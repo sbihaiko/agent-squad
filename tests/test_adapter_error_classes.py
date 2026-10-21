@@ -10,10 +10,12 @@ prints them, the provider's 402 and 429, and the `issue with the selected model`
 died on 116 times.
 """
 import json
+from types import SimpleNamespace
 
 import pytest
 
 from squad import adapter_classes as AC
+from squad.runners.children import Children
 
 SESSION_LIMIT = ("ResultError: Claude Code returned an error result: You've hit your session limit · resets "
                  "7:27am (America/Sao_Paulo) (exit code: 1)")
@@ -29,14 +31,40 @@ PROTOCOL = "ResultError: the response was malformed: invalid JSON frame (exit co
 UNPLACED = "ProcessError: Command failed with exit code 1 (exit code: 1)\nError output: Check stderr output for details"
 
 
-def outcome(model=None, diagnostic=None, reasons=("adapter_error",)):
-    ev = {"event": "outcome", "node": "router", "entry": 1, "outcome": "fail", "reasons": list(reasons), "artifact": None,
+def outcome(model=None, diagnostic=None, reasons=("adapter_error",), node="router"):
+    ev = {"event": "outcome", "node": node, "entry": 1, "outcome": "fail", "reasons": list(reasons), "artifact": None,
           "spend": 0.0, "turns": 0, "cap": 1.0, "elapsed": 1.0, "pos": 2}
     if model is not None:
         ev["model"] = model
     if diagnostic is not None:
         ev["diagnostic"] = {"error": diagnostic}
     return ev
+
+
+def spawn(child="route.1.1", model="claude-gpt-5.6-terra", parent="router"):
+    """The accepted request that created one dispatch child: it names the model the child was asked to run on."""
+    return {"event": "spawn_accepted", "request_key": 1, "child": child, "parent": parent, "depth": 1, "envelope": "route",
+            "reservation": 1.0, "parent_entry": 1, "definition": {"model": model, "effort": "medium"}, "pos": 1}
+
+
+class _Outcomes:
+    def __init__(self):
+        self.events = []
+
+    def child(self, name, outcome, reasons, artifact, extra, *, parent, depth, entry=1):
+        ev = {"event": "outcome", "node": name, "entry": entry, "outcome": outcome, "reasons": list(reasons),
+              "artifact": artifact, "parent": parent, "depth": depth,
+              **{"spend": None, "turns": None, "cap": None, "elapsed": None, **extra}}
+        self.events.append(ev)
+        return ev
+
+
+class _Engine:
+    run_id = "run-test"
+
+    def __init__(self, children):
+        self.dispatch = SimpleNamespace(children=children, held={})
+        self.outcomes = _Outcomes()
 
 
 def verdict(reasons=("adapter_error",)):
@@ -96,6 +124,34 @@ def test_a_spelling_the_registry_does_not_know_passes_through_with_no_backend():
 def test_a_record_that_names_no_model_still_counts():
     [c] = AC.classify_run([outcome(None, SESSION_LIMIT), verdict()])
     assert (c.model, c.backend, c.cause) == ("unknown", "unknown", "quota")
+
+
+# --- a dispatch child's failure names the model it tried -----------------------------------------------------------
+
+def test_a_dispatch_child_adapter_error_records_and_resolves_its_route():
+    # A child's failure has no node-level `model`: the model is the chain entry `session.run_chain` handed to the attempt.
+    # The outcome must keep it, else a new run's child failure reads as `unknown · unknown`.
+    engine = _Engine({"route.1.1": {"parent": "router", "depth": 1}})
+    out = SimpleNamespace(kind="adapter_error", error=RuntimeError("API Error: 401 Unauthorized"),
+                          res=SimpleNamespace(amount=1.0), elapsed=2.0)
+    ev = Children(engine).close(None, "route.1.1", {"effort": "medium"}, "/tmp/ws", out, "claude-gpt-5.6-terra")
+    assert ev["model"] == "claude-gpt-5.6-terra"
+    [c] = AC.classify_run([ev, verdict()])
+    assert (c.model, c.backend, c.cause) == ("gpt-5.6-terra", "gateway", "auth")
+
+
+def test_an_old_child_failure_resolves_its_model_from_its_spawn_definition():
+    # A record written before the child outcome named its model still counted: the accepted request that created the
+    # child names the model it was asked to run on.
+    events = [spawn(), outcome(None, SESSION_LIMIT, node="route.1.1"), verdict()]
+    [c] = AC.classify_run(events)
+    assert (c.model, c.backend, c.cause) == ("gpt-5.6-terra", "gateway", "quota")
+
+
+def test_a_child_model_on_its_own_outcome_wins_over_the_spawn_definition():
+    events = [spawn(model="gemini-3.8-flash-high"), outcome("claude-gpt-5.6-terra", SESSION_LIMIT, node="route.1.1"), verdict()]
+    [c] = AC.classify_run(events)
+    assert (c.model, c.backend) == ("gpt-5.6-terra", "gateway")
 
 
 # --- one verdict is one class ---------------------------------------------------------------------------------------
