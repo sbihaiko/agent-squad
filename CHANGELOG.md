@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.32 (local fork, 2026-10-21)
+- **#743 — the consolidation of `dev` into `stg` is one pull request, never a push.** `promote-stg.sh` opens or reuses the open `dev` → `stg` pull request and merges it with a merge commit once the proof is green; no loop script writes `refs/heads/stg`. A tip already in `stg` is read by ancestry, and a plain commit `stg` holds that `dev` lacks stays the owner's to resolve. `promote-pass.sh` reads the same precondition, so no suite is spent on a tip that cannot merge. CI runs on that pull request only.
+- **#743 — the open-PR fact carries the base ref.** The aggregate read ignores the `base` query, so the promotion names both the head and the base and cannot merge a `dev`-headed pull request for another base.
+- **#730 — one model, one id.** `deepseek-flash` is the one registry row for DeepSeek; `deepseek-v4-flash` and its `[1m]` spellings are aliases of it. The scaffold, the dashboard and the hub label the legacy spelling with the one label.
+
 ## 0.2.31 (local fork, 2026-10-12)
 - **#60 — a run never starts on a model the models panel switched off.** `launch.py` read the panel's `off` switch for one value, the request's "Coding model:" line, while the graph's nodes run another: `route.router` pins `opus`, a dispatch child with no model of its own takes `allow.models[0]`. It now reads the graph the run starts (the same file `squad/workflows.py` resolves), resolves an alias (`opus`, `sonnet`, `haiku`) to its provider id, and refuses the start when a node's model is off in any chain it sits in, naming the node, the alias and the id. A later `allow.models` entry that is off is a warning (it is only a fallback); `SG_ALLOW_MODEL=1` is the deliberate exception, as for the coding gate. Whether the chain should own the model surface or the graph should name the chain's ids stays an open owner/panel decision.
   - New `tests/test_launch_off_models.py` (the real `launch.py`, stub `uv` and `caffeinate`) and three cases in `contrib/squad-goal/scripts/test-launch.sh`.
