@@ -52,6 +52,11 @@
     publish ran raises LIVE-MTIME (#659). live-guard.sh stamps $SG_STATE/live-publish.stamp when it publishes, and every publish writes the live PUBLISHED file
     (#727); either one newer than the last snapshot excuses the pass's changes. A Python bytecode cache (__pycache__/, *.pyc, *.pyo) and an editor's .DS_Store are no change to the
     loop's code and raise nothing. The snapshot is $SG_STATE/live-mtime.json; the first pass only takes it, and a dry pass never keeps it.
+ N  the frontier's idle streak ($SG_STATE/frontier-idle: the epoch the streak began and the frontier's own last idle line, written by
+    autofrontier.sh): a streak past SG_FRONTIER_IDLE_SECONDS (default 3600) raises one FRONTIER-IDLE alert naming the Todo count and
+    the reasons of that line (#744), because a loop can hold Todo work and start nothing for hours with only an attentive owner to
+    notice. It repeats at most once per bound, it never dispatches, and a pass that dispatches drops the file, so the next idle
+    starts the clock again. A dry pass raises no alert and writes no bound.
 Every open issue of the repository carries a card, whether or not a run names it (#92): the pass reads the repository's open-issue list once through the door (gh_aggregate, the throttle) and adds the ones the board does not carry, in the dispatch column, or in Blocked when the issue carries needs-owner or needs-ratification, so an issue created while the loop runs is never left with no status."""
 import json, os, pathlib, re, signal, subprocess, sys, tempfile, time, urllib.parse
 st = pathlib.Path(os.environ["SG_STATE"]); co = pathlib.Path(os.environ["SG_CHECKOUT"]).resolve(); dry = bool(os.environ.get("JANITOR_DRY")); now = time.time()
@@ -1118,6 +1123,20 @@ if hb.exists() and (not hm.exists() or now - hm.stat().st_mtime > 600):
             if not mk.exists():
                 say(f"STATE-REGRESSION #{n}: card is {stt} but its history reached Code Complete/Testing at {reach[-1]}")
                 if not dry: mk.touch()
+def frontier_idle():   # N (#744): a frontier that keeps Todo cards and starts none says so once past a bound
+    """The streak autofrontier.sh leaves in $SG_STATE/frontier-idle: `<epoch> TAB FRONTIER idle: ...`. Past the bound, and
+    once per bound, one alert names the Todo count and the reasons; the frontier drops the file when it dispatches."""
+    bound = int(os.environ.get("SG_FRONTIER_IDLE_SECONDS") or 3600)
+    f, mk = st / "frontier-idle", st / "frontier-idle-alert"
+    try: since, _, line = f.read_text().partition("\t"); since = float(since)
+    except (OSError, ValueError): return
+    if not line.startswith("FRONTIER idle:") or now - since < bound: return
+    try: last = float(mk.read_text())
+    except (OSError, ValueError): last = 0.0
+    if now - last < bound: return
+    if dry: return
+    alert(f"FRONTIER-IDLE {int((now - since) // 60)} min: {line} (the frontier holds this work and starts none; NEEDS OWNER)")
+    mk.write_text(f"{now}\n")
 def live_noise(rel):   # a path no publish makes: a Python bytecode cache, a compiled file, or an editor's .DS_Store (#661)
     parts = rel.split("/")
     return "__pycache__" in parts or rel.endswith((".pyc", ".pyo")) or parts[-1] == ".DS_Store"
@@ -1142,6 +1161,7 @@ def live_mtime():   # M (#659): a change to the live skill copy that no publish 
     changed = sorted(k for k in set(cur) | set(files) if cur.get(k) != files.get(k))
     if changed:
         alert(f"LIVE-MTIME {live}: {len(changed)} file(s) changed with no publish: {', '.join(changed[:5])}")
+frontier_idle()
 live_mtime()
 if acts and not dry:
     kinds = {}

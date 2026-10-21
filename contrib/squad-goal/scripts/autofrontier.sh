@@ -30,12 +30,17 @@ idle() {   # <reasons file> [reason for a card the file does not name]: the summ
   [ -e "$f" ] || : > "$f"
   printf '%s\n' $todo | awk -F'\t' -v def="$def" 'FILENAME==ARGV[1]{why[$1]=$2; note[$1]=$3; next} NF{r=($1 in why)?why[$1]:def; print $1 "\t" r "\t" note[$1]}' "$f" - | sort -n > "$cards"
   total=$(wc -l < "$cards" | tr -d ' ')
-  [ "$total" -gt 0 ] || return 0   # no Todo card: nothing waits, and the line would say nothing
+  [ "$total" -gt 0 ] || { rm -f "${SG_STATE:?idle: no state directory}/frontier-idle"; return 0; }   # no Todo card: nothing waits, and the line would say nothing
   for r in "${WHY_REASONS[@]}"; do
     c=$(awk -F'\t' -v r="$r" '$2==r{c++} END{print c+0}' "$cards"); parts="$parts, $c $r"
   done
   line="FRONTIER idle: $total todo, ${#pick[@]} startable (${parts#, })"
   printf '%s\n' "$line"; printf '%s\n' "$line" >> "${SG_STATE:?idle: no state directory}/cycle.log"
+  # #744: the streak a pass with nothing startable is in, so the janitor can say it once past a bound. The start epoch is kept
+  # across passes; a pass that dispatches drops the file below, so the next idle starts the clock again. The line is the
+  # frontier's own, so the janitor reads this fact and never the frontier again.
+  since=$(cut -f1 "$SG_STATE/frontier-idle" 2>/dev/null); case "$since" in ''|*[!0-9]*) since=$(date +%s);; esac
+  printf '%s\t%s\n' "$since" "$line" > "$SG_STATE/frontier-idle.$$" && mv "$SG_STATE/frontier-idle.$$" "$SG_STATE/frontier-idle"
   h=$(cksum < "$cards" | awk '{print $1 "-" $2}')
   [ "$(cat "$A/frontier-why" 2>/dev/null)" = "$h" ] && return 0   # the same reasons as the last pass: the line alone
   { while IFS=$'\t' read -r n r c; do printf 'FRONTIER why #%s: %s%s\n' "$n" "$r" "${c:+ ($c)}"; done < "$cards"; } > "$F/why.detail"
@@ -230,6 +235,7 @@ if [ -n "$broke" ]; then   # the walk ended at the envelope: the cards past it w
 fi
 [ ${#pick[@]} -gt 0 ] || { idle "$F/why"; exit 0; }
 rm -f "$A/frontier-why"   # this pass dispatched: the next idle pass explains itself afresh
+rm -f "$SG_STATE/frontier-idle"   # this pass started work: the idle streak is over, and the next one starts the clock again (#744)
 noteof() { local i=0 x; for x in "${pick[@]}"; do [ "$x" = "$1" ] && { echo "${notes[$i]}"; return; }; i=$((i+1)); done; }   # bash 3.2: no associative arrays
 all=(); while read -r c; do [ -n "$c" ] && all+=("$c"); done < <(cluster_of "${ready[@]}")
 # One run per free slot, never more runs than children (#728). The children are dealt over the runs in turn, so no run takes

@@ -20,12 +20,12 @@ mark $(( $(date +%s) - 3601 ))
 pass env; [ "$(alerts)" = 1 ] && ok "a streak past the bound raises one alert" || ko "no alert past the bound ($(alerts))"
 cat "$T/st/alerts.log" | /usr/bin/grep 'FRONTIER-IDLE' | /usr/bin/grep -q '3 todo, 0 startable (2 no go label' && ok "the alert names the Todo count and the reasons" || ko "the alert does not carry the idle line: $(cat "$T/st/alerts.log")"
 pass env; [ "$(alerts)" = 1 ] && ok "the same streak raises nothing again inside the bound" || ko "the same streak alerted twice ($(alerts))"
-mark $(( $(date +%s) - 7201 ))
+printf '%s\n' $(( $(date +%s) - 3601 )) > "$T/st/frontier-idle-alert"   # a bound after the first alert
 pass env; [ "$(alerts)" = 2 ] && ok "a streak past a second bound raises again" || ko "a second bound raised nothing ($(alerts))"
 rm -f "$T/st/frontier-idle"   # a pass that dispatched: the frontier drops the file
 mark $(( $(date +%s) - 10 )); pass env; [ "$(alerts)" = 2 ] && ok "a streak that restarted raises nothing" || ko "a restarted streak alerted ($(alerts))"
 printf 'no line here\n' > "$T/st/frontier-idle"; pass env; [ "$(alerts)" = 2 ] && ok "a marker with no idle line raises nothing" || ko "a marker with no line alerted ($(alerts))"
-JANITOR_DRY=1 pass env; mark $(( $(date +%s) - 7201 )); JANITOR_DRY=1 pass env
-[ "$(alerts)" = 2 ] && [ ! -e "$T/st/frontier-idle-alert" ] && ok "a dry pass writes no alert bound" || ko "a dry pass wrote the bound: $(alerts), $(/bin/ls "$T/st")"
+rm -f "$T/st/frontier-idle-alert"; mark $(( $(date +%s) - 7201 )); JANITOR_DRY=1 pass env
+[ "$(alerts)" = 2 ] && [ ! -e "$T/st/frontier-idle-alert" ] && ok "a dry pass raises no alert and writes no bound" || ko "a dry pass wrote the bound: $(alerts), $(/bin/ls "$T/st")"
 [ "$fail" = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 exit $fail
