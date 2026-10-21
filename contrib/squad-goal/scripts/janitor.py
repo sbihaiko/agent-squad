@@ -161,6 +161,7 @@ def kill(pidv, why):
             try: os.kill(q, signal.SIGTERM)
             except OSError: pass
 OWN_PASS = ("childcc.py",)   # the loop's own passes that work inside a finished run's folder by design (#497)
+SESSION = re.compile(r"_bundled/claude|/claude\b|\bclaude-code\b|squad\.cli|-m squad\b")   # a run's own session, never a helper (#745)
 def own_pass(q):
     """True when the process or one of its ancestors is a pass of this loop: the child review (childcc.py -> childreview.sh ->
     review.sh -> the model) and `wave.sh land` run after the run's verdict, in the child's worktree inside the run folder,
@@ -326,11 +327,18 @@ for r in names:
                 if "dashboard_server" in c and str(f) in c: kill(q, f"dashboard of finished run {n}")
         if i["landed"]: landed_n |= req_issues(f)
         keep.append(r); continue
-    alive = bool(inside(f))
+    # A live run is one whose own session is inside its folder: the run's process, or a call it started. A helper the session
+    # left behind -- uv, caffeinate, a stray shell -- has a cwd there too, and reading any process as the run kept a dead run
+    # "alive" for ever, its card in Doing and its active-runs line held (#745).
+    hips = inside(f)
+    alive = any(SESSION.search(procs.get(q, (0, ""))[1]) for q in hips)
     if not alive and i["idle"] > 1200 and not (i["pid"] and same_process(i["pid"], i["started_at"])):
         say(f"zombie run {n} (no verdict, idle {int(i['idle'] // 60)} min, no process) dropped from active-runs")
         if not dry: mark_killed(f)
         pending += free_reaped(f, i)
+        for q in hips:   # the helpers the dead session left behind are reaped with it, never kept by the next pass
+            if own_pass(q) or SESSION.search(procs.get(q, (0, ""))[1]): continue
+            kill(q, f"leftover of zombie run {n}")
         for q, (_, c) in procs.items():
             if "dashboard_server" in c and str(f) in c: kill(q, f"dashboard of zombie run {n}")
         continue
