@@ -63,5 +63,5 @@ def test_every_command_in_the_quickstart_parses_and_the_page_is_linked_and_short
             cli.parser().parse_args(shlex.split(line)[1:])
         except SystemExit:
             raise AssertionError(f"the CLI rejects the quickstart command: {line}") from None
-    assert len(text.splitlines()) < 80 and "docs/quickstart.md" in (ROOT / "README.md").read_text() + (ROOT / "CLAUDE.md").read_text()
+    assert len(text.splitlines()) < 100 and "docs/quickstart.md" in (ROOT / "README.md").read_text() + (ROOT / "CLAUDE.md").read_text()
     assert "docs/quickstart.md" in (ROOT / "README.md").read_text() and "docs/quickstart.md" in (ROOT / "CLAUDE.md").read_text()

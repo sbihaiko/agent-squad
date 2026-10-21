@@ -61,6 +61,19 @@ The verdict prints the exact command, with the absolute run folder, so it works 
 
 Use it after a crash, a pause or a `needs-human` verdict. A resume refuses when a skill, the project settings or the autonomy setting changed since the run started. It also refuses when the run's target is missing, is your own checkout, or is on another branch than the one the run started on; it never migrates a record, so start a new run.
 
+## Tailnet access
+
+The owner does these steps. An agent points the owner here and does not run them.
+
+1. Install Tailscale on the hub machine and sign in.
+2. In the admin console, enable MagicDNS and HTTPS certificates.
+3. Set any ACL or grant that lets your other devices reach the hub.
+4. Type the `tailscale serve` command that `squad tailnet serve-command` prints, for the hub port. Do this once.
+5. Set `tailnet.host` and `tailnet.allow` with `squad config set`. You name the logins.
+6. Never enable Funnel for the hub port. Prove it is off with `squad tailnet check`.
+
+The servers keep their loopback bind. The editor stays a local `file://` page.
+
 ## Where the run folder is
 
 `runs/<run-id>/` under the directory you started from. Pass `--runs-dir` to move it. Git ignores it through `.git/info/exclude`, so your working tree stays clean.
