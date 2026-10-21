@@ -218,10 +218,10 @@ case "$lbat$lcmd" in *"-n auto"*) ko "the landing check runs pytest -n auto";; *
 ! /usr/bin/grep -v '^[[:space:]]*#' "$d/branchland.sh" | /usr/bin/grep -v '^rerun=' | /usr/bin/grep -q 'ruff check squad tests' && ok "branchland keeps no copy of the base battery" || ko "branchland still carries a copy of the base battery"
 # A loop defect in the landing path (#641, ADR-0146 decision 3): while an issue labelled `loop-bug:landing` is open, the pass
 # lands nothing and names the issue. A plain `loop-bug` stops intake only: a green, approved branch still lands.
-reset; r=$(LANDBUG=641 CHECKS="$GREEN" bl)
+reset; r=$(SG_GH_AGGREGATE_WINDOW=0 LANDBUG=641 CHECKS="$GREEN" bl)
 [ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && ok "a loop-bug:landing issue stops the landing" || ko "a branch landed under a loop-bug:landing issue: '$r'"
 case "$r" in *"LOOP STOP: #641 is a loop defect in the landing path; no wave lands until it closes"*) ok "the pass names the landing stop";; *) ko "no landing stop line: '$r'";; esac
-reset; r=$(LANDBUG=641 LANDBUG_LABEL=loop-bug CHECKS="$GREEN" bl)
+reset; r=$(SG_GH_AGGREGATE_WINDOW=0 LANDBUG=641 LANDBUG_LABEL=loop-bug CHECKS="$GREEN" bl)
 [ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && ko "a plain loop-bug stopped the landing: '$r'" || ok "a plain loop-bug lets an approved branch land"
 # The rerun of what failed stays serial, and runs only the names the gate failed: the id list, never the battery.
 rerunline=$(/usr/bin/grep -E '^rerun=' "$d/branchland.sh")

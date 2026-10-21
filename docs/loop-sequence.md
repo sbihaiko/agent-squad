@@ -13,7 +13,9 @@ Shipped columns (`board-definition.json`): Backlog, Todo, Doing, Code Review, Co
 
 Each dispatch pass first runs the stops in `ghcall.sh`, in order. Each stop prints one line, writes it to cycle.log, and the pass dispatches nothing:
 
-- `gh_loop_stop`: an open issue carries `loop-bug` (ADR-0146). `childcc.py` stops on the same label (`loop_defect`).
+- `gh_loop_stop`: an open issue carries `loop-bug` or `loop-bug:landing` (ADR-0146). `childcc.py` stops on the same labels (`loop_defect`): it starts no review, fix run or entry, exits 0 when every pending child is in its wave, and exits 3 while a child of a wave that is not past its age cap is out of it.
+
+The landing has one stop, `gh_land_stop`: an open issue carries `loop-bug:landing`, which names a defect in the landing path. `land_wave` (`watch.sh`) and `branchland.sh` then land nothing, and the run stays unread. A plain `loop-bug` never stops a landing (ADR-0146 decision 3).
 - `gh_dispatch_hold`: the count in `childcc-waiting` is over `SG_DISPATCH_MAX_WAITING` (unset: no hold; a count over 30 min old: no hold).
 - `gh_disk_stop`: the volume of `$SG_STATE` or `$TMPDIR` has less than `SG_MIN_FREE_GB` GiB free (20 by default).
 - `gh_bug_first` (`autofrontier.sh` only): `bugs-waiting`, which `autobug.sh` writes, is over 0 and under 30 min old.
@@ -179,6 +181,8 @@ sequenceDiagram
     participant GH as GitHub
     Note over AF,L: before a run
     AF->>AF: loop-bug open, too many children wait, disk under the floor, or bugs wait: one line, nothing dispatched
+    CC->>CC: loop-bug open: LOOP STOP line, no review, fix run or entry#59; exit 0 when every pending child entered its wave, else exit 3
+    W->>W: loop-bug:landing open: LOOP STOP line, land_wave and branchland land nothing, the run stays unread
     AF->>AF: mkreq.sh refuses a slice: the contested tickets are deferred, their disp- markers freed, the rest rebuilt#59; a whole-batch refusal frees every marker
     L->>L: fetch of origin/dev fails or names no commit: refuse the start, no tree made
     L->>L: worktree add fails three times: refuse the start

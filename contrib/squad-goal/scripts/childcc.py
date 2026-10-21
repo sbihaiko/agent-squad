@@ -91,16 +91,11 @@ def loop_defect():
     if not r.is_answer or not isinstance(r.answer, list): return None
     for i in r.answer:
         names = [l.get("name") if isinstance(l, dict) else l for l in (i.get("labels") or [])]
-        if "loop-bug" in names:
+        if "loop-bug" in names or "loop-bug:landing" in names:   # a defect in the landing path is a loop-bug too (#641)
             try: return int(i["number"])
             except (KeyError, TypeError, ValueError): return None
     return None
-n = loop_defect()
-if n is not None:   # the loop cannot deliver its own fix: no child enters while one is open (#596, ADR-0146)
-    line = f"LOOP STOP: #{n} is a loop defect; the fix lands outside the loop"
-    print(line, flush=True)
-    with (st / "cycle.log").open("a") as f: f.write(line + "\n")   # the loop log, which the hub reads
-    sys.exit(0)
+STOP = loop_defect()   # the loop cannot deliver its own fix: no review, fix run or entry starts while one is open (#596, ADR-0146)
 def child_worktree(rd, child, d):   # the tree a child worked in, by the engine's own rule (squad/runners/children.py, Children.workspace)
     ws = d.get("workspace") if isinstance(d, dict) else None
     logical = "target" if not ws or ws == "." else str(ws).replace("/", "_")
@@ -281,6 +276,21 @@ for r in (sys.argv[1:] or (st / "active-runs.txt").read_text().split()):
 # The pass starts after the child the cursor names, in key order, so the work rotates over every pending child (#590).
 pending.sort(key=lambda p: p[0])
 PENDING[:] = pending; publish()
+if STOP is not None:
+    # The stop is on intake only (#641, ADR-0146 decision 3): an entered child is approved and gated, so a wave whose children
+    # all entered still lands, and the pass exits 0 for it. A child not yet in its wave is never reviewed, fixed or entered
+    # here, and a 0 would land the wave without it, so the pass exits 3 and the wave waits, until its age cap: the capped
+    # landing requeues the child that never entered.
+    line = f"LOOP STOP: #{STOP} is a loop defect; the fix lands outside the loop"
+    print(line, flush=True)
+    with (st / "cycle.log").open("a") as f: f.write(line + "\n")   # the loop log, which the hub reads
+    publish(live=False)
+    wait = sorted({pathlib.Path(p[1]).name for p in pending if (A / f"wave-{pathlib.Path(p[1]).name}").exists()})
+    wait = [w for w in wait if subprocess.run(["bash", wave, "expired", w], capture_output=True).returncode]
+    if wait:
+        print(f"CHILDCC STOP the wave of {', '.join(wait)} waits: a child is not in it, and no child enters while the stop holds", flush=True)
+        sys.exit(INCOMPLETE)
+    sys.exit(0)
 cur = CURSOR.read_text().strip() if CURSOR.exists() else ""
 k0 = next((i for i, p in enumerate(pending) if p[0] > cur), 0)
 spent, visited = 0, set()

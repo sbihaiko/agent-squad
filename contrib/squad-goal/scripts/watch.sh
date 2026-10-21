@@ -42,6 +42,9 @@ verdicts() { local r f; for r in $(cat "$SG_STATE/active-runs.txt"); do case "$r
 land_wave() {   # <run>: 0 the wave is done (landed), 1 the pass that enters its children, or the landing, did not get through, so the run stays unread
   local run=$1 ran pass L h; ran="$SG_STATE/auto/wland-${run##*/}"; pass="$ran.pass"; L="$SG_STATE/locks/single-childcc"
   mkdir -p "$SG_STATE/auto"; rm -f "$ran" "$pass" "$pass.left"
+  # A plain `loop-bug` stops intake, never this landing; a `loop-bug:landing` issue names the landing path, so the wave waits
+  # and the run stays unread until it closes (#641, ADR-0146 decision 3).
+  gh_land_stop && return 1
   # The pass waits a bounded time (SG_LAND_WAIT one-second polls) for the childcc lock the fast lane may hold. The landing runs
   # under its own lock, never the childcc one: its gate wait can last hours, and the fast lane's pass must not queue behind it (#471).
   # A pass works one child and exits 3 when it left one for a later pass (#590): that is no pass, `$pass.left` says so, and the

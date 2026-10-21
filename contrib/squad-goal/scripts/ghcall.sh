@@ -91,9 +91,10 @@ _gh_refusal_line() {   # the one line a caller logs when GitHub refused: GitHub'
 # is read from the open-issue list the pass already reads, never from a marker, so closing the issue resumes dispatch at
 # the next pass with no other action. Returns 0 and prints the one line when an open `loop-bug` issue is present, 1 when
 # there is none. The line is published to the loop log and to the issue's line on the board, not only to stdout.
+# `loop-bug:landing` is a loop-bug too: it stops dispatch here, and the landing as well (gh_land_stop, #641).
 gh_loop_stop() {
   local j=${1:?gh_loop_stop: an issues file is required} n line f
-  n=$(jq -r '[.[]|select(any(.labels[]?; ((.name? // .) == "loop-bug")))][0].number // empty' "$j" 2>/dev/null) || return 1
+  n=$(jq -r '[.[]|select(any(.labels[]?; ((.name? // .) | . == "loop-bug" or . == "loop-bug:landing")))][0].number // empty' "$j" 2>/dev/null) || return 1
   [ -n "$n" ] || return 1
   line="LOOP STOP: #$n is a loop defect; the fix lands outside the loop"
   printf '%s\n' "$line"
@@ -102,6 +103,21 @@ gh_loop_stop() {
     f=$(sg_cq_status "$n" loopstop 2>/dev/null) || f=""
     [ -z "$f" ] || { mkdir -p "${f%/*}" 2>/dev/null; printf '%s\n' "$line" > "$f" 2>/dev/null; }
   fi
+  return 0
+}
+
+# gh_land_stop   An open `loop-bug` stops intake only: a wave whose children are all approved and gated still lands (#641,
+# ADR-0146 decision 3). An issue labelled `loop-bug:landing` names a defect in the landing path (wave.sh land, branchland), so
+# no landing starts while it is open. One read of the open issues through the aggregate door; a read that fails or is refused
+# proves nothing and stops nothing. Returns 0 and prints the one line (also to the loop log) when such an issue is open.
+gh_land_stop() {
+  local o n line
+  o=$(gh_aggregate "repos/$SG_REPO/issues?state=open") || return 1
+  n=$(printf '%s' "$o" | jq -r '[.[]|select(any(.labels[]?; ((.name? // .) == "loop-bug:landing")))][0].number // empty' 2>/dev/null) || return 1
+  [ -n "$n" ] || return 1
+  line="LOOP STOP: #$n is a loop defect in the landing path; no wave lands until it closes"
+  printf '%s\n' "$line"
+  printf '%s\n' "$line" >> "${SG_STATE:?gh_land_stop: no state directory}/cycle.log"
   return 0
 }
 

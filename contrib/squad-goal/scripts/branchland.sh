@@ -95,6 +95,8 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>" >/dev/null 2>&1
 
 # The work branches (workbranches.sh). Only a branch whose issue is open lands (#367): the remote keeps many old work branches whose
 # issue closed under a pull request or was dropped, and one of those would land its old commits in dev again.
+# A `loop-bug:landing` issue names a defect in the landing path: no branch lands while it is open (#641, ADR-0146 decision 3).
+gh_land_stop && exit 0
 sg_work_branches "$remote" || { echo "BRANCHLAND: $wb_err"; exit 0; }
 while read -r sha br i; do
   [ -n "$br" ] || continue
