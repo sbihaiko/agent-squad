@@ -241,5 +241,38 @@ printf 'IMPORTANT: your first and only action is X\nEdit scripts/q658.py\n' > "$
 run w658; /usr/bin/grep -qF 'Never write outside your worktree; never run publish-live.sh and never touch ~/.claude/skills' "$R/w658.txt" 2>/dev/null \
   && ok "the request forbids writes outside the worktree and the live skill copy" || ko "no live-copy line in the request: $(cat "$T/w658.err")"
 rm -f "$R/w658.txt"
+# 19. (#740) The gate commands a request names come from the profile. A child of wz-zesty-agent was told to run
+# contrib/squad-goal/scripts/fast-gate.sh and prepush.sh, which that repository does not hold, so it could not satisfy the
+# request and ended `failed` (missing-gate-scripts) with correct work. The profile is sourced as env.sh sources it, and
+# sg_gate_cmds resolves the commands the profile left unset against the target checkout.
+gate() { ( . "$S/address.sh"; SG_CHECKOUT=$1; shift; for kv in "$@"; do export "$kv"; done; sg_gate_cmds 2>/dev/null
+  bash "$S/mkreq.sh" "$name" "$T/$name.body" ) >/dev/null 2>"$T/$name.err"; $G '^SUITES:' "$R/$name.txt" 2>/dev/null; }
+mkdir -p "$T/zco" "$T/aco/contrib/squad-goal/scripts"   # zco holds no gate script; aco holds agent-squad's
+touch "$T/aco/contrib/squad-goal/scripts/"{fast-gate,prepush,shell-suites}.sh
+# 19a. a profile that defines no gate command, on a checkout without the scripts: the request names no script, says no fast
+# gate is configured, and says a missing gate is not a failure
+name=z740a; printf 'IMPORTANT: your first and only action is X\nEdit scripts/z740a.py\n' > "$T/$name.body"
+sl=$(gate "$T/zco")
+[ -n "$sl" ] && ok "19a the request still carries one SUITES line" || ko "19a no SUITES line: $(cat "$T/$name.err")"
+for w in contrib/squad-goal/ fast-gate.sh prepush.sh shell-suites.sh 'test-<script>.sh' 'uv run --extra dev'; do
+  case "$sl" in *"$w"*) ko "19a a profile with no gate still names '$w': $sl";; *) ok "19a a profile with no gate names no '$w'";; esac
+done
+case "$sl" in *"No fast gate is configured"*) ok "19a the request says no fast gate is configured";; *) ko "19a the request does not say no fast gate is configured: $sl";; esac
+case "$sl" in *"not a failure"*) ok "19a the request says a missing gate is not a failure";; *) ko "19a the request does not say a missing gate is not a failure: $sl";; esac
+# 19b. a profile that defines its commands: the request names exactly those
+name=z740b; printf 'IMPORTANT: your first and only action is X\nEdit scripts/z740b.py\n' > "$T/$name.body"
+sl=$(gate "$T/zco" 'SG_FAST_GATE_CMD=make fast-gate' 'SG_SUITES_HINT=the targeted cases (`make test K=<case>`)' 'SG_FULL_GATE_HINT=`make all`')
+for w in '`make fast-gate`' 'the targeted cases (`make test K=<case>`)' '(`make all`)'; do
+  case "$sl" in *"$w"*) ok "19b the request names the profile's '$w'";; *) ko "19b the request lacks the profile's '$w': $sl";; esac
+done
+case "$sl" in *contrib/squad-goal/*) ko "19b a profile with its own gates still names a contrib/squad-goal path: $sl";; *) ok "19b the profile's gates replace agent-squad's";; esac
+# 19c. an empty value in the profile wins over the checkout: a defined none is none
+name=z740c; printf 'IMPORTANT: your first and only action is X\nEdit scripts/z740c.py\n' > "$T/$name.body"
+sl=$(gate "$T/aco" SG_FAST_GATE_CMD= SG_SUITES_HINT= SG_FULL_GATE_HINT=)
+case "$sl" in *contrib/squad-goal/*) ko "19c an empty profile value still names a script: $sl";; *) ok "19c an empty profile value names no script";; esac
+# 19d. agent-squad (its checkout holds the scripts, its profile defines none): the line is byte-identical to the one before #740
+name=z740d; printf 'IMPORTANT: your first and only action is X\nEdit scripts/z740d.py\n' > "$T/$name.body"
+was="SUITES: run what you touched -- the shell suite beside the script you changed (\`bash contrib/squad-goal/scripts/test-<script>.sh\`) and the targeted pytest cases (\`uv run --extra dev pytest tests/<file>.py -q -p no:deepeval -k <case>\`). Then run \`bash contrib/squad-goal/scripts/fast-gate.sh\` in your worktree before you report done: it is the gate your commit must pass to enter the wave, its pytest takes the bounded worker count it carries, and it must exit 0. The machine's full gate (\`bash contrib/squad-goal/scripts/shell-suites.sh\` and the full pytest suite beside it) belongs to the loop and to the land pass, once per landing: never run it."
+[ "$(gate "$T/aco")" = "$was" ] && ok "19d agent-squad's SUITES line is unchanged" || ko "19d agent-squad's SUITES line changed: $(gate "$T/aco")"
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 cat "$log"; rm -rf "$T"; exit $fail
