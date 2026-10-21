@@ -1124,7 +1124,67 @@ def childcc_row(now=None):
             "badge": "childcc" if live else "waiting", "tip": "the childcc pass: one review and one wave entry at a time",
             "label": f"childcc pass · pid {d['pid']}" if live else f"CHILDCC DEFERRED {len(waits)}", "issues": [], "pid": d["pid"] if live else None,
             "age": age, "dur": round(age / 60, 1), "spend": 0, "agents": 0, "project": "childcc", "sub": sub,
-            "lines": [_childcc_line(c) for c in kids] if live else [], "deferred": len(waits), "oldest_wait": oldest}
+            "lines": [_childcc_line(c) for c in kids] if live else [], "deferred": len(waits), "oldest_wait": oldest,
+            "held": _held_now(kids)}
+
+def _held_now(kids):
+    """The run the pass holds now: the child at review or wave entry, else the first child it holds. A click on the row opens
+    that run (#689); the row itself is never a pane (#598)."""
+    now = [c for c in kids if c.get("step") in ("review", "enter")] or kids
+    return next((str(c["run"]) for c in now if c.get("run")), None)
+
+def held_runs():
+    """The run names the childcc pass holds, in the file's order, each once."""
+    d = _json(STATE / "auto" / "childcc-now.json")
+    kids = d.get("children") or [] if isinstance(d, dict) else []
+    return list(dict.fromkeys(str(c["run"]) for c in kids if isinstance(c, dict) and re.fullmatch(r"run-[\w-]+", str(c.get("run") or ""))))
+
+def held_folder(name):
+    """The folder of a run the childcc pass holds, from the runs directories the hub knows (project_dirs), or None. Only a
+    held run resolves: the name is never a path the page chose."""
+    if name not in held_runs(): return None
+    return next((str(d / name) for d in sorted(project_dirs()) if (d / name / "record.jsonl").is_file()), None)
+
+def open_held(name, start=None):
+    """The port of a dashboard server for a held run, started when none runs (dashboard_server.start), or None. A held run
+    orphaned from active-runs has no server, so the hub starts one when the owner opens it (#689)."""
+    folder = held_folder(name)
+    if folder is None: return None
+    if start is None: start = _start_dashboard
+    try: return int(start(folder))
+    except Exception as e:
+        log_once(f"hub: no dashboard server for {name}: {e}"); return None
+
+def _start_dashboard(folder):
+    """dashboard_server.start(folder) in a child interpreter, from the first root that holds the squad package."""
+    roots = [r for r in squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__) if (pathlib.Path(r) / "squad" / "dashboard_server.py").is_file()]
+    if not roots: raise RuntimeError("no squad package")
+    py = pathlib.Path(roots[0]) / ".venv" / "bin" / "python"
+    p = subprocess.run([str(py) if py.exists() else sys.executable, "-c", "import sys; from squad import dashboard_server as d; print(d.start(sys.argv[1]))", folder],
+                       cwd=roots[0], capture_output=True, text=True, timeout=30)
+    if p.returncode != 0: raise RuntimeError((p.stderr or "").strip().splitlines()[-1:] or "exit " + str(p.returncode))
+    return int(p.stdout.split()[-1])
+
+def run_row(d, port, ps_lines):
+    """One run folder's row of the list and its load-attribution entry (None while the record is empty). `port` is its
+    dashboard server's, or "" when it has none."""
+    p = pathlib.Path(d) / "record.jsonl"
+    r = scan(p)
+    if r is None:
+        b = badge_of("starting")
+        return {"id": os.path.basename(d), "port": port, "state": "starting", "badge": b["text"], "tip": b["title"], "label": "run " + os.path.basename(d)[-6:], "issues": [], "age": 0, "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": 0, "spend": 0, "dur": 0, "kind": "code", "live": True, "agents": 0}, None
+    age = time.time() - p.stat().st_mtime; st = state_of(r, age)
+    try: request = (pathlib.Path(d) / "request.txt").read_text(errors="replace")
+    except OSError: request = None
+    gone = run_gone(r, age, ps_lines, d, request)   # killed: no verdict will come, so it is not live whatever its age
+    st = demoted(st, r, {i["n"] for i in board_cache.get("items", []) if i.get("s") == "closed"})
+    merged = {p["n"] for p in board_cache.get("landed", []) if p.get("m")}
+    st = handled_of(st, {**r, "merged": r.get("fix") in merged or any(int(n) in merged for n in r["issues"])})
+    b = badge_of(st, r)
+    if gone: b = gone_badge(b)
+    rank = run_rank(st, live=not gone)
+    t1 = r["t1"] or time.time()
+    return {"id": os.path.basename(d), "port": port, "state": st, "badge": b["text"], "tip": b["title"], "label": r.get("label"), "issues": r["issues"], "issue_src": r.get("issue_src"), "issue_why": r.get("issue_why"), "age": int(age), "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": rank, "spend": r["spend"], "dur": round((t1 - (r["t0"] or t1)) / 60, 1), "kind": r.get("kind", "code"), "fix": r.get("fix"), "stack": r.get("stack"), "bug": r.get("bug"), "merge": r.get("merge"), "titles": {i: TITLE.get(int(i), "") for i in r["issues"]}, "live": not gone, "agents": 0 if gone else r.get("agents") or 0, "share": r.get("share")}, {"id": os.path.basename(d), "dir": d, "wts": r.get("wts") or []}   # the row, and what the load attribution needs and nothing else
 
 def runs():
     _titles()
@@ -1136,26 +1196,18 @@ def runs():
         pid, d = m.group(1), m.group(2)
         port = re.search(r"TCP 127\.0\.0\.1:(\d+)|n127\.0\.0\.1:(\d+)", sh(LSOF, "-nP", "-a", "-p", pid, "-iTCP", "-sTCP:LISTEN", "-Fn"))
         if not port: continue
-        p = pathlib.Path(d) / "record.jsonl"
         if not pathlib.Path(d).exists(): continue
         if re.search(r"/pytest-\d+/|/pytest-of-", d): continue   # dashboards started by agent-squad's own test suite are fixtures, not runs   # a dashboard server outliving its run folder (worktree removed) must not break the list
-        r = scan(p)
-        if r is None:
-            b = badge_of("starting")
-            out.append({"id": os.path.basename(d), "port": port.group(1) or port.group(2), "state": "starting", "badge": b["text"], "tip": b["title"], "label": "run " + os.path.basename(d)[-6:], "issues": [], "age": 0, "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": 0, "spend": 0, "dur": 0, "kind": "code", "live": True, "agents": 0}); continue
-        age = time.time() - p.stat().st_mtime; st = state_of(r, age)
-        try: request = (pathlib.Path(d) / "request.txt").read_text(errors="replace")
-        except OSError: request = None
-        gone = run_gone(r, age, ps_lines, d, request)   # killed: no verdict will come, so it is not live whatever its age
-        st = demoted(st, r, {i["n"] for i in board_cache.get("items", []) if i.get("s") == "closed"})
-        merged = {p["n"] for p in board_cache.get("landed", []) if p.get("m")}
-        st = handled_of(st, {**r, "merged": r.get("fix") in merged or any(int(n) in merged for n in r["issues"])})
-        b = badge_of(st, r)
-        if gone: b = gone_badge(b)
-        rank = run_rank(st, live=not gone)
-        t1 = r["t1"] or time.time()
-        out.append({"id": os.path.basename(d), "port": port.group(1) or port.group(2), "state": st, "badge": b["text"], "tip": b["title"], "label": r.get("label"), "issues": r["issues"], "issue_src": r.get("issue_src"), "issue_why": r.get("issue_why"), "age": int(age), "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": rank, "spend": r["spend"], "dur": round((t1 - (r["t0"] or t1)) / 60, 1), "kind": r.get("kind", "code"), "fix": r.get("fix"), "stack": r.get("stack"), "bug": r.get("bug"), "merge": r.get("merge"), "titles": {i: TITLE.get(int(i), "") for i in r["issues"]}, "live": not gone, "agents": 0 if gone else r.get("agents") or 0, "share": r.get("share")})
-        load_rows.append({"id": os.path.basename(d), "dir": d, "wts": r.get("wts") or []})   # what the load attribution needs, and nothing else
+        row, load = run_row(d, port.group(1) or port.group(2), ps_lines)
+        out.append(row)
+        if load: load_rows.append(load)
+    listed = {r["id"] for r in out}
+    for name in held_runs():   # a run the childcc pass holds, orphaned from active-runs, has no dashboard server: it is listed all the same (#689)
+        folder = None if name in listed else held_folder(name)
+        if not folder or not (pathlib.Path(folder) / "record.jsonl").is_file(): continue
+        row, load = run_row(folder, "", ps_lines)
+        out.append({**row, "url": "/held/" + name, "held": True})
+        if load: load_rows.append(load)
     for f in sorted((STATE / "tests").glob("test-*.json")):   # coordinator test passes (test.sh)
         try: d = json.loads(f.read_text())
         except Exception: continue
@@ -2353,12 +2405,12 @@ function drawList(){
   const shown=new Set(slots),by={};allRuns.filter(r=>r.kind==="childcc").concat(runs).forEach(r=>(by[groupOf(r)]=by[groupOf(r)]||[]).push(r));
   if(openGroups===null){const first=GROUPS.find(g=>by[g[0]]);openGroups=new Set(first?[first[0]]:[]);saveGroups()}   // nothing stored yet: the first filled group opens once
   const filled=GROUPS;   // the whole age ladder stays visible, so a band that holds no run still draws its header, and an open group that emptied keeps its header and shows no rows
-  const ccRow=r=>`<div class="r cc" data-id="${r.id}"><div><span class="b ${r.state}"${r.tip?` title="${esc(r.tip)}"`:""}>${esc(r.badge)}</span> <b>${esc(r.label)}</b>${r.sub?`<div class=st title="${esc(r.sub)}">${esc(r.sub)}</div>`:""}${(r.lines||[]).map(l=>`<div class=st>${esc(l)}</div>`).join("")}${r.live?`<div class=m>age ${age(r.age)}</div>`:""}</div></div>`;
+  const ccRow=r=>{const h=r.held&&runs.some(x=>x.id===r.held)?r.held:null;return `<div class="r cc ${h&&shown.has(h)?"show":""}"${h?` data-id="${esc(h)}" title="open ${esc(h)}"`:""}><div><span class="b ${r.state}"${r.tip?` title="${esc(r.tip)}"`:""}>${esc(r.badge)}</span> <b>${esc(r.label)}</b>${r.sub?`<div class=st title="${esc(r.sub)}">${esc(r.sub)}</div>`:""}${(r.lines||[]).map(l=>`<div class=st>${esc(l)}</div>`).join("")}${r.live?`<div class=m>age ${age(r.age)}</div>`:""}</div></div>`};
   const row=r=>r.kind==="childcc"?ccRow(r):`<div class="r ${shown.has(r.id)?"show":""} ${pins.has(r.id)?"pinned":""}" data-id="${r.id}"><div>${r.kind==="test"?`<span class=kd title="GUI test run">🧪</span>`:""}<span class="b ${r.state}"${r.tip?` title="${esc(r.tip)}"`:""}>${esc(r.badge||r.state)}</span> <b title="${esc(labelTip(r))}">${esc(name(r))}</b>${loadMark(r)}${!(r.issues||[]).length&&r.issue_why&&!r.fix&&!r.url?`<div class=st>${esc(labelTip(r))}</div>`:""}${sub(r)?`<div class=st title="${esc(sub(r))}">${esc(sub(r))}</div>`:""}<div class=m>${r.share?`<span class="sh${r.share.pct===100?" done":""}" title="the newest gate that counted ran ${r.share.total} tests, ${r.share.passed} passed">${r.share.passed}/${r.share.total} · ${r.share.pct}%</span> · `:""}${usd(r.spend)} · ${Math.round(r.dur)}m · ${age(r.age)} ago · ${r.id.slice(-6)} · :${r.port}</div></div><span class=pn title="shown in the panel">${pins.has(r.id)?"●":"○"}</span></div>`;
   $("#list").innerHTML=filled.map(([k,t])=>{const rows=by[k]||[],h=groupHeader(k,rows);return `<div class="gh ${openGroups.has(k)?"op":""}" data-g="${k}" tabindex=0>${t}<span class=sr title="${esc(h.title)}">${h.text}</span></div>${openGroups.has(k)?rows.map(row).join(""):""}`}).join("")||"<div class=m style=padding:10px>no live dashboards</div>";
   document.querySelectorAll(".gh").forEach(e=>e.onclick=()=>{const k=e.dataset.g;   // the header is the only writer: a click toggles this group and nothing else
     if(openGroups.has(k))openGroups.delete(k);else openGroups.add(k);saveGroups();drawList()});
-  document.querySelectorAll(".r:not(.cc)").forEach(e=>e.onclick=()=>{const id=e.dataset.id;
+  document.querySelectorAll(".r[data-id]").forEach(e=>e.onclick=()=>{const id=e.dataset.id;   // the childcc row carries the id of the run it holds, never its own (#598, #689)
     if(pins.has(id))pins.delete(id);else{if(N===1)pins.clear();pins.add(id);focus=id}
     save();refresh(true)});
 }
@@ -3440,6 +3492,10 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         if not own_host(self):
             self.send_response(403); self.send_header("Content-Length", "0"); self.end_headers(); return
+        if self.path.startswith("/held/"):   # a run the childcc pass holds: its dashboard, started when none runs (#689)
+            port = open_held(re.sub(r"[^\w-]", "", self.path[6:].split("?")[0]))
+            if port is None: self.send_response(404); self.send_header("Content-Length", "0"); self.end_headers(); return
+            self.send_response(302); self.send_header("Location", f"http://127.0.0.1:{port}/"); self.send_header("Content-Length", "0"); self.end_headers(); return
         if self.path.startswith("/test/"):   # a test.sh pass: its log, refreshed while it runs
             n = re.sub(r"[^\w-]", "", self.path[6:]); T = STATE / "tests"
             try: d = json.loads((T / (n + ".json")).read_text())
