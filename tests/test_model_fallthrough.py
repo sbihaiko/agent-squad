@@ -162,7 +162,7 @@ def test_model_chain_keeps_a_model_inside_its_hours():
 # The launcher picks the coding model by the models.json coding_models order; the in-run fallback follows the graph
 # allow-list order, so a request line could promise claude-sonnet-5-5 while the engine took grok (#617). The launcher
 # passes the order it read as the engine option `model_order`, recorded at run start like `model_hours`.
-CODING_ORDER = [CHAIN[2], CHAIN[0], CHAIN[1], CHAIN[3]]   # the allow-list order is CHAIN: the two differ
+CODING_ORDER = [CHAIN[2], CHAIN[0], CHAIN[1]]   # the allow-list order is CHAIN: the two differ
 
 
 async def test_a_fallback_follows_the_coding_order_the_launcher_read(tmp_path):
@@ -177,4 +177,4 @@ async def test_a_fallback_follows_the_coding_order_the_launcher_read(tmp_path):
 
 
 def test_model_chain_keeps_an_entry_the_coding_order_does_not_name_behind_the_named_ones():
-    assert model_chain(CHAIN, PICK, order=[CHAIN[3], CHAIN[1]]) == [PICK, CHAIN[3], CHAIN[1], CHAIN[2]]   # terra follows the named entries
+    assert model_chain(CHAIN, PICK, order=[CHAIN[2]]) == [PICK, CHAIN[2], CHAIN[1]]   # the unnamed entry follows the named one

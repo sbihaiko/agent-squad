@@ -724,6 +724,11 @@ def compatible(mid, chain_name, reg=None):
     return (True, None)
 
 
+def no_tools_route(mid, reg=None):
+    """True when the registry knows the spelling and its coding or router route takes no tools. Unknown passes as data."""
+    return compatible(mid, "coding", reg)[1] == "gateway model takes no tools"
+
+
 def _migrate_route(canon, raw, entry, no_tools):
     """The explicit route an entry runs today: coding and router through the gateway, review as review.sh runs it."""
     if canon in ("coding", "router"):

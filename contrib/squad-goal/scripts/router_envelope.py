@@ -26,6 +26,12 @@ def key(m):
     return f"{ref.id}[{ref.ctx}]" if ref.known and ref.ctx else ref.id
 
 
+def takes_no_tools(chain):
+    """The ids of `chain` whose registry route takes no tools: a coding or router choice never offers one (ADR-0147).
+    An unknown spelling passes as data."""
+    return [m for m in chain if modelreg.no_tools_route(m)]
+
+
 def envelope_blocked(chain, envelope):
     """The ids of `chain` the envelope does not allow, by the resolver's key: an alias, a `claude:` prefix and a
     provider spelling name the same model. An empty envelope allows all: nothing was read, so nothing is compared."""

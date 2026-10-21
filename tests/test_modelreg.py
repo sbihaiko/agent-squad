@@ -232,7 +232,7 @@ def test_invocation_keeps_todays_wire_string(raw, use, wire, reg):
 # The role chains this repository ships. A registry landing changes no caller, so a chain entry moves only in its
 # own landing with its own test; this pin makes an accidental rewrite of models.json fail here.
 PINNED_CHAINS = {
-    "coding_models": ["claude-gpt-5.6-terra", "claude-deepseek-flash[1m]", "claude-grok-4.7", "claude-sonnet-5-5"],
+    "coding_models": ["claude-gpt-5.6-terra", "claude-grok-4.7", "claude-sonnet-5-5"],   # no model that takes no tools (ADR-0147)
     "review_models": ["claude:claude-opus-5-5", "gemini-3.8-flash-medium", "grok-4.6"],
     "vision_models": ["gpt-5.6-luna", "gpt-5.6-terra", "gemini-3.8-flash-low"],
 }

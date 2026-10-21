@@ -3,7 +3,7 @@
 Code checks every value. A value may only narrow. A request over any limit is rejected whole:
 no clamp, no partial apply. A model never supplies an identity.
 """
-from squad import skills
+from squad import modelreg, skills
 
 REQUEST_FIELDS = {"prompt", "skill", "model", "effort", "tools", "stalls", "spend", "deadline", "workspace", "inputs", "after", "task"}
 IDENTITY_FIELDS = {"id", "key", "child", "name", "request_key", "parent", "depth"}
@@ -69,6 +69,8 @@ def limit_errors(req, disp, depth, parent_tools, parent_spend_left, parent_time_
         e.append("depth_over_max")
     if req["model"] not in a["models"]:
         e.append(f"model_outside_allow:{req['model']}")
+    elif modelreg.no_tools_route(req["model"]):
+        e.append(f"model_takes_no_tools:{req['model']}")
     if req.get("effort") and req["effort"] not in a["efforts"]:
         e.append("effort_outside_allow")
     for t in req["tools"]:
