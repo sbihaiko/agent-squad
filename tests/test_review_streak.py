@@ -179,3 +179,36 @@ async def test_a_ledger_repeat_moves_a_redispatched_issue_to_the_next_coder(tmp_
     eng = make(tmp_path, {"router": routed(req(task="issue #735")), CHILD: writer("a.txt")}, target=repo)
     assert (await eng.run()).verdict == "completed"
     assert calls(eng) == [(1, OTHER)], "a new run's first attempt starts one place down the chain"
+
+
+def held_ledger(tmp_path, monkeypatch, issue, corrupt):
+    """An issue's ledger that cannot be read as one: a corrupt file, or no file while the issue's old counters are there.
+    ADR-0149 rule 4 makes that a held issue, never an issue with no loop fact."""
+    st = tmp_path / "state"
+    monkeypatch.setenv("SG_STATE", str(st))
+    if corrupt:
+        p = st / "state" / f"x__y__{issue}.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("{not a ledger\n")
+    else:
+        monkeypatch.setenv("SG_REPO", "x/y")   # the old counters were the primary repository's
+        (st / "auto").mkdir(parents=True, exist_ok=True)
+        (st / "auto" / f"requeues-{issue}").write_text("2\n")
+
+
+@pytest.mark.anyio
+@pytest.mark.heavy
+@pytest.mark.parametrize("corrupt", [True, False], ids=["corrupt", "missing-beside-old-counters"])
+async def test_a_held_ledger_starts_no_child_session(tmp_path, monkeypatch, corrupt):
+    """#702 (ADR-0149 rule 4): a ledger that is corrupt, or missing beside the issue's old counters, holds the issue. The
+    run starts no child session and asks the owner with the ledger's own cause; it never starts the child on the top coder
+    as if the issue had no loop fact."""
+    repo = github_target(tmp_path)
+    held_ledger(tmp_path, monkeypatch, "735", corrupt)
+    eng = make(tmp_path, {"router": routed(req(task="issue #735")), CHILD: writer("a.txt")}, target=repo)
+    v = await eng.run()
+    assert calls(eng) == [], "a held ledger starts no child session"
+    assert v.verdict == "needs-human", v.reasons
+    assert "ledger_held" in v.reasons and any("holds the issue" in r for r in v.reasons), v.reasons
+    [child] = [e for e in outcomes(tmp_path)]
+    assert (child["outcome"], child["reasons"][0]) == ("needs-human", "ledger_held")

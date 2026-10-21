@@ -303,16 +303,30 @@ class Dispatch:
             self._slug = f"{m.group(1)}/{m.group(2)}" if m else ""
         return self._slug
 
+    def ledger_hold(self, d):
+        """Why the issue's ledger holds its dispatch, and `""` when it does not (ADR-0149 rule 4): a file that is corrupt,
+        missing beside the issue's old counters, or unreadable is a held issue, never an issue with no loop fact. Empty
+        when the run has no loop state, or names no repository or issue: it reads no ledger, so it holds nothing."""
+        issue, slug = self.issue(d), self.repo_slug()
+        if not issue or not slug or not os.environ.get("SG_STATE"):
+            return ""
+        try:
+            rec = _ledger().read(f"{slug}#{issue}")
+        except (OSError, ValueError, KeyError) as x:   # a reader that cannot answer is a held issue, never a dispatch
+            return f"the issue ledger cannot be read: {x}"
+        return rec.get("held", "") if rec.get("state") == "held" else ""
+
     def ledger_moves(self, d):
         """The places identical findings twice moved this issue's coder down the chain across runs: the issue ledger's one
-        fact (ADR-0151 rule 2, ADR-0149). Zero when the run has no loop state, or names no repository or issue."""
+        fact (ADR-0151 rule 2, ADR-0149). Zero when the run has no loop state, or names no repository or issue. A held
+        ledger never places a coder here: `ledger_hold` keeps the issue from starting at all."""
         issue, slug = self.issue(d), self.repo_slug()
         if not issue or not slug or not os.environ.get("SG_STATE"):
             return 0
         try:
             return int(_ledger().coder(f"{slug}#{issue}"))
         except (OSError, ValueError, KeyError):
-            return 0   # a held ledger stops the issue where dispatch reads it; no read of it moves a coder
+            return 0
 
     def last_round(self, name):
         """The last review round of this child in the record, 0 before the first."""

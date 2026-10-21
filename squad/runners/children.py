@@ -111,8 +111,11 @@ class Children:
                     ctx.held.append(name)
                     ctx.waits.setdefault(name, anyio.Event()).set()
                     return
+                held = "" if blocked else e.dispatch.ledger_hold(e.dispatch.children[name]["definition"])
                 if blocked:
                     done = self.outcome(name, "fail", ["after_failed", *blocked], None, {})
+                elif held:                                      # a held issue ledger starts no session: the owner is asked (ADR-0149 rule 4, ADR-0029)
+                    done = self.outcome(name, "needs-human", ["ledger_held", held], None, {})
                 else:
                     async with ctx.limiter:
                         done = await self.admitted(ctx, name)

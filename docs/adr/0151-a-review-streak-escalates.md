@@ -31,10 +31,11 @@ A child that the reviewer sends back again and again spends money and produces n
 `tests/test_review_streak.py`: identical findings twice change the coder, different findings do not, a fix round that
 wrote no artifact repeats its finding and changes the coder on the first repetition, the record keeps that round's
 last turn, and the dispatch reads the ledger's moves, so a fix round or a re-dispatched issue starts one place down the
-chain. `contrib/squad-goal/scripts/test-childcc.sh`: a run that reviewed a child owns it, so the child-completion pass
-neither reviews nor fixes that child, a child whose approval is missing or stale holds its delivery, and the wave merges
-only a child whose approval stands at its head. The streak is a ledger fact: `tests/test_issue_ledger.py` and
-`contrib/squad-goal/scripts/test-issue-ledger.sh` (three CHANGES verdicts end the issue needs-human, an approval resets
+chain; a ledger that is held starts no child session, so a corrupt or missing ledger asks the owner instead of starting
+the child on the top coder. `contrib/squad-goal/scripts/test-childcc.sh`: a run that reviewed a child owns it, so the
+child-completion pass neither reviews nor fixes that child, a child whose approval is missing or stale holds its delivery,
+and the wave merges only a child whose approval stands at its head. The streak is a ledger fact: `tests/test_issue_ledger.py`
+and `contrib/squad-goal/scripts/test-issue-ledger.sh` (three CHANGES verdicts end the issue needs-human, an approval resets
 the streak, identical findings twice move the coder, a verdict is one fact per run and round, and a rearm clears it with
 its floor) and `contrib/squad-goal/scripts/test-runreview.sh` (the run's review gate writes the verdict, freezes the card
 and stops the requeue). The severity calibration and the approval binding are a draft until their own tests exist
