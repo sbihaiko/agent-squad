@@ -88,6 +88,20 @@ def test_rearm_clears_the_facts_and_queues_the_comment_removal(tmp_path):
     assert len(q) == 1, list((tmp_path / "cq").iterdir())
 
 
+def test_a_rearm_keeps_a_floor_so_an_old_run_never_counts_again(tmp_path):
+    """#692: a rearm cleared every run, so the next janitor pass counted the old runs again and stopped the issue at once."""
+    run(tmp_path, "fail", "a/b#7", "r1", "", "x")
+    run(tmp_path, "fail", "a/b#7", "l1", "", "adapter_error", "loop")
+    run(tmp_path, "rearm", "a/b#7")
+    d = json.loads(run(tmp_path, "read", "a/b#7").stdout)
+    assert d["attempts"] == 0 and set(d["rearmed"]["runs"]) == {"r1", "l1"} and d["rearmed"]["ts"] > 0
+    assert run(tmp_path, "fail", "a/b#7", "r1", "", "x").stdout.split() == ["0", "0", "0"], "an old run counts nothing"
+    assert run(tmp_path, "fail", "a/b#7", "l1", "", "x", "loop").stdout.split() == ["0", "0", "0"]
+    assert run(tmp_path, "fail", "a/b#7", "r9", "", "y").stdout.split() == ["1", "1", "0"], "a new run counts"
+    run(tmp_path, "rearm", "a/b#7")
+    assert set(json.loads(run(tmp_path, "read", "a/b#7").stdout)["rearmed"]["runs"]) == {"r1", "l1", "r9"}, "a floor keeps the old one"
+
+
 def test_the_old_files_seed_a_missing_ledger_once(tmp_path):
     a = tmp_path / "auto"
     a.mkdir()

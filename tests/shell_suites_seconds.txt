@@ -75,6 +75,7 @@ test-janitor-live-mtime.sh 2.68
 test-janitor-neverstarted.sh 1.51
 test-janitor-own-pass.sh 3.46
 test-janitor-pid-reuse.sh 0.35
+test-janitor-rearm-floor.sh 1.08
 test-janitor-rule-o.sh 1.24
 test-janitor-rule-p.sh 1.48
 test-janitor-run-fields-unchanged.sh 1.75

@@ -37,6 +37,11 @@ line() { mkdir -p "runs/run-$1"; printf '%s\n' "${@:2}" > "runs/run-$1/record.js
 line ended '{"event": "run_start", "pos": 1}' "$(v completed)"; line going '{"event": "run_start", "pos": 1}'
 line lwave '{"event": "run_start", "pos": 1}' "$(v completed)"; : > "$T/st/auto/wave-run-lwave"
 line lws '{"event": "run_start", "pos": 1}' "$(v completed)"; $G worktree add -q -b squad/run-lws/c runs/run-lws/ws/c origin/main; echo w > runs/run-lws/ws/c/f
+# #693: a failed run with remains, an hour past its verdict, whose wave is over (landed or stuck: waved- stays, wave- went) leaves
+# active-runs.txt, so rule O reads it no more; one with remains and no wave over keeps its line for a resume.
+hour2() { python3 -c 'import os, sys, time; t = time.time() - 7200; os.utime(sys.argv[1], (t, t))' "runs/run-$1/record.jsonl"; }
+line lover '{"event": "run_start", "pos": 1}' "$(v failed '["x"]' '["n1"]')"; hour2 lover; : > "$T/st/auto/waved-run-lover"
+line lrem '{"event": "run_start", "pos": 1}' "$(v failed '["x"]' '["n1"]')"; hour2 lrem
 $G worktree add -q -b gui/cn worktrees/child/cn origin/main; mkdir -p worktrees/child/cn/runs/run-cn; echo "$(v completed)" > worktrees/child/cn/runs/run-cn/record.jsonl
 $G worktree add -q -b squad/run-cn/c worktrees/child/cn/runs/run-cn/ws/c origin/main; echo work > worktrees/child/cn/runs/run-cn/ws/c/f
 $G worktree add -q -b fresh/1 "$T/hm/wt-fresh" origin/main   # made a moment ago at the base tip: a gate may be starting in it
@@ -62,6 +67,7 @@ for k in ahead dirty human nest; do case "$out" in *"WT KEPT run $k:"*) ok "the 
 o2=$(bash "$T/s/wtclean.sh" 2>&1); case "$o2" in *"WT KEPT run ahead"*) ko "a kept tree is named again: $o2";; *) ok "a kept tree is named once";; esac
 lines=$(cat "$T/st/active-runs.txt")
 case "$lines" in *run-ended*) ko "an ended run kept its active-runs line: $lines";; *) ok "an ended run leaves active-runs.txt";; esac
-for k in going lwave lws; do case "$lines" in *"run-$k"*) ok "active-runs keeps $k";; *) ko "active-runs dropped $k";; esac; done
+case "$lines" in *run-lover*) ko "a run whose wave is over kept its active-runs line: $lines";; *) ok "a failed run whose wave is over leaves active-runs.txt";; esac
+for k in going lwave lws lrem; do case "$lines" in *"run-$k"*) ok "active-runs keeps $k";; *) ko "active-runs dropped $k";; esac; done
 [ -d "$T/hm/wt-fresh" ] && ok "a fresh ~/wt-* tree at the base tip: kept" || ko "wt-fresh removed: $out"
 rm -rf "$T"; exit $fail
