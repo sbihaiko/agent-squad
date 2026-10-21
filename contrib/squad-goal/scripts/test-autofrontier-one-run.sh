@@ -14,7 +14,7 @@ export SG_SQUAD=$repo SQUAD_CAPS_DIR=$T/caps   # (#21) the pass reads the machin
 mkdir -p "$T/bin" "$T/scripts"
 cat > "$T/bin/gh" <<'GH'
 #!/bin/bash
-q=""; p=""; prev=""
+q=""; p=""; prev=""; [ -n "$GHLOG" ] && echo "$*" >> "$GHLOG"
 for a in "$@"; do
   [ "$prev" = "-q" ] && q="$a"
   case "$a" in repos/*) p="$a";; esac
@@ -360,6 +360,24 @@ mkdir -p "$SG_STATE/state"; printf '{"own": {' > "$SG_STATE/state/o__r__71.json"
 r=$(run)
 [ "$(marked 71)" = 0 ] && case "$r" in *"FRONTIER skip #71: "*corrupt*) true;; *) false;; esac && ok "L: a corrupt ledger holds its issue, and the pass names the cause" || ko "L: #71 with a corrupt ledger: '$r'"
 [ "$(marked 72)" = 1 ] && ok "L: an issue beside it goes out" || ko "L: #72 did not go out: '$r'"
+
+# AC (#729): a ticket whose acceptance commands name a missing repository script is not dispatched. It gets one comment that
+#   names the path, and needs-info; the pass logs the refusal. A path the ticket creates is not missing; no AC, no change.
+scene acpaths
+cp "$(dirname "$src")/acpaths.py" "$T/scripts/" 2>/dev/null; mkdir -p "$SG_CHECKOUT/scripts"; echo x > "$SG_CHECKOUT/scripts/here.sh"
+export GHLOG=$d/gh.log
+issues '[{"number":81,"title":"a","body":"## What to build\n\nx\n\n## Acceptance criteria\n\n- [ ] `python3 scripts/checks/gone.py` passes.\n- [ ] `bash scripts/here.sh` passes.","labels":[{"name":"wave:01"}]},{"number":82,"title":"a","body":"## What to build\n\nAdd `scripts/checks/made.py`.\n\n## Acceptance criteria\n\n- [ ] `python3 scripts/checks/made.py` passes.","labels":[{"name":"wave:01"}]},{"number":83,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
+r=$(run)
+[ "$(marked 81)" = 0 ] && ok "AC: a ticket whose acceptance command names a missing script is not dispatched" || ko "AC: #81 was dispatched: '$r'"
+[ "$(marked 82 83)" = 2 ] && ok "AC: a ticket that creates its script, and one with no acceptance command, are dispatched" || ko "AC: $(marked 82 83) of #82 #83 marked: '$r'"
+case "$r" in *"FRONTIER refuse #81: "*"scripts/checks/gone.py"*needs-info*) ok "AC: the pass logs the refusal with the path";; *) ko "AC: no refusal line for #81: '$r'";; esac
+cq81=$(cat "$d/st/cq/"*"#81-"* 2>/dev/null); nq=$(ls "$d/st/cq" | $G -c -- '#81-')
+[ "$nq" = 1 ] && case "$cq81" in *scripts/checks/gone.py*needs-info*) true;; *) false;; esac && ok "AC: the issue gets one comment that names the path and needs-info" || ko "AC: comments for #81 ($nq): '$cq81'"
+$G -q 'issues/81/labels.*needs-info' "$GHLOG" && ok "AC: the issue is labelled needs-info" || ko "AC: no needs-info label write: '$(cat "$GHLOG")'"
+case "$cq81" in *scripts/here.sh*) ko "AC: the comment names a path the repository holds";; *) ok "AC: the comment names only the missing path";; esac
+r=$(run)
+[ "$(marked 81)" = 0 ] && [ "$(ls "$d/st/cq" | $G -c -- '#81-')" = 1 ] && ok "AC: a second pass dispatches nothing and adds no comment" || ko "AC: second pass: $(marked 81) marked, $(ls "$d/st/cq"): '$r'"
+unset GHLOG; rm -f "$T/scripts/acpaths.py"
 
 rm -rf "$T"
 [ "$fail" = 0 ] && { echo "autofrontier one-run: all checks green"; exit 0; }
