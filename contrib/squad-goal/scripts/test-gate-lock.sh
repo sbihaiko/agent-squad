@@ -40,11 +40,17 @@ case "$out" in *"2") ok "a project that lowers caps.gates: the gate takes min(wo
 # the pytest of the battery runs with the count the gate took
 . "$d/base-battery.sh"; b=$(SQUAD_GATE_WORKERS=2 SG_GATE_WORKERS=6 sg_base_battery py)
 case "$b" in *'-n ${SQUAD_GATE_WORKERS:-6}'*) ok "the battery's pytest reads the count the gate took, 6 when none";; *) ko "battery: '$b'";; esac
-# all or none: 10 of 12 held, a gate that wants 6 holds nothing and is skipped at once in try mode
-capsctl take gates other --count 10 --pid "$live" >/dev/null
+# (#734) the slots that are free, not six or nothing: 8 of 12 held, a gate that wants 6 takes the 4 free and runs with 4
+capsctl take gates other --count 8 --pid "$live" >/dev/null
+out=$(SG_GATE_WORKERS=6 bash "$T/s/gate.sh" sh -c 'echo $SQUAD_GATE_WORKERS' 2>&1)
+[ "$out" = 4 ] && ok "a gate with 4 free slots takes 4 and runs its command with 4 workers" || ko "short take: '$out', want 4"
+[ "$(occ gates)" = 8 ] && ok "a short gate gives its slots back" || ko "short gate left slots: $(occ gates) held, want 8"
+capsctl release gates other
+# below two free: 11 of 12 held, a gate that wants 6 holds nothing and is skipped at once in try mode
+capsctl take gates other --count 11 --pid "$live" >/dev/null
 t0=$(date +%s); SERIAL_TRY=1 SG_GATE_WORKERS=6 bash "$T/s/gate.sh" true 2>"$T/err3"; rc=$?
-[ $rc = 73 ] && [ $(( $(date +%s) - t0 )) -lt 5 ] && ok "try mode skips at once when the slots are full (exit 73)" || ko "try mode: rc $rc"
-[ "$(occ gates)" = 10 ] && ok "a gate that cannot have all its slots holds none of them" || ko "partial hold: $(occ gates) held, want 10"
+[ $rc = 73 ] && [ $(( $(date +%s) - t0 )) -lt 5 ] && ok "try mode skips at once when fewer than two slots are free (exit 73)" || ko "try mode: rc $rc"
+[ "$(occ gates)" = 11 ] && ok "a gate that cannot have two of its slots holds none of them" || ko "partial hold: $(occ gates) held, want 11"
 /usr/bin/grep -c 'caps.gates' "$T/err3" | /usr/bin/grep -q '^1$' && ok "the skip says so on one line naming the ceiling" || ko "skip line: $(cat "$T/err3")"
 SERIAL_WAIT_SECONDS=1 SG_GATE_WORKERS=6 bash "$T/s/gate.sh" true 2>"$T/err4"; rc=$?
 [ $rc = 75 ] && ok "a wait for slots ends at its bound (exit 75)" || ko "slot wait: rc $rc"

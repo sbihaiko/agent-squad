@@ -10,11 +10,13 @@
 # The sha is the HEAD the gate ran at, read from the working directory. The lock lives in $SG_STATE/locks/gate. With SG_STATE
 # unset it is the one machine-wide /tmp/sg-state, never a TMPDIR path: TMPDIR is per user on macOS, so two users or a launchd
 # job would resolve two lock directories and run two gates together.
-# A gate takes SG_GATE_WORKERS gate slots (#566) of the machine-wide budget (caps.gates, squad/caps.py) BEFORE it takes the lock, all
-# at once or none, so the lock holder never spends its hold deadline waiting for slots. Slots are re-entrant as the lock is: a gate
-# inside a gate holder (SG_SERIAL_HELD names gate) takes none and keeps the holder's SQUAD_GATE_WORKERS. A project file that lowers
-# caps.gates below SG_GATE_WORKERS gives the gate min(workers, ceiling) slots, never a wait for slots that cannot exist, and the
-# battery's pytest runs with that count (SQUAD_GATE_WORKERS). Try mode (SERIAL_TRY) skips a full budget at once (73); a wait is
+# A gate takes SG_GATE_WORKERS gate slots (#566) of the machine-wide budget (caps.gates, squad/caps.py) BEFORE it takes the lock, in
+# one locked step, so the lock holder never spends its hold deadline waiting for slots. It takes all it asks for when they are free,
+# else the free slots when they number two or more (#734), so a third gate runs with 2 to 4 workers instead of giving up; fewer than
+# two free is no take, so a gate never holds part of its slots while it waits for the rest. SQUAD_GATE_WORKERS is the count the gate
+# actually took, and the battery's pytest runs with it. Slots are re-entrant as the lock is: a gate inside a gate holder
+# (SG_SERIAL_HELD names gate) takes none and keeps the holder's SQUAD_GATE_WORKERS. A project file that lowers
+# caps.gates below SG_GATE_WORKERS gives the gate min(workers, ceiling) slots, never a wait for slots that cannot exist. Try mode (SERIAL_TRY) skips a full budget at once (73); a wait is
 # bound by SERIAL_WAIT_SECONDS and by the call deadline of a run (SG_CALL_DEADLINE_SECONDS), says so on one line, and ends in 75.
 # `gate.sh --status <kind> <pass|fail> <sha>` writes status for a gate whose sha is not the working directory's HEAD: a command
 # that calls it sets SG_GATE_STATUS=self, so the gate does not overwrite it with the HEAD it was started in. Each line is written

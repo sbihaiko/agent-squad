@@ -11,8 +11,9 @@ the janitor applies to a stranded run: no live process holds it. The holders of 
 process per lease: the count runs on every poll of every wait, and a `ps` per lease is the fork storm that parks a small runner.
 Filling the ceiling queues: `take` waits for a slot until its bound, writes a waiting marker the panel names, then raises
 CeilingWaitExpired, which names the ceiling that was full.
-A gate takes its worker slots all at once or none (`try_take_many`): a partial hold across two gates is a deadlock that lasts until
-the wait bound. Bash takes and releases through `python3 -m squad.caps take|release`; the try mode skips at once (exit 73), as
+A gate takes its worker slots in one locked step (`try_take_many`): all it asks for when they are free, else the free slots when
+they number two or more, so a third gate runs with fewer workers instead of giving up (#734); fewer than two free is no take, and
+a gate never holds part of its slots while it waits for the rest. Bash takes and releases through `python3 -m squad.caps take|release`; the try mode skips at once (exit 73), as
 `SERIAL_TRY` does for serial.sh, and a wait that outlives its bound exits 75. A count above the ceiling is lowered to it.
 
 Guard: `tests/test_machine_caps.py`.
@@ -183,10 +184,18 @@ class Ceiling:
             return list(dict.fromkeys(lease.get("holder", "?") for lease in self._live(kind)))
 
     def try_take_many(self, kind, holder, n, pid=None):
-        """Take `n` slots of `kind` for `holder` all at once, or none. Return the lease paths, or None when the ceiling has no room
-        for all of them: a gate never holds part of its slots while it waits for the rest."""
+        """Take `n` slots of `kind` for `holder` in one locked step, or none. Return the lease paths, or None when the ceiling
+        gives no slot.
+
+        The ceiling gives all `n` when it holds them, else every free slot when they number two or more, so a third gate runs with
+        the slots that are free instead of giving up (#734). Fewer than two free is no take. A take is one locked step, so a gate
+        never holds part of its slots while it waits for the rest."""
         with self._lock():
-            if len(self._live(kind)) + n > self.caps[kind]:
+            if n <= 0:
+                return []
+            free = self.caps[kind] - len(self._live(kind))
+            n = n if free >= n else (free if free >= 2 else 0)
+            if n == 0:
                 return None
             out = []
             for i in range(n):
@@ -256,7 +265,8 @@ def _take(args):
         n = cap
     poll = float(os.environ.get("SQUAD_CAPS_POLL") or 1.0)
     t0, said = time.monotonic(), False
-    while c.try_take_many(args.kind, args.holder, n, args.pid) is None:
+    leases = c.try_take_many(args.kind, args.holder, n, args.pid)
+    while leases is None:
         held = ", ".join(c.holders(args.kind)) or "?"
         full = f"caps.{args.kind} is full ({cap} slots), held by {held}"
         if args.try_mode:
@@ -270,7 +280,8 @@ def _take(args):
             print(f"caps: {args.holder} waited {args.wait:g}s for caps.{args.kind}, held by {held}", file=sys.stderr)
             return EXPIRED
         time.sleep(min(poll, left))
-    print(n)
+        leases = c.try_take_many(args.kind, args.holder, n, args.pid)
+    print(len(leases))
     return 0
 
 

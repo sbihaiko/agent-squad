@@ -266,16 +266,14 @@ def test_a_caps_block_without_gates_and_reviews_is_a_named_failure(tmp_path):
         caps.resolve(defaults_path=p)
 
 
-def test_gate_slots_are_taken_all_or_none(tmp_path):
+def test_gate_slots_are_taken_whole_when_they_fit(tmp_path):
     c = caps.Ceiling(FOUR, tmp_path / "leases")
     first = c.try_take_many("gates", "gate-a", 6)
     assert len(first) == 6 and c.occupancy()["gates"] == 6
-    assert c.try_take_many("gates", "gate-b", 7) is None                  # 6 + 7 > 12: no slot of the seven is held
-    assert c.occupancy()["gates"] == 6
-    second = c.try_take_many("gates", "gate-b", 6)
-    assert len(second) == 6 and c.occupancy()["gates"] == 12
+    assert len(c.try_take_many("gates", "gate-b", 6)) == 6               # it fits: the six are taken whole
+    assert c.occupancy()["gates"] == 12
     c.release_many(first)
-    assert c.occupancy()["gates"] == 6
+    assert len(c.try_take_many("gates", "gate-c", 6)) == 6 and c.occupancy()["gates"] == 12
 
 
 def test_the_slots_of_a_dead_holder_are_reclaimed_whatever_the_kind(tmp_path):

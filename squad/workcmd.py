@@ -10,7 +10,8 @@ recorded `ac_failed:timeout after 120 s` and failed a run whose code was green. 
 stays fast (a wide command is a choice, never the default).
 
 A command takes `SG_CHILD_TEST_WORKERS` (default 2) `gates` slots of the machine-wide budget before it starts (squad/caps.py,
-#608), all at once or none, and runs with that count in `SQUAD_GATE_WORKERS` and `PYTEST_XDIST_AUTO_NUM_WORKERS`, so a run's
+#608), in one locked step and never part of them while it waits, and runs with the count it took in `SQUAD_GATE_WORKERS` and
+`PYTEST_XDIST_AUTO_NUM_WORKERS` (#734), so a run's
 children never start one pytest worker per core each. A full budget makes it wait and say so on stderr, never fail. A wait past
 `SG_CHILD_SLOT_WAIT` (default 1800 s) runs it with 1 worker and says so. Inside a gate holder it takes none, as gate.sh does.
 
@@ -172,7 +173,7 @@ def gate_slots(cwd):
             return
         time.sleep(poll)
     try:
-        yield n
+        yield min(n, len(leases))       # the count it took: a short take runs with the slots it holds (#734)
     finally:
         c.release_many(leases)
 

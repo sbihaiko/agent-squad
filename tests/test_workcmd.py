@@ -183,6 +183,23 @@ def test_a_wait_past_its_bound_runs_the_command_with_one_worker_and_never_fails_
     assert "1 worker" in capsys.readouterr().err
 
 
+def test_a_command_that_gets_fewer_slots_than_it_asked_runs_with_the_slots_it_holds(tmp_path, monkeypatch):
+    """#734: 3 free slots answer a child that asks 4 with 3, so the command runs with 3 workers instead of waiting."""
+    budget_env(monkeypatch)
+    monkeypatch.setenv("SG_CHILD_TEST_WORKERS", "4")
+    monkeypatch.setenv("SQUAD_CAPS_DIR", str(tmp_path / "caps"))
+    from squad import caps
+    c = caps.ceiling()
+    holder = subprocess.Popen(["sleep", "30"])
+    assert len(c.try_take_many("gates", "other-gate", c.caps["gates"] - 3, pid=holder.pid)) == c.caps["gates"] - 3
+    try:
+        r = workcmd.run(BOUNDED.format(n=3), str(tmp_path), timeout=10)
+    finally:
+        holder.kill()
+    assert r.ok, r.evidence
+    assert c.occupancy()["gates"] == c.caps["gates"] - 3       # the slots go back when the command ends
+
+
 def test_inside_a_gate_holder_a_command_takes_no_slot_and_keeps_the_holder_count(tmp_path, monkeypatch):
     budget_env(monkeypatch)
     monkeypatch.setenv("SG_SERIAL_HELD", "gate")
