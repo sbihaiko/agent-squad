@@ -8,12 +8,23 @@ Two issues join a cluster when either holds:
          touch the same slice and would conflict as separate PRs.
 CL_MODE=files keeps only the files rule (the frontier: tickets cut from one spec share an area and a creation time
 without sharing a cause).
+A path is compared in its normal form (paths below): "./squad/a.py" and "squad/x/../a.py" are one file (#703).
 Prints one cluster per line, issue numbers ascending (the first is the primary), input order of clusters by primary."""
-import json, os, re, sys, time
+import json, os, posixpath, re, sys, time
 
-PATH = re.compile(r"\b(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+\.(?:cs|cpp|h|hpp|py|sh|axaml|json|md|yml|yaml|xml|js|ts)\b")
-mode = os.environ.get("CL_MODE", "all")
-win = float(os.environ.get("CL_WINDOW_H", "6")) * 3600
+PATH = re.compile(r"(?<![A-Za-z0-9_.~/-])(?:\.{1,2}/)*(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+\.(?:cs|cpp|h|hpp|py|sh|axaml|json|jsonl|md|yml|yaml|toml|xml|js|ts|html|css)\b")
+
+
+def paths(body):
+    """The repository-relative files a body names, in normal form: "./" and "x/.." fold away; a path that leaves the
+    repository ("../x") is no repository file and is dropped."""
+    out = set()
+    for p in PATH.findall(body or ""):
+        n = posixpath.normpath(p)
+        if n != ".." and not n.startswith("../"):
+            out.add(n)
+    return out
+
 
 def ts(s):
     try: return time.mktime(time.strptime(s, "%Y-%m-%dT%H:%M:%SZ"))
@@ -23,20 +34,28 @@ def area(t):
     t = (t or "").strip()
     return t.split(":", 1)[0].strip().lower() if ":" in t else ""
 
-items = json.load(sys.stdin)
-par = {}
-def find(x):
-    while par[x] != x: par[x] = par[par[x]]; x = par[x]
-    return x
-def join(a, b): par[find(a)] = find(b)
-info = []
-for it in items:
-    n = int(it["number"]); par[n] = n
-    info.append((n, area(it.get("title")), ts(it.get("created_at")), set(PATH.findall(it.get("body") or ""))))
-for i, (a, aa, at, af) in enumerate(info):
-    for b, ba, bt, bf in info[i + 1:]:
-        if mode != "files" and aa and aa == ba and at is not None and bt is not None and abs(at - bt) <= win: join(a, b)
-        elif af & bf: join(a, b)
-groups = {}
-for n, *_ in info: groups.setdefault(find(n), []).append(n)
-for g in sorted((sorted(v) for v in groups.values()), key=lambda v: v[0]): print(" ".join(map(str, g)))
+
+def main():
+    mode = os.environ.get("CL_MODE", "all")
+    win = float(os.environ.get("CL_WINDOW_H", "6")) * 3600
+    items = json.load(sys.stdin)
+    par = {}
+    def find(x):
+        while par[x] != x: par[x] = par[par[x]]; x = par[x]
+        return x
+    def join(a, b): par[find(a)] = find(b)
+    info = []
+    for it in items:
+        n = int(it["number"]); par[n] = n
+        info.append((n, area(it.get("title")), ts(it.get("created_at")), paths(it.get("body"))))
+    for i, (a, aa, at, af) in enumerate(info):
+        for b, ba, bt, bf in info[i + 1:]:
+            if mode != "files" and aa and aa == ba and at is not None and bt is not None and abs(at - bt) <= win: join(a, b)
+            elif af & bf: join(a, b)
+    groups = {}
+    for n, *_ in info: groups.setdefault(find(n), []).append(n)
+    for g in sorted((sorted(v) for v in groups.values()), key=lambda v: v[0]): print(" ".join(map(str, g)))
+
+
+if __name__ == "__main__":
+    main()

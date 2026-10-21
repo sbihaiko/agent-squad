@@ -5,7 +5,8 @@
 # A run takes as many children as its envelope allows: the dispatch node's max_children, and run.max_children less the children the
 # live runs already hold. A pass never asks for more (the engine rejects a request over its limit whole), the startable issues past
 # it wait for the next run, and the pass says so. Without a readable envelope the free run slots bound the picks, as before.
-# READY issues naming a common file share one child and one branch (cluster.py). The profile's
+# READY issues naming a common file share one child and one branch (cluster.py); a second ticket of one spec waits for a
+# later run (siblings.py, ADR-0150). The profile's
 # $SG_FRONTIER_PREAMBLE (shared rules) heads the request. The dispatcher never removes the marker; delete auto/disp-<n>
 # to dispatch again, or let the janitor drop it when the run never starts (rule J, at most twice) or ends without
 # landing anything, whatever its verdict (janitor rule O; rule R sets the card: Todo after a failed run, Blocked after needs-human). Empty SG_FRONTIER_LABEL turns it off.
@@ -168,6 +169,14 @@ while [ $i -lt ${#cands[@]} ]; do
   printf '%s\n' "$stack_out" | grep '^STACK NOTE ' | sed 's/^STACK NOTE /FRONTIER NOTE /' >&2 || true
   g=; nt=
   case "$d" in READY*) g=base; nt="work in the worktree the run gives you";; *) continue;; esac
+  # A run never holds conflicting siblings (ADR-0150, #703): a ticket of a spec that a picked issue already builds, as a child
+  # of its own, waits for a later run. Deterministic (siblings.py: the spec link and the bodies, no model); issues that name
+  # one file are one child (cluster.py), never siblings. A filter that cannot run filters nothing: landing still checks.
+  if [ ${#pick[@]} -gt 0 ]; then
+    why=$(python3 "$here/siblings.py" "$F/issues.json" "$n" "${pick[@]}" 2>&1); rc=$?
+    case $rc in 0) ;; 1) echo "FRONTIER split #$n: $why (ADR-0150); it waits for a later run"; continue;;
+      *) echo "FRONTIER NOTE siblings.py failed ($rc): ${why%%$'\n'*}; no sibling filter for #$n" >&2;; esac
+  fi
   [ -z "$full" ] || joins "$g" "$n" || break
   pick+=("$n"); notes+=("$nt"); ready+=("$n")
   [ -n "$full" ] || [ ${#pick[@]} -lt "$cap" ] || full=1

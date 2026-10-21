@@ -22,4 +22,4 @@ A run that packs several children lands them as one wave. Two children that chan
 
 ## Guard
 
-None yet. This rule is a draft until a named guard test exists (ADR-0018).
+`contrib/squad-goal/scripts/test-autofrontier-one-run.sh` (case S) and `contrib/squad-goal/scripts/test-cluster.sh`. The frontier pass applies the rule in `siblings.py`; issues that name one file are one child (`cluster.py`), so they are never siblings.
