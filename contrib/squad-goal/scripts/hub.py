@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Squad hub: one browser page that lists every live run dashboard (agent-squad dashboard_server processes) and embeds them.
 usage: hub.py [port]   default 7700, loopback only. Read-only: it discovers servers via ps/lsof and reads record.jsonl."""
-import datetime as dt, glob, importlib.util, json, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, pathlib, urllib.parse, urllib.request
+import datetime as dt, glob, hashlib, importlib.util, json, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, pathlib, urllib.parse, urllib.request
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
 import agyquota, chainhealth, provkey, router_envelope   # the one envelope source, shared with launch.py (#436)
 from issue_state import board_state, KINDS, TEST_CASE_TITLE, _utc
@@ -3006,7 +3006,7 @@ def subs_month():
 MODELS = pathlib.Path(__file__).resolve().parent / "models.json"
 CHAINS = ("coding_models", "review_models", "vision_models")   # all three live in models.json
 ROUTER_CHAIN = "router_models"   # the router's own chain, written into the run graph (the dispatch envelope, #95)
-READONLY = ("known", "router_known", "suggest", "labels", "boxes", "last_coding", "envelope", "blocked", "chain")   # fields models_get() adds for the panel: posted back, never stored
+READONLY = ("known", "router_known", "suggest", "version", "labels", "boxes", "last_coding", "envelope", "blocked", "chain")   # fields models_get() adds for the panel: posted back, never stored
 # One model-id shape, in one place (#221): a bare id, and the context suffix the gateway serves beside it
 # (`claude-deepseek-v4-flash[1m]`). The save validates with MODEL_ID and the page's Add box tests the same source,
 # substituted when the page is served, so a second spelling cannot refuse an id the save takes -- the shape without the
@@ -3306,7 +3306,7 @@ def models_get():
             "hours": {k: {bare_id(m): v for m, v in hk.items()} for k, hk in hours_of(d).items()},
             "off": {k: {bare_id(m): True for m in ok} for k, ok in off_of(d).items()},
             "known": known_models(d), "last_coding": last_coding_model(), "envelope": envelope_of(),
-            "router_models": router_get(), "router_known": router_known(),
+            "router_models": router_get(), "router_known": router_known(), "version": models_version(),
             "suggest": {"known": model_suggestions(known_models(d)), "router_known": model_suggestions(router_known())},
             "labels": model_labels(set(known_models(d)) | set(router_known()) | {bare_id(m) for k in CHAINS for m in d.get(k, [])}),
             "boxes": {**{k: {bare_id(m): model_box(bare_id(m), k) for m in d.get(k, [])} for k in CHAINS},
@@ -3314,8 +3314,31 @@ def models_get():
                       "known": {m: model_box(m) for m in set(known_models(d)) | set(router_known()) | ({last_coding_model()} - {None, ""})}},
             "chain": chainhealth.chain_state(d, "review_models", SHARED),
             "blocked": {k: router_envelope.envelope_blocked([bare_id(m) for m in d.get(k, [])], router_get()) for k in ("coding_models",)}}
+def models_version():
+    """What a Save must have read (#688): a hash of models.json and of the graph's allow.models, both parsed, so a
+    rewrite that keeps the same data keeps the version. An unreadable models.json hashes as its raw bytes."""
+    try: m = json.loads(MODELS.read_text())
+    except (OSError, ValueError):
+        try: m = MODELS.read_bytes().hex()
+        except OSError: m = None
+    doc = json.dumps({"models": m, "allow": router_envelope.envelope_models(_graph_doc())}, sort_keys=True)
+    return hashlib.sha256(doc.encode()).hexdigest()
+
+
+_SAVE = threading.Lock()   # one Save at a time, so the version check and the write see the same files
+
+
 def models_set(new):
-    """Replace the three role chains in models.json; every other key is kept. Atomic write, so a reader never sees half a file."""
+    """Replace the three role chains in models.json; every other key is kept. Atomic write, so a reader never sees half a file.
+
+    A body whose version is not the current one comes from a page that did not read the last Save (#688): it is
+    refused whole, before any write, so an old tab never takes back what a newer Save wrote."""
+    with _SAVE:
+        if not isinstance(new, dict) or new.get("version") != models_version(): return {"err": "stale: reload the page"}
+        return _models_set(new)
+
+
+def _models_set(new):
     # The panel posts back whatever models_get() handed it, so every read-only field it carries comes back here: `known`
     # (the add box's list) and `last_coding` (the header's line). Dropping only `known` made the other one read as a chain
     # the panel invented -- "unknown chain" on every Save (2026-10-11).
