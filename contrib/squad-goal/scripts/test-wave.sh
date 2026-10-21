@@ -659,4 +659,21 @@ child 402 g402 "origin/$W40"; REV=none rev 402
 r=$(cd "$T/c402" && SG_WAVE_GATES=true bash "$T/s/wave.sh" enter run-40 402 2>&1)
 case "$(cat "$T/st/auto/excluded-run-40-402" 2>/dev/null)" in *"no review of gui/402 yet"*) ok "Y: a review hold records its cause";; *) ko "Y: excluded marker '$(cat "$T/st/auto/excluded-run-40-402" 2>/dev/null)': '$r'";; esac
 
+# Z (#694): a run whose final gate (ac-verify) failed takes no child into its wave: the child is refused, its cause is recorded,
+# and the wave lands empty. A run that passed, or one with no verdict yet, lets its child enter as before.
+for rn in 41 42 43; do start2 run-$rn >/dev/null; mkdir -p "$T/co/runs/run-$rn"; done
+printf '%s\n' '{"event": "run_start"}' \
+  '{"event": "verdict", "verdict": "failed", "reasons": ["ac-verify:ac_failed:bash contrib/squad-goal/scripts/fast-gate.sh"]}' > "$T/co/runs/run-41/record.jsonl"
+printf '%s\n' '{"event": "run_start"}' '{"event": "verdict", "verdict": "completed", "reasons": []}' > "$T/co/runs/run-42/record.jsonl"
+printf '%s\n' '{"event": "run_start"}' > "$T/co/runs/run-43/record.jsonl"
+child 410 g410 origin/wave/run-41; REV_BASE=wave/run-41 rev 410; before=$($O rev-parse wave/run-41)
+r=$(cd "$T/c410" && SG_WAVE_GATES=true bash "$T/s/wave.sh" enter run-41 410 2>&1); rc=$?
+[ $rc != 0 ] && [ "$($O rev-parse wave/run-41)" = "$before" ] && ok "Z: a child of a run whose final gate failed never enters" || ko "Z: exit $rc, tip moved: '$r'"
+case "$(cat "$T/st/auto/excluded-run-41-410" 2>/dev/null)" in *"the run's final gate failed"*) ok "Z: the exclusion names the failed final gate";; *) ko "Z: excluded marker '$(cat "$T/st/auto/excluded-run-41-410" 2>/dev/null)': '$r'";; esac
+for rn in 42 43; do n=$((410 + rn - 41))
+  child $n g$n origin/wave/run-$rn; REV_BASE=wave/run-$rn rev $n
+  r=$(cd "$T/c$n" && SG_WAVE_GATES=true bash "$T/s/wave.sh" enter run-$rn $n 2>&1); rc=$?
+  [ $rc = 0 ] && $O cat-file -e wave/run-$rn:g$n 2>/dev/null && ok "Z: a child of run-$rn (passed or live) enters" || ko "Z: run-$rn exit $rc: '$r'"
+done
+
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }
