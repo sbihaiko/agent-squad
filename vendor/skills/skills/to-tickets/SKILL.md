@@ -16,6 +16,8 @@ The issue tracker and triage label vocabulary should have been provided to you. 
 
 Work from whatever is already in the conversation context. If the user passes a reference (a spec path, an issue number or URL) as an argument, fetch it and read its full body and comments.
 
+**When the parent is a spec issue, check its `spec` label before drafting.** Read it back (`gh issue view <n> --json labels`). If the label is missing, stop and report it: the squad hub's Specs filter only shows issues that carry it, and an unlabelled spec can be dispatched as work. Add it (creating the label if it does not exist) only with the owner's go-ahead; this is the one change to a parent the skill may make.
+
 ### 2. Explore the codebase (optional)
 
 If you have not already explored the codebase, do so to understand the current state of the code. Ticket titles and descriptions should use the project's domain glossary vocabulary, and respect ADRs in the area you're touching.
@@ -82,7 +84,9 @@ Publish the approved tickets. **How** depends on the tracker `/setup-matt-pocock
 
 Work the **frontier**: any ticket whose blockers are all done. For a purely linear chain that means top to bottom.
 
-Do NOT close or modify any parent issue.
+Do NOT close or modify any parent issue, except adding a missing `spec` label as step 1 allows.
+
+Before reporting the tickets published, read the parent's labels back once more: a spec parent must still carry `spec` and no `ready-for-agent`, and no ticket may carry `spec`.
 
 <local-ticket-template>
 
