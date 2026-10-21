@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Squad hub: one browser page that lists every live run dashboard (agent-squad dashboard_server processes) and embeds them.
 usage: hub.py [port]   default 7700, loopback only. Read-only: it discovers servers via ps/lsof and reads record.jsonl."""
-import datetime as dt, glob, hashlib, html, importlib.util, json, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, pathlib, urllib.parse, urllib.request
+import datetime as dt, glob, hashlib, html, importlib.util, itertools, json, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, pathlib, urllib.parse, urllib.request
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
 import agyquota, chainhealth, modelreg, provkey, router_envelope   # the one envelope source, shared with launch.py (#436)
 from issue_state import board_state, KINDS, TEST_CASE_TITLE, _utc
@@ -1494,10 +1494,15 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
     save_board()
     if items: _flow.append(BOARD.with_name("hub-flow.jsonl"), items)
     return board_cache
+_WRITE_SEQ = itertools.count(1)   # one temp name per write, never one per writer: a thread id is reused once its thread ends (#512)
+def _temp_name(path):
+    """The temp name one write owns: the pid, so two processes never meet, and a counter, because a thread id is reused
+    once its thread has ended (#512, #743)."""
+    return path.with_name(f"{path.name}.{os.getpid()}.{next(_WRITE_SEQ)}.tmp")
 def save_board():
-    """The cache file writes the rows the hub holds. The temp name is the writer's own (#512): hubmux runs one hub per
+    """The cache file writes the rows the hub holds. The temp name is the write's own (#512): hubmux runs one hub per
     profile in one process, so the pid alone is shared."""
-    _tmp = BOARD.with_name(f"{BOARD.name}.{os.getpid()}.{threading.get_ident()}.tmp"); _tmp.write_text(json.dumps(board_cache)); os.replace(_tmp, BOARD)
+    _tmp = _temp_name(BOARD); _tmp.write_text(json.dumps(board_cache)); os.replace(_tmp, BOARD)
 def refresh_board():
     """board_pass() every 60 s, or within 2 s of a board move made through scripts/board.sh (board-dirty flag).
     The items route lags a write by seconds, so a pass a move asked for is read again 16 s later: the card never waits a minute in its old column."""
@@ -2028,7 +2033,7 @@ def drop_moves(ids):
         try:
             if MOVES.read_text() != before: return None   # the door wrote meanwhile: never lose a move this pass did not read
         except OSError: return None
-        _tmp = MOVES.with_name(f"{MOVES.name}.{os.getpid()}.{threading.get_ident()}.tmp")   # the temp name is the writer's own, as save_board's is (#512)
+        _tmp = _temp_name(MOVES)   # the temp name is the write's own, as save_board's is (#512)
         try:
             _tmp.write_text(json.dumps(left, sort_keys=True) + "\n"); os.replace(_tmp, MOVES)
         except OSError:
@@ -3105,7 +3110,7 @@ def grok_keep(k):
     try: old = json.loads(GROK_KEPT.read_text())
     except Exception: old = None
     if isinstance(old, dict) and (old.get("asof") or 0) >= k["asof"]: return old
-    tmp = GROK_KEPT.with_name(f"{GROK_KEPT.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    tmp = _temp_name(GROK_KEPT)
     try: tmp.write_text(json.dumps(k)); os.replace(tmp, GROK_KEPT)
     except OSError: tmp.unlink(missing_ok=True)
     return k
