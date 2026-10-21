@@ -127,8 +127,22 @@ gh_land_stop() {
 # children that outlive the wave age cap unreviewed. Returns 0 and prints the one line on a hold, 1 when the pass may go on.
 # No cap, a cap that is not a number, a missing or unreadable count, or a count older than 30 min (a stale childcc) never
 # holds: the loop is never blocked on a file it cannot trust.
+# The nightly full suite decides the same way (#704): a red record at $SG_STATE/nightly-result (nightly.sh) holds delivery
+# until one green run replaces it, because a base whose full suite is red starts work on a defect the loop already found.
+# A missing or unreadable record never holds, by the same rule as above.
 gh_dispatch_hold() {
-  local m=${SG_DISPATCH_MAX_WAITING:-} f="${SG_STATE:?gh_dispatch_hold: no state directory}/childcc-waiting" n t line
+  local m=${SG_DISPATCH_MAX_WAITING:-} f="${SG_STATE:?gh_dispatch_hold: no state directory}/childcc-waiting" n t line nrec nres nids
+  nrec=$(head -n 1 "$SG_STATE/nightly-result" 2>/dev/null)
+  if [ -n "$nrec" ]; then
+    nres=$(printf '%s\n' "$nrec" | cut -f2)
+    if [ "$nres" = fail ]; then
+      nids=$(printf '%s\n' "$nrec" | cut -f6)
+      line="DISPATCH HOLD: the nightly full suite is red (${nids:-no test named}); no new run until one green nightly"
+      printf '%s\n' "$line"
+      printf '%s\n' "$line" >> "$SG_STATE/cycle.log"
+      return 0
+    fi
+  fi
   [ -n "$m" ] || return 1
   case "$m" in *[!0-9]*) echo "DISPATCH HOLD: SG_DISPATCH_MAX_WAITING='$m' is not a non-negative integer; no limit"; return 1;; esac
   [ -r "$f" ] || return 1
