@@ -1312,6 +1312,26 @@ def stats(period, src="both"):
     models = sorted(({**x, "spend": round(x["spend"], 2), "box": model_box(x["model"])} for x in mt.values()), key=lambda x: -(x["in"] + x["out"]))
     return {"buckets": rows, "totals": {k: round(v, 2) for k, v in tot.items()}, "models": models}
 
+def adapter_errors():
+    """Every `adapter_error` run verdict of the run folders still on disk, counted by (model, backend, cause) (#698).
+    The classification is one pure module, `squad/adapter_classes.py`, resolved through the one model resolver (ADR-0147);
+    this panel holds no model table and chooses no fix. It only reads: no run's record is opened for writing, and a folder
+    that cannot be read is skipped. A missing squad package is reported here and the panel shows nothing, never a guess."""
+    out = {"classes": [], "runs": 0, "err": None}
+    folders = []
+    for d in project_dirs():
+        try: folders += [p for p in sorted(pathlib.Path(d).glob("run-*")) if p.is_dir()]
+        except OSError: continue
+    out["runs"] = len(folders)
+    roots = squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__)
+    try:
+        (AC,) = load_squad(roots, ("adapter_classes",))
+        out["classes"] = AC.aggregate(folders)
+    except Exception as e:
+        out["err"] = f"{type(e).__name__}: {' '.join(str(e).split())}"
+        log_once(f"hub: adapter errors unavailable, the panel shows nothing: {out['err']} (roots tried: {', '.join(roots)})")
+    return out
+
 BOARD = pathlib.Path(os.environ.get("SG_BOARD_CACHE") or HUBDIR / "hub-board.json"); BOARD.parent.mkdir(parents=True, exist_ok=True)
 try: board_cache = json.loads(BOARD.read_text())
 except Exception: board_cache = {"t": 0, "items": [], "prs": [], "err": None}
@@ -2347,6 +2367,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 <details id=plans class=sp><summary>subscriptions<span class=sr id=plsr></span></summary><div class=sb><div id=subs></div></div></details>
 <details id=mdl class=sp><summary>squad models<span class=sr id=mdsr></span></summary><div class=sb id=mbody></div></details>
 <details id=stats class=sp><summary>cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><h4>Spend <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Figures at API list prices (API-equivalent)."></span></h4><div class=tot id=tot></div><div class=cash id=cash></div><h4>Spend over time <span class=row id=per></span></h4><div id=chart></div><div id=kpi></div><div id=open></div><h4>Tokens by model <small class=m id=piet>all time</small></h4><div id=pie></div></div></details>
+<details id=ae class=sp><summary>adapter errors<span class=sr id=aesr></span></summary><div class=sb id=aeb></div></details>
 <div id=list></div>
 </div>
 <div id=main></div>
@@ -2620,6 +2641,14 @@ async function pollStats(){try{pollSubs();
   $("#open").innerHTML=openRows(sp.pr.open);
 }catch(e){}}
 pollStats();setInterval(pollStats,30000);
+async function pollAdapt(){try{const d=await (await fetch("/api/adapter-errors")).json();
+ const rows=d.classes||[],n=rows.reduce((a,r)=>a+(r.count||0),0);
+ $("#aesr").textContent=d.err?"unavailable":rows.length?`${n} in ${d.runs} runs`:"none";
+ $("#aeb").innerHTML=(d.err?`<div class=warnl>${esc(d.err)}</div>`:"")
+  +`<div class=subx>Every adapter_error run verdict in the run folders still on disk, counted by route (model · backend) and cause. Read-only: nothing here fixes a class.</div>`
+  +(rows.length?rows.map(r=>`<div class=kr><span class=l>${esc(r.model)}<small> · ${esc(r.backend)}</small></span><b>${r.count||0}</b><span class=d>${esc(r.cause)}</span></div>`).join(""):`<div class=subx>no adapter_error verdict in ${d.runs} run folders</div>`);
+}catch(e){}}
+pollAdapt();setInterval(pollAdapt,60000);
 poll();setInterval(poll,3000);
 loadPoll();setInterval(loadPoll,LOAD_MS);   // the window owns the reading: one timer and one /api/load per tick, whatever else the page renders
 const bo=ls.bo||{},saveB=()=>{ls.bo=bo;localStorage.hub=JSON.stringify({...ls,pins:[...pins],q,per,bo})};
@@ -3719,6 +3748,7 @@ class H(BaseHTTPRequestHandler):
             ref = '<meta http-equiv="refresh" content="3">' if d.get("state") == "running" else ""
             body = f'<!doctype html><meta charset=utf-8>{ref}<body style="background:#0d1117;color:#c9d1d9;font:12px ui-monospace,monospace;margin:12px"><div style="color:#58a6ff">test #{d.get("issue")} · {d.get("state")}{" (exit "+str(d.get("rc"))+")" if "rc" in d else ""} · {_h.escape(d.get("dir",""))}</div><div style="color:#8b949e">$ {_h.escape(d.get("cmd",""))}</div><pre style="white-space:pre-wrap">{_h.escape(lg)}</pre><script>scrollTo(0,document.body.scrollHeight)</script>'.encode(); ct = "text/html; charset=utf-8"
         elif self.path.startswith("/api/runs"): body, ct = json.dumps(run_list()).encode(), "application/json"
+        elif self.path.startswith("/api/adapter-errors"): body, ct = json.dumps(adapter_errors()).encode(), "application/json"
         elif self.path.startswith("/api/stats"): body, ct = json.dumps(stats((re.search(r"period=(\w+)", self.path) or [0, "day"])[1] if re.search(r"period=(hour|day|month)", self.path) else "day", (re.search(r"src=(sub|api)", self.path) or [0, "both"])[1])).encode(), "application/json"
         elif self.path.startswith("/api/issue"):
             m = re.search(r"[?&]n=(\d{1,6})\b", self.path); rr = re.search(r"[?&]r=([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)", self.path)
