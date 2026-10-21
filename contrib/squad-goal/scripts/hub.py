@@ -1060,9 +1060,14 @@ def _nightly_status():
     at, each mode's own result and the failing test ids. None when the file is absent or is not that line.
 
     A record whose modes are outside pass|fail, or whose result contradicts them — a `pass` over a red mode — is not that
-    line either: a record the hub cannot trust is no reading, and it never draws a pass. `gh_dispatch_hold` drops the same
-    lines, so the hub and the hold never disagree about which record they are looking at (ADR-0153)."""
-    f = _read(STATE / "nightly-result").rstrip("\n").split("\t")
+    line either: a record the hub cannot trust is no reading, and it never draws a pass. The record is one line, and it is
+    read whole: a file with anything after its one line is no reading either, because a first line alone never proves the
+    file whole. `gh_dispatch_hold` drops the same lines, so the hub and the hold never disagree about which record they
+    are looking at (ADR-0153)."""
+    text = _read(STATE / "nightly-result")
+    if text.endswith("\n"): text = text[:-1]   # the one line may end in a newline, and nothing else follows it
+    if "\n" in text: return None
+    f = text.split("\t")
     if len(f) != 6 or not f[0].isdigit() or f[1] not in ("pass", "fail") or not f[2]: return None
     if f[3] not in ("pass", "fail") or f[4] not in ("pass", "fail"): return None
     if f[1] != ("pass" if f[3] == "pass" and f[4] == "pass" else "fail"): return None

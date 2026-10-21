@@ -132,14 +132,17 @@ gh_land_stop() {
 # A missing or unreadable record never holds, by the same rule as above.
 
 # sg_nightly_red   A nightly result record's failing ids when the record is a readable RED one, nothing otherwise. The
-# record is `<epoch> TAB <pass|fail> TAB <sha> TAB <parallel> TAB <serial> TAB <ids>` (nightly.sh, #704). A line the loop
-# cannot trust is no reading and holds nothing (ADR-0153): not six fields, a time that is not a number, an empty sha, a
-# result or a mode outside pass|fail, or a result that contradicts the modes. The hub drops the same lines, so the two
-# readers never disagree about which record they are looking at.
+# record is one line, `<epoch> TAB <pass|fail> TAB <sha> TAB <parallel> TAB <serial> TAB <ids>` (nightly.sh, #704). A line
+# the loop cannot trust is no reading and holds nothing (ADR-0153): not six fields, a time that is not a number, an empty
+# sha, a result or a mode outside pass|fail, or a result that contradicts the modes. The record is read whole: a file that
+# carries anything after its one line is not that record either, because a first line alone never proves the file whole.
+# The hub drops the same lines, so the two readers never disagree about which record they are looking at.
 sg_nightly_red() {
   local rec nf ts res sha par ser ids
-  rec=$(head -n 1 "$1" 2>/dev/null) || return 1
-  [ -n "$rec" ] || return 1
+  [ -r "$1" ] || return 1
+  rec=$(cat -- "$1" 2>/dev/null; printf x) || return 1   # `x` keeps the trailing newlines a substitution would strip
+  rec=${rec%x}; rec=${rec%$'\n'}                          # the one line may end in a newline, and nothing else follows
+  case "$rec" in ''|*$'\n'*) return 1;; esac
   nf=$(printf '%s\n' "$rec" | awk -F'\t' '{print NF}')
   [ "$nf" = 6 ] || return 1
   ts=$(printf '%s\n' "$rec" | cut -f1); res=$(printf '%s\n' "$rec" | cut -f2); sha=$(printf '%s\n' "$rec" | cut -f3)
