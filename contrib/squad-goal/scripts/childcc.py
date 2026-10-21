@@ -35,7 +35,9 @@ record holds a review event for the child; a review that answered "no review her
 as before (ADR-0145 rule 9). A run that reviewed a child owns it (#701, ADR-0151 rule 5): childcc never reviews or fixes a
 child its run reviewed, and starts no fix run for it. The run's approval enters such a child with no second review here, and
 it binds to the head the run's review read (ADR-0151 rule 4): a child at another head, or one whose run approved no head,
-is neither reviewed nor fixed here and its delivery holds, for the wave's age cap to free it. A child its run held, with its
+is neither reviewed nor fixed here and its delivery holds, for the wave's age cap to free it. That hold is read before the
+failed land's requeue: a land that failed on the review itself (review_held, review_deadline) is missing evidence and holds,
+and only a standing approval at the reviewed head lets another landing failure requeue the child. A child its run held, with its
 `requeue` fact in the issue's ledger, is neither entered, reviewed nor requeued again; a child of a run with no review in its
 record is reviewed here as before.
 A dispatch child with fix entries (#570) has one passing `outcome` per entry: the pass works it once, by its last entry (#611).
@@ -339,17 +341,17 @@ for key, r, child, why, n, finished, d, lwhy, ok, own, rnd in pending[k0:] + pen
     if (A / f"waved-{name}").exists() and not waved: mk.touch(); continue   # the wave is landed and this child is not in it: its issue went back to the queue, so no card moves (never the direct Code Complete move)
     if lwhy is not None and requeue_head(name, n):   # its run's own review held it and requeued it already (#601): never twice
         print(f"CHILD HELD #{n} ({name} {child}): its run's review requeued it", flush=True); mk.touch(); continue
-    if lwhy is not None:   # the child's own engine landing failed: its work never reached the run's target, so no entry and no card move (#592)
-        subprocess.run(["bash", wave, "requeue", str(n), f"its landing failed: {lwhy}"], capture_output=True, env={**os.environ, "SG_REQUEUE_RUN": name})
-        print(f"CHILD LAND REQUEUE #{n} ({name} {child}): {lwhy}", flush=True); mk.touch(); continue
-    if finished and not waved and card_status(n) not in ("Todo", "In Progress", "Blocked"): mk.touch(); continue   # backfill never moves a card past (or out of) its column
-    if own:
+    if own:   # the approval is read before a failed land's requeue: a run that reviewed the child owns it, and missing evidence holds delivery (#701, ADR-0151 rules 4 and 5)
         held = run_hold(pathlib.Path(r), child, n, d, ok, rnd)
-        if held:   # a run that reviewed the child owns it: childcc never reviews or fixes one, and missing evidence holds delivery (#701, ADR-0151 rules 4 and 5)
+        if held:   # childcc never reviews or fixes a child its run reviewed: its run's approval is the only evidence, and a land that failed on the review itself (review_held, review_deadline) is missing evidence
             print(f"CHILD RUN-OWNED #{n} ({name} {child}): {held}; delivery holds", flush=True)
             RUN_HELD.add(key)
             if subprocess.run(["bash", wave, "expired", name], capture_output=True).returncode: visited.discard(key)   # a wave past its age cap lands and requeues it (#378)
             continue
+    if lwhy is not None:   # the child's own engine landing failed: its work never reached the run's target, so no entry and no card move (#592); for a run-owned child only a standing approval at its reviewed head reaches here, so the failure is not the review's
+        subprocess.run(["bash", wave, "requeue", str(n), f"its landing failed: {lwhy}"], capture_output=True, env={**os.environ, "SG_REQUEUE_RUN": name})
+        print(f"CHILD LAND REQUEUE #{n} ({name} {child}): {lwhy}", flush=True); mk.touch(); continue
+    if finished and not waved and card_status(n) not in ("Todo", "In Progress", "Blocked"): mk.touch(); continue   # backfill never moves a card past (or out of) its column
     entered, why, worked = enter(pathlib.Path(r), child, n, d, ok, own)
     if worked is None: visited.discard(key); continue   # the review budget was full: this child had no turn, so the pass leaves it (exit 3) and the next one tries it first
     if worked: spent += 1; CURSOR.write_text(key + "\n")

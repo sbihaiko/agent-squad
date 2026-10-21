@@ -431,6 +431,33 @@ out=$(lpass stale); rc=$?; out2=$(lpass stale); rc2=$?
 [ "$rc" = 3 ] && [ "$rc2" = 3 ] && ok "a stale approval holds the child's delivery on every pass" || ko "stale approval: exit $rc, then $rc2: $out $out2"
 /usr/bin/grep -q ' 6301$' "$T/moves" 2>/dev/null && ko "a child whose approval went stale moved its card" || ok "a child whose approval went stale moves no card"
 echo "$out" | /usr/bin/grep -q 'RUN-OWNED #6301' && ok "the pass names the stale approval it holds" || ko "no hold line: $out"
+# (b2) a run-owned child whose own land failed on missing review evidence (a review deadline, or a review that held it) is
+# neither requeued nor worked here: the run's review is the only evidence, and missing evidence holds delivery (ADR-0151
+# rule 5). The failed-land requeue is for a failure unrelated to the review, so it reads the approval first.
+orun_fail() { # run issue verdict reason: a finished run whose review gate held child c, and whose land failed on it; prints the head
+  local n=$1 i=$2 v=$3 r=$4 rd="$T/co/runs/$1" h; wtree "$n"; h=$(/usr/bin/git -C "$rd/ws/target-c" rev-parse HEAD)
+  { echo '{"event": "spawn_accepted", "child": "c", "envelope": "route", "definition": "GitHub issue #'$i'"}'
+    echo '{"event": "outcome", "node": "c", "outcome": "pass", "reasons": ["ok"]}'
+    echo '{"event": "review_round", "node": "c", "round": 1, "head": "'$h'", "verdict": "'$v'", "offered": false, "review": {"verdict": "'$v'", "findings": "x"}}'
+    echo '{"event": "land", "node": "c", "parent": "route", "entry": 1, "outcome": "fail", "reasons": ["'$r'"], "effect": {"name": "review", "before": "b", "head": "'$h'", "review": {"verdict": "'$v'", "findings": "x"}, "rounds": 1}}'
+    echo '{"event": "verdict"}'; } > "$rd/record.jsonl"
+  echo "wave/$n" > "$T/st/auto/wave-$n"; echo "wave/$n" > "$T/st/auto/waved-$n"; printf '%s\n' "$h"; }
+export GH_NUMS="6320:Doing 6321:Doing 6322:Doing"
+orun_fail rhl 6320 hold review_held >/dev/null; : > "$T/cr.calls"; : > "$T/fix.calls"; : > "$WAVE_CALLS"; rm -f "$T/moves"
+out=$(lpass rhl); rc=$?
+[ ! -s "$T/cr.calls" ] && [ ! -s "$T/fix.calls" ] && ok "a run-owned child its land held on review_held is not reviewed or fixed by childcc" || ko "reviews '$(cat "$T/cr.calls")', fix '$(cat "$T/fix.calls")'"
+! /usr/bin/grep -q '^requeue 6320' "$WAVE_CALLS" && ok "a run-owned child its land held on review_held is not requeued by childcc" || ko "childcc requeued it: $(cat "$WAVE_CALLS")"
+[ "$rc" = 3 ] && ok "a run-owned child whose land held on review_held holds its delivery" || ko "review_held: exit $rc: $out"
+/usr/bin/grep -q ' 6320$' "$T/moves" 2>/dev/null && ko "a run-owned child held on review_held moved its card" || ok "a run-owned child held on review_held moves no card"
+orun_fail rdl 6321 deadline review_deadline >/dev/null; : > "$T/cr.calls"; : > "$T/fix.calls"; : > "$WAVE_CALLS"; rm -f "$T/moves"
+out=$(lpass rdl); rc=$?
+! /usr/bin/grep -q '^requeue 6321' "$WAVE_CALLS" && [ "$rc" = 3 ] && ok "a run-owned child whose review ran out of time is not requeued: its delivery holds" || ko "review_deadline: exit $rc, waves '$(cat "$WAVE_CALLS")': $out"
+# (b3) a failed land for a reason that is not the review still requeues a child whose approval stands on its head: the
+# approval is established, and the failure is the landing's own (ADR-0151 rule 5 reads the evidence first, never the reason text).
+h=$(orun_fail rok 6322 approve merge_conflict); : > "$T/cr.calls"; : > "$T/fix.calls"; : > "$WAVE_CALLS"; rm -f "$T/moves"
+out=$(lpass rok); rc=$?
+/usr/bin/grep -q '^requeue 6322 .*its landing failed: merge_conflict' "$WAVE_CALLS" && ok "a failed land unrelated to the review still requeues a child whose approval stands" || ko "standing approval: waves '$(cat "$WAVE_CALLS")': $out"
+[ ! -s "$T/cr.calls" ] && [ ! -s "$T/fix.calls" ] && ok "the run-owned child is never reviewed or fixed here, standing approval or not" || ko "reviews '$(cat "$T/cr.calls")', fix '$(cat "$T/fix.calls")'"
 # (c) the wave merges only a child whose approval stands: its run approved it on that head, and its review evidence is there.
 mkdir -p "$T/co/runs/pick"; wtree pick a; wtree pick b
 ha=$(/usr/bin/git -C "$T/co/runs/pick/ws/target-a" rev-parse HEAD); hb=$(/usr/bin/git -C "$T/co/runs/pick/ws/target-b" rev-parse HEAD)
