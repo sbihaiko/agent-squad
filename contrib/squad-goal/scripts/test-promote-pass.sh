@@ -7,6 +7,7 @@ unset SG_SERIAL_HELD SERIAL_TRY
 d=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G="git -c user.email=a@b -c user.name=t"; R=$T/remote.git
 export SG_STATE=$T/st SG_PROMOTE_REMOTE=$R SG_REPO=x/emu GIT_TERMINAL_PROMPT=0 SG_GHREAD=true SG_PROMOTE_QUIET_SECONDS=0 SERIAL_POLL_SECONDS=0.2
+export SG_PROMOTE_LOAD_LIMIT=1000000   # the box the suite runs on is never idle: the load case below names its own bound
 mkdir -p "$SG_STATE" "$T/bin"
 git init -q --bare "$R"; git init -q "$T/w"; W="$G -C $T/w"
 $W checkout -q -b main; $W commit -q --allow-empty -m base; $W remote add origin "$R"
@@ -92,6 +93,21 @@ printf '%s\tb\t%s\t1\n' "$(( $(date +%s) - 700 ))" "$t5" >> "$SG_STATE/landed.ts
 # stg holds work dev lacks: no fast-forward, so no suite is spent on the tip, and one line says why.
 adv stg stg-only; adv dev dev-only; t6=$(tip dev); before=$(tip stg); n=$(runs); pass
 [ "$(tip stg)" = "$before" ] && [ "$(runs)" = "$n" ] && [ "$(lines "$t6")" = 1 ] && ok "a dev tip that does not descend from stg runs no suite and says so once" || ko "diverged: stg $(tip stg), runs $(runs), lines $(lines "$t6")"
+
+# The proof is a measurement on a machine the loop shares (#738): a loaded box yields "not proven: machine loaded", spends no
+# suite and writes no marker, so a later pass retries the same tip. The worker count is bounded by the machine, never auto.
+git -C "$R" update-ref refs/heads/stg "$(tip dev)"   # the diverged case above left stg ahead: a fast-forward needs it behind again
+adv dev loaded; t7=$(tip dev); before=$(tip stg); n=$(runs); printf 'a live run\n' > "$SG_STATE/active-runs.txt"
+SG_PROMOTE_LOAD_LIMIT=1000000 pass; rc=$?
+[ $rc = 0 ] && [ "$(runs)" = "$n" ] && [ "$(tip stg)" = "$before" ] && ok "a live run marks the tip not proven instead of measuring under it" || ko "loaded: rc $rc, runs $(runs), stg $(tip stg)"
+/usr/bin/grep -q "promote-pass: $t7 not proven: machine loaded" "$SG_STATE/promote.log" && ok "the loaded line names the tip and the reason" || ko "loaded line: $(tail -2 "$SG_STATE/promote.log")"
+[ "$(/usr/bin/grep -c "^$t7 " "$SG_STATE/promote-pass.tips" 2>/dev/null)" = 0 ] && ok "a loaded skip writes no marker: the tip is retried later" || ko "a loaded skip marked the tip refused"
+rm -f "$SG_STATE/active-runs.txt"; n=$(runs); SG_PROMOTE_LOAD_LIMIT=0 pass; rc=$?
+[ $rc = 0 ] && [ "$(runs)" = "$n" ] && [ "$(tip stg)" = "$before" ] && ok "a load average at its bound, with no live run, marks the tip not proven too" || ko "load bound: rc $rc, runs $(runs), stg $(tip stg)"
+pass; rc=$?
+[ $rc = 0 ] && [ "$(tip stg)" = "$t7" ] && ok "the same tip is proved once the machine is free" || ko "retry after load: rc $rc, stg $(tip stg)"
+/usr/bin/grep -q -- '-n auto' "$d/promote-pass.sh" && ko "the default suite still takes every core (-n auto)" || ok "the default suite bounds its workers (#738)"
+/usr/bin/grep -q 'sg_battery_workers' "$d/promote-pass.sh" && ok "the worker count comes from the one machine bound" || ko "promote-pass.sh carries its own worker count"
 
 # The owner starts each promotion (#576, ADR-0145 rule 3): no cycle step runs promote-pass.sh.
 /usr/bin/grep -vE '^[[:space:]]*#' "$d/watch.sh" | /usr/bin/grep -q 'promote-pass\.sh' && ko "watch.sh still runs the promotion" || ok "watch.sh runs no promotion step: the owner starts it"
