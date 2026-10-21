@@ -120,20 +120,22 @@ def test_every_process_table_read_of_a_command_asks_for_the_full_one():
 
 
 def test_ci_workflow_triggers_one_job_that_covers_both_pythons_and_keeps_the_token_read_only():
-    """Guard for the CI rule: a landing push to dev, stg or main starts the run, and nothing else (#398).
+    """Guard for the CI rule: the one pull request that carries dev to stg starts the run, and nothing else.
 
-    Python 3.11 and 3.13 run inside one job, with a read-only token. Only the three long-lived branches are named, so a
-    work-branch push starts no run and a pull request starts none; a work branch is proven by the local fast gate.
+    Python 3.11 and 3.13 run inside one job, with a read-only token. No branch push starts a run: a work branch is
+    proven by the local fast gate, and the landing by the promotion proof. A pull request to any other branch starts
+    none, and neither does a pull request to stg from a branch other than dev.
     """
     import yaml
 
     wf = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
     on = wf.get("on", wf.get(True))  # PyYAML reads a bare `on` as True
-    assert on["push"]["branches"] == ["dev", "stg", "main"], "CI runs only on a landing in dev, stg or main"
-    assert set(on) == {"push"}, f"only a push to a long-lived branch starts the run; found {sorted(on)}"
-    assert "pull_request" not in on and "pull_request_target" not in on, "a pull request starts no run"
+    assert on["pull_request"]["branches"] == ["stg"], "CI runs only on the pull request that carries dev to stg"
+    assert set(on) == {"pull_request"}, f"only that pull request starts the run; found {sorted(on)}"
+    assert "push" not in on and "pull_request_target" not in on, "a branch push starts no run"
     assert wf["permissions"] == {"contents": "read"}
     job = next(iter(wf["jobs"].values()))
+    assert "dev" in str(job.get("if", "")), f"the job refuses a pull request from any branch but dev: {job.get('if')!r}"
     assert job["timeout-minutes"] == 20, "the job keeps the twenty minutes it gives itself"
     versions = [s["with"]["python-version"] for s in job["steps"] if s.get("uses", "").startswith("actions/setup-python")]
     assert versions == ["3.11", "3.13"], f"one job runs both supported versions in order; found {versions}"
@@ -143,7 +145,7 @@ def test_ci_workflow_triggers_one_job_that_covers_both_pythons_and_keeps_the_tok
 
 # The sentence the workflow states for its landing group. A group that names the commit holds one run and nothing
 # pending, so no queue cap applies and GitHub cancels no landing.
-LANDING_GROUP_RULE = "The group names the commit, so no queue holds a landing behind another and GitHub cancels none."
+LANDING_GROUP_RULE = "The group names the commit, so no queue holds a pull request behind another and GitHub cancels none."
 
 
 def test_one_commit_starts_one_job_and_a_landing_waits_in_no_queue():
@@ -172,9 +174,9 @@ def test_one_commit_starts_one_job_and_a_landing_waits_in_no_queue():
         f"{group}: a group shared by a branch's pushes queues them, and GitHub cancels a run past the queue's cap, so a "
         "landing on dev, stg or main can be cancelled; the group names the commit instead"
     )
-    assert "github.ref_name" in group, f"{group}: the group still names the branch the commit belongs to"
+    assert "github.head_ref" in group, f"{group}: the group names the pull request's own branch, never its base"
     assert not re.search(r"github\.ref\b", group), f"{group}: the group names the branch, not the full ref"
-    assert con["cancel-in-progress"] is False, "a landing on dev, stg or main is never cancelled, and no other push starts a run"
+    assert con["cancel-in-progress"] is False, "a pull request's run is never cancelled, and no other event starts one"
     assert "queue" not in con, (
         f"the group holds nothing pending, so no queue cap can cancel a landing; found queue={con.get('queue')!r}"
     )
