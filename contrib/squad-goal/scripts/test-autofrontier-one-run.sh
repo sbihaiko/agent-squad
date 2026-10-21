@@ -407,6 +407,51 @@ r=$(run)
 [ "$(marked 81)" = 0 ] && [ "$(ls "$d/st/cq" | $G -c -- '#81-')" = 1 ] && ok "AC: a second pass dispatches nothing and adds no comment" || ko "AC: second pass: $(marked 81) marked, $(ls "$d/st/cq"): '$r'"
 unset GHLOG; rm -f "$T/scripts/acpaths.py"
 
+# I1 (#733): a pass that leaves Todo cards and picks none says so in one line, always. A silent frontier and a stuck one read
+#     the same in the log, and the owner found the last stall, not the loop. The line names the count of every reason a card
+#     waits; the per-card detail follows only when the reasons changed since the previous pass (a hash in auto/frontier-why),
+#     so a quiet loop costs one line a beat and a changed one explains itself.
+scene idle
+issues '[{"number":301,"title":"a","body":"b","unready":true,"labels":[{"name":"enhancement"}]},{"number":302,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":303,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
+mkdir -p "$SG_STATE/state"; printf '{"own": {' > "$SG_STATE/state/o__r__302.json"   # a corrupt ledger holds #302 (ADR-0149)
+printf '#!/bin/bash\ncase "$1" in 303) echo "WAIT #1 open";; *) echo READY;; esac\n' > "$T/scripts/stack.sh"; chmod +x "$T/scripts/stack.sh"   # #303 waits on its blocker
+r=$(run)
+case "$r" in *"FRONTIER idle: 3 todo, 0 startable (1 no go label, 1 held, 0 sibling, 0 no slot, 1 blocked, "*) ok "I1: the idle line names the count of every reason";; *) ko "I1: no idle line: '$r'";; esac
+[ "$($G -c '^FRONTIER idle:' <<<"$r")" = 1 ] && ok "I1: one idle line a pass" || ko "I1: $($G -c '^FRONTIER idle:' <<<"$r") idle line(s): '$r'"
+$G -q '^FRONTIER why #301: no go label' <<<"$r" && $G -q '^FRONTIER why #302: held' <<<"$r" && $G -q '^FRONTIER why #303: blocked' <<<"$r" \
+  && ok "I1: the first idle pass names every card, with its own reason" || ko "I1: detail: '$($G '^FRONTIER why #' <<<"$r")'"
+$G -qxF "$($G -m1 '^FRONTIER idle:' <<<"$r")" "$d/st/cycle.log" && ok "I1: the line is published to the loop log" || ko "I1: cycle.log: $(cat "$d/st/cycle.log" 2>/dev/null)"
+r=$(run)
+[ "$($G -c '^FRONTIER idle:' <<<"$r")" = 1 ] && [ "$($G -c '^FRONTIER why #' <<<"$r")" = 0 ] \
+  && ok "I1: the same reasons write the line again and the detail once" || ko "I1: the second pass: '$r'"
+printf '#!/bin/bash\necho READY\n' > "$T/scripts/stack.sh"
+issues '[{"number":301,"title":"a","body":"b","unready":true,"labels":[{"name":"enhancement"}]},{"number":302,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":303,"title":"a","body":"b","unready":true,"labels":[{"name":"enhancement"}]}]'
+r=$(run)
+case "$r" in *"FRONTIER idle: 3 todo, 0 startable (2 no go label, 1 held, "*)
+  [ "$($G -c '^FRONTIER why #' <<<"$r")" = 3 ] && ok "I1: a changed reason set explains itself again" \
+    || ko "I1: a changed reason set wrote $($G -c '^FRONTIER why #' <<<"$r") detail line(s)";;
+  *) ko "I1: a changed reason set wrote no line: '$r'";; esac
+
+# I2 (#733): a pass that dispatches writes no idle line.
+scene idlego
+issues '[{"number":311,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
+r=$(run)
+[ "$(marked 311)" = 1 ] && ! $G -q '^FRONTIER idle:' <<<"$r" && ok "I2: a pass that dispatches writes no idle line" || ko "I2: '$r'"
+
+# I3 (#733): a pass with no free run slot has nothing startable for a reason of its own, and says so.
+scene noslot
+slots 1; mkdir -p "$d/co/runs/live"; echo '{"event":"spawn_requested"}' > "$d/co/runs/live/record.jsonl"; echo live > "$d/st/active-runs.txt"   # the one slot is taken
+issues '[{"number":321,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":322,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
+r=$(run)
+case "$r" in *"FRONTIER idle: 2 todo, 0 startable ("*"2 no slot"*) ok "I3: a pass with no free run slot says so";; *) ko "I3: '$r'";; esac
+[ "$(lines "$LAUNCHLOG")" = 0 ] && ok "I3: and starts nothing" || ko "I3: $(lines "$LAUNCHLOG") launch(es): '$r'"
+
+# I4 (#733): a pass with no Todo card has nothing to report: the line is for a frontier that holds work and starts none.
+scene notodo
+issues '[{"number":331,"title":"a","body":"b","card":"Backlog","labels":[{"name":"wave:01"}]}]'
+r=$(run)
+! $G -q '^FRONTIER idle:' <<<"$r" && ok "I4: a pass with no Todo card writes no idle line" || ko "I4: '$r'"
+
 rm -rf "$T"
 [ "$fail" = 0 ] && { echo "autofrontier one-run: all checks green"; exit 0; }
 echo "autofrontier one-run: FAILED"; exit 1
