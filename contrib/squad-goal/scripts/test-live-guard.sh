@@ -203,6 +203,33 @@ v3=$(G -C "$T/restart" rev-parse HEAD)
 case "$out" in *"drivers run ${new:0:8}, published ${v3:0:8}"*) ok "each new publish names its own restart";; *) ko "the second publish named no restart: $out";; esac
 rm -f "$S/watchd.sh"
 
+# --- the publish closes the loop-bug issue its fix names, so the stop lifts by itself (#732) --------
+# The stop reads the issue state and nothing else (ADR-0149), so the step that makes the fix live is the one that
+# closes it: a published commit carrying `Closes #n` closes #n, with one comment naming the sha and the published time.
+# A TDD RED commit names its issue in the subject and carries no closing trailer, so it closes nothing (ADR-0136).
+mkdir -p "$T/cbin"
+cat > "$T/cbin/gh" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >> "$T/gh.log"
+exit 0
+EOF
+chmod +x "$T/cbin/gh"
+mk closes; w=$T/closes.work
+printf 'skill v3\n' > "$w/contrib/squad-goal/SKILL.md"; G -C "$w" add -A; G -C "$w" commit -qm "Fix the live copy" -m "Closes #732"
+G -C "$w" push -q origin HEAD:stg
+clpass() { SG_REPO=example/squad PATH="$T/cbin:$PATH" SG_CHECKOUT=$T/closes SG_LIVE_DIR=$T/closes.live bash "$S/live-guard.sh" 2>&1; }
+out=$(clpass); rc=$?
+[ "$rc" = 0 ] && ok "a pass that closes an issue still exits 0" || ko "the closing pass exited $rc: $out"
+case "$out" in *"LIVE-GUARD publish-live: closed #732"*) ok "the pass names the issue the publish closed";; *) ko "the close is not named: $out";; esac
+[ "$(cat "$T/gh.log" 2>/dev/null | wc -l | tr -d ' ')" = 1 ] && ok "the pass closes the issue once" || ko "gh calls: $(cat "$T/gh.log" 2>/dev/null)"
+clsha=$(G -C "$T/closes" rev-parse HEAD); cts=$(cut -d' ' -f2 "$T/closes.live/PUBLISHED")
+case "$(cat "$T/gh.log")" in *"$clsha"*"$cts"*) ok "the comment names the published sha and time";; *) ko "the comment: $(cat "$T/gh.log")";; esac
+printf 'hand\n' > "$T/closes.live/scripts/hub.py"; : > "$T/gh.log"; out=$(clpass)
+[ ! -s "$T/gh.log" ] && ok "a republish of the same sha closes nothing again" || ko "a republish closed again: $(cat "$T/gh.log")"
+printf 'skill v4\n' > "$w/contrib/squad-goal/SKILL.md"; G -C "$w" add -A; G -C "$w" commit -qm "TDD RED: the live copy leaks #740"
+G -C "$w" push -q origin HEAD:stg; : > "$T/gh.log"; out=$(clpass)
+[ ! -s "$T/gh.log" ] && ok "a TDD RED commit alone closes nothing" || ko "a TDD RED commit closed something: $(cat "$T/gh.log")"
+
 # --- a checkout that ships no copy of the skill: nothing to read, nothing to publish --------------
 out=$(SG_CHECKOUT=$T/elsewhere bash "$S/live-guard.sh" 2>&1); rc=$?
 [ "$rc" = 0 ] && [ -z "$out" ] && ok "a checkout with no contrib/squad-goal: the pass says nothing" || ko "a foreign checkout spoke (exit $rc): $out"

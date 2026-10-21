@@ -3,6 +3,7 @@
 # and the fork-only route the repository retired is dropped from the live copy by name (#134).
 # usage: bash test-publish-live.sh [path/to/publish-live.sh]
 src=${1:-$(dirname "$0")/publish-live.sh}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
+unset SG_REPO                                                          # the close reads the fixture's own origin, never the loop's repository
 
 repo="$T/repo/contrib/squad-goal"; live="$T/home/.claude/skills/squad-goal"
 mkdir -p "$repo/scripts/profiles" "$live/scripts/profiles"
@@ -137,6 +138,57 @@ out=$(env -u SG_SQUAD bash "$src" --check "$sq/contrib/squad-goal" "$live3" 2>&1
 printf '0000000000000000000000000000000000000000 2020-01-01T00:00:00Z\n' > "$live3/PUBLISHED"
 out=$(env -u SG_SQUAD bash "$src" --check "$sq/contrib/squad-goal" "$live3" 2>&1); rc=$?
 [ "$rc" = 1 ] && [ "$out" = "publish $sqh" ] && ok "--check names the sha to publish when PUBLISHED is stale" || ko "--check with a stale PUBLISHED (rc $rc): $out"
+
+# --- a publish closes the issues its commits name, and a TDD RED commit closes nothing (#732) -----
+# The loop-bug stop reads the issue state (ADR-0149): a published commit carrying a `Closes #n` trailer closes #n with
+# one comment naming the sha and the published time, so the stop lifts on the next pass. The commits are the range the
+# publish makes live: the previously published sha (exclusive) to the source HEAD, or the HEAD alone when PUBLISHED is
+# missing. A TDD RED commit names its issue in the subject and carries no closing trailer, so it closes nothing
+# (ADR-0136). --check closes nothing. The repository is SG_REPO when set, else the source's github.com origin.
+cb="$T/closes"; mkdir -p "$cb/contrib/squad-goal/scripts" "$T/cbin"
+cat > "$T/cbin/gh" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >> "$T/gh.log"
+exit 0
+EOF
+chmod +x "$T/cbin/gh"
+git init -q -b main "$cb"; git -C "$cb" remote add origin https://github.com/example/squad.git
+printf 'skill v1\n' > "$cb/contrib/squad-goal/SKILL.md"; git -C "$cb" add -A; git -C "$cb" commit -qm base
+livec="$T/live-closes"; mkdir -p "$livec/scripts"; printf 'skill v0\n' > "$livec/SKILL.md"
+crun() { env -u SG_SQUAD -u SG_REPO PATH="$T/cbin:$PATH" bash "$src" "$cb/contrib/squad-goal" "$livec" 2>&1; }
+ccheck() { env -u SG_SQUAD -u SG_REPO PATH="$T/cbin:$PATH" bash "$src" --check "$cb/contrib/squad-goal" "$livec" 2>&1; }
+# A TDD RED commit names the issue before its fix exists; the fix commit is the one that carries the closing trailer.
+printf 'skill v1b\n' > "$cb/contrib/squad-goal/SKILL.md"; git -C "$cb" add -A; git -C "$cb" commit -qm "TDD RED: the live copy loses a line #11"
+printf 'skill v2\n' > "$cb/contrib/squad-goal/SKILL.md"; git -C "$cb" add -A; git -C "$cb" commit -qm "Fix the live copy" -m "Closes #12"
+fixsha=$(git -C "$cb" rev-parse HEAD)
+out=$(crun); rc=$?
+[ "$rc" = 0 ] && ok "a publish with a closing commit exits 0" || ko "publish with a closing commit (rc $rc): $out"
+[ "$(cat "$T/gh.log" 2>/dev/null | wc -l | tr -d ' ')" = 1 ] && ok "the publish closes exactly the issue the fix names" || ko "gh calls: $(cat "$T/gh.log" 2>/dev/null)"
+case "$(cat "$T/gh.log")" in *"issue close"*"example/squad"*" 12 "*) ok "the close names the origin repository and #12";; *) ko "the close: $(cat "$T/gh.log")";; esac
+case "$(cat "$T/gh.log")" in *"$fixsha"*) ok "the comment names the published sha";; *) ko "the comment does not name $fixsha: $(cat "$T/gh.log")";; esac
+ts=$(cut -d' ' -f2 "$livec/PUBLISHED"); case "$(cat "$T/gh.log")" in *"$ts"*) ok "the comment names the published time";; *) ko "the comment does not name $ts: $(cat "$T/gh.log")";; esac
+case "$(cat "$T/gh.log")" in *" 11 "*) ko "the TDD RED commit closed #11: $(cat "$T/gh.log")";; *) ok "a TDD RED commit alone closes nothing";; esac
+case "$out" in *"publish-live: closed #12"*) ok "the publish names the issue it closed";; *) ko "the close is not named: $out";; esac
+# The next publish closes only the commits the last one did not carry; a Refs line is not a closing trailer, and a list
+# on one trailer closes each number once.
+printf 'skill v3\n' > "$cb/contrib/squad-goal/SKILL.md"; git -C "$cb" add -A; git -C "$cb" commit -qm "Touch the copy" -m "Refs #13"
+printf 'skill v4\n' > "$cb/contrib/squad-goal/SKILL.md"; git -C "$cb" add -A; git -C "$cb" commit -qm "Another fix" -m "Closes #14, #15"
+printf 'skill v5\n' > "$cb/contrib/squad-goal/SKILL.md"; git -C "$cb" add -A; git -C "$cb" commit -qm "The same issue again" -m "Closes #14"
+: > "$T/gh.log"; out=$(crun); rc=$?
+case "$(cat "$T/gh.log")" in *" 14 "*) ok "a list in one trailer closes its issue";; *) ko "no close for #14: $(cat "$T/gh.log")";; esac
+case "$(cat "$T/gh.log")" in *" 15 "*) ok "the second number of a list closes";; *) ko "no close for #15: $(cat "$T/gh.log")";; esac
+case "$(cat "$T/gh.log")" in *" 13 "*) ko "a Refs line closed #13: $(cat "$T/gh.log")";; *) ok "a Refs line closes nothing";; esac
+[ "$(cat "$T/gh.log" | wc -l | tr -d ' ')" = 2 ] && ok "an issue named twice in the range closes once" || ko "gh calls: $(cat "$T/gh.log")"
+# A republish of the same sha closes nothing again, and --check never closes.
+printf 'hand\n' > "$livec/SKILL.md"; : > "$T/gh.log"; out=$(crun)
+[ ! -s "$T/gh.log" ] && ok "a republish of the same sha closes nothing" || ko "a republish closed again: $(cat "$T/gh.log")"
+printf 'skill v6\n' > "$cb/contrib/squad-goal/SKILL.md"; git -C "$cb" add -A; git -C "$cb" commit -qm "Body" -m "Closes #16"
+: > "$T/gh.log"; out=$(ccheck); rc=$?
+[ "$rc" = 1 ] && [ ! -s "$T/gh.log" ] && ok "--check names a difference and closes nothing" || ko "--check closed (rc $rc): $(cat "$T/gh.log")"
+# A commit that names its issue in a TDD RED subject closes nothing, even inside the published range.
+printf 'skill v7\n' > "$cb/contrib/squad-goal/SKILL.md"; git -C "$cb" add -A; git -C "$cb" commit -qm "TDD RED: the publish still leaks #17"
+: > "$T/gh.log"; out=$(crun); rc=$?
+[ "$rc" = 0 ] && [ ! -s "$T/gh.log" ] && ok "a TDD RED commit alone closes nothing inside the range" || ko "a TDD RED commit closed something: $(cat "$T/gh.log")"
 
 # --- a linked worktree is never the source (#658) -------------------------------------------------
 # A coding child published its unlanded branch from its own worktree. A publish from a linked worktree is refused: nonzero,
