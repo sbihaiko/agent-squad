@@ -93,3 +93,16 @@ def test_an_anthropic_id_the_gateway_does_not_list_is_kept_in_the_queue(hub, che
     out = hub.models_set({**hub.models_get(), "router_models": ["claude-gpt-5.6-terra", "claude-opus-5-5"]})
     assert "err" not in out, out
     assert _envelope(checkout) == ["claude-gpt-5.6-terra", "claude-opus-5-5"]
+
+
+def test_the_queue_add_box_offers_the_registry_live_anthropic_ids(hub, checkout, monkeypatch):
+    """The owner could not add Opus 5.5 to the Router queue (#687): the gateway's `/v1/models` lists no Anthropic id,
+    so the box offered none, though router_resolve passes an Anthropic id through and the server accepts it. The box
+    also offers every live registry id that matches ANTHROPIC_ID; a retired one stays out."""
+    served = [m for m in GATEWAY if not hub.ANTHROPIC_ID.match(m)]
+    monkeypatch.setattr(hub, "gateway_models", lambda ttl=120: list(served))
+    got = hub.router_known()
+    assert {"claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"} <= set(got)
+    reg = hub.router_envelope.modelreg.default_registry()
+    assert [m for m in got if m in reg.entries and reg.entries[m].retired] == []
+    assert [m for m in got if hub.ANTHROPIC_ID.match(m) and m not in reg.entries] == []
