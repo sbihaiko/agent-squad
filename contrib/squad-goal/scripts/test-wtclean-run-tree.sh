@@ -4,8 +4,8 @@
 # landed, the tree and the branch go; a live, paused or resumable run, a held wave, a dirty tree or unlanded commits keep both.
 # #676: a kept tree is named once, with its reason. A tool's own scratch (`.codex/`) is no work and keeps nothing. A failed run
 # that still has remains ends for good a day after its verdict: the loop never resumes a run. A tree that holds another
-# registered worktree is kept: its removal deletes the inner tree with it. An ended run leaves active-runs.txt once no tree
-# holds its folder, and a fresh ~/wt-* tree at the base tip is not a landed one.
+# registered worktree is kept: its removal deletes the inner tree with it. An ended run with no open wave leaves active-runs.txt
+# an hour after its record last moved, whatever keeps its tree (#708), and a fresh ~/wt-* tree at the base tip is not a landed one.
 src=${1:-$(dirname "$0")/wtclean.sh}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/s" "$T/st/auto" "$T/hm"; cp "$src" "$T/s/wtclean.sh"
 printf 'export SG_CHECKOUT=%s SG_STATE=%s SG_FORK_DIR= SG_REPO=x/y SG_OWNER=x SG_BASE=main SG_LAND_BRANCH=main\n' "$T/co" "$T/st" > "$T/s/env.sh"
@@ -42,6 +42,15 @@ line lws '{"event": "run_start", "pos": 1}' "$(v completed)"; $G worktree add -q
 hour2() { python3 -c 'import os, sys, time; t = time.time() - 7200; os.utime(sys.argv[1], (t, t))' "runs/run-$1/record.jsonl"; }
 line lover '{"event": "run_start", "pos": 1}' "$(v failed '["x"]' '["n1"]')"; hour2 lover; : > "$T/st/auto/waved-run-lover"
 line lrem '{"event": "run_start", "pos": 1}' "$(v failed '["x"]' '["n1"]')"; hour2 lrem
+# #708: an ended run (a verdict after its last start or resume) whose wave is not open (no wave-<run>) and whose record is an
+# hour idle leaves active-runs.txt, whatever keeps its tree: a child tree with commits on no remote (WT UNPUSHED), a needs-human
+# or paused verdict. The tree stays. A run resumed after its verdict, or one whose record moved this hour, keeps its line.
+line lunp '{"event": "run_start", "pos": 1}' "$(v completed)"; $G worktree add -q -b squad/run-lunp/c runs/run-lunp/ws/c origin/main
+$G -C runs/run-lunp/ws/c -c user.email=a@b -c user.name=t commit -q --allow-empty -m unpushed
+line lhuman '{"event": "run_start", "pos": 1}' "$(v needs-human)"
+line lpaused '{"event": "run_start", "pos": 1}' "$(v stopped '["paused:owner"]')"
+line lresumed '{"event": "run_start", "pos": 1}' "$(v stopped)" '{"event": "resume", "pos": 3}'
+line lnew '{"event": "run_start", "pos": 1}' "$(v completed)"; touch "runs/run-lnew/record.jsonl"
 $G worktree add -q -b gui/cn worktrees/child/cn origin/main; mkdir -p worktrees/child/cn/runs/run-cn; echo "$(v completed)" > worktrees/child/cn/runs/run-cn/record.jsonl
 $G worktree add -q -b squad/run-cn/c worktrees/child/cn/runs/run-cn/ws/c origin/main; echo work > worktrees/child/cn/runs/run-cn/ws/c/f
 $G worktree add -q -b fresh/1 "$T/hm/wt-fresh" origin/main   # made a moment ago at the base tip: a gate may be starting in it
@@ -68,6 +77,8 @@ o2=$(bash "$T/s/wtclean.sh" 2>&1); case "$o2" in *"WT KEPT run ahead"*) ko "a ke
 lines=$(cat "$T/st/active-runs.txt")
 case "$lines" in *run-ended*) ko "an ended run kept its active-runs line: $lines";; *) ok "an ended run leaves active-runs.txt";; esac
 case "$lines" in *run-lover*) ko "a run whose wave is over kept its active-runs line: $lines";; *) ok "a failed run whose wave is over leaves active-runs.txt";; esac
-for k in going lwave lws lrem; do case "$lines" in *"run-$k"*) ok "active-runs keeps $k";; *) ko "active-runs dropped $k";; esac; done
+for k in going lwave lresumed lnew; do case "$lines" in *"run-$k"*) ok "active-runs keeps $k";; *) ko "active-runs dropped $k";; esac; done
+for k in lws lrem lunp lhuman lpaused; do case "$lines" in *"run-$k"*) ko "an ended run with no open wave kept its line ($k): $lines";; *) ok "an ended run leaves active-runs.txt whatever keeps its tree ($k)";; esac; done
+[ -f runs/run-lws/ws/c/f ] && [ -d runs/run-lunp/ws/c ] && ok "the dropped runs keep their trees" || ko "a dropped run lost its tree: $out"
 [ -d "$T/hm/wt-fresh" ] && ok "a fresh ~/wt-* tree at the base tip: kept" || ko "wt-fresh removed: $out"
 rm -rf "$T"; exit $fail
