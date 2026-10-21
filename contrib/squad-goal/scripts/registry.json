@@ -37,7 +37,7 @@
   "models": [
     {
       "id": "claude-opus-5-5",
-      "label": "Opus 5.5",
+      "label": "Claude Opus 5.5",
       "provider": "claude",
       "subscription": "claude",
       "efforts": [
@@ -101,7 +101,7 @@
     },
     {
       "id": "claude-sonnet-5-5",
-      "label": "Sonnet 5.5",
+      "label": "Claude Sonnet 5.5",
       "provider": "claude",
       "subscription": "claude",
       "efforts": [
@@ -165,7 +165,7 @@
     },
     {
       "id": "claude-haiku-4-5-20251001",
-      "label": "Haiku 4.5",
+      "label": "Claude Haiku 4.5",
       "provider": "claude",
       "subscription": "claude",
       "efforts": [
@@ -287,7 +287,7 @@
     },
     {
       "id": "claude-fable-5-1",
-      "label": "Fable 5.1",
+      "label": "Claude Fable 5.1",
       "provider": "claude",
       "subscription": "claude",
       "efforts": [
@@ -338,7 +338,7 @@
     },
     {
       "id": "claude-sonnet-4-6",
-      "label": "Sonnet 4.6",
+      "label": "Claude Sonnet 4.6",
       "provider": "claude",
       "subscription": "claude",
       "efforts": [
@@ -389,7 +389,7 @@
     },
     {
       "id": "claude-opus-4-6-thinking",
-      "label": "Opus 4.6 thinking",
+      "label": "Claude Opus 4.6 thinking",
       "provider": "claude",
       "subscription": "claude",
       "efforts": [
@@ -1281,7 +1281,7 @@
     },
     {
       "id": "deepseek-flash",
-      "label": "DeepSeek V4.1 Flash (no tools)",
+      "label": "DeepSeek V4.1 Flash no-tools",
       "provider": "deepseek",
       "subscription": "deepseek",
       "efforts": [
@@ -1348,7 +1348,7 @@
     },
     {
       "id": "deepseek-v4-flash",
-      "label": "DeepSeek V4.1 Flash (tools)",
+      "label": "DeepSeek V4.1 Flash",
       "provider": "deepseek",
       "subscription": "deepseek",
       "efforts": [

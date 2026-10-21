@@ -30,13 +30,13 @@ def hub():
 
 @pytest.mark.parametrize("raw,chain,llm,route", [
     ("claude-grok-4.7", "coding_models", "Grok 4.7", "gateway"),
-    ("claude-deepseek-flash[1m]", "coding_models", "DeepSeek V4.1 Flash (no tools)", "gateway"),
-    ("claude:claude-opus-5-5", None, "Opus 5.5", "claude CLI"),
-    ("claude-opus-5-5", "review_models", "Opus 5.5", "claude CLI"),   # the panel's bare id: the review chain adds claude:
-    ("claude-opus-5-5", "coding_models", "Opus 5.5", "gateway"),
+    ("claude-deepseek-flash[1m]", "coding_models", "DeepSeek V4.1 Flash no-tools", "gateway"),   # re-anchored to the #687 scheme: <Family> <version> <tier>, no parentheses
+    ("claude:claude-opus-5-5", None, "Claude Opus 5.5", "claude CLI"),
+    ("claude-opus-5-5", "review_models", "Claude Opus 5.5", "claude CLI"),   # the panel's bare id: the review chain adds claude:
+    ("claude-opus-5-5", "coding_models", "Claude Opus 5.5", "gateway"),
     ("gemini-3.8-flash-medium", "review_models", "Gemini 3.8 Flash", "agy CLI"),
     ("gpt-5.6-luna", "vision_models", "GPT-5.6 Luna", "codex CLI"),
-    ("opus", None, "Opus 5.5", "gateway"),
+    ("opus", None, "Claude Opus 5.5", "gateway"),
     ("gpt-6-luna", "coding_models", "GPT-6 Luna", "codex CLI"),   # registered by #679
     ("claude-haiku-5-5", "coding_models", "Claude Haiku 5.5", "gateway"),
 ])

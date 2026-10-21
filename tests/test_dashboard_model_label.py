@@ -27,14 +27,14 @@ def _record(events):
 
 def test_a_registry_id_reads_as_its_label():
     assert _model("gpt-5.6-terra") == "GPT-5.6 Terra"
-    assert _model("claude-opus-5-5") == "Opus 5.5"
+    assert _model("claude-opus-5-5") == "Claude Opus 5.5"   # re-anchored to the #687 scheme: <Family> <version> <tier>, no parentheses
 
 
 def test_an_alias_reads_as_its_registry_label():
     """An old record or a graph may still name the prefixed spelling; the alias map resolves it."""
-    assert _model("opus") == "Opus 5.5"
+    assert _model("opus") == "Claude Opus 5.5"
     assert _model("claude-gpt-5.6-terra") == "GPT-5.6 Terra"
-    assert _model("claude-deepseek-v4-flash") == "DeepSeek V4.1 Flash (tools)"
+    assert _model("claude-deepseek-v4-flash") == "DeepSeek V4.1 Flash"
 
 
 def test_an_unknown_id_renders_raw_and_never_crashes():

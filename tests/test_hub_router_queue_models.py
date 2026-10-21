@@ -79,11 +79,15 @@ def test_a_queue_entry_the_gateway_does_not_serve_is_refused_at_save_by_name(hub
 
 def test_the_queue_add_box_offers_only_gateway_ids_and_the_role_box_keeps_the_others(hub, checkout):
     got = hub.models_get()
-    assert sorted(got["router_known"]) == sorted(GATEWAY)
+    # re-anchored (#687): the box also offers the registry's live Anthropic ids, which the gateway passes through
+    reg = hub.router_envelope.modelreg.default_registry()
+    anthropic = {m for m, e in reg.entries.items() if hub.ANTHROPIC_ID.match(m) and not e.retired}
+    assert sorted(got["router_known"]) == sorted(set(GATEWAY) | anthropic)
     assert [m for m in OTHER_CLI if m not in got["known"]] == []
     src = HUB_PY.read_text()
     assert re.search(r'<input list=mkr data-radd', src), "the Router queue Add box reads its own list"
-    assert re.search(r'<datalist id=mkr>\$\{\(mdl\.router_known\|\|\[\]\)', src), "that list is router_known"
+    # re-anchored (#687): the list renders router_known through its suggestions, the label first and the id second
+    assert re.search(r'<datalist id=mkr>\$\{\(mdl\.suggest\|\|\{\}\)\.router_known', src), "that list is router_known"
 
 
 def test_an_anthropic_id_the_gateway_does_not_list_is_kept_in_the_queue(hub, checkout, monkeypatch):

@@ -112,7 +112,8 @@ def test_two_spellings_of_one_label_differ_by_their_route(hub):
     assert got == {"claude-opus-5-5": "Claude Opus 5.5 · gateway", "claude:claude-opus-5-5": "Claude Opus 5.5 · claude CLI"}
 
 
-def test_every_suggestion_text_is_unique_in_its_list(hub):
+def test_every_suggestion_text_is_unique_in_its_list(hub, monkeypatch):
+    monkeypatch.setattr(hub, "gateway_models", lambda ttl=120: ["claude-gpt-5.2", "claude-gpt-5.6-terra", "claude-grok-4.7"])
     for ids in (hub.known_models({}), hub.router_known()):
         texts = [s["text"] for s in hub.model_suggestions(ids)]
         assert len(texts) == len(set(texts))

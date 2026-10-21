@@ -31,8 +31,8 @@ def test_an_agent_shows_the_model_the_record_says_it_used():
 
 def test_an_agent_with_no_record_shows_its_configured_model_marked():
     assert _line({"name": "a", "kind": "agent", "model": "claude-sonnet-5-5"}) == \
-        {"llm": True, "source": "configured", "registered": True, "text": "Sonnet 5.5 (configured)"}
-    assert _line({"name": "a", "kind": "agent", "model": "opus"}, _used(None))["text"] == "Opus 5.5 (configured)"
+        {"llm": True, "source": "configured", "registered": True, "text": "Claude Sonnet 5.5 (configured)"}
+    assert _line({"name": "a", "kind": "agent", "model": "opus"}, _used(None))["text"] == "Claude Opus 5.5 (configured)"   # re-anchored to the #687 scheme: <Family> <version> <tier>, no parentheses
 
 
 def test_an_unregistered_model_says_so_plainly():
@@ -67,8 +67,8 @@ def test_a_review_command_gate_names_its_command_and_claims_no_llm_of_its_own():
 
 
 def test_fmt_llm_reads_a_label_and_marks_an_unknown_id():
-    assert _llm("claude-deepseek-flash") == "DeepSeek V4.1 Flash (no tools)"
-    assert _llm("claude-deepseek-flash[1m]") == "DeepSeek V4.1 Flash (no tools)"   # a served spelling is an alias
+    assert _llm("claude-deepseek-flash") == "DeepSeek V4.1 Flash no-tools"   # re-anchored to the #687 scheme: <Family> <version> <tier>, no parentheses
+    assert _llm("claude-deepseek-flash[1m]") == "DeepSeek V4.1 Flash no-tools"   # a served spelling is an alias
     assert _llm("gemini-3.8-flash-low") == "Gemini 3.8 Flash"
     assert _llm("claude-gpt-5.6-terra medium tdd") == "GPT-5.6 Terra medium tdd"
     assert _llm("gpt-9-nova medium") == "gpt-9-nova · unregistered medium"
