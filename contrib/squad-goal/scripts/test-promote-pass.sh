@@ -111,6 +111,10 @@ SG_PROMOTE_LOAD_LIMIT=1000000 pass; rc=$?
 [ "$(/usr/bin/grep -c "^$t7 " "$SG_STATE/promote-pass.tips" 2>/dev/null)" = 0 ] && ok "a loaded skip writes no marker: the tip is retried later" || ko "a loaded skip marked the tip refused"
 rm -f "$SG_STATE/active-runs.txt"; n=$(runs); SG_PROMOTE_LOAD_LIMIT=0 pass; rc=$?
 [ $rc = 0 ] && [ "$(runs)" = "$n" ] && [ "$(tip stg)" = "$before" ] && ok "a load average at its bound, with no live run, marks the tip not proven too" || ko "load bound: rc $rc, runs $(runs), stg $(tip stg)"
+# (#748) A run's removal can leave the last line empty, and a file of blank lines is no live run: the pre-check reads the
+# non-empty lines, as its own message does, never the file's size.
+printf '\n' > "$SG_STATE/active-runs.txt"; pass; rc=$?
+[ $rc = 0 ] && [ "$(tip stg)" = "$t7" ] && ok "an active-runs file of blank lines is no live run" || ko "a blank line held the promotion: rc $rc, stg $(tip stg), dev $t7"
 pass; rc=$?
 [ $rc = 0 ] && [ "$(tip stg)" = "$t7" ] && ok "the same tip is proved once the machine is free" || ko "retry after load: rc $rc, stg $(tip stg)"
 /usr/bin/grep -q -- '-n auto' "$d/promote-pass.sh" && ko "the default suite still takes every core (-n auto)" || ok "the default suite bounds its workers (#738)"

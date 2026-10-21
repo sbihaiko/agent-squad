@@ -54,7 +54,7 @@ cores=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 1)
 limit=${SG_PROMOTE_LOAD_LIMIT:-$cores}
 load1=$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}' | tr -d '{}')
 load1=${load1:-$(cut -d' ' -f1 /proc/loadavg 2>/dev/null)}; load1=${load1:-0}
-if [ -s "$live" ] || awk -v l="$load1" -v m="$limit" 'BEGIN { exit !(l + 0 >= m + 0) }'; then
+if /usr/bin/grep -q . "$live" 2>/dev/null || awk -v l="$load1" -v m="$limit" 'BEGIN { exit !(l + 0 >= m + 0) }'; then
   l="promote-pass: $tip not proven: machine loaded (load $load1 on $cores cores, limit $limit, $(/usr/bin/grep -c . "$live" 2>/dev/null || echo 0) live runs)"
   echo "$(date -u +%FT%TZ) $l" >> "$log"; echo "$l"; exit 0
 fi
