@@ -179,6 +179,10 @@ A fetch or push of `wave.sh land` that fails on the network (cannot resolve the 
 
 A spec is never work (ADR-0142). `/to-spec` does not label it `ready-for-agent`, and the frontier skips the `spec` label. The janitor folds a spec's column over its sub-issues (rank 15, forward only, nothing below Doing). When the owner moves a spec card to Todo, the janitor moves each open sub-issue whose card is in Backlog or has no column to Todo (rank 12). A spec with at least one sub-issue, all closed, is closed with one comment.
 
+### Frontier idle
+
+A frontier pass that holds Todo cards and starts none says so in one line (#733): `FRONTIER idle: N todo, M startable (counts)`. It goes to the pass's output and to cycle.log, because a silent frontier and a stuck one read the same in the log, and the owner found the last stall instead of the loop. The counts name every reason a card waits, in this order: `no go label`, `held`, `sibling`, `no slot`, `blocked`, `claimed`, `busy`, `not startable`, `skip label`, `ac paths`, `not listed`. A reason no card carries still prints as 0, so the shape of the line never changes, and the counts sum to N. `no slot` is the reason of every card when the machine holds no run slot or no child room, and of the cards past the pass's envelope. The per-card detail, one `FRONTIER why #N: reason` line a card, follows only when the reasons changed since the previous pass: the pass keeps the hash of them in `auto/frontier-why`, and a pass that dispatches removes it. A pass with no Todo card writes no line.
+
 ## 3. Failure paths
 
 ```mermaid

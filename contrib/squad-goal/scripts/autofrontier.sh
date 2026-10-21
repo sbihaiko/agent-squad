@@ -16,6 +16,37 @@
 export SG_GH_PASS=frontier   # the pass that spends the GitHub calls below, named in the call log (ADR-0277)
 [ -n "${SG_FRONTIER_LABEL:-}" ] || exit 0; [ -e "$A/off" ] && exit 0
 [ -e "$SG_STATE/token-pause" ] && exit 0   # the token guard paused dispatch: the hourly burn stays over 3x the cap (token-guard.sh)
+F=$(mktemp -d "${TMPDIR:-/tmp}/frontier.XXXXXX"); trap 'rm -rf "$F"' EXIT   # the pass's scratch: the issue list, a card's entry, and the reasons a card waits (#733)
+pick=(); notes=(); ready=(); kids=(); full=""; broke=   # the walk's facts, declared here so the idle line can read them at any exit
+# The idle summary (#733): a pass that leaves Todo cards and picks none says so in one line, always -- a silent frontier and a
+# stuck one read the same in the log, and the owner found the last stall, not the loop. The counts name every reason a card
+# waits, in this fixed order; a reason no card carries still prints as 0, so the shape of the line never changes. The per-card
+# detail follows only when the reasons differ from the previous pass (a hash in $A/frontier-why), so a quiet loop costs one
+# line a beat and a changed one explains itself.
+WHY_REASONS=("no go label" "held" "sibling" "no slot" "blocked" "claimed" "busy" "not startable" "skip label" "ac paths" "not listed")
+why_card() { printf '%s\t%s\t%s\n' "$1" "$2" "${3:-}" >> "$F/why"; }   # <issue> <reason> [note]: a Todo card this walk left behind
+idle() {   # <reasons file> [reason for a card the file does not name]: the summary line, and the detail when the reasons changed
+  local f=$1 def=${2:-"not listed"} n r c line parts="" total h cards="$F/why.cards"
+  [ -e "$f" ] || : > "$f"
+  printf '%s\n' $todo | awk -F'\t' -v def="$def" 'FILENAME==ARGV[1]{why[$1]=$2; note[$1]=$3; next} NF{r=($1 in why)?why[$1]:def; print $1 "\t" r "\t" note[$1]}' "$f" - | sort -n > "$cards"
+  total=$(wc -l < "$cards" | tr -d ' ')
+  [ "$total" -gt 0 ] || return 0   # no Todo card: nothing waits, and the line would say nothing
+  for r in "${WHY_REASONS[@]}"; do
+    c=$(awk -F'\t' -v r="$r" '$2==r{c++} END{print c+0}' "$cards"); parts="$parts, $c $r"
+  done
+  line="FRONTIER idle: $total todo, ${#pick[@]} startable (${parts#, })"
+  printf '%s\n' "$line"; printf '%s\n' "$line" >> "${SG_STATE:?idle: no state directory}/cycle.log"
+  h=$(cksum < "$cards" | awk '{print $1 "-" $2}')
+  [ "$(cat "$A/frontier-why" 2>/dev/null)" = "$h" ] && return 0   # the same reasons as the last pass: the line alone
+  { while IFS=$'\t' read -r n r c; do printf 'FRONTIER why #%s: %s%s\n' "$n" "$r" "${c:+ ($c)}"; done < "$cards"; } > "$F/why.detail"
+  cat "$F/why.detail"; cat "$F/why.detail" >> "$SG_STATE/cycle.log"
+  printf '%s\n' "$h" > "$A/frontier-why.$$" && mv "$A/frontier-why.$$" "$A/frontier-why"
+  return 0
+}
+idle_noslot() {   # the pass has no run slot or no child room: every Todo card waits for one, and the line says so
+  todo=$(sg_todo_cards) || { echo "FRONTIER: the board did not answer; nothing dispatched this pass" >&2; return 0; }
+  todo=" $(echo $todo) "; : > "$F/why"; idle "$F/why" "no slot"
+}
 # One pass at a time (#1514): a pass starting inside another one's pick sees every issue unmarked and dispatches the
 # same issues again, overwriting the first pass's markers. single.sh <stage> around the whole pass, as fastloop.sh does
 # for its steps: the second pass exits 0 at once. Not re-entrant, so the re-entry carries its own marker.
@@ -100,7 +131,7 @@ busy=$(sg_live_issues "$SG_STATE/active-runs.txt")
 # notes and improvise (#57); a number the run never set is worse than no number.
 case "${spend:--}" in -|"") spendarg="a spend the run's own dispatch budget allows (this pass could not read that budget: a request over it is rejected whole, spend_outside_budget)";;
   *) spendarg="spend $spend (the dispatch node's budget: a request over it is rejected whole, spend_outside_budget)";; esac
-[ "$free" -gt 0 ] || exit 0
+[ "$free" -gt 0 ] || { idle_noslot; exit 0; }
 # per: the children ONE run may take, its envelope; with no readable envelope, the free run slots. cap: the children the pass
 # may take, per for each free slot (only per when the envelope is unknown, as before), and never more than the room the child
 # ceilings leave (the tighter bound wins).
@@ -109,13 +140,12 @@ fr=$(cd "$SG_CHECKOUT" && python3 "$here/fundroom.py" "${SG_WORKFLOW:-dynamic}" 
 case "$fr" in ''|-|*[!0-9]*) ;; *) [ "$fr" -lt "$per" ] && per=$fr;; esac
 case "${env:--}" in -) cap=$per;; *) cap=$((free * per));; esac
 case "${room:--}" in -) ;; *) [ "$room" -lt "$cap" ] && cap=$room;; esac
-[ "$per" -gt 0 ] && [ "$cap" -gt 0 ] || exit 0   # the live runs hold every child the machine allows
+[ "$per" -gt 0 ] && [ "$cap" -gt 0 ] || { idle_noslot; exit 0; }   # the live runs hold every child the machine allows
 # The issues an open work branch already names are past dispatch, so a pass never dispatches one twice (#361). It is a git
 # read of the remote heads (workbranches.sh), never a GitHub call: the work branch is the unit of work now, and the open
 # issues are read once below, through the door.
-. "$here/ghcall.sh"; . "$here/workbranches.sh"; F=$(mktemp -d "${TMPDIR:-/tmp}/frontier.XXXXXX"); trap 'rm -rf "$F"' EXIT
+. "$here/ghcall.sh"; . "$here/workbranches.sh"
 refs=" $(sg_work_issues) "
-pick=(); notes=(); ready=(); kids=(); full=""
 # Issues whose bodies name a common file share one child and one branch.
 cluster_of() {   # one line per cluster of <n> issues, in the same shape; a lone issue is its own line
   local n lines=() cj cl
@@ -158,40 +188,48 @@ while IFS=$'\x1f' read -r w n labels; do [ -n "$n" ] && cands+=("$w"$'\x1f'"$n"$
 i=0
 while [ $i -lt ${#cands[@]} ]; do
   IFS=$'\x1f' read -r w n labels <<< "${cands[$i]}"; i=$((i+1))
-  [ -n "$n" ] || continue; sg_dispatch_claimed "$n" && continue
+  [ -n "$n" ] || continue
+  card=; case "$todo" in *" $n "*) card=1;; esac   # only a Todo card is counted in the idle line (#733)
+  sg_dispatch_claimed "$n" && { [ -z "$card" ] || why_card "$n" claimed "a dispatch marker holds it"; continue; }
   # A spec is not a unit of work: the owner starts it by breaking it into tickets, and a run that implemented one would
   # commit a decision he has not made. The same holds for an issue that waits on the owner, one closed as not-work, and
   # one waiting on an answer. The bug label is skipped here too: autobug.sh owns those.
   # A run parent rolls a run's children up and is never work (#340).
-  skip=; for s in "${SG_BUG_LABEL:-bug}" debt run-parent frozen:owner frozen:dependency ${SG_FRONTIER_SKIP_LABELS//,/ }; do case ",$labels," in *",$s,"*) skip=1;; esac; done
-  [ -n "$skip" ] && continue
-  case ",$labels," in *",$SG_FRONTIER_LABEL,"*) ;; *) continue;; esac   # no go label, no dispatch (#485)
+  skip=; bad=; for s in "${SG_BUG_LABEL:-bug}" debt run-parent frozen:owner frozen:dependency ${SG_FRONTIER_SKIP_LABELS//,/ }; do case ",$labels," in *",$s,"*) skip=1; bad=$s;; esac; done
+  [ -n "$skip" ] && { [ -z "$card" ] || why_card "$n" "skip label" "$bad"; continue; }
+  case ",$labels," in *",$SG_FRONTIER_LABEL,"*) ;; *) [ -z "$card" ] || why_card "$n" "no go label"; continue;; esac   # no go label, no dispatch (#485)
   case "$todo" in *" $n "*) ;; *) continue;; esac   # the card is not in Todo: the owner has not started it (#550)
-  case "$refs" in *" $n "*) continue;; esac; case ",$busy," in *",$n,"*) continue;; esac
+  case "$refs" in *" $n "*) why_card "$n" busy "an open work branch names it"; continue;; esac
+  case ",$busy," in *",$n,"*) why_card "$n" busy "a live run holds it"; continue;; esac
   jq -c --argjson n "$n" '[.[]|select(.number==$n)][0] // empty' "$F/issues.json" > "$F/issue-$n.json" 2>/dev/null
   # The list's entry decides; only an entry that carried no comments costs the comments read.
   ns=$(jq -r 'if .not_startable == null then "unread" else .not_startable end' "$F/issue-$n.json" 2>/dev/null)
-  { [ "$ns" = true ] || { [ "$ns" != false ] && sg_not_startable "$n"; }; } && { echo "FRONTIER skip #$n: SQUAD-NOT-STARTABLE among its comments (a failure the loop already repeated)"; continue; }
-  h=$(sg_ledger_held "$n") && { echo "FRONTIER skip #$n: $h"; continue; }   # a corrupt ledger holds its issue (ADR-0149)
-  sg_ac_refused "$n" "$F/issue-$n.json" FRONTIER && continue   # an acceptance command on a missing script (#729)
+  { [ "$ns" = true ] || { [ "$ns" != false ] && sg_not_startable "$n"; }; } && { why_card "$n" "not startable" "SQUAD-NOT-STARTABLE among its comments"; echo "FRONTIER skip #$n: SQUAD-NOT-STARTABLE among its comments (a failure the loop already repeated)"; continue; }
+  h=$(sg_ledger_held "$n") && { why_card "$n" held "a corrupt ledger holds it"; echo "FRONTIER skip #$n: $h"; continue; }   # a corrupt ledger holds its issue (ADR-0149)
+  sg_ac_refused "$n" "$F/issue-$n.json" FRONTIER && { why_card "$n" "ac paths" "an acceptance command names a missing path"; continue; }   # an acceptance command on a missing script (#729)
   stack_out=$(SG_STACK_ISSUE="$F/issue-$n.json" "$here/stack.sh" "$n" 2>&1)
   d=$(printf '%s\n' "$stack_out" | grep -m1 -E '^(READY|WAIT )')
   printf '%s\n' "$stack_out" | grep '^STACK NOTE ' | sed 's/^STACK NOTE /FRONTIER NOTE /' >&2 || true
   g=; nt=
-  case "$d" in READY*) g=base; nt="work in the worktree the run gives you";; *) continue;; esac
+  case "$d" in READY*) g=base; nt="work in the worktree the run gives you";; *) why_card "$n" blocked "${d:-no stack line}"; continue;; esac
   # A run never holds conflicting siblings (ADR-0150, #703): a ticket of a spec that a picked issue already builds, as a child
   # of its own, waits for a later run. Deterministic (siblings.py: the spec link and the bodies, no model); issues that name
   # one file are one child (cluster.py), never siblings. A filter that cannot run filters nothing: landing still checks.
   if [ ${#pick[@]} -gt 0 ]; then
     why=$(python3 "$here/siblings.py" "$F/issues.json" "$n" "${pick[@]}" 2>&1); rc=$?
-    case $rc in 0) ;; 1) echo "FRONTIER split #$n: $why (ADR-0150); it waits for a later run"; continue;;
+    case $rc in 0) ;; 1) why_card "$n" sibling "$why"; echo "FRONTIER split #$n: $why (ADR-0150); it waits for a later run"; continue;;
       *) echo "FRONTIER NOTE siblings.py failed ($rc): ${why%%$'\n'*}; no sibling filter for #$n" >&2;; esac
   fi
-  [ -z "$full" ] || joins "$g" "$n" || break
+  [ -z "$full" ] || joins "$g" "$n" || { broke=1; break; }
   pick+=("$n"); notes+=("$nt"); ready+=("$n")
   [ -n "$full" ] || [ ${#pick[@]} -lt "$cap" ] || full=1
 done
-[ ${#pick[@]} -gt 0 ] || exit 0
+if [ -n "$broke" ]; then   # the walk ended at the envelope: the cards past it wait for a slot, not for a reason of their own
+  while [ $i -lt ${#cands[@]} ]; do IFS=$'\x1f' read -r w n labels <<< "${cands[$i]}"; i=$((i+1))
+    case "$todo" in *" $n "*) why_card "$n" "no slot" "past the pass's envelope";; esac; done
+fi
+[ ${#pick[@]} -gt 0 ] || { idle "$F/why"; exit 0; }
+rm -f "$A/frontier-why"   # this pass dispatched: the next idle pass explains itself afresh
 noteof() { local i=0 x; for x in "${pick[@]}"; do [ "$x" = "$1" ] && { echo "${notes[$i]}"; return; }; i=$((i+1)); done; }   # bash 3.2: no associative arrays
 all=(); while read -r c; do [ -n "$c" ] && all+=("$c"); done < <(cluster_of "${ready[@]}")
 # One run per free slot, never more runs than children (#728). The children are dealt over the runs in turn, so no run takes
