@@ -53,6 +53,7 @@ An ADR holds a decision and its reason. It is not a ledger: no dates, counts, st
 | [0150](0150-a-run-never-holds-conflicting-siblings.md) | A run never holds two children of one spec, nor two issues whose bodies name the same repository-relative file; a deterministic check before dispatch enforces it, and conflict handling at landing stays |
 | [0151](0151-a-review-streak-escalates.md) | Three consecutive CHANGES verdicts send an issue to needs-human; identical findings twice stop the fix cycle and the next attempt uses a stronger coder; Debt or nit findings never count as CHANGES; an approval binds to the reviewed commit; a run that reviews its own children owns them |
 | [0152](0152-reach-the-web-surfaces-over-the-tailnet.md) | The web surfaces keep their loopback bind; the hub is the one tailnet entry, through one owner-set `tailscale serve`; a tailnet request needs an allowed login, and a write also the tailnet origin; no credential is stored |
+| [0153](0153-the-full-suite-runs-nightly-in-both-modes.md) | The full suite runs nightly in both modes, heavy included, in its own tree and its own lock, never the landing lock; one atomic result record carries the failing tests to the hub, a red result alerts, and a red result holds delivery until one green run |
 
 ## Adding an ADR
 

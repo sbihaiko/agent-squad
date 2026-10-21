@@ -1,0 +1,32 @@
+# ADR-0153: The full suite runs nightly in both modes, in its own tree and lock
+
+## Status
+
+Accepted.
+
+## Context
+
+Every gate the loop runs is bounded by time. The fast battery that a work-branch tip and a wave entry run deselects `heavy` and runs one mode, so the calls it skips and the two-mode difference go unchecked until the owner promotes. The promotion proof runs the full suite in both modes, but only when the owner starts it, and it holds the landing lock while it runs, so no wave lands meanwhile ([ADR-0145](0145-a-work-branch-lands-in-dev-by-fast-forward.md) rule 3).
+
+A defect that only a heavy call or a serial run shows can therefore sit in the landing branch for days, and the reader of the hub has no reading of it at all.
+
+## Decision
+
+1. **The full suite runs nightly, in both modes, heavy included.** `nightly.sh` runs `pytest -p no:deepeval -n auto` and then `pytest -p no:deepeval -p no:xdist` over the whole suite, with no `-m 'not heavy'`. The watch cycle starts it detached, once a day, under its own single-flight stage; a later cycle the same day runs nothing.
+2. **It runs in its own tree.** The suite runs in a plain clone at the state directory, never in the owner's checkout and never in a child's worktree, so no suite it runs can touch the line the loop is working on. It is not a `~/wt-*` worktree, so the worktree cleanup never removes it.
+3. **It takes its own lock and never the landing lock.** Its serial name is `nightly`, in try mode, so a second start never queues behind a suite of hours. It never takes the `gate` lock that the landing gate, the wave entry and the promotion wait on: a held landing lock is no obstacle to the nightly, and a nightly in flight never delays a landing.
+4. **One result record is the nightly's only output.** The record is written by a temp file and a rename ([ADR-0030](0030-atomic-writes.md)) and holds the time, the result, the sha, each mode's own result and the failing test ids. The result is a pass only when both modes pass. The two mode logs stay beside it.
+5. **The hub draws the record as one fact.** The footer reads the record: the result and its age, in the error tone when the suite is red, with each mode's result, the sha and the failing tests on the hover. A record the hub cannot read is a question mark, never a pass.
+6. **A red result alerts once and holds delivery.** The alert takes the path `health.sh` already uses: one line in the alerts file and one notification. A red record holds dispatch through the dispatch hold both dispatch passes read, and one green run releases it. A missing or unreadable record never holds: the loop is never blocked on a file it cannot trust.
+
+## Consequences
+
+A defect that only the heavy or serial mode shows now surfaces within a day, before the owner's promotion, and the hub names the tests that failed.
+
+Delivery can wait up to a day after a red nightly: the loop starts no new work on a landing branch whose full suite is red, until the next nightly is green. A nightly that never runs again would hold delivery for longer, which is a defect in the schedule and not a defect in the rule.
+
+The nightly spends the machine's time on the order of a full suite once a day. It never adds a gate, so no entry and no landing becomes slower.
+
+## Guard
+
+`contrib/squad-goal/scripts/test-nightly.sh` guards rules 1 to 4 and 6 (both modes in the nightly tree, the record, the alert, the lock names, the day marker and the dispatch hold). `contrib/squad-goal/scripts/test-watch-cycle.sh` (case 12) guards rule 1 (the cycle starts the suite detached and does not wait for it). `tests/test_hub_nightly_fact.py` guards rule 5 (the fact, the modes, the sha and the failing tests).
