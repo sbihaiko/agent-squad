@@ -17,6 +17,10 @@ pass env; [ "$(alerts)" = 1 ] && ok "a changed file with no publish raises LIVE-
 pass env; [ "$(alerts)" = 1 ] && ok "an unchanged live copy raises nothing again" || ko "a pass with no change alerted ($(alerts))"
 printf 'skill v2\n' > "$T/live/SKILL.md"; touch "$T/st/live-publish.stamp"
 pass env; [ "$(alerts)" = 1 ] && ok "a change a publish made raises nothing" || ko "a publish was read as a stray write ($(alerts))"
+# A hand publish (publish-live.sh) writes the live PUBLISHED file and no stamp in the state dir (#727): its change is the
+# publish's own too.
+sleep 1; printf 'skill v3\n' > "$T/live/SKILL.md"; printf 'abc 2026-01-01T00:00:00Z\n' > "$T/live/PUBLISHED"
+pass env; [ "$(alerts)" = 1 ] && ok "a hand publish that writes PUBLISHED raises nothing" || ko "a hand publish was read as a stray write ($(alerts))"
 # An import writes __pycache__/<module>.cpython-312.pyc under the live copy, and an editor writes .DS_Store. Neither is a
 # change to the loop's code (#661): they raise nothing, whether they come or go.
 mkdir -p "$T/live/scripts/__pycache__"
