@@ -3531,17 +3531,21 @@ def tailnet_roots():
     """Where the tailnet rule reads its seam and settings reader: the tree this file sits in first, so a stale SG_SQUAD never answers for the hub's own code."""
     return [str(pathlib.Path(__file__).resolve().parents[3]), *squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__)]
 
-def _load_tailnet_seam():
-    """The tailnet access seam (squad/tailnet_access.py), loaded by path from the first root that holds it."""
-    roots = tailnet_roots()
-    for root in roots:
-        path = pathlib.Path(root) / "squad" / "tailnet_access.py"
-        if path.is_file():
-            spec = importlib.util.spec_from_file_location("tailnet_access", path)
-            seam = importlib.util.module_from_spec(spec); spec.loader.exec_module(seam)
-            return seam
-    sys.exit("hub: no squad/tailnet_access.py in: " + ", ".join(roots))
-TAILNET = _load_tailnet_seam()
+_SEAM = {}
+def tailnet_seam():
+    """The tailnet access seam (squad/tailnet_access.py), loaded by path from the first root that holds it; None when no root does."""
+    if "seam" not in _SEAM:
+        _SEAM["seam"] = None
+        for root in tailnet_roots():
+            path = pathlib.Path(root) / "squad" / "tailnet_access.py"
+            if path.is_file():
+                spec = importlib.util.spec_from_file_location("tailnet_access", path)
+                seam = importlib.util.module_from_spec(spec); spec.loader.exec_module(seam)
+                _SEAM["seam"] = seam
+                break
+        if _SEAM["seam"] is None:
+            log_once("hub: no squad/tailnet_access.py, every tailnet request is refused")
+    return _SEAM["seam"]
 
 _PROJECT = {}
 def tailnet_block():
@@ -3565,11 +3569,13 @@ class Access(NamedTuple):
 def access(h, method):
     """The one rule for every route: the loopback Host as own_host has always answered it, a tailnet request through the seam."""
     if own_host(h): return Access(True, "", "", False)
-    login = h.headers.get(TAILNET.LOGIN_HEADER) or ""
+    seam = tailnet_seam()
+    if seam is None: return Access(False, "no tailnet access seam", "", False)
+    login = h.headers.get(seam.LOGIN_HEADER) or ""
     host = h.headers.get("Host") or ""
     tn = tailnet_block()
-    v = TAILNET.decide(host=host, origin=h.headers.get("Origin") or "", method=method, login=login,
-                       port=h.server.server_port, tailnet_host=tn.get("host") or "", allowed_logins=tn.get("allow") or [])
+    v = seam.decide(host=host, origin=h.headers.get("Origin") or "", method=method, login=login,
+                    port=h.server.server_port, tailnet_host=tn.get("host") or "", allowed_logins=tn.get("allow") or [])
     return Access(v.allowed, v.reason, login if v.allowed else "", bool(tn.get("host")) and host == tn["host"])
 
 class H(BaseHTTPRequestHandler):
