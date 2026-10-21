@@ -203,6 +203,7 @@ for sel in "$lab" debt; do
     # signal the loop already wrote on the issue, and dispatching it again feeds the loop the same input (#1858). The read
     # is one request per candidate that got this far, and it is a refusal-safe read like every other one here.
     sg_not_startable "$n" && { echo "AUTOBUG skip #$n: SQUAD-NOT-STARTABLE among its comments (a failure the loop already repeated)"; continue; }
+    h=$(sg_ledger_held "$n") && { echo "AUTOBUG skip #$n: $h"; continue; }   # a corrupt ledger holds its issue (ADR-0149)
     ready_now "$n" || continue
     cand+=("$n")
   done <<<"$list"

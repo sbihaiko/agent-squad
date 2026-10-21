@@ -164,6 +164,7 @@ while [ $i -lt ${#cands[@]} ]; do
   # The list's entry decides; only an entry that carried no comments costs the comments read.
   ns=$(jq -r 'if .not_startable == null then "unread" else .not_startable end' "$F/issue-$n.json" 2>/dev/null)
   { [ "$ns" = true ] || { [ "$ns" != false ] && sg_not_startable "$n"; }; } && { echo "FRONTIER skip #$n: SQUAD-NOT-STARTABLE among its comments (a failure the loop already repeated)"; continue; }
+  h=$(sg_ledger_held "$n") && { echo "FRONTIER skip #$n: $h"; continue; }   # a corrupt ledger holds its issue (ADR-0149)
   stack_out=$(SG_STACK_ISSUE="$F/issue-$n.json" "$here/stack.sh" "$n" 2>&1)
   d=$(printf '%s\n' "$stack_out" | grep -m1 -E '^(READY|WAIT )')
   printf '%s\n' "$stack_out" | grep '^STACK NOTE ' | sed 's/^STACK NOTE /FRONTIER NOTE /' >&2 || true

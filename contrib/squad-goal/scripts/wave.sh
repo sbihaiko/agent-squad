@@ -241,22 +241,26 @@ loop_stop() {
   echo "WAVE NEEDS-HUMAN #$n: $c loop-caused requeues, so it is not dispatched again: $why"
 }
 
-# excluded <run> <issue> <cause> [keep]: the cause that kept the child out of the run's wave (#682), in
-# auto/excluded-<run>-<issue>, written atomically (ADR-0030). The janitor names it when the wave lands without the child, and
-# names "unknown" when there is none. A later attempt replaces it; `keep` leaves a cause an attempt already recorded.
-excluded() {
-  local m="$SG_STATE/auto/excluded-$1-$2"
+# wave_fact <run> <issue> <state> <cause> [keep]: one wave event of the issue (ADR-0149) -- entered, held, refused, stuck or
+# delivered -- written with its cause into the issue's ledger through its one transition function (issue_ledger.py wave). The
+# janitor reads the cause there when the wave lands without the child (#682), and names "unknown" when there is none. A later
+# event of the run replaces the fact; `keep` leaves a fact the run already has; a duplicate writes nothing; a delivered run is
+# terminal; a run from before a rearm counts nothing. A ledger that refuses the event (a corrupt file holds the issue) is named.
+wave_fact() {
+  local out
   [ -n "$1" ] && [ -n "$2" ] || return 0
-  [ "${4:-}" = keep ] && [ -s "$m" ] && return 0
-  mkdir -p "$SG_STATE/auto" && printf '%s\n' "$(printf '%s' "$3" | head -1)" > "$m.$$" && mv -f "$m.$$" "$m"
+  out=$(ledger wave "$2" "$1" "$3" "$4" ${5:+"$5"} 2>&1) || echo "WAVE-LEDGER #$2 refused: $out"
+  return 0
 }
 
-# held_out <issue>: why the issue must stay where it is, and exit 0, when its ledger stopped it (own or loop) or it carries
-# frozen:owner or needs-owner (#682). A label read that does not answer holds it too: a freeze is never lifted on a guess.
+# held_out <issue>: why the issue must stay where it is, and exit 0, when its ledger stopped it (own or loop), its ledger is
+# corrupt (held, ADR-0149), or it carries frozen:owner or needs-owner (#682). A label read that does not answer holds it too:
+# a freeze is never lifted on a guess.
 held_out() {
   local why labels
   why=$(ledger read "$1" state 2>/dev/null)
-  case "$why" in frozen|needs-human) printf 'its ledger is stopped (%s)\n' "$why"; return 0;; esac
+  case "$why" in frozen|needs-human) printf 'its ledger is stopped (%s)\n' "$why"; return 0;;
+    held) printf '%s\n' "$(ledger read "$1" held 2>/dev/null)"; return 0;; esac
   labels=$(gh_api "repos/$SG_REPO/issues/$1" -q '[.labels[]?.name] | map(select(. == "frozen:owner" or . == "needs-owner")) | join(" ")' 2>/dev/null) \
     || { echo "its labels could not be read"; return 0; }
   [ -n "$labels" ] && { printf 'it carries %s\n' "$labels"; return 0; }
@@ -311,8 +315,8 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
   local rk="$SG_STATE/review-$(printf '%s' "$br" | tr / _)" rsha
   rsha=$($G rev-parse HEAD)
   # hold <why> and refuse <why> [cap]: the child stays out, held or requeued, and the cause is recorded for the janitor (#682).
-  hold() { excluded "$run" "$iss" "$1"; echo "WAVE HOLD #$iss: $1"; return 1; }
-  refuse() { excluded "$run" "$iss" "$1"; requeue "$iss" "$@"; return 1; }
+  hold() { wave_fact "$run" "$iss" held "$1"; echo "WAVE HOLD #$iss: $1"; return 1; }
+  refuse() { wave_fact "$run" "$iss" refused "$1"; requeue "$iss" "$@"; return 1; }
   # A run whose final gate failed takes no child into its wave (#694): what its gate read failed, so the wave would carry a
   # failed tree and conflict on the base. The child stays out, its issue goes back to the queue, and the wave lands empty.
   gate_failed "$run" && { refuse "the run's final gate failed: run $run failed ac-verify, so its child never enters $w"; return 1; }
@@ -370,7 +374,7 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
     if $G push -q origin "HEAD:refs/heads/$w" 2>/dev/null; then
       board_write "Code Complete" "$iss"   # a refused write is named, never dropped (#593)
       : > "$SG_STATE/auto/entered-$run-$iss"   # the durable record of the entry (#467): the janitor's Code Complete reads it, never the run's own land
-      rm -f "$SG_STATE/auto/excluded-$run-$iss"
+      wave_fact "$run" "$iss" entered "entered $w at $sha"   # the same fact in the ledger (ADR-0149); the marker stays until its readers move
       echo "WAVE $br $sha entered $w (#$iss)"; return 0
     fi
     [ "$try" = 1 ] || break
@@ -432,7 +436,7 @@ wave_check() {
     cx=$(child_of "$S" "$found")
     $G -C "$S" rebase --onto "$found^" "$found" >/dev/null 2>&1 || { $G -C "$S" rebase --abort >/dev/null 2>&1
       echo "WAVE CHECK RED $w: #$cx broke the wave tip and cannot leave it (a rebase conflict): the wave does not land"; return 1; }
-    excluded "$run" "$cx" "the check at the wave tip was red: #$cx broke it, so the child left the wave"   # land's run (#682)
+    wave_fact "$run" "$cx" refused "the check at the wave tip was red: #$cx broke it, so the child left the wave"   # land's run (#682)
     requeue "$cx" "the check at the wave tip was red: #$cx broke it, so the child left the wave"
     echo "WAVE CHECK RED $w: #$cx broke the wave tip; it leaves the wave and its issue is back in the queue"
   done
@@ -462,6 +466,7 @@ stuck() {
   local run=$1 w=$2 S=$3 why=$4 f="$SG_STATE/auto/wland-tries-$1" t n named=""
   if loop_caused "$why"; then
     for n in $(refs_of "$S" "origin/$base..origin/$w"); do
+      wave_fact "$run" "$n" stuck "$why; loop-caused, not counted"
       echo "WAVE-LOOP-CAUSED #$n: $why; not counted"; named=1
     done
     [ -n "$named" ] || echo "WAVE-LOOP-CAUSED $w: $why; not counted"
@@ -469,6 +474,7 @@ stuck() {
   fi
   mkdir -p "$SG_STATE/auto"; t=$(( $(cat "$f" 2>/dev/null || echo 0) + 1 )); printf '%s\n' "$t" > "$f"
   echo "WAVE-ERROR $why"
+  for n in $(refs_of "$S" "origin/$base..origin/$w"); do wave_fact "$run" "$n" stuck "$why (try $t of ${SG_WAVE_LAND_TRIES:-3})"; done
   [ "$t" -ge "${SG_WAVE_LAND_TRIES:-3}" ] || return 1
   export SG_GH_PASS=wave
   for n in $(refs_of "$S" "origin/$base..origin/$w"); do
@@ -500,6 +506,7 @@ deliver() {
     mkdir -p "$SG_STATE/cq"
     printf 'Closed #%s after landing %s in %s as %s (one fast-forward push, %s deleted). Refs #%s\n' "$n" "$w" "$base" "$sha" "$w" "$n" > "$(sg_cq_delivery "$n" "wave$$")"
     printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$w" "$sha" "$n" >> "$SG_STATE/landed.tsv"   # the ledger the hub's Landed branches lane reads
+    wave_fact "$run" "$n" delivered "landed $w in $base as $sha"   # terminal for the run (ADR-0149)
     "$BOARD" "$SG_OWNER" "$SG_PROJECT" "$col" "$n" 2>&1 >/dev/null | grep -v '^issue_state\.py: items read ' | sed "s/^/WAVE-BOARD #$n $col refused: /"   # the seam's read note is no refusal (#526)
   done
   if [ -n "$owed" ]; then
@@ -591,7 +598,7 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
       # An issue whose non-RED commit the base holds is delivered below, never requeued.
       if [ "$capped" = 1 ]; then
         for n in $(run_issues "$rd"); do case " $delivered " in *" $n "*) ;; *)
-          excluded "$run" "$n" "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed empty without this child" keep
+          wave_fact "$run" "$n" refused "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed empty without this child" keep
           requeue "$n" "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed empty without this child: it is back in the queue" cap;; esac; done
       fi
       if [ -n "$delivered" ]; then deliver "$run" "$w" "$sha" "$delivered" || return 1; else rm -f "$SG_STATE/auto/wave-$run"; fi
@@ -625,7 +632,7 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
   # (run_issues); an issue the wave carried just closed above, and is never requeued.
   if [ "$capped" = 1 ]; then
     for n in $(run_issues "$rd"); do case " $issues " in *" $n "*) ;; *)
-      excluded "$run" "$n" "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed without this child" keep
+      wave_fact "$run" "$n" refused "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed without this child" keep
       requeue "$n" "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed without this child: it is back in the queue" cap;; esac; done
   fi
   # The wave is in $base: each issue it carries closes through the API, and its one delivery comment is queued, never posted

@@ -859,11 +859,15 @@ for d in [*(st / "auto").glob("disp-*"), *(st / "auto").glob("bug-*")]:
 def count_failed(n, f, i):   # O (#609): a run that ended with nothing delivered for issue n is one failed dispatch, counted
     # by wave.sh fail (one count per issue, keyed by the run, frozen at SG_REQUEUE_CAP), whether or not it still holds a marker.
     # A run the issue's ledger file lists (#673, read through issue_ledger.py, its one module) is not sent again, so a pass
-    # costs no call for a run already counted. A ledger that cannot be read sends the call: wave.sh counts a run once anyway.
+    # costs no call for a run already counted. A corrupt ledger holds the issue (ADR-0149 rule 4): nothing is counted and the
+    # hold is named; the pass decides it again once the owner's rearm wrote a fresh file. A ledger module that cannot be
+    # loaded sends the call: wave.sh counts a run once anyway.
+    rec = {}
     try:
         sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the ledger sits beside this script; -I keeps the script's directory off sys.path
         import issue_ledger
         rec = issue_ledger.read(f"{repo0}#{n}")
+        if rec["state"] == "held": say(f"LEDGER-HELD #{n}: {rec['held']}; run {f.name} is not counted"); return False
         if any(x["run"] == f.name for k in issue_ledger.LEDGERS for x in rec[k]["runs"]): return True
         # A rearm's floor (#692): a run the ledger listed before the rearm, or one whose verdict is older than it, is not counted again.
         rm = rec.get("rearmed") or {}
@@ -873,11 +877,11 @@ def count_failed(n, f, i):   # O (#609): a run that ended with nothing delivered
     st_, pc = issue_info(n)[0], pr_count(n)
     if st_ != "open" or pc != "0": return st_ in ("open", "closed") and pc.isdigit()   # a read that did not answer decides nothing
     # A wave that landed without the child names the cause wave.sh recorded for it (#682: a failed gate, a hold, a conflict, a
-    # drop at the tip, the age cap), or "unknown"; a generic text hid the cause and was read as the loop's.
-    def cause(m):
-        try: return m.read_text().strip()
-        except OSError: return ""
-    ex = next((t for r in (f.name, i["run_id"]) if r for t in [cause(st / "auto" / f"excluded-{r}-{n}")] if t), "unknown")
+    # drop at the tip, the age cap), or "unknown"; a generic text hid the cause and was read as the loop's. The cause is the
+    # run's wave fact in the issue's ledger (ADR-0149), keyed by the folder name or the record's run id.
+    wv = rec.get("wave") or {}
+    ex = next((x.get("cause") for r in (f.name, i["run_id"]) if r for x in [wv.get(r) or {}]
+               if x.get("state") not in (None, "entered", "delivered") and x.get("cause")), "unknown")
     why = f"the child of run {i['run_id']} never entered its wave: {ex}" if i["landed"] else f"ended {i['name']}: " + ("; ".join(i["reasons"]) or "nothing landed")
     # The run's own review of the child decides over the reason text (#621): CHANGES or BLOCKED a model wrote on the diff is
     # the issue's own failure (`own`); a BLOCKED the chain wrote because every model failed, a review past its deadline or one that

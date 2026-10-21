@@ -110,6 +110,14 @@ sg_issue_worktree_note() {   # <issue>: print child instructions only when workt
   }
   printf 'PRESERVE ISSUE WORKTREE: The existing worktree at %s is on branch %s; expected branch %s%s. Do not reuse, reset, delete, or replace it. Preserve it and report this blocker in your result.\n' "$path" "$current" "$branch" "${state:+ and it is dirty}"
 }
+# An issue whose ledger is corrupt is held (ADR-0149 rule 4): sg_ledger_held prints the cause (the issue's file and the parse
+# error) and exits 0, so no dispatch pass takes it, and it never falls back to the old counters. A ledger module that is not
+# there, or a ledger that reads, holds nothing. The owner's `issue_ledger.py rearm` writes a fresh file and frees it.
+sg_ledger_held() {
+  local l; l="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/issue_ledger.py"
+  [ "$(python3 "$l" read "$SG_REPO#$1" state 2>/dev/null)" = held ] || return 1
+  python3 "$l" read "$SG_REPO#$1" held 2>/dev/null; return 0
+}
 # An issue the loop itself has marked not startable (#1858): a run that ended failed on it SG_HEALTH_REPEAT_COUNT times running
 # leaves a `SQUAD-NOT-STARTABLE:` line among its comments, and every dispatch path reads that line before it starts -- so the loop
 # cannot feed itself the same input again. health.sh writes it; autobug.sh and autofrontier.sh read it, once per candidate that got
