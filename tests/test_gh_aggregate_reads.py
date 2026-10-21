@@ -44,6 +44,7 @@ PRS_ENVELOPE = json.dumps(
                             "isDraft": True,
                             "headRefName": "gui/11",
                             "headRefOid": "1a2b3c4d",
+                            "baseRefName": "dev",
                             "labels": {"nodes": [{"name": "bug"}, {"name": "core"}]},
                             "reviewThreads": {"totalCount": 3},
                             "commits": {
@@ -73,6 +74,7 @@ PRS_ENVELOPE = json.dumps(
                             "body": "",
                             "isDraft": False,
                             "headRefName": "gui/12",
+                            "baseRefName": "dev",
                             "headRefOid": "5e6f7a8b",
                             "labels": {"nodes": []},
                             "reviewThreads": {"totalCount": 0},
@@ -226,6 +228,7 @@ def test_the_pr_fact_carries_the_head_ref_the_draft_flag_and_the_labels():
     pr = ghread.read(PRS_ROUTE, transport=stub(0, PRS_ENVELOPE)).answer[0]
     assert pr["head"]["ref"] == "gui/11"
     assert pr["head"]["sha"] == "1a2b3c4d"
+    assert pr["base"]["ref"] == "dev", "the base ref rides the same fact: a promotion reads it to tell dev -> stg from any other"
     assert pr["draft"] is True, "the draft flag is GitHub's `isDraft`, on a REST route's name"
     assert [label["name"] for label in pr["labels"]] == ["bug", "core"]
     assert pr["state"] == "open", "the fact's state vocabulary is REST's own"
