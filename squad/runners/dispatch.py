@@ -4,6 +4,7 @@
 baseline. It decides spawn requests ("decide these requests") and lands finished children ("land these
 children"). It reads and writes the spawn, land, and ledger events. The engine runs the children's sessions.
 """
+import os
 import re
 import subprocess
 import time
@@ -394,6 +395,44 @@ class Dispatch:
 
 
 class DispatchRunner:
+    def gates(self, node):
+        """The gate nodes this dispatch runs: its `checks` after every child, then its `review` gate on every passing child."""
+        return [*node["checks"], *([node["review"]] if node.get("review") else [])]
+
+    def open_gates(self, ctx, node, entry, sc, ent, pe):
+        """A gate's check begins with the entry's children: with no child it never runs, and the record says nothing of it."""
+        if ctx.dry or not ctx.dispatch.accepted(ent, pe):
+            return
+        for g in self.gates(node):
+            ctx.record.append("gate_start", node=g, entry=entry, item=sc.item, pid=os.getpid(), limit=None, started_at=ctx.wall())
+
+    def close_gates(self, ctx, node, entry, sc, d, seen):
+        """Record one outcome per gate this entry ran. A gate the graph declares is a node in the record, so a reader sees it
+        run instead of reading "not run", and a verdict's `remains` never names it (ADR-0100, ADR-0113 rules 2 and 26)."""
+        if ctx.dry or not seen:
+            return
+        for g in self.gates(node):
+            outcome, reasons = (self.review_gate_outcome(d, seen) if g == node.get("review")
+                                else self.check_gate_outcome(d, seen, g))
+            ctx.finish(ctx.nodes[g], entry, sc, outcome, reasons)
+
+    def check_gate_outcome(self, d, seen, g):
+        """Pass when no child failed the gate; fail naming every child that did. A child the gate never read is no pass of it."""
+        results = {n: ((d.last(n) or {}).get("checks") or {}).get(g) for n, _o, _r in seen}
+        failed = [n for n, v in results.items() if v == "fail"]
+        if failed:
+            return "fail", [f"{g}:child:{n}" for n in failed]
+        return "pass", ([] if any(v is not None for v in results.values()) else ["no_child_checked"])
+
+    def review_gate_outcome(self, d, seen):
+        """Pass when the review held no child; fail with the review reason and the child it held. Pass with the reason
+        `no_child_reviewed` when no child's work reached the command (none passed, or none wrote)."""
+        held = [(r, n) for n, _o, rs in seen for r in rs if r.startswith("review_")]
+        if held:
+            return "fail", [f"{r}:{n}" for r, n in held]
+        reviewed = [n for n in (x[0] for x in seen) if "review" in ((d.landed.get(n) or {}).get("effect") or {})]
+        return "pass", ([] if reviewed else ["no_child_reviewed"])
+
     async def run(self, ctx, node, entry, sc):
         node = ctx.dispatch_node(node)   # the router overlay narrows the envelope here; the authored graph keeps its hash
         d, t0, ent = ctx.dispatch, ctx.clock(), node["entry"]   # wall time of this entry, from reading its entry child to landing
@@ -406,10 +445,12 @@ class DispatchRunner:
         stop = isinstance(spawns, list) and not spawns and (ctx.artifacts.get(ent, sc.item) or {}).get("done") is True
         diag = ctx.outcome_event(ent, pe, sc.item).get("diagnostic") or {}
         d.lift(node, ent, pe, 1, spawns, None, ctx.budget.available(), None, diag.get("session", "unknown"))   # the envelope's tool ceiling bounds a top-level child
+        self.open_gates(ctx, node, entry, sc, ent, pe)
         seen = await ctx.runs.run_of(node, ent, pe, sc, min(sc.deadline_at, ctx.clock() + node["deadline"] * ctx.scale))
         if await d.land(node, entry, sc, seen):
             raise Frontier([(node["name"], sc.item)])
         seen = [(n, d.landed_outcome(n, o), d.landed_reasons(n, r)) for n, o, r in seen]
+        self.close_gates(ctx, node, entry, sc, d, seen)
         outcome, reasons = V.fold_dispatch([o for _, o, _ in seen], node["join"], len(seen))
         if reasons == ["no_dispatch"]:      # name why every request was refused, so the verdict line is not the only clue (record.jsonl holds the full event)
             reasons += d.rejections(ent, pe)[:8]

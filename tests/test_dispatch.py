@@ -734,3 +734,31 @@ async def test_a_request_naming_a_field_outside_the_envelope_still_dispatches(tm
     d = [e for e in ev(tmp_path, "outcome") if e["node"] == "route"][0]
     assert "no_dispatch" not in d["reasons"] and not [r for r in d["reasons"] if r.startswith("spawn_rejected")]
     assert "route.router.1" in child_outs(tmp_path)
+
+
+# ---- #731: a gate the dispatch runs is a graph node, and the record says it ran
+@pytest.mark.anyio
+async def test_the_gates_a_dispatch_runs_are_recorded_as_gate_nodes(tmp_path):
+    """#731: `route` names `scope_gate` and `security_gate` as its checks and `review_gate` as its review, and code ran
+    all three after every child. The record held no `gate_start` and no outcome for any of them, so the dashboard read
+    the two checks as the child's own and the review gate as never run. A gate the graph declares and the engine runs is
+    recorded as a node: a start, then one outcome for the entry (ADR-0100, ADR-0113 rule 2)."""
+    eng = make(tmp_path, {"router": routed(req()), "route.router.1": CHILD})
+    v = await eng.run()
+    assert v.verdict == "completed"
+    starts = {e["node"]: e for e in ev(tmp_path, "gate_start")}
+    outs = {e["node"]: e for e in ev(tmp_path, "outcome") if e["node"] in ("scope_gate", "security_gate", "review_gate")}
+    for g in ("scope_gate", "security_gate", "review_gate"):
+        assert g in starts and g in outs, (g, sorted(starts), sorted(outs))
+        assert starts[g]["pos"] < outs[g]["pos"] and outs[g]["outcome"] == "pass"
+
+
+@pytest.mark.anyio
+async def test_a_check_that_fails_a_child_fails_its_gate_node_and_names_the_child(tmp_path):
+    bad = {"output": {"diff": {"files": [{"path": "src/auth/login.py"}]}, "ac_commands": ["true"]}, "spend": 0.2}
+    eng = make(tmp_path, {"router": routed(req()), "route.router.1": bad})
+    await eng.run()
+    out = [e for e in ev(tmp_path, "outcome") if e["node"] == "security_gate"]
+    assert out and out[-1]["outcome"] == "fail" and any("route.router.1" in r for r in out[-1]["reasons"])
+    scope = [e for e in ev(tmp_path, "outcome") if e["node"] == "scope_gate"]
+    assert scope and scope[-1]["outcome"] == "pass"

@@ -263,6 +263,47 @@ def test_a_layout_key_inside_the_document_is_refused():
     has(d, "layout")
 
 
+# --- every gate a graph declares is reached by a walk (ADR-0100: a gate is never skipped) ---
+SHIPPED_GRAPHS = (DESIGN / "router.graph.json", DESIGN / "five-phases.graph.json", DESIGN.parent / "workflows" / "spec-to-build.graph.json")
+
+
+def reached(doc):
+    """Every node a walk from the root enters: a loop's children, and a dispatch's entry, checks and review."""
+    nodes, seen, stack = {n["name"]: n for n in doc["nodes"]}, set(), [doc["root"]]
+    while stack:
+        n = nodes[stack.pop()]
+        if n["name"] in seen:
+            continue
+        seen.add(n["name"])
+        stack += n.get("children", [])
+        if n["kind"] == "dispatch":
+            stack += [n["entry"], *n["checks"], *([n["review"]] if "review" in n else [])]
+    return seen
+
+
+def test_every_gate_a_shipped_graph_declares_is_reached_from_the_root():
+    """#731: `main` held only `route` and `final_gate`, and `scope_gate`, `security_gate` and `review_gate` sat in no loop's
+    children: only the dispatch's `checks` and `review` reached them. A gate no walk enters is a check the graph declares
+    and nothing runs, which a reader sees as "not run"."""
+    for p in SHIPPED_GRAPHS:
+        doc = json.loads(p.read_text())
+        gates = {n["name"] for n in doc["nodes"] if n["kind"] == "gate"}
+        assert gates and gates <= reached(doc), (p.name, sorted(gates - reached(doc)))
+
+
+def test_refuses_a_gate_that_no_loop_and_no_dispatch_reaches():
+    d = five()
+    node(d, "spec")["children"].remove("spec_gate")
+    has(d, "spec_gate", "orphan")
+    d = router()
+    del node(d, "route")["review"]
+    d["nodes"] = [n for n in d["nodes"] if n["name"] != "review_gate"]
+    assert errors(d) == []          # the gate is gone from the document: nothing declares a check nothing reaches
+    d = router()
+    node(d, "route")["checks"] = ["scope_gate"]
+    has(d, "security_gate", "orphan")   # declared, out of every loop, named by no dispatch: no walk enters it
+
+
 # --- dispatch ---
 def test_refuses_a_dispatch_with_no_checks():
     d = router()

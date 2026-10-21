@@ -332,3 +332,20 @@ def test_a_record_corrupt_mid_file_keeps_its_valid_prefix_and_names_the_bad_line
     assert len(nonobj["events"]) == 3 and nonobj["bad"]["line"] == 4 and "JSON object" in nonobj["bad"]["message"]
     assert "events" not in first_bad and "line 1 is not JSON" in first_bad["error"]          # no valid prefix: refused, as before
     assert "run_start" in empty["error"]
+
+
+def test_a_gate_the_engine_ran_is_never_read_as_not_run():       # #731
+    """The record now holds a `gate_start` and an outcome for every gate a dispatch runs. A gate the record names is a
+    node with its outcome, never "not run: the record has no call for this node, and no dispatch checked it"."""
+    doc = json.loads((DESIGN / "router.graph.json").read_text())
+    ev = [{"event": "run_start", "pos": 1, "run_id": "r", "graph_name": doc["name"], "graph_hash": "h", "engine_options": {},
+           "root": "main", "plan": []},
+          {"event": "gate_start", "pos": 2, "node": "review_gate", "entry": 1, "item": None, "pid": 1, "limit": None, "started_at": 1000.0},
+          {"event": "outcome", "pos": 3, "node": "review_gate", "entry": 1, "outcome": "pass", "reasons": [], "artifact": None,
+           "spend": None, "turns": None, "cap": None, "elapsed": None},
+          {"event": "verdict", "pos": 4, "verdict": "completed", "exit_code": 0, "reasons": [], "remains": [], "folded": []}]
+    s = run_node([{"op": "stats", "events": ev, "doc": doc, "shown": True}])[0]
+    g = s["nodes"]["review_gate"]
+    assert g["outcome"] == "pass" and g["running_for"] is None and not g.get("not_run")
+    assert run_node([{"op": "state", "ns": g}])[0] == "passed"
+    assert s["nodes"]["scope_gate"]["not_run"] is True      # a gate the record never names is still reported as not run

@@ -100,10 +100,14 @@ def test_the_resume_hint_names_the_run_folder_and_quotes_it():
 
 @pytest.mark.anyio
 async def test_the_verdict_hint_of_a_run_works_from_any_directory(tmp_path):
+    """The hint names the run folder, not the run id, so a resume works from any directory. It rides a failed verdict that
+    still has a node to run: a run whose plan is fully folded has nothing to resume and prints no hint."""
     repo = sibling_repo(tmp_path)
+    sensitive = {"files": [{"path": "src/auth/login.py"}]}     # the security gate fails this child, so `final_gate` never runs
     eng = make(tmp_path, {"router": routed(req(), req("diagnosing-bugs")), "route.router.1": writer("a.txt"),
-                          "route.router.2": writer("b.txt", cmds=["false"])}, target=repo)
+                          "route.router.2": writer("b.txt", diff=sensitive)}, target=repo)
     v = await eng.run()
+    assert v.verdict == "failed" and v.remains == ["final_gate"]
     assert f"resume: squad resume {tmp_path.resolve()}" in v.message
 
 
