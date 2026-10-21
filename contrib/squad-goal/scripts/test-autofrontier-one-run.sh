@@ -343,6 +343,16 @@ case "$r" in *"FRONTIER split #103: a sibling of #101 in spec #700 (ADR-0150); i
 [ "$(childblocks)" = 3 ] && $G -q '^CHILD — GitHub issue(s) 104, 105 ' "$MKLOG.body" && ok "S: two tickets that name one normalized path are one child" || ko "S: children: '$($G '^CHILD' "$MKLOG.body")'"
 [ "$(marked 104 105 106)" = 3 ] && ok "S: the tickets with no conflict still go out" || ko "S: $(marked 104 105 106) of #104 #105 #106 marked: '$r'"
 
+# S2 (#724): the to-tickets body names its spec as a "## Parent" heading with the number on a later line, and the REST
+#   open-issue list carries no sub_issues field. Two such tickets of one spec still never share a run.
+scene siblings-heading 24
+issues '[{"number":710,"title":"SPEC","body":"b","labels":[{"name":"spec"}]},{"number":201,"title":"a","body":"## Parent\n\n#710\n\n## What to build\n\nx","labels":[{"name":"wave:01"}]},{"number":202,"title":"a","body":"## Parent\n\n#710\n\n## What to build\n\ny","labels":[{"name":"wave:01"}]}]'
+cp "$(dirname "$src")/cluster.py" "$T/scripts/"; cp "$(dirname "$src")/siblings.py" "$T/scripts/" 2>/dev/null
+r=$(run); rm -f "$T/scripts/cluster.py" "$T/scripts/siblings.py"
+[ "$(marked 201)" = 1 ] && [ "$(marked 202)" = 0 ] && ok "S2: a Parent heading links a ticket to its spec; the sibling waits" || ko "S2: $(marked 201) of #201, $(marked 202) of #202 marked: '$r'"
+case "$r" in *"FRONTIER split #202: a sibling of #201 in spec #710 (ADR-0150); it waits for a later run"*) ok "S2: the pass names the split";; *) ko "S2: no split line for #202: '$r'";; esac
+
+
 rm -rf "$T"
 [ "$fail" = 0 ] && { echo "autofrontier one-run: all checks green"; exit 0; }
 echo "autofrontier one-run: FAILED"; exit 1
