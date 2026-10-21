@@ -32,6 +32,7 @@
     A live run holds the issue (dispatch marker or accepted child) -> In Progress; an issue that is closed or whose work branch is in $SG_BASE -> Done, so work that landed on a parent branch (#127) and never reached the base is not Done;
     a landing is credited to the child that made it, never to every issue the run held (#271): an issue a child's own accept line names follows that child's own `land` event and its own outcome, so a child that
     committed nothing keeps the loop's queue however many of its siblings landed, and only an issue no child of the run names takes the run's landing as its own;
+    a landing of a run that cut a wave, or of a branchland pass, is the `landed` fact the landing pass wrote in the issue's ledger (ADR-0149, #695), never a head the run's record names: a landing that reached no base wrote no fact, so it delivers nothing (#691);
     a completed run, whether or not it landed work, whose branch has not landed -> Code Complete; a failed run with nothing landed -> $SG_TODO (Todo); a needs-human run with nothing landed -> Blocked (ADR-0029: the owner is the next actor,
     and Todo would tell him the loop has it); an issue labelled needs-owner or needs-ratification -> Blocked. R is the one owner of a loop-board card a kept run names: no other rule writes one, so no rule races it.
     An issue labelled frozen:owner keeps the column it carries, and cycle.log names the write R held back (BOARD-FROZEN). A run that stopped needs-human or failed never moves its issue's
@@ -387,6 +388,18 @@ def entered():   # {(run, issue)} of each child of repo0 that entered a wave, re
         try: _entered = set(ledger().entered(repo0))
         except (OSError, ImportError, ValueError) as e: say(f"LEDGER-UNREAD: the entered facts could not be read ({e})"); _entered = set()
     return _entered
+_landed = None
+def landings():   # {issue: {(ref, kind)}} of the landing passes' facts (ADR-0149), read from the ledgers once a pass. A
+    # landing is delivered work only when a landing pass wrote it (#691, #695): rule R reads this, never a run's land heads.
+    global _landed
+    if _landed is None:
+        try: _landed = ledger().landings(repo0)
+        except (OSError, ImportError, ValueError) as e: say(f"LEDGER-UNREAD: the landed facts could not be read ({e})"); _landed = {}
+    return _landed
+def base_landed(n, names):   # the issue's work is in the base: a landing of this run, or a branch a branchland pass landed
+    return any(ref in names or kind == "branch" for ref, kind in landings().get(str(n), ()))
+def run_landed(n, names):    # this run's own landing named the issue
+    return any(ref in names for ref, kind in landings().get(str(n), ()) if kind == "run")
 delivering = set()
 for run_, n_ in entered():
     if (st / "auto" / f"wave-{run_}").exists(): delivering.add(n_)
@@ -681,23 +694,33 @@ def reconcile_board():
     for f, i, nums, age in runs:
         nums = {n for n in nums if age >= newest[n]}   # rank orders the signals of one run only (#619)
         by_issue = {}   # issue -> the children whose own accept line named it: that child's outcome decides its card (#271)
+        names = {f.name, i["run_id"]} if i else set()
+        cut_wave = bool(i) and any((st / "auto" / m).exists() for r in names for m in (f"waved-{r}", f"wave-{r}"))   # a run that cut a wave delivers through it (ADR-0145 rule 12)
         if i:
             for ch in sorted(i["kid_issue"]):
                 for x in i["kid_issue"][ch]: by_issue.setdefault(x, []).append(ch)
         for n in nums:
             mine = by_issue.get(n, [])
-            landed_kid = next((c for c in mine if c in i["kid_landed"]), None) if i else None   # a child that landed its own work: the run's landing is that child's, never every issue the run held (#271)
+            # The delivery evidence: the landing pass's `landed` fact for the issue (#691, #695), a landing of this run or a
+            # branch a branchland pass landed. A run that cut no wave delivers by its own engine land event, with the child
+            # attribution of #271; a landing of this run that reached no base names no issue, so it credits none.
+            kid_ok = bool(mine) and any(c in i["kid_landed"] for c in mine) if i else False   # a child of this issue landed its own work
+            sib_ok = bool(mine) and bool(i["kid_landed"]) and not kid_ok if i else False   # the run landed through a sibling
+            fact = bool(i) and base_landed(n, names)
+            own_landed = fact or (bool(i) and not cut_wave and (kid_ok or (i["landed"] and not sib_ok)))
+            sib_landed = bool(i) and ((sib_ok and not cut_wave) or (bool(mine) and any(run_landed(x, names) for x in nums if x != n)))
+            run_any = bool(i) and ((not cut_wave and i["landed"]) or any(run_landed(x, names) for x in nums))
             if i is None:
                 set_expected(n, "In Progress", f"run {f.name} has dispatch marker", f.name, "", 30)
             elif not i["verdict"] and i["decided"] and not any(n in v for v in i["kid_issue"].values()) and all(i["kid_issue"].values()):
                 unheld(n, f, i)   # only when every child maps to its issues: an unmapped child may be working this one (#725)
             elif not i["verdict"]:
                 set_expected(n, "In Progress", f"run {i['run_id']} is live", i["run_id"], i["run_ts"], 30)
-            elif landed_kid:   # a landing is the child's own (#271), and a failed verdict does not unland commits that are in the branch (#666, ADR-0143); needs-human makes the owner the next actor (ADR-0029, #660)
-                if i["name"] == "needs-human": stopped_run(n, i, f"child {landed_kid} landed work locally")
-                else: code_complete(n, f, i, f"run {i['run_id']} child {landed_kid} landed work locally")
-            elif holding(n) and (bool(mine and i["kid_landed"]) or not i["landed"]): continue   # nothing landed here, but a live run works the issue or a pending wave carries it: its card is that run's, never this run's Todo or Blocked (#540)
-            elif mine and i["kid_landed"]:   # the run landed, but through a sibling: this child committed nothing, so its own outcome decides and the loop's column holds it (#271)
+            elif own_landed:   # a landing is the child's own (#271), and a failed verdict does not unland work that reached the base (#666, ADR-0143, #691); needs-human makes the owner the next actor (ADR-0029, #660)
+                if i["name"] == "needs-human": stopped_run(n, i, "landed work in the base" if fact else "landed work locally")
+                else: code_complete(n, f, i, f"run {i['run_id']} landed work " + ("in the base" if fact else "locally"))
+            elif holding(n) and (sib_landed or not run_any): continue   # nothing landed here, but a live run works the issue or a pending wave carries it: its card is that run's, never this run's Todo or Blocked (#540)
+            elif sib_landed:   # the run landed, but through a sibling: this child committed nothing, so its own outcome decides and the loop's column holds it (#271)
                 c = mine[0]; oc, ors = i["kid_out"].get(c, ("", []))
                 why = "; ".join(ors) or "no reason recorded"
                 if oc == "needs-human" or i["name"] == "needs-human":   # not success (ADR-0029): the owner is the next actor
@@ -706,9 +729,6 @@ def reconcile_board():
                 else:
                     if oc == "fail": stopped.add(n)
                     set_expected(n, os.environ.get("SG_TODO", "Todo"), f"run {i['run_id']} child {c} {oc or 'stopped'} with nothing landed ({why})", i["run_id"], i["run_ts"], 20)
-            elif i["landed"]:
-                if i["name"] == "needs-human": stopped_run(n, i, "landed work locally")   # a failed run's landing that reached the landing branch is delivered work, so it reaches Code Complete (ADR-0143, #691)
-                else: code_complete(n, f, i, f"run {i['run_id']} landed work locally")
             elif i["failed"]:
                 stopped.add(n)
                 why = "; ".join(i["reasons"]) or "nothing landed"

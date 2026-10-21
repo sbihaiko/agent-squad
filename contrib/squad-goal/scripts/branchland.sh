@@ -127,6 +127,9 @@ while read -r sha br i; do
     *) say refuse "$br" "$sha" push "not landed in $land: ${fl#FFLAND-FALLBACK }"; continue;;
   esac
   rm -f "$A"/branchland-*-"$(printf '%s' "$br" | tr '/' '_')"-*
+  # The landing is the issue's `landed` fact (ADR-0149, #695): rule R reads it instead of a run's land heads. Written before
+  # the close, because the work is in $land whether or not the API accepts the close; a refused write is named, never dropped.
+  out=$(python3 "$here/issue_ledger.py" landed "$SG_REPO#$i" "$br" branch "$ms" 2>&1) || echo "BRANCHLAND: the landed fact of #$i was refused: $out"
   gh_send -X PATCH "repos/$SG_REPO/issues/$i" -f state=closed -f state_reason=completed >/dev/null || echo "BRANCHLAND: #$i did not close after the landing of $br"
   mkdir -p "$SG_STATE/cq"   # the delivery comment goes through the queue: cqflush.sh keeps one per issue, edited in place (#328)
   cat > "$(sg_cq_delivery "$i" "branchland$$")" <<EOT

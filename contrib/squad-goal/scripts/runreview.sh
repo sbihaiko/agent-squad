@@ -7,8 +7,8 @@
 # Exit: 0 approved (the run merges the child); 3 "no review here" (the run merges it as before, and childcc reviews it later):
 # no issue, or no wave for the run yet or at all; 5 "try again" (#635): a slot wait past its bound, or a review that wrote no
 # verdict. The run tries again within the gate's deadline, and holds the child when the deadline runs out; 1 CHANGES or
-# BLOCKED: the issue goes back to the queue at once (wave.sh requeue) with every blocking finding, and the marker
-# auto/requeued-<run>-<child> holds the reviewed head, so childcc never requeues it a second time. The run holds the child.
+# BLOCKED: the issue goes back to the queue at once (wave.sh requeue) with every blocking finding, and the issue's
+# `requeue` fact holds the reviewed head (ADR-0149), so childcc never requeues it a second time. The run holds the child.
 # 4 "fix" (#570): the run offers a fix round (SQUAD_REVIEW_FIX=1: it holds the grant of the child's next entry) and the review
 # is CHANGES whose findings are new or changed. Nothing is requeued; the run fixes the child in its worktree and reviews the new
 # head again (SQUAD_REVIEW_ROUND names the round). Findings a round left as they were count toward the stall (revformat.py,
@@ -24,7 +24,7 @@ run=$1 child=$2 iss=$3; NONE=3 FIX=4 AGAIN=5
 [ -n "$iss" ] || { echo "RUNREVIEW $run $child: no issue, no review here" >&2; exit $NONE; }
 [ -e "$SG_STATE/auto/wave-$run" ] || { echo "RUNREVIEW $run $child: the run has no wave, no review here (#$iss)" >&2; exit $NONE; }
 br=$(git symbolic-ref --quiet --short HEAD) || { echo "RUNREVIEW $PWD is on no branch (#$iss)" >&2; exit 2; }
-key=$(printf '%s' "$br" | tr / _); head=$(git rev-parse HEAD); mk="$SG_STATE/auto/requeued-$run-$child"
+key=$(printf '%s' "$br" | tr / _); head=$(git rev-parse HEAD)
 holder="runreview-$run-$child"
 sg_caps take reviews "$holder" --pid $$ --wait "${SG_RUN_REVIEW_WAIT:-1800}" >/dev/null
 rc=$?; [ "$rc" = 0 ] || { echo "RUNREVIEW $run $child: no reviews slot (exit $rc), try again (#$iss)" >&2; exit $AGAIN; }
@@ -53,11 +53,11 @@ fi
 f=$(awk 'NR==1{next} /^## /{b=($0 ~ /^## Blocking/)} b' "$md")
 [ -n "$f" ] || f=$(tail -n +2 "$md")
 f=$(printf '%s\n' "$f" | /usr/bin/grep -v '^## Blocking' | /usr/bin/grep -v '^[[:space:]]*$')
-if [ "$(cat "$mk" 2>/dev/null)" = "$head" ]; then
+if [ "$(SG_STATE="$SG_STATE" SG_REPO="$SG_REPO" python3 "$here/issue_ledger.py" requeued "$SG_REPO#$iss" "$run" 2>/dev/null)" = "$head" ]; then
   echo "RUNREVIEW $run $child: ${head:0:9} was already requeued (#$iss)" >&2
 else
   SG_REQUEUE_RUN=$run bash "$here/wave.sh" requeue "$iss" "the review of its own diff in run $run asked for changes ($(head -1 "$md" | tr -d '*')) at ${head:0:9}:
 $f" >&2
-  mkdir -p "$SG_STATE/auto"; printf '%s\n' "$head" > "$mk"
+  SG_STATE="$SG_STATE" SG_REPO="$SG_REPO" python3 "$here/issue_ledger.py" requeue "$SG_REPO#$iss" "$run" "$head" >/dev/null 2>&1   # the head the child was requeued on (ADR-0149)
 fi
 exit 1

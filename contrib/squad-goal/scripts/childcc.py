@@ -32,7 +32,7 @@ A run reviews its own children (#601): the verdict of its review gate is in the 
 its passed child is still its own (#696): it reviews it, fixes it or lands it, so the child is pending here only once its `land`
 event is in the record or the run has its verdict. Such a run's dispatch node names a review gate (its graph.json), or its
 record holds a review event for the child. A child its run approved
-enters with no second review here; a child its run held, with its requeued marker, is neither entered, reviewed nor requeued
+enters with no second review here; a child its run held, with its `requeue` fact in the issue's ledger, is neither entered, reviewed nor requeued
 again; a child of a run with no review in its record is reviewed here as before. An approved child that its entry still
 holds (its review file is stale or gone) is reviewed here from the next pass (marker auto/apphold-<run>-<child>), so it is
 never held for good (#600).
@@ -47,6 +47,7 @@ reason (ADR-0134, revformat.py's fingerprint); changed findings start the next f
 import json, os, pathlib, re, subprocess, sys, time
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
 import child_issues   # the issues a child's spawn text names (#555)
+import issue_ledger   # the issue's loop facts: the head a run requeued its child on is a fact there, never a marker (ADR-0149)
 from issue_state import board_state
 st = pathlib.Path(os.environ["SG_STATE"]); A = st / "auto"; A.mkdir(parents=True, exist_ok=True)
 repo, owner, proj = os.environ["SG_REPO"], os.environ["SG_OWNER"], os.environ["SG_PROJECT"]
@@ -102,6 +103,12 @@ def child_worktree(rd, child, d):   # the tree a child worked in, by the engine'
     return rd / "ws" / f"{logical}-{child}"
 def head_of(wt):   # the sha the child's worktree stands on, "" when it has none
     return subprocess.run(["git", "-C", str(wt), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+def requeue_head(run, n):   # the head this run requeued the issue's child on, "" when it did not (the old auto/requeued- marker, ADR-0149); "held" when the ledger cannot answer, and then the child is held out
+    try: return issue_ledger.requeued(f"{repo}#{n}", run)
+    except (OSError, ValueError, KeyError): return "held"
+def record_requeue(run, n, head):   # the same fact, written through the ledger's one transition function
+    try: issue_ledger.requeue(f"{repo}#{n}", run, head)
+    except (OSError, ValueError, KeyError): pass
 def claimed(claim, head):   # a review claim [head, pid] holds while its pass is alive; a bare head, or a dead pass, holds nothing (#502)
     if len(claim) != 2 or claim[0] != head or not claim[1].isdigit(): return False
     try: os.kill(int(claim[1]), 0)
@@ -177,7 +184,7 @@ def fix_round(rd, child, n, wt, fx, out):
     if fx.exists() and same:
         why = f"a fix run left the same review findings: {first_finding(wt)}"
         subprocess.run(["bash", wave, "requeue", str(n), why], capture_output=True, env={**os.environ, "SG_REQUEUE_RUN": rd.name})   # the run is the key of the count (#609)
-        (A / f"requeued-{rd.name}-{child}").write_text(head_of(wt) + "\n")
+        record_requeue(rd.name, n, head_of(wt))   # the head the child was requeued on, so the pass waits for a new one (ADR-0149)
         return False, out + f"\nCHILD FIX REQUEUE #{n}: {why}", True
     f = subprocess.run(["bash", childfix, rd.name, str(n)], cwd=str(wt), capture_output=True, text=True)
     lines = f.stdout.strip().splitlines()
@@ -193,7 +200,7 @@ def enter(rd, child, n, d, approved=False):
     run cut no wave and the direct move stands, (True, the entry line) when the child is now in the wave branch, and
     (False, why) when it is in none -- a child that did not enter has no delivery to claim. `worked` is True when the
     review and the gates ran, the work one pass is budgeted for (#590). A child a refused entry requeued
-    is not tried again on the same HEAD (marker auto/requeued-<run>-<child>): the gates and the requeue wait for a new commit.
+    is not tried again on the same HEAD (the issue's `requeue` fact in its ledger, ADR-0149): the gates and the requeue wait for a new commit.
     The child's own diff is reviewed here, once per head, before the entry asks for its verdict. A review that asked for
     CHANGES is not a child held where it stands: nothing behind that hold could fix it (the fix lane reads pushed work
     branches, and a child's branch is pushed nowhere), so its issue goes back to the queue -- live run or not, its next head
@@ -201,8 +208,9 @@ def enter(rd, child, n, d, approved=False):
     if not (A / f"waved-{rd.name}").exists() and not (A / f"wave-{rd.name}").exists(): return None, "", False   # `waved-` is the durable record: a landing removes `wave-`, never this
     wt = child_worktree(rd, child, d)
     if not wt.is_dir(): return False, f"WAVE no entry for #{n}: the child's worktree {wt} is not there", False
-    rq = A / f"requeued-{rd.name}-{child}"   # the sha a refused entry left the child on: the same sha would fail the same gates again, so the pass waits for a new commit
-    if rq.exists() and rq.read_text().strip() == head_of(wt): return False, "", False
+    rq = requeue_head(rd.name, n)   # the sha a refused entry left the child on: the same sha would fail the same gates again, so the pass waits for a new commit
+    if rq == "held": return False, f"CHILD HELD #{n}: its ledger could not be read", False
+    if rq and rq == head_of(wt): return False, "", False
     hold = A / f"apphold-{rd.name}-{child}"   # its run approved it, but the entry held it once: the review here takes over (#600)
     approved = approved and not hold.exists()
     fx = A / f"ccfix-{rd.name}-{child}"   # the fix run this pass started for the child (#636)
@@ -213,7 +221,7 @@ def enter(rd, child, n, d, approved=False):
     e = subprocess.run(["bash", wave, "enter", rd.name, str(n)], cwd=str(wt), capture_output=True, text=True)
     out = (e.stdout + e.stderr).strip()
     if approved and "WAVE HOLD" in out: hold.touch()
-    if "WAVE REQUEUE" in out or "WAVE STOP" in out: rq.write_text(head_of(wt) + "\n")   # a hold (no review yet) is no requeue: it is tried again on the same sha; a stop (#594) is one that froze the issue
+    if "WAVE REQUEUE" in out or "WAVE STOP" in out: record_requeue(rd.name, n, head_of(wt))   # a hold (no review yet) is no requeue: it is tried again on the same sha; a stop (#594) is one that froze the issue
     if e.returncode != 0 and re.search(r"did not approve it: .*CHANGES", out):
         return fix_round(rd, child, n, wt, fx, out)   # a fix run in its worktree, never a requeue at once (#636)
     elif e.returncode != 0 and "WAVE HOLD" in out:   # held, not requeued: the wave waits for it (#620)
@@ -228,7 +236,7 @@ def enter(rd, child, n, d, approved=False):
                 m = re.search(r"did not approve it: (.*)", out)   # a BLOCKED a model wrote is the issue's own; the chain's "every review model failed" is the loop's (#621)
                 why = f"its review held it {k} times on head {h[:9]}: {m.group(1)}" if m else f"its review held it {k} times on head {h[:9]} with no verdict"
                 subprocess.run(["bash", wave, "requeue", str(n), why], capture_output=True, env={**os.environ, "SG_REQUEUE_RUN": rd.name})
-                rq.write_text(h + "\n"); hk.unlink(); HOLDS.discard(f"{rd.name} {child}"); out += f"\nCHILD HOLD REQUEUE #{n}: {why}"
+                record_requeue(rd.name, n, h); hk.unlink(); HOLDS.discard(f"{rd.name} {child}"); out += f"\nCHILD HOLD REQUEUE #{n}: {why}"
     return e.returncode == 0, out or f"WAVE no entry for #{n} (exit {e.returncode})", True
 def card_status(n):   # the state the card carries, "" when it carries none or the carrier does not answer
     try: return state.read(n)
@@ -303,7 +311,7 @@ for key, r, child, why, n, finished, d, lwhy, ok in pending[k0:] + pending[:k0]:
     if s != "open": mk.touch(); continue
     waved = (A / f"wave-{name}").exists()   # the run's wave is not landed yet: its marker, not the card, says the child still has an entry to make
     if (A / f"waved-{name}").exists() and not waved: mk.touch(); continue   # the wave is landed and this child is not in it: its issue went back to the queue, so no card moves (never the direct Code Complete move)
-    if lwhy is not None and (A / f"requeued-{name}-{child}").exists():   # its run's own review held it and requeued it already (#601): never twice
+    if lwhy is not None and requeue_head(name, n):   # its run's own review held it and requeued it already (#601): never twice
         print(f"CHILD HELD #{n} ({name} {child}): its run's review requeued it", flush=True); mk.touch(); continue
     if lwhy is not None:   # the child's own engine landing failed: its work never reached the run's target, so no entry and no card move (#592)
         subprocess.run(["bash", wave, "requeue", str(n), f"its landing failed: {lwhy}"], capture_output=True, env={**os.environ, "SG_REQUEUE_RUN": name})

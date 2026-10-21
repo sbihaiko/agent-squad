@@ -13,6 +13,10 @@ usage: issue_ledger.py read  <key> [state|count|last_fail|held|wave]  the record
        issue_ledger.py landtry <key> <run> <cause>           one failed landing of the run's wave: prints the run's tries
        issue_ledger.py owe   <key> <run> <wave> <sha>        the landed wave could not close the issue: it is owed
        issue_ledger.py owed  <owner>/<repo> <run>            "<sha>\t<wave>\t<n>" for each issue the run still owes
+       issue_ledger.py landed <key> <ref> <run|branch> <sha>  the landing pass put the issue's work in the base: prints recorded|duplicate|floor
+       issue_ledger.py landed <owner>/<repo>                 "<ref>\t<n>" for each issue a landing pass put in the base
+       issue_ledger.py requeue <key> <run> <head>            the run requeued the issue's child on this head: prints recorded|duplicate|floor
+       issue_ledger.py requeued <key> <run>                  the head the run requeued the issue on, "" when it did not
 
 This module is the only writer of $SG_STATE/state/<owner>__<repo>__<n>.json. The key is <owner>/<repo>#<n>, the address
 seam's (ADR-0138), never a bare issue number. Owner intent stays on GitHub (ready-for-agent, the Todo card, frozen:owner,
@@ -36,6 +40,12 @@ A `landtry` event is a failed landing of the run's wave, on a cause a repeat doe
 adds one to its `tries`, the same cause too; any other event of the run keeps the tries (wave.sh stops at SG_WAVE_LAND_TRIES). An `owe` event
 sets the fact `owed`, with the wave and the sha that landed, for an issue the landed wave could not close; `owed` lists them
 for the run, and the `delivered` event of the close ends it.
+
+A `landed` fact is the landing pass's own record (`wave.sh` for a wave, `branchland.sh` for a pushed work branch): the issue's
+work is in the base. It is keyed by the run that landed it (`kind` run) or by the branch a branchland pass landed (`kind`
+branch), with the branch and the sha. Rule R reads it instead of a run's land heads (#691, #695): a landing is delivered work
+only when a landing pass wrote the fact. A `requeue` fact holds the head a run requeued the issue's child on, so the pass
+that requeued it is not tried again on the same head (the old auto/requeued-<run>-<child> marker, ADR-0149 rule 6).
 
 A corrupt file holds the issue (ADR-0149 rule 4): `read` gives the state `held` and names the file and the cause, every
 writer but `rearm` refuses it and leaves it as it is, and the dispatch passes read `held` as a stop. It never reads as the
@@ -133,7 +143,7 @@ def load(key):
         return empty(key)   # a new issue: no loop fact yet
     except (ValueError, UnicodeDecodeError) as e: raise Corrupt(f"a corrupt ledger holds the issue: {p} ({e})") from None
     if not (isinstance(rec, dict) and all(isinstance(rec.get(led), dict) and isinstance(rec[led].get("runs"), list) for led in LEDGERS)
-            and isinstance(rec.get("wave", {}), dict)):
+            and all(isinstance(rec.get(k, {}), dict) for k in ("wave", "landed", "requeued"))):
         raise Corrupt(f"a corrupt ledger holds the issue: {p} (not a ledger record)")
     return rec
 
@@ -173,8 +183,9 @@ def last_fail(rec):   # the reason of the newest own failure, the one a redispat
 
 def read(key):   # a corrupt file, or a missing one beside the old counters, reads held with its cause: the reader holds the issue
     try: rec = load(key)
-    except Held as e: return {**empty(key), "wave": {}, "state": "held", "held": str(e), "attempts": 0, "last_fail": ""}
-    return {**rec, "wave": rec.get("wave", {}), "state": state(rec), "held": "", "attempts": rec["own"]["count"], "last_fail": last_fail(rec)}
+    except Held as e: return {**empty(key), "wave": {}, "landed": {}, "requeued": {}, "state": "held", "held": str(e), "attempts": 0, "last_fail": ""}
+    return {**rec, "wave": rec.get("wave", {}), "landed": rec.get("landed", {}), "requeued": rec.get("requeued", {}),
+            "state": state(rec), "held": "", "attempts": rec["own"]["count"], "last_fail": last_fail(rec)}
 
 
 def count(key, led="own"):
@@ -225,6 +236,26 @@ def _wave(rec, ev):   # -> (recorded|duplicate|terminal|kept|floor, changed): on
     return "recorded", True
 
 
+def _landed(rec, ev):   # -> (recorded|duplicate|floor, changed): a landing pass put the issue's work in the base (ADR-0149)
+    ref, kind, sha = ev["ref"], ev["kind"], ev["sha"]
+    if kind not in ("run", "branch"): raise ValueError(f"not a landing kind: {kind!r} (run or branch)")
+    if ref in floor_runs(rec): return "floor", False   # a run from before the rearm counts toward nothing after it
+    L = rec.setdefault("landed", {}); old = L.get(ref)
+    if old and old.get("sha") == sha: return "duplicate", False
+    L[ref] = {"kind": kind, "sha": sha, "ts": time.time()}
+    return "recorded", True
+
+
+def _requeue(rec, ev):   # -> (recorded|duplicate|floor, changed): the head a run requeued the issue's child on
+    run, head = ev["run"], ev["head"]
+    if not run: raise ValueError("a requeue fact names its run")
+    if run in floor_runs(rec): return "floor", False
+    Q = rec.setdefault("requeued", {}); old = Q.get(run)
+    if old and old.get("head") == head: return "duplicate", False
+    Q[run] = {"head": head, "ts": time.time()}
+    return "recorded", True
+
+
 def _migrate(rec, ev):   # the old counters become the file, once: a ledger that exists is never migrated over
     if ev["old"] is not None: raise ValueError(f"nothing to migrate for {ev['key']}: its ledger exists, or it has no old counters")
     rec.clear(); rec.update(seed(ev["key"]))
@@ -234,13 +265,14 @@ def _migrate(rec, ev):   # the old counters become the file, once: a ledger that
 def _rearm(rec, ev):   # the loop facts go, and the floor (#692) keeps every run any of them named
     old = ev["old"] or {}
     runs = {x["run"] for led in LEDGERS for x in (old.get(led) or {}).get("runs", []) if isinstance(x, dict) and x.get("run")}
-    runs |= set((old.get("wave") or {}).keys()) | set((old.get("rearmed") or {}).get("runs", []))
+    runs |= set((old.get("wave") or {}).keys()) | set((old.get("requeued") or {}).keys()) | set((old.get("rearmed") or {}).get("runs", []))
+    runs |= {k for k, f in (old.get("landed") or {}).items() if isinstance(f, dict) and f.get("kind") == "run"}
     rec.clear(); rec.update(empty(ev["key"]))
     rec["rearmed"] = {"ts": time.time(), "runs": sorted(runs)}   # a corrupt file has no runs to read: the time is the floor
     return None, True
 
 
-RULES = {"fail": _fail, "stop": _stop, "wave": _wave, "rearm": _rearm, "migrate": _migrate}
+RULES = {"fail": _fail, "stop": _stop, "wave": _wave, "landed": _landed, "requeue": _requeue, "rearm": _rearm, "migrate": _migrate}
 
 
 def transition(key, ev):   # the one transition function (ADR-0149): every event of every writer, under the issue's lock
@@ -291,6 +323,18 @@ def owe(key, run, w, sha):
     return wave(key, run, "owed", f"landed {w} as {sha}, and the issue did not close", extra={"wave": w, "sha": sha})
 
 
+def landed(key, ref, kind, sha):   # -> recorded|duplicate|floor: a landing pass put the issue's work in the base
+    return transition(key, {"op": "landed", "ref": ref, "kind": kind, "sha": sha})
+
+
+def requeue(key, run, head):   # -> recorded|duplicate|floor: the head a run requeued the issue's child on
+    return transition(key, {"op": "requeue", "run": run, "head": head})
+
+
+def requeued(key, run):   # the head the run requeued the issue on, "" when it did not
+    return ((load(key).get("requeued") or {}).get(run) or {}).get("head", "")
+
+
 def repo_files(repo):   # -> [(n, record)] for every readable ledger file of the repository; a corrupt one holds its issue at dispatch already
     o, r, _ = parse(f"{repo}#0"); out = []
     for p in sorted(state_dir().joinpath("state").glob(f"{o}__{r}__*.json")):
@@ -311,6 +355,11 @@ def entered(repo):   # -> [(run, n)]: each run a child of the repository entered
             if isinstance(fact, dict) and fact.get("entered")]
 
 
+def landings(repo):   # -> {n: {(ref, kind)}}: the landings each issue of the repository holds, from every readable ledger file
+    return {n: {(ref, (fact or {}).get("kind", "run")) for ref, fact in (rec.get("landed") or {}).items() if isinstance(fact, dict)}
+            for n, rec in repo_files(repo)}
+
+
 def main(argv):
     if len(argv) < 2: print(__doc__.split("\n\n")[0], file=sys.stderr); return 2
     op, key, rest = argv[0], argv[1], argv[2:]
@@ -320,6 +369,11 @@ def main(argv):
             return 0
         if op == "owed" and rest:
             for sha, w, n in owed(key, rest[0]): print(f"{sha}\t{w}\t{n}")
+            return 0
+        if op == "landed" and "#" not in key:
+            for ref, n in ((ref, n) for n, facts in sorted(landings(key).items(), key=lambda kv: int(kv[0]))
+                           for ref in sorted(f for f, _ in facts)):
+                print(f"{ref}\t{n}")
             return 0
         parse(key)
         if op == "read":
@@ -332,6 +386,9 @@ def main(argv):
             for line in stop(key, rest[0], *(rest[1:2] or ["own"])): print(line)
         elif op == "landtry" and len(rest) >= 2: print(landtry(key, rest[0], rest[1]))
         elif op == "owe" and len(rest) >= 3: print(owe(key, rest[0], rest[1], rest[2]))
+        elif op == "landed" and len(rest) >= 3: print(landed(key, rest[0], rest[1], rest[2]))
+        elif op == "requeue" and len(rest) >= 2: print(requeue(key, rest[0], rest[1]))
+        elif op == "requeued" and rest: print(requeued(key, rest[0]))
         elif op == "wave" and len(rest) >= 3: print(wave(key, rest[0], rest[1], rest[2], rest[3:4] == ["keep"]))
         elif op == "migrate": migrate(key); print(f"MIGRATE {key}: the old counters are in its ledger file; they are read no more")
         elif op == "rearm": print(f"REARM {key}: the loop facts are cleared; {rearm(key).name} removes the SQUAD-NOT-STARTABLE comment")

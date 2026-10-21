@@ -503,6 +503,9 @@ deliver() {
   export SG_GH_PASS=wave
   local col=Done; [ "${SG_BOARD_VOCAB:-}" = shipped ] && col=Closed
   for n in $issues; do
+    # The landing is the issue's `landed` fact (ADR-0149, #695): rule R reads it instead of the run's land heads. It is
+    # written before the close, because the work is in the base whether or not the API accepts the close.
+    out=$(ledger landed "$n" "$run" run "$sha" 2>&1) || echo "WAVE-LEDGER #$n refused: $out"
     local closed= tries=1
     while :; do
       gh_send -X PATCH "repos/$SG_REPO/issues/$n" -f state=closed -f state_reason=completed >/dev/null && { closed=1; break; }
