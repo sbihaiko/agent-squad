@@ -21,7 +21,7 @@ for m in parallel serial; do
   cat > "$T/$m.sh" <<EOF
 #!/bin/bash
 echo "$m \$PWD" >> "$T/ran.log"
-[ "\${FAIL_$m:-}" = 1 ] && { printf 'FAILED tests/test_x.py::test_a - boom\nFAILED tests/test_y.py::test_b - boom\n'; exit 1; }
+[ "\${FAIL_$m:-}" = 1 ] && { printf 'FAILED tests/test_x.py::test_a - boom\nFAILED tests/test_x.py::test_x[case with space] - boom\nFAILED tests/test_y.py::test_b - boom\n'; exit 1; }
 [ "\${COLLECT_$m:-}" = 1 ] && { printf 'ERROR tests/test_module.py - ImportError: no module named x\n'; exit 1; }
 exit 0
 EOF
@@ -35,6 +35,11 @@ rec() { r_ts= r_res= r_sha= r_par= r_ser= r_ids=
   [ -f "$ST/nightly-result" ] && IFS=$'\t' read -r r_ts r_res r_sha r_par r_ser r_ids < "$ST/nightly-result"; }
 hold() { ( export SG_STATE="$ST"; . "$S/ghcall.sh"; gh_dispatch_hold ); }   # the dispatch hold both dispatch passes read (ghcall.sh)
 mark() { rm -f "$ST/auto/nightly-$(date +%F)"; }
+# json_ids <field>: 0 when the field is ONE JSON array of strings, the one encoding both readers parse (#704)
+json_ids() { printf '%s' "$1" | python3 -c 'import json,sys
+try: v=json.load(sys.stdin)
+except Exception: sys.exit(1)
+sys.exit(0 if type(v) is list and all(type(x) is str for x in v) else 1)'; }
 
 # 1) both modes run once, in the nightly tree, and the record says pass with the sha and both modes
 out=$(ng); rc=$?
@@ -42,7 +47,7 @@ out=$(ng); rc=$?
 [ "$(cat "$T/ran.log" 2>/dev/null)" = "parallel $T/tree
 serial $T/tree" ] && ok "both modes run in the nightly tree, parallel then serial" || ko "ran: '$(cat "$T/ran.log" 2>&1)'"
 rec
-[ "$r_res $r_sha $r_par $r_ser $r_ids" = "pass $sha pass pass -" ] && ok "the record is pass, the tip sha, both modes green and no failing test" || ko "record: '$r_res $r_sha $r_par $r_ser $r_ids'"
+[ "$r_res $r_sha $r_par $r_ser $r_ids" = "pass $sha pass pass []" ] && ok "the record is pass, the tip sha, both modes green and no failing test" || ko "record: '$r_res $r_sha $r_par $r_ser $r_ids'"
 [ -e "$ST/auto/nightly-$(date +%F)" ] && ok "the run leaves its once-a-day marker" || ko "no day marker after a run"
 [ ! -d "$ST/locks/nightly" ] && ok "the nightly lock is released when the run ends" || ko "the nightly lock stayed behind"
 [ ! -e "$ST/alerts.log" ] && ok "a green nightly raises no alert" || ko "a green nightly alerted: $(cat "$ST/alerts.log")"
@@ -53,7 +58,8 @@ out=$(ng FAIL_parallel=1); rc=$?
 [ $rc = 1 ] && ok "a red nightly exits 1" || ko "red nightly rc $rc: $out"
 rec
 [ "$r_res $r_par $r_ser" = "fail fail pass" ] && ok "the record says fail, and which mode failed" || ko "record: '$r_res $r_par $r_ser'"
-[ "$r_ids" = "tests/test_x.py::test_a tests/test_y.py::test_b" ] && ok "the record names the failing tests" || ko "ids: '$r_ids'"
+[ "$r_ids" = '["tests/test_x.py::test_a","tests/test_x.py::test_x[case with space]","tests/test_y.py::test_b"]' ] && ok "the record names every failing test whole, a parametrized id with a space included" || ko "ids: '$r_ids'"
+json_ids "$r_ids" && ok "the ids field is one JSON array, so no reader splits an id at a space" || ko "ids field is not one JSON array of strings: '$r_ids'"
 /usr/bin/grep -qx "serial $T/tree" "$T/ran.log" && ok "the serial mode still runs after a red parallel one" || ko "ran: '$(cat "$T/ran.log" 2>&1)'"
 
 # 3) a red result raises one alert through the existing alert path: alerts.log and the notifier
@@ -64,6 +70,7 @@ rec
 # 4) a red record holds dispatch until one green run, and a green one releases it
 hold >/dev/null; [ $? = 0 ] && ok "the dispatch hold stops a pass after a red nightly" || ko "a red nightly held no dispatch"
 [ -z "$(hold 2>&1 | /usr/bin/grep -i nightly)" ] && ko "the hold does not say why it stopped" || ok "the hold names the nightly as its cause"
+hold 2>&1 | /usr/bin/grep -qF 'tests/test_x.py::test_x[case with space]' && ok "the hold names a failing test whole, its space included" || ko "the hold split a parametrized id: $(hold)"
 mark; out=$(ng)                                     # one green run
 hold >/dev/null; [ $? = 1 ] && ok "one green nightly releases delivery" || ko "the hold outlived a green nightly: $(hold)"
 
@@ -103,6 +110,6 @@ hold >/dev/null; [ $? = 1 ] && ok "no record at all never holds dispatch" || ko 
 rm -f "$T/ran.log" "$ST/alerts.log"; mark
 out=$(ng COLLECT_parallel=1); rc=$?
 rec
-[ "$r_res $r_ids" = "fail tests/test_module.py" ] && ok "a collection error names the file it could not collect" || ko "record: '$r_res $r_ids' (rc $rc: $out)"
+[ "$r_res $r_ids" = 'fail ["tests/test_module.py"]' ] && ok "a collection error names the file it could not collect" || ko "record: '$r_res $r_ids' (rc $rc: $out)"
 
 rm -rf "$T"; exit $fail

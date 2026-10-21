@@ -104,22 +104,43 @@ def test_a_record_the_hub_cannot_read_is_a_question_mark_never_a_pass(hub):
 def test_the_record_nightly_sh_writes_is_the_one_the_footer_reads(hub, tmp_path, monkeypatch):
     st = tmp_path / "st"
     st.mkdir()
-    (st / "nightly-result").write_text(f"{int(NOW - 60)}\tpass\t{SHA}\tpass\tpass\t-\n")
+    (st / "nightly-result").write_text(f"{int(NOW - 60)}\tpass\t{SHA}\tpass\tpass\t[]\n")
     monkeypatch.setattr(hub, "STATE", st)
     assert hub.foot_sources(NOW)["nightly"] == {"result": "pass", "sha": SHA, "parallel": "pass", "serial": "pass",
                                                 "ids": [], "ts": NOW - 60}
-    (st / "nightly-result").write_text(f"{int(NOW - 60)}\tfail\t{SHA}\tpass\tfail\ttests/test_x.py::test_a\n")
+    (st / "nightly-result").write_text(f'{int(NOW - 60)}\tfail\t{SHA}\tpass\tfail\t["tests/test_x.py::test_a"]\n')
     assert hub.foot_sources(NOW)["nightly"]["ids"] == ["tests/test_x.py::test_a"]
-    # a record whose result contradicts its modes is no reading: the hub never draws a pass over a red mode
-    (st / "nightly-result").write_text(f"{int(NOW - 60)}\tpass\t{SHA}\tfail\tpass\t-\n")
+    # the ids are one JSON array, never a whitespace-separated list: a node id may carry a space, and a field that is
+    # not one array of strings is no reading (#704)
+    (st / "nightly-result").write_text(f"{int(NOW - 60)}\tfail\t{SHA}\tpass\tfail\ttests/test_x.py::test_a\n")
     assert hub.foot_sources(NOW)["nightly"] is None
-    (st / "nightly-result").write_text(f"{int(NOW - 60)}\tfail\t{SHA}\tpass\tmaybe\t-\n")
+    (st / "nightly-result").write_text(f'{int(NOW - 60)}\tfail\t{SHA}\tpass\tfail\t[1]\n')
+    assert hub.foot_sources(NOW)["nightly"] is None
+    (st / "nightly-result").write_text(f'{int(NOW - 60)}\tfail\t{SHA}\tpass\tfail\t{{"a":1}}\n')
+    assert hub.foot_sources(NOW)["nightly"] is None
+    # a record whose result contradicts its modes is no reading: the hub never draws a pass over a red mode
+    (st / "nightly-result").write_text(f"{int(NOW - 60)}\tpass\t{SHA}\tfail\tpass\t[]\n")
+    assert hub.foot_sources(NOW)["nightly"] is None
+    (st / "nightly-result").write_text(f"{int(NOW - 60)}\tfail\t{SHA}\tpass\tmaybe\t[]\n")
     assert hub.foot_sources(NOW)["nightly"] is None
     (st / "nightly-result").write_text("not a result line\n")
     assert hub.foot_sources(NOW)["nightly"] is None
     # the record is one line: a valid first line with anything after it is no reading, and the hold drops the same file
     (st / "nightly-result").write_text(
-        f"{int(NOW - 60)}\tfail\t{SHA}\tpass\tfail\ttests/test_x.py::test_a\ncorrupt\n")
+        f'{int(NOW - 60)}\tfail\t{SHA}\tpass\tfail\t["tests/test_x.py::test_a"]\ncorrupt\n')
     assert hub.foot_sources(NOW)["nightly"] is None
     (st / "nightly-result").unlink()
     assert hub.foot_sources(NOW)["nightly"] is None
+
+
+def test_a_failing_test_whose_id_carries_a_space_is_read_whole(hub, tmp_path, monkeypatch):
+    """pytest node ids may carry spaces (a parametrized case id): the record encodes them as one JSON array, so the hub
+    names every test whole and never splits an id at a space (#704, ADR-0153)."""
+    st = tmp_path / "st"
+    st.mkdir()
+    ids = ["tests/test_x.py::test_x[case with space]", "tests/test_y.py::test_b"]
+    (st / "nightly-result").write_text(f"{int(NOW - 60)}\tfail\t{SHA}\tpass\tfail\t{json.dumps(ids)}\n")
+    monkeypatch.setattr(hub, "STATE", st)
+    (fact,) = [i for i in hub.foot_items({"nightly": hub.foot_sources(NOW)["nightly"]}, NOW) if i["key"] == "nightly"]
+    assert fact["detail"] == ids
+    assert "tests/test_x.py::test_x[case with space]" in fact["tip"]
