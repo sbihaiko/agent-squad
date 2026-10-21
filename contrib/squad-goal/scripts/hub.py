@@ -3361,9 +3361,19 @@ def _models_set(new):
             if bad: return {"err": f"{ROUTER_CHAIN}: the gateway does not serve " + ", ".join(bad)}
             rchain = res
             if len(set(rchain)) != len(rchain): return {"err": f"{ROUTER_CHAIN}: need 1-8 distinct model ids"}
-        if rchain != router_get():          # a Save that did not move this queue leaves the graph and its record alone
-            err = router_set(rchain)
-            if err: return err
+    # A coding child runs inside the dispatch envelope, so a coding model the envelope lacks reads "blocked by envelope"
+    # and never runs (#690): the Save appends it, in the gateway's spelling, after the queue order the owner set.
+    coding = new.get("coding_models")
+    base = rchain if rchain is not None else router_get()
+    if base and isinstance(coding, list) and all(isinstance(m, str) for m in coding):
+        miss = router_envelope.envelope_blocked([bare_id(m) for m in coding], base)
+        if miss:
+            served = set(gateway_models())
+            rchain = list(base) + [r for r in dict.fromkeys(router_resolve(m, served) or m for m in miss) if r not in base]
+            if len(rchain) > 8: return {"err": f"{ROUTER_CHAIN}: the coding models do not fit the 8-entry envelope"}
+    if rchain is not None and rchain != router_get():   # a Save that did not move this queue leaves the graph and its record alone
+        err = router_set(rchain)
+        if err: return err
     d = json.loads(MODELS.read_text()); eff = new.pop("efforts", None); hrs = new.pop("hours", None); off = new.pop("off", None)
     for k, v in new.items():
         if not isinstance(v, list) or not 1 <= len(v) <= 8 or not all(isinstance(m, str) and MODEL_ID.match(m) for m in v):

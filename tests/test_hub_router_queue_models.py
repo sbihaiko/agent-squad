@@ -68,7 +68,8 @@ def _envelope(graph):
 def test_a_queue_entry_is_stored_in_the_gateway_spelling(hub, checkout):
     out = hub.models_set({**hub.models_get(), "router_models": ["gpt-5.6-sol", "deepseek-v4-flash[1m]", "claude-gpt-6-astra"]})
     assert "err" not in out, out
-    assert _envelope(checkout) == ["claude-gpt-5.6-sol", "claude-deepseek-v4-flash[1m]", "claude-gpt-6-astra"]
+    # the coding chain keeps gpt-5.6-terra, so the Save appends it to the envelope (#690)
+    assert _envelope(checkout) == ["claude-gpt-5.6-sol", "claude-deepseek-v4-flash[1m]", "claude-gpt-6-astra", "claude-gpt-5.6-terra"]
 
 
 def test_a_queue_entry_the_gateway_does_not_serve_is_refused_at_save_by_name(hub, checkout):
