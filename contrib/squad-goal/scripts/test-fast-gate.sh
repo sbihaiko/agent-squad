@@ -48,7 +48,7 @@ out=$(BASE_FAIL=1 RETRY_FAIL=1 fgr); rc=$?
 out=$(fgr); /usr/bin/grep -q "retry-cmd" "$T/ran.log" && ko "a green battery ran the retry" || ok "a green battery runs no retry"
 # pyproject turns the pytest cache off, so --lf names nothing: the retry runs the failed tests the log names, never the battery.
 out=$(BASE_FAIL=lint fgr); rc=$?
-[ $rc -ne 0 ] && ! /usr/bin/grep -q "retry-cmd" "$T/ran.log" && ok "a red that names no failed test (lint, types) runs no retry and fails" || ko "lint red: rc $rc: '$(cat "$T/ran.log")'"
+[ $rc -ne 0 ] && ! /usr/bin/grep -q "retry-cmd" "$T/ran.log" && ok "a red that names no failed test runs no id retry and fails" || ko "lint red: rc $rc: '$(cat "$T/ran.log")'"
 
 # (#670) A red that is lint or types names the check it failed at, with its own line. A reason that reads "names no failed test"
 # hides which check failed, and the child that must repair it never learns which one it was.
@@ -61,6 +61,51 @@ out=$(RUFF_BARE=1 lintgate); rc=$?
 [ $rc -ne 0 ] && case "$out" in *"ruff:"*"tests/test_models_v2.py"*"F811"*) true;; *) false;; esac && ok "a lint red with no fix marker names ruff, its path and its code" || ko "bare ruff red: rc $rc: $out"
 out=$(MYPY_FAIL=1 lintgate); rc=$?
 [ $rc -ne 0 ] && case "$out" in *"mypy"*"squad/x.py:12"*) true;; *) false;; esac && ok "a type red names mypy and its line" || ko "mypy red: rc $rc: $out"
+
+# (#699) The last line names the failing class: lint, type, collection, pytest (with the failed ids), saturation or unknown. A red
+# that names no failed test is no longer read as one cause. Saturation and unknown are inconclusive: the battery runs once more,
+# and a second inconclusive result exits 4, which holds the landing. Exit 1 is a defect. No class grants landing by its name.
+last() { printf '%s\n' "$1" | /usr/bin/grep -v '^$' | tail -1; }
+out=$(RUFF_FAIL=1 lintgate); case "$(last "$out")" in "fast-gate: lint: "*) ok "a lint red names the lint class on its last line";; *) ko "lint class: '$(last "$out")'";; esac
+out=$(MYPY_FAIL=1 lintgate); case "$(last "$out")" in "fast-gate: type: "*) ok "a type red names the type class on its last line";; *) ko "type class: '$(last "$out")'";; esac
+out=$(BASE_FAIL=1 RETRY_FAIL=1 fgr); rc=$?
+[ $rc = 1 ] && case "$(last "$out")" in "fast-gate: pytest: "*"tests/test_x.py::test_a"*) true;; *) false;; esac && ok "a pytest red names the pytest class and its failed ids" || ko "pytest class: rc $rc: '$(last "$out")'"
+# A stub battery that prints the shape of one class per call: CLS on the first call, CLS2 (default CLS) on the retry.
+cat > "$T/cls.sh" <<CLS
+#!/bin/bash
+n=\$(cat "$T/cls.n" 2>/dev/null || echo 0); n=\$((n+1)); echo \$n > "$T/cls.n"; echo "battery \$n" >> "$T/ran.log"
+c=\$CLS; [ \$n -gt 1 ] && c=\${CLS2-\$CLS}
+case \$c in
+  collection) echo "ERROR collecting tests/test_c.py"; echo "E   ImportError: No module named x"; echo "Interrupted: 1 error during collection"; exit 2;;
+  saturation) echo "[gw2] node down: Not properly terminated"; echo "replacing crashed worker gw2"; exit 1;;
+  killed) echo "Killed"; exit 137;;
+  unknown) echo "something odd"; exit 1;;
+  errorid) echo "ERROR tests/test_e.py::test_b - fixture boom"; exit 1;;
+esac
+exit 0
+CLS
+chmod +x "$T/cls.sh"
+cg() { rm -f "$T/ran.log" "$T/cls.n" "$SG_STATE/gate-status"; (cd "$R" && SG_FAST_BASE=dev SG_FAST_CMD="$T/cls.sh" SG_FAST_RETRY_CMD="$T/retry.sh" bash "$d/fast-gate.sh" 2>&1); }
+out=$(CLS=collection cg); rc=$?
+[ $rc = 1 ] && case "$(last "$out")" in "fast-gate: collection: "*"tests/test_c.py"*) true;; *) false;; esac && ok "a collection error names the collection class and its file" || ko "collection: rc $rc: '$(last "$out")'"
+[ "$(/usr/bin/grep -c '^battery' "$T/ran.log")" = 1 ] && ! /usr/bin/grep -q retry-cmd "$T/ran.log" && ok "a collection error is a defect: no retry" || ko "collection retried: '$(cat "$T/ran.log")'"
+out=$(CLS=errorid RETRY_FAIL=1 cg); rc=$?
+[ $rc = 1 ] && /usr/bin/grep -qx "retry-cmd tests/test_e.py::test_b" "$T/ran.log" && case "$(last "$out")" in "fast-gate: pytest: "*"tests/test_e.py::test_b"*) true;; *) false;; esac \
+  && ok "a test that errors is a failed id: it is retried alone and named" || ko "error id: rc $rc: '$(last "$out")' '$(cat "$T/ran.log")'"
+for c in saturation killed unknown; do
+  out=$(CLS=$c cg); rc=$?; want=$c; [ $c = killed ] && want=saturation
+  [ $rc = 4 ] && case "$(last "$out")" in "fast-gate: $want: "*inconclusive*) true;; *) false;; esac && ok "a $c red, twice, is inconclusive: the $want class and exit 4" || ko "$c: rc $rc: '$(last "$out")'"
+  [ "$(/usr/bin/grep -c '^battery' "$T/ran.log")" = 2 ] && ok "a $c red runs the battery once more, and only once" || ko "$c retries: '$(cat "$T/ran.log")'"
+  ! /usr/bin/grep -q 'test-foo.sh' "$T/ran.log" && ok "an inconclusive $c result runs no suite" || ko "$c ran suites: '$(cat "$T/ran.log")'"
+  case "$out" in *"named no failed test"*) ko "$c is read as pytest: '$out'";; *) ok "a $c red is not read as one pytest cause";; esac
+  IFS=$'\t' read -r _ kind res _ < "$SG_STATE/gate-status" 2>/dev/null; [ "$kind $res" = "fast fail" ] && ok "an inconclusive $c result leaves no pass line" || ko "$c status: '$(cat "$SG_STATE/gate-status" 2>&1)'"
+done
+out=$(CLS=saturation CLS2=pass cg); rc=$?
+[ $rc = 0 ] && /usr/bin/grep -q 'test-foo.sh' "$T/ran.log" && case "$out" in *saturation*) true;; *) false;; esac && ok "an inconclusive red whose retry passes goes on to the suites and names the class" || ko "retry pass: rc $rc: '$out'"
+out=$(CLS=unknown CLS2=collection cg); rc=$?
+[ $rc = 1 ] && case "$(last "$out")" in "fast-gate: collection: "*) true;; *) false;; esac && ok "an inconclusive red whose retry is a defect fails as that defect" || ko "retry defect: rc $rc: '$(last "$out")'"
+# The gate lock is gate.sh's, and fast-gate.sh takes no lock of its own.
+/usr/bin/grep -v '^ *#' "$d/fast-gate.sh" | /usr/bin/grep -qE 'serial\.sh|lockf|flock|locks/' && ko "fast-gate.sh takes a lock of its own" || ok "fast-gate.sh takes no lock but gate.sh's"
 
 # A shell script selects the same suite on a separate branch from the same base.
 $G -C "$R" checkout -q dev; $G -C "$R" checkout -q -b gui/sh; echo 1 >> "$S/foo.sh"; echo 1 >> "$S/baz.sh"; echo 1 >> "$R/docs/x.md"; $G -C "$R" commit -qam shell-work

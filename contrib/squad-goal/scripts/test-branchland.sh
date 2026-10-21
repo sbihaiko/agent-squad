@@ -103,6 +103,13 @@ reset; rm -f "$T/gate.log" "$T/rerun.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_KO" SG_L
 GATE_KO_IDS="echo 'FAILED tests/test_a.py::test_one - boom'; echo 'FAILED tests/test_b.py::test_two'; exit 1"
 reset; rm -f "$T/gate.log" "$T/rerun.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_KO_IDS" SG_LOCAL_GATE_RERUN_CMD="$RERUN_OK" CHECKS='{"check_runs":[]}' bl)
 [ "$(cat "$T/rerun.log" 2>/dev/null)" = "rerun tests/test_a.py::test_one tests/test_b.py::test_two" ] && ok "the rerun gets exactly the failed node ids" || ko "the rerun ids: '$(cat "$T/rerun.log" 2>&1)'"
+# (#699) An inconclusive gate (exit 4: fast-gate ran its one retry, and that failed too) never lands and gets no second rerun:
+# a rerun that passed would grant the landing the gate held.
+GATE_INC="echo gate >> $T/gate.log; echo 'fast-gate: saturation: the battery crashed twice; inconclusive, so the landing holds'; exit 4"
+reset; rm -f "$T/gate.log" "$T/rerun.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_INC" SG_LOCAL_GATE_RERUN_CMD="$RERUN_OK" CHECKS='{"check_runs":[]}' bl)
+[ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && [ ! -e "$T/rerun.log" ] && ok "an inconclusive gate: nothing lands and no rerun runs" || ko "inconclusive gate: rerun '$(cat "$T/rerun.log" 2>&1)': '$r'"
+case "$r" in *"BRANCHLAND WAIT gui/7-x"*inconclusive*) ok "an inconclusive gate says so";; *) ko "inconclusive gate line: '$r'";; esac
+/usr/bin/grep -qh "inconclusive" "$T/st/cq/"x__y#7-status~* 2>/dev/null && ok "the status comment names the inconclusive result" || ko "inconclusive status: $(cat "$T/st/cq/"* 2>&1)"
 # The default gate runs with none of the loop's SG_* variables (a test that reads one would see the live loop state) and with the
 # 2 s line off: that line is the CI speed rule, and this machine's load is not a defect of the branch; the 20 s cap stays.
 printf '#!/bin/bash\necho "SG_STATE=${SG_STATE:-unset} $*" >> %s/py.log\n' "$T" > "$T/py"; chmod +x "$T/py"

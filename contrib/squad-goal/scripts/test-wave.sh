@@ -676,4 +676,16 @@ for rn in 42 43; do n=$((410 + rn - 41))
   [ $rc = 0 ] && $O cat-file -e wave/run-$rn:g$n 2>/dev/null && ok "Z: a child of run-$rn (passed or live) enters" || ko "Z: run-$rn exit $rc: '$r'"
 done
 
+
+# AA (#699): an inconclusive gate (exit 4) holds. At the entry the child is held, never requeued: the machine, not the child,
+# gave no answer. At the tip no child is blamed and the wave does not land; the hold is the loop's, so no landing try is counted.
+start2 run-50 >/dev/null; child 500 g500 "origin/wave/run-50"; REV_BASE=wave/run-50 rev 500; : > "$T/board.log"
+r=$(cd "$T/c500" && SG_WAVE_GATES="echo 'fast-gate: saturation: the battery crashed twice; inconclusive'; exit 4" bash "$T/s/wave.sh" enter run-50 500 2>&1); rc=$?
+[ $rc != 0 ] && ! $O cat-file -e wave/run-50:g500 2>/dev/null && case "$r" in *"WAVE HOLD #500"*saturation*) true;; *) false;; esac && ok "AA: an inconclusive entry gate holds the child" || ko "AA: entry exit $rc: '$r'"
+case "$r" in *REQUEUE*) ko "AA: an inconclusive entry gate requeued the child: '$r'";; *) /usr/bin/grep -q 'Todo 500' "$T/board.log" && ko "AA: the card went back to Todo" || ok "AA: an inconclusive entry gate requeues nothing";; esac
+start2 run-51 >/dev/null; child 510 g510 "origin/wave/run-51"; en2 run-51 510 >/dev/null; : > "$T/board.log"
+r=$(SG_WAVE_TIP_GATES="echo 'fast-gate: unknown: no class; inconclusive'; exit 4" SG_WAVE_CHILD_GATES='exit 1' land2 run-51 2>&1); rc=$?
+[ $rc != 0 ] && ! $O cat-file -e dev:g510 2>/dev/null && case "$r" in *inconclusive*) true;; *) false;; esac && ok "AA: an inconclusive tip check holds the landing and says so" || ko "AA: tip exit $rc: '$r'"
+case "$r" in *"WAVE CHECK RED"*|*REQUEUE*) ko "AA: an inconclusive tip check blamed a child: '$r'";; *) ok "AA: an inconclusive tip check blames no child";; esac
+[ ! -e "$T/st/auto/wland-tries-run-51" ] && ok "AA: an inconclusive tip check counts no landing try" || ko "AA: tries $(cat "$T/st/auto/wland-tries-run-51")"
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }
