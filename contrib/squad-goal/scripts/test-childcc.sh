@@ -330,4 +330,32 @@ out=$(fixpass cst 6101); fixpass cst 6101 >/dev/null
 [ "$(/usr/bin/grep -c '^requeue 6101 ' "$WAVE_CALLS")" = 1 ] && /usr/bin/grep -q '^requeue 6101 .*the cap is never read' "$WAVE_CALLS" \
   && ok "findings that do not change requeue the issue once, with the findings in the reason" || ko "requeues: $(cat "$WAVE_CALLS"), out $out"
 
+# A live run that reviews its own children still owns a child after its pass (#696): it reviews it, fixes it, or lands it,
+# and the verdict comes in the child's `land` event. Until that event (or the run's verdict) the child is not pending here:
+# no review, no fix run, no requeue, no Code Review move, so no second session edits the worktree the run still fixes.
+# The run reviews its children when its dispatch node names a review gate (graph.json), or its record holds a review event.
+lrun() { # name issue graph(g: a review gate in graph.json, else none) extra-record-lines...
+  local n=$1 i=$2 g=$3; shift 3; mkdir -p "$T/co/runs/$n"
+  { echo '{"event": "spawn_accepted", "child": "c", "envelope": "route", "definition": "GitHub issue #'$i'"}'
+    echo '{"event": "outcome", "node": "c", "entry": 1, "outcome": "pass", "reasons": ["ok"]}'; for l in "$@"; do echo "$l"; done; } > "$T/co/runs/$n/record.jsonl"
+  [ "$g" = g ] && echo '{"nodes": [{"name": "route", "kind": "dispatch", "review": "review_gate"}]}' > "$T/co/runs/$n/graph.json"
+  wtree "$n"; echo "wave/$n" > "$T/st/auto/wave-$n"; echo "wave/$n" > "$T/st/auto/waved-$n"; }
+lpass() { echo "$T/co/runs/$1" > "$T/st/active-runs.txt"; (cd "$T/co" && SG_BOARD_VOCAB=shipped SG_CHILDCC_BUDGET=5 python3 "$T/childcc.py.run" 2>&1); }
+untouched() { # name issue out: the pass did not work the child
+  ! /usr/bin/grep -q "^$1 $2 " "$T/fix.calls" && ! /usr/bin/grep -q " $2\$\| $2 " "$WAVE_CALLS" && [ ! -e "$T/st/auto/ccfix-$1-c" ] && [ ! -e "$T/st/auto/cc-$1-c" ] \
+    && ! /usr/bin/grep -q "CODE REVIEW\|CHILD REVIEW\|CHILD FIX" <<<"$3"; }
+printf '**VERDICT: CHANGES**\n- [Blocking] c.py:1 the run still fixes this\n' > "$T/verdict-6200"; printf '**VERDICT: CHANGES**\n- [Blocking] c.py:2 x\n' > "$T/verdict-6201"
+export GH_NUMS="6200:Doing 6201:Doing 6202:Doing"; : > "$WAVE_CALLS"; : > "$T/fix.calls"; rm -f "$T/moves"
+lrun lv 6200 - '{"event": "review_round", "node": "c", "round": 1, "head": "h1", "verdict": "fix"}' '{"event": "call_start", "node": "c", "entry": 2}'
+out=$(lpass lv)
+untouched lv 6200 "$out" && ok "a child its live run reviews and fixes is not worked before its land event" || ko "live run's child worked: fix '$(cat "$T/fix.calls")', waves '$(cat "$WAVE_CALLS")', out $out"
+! /usr/bin/grep -q ' 6200$' "$T/moves" 2>/dev/null && ok "a child its live run still owns moves no card" || ko "card moved: $(cat "$T/moves")"
+lrun lg 6201 g; out=$(lpass lg)
+untouched lg 6201 "$out" && ok "a passed child of a live run whose dispatch names a review gate waits for its land event" || ko "review-gate run's child worked: fix '$(cat "$T/fix.calls")', waves '$(cat "$WAVE_CALLS")', out $out"
+echo '{"event": "land", "node": "c", "parent": "route", "entry": 2, "outcome": "pass", "reasons": [], "effect": {"name": "review", "review": {"verdict": "approve"}}}' >> "$T/co/runs/lv/record.jsonl"
+out=$(lpass lv)
+[ "$(/usr/bin/grep -c '^enter lv 6200' "$WAVE_CALLS")" = 1 ] && [ ! -s "$T/fix.calls" ] && ok "after its land event the child is worked as before" || ko "after land: waves '$(cat "$WAVE_CALLS")', fix '$(cat "$T/fix.calls")', out $out"
+lrun lf 6202 g; echo '{"event": "verdict"}' >> "$T/co/runs/lf/record.jsonl"; out=$(lpass lf)
+/usr/bin/grep -q '^enter lf 6202' "$WAVE_CALLS" && ok "a child of a finished run with no land event is worked as before" || ko "finished run: waves '$(cat "$WAVE_CALLS")', out $out"
+
 rm -rf "$T"; exit $fail
