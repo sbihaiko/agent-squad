@@ -3,7 +3,8 @@
 The sibling filter of one run (ADR-0150): exit 1 and print the reason when the candidate would be a conflicting sibling of an
 issue the run already picked, exit 0 when it may join. Deterministic: it reads the spec link and the issue bodies, no model.
   spec   the candidate and a picked issue are tickets of one spec: the spec's native sub-issues (sub_issues of an open issue
-         in the list) or a "SPEC #N" / "Parent: #N" line in the ticket body. One run takes one ticket of a spec.
+         in the list), a "SPEC #N" / "Parent: #N" line in the ticket body, or a "## Parent" heading whose next
+         non-blank line is "#N" (the to-tickets shape; the REST open-issue list has no sub_issues field). One run takes one ticket of a spec.
   files  issues whose bodies name one repository-relative file (normal form, cluster.paths) are ONE child (cluster.py,
          CL_MODE=files), never two siblings; so tickets of one spec that name a common file share a child and pass.
 Landing still handles a conflict this filter cannot see (a file no body names)."""
@@ -12,13 +13,13 @@ import json, os, re, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from cluster import paths  # noqa: E402
 
-SPEC = re.compile(r"(?i)\b(?:spec|parent)\b[ \t:]*#(\d+)")
+SPEC = re.compile(r"(?i)\b(?:spec|parent)\b[ \t:]*#(\d+)|^#+[ \t]*parent[ \t:]*\s*?\n(?:[ \t]*\n)*[ \t]*#(\d+)\b", re.M)
 
 
 def specs(n, by):
     """The specs issue n is a ticket of."""
     out = {s for s, it in by.items() if n in (it.get("sub_issues") or [])}
-    out |= {int(m) for m in SPEC.findall(by.get(n, {}).get("body") or "")}
+    out |= {int(a or b) for a, b in SPEC.findall(by.get(n, {}).get("body") or "")}
     out.discard(n)
     return out
 
