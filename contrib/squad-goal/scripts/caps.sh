@@ -7,6 +7,18 @@
 # count, so a release is a courtesy, never a need.
 # The module is the one of the repository this script sits in, so the command and its caller are one version; the live copy is
 # not in a repository, and it reads SG_SQUAD (env.sh sets it) instead.
+# sg_battery_workers: the pytest worker count a proof may take, bounded by the machine (#738). `auto` takes every core, and
+# the promotion proof runs on the box the loop and its children use: a battery of wall-time suites then measures its own load.
+# Half the cores, half the memory in 2 GiB steps, never under 2 and never over 6. SG_BATTERY_WORKERS overrides it.
+sg_battery_workers() {
+  local c m w
+  c=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 2)
+  m=$(sysctl -n hw.memsize 2>/dev/null || echo 0); m=$(( m / 1073741824 ))
+  w=$(( c / 2 )); [ "$m" -gt 0 ] && [ $(( m / 2 )) -lt "$w" ] && w=$(( m / 2 ))
+  [ "$w" -lt 2 ] && w=2; [ "$w" -gt 6 ] && w=6
+  echo "${SG_BATTERY_WORKERS:-$w}"
+}
+
 sg_caps() {
   local root; root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd); [ -f "$root/squad/caps.py" ] || root=${SG_SQUAD:-}
   PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}" python3 -m squad.caps "$@"
