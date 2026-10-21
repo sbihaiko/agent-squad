@@ -8,7 +8,7 @@
 # containing submodules cannot be moved or removed`, a line with no run id in it), so every removal here carries the flag that
 # case needs, and the line names the run or the tree. One the flag still cannot free is reported once as WT KEPT submodule.
 # Every tree an ended run keeps is named once, with its reason, as WT KEPT (#676): a live process, a tree inside it, uncommitted
-# work or commits outside the base. An ended run leaves active-runs.txt once no tree holds its folder (rule A below).
+# work or commits outside the base. An ended run with no open wave leaves active-runs.txt, whatever keeps its tree (rule A below).
 . "$(dirname "$0")/env.sh"; G=/usr/bin/git; seen="$SG_STATE/wt-unpushed.txt"; touch "$seen"
 # The tally the hub's footer reads as `wt 10/21`: `held` per child tree this pass saw under the two child directories
 # (the set the footer counts), `free` per one it removed. A `while read` behind a pipe is a subshell, so the count lives
@@ -238,24 +238,24 @@ $G worktree list --porcelain | awk '/^worktree /{w=$2} /^branch /{sub("refs/head
     wt_remove "$SG_CHECKOUT" "$w" && $G branch -D "$b" >/dev/null 2>&1 && echo "WT CLEAN landed $b (in $land at $($G rev-parse --short=9 "origin/$land"))${wt_forced:+ (submodule tree: removed with --force)}"
   else grep -qx "kept $w" "$seen" || { echo "WT KEPT $b: commits not in $land yet; nothing removed"; echo "kept $w" >> "$seen"; }; fi
 done
-# A (#676): an ended run leaves active-runs.txt once no tree holds its folder. A run folder inside a tree goes with the tree, and
-# the janitor drops a missing folder; a folder that stays (the checkout's own runs/) kept its line for good, and every reader
-# of the file read 80 ended runs as its own. The line goes when the run ended for good (the rule above), its record has not
-# moved for SG_RUN_LINE_SECONDS (an hour by default: the janitor's per-run rules have read it), no process is inside its
-# folder and no registered worktree lies inside it. The file is read again just before the write, so a line appended
-# meanwhile stays.
-# A failed run whose wave is over (it landed or got stuck: waved-<run> stays, wave-<run> went) leaves too (#693): a resume
-# that may take its remains keeps its tree, but its line made janitor rule O read the finished run on every pass.
-wave_over() { local r=${1##*/}; [ -e "$SG_STATE/auto/waved-$r" ] && [ ! -e "$SG_STATE/auto/wave-$r" ] || return 1
-  awk '/"event": *"(run_start|resume)"/{v=""} /"event": *"verdict"/{v=$0} END{print v}' "$1/record.jsonl" 2>/dev/null | grep -q '"verdict": "failed"'; }
+# A (#676, #708): an ended run leaves active-runs.txt, whatever keeps its tree. Every reader of the file (childcc, the janitor,
+# the token reader) reads each line on every pass, so a line an ended run keeps doubles the cycle for nothing. The line goes when
+# the run has a verdict after its last run_start or resume (a resumed run is live again), its wave is not open (no wave-<run>:
+# that marker stays from the cut to the landing, so a wave still landing keeps the line), its record has not moved for
+# SG_RUN_LINE_SECONDS (an hour by default: the janitor's per-run rules have read it) and no process is inside its folder. The
+# tree stays for a resume or for the owner: a held, unpushed, dirty or inner tree, a needs-human, paused or failed verdict with
+# remains keep the tree and never the line. This holds #693's rule: a failed run whose wave is over leaves too. The file is
+# read again just before the write, so a line appended meanwhile stays.
+verdict_last() { awk '/"event": *"(run_start|resume)"/{v=""} /"event": *"verdict"/{v=$0} END{print v}' "$1/record.jsonl" 2>/dev/null; }
 act="$SG_STATE/active-runs.txt"; drop="$SG_STATE/active-drop.$$"; : > "$drop"
 [ -f "$act" ] && while read -r r; do
   case "$r" in '') continue;; /*) d=$r;; *) d="$SG_CHECKOUT/runs/$r";; esac
   d=$(cd "$d" 2>/dev/null && pwd -P) && [ -f "$d/record.jsonl" ] || continue
   [ $(( now - $(mtime "$d/record.jsonl") )) -ge "${SG_RUN_LINE_SECONDS:-3600}" ] || continue
-  ended "$d" || wave_over "$d" || continue
-  in_use "$d" && continue; inner "$d" && continue
-  echo "$r" >> "$drop"; echo "RUN ENDED ${d##*/}: its run ended and no tree holds it; dropped from active-runs.txt"
+  [ -n "$(verdict_last "$d")" ] || continue
+  [ -e "$SG_STATE/auto/wave-${d##*/}" ] && continue
+  in_use "$d" && continue
+  echo "$r" >> "$drop"; echo "RUN ENDED ${d##*/}: its run ended and its wave is not open; dropped from active-runs.txt (its tree stays)"
 done < "$act"
 if [ -s "$drop" ]; then grep -vxF -f "$drop" "$act" > "$act.$$" ; mv -f "$act.$$" "$act"; fi
 rm -f "$drop"
