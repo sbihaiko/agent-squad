@@ -101,7 +101,7 @@ sequenceDiagram
     W->>J: janitor.sh every cycle
     J->>GH: rule R: issue closed, card Closed (Done mapped by board_columns.py)
     O->>G: by hand: promote-pass.sh, or the full gate then promote-stg.sh
-    G->>GH: full suite in both modes on the dev tip#59; gate-status-full#59; push dev tip to stg, fast-forward only
+    G->>GH: full suite in both modes on the dev tip#59; gate-status-full#59; merge the dev -> stg pull request
     W->>W: live-guard.sh: main tree on stg, ff to origin/stg, publish-live.sh file list
 ```
 
