@@ -87,16 +87,16 @@ def _drive(hub, script):
 def test_with_n_live_runs_on_the_page_at_most_one_pane_follows_its_run(hub, panes):
     st = _drive(hub, f"N={panes};runs=mk(9);slots=runs.slice(0,N).map(r=>r.id);drawMain();out.s=state();")["s"]
     assert st["cells"] == panes                                   # every slot still shows its run
-    assert st["live"] == ["http://127.0.0.1:9001/"]               # one live source, the focused pane's own run
+    assert st["live"] == ["/dash/run-1/"]               # one live source, the focused pane's own run
     assert st["framed"] == 1
 
 
 def test_selecting_another_pane_moves_the_one_live_stream_to_it(hub):
     st = _drive(hub, """N=4;runs=mk(9);slots=runs.slice(0,N).map(r=>r.id);drawMain();out.first=state();
       press(2);out.moved=state();press(0);out.back=state();""")
-    assert st["first"]["live"] == ["http://127.0.0.1:9001/"]
-    assert st["moved"]["live"] == ["http://127.0.0.1:9003/"]      # one stream, now on the third pane's run
-    assert st["back"]["live"] == ["http://127.0.0.1:9001/"]
+    assert st["first"]["live"] == ["/dash/run-1/"]
+    assert st["moved"]["live"] == ["/dash/run-3/"]      # one stream, now on the third pane's run
+    assert st["back"]["live"] == ["/dash/run-1/"]
     assert st["moved"]["framed"] == 1 and st["moved"]["cells"] == 4
     assert st["moved"]["kept"] == 1                               # the old pane's frame is dropped, not hidden
 
@@ -105,7 +105,7 @@ def test_a_pane_that_is_not_shown_holds_no_frame_at_all(hub):
     st = _drive(hub, """N=4;runs=mk(9);slots=runs.slice(0,N).map(r=>r.id);drawMain();press(1);out.moved=state();
       bo.max=true;liveSync();out.maxed=state();bo.max=false;liveSync();out.back=state();""")
     assert st["maxed"]["live"] == [] and st["maxed"]["framed"] == 0 and st["maxed"]["kept"] == 0   # out of sight: no frame, no stream
-    assert st["back"]["live"] == ["http://127.0.0.1:9002/"]       # shown again: the focused pane follows its run again
+    assert st["back"]["live"] == ["/dash/run-2/"]       # shown again: the focused pane follows its run again
 
 
 def test_an_unfocused_pane_shows_the_state_the_page_already_has_and_refreshes_without_a_frame(hub):

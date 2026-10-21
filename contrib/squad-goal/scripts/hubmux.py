@@ -98,10 +98,10 @@ def test_note(slug, apps):
 
 
 def rewrite(body, slug):
-    """A repository's page calls its own API: every absolute /api/ and /test/ reference gains the /<slug> prefix, in the page and in
-    the JSON it fetches (a test card's link is `/test/<id>` there; without the slug the path read `test` as a repository)."""
+    """A repository's page calls its own API: every absolute /api/, /test/ and /dash/ reference gains the /<slug> prefix, in the page
+    and in the JSON it fetches (a test card's link is `/test/<id>` there; without the slug the path read `test` as a repository)."""
     for q in (b'"', b"'", b"`"):
-        for p in (b"/api/", b"/test/"):
+        for p in (b"/api/", b"/test/", b"/dash/"):
             body = body.replace(q + p, q + b"/" + slug.encode() + p)
     return body
 
@@ -123,6 +123,8 @@ def server(port, apps):
                 return self._send(404, root_page(apps, f"no repository at /{slug}", test_note(slug, apps)), "text/html; charset=utf-8")
             self.path = self.path[len(slug) + 1:] or "/"
             if self.path.startswith("?"): self.path = "/" + self.path
+            if self.path.startswith("/dash/"):   # a run's dashboard streams as it arrives: never buffered, never rewritten
+                return getattr(app["mod"].H, "do_" + method)(self)
             real, buf = self.wfile, io.BytesIO()
             self.wfile = buf
             try: getattr(app["mod"].H, "do_" + method)(self)

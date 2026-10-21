@@ -5,6 +5,7 @@ import datetime as dt, glob, hashlib, html, importlib.util, json, os, re, select
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
 import agyquota, chainhealth, modelreg, provkey, router_envelope   # the one envelope source, shared with launch.py (#436)
 from issue_state import board_state, KINDS, TEST_CASE_TITLE, _utc
+import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import NamedTuple
 
@@ -2474,7 +2475,7 @@ function drawMain(force){
     slots.forEach(id=>{const r=byId.get(id);
       const cell=document.createElement("div");cell.className="cell";cell.dataset.id=id;cell.head=document.createElement("small");cell.appendChild(cell.head);
       if(id===live){let f=frames.get(id);
-        if(!f||f.dataset.port!==(r.port||r.url)){f=document.createElement("iframe");f.src=r.url||"http://127.0.0.1:"+r.port+"/";f.dataset.port=r.port;frames.set(id,f)}
+        if(!f||f.dataset.port!==(r.port||r.url)){f=document.createElement("iframe");f.src=r.url||"/dash/"+encodeURIComponent(r.id)+"/";f.dataset.port=r.port;frames.set(id,f)}
         cell.appendChild(f)}
       else if(live){cell.snap=document.createElement("div");cell.snap.className="snap";cell.snap.dataset.snap=id;cell.appendChild(cell.snap);
         cell.onclick=()=>{focus=id;drawMain()}}   // pressing a pane moves the one live frame to it
@@ -2709,7 +2710,7 @@ const PIP_OLD="This run's dashboard has no single-card mode, so the window has n
 const pip=()=>bo.pip||(bo.pip={});
 const pipCard=p=>(p&&p.card)||PIP.card;
 const pipClamp=(v,lo,hi)=>hi<lo?lo:Math.max(lo,Math.min(hi,v));
-const pipURL=(r,card)=>r?((r.url||"http://127.0.0.1:"+r.port+"/")+"?card="+encodeURIComponent(card)):"";
+const pipURL=(r,card)=>r?((r.url||"/dash/"+encodeURIComponent(r.id)+"/")+"?card="+encodeURIComponent(card)):"";
 const pipBox=()=>{const b=$("#board").getBoundingClientRect(),h=$("#bhead").getBoundingClientRect();return{w:b.width,h:b.height,head:h.height}};
 // The size it takes on this board: the minimum first, so a place remembered on a wider board shrinks onto a narrow one and still fits.
 const pipSize=(box,off)=>off?{w:PIP.cw,h:PIP.ch}:{w:box.w<PIP.w?PIP.minW:PIP.w,h:box.h-box.head<PIP.h?PIP.minH:PIP.h};
@@ -3640,18 +3641,74 @@ def access(h, method):
                     port=h.server.server_port, tailnet_host=tn.get("host") or "", allowed_logins=tn.get("allow") or [])
     return Access(v.allowed, v.reason, login if v.allowed else "", bool(tn.get("host")) and host == tn["host"])
 
+DASH_PREFIXES = ("/dash/", "//")
+DASH_PATH = re.compile(r"/dash/([\w-]+)(/[\w./-]*)?")   # a run id, then plain names only: no escape, host or port
+DASH_TIMEOUT_SECS = 60.0
+DASH_REPLY_HEADERS = ("content-type", "content-length", "cache-control", "x-content-type-options", "referrer-policy")
+LOOPBACK_ORIGIN = re.compile(r"^http://(127\.0\.0\.1|localhost)(:\d+)?$")
+
+def dash_port(run_id):
+    """The port the run list names for this run id, or None: the one address a forwarded request can reach."""
+    for r in run_list():
+        if r.get("id") == run_id and str(r.get("port") or "").isdigit(): return int(r["port"])
+    return None
+
+def dash_target(path):
+    """(run id, path on that dashboard) for a /dash/ path, or None when it names anything but a run's own path."""
+    m = DASH_PATH.fullmatch(path.split("?", 1)[0])
+    if not m: return None
+    rest = m[2] or "/"
+    if ".." in rest.split("/"): return None
+    return m[1], rest
+
+def request_target(h):
+    """The target as the client sent it: the handler turns a leading // into /, which would make //host read as a page."""
+    parts = h.requestline.split()
+    return parts[1] if len(parts) > 1 and parts[1].startswith("//") else h.path
+
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
     def refuse(self, reason):
         body = reason.encode()
         self.send_response(403); self.send_header("Content-Type", "text/plain; charset=utf-8"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+    def not_found(self):
+        self.send_response(404); self.send_header("Content-Length", "0"); self.end_headers()
+    def dash(self, method, body=b""):
+        """A run's own dashboard, reached on loopback with its own Host and Origin, so its checks stay as they are. The body
+        streams back as it arrives. Any other run id, port or host answers 404 and opens no connection."""
+        raw = request_target(self)
+        target = dash_target(raw)
+        port = dash_port(target[0]) if target else None
+        if port is None or (method == "POST" and target[1] != "/run/control"): return self.not_found()
+        rest = target[1] + ("?" + raw.split("?", 1)[1] if "?" in raw else "")
+        headers = {"Host": f"127.0.0.1:{port}", "Origin": f"http://127.0.0.1:{port}"}
+        for k in ("Content-Type", "Last-Event-ID"):
+            if self.headers.get(k): headers[k] = self.headers[k]
+        up = http.client.HTTPConnection("127.0.0.1", port, timeout=DASH_TIMEOUT_SECS)
+        try:
+            up.request(method, rest, body=body if method == "POST" else None, headers=headers)
+            r = up.getresponse()
+        except (OSError, http.client.HTTPException):
+            up.close(); msg = b"dashboard unreachable\n"
+            self.send_response(502); self.send_header("Content-Length", str(len(msg))); self.end_headers(); self.wfile.write(msg); return
+        try:
+            self.send_response(r.status)
+            for k, v in r.getheaders():
+                if k.lower() in DASH_REPLY_HEADERS: self.send_header(k, v)
+            self.send_header("Connection", "close"); self.end_headers(); self.close_connection = True
+            while chunk := r.read1(65536):
+                self.wfile.write(chunk); self.wfile.flush()
+        except (OSError, http.client.HTTPException): pass
+        finally: up.close()
     def do_GET(self):
         a = access(self, "GET")
         if not a.allowed: return self.refuse(a.reason)
+        if request_target(self).startswith(DASH_PREFIXES): return self.dash("GET")
         if self.path.startswith("/held/"):   # a run the childcc pass holds: its dashboard, started when none runs (#689)
-            port = open_held(re.sub(r"[^\w-]", "", self.path[6:].split("?")[0]))
-            if port is None: self.send_response(404); self.send_header("Content-Length", "0"); self.end_headers(); return
-            self.send_response(302); self.send_header("Location", f"http://127.0.0.1:{port}/"); self.send_header("Content-Length", "0"); self.end_headers(); return
+            name = re.sub(r"[^\w-]", "", self.path[6:].split("?")[0])
+            if open_held(name) is None: return self.not_found()
+            refresh_runs()   # the run list names the new dashboard, so the forward finds it
+            self.send_response(302); self.send_header("Location", f"/dash/{name}/"); self.send_header("Content-Length", "0"); self.end_headers(); return
         if self.path.startswith("/test/"):   # a test.sh pass: its log, refreshed while it runs
             n = re.sub(r"[^\w-]", "", self.path[6:]); T = STATE / "tests"
             try: d = json.loads((T / (n + ".json")).read_text())
@@ -3681,7 +3738,13 @@ class H(BaseHTTPRequestHandler):
         # a cross-site page must not be able to write: a loopback write needs our own origin, a tailnet write the tailnet origin (the seam), and a JSON body
         a = access(self, "POST")
         org = self.headers.get("Origin") or ""
-        ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote") and (a.tailnet or re.match(r"^http://(127\.0\.0\.1|localhost)(:\d+)?$", org)) and "json" in (self.headers.get("Content-Type") or "")
+        if request_target(self).startswith(DASH_PREFIXES):   # the body is read before any refusal, as below
+            length = self.headers.get("Content-Length") or "0"
+            raw = self.rfile.read(min(int(length), 1 << 20)) if length.isdigit() else b""
+            if not a.allowed: return self.refuse(a.reason)
+            if not (a.tailnet or LOOPBACK_ORIGIN.match(org)) or "json" not in (self.headers.get("Content-Type") or ""): return self.refuse("forbidden")
+            return self.dash("POST", raw)
+        ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote") and (a.tailnet or LOOPBACK_ORIGIN.match(org)) and "json" in (self.headers.get("Content-Type") or "")
         try:
             raw = self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 1 << 20))   # read before any answer: a refusal that leaves the body unread resets the connection; the models panel posts back ~20 KB of read-only fields (#684)
             if not ok: out = {"err": "forbidden"}
