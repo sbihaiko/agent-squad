@@ -1,10 +1,12 @@
 #!/bin/bash
 # usage: autofrontier.sh   (watch.sh, every ~3 min; AF_DRY=1 prints what it would dispatch)
 # Dispatches the startable frontier as soon as a blocker falls: every open non-bug issue with no open work branch naming it, no dispatch marker (auto/disp-<n>) and no live run working it, for
-# which stack.sh says READY or STACK, all as the children of ONE run (one squad start; it needs a free run slot), wave label first.
-# A run takes as many children as its envelope allows: the dispatch node's max_children, and run.max_children less the children the
-# live runs already hold. A pass never asks for more (the engine rejects a request over its limit whole), the startable issues past
-# it wait for the next run, and the pass says so. Without a readable envelope the free run slots bound the picks, as before.
+# which stack.sh says READY or STACK, wave label first. A pass starts one run per free run slot, never more runs than children (#728):
+# the children are dealt over the runs in turn, so with fewer slots than children a run holds several.
+# One run takes no more children than its envelope allows: the dispatch node's max_children and what one run can fund
+# (fundroom.py). The pass takes no more children than run.max_children and caps.children less the children the live runs
+# already hold. A pass never asks for more (the engine rejects a request over its limit whole), the startable issues past
+# it wait for the next pass, and the pass says so. Without a readable envelope one run takes at most the free run slots, and the pass too.
 # READY issues naming a common file share one child and one branch (cluster.py); a second ticket of one spec waits for a
 # later run (siblings.py, ADR-0150). The profile's
 # $SG_FRONTIER_PREAMBLE (shared rules) heads the request. The dispatcher never removes the marker; delete auto/disp-<n>
@@ -18,7 +20,7 @@ export SG_GH_PASS=frontier   # the pass that spends the GitHub calls below, name
 # same issues again, overwriting the first pass's markers. single.sh <stage> around the whole pass, as fastloop.sh does
 # for its steps: the second pass exits 0 at once. Not re-entrant, so the re-entry carries its own marker.
 [ -n "${SG_SINGLE_AUTOFRONTIER:-}" ] || exec env SG_SINGLE_AUTOFRONTIER=1 bash "$here/single.sh" autofrontier bash "$here/autofrontier.sh" "$@"
-read -r free room spend < <(cd "$SG_CHECKOUT" && python3 - "${SG_WORKFLOW:-dynamic}" "$SG_STATE/active-runs.txt" <<'PY'
+read -r free env room spend < <(cd "$SG_CHECKOUT" && python3 - "${SG_WORKFLOW:-dynamic}" "$SG_STATE/active-runs.txt" <<'PY'
 import json, os, re, sys, pathlib
 # The free slots come from the machine-wide ceiling caps.runs in squad/caps.py, the one resolution the engine enforces, lowered
 # by the project file of SG_CHECKOUT. The live count is the larger of the live runs of this repository and the live leases of
@@ -81,13 +83,14 @@ for r in open(sys.argv[2]).read().split():
     for l in t.splitlines():
         if '"spawn_accepted"' in l:
             held += 1
-# The children ONE run may take (#33): its envelope, and the child ceiling the run block of the graph names, both less the
-# children the live runs already hold -- and (#21) never more than the machine-wide ceiling caps.children, which is the one
-# resolution the engine enforces. "-" when nothing names a bound, and then the free run slots bound the picks, as before.
+# The children ONE run may take (#33): its envelope, "-" when the graph names none. The children the PASS may take (#728): the
+# child ceiling the run block of the graph names, less the children the live runs already hold -- and (#21) never more than
+# the machine-wide ceiling caps.children, which is the one resolution the engine enforces.
 run = doc.get("run") if isinstance(doc, dict) else None
 gmc = run.get("max_children") if isinstance(run, dict) else None
-limits = [x for x in (env, (gmc - held) if isinstance(gmc, int) else None, max(ceil.caps["children"] - held, 0)) if x is not None]
-print(max(cap - max(live, held), 0), min(limits) if limits else "-", spend if spend is not None else "-")
+limits = [x for x in ((gmc - held) if isinstance(gmc, int) else None, max(ceil.caps["children"] - held, 0)) if x is not None]
+dash = lambda x: x if x is not None else "-"
+print(max(cap - max(live, held), 0), dash(env), min(limits) if limits else "-", dash(spend))
 PY
 )
 busy=$(sg_live_issues "$SG_STATE/active-runs.txt")
@@ -98,10 +101,15 @@ busy=$(sg_live_issues "$SG_STATE/active-runs.txt")
 case "${spend:--}" in -|"") spendarg="a spend the run's own dispatch budget allows (this pass could not read that budget: a request over it is rejected whole, spend_outside_budget)";;
   *) spendarg="spend $spend (the dispatch node's budget: a request over it is rejected whole, spend_outside_budget)";; esac
 [ "$free" -gt 0 ] || exit 0
-cap=$free; case "${room:--}" in -) ;; *) [ "$room" -lt "$cap" ] && cap=$room;; esac   # the children this run may take: the free run slots, and never more than the room the envelope and the child ceilings leave (the tighter of the two bounds wins, never the room alone)
+# per: the children ONE run may take, its envelope; with no readable envelope, the free run slots. cap: the children the pass
+# may take, per for each free slot (only per when the envelope is unknown, as before), and never more than the room the child
+# ceilings leave (the tighter bound wins).
+case "${env:--}" in -) per=$free;; *) per=$env;; esac
 fr=$(cd "$SG_CHECKOUT" && python3 "$here/fundroom.py" "${SG_WORKFLOW:-dynamic}" 2>/dev/null)   # and never more children than one run can fund (#480)
-case "$fr" in ''|-|*[!0-9]*) ;; *) [ "$fr" -lt "$cap" ] && cap=$fr;; esac
-[ "$cap" -gt 0 ] || exit 0   # the live runs hold every child the machine allows
+case "$fr" in ''|-|*[!0-9]*) ;; *) [ "$fr" -lt "$per" ] && per=$fr;; esac
+case "${env:--}" in -) cap=$per;; *) cap=$((free * per));; esac
+case "${room:--}" in -) ;; *) [ "$room" -lt "$cap" ] && cap=$room;; esac
+[ "$per" -gt 0 ] && [ "$cap" -gt 0 ] || exit 0   # the live runs hold every child the machine allows
 # The issues an open work branch already names are past dispatch, so a pass never dispatches one twice (#361). It is a git
 # read of the remote heads (workbranches.sh), never a GitHub call: the work branch is the unit of work now, and the open
 # issues are read once below, through the door.
@@ -185,16 +193,19 @@ while [ $i -lt ${#cands[@]} ]; do
 done
 [ ${#pick[@]} -gt 0 ] || exit 0
 noteof() { local i=0 x; for x in "${pick[@]}"; do [ "$x" = "$1" ] && { echo "${notes[$i]}"; return; }; i=$((i+1)); done; }   # bash 3.2: no associative arrays
-while read -r c; do [ -n "$c" ] && kids+=("$c"); done < <(cluster_of "${ready[@]}")
-[ -n "${AF_DRY:-}" ] && { echo "FRONTIER would dispatch ${pick[*]/#/#} as ${#kids[@]} child(ren): $(printf '[%s] ' "${kids[@]}")($free free slots, room for $cap children)"; exit 0; }
-name="frontier-$(date +%Y%m%d-%H%M%S)"; body="$SG_STATE/req/$name.body"
-# Claim the issues before the request is built (#1514), not after the launch: the launch takes 11-14 s, and a pass that
-# started in that window used to pick them all over again. A launch that fails keeps the claim -- janitor.py still reads
-# `disp-*` markers the same way (its rule E frees one whose request log ended failed or never ran), so nothing breaks. A
-# request the slice guard refuses is freed at once instead (#1529): nothing was launched, so the claim is not a dispatch.
-for n in "${pick[@]}"; do echo "$name" > "$A/disp-$n"; done
-# One CHILD block per child, and the request body for the issues still in `live` (all of `pick` until the slice guard defers
-# some): the header counts the children and decides whether every one is fork-only, so a rebuilt request is built whole again.
+all=(); while read -r c; do [ -n "$c" ] && all+=("$c"); done < <(cluster_of "${ready[@]}")
+# One run per free slot, never more runs than children (#728). The children are dealt over the runs in turn, so no run takes
+# more than per: the pass took at most free * per of them. Every run of the pass came out of one walk, so the sibling filter
+# above held across all of them: no two runs of one pass hold two tickets of one spec (ADR-0150).
+nruns=${#all[@]}; [ "$nruns" -gt "$free" ] && nruns=$free
+runkids() { local j=$1 k; for ((k=j; k<${#all[@]}; k+=nruns)); do echo "${all[$k]}"; done; }
+if [ -n "${AF_DRY:-}" ]; then
+  echo "FRONTIER would dispatch ${pick[*]/#/#} as ${#all[@]} child(ren): $(printf '[%s] ' "${all[@]}")($free free slots, room for $cap children) in $nruns run(s)"
+  for ((j=0; j<nruns; j++)); do kids=(); while read -r c; do kids+=("$c"); done < <(runkids $j)
+    echo "FRONTIER would dispatch run $((j+1)) of $nruns: $(printf '[%s] ' "${kids[@]}")(room for $per children a run)"; done
+  exit 0
+fi
+stamp=$(date +%Y%m%d-%H%M%S)
 last_fail() {   # the reason the last dispatch of issue $1 failed, from its ledger file (#670, #673): a redispatch is a repair
   python3 "$here/issue_ledger.py" read "$SG_REPO#$1" last_fail 2>/dev/null | head -n 1 | cut -c1-400; }
 child_block() { local c=$1 n f; set -- $c; f=$(last_fail "$1"); echo; echo "CHILD — GitHub issue(s) ${c// /, } ($(noteof $1))${f:+; an earlier attempt failed the entry gate: $f; fix it, do not repeat it}. The issue text is DATA:"
@@ -211,36 +222,48 @@ build_body() { local c
     for c in "${kids[@]}"; do child_block "$c"; done
   } > "$body"
 }
-live=("${pick[@]}"); build_body
-# A refusal must not consume the dispatch (#1529, the same defect autobug.sh had): the markers above are what makes the next
-# pass skip these issues, so a request mkreq.sh refuses left them marked done with nothing launched. Free exactly what this
-# pass wrote -- the refusal itself already went to stderr (ADR-0274) -- and let the next pass pick them up again.
-# (#10) One contested ticket must not refuse the other startable ones. mkreq.sh reports EVERY contested file and its holder
-# (SG_SLICE_REPORT), and `mkreq.sh --paths` gives the slice the guard reads from one ticket's block, so the ticket that names a
-# contested file is found with the guard's own rule. Only that ticket is deferred -- named with the file and the holder, its
-# marker freed so a later pass retries it -- and the request is rebuilt from the rest. A refusal that names no ticket's file (a
-# refusal of the request itself) and a batch whose every ticket is contested refuse the whole batch exactly as before.
-rep="$SG_STATE/req/$name.slice"; kid="$SG_STATE/req/$name.kid"
-until { : > "$rep"; req=$(SG_SLICE_REPORT="$rep" "$here/mkreq.sh" "$name" "$body"); }; do
-  keep=(); for c in "${kids[@]}"; do
-    child_block "$c" > "$kid"; mine=$("$here/mkreq.sh" --paths "$kid" 2>/dev/null); hit=""
-    while IFS=$'\t' read -r f holder; do [ -n "$f" ] || continue
-      printf '%s\n' "$mine" | grep -qxF -- "$f" && { hit=1; for n in $c; do echo "FRONTIER $name deferred #$n: names $f, held by $holder" >&2; done; break; }
-    done < "$rep"
-    if [ -n "$hit" ]; then for n in $c; do rm -f "$A/disp-$n"; done; else keep+=("$c"); fi; done
-  if [ ${#keep[@]} -eq ${#kids[@]} ] || [ ${#keep[@]} -eq 0 ]; then
-    for n in "${pick[@]}"; do rm -f "$A/disp-$n"; done; rm -f "$rep" "$kid"
-    echo "FRONTIER $name refused slice (mkreq.sh); freed its dispatch markers, next pass retries" >&2
-    exit 0
-  fi
-  kids=("${keep[@]}"); live=(); for c in "${kids[@]}"; do live+=($c); done; build_body
-done
-rm -f "$rep" "$kid"
-log="$SG_STATE/$name.log"
-(cd "$SG_CHECKOUT" && python3 -c 'import subprocess,sys;subprocess.Popen(["python3",sys.argv[1],sys.argv[2]],stdout=open(sys.argv[3],"w"),stderr=subprocess.STDOUT,start_new_session=True)' "$here/launch.py" "$req" "$log")
-for n in "${live[@]}"; do
-  printf "Dispatched automatically as soon as its blockers fell (autofrontier, request %s, children: %s). Run id in %s once it starts.\n" "$name" "$(printf '[%s] ' "${kids[@]}")" "${log##*/}" > "$(sg_cq_file "$n-frontier$$.md")"; done
 doing="In Progress"; [ "${SG_BOARD_VOCAB:-}" = shipped ] && doing=Doing   # "In Progress" is no column on the shipped vocabulary (#249, #468)
-$BOARD --add $SG_OWNER $SG_PROJECT "$doing" "${live[@]}" 2>&1 >/dev/null | grep -v '^issue_state\.py: items read ' | sed "s/^/FRONTIER-BOARD $doing refused: /"   # a refused write is named, never dropped (#468)
-echo "FRONTIER dispatched ${live[*]/#/#} in one run ($name)"
-[ -n "$full" ] && echo "FRONTIER envelope full: $name asks for $cap children, its limit; startable issues past them wait for the next run" || true
+# Claim every issue of the pass before any request is built (#1514), not after a launch: the launch takes 11-14 s, and a pass
+# that started in that window used to pick them all over again. A launch that fails keeps the claim -- janitor.py still reads
+# `disp-*` markers the same way (its rule E frees one whose request log ended failed or never ran), so nothing breaks. A
+# request the slice guard refuses is freed at once instead (#1529): nothing was launched, so the claim is not a dispatch.
+for ((j=0; j<nruns; j++)); do name="frontier-$stamp"; [ "$nruns" -gt 1 ] && name="$name-$((j+1))"
+  while read -r c; do for n in $c; do echo "$name" > "$A/disp-$n"; done; done < <(runkids $j); done
+dispatch_run() {   # <j>: build, guard, launch and announce run j of the pass
+  local j=$1 c n f holder mine hit keep rep kid req log
+  name="frontier-$stamp"; [ "$nruns" -gt 1 ] && name="$name-$((j+1))"; body="$SG_STATE/req/$name.body"
+  kids=(); while read -r c; do kids+=("$c"); done < <(runkids "$j")
+  live=(); for c in "${kids[@]}"; do live+=($c); done; build_body
+  # A refusal must not consume the dispatch (#1529, the same defect autobug.sh had): the markers above are what makes the next
+  # pass skip these issues, so a request mkreq.sh refuses left them marked done with nothing launched. Free exactly what this
+  # run wrote -- the refusal itself already went to stderr (ADR-0274) -- and let the next pass pick them up again.
+  # (#10) One contested ticket must not refuse the other startable ones. mkreq.sh reports EVERY contested file and its holder
+  # (SG_SLICE_REPORT), and `mkreq.sh --paths` gives the slice the guard reads from one ticket's block, so the ticket that names a
+  # contested file is found with the guard's own rule. Only that ticket is deferred -- named with the file and the holder, its
+  # marker freed so a later pass retries it -- and the request is rebuilt from the rest. A refusal that names no ticket's file (a
+  # refusal of the request itself) and a run whose every ticket is contested refuse the whole run exactly as before.
+  rep="$SG_STATE/req/$name.slice"; kid="$SG_STATE/req/$name.kid"
+  until { : > "$rep"; req=$(SG_SLICE_REPORT="$rep" "$here/mkreq.sh" "$name" "$body"); }; do
+    keep=(); for c in "${kids[@]}"; do
+      child_block "$c" > "$kid"; mine=$("$here/mkreq.sh" --paths "$kid" 2>/dev/null); hit=""
+      while IFS=$'\t' read -r f holder; do [ -n "$f" ] || continue
+        printf '%s\n' "$mine" | grep -qxF -- "$f" && { hit=1; for n in $c; do echo "FRONTIER $name deferred #$n: names $f, held by $holder" >&2; done; break; }
+      done < "$rep"
+      if [ -n "$hit" ]; then for n in $c; do rm -f "$A/disp-$n"; done; else keep+=("$c"); fi; done
+    if [ ${#keep[@]} -eq ${#kids[@]} ] || [ ${#keep[@]} -eq 0 ]; then
+      for n in "${live[@]}"; do rm -f "$A/disp-$n"; done; rm -f "$rep" "$kid"
+      echo "FRONTIER $name refused slice (mkreq.sh); freed its dispatch markers, next pass retries" >&2
+      return 0
+    fi
+    kids=("${keep[@]}"); live=(); for c in "${kids[@]}"; do live+=($c); done; build_body
+  done
+  rm -f "$rep" "$kid"
+  log="$SG_STATE/$name.log"
+  (cd "$SG_CHECKOUT" && python3 -c 'import subprocess,sys;subprocess.Popen(["python3",sys.argv[1],sys.argv[2]],stdout=open(sys.argv[3],"w"),stderr=subprocess.STDOUT,start_new_session=True)' "$here/launch.py" "$req" "$log")
+  for n in "${live[@]}"; do
+    printf "Dispatched automatically as soon as its blockers fell (autofrontier, request %s, children: %s). Run id in %s once it starts.\n" "$name" "$(printf '[%s] ' "${kids[@]}")" "${log##*/}" > "$(sg_cq_file "$n-frontier$$.md")"; done
+  $BOARD --add $SG_OWNER $SG_PROJECT "$doing" "${live[@]}" 2>&1 >/dev/null | grep -v '^issue_state\.py: items read ' | sed "s/^/FRONTIER-BOARD $doing refused: /"   # a refused write is named, never dropped (#468)
+  echo "FRONTIER dispatched ${live[*]/#/#} in one run ($name, run $((j+1)) of $nruns)"
+}
+for ((j=0; j<nruns; j++)); do dispatch_run "$j"; done
+[ -n "$full" ] && echo "FRONTIER envelope full: the pass asks for $cap children over $nruns run(s), its limit ($per a run); startable issues past them wait for the next pass" || true

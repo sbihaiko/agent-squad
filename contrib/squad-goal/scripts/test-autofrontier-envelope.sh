@@ -55,6 +55,7 @@ E
   export SG_GH_AGGREGATE_WINDOW=0   # a case rewrites the list between passes: no snapshot answers the second one
   export HOME=$d/home SG_STATE=$d/st SG_CHECKOUT=$d/co SG_REPO=o/r SG_FRONTIER_LABEL=frontier MKLOG=$d/mk.log LAUNCHLOG=$d/launch.log BOARDLOG=$d/board.log
   export GH_ISSUES=$d/issues.json GH_OPEN=$d/open.json GH_CLOSED=$d/closed.json GH_ISSUE1=$d/issue1.json GH_ISSUEDIR=$d/issue; mkdir -p "$GH_ISSUEDIR"
+  printf 'caps:\n  runs: 1\n' > "$d/co/docs/squad/defaults.yaml"   # one free run slot: a pass with more slots deals the children over several runs (#728), and the envelope bounds each run
   printf '[]' > "$GH_OPEN"; printf '[]' > "$GH_CLOSED"
   printf '{"number":0,"title":"t","body":"","created_at":"2026-01-01T00:00:00Z"}' > "$GH_ISSUE1"
 }

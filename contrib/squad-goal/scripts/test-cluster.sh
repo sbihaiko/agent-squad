@@ -55,13 +55,14 @@ printf '%s' "$FK" > "$T/issues.json"
 r=$(AF_DRY=1 bash "$T/s/autofrontier.sh" 2>&1)
 case "$r" in *"[1500 1501]"*) ok "frontier: fork-only issues naming one file share one child";; *) ko "fork-only cluster: '$r'";; esac
 case "$r" in *"2 child(ren): [1500 1501] [1502]"*) ok "frontier: an unrelated fork-only pick keeps its own child";; *) ko "fork-only alone: '$r'";; esac
-# The machine-wide ceiling (#21): a project that lowers caps.runs to 1 dispatches one child; a ceiling filled by another
+# The machine-wide ceiling (#21): a project that lowers caps.runs to 1 dispatches one run, which takes as many children as its
+# envelope allows (#728: the free slots bound the runs, the envelope the children of each); a ceiling filled by another
 # repository's live runs dispatches none and fails nothing; a project that raises the pair stops the pass by name. The one
 # child of that run holds the whole shared-file slice: the envelope bounds the CHILDREN, cluster.py decides them, and a
 # ticket that names a file a taken ticket already names costs no second child (#1521). Bounding the tickets instead cut
 # the pair in two, which is the conflict the clustering exists to stop.
 printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"
-r=$(AF_DRY=1 bash "$T/s/autofrontier.sh" 2>&1); case "$r" in *"as 1 child(ren): [1500 1501] (1 free slots, room for"*) ok "caps: a project lowering caps.runs to 1 dispatches one run, its shared-file slice whole";; *) ko "caps.runs 1: '$r'";; esac
+r=$(AF_DRY=1 bash "$T/s/autofrontier.sh" 2>&1); case "$r" in *"as 2 child(ren): [1500 1501] [1502] (1 free slots, room for"*"in 1 run(s)"*) ok "caps: a project lowering caps.runs to 1 dispatches one run, its shared-file slice whole";; *) ko "caps.runs 1: '$r'";; esac
 printf 'caps:\n  runs: 2\n' > "$T/co/docs/squad/defaults.yaml"; sleep 300 & held=$!
 (cd "$SG_SQUAD" && python3 -c 'import sys; from squad import caps; c = caps.ceiling(); [c.try_take("runs", f"other-repo-{i}", pid=int(sys.argv[1])) for i in range(2)]' "$held")
 r=$(AF_DRY=1 bash "$T/s/autofrontier.sh" 2>&1); rc=$?; [ $rc -eq 0 ] && [ -z "$r" ] && ok "caps: a ceiling full of another repository's runs dispatches nothing and fails nothing" || ko "caps full: rc=$rc '$r'"
