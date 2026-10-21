@@ -8,6 +8,7 @@ usage: issue_ledger.py read  <key> [state|count|last_fail|held|wave]  the record
        issue_ledger.py stop  <key> <why> [own|loop]          the ledger stops: prints "- <run>: <why>" for each run counted
        issue_ledger.py wave  <key> <run> <state> <cause> [keep]  one wave event: prints recorded|duplicate|terminal|kept|floor
        issue_ledger.py rearm <key>                           the facts go, and the SQUAD-NOT-STARTABLE comment with them
+       issue_ledger.py entered <owner>/<repo>                "<run>\t<n>" for each run a child of the repository entered
 
 This module is the only writer of $SG_STATE/state/<owner>__<repo>__<n>.json. The key is <owner>/<repo>#<n>, the address
 seam's (ADR-0138), never a bare issue number. Owner intent stays on GitHub (ready-for-agent, the Todo card, frozen:owner,
@@ -25,7 +26,9 @@ One transition function (ADR-0149): `transition` takes every event -- fail, stop
 no other code changes the file. An event's identity is its kind and its run. A wave event (wave.sh: `entered`, `held`,
 `refused`, `stuck`, `delivered`) sets the run's wave fact, `{state, cause, ts}`: the same state and cause again is a
 duplicate and writes nothing; a `delivered` run is terminal, so a late event of that run changes nothing; `keep` leaves a
-fact the run already has; any other event of the run replaces its fact, in the order the writers send them.
+fact the run already has; any other event of the run replaces its fact, in the order the writers send them. An `entered`
+event also sets the fact's `entered` field, and every later event of the run keeps it: a child that left its wave after the
+entry still entered it. That field is the entry's one record; `entered` lists it for the wave readers (janitor, startability).
 
 A corrupt file holds the issue (ADR-0149 rule 4): `read` gives the state `held` and names the file and the cause, every
 writer but `rearm` refuses it and leaves it as it is, and the dispatch passes read `held` as a stop. It never reads as the
@@ -185,6 +188,8 @@ def _wave(rec, ev):   # -> (recorded|duplicate|terminal|kept|floor, changed): on
     if old and ev.get("keep"): return "kept", False
     if old and old.get("state") == st and old.get("cause") == cause: return "duplicate", False
     W[run] = {"state": st, "cause": cause, "ts": time.time()}
+    if st == "entered": W[run]["entered"] = cause
+    elif old and old.get("entered"): W[run]["entered"] = old["entered"]   # the entry stays a fact of the run
     return "recorded", True
 
 
@@ -232,10 +237,24 @@ def rearm(key):   # the SQUAD-NOT-STARTABLE comment goes through the comment que
     return q / name
 
 
+def entered(repo):   # -> [(run, n)]: each run a child of the repository entered, from every ledger file of it (ADR-0149)
+    o, r, _ = parse(f"{repo}#0"); out = []
+    for p in sorted(state_dir().joinpath("state").glob(f"{o}__{r}__*.json")):
+        n = p.name[len(f"{o}__{r}__"):-len(".json")]
+        if not n.isdigit(): continue
+        try: rec = load(f"{repo}#{n}")
+        except Corrupt: continue   # a corrupt file holds its issue at dispatch already; it names no entry
+        out += [(run, n) for run, fact in sorted((rec.get("wave") or {}).items()) if isinstance(fact, dict) and fact.get("entered")]
+    return out
+
+
 def main(argv):
     if len(argv) < 2: print(__doc__.split("\n\n")[0], file=sys.stderr); return 2
     op, key, rest = argv[0], argv[1], argv[2:]
     try:
+        if op == "entered":
+            for run, n in entered(key): print(f"{run}\t{n}")
+            return 0
         parse(key)
         if op == "read":
             d = read(key)

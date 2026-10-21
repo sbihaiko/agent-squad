@@ -373,12 +373,23 @@ for x, rs in byissue.items():
         say(f"DUP issue #{x} accepted by live runs {', '.join(rs)} (not killed)")
         if not dry: mk.touch()
 # An issue is held from its dispatch until its delivery ends (#539): a run with a verdict whose wave marker auto/wave-<run>
-# stands (wave.sh clears it when the wave lands) still delivers its issues, and so does a child that entered such a wave.
-# startability.sh's sg_live_issues reads the same markers for both dispatchers. No rule releases an issue it holds.
+# stands (wave.sh clears it when the wave lands) still delivers its issues, and so does a child that entered such a wave (the
+# entered fact of its ledger, ADR-0149). startability.sh's sg_live_issues reads the same facts for both dispatchers. No rule
+# releases an issue it holds.
+def ledger():   # the issue ledger module beside this script (ADR-0149); -I keeps the script's directory off sys.path
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+    import issue_ledger
+    return issue_ledger
+_entered = None
+def entered():   # {(run, issue)} of each child of repo0 that entered a wave, read from the ledgers once a pass
+    global _entered
+    if _entered is None:
+        try: _entered = set(ledger().entered(repo0))
+        except (OSError, ImportError, ValueError) as e: say(f"LEDGER-UNREAD: the entered facts could not be read ({e})"); _entered = set()
+    return _entered
 delivering = set()
-for m in (st / "auto").glob("entered-*"):
-    hit = re.fullmatch(r"entered-(.+)-(\d+)", m.name)
-    if hit and (st / "auto" / f"wave-{hit.group(1)}").exists(): delivering.add(hit.group(2))
+for run_, n_ in entered():
+    if (st / "auto" / f"wave-{run_}").exists(): delivering.add(n_)
 for r in names:
     f = folder(r); i = read(f) if f.exists() else None
     if i and i["verdict"] and any((st / "auto" / f"wave-{x}").exists() for x in {f.name, i["run_id"]} if x): delivering |= req_issues(f) | i["acc"]
@@ -499,10 +510,10 @@ def wave_facts(n, runs):   # the board facts of issue n whose child entered the 
     tip, standing = _wv.get(run, ("", ""))
     approved = bool(run) and review_of("wave/" + run, tip) == "approved"
     return board_facts.issue_facts(entered=bool(run), standing=standing, approved=approved, dev_running=bool(run) and standing in board_facts.IN_DEV and dev_ci_running(), review_waits=False)
-def wave_entry(n, f, i):   # the wave's say over issue n of a run (#467): None when the run cut no wave, "entered" when its child entered it (wave.sh's entered-<run>-<n>), "open" when the wave can still take it, "out" when the wave landed without it. A child's own land is in its tree, never in the wave, so for a run that cut a wave only the entry is Code Complete (ADR-0145 rule 12)
+def wave_entry(n, f, i):   # the wave's say over issue n of a run (#467): None when the run cut no wave, "entered" when its child entered it (the entered fact of its ledger, ADR-0149), "open" when the wave can still take it, "out" when the wave landed without it. A child's own land is in its tree, never in the wave, so for a run that cut a wave only the entry is Code Complete (ADR-0145 rule 12)
     names = {f.name, i["run_id"]}; a = st / "auto"
     if not any((a / f"waved-{r}").exists() or (a / f"wave-{r}").exists() for r in names): return None
-    if any((a / f"entered-{r}-{n}").exists() for r in names): return "entered"
+    if any((r, str(n)) in entered() for r in names): return "entered"
     return "open" if any((a / f"wave-{r}").exists() for r in names) else "out"
 def pr_count(n):   # how many remote work branches name the issue: one exists once the issue is past dispatch. The name is kept for its callers; no pull request is read
     return str(len(work_branches().get(str(n), [])))
@@ -866,8 +877,7 @@ def count_failed(n, f, i):   # O (#609): a run that ended with nothing delivered
     # loaded sends the call: wave.sh counts a run once anyway.
     rec = {}
     try:
-        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the ledger sits beside this script; -I keeps the script's directory off sys.path
-        import issue_ledger
+        issue_ledger = ledger()
         rec = issue_ledger.read(f"{repo0}#{n}")
         if rec["state"] == "held": say(f"LEDGER-HELD #{n}: {rec['held']}; run {f.name} is not counted"); return False
         if any(x["run"] == f.name for k in issue_ledger.LEDGERS for x in rec[k]["runs"]): return True

@@ -25,18 +25,22 @@ sg_todo_cards() {
 # so accept the two request forms that the dispatchers write and return exact decimal issue numbers only.
 # An issue is held from its dispatch until its delivery ends (#539): a run with a verdict whose wave marker
 # auto/wave-<run> stands (wave.sh clears it when the wave lands) still holds its issues, and so does a child that entered
-# such a wave (auto/entered-<run>-<n>), whether or not its run is still listed. A run whose record cannot be read holds
+# such a wave (the entered fact of its ledger, ADR-0149), whether or not its run is still listed. A run whose record cannot be read holds
 # the issues its request names: an unknown delivery state keeps the hold.
 sg_live_issues() {   # <active-runs.txt>: print comma-separated issue numbers from live spawn_accepted events
-  python3 - "$SG_CHECKOUT" "$1" <<'PY'
-import json, pathlib, re, sys
-root, active = sys.argv[1:]
+  python3 - "$SG_CHECKOUT" "$1" "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" "${SG_REPO:-}" <<'PY'
+import json, os, pathlib, re, sys
+root, active, here, repo = sys.argv[1:]
 auto = pathlib.Path(active).parent / "auto"
 busy = set()
-for m in auto.glob("entered-*"):
-    hit = re.fullmatch(r"entered-(.+)-(\d+)", m.name)
-    if hit and (auto / f"wave-{hit.group(1)}").exists():
-        busy.add(hit.group(2))
+os.environ.setdefault("SG_STATE", str(auto.parent)); sys.path.insert(0, here)
+try:
+    import issue_ledger
+    for run, n in (issue_ledger.entered(repo) if repo else []):
+        if (auto / f"wave-{run}").exists():
+            busy.add(n)
+except (OSError, ImportError, ValueError) as e:
+    print(f"startability: the entered facts could not be read ({e})", file=sys.stderr)
 try:
     runs = pathlib.Path(active).read_text().split()
 except OSError:

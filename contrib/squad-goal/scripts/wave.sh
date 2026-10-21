@@ -373,8 +373,7 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
     sha=$($G rev-parse HEAD)
     if $G push -q origin "HEAD:refs/heads/$w" 2>/dev/null; then
       board_write "Code Complete" "$iss"   # a refused write is named, never dropped (#593)
-      : > "$SG_STATE/auto/entered-$run-$iss"   # the durable record of the entry (#467): the janitor's Code Complete reads it, never the run's own land
-      wave_fact "$run" "$iss" entered "entered $w at $sha"   # the same fact in the ledger (ADR-0149); the marker stays until its readers move
+      wave_fact "$run" "$iss" entered "entered $w at $sha"   # the durable record of the entry (#467, ADR-0149): the janitor's Code Complete reads it, never the run's own land
       echo "WAVE $br $sha entered $w (#$iss)"; return 0
     fi
     [ "$try" = 1 ] || break
@@ -581,12 +580,13 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
       # their trees are gone, so no entry exists. The issues the run was dispatched for are named, and each one whose
       # non-RED `Refs #N` commit the base holds (an ancestor of origin/$base by construction) is delivered. A RED commit
       # carries the same line and proves nothing, so it never counts.
-      local dispatched="" delivered=""
+      local dispatched="" delivered="" ent
+      ent=$(python3 "$here/issue_ledger.py" entered "$SG_REPO" 2>/dev/null | awk -F '\t' -v r="$run" '$1 == r { print $2 }' | tr '\n' ' ')
       for n in $(run_issues "$rd"); do
         dispatched="${dispatched:+$dispatched, }#$n"
-        # A child that entered this wave (entered-<run>-<n>) and still leaves it empty reached the base by another route,
-        # whatever its message says: the entry is the proof, so it is delivered, never requeued (#620).
-        [ -e "$SG_STATE/auto/entered-$run-$n" ] && { delivered="${delivered:+$delivered }$n"; continue; }
+        # A child that entered this wave (the entered fact of its ledger, ADR-0149) and still leaves it empty reached the base
+        # by another route, whatever its message says: the entry is the proof, so it is delivered, never requeued (#620).
+        case " $ent " in *" $n "*) delivered="${delivered:+$delivered }$n"; continue;; esac
         sc log --format=%B%x1e -E --grep="Refs #$n([^0-9]|\$)" "origin/$base" 2>/dev/null \
           | awk -v RS='\036' '/Refs #/ && $0 !~ /TDD RED/ {f=1} END {exit !f}' && delivered="${delivered:+$delivered }$n"
       done
