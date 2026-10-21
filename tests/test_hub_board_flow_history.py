@@ -165,7 +165,7 @@ def test_samples_older_than_thirty_days_keep_one_per_utc_day_and_newer_ones_stay
     samples = _samples(board)
     assert [s["t"] for s in samples[:4]] == [d0 + 20 * HOUR, d0 + DAY + 3 * HOUR, now - 2 * DAY, now - HOUR]
     assert len(samples) == 5, "two old UTC days roll up to one sample each; the two recent samples and the new one stay"
-    assert samples[-1]["counts"] == {"issue": {"Todo": 1}} and samples[-1]["t"] >= now
+    assert samples[-1]["counts"] == {"issue": {"Todo": 1}} and samples[-1]["t"] >= int(now)
 
 
 def test_the_history_file_sits_beside_the_board_cache_of_each_profile(tmp_path, monkeypatch):
