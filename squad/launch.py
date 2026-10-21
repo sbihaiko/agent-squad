@@ -13,7 +13,7 @@ import sys
 import time
 from pathlib import Path
 
-from squad import caps, git, modelreg, node_commit, record, workflows
+from squad import caps, envelope, git, modelreg, node_commit, record, workflows
 from squad import defaults as D
 from squad import project_settings as P
 from squad.engine import Engine, ResumeRefused
@@ -159,6 +159,18 @@ def router_overlay(graph, models_path, now=None):
     return overlay
 
 
+def no_sdk_route(graph):
+    """Refuse a graph that names a model the SDK adapter cannot reach (#698): an agent's `model` or a dispatch
+    `allow.models` entry whose registry entry has no gateway route and no `claude` CLI route, such as an agy-only id.
+    The bundled CLI answers such an id only at call time, after the run started. An unknown spelling passes as data."""
+    bad = []
+    for node in graph.doc["nodes"]:
+        names = [node.get("model")] + list((node.get("allow") or {}).get("models") or [])
+        bad += [f"{node['name']}: {m}" for m in names if isinstance(m, str) and m and envelope.no_sdk_route(m)]
+    if bad:
+        raise OptionError(f"the SDK adapter has no route for {'; '.join(bad)}: the registry serves it only through another CLI")
+
+
 def launch(graph, run_dir=None, *, runs_dir="runs", adapter=None, defaults=None, models=None, graph_path=None, target=None, options=None, shadow=None, invoker="cli", name=None, watch=None, opener=None, ticker=None):
     """Return an engine ready to `run()`.
 
@@ -173,6 +185,7 @@ def launch(graph, run_dir=None, *, runs_dir="runs", adapter=None, defaults=None,
     and no defaults file means no page. `opener` stands in for `open_dashboard` (tests).
     `watch` False also turns the monitor off; otherwise `watch.monitor` decides. `ticker(watcher, seconds)` stands in for the timer thread (tests).
     """
+    no_sdk_route(graph)                                          # before any folder exists: a model no SDK route serves refuses the run
     data, prec, limits = project_settings(target)                # before any folder exists: an unsound project file refuses the run
     adapter, rec, autonomy = _adapter_and_record(adapter, defaults, data, watch)  # before any folder exists: an unsound file refuses the run
     overlay = router_overlay(graph, models) if models else {}   # before any folder exists: a closed set refuses the start

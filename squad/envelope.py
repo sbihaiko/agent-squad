@@ -9,6 +9,18 @@ REQUEST_FIELDS = {"prompt", "skill", "model", "effort", "tools", "stalls", "spen
 IDENTITY_FIELDS = {"id", "key", "child", "name", "request_key", "parent", "depth"}
 
 
+
+def no_sdk_route(mid, reg=None):
+    """True when the registry knows the spelling and the SDK adapter cannot reach it: no gateway route and no `claude`
+    CLI route (an agy-only id). The bundled CLI answers such an id with "issue with the selected model" (#698). Unknown
+    passes as data. It lives here, not in modelreg.py, whose loop copy must stay byte-identical."""
+    reg = reg or modelreg.default_registry()
+    entry = modelreg.model(mid, reg)
+    if entry is None:
+        return False
+    cli = (entry.routes.get("cli") or {}).get("argv") or []
+    return "gateway" not in entry.routes and not (cli and cli[0] == "claude")
+
 def inside_workspace(w, roots):
     """Whether a requested workspace is one the author allows or a path below one. The author writes the envelope as a
     directory (`worktrees/child`) and the router names the child's own directory below it (`worktrees/child/gui-26`): a
@@ -71,6 +83,8 @@ def limit_errors(req, disp, depth, parent_tools, parent_spend_left, parent_time_
         e.append(f"model_outside_allow:{req['model']}")
     elif modelreg.no_tools_route(req["model"]):
         e.append(f"model_takes_no_tools:{req['model']}")
+    elif no_sdk_route(req["model"]):
+        e.append(f"model_has_no_sdk_route:{req['model']}")
     if req.get("effort") and req["effort"] not in a["efforts"]:
         e.append("effort_outside_allow")
     for t in req["tools"]:

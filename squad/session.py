@@ -27,8 +27,9 @@ PROVIDER_MARKERS = ("API Error", "upstream", '"status"')
 # Some providers refuse in a sentence that carries no status at all: the subscription answers `session limit`, a spent
 # pool answers `usage limit`, a provider answers `rate limit`. The CLI prints the first one when its login is exhausted,
 # and it is the provider refusing to serve like any 429: on 2026-10-13 the router node died on that sentence 116 times
-# while the next entry of its chain answered at once.
-PROVIDER_REFUSAL = ("session limit", "usage limit", "rate limit")
+# while the next entry of its chain answered at once. A spent week answers `weekly limit` the same way, and a CLI that
+# does not know the id answers `issue with the selected model` (#698): neither is a defect of the work.
+PROVIDER_REFUSAL = ("session limit", "weekly limit", "usage limit", "rate limit", "issue with the selected model")
 CHAIN_LINE = 200     # characters of one entry's error kept in the single message an exhausted chain reports
 
 

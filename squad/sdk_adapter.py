@@ -102,6 +102,26 @@ def _loads(s):
     return obj if isinstance(obj, dict) else None
 
 
+STDERR_TAIL = 2048    # characters of the CLI's stderr an unmapped error keeps (#698)
+
+
+class _Tail:
+    """The SDK's stderr callback: it keeps the last STDERR_TAIL characters the CLI wrote. The SDK raises an opaque
+    ProcessError ("Check stderr output for details") and drops the text, so the record would not say why the CLI died.
+    It holds only what the CLI printed; the session environment is never written to it."""
+
+    def __init__(self, chained=None):
+        self.buf, self.chained = "", chained
+
+    def __call__(self, line):
+        self.buf = (self.buf + str(line))[-STDERR_TAIL:]
+        if self.chained:
+            self.chained(line)
+
+    def text(self):
+        return self.buf.strip()
+
+
 def ceiling_hit(err):
     """`(ceiling, size)` when this error is the SDK reader's JSON ceiling, else None.
 
@@ -244,7 +264,7 @@ class SdkAdapter:
             self._reg = modelreg.load(self.registry) if self.registry else modelreg.default_registry()
         return modelreg.invocation(req.model, "sdk", reg=self._reg).wire
 
-    def options(self, req):
+    def options(self, req, tail=None):
         _, cls = self._sdk()
         kw: dict[str, object] = dict(cwd=req.workspace, model=self._model(req), tools=list(req.tools),
                                      max_budget_usd=prices.sdk_budget(self.prices, req.model, req.max_spend), permission_mode="bypassPermissions",
@@ -268,6 +288,9 @@ class SdkAdapter:
             sp["append"] = "\n\n".join(x for x in (sp.get("append"), req.instructions) if x)
             kw["system_prompt"] = sp
         kw["hooks"] = self._hooks(req)
+        if tail is not None:    # the CLI's stderr is piped only when a callback asks for it
+            tail.chained = kw.get("stderr")
+            kw["stderr"] = tail
         return cls(**kw)
 
     async def call(self, req):
@@ -275,7 +298,8 @@ class SdkAdapter:
         result, subagents, output_cap, served = None, 0, False, False
         prog = _Progress(req, self.sink, self.progress_seconds)
         watch = StallWatch(req.max_stalls)
-        stream = query(prompt=req.prompt, options=self.options(req))
+        tail = _Tail()
+        stream = query(prompt=req.prompt, options=self.options(req, tail))
         try:
             async for m in stream:
                 kind = type(m).__name__
@@ -318,7 +342,8 @@ class SdkAdapter:
             # node through its artifact, and the result carries the reason, the spend, and the turns.
             capped = result is not None and getattr(result, "subtype", None) in STOP_REASONS
             if not output_cap and not capped:   # an unmapped error: its result's spend if it produced one, else unknown, unless nothing was served (#494)
-                raise AdapterError(f"{type(e).__name__}: {e}", served=served, spend=spend, usage=usage, spend_source=source) from e
+                said = f"\nstderr tail: {tail.text()}" if tail.text() else ""
+                raise AdapterError(f"{type(e).__name__}: {e}{said}", served=served, spend=spend, usage=usage, spend_source=source) from e
         finally:
             close = getattr(stream, "aclose", None)
             if close:

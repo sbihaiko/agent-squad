@@ -8,9 +8,9 @@ import copy
 
 import pytest
 
-from squad import launch, modelreg
+from squad import launch
 from squad.adapter import AdapterError, ScriptedAdapter
-from squad.envelope import validate_request
+from squad.envelope import no_sdk_route, validate_request
 from squad.graph import from_doc
 from squad.options import OptionError
 from squad.sdk_adapter import SdkAdapter
@@ -40,9 +40,9 @@ def test_an_opaque_process_error_is_not_a_provider_refusal():
 
 
 def test_the_registry_says_an_agy_only_id_has_no_sdk_route():
-    assert modelreg.no_sdk_route(AGY_ONLY)
+    assert no_sdk_route(AGY_ONLY)
     for served in ("claude-sonnet-5-5", "claude-gpt-5.6-terra", "claude-grok-4.7", "scripted-model"):
-        assert not modelreg.no_sdk_route(served), served
+        assert not no_sdk_route(served), served
 
 
 def test_the_envelope_refuses_a_model_with_no_sdk_route_even_when_the_allow_list_names_it():
