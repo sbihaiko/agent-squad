@@ -53,11 +53,17 @@ def test_gemini_efforts_are_low_medium_high(reg):
     assert list(_entry(reg, "gemini-3.8-flash").efforts) == ["low", "medium", "high"]
 
 
-def test_deepseek_v4_flash_stays_its_own_tools_id(reg):
-    no_tools, tools = _entry(reg, "deepseek-flash"), _entry(reg, "deepseek-v4-flash")
-    assert no_tools.id != tools.id
-    assert no_tools.capabilities["tools"] is False
-    assert tools.capabilities["tools"] is True
+def test_deepseek_v4_flash_stays_its_own_id(reg):
+    canonical, legacy = _entry(reg, "deepseek-flash"), _entry(reg, "deepseek-v4-flash")
+    assert canonical.id != legacy.id
+    assert legacy.capabilities["tools"] is True
+
+
+def test_deepseek_flash_uses_tools_so_a_coding_chain_keeps_it(reg):
+    """#683: both DeepSeek V4.1 Flash ids used tools through `claude -p`; the canonical id is a coding choice."""
+    assert _entry(reg, "deepseek-flash").capabilities["tools"] is True
+    assert mr.compatible("claude-deepseek-flash[1m]", "coding", reg) == (True, None)
+    assert mr.no_tools_route("claude-deepseek-flash[1m]", reg) is False
 
 
 def test_haiku_has_an_id_and_the_three_short_names_are_aliases(reg):

@@ -45,8 +45,9 @@ def test_compatible_coding_and_router_need_a_gateway_route_whose_model_takes_too
     assert mr.compatible("claude-opus-5-5", "router", reg=reg) == (True, None)
     ok, reason = mr.compatible("gemini-3.8-flash", "coding", reg=reg)
     assert ok is False and "gateway" in reason
-    ok, reason = mr.compatible("deepseek-flash", "coding", reg=reg)
-    assert ok is False and "tools" in reason
+    # #683: DeepSeek V4.1 Flash uses tools, so a coding or router chain keeps it
+    assert mr.compatible("deepseek-flash", "coding", reg=reg) == (True, None)
+    assert mr.compatible("deepseek-flash", "router", reg=reg) == (True, None)
 
 
 def test_compatible_review_takes_any_route_and_vision_needs_vision(reg):
@@ -74,7 +75,7 @@ def test_migrate_writes_an_explicit_route_and_folds_the_settings(tmp_path, reg):
     assert set(doc["chains"]) == {"coding", "review", "vision", "router"}
 
     coding = _by_raw(doc["chains"]["coding"])
-    assert list(coding) == ["claude-gpt-5.6-terra", "claude-sonnet-5-5"]
+    assert list(coding) == ["claude-gpt-5.6-terra", "claude-deepseek-flash[1m]", "claude-sonnet-5-5"]   # #683
     assert coding["claude-gpt-5.6-terra"]["route"] == "gateway"
     assert coding["claude-gpt-5.6-terra"]["id"] == "gpt-5.6-terra"
     assert coding["claude-sonnet-5-5"]["hrs"] == "19-07"
@@ -110,7 +111,7 @@ def test_migrate_drops_every_incompatible_entry_and_names_the_reason(tmp_path, r
     _, result = _migrate(tmp_path, REPO, reg=reg)
     dropped = {(d["chain"], d["raw"]): d["reason"] for d in result["dropped"]}
     assert "gateway" in dropped[("coding", "gemini-3.8-flash-high")]
-    assert "tools" in dropped[("coding", "claude-deepseek-flash[1m]")]
+    assert ("coding", "claude-deepseek-flash[1m]") not in dropped   # #683: it uses tools
     assert dropped[("vision", "deepseek-v4-flash")] == "no vision capability"
     assert dropped[("vision", "grok-4.5")] == "retired"
 
@@ -122,7 +123,7 @@ def test_the_migrated_file_reads_through_chain(tmp_path, reg):
     e = next(e for e in review.entries if e.raw == "claude:claude-deepseek-flash")
     assert (e.id, e.route, e.effort, e.timeout_s, e.no_tools) == ("deepseek-flash", "direct", None, 120, True)
     coding = mr.chain(path, "coding", reg=reg)
-    assert [e.id for e in coding.entries] == ["gpt-5.6-terra", "claude-sonnet-5-5"]
+    assert [e.id for e in coding.entries] == ["gpt-5.6-terra", "deepseek-flash", "claude-sonnet-5-5"]   # #683
 
 
 # --- the live shape and the orphan report -----------------------------------------------------------------
@@ -142,7 +143,7 @@ def test_migrate_drops_a_retired_entry_on_the_live_shape(tmp_path, reg):
     dropped = {(d["chain"], d["raw"]): d["reason"] for d in result["dropped"]}
     assert dropped[("review", "grok-4.6")] == "retired"
     assert dropped[("vision", "grok-4.5")] == "retired"
-    assert dropped[("coding", "claude-deepseek-flash[1m]")] == "gateway model takes no tools"
+    assert ("coding", "claude-deepseek-flash[1m]") not in dropped   # #683: it uses tools
 
 
 def test_a_setting_keyed_by_a_spelling_in_no_surviving_chain_is_an_orphan_and_is_never_applied(tmp_path, reg):
@@ -151,14 +152,14 @@ def test_a_setting_keyed_by_a_spelling_in_no_surviving_chain_is_an_orphan_and_is
     orphans = doc["_orphans"]
     assert orphans["review_timeout_seconds_by_model"]["claude:claude-deepseek-flash"] == 120
     assert orphans["review_no_tools"] == ["claude:claude-deepseek-flash"]
-    assert orphans["hours"]["coding_models"]["claude-deepseek-flash[1m]"] == "07-19"
+    assert "hours" not in orphans   # #683: the DeepSeek coding entry survives, so its hours apply
     assert len(result["orphans"]["review_timeout_seconds_by_model"]) == 5
 
     for chain in doc["chains"].values():
         for entry in chain:
             assert entry.get("timeout_s") != 120
             assert entry.get("no_tools") is not True
-            assert entry.get("hrs") != "07-19"
+            assert entry.get("hrs") != "07-19" or entry["raw"] == "claude-deepseek-flash[1m]"
     assert any("orphan review_timeout_seconds_by_model.claude:claude-deepseek-flash" in line
                for line in mr.migrate_lines(result))
 
@@ -166,7 +167,7 @@ def test_a_setting_keyed_by_a_spelling_in_no_surviving_chain_is_an_orphan_and_is
 def test_orphan_report_lines_name_each_setting(tmp_path, reg):
     _, result = _migrate(tmp_path, LIVE, reg=reg)
     lines = mr.migrate_lines(result)
-    assert "orphan hours.coding_models.claude-deepseek-flash[1m]: not in the coding chain" in lines
+    assert "orphan hours.coding_models.claude-deepseek-flash[1m]: not in the coding chain" not in lines   # #683
     assert "orphan review_no_tools.claude:claude-deepseek-flash: not in the review chain" in lines
 
 

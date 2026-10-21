@@ -2,7 +2,7 @@
 
 The owner found mixed labels: "Opus 5.5" beside "Claude Haiku 5.5", "DeepSeek V4.1 Flash (tools)", and a raw id
 truncated to "cl..." beside each label. The scheme: `<Family> <version> <tier>`, one of five families (Claude, GPT,
-Gemini, DeepSeek, Grok), no parentheses, and at most one trailing lowercase variant word ("fast", "no-tools").
+Gemini, DeepSeek, Grok), no parentheses, and at most one trailing lowercase variant word ("fast", "no-tools", "legacy").
 The label lives in the one registry (ADR-0147); the panel row renders it and keeps the id in its tooltip.
 """
 import json
@@ -44,8 +44,9 @@ def test_two_live_entries_never_share_a_label():
 
 def test_the_deepseek_flash_pair_reads_by_its_variant():
     labels = {m["id"]: m["label"] for m in _models()}
-    assert labels["deepseek-v4-flash"] == "DeepSeek V4.1 Flash"
-    assert labels["deepseek-flash"] == "DeepSeek V4.1 Flash no-tools"
+    # #683: the canonical id uses tools and takes the plain name; the legacy id carries the variant word
+    assert labels["deepseek-flash"] == "DeepSeek V4.1 Flash"
+    assert labels["deepseek-v4-flash"] == "DeepSeek V4.1 Flash legacy"
 
 
 def _mdl_name(box, mid):

@@ -1,7 +1,7 @@
 """The hub's add boxes name a model by its registry label as well as its id.
 
 The owner looked for "DeepSeek 4.1" in the chains and did not find it. The chains already held
-`claude-deepseek-flash[1m]`, which the registry labels "DeepSeek V4.1 Flash no-tools", but the hub showed raw ids
+`claude-deepseek-flash[1m]`, which the registry labels "DeepSeek V4.1 Flash", but the hub showed raw ids
 only, so no id in the box carried "4.1". The panel now gets a `labels` map from the one registry (ADR-0147), and each
 datalist option carries its label, so the browser matches "4.1" against it. The label is display only: the value
 that is saved stays the id.
@@ -32,8 +32,8 @@ def hub():
 
 def test_a_deepseek_spelling_reads_as_its_v4_1_label(hub):
     labels = hub.model_labels(["claude-deepseek-flash[1m]", "claude-deepseek-v4-flash"])
-    assert labels["claude-deepseek-flash[1m]"] == "DeepSeek V4.1 Flash no-tools"   # re-anchored to the #687 scheme: <Family> <version> <tier>, no parentheses
-    assert labels["claude-deepseek-v4-flash"] == "DeepSeek V4.1 Flash"
+    assert labels["claude-deepseek-flash[1m]"] == "DeepSeek V4.1 Flash"   # #683: the canonical V4.1 id uses tools; the #687 scheme names no variant
+    assert labels["claude-deepseek-v4-flash"] == "DeepSeek V4.1 Flash legacy"   # #683: the legacy id
 
 
 def test_an_id_the_registry_does_not_know_has_no_label(hub):
@@ -47,7 +47,7 @@ def test_the_panel_gets_labels_and_never_stores_them(hub, monkeypatch, tmp_path)
     monkeypatch.setattr(hub, "MODELS", models)
     monkeypatch.setattr(hub, "gateway_models", lambda ttl=120: ["claude-deepseek-flash[1m]"])
     got = hub.models_get()
-    assert got["labels"]["claude-deepseek-flash[1m]"] == "DeepSeek V4.1 Flash no-tools"   # re-anchored to the #687 scheme: <Family> <version> <tier>, no parentheses
+    assert got["labels"]["claude-deepseek-flash[1m]"] == "DeepSeek V4.1 Flash"   # #683: the canonical V4.1 id uses tools; the #687 scheme names no variant
     assert "labels" in hub.READONLY
 
 

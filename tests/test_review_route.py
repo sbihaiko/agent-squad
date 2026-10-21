@@ -27,21 +27,34 @@ def reg():
     return modelreg.load(ROOT / "config/models.registry.json")
 
 
+def _no_tools_registry(path):
+    """The shipped registry with `deepseek-flash` marked tools:false. No shipped entry says no tools since #683, but
+    the no-tools review path stays, so a test registry keeps one entry on it."""
+    doc = json.loads((ROOT / "config/models.registry.json").read_text())
+    for m in doc["models"]:
+        if m["id"] == "deepseek-flash":
+            m["capabilities"]["tools"] = False
+    path.write_text(json.dumps(doc))
+    return path
+
+
 @pytest.mark.parametrize("raw,route,runner,wire", [
     ("claude:claude-opus-5-5", "cli", "claude", "claude-opus-5-5"),
     ("gemini-3.8-flash-medium", "cli", "agy", "gemini-3.8-flash-medium"),
     ("grok-4.6", "cli", "grok", "grok-4.6"),
     ("gpt-5.6-luna", "cli", "codex", "gpt-5.6-luna"),
-    ("claude:claude-deepseek-flash", "direct", "", "claude-deepseek-flash"),
-    ("claude:claude-deepseek-flash[1m]", "direct", "", "claude-deepseek-flash[1m]"),
+    ("claude:claude-deepseek-flash", "cli", "claude", "claude-deepseek-flash"),   # #683: it uses tools
+    ("claude:claude-deepseek-flash[1m]", "cli", "claude", "claude-deepseek-flash[1m]"),
 ])
 def test_a_reviewer_route_comes_from_its_registry_entry(reg, raw, route, runner, wire):
     got = modelreg.review_route(raw, reg)
     assert (got.route, got.runner, got.wire) == (route, runner, wire)
 
 
-def test_a_reviewer_with_no_tools_capability_runs_with_no_tools(reg):
-    assert modelreg.review_route("claude:claude-deepseek-flash", reg).tools is False
+def test_a_reviewer_with_no_tools_capability_runs_with_no_tools(reg, tmp_path):
+    nt = modelreg.load(_no_tools_registry(tmp_path / "registry.json"))
+    got = modelreg.review_route("claude:claude-deepseek-flash", nt)
+    assert (got.route, got.runner, got.wire, got.tools) == ("direct", "", "claude-deepseek-flash", False)
     assert modelreg.review_route("claude:claude-opus-5-5", reg).tools is True
 
 
@@ -71,11 +84,13 @@ def test_the_cli_prints_the_route_as_one_tab_row():
     assert out == "cli\tgrok\tgrok-4.6\t1\n"
 
 
-def test_the_cli_marks_an_empty_runner_with_a_dash():
+def test_the_cli_marks_an_empty_runner_with_a_dash(tmp_path):
     """A shell `read` collapses an empty tab field, so the row never holds one."""
+    import os
     import subprocess
+    env = {**os.environ, "SG_MODELS_REGISTRY": str(_no_tools_registry(tmp_path / "registry.json"))}
     out = subprocess.run([sys.executable, str(ROOT / "squad/modelreg.py"), "review-route", "claude:claude-deepseek-flash"],
-                         capture_output=True, text=True, check=True).stdout
+                         capture_output=True, text=True, check=True, env=env).stdout
     assert out == "direct\t-\tclaude-deepseek-flash\t0\n"
 
 

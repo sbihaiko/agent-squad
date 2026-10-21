@@ -30,7 +30,7 @@ def hub():
 
 @pytest.mark.parametrize("raw,chain,llm,route", [
     ("claude-grok-4.7", "coding_models", "Grok 4.7", "gateway"),
-    ("claude-deepseek-flash[1m]", "coding_models", "DeepSeek V4.1 Flash no-tools", "gateway"),   # re-anchored to the #687 scheme: <Family> <version> <tier>, no parentheses
+    ("claude-deepseek-flash[1m]", "coding_models", "DeepSeek V4.1 Flash", "gateway"),   # #683: the canonical V4.1 id uses tools
     ("claude:claude-opus-5-5", None, "Claude Opus 5.5", "claude CLI"),
     ("claude-opus-5-5", "review_models", "Claude Opus 5.5", "claude CLI"),   # the panel's bare id: the review chain adds claude:
     ("claude-opus-5-5", "coding_models", "Claude Opus 5.5", "gateway"),

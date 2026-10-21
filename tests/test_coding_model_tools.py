@@ -4,8 +4,11 @@ ADR-0147: the resolver says whether a route takes tools; the envelope and the ro
 its own table.
 """
 import copy
+import json
 import sys
 from pathlib import Path
+
+import pytest
 
 from squad import modelreg
 from squad.envelope import validate_request
@@ -15,7 +18,21 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "contrib/squad-goal/scripts"))
 import router_envelope  # noqa: E402
 
-NO_TOOLS = "claude-deepseek-flash[1m]"   # registry id deepseek-flash: a gateway route whose model takes no tools
+NO_TOOLS = "claude-deepseek-flash[1m]"   # registry id deepseek-flash, marked no-tools in the test registry below
+
+
+@pytest.fixture(autouse=True)
+def no_tools_registry(tmp_path, monkeypatch):
+    """No shipped entry says no tools since #683 (DeepSeek V4.1 Flash uses tools), but the guard stays: the test
+    registry marks `deepseek-flash` tools:false, and both resolver copies read it."""
+    doc = json.loads((ROOT / "config/models.registry.json").read_text())
+    for m in doc["models"]:
+        if m["id"] == "deepseek-flash":
+            m["capabilities"]["tools"] = False
+    path = tmp_path / "registry.json"
+    path.write_text(json.dumps(doc))
+    for mod in (modelreg, router_envelope.modelreg):
+        monkeypatch.setattr(mod, "default_registry", lambda p=path, m=mod: m.load(p))
 
 
 def _errors(model, allowed):
