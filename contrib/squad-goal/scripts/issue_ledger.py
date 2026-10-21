@@ -9,6 +9,9 @@ usage: issue_ledger.py read  <key> [state|count|last_fail|held|wave]  the record
        issue_ledger.py wave  <key> <run> <state> <cause> [keep]  one wave event: prints recorded|duplicate|terminal|kept|floor
        issue_ledger.py rearm <key>                           the facts go, and the SQUAD-NOT-STARTABLE comment with them
        issue_ledger.py entered <owner>/<repo>                "<run>\t<n>" for each run a child of the repository entered
+       issue_ledger.py landtry <key> <run> <cause>           one failed landing of the run's wave: prints the run's tries
+       issue_ledger.py owe   <key> <run> <wave> <sha>        the landed wave could not close the issue: it is owed
+       issue_ledger.py owed  <owner>/<repo> <run>            "<sha>\t<wave>\t<n>" for each issue the run still owes
 
 This module is the only writer of $SG_STATE/state/<owner>__<repo>__<n>.json. The key is <owner>/<repo>#<n>, the address
 seam's (ADR-0138), never a bare issue number. Owner intent stays on GitHub (ready-for-agent, the Todo card, frozen:owner,
@@ -29,6 +32,10 @@ duplicate and writes nothing; a `delivered` run is terminal, so a late event of 
 fact the run already has; any other event of the run replaces its fact, in the order the writers send them. An `entered`
 event also sets the fact's `entered` field, and every later event of the run keeps it: a child that left its wave after the
 entry still entered it. That field is the entry's one record; `entered` lists it for the wave readers (janitor, startability).
+A `landtry` event is a failed landing of the run's wave, on a cause a repeat does not change: it sets the fact `stuck` and
+adds one to its `tries`, the same cause too; any other event of the run keeps the tries (wave.sh stops at SG_WAVE_LAND_TRIES). An `owe` event
+sets the fact `owed`, with the wave and the sha that landed, for an issue the landed wave could not close; `owed` lists them
+for the run, and the `delivered` event of the close ends it.
 
 A corrupt file holds the issue (ADR-0149 rule 4): `read` gives the state `held` and names the file and the cause, every
 writer but `rearm` refuses it and leaves it as it is, and the dispatch passes read `held` as a stop. It never reads as the
@@ -55,7 +62,7 @@ import time
 
 LEDGERS = ("own", "loop")
 OLD = {"own": "requeues", "loop": "loopqueues"}   # the old marker names wave.sh wrote in auto/ before #673
-WAVE = ("entered", "held", "refused", "stuck", "delivered")   # the wave events wave.sh sends (ADR-0149)
+WAVE = ("entered", "held", "refused", "stuck", "owed", "delivered")   # the wave events wave.sh sends (ADR-0149)
 KEY = re.compile(r"([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)#([0-9]+)")
 
 
@@ -186,10 +193,13 @@ def _wave(rec, ev):   # -> (recorded|duplicate|terminal|kept|floor, changed): on
     W = rec.setdefault("wave", {}); old = W.get(run)
     if old and old.get("state") == "delivered": return "terminal", False
     if old and ev.get("keep"): return "kept", False
-    if old and old.get("state") == st and old.get("cause") == cause: return "duplicate", False
-    W[run] = {"state": st, "cause": cause, "ts": time.time()}
+    tries = ev.get("try") and (old or {}).get("tries", 0) + 1
+    if not tries and old and old.get("state") == st and old.get("cause") == cause: return "duplicate", False
+    W[run] = {"state": st, "cause": cause, "ts": time.time(), **(ev.get("extra") or {})}
     if st == "entered": W[run]["entered"] = cause
     elif old and old.get("entered"): W[run]["entered"] = old["entered"]   # the entry stays a fact of the run
+    if tries: W[run]["tries"] = tries; return tries, True
+    if old and old.get("tries"): W[run]["tries"] = old["tries"]   # a loop-caused failure counts no try and loses none
     return "recorded", True
 
 
@@ -224,8 +234,8 @@ def stop(key, why, led="own"):
     return transition(key, {"op": "stop", "why": why, "led": led})
 
 
-def wave(key, run, st, cause, keep=False):
-    return transition(key, {"op": "wave", "run": run, "state": st, "cause": cause, "keep": keep})
+def wave(key, run, st, cause, keep=False, extra=None):
+    return transition(key, {"op": "wave", "run": run, "state": st, "cause": cause, "keep": keep, "extra": extra})
 
 
 def rearm(key):   # the SQUAD-NOT-STARTABLE comment goes through the comment queue (cqflush.sh unstart~)
@@ -237,15 +247,33 @@ def rearm(key):   # the SQUAD-NOT-STARTABLE comment goes through the comment que
     return q / name
 
 
-def entered(repo):   # -> [(run, n)]: each run a child of the repository entered, from every ledger file of it (ADR-0149)
+def landtry(key, run, cause):   # -> the run's failed landings for the issue, this one counted; 0 when the floor names the run
+    out = transition(key, {"op": "wave", "run": run, "state": "stuck", "cause": cause, "try": True})
+    return out if isinstance(out, int) else 0
+
+
+def owe(key, run, w, sha):
+    return wave(key, run, "owed", f"landed {w} as {sha}, and the issue did not close", extra={"wave": w, "sha": sha})
+
+
+def repo_files(repo):   # -> [(n, record)] for every readable ledger file of the repository; a corrupt one holds its issue at dispatch already
     o, r, _ = parse(f"{repo}#0"); out = []
     for p in sorted(state_dir().joinpath("state").glob(f"{o}__{r}__*.json")):
         n = p.name[len(f"{o}__{r}__"):-len(".json")]
         if not n.isdigit(): continue
-        try: rec = load(f"{repo}#{n}")
-        except Corrupt: continue   # a corrupt file holds its issue at dispatch already; it names no entry
-        out += [(run, n) for run, fact in sorted((rec.get("wave") or {}).items()) if isinstance(fact, dict) and fact.get("entered")]
+        try: out.append((n, load(f"{repo}#{n}")))
+        except Corrupt: continue
     return out
+
+
+def owed(repo, run):   # -> [(sha, wave, n)]: each issue the run's landed wave still owes a close
+    return [(f.get("sha", ""), f.get("wave", ""), n) for n, rec in repo_files(repo)
+            for f in [(rec.get("wave") or {}).get(run)] if isinstance(f, dict) and f.get("state") == "owed"]
+
+
+def entered(repo):   # -> [(run, n)]: each run a child of the repository entered, from every ledger file of it (ADR-0149)
+    return [(run, n) for n, rec in repo_files(repo) for run, fact in sorted((rec.get("wave") or {}).items())
+            if isinstance(fact, dict) and fact.get("entered")]
 
 
 def main(argv):
@@ -254,6 +282,9 @@ def main(argv):
     try:
         if op == "entered":
             for run, n in entered(key): print(f"{run}\t{n}")
+            return 0
+        if op == "owed" and rest:
+            for sha, w, n in owed(key, rest[0]): print(f"{sha}\t{w}\t{n}")
             return 0
         parse(key)
         if op == "read":
@@ -264,6 +295,8 @@ def main(argv):
         elif op == "fail" and len(rest) >= 3: print(*fail(key, rest[0], rest[1], rest[2], *(rest[3:4] or ["own"])))
         elif op == "stop" and rest:
             for line in stop(key, rest[0], *(rest[1:2] or ["own"])): print(line)
+        elif op == "landtry" and len(rest) >= 2: print(landtry(key, rest[0], rest[1]))
+        elif op == "owe" and len(rest) >= 3: print(owe(key, rest[0], rest[1], rest[2]))
         elif op == "wave" and len(rest) >= 3: print(wave(key, rest[0], rest[1], rest[2], rest[3:4] == ["keep"]))
         elif op == "rearm": print(f"REARM {key}: the loop facts are cleared; {rearm(key).name} removes the SQUAD-NOT-STARTABLE comment")
         else: print(f"issue_ledger.py: bad call: {' '.join(argv)}", file=sys.stderr); return 2

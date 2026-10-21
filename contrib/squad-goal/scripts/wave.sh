@@ -455,14 +455,17 @@ netfail() {
   echo "WAVE-NETWORK $1: $l; it lands on a later cycle"
 }
 
-# stuck <run> <wave> <clone> <why>: a landing that failed on a cause a repeat does not change. The attempts are counted in
-# auto/wland-tries-<run>; at SG_WAVE_LAND_TRIES (default 3) the pass stops retrying: each issue the wave carries gets the label
-# frozen:owner, its card goes to Todo (#657), one comment is queued, and the run's wave marker goes, so the cycle stops. The wave
-# branch stays on the remote with the work, when it is there. A cause the loop itself caused (#663) is no work failure: each
-# issue is named once as WAVE-LOOP-CAUSED and counts no try, the wave stays, and the normal cap handles the issue. Returns 1
-# either way: the landing did not happen.
+# stuck <run> <wave> <clone> <why>: a landing that failed on a cause a repeat does not change. The attempts are ledger facts
+# (ADR-0149): each issue the wave carries (its `Refs #N` ahead of the base) or the run was dispatched for (`run_issues` of the
+# caller's run folder $rd) counts the try in its ledger (`issue_ledger.py landtry`), and the run's count is the largest. At
+# SG_WAVE_LAND_TRIES (default 3) the pass stops retrying: each issue the wave carries gets the label frozen:owner, its card
+# goes to Todo (#657), one comment is queued, and the run's wave marker goes, so the cycle stops. A wave that names no issue
+# has no ledger to count in and holds no issue, so its first failure clears the marker. The wave branch stays on the remote
+# with the work, when it is there. A cause the loop itself caused (#663) is no work failure: each issue is named once as
+# WAVE-LOOP-CAUSED and counts no try, the wave stays, and the normal cap handles the issue. Returns 1 either way: the
+# landing did not happen.
 stuck() {
-  local run=$1 w=$2 S=$3 why=$4 f="$SG_STATE/auto/wland-tries-$1" t n named=""
+  local run=$1 w=$2 S=$3 why=$4 t=0 k n named="" all
   if loop_caused "$why"; then
     for n in $(refs_of "$S" "origin/$base..origin/$w"); do
       wave_fact "$run" "$n" stuck "$why; loop-caused, not counted"
@@ -471,9 +474,13 @@ stuck() {
     [ -n "$named" ] || echo "WAVE-LOOP-CAUSED $w: $why; not counted"
     return 1
   fi
-  mkdir -p "$SG_STATE/auto"; t=$(( $(cat "$f" 2>/dev/null || echo 0) + 1 )); printf '%s\n' "$t" > "$f"
   echo "WAVE-ERROR $why"
-  for n in $(refs_of "$S" "origin/$base..origin/$w"); do wave_fact "$run" "$n" stuck "$why (try $t of ${SG_WAVE_LAND_TRIES:-3})"; done
+  all=$(printf '%s\n' $(refs_of "$S" "origin/$base..origin/$w") $(run_issues "${rd:-/nonexistent}") | sort -un | tr '\n' ' ')
+  for n in $all; do
+    k=$(ledger landtry "$n" "$run" "$why" 2>&1) || { echo "WAVE-LEDGER #$n refused: $k"; continue; }
+    [ "$k" -gt "$t" ] 2>/dev/null && t=$k
+  done
+  [ -n "${all// /}" ] || { t=${SG_WAVE_LAND_TRIES:-3}; echo "WAVE-NOTE $w names no issue (no Refs ahead of $base, no run record): no ledger counts its tries"; }
   [ "$t" -ge "${SG_WAVE_LAND_TRIES:-3}" ] || return 1
   export SG_GH_PASS=wave
   for n in $(refs_of "$S" "origin/$base..origin/$w"); do
@@ -482,16 +489,17 @@ stuck() {
     mkdir -p "$SG_STATE/cq"
     printf 'Needs the owner: the landing of %s in %s failed %s times and stopped (%s). The work stays on %s. Refs #%s\n' "$w" "$base" "$t" "$why" "$w" "$n" > "$(sg_cq_file "$n-wavestuck$$.md")"
   done
-  rm -f "$SG_STATE/auto/wave-$run" "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run" "$f"
-  echo "WAVE NEEDS-HUMAN $w: the landing failed $t times; the run's wave marker is cleared and $w stays on the remote"
+  rm -f "$SG_STATE/auto/wave-$run" "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run"
+  if [ -n "${all// /}" ]; then echo "WAVE NEEDS-HUMAN $w: the landing failed $t times; the run's wave marker is cleared and $w stays on the remote"
+  else echo "WAVE NEEDS-HUMAN $w: the landing failed and the wave names no issue; the run's wave marker is cleared and $w stays on the remote"; fi
   return 1
 }
 
 # deliver <run> <wave> <sha> <issues>: the closes of what a landed wave carries, each with its comment, ledger row and card.
-# An issue that does not close stays owed (#475): its number is kept in $SG_STATE/auto/wowed-<run>, the run keeps its wave
-# marker, and the pass exits 1, so the run is not read as done and the next landing pass tries the close again.
+# An issue that does not close stays owed (#475): its ledger fact is `owed`, with the wave and the sha (ADR-0149), the run
+# keeps its wave marker, and the pass exits 1, so the run is not read as done and the next landing pass tries the close again.
 deliver() {
-  local run=$1 w=$2 sha=$3 issues=$4 n owed=""
+  local run=$1 w=$2 sha=$3 issues=$4 n owed="" out
   export SG_GH_PASS=wave
   local col=Done; [ "${SG_BOARD_VOCAB:-}" = shipped ] && col=Closed
   for n in $issues; do
@@ -509,11 +517,11 @@ deliver() {
     "$BOARD" "$SG_OWNER" "$SG_PROJECT" "$col" "$n" 2>&1 >/dev/null | grep -v '^issue_state\.py: items read ' | sed "s/^/WAVE-BOARD #$n $col refused: /"   # the seam's read note is no refusal (#526)
   done
   if [ -n "$owed" ]; then
-    printf '%s\t%s\t%s\n' "$sha" "$w" "$owed" > "$SG_STATE/auto/wowed-$run"
+    for n in $owed; do out=$(ledger owe "$n" "$run" "$w" "$sha" 2>&1) || echo "WAVE-LEDGER #$n refused: $out"; done
     echo "WAVE-ERROR $w landed in $base, but ${owed// /, } stays owed: the landing exits 1 and the next pass closes it"
     return 1
   fi
-  rm -f "$SG_STATE/auto/wowed-$run" "$SG_STATE/auto/wave-$run"
+  rm -f "$SG_STATE/auto/wave-$run"
   return 0
 }
 
@@ -528,8 +536,10 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
   # The age cap is read before the landing clears the markers it is read from (#378): a wave that reached it requeues the
   # children of the run that never entered it, once the wave it holds is in the base.
   # An issue an earlier landing could not close is owed (#475): the wave is already in the base, so this pass only closes it.
-  if [ -f "$SG_STATE/auto/wowed-$run" ]; then
-    local osha ow oiss; IFS=$'\t' read -r osha ow oiss < "$SG_STATE/auto/wowed-$run"
+  local owed osha ow oiss
+  owed=$(python3 "$here/issue_ledger.py" owed "$SG_REPO" "$run" 2>/dev/null)
+  if [ -n "$owed" ]; then
+    IFS=$'\t' read -r osha ow _ <<< "$owed"; oiss=$(printf '%s\n' "$owed" | cut -f3 | tr '\n' ' '); oiss=${oiss% }
     export SG_GH_PASS=wave
     deliver "$run" "$ow" "$osha" "$oiss" || return 1
     echo "WAVE $ow $osha delivered in $base (owed: ${oiss// /, })"; return 0
@@ -591,7 +601,7 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
           | awk -v RS='\036' '/Refs #/ && $0 !~ /TDD RED/ {f=1} END {exit !f}' && delivered="${delivered:+$delivered }$n"
       done
       sc push -q origin ":refs/heads/$w" >/dev/null 2>&1 || echo "WAVE-NOTE branch $w was not deleted" >&2
-      sha=$(sc rev-parse "origin/$base"); rm -rf "$S"; rm -f "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run" "$SG_STATE/auto/wland-tries-$run"
+      sha=$(sc rev-parse "origin/$base"); rm -rf "$S"; rm -f "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run"
       echo "WAVE $w landed empty in $base (nothing ahead of it; the wave branch is deleted${dispatched:+; the run was dispatched for $dispatched})"
       # An empty wave past its age cap follows the capped landing's rule too (#591): every issue of the run that `dev` does
       # not hold goes back to the queue, so a child that never entered is built into a later wave instead of staying in Doing.
@@ -626,7 +636,7 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
   done
   sc push -q origin ":refs/heads/$w" >/dev/null 2>&1 || echo "WAVE-NOTE branch $w was not deleted" >&2
   rm -rf "$S"
-  rm -f "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run" "$SG_STATE/auto/wland-tries-$run"   # the wave is in $base; wave-$run goes once every issue is delivered (deliver)
+  rm -f "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run"   # the wave is in $base; wave-$run goes once every issue is delivered (deliver)
   # A wave that reached its age cap landed as it is (#378, ADR-0145 rule 13): the children the run dispatched that never
   # entered it go back to the queue, so the loop builds them into a later wave. They are read from the run's own record
   # (run_issues); an issue the wave carried just closed above, and is never requeued.
