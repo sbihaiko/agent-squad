@@ -69,4 +69,10 @@ $G -q '^review.sh x/emu gui/1512 1512$' "$S/launched" && ok "migrated profile: t
 out=$(cd "$S/co" && env -u SG_TOOLING_REPO -u SG_REPOS -u SG_REPO -u SG_STATE SG_PROFILE=migrated bash -c '. "$1/env.sh" 2>/dev/null; sg_repos | tr "\n" " "' _ "$S/s")
 [ "$out" = "x/emu x/tool " ] && ok "migrated profile: the same repositories" || ko "migrated profile repositories: '$out'"
 
+# --- 3. a suite the loop runs inherits SG_PROFILES_DIR from env.sh (#664), and the nightly is such a suite (#746): the scene
+# names its own profiles directory in every child, so the live copy never decides what it resolves.
+SG_PROFILES_DIR=$T/nowhere cycle migrated
+$G -q '^review.sh x/emu gui/1512 1512$' "$S/launched" && ok "an inherited SG_PROFILES_DIR does not decide the scene" \
+  || ko "an inherited SG_PROFILES_DIR decided the scene: $(cat "$S/err-migrated")"
+
 rm -rf "$T"; exit $fail
