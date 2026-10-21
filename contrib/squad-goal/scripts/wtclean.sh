@@ -244,12 +244,16 @@ done
 # moved for SG_RUN_LINE_SECONDS (an hour by default: the janitor's per-run rules have read it), no process is inside its
 # folder and no registered worktree lies inside it. The file is read again just before the write, so a line appended
 # meanwhile stays.
+# A failed run whose wave is over (it landed or got stuck: waved-<run> stays, wave-<run> went) leaves too (#693): a resume
+# that may take its remains keeps its tree, but its line made janitor rule O read the finished run on every pass.
+wave_over() { local r=${1##*/}; [ -e "$SG_STATE/auto/waved-$r" ] && [ ! -e "$SG_STATE/auto/wave-$r" ] || return 1
+  awk '/"event": *"(run_start|resume)"/{v=""} /"event": *"verdict"/{v=$0} END{print v}' "$1/record.jsonl" 2>/dev/null | grep -q '"verdict": "failed"'; }
 act="$SG_STATE/active-runs.txt"; drop="$SG_STATE/active-drop.$$"; : > "$drop"
 [ -f "$act" ] && while read -r r; do
   case "$r" in '') continue;; /*) d=$r;; *) d="$SG_CHECKOUT/runs/$r";; esac
   d=$(cd "$d" 2>/dev/null && pwd -P) && [ -f "$d/record.jsonl" ] || continue
   [ $(( now - $(mtime "$d/record.jsonl") )) -ge "${SG_RUN_LINE_SECONDS:-3600}" ] || continue
-  ended "$d" || continue
+  ended "$d" || wave_over "$d" || continue
   in_use "$d" && continue; inner "$d" && continue
   echo "$r" >> "$drop"; echo "RUN ENDED ${d##*/}: its run ended and no tree holds it; dropped from active-runs.txt"
 done < "$act"
