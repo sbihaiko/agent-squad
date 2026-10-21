@@ -124,7 +124,7 @@ def test_the_panel_marks_a_blocked_row_and_never_stores_the_mark():
 
 
 def test_the_shipped_coding_chain_fits_the_shipped_envelope():
-    chain = json.loads((SCRIPTS / "models.json").read_text())["coding_models"]
+    chain = [e.raw for e in _modelreg().chain(json.loads((SCRIPTS / "models.json").read_text()), "coding").entries]
     graph = json.loads((ROOT / "docs/design/router.graph.json").read_text())
     env = next(n["allow"]["models"] for n in graph["nodes"] if n.get("kind") == "dispatch")
     assert router_envelope.envelope_blocked(chain, env) == []
