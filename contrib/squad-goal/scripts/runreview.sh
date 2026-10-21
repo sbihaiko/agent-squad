@@ -64,6 +64,12 @@ if [ "$lv" = frozen ]; then
   echo "RUNREVIEW $run $child: the review streak ended #$iss needs-human, so the run holds its child (frozen:owner)" >&2
   exit 1
 fi
+# An issue the streak already stopped stays stopped: a review queued before the freeze (a fourth CHANGES, an approval, a
+# retry of an old round) holds the child here, with no fix round and no requeue. The owner's lift is the only next move.
+if [ "$(SG_STATE="$SG_STATE" SG_REPO="$SG_REPO" python3 "$here/issue_ledger.py" read "$SG_REPO#$iss" state 2>/dev/null)" = needs-human ]; then
+  echo "RUNREVIEW $run $child: #$iss is frozen for the owner, so the run holds its child (#$iss)" >&2
+  exit 1
+fi
 [ "$v" = APPROVE ] && exit 0
 if [ "$v" = CHANGES ] && [ "${SQUAD_REVIEW_FIX:-0}" = 1 ]; then
   [ -n "$fp" ] && same=$(python3 "$here/revformat.py" --stall "$SG_STATE/auto" runfix "$key" "$fp") || same=

@@ -3,13 +3,19 @@
 A review that asks for changes opens a finding; the fix round answers it, or it does not. A fix round that ends
 `artifact_missing` wrote nothing, so the finding stands as it was: it is the finding's first repetition, and it changes
 the coder on the next round. Two CHANGES verdicts whose findings differ are two findings, so the coder stays.
-The record keeps the child's last turn of that round, so a reader sees why it stopped.
+The record keeps the child's last turn of that round, so a reader sees why it stopped. The ledger holds the streak of the
+issue across runs, and the dispatch reads it, so a requeue or a new run starts where the earlier one stopped (#702).
 """
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 
 from squad import review_streak as R
 from squad.adapter import CallResult
-from tests.gitrepo import sibling_repo
+from tests.gitrepo import sh, sibling_repo
 from tests.helpers import node, router
 from tests.test_dispatch import MODEL, ev, make, req, routed
 from tests.test_review_gate import gated
@@ -17,6 +23,7 @@ from tests.test_waves import writer
 
 CHILD = "route.router.1"
 OTHER = node(router(), "route")["allow"]["models"][1]   # the coder after the child's own model in the route node's allow list
+SCRIPTS = Path(__file__).resolve().parent.parent / "contrib" / "squad-goal" / "scripts"
 
 
 def fp(text):
@@ -115,3 +122,60 @@ async def test_two_changes_verdicts_with_different_findings_keep_the_coder(tmp_p
     eng = run(tmp_path, {CHILD: [writer("a.txt"), writer("b.txt"), writer("c.txt")]}, findings, codes=(4, 4, 0))
     assert (await eng.run()).verdict == "completed"
     assert calls(eng) == [(1, MODEL), (2, MODEL), (3, MODEL)]     # CHANGES twice with different findings: no coder change
+
+
+def github_target(tmp_path):
+    """A target whose origin names a GitHub repository, as a loop run's target does: the ledger key is that address."""
+    repo = sibling_repo(tmp_path / "t")
+    sh(repo, "git", "remote", "add", "origin", "https://github.com/x/y")
+    return repo
+
+
+def seed_streak(tmp_path, monkeypatch, issue):
+    """Two reviews of the issue with the same findings, written by the ledger's own command: one repeated finding, so the
+    ledger holds one move down the coder chain. The engine reads it from the state directory the loop would use."""
+    st = tmp_path / "state"
+    monkeypatch.setenv("SG_STATE", str(st))
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SG_")}
+    env.update(SG_STATE=str(st), SG_REPO="x/y")
+    for rnd in (1, 2):
+        p = subprocess.run([sys.executable, str(SCRIPTS / "issue_ledger.py"), "review", f"x/y#{issue}", f"r{rnd}",
+                            "changes", "the same finding"], env=env, capture_output=True, text=True, timeout=15)
+        assert p.returncode == 0, p.stderr
+    assert subprocess.run([sys.executable, str(SCRIPTS / "issue_ledger.py"), "coder", f"x/y#{issue}"],
+                          env=env, capture_output=True, text=True, timeout=15).stdout.strip() == "1"
+
+
+@pytest.mark.anyio
+@pytest.mark.heavy
+async def test_a_ledger_repeat_moves_the_next_fix_round_down_the_chain(tmp_path, monkeypatch):
+    """#702 (ADR-0151 rule 2): the moves are the issue's fact, not one run's. The review of the first entry reports the two
+    earlier runs' identical finding to the ledger, and the fix round the run starts after it answers on the next coder,
+    though this run's own record holds one review only."""
+    repo = github_target(tmp_path)
+    st = tmp_path / "state"
+    monkeypatch.setenv("SG_STATE", str(st))
+    earlier = " ".join(f'{sys.executable} "{SCRIPTS / "issue_ledger.py"}" review "x/y#735" seed-{i} changes "the same finding";'
+                       for i in (1, 2))
+    findings = 'echo "- a.txt — the same finding — it fails — fix it"'
+    cmd = tmp_path / "review.sh"
+    cmd.write_text(f'#!/bin/sh\n[ "$SQUAD_REVIEW_ROUND" = 1 ] && {{ {earlier} }}\n'
+                   f'echo "VERDICT: CHANGES"\necho "## Blocking"\n{findings}\n'
+                   f'set -- 4 0\nshift $((SQUAD_REVIEW_ROUND - 1)); exit ${{1:-0}}\n')
+    cmd.chmod(0o755)
+    eng = make(tmp_path, {"router": routed(req(task="issue #735")), CHILD: [writer("a.txt"), writer("b.txt")]},
+               tweak=gated(str(cmd)), target=repo, options={"spend_cap": 10})
+    assert (await eng.run()).verdict == "completed"
+    assert calls(eng) == [(1, MODEL), (2, OTHER)], "the ledger's one move places the fix round on the second chain entry"
+
+
+@pytest.mark.anyio
+@pytest.mark.heavy
+async def test_a_ledger_repeat_moves_a_redispatched_issue_to_the_next_coder(tmp_path, monkeypatch):
+    """#702 (ADR-0151 rule 2): a requeue starts a new run that dispatches the issue again with the top of the chain named;
+    the ledger's moves lead its first attempt, so the next attempt uses the stronger coder."""
+    repo = github_target(tmp_path)
+    seed_streak(tmp_path, monkeypatch, "735")
+    eng = make(tmp_path, {"router": routed(req(task="issue #735")), CHILD: writer("a.txt")}, target=repo)
+    assert (await eng.run()).verdict == "completed"
+    assert calls(eng) == [(1, OTHER)], "a new run's first attempt starts one place down the chain"

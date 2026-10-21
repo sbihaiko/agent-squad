@@ -147,6 +147,16 @@ for r in 1 2 3; do out=$(cd "$T/wt" && SQUAD_REVIEW_FIX=0 SQUAD_REVIEW_ROUND=$r 
 [ "$(/usr/bin/grep -c '^wave.sh requeue 7 ' "$T/wave.log")" = 1 ] && ok "L: the frozen issue adds no requeue of the head it already requeued" || ko "L: requeues '$(/usr/bin/grep -c '^wave.sh requeue 7 ' "$T/wave.log")'"
 c=$(/bin/ls "$T/st/cq" | /usr/bin/grep 'reviewstreak'); /usr/bin/grep -q 'first finding' "$T/st/cq/$c" \
   && ok "L: one status comment names the last findings" || ko "L: comment '$(/bin/ls "$T/st/cq")'"
+# a review already queued for the stopped issue (a fourth CHANGES on a head it never requeued) holds the child: no requeue,
+# and no fix round on offer either, because the owner's freeze is the one decision left on it (ADR-0029, ADR-0151 rule 1).
+(cd "$T/wt" && echo y > g && $G add g && $G -c user.email=a@b -c user.name=t commit -q -m "late work (Refs #7)")
+: > "$T/wave.log"
+out=$(cd "$T/wt" && SQUAD_REVIEW_FIX=0 SQUAD_REVIEW_ROUND=4 STUB_VERDICT=CHANGES STUB_EXTRA="d.py:9 a late finding" bash "$T/s/runreview.sh" run-1 route.1.1 7 2>&1); rc=$?
+[ "$rc" = 1 ] && [ ! -s "$T/wave.log" ] \
+  && ok "L: a review queued after the freeze holds the child and requeues nothing" || ko "L: exit $rc, wave.log '$(cat "$T/wave.log")'"
+out=$(cd "$T/wt" && SQUAD_REVIEW_FIX=1 SQUAD_REVIEW_ROUND=5 STUB_VERDICT=CHANGES STUB_EXTRA="e.py:1 another finding" bash "$T/s/runreview.sh" run-1 route.1.1 7 2>&1); rc=$?
+[ "$rc" = 1 ] && [ ! -s "$T/wave.log" ] \
+  && ok "L: a frozen issue is offered no fix round" || ko "L: exit $rc, wave.log '$(cat "$T/wave.log")'"
 # an approval resets the streak, so a fourth review is no freeze of its own
 reset; rm -f "$T/gh.log"
 (cd "$T/wt" && SQUAD_REVIEW_FIX=0 SQUAD_REVIEW_ROUND=1 STUB_VERDICT=CHANGES bash "$T/s/runreview.sh" run-1 route.1.1 7 >/dev/null 2>&1)
