@@ -30,5 +30,7 @@ A child that the reviewer sends back again and again spends money and produces n
 
 `tests/test_review_streak.py`: identical findings twice change the coder, different findings do not, a fix round that
 wrote no artifact repeats its finding and changes the coder on the first repetition, and the record keeps that round's
-last turn. The three-CHANGES freeze, the severity calibration and the approval binding are a draft until their own
-tests exist (ADR-0018).
+last turn. `contrib/squad-goal/scripts/test-childcc.sh`: a run that reviewed a child owns it, so the child-completion
+pass neither reviews nor fixes that child, a child whose approval is missing or stale holds its delivery, and the wave
+merges only a child whose approval stands at its head. The three-CHANGES freeze and the severity calibration are a draft
+until their own tests exist (ADR-0018).

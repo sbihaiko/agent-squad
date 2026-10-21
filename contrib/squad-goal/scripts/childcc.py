@@ -31,11 +31,13 @@ Code Review or sent back to Todo by a requeue, is never moved (#603, ADR-0143, A
 A run reviews its own children (#601): the verdict of its review gate is in the child's `land` event. While such a run is live
 its passed child is still its own (#696): it reviews it, fixes it or lands it, so the child is pending here only once its `land`
 event is in the record or the run has its verdict. Such a run's dispatch node names a review gate (its graph.json), or its
-record holds a review event for the child. A child its run approved
-enters with no second review here; a child its run held, with its `requeue` fact in the issue's ledger, is neither entered, reviewed nor requeued
-again; a child of a run with no review in its record is reviewed here as before. An approved child that its entry still
-holds (its review file is stale or gone) is reviewed here from the next pass (marker auto/apphold-<run>-<child>), so it is
-never held for good (#600).
+record holds a review event for the child; a review that answered "no review here" is no review, so that child is read here
+as before (ADR-0145 rule 9). A run that reviewed a child owns it (#701, ADR-0151 rule 5): childcc never reviews or fixes a
+child its run reviewed, and starts no fix run for it. The run's approval enters such a child with no second review here, and
+it binds to the head the run's review read (ADR-0151 rule 4): a child at another head, or one whose run approved no head,
+is neither reviewed nor fixed here and its delivery holds, for the wave's age cap to free it. A child its run held, with its
+`requeue` fact in the issue's ledger, is neither entered, reviewed nor requeued again; a child of a run with no review in its
+record is reviewed here as before.
 A dispatch child with fix entries (#570) has one passing `outcome` per entry: the pass works it once, by its last entry (#611).
 A review here that asks for CHANGES starts one fix run in the child's kept worktree (childfix.sh, #636), and the issue does not
 go back to the queue: the child's branch is pushed nowhere, so the pushed-branch fix lane never reaches it. The marker
@@ -206,7 +208,18 @@ def fix_round(rd, child, n, wt, fx, out):
     with (A / f"wave-pause-{rd.name}").open("a") as p: p.write(lines[-1] + "\n")   # the wave's age cap pauses while the fix run runs (#637, wave.sh expired)
     revformat.record_stall(str(A), "ccfix", key, fp, same)
     return False, out + f"\nCHILD FIX RUN #{n} ({rd.name} {child}): {first_finding(wt)} -> {pathlib.Path(lines[-1]).name}", True
-def enter(rd, child, n, d, approved=False):
+def run_hold(rd, child, n, d, ok, rnd):
+    """Why a child its run reviewed waits on that run instead of this pass (ADR-0151 rules 4 and 5), "" when its approval
+    stands: a run that reviews its own children owns them, so childcc never reviews or fixes one, and missing evidence holds
+    delivery. The approval binds to the head the run's review read (rule 4), so a new commit after it makes it stale and
+    nothing enters the wave."""
+    if not ok: return "its run approved no head for it"
+    head = str((rnd or {}).get("head") or "")
+    if not head: return "its run recorded no reviewed head, so its approval binds to nothing"
+    now = head_of(child_worktree(rd, child, d))
+    if now != head: return f"its run approved {head[:9]}, and the child stands at {now[:9] or 'no head'}: a new commit needs a new review"
+    return ""
+def enter(rd, child, n, d, approved=False, own=False):
     """The wave's entry of a finished child, in the tree the engine made for it. Return (entered, why, worked): (None, "") when the
     run cut no wave and the direct move stands, (True, the entry line) when the child is now in the wave branch, and
     (False, why) when it is in none -- a child that did not enter has no delivery to claim. `worked` is True when the
@@ -215,25 +228,24 @@ def enter(rd, child, n, d, approved=False):
     The child's own diff is reviewed here, once per head, before the entry asks for its verdict. A review that asked for
     CHANGES is not a child held where it stands: nothing behind that hold could fix it (the fix lane reads pushed work
     branches, and a child's branch is pushed nowhere), so its issue goes back to the queue -- live run or not, its next head
-    is read again."""
+    is read again. A child its run reviewed is never reviewed or fixed here (`own`, ADR-0151 rule 5): its run's approval is
+    the only evidence, and it enters on that alone, bound to the head the run read (rule 4)."""
     if not (A / f"waved-{rd.name}").exists() and not (A / f"wave-{rd.name}").exists(): return None, "", False   # `waved-` is the durable record: a landing removes `wave-`, never this
     wt = child_worktree(rd, child, d)
     if not wt.is_dir(): return False, f"WAVE no entry for #{n}: the child's worktree {wt} is not there", False
     rq = requeue_head(rd.name, n)   # the sha a refused entry left the child on: the same sha would fail the same gates again, so the pass waits for a new commit
     if rq == "held": return False, f"CHILD HELD #{n}: its ledger could not be read", False
     if rq and rq == head_of(wt): return False, "", False
-    hold = A / f"apphold-{rd.name}-{child}"   # its run approved it, but the entry held it once: the review here takes over (#600)
-    approved = approved and not hold.exists()
     fx = A / f"ccfix-{rd.name}-{child}"   # the fix run this pass started for the child (#636)
     if fx.exists() and fix_live(fx):   # its fix run still works the child's worktree: held, at no cost, and its wave waits
         HOLDS.add(f"{rd.name} {child}")
         return False, f"CHILD FIX WAIT #{n} ({rd.name} {child}): its fix run {pathlib.Path(fx.read_text().strip()).name} has no verdict yet", False
+    if not approved and own: return False, f"CHILD RUN-OWNED #{n} ({rd.name} {child}): its run approved no head for it; delivery holds", False
     if not approved and not reviewed(rd, child, n, wt, A / f"rvd-{rd.name}-{child}"): return False, "", None   # no review slot: the child waits, and the landing waits for it
     e = subprocess.run(["bash", wave, "enter", rd.name, str(n)], cwd=str(wt), capture_output=True, text=True)
     out = (e.stdout + e.stderr).strip()
-    if approved and "WAVE HOLD" in out: hold.touch()
     if "WAVE REQUEUE" in out or "WAVE STOP" in out: record_requeue(rd.name, n, head_of(wt))   # a hold (no review yet) is no requeue: it is tried again on the same sha; a stop (#594) is one that froze the issue
-    if e.returncode != 0 and re.search(r"did not approve it: .*CHANGES", out):
+    if not own and e.returncode != 0 and re.search(r"did not approve it: .*CHANGES", out):
         return fix_round(rd, child, n, wt, fx, out)   # a fix run in its worktree, never a requeue at once (#636)
     elif e.returncode != 0 and "WAVE HOLD" in out:   # held, not requeued: the wave waits for it (#620)
         HOLDS.add(f"{rd.name} {child}")
@@ -261,7 +273,7 @@ for r in (sys.argv[1:] or (st / "active-runs.txt").read_text().split()):
     if not rec.exists(): continue
     finished = '"event": "verdict"' in rec.read_text()
     issue, seen, done, unmapped, defn, failed, verdict = {}, set(), {}, [], {}, {}, {}   # done: one item per child, its last passing entry (#611)
-    owned, landed = set(), set()   # the children the run reviews itself, and the children with a `land` event (#696)
+    owned, landed, rounds = set(), set(), {}   # the children the run reviews itself (#696), the children with a `land` event, and each child's last review round
     try: gated = {g.get("name") for g in json.loads((rec.parent / "graph.json").read_text()).get("nodes", []) if isinstance(g, dict) and g.get("review")}   # the dispatch nodes with a review gate
     except (OSError, ValueError, AttributeError): gated = set()
     for l in rec.open():
@@ -276,8 +288,11 @@ for r in (sys.argv[1:] or (st / "active-runs.txt").read_text().split()):
             done.pop(d["node"], None); done[d["node"]] = (d.get("reasons") or [""])[0]   # a fix entry (#570) is entry 2, 3, ... of the same child: the last one stands, and its worktree holds its head
         elif d.get("event") == "outcome" and d.get("outcome") == "pass" and d.get("node") in seen:
             if d["node"] not in unmapped: unmapped.append(d["node"])
+        elif d.get("event") == "review_round" and d.get("node") in seen:
+            if d.get("verdict") == "no_review": owned.discard(d["node"])   # "no review here" is no review: the pass reads that child as before (ADR-0145 rule 9)
+            else: owned.add(d["node"]); rounds[d["node"]] = d   # the run reviewed this head, so it owns the child (#701, ADR-0151 rule 5)
         elif str(d.get("event")).startswith("review_") and d.get("node") in seen:
-            owned.add(d["node"])   # the run reviews this child itself (#696)
+            owned.add(d["node"])   # a review try or a round in flight: only the run reads that head
         elif d.get("event") == "land" and d.get("node") in seen:
             landed.add(d["node"])
             rv = (d.get("effect") or {}).get("review") if isinstance(d.get("effect"), dict) else None
@@ -287,7 +302,7 @@ for r in (sys.argv[1:] or (st / "active-runs.txt").read_text().split()):
     if (A / f"ccfixrun-{name}").exists(): continue   # a fix run this pass started: its child commits in another child's worktree, and delivers nothing itself (#636)
     for child, why in done.items():
         if not finished and child in owned and child not in landed: continue   # its live run still reviews, fixes or lands it (#696)
-        if not (A / f"cc-{name}-{child}").exists(): pending.append((f"{name} {child}", r, child, why, issue[child], finished, defn.get(child), failed.get(child), verdict.get(child) == "approve"))
+        if not (A / f"cc-{name}-{child}").exists(): pending.append((f"{name} {child}", r, child, why, issue[child], finished, defn.get(child), failed.get(child), verdict.get(child) == "approve", child in owned, rounds.get(child)))
     for child in unmapped:
         mk = A / f"unmap-{name}-{child}"
         if mk.exists(): continue
@@ -312,8 +327,8 @@ if STOP is not None:
     sys.exit(0)
 cur = CURSOR.read_text().strip() if CURSOR.exists() else ""
 k0 = next((i for i, p in enumerate(pending) if p[0] > cur), 0)
-spent, visited = 0, set()
-for key, r, child, why, n, finished, d, lwhy, ok in pending[k0:] + pending[:k0]:
+spent, visited, RUN_HELD = 0, set(), set()   # RUN_HELD: the children this pass left to their run's approval, so the landing waits for them (ADR-0151 rule 5)
+for key, r, child, why, n, finished, d, lwhy, ok, own, rnd in pending[k0:] + pending[:k0]:
     if spent >= BUDGET: break   # the budget is spent: the children left wait for the next pass
     visited.add(key)
     HELD.update(key=key, step="enter", rk=None); publish()
@@ -328,7 +343,14 @@ for key, r, child, why, n, finished, d, lwhy, ok in pending[k0:] + pending[:k0]:
         subprocess.run(["bash", wave, "requeue", str(n), f"its landing failed: {lwhy}"], capture_output=True, env={**os.environ, "SG_REQUEUE_RUN": name})
         print(f"CHILD LAND REQUEUE #{n} ({name} {child}): {lwhy}", flush=True); mk.touch(); continue
     if finished and not waved and card_status(n) not in ("Todo", "In Progress", "Blocked"): mk.touch(); continue   # backfill never moves a card past (or out of) its column
-    entered, why, worked = enter(pathlib.Path(r), child, n, d, ok)
+    if own:
+        held = run_hold(pathlib.Path(r), child, n, d, ok, rnd)
+        if held:   # a run that reviewed the child owns it: childcc never reviews or fixes one, and missing evidence holds delivery (#701, ADR-0151 rules 4 and 5)
+            print(f"CHILD RUN-OWNED #{n} ({name} {child}): {held}; delivery holds", flush=True)
+            RUN_HELD.add(key)
+            if subprocess.run(["bash", wave, "expired", name], capture_output=True).returncode: visited.discard(key)   # a wave past its age cap lands and requeues it (#378)
+            continue
+    entered, why, worked = enter(pathlib.Path(r), child, n, d, ok, own)
     if worked is None: visited.discard(key); continue   # the review budget was full: this child had no turn, so the pass leaves it (exit 3) and the next one tries it first
     if worked: spent += 1; CURSOR.write_text(key + "\n")
     if why: print(why, flush=True)
@@ -344,16 +366,16 @@ for key, r, child, why, n, finished, d, lwhy, ok in pending[k0:] + pending[:k0]:
 # child is never in `visited` (#620): it holds the landing until its hold is requeued or its wave reaches its age cap.
 rnd = set(ROUND.read_text().split("\n")) - {""} if ROUND.exists() else set()
 keys = {p[0] for p in pending}
-left = [k for k in keys - visited if k not in rnd]
+left = [k for k in keys - visited if k not in rnd or k in RUN_HELD]
 # The children that wait for review: every pending child this pass did not work, deferred or out of the budget's reach. The
 # dispatch passes read the count (gh_dispatch_hold, #562) and start no new run while too many wait; it is written on every
 # pass, 0 when none wait, and atomically, so a reader never sees a half-written count.
 WAITING = st / "childcc-waiting"
 _tmp = WAITING.with_name(f"{WAITING.name}.{os.getpid()}.tmp"); _tmp.write_text(f"{len(keys - visited)}\n"); os.replace(_tmp, WAITING)
 HELD.update(key=None, step=None, rk=None); publish(live=False)
-for key, r, child, why, n, finished, d, lwhy, _ in pending:   # a child that waits for review: its card reads Code Review (#603)
+for key, r, child, why, n, finished, d, lwhy, *_ in pending:   # a child that waits for review: its card reads Code Review (#603)
     name = pathlib.Path(r).name
-    if key not in visited and (A / f"wave-{name}").exists(): code_review(name, child, n, "it waits for review")
+    if key not in visited and key not in RUN_HELD and (A / f"wave-{name}").exists(): code_review(name, child, n, "it waits for review")
 if left:
     ROUND.write_text("".join(k + "\n" for k in sorted((rnd & keys) | visited | {k for k in rnd if k.split(" ")[0] not in runs})))
     print(f"CHILDCC DEFERRED {len(left)} child(ren) wait for a later pass: {', '.join(sorted(left))}", flush=True)
