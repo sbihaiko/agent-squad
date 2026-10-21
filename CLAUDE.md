@@ -66,7 +66,7 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 ### Run engine
 
 - **Run truth lives in one module; the exit code is a function of one verdict** ([ADR-0019](docs/adr/0019-run-truth-in-one-module.md)). Guard: none yet.
-- **Loop defects are fixed outside it: `loop-bug` halts dispatch** ([ADR-0146](docs/adr/0146-a-loop-defect-is-fixed-outside-the-loop.md)). Guard: `contrib/squad-goal/scripts/test-autobug.sh`, `contrib/squad-goal/scripts/test-autofrontier-one-run.sh`, `contrib/squad-goal/scripts/test-childcc.sh`.
+- **`loop-bug` halts dispatch, never an approved wave's landing** ([ADR-0146](docs/adr/0146-a-loop-defect-is-fixed-outside-the-loop.md)). Guard: `contrib/squad-goal/scripts/test-autobug.sh`, `contrib/squad-goal/scripts/test-autofrontier-one-run.sh`, `contrib/squad-goal/scripts/test-childcc.sh`.
 - **Needs-human is not success and has its own exit code; its card keeps its column, marked frozen:owner** ([ADR-0029](docs/adr/0029-needs-human-exit-code.md)). Guard: `tests/test_verdict.py`, `tests/test_resume.py`, `tests/test_cli.py`, `contrib/squad-goal/scripts/test-janitor-disp-expiry.sh`.
 - **An interruptible write is atomic** ([ADR-0030](docs/adr/0030-atomic-writes.md)). Guard: `tests/test_record.py`.
 - **A call has a deadline; a stuck agent is found without a caller** ([ADR-0051](docs/adr/0051-call-deadline-and-stuck-agent.md)). Guard: `tests/test_deadlines.py`, `tests/test_monitor.py`.
@@ -83,6 +83,9 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 - **An adaptation is a read-only report; round one has no cross-run input** ([ADR-0109](docs/adr/0109-adaptation-report-no-cross-run.md)). Guard: `tests/test_graph.py`, `tests/test_report.py`.
 - **A dispatch node requests children inside an author-fixed envelope** ([ADR-0113](docs/adr/0113-dispatch-envelope.md)). Guard: `tests/test_dispatch.py`, `tests/test_waves.py`, `tests/test_graph.py`.
 - **One model registry names every model; one resolver maps a raw spelling to a route; a chain is a list of registry ids** ([ADR-0147](docs/adr/0147-one-model-registry.md)). Guard: `tests/test_model_resolver_seam.py`, `tests/test_modelreg.py`.
+- **One writer per loop fact: the issue ledger is the single source, every writer goes through one transition function, a missing or corrupt ledger holds dispatch, a rearm is a floor** ([ADR-0149](docs/adr/0149-one-writer-per-loop-fact.md)). Guard: none yet; a draft.
+- **A run never holds conflicting siblings: no two children of one spec, no two issues that name the same file; checked before dispatch** ([ADR-0150](docs/adr/0150-a-run-never-holds-conflicting-siblings.md)). Guard: none yet; a draft.
+- **A review streak escalates: three CHANGES verdicts go to needs-human, identical findings twice change the coder, an approval binds to the reviewed commit** ([ADR-0151](docs/adr/0151-a-review-streak-escalates.md)). Guard: none yet; a draft.
 
 ### Dashboard, editor and repository
 
