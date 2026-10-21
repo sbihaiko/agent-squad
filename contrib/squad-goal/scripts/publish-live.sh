@@ -13,6 +13,10 @@
 # A publish refuses (exit 3, nothing written, one line naming the tree) when the source is a linked worktree (#658).
 # A publish writes $dest/PUBLISHED (`<sha> <utc>`, atomic): the tested sha, the source HEAD (#700). --check prints
 # `publish <sha>` while PUBLISHED is missing or names another sha. A publish with a failed copy writes no PUBLISHED. A source with no git has no sha and no PUBLISHED.
+# A publish closes every issue named by a `Closes #n` trailer in the commits it makes live -- the previously published sha
+# (exclusive) to the source HEAD -- with one comment naming the sha and the published time (#732). The loop's loop-bug stop
+# reads the issue state alone (ADR-0149), so it lifts by itself; a TDD RED commit names its issue and closes nothing
+# (ADR-0136). --check closes nothing, and a close that fails is named, never failing the publish.
 #
 # The retired names (#122, #134, #361) are the routes the repository no longer ships: the fork-only route and, from the #361
 # landing, the pull-request route. The fork names are split in the source so this list is not itself a call site:
@@ -84,6 +88,50 @@ shipped() { { ( cd "$src" && find . -type f ! -name .DS_Store ! -name '*.pyc' ! 
   | { grep -vE '^scripts/profiles/.+\.sh$' || true; }
   [ -f "$src/scripts/profiles/example.sh" ] && printf '%s\n' scripts/profiles/example.sh; } | LC_ALL=C sort -u; }
 
+# The issues a publish closes (#732). The loop-bug stop reads the issue state and nothing else (ADR-0149, one writer per
+# fact), so the step that makes a fix live is the step that closes its issue: a published commit carrying a `Closes #n`
+# trailer closes #n, with one comment naming the sha and the published time, and the stop lifts on the next pass. A
+# TDD RED commit names its issue in the subject and carries no closing trailer, so it closes nothing (ADR-0136). The
+# commits are the range the publish makes live: the previously published sha (exclusive) to the source HEAD, or the HEAD
+# alone when PUBLISHED is missing or names a commit the source does not hold. --check closes nothing. The repository is
+# SG_REPO when the profile sets it, else the source's origin when that is a github.com URL; a source with neither closes
+# nothing. Every reach goes through the door (ADR-0277): gh_send is its write half, and it returns 0 only when GitHub
+# accepted the write. A close that fails is named and never fails the publish: the live copy already moved.
+. "$here/ghcall.sh"
+publish_repo() {
+  local u
+  case "${SG_REPO:-}" in ?*/?*) printf '%s\n' "$SG_REPO"; return 0;; esac
+  u=$(git -C "$src" remote get-url origin 2>/dev/null) || return 1
+  case "$u" in
+    git@github.com:*) u=${u#git@github.com:};;
+    ssh://git@github.com/*) u=${u#ssh://git@github.com/};;
+    https://github.com/*|http://github.com/*) u=${u#*github.com/};;
+    *) return 1;;
+  esac
+  printf '%s\n' "${u%.git}"
+}
+closed_issues() { # closed_issues FROM TO: the issue numbers the published commits close, sorted once
+  { if [ -n "$1" ] && git -C "$src" cat-file -e "$1^{commit}" 2>/dev/null \
+       && git -C "$src" merge-base --is-ancestor "$1" "$2" 2>/dev/null
+    then git -C "$src" log --format=%B "$1..$2" 2>/dev/null
+    else git -C "$src" log -1 --format=%B "$2" 2>/dev/null; fi; } \
+  | /usr/bin/grep -oiE '^[[:space:]]*(close[sd]?|fix(e[sd])?|resolve[sd]?):?[[:space:]]+#[0-9]+([[:space:],]+#[0-9]+)*[[:space:].]*$' \
+  | /usr/bin/grep -oE '#[0-9]+' | /usr/bin/grep -oE '[0-9]+' | sort -n -u
+}
+close_named() { # close_named FROM TO UTC
+  local repo n out
+  repo=$(publish_repo) || return 0
+  for n in $(closed_issues "$1" "$2"); do
+    out=$(gh_send -X POST "repos/$repo/issues/$n/comments" -f body="Closed by the publish of $2 at $3." 2>&1) \
+      || echo "publish-live: #$n did not take the closing comment: $(printf '%s' "$out" | head -1)"
+    if out=$(gh_send -X PATCH "repos/$repo/issues/$n" -f state=closed -f state_reason=completed 2>&1); then
+      echo "publish-live: closed #$n in $repo"
+    else
+      echo "publish-live: #$n did not close: $(printf '%s' "$out" | head -1)"
+    fi
+  done
+}
+
 sha=$(git -C "$src" rev-parse HEAD 2>/dev/null); bad=
 rc=0
 for f in $(shipped); do
@@ -110,9 +158,14 @@ for n in $RETIRED_DATA; do
   if [ -n "$check" ]; then echo "drop $n"; rc=1; continue; fi
   rm -f "$dest/$n"; echo "publish-live: dropped $n"
 done
-if [ -n "$sha" ] && [ "$(cut -d' ' -f1 "$dest/PUBLISHED" 2>/dev/null)" != "$sha" ]; then
+prev=$(cut -d' ' -f1 "$dest/PUBLISHED" 2>/dev/null)
+if [ -n "$sha" ] && [ "$prev" != "$sha" ]; then
   if [ -n "$check" ]; then echo "publish $sha"; rc=1
-  elif [ -z "$bad" ]; then printf '%s %s\n' "$sha" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$dest/PUBLISHED.new.$$" && mv "$dest/PUBLISHED.new.$$" "$dest/PUBLISHED"; fi
+  elif [ -z "$bad" ]; then
+    utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    close_named "$prev" "$sha" "$utc"
+    printf '%s %s\n' "$sha" "$utc" > "$dest/PUBLISHED.new.$$" && mv "$dest/PUBLISHED.new.$$" "$dest/PUBLISHED"
+  fi
 fi
 [ -n "$check" ] && exit $rc
 echo "publish-live: $(shipped | wc -l | tr -d ' ') file(s) published to $dest, retired names dropped by name"

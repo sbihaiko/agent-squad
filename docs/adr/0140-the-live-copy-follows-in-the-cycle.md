@@ -47,6 +47,15 @@ reader for was its own drift.
 8. **The pass never fails the cycle.** A drift, and a publish that could not land, are reported and the
    pass exits 0: the cycle's other steps keep their beat, and a source tree the publish cannot resolve
    is a defect of that tree, named every cycle until the tree drops it.
+9. **A publish closes the issues its commits name.** The `loop-bug` stop reads the issue state and
+   nothing else (ADR-0149), so the step that makes a fix live is the step that closes it. A commit the
+   publish makes live that carries a `Closes #n` trailer closes `#n`, with one comment naming the sha
+   and the published time, and the stop lifts on the next pass. The commits are the previously published
+   sha (exclusive) to the source HEAD; the HEAD alone when `PUBLISHED` is missing or names a commit the
+   source does not hold. A `TDD RED` commit names its issue and carries no closing trailer, so it closes
+   nothing (ADR-0136). `--check` closes nothing, and a close that fails is named, never failing the
+   publish. The ledger keeps its local record; the write to GitHub is the issue close alone, and no
+   other pass writes that fact.
 
 ## Consequences
 
@@ -56,6 +65,8 @@ reader for was its own drift.
   until the tree drops it. The defect is in the tree, not in the two lists.
 - The live copy names the sha it holds, and the drivers name the sha they run, so a gap between them is
   one line, not a guess.
+- A `loop-bug` stop that a landed fix closed stays lifted: the issue closes when the fix becomes live,
+  not when it lands, and no owner hand closes it in between.
 - A note that does not change is not printed again, so two cycles with no change print nothing.
 - The reader owns no second dialect of the publish: what it reads and what it prints are the publish's
   own lines.
@@ -66,7 +77,9 @@ reader for was its own drift.
 named; after the pass the publish reports no difference; the machine config and a file no one named are
 untouched; a difference the publish cannot land is named; a checkout that ships no copy of the skill
 says nothing; a publish names its sha and a pending restart once; a hand edit to live `models.json` and
-live clutter are named once), `contrib/squad-goal/scripts/test-publish-live.sh` (`PUBLISHED` and its
-`--check` line; a linked worktree writes none), `contrib/squad-goal/scripts/test-watchd-driver-sha.sh`
+live clutter are named once; a publish closes the issue its `Closes #n` fix names, once, and a `TDD RED`
+commit closes nothing), `contrib/squad-goal/scripts/test-publish-live.sh` (`PUBLISHED` and its
+`--check` line; a linked worktree writes none; the close names the sha and the published time, closes
+each issue once, and `--check` closes nothing), `contrib/squad-goal/scripts/test-watchd-driver-sha.sh`
 (a start records `driver.sha`) and `contrib/squad-goal/scripts/test-watch-cycle.sh` (the cycle runs the pass once per
 cycle under its own single-flight lock).

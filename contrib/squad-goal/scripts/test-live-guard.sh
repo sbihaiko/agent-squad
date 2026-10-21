@@ -8,7 +8,7 @@ d=$(dirname "$0"); src=${1:-$d/live-guard.sh}; T=$(mktemp -d); fail=0; ok() { ec
 
 S=$T/scripts; co=$T/co; live=$T/home/.claude/skills/squad-goal; repo=$co/contrib/squad-goal
 mkdir -p "$S" "$repo/scripts/profiles" "$live/scripts/profiles" "$T/st"
-cp "$src" "$S/live-guard.sh"; cp "$d/publish-live.sh" "$S/publish-live.sh"; cp "$d/modelreg.py" "$d/registry.json" "$S/"
+cp "$src" "$S/live-guard.sh"; cp "$d/publish-live.sh" "$S/publish-live.sh"; cp "$d/ghcall.sh" "$d/modelreg.py" "$d/registry.json" "$S/"
 # The pass reads its checkout and its live skill from the profile, as every pass does: the fixture profile names both.
 cat > "$S/env.sh" <<EOF
 export SG_CHECKOUT=\${SG_CHECKOUT:-$co} SG_LIVE_DIR=\${SG_LIVE_DIR:-$live} SG_STATE=\${SG_STATE:-$T/st}
@@ -221,7 +221,8 @@ clpass() { SG_REPO=example/squad PATH="$T/cbin:$PATH" SG_CHECKOUT=$T/closes SG_L
 out=$(clpass); rc=$?
 [ "$rc" = 0 ] && ok "a pass that closes an issue still exits 0" || ko "the closing pass exited $rc: $out"
 case "$out" in *"LIVE-GUARD publish-live: closed #732"*) ok "the pass names the issue the publish closed";; *) ko "the close is not named: $out";; esac
-[ "$(cat "$T/gh.log" 2>/dev/null | wc -l | tr -d ' ')" = 1 ] && ok "the pass closes the issue once" || ko "gh calls: $(cat "$T/gh.log" 2>/dev/null)"
+[ "$(/usr/bin/grep -c 'state=closed' "$T/gh.log" 2>/dev/null || true)" = 1 ] && ok "the pass closes the issue once" || ko "close calls: $(cat "$T/gh.log" 2>/dev/null)"
+case "$(cat "$T/gh.log")" in *"api -X PATCH repos/example/squad/issues/732 "*"state=closed"*) ok "the close goes through the one interface to the issue";; *) ko "the close: $(cat "$T/gh.log")";; esac
 clsha=$(G -C "$T/closes" rev-parse HEAD); cts=$(cut -d' ' -f2 "$T/closes.live/PUBLISHED")
 case "$(cat "$T/gh.log")" in *"$clsha"*"$cts"*) ok "the comment names the published sha and time";; *) ko "the comment: $(cat "$T/gh.log")";; esac
 printf 'hand\n' > "$T/closes.live/scripts/hub.py"; : > "$T/gh.log"; out=$(clpass)

@@ -133,7 +133,7 @@ The column is the one the writer asks for. A board write that the API refuses le
 | 17 | janitor.py R | run records (active runs and run folders under the checkout, `worktrees/run/*` and `worktrees/child/*`); the ledger's `entered` and `landed` facts; issue state and labels; board cards, read once; remote branches; review files | board PATCH only on a mismatch. An issue follows the newest run that holds it; rank orders the signals of that run only. A child done and not in the run's open wave ranks Code Review (35). A landing is delivered work only when a landing pass wrote the issue's ledger fact `landed` (`wave.sh`, `branchland.sh`, ADR-0149); rule R reads that fact, never a run's land heads, so a local land commit that reached no base delivers nothing (#691). A run that cut no wave delivers by its own land event. Run fields; frozen:owner for a Blocked want; cycle.log | Code Review; Closed |
 | 18 | owner | the dev tip | `promote-pass.sh`: full suite in a clean clone under the gate lock (try mode), gate-status-full, commit status `squad/full-proof`, then `promote-stg.sh` | - |
 | 19 | promote-stg.sh | gate-status-full (`SG_PROMOTE_PROOF=local`) or the dev tip's CI (`ci`), under the gate lock | stg ref, fast-forward only; promote.log once per tip and reason | - |
-| 20 | live-guard.sh | main tree branch is stg and clean; fetch origin/stg; `publish-live.sh --check`; live `PUBLISHED`, `scripts/models.json` digest and `scripts/*.bak-*`; `driver.sha` (written by `watchd.sh start`) | ff of the main tree; the file list and `PUBLISHED` (source HEAD sha) into `~/.claude/skills/squad-goal`; `live-guard.models`, `.clutter`, `.restart` (each note named once) | - |
+| 20 | live-guard.sh | main tree branch is stg and clean; fetch origin/stg; `publish-live.sh --check`; live `PUBLISHED`, `scripts/models.json` digest and `scripts/*.bak-*`; `driver.sha` (written by `watchd.sh start`) | ff of the main tree; the file list and `PUBLISHED` (source HEAD sha) into `~/.claude/skills/squad-goal`; each issue a published `Closes #n` names, closed with one comment (sha, publish time) (#732); `live-guard.models`, `.clutter`, `.restart` (each note named once) | - |
 
 ### Run folders
 
@@ -258,6 +258,7 @@ sequenceDiagram
     Note over LG: live publication
     LG->>LG: main tree not on stg, a shipped file dirty, fetch failed, or diverged: named, nothing published
     LG->>LG: publish: PUBLISHED holds the source HEAD sha#59; LIVE-GUARD published SHA
+    LG->>GH: a published commit carrying Closes #n closes #n, one comment naming sha and publish time#59; the loop-bug stop lifts
     LG->>LG: driver.sha differs from PUBLISHED: restart pending (owner), once per publish#59; no process started or stopped
     LG->>LG: live models.json digest changed: changed by hand, once#59; never compared with the repository
 ```
