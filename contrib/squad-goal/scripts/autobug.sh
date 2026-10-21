@@ -111,7 +111,7 @@ sg_issue_body() {
 lab=${SG_BUG_LABEL:-bug}; skip=${SG_BUG_SKIP_LABELS:-needs-owner,no-auto,wontfix,question}
 # The frozen labels autofrontier.sh skips too (#530) are a floor, never a default (#537): a profile sets its own
 # SG_BUG_SKIP_LABELS and env.sh exports it, so a default here never applied and a frozen:dependency issue was dispatched.
-skip="$skip,frozen:owner,frozen:dependency"
+skip="$skip,frozen:owner,frozen:dependency,needs-info"   # needs-info: a ticket waits on an answer (#729)
 read -r free < <(cd "$SG_CHECKOUT" && python3 - "$SG_STATE/active-runs.txt" <<'PY'
 import os, re, sys, pathlib
 # The free slots come from the machine-wide ceiling caps.runs in squad/caps.py, the one resolution the engine enforces, lowered
@@ -205,6 +205,7 @@ for sel in "$lab" debt; do
     sg_not_startable "$n" && { echo "AUTOBUG skip #$n: SQUAD-NOT-STARTABLE among its comments (a failure the loop already repeated)"; continue; }
     h=$(sg_ledger_held "$n") && { echo "AUTOBUG skip #$n: $h"; continue; }   # a corrupt ledger holds its issue (ADR-0149)
     ready_now "$n" || continue
+    sg_ac_refused "$n" "$F/issue-$n.json" AUTOBUG && continue   # an acceptance command on a missing script (#729)
     cand+=("$n")
   done <<<"$list"
   [ "$sel" = "$lab" ] && nb=${#cand[@]}   # the bugs among the candidates; debt is read only when there is none (#616)

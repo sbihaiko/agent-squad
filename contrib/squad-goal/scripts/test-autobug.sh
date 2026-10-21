@@ -615,16 +615,26 @@ case "$r" in *"[71]"*) ko "15b a profile skip list let a frozen:owner issue thro
 case "$r" in *"[72]"*) ok "15b a plain bug is still a candidate under a profile skip list";; *) ko "15b the plain bug was skipped: '$r'";; esac
 # 15c) (#729) a bug whose acceptance command names a missing repository script is not dispatched: the pass names the path and
 # the needs-info refusal. A bug with no acceptance command is dispatched as before. needs-info is a skip floor, as frozen is.
+# The stub's aggregate read carries each body, as the real one does.
 M=$T/acmiss; mkdir -p "$M/bin"; cp "$d/acpaths.py" "$T/s/" 2>/dev/null
 cat > "$M/issues.json" <<'JSON'
 [
-  {"number":74,"title":"Check fails","body":"## Acceptance criteria\n\n- [ ] `python3 scripts/checks/gone.py` passes.","created_at":"2026-10-10T15:00:00Z","labels":[{"name":"bug"},{"name":"ready-for-agent"}]},
-  {"number":75,"title":"Plain bug","body":"z.py","created_at":"2026-10-10T15:02:00Z","labels":[{"name":"bug"},{"name":"ready-for-agent"}]},
-  {"number":76,"title":"Waits on an answer","body":"q.py","created_at":"2026-10-10T15:03:00Z","labels":[{"name":"bug"},{"name":"ready-for-agent"},{"name":"needs-info"}]}
+  {"number":74,"title":"Check fails","body":"## Acceptance criteria\n\n- [ ] `python3 scripts/checks/gone.py` passes.","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]},
+  {"number":75,"title":"Plain bug","body":"z.py","created_at":"2026-10-10T15:02:00Z","labels":["bug","ready-for-agent"]},
+  {"number":76,"title":"Waits on an answer","body":"q.py","created_at":"2026-10-10T15:03:00Z","labels":["bug","ready-for-agent","needs-info"]}
 ]
 JSON
-sed "s#$R/issues.json#$M/issues.json#g" "$R/bin/gh" > "$M/bin/gh"; chmod +x "$M/bin/gh"; todo 74 75 76
-r=$(PATH="$M/bin:$PATH" AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+cat > "$M/bin/gh" <<J
+#!/bin/bash
+case "\$*" in
+  *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$M/issues.json" ;;
+  *"issues?state=open"*labels=bug*) jq -r '.[]|select((.labels // [])|index("bug"))|"\(.number)\u001f\(.labels|join(","))"' "$M/issues.json" ;;
+  *issues/*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issues/[0-9]+' | cut -d/ -f2); jq -c --argjson n "\$n" '.[]|select(.number==\$n)' "$M/issues.json" ;;
+  *) echo "" ;;
+esac
+J
+chmod +x "$M/bin/gh"; todo 74 75 76
+r=$(PATH="$M/bin:$PATH" SG_GH_CACHE_WINDOW=0 AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
 case "$r" in *"would dispatch"*"[74]"*|*"would dispatch"*" 74"*) ko "15c a bug whose acceptance command names a missing script was dispatched: '$r'";; *) ok "15c a bug whose acceptance command names a missing script is not dispatched";; esac
 case "$r" in *"AUTOBUG would refuse #74: "*"scripts/checks/gone.py"*needs-info*) ok "15c the pass names the missing path and needs-info";; *) ko "15c no refusal line for #74: '$r'";; esac
 case "$r" in *"[75]"*) ok "15c a bug with no acceptance command is still a candidate";; *) ko "15c the plain bug was skipped: '$r'";; esac

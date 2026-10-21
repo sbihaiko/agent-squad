@@ -134,3 +134,21 @@ sg_not_startable() {
   [ "$rc" -eq 0 ] || return 1
   printf '%s\n' "$out" | /usr/bin/grep -q '^SQUAD-NOT-STARTABLE:'
 }
+# A ticket whose acceptance commands name a repository path the repository does not hold is not dispatched (#729): the run
+# would spend its budget and end failed on a command that cannot pass (run-20261021-043520-76754d named three scripts that did
+# not exist). acpaths.py finds the paths; a path the ticket creates is not missing. sg_ac_refused <issue> <issue.json> <PASS>
+# exits 0 when the ticket is refused: it queues one comment that names the paths, labels the issue needs-info (a skip label
+# of both dispatchers), and prints the refusal. A check that cannot run refuses nothing. Under AF_DRY or AB_DRY it only prints.
+sg_ac_refused() {
+  local m p o rc
+  m=$(python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/acpaths.py" "$2" "${SG_CHECKOUT:-.}" "${SG_BASE:-main}" "origin/${SG_BASE:-main}" 2>/dev/null); rc=$?
+  [ "$rc" = 1 ] && [ -n "$m" ] || return 1
+  p=$(printf '%s\n' "$m" | paste -sd, - | sed 's/,/, /g')
+  [ -n "${AF_DRY:-}${AB_DRY:-}" ] && { echo "$3 would refuse #$1: its acceptance commands name missing paths: $p; needs-info"; return 0; }
+  if [ "$(cat "$SG_STATE/auto/acmiss-$1" 2>/dev/null)" != "$p" ]; then   # one comment per set of paths, even when the label write fails
+    printf 'SQUAD-AC-MISSING: the loop did not dispatch this ticket. Its acceptance criteria name commands on paths the repository does not hold: %s. A run cannot pass a command on a missing script. Fix the command, or name the path under "What to build" when the run must create it, then remove the needs-info label.\n' "$p" > "$(sg_cq_file "$1-acmissing.md")"
+    mkdir -p "$SG_STATE/auto"; printf '%s\n' "$p" > "$SG_STATE/auto/acmiss-$1"
+  fi
+  o=$(gh_send --method POST "repos/$SG_REPO/issues/$1/labels" -f "labels[]=needs-info") || echo "$3 NOTE #$1: the needs-info label write failed, the next pass retries: ${o%%$'\n'*}" >&2
+  echo "$3 refuse #$1: its acceptance commands name missing paths: $p; commented and labelled needs-info"
+}
