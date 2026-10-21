@@ -19,6 +19,10 @@ evolution starts the count again at one: a new evolution key (the newest non-RED
 after the stop, which only the owner lets start. A runless failure after a stop counts on and clears the stop, as the old
 ledger's appended line did.
 
+A rearm keeps a floor (#692): `rearmed` holds the rearm's time and every run either ledger listed. `fail` counts no run the
+floor names, and the janitor counts no run whose verdict is older than the floor's time, so the old runs never stop the issue
+again. The run set covers a record with no time; the time covers a run no ledger listed.
+
 Seed: a missing file of the profile's primary repository (SG_REPO) reads the old auto/requeues-<n> and auto/loopqueues-<n>
 counters and their .runs ledgers, so a live cutover needs no halt. The counter wins over the line count: a counter the owner
 reset holds (#673: requeues-543 read 1 while its ledger held 2 lines). The first write makes the file, and the old files are
@@ -32,6 +36,7 @@ import pathlib
 import re
 import sys
 import tempfile
+import time
 
 LEDGERS = ("own", "loop")
 OLD = {"own": "requeues", "loop": "loopqueues"}   # the old marker names wave.sh wrote in auto/ before #673
@@ -125,7 +130,8 @@ def count(key, led="own"):
 def fail(key, run, evo, why, led="own"):   # -> (count, fresh, stopped): fresh 1 when this call counted the run
     with locked(key):
         rec = load(key); L = rec[led]
-        if run and any(x["run"] == run for x in L["runs"]): return L["count"], 0, int(bool(L["stopped"]))
+        if run and (run in (rec.get("rearmed") or {}).get("runs", []) or any(x["run"] == run for x in L["runs"])):
+            return L["count"], 0, int(bool(L["stopped"]))   # a run counts once, and a run from before the rearm not at all
         last = L["runs"][-1] if L["runs"] else None
         if (L["stopped"] and run) or (not L["stopped"] and last is not None and last["key"] != evo):
             L["runs"], L["count"] = [], 0   # evolution: a new key, or a new run after the stop (ADR-0134)
@@ -145,7 +151,11 @@ def stop(key, why, led="own"):   # -> the runs counted, one comment line each
 
 def rearm(key):   # the loop facts go; the SQUAD-NOT-STARTABLE comment goes through the comment queue (cqflush.sh unstart~)
     o, r, n = parse(key)
-    with locked(key): save(key, empty(key))
+    with locked(key):
+        old = load(key); rec = empty(key)
+        runs = {x["run"] for led in LEDGERS for x in old[led]["runs"] if x["run"]} | set((old.get("rearmed") or {}).get("runs", []))
+        rec["rearmed"] = {"ts": time.time(), "runs": sorted(runs)}   # the floor (#692): no run from before it counts again
+        save(key, rec)
     q = state_dir() / "cq"; q.mkdir(parents=True, exist_ok=True)
     name = f"{o}__{r}#{n}-unstart~rearm{os.getpid()}.md"
     (q / (name + ".tmp")).write_text("SQUAD-NOT-STARTABLE:\n"); os.replace(q / (name + ".tmp"), q / name)

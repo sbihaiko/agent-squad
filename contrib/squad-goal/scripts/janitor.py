@@ -179,6 +179,7 @@ def in_land(sha):   # the commit is an ancestor of origin/<land>, read in the ch
 def folder(r): return pathlib.Path(r) if r.startswith("/") else co / "runs" / r
 def read(f):
     v = False; pidc = None; started_at = None; acc = set(); t = f / "record.jsonl"; ver = None; rs = []; landed = False; rid = f.name; rts = ""
+    vts = None; vkey = ""; nv = 0   # the last verdict's time and its key (#692, #693): the rearm floor and rule O's read-once marker read them
     # The per-child evidence (#271): the children the run accepted, the issues each child's own accept line named, the
     # landing nodes that stand, and every node's own outcome. A run that asked for children landed through the child
     # that made the landing, so rule R reads each child's own fact instead of crediting the run's landing to every issue.
@@ -200,6 +201,7 @@ def read(f):
             rid = str(d.get("run_id") or rid); rts = str(d.get("ts") or d.get("started_at") or rts)
         if ev == "verdict":   # the fold takes the last verdict event of a resumed record (ADR-0105)
             v = True; ver = d.get("verdict"); rs = [str(x) for x in (d.get("reasons") or [])]
+            vts = d.get("ts") if isinstance(d.get("ts"), (int, float)) else None; vkey = f"{vts if vts is not None else ''}:{nv}"; nv += 1
         if ev == "land":   # only the landing stage's own event counts; a router's `routed: continue` is not a landing
             eff = d.get("effect") or {}
             if isinstance(eff, dict) and isinstance(eff.get("review"), dict) and d.get("node") is not None:
@@ -238,7 +240,7 @@ def read(f):
         if stands and node is not None: land_nodes.add(str(node))
     kid_landed = {n for n in land_nodes if n in kids}   # the children whose own landing stands: the run's landing is theirs
     return {"verdict": v, "name": ver or "no verdict", "pid": pidc, "started_at": started_at, "acc": acc, "idle": now - t.stat().st_mtime,
-            "failed": ver == "failed", "reasons": rs, "landed": landed, "run_id": rid, "run_ts": rts,
+            "failed": ver == "failed", "reasons": rs, "landed": landed, "run_id": rid, "run_ts": rts, "vts": vts, "vkey": vkey,
             "kid_issue": kid_issue, "kid_review": kid_review, "kid_landed": kid_landed, "kid_out": outs, "decided": decided, "spawn_ts": spawn_ts}
 def same_process(pidc, started_at):
     if pidc not in procs or not isinstance(started_at, (int, float)):
@@ -862,9 +864,14 @@ def count_failed(n, f, i):   # O (#609): a run that ended with nothing delivered
         sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the ledger sits beside this script; -I keeps the script's directory off sys.path
         import issue_ledger
         rec = issue_ledger.read(f"{repo0}#{n}")
-        if any(x["run"] == f.name for k in issue_ledger.LEDGERS for x in rec[k]["runs"]): return
+        if any(x["run"] == f.name for k in issue_ledger.LEDGERS for x in rec[k]["runs"]): return True
+        # A rearm's floor (#692): a run the ledger listed before the rearm, or one whose verdict is older than it, is not counted again.
+        rm = rec.get("rearmed") or {}
+        if f.name in rm.get("runs", []) or (i["vts"] is not None and isinstance(rm.get("ts"), (int, float)) and i["vts"] < rm["ts"]): return True
     except (OSError, ImportError, ValueError, KeyError): pass
-    if holding(n) or issue_info(n)[0] != "open" or pr_count(n) != "0": return
+    if holding(n): return False   # a live run or a wave still has it: a later pass decides
+    st_, pc = issue_info(n)[0], pr_count(n)
+    if st_ != "open" or pc != "0": return st_ in ("open", "closed") and pc.isdigit()   # a read that did not answer decides nothing
     # A wave that landed without the child names the cause wave.sh recorded for it (#682: a failed gate, a hold, a conflict, a
     # drop at the tip, the age cap), or "unknown"; a generic text hid the cause and was read as the loop's.
     def cause(m):
@@ -881,9 +888,14 @@ def count_failed(n, f, i):   # O (#609): a run that ended with nothing delivered
         if n not in iss or not rv or str(rv.get("verdict") or "").lower() in ("approve", "no_review", ""): continue
         lost = str(rv.get("verdict")) == "deadline" or "every review model failed" in str(rv.get("findings") or "") or str(rv.get("stderr") or "").startswith("review_not_started")
         kind = "own" if not lost or kind == "own" else "loop"
-    if dry: say(f"FAILED-DISPATCH #{n}: run {f.name} would count ({why}{', ' + kind if kind else ''})"); return
+    if dry: say(f"FAILED-DISPATCH #{n}: run {f.name} would count ({why}{', ' + kind if kind else ''})"); return False
     out = _run(["bash", str(pathlib.Path(__file__).parent / "wave.sh"), "fail", n, f.name, why, *([kind] if kind else [])])[1].strip()
     if out: say(f"FAILED-DISPATCH #{n}: {out}")
+    return True
+if not dry:   # a run that left active-runs.txt is read no more, so its read-once marker goes (#693)
+    _ck = {f"counted-{folder(r).name}" for r in names}
+    for m in (st / "auto").glob("counted-*"):
+        if m.name not in _ck: m.unlink(missing_ok=True)
 if owner and proj and repo0:
     for r in names:   # O:a run that ended without landing releases its issues: marker dropped (whatever the verdict was: #1847), card back where the dispatch found it
         f = folder(r); i = read(f)
@@ -891,8 +903,17 @@ if owner and proj and repo0:
         req = f / "request.txt"
         nums = issues_named(req.read_text()) if req.exists() else set()
         if i["landed"]: nums = {n for n in nums if wave_entry(n, f, i) == "out"}   # a run that landed keeps its markers, but for an issue its landed wave never carried (#467)
-        if i["name"] != "needs-human":   # needs-human is the owner's already (ADR-0029)
-            for n in sorted(nums, key=int): count_failed(n, f, i)
+        # A child that entered the run's wave is the wave's to decide (wave.sh requeues or stops it), landed run or not: a failed
+        # run's local-only landing reads as no landing (#691), so the filter above no longer holds such an issue out of the count.
+        cnt = {n for n in nums if wave_entry(n, f, i) != "entered"}
+        # A run folder is read once per verdict (#693): auto/counted-<run> holds the verdict whose issues were all decided, so a
+        # later pass sends nothing again for a run a rearm cleared from the ledger. A resume's new verdict reads it again.
+        cm = st / "auto" / f"counted-{f.name}"
+        try: done_v = cm.read_text().strip()
+        except OSError: done_v = None
+        if i["name"] != "needs-human" and done_v != i["vkey"]:   # needs-human is the owner's already (ADR-0029)
+            decided = [count_failed(n, f, i) for n in sorted(cnt, key=int)]
+            if all(decided) and not dry: cm.write_text(i["vkey"] + "\n")
         marks ={n: [k for k in ("disp", "bug") if owns(f, i, st / "auto" / f"{k}-{n}")] for n in nums}   # only the markers this run's request wrote (#539)
         marks = {n: m for n, m in marks.items() if m}
         if not marks: continue
