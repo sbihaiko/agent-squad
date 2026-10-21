@@ -21,7 +21,7 @@ for a in "$@"; do
   prev="$a"
 done
 case "$*" in *"issues(states: OPEN"*)   # the open-issue list is one GraphQL request through the door (#383): the REST fixture in its shape
-  jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:(.labels//[])},blockedBy:{nodes:[]},comments:{nodes:[(.comments//[])[]|{body:.}]}}]}}}}' "$GH_ISSUES"; exit 0;; esac
+  jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:(.labels//[])},blockedBy:{nodes:[]},subIssues:{nodes:[(.sub_issues//[])[]|{number:.}]},comments:{nodes:[(.comments//[])[]|{body:.}]}}]}}}}' "$GH_ISSUES"; exit 0;; esac
 case "$p" in
   */pulls?state=open*)    f=$GH_OPEN;;
   */pulls?state=closed*)  f=$GH_CLOSED;;
@@ -328,6 +328,20 @@ $G -qxF "DISPATCH HOLD: 4 children wait for review (cap 3); no new run this pass
 echo 3 > "$d/st/childcc-waiting"
 r=$(SG_DISPATCH_MAX_WAITING=3 run)
 [ "$(marked 95)" = 1 ] && ok "Z: at the cap the frontier pass dispatches" || ko "Z: no dispatch at the cap: '$r'"
+
+# S (#703, ADR-0150): a run never holds conflicting siblings. Two tickets of one spec, by the native sub-issue relation or a
+#   "SPEC #N" line in the body, never go out as two children of one run: the first takes the run, the other waits for a
+#   later pass, and the pass names the split and its reason. Two tickets that name one file, however the path is written,
+#   are one child, never two siblings.
+scene siblings 24
+issues '[{"number":700,"title":"SPEC","body":"b","sub_issues":[101,102],"labels":[{"name":"spec"}]},{"number":101,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":102,"title":"a","body":"c","labels":[{"name":"wave:01"}]},{"number":103,"title":"a","body":"Part of SPEC #700, phase 02.","labels":[{"name":"wave:01"}]},{"number":104,"title":"a","body":"edit ./squad/a.py","labels":[{"name":"wave:01"}]},{"number":105,"title":"a","body":"edit squad/x/../a.py too","labels":[{"name":"wave:01"}]},{"number":106,"title":"a","body":"other","labels":[{"name":"wave:01"}]}]'
+cp "$(dirname "$src")/cluster.py" "$T/scripts/"; cp "$(dirname "$src")/siblings.py" "$T/scripts/" 2>/dev/null
+r=$(run); rm -f "$T/scripts/cluster.py" "$T/scripts/siblings.py"
+[ "$(marked 101)" = 1 ] && [ "$(marked 102 103)" = 0 ] && ok "S: one run takes one ticket of a spec; its siblings wait" || ko "S: spec siblings: $(marked 101) of #101, $(marked 102 103) of #102 #103 marked: '$r'"
+case "$r" in *"FRONTIER split #102: a sibling of #101 in spec #700 (ADR-0150); it waits for a later run"*) ok "S: the pass names a split of the native relation";; *) ko "S: no split line for #102: '$r'";; esac
+case "$r" in *"FRONTIER split #103: a sibling of #101 in spec #700 (ADR-0150); it waits for a later run"*) ok "S: the pass names a split of a body spec line";; *) ko "S: no split line for #103: '$r'";; esac
+[ "$(childblocks)" = 3 ] && $G -q '^CHILD — GitHub issue(s) 104, 105 ' "$MKLOG.body" && ok "S: two tickets that name one normalized path are one child" || ko "S: children: '$($G '^CHILD' "$MKLOG.body")'"
+[ "$(marked 104 105 106)" = 3 ] && ok "S: the tickets with no conflict still go out" || ko "S: $(marked 104 105 106) of #104 #105 #106 marked: '$r'"
 
 rm -rf "$T"
 [ "$fail" = 0 ] && { echo "autofrontier one-run: all checks green"; exit 0; }
