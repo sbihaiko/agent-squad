@@ -223,7 +223,9 @@ def read(f):
             found = set()
             # Both dispatchers make every child carry `Refs #N` (autofrontier.sh, autobug.sh), whatever words the router picks around it:
             # a router that wrote "issue 548" matched neither form above, so a live child read as unheld and lost its marker (#551).
-            for m in re.finditer(r"GitHub issues? #?([0-9][0-9, ]*)|\bissue #(\d+)|\bRefs #(\d+)", l):
+            # The line is JSON: an escaped newline ("\\nRefs #715") reads as the newline it encodes, so `\b` finds the
+            # boundary and a bundled child's Refs lines map (#725), as child_issues.plain reads them.
+            for m in re.finditer(r"GitHub issues? #?([0-9][0-9, ]*)|\bissue #(\d+)|\bRefs #(\d+)", l.replace("\\n", "\n").replace("\\t", "\t")):
                 found.update(x for x in re.split(r"[^0-9]+", m.group(1) or m.group(2) or m.group(3) or "") if x)
             acc |= found
             if d.get("child") is not None:   # the issues one accept line names belong to the child that line accepted, never to the whole run (#271)
@@ -676,8 +678,8 @@ def reconcile_board():
             landed_kid = next((c for c in mine if c in i["kid_landed"]), None) if i else None   # a child that landed its own work: the run's landing is that child's, never every issue the run held (#271)
             if i is None:
                 set_expected(n, "In Progress", f"run {f.name} has dispatch marker", f.name, "", 30)
-            elif not i["verdict"] and i["decided"] and not any(n in v for v in i["kid_issue"].values()):
-                unheld(n, f, i)
+            elif not i["verdict"] and i["decided"] and not any(n in v for v in i["kid_issue"].values()) and all(i["kid_issue"].values()):
+                unheld(n, f, i)   # only when every child maps to its issues: an unmapped child may be working this one (#725)
             elif not i["verdict"]:
                 set_expected(n, "In Progress", f"run {i['run_id']} is live", i["run_id"], i["run_ts"], 30)
             elif landed_kid:   # a landing is the child's own (#271), and a failed verdict does not unland commits that are in the branch (#666, ADR-0143); needs-human makes the owner the next actor (ADR-0029, #660)

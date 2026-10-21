@@ -158,6 +158,8 @@ A corrupt ledger file holds its issue (ADR-0149 rule 4). `read` gives the state 
 
 `issue_ledger.py rearm` clears both ledgers and the wave facts, and keeps a floor (`rearmed`: the rearm time and every run a ledger or a wave fact listed). `fail` and a wave event never count a run on that list (#692). A rearm also writes a fresh file over a corrupt one.
 
+`janitor.py` rule R unholds an issue of a live run whose spawn batch is decided and gave it no child: the card goes to Todo and the dispatch marker goes (#480). A child maps to its issues by its accept line, `Refs #N` included, read with each escaped newline as a newline (`child_issues.plain`, #725). While any child of the run maps to no issue, nothing is unheld.
+
 `janitor.py` rule O counts a run that delivered nothing through `wave.sh fail`, with the run's own review verdict as the kind. When the run's wave landed without the child, the reason names the run's wave fact in the ledger, or `unknown`. It skips a run whose verdict is older than the rearm, and an issue whose child entered the run's wave. It writes `auto/counted-RUN` with the verdict key once every issue of the run is decided, so a later pass reads that run again only after a resume writes a new verdict (#693).
 
 ### Gate lock
