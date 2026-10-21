@@ -1,7 +1,8 @@
 #!/bin/bash
-# Regression test for autofrontier.sh: startable issues go out as the children of ONE run, and the number of children a pass
-# asks for never passes the envelope the author set (the dispatch node's max_children) or the machine-wide child ceiling
-# (run.max_children less the children live runs already hold). A second run opens only in a later pass, and the pass says why.
+# Regression test for autofrontier.sh: a pass starts one run per free run slot, at most one per child (#728); with fewer slots
+# than children the children share the runs. The children of one run never pass the envelope the author set (the dispatch
+# node's max_children), and the children of the pass never pass the machine-wide child ceiling (run.max_children less the
+# children live runs already hold). The startable issues past the bounds wait for a later pass, and the pass says why.
 # Offline and hermetic: stub gh (fixtures served through jq), stack.sh, startability.sh, mkreq.sh and launch.py, with its own state and HOME.
 # usage: bash test-autofrontier-one-run.sh [path/to/autofrontier.sh]
 src=${1:-$(dirname "$0")/autofrontier.sh}; T=$(mktemp -d); fail=0
@@ -37,8 +38,8 @@ printf '#!/bin/bash\necho READY\n' > "$T/scripts/stack.sh"; chmod +x "$T/scripts
 # carries the real file's own reads and fakes only what this suite fixes by hand.
 cp "$(dirname "$src")/startability.sh" "$T/scripts/startability-real.sh"
 printf '#!/bin/bash\n. "$(dirname "$0")/startability-real.sh"\nsg_fork_only() { return 1; }\nsg_not_startable() { return 1; }\nsg_fork_preamble() { :; }\nsg_fork_branch() { echo "gui/$1"; }\nsg_fork_branch_pattern() { echo "gui/%%n"; }\nsg_issue_worktree_note() { :; }\n' > "$T/scripts/startability.sh"
-# mkreq.sh keeps the body it was handed and prints a request path (or refuses when MK_REFUSE is set); launch.py only counts
-printf '#!/bin/bash\n[ -n "$MK_REFUSE" ] && { echo "refusing: stub" >&2; exit 1; }\n[ "$1" = --paths ] && exec bash "$(dirname "$0")/mkreq-real.sh" "$@"\n[ -n "$MK_REAL" ] && { bash "$(dirname "$0")/mkreq-real.sh" "$@" || exit 1; echo x >> "$MKLOG"; cp "$2" "$MKLOG.body"; exit 0; }\necho x >> "$MKLOG"; cp "$2" "$MKLOG.body"; echo "$HOME/req.txt"\n' > "$T/scripts/mkreq.sh"
+# mkreq.sh appends the body it was handed (one pass may build several requests, #728) and prints a request path (or refuses when MK_REFUSE is set); launch.py only counts
+printf '#!/bin/bash\n[ -n "$MK_REFUSE" ] && { echo "refusing: stub" >&2; exit 1; }\n[ "$1" = --paths ] && exec bash "$(dirname "$0")/mkreq-real.sh" "$@"\n[ -n "$MK_REAL" ] && { bash "$(dirname "$0")/mkreq-real.sh" "$@" || exit 1; echo x >> "$MKLOG"; cat "$2" >> "$MKLOG.body"; exit 0; }\necho x >> "$MKLOG"; cat "$2" >> "$MKLOG.body"; echo "$HOME/req.txt"\n' > "$T/scripts/mkreq.sh"
 printf 'open(__import__("os").environ["LAUNCHLOG"], "a").write("launch\\n")\n' > "$T/scripts/launch.py"
 chmod +x "$T/scripts/mkreq.sh"
 # board.sh keeps the call it was handed: <owner> <project> <column> <issue>... (#33: the card move was a bare `true`, so no case could say which cards moved)
@@ -67,7 +68,7 @@ E
   export SG_GH_AGGREGATE_WINDOW=0   # a case rewrites the list between passes: no snapshot answers the second one
   export HOME=$d/home SG_STATE=$d/st SG_CHECKOUT=$d/co SG_REPO=o/r SG_FRONTIER_LABEL=frontier MKLOG=$d/mk.log LAUNCHLOG=$d/launch.log BOARDLOG=$d/board.log
   export GH_ISSUES=$d/issues.json GH_FRONTIER=$d/frontier.json GH_OPEN=$d/open.json GH_CLOSED=$d/closed.json GH_ISSUE1=$d/issue1.json GH_ISSUEDIR=$d/issue; mkdir -p "$GH_ISSUEDIR"
-  printf '[]' > "$GH_FRONTIER"
+  rm -f "$d/st/token-pause"; printf '[]' > "$GH_FRONTIER"
   printf '[]' > "$GH_OPEN"; printf '[]' > "$GH_CLOSED"
   printf '{"number":0,"title":"t","body":"","created_at":"2026-01-01T00:00:00Z"}' > "$GH_ISSUE1"
 }
@@ -98,22 +99,48 @@ def walk(o):
 print(walk(d))
 PY
 }
+slots() { mkdir -p "$d/co/docs/squad"; printf 'caps:\n  runs: %s\n' "$1" > "$d/co/docs/squad/defaults.yaml"; }   # <n>: the project file lowers caps.runs, so the pass has n free run slots
+reqs() { sort -u "$SG_STATE"/auto/disp-* 2>/dev/null | $G -c .; }   # the distinct requests the dispatch markers name
 childblocks() { $G -c '^CHILD' "$MKLOG.body" 2>/dev/null; }
 
-# 1) AC1, AC2, AC3: three startable issues open ONE run; its request asks for three children, one issue each; every
-#    issue holds its dispatch marker, its own comment and its own card move
+# 1) #728 AC1: three startable issues of three specs and free run slots: one pass starts three runs, one child each. Every
+#    issue holds its dispatch marker, its own comment and its own card move.
 scene three
 issues '[{"number":21,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":22,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":23,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
 r=$(run)
-[ "$(lines "$LAUNCHLOG")" = 1 ] && ok "three startable issues open one run" || ko "three startable issues open one run: $(lines "$LAUNCHLOG") launches: '$r'"
-[ "$(lines "$MKLOG")" = 1 ] && ok "the pass builds one request" || ko "the pass builds one request: $(lines "$MKLOG")"
-[ "$(asked)" = 3 ] && ok "the request asks for three children" || ko "the request asks for three children: '$(asked)'"
-[ "$(childblocks)" = 3 ] && ok "the request carries three CHILD blocks, one issue each" || ko "the request carries three CHILD blocks: '$(childblocks)'"
+[ "$(lines "$LAUNCHLOG")" = 3 ] && ok "three startable issues and free slots start three runs" || ko "three startable issues and free slots start three runs: $(lines "$LAUNCHLOG") launches: '$r'"
+[ "$(lines "$MKLOG")" = 3 ] && ok "the pass builds one request per run" || ko "the pass builds one request per run: $(lines "$MKLOG")"
+[ "$(sed -nE 's/.*call the spawn tool for the ([0-9]+) child.*/\1/p' "$MKLOG.body" | sort -u | tr -d '\n')" = 1 ] && ok "each request asks for one child" || ko "each request asks for one child: '$($G -o 'spawn tool for the [0-9]* child' "$MKLOG.body")'"
+[ "$(childblocks)" = 3 ] && ok "the requests carry three CHILD blocks, one issue each" || ko "the requests carry three CHILD blocks: '$(childblocks)'"
 [ "$(marked 21 22 23)" = 3 ] && ok "every dispatched issue holds its marker" || ko "every dispatched issue holds its marker: $(marked 21 22 23) of 3"
+[ "$(reqs)" = 3 ] && ok "each run has its own request name" || ko "each run has its own request name: $(cat "$d"/st/auto/disp-*)"
 [ "$(ls "$d/st/cq" | $G -c -- '^o__r#[0-9]*-frontier')" = 3 ] && ok "every dispatched issue gets its own comment" || ko "every dispatched issue gets its own comment: $(ls "$d/st/cq")"
 case "$(cat "$d/st/auto/disp-21")" in frontier-*) ok "a marker names the request";; *) ko "a marker names the request";; esac
 moved 21 22 23 && ok "every dispatched issue gets its own card move" || ko "every dispatched issue gets its own card move: '$(cat "$BOARDLOG")'"
 added && ok "a dispatch adds each missing board card before its move" || ko "a dispatch does not add missing board cards: '$(cat "$BOARDLOG")'"
+
+# 1c) #728 AC2: with one free slot, the three issues are the children of ONE run.
+scene oneslot
+slots 1
+issues '[{"number":21,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":22,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":23,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
+r=$(run)
+[ "$(lines "$LAUNCHLOG")" = 1 ] && ok "one free slot: one run" || ko "one free slot: one run: $(lines "$LAUNCHLOG") launches: '$r'"
+[ "$(asked)" = 3 ] && [ "$(childblocks)" = 3 ] && ok "one free slot: the run asks for three children" || ko "one free slot: asked '$(asked)', $(childblocks) CHILD blocks"
+[ "$(marked 21 22 23)" = 3 ] && [ "$(reqs)" = 1 ] && ok "one free slot: every marker names the one request" || ko "one free slot: $(marked 21 22 23) markers, $(reqs) requests"
+
+# 1d) #728: never more runs than free slots. Three free slots and four startable issues: three runs, and every issue goes out.
+scene threeslots
+slots 3
+issues '[{"number":21,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":22,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":23,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":24,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
+r=$(run)
+[ "$(lines "$LAUNCHLOG")" = 3 ] && ok "three free slots: three runs for four issues" || ko "three free slots: $(lines "$LAUNCHLOG") launches: '$r'"
+[ "$(marked 21 22 23 24)" = 4 ] && [ "$(childblocks)" = 4 ] && ok "three free slots: every issue is a child of one of them" || ko "three free slots: $(marked 21 22 23 24) markers, $(childblocks) CHILD blocks"
+
+# 1e) #728 AC4: the token pause starts no run, whatever the free slots.
+scene tokenpause
+issues '[{"number":21,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":22,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":23,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
+touch "$d/st/token-pause"; r=$(run)
+[ "$(lines "$LAUNCHLOG")" = 0 ] && [ "$(marked 21 22 23)" = 0 ] && ok "the token pause starts no run" || ko "the token pause started $(lines "$LAUNCHLOG") run(s): '$r'"
 
 # 1b) (#670) A redispatch is a repair, not a repeat: an issue whose last dispatch failed carries that reason on its own CHILD
 #     line, so the child sees the failure it must fix. An issue with no failed dispatch carries none.
@@ -148,7 +175,7 @@ moved 31 32 34 && ok "every issue of a multi-issue child moves its own card" || 
 # 2) AC5: the envelope stays the author's. Five startable issues, a dispatch node that allows two children: the request asks
 #    for two, never five (the engine rejects a request over the limit whole), and the rest stay unmarked for the next run
 scene envelope 2
-five; r=$(run)
+slots 1; five; r=$(run)
 [ "$(asked)" = 2 ] && ok "the request never asks for more children than the envelope allows" || ko "the request asks for '$(asked)' children against an envelope of 2: '$r'"
 [ "$(lines "$LAUNCHLOG")" = 1 ] && ok "a full envelope still opens one run in this pass" || ko "a full envelope still opens one run in this pass: $(lines "$LAUNCHLOG")"
 [ "$(marked 11 12)" = 2 ] && [ "$(marked 13 14 15)" = 0 ] && ok "the issues past the envelope stay unmarked" || ko "the issues past the envelope stay unmarked: $(marked 11 12) of 2 marked, $(marked 13 14 15) of 3 past it"
@@ -187,7 +214,7 @@ case "$r" in *"refused slice"*) ok "the pass says a slice was refused";; *) ko "
 #    envelope -- the envelope the engine will enforce -- instead of reading nothing and leaving the bound to free run slots.
 #    The bound was re-anchored when the pass started reading the file the engine runs: the seed allows four children, not five.
 scene nograph
-five; r=$(run); sm=$(seedmax)
+slots 1; five; r=$(run); sm=$(seedmax)
 [ "$(asked)" = "$sm" ] && ok "no graph of its own: the request fits the seed's envelope" || ko "no graph of its own: asked for '$(asked)' against the seed's '$sm': '$r'"
 
 # 7) #208: a spec is a document until its owner starts it, and an issue that waits on him is not a unit of work either. The
@@ -342,6 +369,7 @@ case "$r" in *"FRONTIER split #102: a sibling of #101 in spec #700 (ADR-0150); i
 case "$r" in *"FRONTIER split #103: a sibling of #101 in spec #700 (ADR-0150); it waits for a later run"*) ok "S: the pass names a split of a body spec line";; *) ko "S: no split line for #103: '$r'";; esac
 [ "$(childblocks)" = 3 ] && $G -q '^CHILD — GitHub issue(s) 104, 105 ' "$MKLOG.body" && ok "S: two tickets that name one normalized path are one child" || ko "S: children: '$($G '^CHILD' "$MKLOG.body")'"
 [ "$(marked 104 105 106)" = 3 ] && ok "S: the tickets with no conflict still go out" || ko "S: $(marked 104 105 106) of #104 #105 #106 marked: '$r'"
+[ "$(lines "$LAUNCHLOG")" = 3 ] && ! $G -qE '^CHILD .*[ ,](102|103)[ ,]' "$MKLOG.body" && ok "S: three runs in one pass, and no run of the pass holds a sibling (#728)" || ko "S: $(lines "$LAUNCHLOG") runs; CHILD lines: '$($G '^CHILD' "$MKLOG.body")'"
 
 # S2 (#724): the to-tickets body names its spec as a "## Parent" heading with the number on a later line, and the REST
 #   open-issue list carries no sub_issues field. Two such tickets of one spec still never share a run.
