@@ -171,6 +171,16 @@ def first_finding(wt):   # the first finding of the review the entry read, for t
 def fix_live(fx):   # the fix run the marker names has no verdict yet, and a record that cannot be read is no verdict either (#667): the fix run lived inside the child's worktree, and a landing that cleaned it took the record too, so the child stays held and the wave's age cap frees it
     try: return '"event": "verdict"' not in (pathlib.Path(fx.read_text().strip()) / "record.jsonl").read_text()
     except OSError: return True
+def last_turn(fx):   # the child's last turn of the fix run `fx` names: why it stopped, so a reader of the requeue reason sees it (ADR-0151, #735)
+    try: lines = (pathlib.Path(fx.read_text().strip()) / "record.jsonl").read_text().splitlines()
+    except OSError: return ""
+    for line in reversed(lines):
+        try: ev = json.loads(line)
+        except ValueError: continue
+        diag = ev.get("diagnostic") if ev.get("event") == "outcome" else None
+        last = diag.get("ended", {}).get("last") if isinstance(diag, dict) and isinstance(diag.get("ended"), dict) else None
+        if last: return " ".join(str(last).split())[:300]
+    return ""
 def fix_round(rd, child, n, wt, fx, out):
     """A review here asked for CHANGES (#636). The first time, or when the findings changed after a fix run, one fix run
     starts in the child's worktree and the child is held: (False, line, True). Findings that a fix run left as they were
@@ -182,7 +192,8 @@ def fix_round(rd, child, n, wt, fx, out):
     except OSError: fp = ""
     same = revformat.stall_rounds(str(A), "ccfix", key, fp)
     if fx.exists() and same:
-        why = f"a fix run left the same review findings: {first_finding(wt)}"
+        stopped = last_turn(fx)
+        why = f"a fix run left the same review findings: {first_finding(wt)}" + (f" (its last turn: {stopped})" if stopped else "")
         subprocess.run(["bash", wave, "requeue", str(n), why], capture_output=True, env={**os.environ, "SG_REQUEUE_RUN": rd.name})   # the run is the key of the count (#609)
         record_requeue(rd.name, n, head_of(wt))   # the head the child was requeued on, so the pass waits for a new one (ADR-0149)
         return False, out + f"\nCHILD FIX REQUEUE #{n}: {why}", True

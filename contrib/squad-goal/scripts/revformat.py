@@ -150,18 +150,26 @@ def count(review):
     return counts
 
 
-def findings_fingerprint(review):
-    """The fingerprint of a review's findings: a round that fixed nothing keeps it (ADR-0134). `review` is its bytes.
+def body_fingerprint(body):
+    """The fingerprint of the findings in `body` (a review without its verdict line), the one reading of ADR-0134.
 
-    Line 1 (the verdict) is dropped, a line number after a colon and a sha are removed, and whitespace is squeezed to
-    one space, so a moved line or a new sha is not a change; SHA-1 of the result, cut to 16 characters. The bytes are
-    the ones branchfixpass.sh read before the reading moved here, so a marker that pass kept still matches.
+    A line number after a colon and a sha are removed, and whitespace is squeezed to one space, so a moved line or a
+    new sha is not a change; SHA-1 of the result, cut to 16 characters.
     """
-    body = review.split(b"\n", 1)[1] if b"\n" in review else b""   # tail -n +2: the verdict line is not a finding
     body = re.sub(rb":[0-9]+", b":", body)                          # a line number that moved
     body = re.sub(rb"[0-9a-f]{7,40}", b"", body)                    # a sha, short or whole
     body = re.sub(rb"[ \t\n]+", b" ", body)                         # whitespace of any kind, squeezed (tr -s)
     return hashlib.sha1(body).hexdigest()[:16]
+
+
+def findings_fingerprint(review):
+    """The fingerprint of a review's findings: a round that fixed nothing keeps it (ADR-0134). `review` is its bytes.
+
+    Line 1 (the verdict) is dropped and `body_fingerprint` hashes the rest. The bytes are the ones branchfixpass.sh read
+    before the reading moved here, so a marker that pass kept still matches.
+    """
+    body = review.split(b"\n", 1)[1] if b"\n" in review else b""   # tail -n +2: the verdict line is not a finding
+    return body_fingerprint(body)
 
 
 def _marker(path):

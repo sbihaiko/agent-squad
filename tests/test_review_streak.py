@@ -49,19 +49,22 @@ def no_artifact(last):
     return CallResult(None, 0.1, turns=1, ended={"subtype": "success", "is_error": False, "last": last})
 
 
-def stub(tmp_path, findings):
-    """A review command: it logs its round and head, prints `findings` for that round, and always asks for a fix (exit 4)."""
+def stub(tmp_path, findings, codes=(4, 4)):
+    """A review command: it logs its round and head, prints `findings` for that round, and exits with that round's code;
+    the last code repeats."""
+    tail = " ".join(str(c) for c in codes)
     p = tmp_path / "review.sh"
     p.write_text(f'#!/bin/sh\necho "$SQUAD_REVIEW_ROUND $SQUAD_REVIEW_FIX $(git rev-parse HEAD)" >> "{tmp_path}/review.log"\n'
-                 f'echo "VERDICT: CHANGES"\necho "## Blocking"\n{findings}\nexit 4\n')
+                 f'echo "VERDICT: CHANGES"\necho "## Blocking"\n{findings}\n'
+                 f'set -- {tail}\nshift $((SQUAD_REVIEW_ROUND - 1)); exit ${{1:-0}}\n')
     p.chmod(0o755)
     return str(p)
 
 
-def run(tmp_path, steps, findings):
+def run(tmp_path, steps, findings, codes=(4, 4)):
     repo = sibling_repo(tmp_path / "t")
     eng = make(tmp_path, {"router": routed(req(task="issue #735")), **steps},
-               tweak=gated(stub(tmp_path, findings)), target=repo, options={"spend_cap": 10})
+               tweak=gated(stub(tmp_path, findings, codes)), target=repo, options={"spend_cap": 10})
     return eng
 
 
@@ -86,6 +89,10 @@ async def test_a_fix_round_with_no_artifact_changes_the_coder_on_the_first_repet
     last = outcomes(tmp_path)[1]
     assert last["outcome"] == "fail" and last["reasons"] == ["artifact_missing"]
     assert last["diagnostic"]["ended"]["last"] == "I read the finding, then ran out of context before I wrote the file"
+    rounds = ev(tmp_path, "review_round")
+    assert [(r["round"], r.get("repeated", False)) for r in rounds] == [(1, False), (2, True)]   # the unchanged head is not read again
+    assert rounds[1]["review"]["findings"] == rounds[0]["review"]["findings"] and rounds[1]["review"]["elapsed"] == 0.0
+    assert len((tmp_path / "review.log").read_text().splitlines()) == 1
     [land] = ev(tmp_path, "land")
     assert land["outcome"] == "fail" and land["reasons"] == ["review_fix_failed", "artifact_missing"]
 
@@ -94,6 +101,6 @@ async def test_a_fix_round_with_no_artifact_changes_the_coder_on_the_first_repet
 @pytest.mark.heavy
 async def test_two_changes_verdicts_with_different_findings_keep_the_coder(tmp_path):
     findings = 'echo "- a.txt — defect $SQUAD_REVIEW_ROUND — it fails — fix it"'
-    eng = run(tmp_path, {CHILD: [writer("a.txt"), writer("b.txt"), writer("c.txt")]}, findings)
-    assert (await eng.run()).verdict is not None
+    eng = run(tmp_path, {CHILD: [writer("a.txt"), writer("b.txt"), writer("c.txt")]}, findings, codes=(4, 4, 0))
+    assert (await eng.run()).verdict == "completed"
     assert calls(eng) == [(1, MODEL), (2, MODEL), (3, MODEL)]     # CHANGES twice with different findings: no coder change

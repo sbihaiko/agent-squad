@@ -12,6 +12,10 @@ A child that the reviewer sends back again and again spends money and produces n
 
 1. **Three consecutive CHANGES verdicts on one issue send it to needs-human** (`frozen:owner`, ADR-0029) instead of another dispatch.
 2. **Identical findings twice stop the fix cycle.** The next attempt uses a stronger coder model.
+   A fix round that writes no artifact is the same finding unanswered, not a new finding (ADR-0134 reads a round that
+   changed nothing by its fingerprint). It is the finding's first repetition, so it moves the coder at once: the round
+   after it answers on the next coder of the run's chain, and the unchanged head is not reviewed again. The record keeps
+   the child's last turn of that round, so a reader sees why it stopped.
 3. **Reviewer severity is calibrated against labeled examples.** A finding that is only Debt or nit never counts as CHANGES.
 4. **An approval binds to the reviewed commit.** A new commit after the approval needs a new review.
 5. **A run that reviews its own children owns them.** childcc never reviews or fixes them. Missing review evidence holds delivery.
@@ -24,4 +28,7 @@ A child that the reviewer sends back again and again spends money and produces n
 
 ## Guard
 
-None yet. This rule is a draft until a named guard test exists (ADR-0018).
+`tests/test_review_streak.py`: identical findings twice change the coder, different findings do not, a fix round that
+wrote no artifact repeats its finding and changes the coder on the first repetition, and the record keeps that round's
+last turn. The three-CHANGES freeze, the severity calibration and the approval binding are a draft until their own
+tests exist (ADR-0018).

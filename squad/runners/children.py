@@ -127,18 +127,20 @@ class Children:
         ctx.results.append((name, done["outcome"], done["reasons"]))
         await self.run_all(ctx, e.dispatch.accepted(name, 1))
 
-    async def fix(self, node, name, entry, review, dl_at):
+    async def fix(self, node, name, entry, review, dl_at, coder=None):
         """One fix round of a child its review asked to fix (#570): entry `entry` of the same child, in its own worktree, with
-        the child's caps and the full review as input. Its commits stay on the child's branch. Return its outcome event."""
+        the child's caps and the full review as input. `coder` is the model this round answers on first, when the review
+        streak moved it (ADR-0151); the child's own model when it is None. Its commits stay on the child's branch.
+        Return its outcome event."""
         ctx = SimpleNamespace(node=node, dl_at=dl_at)
-        return await self.admitted(ctx, name, entry, review)
+        return await self.admitted(ctx, name, entry, review, coder)
 
-    async def admitted(self, ctx, name, entry=1, review=None):
+    async def admitted(self, ctx, name, entry=1, review=None, coder=None):
         """One child inside one slot of the machine-wide child ceiling, keyed on its `spawn_accepted` name. A full ceiling waits,
         bounded by the child's call deadline; a wait that expires fails the child by name. The slot returns when the child ends."""
         e = self.e
         if not e.ceiling:
-            return await self.session(ctx, name, entry, review)
+            return await self.session(ctx, name, entry, review, coder)
         d = e.dispatch.children[name]["definition"]
         bound = anyio.current_time() + max(0.0, min(d["deadline"] * e.scale, ctx.dl_at - e.clock()))
         try:
@@ -147,7 +149,7 @@ class Children:
         except CeilingWaitExpired as x:
             return self.outcome(name, "fail", [f"ceiling_wait_expired:{x.ceiling}", f"cap:{x.cap}"], None, {}, entry)
         try:
-            return await self.session(ctx, name, entry, review)
+            return await self.session(ctx, name, entry, review, coder)
         finally:
             e.ceiling.release(lease)
 
@@ -166,16 +168,18 @@ class Children:
                 bad.append(dep)
         return bad
 
-    async def session(self, ctx, name, entry=1, review=None):
+    async def session(self, ctx, name, entry=1, review=None, coder=None):
         """One child entry: its worktree, the metered call in `squad/session.py`, then its checks and its spawn lift.
-        Entry 1 cuts the worktree; a fix entry (2, 3, ...) works in it again with the review that asked for it."""
+        Entry 1 cuts the worktree; a fix entry (2, 3, ...) works in it again with the review that asked for it, led by
+        `coder` when the review streak moved it (ADR-0151)."""
         e, d, slot = self.e, self.e.dispatch.children[name]["definition"], {}
         dl, ws = min(d["deadline"] * e.scale, ctx.dl_at - e.clock()), str(self.workspace(name, d))
         # A child answers on the envelope's `allow.models`, led by the model its request names. A provider that refuses
         # to serve is an outage, not a defect of the work, so the chain moves on; the worktree is cut once and kept.
         spent, hours, hour = e.options.get("spent_models") or [], e.options.get("model_hours") or {}, time.localtime(e.wall()).tm_hour
-        chain = session.model_chain(ctx.node["allow"]["models"], d["model"], spent, hours, hour, e.options.get("model_order") or [])
-        for m, why in session.hours_skipped(ctx.node["allow"]["models"], d["model"], spent, hours, hour):    # an entry left out of its window is on the record
+        first = coder or d["model"]
+        chain = session.model_chain(ctx.node["allow"]["models"], first, spent, hours, hour, e.options.get("model_order") or [])
+        for m, why in session.hours_skipped(ctx.node["allow"]["models"], first, spent, hours, hour):    # an entry left out of its window is on the record
             e.record.append("model_skipped", node=name, entry=entry, model=m, reason=why)
         out, tried, model = await session.run_chain(chain, lambda m, first: self.attempt(name, d, ws, dl, m, slot, first and entry == 1, entry, review))
         for m, err in tried:    # every refusal is on the record, exhausted chain or not (#494)

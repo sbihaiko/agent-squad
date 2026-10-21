@@ -6,10 +6,11 @@ children"). It reads and writes the spawn, land, and ledger events. The engine r
 """
 import re
 import subprocess
+import time
 
 import anyio
 
-from squad import actions, envelope, gates, git, node_commit, session, workcmd
+from squad import actions, envelope, gates, git, node_commit, review_streak, session, workcmd
 from squad import verdict as V
 from squad.engine_errors import Frontier
 
@@ -183,17 +184,24 @@ class Dispatch:
         The command decides fix or hold (its stall rule, ADR-0134); code offers a round only when it already holds the next
         entry's grant from the run budget (ADR-0108), and there is no cap on rounds. Each round is a `review_round` event;
         a resume replays the recorded rounds and fix entries and reviews only a head with no recorded round (ADR-0107).
+        Identical findings twice move the fix round to the next coder of the chain, and a fix round that wrote no artifact
+        is the finding unanswered: it moves the coder at once, and because the head did not move the review stands and is
+        not read again (`review_round.repeated`, ADR-0151, #735).
         Return (the last review, the rounds, the reasons that hold the child or None)."""
         e, n = self.e, 1
+        standing = None          # the review of a head a failed fix entry left in place: the same findings, not a new reading
         while True:
-            fund, rec = None, next((x for x in e.record.events if x["event"] == "review_round" and x["node"] == name and x["round"] == n), None)
+            reading = standing
+            standing = None
+            fund, rec = None, None if reading else next((x for x in e.record.events if x["event"] == "review_round" and x["node"] == name and x["round"] == n), None)
             if rec is None:
                 fund = e.budget.hold(self.children[name]["definition"]["spend"])
-                review = await self.tries(node, name, d, path, base, n, fund is not None)
+                review = reading or await self.tries(node, name, d, path, base, n, fund is not None)
                 if review["verdict"] == "fix" and fund is None:      # a fix the run did not offer is a hold
                     review["verdict"] = "hold"
                 rec = e.record.append("review_round", node=name, round=n, head=git.head(path), verdict=review["verdict"],
-                                      offered=fund is not None, review=review)
+                                      offered=fund is not None, review=({**review, "elapsed": 0.0} if reading else review),
+                                      **({"repeated": True} if reading else {}))      # a repeated round ran no review: it pauses for no time
             review = rec["review"]
             if rec["verdict"] != "fix":
                 if fund is not None:
@@ -204,6 +212,7 @@ class Dispatch:
                     return review, n, ["review_held", *([] if rec["offered"] else ["review_fix_unfunded"])]
                 return review, n, None
             out = e.outcomes.event(name, n + 1)
+            coder = self.coder(node, name, d)
             if out is None and any(x["event"] == "call_start" and x["node"] == name and x["entry"] == n + 1 for x in e.record.events):
                 if fund is not None:
                     e.budget.release(fund)
@@ -213,12 +222,46 @@ class Dispatch:
             elif out is None:
                 if fund is not None:
                     self.held[name] = fund      # the fix entry's call takes this grant
-                out = await e.runs.fix(node, name, n + 1, review, sc.deadline_at)
+                out = await e.runs.fix(node, name, n + 1, review, sc.deadline_at, coder)
             elif fund is not None:
                 e.budget.release(fund)
             if out["outcome"] != "pass":
+                if review_streak.unanswered(out["outcome"], out["reasons"]) and self.coder(node, name, d, n + 1) != coder:
+                    standing = review      # the same finding, unanswered: the head did not move, and the next entry answers on the next coder
+                    n += 1
+                    continue
                 return review, n, ["review_fix_failed", *out["reasons"]]
             n += 1
+
+    def findings_seq(self, name, upto_round, upto_entry):
+        """The fingerprints of this child's first `upto_round` reviews, each followed by itself when the fix round that
+        answered it (entry 2 to `upto_entry`) wrote no artifact (#735): the streak reads them (ADR-0151)."""
+        e = self.e
+        seq, repeat = [], []
+        for x in sorted((x for x in e.record.events if x["event"] == "review_round" and x["node"] == name),
+                        key=lambda x: x["round"]):
+            if x["round"] > upto_round:
+                break
+            seq.append(review_streak.fingerprint(x["review"].get("findings")))
+            out = e.outcomes.event(name, x["round"] + 1) if x["round"] + 1 <= upto_entry else None
+            repeat.append(x["verdict"] == "fix" and out is not None
+                          and review_streak.unanswered(out["outcome"], out["reasons"]))
+        return review_streak.with_unanswered(seq, repeat)
+
+    def coder(self, node, name, d, upto_entry=None):
+        """The coder the child's next fix entry uses: the child's own model, moved one place down the chain each time
+        identical findings twice stopped the cycle (ADR-0151 rule 2). `upto_entry` counts a failed fix entry of the
+        record; the entry about to start is not one of them."""
+        e = self.e
+        spent, hours = e.options.get("spent_models") or [], e.options.get("model_hours") or {}
+        chain = session.model_chain(node["allow"]["models"], d["model"], spent, hours, time.localtime(e.wall()).tm_hour,
+                                    e.options.get("model_order") or [])
+        upto_entry = upto_entry if upto_entry is not None else self.last_round(name)
+        return review_streak.coder(chain, self.findings_seq(name, self.last_round(name), upto_entry), d["model"])
+
+    def last_round(self, name):
+        """The last review round of this child in the record, 0 before the first."""
+        return max((x["round"] for x in self.e.record.events if x["event"] == "review_round" and x["node"] == name), default=0)
 
     async def tries(self, node, name, d, path, base, n, offer):
         """Review round n until it gets a verdict (#635). A `retry` (no verdict: the chain wrote none, or the slot wait passed

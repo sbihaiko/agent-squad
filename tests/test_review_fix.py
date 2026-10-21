@@ -120,7 +120,10 @@ async def test_a_round_the_budget_cannot_fund_is_told_so_and_no_fix_entry_starts
 @pytest.mark.anyio
 @pytest.mark.heavy
 async def test_a_fix_entry_that_fails_holds_the_child(tmp_path):
-    eng, repo, base = run_with(tmp_path, [4, 0], [writer("a.txt"), {"output": None, "spend": 0.1, "turns": 1}])
+    """A fix entry that ends on its own cap holds the child at once. A fix entry that writes no artifact is no failure
+    of that kind: it is the review's finding unanswered, so the run answers it on the next coder and one round still
+    stands (ADR-0151, #735, `tests/test_review_streak.py`)."""
+    eng, repo, base = run_with(tmp_path, [4, 0], [writer("a.txt"), {"output": None, "spend": 0.1, "turns": 1, "stop_reason": "spend_cap"}])
     assert (await eng.run()).verdict == "failed"
     assert entries(tmp_path)[0] == (1, "pass") and entries(tmp_path)[1][1] == "fail"
     assert len(logged(tmp_path)) == 1 and git.head(repo) == base
