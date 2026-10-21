@@ -195,6 +195,7 @@ t0=$(date +%s); run_cycles 2 REAL_SLEEP=1 SG_WATCH_WAIT=2 SG_WATCH_POLL=0.5; el=
 lane_down; t0=$(date +%s); run_cycles 1 NIGHT_HOLD=3; el=$(( $(date +%s) - t0 ))
 [ "$(count nightly)" = 1 ] && ok "12 the cycle starts the nightly full suite" || ko "12 the cycle started $(count nightly) nightly pass(es)"
 [ "$el" -lt 3 ] && ok "12 the cycle does not wait for the nightly suite (${el}s with a 3 s suite)" || ko "12 the cycle waited for the nightly (${el}s)"
+for _ in $(seq 1 100); do [ -d "$ST/locks/single-nightly" ] || break; /bin/sleep 0.1; done   # the previous case's suite drains
 : > "$STEPS"; run_cycles 2 NIGHT_HOLD=3
 [ "$(count nightly)" = 1 ] && ok "12 a suite still running is not started again (single.sh lock)" || ko "12 the nightly overlapped itself ($(count nightly) passes)"
 

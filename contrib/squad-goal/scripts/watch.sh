@@ -123,6 +123,10 @@ if v:
   # from GitHub facts: detached under its own single.sh lock, filing its stream in $SG_STATE/reconcile.log
   # instead of holding the cycle (#1845). A pass already running is skipped, not doubled.
   [ $((tick % 8)) -eq 1 ] && ( bash "$(dirname "$0")/single.sh" reconcile env RECONCILE=apply python3 "$(dirname "$0")/reconcile.py" 2>&1 | sed "s/^/BOARD /" >> "$SG_STATE/reconcile.log" & ) 2>/dev/null   # card Status from GitHub facts, every ~12 min (GraphQL budget)
+  # The full suite runs nightly in both modes, heavy included (#704). It is detached under its own single-flight stage and
+  # its own log: a suite of hours must never hold this cycle, and it takes its own `nightly` lock, never the landing one.
+  # nightly.sh runs at most once a day by its own marker; each later cycle's start costs one file read and exits.
+  ( bash "$(dirname "$0")/single.sh" nightly bash "$(dirname "$0")/nightly.sh" 2>&1 | sed "s/^/NIGHTLY /" >> "$SG_STATE/nightly.log" & ) 2>/dev/null
   # Work-branch landing (#355): a pushed work branch with a green check lands in dev by a fast-forward push.
   [ -n "${SG_LAND_PAUSED:-}" ] || ( tm bash "$(dirname "$0")/single.sh" branchland "$(dirname "$0")/branchland.sh" 2>&1 & ) 2>/dev/null
   # Work-branch review (#397): each pushed work branch is reviewed once per tip, so branchland finds the verdict it waits for.
