@@ -14,7 +14,7 @@ export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR="$T/caps" GIT_TERMINAL
 unset SG_BOARD_VOCAB
 mkdir -p "$T/bin" "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/co/runs" "$T/co/docs/squad/workflows" "$T/s"
 cp "$d/autobug.sh" "$d/autofrontier.sh" "$d/cluster.py" "$d/single.sh" "$d/startability.sh" "$d/ghcall.sh" "$d/ghread.py" "$d/ghthrottle.py" \
-  "$d/refusal-names.sh" "$d/workbranches.sh" "$d/janitor.py" "$d/issue_state.py" "$T/s/"
+  "$d/refusal-names.sh" "$d/workbranches.sh" "$d/janitor.py" "$d/issue_state.py" "$d/issue_ledger.py" "$T/s/"
 printf 'caps:\n  runs: 2\n' > "$T/co/docs/squad/defaults.yaml"
 printf 'export SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_STATE=%s SG_BASE=main SG_CHECKOUT=%s SG_FRONTIER_LABEL=ready-for-agent SG_BUG_LABEL=bug\n' "$T/st" "$T/co" > "$T/s/env.sh"
 printf '#!/bin/bash\necho READY\n' > "$T/s/stack.sh"; printf 'print("-")\n' > "$T/s/fundroom.py"
@@ -58,7 +58,7 @@ A=run-20261018-000438-aaaaaa; B=run-20261018-011009-03493a
 run "$A" autobug-20261018-000430 pass
 run "$B" autobug-20261018-011000 pass
 echo autobug-20261018-011000 > "$T/st/auto/bug-536"; echo autobug-20261018-011000 > "$T/st/auto/disp-537"
-echo "wave/$B" > "$T/st/auto/wave-$B"; echo "wave/$B" > "$T/st/auto/waved-$B"; date +%s > "$T/st/auto/wave-start-$B"; : > "$T/st/auto/entered-$B-536"
+echo "wave/$B" > "$T/st/auto/wave-$B"; echo "wave/$B" > "$T/st/auto/waved-$B"; date +%s > "$T/st/auto/wave-start-$B"; SG_STATE="$T/st" python3 "$T/s/issue_ledger.py" wave 'x/y#536' "$B" entered "entered wave/$B" >/dev/null
 jan() { SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_TODO=Todo SG_BASE=main SG_HUB_DIR="$T/st" JANITOR_NOTIFY="$T/notify" python3 -I "$T/s/janitor.py" 2>&1; }
 o=$(jan)
 # rule R (#540): run A's "nothing landed" never moves the card of an issue run B's pending wave holds

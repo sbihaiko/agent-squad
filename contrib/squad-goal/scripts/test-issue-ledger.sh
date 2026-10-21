@@ -31,6 +31,12 @@ L rearm 'x/y#9' >/dev/null
 [ "$(L read 'x/y#9' wave)" = "{}" ] && ok "a rearm clears the wave facts" || ko "rearm wave: '$(L read 'x/y#9' wave)'"
 [ "$(L wave 'x/y#9' run-a refused 'stale')" = floor ] && [ "$(W run-a)" = " " ] && ok "a stale event after a rearm counts nothing" || ko "floor: '$(W run-a)'"
 [ "$(L wave 'x/y#9' run-d held 'gate lock')" = recorded ] && ok "a run after the rearm records" || ko "after rearm: '$(L read 'x/y#9')'"
+# The entry of a child is a ledger fact that a later event of its run keeps (ADR-0149): the wave marker readers ask the ledger
+# which runs a child entered, and a child that left the wave after its entry still entered it.
+L wave 'x/z#12' run-e entered 'entered wave/run-e at s1' >/dev/null; L wave 'x/z#12' run-e refused 'the check at the wave tip was red' >/dev/null
+L wave 'x/z#13' run-e entered 'entered wave/run-e at s2' >/dev/null; L wave 'x/z#14' run-f held 'no review yet' >/dev/null
+[ "$(L entered x/z | sort | tr '\t\n' ': ')" = "run-e:12 run-e:13 " ] && ok "the ledger lists each run a child entered, after a later event too" || ko "entered: '$(L entered x/z)'"
+[ -z "$(L entered x/q)" ] && ok "a repository with no ledger lists no entry" || ko "entered x/q: '$(L entered x/q)'"
 # A kill in a write leaves a temp file beside the old file: the old file reads whole, and the next event writes.
 printf '{"tor' > "$T/st/state/x__y__9.json.zz.tmp"
 [ "$(W run-d)" = "held gate lock" ] && [ "$(L wave 'x/y#9' run-d entered 'in')" = recorded ] && ok "a write killed before its rename loses nothing" || ko "torn temp: '$(L read 'x/y#9')'"

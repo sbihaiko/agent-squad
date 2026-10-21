@@ -90,7 +90,8 @@ $O rev-list --merges $W | /usr/bin/grep -q . && ko "B: a merge commit entered th
 $O merge-base --is-ancestor dev $W && ok "B: the wave branch stays a fast-forward of dev" || ko "B: the wave is not a fast-forward of dev"
 /usr/bin/grep -qx 'o 3 Code Complete 7' "$T/board.log" && /usr/bin/grep -qx 'o 3 Code Complete 8' "$T/board.log" && ok "B: the card of a child that entered reads Code Complete" || ko "B: no Code Complete card: $(cat "$T/board.log" 2>/dev/null)"
 # The entry leaves a durable record per issue (#467): the janitor reads Code Complete from it, never from the run's own land.
-[ -e "$T/st/auto/entered-run-1-7" ] && [ -e "$T/st/auto/entered-run-1-8" ] && ok "B: each entry leaves its entered-<run>-<issue> record" || ko "B: no entered record: $(ls "$T/st/auto")"
+[ "$(SG_STATE=$T/st python3 "$T/s/issue_ledger.py" entered x/y | sort | tr '\t\n' ': ')" = "run-1:7 run-1:8 " ] && ok "B: each entry is an entered fact in its issue's ledger" || ko "B: entered facts: '$(SG_STATE=$T/st python3 "$T/s/issue_ledger.py" entered x/y)'"
+[ -z "$(/bin/ls "$T/st/auto" | /usr/bin/grep '^entered-')" ] && ok "B: an entry writes no entered- marker (ADR-0149)" || ko "B: marker: $(/bin/ls "$T/st/auto")"
 case "$(wfact 7 run-1)" in "entered "*) ok "B: the entry is a fact in the issue's ledger";; *) ko "B: ledger fact of #7: '$(wfact 7 run-1)'";; esac
 IFS=$'\t' read -r _ kind res at < "$T/st/gate-status" 2>/dev/null
 [ "$kind $res $at" = "fast pass $($G -C "$T/c8" rev-parse HEAD)" ] && ok "B: the entry gate leaves one fast status line: its result and the sha it ran at" || ko "B: status line: '$(cat "$T/st/gate-status" 2>&1)'"
@@ -101,7 +102,7 @@ printf 'run-1\n' > "$T/st/auto/disp-9"; child 9 g9; before=$($O rev-parse $W); r
 case "$r" in *"WAVE REQUEUE #9"*gates*) ok "C: the failed gates are said";; *) ko "C: the failure is silent: '$r'";; esac
 [ ! -e "$T/st/auto/disp-9" ] && ok "C: its dispatch marker is dropped, so the frontier builds it again" || ko "C: the marker is kept"
 /usr/bin/grep -qx 'o 3 Todo 9' "$T/board.log" && ok "C: its card is back in the queue" || ko "C: no Todo card for #9"
-[ ! -e "$T/st/auto/entered-run-1-9" ] && ok "C: a child that never entered leaves no entered record" || ko "C: #9 has an entered record"
+SG_STATE=$T/st python3 "$T/s/issue_ledger.py" entered x/y | /usr/bin/grep -q $'\t9$' && ko "C: #9 has an entered fact" || ok "C: a child that never entered leaves no entered fact"
 case "$(wfact 9 run-1)" in "refused the local gates failed"*) ok "C: the refusal and its cause are a fact in the issue's ledger";; *) ko "C: ledger fact of #9: '$(wfact 9 run-1)'";; esac
 
 # The gates run in the child's own worktree, before the entry: a gate that only passes on the child's file proves it.
@@ -571,11 +572,11 @@ r=$(cd "$T/c310" && SG_WAVE_GATES=true bash "$T/s/wave.sh" enter run-14 310 2>&1
 [ $rc = 0 ] || ko "T: the second entry exited $rc: '$r'"
 case "$r" in *refused*) ko "T: a working board write is named refused: '$r'";; *) ok "T: a working board write names no refusal";; esac
 
-# U (#620): a child that ENTERED its wave (entered-<run>-<n>) whose commit reached dev by another route makes the wave land
+# U (#620): a child that ENTERED its wave (its ledger's entered fact) whose commit reached dev by another route makes the wave land
 # empty, and dev holds no `Refs #N` line for it (a squash rewrote the message). The entry is the proof: the issue is
 # delivered, never requeued, even past the age cap.
 W15=wave/run-15; start2 run-15 >/dev/null
-printf 'run-15\n' > "$T/st/auto/disp-231"; : > "$T/st/auto/entered-run-15-231"
+printf 'run-15\n' > "$T/st/auto/disp-231"; SG_STATE=$T/st python3 "$T/s/issue_ledger.py" wave 'x/y#231' run-15 entered 'entered wave/run-15' >/dev/null
 mkdir -p "$T/co/runs/run-15"
 printf '%s\n' '{"event": "spawn_accepted", "child": "a", "definition": {"prompt": "GitHub issue #231 work"}}' > "$T/co/runs/run-15/record.jsonl"
 printf '%s\n' "$(( $(date +%s) - 7201 ))" > "$T/st/auto/wave-start-run-15"

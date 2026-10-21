@@ -18,6 +18,7 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -69,7 +70,7 @@ def sandbox(tmp_path: Path, scoped: str, *, landed: bool = False, wave: str = ""
     yet) or "closed" (it landed); `entered` leaves the record that the issue's child entered that wave. `card` is the column
     the board answers the issue's card in, none when empty; `live` leaves the run with no verdict."""
     for name in ("janitor.py", "ghthrottle.py", "ghread.py", "issue_state.py", "board_columns.py", "board-definition.json",
-                 "board_facts.py", "spec_fold.py"):
+                 "board_facts.py", "spec_fold.py", "issue_ledger.py"):
         shutil.copy(SCRIPTS / name, tmp_path / name)
     (tmp_path / "bin").mkdir()
     calls = tmp_path / "calls"
@@ -92,8 +93,9 @@ def sandbox(tmp_path: Path, scoped: str, *, landed: bool = False, wave: str = ""
         (auto / "waved-run-stacked").write_text("wave/run-stacked\n")
     if wave == "open":
         (auto / "wave-run-stacked").write_text("wave/run-stacked\n")
-    if entered:
-        (auto / f"entered-run-stacked-{N}").touch()
+    if entered:   # the entry is a fact in the issue's ledger (ADR-0149), written by its one module
+        subprocess.run([sys.executable, str(tmp_path / "issue_ledger.py"), "wave", f"x/y#{N}", "run-stacked", "entered", "entered wave/run-stacked"],
+                       env={**os.environ, "SG_STATE": str(tmp_path / "st")}, check=True, capture_output=True)
     (auto / f"disp-{N}").write_text("run-stacked\n")
     old = time.time() - 3600   # the run ended an hour ago: past every settle window, so its markers are the pass's to read
     for p in [*run.iterdir(), run, *auto.iterdir()]:

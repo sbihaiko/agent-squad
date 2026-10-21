@@ -28,7 +28,7 @@ L() { SG_STATE="$T/st" SG_REPO=x/y python3 "$T/s/issue_ledger.py" "$@" >/dev/nul
 mk run-a1 801 1000; mk run-a2 801 1001; mk run-a3 801 1002
 L fail 'x/y#801' run-a1 '' 'ended failed: x'; L fail 'x/y#801' run-a2 '' 'ended failed: x'; L rearm 'x/y#801'
 mk run-new 802 4000000000
-mk run-ent 803 4000000000; : > "$T/st/auto/waved-run-ent"; : > "$T/st/auto/entered-run-ent-803"
+mk run-ent 803 4000000000; : > "$T/st/auto/waved-run-ent"; L wave 'x/y#803' run-ent entered 'entered wave/run-ent'
 pass() { SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 JANITOR_NOTIFY="$T/notify" python3 -I "$T/s/janitor.py" 2>&1; }
 o=$(pass)
 /usr/bin/grep -q '^fail 801 ' "$T/wave.calls" 2>/dev/null && ko "A: an old run of a rearmed issue was counted again: $(cat "$T/wave.calls")" || ok "A: a rearmed issue's old runs count nothing"
