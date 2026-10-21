@@ -48,6 +48,18 @@ def stale_worktrees(rows, here, ahead):
     return stale
 
 
+def test_the_repository_tracks_no_virtualenv():
+    """A `.venv` in the index is a symlink one agent committed from its worktree (2026-10-21, #737).
+
+    `.gitignore` held `.venv/`, which does not match a file named `.venv`, so nothing refused it. Every checkout then
+    restored the link over the real venv, every gate fell back to a system python3 without mypy, and the promotion
+    failed three times before the cause was read.
+    """
+    assert git("ls-files", "--", ".venv") == "", "the repository tracks .venv: every checkout would replace the real venv with it"
+    assert subprocess.run(["git", "check-ignore", "-q", ".venv"], cwd=ROOT).returncode == 0, \
+        ".gitignore must ignore the bare name .venv, not only the directory: a symlink named .venv is a file"
+
+
 def test_no_finished_worktree_is_left_behind():
     rows = parse_worktrees(git("worktree", "list", "--porcelain"))
     assert rows, "git worktree list returned nothing"
