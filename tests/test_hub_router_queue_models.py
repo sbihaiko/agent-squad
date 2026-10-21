@@ -110,3 +110,14 @@ def test_the_queue_add_box_offers_the_registry_live_anthropic_ids(hub, checkout,
     reg = hub.router_envelope.modelreg.default_registry()
     assert [m for m in got if m in reg.entries and reg.entries[m].retired] == []
     assert [m for m in got if hub.ANTHROPIC_ID.match(m) and m not in reg.entries] == []
+
+
+def test_a_coding_model_the_save_leaves_out_of_the_envelope_is_added_to_it(hub, checkout):
+    """A coding child runs inside the dispatch envelope, so a coding model outside it reads "blocked by envelope" and
+    never runs (#690). A Save that leaves one out, by a queue edit or a new coding row, appends it in the gateway's
+    spelling; the queue order the owner set stays."""
+    out = hub.models_set({**hub.models_get(), "coding_models": ["claude-opus-5-5", "gpt-5.6-sol", "gpt-5.6-terra"],
+                          "router_models": ["claude-gpt-5.6-terra"]})
+    assert "err" not in out, out
+    assert _envelope(checkout) == ["claude-gpt-5.6-terra", "claude-opus-5-5", "claude-gpt-5.6-sol"]
+    assert out["blocked"] == {"coding_models": []}
