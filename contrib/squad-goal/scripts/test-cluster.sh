@@ -65,7 +65,7 @@ printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"
 r=$(AF_DRY=1 bash "$T/s/autofrontier.sh" 2>&1); case "$r" in *"as 2 child(ren): [1500 1501] [1502] (1 free slots, room for"*"in 1 run(s)"*) ok "caps: a project lowering caps.runs to 1 dispatches one run, its shared-file slice whole";; *) ko "caps.runs 1: '$r'";; esac
 printf 'caps:\n  runs: 2\n' > "$T/co/docs/squad/defaults.yaml"; sleep 300 & held=$!
 (cd "$SG_SQUAD" && python3 -c 'import sys; from squad import caps; c = caps.ceiling(); [c.try_take("runs", f"other-repo-{i}", pid=int(sys.argv[1])) for i in range(2)]' "$held")
-r=$(AF_DRY=1 bash "$T/s/autofrontier.sh" 2>&1); rc=$?; [ $rc -eq 0 ] && [ -z "$r" ] && ok "caps: a ceiling full of another repository's runs dispatches nothing and fails nothing" || ko "caps full: rc=$rc '$r'"
+r=$(AF_DRY=1 bash "$T/s/autofrontier.sh" 2>&1); rc=$?; case "$rc:$r" in 0:*"FRONTIER idle:"*"no slot"*) case "$r" in *"would dispatch"*) ko "caps full: a full ceiling dispatched: '$r'";; *) ok "caps: a ceiling full of another repository's runs dispatches nothing, fails nothing, and names the reason (#733)";; esac;; *) ko "caps full: rc=$rc '$r'";; esac   # #733: the pass says why it started nothing
 kill "$held"; wait "$held" 2>/dev/null
 r=$(AF_DRY=1 bash "$T/s/autofrontier.sh" 2>&1); case "$r" in *"(2 free slots, room for"*) ok "caps: the leases of a dead holder are reclaimed in one pass";; *) ko "caps reclaim: '$r'";; esac
 printf 'caps:\n  runs: 11\n' > "$T/co/docs/squad/defaults.yaml"
