@@ -117,5 +117,9 @@ def test_the_record_nightly_sh_writes_is_the_one_the_footer_reads(hub, tmp_path,
     assert hub.foot_sources(NOW)["nightly"] is None
     (st / "nightly-result").write_text("not a result line\n")
     assert hub.foot_sources(NOW)["nightly"] is None
+    # the record is one line: a valid first line with anything after it is no reading, and the hold drops the same file
+    (st / "nightly-result").write_text(
+        f"{int(NOW - 60)}\tfail\t{SHA}\tpass\tfail\ttests/test_x.py::test_a\ncorrupt\n")
+    assert hub.foot_sources(NOW)["nightly"] is None
     (st / "nightly-result").unlink()
     assert hub.foot_sources(NOW)["nightly"] is None

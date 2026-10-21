@@ -91,6 +91,10 @@ bad_rec "$(date +%s)\tfail\t$sha\tpass\tfail\n" && ok "a record short a field ne
 bad_rec "$(date +%s)\tpass\t$sha\tfail\tpass\t-\n" && ok "a result that contradicts its modes never holds dispatch" || ko "a contradictory record held dispatch"
 bad_rec "nope\tfail\t$sha\tpass\tfail\t-\n" && ok "a timestamp that is not a number never holds dispatch" || ko "a non-numeric time held dispatch"
 bad_rec "$(date +%s)\tfail\t\tpass\tfail\t-\n" && ok "a record with no sha never holds dispatch" || ko "an empty sha held dispatch"
+#    The hold reads the whole file, never its first line alone: a valid red line with anything after it is a record the loop
+#    cannot trust, and such a record holds nothing (#704, ADR-0153).
+bad_rec "$(date +%s)\tfail\t$sha\tpass\tfail\ttests/test_x.py::test_a\ncorrupt\n" && ok "a valid red line followed by a corrupt second line never holds dispatch" || ko "a red line over a corrupt second line held dispatch"
+bad_rec "$(date +%s)\tfail\t$sha\tpass\tfail\ttests/test_x.py::test_a\n"$'\n' && ok "a red line followed by an empty line never holds dispatch" || ko "a red line with a trailing empty line held dispatch"
 rm -f "$ST/nightly-result"
 hold >/dev/null; [ $? = 1 ] && ok "no record at all never holds dispatch" || ko "a missing record held dispatch"
 
