@@ -57,8 +57,11 @@ fi
 g remote set-url origin "$remote"
 o=$(g fetch -q origin "+refs/heads/dev:refs/remotes/origin/dev" "+refs/heads/stg:refs/remotes/origin/stg" 2>&1) || { echo "promote-pass: fetch failed: $(printf '%s' "$o" | tail -1)" >&2; exit 1; }
 [ "$(g rev-parse origin/dev)" = "$tip" ] || exit 0   # dev moved under the read: a later pass takes the new tip
-[ "$(g rev-parse origin/stg)" = "$tip" ] && exit 0
-g merge-base --is-ancestor origin/stg "$tip" || { mark "$tip" "not promoted: stg is not an ancestor of dev, no fast-forward"; exit 1; }
+g merge-base --is-ancestor "$tip" origin/stg && exit 0   # the dev tip is already in stg
+# A promotion leaves a merge commit in stg (#743), so stg is never an ancestor of the next dev tip: only the work stg holds and
+# dev lacks decides. Any plain commit there is the owner's to resolve, and no suite is spent on it.
+o=$(g rev-list --no-merges "$tip..origin/stg" 2>/dev/null) || o=
+[ -z "$o" ] || { mark "$tip" "not promoted: stg holds $(printf '%s\n' "$o" | /usr/bin/grep -c .) commit(s) the dev tip lacks; the owner resolves it"; exit 1; }
 g checkout -q -f --detach "$tip" && g clean -q -ffdx || { mark "$tip" "not promoted: the clean tree could not check out the tip"; exit 1; }
 SERIAL_TRY=1 SG_GATE_STATUS=self SG_GATE_KIND=full bash "$d/gate.sh" bash "$0" --hold "$tip" 2>"$state/promote-pass.err"; rc=$?
 [ $rc = 73 ] && exit 0   # another gate holds the lock: this tick is skipped, never queued

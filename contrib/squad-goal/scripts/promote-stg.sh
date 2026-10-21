@@ -1,5 +1,6 @@
 #!/bin/bash
-# usage: promote-stg.sh      fast-forward stg to the dev tip when the promotion proof is green on that tip (ADR-0145), and never otherwise.
+# usage: promote-stg.sh      promote the dev tip into stg by one pull request when the promotion proof is green on that tip
+#                            (ADR-0145, #743), and never otherwise. No script pushes refs/heads/stg.
 #
 # SG_PROMOTE_PROOF names the proof.
 #   ci (the default): the CI of the dev tip. Green promotes; red, running or a missing run promotes nothing.
@@ -9,9 +10,11 @@
 #         SG_GATE_KIND=full bash gate.sh bash -c '<the full suite>'
 #     stg moves only when the line says `full`, `pass`, and names the dev tip exactly. A missing proof, a failed proof and a
 #     proof for another sha each refuse in their own words.
-# Exit 0: stg is at the dev tip (promoted, or already there). Exit 1: nothing promoted; the one reason goes to $SG_STATE/promote.log
+# Exit 0: the dev tip is in stg (promoted, or already there). Exit 1: nothing promoted; the one reason goes to $SG_STATE/promote.log
 # once per tip and reason (the dedupe list keeps its last 20 lines), so a pass that repeats says nothing new, and to stderr.
-# A later green tip carries the earlier work with it. The push is plain, never forced, so stg moves by a fast-forward or not at all.
+# A later green tip carries the earlier work with it. The consolidation is one pull request (#743, owner rule for every project):
+# the pass opens or reuses the open `dev` -> `stg` pull request and merges it with a merge commit, so a later tip is measured by
+# ancestry, never by identity. The proof is read before the merge, so a red tip leaves the pull request open and promotes nothing.
 # The loop never writes main: the owner does, with promote-main.sh. The work happens in a throwaway clone.
 # $SG_PROMOTE_REMOTE overrides the remote; $SG_CI_STATE_CMD <sha> prints green, red or running (the CI seam); SG_PROMOTE_PROOF
 # selects the proof (ci, the default).
@@ -48,8 +51,26 @@ prove() {  # <tip>: refuse unless the proof for this tip is green, each refusal 
 g init -q . 2>/dev/null; g remote add origin "$remote"
 o=$(g fetch -q origin "+refs/heads/dev:refs/remotes/origin/dev" "+refs/heads/stg:refs/remotes/origin/stg" 2>&1) || { echo "promote-stg: fetch failed: $(printf '%s' "$o" | tail -1)" >&2; exit 1; }
 tip=$(g rev-parse origin/dev) || exit 1
-[ "$(g rev-parse origin/stg)" = "$tip" ] && exit 0
-g merge-base --is-ancestor origin/stg "$tip" || refuse "$tip" "not promoted: stg is not an ancestor of dev, no fast-forward"
+g merge-base --is-ancestor "$tip" origin/stg && exit 0   # the dev tip is already in stg: no pull request is opened
+# A promotion leaves a merge commit in stg, so stg is never an ancestor of the next dev tip. The work stg holds and dev lacks
+# must be those merge commits alone; any plain commit is the owner's to resolve before a merge.
+o=$(g rev-list --no-merges "$tip..origin/stg" 2>/dev/null) || o=
+[ -z "$o" ] || refuse "$tip" "not promoted: stg holds $(printf '%s\n' "$o" | /usr/bin/grep -c .) commit(s) the dev tip lacks; the owner resolves it"
 prove "$tip"
-o=$(g push -q origin "$tip:refs/heads/stg" 2>&1) || refuse "$tip" "not promoted: push refused: $(printf '%s' "$o" | tail -1)"
-echo "PROMOTED stg $tip"
+# The owner's consolidation rule (#743): one pull request, never a push. The merge is a merge commit, so the next tip is read
+# by ancestry and a tip already in stg is no work.
+. "$d/ghcall.sh"
+pr=$(gh_api "repos/$SG_REPO/pulls?state=open&base=stg" -q '[.[] | select(.head.ref == "dev")][0].number // empty' 2>/dev/null) \
+  || refuse "$tip" "not promoted: the open dev -> stg pull request could not be read"
+if [ -z "$pr" ]; then
+  o=$(gh_send -X POST "repos/$SG_REPO/pulls" -f head=dev -f base=stg -f "title=Promote dev into stg" \
+      -f "body=The dev tip $tip carries its proof. Merge this to move stg." 2>&1) \
+    || refuse "$tip" "not promoted: the dev -> stg pull request could not be opened: $(printf '%s' "$o" | tail -1)"
+  pr=$(printf '%s' "$o" | jq -r '.number // empty' 2>/dev/null)
+  [ -n "$pr" ] || refuse "$tip" "not promoted: the pull request was opened but its number was not read"
+fi
+o=$(gh_send -X PUT "repos/$SG_REPO/pulls/$pr/merge" -f merge_method=merge 2>&1) \
+  || refuse "$tip" "not promoted: pull request #$pr could not be merged: $(printf '%s' "$o" | tail -1)"
+printf '%s' "$o" | jq -e '.merged == true' >/dev/null 2>&1 \
+  || refuse "$tip" "not promoted: pull request #$pr did not merge: $(printf '%s' "$o" | jq -r '.message // "no reason"' 2>/dev/null)"
+echo "PROMOTED stg $tip via pull request #$pr"
