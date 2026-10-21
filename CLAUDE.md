@@ -86,7 +86,7 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 - **One model registry names every model; one resolver maps a raw spelling to a route; a chain is a list of registry ids** ([ADR-0147](docs/adr/0147-one-model-registry.md)). Guard: `tests/test_model_resolver_seam.py`, `tests/test_modelreg.py`.
 - **One writer per loop fact: the issue ledger is the one source, one transition function, a missing or corrupt ledger holds, a rearm is a floor** ([ADR-0149](docs/adr/0149-one-writer-per-loop-fact.md)). Guard: `tests/test_issue_ledger.py`, `test-issue-ledger.sh`; rest a draft.
 - **A run never holds conflicting siblings: no two children of one spec, no two issues that name the same file; checked before dispatch** ([ADR-0150](docs/adr/0150-a-run-never-holds-conflicting-siblings.md)). Guard: `contrib/squad-goal/scripts/test-autofrontier-one-run.sh`.
-- **A review streak escalates: three CHANGES go to needs-human, identical findings twice change the coder, an approval binds to its commit** ([ADR-0151](docs/adr/0151-a-review-streak-escalates.md)). Guard: `tests/test_review_streak.py`, `contrib/squad-goal/scripts/test-childcc.sh`; the rest a draft.
+- **A review streak escalates: three CHANGES go to needs-human, identical findings twice change the coder, an approval binds to its commit** ([ADR-0151](docs/adr/0151-a-review-streak-escalates.md)). Guard: `tests/test_review_streak.py`, `test-childcc.sh`, `tests/test_issue_ledger.py`; rest a draft.
 
 ### Dashboard, editor and repository
 

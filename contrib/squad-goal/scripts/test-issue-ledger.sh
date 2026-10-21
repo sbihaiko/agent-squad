@@ -78,4 +78,29 @@ L migrate 'x/y#30' >/dev/null && [ "$(L read 'x/y#30' state)" = todo ] && [ "$(L
 L rearm 'x/z#40' >/dev/null
 [ "$(L read 'x/z#40' landed)" = "{}" ] && [ -z "$(L requeued 'x/z#40' run-h)" ] \
   && ok "a rearm clears the landing and requeue facts" || ko "after rearm: '$(L read 'x/z#40')'"
+# The review streak is a ledger fact (ADR-0151, #702): three CHANGES verdicts in a row end the issue needs-human for the
+# owner, an APPROVE starts the count again, and identical findings twice move the next attempt one place down the coder
+# chain. A verdict is one fact per run and round; a rearm clears it and its floor holds.
+R() { L review 'x/z#50' "$@"; }
+[ "$(R r1 changes 'the same finding')" = recorded ] && [ "$(L coder 'x/z#50')" = 0 ] \
+  && ok "one CHANGES verdict asks for no different coder" || ko "coder after one: '$(L read 'x/z#50' review)'"
+[ "$(R r2 changes 'the same finding')" = recorded ] && [ "$(L coder 'x/z#50')" = 1 ] \
+  && ok "identical findings twice move the next attempt one place down the chain" || ko "coder after two: '$(L coder 'x/z#50')'"
+[ "$(R r3 changes 'the same finding')" = frozen ] && [ "$(L coder 'x/z#50')" = 1 ] \
+  && ok "a third CHANGES verdict freezes the issue and moves no coder a second time" || ko "three: '$(L read 'x/z#50')'"
+[ "$(L read 'x/z#50' state)" = needs-human ] && ok "a frozen review streak holds the issue's dispatch (needs-human)" || ko "state: '$(L read 'x/z#50' state)'"
+[ "$(R r4 approve '')" = reset ] && [ "$(L read 'x/z#50' state)" = needs-human ] \
+  && ok "an approval after the freeze does not lift the owner's freeze" || ko "approve after freeze: '$(L read 'x/z#50' state)'"
+[ "$(R r5 changes 'a new finding')" = recorded ] && [ "$(L coder 'x/z#50')" = 0 ] \
+  && ok "a new finding starts the coder at the top of the chain" || ko "new finding: '$(L coder 'x/z#50')'"
+[ "$(R r6 changes 'another finding')" = recorded ] && [ "$(L read 'x/z#50' review | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["changes"], d["moves"])')" = "2 0" ] \
+  && ok "two different findings change no coder" || ko "different: '$(L read 'x/z#50' review)'"
+[ "$(L review 'x/z#51' r1 changes f1 1)" = recorded ] && [ "$(L review 'x/z#51' r1 changes f1 1)" = duplicate ] \
+  && [ "$(L review 'x/z#51' r1 changes f1 2)" = recorded ] \
+  && ok "a review verdict is one fact per run and round" || ko "per round: '$(L read 'x/z#51' review)'"
+L review 'x/z#51' r1 blocked f1 3 >/dev/null 2>&1 && ko "an unknown verdict is accepted" || ok "an unknown verdict is refused"
+L rearm 'x/z#51' >/dev/null
+[ "$(L read 'x/z#51' review | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["changes"], d["moves"], len(d["verdicts"]))')" = "0 0 0" ] \
+  && ok "a rearm clears the review facts" || ko "rearm review: '$(L read 'x/z#51' review)'"
+[ "$(L review 'x/z#51' r1 changes f1 1)" = floor ] && ok "a review of a run from before the rearm counts nothing" || ko "floor review: '$(L read 'x/z#51' review)'"
 rm -rf "$T"; exit $fail

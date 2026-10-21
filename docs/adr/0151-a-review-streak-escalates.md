@@ -32,5 +32,9 @@ A child that the reviewer sends back again and again spends money and produces n
 wrote no artifact repeats its finding and changes the coder on the first repetition, and the record keeps that round's
 last turn. `contrib/squad-goal/scripts/test-childcc.sh`: a run that reviewed a child owns it, so the child-completion
 pass neither reviews nor fixes that child, a child whose approval is missing or stale holds its delivery, and the wave
-merges only a child whose approval stands at its head. The three-CHANGES freeze and the severity calibration are a draft
-until their own tests exist (ADR-0018).
+merges only a child whose approval stands at its head. The streak is a ledger fact: `tests/test_issue_ledger.py` and
+`contrib/squad-goal/scripts/test-issue-ledger.sh` (three CHANGES verdicts end the issue needs-human, an approval resets
+the streak, identical findings twice move the coder, a verdict is one fact per run and round, and a rearm clears it with
+its floor) and `contrib/squad-goal/scripts/test-runreview.sh` (the run's review gate writes the verdict, freezes the card
+and stops the requeue). The severity calibration and the approval binding are a draft until their own tests exist
+(ADR-0018).

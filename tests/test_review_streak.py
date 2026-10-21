@@ -10,12 +10,13 @@ import pytest
 from squad import review_streak as R
 from squad.adapter import CallResult
 from tests.gitrepo import sibling_repo
+from tests.helpers import node, router
 from tests.test_dispatch import MODEL, ev, make, req, routed
 from tests.test_review_gate import gated
 from tests.test_waves import writer
 
 CHILD = "route.router.1"
-OTHER = "claude-gpt-5.6-terra"       # the coder after the child's own model in the route node's allow list
+OTHER = node(router(), "route")["allow"]["models"][1]   # the coder after the child's own model in the route node's allow list
 
 
 def fp(text):
@@ -43,6 +44,16 @@ def test_a_fix_round_that_wrote_no_artifact_repeats_the_finding():
 
 def test_a_moved_line_is_not_a_changed_finding():
     assert fp("- a.txt:12 — no test — it fails — add one") == fp("- a.txt:41 — no test — it fails — add one")
+
+
+def test_the_coder_moves_one_place_per_repeated_finding_until_the_chain_ends():
+    """#702: the ledger holds how many times identical findings repeated; the chain moves that many places, and the last
+    entry stays when the chain has no further one."""
+    chain = ["claude-sonnet-5-5", OTHER, "claude-opus-5-5"]
+    assert R.at(chain, 0, "claude-sonnet-5-5") == "claude-sonnet-5-5"
+    assert R.at(chain, 1, "claude-sonnet-5-5") == OTHER
+    assert R.at(chain, 9, "claude-sonnet-5-5") == "claude-opus-5-5"
+    assert R.at([], 0) is None
 
 
 def no_artifact(last):

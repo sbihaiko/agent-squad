@@ -17,6 +17,8 @@ usage: issue_ledger.py read  <key> [state|count|last_fail|held|wave]  the record
        issue_ledger.py landed <owner>/<repo>                 "<ref>\t<n>" for each issue a landing pass put in the base
        issue_ledger.py requeue <key> <run> <head>            the run requeued the issue's child on this head: prints recorded|duplicate|floor
        issue_ledger.py requeued <key> <run>                  the head the run requeued the issue on, "" when it did not
+       issue_ledger.py review <key> <run> <verdict> <findings> [round]  one review of the issue's work: prints recorded|reset|duplicate|frozen|floor
+       issue_ledger.py coder <key>                           the places down the coder chain the next attempt starts
 
 This module is the only writer of $SG_STATE/state/<owner>__<repo>__<n>.json. The key is <owner>/<repo>#<n>, the address
 seam's (ADR-0138), never a bare issue number. Owner intent stays on GitHub (ready-for-agent, the Todo card, frozen:owner,
@@ -47,6 +49,13 @@ branch), with the branch and the sha. Rule R reads it instead of a run's land he
 only when a landing pass wrote the fact. A `requeue` fact holds the head a run requeued the issue's child on, so the pass
 that requeued it is not tried again on the same head (the old auto/requeued-<run>-<child> marker, ADR-0149 rule 6).
 
+A `review` event is one review of the issue's work, keyed by its run and round (ADR-0151, ADR-0149 rule 1): a retry of one
+round is no second verdict. The streak holds the consecutive `changes` verdicts, the `moves` identical findings twice made
+down the coder chain, the last finding, and the cause when the streak ended the issue. Three consecutive `changes`
+verdicts set `stopped` and the issue reads needs-human, so its dispatch is held for the owner (ADR-0029). An `approve`
+resets the count and the moves, and lifts no stop the owner has not lifted; a new finding starts the moves again at zero.
+`coder` prints the moves, the places down the chain the next fix attempt starts (ADR-0151 rule 2).
+
 A corrupt file holds the issue (ADR-0149 rule 4): `read` gives the state `held` and names the file and the cause, every
 writer but `rearm` refuses it and leaves it as it is, and the dispatch passes read `held` as a stop. It never reads as the
 seed: a fallback to the old counters would hide the defect. A rearm, the owner's act, writes a fresh file over it.
@@ -76,6 +85,8 @@ import time
 LEDGERS = ("own", "loop")
 OLD = {"own": "requeues", "loop": "loopqueues"}   # the old marker names wave.sh wrote in auto/ before #673
 WAVE = ("entered", "held", "refused", "stuck", "owed", "delivered")   # the wave events wave.sh sends (ADR-0149)
+STREAK = 3   # consecutive CHANGES verdicts that end the issue needs-human (ADR-0151 rule 1)
+VERDICTS = ("changes", "approve")   # the review verdicts the streak counts (ADR-0151)
 KEY = re.compile(r"([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)#([0-9]+)")
 
 
@@ -94,8 +105,14 @@ def path(key):
     return state_dir() / "state" / f"{o}__{r}__{n}.json"
 
 
+def review_fact(rec):   # the review streak of the issue: a fact from the ledger, or the one a new issue has
+    r = rec.get("review") or {}
+    return {"changes": r.get("changes", 0), "moves": r.get("moves", 0), "seen": r.get("seen", 0),
+            "findings": r.get("findings", ""), "stopped": r.get("stopped"), "verdicts": list(r.get("verdicts") or [])}
+
+
 def empty(key):
-    return {"key": key, **{led: {"count": 0, "runs": [], "stopped": None} for led in LEDGERS}}
+    return {"key": key, "review": review_fact({}), **{led: {"count": 0, "runs": [], "stopped": None} for led in LEDGERS}}
 
 
 def seed(key):   # the old auto/ files of the primary repository: what `migrate` writes into a missing file
@@ -143,7 +160,8 @@ def load(key):
         return empty(key)   # a new issue: no loop fact yet
     except (ValueError, UnicodeDecodeError) as e: raise Corrupt(f"a corrupt ledger holds the issue: {p} ({e})") from None
     if not (isinstance(rec, dict) and all(isinstance(rec.get(led), dict) and isinstance(rec[led].get("runs"), list) for led in LEDGERS)
-            and all(isinstance(rec.get(k, {}), dict) for k in ("wave", "landed", "requeued"))):
+            and all(isinstance(rec.get(k, {}), dict) for k in ("wave", "landed", "requeued", "review"))
+            and isinstance((rec.get("review") or {}).get("verdicts", []), list)):
         raise Corrupt(f"a corrupt ledger holds the issue: {p} (not a ledger record)")
     return rec
 
@@ -173,7 +191,8 @@ def locked(key):   # one lock per issue: a writer holds it from its read to its 
 
 
 def state(rec):
-    return "frozen" if rec["own"]["stopped"] else "needs-human" if rec["loop"]["stopped"] else "todo"
+    return ("frozen" if rec["own"]["stopped"] else
+            "needs-human" if rec["loop"]["stopped"] or (rec.get("review") or {}).get("stopped") else "todo")
 
 
 def last_fail(rec):   # the reason of the newest own failure, the one a redispatch must repair (#670)
@@ -185,7 +204,7 @@ def read(key):   # a corrupt file, or a missing one beside the old counters, rea
     try: rec = load(key)
     except Held as e: return {**empty(key), "wave": {}, "landed": {}, "requeued": {}, "state": "held", "held": str(e), "attempts": 0, "last_fail": ""}
     return {**rec, "wave": rec.get("wave", {}), "landed": rec.get("landed", {}), "requeued": rec.get("requeued", {}),
-            "state": state(rec), "held": "", "attempts": rec["own"]["count"], "last_fail": last_fail(rec)}
+            "review": review_fact(rec), "state": state(rec), "held": "", "attempts": rec["own"]["count"], "last_fail": last_fail(rec)}
 
 
 def count(key, led="own"):
@@ -256,6 +275,27 @@ def _requeue(rec, ev):   # -> (recorded|duplicate|floor, changed): the head a ru
     return "recorded", True
 
 
+def _review(rec, ev):   # -> (recorded|reset|duplicate|frozen|floor, changed): one review of the issue's work (ADR-0151)
+    run, v, f, rnd = ev["run"], ev["verdict"], ev["findings"], str(ev.get("round") or 0)
+    if v not in VERDICTS: raise ValueError(f"not a review verdict: {v!r} (one of {', '.join(VERDICTS)})")
+    if not run: raise ValueError("a review verdict names its run")
+    if run in floor_runs(rec): return "floor", False   # a run from before the rearm counts toward nothing after it
+    R = rec["review"] = review_fact(rec)
+    if any(x.get("run") == run and str(x.get("round") or 0) == rnd for x in R["verdicts"]): return "duplicate", False
+    R["verdicts"].append({"run": run, "round": rnd, "verdict": v, "findings": f, "ts": time.time()})
+    if v == "approve":
+        R["changes"], R["moves"], R["seen"], R["findings"] = 0, 0, 0, ""
+        return "reset", True   # the stop an earlier streak set stays: only the owner lifts it (ADR-0029)
+    R["changes"] += 1
+    R["seen"] = R["seen"] + 1 if f and f == R["findings"] else (1 if f else 0)   # identical findings twice move the coder (#702)
+    R["moves"] += 1 if f and R["seen"] % 2 == 0 else 0
+    R["findings"] = f
+    if R["changes"] >= STREAK and not R["stopped"]:
+        R["stopped"] = f"{STREAK} reviews of the issue asked for changes"
+        return "frozen", True
+    return "recorded", True
+
+
 def _migrate(rec, ev):   # the old counters become the file, once: a ledger that exists is never migrated over
     if ev["old"] is not None: raise ValueError(f"nothing to migrate for {ev['key']}: its ledger exists, or it has no old counters")
     rec.clear(); rec.update(seed(ev["key"]))
@@ -266,13 +306,15 @@ def _rearm(rec, ev):   # the loop facts go, and the floor (#692) keeps every run
     old = ev["old"] or {}
     runs = {x["run"] for led in LEDGERS for x in (old.get(led) or {}).get("runs", []) if isinstance(x, dict) and x.get("run")}
     runs |= set((old.get("wave") or {}).keys()) | set((old.get("requeued") or {}).keys()) | set((old.get("rearmed") or {}).get("runs", []))
+    runs |= {x["run"] for x in ((old.get("review") or {}).get("verdicts") or []) if isinstance(x, dict) and x.get("run")}
     runs |= {k for k, f in (old.get("landed") or {}).items() if isinstance(f, dict) and f.get("kind") == "run"}
     rec.clear(); rec.update(empty(ev["key"]))
     rec["rearmed"] = {"ts": time.time(), "runs": sorted(runs)}   # a corrupt file has no runs to read: the time is the floor
     return None, True
 
 
-RULES = {"fail": _fail, "stop": _stop, "wave": _wave, "landed": _landed, "requeue": _requeue, "rearm": _rearm, "migrate": _migrate}
+RULES = {"fail": _fail, "stop": _stop, "wave": _wave, "landed": _landed, "requeue": _requeue, "review": _review,
+         "rearm": _rearm, "migrate": _migrate}
 
 
 def transition(key, ev):   # the one transition function (ADR-0149): every event of every writer, under the issue's lock
@@ -335,6 +377,14 @@ def requeued(key, run):   # the head the run requeued the issue on, "" when it d
     return ((load(key).get("requeued") or {}).get(run) or {}).get("head", "")
 
 
+def review(key, run, verdict, findings="", rnd=0):   # -> recorded|reset|duplicate|frozen|floor: one review of the issue
+    return transition(key, {"op": "review", "run": run, "verdict": verdict, "findings": findings, "round": rnd})
+
+
+def coder(key):   # the places down the coder chain the next fix attempt starts: one per repeated finding (ADR-0151 rule 2)
+    return int(review_fact(load(key)).get("moves") or 0)
+
+
 def repo_files(repo):   # -> [(n, record)] for every readable ledger file of the repository; a corrupt one holds its issue at dispatch already
     o, r, _ = parse(f"{repo}#0"); out = []
     for p in sorted(state_dir().joinpath("state").glob(f"{o}__{r}__*.json")):
@@ -389,6 +439,8 @@ def main(argv):
         elif op == "landed" and len(rest) >= 3: print(landed(key, rest[0], rest[1], rest[2]))
         elif op == "requeue" and len(rest) >= 2: print(requeue(key, rest[0], rest[1]))
         elif op == "requeued" and rest: print(requeued(key, rest[0]))
+        elif op == "review" and len(rest) >= 3: print(review(key, rest[0], rest[1], rest[2], *(rest[3:4] or [0])))
+        elif op == "coder": print(coder(key))
         elif op == "wave" and len(rest) >= 3: print(wave(key, rest[0], rest[1], rest[2], rest[3:4] == ["keep"]))
         elif op == "migrate": migrate(key); print(f"MIGRATE {key}: the old counters are in its ledger file; they are read no more")
         elif op == "rearm": print(f"REARM {key}: the loop facts are cleared; {rearm(key).name} removes the SQUAD-NOT-STARTABLE comment")
