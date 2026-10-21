@@ -185,6 +185,19 @@ gh_dispatch_hold() {
     esac
   fi
   if nids=$(sg_nightly_red "$SG_STATE/nightly-result"); then
+    # (#747) The record is red for the sha it ran at, not for whatever the tip became. A tip the nightly has not seen is
+    # unproven, not red: one line names both shas and the pass delivers, and the next nightly proves the new tip. Each
+    # landing carries its own local gate, and the promotion still needs its full proof. A tip the pass cannot read holds.
+    rsha=$(cut -f3 "$SG_STATE/nightly-result" 2>/dev/null); tip=
+    if [ -n "${SG_CHECKOUT:-}" ]; then
+      tip=$(/usr/bin/git -C "$SG_CHECKOUT" rev-parse --verify -q origin/dev 2>/dev/null) \
+        || tip=$(/usr/bin/git -C "$SG_CHECKOUT" rev-parse --verify -q HEAD 2>/dev/null) || tip=
+    fi
+    if [ -n "$tip" ] && [ "${rsha:0:12}" != "${tip:0:12}" ]; then
+      line="DISPATCH NOTE: the nightly red names $rsha, not the dev tip $tip; the tip is unproven and the next nightly proves it"
+      printf '%s\n' "$line"; printf '%s\n' "$line" >> "$SG_STATE/cycle.log"
+      return 1
+    fi
     line="DISPATCH HOLD: the nightly full suite is red (${nids:-no test named}); no new run until one green nightly"
     printf '%s\n' "$line"
     printf '%s\n' "$line" >> "$SG_STATE/cycle.log"
