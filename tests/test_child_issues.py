@@ -36,3 +36,13 @@ def test_a_text_that_names_no_issue_maps_to_none():
     m = _mod()
     assert m.first("a child whose prompt names no issue at all") is None
     assert m.named("a child whose prompt names no issue at all") == set()
+
+
+def test_a_json_encoded_prompt_maps_every_refs_line():
+    """#725: a reader that scans a record line or json.dumps of the definition sees "\\nRefs #715", and `\\bRefs` found no
+    word boundary after the escaped newline, so a bundled child read as unmapped and the janitor unheld its issues."""
+    import json
+    m = _mod()
+    text = json.dumps({"prompt": "Deliver two issues of SPEC 481 in one slice.\n\n## Issue 715: a seam\nRefs #715\nRefs #717\n"})
+    assert m.named(text) == {"715", "717"}
+    assert m.first(text) == "715"
