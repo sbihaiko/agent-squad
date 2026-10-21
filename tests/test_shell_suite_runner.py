@@ -4,11 +4,12 @@ These cases drive the runner's seam (`tests/shell_suites.py`) on throwaway suite
 `tests/test_shell_suites.py`, never from here, so this file stays fast.
 """
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
 
-from tests import shell_suites
+from tests import shell_suites, slowcap
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"
@@ -121,3 +122,35 @@ def test_every_suite_has_a_measured_line_so_none_lands_unmeasured():
     missing = [p.name for p in shell_suites.discover() if p.name not in listed]
     assert not missing, ("each shell suite needs a line in tests/shell_suites_seconds.txt; measure it with "
                          f"`python3 -m tests.measure_shell_suites --write {' '.join(missing)}`")
+
+
+def repo_cap_seconds():
+    """The cap this repository sets for one test call, read from pyproject.toml, so the lines here are anchored to it."""
+    m = re.search(r'^slow_cap_seconds = "([\d.]+)"', (ROOT / "pyproject.toml").read_text(), re.M)
+    assert m, "pyproject.toml sets slow_cap_seconds"
+    return float(m.group(1))
+
+
+def test_the_slow_line_is_the_cap_divided_by_the_slowdown_the_cap_excuses():
+    """The cap excuses a call over its line only up to the slowdown `contention_factor` measures. A suite whose own measured
+    time crosses the cap under that load has an outcome the load decides, so it carries a slow reason (#736)."""
+    assert shell_suites.SLOW_SECONDS == repo_cap_seconds() / slowcap.MAX_CONTENTION_FACTOR
+    assert shell_suites.SLOW_SECONDS * slowcap.MAX_CONTENTION_FACTOR == repo_cap_seconds()
+
+
+def test_a_suites_bound_is_its_measured_time_times_the_slowdown_the_cap_excuses(monkeypatch):
+    """A bound tighter than the load this machine may meet fails a suite for the machine's work, not for its own (#736)."""
+    monkeypatch.setattr(shell_suites, "measured", lambda: {"test-long.sh": 250.0})
+    assert shell_suites.timeout_for("/nowhere/test-long.sh") == 250.0 * slowcap.MAX_CONTENTION_FACTOR
+
+
+def test_a_quick_suites_bound_is_the_floor(monkeypatch):
+    monkeypatch.setattr(shell_suites, "measured", lambda: {"test-quick.sh": 1.0})
+    assert shell_suites.timeout_for("/nowhere/test-quick.sh") == shell_suites.MIN_TIMEOUT_SECONDS
+
+
+def test_the_longest_suite_gets_a_bound_above_the_one_it_met_under_load():
+    """test-review.sh measures 266.8 s quiet, and it crossed the old 300 s bound at load 61. Its bound follows its own measure."""
+    measured = shell_suites.measured()["test-review.sh"]
+    assert measured * slowcap.MAX_CONTENTION_FACTOR > 300.0
+    assert shell_suites.timeout_for(SCRIPTS / "test-review.sh") == measured * slowcap.MAX_CONTENTION_FACTOR
