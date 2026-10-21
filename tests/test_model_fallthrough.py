@@ -162,7 +162,11 @@ def test_model_chain_keeps_a_model_inside_its_hours():
 # The launcher picks the coding model by the models.json coding_models order; the in-run fallback follows the graph
 # allow-list order, so a request line could promise claude-sonnet-5-5 while the engine took grok (#617). The launcher
 # passes the order it read as the engine option `model_order`, recorded at run start like `model_hours`.
-CODING_ORDER = [CHAIN[2], CHAIN[0], CHAIN[1]]   # the allow-list order is CHAIN: the two differ
+# The order is built from the shipped envelope and never hardcoded: the router's own model sits wherever the graph puts
+# it, so an index chosen today names the pick tomorrow (2026-10-21).
+_PICK = node(_DOC, "router")["model"]
+_OTHERS = [m for m in CHAIN if m != _PICK]
+CODING_ORDER = _OTHERS[1:] + _OTHERS[:1]   # a rotation: the launcher's order differs from the allow list, and starts elsewhere
 
 
 async def test_a_fallback_follows_the_coding_order_the_launcher_read(tmp_path):
@@ -170,11 +174,13 @@ async def test_a_fallback_follows_the_coding_order_the_launcher_read(tmp_path):
     eng = engine(tmp_path, {"router": [{"error": PROVIDER_ERROR}, SPAWNS], "route.router.1": CHILD},
                  options={"model_order": CODING_ORDER})
     v = await eng.run()
-    assert [c.model for c in eng.adapter.calls if c.node == "router"] == [pick, CHAIN[2]]   # refused, then the coding chain's next entry, not the allow list's
+    assert [c.model for c in eng.adapter.calls if c.node == "router"] == [pick, CODING_ORDER[0]]   # refused, then the coding chain's next entry, not the allow list's
     start = [e for e in read(tmp_path / "record.jsonl") if e["event"] == "run_start"][0]
     assert start["engine_options"]["model_order"] == CODING_ORDER
     assert v.verdict == "completed"
 
 
 def test_model_chain_keeps_an_entry_the_coding_order_does_not_name_behind_the_named_ones():
-    assert model_chain(CHAIN, PICK, order=[CHAIN[2]]) == [PICK, CHAIN[2], CHAIN[1]]   # the unnamed entry follows the named one
+    named = next(m for m in CHAIN if m != PICK)
+    unnamed = [m for m in CHAIN if m not in (PICK, named)]
+    assert model_chain(CHAIN, PICK, order=[named]) == [PICK, named, *unnamed]   # every unnamed entry follows the named one, in allow-list order
