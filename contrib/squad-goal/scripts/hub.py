@@ -3063,6 +3063,9 @@ def usable(ids, chain):
     """The ids one chain keeps: an unregistered id stays, so the panel shows it as unregistered; a registered id stays
     only when the registry says the chain can run it (ADR-0147, #545)."""
     return [m for m in ids if modelreg.model(m) is None or modelreg.compatible(m, chain)[0]]
+def router_view():
+    """The Router queue the panel shows: the entries the router chain can run. A Save compares against the same list."""
+    return usable(router_get(), "router")
 def v1_view(d):
     """The panel's reading of models.json: a v2 file's chains as the resolver reads them, under the v1 keys the panel draws (ADR-0147)."""
     if d.get("schema_version") != 2: return d
@@ -3380,7 +3383,7 @@ def models_get():
     The file keeps the spelling each role needs (chain_id); the panel never sees it, so a reader cannot pick the
     wrong one of two spellings of the same model."""
     d = v1_view(json.loads(MODELS.read_text()))
-    known, rknown, rchain, states = known_models(d), router_known(), usable(router_get(), "router"), subscription_states()
+    known, rknown, rchain, states = known_models(d), router_known(), router_view(), subscription_states()
     return {**{k: [bare_id(m) for m in d.get(k, [])] for k in CHAINS},
             "efforts": {k: {bare_id(m): v for m, v in ek.items()} for k, ek in efforts_of(d).items()},
             "hours": {k: {bare_id(m): v for m, v in hk.items()} for k, hk in hours_of(d).items()},
@@ -3428,8 +3431,8 @@ def _models_set(new):
     if json.loads(MODELS.read_text()).get("schema_version") == 2: return {"err": "models.json is v2: the panel cannot save it yet; edit its chains with modelreg"}
     # The router chain is the dispatch envelope, so it lives in the run graph and never in this file (#95)
     rchain = new.pop(ROUTER_CHAIN, None)
-    if rchain == []:
-        rchain = None       # no run graph under this checkout: the panel has no envelope to write, and says nothing
+    if rchain == [] or rchain == router_view():
+        rchain = None       # no run graph, or the queue as shown: the envelope and its hidden entries stay as they are
     if rchain is not None:
         if not isinstance(rchain, list) or not 1 <= len(rchain) <= 8 or \
            not all(isinstance(m, str) and MODEL_ID.match(m) for m in rchain) or len(set(rchain)) != len(rchain):
