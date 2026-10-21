@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted. Rule 6 of ADR-0117 reads: the page reads only its own origin.
+Accepted. ADR-0152 amends the consequence paragraph of ADR-0118 in place. Rule 6 of ADR-0117 reads: the page reads only its own origin.
 
 ## Context
 
@@ -41,7 +41,7 @@ Rejected: a signal or socket to the engine (no pidfile, and dispatch children sh
 
 ## Consequences
 
-Any local process can read the run folder, and can pause the run, through the loopback port. A run folder holds no credential. If a local process that pauses a run proves a real nuisance, the write route goes behind a token.
+Any local process can read the run folder, and can pause the run, through the loopback port. The server keeps its loopback bind. Tailnet reach goes only through the hub, under the rules of ADR-0152. A run folder holds no credential. If a local process that pauses a run proves a real nuisance, the write route goes behind a token.
 
 ## Guard
 

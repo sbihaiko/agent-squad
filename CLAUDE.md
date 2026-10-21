@@ -92,6 +92,7 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 - **The editor writes what a person authors** ([ADR-0111](docs/adr/0111-editor-contract.md)). Guard: `tests/test_graph.py`, `tests/test_report.py`, `tests/test_dashboard.py`.
 - **The editor prepares a run and never launches it** ([ADR-0117](docs/adr/0117-editor-prepares-never-launches.md)). Guard: `tests/test_dashboard.py`.
 - **`squad dashboard` serves one run folder over a loopback server, one write route** ([ADR-0118](docs/adr/0118-dashboard-server.md)). Guard: `tests/test_dashboard_server.py`, `tests/test_dashboard_page.py`, `tests/test_dashboard_control.py`.
+- **Tailnet reach goes through the hub only** ([ADR-0152](docs/adr/0152-reach-the-web-surfaces-over-the-tailnet.md)). Guard: `tests/test_tailnet_access.py`, `tests/test_tailnet_exposure_guard.py`, `tests/test_tailnet_settings.py`, `tests/test_hub_tailnet.py`, `tests/test_dashboard_tailnet.py`.
 - **The dashboard page: inspector panel, group cards, valid prefix of a corrupt record** ([ADR-0124](docs/adr/0124-dashboard-page.md)). Guard: `tests/test_dashboard_chrome.py`, `tests/test_dashboard_legend_help.py`, `tests/test_dashboard_groups.py`.
 - **The subject answer key asserts what its issue text states** ([ADR-0119](docs/adr/0119-subject-answer-key.md)). Guard: `tests/test_subject_key.py`.
 - **A borrowed skill is found by name; a run records every skill hash** ([ADR-0129](docs/adr/0129-skill-found-by-name.md)). Guard: `tests/test_skillpath.py`, `tests/test_agent_doors.py`, `tests/test_skills.py`.

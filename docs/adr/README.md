@@ -35,6 +35,7 @@ An ADR holds a decision and its reason. It is not a ledger: no dates, counts, st
 | [0129](0129-skill-found-by-name.md) | A borrowed skill is found by name, and a run records the hash of every skill it can load |
 | [0133](0133-a-defect-an-agent-finds-is-its-own.md) | A defect an agent finds is its own from that moment, whoever caused it and whenever it began |
 | [0134](0134-stall-cap-counts-failures-without-evolution.md) | A cap counts failed attempts with an unchanged failure, never totals: a call's turns, a loop's entries |
+| [0135](0135-failed-run-evidence-lives-on-a-branch.md) | A failed gui-test run's screenshots live on a dedicated evidence branch |
 | [0136](0136-a-defect-is-fixed-test-first.md) | A defect is fixed test-first, and the red run kept |
 | [0137](0137-a-gui-keeps-its-rules-out-of-the-view.md) | A GUI keeps its rules out of the view |
 | [0138](0138-a-profile-works-a-list-of-repositories.md) | A profile works a list of repositories, and one seam resolves every address |
@@ -51,6 +52,7 @@ An ADR holds a decision and its reason. It is not a ledger: no dates, counts, st
 | [0149](0149-one-writer-per-loop-fact.md) | The per-issue ledger is the single source of an issue's loop facts; every writer submits events through one transition function; a missing or corrupt ledger holds dispatch for that issue; a rearm is a floor; a marker prefix is deleted only after its readers and writers moved and replay is verified |
 | [0150](0150-a-run-never-holds-conflicting-siblings.md) | A run never holds two children of one spec, nor two issues whose bodies name the same repository-relative file; a deterministic check before dispatch enforces it, and conflict handling at landing stays |
 | [0151](0151-a-review-streak-escalates.md) | Three consecutive CHANGES verdicts send an issue to needs-human; identical findings twice stop the fix cycle and the next attempt uses a stronger coder; Debt or nit findings never count as CHANGES; an approval binds to the reviewed commit; a run that reviews its own children owns them |
+| [0152](0152-reach-the-web-surfaces-over-the-tailnet.md) | The web surfaces keep their loopback bind; the hub is the one tailnet entry, through one owner-set `tailscale serve`; a tailnet request needs an allowed login, and a write also the tailnet origin; no credential is stored |
 
 ## Adding an ADR
 
