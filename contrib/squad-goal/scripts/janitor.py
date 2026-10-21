@@ -35,8 +35,9 @@
     a completed run, whether or not it landed work, whose branch has not landed -> Code Complete; a failed run with nothing landed -> $SG_TODO (Todo); a needs-human run with nothing landed -> Blocked (ADR-0029: the owner is the next actor,
     and Todo would tell him the loop has it); an issue labelled needs-owner or needs-ratification -> Blocked. R is the one owner of a loop-board card a kept run names: no other rule writes one, so no rule races it.
     An issue labelled frozen:owner keeps the column it carries, and cycle.log names the write R held back (BOARD-FROZEN). A run that stopped needs-human or failed never moves its issue's
-    card forward: its Todo or Blocked stands, and a work branch it left is stale evidence. A local landing is delivered work (ADR-0143): a failed run's landing reaches
-    Code Complete, the child's own or the run's; a needs-human run's landing keeps Blocked, since the owner is the next actor (ADR-0029).
+    card forward: its Todo or Blocked stands, and a work branch it left is stale evidence. A landing is delivered work once it reached the landing branch (ADR-0143): a failed run's
+    landing whose head origin/<land> holds reaches Code Complete, the child's own or the run's, and one that stayed its local land commit delivered nothing,
+    so the card goes back to Todo and rule O drops the marker (#691); a needs-human run's landing keeps Blocked, since the owner is the next actor (ADR-0029).
     Text fields: Run and Run started carry the run id and its start time while the card is In Progress, and are cleared when it is anything else. A card already in its expected status is not written again, and a write GitHub refuses is named in cycle.log (BOARD-RECONCILE / BOARD-WRITE-FAILED), never swallowed.
     The board is read once per pass (one fields read, one items read per project), and the card cache follows every status the pass writes, so a later rule (O, Q, P) reads the column the pass set, never the stale read. An issue the board answers no card for is added with its expected status in one write (board.sh --add);
     a board that does not answer at all (a refusal, a deadline miss) is told apart from that: nothing is moved on a guess, nothing is reported as a defect.
@@ -170,13 +171,18 @@ def own_pass(q):
         if any(s in c for s in OWN_PASS): return True
         q = pp
     return False
+_in_land = {}
+def in_land(sha):   # the commit is an ancestor of origin/<land>, read in the checkout as named_in_land reads it: the work reached the landing branch. A checkout with no such ref holds none
+    if sha not in _in_land:
+        _in_land[sha] = subprocess.run(["git", "-C", str(co), "merge-base", "--is-ancestor", sha, f"origin/{os.environ.get('SG_LAND_BRANCH') or 'dev'}"], capture_output=True).returncode == 0
+    return _in_land[sha]
 def folder(r): return pathlib.Path(r) if r.startswith("/") else co / "runs" / r
 def read(f):
     v = False; pidc = None; started_at = None; acc = set(); t = f / "record.jsonl"; ver = None; rs = []; landed = False; rid = f.name; rts = ""
     # The per-child evidence (#271): the children the run accepted, the issues each child's own accept line named, the
     # landing nodes that stand, and every node's own outcome. A run that asked for children landed through the child
     # that made the landing, so rule R reads each child's own fact instead of crediting the run's landing to every issue.
-    kids = set(); kid_issue = {}; land_nodes = set(); outs = {}; kid_review = {}
+    kids = set(); kid_issue = {}; land_nodes = set(); outs = {}; kid_review = {}; heads = []
     # The spawn batch (#480): the engine answers a dispatch's requests in one batch, then starts the children. Any event after
     # the last spawn event is past that batch, so the run's choice of children is decided; spawn_ts is when it was made.
     spawned = decided = False; spawn_ts = 0.0
@@ -202,11 +208,7 @@ def read(f):
             # no marker stands on it (ADR-0145 rule 12, #464). A record written before the effect carried `before` keeps the
             # old reading, so an old run is judged as it was.
             moved = eff.get("before") is None or eff.get("before") != eff.get("head")
-            landed = landed or (d.get("outcome") == "pass" and moved)
-            # The node that landed: a dispatch child's own name (`dispatch.py` writes node=child), or the run's own stage.
-            # A landing a child's own held-out command turned red was undone, so it is not a landing (subject.py).
-            if d.get("outcome") == "pass" and moved and eff.get("held_out") != "fail" and d.get("node") is not None:
-                land_nodes.add(str(d["node"]))
+            if d.get("outcome") == "pass" and moved: heads.append((d.get("node"), eff.get("head"), eff.get("held_out") != "fail"))
         if ev == "outcome":   # the outcome the node itself recorded, child or run stage: the fact rule R reads per child (#271)
             if d.get("node") is not None:
                 outs[str(d["node"])] = (str(d.get("outcome") or ""), [str(x) for x in (d.get("reasons") or [])])
@@ -225,6 +227,15 @@ def read(f):
             if d.get("child") is not None:   # the issues one accept line names belong to the child that line accepted, never to the whole run (#271)
                 kids.add(str(d["child"]))
                 kid_issue.setdefault(str(d["child"]), set()).update(found)
+    # A failed run's landing is delivered work only once it reached the landing branch (#691, ADR-0143): its own land commit on
+    # its work branch, a head origin/<land> does not hold, delivered nothing, so the run reads as one that landed nothing. A
+    # landing that records no head keeps the old reading. Any other verdict keeps its landing: a pass goes on through its wave.
+    for node, head, stands in heads:
+        if ver == "failed" and head and not in_land(str(head)): continue
+        landed = True
+        # The node that landed: a dispatch child's own name (`dispatch.py` writes node=child), or the run's own stage.
+        # A landing a child's own held-out command turned red was undone, so it is not a landing (subject.py).
+        if stands and node is not None: land_nodes.add(str(node))
     kid_landed = {n for n in land_nodes if n in kids}   # the children whose own landing stands: the run's landing is theirs
     return {"verdict": v, "name": ver or "no verdict", "pid": pidc, "started_at": started_at, "acc": acc, "idle": now - t.stat().st_mtime,
             "failed": ver == "failed", "reasons": rs, "landed": landed, "run_id": rid, "run_ts": rts,
@@ -681,7 +692,7 @@ def reconcile_board():
                     if oc == "fail": stopped.add(n)
                     set_expected(n, os.environ.get("SG_TODO", "Todo"), f"run {i['run_id']} child {c} {oc or 'stopped'} with nothing landed ({why})", i["run_id"], i["run_ts"], 20)
             elif i["landed"]:
-                if i["name"] == "needs-human": stopped_run(n, i, "landed work locally")   # a failed run's landing is delivered work, so it reaches Code Complete (ADR-0143)
+                if i["name"] == "needs-human": stopped_run(n, i, "landed work locally")   # a failed run's landing that reached the landing branch is delivered work, so it reaches Code Complete (ADR-0143, #691)
                 else: code_complete(n, f, i, f"run {i['run_id']} landed work locally")
             elif i["failed"]:
                 stopped.add(n)

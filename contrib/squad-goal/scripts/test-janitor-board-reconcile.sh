@@ -150,7 +150,7 @@ rec run-stacked-pr '{"event":"run_start","run_id":"run-stacked-pr","ts":"2026-10
 {"event":"verdict","verdict":"pass","reasons":[],"exit_code":0}'
 # ONE run, TWO children, and only one of them landed (#271): the run's `land` event names the child that made
 # it, and the failed child committed nothing -- no branch, no PR. The run's landing is that child's, never
-# every issue the run held, so #2022 leaves Todo and #2023 stays in the loop's queue.
+# every issue the run held, so #2022 leaves Todo once its landing reached origin/dev (#691), and #2023 stays in the loop's queue.
 mk run-mixed 2022
 printf 'CHILD — GitHub issue(s) 2022, 2023:\n' > "$T/co/runs/run-mixed/request.txt"
 rec run-mixed '{"event":"run_start","run_id":"run-mixed","ts":"2026-10-13T08:13:00Z"}
@@ -168,6 +168,8 @@ git -C "$T/co" init -q; git -C "$T/co" -c user.email=t@t -c user.name=t commit -
 git -C "$T/co" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "A child of the spec landed (#2050)"
 git -C "$T/co" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "A queued child's fix is prepared (#2053)"
 git -C "$T/co" update-ref refs/remotes/origin/dev HEAD
+# #2022's child landing reached the landing branch: its head is in origin/dev, so the run's failure does not unland it (#691)
+sed -i '' "s/a7df8f1ecff77bdb5833721121a7a50be4066053/$(git -C "$T/co" rev-parse HEAD)/" "$T/co/runs/run-mixed/record.jsonl"
 printf '%s\n' '{"items":[{"n":2015,"st":"Done","s":"open"}]}' > "$T/st/hub-board.json"   # the cached board exposes the false Done card to rule H while R repairs the live card
 o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1)
 bc() { cat "$T/board.calls" 2>/dev/null; }
