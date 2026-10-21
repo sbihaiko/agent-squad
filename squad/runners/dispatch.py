@@ -399,19 +399,25 @@ class DispatchRunner:
         """The gate nodes this dispatch runs: its `checks` after every child, then its `review` gate on every passing child."""
         return [*node["checks"], *([node["review"]] if node.get("review") else [])]
 
-    def open_gates(self, ctx, node, entry, sc, ent, pe):
-        """A gate's check begins with the entry's children: with no child it never runs, and the record says nothing of it."""
-        if ctx.dry or not ctx.dispatch.accepted(ent, pe):
+    def open_gates(self, ctx, node, entry, sc):
+        """Record the start of every gate this dispatch entry runs. A completed entry opens every gate the graph declares
+        for it, whether or not it accepted a child: a gate with an empty set to check still runs, and its outcome says so
+        (ADR-0100). A gate whose outcome this entry already recorded is not reopened on replay."""
+        if ctx.dry:
             return
         for g in self.gates(node):
-            ctx.record.append("gate_start", node=g, entry=entry, item=sc.item, pid=os.getpid(), limit=None, started_at=ctx.wall())
+            if ctx.outcome_event(g, entry, sc.item) is None:
+                ctx.record.append("gate_start", node=g, entry=entry, item=sc.item, pid=os.getpid(), limit=None, started_at=ctx.wall())
 
     def close_gates(self, ctx, node, entry, sc, d, seen):
-        """Record one outcome per gate this entry ran. A gate the graph declares is a node in the record, so a reader sees it
-        run instead of reading "not run", and a verdict's `remains` never names it (ADR-0100, ADR-0113 rules 2 and 26)."""
-        if ctx.dry or not seen:
+        """Record one outcome per gate this entry ran, and a gate with no child passes with the reason that says what it
+        read. A gate the graph declares is a node in the record, so a reader sees it run instead of reading "not run", and
+        a verdict's `remains` never names it (ADR-0100, ADR-0113 rules 2 and 26)."""
+        if ctx.dry:
             return
         for g in self.gates(node):
+            if ctx.outcome_event(g, entry, sc.item) is not None:   # a replay stands on the outcome it already holds
+                continue
             outcome, reasons = (self.review_gate_outcome(d, seen) if g == node.get("review")
                                 else self.check_gate_outcome(d, seen, g))
             ctx.finish(ctx.nodes[g], entry, sc, outcome, reasons)
@@ -423,6 +429,13 @@ class DispatchRunner:
         if failed:
             return "fail", [f"{g}:child:{n}" for n in failed]
         return "pass", ([] if any(v is not None for v in results.values()) else ["no_child_checked"])
+
+    def close_failed_entry(self, ctx, node, entry, sc, res, t0):
+        """An entry that failed before dispatch requested nothing. The gates it declares still run over their empty set and
+        say so, then the dispatch fails on the entry's own reasons (ADR-0100, ADR-0113 rule 26)."""
+        self.open_gates(ctx, node, entry, sc)
+        self.close_gates(ctx, node, entry, sc, ctx.dispatch, [])
+        return ctx.finish(node, entry, sc, res.outcome, res.reasons, elapsed=ctx.clock() - t0)
 
     def review_gate_outcome(self, d, seen):
         """Pass when the review held no child; fail with the review reason and the child it held. Pass with the reason
@@ -438,14 +451,14 @@ class DispatchRunner:
         d, t0, ent = ctx.dispatch, ctx.clock(), node["entry"]   # wall time of this entry, from reading its entry child to landing
         res = await ctx.exec_node(ent, sc)
         if res.outcome != "pass":
-            return ctx.finish(node, entry, sc, res.outcome, res.reasons, elapsed=ctx.clock() - t0)
+            return self.close_failed_entry(ctx, node, entry, sc, res, t0)
         pe, spawns = ctx.entry_count(ent, sc.item), ctx.artifacts.get(ctx.nodes[ent]["output_key"], sc.item)
         if ctx.dry and d.lift_pending(ent, pe, spawns):
             raise Frontier([(node["name"], sc.item)])
         stop = isinstance(spawns, list) and not spawns and (ctx.artifacts.get(ent, sc.item) or {}).get("done") is True
         diag = ctx.outcome_event(ent, pe, sc.item).get("diagnostic") or {}
         d.lift(node, ent, pe, 1, spawns, None, ctx.budget.available(), None, diag.get("session", "unknown"))   # the envelope's tool ceiling bounds a top-level child
-        self.open_gates(ctx, node, entry, sc, ent, pe)
+        self.open_gates(ctx, node, entry, sc)
         seen = await ctx.runs.run_of(node, ent, pe, sc, min(sc.deadline_at, ctx.clock() + node["deadline"] * ctx.scale))
         if await d.land(node, entry, sc, seen):
             raise Frontier([(node["name"], sc.item)])

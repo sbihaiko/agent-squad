@@ -737,6 +737,19 @@ async def test_a_request_naming_a_field_outside_the_envelope_still_dispatches(tm
 
 
 # ---- #731: a gate the dispatch runs is a graph node, and the record says it ran
+def declared_gates():
+    """The gate nodes the shipped router graph declares for its one dispatch, read from the document itself."""
+    d = node(router(), "route")
+    return [*d["checks"], *([d["review"]] if d.get("review") else [])]
+
+
+def gate_events(p, gates):
+    """The start event and the outcome event of every declared gate, by name, for one run."""
+    starts = {e["node"]: e for e in ev(p, "gate_start") if e["node"] in gates}
+    outs = {e["node"]: e for e in ev(p, "outcome") if e["node"] in gates}
+    return starts, outs
+
+
 @pytest.mark.anyio
 async def test_the_gates_a_dispatch_runs_are_recorded_as_gate_nodes(tmp_path):
     """#731: `route` names `scope_gate` and `security_gate` as its checks and `review_gate` as its review, and code ran
@@ -762,3 +775,39 @@ async def test_a_check_that_fails_a_child_fails_its_gate_node_and_names_the_chil
     assert out and out[-1]["outcome"] == "fail" and any("route.router.1" in r for r in out[-1]["reasons"])
     scope = [e for e in ev(tmp_path, "outcome") if e["node"] == "scope_gate"]
     assert scope and scope[-1]["outcome"] == "pass"
+
+
+@pytest.mark.anyio
+async def test_a_dispatch_entry_with_no_accepted_child_still_records_every_gate_it_declares(tmp_path):
+    """#731 review: zero accepted children is a completed dispatch entry, and the graph still declares `scope_gate`,
+    `security_gate` and `review_gate` for it. Nothing had a child to check, so the gate's outcome says that in its
+    reasons. Silence left the dashboard reading a declared gate as one nothing ran (ADR-0100, ADR-0113 rule 26)."""
+    eng = make(tmp_path, {"router": routed()})
+    v = await eng.run()
+    assert v.verdict == "failed"                         # `no_dispatch`: the empty run still fails
+    gates = declared_gates()
+    starts, outs = gate_events(tmp_path, gates)
+    assert sorted(outs) == sorted(gates), sorted(outs)
+    for g in gates:
+        assert starts[g]["pos"] < outs[g]["pos"]
+    assert outs["scope_gate"]["outcome"] == "pass" and outs["scope_gate"]["reasons"] == ["no_child_checked"]
+    assert outs["security_gate"]["outcome"] == "pass" and outs["security_gate"]["reasons"] == ["no_child_checked"]
+    assert outs["review_gate"]["outcome"] == "pass" and outs["review_gate"]["reasons"] == ["no_child_reviewed"]
+
+
+@pytest.mark.anyio
+async def test_a_dispatch_entry_that_fails_before_dispatch_still_records_every_gate_it_declares(tmp_path):
+    """#731 review: the router's own entry can fail before any request is lifted. The dispatch entry is still complete,
+    and the gates it declares are still recorded: a start and an outcome that names the empty set they checked.
+    The run fails on the entry's reasons, never on a silent gate (ADR-0100, ADR-0113 rules 2 and 26)."""
+    entry = {"output": {"status": "fail", "reasons": ["bad"]}, "spend": 0.1}
+    eng = make(tmp_path, {"router": entry})
+    v = await eng.run()
+    assert v.verdict == "failed"
+    gates = declared_gates()
+    starts, outs = gate_events(tmp_path, gates)
+    assert sorted(outs) == sorted(gates), sorted(outs)
+    for g in gates:
+        assert starts[g]["pos"] < outs[g]["pos"]
+    assert outs["review_gate"]["reasons"] == ["no_child_reviewed"]
+    assert [e for e in ev(tmp_path, "outcome") if e["node"] == "route"][0]["reasons"] == ["bad"]

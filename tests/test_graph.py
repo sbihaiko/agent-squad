@@ -263,12 +263,15 @@ def test_a_layout_key_inside_the_document_is_refused():
     has(d, "layout")
 
 
-# --- every gate a graph declares is reached by a walk (ADR-0100: a gate is never skipped) ---
+# --- every gate a graph declares is scheduled from the root (ADR-0100: a gate is never skipped) ---
 SHIPPED_GRAPHS = (DESIGN / "router.graph.json", DESIGN / "five-phases.graph.json", DESIGN.parent / "workflows" / "spec-to-build.graph.json")
 
 
-def reached(doc):
-    """Every node a walk from the root enters: a loop's children, and a dispatch's entry, checks and review."""
+def scheduled(doc):
+    """Every node the engine schedules from the root: a loop's or an each's ordered children, and a dispatch's entry,
+    `checks` and `review`. These are the only references the two runners follow (ADR-0100 rule 6, ADR-0113 rule 2), so a
+    gate outside this set is a check the graph declares and nothing runs. This walk reads the document alone: an engine
+    that declines to record a scheduled gate is a defect the document cannot show, and test_dispatch.py proves it (#731)."""
     nodes, seen, stack = {n["name"]: n for n in doc["nodes"]}, set(), [doc["root"]]
     while stack:
         n = nodes[stack.pop()]
@@ -281,14 +284,17 @@ def reached(doc):
     return seen
 
 
-def test_every_gate_a_shipped_graph_declares_is_reached_from_the_root():
-    """#731: `main` held only `route` and `final_gate`, and `scope_gate`, `security_gate` and `review_gate` sat in no loop's
-    children: only the dispatch's `checks` and `review` reached them. A gate no walk enters is a check the graph declares
-    and nothing runs, which a reader sees as "not run"."""
+def test_every_gate_a_shipped_graph_declares_is_scheduled_from_the_root():
+    """#731: a gate no walk enters is a check the graph declares and nothing runs, which a reader sees as "not run".
+    The shipped router graph schedules its three dispatch gates through `route`'s `checks` and `review`, and they hold
+    no loop child of their own."""
     for p in SHIPPED_GRAPHS:
         doc = json.loads(p.read_text())
         gates = {n["name"] for n in doc["nodes"] if n["kind"] == "gate"}
-        assert gates and gates <= reached(doc), (p.name, sorted(gates - reached(doc)))
+        assert gates and gates <= scheduled(doc), (p.name, sorted(gates - scheduled(doc)))
+    r = json.loads((DESIGN / "router.graph.json").read_text())
+    dispatch = node(r, "route")
+    assert {*dispatch["checks"], dispatch["review"]} == {"scope_gate", "security_gate", "review_gate"} <= scheduled(r)
 
 
 def test_refuses_a_gate_that_no_loop_and_no_dispatch_reaches():
@@ -302,6 +308,13 @@ def test_refuses_a_gate_that_no_loop_and_no_dispatch_reaches():
     d = router()
     node(d, "route")["checks"] = ["scope_gate"]
     has(d, "security_gate", "orphan")   # declared, out of every loop, named by no dispatch: no walk enters it
+    # The validator reads a dispatch's names as parents even when the dispatch itself is out of the walk: `route` is the
+    # only orphan it names, and the gates it names are an unreachable subtree. The walk is the stricter reading, and it is
+    # what says whether the engine can schedule them at all (#731).
+    d = router()
+    node(d, "main")["children"].remove("route")
+    gates = {"scope_gate", "security_gate", "review_gate"}
+    assert gates <= scheduled(router()) and not gates & scheduled(d)
 
 
 # --- dispatch ---
