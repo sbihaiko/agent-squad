@@ -352,6 +352,14 @@ r=$(run); rm -f "$T/scripts/cluster.py" "$T/scripts/siblings.py"
 [ "$(marked 201)" = 1 ] && [ "$(marked 202)" = 0 ] && ok "S2: a Parent heading links a ticket to its spec; the sibling waits" || ko "S2: $(marked 201) of #201, $(marked 202) of #202 marked: '$r'"
 case "$r" in *"FRONTIER split #202: a sibling of #201 in spec #710 (ADR-0150); it waits for a later run"*) ok "S2: the pass names the split";; *) ko "S2: no split line for #202: '$r'";; esac
 
+# L (ADR-0149 rule 4): a corrupt ledger holds dispatch for that issue, and only that one. The pass names the issue and the
+# cause; it never reads the old counters in its place.
+scene ledger
+issues '[{"number":71,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":72,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
+mkdir -p "$SG_STATE/state"; printf '{"own": {' > "$SG_STATE/state/o__r__71.json"
+r=$(run)
+[ "$(marked 71)" = 0 ] && case "$r" in *"FRONTIER skip #71: "*corrupt*) true;; *) false;; esac && ok "L: a corrupt ledger holds its issue, and the pass names the cause" || ko "L: #71 with a corrupt ledger: '$r'"
+[ "$(marked 72)" = 1 ] && ok "L: an issue beside it goes out" || ko "L: #72 did not go out: '$r'"
 
 rm -rf "$T"
 [ "$fail" = 0 ] && { echo "autofrontier one-run: all checks green"; exit 0; }

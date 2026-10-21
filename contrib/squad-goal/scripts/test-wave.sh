@@ -60,6 +60,8 @@ rev() { local n=$1 sha; sha=$($G -C "$T/c$n" rev-parse HEAD); rm -f "$T/st/revie
   printf '%s\n' "${REV_SHA-$sha}" > "$T/st/review-gui_$n.sha"; printf '%s\n' "${REV_BASE-$W}" > "$T/st/review-gui_$n.base"; }
 # enter runs where the child works. GATES is the local gate command the profile sets (SG_WAVE_GATES).
 en() { local n=$1; rev "$n"; (cd "$T/c$n" && SG_WAVE_GATES=${GATES-true} bash "$T/s/wave.sh" enter run-1 "$n"); }
+# wfact <issue> <run>: the wave fact the issue's ledger holds for the run, "<state> <cause>" (ADR-0149: wave events write it).
+wfact() { SG_STATE=$T/st python3 "$T/s/issue_ledger.py" read "x/y#$1" wave 2>/dev/null | python3 -c 'import json,sys; r=json.load(sys.stdin).get(sys.argv[1]) or {}; print(r.get("state",""), r.get("cause",""))' "$2" 2>/dev/null; }
 entered() { $O merge-base --is-ancestor "$($G -C "$T/c$1" rev-parse HEAD)" $W 2>/dev/null && echo yes || echo no; }
 # The wave's landing pass runs beside the run, never in the owner's checkout (it works in a throwaway clone).
 land() { (cd "$T/co" && bash "$T/s/wave.sh" land "$@"); }
@@ -89,6 +91,7 @@ $O merge-base --is-ancestor dev $W && ok "B: the wave branch stays a fast-forwar
 /usr/bin/grep -qx 'o 3 Code Complete 7' "$T/board.log" && /usr/bin/grep -qx 'o 3 Code Complete 8' "$T/board.log" && ok "B: the card of a child that entered reads Code Complete" || ko "B: no Code Complete card: $(cat "$T/board.log" 2>/dev/null)"
 # The entry leaves a durable record per issue (#467): the janitor reads Code Complete from it, never from the run's own land.
 [ -e "$T/st/auto/entered-run-1-7" ] && [ -e "$T/st/auto/entered-run-1-8" ] && ok "B: each entry leaves its entered-<run>-<issue> record" || ko "B: no entered record: $(ls "$T/st/auto")"
+case "$(wfact 7 run-1)" in "entered "*) ok "B: the entry is a fact in the issue's ledger";; *) ko "B: ledger fact of #7: '$(wfact 7 run-1)'";; esac
 IFS=$'\t' read -r _ kind res at < "$T/st/gate-status" 2>/dev/null
 [ "$kind $res $at" = "fast pass $($G -C "$T/c8" rev-parse HEAD)" ] && ok "B: the entry gate leaves one fast status line: its result and the sha it ran at" || ko "B: status line: '$(cat "$T/st/gate-status" 2>&1)'"
 
@@ -99,6 +102,7 @@ case "$r" in *"WAVE REQUEUE #9"*gates*) ok "C: the failed gates are said";; *) k
 [ ! -e "$T/st/auto/disp-9" ] && ok "C: its dispatch marker is dropped, so the frontier builds it again" || ko "C: the marker is kept"
 /usr/bin/grep -qx 'o 3 Todo 9' "$T/board.log" && ok "C: its card is back in the queue" || ko "C: no Todo card for #9"
 [ ! -e "$T/st/auto/entered-run-1-9" ] && ok "C: a child that never entered leaves no entered record" || ko "C: #9 has an entered record"
+case "$(wfact 9 run-1)" in "refused the local gates failed"*) ok "C: the refusal and its cause are a fact in the issue's ledger";; *) ko "C: ledger fact of #9: '$(wfact 9 run-1)'";; esac
 
 # The gates run in the child's own worktree, before the entry: a gate that only passes on the child's file proves it.
 child 10 g10; r=$(GATES='test -f g10' en 10)
@@ -128,6 +132,7 @@ case "$r" in *"WAVE REQUEUE #12"*conflict*g11*) ok "D: the conflict is said, and
 before=$($O rev-parse $W); printf 'run-1\n' > "$T/st/auto/disp-20"; child 20 g20; r=$(REV=CHANGES en 20)
 [ "$($O rev-parse $W)" = "$before" ] && [ "$(entered 20)" = no ] && ok "E: a child whose review asked for changes never enters" || ko "E: #20 entered: '$r'"
 case "$r" in *"#20"*CHANGES*) ok "E: the changes verdict is said, and names the child";; *) ko "E: no reason for the hold: '$r'";; esac
+case "$(wfact 20 run-1)" in "held the review of gui/20 did not approve it"*) ok "E: the hold and its cause are a fact in the issue's ledger";; *) ko "E: ledger fact of #20: '$(wfact 20 run-1)'";; esac
 [ -e "$T/st/auto/disp-20" ] && ok "E: a held child keeps its dispatch marker for the fix round" || ko "E: the marker was dropped"
 /usr/bin/grep -q " 20\$" "$T/board.log" 2>/dev/null && ko "E: a held child moved a card" || ok "E: a held child moves no card"
 
@@ -205,6 +210,7 @@ $O rev-parse -q --verify "refs/heads/$W" >/dev/null && ko "J: the landed wave br
 [ "$(pushes | awk -v w="refs/heads/$W" '$3!="refs/heads/dev" && $3!=w')" = "" ] && ok "J: the landing writes dev and the wave ref, nothing else" || ko "J: the landing wrote $(pushes)"
 # Each issue of the wave is closed through the API, and its one delivery comment is queued, never posted.
 for n in $WAVE_ISSUES; do /usr/bin/grep -q "issues/$n -f state=closed" "$T/gh.log" || ko "J: #$n is not closed through the API"; done
+for n in $WAVE_ISSUES; do case "$(wfact $n run-1)" in "delivered "*) ;; *) ko "J: #$n has no delivered fact in its ledger: '$(wfact $n run-1)'";; esac; done
 [ "$(/usr/bin/grep -c 'state=closed' "$T/gh.log")" = 8 ] && ok "J: each issue of the wave is closed through the API" || ko "J: $(/usr/bin/grep -c 'state=closed' "$T/gh.log") closes for 8 issues"
 for n in $WAVE_ISSUES; do ls "$T/st/cq/"x__y#$n-delivery~* >/dev/null 2>&1 || ko "J: no delivery comment is queued for #$n"; done
 [ "$(ls "$T/st/cq/"*-delivery~* 2>/dev/null | wc -l | tr -d ' ')" = 8 ] && ok "J: each issue of the wave has its one delivery comment queued" || ko "J: $(ls "$T/st/cq" 2>/dev/null | tr '\n' ' ')"
@@ -356,6 +362,7 @@ rm -rf "$T/w3"; $G clone -q "$T/origin.git" "$T/w3" 2>/dev/null
 (cd "$T/w3" && $G checkout -q dev && echo other > cf && $G add cf && $G -c user.email=a@b -c user.name=t commit -q -m "conflicting work" && $G push -q origin HEAD:dev)
 : > "$T/gh.log"; before=$($O rev-parse dev)
 r1=$(land2 run-7); rc1=$?; r2=$(land2 run-7); rc2=$?
+case "$(wfact 70 run-7)" in "stuck the rebase of $W7 on dev conflicts"*) ok "K: a stuck landing is a fact in the issue's ledger";; *) ko "K: ledger fact of #70: '$(wfact 70 run-7)'";; esac
 [ $rc1 = 1 ] && [ $rc2 = 1 ] && [ -e "$T/st/auto/wave-run-7" ] && ok "K: a conflicting landing fails and keeps its marker below the cap" || ko "K: exits $rc1 $rc2, marker $([ -e "$T/st/auto/wave-run-7" ] && echo kept || echo gone)"
 /usr/bin/grep -q 'issues/70/labels' "$T/gh.log" && ko "K: escalated below the cap" || ok "K: nothing is escalated below the cap"
 : > "$T/board.log"; r3=$(land2 run-7); rc3=$?
@@ -637,7 +644,7 @@ child 400 g400 "origin/$W40"; REV_BASE=$W40 rev 400; : > "$T/hook40"; : > "$T/gl
 r=$(cd "$T/c400" && SG_WAVE_GATES="echo gate >> '$T/gl40'" bash "$T/s/wave.sh" enter run-40 400 2>&1); rc=$?
 [ $rc = 0 ] && $O merge-base --is-ancestor "$SIB" $W40 && $O cat-file -e $W40:g400 2>/dev/null && ok "X: a refused entry push rebases and enters" || ko "X: exit $rc: '$r'"
 [ "$(wc -l < "$T/gl40" | tr -d ' ')" = 2 ] && ok "X: the gates run again on the rebased tree before the second push" || ko "X: the gates ran $(wc -l < "$T/gl40" | tr -d ' ') times: '$r'"
-[ ! -e "$T/st/auto/excluded-run-40-400" ] && ok "X: a child that entered records no exclusion" || ko "X: excluded marker for an entered child"
+case "$(wfact 400 run-40)" in "entered "*) ok "X: a child that entered records its entry, no exclusion";; *) ko "X: ledger fact of #400: '$(wfact 400 run-40)'";; esac
 # X2: the gates fail on the rebased tree, so the child does not enter, and the cause is recorded for the janitor.
 child 401 g401 "origin/$W40"; REV_BASE=$W40 rev 401; rm -f "$T/g401"
 rm -rf "$T/sib2"; $G clone -q "$T/origin.git" "$T/sib2" 2>/dev/null
@@ -653,11 +660,11 @@ H
 : > "$T/hook40"; before=$SIB
 r=$(cd "$T/c401" && SG_WAVE_GATES="[ -e '$T/g401' ] && { echo red after the rebase; exit 1; }; touch '$T/g401'" bash "$T/s/wave.sh" enter run-40 401 2>&1); rc=$?
 [ $rc != 0 ] && [ "$($O rev-parse $W40)" = "$before" ] && ok "X2: a rebased tree the gates fail never enters" || ko "X2: exit $rc, tip $($O rev-parse $W40): '$r'"
-case "$(cat "$T/st/auto/excluded-run-40-401" 2>/dev/null)" in *"the local gates failed: red after the rebase"*) ok "X2: the exclusion cause is recorded";; *) ko "X2: excluded marker '$(cat "$T/st/auto/excluded-run-40-401" 2>/dev/null)'";; esac
+case "$(wfact 401 run-40)" in "refused the local gates failed: red after the rebase"*) ok "X2: the exclusion cause is recorded";; *) ko "X2: ledger fact '$(wfact 401 run-40)'";; esac
 # Y (#682): a hold records its cause too, so the janitor names it when the wave lands without the child.
 child 402 g402 "origin/$W40"; REV=none rev 402
 r=$(cd "$T/c402" && SG_WAVE_GATES=true bash "$T/s/wave.sh" enter run-40 402 2>&1)
-case "$(cat "$T/st/auto/excluded-run-40-402" 2>/dev/null)" in *"no review of gui/402 yet"*) ok "Y: a review hold records its cause";; *) ko "Y: excluded marker '$(cat "$T/st/auto/excluded-run-40-402" 2>/dev/null)': '$r'";; esac
+case "$(wfact 402 run-40)" in "held no review of gui/402 yet"*) ok "Y: a review hold records its cause";; *) ko "Y: ledger fact '$(wfact 402 run-40)': '$r'";; esac
 
 # Z (#694): a run whose final gate (ac-verify) failed takes no child into its wave: the child is refused, its cause is recorded,
 # and the wave lands empty. A run that passed, or one with no verdict yet, lets its child enter as before.
@@ -669,7 +676,7 @@ printf '%s\n' '{"event": "run_start"}' > "$T/co/runs/run-43/record.jsonl"
 child 410 g410 origin/wave/run-41; REV_BASE=wave/run-41 rev 410; before=$($O rev-parse wave/run-41)
 r=$(cd "$T/c410" && SG_WAVE_GATES=true bash "$T/s/wave.sh" enter run-41 410 2>&1); rc=$?
 [ $rc != 0 ] && [ "$($O rev-parse wave/run-41)" = "$before" ] && ok "Z: a child of a run whose final gate failed never enters" || ko "Z: exit $rc, tip moved: '$r'"
-case "$(cat "$T/st/auto/excluded-run-41-410" 2>/dev/null)" in *"the run's final gate failed"*) ok "Z: the exclusion names the failed final gate";; *) ko "Z: excluded marker '$(cat "$T/st/auto/excluded-run-41-410" 2>/dev/null)': '$r'";; esac
+case "$(wfact 410 run-41)" in "refused the run's final gate failed"*) ok "Z: the exclusion names the failed final gate";; *) ko "Z: ledger fact '$(wfact 410 run-41)': '$r'";; esac
 for rn in 42 43; do n=$((410 + rn - 41))
   child $n g$n origin/wave/run-$rn; REV_BASE=wave/run-$rn rev $n
   r=$(cd "$T/c$n" && SG_WAVE_GATES=true bash "$T/s/wave.sh" enter run-$rn $n 2>&1); rc=$?
@@ -688,4 +695,8 @@ r=$(SG_WAVE_TIP_GATES="echo 'fast-gate: unknown: no class; inconclusive'; exit 4
 [ $rc != 0 ] && ! $O cat-file -e dev:g510 2>/dev/null && case "$r" in *inconclusive*) true;; *) false;; esac && ok "AA: an inconclusive tip check holds the landing and says so" || ko "AA: tip exit $rc: '$r'"
 case "$r" in *"WAVE CHECK RED"*|*REQUEUE*) ko "AA: an inconclusive tip check blamed a child: '$r'";; *) ok "AA: an inconclusive tip check blames no child";; esac
 [ ! -e "$T/st/auto/wland-tries-run-51" ] && ok "AA: an inconclusive tip check counts no landing try" || ko "AA: tries $(cat "$T/st/auto/wland-tries-run-51")"
+
+# The ledger replaced the auto/excluded-<run>-<n> marker (ADR-0149 rule 6): no case leaves one.
+[ -z "$(/bin/ls "$T/st/auto" | /usr/bin/grep '^excluded-')" ] && ok "no excluded- marker is written" || ko "excluded markers: $(/bin/ls "$T/st/auto" | /usr/bin/grep '^excluded-' | tr '\n' ' ')"
+
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }
