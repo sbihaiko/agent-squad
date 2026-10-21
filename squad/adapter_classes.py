@@ -42,6 +42,9 @@ _PROTOCOL_WORDS = ("protocol", "malformed", "parse error", "parseerror", "invali
 _STATUS = re.compile(r"\b(\d{3})\b")
 _STATUS_CAUSE = {"400": "protocol", "401": "auth", "402": "quota", "403": "auth", "408": "timeout",
                  "422": "protocol", "429": "quota"}
+# A status is the provider's own answer only when the sentence says it is one, as `session.provider_error` keeps: a
+# number in a message about a frame size or a duration is not an authentication or a quota failure.
+_STATUS_MARKERS = ("api error", "upstream", '"status"', "http", "status code", "error code")
 
 
 @dataclass(frozen=True)
@@ -56,6 +59,8 @@ class ErrorClass:
 
 
 def _status_cause(text: str) -> str | None:
+    if not any(m in text for m in _STATUS_MARKERS):
+        return None
     for status in _STATUS.findall(text):
         cause = _STATUS_CAUSE.get(status)
         if cause:
