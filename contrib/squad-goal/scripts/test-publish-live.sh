@@ -122,12 +122,28 @@ printf 'skill v0\n' > "$live2/SKILL.md"
 out=$(env -u SG_SQUAD bash "$src" "$wt/contrib/squad-goal" "$live2" 2>&1); rc=$?
 [ "$rc" = 0 ] && [ "$(cat "$live2/SKILL.md")" = "skill B" ] && ok "no SG_SQUAD publishes as before" || ko "no SG_SQUAD (rc $rc): $out"
 
+# --- a publish records the tested sha, and --check reads it (#700) ---------------------------------
+# The tested sha is the source HEAD. A publish writes PUBLISHED (`<sha> <utc>`) at the top of the live skill; --check
+# names `publish <sha>` while PUBLISHED is missing or names another sha.
+live3="$T/live3"; mkdir -p "$live3/scripts"; sqh=$(git -C "$sq" rev-parse HEAD)
+out=$(env -u SG_SQUAD bash "$src" --check "$sq/contrib/squad-goal" "$live3" 2>&1); rc=$?
+[ "$rc" = 1 ] && printf '%s\n' "$out" | /usr/bin/grep -qx "publish $sqh" && ok "--check names the sha to publish when PUBLISHED is missing" || ko "--check with no PUBLISHED (rc $rc): $out"
+[ ! -e "$live3/PUBLISHED" ] && ok "--check writes no PUBLISHED" || ko "--check wrote PUBLISHED"
+out=$(env -u SG_SQUAD bash "$src" "$sq/contrib/squad-goal" "$live3" 2>&1); rc=$?
+[ "$rc" = 0 ] && [ "$(cut -d' ' -f1 "$live3/PUBLISHED" 2>/dev/null)" = "$sqh" ] && ok "a publish writes PUBLISHED with the source HEAD sha" || ko "PUBLISHED after a publish (rc $rc): $(cat "$live3/PUBLISHED" 2>&1)"
+/usr/bin/grep -qE "^$sqh [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\$" "$live3/PUBLISHED" && ok "PUBLISHED is '<sha> <utc>'" || ko "PUBLISHED shape: $(cat "$live3/PUBLISHED" 2>&1)"
+out=$(env -u SG_SQUAD bash "$src" --check "$sq/contrib/squad-goal" "$live3" 2>&1); rc=$?
+[ "$rc" = 0 ] && [ -z "$out" ] && ok "--check is quiet once PUBLISHED names the source HEAD" || ko "--check after the publish (rc $rc): $out"
+printf '0000000000000000000000000000000000000000 2020-01-01T00:00:00Z\n' > "$live3/PUBLISHED"
+out=$(env -u SG_SQUAD bash "$src" --check "$sq/contrib/squad-goal" "$live3" 2>&1); rc=$?
+[ "$rc" = 1 ] && [ "$out" = "publish $sqh" ] && ok "--check names the sha to publish when PUBLISHED is stale" || ko "--check with a stale PUBLISHED (rc $rc): $out"
+
 # --- a linked worktree is never the source (#658) -------------------------------------------------
 # A coding child published its unlanded branch from its own worktree. A publish from a linked worktree is refused: nonzero,
 # nothing written, one line naming the tree. --check writes nothing, so it still runs.
 lw="$T/linked"; git -C "$sq" worktree add -q -b child "$lw" main
 printf 'skill child\n' > "$lw/contrib/squad-goal/SKILL.md"
-printf 'skill v0\n' > "$live2/SKILL.md"; before=$(snap "$live2")
+rm -f "$live2/PUBLISHED"; printf 'skill v0\n' > "$live2/SKILL.md"; before=$(snap "$live2")
 for env in "env -u SG_SQUAD" "env SG_SQUAD=$sq"; do
   out=$($env bash "$src" "$lw/contrib/squad-goal" "$live2" 2>&1); rc=$?
   [ "$rc" != 0 ] && ok "a publish from a linked worktree is refused ($env)" || ko "a linked worktree published (rc $rc): $out"
@@ -135,6 +151,7 @@ for env in "env -u SG_SQUAD" "env SG_SQUAD=$sq"; do
   printf '%s' "$out" | /usr/bin/grep -q "$(cd "$lw" && pwd -P)" && printf '%s' "$out" | /usr/bin/grep -qi 'worktree' \
     && ok "the refusal names the worktree ($env)" || ko "the worktree refusal line: $out"
 done
+[ ! -e "$live2/PUBLISHED" ] && ok "a refused worktree publish writes no PUBLISHED" || ko "a refused worktree publish wrote PUBLISHED"
 out=$(env -u SG_SQUAD bash "$src" --check "$lw/contrib/squad-goal" "$live2" 2>&1); rc=$?
 [ "$rc" = 1 ] && printf '%s\n' "$out" | /usr/bin/grep -qx 'copy SKILL.md' && [ "$before" = "$(snap "$live2")" ] \
   && ok "--check from a linked worktree still reports and writes nothing" || ko "--check from a linked worktree (rc $rc): $out"

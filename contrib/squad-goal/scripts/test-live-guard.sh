@@ -53,27 +53,33 @@ chmod 755 "$live"
 case "$out" in *LIVE-GUARD*"copy SKILL.md"*) ok "the unresolved difference is read and named";; *) ko "the unresolved difference is silent: $out";; esac
 case "$out" in *LIVE-GUARD*"could not resolve"*"copy SKILL.md"*) ok "the pass names the difference the publish left";; *) ko "the pass does not name what the publish left: $out";; esac
 
-# --- the review chain is compared as the resolver reads it, a v1 live file against a v2 repository file (ADR-0147) ---
+# --- live models.json is owner config: a hand edit is named once, never compared each cycle (#700) ----------
+# The per-cycle review chain compare named the same difference on most cycles. The guard now keeps the digest of the
+# live models.json and names a change once; a repository models.json that differs is never a line.
 cp "$repo/SKILL.md" "$live/SKILL.md"; cp "$repo/scripts/hub.py" "$live/scripts/hub.py"
-printf '%s\n' '{"schema_version":2,"chains":{"review":[{"id":"claude-opus-5-5","raw":"claude:claude-opus-5-5","route":"cli","on":false},{"id":"claude-sonnet-5-5","raw":"claude:claude-sonnet-5-5","route":"cli"}]}}' > "$repo/scripts/models.json"
-printf '%s\n' '{"review_models":["claude:claude-opus-5-5","claude:claude-sonnet-5-5"]}' > "$live/scripts/models.json"
+printf '%s\n' '{"review_models":["claude:claude-opus-5-5","claude:claude-sonnet-5-5"]}' > "$repo/scripts/models.json"
 out=$(pass)
-case "$out" in *"LIVE-GUARD the live review chain differs"*) ok "a v1 live review chain that differs from the v2 repository chain is named";;
-  *) ko "a v1 live review chain that differs from the v2 repository chain is silent: $out";; esac
-printf '%s\n' '{"review_models":["claude:claude-opus-5-5","claude:claude-sonnet-5-5"]}' > "$live/scripts/models.json"
-printf '%s\n' '{"schema_version":2,"chains":{"review":[{"id":"claude-opus-5-5","raw":"claude:claude-opus-5-5","route":"cli","on":false},{"id":"claude-sonnet-5-5","raw":"claude:claude-sonnet-5-5","route":"cli","effort":"high"}]}}' > "$repo/scripts/models.json"
+case "$out" in *"review chain"*) ko "a repository models.json that differs is still compared: $out";; *) ok "a repository models.json that differs is not compared";; esac
+out=$(pass); [ -z "$out" ] && ok "two cycles with no change print nothing" || ko "a quiet cycle printed: $out"
+printf '%s\n' '{"review_models":["claude:claude-opus-5-5"]}' > "$live/scripts/models.json"
+out=$(pass); dg=$(shasum -a 256 "$live/scripts/models.json" | cut -c1-12)
+[ "$(printf '%s\n' "$out" | /usr/bin/grep -c 'LIVE-GUARD live models.json changed by hand')" = 1 ] && ok "a hand edit to live models.json is one line" || ko "the hand edit is not one line: $out"
+case "$out" in *"changed by hand: $dg"*) ok "the line names the new digest";; *) ko "the line does not name digest $dg: $out";; esac
+[ "$(jq -c .review_models "$live/scripts/models.json")" = '["claude:claude-opus-5-5"]' ] && ok "the pass only reads live models.json, never writes it" || ko "the live models.json was rewritten"
+out=$(pass); [ -z "$out" ] && ok "the same hand edit is not named again" || ko "the same hand edit printed again: $out"
+printf '%s\n' '{"review_models":["grok-4.6"]}' > "$live/scripts/models.json"
 out=$(pass)
-case "$out" in *"LIVE-GUARD the live review chain differs"*) ok "a v2 effort that the v1 live chain does not carry is named";;
-  *) ko "an effort the live chain does not carry is silent: $out";; esac
-printf '%s\n' '{"schema_version":2,"chains":{"review":[{"id":"claude-opus-5-5","raw":"claude:claude-opus-5-5","route":"cli","on":false},{"id":"claude-sonnet-5-5","raw":"claude:claude-sonnet-5-5","route":"cli"}]}}' > "$repo/scripts/models.json"
-printf '%s\n' '{"schema_version":2,"chains":{"review":[{"id":"claude-opus-5-5","raw":"claude:claude-opus-5-5","route":"cli","on":true},{"id":"claude-sonnet-5-5","raw":"claude:claude-sonnet-5-5","route":"cli"}]}}' > "$live/scripts/models.json"
-out=$(pass)
-case "$out" in *"LIVE-GUARD the live review chain differs"*) ok "a v2 switch that differs between two v2 files is named";;
-  *) ko "a v2 switch that differs between two v2 files is silent: $out";; esac
-printf '%s\n' '{"schema_version":2,"chains":{"review":[{"id":"claude-opus-5-5","raw":"claude:claude-opus-5-5","route":"cli","on":false},{"id":"claude-sonnet-5-5","raw":"claude:claude-sonnet-5-5","route":"cli"}]}}' > "$live/scripts/models.json"
-out=$(pass)
-case "$out" in *"LIVE-GUARD the live review chain"*) ko "equal review chains are named: $out";; *) ok "equal review chains are silent";; esac
+[ "$(printf '%s\n' "$out" | /usr/bin/grep -c 'changed by hand')" = 1 ] && ok "the next hand edit is named once" || ko "the next hand edit: $out"
+rm -f "$repo/scripts/models.json"; printf '{"models": "mine"}\n' > "$live/scripts/models.json"; pass >/dev/null
 
+# --- a stray .bak-* copy in live scripts/ is clutter, listed once (#700) -------------------------------------
+printf 'old\n' > "$live/scripts/hub.py.bak-1"
+out=$(pass)
+[ "$(printf '%s\n' "$out" | /usr/bin/grep -c 'LIVE-GUARD live clutter')" = 1 ] && case "$out" in *"scripts/hub.py.bak-1"*) true;; *) false;; esac \
+  && ok "a stray .bak-* copy is listed once as clutter" || ko "the clutter line: $out"
+[ -f "$live/scripts/hub.py.bak-1" ] && ok "the clutter is listed, never removed" || ko "the clutter was removed"
+out=$(pass); [ -z "$out" ] && ok "the same clutter is not listed again" || ko "the clutter printed again: $out"
+rm -f "$live/scripts/hub.py.bak-1"; pass >/dev/null
 # --- the main tree follows origin/stg before the publish (issue #292, #359) ---------------------------------
 # The live copy is published from the main working tree, and nothing moved that tree to origin/stg: it stayed at an old
 # commit while later PRs merged. The base is stg, never dev or main: a commit that landed in dev and not in stg never publishes. Before the publish the pass fast-forwards it (ff-only), and only a clean tree on its base.
@@ -96,6 +102,9 @@ out=$(ffpass behind)
 [ "$(G -C "$T/behind" rev-parse HEAD)" = "$(G -C "$T/behind" rev-parse origin/stg)" ] && [ "$(G -C "$T/behind" rev-parse HEAD)" != "$head0" ] && ok "a clean tree behind origin is fast-forwarded" || ko "the tree was not fast-forwarded: $out"
 case "$out" in *LIVE-GUARD*"fast-forwarded"*) ok "the fast-forward is named";; *) ko "the fast-forward is silent: $out";; esac
 [ "$(cat "$T/behind.live/SKILL.md")" = "skill v2" ] && [ -f "$T/behind.live/board-definition.json" ] && ok "the publish carries the files the fast-forward brought" || ko "the publish did not carry the new files: $out"
+stgsha=$(G -C "$T/behind" rev-parse origin/stg)
+[ "$(cut -d' ' -f1 "$T/behind.live/PUBLISHED" 2>/dev/null)" = "$stgsha" ] && ok "the publish writes PUBLISHED with the tested sha (#700)" || ko "PUBLISHED does not hold $stgsha: $(cat "$T/behind.live/PUBLISHED" 2>&1)"
+case "$out" in *"LIVE-GUARD published ${stgsha:0:8}"*) ok "the pass names the sha it published";; *) ko "the published sha is not named: $out";; esac
 
 mk dirty; printf 'mine\n' >> "$T/dirty/contrib/squad-goal/SKILL.md"; h=$(G -C "$T/dirty" rev-parse HEAD)
 out=$(ffpass dirty)
@@ -175,15 +184,24 @@ case "$out" in *LIVE-GUARD*"copy scripts/hub.py"*) ok "a hand edit of the live c
 : > "$calls"; out=$(kpass)
 [ -z "$out" ] && [ ! -s "$calls" ] && ok "after a publish the key is stored: the next pass skips" || ko "the pass did not skip after a publish (check calls: $(cat "$calls")): $out"
 
-# --- the live review chain is the repository review chain: a hand edit from the hub panel is named (#542) -----
-printf '{"review_models":["claude:claude-opus-5-5","grok-4.6"]}\n' > "$repo/scripts/models.json"
-printf '{"review_models":["claude:claude-opus-5-5","grok-4.6"]}\n' > "$live/scripts/models.json"
-out=$(pass 2>&1 | /usr/bin/grep "review chain"); [ -z "$out" ] && ok "the same review chains: the pass says nothing about them" || ko "same chains were named: $out"
-printf '{"review_models":["claude:claude-opus-5-5"]}\n' > "$live/scripts/models.json"
-out=$(pass 2>&1 | /usr/bin/grep "review chain")
-case "$out" in *LIVE-GUARD*"live review chain differs"*"grok-4.6"*) ok "a live review chain that differs is named with both lists";; *) ko "the review chain drift is silent: $out";; esac
-[ "$(jq -c .review_models "$live/scripts/models.json")" = '["claude:claude-opus-5-5"]' ] && ok "the pass only reads the live chain, never writes it" || ko "the live models.json was rewritten"
-rm -f "$repo/scripts/models.json"; printf '{"models": "mine"}\n' > "$live/scripts/models.json"
+# --- the drivers keep the sha they started on: a publish to another sha is a restart the owner makes (#700) ---
+# watchd start records driver.sha; the guard names the pending restart once per publish and never kills or starts a process.
+mk restart; str=$T/st.restart; mkdir -p "$str"; old=$(G -C "$T/restart" rev-parse HEAD); printf '%s\n' "$old" > "$str/driver.sha"
+printf '#!/bin/bash\necho "$*" >> "%s"\n' "$T/restart.watchd" > "$S/watchd.sh"
+rpass() { SG_STATE=$str SG_CHECKOUT=$T/restart SG_LIVE_DIR=$T/restart.live bash "$S/live-guard.sh" 2>&1; }
+out=$(rpass); new=$(G -C "$T/restart" rev-parse HEAD)
+[ "$(printf '%s\n' "$out" | /usr/bin/grep -c "LIVE-GUARD drivers run ${old:0:8}, published ${new:0:8}: restart pending (owner)")" = 1 ] \
+  && ok "a publish to another sha names the pending restart once" || ko "no restart-pending line: $out"
+[ ! -e "$T/restart.watchd" ] && ok "the guard starts or stops no driver" || ko "the guard called watchd: $(cat "$T/restart.watchd")"
+[ "$(cat "$str/driver.sha")" = "$old" ] && ok "the guard leaves driver.sha to watchd" || ko "the guard rewrote driver.sha"
+out=$(rpass); [ -z "$out" ] && ok "the restart-pending line is not repeated for the same publish" || ko "the next cycle printed: $out"
+printf 'hand\n' > "$T/restart.live/SKILL.md"; out=$(rpass)
+case "$out" in *"restart pending"*) ko "a republish of the same sha named the restart again: $out";; *) ok "a republish of the same sha names no second restart";; esac
+printf '%s\n' "$new" > "$str/driver.sha"; w=$T/restart.work; printf 'skill v3\n' > "$w/contrib/squad-goal/SKILL.md"
+G -C "$w" commit -qam v3; G -C "$w" push -q origin HEAD:stg; out=$(rpass)
+v3=$(G -C "$T/restart" rev-parse HEAD)
+case "$out" in *"drivers run ${new:0:8}, published ${v3:0:8}"*) ok "each new publish names its own restart";; *) ko "the second publish named no restart: $out";; esac
+rm -f "$S/watchd.sh"
 
 # --- a checkout that ships no copy of the skill: nothing to read, nothing to publish --------------
 out=$(SG_CHECKOUT=$T/elsewhere bash "$S/live-guard.sh" 2>&1); rc=$?
