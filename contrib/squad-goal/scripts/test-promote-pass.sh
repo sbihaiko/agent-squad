@@ -21,6 +21,9 @@ echo "\$*" >> "$T/gh.log"
 case "\$*" in
   *"-X POST repos/x/emu/statuses/"*) a="\$*"; s=\${a##*statuses/}; s=\${s%% *}; echo '{"state":"success","context":"squad/full-proof"}' > "$T/status-\$s"; echo '{"state":"success"}';;
   *"commits/"*"/statuses"*) a="\$*"; s=\${a##*commits/}; s=\${s%%/*}; if [ -e "$T/readback-none" ] || [ ! -e "$T/status-\$s" ]; then echo '[]'; else echo "[\$(cat "$T/status-\$s")]"; fi;;
+  *graphql*) echo '{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}';;
+  *"-X POST repos/x/emu/pulls"*) echo '{"number":11}';;
+  *"-X PUT repos/x/emu/pulls/"*"/merge"*) if git -C "$T/w" fetch -q origin && git -C "$T/w" push -q origin origin/dev:refs/heads/stg; then echo '{"merged":true}'; else echo '{"merged":false,"message":"Pull Request is not mergeable"}'; fi;;
   *) echo '{}';;
 esac
 EOF
