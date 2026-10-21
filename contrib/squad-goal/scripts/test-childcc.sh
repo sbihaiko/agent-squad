@@ -246,7 +246,8 @@ pass rst >/dev/null; pass rst >/dev/null
 mkdir -p "$T/co/runs/fx"; { echo '{"event": "spawn_accepted", "child": "c", "definition": "GitHub issue #5900"}'
   echo '{"event": "outcome", "node": "c", "entry": 1, "outcome": "pass", "reasons": ["one"]}'
   echo '{"event": "review_round", "node": "c", "round": 1, "head": "h1", "verdict": "fix"}'
-  echo '{"event": "outcome", "node": "c", "entry": 2, "outcome": "pass", "reasons": ["two"]}'; } > "$T/co/runs/fx/record.jsonl"
+  echo '{"event": "outcome", "node": "c", "entry": 2, "outcome": "pass", "reasons": ["two"]}'
+  echo '{"event": "land", "node": "c", "parent": "route", "entry": 1, "outcome": "pass", "reasons": [], "effect": {"name": "merge_land"}}'; } > "$T/co/runs/fx/record.jsonl"   # a live run that reviews its child works it only after its land (#696)
 wtree fx; /usr/bin/git -C "$T/co/runs/fx/ws/target-c" -c user.email=a@b -c user.name=t commit -q --allow-empty -m entry2
 h2=$(/usr/bin/git -C "$T/co/runs/fx/ws/target-c" rev-parse HEAD); echo wave/fx > "$T/st/auto/wave-fx"; echo wave/fx > "$T/st/auto/waved-fx"
 export GH_NUMS="5900:Doing"; : > "$WAVE_CALLS"; : > "$T/cr.calls"
@@ -353,7 +354,7 @@ untouched lv 6200 "$out" && ok "a child its live run reviews and fixes is not wo
 lrun lg 6201 g; out=$(lpass lg)
 untouched lg 6201 "$out" && ok "a passed child of a live run whose dispatch names a review gate waits for its land event" || ko "review-gate run's child worked: fix '$(cat "$T/fix.calls")', waves '$(cat "$WAVE_CALLS")', out $out"
 echo '{"event": "land", "node": "c", "parent": "route", "entry": 2, "outcome": "pass", "reasons": [], "effect": {"name": "review", "review": {"verdict": "approve"}}}' >> "$T/co/runs/lv/record.jsonl"
-out=$(lpass lv)
+rm -f "$T"/st/review-*; out=$(lpass lv)   # the review files of the earlier cases name the same branch
 [ "$(/usr/bin/grep -c '^enter lv 6200' "$WAVE_CALLS")" = 1 ] && [ ! -s "$T/fix.calls" ] && ok "after its land event the child is worked as before" || ko "after land: waves '$(cat "$WAVE_CALLS")', fix '$(cat "$T/fix.calls")', out $out"
 lrun lf 6202 g; echo '{"event": "verdict"}' >> "$T/co/runs/lf/record.jsonl"; out=$(lpass lf)
 /usr/bin/grep -q '^enter lf 6202' "$WAVE_CALLS" && ok "a child of a finished run with no land event is worked as before" || ko "finished run: waves '$(cat "$WAVE_CALLS")', out $out"

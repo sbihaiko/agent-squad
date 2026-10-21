@@ -28,7 +28,10 @@ the queue once with the landing's reason, and no card moves (#592).
 With the shipped vocabulary a child whose review starts, or that is deferred while it waits for review, moves its card from
 Doing to Code Review through board.sh, once per child (marker auto/crv-<run>-<child>): a card in any other column, past
 Code Review or sent back to Todo by a requeue, is never moved (#603, ADR-0143, ADR-0144).
-A run reviews its own children (#601): the verdict of its review gate is in the child's `land` event. A child its run approved
+A run reviews its own children (#601): the verdict of its review gate is in the child's `land` event. While such a run is live
+its passed child is still its own (#696): it reviews it, fixes it or lands it, so the child is pending here only once its `land`
+event is in the record or the run has its verdict. Such a run's dispatch node names a review gate (its graph.json), or its
+record holds a review event for the child. A child its run approved
 enters with no second review here; a child its run held, with its requeued marker, is neither entered, reviewed nor requeued
 again; a child of a run with no review in its record is reviewed here as before. An approved child that its entry still
 holds (its review file is stale or gone) is reviewed here from the next pass (marker auto/apphold-<run>-<child>), so it is
@@ -244,24 +247,32 @@ for r in (sys.argv[1:] or (st / "active-runs.txt").read_text().split()):
     if not rec.exists(): continue
     finished = '"event": "verdict"' in rec.read_text()
     issue, seen, done, unmapped, defn, failed, verdict = {}, set(), {}, [], {}, {}, {}   # done: one item per child, its last passing entry (#611)
+    owned, landed = set(), set()   # the children the run reviews itself, and the children with a `land` event (#696)
+    try: gated = {g.get("name") for g in json.loads((rec.parent / "graph.json").read_text()).get("nodes", []) if isinstance(g, dict) and g.get("review")}   # the dispatch nodes with a review gate
+    except (OSError, ValueError, AttributeError): gated = set()
     for l in rec.open():
-        if '"spawn_accepted"' not in l and '"outcome"' not in l and '"land"' not in l: continue
+        if '"spawn_accepted"' not in l and '"outcome"' not in l and '"land"' not in l and '"review_' not in l: continue
         try: d = json.loads(l)
         except Exception: continue
         if d.get("event") == "spawn_accepted":
             seen.add(d["child"]); defn[d["child"]] = d.get("definition"); n = issue_from(json.dumps(d.get("definition")))
+            if d.get("envelope") in gated: owned.add(d["child"])
             if n is not None: issue[d["child"]] = n
         elif d.get("event") == "outcome" and d.get("outcome") == "pass" and d.get("node") in issue:
             done.pop(d["node"], None); done[d["node"]] = (d.get("reasons") or [""])[0]   # a fix entry (#570) is entry 2, 3, ... of the same child: the last one stands, and its worktree holds its head
         elif d.get("event") == "outcome" and d.get("outcome") == "pass" and d.get("node") in seen:
             if d["node"] not in unmapped: unmapped.append(d["node"])
+        elif str(d.get("event")).startswith("review_") and d.get("node") in seen:
+            owned.add(d["node"])   # the run reviews this child itself (#696)
         elif d.get("event") == "land" and d.get("node") in seen:
+            landed.add(d["node"])
             rv = (d.get("effect") or {}).get("review") if isinstance(d.get("effect"), dict) else None
             if isinstance(rv, dict): verdict[d["node"]] = rv.get("verdict")   # the run's own review of the child (#599, #601)
             if d.get("outcome") != "pass": failed[d["node"]] = (d.get("reasons") or ["the landing failed"])[0]   # the child's own engine landing: its work is not in the run's target (#592)
     name = pathlib.Path(r).name; runs.add(name)
     if (A / f"ccfixrun-{name}").exists(): continue   # a fix run this pass started: its child commits in another child's worktree, and delivers nothing itself (#636)
     for child, why in done.items():
+        if not finished and child in owned and child not in landed: continue   # its live run still reviews, fixes or lands it (#696)
         if not (A / f"cc-{name}-{child}").exists(): pending.append((f"{name} {child}", r, child, why, issue[child], finished, defn.get(child), failed.get(child), verdict.get(child) == "approve"))
     for child in unmapped:
         mk = A / f"unmap-{name}-{child}"
