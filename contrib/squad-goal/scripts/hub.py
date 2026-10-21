@@ -1387,6 +1387,26 @@ def adapter_errors():
         log_once(f"hub: adapter errors unavailable, the panel shows nothing: {out['err']} (roots tried: {', '.join(roots)})")
     return out
 
+def delivery():
+    """The loop's delivery metrics, read from its own local records (#705): the issue ledgers, the landing ledger,
+    the auto/ markers and the run folders. The computation is one pure module, `squad/delivery_metrics.py`; this
+    binds it and gathers the run folders, as `adapter_errors` does. It only reads: no record is opened for writing,
+    no work is started or retried, and the panel decides nothing. A missing squad package is reported here and the
+    panel shows nothing, never a guess."""
+    folders = []
+    for d in project_dirs():
+        try: folders += [p for p in sorted(pathlib.Path(d).glob("run-*")) if p.is_dir()]
+        except OSError: continue
+    out = {"err": None, "state": str(STATE), "runs": len(folders)}
+    roots = squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__)
+    try:
+        (DM,) = load_squad(roots, ("delivery_metrics",))
+        out.update(DM.compute(STATE, folders))
+    except Exception as e:
+        out["err"] = f"{type(e).__name__}: {' '.join(str(e).split())}"
+        log_once(f"hub: delivery metrics unavailable, the panel shows nothing: {out['err']} (roots tried: {', '.join(roots)})")
+    return out
+
 BOARD = pathlib.Path(os.environ.get("SG_BOARD_CACHE") or HUBDIR / "hub-board.json"); BOARD.parent.mkdir(parents=True, exist_ok=True)
 try: board_cache = json.loads(BOARD.read_text())
 except Exception: board_cache = {"t": 0, "items": [], "prs": [], "err": None}
@@ -2425,6 +2445,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 <details id=mdl class=sp><summary>squad models<span class=sr id=mdsr></span></summary><div class=sb id=mbody></div></details>
 <details id=stats class=sp><summary>cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><h4>Spend <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Figures at API list prices (API-equivalent)."></span></h4><div class=tot id=tot></div><div class=cash id=cash></div><h4>Spend over time <span class=row id=per></span></h4><div id=chart></div><div id=kpi></div><div id=open></div><h4>Tokens by model <small class=m id=piet>all time</small></h4><div id=pie></div></div></details>
 <details id=ae class=sp><summary>adapter errors<span class=sr id=aesr></span></summary><div class=sb id=aeb></div></details>
+<details id=dlv class=sp><summary>delivery<span class=sr id=dlvsr></span></summary><div class=sb id=dlvb></div></details>
 <div id=list></div>
 </div>
 <div id=main></div>
@@ -2706,6 +2727,20 @@ async function pollAdapt(){try{const d=await (await fetch("/api/adapter-errors")
   +(rows.length?rows.map(r=>`<div class=kr><span class=l>${esc(r.model)}<small> · ${esc(r.backend)}</small></span><b>${r.count||0}</b><span class=d>${esc(r.cause)}</span></div>`).join(""):`<div class=subx>no adapter_error verdict in ${d.runs} run folders</div>`);
 }catch(e){}}
 pollAdapt();setInterval(pollAdapt,60000);
+async function pollDelivery(){try{const d=await (await fetch("/api/delivery")).json(),p=d.dispatched||{},a=d.adapter||{},l=d.landings||{},r=d.review||{},
+ bad=Object.entries(p.by_state||{}).map(([k,v])=>`${v} ${esc(k)}`).join(" · "),
+ many=((d.attempts||{}).per_issue||[]).filter(x=>x.attempts>1);
+ $("#dlvsr").textContent=d.err?"unavailable":`${p.landed_nothing||0} dispatched, no landing · ${l.count||0} landing${l.count===1?"":"s"}`;
+ $("#dlvb").innerHTML=(d.err?`<div class=warnl>${esc(d.err)}</div>`:"")
+  +`<div class=subx>Read-only delivery metrics from the loop's own records: the issue ledgers, the landing ledger, the auto/ markers and the run folders. Nothing here starts, retries or moves work.</div>`
+  +`<div class=kr><span class=l>Dispatched, landed nothing</span><b>${p.landed_nothing||0}</b><span class=d>${esc(p.attempts||0)} attempts · ${p.landed||0} landed${bad?" · "+bad:""} · ${p.open||0} open</span></div>`
+  +`<div class=kr><span class=l>No-op waves</span><b>${(d.noop_waves||{}).count||0}</b><span class=d>landed empty, counted apart from a failed dispatch</span></div>`
+  +(many.length?many.map(x=>`<div class=kr><span class=l>${esc(x.issue)}</span><b>${x.attempts}</b><span class=d>${x.landed} landed · ${x.landed_nothing} nothing · ${x.open} open</span></div>`).join(""):`<div class=subx>no issue was attempted more than once</div>`)
+  +(a.classes&&a.classes.length?a.classes.map(x=>`<div class=kr><span class=l>${esc(x.model)}<small> · ${esc(x.backend)}</small></span><b>${x.count||0}</b><span class=d>${esc(x.cause)}</span></div>`).join(""):`<div class=subx>no adapter_error verdict in ${a.runs||0} run folders</div>`)
+  +`<div class=kr><span class=l>Repeated review findings</span><b>${r.repeated||0}</b><span class=d>${(r.loops||[]).map(x=>esc(x.prefix+" "+x.key)+": "+x.rounds).join(" · ")}</span></div>`
+  +`<div class=kr><span class=l>Landings</span><b>${l.count||0}</b><span class=d>${l.branches||0} branches · ${l.issues||0} issues in the base</span></div>`;
+}catch(e){}}
+pollDelivery();setInterval(pollDelivery,60000);
 poll();setInterval(poll,3000);
 loadPoll();setInterval(loadPoll,LOAD_MS);   // the window owns the reading: one timer and one /api/load per tick, whatever else the page renders
 const bo=ls.bo||{},saveB=()=>{ls.bo=bo;localStorage.hub=JSON.stringify({...ls,pins:[...pins],q,per,bo})};
@@ -3806,6 +3841,7 @@ class H(BaseHTTPRequestHandler):
             body = f'<!doctype html><meta charset=utf-8>{ref}<body style="background:#0d1117;color:#c9d1d9;font:12px ui-monospace,monospace;margin:12px"><div style="color:#58a6ff">test #{d.get("issue")} · {d.get("state")}{" (exit "+str(d.get("rc"))+")" if "rc" in d else ""} · {_h.escape(d.get("dir",""))}</div><div style="color:#8b949e">$ {_h.escape(d.get("cmd",""))}</div><pre style="white-space:pre-wrap">{_h.escape(lg)}</pre><script>scrollTo(0,document.body.scrollHeight)</script>'.encode(); ct = "text/html; charset=utf-8"
         elif self.path.startswith("/api/runs"): body, ct = json.dumps(run_list()).encode(), "application/json"
         elif self.path.startswith("/api/adapter-errors"): body, ct = json.dumps(adapter_errors()).encode(), "application/json"
+        elif self.path.startswith("/api/delivery"): body, ct = json.dumps(delivery()).encode(), "application/json"
         elif self.path.startswith("/api/stats"): body, ct = json.dumps(stats((re.search(r"period=(\w+)", self.path) or [0, "day"])[1] if re.search(r"period=(hour|day|month)", self.path) else "day", (re.search(r"src=(sub|api)", self.path) or [0, "both"])[1])).encode(), "application/json"
         elif self.path.startswith("/api/issue"):
             m = re.search(r"[?&]n=(\d{1,6})\b", self.path); rr = re.search(r"[?&]r=([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)", self.path)

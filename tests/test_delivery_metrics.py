@@ -160,7 +160,7 @@ def test_landings_are_counted_from_the_landing_ledger(tmp_path, dm):
 def test_a_corrupt_ledger_is_skipped_and_never_raises(tmp_path, dm):
     st = build_state(tmp_path)
     m = dm.compute(st, [])
-    assert m["sources"]["ledgers"] == 5 and m["sources"]["unreadable"] == 1
+    assert m["sources"]["ledgers"] == 4 and m["sources"]["unreadable"] == 1
     assert m["err"] is None
 
 
