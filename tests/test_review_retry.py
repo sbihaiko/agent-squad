@@ -3,6 +3,11 @@
 Each case drives a run end to end with a stub review command whose exit changes by try. The stub logs one line per try; the
 test compares the recorded tries. When the deadline runs out, the child is held (`review_deadline`), never merged unreviewed.
 """
+import os
+import statistics
+import subprocess
+import time
+
 import pytest
 
 from squad import gates, git
@@ -34,6 +39,24 @@ def run_with(tmp_path, codes, deadline=30, sleep=0):
     return eng, repo, base
 
 
+def one_try_seconds(tmp_path, sleep):
+    """One try of this stub, timed on this machine right now: the median of three, so one hiccup neither shortens nor lengthens
+    the gate's deadline below. The deadline is a count of the tries this machine can run, never a wall second guessed on a
+    quiet one: the case reads the tries that fit, so the runner's load decides how long it runs, never whether it passes
+    (#736)."""
+    p = stub(tmp_path, [5], sleep)
+    times = []
+    for _ in range(3):
+        t0 = time.monotonic()
+        done = subprocess.run([p], cwd=tmp_path, env={**os.environ, "SQUAD_REVIEW_ROUND": "1"})
+        assert done.returncode == gates.REVIEW_RETRY_EXIT
+        times.append(time.monotonic() - t0)
+    return statistics.median(times)
+
+
+TRIES_AT_THE_DEADLINE = 10.0   # the gate's deadline is this many tries of the measured machine
+
+
 @pytest.fixture(autouse=True)
 def no_pause(monkeypatch):
     monkeypatch.setattr(D, "REVIEW_RETRY_PAUSE_S", 0)
@@ -56,10 +79,13 @@ async def test_a_no_verdict_try_is_tried_again_and_each_try_is_recorded(tmp_path
 @pytest.mark.anyio
 @pytest.mark.heavy
 async def test_tries_stop_at_the_gate_deadline_and_the_child_is_held_unmerged(tmp_path):
-    eng, repo, base = run_with(tmp_path, [5], deadline=3, sleep=0.3)
+    deadline = one_try_seconds(tmp_path, 0.3) * TRIES_AT_THE_DEADLINE
+    eng, repo, base = run_with(tmp_path, [5], deadline=deadline, sleep=0.3)
     assert (await eng.run()).verdict == "failed"
     tries = ev(tmp_path, "review_try")
-    assert len(tries) >= 2 and sum(t["review"]["elapsed"] for t in tries) <= 3
+    assert len(tries) >= 2, f"only {len(tries)} try fit the gate's deadline of {deadline:.1f} s"
+    # every try but the last started while its round had time left; only the last may run past what remained
+    assert sum(t["review"]["elapsed"] for t in tries[:-1]) < deadline
     assert [r["verdict"] for r in ev(tmp_path, "review_round")] == ["deadline"]
     [land] = ev(tmp_path, "land")
     assert land["outcome"] == "fail" and land["reasons"] == ["review_deadline"]

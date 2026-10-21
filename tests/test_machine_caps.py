@@ -307,13 +307,29 @@ async def test_a_step_waits_while_the_slots_are_full_and_names_the_ceiling_and_i
 @pytest.mark.anyio
 async def test_a_long_wait_ticks_so_the_record_of_the_run_keeps_moving(tmp_path):
     """A wait inside a run stays inside the call deadline and writes to the record while it lasts, so the heartbeat reads a run
-    that waits for a slot as a run that moves."""
+    that waits for a slot as a run that moves.
+
+    The case waits for ticks, never for a wall second: what it reads is the ticks that arrived, and a slot frees once three
+    have. The bound below is the guard against a wait that never ticks, so it is far wider than the work the ticks need: a
+    0.3 s window of a loaded runner can hold fewer than three polls, and the case then read the machine's load, not the tick
+    (#736)."""
     c = caps.Ceiling({**FOUR, "reviews": 1}, tmp_path / "leases", poll=0.01)
-    c.try_take("reviews", "holder")
+    holder = c.try_take("reviews", "holder")
     ticks = []
-    with pytest.raises(caps.CeilingWaitExpired, match=r"caps\.reviews"):
-        await c.take("reviews", "late", deadline_at=anyio.current_time() + 0.3, on_tick=ticks.append, tick=0.05)
-    assert len(ticks) >= 3 and ticks[0]["ceiling"] == "caps.reviews"
+    bound = 60.0
+
+    async def free_after_three_ticks():
+        deadline = anyio.current_time() + bound
+        while len(ticks) < 3:
+            assert anyio.current_time() < deadline, f"the wait ticked {len(ticks)} times within {bound:g} s"
+            await anyio.sleep(0.01)
+        c.release(holder)
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(free_after_three_ticks)
+        lease = await c.take("reviews", "late", deadline_at=anyio.current_time() + bound, on_tick=ticks.append, tick=0.05)
+    assert lease is not None and len(ticks) >= 3 and ticks[0]["ceiling"] == "caps.reviews"
+    assert c.occupancy()["reviews"] == 1        # the wait took the slot the release freed
 
 
 def test_try_mode_skips_at_once_with_one_line_naming_the_ceiling_and_its_holder(tmp_path):
