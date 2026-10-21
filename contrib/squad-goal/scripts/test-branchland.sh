@@ -20,7 +20,7 @@ cat > "$T/bin/gh" <<J
 echo "\$*" >> "$T/gh.log"
 case "\$*" in
   *"pulls?per_page"*) echo "\${PRS:-[]}";;
-  *"issues(states: OPEN"*) n=\$(for x in \${OPEN:-7}; do printf '{"number":%s,"title":"t","body":"","state":"OPEN"},' "\$x"; done); echo "{\"data\":{\"repository\":{\"issues\":{\"pageInfo\":{\"hasNextPage\":false},\"nodes\":[\${n%,}]}}}}";;
+  *"issues(states: OPEN"*) n=\$(for x in \${OPEN:-7}; do printf '{"number":%s,"title":"t","body":"","state":"OPEN"},' "\$x"; done); [ -n "\${LANDBUG:-}" ] && n="\$n{\"number\":\$LANDBUG,\"title\":\"t\",\"body\":\"\",\"state\":\"OPEN\",\"labels\":{\"nodes\":[{\"name\":\"\${LANDBUG_LABEL:-loop-bug:landing}\"}]}},"; echo "{\"data\":{\"repository\":{\"issues\":{\"pageInfo\":{\"hasNextPage\":false},\"nodes\":[\${n%,}]}}}}";;
   *"/check-runs"*) echo "\${CHECKS:-{\"check_runs\":[]\}}";;
   *"issues/7/comments"*) cat > "$T/comment.body"; echo '{"id":1}';;
   *"issues/7"*) echo '{"number":7,"state":"closed"}';;
@@ -216,6 +216,13 @@ case "$lbat$lcmd" in *"-n auto"*) ko "the landing check runs pytest -n auto";; *
 /usr/bin/grep -q 'sg_base_gate "refs/sg-gate/\$land"' "$d/branchland.sh" && ok "branchland builds its landing check from the shared definition" || ko "branchland does not use the shared base gate"
 # The gate command keeps no copy; the serial rerun below keeps its own lint and types leg, and the names that failed.
 ! /usr/bin/grep -v '^[[:space:]]*#' "$d/branchland.sh" | /usr/bin/grep -v '^rerun=' | /usr/bin/grep -q 'ruff check squad tests' && ok "branchland keeps no copy of the base battery" || ko "branchland still carries a copy of the base battery"
+# A loop defect in the landing path (#641, ADR-0146 decision 3): while an issue labelled `loop-bug:landing` is open, the pass
+# lands nothing and names the issue. A plain `loop-bug` stops intake only: a green, approved branch still lands.
+reset; r=$(LANDBUG=641 CHECKS="$GREEN" bl)
+[ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && ok "a loop-bug:landing issue stops the landing" || ko "a branch landed under a loop-bug:landing issue: '$r'"
+case "$r" in *"LOOP STOP: #641 is a loop defect in the landing path; no wave lands until it closes"*) ok "the pass names the landing stop";; *) ko "no landing stop line: '$r'";; esac
+reset; r=$(LANDBUG=641 LANDBUG_LABEL=loop-bug CHECKS="$GREEN" bl)
+[ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && ko "a plain loop-bug stopped the landing: '$r'" || ok "a plain loop-bug lets an approved branch land"
 # The rerun of what failed stays serial, and runs only the names the gate failed: the id list, never the battery.
 rerunline=$(/usr/bin/grep -E '^rerun=' "$d/branchland.sh")
 case "$rerunline" in *'$SG_GATE_FAILED'*) ok "the rerun runs only the failed names";; *) ko "the rerun does not take the failed names: '$rerunline'";; esac

@@ -184,6 +184,20 @@ out=$(pass lb)
 echo "$out" | /usr/bin/grep -q "LOOP STOP: #596 is a loop defect; the fix lands outside the loop" && ok "the pass names the same stop line" || ko "no stop line: $out"
 /usr/bin/grep -qxF "LOOP STOP: #596 is a loop defect; the fix lands outside the loop" "$T/st/cycle.log" 2>/dev/null && ok "the stop is published to the loop log" || ko "cycle.log: $(cat "$T/st/cycle.log" 2>/dev/null)"
 [ ! -e "$T/st/auto/cc-lb-c" ] && ok "the stopped pass leaves no entry marker" || ko "the stopped pass wrote a marker"
+rc=0; out=$(pass lb) || rc=$?
+[ "$rc" = 3 ] && ok "a child left out of its wave under the stop holds the landing (exit 3, #641)" || ko "the stopped pass exited $rc with a child not in its wave: $out"
+: > "$T/cr.calls"; out=$(pass lb); [ ! -s "$T/cr.calls" ] && ok "the stopped pass starts no review" || ko "a review started under the stop: $(cat "$T/cr.calls")"
+# An entered child is approved and gated (#641, ADR-0146 decision 3): a wave whose children all entered still lands, so the pass
+# exits 0 and the landing goes on. A wave past its age cap lands too: the capped landing requeues the child that never entered.
+run lbin 5601 n; wtree lbin; echo wave/lbin > "$T/st/auto/wave-lbin"; echo wave/lbin > "$T/st/auto/waved-lbin"; : > "$T/st/auto/cc-lbin-c"
+rc=0; out=$(pass lbin) || rc=$?
+[ "$rc" = 0 ] && ok "a wave whose children all entered lands under a loop-bug (exit 0)" || ko "the stop held an approved wave: exit $rc: $out"
+: > "$WAVE_CALLS.expired-lb"; rc=0; out=$(pass lb) || rc=$?; rm -f "$WAVE_CALLS.expired-lb"
+[ "$rc" = 0 ] && [ "$(ent lb 5600)" = 0 ] && ok "a wave past its age cap lands under a loop-bug, with no entry" || ko "expired wave under the stop: exit $rc, entries $(ent lb 5600)"
+# `loop-bug:landing` names the landing path; it is a loop-bug too, so it stops the entry as well.
+sed 's/"name":"loop-bug"/"name":"loop-bug:landing"/' "$T/issues-open.json" > "$T/issues-open.json.l" && mv "$T/issues-open.json.l" "$T/issues-open.json"
+rc=0; out=$(pass lb) || rc=$?
+[ "$(ent lb 5600)" = 0 ] && echo "$out" | /usr/bin/grep -q "LOOP STOP: #596" && ok "a loop-bug:landing issue stops the entry too" || ko "loop-bug:landing did not stop the entry: $(cat "$WAVE_CALLS")"
 printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}}' > "$T/issues-open.json"
 out=$(pass lb)
 [ "$(ent lb 5600)" = 1 ] && ok "closing the issue resumes the entry with no other action" || ko "entry did not resume: $(cat "$WAVE_CALLS")"

@@ -16,7 +16,8 @@ export SG_STATE=$ST SG_STATE_BASE=$T/cache SG_REPO=o/r SG_OWNER=o SG_PROJECT=1 S
 export SG_FRONTIER_LABEL=ready SG_BUG_LABEL=bug SG_TODO=Todo SG_BASE=dev
 export SG_GH_AGGREGATE_WINDOW=0 SG_GH_COOLDOWN=0.001 SG_GH_COOLDOWN_JITTER=0.001
 EOF
-printf '#!/bin/bash\nexit 0\n' > "$B/gh"          # no open PR, no revci summary, nothing to move
+# No open PR, no revci summary, nothing to move. The open-issue list answers the file `openissues` when a case writes one (#641).
+printf '#!/bin/bash\ncase "$*" in *"issues(states: OPEN"*) [ -e "%s/openissues" ] && cat "%s/openissues";; esac\nexit 0\n' "$T" "$T" > "$B/gh"
 printf '#!/bin/bash\nexit 0\n' > "$B/sleep"       # the cycle's own naps cost nothing
 chmod +x "$B/gh" "$B/sleep"; export PATH="$B:$PATH"
 : > "$ST/active-runs.txt"
@@ -123,5 +124,20 @@ run run-7 pass; printf 'wave/run-7\n' > "$ST/auto/wave-run-7"; printf '%s\n' "$T
 rm -f "$T/ccinc"; run_cycle 1
 [ "$(/usr/bin/grep -cxE 'wave land run-7 /.*/run-7' "$STEPS")" = 1 ] && ok "the pass that completes lands the wave" || ko "run-7 not landed after a complete pass: '$(cat "$STEPS")'"
 /usr/bin/grep -q "run-7" "$ST/watch-seen.txt" 2>/dev/null && ok "and the run is read" || ko "run-7 not in watch-seen.txt"
+
+# 8) (#641, ADR-0146 decision 3) an open `loop-bug` stops intake, never the landing of an approved wave: the childcc pass
+# exits 0 when every child of the run is in its wave, and the wave lands. A `loop-bug:landing` issue names the landing path,
+# so no wave lands while it is open; the run stays unread, the log names the issue, and closing it lands the wave.
+oi() { printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":641,"title":"t","body":"","state":"OPEN","labels":{"nodes":[{"name":"%s"}]},"blockedBy":{"nodes":[]},"comments":{"nodes":[]}}]}}}}' "$1" > "$T/openissues"; }
+oi loop-bug; run run-8 pass; printf 'wave/run-8\n' > "$ST/auto/wave-run-8"; printf '%s\n' "$T/run-8" > "$ST/active-runs.txt"
+run_cycle 1
+[ "$(/usr/bin/grep -cxE 'wave land run-8 /.*/run-8' "$STEPS")" = 1 ] && ok "an open loop-bug still lands an approved wave" || ko "loop-bug held the landing: '$(cat "$STEPS")'"
+oi loop-bug:landing; run run-9 pass; printf 'wave/run-9\n' > "$ST/auto/wave-run-9"; printf '%s\n' "$T/run-9" > "$ST/active-runs.txt"
+run_cycle 1
+/usr/bin/grep -q 'wave land run-9' "$STEPS" && ko "a loop-bug:landing issue let the wave land" || ok "a loop-bug:landing issue stops the landing"
+/usr/bin/grep -q "run-9" "$ST/watch-seen.txt" 2>/dev/null && ko "a stopped landing marked the run seen" || ok "a stopped landing leaves the run unread"
+/usr/bin/grep -qF "LOOP STOP: #641 is a loop defect in the landing path; no wave lands until it closes" "$T/watch.out" && ok "the log names the landing stop and its issue" || ko "no landing stop line: '$(cat "$T/watch.out")'"
+rm -f "$T/openissues"; run_cycle 1
+[ "$(/usr/bin/grep -cxE 'wave land run-9 /.*/run-9' "$STEPS")" = 1 ] && ok "closing the issue lands the wave with no other action" || ko "run-9 not landed after the close: '$(cat "$STEPS")'"
 
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }

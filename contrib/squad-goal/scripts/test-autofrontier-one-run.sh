@@ -279,6 +279,13 @@ issues '[{"number":91,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
 r=$(run)
 [ "$(marked 91)" = 1 ] && ok "Y: closing the issue resumes dispatch with no other action" || ko "Y: dispatch did not resume: '$r'"
 
+# Y1 (#641): `loop-bug:landing` names a loop defect in the landing path. It is a loop-bug too, so it halts dispatch as well.
+scene loopbugland
+issues '[{"number":93,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":641,"title":"wave.sh land drops a child","body":"b","labels":[{"name":"loop-bug:landing"}]}]'
+r=$(run)
+[ "$(lines "$LAUNCHLOG")" = 0 ] && [ "$(marked 93)" = 0 ] && ok "Y1: a loop-bug:landing issue halts the frontier pass" || ko "Y1: the pass launched with a landing loop defect open: '$r'"
+case "$r" in *"LOOP STOP: #641 is a loop defect; the fix lands outside the loop"*) ok "Y1: the stop names the issue";; *) ko "Y1: the stop is not named: '$r'";; esac
+
 # Y2 (#615): under SG_MIN_FREE_GB GiB free on the volume of $SG_STATE or of $TMPDIR, the frontier pass dispatches nothing
 # and names the volume in the loop log; at or over the floor it dispatches as before.
 scene diskstop
