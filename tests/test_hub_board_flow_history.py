@@ -52,8 +52,8 @@ def board(hub, tmp_path, monkeypatch):
     return cache / "hub-board.json"
 
 
-def _card(n, st="Todo", s="OPEN", k=None, l=(), o=OPENED):
-    return {"n": n, "i": f"PVT_{n}", "t": f"card {n}", "s": s, "c": None, "st": st, "k": k, "l": list(l),
+def _card(n, st="Todo", s="OPEN", k=None, labels=(), o=OPENED):
+    return {"n": n, "i": f"PVT_{n}", "t": f"card {n}", "s": s, "c": None, "st": st, "k": k, "l": list(labels),
             "si": {"total": None, "completed": None}, "o": o}
 
 
@@ -131,8 +131,8 @@ def test_a_failed_items_read_appends_nothing_and_leaves_the_file_unchanged(hub, 
 
 def test_counts_key_by_kind_and_column_and_a_frozen_card_stays_in_its_column(hub, board, monkeypatch):
     cards = [_card(1, st="In Progress", k="bug"),
-             _card(2, st="Doing", k=None, l=["frozen:owner"]),
-             _card(3, st="Todo", k="task", l=["frozen:dependency"])]
+             _card(2, st="Doing", k=None, labels=["frozen:owner"]),
+             _card(3, st="Todo", k="task", labels=["frozen:dependency"])]
     _pass(hub, monkeypatch, cards)
     s = _samples(board)[-1]
     assert s["counts"] == {"bug": {"Doing": 1}, "issue": {"Doing": 1}, "task": {"Todo": 1}}
