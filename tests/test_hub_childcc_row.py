@@ -4,10 +4,16 @@ The pass writes `auto/childcc-now.json`: its pid and start, and one entry per ch
 since when it waits). The hub reads that file, never the pass: a live pass is one row with its pid and age, one line under
 it per child, and the deferred count with the oldest wait. With no live pass the row keeps the deferred count; with nothing
 waiting there is no row.
+
+GitHub issue #689: the row names the run the pass holds now, and a click on it selects that run like a run row. The list
+carries the held run even when no dashboard server serves it (it was orphaned from active-runs); the hub starts one when the
+run is opened. The row itself is never a pane.
 """
 import importlib.util
 import json
 import os
+import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -96,3 +102,107 @@ def test_nothing_waiting_shows_no_row(hub, state):
 def test_the_row_is_not_a_run(hub, state):
     publish(state, None, [child("run-b", "c1", 600, "deferred")])
     assert hub.working([hub.childcc_row(NOW)]) == []
+
+
+# --- #689: the row opens the run the pass holds, and the list carries that run though no dashboard server serves it ---
+
+
+def test_the_row_names_the_run_the_pass_holds_now(hub, state):
+    publish(state, os.getpid(), [child("run-b", "c1", 600, "deferred"), child("run-a", "c1", 544, "review")])
+    assert hub.childcc_row(NOW)["held"] == "run-a"
+    publish(state, None, [child("run-b", "c1", 600, "deferred")])
+    assert hub.childcc_row(NOW)["held"] == "run-b"
+
+
+@pytest.fixture
+def held(hub, state, monkeypatch, tmp_path):
+    """A held run folder under a child worktree's runs/, as the loop leaves it, and no dashboard server on this machine."""
+    runs = tmp_path / "co" / "worktrees" / "child" / "gui-544" / "runs"
+    run = runs / "run-20261020-192307-95bcfe"
+    run.mkdir(parents=True)
+    (run / "record.jsonl").write_text(json.dumps({"event": "run_start", "t": NOW, "run_id": run.name}) + "\n")
+    monkeypatch.setattr(hub, "project_dirs", lambda: [runs])
+    monkeypatch.setattr(hub, "sh", lambda *a, **k: "")
+    publish(state, None, [child(run.name, "c1", 544, "review")])
+    return run
+
+
+def test_run_list_carries_the_held_run_that_no_dashboard_lists(hub, held):
+    rows = {r["id"]: r for r in hub.runs()}
+    assert held.name in rows, "the run the pass holds is not in the list"
+    r = rows[held.name]
+    assert r["kind"] != "childcc" and r["url"] == "/held/" + held.name
+    assert rows["childcc"]["held"] == held.name
+
+
+def test_a_held_run_opens_through_a_dashboard_server_started_for_its_folder(hub, held):
+    seen = []
+    assert hub.open_held(held.name, start=lambda f: seen.append(f) or 8123) == 8123
+    assert seen == [str(held)]
+
+
+def test_a_run_the_pass_does_not_hold_never_opens(hub, held):
+    seen = []
+    assert hub.open_held("run-20261020-000000-other", start=lambda f: seen.append(f) or 1) is None
+    assert hub.open_held("../etc", start=lambda f: seen.append(f) or 1) is None
+    assert seen == []
+
+
+NODE = shutil.which("node")
+
+
+def _draw_list(hub):
+    src = hub.PAGE
+    i = src.index("function drawList(")
+    depth = 0
+    for k in range(src.index("{", i), len(src)):
+        depth += {"{": 1, "}": -1}.get(src[k], 0)
+        if depth == 0:
+            return src[i : k + 1]
+    raise AssertionError("drawList is not closed")
+
+
+def _page(hub, all_runs, click=None):
+    js = """
+const HTML={list:""},CLICK={};
+const $=s=>({set innerHTML(v){HTML[s.slice(1)]=v},get innerHTML(){return HTML[s.slice(1)]}});
+const document={querySelectorAll:s=>{if(s===".gh")return [];
+  if(s!==".r[data-id]")throw new Error("selector "+s);
+  return [...HTML.list.matchAll(/<div class="r [^"]*"[^>]*data-id="([^"]+)"/g)].map(m=>{const e={dataset:{id:m[1]}};
+    Object.defineProperty(e,"onclick",{set:f=>{CLICK[m[1]]=f}});return e})}};
+const esc=s=>String(s),age=s=>s+"s",usd=v=>"$"+v,name=r=>r.id,labelTip=r=>"",loadMark=r=>"",sub=r=>"";
+const GROUPS=[["running","WORKERS"]],groupOf=r=>"running",groupHeader=()=>({text:"",title:""});
+let openGroups=new Set(["running"]);const saveGroups=()=>{},save=()=>{};
+let N=1,focus=null,slots=[],pins=new Set(),allRuns=__RUNS__,runs=allRuns.filter(r=>r.kind!=="childcc");
+const refresh=()=>{};
+__DRAW__
+drawList();
+const ids=[...HTML.list.matchAll(/data-id="([^"]+)"/g)].map(m=>m[1]);
+const clicked="__CLICK__";if(clicked&&CLICK[clicked])CLICK[clicked]();
+console.log(JSON.stringify({ids,pins:[...pins],cc:/class="r cc[^>]*>/.exec(HTML.list)[0]}));
+""".replace("__RUNS__", json.dumps(all_runs)).replace("__DRAW__", _draw_list(hub)).replace("__CLICK__", click or "")
+    assert NODE, "node is not installed: the hub page's own drawList is run here"
+    p = subprocess.run([NODE, "-"], input=js, capture_output=True, text=True, timeout=30)
+    assert p.returncode == 0, p.stderr
+    return json.loads(p.stdout)
+
+
+HELD = {"id": "run-20261020-192307-95bcfe", "kind": "code", "rank": 0, "state": "running", "age": 5, "spend": 1, "dur": 3, "port": "", "url": "/held/run-20261020-192307-95bcfe"}
+
+
+def _cc(held):
+    return {"id": "childcc", "kind": "childcc", "rank": 0, "state": "running", "badge": "childcc", "label": "childcc pass", "live": True,
+            "age": 9, "lines": ["run-20261020-192307-95bcfe c1 #544 · in review"], "held": held}
+
+
+def test_a_click_on_the_childcc_row_selects_the_run_it_holds(hub):
+    out = _page(hub, [_cc(HELD["id"]), HELD], click=HELD["id"])
+    assert f'data-id="{HELD["id"]}"' in out["cc"], "the childcc row carries no id of the run it holds"
+    assert out["pins"] == [HELD["id"]], "a click on the childcc row selects nothing"
+
+
+def test_the_childcc_row_is_never_a_pane(hub):
+    out = _page(hub, [_cc(None), HELD])
+    assert "childcc" not in out["ids"] and "data-id" not in out["cc"]
+    out = _page(hub, [_cc("run-not-listed")])
+    assert "data-id" not in out["cc"], "a held run the list does not carry cannot be opened"
