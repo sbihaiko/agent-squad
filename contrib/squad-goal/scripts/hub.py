@@ -2479,6 +2479,7 @@ const MBOX0={llm:null,route:null,registered:null,text:"resolved on save"};
 function mdlBox(k,m){const b=mdl.boxes||{};return (b[k]||{})[m]||(b.known||{})[m]||MBOX0}
 // a dropdown pick fills the box with its label text; the Add button saves the id that text stands for (#687)
 function sugId(list,v){const s=((mdl.suggest||{})[list]||[]).find(o=>o.text===v);return s?s.id:v}
+function mdlSub(x){if(!x.sub)return"";const q=x.quota||{},when=q.spent&&q.until_text?`, resets ${esc(q.until_text)}`:"";return`<span class="${q.spent?"bk":"el"}" title="${esc(x.sub.label)}${q.reason?" · "+esc(q.reason):""}">${esc(x.sub.label)}${q.spent?" · spent"+when:""}</span>`}
 function mdlName(x,m){return x.llm?esc(x.llm):esc(m)}   // the id stays in the row title; only an unregistered row shows it (#687)
 function mdlRoute(x,dflt){return x.registered===false?`<span class=ur>unregistered</span>`:esc(x.route||(x.registered?dflt:x.text))}
 /* The router's own chain (#95): the dispatch envelope of the run graph. It is a queue like the role chains, so it
@@ -2487,14 +2488,14 @@ function mdlRoute(x,dflt){return x.registered===false?`<span class=ur>unregister
 function mdlRouter(){const ids=mdl.router_models||[],e=mdl.envelope||{};
  const rk=i=>i?"fallback "+i:"primary";
  return `<div class=mc><div class=mt>Router</div><div class=mx>The models the router may ask a child for, in order, from the run graph${e.graph?` <code>${esc(e.graph)}</code>`:""}${e.node?` (<code>${esc(e.node)}</code>)`:""}. A request outside this list is refused whole; the first entry is the model a child takes when it names none.</div>`
- +ids.map((m,i)=>{const x=mdlBox("router_models",m);return`<div class="mr${i?"":" p"}"><span class=rk title="${rk(i)}">${i+1}</span><span class=mn title="${esc(m)} · ${esc(x.text)}">${mdlName(x,m)}</span><span class=ct><span class=pv title="${rk(i)} · ${esc(x.text)}">${mdlRoute(x,rk(i))}</span><span class=mb><button data-rv="${i}|-1" ${i?"":"disabled"} title="move up">↑</button><button data-rv="${i}|1" ${i<ids.length-1?"":"disabled"} title="move down">↓</button><button class=x data-rrm="${i}" ${ids.length>1?"":"disabled"} title="remove from the envelope">✕</button></span></span></div>`}).join("")
+ +ids.map((m,i)=>{const x=mdlBox("router_models",m);return`<div class="mr${i?"":" p"}"><span class=rk title="${rk(i)}">${i+1}</span><span class=mn title="${esc(m)} · ${esc(x.text)}">${mdlName(x,m)}</span><span class=ct><span class=pv title="${rk(i)} · ${esc(x.text)}">${mdlRoute(x,rk(i))}${mdlSub(x)}</span><span class=mb><button data-rv="${i}|-1" ${i?"":"disabled"} title="move up">↑</button><button data-rv="${i}|1" ${i<ids.length-1?"":"disabled"} title="move down">↓</button><button class=x data-rrm="${i}" ${ids.length>1?"":"disabled"} title="remove from the envelope">✕</button></span></span></div>`}).join("")
  +`<div class=madd><input list=mkr data-radd placeholder="add a model id the gateway serves…"><button data-raddb="router">Add</button></div>`
  +`<div class=mx>efforts ${(e.efforts||[]).map(x=>`<code>${esc(x)}</code>`).join(" ")||"—"} · workspaces ${(e.workspaces||[]).map(x=>`<code>${esc(x)}</code>`).join(" ")||"—"} · children ≤ ${e.max_children??"–"} · parallel ≤ ${e.max_parallel??"–"} · depth ≤ ${e.max_depth??"–"}</div></div>`}
 function mdlRender(){const b=$("#mbody");if(!mdl){b.innerHTML="<span class=m>loading…</span>";return}
  {const lc=mdl.last_coding||(mdl.coding_models||[])[0]||"",x=lc?mdlBox("coding_models",lc):MBOX0;$("#mdsr").textContent=x.llm?`${x.llm} · ${lc}`:lc}   // the model the last run coded with, not the chain's head
  const dirty=JSON.stringify(mdl)!==mdlSrv;   // the dropdowns read mdl.suggest: the label first, the saved value stays the id (#672, #687)
  const ch=mdl.chain||{},chOut=ch.out||[],chBan=ch.banner?`<div class="mx err" role=alert>${esc(ch.banner)}</div>`:(ch.notice?`<div class=mx>${esc(ch.notice)}</div>`:"");
- b.innerHTML=chBan+`<datalist id=mk>${(mdl.suggest||{}).known.map(s=>`<option value="${esc(s.text)}" label="${esc(s.id)}">`).join("")}</datalist><datalist id=mkr>${(mdl.suggest||{}).router_known.map(s=>`<option value="${esc(s.text)}" label="${esc(s.id)}">`).join("")}</datalist><datalist id=hrp>${HRP.map(v=>`<option value="${v}">`).join("")}</datalist>`+Object.keys(MLAB).map(k=>`<div class=mc><div class=mt>${MLAB[k]}</div><div class=mx>${MDESC[k]} Tried top to bottom; the first healthy model wins, and a model switched off is skipped like one outside its hrs window.</div>`+mdl[k].map((m,i)=>{const ef=mdlEff(k,m),hr=mdlHrs(k,m),x=mdlBox(k,m),of=mdlOff(k,m),bl=((mdl.blocked||{})[k]||[]).includes(m),rk=i?"fallback "+i:"primary";return`<div class="mr${i?"":" p"}${of?" off":""}"><span class=rk title="${rk}${of?" · switched off":""}">${i+1}</span><span class=mn title="${esc(m)} · ${esc(x.text)}">${mdlName(x,m)}</span><span class=ct><span class=pv title="${rk} · ${esc(x.text)}">${mdlRoute(x,rk)}${of?" · out of the chain":""}</span>${k==="review_models"&&chOut.find(o=>o.model===m&&o.until_text)?`<span class=bk title="${esc(chOut.find(o=>o.model===m).reason)}">${esc(chOut.find(o=>o.model===m).reason)}, resets ${esc(chOut.find(o=>o.model===m).until_text)}</span>`:""}${bl?`<span class=bk title="the router envelope does not allow ${esc(m)}: a request naming it is refused whole, so the router picks an allowed model instead. Add it to the Router queue or take it out of this chain">blocked by envelope</span>`:""}<span class=el>effort</span><select class="ef${ef?" set":""}" data-ef="${k}|${esc(m)}" title="effort for this model (medium is the default)">${EFF.map(e=>`<option value="${e==="medium"?"":e}"${(ef||"medium")===e?" selected":""}>${e}</option>`).join("")}</select><span class=el>hrs</span><input class="hr${hr?" set":""}" list=hrp data-hr="${k}|${esc(m)}" value="${esc(hr)}" placeholder="always" title="local hours this model may run (HH-HH, wraps midnight; empty = always)"><span class=mb><button data-mv="${k}|${i}|-1" ${i?"":"disabled"} title="move up">↑</button><button data-mv="${k}|${i}|1" ${i<mdl[k].length-1?"":"disabled"} title="move down">↓</button><button class="sw${of?" off":""}" data-sw="${k}|${esc(m)}" aria-pressed="${of}" title="${of?"out of the chain — it never runs; its rank, effort and hrs are kept, press to put it back":"in the chain — press to take it out without removing it: it keeps its rank, its effort and its hrs"}">${of?"off":"on"}</button><button class=x data-rm="${k}|${i}" ${mdl[k].length>1?"":"disabled"} title="remove from chain">✕</button></span></span></div>`}).join("")+`<div class=madd><input list=mk data-add="${k}" placeholder="add a model id…"><button data-addb="${k}">Add</button></div></div>`).join("")
+ b.innerHTML=chBan+`${Object.keys(MLAB).map(k=>`<datalist id=mk-${k}>${((mdl.suggest||{})[k]||[]).map(s=>`<option value="${esc(s.text)}" label="${esc(s.id)}">`).join("")}</datalist>`).join("")}<datalist id=mkr>${(mdl.suggest||{}).router_known.map(s=>`<option value="${esc(s.text)}" label="${esc(s.id)}">`).join("")}</datalist><datalist id=hrp>${HRP.map(v=>`<option value="${v}">`).join("")}</datalist>`+Object.keys(MLAB).map(k=>`<div class=mc><div class=mt>${MLAB[k]}</div><div class=mx>${MDESC[k]} Tried top to bottom; the first healthy model wins, and a model switched off is skipped like one outside its hrs window.</div>`+mdl[k].map((m,i)=>{const ef=mdlEff(k,m),hr=mdlHrs(k,m),x=mdlBox(k,m),of=mdlOff(k,m),bl=((mdl.blocked||{})[k]||[]).includes(m),rk=i?"fallback "+i:"primary";return`<div class="mr${i?"":" p"}${of?" off":""}"><span class=rk title="${rk}${of?" · switched off":""}">${i+1}</span><span class=mn title="${esc(m)} · ${esc(x.text)}">${mdlName(x,m)}</span><span class=ct><span class=pv title="${rk} · ${esc(x.text)}">${mdlRoute(x,rk)}${mdlSub(x)}${of?" · out of the chain":""}</span>${k==="review_models"&&chOut.find(o=>o.model===m&&o.until_text)?`<span class=bk title="${esc(chOut.find(o=>o.model===m).reason)}">${esc(chOut.find(o=>o.model===m).reason)}, resets ${esc(chOut.find(o=>o.model===m).until_text)}</span>`:""}${bl?`<span class=bk title="the router envelope does not allow ${esc(m)}: a request naming it is refused whole, so the router picks an allowed model instead. Add it to the Router queue or take it out of this chain">blocked by envelope</span>`:""}<span class=el>effort</span><select class="ef${ef?" set":""}" data-ef="${k}|${esc(m)}" title="effort for this model (medium is the default)">${EFF.map(e=>`<option value="${e==="medium"?"":e}"${(ef||"medium")===e?" selected":""}>${e}</option>`).join("")}</select><span class=el>hrs</span><input class="hr${hr?" set":""}" list=hrp data-hr="${k}|${esc(m)}" value="${esc(hr)}" placeholder="always" title="local hours this model may run (HH-HH, wraps midnight; empty = always)"><span class=mb><button data-mv="${k}|${i}|-1" ${i?"":"disabled"} title="move up">↑</button><button data-mv="${k}|${i}|1" ${i<mdl[k].length-1?"":"disabled"} title="move down">↓</button><button class="sw${of?" off":""}" data-sw="${k}|${esc(m)}" aria-pressed="${of}" title="${of?"out of the chain — it never runs; its rank, effort and hrs are kept, press to put it back":"in the chain — press to take it out without removing it: it keeps its rank, its effort and its hrs"}">${of?"off":"on"}</button><button class=x data-rm="${k}|${i}" ${mdl[k].length>1?"":"disabled"} title="remove from chain">✕</button></span></span></div>`}).join("")+`<div class=madd><input list=mk-${k} data-add="${k}" placeholder="add a model id…"><button data-addb="${k}">Add</button></div></div>`).join("")
  +mdlRouter()
  +`<div class=mx><b>effort</b> · <b>hrs</b> local time <code>HH-HH</code>, wraps midnight, empty = always · <b>switch</b> <code>off</code> skips a model and keeps its place · <b>✕</b> deletes the row. A coding row must name an id the dispatch envelope allows.</div>`
  +`<div class="msave${dirty?" dirty":""}"><button id=msv ${dirty?"":"disabled"}>Save</button><button id=mrv ${dirty?"":"disabled"}>Revert</button><span class="st${mdlMsg.startsWith("!")?" err":mdlMsg?" okm":""}">${mdlMsg?esc(mdlMsg.replace(/^!/,"")):(dirty?"<span class=dot></span>unsaved changes":"saved in models.json")}</span></div>`}
@@ -2509,7 +2510,7 @@ $("#mbody").addEventListener("click",async e=>{const t=e.target.closest("button"
  else if(t.dataset.rv){const[i,d]=t.dataset.rv.split("|"),a=mdl.router_models,j=+i+ +d;[a[i],a[j]]=[a[j],a[i]]}
  else if(t.dataset.rrm){mdl.router_models.splice(+t.dataset.rrm,1)}
  else if(t.dataset.raddb){const v=sugId("router_known",t.parentElement.querySelector("input").value.trim());if(!MODELRE.test(v))mdlMsg="!invalid model id";else if(mdl.router_models.includes(v))mdlMsg="!already in the envelope";else mdl.router_models.push(v)}
- else if(t.dataset.addb){const k=t.dataset.addb,v=sugId("known",t.parentElement.querySelector("input").value.trim());if(!MODELRE.test(v))mdlMsg="!invalid model id";else if(mdl[k].includes(v))mdlMsg="!already in the chain";else mdl[k].push(v)}
+ else if(t.dataset.addb){const k=t.dataset.addb,v=sugId(k,t.parentElement.querySelector("input").value.trim());if(!MODELRE.test(v))mdlMsg="!invalid model id";else if(mdl[k].includes(v))mdlMsg="!already in the chain";else mdl[k].push(v)}
  else if(t.id==="mrv")mdl=JSON.parse(mdlSrv);
  else if(t.id==="msv"){try{const r=await fetch("/api/models",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(mdl)}),d=await r.json();if(d.err)mdlMsg="!"+d.err;else{mdl=d;mdlSrv=JSON.stringify(d);mdlMsg="saved · new runs use it"}}catch(x){mdlMsg="!save failed"}}
  mdlRender()});
@@ -3058,11 +3059,15 @@ def subs_month():
 MODELS = pathlib.Path(__file__).resolve().parent / "models.json"
 CHAINS = ("coding_models", "review_models", "vision_models")   # all three live in models.json
 ROUTER_CHAIN = "router_models"   # the router's own chain, written into the run graph (the dispatch envelope, #95)
+def usable(ids, chain):
+    """The ids one chain keeps: an unregistered id stays, so the panel shows it as unregistered; a registered id stays
+    only when the registry says the chain can run it (ADR-0147, #545)."""
+    return [m for m in ids if modelreg.model(m) is None or modelreg.compatible(m, chain)[0]]
 def v1_view(d):
     """The panel's reading of models.json: a v2 file's chains as the resolver reads them, under the v1 keys the panel draws (ADR-0147)."""
     if d.get("schema_version") != 2: return d
     view = {k: v for k, v in d.items() if k not in ("schema_version", "chains")}
-    rows = {k: modelreg.chain(d, k.removesuffix("_models")).entries for k in CHAINS}
+    rows = {k: [e for e in modelreg.chain(d, k.removesuffix("_models")).entries if usable([e.raw], k.removesuffix("_models"))] for k in CHAINS}
     view.update({k: [e.raw for e in rows[k]] for k in CHAINS})
     view["off"] = {k: {e.raw: True for e in rows[k] if not e.on} for k in CHAINS}
     view["hours"] = {k: {e.raw: e.hrs for e in rows[k] if e.hrs} for k in CHAINS}
@@ -3357,23 +3362,37 @@ def envelope_of():
     return {}
 
 
+def subscription_states():
+    """Each subscription's quota now, read once per page (#545): its marker, its quota cache, or neither."""
+    reg = modelreg.default_registry()
+    return {k: {"quota": modelreg.quota(k, shared=SHARED), "label": info.get("label", k)} for k, info in reg.subscriptions.items()}
+def model_status(raw, states):
+    """The subscription that bills one model, and its quota: spent when a marker or a window closes it (#545)."""
+    e = modelreg.model(raw)
+    if e is None: return {"sub": None, "quota": None}
+    q = states[e.subscription]["quota"]
+    return {"sub": {"key": e.subscription, "label": states[e.subscription]["label"]},
+            "quota": {"spent": bool(q["limited"]), "reason": q["reason"], "until": q["until"],
+                      "until_text": time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(q["until"])) if q["until"] else None}}
 def models_get():
     """The three chains as the panel reads them: bare ids, so one model is one row in every chain and in the box.
 
     The file keeps the spelling each role needs (chain_id); the panel never sees it, so a reader cannot pick the
     wrong one of two spellings of the same model."""
     d = v1_view(json.loads(MODELS.read_text()))
+    known, rknown, rchain, states = known_models(d), router_known(), usable(router_get(), "router"), subscription_states()
     return {**{k: [bare_id(m) for m in d.get(k, [])] for k in CHAINS},
             "efforts": {k: {bare_id(m): v for m, v in ek.items()} for k, ek in efforts_of(d).items()},
             "hours": {k: {bare_id(m): v for m, v in hk.items()} for k, hk in hours_of(d).items()},
             "off": {k: {bare_id(m): True for m in ok} for k, ok in off_of(d).items()},
-            "known": known_models(d), "last_coding": last_coding_model(), "envelope": envelope_of(),
-            "router_models": router_get(), "router_known": router_known(), "version": models_version(),
-            "suggest": {"known": model_suggestions(known_models(d)), "router_known": model_suggestions(router_known())},
-            "labels": model_labels(set(known_models(d)) | set(router_known()) | {bare_id(m) for k in CHAINS for m in d.get(k, [])}),
-            "boxes": {**{k: {bare_id(m): model_box(bare_id(m), k) for m in d.get(k, [])} for k in CHAINS},
-                      ROUTER_CHAIN: {m: model_box(m) for m in router_get()},
-                      "known": {m: model_box(m) for m in set(known_models(d)) | set(router_known()) | ({last_coding_model()} - {None, ""})}},
+            "known": known, "last_coding": last_coding_model(), "envelope": envelope_of(),
+            "router_models": rchain, "router_known": rknown, "version": models_version(),
+            "suggest": {**{k: model_suggestions(usable(known, k.removesuffix("_models"))) for k in CHAINS},
+                        "router_known": model_suggestions(usable(rknown, "router"))},
+            "labels": model_labels(set(known) | set(rknown) | {bare_id(m) for k in CHAINS for m in d.get(k, [])}),
+            "boxes": {**{k: {bare_id(m): {**model_box(bare_id(m), k), **model_status(bare_id(m), states)} for m in d.get(k, [])} for k in CHAINS},
+                      ROUTER_CHAIN: {m: {**model_box(m), **model_status(m, states)} for m in rchain},
+                      "known": {m: model_box(m) for m in set(known) | set(rknown) | ({last_coding_model()} - {None, ""})}},
             "chain": chainhealth.chain_state(d, "review_models", SHARED),
             "blocked": {k: router_envelope.envelope_blocked([bare_id(m) for m in d.get(k, [])], router_get()) for k in ("coding_models",)}}
 def models_version():
