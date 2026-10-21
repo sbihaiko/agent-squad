@@ -2,7 +2,8 @@
 
 One server serves one run folder. It serves the built dashboard page and five read-only paths for that run:
 `/run/record.jsonl`, `/run/graph.json`, `/run/info.json`, `/run/control.json` and `/run/events`. It binds 127.0.0.1
-only and checks the Host header, so a web page on another origin cannot read a run through DNS rebinding.
+only and checks the Host header, so a web page on another origin cannot read a run through DNS rebinding. A request
+through the tailnet route (Host equal to the project's `tailnet.host`) passes only with a listed login, decided in `squad/tailnet_access.py`.
 It never starts a run. Its one write is `POST /run/control`: a pause or resume request that it appends
 to the run's control file and to nothing else. Every other method is refused. It exits when no request
 came for the idle time.
@@ -27,7 +28,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import cast
 
-from squad import runs
+from squad import runs, tailnet_access
 from squad.control import ACTIONS, Control
 
 IDLE_SECONDS = 2 * 3600
@@ -241,12 +242,15 @@ class RecordFeed:
 class RunServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, folder, page=None, port: int = 0, idle: float = IDLE_SECONDS, watch: float = WATCH_SECONDS, clock=time.monotonic):
+    def __init__(self, folder, page=None, port: int = 0, idle: float = IDLE_SECONDS, watch: float = WATCH_SECONDS, clock=time.monotonic,
+                 tailnet_host=None, allowed_logins=()):
         self.folder = Path(folder).resolve()
         self.page = Path(page) if page else runs.PAGE
         self.idle = idle
         self.watch = watch
         self.clock = clock      # the idle clock; a test passes a fake one
+        self.tailnet_host = (tailnet_host or "").lower() or None
+        self.allowed_logins = list(allowed_logins)
         self.last = clock()
         self.port = 0
         self._feed = None
@@ -308,13 +312,19 @@ class _Handler(BaseHTTPRequestHandler):
         if self.command != "HEAD":
             self.wfile.write(body)
 
-    def _host_ok(self):
-        host = (self.headers.get("Host") or "").lower()
-        return host in (f"{LOOPBACK}:{self._run.port}", f"localhost:{self._run.port}")
+    def _verdict(self, method):
+        """Whether this request may pass: the one access decision (squad/tailnet_access.py), made on every method."""
+        return tailnet_access.decide(host=(self.headers.get("Host") or "").lower(), origin=self.headers.get("Origin"), method=method,
+                                     login=self.headers.get(tailnet_access.LOGIN_HEADER), port=self._run.port,
+                                     tailnet_host=self._run.tailnet_host, allowed_logins=self._run.allowed_logins)
+
+    def _is_loopback(self):
+        return (self.headers.get("Host") or "").lower() in (f"{LOOPBACK}:{self._run.port}", f"localhost:{self._run.port}")
 
     def do_GET(self):
-        if not self._host_ok():
-            return self._send(403, b"forbidden host\n")
+        verdict = self._verdict("GET")
+        if not verdict.allowed:
+            return self._send(403, (verdict.reason + "\n").encode())
         path = self.path.split("?", 1)[0].split("#", 1)[0]
         if path == "/__ping":   # the check that finds a running server is not use: it must not keep the server alive
             return self._send(200, json.dumps({"folder": str(self._run.folder), "pid": os.getpid()}).encode(), "application/json; charset=utf-8")
@@ -400,12 +410,13 @@ class _Handler(BaseHTTPRequestHandler):
         The page's own origin and a JSON content type are both required, so a form or a script on another site
         cannot send it; the Host check stops DNS rebinding. The body is small and validated before anything is written.
         """
-        if not self._host_ok():
-            return self._send(403, b"forbidden host\n")
+        verdict = self._verdict("POST")
+        if not verdict.allowed:
+            return self._send(403, (verdict.reason + "\n").encode())
         if self.path.split("?", 1)[0].split("#", 1)[0] != CONTROL_PATH:
             return self._refuse()
         origin = self.headers.get("Origin")
-        if origin is not None and origin not in (f"http://{LOOPBACK}:{self._run.port}", f"http://localhost:{self._run.port}"):
+        if self._is_loopback() and origin is not None and origin not in (f"http://{LOOPBACK}:{self._run.port}", f"http://localhost:{self._run.port}"):
             return self._send(403, b"forbidden origin\n")
         if (self.headers.get("Content-Type") or "").split(";")[0].strip().lower() != "application/json":
             return self._send(415, b"json only\n")
@@ -463,7 +474,16 @@ def running(folder):
     return None
 
 
-def start(folder, idle=IDLE_SECONDS, wait=15.0, watch=WATCH_SECONDS):
+def _server_argv(folder, idle, watch, tailnet_host, allowed_logins):
+    argv = [sys.executable, "-m", "squad.dashboard_server", str(Path(folder).resolve()), "--idle", str(idle), "--watch", str(watch)]
+    if tailnet_host:
+        argv += ["--tailnet-host", tailnet_host]
+    for login in allowed_logins:
+        argv += ["--tailnet-allow", login]
+    return argv
+
+
+def start(folder, idle=IDLE_SECONDS, wait=15.0, watch=WATCH_SECONDS, tailnet_host=None, allowed_logins=()):
     """The port of a server for this folder: the one that runs, or a new detached one."""
     port = running(folder)
     if port:
@@ -471,7 +491,7 @@ def start(folder, idle=IDLE_SECONDS, wait=15.0, watch=WATCH_SECONDS):
     _state_dir().mkdir(parents=True, exist_ok=True)
     f = _state_file(folder)
     f.unlink(missing_ok=True)
-    subprocess.Popen([sys.executable, "-m", "squad.dashboard_server", str(Path(folder).resolve()), "--idle", str(idle), "--watch", str(watch)],
+    subprocess.Popen(_server_argv(folder, idle, watch, tailnet_host, allowed_logins),
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True)
     end = time.monotonic() + wait
     while time.monotonic() < end:
@@ -488,8 +508,10 @@ def main(argv=None):
     ap.add_argument("folder")
     ap.add_argument("--idle", type=float, default=IDLE_SECONDS)
     ap.add_argument("--watch", type=float, default=WATCH_SECONDS)
+    ap.add_argument("--tailnet-host", default=None)
+    ap.add_argument("--tailnet-allow", action="append", default=[])
     a = ap.parse_args(argv)
-    srv = RunServer(a.folder, idle=a.idle, watch=a.watch)
+    srv = RunServer(a.folder, idle=a.idle, watch=a.watch, tailnet_host=a.tailnet_host, allowed_logins=a.tailnet_allow)
     f = _state_file(a.folder)
     f.parent.mkdir(parents=True, exist_ok=True)
     tmp = f.with_suffix(".tmp")

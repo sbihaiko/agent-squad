@@ -271,6 +271,19 @@ def _config(a):
     return 0
 
 
+def _tailnet_of(target):
+    """The tailnet host and allowed logins of the project file under `target`. A file that is refused leaves the server loopback only."""
+    from squad import project_settings as P
+    from squad.options import OptionError
+    try:
+        data, _ = P.load(target)
+    except OptionError as e:
+        print(f"squad: tailnet access off, the project file is refused: {e}", file=sys.stderr)
+        return None, []
+    block = (data or {}).get("tailnet") or {}
+    return block.get("host") or None, list(block.get("allow") or [])
+
+
 def _dashboard(a):
     from squad import dashboard_server, defaults, runs
     try:
@@ -292,12 +305,16 @@ def _dashboard(a):
             watch = (defaults.load(a.defaults or defaults.PATH).get("dashboard") or {}).get("watch_seconds", dashboard_server.WATCH_SECONDS)
         except (OSError, defaults.OptionError):
             watch = dashboard_server.WATCH_SECONDS   # the page still follows the run, at the server's own step
+        tailnet_host, allowed = _tailnet_of(".")
+        tailnet = {"tailnet_host": tailnet_host, "allowed_logins": allowed} if tailnet_host else {}
         try:
-            port = dashboard_server.start(run.folder, watch=watch, **({"idle": a.idle} if a.idle is not None else {}))
+            port = dashboard_server.start(run.folder, watch=watch, **tailnet, **({"idle": a.idle} if a.idle is not None else {}))
         except RuntimeError as e:
             return _fail(str(e))
         url = f"http://{dashboard_server.LOOPBACK}:{port}/"
         note = "the page reads this run from a loopback server on this machine; its one write is a pause or resume request; it exits when idle"
+        if tailnet_host:
+            note += f"; on the tailnet at https://{tailnet_host}/ for the listed logins"
     print(f"run {run.number}: {run.run_id or run.folder.name}\nrequest: {runs.request_of(run.folder) or '(none)'}\nfolder: {run.folder}\n{note}\n{url}")
     if not a.no_open:
         import webbrowser
