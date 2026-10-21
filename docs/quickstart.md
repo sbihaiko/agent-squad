@@ -8,20 +8,16 @@ Run agent-squad on your own repository. You need `git`, [`uv`](https://docs.astr
 claude plugin marketplace add sbihaiko/agent-squad
 claude plugin install agent-squad@agent-squad --scope user
 ```
-The repository is private, so ask the owner for access first. **The plugin's repository moved** from `mmctech-ai/agent-squad`, which no longer exists: a machine that still names it installs nothing. The uninstall-and-reinstall block, and the check that proves it took, are in [install.md](install.md#1-install-the-engine).
-
-Without the plugin, clone the repository and use `uv run --extra sdk squad <command>` in place of `squad`. A plain `pip install` needs the `sdk` extra: `pip install 'agent-squad[sdk]'`.
+The repository is private, so ask the owner for access first. **The plugin's repository moved** from `mmctech-ai/agent-squad`, which no longer exists: a machine that still names it installs nothing. The uninstall-and-reinstall block, and the check that proves it took, are in [install.md](install.md#1-install-the-engine). Without the plugin, clone the repository and use `uv run --extra sdk squad <command>` in place of `squad`. A plain `pip install` needs the `sdk` extra: `pip install 'agent-squad[sdk]'`.
 
 ## Prepare the project
-
-Run these in your repository. The plugin commands do the same:
 
 ```bash
 squad setup --test-command "python3 -m pytest"
 squad setup --apply --test-command "python3 -m pytest"
 squad setup --check
 ```
-The first command prints a plan and writes nothing. `--apply` adds `CLAUDE.md`, `docs/adr/` and a memory index. It never overwrites a file. Commit the new files before a run.
+The first command prints a plan and writes nothing. The plugin commands do the same. `--apply` adds `CLAUDE.md`, `docs/adr/` and a memory index. It never overwrites a file. Commit the new files before a run.
 
 ## Configure
 
@@ -40,9 +36,7 @@ squad config check
 squad work --target . "add a function truncate(s, n) with tests"
 squad task --target . "fix the failing date parser test"
 ```
-In Claude Code, use `/agent-squad:work <request>` or `/agent-squad:task <task>`. A run costs money: the run spend cap is in `squad config show` (`run.spend_cap`).
-
-The command prints the dashboard URL, the run id and the run folder. It ends with a verdict and an exit code: 0 passed, 1 failed, 10 needs a human, 2 bad usage.
+In Claude Code, use `/agent-squad:work <request>` or `/agent-squad:task <task>`. A run costs money: the run spend cap is in `squad config show` (`run.spend_cap`). The command prints the dashboard URL, the run id and the run folder. It ends with a verdict and an exit code: 0 passed, 1 failed, 10 needs a human, 2 bad usage.
 
 ## Dashboard
 
@@ -57,13 +51,9 @@ The page shows one run. It never starts a run.
 ```bash
 squad resume <run-id>
 ```
-The verdict prints the exact command, with the absolute run folder, so it works from any directory.
-
-Use it after a crash, a pause or a `needs-human` verdict. A resume refuses when a skill, the project settings or the autonomy setting changed since the run started. It also refuses when the run's target is missing, is your own checkout, or is on another branch than the one the run started on; it never migrates a record, so start a new run.
+The verdict prints the exact command, with the absolute run folder, so it works from any directory. Use it after a crash, a pause or a `needs-human` verdict. A resume refuses when a skill, the project settings or the autonomy setting changed since the run started. It also refuses when the run's target is missing, is your own checkout, or is on another branch than the one the run started on; it never migrates a record, so start a new run.
 
 ## Tailnet access
-
-The owner does these steps. An agent points the owner here and does not run them.
 
 1. Install Tailscale on the hub machine and sign in.
 2. In the admin console, enable MagicDNS and HTTPS certificates.
@@ -72,7 +62,7 @@ The owner does these steps. An agent points the owner here and does not run them
 5. Set `tailnet.host` and `tailnet.allow` with `squad config set`. You name the logins.
 6. Never enable Funnel for the hub port. Prove it is off with `squad tailnet check`.
 
-The servers keep their loopback bind. The editor stays a local `file://` page.
+The owner does these steps. An agent points the owner here and never runs them. The servers keep their loopback bind. The editor stays a local `file://` page.
 
 ## Where the run folder is
 
