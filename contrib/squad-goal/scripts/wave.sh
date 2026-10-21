@@ -82,6 +82,27 @@ wave_of() { case "${1:-}" in wave/*) printf '%s\n' "$1";; *) printf 'wave/%s\n' 
 mark() { mkdir -p "$SG_STATE/auto" && printf '%s\n' "$2" > "$SG_STATE/auto/wave-$1" && printf '%s\n' "$2" > "$SG_STATE/auto/waved-$1" \
   && { [ -s "$SG_STATE/auto/wave-start-$1" ] || date +%s > "$SG_STATE/auto/wave-start-$1"; }; }
 
+# run_dir <run>: the run folder, its line in active-runs.txt, else $SG_CHECKOUT/runs/<run>.
+run_dir() { local rd; rd=$(/usr/bin/grep "/$1\$" "$SG_STATE/active-runs.txt" 2>/dev/null | tail -1); printf '%s\n' "${rd:-${SG_CHECKOUT:-.}/runs/$1}"; }
+
+# gate_failed <run>: 0 when the run's verdict failed on its final gate (#694), read as the dashboard reads it: the last verdict
+# after the last run_start or resume, `failed`, with a reason that starts `ac-verify:`. `ac-verify:no_ac_commands` ran no
+# command, so it is no failed gate (watch.sh reads it as landed). A run with no verdict yet, or no record, is not failed.
+gate_failed() {
+  python3 -c 'import json,sys
+v=None
+try:
+    for l in open(sys.argv[1]):
+        try: d=json.loads(l)
+        except Exception: continue
+        e=d.get("event") if isinstance(d,dict) else None
+        if e in ("run_start","resume"): v=None
+        elif e=="verdict": v=d
+except OSError: pass
+rs=[r for r in (v or {}).get("reasons") or [] if isinstance(r,str)]
+sys.exit(0 if v and v.get("verdict")=="failed" and any(r.startswith("ac-verify:") and r!="ac-verify:no_ac_commands" for r in rs) else 1)' "$(run_dir "$1")/record.jsonl" 2>/dev/null
+}
+
 # expired <run>: 0 when the run's wave reached its age cap (SG_WAVE_MAX_AGE_SECONDS, 7200 s by default, a profile setting).
 # The age is the epoch `mark` wrote into the run's wave start marker, never a second clock. A wave with no marker, or one
 # that is not cut, is never expired: the cap is a fact about a wave that exists.
@@ -93,7 +114,7 @@ expired() {
   t=$(cat "$SG_STATE/auto/wave-start-$run" 2>/dev/null); case "$t" in ''|*[!0-9]*) return 1;; esac
   now=$(date +%s); cap=${SG_WAVE_MAX_AGE_SECONDS:-7200}
   [ $(( now - t )) -ge "$cap" ] || return 1   # under the cap with no pause: no record is read
-  rd=$(/usr/bin/grep "/$run\$" "$SG_STATE/active-runs.txt" 2>/dev/null | tail -1); [ -n "$rd" ] || rd="${SG_CHECKOUT:-.}/runs/$run"
+  rd=$(run_dir "$run")
   if [ -f "$SG_STATE/auto/wave-pause-$run" ]; then while IFS= read -r l; do [ -n "$l" ] && fx+=("$l"); done < "$SG_STATE/auto/wave-pause-$run"; fi
   p=$(python3 "$here/wavepause.py" "$t" "$now" "$rd" ${fx[@]+"${fx[@]}"} 2>/dev/null); case "$p" in ''|*[!0-9]*) p=0;; esac
   [ $(( now - t - p )) -ge "$cap" ]
@@ -292,6 +313,9 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
   # hold <why> and refuse <why> [cap]: the child stays out, held or requeued, and the cause is recorded for the janitor (#682).
   hold() { excluded "$run" "$iss" "$1"; echo "WAVE HOLD #$iss: $1"; return 1; }
   refuse() { excluded "$run" "$iss" "$1"; requeue "$iss" "$@"; return 1; }
+  # A run whose final gate failed takes no child into its wave (#694): what its gate read failed, so the wave would carry a
+  # failed tree and conflict on the base. The child stays out, its issue goes back to the queue, and the wave lands empty.
+  gate_failed "$run" && { refuse "the run's final gate failed: run $run failed ac-verify, so its child never enters $w"; return 1; }
   # A wave past its age cap takes no new child (#378, ADR-0145 rule 13): the child's issue goes back to the queue, so the
   # loop builds it into a later wave, and that requeue is not counted (#594). A child whose review already approved its
   # current head against this wave still enters (#594): its wait was the loop's queue of reviews, not its own work. Any
