@@ -12,6 +12,10 @@ _columns_spec = importlib.util.spec_from_file_location("board_columns", pathlib.
 _columns_module = importlib.util.module_from_spec(_columns_spec); _columns_spec.loader.exec_module(_columns_module)
 _flow_spec = importlib.util.spec_from_file_location("board_flow_history", pathlib.Path(__file__).resolve().parent / "board_flow_history.py")
 _flow = importlib.util.module_from_spec(_flow_spec); _flow_spec.loader.exec_module(_flow)
+_cfd_spec = importlib.util.spec_from_file_location("board_cfd", pathlib.Path(__file__).resolve().parent / "board_cfd.py")
+_cfd = importlib.util.module_from_spec(_cfd_spec); _cfd_spec.loader.exec_module(_cfd)
+_leadtime_spec = importlib.util.spec_from_file_location("board_leadtime", pathlib.Path(__file__).resolve().parent / "board_leadtime.py")
+_leadtime = importlib.util.module_from_spec(_leadtime_spec); _leadtime_spec.loader.exec_module(_leadtime)
 # The board draws the shipped definition (#247): its statuses, in its order, with their colours. Open PRs are a lane beside
 # the axis, never a column, and it is for tracking only (#384); a work branch has no lane of its own -- its kind reaches the
 # kinds view -- and a landed branch is read from its issue card. Every name comes from the table; COLUMN reads a column or a
@@ -1938,6 +1942,34 @@ def drop_moves(ids):
             except OSError: pass
             return None
         return set(moves) - set(left)
+def _band_extents(bands):
+    """Each column's band over one day, stacked from the last column of ORDER at the foot: lower is the cards in the
+    columns after it, upper adds its own."""
+    extents, run = {}, 0
+    for name in reversed(ORDER):
+        extents[name] = (run, run + bands[name])
+        run += bands[name]
+    return extents
+
+
+def flow_charts():
+    """The two diagrams' numbers, computed here from board_cfd and board_leadtime; the page draws them and computes none."""
+    cfd = _cfd.cfd(_flow.samples(BOARD.with_name("hub-flow.jsonl")), ORDER)
+    extents = [_band_extents(p["bands"]) for p in cfd["points"]]
+    ymax = max((e[ORDER[0]][1] for e in extents), default=0)
+    rows = [{"n": i["n"], "column": _columns_module.view_column(i["st"], str(i["s"]).lower() == "closed", i.get("l"))[0],
+             "c": i.get("c") if str(i["s"]).lower() == "closed" else None, "o": i.get("o")} for i in board_cache["items"]]
+    lead = _leadtime.lead_time(rows)
+    return {
+        "cfd": {"start": dt.datetime.fromtimestamp(cfd["start"], dt.UTC).date().isoformat() if cfd["start"] is not None else None,
+                "days": [p["day"] for p in cfd["points"]], "ymax": ymax,
+                "bands": [{"name": n, "lower": [e[n][0] for e in extents], "upper": [e[n][1] for e in extents]} for n in ORDER] if extents else []},
+        "lead": {"measure": lead["measure"], "window": lead["window"],
+                 "excluded": [{"reason": r, "count": c} for r, c in lead["excluded"].items()],
+                 "excluded_total": sum(lead["excluded"].values()), "series": lead["series"], "summary": lead["summary"]},
+    }
+
+
 def board():
     overlay = overlay_on()   # one setting turns the overlay off: the served board is then the list read alone (#651)
     moves = read_moves() if overlay else {}   # the record is read on every serve, so a page reload sees the same overlay (#650)
@@ -2009,7 +2041,7 @@ def board():
         dropped = drop_moves(agreed | set(expired))   # agreement settles an entry; the window settles one no read ever agreed with (#651)
         for item, (n, recorded, read) in expired.items():
             if dropped and item in dropped: report_expired(n, item, recorded, read, window)   # only a drop that really happened is reported, so a retry never repeats a line
-    return {"t": board_cache["t"], "err": board_cache["err"], "prs": lane, "groups": groups, "cases": cases, "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {})}
+    return {"t": board_cache["t"], "err": board_cache["err"], "prs": lane, "groups": groups, "cases": cases, "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {}), "flow": flow_charts()}
 
 PROMOTE_TO = COLUMN["issue_todo"]   # the column the arrow moves a card into: the owner's go signal (ADR-0142)
 def promote_write(issue):
@@ -2185,6 +2217,11 @@ button.on{border-color:var(--pin);color:var(--pin)}
 #board{position:relative;width:360px;border-left:1px solid var(--line);overflow:auto;background:var(--panel);flex:none}
 #board.off{width:26px;overflow:hidden}#board.off #bbody{display:none}#bhead{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel);z-index:2}
 #board.off #bhead b{display:none}#board.off #bhead{padding:8px 3px}
+#bcharts{margin-left:8px}#bcharts button{font-size:11.5px}#board.off #bcharts,#board.off #flowov{display:none}
+#flowov{position:absolute;inset:0;z-index:4;background:var(--panel);display:flex;flex-direction:column;overflow:auto}#flowov[hidden]{display:none}
+#flowh{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel)}
+#flowb{padding:10px;font-size:12.5px}#flowb svg{width:100%;height:auto;display:block;margin:6px 0}#flowb .fnote,#flowb .fhead{color:var(--mute);margin:4px 0}#flowb .fhead b{color:var(--fg,inherit)}
+#flowb .flg{margin-right:10px;white-space:nowrap}#flowb .flg i{display:inline-block;width:9px;height:9px;margin-right:4px;vertical-align:middle;border-radius:2px}
 #bbody .ah{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);cursor:pointer;font-weight:600;position:sticky;top:34px;background:#1b212b;z-index:1}   /* the same gap as the docked header: `Todo0` is never a reading, in either rendering (#1809) */
 #bbody .ah .n{background:#2a303b;border-radius:9px;padding:0 8px;font-weight:400}
 #bbody .ah i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;background:var(--mute)}
@@ -2313,7 +2350,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 </div>
 <div id=main></div>
 <div id=pop><div id=pbox></div></div>
-<div id=board><div id=grip title="drag to resize"></div><div id=bhead><b>TASKS <span id=bt class=m></span></b><span><details id=lf><summary title="filter cards by label">labels</summary><div id=lfl></div></details> <button id=bsp data-m=all title="the Specs filter holds a mode: every card, only the spec-labelled cards, or every card but those. A press cycles the three, and the label states the one it holds.">Specs: all</button> <button id=bz title="maximize the board over the run pane" aria-pressed=false></button> <button id=bx title="collapse" aria-pressed=false>&raquo;</button></span></div><div id="pip"><div id="piph" tabindex="0" title="drag to move the window; arrow keys move it 16px (64 with shift); Esc collapses it"><b id="pipt"></b><button id=pipx title="collapse the window to its header">&#8211;</button><button id=pipo title="close the window and restore the split">&#215;</button></div><div id="pipb"><iframe id="pipf" title="one card of the run panel"></iframe></div><div id="pipm"></div></div><div id=bcases></div><div id=bbody></div></div>
+<div id=board><div id=grip title="drag to resize"></div><div id=bhead><span id=btitle><b>TASKS <span id=bt class=m></span></b> <span id=bcharts><button id=bflow title="the development flow: the cards in each column over time, from the flow history (SPEC 111)">Flow</button> <button id=blead title="the lead time of the closed cards, opened to closed (SPEC 111)">Lead time</button></span></span><span><details id=lf><summary title="filter cards by label">labels</summary><div id=lfl></div></details> <button id=bsp data-m=all title="the Specs filter holds a mode: every card, only the spec-labelled cards, or every card but those. A press cycles the three, and the label states the one it holds.">Specs: all</button> <button id=bz title="maximize the board over the run pane" aria-pressed=false></button> <button id=bx title="collapse" aria-pressed=false>&raquo;</button></span></div><div id="pip"><div id="piph" tabindex="0" title="drag to move the window; arrow keys move it 16px (64 with shift); Esc collapses it"><b id="pipt"></b><button id=pipx title="collapse the window to its header">&#8211;</button><button id=pipo title="close the window and restore the split">&#215;</button></div><div id="pipb"><iframe id="pipf" title="one card of the run panel"></iframe></div><div id="pipm"></div></div><div id=bcases></div><div id=bbody></div><div id=flowov hidden><div id=flowh><b id=flowt></b><button id=flowx title="close the diagram">&#215;</button></div><div id=flowb></div></div></div>
 </div>
 <div id=foot title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"><span>load</span><b id=ldline>CPU ? · RAM ? · GPU ?</b><span id=ldfacts title="the squad's own state: health, progress, occupancy, quotas, subscriptions"></span></div>
 <script>
@@ -2736,11 +2773,36 @@ const COLNAME=/*BOARD_NAMES*/;   // the columns' names by the fact that sets the
 const RING=["#a3e635","#d8b4fe","#ff9ecd","#7dd3fc"];   // reserved for the columns the user creates, and never one of the named columns
 const colOf=(n,names)=>{const u=(names||[]).filter(x=>!Object.hasOwn(COLORS,x)).sort(),i=u.indexOf(n);return COLORS[n]||RING[(i<0?0:i)%RING.length]};
 const caseRows=cs=>(cs||[]).map(c=>{const a=c.age<3600?Math.max(1,Math.round(c.age/60))+"m":c.age<172800?Math.round(c.age/3600)+"h":Math.round(c.age/86400)+"d";return `<div class="tcrow ${c.result==="fail"?"fail":"pass"}" data-key="test case:${c.issue}@${esc(c.commit)}"><span class=tr>${esc(c.result)}</span><span class=id>#${c.issue}</span><span class=ta>${a}</span><code class=tm>${esc(c.commit)}</code></div>`}).join("");   // one row for each test case item, in the model's order: a strip beside the axis, never a column, and the pane reads no cache of its own
+// flow-charts:
+let FLOWK=null,FLOWD=null;
+const flowW=800,flowH=340,flowP=36;
+const flowX=(i,n)=>n<2?flowP:flowP+i*(flowW-2*flowP)/(n-1);
+const flowY=(v,max)=>max?flowH-flowP-v*(flowH-2*flowP)/max:flowH-flowP;
+const flowAxis=(max,unit)=>`<line x1=${flowP} y1=${flowH-flowP} x2=${flowW-flowP} y2=${flowH-flowP} stroke=var(--line)></line><text x=${flowP-6} y=${flowY(max,max)+4} text-anchor=end fill=var(--mute) font-size=11>${max} ${unit}</text>`;
+const flowCFD=c=>{if(!c.days.length)return "<p class=fnote>the flow history has no sample yet</p>";
+  const idx=[...c.days.keys()],rev=[...idx].reverse(),n=idx.length;
+  const band=b=>[...idx.map(i=>`${flowX(i,n)},${flowY(b.upper[i],c.ymax)}`),...rev.map(i=>`${flowX(i,n)},${flowY(b.lower[i],c.ymax)}`)].join(" ");
+  return `<svg viewBox="0 0 ${flowW} ${flowH}">${c.bands.map(b=>`<polygon points="${band(b)}" fill="${COLORS[b.name]||"#888"}" fill-opacity=".85"><title>${esc(b.name)}</title></polygon>`).join("")}${flowAxis(c.ymax,"cards")}</svg>`+
+    `<p class=fnote>history from ${esc(c.start)} UTC</p><p>${c.bands.map(b=>`<span class=flg><i style="background:${COLORS[b.name]||"#888"}"></i>${esc(b.name)}</span>`).join("")}</p>`;};
+const flowLead=l=>{const S=l.summary,ex=l.excluded.map(e=>`${esc(e.reason)} ${e.count}`).join(", ");
+  const head=`<p class=fhead><b>${esc(l.measure)}</b> · window ${l.window.size} ${esc(l.window.unit)} · excluded ${l.excluded_total}${ex?" ("+ex+")":""}</p>`;
+  if(!S)return head+"<p class=fnote>no closed card yet</p>";
+  const stat=(k,v)=>`${k} <b>${esc(v.text)}</b>`;
+  const pts=l.series,n=pts.length,max=S.maximum.hours,col=COLORS[COLNAME.issue_closed]||"#888";
+  const roll=`<polyline fill=none stroke=var(--mute) stroke-width=1.5 points="${pts.map((p,i)=>`${flowX(i,n)},${flowY(p.rolling_hours,max)}`).join(" ")}"></polyline>`;
+  const dots=pts.map((p,i)=>`<circle cx=${flowX(i,n)} cy=${flowY(p.hours,max)} r=3.5 fill="${col}"><title>#${p.n} closed ${esc(p.closed)}</title></circle>`).join("");
+  return head+`<p class=fhead>${stat("average",S.average)} · ${stat("median",S.median)} · ${stat("minimum",S.minimum)} · ${stat("maximum",S.maximum)}</p>`+
+    `<svg viewBox="0 0 ${flowW} ${flowH}">${flowAxis(max,"h")}${roll}${dots}</svg>`;};
+const drawFlow=()=>{const cfd=FLOWK==="cfd";$("#flowt").textContent=cfd?"Cumulative flow":"Lead time";
+  $("#flowb").innerHTML=!FLOWD?"<p class=fnote>the board has not loaded yet</p>":cfd?flowCFD(FLOWD.cfd):flowLead(FLOWD.lead)};
+const flowOpen=k=>{FLOWK=k;$("#flowov").hidden=false;drawFlow()};
+$("#bflow").onclick=()=>flowOpen("cfd");$("#blead").onclick=()=>flowOpen("lead");$("#flowx").onclick=()=>{$("#flowov").hidden=true};
+// flow-charts:end
 async function pollBoard(){lim.busy=1;try{const b=await (await fetch("/api/board")).json(),FLOW=/*BOARD_FLOW*/,   // development flow, left to right
 all=[b.prs,...b.groups.sort((x,y)=>{const i=n=>{const k=FLOW.indexOf(n);return k<0?FLOW.length:k};return i(x.name)-i(y.name)})],f=q.trim().replace(/^#/,"");
 if(bo.open===undefined||!all.some(g=>g.name===bo.open))bo.open=(all.find(g=>g.n&&g.name!==COLNAME.issue_closed&&!isPR(g.name))||all[2]).name;
 const CN=all.map(g=>g.name);   // every column of this board: what colOf reads the user columns out of, never a colour of its own
-$("#bcases").innerHTML=caseRows(b.cases);$("#bt").textContent=b.err?"(stale)":"";$("#bsp").setAttribute("aria-pressed",String(!!bo.specs));
+FLOWD=b.flow;if(!$("#flowov").hidden)drawFlow();$("#bcases").innerHTML=caseRows(b.cases);$("#bt").textContent=b.err?"(stale)":"";$("#bsp").setAttribute("aria-pressed",String(!!bo.specs));
 const fam=ls=>ls.reduce((o,l)=>{const k=l.includes(":")?l.split(":")[0]:"";(o[k]=o[k]||[]).push(l);return o},{});   // label group = prefix before ":"
 if(bo.label!==undefined){bo.labels=bo.label?[bo.label]:[];delete bo.label;saveB()}   // the single-label filter of the previous version
 const sel=bo.labels=bo.labels||[],LB=[...new Set([...(b.labels||[]),...sel])].sort(),lf=$("#lf"),lfl=$("#lfl");

@@ -20,9 +20,6 @@ SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"
 HUB_PY = SCRIPTS / "hub.py"
 OPENED = "2026-10-01T09:00:00Z"
 
-if str(SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS))
-
 
 def _load(name, path):
     spec = importlib.util.spec_from_file_location(name, path)
@@ -150,15 +147,14 @@ def test_opening_the_diagrams_makes_no_gh_call(hub, board, monkeypatch):
 
     monkeypatch.setattr(hub.subprocess, "run", gh_fails)
     flow = hub.board()["flow"]
-    page = hub.served_page()
     assert calls == []
     assert flow["cfd"]["bands"] and flow["lead"]["summary"] is not None
-    assert "flowov" in page
+    assert 'id=flowov hidden' in hub.PAGE
 
 
 def test_page_draws_the_hub_numbers_and_does_no_arithmetic(hub, board):
     block = _flow_block(hub)
-    for forbidden in ("reduce(", "Math.", "+=", "-=", "fmean", "median", "saveB(", "bo.", "#bbody"):
+    for forbidden in ("reduce(", "Math.", "+=", "-=", "fmean(", "median(", "average(", "saveB(", "bo.", "#bbody"):
         assert forbidden not in block, f"the flow script names {forbidden}"
 
 

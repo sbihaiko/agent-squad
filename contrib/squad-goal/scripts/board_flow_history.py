@@ -45,6 +45,10 @@ def append(path, rows, now=None):
     return s
 
 
+def samples(path):
+    return [obj for _, obj in _read(pathlib.Path(path)) if _is_sample(obj)]
+
+
 def _is_sample(obj):
     return isinstance(obj, dict) and isinstance(obj.get("t"), (int, float)) and isinstance(obj.get("counts"), dict)
 
