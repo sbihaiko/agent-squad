@@ -51,7 +51,7 @@ def serve(monkeypatch, tmp_path):
         srv = ThreadingHTTPServer(("127.0.0.1", 0), mod.H)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         servers.append(srv)
-        return SimpleNamespace(port=srv.server_port, calls=calls)
+        return SimpleNamespace(port=srv.server_port, calls=calls, mod=mod)
 
     yield start
     for srv in servers:
@@ -146,6 +146,13 @@ def test_tailnet_write_by_an_unknown_login_is_refused_and_writes_nothing(serve, 
     status, text = request(s.port, "POST", route, host=TAILNET, login=EVE, origin=tailnet_origin(), body={"issue": 5})
     assert (status, text) == (403, "login not allowed")
     assert s.calls[route] == []
+
+
+def test_a_tailnet_request_is_refused_when_the_seam_cannot_load(serve, tmp_path, monkeypatch):
+    s = serve()
+    monkeypatch.setattr(s.mod, "tailnet_roots", lambda: [str(tmp_path)])
+    assert request(s.port, "GET", "/api/runs", host=TAILNET, login=ANA) == (403, "no tailnet access seam")
+    assert request(s.port, "GET", "/api/version", host=loopback(s.port))[0] == 200
 
 
 def test_loopback_write_with_a_foreign_origin_keeps_today_s_refusal(serve):
