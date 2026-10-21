@@ -46,14 +46,14 @@ mk run-human; printf 'CHILD — GitHub issue(s) 706 (one PR):\n' > "$T/co/runs/r
 printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #706"}\n{"event": "verdict", "verdict": "needs-human", "reasons": ["ask"], "exit_code": 3}\n' > "$T/co/runs/run-human/record.jsonl"
 mk run-dup; printf 'CHILD — GitHub issue(s) 707 (one PR):\n' > "$T/co/runs/run-dup/request.txt"
 printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #707"}\n{"event": "verdict", "verdict": "failed", "reasons": ["x"], "exit_code": 1}\n' > "$T/co/runs/run-dup/record.jsonl"
-printf 'run-dup\t\tended failed: x\n' > "$T/st/auto/requeues-707.runs"; echo 1 > "$T/st/auto/requeues-707"
+SG_STATE="$T/st" SG_REPO=x/y python3 "$T/s/issue_ledger.py" fail 'x/y#707' run-dup '' 'ended failed: x' >/dev/null
 # #621: the run's own review of the child decides, not the reason text: a review that held its diff (CHANGES or BLOCKED) is
 # the issue's own failure, passed as `own`. A run the loop ledger lists is not sent again either.
 mk run-held; printf 'CHILD — GitHub issue(s) 708 (one PR):\n' > "$T/co/runs/run-held/request.txt"
 printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #708"}\n{"event": "land", "node": "c1", "outcome": "fail", "reasons": ["review_held"], "effect": {"name": "review", "review": {"verdict": "hold"}}}\n{"event": "verdict", "verdict": "failed", "reasons": ["review_held"], "exit_code": 1}\n' > "$T/co/runs/run-held/record.jsonl"
 mk run-loopdup; printf 'CHILD — GitHub issue(s) 709 (one PR):\n' > "$T/co/runs/run-loopdup/request.txt"
 printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #709"}\n{"event": "verdict", "verdict": "failed", "reasons": ["adapter_error"], "exit_code": 1}\n' > "$T/co/runs/run-loopdup/record.jsonl"
-printf 'run-loopdup\t\tended failed: adapter_error\n' > "$T/st/auto/loopqueues-709.runs"; echo 1 > "$T/st/auto/loopqueues-709"
+SG_STATE="$T/st" SG_REPO=x/y python3 "$T/s/issue_ledger.py" fail 'x/y#709' run-loopdup '' 'ended failed: adapter_error' loop >/dev/null
 mk run-chain; printf 'CHILD — GitHub issue(s) 710 (one PR):\n' > "$T/co/runs/run-chain/request.txt"
 printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #710"}\n{"event": "land", "node": "c1", "outcome": "fail", "reasons": ["review_held"], "effect": {"name": "review", "review": {"verdict": "hold", "findings": "VERDICT: BLOCKED (every review model failed)\\n"}}}\n{"event": "verdict", "verdict": "failed", "reasons": ["review_held"], "exit_code": 1}\n' > "$T/co/runs/run-chain/record.jsonl"
 # #673: the janitor reads the issue's ledger file through its module; a run that file lists is not sent again either.

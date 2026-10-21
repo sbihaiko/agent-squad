@@ -1,7 +1,8 @@
 """One ledger file per issue holds the loop's facts about it (#673): attempts per run, the last failure, the stop reason.
 
 issue_ledger.py is the only writer of $SG_STATE/state/<owner>__<repo>__<n>.json. A write is atomic (ADR-0030), the key names
-the repository (ADR-0138), a missing file reads as todo with 0 attempts, and the old requeues-N files seed it once.
+the repository (ADR-0138), a missing file of a new issue reads as todo with 0 attempts, and a missing file beside the old
+requeues-N files holds the issue until `migrate` carries them in (ADR-0149 rule 4).
 """
 import json
 import os
@@ -102,20 +103,34 @@ def test_a_rearm_keeps_a_floor_so_an_old_run_never_counts_again(tmp_path):
     assert set(json.loads(run(tmp_path, "read", "a/b#7").stdout)["rearmed"]["runs"]) == {"r1", "l1", "r9"}, "a floor keeps the old one"
 
 
-def test_the_old_files_seed_a_missing_ledger_once(tmp_path):
+def test_a_missing_ledger_beside_the_old_counters_holds_until_migrate(tmp_path):
+    """ADR-0149 rule 4: a missing ledger never falls back to the old counters. Beside them it holds the issue, and the
+    owner's `migrate` carries them in once (or `rearm` clears them)."""
     a = tmp_path / "auto"
     a.mkdir()
     (a / "requeues-543").write_text("1\n")
     (a / "requeues-543.runs").write_text("r1\tk\tfirst\nr2\tk\tsecond\nfrozen\n")
     (a / "loopqueues-543.runs").write_text("l1\t\tadapter_error\n")
     d = json.loads(run(tmp_path, "read", "a/b#543").stdout)
+    assert d["state"] == "held" and "migrate" in d["held"] and "requeues-543" in d["held"], d
+    assert run(tmp_path, "fail", "a/b#543", "r3", "k", "x").returncode == 3, "a writer never reads the old counters"
+    assert not (tmp_path / "state" / "a__b__543.json").exists()
+    assert run(tmp_path, "migrate", "a/b#543").returncode == 0
+    d = json.loads(run(tmp_path, "read", "a/b#543").stdout)
     assert d["state"] == "frozen" and d["attempts"] == 1, "the counter wins over the line count: the owner's reset holds"
     assert run(tmp_path, "count", "a/b#543", "loop").stdout.strip() == "1"
     assert run(tmp_path, "read", "a/b#543", "last_fail").stdout.strip() == "second"
-    assert run(tmp_path, "fail", "a/b#543", "r2", "k", "dup").stdout.split() == ["1", "0", "1"], "a seeded run counts once"
-    run(tmp_path, "rearm", "a/b#543")
-    assert json.loads(run(tmp_path, "read", "a/b#543").stdout)["state"] == "todo", "after a write the old files are read no more"
+    assert run(tmp_path, "fail", "a/b#543", "r2", "k", "dup").stdout.split() == ["1", "0", "1"], "a migrated run counts once"
+    assert run(tmp_path, "migrate", "a/b#543").returncode != 0, "a ledger that exists is never migrated over"
     assert run(tmp_path, "read", "c/d#543", "state", repo="a/b").stdout.strip() == "todo", "the old files are the primary repository's"
+
+
+def test_a_rearm_frees_a_missing_ledger_beside_the_old_counters(tmp_path):
+    (tmp_path / "auto").mkdir()
+    (tmp_path / "auto" / "requeues-9").write_text("3\n")
+    assert run(tmp_path, "read", "a/b#9", "state").stdout.strip() == "held"
+    run(tmp_path, "rearm", "a/b#9")
+    assert run(tmp_path, "read", "a/b#9", "state").stdout.strip() == "todo", "after a write the old files are read no more"
 
 
 def test_a_kill_in_the_middle_of_a_write_leaves_the_old_file_whole(tmp_path):

@@ -59,4 +59,8 @@ out=$(L fail 'x/y#11' r1 "" x 2>&1); rc=$?
 [ $rc != 0 ] && [ "$(cat "$T/st/state/x__y__11.json")" = '{"own": {"count": 1' ] && ok "a writer never overwrites a corrupt ledger" || ko "fail on corrupt: rc $rc '$out'"
 [ "$(L wave 'x/y#11' r1 held x >/dev/null 2>&1; echo $?)" != 0 ] && ok "a wave event on a corrupt ledger is refused" || ko "wave on corrupt accepted"
 L rearm 'x/y#11' >/dev/null && [ "$(L read 'x/y#11' state)" = todo ] && ok "a rearm recovers a corrupt ledger" || ko "rearm corrupt: '$(L read 'x/y#11')'"
+# A missing ledger beside the old counters of the issue holds it (ADR-0149 rule 4); a new issue with no loop trace reads todo.
+echo 1 > "$T/st/auto/loopqueues-30"
+[ "$(L read 'x/y#30' state)" = held ] && [ "$(L read 'x/y#31' state)" = todo ] && ok "a missing ledger holds only beside old counters" || ko "missing: '$(L read 'x/y#30')' '$(L read 'x/y#31' state)'"
+L migrate 'x/y#30' >/dev/null && [ "$(L read 'x/y#30' state)" = todo ] && [ "$(L count 'x/y#30' loop)" = 1 ] && ok "migrate carries the old counters in" || ko "migrate: '$(L read 'x/y#30')'"
 rm -rf "$T"; exit $fail

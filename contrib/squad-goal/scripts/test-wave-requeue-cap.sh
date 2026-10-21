@@ -32,7 +32,7 @@ echo req > "$T/st/auto/disp-8"; o8=$(PATH="$T/bin:$PATH" BOARD_REFUSE=1 bash "$T
 case "$o8" in *"WAVE-BOARD #8 Todo refused: board refused"*) ok "a refused card write is reported";; *) ko "the refused card write was dropped: '$o8'";; esac
 # A requeue the wave's age cap made (#594) is no failure of the child: the loop's own queue made it late. It never counts
 # toward the cap and never stops the issue, and the count real failures left stays as it was.
-echo 2 > "$T/st/auto/requeues-9"; echo req > "$T/st/auto/disp-9"   # two real failures already counted: a counted requeue now stops it
+for r in r9a r9b; do SG_STATE="$T/st" SG_REPO=x/y python3 "$T/s/issue_ledger.py" fail 'x/y#9' "$r" '' 'x' >/dev/null; done; echo req > "$T/st/auto/disp-9"   # two real failures already counted: a counted requeue now stops it
 o9=$(PATH="$T/bin:$PATH" bash "$T/s/wave.sh" requeue 9 "the wave reached its age cap" cap)
 [ ! -e "$T/st/auto/disp-9" ] && [ "$(cnt 9)" = 2 ] && case "$o9" in *"WAVE REQUEUE #9"*) true;; *) false;; esac \
   && ok "a cap requeue never counts and never stops the issue" || ko "cap requeue: count '$(cnt 9)', '$o9'"
