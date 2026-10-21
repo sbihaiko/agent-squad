@@ -68,12 +68,14 @@ localgate() { local br=$1 sha=$2 i=$3 wt out rc base
   # The gate runs under the machine-wide gate lock (#392): a second gate waits, and its one wait line is passed on. The lock
   # reads SG_STATE, so gate.sh runs in the loop env and only the gate command inside it drops the SG_* variables.
   out=$(cd "$wt/tip" && PYTHONPATH=. SG_GATE_KIND=fast bash "$here/gate.sh" env $noloop bash -c "$gatecmd" 2>&1); rc=$?; out=$(unwait "$out")
-  [ "$rc" = 0 ] || { out="$out
+  # Exit 4 is an inconclusive gate (#699): fast-gate ran its one retry and that failed too. It gets no rerun and no ruff fix,
+  # so nothing grants the landing it held.
+  [ "$rc" = 0 ] || [ "$rc" = 4 ] || { out="$out
 --- the rerun of what failed ---
 $(cd "$wt/tip" && SG_GATE_FAILED="$(printf '%s\n' "$out" | sed -n 's/^FAILED \([^ ]*\).*/\1/p' | sort -u | tr '\n' ' ' | sed 's/ $//')" PYTHONPATH=. SG_GATE_KIND=fast bash "$here/gate.sh" env $noloop bash -c "$rerun" 2>&1)"; rc=$?; out=$(unwait "$out"); }
   # Only ruff red, and ruff says it can fix it: `ruff check --fix` (safe fixes only) in the trial, one commit, the gate again.
   # The fixed trial is pushed to the branch (it is rebased on $land), so the fix lands with the branch.
-  if [ "$rc" != 0 ] && printf '%s' "$out" | /usr/bin/grep -q 'fixable with the'; then
+  if [ "$rc" != 0 ] && [ "$rc" != 4 ] && printf '%s' "$out" | /usr/bin/grep -q 'fixable with the'; then
     (cd "$wt/tip" && env $noloop bash -c "$fixcmd") >/dev/null 2>&1
     if [ -n "$(/usr/bin/git -C "$wt/tip" status --porcelain 2>/dev/null)" ]; then
       /usr/bin/git -C "$wt/tip" add -A >/dev/null 2>&1; /usr/bin/git -C "$wt/tip" -c user.email=gate@squad -c user.name=squad-gate commit -q -m "Apply ruff --fix at the landing
@@ -89,9 +91,10 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>" >/dev/null 2>&1
   if [ "$rc" = 0 ]; then
     printf 'Status update — branch %s @ %s: local gate, CI off: passed at %s (ruff, mypy, pytest -m "not heavy", the shell suites of the changed scripts).\n' "$br" "${sha:0:9}" "$sha" > "$(sg_cq_status "$i" "branchland$$")"
     return 0; fi
-  { printf 'Status update — branch %s @ %s: local gate, CI off: failed at %s (exit %s). The branch does not land.\n\n```\n' "$br" "${sha:0:9}" "$sha" "$rc"
+  local res=failed; [ "$rc" = 4 ] && res=inconclusive
+  { printf 'Status update — branch %s @ %s: local gate, CI off: %s at %s (exit %s). The branch does not land.\n\n```\n' "$br" "${sha:0:9}" "$res" "$sha" "$rc"
     printf '%s\n' "$out" | grep -E '^(FAILED|E  |ERROR)' | sort -u | head -20; printf '%s\n' "$out" | tail -30; printf '```\n'; } > "$(sg_cq_status "$i" "branchland$$")"
-  say wait "$br" "$sha" "gate$base" "the local gate (CI off) failed on ${sha:0:9} rebased onto $land ${base:-?}: $(printf '%s' "$out" | tail -1)"; return 1; }
+  say wait "$br" "$sha" "gate$base" "the local gate (CI off) $res on ${sha:0:9} rebased onto $land ${base:-?}: $(printf '%s' "$out" | tail -1)"; return 1; }
 
 # The work branches (workbranches.sh). Only a branch whose issue is open lands (#367): the remote keeps many old work branches whose
 # issue closed under a pull request or was dropped, and one of those would land its old commits in dev again.

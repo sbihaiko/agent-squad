@@ -160,6 +160,10 @@ Each issue has one ledger file, `$SG_STATE/state/<owner>__<repo>__<n>.json`, key
 
 `gate.sh` takes the machine-wide `gate` lock through `serial.sh`. The wave entry and the wave tip check take it in try mode (`SERIAL_TRY=1`): a held lock exits 73 at once, never queued, and counts nothing toward `stuck`. The entry prints `WAVE HOLD` and the child enters on a later pass. The landing prints `WAVE WAIT` and the wave lands on a later cycle. `promote-pass.sh` takes the lock in try mode too. A hand-started gate waits.
 
+### Fast gate result
+
+`fast-gate.sh` names the failing class on its last line: `lint`, `type`, `collection`, `pytest` with the failed ids, `saturation` or `unknown`. A red that names no failed test is never read as one cause. Failed ids run once more, serially: a pass there is saturation and goes on, a red there exits 1. A `saturation` or `unknown` red is inconclusive, so the battery runs once more. A pass goes on, a defect exits 1, and a second inconclusive result exits 4. Exit 4 holds landing: the wave entry prints `WAVE HOLD` and requeues nothing, the wave tip check blames no child and counts no landing try, and `branchland.sh` runs no rerun and lands nothing. The gate lock stays the one `gate.sh` takes.
+
 A fetch or push of `wave.sh land` that fails on the network (cannot resolve the host, cannot connect, a timeout, a 5xx answer, a TLS handshake) prints `WAVE-NETWORK` and exits 2. It counts nothing toward `stuck` and freezes nothing, so the wave lands on a later cycle. A fetch that answers and lacks the ref still counts.
 
 ### Spec cards
@@ -202,7 +206,7 @@ sequenceDiagram
     Note over CC,WV: entry refused: run failed its final gate (#694), gates red, rebase conflict, push refused twice, wave expired
     WV->>GH: requeue: rm disp-N, bug-N#59; card Todo#59; cq why#59; at a ledger cap NEEDS-HUMAN or STOP instead (Requeue counts)
     CC->>CC: requeued-RUN-CHILD = HEAD, no cc- marker: no new try on the same head
-    Note over CC,WV: entry held: no review, wrong base, other sha, not APPROVE, gate lock or gate slots held
+    Note over CC,WV: entry held: no review, wrong base, other sha, not APPROVE, gate lock or gate slots held, gates inconclusive (exit 4)
     WV-->>CC: exit 1 WAVE HOLD, nothing requeued#59; the child stays left, so the pass exits 3
     CC->>WV: SG_HOLD_TRIES review holds on one head: wave.sh requeue N with the hold reason
     CC->>CC: review says CHANGES: childfix.sh starts one fix run in the child's worktree#59; the child is held until its verdict
@@ -218,6 +222,7 @@ sequenceDiagram
     WV->>WV: rebase on dev conflicts, push refused twice, base or wave branch gone: stuck() counts wland-tries (a network error counts nothing)
     WV->>GH: at SG_WAVE_LAND_TRIES (3): frozen:owner and card Todo per issue, cq comment, rm wave-RUN#59; wave/RUN stays on the remote
     WV->>WV: gate lock held at the tip check: WAVE WAIT, exit 1, no count
+    WV->>WV: tip check inconclusive (fast-gate exit 4): no child blamed, the wave does not land, no count
     Note over WV: red tip
     WV->>WV: wave_check: child_gate per commit, newest first#59; drop the culprit by rebase --onto#59; requeue it
     WV->>WV: no culprit, or the drop conflicts: stuck()

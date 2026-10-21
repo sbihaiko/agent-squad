@@ -220,7 +220,7 @@ loop_caused() {
   case "${2:-}" in own) return 1;; loop) return 0;; esac
   case "$1" in *"the gate lock is held"*|*"the gate slots"*"are full"*|*"reached its age cap"*|*adapter_error*|*merge_conflict*|*"the rebase on "*" conflicts"*|*"DISK STOP"*|*"No space left"*|\
     *"every review model failed"*|*"head moved during the review"*|*"with no verdict"*|\
-    *"no child's own suite names the cause"*|*"completed"*"nothing landed"*|*"no profile"*|*"sandbox"*"denied"*|\
+    *"no child's own suite names the cause"*|*"is inconclusive, so the wave does not land"*|*"completed"*"nothing landed"*|*"no profile"*|*"sandbox"*"denied"*|\
     *"Could not resolve host"*|*"Failed to connect"*|*"Connection timed out"*|*"Operation timed out"*|*"Network is unreachable"*) return 0;; esac
   return 1
 }
@@ -358,6 +358,8 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
     if [ $grc = 73 ] && h=$(held_by "$out"); then
       case "$h" in slots:*) hold "the gate slots (caps.gates) are full, held by ${h#slots:}; the child enters on a later pass";;
         *) hold "the gate lock is held by pid $h; the child enters on a later pass";; esac; return 1; fi
+    # Exit 4 is an inconclusive gate (#699): the machine gave no answer, so the child is held, never requeued.
+    [ $grc = 4 ] && { hold "the local gates were inconclusive: $(printf '%s' "$out" | /usr/bin/grep -v '^$' | tail -1); the child enters on a later pass"; return 1; }
     [ $grc = 0 ] || { refuse "the local gates failed: $(printf '%s' "$out" | /usr/bin/grep -v '^$' | tail -1)"; return 1; }
   }
   rebase_on_tip || return $?
@@ -411,7 +413,8 @@ child_gate() {
 # wave_check <clone> <w>: the wave tip's check, and, when it is red, the child that broke it. Each child's own suite runs
 # again against the tip, the last entrant first; the first child whose suite fails leaves the wave -- its commits are dropped
 # from the tip and its issue goes back to the queue -- and the check runs again, so the wave without it can land. Exit 0:
-# the tip's check is green (after any child left); 1: it stayed red, so the landing fails as before.
+# the tip's check is green (after any child left); 1: it stayed red, so the landing fails as before; 3: the gate lock
+# is held; 4: the check was inconclusive (#699), so no child is blamed.
 wave_check() {
   local S=$1 w=$2 rc found cx clog
   [ -n "$tipgate" ] || return 0
@@ -420,6 +423,7 @@ wave_check() {
     (cd "$S" && export SERIAL_TRY=1 && eval "$tipgate") >"$clog" 2>&1; rc=$?   # try mode (#575): the landing runs inline in the watch cycle
     [ $rc = 0 ] && { rm -f "$clog"; return 0; }
     [ $rc = 73 ] && held_by "$(cat "$clog")" >/dev/null && { rm -f "$clog"; return 3; }   # 3: the gate lock is held, so the check did not run
+    [ $rc = 4 ] && return 4   # 4: the check was inconclusive (#699): no child is blamed, and the wave does not land
     found=""; while read -r sha; do
       [ -n "$sha" ] || continue
       child_gate "$S" "$sha^" "$sha" "$(child_of "$S" "$sha")" || { found=$sha; break; }
@@ -596,6 +600,7 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
     # before it lands. A tip that stays red with no child named is a landing that failed, as any other cause is.
     wave_check "$S" "$w"; rc=$?
     [ $rc = 3 ] && { echo "WAVE WAIT $w: the gate lock or the gate slots are held by another gate, so the tip's check did not run; the wave lands on a later pass"; rm -rf "$S"; return 1; }
+    [ $rc = 4 ] && { stuck "$run" "$w" "$S" "the check at the tip of $w is inconclusive, so the wave does not land: $(/usr/bin/grep -v '^$' "$SG_STATE/wave-check-$(printf '%s' "$w" | tr / _).log" 2>/dev/null | tail -1)"; rm -rf "$S"; return 1; }
     [ $rc = 0 ] || { stuck "$run" "$w" "$S" "the check at the tip of $w is red and no child's own suite names the cause"; rm -rf "$S"; return 1; }
     sha=$(sc rev-parse HEAD)
     # The issues the wave carries: every `Refs #N` in a commit message, subject or body (a child never writes Closes), each

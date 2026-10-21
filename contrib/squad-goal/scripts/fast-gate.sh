@@ -6,7 +6,8 @@
 # against its merge-base with SG_FAST_BASE (default origin/$SG_BASE, else origin/dev), so work that landed on the base after the
 # branch point adds no suite. A base that does not resolve fails the gate, never skips the suites. Each suite runs hermetic, as
 # shell-suites.sh runs it: no SG_* variable, its own HOME. The promotion gate is the full suite (promote-stg.sh), not this.
-# The gate runs under the machine-wide gate lock (gate.sh) and leaves the fast status line the hub reads. Exit 0 when all pass.
+# The gate runs under the machine-wide gate lock (gate.sh) and leaves the fast status line the hub reads. Exit 0 when all pass,
+# 1 on a defect, 2 when the base does not resolve, 4 when the battery is inconclusive twice (#699): 4 holds landing.
 here="$(cd "$(dirname "$0")" && pwd)"
 case ":${SG_SERIAL_HELD:-}:" in *":gate:"*) ;; *) SG_GATE_KIND=fast exec bash "$here/gate.sh" bash "$0" "$@";; esac
 base=${SG_FAST_BASE:-origin/${SG_BASE:-dev}}
@@ -17,32 +18,49 @@ py=${SG_GATE_PY:-$SG_CHECKOUT/.venv/bin/python}; [ -x "$py" ] || py=python3
 fastcmd=${SG_FAST_CMD:-"$(sg_base_battery "$py")"}
 mb=$(git merge-base HEAD "$base" 2>/dev/null) || { echo "fast-gate: base $base does not resolve: the changed scripts are unknown, so the gate does not pass"; exit 2; }
 top=$(git rev-parse --show-toplevel) || exit 2
-# The check the battery failed at, named with its own line (#670): ruff's code and path, mypy's line, or pytest, which named no
-# failed test. A reason that says only "names no failed test" hides a lint or type failure from the child that must repair it.
-stage_of() {
-  local p
-  p=$(sed -n -e 's/^\([A-Z][A-Z]*[0-9][0-9][0-9]*\) \[[^]]*\] \(.*\)$/\1 \2/p' -e 's/^\([A-Z][A-Z]*[0-9][0-9][0-9]*\) \([^[].*\)$/\1 \2/p' "$1" | head -n 1)   # with or without the fix marker (#671)
-  if [ -n "$p" ]; then
-    local f; f=$(sed -n 's/^ *--> \(.*\)$/\1/p' "$1" | head -n 1)
-    echo "ruff: ${f:+$f }$p"; return
-  fi
-  p=$(sed -n 's/^\([^ ]*:[0-9][0-9]*\): error: \(.*\)$/\1: \2/p' "$1" | head -n 1)
-  [ -n "$p" ] && { echo "mypy: $p"; return; }
-  echo "pytest: it named no failed test"
+# classify <log> <rc>: the failing class of a red battery (#699), one word, then its detail: lint (ruff's code and path, #670,
+# #671), type (mypy's line), collection (the files pytest could not collect), pytest (the failed or errored test ids),
+# saturation (a worker crashed, or a signal killed the battery) or unknown (none of these). A red that names no failed test
+# is never read as one cause: it is a lint, type or collection defect, or it is inconclusive.
+ids_of() { sed -n -e 's/^FAILED \([^ ]*\).*/\1/p' -e 's/^ERROR \([^ ]*::[^ ]*\).*/\1/p' "$1" | sort -u; }
+classify() {
+  local log=$1 rc=$2 p f
+  p=$(sed -n -e 's/^\([A-Z][A-Z]*[0-9][0-9][0-9]*\) \[[^]]*\] \(.*\)$/\1 \2/p' -e 's/^\([A-Z][A-Z]*[0-9][0-9][0-9]*\) \([^[].*\)$/\1 \2/p' "$log" | head -n 1)   # with or without the fix marker (#671)
+  if [ -n "$p" ]; then f=$(sed -n 's/^ *--> \(.*\)$/\1/p' "$log" | head -n 1); echo "lint the base battery failed at ruff: ${f:+$f }$p"; return; fi
+  p=$(sed -n 's/^\([^ ]*:[0-9][0-9]*\): error: \(.*\)$/\1: \2/p' "$log" | head -n 1)
+  [ -n "$p" ] && { echo "type the base battery failed at mypy: $p"; return; }
+  p=$(sed -n -e 's/^ERROR collecting \([^ ]*\).*/\1/p' -e 's/^ERROR \([^ :]*\.py\)\( .*\)*$/\1/p' "$log" | sort -u | tr '\n' ' ' | sed 's/ $//')
+  if [ -n "$p" ] || /usr/bin/grep -qE 'errors? during collection' "$log"; then echo "collection pytest could not collect ${p:-its tests}"; return; fi
+  p=$(ids_of "$log" | tr '\n' ' ' | sed 's/ $//')
+  [ -n "$p" ] && { echo "pytest the base battery failed at $p"; return; }
+  if [ "$rc" -ge 128 ] || /usr/bin/grep -qE 'node down|crashed worker|worker .*crashed|^Killed|MemoryError|Cannot allocate memory|Too many open files|Resource temporarily unavailable' "$log"; then
+    echo "saturation the battery exited $rc with a crashed worker or a kill, and no test id"; return; fi
+  echo "unknown the battery exited $rc and named no lint, type, collection or test failure"
 }
 # A test that fails under the parallel battery and passes alone is saturation, not a defect (#520): the failed tests the log
-# names run once more, serially (pyproject turns the pytest cache off, so --lf would rerun the whole battery). A red that
-# names no test (lint, types) or a red there too fails the gate. The battery output stays in a log that the failure line names.
+# names run once more, serially (pyproject turns the pytest cache off, so --lf would rerun the whole battery). A red there too
+# fails the gate. A saturation or unknown red is inconclusive: the battery runs once more, and only once. A pass there goes
+# on; a defect there fails as that defect; inconclusive again exits 4, and the landing holds. The battery output stays in a
+# log that the failure line names. Exit 1 is a defect, 4 is inconclusive; neither grants a landing.
 retrycmd=${SG_FAST_RETRY_CMD:-"$py -m pytest -p no:deepeval -p no:xdist -o heavy_cap_seconds=20"}
 log=${SG_STATE:-${TMPDIR:-/tmp}}/fast-gate-$(git rev-parse --short HEAD 2>/dev/null || echo x).log
-if ! bash -c "$fastcmd" > "$log" 2>&1; then
-  tail -n 5 "$log"
-  ids=$(sed -n 's/^FAILED \([^ ]*\).*/\1/p' "$log" | sort -u)
-  [ -n "$ids" ] || { echo "fast-gate: the base battery failed at $(stage_of "$log") ($log)"; exit 1; }
-  # shellcheck disable=SC2086  # one word per test id; set -f keeps a parametrized id such as t[a.sh] from globbing
-  set -f; if bash -c "$retrycmd \"\$@\"" retry $ids >> "$log" 2>&1; then echo "fast-gate: the base battery failed under load and its failed tests passed alone: saturation, not a defect ($log)"
-  else echo "fast-gate: the base battery failed, and its failed tests fail alone too ($log)"; exit 1; fi; set +f
-fi
+for try in 1 2; do
+  lg=$log; [ $try = 1 ] || lg=${log%.log}-retry.log
+  bash -c "$fastcmd" > "$lg" 2>&1 && break
+  rc=$?; tail -n 5 "$lg"
+  c=$(classify "$lg" "$rc"); cls=${c%% *}; detail=${c#* }
+  case $cls in
+    saturation|unknown)
+      [ $try = 1 ] && { echo "fast-gate: $cls: $detail; inconclusive, so the battery runs once more ($lg)"; continue; }
+      echo "fast-gate: $cls: $detail; inconclusive twice, so the gate does not pass and the landing holds ($lg)"; exit 4;;
+    pytest)
+      # shellcheck disable=SC2086  # one word per test id; set -f keeps a parametrized id such as t[a.sh] from globbing
+      set -f; if bash -c "$retrycmd \"\$@\"" retry $(ids_of "$lg") >> "$lg" 2>&1; then set +f
+        echo "fast-gate: the base battery failed under load and its failed tests passed alone: saturation, not a defect ($lg)"; break; fi
+      echo "fast-gate: pytest: $detail, and they fail alone too ($lg)"; exit 1;;
+    *) echo "fast-gate: $cls: $detail ($lg)"; exit 1;;
+  esac
+done
 suites=$(git diff --name-only --diff-filter=d "$mb" HEAD | sed -n -e 's|^contrib/squad-goal/scripts/\(.*\)\.sh$|\1|p' -e 's|^contrib/squad-goal/scripts/\(.*\)\.py$|\1|p' | grep -v / \
   | sed 's|^test-||' | sort -u)
 failed=""
