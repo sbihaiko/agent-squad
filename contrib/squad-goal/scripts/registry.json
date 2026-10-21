@@ -1281,7 +1281,7 @@
     },
     {
       "id": "deepseek-flash",
-      "label": "DeepSeek V4.1 Flash no-tools",
+      "label": "DeepSeek V4.1 Flash",
       "provider": "deepseek",
       "subscription": "deepseek",
       "efforts": [
@@ -1329,7 +1329,7 @@
         }
       },
       "capabilities": {
-        "tools": false,
+        "tools": true,
         "thinking_off": true,
         "vision": false,
         "context": 131072
@@ -1348,7 +1348,7 @@
     },
     {
       "id": "deepseek-v4-flash",
-      "label": "DeepSeek V4.1 Flash",
+      "label": "DeepSeek V4.1 Flash legacy",
       "provider": "deepseek",
       "subscription": "deepseek",
       "efforts": [
