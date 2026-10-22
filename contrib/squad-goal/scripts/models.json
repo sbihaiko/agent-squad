@@ -3,6 +3,16 @@
   "chains": {
     "coding": [
       {
+        "id": "claude-sonnet-5-5",
+        "route": "gateway",
+        "hrs": "19-07"
+      },
+      {
+        "id": "claude-sonnet-4-6",
+        "route": "gateway",
+        "hrs": "19-07"
+      },
+      {
         "id": "gpt-5.6-terra",
         "raw": "claude-gpt-5.6-terra",
         "route": "gateway"
@@ -11,11 +21,6 @@
         "id": "grok-4.7",
         "raw": "claude-grok-4.7",
         "route": "gateway"
-      },
-      {
-        "id": "claude-sonnet-5-5",
-        "route": "gateway",
-        "hrs": "19-07"
       }
     ],
     "review": [
