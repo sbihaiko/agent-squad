@@ -239,8 +239,10 @@ class Children:
         # A requeued issue starts its first entry where the issue ledger says its last attempt stopped (ADR-0151 rule 2).
         spent, hours, hour = e.options.get("spent_models") or [], e.options.get("model_hours") or {}, time.localtime(e.wall()).tm_hour
         first = coder or (e.dispatch.moved(ctx.node, d) if entry == 1 else d["model"])
-        chain = session.model_chain(ctx.node["allow"]["models"], first, spent, hours, hour, e.options.get("model_order") or [])
-        for m, why in session.hours_skipped(ctx.node["allow"]["models"], first, spent, hours, hour):    # an entry left out of its window is on the record
+        km = e.dispatch.kind_models(d)    # a child of a kind falls back along its own kind's chain (SPEC 750)
+        models = km or ctx.node["allow"]["models"]
+        chain = session.model_chain(models, first, spent, hours, hour, km or e.options.get("model_order") or [])
+        for m, why in session.hours_skipped(models, first, spent, hours, hour):    # an entry left out of its window is on the record
             e.record.append("model_skipped", node=name, entry=entry, model=m, reason=why)
         out, tried, model = await session.run_chain(chain, lambda m, first: self.attempt(name, d, ws, dl, m, slot, first and entry == 1, entry, review))
         for m, err in tried:    # every refusal is on the record, exhausted chain or not (#494)

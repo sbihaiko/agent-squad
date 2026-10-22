@@ -319,6 +319,10 @@ class Dispatch:
                           and review_streak.unanswered(out["outcome"], out["reasons"]))
         return review_streak.with_unanswered(seq, repeat)
 
+    def kind_models(self, d):
+        """The chain of a child's kind, in order (SPEC 750), or None for a child of a legacy envelope with no kind."""
+        return self.e.kind_chains.get(d.get("kind")) if d.get("kind") else None
+
     def coder(self, node, name, d, upto_entry=None):
         """The coder the child's next fix entry uses: the child's own model, moved one place down the chain each time
         identical findings twice stopped the cycle (ADR-0151 rule 2). The record counts this run's repeats, the issue
@@ -326,8 +330,9 @@ class Dispatch:
         attempt stopped. `upto_entry` counts a failed fix entry of the record; the entry about to start is not one."""
         e = self.e
         spent, hours = e.options.get("spent_models") or [], e.options.get("model_hours") or {}
-        chain = session.model_chain(node["allow"]["models"], d["model"], spent, hours, time.localtime(e.wall()).tm_hour,
-                                    e.options.get("model_order") or [])
+        km = self.kind_models(d)
+        chain = session.model_chain(km or node["allow"]["models"], d["model"], spent, hours, time.localtime(e.wall()).tm_hour,
+                                    km or e.options.get("model_order") or [])
         upto_entry = upto_entry if upto_entry is not None else self.last_round(name)
         moves = review_streak.changes(self.findings_seq(name, self.last_round(name), upto_entry))
         return review_streak.at(chain, max(moves, self.ledger_moves(d)), d["model"])
@@ -339,8 +344,9 @@ class Dispatch:
         window closes: `at` reads it as it stands, so the first attempt is unchanged when the ledger holds no move."""
         e = self.e
         spent, hours = e.options.get("spent_models") or [], e.options.get("model_hours") or {}
-        chain = session.model_chain(node["allow"]["models"], d["model"], spent, hours, time.localtime(e.wall()).tm_hour,
-                                    e.options.get("model_order") or [])
+        km = self.kind_models(d)
+        chain = session.model_chain(km or node["allow"]["models"], d["model"], spent, hours, time.localtime(e.wall()).tm_hour,
+                                    km or e.options.get("model_order") or [])
         return review_streak.at(chain, self.ledger_moves(d)) or d["model"]
 
     def repo_slug(self):

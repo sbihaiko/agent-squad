@@ -742,14 +742,37 @@
         "allow": {
           "type": "object",
           "required": [
-            "models",
             "efforts",
             "tools",
             "skills",
             "workspaces"
           ],
+          "anyOf": [
+            {
+              "required": [
+                "models"
+              ]
+            },
+            {
+              "required": [
+                "kinds"
+              ]
+            }
+          ],
           "additionalProperties": false,
           "properties": {
+            "kinds": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "coding",
+                  "review",
+                  "vision"
+                ]
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            },
             "models": {
               "type": "array",
               "items": {
