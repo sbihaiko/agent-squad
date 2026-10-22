@@ -218,6 +218,7 @@ rm -f "$ST/watch-seen.txt"; run_cycles 1
 cp "$d/models.json" "$S/"; : > "$ST/active-runs.txt"; rm -f "$ST/watch-seen.txt"
 # 13c) a configured 0 is a real bound, never the fallback: jq's `//` must not swallow it
 printf '{"stall_timeout_minutes": 0}\n' > "$S/models.json"
+echo "$T/co/runs/run-set" >> "$ST/active-runs.txt"   # the case above emptied the list
 rm -f "$ST/watch-seen.txt"; run_cycles 1
 /usr/bin/grep -q "STALL RUN run-set no record.jsonl progress for 0m" "$T/watch.out" && ok "13c a configured 0 stays 0, the 15 m fallback does not fire" || ko "13c zero bound: $(tail -3 "$T/watch.out")"
 

@@ -581,7 +581,7 @@ n=$(wc -l < "$T/rcalls" 2>/dev/null | tr -d ' ')
 printf '{"review_models":["claude:only"],"model_retry_budget":0,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
 rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/rcalls"
 out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>"$T/e21"); rc=$?
-n=$(wc -l < "$T/rcalls" 2>/dev/null | tr -d ' ')
-[ "$n" = 0 ] && ok "26c a configured budget of 0 stays 0, the fallback does not fire" || ko "26c zero budget: calls='$n' rc=$rc"
+n=$( [ -f "$T/rcalls" ] && wc -l < "$T/rcalls" | tr -d ' ' || echo 0 )   # a zero budget calls no model, so the file is never written
+[ "$n" = 0 ] && ! /usr/bin/grep -q 'integer expression expected' "$T/e21" && ok "26c a configured budget of 0 stays 0, the fallback does not fire" || ko "26c zero budget: calls='$n' rc=$rc"
 
 rm -rf "$T"; exit $fail
