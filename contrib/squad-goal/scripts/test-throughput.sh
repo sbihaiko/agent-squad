@@ -111,9 +111,10 @@ out=$(cd "$T/co" && PATH="$T/bin:$PATH" bash "$T/s/throughput.sh" 2>&1); rc=$?
 [ "$rc" = 0 ] && ok "a hand run with no address exits 0" || ko "a hand run exited $rc: $out"
 has "  $D0: 2" && ok "a hand run reads the checkout it stands in" || ko "a hand run lost the landed issues: $out"
 printf '%s\n' "$out" | /usr/bin/grep -q 'no SG_STATE: no verdict was read' && ok "a hand run says it read no watch.log" || ko "a hand run did not say what it could not read: $out"
-has "no SG_STATE: no gate time was read" && ok "a hand run says it read no gate history" || ko "a hand run did not say it read no gate history: $out"
+has "  no SG_STATE: no gate time was read" && ok "a hand run says it read no gate history" || ko "a hand run did not say it read no gate history: $out"
 
 # --- gate time: selected gates and whole-battery gates, two figures (#647) -----------------------
+out=$(run 2>&1)
 has "Gate time (gate-history, all lines)" && ok "the report has a gate time section" || ko "no gate time section: $out"
 has "  selected: 2 gates, 150 s total, 75.0 s mean" && ok "a selected gate counts as selected: two gates, 150 s" || ko "selected split is not 2 gates, 150 s: $out"
 has "  whole battery: 3 gates, 700 s total, 233.3 s mean" && ok "a gate with no selection counts as whole battery: three gates, 700 s" || ko "whole-battery split is not 3 gates, 700 s: $out"

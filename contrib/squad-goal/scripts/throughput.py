@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """The loop's throughput over a time window, read from local records only (#564).
 
-Three numbers, each read from a record on this machine:
+Four numbers, each read from a record on this machine:
   issues landed per day   the `Refs #N` lines of the commits on the base branch, grouped by commit date;
   mean runs per issue     the run folders whose request names the issue, each issue counted once per run;
-  child review verdicts   the `CHILD REVIEW ... VERDICT: <v>`, `CHILD REVIEW REQUEUE` and `CHILD FIX REQUEUE` lines of $SG_STATE/watch.log.
+  child review verdicts   the `CHILD REVIEW ... VERDICT: <v>`, `CHILD REVIEW REQUEUE` and `CHILD FIX REQUEUE` lines of $SG_STATE/watch.log;
+  gate time               each finished gate of $SG_STATE/gate-history, split: a selected gate, and a whole-battery gate (no selection, or `all: <reason>`).
 
 No GitHub call, no REST, no network: the commits come from the local clone and the runs from its runs/ folder.
 The report does not show the time from Todo to landed: no local record stamps the move of a card to Todo.
@@ -90,6 +91,30 @@ def child_reviews(state):
     return counts
 
 
+def gate_time(state):
+    """The run time of each gate of gate-history, split by selection: a selected gate's selection field starts with
+    `selected`; any other gate (an `all: <reason>` field, an empty field, or no field, as an older record has) ran the whole
+    battery. A missing or empty file counts nothing. All lines: the history stamps dates, but the report reads every line as
+    child_reviews does."""
+    if state is None: return None
+    groups = {"selected": [], "whole": []}
+    try: lines = (state / "gate-history").read_text(errors="replace").splitlines()
+    except OSError: lines = []
+    for line in lines:
+        f = line.split("\t")
+        if len(f) < 5: continue
+        try: finish, start = int(f[0]), int(f[4])
+        except ValueError: continue
+        groups["selected" if len(f) > 5 and f[5].startswith("selected") else "whole"].append(finish - start)
+    return groups
+
+
+def gate_line(label, durations):
+    total = sum(durations)
+    mean = total / len(durations) if durations else 0.0
+    return f"  {label}: {plural(len(durations), 'gate')}, {total} s total, {mean:.1f} s mean"
+
+
 def plural(n, word): return f"{n} {word}{'' if n == 1 else 's'}"
 
 
@@ -139,6 +164,13 @@ def main(argv):
     else:
         for v in VERDICTS: print(f"  {v}: {reviews[v]}")
         print(f"  REQUEUE: {reviews['REQUEUE']}")
+    print()
+    print("Gate time (gate-history, all lines)")
+    gates = gate_time(state)
+    if gates is None: print("  no SG_STATE: no gate time was read")
+    else:
+        print(gate_line("selected", gates["selected"]))
+        print(gate_line("whole battery", gates["whole"]))
     return 0
 
 

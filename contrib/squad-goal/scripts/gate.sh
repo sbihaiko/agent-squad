@@ -22,6 +22,10 @@
 # `gate.sh --status <kind> <pass|fail> <sha>` writes status for a gate whose sha is not the working directory's HEAD: a command
 # that calls it sets SG_GATE_STATUS=self, so the gate does not overwrite it with the HEAD it was started in. Each line is written
 # by a temp file and a mv, so no reader sees half of it. SG_STATE unset: /tmp/sg-state, never TMPDIR.
+# Each finished gate also appends one line to $SG_STATE/gate-history: `<finish epoch> TAB <kind> TAB <result> TAB <sha> TAB <start epoch>
+# TAB <selection>`, the selection empty when the gate ran no battery. The duration is finish minus start, and start is read inside the
+# lock, after the wait: it is the gate's run time, never its queue time. A gate that sets SG_GATE_STATUS=self writes no history line,
+# as it writes no status line. The file only grows: the throughput report reads it, and nothing rewrites it.
 here="$(cd "$(dirname "$0")" && pwd)"; st=${SG_STATE:-/tmp/sg-state}
 write_status() {  # <path> <line>
   printf '%s\n' "$2" > "$1.$$" && mv -f "$1.$$" "$1"
@@ -33,11 +37,26 @@ status() {  # <kind> <result> <sha> [<test selection>]
   write_status "$st/gate-status" "$line" || return
   [ "$1" != full ] || write_status "$st/gate-status-full" "$line"
 }
+append_line() {  # <path> <line>: one short write at the end of the file, never a rewrite
+  printf '%s\n' "$2" >> "$1"
+}
+gate_history() {  # <kind> <result> <sha> <start epoch> [<test selection>]
+  mkdir -p "$st" 2>/dev/null || return 0
+  printf -v line '%s\t%s\t%s\t%s\t%s\t%s' "$(date +%s)" "$1" "$2" "$3" "$4" "${5:-}"
+  append_line "$st/gate-history" "$line"
+}
 case "${1:-}" in
   --status) [ $# = 4 ] || { echo "usage: gate.sh --status <kind> <pass|fail> <sha>" >&2; exit 2; }; status "$2" "$3" "$4"; exit 0;;
   --run)    # inside the lock: run the command, then write the line. A command the holder stops at its deadline (TERM) is a fail.
     shift; export GATE_SELECT_FILE; GATE_SELECT_FILE=$(mktemp "${TMPDIR:-/tmp}/gate-select.XXXXXX" 2>/dev/null) || GATE_SELECT_FILE=
-    note() { [ "${SG_GATE_STATUS:-}" = self ] || status "${SG_GATE_KIND:-gate}" "$1" "$(git rev-parse HEAD 2>/dev/null)" "$(cat "$GATE_SELECT_FILE" 2>/dev/null)"; [ -z "$GATE_SELECT_FILE" ] || rm -f "$GATE_SELECT_FILE"; }
+    start=$(date +%s)
+    note() {
+      if [ "${SG_GATE_STATUS:-}" != self ]; then
+        sha=$(git rev-parse HEAD 2>/dev/null); sel=$(cat "$GATE_SELECT_FILE" 2>/dev/null)
+        status "${SG_GATE_KIND:-gate}" "$1" "$sha" "$sel"; gate_history "${SG_GATE_KIND:-gate}" "$1" "$sha" "$start" "$sel"
+      fi
+      [ -z "$GATE_SELECT_FILE" ] || rm -f "$GATE_SELECT_FILE"
+    }
     trap 'note fail; exit 143' TERM
     "$@"; rc=$?; if [ $rc = 0 ]; then note pass; else note fail; fi; exit $rc;;
 esac
