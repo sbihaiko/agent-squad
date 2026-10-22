@@ -143,12 +143,15 @@ def test_a_held_run_link_and_its_redirect_carry_their_repository():
     base = f"http://127.0.0.1:{srv.server_address[1]}"
 
     class NoFollow(urllib.request.HTTPRedirectHandler):
-        def redirect_request(self, *a, **k): return None
+        def redirect_request(self, *a, **k):
+            return None
 
     try:
         _, body = _get(base + "/alpha/api/runs")
-        try: urllib.request.build_opener(NoFollow).open(base + "/alpha/held/r1")
-        except urllib.error.HTTPError as e: loc = e.headers["Location"]
+        try:
+            urllib.request.build_opener(NoFollow).open(base + "/alpha/held/r1")
+        except urllib.error.HTTPError as e:
+            loc = e.headers["Location"]
     finally:
         srv.shutdown()
     assert json.loads(body)[0]["url"] == "/alpha/held/r1", body
