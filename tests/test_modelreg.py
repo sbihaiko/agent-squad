@@ -542,3 +542,20 @@ def test_spent_names_the_spellings_whose_subscription_is_spent(tmp_path):
     or a marker closes, so a child is not given a spent subscription."""
     _quota(tmp_path, {"grok": {"windows": [{"label": "weekly", "pct": 100, "resets": 9000}], "asof": 1000}})
     assert mr.spent(["grok-4.5", "claude-opus-5-5", "nobody-knows"], shared=tmp_path, now=1000) == ["grok-4.5"]
+
+
+def test_write_chains_with_no_doc_keeps_the_files_other_keys(tmp_path):
+    """A caller that writes only the chains changes only the chains.
+
+    `doc` defaults to `{}`, so a call that omits it wrote a file of two keys and dropped every constant beside the
+    chains -- the review timeout, the review line cap and the stall budget. A live Save through that path left every
+    review BLOCKED with `[: null: integer expression expected`, and nothing refused (#1836)."""
+    path = tmp_path / "models.json"
+    path.write_text(json.dumps({"schema_version": 2,
+                                "chains": {"coding": [{"id": "grok-4.7"}], "review": [], "vision": [], "router": []},
+                                "review_timeout_seconds": 360, "review_max_lines": 60}))
+    mr.write_chains(path, {"coding": [{"id": "grok-4.7"}], "review": [], "vision": [], "router": []})
+    out = json.loads(path.read_text())
+    assert out["review_timeout_seconds"] == 360, out
+    assert out["review_max_lines"] == 60, out
+    assert [e["id"] for e in out["chains"]["coding"]] == ["grok-4.7"], out

@@ -903,12 +903,23 @@ def write_chains(path, chains, doc=None):
     a caller changes the chains and nothing else. The entry shape is the one `migrate` writes. The write is atomic.
     Return the document written.
 
+    A caller that passes no `doc` keeps the file's own keys: it reads the file on disk. No `doc` never means "a file of
+    two keys", because that wrote a live models.json of `schema_version` and `chains` alone and took the review timeout,
+    the review line cap and the stall budget with it (#1836). A file that is absent or unreadable is the empty document
+    it always was.
+
     A `doc` still in the v1 shape is migrated whole, never partly: a keyed setting for a model that survives in no
     chain goes under `_orphans` as `migrate` keeps it, and the input file is saved as `<name>.v1.bak` first, so a
     caller's Save can never drop a timeout or a tool rule in silence."""
     src = Path(path)
     out_chains = {_canonical(name): list(entries) for name, entries in chains.items()}
-    doc = doc if isinstance(doc, dict) else {}
+    if not isinstance(doc, dict):
+        try:
+            doc = json.loads(src.read_text())
+        except (OSError, ValueError):
+            doc = {}
+    if not isinstance(doc, dict):
+        doc = {}
     kept = {key: value for key, value in doc.items()
             if key not in V1_CHAINS.values() and key not in MIGRATED_KEYS and key not in ("schema_version", "chains")}
     out = {"schema_version": 2, "chains": out_chains, **kept}
