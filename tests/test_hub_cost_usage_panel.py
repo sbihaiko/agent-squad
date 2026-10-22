@@ -404,3 +404,12 @@ def test_a_quota_probe_with_no_windows_still_renders_the_subscriptions_panel():
     assert "SuperGrok" in out["subs"] and "unavailable" in out["subs"], out["subs"][:300]
     assert "Claude Max 20x" in out["subs"] and "Claude Team" not in out["subs"], out["subs"][:300]   # the name comes from the row (#511)
     assert "77%" in out["subs"], out["subs"][:300]
+
+
+def test_the_pie_merges_the_spellings_of_one_model_name():
+    """One model answers under several spellings (deepseek-flash, deepseek-flash[1m], claude-deepseek-flash), so keying
+    the slices on the raw id drew the same label three times. The rows merge by the name, and the tooltip keeps every
+    spelling that went into the slice."""
+    body = _fn(SRC, "pie")
+    assert "byName" in body and "byName.set(k,r)" in body, body
+    assert "ids.join" in body and "ids.includes(m.model)" in body, body
