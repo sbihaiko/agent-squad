@@ -132,6 +132,7 @@ The autonomy fragment (`prompts/_autonomy.md`) and the plugin commands read this
 - Jev (TypeSafe) spend is granted (owner). Use the keys in the gitignored `.env` (`JEV_API_KEY`, `TYPESAFE_API_KEY`) and send any repo text.
   Never print, log, or commit a key value. Every call keeps a deadline, a timeout means no suggestion, and a Jev answer stays advisory.
   No threshold enters a gate before a labeled set supports it (ADR-0012, ADR-0018).
+- A status comment on an issue of `sbihaiko/agent-squad` is not external publication (owner grant). Guard: `tests/test_autonomy_fragment.py`.
 - A consequential live write without its own grant ([ADR-0024](docs/adr/0024-live-write-needs-a-grant.md)). Guard: none yet; a draft.
 
 ## Agent skills
