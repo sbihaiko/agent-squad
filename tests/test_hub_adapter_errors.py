@@ -77,12 +77,8 @@ def test_the_route_is_a_read_and_never_a_write():
     assert "/api/adapter-errors" not in post
 
 
-def test_the_page_carries_the_panel_and_reads_the_route():
-    assert "<details id=ae class=sp>" in PAGE
-    assert 'fetch("/api/adapter-errors")' in SRC
-
-
-def test_the_panel_renders_the_route_the_cause_and_the_count():
-    i = SRC.index("async function pollAdapt")
-    body = SRC[i: SRC.index("\n", SRC.index("pollAdapt();setInterval", i))]
-    assert "r.model" in body and "r.backend" in body and "r.cause" in body and "r.count" in body
+def test_the_page_carries_no_adapter_errors_panel_and_never_reads_the_route():
+    """The owner hid the panel from the accordion: the page holds no adapter-errors section and polls no route. The
+    route stays a read for the tools that ask it, and the page makes no call of its own."""
+    assert "<details id=ae class=sp>" not in PAGE
+    assert 'fetch("/api/adapter-errors")' not in SRC
