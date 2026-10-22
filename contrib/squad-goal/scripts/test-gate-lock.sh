@@ -38,8 +38,8 @@ mkdir -p "$T/proj/docs/squad"; printf 'caps:\n  gates: 2\n' > "$T/proj/docs/squa
 out=$(cd "$T/proj" && SG_GATE_WORKERS=6 bash "$T/s/gate.sh" sh -c "echo \$SQUAD_GATE_WORKERS" 2>&1)
 case "$out" in *"2") ok "a project that lowers caps.gates: the gate takes min(workers, ceiling) and never waits";; *) ko "min(workers, ceiling): '$out'";; esac
 # the pytest of the battery runs with the count the gate took
-. "$d/base-battery.sh"; b=$(SQUAD_GATE_WORKERS=2 SG_GATE_WORKERS=6 sg_base_battery py)
-case "$b" in *'-n ${SQUAD_GATE_WORKERS:-6}'*) ok "the battery's pytest reads the count the gate took, 6 when none";; *) ko "battery: '$b'";; esac
+. "$d/base-battery.sh"; b=$(SQUAD_GATE_WORKERS=2 SG_GATE_WORKERS=6 sg_base_battery py origin/dev)
+case "$b" in *'-n "${SQUAD_GATE_WORKERS:-$workers}"'*"sg_battery_run py origin/dev 6 yes"*) ok "the battery's pytest reads the count the gate took, 6 when none";; *) ko "battery: '$b'";; esac
 # (#734) the slots that are free, not six or nothing: 8 of 12 held, a gate that wants 6 takes the 4 free and runs with 4
 capsctl take gates other --count 8 --pid "$live" >/dev/null
 out=$(SG_GATE_WORKERS=6 bash "$T/s/gate.sh" sh -c 'echo $SQUAD_GATE_WORKERS' 2>&1)

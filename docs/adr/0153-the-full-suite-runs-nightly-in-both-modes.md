@@ -6,7 +6,7 @@ Accepted.
 
 ## Context
 
-Every gate the loop runs is bounded by time. The fast battery that a work-branch tip and a wave entry run deselects `heavy` and runs one mode, so the calls it skips and the two-mode difference go unchecked until the owner promotes. The promotion proof runs the full suite in both modes, but only when the owner starts it, and it holds the landing lock while it runs, so no wave lands meanwhile ([ADR-0145](0145-a-work-branch-lands-in-dev-by-fast-forward.md) rule 3).
+Every gate the loop runs is bounded by time. The fast battery that a work-branch tip and a wave entry run deselects `heavy`, runs one mode and runs only the test files its diff reaches, so the calls it skips, the two-mode difference and the files it does not reach go unchecked until the owner promotes; its result line says which files it ran, or that it ran all. The promotion proof runs the full suite in both modes, but only when the owner starts it, and it holds the landing lock while it runs, so no wave lands meanwhile ([ADR-0145](0145-a-work-branch-lands-in-dev-by-fast-forward.md) rule 3).
 
 A defect that only a heavy call or a serial run shows can therefore sit in the landing branch for days, and the reader of the hub has no reading of it at all.
 

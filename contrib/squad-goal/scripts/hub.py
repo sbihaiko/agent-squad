@@ -1053,11 +1053,14 @@ def _last_landing():
     return best
 
 def _gate_status():
-    """The one line the gate wrapper leaves in $SG_STATE/gate-status, `<epoch> TAB <kind> TAB <pass|fail> TAB <sha>`: the latest
-    gate, its result and the sha it ran at. None when the file is absent or is not that line."""
+    """The one line the gate wrapper leaves in $SG_STATE/gate-status, `<epoch> TAB <kind> TAB <pass|fail> TAB <sha>`, and for a
+    gate that ran the test battery a fifth field, its selection (`selected N files` or `all: <reason>`): the latest gate, its
+    result, the sha it ran at and that selection. None when the file is absent or is not that line."""
     f = _read(STATE / "gate-status").rstrip("\n").split("\t")
-    if len(f) != 4 or not f[0].isdigit() or not all(f[1:]): return None
-    return {"kind": f[1], "result": f[2], "sha": f[3], "ts": float(f[0])}
+    if len(f) not in (4, 5) or not f[0].isdigit() or not all(f[1:4]) or (len(f) == 5 and not f[4]): return None
+    line = {"kind": f[1], "result": f[2], "sha": f[3], "ts": float(f[0])}
+    if len(f) == 5: line["selection"] = f[4]
+    return line
 
 def _nightly_status():
     """The one result line the nightly full suite leaves in $SG_STATE/nightly-result, `<epoch> TAB <pass|fail> TAB <sha>

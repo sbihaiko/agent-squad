@@ -4,7 +4,8 @@
 # waits for the first and then runs; it is never dropped, so the wait is long (SERIAL_WAIT_SECONDS, default 86400) and says so on one
 # line naming the holder. A gate holder that died, or that outlived its run, loses the lock to the next gate (serial.sh).
 # SERIAL_HOLD_SECONDS (default 7200) is the longest a gate may hold the lock. The exit code of the command is passed through.
-# The hub reads the latest result from $SG_STATE/gate-status: `<epoch> TAB <kind> TAB <pass|fail> TAB <sha>`.
+# The hub reads the latest result from $SG_STATE/gate-status: `<epoch> TAB <kind> TAB <pass|fail> TAB <sha>`, and a fifth field
+# when the gate ran the test battery: its selection, `selected N files` or `all: <reason>` (GATE_SELECT_FILE carries it out).
 # SG_GATE_KIND is fast for a tip or wave entry, full for a promotion to stg, and gate by default. A later gate replaces this
 # hub line. A full result also writes $SG_STATE/gate-status-full, so a later fast result cannot replace promotion proof.
 # The sha is the HEAD the gate ran at, read from the working directory. The lock lives in $SG_STATE/locks/gate. With SG_STATE
@@ -25,16 +26,18 @@ here="$(cd "$(dirname "$0")" && pwd)"; st=${SG_STATE:-/tmp/sg-state}
 write_status() {  # <path> <line>
   printf '%s\n' "$2" > "$1.$$" && mv -f "$1.$$" "$1"
 }
-status() {  # <kind> <result> <sha>
+status() {  # <kind> <result> <sha> [<test selection>]
   mkdir -p "$st" 2>/dev/null || return 0
   printf -v line '%s\t%s\t%s\t%s' "$(date +%s)" "$1" "$2" "$3"
+  [ -z "${4:-}" ] || line="$line"$'\t'"$4"
   write_status "$st/gate-status" "$line" || return
   [ "$1" != full ] || write_status "$st/gate-status-full" "$line"
 }
 case "${1:-}" in
   --status) [ $# = 4 ] || { echo "usage: gate.sh --status <kind> <pass|fail> <sha>" >&2; exit 2; }; status "$2" "$3" "$4"; exit 0;;
   --run)    # inside the lock: run the command, then write the line. A command the holder stops at its deadline (TERM) is a fail.
-    shift; note() { [ "${SG_GATE_STATUS:-}" = self ] || status "${SG_GATE_KIND:-gate}" "$1" "$(git rev-parse HEAD 2>/dev/null)"; }
+    shift; export GATE_SELECT_FILE; GATE_SELECT_FILE=$(mktemp "${TMPDIR:-/tmp}/gate-select.XXXXXX" 2>/dev/null) || GATE_SELECT_FILE=
+    note() { [ "${SG_GATE_STATUS:-}" = self ] || status "${SG_GATE_KIND:-gate}" "$1" "$(git rev-parse HEAD 2>/dev/null)" "$(cat "$GATE_SELECT_FILE" 2>/dev/null)"; [ -z "$GATE_SELECT_FILE" ] || rm -f "$GATE_SELECT_FILE"; }
     trap 'note fail; exit 143' TERM
     "$@"; rc=$?; if [ $rc = 0 ]; then note pass; else note fail; fi; exit $rc;;
 esac
