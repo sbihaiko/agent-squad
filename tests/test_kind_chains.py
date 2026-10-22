@@ -116,3 +116,11 @@ def test_a_legacy_envelope_with_models_still_takes_a_model():
     d["allow"] = {k: v for k, v in d["allow"].items() if k not in ("kinds", "kind_models")} | {"models": ["claude-sonnet-5-5"]}
     req, errs = validate_request(d, {"prompt": "go", "skill": "tdd"}, 1, None, 10.0)
     assert errs == [] and "kind" not in req
+
+
+def test_the_router_effort_comes_from_the_entry_it_answers_on(tmp_path):
+    """SPEC 750: the panel draws one effort per row for every chain, so the router answers on its entry's effort,
+    never on the node's."""
+    chains = {**CHAINS, "router": [{"id": "claude-opus-5-5", "effort": "low"}, {"id": "claude-sonnet-5-5"}]}
+    got = launch.kind_efforts(models_file(tmp_path, chains))
+    assert got["router"] == {"claude-opus-5-5": "low"} and got["coding"] == {}

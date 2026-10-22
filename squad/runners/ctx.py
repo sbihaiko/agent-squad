@@ -77,6 +77,12 @@ class RunCtx:
         """The router agent's models, in chain order (SPEC 750): empty for a graph whose envelope still lists models."""
         return list(self._e.kind_chains.get("router") or [])
 
+    def router_effort(self):
+        """The effort the router chain names for the entry it answers on (SPEC 750), or None: the panel draws one
+        effort per row, so the router's effort is the chain's, never the node's."""
+        chain = self._e.kind_chains.get("router") or []
+        return (self._e.kind_efforts.get("router") or {}).get(chain[0]) if chain else None
+
     def limits(self, name):
         """The limits a router may ask within: the dispatch's allow lists and budget, as the envelope checks them."""
         d = self.dispatch_node(self._e.nodes[self._e.entry_of[name]])

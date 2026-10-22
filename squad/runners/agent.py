@@ -93,7 +93,7 @@ class AgentRunner:
         hour = ctx.local_hour()
         if rchain:
             models = rchain
-            eff = {**eff, "model": rchain[0]}
+            eff = {**eff, "model": rchain[0], **({"effort": e} if (e := ctx.router_effort()) else {})}
         chain = session.model_chain(models, eff["model"], ctx.spent_models, ctx.model_hours, hour, rchain or ctx.model_order)
         for m, why in session.hours_skipped(models, eff["model"], ctx.spent_models, ctx.model_hours, hour):
             ctx.record.append("model_skipped", node=node["name"], entry=entry, model=m, reason=why)

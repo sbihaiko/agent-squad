@@ -41,7 +41,7 @@ from squad.runners.types import Scope as Scope
 
 class Engine:
     def __init__(self, graph, adapter, run_dir, *, options=None, target=None, time_scale=1.0, clock=time.monotonic,
-                 wall=time.time, run_id=None, invoker="cli", graph_path=None, defaults=None, shadow=None, vendor=None, project=None, autonomy=None, ceiling=None, state_binding="board", registry=None, router_overlay=None, kind_chains=None):
+                 wall=time.time, run_id=None, invoker="cli", graph_path=None, defaults=None, shadow=None, vendor=None, project=None, autonomy=None, ceiling=None, state_binding="board", registry=None, router_overlay=None, kind_chains=None, kind_efforts=None):
         self.shadow = shadow     # advisory observer: its output is recorded as `diagnostic` and read by nothing
         self.graph_path = graph_path
         self.g, self.adapter, self.run_dir = graph, adapter, Path(run_dir)
@@ -80,6 +80,7 @@ class Engine:
         self.registry = registry       # the model registry path; None is the committed registry (SPEC 505)
         self.router_overlay = dict(router_overlay or {})   # {dispatch node: models kept}: recorded at run_start, applied at dispatch
         self.kind_chains = {k: list(v) for k, v in (kind_chains or {}).items()}   # {kind: models in chain order} (SPEC 750): recorded at run_start, read at dispatch
+        self.kind_efforts = {k: dict(v) for k, v in (kind_efforts or {}).items()}  # {kind: {model: effort}}: the panel's per-entry effort
         self._reg = None               # the loaded registry, read once
         self.models_resolve = False    # run_start asks the SDK adapter to resolve a spelling; an old record stays opaque
         if hasattr(adapter, "bind"):
@@ -291,7 +292,7 @@ class Engine:
         if resolve:
             models["entries_sha256"] = modelreg.entries_sha256(self._model_names(), self._registry())
         self.record.append("run_start", run_id=self.run_id, graph_name=self.g.doc["name"], graph_hash=self.g.hash,
-                           models=models, **({"router_overlay": self.router_overlay} if self.router_overlay else {}), **({"kind_chains": self.kind_chains} if self.kind_chains else {}),
+                           models=models, **({"router_overlay": self.router_overlay} if self.router_overlay else {}), **({"kind_chains": self.kind_chains} if self.kind_chains else {}), **({"kind_efforts": self.kind_efforts} if self.kind_efforts else {}),
                            engine_options=self.options, root=self.g.root, plan=plan_order(self.g.doc), preflight=self.preflight, target=str(self.target), **({"target_branch": b} if (b := self._target_branch()) else {}), **self._target_owned(),
                            **({"graph_path": str(self.graph_path)} if self.graph_path else {}), **({"defaults": self.defaults} if self.defaults else {}),
                            **({"project_settings": self.project["record"], "project_settings_method": P.METHOD} if self.project.get("record") else {}), **({"autonomy": self.autonomy} if self.autonomy else {}),
