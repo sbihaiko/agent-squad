@@ -545,6 +545,32 @@ out=$(GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null)
 unset CLAUDE_ARGS
 rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"*
 
+# 26) #749: a review model that times out three times in a row is omitted from the next chains for its window, and the
+# omission is named once in the pass (stderr), in cycle.log and in the queue. One timeout omits nothing. An answered review
+# clears the streak. The window ends by time: the model is tried again with no state edit.
+printf '#!/bin/bash\ncat > /dev/null; echo "$*" >> "$CLAUDE_ARGS"\ncase "$*" in *"--model slow"*) [ "$(cat "$T/slow.mode")" = answer ] && { echo "VERDICT: APPROVE"; exit 0; }; sleep 30;; *) echo "VERDICT: APPROVE";; esac\n' > "$T/bin/claude"; chmod +x "$T/bin/claude"
+printf '{"review_models":["claude:slow","claude:fast"],"review_order":"config","model_retry_budget":1,"review_timeout_seconds":2,"review_timeout_bound":3,"review_timeout_omit_seconds":4,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+export CLAUDE_ARGS="$T/claude-args"; : > "$CLAUDE_ARGS"; echo timeout > "$T/slow.mode"
+rm -f "$T/st/review-timeouts.json" "$T/st/cycle.log" "$T/st/cq/"*
+rv() { rm -f "$T/st/review-fix_1-x".*; GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 2>"$T/rv.err"; }
+slow() { /usr/bin/grep -c -- '--model slow' "$CLAUDE_ARGS"; }
+rv >/dev/null; rv >/dev/null
+[ "$(slow)" = 2 ] && ok "26 a single timeout omits nothing: the next review tries the model again" || ko "26 one timeout omitted the model: slow calls $(slow) $(cat "$T/rv.err")"
+rv >/dev/null
+[ "$(slow)" = 3 ] && ok "26 the third timeout in a row is the last try of the model" || ko "26 third timeout: slow calls $(slow)"
+rv >/dev/null
+[ "$(slow)" = 3 ] && [ "$(/usr/bin/grep -c MODEL_OMIT "$T/rv.err")" = 1 ] && /usr/bin/grep -q 'MODEL_OMIT review claude:slow' "$T/rv.err" \
+  && [ "$(/usr/bin/grep -c 'MODEL_OMIT review claude:slow' "$T/st/cycle.log")" = 2 ] && /usr/bin/grep -q 'MODEL_OMIT' "$T/st/cq/"* \
+  && ok "26 an omitted model is not tried, and the pass, cycle.log and the queue each name the omission" \
+  || ko "26 omission: slow calls $(slow) pass=[$(cat "$T/rv.err")] cycle=[$(cat "$T/st/cycle.log" 2>/dev/null)] cq=$(ls "$T/st/cq" | tr '\n' ' ')"
+sleep 5; rv >/dev/null
+[ "$(slow)" = 4 ] && ok "26 the window ends by time: the model is tried again" || ko "26 expiry: slow calls $(slow) $(cat "$T/rv.err")"
+echo answer > "$T/slow.mode"; rv >/dev/null
+echo timeout > "$T/slow.mode"; rv >/dev/null; rv >/dev/null
+rv >/dev/null
+[ "$(slow)" = 8 ] && ok "26 an answered review clears the streak: two timeouts after it do not omit the model" || ko "26 answer reset: slow calls $(slow) $(cat "$T/rv.err")"
+rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/st/cycle.log" "$T/st/review-timeouts.json" "$CLAUDE_ARGS"; unset CLAUDE_ARGS
+
 # The committed labeled sample measures historical CHANGES verdicts. The report is a read-only
 # calibration instrument: it names the total, the Debt/nit-only count, and the rate.
 calibration=$(python3 "$(dirname "$src")/review-calibration.py" "$(dirname "$src")/fixtures/review-calibration.json" 2>&1); rc=$?
