@@ -123,11 +123,12 @@ def test_the_panel_marks_a_blocked_row_and_never_stores_the_mark():
     assert '"blocked"' in src.split("READONLY =")[1].split("\n")[0]
 
 
-def test_the_shipped_coding_chain_fits_the_shipped_envelope():
-    chain = [e.raw for e in _modelreg().chain(json.loads((SCRIPTS / "models.json").read_text()), "coding").entries]
+def test_the_shipped_envelope_names_no_model_so_no_coding_entry_is_blocked():
+    """SPEC 750: the owner's chains are the one list. The envelope names kinds, so no coding entry is refused for being
+    outside a model list, and the hub's auto-append and its "blocked by envelope" badge have nothing to hold."""
     graph = json.loads((ROOT / "docs/design/router.graph.json").read_text())
-    env = next(n["allow"]["models"] for n in graph["nodes"] if n.get("kind") == "dispatch")
-    assert router_envelope.envelope_blocked(chain, env) == []
+    allow = next(n["allow"] for n in graph["nodes"] if n.get("kind") == "dispatch")
+    assert "models" not in allow and allow["kinds"] == ["coding", "review", "vision"]
 
 
 def _shared(tmp_path, **markers):

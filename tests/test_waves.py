@@ -9,7 +9,7 @@ from squad import git
 from squad.record import read
 from tests.gitrepo import sh, sibling_repo
 from tests.helpers import node
-from tests.test_dispatch import CHILD, child_outs, ev, make, req, routed
+from tests.test_dispatch import CHILD, MODEL, child_outs, ev, make, req, routed
 
 
 def writer(name, text="x\n", cmds=("true",), **out):
@@ -239,8 +239,8 @@ async def test_a_dispatch_child_outcome_carries_its_model_effort_and_tokens_when
     eng = make(tmp_path, {"router": routed(req(), req("diagnosing-bugs")), "route.router.1": known, "route.router.2": unknown}, target=sibling_repo(tmp_path))
     await eng.run()
     one, two = child_outs(tmp_path)["route.router.1"], child_outs(tmp_path)["route.router.2"]
-    assert (one["model"], one["effort"], one["tokens_in"], one["tokens_out"]) == (req()["model"], "medium", 1200, 340)
-    assert (two["model"], two["effort"]) == (req()["model"], "medium") and "tokens_in" not in two      # unknown stays absent, never zero
+    assert (one["model"], one["effort"], one["tokens_in"], one["tokens_out"]) == (MODEL, "medium", 1200, 340)
+    assert (two["model"], two["effort"]) == (MODEL, "medium") and "tokens_in" not in two      # unknown stays absent, never zero
 
 
 @pytest.mark.anyio

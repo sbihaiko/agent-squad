@@ -102,13 +102,13 @@ def test_the_router_chain_is_the_envelope_in_order(tmp_path):
     assert ns["router_get"]() == ["a-1", "b-2"]
 
 
-def test_the_shipped_envelope_names_no_anthropic_model():
-    """The rule behind the measured defect: the envelope is what the router is held inside, so it names no model the
-    owner withheld. A chain entry alone is not enough: the router reads this list."""
-    got = _envelope_ns(str(ROOT))["envelope_of"]()
-    assert got["models"], "the shipped graph has no dispatch envelope"
-    for m in got["models"]:
-        assert not any(m == a or m.endswith("-" + a) for a in ANTHROPIC), f"{m} is an Anthropic id"
+def test_the_shipped_envelope_holds_kinds_and_no_model_list():
+    """SPEC 750: the owner edits the four chains and nothing else. The envelope names the kinds a child may be, so a
+    model the owner withheld is withheld in the one chain he edits, never in a second list that drifts."""
+    graph = json.loads((ROOT / "docs" / "design" / "router.graph.json").read_text())
+    got = next(n["allow"] for n in graph["nodes"] if n.get("kind") == "dispatch")
+    assert "models" not in got, "the shipped envelope still names a model list"
+    assert got["kinds"] == ["coding", "review", "vision"]
     assert "high" not in got["efforts"], "the engine default is medium; a child is never asked for high"
 
 

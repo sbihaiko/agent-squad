@@ -9,25 +9,31 @@ ROOT = Path(__file__).resolve().parent.parent
 MODELS = ROOT / "contrib" / "squad-goal" / "scripts" / "models.json"
 
 
-def test_squad_goal_coding_chain_names_models_the_dispatch_envelope_can_run():
-    """The request builder names coding_models[0]; the dispatch envelope must honor that id."""
-    chain = [e.raw for e in modelreg.chain(json.loads(MODELS.read_text()), "coding").entries]
-    graph = json.loads(DYNAMIC_SEED.read_text())
-    allowed = {m for n in graph["nodes"] if n["kind"] == "dispatch" for m in n["allow"]["models"]}
-    missing = [m for m in chain if m not in allowed]
-    assert missing == [], f"coding_models outside the dynamic dispatch model envelope: {missing}"
-
-
-def test_a_request_that_names_a_coding_model_fits_the_shipped_envelope():
-    """The agreement read through the rule's owner, `squad.envelope.validate_request`: every model the coding chain
-    names is one a spawn request may carry, so the request the chain builds fits the envelope it runs under. A model the
-    envelope refuses is a dispatch that cannot start (ADR-0113), and a membership test of its own is a second copy of
-    the rule the validator already holds."""
+def _seed():
+    """The seed the loop runs, with the chains a launcher reads from models.json (SPEC 750): the envelope names kinds
+    and the engine synthesizes each kind's models before it checks a request."""
     doc = json.loads(DYNAMIC_SEED.read_text())
+    models = json.loads(MODELS.read_text())
     disp = next(n for n in doc["nodes"] if n["kind"] == "dispatch")
-    router = next(n for n in doc["nodes"] if n["name"] == disp["entry"])
-    for model in [e.raw for e in modelreg.chain(json.loads(MODELS.read_text()), "coding").entries]:
-        raw = {"prompt": "Move the counter into its own module.", "skill": "tdd", "model": model,
-               "tools": list(router["tools"])}
-        _, errs = validate_request(disp, raw, 1, router["tools"], disp["budget"]["spend"]["max"])
-        assert errs == [], f"the coding model {model} is refused by the shipped envelope: {errs}"
+    disp["allow"]["kind_models"] = {k: [e.raw for e in modelreg.chain(models, k).entries]
+                                    for k in disp["allow"]["kinds"]}
+    return doc, disp, next(n for n in doc["nodes"] if n["name"] == disp["entry"])
+
+
+def test_squad_goal_coding_chain_names_the_chain_a_coding_child_answers_on():
+    """The request builder names coding_models[0]; a coding child takes its chain from that same read."""
+    chain = [e.raw for e in modelreg.chain(json.loads(MODELS.read_text()), "coding").entries]
+    _, disp, _ = _seed()
+    assert disp["allow"]["kind_models"]["coding"] == chain
+
+
+def test_a_request_that_names_a_coding_kind_fits_the_shipped_envelope():
+    """The agreement read through the rule's owner, `squad.envelope.validate_request`: a request that names a kind is
+    accepted, and the model it resolves is the first entry of that kind's chain. A request the envelope refuses is a
+    dispatch that cannot start (ADR-0113)."""
+    _, disp, router = _seed()
+    raw = {"prompt": "Move the counter into its own module.", "skill": "tdd", "kind": "coding",
+           "tools": list(router["tools"])}
+    req, errs = validate_request(disp, raw, 1, router["tools"], disp["budget"]["spend"]["max"])
+    assert errs == [], f"a coding request is refused by the shipped envelope: {errs}"
+    assert req["model"] == disp["allow"]["kind_models"]["coding"][0]

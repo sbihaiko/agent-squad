@@ -86,11 +86,17 @@ def _graph_path(workflow):   # mirrors squad/workflows.py resolve: no id, `defau
         return next((p for p in (folder / "default.graph.json", folder / "dynamic.graph.json") if p.is_file()), sq / "docs" / "design" / "router.graph.json")
     mine = folder / f"{workflow}.graph.json"
     return mine if mine.is_file() else sq / "docs" / "workflows" / f"{workflow}.graph.json"
+def _dispatch_models(n):   # every model a dispatch node may hand a child, in the order it reads them
+    allow = n.get("allow") or {}
+    kinds = allow.get("kinds")
+    if kinds:   # SPEC 750: the envelope names kinds, and each kind's models are its chain in models.json
+        return [e.raw for k in kinds for e in _chain(f"{k}_models")]
+    return list(allow.get("models") or [])
 def _run_models(doc):   # [(node, model as the graph names it, first: whether it is the one the node runs first)]: an agent's own model; a dispatch's child default and fallbacks
     for n in doc.get("nodes", []):
         if n.get("kind") == "agent" and n.get("model"): yield n["name"], n["model"], True
         if n.get("kind") == "dispatch":
-            for i, m in enumerate((n.get("allow") or {}).get("models") or []): yield n["name"], m, i == 0
+            for i, m in enumerate(_dispatch_models(n)): yield n["name"], m, i == 0
 # A shared marker (`codex-limited` for `gpt-`, `agy-limited` for `gemini-`) names a subscription that is spent until its epoch. The
 # engine's chain waits for that provider's refusal before it moves on, so the ids the graph runs on a spent provider go to the run
 # as `--spent-models` (ADR-0106): the chain leaves them out. A marker with no readable epoch ahead of now closes nothing.
@@ -112,7 +118,7 @@ if off_ids:
     # A dispatch whose first model is only outside its hours window, with an open model after it, starts: the request names
     # the first open coding model (mkreq.sh) and the router takes it (#433). Refused, no run started all night (#522).
     open_in = {n["name"] for n in gdoc.get("nodes", []) if n.get("kind") == "dispatch"
-               and any(ALIASES.get(m, m) not in off_ids for m in (n.get("allow") or {}).get("models") or [])}
+               and any(ALIASES.get(m, m) not in off_ids for m in _dispatch_models(n))}
     hits = [h[:4] + (False,) if h[4] and h[0] in open_in and h[3].endswith("hours window") else h for h in hits]
     said = lambda h: f"node {h[0]!r} runs {h[1]}{'' if h[1] == h[2] else f' -> {h[2]}'}, which the models panel switched off, or whose hours window excludes now, in models.json ({h[3]})"
     for h in hits:

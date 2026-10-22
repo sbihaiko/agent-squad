@@ -64,9 +64,12 @@ def normalize_request(dispatch, raw, vendor=skills.VENDOR, default_effort=None):
     # An omitted effort is the engine's default, never the allow list's first entry: the list is an order, and its first
     # entry is the weakest level as often as it is the strongest. A default the envelope does not allow narrows nothing.
     eff = raw.get("effort") or (default_effort if default_effort in a["efforts"] else None) or a["efforts"][0]
+    # An envelope of kinds takes the model from the chain of the request's kind; a legacy one from its own list. Both
+    # fall back to an empty id, so the rule that names the missing model is the one the run reads.
+    model = (a["kind_models"].get(kind) or [""])[0] if "kind_models" in a else raw.get("model", (a.get("models") or [""])[0])
     req = {
         "prompt": raw.get("prompt", ""), "skill": {"name": skill["name"], "version": skill.get("version", "")},
-        "model": raw.get("model", a["models"][0]) if "kind_models" not in a else (a["kind_models"].get(kind) or [""])[0], "effort": eff,
+        "model": model, "effort": eff,
         "tools": list(raw.get("tools", a["tools"])), "stalls": raw.get("stalls", b["stalls"]["max"]),
         "spend": raw.get("spend", b["spend"]["max"]), "deadline": raw.get("deadline", dispatch["deadline"]),
         "workspace": raw.get("workspace", a["workspaces"][0]), "inputs": list(raw.get("inputs", [])),
@@ -87,7 +90,7 @@ def limit_errors(req, disp, depth, parent_tools, parent_spend_left, parent_time_
         e.append(f"kind_outside_allow:{req['kind']}")
     elif "kind_models" in a and not req["model"]:
         e.append(f"kind_has_no_model:{req['kind']}")
-    elif "kind_models" not in a and req["model"] not in a["models"]:
+    elif "kind_models" not in a and req["model"] not in (a.get("models") or []):
         e.append(f"model_outside_allow:{req['model']}")
     elif modelreg.no_tools_route(req["model"]):
         e.append(f"model_takes_no_tools:{req['model']}")

@@ -19,7 +19,7 @@ from squad.adapter import ScriptedAdapter
 from squad.engine import Engine
 from squad.graph import from_doc
 from tests.gitrepo import sibling_repo
-from tests.helpers import router
+from tests.helpers import KIND_CHAINS, router
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 LAUNCH = ROOT / "contrib/squad-goal/scripts/launch.py"
@@ -36,7 +36,8 @@ TERRA = "claude-gpt-5.6-terra"
 NOW = datetime(2026, 10, 18, 5, 57, tzinfo=UTC).timestamp()
 RESET = datetime(2026, 10, 18, 6, 49, tzinfo=UTC).timestamp()
 
-REQUEST = {"prompt": "Move the counter into its own module.", "skill": "tdd", "model": TERRA, "effort": "medium",
+CHAINS = {**KIND_CHAINS, "coding": [TERRA, *KIND_CHAINS["coding"]]}   # this run's child answers on terra first
+REQUEST = {"prompt": "Move the counter into its own module.", "skill": "tdd", "kind": "coding", "effort": "medium",
            "tools": ["Read", "Edit"], "stalls": 4, "spend": 1.0, "deadline": 100, "workspace": "worktrees/child"}
 SPAWNS = {"output": {"spawns": [REQUEST]}, "spend": 0.1}
 CHILD = {"output": {"diff": {"files": [{"path": "a.py"}]}, "ac_commands": ["true"]}, "spend": 0.2, "turns": 3}
@@ -58,13 +59,14 @@ def _spent_models():
                ALIASES={"opus": "claude-opus-5-5", "sonnet": "claude-sonnet-5-5", "haiku": "claude-haiku-4-5-20251001"},
                SPENT_MARKERS=(("gpt-", "codex-limited"), ("gemini-", "agy-limited")),
                provkey=SimpleNamespace(closed=lambda m: False), modelreg=modelreg,
-               _run_models=_fn(LAUNCH, "_run_models"))
+               _run_models=_fn(LAUNCH, "_run_models", _dispatch_models=_fn(LAUNCH, "_dispatch_models",
+                   _chain=lambda name: [SimpleNamespace(raw=m) for m in CHAINS[name.removesuffix("_models")]])))
 
 
 def engine(tmp_path, script):
     d = router()
     d["run"]["deadline"] = 7200
-    return Engine(from_doc(d), ScriptedAdapter(script), tmp_path, target=sibling_repo(tmp_path))
+    return Engine(from_doc(d), ScriptedAdapter(script), tmp_path, target=sibling_repo(tmp_path), kind_chains=CHAINS)
 
 
 def test_a_session_limit_names_the_epoch_of_its_reset():
@@ -124,7 +126,7 @@ async def test_an_agent_node_refused_for_its_session_limit_writes_the_marker(tmp
     d["run"]["deadline"] = 7200
     next(n for n in d["nodes"] if n["name"] == "router")["model"] = TERRA
     eng = Engine(from_doc(d), ScriptedAdapter({"router": [{"error": SESSION_LIMIT}]}, repeat_last=True),
-                 tmp_path, target=sibling_repo(tmp_path))   # the router answers on the envelope's chain: every entry refuses
+                 tmp_path, target=sibling_repo(tmp_path), kind_chains={**CHAINS, "router": [TERRA]})   # the router answers on its own chain: every entry refuses
     v = await eng.run()
     assert v.verdict == "failed"
     marker = shared / "codex-limited"

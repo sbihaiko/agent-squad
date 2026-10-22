@@ -63,13 +63,14 @@ class RunCtx:
 
     def dispatch_node(self, node):
         """A dispatch node with this run's router overlay applied. The authored graph, and its hash, stay unchanged."""
+        models = self._e.router_overlay.get(node.get("name")) if node.get("kind") == "dispatch" else None
         if node.get("kind") == "dispatch" and "kinds" in (node.get("allow") or {}):
-            # SPEC 750: the envelope holds kinds; each kind's models are the chain of that kind, read from run_start
+            # SPEC 750: the envelope holds kinds; each kind's models are the chain of that kind, read from run_start.
+            # The overlay still narrows it: a model it does not name is closed for every kind (SPEC 505).
             chains = self._e.kind_chains
-            km = {k: list(chains.get(k) or []) for k in node["allow"]["kinds"]}
+            km = {k: [m for m in (chains.get(k) or []) if models is None or m in models] for k in node["allow"]["kinds"]}
             union = list(dict.fromkeys(m for v in km.values() for m in v))
             return {**node, "allow": {**node["allow"], "models": union, "kind_models": km}}
-        models = self._e.router_overlay.get(node.get("name")) if node.get("kind") == "dispatch" else None
         return node if models is None else {**node, "allow": {**(node.get("allow") or {}), "models": list(models)}}
 
     def router_chain(self):

@@ -112,5 +112,7 @@ def test_a_kind_outside_the_envelope_is_rejected():
 
 
 def test_a_legacy_envelope_with_models_still_takes_a_model():
-    req, errs = validate_request(route(), {"prompt": "go", "skill": "tdd"}, 1, None, 10.0)
+    d = route()
+    d["allow"] = {k: v for k, v in d["allow"].items() if k not in ("kinds", "kind_models")} | {"models": ["claude-sonnet-5-5"]}
+    req, errs = validate_request(d, {"prompt": "go", "skill": "tdd"}, 1, None, 10.0)
     assert errs == [] and "kind" not in req

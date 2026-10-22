@@ -239,7 +239,9 @@ class Children:
         # A requeued issue starts its first entry where the issue ledger says its last attempt stopped (ADR-0151 rule 2).
         spent, hours, hour = e.options.get("spent_models") or [], e.options.get("model_hours") or {}, time.localtime(e.wall()).tm_hour
         first = coder or (e.dispatch.moved(ctx.node, d) if entry == 1 else d["model"])
-        km = e.dispatch.kind_models(d)    # a child of a kind falls back along its own kind's chain (SPEC 750)
+        # A child of a kind falls back along its own kind's chain (SPEC 750). The chain is read from this entry's node,
+        # so the router overlay still closes a model the run may not use (SPEC 505).
+        km = (ctx.node["allow"].get("kind_models") or {}).get(d.get("kind")) if d.get("kind") else None
         models = km or ctx.node["allow"]["models"]
         chain = session.model_chain(models, first, spent, hours, hour, km or e.options.get("model_order") or [])
         for m, why in session.hours_skipped(models, first, spent, hours, hour):    # an entry left out of its window is on the record

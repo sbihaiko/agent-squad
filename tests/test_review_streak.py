@@ -16,13 +16,13 @@ import pytest
 from squad import review_streak as R
 from squad.adapter import CallResult
 from tests.gitrepo import sh, sibling_repo
-from tests.helpers import node, router
-from tests.test_dispatch import MODEL, child_outs, ev, make, req, routed
+from tests.helpers import node
+from tests.test_dispatch import CHAINS, MODEL, child_outs, ev, make, req, routed
 from tests.test_review_gate import gated
 from tests.test_waves import writer
 
 CHILD = "route.router.1"
-OTHER = node(router(), "route")["allow"]["models"][1]   # the coder after the child's own model in the route node's allow list
+OTHER = CHAINS["coding"][1]   # the coder after the child's own model in the coding chain (SPEC 750)
 SCRIPTS = Path(__file__).resolve().parent.parent / "contrib" / "squad-goal" / "scripts"
 
 

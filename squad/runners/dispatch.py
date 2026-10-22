@@ -330,7 +330,7 @@ class Dispatch:
         attempt stopped. `upto_entry` counts a failed fix entry of the record; the entry about to start is not one."""
         e = self.e
         spent, hours = e.options.get("spent_models") or [], e.options.get("model_hours") or {}
-        km = self.kind_models(d)
+        km = (node["allow"].get("kind_models") or {}).get(d.get("kind")) if d.get("kind") else None
         chain = session.model_chain(km or node["allow"]["models"], d["model"], spent, hours, time.localtime(e.wall()).tm_hour,
                                     km or e.options.get("model_order") or [])
         upto_entry = upto_entry if upto_entry is not None else self.last_round(name)
@@ -344,7 +344,7 @@ class Dispatch:
         window closes: `at` reads it as it stands, so the first attempt is unchanged when the ledger holds no move."""
         e = self.e
         spent, hours = e.options.get("spent_models") or [], e.options.get("model_hours") or {}
-        km = self.kind_models(d)
+        km = (node["allow"].get("kind_models") or {}).get(d.get("kind")) if d.get("kind") else None
         chain = session.model_chain(km or node["allow"]["models"], d["model"], spent, hours, time.localtime(e.wall()).tm_hour,
                                     km or e.options.get("model_order") or [])
         return review_streak.at(chain, self.ledger_moves(d)) or d["model"]
