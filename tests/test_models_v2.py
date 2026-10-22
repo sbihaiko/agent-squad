@@ -40,7 +40,7 @@ def test_the_repository_models_json_is_v2(doc):
 
 
 def test_the_resolver_reads_every_repository_chain(doc):
-    assert [e.raw for e in modelreg.chain(doc, "coding").entries][0] == "claude-gpt-5.6-terra"
+    assert [e.raw for e in modelreg.chain(doc, "coding").entries][0] == "claude-sonnet-5-5"
     assert [e.raw for e in modelreg.chain(doc, "review").entries][0] == "claude:claude-opus-5-5"
     assert modelreg.chain(doc, "vision").entries
     assert modelreg.chain(doc, "router").entries == []
@@ -48,7 +48,7 @@ def test_the_resolver_reads_every_repository_chain(doc):
 
 def test_the_panel_reads_the_repository_chains_under_the_v1_keys(hub, doc):
     view = hub.v1_view(doc)
-    assert view["coding_models"][0] == "claude-gpt-5.6-terra"
+    assert view["coding_models"][0] == "claude-sonnet-5-5"
     assert view["review_models"] == ["claude:claude-opus-5-5", "gemini-3.8-flash-medium"]
     assert view["hours"]["review_models"] == {"claude:claude-opus-5-5": "19-07"}
     assert view["efforts"]["vision_models"] == {"gemini-3.8-flash-low": "low"}
