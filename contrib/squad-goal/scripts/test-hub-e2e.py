@@ -19,8 +19,22 @@ MODELS = S / "skill/scripts/models.json"
 # The panel checks below read one row that carries a window, so the copy's review chain head is given one: the shipped
 # chain follows the owner's tuning, and a suite that pinned a model id went red the day that chain changed (#393).
 _m = json.loads(MODELS.read_text())
-_m.setdefault("hours", {}).setdefault("review_models", {})[_m["review_models"][0]] = "19-07"   # merged: the shipped windows stay
+_rev = _m["chains"]["review"]                       # v2: a window is the entry's own `hrs`, never a top-level map
+_rev[0]["hrs"] = _rev[0].get("hrs") or "19-07"      # merged: the shipped windows stay
 MODELS.write_text(json.dumps(_m, indent=2) + "\n")
+
+def chain_rows(kind):
+    """The stored spelling of one chain's rows, in rank order: the panel shows `bare` of each."""
+    return [e.get("raw") or e["id"] for e in json.loads(MODELS.read_text())["chains"][kind]]
+
+def bare(raw):
+    """The id the panel shows for a stored spelling: review.sh's `claude:` prefix is the file's, never the page's."""
+    return raw[len("claude:"):] if raw.startswith("claude:") else raw
+
+def window_of(kind, raw):
+    """One entry's window, "" when it has none (all day)."""
+    e = next(e for e in json.loads(MODELS.read_text())["chains"][kind] if (e.get("raw") or e["id"]) == raw)
+    return e.get("hrs") or ""
 def browser_ok():
     """Probe in a child process: a sync playwright session started here would keep its event loop alive."""
     code = "from playwright.sync_api import sync_playwright\nwith sync_playwright() as p: p.chromium.launch(channel='chrome').close()"
@@ -128,16 +142,15 @@ try:
     st, b = req("/api/models", {"version": ver(), "hours": {"coding_models": {"claude-sonnet-5-5": "23-06"}}}, origin=BASE)
     d = json.loads(b)
     ck(st == 200 and d.get("hours", {}).get("coding_models", {}).get("claude-sonnet-5-5") == "23-06", "valid window stored", f"{st} {b[:120]}")
-    ck(json.loads(MODELS.read_text())["hours"]["coding_models"]["claude-sonnet-5-5"] == "23-06", "written to models.json")
+    ck(window_of("coding", "claude-sonnet-5-5") == "23-06", "written to models.json")
     st, b = req("/api/models", {"version": ver(), "hours": {"coding_models": {"claude-sonnet-5-5": "25-99"}}}, origin=BASE)
-    d = json.loads(b)
-    ck("err" in d, "bad window rejected", b[:120])
+    ck("err" in json.loads(b), "bad window rejected", b[:120])
     st, b = req("/api/models", {"version": ver(), "hours": {"coding_models": {"claude-sonnet-5-5": "07-07"}}}, origin=BASE)
-    ck("err" in d or "coding_models" not in json.loads(b).get("hours", {}), "degenerate window (07-07) refused")
+    ck(window_of("coding", "claude-sonnet-5-5") != "07-07", "degenerate window (07-07) never stored", b[:120])
     st, b = req("/api/models", {"version": ver(), "hours": {"not_a_chain": {"m": "01-02"}}}, origin=BASE)
     ck("err" in json.loads(b), "unknown chain refused", b[:120])
     st, b = req("/api/models", {"version": ver(), "hours": {"coding_models": {"not-in-chain": "01-02"}}}, origin=BASE)
-    ck("err" in json.loads(b), "model outside the chain refused", b[:120])
+    ck("err" not in json.loads(b), "a setting for a model outside the chain goes with the row, never refuses the Save", b[:120])
     MODELS.write_text(before)
     ck(MODELS.read_text() == before, "models.json restored byte for byte")
 
@@ -173,18 +186,19 @@ try:
         ck(card and card["over"] <= 1 and card["cover"] <= 1 and card["rover"] <= 1, "the card does not overflow the column", card)
         if not pg.eval_on_selector("details#mdl", "e=>e.open"): pg.click("details#mdl > summary")
         pg.wait_for_selector('#mbody input[data-hr="coding_models|claude-sonnet-5-5"]', timeout=15000)
-        # the Router queue's rows are `.mr` too and carry no hours input (#393): read only the rows that have one
+        # every chain draws the same row, the router's included (SPEC 750): each carries the hrs input and the effort select
         rows = pg.eval_on_selector_all("#mbody .mr:has(input.hr)", "els=>els.map(e=>({m:e.querySelector('.mn').textContent,hr:e.querySelector('input.hr').value,ph:e.querySelector('input.hr').placeholder}))")
         ck(len(rows) >= 6, f"panel renders the chains' rows ({len(rows)})", rows)
         by = {r["m"]: r for r in rows}
-        head = json.loads(MODELS.read_text())["review_models"][0]   # the chain's head, the review row this copy gave a window to
+        rev = {bare(m): m for m in chain_rows("review")}   # the panel's id -> the spelling the file stores
+        head = bare(chain_rows("review")[0])               # the chain's head, the review row this copy gave a window to
         ck(by.get("claude-sonnet-5-5", {}).get("hr") == "19-07", "coding claude-sonnet-5-5 shows 19-07", by.get("claude-sonnet-5-5"))
         ck(by.get(head, {}).get("hr") == "19-07", f"review {head} shows 19-07", by.get(head))   # the panel shows bare ids; review.sh's `claude:` prefix is added on the way into models.json
-        idle = next(m for m in json.loads(MODELS.read_text())["review_models"] if m != head and not json.loads(MODELS.read_text()).get("hours", {}).get("review_models", {}).get(m))   # a chain member with no window
+        idle = next(b for b, m in rev.items() if b != head and not window_of("review", m))   # a chain member with no window
         ck(by.get(idle, {}).get("hr") == "", f"{idle} has no window (all day)", by.get(idle))
         ck(all(r["ph"] == "always" for r in rows), "empty rows read 'always'", [r for r in rows if r['ph']!='always'])
         ck(pg.is_disabled("#msv"), "Save starts disabled (nothing dirty)")
-        cur = json.loads(MODELS.read_text())["hours"].get("review_models", {}).get(idle, "")
+        cur = window_of("review", rev[idle])
         want = "21-05" if cur != "21-05" else "20-04"
         pg.fill(f'input[data-hr="review_models|{idle}"]', want)
         pg.dispatch_event(f'input[data-hr="review_models|{idle}"]', "change")
@@ -192,7 +206,7 @@ try:
         ck(not pg.is_disabled("#msv"), "Save wakes up on an edit")
         pg.click("#msv")
         pg.wait_for_timeout(900)
-        saved = json.loads(MODELS.read_text())["hours"].get("review_models", {}).get(idle)
+        saved = window_of("review", rev[idle])
         ck(saved == want, f"the browser's Save wrote {want} to models.json", saved)
         ck("saved" in pg.inner_text(".msave .st").lower(), "the panel says saved", pg.inner_text(".msave .st")[:60])
         pg.reload(wait_until="domcontentloaded"); pg.wait_for_timeout(1200)

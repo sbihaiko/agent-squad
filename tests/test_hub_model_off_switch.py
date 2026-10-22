@@ -97,17 +97,26 @@ def _post(hub, **changes):
     return hub.models_set(doc)
 
 
+def _saved(models, canon):
+    """One chain as the Save wrote it: the v2 entries, where the switch is `on: False` (SPEC 750)."""
+    return json.loads(models.read_text())["chains"][canon]
+
+
+def _off(entries):
+    return {e["id"] for e in entries if e.get("on") is False}
+
+
 @pytest.mark.heavy
 def test_a_rows_switch_round_trips_through_save_and_revert(hub, models):
     """The state survives Save (models.json carries it per chain) and Revert (models_get hands the same thing back)."""
     out = _post(hub, off={"coding_models": {"claude-sonnet-5-5": True}})
     assert out["off"]["coding_models"] == {"claude-sonnet-5-5": True}   # every chain present, like efforts and hours
-    assert json.loads(models.read_text())["off"] == {"coding_models": {"claude-sonnet-5-5": True}}
+    assert _off(_saved(models, "coding")) == {"claude-sonnet-5-5"}, "the switch is the entry's `on: false`"
 
 
 def test_the_switch_is_written_per_chain_so_one_chain_can_hold_it_alone(hub, models):
     _post(hub, off={"review_models": {"grok-4.5": True}})
-    assert json.loads(models.read_text())["off"] == {"review_models": {"grok-4.5": True}}
+    assert _off(_saved(models, "review")) == {"grok-4.5"}
 
 
 def test_switching_a_model_off_leaves_its_rank_effort_and_hours_alone(hub, models):
@@ -115,26 +124,31 @@ def test_switching_a_model_off_leaves_its_rank_effort_and_hours_alone(hub, model
     before = hub.models_get()
     out = _post(hub, off={"coding_models": {"gpt-5.6-terra": True}})
     assert out["coding_models"] == before["coding_models"]        # same order, same place, same rank
-    assert out["efforts"] == before["efforts"]                    # the effort is still the row's
-    assert out["hours"] == before["hours"]                        # and so is the window
+    assert out["efforts"]["coding_models"] == before["efforts"]["coding_models"]   # the effort is still the row's
+    assert out["hours"]["coding_models"] == before["hours"]["coding_models"]       # and so is the window
     back = hub.models_set({**out, "off": {k: {} for k in ("coding_models", "review_models", "vision_models")}})
     assert back["coding_models"] == before["coding_models"]       # switched back on, same position
-    assert all(not v for v in back["off"].values())
-    assert "off" not in json.loads(models.read_text())            # an empty map is not written back at all
+    assert back["off"]["coding_models"] == {}
+    assert _off(_saved(models, "coding")) == set()                # an entry back on carries no switch at all
 
 
 def test_switching_every_entry_of_a_chain_off_is_allowed(hub, models):
     """It is a legal state: the consumers then fail on the existing "no model may run now" path, never silently."""
     out = _post(hub, off={"review_models": {m: True for m in ("gemini-3.8-flash-high", "claude-opus-5-5", "grok-4.5")}})
-    assert out["off"]["review_models"] == {"gemini-3.8-flash-high": True, "claude-opus-5-5": True, "grok-4.5": True}
-    assert out["review_models"] == ["gemini-3.8-flash-high", "claude-opus-5-5", "grok-4.5"]   # bare ids, order untouched
+    saved = _saved(models, "review")
+    assert [e["id"] for e in saved] == ["gemini-3.8-flash", "claude-opus-5-5", "grok-4.5"]   # order untouched
+    assert _off(saved) == {"gemini-3.8-flash", "claude-opus-5-5", "grok-4.5"}                # every row is off
+    # the panel draws only the entries a reviewer can run, so the retired grok row is hidden from it, not deleted; the
+    # `-high` row reads medium in the panel (this v1 file carries no effort for it), so its suffix goes with the Save
+    assert out["review_models"] == ["gemini-3.8-flash", "claude-opus-5-5"]
 
 
 def test_the_panel_never_sees_a_prefix_it_did_not_offer(hub, models):
     """`claude:` is review.sh's routing prefix; the panel works in bare ids, so the switch does too."""
     out = _post(hub, off={"review_models": {"claude-opus-5-5": True}})
     assert out["off"]["review_models"] == {"claude-opus-5-5": True}
-    assert json.loads(models.read_text())["off"]["review_models"] == {"claude:claude-opus-5-5": True}
+    assert _off(_saved(models, "review")) == {"claude-opus-5-5"}
+    assert [e["raw"] for e in _saved(models, "review") if e.get("on") is False] == ["claude:claude-opus-5-5"]
 
 
 def test_a_model_switched_off_may_not_run(hub, models):
@@ -288,7 +302,7 @@ def test_a_row_removed_with_its_hours_effort_and_switch_saves_and_drops_them(hub
                 efforts={"coding_models": {"claude-sonnet-5-5": "low", "gpt-5.6-terra": "low"}},
                 off={"coding_models": {"claude-sonnet-5-5": True}})
     assert "err" not in out, out
-    saved = json.loads(models.read_text())
-    assert saved["coding_models"] == ["claude-deepseek-v4-flash", "gpt-5.6-terra"]
-    assert "hours" not in saved and "off" not in saved
-    assert saved["efforts"] == {"coding_models": {"gpt-5.6-terra": "low"}}
+    saved = _saved(models, "coding")
+    assert [e.get("raw") or e["id"] for e in saved] == ["claude-deepseek-v4-flash", "gpt-5.6-terra"]
+    assert "hrs" not in saved[0] and "on" not in saved[0]          # the removed row took its window and switch with it
+    assert saved[1]["effort"] == "low"

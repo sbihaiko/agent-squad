@@ -70,8 +70,9 @@ def test_an_unregistered_row_shows_its_id():
 
 
 def test_the_row_tooltip_still_names_the_id():
+    """One row for every chain, the router's included (SPEC 750): the id stays in the row title, the label in the row."""
     src = HUB_PY.read_text()
-    assert src.count('<span class=mn title="${esc(m)} · ${esc(x.text)}">${mdlName(x,m)}</span>') == 2
+    assert src.count('<span class=mn title="${esc(m)} · ${esc(x.text)}">${mdlName(x,m)}</span>') == 1
 
 
 # --- the add-a-model dropdowns (#687): the label is the primary text and the id the secondary one. An id no registry
@@ -123,6 +124,6 @@ def test_every_suggestion_text_is_unique_in_its_list(hub, monkeypatch):
 def test_the_dropdowns_render_the_label_first_and_map_it_back_to_the_id():
     src = HUB_PY.read_text()
     assert '<datalist id=mk-${k}>${((mdl.suggest||{})[k]||[]).map' in src   # one dropdown per role chain, from its own list (#545)
-    assert '<datalist id=mkr>${(mdl.suggest||{}).router_known' in src
+    assert '<datalist id=mk-${k}>' in src and 'mdl.suggest||{})[k]' in src
     assert '<option value="${esc(s.text)}" label="${esc(s.id)}">' in src
-    assert src.count("sugId(") >= 3   # one helper, used by both Add buttons
+    assert src.count("sugId(") >= 2   # one helper, used by the one Add button of every chain

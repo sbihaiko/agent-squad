@@ -1,11 +1,13 @@
-"""The Coding chain and the router envelope are two lists, and a Coding model outside the envelope was dropped in silence.
+"""The Coding chain and a legacy graph's `allow.models`, and a Coding model outside that list was dropped in silence.
 
 The router only requests models in the dispatch node's `allow.models`; a request outside it is refused whole, so the
-router picked an allowed id and the request's "Coding model:" line lost without a word. The loop now names the Coding
-model the envelope blocks, the models panel marks it in the Coding chain, and a guard flags the shipped chain and the
-shipped graph when they diverge. The comparison is one rule, `envelope_blocked`, shipped once, in
-`router_envelope.py`; the panel (hub.py) and the loop (launch.py) both import it, so a badge and a warning read one
-source: the dispatch node's `allow.models`. The loop names every eligible Coding model the envelope blocks, a fallback too.
+router picked an allowed id and the request's "Coding model:" line lost without a word. The loop names the Coding model
+the envelope blocks, and a guard flags the shipped chain and the shipped graph when they diverge. The comparison is one
+rule, `envelope_blocked`, shipped once, in `router_envelope.py`; the loop (launch.py) imports it for a legacy graph.
+
+SPEC 750 retires the list: the shipped envelope names kinds, the router chain is `chains.router` in models.json, and the
+panel marks nothing and appends nothing. The badge, the auto-append and the hub's own envelope read are gone; the
+launcher's warning stays for a graph that still carries a model list, and is silent for the shipped one.
 """
 
 from __future__ import annotations
@@ -72,6 +74,15 @@ def _launch(tmp_path, coding, envelope, shared=None, hours=None):
 def test_the_loop_names_a_first_coding_model_the_envelope_blocks(tmp_path):
     r = _launch(tmp_path, ["grok-4.7", "gemini-3.8-flash-medium"], ENVELOPE)
     assert "grok-4.7 is not in the router envelope" in r.stderr, r.stdout + r.stderr
+    assert "allow.models" in r.stderr, f"the warning offers no remedy that still exists: {r.stderr}"
+
+
+def test_the_legacy_warning_offers_a_remedy_the_panel_still_has():
+    """SPEC 750: the hub no longer writes the graph's dispatch envelope and has no Router queue, so the warning on a
+    legacy graph must name the surface that still changes `allow.models` — the graph itself (ADR-0113)."""
+    src = (SCRIPTS / "launch.py").read_text()
+    assert "Router queue" not in src, "the warning offers a control the panel no longer has"
+    assert "allow.models" in src, "the warning names no surface that still holds the envelope"
 
 
 @pytest.mark.heavy   # launch.py waits for the run folder, over a second
@@ -87,26 +98,38 @@ def test_the_check_names_every_coding_model_missing_from_the_envelope():
     assert blocked(["grok-4.7"], []) == []                                  # no envelope read, nothing to compare
 
 
-def test_the_envelope_has_one_copy_and_both_callers_import_it():
-    for name in ("hub.py", "launch.py"):
-        src = (SCRIPTS / name).read_text()
+def test_the_envelope_has_one_copy_and_only_the_legacy_launcher_imports_it():
+    """SPEC 750: the hub reads the router chain from models.json, so only the launcher's legacy-graph warning reads
+    `allow.models`. It still does that through the one shared module, never through a copy of the rule."""
+    launch = (SCRIPTS / "launch.py").read_text()
+    hub = (SCRIPTS / "hub.py").read_text()
+    for name, src in (("launch.py", launch), ("hub.py", hub)):
         assert "def envelope_blocked" not in src, f"{name} keeps its own copy of the rule"
-        assert "router_envelope" in src, f"{name} does not read the shared envelope"
+    assert "router_envelope" in launch and "router_envelope" not in hub
 
 
 def _graph(models):
     return {"nodes": [{"name": "r", "kind": "dispatch", "allow": {"models": models}}, {"name": "a", "kind": "agent"}]}
 
 
-def test_the_hub_reads_the_envelope_the_shared_module_reads():
-    doc = _graph(["claude-opus-5-5", "claude-sonnet-5-5"])
-    ns = {"_graph_doc": lambda: doc, "router_envelope": router_envelope, "bare_id": lambda m: m.removeprefix("claude:")}
-    envelope_of = _fn(SCRIPTS / "hub.py", "envelope_of", **ns)
-    ns["envelope_of"] = envelope_of
-    router_get = _fn(SCRIPTS / "hub.py", "router_get", **ns)
-    assert envelope_of()["models"] == router_envelope.envelope_models(doc)
-    assert router_get() == router_envelope.envelope_models(doc)
+def test_the_hub_reads_the_router_chain_from_models_json_not_the_graph():
+    """SPEC 750: the panel's router chain is `chains.router`. The graph's allow.models is the launcher's legacy path."""
+    doc = {"schema_version": 2, "chains": {"router": [{"id": "claude-opus-5-5"}, {"id": "claude-sonnet-5-5"}]}}
+    ns = {"models_doc": lambda: hub_v1_view(doc), "bare_id": lambda m: m.removeprefix("claude:"),
+          "v1_view": hub_v1_view, "usable": lambda ids, chain: ids, "ROUTER_CHAIN": "router_models"}
+    assert _fn(SCRIPTS / "hub.py", "router_get", **ns)(doc) == ["claude-opus-5-5", "claude-sonnet-5-5"]
+    graph = _graph(["claude-opus-5-5"])
+    assert router_envelope.envelope_models(graph) == ["claude-opus-5-5"]   # the legacy path still reads the graph
     assert router_envelope.envelope_models({}) == []
+
+
+def hub_v1_view(doc):
+    """The hub's own reader, sliced out of the file: `chains` under the v1 keys the page draws."""
+    import sys
+    sys.path.insert(0, str(SCRIPTS))
+    ns = {"modelreg": _modelreg(), "CHAINS": ("coding_models", "review_models", "vision_models", "router_models"),
+          "usable": lambda ids, chain: ids}
+    return _fn(SCRIPTS / "hub.py", "v1_view", **ns)(doc)
 
 
 @pytest.mark.heavy   # launch.py waits for the run folder, over a second
@@ -117,10 +140,11 @@ def test_the_loop_names_each_eligible_model_the_envelope_blocks_a_fallback_too(t
     assert "claude-sonnet-5-5 is not in the router envelope" not in r.stderr
 
 
-def test_the_panel_marks_a_blocked_row_and_never_stores_the_mark():
+def test_the_panel_marks_no_blocked_row_and_stores_no_mark():
+    """SPEC 750 retires the badge: the envelope names a kind, so no coding row can be blocked by a model list."""
     src = (SCRIPTS / "hub.py").read_text()
-    assert "blocked by envelope" in src
-    assert '"blocked"' in src.split("READONLY =")[1].split("\n")[0]
+    assert "blocked by envelope" not in src
+    assert '"blocked"' not in src.split("READONLY =")[1].split("\n")[0]
 
 
 def test_the_shipped_envelope_names_no_model_so_no_coding_entry_is_blocked():

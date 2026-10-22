@@ -23,7 +23,7 @@ V2 = {"schema_version": 2, "chains": {
                {"id": "grok-4.7", "route": "cli"}],
     "vision": [{"id": "gpt-5.6-luna", "route": "cli"}, {"id": "deepseek-flash", "route": "gateway"},
                {"id": "grok-4.7", "route": "gateway"}],
-    "router": []}}
+    "router": [{"id": "grok-4.7", "route": "gateway"}, {"id": "gpt-5.5", "route": "gateway"}]}}
 
 
 @pytest.fixture(scope="module")
@@ -45,7 +45,6 @@ def hub(hub_module, monkeypatch, tmp_path):
     monkeypatch.setattr(hub_module, "MODELS", models)
     monkeypatch.setattr(hub_module, "SHARED", tmp_path)
     monkeypatch.setattr(hub_module, "gateway_models", lambda ttl=120: ["gpt-5.6-terra", "gpt-5.5"])
-    monkeypatch.setattr(hub_module, "router_get", lambda: ["grok-4.7", "gpt-5.6-terra"])
     return hub_module
 
 
@@ -84,9 +83,9 @@ def test_a_chain_drops_a_registered_entry_it_cannot_run_and_keeps_an_unregistere
     assert got["vision_models"] == ["gpt-5.6-luna", "grok-4.7"]           # deepseek takes no image input
 
 
-def test_a_chain_drops_a_retired_router_entry(hub, monkeypatch):
-    monkeypatch.setattr(hub, "router_get", lambda: ["gpt-5.5", "gpt-5.6-terra"])
-    assert hub.models_get()["router_models"] == ["gpt-5.6-terra"]
+def test_a_chain_drops_a_retired_router_entry(hub):
+    """SPEC 750: the router chain is the file's `chains.router`, and the view drops a retired entry like any chain."""
+    assert hub.models_get()["router_models"] == ["grok-4.7"]        # gpt-5.5 is retired
 
 
 def test_each_dropdown_offers_only_the_models_its_chain_can_use(hub):
@@ -100,13 +99,15 @@ def test_each_dropdown_offers_only_the_models_its_chain_can_use(hub):
     assert "deepseek-flash" in review and "gemini-3.8-flash" in review
     assert "deepseek-flash" not in vision and "gpt-oss-120b" not in vision
     assert "gpt-5.6-luna" in vision
-    router = registry_ids("router_known")
-    assert "gpt-5.6-terra" in router and "gpt-5.5" not in router
+    router = {s["id"] for s in got["suggest"]["router_models"]}
+    assert "gpt-5.6-terra" in router and "gpt-5.5" not in router   # the gateway's catalogue, a retired id left out
+    assert "gemini-3.8-flash" not in router                        # a cli-only id is never offered to the router
 
 
 def test_the_page_draws_subscription_and_quota_on_all_four_chains(hub):
     src = HUB_PY.read_text()
     assert "function mdlSub(" in src
-    assert src.count("${mdlSub(x)}") >= 2                        # the role rows and the router rows
-    assert "list=mk-${k}" in src and "id=mk-${k}" in src          # one dropdown per role chain
-    assert 'sugId("router_known"' in src
+    assert src.count("${mdlSub(x)}") == 1                         # one row form draws all four chains
+    assert src.count("mdlSub(") >= 2                              # the definition and its one call
+    assert "list=mk-${k}" in src and "id=mk-${k}" in src          # one dropdown per chain, the router's included
+    assert 'sugId("router_known"' not in src

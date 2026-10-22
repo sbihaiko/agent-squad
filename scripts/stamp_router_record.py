@@ -2,8 +2,8 @@
 """Restamp docs/design/router.record.jsonl to the graph it ships beside (#95).
 
 The record's `run_start` carries the graph hash `check_record.py` enforces, so a graph edit and the restamp of the
-record are one change. The hub's models panel edits the dispatch envelope, which is graph data (ADR-0106), so it calls
-this right after the write.
+record are one change. An author runs this by hand after editing the graph: nothing in the hub calls it any more, since
+a Save edits `models.json` and never the graph (SPEC 750).
 
 usage: stamp_router_record.py [--check]   --check writes nothing and exits 1 when the record is stale.
 """

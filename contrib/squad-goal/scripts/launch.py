@@ -139,7 +139,7 @@ if primary:
     for _m in router_envelope.envelope_blocked([m for m in cm if _may_run("coding_models", m)], _env):   # every eligible model, the primary and each fallback
         print(f"warning: {_m} is not in the router envelope (allow.models of the dispatch node: {', '.join(_env)}); the router cannot request it, "
               + ("so the child runs an allowed model instead of the Coding model line" if _m == primary else "so this fallback is never requested")
-              + ". Add it to the Router queue in the hub's models panel, or change the chain.", file=sys.stderr)
+              + ". Add it to the dispatch node's `allow.models` in the workflow graph, or change the coding chain.", file=sys.stderr)
 
 co = os.environ.get("SG_CHECKOUT")
 if co and pathlib.Path(co).resolve() != cwd and not os.environ.get("SG_ALLOW_OTHER_CWD"):

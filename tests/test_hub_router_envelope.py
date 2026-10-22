@@ -1,12 +1,8 @@
-"""GitHub issue #95: the router's models are configured in the panel, and the panel writes them where they live.
+"""GitHub issue #95 and SPEC 750: the router's own chain lives in models.json with the three role chains.
 
-The panel listed the three role chains of models.json. The envelope that governs what the router may ask a child for
-lives in the run graph instead, so a reader who cut a model from a chain still saw the router ask for it: the envelope
-allowed `sonnet` and `opus`, the router named `opus`, and a child ran `opus high` for a quarter hour while the chains
-of the same machine named no Anthropic model at all.
-
-The router now has a queue of its own in the same panel, edited the way Vision is. The queue is graph data (ADR-0106):
-the reading comes from the graph, the write goes to the graph and restamps the record it ships beside.
+The panel once drew a bespoke Router queue and wrote it into the run graph's dispatch envelope. SPEC 750 moved the
+router's models to `chains.router`: a child request names a kind, and the router agent runs on the router chain. The
+panel now draws the router row like any other chain, so a Save edits models.json and never the graph or its record.
 
 This guard reads the functions the hub ships, sliced out of the file with `ast`, rather than a copy of the rule. It
 never imports the module: the module body needs a profile, and a test that needs one cannot run on the runner.
@@ -23,16 +19,20 @@ import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 HUB = ROOT / "contrib" / "squad-goal" / "scripts" / "hub.py"
-# The ids the CLI resolves to an Anthropic leg: the local proxy serves every other id the chains name.
-ANTHROPIC = ("sonnet", "opus", "haiku", "fable")
-# `bare_id` strips a `claude:` prefix; the graph never carries one, so the identity is enough here.
-STUBS = {"bare_id": lambda m: m, "subprocess": None, "sys": None}
+SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"
+STUBS = {"bare_id": lambda m: m.removeprefix("claude:")}
 
-def _envelope_module():
-    """The one envelope source (#436), loaded by path: it is a pure module, and hub.py's sliced functions call it."""
-    spec = importlib.util.spec_from_file_location("router_envelope", ROOT / "contrib" / "squad-goal" / "scripts" / "router_envelope.py")
+
+def _module(name, path):
+    """A pure script of the repo, loaded by path: hub.py itself needs a profile, these do not."""
+    spec = importlib.util.spec_from_file_location(name, path)
     mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
     return mod
+
+
+def _envelope_module():
+    """The one envelope source (#436): still shipped for a legacy graph's launcher warning."""
+    return _module("router_envelope", SCRIPTS / "router_envelope.py")
 
 
 def test_the_envelope_keys_through_the_one_resolver():
@@ -42,64 +42,53 @@ def test_the_envelope_keys_through_the_one_resolver():
     assert env.envelope_blocked(["sonnet[1m]", "opus"], ["claude-sonnet-5-5[1m]", "claude:opus"]) == []
 
 
-def test_the_envelope_result_is_unchanged_for_the_shipped_graph():
-    """The strings the shipped router graph carries today keep their key: one spelling of a model is never blocked
-    beside another, and a model the envelope does not name still is."""
-    env = _envelope_module()
-    shipped = ["claude-grok-4.7", "claude-gpt-5.6-terra", "claude-deepseek-flash[1m]", "claude-opus-5-5", "claude-sonnet-5-5"]
-    chain = ["grok-4.7", "gpt-5.6-terra", "deepseek-flash[1m]", "opus", "sonnet", "claude:sonnet"]
-    assert env.envelope_blocked(chain, shipped) == []
-    assert env.envelope_blocked(["gemini-3.8-flash-medium"], shipped) == ["gemini-3.8-flash-medium"]
-
-
 def test_the_envelope_module_carries_the_seam_header():
     """The resolver seam enforces its header on a caller, so this file must carry it (SPEC 505 ticket 5)."""
-    text = (ROOT / "contrib" / "squad-goal" / "scripts" / "router_envelope.py").read_text()
+    text = (SCRIPTS / "router_envelope.py").read_text()
     assert any("modelreg: seam-clean" in line for line in text.splitlines()[:5])
 
 
-def _hub(*names, checkout="", stubs=None):
+def _hub(*names, stubs=None, **extra):
     """The named functions of hub.py, compiled alone, so importing the module never starts a server."""
     tree = ast.parse(HUB.read_text())
     keep = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in names]
     assert {n.name for n in keep} == set(names), f"hub.py no longer ships {names}"
-    ns = {"json": json, "os": __import__("os"), "pathlib": pathlib, "CHECKOUT": checkout, "router_envelope": _envelope_module(),
-          **{**STUBS, "subprocess": subprocess, "sys": sys, **(stubs or {})}}
+    ns = {"json": json, "os": __import__("os"), "pathlib": pathlib, "modelreg": _module("modelreg_shipped", SCRIPTS / "modelreg.py"),
+          **{**STUBS, **(stubs or {})}, **extra}
     exec(compile(ast.Module(body=keep, type_ignores=[]), str(HUB), "exec"), ns)
     return ns
 
 
-def _envelope_ns(checkout):
-    return _hub("_graph_path", "_graph_doc", "envelope_of", "router_get", checkout=checkout)
+def test_the_router_chain_is_models_json_chains_router():
+    """SPEC 750: the router's chain is `chains.router`, read through the same resolver seam as the three role chains."""
+    ns = _hub("usable", "v1_view", "router_get", CHAINS=("coding_models", "review_models", "vision_models", "router_models"), ROUTER_CHAIN="router_models")
+    doc = {"schema_version": 2, "chains": {"router": [{"id": "claude-opus-5-5"}, {"id": "claude-sonnet-5-5"},
+                                                      {"id": "claude:claude-opus-5-5"}]}}
+    assert ns["router_get"](doc) == ["claude-opus-5-5", "claude-sonnet-5-5", "claude-opus-5-5"]
+    assert ns["router_get"]({"schema_version": 2, "chains": {}}) == []
 
 
-def _doc(envelope):
-    return {"schema_version": 1, "name": "router-dynamic", "nodes": [
-        {"name": "main", "kind": "loop"}, {"name": "route", "kind": "dispatch", **envelope}]}
+def test_the_router_chain_drops_an_entry_the_router_cannot_run():
+    """The panel shows the entries the chain can run (usable, ADR-0147): a gateway-less id is not drawn."""
+    ns = _hub("usable", "v1_view", "router_get", CHAINS=("coding_models", "review_models", "vision_models", "router_models"), ROUTER_CHAIN="router_models")
+    doc = {"schema_version": 2, "chains": {"router": [{"id": "claude-opus-5-5", "route": "gateway"},
+                                                      {"id": "gemini-3.8-flash", "route": "cli"},
+                                                      {"id": "gpt-9-nova", "route": "gateway"}]}}
+    # gemini has no gateway route, so the router chain cannot run it; an unknown id stays as unregistered
+    assert ns["router_get"](doc) == ["claude-opus-5-5", "gpt-9-nova"]
 
 
-def test_the_envelope_is_read_from_the_run_graph_the_loop_starts(tmp_path):
-    ns = _envelope_ns(str(tmp_path))
-    d = tmp_path / "docs" / "design"; d.mkdir(parents=True)
-    (d / "router.graph.json").write_text(json.dumps(_doc(
-        {"allow": {"models": ["a-1"], "efforts": ["low"]}, "max_children": 3, "max_parallel": 2, "max_depth": 1})))
-    got = ns["envelope_of"]()
-    assert got["node"] == "route" and got["models"] == ["a-1"] and got["efforts"] == ["low"]
-    assert got["max_children"] == 3 and got["max_parallel"] == 2 and got["max_depth"] == 1
-
-
-def test_the_project_workflow_file_wins_over_the_seed(tmp_path):
-    ns = _envelope_ns(str(tmp_path))
-    w = tmp_path / "docs" / "squad" / "workflows"; w.mkdir(parents=True)
-    (w / "dynamic.graph.json").write_text(json.dumps(_doc({"allow": {"models": ["mine-1"]}})))
-    assert ns["envelope_of"]()["models"] == ["mine-1"]
-
-
-def test_the_router_chain_is_the_envelope_in_order(tmp_path):
-    ns = _envelope_ns(str(tmp_path))
-    d = tmp_path / "docs" / "design"; d.mkdir(parents=True)
-    (d / "router.graph.json").write_text(json.dumps(_doc({"allow": {"models": ["a-1", "b-2"]}})))
-    assert ns["router_get"]() == ["a-1", "b-2"]
+def test_the_shipped_router_chain_names_models_the_router_can_run():
+    """SPEC 750 and ADR-0113: `chains.router` is the only place the router agent's model is chosen, so every shipped
+    entry must be one the router can run. The test pins the chain, never the graph's router node: the node's own
+    `model` is not read, so dropping it changes nothing a run does."""
+    models = json.loads((SCRIPTS / "models.json").read_text())
+    router = [e.get("raw") or e["id"] for e in models["chains"]["router"]]
+    assert router, "the shipped router chain is empty, so the router agent has no model of its own"
+    reg = _module("modelreg_shipped_router", SCRIPTS / "modelreg.py")
+    for m in router:
+        ok, why = reg.compatible(m, "router")
+        assert ok, f"the router chain holds {m}, which the router cannot run: {why}"
 
 
 def test_the_shipped_envelope_holds_kinds_and_no_model_list():
@@ -112,19 +101,25 @@ def test_the_shipped_envelope_holds_kinds_and_no_model_list():
     assert "high" not in got["efforts"], "the engine default is medium; a child is never asked for high"
 
 
-def test_the_panel_offers_the_router_as_an_editable_queue():
-    """The owner configures the router's models the way he configures Vision (#95): rank, up, down, remove, add. The
-    queue is written where it lives, so the panel carries the write and not only the reading."""
+def test_the_panel_draws_the_router_as_the_fourth_chain():
+    """The owner configures the router's models the way he configures Vision: rank, up, down, switch, remove, add."""
     src = HUB.read_text()
-    assert "function mdlRouter()" in src and "mdl.router_models" in src, "the router is not rendered as a queue"
-    assert "+mdlRouter()" in src, "the render never calls it"
-    for control in ("data-rv", "data-rrm", "data-raddb"):
-        assert control in src, f"the router queue has no {control} control"
-    assert src.index("MODEL_ID.match") < src.index("router_set(rchain)"), "a save writes before it validates"
+    labels = re.search(r"const MLAB=\{(.*?)\},MDESC=", src).group(1)
+    assert "router_models" in labels, "the Router card is not drawn with the three role chains"
+    assert "function mdlRouter()" not in src and "+mdlRouter()" not in src, "the bespoke queue survives"
+    for control in ("data-mv", "data-rm", "data-sw", "data-addb"):
+        assert f"{control}=" in src, f"the router row has no {control} control"
+
+
+def test_the_panel_no_longer_reads_or_writes_the_run_graph():
+    """SPEC 750: the router chain is one models.json chain, so the hub keeps no graph reader and no graph writer."""
+    src = HUB.read_text()
+    for gone in ("router_set", "envelope_of", "_graph_doc", "_graph_path", "router_envelope"):
+        assert gone not in src, f"the hub still carries {gone}"
 
 
 def test_no_attribute_the_handler_reads_carries_no_value():
-    """`t.dataset.raddb` is the empty string when the attribute is written without one, and the empty string is falsy:
+    """`t.dataset.addb` is the empty string when the attribute is written without one, and the empty string is falsy:
     the branch never runs and the button does nothing. Measured 2026-10-13: the router queue's Add was dead this way
     while the Vision chain's Add (which carries its chain id) worked."""
     src = HUB.read_text()
@@ -134,47 +129,26 @@ def test_no_attribute_the_handler_reads_carries_no_value():
             assert m and (m.group(1) or m.group(2)), f"the handler reads data-{name} but this button carries no value: {tag[:70]}"
 
 
-def test_the_queue_says_it_is_graph_data():
-    """ADR-0106: the reader must know the write goes to the run graph, not to models.json."""
+def test_the_panel_has_no_envelope_badge_and_no_envelope_field():
+    """SPEC 750: nothing can be "blocked by envelope" any more, because the envelope names a kind and the chain names
+    the model. The badge and the field that fed it are gone together."""
     src = HUB.read_text()
-    seg = src.split("The models the router may ask a child for", 1)
-    assert len(seg) == 2, "the panel has no Router section"
-    assert "run graph" in seg[1][:400], "the queue does not say where it lives"
-
-
-def test_the_envelope_comes_back_on_a_save_and_is_never_stored():
-    src = HUB.read_text()
+    assert "blocked by envelope" not in src
     ro = src.split("READONLY = (", 1)[1].split(")", 1)[0]
-    assert "envelope" in ro and "router_models" not in ro, "the envelope is read-only; the router chain is writable"
+    assert "envelope" not in ro and "blocked" not in ro
+    assert "router_models" not in ro, "the router chain is writable, like the other three"
+
+
+def test_the_panel_says_the_router_chain_is_a_chain_of_models_json():
+    src = HUB.read_text()
+    card = src[src.index("const MLAB="):src.index("EFF=[")]
+    assert "The models the router runs on" in card, "the Router card does not say what its chain is"
+    assert "graph" not in card, "the card still tells the reader the router models live in the graph"
 
 
 @pytest.mark.heavy
 def test_the_stamp_script_reports_the_record_current():
-    """The write path restamps through this script; a stale record breaks check_record.py, so the script is the seam."""
+    """The shipped graph and its record still ship beside each other; a stale record breaks check_record.py."""
     r = subprocess.run([sys.executable, str(ROOT / "scripts" / "stamp_router_record.py"), "--check"],
                        capture_output=True, text=True, cwd=str(ROOT))
     assert r.returncode == 0, f"the shipped router record is stale: {r.stdout}{r.stderr}"
-
-
-def test_writing_the_queue_goes_to_the_graph_and_restamps(tmp_path):
-    """The write path: the envelope in the graph takes the new queue, and the record that ships beside it is restamped
-    through the script the repo owns. The graph keeps its own formatting, so a save is a one-line change."""
-    d = tmp_path / "docs" / "design"; d.mkdir(parents=True)
-    graph = d / "router.graph.json"
-    graph.write_text(json.dumps(_doc({"allow": {"models": ["a-1", "b-2"]}}), indent=2) + "\n")
-    s = tmp_path / "scripts"; s.mkdir()
-    (s / "stamp_router_record.py").write_text("import sys; print('restamped: test'); sys.exit(0)\n")
-    ns = _hub("_graph_path", "_graph_doc", "router_set", checkout=str(tmp_path))
-    assert ns["router_set"](["b-2", "c-3"]) == {}
-    assert json.loads(graph.read_text())["nodes"][1]["allow"]["models"] == ["b-2", "c-3"]
-
-
-def test_a_failed_restamp_is_reported_not_swallowed(tmp_path):
-    """A graph written while its record stayed stale breaks check_record.py, so the caller is told."""
-    d = tmp_path / "docs" / "design"; d.mkdir(parents=True)
-    (d / "router.graph.json").write_text(json.dumps(_doc({"allow": {"models": ["a-1"]}}), indent=2) + "\n")
-    s = tmp_path / "scripts"; s.mkdir()
-    (s / "stamp_router_record.py").write_text("import sys; print('boom'); sys.exit(1)\n")
-    ns = _hub("_graph_path", "_graph_doc", "router_set", checkout=str(tmp_path))
-    err = ns["router_set"](["a-1"])
-    assert "could not be restamped" in err.get("err", ""), err
