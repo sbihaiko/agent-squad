@@ -101,6 +101,7 @@ for mode in full fix; do
   /usr/bin/grep -qF 'at most 21 lines' "$T/prompt" && ok "$mode prompt carries the format 21-line cap from review_max_lines" || ko "$mode prompt cap: $(/usr/bin/grep -i 'lines' "$T/prompt" | head -1)"
   /usr/bin/grep -q 'divergence from an accepted ADR' "$T/prompt" && /usr/bin/grep -q 'regression of behaviour' "$T/prompt" && /usr/bin/grep -q 'wire protocol or a persisted format' "$T/prompt" && /usr/bin/grep -q 'passes while lying' "$T/prompt" && ok "$mode prompt lists the closed blocking set" || ko "$mode prompt lacks the blocking list"
   /usr/bin/grep -qi 'filed task' "$T/prompt" && ok "$mode prompt states what DEBT costs" || ko "$mode prompt lacks the DEBT cost"
+  /usr/bin/grep -qF 'Debt/nit-only findings require APPROVE, never CHANGES.' "$T/prompt" && ok "$mode prompt rules Debt/nit-only findings as APPROVE" || ko "$mode prompt does not rule Debt/nit-only findings as APPROVE"
 done
 /usr/bin/grep -qi 'previous' "$T/prompt" && ok "fix prompt answers the previous findings" || ko "fix prompt does not answer the previous findings"
 # the cap is a named constant in the config, not a magic number in the prompt: another value, another prompt
@@ -543,5 +544,12 @@ out=$(GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null)
   && ok "a v2 review chain skips its off entry and runs the next with its effort" || ko "v2 review chain: args=$(cat "$CLAUDE_ARGS" 2>/dev/null) cq=$(/bin/ls "$T/st/cq" | tr '\n' ' ')"
 unset CLAUDE_ARGS
 rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"*
+
+# The committed labeled sample measures historical CHANGES verdicts. The report is a read-only
+# calibration instrument: it names the total, the Debt/nit-only count, and the rate.
+calibration=$(python3 "$(dirname "$src")/review-calibration.py" "$(dirname "$src")/fixtures/review-calibration.json" 2>&1); rc=$?
+[ $rc = 0 ] && [ "$calibration" = "labeled=10 debt_nit_only=1 rate=10.0%" ] \
+  && ok "the calibration report measures the committed Debt/nit-only sample" \
+  || ko "calibration report: rc=$rc '$calibration'"
 
 rm -rf "$T"; exit $fail

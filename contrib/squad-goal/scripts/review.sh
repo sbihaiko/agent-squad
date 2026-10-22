@@ -84,7 +84,7 @@ fi
 # the mode the answer was asked for: a fix round answers its previous findings, and may do it in a '## Resolved'
 # section of their own (#1834) -- a full review may not write that heading, so revformat.py is told which one this is.
 fr=""; [ -n "$delta" ] && fr=--fix-round
-SEV="Severity: the section a finding sits in is its severity, nothing else. BLOCKING is a closed list: a divergence from an accepted ADR; a regression of behaviour main already had; a change to a wire protocol or a persisted format; a test that passes while lying. Anything else real is DEBT. DEBT is not a dropped finding: it costs a filed task, so say it concretely enough to file."
+SEV="Severity: the section a finding sits in is its severity, nothing else. BLOCKING is a closed list: a divergence from an accepted ADR; a regression of behaviour main already had; a change to a wire protocol or a persisted format; a test that passes while lying. Anything else real is DEBT. DEBT is not a dropped finding: it costs a filed task, so say it concretely enough to file. Debt/nit-only findings require APPROVE, never CHANGES."
 # #1777: the length cap is a named constant in the config, never a magic number in the prompt.
 # #1835: the checklist shape is not written here either. revformat.py prints it (--shape, and --fix-round for the mode
 # that has an answer section) and the prompt embeds that printed text verbatim, so the prompt and the check that reads
