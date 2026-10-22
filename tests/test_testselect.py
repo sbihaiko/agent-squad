@@ -18,6 +18,7 @@ BASE = {
     "squad/beta.py": "from squad import alpha\n",
     "squad/gamma.py": "VALUE = 3\n",
     "squad/testselect.py": "",
+    "squad/testselect_inert.txt": "",
     "tests/__init__.py": "",
     "tests/test_alpha.py": "from squad import alpha\n",
     "tests/test_beta.py": "import squad.beta\n",
@@ -201,6 +202,13 @@ INERT_PATH = "docs/agents/triage-labels.md"
 
 def test_a_changed_inert_path_selects_nothing(tmp_path):
     repo = tip(tmp_path, {INERT_PATH: "changed\n"}, extra={INERT_PATH: "old\n", INERT: f"{INERT_PATH}\n"})
+    assert select(repo) == []
+
+
+def test_a_changed_path_on_the_shipped_inert_list_selects_nothing(tmp_path):
+    shipped = (ROOT / INERT).read_text()
+    path = next(line for line in shipped.splitlines() if line and not line.startswith("#"))
+    repo = tip(tmp_path, {path: "changed\n"}, extra={path: "old\n", INERT: shipped})
     assert select(repo) == []
 
 

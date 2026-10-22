@@ -1,10 +1,12 @@
-"""Name the test files a change reaches, by imports; answer `all` with a reason when the imports cannot say."""
+"""Name the test files a change reaches, by imports and by the paths tests name; answer `all` with a reason when neither can say."""
 import argparse
 import ast
 import subprocess
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
-SHARED = {"pyproject.toml", "uv.lock", "squad/testselect.py"}
+INERT = "squad/testselect_inert.txt"
+SHARED = {"pyproject.toml", "uv.lock", "squad/testselect.py", INERT}
 DYNAMIC = {"import_module", "spec_from_file_location", "__import__"}
 LITERAL = {"import_module", "__import__"}
 
@@ -38,12 +40,14 @@ def _with_ancestors(name):
 
 
 def _scan(rel, text):
-    """The module names a file reaches, and whether it imports something dynamically."""
-    names, dynamic = set(), False
+    """The module names a file reaches, whether it imports something dynamically, and the paths its string literals name."""
+    names, dynamic, literals = set(), False, set()
     name = _module(rel)
     pkg = name if rel.endswith("/__init__.py") else name.rpartition(".")[0]
     for node in ast.walk(ast.parse(text, filename=rel)):
-        if isinstance(node, ast.Import):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            literals.add(node.value.removeprefix("./").rstrip("/"))
+        elif isinstance(node, ast.Import):
             for alias in node.names:
                 names |= _with_ancestors(alias.name)
         elif isinstance(node, ast.ImportFrom):
@@ -65,7 +69,45 @@ def _scan(rel, text):
                     names |= _with_ancestors(arg.value)
                 else:
                     dynamic = True
-    return names, dynamic
+    return names, dynamic, literals
+
+
+def _scan_file(job):
+    root, rel = job
+    try:
+        return rel, _scan(rel, (root / rel).read_text())
+    except (SyntaxError, ValueError):
+        return rel, None
+
+
+def _inert(root):
+    lines = (root / INERT).read_text().splitlines()
+    return {line.strip() for line in lines if line.strip() and not line.startswith("#")}
+
+
+def _named_by(named, rel):
+    parts = rel.split("/")
+    hits = set()
+    for i in range(1, len(parts) + 1):
+        hits |= named.get("/".join(parts[:i]), set())
+    return hits
+
+
+def _reach(start, start_rel, importers, dynamic):
+    reached, queue, seen = set(), [start], set()
+    while queue:
+        name = queue.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        for rel in importers.get(name, ()):
+            if rel in dynamic:
+                _all(f"{rel} imports dynamically and reaches {start_rel}")
+            if _is_test(rel):
+                reached.add(rel)
+            else:
+                queue.append(_module(rel))
+    return reached
 
 
 def _answer(root, base):
@@ -78,55 +120,52 @@ def _answer(root, base):
     if diff.returncode:
         _all(f"the diff against {base} failed")
     changed = [p for p in diff.stdout.split("\0") if p]
-
-    modules, tests = {}, set()
-    for rel in changed:
-        if rel in SHARED or rel.startswith("config/"):
-            _all(f"{rel} is shared by every test")
-        if rel.startswith("tests/"):
-            if not _is_test(rel):
-                _all(f"{rel} is a test helper, not a test file")
-            tests.add(rel)
-        elif rel.startswith("squad/") and rel.endswith(".py"):
-            modules[_module(rel)] = rel
-        else:
-            _all(f"{rel} is not a squad module or a test file")
     if not changed:
         return []
 
-    importers, dynamic = {}, set()
-    for folder in ("squad", "tests"):
-        for path in sorted((root / folder).rglob("*.py")):
-            if "__pycache__" in path.parts:
-                continue
-            rel = path.relative_to(root).as_posix()
-            try:
-                names, dyn = _scan(rel, path.read_text())
-            except (SyntaxError, ValueError):
-                _all(f"{rel} does not parse")
-            for name in names:
-                importers.setdefault(name, set()).add(rel)
-            if dyn:
-                dynamic.add(rel)
+    inert = _inert(root)
+    live = []
+    for rel in changed:
+        if rel in SHARED or rel.startswith("config/"):
+            _all(f"{rel} is shared by every test")
+        if rel.startswith("tests/") and not _is_test(rel):
+            _all(f"{rel} is a test helper, not a test file")
+        if rel not in inert:
+            live.append(rel)
+    if not live:
+        return []
 
-    selected = set(tests)
-    for start, start_rel in sorted(modules.items()):
-        reached, queue, seen = set(), [start], set()
-        while queue:
-            name = queue.pop()
-            if name in seen:
-                continue
-            seen.add(name)
-            for rel in importers.get(name, ()):
-                if rel in dynamic:
-                    _all(f"{rel} imports dynamically and reaches {start_rel}")
-                if _is_test(rel):
-                    reached.add(rel)
-                else:
-                    queue.append(_module(rel))
-        if not reached:
-            _all(f"no test imports {start_rel}")
-        selected |= reached
+    rels = sorted(
+        path.relative_to(root).as_posix()
+        for folder in ("squad", "tests")
+        for path in (root / folder).rglob("*.py")
+        if "__pycache__" not in path.parts
+    )
+    with ProcessPoolExecutor() as pool:
+        scanned = list(pool.map(_scan_file, [(root, rel) for rel in rels], chunksize=8))
+    importers, dynamic, named = {}, set(), {}
+    for rel, scan in scanned:
+        if scan is None:
+            _all(f"{rel} does not parse")
+        names, dyn, literals = scan
+        for name in names:
+            importers.setdefault(name, set()).add(rel)
+        if dyn:
+            dynamic.add(rel)
+        if _is_test(rel):
+            for literal in literals:
+                named.setdefault(literal, set()).add(rel)
+
+    selected = set()
+    for rel in live:
+        hits = _named_by(named, rel)
+        if _is_test(rel):
+            hits.add(rel)
+        elif rel.startswith("squad/") and rel.endswith(".py"):
+            hits |= _reach(_module(rel), rel, importers, dynamic)
+        if not hits:
+            _all(f"{rel} is reached by no test: no import, no path literal, not inert")
+        selected |= hits
     return sorted(selected)
 
 
