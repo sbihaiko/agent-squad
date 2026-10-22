@@ -11,8 +11,14 @@ export PATH="$T/bin:$PATH" CONSULT_DRY=1
 ask() { rm -f "$T/run/consult.done"; bash "$S/consult.sh" "$T/run" 2>"$T/err"; }
 
 cp "$d/models.json" "$S/models.json"
+# The repo file's first coding entry keeps an hours window, so the case reads which entry may run now through the shipped
+# resolver instead of naming one: a night run and a day run start on different entries.
+first_coding=$(cd "$S" && python3 -c 'import time, modelreg
+e = modelreg.chain("models.json", "coding").entries
+h = time.localtime().tm_hour
+print(next((x.raw for x in e if modelreg.eligible(x, hour=h).ok), e[0].raw))')
 out=$(ask)
-case "$out" in *"(claude-gpt-5.6-terra): GO"*) ok "the repo models.json (v2) asks its first coding model";;
+case "$out" in *"($first_coding): GO"*) ok "the repo models.json (v2) asks its first coding model";;
   *) ko "v2 repo file asks: ${out:-nothing} $(cat "$T/err")";; esac
 
 printf '{"schema_version":2,"chains":{"coding":[{"id":"gpt-5.6-terra","raw":"claude-gpt-5.6-terra","route":"gateway","on":false},{"id":"grok-4.7","raw":"claude-grok-4.7","route":"gateway"}]}}' > "$S/models.json"

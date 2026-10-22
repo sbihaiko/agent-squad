@@ -34,7 +34,9 @@ async def test_an_over_limit_spawn_is_rejected_and_a_crash_resumes_from_the_fron
     await two_children(tmp_path / "a")
     over = make(tmp_path / "over", {"router": routed(req(model="gpt-x"))})
     await over.run()
-    assert [e["reason"] for e in ev(tmp_path / "over", "spawn_rejected")] == ["model_outside_allow:gpt-x"]
+    # a request that names a model is rejected whole (ADR-0113 rule 3, SPEC 750): the envelope holds no model list to be
+    # outside of, and the child's model comes from the chain of its kind
+    assert [e["reason"] for e in ev(tmp_path / "over", "spawn_rejected")] == ["model_supplied"]
     crash_after_first_child(tmp_path / "a", tmp_path / "b")
     eng = make(tmp_path / "b", {"route.router.2": CHILD})
     v = await eng.resume()

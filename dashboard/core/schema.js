@@ -54,6 +54,9 @@ function schemaModule({ ENGINE, isObj, canonText, same, pyFloat }) {
         else if (isObj(s.additionalProperties)) out.push(...check(v[k], s.additionalProperties, defs, [...path, k]));
       }
     }
+    if (s.anyOf) {
+      if (!s.anyOf.some((x) => check(v, x, defs, path).length === 0)) out.push({ path: at, message: `${JSON.stringify(v)} is not valid under any of the given schemas` });
+    }
     if (s.oneOf) {
       const n = s.oneOf.filter((x) => check(v, x, defs, path).length === 0).length;
       if (n !== 1) out.push({ path: at, message: `${JSON.stringify(v)} is valid under ${n} of the given schemas, not exactly one` });
