@@ -22,6 +22,13 @@ def head(cwd):
     return r.stdout.strip() if r.returncode == 0 else None
 
 
+def merge_base(a, b, cwd):
+    """The commit two revisions share, or None when they share none. Read for a `{base}` that never moves: a merge base
+    is the point a branch was cut from, so a sibling's later merge leaves it as it was."""
+    r = run(["merge-base", a, b], cwd)
+    return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
+
+
 def state(cwd):
     """A digest of the working state: HEAD, status, and the diff against HEAD. Equal digests mean no change."""
     parts = [head(cwd) or "", run(["status", "--porcelain=v1", "-uall"], cwd).stdout, run(["diff", "HEAD"], cwd).stdout]

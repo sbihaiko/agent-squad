@@ -42,6 +42,7 @@ class Dispatch:
         self.e = engine
         self.children, self.held = {}, {}   # spawned children by name (their spawn_accepted event), and their held reservations
         self.landed = {}       # dispatch child name -> its `land` event
+        self.pending = {}      # dispatch child name -> {"event", "got"}: the review its pass started, and where its result lands
         self.ac_before = None  # {child: its held-out commands all passed}, as of the last landing
         self._slug = None      # the target's <owner>/<repo>, read once from its origin: the issue ledger's key (ADR-0138)
 
@@ -180,8 +181,7 @@ class Dispatch:
             if self.ac_before is None:      # the first landing of this walk or resume: the target as it stands is the baseline
                 self.ac_before, _ = await self.ac_survey()
             head_before = git.head(self.e.target)
-            review, rounds, why = (await self.rounds(node, name, d, path, head_before, sc)
-                                   if node.get("review") and path.exists() else (None, 0, None))
+            review, rounds, why = await self.review_of(node, name, d, path, head_before, sc)
             if not path.exists():      # a passed writer whose worktree is gone: its work cannot land, and the record says so
                 r = actions.ActionResult(False, ["land_workspace_missing"], head_before)
             elif why:                  # a held child is not merged: its worktree stays, with every fix round on its branch
@@ -202,12 +202,48 @@ class Dispatch:
                                                            **({"review": review, "rounds": rounds} if review else {})})   # `before` is read here: the landing check replaces the merge's result
         return False
 
-    async def rounds(self, node, name, d, path, base, sc):
+    def review_base(self, path):
+        """The target's side of a review's `{base}`: the point the child's branch was cut from. A target head read when the
+        review starts moves with a sibling's merge, so the same round would be read against two repositories depending on
+        when the process was cut (ADR-0107). A merge base never moves; a branch with no shared history falls back to it."""
+        e = self.e
+        target = git.head(e.target)
+        return (git.merge_base(target, "HEAD", str(path)) if target else None) or target
+
+    async def first_round(self, node, name, d, path, base):
+        """The reading of one passed child's head, run beside its siblings' work. The fix the review may ask for is funded
+        later, in `land` (ADR-0108): this command is told whether the run's cap still covers the next entry's spend, read
+        without reserving it, so a sibling's reservation in flight never turns a fundable fix into a hold. The grant is
+        taken in `rounds`, after the entry's children settled."""
+        e = self.e
+        if not node.get("review") or not path.exists():
+            return None
+        return await self.tries(node, name, d, path, base, 1, e.budget.run_spend_remaining >= d["spend"])
+
+    async def review_of(self, node, name, d, path, head_before, sc):
+        """The review of one passed child, or (None, 0, None) when the graph declares none or its worktree is gone.
+        The reading itself starts when the child passes (`Children.review_child`), so the readings of several passing
+        children overlap; `rounds` then decides that round and every fix round it asks for, in request order, after the
+        entry's children settled. The merge still happens here, one child at a time in request order.
+        A resumed pass has no task: `rounds` replays the rounds the record holds and reviews only a head with no
+        `review_round` (ADR-0107). A task that died before writing its result leaves the same replay, so a cancelled or
+        broken review never merges a child unreviewed."""
+        if not node.get("review") or not path.exists():
+            return None, 0, None
+        first, pending = None, self.pending.get(name)
+        if pending is not None:
+            await pending["event"].wait()
+            first = pending["got"]
+        return await self.rounds(node, name, d, path, self.review_base(path) or head_before, sc, first)
+
+    async def rounds(self, node, name, d, path, base, sc, first=None):
         """Review one passed child, and fix it while its review asks (#570). Round n reviews the head of entry n; a `fix`
         verdict starts entry n+1 of the same child in its worktree with the full review, and its new head is round n+1.
         The command decides fix or hold (its stall rule, ADR-0134); code offers a round only when it already holds the next
         entry's grant from the run budget (ADR-0108), and there is no cap on rounds. Each round is a `review_round` event;
         a resume replays the recorded rounds and fix entries and reviews only a head with no recorded round (ADR-0107).
+        `first` is the reading `Children.review_child` already ran for round 1, or None when the pass is replayed, read on
+        resume, or its task died: then this reads the head itself, and `tries` replays what the record holds.
         Identical findings twice move the fix round to the next coder of the chain, and a fix round that wrote no artifact
         is the finding unanswered: it moves the coder at once, and because the head did not move the review stands and is
         not read again (`review_round.repeated`, ADR-0151, #735).
@@ -220,7 +256,18 @@ class Dispatch:
             fund, rec = None, None if reading else next((x for x in e.record.events if x["event"] == "review_round" and x["node"] == name and x["round"] == n), None)
             if rec is None:
                 fund = e.budget.hold(self.children[name]["definition"]["spend"])
-                review = reading or await self.tries(node, name, d, path, base, n, fund is not None)
+                try:
+                    if reading:
+                        review = reading
+                    elif n == 1 and first is not None:
+                        review = first
+                    else:
+                        review = await self.tries(node, name, d, path, base, n, fund is not None)
+                except BaseException as x:      # a grant a broken round cannot use goes back, and the record names the break
+                    if fund is not None:
+                        e.budget.release(fund)
+                    e.record.append("diagnostic", source="review", node=name, entry=n, payload={"error": str(x)[:500]})
+                    raise
                 if review["verdict"] == "fix" and fund is None:      # a fix the run did not offer is a hold
                     review["verdict"] = "hold"
                 rec = e.record.append("review_round", node=name, round=n, head=git.head(path), verdict=review["verdict"],
@@ -521,6 +568,28 @@ class DispatchRunner:
         reviewed = [n for n in (x[0] for x in seen) if "review" in ((d.landed.get(n) or {}).get("effect") or {})]
         return "pass", ([] if reviewed else ["no_child_reviewed"])
 
+    async def land_children(self, ctx, node, ent, pe, sc, d, entry):
+        """Run the entry's children and land them. A child's reading starts the moment it passes, in the task group opened
+        here, so the readings of several passing children overlap; `land` still reviews and merges one at a time in
+        request order. The group sits outside `run_of`'s cancel scope: a child that passed is finished work, so a sibling's
+        `first_failure` cancels the children still running, never the review of one that already passed.
+        An exception from the body (a pause holds the entry, a dry walk owes a landing) is stored so the group's own
+        BaseExceptionGroup is never handed to the engine unwrapped, and it cancels the group first: a review in flight
+        after a hold would start a new metered session the owner has asked to stop."""
+        raised, owed = None, False
+        async with anyio.create_task_group() as reviews:
+            try:
+                seen = await ctx.runs.run_of(node, ent, pe, sc, min(sc.deadline_at, ctx.clock() + node["deadline"] * ctx.scale), reviews)
+                owed = await d.land(node, entry, sc, seen)
+            except Exception as x:  # noqa: BLE001 - a task group wraps its body's exception: hand the run the one it raised
+                reviews.cancel_scope.cancel()
+                raised = x
+        if raised is not None:
+            raise raised
+        if owed:
+            raise Frontier([(node["name"], sc.item)])
+        return seen
+
     async def run(self, ctx, node, entry, sc):
         node = ctx.dispatch_node(node)   # the router overlay narrows the envelope here; the authored graph keeps its hash
         d, t0, ent = ctx.dispatch, ctx.clock(), node["entry"]   # wall time of this entry, from reading its entry child to landing
@@ -534,9 +603,7 @@ class DispatchRunner:
         diag = ctx.outcome_event(ent, pe, sc.item).get("diagnostic") or {}
         d.lift(node, ent, pe, 1, spawns, None, ctx.budget.available(), None, diag.get("session", "unknown"))   # the envelope's tool ceiling bounds a top-level child
         self.open_gates(ctx, node, entry, sc)
-        seen = await ctx.runs.run_of(node, ent, pe, sc, min(sc.deadline_at, ctx.clock() + node["deadline"] * ctx.scale))
-        if await d.land(node, entry, sc, seen):
-            raise Frontier([(node["name"], sc.item)])
+        seen = await self.land_children(ctx, node, ent, pe, sc, d, entry)
         seen = [(n, d.landed_outcome(n, o), d.landed_reasons(n, r)) for n, o, r in seen]
         self.close_gates(ctx, node, entry, sc, d, seen)
         outcome, reasons = d.entry_verdict(node, seen)   # a held issue asks the owner, never a dependent's failure (ADR-0029)

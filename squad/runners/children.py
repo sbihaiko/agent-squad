@@ -93,11 +93,17 @@ class Children:
                     res[f"{g}:evidence"] = r.evidence
         return res
 
-    async def run_of(self, node, ent, pe, sc, dl_at):
-        """Run the accepted top-level children of one dispatch entry. Return (name, outcome, reasons) in request order."""
+    async def run_of(self, node, ent, pe, sc, dl_at, reviews=None):
+        """Run the accepted top-level children of one dispatch entry. Return (name, outcome, reasons) in request order.
+        `reviews` is the task group that owns the children's reviews. A child's review starts the moment the child passes,
+        so the reviews of several passing children overlap; the group is opened outside this entry's cancel scope, because
+        a child that passed is finished work and a sibling's failure never cancels its review. A review takes a slot of
+        `review_slots`, never one of `limiter`: a reading beside a sibling's work is never a child's place in the queue."""
         e = self.e
-        ctx = SimpleNamespace(node=node, dl_at=dl_at, results=[], frontier=[], held=[], cancel=None, waits={},
-                              limiter=anyio.CapacityLimiter(max(1, min(node["max_parallel"], e.run_cfg["max_parallel"]))))
+        room = max(1, min(node["max_parallel"], e.run_cfg["max_parallel"]))
+        ctx = SimpleNamespace(node=node, dl_at=dl_at, deadline_at=sc.deadline_at, results=[], frontier=[], held=[],
+                              cancel=None, waits={}, reviews=reviews,
+                              limiter=anyio.CapacityLimiter(room), review_slots=anyio.CapacityLimiter(room))
         with anyio.CancelScope() as scope:
             ctx.cancel = scope
             await self.run_all(ctx, e.dispatch.accepted(ent, pe))
@@ -139,6 +145,7 @@ class Children:
                 else:
                     async with ctx.limiter:
                         done = await self.admitted(ctx, name)
+                        self.start_review(ctx, name, done)
             except anyio.get_cancelled_exc_class():
                 if (name, 1, None) not in e.done:
                     with anyio.CancelScope(shield=True):
@@ -149,6 +156,36 @@ class Children:
         ctx.waits.setdefault(name, anyio.Event()).set()
         ctx.results.append((name, done["outcome"], done["reasons"]))
         await self.run_all(ctx, e.dispatch.accepted(name, 1))
+
+    def start_review(self, ctx, name, done):
+        """Start a passing child's reading now, so it overlaps its siblings' work. Only a passing write child that can
+        land is read: no other child reaches the review in `Dispatch.land`. A dry walk starts none, and a round the
+        record already holds is replayed by `land`, never read again (ADR-0107)."""
+        e = self.e
+        d = e.dispatch.children[name]["definition"]
+        path = self.workspace(name, d)
+        if (ctx.reviews is None or e.dry or done["outcome"] != "pass" or not ctx.node.get("review")
+                or not e.dispatch.landable(name) or not path.exists() or e.dispatch.last_round(name) >= 1):
+            return
+        e.dispatch.pending[name] = {"event": anyio.Event(), "got": None}
+        ctx.reviews.start_soon(self.review_child, ctx, name, d, path)
+
+    async def review_child(self, ctx, name, d, path):
+        """One passed child's reading, beside its siblings. It takes a slot of the review limiter, never a child's: a
+        review's wall time is never taken from a waiting child's call deadline (ADR-0051). A fix round the review asks
+        for runs in `Dispatch.land`, after the entry's children settled: no worktree is rewritten under a sibling that
+        reads it (ADR-0113 rule 11), and the grant is taken against a settled budget (ADR-0108).
+        `Dispatch.land` waits for this result and replays the record when the task died before writing one."""
+        e = self.e
+        got = e.dispatch.pending[name]
+        try:
+            async with ctx.review_slots:
+                got["got"] = await e.dispatch.first_round(ctx.node, name, d, path, e.dispatch.review_base(path))
+        except Exception as x:  # noqa: BLE001 - a task that broke mid-read leaves the land to replay what the record holds
+            e.record.append("diagnostic", source="review", node=name, entry=1, payload={"error": str(x)[:500]})
+            got["got"] = None
+        finally:
+            got["event"].set()
 
     async def fix(self, node, name, entry, review, dl_at, coder=None):
         """One fix round of a child its review asked to fix (#570): entry `entry` of the same child, in its own worktree, with
