@@ -56,8 +56,9 @@ def test_two_timeouts_omit_nothing_at_the_default_bound(tmp_path):
 
 def test_the_bound_is_read_from_the_argument(tmp_path):
     state = tmp_path / "review-timeouts.json"
-    timeouts(state, 2)
-    assert call(state, "omitted", T0 + 10, bound="2").returncode == 0
+    assert call(state, "timeout", T0, bound="2").stdout == ""
+    assert call(state, "timeout", T0 + 1, bound="2").stdout.count("omitted until") == 1
+    assert call(state, "omitted", T0 + 10).returncode == 0
 
 
 def test_the_window_ends_by_time_and_restores_eligibility(tmp_path):

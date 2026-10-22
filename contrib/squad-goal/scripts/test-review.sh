@@ -5,7 +5,7 @@
 # 7) #1501: the aging leash must not kill the only reachable model; 8) with several reachable models it still clamps.
 src=${1:-$(dirname "$0")/review.sh}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 export SG_SHARED="$T/st"   # the shared marks (quota-guard, *-limited) are the suite's own, never the machine's under ~/.cache
-mkdir -p "$T/bin" "$T/st/cq" "$T/s"; cp "$src" "$T/s/review.sh"; cp "$(dirname "$src")/revformat.py" "$(dirname "$src")/ghcall.sh" "$(dirname "$src")/ghread.py" "$(dirname "$src")/modelreg.py" "$T/s/"; : > "$T/s/codex-reset.py"
+mkdir -p "$T/bin" "$T/st/cq" "$T/s"; cp "$src" "$T/s/review.sh"; cp "$(dirname "$src")/revformat.py" "$(dirname "$src")/ghcall.sh" "$(dirname "$src")/ghread.py" "$(dirname "$src")/modelreg.py" "$(dirname "$src")/review-timeouts.py" "$T/s/"; : > "$T/s/codex-reset.py"
 # the registry the review reads: the shipped one plus `nt`, a model whose capabilities say no tools (the no-tools path reads that, not a list)
 jq '.models += [{id:"nt",label:"nt",provider:"claude",subscription:"claude",aliases:["claude:nt"],capabilities:{tools:false},
   routes:{cli:{auth:"subscription",argv:["claude","-p","--model","{model}","{prompt_file}"],served:["nt"]},direct:{auth:"subscription",model:"nt",served:["nt"]}}}]' "$(dirname "$src")/registry.json" > "$T/s/registry.json"
@@ -548,9 +548,9 @@ rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"*
 # 26) #749: a review model that times out three times in a row is omitted from the next chains for its window, and the
 # omission is named once in the pass (stderr), in cycle.log and in the queue. One timeout omits nothing. An answered review
 # clears the streak. The window ends by time: the model is tried again with no state edit.
-printf '#!/bin/bash\ncat > /dev/null; echo "$*" >> "$CLAUDE_ARGS"\ncase "$*" in *"--model slow"*) [ "$(cat "$T/slow.mode")" = answer ] && { echo "VERDICT: APPROVE"; exit 0; }; sleep 30;; *) echo "VERDICT: APPROVE";; esac\n' > "$T/bin/claude"; chmod +x "$T/bin/claude"
+printf '#!/bin/bash\ncat > /dev/null; echo "$*" >> "$CLAUDE_ARGS"\ncase "$*" in *"--model slow"*) [ "$(cat "$SLOW_MODE")" = answer ] && { echo "VERDICT: APPROVE"; exit 0; }; sleep 30;; *) echo "VERDICT: APPROVE";; esac\n' > "$T/bin/claude"; chmod +x "$T/bin/claude"
 printf '{"review_models":["claude:slow","claude:fast"],"review_order":"config","model_retry_budget":1,"review_timeout_seconds":2,"review_timeout_bound":3,"review_timeout_omit_seconds":4,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
-export CLAUDE_ARGS="$T/claude-args"; : > "$CLAUDE_ARGS"; echo timeout > "$T/slow.mode"
+export CLAUDE_ARGS="$T/claude-args" SLOW_MODE="$T/slow.mode"; : > "$CLAUDE_ARGS"; echo timeout > "$SLOW_MODE"
 rm -f "$T/st/review-timeouts.json" "$T/st/cycle.log" "$T/st/cq/"*
 rv() { rm -f "$T/st/review-fix_1-x".*; GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 2>"$T/rv.err"; }
 slow() { /usr/bin/grep -c -- '--model slow' "$CLAUDE_ARGS"; }
@@ -569,7 +569,7 @@ echo answer > "$T/slow.mode"; rv >/dev/null
 echo timeout > "$T/slow.mode"; rv >/dev/null; rv >/dev/null
 rv >/dev/null
 [ "$(slow)" = 8 ] && ok "26 an answered review clears the streak: two timeouts after it do not omit the model" || ko "26 answer reset: slow calls $(slow) $(cat "$T/rv.err")"
-rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/st/cycle.log" "$T/st/review-timeouts.json" "$CLAUDE_ARGS"; unset CLAUDE_ARGS
+rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/st/cycle.log" "$T/st/review-timeouts.json" "$CLAUDE_ARGS"; unset CLAUDE_ARGS SLOW_MODE
 
 # The committed labeled sample measures historical CHANGES verdicts. The report is a read-only
 # calibration instrument: it names the total, the Debt/nit-only count, and the rate.
