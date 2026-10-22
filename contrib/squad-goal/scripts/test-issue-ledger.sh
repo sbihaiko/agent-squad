@@ -117,4 +117,17 @@ out=$(L replay 'x/z#60' 2>&1); rc=$?
 L fail 'x/y#61' r1 k first >/dev/null; echo 3 > "$T/st/auto/requeues-61"
 out=$(L replay 'x/y#61' 2>&1); rc=$?
 [ $rc = 1 ] && case "$out" in *'x/y#61'*requeues-61*) ok "a replay names an old counter that differs from the ledger";; *) ko "replay legacy out: '$out'";; esac || ko "replay legacy rc $rc '$out'"
+L fail 'x/y#62' r1 k first >/dev/null; printf '1\n' > "$T/st/auto/requeues-62"; printf 'r1\tother\tfirst\n' > "$T/st/auto/requeues-62.runs"
+out=$(L replay 'x/y#62' 2>&1); rc=$?
+[ $rc = 1 ] && case "$out" in *'x/y#62'*own.runs*) ok "a replay names a legacy failure whose key differs";; *) ko "replay key out: '$out'";; esac || ko "replay key rc $rc '$out'"
+printf 'r1\tk\tfirst\nfrozen\n' > "$T/st/auto/requeues-62.runs"
+out=$(L replay 'x/y#62' 2>&1); rc=$?
+[ $rc = 1 ] && case "$out" in *'x/y#62'*own.frozen*) ok "a replay names a legacy frozen the ledger does not hold";; *) ko "replay frozen out: '$out'";; esac || ko "replay frozen rc $rc '$out'"
+L review 'x/y#63' v1 changes f 1 >/dev/null
+python3 - "$T/st/state/x__y__63.json" <<'PY'
+import json,sys
+d=json.load(open(sys.argv[1])); d["review"]["stopped"]="3 reviews"; json.dump(d,open(sys.argv[1],"w"))
+PY
+out=$(L replay 'x/y#63' 2>&1); rc=$?
+[ $rc = 1 ] && case "$out" in *'x/y#63'*review.stopped*) ok "a replay names a stored review stop its events do not support";; *) ko "replay stop out: '$out'";; esac || ko "replay stop rc $rc '$out'"
 rm -rf "$T"; exit $fail

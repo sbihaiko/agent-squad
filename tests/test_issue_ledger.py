@@ -306,3 +306,41 @@ def test_replay_of_a_held_ledger_is_held_not_a_pass(tmp_path):
     f.write_text("{")
     r = run(tmp_path, "replay", "a/b#66")
     assert r.returncode == 3 and "a/b#66" in r.stderr, (r.stdout, r.stderr)
+
+
+def _legacy(tmp_path, n, lines):
+    a = tmp_path / "auto"
+    a.mkdir(exist_ok=True)
+    (a / f"requeues-{n}").write_text("1\n")
+    (a / f"requeues-{n}.runs").write_text(lines)
+
+
+@pytest.mark.parametrize("old", ["r1\tother-key\tfirst\n", "r1\tk\tchanged reason\n"])
+def test_replay_names_a_legacy_failure_whose_key_or_reason_differs(tmp_path, old):
+    run(tmp_path, "fail", "a/b#67", "r1", "k", "first")
+    _legacy(tmp_path, 67, old)
+    r = run(tmp_path, "replay", "a/b#67")
+    assert r.returncode == 1 and "a/b#67" in r.stderr and "own.runs" in r.stderr, (r.stdout, r.stderr)
+
+
+def test_replay_names_a_legacy_frozen_the_ledger_does_not_hold(tmp_path):
+    run(tmp_path, "fail", "a/b#68", "r1", "k", "first")
+    _legacy(tmp_path, 68, "r1\tk\tfirst\nfrozen\n")
+    r = run(tmp_path, "replay", "a/b#68")
+    assert r.returncode == 1 and "a/b#68" in r.stderr and "frozen" in r.stderr, (r.stdout, r.stderr)
+
+
+def test_replay_agrees_with_a_legacy_frozen_the_migrated_ledger_holds(tmp_path):
+    _legacy(tmp_path, 69, "r1\tk\tfirst\nfrozen\n")
+    run(tmp_path, "migrate", "a/b#69")
+    assert run(tmp_path, "replay", "a/b#69").returncode == 0
+
+
+def test_replay_names_a_stored_review_stop_its_events_do_not_support(tmp_path):
+    run(tmp_path, "review", "a/b#70", "v1", "changes", "f", "1")
+    f = tmp_path / "state" / "a__b__70.json"
+    d = json.loads(f.read_text())
+    d["review"]["stopped"] = "3 reviews of the issue asked for changes"
+    f.write_text(json.dumps(d))
+    r = run(tmp_path, "replay", "a/b#70")
+    assert r.returncode == 1 and "a/b#70" in r.stderr and "review.stopped" in r.stderr, (r.stdout, r.stderr)
