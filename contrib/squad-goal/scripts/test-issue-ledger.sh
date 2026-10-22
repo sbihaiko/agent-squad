@@ -103,4 +103,18 @@ L rearm 'x/z#51' >/dev/null
 [ "$(L read 'x/z#51' review | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["changes"], d["moves"], len(d["verdicts"]))')" = "0 0 0" ] \
   && ok "a rearm clears the review facts" || ko "rearm review: '$(L read 'x/z#51' review)'"
 [ "$(L review 'x/z#51' r1 changes f1 1)" = floor ] && ok "a review of a run from before the rearm counts nothing" || ko "floor review: '$(L read 'x/z#51' review)'"
+# A replay (ADR-0149 rule 6) rebuilds the issue's state from its ledger's events and compares it with the stored state and
+# with any old counter beside it; it names the issue and exits non-zero when they differ.
+L fail 'x/z#60' r1 k first >/dev/null; L fail 'x/z#60' r2 k second >/dev/null; L review 'x/z#60' v1 changes f 1 >/dev/null
+out=$(L replay 'x/z#60' 2>&1); rc=$?
+[ $rc = 0 ] && case "$out" in *'x/z#60'*ok*) ok "a replay of a sound ledger agrees";; *) ko "replay out: '$out'";; esac || ko "replay rc $rc '$out'"
+python3 - "$T/st/state/x__z__60.json" <<'PY'
+import json,sys
+d=json.load(open(sys.argv[1])); d["own"]["count"]=9; json.dump(d,open(sys.argv[1],"w"))
+PY
+out=$(L replay 'x/z#60' 2>&1); rc=$?
+[ $rc = 1 ] && case "$out" in *'x/z#60'*own.count*) ok "a replay names the issue and the field that differs";; *) ko "replay diff out: '$out'";; esac || ko "replay diff rc $rc '$out'"
+L fail 'x/y#61' r1 k first >/dev/null; echo 3 > "$T/st/auto/requeues-61"
+out=$(L replay 'x/y#61' 2>&1); rc=$?
+[ $rc = 1 ] && case "$out" in *'x/y#61'*requeues-61*) ok "a replay names an old counter that differs from the ledger";; *) ko "replay legacy out: '$out'";; esac || ko "replay legacy rc $rc '$out'"
 rm -rf "$T"; exit $fail
