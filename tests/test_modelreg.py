@@ -549,7 +549,7 @@ def test_write_chains_with_no_doc_keeps_the_files_other_keys(tmp_path):
 
     `doc` defaults to `{}`, so a call that omits it wrote a file of two keys and dropped every constant beside the
     chains -- the review timeout, the review line cap and the stall budget. A live Save through that path left every
-    review BLOCKED with `[: null: integer expression expected`, and nothing refused (#1836)."""
+    review BLOCKED with `[: null: integer expression expected`, and nothing refused."""
     path = tmp_path / "models.json"
     path.write_text(json.dumps({"schema_version": 2,
                                 "chains": {"coding": [{"id": "grok-4.7"}], "review": [], "vision": [], "router": []},
@@ -558,4 +558,12 @@ def test_write_chains_with_no_doc_keeps_the_files_other_keys(tmp_path):
     out = json.loads(path.read_text())
     assert out["review_timeout_seconds"] == 360, out
     assert out["review_max_lines"] == 60, out
+    assert [e["id"] for e in out["chains"]["coding"]] == ["grok-4.7"], out
+
+
+def test_write_chains_with_no_doc_and_no_file_writes_the_chains(tmp_path):
+    path = tmp_path / "models.json"
+    mr.write_chains(path, {"coding": [{"id": "grok-4.7"}], "review": [], "vision": [], "router": []})
+    out = json.loads(path.read_text())
+    assert set(out) == {"schema_version", "chains"}, out
     assert [e["id"] for e in out["chains"]["coding"]] == ["grok-4.7"], out

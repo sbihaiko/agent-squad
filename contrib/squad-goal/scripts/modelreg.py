@@ -904,9 +904,8 @@ def write_chains(path, chains, doc=None):
     Return the document written.
 
     A caller that passes no `doc` keeps the file's own keys: it reads the file on disk. No `doc` never means "a file of
-    two keys", because that wrote a live models.json of `schema_version` and `chains` alone and took the review timeout,
-    the review line cap and the stall budget with it (#1836). A file that is absent or unreadable is the empty document
-    it always was.
+    two keys", because that drops the review timeout, the review line cap and the stall budget. A file that is absent
+    or unreadable is the empty document it always was.
 
     A `doc` still in the v1 shape is migrated whole, never partly: a keyed setting for a model that survives in no
     chain goes under `_orphans` as `migrate` keeps it, and the input file is saved as `<name>.v1.bak` first, so a
