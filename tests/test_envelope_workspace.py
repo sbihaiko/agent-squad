@@ -17,7 +17,7 @@ from squad.engine import Engine
 from squad.envelope import validate_request
 from squad.graph import from_doc
 from tests.gitrepo import sibling_repo
-from tests.helpers import node, router
+from tests.helpers import KIND_CHAINS, route, router
 from tests.test_dispatch import CHILD, ev, req, routed
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "contrib" / "squad-goal" / "scripts"
@@ -25,7 +25,7 @@ GIT = ["/usr/bin/git", "-c", "user.email=a@b", "-c", "user.name=t"]
 
 
 def disp():
-    return node(router(), "route")
+    return route()
 
 
 def issue_worktree_note(tmp_path):
@@ -74,7 +74,7 @@ async def test_the_issue_worktree_a_real_request_names_is_inside_the_graphs_enve
     d = router()
     d["run"]["deadline"] = 7200
     eng = Engine(from_doc(d), ScriptedAdapter({"router": routed(req(workspace=router_reads(note))), "route.router.1": CHILD}), run,
-                 target=sibling_repo(tmp_path))
+                 target=sibling_repo(tmp_path), kind_chains=KIND_CHAINS)
     v = await eng.run()
     assert [e["reason"] for e in ev(run, "spawn_rejected")] == []
     assert [e["child"] for e in ev(run, "spawn_accepted")] == ["route.router.1"] and v.verdict == "completed"
@@ -90,7 +90,8 @@ def test_a_refused_workspace_is_quoted_with_the_allowed_list():
 @pytest.mark.anyio
 async def test_the_rejection_event_carries_the_quoted_workspace(tmp_path):
     eng = Engine(from_doc({**router(), "run": {**router()["run"], "deadline": 7200}}),
-                 ScriptedAdapter({"router": routed(req(workspace="worktrees/other"))}), tmp_path, target=sibling_repo(tmp_path))
+                 ScriptedAdapter({"router": routed(req(workspace="worktrees/other"))}), tmp_path, target=sibling_repo(tmp_path),
+                 kind_chains=KIND_CHAINS)
     v = await eng.run()
     assert [e["reason"] for e in ev(tmp_path, "spawn_rejected")] == ["workspace_outside_allow:requested 'worktrees/other', allowed ['worktrees/child']"]
     assert v.verdict == "failed"

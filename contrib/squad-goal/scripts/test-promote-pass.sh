@@ -28,8 +28,9 @@ case "\$*" in
 esac
 EOF
 chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
-# The stub suite logs where it ran, the HEAD it ran at, and whether the gate lock was held around it; $T/suite-rc is its exit.
-printf '#!/bin/bash\necho "$(pwd -P) $(git rev-parse HEAD) $([ -d "$SG_STATE/locks/gate" ] && echo held || echo free) $(git status --porcelain | wc -l | tr -d " ")" >> "%s/suite.log"\necho "$([ -e "$SG_STATE/promote-reserve" ] && echo reserved || echo unreserved)" >> "%s/reserve.log"\nexit $(cat "%s/suite-rc" 2>/dev/null || echo 0)\n' "$T" "$T" "$T" > "$T/suite"
+# The stub suite logs where it ran, the HEAD it ran at, whether the proof lock was held and the landing gate lock was free
+# around it (ADR-0145 rule 3: the proof runs in its own tree under its own lock, and no wave waits on it); $T/suite-rc is its exit.
+printf '#!/bin/bash\necho "$(pwd -P) $(git rev-parse HEAD) $([ -d "$SG_STATE/locks/full-proof" ] && echo held || echo free)-$([ -d "$SG_STATE/locks/gate" ] && echo gateheld || echo gatefree) $(git status --porcelain | wc -l | tr -d " ")" >> "%s/suite.log"\necho "$([ -e "$SG_STATE/promote-reserve" ] && echo reserved || echo unreserved)" >> "%s/reserve.log"\nexit $(cat "%s/suite-rc" 2>/dev/null || echo 0)\n' "$T" "$T" "$T" > "$T/suite"
 chmod +x "$T/suite"; export SG_PROMOTE_SUITE="$T/suite"
 runs() { cat "$T/suite.log" 2>/dev/null | wc -l | tr -d " "; }
 lines() { cat "$SG_STATE/promote.log" 2>/dev/null | /usr/bin/grep -c "promote-pass: $1"; }
@@ -44,7 +45,7 @@ adv dev one; t1=$(tip dev); pass; rc=$?
 [ $rc = 0 ] && [ "$(tip stg)" = "$t1" ] && ok "a green suite at the dev tip promotes stg by fast-forward" || ko "green: rc $rc, stg $(tip stg), dev $t1, out '$(cat "$T/out")'"
 read -r where at lock dirty < "$T/suite.log"
 [ "$at" = "$t1" ] && ok "the suite ran at the exact dev tip" || ko "the suite ran at $at, not $t1"
-[ "$lock" = held ] && ok "the suite ran inside the gate lock" || ko "the suite ran outside the gate lock"
+[ "$lock" = held-gatefree ] && ok "the suite ran inside the proof lock, and the landing gate lock was free" || ko "the suite ran with the proof lock $lock"
 [ "$dirty" = 0 ] && ok "the suite ran in a clean tree" || ko "the suite's tree was dirty ($dirty)"
 case "$where" in "$HOME"/wt-*|*/wt-*) ko "the suite tree is a wt-* tree, which wtclean removes: $where";; *) ok "the suite tree is not a wt-* tree";; esac
 # #739: the proof reserves the machine it measures. The dispatchers read the marker through gh_dispatch_hold, and the pass
@@ -80,9 +81,9 @@ rm -f "$T/readback-none"
 # A held gate lock: the pass returns at once, runs no suite, leaves no marker; the next free pass proves the tip and carries the
 # earlier refused work with it.
 adv dev four; t4=$(tip dev); before=$(tip stg)
-(bash "$d/serial.sh" gate sleep 6) & hp=$!; for _ in $(seq 1 50); do [ -s "$SG_STATE/locks/gate/pid" ] && break; sleep 0.1; done
+(bash "$d/serial.sh" full-proof sleep 6) & hp=$!; for _ in $(seq 1 50); do [ -s "$SG_STATE/locks/full-proof/pid" ] && break; sleep 0.1; done
 n=$(runs); s0=$(date +%s); pass; rc=$?; el=$(( $(date +%s) - s0 ))
-[ "$el" -lt 4 ] && [ "$(runs)" = "$n" ] && ok "a held gate lock makes the pass return instead of wait (${el}s)" || ko "held lock: ${el}s, runs $(runs) (was $n)"
+[ "$el" -lt 4 ] && [ "$(runs)" = "$n" ] && ok "a held proof lock makes the pass return instead of wait (${el}s)" || ko "held proof lock: ${el}s, runs $(runs) (was $n)"
 [ "$(tip stg)" = "$before" ] && [ "$(lines "$t4")" = 0 ] && ok "a skipped tick marks nothing and promotes nothing" || ko "skipped tick: stg $(tip stg), lines $(lines "$t4")"
 wait "$hp"; pass; rc=$?
 [ $rc = 0 ] && [ "$(tip stg)" = "$t4" ] && ok "the next free pass proves the tip and promotes it" || ko "after the hold: rc $rc, stg $(tip stg), out '$(cat "$T/out")'"

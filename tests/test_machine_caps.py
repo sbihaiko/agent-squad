@@ -23,7 +23,7 @@ from squad.graph import from_doc
 from squad.options import OptionError
 from squad.record import read
 from tests.gitrepo import sibling_repo
-from tests.helpers import router
+from tests.helpers import KIND_CHAINS, router
 from tests.test_dispatch import CHILD, req, routed
 
 
@@ -152,6 +152,7 @@ def make(tmp_path, ceiling, script, tweak=None, **kw):
     d["run"]["deadline"] = 7200
     if tweak:
         tweak(d)
+    kw.setdefault("kind_chains", KIND_CHAINS)
     return Engine(from_doc(d), ScriptedAdapter(script), tmp_path / "run", target=sibling_repo(tmp_path), ceiling=ceiling, **kw)
 
 

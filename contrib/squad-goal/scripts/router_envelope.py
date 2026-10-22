@@ -1,9 +1,9 @@
 # modelreg: seam-clean
 """The router's dispatch envelope, in one place (#436).
 
-The envelope is the `allow.models` of the run graph's dispatch node. The hub (the models panel's badge) and launch.py
-(the start-up warning) both import this module, so the two never read different sources or apply different rules.
-The key is the resolver's (SPEC 505)."""
+The envelope is the `allow.models` of the run graph's dispatch node, which only a legacy graph still carries: the shipped
+envelope names kinds, and the chains live in `models.json` (SPEC 750). launch.py imports this module for the start-up
+warning on such a graph; the hub keeps no graph reader and never imports it. The key is the resolver's (SPEC 505)."""
 import pathlib
 import sys
 

@@ -59,3 +59,9 @@ async def test_a_wait_node_makes_no_model_call_so_the_fragment_does_not_reach_it
     eng = Engine(from_doc(doc([w], ["ask"])), ScriptedAdapter({}), tmp_path, autonomy={"enabled": True, "max_resumes": 3})
     await eng.run()
     assert eng.adapter.calls == []
+
+
+def test_the_fragment_and_claude_md_grant_issue_status_comments():
+    claude = (Path(__file__).resolve().parent.parent / "CLAUDE.md").read_text()
+    for text in (FRAGMENT, claude):
+        assert "status comment" in text and "sbihaiko/agent-squad" in text and "not external publication" in text

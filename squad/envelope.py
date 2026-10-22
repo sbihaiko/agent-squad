@@ -5,7 +5,7 @@ no clamp, no partial apply. A model never supplies an identity.
 """
 from squad import modelreg, skills
 
-REQUEST_FIELDS = {"prompt", "skill", "model", "effort", "tools", "stalls", "spend", "deadline", "workspace", "inputs", "after", "task"}
+REQUEST_FIELDS = {"prompt", "skill", "model", "kind", "effort", "tools", "stalls", "spend", "deadline", "workspace", "inputs", "after", "task"}
 IDENTITY_FIELDS = {"id", "key", "child", "name", "request_key", "parent", "depth"}
 
 
@@ -58,16 +58,23 @@ def normalize_request(dispatch, raw, vendor=skills.VENDOR, default_effort=None):
         errs.append("after_malformed")
         after = []
     a, b = dispatch["allow"], dispatch["budget"]
+    kind = raw.get("kind") or "coding"   # SPEC 750: a kind names the chain the model comes from; none is coding
+    if "kind_models" in a and "model" in raw:
+        errs.append("model_supplied")
     # An omitted effort is the engine's default, never the allow list's first entry: the list is an order, and its first
     # entry is the weakest level as often as it is the strongest. A default the envelope does not allow narrows nothing.
     eff = raw.get("effort") or (default_effort if default_effort in a["efforts"] else None) or a["efforts"][0]
+    # An envelope of kinds takes the model from the chain of the request's kind; a legacy one from its own list. Both
+    # fall back to an empty id, so the rule that names the missing model is the one the run reads.
+    model = (a["kind_models"].get(kind) or [""])[0] if "kind_models" in a else raw.get("model", (a.get("models") or [""])[0])
     req = {
         "prompt": raw.get("prompt", ""), "skill": {"name": skill["name"], "version": skill.get("version", "")},
-        "model": raw.get("model", a["models"][0]), "effort": eff,
+        "model": model, "effort": eff,
         "tools": list(raw.get("tools", a["tools"])), "stalls": raw.get("stalls", b["stalls"]["max"]),
         "spend": raw.get("spend", b["spend"]["max"]), "deadline": raw.get("deadline", dispatch["deadline"]),
         "workspace": raw.get("workspace", a["workspaces"][0]), "inputs": list(raw.get("inputs", [])),
         "after": list(after),   # indexes of earlier requests in the same list; the engine turns them into child names
+        **({"kind": kind} if "kind_models" in a else {}),
         "task": raw.get("task"),   # the work item this child advances, a string or None; a task key narrows nothing, so no limit rule
     }
     return req, errs
@@ -79,7 +86,11 @@ def limit_errors(req, disp, depth, parent_tools, parent_spend_left, parent_time_
     e = []
     if depth > disp["max_depth"]:
         e.append("depth_over_max")
-    if req["model"] not in a["models"]:
+    if "kind_models" in a and req["kind"] not in a["kind_models"]:
+        e.append(f"kind_outside_allow:{req['kind']}")
+    elif "kind_models" in a and not req["model"]:
+        e.append(f"kind_has_no_model:{req['kind']}")
+    elif "kind_models" not in a and req["model"] not in (a.get("models") or []):
         e.append(f"model_outside_allow:{req['model']}")
     elif modelreg.no_tools_route(req["model"]):
         e.append(f"model_takes_no_tools:{req['model']}")

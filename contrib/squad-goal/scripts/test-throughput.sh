@@ -62,6 +62,18 @@ CHILD REVIEW run-20261018-121500-r1 child-4: squad/run-1/ws-child-4 222222222 VE
 watch: a line that is not a child review
 EOF
 
+# The gate history gate.sh appends: <finish> TAB <kind> TAB <result> TAB <sha> TAB <start> TAB <selection>. Two selected gates
+# (100 s and 50 s), three whole-battery gates (400 s, an empty selection, and a line with no selection field: 100 s and 200 s).
+# The last line is not a history line at all, so the report skips it and counts nothing.
+tab=$(printf '\t')
+printf '%s\n' \
+  "1000${tab}fast${tab}pass${tab}aaa${tab}900${tab}selected 3 files" \
+  "2000${tab}fast${tab}pass${tab}bbb${tab}1950${tab}selected 1 files" \
+  "3000${tab}full${tab}pass${tab}ccc${tab}2600${tab}all: no test imports x" \
+  "4000${tab}gate${tab}fail${tab}ddd${tab}3900${tab}" \
+  "5000${tab}gate${tab}pass${tab}eee${tab}4800" \
+  "not a gate history line" > "$T/st/gate-history"
+
 # The loop exports its address to every pass: the fixture names the same three settings, and a `gh` stub first in PATH would
 # record any GitHub call.
 run() { SG_CHECKOUT="$T/co" SG_STATE="$T/st" SG_BASE=dev PATH="$T/bin:$PATH" bash "$T/s/throughput.sh" "$@"; }
@@ -99,6 +111,21 @@ out=$(cd "$T/co" && PATH="$T/bin:$PATH" bash "$T/s/throughput.sh" 2>&1); rc=$?
 [ "$rc" = 0 ] && ok "a hand run with no address exits 0" || ko "a hand run exited $rc: $out"
 has "  $D0: 2" && ok "a hand run reads the checkout it stands in" || ko "a hand run lost the landed issues: $out"
 printf '%s\n' "$out" | /usr/bin/grep -q 'no SG_STATE: no verdict was read' && ok "a hand run says it read no watch.log" || ko "a hand run did not say what it could not read: $out"
+has "  no SG_STATE: no gate time was read" && ok "a hand run says it read no gate history" || ko "a hand run did not say it read no gate history: $out"
+
+# --- gate time: selected gates and whole-battery gates, two figures (#647) -----------------------
+out=$(run 2>&1)
+has "Gate time (gate-history, all lines)" && ok "the report has a gate time section" || ko "no gate time section: $out"
+has "  selected: 2 gates, 150 s total, 75.0 s mean" && ok "a selected gate counts as selected: two gates, 150 s" || ko "selected split is not 2 gates, 150 s: $out"
+has "  whole battery: 3 gates, 700 s total, 233.3 s mean" && ok "a gate with no selection counts as whole battery: three gates, 700 s" || ko "whole-battery split is not 3 gates, 700 s: $out"
+
+mkdir -p "$T/empty"; : > "$T/empty/gate-history"
+out=$(SG_CHECKOUT="$T/co" SG_STATE="$T/empty" SG_BASE=dev PATH="$T/bin:$PATH" bash "$T/s/throughput.sh" 2>&1); rc=$?
+[ "$rc" = 0 ] && ok "an empty gate history is not an error" || ko "an empty gate history exited $rc: $out"
+has "  selected: 0 gates, 0 s total, 0.0 s mean" && has "  whole battery: 0 gates, 0 s total, 0.0 s mean" && ok "an empty gate history reports zero for both groups" || ko "an empty gate history is not zero for both groups: $out"
+rm -f "$T/empty/gate-history"
+out=$(SG_CHECKOUT="$T/co" SG_STATE="$T/empty" SG_BASE=dev PATH="$T/bin:$PATH" bash "$T/s/throughput.sh" 2>&1); rc=$?
+[ "$rc" = 0 ] && has "  selected: 0 gates, 0 s total, 0.0 s mean" && ok "a missing gate history reports zero for both groups and is not an error" || ko "a missing gate history: rc $rc: $out"
 
 # --- the help text names what no local record can answer ----------------------------------------
 out=$(run --help 2>&1); rc=$?

@@ -5,7 +5,7 @@ profile's own context from the seam, address.sh); `/` lists the repositories and
 (every one on loopback; on the tailnet, those whose own allow list admits the login); a path no profile owns answers 404 with
 that list; `/api/hub` names the hub and its repositories, so hubctl.sh can tell this hub from any other listener. A refused
 tailnet request answers 403 with its reason. Read-only, as hub.py is: it starts no run."""
-import html, importlib.util, io, json, os, pathlib, shlex, subprocess, sys, threading
+import html, importlib.util, io, json, os, pathlib, re, shlex, subprocess, sys, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -102,7 +102,7 @@ def rewrite(body, slug):
     """A repository's page calls its own API: every absolute /api/, /test/ and /dash/ reference gains the /<slug> prefix, in the page
     and in the JSON it fetches (a test card's link is `/test/<id>` there; without the slug the path read `test` as a repository)."""
     for q in (b'"', b"'", b"`"):
-        for p in (b"/api/", b"/test/", b"/dash/"):
+        for p in (b"/api/", b"/test/", b"/dash/", b"/held/"):
             body = body.replace(q + p, q + b"/" + slug.encode() + p)
     return body
 
@@ -159,6 +159,7 @@ def server(port, apps):
             try: getattr(self.profile, "do_" + method)(self)
             finally: self.wfile = real
             head, sep, body = buf.getvalue().partition(b"\r\n\r\n")
+            head = re.sub(rb"(?im)^(Location: )/(?!/)", rb"\1/" + slug.encode() + b"/", head)   # a redirect to this repository's own path keeps its slug
             real.write(head + sep + (rewrite(body, slug) if b"text/html" in head or b"application/json" in head else body))
 
         def do_GET(self): self._route("GET")

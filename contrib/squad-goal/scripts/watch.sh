@@ -114,7 +114,11 @@ if v:
   # its verdict is not a stalled run: it is over, and it waits for its wave to land (childcc keeps it in active-runs until
   # then, so its children can still enter). Reading its quiet record as a stall named three finished runs at 10:41 today and
   # sent the diagnosis after a hang that was never there (#450).
-  cfg="$(dirname "$0")/models.json"; st=$(jq -r .stall_timeout_minutes "$cfg")
+  # The bound is an integer find's -mmin can read: a key left out or set to null prints the string "null", find rejects
+  # `-mmin +null` as an illegal value with its stderr dropped, so no run was ever named stalled and every review ended
+  # BLOCKED while the run retried once a minute. The fallback is the shipped 15 m.
+  cfg="$(dirname "$0")/models.json"; st=$(jq -r '.stall_timeout_minutes // 15' "$cfg" 2>/dev/null)
+  case "$st" in ''|*[!0-9]*) st=15 ;; esac   # a missing file or a non-integer reads as the default too, never as a bad -mmin
   for r in $(cat "$SG_STATE/active-runs.txt"); do case "$seen" in *" $r "*) continue;; esac; case "$r" in /*) f=$r/record.jsonl;; *) f=runs/$r/record.jsonl;; esac
     grep -q '"event": *"verdict"' "$f" 2>/dev/null && continue
     [ -e "$f" ] && [ -n "$(find "$f" -mmin +$st 2>/dev/null)" ] && case "$stalled" in *" $r "*) ;; *) echo "STALL RUN ${r##*/} no record.jsonl progress for ${st}m"; stalled="$stalled$r "; echo "stall $r" >> "$W";; esac; done

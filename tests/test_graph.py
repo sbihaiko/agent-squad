@@ -327,12 +327,23 @@ def test_refuses_a_dispatch_with_no_checks():
     has(d, "route", "checks")
 
 
+CHAIN = ["claude-sonnet-5-5", "claude-sonnet-4-6"]
+
+
+def kinds_route():
+    """The shipped dispatch node with the coding chain a launcher would read (SPEC 750). The test owns the chain, so a
+    model the run cannot serve never turns a rule test red."""
+    d = route()
+    d["allow"]["kind_models"] = {k: list(CHAIN) for k in d["allow"]["kinds"]}
+    return d
+
+
 def test_a_spawn_value_outside_allow_is_rejected_whole_with_its_rule():
-    disp = route()
-    ok = {"prompt": "go", "skill": {"name": "tdd"}, "model": node(router(), "route")["allow"]["models"][0], "tools": ["Read"]}
+    disp = kinds_route()
+    ok = {"prompt": "go", "skill": {"name": "tdd"}, "kind": "coding", "tools": ["Read"]}
     _, errs = validate_request(disp, ok, 1, None, 10.0)
     assert errs == []
-    cases = [({"model": "gpt"}, "model_outside_allow:gpt"), ({"tools": ["WebFetch"]}, "tool_outside_allow:WebFetch"),
+    cases = [({"model": "gpt"}, "model_supplied"), ({"tools": ["WebFetch"]}, "tool_outside_allow:WebFetch"),
              ({"skill": {"name": "tdd", "version": "2"}}, "skill_pin_mismatch:tdd"), ({"stalls": 999}, "stalls_outside_budget"),
              ({"spend": 99.0}, "spend_outside_budget"), ({"deadline": 99999}, "deadline_over_dispatch"),
              ({"workspace": "/etc"}, "workspace_outside_allow:requested '/etc', allowed ['worktrees/child']"), ({"effort": "extreme"}, "effort_outside_allow")]
@@ -348,8 +359,8 @@ def test_a_workspace_inside_an_allowed_one_is_inside_the_envelope():
     The rule read the value as a string, so an allowed envelope rejected every child that named the directory it works in:
     three children of one frontier run, and the run folded to fail `no_dispatch, spawn_rejected:workspace_outside_allow`
     with nothing delivered (#55)."""
-    disp = route()
-    ok = {"prompt": "go", "skill": {"name": "tdd"}, "model": node(router(), "route")["allow"]["models"][0], "tools": ["Read"]}
+    disp = kinds_route()
+    ok = {"prompt": "go", "skill": {"name": "tdd"}, "kind": "coding", "tools": ["Read"]}
     for w in ("worktrees/child", "worktrees/child/gui-26", "worktrees/child/gui-26/", "worktrees/child/a/b"):
         _, errs = validate_request(disp, {**ok, "workspace": w}, 1, None, 10.0)
         assert errs == [], (w, errs)
@@ -360,15 +371,15 @@ def test_a_workspace_inside_an_allowed_one_is_inside_the_envelope():
 
 
 def test_a_model_supplied_identity_in_a_spawn_request_is_refused():
-    disp = route()
+    disp = kinds_route()
     for key in ("id", "child", "request_key", "name"):
-        _, errs = validate_request(disp, {"prompt": "go", "skill": "tdd", key: "x"}, 1, None, 10.0)
+        _, errs = validate_request(disp, {"prompt": "go", "skill": "tdd", "kind": "coding", key: "x"}, 1, None, 10.0)
         assert f"model_supplied_identity:{key}" in errs
 
 
 def test_skill_name_alone_floats_to_the_current_hash():
-    disp = route()
-    req, errs = validate_request(disp, {"prompt": "go", "skill": "tdd"}, 1, None, 10.0)
+    disp = kinds_route()
+    req, errs = validate_request(disp, {"prompt": "go", "skill": "tdd", "kind": "coding"}, 1, None, 10.0)
     assert errs == [] and req["skill"] == {"name": "tdd", "version": skills.load()["tdd"]["hash"]}
 
 

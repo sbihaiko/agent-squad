@@ -8,6 +8,7 @@ usage: issue_ledger.py read  <key> [state|count|last_fail|held|wave]  the record
        issue_ledger.py stop  <key> <why> [own|loop]          the ledger stops: prints "- <run>: <why>" for each run counted
        issue_ledger.py wave  <key> <run> <state> <cause> [keep]  one wave event: prints recorded|duplicate|terminal|kept|floor
        issue_ledger.py rearm <key>                           the facts go, and the SQUAD-NOT-STARTABLE comment with them
+       issue_ledger.py replay <key>                          the state rebuilt from the ledger's events, against the stored state and the old counters
        issue_ledger.py migrate <key>                         the old auto/ counters of a missing ledger become its file, once
        issue_ledger.py entered <owner>/<repo>                "<run>\t<n>" for each run a child of the repository entered
        issue_ledger.py landtry <key> <run> <cause>           one failed landing of the run's wave: prints the run's tries
@@ -71,6 +72,11 @@ gives `held` with the cause, and every writer but `rearm` and `migrate` refuses 
 counters into the file once (the counter wins over the line count: a counter the owner reset holds, #673: requeues-543 read 1
 while its ledger held 2 lines); `rearm` clears them. Once the file exists the old files are read no more. An issue with no
 file and none of those counters is new: it reads todo.
+
+`replay` is the check ADR-0149 rule 6 asks for before a marker prefix goes: it rebuilds the counts from each ledger's runs and the
+review streak from its verdicts, through the same rules, and compares them with the stored state and with any old counter beside
+the file. It prints "REPLAY <key>: ok" and exits 0, or names the issue and each field that differs on stderr and exits 1; a held
+ledger exits 3, never a pass.
 """
 import contextlib
 import fcntl
@@ -410,6 +416,43 @@ def landings(repo):   # -> {n: {(ref, kind)}}: the landings each issue of the re
             for n, rec in repo_files(repo)}
 
 
+def legacy(key, led):   # -> (counter or None, [{run, key, why}] or None, frozen): the old auto/ files of one ledger, read only to be compared
+    o, r, n = parse(key)
+    if os.environ.get("SG_REPO", f"{o}/{r}") != f"{o}/{r}": return None, None, False
+    a = state_dir() / "auto"; name = OLD[led]
+    try: c = (a / f"{name}-{n}").read_text().strip()
+    except OSError: c = ""
+    try: lines = [x for x in (a / f"{name}-{n}.runs").read_text().splitlines() if x]
+    except OSError: lines = None
+    runs = None if lines is None else [dict(zip(("run", "key", "why"), (x.split("\t", 2) + ["", ""])[:3])) for x in lines if x != "frozen"]
+    return (int(c) if c.isdigit() else None), runs, bool(lines) and lines[-1] == "frozen"
+
+
+def replay(key):   # -> [what differs]: the state rebuilt from the ledger's events, against the stored state and the old counters
+    try: rec = load(key)
+    except Held as e: raise Held(f"{key}: {e}") from None
+    diffs = []
+    for led in LEDGERS:
+        L = rec[led]; mine = [{f: x.get(f, "") for f in ("run", "key", "why")} for x in L["runs"]]
+        counter, old_runs, frozen = legacy(key, led)
+        want = counter if counter is not None else len(mine)   # the counter wins over the line count (#673)
+        if L["count"] != want:
+            diffs.append(f"{led}.count: stored {L['count']}, replay {want}" + (f" ({OLD[led]}-{parse(key)[2]} holds {counter})" if counter is not None else ""))
+        if old_runs is not None and old_runs != mine:
+            diffs.append(f"{led}.runs: stored {mine}, {OLD[led]}-{parse(key)[2]}.runs holds {old_runs}")
+        if old_runs is not None and frozen != bool(L.get("stopped")):
+            diffs.append(f"{led}.frozen: stored {L.get('stopped')!r}, {OLD[led]}-{parse(key)[2]}.runs {'ends' if frozen else 'does not end'} with frozen")
+    fresh = {"review": review_fact({})}
+    for v in (rec.get("review") or {}).get("verdicts") or []:
+        _review(fresh, {"run": v.get("run"), "verdict": v.get("verdict"), "findings": v.get("findings", ""), "round": v.get("round")})
+    got, had = fresh["review"], review_fact(rec)
+    for f in ("changes", "moves", "seen", "findings"):
+        if got[f] != had[f]: diffs.append(f"review.{f}: stored {had[f]!r}, replay {got[f]!r}")
+    if bool(got["stopped"]) != bool(had["stopped"]):
+        diffs.append(f"review.stopped: stored {had['stopped']!r}, replay {got['stopped']!r}")
+    return diffs
+
+
 def main(argv):
     if len(argv) < 2: print(__doc__.split("\n\n")[0], file=sys.stderr); return 2
     op, key, rest = argv[0], argv[1], argv[2:]
@@ -440,6 +483,11 @@ def main(argv):
         elif op == "requeue" and len(rest) >= 2: print(requeue(key, rest[0], rest[1]))
         elif op == "requeued" and rest: print(requeued(key, rest[0]))
         elif op == "review" and len(rest) >= 3: print(review(key, rest[0], rest[1], rest[2], *(rest[3:4] or [0])))
+        elif op == "replay":
+            diffs = replay(key)
+            if diffs:
+                print(f"issue_ledger.py: replay of {key} differs: " + "; ".join(diffs), file=sys.stderr); return 1
+            print(f"REPLAY {key}: ok")
         elif op == "coder": print(coder(key))
         elif op == "wave" and len(rest) >= 3: print(wave(key, rest[0], rest[1], rest[2], rest[3:4] == ["keep"]))
         elif op == "migrate": migrate(key); print(f"MIGRATE {key}: the old counters are in its ledger file; they are read no more")

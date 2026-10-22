@@ -159,6 +159,49 @@ def router_overlay(graph, models_path, now=None):
     return overlay
 
 
+KINDS = ("router", "coding", "review", "vision")
+
+
+def has_kinds(graph):
+    """True when a dispatch node of the graph holds `allow.kinds`: its models come from the four chains (SPEC 750)."""
+    return any(n.get("kind") == "dispatch" and "kinds" in (n.get("allow") or {}) for n in graph.doc["nodes"])
+
+
+def kind_chains(models_path, now=None):
+    """`{kind: [spelling, ...]}` for the four chains of a models.json, in chain order (SPEC 750).
+
+    A chain keeps the entries `modelreg.eligible` opens now (its on/hrs switch, its subscription marker, a spent weekly
+    window, the Claude reserve). A chain that closes every entry stays as written, so a wrong marker never leaves a kind
+    with no model. A spelling is the one the chain stores. The result is recorded in `run_start` and read at dispatch, so
+    the clock cannot move it across a resume."""
+    out = {}
+    hour = time.localtime(now).tm_hour
+    for kind in KINDS:
+        try:
+            entries = modelreg.chain(models_path, kind).entries
+        except (OSError, ValueError) as exc:
+            raise OptionError(f"models {models_path}: {exc}") from exc
+        open_ = [e.raw for e in entries if modelreg.eligible(e, now=now, hour=hour).ok]
+        out[kind] = open_ or [e.raw for e in entries]
+    return out
+
+
+def kind_efforts(models_path):
+    """`{kind: {spelling: effort}}` for the entries that name one (SPEC 750).
+
+    The panel draws one row per entry with its effort, so a chain's effort is the entry's, never the node's. Only the
+    router reads it today: a child's effort is the request's, which the router chose. Recorded beside the chains in
+    `run_start`, so a resume reads the same map."""
+    out = {}
+    for kind in KINDS:
+        try:
+            entries = modelreg.chain(models_path, kind).entries
+        except (OSError, ValueError):
+            continue
+        out[kind] = {e.raw: e.effort for e in entries if getattr(e, "effort", None)}
+    return out
+
+
 def no_sdk_route(graph):
     """Refuse a graph that names a model the SDK adapter cannot reach (#698): an agent's `model` or a dispatch
     `allow.models` entry whose registry entry has no gateway route and no `claude` CLI route, such as an agy-only id.
@@ -188,7 +231,13 @@ def launch(graph, run_dir=None, *, runs_dir="runs", adapter=None, defaults=None,
     no_sdk_route(graph)                                          # before any folder exists: a model no SDK route serves refuses the run
     data, prec, limits = project_settings(target)                # before any folder exists: an unsound project file refuses the run
     adapter, rec, autonomy = _adapter_and_record(adapter, defaults, data, watch)  # before any folder exists: an unsound file refuses the run
-    overlay = router_overlay(graph, models) if models else {}   # before any folder exists: a closed set refuses the start
+    overlay = router_overlay(graph, models) if models and not has_kinds(graph) else {}   # before any folder exists: a closed set refuses the start
+    chains, efforts = {}, {}
+    if has_kinds(graph):
+        if not models:
+            raise OptionError("a dispatch node with `allow.kinds` takes its models from the chains of a models.json: pass `models`")
+        chains = kind_chains(models)
+        efforts = kind_efforts(models)   # one effort per entry, as the panel draws it
     if name is not None:
         run_id = name
         if not workflows.valid_id(name):
@@ -203,7 +252,7 @@ def launch(graph, run_dir=None, *, runs_dir="runs", adapter=None, defaults=None,
     ceiling = launch_ceiling(target, rec["path"]) if rec else None   # a missing caps block refuses the run by name, before a folder exists
     eng = Engine(graph, adapter, run_dir, options=_lowered(options, data, graph), target=target, run_id=run_id, invoker=invoker,
                  graph_path=Path(graph_path).resolve() if graph_path else copy, defaults=rec, shadow=shadow, project={"record": prec, "limits": limits}, autonomy=autonomy,
-                 ceiling=ceiling, router_overlay=overlay)   # a bad option raises here, before a folder exists
+                 ceiling=ceiling, router_overlay=overlay, kind_chains=chains, kind_efforts=efforts)   # a bad option raises here, before a folder exists
     run_dir.mkdir(parents=True, exist_ok=True)
     if target:
         keep_runs_out_of_the_target(target, run_dir)
@@ -271,9 +320,11 @@ def resume_engine(graph, run_dir, *, adapter=None, defaults=None, target=None, o
         if gone:
             raise ResumeRefused(gone)
     overlay = (events[0].get("router_overlay") or {}) if events and events[0]["event"] == "run_start" else {}
+    chains = (events[0].get("kind_chains") or {}) if events and events[0]["event"] == "run_start" else {}
+    efforts = (events[0].get("kind_efforts") or {}) if events and events[0]["event"] == "run_start" else {}
     eng = Engine(graph, adapter, Path(run_dir), options=_lowered(options, data, graph), target=target, invoker="cli", defaults=rec,
                  project={"record": prec, "limits": limits}, autonomy=autonomy, ceiling=launch_ceiling(target, rec["path"]) if rec else None,
-                 router_overlay=overlay)
+                 router_overlay=overlay, kind_chains=chains, kind_efforts=efforts)
     if rec and rec["watch"]["dashboard"]:
         _watch_page(opener, Path(run_dir), rec, resume=True)
     if rec and rec["watch"].get("monitor"):

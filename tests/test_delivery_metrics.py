@@ -202,13 +202,8 @@ def test_a_missing_squad_package_is_reported_and_never_guessed(hub, tmp_path, mo
     assert d["err"] and "dispatched" not in d
 
 
-def test_the_page_carries_the_delivery_panel_and_reads_the_route():
-    assert "<details id=dlv class=sp>" in PAGE
-    assert 'fetch("/api/delivery")' in SRC
-
-
-def test_the_panel_renders_the_five_numbers():
-    i = SRC.index("async function pollDelivery")
-    body = SRC[i: SRC.index("\n", SRC.index("pollDelivery();setInterval", i))]
-    for field in ("landed_nothing", "noop_waves", "per_issue", "adapter", "review", "landings"):
-        assert field in body
+def test_the_page_carries_no_delivery_panel_and_never_reads_the_route():
+    """The owner hid the panel from the accordion: the page holds no delivery section and polls no route. The route
+    and the module stay, so a person or a script still reads the same numbers; the page makes no call of its own."""
+    assert "<details id=dlv class=sp>" not in PAGE
+    assert 'fetch("/api/delivery")' not in SRC

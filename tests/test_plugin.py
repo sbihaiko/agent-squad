@@ -193,12 +193,16 @@ def test_start_reads_the_name_from_stdin_and_refuses_a_bad_one(project, monkeypa
     script = project / "s.json"
     script.write_text(json.dumps({"script": {"a": OK, "b": OK}, "repeat_last": True}))
     runs_dir = project / "runs"
+    models = project / "models.json"   # the default workflow names kinds, so a start carries the chains it reads
+    models.write_text(json.dumps({"schema_version": 2, "chains": {k: [{"id": "claude-sonnet-5-5"}] for k in
+                                                                   ("router", "coding", "review", "vision")}}))
     monkeypatch.setattr("sys.stdin", io.StringIO("fix it --workflow duo --name my-run.1\n"))
-    assert cli.main(["start", "--stdin", "--script", str(script), "--runs-dir", str(runs_dir)]) == 0
+    assert cli.main(["start", "--stdin", "--script", str(script), "--runs-dir", str(runs_dir), "--models", str(models)]) == 0
     assert (runs_dir / "my-run.1").is_dir()
+    capsys.readouterr()
     for bad in ("$(touch$IFS/tmp/x)", "a;b"):
         monkeypatch.setattr("sys.stdin", io.StringIO(f"fix it --name {bad}\n"))
-        assert cli.main(["start", "--stdin", "--script", str(script), "--runs-dir", str(runs_dir)]) == cli.USAGE
+        assert cli.main(["start", "--stdin", "--script", str(script), "--runs-dir", str(runs_dir), "--models", str(models)]) == cli.USAGE
         assert "is not a run name" in capsys.readouterr().err
 
 

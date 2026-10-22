@@ -15,7 +15,7 @@ base=${SG_FAST_BASE:-origin/${SG_BASE:-dev}}
 # over the same fast gate. Its pytest takes a bounded worker count, SG_GATE_WORKERS, never `auto`.
 . "$here/base-battery.sh"
 py=${SG_GATE_PY:-$SG_CHECKOUT/.venv/bin/python}; [ -x "$py" ] || py=python3
-fastcmd=${SG_FAST_CMD:-"$(sg_base_battery "$py")"}
+fastcmd=${SG_FAST_CMD:-"$(sg_base_battery "$py" "$base")"}
 mb=$(git merge-base HEAD "$base" 2>/dev/null) || { echo "fast-gate: base $base does not resolve: the changed scripts are unknown, so the gate does not pass"; exit 2; }
 top=$(git rev-parse --show-toplevel) || exit 2
 # classify <log> <rc>: the failing class of a red battery (#699), one word, then its detail: lint (ruff's code and path, #670,

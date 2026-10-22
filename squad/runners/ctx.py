@@ -64,12 +64,31 @@ class RunCtx:
     def dispatch_node(self, node):
         """A dispatch node with this run's router overlay applied. The authored graph, and its hash, stay unchanged."""
         models = self._e.router_overlay.get(node.get("name")) if node.get("kind") == "dispatch" else None
+        if node.get("kind") == "dispatch" and "kinds" in (node.get("allow") or {}):
+            # SPEC 750: the envelope holds kinds; each kind's models are the chain of that kind, read from run_start.
+            # The overlay still narrows it: a model it does not name is closed for every kind (SPEC 505).
+            chains = self._e.kind_chains
+            km = {k: [m for m in (chains.get(k) or []) if models is None or m in models] for k in node["allow"]["kinds"]}
+            union = list(dict.fromkeys(m for v in km.values() for m in v))
+            return {**node, "allow": {**node["allow"], "models": union, "kind_models": km}}
         return node if models is None else {**node, "allow": {**(node.get("allow") or {}), "models": list(models)}}
+
+    def router_chain(self):
+        """The router agent's models, in chain order (SPEC 750): empty for a graph whose envelope still lists models."""
+        return list(self._e.kind_chains.get("router") or [])
+
+    def router_effort(self):
+        """The effort the router chain names for the entry it answers on (SPEC 750), or None: the panel draws one
+        effort per row, so the router's effort is the chain's, never the node's."""
+        chain = self._e.kind_chains.get("router") or []
+        return (self._e.kind_efforts.get("router") or {}).get(chain[0]) if chain else None
 
     def limits(self, name):
         """The limits a router may ask within: the dispatch's allow lists and budget, as the envelope checks them."""
         d = self.dispatch_node(self._e.nodes[self._e.entry_of[name]])
-        return {"skills": [s["name"] for s in d["allow"]["skills"]], **{k: d["allow"][k] for k in ("models", "efforts", "tools", "workspaces")},
+        # an envelope of kinds names the kinds a request may ask for, never a model id (SPEC 750)
+        pick = ("kinds" if "kind_models" in d["allow"] else "models", "efforts", "tools", "workspaces")
+        return {"skills": [s["name"] for s in d["allow"]["skills"]], **{k: d["allow"][k] for k in pick},
                 "stalls": d["budget"]["stalls"], "spend": d["budget"]["spend"], "deadline": d["deadline"],
                 "max_children": d["max_children"], "max_parallel": d["max_parallel"], "max_depth": d["max_depth"]}
 

@@ -16,7 +16,15 @@ The issue tracker and triage label vocabulary should have been provided to you. 
 
 Check with the user that these seams match their expectations.
 
-3. Write the spec using the template below, then publish it to the project issue tracker. Apply the `spec` label and no `ready-for-agent` label: a spec is never work, its tickets are, and they carry `ready-for-agent`. Where the tracker has a board, create the spec's card in **Backlog**. The owner starts the spec by moving its card to Todo, and its tickets in Backlog follow it there. The loop never moves a card into Backlog or Todo on its own.
+3. Write the spec using the template below, then publish it to the project issue tracker. Apply the `spec` label and no `ready-for-agent` label: a spec is never work, its tickets are, and they carry `ready-for-agent`. Where the tracker has a board, create the spec's card in **Backlog** (see the next paragraph for the project). The owner starts the spec by moving its card to Todo, and its tickets in Backlog follow it there. The loop never moves a card into Backlog or Todo on its own.
+
+   **Set the project to "Squad Board" when you create the issue.** On GitHub the card is the issue's project item, and the board is the project titled `Squad Board` in the repository's owner (the wellzesta org for wz-zesty-agent), never a project looked up by number or by any other title:
+   ```sh
+   OWNER=${SG_OWNER:-$(gh repo view --json owner --jq .owner.login)}
+   NUM=$(gh project list --owner "$OWNER" --format json --jq '.projects[]|select(.title=="Squad Board").number')   # exactly one number, or stop
+   gh project item-add "$NUM" --owner "$OWNER" --url "$ISSUE_URL" --format json --jq .id   # the item id; then set its Status to Backlog (a bug's to Todo) with gh project item-edit
+   ```
+   Read the project back (`gh issue view <n> --json projectItems`): it must list `Squad Board`. Where the repository has no `Squad Board` project, say so to the owner instead of guessing another project.
 
    **Verify the spec label before you report the spec published.** A spec without it is invisible to the squad hub's Specs filter and can be dispatched as work.
    - Before creating the issue, make sure the label exists (on GitHub: `gh label create spec --color 5319E7 --description "A spec: never work itself; its sub-issue tickets are" --force`).

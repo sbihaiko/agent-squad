@@ -198,5 +198,28 @@ lane_down; t0=$(date +%s); run_cycles 1 NIGHT_HOLD=3; el=$(( $(date +%s) - t0 ))
 for _ in $(seq 1 100); do [ -d "$ST/locks/single-nightly" ] || break; /bin/sleep 0.1; done   # the previous case's suite drains
 : > "$STEPS"; run_cycles 2 NIGHT_HOLD=3
 [ "$(count nightly)" = 1 ] && ok "12 a suite still running is not started again (single.sh lock)" || ko "12 the nightly overlapped itself ($(count nightly) passes)"
+# 13) the stall bound is an integer find can read. A models.json that leaves stall_timeout_minutes out, or sets it null, used to
+# reach the watchdog as the literal string "null": find rejected `-mmin +null` as an illegal value with its stderr dropped, so no
+# run was ever named stalled. In production every review ended BLOCKED while the run retried once a minute. The fallback is the
+# shipped 15 m; a key that IS set still wins, which says the fallback is a floor and not a hardcoded 15.
+lane_down; mkdir -p "$T/co/runs/run-nokey" "$T/co/runs/run-null" "$T/co/runs/run-set"
+for c in nokey null set; do printf '{"event": "call_started"}\n' > "$T/co/runs/run-$c/record.jsonl"
+  touch -t 202001010000 "$T/co/runs/run-$c/record.jsonl"; echo "$T/co/runs/run-$c" >> "$ST/active-runs.txt"; done
+printf '{"review_stall_minutes": 60}\n' > "$S/models.json"      # the key absent
+rm -f "$ST/watch-seen.txt"; run_cycles 1
+/usr/bin/grep -q "STALL RUN run-nokey no record.jsonl progress for 15m" "$T/watch.out" && ok "13 a keyless models.json falls back to the 15 m default" || ko "13 no stall line for a keyless models.json: $(tail -3 "$T/watch.out")"
+/usr/bin/grep -q "progress for nullm" "$T/watch.out" && ko "13 the word null reached the stall line" || ok "13 the stall line carries a number, never the string null"
+printf '{"stall_timeout_minutes": null}\n' > "$S/models.json"   # the key explicitly null
+rm -f "$ST/watch-seen.txt"; run_cycles 1
+/usr/bin/grep -q "STALL RUN run-null no record.jsonl progress for 15m" "$T/watch.out" && ok "13 an explicit null falls back to the 15 m default" || ko "13 no stall line for a null stall_timeout_minutes: $(tail -3 "$T/watch.out")"
+printf '{"stall_timeout_minutes": 3}\n' > "$S/models.json"      # a configured value still wins
+rm -f "$ST/watch-seen.txt"; run_cycles 1
+/usr/bin/grep -q "STALL RUN run-set no record.jsonl progress for 3m" "$T/watch.out" && ok "13 a configured stall_timeout_minutes still wins (3m)" || ko "13 the configured value was ignored: $(tail -3 "$T/watch.out")"
+cp "$d/models.json" "$S/"; : > "$ST/active-runs.txt"; rm -f "$ST/watch-seen.txt"
+# 13c) a configured 0 is a real bound, never the fallback: jq's `//` must not swallow it
+printf '{"stall_timeout_minutes": 0}\n' > "$S/models.json"
+echo "$T/co/runs/run-set" >> "$ST/active-runs.txt"   # the case above emptied the list
+rm -f "$ST/watch-seen.txt"; run_cycles 1
+/usr/bin/grep -q "STALL RUN run-set no record.jsonl progress for 0m" "$T/watch.out" && ok "13c a configured 0 stays 0, the 15 m fallback does not fire" || ko "13c zero bound: $(tail -3 "$T/watch.out")"
 
 rm -rf "$T"; exit $fail

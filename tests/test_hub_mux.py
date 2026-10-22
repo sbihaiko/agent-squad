@@ -116,6 +116,48 @@ def test_a_test_card_link_in_the_json_carries_its_repository():
     assert json.loads(body)[0]["url"] == "/alpha/test/t1", body
 
 
+def test_a_held_run_link_and_its_redirect_carry_their_repository():
+    """A run the childcc pass holds is linked as `/held/<name>` and redirects to `/dash/<name>/`: without the slug the mux read
+    `held` (then `dash`) as a repository and the diagram pane showed "no repository at /held"."""
+    spec = importlib.util.spec_from_file_location("hubmux_held_under_test", SCRIPTS / "hubmux.py")
+    mux = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mux)
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path.startswith("/held/"):
+                self.send_response(302)
+                self.send_header("Location", "/dash/r1/")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            body = json.dumps([{"id": "r1", "url": "/held/r1"}]).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(body)
+
+    stub = type("M", (), {"H": H})
+    srv = mux.server(0, {"alpha": {"mod": stub, "repo": "x/alpha"}})
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+
+    class NoFollow(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *a, **k):
+            return None
+
+    try:
+        _, body = _get(base + "/alpha/api/runs")
+        try:
+            urllib.request.build_opener(NoFollow).open(base + "/alpha/held/r1")
+        except urllib.error.HTTPError as e:
+            loc = e.headers["Location"]
+    finally:
+        srv.shutdown()
+    assert json.loads(body)[0]["url"] == "/alpha/held/r1", body
+    assert loc == "/alpha/dash/r1/", loc
+
+
 def test_an_unknown_path_answers_404_with_the_list(fleet):
     code, body = _get(fleet["url"] + "/gamma")
     assert code == 404

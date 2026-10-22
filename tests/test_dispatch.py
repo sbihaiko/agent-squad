@@ -14,14 +14,20 @@ from squad.record import read
 from tests.gitrepo import make_repo, sh, sibling_repo
 from tests.helpers import DESIGN, node, router
 
-# The model a request in these fixtures names: the first entry the shipped route node allows. An id spelled here went
-# stale the day the envelope named the coding chain's own first entry (claude-gpt-5.5 was left outside it), and every
-# dispatch in the suite was refused `model_outside_allow` -- so the fixture reads the envelope it is checked against.
-MODEL = node(router(), "route")["allow"]["models"][0]
+# The four chains a run takes its models from (SPEC 750). The coding chain keeps the order the dispatch envelope used
+# to name, so a fallback test reads the same sequence it read before; the router answers on its own chain.
+CHAINS = {
+    "router": ["claude-opus-5-5", "claude-sonnet-5-5"],
+    "coding": ["claude-grok-4.7", "claude-deepseek-flash[1m]", "claude-opus-5-5", "claude-gpt-5.6-terra",
+               "claude-sonnet-5-5", "claude-sonnet-4-6", "claude-haiku-5-5"],
+    "review": ["claude-opus-5-5"],
+    "vision": ["claude-sonnet-5-5"],
+}
+MODEL = CHAINS["coding"][0]
 
 
 def req(skill="tdd", **kw):
-    return {"prompt": f"Run {skill} on the task.", "skill": skill, "model": MODEL, "effort": "medium", "tools": ["Read", "Edit"],
+    return {"prompt": f"Run {skill} on the task.", "skill": skill, "kind": "coding", "effort": "medium", "tools": ["Read", "Edit"],
             "stalls": 4, "spend": 1.0, "deadline": 100, "workspace": "worktrees/child", **kw}
 
 
@@ -38,6 +44,7 @@ def make(tmp_path, script, tweak=None, **kw):
     if tweak:
         tweak(d)
     kw.setdefault("target", sibling_repo(tmp_path))
+    kw.setdefault("kind_chains", CHAINS)
     eng = Engine(from_doc(d), ScriptedAdapter(script, **kw.pop("adapter", {})), tmp_path, **kw)
     return eng
 
@@ -54,10 +61,10 @@ def child_outs(tmp_path):
 async def test_a_child_falls_back_only_within_the_router_overlay(tmp_path):
     """SPEC 505: a child's chain reads the narrowed envelope, never a model the router overlay closed."""
     keep = "claude-sonnet-5-5"
-    closed = [m for m in node(router(), "route")["allow"]["models"] if m != keep]
+    closed = [m for m in CHAINS["coding"] if m != keep]
     assert closed
     err = {"error": "API Error: 400 the model is not supported", "served": False}
-    eng = make(tmp_path, {"router": routed(req(model=keep)), "route.router.1": [err] * 8},
+    eng = make(tmp_path, {"router": routed(req()), "route.router.1": [err] * 8},
                router_overlay={"route": [keep]})
     await eng.run()
     calls = [c.model for c in eng.adapter.calls if c.node == "route.router.1"]
@@ -111,7 +118,7 @@ async def test_code_assigns_the_request_key_and_child_name_and_a_model_id_is_ref
 
 
 BAD = [
-    (dict(model="gpt"), "model_outside_allow:gpt"), (dict(effort="max"), "effort_outside_allow"),
+    (dict(model="gpt"), "model_supplied"), (dict(effort="max"), "effort_outside_allow"),
     (dict(tools=["Read", "WebFetch"]), "tool_outside_allow:WebFetch"), (dict(skill="evil"), "skill_outside_allow"),
     (dict(stalls=999), "stalls_outside_budget"), (dict(stalls=1), "stalls_outside_budget"), (dict(spend=50.0), "spend_outside_budget"),
     (dict(deadline=99999), "deadline_over_dispatch"), (dict(workspace="elsewhere"), "workspace_outside_allow:requested 'elsewhere', allowed ['worktrees/child']"),
@@ -679,7 +686,7 @@ async def test_the_router_is_given_the_limits_it_may_ask_within(tmp_path):
     call = next(c for c in eng.adapter.calls if c.node == "router")
     limits = json.loads(call.prompt.split(" ", 1)[1] if call.prompt.startswith("/") else call.prompt)["limits"]
     assert "tdd" in limits["skills"] and "evil" not in limits["skills"]
-    assert set(limits) >= {"skills", "models", "efforts", "tools", "workspaces", "stalls", "spend", "deadline", "max_children"}
+    assert set(limits) >= {"skills", "kinds", "efforts", "tools", "workspaces", "stalls", "spend", "deadline", "max_children"}
     assert not [c for c in eng.adapter.calls if c.node == "route.router.1" and "limits" in c.prompt]       # a child sees no limits, only its own task
 
 

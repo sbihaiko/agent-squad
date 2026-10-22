@@ -63,13 +63,7 @@ class AgentRunner:
         await shadow(ctx, node, entry, sc)    # before the deadline and the reservation, so it never eats a node's time
         eff, deadline, slot = ctx.eff.agent(node), ctx.call_deadline(node, sc), {}
         fin = lambda *a, **kw: ctx.finish(node, entry, sc, *a, **kw)    # noqa: E731
-        # A dispatch entry answers on the envelope's `allow.models`, led by the model the node names: a provider that
-        # refuses to serve one entry must not end the node while the chain still holds an entry nobody tried.
-        models = ctx.limits(node["name"])["models"] if ctx.is_dispatch_entry(node["name"]) else []
-        hour = ctx.local_hour()
-        chain = session.model_chain(models, eff["model"], ctx.spent_models, ctx.model_hours, hour, ctx.model_order)
-        for m, why in session.hours_skipped(models, eff["model"], ctx.spent_models, ctx.model_hours, hour):    # an entry left out of its window is on the record
-            ctx.record.append("model_skipped", node=node["name"], entry=entry, model=m, reason=why)
+        eff, chain = self.chain(ctx, node, entry, eff)
         out, tried, who = await session.run_chain(chain, lambda m, first: self.attempt(ctx, node, entry, sc, eff, deadline, m, slot, fin))
         for m, err in tried:    # every refusal is on the record, exhausted chain or not (#494)
             ctx.record.append("model_refused", node=node["name"], entry=entry, model=m, error=err[:session.CHAIN_LINE])
@@ -87,6 +81,23 @@ class AgentRunner:
             return fin("fail", session.adapter_reason(out.error), cap=out.res.amount, elapsed=out.elapsed,
                        diagnostic=session.adapter_diagnostic(out.error), **session.error_fields(out.error), **who)
         return self.settle(ctx, node, entry, sc, out, eff, who)
+
+    def chain(self, ctx, node, entry, eff):
+        """The models this entry may answer on, and the effort to name with them. A dispatch entry answers on the envelope's
+        `allow.models`, led by the model the node names; SPEC 750 makes it the router's own chain when the envelope holds
+        kinds. A provider that refuses to serve one entry never ends the node while the chain still holds an entry nobody
+        tried. An entry left out of its window is on the record."""
+        dispatch = ctx.is_dispatch_entry(node["name"])
+        models = ctx.limits(node["name"]).get("models", []) if dispatch else []
+        rchain = ctx.router_chain() if dispatch else []
+        hour = ctx.local_hour()
+        if rchain:
+            models = rchain
+            eff = {**eff, "model": rchain[0], **({"effort": e} if (e := ctx.router_effort()) else {})}
+        chain = session.model_chain(models, eff["model"], ctx.spent_models, ctx.model_hours, hour, rchain or ctx.model_order)
+        for m, why in session.hours_skipped(models, eff["model"], ctx.spent_models, ctx.model_hours, hour):
+            ctx.record.append("model_skipped", node=node["name"], entry=entry, model=m, reason=why)
+        return eff, chain
 
     async def attempt(self, ctx, node, entry, sc, eff, deadline, model, slot, fin):
         """One model's call for this node entry. The next entry of the chain answers after one that refused to serve."""

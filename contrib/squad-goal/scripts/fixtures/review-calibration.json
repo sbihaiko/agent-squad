@@ -1,0 +1,54 @@
+{
+  "samples": [
+    {
+      "source": "review-squad_run-20261017-002454-f4c200_worktrees_child_gui-470-route.router.1.md",
+      "label": "real_defect",
+      "finding": "The fallback stopped parsing a legacy issue request, so existing runs selected the checkout instead of the issue worktree."
+    },
+    {
+      "source": "review-squad_run-20261017-002454-f4c200_worktrees_child_gui-474-route.router.2.md",
+      "label": "real_defect",
+      "finding": "A negative test searched for a path form that the changed code never logs, so the test passed while lying."
+    },
+    {
+      "source": "review-squad_run-20261017-002659-fe0142_worktrees_child_gui-477-route.router.2.md",
+      "label": "real_defect",
+      "finding": "A landing marker could remove a worktree whose commits were not in the base."
+    },
+    {
+      "source": "review-squad_run-20261017-010017-b5e031_worktrees_child-route.router.1.md",
+      "label": "real_defect",
+      "finding": "A transient fetch failure was counted as a permanent landing failure and abandoned a wave."
+    },
+    {
+      "source": "review-squad_run-20261017-010219-65e09c_worktrees_child-route.router.1.md",
+      "label": "debt_nit_only",
+      "finding": "The review listed merge-conflict, token-ledger, and test-runtime improvements, but no behavior that violated an accepted rule or regressed main."
+    },
+    {
+      "source": "review-squad_run-20261017-124636-703e72_worktrees_child-route.router.1.md",
+      "label": "real_defect",
+      "finding": "A quiet window after a relight stopped the loop even though no burn crossed the cap."
+    },
+    {
+      "source": "review-squad_run-20261017-124835-15a61e_worktrees_child-route.router.1.md",
+      "label": "real_defect",
+      "finding": "A failed landing start cleared the wave without an owner signal."
+    },
+    {
+      "source": "review-squad_run-20261017-131213-fbe156_worktrees_child-route.router.1.md",
+      "label": "real_defect",
+      "finding": "An unreachable remote was handled as a missing wave and stranded the work."
+    },
+    {
+      "source": "review-squad_run-20261017-131800-ea53d2_worktrees_child-route.router.1.md",
+      "label": "real_defect",
+      "finding": "The proof check stopped the loop after a normal relight."
+    },
+    {
+      "source": "review-squad_run-20261017-133143-a51dda_worktrees_child-route.router.1.md",
+      "label": "real_defect",
+      "finding": "An acceptance test passed only because a local hub happened to hold a port."
+    }
+  ]
+}

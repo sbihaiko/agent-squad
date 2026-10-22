@@ -3,7 +3,7 @@
 usage: hub.py [port]   default 7700, loopback only. Read-only: it discovers servers via ps/lsof and reads record.jsonl."""
 import datetime as dt, glob, hashlib, html, importlib.util, itertools, json, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, pathlib, urllib.parse, urllib.request
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
-import agyquota, chainhealth, modelreg, provkey, router_envelope   # the one envelope source, shared with launch.py (#436)
+import agyquota, chainhealth, modelreg, provkey   # the chains and the one registry resolve a model (ADR-0147)
 from issue_state import board_state, KINDS, TEST_CASE_TITLE, _utc
 import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -250,13 +250,18 @@ def run_roots(co):   # where a checkout keeps run folders: its runs/, and each r
     co = pathlib.Path(co)
     return [co / "runs", *(w / "runs" for kind in ("run", "child") for w in sorted((co / "worktrees" / kind).glob("*")))]
 
-def project_dirs():
+def own_roots():
+    """The run roots of this profile: its checkout, SG_PROJECTS and SG_FORK_DIR. A dashboard outside them is another profile's."""
     ds = set(run_roots(CHECKOUT))
-    for x in os.environ.get("SG_PROJECTS", "").split(":"):
+    for x in [*os.environ.get("SG_PROJECTS", "").split(":"), os.environ.get("SG_FORK_DIR", "")]:
         if x: ds.update(run_roots(x))
+    return ds
+
+def project_dirs():
+    own = own_roots(); ds = set(own)
     for l in sh("/bin/ps", "-axwwo", "command=").splitlines():
         m = re.search(r"squad\.dashboard_server\s+(\S+)", l)
-        if m: ds.add(pathlib.Path(m.group(1)).parent)
+        if m and pathlib.Path(m.group(1)).parent in own: ds.add(pathlib.Path(m.group(1)).parent)
     return [d for d in ds if d.is_dir()]
 
 def all_runs():
@@ -1048,11 +1053,14 @@ def _last_landing():
     return best
 
 def _gate_status():
-    """The one line the gate wrapper leaves in $SG_STATE/gate-status, `<epoch> TAB <kind> TAB <pass|fail> TAB <sha>`: the latest
-    gate, its result and the sha it ran at. None when the file is absent or is not that line."""
+    """The one line the gate wrapper leaves in $SG_STATE/gate-status, `<epoch> TAB <kind> TAB <pass|fail> TAB <sha>`, and for a
+    gate that ran the test battery a fifth field, its selection (`selected N files` or `all: <reason>`): the latest gate, its
+    result, the sha it ran at and that selection. None when the file is absent or is not that line."""
     f = _read(STATE / "gate-status").rstrip("\n").split("\t")
-    if len(f) != 4 or not f[0].isdigit() or not all(f[1:]): return None
-    return {"kind": f[1], "result": f[2], "sha": f[3], "ts": float(f[0])}
+    if len(f) not in (4, 5) or not f[0].isdigit() or not all(f[1:4]) or (len(f) == 5 and not f[4]): return None
+    line = {"kind": f[1], "result": f[2], "sha": f[3], "ts": float(f[0])}
+    if len(f) == 5: line["selection"] = f[4]
+    return line
 
 def _nightly_status():
     """The one result line the nightly full suite leaves in $SG_STATE/nightly-result, `<epoch> TAB <pass|fail> TAB <sha>
@@ -1253,13 +1261,15 @@ def runs():
     _titles()
     out = []; load_rows = []
     ps_lines = sh("/bin/ps", "-axwwo", "pid=,command=").splitlines()
+    own = own_roots()
     for l in ps_lines:
-        m = re.match(r"\s*(\d+)\s+\S*python\S*\s+-m\s+squad\.dashboard_server\s+(\S+)", l)
+        m = re.match(r"\s*(\d+)\s+\S+\s+-m\s+squad\.dashboard_server\s+(\S+)", l)   # any interpreter: macOS runs the server as `.../MacOS/Python` (#1751)
         if not m: continue
         pid, d = m.group(1), m.group(2)
         port = re.search(r"TCP 127\.0\.0\.1:(\d+)|n127\.0\.0\.1:(\d+)", sh(LSOF, "-nP", "-a", "-p", pid, "-iTCP", "-sTCP:LISTEN", "-Fn"))
         if not port: continue
         if not pathlib.Path(d).exists(): continue
+        if pathlib.Path(d).parent not in own: continue   # another profile's dashboard: the ps scan sees the whole machine
         if re.search(r"/pytest-\d+/|/pytest-of-", d): continue   # dashboards started by agent-squad's own test suite are fixtures, not runs   # a dashboard server outliving its run folder (worktree removed) must not break the list
         row, load = run_row(d, port.group(1) or port.group(2), ps_lines)
         out.append(row)
@@ -1453,6 +1463,11 @@ def task_count(i):
     t, c = s.get("total"), s.get("completed")
     if isinstance(t, bool) or isinstance(c, bool) or not isinstance(t, int) or not isinstance(c, int): return None
     return f"{c}/{t}" if t > 0 else None
+def board_items_jq(repo):
+    """The board read's jq. A project may hold cards of several repositories and an issue number repeats between them, so an
+    Issue item counts only when its repository is `repo`; a draft item has no repository."""
+    return ('''.[]|select((.content_type=="Issue" and ((.content.repository_url//"")|endswith("/" + $repo))) or .content_type=="DraftIssue")|{n:.content.number,i:.id,t:.content.title,s:.content.state,c:.content.closed_at,st:((.fields[]|select(.name=="Status")|.value.name.raw)//null),k:(((.fields[]?|select(.name=="Kind")|.value.name|if type=="object" then .raw else . end)//"")|ascii_downcase|if .=="" then null else . end),l:[.content.labels[]?.name],si:{total:.content.sub_issues_summary.total,completed:.content.sub_issues_summary.completed},o:.content.created_at}''').replace("$repo", json.dumps(repo))
+
 def board_pass(fetch_open=None, fetch_landed=None, repos=None):
     """One board re-read: Board 4 statuses (REST) + one GraphQL page of Issue.blockedBy + the open work branches and the
     landing ledger of every repository the hub is told to read (#1820). The 60 s loop runs exactly this.
@@ -1464,7 +1479,7 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
     read_started = time.time()   # when the list read begins: the only stamp the overlay may compare a proved move against
     try:
             out = board_seam().rows(
-                '.[]|select(.content_type=="Issue" or .content_type=="DraftIssue")|{n:.content.number,i:.id,t:.content.title,s:.content.state,c:.content.closed_at,st:((.fields[]|select(.name=="Status")|.value.name.raw)//null),k:(((.fields[]?|select(.name=="Kind")|.value.name|if type=="object" then .raw else . end)//"")|ascii_downcase|if .=="" then null else . end),l:[.content.labels[]?.name],si:{total:.content.sub_issues_summary.total,completed:.content.sub_issues_summary.completed},o:.content.created_at}',
+                board_items_jq(REPO),
                 kind=True, timeout=120)
             items = [json.loads(l) for l in out.splitlines() if l.strip()]
             cases = [i["t"] for i in items if i.get("n") is None and i.get("k") == "test case"]   # a test case is a draft item: it has no number, so it is a row and never a card (#306)
@@ -2147,8 +2162,10 @@ def board():
 PROMOTE_TO = COLUMN["issue_todo"]   # the column the arrow moves a card into: the owner's go signal (ADR-0142)
 def promote_write(issue):
     """The one writer call of the owner's move: `<owner> <project> Todo <n>`, the shape reconcile.py writes, so the
-    board seam (`board.sh`) is the only reach of the carrier."""
-    return subprocess.run(["bash", str(pathlib.Path(__file__).resolve().parent / "board.sh"), OWNER, str(PROJECT_NO), PROMOTE_TO, str(issue)], capture_output=True, text=True, timeout=120)
+    board seam (`board.sh`) is the only reach of the carrier. The call carries the state directory this hub resolved:
+    hubctl starts the hub with no SG_STATE, and board.py reads the key to find its caches (#1750)."""
+    env = {**os.environ, "SG_STATE": str(STATE)}
+    return subprocess.run(["bash", str(pathlib.Path(__file__).resolve().parent / "board.sh"), OWNER, str(PROJECT_NO), PROMOTE_TO, str(issue)], capture_output=True, text=True, timeout=120, env=env)
 def promote(issue):
     """Move one open card from Backlog to Todo through the board seam (#560). Only a card the hub holds in Backlog now
     is accepted: a closed issue keeps its column (ADR-0143), a spec is never work (ADR-0142), and a card already in
@@ -2449,8 +2466,6 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 <details id=plans class=sp><summary>subscriptions<span class=sr id=plsr></span></summary><div class=sb><div id=subs></div></div></details>
 <details id=mdl class=sp><summary>squad models<span class=sr id=mdsr></span></summary><div class=sb id=mbody></div></details>
 <details id=stats class=sp><summary>cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><h4>Spend <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Figures at API list prices (API-equivalent)."></span></h4><div class=tot id=tot></div><div class=cash id=cash></div><h4>Spend over time <span class=row id=per></span></h4><div id=chart></div><div id=kpi></div><div id=open></div><h4>Tokens by model <small class=m id=piet>all time</small></h4><div id=pie></div></div></details>
-<details id=ae class=sp><summary>adapter errors<span class=sr id=aesr></span></summary><div class=sb id=aeb></div></details>
-<details id=dlv class=sp><summary>delivery<span class=sr id=dlvsr></span></summary><div class=sb id=dlvb></div></details>
 <div id=list></div>
 </div>
 <div id=main></div>
@@ -2612,7 +2627,7 @@ function kr(label,sub,v,unit,base,lowerBetter=true){if(v==null)return`<div class
 function openRows(o){return `<h4>Open branches <small>oldest first</small></h4>`
   +(o&&o.length?o.map((x,i)=>`<div class=kr><span class=l>#${x.n} · <b${x.min>=30?" class=w":""}>${x.min}</b> min${i===0?" (warns at 30)":""}</span></div>`).join("")
    :`<div class=kr><span class=l>none open</span></div>`)}
-let mdl=null,mdlSrv="",mdlMsg="";const MLAB={coding_models:"Coding",review_models:"Review",vision_models:"Vision"},MDESC={coding_models:"Writes the code in squad runs.",review_models:"Reviews each PR independently.",vision_models:"Looks at screenshots and images."},EFF=["low","medium","high","max"];
+let mdl=null,mdlSrv="",mdlMsg="";const MLAB={coding_models:"Coding",review_models:"Review",vision_models:"Vision",router_models:"Router"},MDESC={coding_models:"Writes the code in squad runs.",review_models:"Reviews each PR independently.",vision_models:"Looks at screenshots and images.",router_models:"The models the router runs on, in order; the first is the one it uses, the rest are fallbacks."},EFF=["low","medium","high","max"];
 function mdlEff(k,m){return (mdl.efforts&&mdl.efforts[k]&&mdl.efforts[k][m])||""}
 function mdlSetEff(k,m,v){mdl.efforts=mdl.efforts||{};mdl.efforts[k]=mdl.efforts[k]||{};if(EFF.includes(v)&&v!=="medium")mdl.efforts[k][m]=v;else delete mdl.efforts[k][m]}
 const HRP=["22-07","07-22","20-08","18-06"],HRX=/^([01]\d|2[0-3])-([01]\d|2[0-3])$/;
@@ -2631,22 +2646,12 @@ function sugId(list,v){const s=((mdl.suggest||{})[list]||[]).find(o=>o.text===v)
 function mdlSub(x){if(!x.sub)return"";const q=x.quota||{},when=q.spent&&q.until_text?`, resets ${esc(q.until_text)}`:"";return`<span class="${q.spent?"bk":"el"}" title="${esc(x.sub.label)}${q.reason?" · "+esc(q.reason):""}">${esc(x.sub.label)}${q.spent?" · spent"+when:""}</span>`}
 function mdlName(x,m){return x.llm?esc(x.llm):esc(m)}   // the id stays in the row title; only an unregistered row shows it (#687)
 function mdlRoute(x,dflt){return x.registered===false?`<span class=ur>unregistered</span>`:esc(x.route||(x.registered?dflt:x.text))}
-/* The router's own chain (#95): the dispatch envelope of the run graph. It is a queue like the role chains, so it
-   reads the same way -- rank, ↑ ↓, ✕, Add -- but it is graph data: it lives in the run graph, never in models.json
-   (ADR-0106), and the Save writes it there and restamps the record the graph ships beside. */
-function mdlRouter(){const ids=mdl.router_models||[],e=mdl.envelope||{};
- const rk=i=>i?"fallback "+i:"primary";
- return `<div class=mc><div class=mt>Router</div><div class=mx>The models the router may ask a child for, in order, from the run graph${e.graph?` <code>${esc(e.graph)}</code>`:""}${e.node?` (<code>${esc(e.node)}</code>)`:""}. A request outside this list is refused whole; the first entry is the model a child takes when it names none.</div>`
- +ids.map((m,i)=>{const x=mdlBox("router_models",m);return`<div class="mr${i?"":" p"}"><span class=rk title="${rk(i)}">${i+1}</span><span class=mn title="${esc(m)} · ${esc(x.text)}">${mdlName(x,m)}</span><span class=ct><span class=pv title="${rk(i)} · ${esc(x.text)}">${mdlRoute(x,rk(i))}${mdlSub(x)}</span><span class=mb><button data-rv="${i}|-1" ${i?"":"disabled"} title="move up">↑</button><button data-rv="${i}|1" ${i<ids.length-1?"":"disabled"} title="move down">↓</button><button class=x data-rrm="${i}" ${ids.length>1?"":"disabled"} title="remove from the envelope">✕</button></span></span></div>`}).join("")
- +`<div class=madd><input list=mkr data-radd placeholder="add a model id the gateway serves…"><button data-raddb="router">Add</button></div>`
- +`<div class=mx>efforts ${(e.efforts||[]).map(x=>`<code>${esc(x)}</code>`).join(" ")||"—"} · workspaces ${(e.workspaces||[]).map(x=>`<code>${esc(x)}</code>`).join(" ")||"—"} · children ≤ ${e.max_children??"–"} · parallel ≤ ${e.max_parallel??"–"} · depth ≤ ${e.max_depth??"–"}</div></div>`}
 function mdlRender(){const b=$("#mbody");if(!mdl){b.innerHTML="<span class=m>loading…</span>";return}
  {const lc=mdl.last_coding||(mdl.coding_models||[])[0]||"",x=lc?mdlBox("coding_models",lc):MBOX0;$("#mdsr").textContent=x.llm?`${x.llm} · ${lc}`:lc}   // the model the last run coded with, not the chain's head
  const dirty=JSON.stringify(mdl)!==mdlSrv;   // the dropdowns read mdl.suggest: the label first, the saved value stays the id (#672, #687)
  const ch=mdl.chain||{},chOut=ch.out||[],chBan=ch.banner?`<div class="mx err" role=alert>${esc(ch.banner)}</div>`:(ch.notice?`<div class=mx>${esc(ch.notice)}</div>`:"");
- b.innerHTML=chBan+`${Object.keys(MLAB).map(k=>`<datalist id=mk-${k}>${((mdl.suggest||{})[k]||[]).map(s=>`<option value="${esc(s.text)}" label="${esc(s.id)}">`).join("")}</datalist>`).join("")}<datalist id=mkr>${(mdl.suggest||{}).router_known.map(s=>`<option value="${esc(s.text)}" label="${esc(s.id)}">`).join("")}</datalist><datalist id=hrp>${HRP.map(v=>`<option value="${v}">`).join("")}</datalist>`+Object.keys(MLAB).map(k=>`<div class=mc><div class=mt>${MLAB[k]}</div><div class=mx>${MDESC[k]} Tried top to bottom; the first healthy model wins, and a model switched off is skipped like one outside its hrs window.</div>`+mdl[k].map((m,i)=>{const ef=mdlEff(k,m),hr=mdlHrs(k,m),x=mdlBox(k,m),of=mdlOff(k,m),bl=((mdl.blocked||{})[k]||[]).includes(m),rk=i?"fallback "+i:"primary";return`<div class="mr${i?"":" p"}${of?" off":""}"><span class=rk title="${rk}${of?" · switched off":""}">${i+1}</span><span class=mn title="${esc(m)} · ${esc(x.text)}">${mdlName(x,m)}</span><span class=ct><span class=pv title="${rk} · ${esc(x.text)}">${mdlRoute(x,rk)}${mdlSub(x)}${of?" · out of the chain":""}</span>${k==="review_models"&&chOut.find(o=>o.model===m&&o.until_text)?`<span class=bk title="${esc(chOut.find(o=>o.model===m).reason)}">${esc(chOut.find(o=>o.model===m).reason)}, resets ${esc(chOut.find(o=>o.model===m).until_text)}</span>`:""}${bl?`<span class=bk title="the router envelope does not allow ${esc(m)}: a request naming it is refused whole, so the router picks an allowed model instead. Add it to the Router queue or take it out of this chain">blocked by envelope</span>`:""}<span class=el>effort</span><select class="ef${ef?" set":""}" data-ef="${k}|${esc(m)}" title="effort for this model (medium is the default)">${EFF.map(e=>`<option value="${e==="medium"?"":e}"${(ef||"medium")===e?" selected":""}>${e}</option>`).join("")}</select><span class=el>hrs</span><input class="hr${hr?" set":""}" list=hrp data-hr="${k}|${esc(m)}" value="${esc(hr)}" placeholder="always" title="local hours this model may run (HH-HH, wraps midnight; empty = always)"><span class=mb><button data-mv="${k}|${i}|-1" ${i?"":"disabled"} title="move up">↑</button><button data-mv="${k}|${i}|1" ${i<mdl[k].length-1?"":"disabled"} title="move down">↓</button><button class="sw${of?" off":""}" data-sw="${k}|${esc(m)}" aria-pressed="${of}" title="${of?"out of the chain — it never runs; its rank, effort and hrs are kept, press to put it back":"in the chain — press to take it out without removing it: it keeps its rank, its effort and its hrs"}">${of?"off":"on"}</button><button class=x data-rm="${k}|${i}" ${mdl[k].length>1?"":"disabled"} title="remove from chain">✕</button></span></span></div>`}).join("")+`<div class=madd><input list=mk-${k} data-add="${k}" placeholder="add a model id…"><button data-addb="${k}">Add</button></div></div>`).join("")
- +mdlRouter()
- +`<div class=mx><b>effort</b> · <b>hrs</b> local time <code>HH-HH</code>, wraps midnight, empty = always · <b>switch</b> <code>off</code> skips a model and keeps its place · <b>✕</b> deletes the row. A coding row must name an id the dispatch envelope allows.</div>`
+ b.innerHTML=chBan+`${Object.keys(MLAB).map(k=>`<datalist id=mk-${k}>${((mdl.suggest||{})[k]||[]).map(s=>`<option value="${esc(s.text)}" label="${esc(s.id)}">`).join("")}</datalist>`).join("")}<datalist id=hrp>${HRP.map(v=>`<option value="${v}">`).join("")}</datalist>`+Object.keys(MLAB).map(k=>`<div class=mc><div class=mt>${MLAB[k]}</div><div class=mx>${MDESC[k]} Tried top to bottom; the first healthy model wins, and a model switched off is skipped like one outside its hrs window.</div>`+mdl[k].map((m,i)=>{const ef=mdlEff(k,m),hr=mdlHrs(k,m),x=mdlBox(k,m),of=mdlOff(k,m),rk=i?"fallback "+i:"primary";return`<div class="mr${i?"":" p"}${of?" off":""}"><span class=rk title="${rk}${of?" · switched off":""}">${i+1}</span><span class=mn title="${esc(m)} · ${esc(x.text)}">${mdlName(x,m)}</span><span class=ct><span class=pv title="${rk} · ${esc(x.text)}">${mdlRoute(x,rk)}${mdlSub(x)}${of?" · out of the chain":""}</span>${k==="review_models"&&chOut.find(o=>o.model===m&&o.until_text)?`<span class=bk title="${esc(chOut.find(o=>o.model===m).reason)}">${esc(chOut.find(o=>o.model===m).reason)}, resets ${esc(chOut.find(o=>o.model===m).until_text)}</span>`:""}<span class=el>effort</span><select class="ef${ef?" set":""}" data-ef="${k}|${esc(m)}" title="effort for this model (medium is the default)">${EFF.map(e=>`<option value="${e==="medium"?"":e}"${(ef||"medium")===e?" selected":""}>${e}</option>`).join("")}</select><span class=el>hrs</span><input class="hr${hr?" set":""}" list=hrp data-hr="${k}|${esc(m)}" value="${esc(hr)}" placeholder="always" title="local hours this model may run (HH-HH, wraps midnight; empty = always)"><span class=mb><button data-mv="${k}|${i}|-1" ${i?"":"disabled"} title="move up">↑</button><button data-mv="${k}|${i}|1" ${i<mdl[k].length-1?"":"disabled"} title="move down">↓</button><button class="sw${of?" off":""}" data-sw="${k}|${esc(m)}" aria-pressed="${of}" title="${of?"out of the chain — it never runs; its rank, effort and hrs are kept, press to put it back":"in the chain — press to take it out without removing it: it keeps its rank, its effort and its hrs"}">${of?"off":"on"}</button><button class=x data-rm="${k}|${i}" ${mdl[k].length>1?"":"disabled"} title="remove from chain">✕</button></span></span></div>`}).join("")+`<div class=madd><input list=mk-${k} data-add="${k}" placeholder="add a model id…"><button data-addb="${k}">Add</button></div></div>`).join("")
+ +`<div class=mx><b>effort</b> · <b>hrs</b> local time <code>HH-HH</code>, wraps midnight, empty = always · <b>switch</b> <code>off</code> skips a model and keeps its place · <b>✕</b> deletes the row.</div>`
  +`<div class="msave${dirty?" dirty":""}"><button id=msv ${dirty?"":"disabled"}>Save</button><button id=mrv ${dirty?"":"disabled"}>Revert</button><span class="st${mdlMsg.startsWith("!")?" err":mdlMsg?" okm":""}">${mdlMsg?esc(mdlMsg.replace(/^!/,"")):(dirty?"<span class=dot></span>unsaved changes":"saved in models.json")}</span></div>`}
 async function mdlLoad(){try{mdl=await (await fetch("/api/models")).json();mdlSrv=JSON.stringify(mdl);mdlRender()}catch(e){}}
 $("#mbody").addEventListener("change",e=>{const t=e.target;if(!mdl)return;mdlMsg="";if(t.dataset.ef){const[k,m]=t.dataset.ef.split("|");mdlSetEff(k,m,t.value)}
@@ -2656,9 +2661,6 @@ $("#mbody").addEventListener("click",async e=>{const t=e.target.closest("button"
  if(t.dataset.mv){const[k,i,d]=t.dataset.mv.split("|"),a=mdl[k],j=+i+ +d;[a[i],a[j]]=[a[j],a[i]]}
  else if(t.dataset.sw){const[k,m]=t.dataset.sw.split("|");mdlSetOff(k,m,!mdlOff(k,m))}
  else if(t.dataset.rm){const[k,i]=t.dataset.rm.split("|");const[m]=mdl[k].splice(+i,1);mdlSetEff(k,m,"");mdlSetOff(k,m,false)}
- else if(t.dataset.rv){const[i,d]=t.dataset.rv.split("|"),a=mdl.router_models,j=+i+ +d;[a[i],a[j]]=[a[j],a[i]]}
- else if(t.dataset.rrm){mdl.router_models.splice(+t.dataset.rrm,1)}
- else if(t.dataset.raddb){const v=sugId("router_known",t.parentElement.querySelector("input").value.trim());if(!MODELRE.test(v))mdlMsg="!invalid model id";else if(mdl.router_models.includes(v))mdlMsg="!already in the envelope";else mdl.router_models.push(v)}
  else if(t.dataset.addb){const k=t.dataset.addb,v=sugId(k,t.parentElement.querySelector("input").value.trim());if(!MODELRE.test(v))mdlMsg="!invalid model id";else if(mdl[k].includes(v))mdlMsg="!already in the chain";else mdl[k].push(v)}
  else if(t.id==="mrv")mdl=JSON.parse(mdlSrv);
  else if(t.id==="msv"){try{const r=await fetch("/api/models",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(mdl)}),d=await r.json();if(d.err)mdlMsg="!"+d.err;else{mdl=d;mdlSrv=JSON.stringify(d);mdlMsg="saved · new runs use it"}}catch(x){mdlMsg="!save failed"}}
@@ -2670,12 +2672,22 @@ const saveAcc=()=>{ls.acc=[...openAcc];save()};
 ACC.forEach(i=>{const e=$("#"+i);e.open=openAcc.has(i);e.addEventListener("toggle",()=>{if(e.open)openAcc.add(i);else openAcc.delete(i);saveAcc();if(i==="mdl"&&e.open)mdlLoad()})});mdlLoad();
 const PCOL=["#5aa9ff","#3ecf8e","#f5b041","#b79cf6","#2dd4bf","#ff6b6b","#c678dd","#e5c07b","#8a93a3"],tk=n=>n>=1e9?(n/1e9).toFixed(2)+"B":n>=1e6?(n/1e6).toFixed(1)+"M":n>=1e3?(n/1e3).toFixed(0)+"K":""+n;
 const OTHER=0.01;
-function pie(ms){const rows=ms.map(m=>({...m,v:m.in+m.out})).filter(m=>m.v>0);if(!rows.length)return"<span class=m>no token data</span>";
+function pie(ms){
+ // One slice per model NAME, never per spelling: one model answers under several (deepseek-flash, deepseek-flash[1m],
+ // claude-deepseek-flash), and keying the rows on the raw id drew the same label three times (#1750).
+ const byName=new Map();
+ for(const m of ms){const v=m.in+m.out;if(!(v>0))continue;
+  const k=m.box&&m.box.registered===false?m.model+" · unregistered":(m.box&&m.box.llm)||m.model;
+  const r=byName.get(k)||{n:k,v:0,in:0,out:0,cache:0,spend:0,calls:0,ids:[]};
+  r.v+=v;r.in+=m.in;r.out+=m.out;r.cache+=m.cache||0;r.spend+=m.spend||0;r.calls+=m.calls||0;
+  if(!r.ids.includes(m.model))r.ids.push(m.model);
+  byName.set(k,r)}
+ const rows=[...byName.values()];if(!rows.length)return"<span class=m>no token data</span>";
  const tot=rows.reduce((a,m)=>a+m.v,0);const keep=[],fold=[];
  for(const m of rows) (m.v/tot<OTHER?fold:keep).push(m);
  while(keep.length+(fold.length?1:0)>6) fold.unshift(keep.pop());
- const nm=m=>(m.box&&m.box.registered===false?m.model+" · unregistered":(m.box&&m.box.llm)||m.model),sl=keep.map(m=>({n:nm(m),v:m.v,t:`${nm(m)} (${m.model}): ${tk(m.in)} in · ${tk(m.out)} out · ${tk(m.cache)} cache read · ${m.calls} calls · ${usd(m.spend)}`}));
- if(fold.length){const v=fold.reduce((a,m)=>a+m.v,0),t=fold.map(m=>`${m.model}: ${(m.v/tot*100).toFixed(2)}%`).join("\n");sl.push({n:`other · ${fold.length} models`,v,t})}
+ const sl=keep.map(m=>({n:m.n,v:m.v,t:`${m.n} (${m.ids.join(", ")}): ${tk(m.in)} in · ${tk(m.out)} out · ${tk(m.cache)} cache read · ${m.calls} calls · ${usd(m.spend)}`}));
+ if(fold.length){const v=fold.reduce((a,m)=>a+m.v,0),t=fold.map(m=>`${m.n}: ${(m.v/tot*100).toFixed(2)}%`).join("\n");sl.push({n:`other · ${fold.length} models`,v,t})}
  let a0=-Math.PI/2;const R=52,C=60,arc=sl.map((x,i)=>{const a1=a0+x.v/tot*2*Math.PI,big=a1-a0>Math.PI?1:0,p=sl.length===1?`<circle cx=${C} cy=${C} r=${R} fill="${PCOL[i]}"><title>${esc(x.t)}</title></circle>`:`<path d="M${C} ${C}L${C+R*Math.cos(a0)} ${C+R*Math.sin(a0)}A${R} ${R} 0 ${big} 1 ${C+R*Math.cos(a1)} ${C+R*Math.sin(a1)}Z" fill="${PCOL[i]}" stroke="#161a21" stroke-width=1><title>${esc(x.t)}</title></path>`;a0=a1;return p}).join("");
  return `<div class=pie><svg viewBox="0 0 120 120" width=112 height=112>${arc}<circle cx=${C} cy=${C} r=26 fill="#161a21"/><text x=${C} y=${C-1} text-anchor=middle fill="#d8dde6" font-size=11 font-weight=600>${tk(tot)}</text><text x=${C} y=${C+12} text-anchor=middle fill="#8a93a3" font-size=8>tokens</text></svg><div class=lg>${sl.map((x,i)=>`<div title="${esc(x.t)}"><i style="background:${PCOL[i]}"></i><span class=ln>${esc(x.n)}</span><b>${Math.round(x.v/tot*100)}%</b></div>`).join("")}</div></div>`}
 const ago=t=>{const m=Math.round((Date.now()/1000-t)/60);return m<2?"just now":m<90?m+" min ago":Math.round(m/60)+" h ago"},rs=t=>t?new Date(t*1000).toLocaleString([],{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}):"?";
@@ -2725,28 +2737,6 @@ async function pollStats(){try{pollSubs();
   $("#open").innerHTML=openRows(sp.pr.open);
 }catch(e){}}
 pollStats();setInterval(pollStats,30000);
-async function pollAdapt(){try{const d=await (await fetch("/api/adapter-errors")).json();
- const rows=d.classes||[],n=rows.reduce((a,r)=>a+(r.count||0),0);
- $("#aesr").textContent=d.err?"unavailable":rows.length?`${n} in ${d.runs} runs`:"none";
- $("#aeb").innerHTML=(d.err?`<div class=warnl>${esc(d.err)}</div>`:"")
-  +`<div class=subx>Every adapter_error run verdict in the run folders still on disk, counted by route (model · backend) and cause. Read-only: nothing here fixes a class.</div>`
-  +(rows.length?rows.map(r=>`<div class=kr><span class=l>${esc(r.model)}<small> · ${esc(r.backend)}</small></span><b>${r.count||0}</b><span class=d>${esc(r.cause)}</span></div>`).join(""):`<div class=subx>no adapter_error verdict in ${d.runs} run folders</div>`);
-}catch(e){}}
-pollAdapt();setInterval(pollAdapt,60000);
-async function pollDelivery(){try{const d=await (await fetch("/api/delivery")).json(),p=d.dispatched||{},a=d.adapter||{},l=d.landings||{},r=d.review||{},
- bad=Object.entries(p.by_state||{}).map(([k,v])=>`${v} ${esc(k)}`).join(" · "),
- many=((d.attempts||{}).per_issue||[]).filter(x=>x.attempts>1);
- $("#dlvsr").textContent=d.err?"unavailable":`${p.landed_nothing||0} dispatched, no landing · ${l.count||0} landing${l.count===1?"":"s"}`;
- $("#dlvb").innerHTML=(d.err?`<div class=warnl>${esc(d.err)}</div>`:"")
-  +`<div class=subx>Read-only delivery metrics from the loop's own records: the issue ledgers, the landing ledger, the auto/ markers and the run folders. Nothing here starts, retries or moves work.</div>`
-  +`<div class=kr><span class=l>Dispatched, landed nothing</span><b>${p.landed_nothing||0}</b><span class=d>${esc(p.attempts||0)} attempts · ${p.landed||0} landed${bad?" · "+bad:""} · ${p.open||0} open</span></div>`
-  +`<div class=kr><span class=l>No-op waves</span><b>${(d.noop_waves||{}).count||0}</b><span class=d>landed empty, counted apart from a failed dispatch</span></div>`
-  +(many.length?many.map(x=>`<div class=kr><span class=l>${esc(x.issue)}</span><b>${x.attempts}</b><span class=d>${x.landed} landed · ${x.landed_nothing} nothing · ${x.open} open</span></div>`).join(""):`<div class=subx>no issue was attempted more than once</div>`)
-  +(a.classes&&a.classes.length?a.classes.map(x=>`<div class=kr><span class=l>${esc(x.model)}<small> · ${esc(x.backend)}</small></span><b>${x.count||0}</b><span class=d>${esc(x.cause)}</span></div>`).join(""):`<div class=subx>no adapter_error verdict in ${a.runs||0} run folders</div>`)
-  +`<div class=kr><span class=l>Repeated review findings</span><b>${r.repeated||0}</b><span class=d>${(r.loops||[]).map(x=>esc(x.prefix+" "+x.key)+": "+x.rounds).join(" · ")}</span></div>`
-  +`<div class=kr><span class=l>Landings</span><b>${l.count||0}</b><span class=d>${l.branches||0} branches · ${l.issues||0} issues in the base</span></div>`;
-}catch(e){}}
-pollDelivery();setInterval(pollDelivery,60000);
 poll();setInterval(poll,3000);
 loadPoll();setInterval(loadPoll,LOAD_MS);   // the window owns the reading: one timer and one /api/load per tick, whatever else the page renders
 const bo=ls.bo||{},saveB=()=>{ls.bo=bo;localStorage.hub=JSON.stringify({...ls,pins:[...pins],q,per,bo})};
@@ -3253,15 +3243,15 @@ def subs_month():
     return {"subs": out, "frac": round(frac, 3), "plans": round(plans, 2), "api": round(api, 2), "total": round(plans + api, 2)}
 
 MODELS = pathlib.Path(__file__).resolve().parent / "models.json"
-CHAINS = ("coding_models", "review_models", "vision_models")   # all three live in models.json
-ROUTER_CHAIN = "router_models"   # the router's own chain, written into the run graph (the dispatch envelope, #95)
+CHAINS = ("coding_models", "review_models", "vision_models", "router_models")   # all four live in models.json (SPEC 750)
+ROUTER_CHAIN = "router_models"   # the router's own chain: the models the router agent runs on, in rank order (#95)
 def usable(ids, chain):
     """The ids one chain keeps: an unregistered id stays, so the panel shows it as unregistered; a registered id stays
     only when the registry says the chain can run it (ADR-0147, #545)."""
     return [m for m in ids if modelreg.model(m) is None or modelreg.compatible(m, chain)[0]]
-def router_view():
-    """The Router queue the panel shows: the entries the router chain can run. A Save compares against the same list."""
-    return usable(router_get(), "router")
+def models_doc():
+    """models.json as the panel reads it: a v2 file's chains under the v1 keys the page draws (v1_view)."""
+    return v1_view(json.loads(MODELS.read_text()))
 def v1_view(d):
     """The panel's reading of models.json: a v2 file's chains as the resolver reads them, under the v1 keys the panel draws (ADR-0147)."""
     if d.get("schema_version") != 2: return d
@@ -3272,7 +3262,7 @@ def v1_view(d):
     view["hours"] = {k: {e.raw: e.hrs for e in rows[k] if e.hrs} for k in CHAINS}
     view["efforts"] = {k: {e.raw: e.effort for e in rows[k] if e.effort} for k in CHAINS}
     return view
-READONLY = ("known", "router_known", "suggest", "version", "labels", "boxes", "last_coding", "envelope", "blocked", "chain")   # fields models_get() adds for the panel: posted back, never stored
+READONLY = ("known", "router_known", "suggest", "version", "labels", "boxes", "last_coding", "chain")   # fields models_get() adds for the panel: posted back, never stored
 # One model-id shape, in one place (#221): a bare id, and the context suffix the gateway serves beside it
 # (`claude-deepseek-v4-flash[1m]`). The save validates with MODEL_ID and the page's Add box tests the same source,
 # substituted when the page is served, so a second spelling cannot refuse an id the save takes -- the shape without the
@@ -3365,9 +3355,9 @@ def router_known():
     A queue entry is handed to the engine, which runs every call through the gateway, so the box offers only what the
     gateway's catalogue holds. The other CLIs' ids (codex, agy, grok) stay in `known`, for the role chains.
 
-    The gateway's catalogue lists no Anthropic id, and router_resolve passes one through, so the box also offers every
-    live registry id that matches ANTHROPIC_ID (#687)."""
-    reg = router_envelope.modelreg.default_registry()
+    The gateway's catalogue lists no Anthropic id, and it passes one through, so the box also offers every live
+    registry id that matches ANTHROPIC_ID (#687)."""
+    reg = modelreg.default_registry()
     anthropic = {m for m, e in reg.entries.items() if ANTHROPIC_ID.match(m) and not e.retired}
     return sorted({m for m in set(gateway_models()) | anthropic if MODEL_ID.match(m) and not provkey.closed(m)})   # no key, never offered (#482)
 
@@ -3378,7 +3368,7 @@ def model_labels(ids):
     Display only: the add box matches a typed "4.1" against the label, and the value it saves stays the id."""
     out = {}
     for m in ids:
-        e = router_envelope.modelreg.model(m)
+        e = modelreg.model(m)
         if e is not None and e.label: out[m] = e.label
     return out
 
@@ -3390,7 +3380,7 @@ def model_suggestions(ids):
     name, and a raw id can still be typed. An effort spelling adds its effort word ("Gemini 3.8 Flash high"); two ids
     that still share a text add their route; a last tie adds the id. So every text in one list is unique, and the
     page maps a picked text back to its id."""
-    reg = router_envelope.modelreg
+    reg = modelreg
     rows = []
     for m in sorted(set(ids)):
         e = reg.model(m)
@@ -3414,7 +3404,7 @@ def model_box(raw, chain=None):
     The rule lives here, never in the page (ADR-0137). `chain` picks the spelling that chain stores (chain_id), so a
     review row of an Anthropic id reads as the claude CLI it runs through. A cli route is named by its argv's program
     (claude, codex, grok, agy)."""
-    reg = router_envelope.modelreg
+    reg = modelreg
     spelling = chain_id(chain, raw) if chain else raw
     e, ref = reg.model(spelling), reg.normalize(spelling)
     if e is None or not e.label:
@@ -3425,19 +3415,6 @@ def model_box(raw, chain=None):
 
 
 ANTHROPIC_ID = re.compile(r"^claude-(opus|sonnet|haiku|fable)-[0-9][0-9a-z.\-]*$")
-
-
-def router_resolve(mid, served):
-    """The gateway's spelling of one queue entry, or None when the gateway does not serve it (#225).
-
-    The box folds `claude-gpt-5.6-terra` onto `gpt-5.6-terra`, so a bare id is tried under the `claude-` prefix too; a
-    suffix such as `[1m]` is kept, because it is part of the id the gateway serves. An Anthropic id is not in the
-    gateway's list and the gateway passes it through, so it resolves to itself."""
-    if ANTHROPIC_ID.match(mid): return mid
-    b = bare_id(mid)
-    for c in (b, "claude-" + b):
-        if c in served: return c
-    return None
 
 
 def known_models(d):
@@ -3497,68 +3474,11 @@ def efforts_of(d):
     """Per-chain {model-id: effort} from models.json's optional top-level `efforts`; every chain present, only entries whose model is in that chain."""
     e = d.get("efforts") if isinstance(d.get("efforts"), dict) else {}
     return {k: {m: v for m, v in (e.get(k) or {}).items() if isinstance(e.get(k), dict) and m in d.get(k, []) and v in EFFORTS and v != "medium"} for k in CHAINS}
-def _graph_path():
-    """The run graph the loop starts, as launch.py resolves it: the project's own workflow file first, else the seed.
-
-    The checkout comes from the seam (CHECKOUT, resolved by address.sh), never from the cwd: the hub serves every
-    repository of the profile, so its working directory says nothing about whose graph it is reading."""
-    for p in (pathlib.Path(CHECKOUT) / "docs/squad/workflows/default.graph.json",
-              pathlib.Path(CHECKOUT) / "docs/squad/workflows/dynamic.graph.json",
-              pathlib.Path(CHECKOUT) / "docs/design/router.graph.json"):
-        if p.is_file(): return p
-    return None
-
-
-def _graph_doc():
-    p = _graph_path()
-    if p is None: return {}
-    try: return json.loads(p.read_text())
-    except (OSError, ValueError): return {}
-
-
-def router_get():
-    """The router's own chain (#95): the models the dispatch envelope allows, in the order it lists them. It is the
-    same list the router reads to name a child's model, and the same one a request outside of which is refused whole."""
-    return [bare_id(m) for m in router_envelope.envelope_models(_graph_doc())]
-
-
-def router_set(ids):
-    """Write that chain into the run graph and restamp the record it ships beside.
-
-    The envelope is graph data, never a models.json chain (ADR-0106): the graph is the author's, and the panel is its
-    editor. The record carries the graph hash `check_record.py` enforces, so the two move together."""
-    p = _graph_path()
-    if p is None: return {"err": "no run graph to write"}
-    try: doc = json.loads(p.read_text())
-    except (OSError, ValueError): return {"err": "the run graph does not parse"}
-    hit = False
-    for n in doc.get("nodes") or []:
-        if n.get("kind") == "dispatch":
-            n.setdefault("allow", {})["models"] = list(ids); hit = True
-    if not hit: return {"err": "the run graph has no dispatch node"}
-    tmp = p.with_name(p.name + ".tmp")
-    tmp.write_text(json.dumps(doc, indent=2) + "\n"); tmp.replace(p)
-    venv = pathlib.Path(CHECKOUT) / ".venv" / "bin" / "python"
-    r = subprocess.run([str(venv) if venv.exists() else sys.executable,
-                        str(pathlib.Path(CHECKOUT) / "scripts" / "stamp_router_record.py")],
-                       capture_output=True, text=True)
-    if r.returncode != 0:
-        return {"err": "the graph was written and its record could not be restamped: " + (r.stdout + r.stderr).strip()[-200:]}
-    return {}
-
-
-def envelope_of():
-    """The dispatch envelope of that graph: what the router may ask a child for. A request outside it is refused whole."""
-    d = _graph_doc()
-    for n in d.get("nodes") or []:
-        if n.get("kind") == "dispatch":
-            a = n.get("allow") or {}
-            return {"node": n.get("name"), "graph": d.get("name"),
-                    "models": router_envelope.envelope_models(d), "efforts": a.get("efforts") or [],
-                    "tools": a.get("tools") or [], "workspaces": a.get("workspaces") or [],
-                    "max_children": n.get("max_children"), "max_parallel": n.get("max_parallel"),
-                    "max_depth": n.get("max_depth")}
-    return {}
+def router_get(doc=None):
+    """The router's own chain (#95, SPEC 750): the models the router agent runs on, in rank order, read from
+    models.json's `chains.router` like the three role chains. The panel shows the entries the chain can run (usable)."""
+    d = models_doc() if doc is None else v1_view(doc)
+    return [bare_id(m) for m in d.get(ROUTER_CHAIN, [])]
 
 
 def subscription_states():
@@ -3574,42 +3494,42 @@ def model_status(raw, states):
             "quota": {"spent": bool(q["limited"]), "reason": q["reason"], "until": q["until"],
                       "until_text": time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(q["until"])) if q["until"] else None}}
 def models_get():
-    """The three chains as the panel reads them: bare ids, so one model is one row in every chain and in the box.
+    """The four chains as the panel reads them: bare ids, so one model is one row in every chain and in the box.
 
     The file keeps the spelling each role needs (chain_id); the panel never sees it, so a reader cannot pick the
     wrong one of two spellings of the same model."""
-    d = v1_view(json.loads(MODELS.read_text()))
-    known, rknown, rchain, states = known_models(d), router_known(), router_view(), subscription_states()
+    d = models_doc()
+    known, rknown, states = known_models(d), router_known(), subscription_states()
     return {**{k: [bare_id(m) for m in d.get(k, [])] for k in CHAINS},
             "efforts": {k: {bare_id(m): v for m, v in ek.items()} for k, ek in efforts_of(d).items()},
             "hours": {k: {bare_id(m): v for m, v in hk.items()} for k, hk in hours_of(d).items()},
             "off": {k: {bare_id(m): True for m in ok} for k, ok in off_of(d).items()},
-            "known": known, "last_coding": last_coding_model(), "envelope": envelope_of(),
-            "router_models": rchain, "router_known": rknown, "version": models_version(),
-            "suggest": {**{k: model_suggestions(usable(known, k.removesuffix("_models"))) for k in CHAINS},
-                        "router_known": model_suggestions(usable(rknown, "router"))},
+            "known": known, "last_coding": last_coding_model(),
+            "router_known": rknown, "version": models_version(),
+            # The router's add box offers what the gateway serves, never the other CLIs' ids (#225): the router row is a
+            # chain like the other three, so its own catalogue answers for it (#687).
+            "suggest": {**{k: model_suggestions(usable(known, k.removesuffix("_models"))) for k in CHAINS if k != ROUTER_CHAIN},
+                        ROUTER_CHAIN: model_suggestions(usable(rknown, "router"))},
             "labels": model_labels(set(known) | set(rknown) | {bare_id(m) for k in CHAINS for m in d.get(k, [])}),
             "boxes": {**{k: {bare_id(m): {**model_box(bare_id(m), k), **model_status(bare_id(m), states)} for m in d.get(k, [])} for k in CHAINS},
-                      ROUTER_CHAIN: {m: {**model_box(m), **model_status(m, states)} for m in rchain},
                       "known": {m: model_box(m) for m in set(known) | set(rknown) | ({last_coding_model()} - {None, ""})}},
-            "chain": chainhealth.chain_state(d, "review_models", SHARED),
-            "blocked": {k: router_envelope.envelope_blocked([bare_id(m) for m in d.get(k, [])], router_get()) for k in ("coding_models",)}}
+            "chain": chainhealth.chain_state(d, "review_models", SHARED)}
 def models_version():
-    """What a Save must have read (#688): a hash of models.json and of the graph's allow.models, both parsed, so a
-    rewrite that keeps the same data keeps the version. An unreadable models.json hashes as its raw bytes."""
+    """What a Save must have read (#688): a hash of models.json, parsed, so a rewrite that keeps the same data keeps
+    the version. An unreadable models.json hashes as its raw bytes. The four chains all live in that one file (SPEC
+    750), so no run graph enters the hash: a graph edit no longer makes a panel tab stale."""
     try: m = json.loads(MODELS.read_text())
     except (OSError, ValueError):
         try: m = MODELS.read_bytes().hex()
         except OSError: m = None
-    doc = json.dumps({"models": m, "allow": router_envelope.envelope_models(_graph_doc())}, sort_keys=True)
-    return hashlib.sha256(doc.encode()).hexdigest()
+    return hashlib.sha256(json.dumps(m, sort_keys=True).encode()).hexdigest()
 
 
 _SAVE = threading.Lock()   # one Save at a time, so the version check and the write see the same files
 
 
 def models_set(new):
-    """Replace the three role chains in models.json; every other key is kept. Atomic write, so a reader never sees half a file.
+    """Replace the four chains in models.json; every other key is kept. Atomic write, so a reader never sees half a file.
 
     A body whose version is not the current one comes from a page that did not read the last Save (#688): it is
     refused whole, before any write, so an old tab never takes back what a newer Save wrote."""
@@ -3618,91 +3538,143 @@ def models_set(new):
         return _models_set(new)
 
 
+def _new_raw(k, mid, reg):
+    """The spelling a new row takes in the file: the one the route its chain prefers serves, through chain_id's rule.
+
+    The posting id is the owner's choice and stays when that route serves it, context suffix included. When it does
+    not, the route's own spelling answers: the gateway names `claude-gpt-5.6-terra` for `gpt-5.6-terra`, while the
+    bare spelling there is the codex CLI's. A spelling without an effort suffix wins, so a gemini row keeps the
+    effort the panel chose."""
+    e = modelreg.model(mid, reg)
+    route = modelreg._default_route(k.removesuffix("_models"), e)
+    served = ((e.routes.get(route) or {}).get("served") or []) if (e is not None and route) else []
+    if not served or mid in served or mid.removeprefix(RUNNER) in served: return chain_id(k, mid)
+    ref = modelreg.normalize(mid, reg)
+    same = next((x for x in served if modelreg.normalize(x, reg).ctx == ref.ctx
+                 and modelreg.normalize(x, reg).effort == ref.effort), None)
+    plain = next((x for x in served if not modelreg.normalize(x, reg).effort), None)
+    return chain_id(k, same or plain or mid)
+
+_ABSENT = object()   # a setting section the Save body leaves out: the file's own value stays, never cleared
+
+
+def _entry(k, mid, prev, effort, window, off):
+    """One v2 chain entry for a panel row, in the shape `modelreg.migrate` writes: `id`, `raw` when the spelling
+    differs, an explicit route, and the row's effort, window and switch.
+
+    `raw` is not the panel's id (ADR-0147): review's Anthropic row carries `claude:`, and a gateway row carries the
+    `claude-` alias of its bare model. A row already in the file keeps the spelling and the route it holds; a new row
+    takes the spelling its chain needs. A `-low`/`-medium` suffix fixes an effort, so a changed effort drops it.
+
+    A setting the body leaves out (`_ABSENT`) keeps the value the file holds. A value the body names -- the empty
+    string or the default effort included -- replaces it, so an omitted section never clears a row."""
+    ref = modelreg.normalize(mid)
+    want = chain_id(k, mid)
+    raw = _new_raw(k, mid, None)
+    route = modelreg._default_route(k.removesuffix("_models"), modelreg.model(mid))
+    if effort is _ABSENT: effort = prev.effort if prev is not None else None
+    if window is _ABSENT: window = prev.hrs if prev is not None else None
+    if off is _ABSENT: off = (not prev.on) if prev is not None else False
+    if prev is not None and prev.raw == want:
+        held = modelreg.normalize(prev.raw)
+        if not held.effort or held.effort == (effort or "medium"):
+            raw = prev.raw
+        elif mid.endswith("-" + held.effort):   # the owner set the default effort: drop the suffix that fixed another
+            raw = _new_raw(k, mid[: -len(held.effort) - 1], None)
+        route = prev.route or route
+    out = {"id": ref.id}
+    if raw != ref.id: out["raw"] = raw
+    if route: out["route"] = route
+    if prev is not None:   # what the panel does not draw stays: review's timeout and tool rule, an explicit context
+        if prev.ctx: out["ctx"] = prev.ctx
+        if prev.timeout_s is not None: out["timeout_s"] = prev.timeout_s
+        if prev.no_tools: out["no_tools"] = True
+    if effort and effort != "medium": out["effort"] = effort
+    if isinstance(window, str) and HOURS.match(window) and window[:2] != window[3:]: out["hrs"] = window
+    if off: out["on"] = False
+    return out
+
+
+def _setting(sec, k, raw):
+    """One row's setting from a posted section: `_ABSENT` when the body left the chain (or the whole section) out, so
+    the file's value stays; the row's own value otherwise, `None` when the section names the chain but not this row.
+
+    A row is looked up by the spelling the file stores, by the panel's bare id, or by the model id the resolver folds
+    both onto, so a caller may key a section by either spelling of one model."""
+    if sec is _ABSENT or not isinstance(sec, dict) or k not in sec: return _ABSENT
+    rows, want = sec.get(k) or {}, modelreg.normalize(raw).id
+    for name, value in rows.items():
+        if name in (raw, bare_id(raw)) or modelreg.normalize(name).id == want: return value
+    return None
+
+
+def _v2_chain(k, posted, doc, eff, hrs, off):
+    """One v2 chain for the Save, from the panel's list in rank order (or the file's own list when the body omits it).
+
+    An entry the panel's view hid -- `usable()` drops a model its chain cannot run (ADR-0147) -- is not in the posted
+    list; it stays where it was, else a Save of another chain would delete the owner's entry. An entry the owner
+    removed with ✕ was shown, so it goes.
+
+    One model is one row. Two posted spellings can fold onto one stored spelling (`gpt-5.6-terra` and
+    `claude-gpt-5.6-terra` both store as the gateway alias), so the fold drops the later one here: a file with two
+    identical entries cannot be read back or saved again."""
+    canon = k.removesuffix("_models")
+    old = list(modelreg.chain(doc, canon).entries)
+    if posted is None:   # the body names a section but no list: apply the section, keep the file's rank and rows
+        return [_entry(k, e.raw, e, _setting(eff, k, e.raw), _setting(hrs, k, e.raw), _setting(off, k, e.raw)) for e in old]
+    by_id = {modelreg.normalize(e.raw).id: e for e in old}
+    out, seen = [], set()
+    for m in posted:
+        ref = modelreg.normalize(m)
+        seen.add(ref.id)   # two spellings of one model may both be posted: the panel drew two rows, so both stay
+        out.append(_entry(k, m, by_id.get(ref.id), _setting(eff, k, m), _setting(hrs, k, m), _setting(off, k, m)))
+    shown = {modelreg.normalize(m).id for m in v1_view(doc).get(k, [])}
+    for i, e in enumerate(old):
+        ref = modelreg.normalize(e.raw)
+        if ref.id in shown or ref.id in seen: continue
+        out.insert(min(i, len(out)), _entry(k, e.raw, e, _ABSENT, _ABSENT, _ABSENT))
+        seen.add(ref.id)
+    written, unique = set(), []
+    for e in out:   # one stored spelling, one row: the fold above can land two posted ids on the same `raw`
+        spelling = e.get("raw") or e["id"]
+        if spelling in written: continue
+        written.add(spelling); unique.append(e)
+    return unique
+
+
 def _models_set(new):
     # The panel posts back whatever models_get() handed it, so every read-only field it carries comes back here: `known`
     # (the add box's list) and `last_coding` (the header's line). Dropping only `known` made the other one read as a chain
     # the panel invented -- "unknown chain" on every Save (2026-10-11).
     new = {k: v for k, v in new.items() if k not in READONLY} if isinstance(new, dict) else new
-    if not isinstance(new, dict) or set(new) - set(CHAINS) - {"efforts", "hours", "off", ROUTER_CHAIN}: return {"err": "unknown chain"}
-    if json.loads(MODELS.read_text()).get("schema_version") == 2: return {"err": "models.json is v2: the panel cannot save it yet; edit its chains with modelreg"}
-    # The router chain is the dispatch envelope, so it lives in the run graph and never in this file (#95)
-    rchain = new.pop(ROUTER_CHAIN, None)
-    if rchain == [] or rchain == router_view():
-        rchain = None       # no run graph, or the queue as shown: the envelope and its hidden entries stay as they are
-    if rchain is not None:
-        if not isinstance(rchain, list) or not 1 <= len(rchain) <= 8 or \
-           not all(isinstance(m, str) and MODEL_ID.match(m) for m in rchain) or len(set(rchain)) != len(rchain):
-            return {"err": f"{ROUTER_CHAIN}: need 1-8 distinct model ids"}
-        # One entry is one id the engine can run (#225): the gateway's spelling, or a refusal that names the entry.
-        # A Save that did not move this queue leaves the graph alone, so a role-chain edit is never refused for it.
-        if rchain != router_get():
-            served = set(gateway_models())
-            res = [router_resolve(m, served) for m in rchain]
-            bad = [m for m, r in zip(rchain, res) if r is None]
-            if bad: return {"err": f"{ROUTER_CHAIN}: the gateway does not serve " + ", ".join(bad)}
-            rchain = res
-            if len(set(rchain)) != len(rchain): return {"err": f"{ROUTER_CHAIN}: need 1-8 distinct model ids"}
-    # A coding child runs inside the dispatch envelope, so a coding model the envelope lacks reads "blocked by envelope"
-    # and never runs (#690): the Save appends it, in the gateway's spelling, after the queue order the owner set.
-    coding = new.get("coding_models")
-    base = rchain if rchain is not None else router_get()
-    if base and isinstance(coding, list) and all(isinstance(m, str) for m in coding):
-        miss = router_envelope.envelope_blocked([bare_id(m) for m in coding], base)
-        if miss:
-            served = set(gateway_models())
-            rchain = list(base) + [r for r in dict.fromkeys(router_resolve(m, served) or m for m in miss) if r not in base]
-            if len(rchain) > 8: return {"err": f"{ROUTER_CHAIN}: the coding models do not fit the 8-entry envelope"}
-    if rchain is not None and rchain != router_get():   # a Save that did not move this queue leaves the graph and its record alone
-        err = router_set(rchain)
-        if err: return err
-    d = json.loads(MODELS.read_text()); eff = new.pop("efforts", None); hrs = new.pop("hours", None); off = new.pop("off", None)
+    if not isinstance(new, dict) or set(new) - set(CHAINS) - {"efforts", "hours", "off"}: return {"err": "unknown chain"}
+    d = json.loads(MODELS.read_text())
+    eff, hrs, off = new.pop("efforts", _ABSENT), new.pop("hours", _ABSENT), new.pop("off", _ABSENT)
+    posted = {}
     for k, v in new.items():
-        if not isinstance(v, list) or not 1 <= len(v) <= 8 or not all(isinstance(m, str) and MODEL_ID.match(m) for m in v):
-            return {"err": f"{k}: need 1-8 distinct model ids"}
-        v = [chain_id(k, m) for m in v]      # the panel works in bare ids; the file gets the spelling the role needs
-        if len(set(v)) != len(v): return {"err": f"{k}: need 1-8 distinct model ids"}
-        d[k] = v
-    # ✕ takes a row out of its chain, and the panel still posts that row's effort, hrs and switch back (#685): a setting of
-    # a model no longer in its chain goes with the row, never refuses the Save. A bad value of a kept row still refuses.
-    def _kept(sec):
-        if not isinstance(sec, dict): return sec
-        return {k: ({m: v for m, v in ek.items() if not isinstance(m, str) or m in {bare_id(x) for x in d.get(k, [])}} if isinstance(ek, dict) else ek)
-                for k, ek in sec.items()}
-    eff, hrs, off = _kept(eff), _kept(hrs), _kept(off)
-    if eff is not None:
-        # efforts live beside the chains, never inside them (other scripts jq the arrays of strings); "default" = key absent
-        if not isinstance(eff, dict) or set(eff) - set(CHAINS): return {"err": "efforts: unknown chain"}
-        for k, ek in eff.items():
-            if not isinstance(ek, dict) or not all(isinstance(m, str) and m in {bare_id(x) for x in d.get(k, [])} and v in EFFORTS for m, v in ek.items()):
-                return {"err": f"efforts.{k}: model must be in the chain, effort one of {'|'.join(EFFORTS)}"}
-        # keyed by the spelling the chain stores, like the chain itself (medium is the default: absent)
-        d["efforts"] = {k: {chain_id(k, m): v for m, v in (eff.get(k) or {}).items() if v != "medium"} for k in CHAINS}
-    if hrs is not None:
-        # hours live beside the chains, like efforts; a window equal at both ends is meaningless, so it is dropped
-        if not isinstance(hrs, dict) or set(hrs) - set(CHAINS): return {"err": "hours: unknown chain"}
-        for k, hk in hrs.items():
-            if not isinstance(hk, dict) or not all(isinstance(m, str) and m in {bare_id(x) for x in d.get(k, [])} and isinstance(v, str) and HOURS.match(v) for m, v in hk.items()):
-                return {"err": f"hours.{k}: model must be in the chain, window HH-HH (00-23)"}
-        d["hours"] = {k: {chain_id(k, m): v for m, v in (hrs.get(k) or {}).items() if v[:2] != v[3:]} for k in CHAINS}
-    if off is not None:
-        # The switch (#1819) lives beside the chains like efforts and hours: a model out of its chain is a state of the
-        # row, so the array of strings other scripts jq stays exactly what it was. Switching every entry off is allowed:
-        # the consumers then take the "no model may run now" path instead of falling back to a model the owner took out.
-        if not isinstance(off, dict) or set(off) - set(CHAINS): return {"err": "off: unknown chain"}
-        for k, ok in off.items():
-            if not isinstance(ok, dict) or not all(isinstance(m, str) and m in {bare_id(x) for x in d.get(k, [])} and v for m, v in ok.items()):
-                return {"err": f"off.{k}: model must be in the chain, value true"}
-        d["off"] = {k: {chain_id(k, m): True for m, v in (off.get(k) or {}).items() if v} for k in CHAINS}
-    if "off" in d:
-        d["off"] = {k: v for k, v in off_of(d).items() if v}
-        if not d["off"]: del d["off"]
-    if "hours" in d:
-        d["hours"] = {k: v for k, v in hours_of(d).items() if v}
-        if not d["hours"]: del d["hours"]
-    if "efforts" in d:
-        d["efforts"] = {k: v for k, v in efforts_of(d).items() if v}
-        if not d["efforts"]: del d["efforts"]
-    tmp = MODELS.with_suffix(".tmp"); tmp.write_text(json.dumps(d, indent=2) + "\n"); os.replace(tmp, MODELS)
+        # An empty chain is a legal state: the reader tolerates it, and a file that carries one (the router's, until the
+        # owner ranks it) must not refuse every Save. The panel's row controls keep at least one entry (SPEC 750).
+        if not isinstance(v, list) or len(v) > 8 or not all(isinstance(m, str) and MODEL_ID.match(m) for m in v):
+            return {"err": f"{k}: need at most 8 distinct model ids"}
+        stored = [chain_id(k, m) for m in v]      # the panel works in bare ids; the file gets the spelling the role needs
+        if len(set(stored)) != len(stored): return {"err": f"{k}: need at most 8 distinct model ids"}
+        posted[k] = [bare_id(m) for m in v]
+    # ✕ takes a row out of its chain, and the panel still posts that row's effort, hrs and switch back (#685): a setting
+    # of a model no longer in its chain goes with the row, never refuses the Save. A bad value of a kept row still refuses,
+    # and the sentence names the row and the rule, so a caller learns what to send.
+    for name, sec, rule, ok in (("efforts", eff, "must name one of low|medium|high|max", lambda v: v in EFFORTS),
+                                ("hours", hrs, "must be an HH-HH window (00-23)", lambda v: isinstance(v, str) and HOURS.match(v)),
+                                ("off", off, "must be true or false", lambda v: isinstance(v, bool))):
+        if sec is _ABSENT: continue
+        if not isinstance(sec, dict) or set(sec) - set(CHAINS): return {"err": f"{name}: unknown chain"}
+        for k, rows in sec.items():
+            if not isinstance(rows, dict): return {"err": f"{name}.{k}: must name models"}
+            for m, v in rows.items():
+                if not (isinstance(m, str) and ok(v)): return {"err": f"{name}.{k}: {m} {rule}"}
+    # The file is v2, and every chain writes there: the router row is a chain row like the other three (SPEC 750). The
+    # graph and its record are never touched by a Save; a run reads the router chain from this file.
+    chains = {k.removesuffix("_models"): _v2_chain(k, posted.get(k), d, eff, hrs, off) for k in CHAINS}
+    modelreg.write_chains(MODELS, chains, d)
     return models_get()
 
 def served_page(login=""):

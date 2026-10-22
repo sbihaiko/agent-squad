@@ -80,7 +80,15 @@ Publish the approved tickets. **How** depends on the tracker `/setup-matt-pocock
   Publish no `relates_to` edge of the parent to its own tickets, and none between tickets on a guess. The parent link already lists them under the parent, with progress; a second copy can only disagree with it. A `relates_to` edge (on GitHub: `POST /repos/$OWNER/$REPO/issues/$TICKET/relates_to` with `-F issue_id=<the numeric id>`) is earned when two tickets touch the same place and neither blocks the other — and only once the reason is known and written in a comment, because the edge itself carries no direction and no proof. Where the repository already defers a startable ticket whose file another holds, that guard is the operational half and no edge replaces it.
   Apply every ticket's labels when it is created: the triage label, its `wave:NN` label and any type label. Before the first issue, make sure each `wave:NN` label you need exists (on GitHub: `gh label create "wave:NN" --color <hex> --description "Wave NN: startable once waves before it are done" --force`, one color per wave or one shared color). If a later edge change moves a ticket to another wave, move its label too: a ticket carries exactly one `wave:` label.
   Every ticket gets the triage label (`ready-for-agent`) when it is created, blocked or not. The repository's own guard (for example its `stack.sh`) holds a ticket whose blocker is open; the skill does not withhold the label. The wave labels stay on all of them, so the order is readable and the edges are the same thing the dispatch sorts by.
-  Where the tracker has a board, create each ticket's card in **Backlog** (a bug's card in **Todo**). The loop never moves a card into Backlog or Todo; only the owner does. Todo plus `ready-for-agent` is the dispatcher's go signal, so the owner starts a ticket by moving its card to Todo.
+  Where the tracker has a board, create each ticket's card in **Backlog** (a bug's card in **Todo**).
+  **Set the project to "Squad Board" when you create the issue.** On GitHub the card is the issue's project item, and the board is the project titled `Squad Board` in the repository's owner (the wellzesta org for wz-zesty-agent), never a project looked up by number or by any other title:
+  ```sh
+  OWNER=${SG_OWNER:-$(gh repo view --json owner --jq .owner.login)}
+  NUM=$(gh project list --owner "$OWNER" --format json --jq '.projects[]|select(.title=="Squad Board").number')   # exactly one number, or stop
+  gh project item-add "$NUM" --owner "$OWNER" --url "$ISSUE_URL" --format json --jq .id   # the item id; then set its Status to Backlog (a bug's to Todo) with gh project item-edit
+  ```
+  Read the project back (`gh issue view <n> --json projectItems`): it must list `Squad Board`. Add the ticket to the board when you create it, before the next ticket, so a refused add is seen once. Where the repository has no `Squad Board` project, say so to the owner instead of guessing another project.
+  The loop never moves a card into Backlog or Todo; only the owner does. Todo plus `ready-for-agent` is the dispatcher's go signal, so the owner starts a ticket by moving its card to Todo.
 
 Work the **frontier**: any ticket whose blockers are all done. For a purely linear chain that means top to bottom.
 

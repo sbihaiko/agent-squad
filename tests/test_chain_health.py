@@ -197,7 +197,11 @@ def test_the_models_panel_gets_the_reader_result_and_posts_it_back_harmlessly(hu
     doc = hub.models_get()
     assert doc["chain"]["out"][0]["model"] == "gpt-5.6-terra" and doc["chain"]["out"][0]["reason"] == "usage limit"
     assert "chain" in hub.READONLY
-    assert "error" not in hub.models_set(doc) and "err" not in hub.models_set(doc)
+    first = hub.models_set(doc)
+    assert "error" not in first and "err" not in first, first
+    # a page reads the version again before its next Save (#688); posting the fresh reading back changes nothing
+    again = hub.models_set(hub.models_get())
+    assert "error" not in again and "err" not in again, again
 
 
 def time_in_future():

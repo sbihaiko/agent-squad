@@ -241,7 +241,7 @@ def test_invocation_keeps_todays_wire_string(raw, use, wire, reg):
 # The role chains this repository ships. A registry landing changes no caller, so a chain entry moves only in its
 # own landing with its own test; this pin makes an accidental rewrite of models.json fail here.
 PINNED_CHAINS = {
-    "coding": ["claude-gpt-5.6-terra", "claude-grok-4.7", "claude-sonnet-5-5"],   # no model that takes no tools (ADR-0147)
+    "coding": ["claude-sonnet-5-5", "claude-sonnet-4-6", "claude-gpt-5.6-terra", "claude-grok-4.7"],   # no model that takes no tools (ADR-0147)
     "review": ["claude:claude-opus-5-5", "gemini-3.8-flash-medium"],
     "vision": ["gpt-5.6-luna", "gpt-5.6-terra", "gemini-3.8-flash-low"],
 }
@@ -542,3 +542,28 @@ def test_spent_names_the_spellings_whose_subscription_is_spent(tmp_path):
     or a marker closes, so a child is not given a spent subscription."""
     _quota(tmp_path, {"grok": {"windows": [{"label": "weekly", "pct": 100, "resets": 9000}], "asof": 1000}})
     assert mr.spent(["grok-4.5", "claude-opus-5-5", "nobody-knows"], shared=tmp_path, now=1000) == ["grok-4.5"]
+
+
+def test_write_chains_with_no_doc_keeps_the_files_other_keys(tmp_path):
+    """A caller that writes only the chains changes only the chains.
+
+    `doc` defaults to `{}`, so a call that omits it wrote a file of two keys and dropped every constant beside the
+    chains -- the review timeout, the review line cap and the stall budget. A live Save through that path left every
+    review BLOCKED with `[: null: integer expression expected`, and nothing refused."""
+    path = tmp_path / "models.json"
+    path.write_text(json.dumps({"schema_version": 2,
+                                "chains": {"coding": [{"id": "grok-4.7"}], "review": [], "vision": [], "router": []},
+                                "review_timeout_seconds": 360, "review_max_lines": 60}))
+    mr.write_chains(path, {"coding": [{"id": "grok-4.7"}], "review": [], "vision": [], "router": []})
+    out = json.loads(path.read_text())
+    assert out["review_timeout_seconds"] == 360, out
+    assert out["review_max_lines"] == 60, out
+    assert [e["id"] for e in out["chains"]["coding"]] == ["grok-4.7"], out
+
+
+def test_write_chains_with_no_doc_and_no_file_writes_the_chains(tmp_path):
+    path = tmp_path / "models.json"
+    mr.write_chains(path, {"coding": [{"id": "grok-4.7"}], "review": [], "vision": [], "router": []})
+    out = json.loads(path.read_text())
+    assert set(out) == {"schema_version", "chains"}, out
+    assert [e["id"] for e in out["chains"]["coding"]] == ["grok-4.7"], out

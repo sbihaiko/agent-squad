@@ -3,6 +3,7 @@
 # fast-forward push. Stub gh (every argv logged), a bare local remote, a stub board, temp state dir. One line per case.
 # usage: bash test-branchland.sh [scripts dir]
 unset SG_SERIAL_HELD   # a gate inside a gate hands the lock name down; this suite takes its own gate lock, so its wait is proved
+unset SG_BOARD_VOCAB   # the loop's shipped vocabulary (Closed, not Done) is ambient in a live shell; this suite expects the default
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/bin" "$T/co/runs"
 cp "$d/issue_ledger.py" "$d/gate.sh" "$d/caps.sh" "$d/serial.sh" "$d/fast-gate.sh" "$d/base-battery.sh" "$d/branchland.sh" "$d/revformat.py" "$d/workbranches.sh" "$d/ffland.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$T/s/" 2>/dev/null
@@ -114,7 +115,7 @@ case "$r" in *"BRANCHLAND WAIT gui/7-x"*inconclusive*) ok "an inconclusive gate 
 /usr/bin/grep -qh "inconclusive" "$T/st/cq/"x__y#7-status~* 2>/dev/null && ok "the status comment names the inconclusive result" || ko "inconclusive status: $(cat "$T/st/cq/"* 2>&1)"
 # The default gate runs with none of the loop's SG_* variables (a test that reads one would see the live loop state) and with the
 # 2 s line off: that line is the CI speed rule, and this machine's load is not a defect of the branch; the 20 s cap stays.
-printf '#!/bin/bash\necho "SG_STATE=${SG_STATE:-unset} $*" >> %s/py.log\n' "$T" > "$T/py"; chmod +x "$T/py"
+printf '#!/bin/bash\necho "SG_STATE=${SG_STATE:-unset} $*" >> %s/py.log\ncase "$*" in *squad.testselect*) echo "all: stub";; esac\n' "$T" > "$T/py"; chmod +x "$T/py"
 reset; rm -f "$T/py.log"; r=$(SG_STATE="$T/st" SG_GATE_PY="$T/py" CHECKS='{"check_runs":[]}' bl)
 /usr/bin/grep -q 'pytest' "$T/py.log" 2>/dev/null && ! /usr/bin/grep -q 'SG_STATE=/' "$T/py.log" && ok "the default gate runs with no SG_* variable" || ko "the gate saw the loop env: $(cat "$T/py.log" 2>&1)"
 /usr/bin/grep 'pytest' "$T/py.log" 2>/dev/null | /usr/bin/grep -q -- '-o heavy_cap_seconds=20' && ok "the default gate lifts the 2 s line to the 20 s cap" || ko "the gate keeps the 2 s line: $(grep pytest "$T/py.log" 2>&1)"
@@ -218,9 +219,9 @@ reset; rm -f "$T/fix.log"; r=$(SG_LOCAL_GATE_CMD="echo '[*] 1 fixable with the -
 # is set here, so this suite reads no profile's default and depends on no worker count.
 . "$d/base-battery.sh" 2>/dev/null
 lcmd=$(SG_GATE_WORKERS=3 sg_base_gate "refs/sg-gate/main" /usr/bin/true 2>/dev/null)
-lbat=$(SG_GATE_WORKERS=3 sg_base_battery /usr/bin/true 2>/dev/null)
+lbat=$(SG_GATE_WORKERS=3 sg_base_battery /usr/bin/true "refs/sg-gate/main" 2>/dev/null)
 case "$lcmd" in *"SG_FAST_BASE=refs/sg-gate/main "*"fast-gate.sh"*) ok "the landing check reads the changed scripts against refs/sg-gate/\$land";; *) ko "the shared base gate is not the fast gate at refs/sg-gate/\$land: '$lcmd'";; esac
-case "$lbat" in *"ruff check squad tests"*"mypy squad"*'-n ${SQUAD_GATE_WORKERS:-3}'*"not heavy"*) ok "the landing check runs ruff, mypy and the fast pytest with SG_GATE_WORKERS";; *) ko "the landing check command: '$lbat'";; esac
+case "$lbat" in *"ruff check squad tests"*"mypy squad"*'-n "${SQUAD_GATE_WORKERS:-$workers}"'*"not heavy"*"sg_battery_run /usr/bin/true refs/sg-gate/main 3 yes"*) ok "the landing check runs ruff, mypy and the fast pytest with SG_GATE_WORKERS";; *) ko "the landing check command: '$lbat'";; esac
 case "$lbat$lcmd" in *"-n auto"*) ko "the landing check runs pytest -n auto";; *) ok "the landing check never runs pytest -n auto";; esac
 /usr/bin/grep -q 'sg_base_gate "refs/sg-gate/\$land"' "$d/branchland.sh" && ok "branchland builds its landing check from the shared definition" || ko "branchland does not use the shared base gate"
 # The gate command keeps no copy; the serial rerun below keeps its own lint and types leg, and the names that failed.
@@ -236,4 +237,11 @@ reset; r=$(SG_GH_AGGREGATE_WINDOW=0 LANDBUG=641 LANDBUG_LABEL=loop-bug CHECKS="$
 rerunline=$(/usr/bin/grep -E '^rerun=' "$d/branchland.sh")
 case "$rerunline" in *'$SG_GATE_FAILED'*) ok "the rerun runs only the failed names";; *) ko "the rerun does not take the failed names: '$rerunline'";; esac
 case "${rerunline#*pytest}" in *' -n '*) ko "the serial rerun takes workers: '$rerunline'";; *) ok "the serial rerun stays serial";; esac
+# (#646) The landing check's pytest runs over the selection the selector answers for refs/sg-gate/$land; a stub python logs each argv.
+printf '#!/bin/bash\necho "$*" >> "%s/selpy.log"\ncase "$*" in *squad.testselect*) cat "%s/select.out" 2>/dev/null;; esac\nexit 0\n' "$T" "$T" > "$T/selpy"; chmod +x "$T/selpy"
+printf 'tests/test_a.py\n' > "$T/select.out"
+reset; rm -f "$T/selpy.log"; r=$(SG_STATE="$T/st" SG_GATE_PY="$T/selpy" SG_GATE_WORKERS=3 CHECKS='{"check_runs":[]}' bl)
+/usr/bin/grep -qx -- "-m pytest -p no:deepeval -o heavy_cap_seconds=20 -n 3 -m not heavy tests/test_a.py" "$T/selpy.log" 2>/dev/null && ok "the landing check passes the selection to pytest" || ko "landing check argv: '$(cat "$T/selpy.log" 2>&1)' $r"
+IFS=$'\t' read -r _ kind res _ sel < "$T/st/gate-status" 2>/dev/null
+[ "$kind $res $sel" = "fast pass selected 1 files" ] && ok "the landing check's status line states the selected file count" || ko "landing status: '$(cat "$T/st/gate-status" 2>&1)'"
 rm -rf "$T"; exit $fail

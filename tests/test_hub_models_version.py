@@ -1,8 +1,8 @@
 """A Save from a stale page never overwrites what another Save wrote (#688).
 
-The owner's old tab posted its whole panel back and removed Router queue entries a newer Save had added. models_get
-hands the page a `version`, a hash of models.json and of the graph's allow.models; models_set refuses a body whose
-version differs, or that carries none, with "stale: reload the page", and writes nothing.
+The owner's old tab posted its whole panel back and removed router-chain entries a newer Save had added. models_get
+hands the page a `version`, a hash of models.json (SPEC 750: the four chains all live there, so no graph enters it);
+models_set refuses a body whose version differs, or that carries none, with "stale: reload the page", and writes nothing.
 """
 import importlib.util
 import json
@@ -86,3 +86,13 @@ def test_a_fresh_save_passes_and_hands_back_the_new_version(hub, checkout):
     assert "err" not in out, out
     assert out["version"] == hub.models_get()["version"]
     assert "err" not in hub.models_set(out)
+
+
+def test_a_graph_edit_does_not_make_a_panel_tab_stale(hub, checkout):
+    """SPEC 750: the router chain is a models.json chain now, so the author's graph may change under an open panel; the
+    page's reading is unchanged and its Save still passes."""
+    graph, _ = checkout
+    v = hub.models_get()["version"]
+    graph.write_text(graph.read_text().replace('"efforts": ["low"]', '"efforts": ["low", "high"]'))
+    assert hub.models_get()["version"] == v
+    assert "err" not in hub.models_set(hub.models_get())

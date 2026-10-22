@@ -67,7 +67,7 @@ def test_the_panel_gets_a_box_for_every_chain_id_and_never_stores_it(hub, monkey
 def test_the_page_renders_the_box_and_holds_no_provider_rule(hub):
     src = HUB_PY.read_text()
     assert "function mdlProv" not in src and "mdlProv(" not in src
-    assert src.count("mdlBox(k,m)") >= 1 and src.count('mdlBox("router_models",m)') >= 1   # the role chains and the Router queue
+    assert src.count("mdlBox(k,m)") >= 1 and src.count('mdlBox("coding_models",lc)') == 1   # one row form, every chain
 
 
 def test_the_token_pie_names_each_model_by_its_box(hub, monkeypatch):

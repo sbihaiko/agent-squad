@@ -57,6 +57,20 @@ def test_a_line_the_hub_cannot_read_is_a_question_mark_never_a_pass(hub):
     assert "pass" not in fact["text"] and "?" in fact["text"]
 
 
+def test_a_fast_status_line_carries_the_test_selection(hub, tmp_path, monkeypatch):
+    st = tmp_path / "st"
+    st.mkdir()
+    monkeypatch.setattr(hub, "STATE", st)
+    (st / "gate-status").write_text(f"{int(NOW - 60)}\tfast\tpass\t{SHA}\tselected 2 files\n")
+    assert hub.foot_sources(NOW)["gate"] == {
+        "kind": "fast", "result": "pass", "sha": SHA, "ts": NOW - 60, "selection": "selected 2 files",
+    }
+    (st / "gate-status").write_text(f"{int(NOW - 60)}\tfast\tpass\t{SHA}\tall: no test imports squad/x.py\n")
+    assert hub.foot_sources(NOW)["gate"]["selection"] == "all: no test imports squad/x.py"
+    (st / "gate-status").write_text(f"{int(NOW - 60)}\tfast\tpass\t{SHA}\t\n")
+    assert hub.foot_sources(NOW)["gate"] is None
+
+
 def test_the_status_line_gate_sh_writes_is_the_one_the_footer_reads(hub, tmp_path, monkeypatch):
     st = tmp_path / "st"
     st.mkdir()

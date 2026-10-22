@@ -75,7 +75,7 @@ def _panel_shape(hub):
     src = HUB_PY.read_text()
     assert 'const MODELID_SRC="__MODELID__";' in src, "the page no longer carries the one shape"
     assert '.replace(\'"__MODELID__"\', json.dumps(MODEL_ID_SRC))' in src, "the served page never substitutes the shape"
-    assert src.count("MODELRE.test(v)") == 2, "both Add boxes test it"
+    assert src.count("MODELRE.test(v)") == 1, "the one Add box of every chain tests it"
     assert src.count("MODELID_SRC") == 2, "the shape is declared once and used once"
     assert not re.search(r"!/\(\^\[A-Za-z0-9\]\S*?\)\.test\(v\)\)", src), "a copy of the shape survives in the page"
     return re.compile("^" + hub.MODEL_ID_SRC + "$")
@@ -98,19 +98,19 @@ def test_the_shape_takes_the_context_suffix_the_gateway_serves(hub):
         assert _panel_shape(hub).match(m), f"an Add box refuses {m}"
 
 
-def test_the_save_accepts_a_router_queue_that_names_a_suffixed_id(hub, checkout):
-    graph, _ = checkout
+def test_the_save_accepts_a_router_chain_that_names_a_suffixed_id(hub, checkout):
+    _, models = checkout
     out = hub.models_set({**hub.models_get(), "router_models": ["claude-deepseek-v4-flash[1m]", "claude-gpt-5.6-terra"]})
     assert "err" not in out, out
-    written = [n for n in json.loads(graph.read_text())["nodes"] if n.get("kind") == "dispatch"][0]
-    assert written["allow"]["models"] == ["claude-deepseek-v4-flash[1m]", "claude-gpt-5.6-terra"]
+    written = [e.get("raw") or e["id"] for e in json.loads(models.read_text())["chains"]["router"]]
+    assert written == ["claude-deepseek-v4-flash[1m]", "claude-gpt-5.6-terra"]
 
 
 def test_the_save_accepts_a_chain_that_names_a_suffixed_id(hub, checkout):
     _, models = checkout
     out = hub.models_set({**hub.models_get(), **{k: list(SUFFIXED) for k in ("coding_models", "review_models", "vision_models")}})
     assert "err" not in out, out
-    assert json.loads(models.read_text())["coding_models"] == SUFFIXED
+    assert [e.get("raw") or e["id"] for e in json.loads(models.read_text())["chains"]["coding"]] == SUFFIXED
 
 
 def test_the_add_box_offers_the_ids_the_gateway_serves_with_a_context_suffix(hub, checkout):

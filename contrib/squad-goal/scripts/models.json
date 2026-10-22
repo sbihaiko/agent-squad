@@ -3,6 +3,16 @@
   "chains": {
     "coding": [
       {
+        "id": "claude-sonnet-5-5",
+        "route": "gateway",
+        "hrs": "19-07"
+      },
+      {
+        "id": "claude-sonnet-4-6",
+        "route": "gateway",
+        "hrs": "19-07"
+      },
+      {
         "id": "gpt-5.6-terra",
         "raw": "claude-gpt-5.6-terra",
         "route": "gateway"
@@ -11,11 +21,6 @@
         "id": "grok-4.7",
         "raw": "claude-grok-4.7",
         "route": "gateway"
-      },
-      {
-        "id": "claude-sonnet-5-5",
-        "route": "gateway",
-        "hrs": "19-07"
       }
     ],
     "review": [
@@ -48,9 +53,14 @@
         "effort": "low"
       }
     ],
-    "router": []
+    "router": [
+      {
+        "id": "claude-opus-5-5",
+        "route": "gateway"
+      }
+    ]
   },
-  "_doc": "Role-based model chains for squad-goal. First healthy, quota-eligible entry wins. Squad ids must be in the dynamic dispatch envelope in docs/design/router.graph.json; if a chain wants a provider alias, the request must name the allowed id that stands for it. A review id routes through the registry (config/models.registry.json): its route and its tools capability pick the runner, never the spelling. `efforts`, `hours` and `review_timeout_seconds_by_model` are optional {model: value} maps set from the hub's models panel: hours is a local window \"HH-HH\" (start inclusive, end exclusive, wraps midnight; absent = always), and a model outside its window is skipped.",
+  "_doc": "Role-based model chains for squad-goal. First healthy, quota-eligible entry wins. A dispatch envelope names kinds, and each kind takes the chain of its name here (SPEC 750); `router` names the models the router agent runs on, in rank order. An entry carries its `id`, the `raw` spelling when it differs, its `route`, and its `effort`, `hrs` window and `on` switch. A review id routes through the registry (config/models.registry.json): its route and its tools capability pick the runner, never the spelling. `hrs` is a local window \"HH-HH\" (start inclusive, end exclusive, wraps midnight; absent = always), and a model outside its window is skipped.",
   "stall_timeout_minutes": 15,
   "review_stall_minutes": 60,
   "model_retry_budget": 2,

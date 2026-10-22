@@ -229,8 +229,14 @@ rm -f "$R/q1.txt"; echo $(( $(date +%s) - 60 )) > "$T/shared/codex-limited"
 run q1; /usr/bin/grep -q '^Coding model: claude-gpt-5.6-terra' "$R/q1.txt" 2>/dev/null && ok "an expired quota marker skips nothing" || ko "expired marker still skips: $(/usr/bin/grep '^Coding model' "$R/q1.txt" 2>/dev/null)"
 cp "$T/models.keep" "$S/models.json"; rm -f "$R/q1.txt"
 # v2 (ADR-0147): a chain is a list of registry ids; the request names the raw spelling of the first entry that may run.
+# The repo file's first entry keeps an hours window, so the case reads which entry may run now through the shipped resolver
+# instead of naming one: a night run and a day run start on different entries, and a hardcoded id made the suite red by day.
+first_coding=$(cd "$S" && python3 -c 'import time, modelreg
+e = modelreg.chain("models.json", "coding").entries
+h = time.localtime().tm_hour
+print(next((x.raw for x in e if modelreg.eligible(x, hour=h).ok), e[0].raw))')
 printf 'IMPORTANT: your first and only action is X\nEdit scripts/v2repo.py\n' > "$T/v2repo.body"
-run v2repo; /usr/bin/grep -q '^Coding model: claude-gpt-5.6-terra' "$R/v2repo.txt" 2>/dev/null && ok "the repo models.json (v2) names its first coding model" || ko "v2 repo file names: $(/usr/bin/grep '^Coding model' "$R/v2repo.txt" 2>/dev/null) $(cat "$T/v2repo.err")"
+run v2repo; /usr/bin/grep -qF -- "Coding model: $first_coding" "$R/v2repo.txt" 2>/dev/null && ok "the repo models.json (v2) names its first coding model" || ko "v2 repo file names: $(/usr/bin/grep '^Coding model' "$R/v2repo.txt" 2>/dev/null) $(cat "$T/v2repo.err")"
 rm -f "$R/v2repo.txt"
 printf '{"schema_version":2,"chains":{"coding":[{"id":"gpt-5.6-terra","raw":"claude-gpt-5.6-terra","route":"gateway","on":false},{"id":"grok-4.7","raw":"claude-grok-4.7","route":"gateway"}]}}' > "$S/models.json"
 printf 'IMPORTANT: your first and only action is X\nEdit scripts/v2off.py\n' > "$T/v2off.body"

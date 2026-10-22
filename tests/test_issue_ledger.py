@@ -245,3 +245,102 @@ def test_a_review_fact_follows_a_rearm_floor_and_a_rearm_clears_it(tmp_path):
     assert d["changes"] == 0 and d["moves"] == 0 and not d["stopped"] and d["verdicts"] == []
     assert review(tmp_path, "r1", "changes", "f1") == "floor", "a run from before the rearm counts nothing"
     assert review(tmp_path, "r9", "changes", "f9") == "recorded"
+
+
+def test_replay_agrees_with_a_ledger_its_events_rebuild(tmp_path):
+    """ADR-0149 rule 6: a prefix goes only after a replay of the ledger gives the same states."""
+    run(tmp_path, "fail", "a/b#60", "r1", "k", "first")
+    run(tmp_path, "fail", "a/b#60", "r2", "k", "second")
+    for i in (1, 2, 3):
+        run(tmp_path, "review", "a/b#60", f"v{i}", "changes", "same", str(i))
+    r = run(tmp_path, "replay", "a/b#60")
+    assert r.returncode == 0, r.stderr
+    assert "a/b#60" in r.stdout and "ok" in r.stdout
+    assert run(tmp_path, "replay", "a/b#61").returncode == 0, "a new issue replays to the seed"
+
+
+def test_replay_names_the_issue_when_the_stored_state_differs(tmp_path):
+    run(tmp_path, "fail", "a/b#62", "r1", "k", "first")
+    f = tmp_path / "state" / "a__b__62.json"
+    d = json.loads(f.read_text())
+    d["own"]["count"] = 5
+    f.write_text(json.dumps(d))
+    r = run(tmp_path, "replay", "a/b#62")
+    assert r.returncode == 1 and "a/b#62" in r.stderr and "own.count" in r.stderr, (r.stdout, r.stderr)
+
+
+def test_replay_names_the_issue_when_the_review_streak_differs(tmp_path):
+    run(tmp_path, "review", "a/b#63", "v1", "changes", "f", "1")
+    f = tmp_path / "state" / "a__b__63.json"
+    d = json.loads(f.read_text())
+    d["review"]["changes"] = 0
+    f.write_text(json.dumps(d))
+    r = run(tmp_path, "replay", "a/b#63")
+    assert r.returncode == 1 and "a/b#63" in r.stderr and "review.changes" in r.stderr, (r.stdout, r.stderr)
+
+
+def test_replay_compares_the_ledger_with_its_legacy_counters(tmp_path):
+    run(tmp_path, "fail", "a/b#64", "r1", "k", "first")
+    a = tmp_path / "auto"
+    a.mkdir()
+    (a / "requeues-64").write_text("1\n")
+    (a / "requeues-64.runs").write_text("r1\tk\tfirst\n")
+    assert run(tmp_path, "replay", "a/b#64").returncode == 0, "the counters agree"
+    (a / "requeues-64").write_text("4\n")
+    r = run(tmp_path, "replay", "a/b#64")
+    assert r.returncode == 1 and "a/b#64" in r.stderr and "requeues-64" in r.stderr, (r.stdout, r.stderr)
+
+
+def test_replay_of_a_migrated_ledger_agrees_with_the_counter_the_owner_reset(tmp_path):
+    a = tmp_path / "auto"
+    a.mkdir()
+    (a / "requeues-65").write_text("1\n")
+    (a / "requeues-65.runs").write_text("r1\tk\tfirst\nr2\tk\tsecond\n")
+    run(tmp_path, "migrate", "a/b#65")
+    assert run(tmp_path, "replay", "a/b#65").returncode == 0
+
+
+def test_replay_of_a_held_ledger_is_held_not_a_pass(tmp_path):
+    f = tmp_path / "state" / "a__b__66.json"
+    f.parent.mkdir()
+    f.write_text("{")
+    r = run(tmp_path, "replay", "a/b#66")
+    assert r.returncode == 3 and "a/b#66" in r.stderr, (r.stdout, r.stderr)
+
+
+def _legacy(tmp_path, n, lines):
+    a = tmp_path / "auto"
+    a.mkdir(exist_ok=True)
+    (a / f"requeues-{n}").write_text("1\n")
+    (a / f"requeues-{n}.runs").write_text(lines)
+
+
+@pytest.mark.parametrize("old", ["r1\tother-key\tfirst\n", "r1\tk\tchanged reason\n"])
+def test_replay_names_a_legacy_failure_whose_key_or_reason_differs(tmp_path, old):
+    run(tmp_path, "fail", "a/b#67", "r1", "k", "first")
+    _legacy(tmp_path, 67, old)
+    r = run(tmp_path, "replay", "a/b#67")
+    assert r.returncode == 1 and "a/b#67" in r.stderr and "own.runs" in r.stderr, (r.stdout, r.stderr)
+
+
+def test_replay_names_a_legacy_frozen_the_ledger_does_not_hold(tmp_path):
+    run(tmp_path, "fail", "a/b#68", "r1", "k", "first")
+    _legacy(tmp_path, 68, "r1\tk\tfirst\nfrozen\n")
+    r = run(tmp_path, "replay", "a/b#68")
+    assert r.returncode == 1 and "a/b#68" in r.stderr and "frozen" in r.stderr, (r.stdout, r.stderr)
+
+
+def test_replay_agrees_with_a_legacy_frozen_the_migrated_ledger_holds(tmp_path):
+    _legacy(tmp_path, 69, "r1\tk\tfirst\nfrozen\n")
+    run(tmp_path, "migrate", "a/b#69")
+    assert run(tmp_path, "replay", "a/b#69").returncode == 0
+
+
+def test_replay_names_a_stored_review_stop_its_events_do_not_support(tmp_path):
+    run(tmp_path, "review", "a/b#70", "v1", "changes", "f", "1")
+    f = tmp_path / "state" / "a__b__70.json"
+    d = json.loads(f.read_text())
+    d["review"]["stopped"] = "3 reviews of the issue asked for changes"
+    f.write_text(json.dumps(d))
+    r = run(tmp_path, "replay", "a/b#70")
+    assert r.returncode == 1 and "a/b#70" in r.stderr and "review.stopped" in r.stderr, (r.stdout, r.stderr)

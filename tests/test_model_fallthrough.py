@@ -35,14 +35,21 @@ SESSION_LIMIT = ("ResultError: Claude Code returned an error result: "
 # a pool's refusal, and a provider's, in the same shape
 USAGE_LIMIT = "ResultError: Claude Code returned an error result: API Error: The usage limit has been reached (exit code: 1)"
 
-# The shipped envelope, read and not copied: a chain this file hardcodes goes stale the day the envelope moves
-# (2026-10-13). The expected order is the one the engine builds, `[pick] + allow.models` without the pick.
+# The shipped chains, read and not copied: a chain this file hardcodes goes stale the day the graph moves
+# (2026-10-13). The expected order is the one the engine builds, `[pick] + the kind's chain` without the pick.
 _DOC = load_doc("router")
-CHAIN = node(_DOC, "route")["allow"]["models"]
-ROUTER_CHAIN = model_chain(CHAIN, node(_DOC, "router")["model"])
+CHAINS = {
+    "router": ["claude-opus-5-5", "claude-sonnet-5-5", "claude-sonnet-4-6"],
+    "coding": ["claude-grok-4.7", "claude-deepseek-flash[1m]", "claude-opus-5-5", "claude-gpt-5.6-terra",
+               "claude-sonnet-5-5", "claude-sonnet-4-6", "claude-haiku-5-5"],
+    "review": ["claude-opus-5-5"],
+    "vision": ["claude-sonnet-5-5"],
+}
+CHAIN = CHAINS["coding"]
+ROUTER_CHAIN = model_chain(CHAINS["router"], node(_DOC, "router")["model"])
 PICK, NEXT = CHAIN[0], CHAIN[1]
 CHILD_CHAIN = model_chain(CHAIN, PICK)
-REQUEST = {"prompt": "Move the counter into its own module.", "skill": "tdd", "model": PICK, "effort": "medium",
+REQUEST = {"prompt": "Move the counter into its own module.", "skill": "tdd", "kind": "coding", "effort": "medium",
            "tools": ["Read", "Edit"], "stalls": 4, "spend": 1.0, "deadline": 100, "workspace": "worktrees/child"}
 SPAWNS = {"output": {"spawns": [REQUEST]}, "spend": 0.1}
 CHILD = {"output": {"diff": {"files": [{"path": "a.py"}]}, "ac_commands": ["true"]}, "spend": 0.2, "turns": 3}
@@ -54,8 +61,9 @@ def engine(tmp_path, script, **kw):
     # A failed attempt keeps its whole grant (ADR-0108: an unmeasured call may have paid), so a run cap of 40 funds exactly
     # five attempts of 8. The test owns the cap, like the child spend in helpers.route, so it measures the fallthrough and
     # not the shipped budget when the envelope grows.
-    d["run"]["spend_cap"] = 8 * (len(node(d, "route")["allow"]["models"]) + 2)
+    d["run"]["spend_cap"] = 8 * (len(CHAIN) + 2)
     kw.setdefault("target", sibling_repo(tmp_path))
+    kw.setdefault("kind_chains", CHAINS)
     return Engine(from_doc(d), ScriptedAdapter(script, **kw.pop("adapter", {})), tmp_path, **kw)
 
 
@@ -124,11 +132,11 @@ SPENT = [m for m in [node(_DOC, "router")["model"], *CHAIN] if m.startswith("cla
 
 
 def test_model_chain_drops_the_spent_ids_and_keeps_the_order_of_the_rest():
-    assert model_chain(CHAIN, node(_DOC, "router")["model"], SPENT) == [m for m in ROUTER_CHAIN if m not in SPENT]
+    assert model_chain(CHAINS["router"], node(_DOC, "router")["model"], SPENT) == [m for m in ROUTER_CHAIN if m not in SPENT]
 
 
 def test_model_chain_keeps_the_chain_when_every_model_is_spent():
-    assert model_chain(CHAIN, PICK, spent=ROUTER_CHAIN) == CHILD_CHAIN   # a closed marker is a hint: with no model left, the chain tries them in order
+    assert model_chain(CHAIN, PICK, spent=CHAIN) == CHILD_CHAIN   # a closed marker is a hint: with no model left, the chain tries them in order
 
 
 def test_model_chain_with_no_spent_ids_is_the_chain_as_before():
@@ -178,7 +186,7 @@ async def test_a_fallback_follows_the_coding_order_the_launcher_read(tmp_path):
     eng = engine(tmp_path, {"router": [{"error": PROVIDER_ERROR}, SPAWNS], "route.router.1": CHILD},
                  options={"model_order": CODING_ORDER})
     v = await eng.run()
-    assert [c.model for c in eng.adapter.calls if c.node == "router"] == [pick, CODING_ORDER[0]]   # refused, then the coding chain's next entry, not the allow list's
+    assert [c.model for c in eng.adapter.calls if c.node == "router"] == [pick, ROUTER_CHAIN[1]]   # refused, then the router chain's next entry: the coding order never reorders it (SPEC 750)
     start = [e for e in read(tmp_path / "record.jsonl") if e["event"] == "run_start"][0]
     assert start["engine_options"]["model_order"] == CODING_ORDER
     assert v.verdict == "completed"

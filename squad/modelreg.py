@@ -896,6 +896,46 @@ def migrate(path, dry_run=False, reg=None, live=False):
     return result
 
 
+def write_chains(path, chains, doc=None):
+    """Write one v2 models.json from complete chains: `{canonical chain name: [entry, ...]}`.
+
+    Every top-level key of `doc` other than the v1 chains, the flat setting maps and the entry-shape line is kept, so
+    a caller changes the chains and nothing else. The entry shape is the one `migrate` writes. The write is atomic.
+    Return the document written.
+
+    A caller that passes no `doc` keeps the file's own keys: it reads the file on disk. No `doc` never means "a file of
+    two keys", because that drops the review timeout, the review line cap and the stall budget. A file that is absent
+    or unreadable is the empty document it always was.
+
+    A `doc` still in the v1 shape is migrated whole, never partly: a keyed setting for a model that survives in no
+    chain goes under `_orphans` as `migrate` keeps it, and the input file is saved as `<name>.v1.bak` first, so a
+    caller's Save can never drop a timeout or a tool rule in silence."""
+    src = Path(path)
+    out_chains = {_canonical(name): list(entries) for name, entries in chains.items()}
+    if not isinstance(doc, dict):
+        try:
+            doc = json.loads(src.read_text())
+        except (OSError, ValueError):
+            doc = {}
+    if not isinstance(doc, dict):
+        doc = {}
+    kept = {key: value for key, value in doc.items()
+            if key not in V1_CHAINS.values() and key not in MIGRATED_KEYS and key not in ("schema_version", "chains")}
+    out = {"schema_version": 2, "chains": out_chains, **kept}
+    if any(key in doc for key in V1_CHAINS.values()):
+        surviving = {canon: set() for canon in V1_CHAINS}
+        surviving.update({canon: {e.get("raw") or e["id"] for e in entries} for canon, entries in out_chains.items()})
+        orphans, _ = _migration_orphans(doc, surviving)
+        if orphans:
+            out["_orphans"] = orphans
+        try:
+            _atomic_write(src.with_name(src.name + ".v1.bak"), src.read_text())
+        except OSError:
+            pass
+    _atomic_write(src, json.dumps(out, indent=2) + "\n")
+    return out
+
+
 def migrate_lines(result):
     """The report a migrate prints: one line per dropped entry, one per orphan, and a no-op line."""
     lines = result["dropped_lines"] + result["orphan_lines"]

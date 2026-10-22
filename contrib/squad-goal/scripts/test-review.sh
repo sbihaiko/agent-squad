@@ -5,7 +5,7 @@
 # 7) #1501: the aging leash must not kill the only reachable model; 8) with several reachable models it still clamps.
 src=${1:-$(dirname "$0")/review.sh}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 export SG_SHARED="$T/st"   # the shared marks (quota-guard, *-limited) are the suite's own, never the machine's under ~/.cache
-mkdir -p "$T/bin" "$T/st/cq" "$T/s"; cp "$src" "$T/s/review.sh"; cp "$(dirname "$src")/revformat.py" "$(dirname "$src")/ghcall.sh" "$(dirname "$src")/ghread.py" "$(dirname "$src")/modelreg.py" "$T/s/"; : > "$T/s/codex-reset.py"
+mkdir -p "$T/bin" "$T/st/cq" "$T/s"; cp "$src" "$T/s/review.sh"; cp "$(dirname "$src")/revformat.py" "$(dirname "$src")/ghcall.sh" "$(dirname "$src")/ghread.py" "$(dirname "$src")/modelreg.py" "$(dirname "$src")/review-timeouts.py" "$T/s/"; : > "$T/s/codex-reset.py"
 # the registry the review reads: the shipped one plus `nt`, a model whose capabilities say no tools (the no-tools path reads that, not a list)
 jq '.models += [{id:"nt",label:"nt",provider:"claude",subscription:"claude",aliases:["claude:nt"],capabilities:{tools:false},
   routes:{cli:{auth:"subscription",argv:["claude","-p","--model","{model}","{prompt_file}"],served:["nt"]},direct:{auth:"subscription",model:"nt",served:["nt"]}}}]' "$(dirname "$src")/registry.json" > "$T/s/registry.json"
@@ -101,6 +101,7 @@ for mode in full fix; do
   /usr/bin/grep -qF 'at most 21 lines' "$T/prompt" && ok "$mode prompt carries the format 21-line cap from review_max_lines" || ko "$mode prompt cap: $(/usr/bin/grep -i 'lines' "$T/prompt" | head -1)"
   /usr/bin/grep -q 'divergence from an accepted ADR' "$T/prompt" && /usr/bin/grep -q 'regression of behaviour' "$T/prompt" && /usr/bin/grep -q 'wire protocol or a persisted format' "$T/prompt" && /usr/bin/grep -q 'passes while lying' "$T/prompt" && ok "$mode prompt lists the closed blocking set" || ko "$mode prompt lacks the blocking list"
   /usr/bin/grep -qi 'filed task' "$T/prompt" && ok "$mode prompt states what DEBT costs" || ko "$mode prompt lacks the DEBT cost"
+  /usr/bin/grep -qF 'Debt/nit-only findings require APPROVE, never CHANGES.' "$T/prompt" && ok "$mode prompt rules Debt/nit-only findings as APPROVE" || ko "$mode prompt does not rule Debt/nit-only findings as APPROVE"
 done
 /usr/bin/grep -qi 'previous' "$T/prompt" && ok "fix prompt answers the previous findings" || ko "fix prompt does not answer the previous findings"
 # the cap is a named constant in the config, not a magic number in the prompt: another value, another prompt
@@ -543,5 +544,79 @@ out=$(GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null)
   && ok "a v2 review chain skips its off entry and runs the next with its effort" || ko "v2 review chain: args=$(cat "$CLAUDE_ARGS" 2>/dev/null) cq=$(/bin/ls "$T/st/cq" | tr '\n' ' ')"
 unset CLAUDE_ARGS
 rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"*
+
+# 26) #749: a review model that times out three times in a row is omitted from the next chains for its window, and the
+# omission is named once in the pass (stderr), in cycle.log and in the queue. One timeout omits nothing. An answered review
+# clears the streak. The window ends by time: the model is tried again with no state edit.
+printf '#!/bin/bash\ncat > /dev/null; echo "$*" >> "$CLAUDE_ARGS"\ncase "$*" in *"--model slow"*) [ "$(cat "$SLOW_MODE")" = answer ] && { echo "VERDICT: APPROVE"; exit 0; }; sleep 30;; *) echo "VERDICT: APPROVE";; esac\n' > "$T/bin/claude"; chmod +x "$T/bin/claude"
+printf '{"review_models":["claude:slow","claude:fast"],"review_order":"config","model_retry_budget":1,"review_timeout_seconds":2,"review_timeout_bound":3,"review_timeout_omit_seconds":3600,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+export CLAUDE_ARGS="$T/claude-args" SLOW_MODE="$T/slow.mode"; : > "$CLAUDE_ARGS"; echo timeout > "$SLOW_MODE"
+rm -f "$T/st/review-timeouts.json" "$T/st/cycle.log" "$T/st/cq/"*
+rv() { rm -f "$T/st/review-fix_1-x".*; GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 2>"$T/rv.err"; }
+slow() { /usr/bin/grep -c -- '--model slow' "$CLAUDE_ARGS"; }
+rv >/dev/null; rv >/dev/null
+[ "$(slow)" = 2 ] && ok "26 a single timeout omits nothing: the next review tries the model again" || ko "26 one timeout omitted the model: slow calls $(slow) $(cat "$T/rv.err")"
+rv >/dev/null
+[ "$(slow)" = 3 ] && ok "26 the third timeout in a row is the last try of the model" || ko "26 third timeout: slow calls $(slow)"
+rv >/dev/null
+[ "$(slow)" = 3 ] && [ "$(/usr/bin/grep -c MODEL_OMIT "$T/rv.err")" = 1 ] && /usr/bin/grep -q 'MODEL_OMIT review claude:slow' "$T/rv.err" \
+  && [ "$(/usr/bin/grep -c 'MODEL_OMIT review claude:slow' "$T/st/cycle.log")" = 2 ] && /usr/bin/grep -q 'MODEL_OMIT' "$T/st/cq/"* \
+  && ok "26 an omitted model is not tried, and the pass, cycle.log and the queue each name the omission" \
+  || ko "26 omission: slow calls $(slow) pass=[$(cat "$T/rv.err")] cycle=[$(cat "$T/st/cycle.log" 2>/dev/null)] cq=$(ls "$T/st/cq" | tr '\n' ' ')"
+# The window ends by time. The case moves that clock, not the state's shape: it backdates the recorded end, so no sleep
+# races a loaded machine (a 4 s window against a 5 s sleep failed whenever the box was busy, #749).
+python3 - "$T/st/review-timeouts.json" <<'PY'
+import json, sys, time
+p = sys.argv[1]; d = json.load(open(p))
+for e in d.values():
+    if e.get("until") is not None: e["until"] = int(time.time()) - 10
+open(p, "w").write(json.dumps(d, sort_keys=True) + "\n")
+PY
+rv >/dev/null
+[ "$(slow)" = 4 ] && ok "26 the window ends by time: the model is tried again" || ko "26 expiry: slow calls $(slow) $(cat "$T/rv.err")"
+echo answer > "$T/slow.mode"; rv >/dev/null
+echo timeout > "$T/slow.mode"; rv >/dev/null; rv >/dev/null
+rv >/dev/null
+[ "$(slow)" = 8 ] && ok "26 an answered review clears the streak: two timeouts after it do not omit the model" || ko "26 answer reset: slow calls $(slow) $(cat "$T/rv.err")"
+rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/st/cycle.log" "$T/st/review-timeouts.json" "$CLAUDE_ARGS"; unset CLAUDE_ARGS SLOW_MODE
+
+# The committed labeled sample measures historical CHANGES verdicts. The report is a read-only
+# calibration instrument: it names the total, the Debt/nit-only count, and the rate.
+calibration=$(python3 "$(dirname "$src")/review-calibration.py" "$(dirname "$src")/fixtures/review-calibration.json" 2>&1); rc=$?
+[ $rc = 0 ] && [ "$calibration" = "labeled=10 debt_nit_only=1 rate=10.0%" ] \
+  && ok "the calibration report measures the committed Debt/nit-only sample" \
+  || ko "calibration report: rc=$rc '$calibration'"
+# 27) a models.json with no model_retry_budget, or with it explicitly null, takes the shipped default of 2 tries -- never
+# jq's literal "null". That string made `[ "$i" -lt "$lim" ]` fail with "integer expression expected", the loop body never
+# ran, and every review ended BLOCKED while the run retried once a minute.
+cat > "$T/bin/claude" <<J
+#!/bin/bash
+cat >/dev/null; echo x >> "$T/rcalls"; echo "API Error: 529 overloaded_error"; exit 1
+J
+chmod +x "$T/bin/claude"
+for cfgv in absent null; do
+  case $cfgv in
+    absent) printf '{"review_models":["claude:only"],"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json";;
+    null) printf '{"review_models":["claude:only"],"model_retry_budget":null,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json";;
+  esac
+  rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/rcalls"
+  out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>"$T/e21"); rc=$?
+  n=$(wc -l < "$T/rcalls" 2>/dev/null | tr -d ' ')
+  [ "$n" = 2 ] && ! /usr/bin/grep -q 'integer expression expected' "$T/e21" \
+    && ok "27 model_retry_budget $cfgv: the shipped default (2 tries) is used, with no integer error" \
+    || ko "27 model_retry_budget $cfgv: calls='$n' rc=$rc err=$(head -2 "$T/e21" 2>/dev/null | tr '\n' ' ')"
+done
+# the configured value still wins over the default
+printf '{"review_models":["claude:only"],"model_retry_budget":3,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/rcalls"
+out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>"$T/e21"); rc=$?
+n=$(wc -l < "$T/rcalls" 2>/dev/null | tr -d ' ')
+[ "$n" = 3 ] && ok "27 a configured model_retry_budget still wins (3 tries)" || ko "26 configured budget: calls='$n' rc=$rc $(head -1 "$T/st/review-fix_1-x.md" 2>/dev/null)"
+# 27c) a configured budget of 0 is a real value, never the fallback: zero tries must stay zero
+printf '{"review_models":["claude:only"],"model_retry_budget":0,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/rcalls"
+out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>"$T/e21"); rc=$?
+n=$( [ -f "$T/rcalls" ] && wc -l < "$T/rcalls" | tr -d ' ' || echo 0 )   # a zero budget calls no model, so the file is never written
+[ "$n" = 0 ] && ! /usr/bin/grep -q 'integer expression expected' "$T/e21" && ok "27c a configured budget of 0 stays 0, the fallback does not fire" || ko "26c zero budget: calls='$n' rc=$rc"
 
 rm -rf "$T"; exit $fail

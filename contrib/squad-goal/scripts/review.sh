@@ -13,7 +13,9 @@
 # Walks review_models in models.json (each one runs the runner its registry route names): a model that fails for infrastructure reasons (non-zero exit,
 # empty output, no VERDICT line) after model_retry_budget tries is skipped, and MODEL_FAIL/MODEL_SWITCH
 # are queued on the issue. Anthropic entries are skipped while $SG_SHARED/quota-guard exists.
-# A model try is killed after review_timeout_seconds and the chain moves on (no retry of a timed-out model).
+# A model try is killed after review_timeout_seconds and the chain moves on (no retry of a timed-out model). A model that
+# times out review_timeout_bound times in a row (default 3) is omitted from the chains for review_timeout_omit_seconds
+# (default 21600), and the omission is named in the pass, cycle.log and the queue (#749, review-timeouts.py).
 # The saved review is the checklist shape of revformat.py (#1777), capped at review_max_lines of models.json:
 # an answer outside it (prose, a verdict off line 1, a bullet over two lines) is a MODEL_FORMAT failure of that
 # try and the chain moves on, never a silent pass. That shape is not described here (#1835): revformat.py prints
@@ -84,7 +86,7 @@ fi
 # the mode the answer was asked for: a fix round answers its previous findings, and may do it in a '## Resolved'
 # section of their own (#1834) -- a full review may not write that heading, so revformat.py is told which one this is.
 fr=""; [ -n "$delta" ] && fr=--fix-round
-SEV="Severity: the section a finding sits in is its severity, nothing else. BLOCKING is a closed list: a divergence from an accepted ADR; a regression of behaviour main already had; a change to a wire protocol or a persisted format; a test that passes while lying. Anything else real is DEBT. DEBT is not a dropped finding: it costs a filed task, so say it concretely enough to file."
+SEV="Severity: the section a finding sits in is its severity, nothing else. BLOCKING is a closed list: a divergence from an accepted ADR; a regression of behaviour main already had; a change to a wire protocol or a persisted format; a test that passes while lying. Anything else real is DEBT. DEBT is not a dropped finding: it costs a filed task, so say it concretely enough to file. Debt/nit-only findings require APPROVE, never CHANGES."
 # #1777: the length cap is a named constant in the config, never a magic number in the prompt.
 # #1835: the checklist shape is not written here either. revformat.py prints it (--shape, and --fix-round for the mode
 # that has an answer section) and the prompt embeds that printed text verbatim, so the prompt and the check that reads
@@ -206,7 +208,13 @@ off_ok() { [ "$(row_of "$2" 7)" != 0 ]; }
 may_run() { hours_ok "$1" "$2" && off_ok "$1" "$2"; }
 # a full Codex window (hub quota) skips codex before any try; --sync also clears a marker the cache has outlived (#1525)
 python3 "$(dirname "$0")/codex-reset.py" --sync "$SG_SHARED/codex-limited"
-tries=$(jq -r .model_retry_budget "$cfg"); prev=""
+# A config with no model_retry_budget, or one set to null, takes the shipped default: jq would print the literal "null",
+# which is no loop limit -- the comparison failed, the model was never tried, and every review ended BLOCKED.
+tries=$(jq -r '.model_retry_budget // 2' "$cfg"); prev=""
+tbound=$(jq -r '.review_timeout_bound // 3' "$cfg"); tomit=$(jq -r '.review_timeout_omit_seconds // 21600' "$cfg")
+streak() { python3 "$(dirname "$0")/review-timeouts.py" "$SG_STATE/review-timeouts.json" "$@" --bound "$tbound" --window "$tomit"; }   # omitted|timeout|clear <model>: the timeout streak of one review model (#749)
+omit_say() { local line; line=$(printf 'MODEL_OMIT review %s on branch %s: %s.' "$m" "$bm" "$1")
+  printf '%s\n' "$line" >&2; printf '%s\n' "$line" >> "$SG_STATE/cycle.log"; printf '%s\n' "$line" > "$(sg_cq_status "$iss" "momit$$-$ms")"; }
 # A branch pass may pin the review to one model and one try (SG_REVIEW_CHAIN_DEPTH): an old branch may not
 # spend the whole chain again, and the model that answers is the one that measures best, not the one that times out.
 [ -n "${SG_REVIEW_RETRY_BUDGET:-}" ] && tries=$SG_REVIEW_RETRY_BUDGET
@@ -252,10 +260,11 @@ eligible() { local m=$1 rt rn
   case $rn in grok) [ -e "$SG_SHARED/grok-limited" ] && return 1;; esac
   if [ -e "$SG_SHARED/quota-guard" ] && jq -e --arg m "$m" '.anthropic_models|index($m)' "$cfg" >/dev/null; then return 1; fi
   may_run review_models "$m" || return 1
+  streak omitted "$m" >/dev/null && return 1
   return 0; }
 reachable=0; for m in $chain; do eligible "$m" && reachable=$((reachable+1)); done
 used=0
-for m in $chain; do fmt=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9.-' _)   # ms: the model in a status file name, so one model's status never overwrites another's (#624)   # fmt=1: this model's answer was outside the checklist shape, so no MODEL_FAIL on top of the MODEL_FORMAT
+for m in $chain; do fmt=0; timed_out=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9.-' _)   # ms: the model in a status file name, so one model's status never overwrites another's (#624)   # fmt=1: this model's answer was outside the checklist shape, so no MODEL_FAIL on top of the MODEL_FORMAT
   IFS=$'\t' read -r rroute runner wire tools <<< "$(route_of "$m")"
   [ -n "$rroute" ] || { printf "MODEL_FAIL review %s on branch %s: the registry gave no route for it (%s).\n" "$m" "$bm" "$(head -c 300 "$SG_STATE/review-route.$$.err" 2>/dev/null | tr '\n' ' ')" > "$(sg_cq_status "$iss" "mfail$$-$ms-0")"; prev=$m; continue; }
   # codex usage limit is account-wide: skip every codex entry until the file's time passes
@@ -270,6 +279,7 @@ for m in $chain; do fmt=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9.-' _)   # ms
   # MODEL_FAIL is written. Switching every entry off leaves no reachable model, which is the pre-existing BLOCKED path.
   off_ok review_models "$m" || { printf "MODEL_OFF review %s skipped on branch %s: switched off in models.json.\n" "$m" "$bm" > "$(sg_cq_status "$iss" "moff$$-$ms")"; continue; }
   hours_ok review_models "$m" || { printf "MODEL_HOURS review %s skipped on branch %s: outside its window in models.json.\n" "$m" "$bm" > "$(sg_cq_status "$iss" "mhours$$-$ms")"; continue; }
+  om=$(streak omitted "$m") && { omit_say "$om"; continue; }
   [ -n "${SG_REVIEW_CHAIN_DEPTH:-}" ] && [ "$used" -ge "$SG_REVIEW_CHAIN_DEPTH" ] && break
   used=$((used+1))
   echo "$m" > "$SG_STATE/review-$pr.model"   # the model this review tries now: the hub reads it for the pass that holds the child (#598)
@@ -356,7 +366,7 @@ for m in $chain; do fmt=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9.-' _)   # ms
       date +%s > "$SG_SHARED/grok-limited"
       printf "MODEL_QUOTA review %s skipped on branch %s: the grok balance is spent; it has no reset, so the owner removes %s after a top-up.\n" "$m" "$bm" "$SG_SHARED/grok-limited" > "$(sg_cq_status "$iss" "mquota$$-$ms")"
       rc=99; break; fi;; esac
-    [ $rc = 142 ] && { printf "MODEL_TIMEOUT review %s on branch %s after %ss; next model.\n" "$m" "$bm" "$tmo" > "$(sg_cq_status "$iss" "mtimeout$$-$ms-$i")"; break; }
+    [ $rc = 142 ] && { printf "MODEL_TIMEOUT review %s on branch %s after %ss; next model.\n" "$m" "$bm" "$tmo" > "$(sg_cq_status "$iss" "mtimeout$$-$ms-$i")"; timed_out=1; tm=$(streak timeout "$m"); [ -n "$tm" ] && omit_say "$tm"; break; }
     # the verdict goes on line 1 in the exact form the loop parses (review.sh, the loop's own passes and hub.py read line 1): the model may
     # have written it bold, in another case, or after a paragraph of narration -- revformat.py owns that normalization.
     if [ $rc = 0 ] && [ -s "$o" ] && [ -f "$(dirname "$0")/revformat.py" ]; then
@@ -381,8 +391,9 @@ for m in $chain; do fmt=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9.-' _)   # ms
       { echo "VERDICT: APPROVE (the model wrote CHANGES with only Debt findings)"; tail -n +2 "$o"; } > "$o.v" && mv -f "$o.v" "$o"
     fi
     # the raw JSON answer is kept as review-<key>.answer.json (#632); review-<key>.json is a failed claude envelope
-    grep -q 'VERDICT' "$o" 2>/dev/null && [ $rc = 0 ] && { if [ -s "$o.answer" ]; then mv -f "$o.answer" "$SG_STATE/review-$pr.answer.json"; else rm -f "$SG_STATE/review-$pr.answer.json"; fi; mv -f "$o" "$out"; echo "$head" > "$o.sha" && mv -f "$o.sha" "$last"; echo "model=$m${delta:+ (fix round, delta)}$lane $(head -1 "$out")"; git -C "$SG_CHECKOUT" status --porcelain | head -3; exit 0; }
+    grep -q 'VERDICT' "$o" 2>/dev/null && [ $rc = 0 ] && { if [ -s "$o.answer" ]; then mv -f "$o.answer" "$SG_STATE/review-$pr.answer.json"; else rm -f "$SG_STATE/review-$pr.answer.json"; fi; mv -f "$o" "$out"; echo "$head" > "$o.sha" && mv -f "$o.sha" "$last"; echo "model=$m${delta:+ (fix round, delta)}$lane $(head -1 "$out")"; git -C "$SG_CHECKOUT" status --porcelain | head -3; streak clear "$m"; exit 0; }
   done
+  [ "$timed_out" = 1 ] || streak clear "$m"
   [ "$fmt" = 1 ] || printf "MODEL_FAIL review %s on branch %s: exit %s, %s\n" "$m" "$bm" "$rc" "$({ tail -c 300 "$e"; [ "$rc" != 0 ] && tail -c 300 "$o"; } 2>/dev/null | tr '\n' ' ')" > "$(sg_cq_status "$iss" "mfail$$-$ms-$i")"   # claude -p prints its API error on stdout, the answer file
   prev=$m   # this model's tries failed (MODEL_FAIL or MODEL_FORMAT), so the next model's turn queues a MODEL_SWITCH (#631)
 done

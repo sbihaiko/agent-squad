@@ -636,9 +636,9 @@ r=$(SG_WAVE_TIP_GATES="bash '$T/s/gate.sh' true" land2 run-30 2>&1); rc=$?
 # is set here, so this suite reads no profile's default and depends on no worker count.
 . "$d/base-battery.sh" 2>/dev/null
 wcmd=$(SG_GATE_WORKERS=3 sg_base_gate "origin/dev" /usr/bin/true 2>/dev/null)
-wbat=$(SG_GATE_WORKERS=3 sg_base_battery /usr/bin/true 2>/dev/null)
+wbat=$(SG_GATE_WORKERS=3 sg_base_battery /usr/bin/true origin/dev 2>/dev/null)
 case "$wcmd" in *"SG_FAST_BASE=origin/dev "*"fast-gate.sh"*) ok "R: the tip check reads the changed scripts against origin/\$SG_BASE";; *) ko "R: the shared base gate is not the fast gate at origin/\$SG_BASE: '$wcmd'";; esac
-case "$wbat" in *"ruff check squad tests"*"mypy squad"*'-n ${SQUAD_GATE_WORKERS:-3}'*"not heavy"*) ok "R: the base gate runs ruff, mypy and the fast pytest with SG_GATE_WORKERS";; *) ko "R: the base gate command: '$wbat'";; esac
+case "$wbat" in *"ruff check squad tests"*"mypy squad"*'-n "${SQUAD_GATE_WORKERS:-$workers}"'*"not heavy"*"sg_battery_run /usr/bin/true origin/dev 3 yes"*) ok "R: the base gate runs ruff, mypy and the fast pytest with SG_GATE_WORKERS";; *) ko "R: the base gate command: '$wbat'";; esac
 case "$wbat$wcmd" in *"-n auto"*) ko "R: the base gate runs pytest -n auto";; *) ok "R: the base gate never runs pytest -n auto";; esac
 /usr/bin/grep -q 'sg_base_gate "origin/\$base"' "$T/s/wave.sh" && ok "R: wave.sh builds its tip check from the shared definition" || ko "R: wave.sh does not use the shared base gate"
 ! /usr/bin/grep -v '^[[:space:]]*#' "$T/s/wave.sh" | /usr/bin/grep -q 'ruff check squad tests' && ok "R: wave.sh keeps no copy of the base battery" || ko "R: wave.sh still carries a copy of the base battery"
@@ -716,5 +716,16 @@ case "$r" in *"WAVE CHECK RED"*|*REQUEUE*) ko "AA: an inconclusive tip check bla
 
 # The ledger replaced the auto/excluded-<run>-<n> marker (ADR-0149 rule 6): no case leaves one.
 [ -z "$(/bin/ls "$T/st/auto" | /usr/bin/grep '^excluded-')" ] && ok "no excluded- marker is written" || ko "excluded markers: $(/bin/ls "$T/st/auto" | /usr/bin/grep '^excluded-' | tr '\n' ' ')"
+
+# (#646) The wave tip's check is the base battery over origin/$SG_BASE, and its pytest runs over the selection. The check's command
+# is built from the shared definition and run in a clone of the remote, as wave.sh runs it; a stub python logs each call's argv.
+printf '#!/bin/bash\necho "$*" >> "%s/argv.log"\ncase "$*" in *squad.testselect*) cat "%s/select.out" 2>/dev/null;; esac\nexit 0\n' "$T" "$T" > "$T/selpy"; chmod +x "$T/selpy"
+tipcmd=$(SG_GATE_WORKERS=3 sg_base_gate "origin/dev" "$T/selpy" 2>/dev/null)
+rm -rf "$T/tipclone"; $G clone -q "$T/origin.git" "$T/tipclone" 2>/dev/null
+printf 'tests/test_a.py\n' > "$T/select.out"; rm -f "$T/argv.log"
+r=$(cd "$T/tipclone" && SG_GATE_WORKERS=3 SG_STATE="$T/st" bash -c "$tipcmd" 2>&1); rc=$?
+[ $rc = 0 ] && /usr/bin/grep -qx -- "-m pytest -p no:deepeval -o heavy_cap_seconds=20 -n 3 -m not heavy tests/test_a.py" "$T/argv.log" && ok "the wave tip check passes the selection to pytest" || ko "tip check argv: rc $rc: '$(cat "$T/argv.log" 2>&1)' $r"
+IFS=$'\t' read -r _ kind res _ sel < "$T/st/gate-status" 2>/dev/null
+[ "$kind $res $sel" = "fast pass selected 1 files" ] && ok "the wave tip check's status line states the selected file count" || ko "tip check status: '$(cat "$T/st/gate-status" 2>&1)'"
 
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }

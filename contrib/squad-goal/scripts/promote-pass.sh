@@ -4,9 +4,12 @@
 # machine-wide /tmp/sg-state, a different file from the profile's state directory (exit 2).
 # Debounce: no suite for a tip already proved or refused ($SG_STATE/promote-pass.tips, last 50), nor while the latest landing in
 # $SG_STATE/landed.tsv is younger than SG_PROMOTE_QUIET_SECONDS (default 900): a burst of landings earns one proof.
-# One hold of the gate lock, in try mode (serial.sh SERIAL_TRY): a held lock skips the tick, never queues. Inside the hold: the
-# suite (SG_PROMOTE_SUITE; default ruff, mypy, pytest at sg_battery_workers and serial) in a clean tree at the exact tip, the full line
-# (gate.sh --status), a commit status on the sha (context squad/full-proof), its read-back, then SG_PROMOTE_PROOF=local promote-stg.sh.
+# One hold of the proof's own lock, in try mode (serial.sh SERIAL_TRY, name `full-proof`): a held lock skips the tick, never
+# queues. The proof never takes the `gate` lock, which the landing gate, the wave entry and the promotion all wait on, so a proof
+# in flight holds no landing up and a landing holds no proof up (ADR-0145 rule 3, as the nightly of ADR-0153 does). Inside the
+# hold: the suite (SG_PROMOTE_SUITE; default ruff, mypy, pytest at sg_battery_workers and serial) in a clean tree at the exact
+# tip, the full line (gate.sh --status), a commit status on the sha (context squad/full-proof), its read-back, then
+# SG_PROMOTE_PROOF=local promote-stg.sh.
 # The tree is $SG_STATE/promote-tree (SG_PROMOTE_TREE), a plain clone, never a ~/wt-* worktree, so wtclean never removes it.
 # A red or missing proof: one marker and one line per tip in $SG_STATE/promote.log; the next tip is tried on a later pass.
 d=$(cd "$(dirname "$0")" && pwd)
@@ -19,7 +22,7 @@ g() { /usr/bin/git -C "$tree" "$@"; }
 mark() {  # <tip> <reason>: one marker and one line per tip
   echo "$1 $2" >> "$marks"; tail -n 50 "$marks" > "$marks.tmp" && mv "$marks.tmp" "$marks"
   echo "$(date -u +%FT%TZ) promote-pass: $1 $2" >> "$log"; echo "promote-pass: $1 $2"; }
-if [ "${1:-}" = --hold ]; then   # inside the gate lock: suite, full line, commit status, read-back, promotion
+if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line, commit status, read-back, promotion
   tip=$2; . "$d/ghcall.sh"; unset SG_GATE_STATUS SG_GATE_KIND   # the suite inherits no gate setting of this hold
   # The proof reserves what it measures (#739): the dispatchers read this marker (gh_dispatch_hold) and start no run while it
   # stands, so the suite is not measured against the next wave landing. Its bound is the gate lock's own (SERIAL_HOLD_SECONDS),
@@ -68,6 +71,7 @@ g merge-base --is-ancestor "$tip" origin/stg && exit 0   # the dev tip is alread
 o=$(g rev-list --no-merges "$tip..origin/stg" 2>/dev/null) || o=
 [ -z "$o" ] || { mark "$tip" "not promoted: stg holds $(printf '%s\n' "$o" | /usr/bin/grep -c .) commit(s) the dev tip lacks; the owner resolves it"; exit 1; }
 g checkout -q -f --detach "$tip" && g clean -q -ffdx || { mark "$tip" "not promoted: the clean tree could not check out the tip"; exit 1; }
-SERIAL_TRY=1 SG_GATE_STATUS=self SG_GATE_KIND=full bash "$d/gate.sh" bash "$0" --hold "$tip" 2>"$state/promote-pass.err"; rc=$?
-[ $rc = 73 ] && exit 0   # another gate holds the lock: this tick is skipped, never queued
+SERIAL_TRY=1 SERIAL_HOLD_SECONDS=${SG_PROMOTE_HOLD_SECONDS:-10800} \
+  bash "$d/serial.sh" full-proof bash "$0" --hold "$tip" 2>"$state/promote-pass.err"; rc=$?
+[ $rc = 73 ] && exit 0   # another proof holds the proof lock: this tick is skipped, never queued
 cat "$state/promote-pass.err" >&2; exit $rc

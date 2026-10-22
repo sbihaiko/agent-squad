@@ -130,7 +130,7 @@ out=$(cd "$R" && SG_FAST_BASE=no-such-ref SG_FAST_CMD="$T/base.sh" bash "$d/fast
 # (#566) The default battery is the loop's one definition (base-battery.sh), and its pytest runs with a bounded worker count,
 # SG_GATE_WORKERS, instead of `auto`. A stub python logs the argv of each leg: the count is set here, so this suite reads no
 # profile's default and depends on no worker count.
-printf '#!/bin/bash\necho "$*" >> "%s/py.log"\nexit 0\n' "$T" > "$T/py"; chmod +x "$T/py"
+printf '#!/bin/bash\necho "$*" >> "%s/py.log"\ncase "$*" in *squad.testselect*) echo "all: stub";; esac\nexit 0\n' "$T" > "$T/py"; chmod +x "$T/py"
 rm -f "$T/ran.log" "$T/py.log"; $G -C "$R" checkout -q dev   # no script changes at the base: the battery alone runs
 out=$(cd "$R" && SG_FAST_BASE=dev SG_GATE_PY="$T/py" SG_GATE_WORKERS=3 bash "$d/fast-gate.sh" 2>&1); rc=$?
 [ $rc = 0 ] && ok "the default battery passes on a stub python" || ko "default battery: rc $rc: $out"
@@ -143,5 +143,32 @@ retryline=$(/usr/bin/grep -E '^retrycmd=' "$d/fast-gate.sh")
 case "$retryline" in *'-p no:xdist'*) ok "the retry serializes pytest";; *) ko "the retry is not serial: '$retryline'";; esac
 case "$retryline" in *' -n '*) ko "the serial retry takes workers: '$retryline'";; *) ok "the serial retry stays serial";; esac
 /usr/bin/grep -qE 'SG_GATE_WORKERS:=[0-9]+' "$d/env.sh" && ok "env.sh holds the default worker count" || ko "env.sh: no numeric SG_GATE_WORKERS default"
+# (#646) The base battery's pytest runs over the selection the selector answers for the base. A stub python logs each call's argv
+# on one line and answers squad.testselect from $T/select.out, so each pytest line is compared exactly, never by one word.
+printf '#!/bin/bash\necho "$*" >> "%s/argv.log"\ncase "$*" in\n  *squad.testselect*) cat "%s/select.out" 2>/dev/null;;\n  *pytest*) [ "$PY_FAIL" = 1 ] && { echo "FAILED tests/test_a.py::test_one - boom"; exit 1; };;\nesac\nexit 0\n' "$T" "$T" > "$T/selpy"; chmod +x "$T/selpy"
+printf '#!/bin/bash\necho "$*" >> "%s/retry.log"\n' "$T" > "$T/retry.sh"; chmod +x "$T/retry.sh"
+selrun() { rm -f "$T/argv.log" "$T/retry.log" "$SG_STATE/gate-status"; (cd "$R" && env -u SG_TEST_SELECT -u SG_FAST_CMD SG_FAST_BASE=dev SG_GATE_PY="$T/selpy" SG_GATE_WORKERS=3 SG_FAST_RETRY_CMD="$T/retry.sh" "$@" bash "$d/fast-gate.sh" 2>&1); }
+PYTEST_OPTS='-p no:deepeval -o heavy_cap_seconds=20 -n 3 -m not heavy'
+printf 'tests/test_a.py\ntests/test_b.py\n' > "$T/select.out"
+out=$(selrun); rc=$?
+[ $rc = 0 ] && /usr/bin/grep -qx -- "-m pytest $PYTEST_OPTS tests/test_a.py tests/test_b.py" "$T/argv.log" && ok "the battery passes the selection to pytest, after the unchanged options" || ko "selection argv: rc $rc: '$(cat "$T/argv.log" 2>&1)' $out"
+IFS=$'\t' read -r _ kind res _ sel < "$SG_STATE/gate-status" 2>/dev/null
+[ "$kind $res $sel" = "fast pass selected 2 files" ] && ok "the status line states the selected file count" || ko "selection status: '$(cat "$SG_STATE/gate-status" 2>&1)'"
+echo "all: no test imports squad/x.py" > "$T/select.out"
+out=$(selrun); rc=$?
+[ $rc = 0 ] && /usr/bin/grep -qx -- "-m pytest $PYTEST_OPTS" "$T/argv.log" && ok "an all answer runs the whole battery" || ko "all argv: rc $rc: '$(cat "$T/argv.log" 2>&1)'"
+IFS=$'\t' read -r _ kind res _ sel < "$SG_STATE/gate-status" 2>/dev/null
+[ "$sel" = "all: no test imports squad/x.py" ] && ok "the status line states the all reason" || ko "all status: '$(cat "$SG_STATE/gate-status" 2>&1)'"
+: > "$T/select.out"
+out=$(selrun); rc=$?
+[ $rc = 0 ] && ! /usr/bin/grep -q -- "-m pytest" "$T/argv.log" && /usr/bin/grep -q -- "-m ruff check squad tests" "$T/argv.log" && /usr/bin/grep -q -- "-m mypy squad" "$T/argv.log" && ok "an empty selection runs no pytest and still runs ruff and mypy" || ko "empty selection: rc $rc: '$(cat "$T/argv.log" 2>&1)'"
+/usr/bin/grep -q "selected 0 files" "$SG_STATE"/fast-gate-*.log && ok "an empty selection logs that it ran none" || ko "empty selection log: '$(cat "$SG_STATE"/fast-gate-*.log 2>&1)'"
+printf 'tests/test_a.py\n' > "$T/select.out"
+out=$(selrun SG_TEST_SELECT=no); rc=$?
+[ $rc = 0 ] && /usr/bin/grep -qx -- "-m pytest $PYTEST_OPTS" "$T/argv.log" && ! /usr/bin/grep -q "squad.testselect" "$T/argv.log" && ok "SG_TEST_SELECT=no runs the whole battery without the selector" || ko "SG_TEST_SELECT=no: rc $rc: '$(cat "$T/argv.log" 2>&1)'"
+/usr/bin/grep -q "all: SG_TEST_SELECT=no" "$SG_STATE"/fast-gate-*.log && ok "SG_TEST_SELECT=no says so in the log" || ko "SG_TEST_SELECT=no log: '$(cat "$SG_STATE"/fast-gate-*.log 2>&1)'"
+printf 'tests/test_a.py\ntests/test_b.py\n' > "$T/select.out"
+out=$(selrun PY_FAIL=1); rc=$?
+[ "$(cat "$T/retry.log" 2>/dev/null)" = "tests/test_a.py::test_one" ] && ok "the serial retry reruns only the failed test names" || ko "retry argv: rc $rc: '$(cat "$T/retry.log" 2>&1)' $out"
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 rm -rf "$T"; exit $fail
