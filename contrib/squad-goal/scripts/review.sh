@@ -206,7 +206,9 @@ off_ok() { [ "$(row_of "$2" 7)" != 0 ]; }
 may_run() { hours_ok "$1" "$2" && off_ok "$1" "$2"; }
 # a full Codex window (hub quota) skips codex before any try; --sync also clears a marker the cache has outlived (#1525)
 python3 "$(dirname "$0")/codex-reset.py" --sync "$SG_SHARED/codex-limited"
-tries=$(jq -r .model_retry_budget "$cfg"); prev=""
+# A config with no model_retry_budget, or one set to null, takes the shipped default: jq would print the literal "null",
+# which is no loop limit -- the comparison failed, the model was never tried, and every review ended BLOCKED.
+tries=$(jq -r '.model_retry_budget // 2' "$cfg"); prev=""
 # A branch pass may pin the review to one model and one try (SG_REVIEW_CHAIN_DEPTH): an old branch may not
 # spend the whole chain again, and the model that answers is the one that measures best, not the one that times out.
 [ -n "${SG_REVIEW_RETRY_BUDGET:-}" ] && tries=$SG_REVIEW_RETRY_BUDGET

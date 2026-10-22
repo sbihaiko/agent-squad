@@ -551,5 +551,37 @@ calibration=$(python3 "$(dirname "$src")/review-calibration.py" "$(dirname "$src
 [ $rc = 0 ] && [ "$calibration" = "labeled=10 debt_nit_only=1 rate=10.0%" ] \
   && ok "the calibration report measures the committed Debt/nit-only sample" \
   || ko "calibration report: rc=$rc '$calibration'"
+# 26) a models.json with no model_retry_budget, or with it explicitly null, takes the shipped default of 2 tries -- never
+# jq's literal "null". That string made `[ "$i" -lt "$lim" ]` fail with "integer expression expected", the loop body never
+# ran, and every review ended BLOCKED while the run retried once a minute.
+cat > "$T/bin/claude" <<J
+#!/bin/bash
+cat >/dev/null; echo x >> "$T/rcalls"; echo "API Error: 529 overloaded_error"; exit 1
+J
+chmod +x "$T/bin/claude"
+for cfgv in absent null; do
+  case $cfgv in
+    absent) printf '{"review_models":["claude:only"],"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json";;
+    null) printf '{"review_models":["claude:only"],"model_retry_budget":null,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json";;
+  esac
+  rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/rcalls"
+  out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>"$T/e21"); rc=$?
+  n=$(wc -l < "$T/rcalls" 2>/dev/null | tr -d ' ')
+  [ "$n" = 2 ] && ! /usr/bin/grep -q 'integer expression expected' "$T/e21" \
+    && ok "26 model_retry_budget $cfgv: the shipped default (2 tries) is used, with no integer error" \
+    || ko "26 model_retry_budget $cfgv: calls='$n' rc=$rc err=$(head -2 "$T/e21" 2>/dev/null | tr '\n' ' ')"
+done
+# the configured value still wins over the default
+printf '{"review_models":["claude:only"],"model_retry_budget":3,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/rcalls"
+out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>"$T/e21"); rc=$?
+n=$(wc -l < "$T/rcalls" 2>/dev/null | tr -d ' ')
+[ "$n" = 3 ] && ok "26 a configured model_retry_budget still wins (3 tries)" || ko "26 configured budget: calls='$n' rc=$rc $(head -1 "$T/st/review-fix_1-x.md" 2>/dev/null)"
+# 26c) a configured budget of 0 is a real value, never the fallback: zero tries must stay zero
+printf '{"review_models":["claude:only"],"model_retry_budget":0,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/rcalls"
+out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>"$T/e21"); rc=$?
+n=$(wc -l < "$T/rcalls" 2>/dev/null | tr -d ' ')
+[ "$n" = 0 ] && ok "26c a configured budget of 0 stays 0, the fallback does not fire" || ko "26c zero budget: calls='$n' rc=$rc"
 
 rm -rf "$T"; exit $fail
