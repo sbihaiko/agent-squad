@@ -79,6 +79,22 @@ def test_the_writer_call_is_the_board_seam(hub, monkeypatch):
     assert calls and calls[0][1].endswith("board.sh") and calls[0][2:] == ["x", "4", "Todo", "7"], calls
 
 
+def test_the_writer_call_carries_the_state_directory_the_hub_resolved(hub, monkeypatch):
+    """A hub started with no SG_STATE (hubctl starts it with none) still resolves its state directory by the seam, and the
+    board seam it starts reads $SG_STATE: the writer call carries the one the hub resolved, never the empty environment.
+    Without it board.py dies on the key and the card shows the traceback (#1750)."""
+    mod, _ = hub
+    kw = {}
+
+    def fake(cmd, **options):
+        kw.update(options)
+        return subprocess.CompletedProcess(cmd, 0, "#7 -> Todo\n", "")
+
+    monkeypatch.setattr(mod.subprocess, "run", fake)
+    mod.promote_write(7)
+    assert (kw.get("env") or {}).get("SG_STATE") == str(mod.STATE), kw
+
+
 def test_a_backlog_card_moves_to_todo_and_the_cache_follows(hub):
     mod, port = hub
     calls = []

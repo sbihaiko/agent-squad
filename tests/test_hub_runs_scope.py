@@ -62,3 +62,23 @@ def test_a_run_root_named_by_sg_projects_or_the_fork_dir_is_still_listed(hub, ma
     mine, other = machine
     monkeypatch.setenv("SG_FORK_DIR", str(other))
     assert len([r for r in hub.runs() if r.get("port")]) == 2
+
+
+def test_a_dashboard_started_by_any_interpreter_is_listed(hub, machine, monkeypatch):
+    """The ps scan reads the server's own argv, never the spelling of the interpreter: macOS starts the framework build
+    as `.../MacOS/Python`, and a scan that required the program to read `python` listed no run of this machine, so the
+    hub showed no live run at all (#1751)."""
+    mine, other = machine
+    run_mine = mine / "runs" / "run-a"
+    ps = (f"4242 /Library/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python"
+          f" -m squad.dashboard_server {run_mine}")
+
+    def fake_sh(cmd, *args, **kw):
+        if cmd == "/bin/ps":
+            return ps
+        if cmd == hub.LSOF:
+            return "n127.0.0.1:5555"
+        return ""
+
+    monkeypatch.setattr(hub, "sh", fake_sh)
+    assert [r["project"] for r in hub.runs() if r.get("port")] == ["mine"]

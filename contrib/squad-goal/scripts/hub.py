@@ -1260,7 +1260,7 @@ def runs():
     ps_lines = sh("/bin/ps", "-axwwo", "pid=,command=").splitlines()
     own = own_roots()
     for l in ps_lines:
-        m = re.match(r"\s*(\d+)\s+\S*python\S*\s+-m\s+squad\.dashboard_server\s+(\S+)", l)
+        m = re.match(r"\s*(\d+)\s+\S+\s+-m\s+squad\.dashboard_server\s+(\S+)", l)   # any interpreter: macOS runs the server as `.../MacOS/Python` (#1751)
         if not m: continue
         pid, d = m.group(1), m.group(2)
         port = re.search(r"TCP 127\.0\.0\.1:(\d+)|n127\.0\.0\.1:(\d+)", sh(LSOF, "-nP", "-a", "-p", pid, "-iTCP", "-sTCP:LISTEN", "-Fn"))
@@ -2159,8 +2159,10 @@ def board():
 PROMOTE_TO = COLUMN["issue_todo"]   # the column the arrow moves a card into: the owner's go signal (ADR-0142)
 def promote_write(issue):
     """The one writer call of the owner's move: `<owner> <project> Todo <n>`, the shape reconcile.py writes, so the
-    board seam (`board.sh`) is the only reach of the carrier."""
-    return subprocess.run(["bash", str(pathlib.Path(__file__).resolve().parent / "board.sh"), OWNER, str(PROJECT_NO), PROMOTE_TO, str(issue)], capture_output=True, text=True, timeout=120)
+    board seam (`board.sh`) is the only reach of the carrier. The call carries the state directory this hub resolved:
+    hubctl starts the hub with no SG_STATE, and board.py reads the key to find its caches (#1750)."""
+    env = {**os.environ, "SG_STATE": str(STATE)}
+    return subprocess.run(["bash", str(pathlib.Path(__file__).resolve().parent / "board.sh"), OWNER, str(PROJECT_NO), PROMOTE_TO, str(issue)], capture_output=True, text=True, timeout=120, env=env)
 def promote(issue):
     """Move one open card from Backlog to Todo through the board seam (#560). Only a card the hub holds in Backlog now
     is accepted: a closed issue keeps its column (ADR-0143), a spec is never work (ADR-0142), and a card already in
@@ -2461,8 +2463,6 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 <details id=plans class=sp><summary>subscriptions<span class=sr id=plsr></span></summary><div class=sb><div id=subs></div></div></details>
 <details id=mdl class=sp><summary>squad models<span class=sr id=mdsr></span></summary><div class=sb id=mbody></div></details>
 <details id=stats class=sp><summary>cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><h4>Spend <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Figures at API list prices (API-equivalent)."></span></h4><div class=tot id=tot></div><div class=cash id=cash></div><h4>Spend over time <span class=row id=per></span></h4><div id=chart></div><div id=kpi></div><div id=open></div><h4>Tokens by model <small class=m id=piet>all time</small></h4><div id=pie></div></div></details>
-<details id=ae class=sp><summary>adapter errors<span class=sr id=aesr></span></summary><div class=sb id=aeb></div></details>
-<details id=dlv class=sp><summary>delivery<span class=sr id=dlvsr></span></summary><div class=sb id=dlvb></div></details>
 <div id=list></div>
 </div>
 <div id=main></div>
@@ -2724,28 +2724,6 @@ async function pollStats(){try{pollSubs();
   $("#open").innerHTML=openRows(sp.pr.open);
 }catch(e){}}
 pollStats();setInterval(pollStats,30000);
-async function pollAdapt(){try{const d=await (await fetch("/api/adapter-errors")).json();
- const rows=d.classes||[],n=rows.reduce((a,r)=>a+(r.count||0),0);
- $("#aesr").textContent=d.err?"unavailable":rows.length?`${n} in ${d.runs} runs`:"none";
- $("#aeb").innerHTML=(d.err?`<div class=warnl>${esc(d.err)}</div>`:"")
-  +`<div class=subx>Every adapter_error run verdict in the run folders still on disk, counted by route (model · backend) and cause. Read-only: nothing here fixes a class.</div>`
-  +(rows.length?rows.map(r=>`<div class=kr><span class=l>${esc(r.model)}<small> · ${esc(r.backend)}</small></span><b>${r.count||0}</b><span class=d>${esc(r.cause)}</span></div>`).join(""):`<div class=subx>no adapter_error verdict in ${d.runs} run folders</div>`);
-}catch(e){}}
-pollAdapt();setInterval(pollAdapt,60000);
-async function pollDelivery(){try{const d=await (await fetch("/api/delivery")).json(),p=d.dispatched||{},a=d.adapter||{},l=d.landings||{},r=d.review||{},
- bad=Object.entries(p.by_state||{}).map(([k,v])=>`${v} ${esc(k)}`).join(" · "),
- many=((d.attempts||{}).per_issue||[]).filter(x=>x.attempts>1);
- $("#dlvsr").textContent=d.err?"unavailable":`${p.landed_nothing||0} dispatched, no landing · ${l.count||0} landing${l.count===1?"":"s"}`;
- $("#dlvb").innerHTML=(d.err?`<div class=warnl>${esc(d.err)}</div>`:"")
-  +`<div class=subx>Read-only delivery metrics from the loop's own records: the issue ledgers, the landing ledger, the auto/ markers and the run folders. Nothing here starts, retries or moves work.</div>`
-  +`<div class=kr><span class=l>Dispatched, landed nothing</span><b>${p.landed_nothing||0}</b><span class=d>${esc(p.attempts||0)} attempts · ${p.landed||0} landed${bad?" · "+bad:""} · ${p.open||0} open</span></div>`
-  +`<div class=kr><span class=l>No-op waves</span><b>${(d.noop_waves||{}).count||0}</b><span class=d>landed empty, counted apart from a failed dispatch</span></div>`
-  +(many.length?many.map(x=>`<div class=kr><span class=l>${esc(x.issue)}</span><b>${x.attempts}</b><span class=d>${x.landed} landed · ${x.landed_nothing} nothing · ${x.open} open</span></div>`).join(""):`<div class=subx>no issue was attempted more than once</div>`)
-  +(a.classes&&a.classes.length?a.classes.map(x=>`<div class=kr><span class=l>${esc(x.model)}<small> · ${esc(x.backend)}</small></span><b>${x.count||0}</b><span class=d>${esc(x.cause)}</span></div>`).join(""):`<div class=subx>no adapter_error verdict in ${a.runs||0} run folders</div>`)
-  +`<div class=kr><span class=l>Repeated review findings</span><b>${r.repeated||0}</b><span class=d>${(r.loops||[]).map(x=>esc(x.prefix+" "+x.key)+": "+x.rounds).join(" · ")}</span></div>`
-  +`<div class=kr><span class=l>Landings</span><b>${l.count||0}</b><span class=d>${l.branches||0} branches · ${l.issues||0} issues in the base</span></div>`;
-}catch(e){}}
-pollDelivery();setInterval(pollDelivery,60000);
 poll();setInterval(poll,3000);
 loadPoll();setInterval(loadPoll,LOAD_MS);   // the window owns the reading: one timer and one /api/load per tick, whatever else the page renders
 const bo=ls.bo||{},saveB=()=>{ls.bo=bo;localStorage.hub=JSON.stringify({...ls,pins:[...pins],q,per,bo})};
