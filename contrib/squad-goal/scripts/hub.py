@@ -1460,6 +1460,11 @@ def task_count(i):
     t, c = s.get("total"), s.get("completed")
     if isinstance(t, bool) or isinstance(c, bool) or not isinstance(t, int) or not isinstance(c, int): return None
     return f"{c}/{t}" if t > 0 else None
+def board_items_jq(repo):
+    """The board read's jq. A project may hold cards of several repositories and an issue number repeats between them, so an
+    Issue item counts only when its repository is `repo`; a draft item has no repository."""
+    return ('''.[]|select((.content_type=="Issue" and ((.content.repository_url//"")|endswith("/" + $repo))) or .content_type=="DraftIssue")|{n:.content.number,i:.id,t:.content.title,s:.content.state,c:.content.closed_at,st:((.fields[]|select(.name=="Status")|.value.name.raw)//null),k:(((.fields[]?|select(.name=="Kind")|.value.name|if type=="object" then .raw else . end)//"")|ascii_downcase|if .=="" then null else . end),l:[.content.labels[]?.name],si:{total:.content.sub_issues_summary.total,completed:.content.sub_issues_summary.completed},o:.content.created_at}''').replace("$repo", json.dumps(repo))
+
 def board_pass(fetch_open=None, fetch_landed=None, repos=None):
     """One board re-read: Board 4 statuses (REST) + one GraphQL page of Issue.blockedBy + the open work branches and the
     landing ledger of every repository the hub is told to read (#1820). The 60 s loop runs exactly this.
@@ -1471,7 +1476,7 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
     read_started = time.time()   # when the list read begins: the only stamp the overlay may compare a proved move against
     try:
             out = board_seam().rows(
-                '.[]|select(.content_type=="Issue" or .content_type=="DraftIssue")|{n:.content.number,i:.id,t:.content.title,s:.content.state,c:.content.closed_at,st:((.fields[]|select(.name=="Status")|.value.name.raw)//null),k:(((.fields[]?|select(.name=="Kind")|.value.name|if type=="object" then .raw else . end)//"")|ascii_downcase|if .=="" then null else . end),l:[.content.labels[]?.name],si:{total:.content.sub_issues_summary.total,completed:.content.sub_issues_summary.completed},o:.content.created_at}',
+                board_items_jq(REPO),
                 kind=True, timeout=120)
             items = [json.loads(l) for l in out.splitlines() if l.strip()]
             cases = [i["t"] for i in items if i.get("n") is None and i.get("k") == "test case"]   # a test case is a draft item: it has no number, so it is a row and never a card (#306)
