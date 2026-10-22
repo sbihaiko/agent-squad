@@ -17,13 +17,13 @@ A defect that only a heavy call or a serial run shows can therefore sit in the l
 3. **It takes its own lock and never the landing lock.** Its serial name is `nightly`, in try mode, so a second start never queues behind a suite of hours. It never takes the `gate` lock that the landing gate, the wave entry and the promotion wait on: a held landing lock is no obstacle to the nightly, and a nightly in flight never delays a landing.
 4. **One result record is the nightly's only output.** The record is written by a temp file and a rename ([ADR-0030](0030-atomic-writes.md)) and holds the time, the result, the sha, each mode's own result and the failing test ids. The result is a pass only when both modes pass. The two mode logs stay beside it.
 5. **The hub draws the record as one fact.** The footer reads the record: the result and its age, in the error tone when the suite is red, with each mode's result, the sha and the failing tests on the hover. A record the hub cannot read is a question mark, never a pass.
-6. **A red result alerts once and holds delivery.** The alert takes the path `health.sh` already uses: one line in the alerts file and one notification. A red record holds dispatch through the dispatch hold both dispatch passes read, and one green run releases it. A missing or unreadable record never holds: the loop is never blocked on a file it cannot trust.
+6. **A red result alerts once and holds delivery while it names the tip.** The alert takes the path `health.sh` already uses: one line in the alerts file and one notification. A red record holds dispatch through the dispatch hold both dispatch passes read, and one green run releases it. The hold compares the record's sha with the dev tip: a record whose sha is another commit is red for a base the tip no longer is, so the tip is unproven and not red, the pass says so on one line naming both shas, and it delivers. Each landing still carries its own local fast gate, and the promotion still needs its full proof. A missing or unreadable record never holds, and neither does a record whose sha the checkout does not carry: the loop is never blocked on a file it cannot trust. When no tip can be read at all, the record holds: a comparison that cannot be made is no clearance.
 
 ## Consequences
 
 A defect that only the heavy or serial mode shows now surfaces within a day, before the owner's promotion, and the hub names the tests that failed.
 
-Delivery can wait up to a day after a red nightly: the loop starts no new work on a landing branch whose full suite is red, until the next nightly is green. A nightly that never runs again would hold delivery for longer, which is a defect in the schedule and not a defect in the rule.
+A tip the nightly has not seen is delivered on, unproven, until the next nightly proves it. The risk is bounded to one nightly: a defect that only a heavy call shows can land before the nightly names it, and the red record then holds the next tip.
 
 The nightly spends the machine's time on the order of a full suite once a day. It never adds a gate, so no entry and no landing becomes slower.
 

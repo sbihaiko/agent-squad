@@ -51,6 +51,10 @@ CHILD = {"output": {"diff": {"files": [{"path": "a.py"}]}, "ac_commands": ["true
 def engine(tmp_path, script, **kw):
     d = router()
     d["run"]["deadline"] = 7200
+    # A failed attempt keeps its whole grant (ADR-0108: an unmeasured call may have paid), so a run cap of 40 funds exactly
+    # five attempts of 8. The test owns the cap, like the child spend in helpers.route, so it measures the fallthrough and
+    # not the shipped budget when the envelope grows.
+    d["run"]["spend_cap"] = 8 * (len(node(d, "route")["allow"]["models"]) + 2)
     kw.setdefault("target", sibling_repo(tmp_path))
     return Engine(from_doc(d), ScriptedAdapter(script, **kw.pop("adapter", {})), tmp_path, **kw)
 

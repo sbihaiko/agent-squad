@@ -42,11 +42,11 @@ def test_two_live_entries_never_share_a_label():
     assert {k: v for k, v in seen.items() if len(v) > 1} == {}
 
 
-def test_the_deepseek_flash_pair_reads_by_its_variant():
+def test_the_legacy_deepseek_spelling_is_one_row_not_two():
     labels = {m["id"]: m["label"] for m in _models()}
-    # #683: the canonical id uses tools and takes the plain name; the legacy id carries the variant word
+    # #730: one model, one id. #683's second row, which carried the variant word, is retired; the legacy spelling is an alias.
     assert labels["deepseek-flash"] == "DeepSeek V4.1 Flash"
-    assert labels["deepseek-v4-flash"] == "DeepSeek V4.1 Flash legacy"
+    assert "deepseek-v4-flash" not in labels
 
 
 def _mdl_name(box, mid):

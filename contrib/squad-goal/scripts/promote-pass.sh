@@ -21,6 +21,11 @@ mark() {  # <tip> <reason>: one marker and one line per tip
   echo "$(date -u +%FT%TZ) promote-pass: $1 $2" >> "$log"; echo "promote-pass: $1 $2"; }
 if [ "${1:-}" = --hold ]; then   # inside the gate lock: suite, full line, commit status, read-back, promotion
   tip=$2; . "$d/ghcall.sh"; unset SG_GATE_STATUS SG_GATE_KIND   # the suite inherits no gate setting of this hold
+  # The proof reserves what it measures (#739): the dispatchers read this marker (gh_dispatch_hold) and start no run while it
+  # stands, so the suite is not measured against the next wave landing. Its bound is the gate lock's own (SERIAL_HOLD_SECONDS),
+  # and the trap removes it on exit, INT and TERM, so a stopped proof leaves nothing behind.
+  printf '%s %s\n' "$(date +%s)" "$$" > "$state/promote-reserve.$$" && mv "$state/promote-reserve.$$" "$state/promote-reserve"
+  trap 'rm -f "$state/promote-reserve"' EXIT INT TERM
   [ "$(g rev-parse HEAD)" = "$tip" ] || { mark "$tip" "not promoted: the clean tree is not at the tip"; exit 1; }
   py=${SG_GATE_PY:-${SG_CHECKOUT:+$SG_CHECKOUT/.venv/bin/python}}; [ -x "$py" ] || py=python3
   suite=${SG_PROMOTE_SUITE:-"$py -m ruff check squad tests && $py -m mypy squad && $py -m pytest -p no:deepeval -n ${SG_PROMOTE_WORKERS:-$(sg_battery_workers)} && $py -m pytest -p no:deepeval -p no:xdist"}
@@ -49,7 +54,7 @@ cores=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 1)
 limit=${SG_PROMOTE_LOAD_LIMIT:-$cores}
 load1=$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}' | tr -d '{}')
 load1=${load1:-$(cut -d' ' -f1 /proc/loadavg 2>/dev/null)}; load1=${load1:-0}
-if [ -s "$live" ] || awk -v l="$load1" -v m="$limit" 'BEGIN { exit !(l + 0 >= m + 0) }'; then
+if /usr/bin/grep -q . "$live" 2>/dev/null || awk -v l="$load1" -v m="$limit" 'BEGIN { exit !(l + 0 >= m + 0) }'; then
   l="promote-pass: $tip not proven: machine loaded (load $load1 on $cores cores, limit $limit, $(/usr/bin/grep -c . "$live" 2>/dev/null || echo 0) live runs)"
   echo "$(date -u +%FT%TZ) $l" >> "$log"; echo "$l"; exit 0
 fi
@@ -57,8 +62,11 @@ fi
 g remote set-url origin "$remote"
 o=$(g fetch -q origin "+refs/heads/dev:refs/remotes/origin/dev" "+refs/heads/stg:refs/remotes/origin/stg" 2>&1) || { echo "promote-pass: fetch failed: $(printf '%s' "$o" | tail -1)" >&2; exit 1; }
 [ "$(g rev-parse origin/dev)" = "$tip" ] || exit 0   # dev moved under the read: a later pass takes the new tip
-[ "$(g rev-parse origin/stg)" = "$tip" ] && exit 0
-g merge-base --is-ancestor origin/stg "$tip" || { mark "$tip" "not promoted: stg is not an ancestor of dev, no fast-forward"; exit 1; }
+g merge-base --is-ancestor "$tip" origin/stg && exit 0   # the dev tip is already in stg
+# A promotion leaves a merge commit in stg (#743), so stg is never an ancestor of the next dev tip: only the work stg holds and
+# dev lacks decides. Any plain commit there is the owner's to resolve, and no suite is spent on it.
+o=$(g rev-list --no-merges "$tip..origin/stg" 2>/dev/null) || o=
+[ -z "$o" ] || { mark "$tip" "not promoted: stg holds $(printf '%s\n' "$o" | /usr/bin/grep -c .) commit(s) the dev tip lacks; the owner resolves it"; exit 1; }
 g checkout -q -f --detach "$tip" && g clean -q -ffdx || { mark "$tip" "not promoted: the clean tree could not check out the tip"; exit 1; }
 SERIAL_TRY=1 SG_GATE_STATUS=self SG_GATE_KIND=full bash "$d/gate.sh" bash "$0" --hold "$tip" 2>"$state/promote-pass.err"; rc=$?
 [ $rc = 73 ] && exit 0   # another gate holds the lock: this tick is skipped, never queued

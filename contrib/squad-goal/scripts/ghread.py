@@ -276,7 +276,7 @@ _PULLS_QUERY = """query($owner: String!, $repo: String!) {
     pullRequests(states: OPEN, first: %d, orderBy: {field: CREATED_AT, direction: DESC}) {
       pageInfo { hasNextPage }
       nodes {
-        number title body isDraft headRefName headRefOid
+        number title body isDraft headRefName headRefOid baseRefName
         labels(first: 100) { nodes { name } }
         reviewThreads { totalCount }
         commits(last: 1) {
@@ -381,6 +381,7 @@ def _pull(node: Any) -> dict[str, Any]:
         "state": "open",
         "draft": node.get("isDraft") is True,
         "head": {"ref": node.get("headRefName"), "sha": node.get("headRefOid")},
+        "base": {"ref": node.get("baseRefName")},
         "labels": _labels(node.get("labels")),
         "review_threads": _total(node.get("reviewThreads")) if node.get("reviewThreads") is not None else None,
         "check_rollup": _check_rollup(node.get("commits")),

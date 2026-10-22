@@ -64,6 +64,7 @@ eval "$(printf '%s\n' "$_sg_ctx" | /usr/bin/grep -E '^(SG_STATE|SG_SHARED|SG_BOA
 # without a code change.
 : "${SG_PENDING_WINDOW_SECONDS:=120}"
 : "${SG_PENDING_OVERLAY:=on}"
+sg_gate_cmds   # (#740) the gate commands a request names: the profile's, or none where the checkout lacks agent-squad's scripts
 # The retired SG_TOOLING_REPO is one more entry of SG_REPOS, and the key is not read again (the seam lists it once).
 if [ -n "${SG_TOOLING_REPO:-}" ]; then
   SG_REPOS=$(sg_repos | tr '\n' ' '); SG_REPOS=${SG_REPOS% }

@@ -61,6 +61,22 @@ class Children:
             e.budget.release(res)
         return e.outcomes.child(name, outcome, reasons, artifact, extra, parent=acc["parent"], depth=acc["depth"], entry=entry)
 
+    def ledger_held(self, name):
+        """The cause of a child its issue ledger held, and "" for any other child: the issue is frozen for the owner
+        (ADR-0149 rule 4, ADR-0029). A dependent of such a child inherits the hold, so a chain of dependents stays a hold
+        and `first_failure` reads it too, and a hold never turns into a failure."""
+        done = self.e.done.get((name, 1, None))
+        if done and done["outcome"] == "needs-human" and done["reasons"][:1] in (["ledger_held"], ["after_held"]):
+            return " ".join(str(r) for r in done["reasons"][1:]) or "ledger_held"
+        return ""
+
+    @staticmethod
+    def held_by_ledger(done):
+        """True when this outcome is a ledger hold, the child's own or the one a dependent inherited: it asks the owner,
+        so it cancels no sibling and fails no dependent."""
+        return (done["outcome"] == "needs-human" and bool(done["reasons"])
+                and done["reasons"][0] in ("ledger_held", "after_held"))
+
     def run_checks(self, disp, output, cwd):
         """The `checks` gates run after every child. A child cannot omit or edit them."""
         e = self.e
@@ -111,8 +127,15 @@ class Children:
                     ctx.held.append(name)
                     ctx.waits.setdefault(name, anyio.Event()).set()
                     return
-                if blocked:
+                held = "" if blocked else e.dispatch.ledger_hold(e.dispatch.children[name]["definition"])
+                holding = [(dep, cause) for dep in (blocked or []) if (cause := self.ledger_held(dep))]
+                if holding:           # a dependent of a held issue asks the owner with it, never fails `after_failed` (ADR-0029)
+                    done = self.outcome(name, "needs-human",
+                                        ["after_held", *[dep for dep, _ in holding], *dict.fromkeys(c for _, c in holding)], None, {})
+                elif blocked:
                     done = self.outcome(name, "fail", ["after_failed", *blocked], None, {})
+                elif held:                                      # a held issue ledger starts no session: the owner is asked (ADR-0149 rule 4, ADR-0029)
+                    done = self.outcome(name, "needs-human", ["ledger_held", held], None, {})
                 else:
                     async with ctx.limiter:
                         done = await self.admitted(ctx, name)
@@ -121,7 +144,7 @@ class Children:
                     with anyio.CancelScope(shield=True):
                         self.outcome(name, "fail", ["cancelled", "not_started"], None, {})
                 raise
-            if done["outcome"] != "pass" and ctx.node["join"] == "first_failure":
+            if done["outcome"] != "pass" and ctx.node["join"] == "first_failure" and not self.held_by_ledger(done):
                 ctx.cancel.cancel()
         ctx.waits.setdefault(name, anyio.Event()).set()
         ctx.results.append((name, done["outcome"], done["reasons"]))
@@ -176,8 +199,9 @@ class Children:
         dl, ws = min(d["deadline"] * e.scale, ctx.dl_at - e.clock()), str(self.workspace(name, d))
         # A child answers on the envelope's `allow.models`, led by the model its request names. A provider that refuses
         # to serve is an outage, not a defect of the work, so the chain moves on; the worktree is cut once and kept.
+        # A requeued issue starts its first entry where the issue ledger says its last attempt stopped (ADR-0151 rule 2).
         spent, hours, hour = e.options.get("spent_models") or [], e.options.get("model_hours") or {}, time.localtime(e.wall()).tm_hour
-        first = coder or d["model"]
+        first = coder or (e.dispatch.moved(ctx.node, d) if entry == 1 else d["model"])
         chain = session.model_chain(ctx.node["allow"]["models"], first, spent, hours, hour, e.options.get("model_order") or [])
         for m, why in session.hours_skipped(ctx.node["allow"]["models"], first, spent, hours, hour):    # an entry left out of its window is on the record
             e.record.append("model_skipped", node=name, entry=entry, model=m, reason=why)

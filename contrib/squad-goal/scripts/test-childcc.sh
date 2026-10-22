@@ -256,13 +256,13 @@ pass rnr >/dev/null
 [ "$(/usr/bin/grep -c '^rnr 5803' "$T/cr.calls")" = 1 ] && ok "a child whose run gate answered no_review is reviewed as before" || ko "no_review: reviews '$(cat "$T/cr.calls")'"
 rrun rst 5300 pass '' approve; : > "$WAVE_CALLS"; : > "$T/cr.calls"
 pass rst >/dev/null; pass rst >/dev/null
-[ "$(/usr/bin/grep -c '^rst 5300' "$T/cr.calls")" = 1 ] && [ "$(ent rst 5300)" = 2 ] && ok "an approved child its entry holds is reviewed here on the next pass" || ko "approved but held: reviews '$(cat "$T/cr.calls")', entries '$(cat "$WAVE_CALLS")'"
+[ ! -s "$T/cr.calls" ] && [ "$(ent rst 5300)" = 2 ] && [ ! -e "$T/st/auto/apphold-rst-c" ] && ok "an approved child its entry holds is never reviewed here: its approval binds to its head (ADR-0151 rules 4 and 5)" || ko "approved but held: reviews '$(cat "$T/cr.calls")', entries '$(cat "$WAVE_CALLS")'"
 
 # A dispatch child with fix entries (#570) has one passing `outcome` per entry, entry 1, 2, ... of the same child. The pass
 # works the child once, at its last entry's head: one review and one entry, never one per entry (#611).
 mkdir -p "$T/co/runs/fx"; { echo '{"event": "spawn_accepted", "child": "c", "definition": "GitHub issue #5900"}'
   echo '{"event": "outcome", "node": "c", "entry": 1, "outcome": "pass", "reasons": ["one"]}'
-  echo '{"event": "review_round", "node": "c", "round": 1, "head": "h1", "verdict": "fix"}'
+  echo '{"event": "review_round", "node": "c", "round": 1, "head": "h1", "verdict": "no_review"}'
   echo '{"event": "outcome", "node": "c", "entry": 2, "outcome": "pass", "reasons": ["two"]}'
   echo '{"event": "land", "node": "c", "parent": "route", "entry": 1, "outcome": "pass", "reasons": [], "effect": {"name": "merge_land"}}'; } > "$T/co/runs/fx/record.jsonl"   # a live run that reviews its child works it only after its land (#696)
 wtree fx; /usr/bin/git -C "$T/co/runs/fx/ws/target-c" -c user.email=a@b -c user.name=t commit -q --allow-empty -m entry2
@@ -300,8 +300,8 @@ k=$(git symbolic-ref --quiet --short HEAD | tr / _); cp "$FIX_DIR/verdict-$2" "$
 CR
 cat > "$T/wave.sh" <<'W'
 #!/bin/bash
+[ "$1" = expired ] && exit 1    # the wave's age cap: not reached here, and a read that writes nothing
 echo "$*" >> "$WAVE_CALLS"
-[ "$1" = expired ] && exit 1
 [ "$1" = requeue ] && { echo "WAVE REQUEUE #$2: $3"; exit 0; }
 k=$(git symbolic-ref --quiet --short HEAD | tr / _)
 head -1 "$SG_STATE/review-$k.md" | /usr/bin/grep -q 'VERDICT: APPROVE' || { echo "WAVE HOLD #$3: the review of x did not approve it: $(head -1 "$SG_STATE/review-$k.md")"; exit 1; }
@@ -355,19 +355,19 @@ out=$(fixpass cst 6101); fixpass cst 6101 >/dev/null
 # and the verdict comes in the child's `land` event. Until that event (or the run's verdict) the child is not pending here:
 # no review, no fix run, no requeue, no Code Review move, so no second session edits the worktree the run still fixes.
 # The run reviews its children when its dispatch node names a review gate (graph.json), or its record holds a review event.
-lrun() { # name issue graph(g: a review gate in graph.json, else none) extra-record-lines...
-  local n=$1 i=$2 g=$3; shift 3; mkdir -p "$T/co/runs/$n"
+lrun() { # name issue graph(g: a review gate in graph.json, else none) extra-record-lines... (@HEAD@ is the child's head)
+  local n=$1 i=$2 g=$3 h; shift 3; mkdir -p "$T/co/runs/$n"; wtree "$n"; h=$(/usr/bin/git -C "$T/co/runs/$n/ws/target-c" rev-parse HEAD)
   { echo '{"event": "spawn_accepted", "child": "c", "envelope": "route", "definition": "GitHub issue #'$i'"}'
-    echo '{"event": "outcome", "node": "c", "entry": 1, "outcome": "pass", "reasons": ["ok"]}'; for l in "$@"; do echo "$l"; done; } > "$T/co/runs/$n/record.jsonl"
+    echo '{"event": "outcome", "node": "c", "entry": 1, "outcome": "pass", "reasons": ["ok"]}'; for l in "$@"; do echo "${l//@HEAD@/$h}"; done; } > "$T/co/runs/$n/record.jsonl"
   [ "$g" = g ] && echo '{"nodes": [{"name": "route", "kind": "dispatch", "review": "review_gate"}]}' > "$T/co/runs/$n/graph.json"
-  wtree "$n"; echo "wave/$n" > "$T/st/auto/wave-$n"; echo "wave/$n" > "$T/st/auto/waved-$n"; }
+  echo "wave/$n" > "$T/st/auto/wave-$n"; echo "wave/$n" > "$T/st/auto/waved-$n"; }
 lpass() { echo "$T/co/runs/$1" > "$T/st/active-runs.txt"; (cd "$T/co" && SG_BOARD_VOCAB=shipped SG_CHILDCC_BUDGET=5 python3 "$T/childcc.py.run" 2>&1); }
 untouched() { # name issue out: the pass did not work the child
   ! /usr/bin/grep -q "^$1 $2 " "$T/fix.calls" && ! /usr/bin/grep -q " $2\$\| $2 " "$WAVE_CALLS" && [ ! -e "$T/st/auto/ccfix-$1-c" ] && [ ! -e "$T/st/auto/cc-$1-c" ] \
     && ! /usr/bin/grep -q "CODE REVIEW\|CHILD REVIEW\|CHILD FIX" <<<"$3"; }
 printf '**VERDICT: CHANGES**\n- [Blocking] c.py:1 the run still fixes this\n' > "$T/verdict-6200"; printf '**VERDICT: CHANGES**\n- [Blocking] c.py:2 x\n' > "$T/verdict-6201"
 export GH_NUMS="6200:Doing 6201:Doing 6202:Doing"; : > "$WAVE_CALLS"; : > "$T/fix.calls"; rm -f "$T/moves"
-lrun lv 6200 - '{"event": "review_round", "node": "c", "round": 1, "head": "h1", "verdict": "fix"}' '{"event": "call_start", "node": "c", "entry": 2}'
+lrun lv 6200 - '{"event": "review_round", "node": "c", "round": 1, "head": "@HEAD@", "verdict": "fix"}' '{"event": "call_start", "node": "c", "entry": 2}'
 out=$(lpass lv)
 untouched lv 6200 "$out" && ok "a child its live run reviews and fixes is not worked before its land event" || ko "live run's child worked: fix '$(cat "$T/fix.calls")', waves '$(cat "$WAVE_CALLS")', out $out"
 ! /usr/bin/grep -q ' 6200$' "$T/moves" 2>/dev/null && ok "a child its live run still owns moves no card" || ko "card moved: $(cat "$T/moves")"
@@ -376,7 +376,107 @@ untouched lg 6201 "$out" && ok "a passed child of a live run whose dispatch name
 echo '{"event": "land", "node": "c", "parent": "route", "entry": 2, "outcome": "pass", "reasons": [], "effect": {"name": "review", "review": {"verdict": "approve"}}}' >> "$T/co/runs/lv/record.jsonl"
 rm -f "$T"/st/review-*; out=$(lpass lv)   # the review files of the earlier cases name the same branch
 [ "$(/usr/bin/grep -c '^enter lv 6200' "$WAVE_CALLS")" = 1 ] && [ ! -s "$T/fix.calls" ] && ok "after its land event the child is worked as before" || ko "after land: waves '$(cat "$WAVE_CALLS")', fix '$(cat "$T/fix.calls")', out $out"
-lrun lf 6202 g; echo '{"event": "verdict"}' >> "$T/co/runs/lf/record.jsonl"; out=$(lpass lf)
-/usr/bin/grep -q '^enter lf 6202' "$WAVE_CALLS" && ok "a child of a finished run with no land event is worked as before" || ko "finished run: waves '$(cat "$WAVE_CALLS")', out $out"
+lrun lf 6202 g; echo '{"event": "verdict"}' >> "$T/co/runs/lf/record.jsonl"; : > "$WAVE_CALLS"; : > "$T/cr.calls"; out=$(lpass lf); rc=$?
+untouched lf 6202 "$out" && [ "$rc" = 3 ] && ok "a child of a finished review-gate run with no approval is neither entered nor reviewed: its delivery holds" || ko "finished run: exit $rc, waves '$(cat "$WAVE_CALLS")', out $out"
+
+# One owner per child and per worktree (ADR-0151 rules 4 and 5, #701). A run that reviewed a child owns it: childcc never
+# reviews it, starts no fix run for it and never asks the wave to merge it on its own reading. The run's approval binds to
+# the head its review read (rule 4), so a child at another head, or one whose run approved no head, holds its delivery
+# (rule 5), and only a child whose approval stands enters the wave. The wave stub below carries wave.sh's review evidence:
+# the verdict, the base it was read against, and the head it read.
+cat > "$T/childreview.sh" <<'CR'
+#!/bin/bash
+echo "$* $(git rev-parse HEAD)" >> "$FIX_DIR/cr.calls"
+CR
+cat > "$T/wave.sh" <<'W'
+#!/bin/bash
+[ "$1" = expired ] && exit 1    # the wave's age cap: not reached here, and a read that writes nothing
+echo "$*" >> "$WAVE_CALLS"
+[ "$1" = requeue ] && { echo "WAVE REQUEUE #$2: $3"; exit 0; }
+k=$(git symbolic-ref --quiet --short HEAD | tr / _); h=$(git rev-parse HEAD)
+[ -s "$SG_STATE/review-$k.md" ] || { echo "WAVE HOLD #$3: no review of $k yet: a child never enters a wave unreviewed"; exit 1; }
+[ "$(cat "$SG_STATE/review-$k.base" 2>/dev/null)" = "wave/$1" ] || { echo "WAVE HOLD #$3: the review of $k was read against '$(cat "$SG_STATE/review-$k.base" 2>/dev/null)', not wave/$1"; exit 1; }
+[ "$(cat "$SG_STATE/review-$k.sha" 2>/dev/null)" = "$h" ] || { echo "WAVE HOLD #$3: the review of $k read $(cut -c1-9 "$SG_STATE/review-$k.sha" 2>/dev/null), not HEAD ${h:0:9}"; exit 1; }
+head -1 "$SG_STATE/review-$k.md" | /usr/bin/grep -q 'VERDICT: APPROVE' || { echo "WAVE HOLD #$3: the review of $k did not approve it: $(head -1 "$SG_STATE/review-$k.md")"; exit 1; }
+echo "WAVE x entered (#$3)"
+W
+orun() { # run issue review-verdict [land]: a finished run whose review gate read child c's one head; prints that head
+  local n=$1 i=$2 v=$3 l=${4:-} rd="$T/co/runs/$1" h; wtree "$n"; h=$(/usr/bin/git -C "$rd/ws/target-c" rev-parse HEAD)
+  { echo '{"event": "spawn_accepted", "child": "c", "envelope": "route", "definition": "GitHub issue #'$i'"}'
+    echo '{"event": "outcome", "node": "c", "outcome": "pass", "reasons": ["ok"]}'
+    echo '{"event": "review_round", "node": "c", "round": 1, "head": "'$h'", "verdict": "'$v'", "offered": false, "review": {"verdict": "'$v'", "findings": "x"}}'
+    [ -n "$l" ] && echo '{"event": "land", "node": "c", "parent": "route", "entry": 1, "outcome": "pass", "reasons": [], "effect": {"name": "merge_land", "before": "b", "head": "h", "review": {"verdict": "'$v'", "findings": "x"}, "rounds": 1}}'
+    echo '{"event": "verdict"}'; } > "$rd/record.jsonl"
+  echo "wave/$n" > "$T/st/auto/wave-$n"; echo "wave/$n" > "$T/st/auto/waved-$n"; printf '%s\n' "$h"; }
+rfile() { # run head verdict: the review evidence the run's gate wrote for the child's branch, as runreview.sh leaves it
+  local k; k=$(/usr/bin/git -C "$T/co/runs/$1/ws/target-c" symbolic-ref --quiet --short HEAD | tr / _)
+  printf '**VERDICT: %s**\n- [Blocking] a.py:1 x\n' "$3" > "$T/st/review-$k.md"
+  echo "wave/$1" > "$T/st/review-$k.base"; echo "$2" > "$T/st/review-$k.sha"; }
+# (a) a child its run reviewed and did not approve is neither reviewed nor fixed here, and its delivery holds.
+export GH_NUMS="6300:Doing 6301:Doing"; rm -f "$T"/st/review-*
+orun miss 6300 hold >/dev/null; : > "$T/cr.calls"; : > "$T/fix.calls"; : > "$WAVE_CALLS"; rm -f "$T/moves"
+out=$(lpass miss); rc=$?
+[ ! -s "$T/cr.calls" ] && ok "a run-owned child its run did not approve is not reviewed by childcc" || ko "childcc reviewed it: $(cat "$T/cr.calls")"
+[ ! -s "$T/fix.calls" ] && [ ! -s "$WAVE_CALLS" ] && ok "a run-owned child its run did not approve starts no fix run and enters nothing" || ko "waves '$(cat "$WAVE_CALLS")', fix '$(cat "$T/fix.calls")'"
+[ "$rc" = 3 ] && ok "a run-owned child its run did not approve holds its delivery" || ko "held child: exit $rc: $out"
+/usr/bin/grep -q ' 6300$' "$T/moves" 2>/dev/null && ko "a held run-owned child moved its card" || ok "a held run-owned child moves no card"
+echo "$out" | /usr/bin/grep -q 'RUN-OWNED #6300' && ok "the pass names the run-owned child it holds" || ko "no hold line: $out"
+# (b) the approval binds to the reviewed commit: a new head makes it stale, and nothing enters.
+h=$(orun stale 6301 approve land); rfile stale "$h" APPROVE
+/usr/bin/git -C "$T/co/runs/stale/ws/target-c" -c user.email=a@b -c user.name=t commit -q --allow-empty -m after-approval
+: > "$T/cr.calls"; : > "$T/fix.calls"; : > "$WAVE_CALLS"; rm -f "$T/moves"
+out=$(lpass stale); rc=$?; out2=$(lpass stale); rc2=$?
+[ ! -s "$T/cr.calls" ] && ok "a run-owned child whose approval went stale is not reviewed by childcc" || ko "childcc reviewed it: $(cat "$T/cr.calls")"
+[ ! -s "$T/fix.calls" ] && [ ! -s "$WAVE_CALLS" ] && ok "a stale approval enters nothing and starts no fix run" || ko "waves '$(cat "$WAVE_CALLS")', fix '$(cat "$T/fix.calls")'"
+[ "$rc" = 3 ] && [ "$rc2" = 3 ] && ok "a stale approval holds the child's delivery on every pass" || ko "stale approval: exit $rc, then $rc2: $out $out2"
+/usr/bin/grep -q ' 6301$' "$T/moves" 2>/dev/null && ko "a child whose approval went stale moved its card" || ok "a child whose approval went stale moves no card"
+echo "$out" | /usr/bin/grep -q 'RUN-OWNED #6301' && ok "the pass names the stale approval it holds" || ko "no hold line: $out"
+# (b2) a run-owned child whose own land failed on missing review evidence (a review deadline, or a review that held it) is
+# neither requeued nor worked here: the run's review is the only evidence, and missing evidence holds delivery (ADR-0151
+# rule 5). The failed-land requeue is for a failure unrelated to the review, so it reads the approval first.
+orun_fail() { # run issue verdict reason: a finished run whose review gate held child c, and whose land failed on it; prints the head
+  local n=$1 i=$2 v=$3 r=$4 rd="$T/co/runs/$1" h; wtree "$n"; h=$(/usr/bin/git -C "$rd/ws/target-c" rev-parse HEAD)
+  { echo '{"event": "spawn_accepted", "child": "c", "envelope": "route", "definition": "GitHub issue #'$i'"}'
+    echo '{"event": "outcome", "node": "c", "outcome": "pass", "reasons": ["ok"]}'
+    echo '{"event": "review_round", "node": "c", "round": 1, "head": "'$h'", "verdict": "'$v'", "offered": false, "review": {"verdict": "'$v'", "findings": "x"}}'
+    echo '{"event": "land", "node": "c", "parent": "route", "entry": 1, "outcome": "fail", "reasons": ["'$r'"], "effect": {"name": "review", "before": "b", "head": "'$h'", "review": {"verdict": "'$v'", "findings": "x"}, "rounds": 1}}'
+    echo '{"event": "verdict"}'; } > "$rd/record.jsonl"
+  echo "wave/$n" > "$T/st/auto/wave-$n"; echo "wave/$n" > "$T/st/auto/waved-$n"; printf '%s\n' "$h"; }
+export GH_NUMS="6320:Doing 6321:Doing 6322:Doing"
+orun_fail rhl 6320 hold review_held >/dev/null; : > "$T/cr.calls"; : > "$T/fix.calls"; : > "$WAVE_CALLS"; rm -f "$T/moves"
+out=$(lpass rhl); rc=$?
+[ ! -s "$T/cr.calls" ] && [ ! -s "$T/fix.calls" ] && ok "a run-owned child its land held on review_held is not reviewed or fixed by childcc" || ko "reviews '$(cat "$T/cr.calls")', fix '$(cat "$T/fix.calls")'"
+! /usr/bin/grep -q '^requeue 6320' "$WAVE_CALLS" && ok "a run-owned child its land held on review_held is not requeued by childcc" || ko "childcc requeued it: $(cat "$WAVE_CALLS")"
+[ "$rc" = 3 ] && ok "a run-owned child whose land held on review_held holds its delivery" || ko "review_held: exit $rc: $out"
+/usr/bin/grep -q ' 6320$' "$T/moves" 2>/dev/null && ko "a run-owned child held on review_held moved its card" || ok "a run-owned child held on review_held moves no card"
+orun_fail rdl 6321 deadline review_deadline >/dev/null; : > "$T/cr.calls"; : > "$T/fix.calls"; : > "$WAVE_CALLS"; rm -f "$T/moves"
+out=$(lpass rdl); rc=$?
+! /usr/bin/grep -q '^requeue 6321' "$WAVE_CALLS" && [ "$rc" = 3 ] && ok "a run-owned child whose review ran out of time is not requeued: its delivery holds" || ko "review_deadline: exit $rc, waves '$(cat "$WAVE_CALLS")': $out"
+# (b3) a failed land for a reason that is not the review still requeues a child whose approval stands on its head: the
+# approval is established, and the failure is the landing's own (ADR-0151 rule 5 reads the evidence first, never the reason text).
+h=$(orun_fail rok 6322 approve merge_conflict); : > "$T/cr.calls"; : > "$T/fix.calls"; : > "$WAVE_CALLS"; rm -f "$T/moves"
+out=$(lpass rok); rc=$?
+/usr/bin/grep -q '^requeue 6322 .*its landing failed: merge_conflict' "$WAVE_CALLS" && ok "a failed land unrelated to the review still requeues a child whose approval stands" || ko "standing approval: waves '$(cat "$WAVE_CALLS")': $out"
+[ ! -s "$T/cr.calls" ] && [ ! -s "$T/fix.calls" ] && ok "the run-owned child is never reviewed or fixed here, standing approval or not" || ko "reviews '$(cat "$T/cr.calls")', fix '$(cat "$T/fix.calls")'"
+# (c) the wave merges only a child whose approval stands: its run approved it on that head, and its review evidence is there.
+mkdir -p "$T/co/runs/pick"; wtree pick a; wtree pick b
+ha=$(/usr/bin/git -C "$T/co/runs/pick/ws/target-a" rev-parse HEAD); hb=$(/usr/bin/git -C "$T/co/runs/pick/ws/target-b" rev-parse HEAD)
+{ echo '{"event": "spawn_accepted", "child": "a", "envelope": "route", "definition": "GitHub issue #6310"}'
+  echo '{"event": "spawn_accepted", "child": "b", "envelope": "route", "definition": "GitHub issue #6311"}'
+  echo '{"event": "outcome", "node": "a", "outcome": "pass", "reasons": ["ok"]}'
+  echo '{"event": "outcome", "node": "b", "outcome": "pass", "reasons": ["ok"]}'
+  echo '{"event": "review_round", "node": "a", "round": 1, "head": "'$ha'", "verdict": "approve", "offered": false, "review": {"verdict": "approve", "findings": "x"}}'
+  echo '{"event": "review_round", "node": "b", "round": 1, "head": "'$hb'", "verdict": "hold", "offered": false, "review": {"verdict": "hold", "findings": "y"}}'
+  echo '{"event": "land", "node": "a", "parent": "route", "entry": 1, "outcome": "pass", "reasons": [], "effect": {"name": "merge_land", "before": "b0", "head": "h0", "review": {"verdict": "approve", "findings": "x"}, "rounds": 1}}'
+  echo '{"event": "verdict"}'; } > "$T/co/runs/pick/record.jsonl"
+echo wave/pick > "$T/st/auto/wave-pick"; echo wave/pick > "$T/st/auto/waved-pick"
+ka=$(/usr/bin/git -C "$T/co/runs/pick/ws/target-a" symbolic-ref --quiet --short HEAD | tr / _)
+printf '**VERDICT: APPROVE**\n' > "$T/st/review-$ka.md"; echo wave/pick > "$T/st/review-$ka.base"; echo "$ha" > "$T/st/review-$ka.sha"
+: > "$T/cr.calls"; : > "$T/fix.calls"; : > "$WAVE_CALLS"; rm -f "$T/moves"
+out=$(lpass pick); rc=$?
+[ "$(/usr/bin/grep -c '^enter pick 6310' "$WAVE_CALLS")" = 1 ] && ok "the wave merges the child its run approved on that head" || ko "approved child not entered: $(cat "$WAVE_CALLS")"
+[ "$(/usr/bin/grep -c '^enter pick 6311' "$WAVE_CALLS")" = 0 ] && ok "the wave merges no child its run did not approve" || ko "unapproved child entered: $(cat "$WAVE_CALLS")"
+[ ! -s "$T/cr.calls" ] && [ ! -s "$T/fix.calls" ] && ok "neither run-owned child is reviewed or fixed by childcc" || ko "reviews '$(cat "$T/cr.calls")', fix '$(cat "$T/fix.calls")'"
+[ "$rc" = 3 ] && ok "the child its run did not approve holds the pass, so the wave waits for it" || ko "pick: exit $rc: $out"
 
 rm -rf "$T"; exit $fail

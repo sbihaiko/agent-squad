@@ -18,6 +18,11 @@ Check with the user that these seams match their expectations.
 
 3. Write the spec using the template below, then publish it to the project issue tracker. Apply the `spec` label and no `ready-for-agent` label: a spec is never work, its tickets are, and they carry `ready-for-agent`. Where the tracker has a board, create the spec's card in **Backlog**. The owner starts the spec by moving its card to Todo, and its tickets in Backlog follow it there. The loop never moves a card into Backlog or Todo on its own.
 
+   **Verify the spec label before you report the spec published.** A spec without it is invisible to the squad hub's Specs filter and can be dispatched as work.
+   - Before creating the issue, make sure the label exists (on GitHub: `gh label create spec --color 5319E7 --description "A spec: never work itself; its sub-issue tickets are" --force`).
+   - After creating it, read the labels back (`gh issue view <n> --json labels`). They must include `spec` and must not include `ready-for-agent`. Drop `needs-triage`: a published spec is triaged.
+   - A sibling spec (one that another spec depends on) is a spec too and gets the same label.
+
 A spec is a document, never work. Its breakdown into tickets (`/to-tickets`) needs the owner's approval. The autonomy panel never approves a breakdown unless the owner asked for it in the session; with the owner away, the breakdown waits.
 
 <spec-template>

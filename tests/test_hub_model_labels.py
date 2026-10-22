@@ -33,7 +33,7 @@ def hub():
 def test_a_deepseek_spelling_reads_as_its_v4_1_label(hub):
     labels = hub.model_labels(["claude-deepseek-flash[1m]", "claude-deepseek-v4-flash"])
     assert labels["claude-deepseek-flash[1m]"] == "DeepSeek V4.1 Flash"   # #683: the canonical V4.1 id uses tools; the #687 scheme names no variant
-    assert labels["claude-deepseek-v4-flash"] == "DeepSeek V4.1 Flash legacy"   # #683: the legacy id
+    assert labels["claude-deepseek-v4-flash"] == "DeepSeek V4.1 Flash"   # #730: the legacy spelling is an alias of the one row
 
 
 def test_an_id_the_registry_does_not_know_has_no_label(hub):

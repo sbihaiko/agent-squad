@@ -21,6 +21,20 @@ adv() { $W fetch -q origin; $W checkout -q -B "$1" "origin/$1"; $W commit -q --a
 ci() { printf '#!/bin/bash\necho "ci read %s" >> "%s/ci.log"\necho "%s"\n' "$1" "$T" "$1" > "$T/ci"; chmod +x "$T/ci"; export SG_CI_STATE_CMD=$T/ci; }
 # line <kind> <result> <sha>: gate.sh keeps the full result apart from the hub's latest status.
 line() { printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$1" "$2" "$3" > "$SG_STATE/gate-status"; [ "$1" != full ] || cp "$SG_STATE/gate-status" "$SG_STATE/gate-status-full"; }
+# The stub GitHub (#743): the open dev -> stg pull request lives in $T/pr, and merging it moves stg through the same bare
+# remote a real merge moves. It logs every call, so a test names the route the promotion read or wrote, and proves no push.
+mkdir -p "$T/bin"
+cat > "$T/bin/gh" <<EOF
+#!/bin/bash
+echo "\$*" >> "$T/gh.log"
+case "\$*" in
+  *graphql*) if [ -e "$T/pr" ]; then printf '{"data":{"repository":{"pullRequests":{"nodes":[{"number":%s,"headRefName":"dev","baseRefName":"stg","isDraft":false,"labels":{"nodes":[]}}],"pageInfo":{"hasNextPage":false}}}}}\n' "\$(cat "$T/pr")"; else echo '{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}'; fi;;
+  *"-X POST repos/x/emu/pulls"*) echo 7 > "$T/pr"; echo '{"number":7}';;
+  *"-X PUT repos/x/emu/pulls/"*"/merge"*) if git -C "$T/w" fetch -q origin && git -C "$T/w" push -q origin origin/dev:refs/heads/stg; then rm -f "$T/pr"; echo '{"merged":true,"message":"Pull Request successfully merged"}'; else echo '{"merged":false,"message":"Pull Request is not mergeable"}'; fi;;
+  *) echo '{}';;
+esac
+EOF
+chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 # The promotion proof is a profile setting (#439): the default lives in env.sh after the profile, so a profile that names it
 # wins. The real env.sh is sourced under a throwaway profile directory, so the value is read from the code the loop runs.
 env_proof() {  # $1: the profile's own lines. Prints the SG_PROMOTE_PROOF the real env.sh resolves.
@@ -39,10 +53,18 @@ base=$(tip main)
 
 # The default proof is `ci`: with no SG_PROMOTE_PROOF set the CI seam decides, and a green CI promotes.
 unset SG_PROMOTE_PROOF
-adv dev one; ci green; rm -f "$T/ci.log"
+adv dev one; ci green; rm -f "$T/ci.log" "$T/pr"; : > "$T/gh.log"
 out=$(bash "$d/promote-stg.sh" 2>&1); rc=$?
 [ -s "$T/ci.log" ] && ok "the default proof is ci: the CI seam is read with SG_PROMOTE_PROOF unset" || ko "the default proof did not read the CI seam"
-[ $rc = 0 ] && [ "$(tip stg)" = "$(tip dev)" ] && ok "a dev tip whose CI is green is promoted to stg by fast-forward" || ko "green CI: rc $rc, stg $(tip stg), dev $(tip dev), out '$out'"
+[ $rc = 0 ] && [ "$(tip stg)" = "$(tip dev)" ] && ok "a dev tip whose CI is green is promoted to stg" || ko "green CI: rc $rc, stg $(tip stg), dev $(tip dev), out '$out'"
+/usr/bin/grep -q -- "-X POST repos/x/emu/pulls" "$T/gh.log" && ok "the promotion opens the dev -> stg pull request (#743)" || ko "no pull request opened: $(cat "$T/gh.log")"
+/usr/bin/grep -q -- "-X PUT repos/x/emu/pulls/7/merge" "$T/gh.log" && ok "the promotion merges the pull request once the proof is green" || ko "no merge: $(cat "$T/gh.log")"
+/usr/bin/grep -q "refs/heads/stg" "$T/gh.log" && ko "the promotion still names the stg ref on GitHub" || ok "the promotion never writes refs/heads/stg"
+# One pull request at a time: an open one is reused, never opened twice.
+: > "$T/gh.log"; echo 4 > "$T/pr"; adv dev reuse; ci green; out=$(bash "$d/promote-stg.sh" 2>&1); rc=$?
+[ $rc = 0 ] && [ "$(tip stg)" = "$(tip dev)" ] || ko "reuse: rc $rc, stg $(tip stg), dev $(tip dev), out '$out'"
+/usr/bin/grep -q -- "-X POST repos/x/emu/pulls" "$T/gh.log" && ko "the pass opened a second pull request" || ok "an open dev -> stg pull request is reused"
+/usr/bin/grep -q -- "-X PUT repos/x/emu/pulls/4/merge" "$T/gh.log" && ok "the reused pull request is the one merged" || ko "the reused pull request was not merged: $(cat "$T/gh.log")"
 [ "$(tip main)" = "$base" ] && ok "the loop left main alone" || ko "the loop moved main"
 
 # A missing CI run (no check runs) reads as running: nothing is promoted.
@@ -79,10 +101,10 @@ adv dev full-then-fast; before=$(tip stg)
 out=$(bash "$d/promote-stg.sh" 2>&1); rc=$?
 [ $rc = 0 ] && [ "$(tip stg)" = "$(tip dev)" ] && ok "local: a full pass still promotes after a later fast gate" || ko "local full then fast: rc $rc, stg $(tip stg), dev $(tip dev), out '$out'"
 
-# stg holds work dev lacks: a fast-forward is impossible, so nothing moves, whatever the proof.
+# stg holds a plain commit dev lacks (a promotion leaves merge commits only, #743): nothing moves, and the owner resolves it.
 adv stg stg-only; adv dev dev-only; line full pass "$(tip dev)"; before=$(tip stg)
 bash "$d/promote-stg.sh" >/dev/null 2>&1
-[ "$(tip stg)" = "$before" ] && ok "a dev tip that does not descend from stg is not promoted" || ko "stg moved without a fast-forward"
+[ "$(tip stg)" = "$before" ] && ok "a stg that holds a plain commit dev lacks is not promoted" || ko "stg moved over work dev lacks"
 $W checkout -q -B stg origin/dev; $W push -q -f origin stg   # fixture: realign stg with dev
 
 # The owner command.
@@ -96,6 +118,9 @@ out=$(bash "$d/promote-main.sh" 2>&1); rc=$?
 # No loop script pushes to main: only promote-main.sh names it, and a test fixture is no loop script.
 bad=$(cd "$d" && grep -lE 'push[^#]*(refs/heads/main|origin main|HEAD:main)' *.sh *.py 2>/dev/null | grep -v -e '^test-' -e '^promote-main.sh$')
 [ -z "$bad" ] && ok "no loop script pushes to main" || ko "pushes to main: $bad"
+# The owner's consolidation rule (#743): stg moves by a pull request merge, never by a push from a loop script.
+bad=$(cd "$d" && grep -lE '^[^#]*push[^#]*(refs/heads/stg|origin stg|HEAD:stg)' *.sh 2>/dev/null | grep -v -e '^test-')
+[ -z "$bad" ] && ok "no loop script pushes stg: the consolidation is a pull request" || ko "pushes to stg: $bad"
 
 # (#392) The promotion reads the machine-wide gate lock: with a holder it waits, says so on one line, then promotes.
 export SG_PROMOTE_PROOF=local; adv dev lock; line full pass "$(tip dev)"; rm -f "$T/gl"

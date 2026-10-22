@@ -33,7 +33,7 @@ ng() { env "$@" SG_STATE="$ST" SG_REPO=o/r SG_BASE=dev SG_NIGHTLY_REMOTE="$T/ori
   SG_NIGHTLY_PARALLEL="$T/parallel.sh" SG_NIGHTLY_SERIAL="$T/serial.sh" HEALTH_NOTIFY="$T/notify.sh" bash "$S/nightly.sh" 2>&1; }
 rec() { r_ts= r_res= r_sha= r_par= r_ser= r_ids=
   [ -f "$ST/nightly-result" ] && IFS=$'\t' read -r r_ts r_res r_sha r_par r_ser r_ids < "$ST/nightly-result"; }
-hold() { ( export SG_STATE="$ST"; . "$S/ghcall.sh"; gh_dispatch_hold ); }   # the dispatch hold both dispatch passes read (ghcall.sh)
+hold() { ( export SG_STATE="$ST" SG_CHECKOUT="$T/src"; . "$S/ghcall.sh"; gh_dispatch_hold ); }   # the dispatch hold both dispatch passes read (ghcall.sh)
 mark() { rm -f "$ST/auto/nightly-$(date +%F)"; }
 # json_ids <field>: 0 when the field is ONE JSON array of strings, the one encoding both readers parse (#704)
 json_ids() { printf '%s' "$1" | python3 -c 'import json,sys
@@ -73,6 +73,18 @@ hold >/dev/null; [ $? = 0 ] && ok "the dispatch hold stops a pass after a red ni
 hold 2>&1 | /usr/bin/grep -qF 'tests/test_x.py::test_x[case with space]' && ok "the hold names a failing test whole, its space included" || ko "the hold split a parametrized id: $(hold)"
 mark; out=$(ng)                                     # one green run
 hold >/dev/null; [ $? = 1 ] && ok "one green nightly releases delivery" || ko "the hold outlived a green nightly: $(hold)"
+# 4b (#747) a red record holds delivery while it names the dev tip. A tip the nightly has not seen is unproven, not red: the
+#    pass says so in one line naming both shas and delivers, and the next nightly proves the new tip. A sha the checkout does
+#    not carry holds nothing.
+$G -C "$T/src" commit -q --allow-empty -m two; new=$($G -C "$T/src" rev-parse dev)
+printf '%s\tfail\t%s\tfail\tpass\t["tests/test_x.py::test_a"]\n' "$(date +%s)" "$sha" > "$ST/nightly-result"
+o=$(hold); rc=$?
+[ $rc = 1 ] && ok "a red record at another sha holds nothing (#747)" || ko "a stale red held dispatch: rc $rc, '$o'"
+case "$o" in *"$sha"*"$new"*) ok "the pass names the record's sha and the tip, so the wait is legible";; *) ko "the note names not both: '$o'";; esac
+$G -C "$T/src" reset -q --hard "$sha"
+printf '%s\tfail\t%s\tfail\tpass\t["tests/test_x.py::test_a"]\n' "$(date +%s)" "0000000000000000000000000000000000000000" > "$ST/nightly-result"
+hold >/dev/null; [ $? = 1 ] && ok "a sha the checkout does not carry holds nothing" || ko "a ghost sha held dispatch"
+rm -f "$ST/nightly-result"
 
 # 5) the landing lock is never taken: a held gate lock is no obstacle, and it is left as it was
 mkdir -p "$ST/locks/gate"; echo $$ > "$ST/locks/gate/pid"; rm -f "$T/ran.log"; mark

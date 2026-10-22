@@ -183,3 +183,65 @@ def test_the_head_a_run_requeued_the_issue_on_is_a_fact(tmp_path):
     assert run(tmp_path, "requeue", "a/b#7", "run-1", "def").stdout.strip() == "recorded", "a new head records"
     assert run(tmp_path, "requeued", "a/b#7", "run-1").stdout.strip() == "def"
     assert run(tmp_path, "requeued", "a/b#7", "run-2").stdout.strip() == ""
+
+
+def review(st, *args):
+    """One review verdict of one run, as the loop's review gate sends it."""
+    return run(st, "review", "a/b#7", *args).stdout.strip()
+
+
+def test_three_changes_verdicts_freeze_the_issue_as_needs_human(tmp_path):
+    """#702 (ADR-0151 rule 1): three consecutive reviews that ask for changes end the issue needs-human for the owner,
+    instead of another dispatch, and an approval in between starts the count again."""
+    assert [review(tmp_path, r, "changes", f"finding-{r}") for r in ("r1", "r2", "r3")] == ["recorded", "recorded", "frozen"]
+    d = json.loads(run(tmp_path, "read", "a/b#7", "review").stdout)
+    assert d["changes"] == 3 and d["stopped"] and "changes" in d["stopped"]
+    assert run(tmp_path, "read", "a/b#7", "state").stdout.strip() == "needs-human", "the ledger holds its dispatch"
+    assert review(tmp_path, "r4", "changes", "finding-r4") == "recorded", "a stopped issue still records its reviews"
+    assert run(tmp_path, "read", "a/b#7", "state").stdout.strip() == "needs-human", "an approval does not lift the owner's freeze"
+
+
+def test_an_approve_resets_the_review_streak(tmp_path):
+    assert [review(tmp_path, r, v, f) for r, v, f in (("r1", "changes", "f1"), ("r2", "changes", "f2"),
+                                                      ("r3", "approve", ""), ("r4", "changes", "f3"),
+                                                      ("r5", "changes", "f4"))] == ["recorded", "recorded", "reset",
+                                                                                   "recorded", "recorded"]
+    d = json.loads(run(tmp_path, "read", "a/b#7", "review").stdout)
+    assert d["changes"] == 2 and not d["stopped"], "two after the approval is no streak of three"
+    assert run(tmp_path, "read", "a/b#7", "state").stdout.strip() == "todo"
+
+
+def test_identical_findings_twice_move_the_coder_one_place(tmp_path):
+    """#702 (ADR-0151 rule 2): the same findings twice stop the fix cycle, so the next attempt starts one place down the
+    coder chain; a third identical round moves it no further, and a new finding starts the count again."""
+    assert run(tmp_path, "coder", "a/b#7").stdout.strip() == "0"
+    assert review(tmp_path, "r1", "changes", "the same finding") == "recorded"
+    assert run(tmp_path, "coder", "a/b#7").stdout.strip() == "0", "one review asks for no different coder"
+    assert review(tmp_path, "r2", "changes", "the same finding") == "recorded"
+    assert run(tmp_path, "coder", "a/b#7").stdout.strip() == "1"
+    assert review(tmp_path, "r3", "changes", "the same finding") == "frozen"
+    assert run(tmp_path, "coder", "a/b#7").stdout.strip() == "1", "a third identical round moves no coder a second time"
+    assert review(tmp_path, "r4", "approve", "") == "reset"
+    assert run(tmp_path, "coder", "a/b#7").stdout.strip() == "0", "an approval starts the coder at the top of the chain"
+    assert review(tmp_path, "r5", "changes", "a new finding") == "recorded"
+    assert review(tmp_path, "r6", "changes", "another finding") == "recorded"
+    assert run(tmp_path, "coder", "a/b#7").stdout.strip() == "0", "two different findings change no coder"
+
+
+def test_a_review_verdict_is_one_fact_per_run_and_round(tmp_path):
+    """A retry of one round is no second verdict; a fix round of the same run is one."""
+    assert run(tmp_path, "review", "a/b#7", "r1", "changes", "f1", "1").stdout.strip() == "recorded"
+    assert run(tmp_path, "review", "a/b#7", "r1", "changes", "f1", "1").stdout.strip() == "duplicate"
+    assert json.loads(run(tmp_path, "read", "a/b#7", "review").stdout)["changes"] == 1
+    assert run(tmp_path, "review", "a/b#7", "r1", "changes", "f1", "2").stdout.strip() == "recorded"
+    assert run(tmp_path, "review", "a/b#7", "r1", "blocked", "f1", "3").returncode == 2, "only changes and approve"
+
+
+def test_a_review_fact_follows_a_rearm_floor_and_a_rearm_clears_it(tmp_path):
+    review(tmp_path, "r1", "changes", "f1")
+    review(tmp_path, "r2", "changes", "f2")
+    run(tmp_path, "rearm", "a/b#7")
+    d = json.loads(run(tmp_path, "read", "a/b#7", "review").stdout)
+    assert d["changes"] == 0 and d["moves"] == 0 and not d["stopped"] and d["verdicts"] == []
+    assert review(tmp_path, "r1", "changes", "f1") == "floor", "a run from before the rearm counts nothing"
+    assert review(tmp_path, "r9", "changes", "f9") == "recorded"

@@ -29,8 +29,8 @@ ADRs and this file are never ledgers (see Design rules): no dates, counts, statu
 - **Everything written is US English, Concise STE100.** Rafael may talk in Portuguese; the record is English. Guard: none yet; a draft.
 - **The full suite is `python3 -m pytest -n auto`; serial is `-p no:xdist`. Both must pass before a merge, and a test never relies on the worker count.** CI runs the fast battery, `-m "not heavy"`. A test call over 1 s carries `heavy`. Guard: `tests/test_slow_cap.py`, `tests/test_tooling.py`.
 - **One test call over 20 seconds fails the suite, unless it carries a reason.** Guard: `tests/test_slow_cap.py`.
-- **CI runs ruff, mypy and the fast battery on a landing only, a push to `dev`, `stg` or `main`, and on no work-branch push and no pull request; a work branch is proven by the local fast gate** (`.github/workflows/ci.yml`, Python 3.11 and 3.13; no secret). Guard: `tests/test_tooling.py`.
-- **One commit starts one CI job, and one concurrency group names one commit; a landing on `dev`, `stg` or `main` is never cancelled** (`.github/workflows/ci.yml`; only a landing pushes, and a group that names the commit queues nothing, so no cap cancels one). Guard: `tests/test_tooling.py`.
+- **CI runs ruff, mypy and the fast battery on one pull request only, from `dev` to `stg`, and on no branch push; a work branch is proven by the local fast gate, and a landing by the promotion proof** (`.github/workflows/ci.yml`, Python 3.11 and 3.13; no secret). Guard: `tests/test_tooling.py`.
+- **One commit starts one CI job, and one concurrency group names one commit; a pull request's run is never cancelled** (`.github/workflows/ci.yml`; only the dev-to-stg pull request runs it, and a group that names the commit queues nothing, so no cap cancels one). Guard: `tests/test_tooling.py`.
 - **A run records the autonomy setting** (`autonomy.enabled`, default on; `autonomy.max_resumes`, default 3, range 0 to 10; `config/agent-defaults.yaml`) in `run_start`, and a resume refuses when it differs. Guard: `tests/test_defaults.py`, `tests/test_launch.py`.
 - **The repo is a Claude Code plugin** (`agent-squad`): `/agent-squad:editor [id]` opens the editor, `/agent-squad:work <request>` and `/agent-squad:task <task>` start a run, `/agent-squad:dashboard [run]` opens a run's page, `/agent-squad:skill-update` checks the skills,
   `/agent-squad:config` edits the project settings file, `/agent-squad:setup` prepares a project.
@@ -61,7 +61,7 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 - **A test whose fixture repository the runner does not own is deselected there, never skipped** ([ADR-0139](docs/adr/0139-a-test-without-its-fixture-repo-is-deselected.md)). Guard: `tests/test_tooling.py`.
 - **A defect an agent finds is its own, whoever caused it and whenever it began** ([ADR-0133](docs/adr/0133-a-defect-an-agent-finds-is-its-own.md)). Guard: none yet; a draft.
 - **`/implement` works in its own worktree and lands in `dev` by a fast-forward push, with no pull request; commit and push are automatic** ([ADR-0116](docs/adr/0116-implement-in-a-worktree.md)). Guard: `tests/test_repo_hygiene.py`.
-- **Three long-lived branches: `dev` takes landings, the owner promotes to `stg` and to `main`; a wave is one branch with one CI run, at its landing in `dev`** ([ADR-0145](docs/adr/0145-a-work-branch-lands-in-dev-by-fast-forward.md)). Guard: `tests/test_tooling.py`; the rest is a draft.
+- **Three branches: `dev` takes landings, `dev` reaches `stg` by one pull request, the owner promotes `stg` to `main`** ([ADR-0145](docs/adr/0145-a-work-branch-lands-in-dev-by-fast-forward.md)). Guard: `tests/test_no_pr_path.py`, `contrib/squad-goal/scripts/test-promote.sh`; the rest is a draft.
 
 ### Run engine
 
@@ -69,7 +69,7 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 - **`loop-bug` halts dispatch, never an approved wave's landing** ([ADR-0146](docs/adr/0146-a-loop-defect-is-fixed-outside-the-loop.md)). Guard: `test-autobug.sh`, `test-autofrontier-one-run.sh`, `test-childcc.sh`, `test-watch-land.sh`, `test-branchland.sh` in `contrib/squad-goal/scripts/`.
 - **Needs-human is not success and has its own exit code; its card keeps its column, marked frozen:owner** ([ADR-0029](docs/adr/0029-needs-human-exit-code.md)). Guard: `tests/test_verdict.py`, `tests/test_resume.py`, `tests/test_cli.py`, `contrib/squad-goal/scripts/test-janitor-disp-expiry.sh`.
 - **An interruptible write is atomic** ([ADR-0030](docs/adr/0030-atomic-writes.md)). Guard: `tests/test_record.py`.
-- **The full suite runs nightly in both modes, heavy included, in its own tree and lock, never the landing lock; a red record holds delivery until one green run** ([ADR-0153](docs/adr/0153-the-full-suite-runs-nightly-in-both-modes.md)). Guard: `contrib/squad-goal/scripts/test-nightly.sh`.
+- **The full suite runs nightly in both modes, heavy included, in its own tree and lock, never the landing lock; a red record holds delivery while it names the dev tip** ([ADR-0153](docs/adr/0153-the-full-suite-runs-nightly-in-both-modes.md)). Guard: `contrib/squad-goal/scripts/test-nightly.sh`.
 - **A call has a deadline; a stuck agent is found without a caller** ([ADR-0051](docs/adr/0051-call-deadline-and-stuck-agent.md)). Guard: `tests/test_deadlines.py`, `tests/test_monitor.py`.
 - **A wedged run is killed, not merely logged** ([ADR-0051](docs/adr/0051-call-deadline-and-stuck-agent.md)). Guard: `tests/test_heartbeat.py`.
 - **A call or a loop stops on failed attempts that do not change, never on total turns or entries** ([ADR-0134](docs/adr/0134-stall-cap-counts-failures-without-evolution.md)). Guard: `tests/test_stall.py`, `tests/test_engine_skeleton.py`, `tests/test_sdk_adapter.py`.
@@ -86,7 +86,7 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 - **One model registry names every model; one resolver maps a raw spelling to a route; a chain is a list of registry ids** ([ADR-0147](docs/adr/0147-one-model-registry.md)). Guard: `tests/test_model_resolver_seam.py`, `tests/test_modelreg.py`.
 - **One writer per loop fact: the issue ledger is the one source, one transition function, a missing or corrupt ledger holds, a rearm is a floor** ([ADR-0149](docs/adr/0149-one-writer-per-loop-fact.md)). Guard: `tests/test_issue_ledger.py`, `test-issue-ledger.sh`; rest a draft.
 - **A run never holds conflicting siblings: no two children of one spec, no two issues that name the same file; checked before dispatch** ([ADR-0150](docs/adr/0150-a-run-never-holds-conflicting-siblings.md)). Guard: `contrib/squad-goal/scripts/test-autofrontier-one-run.sh`.
-- **A review streak escalates: three CHANGES verdicts go to needs-human, identical findings twice change the coder, an approval binds to the reviewed commit** ([ADR-0151](docs/adr/0151-a-review-streak-escalates.md)). Guard: `tests/test_review_streak.py`; the rest is a draft.
+- **A review streak escalates: three CHANGES go to needs-human, identical findings twice change the coder, an approval binds to its commit** ([ADR-0151](docs/adr/0151-a-review-streak-escalates.md)). Guard: `tests/test_review_streak.py`, `test-childcc.sh`, `tests/test_issue_ledger.py`; rest a draft.
 
 ### Dashboard, editor and repository
 

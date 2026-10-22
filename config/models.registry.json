@@ -1304,7 +1304,9 @@
           ],
           "served": [
             "claude-deepseek-flash",
-            "claude-deepseek-flash[1m]"
+            "claude-deepseek-flash[1m]",
+            "claude-deepseek-v4-flash",
+            "claude-deepseek-v4-flash[1m]"
           ]
         },
         "gateway": {
@@ -1314,7 +1316,11 @@
             "deepseek-flash",
             "claude-deepseek-flash",
             "deepseek-flash[1m]",
-            "claude-deepseek-flash[1m]"
+            "claude-deepseek-flash[1m]",
+            "deepseek-v4-flash",
+            "claude-deepseek-v4-flash",
+            "deepseek-v4-flash[1m]",
+            "claude-deepseek-v4-flash[1m]"
           ]
         },
         "direct": {
@@ -1324,64 +1330,11 @@
             "claude-deepseek-flash",
             "claude-deepseek-flash[1m]",
             "deepseek-flash",
-            "deepseek-flash[1m]"
-          ]
-        }
-      },
-      "capabilities": {
-        "tools": true,
-        "thinking_off": true,
-        "vision": false,
-        "context": 131072
-      },
-      "display_price": {
-        "input": 0.14,
-        "output": 0.28,
-        "currency": "USD",
-        "per": "mtok"
-      },
-      "aliases": [
-        "claude-deepseek-flash"
-      ],
-      "retired": false,
-      "gateway_only": false
-    },
-    {
-      "id": "deepseek-v4-flash",
-      "label": "DeepSeek V4.1 Flash legacy",
-      "provider": "deepseek",
-      "subscription": "deepseek",
-      "efforts": [
-        "low",
-        "medium",
-        "high"
-      ],
-      "routes": {
-        "cli": {
-          "auth": "api_key",
-          "argv": [
-            "claude",
-            "-p",
-            "--strict-mcp-config",
-            "--model",
-            "{model}",
-            "--effort",
-            "{effort}",
-            "{prompt_file}"
-          ],
-          "served": [
+            "deepseek-flash[1m]",
             "claude-deepseek-v4-flash",
-            "claude-deepseek-v4-flash[1m]"
-          ]
-        },
-        "gateway": {
-          "auth": "api_key",
-          "model": "claude-deepseek-v4-flash",
-          "served": [
+            "claude-deepseek-v4-flash[1m]",
             "deepseek-v4-flash",
-            "claude-deepseek-v4-flash",
-            "deepseek-v4-flash[1m]",
-            "claude-deepseek-v4-flash[1m]"
+            "deepseek-v4-flash[1m]"
           ]
         }
       },
@@ -1398,7 +1351,11 @@
         "per": "mtok"
       },
       "aliases": [
-        "claude-deepseek-v4-flash"
+        "claude-deepseek-flash",
+        "claude-deepseek-v4-flash",
+        "claude-deepseek-v4-flash[1m]",
+        "deepseek-v4-flash",
+        "deepseek-v4-flash[1m]"
       ],
       "retired": false,
       "gateway_only": false

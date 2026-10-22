@@ -4,7 +4,9 @@
 baseline. It decides spawn requests ("decide these requests") and lands finished children ("land these
 children"). It reads and writes the spawn, land, and ledger events. The engine runs the children's sessions.
 """
+import importlib.util
 import os
+import pathlib
 import re
 import subprocess
 import time
@@ -20,6 +22,19 @@ REVIEW_NONE_EXIT = gates.REVIEW_NONE_EXIT  # the review command's "no review her
 REVIEW_FIX_EXIT = gates.REVIEW_FIX_EXIT    # the review command's "fix": the run starts the child's next entry in its worktree (#570)
 REVIEW_RETRY_EXIT = gates.REVIEW_RETRY_EXIT  # the review command's "try again": no verdict; the run tries again within the gate's deadline (#635)
 REVIEW_RETRY_PAUSE_S = 60.0               # the pause between two tries of one round, inside the gate's deadline
+_LEDGER: dict = {}
+
+
+def _ledger():
+    """`issue_ledger.py`, the loop's one writer and reader of an issue's facts (ADR-0149), loaded from the checkout beside
+    review.sh so the engine and the loop read one rule. Its state is the loop's (SG_STATE), never the run folder's."""
+    if "m" not in _LEDGER:
+        path = pathlib.Path(__file__).resolve().parents[2] / "contrib" / "squad-goal" / "scripts" / "issue_ledger.py"
+        spec = importlib.util.spec_from_file_location("issue_ledger", path)
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        _LEDGER["m"] = m
+    return _LEDGER["m"]
 
 
 class Dispatch:
@@ -28,6 +43,7 @@ class Dispatch:
         self.children, self.held = {}, {}   # spawned children by name (their spawn_accepted event), and their held reservations
         self.landed = {}       # dispatch child name -> its `land` event
         self.ac_before = None  # {child: its held-out commands all passed}, as of the last landing
+        self._slug = None      # the target's <owner>/<repo>, read once from its origin: the issue ledger's key (ADR-0138)
 
     def absorb(self, ev):
         """Rebuild state from one record event on resume."""
@@ -142,6 +158,13 @@ class Dispatch:
     def landed_reasons(self, name, reasons):
         return list(self.landed[name]["reasons"]) if name in self.landed and self.landed[name]["outcome"] != "pass" else reasons
 
+    def entry_verdict(self, node, seen):
+        """The outcome of one dispatch entry: its join rule, except that an issue ledger's hold asks the owner whatever the
+        rule says (ADR-0029). No dependent's failure and no cancelled sibling hides the ledger's cause (ADR-0149 rule 4)."""
+        outcome, reasons = V.fold_dispatch([o for _, o, _ in seen], node["join"], len(seen))
+        holds = V.ledger_holds(seen)
+        return ("needs-human", list(dict.fromkeys(holds + reasons))) if holds else (outcome, reasons)
+
     async def land(self, node, entry, sc, seen):
         """Land every passing write child's branch into the target, in request order, once.
         A landing that turns an earlier child's held-out command red is undone.
@@ -251,14 +274,66 @@ class Dispatch:
 
     def coder(self, node, name, d, upto_entry=None):
         """The coder the child's next fix entry uses: the child's own model, moved one place down the chain each time
-        identical findings twice stopped the cycle (ADR-0151 rule 2). `upto_entry` counts a failed fix entry of the
-        record; the entry about to start is not one of them."""
+        identical findings twice stopped the cycle (ADR-0151 rule 2). The record counts this run's repeats, the issue
+        ledger the issue's, and the larger count places the coder, so a requeue or a new run starts where the earlier
+        attempt stopped. `upto_entry` counts a failed fix entry of the record; the entry about to start is not one."""
         e = self.e
         spent, hours = e.options.get("spent_models") or [], e.options.get("model_hours") or {}
         chain = session.model_chain(node["allow"]["models"], d["model"], spent, hours, time.localtime(e.wall()).tm_hour,
                                     e.options.get("model_order") or [])
         upto_entry = upto_entry if upto_entry is not None else self.last_round(name)
-        return review_streak.coder(chain, self.findings_seq(name, self.last_round(name), upto_entry), d["model"])
+        moves = review_streak.changes(self.findings_seq(name, self.last_round(name), upto_entry))
+        return review_streak.at(chain, max(moves, self.ledger_moves(d)), d["model"])
+
+    def moved(self, node, d):
+        """The coder an issue's next attempt starts on when a requeue or a new run dispatches it: the ledger's moves place
+        it down the same chain a fix round uses (ADR-0151 rule 2). `d["model"]` when the issue has no such fact. The chain
+        `model_chain` returns already leads with the request's model, and it leaves out a model a spent marker or an hours
+        window closes: `at` reads it as it stands, so the first attempt is unchanged when the ledger holds no move."""
+        e = self.e
+        spent, hours = e.options.get("spent_models") or [], e.options.get("model_hours") or {}
+        chain = session.model_chain(node["allow"]["models"], d["model"], spent, hours, time.localtime(e.wall()).tm_hour,
+                                    e.options.get("model_order") or [])
+        return review_streak.at(chain, self.ledger_moves(d)) or d["model"]
+
+    def repo_slug(self):
+        """`<owner>/<repo>` of the target's origin when it names github.com, else "". The issue ledger is keyed by that
+        address (ADR-0138, ADR-0149): a target with no GitHub origin has no loop ledger to read."""
+        if self._slug is None:
+            url = ""
+            if self.e.has_git:
+                try:
+                    url = git.run(["remote", "get-url", "origin"], self.e.target, timeout=node_commit.PROBE_DEADLINE_S).stdout.strip()
+                except (OSError, subprocess.TimeoutExpired):
+                    url = ""
+            m = re.search(r"github\.com[:/]+([^/]+)/([^/]+?)(?:\.git)?/?$", url)
+            self._slug = f"{m.group(1)}/{m.group(2)}" if m else ""
+        return self._slug
+
+    def ledger_hold(self, d):
+        """Why the issue's ledger holds its dispatch, and `""` when it does not (ADR-0149 rule 4): a file that is corrupt,
+        missing beside the issue's old counters, or unreadable is a held issue, never an issue with no loop fact. Empty
+        when the run has no loop state, or names no repository or issue: it reads no ledger, so it holds nothing."""
+        issue, slug = self.issue(d), self.repo_slug()
+        if not issue or not slug or not os.environ.get("SG_STATE"):
+            return ""
+        try:
+            rec = _ledger().read(f"{slug}#{issue}")
+        except (OSError, ValueError, KeyError) as x:   # a reader that cannot answer is a held issue, never a dispatch
+            return f"the issue ledger cannot be read: {x}"
+        return rec.get("held", "") if rec.get("state") == "held" else ""
+
+    def ledger_moves(self, d):
+        """The places identical findings twice moved this issue's coder down the chain across runs: the issue ledger's one
+        fact (ADR-0151 rule 2, ADR-0149). Zero when the run has no loop state, or names no repository or issue. A held
+        ledger never places a coder here: `ledger_hold` keeps the issue from starting at all."""
+        issue, slug = self.issue(d), self.repo_slug()
+        if not issue or not slug or not os.environ.get("SG_STATE"):
+            return 0
+        try:
+            return int(_ledger().coder(f"{slug}#{issue}"))
+        except (OSError, ValueError, KeyError):
+            return 0
 
     def last_round(self, name):
         """The last review round of this child in the record, 0 before the first."""
@@ -464,7 +539,7 @@ class DispatchRunner:
             raise Frontier([(node["name"], sc.item)])
         seen = [(n, d.landed_outcome(n, o), d.landed_reasons(n, r)) for n, o, r in seen]
         self.close_gates(ctx, node, entry, sc, d, seen)
-        outcome, reasons = V.fold_dispatch([o for _, o, _ in seen], node["join"], len(seen))
+        outcome, reasons = d.entry_verdict(node, seen)   # a held issue asks the owner, never a dependent's failure (ADR-0029)
         if reasons == ["no_dispatch"]:      # name why every request was refused, so the verdict line is not the only clue (record.jsonl holds the full event)
             reasons += d.rejections(ent, pe)[:8]
         if outcome != "pass" and not reasons:

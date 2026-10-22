@@ -130,6 +130,9 @@ gh_land_stop() {
 # The nightly full suite decides the same way (#704): a red record at $SG_STATE/nightly-result (nightly.sh) holds delivery
 # until one green run replaces it, because a base whose full suite is red starts work on a defect the loop already found.
 # A missing or unreadable record never holds, by the same rule as above.
+# The promotion proof reserves the machine it measures (#739): promote-pass.sh writes $SG_STATE/promote-reserve while it
+# holds the gate lock, and a dispatch pass starts nothing while a marker younger than SERIAL_HOLD_SECONDS stands, so the
+# suite is not measured against the next wave landing. A marker past that bound is a proof that died and never holds.
 
 # sg_nightly_red   A nightly result record's failing ids when the record is a readable RED one, nothing otherwise. The
 # record is one line, `<epoch> TAB <pass|fail> TAB <sha> TAB <parallel> TAB <serial> TAB <ids>` (nightly.sh, #704), where
@@ -166,8 +169,35 @@ print(", ".join(v) if v else "no test named")' 2>/dev/null || return 1
 }
 
 gh_dispatch_hold() {
-  local m=${SG_DISPATCH_MAX_WAITING:-} f="${SG_STATE:?gh_dispatch_hold: no state directory}/childcc-waiting" n t line nids
+  local m=${SG_DISPATCH_MAX_WAITING:-} f="${SG_STATE:?gh_dispatch_hold: no state directory}/childcc-waiting" n t line nids r ts
+  # The promotion proof reserves the machine it measures (#739): promote-pass.sh writes $SG_STATE/promote-reserve while it
+  # holds the gate lock, and it removes the file on exit, INT and TERM. A marker older than the lock's own bound is a proof
+  # that died, and it never holds, by the same rule as the other guards here.
+  if [ -r "$SG_STATE/promote-reserve" ]; then
+    read -r ts _ < "$SG_STATE/promote-reserve" 2>/dev/null
+    case "$ts" in
+      ''|*[!0-9]*) ;;
+      *) if [ $(( $(date +%s) - ts )) -lt "${SERIAL_HOLD_SECONDS:-7200}" ]; then
+           line="DISPATCH HOLD: the promotion proof holds the machine (since $(date -r "$SG_STATE/promote-reserve" +%T 2>/dev/null || echo "$ts")); no new run this pass"
+           printf '%s\n' "$line"; printf '%s\n' "$line" >> "$SG_STATE/cycle.log"
+           return 0
+         fi;;
+    esac
+  fi
   if nids=$(sg_nightly_red "$SG_STATE/nightly-result"); then
+    # (#747) The record is red for the sha it ran at, not for whatever the tip became. A tip the nightly has not seen is
+    # unproven, not red: one line names both shas and the pass delivers, and the next nightly proves the new tip. Each
+    # landing carries its own local gate, and the promotion still needs its full proof. A tip the pass cannot read holds.
+    rsha=$(cut -f3 "$SG_STATE/nightly-result" 2>/dev/null); tip=
+    if [ -n "${SG_CHECKOUT:-}" ]; then
+      tip=$(/usr/bin/git -C "$SG_CHECKOUT" rev-parse --verify -q origin/dev 2>/dev/null) \
+        || tip=$(/usr/bin/git -C "$SG_CHECKOUT" rev-parse --verify -q HEAD 2>/dev/null) || tip=
+    fi
+    if [ -n "$tip" ] && [ "${rsha:0:12}" != "${tip:0:12}" ]; then
+      line="DISPATCH NOTE: the nightly red names $rsha, not the dev tip $tip; the tip is unproven and the next nightly proves it"
+      printf '%s\n' "$line"; printf '%s\n' "$line" >> "$SG_STATE/cycle.log"
+      return 1
+    fi
     line="DISPATCH HOLD: the nightly full suite is red (${nids:-no test named}); no new run until one green nightly"
     printf '%s\n' "$line"
     printf '%s\n' "$line" >> "$SG_STATE/cycle.log"

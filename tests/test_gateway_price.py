@@ -16,7 +16,7 @@ from tests.test_sdk_adapter import AssistantMessage, Options, ResultMessage, req
 
 pytestmark = pytest.mark.anyio
 
-GATEWAY = "claude-deepseek-v4-flash"
+GATEWAY = "claude-deepseek-flash"   # one id for the model (#730): the v4 spelling is an alias of this row
 FLASH = {"input": 0.30, "cache_read": 0.006, "cache_write": 0.30, "output": 1.20}
 CLIENT = {"input": 3.0, "cache_read": 0.30, "cache_write": 3.75, "output": 15.0}
 TABLE = {"client": CLIENT, "models": {GATEWAY: FLASH}}
@@ -60,9 +60,9 @@ def test_terra_has_an_explicit_subscription_price_so_the_cap_never_reads_it_at_c
 def test_a_price_entry_with_a_missing_or_negative_rate_is_a_defect():
     cfg = defaults.load()
     cfg["prices"]["models"][GATEWAY] = {**FLASH, "output": -1}
-    assert "prices.models.claude-deepseek-v4-flash" in defaults.check(cfg)
+    assert f"prices.models.{GATEWAY}" in defaults.check(cfg)
     cfg["prices"]["models"][GATEWAY] = {k: v for k, v in FLASH.items() if k != "cache_read"}
-    assert "prices.models.claude-deepseek-v4-flash" in defaults.check(cfg)
+    assert f"prices.models.{GATEWAY}" in defaults.check(cfg)
 
 
 def test_the_price_counts_each_token_once_with_cache_tokens_split_out_of_tokens_in():
@@ -103,14 +103,15 @@ def test_an_alias_is_never_priced_through_another_models_row(tmp_path, monkeypat
         modelreg._CACHE.clear()
 
 
-def test_the_no_tools_flash_spelling_resolves_to_its_own_row_never_the_v4_row():
-    """`deepseek-flash` is its own id, not an alias of the v4 id, so a changed row is never read through the other."""
+def test_every_spelling_of_deepseek_flash_reads_the_one_row():
+    """#730: one model, one id. Every spelling, the legacy v4 one included, prices from the canonical row, so a changed
+    row is never half read and a chain that names one spelling cannot spend through another."""
     models = defaults.load()["prices"]["models"]
     own = {**models["claude-deepseek-flash"], "output": 9.99}
     table = {"client": defaults.load()["prices"]["client"], "models": {**models, "claude-deepseek-flash": own}}
-    assert prices.rates(table, "deepseek-flash") == own
-    assert prices.rates(table, "claude-deepseek-flash[1m]") == own
-    assert prices.rates(table, "claude-deepseek-v4-flash") == FLASH
+    for spelling in ("deepseek-flash", "claude-deepseek-flash", "claude-deepseek-flash[1m]",
+                     "claude-deepseek-v4-flash", "claude-deepseek-v4-flash[1m]"):
+        assert prices.rates(table, spelling) == own, spelling
 
 
 async def test_a_priced_gateway_call_spends_its_table_price_and_names_the_source():

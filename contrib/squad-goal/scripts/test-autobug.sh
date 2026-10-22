@@ -119,6 +119,28 @@ body=$(cat "$T/st/req/"*.txt 2>/dev/null)
 case "$body" in *'"bash contrib/squad-goal/scripts/prepush.sh --local"'*) ko "3c no profile, yet the request prescribes prepush.sh --local";; *) ok "3c no profile: the request does not prescribe prepush.sh --local";; esac
 case "$body" in *"no squad-goal profile resolves"*) ok "3c the request names why the prepush check is unavailable";; *) ko "3c the request does not name why: '$body'";; esac
 
+# 3d) (#740) the prepush line names the profile's command, or none. A child of wz-zesty-agent was told to run
+# contrib/squad-goal/scripts/prepush.sh, which that repository does not hold, and its run ended failed with correct work.
+# The profile resolves here (a stub profile file), and env.sh's sg_gate_cmds resolves what the profile left unset.
+mkdir -p "$T/profiles"; : > "$T/profiles/stub.sh"; cp -R "$T/st/auto" "$T/auto.keep"
+abody() { rm -rf "$T/st/req" "$T/st/auto"; cp -R "$T/auto.keep" "$T/st/auto"; rm -f "$T/st/auto/bug-"*; mkdir -p "$T/st/req"
+  ( export SG_PROFILE=stub SG_PROFILES_DIR="$T/profiles" "$@"; bash "$T/s/autobug.sh" ) >/dev/null 2>&1; cat "$T/st/req/"*.txt 2>/dev/null; }
+printf '. "$(dirname "$0")/address.sh"; type sg_gate_cmds >/dev/null 2>&1 && sg_gate_cmds   # env.sh resolves the gate commands after the profile (#740)\n' >> "$T/s/env.sh"
+# 3d-1 agent-squad: its checkout holds prepush.sh and its profile defines none, so the line is unchanged
+mkdir -p "$T/co/contrib/squad-goal/scripts"; touch "$T/co/contrib/squad-goal/scripts/prepush.sh"
+body=$(abody SG_GATE_740=1)
+case "$body" in *'Before you report done, run "bash contrib/squad-goal/scripts/prepush.sh --local" in that worktree: it must print nothing.'*) ok "3d agent-squad's prepush line is unchanged";; *) ko "3d agent-squad's prepush line changed: '$body'";; esac
+# 3d-2 a checkout without prepush.sh and a profile that defines none: no script is named, and the request says why
+rm -rf "$T/co/contrib"
+body=$(abody SG_GATE_740=1)
+[ -n "$body" ] || ko "3d no request was built"
+case "$body" in *prepush.sh*) ko "3d a profile with no prepush command still names prepush.sh";; *) ok "3d a profile with no prepush command names no prepush.sh";; esac
+case "$body" in *"No prepush check is configured"*"not a failure"*) ok "3d the request says no prepush check is configured and that it is not a failure";; *) ko "3d the request does not say no prepush check is configured: '$body'";; esac
+# 3d-3 a profile that defines its prepush command: the request names it
+body=$(abody 'SG_PREPUSH_CMD=make prepush')
+case "$body" in *'run "make prepush" in that worktree'*) ok "3d the request names the profile's prepush command";; *) ko "3d the request lacks the profile's prepush command: '$body'";; esac
+rm -rf "$T/st/auto"; mv "$T/auto.keep" "$T/st/auto"
+
 # 4) autofrontier never dispatches a debt issue (1400 has ready-for-agent + debt; 1401 is a real slice)
 r=$(AF_DRY=1 bash "$T/s/autofrontier.sh" 2>&1)
 case "$r" in *1400*) ko "4 autofrontier dispatched debt #1400: '$r'";; *1401*) ok "4 autofrontier skips debt, keeps the slice";; *) ko "4 autofrontier dispatched nothing: '$r'";; esac

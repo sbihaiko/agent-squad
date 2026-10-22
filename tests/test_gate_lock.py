@@ -139,10 +139,11 @@ def branchland_runner(tmp_path):
 
 @pytest.fixture
 def promote_runner(tmp_path):
-    """promote-stg.sh with dev one commit ahead of stg and the local proof for the dev tip on the status line: the promotion pushes stg."""
+    """promote-stg.sh with dev one commit ahead of stg and the local proof for the dev tip on the status line: the promotion
+    merges the dev -> stg pull request (#743), and the stub GitHub moves stg the way a merge commit does."""
     d = tmp_path / "s"
     d.mkdir()
-    _copy(SCRIPTS, ("promote-stg.sh", "gate.sh", "serial.sh", "caps.sh"), d)
+    _copy(SCRIPTS, ("promote-stg.sh", "gate.sh", "serial.sh", "caps.sh", "ghcall.sh", "ghread.py"), d)
     co, origin = _repo_with_remote(tmp_path, ["stg"])
     _git("commit", "-q", "--allow-empty", "-m", "one", cwd=co)
     _git("push", "-q", str(origin), "dev", cwd=co)
@@ -150,7 +151,19 @@ def promote_runner(tmp_path):
     st.mkdir()
     dev = subprocess.run([GIT, "-C", str(co), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
     (st / "gate-status-full").write_text(f"{int(time.time())}\tfull\tpass\t{dev}\n")   # the promotion reads the full proof here, which a fast gate never overwrites (#472)
-    env = _env(st) | POLL | {"SG_PROMOTE_REMOTE": str(origin), "SG_REPO": "x/y", "SG_PROMOTE_PROOF": "local"}
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    (bin_ / "gh").write_text(
+        "#!/bin/bash\ncase \"$*\" in\n"
+        "  *graphql*) echo '{\"data\":{\"repository\":{\"pullRequests\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}}}}}';;\n"
+        "  *\"-X POST repos/x/y/pulls\"*) echo '{\"number\":9}';;\n"
+        "  *\"-X PUT repos/x/y/pulls/9/merge\"*) "
+        f"\"{GIT}\" --git-dir=\"$SG_PROMOTE_REMOTE\" update-ref refs/heads/stg "
+        f"\"$(\"{GIT}\" --git-dir=\"$SG_PROMOTE_REMOTE\" rev-parse refs/heads/dev)\" && echo '{{\"merged\":true}}';;\n"
+        "  *) echo '{}';;\nesac\n")
+    (bin_ / "gh").chmod(0o755)
+    env = _env(st) | POLL | {"SG_PROMOTE_REMOTE": str(origin), "SG_REPO": "x/y", "SG_PROMOTE_PROOF": "local",
+                             "PATH": f"{bin_}:{os.environ['PATH']}"}
     ran = f'test "$({GIT} -C {origin} rev-parse stg)" = "$({GIT} -C {origin} rev-parse dev)"'
     return (["bash", str(d / "promote-stg.sh")], tmp_path, env, st, ran, None)
 

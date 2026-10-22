@@ -254,8 +254,11 @@ name="autobug-$(date +%Y%m%d-%H%M%S)"; body="$SG_STATE/req/$name.body"
 for n in "${pick[@]}"; do echo "$name" > "$A/bug-$n"; done
 { echo "IMPORTANT: your first and only action is to call the spawn tool for the ${#clusters[@]} child(ren) below, all in one turn; ending the turn without a spawn call fails the run. Spawn each child with $(bash "$(dirname "$0")/envelope-spend.sh"). Repo $SG_REPO. One child per CHILD block: the run cut each child's own worktree and checked out its branch there. en-US everywhere; no Co-Authored-By and no \"Generated with Claude Code\" line."
   echo "Every child: work where you stand -- the run cut you a worktree of your own and checked out your branch there, so your own working directory is that worktree, and you name no path for it. Commit there. Create no worktree and no branch of your own; push nothing. The loop reads that worktree, enters your commits into the run's wave branch, and lands the wave in $SG_BASE with one push (ADR-0145 rule 9). The commit message carries one \"Refs #N\" line per issue of the block (never Closes). A block with several issues is ONE probable root cause seen as several symptoms: find the shared cause and fix it once, test-side and product-side in the same worktree; if an issue of the block turns out unrelated, say so in the issue status comment and leave it out. Rules: $SG_CODING_RULES."
-  if sg_profile_resolves; then
-    echo "Before you report done, run \"bash contrib/squad-goal/scripts/prepush.sh --local\" in that worktree: it must print nothing."
+  pc=${SG_PREPUSH_CMD-bash contrib/squad-goal/scripts/prepush.sh --local}   # (#740) the profile's prepush command, or none
+  if sg_profile_resolves && [ -n "$pc" ]; then
+    echo "Before you report done, run \"$pc\" in that worktree: it must print nothing."
+  elif sg_profile_resolves; then
+    echo "No prepush check is configured for this repository, so run none: a missing check is not a failure; name that in your report."
   else
     echo "The prepush check is unavailable: no squad-goal profile resolves for this session (SG_PROFILE='${SG_PROFILE:-}', SG_PROFILES_DIR='$(sg_profiles_dir)'), so do not run prepush.sh --local; name that in your report."
   fi

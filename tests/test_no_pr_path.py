@@ -1,6 +1,8 @@
-"""No loop script operates on a pull request: the work branch is the unit of work (#361, ADR-0145).
+"""No loop script operates on a pull request, save the promotion: the work branch is the unit of work (#361, ADR-0145).
 
-A loop script creates, reads or merges no pull request. The pull request survives in one place only -- the page, which
+A loop script creates, reads or merges no pull request. The one exception is the consolidation of `dev` into `stg`, which
+the owner ruled to be one pull request (#743): `promote-stg.sh` opens or reuses that pull request and merges it, and it is
+the only loop script that names a pulls route. The pull request otherwise survives in one place only -- the page, which
 the owner reads: `hub.py` (`OPEN_PR_QUERY`, `prs_from_graphql`), `board_columns.py` (the PR lane and the PR kind),
 `hubmux.py` and `hubctl.sh`. Reading the `pull_request` field of an issue to skip a pull request in an issue list is not
 a pull-request operation either, and neither is the word "pull request" in a sentence that says the path was removed.
@@ -34,6 +36,9 @@ PULLS_GRAPHQL = re.compile(r"pullRequests\s*\(")
 # The scripts that only ever served the pull-request path, so the budget file names no pull-request caller.
 PR_CALLERS = {"prland.sh", "revci.sh", "autopilot.sh", "autofix.sh", "autopanel.sh", "stack.sh", "speed.py", "retryfix.sh"}
 
+# The one loop script that operates on a pull request, by the owner's rule (#743): the consolidation of `dev` into `stg`.
+PROMOTION = {"promote-stg.sh"}
+
 
 def loop_scripts() -> list[Path]:
     """Every script the loop runs: the .sh and .py beside the scripts, less the page, the door, its checkers and the suites."""
@@ -41,9 +46,12 @@ def loop_scripts() -> list[Path]:
     return [p for p in picked if not p.name.startswith("test-")]
 
 
-def offenders() -> list[str]:
+def offenders(only: set[str] | None = None) -> list[str]:
+    """The pull-request operations in the loop scripts, less the promotion; `only` reads the promotion alone."""
     hits = []
     for p in loop_scripts():
+        if p.name in PROMOTION and p.name not in (only or set()):
+            continue
         text = p.read_text(errors="ignore")
         for m in GH_PR.finditer(text):
             hits.append(f"{p.name}: a `gh pr` call: {text[m.start():m.start() + 60].splitlines()[0].strip()!r}")
@@ -57,6 +65,14 @@ def offenders() -> list[str]:
 def test_no_loop_script_operates_on_a_pull_request() -> None:
     hits = offenders()
     assert hits == [], "a loop script still operates on a pull request:\n" + "\n".join(hits)
+
+
+def test_the_promotion_is_the_one_pull_request_path() -> None:
+    """#743: `dev` reaches `stg` by one pull request, and it is the only pull request a loop script touches."""
+    assert PROMOTION == {"promote-stg.sh"}
+    hits = offenders(only=PROMOTION)
+    assert hits, "promote-stg.sh no longer operates on the pull request: the guard would pass for the wrong reason"
+    assert all(h.startswith("promote-stg.sh:") for h in hits)
 
 
 def test_the_budget_file_names_no_pull_request_caller() -> None:

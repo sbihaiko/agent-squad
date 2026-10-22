@@ -64,13 +64,19 @@ def changes(seq):
     return n
 
 
-def coder(chain, seq, first=None):
-    """The coder a fix round after `seq` uses: `chain`, led by `first` (the child's own model), moved one place for
-    each repeated finding. The last entry stays when the chain has no further one (ADR-0151)."""
+def at(chain, steps, first=None):
+    """The coder `steps` places down `chain`, led by `first` (the child's own model). The last entry stays when the chain
+    has no further one (ADR-0151 rule 2). `steps` is the ledger's `moves`: one per repeated finding (#702)."""
     chain = [first] + [m for m in (chain or []) if m and m != first] if first else list(chain or [])
     if not chain:
         return first
-    return chain[min(changes(seq), len(chain) - 1)]
+    return chain[min(max(int(steps or 0), 0), len(chain) - 1)]
+
+
+def coder(chain, seq, first=None):
+    """The coder a fix round after `seq` uses: `chain`, led by `first` (the child's own model), moved one place for
+    each repeated finding. The last entry stays when the chain has no further one (ADR-0151)."""
+    return at(chain, changes(seq), first)
 
 
 def unanswered(outcome, reasons):

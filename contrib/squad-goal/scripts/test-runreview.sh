@@ -5,16 +5,22 @@
 # and on CHANGES or BLOCKED requeues the issue at once, with every blocking finding, and writes the marker childcc honors.
 # When its run offers a fix round (SQUAD_REVIEW_FIX=1, #570), a CHANGES whose findings are new or changed exits 4 ("fix") and
 # requeues nothing; findings left as they were count toward the stall (ADR-0134), and at the cap the issue is requeued once.
+# Every verdict is a `review` fact in the issue's ledger (#702, ADR-0151): three CHANGES in a row end the issue needs-human,
+# frozen:owner with one status comment and no requeue; identical findings twice move the coder; an APPROVE resets the streak.
 # Stubs: childreview.sh and wave.sh record their argv; the budget is a throwaway SQUAD_CAPS_DIR. No network, no model.
 # usage: bash test-runreview.sh [scripts dir]
 for v in $(compgen -e | /usr/bin/grep '^SG_'); do unset "$v"; done
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/squad"
-cp "$d/runreview.sh" "$d/issue_ledger.py" "$d/caps.sh" "$d/revformat.py" "$T/s/" 2>/dev/null
+G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/squad" "$T/bin"
+cp "$d/runreview.sh" "$d/issue_ledger.py" "$d/caps.sh" "$d/revformat.py" "$d/ghcall.sh" "$d/ghread.py" "$d/ghthrottle.py" "$T/s/" 2>/dev/null
 for x in squad config; do ln -s "$(cd "$d/../../.." && pwd)/$x" "$T/squad/$x"; done
+# The gh door: the freeze label and the status comment go through ghcall.sh, and this stub records the write.
+printf '#!/bin/sh\nprintf "gh %%s\\\\n" "$*" >> "%s/gh.log"\n' "$T" > "$T/bin/gh"; chmod +x "$T/bin/gh"; PATH="$T/bin:$PATH"; export PATH
 export SQUAD_CAPS_DIR=$T/caps SQUAD_CAPS_POLL=0.05
 cat > "$T/s/env.sh" <<EOF
 export SG_STATE=$T/st SG_REPO=x/y SG_BASE=dev SG_SQUAD=$T/squad
+sg_cq_file() { printf '%s/cq/x__y#%s\n' "\$SG_STATE" "\$1"; }
+sg_cq_status() { sg_cq_file "\$1-status~\$2.md"; }
 EOF
 # childreview.sh writes what the real one writes (the verdict, the head, the base) and records its argv.
 cat > "$T/s/childreview.sh" <<EOF
@@ -126,5 +132,36 @@ reset; out=$(V=BLOCKED fx); rc=$?
 # J) no fix round on offer (the run cannot fund it, or an older engine): CHANGES requeues as before.
 reset; out=$(cd "$T/wt" && SQUAD_REVIEW_FIX=0 STUB_VERDICT=CHANGES bash "$T/s/runreview.sh" run-1 route.1.1 7 2>/dev/null); rc=$?
 [ "$rc" = 1 ] && [ "$(/usr/bin/grep -c '^wave.sh requeue 7 ' "$T/wave.log")" = 1 ] && ok "J: with no fix round on offer, CHANGES requeues" || ko "J: exit $rc"
+
+# L) the review streak is a ledger fact (#702, ADR-0151): three CHANGES verdicts in a row end the issue needs-human for the
+# owner, so the card carries frozen:owner, one status comment names the last findings, and the issue is not requeued again.
+# Identical findings twice move the next fix round one place down the coder chain, and the ledger holds that too.
+st() { SG_STATE=$T/st SG_REPO=x/y python3 "$T/s/issue_ledger.py" "$@"; }
+reset; rm -f "$T/gh.log"; rm -rf "$T/st/cq"; mkdir -p "$T/st/cq"
+for r in 1 2 3; do out=$(cd "$T/wt" && SQUAD_REVIEW_FIX=0 SQUAD_REVIEW_ROUND=$r STUB_VERDICT=CHANGES bash "$T/s/runreview.sh" run-1 route.1.1 7 2>&1); rc=$?; done
+[ "$rc" = 1 ] && ok "L: the third CHANGES verdict holds the child (1)" || ko "L: exit $rc: $out"
+[ "$(st read 'x/y#7' state)" = needs-human ] && ok "L: three CHANGES verdicts end the issue needs-human" || ko "L: state '$(st read 'x/y#7' state)'"
+[ "$(st coder 'x/y#7')" = 1 ] && ok "L: identical findings twice move the next attempt down the coder chain" || ko "L: coder '$(st coder 'x/y#7')'"
+[ "$(/usr/bin/grep -c 'issues/7/labels' "$T/gh.log" 2>/dev/null)" = 1 ] && /usr/bin/grep -q 'frozen:owner' "$T/gh.log" \
+  && ok "L: the card is frozen for the owner once (frozen:owner, through the door)" || ko "L: label writes '$(cat "$T/gh.log" 2>/dev/null)'"
+[ "$(/usr/bin/grep -c '^wave.sh requeue 7 ' "$T/wave.log")" = 1 ] && ok "L: the frozen issue adds no requeue of the head it already requeued" || ko "L: requeues '$(/usr/bin/grep -c '^wave.sh requeue 7 ' "$T/wave.log")'"
+c=$(/bin/ls "$T/st/cq" | /usr/bin/grep 'reviewstreak'); /usr/bin/grep -q 'first finding' "$T/st/cq/$c" \
+  && ok "L: one status comment names the last findings" || ko "L: comment '$(/bin/ls "$T/st/cq")'"
+# a review already queued for the stopped issue (a fourth CHANGES on a head it never requeued) holds the child: no requeue,
+# and no fix round on offer either, because the owner's freeze is the one decision left on it (ADR-0029, ADR-0151 rule 1).
+(cd "$T/wt" && echo y > g && $G add g && $G -c user.email=a@b -c user.name=t commit -q -m "late work (Refs #7)")
+: > "$T/wave.log"
+out=$(cd "$T/wt" && SQUAD_REVIEW_FIX=0 SQUAD_REVIEW_ROUND=4 STUB_VERDICT=CHANGES STUB_EXTRA="d.py:9 a late finding" bash "$T/s/runreview.sh" run-1 route.1.1 7 2>&1); rc=$?
+[ "$rc" = 1 ] && [ ! -s "$T/wave.log" ] \
+  && ok "L: a review queued after the freeze holds the child and requeues nothing" || ko "L: exit $rc, wave.log '$(cat "$T/wave.log")'"
+out=$(cd "$T/wt" && SQUAD_REVIEW_FIX=1 SQUAD_REVIEW_ROUND=5 STUB_VERDICT=CHANGES STUB_EXTRA="e.py:1 another finding" bash "$T/s/runreview.sh" run-1 route.1.1 7 2>&1); rc=$?
+[ "$rc" = 1 ] && [ ! -s "$T/wave.log" ] \
+  && ok "L: a frozen issue is offered no fix round" || ko "L: exit $rc, wave.log '$(cat "$T/wave.log")'"
+# an approval resets the streak, so a fourth review is no freeze of its own
+reset; rm -f "$T/gh.log"
+(cd "$T/wt" && SQUAD_REVIEW_FIX=0 SQUAD_REVIEW_ROUND=1 STUB_VERDICT=CHANGES bash "$T/s/runreview.sh" run-1 route.1.1 7 >/dev/null 2>&1)
+(cd "$T/wt" && SQUAD_REVIEW_FIX=0 SQUAD_REVIEW_ROUND=2 STUB_VERDICT=APPROVE bash "$T/s/runreview.sh" run-1 route.1.1 7 >/dev/null 2>&1)
+[ "$(st read 'x/y#7' state)" = todo ] && [ "$(st coder 'x/y#7')" = 0 ] \
+  && ok "L: an approval resets the review streak" || ko "L: after approve '$(st read 'x/y#7' review)'"
 
 rm -rf "$T"; exit $fail

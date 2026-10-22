@@ -15,10 +15,14 @@
 # markers auto/runfix-fp-<branch key> and -same-, ADR-0134); at SG_RUN_FIX_STALLS (default 3) the issue is requeued once, exit 1.
 # BLOCKED, or CHANGES with no fix round on offer, requeues as above. SG_REQUEUE_CAP in wave.sh stays the outer bound.
 # A requeue frees the issue while other children of the same run are still live; that is accepted.
+# Every APPROVE and CHANGES verdict is a `review` fact in the issue's ledger (ADR-0151, ADR-0149): three CHANGES verdicts in
+# a row end the issue needs-human, so the card takes frozen:owner over the column its work reached, one status comment names
+# the last findings, and the run holds the child with no requeue (ADR-0029); identical findings twice move the next fix round
+# one place down the coder chain. An APPROVE resets the streak. A BLOCKED verdict enters no streak.
 # The review takes one `reviews` slot of the machine-wide budget (squad/caps.py), waiting for it: caps says so on one line.
 # Stdout is the review (the run record keeps it as the gate's findings).
 here="$(cd "$(dirname "$0")" && pwd)"
-. "$here/env.sh"; . "$here/caps.sh"
+. "$here/env.sh"; . "$here/caps.sh"; . "$here/ghcall.sh"
 run=$1 child=$2 iss=$3; NONE=3 FIX=4 AGAIN=5
 { [ -n "$run" ] && [ -n "$child" ]; } || { echo "usage: runreview.sh <run> <child> <issue>" >&2; exit 2; }
 [ -n "$iss" ] || { echo "RUNREVIEW $run $child: no issue, no review here" >&2; exit $NONE; }
@@ -36,12 +40,39 @@ md="$SG_STATE/review-$key.md"
 cat "$md"
 v=$(head -1 "$md" | tr -d '*'); v=${v#VERDICT: }; v=${v%% *}
 case "$v" in
-  APPROVE) exit 0;;
-  CHANGES|BLOCKED) ;;
+  APPROVE|CHANGES|BLOCKED) ;;
   *) echo "RUNREVIEW $run $child: verdict '$v' is none of APPROVE, CHANGES, BLOCKED: try again (#$iss)" >&2; exit $AGAIN;;
 esac
+fp=$(python3 "$here/revformat.py" --fingerprint "$md" 2>/dev/null) || fp=
+# One review of the issue is a ledger fact (ADR-0151, ADR-0149): three CHANGES verdicts in a row end it needs-human for the
+# owner, and identical findings twice move the next fix round one place down the coder chain. A BLOCKED verdict answers no
+# finding the fix cycle can read, so it enters no streak. A ledger that refuses the event is named, never dropped.
+st=; case "$v" in APPROVE) st=approve;; CHANGES) st=changes;; esac
+if [ -n "$st" ]; then
+  lv=$(SG_STATE="$SG_STATE" SG_REPO="$SG_REPO" python3 "$here/issue_ledger.py" review "$SG_REPO#$iss" "$run" "$st" "$fp" "${SQUAD_REVIEW_ROUND:-0}" 2>&1) \
+    || echo "RUNREVIEW $run $child: the review fact of #$iss was refused: $lv" >&2
+else lv=; fi
+# The streak ended the issue needs-human: the card keeps the column its work reached and carries the owner freeze marker
+# (ADR-0029 rule 8), the run holds its child, and no dispatch follows the issue.
+if [ "$lv" = frozen ]; then
+  lout=$(gh_send -X POST "repos/$SG_REPO/issues/$iss/labels" -f "labels[]=frozen:owner" 2>&1) \
+    || printf 'RUNREVIEW %s: the freeze of #%s was refused: %s\n' "$child" "$iss" "$lout" >&2
+  f=$(sg_cq_status "$iss" reviewstreak 2>/dev/null) && {
+    printf 'SQUAD-NEEDS-HUMAN: the reviews of this issue asked for changes in a row, so the loop stops building it (ADR-0151). The card is frozen for the owner (frozen:owner); removing the label and rearming the issue lets it start again. Last findings at %s:\n\n' "$head"
+    awk 'NR==1{next} /^## /{b=($0 ~ /^## Blocking/)} b' "$md" | /usr/bin/grep -v '^## Blocking' | /usr/bin/grep -v '^[[:space:]]*$'
+  } > "$f"
+  echo "RUNREVIEW $run $child: the review streak ended #$iss needs-human, so the run holds its child (frozen:owner)" >&2
+  exit 1
+fi
+# An issue the streak already stopped stays stopped: a review queued before the freeze (a fourth CHANGES, an approval, a
+# retry of an old round) holds the child here, with no fix round and no requeue. The owner's lift is the only next move.
+if [ "$(SG_STATE="$SG_STATE" SG_REPO="$SG_REPO" python3 "$here/issue_ledger.py" read "$SG_REPO#$iss" state 2>/dev/null)" = needs-human ]; then
+  echo "RUNREVIEW $run $child: #$iss is frozen for the owner, so the run holds its child (#$iss)" >&2
+  exit 1
+fi
+[ "$v" = APPROVE ] && exit 0
 if [ "$v" = CHANGES ] && [ "${SQUAD_REVIEW_FIX:-0}" = 1 ]; then
-  fp=$(python3 "$here/revformat.py" --fingerprint "$md") && same=$(python3 "$here/revformat.py" --stall "$SG_STATE/auto" runfix "$key" "$fp") || same=
+  [ -n "$fp" ] && same=$(python3 "$here/revformat.py" --stall "$SG_STATE/auto" runfix "$key" "$fp") || same=
   if [ -n "$same" ] && [ "$same" -lt "${SG_RUN_FIX_STALLS:-3}" ]; then
     python3 "$here/revformat.py" --record-stall "$SG_STATE/auto" runfix "$key" "$fp" "$same"
     echo "RUNREVIEW $run $child: CHANGES at ${head:0:9}, round ${SQUAD_REVIEW_ROUND:-?}, $same failed rounds with no change before it: fix round (#$iss)" >&2
