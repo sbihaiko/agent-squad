@@ -250,13 +250,18 @@ def run_roots(co):   # where a checkout keeps run folders: its runs/, and each r
     co = pathlib.Path(co)
     return [co / "runs", *(w / "runs" for kind in ("run", "child") for w in sorted((co / "worktrees" / kind).glob("*")))]
 
-def project_dirs():
+def own_roots():
+    """The run roots of this profile: its checkout, SG_PROJECTS and SG_FORK_DIR. A dashboard outside them is another profile's."""
     ds = set(run_roots(CHECKOUT))
-    for x in os.environ.get("SG_PROJECTS", "").split(":"):
+    for x in [*os.environ.get("SG_PROJECTS", "").split(":"), os.environ.get("SG_FORK_DIR", "")]:
         if x: ds.update(run_roots(x))
+    return ds
+
+def project_dirs():
+    own = own_roots(); ds = set(own)
     for l in sh("/bin/ps", "-axwwo", "command=").splitlines():
         m = re.search(r"squad\.dashboard_server\s+(\S+)", l)
-        if m: ds.add(pathlib.Path(m.group(1)).parent)
+        if m and pathlib.Path(m.group(1)).parent in own: ds.add(pathlib.Path(m.group(1)).parent)
     return [d for d in ds if d.is_dir()]
 
 def all_runs():
@@ -1253,6 +1258,7 @@ def runs():
     _titles()
     out = []; load_rows = []
     ps_lines = sh("/bin/ps", "-axwwo", "pid=,command=").splitlines()
+    own = own_roots()
     for l in ps_lines:
         m = re.match(r"\s*(\d+)\s+\S*python\S*\s+-m\s+squad\.dashboard_server\s+(\S+)", l)
         if not m: continue
@@ -1260,6 +1266,7 @@ def runs():
         port = re.search(r"TCP 127\.0\.0\.1:(\d+)|n127\.0\.0\.1:(\d+)", sh(LSOF, "-nP", "-a", "-p", pid, "-iTCP", "-sTCP:LISTEN", "-Fn"))
         if not port: continue
         if not pathlib.Path(d).exists(): continue
+        if pathlib.Path(d).parent not in own: continue   # another profile's dashboard: the ps scan sees the whole machine
         if re.search(r"/pytest-\d+/|/pytest-of-", d): continue   # dashboards started by agent-squad's own test suite are fixtures, not runs   # a dashboard server outliving its run folder (worktree removed) must not break the list
         row, load = run_row(d, port.group(1) or port.group(2), ps_lines)
         out.append(row)
