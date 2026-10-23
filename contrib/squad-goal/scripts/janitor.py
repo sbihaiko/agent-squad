@@ -551,7 +551,9 @@ _named_in_land = None
 def named_in_land():   # {issue} whose fix is a commit in origin/<land>: its subject ends `(#N)` and is no `TDD RED` (a red test alone fixes nothing). A fix pushed straight to dev reached it (#519). The subject only: a body names issues in passing. One local log a pass, no API call; a checkout with no such ref names none
     global _named_in_land
     if _named_in_land is None:
-        r = subprocess.run(["git", "-C", str(co), "log", "-n", "2000", "--format=%s", f"origin/{os.environ.get('SG_LAND_BRANCH') or 'dev'}"], capture_output=True, text=True)
+        land = f"origin/{os.environ.get('SG_LAND_BRANCH') or 'dev'}"
+        base = os.environ.get("SG_LAND_SCAN_FROM", "").strip()   # a fork's last upstream commit: the upstream's `(#N)` subjects name its PRs, never this repository's issues (#759)
+        r = subprocess.run(["git", "-C", str(co), "log", "-n", "2000", "--format=%s", f"{base}..{land}" if base else land], capture_output=True, text=True)
         _named_in_land = {m.group(1) for line in (r.stdout.splitlines() if r.returncode == 0 else []) if not line.startswith("TDD RED")
                           for m in [re.search(r"\(#(\d+)\)\s*$", line)] if m}
     return _named_in_land
