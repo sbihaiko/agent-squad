@@ -384,13 +384,20 @@ class BoardBinding:
         print(f"issue_state.py: items read {len(m)}; project total: none on the REST items route (source: {self.base}/items, a bare array)", file=sys.stderr)
         return m
 
+    @property
+    def _items_file(self):
+        """The item map's cache file. The map is filtered to the binding's repository, so the file is named by it too: two
+        repositories on one board never read each other's map (#770)."""
+        tag = "-" + self.repo.replace("/", "_") if self.repo else ""
+        return f"rest-items-{self.owner}-{self.project}{tag}.json"
+
     def _items(self):
         if self.items_map is None:
-            self.items_map = self._cached(f"rest-items-{self.owner}-{self.project}.json", 600, self.items)
+            self.items_map = self._cached(self._items_file, 600, self.items)
         return self.items_map
 
     def _save_items(self):
-        (self.st / f"rest-items-{self.owner}-{self.project}.json").write_text(json.dumps(self.items_map))
+        (self.st / self._items_file).write_text(json.dumps(self.items_map))
 
     def item_id(self, n, add_missing=False):
         """The one reader every caller uses (move, --add, --run-fields, --clear-run). A miss re-reads the
