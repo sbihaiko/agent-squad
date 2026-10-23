@@ -268,7 +268,7 @@ reachable=0; for m in $chain; do eligible "$m" && reachable=$((reachable+1)); do
 # #762: the model that wrote the tip never reviews it while another reviewer is reachable. The writer names it in
 # SG_REVIEW_AUTHOR or in $SG_STATE/author-<branch with / as _>; with no other reachable reviewer it still reviews.
 author=${SG_REVIEW_AUTHOR:-$(head -1 "$SG_STATE/author-$pr" 2>/dev/null)}
-same() { local x=${1%%\[*} y=${2%%\[*}; [ -n "$y" ] && [ "${x#claude:}" = "${y#claude:}" ]; }
+same() { [ -n "$2" ] && [ "$(route_of "$1" | cut -f3)" = "$(route_of "$2" | cut -f3)" ]; }   # one model when the registry gives one wire string (ADR-0147)
 others=0; for m in $chain; do same "$m" "$author" || { eligible "$m" && others=$((others+1)); }; done
 [ "$others" -gt 0 ] && [ "$others" -lt "$reachable" ] && reachable=$others || author=""
 used=0

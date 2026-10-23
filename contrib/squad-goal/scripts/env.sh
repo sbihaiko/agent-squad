@@ -32,7 +32,7 @@ _sg_ctx=$(repoctx "$SG_PROFILE") || exit 2
 : "${SG_WAVE_GATES:=bash '$here/fast-gate.sh'}"
 # The review a loop run gives each passed child before it merges it (#601, ADR-0145 rule 9): the loop workflow's review gate
 # runs the script this names, and with none set (a run outside the loop) the gate answers "no review here".
-: "${SG_RUN_REVIEW:=$here/runreview.sh}"
+: "${SG_RUN_REVIEW:=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/runreview.sh}"
 if [ -z "${SG_SQUAD:-}" ]; then
   SG_SQUAD=$(python3 -I -c "import json,os;print(json.load(open(os.path.expanduser('~/.claude/plugins/installed_plugins.json')))['plugins']['agent-squad@agent-squad'][0]['installPath'])")
 fi
