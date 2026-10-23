@@ -154,3 +154,12 @@ def test_every_real_suite_s_bound_covers_the_load_the_cap_excuses():
     own measure times the load the cap excuses, so no suite is failed for the machine's wall."""
     for name, seconds in shell_suites.measured().items():
         assert shell_suites.timeout_for(SCRIPTS / name) >= seconds * shell_suites.LOAD_FACTOR
+
+
+def test_the_gate_knobs_never_reach_a_suite(tmp_path, monkeypatch):
+    # #755: nightly.sh runs the gate with SERIAL_HOLD_SECONDS=10800, and a suite that reads the bound in force saw a
+    # reserve it wrote as dead still alive. The runner clears the gate's SERIAL_* knobs as it clears SG_*.
+    monkeypatch.setenv("SERIAL_HOLD_SECONDS", "10800")
+    monkeypatch.setenv("SERIAL_TRY", "1")
+    suite = write_suite(tmp_path, "test-env.sh", 'echo "hold=${SERIAL_HOLD_SECONDS:-unset} try=${SERIAL_TRY:-unset}"\n')
+    assert "hold=unset try=unset" in shell_suites.run(suite).stdout
