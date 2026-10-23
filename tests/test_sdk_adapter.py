@@ -203,6 +203,13 @@ def test_extract_json_prefers_the_last_fenced_block_then_the_last_object():
     assert extract_json("[1, 2]") is None   # an artifact is an object
 
 
+def test_extract_json_reads_an_object_with_a_shell_escape_json_does_not_allow():
+    """A child copies a shell command whole, so `\\!` reaches its last text. The object is still its artifact (#766)."""
+    text = r'{"status": "pass", "ac_commands": ["[ \! -d hostbuild ] || make"]}'
+    assert extract_json(text) == {"status": "pass", "ac_commands": [r"[ \! -d hostbuild ] || make"]}
+    assert extract_json("```json\n" + text + "\n```") == extract_json(text)
+
+
 async def test_an_output_cap_error_after_a_result_keeps_the_measured_spend_and_reports_output_cap():
     async def query(*, prompt, options):
         yield ResultMessage(total_cost_usd=0.022, result="cut off")

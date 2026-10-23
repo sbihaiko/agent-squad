@@ -44,8 +44,11 @@ ser=${SG_NIGHTLY_SERIAL:-"$py -m pytest -p no:deepeval -p no:xdist"}
 # one line, and both readers (hub.py, ghcall.sh) parse that array and never a word of it.
 ids_of() { sed -n -e 's/^FAILED //p' -e 's/^ERROR //p' "$1" | sed -e 's/ - .*//'; }
 pout=$st/nightly-parallel.log; sout=$st/nightly-serial.log
-pm=pass; ( cd "$tree" && bash -c "$par" ) > "$pout" 2>&1 || pm=fail
-sm=pass; ( cd "$tree" && bash -c "$ser" ) > "$sout" 2>&1 || sm=fail   # both modes always run: the record says which one broke
+# pytest exits 5 when it collects no test. Under the default command that is a repository with no Python suite, and no
+# suite is not red (#758); a profile names its own command in SG_NIGHTLY_PARALLEL/SG_NIGHTLY_SERIAL, and there 5 is red.
+mode() { ( cd "$tree" && bash -c "$1" ) > "$2" 2>&1; local r=$?; [ $r = 0 ] || { [ $r = 5 ] && [ -z "$3" ]; }; }
+pm=pass; mode "$par" "$pout" "${SG_NIGHTLY_PARALLEL:-}" || pm=fail
+sm=pass; mode "$ser" "$sout" "${SG_NIGHTLY_SERIAL:-}" || sm=fail   # both modes always run: the record says which one broke
 failed=$st/nightly-failing.$$   # one complete id per line, so no id is ever split
 { ids_of "$pout"; ids_of "$sout"; } | sort -u > "$failed"
 nfail=$(awk 'END{print NR}' "$failed")

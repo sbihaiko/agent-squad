@@ -59,7 +59,7 @@ head -1 "$T/st/review-$key.md" | /usr/bin/grep -q APPROVE && ok "the second roun
 # 4) the fix request: it works on the same branch, commits on it and opens no pull request
 echo '#7 title' > /dev/null; printf 'VERDICT: CHANGES\n## Blocking\n- a.cs:1 — wrong — fix\n' > "$T/st/review-$key.md"
 r=$(AF_DRY=1 bash "$T/s/branchfix.sh" gui/7-x 7 2>&1)
-case "$r" in *"Check out origin/gui/7-x, commit on top, push to the SAME branch (git push origin HEAD:gui/7-x); no pull request"*) ok "the fix round commits on the work branch";; *) ko "fix request: '$r'";; esac
+case "$r" in *"check out origin/gui/7-x and commit on top; push nothing and open no pull request: once the run ends, the loop pushes the run's head to gui/7-x (fast-forward only)"*) ok "the fix round commits on the work branch, and the loop pushes it (#768)";; *) ko "fix request: '$r'";; esac
 case "$r" in *"a.cs:1"*) ok "the fix request carries the findings";; *) ko "no findings in the fix request";; esac
 # 5) the child of a wave (#376): the review reads only the child's own commits, against its merge-base with the wave branch,
 #    and the verdict still lands in the issue's one status comment. SG_REVIEW_BASE names the branch the diff is taken against.
@@ -119,4 +119,26 @@ out=$(cd "$T/child" && CLAUDE_CHANGES=1 bash "$T/s/childreview.sh" run-1 7 2>&1)
 [ $rc = 0 ] && /usr/bin/grep -q '^+late' "$T/prompt" && ! /usr/bin/grep -q '^+devlater' "$T/prompt" && ! /usr/bin/grep -q '^+wave' "$T/prompt" \
   && ok "late: a child on a dev tip newer than its wave is reviewed on its own commits only" || ko "late: rc=$rc, the prompt diff: $(/usr/bin/grep '^+[a-z]' "$T/prompt" | tr '\n' ' ') $out"
 [ "$(cat "$T/st/review-squad_run-1_ws-late.base" 2>/dev/null)" = wave/run-1 ] && ok "late: the base file still names the wave branch, as the entry requires" || ko "late: base '$(cat "$T/st/review-squad_run-1_ws-late.base" 2>/dev/null)'"
+# 10) #772: review.sh prints a progress line before its model= line. The review reads every line, so review.sh is never
+#     killed by SIGPIPE in the middle of the call, and the status comment names the model.
+mkdir -p "$T/p"; cp "$T/s/branchreview.sh" "$T/s/env.sh" "$T/s/ghcall.sh" "$T/s/ghread.py" "$T/s/address.sh" "$T/p/" 2>/dev/null
+cat > "$T/p/review.sh" <<J
+#!/bin/bash
+echo "review m1 on x still running, 30s of 60s"; sleep 0.2; echo "model=m1 verdict=APPROVE"
+printf 'VERDICT: APPROVE\n' > "$T/st/review-gui_7-x.md"; : > "$T/p/finished"
+J
+echo ccc333 > "$T/head"; rm -f "$T/st/cq/"*
+bash "$T/p/branchreview.sh" gui/7-x 7 >/dev/null 2>&1
+[ -e "$T/p/finished" ] && /usr/bin/grep -q 'review (m1) against' "$T/st/cq/"x__y#7-status~* 2>/dev/null \
+  && ok "progress: a progress line before model= never kills review.sh, and the status names the model" || ko "progress: finished=$([ -e "$T/p/finished" ] && echo y || echo n), status '$(head -1 "$T/st/cq/"x__y#7-status~* 2>/dev/null)'"
+# 11) #769: the run that coded a child names the coder's model for the review, so review.sh's self-review skip (#762) fires.
+#    childreview.sh reads the run record above the worktree: the outcome whose workspace is this worktree names the model,
+#    and it goes to $SG_STATE/author-<branch key>. A dispatcher outcome with no workspace is never the author.
+rm -f "$T/st/author-"*
+printf '%s\n' '{"event": "outcome", "node": "route.router.2", "entry": 1, "item": null, "outcome": "pass", "model": "claude-sonnet-5-5", "workspace": {"name": "worktrees/child", "path": "child"}}' \
+  '{"event": "outcome", "node": "router", "entry": 1, "item": null, "outcome": "pass", "model": "claude-opus-5-5"}' > "$T/record.jsonl"
+out=$(cd "$T/child" && CLAUDE_CHANGES=1 bash "$T/s/childreview.sh" run-1 7 2>&1)
+[ "$(head -1 "$T/st/author-squad_run-1_ws-late" 2>/dev/null)" = claude-sonnet-5-5 ] && ok "author: the coder's model from the run record names the branch author" \
+  || ko "author: author file '$(cat "$T/st/author-squad_run-1_ws-late" 2>/dev/null)' $out"
+rm -f "$T/record.jsonl"
 rm -rf "$T"; exit $fail

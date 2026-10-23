@@ -12,7 +12,7 @@ export SG_GH_PASS=${SG_GH_PASS:-branchreview}
 br=$1 iss=$2; key=$(printf '%s' "$br" | tr / _)
 base=${SG_REVIEW_BASE:-${SG_LAND_BRANCH:-dev}}; export SG_REVIEW_BASE=$base   # the ref the diff is taken against: the wave branch for a child of a wave
 sha=$(gh_api repos/$repo/commits/$br -q .sha)
-rm=$(bash "$(dirname "$0")/review.sh" $repo --branch "$br" $iss | head -1 | sed -n "s/^model=\([^ ]*\).*/\1/p")
+rm=$(bash "$(dirname "$0")/review.sh" $repo --branch "$br" $iss | sed -n "s/^model=\([^ ]*\).*/\1/p" | sed -n 1p)   # every line is read: a closed pipe would kill review.sh mid-call (#772)
 v=$(head -1 "$SG_STATE/review-$key.md" | tr -d '*')
 printf '%s\n' "$base" > "$SG_STATE/review-$key.base"   # the base beside the reviewed sha, so wave.sh's entry can require the wave branch
 { echo "Status update — branch $br @ ${sha:0:9}: review ($rm) against $base: $v."; echo; tail -n +2 "$SG_STATE/review-$key.md"; } > "$(sg_cq_status "$iss" "res$$")"

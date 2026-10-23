@@ -83,3 +83,12 @@ def test_the_emulator_acceptance_goes_through_the_one_serial_lock_and_is_never_b
     assert bare == [], f"a script runs the profile's GUI command bare: {bare}"
     assert "serial.sh gui-suite" in (SCRIPTS / "req-checklist.txt").read_text(), (
         "the checklist must send an emulator acceptance through the gui-suite lock")
+
+
+def test_the_gate_knobs_never_reach_a_suite(tmp_path):
+    # #755: nightly.sh runs the suites with SERIAL_HOLD_SECONDS=10800, and a suite that reads the bound in force saw a
+    # reserve it wrote as dead still alive. The gate's SERIAL_* knobs are cleared like SG_*, so a suite reads its own.
+    d = _tree(tmp_path, {"test-a.sh": 'echo "hold=${SERIAL_HOLD_SECONDS:-unset} try=${SERIAL_TRY:-unset}"'})
+    p = _run("bash", str(d / "shell-suites.sh"), cwd=tmp_path, env={"SERIAL_HOLD_SECONDS": "10800", "SERIAL_TRY": "1"})
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert "hold=unset try=unset" in p.stdout, p.stdout

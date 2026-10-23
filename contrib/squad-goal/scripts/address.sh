@@ -125,9 +125,14 @@ sg_profile_from_origin() { local url n hit=""; url=$(git -C "${1:-.}" remote get
   [ -n "$url" ] || return 1
   for n in $(sg_profiles); do case "$url" in *"$(echo "$n" | tr A-Z a-z)"*) hit=$n;; esac; done
   [ -n "$hit" ] && echo "$hit"; }
+# sg_profile_parses <file>: 0 when bash parses the profile; else prints "<file> does not parse: line N ..." and returns 1, so
+# no script goes on with half a profile (#761).
+sg_profile_parses() { local e; e=$(bash -n "$1" 2>&1) && return 0
+  echo "repoctx: profile $1 does not parse: $(printf '%s' "$e" | head -1 | sed 's/^[^:]*: //')"; return 1; }
 # The context of one profile, KEY=value lines; the profile's own values only.
 _sg_ctx_of() { local slug=$1 issue=$2 f out op; f="$(sg_profiles_dir)/$slug.sh"
   [ -f "$f" ] && [ "$slug" != example ] || { echo "repoctx: unknown profile: $slug (known: $(sg_profiles | tr '\n' ' '))" >&2; return 2; }
+  sg_profile_parses "$f" >&2 || return 2
   out=$(env $(compgen -e | /usr/bin/grep '^SG_' | /usr/bin/grep -vx 'SG_PROFILES_DIR\|SG_STATE_BASE' | sed 's/^/-u /') \
     bash -c 'here=$1; . "$2" >/dev/null 2>&1
       printf "%s=%q\n" SG_PROFILE "$3" SG_REPO "$SG_REPO" SG_OWNER "${SG_OWNER:-${SG_REPO%%/*}}" SG_PROJECT "$SG_PROJECT" \
@@ -165,6 +170,7 @@ repoctx() { local in=$1 slug="" issue="" n r want co
 # sg_repo_ctx <input>: the sourced form; sets every context key in the caller's shell, or returns 2 and sets none.
 sg_repo_ctx() { local out; out=$(repoctx "$1") || return 2; eval "$out"; }
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
-  if [ "${1:-}" = --list ]; then for n in $(sg_profiles); do printf '%s\t%s\n' "$n" "$(_sg_repo_of "$n")"; done; exit 0; fi
+  if [ "${1:-}" = --list ]; then for n in $(sg_profiles); do f="$(sg_profiles_dir)/$n.sh"
+    if e=$(sg_profile_parses "$f"); then printf '%s\t%s\n' "$n" "$(_sg_repo_of "$n")"; else printf '%s\t%s\n' "$n" "${e#repoctx: }"; fi; done; exit 0; fi
   repoctx "${1:-}" || exit 2
 fi

@@ -7,17 +7,9 @@
 # could name, is retired (#20): a profile that still sets it keeps working. It is mapped into SG_REPOS and one warning per
 # state directory names the profile, the setting and its replacement. SG_REQUIRED_SETTINGS is the contract in one place
 # (`<setting>:<the setting that engages it>`; the retired form is `<setting>:<engaging setting>:retired:<replacement>`).
+# env.sh resolves itself with BASH_SOURCE and the seam uses bash builtins, so another shell is refused here, by name (#761).
+[ -n "${BASH_VERSION:-}" ] || { echo "env.sh: source it from bash (bash -c '. env.sh; ...'), not from ${ZSH_NAME:-this shell}" >&2; return 2 2>/dev/null || exit 2; }
 SG_REQUIRED_SETTINGS="SG_TOOLING_REPO:SG_FORK_DIR:retired:SG_REPOS"
-# A spec is a document until the owner starts it, and a freeze marker holds the card without changing its column:
-# the dispatch pass never takes one of these labels as work (SG_FRONTIER_SKIP_LABELS, beside the bug label it already skips).
-: "${SG_FRONTIER_SKIP_LABELS:=spec,needs-owner,needs-ratification,needs-info,frozen:owner,frozen:dependency,wontfix}"
-# The local gates a child runs in its own worktree before it enters the wave branch (wave.sh): lint, types, the fast
-# battery and the shell suites of the scripts the child changes (fast-gate.sh). A profile that works another repository overrides it, and an empty value refuses the entry, so no child ever
-# enters a wave ungated (ADR-0145 rule 9).
-: "${SG_WAVE_GATES:=bash '$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fast-gate.sh'}"
-# The review a loop run gives each passed child before it merges it (#601, ADR-0145 rule 9): the loop workflow's review gate
-# runs the script this names, and with none set (a run outside the loop) the gate answers "no review here".
-: "${SG_RUN_REVIEW:=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/runreview.sh}"
 # A tool's absolute path differs by platform: /usr/sbin/lsof holds on macOS and is absent on the CI runner, where a
 # hardcoded path turns a missing tool into a failed pass. One resolution here, and every script reads it from SG_LSOF.
 SG_LSOF="${SG_LSOF:-}"; [ -n "$SG_LSOF" ] || SG_LSOF="$(command -v lsof 2>/dev/null)"
@@ -30,6 +22,17 @@ SG_PROFILES_DIR="$(sg_profiles_dir)"; export SG_PROFILES_DIR   # a session a run
 : "${SG_PROFILE:?no squad-goal profile matched; set SG_PROFILE or add scripts/profiles/<name>.sh}"
 _sg_ctx=$(repoctx "$SG_PROFILE") || exit 2
 . "$(sg_profiles_dir)/$SG_PROFILE.sh"
+# These three defaults are read after the profile, so a profile's := default wins (#757).
+# A spec is a document until the owner starts it, and a freeze marker holds the card without changing its column:
+# the dispatch pass never takes one of these labels as work (SG_FRONTIER_SKIP_LABELS, beside the bug label it already skips).
+: "${SG_FRONTIER_SKIP_LABELS:=spec,needs-owner,needs-ratification,needs-info,frozen:owner,frozen:dependency,wontfix}"
+# The local gates a child runs in its own worktree before it enters the wave branch (wave.sh): lint, types, the fast
+# battery and the shell suites of the scripts the child changes (fast-gate.sh). A profile that works another repository overrides it, and an empty value refuses the entry, so no child ever
+# enters a wave ungated (ADR-0145 rule 9).
+: "${SG_WAVE_GATES:=bash '$here/fast-gate.sh'}"
+# The review a loop run gives each passed child before it merges it (#601, ADR-0145 rule 9): the loop workflow's review gate
+# runs the script this names, and with none set (a run outside the loop) the gate answers "no review here".
+: "${SG_RUN_REVIEW:=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/runreview.sh}"
 if [ -z "${SG_SQUAD:-}" ]; then
   SG_SQUAD=$(python3 -I -c "import json,os;print(json.load(open(os.path.expanduser('~/.claude/plugins/installed_plugins.json')))['plugins']['agent-squad@agent-squad'][0]['installPath'])")
 fi
@@ -64,6 +67,9 @@ eval "$(printf '%s\n' "$_sg_ctx" | /usr/bin/grep -E '^(SG_STATE|SG_SHARED|SG_BOA
 # without a code change.
 : "${SG_PENDING_WINDOW_SECONDS:=120}"
 : "${SG_PENDING_OVERLAY:=on}"
+# The board vocabulary the loop writes (#760): board_define.py makes a board with the shipped vocabulary, so `shipped` is the
+# default. Read here, after the profile, so a profile on an old board sets another value (`legacy`) and keeps it.
+: "${SG_BOARD_VOCAB:=shipped}"
 sg_gate_cmds   # (#740) the gate commands a request names: the profile's, or none where the checkout lacks agent-squad's scripts
 # The retired SG_TOOLING_REPO is one more entry of SG_REPOS, and the key is not read again (the seam lists it once).
 if [ -n "${SG_TOOLING_REPO:-}" ]; then
@@ -73,7 +79,7 @@ if [ -n "${SG_TOOLING_REPO:-}" ]; then
     echo "env.sh: profile $SG_PROFILE sets SG_TOOLING_REPO, which is retired: it is mapped into SG_REPOS for now; name $SG_TOOLING_REPO in SG_REPOS and remove SG_TOOLING_REPO from the profile" >&2; }
   unset SG_TOOLING_REPO
 fi
-export SG_LSOF SG_FRONTIER_SKIP_LABELS SG_WAVE_GATES SG_RUN_REVIEW SG_WAVE_MAX_AGE_SECONDS SG_PROMOTE_PROOF SG_GATE_WORKERS SG_PROFILE SG_SHARED SG_BOARD_CACHE SG_REPO SG_REPOS SG_OWNER SG_PROJECT SG_CHECKOUT SG_BASE SG_MERGE_METHOD SG_AUTO_MERGE SG_CI_WORKFLOW SG_E2E_DIR SG_E2E_CMD SG_E2E_PASS_REGEX SG_WORKFLOW SG_ROOT_NAME SG_REVIEW_RULES SG_CODING_RULES SG_SQUAD SG_STATE SG_AUTO_BUGFIX SG_BUG_LABEL SG_BUG_SKIP_LABELS SG_BUG_PROJECT SG_BUG_DOING SG_FRONTIER_LABEL SG_FRONTIER_PREAMBLE SG_FORK_DIR SG_FORK_BASE SG_FORK_BRANCH SG_FORK_TEST_CMD SG_E2E_BUILD_DIR SG_E2E_BUILD_CMD SG_FAST_INTERVAL SG_PENDING_WINDOW_SECONDS SG_PENDING_OVERLAY
+export SG_LSOF SG_FRONTIER_SKIP_LABELS SG_WAVE_GATES SG_RUN_REVIEW SG_WAVE_MAX_AGE_SECONDS SG_PROMOTE_PROOF SG_GATE_WORKERS SG_PROFILE SG_SHARED SG_BOARD_CACHE SG_REPO SG_REPOS SG_OWNER SG_PROJECT SG_CHECKOUT SG_BASE SG_MERGE_METHOD SG_AUTO_MERGE SG_CI_WORKFLOW SG_E2E_DIR SG_E2E_CMD SG_E2E_PASS_REGEX SG_WORKFLOW SG_ROOT_NAME SG_REVIEW_RULES SG_CODING_RULES SG_SQUAD SG_STATE SG_AUTO_BUGFIX SG_BUG_LABEL SG_BUG_SKIP_LABELS SG_BUG_PROJECT SG_BUG_DOING SG_FRONTIER_LABEL SG_FRONTIER_PREAMBLE SG_FORK_DIR SG_FORK_BASE SG_FORK_BRANCH SG_FORK_TEST_CMD SG_E2E_BUILD_DIR SG_E2E_BUILD_CMD SG_FAST_INTERVAL SG_PENDING_WINDOW_SECONDS SG_PENDING_OVERLAY SG_BOARD_VOCAB
 BOARD="$here/board.sh"   # board-status.sh + a hub refresh flag
 mkdir -p "$SG_STATE/cq" "$SG_STATE/req" "$SG_SHARED" "$(dirname "$SG_BOARD_CACHE")"
 touch "$SG_STATE/active-runs.txt"

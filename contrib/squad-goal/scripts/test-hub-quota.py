@@ -129,19 +129,19 @@ hub.quota = {
 items = hub.foot_items(hub.foot_sources(NOW), NOW)
 subs = [i for i in items if i["key"] == "subs"]
 ck(len(subs) == 1, "one subscription fact reaches the line", [i["key"] for i in items])
-ck(subs and subs[0]["text"] == "CL 42% · GK 88% 1d 2h · GPT 61% ? · GEM ?",
-   "a token below the warn ladder moves its reset span out of the line", subs[0]["text"] if subs else None)
+ck(subs and subs[0]["text"] == "CL 42% 3.3h · GK 88% 1.1d · GPT 61% ? · GEM ?",
+   "every token carries its reset in one compact rung, green ones too", subs[0]["text"] if subs else None)
 ck(subs and subs[0]["parts"][0].get("tip") == "resets in 3h 20m · read 0s ago",
    "the hidden reset span is the token tooltip", subs[0]["parts"][0] if subs else None)
-# The warn boundary draws the span, but an unreadable reset always stays visible. A reset only one minute away does not
-# override the ladder; quota markers keep their absolute reset time.
+# Every token draws the compact span, whatever its tone, and an unreadable reset always stays visible. A reset only one
+# minute away reads in its own rung; quota markers keep their absolute reset time.
 hub.quota["claude"] = {"windows": [{"label": "weekly", "pct": hub.FOOT_WARN_PCT, "resets": NOW + 3 * 3600 + 20 * 60}], "asof": NOW}
 boundary = [i for i in hub.foot_items(hub.foot_sources(NOW), NOW) if i["key"] == "subs"][0]
-ck(boundary["parts"][0]["text"] == "CL 80% 3h 20m", "the warn boundary keeps the reset span", boundary["parts"][0])
+ck(boundary["parts"][0]["text"] == "CL 80% 3.3h", "a token at the warn boundary keeps the same rung", boundary["parts"][0])
 hub.quota["claude"] = {"windows": [{"label": "weekly", "pct": 42, "resets": NOW + 60}], "asof": NOW}
 close = [i for i in hub.foot_items(hub.foot_sources(NOW), NOW) if i["key"] == "subs"][0]
-ck(close["parts"][0]["text"] == "CL 42%" and close["parts"][0].get("tip") == "resets in 1m · read 0s ago",
-   "a reset minutes away stays hidden below the ladder", close["parts"][0])
+ck(close["parts"][0]["text"] == "CL 42% 1m" and close["parts"][0].get("tip") == "resets in 1m · read 0s ago",
+   "a reset minutes away reads in the minute rung, its exact span in the tooltip", close["parts"][0])
 ck(hub._quota_fact({"codex": NOW + 60, "agy": None}, NOW, subs=()) == "codex reset 05:01 · agy ok",
    "the quota block keeps its reset time", hub._quota_fact({"codex": NOW + 60, "agy": None}, NOW, subs=()))
 hub.quota["claude"] = {"windows": [{"label": "weekly", "pct": 42, "resets": NOW + 3 * 3600 + 20 * 60}], "asof": NOW}
@@ -197,7 +197,7 @@ row = hub.quota_row("grok", LATER)
 ck(row and (row.get("windows") or [{}])[0].get("pct") == 73.0, "the panel row shows the kept reading before the period end", row)
 ck(row and row.get("asof") == ASOF, "the panel row carries the reading's age", row)
 gk = [p for p in [i for i in hub.foot_items(hub.foot_sources(LATER), LATER) if i["key"] == "subs"][0]["parts"] if p["text"].startswith("GK")][0]
-ck(gk["text"] == "GK 73%" and "resets in 4d 7h" in (gk.get("tip") or ""), "the footer token reads the same value as the panel", gk)
+ck(gk["text"] == "GK 73% 4.3d" and "resets in 4d 7h" in (gk.get("tip") or ""), "the footer token reads the same value as the panel", gk)
 ck("read 5h ago" in (gk.get("tip") or ""), "the footer token carries the same age as the panel", gk)
 row = hub.quota_row("grok", END + 60)
 ck(row and row.get("unavailable") is True and row.get("stale") is True, "past the period end the reading is stale", row)
@@ -208,6 +208,28 @@ older = line("2026-10-17T06:00:00.000Z", "billing: credits config", ctx={"config
     "creditUsagePercent": 10.0, "currentPeriod": {"start": "2026-10-15T18:51:01Z", "end": "2026-10-22T18:51:01Z"}}})
 write_log(older)
 ck(hub.q_grok()["windows"][0]["pct"] == 73.0, "a log line older than the kept reading does not replace it")
+
+print("== 8. a billing line with no creditUsagePercent is a 0% reading, not a missing one (#753)")
+# grok 1.0.62 omits creditUsagePercent when the period's usage is 0%, so that line carries the period alone: a
+# currentPeriod with start and end is a reading, and the field's absence on it means 0%. The previous period's
+# kept 73% must not stand in for it.
+NEW_START = dt.datetime(2026, 10, 22, 18, 51, 1, 60398, tzinfo=dt.timezone.utc).timestamp()
+NEW_END = dt.datetime(2026, 10, 29, 18, 51, 1, 60398, tzinfo=dt.timezone.utc).timestamp()
+write_log(line("2026-10-22T19:00:00.000Z", "billing: fetched credits config", src="shell", ctx={"config": {
+    "currentPeriod": {"type": "USAGE_PERIOD_TYPE_WEEKLY",
+                      "start": "2026-10-22T18:51:01.060398+00:00", "end": "2026-10-29T18:51:01.060398+00:00"}},
+    "subscriptionTier": "SuperGrok"}))
+r = hub.q_grok()
+w = ((r or {}).get("windows") or [{}])[0]
+ck(w.get("pct") == 0.0, "a line with no creditUsagePercent reads as 0%, not as the kept reading", r)
+ck(w.get("resets") == NEW_END and (r or {}).get("until") == NEW_END, "the weekly window resets at the new period end", r)
+ck(not (r or {}).get("unavailable"), "the reading is not unavailable", r)
+kept = json.loads(KEPT.read_text()) if KEPT.exists() else {}
+ck(kept.get("pct") == 0.0, "the 0% reading replaces the kept one, so a rotation cannot resurrect the old period", kept)
+hub.quota = {"grok": r}
+row = hub.quota_row("grok", NEW_START + 3600)
+ck(row and not row.get("unavailable") and not row.get("stale"), "the panel row is not stale while the new period is open", row)
+ck(row and (row.get("windows") or [{}])[0].get("pct") == 0.0, "the panel row reads 0%", row)
 
 print(f"\n{checks - len(fails)}/{checks} checks passed")
 if fails:

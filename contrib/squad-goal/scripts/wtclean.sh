@@ -106,7 +106,12 @@ $G worktree list --porcelain | sed -n 's#^worktree \(.*/runs/run-[^/]*/ws/.*\)#\
   # its work is not in the base: a wave that landed rebased the child, so its sha is on no remote and its patch is in the base
   if ! in_base "$w" && [ -z "$($G branch -r --contains "$sha" 2>/dev/null | head -1)" ] && [ -z "$($G branch --contains "$sha" --format='%(refname:short)' 2>/dev/null | grep -vxF "${own:-//}" | head -1)" ]; then
     grep -qx "$w" "$seen" && continue
-    echo "WT UNPUSHED ${run##*/} ${sha:0:9}: finished run with commits on no remote branch; kept"; echo "$w" >> "$seen"; continue; fi
+    # #767: the branch passes and the frontier see only `fix/<n>-…` or `gui/<n>-…` (workbranches.sh), so the line names the
+    # push under such a name: the tree's own name when it is one and the push is a fast-forward, else a fresh one to fill in
+    to='fix/<n>-<slug>'
+    if printf '%s' "$own" | grep -qE '^(fix|gui)/[0-9]+([^0-9]|$)'; then
+      { ! $G rev-parse -q --verify "refs/remotes/origin/$own" >/dev/null || $G merge-base --is-ancestor "origin/$own" "$sha"; } && to=$own; fi
+    echo "WT UNPUSHED ${run##*/} ${sha:0:9}: finished run with commits on no remote branch; kept; salvage: git push origin ${sha:0:9}:refs/heads/$to"; echo "$w" >> "$seen"; continue; fi
   b=$($G -C "$w" branch --show-current)
   wt_remove "$SG_CHECKOUT" "$w"; rc=$?
   if [ $rc = 0 ]; then echo "WT CLEAN ${run##*/} ${b:-detached} ${sha:0:9}${wt_forced:+ (submodule tree: removed with --force)}"

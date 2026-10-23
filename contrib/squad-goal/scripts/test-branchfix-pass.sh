@@ -95,4 +95,21 @@ push gui/10-w; printf 'VERDICT: CHANGES\n## Blocking\n\n## Debt\n- c.sh:1 — na
 r=$(OPEN="7 8 9 10" fp); [ "$(n gui/10-w)" = 0 ] && ok "a debt-only CHANGES dispatches no fix round" || ko "a debt-only CHANGES was dispatched: '$r'"
 w=$(/usr/bin/grep -n 'single.sh" branchfix ' "$d/watch.sh")
 case "$w" in *'SG_LAND_PAUSED'*'branchfixpass.sh'*) ok "watch.sh runs the pass under its own single.sh lock, gated by SG_LAND_PAUSED";; *) ko "watch.sh does not run the fix pass: '$w'";; esac
+# 11) (#768) the fix round pushes nothing and runs no prepush.sh: the child rules say "push nothing", the sandbox denies prepush
+: > "$T/launch.log"; push gui/15-p; rev gui/15-p CHANGES "h.sh:1 fix"; r=$(OPEN="15" fp)
+q=$(/usr/bin/grep "work branch gui/15-p " "$T/launch.log")
+case "$q" in *"git push"*|*prepush.sh*) ko "the fix round still asks for a push or prepush.sh: '$q'";; *"push nothing"*) ok "the fix round pushes nothing and runs no prepush.sh";; *) ko "the fix round does not say push nothing: '$q'";; esac
+# 12) (#768) once the fix run has a verdict, the pass pushes the run's head to the work branch, fast-forward only, once
+rid=$(cat "$T/st/auto/branchfix-gui_15-p-"*); tip=$($O rev-parse gui/15-p); tg=$T/tg; $G clone -q "$T/origin.git" "$tg" 2>/dev/null
+(cd "$tg" && $G checkout -q -b "squad/run/$rid" "$tip" && echo fix > h && $G add h && $G -c user.email=a@b -c user.name=t commit -q -m "fix (Refs #15)")
+mkdir -p "$T/co/runs/$rid"; printf '{"event": "run_start", "target": "%s", "target_branch": "squad/run/%s"}\n' "$tg" "$rid" > "$T/co/runs/$rid/record.jsonl"
+r=$(OPEN="15" fp); [ "$($O rev-parse gui/15-p)" = "$tip" ] && ok "a fix run with no verdict yet is not pushed" || ko "a run with no verdict was pushed: '$r'"
+echo '{"event": "verdict", "verdict": "completed"}' >> "$T/co/runs/$rid/record.jsonl"
+r=$(OPEN="15" fp); [ "$($O rev-parse gui/15-p)" = "$($G -C "$tg" rev-parse "squad/run/$rid")" ] && ok "the fix run's head reaches the work branch" || ko "the work branch did not move: '$r'"
+case "$r" in *"BRANCHFIX PUSH gui/15-p"*) ok "the push is named";; *) ko "no push line: '$r'";; esac
+r=$(OPEN="15" fp); case "$r" in *"BRANCHFIX PUSH"*) ko "the push is made again: '$r'";; *) ok "the push is made once";; esac
+push gui/16-n; rev gui/16-n CHANGES "i.sh:1 fix"; r=$(OPEN="16" fp); rid=$(cat "$T/st/auto/branchfix-gui_16-n-"*)
+(cd "$tg" && $G fetch -q origin && $G checkout -q -b "squad/run/$rid" origin/main && echo y > k && $G add k && $G -c user.email=a@b -c user.name=t commit -q -m other)
+mkdir -p "$T/co/runs/$rid"; printf '{"event": "run_start", "target": "%s", "target_branch": "squad/run/%s"}\n{"event": "verdict", "verdict": "completed"}\n' "$tg" "$rid" > "$T/co/runs/$rid/record.jsonl"
+t16=$($O rev-parse gui/16-n); r=$(OPEN="16" fp); [ "$($O rev-parse gui/16-n)" = "$t16" ] && ok "a head that is not a fast-forward is not pushed" || ko "a non-fast-forward head was pushed: '$r'"
 exit $fail

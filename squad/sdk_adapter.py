@@ -25,6 +25,8 @@ from squad.stall import StallWatch
 STOP_REASONS = {"error_max_budget_usd": "spend_cap"}
 OUTPUT_CAP_TEXT = "output token maximum"
 FENCE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.S)
+ESCAPE = re.compile(r"\\(.)", re.S)     # one backslash pair; JSON allows only the escapes in JSON_ESCAPES
+JSON_ESCAPES = '"\\/bfnrtu'
 CEILING_TEXT = re.compile(r"exceeded maximum buffer size of (\d+) bytes")
 FRAME_TEXT = re.compile(r"Buffer size (\d+) exceeds limit (\d+)")
 PROGRESS_SECONDS = 10.0     # the default interval between two progress events of one call; a setting in agent-defaults.yaml
@@ -78,6 +80,7 @@ def extract_json(text):
     """The node artifact: the last fenced JSON object in the text, else the last top-level object. None when absent."""
     if not text:
         return None
+    text = ESCAPE.sub(_escape, text)    # a copied shell command (`[ \\! -d x ]`) holds an escape JSON refuses; keep it literal (#766)
     for body in reversed(FENCE.findall(text)):
         obj = _loads(body)
         if obj is not None:
@@ -92,6 +95,10 @@ def extract_json(text):
         best = obj if isinstance(obj, dict) else best
         i = text.find("{", end)
     return best
+
+
+def _escape(m):
+    return m.group(0) if m.group(1) in JSON_ESCAPES else "\\\\" + m.group(1)
 
 
 def _loads(s):

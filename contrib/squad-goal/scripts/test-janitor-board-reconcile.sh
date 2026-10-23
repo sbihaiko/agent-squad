@@ -162,7 +162,12 @@ rec run-mixed '{"event":"run_start","run_id":"run-mixed","ts":"2026-10-13T08:13:
 {"event":"verdict","verdict":"failed","reasons":["child route.router.2 failed"],"exit_code":1}'
 # #2032 was fixed by hand in the landing branch (#519): no run and no work branch, but a commit in origin/dev names it. The
 # work reached dev, so the card keeps Code Complete; the floor never moves it back (ADR-0143).
-git -C "$T/co" init -q; git -C "$T/co" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "Fix the thing by hand (#2032)"
+git -C "$T/co" init -q
+# A fork inherits its upstream's history, whose subjects end with the upstream's PR numbers (#759). SG_LAND_SCAN_FROM names
+# the fork point, the last upstream commit, so the scan reads only commits made in this repository: #2019 stays in Backlog.
+git -C "$T/co" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "An upstream pull request landed (#2019)"
+export SG_LAND_SCAN_FROM=$(git -C "$T/co" rev-parse HEAD)
+git -C "$T/co" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "Fix the thing by hand (#2032)"
 # A spec's children land their own commits under the parent's number (#665): the subject names the spec, and no work rule
 # may read that as the spec's own delivery.
 git -C "$T/co" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "A child of the spec landed (#2050)"
@@ -236,6 +241,7 @@ cq="$T/st/cq/x__y#2009-refusal-board-write-failed.md"
 ! /usr/bin/grep -q 'Todo 2017' "$T/board.calls" 2>/dev/null && ok "a spec is never created in the queue column" || ko "#2017 read as work: $(bc)"
 /usr/bin/grep -q 'BOARD-RECONCILE #2017: card added -> Doing (spec folds over its sub-issues)' "$T/st/cycle.log" 2>/dev/null && ok "the spec column is named in cycle.log" || ko "#2017 add not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
 /usr/bin/grep -q '^ADD o 4 Backlog 2019$' "$T/board.calls" 2>/dev/null && ok "a spec child with no card is created in Backlog" || ko "#2019 not added Backlog: $(bc) $o"
+! /usr/bin/grep -q 'Code Complete 2019' "$T/board.calls" 2>/dev/null && ok "an upstream commit before the fork point names no issue of this repository" || ko "#2019 read Code Complete over an upstream subject: $(bc)"
 ! /usr/bin/grep -q 'Blocked 2019' "$T/board.calls" 2>/dev/null && ok "a child whose blocker is still open is not held out of Todo" || ko "#2019 read Blocked: $(bc)"
 # A spec's column is a fold over its sub-issues, read off the relation the one open-issue read already carries and the
 # cards the pass already holds: no write with none (or none past the queue), so the floor opens a new spec in Backlog; Doing once a child reached Doing or a child was

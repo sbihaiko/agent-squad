@@ -27,6 +27,26 @@ git fetch -q "${SG_LAND_REMOTE:-origin}" "+refs/heads/$lb:$lref" 2>/dev/null
 rb=$(git merge-base HEAD "$rref") || { echo "CHILDREVIEW $br shares no history with $w (#$iss)" >&2; exit 2; }
 db=$(git merge-base HEAD "$lref" 2>/dev/null)
 [ -n "$db" ] && [ "$db" != "$rb" ] && git merge-base --is-ancestor "$rb" "$db" && rb=$db
+# #769: the coder's model names the branch author, so review.sh skips it while another reviewer is reachable (#762).
+# It comes from the run record above this worktree: the last outcome whose workspace path ends this worktree's path.
+python3 - "$PWD" "$SG_STATE/author-$key" <<'PY'
+import json, os, sys
+wt, out = sys.argv[1], sys.argv[2]
+d, rec = wt, None
+for _ in range(4):
+    d = os.path.dirname(d)
+    if os.path.isfile(os.path.join(d, "record.jsonl")): rec = os.path.join(d, "record.jsonl"); break
+m = None
+for line in open(rec) if rec else []:
+    try: e = json.loads(line)
+    except ValueError: continue
+    p = (e.get("workspace") or {}).get("path") if isinstance(e.get("workspace"), dict) else None
+    if e.get("event") == "outcome" and p and (wt == p or wt.endswith("/" + p.strip("/"))) and isinstance(e.get("model"), str):
+        m = e.get("model_id") or e["model"]
+if m:
+    with open(out + ".tmp", "w") as f: f.write(m + "\n")
+    os.replace(out + ".tmp", out)
+PY
 out=$(SG_REVIEW_BASE=$w bash "$(dirname "$0")/review.sh" --worktree "$rb" "$iss"); rc=$?
 rm=$(printf '%s\n' "$out" | head -1 | sed -n 's/^model=\([^ ]*\).*/\1/p')
 printf '%s\n' "$w" > "$SG_STATE/review-$key.base"   # the base beside the reviewed head, so the entry can require the wave branch

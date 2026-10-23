@@ -413,7 +413,7 @@ cat > "$T/bin/codex" <<C
 #!/bin/bash
 cat > "$T/prompt21c"; echo "\$*" > "$T/args21c"; o=""
 while [ \$# -gt 0 ]; do case "\$1" in -o) o=\$2; shift;; --output-schema) cp "\$2" "$T/schema21c"; shift;; esac; shift; done
-printf '%s\n' '$J' > "\$o"
+printf '%s\n' '$J' > "\$o"; printf 'tokens used\n54.227\n'
 C
 chmod +x "$T/bin/claude" "$T/bin/codex"
 printf '{"review_models":["claude:m"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
@@ -428,6 +428,10 @@ printf '{"review_models":["gpt-x"],"model_retry_budget":1,"review_timeout_second
 rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"*; out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
 jq -e '.properties.verdict.enum==["APPROVE","CHANGES"]' "$T/schema21c" >/dev/null 2>&1 && ok "21 codex asks for JSON with --output-schema" || ko "21 codex args: $(cat "$T/args21c")"
 [ $rc = 0 ] && /usr/bin/grep -q '^- a.cs:1 — diverges from ADR-0001 — wrong — fix$' "$T/st/review-fix_1-x.md" && ok "21 codex: the JSON answer is rendered" || ko "21 codex render: rc=$rc '$out' $(cat "$T/st/review-fix_1-x.md")"
+# #764: codex read an unrelated global skill (graphify SKILL.md) during a review, so the prompt forbids every skill file.
+/usr/bin/grep -q 'Open no skill file (no SKILL.md under ~/.agents, ~/.codex or ~/.claude) and use no skill' "$T/prompt21c" && ok "21 the codex prompt forbids skill files (#764)" || ko "21 the codex prompt has no skill line (#764)"
+# #765: codex prints 'tokens used' and the count, with a locale thousands separator; the ledger keeps it as the input count
+/usr/bin/grep -q '	gpt-x	54227	0	0$' "$T/st/token-usage.tsv" && ok "21 codex: its token count reaches the ledger" || ko "21 codex tokens: $(/usr/bin/grep 'gpt-x' "$T/st/token-usage.tsv" | tail -1)"
 # 22) #633: a fix round answers in JSON with the same schema. claude -p carries --json-schema, the prompt carries the
 # schema, and the previous findings it reads are the rendered markdown. A fixed finding in resolved renders the
 # '## Resolved' section the fix-round check reads, and the next fix round reads that rendered review unchanged.
@@ -441,6 +445,7 @@ R
 rm -f "$T/st/cq/"*; out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
 /usr/bin/grep -q 'FIX ROUND' "$T/prompt21" && /usr/bin/grep -q -- '--json-schema' "$T/args21" && ok "22 a fix round asks for JSON with --json-schema" || ko "22 fix round args: $(cat "$T/args21")"
 sed -n '1,/=== BRANCH/p' "$T/prompt21" | /usr/bin/grep -q '"resolved"' && ok "22 the fix prompt carries the schema" || ko "22 the fix prompt has no schema"
+/usr/bin/grep -q 'Open no skill file (no SKILL.md under ~/.agents, ~/.codex or ~/.claude) and use no skill' "$T/prompt21" && ok "22 the fix prompt forbids skill files (#764)" || ko "22 the fix prompt has no skill line (#764)"
 sed -n '/=== PREVIOUS FINDINGS/,/=== DELTA/p' "$T/prompt21" | /usr/bin/grep -q '^- a.cs:1 — x — y — z$' && ok "22 the fix prompt reads the previous findings as markdown" || ko "22 previous findings: $(sed -n '/=== PREVIOUS/,/=== DELTA/p' "$T/prompt21")"
 [ $rc = 0 ] && [ "$(head -1 "$T/st/review-fix_1-x.md")" = "VERDICT: APPROVE (the model wrote CHANGES with only Debt findings)" ] && /usr/bin/grep -q '^## Resolved$' "$T/st/review-fix_1-x.md" \
   && /usr/bin/grep -q '^- a.cs:1 — x — fixed: the ADR is followed now — UI.Tests/a.cs$' "$T/st/review-fix_1-x.md" \
@@ -586,6 +591,21 @@ calibration=$(python3 "$(dirname "$src")/review-calibration.py" "$(dirname "$src
 [ $rc = 0 ] && [ "$calibration" = "labeled=10 debt_nit_only=1 rate=10.0%" ] \
   && ok "the calibration report measures the committed Debt/nit-only sample" \
   || ko "calibration report: rc=$rc '$calibration'"
+# 28) #762: the model that wrote the tip never reviews it while another reviewer is reachable; it says so on the issue
+unset SLOW_MODE CLAUDE_ARGS; cat > "$T/bin/claude" <<'J'
+#!/bin/bash
+cat >/dev/null; jq -cn '{type:"result",subtype:"success",is_error:false,result:"",structured_output:{verdict:"APPROVE",blocking:[],debt:[],resolved:[]},usage:{input_tokens:10,output_tokens:5}}'
+J
+chmod +x "$T/bin/claude"
+printf '{"review_models":["claude:slow","claude:fast"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[],"review_order":"config"}' > "$T/s/models.json"
+rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"*; out=$(SG_REVIEW_AUTHOR=claude:slow bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null)
+case "$out" in model=claude:fast*) ok "28 the author's model is skipped in the review chain";; *) ko "28 self-review: '$out'";; esac
+/usr/bin/grep -q 'claude:slow' "$T/st/cq/"*"#8-status~mself"* 2>/dev/null && ok "28 the skip is said on the issue" || ko "28 no MODEL_SELF status"
+printf 'claude:slow\n' > "$T/st/author-fix_1-x"; rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"*; out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null)
+case "$out" in model=claude:fast*) ok "28 the author file names the model too";; *) ko "28 author file: '$out'";; esac
+printf '{"review_models":["claude:slow"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"*; out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rm -f "$T/st/author-fix_1-x"
+case "$out" in model=claude:slow*) ok "28 with no other reviewer the author's model still reviews";; *) ko "28 lone reviewer: '$out'";; esac
 # 27) a models.json with no model_retry_budget, or with it explicitly null, takes the shipped default of 2 tries -- never
 # jq's literal "null". That string made `[ "$i" -lt "$lim" ]` fail with "integer expression expected", the loop body never
 # ran, and every review ended BLOCKED while the run retried once a minute.

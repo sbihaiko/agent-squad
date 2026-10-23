@@ -62,8 +62,9 @@ after=$(cd "$T" && /usr/bin/find st co/runs -type f -exec /usr/bin/shasum {} \; 
 [ "$before" = "$after" ] && ok "the metrics read their records and write nothing" || ko "the fixture changed: $(printf '%s\n' "$before" "$after" | sort | uniq -u | tr '\n' ' ')"
 
 $G -q 'elif self.path.startswith("/api/delivery")' "$src" && ok "the hub serves the metrics on one GET route" || ko "no /api/delivery route"
-$G -q 'async function pollDelivery' "$src" && ok "the page reads the delivery route" || ko "no pollDelivery in the page"
-$G -q '<details id=dlv class=sp>' "$src" && ok "the page carries the delivery panel" || ko "no delivery panel"
+# The owner hid the panel from the accordion: the route stays, the page neither shows it nor polls it (tests/test_delivery_metrics.py).
+$G -q 'async function pollDelivery' "$src" && ko "the page polls the delivery route" || ok "the page polls no delivery route"
+$G -q '<details id=dlv class=sp>' "$src" && ko "the page carries the hidden delivery panel" || ok "the page carries no delivery panel"
 post=$(sed -n '/def do_POST/,$p' "$src")
 printf '%s' "$post" | $G -q '/api/delivery' && ko "a write route names the metrics" || ok "no write route names the metrics"
 $G -q 'def do_PUT\|def do_DELETE' "$src" && ko "the hub carries a write verb" || ok "the hub carries no other write verb"

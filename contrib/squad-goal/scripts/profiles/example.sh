@@ -19,6 +19,9 @@
 # SG_FAST_GATE_CMD='make check'   SG_PREPUSH_CMD=''   SG_SUITES_HINT='the targeted cases (`make test K=<case>`)'   SG_FULL_GATE_HINT='`make test`'
 # : "${SG_WAVE_MAX_AGE_SECONDS:=7200}"   # wave.sh: a wave older than this (seconds) lands what it holds; the children still running go back to the queue (env.sh's default is two hours)
 # : "${SG_WAVE_TIP_GATES:=...}"          # wave.sh: the wave tip's own check (#377), run in the wave's throwaway clone; a red one makes each child's suite run again against the tip, last entrant first. Unset: the fast gate. Empty: the wave's CI is its only check
+# nightly.sh: the full suite once a day, one command per mode, run in the nightly tree. Unset: pytest, and a pytest that collects
+# no test (exit 5) counts as no suite, not red (#758). A repository without a Python suite names its own, e.g. `make clean all`.
+# : "${SG_NIGHTLY_PARALLEL:=make test}"; : "${SG_NIGHTLY_SERIAL:=make test}"
 # : "${SG_SQUAD:=$HOME/src/agent-squad}"   # unset: the installed agent-squad plugin
 : "${SG_AUTO_BUGFIX:=yes}"           # autobug.sh dispatches open bug issues automatically (no = off)
 : "${SG_BUG_LABEL:=bug}"

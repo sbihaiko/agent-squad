@@ -3110,11 +3110,14 @@ def grok_plan():
     except Exception: return None
     return ((p.get("settings") or {}).get("subscription_tier_display")) or None
 def q_grok():
-    """Read the newest log line carrying a BillingConfig: `creditUsagePercent` + `currentPeriod{start,end}`.
-    The grok CLI pushes that payload in the line's `ctx.config`, and its message wording drifts between versions
-    (`billing: fetched credits config` in older ones), so match the fields and never the text. Finding none is a
-    reading of its own — `unavailable` with the reason — so refresh_quota cannot keep showing yesterday's number.
-    The newest reading is kept in GROK_KEPT and read back after the log rotates; `until` is its period end (quota_row)."""
+    """Read the newest log line carrying a BillingConfig: `currentPeriod{start,end}`, and `creditUsagePercent`
+    when the CLI writes it. The grok CLI pushes that payload in the line's `ctx.config`, and its message wording
+    drifts between versions (`billing: fetched credits config` in older ones), so match the fields and never the
+    text. A line whose `currentPeriod` carries an `end` is a reading; the 1.0.62 CLI omits `creditUsagePercent`
+    when the period's usage is 0%, so a missing field on such a line reads as 0%, never as no reading.
+    Finding none is a reading of its own — `unavailable` with the reason — so refresh_quota cannot keep showing
+    yesterday's number. The newest reading is kept in GROK_KEPT and read back after the log rotates; `until` is
+    its period end (quota_row)."""
     last = first = None
     try:
         with open(GROK_LOG, "rb") as fh:
@@ -3136,13 +3139,14 @@ def q_grok():
                     if not isinstance(d, dict): continue
                     if first is None and d.get("ts"): first = d["ts"]   # the first line of the oldest chunk read
                     c = (d.get("ctx") or {}).get("config") or {}
-                    if c.get("creditUsagePercent") is not None and isinstance(c.get("currentPeriod"), dict): last = (d, c)
+                    if isinstance(c.get("currentPeriod"), dict) and c["currentPeriod"].get("end"): last = (d, c)
     except OSError: pass
     k = None
     if last:
         d, c = last; per = c.get("currentPeriod") or {}
         end = dt.datetime.fromisoformat(per["end"].replace("Z", "+00:00")).timestamp() if per.get("end") else None
-        k = grok_keep({"pct": c.get("creditUsagePercent"), "end": end,
+        pct = c.get("creditUsagePercent")
+        k = grok_keep({"pct": 0.0 if pct is None else pct, "end": end,
                        "asof": dt.datetime.fromisoformat(d["ts"].replace("Z", "+00:00")).timestamp()})
     else:
         try: k = json.loads(GROK_KEPT.read_text())
