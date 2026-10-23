@@ -13,7 +13,7 @@ on the board and waits for the owner's grant (ADR-0024). The definition is read 
 --migrate moves each card on an old Status option to the column board_migrate plans (ADR-0143), and proves every move by
 one items read after the writes. --contract drops each Status option the definition does not name, and refuses while a
 card still carries one: no card ever loses the value it carries. Both are dry runs without --apply."""
-import argparse, json, os, sys
+import argparse, json, sys
 from issue_state import HOLDER_FIELDS, board_state
 import board_migrate
 
@@ -162,11 +162,14 @@ def main(argv):
     step.add_argument("--contract", action="store_true", help="drop the Status options the definition does not name; refused while a card carries one")
     p.add_argument("owner"); p.add_argument("project")
     a = p.parse_args(argv)
-    if not os.environ.get("SG_STATE"):   # the binding caches under $SG_STATE: name the gap, never a KeyError (#770)
+    definition = json.load(open(a.definition))
+    try:
+        binding = board_state(owner=a.owner, project=a.project, kind=None).binding
+    except KeyError as e:   # the binding caches under $SG_STATE: name the gap, never a traceback (#770)
+        if e.args != ("SG_STATE",):
+            raise
         print("board_define.py: SG_STATE is not set; source env.sh or set SG_STATE to the loop's state directory", file=sys.stderr)
         return 2
-    definition = json.load(open(a.definition))
-    binding = board_state(owner=a.owner, project=a.project, kind=None).binding
     fields = json.loads(binding.api(f"{binding.base}/fields?per_page=100"))   # the one read
     if a.migrate: return migrate(binding, status_field(fields), a.apply)
     if a.contract: return contract(binding, status_field(fields), definition, a.apply)
