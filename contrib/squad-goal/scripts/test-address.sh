@@ -136,5 +136,23 @@ bad=""; for s in "$d"/*.sh; do
   /usr/bin/grep -q 'stat -f' "$s" && ! /usr/bin/grep -q 'stat -c' "$s" && bad="$bad $(basename "$s")"; done
 [ -z "$bad" ] && ok "portable: every script that reads mtime names the GNU stat form beside the BSD one" \
   || ko "portable: these scripts read mtime with BSD stat alone, which GNU stat does not answer:$bad"
+# --- (#757) a profile's := default wins over env.sh's: env.sh assigns its defaults after the profile.
+printf ': "${SG_REPO:=x/gates}"; : "${SG_WAVE_GATES:=make clean all}"; : "${SG_FRONTIER_SKIP_LABELS:=spec}"; : "${SG_RUN_REVIEW:=/bin/true}"\n' > "$P/gates.sh"
+out=$(SG_PROFILE=gates guard bash -c '. "$1/env.sh"; echo "[$SG_WAVE_GATES|$SG_FRONTIER_SKIP_LABELS|$SG_RUN_REVIEW]"' _ "$d" | tail -1)
+[ "$out" = "[make clean all|spec|/bin/true]" ] && ok "defaults: a profile's := default wins over env.sh's" || ko "defaults: profile := lost to env.sh: $out"
+out=$(SG_PROFILE=alpha guard bash -c '. "$1/env.sh"; echo "[$SG_WAVE_GATES]"' _ "$d" | tail -1)
+case "$out" in *fast-gate.sh*) ok "defaults: with no profile value env.sh's gate holds";; *) ko "defaults: no default gate: $out";; esac
+# --- (#761) a profile that does not parse is refused, naming the file and line, and --list reports it.
+P2=$T/profiles2; mkdir -p "$P2"; printf ': "${SG_REPO:=x/ok}"\n' > "$P2/ok.sh"
+printf ': "${SG_REPO:=x/broken}"\n: "${SG_REVIEW_RULES:=the repo'"'"'s rules}"\n' > "$P2/broken.sh"
+out=$(cd "$T/plain" && SG_PROFILES_DIR=$P2 SG_STATE_BASE=$B bash "$src" broken 2>&1); rc=$?
+[ $rc = 2 ] && printf '%s' "$out" | /usr/bin/grep -qF "$P2/broken.sh" && printf '%s' "$out" | /usr/bin/grep -q 'line [0-9]' \
+  && ok "parse: a profile that does not parse is refused, naming the file and line" || ko "parse: broken profile (rc $rc): $out"
+out=$(cd "$T/plain" && SG_PROFILES_DIR=$P2 SG_STATE_BASE=$B bash "$src" --list 2>&1)
+printf '%s' "$out" | /usr/bin/grep -q '^broken	.*does not parse' && printf '%s' "$out" | /usr/bin/grep -qx 'ok	x/ok' \
+  && ok "parse: --list reports a profile that does not parse" || ko "parse: --list: $out"
+if command -v zsh >/dev/null; then out=$(cd "$T/plain" && SG_PROFILE=alpha SG_PROFILES_DIR=$P SG_STATE_BASE=$B zsh -c '. "$1/env.sh"; echo "rc=$?"' _ "$d" 2>&1)
+  printf '%s' "$out" | /usr/bin/grep -q 'source it from bash' && ! printf '%s' "$out" | /usr/bin/grep -q 'address.sh' \
+    && ok "zsh: env.sh sourced from zsh says it needs bash" || ko "zsh: env.sh from zsh: $out"; fi
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 rm -rf "$T"; exit $fail
