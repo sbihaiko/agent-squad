@@ -20,6 +20,33 @@ export GIT_TERMINAL_PROMPT=0
 cd "$SG_STATE" || exit 0
 sg_work_branches "$remote" || { echo "BRANCHFIX: $wb_err"; exit 0; }
 A="$SG_STATE/auto"; mkdir -p "$A"
+# The push back (#768): a fix round's child pushes nothing, as every child, so its commits stay on the run's target branch. Once
+# the run has a verdict, this pass pushes that head to the work branch, fast-forward only; auto/branchfix-push-<run> ("<br> <sha>")
+# names the round and goes after the push, or when the head is no fast-forward of the branch (said once). The review pass then
+# reviews the new tip.
+for m in "$A"/branchfix-push-*; do
+  [ -f "$m" ] || continue
+  run=${m##*/branchfix-push-}; read -r br _ < "$m"
+  rd=$(/usr/bin/grep "/$run\$" "$SG_STATE/active-runs.txt" 2>/dev/null | tail -1); rd=${rd:-$SG_CHECKOUT/runs/$run}
+  t=$(python3 -c 'import json,sys
+s=v=None
+for l in open(sys.argv[1]):
+    try: d=json.loads(l)
+    except Exception: continue
+    if d.get("event") in ("run_start","resume"): v=None; s=d if d.get("event")=="run_start" else s
+    elif d.get("event")=="verdict": v=d
+if s and v and s.get("target") and s.get("target_branch"): print(s["target"], s["target_branch"])' "$rd/record.jsonl" 2>/dev/null)
+  [ -n "$t" ] || continue
+  tg=${t% *} tb=${t#* }
+  head=$(/usr/bin/git -C "$tg" rev-parse -q --verify "refs/heads/$tb^{commit}" 2>/dev/null) \
+    && /usr/bin/git -C "$tg" fetch -q "$remote" "refs/heads/$br" 2>/dev/null || { echo "BRANCHFIX PUSH $br: the head of run $run is not readable; the next pass retries"; continue; }
+  old=$(/usr/bin/git -C "$tg" rev-parse FETCH_HEAD)
+  if [ "$old" = "$head" ]; then echo "BRANCHFIX PUSH $br: run $run left no new commit"
+  elif ! /usr/bin/git -C "$tg" merge-base --is-ancestor "$old" "$head"; then echo "BRANCHFIX PUSH $br: the head of run $run is no fast-forward of the branch, so it is not pushed"
+  elif /usr/bin/git -C "$tg" push -q "$remote" "$head:refs/heads/$br" 2>/dev/null; then echo "BRANCHFIX PUSH $br: ${old:0:9} -> ${head:0:9} (run $run)"
+  else echo "BRANCHFIX PUSH $br: the push of run $run was refused; the next pass retries"; continue; fi
+  rm -f "$m"
+done
 # An issue that carries a label the frontier skips (SG_FRONTIER_SKIP_LABELS: frozen:owner, needs-ratification, spec, ...) gets no fix
 # run. The labels come from the open-issue list sg_work_branches already read, so this costs no call.
 held=" $(printf '%s' "$wb_issues" | jq -r --arg s "${SG_FRONTIER_SKIP_LABELS:-}" '($s|split(",")|map(select(.!=""))) as $k
@@ -54,7 +81,7 @@ while read -r sha br i; do
   run=$(cd "$SG_CHECKOUT" && python3 "$here/launch.py" "$req" 2>/dev/null | tail -1)
   [ -n "$run" ] || { echo "BRANCHFIX $br @ $s9: launch.py printed no run id, so no fix run started; the next pass retries"; continue; }
   /usr/bin/git -C "$SG_CHECKOUT" checkout -q -- docs/squad/workflows/dynamic.graph.json 2>/dev/null   # launch.py renames the graph root in place
-  echo "$run" > "$A/branchfix-$key-$s9"; python3 "$here/revformat.py" --record-stall "$A" branchfix "$key" "$fp" "$same"; rm -f "$A/branchfix-stop-$key"
+  echo "$run" > "$A/branchfix-$key-$s9"; echo "$br $sha" > "$A/branchfix-push-$run";python3 "$here/revformat.py" --record-stall "$A" branchfix "$key" "$fp" "$same"; rm -f "$A/branchfix-stop-$key"
   find "$A" -maxdepth 1 -name "branchfix-$key-?????????" ! -name "*-$s9" -delete 2>/dev/null
   echo "BRANCHFIX $br @ $s9 (issue #$i): fix round dispatched ($same failed rounds with no change before it) -> $run"
 done <<EOT
