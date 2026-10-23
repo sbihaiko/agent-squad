@@ -428,6 +428,8 @@ printf '{"review_models":["gpt-x"],"model_retry_budget":1,"review_timeout_second
 rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"*; out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
 jq -e '.properties.verdict.enum==["APPROVE","CHANGES"]' "$T/schema21c" >/dev/null 2>&1 && ok "21 codex asks for JSON with --output-schema" || ko "21 codex args: $(cat "$T/args21c")"
 [ $rc = 0 ] && /usr/bin/grep -q '^- a.cs:1 — diverges from ADR-0001 — wrong — fix$' "$T/st/review-fix_1-x.md" && ok "21 codex: the JSON answer is rendered" || ko "21 codex render: rc=$rc '$out' $(cat "$T/st/review-fix_1-x.md")"
+# #764: codex read an unrelated global skill (graphify SKILL.md) during a review, so the prompt forbids every skill file.
+/usr/bin/grep -q 'Open no skill file (no SKILL.md under ~/.agents, ~/.codex or ~/.claude) and use no skill' "$T/prompt21c" && ok "21 the codex prompt forbids skill files (#764)" || ko "21 the codex prompt has no skill line (#764)"
 # 22) #633: a fix round answers in JSON with the same schema. claude -p carries --json-schema, the prompt carries the
 # schema, and the previous findings it reads are the rendered markdown. A fixed finding in resolved renders the
 # '## Resolved' section the fix-round check reads, and the next fix round reads that rendered review unchanged.
@@ -441,6 +443,7 @@ R
 rm -f "$T/st/cq/"*; out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
 /usr/bin/grep -q 'FIX ROUND' "$T/prompt21" && /usr/bin/grep -q -- '--json-schema' "$T/args21" && ok "22 a fix round asks for JSON with --json-schema" || ko "22 fix round args: $(cat "$T/args21")"
 sed -n '1,/=== BRANCH/p' "$T/prompt21" | /usr/bin/grep -q '"resolved"' && ok "22 the fix prompt carries the schema" || ko "22 the fix prompt has no schema"
+/usr/bin/grep -q 'Open no skill file (no SKILL.md under ~/.agents, ~/.codex or ~/.claude) and use no skill' "$T/prompt21" && ok "22 the fix prompt forbids skill files (#764)" || ko "22 the fix prompt has no skill line (#764)"
 sed -n '/=== PREVIOUS FINDINGS/,/=== DELTA/p' "$T/prompt21" | /usr/bin/grep -q '^- a.cs:1 — x — y — z$' && ok "22 the fix prompt reads the previous findings as markdown" || ko "22 previous findings: $(sed -n '/=== PREVIOUS/,/=== DELTA/p' "$T/prompt21")"
 [ $rc = 0 ] && [ "$(head -1 "$T/st/review-fix_1-x.md")" = "VERDICT: APPROVE (the model wrote CHANGES with only Debt findings)" ] && /usr/bin/grep -q '^## Resolved$' "$T/st/review-fix_1-x.md" \
   && /usr/bin/grep -q '^- a.cs:1 — x — fixed: the ADR is followed now — UI.Tests/a.cs$' "$T/st/review-fix_1-x.md" \
