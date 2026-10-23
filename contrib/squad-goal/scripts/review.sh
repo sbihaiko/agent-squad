@@ -323,8 +323,9 @@ for m in $chain; do fmt=0; timed_out=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9
     # review:<branch>#2 for the second call. claude -p runs in its JSON mode: .result is the answer text, .usage the tokens. A
     # call whose answer carries no usage is not a zero, it is a FLOOR: a claude call -- a model that reports tokens -- whose
     # answer carried none (a refusal, an error, a zeroed .usage, an old CLI's plain text) gets a 7th field `no-usage`, so a reader
-    # can tell a call that never answered from a model that never reports (both make the total a floor). grok, agy and codex print no token count on the plain
-    # path this script reads, so they log 0 with NO mark: the call is still counted and named, and tokens.py reads it as `unreported`, so the total is a floor.
+    # can tell a call that never answered from a model that never reports (both make the total a floor). codex prints 'tokens used' and the total on its
+    # output (same line or the next), with a locale separator (54.227, 54,227): the digits are logged as the input count, out and
+    # cache_read 0; with no such line it logs 0. grok and agy print no token count on the plain path this script reads, so they log 0 with NO mark: the call is still counted and named, and tokens.py reads it as `unreported`, so the total is a floor.
     # The mark is APPENDED, never substituted into a count field: the six fields keep their order and their meaning, so a reader
     # that stops at six (tokens.py reads len(p) >= 6) is untouched, and a count field holding a word would make that reader drop
     # the whole line and lose the call. Why a word and not a bare flag: the mark names its reason, and the reason travels with it.
@@ -340,6 +341,8 @@ for m in $chain; do fmt=0; timed_out=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9
       # with --json-schema the answer is the envelope's structured_output (#632); without it, .result
       jq -r 'if (.structured_output|type)=="object" then (.structured_output|tojson) else .result end' "$o" > "$o.r" 2>/dev/null && mv "$o.r" "$o"; rm -f "$o.r"
       case "$tu" in ""|"0	0	0") tu="0	0	0"; mark="no-usage";; esac;;
+      cli:codex) tu=$(awk 'f{gsub(/[^0-9]/,""); if($0!=""){print; exit}} /tokens used/{f=1; sub(/.*tokens used/,""); gsub(/[^0-9]/,""); if($0!=""){print; exit}}' "$e" 2>/dev/null)
+        tu="${tu:-0}	0	0";;
       *) tu="0	0	0";;
     esac
     if [ -n "$mark" ]; then printf "%s\t%s\t%s\t%s\t%s\n" "$(date +%FT%T)" "$tc" "$m" "$tu" "$mark" >> "$tl"
