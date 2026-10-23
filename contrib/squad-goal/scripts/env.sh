@@ -7,17 +7,9 @@
 # could name, is retired (#20): a profile that still sets it keeps working. It is mapped into SG_REPOS and one warning per
 # state directory names the profile, the setting and its replacement. SG_REQUIRED_SETTINGS is the contract in one place
 # (`<setting>:<the setting that engages it>`; the retired form is `<setting>:<engaging setting>:retired:<replacement>`).
+# env.sh resolves itself with BASH_SOURCE and the seam uses bash builtins, so another shell is refused here, by name (#761).
+[ -n "${BASH_VERSION:-}" ] || { echo "env.sh: source it from bash (bash -c '. env.sh; ...'), not from ${ZSH_NAME:-this shell}" >&2; return 2 2>/dev/null || exit 2; }
 SG_REQUIRED_SETTINGS="SG_TOOLING_REPO:SG_FORK_DIR:retired:SG_REPOS"
-# A spec is a document until the owner starts it, and a freeze marker holds the card without changing its column:
-# the dispatch pass never takes one of these labels as work (SG_FRONTIER_SKIP_LABELS, beside the bug label it already skips).
-: "${SG_FRONTIER_SKIP_LABELS:=spec,needs-owner,needs-ratification,needs-info,frozen:owner,frozen:dependency,wontfix}"
-# The local gates a child runs in its own worktree before it enters the wave branch (wave.sh): lint, types, the fast
-# battery and the shell suites of the scripts the child changes (fast-gate.sh). A profile that works another repository overrides it, and an empty value refuses the entry, so no child ever
-# enters a wave ungated (ADR-0145 rule 9).
-: "${SG_WAVE_GATES:=bash '$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fast-gate.sh'}"
-# The review a loop run gives each passed child before it merges it (#601, ADR-0145 rule 9): the loop workflow's review gate
-# runs the script this names, and with none set (a run outside the loop) the gate answers "no review here".
-: "${SG_RUN_REVIEW:=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/runreview.sh}"
 # A tool's absolute path differs by platform: /usr/sbin/lsof holds on macOS and is absent on the CI runner, where a
 # hardcoded path turns a missing tool into a failed pass. One resolution here, and every script reads it from SG_LSOF.
 SG_LSOF="${SG_LSOF:-}"; [ -n "$SG_LSOF" ] || SG_LSOF="$(command -v lsof 2>/dev/null)"
@@ -30,6 +22,17 @@ SG_PROFILES_DIR="$(sg_profiles_dir)"; export SG_PROFILES_DIR   # a session a run
 : "${SG_PROFILE:?no squad-goal profile matched; set SG_PROFILE or add scripts/profiles/<name>.sh}"
 _sg_ctx=$(repoctx "$SG_PROFILE") || exit 2
 . "$(sg_profiles_dir)/$SG_PROFILE.sh"
+# These three defaults are read after the profile, so a profile's := default wins (#757).
+# A spec is a document until the owner starts it, and a freeze marker holds the card without changing its column:
+# the dispatch pass never takes one of these labels as work (SG_FRONTIER_SKIP_LABELS, beside the bug label it already skips).
+: "${SG_FRONTIER_SKIP_LABELS:=spec,needs-owner,needs-ratification,needs-info,frozen:owner,frozen:dependency,wontfix}"
+# The local gates a child runs in its own worktree before it enters the wave branch (wave.sh): lint, types, the fast
+# battery and the shell suites of the scripts the child changes (fast-gate.sh). A profile that works another repository overrides it, and an empty value refuses the entry, so no child ever
+# enters a wave ungated (ADR-0145 rule 9).
+: "${SG_WAVE_GATES:=bash '$here/fast-gate.sh'}"
+# The review a loop run gives each passed child before it merges it (#601, ADR-0145 rule 9): the loop workflow's review gate
+# runs the script this names, and with none set (a run outside the loop) the gate answers "no review here".
+: "${SG_RUN_REVIEW:=$here/runreview.sh}"
 if [ -z "${SG_SQUAD:-}" ]; then
   SG_SQUAD=$(python3 -I -c "import json,os;print(json.load(open(os.path.expanduser('~/.claude/plugins/installed_plugins.json')))['plugins']['agent-squad@agent-squad'][0]['installPath'])")
 fi
