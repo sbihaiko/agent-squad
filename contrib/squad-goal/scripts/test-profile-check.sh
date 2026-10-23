@@ -29,6 +29,10 @@ printf ': "${SG_REPO:=owner/repo}"\n' > "$T/p/emu.sh"; row "the example placehol
 good; printf 'SG_PROJECT=\n' >> "$T/p/emu.sh"; row "an unset board is named" 1 "SG_PROJECT"
 good; git -C "$T/co" remote set-url origin git@github.com:acme/other.git; row "a checkout of another repository is named" 1 "SG_CHECKOUT"
 git -C "$T/co" remote set-url origin git@github.com:acme/emu.git
+good; printf 'SG_NIGHTLY_SERIAL="nosuchtool-770 -q"\n' >> "$T/p/emu.sh"; row "a nightly command that does not resolve is named" 1 "SG_NIGHTLY_SERIAL"
+good; printf 'SG_LOCAL_GATE_CMD="./nosuch-gate.sh"\n' >> "$T/p/emu.sh"; row "a gate command that does not resolve is named" 1 "SG_LOCAL_GATE_CMD"
+good; printf 'SG_LOCAL_GATE_CMD="./gate.sh"; SG_E2E_CMD="true"\n' >> "$T/p/emu.sh"; printf '#!/bin/sh\n' > "$T/co/gate.sh"; chmod +x "$T/co/gate.sh"
+row "gate commands that resolve in the checkout pass" 0 "profile emu: ok"
 printf 'if then\n' > "$T/p/emu.sh"; row "a profile that does not parse is named" 1 "does not parse"
 out=$(run nosuch); [ $? = 1 ] && case "$out" in *nosuch*) true;; *) false;; esac && ok "an unknown profile is named" || ko "unknown profile: $out"
 exit $fail
