@@ -1,7 +1,7 @@
 #!/bin/bash
 # usage: profile-check.sh <profile>   The one check a new profile runs once (#763). It names each setup gap, not just the
 # first: the profile parses; SG_REPO, SG_OWNER, SG_PROJECT, SG_CHECKOUT and SG_BASE are set and are not the example's
-# placeholders; the checkout's origin is SG_REPO; the repository holds the labels the loop and /to-tickets use. It reads
+# placeholders; the checkout's origin is SG_REPO; each gate, e2e and nightly command resolves; the repository holds the labels the loop and /to-tickets use. It reads
 # GitHub through the loop's one door (ghcall.sh) and writes nothing. Exit 0 when clean, 1 when a gap is named.
 # The hub loads profiles only at start: after a new profile passes, run `hubctl.sh --restart`.
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -22,6 +22,12 @@ if [ -n "${SG_CHECKOUT:-}" ]; then
     [ "$origin" = "${SG_REPO:-}" ] || gap "SG_CHECKOUT origin is '${origin:-none}', not ${SG_REPO:-}"
   else gap "SG_CHECKOUT $SG_CHECKOUT is no directory"; fi
 fi
+# Each gate, e2e and nightly command the profile names must resolve: its first word is a command, or a file run from the checkout.
+for v in SG_FAST_GATE_CMD SG_LOCAL_GATE_CMD SG_LOCAL_GATE_RERUN_CMD SG_PREPUSH_CMD SG_E2E_CMD SG_NIGHTLY_PARALLEL SG_NIGHTLY_SERIAL; do
+  c=${!v:-}; [ -n "$c" ] || continue; w=${c%% *}
+  case "$w" in */*) (cd "${SG_CHECKOUT:-.}" 2>/dev/null && [ -x "$w" ]) || gap "$v '$c': $w is no executable file in the checkout";;
+    *) command -v "$w" >/dev/null 2>&1 || gap "$v '$c': $w is no command";; esac
+done
 case "${SG_REPO:-}" in */?*)
   [ "$SG_REPO" = owner/repo ] && SG_REPO=""
   if [ -n "$SG_REPO" ]; then
