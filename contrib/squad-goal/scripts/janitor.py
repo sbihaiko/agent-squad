@@ -184,6 +184,16 @@ def in_land(sha):   # the commit is an ancestor of origin/<land>, read in the ch
         _in_land[sha] = subprocess.run(["git", "-C", str(co), "merge-base", "--is-ancestor", sha, f"origin/{os.environ.get('SG_LAND_BRANCH') or 'dev'}"], capture_output=True).returncode == 0
     return _in_land[sha]
 def folder(r): return pathlib.Path(r) if r.startswith("/") else co / "runs" / r
+def unpushed(f):   # #771: "<branch> <sha9> in <tree>" for each child tree of the run whose HEAD is in no origin/<land> and on no remote branch
+    out = []
+    for w in sorted((f / "ws").glob("*")) if (f / "ws").is_dir() else []:
+        r = subprocess.run(["git", "-C", str(w), "rev-parse", "HEAD"], capture_output=True, text=True)
+        sha = r.stdout.strip() if r.returncode == 0 else ""
+        if not sha or in_land(sha): continue
+        if subprocess.run(["git", "-C", str(w), "branch", "-r", "--contains", sha], capture_output=True, text=True).stdout.strip(): continue
+        b = subprocess.run(["git", "-C", str(w), "branch", "--show-current"], capture_output=True, text=True).stdout.strip() or "detached"
+        out.append(f"{b} {sha[:9]} in {w}")
+    return out
 def read(f):
     v = False; pidc = None; started_at = None; acc = set(); t = f / "record.jsonl"; ver = None; rs = []; landed = False; rid = f.name; rts = ""
     vts = None; vkey = ""; nv = 0   # the last verdict's time and its key (#692, #693): the rearm floor and rule O's read-once marker read them
@@ -985,12 +995,14 @@ if owner and proj and repo0:
             mks = " and ".join("auto/" + k + "-" + n for k in marks[n])
             col = expected.get(n)
             where = (f"its card is {col[1]}" if col else "its card keeps its column") + (f" (bug card back in {moves[-1][1]})" if moves else "") + " and"
-            say(f"DISPATCH-FAILED #{n}: run {f.name} ended {i['name']} ({why}), nothing landed; {where} {mks} marker dropped so it dispatches again")
+            kept = unpushed(f)   # #771: the loop pushes no work (#361), so the release names a child's unpushed commits for salvage
+            salv = f"; its child left commits on no remote branch, kept for salvage: {', '.join(kept)}" if kept else ""
+            say(f"DISPATCH-FAILED #{n}: run {f.name} ended {i['name']} ({why}), nothing landed; {where} {mks} marker dropped so it dispatches again{salv}")
             if not dry:
                 for p, s in moves: board_write([owner, str(p), s, str(n)], n, f"bug card back in {s} after run {f.name} ended {i['name']}")
                 for k in marks[n]: (st / "auto" / f"{k}-{n}").unlink()
                 (st / "cq" / f"{CQ}#{n}-dispatchfail-{os.getpid()}.md").write_text(
-                    f"Run {f.name} ended without a landed change (verdict {i['name']}: {why}). {where[:1].upper() + where[1:]} its {mks} marker dropped, so the next cycle dispatches the issue again.\n")
+                    f"Run {f.name} ended without a landed change (verdict {i['name']}: {why}). {where[:1].upper() + where[1:]} its {mks} marker dropped, so the next cycle dispatches the issue again." + (f" The child left commits on no remote branch, kept for salvage: {', '.join(kept)}." if kept else "") + "\n")
         if not again and not dry: mk.touch()
     # O: a missing child-worktree run has no record to read, but its marker still identifies the issue it claimed.
     for r, f in missing:
