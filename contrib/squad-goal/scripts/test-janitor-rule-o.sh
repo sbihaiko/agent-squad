@@ -71,6 +71,8 @@ echo run-flaky > "$T/st/auto/disp-806"
 mk run-local 807
 printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #807 on gui/807-x"}\n{"event": "land", "node": "route.router.1", "parent": "route", "entry": 1, "outcome": "pass", "reasons": [], "effect": {"name": "merge_land", "before": "%s", "head": "%s"}}\n{"event": "outcome", "node": "final_gate", "entry": 1, "outcome": "fail", "reasons": ["ac-verify:fast-gate"]}\n{"event": "verdict", "verdict": "failed", "reasons": ["ac-verify:fast-gate"], "exit_code": 1}\n' "$inbase" "$local" > "$T/co/runs/run-local/record.jsonl"
 echo run-local > "$T/st/auto/disp-807"
+# G (#771): the child of run-local left its commit in its own tree, on a branch no remote holds: the release names it for salvage
+g worktree add -q -b gui/807-x "$T/co/runs/run-local/ws/c1" "$local"
 touch -t 202001010000 "$T/co/runs"/run-*/record.jsonl
 o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$T/st" JANITOR_NOTIFY="$T/notify" python3 -I "$T/s/janitor.py" 2>&1)
 /usr/bin/grep -q '^o 4 Todo 801$' "$T/board.calls" 2>/dev/null && ok "O: failed run whose only pass is the router's -> card back to Todo" || ko "O #801 not demoted: $(cat "$T/board.calls" 2>/dev/null) $o"
@@ -81,6 +83,7 @@ o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_
 /usr/bin/grep -q '^o 4 Todo 803$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -q 'Code Complete 803' "$T/board.calls" 2>/dev/null && [ -e "$T/st/auto/disp-803" ] && ok "O: a failed run's stale work branch keeps its marker, and its card goes back to Todo" || ko "O #803 not reconciled: $(cat "$T/board.calls" 2>/dev/null)"
 /usr/bin/grep -q '^o 4 Todo 807$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -Eq 'Code Complete 807|Done 807' "$T/board.calls" 2>/dev/null && ok "R: a failed run whose landing never reached origin/dev delivered nothing, so its card goes back to Todo (#691)" || ko "R #807 not back in Todo: $(cat "$T/board.calls" 2>/dev/null)"
 [ ! -e "$T/st/auto/disp-807" ] && /usr/bin/grep -q 'DISPATCH-FAILED #807' "$T/st/cycle.log" 2>/dev/null && ok "O: a failed run's local-only landing drops its marker, so the issue dispatches again (#691)" || ko "O disp-807 kept: $(cat "$T/st/cycle.log" 2>/dev/null)"
+/usr/bin/grep -q "DISPATCH-FAILED #807.*gui/807-x ${local:0:9}.*salvage" "$T/st/cycle.log" 2>/dev/null && /usr/bin/grep -q "gui/807-x ${local:0:9}" "$T/st/cq/"*807* 2>/dev/null && ok "O: a failed run's unpushed child commits are named for salvage in the log and the comment (#771)" || ko "O #807 salvage not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
 /usr/bin/grep -q 'repos/x/y/branches' "$T/branch.calls" 2>/dev/null && ok "O: the work-branch lookup reached the API" || ko "O: no work-branch lookup answered: $(cat "$T/branch.calls" 2>/dev/null)"
 [ ! -e "$T/st/auto/bug-804" ] && ok "O: a deleted child-worktree run releases its bug marker" || ko "O bug-804 kept: $o"
 /usr/bin/grep -q 'MISSING.*#804.*bug-804.*dropped' "$T/st/cycle.log" 2>/dev/null && ok "O: the missing-run release is named in cycle.log" || ko "O missing-run cycle.log: $(cat "$T/st/cycle.log" 2>/dev/null)"
