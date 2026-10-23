@@ -591,6 +591,21 @@ calibration=$(python3 "$(dirname "$src")/review-calibration.py" "$(dirname "$src
 [ $rc = 0 ] && [ "$calibration" = "labeled=10 debt_nit_only=1 rate=10.0%" ] \
   && ok "the calibration report measures the committed Debt/nit-only sample" \
   || ko "calibration report: rc=$rc '$calibration'"
+# 28) #762: the model that wrote the tip never reviews it while another reviewer is reachable; it says so on the issue
+unset SLOW_MODE CLAUDE_ARGS; cat > "$T/bin/claude" <<'J'
+#!/bin/bash
+cat >/dev/null; jq -cn '{type:"result",subtype:"success",is_error:false,result:"",structured_output:{verdict:"APPROVE",blocking:[],debt:[],resolved:[]},usage:{input_tokens:10,output_tokens:5}}'
+J
+chmod +x "$T/bin/claude"
+printf '{"review_models":["claude:slow","claude:fast"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[],"review_order":"config"}' > "$T/s/models.json"
+rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"*; out=$(SG_REVIEW_AUTHOR=claude:slow bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null)
+case "$out" in model=claude:fast*) ok "28 the author's model is skipped in the review chain";; *) ko "28 self-review: '$out'";; esac
+/usr/bin/grep -q 'claude:slow' "$T/st/cq/"*"#8-status~mself"* 2>/dev/null && ok "28 the skip is said on the issue" || ko "28 no MODEL_SELF status"
+printf 'claude:slow\n' > "$T/st/author-fix_1-x"; rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"*; out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null)
+case "$out" in model=claude:fast*) ok "28 the author file names the model too";; *) ko "28 author file: '$out'";; esac
+printf '{"review_models":["claude:slow"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"*; out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rm -f "$T/st/author-fix_1-x"
+case "$out" in model=claude:slow*) ok "28 with no other reviewer the author's model still reviews";; *) ko "28 lone reviewer: '$out'";; esac
 # 27) a models.json with no model_retry_budget, or with it explicitly null, takes the shipped default of 2 tries -- never
 # jq's literal "null". That string made `[ "$i" -lt "$lim" ]` fail with "integer expression expected", the loop body never
 # ran, and every review ended BLOCKED while the run retried once a minute.
