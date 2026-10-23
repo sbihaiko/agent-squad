@@ -163,7 +163,13 @@ def main(argv):
     p.add_argument("owner"); p.add_argument("project")
     a = p.parse_args(argv)
     definition = json.load(open(a.definition))
-    binding = board_state(owner=a.owner, project=a.project, kind=None).binding
+    try:
+        binding = board_state(owner=a.owner, project=a.project, kind=None).binding
+    except KeyError as e:   # the binding caches under $SG_STATE: name the gap, never a traceback (#770)
+        if e.args != ("SG_STATE",):
+            raise
+        print("board_define.py: SG_STATE is not set; source env.sh or set SG_STATE to the loop's state directory", file=sys.stderr)
+        return 2
     fields = json.loads(binding.api(f"{binding.base}/fields?per_page=100"))   # the one read
     if a.migrate: return migrate(binding, status_field(fields), a.apply)
     if a.contract: return contract(binding, status_field(fields), definition, a.apply)

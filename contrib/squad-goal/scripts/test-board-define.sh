@@ -109,4 +109,8 @@ P
 rm -f "$T/graphql.in"; o=$(run --check --apply o 4 2>&1); rc=$?
 [ "$rc" -eq 0 ] && [ ! -e "$T/graphql.in" ] && grep -qxF "no drift: the board carries every option the definition names, and no other" <<<"$o" && ok "an applied board reports no drift and sends no write" || ko "applied board exit $rc: $o"
 
+# #770: with no SG_STATE the run names the gap and exits 2, never a KeyError traceback
+o=$(env -u SG_STATE PATH="$T/bin:$PATH" python3 "$T/board_define.py" --definition "$T/board.json" o 4 2>&1); rc=$?
+[ "$rc" -eq 2 ] && grep -q "SG_STATE is not set" <<<"$o" && ! grep -q Traceback <<<"$o" && ok "no SG_STATE is named, not a KeyError" || ko "no SG_STATE: exit $rc: $o"
+
 rm -rf "$T"; [ "$fail" -eq 0 ] && echo "TDD GREEN: board_define" || exit 1

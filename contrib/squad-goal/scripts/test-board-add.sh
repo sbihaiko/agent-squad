@@ -81,13 +81,13 @@ esac
 J
 sed -i '' "s|TMPDIR|$T|" "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 run() { SG_STATE="$T/st" SG_REPO=x/y SG_BOARD_READ_BACKOFF=0 python3 "$T/s-board.py" "$@"; }
-echo '{"2001":"ITEM1"}' > "$T/st/rest-items-o-4.json"; touch "$T/seen-2001"   # a fresh cache that does not know #2003
+echo '{"2001":"ITEM1"}' > "$T/st/rest-items-o-4-x_y.json"; touch "$T/seen-2001"   # a fresh cache that does not know #2003
 o=$(run --add o 4 Todo 2003 2>&1); rc=$?
 [ "$rc" -eq 0 ] && ok "a refused add whose re-read finds the item exits 0" || ko "exit $rc: $o"
 case $o in *"already exists"*|*"not on the board"*) ko "the stale cache is reported as a defect: $o";; *) ok "nothing is named as a defect";; esac
 /usr/bin/grep -q 'items/ITEM3 ' "$T/gh.calls" 2>/dev/null && ok "the Status is written to the id the re-read found" || ko "no PATCH on ITEM3: $(cat "$T/gh.calls")"
 [ "$(/usr/bin/grep -c 'items?per_page=100 ' "$T/gh.calls")" = 2 ] && ok "the items are re-read once after the refused add" || ko "items reads: $(/usr/bin/grep -c 'items?per_page=100 ' "$T/gh.calls")"
-/usr/bin/grep -q '"2003": "ITEM3"' "$T/st/rest-items-o-4.json" && ok "the cache carries the repaired item" || ko "cache: $(cat "$T/st/rest-items-o-4.json")"
+/usr/bin/grep -q '"2003": "ITEM3"' "$T/st/rest-items-o-4-x_y.json" && ok "the cache carries the repaired item" || ko "cache: $(cat "$T/st/rest-items-o-4-x_y.json")"
 : > "$T/gh.calls"; o=$(run --add o 4 Todo 2004 2>&1); rc=$?
 [ "$rc" -eq 0 ] && /usr/bin/grep -q 'items/ITEM4 ' "$T/gh.calls" && ok "a missing issue is added and its Status written in one call" || ko "add #2004 exit $rc: $o $(cat "$T/gh.calls")"
 [ "$(/usr/bin/grep -c -- '-X POST' "$T/gh.calls")" = 1 ] && ok "one POST adds it" || ko "POSTs: $(cat "$T/gh.calls")"
@@ -101,19 +101,19 @@ case $o in *"already exists"*|*"not on the board"*) ko "the stale cache is repor
 [ "$rc" -eq 1 ] && ok "a Status write the card never carries is not a success" || ko "unproven write exit $rc: $o"
 case $o in *"#2006"*"read failure"*) ok "it is named a read failure, not an absence";; *) ko "unproven write message: $o";; esac
 case $o in *"-> Todo"*) ko "the unproven write is reported as written: $o";; *) ok "it never claims the card was written";; esac
-/usr/bin/grep -q '"2006"' "$T/st/rest-items-o-4.json" && ko "the cache records a card whose write is unproven: $(cat "$T/st/rest-items-o-4.json")" || ok "the cache does not record the unproven card"
+/usr/bin/grep -q '"2006"' "$T/st/rest-items-o-4-x_y.json" && ko "the cache records a card whose write is unproven: $(cat "$T/st/rest-items-o-4-x_y.json")" || ok "the cache does not record the unproven card"
 [ "$(/usr/bin/grep -c -- '-X PATCH' "$T/gh.calls")" -gt 1 ] && [ "$(/usr/bin/grep -c 'fields\[\]=' "$T/gh.calls")" -gt 1 ] && ok "the unproven write is retried" || ko "no retry: $(cat "$T/gh.calls")"
 [ "$(/usr/bin/grep -c -- '-X PATCH' "$T/gh.calls")" -le 4 ] && [ "$(/usr/bin/grep -c 'fields\[\]=' "$T/gh.calls")" -le 4 ] && ok "the retry is bounded" || ko "retries: $(/usr/bin/grep -c -- '-X PATCH' "$T/gh.calls") PATCH, $(/usr/bin/grep -c 'fields\[\]=' "$T/gh.calls") reads"
 : > "$T/gh.calls"; o=$(run --add o 4 Todo 2007 2>&1); rc=$?
 [ "$rc" -eq 0 ] && ok "a write a retry lands exits 0" || ko "repaired write exit $rc: $o"
 case $o in *"#2007 -> Todo"*) ok "the card the read carries is reported as written";; *) ko "repaired write message: $o";; esac
 [ "$(/usr/bin/grep -c -- '-X PATCH' "$T/gh.calls")" = 2 ] && ok "the dropped write is written again" || ko "PATCHes: $(cat "$T/gh.calls")"
-/usr/bin/grep -q '"2007"' "$T/st/rest-items-o-4.json" && ok "a proven card stays in the cache" || ko "cache: $(cat "$T/st/rest-items-o-4.json")"
+/usr/bin/grep -q '"2007"' "$T/st/rest-items-o-4-x_y.json" && ok "a proven card stays in the cache" || ko "cache: $(cat "$T/st/rest-items-o-4-x_y.json")"
 : > "$T/gh.calls"; o=$(run --add o 4 Todo 2008 2>&1); rc=$?
 [ "$rc" -eq 1 ] && ok "a field write the board refuses and the card never carries is not a success" || ko "refused write exit $rc: $o"
 case $o in *"#2008"*"Invalid field values"*"read failure"*) ok "the refusal and the read failure are both named";; *) ko "refused write message: $o";; esac
 case $o in *"-> Todo"*) ko "the refused write is reported as written: $o";; *) ok "it never claims the card was written";; esac
-/usr/bin/grep -q '"2008"' "$T/st/rest-items-o-4.json" && ko "the cache records a refused card: $(cat "$T/st/rest-items-o-4.json")" || ok "the cache does not record the refused card"
+/usr/bin/grep -q '"2008"' "$T/st/rest-items-o-4-x_y.json" && ko "the cache records a refused card: $(cat "$T/st/rest-items-o-4-x_y.json")" || ok "the cache does not record the refused card"
 echo O_TODO > "$T/st-2009"; : > "$T/gh.calls"; o=$(run --add o 4 Todo 2009 2>&1); rc=$?
 [ "$rc" -eq 0 ] && ok "a refused PATCH whose card carries the Status is a success" || ko "carried write exit $rc: $o"
 case $o in *"#2009 -> Todo"*) ok "the card is read back as the judge of the write";; *) ko "carried write message: $o";; esac
@@ -132,11 +132,11 @@ case $o in *"not on the board"*) ko "a card the write proved is reported as abse
 [ "$(/usr/bin/grep -c 'items?per_page=100 ' "$T/gh.calls")" -le 5 ] && ok "the re-read is bounded" || ko "items reads: $(cat "$T/gh.calls")"
 # a cached Status option id the board no longer carries (a migrated or recreated option) is refused "Invalid field values":
 # the refusal drops the cached fields, the next attempt reads them again and sends the id the board carries now
-echo '{"id":"F_STATUS","opt":{"Todo":"O_OLD"}}' > "$T/st/rest-fields-o-4.json"; touch "$T/seen-2012"; echo '{"2012":"ITEM12"}' > "$T/st/rest-items-o-4.json"; : > "$T/gh.calls"
+echo '{"id":"F_STATUS","opt":{"Todo":"O_OLD"}}' > "$T/st/rest-fields-o-4.json"; touch "$T/seen-2012"; echo '{"2012":"ITEM12"}' > "$T/st/rest-items-o-4-x_y.json"; : > "$T/gh.calls"
 o=$(run o 4 Todo 2012 2>&1); rc=$?
 [ "$rc" -eq 0 ] && case $o in *"#2012 -> Todo"*) ok "a stale cached option id is re-read after the refusal and the write lands";; *) ko "stale id message: $o";; esac || ko "stale option id exit $rc: $o"
 # an option the board dropped for good: named as no option, never a traceback and never a write of the dead id
-echo '{"id":"F_STATUS","opt":{"Todo":"O_OLD","Gone":"O_GONE"}}' > "$T/st/rest-fields-o-4.json"; touch "$T/seen-2013"; echo '{"2013":"ITEM13"}' > "$T/st/rest-items-o-4.json"; : > "$T/gh.calls"
+echo '{"id":"F_STATUS","opt":{"Todo":"O_OLD","Gone":"O_GONE"}}' > "$T/st/rest-fields-o-4.json"; touch "$T/seen-2013"; echo '{"2013":"ITEM13"}' > "$T/st/rest-items-o-4-x_y.json"; : > "$T/gh.calls"
 o=$(run o 4 Gone 2013 2>&1); rc=$?
 [ "$rc" -eq 1 ] && case $o in *"no Status option 'Gone'"*) ok "an option the board dropped is named, exit 1";; *) ko "dropped option message: $o";; esac || ko "dropped option exit $rc: $o"
 case $o in *Traceback*) ko "a traceback: $o";; *) ok "no traceback";; esac
@@ -146,7 +146,7 @@ case $o in *Traceback*) ko "a traceback: $o";; *) ok "no traceback";; esac
 settle() { SG_STATE="$T/st" SG_REPO=x/y SG_BOARD_READ_BACKOFF=0.01 SG_BOARD_SETTLE_SECONDS=3 python3 "$T/s-board.py" "$@"; }
 : > "$T/gh.calls"; o=$(settle --add o 4 Todo 2014 2>&1); rc=$?
 [ "$rc" -eq 0 ] && case $o in *"#2014 -> Todo"*) ok "a card the add proved, carried only after the bounded attempts, is written within the settle bound";; *) ko "settle add message: $o";; esac || ko "settle add exit $rc: $o"
-echo '{"2015":"ITEM15"}' > "$T/st/rest-items-o-4.json"; touch "$T/seen-2015"; rm -f "$T/sreads15"; : > "$T/gh.calls"
+echo '{"2015":"ITEM15"}' > "$T/st/rest-items-o-4-x_y.json"; touch "$T/seen-2015"; rm -f "$T/sreads15"; : > "$T/gh.calls"
 o=$(settle o 4 Todo 2015 2>&1); rc=$?
 [ "$rc" -eq 0 ] && case $o in *"#2015 -> Todo"*) ok "a write whose card the read carries only after the bounded attempts is proven within the settle bound";; *) ko "settle write message: $o";; esac || ko "settle write exit $rc: $o"
 : > "$T/gh.calls"; o=$(settle --add o 4 Todo 2011 2>&1); rc=$?
@@ -155,19 +155,19 @@ o=$(settle o 4 Todo 2015 2>&1); rc=$?
 # old Status (Todo) for longer than the bounded attempts. That is the read behind the write, as for a card with no Status
 # yet, so it is read again within the settle bound, never named "carries no 'Doing' after 3 reads" a few seconds after the
 # write. The settle only reads: it never writes again, so a card another writer moved is never moved back (ADR-0143).
-echo '{"2016":"ITEM16"}' > "$T/st/rest-items-o-4.json"; touch "$T/seen-2016"; echo O_TODO > "$T/st-2016"; rm -f "$T/sreads16"; : > "$T/gh.calls"
+echo '{"2016":"ITEM16"}' > "$T/st/rest-items-o-4-x_y.json"; touch "$T/seen-2016"; echo O_TODO > "$T/st-2016"; rm -f "$T/sreads16"; : > "$T/gh.calls"
 o=$(settle o 4 Doing 2016 2>&1); rc=$?
 [ "$rc" -eq 0 ] && case $o in *"#2016 -> Doing"*) ok "a write whose card the read shows on its old Status past the bounded attempts is proven within the settle bound";; *) ko "settle old-Status message: $o";; esac || ko "settle old-Status exit $rc: $o"
 [ "$(/usr/bin/grep -c -- '-X PATCH' "$T/gh.calls")" = 3 ] && ok "the settle reads and never writes the card again: exactly the 3 bounded attempts, no 4th PATCH" || ko "settle wrote again: $(/usr/bin/grep -c -- '-X PATCH' "$T/gh.calls") PATCHes"
 # (#438) a write GitHub accepted that an old-Status card never carries is a lost write, not lag: its settle is capped
 # (SG_BOARD_OLD_SETTLE_SECONDS, default 10), so it does not wait the full SG_BOARD_SETTLE_SECONDS before the failure.
-echo '{"2017":"ITEM17"}' > "$T/st/rest-items-o-4.json"; touch "$T/seen-2017"; echo O_TODO > "$T/st-2017"; : > "$T/gh.calls"
+echo '{"2017":"ITEM17"}' > "$T/st/rest-items-o-4-x_y.json"; touch "$T/seen-2017"; echo O_TODO > "$T/st-2017"; : > "$T/gh.calls"
 t0=$(date +%s); o=$(SG_BOARD_OLD_SETTLE_SECONDS=0.1 SG_STATE="$T/st" SG_REPO=x/y SG_BOARD_READ_BACKOFF=0.01 SG_BOARD_SETTLE_SECONDS=30 python3 "$T/s-board.py" o 4 Doing 2017 2>&1); rc=$?; t1=$(date +%s)
 [ "$rc" -eq 1 ] && case $o in *"#2017"*"read failure"*) ok "a lost write on an old-Status card is a read failure";; *) ko "lost write message: $o";; esac || ko "lost write exit $rc: $o"
 [ $((t1 - t0)) -lt 5 ] && ok "its settle is capped: it does not wait the full settle bound" || ko "the lost write waited $((t1 - t0)) s"
 [ "$(/usr/bin/grep -c -- '-X PATCH' "$T/gh.calls")" = 3 ] && ok "a lost write is written for the 3 bounded attempts only" || ko "lost write PATCHes: $(/usr/bin/grep -c -- '-X PATCH' "$T/gh.calls")"
 # another writer moved the card to a third Status during the settle: the settle never moves it back (ADR-0143).
-echo '{"2018":"ITEM18"}' > "$T/st/rest-items-o-4.json"; touch "$T/seen-2018"; echo O_TODO > "$T/st-2018"; rm -f "$T/sreads18"; : > "$T/gh.calls"
+echo '{"2018":"ITEM18"}' > "$T/st/rest-items-o-4-x_y.json"; touch "$T/seen-2018"; echo O_TODO > "$T/st-2018"; rm -f "$T/sreads18"; : > "$T/gh.calls"
 o=$(SG_BOARD_OLD_SETTLE_SECONDS=0.5 settle o 4 Doing 2018 2>&1); rc=$?
 [ "$rc" -eq 1 ] && case $o in *"#2018"*"read failure"*) ok "a card another writer moved to a third Status is not claimed as written";; *) ko "third-Status message: $o";; esac || ko "third-Status exit $rc: $o"
 [ "$(/usr/bin/grep -c -- '-X PATCH' "$T/gh.calls")" = 3 ] && ok "a card moved to a third Status is written for the 3 bounded attempts only, never moved back by the settle" || ko "third-Status PATCHes: $(/usr/bin/grep -c -- '-X PATCH' "$T/gh.calls")"

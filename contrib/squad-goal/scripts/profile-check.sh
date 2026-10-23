@@ -1,7 +1,9 @@
 #!/bin/bash
 # usage: profile-check.sh <profile>   The one check a new profile runs once (#763). It names each setup gap, not just the
 # first: the profile parses; SG_REPO, SG_OWNER, SG_PROJECT, SG_CHECKOUT and SG_BASE are set and are not the example's
-# placeholders; the checkout's origin is SG_REPO; each gate, e2e and nightly command resolves; the repository holds the labels the loop and /to-tickets use. It reads
+# placeholders; the checkout's origin is SG_REPO; each gate, e2e and nightly command resolves; the board carries the shipped definition's vocabulary
+# (board_define.py --check, a read); a dry frontier pass (AF_DRY=1) runs clean; the repository holds the labels the loop and
+# /to-tickets use, and each missing one is named (creating it is a GitHub write, the owner's). Both passes run on a scratch state directory, so the loop's own state is never written. It reads
 # GitHub through the loop's one door (ghcall.sh) and writes nothing. Exit 0 when clean, 1 when a gap is named.
 # The hub loads profiles only at start: after a new profile passes, run `hubctl.sh --restart`.
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -28,6 +30,18 @@ for v in SG_FAST_GATE_CMD SG_LOCAL_GATE_CMD SG_LOCAL_GATE_RERUN_CMD SG_PREPUSH_C
   case "$w" in */*) (cd "${SG_CHECKOUT:-.}" 2>/dev/null && [ -x "$w" ]) || gap "$v '$c': $w is no executable file in the checkout";;
     *) command -v "$w" >/dev/null 2>&1 || gap "$v '$c': $w is no command";; esac
 done
+# #770: the board vocabulary and a dry frontier pass, each on a scratch state directory, so no check writes the loop's state.
+if [ -n "${SG_OWNER:-}" ] && [ -n "${SG_PROJECT:-}" ] && [ "${SG_REPO:-}" != owner/repo ]; then
+  scratch=$(mktemp -d "${TMPDIR:-/tmp}/profile-check.XXXXXX"); trap 'rm -rf "$scratch"' EXIT
+  bc=${SG_PF_BOARD_CHECK:-python3 $here/board_define.py}
+  out=$(SG_STATE="$scratch/board" $bc --definition "$here/board-definition.json" --check "$SG_OWNER" "$SG_PROJECT" 2>&1); rc=$?
+  case $rc in 0) ;; 1) gap "board vocabulary: $(printf '%s\n' "$out" | /usr/bin/grep -vE '^(read:|dry run)' | tr '\n' ';' | sed 's/;$//')";;
+    *) gap "board vocabulary unreadable: exit $rc: $(printf '%s' "$out" | tail -n 1)";; esac
+  if [ -n "${SG_FRONTIER_LABEL:-}" ]; then
+    out=$(cd "${SG_CHECKOUT:-.}" 2>/dev/null && SG_PROFILE="$name" AF_DRY=1 SG_STATE="$scratch/frontier" bash ${SG_PF_FRONTIER:-$here/autofrontier.sh} 2>&1); rc=$?
+    [ "$rc" = 0 ] || gap "dry frontier pass: exit $rc: $(printf '%s' "$out" | tail -n 1)"
+  fi
+fi
 case "${SG_REPO:-}" in */?*)
   [ "$SG_REPO" = owner/repo ] && SG_REPO=""
   if [ -n "$SG_REPO" ]; then
