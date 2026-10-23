@@ -36,6 +36,11 @@ remote=$($G ls-remote origin refs/heads/fix/9-x | cut -c1-9); [ "$remote" != "$(
 [ -d runs/run-landed/ws/w ] && ok "P: the tree with the unpushed work is kept" || ko "P: the tree with the unpushed work was removed"
 [ ! -s "$T/ghlog" ] && ok "P: the pass reads nothing of GitHub" || ko "P: a gh call was made: $(cat "$T/ghlog")"
 case "$out" in *"WT UNPUSHED run-moved"*) ok "P: a branch that moved on the remote is reported the same way, never force-pushed";; *) ko "P: run-moved not reported: $out";; esac
+# #767: only a `fix/<n>-…` or `gui/<n>-…` branch is a work branch, so the line names the exact salvage push under that name.
+sl=$($G -C runs/run-landed/ws/w rev-parse HEAD | cut -c1-9)
+case "$out" in *"git push origin $sl:refs/heads/fix/9-x"*) ok "#767: the line names the salvage push under the work-branch name";; *) ko "#767: no salvage command: $out";; esac
+mv_line=$(printf '%s\n' "$out" | grep "WT UNPUSHED run-moved")
+case "$mv_line" in *"refs/heads/fix/8-y"*) ko "#767: a moved branch is named for a push the remote refuses: $mv_line";; *"refs/heads/fix/<n>-<slug>"*) ok "#767: a moved branch gets a fresh fix/<n>-<slug> name";; *) ko "#767: run-moved has no salvage command: $mv_line";; esac
 # V (#464): the loop's wave entry reads the child's worktree after the run's VERDICT (ADR-0145 rule 9), so a run whose wave
 # has not landed keeps its child trees: a tree removed here left the entry with nothing to read ("WAVE no entry for #N: the
 # child's worktree ... is not there"), so every wave landed empty and no card left the queue. The marker `wave-<run>` exists
