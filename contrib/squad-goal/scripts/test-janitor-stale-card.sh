@@ -12,7 +12,9 @@
 #  (G) a marker younger than the grace stays;
 #  (H) a card another step moved past In Progress stays where it is;
 #  (I) a run that landed work and ended is reconciled to Code Complete (#239: a local landing is not Done);
-#  (J) a GitHub refusal is not an answer: nothing is touched, and the next pass (the API back) releases the card.
+#  (J) a GitHub refusal is not an answer: nothing is touched, and the next pass (the API back) releases the card;
+#  (K) #771: a failed run left active-runs before rule O released it, and rule R put its card back in Todo: the marker is
+#      dropped with no board write, so the frontier dispatches the issue again instead of reading it as claimed for good.
 # Stubbed gh/board; a temp state dir, so the live watch.log, markers and board are never read or written.
 # usage: bash test-janitor-stale-card.sh [janitor.py]
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
@@ -31,7 +33,7 @@ case "$a" in
   *repos/x/y/compare/*) echo ahead;;
   *projectsV2/4/fields*) echo FID4;;
   *projectsV2/1/fields*) echo FID1;;
-  *projectsV2/4/items*) for n in 1007; do printf '%s\tCode Complete\n' "$n"; done; for n in 1001 1002 1003 1004 1005 1006 1008 1009 1010 1011; do printf '%s\tIn Progress\n' "$n"; done;;   # one read, every card
+  *projectsV2/4/items*) for n in 1007; do printf '%s\tCode Complete\n' "$n"; done; printf '1012\tTodo\n'; for n in 1001 1002 1003 1004 1005 1006 1008 1009 1010 1011; do printf '%s\tIn Progress\n' "$n"; done;;   # one read, every card
   *projectsV2/1/items*) for n in 1003; do printf '%s\tDoing\n' "$n"; done;;
   *issues/1010*) if [ -e "TMPDIR/refuse" ]; then echo "API rate limit exceeded for user"; else echo open; fi;;
   *issues/10*) echo open;;
@@ -59,6 +61,8 @@ mark disp-1008 run-gone fresh
 mark disp-1007 run-gone
 # I: a run that landed and ended
 mk run-landed 1009; printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #1009 on fix/1009-x"}\n{"event": "land", "node": "route.router.1", "parent": "route", "entry": 1, "outcome": "pass", "reasons": [], "effect": {"name": "merge_land", "head": "a7df8f1ecff77bdb5833721121a7a50be4066053"}}\n{"event": "verdict", "verdict": "pass", "reasons": [], "exit_code": 0}\n' > "$T/co/runs/run-landed/record.jsonl"; old "$T/co/runs/run-landed/record.jsonl"; mark disp-1009 run-landed
+# K: a failed run that left active-runs unreleased; rule R put its card in Todo
+mark disp-1012 run-gone
 # J: the API refuses the first pass
 mark disp-1010 run-gone; touch "$T/refuse"
 pass() { SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$T/st" JANITOR_NOTIFY="$T/notify" python3 -I "$T/s/janitor.py" 2>&1; }
@@ -77,6 +81,7 @@ o=$(pass); bc() { cat "$T/board.calls" 2>/dev/null; }
 ! /usr/bin/grep -q ' 1007$' "$T/board.calls" 2>/dev/null && ok "H: a card past In Progress is never downgraded" || ko "H #1007 moved: $(bc)"
 /usr/bin/grep -q '^o 4 Code Complete 1009$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -q 'Done 1009' "$T/board.calls" 2>/dev/null && ok "I: a run that landed is reconciled to Code Complete, never Done" || ko "I #1009 not reconciled to Code Complete: $(bc)"
 [ -e "$T/st/auto/disp-1010" ] && ! /usr/bin/grep -q ' 1010$' "$T/board.calls" 2>/dev/null && ok "J: a refused read touches nothing" || ko "J #1010 touched on a refusal: $(bc)"
+[ ! -e "$T/st/auto/disp-1012" ] && ! /usr/bin/grep -q ' 1012$' "$T/board.calls" 2>/dev/null && ok "K: a Todo card behind a marker no run holds is released, the card untouched (#771)" || ko "K #1012 stays claimed: $(bc) $o"
 rm -f "$T/refuse"; o=$(pass)
 /usr/bin/grep -q '^o 4 Todo 1010$' "$T/board.calls" 2>/dev/null && [ ! -e "$T/st/auto/disp-1010" ] && ok "J: the next pass, API back, releases it (a refusal leaves no once-only marker behind)" || ko "J #1010 not released after the refusal: $(bc) $o"
 n=$(/usr/bin/grep -c ' 1001$' "$T/board.calls"); [ "$n" = 1 ] && ok "the card of #1001 is moved once" || ko "#1001 moved $n times"
