@@ -265,6 +265,12 @@ eligible() { local m=$1 rt rn
   streak omitted "$m" >/dev/null && return 1
   return 0; }
 reachable=0; for m in $chain; do eligible "$m" && reachable=$((reachable+1)); done
+# #762: the model that wrote the tip never reviews it while another reviewer is reachable. The writer names it in
+# SG_REVIEW_AUTHOR or in $SG_STATE/author-<branch with / as _>; with no other reachable reviewer it still reviews.
+author=${SG_REVIEW_AUTHOR:-$(head -1 "$SG_STATE/author-$pr" 2>/dev/null)}
+same() { local x=${1%%\[*} y=${2%%\[*}; [ -n "$y" ] && [ "${x#claude:}" = "${y#claude:}" ]; }
+others=0; for m in $chain; do same "$m" "$author" || { eligible "$m" && others=$((others+1)); }; done
+[ "$others" -gt 0 ] && [ "$others" -lt "$reachable" ] && reachable=$others || author=""
 used=0
 for m in $chain; do fmt=0; timed_out=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9.-' _)   # ms: the model in a status file name, so one model's status never overwrites another's (#624)   # fmt=1: this model's answer was outside the checklist shape, so no MODEL_FAIL on top of the MODEL_FORMAT
   IFS=$'\t' read -r rroute runner wire tools <<< "$(route_of "$m")"
@@ -281,6 +287,7 @@ for m in $chain; do fmt=0; timed_out=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9
   # MODEL_FAIL is written. Switching every entry off leaves no reachable model, which is the pre-existing BLOCKED path.
   off_ok review_models "$m" || { printf "MODEL_OFF review %s skipped on branch %s: switched off in models.json.\n" "$m" "$bm" > "$(sg_cq_status "$iss" "moff$$-$ms")"; continue; }
   hours_ok review_models "$m" || { printf "MODEL_HOURS review %s skipped on branch %s: outside its window in models.json.\n" "$m" "$bm" > "$(sg_cq_status "$iss" "mhours$$-$ms")"; continue; }
+  same "$m" "$author" && { printf "MODEL_SELF review %s skipped on branch %s: it wrote this branch, and another reviewer is reachable.\n" "$m" "$bm" > "$(sg_cq_status "$iss" "mself$$-$ms")"; continue; }
   om=$(streak omitted "$m") && { omit_say "$om"; continue; }
   [ -n "${SG_REVIEW_CHAIN_DEPTH:-}" ] && [ "$used" -ge "$SG_REVIEW_CHAIN_DEPTH" ] && break
   used=$((used+1))
