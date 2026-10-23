@@ -45,6 +45,9 @@ chmod +x "$T/scripts/mkreq.sh"
 # board.sh keeps the call it was handed: <owner> <project> <column> <issue>... (#33: the card move was a bare `true`, so no case could say which cards moved)
 printf '#!/bin/bash\necho "$*" >> "$BOARDLOG"\n' > "$T/board.sh"; chmod +x "$T/board.sh"
 cp "$src" "$T/scripts/autofrontier.sh"; cp "$(dirname "$src")"/{ghcall.sh,ghread.py,ghthrottle.py,issue_ledger.py} "$T/scripts/"   # the pass reads the open-issue list through the door
+# The issues an open work branch names (#361, workbranches.sh): the real read is `git ls-remote` against github.com, which no
+# fixture may reach, so the stand-in answers WORK_ISSUES (none unless a case sets it) (#756).
+printf '#!/bin/bash\nsg_work_issues() { echo "${WORK_ISSUES:-}"; }\n' > "$T/scripts/workbranches.sh"
 # The seam's door, stubbed at the script's own name (#550): one `<issue>\t<state>` line per card. A fixture issue's card is
 # in Todo unless it names its own "card" ("" is no card); CARDS_DOWN is a board that does not answer.
 cat > "$T/scripts/issue_state.py" <<'PY'
@@ -478,7 +481,8 @@ r=$(run)
 [ "$(marked 351)" = 1 ] && ok "I6: a reserve past the lock's bound holds nothing" || ko "I6: a dead reserve held the pass: '$r'"
 
 # #756: the fixture carries every file the pass sources, so no case reads a pass that died on a missing helper.
-/usr/bin/grep -q 'No such file or directory' "$T/pass.out" && ko "a pass sourced a file the fixture lacks: $(/usr/bin/grep -m1 'No such file' "$T/pass.out")" || ok "every file the pass sources is in the fixture"
+# A missing siblings.py is a FRONTIER NOTE the pass prints on purpose; a missing sourced .sh is a pass that ran without its helper.
+/usr/bin/grep -qE '\.sh: No such file or directory' "$T/pass.out" && ko "a pass sourced a file the fixture lacks: $(/usr/bin/grep -m1 -E '\.sh: No such file' "$T/pass.out")" || ok "every file the pass sources is in the fixture"
 
 rm -rf "$T"
 [ "$fail" = 0 ] && { echo "autofrontier one-run: all checks green"; exit 0; }
