@@ -99,6 +99,7 @@ test-mkreq.sh 6.64
 test-nightly.sh 4.46
 test-pass-deadline.sh 15.65
 test-prepush.sh 1.28
+test-profile-check.sh 1.16
 test-promote-pass.sh 11.04
 test-promote.sh 15.14
 test-publish-live.sh 2.50
