@@ -131,4 +131,14 @@ echo ccc333 > "$T/head"; rm -f "$T/st/cq/"*
 bash "$T/p/branchreview.sh" gui/7-x 7 >/dev/null 2>&1
 [ -e "$T/p/finished" ] && /usr/bin/grep -q 'review (m1) against' "$T/st/cq/"x__y#7-status~* 2>/dev/null \
   && ok "progress: a progress line before model= never kills review.sh, and the status names the model" || ko "progress: finished=$([ -e "$T/p/finished" ] && echo y || echo n), status '$(head -1 "$T/st/cq/"x__y#7-status~* 2>/dev/null)'"
+# 11) #769: the run that coded a child names the coder's model for the review, so review.sh's self-review skip (#762) fires.
+#    childreview.sh reads the run record above the worktree: the outcome whose workspace is this worktree names the model,
+#    and it goes to $SG_STATE/author-<branch key>. A dispatcher outcome with no workspace is never the author.
+rm -f "$T/st/author-"*
+printf '%s\n' '{"event": "outcome", "node": "route.router.2", "entry": 1, "item": null, "outcome": "pass", "model": "claude-sonnet-5-5", "workspace": {"name": "worktrees/child", "path": "child"}}' \
+  '{"event": "outcome", "node": "router", "entry": 1, "item": null, "outcome": "pass", "model": "claude-opus-5-5"}' > "$T/record.jsonl"
+out=$(cd "$T/child" && CLAUDE_CHANGES=1 bash "$T/s/childreview.sh" run-1 7 2>&1)
+[ "$(head -1 "$T/st/author-squad_run-1_ws-late" 2>/dev/null)" = claude-sonnet-5-5 ] && ok "author: the coder's model from the run record names the branch author" \
+  || ko "author: author file '$(cat "$T/st/author-squad_run-1_ws-late" 2>/dev/null)' $out"
+rm -f "$T/record.jsonl"
 rm -rf "$T"; exit $fail
