@@ -209,6 +209,28 @@ older = line("2026-10-17T06:00:00.000Z", "billing: credits config", ctx={"config
 write_log(older)
 ck(hub.q_grok()["windows"][0]["pct"] == 73.0, "a log line older than the kept reading does not replace it")
 
+print("== 8. a billing line with no creditUsagePercent is a 0% reading, not a missing one (#753)")
+# grok 1.0.62 omits creditUsagePercent when the period's usage is 0%, so that line carries the period alone: a
+# currentPeriod with start and end is a reading, and the field's absence on it means 0%. The previous period's
+# kept 73% must not stand in for it.
+NEW_START = dt.datetime(2026, 10, 22, 18, 51, 1, 60398, tzinfo=dt.timezone.utc).timestamp()
+NEW_END = dt.datetime(2026, 10, 29, 18, 51, 1, 60398, tzinfo=dt.timezone.utc).timestamp()
+write_log(line("2026-10-22T19:00:00.000Z", "billing: fetched credits config", src="shell", ctx={"config": {
+    "currentPeriod": {"type": "USAGE_PERIOD_TYPE_WEEKLY",
+                      "start": "2026-10-22T18:51:01.060398+00:00", "end": "2026-10-29T18:51:01.060398+00:00"}},
+    "subscriptionTier": "SuperGrok"}))
+r = hub.q_grok()
+w = ((r or {}).get("windows") or [{}])[0]
+ck(w.get("pct") == 0.0, "a line with no creditUsagePercent reads as 0%, not as the kept reading", r)
+ck(w.get("resets") == NEW_END and (r or {}).get("until") == NEW_END, "the weekly window resets at the new period end", r)
+ck(not (r or {}).get("unavailable"), "the reading is not unavailable", r)
+kept = json.loads(KEPT.read_text()) if KEPT.exists() else {}
+ck(kept.get("pct") == 0.0, "the 0% reading replaces the kept one, so a rotation cannot resurrect the old period", kept)
+hub.quota = {"grok": r}
+row = hub.quota_row("grok", NEW_START + 3600)
+ck(row and not row.get("unavailable") and not row.get("stale"), "the panel row is not stale while the new period is open", row)
+ck(row and (row.get("windows") or [{}])[0].get("pct") == 0.0, "the panel row reads 0%", row)
+
 print(f"\n{checks - len(fails)}/{checks} checks passed")
 if fails:
     print("FAILED: " + "; ".join(fails)); sys.exit(1)
