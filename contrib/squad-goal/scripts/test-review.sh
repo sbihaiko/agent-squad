@@ -413,7 +413,7 @@ cat > "$T/bin/codex" <<C
 #!/bin/bash
 cat > "$T/prompt21c"; echo "\$*" > "$T/args21c"; o=""
 while [ \$# -gt 0 ]; do case "\$1" in -o) o=\$2; shift;; --output-schema) cp "\$2" "$T/schema21c"; shift;; esac; shift; done
-printf '%s\n' '$J' > "\$o"
+printf '%s\n' '$J' > "\$o"; printf 'tokens used\n54.227\n'
 C
 chmod +x "$T/bin/claude" "$T/bin/codex"
 printf '{"review_models":["claude:m"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
@@ -430,6 +430,8 @@ jq -e '.properties.verdict.enum==["APPROVE","CHANGES"]' "$T/schema21c" >/dev/nul
 [ $rc = 0 ] && /usr/bin/grep -q '^- a.cs:1 — diverges from ADR-0001 — wrong — fix$' "$T/st/review-fix_1-x.md" && ok "21 codex: the JSON answer is rendered" || ko "21 codex render: rc=$rc '$out' $(cat "$T/st/review-fix_1-x.md")"
 # #764: codex read an unrelated global skill (graphify SKILL.md) during a review, so the prompt forbids every skill file.
 /usr/bin/grep -q 'Open no skill file (no SKILL.md under ~/.agents, ~/.codex or ~/.claude) and use no skill' "$T/prompt21c" && ok "21 the codex prompt forbids skill files (#764)" || ko "21 the codex prompt has no skill line (#764)"
+# #765: codex prints 'tokens used' and the count, with a locale thousands separator; the ledger keeps it as the input count
+/usr/bin/grep -q '	gpt-x	54227	0	0$' "$T/st/token-usage.tsv" && ok "21 codex: its token count reaches the ledger" || ko "21 codex tokens: $(/usr/bin/grep 'gpt-x' "$T/st/token-usage.tsv" | tail -1)"
 # 22) #633: a fix round answers in JSON with the same schema. claude -p carries --json-schema, the prompt carries the
 # schema, and the previous findings it reads are the rendered markdown. A fixed finding in resolved renders the
 # '## Resolved' section the fix-round check reads, and the next fix round reads that rendered review unchanged.
