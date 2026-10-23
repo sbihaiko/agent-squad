@@ -23,6 +23,7 @@
  Q  a card still In Progress behind its auto/disp-<n> (or auto/bug-<n>) marker, 10 min old, that no run works: not a live run, not a run in its launch window, not a run that landed, no open work branch naming the issue, no fork-<n>-<sha9> marker.
     Rules E and O read a run's verdict, so a run that ended without one (rule C drops a zombie from active-runs) or that left active-runs by any other road freed nothing: the card sat In Progress, autofrontier.sh skipped the issue,
     and health.sh reported runs-board-drift for hours. Rule Q reads the state, never the run's history: the card goes back to Todo (the bug card to To triage), the marker is dropped, one comment is queued. A refused read touches nothing.
+    A marker behind a card already back in Todo (the bug card in To triage), with the same "no run, no work branch" answer, is dropped with no board write (#771): a failed run that left active-runs before rule O released it kept its issue claimed for good.
  P  a `fork-<n>-<sha9>` marker whose commit left the fork base while the base no longer carries its change and the branch has nothing ahead to merge: an unwound landing (a hand revert, a branch reset, a base rebuilt under it).
     Its issue goes back to the column the dispatch reads (Todo; the bug board's Doing -> To triage) and the fork/disp/bug markers are dropped, so the frontier builds it again (#1830). A marker whose commit is in the base, or whose change the base holds anyway, and a branch still ahead of the base (the close retries on its head) are left alone.
  H  board state against the issue's own history (its loop comments; the REST timeline carries no project-status events), at most once per 10 min:
@@ -1040,8 +1041,17 @@ if owner and proj and repo0:
         if not cs and not bs: continue
         moves = [[proj, os.environ.get("SG_TODO", "Todo")]] if cs in ("In Progress", "Doing") else []
         if bs == os.environ.get("SG_BUG_DOING", "Doing"): moves.append([bproj, os.environ.get("SG_BUG_TRIAGE", "To triage")])
-        if not moves: no(); continue
         mks = " and ".join("auto/" + k + "-" + n for k in sorted(ms))
+        if not moves and (cs == os.environ.get("SG_TODO", "Todo") or bs == os.environ.get("SG_BUG_TRIAGE", "To triage")):
+            # #771: the card is back where a dispatch takes it (rule R put a failed run's card in Todo), but the marker of a run
+            # that left active-runs before rule O released it still stands, so the issue read as claimed for good. No run holds
+            # it and no work branch names it: the marker goes, the card is not touched.
+            say(f"STALE-CLAIM #{n}: {mks} stands behind a card in {cs or bs}, no run works it, no work branch names it; marker dropped so it dispatches again")
+            if not dry:
+                for m in ms.values():
+                    if m is not None: m.unlink()
+            continue
+        if not moves: no(); continue
         say(f"STALE-CARD #{n}: card In Progress behind {mks}, no run works it, no work branch names it; card -> {', '.join(s for _, s in moves)}, marker dropped so it dispatches again")
         if not dry:
             for p, s in moves: board_write([owner, str(p), s, str(n)], n, f"stale card back in {s}")
