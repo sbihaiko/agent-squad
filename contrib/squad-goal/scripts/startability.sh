@@ -84,10 +84,24 @@ for run in runs:
 print(",".join(sorted(busy, key=int)) or "-")
 PY
 }
+# A failed run's child can leave commits on a local branch no remote holds (#771). The loop never pushes them (#361):
+# janitor rule O keeps each such tree as auto/salvage-<n> ("<branch> <sha9> in <tree>"), and the next dispatch names the
+# branch and sha, so the new run can reuse the work. A tree that is gone, or whose HEAD moved off that sha, is not named.
+sg_salvage_note() {   # <issue>
+  local f="${SG_STATE:-}/auto/salvage-$1" b sha _in w head
+  [ -n "${SG_STATE:-}" ] && [ -f "$f" ] || return 0
+  while read -r b sha _in w; do
+    [ -n "$w" ] && [ -d "$w" ] || continue
+    head=$(git -C "$w" rev-parse HEAD 2>/dev/null) || continue
+    case "$head" in "$sha"*) ;; *) continue;; esac
+    printf 'SALVAGE: an earlier run of this issue failed and left commit %s on local branch %s in %s; no remote holds it. Read that work first (git -C %s log -p %s) and reuse what is sound (git cherry-pick %s) instead of starting again.\n' "$sha" "$b" "$w" "$w" "$sha" "$sha"
+  done < "$f"
+}
 # An old run can leave the issue worktree behind. The dispatcher owns that path, so it tells the next child when the
 # exact expected checkout is safe to reuse. Every other state stays intact and is reported as a blocker (#65).
 sg_issue_worktree_note() {   # <issue>: print child instructions only when worktrees/child/gui-<issue> already exists
   local n=$1 path branch root current state
+  sg_salvage_note "$n"
   path="${SG_CHECKOUT%/}/worktrees/child/gui-$n"
   branch=$(sg_fork_branch "$n")
   [ -e "$path" ] || return 0

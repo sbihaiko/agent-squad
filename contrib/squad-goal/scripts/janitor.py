@@ -1002,8 +1002,9 @@ if owner and proj and repo0:
             if not dry:
                 for p, s in moves: board_write([owner, str(p), s, str(n)], n, f"bug card back in {s} after run {f.name} ended {i['name']}")
                 for k in marks[n]: (st / "auto" / f"{k}-{n}").unlink()
+                if kept: (st / "auto" / f"salvage-{n}").write_text("".join(k + "\n" for k in kept))   # the next dispatch names it (startability.sh)
                 (st / "cq" / f"{CQ}#{n}-dispatchfail-{os.getpid()}.md").write_text(
-                    f"Run {f.name} ended without a landed change (verdict {i['name']}: {why}). {where[:1].upper() + where[1:]} its {mks} marker dropped, so the next cycle dispatches the issue again." + (f" The child left commits on no remote branch, kept for salvage: {', '.join(kept)}." if kept else "") + "\n")
+                    f"Run {f.name} ended without a landed change (verdict {i['name']}: {why}). {where[:1].upper() + where[1:]} its {mks} marker dropped, so the next cycle dispatches the issue again." + (f" The child left commits on no remote branch, kept for salvage: {', '.join(kept)}. The loop flags them and never pushes them (#361); the next dispatch of this issue names them, so the new run can reuse them." if kept else "") + "\n")
         if not again and not dry: mk.touch()
     # O: a missing child-worktree run has no record to read, but its marker still identifies the issue it claimed.
     for r, f in missing:
