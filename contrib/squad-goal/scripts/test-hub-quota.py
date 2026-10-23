@@ -129,19 +129,19 @@ hub.quota = {
 items = hub.foot_items(hub.foot_sources(NOW), NOW)
 subs = [i for i in items if i["key"] == "subs"]
 ck(len(subs) == 1, "one subscription fact reaches the line", [i["key"] for i in items])
-ck(subs and subs[0]["text"] == "CL 42% · GK 88% 1d 2h · GPT 61% ? · GEM ?",
-   "a token below the warn ladder moves its reset span out of the line", subs[0]["text"] if subs else None)
+ck(subs and subs[0]["text"] == "CL 42% 3.3h · GK 88% 1.1d · GPT 61% ? · GEM ?",
+   "every token carries its reset in one compact rung, green ones too", subs[0]["text"] if subs else None)
 ck(subs and subs[0]["parts"][0].get("tip") == "resets in 3h 20m · read 0s ago",
    "the hidden reset span is the token tooltip", subs[0]["parts"][0] if subs else None)
-# The warn boundary draws the span, but an unreadable reset always stays visible. A reset only one minute away does not
-# override the ladder; quota markers keep their absolute reset time.
+# Every token draws the compact span, whatever its tone, and an unreadable reset always stays visible. A reset only one
+# minute away reads in its own rung; quota markers keep their absolute reset time.
 hub.quota["claude"] = {"windows": [{"label": "weekly", "pct": hub.FOOT_WARN_PCT, "resets": NOW + 3 * 3600 + 20 * 60}], "asof": NOW}
 boundary = [i for i in hub.foot_items(hub.foot_sources(NOW), NOW) if i["key"] == "subs"][0]
-ck(boundary["parts"][0]["text"] == "CL 80% 3h 20m", "the warn boundary keeps the reset span", boundary["parts"][0])
+ck(boundary["parts"][0]["text"] == "CL 80% 3.3h", "a token at the warn boundary keeps the same rung", boundary["parts"][0])
 hub.quota["claude"] = {"windows": [{"label": "weekly", "pct": 42, "resets": NOW + 60}], "asof": NOW}
 close = [i for i in hub.foot_items(hub.foot_sources(NOW), NOW) if i["key"] == "subs"][0]
-ck(close["parts"][0]["text"] == "CL 42%" and close["parts"][0].get("tip") == "resets in 1m · read 0s ago",
-   "a reset minutes away stays hidden below the ladder", close["parts"][0])
+ck(close["parts"][0]["text"] == "CL 42% 1m" and close["parts"][0].get("tip") == "resets in 1m · read 0s ago",
+   "a reset minutes away reads in the minute rung, its exact span in the tooltip", close["parts"][0])
 ck(hub._quota_fact({"codex": NOW + 60, "agy": None}, NOW, subs=()) == "codex reset 05:01 · agy ok",
    "the quota block keeps its reset time", hub._quota_fact({"codex": NOW + 60, "agy": None}, NOW, subs=()))
 hub.quota["claude"] = {"windows": [{"label": "weekly", "pct": 42, "resets": NOW + 3 * 3600 + 20 * 60}], "asof": NOW}
@@ -197,7 +197,7 @@ row = hub.quota_row("grok", LATER)
 ck(row and (row.get("windows") or [{}])[0].get("pct") == 73.0, "the panel row shows the kept reading before the period end", row)
 ck(row and row.get("asof") == ASOF, "the panel row carries the reading's age", row)
 gk = [p for p in [i for i in hub.foot_items(hub.foot_sources(LATER), LATER) if i["key"] == "subs"][0]["parts"] if p["text"].startswith("GK")][0]
-ck(gk["text"] == "GK 73%" and "resets in 4d 7h" in (gk.get("tip") or ""), "the footer token reads the same value as the panel", gk)
+ck(gk["text"] == "GK 73% 4.3d" and "resets in 4d 7h" in (gk.get("tip") or ""), "the footer token reads the same value as the panel", gk)
 ck("read 5h ago" in (gk.get("tip") or ""), "the footer token carries the same age as the panel", gk)
 row = hub.quota_row("grok", END + 60)
 ck(row and row.get("unavailable") is True and row.get("stale") is True, "past the period end the reading is stale", row)
