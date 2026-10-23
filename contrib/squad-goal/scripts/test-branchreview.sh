@@ -119,4 +119,16 @@ out=$(cd "$T/child" && CLAUDE_CHANGES=1 bash "$T/s/childreview.sh" run-1 7 2>&1)
 [ $rc = 0 ] && /usr/bin/grep -q '^+late' "$T/prompt" && ! /usr/bin/grep -q '^+devlater' "$T/prompt" && ! /usr/bin/grep -q '^+wave' "$T/prompt" \
   && ok "late: a child on a dev tip newer than its wave is reviewed on its own commits only" || ko "late: rc=$rc, the prompt diff: $(/usr/bin/grep '^+[a-z]' "$T/prompt" | tr '\n' ' ') $out"
 [ "$(cat "$T/st/review-squad_run-1_ws-late.base" 2>/dev/null)" = wave/run-1 ] && ok "late: the base file still names the wave branch, as the entry requires" || ko "late: base '$(cat "$T/st/review-squad_run-1_ws-late.base" 2>/dev/null)'"
+# 10) #772: review.sh prints a progress line before its model= line. The review reads every line, so review.sh is never
+#     killed by SIGPIPE in the middle of the call, and the status comment names the model.
+mkdir -p "$T/p"; cp "$T/s/branchreview.sh" "$T/s/env.sh" "$T/s/ghcall.sh" "$T/s/ghread.py" "$T/s/address.sh" "$T/p/" 2>/dev/null
+cat > "$T/p/review.sh" <<J
+#!/bin/bash
+echo "review m1 on x still running, 30s of 60s"; sleep 0.2; echo "model=m1 verdict=APPROVE"
+printf 'VERDICT: APPROVE\n' > "$T/st/review-gui_7-x.md"; : > "$T/p/finished"
+J
+echo ccc333 > "$T/head"; rm -f "$T/st/cq/"*
+bash "$T/p/branchreview.sh" gui/7-x 7 >/dev/null 2>&1
+[ -e "$T/p/finished" ] && /usr/bin/grep -q 'review (m1) against' "$T/st/cq/"x__y#7-status~* 2>/dev/null \
+  && ok "progress: a progress line before model= never kills review.sh, and the status names the model" || ko "progress: finished=$([ -e "$T/p/finished" ] && echo y || echo n), status '$(head -1 "$T/st/cq/"x__y#7-status~* 2>/dev/null)'"
 rm -rf "$T"; exit $fail
