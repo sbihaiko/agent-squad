@@ -1,7 +1,7 @@
 """The shell-suite runner's seam: find each `test-*.sh` beside the scripts, run one, and say why it failed.
 
 `contrib/squad-goal/scripts/shell-suites.sh` runs the same files. Each suite runs the way it does there: every inherited
-`SG_*` variable cleared and `HOME` at its own temp dir, so the live loop's state never reaches an assertion.
+`SG_*` and `SERIAL_*` variable cleared and `HOME` at its own temp dir, so the live loop's state never reaches an assertion.
 
 The measured run time of each suite sits beside the runner, in `tests/shell_suites_seconds.txt` (`name seconds`, `#` starts
 a comment); `python3 -m tests.measure_shell_suites` writes it. A suite of 0.5 s or more is heavy, so the fast battery
@@ -66,7 +66,7 @@ def timeout_for(suite):
 
 def _run(suite, timeout=None, extra_env=None):
     timeout = timeout_for(suite) if timeout is None else timeout
-    env = {k: v for k, v in os.environ.items() if not k.startswith("SG_")}
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("SG_", "SERIAL_"))}   # the gate exports its lock bounds (#755)
     if extra_env:
         env.update(extra_env)   # a variable a caller sets on purpose, after the clear: the suite must survive it
     with tempfile.TemporaryDirectory() as home:
@@ -76,7 +76,7 @@ def _run(suite, timeout=None, extra_env=None):
 
 
 def run(suite, timeout=None, extra_env=None):
-    """Run one suite the way `problem` does -- every inherited `SG_*` cleared and `HOME` in its own temp dir -- and hand back
+    """Run one suite the way `problem` does -- every inherited `SG_*` and `SERIAL_*` cleared and `HOME` in its own temp dir -- and hand back
     its result, so a module reads the run by this one seam instead of spawning the suite with the ambient environment. `extra_env`
     names a variable to set on purpose (a lock the gate would hand down), so a caller can prove the suite survives it. A caller
     that names no `timeout` gets `timeout_for(suite)`: the suite's own measure, never a hand-tuned wall bound (#736)."""
