@@ -27,6 +27,10 @@ AUTHS = ("subscription", "api_key", "unverified")
 V1_CHAINS = {"coding": "coding_models", "review": "review_models",
              "vision": "vision_models", "router": "router_models"}
 DEFAULT_RESERVE_PERCENT = 10
+# A cache read costs this share of the input rate where a model's display_price names no cache_read. It is the Anthropic
+# ratio. The hub's stats price cache reads with it (#791). The token guard does not read it: its cache-read weight is
+# SG_TOKEN_CACHE_WEIGHT, default 0 (#495, #793).
+CACHE_READ_RATIO = 0.1
 DEFAULT_QUOTA_STALE_SECONDS = 6 * 3600   # a quota reading older than this is unknown; SG_QUOTA_STALE_SECONDS overrides
 _CTX = re.compile(r"\[([A-Za-z0-9]{1,8})\]$")
 _EFFORT = re.compile(r"^(.*)-(low|medium|high)$")

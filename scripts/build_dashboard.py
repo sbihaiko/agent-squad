@@ -57,6 +57,11 @@ def served_lists(home=False):
     return lists
 
 
+def has_price(price):
+    """#798: a display price shows only with a number for input or output; an all-null price (gpt-6-luna) is no price."""
+    return bool(price) and any(isinstance(price.get(k), (int, float)) and not isinstance(price.get(k), bool) for k in ("input", "output"))
+
+
 def model_snapshot():
     """The registry data the dashboard shows: one label, one alias map, one display price and one provider per entry.
     `providers` lets the record re-price only a model the SDK cannot price, which is every provider but Claude."""
@@ -68,7 +73,7 @@ def model_snapshot():
         # page parses no id (#677). The resolver is the seam: a spelling it does not read stays out.
         "spellings": {sp: hit.id for e in reg.entries.values() for r in e.routes.values() for sp in (r.get("served") or [])
                       if sp not in reg.entries and sp not in reg.aliases and (hit := modelreg.model(sp, reg)) is not None},
-        "prices": {mid: e.display_price for mid, e in reg.entries.items() if e.display_price},
+        "prices": {mid: e.display_price for mid, e in reg.entries.items() if has_price(e.display_price)},
         "providers": {mid: e.provider for mid, e in reg.entries.items()},
     }
 

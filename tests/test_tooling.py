@@ -264,3 +264,34 @@ def test_ci_gate_steps_run_the_fast_battery_on_both_pythons():
     """Guard for the suite rule: each gate step runs the fast battery, which leaves the `heavy` tests out."""
     gates = [r for r in _ci_run_lines() if r.startswith("python3 -m pytest") and "test_gui_test_e2e.py" not in r]
     assert gates == ['python3 -m pytest -n auto -m "not heavy"'] * 2, gates
+
+
+# #793: a fixture that runs the real autobug.sh or autofrontier.sh pins its own disk floor. Without the pin the
+# dispatcher reads the machine's free space, so a shared runner or a full volume decides the test (#615).
+# A run is the dispatcher as a command: first word, after `bash`, `exec`, or a `;`, `&&`, `|` or `(`. A path named as an
+# argument (cp, chmod, grep -l, a printf stub) is a file operation, not a run.
+_DISPATCHER_RUN = re.compile(r"(?:^|[;&|(]\s*|\bexec\s+|\bbash\s+)\"?[^\s\"]*/?(?:autobug|autofrontier)\.sh\"?(?=\s|$)")
+_NOT_A_RUN = re.compile(r"^\s*#|\bprintf\b|\becho\b|\bgrep\b|>\s*\"?\$?\S*(?:autobug|autofrontier)\.sh")
+
+
+def _runs_a_dispatcher_without_pin(text):
+    """True when a non-comment line runs the real dispatcher and no SG_MIN_FREE_GB assignment is in the file."""
+    runs = any(_DISPATCHER_RUN.search(line) and not _NOT_A_RUN.search(line) for line in text.splitlines())
+    return runs and not re.search(r"(?m)^\s*(?:export\s+)?SG_MIN_FREE_GB=", text)
+
+
+def test_a_dispatcher_fixture_pins_its_disk_floor_in_the_text():
+    """The guard itself: a fixture that runs the dispatcher with no pin is caught; a stub or a pinned fixture is not."""
+    assert _runs_a_dispatcher_without_pin('bash "$T/s/autobug.sh"\n')
+    assert _runs_a_dispatcher_without_pin('bash "$S/autofrontier.sh" 2>&1\n')
+    assert _runs_a_dispatcher_without_pin('x=1; "$S/autobug.sh"\n')
+    assert not _runs_a_dispatcher_without_pin('chmod +x "$F/autobug.sh"\ncp "$S/autobug.sh" "$F2/"\n')
+    assert not _runs_a_dispatcher_without_pin('export SG_MIN_FREE_GB=0\nbash "$T/s/autobug.sh"\n')
+    assert not _runs_a_dispatcher_without_pin('printf "#!/bin/bash\\nexit 0\\n" > "$F/autobug.sh"\n')
+    assert not _runs_a_dispatcher_without_pin("# bash autobug.sh is run by the loop\n")
+
+
+def test_every_shell_fixture_that_runs_a_dispatcher_pins_its_disk_floor():
+    scripts = ROOT / "contrib/squad-goal/scripts"
+    unpinned = [p.name for p in sorted(scripts.glob("test-*.sh")) if _runs_a_dispatcher_without_pin(p.read_text(errors="replace"))]
+    assert unpinned == [], f"these fixtures run autobug.sh or autofrontier.sh with no SG_MIN_FREE_GB pin: {unpinned}"

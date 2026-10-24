@@ -58,7 +58,7 @@ def _scripts(tmp_path, cluster_sleep):
     d = tmp_path / "scripts"
     d.mkdir(parents=True)
     for name in ("single.sh", "autobug.sh", "autofrontier.sh", "ghcall.sh", "ghread.py", "ghthrottle.py",
-                 "refusal-names.sh", "workbranches.sh"):
+                 "refusal-names.sh", "workbranches.sh", "issue_ledger.py"):
         (d / name).write_text((SCRIPTS / name).read_text())
     (d / "env.sh").write_text("")                       # the test sets every SG_* it needs
     (d / "startability.sh").write_text(STARTABILITY)
@@ -99,6 +99,7 @@ def _state(tmp_path, script):
         "SG_BASE": "main", "SG_BUG_LABEL": "bug", "SG_FRONTIER_LABEL": "ready-for-agent",
         "SG_FRONTIER_PREAMBLE": "", "BOARD": "true", "LABELS": labels,
         "SG_SQUAD": str(SCRIPTS.parents[2]), "SQUAD_CAPS_DIR": str(tmp_path / "caps"),   # the free slots come from squad/caps.py
+        "SG_MIN_FREE_GB": "0",   # the disk floor reads the real volume (#615): a fixture pass must not stop on this machine's free space (#792)
     }
 
 

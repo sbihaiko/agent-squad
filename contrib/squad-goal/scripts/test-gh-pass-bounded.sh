@@ -9,6 +9,7 @@
 # are not here any more). Writes are not reads: landing an issue closes it, once per issue, and no read can avoid that.
 # Nothing here touches the network, a model or a board.
 for v in $(compgen -e | /usr/bin/grep -E '^(SG_|FC_)'); do unset "$v"; done
+export SG_MIN_FREE_GB=0   # the dispatchers pin their disk floor: the real volume must not stop a fixture pass (#792); a case that tests the stop sets its own
 d=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 trap 'rm -rf "$T"' EXIT
 G=/usr/bin/git
@@ -32,7 +33,7 @@ echo '{"core":{"remaining":100,"limit":5000,"reset":'"$(( $(date +%s) + 3000 ))"
 frontier_pass() {
   local n=$1 t; t=$(mktemp -d -p "$T")
   mkdir -p "$t/s" "$t/st/auto" "$t/bin" "$t/co/docs/squad/workflows" "$t/fix"
-  for f in autofrontier.sh stack.sh startability.sh workbranches.sh ghcall.sh ghread.py ghthrottle.py single.sh cluster.py address.sh; do cp "$d/$f" "$t/s/"; done
+  for f in autofrontier.sh stack.sh startability.sh workbranches.sh ghcall.sh ghread.py ghthrottle.py single.sh cluster.py address.sh issue_ledger.py; do cp "$d/$f" "$t/s/"; done
   printf 'export SG_REPO=x/y SG_STATE=%s SG_BASE=main SG_CHECKOUT=%s SG_FRONTIER_LABEL=ready-for-agent SG_BUG_LABEL=bug\n' "$t/st" "$t/co" > "$t/s/env.sh"
   printf '{"run":{"max_parallel":20},"nodes":[{"name":"root","kind":"loop","nodes":[{"name":"route","kind":"dispatch","max_children":24,"max_parallel":2}]}]}' > "$t/co/docs/squad/workflows/dynamic.graph.json"
   printf 'caps:\n  runs: 10\n' > "$t/co/docs/squad/defaults.yaml"
@@ -62,7 +63,7 @@ J
   chmod +x "$t/bin/gh"; : > "$t/gh.log"
   cat > "$t/s/issue_state.py" <<'PY'
 import json, os, sys   # the seam's door, stubbed (#550): one board read a pass, every card in Todo
-if sys.argv[1:]: sys.exit(1)
+if sys.argv[1:2] not in ([], ["--go"]): sys.exit(1)   # the plain read and the go-list read (#800) both answer
 for i in json.load(open(os.environ["FIX"] + "/rest.json")): print(f"{i['number']}\tTodo")
 PY
   ( cd "$t" && env SG_SINGLE_AUTOFRONTIER=1 AF_DRY=1 SG_GH_AGGREGATE_WINDOW=0 SG_SQUAD="$(cd "$d/../../.." && pwd)" SQUAD_CAPS_DIR="$t/caps" \

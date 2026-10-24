@@ -486,6 +486,7 @@
       },
       "display_price": {
         "input": 2.5,
+        "cache_read": 0.2,
         "output": 15,
         "currency": "USD",
         "per": "mtok"
@@ -543,6 +544,7 @@
         "context": 400000
       },
       "display_price": {
+        "cache_read": null,
         "input": 1,
         "output": 6,
         "currency": "USD",
@@ -600,6 +602,13 @@
         "vision": true,
         "context": 400000
       },
+      "display_price": {
+        "input": null,
+        "cache_read": null,
+        "output": null,
+        "currency": "USD",
+        "per": "mtok"
+      },
       "aliases": [
         "claude-gpt-6-luna"
       ],
@@ -654,6 +663,7 @@
       },
       "display_price": {
         "input": 1.25,
+        "cache_read": 0.4,
         "output": 10,
         "currency": "USD",
         "per": "mtok"
@@ -688,6 +698,7 @@
       },
       "display_price": {
         "input": 5,
+        "cache_read": 0.4,
         "output": 30,
         "currency": "USD",
         "per": "mtok"
@@ -719,6 +730,7 @@
         "context": 400000
       },
       "display_price": {
+        "cache_read": null,
         "input": 2,
         "output": 12,
         "currency": "USD",
@@ -743,6 +755,7 @@
       },
       "display_price": {
         "input": 1.25,
+        "cache_read": 0.5,
         "output": 10,
         "currency": "USD",
         "per": "mtok"
@@ -765,6 +778,7 @@
         "context": 400000
       },
       "display_price": {
+        "cache_read": null,
         "input": 5,
         "output": 25,
         "currency": "USD",
@@ -789,6 +803,7 @@
       },
       "display_price": {
         "input": 2,
+        "cache_read": 0.8,
         "output": 12,
         "currency": "USD",
         "per": "mtok"
@@ -845,6 +860,7 @@
       },
       "display_price": {
         "input": 1.25,
+        "cache_read": 0.1,
         "output": 10,
         "currency": "USD",
         "per": "mtok"
@@ -870,6 +886,7 @@
       },
       "display_price": {
         "input": 2,
+        "cache_read": 0.2,
         "output": 12,
         "currency": "USD",
         "per": "mtok"
@@ -930,6 +947,7 @@
       },
       "display_price": {
         "input": 3,
+        "cache_read": 0.5,
         "output": 15,
         "currency": "USD",
         "per": "mtok"
@@ -985,6 +1003,7 @@
       },
       "display_price": {
         "input": 2,
+        "cache_read": 0.3,
         "output": 10,
         "currency": "USD",
         "per": "mtok"
@@ -1040,6 +1059,7 @@
       },
       "display_price": {
         "input": 2,
+        "cache_read": 0.5,
         "output": 10,
         "currency": "USD",
         "per": "mtok"
@@ -1088,6 +1108,7 @@
         "context": 1000000
       },
       "display_price": {
+        "cache_read": null,
         "input": 0.3,
         "output": 2.5,
         "currency": "USD",
@@ -1135,6 +1156,7 @@
         "context": 1000000
       },
       "display_price": {
+        "cache_read": null,
         "input": 0.3,
         "output": 2.5,
         "currency": "USD",
@@ -1182,6 +1204,7 @@
         "context": 1000000
       },
       "display_price": {
+        "cache_read": null,
         "input": 0.3,
         "output": 2.5,
         "currency": "USD",
@@ -1227,6 +1250,7 @@
         "context": 1000000
       },
       "display_price": {
+        "cache_read": null,
         "input": 1.25,
         "output": 10,
         "currency": "USD",
@@ -1270,6 +1294,7 @@
         "context": 131072
       },
       "display_price": {
+        "cache_read": null,
         "input": 0.15,
         "output": 0.6,
         "currency": "USD",
@@ -1346,6 +1371,7 @@
       },
       "display_price": {
         "input": 0.14,
+        "cache_read": 0.006,
         "output": 0.28,
         "currency": "USD",
         "per": "mtok"
@@ -1390,6 +1416,7 @@
       },
       "display_price": {
         "input": 0.55,
+        "cache_read": 0.044,
         "output": 2.19,
         "currency": "USD",
         "per": "mtok"

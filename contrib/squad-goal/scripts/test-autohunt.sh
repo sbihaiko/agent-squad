@@ -1,6 +1,7 @@
 #!/bin/bash
 # Regression test for autohunt.sh: when the loop is idle, start one read-only bug hunt (Refs #1493, #1504).
 # Offline: stub gh, autobug, autofrontier, mkreq, launch. usage: bash test-autohunt.sh [path/to/autohunt.sh]
+export SG_MIN_FREE_GB=0   # the dispatchers pin their disk floor: the real volume must not stop a fixture pass (#792); a case that tests the stop sets its own
 src=${1:-$(dirname "$0")/autohunt.sh}; here=$(cd "$(dirname "$src")" && pwd); T=$(mktemp -d); fail=0
 repo=$(cd "$(dirname "$src")/../../.." && pwd)   # SG_SQUAD: squad/caps.py lives in the tooling repo the fixture is testing (#21)
 export SG_SQUAD=$repo SQUAD_CAPS_DIR=$T/caps   # (#21) the pass reads the machine-wide ceiling through squad.caps, exported so the reader process sees it; the leases are sandboxed
@@ -43,7 +44,7 @@ scene() {
   S=$T/$1/scripts; mkdir -p "$S" "$T/$1/st/req" "$T/$1/st/cq" "$T/$1/st/auto" "$T/$1/st/locks" "$T/$1/co/runs" "$T/$1/home"
   /usr/bin/git init -q --bare "$T/$1/origin.git"   # the branch read of the case: a local bare repository, never github.com
   cp "$src" "$S/autohunt.sh"
-  cp "$here/ghcall.sh" "$here/ghread.py" "$here/workbranches.sh" "$S/"   # the filer's one write door (#140, #139): --file writes through gh_send, which reads ghread.py; the work-branch read is workbranches.sh (#361)
+  cp "$here/ghcall.sh" "$here/ghread.py" "$here/workbranches.sh" "$here/refusal-names.sh" "$here/envelope-spend.sh" "$here/issue_ledger.py" "$S/"   # the filer's one write door (#140, #139): --file writes through gh_send, which reads ghread.py; the work-branch read is workbranches.sh (#361)
   printf '#!/bin/bash\n[ -n "${AB_DRY:-}" ] && [ -e "$SG_STATE/auto/startable-bug" ] && echo "AUTOBUG would dispatch 1 cluster(s)"; exit 0\n' > "$S/autobug.sh"
   printf '#!/bin/bash\n[ -n "${AF_DRY:-}" ] && [ -e "$SG_STATE/auto/startable-frontier" ] && echo "FRONTIER would dispatch"; exit 0\n' > "$S/autofrontier.sh"
   printf '#!/bin/bash\nmkdir -p "$SG_STATE/req"; echo "$SG_STATE/req/$1.txt"; cat "$2" > "$SG_STATE/req/$1.txt"\n' > "$S/mkreq.sh"

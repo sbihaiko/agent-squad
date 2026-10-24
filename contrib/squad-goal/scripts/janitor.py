@@ -286,6 +286,12 @@ def issue_is_gone(x):   # a missing issue is not a transient read failure. The p
     # writes GitHub's error body to stdout and ignores -q on a refusal, so a deleted issue reads as GitHub's stable message, no extra call
     return gone_msg("\t".join(issue_read(x)))
 live = {}; livef = {}; keep = []; held = set(); landed_n = set(); freed_markers = {}; missing = []   # held: issues a run still in active-runs may be working (a run in its launch window has no record yet); landed_n: issues a finished run landed
+def marker_mtime(p):   # #794: a marker can vanish between the glob, its test and its stat; a gone marker is no live marker: None
+    try: return p.stat().st_mtime
+    except FileNotFoundError: return None
+def marker_text(p):   # #794: the text of a marker, or None when it vanished before the read
+    try: return p.read_text().strip()
+    except FileNotFoundError: return None
 def req_issues(f): return issues_named((f / "request.txt").read_text()) if (f / "request.txt").exists() else set()
 def owns(f, i, p):   # a dispatch marker names the request that wrote it (or its run): a run releases only a marker its own request wrote, never a newer run's (#539)
     try: c = p.read_text().strip()
@@ -709,7 +715,8 @@ def reconcile_board():
         set_expected(n, os.environ.get("SG_TODO", "Todo"), f"run {i['run_id']} gave the issue no child (the router did not choose it, or the engine rejected its spawn)", i["run_id"], i["run_ts"], 20)
         for k in ("disp", "bug"):
             m = st / "auto" / f"{k}-{n}"
-            if m.exists() and m.stat().st_mtime <= i["spawn_ts"]:
+            mt = marker_mtime(m)   # #794: a marker gone since the test is no marker: no stat on a vanished file
+            if mt is not None and mt <= i["spawn_ts"]:
                 say(f"UNHELD #{n}: run {i['run_id']} gave it no child; {m.name} dropped")
                 if not dry: m.unlink(missing_ok=True)
     def code_complete(n, f, i, why):   # a landing is Code Complete only once the wave, when the run cut one, holds the issue (#467)
@@ -783,7 +790,9 @@ def reconcile_board():
             else:   # a run that ended with nothing delivered delivered nothing: the card goes back to the queue, never to Code Complete (ADR-0145 rule 12, #464)
                 set_expected(n, os.environ.get("SG_TODO", "Todo"), f"run {i['run_id']} completed with nothing landed", i["run_id"], i["run_ts"], 20)
     for m in sorted((st / "auto").glob("disp-*")):
-        n = m.name[5:]; holder = m.read_text().strip()
+        holder = marker_text(m)
+        if holder is None: continue   # #794: a marker gone since the glob (a dangling link) holds nothing
+        n = m.name[5:]
         if n.isdigit() and holder in keep and not (read(folder(holder)) or {}).get("verdict"):   # a holder with a verdict is over: its own record ranks the card (Todo, Blocked, Code Complete), not the marker it left
             set_expected(n, "In Progress", f"{m.name} holds live run {holder}", holder, "", 30)
     # The loop floor gives a column only to an open issue with no card, once: Todo for a bug, Backlog for anything else
@@ -920,24 +929,27 @@ def reconcile_board():
 reconcile_board()
 # an autobug marker of a launch.py refusal too: that refusal makes no run folder, so rule J never sees it (#523)
 for d in [*(st / "auto").glob("disp-*"), *(st / "auto").glob("bug-*")]:
-    req = d.read_text().strip(); lg = st / f"{req}.log"
+    req = marker_text(d)
+    if req is None: continue   # #794: a marker gone since the glob holds nothing
+    lg = st / f"{req}.log"
     n = d.name.split("-", 1)[1]; lt = lg.read_text() if lg.exists() else ""
     if d.name.startswith("bug-") and "refusing to start" not in lt: continue   # a bug marker of a run that started is rule O's
     refused = "Nothing ran" in lt or "refusing to start" in lt   # K: squad's own refusal, or launch.py's (the model gate, #523)
-    if now - d.stat().st_mtime < (600 if refused else 1800): continue   # K: a refused start frees the issue after 10 min
+    mt = marker_mtime(d)
+    if mt is None or now - mt < (600 if refused else 1800): continue   # K: a refused start frees the issue after 10 min
     if not (("verdict failed" in lt or refused) and not holding(n)): continue
     repo = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
     state = sh("gh", "api", f"repos/{repo}/issues/{n}", "-q", ".state").strip()
     if state == "closed":   # a closed issue is never dispatched: its marker only made every pass read its state again (#525)
         say(f"stale {d.name} (issue closed) removed")
-        if not dry: d.unlink()
+        if not dry: d.unlink(missing_ok=True)
         continue
     if state != "open": continue
     if pr_count(n) != "0":   # a work branch exists: the issue is past dispatch, so the marker stands -- and the pass names the issue, so this decision reads apart from a release (#217)
         say(f"DISPATCH-FAILED #{n}: request {req} ended failed, but a work branch names the issue; {d.name} kept so the pass never dispatches it again")
         continue
     say(f"stale {d.name} (request {req} ended failed, issue open, no work branch) removed")
-    if not dry: d.unlink()
+    if not dry: d.unlink(missing_ok=True)
 def count_failed(n, f, i):   # O (#609): a run that ended with nothing delivered for issue n is one failed dispatch, counted
     # by wave.sh fail (one count per issue, keyed by the run, frozen at SG_REQUEUE_CAP), whether or not it still holds a marker.
     # A run the issue's ledger file lists (#673, read through issue_ledger.py, its one module) is not sent again, so a pass
@@ -1024,7 +1036,7 @@ if owner and proj and repo0:
             say(f"DISPATCH-FAILED #{n}: run {f.name} ended {i['name']} ({why}), nothing landed; {where} {mks} marker dropped so it dispatches again{salv}")
             if not dry:
                 for p, s in moves: board_write([owner, str(p), s, str(n)], n, f"bug card back in {s} after run {f.name} ended {i['name']}")
-                for k in marks[n]: (st / "auto" / f"{k}-{n}").unlink()
+                for k in marks[n]: (st / "auto" / f"{k}-{n}").unlink(missing_ok=True)
                 if kept: (st / "auto" / f"salvage-{n}").write_text("".join(k + "\n" for k in kept))   # the next dispatch names it (startability.sh)
                 (st / "cq" / f"{CQ}#{n}-dispatchfail-{os.getpid()}.md").write_text(
                     f"Run {f.name} ended without a landed change (verdict {i['name']}: {why}). {where[:1].upper() + where[1:]} its {mks} marker dropped, so the next cycle dispatches the issue again." + (f" The child left commits on no remote branch, kept for salvage: {', '.join(kept)}. The loop flags them and never pushes them (#361); the next dispatch of this issue names them, so the new run can reuse them." if kept else "") + "\n")
@@ -1034,13 +1046,13 @@ if owner and proj and repo0:
         marks = {}
         for p in (st / "auto").glob("*"):
             mo = re.fullmatch(r"(disp|bug)-(\d+)", p.name)
-            if mo and p.read_text().strip() in (r, f.name): marks.setdefault(mo.group(2), []).append((mo.group(1), p))
+            if mo and marker_text(p) in (r, f.name): marks.setdefault(mo.group(2), []).append((mo.group(1), p))
         for n in sorted(marks, key=int):
             if holding(n) or issue_info(n)[0] != "open" or pr_count(n) != "0": continue
             mks = " and ".join("auto/" + kind + "-" + n for kind, _ in marks[n])
             say(f"DISPATCH-MISSING #{n}: run {f.name} folder missing; {mks} marker dropped so it dispatches again")
             if not dry:
-                for _, p in marks[n]: p.unlink()
+                for _, p in marks[n]: p.unlink(missing_ok=True)
     # Q: a marker and an In Progress card with no run behind them. Only a definite answer counts: a refused read (not "open", not a digit, no status)
     # touches nothing and leaves no once-only marker, so the next pass decides. A definite "no" is remembered for 10 min, so a landed issue's old marker is not re-read every pass.
     qm = {}
@@ -1050,9 +1062,10 @@ if owner and proj and repo0:
     for n, ms0 in freed_markers.items():
         qm.setdefault(n, {}).update(ms0)
     for n, ms in sorted(qm.items(), key=lambda kv: int(kv[0])):
-        if n in held or n in landed_n or n in delivering or any(m is not None and now - m.stat().st_mtime < 600 for m in ms.values()) or list((st / "auto").glob(f"fork-{n}-*")): continue
+        if n in held or n in landed_n or n in delivering or any(mt is not None and now - mt < 600 for mt in (marker_mtime(m) for m in ms.values() if m is not None)) or list((st / "auto").glob(f"fork-{n}-*")): continue
         seen = st / "auto" / f"janitor-q-seen-{n}"
-        if seen.exists() and now - seen.stat().st_mtime < 600: continue
+        smt = marker_mtime(seen)   # #798: the record can vanish between a test and a stat: a gone record is none
+        if smt is not None and now - smt < 600: continue
         def no():   # a definite answer that says "not ours": remember it
             if not dry: seen.touch()
         state = issue_info(n)[0]
@@ -1073,14 +1086,14 @@ if owner and proj and repo0:
             say(f"STALE-CLAIM #{n}: {mks} stands behind a card in {cs or bs}, no run works it, no work branch names it; marker dropped so it dispatches again")
             if not dry:
                 for m in ms.values():
-                    if m is not None: m.unlink()
+                    if m is not None: m.unlink(missing_ok=True)
             continue
         if not moves: no(); continue
         say(f"STALE-CARD #{n}: card In Progress behind {mks}, no run works it, no work branch names it; card -> {', '.join(s for _, s in moves)}, marker dropped so it dispatches again")
         if not dry:
             for p, s in moves: board_write([owner, str(p), s, str(n)], n, f"stale card back in {s}")
             for m in ms.values():
-                if m is not None: m.unlink()
+                if m is not None: m.unlink(missing_ok=True)
             (st / "cq" / f"{CQ}#{n}-stalecard-{os.getpid()}.md").write_text(
                 f"Its card was In Progress behind {mks}, and no run works this issue (no live run, none in its launch window; the run that took it ended without releasing it). The card is back in {moves[-1][1]} and the marker is dropped, so the next cycle dispatches the issue again.\n")
 # Q has read them: what Q left alone (no card, a card past In Progress, a definite no about the issue) is dropped now, so

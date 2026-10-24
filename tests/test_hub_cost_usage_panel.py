@@ -413,3 +413,13 @@ def test_the_pie_merges_the_spellings_of_one_model_name():
     body = _fn(SRC, "pie")
     assert "byName" in body and "byName.set(k,r)" in body, body
     assert "ids.join" in body and "ids.includes(m.model)" in body, body
+
+
+def test_a_floor_note_names_unpriced_and_uncounted_review_calls():
+    """The totals are a floor: the note beside the tiles says how many calls priced at 0.0 or had no usage count (#789)."""
+    html = _render("const st={totals:{today:1,month:2,all:2,unpriced:2,uncounted:1}};\n",
+                   _stmt('$("#totnote").innerHTML='))
+    assert "2" in html and "unpriced" in html and "1" in html and "no usage" in html and "floor" in html, html
+    clean = _render("const st={totals:{today:1,month:2,all:2,unpriced:0,uncounted:0}};\n",
+                    _stmt('$("#totnote").innerHTML='))
+    assert clean.strip() in ("", "''", '""'), clean

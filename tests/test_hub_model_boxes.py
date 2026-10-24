@@ -22,6 +22,7 @@ def hub():
     os.environ.setdefault("SG_OWNER", "x")
     os.environ.setdefault("SG_PROJECT", "4")
     os.environ["SG_HUB_DIR"] = tempfile.mkdtemp()
+    os.environ["SG_STATE"] = tempfile.mkdtemp()   # hermetic: no ledger or run state of the owner is read
     spec = importlib.util.spec_from_file_location("hub_model_boxes", HUB_PY)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)

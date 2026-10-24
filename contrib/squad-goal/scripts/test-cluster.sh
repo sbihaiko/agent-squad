@@ -1,6 +1,7 @@
 #!/bin/bash
 # Regression test for root-cause clustering (cluster.py) and its two callers' dispatch plans (AB_DRY / AF_DRY), stubbed gh.
 # usage: bash test-cluster.sh [scripts dir]
+export SG_MIN_FREE_GB=0   # the dispatchers pin their disk floor: the real volume must not stop a fixture pass (#792); a case that tests the stop sets its own
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 # The free slots come from the machine-wide caps (squad/caps.py) of this checkout, with leases in the sandbox, never the real ones.
 export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR="$T/caps"
@@ -26,7 +27,7 @@ printf 'export SG_REPO=x/y SG_STATE=%s SG_BASE=main SG_CHECKOUT=%s SG_FRONTIER_L
 printf '%s' "$I" > "$T/issues.json"; printf '#!/bin/bash\necho READY\n' > "$T/s/stack.sh"; chmod +x "$T/s/stack.sh"
 cat > "$T/s/issue_state.py" <<PY
 import json, sys   # the seam's door, stubbed (#550): every fixture issue's card sits in Todo, the owner's go signal
-if sys.argv[1:]: sys.exit(1)
+if sys.argv[1:2] not in ([], ["--go"]): sys.exit(1)   # the plain read and the go-list read (#800) both answer
 for i in json.load(open("$T/issues.json")): print(f"{i['number']}\\tTodo")
 PY
 cat > "$T/bin/gh" <<J

@@ -134,6 +134,20 @@ class State:
         and labels beside the state, and asks for them here rather than at the carrier."""
         return self.binding.rows(jq, **kw)
 
+    def unread(self, go):
+        """The go-labelled issues `go` names that the board read does not carry (#800). One board read; a missing card is
+        asked by its known node id, and a node that answers a Status rescues it. Returns (carried, rescued, missing):
+        carried is the read {issue: state}, rescued {issue: state} the node reads, missing the issues nothing reads."""
+        carried = self.read_all()
+        rescued, missing = {}, []
+        for n in sorted({str(x) for x in go}, key=int):
+            if n in carried: continue
+            ask = getattr(self.binding, "node_status", None)
+            st = ask(n) if ask else None
+            if st: rescued[n] = st
+            else: missing.append(n)
+        return carried, rescued, missing
+
     def write(self, issue, wanted):
         """Write `wanted` on `issue`, then read it back. The read is the proof, and neither the answer nor
         the refusal is: a write the carrier refuses can be a state the issue already carries (#105, #101),
@@ -396,8 +410,34 @@ class BoardBinding:
             self.items_map = self._cached(self._items_file, 600, self.items)
         return self.items_map
 
+    @property
+    def _known_file(self):
+        """Every issue -> node id this binding has ever read, kept across reads and never pruned: the node id is the one
+        key a missing card still answers by (#800). A read that drops a card does not drop its id."""
+        tag = "-" + self.repo.replace("/", "_") if self.repo else ""
+        return f"rest-known-{self.owner}-{self.project}{tag}.json"
+
+    def known_ids(self):
+        try: return json.loads((self.st / self._known_file).read_text())
+        except (OSError, ValueError): return {}
+
     def _save_items(self):
         (self.st / self._items_file).write_text(json.dumps(self.items_map))
+        known = self.known_ids(); known.update(self.items_map)
+        (self.st / self._known_file).write_text(json.dumps(known))
+
+    def node_status(self, issue):
+        """The Status of the card a known node id names, read by node(id:) -- a route the items list does not share (#800).
+        None when no id is known for the issue, or the node read is refused or names another issue."""
+        iid = self.known_ids().get(str(issue))
+        if not iid: return None
+        query = ('query($id: ID!) { node(id: $id) { ... on ProjectV2Item { isArchived content { ... on Issue { number } } '
+                 'fieldValueByName(name: "Status") { ... on ProjectV2ItemFieldSingleSelectValue { name } } } } }')
+        try: d = json.loads(self.api("graphql", "-f", f"query={query}", "-F", f"id={iid}"))
+        except (RuntimeError, ValueError): return None
+        node = ((d or {}).get("data") or {}).get("node") or {}
+        if str((node.get("content") or {}).get("number", "")) != str(issue) or node.get("isArchived"): return None
+        return ((node.get("fieldValueByName") or {}).get("name")) or None
 
     def item_id(self, n, add_missing=False):
         """The one reader every caller uses (move, --add, --run-fields, --clear-run). A miss re-reads the
@@ -608,6 +648,18 @@ def main(argv):
     args = argv[1:]
     repo = ""
     if args[:1] == ["--repo"]: repo = args[1]; args = args[2:]
+    if args[:1] == ["--go"]:   # the rows a dispatch pass reads, with the go-labelled issues the board does not carry named (#800)
+        carried, rescued, missing = board_state(repo=repo or None).unread(args[1].split(",") if len(args) > 1 and args[1] else [])
+        rows = {**carried, **rescued}
+        for n, s in sorted(rows.items(), key=lambda kv: int(kv[0])): print(f"{n}\t{s}")
+        if missing:
+            print("UNREAD\t" + ",".join(missing))
+            alerts = os.environ.get("SG_STATE")
+            if alerts:
+                stamp = _now()
+                with open(os.path.join(alerts, "alerts.log"), "a") as f:
+                    f.write(f"{stamp} FRONTIER unread: go-labelled {', '.join('#' + m for m in missing)} has no readable card on the board\n")
+        return 0
     if args[:1] == ["--kinds"]:
         for n, k in sorted(board_state(repo=repo).kinds().items(), key=lambda kv: int(kv[0])): print(f"{n}\t{k}")
         return 0

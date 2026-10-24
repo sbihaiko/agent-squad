@@ -18,7 +18,7 @@
 . "$(dirname "$0")/env.sh" 2>/dev/null || exit 0
 here="$(cd "$(dirname "$0")" && pwd)"
 export SG_GH_PASS=branchland
-SG_GHREAD="python3 $here/ghthrottle.py"; . "$here/ghcall.sh"; . "$here/address.sh"; . "$here/workbranches.sh"
+SG_GHREAD="python3 $here/ghthrottle.py"; . "$here/ghcall.sh"; . "$here/address.sh"; . "$here/workbranches.sh"; . "$here/basecheck.sh"
 A="$SG_STATE/auto"; mkdir -p "$A"; land=${SG_LAND_BRANCH:-dev}; remote=${SG_LAND_REMOTE:-https://github.com/$SG_REPO.git}
 export GIT_TERMINAL_PROMPT=0
 cd "$SG_STATE" || exit 0
@@ -119,6 +119,9 @@ while read -r sha br i; do
   if [ "$(cat "$rk.sha" 2>/dev/null)" != "$sha" ] || [ ! -s "$rk.md" ]; then say wait "$br" "$sha" noreview "no review of ${sha:0:9} yet"; continue; fi
   # a CHANGES with no Blocking finding (debt only) is an approval, as the loop's own passes read it (revformat.py count; #392)
   head -1 "$rk.md" | grep -q 'VERDICT: APPROVE' || python3 "$here/revformat.py" --summary "$rk.md" 2>/dev/null | grep -q '^blocking=0 ' || { say wait "$br" "$sha" changes "the review of ${sha:0:9} asked for changes or did not approve: $(head -1 "$rk.md")"; continue; }
+  # The base's own check (#786): a red completed check on $land holds every landing until its head is green, whatever this branch
+  # says. It is read before the local gate, so a red base costs no gate run.
+  red=$(sg_base_red "$land") && { say wait "$br" "$sha" basered "$red"; continue; }
   if [ -n "$gate" ]; then localgate "$br" "$sha" "$i" || continue; green="The local gate (CI off) passed on ${sha:0:9}."
   else green="The check on ${sha:0:9} was green."; fi
   fl=$(SG_BASE=$land bash "$here/ffland.sh" "$br" "$i" 2>/dev/null | tail -1)
@@ -138,6 +141,7 @@ EOT
   col=Done; [ "${SG_BOARD_VOCAB:-}" = shipped ] && col=Closed   # the shipped vocabulary has no Done (#468)
   $BOARD "$SG_OWNER" "$SG_PROJECT" "$col" "$i" >/dev/null
   printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$br" "$ms" "$i" >> "$SG_STATE/landed.tsv"   # the ledger the hub's last-landing fact reads: the landed branch is deleted by the push, so the remote no longer names it. The board draws no lane for it (#384): a landed branch is read from its issue card
+  sg_base_red "$land" >/dev/null   # the base right after the landing (#786): a red head it lands on is reported now, not at the next landing
   echo "BRANCHLAND LANDED $br as $ms into $land, closed #$i"
 done <<EOT
 $wb_list

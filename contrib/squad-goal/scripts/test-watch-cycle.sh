@@ -21,7 +21,7 @@ printf '#!/bin/bash\nexit 0\n' > "$B/gh"        # nothing to read, nothing to mo
 printf '#!/bin/bash\n[ -n "$REAL_SLEEP" ] && exec /bin/sleep "$@"\nexit 0\n' > "$B/sleep"   # REAL_SLEEP=1 keeps a stub slow on purpose
 chmod +x "$B/gh" "$B/sleep"; export PATH="$B:$PATH"
 : > "$ST/active-runs.txt"
-for s in branchland.sh branchreviewpass.sh branchfixpass.sh autohunt.sh heartbeat.sh wtclean.sh janitor.sh startability.sh live-guard.sh; do
+for s in basecheckpass.sh branchland.sh branchreviewpass.sh branchfixpass.sh autohunt.sh heartbeat.sh wtclean.sh janitor.sh startability.sh live-guard.sh; do
   printf '#!/bin/bash\necho %s >> "%s"\n' "${s%.sh}" "$STEPS" > "$S/$s"; chmod +x "$S/$s"; done
 # the nightly full suite (#704) blocks for NIGHT_HOLD s on the REAL sleep, never the stubbed one: the case times the cycle
 # around it, and a cycle that waited for the suite would be as long as the suite
@@ -221,5 +221,10 @@ printf '{"stall_timeout_minutes": 0}\n' > "$S/models.json"
 echo "$T/co/runs/run-set" >> "$ST/active-runs.txt"   # the case above emptied the list
 rm -f "$ST/watch-seen.txt"; run_cycles 1
 /usr/bin/grep -q "STALL RUN run-set no record.jsonl progress for 0m" "$T/watch.out" && ok "13c a configured 0 stays 0, the 15 m fallback does not fire" || ko "13c zero bound: $(tail -3 "$T/watch.out")"
+
+# 14) (#790) The base's own check is read once per cycle, with or without a landing: the cycle runs basecheckpass once.
+rm -f "$ST/fastloop.pid"; : > "$ST/active-runs.txt"; run_cycles 1
+waitfor basecheckpass 30
+[ "$(count basecheckpass)" = 1 ] && ok "14 the cycle reads the base's check once, with nothing to land" || ko "14 the base's check ran $(count basecheckpass) times in one cycle"
 
 rm -rf "$T"; exit $fail

@@ -48,3 +48,14 @@ def test_the_pid_file_decides(hub, tmp_path):
     assert hub._loop_on(pid) is False   # a dead pid
     pid.write_text("not a pid\n")
     assert hub._loop_on(pid) is False
+
+
+def test_an_auto_off_flag_reads_loop_off_even_with_a_live_supervisor(hub, tmp_path, monkeypatch):
+    """#788: `auto/off` pauses dispatch, so the footer reads Loop:OFF while the supervisor pid is still live."""
+    monkeypatch.setattr(hub, "STATE", tmp_path)
+    (tmp_path / "watchd.pid").write_text(f"{os.getpid()}\n")
+    assert hub._loop_on(tmp_path / "watchd.pid") is True   # live pid, no flag
+    (tmp_path / "auto").mkdir()
+    (tmp_path / "auto" / "off").touch()
+    assert hub._loop_on(tmp_path / "watchd.pid") is False   # the flag pauses the loop
+    assert hub.foot_items({"quota": {"codex": None, "agy": None}, "loop": hub._loop_on(tmp_path / "watchd.pid")}, NOW)[-1]["text"] == "Loop:OFF"

@@ -8,6 +8,7 @@ test-autofrontier-envelope.sh 2.95
 test-autofrontier-one-run.sh 27.39
 test-autohunt.sh 9.69
 test-autorefuse.sh 1.79
+test-basecheck.sh 3.73
 test-board-add.sh 8.13
 test-board-clear-run.sh 0.65
 test-board-define.sh 0.79
@@ -35,7 +36,7 @@ test-dispatch-mutex.sh 4.06
 test-dispatch-worktree-reuse.sh 1.96
 test-env-board-vocab.sh 0.13
 test-envelope-spend.sh 0.13
-test-fast-gate.sh 3.53
+test-fast-gate.sh 8.46
 test-fastloop-childcc.sh 0.97
 test-fastloop-interval.sh 8.33
 test-fastloop-orphan.sh 0.73
@@ -102,7 +103,7 @@ test-pass-deadline.sh 15.65
 test-prepush.sh 1.28
 test-profile-check.sh 1.16
 test-promote-pass.sh 11.04
-test-promote.sh 15.14
+test-promote.sh 16.53
 test-publish-live.sh 2.50
 test-reconcile.sh 1.60
 test-refusal-comment.sh 1.87
@@ -123,11 +124,12 @@ test-state-isolation.sh 1.45
 test-state-split.sh 1.75
 test-tdd-red.sh 2.54
 test-throughput.sh 1.04
+test-todo-unread.sh 0.53
 test-token-guard.sh 2.43
 test-token-ledger.sh 12.98
 test-vendor-guard.sh 1.38
 test-view-domain-firewall.sh 0.37
-test-watch-cycle.sh 94.70
+test-watch-cycle.sh 61.41
 test-watch-land.sh 10.13
 test-watch-single-exec.sh 0.02
 test-watchd-driver-sha.sh 2.30

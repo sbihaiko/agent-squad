@@ -11,7 +11,7 @@ from squad import graph, modelreg
 from tests.dashboard_helpers import ROOT, run_node
 
 sys.path.insert(0, str(ROOT / "scripts"))
-from build_dashboard import CORE_DIR, CORE_ORDER, OUT, PAGE_CSS, PAGE_DIR, PAGE_HTML, PAGE_ORDER, build, core_bundle, engine_data, page_bundle, page_sources, served_lists  # noqa: E402
+from build_dashboard import CORE_DIR, CORE_ORDER, OUT, PAGE_CSS, PAGE_DIR, PAGE_HTML, PAGE_ORDER, build, core_bundle, engine_data, has_price, page_bundle, page_sources, served_lists  # noqa: E402
 
 
 # --- one source: the built file is the template plus the engine's own schema, registry, and lists ---
@@ -30,6 +30,24 @@ def test_the_dashboard_embeds_the_engine_schema_registry_and_served_lists_not_a_
     assert {"Read", "claude-deepseek-v4-flash", "medium", "tdd"} <= set(served["tools"] + served["models"] + served["efforts"] + served["skills"])
 
 
+def test_a_display_price_with_no_number_is_not_shown():
+    """#798: an entry whose display price has no input and no output number (gpt-6-luna, all null) is not a price."""
+    prices = engine_data()["models"]["prices"]
+    assert all(isinstance(p.get("input"), (int, float)) or isinstance(p.get("output"), (int, float)) for p in prices.values()), prices
+    reg = modelreg.default_registry()
+    assert all(mid not in prices for mid, e in reg.entries.items() if not has_price(e.display_price)), "an entry with no display number is shown"
+
+
+def test_has_price_needs_a_number_for_input_or_output():
+    """#799: has_price is true only for a number (not a bool) in input or output."""
+    assert not has_price({"input": None, "output": None})
+    assert has_price({"input": 1.0, "output": None})
+    assert has_price({"input": None, "output": 2.5})
+    assert not has_price({"input": True, "output": False})
+    assert not has_price({})
+    assert not has_price(None)
+
+
 def test_the_dashboard_embeds_the_registry_snapshot_and_the_registry_models():
     """Labels, aliases and display prices come from the one registry, and the served model list is its ids and aliases."""
     reg = modelreg.default_registry()
@@ -37,7 +55,7 @@ def test_the_dashboard_embeds_the_registry_snapshot_and_the_registry_models():
     assert data["labels"] == {mid: e.label for mid, e in reg.entries.items()}
     assert data["aliases"] == dict(reg.aliases)
     assert all(modelreg.model(sp, reg).id == mid for sp, mid in data["spellings"].items())   # a served spelling reads as its entry (#677)
-    assert data["prices"] == {mid: e.display_price for mid, e in reg.entries.items() if e.display_price}
+    assert data["prices"] == {mid: e.display_price for mid, e in reg.entries.items() if has_price(e.display_price)}
     assert json.dumps(data, sort_keys=True).replace("</", "<\\/") in OUT.read_text()
     assert set(served_lists()["models"]) == set(reg.entries) | set(reg.aliases)
 

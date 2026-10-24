@@ -16,10 +16,17 @@ sg_dispatch_claimed() { [ -e "$SG_STATE/auto/bug-$1" ] || [ -e "$SG_STATE/auto/d
 # and it carries the go label. One board read a pass, through the seam's door, never one per issue. It prints one issue a
 # line whose card is in Todo; a card with no column is not in Todo. A read that does not answer returns 1, and the pass
 # then dispatches nothing.
+# With a go list (comma-separated issue numbers, #800) the read also names each go-labelled issue whose card no read carries:
+# it is rescued by its known node id when that answers Todo, else named once on stderr and in alerts.log. No list is the plain read.
 sg_todo_cards() {
-  local out
-  out=$(python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/issue_state.py" 2>/dev/null) || return 1
-  printf '%s\n' "$out" | awk -F '\t' -v t="${SG_TODO:-Todo}" '$2 == t { print $1 }'
+  local out here; here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  if [ $# -gt 0 ]; then out=$(python3 "$here/issue_state.py" --go "$1" 2>/dev/null) || return 1
+  else out=$(python3 "$here/issue_state.py" 2>/dev/null) || return 1; fi
+  printf '%s\n' "$out" | awk -F '\t' -v t="${SG_TODO:-Todo}" '$1 == "UNREAD" { print "FRONTIER: go-labelled #" $2 " has no readable card on the board (named in alerts.log)" > "/dev/stderr"; next } $2 == t { print $1 }'
+}
+# The go-labelled open issues of the pass's issue list, comma-separated (#800): the list sg_todo_cards checks for a card.
+sg_go_csv() {   # <issues.json> <label>
+  jq -r --arg g "$2" '[.[]|select(.pull_request|not)|select([.labels[]?.name]|index($g))|(.number|tostring)]|join(",")' "$1" 2>/dev/null
 }
 # Read live child requests once for both dispatchers. Issue text is not structured in spawn_accepted yet,
 # so accept the two request forms that the dispatchers write and return exact decimal issue numbers only.
