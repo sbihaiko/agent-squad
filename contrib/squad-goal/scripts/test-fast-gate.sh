@@ -170,5 +170,10 @@ out=$(selrun SG_TEST_SELECT=no); rc=$?
 printf 'tests/test_a.py\ntests/test_b.py\n' > "$T/select.out"
 out=$(selrun PY_FAIL=1); rc=$?
 [ "$(cat "$T/retry.log" 2>/dev/null)" = "tests/test_a.py::test_one" ] && ok "the serial retry reruns only the failed test names" || ko "retry argv: rc $rc: '$(cat "$T/retry.log" 2>&1)' $out"
+# (#801) The fixture waits on nothing outside itself. A stub the fixture writes and then executes directly costs macOS a first-run
+# assessment that idles the wall clock, so each stub runs through bash. A fixture case that does not set a retry command runs the
+# real pytest, so every case sets one.
+/usr/bin/grep -qE 'SG_FAST_(CMD|RETRY_CMD)="\$T/' "$0" && ko "a fixture stub is executed directly, not through bash (#801)" || ok "every fixture stub runs through bash"
+/usr/bin/grep -qE '^fg\(\) \{.*SG_FAST_RETRY_CMD=' "$0" && ok "the base-fail case names its retry, and runs no real pytest" || ko "fg runs the real pytest retry (#801)"
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 rm -rf "$T"; exit $fail
