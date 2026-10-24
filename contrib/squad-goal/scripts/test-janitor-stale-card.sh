@@ -90,8 +90,9 @@ o=$(pass); bc() { cat "$T/board.calls" 2>/dev/null; }
 rm -f "$T/refuse"; o=$(pass)
 /usr/bin/grep -q '^o 4 Todo 1010$' "$T/board.calls" 2>/dev/null && [ ! -e "$T/st/auto/disp-1010" ] && ok "J: the next pass, API back, releases it (a refusal leaves no once-only marker behind)" || ko "J #1010 not released after the refusal: $(bc) $o"
 n=$(/usr/bin/grep -c ' 1001$' "$T/board.calls"); [ "$n" = 1 ] && ok "the card of #1001 is moved once" || ko "#1001 moved $n times"
-# M: a marker removed mid-pass (#794), in a second state dir so the cases above stay as they were.
-# The regression is the race on disp-1021: the disp-/bug- glob lists it, then it is removed before its first stat, so the
+# M: a marker removed mid-pass (#794), in a second state dir so the cases above stay as they were. #798: the race fires in
+# rule K's age read (the first stat of disp-1021), not in rule Q, so these lines pin rule K.
+# The regression is the race on disp-1021: the disp-/bug- glob lists it, then it is removed before its first stat (rule K), so the
 # stat must read it as no marker. race.py removes it at that first stat, and the fork pass after it must still print.
 # DISPATCH-MISSING #1020 is context only: rule O drops disp-1020 (its run folder is missing) before the race.
 S2="$T/st2"; C2="$T/co2"; mkdir -p "$S2/auto" "$S2/cq" "$C2/runs" "$T/bin2" "$T/fork"
@@ -118,28 +119,87 @@ J
 echo run-missing > "$S2/active-runs.txt"; echo run-missing > "$S2/auto/disp-1020"; echo run-gone > "$S2/auto/bug-1020"; echo run-gone > "$S2/auto/disp-1021"
 git -C "$T/fork" init -q && GIT_AUTHOR_DATE=2020-01-01T00:00:00Z GIT_COMMITTER_DATE=2020-01-01T00:00:00Z git -C "$T/fork" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "fix: an old change (#1030)"
 o2=$(RACE_MARKER=disp-1021 PATH="$T/bin2:$PATH" SG_STATE="$S2" SG_CHECKOUT="$C2" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$S2" SG_FORK_DIR="$T/fork" SG_FORK_BASE=HEAD JANITOR_NOTIFY="$T/notify" python3 -I "$T/race.py" "$T/s/janitor.py" 2>&1)
-! grep -q Traceback <<< "$o2" && ok "M: rule O and rule Q meet one pass, a marker removed mid-pass: no Traceback" || ko "M traceback: $o2"
+! grep -q Traceback <<< "$o2" && ok "M: rule O and rule K meet one pass, a marker removed mid-pass: no Traceback" || ko "M traceback: $o2"
 /usr/bin/grep -q 'DISPATCH-MISSING #1020' "$S2/cycle.log" 2>/dev/null && [ ! -e "$S2/auto/disp-1020" ] && ok "M: rule O drops the marker of the missing run" || ko "M: rule O did not run: $(cat "$S2/cycle.log" 2>/dev/null)"
-[ ! -e "$S2/auto/disp-1021" ] && ok "M: the race removed disp-1021 at its stat, and the pass read it as no marker" || ko "M: disp-1021 kept"
-/usr/bin/grep -q 'FIXED-NOT-CLOSED #1030' "$S2/cycle.log" 2>/dev/null && ok "M: the rule after Q still prints" || ko "M: no output after Q: $(cat "$S2/cycle.log" 2>/dev/null)"
-# N: #794 review: the unheld read goes through marker_mtime; a marker removed at that read is no marker, the pass goes on.
+[ ! -e "$S2/auto/disp-1021" ] && ok "M: rule K: the race removed disp-1021 at its stat, and the pass read it as no marker" || ko "M: disp-1021 kept"
+/usr/bin/grep -q 'FIXED-NOT-CLOSED #1030' "$S2/cycle.log" 2>/dev/null && ok "M: the rule after K still prints" || ko "M: no output after Q: $(cat "$S2/cycle.log" 2>/dev/null)"
+# N: #794 review, #798: the unheld read goes through marker_mtime. The race removes the marker at the second stat made inside
+# unheld() (the second read: exists() then stat() on the old code), so the second read finds no file. The old code tracebacks there;
+# unheld() must still run: UNHELD #1014 is printed, the marker dropped, and the pass goes on.
 S3="$T/st3"; C3="$T/co3"; mkdir -p "$S3/auto" "$S3/cq" "$C3/runs/run-unheld"
 echo run-unheld > "$S3/active-runs.txt"; echo "CHILD — GitHub issue(s) 1014 (one PR):" > "$C3/runs/run-unheld/request.txt"
 printf '{"event": "spawn_accepted", "ts": 1700000000, "child": "c1", "definition": "GitHub issue #1040 on fix/1040-x"}\n{"event": "node_done", "ts": 1700000001, "node": "route.router.1"}\n' > "$C3/runs/run-unheld/record.jsonl"
 echo run-unheld > "$S3/auto/disp-1014"; touch -t 202001010000 "$S3/auto/disp-1014"
-cat > "$T/race_first.py" <<'J'
-# runs janitor.py; the marker named by RACE_MARKER is removed at the first os.stat of its path, the read that tests it
+cat > "$T/race_unheld.py" <<'J'
+# runs janitor.py; inside unheld(), the marker named by RACE_MARKER is removed at its second stat
 import os, runpy, sys
-orig = os.stat; hit = [0]
+orig = os.stat; hits = [0]
+def in_unheld():
+    f = sys._getframe(1)
+    while f is not None:
+        if f.f_code.co_name == "unheld": return True
+        f = f.f_back
+    return False
 def racing(p, *a, **k):
-    if os.path.basename(os.fspath(p)) == os.environ.get("RACE_MARKER") and os.path.lexists(p):
-        hit[0] += 1
-        os.unlink(p)
+    if os.path.basename(os.fspath(p)) == os.environ.get("RACE_MARKER") and in_unheld():
+        hits[0] += 1
+        if hits[0] == 2 and os.path.lexists(p): os.unlink(p)
     return orig(p, *a, **k)
 os.stat = racing
 sys.argv = sys.argv[1:]; sys.path.insert(0, os.path.dirname(os.path.abspath(sys.argv[0]))); runpy.run_path(sys.argv[0], run_name="__main__")
 J
-o3=$(RACE_MARKER=disp-1014 PATH="$T/bin2:$PATH" SG_STATE="$S3" SG_CHECKOUT="$C3" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$S3" JANITOR_NOTIFY="$T/notify" python3 -I "$T/race_first.py" "$T/s/janitor.py" 2>&1)
-! grep -q Traceback <<< "$o3" && ok "N: a marker removed at the unheld read: no Traceback" || ko "N traceback: $o3"
-[ ! -e "$S3/auto/disp-1014" ] && ! /usr/bin/grep -q 'UNHELD #1014' "$S3/cycle.log" 2>/dev/null && ok "N: a marker gone at the unheld read is no UNHELD, and the pass goes on" || ko "N: $(cat "$S3/cycle.log" 2>/dev/null) $o3"
+o3=$(RACE_MARKER=disp-1014 PATH="$T/bin2:$PATH" SG_STATE="$S3" SG_CHECKOUT="$C3" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$S3" JANITOR_NOTIFY="$T/notify" python3 -I "$T/race_unheld.py" "$T/s/janitor.py" 2>&1)
+! grep -q Traceback <<< "$o3" && ok "N: a marker removed at the second read in unheld: no Traceback" || ko "N traceback: $o3"
+/usr/bin/grep -q 'UNHELD #1014' "$S3/cycle.log" 2>/dev/null && [ ! -e "$S3/auto/disp-1014" ] && ok "N: unheld ran for #1014: UNHELD printed, the marker dropped" || ko "N: unheld did not run for #1014: $(cat "$S3/cycle.log" 2>/dev/null) $o3"
+# N2: #794: a marker removed before unheld's first read is no marker: no UNHELD line, no Traceback.
+S5="$T/st5"; C5="$T/co5"; mkdir -p "$S5/auto" "$S5/cq" "$C5/runs/run-unheld"
+echo run-unheld > "$S5/active-runs.txt"; echo "CHILD — GitHub issue(s) 1014 (one PR):" > "$C5/runs/run-unheld/request.txt"
+cp "$C3/runs/run-unheld/record.jsonl" "$C5/runs/run-unheld/"; echo run-unheld > "$S5/auto/disp-1014"; touch -t 202001010000 "$S5/auto/disp-1014"
+cat > "$T/race_first_unheld.py" <<'J'
+# runs janitor.py; inside unheld(), the marker named by RACE_MARKER is removed before its first stat
+import os, runpy, sys
+orig = os.stat
+def in_unheld():
+    f = sys._getframe(1)
+    while f is not None:
+        if f.f_code.co_name == "unheld": return True
+        f = f.f_back
+    return False
+def racing(p, *a, **k):
+    if os.path.basename(os.fspath(p)) == os.environ.get("RACE_MARKER") and in_unheld() and os.path.lexists(p): os.unlink(p)
+    return orig(p, *a, **k)
+os.stat = racing
+sys.argv = sys.argv[1:]; sys.path.insert(0, os.path.dirname(os.path.abspath(sys.argv[0]))); runpy.run_path(sys.argv[0], run_name="__main__")
+J
+o5=$(RACE_MARKER=disp-1014 PATH="$T/bin2:$PATH" SG_STATE="$S5" SG_CHECKOUT="$C5" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$S5" JANITOR_NOTIFY="$T/notify" python3 -I "$T/race_first_unheld.py" "$T/s/janitor.py" 2>&1)
+! grep -q Traceback <<< "$o5" && ! /usr/bin/grep -q 'UNHELD #1014' "$S5/cycle.log" 2>/dev/null && ok "N2: a marker gone at unheld's first read is no UNHELD, no Traceback" || ko "N2: $(cat "$S5/cycle.log" 2>/dev/null) $o5"
+# P: #798: rule Q's seen-record read. janitor-q-seen-<n> is removed between its exists() and its stat() (the second stat of
+# that file): the record is gone, so the pass reads it as none and rule Q releases the card.
+S4="$T/st4"; C4="$T/co4"; mkdir -p "$S4/auto" "$S4/cq" "$C4/runs" "$T/bin4"
+echo run-gone > "$S4/auto/disp-1031"; touch -t 202001010000 "$S4/auto/disp-1031"; echo x > "$S4/auto/janitor-q-seen-1031"; touch -t 202001010000 "$S4/auto/janitor-q-seen-1031"
+cat > "$T/bin4/gh" <<'J'
+#!/bin/bash
+a="$*"
+case "$a" in
+  *search/issues*) echo 0;;
+  *projectsV2/4/items*) printf '1031\tIn Progress\n';;
+  *issues/10*) echo open;;
+esac
+J
+chmod +x "$T/bin4/gh"
+cat > "$T/race_nth.py" <<'J'
+# runs janitor.py; the file named by RACE_MARKER is removed at its RACE_NTH stat call, after the earlier ones
+import os, runpy, sys
+orig = os.stat; hits = [0]
+def racing(p, *a, **k):
+    if os.path.basename(os.fspath(p)) == os.environ.get("RACE_MARKER"):
+        hits[0] += 1
+        if hits[0] == int(os.environ.get("RACE_NTH", "1")) and os.path.lexists(p): os.unlink(p)
+    return orig(p, *a, **k)
+os.stat = racing
+sys.argv = sys.argv[1:]; sys.path.insert(0, os.path.dirname(os.path.abspath(sys.argv[0]))); runpy.run_path(sys.argv[0], run_name="__main__")
+J
+o4=$(RACE_MARKER=janitor-q-seen-1031 RACE_NTH=2 PATH="$T/bin4:$PATH" SG_STATE="$S4" SG_CHECKOUT="$C4" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$S4" JANITOR_NOTIFY="$T/notify" python3 -I "$T/race_nth.py" "$T/s/janitor.py" 2>&1)
+! grep -q Traceback <<< "$o4" && ok "P: a seen record removed between rule Q's exists and stat: no Traceback" || ko "P traceback: $o4"
+/usr/bin/grep -q '^o 4 Todo 1031$' "$T/board.calls" 2>/dev/null && [ ! -e "$S4/auto/disp-1031" ] && ok "P: rule Q reads the gone record as none and releases #1031" || ko "P #1031 not released: $(cat "$T/board.calls" 2>/dev/null) $o4"
 rm -rf "$T"; exit $fail
