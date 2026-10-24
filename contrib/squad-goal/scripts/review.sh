@@ -338,7 +338,7 @@ for m in $chain; do fmt=0; timed_out=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9
     # the whole line and lose the call. Why a word and not a bare flag: the mark names its reason, and the reason travels with it.
     tl="$SG_STATE/token-usage.tsv"; tn=$(grep -c "^[^	]*	review:$pr\(#[0-9]*\)\{0,1\}	" "$tl" 2>/dev/null); tc="review:$pr"; [ "${tn:-0}" -gt 0 ] && tc="$tc#$((tn+1))"
     tu=""; mark=""
-    case $rroute:$runner in direct:*|gateway:*|cli:claude) tu=$(jq -r 'select(type=="object" and ((.result|type)=="string" or (.structured_output|type)=="object") and (.usage|type)=="object") | [(.usage.input_tokens//0)+(.usage.cache_creation_input_tokens//0), (.usage.output_tokens//0), (.usage.cache_read_input_tokens//0)] | @tsv' "$o" 2>/dev/null)
+    case $rroute:$runner in direct:*|gateway:*|cli:claude) tu=$(jq -r 'select(type=="object" and ((.result|type)=="string" or (.structured_output|type)=="object") and (.usage|type)=="object") | [(.usage.input_tokens//0)+(.usage.cache_creation_input_tokens//0), (.usage.output_tokens//0), (.usage | .cache_read_input_tokens // .prompt_tokens_details.cached_tokens? // .input_tokens_details.cached_tokens? // .cache_read_tokens // .cached_tokens // 0)] | @tsv' "$o" 2>/dev/null)
       # A claude answer is a review only when the run itself succeeded (#501): the JSON says `is_error` and the `subtype`
       # (success, error_max_turns, error_during_execution, ...), and `.result` holds whatever the model had said when the run
       # ended -- a lone preamble included, which the check below would take for an answer of rc 0. The raw JSON is kept
