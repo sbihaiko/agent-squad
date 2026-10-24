@@ -89,4 +89,36 @@ o=$(pass); bc() { cat "$T/board.calls" 2>/dev/null; }
 rm -f "$T/refuse"; o=$(pass)
 /usr/bin/grep -q '^o 4 Todo 1010$' "$T/board.calls" 2>/dev/null && [ ! -e "$T/st/auto/disp-1010" ] && ok "J: the next pass, API back, releases it (a refusal leaves no once-only marker behind)" || ko "J #1010 not released after the refusal: $(bc) $o"
 n=$(/usr/bin/grep -c ' 1001$' "$T/board.calls"); [ "$n" = 1 ] && ok "the card of #1001 is moved once" || ko "#1001 moved $n times"
+# M: rule O (a missing run folder) and rule Q in one pass, a second state dir so the cases above stay as they were (#794).
+# The race: disp-1021 is removed at its third stat: the is_file test passes, then the stat finds it gone (race.py).
+# Rule O drops disp-1020 (its run folder is missing); the pass then reaches rule Q and the fork pass after it, which must print.
+S2="$T/st2"; C2="$T/co2"; mkdir -p "$S2/auto" "$S2/cq" "$C2/runs" "$T/bin2" "$T/fork"
+cat > "$T/bin2/gh" <<'J'
+#!/bin/bash
+a="$*"
+case "$a" in
+  *search/issues*) echo 0;;
+  *projectsV2/4/items*) printf '1020\tIn Progress\n1021\tIn Progress\n';;
+  *issues/10*) echo open;;
+esac
+J
+chmod +x "$T/bin2/gh"
+cat > "$T/race.py" <<'J'
+# runs janitor.py; the marker named by RACE_MARKER is removed at its third os.stat, after an is_file test passed
+import os, runpy, sys
+orig = os.stat; seen = [0]
+def racing(p, *a, **k):
+    if os.path.basename(os.fspath(p)) == os.environ.get("RACE_MARKER"):
+        seen[0] += 1
+        if seen[0] == 3 and os.path.lexists(p): os.unlink(p)
+    return orig(p, *a, **k)
+os.stat = racing
+sys.argv = sys.argv[1:]; sys.path.insert(0, os.path.dirname(os.path.abspath(sys.argv[0]))); runpy.run_path(sys.argv[0], run_name="__main__")
+J
+echo run-missing > "$S2/active-runs.txt"; echo run-missing > "$S2/auto/disp-1020"; echo run-gone > "$S2/auto/bug-1020"; echo run-gone > "$S2/auto/disp-1021"
+git -C "$T/fork" init -q && GIT_AUTHOR_DATE=2020-01-01T00:00:00Z GIT_COMMITTER_DATE=2020-01-01T00:00:00Z git -C "$T/fork" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "fix: an old change (#1030)"
+o2=$(RACE_MARKER=disp-1021 PATH="$T/bin2:$PATH" SG_STATE="$S2" SG_CHECKOUT="$C2" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$S2" SG_FORK_DIR="$T/fork" SG_FORK_BASE=HEAD JANITOR_NOTIFY="$T/notify" python3 -I "$T/race.py" "$T/s/janitor.py" 2>&1)
+! grep -q Traceback <<< "$o2" && ok "M: rule O and rule Q meet one pass, a marker removed mid-pass: no Traceback" || ko "M traceback: $o2"
+/usr/bin/grep -q 'DISPATCH-MISSING #1020' "$S2/cycle.log" 2>/dev/null && [ ! -e "$S2/auto/disp-1020" ] && ok "M: rule O drops the marker of the missing run" || ko "M: rule O did not run: $(cat "$S2/cycle.log" 2>/dev/null)"
+/usr/bin/grep -q 'FIXED-NOT-CLOSED #1030' "$S2/cycle.log" 2>/dev/null && ok "M: the rule after Q still prints" || ko "M: no output after Q: $(cat "$S2/cycle.log" 2>/dev/null)"
 rm -rf "$T"; exit $fail
