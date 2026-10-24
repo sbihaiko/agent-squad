@@ -105,7 +105,7 @@ HIST = HUBDIR / "hub-history.json"; LOCK = threading.Lock()
 BASE = {"pr": {"n": 31, "median": 38, "mean": 73, "max": 266, "over60": 13}, "run_median": 13, "cutoff": "2026-10-09T19:00:00Z"}
 try: hist = json.loads(HIST.read_text())          # finished runs never get re-parsed: {record path: fields}
 except Exception: hist = {}
-live = {}                                          # unfinished runs: {path: (mtime, size, fields)}
+live = {}                                          # unfinished runs: {path: (mtime, size, fields, transcript stamp, (children, spawn definitions))}
 
 # Billing source of a call, from the model on its outcome: Claude (sonnet/opus/fable/haiku), Grok and GPT run on the owner's subscriptions;
 # every other model (deepseek, gemini…) and any call that names no model is pay-per-use API.
@@ -171,79 +171,161 @@ CLAUDE_PROJECTS = pathlib.Path.home() / ".claude" / "projects"   # where Claude 
 PROJECT_NAME_MAX = 200   # Claude Code cuts a longer sanitized working directory to this length and adds a hash suffix (#796)
 USAGE_FILES = {}         # one transcript file's messages, cached by (path, mtime, size): {key: [(message id, model, usage)]}
 
-def child_cwd(record, kid, definition):
-    """The directory a child works in, named as squad/runners/children.py:workspace names it: <run folder>/ws/<logical>-<kid>, where
-    logical is the template workspace with "/" as "_", or "target" (#796). A record from before the spawn carried its definition
-    has none: the one folder ending in the child's name is taken. None when no such folder is there."""
-    ws = pathlib.Path(os.path.realpath(str(record))).parent / "ws"
+WRITE_TOOLS = {"Edit", "Write", "Bash", "NotebookEdit"}   # squad/graph.py:WRITE_TOOLS; a child with one of these runs in its own worktree (#802)
+
+def _epoch(s):
+    """A transcript line's ISO timestamp as epoch seconds, None when it has none or it is not one (#802)."""
+    try:
+        return dt.datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+def child_cwd(record, kid, definition, defs=None):
+    """The directory a child works in, as squad/runners/children.py:workspace names it (#796, #802). A child that may write runs in
+    <run folder>/ws/<logical>-<kid>. One that may not runs after a writer it names in "after" (in that writer's worktree), else in its
+    template's workspace under the checkout. The shared target is no child's, so None. A record from before the spawn carried its
+    definition has none: the one folder ending in "-<kid>" is taken, and none or two are None."""
+    run = pathlib.Path(os.path.realpath(str(record))).parent
+    ws = run / "ws"
     if definition is None:
-        found = sorted(c for c in ws.iterdir() if c.name.endswith("-" + kid)) if ws.is_dir() else []
-        return os.path.realpath(found[0]) if found else None
-    logical = "target" if definition.get("workspace") in (None, ".") else str(definition["workspace"]).replace("/", "_")
-    return os.path.realpath(ws / f"{logical}-{kid}")
+        found = []
+        if ws.is_dir():
+            found = sorted(c for c in ws.iterdir() if c.name.endswith("-" + kid) and len(c.name) > len(kid) + 1)
+        if len(found) > 1:
+            log_once(f"hub: {len(found)} folders end in -{kid} under {ws}; the child's folder is not known, its tokens are not counted")
+        return os.path.realpath(found[0]) if len(found) == 1 else None
+    tools = set(definition.get("tools") or [])
+    workspace = definition.get("workspace")
+    if tools & WRITE_TOOLS:
+        logical = "target" if workspace in (None, ".") else str(workspace).replace("/", "_")
+        return os.path.realpath(ws / f"{logical}-{kid}")
+    for dep in definition.get("after") or []:   # a reader after a writer reads the writer's worktree, as workspace() does
+        dd = (defs or {}).get(dep)
+        if isinstance(dd, dict) and set(dd.get("tools") or []) & WRITE_TOOLS:
+            c = child_cwd(record, dep, dd)
+            if c and os.path.isdir(c):
+                return c
+    if workspace in (None, "."):
+        log_once(f"hub: child {kid} of {record} works in the shared target; its tokens are not counted")
+        return None
+    s = os.path.realpath(str(record))
+    k = s.rfind("/worktrees/run/")
+    if k < 0:
+        return None
+    path = os.path.realpath(os.path.join(s[:k], str(workspace)))
+    if not os.path.isdir(path):   # workspace() falls back to the target when the template's folder is not there
+        log_once(f"hub: child {kid} of {record} works in the shared target; its tokens are not counted")
+        return None
+    return path
 
 def transcript_folder(cwd):
-    """Claude Code's folder for one working directory: the sanitized path, or for a long one the cut path it starts with (#796)."""
+    """Claude Code's folder for one working directory: the sanitized path, or for a long one the cut path it starts with (#796).
+    A long path that more than one folder starts with is no folder of this one (#802)."""
     name = re.sub(r"[^A-Za-z0-9]", "-", cwd)
-    if os.path.isdir(CLAUDE_PROJECTS / name): return CLAUDE_PROJECTS / name   # isdir: a name over the filesystem limit is no folder, not an error
-    if len(name) <= PROJECT_NAME_MAX: return None
-    try: names = sorted(n for n in os.listdir(CLAUDE_PROJECTS) if n.startswith(name[:PROJECT_NAME_MAX]))
-    except OSError: return None
-    return CLAUDE_PROJECTS / names[0] if names and os.path.isdir(CLAUDE_PROJECTS / names[0]) else None
+    if os.path.isdir(CLAUDE_PROJECTS / name):   # isdir: a name over the filesystem limit is no folder, not an error
+        return CLAUDE_PROJECTS / name
+    if len(name) <= PROJECT_NAME_MAX:
+        return None
+    prefix = name[:PROJECT_NAME_MAX]
+    try:
+        names = [n for n in os.listdir(CLAUDE_PROJECTS) if n.startswith(prefix) and len(n) > PROJECT_NAME_MAX]
+    except OSError:
+        return None
+    if len(names) != 1 or not os.path.isdir(CLAUDE_PROJECTS / names[0]):
+        return None
+    return CLAUDE_PROJECTS / names[0]
 
 def transcript_usage(f):
-    """The assistant messages of one transcript file: [(message id, raw model, usage)], cached by (path, mtime, size) (#796)."""
-    try: st = os.stat(f)
-    except OSError: return []
+    """The assistant messages of one transcript file: [(message id, raw model, usage, epoch or None)], cached by (path, mtime, size) (#796)."""
+    try:
+        st = os.stat(f)
+    except OSError:
+        return []
     key = (str(f), st.st_mtime, st.st_size)
-    if key in USAGE_FILES: return USAGE_FILES[key]
-    for old in [k for k in USAGE_FILES if k[0] == key[0]]: del USAGE_FILES[old]   # an older version of this file is never read again
-    try: lines = f.read_text(errors="replace").splitlines()
-    except OSError: return []
+    if key in USAGE_FILES:
+        return USAGE_FILES[key]
+    for old in [k for k in USAGE_FILES if k[0] == key[0]]:   # an older version of this file is never read again
+        del USAGE_FILES[old]
+    try:
+        lines = f.read_text(errors="replace").splitlines()
+    except OSError:
+        return []
     rows = []
     for i, l in enumerate(lines):
-        if '"usage"' not in l: continue
-        try: d = json.loads(l)
-        except Exception: continue
+        if '"usage"' not in l:
+            continue
+        try:
+            d = json.loads(l)
+        except Exception:
+            continue
         m = d.get("message") if isinstance(d, dict) else None
-        if not isinstance(m, dict): continue
+        if not isinstance(m, dict):
+            continue
         u, model = m.get("usage"), m.get("model")
-        if not isinstance(u, dict) or not isinstance(model, str) or model.startswith("<"): continue   # "<synthetic>" is no model
-        rows.append((m.get("id") or f"{f}:{i}", model, u))
+        if not isinstance(u, dict) or not isinstance(model, str) or model.startswith("<"):   # "<synthetic>" is no model
+            continue
+        ts = _epoch(d["timestamp"]) if isinstance(d.get("timestamp"), str) else None
+        rows.append((m.get("id") or f"{f}:{i}", model, u, ts))
     USAGE_FILES[key] = rows
     return rows
 
-def transcript_files(record, pending):
-    """Every transcript file of the given children: pending is [(kid, definition)]. Subagent transcripts sit in subfolders (#796)."""
-    out = []
-    for kid, dfn in pending:
-        cwd = child_cwd(record, kid, dfn)
-        folder = transcript_folder(cwd) if cwd else None
-        if folder is None: continue
-        try: out.extend(sorted(folder.rglob("*.jsonl")))
-        except OSError: pass
-    return out
+def transcript_files(folder):
+    """Every transcript of one session folder; subagent transcripts sit in subfolders (#796). [] when unreadable."""
+    try:
+        return sorted(folder.rglob("*.jsonl"))
+    except OSError:
+        return []
 
-def transcript_stamp(record, pending):
-    """The newest transcript mtime of the given children, 0 when none: an unfinished run is cached by it as well as by its record (#796)."""
-    mt = [os.stat(f).st_mtime for f in transcript_files(record, pending) if os.path.exists(f)]
+def transcript_stamp(files):
+    """The newest mtime of these transcripts, 0 when none. A file that goes between the listing and the stat is skipped (#802)."""
+    mt = []
+    for f in files:
+        try:
+            mt.append(os.stat(f).st_mtime)
+        except OSError:
+            pass
     return max(mt) if mt else 0
 
-def child_transcript_usage(record, kid, definition=None):
-    """The tokens of one child session, read from its transcript: {raw model: {in, out, cache, spend, calls}}, or {} when it has
-    none (#796). A transcript repeats one message on several lines, and a subagent's transcript may repeat one of the session's, so
-    each message id counts once. `in` includes the cache reads, as an outcome's tokens_in does; a cache write is fresh input.
-    A child with no transcript folder is named once on stderr: its tokens are then not counted."""
-    cwd = child_cwd(record, kid, definition)
+def child_folder(record, kid, definition=None, defs=None):
+    """(working directory, transcript folder) of one child; the folder is None when it has none, and that is named once on stderr."""
+    cwd = child_cwd(record, kid, definition, defs)
     folder = transcript_folder(cwd) if cwd else None
-    if folder is None:
-        log_once(f"hub: no transcript folder for child {kid} of {record} (looked for {cwd or 'its workspace'}); its tokens are not counted")
-        return {}
-    try: files = sorted(folder.rglob("*.jsonl"))
-    except OSError: return {}
+    if folder is None and cwd is not None:
+        log_once(f"hub: no transcript folder for child {kid} of {record} (looked for {cwd}); its tokens are not counted")
+    return cwd, folder
+
+def child_groups(record, kids, defs, outs):
+    """Each child's transcript folder once: {folder: (files, cutoff)}. A folder two working directories name is no child's alone, so
+    it is dropped (#802). The cutoff is the earliest last outcome of its children (only messages after it count), None when one has none."""
+    groups = {}
+    for kid, dfn in kids:
+        cwd, folder = child_folder(record, kid, dfn, defs)
+        if folder is None:
+            continue
+        g = groups.setdefault(folder, {"cwds": set(), "cut": []})
+        g["cwds"].add(cwd)
+        ts = [t for (k, _), t in outs.items() if k == kid and t is not None]
+        g["cut"].append(max(ts) if ts else None)
+    out = {}
+    for folder, g in groups.items():
+        if len(g["cwds"]) > 1:
+            log_once(f"hub: {len(g['cwds'])} working directories share the transcript folder {folder}; its tokens are not counted")
+            continue
+        out[folder] = (transcript_files(folder), None if None in g["cut"] else min(g["cut"]))
+    return out
+
+def child_stamp(record, kids, defs):
+    """The newest transcript mtime of the children's folders: an unfinished run is cached by it as well as by its record (#796)."""
+    return transcript_stamp([f for files, _ in child_groups(record, kids, defs, {}).values() for f in files])
+
+def folder_usage(files, cutoff=None):
+    """The tokens of the messages in these transcripts: {raw model: {in, out, cache, spend, calls}}. With a cutoff (epoch), only the
+    messages after it count; a message with no timestamp is not after it (#802). Each message id counts once."""
     msgs = {}
     for f in files:
-        for mid, model, u in transcript_usage(f):
+        for mid, model, u, ts in transcript_usage(f):
+            if cutoff is not None and (ts is None or ts <= cutoff):
+                continue
             msgs.setdefault(mid, (model, u))
     out = {}
     for model, u in msgs.values():
@@ -251,20 +333,30 @@ def child_transcript_usage(record, kid, definition=None):
         cr, o = u.get("cache_read_input_tokens") or 0, u.get("output_tokens") or 0
         spend, _ = _usage_spend(model, fresh, o, cr)
         x = out.setdefault(model, {"in": 0, "out": 0, "cache": 0, "spend": 0.0, "calls": 0})
-        x["in"] += fresh + cr; x["out"] += o; x["cache"] += cr; x["spend"] += spend; x["calls"] += 1
+        x["in"] += fresh + cr
+        x["out"] += o
+        x["cache"] += cr
+        x["spend"] += spend
+        x["calls"] += 1
     return out
+
+def child_transcript_usage(record, kid, definition=None, defs=None, cutoff=None):
+    """The tokens of one child session, read from its transcript (#796): {} when it has no folder. `in` includes the cache reads, as an
+    outcome's tokens_in does; a cache write is fresh input."""
+    _, folder = child_folder(record, kid, definition, defs)
+    return folder_usage(transcript_files(folder), cutoff) if folder else {}
 
 def scan(p):
     """Parse one record.jsonl into fields. Finished runs come from `hist`, unfinished ones are cached by (mtime, size)."""
     p = str(p)
-    if p in hist and "v16" in hist[p]: return hist[p]   # v10 added the worktree paths a run works in (the load attribution reads them); v11 reads the run issue from request.txt; v12 reads every issue of a dispatch request's CHILD lines; v13 reads the test share a gate counted; v14 reads the card's label from the dispatch form too; v15 splits a run sub/api on the canonical model id (#791, #793); v16 counts a child's tokens from its transcript when no outcome reached the record (#796)
+    if p in hist and "v17" in hist[p]: return hist[p]   # v10 added the worktree paths a run works in (the load attribution reads them); v11 reads the run issue from request.txt; v12 reads every issue of a dispatch request's CHILD lines; v13 reads the test share a gate counted; v14 reads the card's label from the dispatch form too; v15 splits a run sub/api on the canonical model id (#791, #793); v16 counts a child's tokens from its transcript when no outcome reached the record (#796); v17 counts a fix round's messages after its last outcome, follows a reader to its writer, and drops a shared folder (#802)
     try: st = os.stat(p)
     except OSError: return None
     c = live.get(p)
-    if c and c[0] == st.st_mtime and c[1] == st.st_size and c[3] == transcript_stamp(p, c[4]): return c[2]
+    if c and c[0] == st.st_mtime and c[1] == st.st_size and c[3] == child_stamp(p, *c[4]): return c[2]
     spend = sub = api = 0.0; mod = {}; t0 = t1 = ver = None; reasons = []; land = False; issues = set(); ntok = 0; kind = "code"; fix = None; stack = None; bug = False; merge = False; head = None; rc = None; share = None
     rid = pathlib.Path(p).parent.name   # the run folder, read before the loop: the share below rebinds a local of its own, never `p`
-    accepted, done_kids, wts, defs = set(), set(), set(), {}
+    accepted, done_kids, wts, defs, outs = set(), set(), set(), {}, {}
     try: req_issues = request_issues((pathlib.Path(p).parent / "request.txt").read_text(errors="replace")); has_req = True
     except OSError: req_issues = set(); has_req = False
     with open(p) as f:
@@ -289,7 +381,9 @@ def scan(p):
             if ts and t0 is None: t0 = ts
             if e == "spawn_accepted" and d.get("child"):
                 accepted.add(d["child"]); defs[d["child"]] = d.get("definition") if isinstance(d.get("definition"), dict) else None   # the definition names the child's workspace (#796)
-            if e == "outcome" and d.get("node"): done_kids.add(d["node"])
+            if e == "outcome" and d.get("node"):
+                done_kids.add(d["node"])
+                outs[(d["node"], d.get("entry"))] = ts   # the last outcome of each entry bounds the transcript (#802)
             if e == "outcome" and d.get("spend") is not None:
                 d["spend"] = priced(d)
                 spend += d["spend"]
@@ -315,15 +409,14 @@ def scan(p):
                 h = (d.get("effect") or {}).get("head") if isinstance(d.get("effect"), dict) else None
                 if h: head = h
             elif e == "verdict": ver, reasons, t1, rc = d.get("verdict"), d.get("reasons") or [], ts, d.get("exit_code")
-    # A child whose outcome never reached the record (killed, or still running) spent tokens the record does not carry: its session
-    # transcript does (#796). A child with a recorded outcome is counted from that outcome alone, so no token is counted twice.
-    # GAP, not fixed (#796): a fix round (entry 2 and later) runs in the same child. When its entry 1 has an outcome, the child is in
-    # done_kids and no transcript is read, so a fix round killed before its own outcome is not counted. Pinned by an xfail test in
-    # tests/test_hub_child_transcript_usage.py.
-    pending = [(kid, defs.get(kid)) for kid in sorted(accepted - done_kids)]
-    stamp = transcript_stamp(p, pending)   # read before the transcripts, so a write during the read is seen by the next poll
-    for kid, dfn in pending:
-        for raw, v in child_transcript_usage(p, kid, dfn).items():
+    # A child's transcript holds the tokens its record lacks: all of them when no outcome reached the record (killed, or running), and
+    # the messages after its last outcome when it has one, so a fix round killed before its own outcome counts (#796, #802). Each
+    # transcript folder is read once, and a folder two working directories name is no child's alone (#802).
+    kids = [(kid, defs.get(kid)) for kid in sorted(accepted)]
+    groups = child_groups(p, kids, defs, outs)
+    stamp = transcript_stamp([f for files, _ in groups.values() for f in files])   # read before the transcripts, so a write during the read is seen by the next poll
+    for files, cutoff in groups.values():
+        for raw, v in folder_usage(files, cutoff).items():
             x = mod.setdefault(raw, {"in": 0, "out": 0, "cache": 0, "spend": 0.0, "calls": 0})
             for k in ("in", "out", "cache", "calls"): x[k] += v[k]
             x["spend"] += v["spend"]; spend += v["spend"]
@@ -331,7 +424,7 @@ def scan(p):
             else: api += v["spend"]
     if has_req: src, why, issues = ("request", None, req_issues) if req_issues else (None, "request-no-issue", set())   # the request is the truth; the transcript never overrides it
     else: src, why = ("transcript" if issues else None), "request-missing"
-    r = {"spend": round(spend, 4), "sub": round(sub, 4), "api": round(api, 4), "mod": mod, "v8": 1, "v9": 1, "v10": 1, "v11": 1, "v12": 1, "v13": 1, "v14": 1, "v15": 1, "v16": 1, "t0": t0, "t1": t1, "verdict": ver, "reasons": reasons, "land": land, "issues": sorted(issues, key=int), "issue_src": src, "issue_why": why, "kind": kind, "fix": fix, "stack": stack, "bug": bug, "merge": merge, "head": head, "exit_code": rc, "agents": len(accepted - done_kids), "wts": sorted(wts), "share": share}
+    r = {"spend": round(spend, 4), "sub": round(sub, 4), "api": round(api, 4), "mod": mod, "v8": 1, "v9": 1, "v10": 1, "v11": 1, "v12": 1, "v13": 1, "v14": 1, "v15": 1, "v16": 1, "v17": 1, "t0": t0, "t1": t1, "verdict": ver, "reasons": reasons, "land": land, "issues": sorted(issues, key=int), "issue_src": src, "issue_why": why, "kind": kind, "fix": fix, "stack": stack, "bug": bug, "merge": merge, "head": head, "exit_code": rc, "agents": len(accepted - done_kids), "wts": sorted(wts), "share": share}
     r["id"] = rid   # the run folder: the label a run with no issue falls back on
     r["label"] = run_label(r)               # the card's name is computed here, so the page renders a value and holds no rule (ADR-0137)
     if ver is not None:
@@ -339,7 +432,7 @@ def scan(p):
         with LOCK:
             try: HIST.write_text(json.dumps(hist))
             except OSError: pass
-    else: live[p] = (st.st_mtime, st.st_size, r, stamp, pending)
+    else: live[p] = (st.st_mtime, st.st_size, r, stamp, (kids, defs))
     return r
 
 def state_of(r, age):
