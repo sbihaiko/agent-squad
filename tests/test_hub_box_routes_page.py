@@ -94,6 +94,18 @@ def test_the_pie_matcher_skips_braces_inside_strings():
     assert _pie_source(src) == 'function pie(ms){return "}";}', "the matcher ended at the brace inside the string"
 
 
+def test_the_pie_matcher_skips_braces_in_block_comments():
+    """#799: a brace inside a block comment is text, not a block: the matcher reads the whole pie."""
+    src = 'function pie(ms){/* } */return 1;}\nfunction other(){}'
+    assert _pie_source(src) == 'function pie(ms){/* } */return 1;}', "the matcher ended at the brace inside the block comment"
+
+
+def test_the_pie_matcher_skips_braces_in_regex_literals():
+    """#799: a brace inside a regex literal is text, not a block: the matcher reads the whole pie."""
+    src = 'function pie(ms){return /[}{]/.test(ms)}\nfunction other(){}'
+    assert _pie_source(src) == 'function pie(ms){return /[}{]/.test(ms)}', "the matcher ended at the brace inside the regex"
+
+
 @pytest.mark.node_bound
 def test_the_rendered_pie_escapes_a_model_name_with_the_page_esc(page):
     """#798: the pie runs the page's own esc, not a stub: a model name with markup renders as text."""
