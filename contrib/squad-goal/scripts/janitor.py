@@ -1064,7 +1064,8 @@ if owner and proj and repo0:
     for n, ms in sorted(qm.items(), key=lambda kv: int(kv[0])):
         if n in held or n in landed_n or n in delivering or any(mt is not None and now - mt < 600 for mt in (marker_mtime(m) for m in ms.values() if m is not None)) or list((st / "auto").glob(f"fork-{n}-*")): continue
         seen = st / "auto" / f"janitor-q-seen-{n}"
-        if seen.exists() and now - seen.stat().st_mtime < 600: continue
+        smt = marker_mtime(seen)   # #798: the record can vanish between a test and a stat: a gone record is none
+        if smt is not None and now - smt < 600: continue
         def no():   # a definite answer that says "not ours": remember it
             if not dry: seen.touch()
         state = issue_info(n)[0]
