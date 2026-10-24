@@ -153,6 +153,6 @@ def test_every_priced_model_names_its_hub_hit_rate(hub):
 
 def test_the_scan_marker_comment_lists_each_version_once_in_order(hub):
     """#795: the comment above the scan marker names v10 to v15, each once, in order."""
-    line = next(l for l in HUB_PY.read_text().splitlines() if 'if p in hist and "v15" in hist[p]' in l)
+    line = next(s for s in HUB_PY.read_text().splitlines() if 'if p in hist and "v15" in hist[p]' in s)
     versions = re.findall(r"\bv(\d+)\b", line.split("#", 1)[1])
     assert versions == [str(n) for n in range(10, 16)], versions
