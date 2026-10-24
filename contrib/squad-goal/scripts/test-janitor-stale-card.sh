@@ -16,6 +16,7 @@
 #  (K) #771: a failed run left active-runs before rule O released it, and rule R put its card back in Todo: the marker is
 #      dropped with no board write, so the frontier dispatches the issue again instead of reading it as claimed for good.
 #  (L) #794: a dangling marker (its file gone) is no live marker: the pass never stats or reads it, and its card is released.
+#  (N) #794: a marker removed at the unheld read is no marker: no stat on it fails the pass, and no UNHELD line is printed.
 # Stubbed gh/board; a temp state dir, so the live watch.log, markers and board are never read or written.
 # usage: bash test-janitor-stale-card.sh [janitor.py]
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
@@ -89,9 +90,10 @@ o=$(pass); bc() { cat "$T/board.calls" 2>/dev/null; }
 rm -f "$T/refuse"; o=$(pass)
 /usr/bin/grep -q '^o 4 Todo 1010$' "$T/board.calls" 2>/dev/null && [ ! -e "$T/st/auto/disp-1010" ] && ok "J: the next pass, API back, releases it (a refusal leaves no once-only marker behind)" || ko "J #1010 not released after the refusal: $(bc) $o"
 n=$(/usr/bin/grep -c ' 1001$' "$T/board.calls"); [ "$n" = 1 ] && ok "the card of #1001 is moved once" || ko "#1001 moved $n times"
-# M: rule O (a missing run folder) and rule Q in one pass, a second state dir so the cases above stay as they were (#794).
-# The race: disp-1021 is removed at its third stat: the is_file test passes, then the stat finds it gone (race.py).
-# Rule O drops disp-1020 (its run folder is missing); the pass then reaches rule Q and the fork pass after it, which must print.
+# M: a marker removed mid-pass (#794), in a second state dir so the cases above stay as they were.
+# The regression is the race on disp-1021: the disp-/bug- glob lists it, then it is removed before its first stat, so the
+# stat must read it as no marker. race.py removes it at that first stat, and the fork pass after it must still print.
+# DISPATCH-MISSING #1020 is context only: rule O drops disp-1020 (its run folder is missing) before the race.
 S2="$T/st2"; C2="$T/co2"; mkdir -p "$S2/auto" "$S2/cq" "$C2/runs" "$T/bin2" "$T/fork"
 cat > "$T/bin2/gh" <<'J'
 #!/bin/bash
@@ -104,13 +106,11 @@ esac
 J
 chmod +x "$T/bin2/gh"
 cat > "$T/race.py" <<'J'
-# runs janitor.py; the marker named by RACE_MARKER is removed at its third os.stat, after an is_file test passed
+# runs janitor.py; the marker named by RACE_MARKER is removed at its first os.stat, after the glob listed it
 import os, runpy, sys
-orig = os.stat; seen = [0]
+orig = os.stat
 def racing(p, *a, **k):
-    if os.path.basename(os.fspath(p)) == os.environ.get("RACE_MARKER"):
-        seen[0] += 1
-        if seen[0] == 3 and os.path.lexists(p): os.unlink(p)
+    if os.path.basename(os.fspath(p)) == os.environ.get("RACE_MARKER") and os.path.lexists(p): os.unlink(p)
     return orig(p, *a, **k)
 os.stat = racing
 sys.argv = sys.argv[1:]; sys.path.insert(0, os.path.dirname(os.path.abspath(sys.argv[0]))); runpy.run_path(sys.argv[0], run_name="__main__")
@@ -120,5 +120,26 @@ git -C "$T/fork" init -q && GIT_AUTHOR_DATE=2020-01-01T00:00:00Z GIT_COMMITTER_D
 o2=$(RACE_MARKER=disp-1021 PATH="$T/bin2:$PATH" SG_STATE="$S2" SG_CHECKOUT="$C2" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$S2" SG_FORK_DIR="$T/fork" SG_FORK_BASE=HEAD JANITOR_NOTIFY="$T/notify" python3 -I "$T/race.py" "$T/s/janitor.py" 2>&1)
 ! grep -q Traceback <<< "$o2" && ok "M: rule O and rule Q meet one pass, a marker removed mid-pass: no Traceback" || ko "M traceback: $o2"
 /usr/bin/grep -q 'DISPATCH-MISSING #1020' "$S2/cycle.log" 2>/dev/null && [ ! -e "$S2/auto/disp-1020" ] && ok "M: rule O drops the marker of the missing run" || ko "M: rule O did not run: $(cat "$S2/cycle.log" 2>/dev/null)"
+[ ! -e "$S2/auto/disp-1021" ] && ok "M: the race removed disp-1021 at its stat, and the pass read it as no marker" || ko "M: disp-1021 kept"
 /usr/bin/grep -q 'FIXED-NOT-CLOSED #1030' "$S2/cycle.log" 2>/dev/null && ok "M: the rule after Q still prints" || ko "M: no output after Q: $(cat "$S2/cycle.log" 2>/dev/null)"
+# N: #794 review: the unheld read goes through marker_mtime; a marker removed at that read is no marker, the pass goes on.
+S3="$T/st3"; C3="$T/co3"; mkdir -p "$S3/auto" "$S3/cq" "$C3/runs/run-unheld"
+echo run-unheld > "$S3/active-runs.txt"; echo "CHILD — GitHub issue(s) 1014 (one PR):" > "$C3/runs/run-unheld/request.txt"
+printf '{"event": "spawn_accepted", "ts": 1700000000, "child": "c1", "definition": "GitHub issue #1040 on fix/1040-x"}\n{"event": "node_done", "ts": 1700000001, "node": "route.router.1"}\n' > "$C3/runs/run-unheld/record.jsonl"
+echo run-unheld > "$S3/auto/disp-1014"; touch -t 202001010000 "$S3/auto/disp-1014"
+cat > "$T/race_first.py" <<'J'
+# runs janitor.py; the marker named by RACE_MARKER is removed at the first os.stat of its path, the read that tests it
+import os, runpy, sys
+orig = os.stat; hit = [0]
+def racing(p, *a, **k):
+    if os.path.basename(os.fspath(p)) == os.environ.get("RACE_MARKER") and os.path.lexists(p):
+        hit[0] += 1
+        os.unlink(p)
+    return orig(p, *a, **k)
+os.stat = racing
+sys.argv = sys.argv[1:]; sys.path.insert(0, os.path.dirname(os.path.abspath(sys.argv[0]))); runpy.run_path(sys.argv[0], run_name="__main__")
+J
+o3=$(RACE_MARKER=disp-1014 PATH="$T/bin2:$PATH" SG_STATE="$S3" SG_CHECKOUT="$C3" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$S3" JANITOR_NOTIFY="$T/notify" python3 -I "$T/race_first.py" "$T/s/janitor.py" 2>&1)
+! grep -q Traceback <<< "$o3" && ok "N: a marker removed at the unheld read: no Traceback" || ko "N traceback: $o3"
+[ ! -e "$S3/auto/disp-1014" ] && ! /usr/bin/grep -q 'UNHELD #1014' "$S3/cycle.log" 2>/dev/null && ok "N: a marker gone at the unheld read is no UNHELD, and the pass goes on" || ko "N: $(cat "$S3/cycle.log" 2>/dev/null) $o3"
 rm -rf "$T"; exit $fail

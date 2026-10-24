@@ -715,7 +715,8 @@ def reconcile_board():
         set_expected(n, os.environ.get("SG_TODO", "Todo"), f"run {i['run_id']} gave the issue no child (the router did not choose it, or the engine rejected its spawn)", i["run_id"], i["run_ts"], 20)
         for k in ("disp", "bug"):
             m = st / "auto" / f"{k}-{n}"
-            if m.exists() and m.stat().st_mtime <= i["spawn_ts"]:
+            mt = marker_mtime(m)   # #794: a marker gone since the test is no marker: no stat on a vanished file
+            if mt is not None and mt <= i["spawn_ts"]:
                 say(f"UNHELD #{n}: run {i['run_id']} gave it no child; {m.name} dropped")
                 if not dry: m.unlink(missing_ok=True)
     def code_complete(n, f, i, why):   # a landing is Code Complete only once the wave, when the run cut one, holds the issue (#467)
