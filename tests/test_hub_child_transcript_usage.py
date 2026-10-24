@@ -43,6 +43,7 @@ def homes(hub, tmp_path, monkeypatch):
     monkeypatch.setattr(hub, "hist", {})
     monkeypatch.setattr(hub, "live", {})
     monkeypatch.setattr(hub, "USAGE_FILES", {})
+    monkeypatch.setattr(hub, "FOLDERS", {})
     return projects
 
 
@@ -270,9 +271,9 @@ def _long_run(tmp_path):
 
 
 def test_a_read_only_child_is_found_in_the_workspace_its_template_names(hub, tmp_path, layout):
-    """A child that may not write runs in its template's workspace (children.py:workspace), in the checkout, not in ws/."""
+    """A child that may not write runs in its template's workspace, named under the run as ws/<logical> (children.py:workspace)."""
     run_dir, projects = layout
-    review = tmp_path / "ariel" / "worktrees" / "review"
+    review = run_dir / "ws" / "worktrees_review"
     review.mkdir(parents=True)
     rec = _record(run_dir, _spawn("worktrees/review", tools=("Read",)))
     (_folder(projects, review) / "s1.jsonl").write_text(_usage_line("msg_1", "claude-haiku-5-5", 10, 5, 0, 0))
@@ -370,3 +371,71 @@ def test_a_killed_fix_round_after_a_passed_entry_is_counted(hub, layout):
     got = hub.scan(rec)
     assert got["mod"]["claude-haiku-5-5"]["in"] == 999 + 50, got["mod"]
     assert got["mod"]["claude-haiku-5-5"]["calls"] == 2, got["mod"]   # the recorded outcome, and the fix round's one message
+
+
+# --- (#802, review round 2) read-only children resolve under the run's ws/, not the checkout ---------------------------
+
+def test_a_read_only_child_is_found_under_the_run_ws_not_the_checkout(hub, tmp_path, layout):
+    """children.py:workspace and engine.workspace_path name a read-only child's folder as <run>/ws/<logical>; a folder of the same
+    name in the checkout is no child's, so it is not read."""
+    run_dir, projects = layout
+    rec = _record(run_dir, _spawn("worktrees/review", tools=("Read",)))
+    (run_dir / "ws" / ("worktrees_review")).mkdir()
+    (_transcript(projects, run_dir, "worktrees_review") / "s1.jsonl").write_text(_usage_line("msg_1", "claude-haiku-5-5", 10, 5, 0, 0))
+    decoy = tmp_path / "ariel" / "worktrees" / "review"
+    decoy.mkdir(parents=True)
+    (_folder(projects, decoy) / "s9.jsonl").write_text(_usage_line("msg_9", "claude-haiku-5-5", 999, 9, 0, 0))
+    got = hub.scan(rec)
+    assert got["mod"]["claude-haiku-5-5"]["calls"] == 1, got["mod"]
+    assert got["mod"]["claude-haiku-5-5"]["in"] == 10, got["mod"]
+
+
+# --- (#802, review round 2) a folder shared by a writer and a reader is counted once, from the latest outcome ---------------
+
+def _outcome(node, ts, entry=1):
+    # a recorded outcome of another model, with no tokens: the haiku bucket then holds only what the transcript adds
+    v = {"ts": ts, "event": "outcome", "node": node, "entry": entry, "outcome": "pass", "model": "claude-sonnet-5-5",
+         "tokens_in": 0, "tokens_out": 0, "cache_read": 0, "spend": 0.0}
+    return v
+
+
+def test_a_folder_shared_by_a_writer_and_its_reader_counts_each_message_after_the_latest_outcome(hub, layout):
+    """The writer's outcome (t=650) and the reader's (t=750) both sit in the record. A message before 750 is already recorded by one
+    of them, so it is not counted again; only the message after 750 is new. The folder is read once."""
+    run_dir, projects = layout
+    reader = _spawn("worktrees/review", tools=("Read",), kid="route.router.2")
+    reader["definition"]["after"] = [KID]
+    rec = _record(run_dir, _spawn("worktrees/child"), reader, _outcome(KID, 1792857650.0), _outcome("route.router.2", 1792857750.0))
+    folder = _transcript(projects, run_dir)
+    (folder / "s1.jsonl").write_text(_usage_line("msg_early", "claude-haiku-5-5", 10, 5, 0, 0, ts=1792857600.0)
+                                     + _usage_line("msg_mid", "claude-haiku-5-5", 20, 6, 0, 0, ts=1792857700.0)
+                                     + _usage_line("msg_late", "claude-haiku-5-5", 30, 7, 0, 0, ts=1792857800.0))
+    got = hub.scan(rec)
+    assert got["mod"]["claude-haiku-5-5"]["calls"] == 1, got["mod"]
+    assert got["mod"]["claude-haiku-5-5"]["in"] == 30, got["mod"]
+
+
+def test_a_non_numeric_outcome_time_does_not_fail_the_scan(hub, layout):
+    """A record's outcome ts that is not a number (a string) must not raise TypeError when the folder's cutoff is taken."""
+    run_dir, projects = layout
+    reader = _spawn("worktrees/review", tools=("Read",), kid="route.router.2")
+    reader["definition"]["after"] = [KID]
+    rec = _record(run_dir, _spawn("worktrees/child"), reader, _outcome(KID, "not-a-time"), _outcome("route.router.2", 1792857750.0))
+    (_transcript(projects, run_dir) / "s1.jsonl").write_text(_usage_line("msg_late", "claude-haiku-5-5", 30, 7, 0, 0, ts=1792857800.0))
+    got = hub.scan(rec)
+    assert got["mod"]["claude-haiku-5-5"]["calls"] == 1, got["mod"]
+
+
+# --- (#802, review round 2) folder resolution is cached per (run, child) ----------------------------------------------------
+
+def test_a_child_folder_is_resolved_once_per_run_and_child(hub, layout, monkeypatch):
+    """The folder is worked out once for a child that has one; a second ask does not walk the filesystem again."""
+    run_dir, projects = layout
+    rec = _record(run_dir, SPAWN)
+    (_transcript(projects, run_dir) / "s1.jsonl").write_text(_usage_line("msg_1", "claude-haiku-5-5", 10, 5, 0, 0))
+    calls = []
+    real = hub.transcript_folder
+    monkeypatch.setattr(hub, "transcript_folder", lambda cwd: calls.append(cwd) or real(cwd))
+    hub.child_transcript_usage(rec, KID, {"workspace": "worktrees/child", "tools": ["Write"]})
+    hub.child_transcript_usage(rec, KID, {"workspace": "worktrees/child", "tools": ["Write"]})
+    assert len(calls) == 1, calls

@@ -169,6 +169,7 @@ def run_label(r):
 
 CLAUDE_PROJECTS = pathlib.Path.home() / ".claude" / "projects"   # where Claude Code keeps each session's transcript, in a folder named for its working directory
 PROJECT_NAME_MAX = 200   # Claude Code cuts a longer sanitized working directory to this length and adds a hash suffix (#796)
+FOLDERS = {}             # (run record, child): (working directory, transcript folder) once found (#802)
 USAGE_FILES = {}         # one transcript file's messages, cached by (path, mtime, size): {key: [(message id, model, usage)]}
 
 WRITE_TOOLS = {"Edit", "Write", "Bash", "NotebookEdit"}   # squad/graph.py:WRITE_TOOLS; a child with one of these runs in its own worktree (#802)
@@ -182,8 +183,8 @@ def _epoch(s):
 
 def child_cwd(record, kid, definition, defs=None):
     """The directory a child works in, as squad/runners/children.py:workspace names it (#796, #802). A child that may write runs in
-    <run folder>/ws/<logical>-<kid>. One that may not runs after a writer it names in "after" (in that writer's worktree), else in its
-    template's workspace under the checkout. The shared target is no child's, so None. A record from before the spawn carried its
+    <run folder>/ws/<logical>-<kid>. One that may not runs after a writer it names in "after" (in that writer's worktree), else in
+    <run folder>/ws/<logical> (children.py:workspace), or the shared target when that folder is not there. The shared target is no child's, so None. A record from before the spawn carried its
     definition has none: the one folder ending in "-<kid>" is taken, and none or two are None."""
     run = pathlib.Path(os.path.realpath(str(record))).parent
     ws = run / "ws"
@@ -205,18 +206,11 @@ def child_cwd(record, kid, definition, defs=None):
             c = child_cwd(record, dep, dd)
             if c and os.path.isdir(c):
                 return c
-    if workspace in (None, "."):
+    path = ws / ("target" if workspace in (None, ".") else str(workspace).replace("/", "_"))
+    if workspace in (None, ".") or not path.is_dir():   # children.py:workspace falls back to the shared target when the folder is not there
         log_once(f"hub: child {kid} of {record} works in the shared target; its tokens are not counted")
         return None
-    s = os.path.realpath(str(record))
-    k = s.rfind("/worktrees/run/")
-    if k < 0:
-        return None
-    path = os.path.realpath(os.path.join(s[:k], str(workspace)))
-    if not os.path.isdir(path):   # workspace() falls back to the target when the template's folder is not there
-        log_once(f"hub: child {kid} of {record} works in the shared target; its tokens are not counted")
-        return None
-    return path
+    return os.path.realpath(path)
 
 def transcript_folder(cwd):
     """Claude Code's folder for one working directory: the sanitized path, or for a long one the cut path it starts with (#796).
@@ -287,16 +281,22 @@ def transcript_stamp(files):
     return max(mt) if mt else 0
 
 def child_folder(record, kid, definition=None, defs=None):
-    """(working directory, transcript folder) of one child; the folder is None when it has none, and that is named once on stderr."""
+    """(working directory, transcript folder) of one child; the folder is None when it has none, and that is named once on stderr.
+    A found folder is cached per (run, child): the polls of a live run do not walk the filesystem again (#802)."""
+    key = (str(record), kid)
+    if key in FOLDERS:
+        return FOLDERS[key]
     cwd = child_cwd(record, kid, definition, defs)
     folder = transcript_folder(cwd) if cwd else None
     if folder is None and cwd is not None:
         log_once(f"hub: no transcript folder for child {kid} of {record} (looked for {cwd}); its tokens are not counted")
+    if folder is not None:
+        FOLDERS[key] = (cwd, folder)
     return cwd, folder
 
 def child_groups(record, kids, defs, outs):
     """Each child's transcript folder once: {folder: (files, cutoff)}. A folder two working directories name is no child's alone, so
-    it is dropped (#802). The cutoff is the earliest last outcome of its children (only messages after it count), None when one has none."""
+    it is dropped (#802). The cutoff is the latest recorded outcome of its children (only messages after it count), None when none has one."""
     groups = {}
     for kid, dfn in kids:
         cwd, folder = child_folder(record, kid, dfn, defs)
@@ -304,14 +304,15 @@ def child_groups(record, kids, defs, outs):
             continue
         g = groups.setdefault(folder, {"cwds": set(), "cut": []})
         g["cwds"].add(cwd)
-        ts = [t for (k, _), t in outs.items() if k == kid and t is not None]
+        ts = [t for (k, _), t in outs.items() if k == kid and isinstance(t, (int, float))]
         g["cut"].append(max(ts) if ts else None)
     out = {}
     for folder, g in groups.items():
         if len(g["cwds"]) > 1:
             log_once(f"hub: {len(g['cwds'])} working directories share the transcript folder {folder}; its tokens are not counted")
             continue
-        out[folder] = (transcript_files(folder), None if None in g["cut"] else min(g["cut"]))
+        cuts = [c for c in g["cut"] if c is not None]   # a child with no recorded outcome adds no cutoff; none at all counts the whole transcript
+        out[folder] = (transcript_files(folder), max(cuts) if cuts else None)
     return out
 
 def child_stamp(record, kids, defs):
