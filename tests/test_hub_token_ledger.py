@@ -2,8 +2,7 @@
 
 review.sh writes one line per review call to $SG_STATE/token-usage.tsv. The stats' "Tokens by model" pie and the
 Spend totals count those calls under their canonical model id (the one model registry, ADR-0147), so the pie does
-not show the coding model at 100%. A call that a run record already holds is counted once.
-"""
+not show the coding model at 100%. """
 import importlib.util
 import os
 import tempfile
@@ -62,9 +61,10 @@ def test_review_spend_reaches_the_spend_totals(hub, state):
     assert hub.stats("day")["totals"]["all"] > 0
 
 
-def test_a_call_a_run_record_holds_is_not_counted_twice(hub, state):
-    _ledger(state, ("run:run-1:coder", "claude-opus-5-5", 100, 30, 0))
-    assert _models(hub) == {}
+def test_a_claude_review_call_raises_the_spend_totals(hub, state):
+    """No PRICES row names a claude model: the call is priced from its registry display_price ($15 in, $75 out per mtok)."""
+    _ledger(state, ("review:fix_3", "claude:claude-opus-5-5", 1000000, 1000000, 0))
+    assert hub.stats("day")["totals"]["all"] == pytest.approx(90.0, abs=0.01)
 
 
 def test_no_ledger_leaves_the_stats_as_they_were(hub, state):

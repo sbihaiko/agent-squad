@@ -1363,20 +1363,25 @@ def canon_model(raw):
 
 def ledger_calls():
     """The review calls of $SG_STATE/token-usage.tsv (review.sh), one dict per line: t0, model (canonical), in (cache reads
-    included, as an outcome's tokens_in is), out, cache and spend. A `run:` consumer is skipped: a run record already holds
-    that call, so it is counted once. A missing or unreadable ledger is no calls."""
+    included, as an outcome's tokens_in is), out, cache and spend. Only review.sh writes the ledger, so every line is a
+    review call. A call the PRICES table does not match is priced from the registry's display_price (cache read at the input
+    rate). A missing or unreadable ledger is no calls."""
     out = []
     try: lines = (STATE / "token-usage.tsv").read_text(errors="replace").splitlines()
     except OSError: return out
     for l in lines:
         p = l.split("\t")
-        if len(p) < 6 or p[1].startswith("run:"): continue
+        if len(p) < 6: continue
         try:
             t0 = time.mktime(time.strptime(p[0], "%Y-%m-%dT%H:%M:%S"))
             i, o, cr = int(float(p[3])), int(float(p[4])), int(float(p[5]))
         except (ValueError, OverflowError): continue
         m = canon_model(p[2])
-        spend = priced({"model": m, "tokens_in": i + cr, "cache_read": cr, "tokens_out": o, "spend": 0})
+        call = {"model": m, "tokens_in": i + cr, "cache_read": cr, "tokens_out": o, "spend": None}
+        spend = priced(call)
+        if spend is None:
+            rate = modelreg.display_price(m)
+            spend = ((i + cr) * rate["input"] + o * rate["output"]) / 1e6 if rate else 0.0
         out.append({"t0": t0, "model": m, "in": i + cr, "out": o, "cache": cr, "spend": round(spend, 4)})
     return out
 
