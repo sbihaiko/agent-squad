@@ -1367,7 +1367,7 @@ def ledger_calls():
     """The review calls of $SG_STATE/token-usage.tsv (review.sh), one dict per line: t0, model (canonical), in (cache reads
     included, as an outcome's tokens_in is), out, cache and spend. Only review.sh writes the ledger, so every line is a
     review call. A call the PRICES table does not match is priced from the registry's display_price, its cache reads at the
-    display_price cache_read, else at CACHE_READ_RATIO of the input rate. A missing or unreadable ledger is no calls."""
+    display_price cache_read, else at the shared CACHE_READ_RATIO share of the input price. A missing or unreadable ledger is no calls."""
     out = []
     try: lines = (STATE / "token-usage.tsv").read_text(errors="replace").splitlines()
     except OSError: return out
