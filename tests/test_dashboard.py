@@ -34,7 +34,18 @@ def test_a_display_price_with_no_number_is_not_shown():
     """#798: an entry whose display price has no input and no output number (gpt-6-luna, all null) is not a price."""
     prices = engine_data()["models"]["prices"]
     assert all(isinstance(p.get("input"), (int, float)) or isinstance(p.get("output"), (int, float)) for p in prices.values()), prices
-    assert "gpt-6-luna" not in prices
+    reg = modelreg.default_registry()
+    assert all(mid not in prices for mid, e in reg.entries.items() if not has_price(e.display_price)), "an entry with no display number is shown"
+
+
+def test_has_price_needs_a_number_for_input_or_output():
+    """#799: has_price is true only for a number (not a bool) in input or output."""
+    assert not has_price({"input": None, "output": None})
+    assert has_price({"input": 1.0, "output": None})
+    assert has_price({"input": None, "output": 2.5})
+    assert not has_price({"input": True, "output": False})
+    assert not has_price({})
+    assert not has_price(None)
 
 
 def test_the_dashboard_embeds_the_registry_snapshot_and_the_registry_models():
