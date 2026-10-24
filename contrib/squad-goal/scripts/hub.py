@@ -205,7 +205,7 @@ def scan(p):
             if e == "outcome" and d.get("spend") is not None:
                 d["spend"] = priced(d)
                 spend += d["spend"]
-                if SUBSCRIPTION.match(d.get("model") or ""): sub += d["spend"]
+                if SUBSCRIPTION.match(canon_model(d.get("model"))): sub += d["spend"]   # the canonical id, as stats() splits it (#791)
                 else: api += d["spend"]
             if e == "outcome":
                 x = mod.setdefault(d.get("model") or "unknown", {"in": 0, "out": 0, "cache": 0, "spend": 0.0, "calls": 0})
@@ -1361,13 +1361,13 @@ def canon_model(raw):
     ref = modelreg.normalize(raw or "unknown")
     return ref.id if ref.known else (raw or "unknown")
 
-CACHE_READ_RATIO = 0.1   # a cache read costs a tenth of the input rate where the registry names no cache rate
+CACHE_READ_RATIO = modelreg.CACHE_READ_RATIO   # the one shared ratio (#495, #791); a registry cache_read overrides it per model
 
 def ledger_calls():
     """The review calls of $SG_STATE/token-usage.tsv (review.sh), one dict per line: t0, model (canonical), in (cache reads
     included, as an outcome's tokens_in is), out, cache and spend. Only review.sh writes the ledger, so every line is a
-    review call. A call the PRICES table does not match is priced from the registry's display_price (cache read at the input
-    rate). A missing or unreadable ledger is no calls."""
+    review call. A call the PRICES table does not match is priced from the registry's display_price, its cache reads at the
+    display_price cache_read, else at CACHE_READ_RATIO of the input rate. A missing or unreadable ledger is no calls."""
     out = []
     try: lines = (STATE / "token-usage.tsv").read_text(errors="replace").splitlines()
     except OSError: return out
@@ -1386,7 +1386,7 @@ def ledger_calls():
             rate = modelreg.display_price(m) or {}
             rin, rout = rate.get("input"), rate.get("output")
             if isinstance(rin, (int, float)) and isinstance(rout, (int, float)):
-                # cache reads price at the cache rate: the registry's, else a tenth of the input rate (the Anthropic ratio, #789)
+                # cache reads price at the cache rate: the registry's, else CACHE_READ_RATIO of the input rate (#789, #791)
                 rcr = rate.get("cache_read")
                 if not isinstance(rcr, (int, float)): rcr = rin * CACHE_READ_RATIO
                 spend = ((i * rin) + (cr * rcr) + o * rout) / 1e6
@@ -1432,15 +1432,21 @@ def stats(period, src="both"):
         for raw, v in r["mod"].items():   # keyed on the canonical id, as the review calls are, so one model is one slice (#789)
             m = canon_model(raw)
             if src == "sub" and not SUBSCRIPTION.match(m) or src == "api" and SUBSCRIPTION.match(m): continue
-            x = mt.setdefault(m, {"model": m, "in": 0, "out": 0, "cache": 0, "spend": 0.0, "calls": 0, "src": raw})   # the first spelling names the box's route
+            x = mt.setdefault(m, {"model": m, "in": 0, "out": 0, "cache": 0, "spend": 0.0, "calls": 0, "src": raw, "srcs": []})   # the first spelling names the box; every spelling's route is kept (#791)
+            if raw not in x["srcs"]: x["srcs"].append(raw)
             for k in ("in", "out", "cache", "calls"): x[k] += v[k]
             x["spend"] += v["spend"]
     for c in calls:
         m = c["model"]
         if src == "sub" and not SUBSCRIPTION.match(m) or src == "api" and SUBSCRIPTION.match(m): continue
-        x = mt.setdefault(m, {"model": m, "in": 0, "out": 0, "cache": 0, "spend": 0.0, "calls": 0, "src": m})
+        x = mt.setdefault(m, {"model": m, "in": 0, "out": 0, "cache": 0, "spend": 0.0, "calls": 0, "src": m, "srcs": []})
+        if m not in x["srcs"]: x["srcs"].append(m)
         x["in"] += c["in"]; x["out"] += c["out"]; x["cache"] += c["cache"]; x["calls"] += 1; x["spend"] += c["spend"]
-    models = sorted(({**{k: v for k, v in x.items() if k != "src"}, "spend": round(x["spend"], 2), "box": model_box(x["src"])} for x in mt.values()),
+    def _box(x):
+        box = model_box(x["src"])
+        box["routes"] = sorted({model_box(s)["route"] for s in x["srcs"]} - {None})   # every route the model was called by (#791)
+        return box
+    models = sorted(({**{k: v for k, v in x.items() if k not in ("src", "srcs")}, "spend": round(x["spend"], 2), "box": _box(x)} for x in mt.values()),
                     key=lambda x: -(x["in"] + x["out"]))
     return {"buckets": rows, "totals": {k: round(v, 2) for k, v in tot.items()}, "models": models}
 
