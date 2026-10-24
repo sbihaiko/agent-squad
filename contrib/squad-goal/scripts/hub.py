@@ -1379,10 +1379,16 @@ def ledger_calls():
         m = canon_model(p[2])
         call = {"model": m, "tokens_in": i + cr, "cache_read": cr, "tokens_out": o, "spend": None}
         spend = priced(call)
+        unpriced = False
         if spend is None:
-            rate = modelreg.display_price(m)
-            spend = ((i + cr) * rate["input"] + o * rate["output"]) / 1e6 if rate else 0.0
-        out.append({"t0": t0, "model": m, "in": i + cr, "out": o, "cache": cr, "spend": round(spend, 4)})
+            rate = modelreg.display_price(m) or {}
+            rin, rout = rate.get("input"), rate.get("output")
+            if isinstance(rin, (int, float)) and isinstance(rout, (int, float)):
+                spend = ((i + cr) * rin + o * rout) / 1e6
+            else:
+                spend, unpriced = 0.0, True
+                log_once(f"hub: no price for {m}, its review calls count 0.0 in the Spend totals")
+        out.append({"t0": t0, "model": m, "in": i + cr, "out": o, "cache": cr, "spend": round(spend, 4), "unpriced": unpriced})
     return out
 
 def _billed(src, model, spend):
@@ -1404,7 +1410,7 @@ def stats(period, src="both"):
         x["spend"] += _billed(src, c["model"], c["spend"])
     ks = sorted(b)[-48:]
     rows = [{"t": k, "spend": round(b[k]["spend"], 2), "runs": b[k]["runs"], "median_dur": round(st.median(b[k]["durs"]), 1) if b[k]["durs"] else None} for k in ks]
-    now = time.localtime(); tot = {"today": 0.0, "month": 0.0, "all": 0.0}
+    now = time.localtime(); tot = {"today": 0.0, "month": 0.0, "all": 0.0, "unpriced": sum(1 for c in calls if c["unpriced"])}
     for r in allr:
         lt = time.localtime(r["t0"]); tot["all"] += r["spend"]
         if lt[:2] == now[:2]: tot["month"] += r["spend"]

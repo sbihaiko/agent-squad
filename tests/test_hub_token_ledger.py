@@ -61,10 +61,36 @@ def test_review_spend_reaches_the_spend_totals(hub, state):
     assert hub.stats("day")["totals"]["all"] > 0
 
 
+def _registry_spend(hub, model, tokens_in, tokens_out):
+    """The expected spend from the registry's own display_price, by the same per-mtok arithmetic the hub uses."""
+    rate = hub.modelreg.display_price(model)
+    return (tokens_in * rate["input"] + tokens_out * rate["output"]) / 1e6
+
+
 def test_a_claude_review_call_raises_the_spend_totals(hub, state):
-    """No PRICES row names a claude model: the call is priced from its registry display_price ($15 in, $75 out per mtok)."""
+    """No PRICES row names a claude model: the call is priced from its registry display_price, not a copied constant."""
     _ledger(state, ("review:fix_3", "claude:claude-opus-5-5", 1000000, 1000000, 0))
-    assert hub.stats("day")["totals"]["all"] == pytest.approx(90.0, abs=0.01)
+    expected = _registry_spend(hub, "claude-opus-5-5", 1000000, 1000000)
+    assert hub.stats("day")["totals"]["all"] == pytest.approx(expected, abs=0.01)
+
+
+def test_a_null_price_call_counts_zero_and_is_marked(hub, state, monkeypatch):
+    """A registry entry with no display_price is priced 0.0, counted under unpriced, and never a KeyError."""
+    monkeypatch.setattr(hub.modelreg, "display_price", lambda *a, **k: None)
+    _ledger(state, ("review:fix_4", "claude:claude-opus-5-5", 1000000, 1000000, 0))
+    stats = hub.stats("day")
+    assert stats["totals"]["all"] == 0.0
+    assert stats["totals"]["unpriced"] == 1
+    assert _models(hub)["claude-opus-5-5"]["calls"] == 1
+
+
+def test_a_partial_price_dict_counts_zero_and_is_marked(hub, state, monkeypatch):
+    """A display_price with only an input rate is unpriced: no KeyError, the call counts 0.0 and is marked."""
+    monkeypatch.setattr(hub.modelreg, "display_price", lambda *a, **k: {"input": 15.0})
+    _ledger(state, ("review:fix_5", "claude:claude-opus-5-5", 1000000, 1000000, 0))
+    stats = hub.stats("day")
+    assert stats["totals"]["all"] == 0.0
+    assert stats["totals"]["unpriced"] == 1
 
 
 def test_no_ledger_leaves_the_stats_as_they_were(hub, state):
