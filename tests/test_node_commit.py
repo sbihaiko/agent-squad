@@ -273,3 +273,13 @@ def test_the_issue_a_run_names_is_read_from_the_request():
     assert node_commit.issue_of({"nodes": [worker()]}) == 73
     assert node_commit.issue_of({"nodes": [agent("a", instructions="Fix #12 now\n\nTask:\nno number")]}) is None
     assert node_commit.issue_of({"nodes": [agent("a")]}) is None
+
+
+def test_the_dispatched_issue_wins_over_an_issue_its_prose_names_first():
+    """#775: a task whose body names another issue before its own still names the dispatched issue."""
+    header = agent("a", instructions="Build it.\n\nTask:\nIt is the work #11 is waiting on. One child for GitHub issue #14.")
+    assert node_commit.issue_of({"nodes": [header]}) == 14
+    refs = agent("a", instructions="Build it.\n\nWork:\nUnblocks #11.\nRefs #14")
+    assert node_commit.issue_of({"nodes": [refs]}) == 14
+    msg = node_commit.message("route.router.1", 1, "worktrees/child", "run-1", node_commit.issue_of({"nodes": [header]}))
+    assert "Refs #14" in msg and "#11" not in msg
