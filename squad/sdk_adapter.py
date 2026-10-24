@@ -50,7 +50,28 @@ def usage_of(result):
     for field, key in CACHE_KEYS:       # the split of tokens_in; a key the provider omits stays absent, a reported 0 stays 0
         if isinstance(v := u.get(key), int):
             out[field] = v
+    if "cache_read" not in out:
+        alt = _alt_cache_read(u)        # a gateway's own name for the cache share of input_tokens (#783)
+        if alt is not None:
+            out["cache_read"] = min(alt, tin)
+        elif isinstance(turns := getattr(result, "num_turns", None), int) and turns > 1:
+            # No cache key at all: a multi-turn session re-sends its growing context each turn, so the fresh input is
+            # about the last context, 2 * total / turns. An estimate, marked so, never a measure.
+            if (est := tin - min(tin, 2 * tin // turns)) > 0:   # an estimate of 0 says nothing, so none is written
+                out["cache_read"], out["cache_estimated"] = est, True
     return out
+
+
+def _alt_cache_read(u):
+    """The cache-read count under a non-Anthropic name, or None. Each is a share of input_tokens, never an addition."""
+    for path in (("prompt_tokens_details", "cached_tokens"), ("input_tokens_details", "cached_tokens"),
+                 ("cache_read_tokens",), ("cached_tokens",)):
+        v = u
+        for k in path:
+            v = v.get(k) if isinstance(v, dict) else None
+        if isinstance(v, int):
+            return v
+    return None
 
 
 def failed_spend(table, model, result):
