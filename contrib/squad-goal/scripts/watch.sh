@@ -131,6 +131,8 @@ if v:
   # its own log: a suite of hours must never hold this cycle, and it takes its own `nightly` lock, never the landing one.
   # nightly.sh runs at most once a day by its own marker; each later cycle's start costs one file read and exits.
   ( bash "$(dirname "$0")/single.sh" nightly bash "$(dirname "$0")/nightly.sh" 2>&1 | sed "s/^/NIGHTLY /" >> "$SG_STATE/nightly.log" & ) 2>/dev/null
+  # The base's own check (#790): read once per cycle, so a red head that no landing reads is reported. It holds nothing.
+  ( tm bash "$(dirname "$0")/single.sh" basecheck bash "$(dirname "$0")/basecheckpass.sh" 2>&1 & ) 2>/dev/null
   # Work-branch landing (#355): a pushed work branch with a green check lands in dev by a fast-forward push.
   [ -n "${SG_LAND_PAUSED:-}" ] || ( tm bash "$(dirname "$0")/single.sh" branchland "$(dirname "$0")/branchland.sh" 2>&1 & ) 2>/dev/null
   # Work-branch review (#397): each pushed work branch is reviewed once per tip, so branchland finds the verdict it waits for.

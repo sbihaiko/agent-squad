@@ -102,7 +102,7 @@ test-pass-deadline.sh 15.65
 test-prepush.sh 1.28
 test-profile-check.sh 1.16
 test-promote-pass.sh 11.04
-test-promote.sh 15.14
+test-promote.sh 16.53
 test-publish-live.sh 2.50
 test-reconcile.sh 1.60
 test-refusal-comment.sh 1.87
@@ -127,7 +127,7 @@ test-token-guard.sh 2.43
 test-token-ledger.sh 12.98
 test-vendor-guard.sh 1.38
 test-view-domain-firewall.sh 0.37
-test-watch-cycle.sh 94.70
+test-watch-cycle.sh 61.41
 test-watch-land.sh 10.13
 test-watch-single-exec.sh 0.02
 test-watchd-driver-sha.sh 2.30
@@ -138,4 +138,4 @@ test-wave.sh 46.99
 test-wavepause.sh 0.65
 test-wtclean-run-tree.sh 1.70
 test-wtclean.sh 90.59
-test-basecheck.sh 2.58
+test-basecheck.sh 3.73

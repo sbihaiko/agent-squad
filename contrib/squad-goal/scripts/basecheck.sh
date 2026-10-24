@@ -5,7 +5,8 @@
 # sg_base_red <base>: while the head of origin/<base> has a completed check that did not end success, skipped or neutral, prints
 # "base <base> is red at <sha9>: <check> ended <conclusion>" and returns 0. Otherwise returns 1. A pending, missing or unreadable
 # check does not block. The answer is cached per head under $SG_STATE/auto/basecheck-<sha>, written through a temporary file:
-#   ok <epoch>            green; kept only once the newest completed check is at least SG_BASE_CI_GRACE seconds old (default 900)
+#   ok <epoch>            green; kept only once the newest completed check is at least SG_BASE_CI_GRACE seconds old (default 900),
+#                         and read again once SG_BASE_CI_OK_TTL seconds have passed since the read (default 600), so a re-run is seen (#790)
 #   red <epoch> <check>   red; read again once SG_BASE_CI_RECHECK seconds have passed (default 600)
 # Any other content is no answer, and the head is read again. A red head is reported once: one alerts.log line per head, and one
 # queued comment on each issue whose landed.tsv row names that head. An unreadable read is one alerts.log line per head.
@@ -24,7 +25,10 @@ sg_base_red() { local base=${1:?sg_base_red: a base branch is required} sha sn c
   [ -n "$sha" ] || return 1
   sn=${sha:0:9}; cache="$SG_STATE/auto/basecheck-$sha"; now=$(date +%s)
   line=$(head -n 1 "$cache" 2>/dev/null)
-  re='^ok ([0-9]+)$'; [[ $line =~ $re ]] && have=1
+  re='^ok ([0-9]+)$'
+  if [[ $line =~ $re ]]; then ep=${BASH_REMATCH[1]}
+    if [ $((now - ep)) -ge 0 ] && [ $((now - ep)) -lt "${SG_BASE_CI_OK_TTL:-600}" ]; then have=1; fi
+  fi
   re='^red ([0-9]+) (.+ ended .+)$'
   if [[ $line =~ $re ]]; then ep=${BASH_REMATCH[1]}
     if [ $((now - ep)) -ge 0 ] && [ $((now - ep)) -lt "${SG_BASE_CI_RECHECK:-600}" ]; then have=1; bad=${BASH_REMATCH[2]}; fi
