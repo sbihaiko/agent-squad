@@ -168,29 +168,83 @@ def run_label(r):
     return "run " + str(r.get("id") or "")[-6:]
 
 CLAUDE_PROJECTS = pathlib.Path.home() / ".claude" / "projects"   # where Claude Code keeps each session's transcript, in a folder named for its working directory
+PROJECT_NAME_MAX = 200   # Claude Code cuts a longer sanitized working directory to this length and adds a hash suffix (#796)
+USAGE_FILES = {}         # one transcript file's messages, cached by (path, mtime, size): {key: [(message id, model, usage)]}
 
-def child_transcript_usage(record, kid):
+def child_cwd(record, kid, definition):
+    """The directory a child works in, named as squad/runners/children.py:workspace names it: <run folder>/ws/<logical>-<kid>, where
+    logical is the template workspace with "/" as "_", or "target" (#796). A record from before the spawn carried its definition
+    has none: the one folder ending in the child's name is taken. None when no such folder is there."""
+    ws = pathlib.Path(os.path.realpath(str(record))).parent / "ws"
+    if definition is None:
+        found = sorted(c for c in ws.iterdir() if c.name.endswith("-" + kid)) if ws.is_dir() else []
+        return os.path.realpath(found[0]) if found else None
+    logical = "target" if definition.get("workspace") in (None, ".") else str(definition["workspace"]).replace("/", "_")
+    return os.path.realpath(ws / f"{logical}-{kid}")
+
+def transcript_folder(cwd):
+    """Claude Code's folder for one working directory: the sanitized path, or for a long one the cut path it starts with (#796)."""
+    name = re.sub(r"[^A-Za-z0-9]", "-", cwd)
+    if os.path.isdir(CLAUDE_PROJECTS / name): return CLAUDE_PROJECTS / name   # isdir: a name over the filesystem limit is no folder, not an error
+    if len(name) <= PROJECT_NAME_MAX: return None
+    try: names = sorted(n for n in os.listdir(CLAUDE_PROJECTS) if n.startswith(name[:PROJECT_NAME_MAX]))
+    except OSError: return None
+    return CLAUDE_PROJECTS / names[0] if names and os.path.isdir(CLAUDE_PROJECTS / names[0]) else None
+
+def transcript_usage(f):
+    """The assistant messages of one transcript file: [(message id, raw model, usage)], cached by (path, mtime, size) (#796)."""
+    try: st = os.stat(f)
+    except OSError: return []
+    key = (str(f), st.st_mtime, st.st_size)
+    if key in USAGE_FILES: return USAGE_FILES[key]
+    for old in [k for k in USAGE_FILES if k[0] == key[0]]: del USAGE_FILES[old]   # an older version of this file is never read again
+    try: lines = f.read_text(errors="replace").splitlines()
+    except OSError: return []
+    rows = []
+    for i, l in enumerate(lines):
+        if '"usage"' not in l: continue
+        try: d = json.loads(l)
+        except Exception: continue
+        m = d.get("message") if isinstance(d, dict) else None
+        if not isinstance(m, dict): continue
+        u, model = m.get("usage"), m.get("model")
+        if not isinstance(u, dict) or not isinstance(model, str) or model.startswith("<"): continue   # "<synthetic>" is no model
+        rows.append((m.get("id") or f"{f}:{i}", model, u))
+    USAGE_FILES[key] = rows
+    return rows
+
+def transcript_files(record, pending):
+    """Every transcript file of the given children: pending is [(kid, definition)]. Subagent transcripts sit in subfolders (#796)."""
+    out = []
+    for kid, dfn in pending:
+        cwd = child_cwd(record, kid, dfn)
+        folder = transcript_folder(cwd) if cwd else None
+        if folder is None: continue
+        try: out.extend(sorted(folder.rglob("*.jsonl")))
+        except OSError: pass
+    return out
+
+def transcript_stamp(record, pending):
+    """The newest transcript mtime of the given children, 0 when none: an unfinished run is cached by it as well as by its record (#796)."""
+    mt = [os.stat(f).st_mtime for f in transcript_files(record, pending) if os.path.exists(f)]
+    return max(mt) if mt else 0
+
+def child_transcript_usage(record, kid, definition=None):
     """The tokens of one child session, read from its transcript: {raw model: {in, out, cache, spend, calls}}, or {} when it has
-    none (#796). The child works in <run folder>/ws/worktrees_child-<node>, and Claude Code names its transcript folder for that
-    path with every character but a letter or a digit made a dash. A transcript repeats one message on several lines, so each
-    message id counts once. `in` includes the cache reads, as an outcome's tokens_in does; a cache write is fresh input."""
-    cwd = os.path.join(os.path.dirname(os.path.abspath(str(record))), "ws", f"worktrees_child-{kid}")
-    folder = CLAUDE_PROJECTS / re.sub(r"[^A-Za-z0-9]", "-", cwd)
-    msgs = {}
-    try: files = sorted(folder.glob("*.jsonl"))
+    none (#796). A transcript repeats one message on several lines, and a subagent's transcript may repeat one of the session's, so
+    each message id counts once. `in` includes the cache reads, as an outcome's tokens_in does; a cache write is fresh input.
+    A child with no transcript folder is named once on stderr: its tokens are then not counted."""
+    cwd = child_cwd(record, kid, definition)
+    folder = transcript_folder(cwd) if cwd else None
+    if folder is None:
+        log_once(f"hub: no transcript folder for child {kid} of {record} (looked for {cwd or 'its workspace'}); its tokens are not counted")
+        return {}
+    try: files = sorted(folder.rglob("*.jsonl"))
     except OSError: return {}
+    msgs = {}
     for f in files:
-        try: lines = f.read_text(errors="replace").splitlines()
-        except OSError: continue
-        for i, l in enumerate(lines):
-            if '"usage"' not in l: continue
-            try: d = json.loads(l)
-            except Exception: continue
-            m = d.get("message") if isinstance(d, dict) else None
-            if not isinstance(m, dict): continue
-            u, model = m.get("usage"), m.get("model")
-            if not isinstance(u, dict) or not isinstance(model, str) or model.startswith("<"): continue   # "<synthetic>" is no model
-            msgs.setdefault(m.get("id") or f"{f}:{i}", (model, u))
+        for mid, model, u in transcript_usage(f):
+            msgs.setdefault(mid, (model, u))
     out = {}
     for model, u in msgs.values():
         fresh = (u.get("input_tokens") or 0) + (u.get("cache_creation_input_tokens") or 0)
@@ -207,10 +261,10 @@ def scan(p):
     try: st = os.stat(p)
     except OSError: return None
     c = live.get(p)
-    if c and c[0] == st.st_mtime and c[1] == st.st_size: return c[2]
+    if c and c[0] == st.st_mtime and c[1] == st.st_size and c[3] == transcript_stamp(p, c[4]): return c[2]
     spend = sub = api = 0.0; mod = {}; t0 = t1 = ver = None; reasons = []; land = False; issues = set(); ntok = 0; kind = "code"; fix = None; stack = None; bug = False; merge = False; head = None; rc = None; share = None
     rid = pathlib.Path(p).parent.name   # the run folder, read before the loop: the share below rebinds a local of its own, never `p`
-    accepted, done_kids, wts = set(), set(), set()
+    accepted, done_kids, wts, defs = set(), set(), set(), {}
     try: req_issues = request_issues((pathlib.Path(p).parent / "request.txt").read_text(errors="replace")); has_req = True
     except OSError: req_issues = set(); has_req = False
     with open(p) as f:
@@ -233,7 +287,8 @@ def scan(p):
             except Exception: continue
             ts = d.get("ts"); e = d.get("event")
             if ts and t0 is None: t0 = ts
-            if e == "spawn_accepted" and d.get("child"): accepted.add(d["child"])
+            if e == "spawn_accepted" and d.get("child"):
+                accepted.add(d["child"]); defs[d["child"]] = d.get("definition") if isinstance(d.get("definition"), dict) else None   # the definition names the child's workspace (#796)
             if e == "outcome" and d.get("node"): done_kids.add(d["node"])
             if e == "outcome" and d.get("spend") is not None:
                 d["spend"] = priced(d)
@@ -262,8 +317,13 @@ def scan(p):
             elif e == "verdict": ver, reasons, t1, rc = d.get("verdict"), d.get("reasons") or [], ts, d.get("exit_code")
     # A child whose outcome never reached the record (killed, or still running) spent tokens the record does not carry: its session
     # transcript does (#796). A child with a recorded outcome is counted from that outcome alone, so no token is counted twice.
-    for kid in sorted(accepted - done_kids):
-        for raw, v in child_transcript_usage(p, kid).items():
+    # GAP, not fixed (#796): a fix round (entry 2 and later) runs in the same child. When its entry 1 has an outcome, the child is in
+    # done_kids and no transcript is read, so a fix round killed before its own outcome is not counted. Pinned by an xfail test in
+    # tests/test_hub_child_transcript_usage.py.
+    pending = [(kid, defs.get(kid)) for kid in sorted(accepted - done_kids)]
+    stamp = transcript_stamp(p, pending)   # read before the transcripts, so a write during the read is seen by the next poll
+    for kid, dfn in pending:
+        for raw, v in child_transcript_usage(p, kid, dfn).items():
             x = mod.setdefault(raw, {"in": 0, "out": 0, "cache": 0, "spend": 0.0, "calls": 0})
             for k in ("in", "out", "cache", "calls"): x[k] += v[k]
             x["spend"] += v["spend"]; spend += v["spend"]
@@ -279,7 +339,7 @@ def scan(p):
         with LOCK:
             try: HIST.write_text(json.dumps(hist))
             except OSError: pass
-    else: live[p] = (st.st_mtime, st.st_size, r)
+    else: live[p] = (st.st_mtime, st.st_size, r, stamp, pending)
     return r
 
 def state_of(r, age):
