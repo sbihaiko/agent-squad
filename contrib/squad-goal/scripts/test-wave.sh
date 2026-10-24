@@ -717,6 +717,23 @@ case "$r" in *"WAVE CHECK RED"*|*REQUEUE*) ko "AA: an inconclusive tip check bla
 # The ledger replaced the auto/excluded-<run>-<n> marker (ADR-0149 rule 6): no case leaves one.
 [ -z "$(/bin/ls "$T/st/auto" | /usr/bin/grep '^excluded-')" ] && ok "no excluded- marker is written" || ko "excluded markers: $(/bin/ls "$T/st/auto" | /usr/bin/grep '^excluded-' | tr '\n' ' ')"
 
+# S775 (#775): a wave closes only the issues its run was dispatched for. A `Refs #N` outside the run's dispatch set (an engine
+# commit that named the first #N of the issue's prose) is reported in one WAVE-NOTE line and a row of wave-outside.tsv, and
+# that issue is never closed, never moved, never given a delivery comment.
+W14=wave/run-14; start2 run-14 >/dev/null
+child 140 g140 "origin/$W14" && (cd "$T/c140" && echo e > e140 && $G add e140 && $G -c user.email=a@b -c user.name=t commit -q -m "squad: route.router.1 passed for #141" -m "Refs #141")
+en2 run-14 140 >/dev/null
+RD="$T/co/runs/run-14"; mkdir -p "$RD"
+printf '%s\n' '{"event": "spawn_accepted", "child": "a", "definition": {"prompt": "GitHub issue #140 work; it is the work #141 waits on"}}' > "$RD/record.jsonl"
+: > "$T/gh.log"; : > "$T/board.log"; rm -f "$T/st/cq/"*141* "$T/st/wave-outside.tsv"
+r=$(cd "$T/co" && bash "$T/s/wave.sh" land run-14 "$RD" 2>&1); rc=$?
+[ $rc = 0 ] && /usr/bin/grep -q 'issues/140 -f state=closed' "$T/gh.log" && ok "S775: the dispatched issue closes with the landing" || ko "S775: #140 not closed: rc $rc '$r'"
+/usr/bin/grep -q 'issues/141 -f state=closed' "$T/gh.log" && ko "S775: #141, outside the dispatch set, was closed: '$r'" || ok "S775: a Refs outside the dispatch set is not closed"
+/usr/bin/grep -q ' 141$' "$T/board.log" && ko "S775: #141's card moved" || ok "S775: the card of an issue outside the dispatch set does not move"
+[ -z "$(/bin/ls "$T/st/cq" | /usr/bin/grep '141')" ] && ok "S775: no delivery comment is queued for #141" || ko "S775: a comment is queued for #141"
+[ "$(printf '%s\n' "$r" | /usr/bin/grep -c 'WAVE-NOTE.*#141.*outside.*dispatch')" = 1 ] && ok "S775: the outside Refs is named in one log line" || ko "S775: no single WAVE-NOTE for #141: '$r'"
+awk -F '\t' '$2 == "run-14" && $3 == "141"' "$T/st/wave-outside.tsv" 2>/dev/null | /usr/bin/grep -q . && ok "S775: the outside Refs is recorded in wave-outside.tsv" || ko "S775: no wave-outside.tsv row: '$(cat "$T/st/wave-outside.tsv" 2>&1)'"
+
 # (#646) The wave tip's check is the base battery over origin/$SG_BASE, and its pytest runs over the selection. The check's command
 # is built from the shared definition and run in a clone of the remote, as wave.sh runs it; a stub python logs each call's argv.
 printf '#!/bin/bash\necho "$*" >> "%s/argv.log"\ncase "$*" in *squad.testselect*) cat "%s/select.out" 2>/dev/null;; esac\nexit 0\n' "$T" "$T" > "$T/selpy"; chmod +x "$T/selpy"

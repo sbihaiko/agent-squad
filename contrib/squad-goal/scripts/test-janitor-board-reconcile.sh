@@ -62,7 +62,7 @@ case "$a" in
     printf '2015\tBlocked\thttps://api.github.com/repos/x/y\n';;   # stale Blocked card with no current blocking cause
   *graphql*)   # the open-issue list in ONE request: every open issue of the repository, with its labels
     printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":['
-    sep=""; for n in 2001 2002 2003 2004 2005 2006 2007 2008 2009 2011 2012 2013 2014 2015 2016 2017 2018 2019 2020 2021 2027 2028 2029 2032 2040 2041 2042 2043 2044 2045 2046 2047 2050 2051 2052 2053 2054; do
+    sep=""; for n in 2001 2002 2003 2004 2005 2006 2007 2008 2009 2011 2012 2013 2014 2015 2016 2017 2018 2019 2020 2021 2027 2028 2029 2032 2040 2041 2042 2043 2044 2045 2046 2047 2050 2051 2052 2053 2054 2060; do
       body=""; subs='{"total":0,"completed":0}'; kids='[]'
       case $n in
         2007|2016) labs='{"nodes":[{"name":"needs-owner"}]}';;
@@ -79,6 +79,9 @@ case "$a" in
         2029) labs='{"nodes":[{"name":"spec"}]}'; subs='{"total":2,"completed":1}'; kids='[{"number":2030},{"number":2002}]';;
         2040|2041) labs='{"nodes":[{"name":"run-parent"},{"name":"enhancement"}]}';;   # a run parent: the roll-up of a run's children, never work
         2021) labs='{"nodes":[{"name":"spec"}]}';;
+        # #2060 is a spec whose every sub-issue is closed, but a landing named #2062 outside its run's dispatch set (#775):
+        # that close has no evidence, so the spec is held open, never closed off it.
+        2060) labs='{"nodes":[{"name":"spec"}]}'; subs='{"total":2,"completed":2}'; kids='[{"number":2061},{"number":2062}]';;
         # The owner starts a spec by moving its card (#589): #2042 sits in Todo, so its children in Backlog (#2043) or with no
         # card (#2045) follow it; #2044 is past Backlog and keeps its column. #2046 still sits in Backlog, so #2047 stays.
         2042) labs='{"nodes":[{"name":"spec"}]}'; subs='{"total":3,"completed":0}'; kids='[{"number":2043},{"number":2044},{"number":2045}]';;
@@ -175,6 +178,7 @@ git -C "$T/co" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "A qu
 git -C "$T/co" update-ref refs/remotes/origin/dev HEAD
 # #2022's child landing reached the landing branch: its head is in origin/dev, so the run's failure does not unland it (#691)
 sed -i '' "s/a7df8f1ecff77bdb5833721121a7a50be4066053/$(git -C "$T/co" rev-parse HEAD)/" "$T/co/runs/run-mixed/record.jsonl"
+printf '1\trun-x\t2062\twave/run-x\n' > "$T/st/wave-outside.tsv"   # a landing named #2062 outside its run's dispatch set (#775)
 printf '%s\n' '{"items":[{"n":2015,"st":"Done","s":"open"}]}' > "$T/st/hub-board.json"   # the cached board exposes the false Done card to rule H while R repairs the live card
 o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1)
 bc() { cat "$T/board.calls" 2>/dev/null; }
@@ -257,6 +261,10 @@ done
 [ "$(/usr/bin/grep -c '^api repos/x/y/issues/2020/comments -f body=Closed by the loop: every sub-issue (2) is closed' "$T/gh.calls")" = 1 ] && ok "the close carries one comment that names the condition" || ko "#2020 comment: $(/usr/bin/grep 'issues/2020' "$T/gh.calls")"
 /usr/bin/grep -q 'SPEC-CLOSED #2020: every sub-issue (2) is closed' "$T/st/cycle.log" 2>/dev/null && ok "the close is named in cycle.log" || ko "#2020 close not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
 ! /usr/bin/grep -q 'issues/20\(17\|21\|27\|28\)\(/comments\| -X PATCH\| -f state\)' "$T/gh.calls" 2>/dev/null && ok "a spec with an open sub-issue, or with none, stays open" || ko "a spec closed early: $(/usr/bin/grep -E 'issues/20(17|21|27|28)' "$T/gh.calls")"
+# A spec whose sub-issue a landing named outside its run's dispatch set is held open (#775): the cascade never closes a
+# parent off a close that has no evidence, and the hold is named.
+! /usr/bin/grep -q 'issues/2060\(/comments\| -X PATCH\| -f state\)' "$T/gh.calls" 2>/dev/null && ok "a spec whose sub-issue was named outside a dispatch set stays open" || ko "#2060 closed: $(/usr/bin/grep 'issues/2060' "$T/gh.calls")"
+/usr/bin/grep -q 'SPEC-HELD #2060: sub-issue #2062 was named outside the dispatch set of run run-x' "$T/st/cycle.log" 2>/dev/null && ok "the hold is named in cycle.log" || ko "#2060 hold not named: $(/usr/bin/grep 2060 "$T/st/cycle.log")"
 # A spec card already Closed whose child reopened keeps Closed (#246) and gains the tag instead of a move back.
 ! /usr/bin/grep -q ' 2029$' "$T/board.calls" 2>/dev/null && ok "a Closed spec whose child reopened keeps its column" || ko "#2029 moved: $(/usr/bin/grep ' 2029$' "$T/board.calls")"
 /usr/bin/grep -q '^api -X POST repos/x/y/issues/2029/labels -f labels\[\]=reverted$' "$T/gh.calls" 2>/dev/null && ok "it gains the reverted tag" || ko "#2029 not tagged: $(/usr/bin/grep 'issues/2029' "$T/gh.calls")"
