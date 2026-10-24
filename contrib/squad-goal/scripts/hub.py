@@ -1355,14 +1355,48 @@ def working(rows):
     """The ids of the runs that work: a run folder with no verdict and a dashboard that answers, as the list above groups them. Test passes are not runs."""
     return [r["id"] for r in rows if r.get("kind") not in ("test", "childcc") and group_of(r) == "running"]
 
+def canon_model(raw):
+    """The canonical id of one model spelling, through the one registry (ADR-0147): `claude:claude-opus-5-5` and
+    `claude-opus-5-5[1m]` name one model. A spelling the registry does not know keeps its raw form."""
+    ref = modelreg.normalize(raw or "unknown")
+    return ref.id if ref.known else (raw or "unknown")
+
+def ledger_calls():
+    """The review calls of $SG_STATE/token-usage.tsv (review.sh), one dict per line: t0, model (canonical), in (cache reads
+    included, as an outcome's tokens_in is), out, cache and spend. A `run:` consumer is skipped: a run record already holds
+    that call, so it is counted once. A missing or unreadable ledger is no calls."""
+    out = []
+    try: lines = (STATE / "token-usage.tsv").read_text(errors="replace").splitlines()
+    except OSError: return out
+    for l in lines:
+        p = l.split("\t")
+        if len(p) < 6 or p[1].startswith("run:"): continue
+        try:
+            t0 = time.mktime(time.strptime(p[0], "%Y-%m-%dT%H:%M:%S"))
+            i, o, cr = int(float(p[3])), int(float(p[4])), int(float(p[5]))
+        except (ValueError, OverflowError): continue
+        m = canon_model(p[2])
+        spend = priced({"model": m, "tokens_in": i + cr, "cache_read": cr, "tokens_out": o, "spend": 0})
+        out.append({"t0": t0, "model": m, "in": i + cr, "out": o, "cache": cr, "spend": round(spend, 4)})
+    return out
+
+def _billed(src, model, spend):
+    """A call's spend under the stats' billing filter: both, the subscriptions only, or the API only (as `stats` filters runs)."""
+    if src == "both": return spend
+    return spend if bool(SUBSCRIPTION.match(model)) == (src == "sub") else 0.0
+
 def stats(period, src="both"):
     fmt = {"hour": "%Y-%m-%d %H:00", "day": "%Y-%m-%d", "month": "%Y-%m"}[period]
     b = {}; amt = (lambda r: r["spend"]) if src == "both" else (lambda r: r["sub"] if src == "sub" else r["api"])
     allr = [dict(r, spend=amt(r)) for r in all_runs()]
+    calls = ledger_calls()   # review calls: they carry spend and tokens, never a run
     for r in allr:
         k = time.strftime(fmt, time.localtime(r["t0"])); x = b.setdefault(k, {"t": k, "spend": 0.0, "runs": 0, "durs": []})
         x["spend"] += r["spend"]; x["runs"] += 1
         if r["done"]: x["durs"].append(r["dur"])
+    for c in calls:
+        k = time.strftime(fmt, time.localtime(c["t0"])); x = b.setdefault(k, {"t": k, "spend": 0.0, "runs": 0, "durs": []})
+        x["spend"] += _billed(src, c["model"], c["spend"])
     ks = sorted(b)[-48:]
     rows = [{"t": k, "spend": round(b[k]["spend"], 2), "runs": b[k]["runs"], "median_dur": round(st.median(b[k]["durs"]), 1) if b[k]["durs"] else None} for k in ks]
     now = time.localtime(); tot = {"today": 0.0, "month": 0.0, "all": 0.0}
@@ -1370,13 +1404,22 @@ def stats(period, src="both"):
         lt = time.localtime(r["t0"]); tot["all"] += r["spend"]
         if lt[:2] == now[:2]: tot["month"] += r["spend"]
         if lt[:3] == now[:3]: tot["today"] += r["spend"]
+    for c in calls:
+        lt = time.localtime(c["t0"]); sp = _billed(src, c["model"], c["spend"]); tot["all"] += sp
+        if lt[:2] == now[:2]: tot["month"] += sp
+        if lt[:3] == now[:3]: tot["today"] += sp
     mt = {}
     for r in allr:
-        for m, v in r["mod"].items():
+        for m, v in r["mod"].items():   # a run's spelling is kept: its box reads the route the spelling names (the review calls below are canonical)
             if src == "sub" and not SUBSCRIPTION.match(m) or src == "api" and SUBSCRIPTION.match(m): continue
             x = mt.setdefault(m, {"model": m, "in": 0, "out": 0, "cache": 0, "spend": 0.0, "calls": 0})
             for k in ("in", "out", "cache", "calls"): x[k] += v[k]
             x["spend"] += v["spend"]
+    for c in calls:
+        m = c["model"]
+        if src == "sub" and not SUBSCRIPTION.match(m) or src == "api" and SUBSCRIPTION.match(m): continue
+        x = mt.setdefault(m, {"model": m, "in": 0, "out": 0, "cache": 0, "spend": 0.0, "calls": 0})
+        x["in"] += c["in"]; x["out"] += c["out"]; x["cache"] += c["cache"]; x["calls"] += 1; x["spend"] += c["spend"]
     models = sorted(({**x, "spend": round(x["spend"], 2), "box": model_box(x["model"])} for x in mt.values()), key=lambda x: -(x["in"] + x["out"]))
     return {"buckets": rows, "totals": {k: round(v, 2) for k, v in tot.items()}, "models": models}
 
