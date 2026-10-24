@@ -29,18 +29,26 @@ for m in "$A"/branchfix-push-*; do
   run=${m##*/branchfix-push-}; read -r br _ < "$m"
   rd=$(/usr/bin/grep "/$run\$" "$SG_STATE/active-runs.txt" 2>/dev/null | tail -1); rd=${rd:-$SG_CHECKOUT/runs/$run}
   t=$(python3 -c 'import json,sys
-s=v=None
+s=v=None; h=[]
 for l in open(sys.argv[1]):
     try: d=json.loads(l)
     except Exception: continue
     if d.get("event") in ("run_start","resume"): v=None; s=d if d.get("event")=="run_start" else s
     elif d.get("event")=="verdict": v=d
-if s and v and s.get("target") and s.get("target_branch"): print(s["target"], s["target_branch"])' "$rd/record.jsonl" 2>/dev/null)
+    elif d.get("event")=="outcome" and d.get("outcome")=="pass" and (d.get("workspace") or {}).get("head"): h.append(d["workspace"]["head"])
+if s and v and s.get("target") and s.get("target_branch"): print(s["target"], s["target_branch"], *reversed(h))' "$rd/record.jsonl" 2>/dev/null)
   [ -n "$t" ] || continue
-  tg=${t% *} tb=${t#* }
+  read -r tg tb ch <<< "$t"
+  # The head (#779): on a work branch the land into the target branch can be a no-op, so that branch stays at the base. The
+  # child's own heads (pass outcomes' workspace heads, last first) come first, then the target branch: the first one that is a
+  # fast-forward past the work branch is pushed.
   head=$(/usr/bin/git -C "$tg" rev-parse -q --verify "refs/heads/$tb^{commit}" 2>/dev/null) \
     && /usr/bin/git -C "$tg" fetch -q "$remote" "refs/heads/$br" 2>/dev/null || { echo "BRANCHFIX PUSH $br: the head of run $run is not readable; the next pass retries"; continue; }
   old=$(/usr/bin/git -C "$tg" rev-parse FETCH_HEAD)
+  for c in $ch "$head"; do
+    c=$(/usr/bin/git -C "$tg" rev-parse -q --verify "$c^{commit}" 2>/dev/null) || continue
+    [ "$c" != "$old" ] && /usr/bin/git -C "$tg" merge-base --is-ancestor "$old" "$c" && { head=$c; break; }
+  done
   if [ "$old" = "$head" ]; then echo "BRANCHFIX PUSH $br: run $run left no new commit"
   elif ! /usr/bin/git -C "$tg" merge-base --is-ancestor "$old" "$head"; then echo "BRANCHFIX PUSH $br: the head of run $run is no fast-forward of the branch, so it is not pushed"
   elif /usr/bin/git -C "$tg" push -q "$remote" "$head:refs/heads/$br" 2>/dev/null; then echo "BRANCHFIX PUSH $br: ${old:0:9} -> ${head:0:9} (run $run)"
