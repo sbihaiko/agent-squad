@@ -22,7 +22,7 @@ echo "\$*" >> "$T/gh.log"
 case "\$*" in
   *"pulls?per_page"*) echo "\${PRS:-[]}";;
   *"issues(states: OPEN"*) n=\$(for x in \${OPEN:-7}; do printf '{"number":%s,"title":"t","body":"","state":"OPEN"},' "\$x"; done); [ -n "\${LANDBUG:-}" ] && n="\$n{\"number\":\$LANDBUG,\"title\":\"t\",\"body\":\"\",\"state\":\"OPEN\",\"labels\":{\"nodes\":[{\"name\":\"\${LANDBUG_LABEL:-loop-bug:landing}\"}]}},"; echo "{\"data\":{\"repository\":{\"issues\":{\"pageInfo\":{\"hasNextPage\":false},\"nodes\":[\${n%,}]}}}}";;
-  *"/check-runs"*) echo "\${CHECKS:-{\"check_runs\":[]\}}";;
+  *"/check-runs"*) d=\$(/usr/bin/git -C $T/origin.git rev-parse -q --verify refs/heads/dev); x=\${CHECKS:-{\"check_runs\":[]\}}; case "\$*" in *"/commits/\$d/"*) x=\${BASECHECKS:-\$x};; esac; echo "\$x";;
   *"issues/7/comments"*) cat > "$T/comment.body"; echo '{"id":1}';;
   *"issues/7"*) echo '{"number":7,"state":"closed"}';;
 esac
@@ -244,4 +244,24 @@ reset; rm -f "$T/selpy.log"; r=$(SG_STATE="$T/st" SG_GATE_PY="$T/selpy" SG_GATE_
 /usr/bin/grep -qx -- "-m pytest -p no:deepeval -o heavy_cap_seconds=20 -n 3 -m not heavy tests/test_a.py" "$T/selpy.log" 2>/dev/null && ok "the landing check passes the selection to pytest" || ko "landing check argv: '$(cat "$T/selpy.log" 2>&1)' $r"
 IFS=$'\t' read -r _ kind res _ sel < "$T/st/gate-status" 2>/dev/null
 [ "$kind $res $sel" = "fast pass selected 1 files" ] && ok "the landing check's status line states the selected file count" || ko "landing status: '$(cat "$T/st/gate-status" 2>&1)'"
+# (#786) A red base holds the landing, and the base is read before the gate: the branch tip is green, the base head (dev) is red.
+# The pass names the base, lands nothing, pushes nothing to dev, and says it once on alerts.log; the issue landed at the dev head
+# gets one queued comment. BASECHECKS answers the check runs of the base head; CHECKS answers the branch tip.
+basehold() { reset; rm -f "$T/gate.log" "$T/st/auto/basecheck-"*; before=$($O rev-parse dev); printf '1700000000\tgui/6-y\t%s\t6\n' "$before" >> "$T/st/landed.tsv"; }
+basehold; r=$(BASECHECKS="$RED" SG_LOCAL_GATE_CMD="$GATE_OK" CHECKS="$GREEN" bl)
+case "$r" in "BRANCHLAND WAIT gui/7-x: base dev is red at "*": check (3.11) ended failure"*) ok "a red base: the pass names the base and waits";; *) ko "a red base: no wait line: '$r'";; esac
+[ "$($O rev-parse dev)" = "$before" ] && ok "a red base: dev does not move" || ko "a red base: dev moved"
+[ "$(/usr/bin/grep -c 'BASE CI' "$T/st/alerts.log" 2>/dev/null)" = 1 ] && ok "a red base: one alerts.log line" || ko "a red base: alerts $(cat "$T/st/alerts.log" 2>/dev/null)"
+[ "$(ls "$T/st/cq" | /usr/bin/grep -c '#6-basecheck-')" = 1 ] && ok "a red base: one queued comment on the issue landed at that head" || ko "a red base: cq $(ls "$T/st/cq" 2>/dev/null)"
+r2=$(BASECHECKS="$RED" CHECKS="$GREEN" bl)
+[ -z "$r2" ] && [ "$(/usr/bin/grep -c 'BASE CI' "$T/st/alerts.log")" = 1 ] && [ "$(ls "$T/st/cq" | /usr/bin/grep -c '#6-basecheck-')" = 1 ] && ok "a red base: the second pass says and queues nothing more" || ko "a red base repeat: '$r2' alerts $(cat "$T/st/alerts.log") cq $(ls "$T/st/cq")"
+# The base is read before the local gate: a zero-check tip on a red base runs no gate.
+basehold; r=$(BASECHECKS="$RED" SG_LOCAL_GATE_CMD="$GATE_OK" CHECKS='{"check_runs":[]}' bl)
+case "$r" in *"BRANCHLAND WAIT gui/7-x: base dev is red at"*) ok "a red base with no tip check: the pass waits on the base";; *) ko "a red base, zero checks: '$r'";; esac
+[ ! -e "$T/gate.log" ] && ok "a red base: the local gate does not run" || ko "a red base ran the local gate: $(cat "$T/gate.log")"
+[ "$($O rev-parse dev)" = "$before" ] && ok "a red base with no tip check: dev does not move" || ko "a red base with no tip check: dev moved"
+# The hold ends with the base: once dev is green, the same branch lands.
+rm -f "$T/st/auto/basecheck-"* "$T/st/auto/branchland-"*; basehold; r=$(CHECKS="$GREEN" bl)
+[ "$($O rev-parse dev)" != "$before" ] && ok "a green base: the held branch lands" || ko "a green base: nothing landed: '$r'"
+rm -f "$T/st/auto/basecheck-"*; /usr/bin/grep -v 'gui/6-y' "$T/st/landed.tsv" > "$T/st/landed.tmp" && mv "$T/st/landed.tmp" "$T/st/landed.tsv"
 rm -rf "$T"; exit $fail

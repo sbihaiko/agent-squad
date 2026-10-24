@@ -37,7 +37,8 @@ printf '#!/bin/bash\nwhile read -r old new ref; do printf "%%s\\t%%s\\t%%s\\n" "
 chmod +x "$T/origin.git/hooks/pre-receive"
 pushes() { awk -F'\t' -v r="${1:-}" '$3==r || r=="" {print $1, $2, $3}' "$T/pushes.log" 2>/dev/null; }
 # The stub gh: every argv is logged, and a close answers GitHub's own shape. SWEEPS resets the log between cases.
-printf '#!/bin/bash\necho "$*" >> "%s/gh.log"\ncase "$*" in *"issues/"*) echo "{\\"number\\":1,\\"state\\":\\"closed\\"}";; *) echo "{}";; esac\n' "$T" > "$T/bin/gh"
+# RED_BASE=1 answers a red completed check on every check-runs read (the base's own check, #786); otherwise the read is not a check-run list.
+printf '#!/bin/bash\necho "$*" >> "%s/gh.log"\ncase "$*" in *"issues/"*) echo "{\\"number\\":1,\\"state\\":\\"closed\\"}";; *"/check-runs"*) if [ -n "${RED_BASE:-}" ]; then echo "{\\"check_runs\\":[{\\"id\\":1,\\"name\\":\\"check (3.11)\\",\\"status\\":\\"completed\\",\\"conclusion\\":\\"failure\\"}]}"; else echo "{}"; fi;; *) echo "{}";; esac\n' "$T" > "$T/bin/gh"
 chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 # The remote is a bare repository on this machine: the whole suite runs against it, never against GitHub.
 [ "$($O rev-parse --is-bare-repository)" = true ] && ok "the suite runs against a bare local remote" || ko "the remote is not a bare repository"
@@ -194,6 +195,14 @@ cp "$T/pushes.log" "$T/pushes.before"; : > "$T/pushes.log"   # from here, the on
 [ "$($O rev-parse $W)" = "$en31head" ] && [ "$($O rev-parse $W)" = "$wtip" ] && ok "J: the wave tip is the last entrant's head, and the moved dev did not move it" || ko "J: the wave tip is not the last entrant's head"
 $O merge-base --is-ancestor "$moved" $W && ko "J: the wave carries the moved dev before the landing" || ok "J: mid-wave the wave does not carry the moved dev (it is not rebased on dev yet)"
 $O merge-base --is-ancestor "$en30head" $W && ok "J: the entry of a child is what moves the wave tip" || ko "J: #30's entry is not in the wave"
+# (#786) A red base holds the wave's landing: the base is read before the tip's check, so the pass names the base, pushes nothing to
+# dev and says it once on alerts.log. The red answer is cleared after the case, so the landing below reads the base afresh.
+r=$(cd "$T/co" && RED_BASE=1 bash "$T/s/wave.sh" land run-1 2>&1); rc=$?
+case "$r" in *"WAVE WAIT $W: base dev is red at "*) ok "J: a red base holds the wave: the pass names the base and waits";; *) ko "J: a red base did not hold the wave: '$r' (exit $rc)";; esac
+[ "$rc" = 1 ] && ok "J: a red base is a wait (exit 1), not a refusal" || ko "J: a red base exited $rc"
+[ "$(pushes refs/heads/dev | wc -l | tr -d ' ')" = 0 ] && ok "J: a red base: the wave pushes nothing to dev" || ko "J: a red base pushed to dev: $(pushes refs/heads/dev)"
+[ "$(/usr/bin/grep -c 'is red at' "$T/st/alerts.log" 2>/dev/null)" = 1 ] && ok "J: a red base raises one alerts.log line" || ko "J: alerts.log: $(cat "$T/st/alerts.log" 2>/dev/null)"
+rm -f "$T/st/auto/basecheck-"*
 r=$(land run-1); rc=$?
 case "$r" in "WAVE $W "*) ok "J: land names the wave branch and its sha";; *) ko "J: land said nothing: '$r' (exit $rc)";; esac
 [ $rc = 0 ] && ok "J: the wave landed (exit 0)" || ko "J: exit $rc: '$r'"

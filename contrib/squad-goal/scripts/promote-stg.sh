@@ -35,8 +35,11 @@ refuse() { say "$1" "$2"; echo "promote-stg: $2" >&2; exit 1; }   # the one reas
 proof=${SG_PROMOTE_PROOF:-ci}
 ci_state() {  # sha -> green | red | running, from the check runs of the commit
   if [ -n "$SG_CI_STATE_CMD" ]; then "$SG_CI_STATE_CMD" "$1"; return; fi
-  . "$d/ghcall.sh"
-  gh_api "repos/$SG_REPO/commits/$1/check-runs" -q 'if .total_count == 0 or ([.check_runs[] | select(.status != "completed")] | length) > 0 then "running" elif ([.check_runs[] | select(.conclusion | IN("success","skipped","neutral") | not)] | length) > 0 then "red" else "green" end'
+  . "$d/ghcall.sh"; . "$d/basecheck.sh"   # the classifier is the base check's own (#786): the two readers cannot disagree
+  local cr c; cr=$(gh_api "repos/$SG_REPO/commits/$1/check-runs?per_page=100&filter=latest") || return 1
+  c=$(printf '%s' "$cr" | sg_ci_class) || return 1
+  [ "$c" = none ] && c=running   # zero check runs is not yet green: promotion waits for them
+  printf '%s\n' "$c"
 }
 prove() {  # <tip>: refuse unless the proof for this tip is green, each refusal in its own words
   if [ "$proof" = local ]; then
