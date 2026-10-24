@@ -1,6 +1,7 @@
 #!/bin/bash
 # Regression test for root-cause clustering (cluster.py) and its two callers' dispatch plans (AB_DRY / AF_DRY), stubbed gh.
 # usage: bash test-cluster.sh [scripts dir]
+export SG_MIN_FREE_GB=0   # the dispatchers pin their disk floor: the real volume must not stop a fixture pass (#792); a case that tests the stop sets its own
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 # The free slots come from the machine-wide caps (squad/caps.py) of this checkout, with leases in the sandbox, never the real ones.
 export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR="$T/caps"

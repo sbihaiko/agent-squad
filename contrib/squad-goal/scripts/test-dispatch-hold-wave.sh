@@ -9,11 +9,12 @@
 #  (4) rule R leaves the card of an issue a pending wave holds, whatever an older run recorded (#540);
 #  (3) once the wave landed (its marker gone), the issue is free again.
 # Offline: stub gh, a temp state dir. usage: bash test-dispatch-hold-wave.sh [scripts dir]
+export SG_MIN_FREE_GB=0   # the dispatchers pin their disk floor: the real volume must not stop a fixture pass (#792); a case that tests the stop sets its own
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR="$T/caps" GIT_TERMINAL_PROMPT=0 SG_GH_AGGREGATE_WINDOW=0
 unset SG_BOARD_VOCAB
 mkdir -p "$T/bin" "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/co/runs" "$T/co/docs/squad/workflows" "$T/s"
-cp "$d/autobug.sh" "$d/autofrontier.sh" "$d/cluster.py" "$d/single.sh" "$d/startability.sh" "$d/ghcall.sh" "$d/ghread.py" "$d/ghthrottle.py" \
+cp "$d/autobug.sh" "$d/autofrontier.sh" "$d/cluster.py" "$d/single.sh" "$d/startability.sh" "$d/ghcall.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/refusal-names.sh" "$d/workbranches.sh" "$d/issue_ledger.py" \
   "$d/refusal-names.sh" "$d/workbranches.sh" "$d/janitor.py" "$d/issue_state.py" "$d/issue_ledger.py" "$T/s/"
 printf 'caps:\n  runs: 2\n' > "$T/co/docs/squad/defaults.yaml"
 printf 'export SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_STATE=%s SG_BASE=main SG_CHECKOUT=%s SG_FRONTIER_LABEL=ready-for-agent SG_BUG_LABEL=bug\n' "$T/st" "$T/co" > "$T/s/env.sh"

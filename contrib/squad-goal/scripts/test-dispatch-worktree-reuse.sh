@@ -1,10 +1,11 @@
 #!/bin/bash
 # Regression test for redispatching a clean issue worktree (#65).
+export SG_MIN_FREE_GB=0   # the dispatchers pin their disk floor: the real volume must not stop a fixture pass (#792); a case that tests the stop sets its own
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/co/docs/squad"
 : > "$T/st/active-runs.txt"
-cp "$d"/{autobug.sh,cluster.py,startability.sh,ghcall.sh,address.sh,envelope-spend.sh,ghread.py,ghthrottle.py} "$T/s/"
+cp "$d"/{autobug.sh,cluster.py,startability.sh,ghcall.sh,address.sh,envelope-spend.sh,ghread.py,ghthrottle.py,refusal-names.sh,workbranches.sh,issue_ledger.py} "$T/s/"
 printf '#!/bin/bash\necho READY\n' > "$T/s/stack.sh"; chmod +x "$T/s/stack.sh"   # the blocker gate (#479): #65 has no blocker
 printf 'import sys\nif sys.argv[1:]: sys.exit(1)\nprint("65\\tTodo")\n' > "$T/s/issue_state.py"   # the seam's door, stubbed: #65's card sits in Todo (#550)
 printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"
