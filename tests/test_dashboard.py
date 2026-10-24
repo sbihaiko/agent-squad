@@ -11,7 +11,7 @@ from squad import graph, modelreg
 from tests.dashboard_helpers import ROOT, run_node
 
 sys.path.insert(0, str(ROOT / "scripts"))
-from build_dashboard import CORE_DIR, CORE_ORDER, OUT, PAGE_CSS, PAGE_DIR, PAGE_HTML, PAGE_ORDER, build, core_bundle, engine_data, page_bundle, page_sources, served_lists  # noqa: E402
+from build_dashboard import CORE_DIR, CORE_ORDER, OUT, PAGE_CSS, PAGE_DIR, PAGE_HTML, PAGE_ORDER, build, core_bundle, engine_data, has_price, page_bundle, page_sources, served_lists  # noqa: E402
 
 
 # --- one source: the built file is the template plus the engine's own schema, registry, and lists ---
@@ -44,7 +44,7 @@ def test_the_dashboard_embeds_the_registry_snapshot_and_the_registry_models():
     assert data["labels"] == {mid: e.label for mid, e in reg.entries.items()}
     assert data["aliases"] == dict(reg.aliases)
     assert all(modelreg.model(sp, reg).id == mid for sp, mid in data["spellings"].items())   # a served spelling reads as its entry (#677)
-    assert data["prices"] == {mid: e.display_price for mid, e in reg.entries.items() if e.display_price}
+    assert data["prices"] == {mid: e.display_price for mid, e in reg.entries.items() if has_price(e.display_price)}
     assert json.dumps(data, sort_keys=True).replace("</", "<\\/") in OUT.read_text()
     assert set(served_lists()["models"]) == set(reg.entries) | set(reg.aliases)
 
