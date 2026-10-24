@@ -660,7 +660,8 @@ def queue_terminal(n, col, note):   # one comment per terminal entry, through th
     note += run_summary(n)   # the run's summary rides the comment this pass already posts: no other write path
     if dry: return
     (st / "cq").mkdir(exist_ok=True)
-    (st / "cq" / f"{CQ}#{n}-terminal-{os.getpid()}.md").write_text(note)
+    tag = "terminal-closed" if col == "Closed" else "terminal"   # cqflush.sh reads the state again before it posts a Closed one (#777)
+    (st / "cq" / f"{CQ}#{n}-{tag}-{os.getpid()}.md").write_text(note)
     mk.write_text(col + "\n")
 expected = {}   # issue -> (rank, status, why, run_id, run_ts): the column R derived for every card it owns; rule O reads it, never the board
 def door(fn, *a):   # one call through ghcall.sh: (exit code, output). A read is gh_api, a write gh_send (ADR-0277), so this module's own call sites stay as they were

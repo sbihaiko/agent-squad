@@ -9,10 +9,14 @@ G=/usr/bin/grep; P=$T/profiles; B=$T/state; mkdir -p "$P" "$T/bin" "$T/plain" "$
 printf ': "${SG_REPO:=x/alpha}"; : "${SG_OWNER:=x}"; : "${SG_PROJECT:=1}"; : "${SG_CHECKOUT:=%s}"\n' "$T/co" > "$P/alpha.sh"
 cat > "$T/bin/gh" <<'GH'
 #!/bin/bash
+# the issue read reaches gh as REST or as the door's batched graphql: both answer the state in $ISTATE (fail: exit 1)
 all="$*"
 case "$all" in
   *issues/*/comments*) echo "POST $all" >> "$GHLOG"; echo '{"id":1}';;
-  *repos/x/alpha/issues/[0-9]*) echo "READ" >> "$GHLOG"; s=$(cat "$ISTATE"); [ "$s" = fail ] && exit 1; echo "$s";;
+  *graphql*issue\(number:*) echo "READ" >> "$GHLOG"; s=$(cat "$ISTATE"); [ "$s" = fail ] && exit 1
+    S=$(printf '%s' "$s" | tr a-z A-Z)
+    printf 'HTTP/2.0 200 OK\r\n\r\n{"data":{"repository":{"i9":{"number":9,"title":"t","body":"","state":"%s","labels":{"nodes":[]},"blockedBy":{"nodes":[]},"subIssuesSummary":{"total":0,"completed":0},"subIssues":{"nodes":[]},"comments":{"nodes":[]}}}}}' "$S";;
+  *repos/x/alpha/issues/[0-9]*) echo "READ" >> "$GHLOG"; s=$(cat "$ISTATE"); [ "$s" = fail ] && exit 1; printf '{"state":"%s"}' "$s";;
 esac
 GH
 chmod +x "$T/bin/gh"
@@ -40,5 +44,5 @@ echo open > "$T/istate"; f='x__alpha#9-terminal-14.md'; put "$f"
 out=$(flush); $G -q POST "$T/ghlog" && ! $G -q READ "$T/ghlog" && ok "a non-Closed terminal comment is posted with no read" || ko "done: $(cat "$T/ghlog") / $out"
 
 # 5. the janitor names a queued Closed comment with the tag the flush checks
-$G -q 'terminal-closed-' "$d/janitor.py" && ok "the janitor tags a Closed comment terminal-closed" || ko "janitor tag missing"
+$G -q 'terminal-closed' "$d/janitor.py" && ok "the janitor tags a Closed comment terminal-closed" || ko "janitor tag missing"
 rm -rf "$T"; exit $fail
