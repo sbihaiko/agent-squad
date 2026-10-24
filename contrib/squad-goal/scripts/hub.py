@@ -170,7 +170,7 @@ def run_label(r):
 def scan(p):
     """Parse one record.jsonl into fields. Finished runs come from `hist`, unfinished ones are cached by (mtime, size)."""
     p = str(p)
-    if p in hist and "v15" in hist[p]: return hist[p]   # v15 splits a run sub/api on the canonical model id (#791, #793); v14 reads the card's label from the dispatch form too; v10 added the worktree paths a run works in (the load attribution reads them); v11 reads the run issue from request.txt; v12 reads every issue of a dispatch request's CHILD lines; v13 reads the test share a gate counted; v14 reads the card's label from the dispatch form too
+    if p in hist and "v15" in hist[p]: return hist[p]   # v10 added the worktree paths a run works in (the load attribution reads them); v11 reads the run issue from request.txt; v12 reads every issue of a dispatch request's CHILD lines; v13 reads the test share a gate counted; v14 reads the card's label from the dispatch form too; v15 splits a run sub/api on the canonical model id (#791, #793)
     try: st = os.stat(p)
     except OSError: return None
     c = live.get(p)
@@ -1387,8 +1387,9 @@ def ledger_calls():
             rin, rout = rate.get("input"), rate.get("output")
             if isinstance(rin, (int, float)) and isinstance(rout, (int, float)):
                 # cache reads price at the cache rate: the registry's, else CACHE_READ_RATIO of the input rate (#789, #791)
-                rcr = rate.get("cache_read")
-                if not isinstance(rcr, (int, float)): rcr = rin * CACHE_READ_RATIO
+                rcr = rate["cache_read"] if "cache_read" in rate else rin * CACHE_READ_RATIO
+                if rcr is None: rcr = rin   # an explicit null names no discount: a cache read costs the input rate (#795)
+                elif not isinstance(rcr, (int, float)): rcr = rin * CACHE_READ_RATIO
                 spend = ((i * rin) + (cr * rcr) + o * rout) / 1e6
             else:
                 spend, unpriced = 0.0, True
