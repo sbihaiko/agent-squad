@@ -167,10 +167,43 @@ def run_label(r):
     if is_: return run_action(r) + " " + is_ + (f" · on PR #{r['stack']}" if r.get("stack") else "")
     return "run " + str(r.get("id") or "")[-6:]
 
+CLAUDE_PROJECTS = pathlib.Path.home() / ".claude" / "projects"   # where Claude Code keeps each session's transcript, in a folder named for its working directory
+
+def child_transcript_usage(record, kid):
+    """The tokens of one child session, read from its transcript: {raw model: {in, out, cache, spend, calls}}, or {} when it has
+    none (#796). The child works in <run folder>/ws/worktrees_child-<node>, and Claude Code names its transcript folder for that
+    path with every character but a letter or a digit made a dash. A transcript repeats one message on several lines, so each
+    message id counts once. `in` includes the cache reads, as an outcome's tokens_in does; a cache write is fresh input."""
+    cwd = os.path.join(os.path.dirname(os.path.abspath(str(record))), "ws", f"worktrees_child-{kid}")
+    folder = CLAUDE_PROJECTS / re.sub(r"[^A-Za-z0-9]", "-", cwd)
+    msgs = {}
+    try: files = sorted(folder.glob("*.jsonl"))
+    except OSError: return {}
+    for f in files:
+        try: lines = f.read_text(errors="replace").splitlines()
+        except OSError: continue
+        for i, l in enumerate(lines):
+            if '"usage"' not in l: continue
+            try: d = json.loads(l)
+            except Exception: continue
+            m = d.get("message") if isinstance(d, dict) else None
+            if not isinstance(m, dict): continue
+            u, model = m.get("usage"), m.get("model")
+            if not isinstance(u, dict) or not isinstance(model, str) or model.startswith("<"): continue   # "<synthetic>" is no model
+            msgs.setdefault(m.get("id") or f"{f}:{i}", (model, u))
+    out = {}
+    for model, u in msgs.values():
+        fresh = (u.get("input_tokens") or 0) + (u.get("cache_creation_input_tokens") or 0)
+        cr, o = u.get("cache_read_input_tokens") or 0, u.get("output_tokens") or 0
+        spend, _ = _usage_spend(model, fresh, o, cr)
+        x = out.setdefault(model, {"in": 0, "out": 0, "cache": 0, "spend": 0.0, "calls": 0})
+        x["in"] += fresh + cr; x["out"] += o; x["cache"] += cr; x["spend"] += spend; x["calls"] += 1
+    return out
+
 def scan(p):
     """Parse one record.jsonl into fields. Finished runs come from `hist`, unfinished ones are cached by (mtime, size)."""
     p = str(p)
-    if p in hist and "v15" in hist[p]: return hist[p]   # v10 added the worktree paths a run works in (the load attribution reads them); v11 reads the run issue from request.txt; v12 reads every issue of a dispatch request's CHILD lines; v13 reads the test share a gate counted; v14 reads the card's label from the dispatch form too; v15 splits a run sub/api on the canonical model id (#791, #793)
+    if p in hist and "v16" in hist[p]: return hist[p]   # v10 added the worktree paths a run works in (the load attribution reads them); v11 reads the run issue from request.txt; v12 reads every issue of a dispatch request's CHILD lines; v13 reads the test share a gate counted; v14 reads the card's label from the dispatch form too; v15 splits a run sub/api on the canonical model id (#791, #793); v16 counts a child's tokens from its transcript when no outcome reached the record (#796)
     try: st = os.stat(p)
     except OSError: return None
     c = live.get(p)
@@ -227,9 +260,18 @@ def scan(p):
                 h = (d.get("effect") or {}).get("head") if isinstance(d.get("effect"), dict) else None
                 if h: head = h
             elif e == "verdict": ver, reasons, t1, rc = d.get("verdict"), d.get("reasons") or [], ts, d.get("exit_code")
+    # A child whose outcome never reached the record (killed, or still running) spent tokens the record does not carry: its session
+    # transcript does (#796). A child with a recorded outcome is counted from that outcome alone, so no token is counted twice.
+    for kid in sorted(accepted - done_kids):
+        for raw, v in child_transcript_usage(p, kid).items():
+            x = mod.setdefault(raw, {"in": 0, "out": 0, "cache": 0, "spend": 0.0, "calls": 0})
+            for k in ("in", "out", "cache", "calls"): x[k] += v[k]
+            x["spend"] += v["spend"]; spend += v["spend"]
+            if SUBSCRIPTION.match(canon_model(raw)): sub += v["spend"]
+            else: api += v["spend"]
     if has_req: src, why, issues = ("request", None, req_issues) if req_issues else (None, "request-no-issue", set())   # the request is the truth; the transcript never overrides it
     else: src, why = ("transcript" if issues else None), "request-missing"
-    r = {"spend": round(spend, 4), "sub": round(sub, 4), "api": round(api, 4), "mod": mod, "v8": 1, "v9": 1, "v10": 1, "v11": 1, "v12": 1, "v13": 1, "v14": 1, "v15": 1, "t0": t0, "t1": t1, "verdict": ver, "reasons": reasons, "land": land, "issues": sorted(issues, key=int), "issue_src": src, "issue_why": why, "kind": kind, "fix": fix, "stack": stack, "bug": bug, "merge": merge, "head": head, "exit_code": rc, "agents": len(accepted - done_kids), "wts": sorted(wts), "share": share}
+    r = {"spend": round(spend, 4), "sub": round(sub, 4), "api": round(api, 4), "mod": mod, "v8": 1, "v9": 1, "v10": 1, "v11": 1, "v12": 1, "v13": 1, "v14": 1, "v15": 1, "v16": 1, "t0": t0, "t1": t1, "verdict": ver, "reasons": reasons, "land": land, "issues": sorted(issues, key=int), "issue_src": src, "issue_why": why, "kind": kind, "fix": fix, "stack": stack, "bug": bug, "merge": merge, "head": head, "exit_code": rc, "agents": len(accepted - done_kids), "wts": sorted(wts), "share": share}
     r["id"] = rid   # the run folder: the label a run with no issue falls back on
     r["label"] = run_label(r)               # the card's name is computed here, so the page renders a value and holds no rule (ADR-0137)
     if ver is not None:
@@ -1363,6 +1405,19 @@ def canon_model(raw):
 
 CACHE_READ_RATIO = modelreg.CACHE_READ_RATIO   # the one shared ratio (#495, #791); a registry cache_read overrides it per model
 
+def _usage_spend(model, fresh, out, cr):
+    """USD of one count of tokens: the PRICES table first, else the registry's display_price, whose cache reads take its cache
+    rate or else the shared ratio of the input rate (#789, #791, #795). Returns (spend, unpriced); a model neither names counts 0.0.
+    `fresh` is the input that missed the cache, `cr` the cache reads."""
+    spend = priced({"model": model, "tokens_in": fresh + cr, "cache_read": cr, "tokens_out": out, "spend": None})   # None: no PRICES match
+    if spend is not None: return spend, False
+    rate = modelreg.display_price(model) or {}
+    rin, rout = rate.get("input"), rate.get("output")
+    if not (isinstance(rin, (int, float)) and isinstance(rout, (int, float))): return 0.0, True
+    rcr = rate.get("cache_read")   # a null is unknown, priced at the shared ratio: only a number is a rate (#795)
+    if not isinstance(rcr, (int, float)): rcr = rin * CACHE_READ_RATIO
+    return ((fresh * rin) + (cr * rcr) + out * rout) / 1e6, False
+
 def ledger_calls():
     """The review calls of $SG_STATE/token-usage.tsv (review.sh), one dict per line: t0, model (canonical), in (cache reads
     included, as an outcome's tokens_in is), out, cache and spend. Only review.sh writes the ledger, so every line is a
@@ -1379,20 +1434,8 @@ def ledger_calls():
             i, o, cr = int(float(p[3])), int(float(p[4])), int(float(p[5]))
         except (ValueError, OverflowError): continue
         m = canon_model(p[2])
-        call = {"model": m, "tokens_in": i + cr, "cache_read": cr, "tokens_out": o, "spend": None}
-        spend = priced(call)
-        unpriced = False
-        if spend is None:
-            rate = modelreg.display_price(m) or {}
-            rin, rout = rate.get("input"), rate.get("output")
-            if isinstance(rin, (int, float)) and isinstance(rout, (int, float)):
-                # cache reads price at the cache rate: the registry's, else CACHE_READ_RATIO of the input rate (#789, #791)
-                rcr = rate.get("cache_read")   # a null is unknown, priced at the shared ratio: only a number is a rate (#795)
-                if not isinstance(rcr, (int, float)): rcr = rin * CACHE_READ_RATIO
-                spend = ((i * rin) + (cr * rcr) + o * rout) / 1e6
-            else:
-                spend, unpriced = 0.0, True
-                log_once(f"hub: no price for {m}, its review calls count 0.0 in the Spend totals")
+        spend, unpriced = _usage_spend(m, i, o, cr)
+        if unpriced: log_once(f"hub: no price for {m}, its review calls count 0.0 in the Spend totals")
         # a 7th field marks a call with no usage count (tokens.py): it is counted as uncounted, never as a measure (#789)
         uncounted = len(p) > 6 and bool(p[6].strip())
         out.append({"t0": t0, "model": m, "in": i + cr, "out": o, "cache": cr, "spend": round(spend, 4), "unpriced": unpriced, "uncounted": uncounted})
