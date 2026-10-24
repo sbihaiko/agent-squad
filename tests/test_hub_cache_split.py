@@ -127,11 +127,28 @@ def test_every_non_claude_model_names_its_cache_read():
     assert missing == [], missing
 
 
-def test_a_null_cache_read_is_no_discount(hub, state, monkeypatch):
-    """#795: an explicit null cache_read prices cache reads at the full input rate, not at the 0.1 ratio."""
+def test_a_null_cache_read_is_unknown_and_priced_at_the_ratio(hub, state, monkeypatch):
+    """#795: an explicit null cache_read is unknown, not no discount: cache reads price at the shared ratio, as before."""
     monkeypatch.setattr(hub.modelreg, "display_price", lambda *a, **k: {"input": 10.0, "output": 0.0, "cache_read": None, "currency": "USD", "per": "mtok"})
     _ledger(state, ("review:c5", "gemini-3.8-flash", 0, 0, 1000000))
-    assert hub.ledger_calls()[0]["spend"] == pytest.approx(10.0)
+    assert hub.ledger_calls()[0]["spend"] == pytest.approx(10.0 * hub.CACHE_READ_RATIO)
+
+
+def test_every_priced_model_names_its_hub_hit_rate(hub):
+    """#795: a model with a hub PRICES row names a non-null cache_read in the registry, equal to that row's cache-hit rate."""
+    reg = json.loads((ROOT / "config/models.registry.json").read_text())
+    checked, bad = [], []
+    for m in reg["models"]:
+        rows = [(rx, p) for rx, p in hub.PRICES if rx.search(m["id"])]
+        if not rows:
+            continue
+        hit = rows[0][1][0]
+        checked.append(m["id"])
+        got = (m.get("display_price") or {}).get("cache_read")
+        if got != hit:
+            bad.append((m["id"], got, hit))
+    assert checked, "no registry model matches a PRICES row"
+    assert bad == [], bad
 
 
 def test_the_scan_marker_comment_lists_each_version_once_in_order(hub):
