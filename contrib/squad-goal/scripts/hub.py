@@ -1095,7 +1095,9 @@ def _newest_mtime(*paths):
     return max(ts) if ts else None
 
 def _loop_on(pid_file=None):
-    """True while the supervisor's pid file (watchd.sh writes $SG_STATE/watchd.pid) names a live process: a signal 0, never a `ps`."""
+    """True while the supervisor's pid file (watchd.sh writes $SG_STATE/watchd.pid) names a live process: a signal 0, never a `ps`.
+    `auto/off` pauses dispatch, so it reads off even while that pid is live (#788)."""
+    if (STATE / "auto" / "off").exists(): return False
     try: pid = int(_read(pid_file or STATE / "watchd.pid").split()[0])
     except (ValueError, IndexError): return False
     try: os.kill(pid, 0)
