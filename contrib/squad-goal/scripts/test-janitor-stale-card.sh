@@ -15,6 +15,7 @@
 #  (J) a GitHub refusal is not an answer: nothing is touched, and the next pass (the API back) releases the card;
 #  (K) #771: a failed run left active-runs before rule O released it, and rule R put its card back in Todo: the marker is
 #      dropped with no board write, so the frontier dispatches the issue again instead of reading it as claimed for good.
+#  (L) #794: a dangling marker (its file gone) is no live marker: the pass never stats or reads it, and its card is released.
 # Stubbed gh/board; a temp state dir, so the live watch.log, markers and board are never read or written.
 # usage: bash test-janitor-stale-card.sh [janitor.py]
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
@@ -33,7 +34,7 @@ case "$a" in
   *repos/x/y/compare/*) echo ahead;;
   *projectsV2/4/fields*) echo FID4;;
   *projectsV2/1/fields*) echo FID1;;
-  *projectsV2/4/items*) for n in 1007; do printf '%s\tCode Complete\n' "$n"; done; printf '1012\tTodo\n'; for n in 1001 1002 1003 1004 1005 1006 1008 1009 1010 1011; do printf '%s\tIn Progress\n' "$n"; done;;   # one read, every card
+  *projectsV2/4/items*) for n in 1007; do printf '%s\tCode Complete\n' "$n"; done; printf '1012\tTodo\n'; for n in 1001 1002 1003 1004 1005 1006 1008 1009 1010 1011 1013; do printf '%s\tIn Progress\n' "$n"; done;;   # one read, every card
   *projectsV2/1/items*) for n in 1003; do printf '%s\tDoing\n' "$n"; done;;
   *issues/1010*) if [ -e "TMPDIR/refuse" ]; then echo "API rate limit exceeded for user"; else echo open; fi;;
   *issues/10*) echo open;;
@@ -65,6 +66,8 @@ mk run-landed 1009; printf '{"event": "spawn_accepted", "child": "c1", "definiti
 mark disp-1012 run-gone
 # J: the API refuses the first pass
 mark disp-1010 run-gone; touch "$T/refuse"
+# L: a dangling marker (its target is gone): rule Q's stat raises unless the pass treats it as no live marker (#794)
+ln -s "$T/st/auto/gone" "$T/st/auto/disp-1013"
 pass() { SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$T/st" JANITOR_NOTIFY="$T/notify" python3 -I "$T/s/janitor.py" 2>&1; }
 old "$T/co/runs/run-zombie" "$T/co/runs/run-landed"; touch -t 202001010000 "$T/co/runs/run-zombie/request.txt" "$T/co/runs/run-landed/request.txt"
 o=$(pass); bc() { cat "$T/board.calls" 2>/dev/null; }
@@ -82,6 +85,7 @@ o=$(pass); bc() { cat "$T/board.calls" 2>/dev/null; }
 /usr/bin/grep -q '^o 4 Code Complete 1009$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -q 'Done 1009' "$T/board.calls" 2>/dev/null && ok "I: a run that landed is reconciled to Code Complete, never Done" || ko "I #1009 not reconciled to Code Complete: $(bc)"
 [ -e "$T/st/auto/disp-1010" ] && ! /usr/bin/grep -q ' 1010$' "$T/board.calls" 2>/dev/null && ok "J: a refused read touches nothing" || ko "J #1010 touched on a refusal: $(bc)"
 [ ! -e "$T/st/auto/disp-1012" ] && ! /usr/bin/grep -q ' 1012$' "$T/board.calls" 2>/dev/null && ok "K: a Todo card behind a marker no run holds is released, the card untouched (#771)" || ko "K #1012 stays claimed: $(bc) $o"
+[ ! -L "$T/st/auto/disp-1013" ] && /usr/bin/grep -q '^o 4 Todo 1013$' "$T/board.calls" 2>/dev/null && ! grep -q Traceback <<< "$o" && ok "L: a dangling marker is dropped, its card released, the pass reaches the card pass (#794)" || ko "L #1013: $(bc) $o"
 rm -f "$T/refuse"; o=$(pass)
 /usr/bin/grep -q '^o 4 Todo 1010$' "$T/board.calls" 2>/dev/null && [ ! -e "$T/st/auto/disp-1010" ] && ok "J: the next pass, API back, releases it (a refusal leaves no once-only marker behind)" || ko "J #1010 not released after the refusal: $(bc) $o"
 n=$(/usr/bin/grep -c ' 1001$' "$T/board.calls"); [ "$n" = 1 ] && ok "the card of #1001 is moved once" || ko "#1001 moved $n times"
