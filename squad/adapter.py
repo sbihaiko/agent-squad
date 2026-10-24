@@ -62,7 +62,7 @@ class CallResult:
     stop_reason: str | None = None   # "stall_cap" | "spend_cap" | "output_cap" | None
     subagents: int = 0               # diagnostic only: a subagent is never a node
     session_id: str | None = None
-    usage: dict | None = None        # {"tokens_in", "tokens_out", optional "cache_read", "cache_write"} when the result reports them; None means unknown, never zero
+    usage: dict | None = None        # {"tokens_in", "tokens_out", optional "cache_read", "cache_write", "cache_estimated"} when the result reports them (cache_estimated: the cache_read is an estimate, #783); None means unknown, never zero
     ended: dict | None = None        # {"subtype", "is_error", "last"}: how the session ended and its last text, kept on an artifact_missing outcome
     spend_source: str | None = None  # "price_table" | "total_cost_usd": where `spend` came from (squad/prices.py); None when spend is unknown
 

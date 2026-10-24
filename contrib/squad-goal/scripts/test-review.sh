@@ -187,6 +187,15 @@ out=$(GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); 
 [ ! -s "$CLAUDE_ARGS" ] && jq -e '.thinking.type=="disabled" and (has("tools")|not) and .model=="nt"' "$CURL_BODY" >/dev/null 2>&1 && ok "no tools: one direct call, thinking off, no tool" || ko "no tools: not a direct no-thinking call: args=$(cat "$CLAUDE_ARGS") body=$(head -c 200 "$CURL_BODY" 2>/dev/null)"
 jq -r '.messages[0].content' "$CURL_BODY" 2>/dev/null | /usr/bin/grep -q 'no tools' && ! jq -r '.messages[0].content' "$CURL_BODY" | /usr/bin/grep -q 'git show' && ok "no tools: the prompt judges from its own text" || ko "no tools: the prompt still sends it to read code"
 [ $rc = 0 ] && head -1 "$T/st/review-fix_1-x.md" | /usr/bin/grep -q 'VERDICT: APPROVE' && /usr/bin/grep -q 'claude:nt	900	40' "$T/st/token-usage.tsv" && ok "no tools: the answer is the review, and its tokens are counted" || ko "no tools: answer not kept: rc=$rc $(cat "$T/st/review-fix_1-x.md" 2>/dev/null) $(tail -1 "$T/st/token-usage.tsv")"
+# #783: a gateway that names its cache read another way (OpenAI prompt_tokens_details.cached_tokens, input_tokens_details,
+# cache_read_tokens, cached_tokens) still reaches the ledger's cache_read field, as sdk_adapter.usage_of reads it.
+for u in '"prompt_tokens_details":{"cached_tokens":77}' '"input_tokens_details":{"cached_tokens":77}' '"cache_read_tokens":77' '"cached_tokens":77'; do
+  printf '{"type":"message","stop_reason":"end_turn","content":[{"type":"text","text":"VERDICT: APPROVE"}],"usage":{"input_tokens":900,"output_tokens":40,%s}}' "$u" > "$CURL_REPLY"
+  rm -f "$T/st/review-fix_1-x".*; : > "$T/st/token-usage.tsv"
+  GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 >/dev/null 2>&1
+  /usr/bin/grep -q 'claude:nt	900	40	77' "$T/st/token-usage.tsv" && ok "cache read from ${u%%:*} reaches the ledger (#783)" || ko "cache read ${u%%:*} lost: $(tail -1 "$T/st/token-usage.tsv")"
+done
+printf '{"type":"message","stop_reason":"end_turn","content":[{"type":"text","text":"VERDICT: APPROVE"}],"usage":{"input_tokens":900,"output_tokens":40}}' > "$CURL_REPLY"
 # #643: a chain id with a context suffix (claude:nt[1m]) matches its per-model settings written without it (claude:nt).
 printf '{"review_models":["claude:nt[1m]"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
 rm -f "$T/st/review-fix_1-x".* "$CURL_BODY"; : > "$CLAUDE_ARGS"
