@@ -20,11 +20,28 @@ PROBE_DEADLINE_S = 10       # the cap of each read-only git call that decides wh
 _REQUEST = re.compile(r"\n\n(?:Work|Task):\n(.*)\Z", re.S)
 
 
+_NAMED = (re.compile(r"\bGitHub issue #(\d+)"), re.compile(r"\bRefs #(\d+)"))
+
+
+def named_issue(text):
+    """The issue a text was dispatched for: its `GitHub issue #<n>` header, else its `Refs #<n>` line, else None.
+    Prose may name another issue first (a blocker, a waiter), so a bare `#<n>` is never read here (#613, #775)."""
+    for pat in _NAMED:
+        m = pat.search(text) if isinstance(text, str) else None
+        if m:
+            return int(m.group(1))
+    return None
+
+
 def issue_of(doc):
-    """The issue a run names: the first `#<n>` in the request `with_request` appended to the entry agent, else None."""
+    """The issue a run names in the request `with_request` appended to the entry agent: the dispatched issue
+    (`named_issue`), else the first `#<n>` there, else None."""
     for n in doc.get("nodes", []):
         m = _REQUEST.search(n.get("instructions") or "")
         if m:
+            named = named_issue(m.group(1))
+            if named is not None:
+                return named
             found = re.search(r"#(\d+)", m.group(1))
             return int(found.group(1)) if found else None
     return None
