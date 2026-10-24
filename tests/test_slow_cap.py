@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -174,6 +175,19 @@ def test_a_call_over_the_cap_fails_in_both_modes(tmp_path, mode):
     assert "over the 0.5 s cap" in r.stdout, r.stdout
 
 
+@pytest.mark.slow(reason="starts a nested pytest subprocess")
+@pytest.mark.heavy
+def test_a_nested_run_of_a_trivial_test_is_cheap(tmp_path):
+    """A nested run of one empty test does no work of its own: its wall time is interpreter start and pytest import.
+    Left to load every installed plugin (deepeval alone adds seconds), it crept to the inner deadline under load (#797).
+    The nested run names only the plugins it needs, so a trivial run finishes in a few seconds even on a loaded machine."""
+    start = time.monotonic()
+    r = run_inner(tmp_path, "def test_fast():\n    pass\n")
+    elapsed = time.monotonic() - start
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert elapsed < 3.0, f"a nested run of one empty test took {elapsed:.1f} s"
+
+
 NESTED_CHECKS = (
     test_a_test_over_the_cap_fails_and_is_named,
     test_a_test_under_the_cap_passes,
@@ -190,6 +204,7 @@ NESTED_CHECKS = (
     test_under_xdist_an_unmarked_call_at_the_heavy_line_is_reported_not_failed,
     test_in_a_serial_run_an_unmarked_call_at_the_heavy_line_fails,
     test_a_call_over_the_cap_fails_in_both_modes,
+    test_a_nested_run_of_a_trivial_test_is_cheap,
 )
 
 
@@ -230,4 +245,5 @@ def test_nested_pytest_checks_explain_their_slow_marker():
         "test_under_xdist_an_unmarked_call_at_the_heavy_line_is_reported_not_failed": "starts a nested pytest subprocess",
         "test_in_a_serial_run_an_unmarked_call_at_the_heavy_line_fails": "starts a nested pytest subprocess",
         "test_a_call_over_the_cap_fails_in_both_modes": "starts a nested pytest subprocess",
+        "test_a_nested_run_of_a_trivial_test_is_cheap": "starts a nested pytest subprocess",
     }
