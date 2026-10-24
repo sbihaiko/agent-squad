@@ -11,25 +11,29 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def run_inner(body, ini=(), timeout=60, args=()):
+def run_inner(body, ini=(), timeout=60, args=(), keep=False):
     """One nested pytest run. `timeout` is the caller's own bound: a case about a test that never ends must not end the suite
     it runs in, so the nested run is cut there and the case fails on the exception instead of parking the worker.
 
     The nested run is cheap by design (#797): its own directory under /tmp, a fresh one per run, with no conftest above it
     and no plugin that is not named. pytest walks every ancestor of a collected path, and the macOS TMPDIR above
-    the test holds over 100,000 entries, so a run there took 25 s alone."""
+    the test holds over 100,000 entries, so a run there took 25 s alone. `keep` leaves the work dir for the caller to
+    inspect and remove; the caller owns that removal."""
     work = Path(tempfile.mkdtemp(prefix="slowcap-", dir="/tmp")).resolve()
     try:
         (work / "test_inner.py").write_text(body)
         env = {**os.environ, "PYTHONPATH": str(ROOT)}
         opts = [x for i in ini for x in ("-o", i)]
-        return subprocess.run(
+        result = subprocess.run(
             [sys.executable, "-m", "pytest", "-p", "no:deepeval", "-p", "no:cacheprovider", "-p", "tests.slowcap",
-             "-o", "slow_cap_seconds=0.2", *opts, *args, "-c", "/dev/null", "--rootdir", str(work), "test_inner.py"],
+             "-o", "slow_cap_seconds=0.2", *opts, *args, "--confcutdir", str(work), "-c", "/dev/null", "--rootdir", str(work), "test_inner.py"],
             cwd=work, env=env, capture_output=True, text=True, timeout=timeout,
         )
+        result.workdir = str(work)
+        return result
     finally:
-        shutil.rmtree(work, ignore_errors=True)
+        if not keep:
+            shutil.rmtree(work, ignore_errors=True)
 
 
 SLEEP = "import time\n"
@@ -180,24 +184,34 @@ def test_in_a_serial_run_an_unmarked_call_at_the_heavy_line_fails():
 @pytest.mark.slow(reason="starts a nested pytest subprocess")
 @pytest.mark.parametrize("mode", [("-p", "xdist", "-n", "1"), ("-p", "no:xdist")], ids=["xdist", "serial"])
 def test_a_call_over_the_cap_fails_in_both_modes(mode):
-    r = run_inner(UNMARKED_SLOW, ini=("slow_cap_seconds=0.5", "heavy_cap_seconds=0.3"), args=mode)
+    # A 1.0 s call under the worst contention (factor 4) still reads 0.25 s, so a 0.2 s cap always names it.
+    r = run_inner(UNMARKED_SLOW, ini=("slow_cap_seconds=0.2", "heavy_cap_seconds=0.1"), args=mode)
     assert r.returncode == 1, r.stdout + r.stderr
-    assert "over the 0.5 s cap" in r.stdout, r.stdout
+    assert "over the 0.2 s cap" in r.stdout, r.stdout
 
 
 @pytest.mark.slow(reason="starts a nested pytest subprocess")
 @pytest.mark.heavy
 def test_a_nested_run_of_a_trivial_test_is_cheap():
     """A nested run of one empty test is set up for speed, not timed: its work dir is under /tmp, never TMPDIR (#797),
-    and its loaded plugins are named, with no deepeval and no cacheprovider. Both are read from the run's own header; no header means no third-party plugin."""
-    r = run_inner("def test_fast():\n    pass\n")
-    assert r.returncode == 0, r.stdout + r.stderr
+    and its loaded plugins are named, with no deepeval. The plugin list is read from the run's own header; no header means no third-party plugin.
+    No .pytest_cache is left in its work dir, which is kept until this check ends (#797)."""
+    r = run_inner("def test_fast():\n    pass\n", keep=True)
+    try:
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert not os.path.exists(os.path.join(r.workdir, ".pytest_cache")), os.listdir(r.workdir)
+        _check_cheap_header(r)
+    finally:
+        shutil.rmtree(r.workdir, ignore_errors=True)
+
+
+def _check_cheap_header(r):
     rootdir = next((ln.split(":", 1)[1].strip() for ln in r.stdout.splitlines() if ln.startswith("rootdir:")), None)
     assert rootdir is not None, r.stdout
     assert os.path.realpath(rootdir).startswith(os.path.realpath("/tmp") + os.sep), rootdir
     # pytest prints no "plugins:" header when no third-party plugin loaded; that is an empty list, not a failure.
     plugins = next((ln.split(":", 1)[1] for ln in r.stdout.splitlines() if ln.startswith("plugins:")), "")
-    assert "deepeval" not in plugins and "cacheprovider" not in plugins, plugins
+    assert "deepeval" not in plugins, plugins
 
 
 NESTED_CHECKS = (
