@@ -265,7 +265,7 @@ class Children:
             return self.outcome(name, "fail", ["cancelled"], None, {"cap": res.amount, "elapsed": el}, entry)
 
         out = await session.run_call(
-            lambda: e.dispatch.held.pop(name, None) or e.budget.hold(d["spend"]),   # a resume checks the funding again
+            lambda: e.dispatch.held.pop(name, None) or e.budget.hold(d["spend"], d.get("spend_tokens")),   # a resume checks the funding again
             dl, lambda res: self.request(name, d, res, ws, dl, model, entry, review), adapter=e.adapter, record=e.record, budget=e.budget, clock=e.clock,
             wall=e.wall, prepare=(lambda res: self.prepare(name, d, dl)) if first else None,
             on_deadline=hit_deadline, on_cancel=cancelled)

@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 import anyio
 
 from squad.adapter import AdapterError, MessageOverCeiling
+from squad.budget import measured_tokens
 
 # A reason the model writes about itself is a claim, not an engine fact: the contract tells a child to answer `out_of_budget` when it
 # gives up, and it did so at $0.36 of a $1.50 cap. The engine's own cap reasons (CAP_REASON) stay apart from it.
@@ -208,11 +209,11 @@ async def run_call(source, deadline, make_request, *, adapter, record, budget, c
     elapsed = clock() - t0
     if "err" in box:
         if getattr(box["err"], "served", True):     # the work it did before the refusal is spent; no data leaves the grant whole
-            budget.settle(res, getattr(box["err"], "spend", None))
+            budget.settle(res, getattr(box["err"], "spend", None), measured_tokens(getattr(box["err"], "usage", None)))
         else:               # refused before one message: nothing was spent, so the grant goes back (#494)
             budget.release(res)
         return CallOutcome("adapter_error", res, error=box["err"], elapsed=elapsed)
-    budget.settle(res, box["r"].spend)
+    budget.settle(res, box["r"].spend, measured_tokens(box["r"].usage))
     return CallOutcome("result", res, result=box["r"], elapsed=elapsed)
 
 

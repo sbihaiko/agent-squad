@@ -36,7 +36,7 @@ if [ -n "${SG_OWNER:-}" ] && [ -n "${SG_PROJECT:-}" ] && [ "${SG_REPO:-}" != own
   bc=${SG_PF_BOARD_CHECK:-python3 $here/board_define.py}
   out=$(SG_STATE="$scratch/board" $bc --definition "$here/board-definition.json" --check "$SG_OWNER" "$SG_PROJECT" 2>&1); rc=$?
   case $rc in 0) ;; 1) gap "board vocabulary: $(printf '%s\n' "$out" | /usr/bin/grep -vE '^(read:|dry run)' | tr '\n' ';' | sed 's/;$//')";;
-    *) gap "board vocabulary unreadable: exit $rc: $(printf '%s' "$out" | tail -n 1)";; esac
+    *) gap "board vocabulary unreadable: $(printf '%s\n' "$out" | tail -n 1 | sed 's/^board_define\.py: board unreadable: //')";; esac
   if [ -n "${SG_FRONTIER_LABEL:-}" ]; then
     out=$(cd "${SG_CHECKOUT:-.}" 2>/dev/null && SG_PROFILE="$name" AF_DRY=1 SG_STATE="$scratch/frontier" bash ${SG_PF_FRONTIER:-$here/autofrontier.sh} 2>&1); rc=$?
     [ "$rc" = 0 ] || gap "dry frontier pass: exit $rc: $(printf '%s' "$out" | tail -n 1)"

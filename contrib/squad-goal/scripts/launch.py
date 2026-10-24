@@ -128,8 +128,8 @@ if off_ids:
                  "or change the model in the workflow graph, or set SG_ALLOW_MODEL=1 for a deliberate exception.")
 
 # The router only asks a child for a model in the dispatch envelope, and a request outside it is refused whole, so the router
-# takes an allowed id and the "Coding model:" line loses in silence (#433). Say so by name; the run still starts, and the owner
-# decides whether the envelope or the chain changes.
+# takes an allowed id and the "Coding model:" line loses in silence (#433). Say so by name. A blocked fallback only warns; a
+# blocked first coding model refuses the start (#778), since the run would spend on a model the coding chain does not name.
 if primary:
     import importlib.util   # the shared envelope module sits beside this script, as hub.py's does (#436)
     _spec = importlib.util.spec_from_file_location("router_envelope", here / "router_envelope.py")
@@ -140,6 +140,10 @@ if primary:
         print(f"warning: {_m} is not in the router envelope (allow.models of the dispatch node: {', '.join(_env)}); the router cannot request it, "
               + ("so the child runs an allowed model instead of the Coding model line" if _m == primary else "so this fallback is never requested")
               + ". Add it to the dispatch node's `allow.models` in the workflow graph, or change the coding chain.", file=sys.stderr)
+    if primary in router_envelope.envelope_blocked([primary], _env) and not os.environ.get("SG_ALLOW_MODEL"):
+        sys.exit(f"refused: the first coding model {primary} is not in the router envelope, so the router would run another model. "
+                 "Add it to the dispatch node's `allow.models` in the workflow graph, use an envelope of `allow.kinds`, change the coding chain, "
+                 "or set SG_ALLOW_MODEL=1 for a deliberate exception.")
 
 co = os.environ.get("SG_CHECKOUT")
 if co and pathlib.Path(co).resolve() != cwd and not os.environ.get("SG_ALLOW_OTHER_CWD"):

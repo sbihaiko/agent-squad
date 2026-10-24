@@ -57,7 +57,7 @@ class Engine:
         self.project = project or {}    # {record: {path, sha256}, limits: {...}}: the project settings file
         self.limits = self.project.get("limits", {})
         self.eff = Effective(self.nodes, self.limits)
-        self.budget = Budget(self.run_cfg["spend_cap"])
+        self.budget = Budget(self.run_cfg["spend_cap"], graph.doc["run"].get("spend_cap_tokens"))
         self.facts = FactStore(graph.doc["facts"], self.nodes, self.run_id, clock=wall)
         self.artifacts = ArtifactStore(self.run_dir / "artifacts")
         self.entries = {}

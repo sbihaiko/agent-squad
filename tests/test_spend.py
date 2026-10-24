@@ -172,3 +172,45 @@ async def test_an_output_cap_stop_is_a_fail_with_the_reason_node_output_cap_and_
     v = await eng.run()
     out = [e for e in record.read(tmp_path / "record.jsonl") if e["event"] == "outcome" and e["node"] == "a"][0]
     assert out["outcome"] == "fail" and out["reasons"] == ["node_output_cap"] and out["spend"] == 0.05 and v.verdict == "failed"
+
+
+# #780: a cap in tokens. Tokens are input plus output, as the record measures them; the dollar form stays valid.
+def test_a_token_cap_never_starts_an_entry_it_cannot_fund():
+    b = Budget(10.0, tokens=1000)
+    r1 = b.reserve(4.0, 0.01, tokens=600)
+    assert r1.tokens == 600
+    r2 = b.reserve(4.0, 0.01, tokens=600)
+    assert r2.tokens == 400                         # the grant never exceeds the token remainder
+    assert b.reserve(1.0, 0.01, tokens=600) is None
+    b.settle(r1, 0.1, tokens=700)
+    b.settle(r2, None)                              # unknown tokens keep their grant reserved
+    assert b.run_tokens == 700 and b.available_tokens() == 1000 - 700 - 400
+    assert b.hold(1.0, tokens=1) is None
+
+
+def test_the_dollar_form_alone_keeps_tokens_uncapped():
+    b = Budget(1.0)
+    r = b.reserve(0.5, 0.01, tokens=600)
+    b.settle(r, 0.2, tokens=10 ** 9)
+    assert b.available() == pytest.approx(0.8) and b.reserve(0.5, 0.01) is not None
+
+
+async def test_a_run_token_cap_stops_the_next_entry_after_measured_tokens(tmp_path):
+    d = doc([agent("a", output_key="x"), agent("b", output_key="y", next={"fail": "exit:fail"})], ["a", "b"])
+    d["run"]["spend_cap_tokens"] = 1000
+    eng = run_engine(d, {"a": {"output": {"x": 1}, "spend": 0.1, "usage": {"tokens_in": 600, "tokens_out": 500}},
+                         "b": {"output": {"y": 1}, "spend": 0.1}}, tmp_path)
+    await eng.run()
+    b = outs(tmp_path, "b")[0]
+    assert b["outcome"] == "fail" and b["reasons"] == ["run_spend_cap"]
+    assert eng.budget.run_tokens == 1100
+
+
+def test_a_token_cap_that_is_not_a_positive_integer_is_refused_at_load():
+    d = five()
+    d["run"]["spend_cap_tokens"] = 0
+    assert any("spend_cap_tokens" in str(e) for e in validate(d))
+    d = five()
+    n = next(n for n in d["nodes"] if n["kind"] == "agent")
+    n["budget"]["spend"]["max_tokens"] = -5
+    assert any("max_tokens" in str(e) for e in validate(d))

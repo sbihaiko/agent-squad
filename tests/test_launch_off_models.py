@@ -100,7 +100,7 @@ def test_the_workflow_the_run_names_is_the_one_checked(tmp_path):
 
 @pytest.mark.heavy
 def test_a_graph_on_models_that_are_on_starts(tmp_path):
-    r, runs = launch(tmp_path, graph(router="haiku", allow=("haiku",)), off=OFF)
+    r, runs = launch(tmp_path, graph(router="haiku", allow=("haiku", "test-model")), off=OFF)
     assert r.returncode == 0, r.stdout + r.stderr
     assert runs
 
@@ -152,7 +152,7 @@ def test_a_dispatch_whose_first_model_is_outside_its_window_starts_on_the_next(t
     """#522: the envelope led with DeepSeek, whose window is 07-19, so no run started all night. The request names the first
     open coding model (mkreq.sh) and the router takes it (#433): a closed first model with an open one after it is a warning."""
     hours = {"review_models": {"claude:claude-opus-5-5": _window(1)}}
-    r, runs = launch(tmp_path, graph(router="haiku", allow=("opus", "haiku")), hours=hours)
+    r, runs = launch(tmp_path, graph(router="haiku", allow=("opus", "haiku", "sonnet")), hours=hours)
     out = r.stdout + r.stderr
     assert r.returncode == 0, out
     assert runs
@@ -162,7 +162,7 @@ def test_a_dispatch_whose_first_model_is_outside_its_window_starts_on_the_next(t
 @pytest.mark.heavy
 def test_a_node_model_inside_its_window_starts(tmp_path):
     hours = {"review_models": {"claude:claude-opus-5-5": _window(0)}}
-    r, runs = launch(tmp_path, graph(router="opus", allow=("haiku",)), hours=hours)
+    r, runs = launch(tmp_path, graph(router="opus", allow=("haiku", "sonnet")), hours=hours)
     assert r.returncode == 0, r.stdout + r.stderr
     assert runs
 

@@ -170,7 +170,11 @@ def main(argv):
             raise
         print("board_define.py: SG_STATE is not set; source env.sh or set SG_STATE to the loop's state directory", file=sys.stderr)
         return 2
-    fields = json.loads(binding.api(f"{binding.base}/fields?per_page=100"))   # the one read
+    try:
+        fields = json.loads(binding.api(f"{binding.base}/fields?per_page=100"))   # the one read
+    except RuntimeError as e:   # a refused read (rate limit, auth): one line, never a traceback (#781)
+        print(f"board_define.py: board unreadable: {' '.join(str(e).split())}", file=sys.stderr)
+        return 2
     if a.migrate: return migrate(binding, status_field(fields), a.apply)
     if a.contract: return contract(binding, status_field(fields), definition, a.apply)
     rows = diff(definition, snapshot(fields))

@@ -96,7 +96,7 @@ class Dispatch:
                                             default_effort=getattr(self.e.adapter, "extra_options", {}).get("effort"))
         if not errs:
             errs += self.resolve_after(req, parent, pentry, req_ev)
-        res = None if errs else self.e.budget.hold(req["spend"])
+        res = None if errs else self.e.budget.hold(req["spend"], req.get("spend_tokens"))
         if not errs and res is None:
             errs = ["spend_over_remainder"]
         if errs:
@@ -255,7 +255,7 @@ class Dispatch:
             standing = None
             fund, rec = None, None if reading else next((x for x in e.record.events if x["event"] == "review_round" and x["node"] == name and x["round"] == n), None)
             if rec is None:
-                fund = e.budget.hold(self.children[name]["definition"]["spend"])
+                fund = e.budget.hold(self.children[name]["definition"]["spend"], self.children[name]["definition"].get("spend_tokens"))
                 try:
                     if reading:
                         review = reading

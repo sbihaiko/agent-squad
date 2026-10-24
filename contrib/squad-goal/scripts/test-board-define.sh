@@ -113,4 +113,10 @@ rm -f "$T/graphql.in"; o=$(run --check --apply o 4 2>&1); rc=$?
 o=$(env -u SG_STATE PATH="$T/bin:$PATH" python3 "$T/board_define.py" --definition "$T/board.json" o 4 2>&1); rc=$?
 [ "$rc" -eq 2 ] && grep -q "SG_STATE is not set" <<<"$o" && ! grep -q Traceback <<<"$o" && ok "no SG_STATE is named, not a KeyError" || ko "no SG_STATE: exit $rc: $o"
 
+# #781: a refused read (rate limit) exits non-zero in one line, never a RuntimeError traceback
+mkdir -p "$T/rbin"; printf '#!/bin/bash\necho "gh: API rate limit exceeded" >&2; exit 1\n' > "$T/rbin/gh"; chmod +x "$T/rbin/gh"
+o=$(PATH="$T/rbin:$PATH" SG_STATE="$T/st2" SG_BOARD_READ_BACKOFF=0 python3 "$T/board_define.py" --definition "$T/board.json" --check o 4 2>&1); rc=$?
+[ "$rc" -ge 2 ] && [ "$(printf '%s\n' "$o" | wc -l | tr -d ' ')" = 1 ] && grep -q "rate limit exceeded" <<<"$o" && ! grep -q Traceback <<<"$o" \
+  && ok "a refused read is one line, not a traceback" || ko "refused read: exit $rc: $o"
+
 rm -rf "$T"; [ "$fail" -eq 0 ] && echo "TDD GREEN: board_define" || exit 1

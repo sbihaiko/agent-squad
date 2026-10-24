@@ -125,6 +125,11 @@
         "max": {
           "type": "number",
           "exclusiveMinimum": 0
+        },
+        "max_tokens": {
+          "description": "Token cap of one call: input plus output tokens, as the record measures them. Absent means no token cap.",
+          "type": "integer",
+          "minimum": 1
         }
       }
     },
@@ -173,6 +178,11 @@
         "spend_cap": {
           "type": "number",
           "exclusiveMinimum": 0
+        },
+        "spend_cap_tokens": {
+          "description": "Token cap of the run: input plus output tokens, as the record measures them. Absent means no token cap; the dollar cap stays.",
+          "type": "integer",
+          "minimum": 1
         }
       }
     },
