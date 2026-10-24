@@ -653,6 +653,16 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
   # means: Closed on the shipped vocabulary, which has no Done (#468), Done otherwise. A refused write is named, never dropped. Only a
   # close the API accepted queues the comment, writes the ledger row and moves the card: a close that fails leaves the issue
   # open, and every one of those three would claim a delivery that did not happen. The close repeats once, as the push does.
+  # A wave closes only the issues its run was dispatched for (#775). A `Refs #N` outside the run's dispatch set (an engine
+  # commit that took the first #N of the issue's prose) is reported here and in wave-outside.tsv, which the spec cascade
+  # reads, and that issue is never closed. A run whose record names no issue keeps the old rule: every `Refs #N` closes.
+  local dset kept="" n2; dset=" $(run_issues "$rd" | tr '\n' ' ') "
+  if [ -n "${dset// /}" ]; then
+    for n2 in $issues; do case "$dset" in *" $n2 "*) kept="${kept:+$kept }$n2";; *)
+      echo "WAVE-NOTE #$n2: $w names it (Refs #$n2) outside the dispatch set of run $run; reported, not closed"
+      printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$run" "$n2" "$w" >> "$SG_STATE/wave-outside.tsv";; esac; done
+    issues=$kept
+  fi
   deliver "$run" "$w" "$sha" "$issues" || return 1
   local named=""; for n in $issues; do named="${named:+$named, }#$n"; done
   echo "WAVE $w $sha landed in $base (${named:-no issue named: the wave carries no Refs})"
