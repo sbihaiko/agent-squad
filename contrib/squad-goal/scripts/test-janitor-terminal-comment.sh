@@ -33,18 +33,20 @@ case "$a" in
   *--include*issues/2203/events*) echo '[{"event":"labeled","label":{"name":"bug"},"actor":{"login":"x"}},{"event":"closed","actor":{"login":"owner1"},"state_reason":"not_planned"}]';;
   *--include*issues/2208/events*) echo '[{"event":"closed","actor":{"login":"owner1"},"state_reason":"not_planned"}]';;
   *--include*issues/2208/comments*) echo '[]';;
+  *--include*issues/2209/comments*) echo '[]';;
+  *--include*issues/2209/events*) echo '[{"event":"closed","actor":{"login":"sbihaiko"}},{"event":"reopened","actor":{"login":"sbihaiko"}}]';;
   *search/issues*) echo 0;;
   *projectsV2/4/fields*) echo FID4;;
   *projectsV2/4/items*)
     printf '2201\tCode Complete\thttps://api.github.com/repos/x/y\n2202\tTodo\thttps://api.github.com/repos/x/y\n'
     printf '2203\tTodo\thttps://api.github.com/repos/x/y\n2204\tCode Complete\thttps://api.github.com/repos/x/y\n'
     printf '2205\tClosed\thttps://api.github.com/repos/x/y\n2206\tClosed\thttps://api.github.com/repos/x/y\n'
-    printf '2208\tClosed\thttps://api.github.com/repos/x/y\n';;
+    printf '2208\tClosed\thttps://api.github.com/repos/x/y\n2209\tClosed\thttps://api.github.com/repos/x/y\n';;
   *graphql*)
     printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":['
     printf '{"number":2202,"title":"Issue 2202","body":"","state":"OPEN","labels":{"nodes":[{"name":"wontfix"}]},"subIssuesSummary":{"total":0,"completed":0},"comments":{"nodes":[]}}'
     printf ']}}}}';;
-  *issues/2201*|*issues/2204*) echo $'closed\tcompleted\tIssue';;
+  *issues/2201*|*issues/2204*|*issues/2205*) echo $'closed\tcompleted\tIssue';;
   *issues/2203*) echo $'closed\tnot_planned\tIssue';;
   *issues/2208*) echo $'closed\tnot_planned\tIssue';;
   *issues/22*) echo $'open\t\tIssue\twontfix';;
@@ -88,4 +90,8 @@ for n in 2201 2203; do other=2203; [ $n = 2203 ] && other=2201
     && ok "#$n's terminal comment carries the run id, the other child #$other, the verdict and the dashboard command" || ko "#$n comment has no run summary: $(note $n)"
 done
 note 2205 | /usr/bin/grep -q 'dashboard' && ko "#2205 belongs to no run but its comment names a dashboard: $(note 2205)" || ok "a card no run holds gets no run summary"
+# A Closed comment states a close that still holds (#775): the issue state is read again before the comment is queued,
+# and an issue that is open again (#2209 was reopened by hand) gets no comment, only a log line.
+[ "$(count 2209)" = 0 ] && ok "a Closed card whose issue is open again gets no terminal comment" || ko "#2209 commented while open: $(note 2209)"
+/usr/bin/grep -q 'TERMINAL-REOPENED #2209' "$T/st/cycle.log" && ok "the skipped comment is named in cycle.log" || ko "#2209 not named: $(/usr/bin/grep 2209 "$T/st/cycle.log")"
 [ "$fail" = 0 ] && echo "PASS" || { echo "FAILED"; exit 1; }

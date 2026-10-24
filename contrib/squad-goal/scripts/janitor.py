@@ -440,6 +440,17 @@ def close_spec(n, why):   # the comment, then the close as completed, both throu
     door = ["bash", "-c", '. "$0"; "$@"', str(pathlib.Path(__file__).parent / "ghcall.sh"), "gh_send"]
     if _run(door + [f"repos/{repo0}/issues/{n}/comments", "-f", f"body={why}"])[0] == 0:
         _run(door + ["-X", "PATCH", f"repos/{repo0}/issues/{n}", "-f", "state=closed", "-f", "state_reason=completed"])
+_outside = None
+def wave_outside():   # issue -> run: each `Refs #N` a landing named outside its run's dispatch set (wave.sh writes wave-outside.tsv, #775)
+    global _outside
+    if _outside is None:
+        _outside = {}
+        try:
+            for l in (st / "wave-outside.tsv").read_text().splitlines():
+                f = l.split("\t")
+                if len(f) >= 3 and f[2].isdigit(): _outside[f[2]] = f[1]
+        except OSError: pass
+    return _outside
 _subs = {}   # issue -> REST's sub_issues_summary, from the same one read as the labels
 _kids = {}   # spec -> its sub-issues' numbers (the native relation), from the same one read as the labels
 def open_issues():   # every open issue of the repository, ONE read per pass through the door's aggregate route (#92): (answered, {number: labels}). answered is False when the list did not answer (a refusal, a deadline miss, no door beside this module), and then no card is added on a guess. No call per issue: the one list carries every issue's number and labels.
@@ -640,11 +651,17 @@ def run_summary(n):   # the run that worked issue n as a child, as text for its 
 def queue_terminal(n, col, note):   # one comment per terminal entry, through the queue cqflush.sh posts from; the marker keeps a repeat pass from queuing it twice
     mk = st / "auto" / f"janitor-terminal-{n}"
     if mk.exists() and mk.read_text().strip() == col: return
+    if col == "Closed":   # the state is read again (#775): a close a reopen undid is never reported
+        _is.pop(n, None); _is.pop(str(n), None)
+        if issue_info(n)[0] != "closed":
+            say(f"TERMINAL-REOPENED #{n}: the card sits in Closed but the issue is open again; no Closed comment is queued")
+            return
     say(f"TERMINAL-COMMENT #{n}: {col} -> {note.splitlines()[-1]}")
     note += run_summary(n)   # the run's summary rides the comment this pass already posts: no other write path
     if dry: return
     (st / "cq").mkdir(exist_ok=True)
-    (st / "cq" / f"{CQ}#{n}-terminal-{os.getpid()}.md").write_text(note)
+    tag = "terminal-closed" if col == "Closed" else "terminal"   # cqflush.sh reads the state again before it posts a Closed one (#777)
+    (st / "cq" / f"{CQ}#{n}-{tag}-{os.getpid()}.md").write_text(note)
     mk.write_text(col + "\n")
 expected = {}   # issue -> (rank, status, why, run_id, run_ts): the column R derived for every card it owns; rule O reads it, never the board
 def door(fn, *a):   # one call through ghcall.sh: (exit code, output). A read is gh_api, a write gh_send (ADR-0277), so this module's own call sites stay as they were
@@ -804,7 +821,13 @@ def reconcile_board():
                 # A spec with at least one sub-issue, every one closed, is done (the owner's rule): the loop closes it with one comment.
                 # A spec with no sub-issue proves nothing and stays open.
                 sub = _subs.get(n) or {}
-                if sub.get("total", 0) >= 1 and sub.get("completed") == sub["total"]:
+                # A sub-issue a landing named outside its run's dispatch set (wave.sh, wave-outside.tsv, #775) has a close with
+                # no evidence: the spec is held open and the hold is named, so the owner decides.
+                outside = [(k, r) for k in _kids.get(n, []) for r in [wave_outside().get(k)] if r]
+                if sub.get("total", 0) >= 1 and sub.get("completed") == sub["total"] and outside:
+                    k, r = outside[0]
+                    say(f"SPEC-HELD #{n}: sub-issue #{k} was named outside the dispatch set of run {r}; its close has no evidence, so the spec stays open")
+                elif sub.get("total", 0) >= 1 and sub.get("completed") == sub["total"]:
                     say(f"SPEC-CLOSED #{n}: every sub-issue ({sub['total']}) is closed")
                     if not dry: close_spec(n, f"Closed by the loop: every sub-issue ({sub['total']}) is closed, so the spec is done.")
                 if reverted:
