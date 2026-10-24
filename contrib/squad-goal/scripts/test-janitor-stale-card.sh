@@ -176,7 +176,7 @@ o5=$(RACE_MARKER=disp-1014 PATH="$T/bin2:$PATH" SG_STATE="$S5" SG_CHECKOUT="$C5"
 # P: #798: rule Q's seen-record read. janitor-q-seen-<n> is removed between its exists() and its stat() (the second stat of
 # that file): the record is gone, so the pass reads it as none and rule Q releases the card.
 S4="$T/st4"; C4="$T/co4"; mkdir -p "$S4/auto" "$S4/cq" "$C4/runs" "$T/bin4"
-echo run-gone > "$S4/auto/disp-1031"; touch -t 202001010000 "$S4/auto/disp-1031"; echo x > "$S4/auto/janitor-q-seen-1031"; touch -t 202001010000 "$S4/auto/janitor-q-seen-1031"
+echo run-gone > "$S4/auto/disp-1031"; touch -t 202001010000 "$S4/auto/disp-1031"; echo x > "$S4/auto/janitor-q-seen-1031"
 cat > "$T/bin4/gh" <<'J'
 #!/bin/bash
 a="$*"
@@ -188,18 +188,22 @@ esac
 J
 chmod +x "$T/bin4/gh"
 cat > "$T/race_nth.py" <<'J'
-# runs janitor.py; the file named by RACE_MARKER is removed at its RACE_NTH stat call, after the earlier ones
+# runs janitor.py; the file named by RACE_MARKER is removed at its RACE_NTH stat call; every hit and the removal go to RACE_LOG
 import os, runpy, sys
 orig = os.stat; hits = [0]
 def racing(p, *a, **k):
     if os.path.basename(os.fspath(p)) == os.environ.get("RACE_MARKER"):
         hits[0] += 1
-        if hits[0] == int(os.environ.get("RACE_NTH", "1")) and os.path.lexists(p): os.unlink(p)
+        with open(os.environ["RACE_LOG"], "a") as log: log.write(f"hit {hits[0]}\n")
+        if hits[0] == int(os.environ.get("RACE_NTH", "1")) and os.path.lexists(p):
+            os.unlink(p)
+            with open(os.environ["RACE_LOG"], "a") as log: log.write("removed\n")
     return orig(p, *a, **k)
 os.stat = racing
 sys.argv = sys.argv[1:]; sys.path.insert(0, os.path.dirname(os.path.abspath(sys.argv[0]))); runpy.run_path(sys.argv[0], run_name="__main__")
 J
-o4=$(RACE_MARKER=janitor-q-seen-1031 RACE_NTH=2 PATH="$T/bin4:$PATH" SG_STATE="$S4" SG_CHECKOUT="$C4" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$S4" JANITOR_NOTIFY="$T/notify" python3 -I "$T/race_nth.py" "$T/s/janitor.py" 2>&1)
+o4=$(RACE_LOG="$T/race-p.log" RACE_MARKER=janitor-q-seen-1031 RACE_NTH=2 PATH="$T/bin4:$PATH" SG_STATE="$S4" SG_CHECKOUT="$C4" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$S4" JANITOR_NOTIFY="$T/notify" python3 -I "$T/race_nth.py" "$T/s/janitor.py" 2>&1)
+/usr/bin/grep -q '^removed$' "$T/race-p.log" 2>/dev/null && ok "P: the race removed the seen record at stat $(/usr/bin/grep -c '^hit' "$T/race-p.log")" || ko "P: the removal never fired: $(cat "$T/race-p.log" 2>/dev/null)"
 ! grep -q Traceback <<< "$o4" && ok "P: a seen record removed between rule Q's exists and stat: no Traceback" || ko "P traceback: $o4"
 /usr/bin/grep -q '^o 4 Todo 1031$' "$T/board.calls" 2>/dev/null && [ ! -e "$S4/auto/disp-1031" ] && ok "P: rule Q reads the gone record as none and releases #1031" || ko "P #1031 not released: $(cat "$T/board.calls" 2>/dev/null) $o4"
 rm -rf "$T"; exit $fail
