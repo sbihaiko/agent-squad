@@ -18,7 +18,8 @@ A budget is a stall cap and a spend cap, each with a minimum and a maximum ([ADR
 6. **Spend that passes a cap by one response is measured, not a defect.** Overshoot beyond one response is a defect to investigate (ADR-0018).
 7. **A proposer sees spend facts only when its `sees` list names them.** No proposal kind raises a cap (ADR-0103).
 8. **The dev_squad floor is an optional gate.** An author may place a gate that compares `run_spend_remaining` to a fixed threshold, with `next.fail` set to `exit:fail` and reason `spend_floor`. Its threshold never adapts. It is the author's choice, not an engine rule.
-9. **The validator refuses a graph whose run spend cap is below any agent node's spend minimum.** It also refuses an engine option that lowers the run cap below the first agent node's minimum.
+9. **A cap may also count tokens.** `run.spend_cap_tokens` caps the run, and `budget.spend.max_tokens` caps one call or one child. A token is input plus output, as the outcome records them (`tokens_in` plus `tokens_out`). The dollar cap stays valid, and both apply when both are set. Rules 2 and 5 hold in tokens: unknown tokens keep their grant reserved, and no entry or child starts when the run has no tokens left to grant. The SDK cannot stop a call on tokens, so a call may pass its token grant; the next entry then has less to fund. Gateway models burn a dollar cap unevenly, so tokens are the owner's measure for a child's work.
+10. **The validator refuses a graph whose run spend cap is below any agent node's spend minimum.** It also refuses an engine option that lowers the run cap below the first agent node's minimum.
 
 Rejected: a cap outcome of `needs-human`, because raising a cap is a graph edit and a changed graph cannot resume. Rejected: the floor as a `when`, because a `when` skips silently and the run could fold `completed` with no work done. Rejected: starting an entry below its minimum.
 

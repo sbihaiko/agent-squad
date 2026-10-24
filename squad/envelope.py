@@ -71,7 +71,7 @@ def normalize_request(dispatch, raw, vendor=skills.VENDOR, default_effort=None):
         "prompt": raw.get("prompt", ""), "skill": {"name": skill["name"], "version": skill.get("version", "")},
         "model": model, "effort": eff,
         "tools": list(raw.get("tools", a["tools"])), "stalls": raw.get("stalls", b["stalls"]["max"]),
-        "spend": raw.get("spend", b["spend"]["max"]), "deadline": raw.get("deadline", dispatch["deadline"]),
+        "spend": raw.get("spend", b["spend"]["max"]), "spend_tokens": b["spend"].get("max_tokens"), "deadline": raw.get("deadline", dispatch["deadline"]),
         "workspace": raw.get("workspace", a["workspaces"][0]), "inputs": list(raw.get("inputs", [])),
         "after": list(after),   # indexes of earlier requests in the same list; the engine turns them into child names
         **({"kind": kind} if "kind_models" in a else {}),

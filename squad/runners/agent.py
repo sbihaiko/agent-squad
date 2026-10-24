@@ -116,7 +116,7 @@ class AgentRunner:
                                ctx.project_limits.get("max_output_tokens"), ctx.project_limits.get("context_tokens"))
 
         out = await session.run_call(
-            lambda: ctx.budget.reserve(eff["spend_max"], node["budget"]["spend"]["min"]), deadline, make, adapter=ctx.adapter,
+            lambda: ctx.budget.reserve(eff["spend_max"], node["budget"]["spend"]["min"], node["budget"]["spend"].get("max_tokens")), deadline, make, adapter=ctx.adapter,
             record=ctx.record, budget=ctx.budget, clock=ctx.clock, wall=ctx.wall, on_deadline=hit_deadline, on_cancel=cancelled)
         return out, who
 

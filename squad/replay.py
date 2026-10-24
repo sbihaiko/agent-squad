@@ -8,6 +8,7 @@ from pathlib import Path
 
 from squad import git, modelreg, skills
 from squad import project_settings as P
+from squad.budget import measured_tokens
 from squad.engine_errors import ResumeRefused
 from squad.graph import check_node_names
 
@@ -95,6 +96,9 @@ class Replay:
                     e.budget.measured += ev["spend"]
                 elif ev["cap"] is not None:
                     e.budget.unmeasured += ev["cap"]
+                tok = measured_tokens(ev)
+                if tok is not None:
+                    e.budget.run_tokens += tok
                 e.outcomes.absorb(ev)    # Absorb last. It refreshes the derived facts. Those facts read the artifacts loaded above.
         return missing
 

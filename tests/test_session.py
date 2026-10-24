@@ -35,7 +35,7 @@ async def go(adapter, deadline=5.0, budget=None, **kw):
     budget = budget or Budget(10.0)
     settled = []
     real = budget.settle
-    budget.settle = lambda r, m: (settled.append(m), real(r, m))[1]
+    budget.settle = lambda r, m, t=None: (settled.append(m), real(r, m, t))[1]
     rec = Rec()
     out = await session.run_call(lambda: budget.reserve(2.0, 0.1), deadline, req, adapter=adapter, record=rec,
                                  budget=budget, clock=lambda: 0.0, wall=lambda: 0.0, **kw)
