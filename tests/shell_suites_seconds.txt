@@ -36,7 +36,7 @@ test-dispatch-mutex.sh 4.06
 test-dispatch-worktree-reuse.sh 1.96
 test-env-board-vocab.sh 0.13
 test-envelope-spend.sh 0.13
-test-fast-gate.sh 3.53
+test-fast-gate.sh 8.46
 test-fastloop-childcc.sh 0.97
 test-fastloop-interval.sh 8.33
 test-fastloop-orphan.sh 0.73
