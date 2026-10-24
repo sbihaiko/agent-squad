@@ -8,6 +8,7 @@ route it was called by.
 import importlib.util
 import json
 import os
+import re
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -117,3 +118,24 @@ def test_a_finished_run_cached_under_v14_is_read_again(hub, tmp_path, monkeypatc
     fresh = {"v15": 1, "sentinel": True}
     monkeypatch.setattr(hub, "hist", {str(run / "record.jsonl"): fresh})
     assert hub.scan(run / "record.jsonl") is fresh
+
+
+def test_every_non_claude_model_names_its_cache_read():
+    """#795: a gateway model names cache_read in its display_price, a number or an explicit null (no discount)."""
+    reg = json.loads((ROOT / "config/models.registry.json").read_text())
+    missing = [m["id"] for m in reg["models"] if m["provider"] != "claude" and "cache_read" not in (m.get("display_price") or {})]
+    assert missing == [], missing
+
+
+def test_a_null_cache_read_is_no_discount(hub, state, monkeypatch):
+    """#795: an explicit null cache_read prices cache reads at the full input rate, not at the 0.1 ratio."""
+    monkeypatch.setattr(hub.modelreg, "display_price", lambda *a, **k: {"input": 10.0, "output": 0.0, "cache_read": None, "currency": "USD", "per": "mtok"})
+    _ledger(state, ("review:c5", "gemini-3.8-flash", 0, 0, 1000000))
+    assert hub.ledger_calls()[0]["spend"] == pytest.approx(10.0)
+
+
+def test_the_scan_marker_comment_lists_each_version_once_in_order(hub):
+    """#795: the comment above the scan marker names v10 to v15, each once, in order."""
+    line = next(l for l in HUB_PY.read_text().splitlines() if 'if p in hist and "v15" in hist[p]' in l)
+    versions = re.findall(r"\bv(\d+)\b", line.split("#", 1)[1])
+    assert versions == [str(n) for n in range(10, 16)], versions

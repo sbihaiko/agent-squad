@@ -3,7 +3,9 @@
 The page is one string in `hub.py`. The pie's tooltip names each route; the guard reads the page text.
 """
 import importlib.util
+import json
 import os
+import subprocess
 import re
 import tempfile
 from pathlib import Path
@@ -41,3 +43,21 @@ def test_the_pie_collects_every_route_of_a_model(page):
 def test_the_pie_tooltip_names_every_route(page):
     pie = _pie(page)
     assert '" via "+m.routes.join(", ")' in pie, "the tooltip text names every route"
+
+
+def _render_pie(page, models):
+    """#795: run the page's own pie() under node, with the page's palette and the helpers it calls, and return its markup."""
+    palette = re.search(r"^const PCOL=.*;$", page, re.M).group(0)
+    other = re.search(r"^const OTHER=.*;$", page, re.M).group(0)
+    prelude = 'const esc=t=>String(t);const usd=v=>"$"+v;'
+    js = prelude + palette + other + _pie(page).rsplit("\nconst ago", 1)[0] + "\nprocess.stdout.write(pie(JSON.parse(require('fs').readFileSync(0,'utf8'))));"
+    p = subprocess.run(["node", "-e", js], input=json.dumps(models), capture_output=True, text=True, timeout=20)
+    assert p.returncode == 0, p.stderr
+    return p.stdout
+
+
+def test_the_rendered_pie_tooltip_names_every_route(page):
+    """#795: a model called through cli and gateway is labelled 'via cli, gateway' in the rendered pie."""
+    row = {"model": "deepseek-flash", "in": 10, "out": 10, "cache": 0, "spend": 0.1, "calls": 1, "box": {"llm": "deepseek-flash", "routes": ["cli", "gateway"]}}
+    html = _render_pie(page, [row])
+    assert "via cli, gateway" in html, html
