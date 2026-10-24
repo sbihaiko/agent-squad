@@ -486,7 +486,7 @@
       },
       "display_price": {
         "input": 2.5,
-        "cache_read": 0.25,
+        "cache_read": 0.2,
         "output": 15,
         "currency": "USD",
         "per": "mtok"
@@ -662,8 +662,8 @@
         "context": 400000
       },
       "display_price": {
-        "cache_read": null,
         "input": 1.25,
+        "cache_read": 0.4,
         "output": 10,
         "currency": "USD",
         "per": "mtok"
@@ -697,8 +697,8 @@
         "context": 400000
       },
       "display_price": {
-        "cache_read": null,
         "input": 5,
+        "cache_read": 0.4,
         "output": 30,
         "currency": "USD",
         "per": "mtok"
@@ -754,8 +754,8 @@
         "context": 200000
       },
       "display_price": {
-        "cache_read": null,
         "input": 1.25,
+        "cache_read": 0.5,
         "output": 10,
         "currency": "USD",
         "per": "mtok"
@@ -802,8 +802,8 @@
         "context": 400000
       },
       "display_price": {
-        "cache_read": null,
         "input": 2,
+        "cache_read": 0.8,
         "output": 12,
         "currency": "USD",
         "per": "mtok"
@@ -859,8 +859,8 @@
         "context": 400000
       },
       "display_price": {
-        "cache_read": null,
         "input": 1.25,
+        "cache_read": 0.1,
         "output": 10,
         "currency": "USD",
         "per": "mtok"
@@ -885,8 +885,8 @@
         "context": 400000
       },
       "display_price": {
-        "cache_read": null,
         "input": 2,
+        "cache_read": 0.2,
         "output": 12,
         "currency": "USD",
         "per": "mtok"
@@ -946,8 +946,8 @@
         "context": 256000
       },
       "display_price": {
-        "cache_read": null,
         "input": 3,
+        "cache_read": 0.5,
         "output": 15,
         "currency": "USD",
         "per": "mtok"
@@ -1002,8 +1002,8 @@
         "context": 256000
       },
       "display_price": {
-        "cache_read": null,
         "input": 2,
+        "cache_read": 0.3,
         "output": 10,
         "currency": "USD",
         "per": "mtok"
@@ -1058,8 +1058,8 @@
         "context": 256000
       },
       "display_price": {
-        "cache_read": null,
         "input": 2,
+        "cache_read": 0.5,
         "output": 10,
         "currency": "USD",
         "per": "mtok"
@@ -1415,8 +1415,8 @@
         "context": 131072
       },
       "display_price": {
-        "cache_read": null,
         "input": 0.55,
+        "cache_read": 0.044,
         "output": 2.19,
         "currency": "USD",
         "per": "mtok"
