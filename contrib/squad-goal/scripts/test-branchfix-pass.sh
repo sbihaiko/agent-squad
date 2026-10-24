@@ -112,4 +112,11 @@ push gui/16-n; rev gui/16-n CHANGES "i.sh:1 fix"; r=$(OPEN="16" fp); rid=$(cat "
 (cd "$tg" && $G fetch -q origin && $G checkout -q -b "squad/run/$rid" origin/main && echo y > k && $G add k && $G -c user.email=a@b -c user.name=t commit -q -m other)
 mkdir -p "$T/co/runs/$rid"; printf '{"event": "run_start", "target": "%s", "target_branch": "squad/run/%s"}\n{"event": "verdict", "verdict": "completed"}\n' "$tg" "$rid" > "$T/co/runs/$rid/record.jsonl"
 t16=$($O rev-parse gui/16-n); r=$(OPEN="16" fp); [ "$($O rev-parse gui/16-n)" = "$t16" ] && ok "a head that is not a fast-forward is not pushed" || ko "a non-fast-forward head was pushed: '$r'"
+# 13) (#779) a fix run whose merge_land into its target is a no-op: the target branch stays at the base, and the child's own head
+#     (the workspace head of its pass outcome, a fast-forward of the work branch) is the head pushed
+push gui/17-c; rev gui/17-c CHANGES "j.sh:1 fix"; r=$(OPEN="17" fp); rid=$(cat "$T/st/auto/branchfix-gui_17-c-"*); tip=$($O rev-parse gui/17-c)
+(cd "$tg" && $G fetch -q origin && $G checkout -q -b "squad/run/$rid" origin/dev && $G worktree add -q -b "child-$rid" "$T/cw" "$tip" && cd "$T/cw" && echo z > m && $G add m && $G -c user.email=a@b -c user.name=t commit -q -m "fix (Refs #17)")
+ch=$($G -C "$T/cw" rev-parse HEAD); b0=$($G -C "$tg" rev-parse "squad/run/$rid"); mkdir -p "$T/co/runs/$rid"
+printf '{"event": "run_start", "target": "%s", "target_branch": "squad/run/%s"}\n{"event": "outcome", "node": "route.router.1", "outcome": "pass", "workspace": {"name": "worktrees/child", "head": "%s"}}\n{"event": "land", "node": "route.router.1", "effect": {"name": "merge_land", "before": "%s", "head": "%s"}}\n{"event": "verdict", "verdict": "completed"}\n' "$tg" "$rid" "$ch" "$b0" "$b0" > "$T/co/runs/$rid/record.jsonl"
+r=$(OPEN="17" fp); [ "$($O rev-parse gui/17-c)" = "$ch" ] && ok "a fix run with a no-op land pushes the child's own head" || ko "the child's head was not pushed: '$r'"
 exit $fail
