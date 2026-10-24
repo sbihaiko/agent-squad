@@ -206,6 +206,8 @@ rm -f "$T/st/auto/basecheck-"*
 r=$(land run-1); rc=$?
 case "$r" in "WAVE $W "*) ok "J: land names the wave branch and its sha";; *) ko "J: land said nothing: '$r' (exit $rc)";; esac
 [ $rc = 0 ] && ok "J: the wave landed (exit 0)" || ko "J: exit $rc: '$r'"
+# (#790) The base is read again right after the push: the head the wave landed at has its own answer (unreadable here, the stub has no checks).
+[ -e "$T/st/auto/basecheck-unreadable-$($O rev-parse dev)" ] && ok "J: the wave reads the base head it pushed" || ko "J: no read of the pushed head: $(ls "$T/st/auto" 2>/dev/null)"
 case "$r" in *refused*) ko "J: a board move that worked is logged as refused: '$r'";; *) ok "J: a board move that worked names no refusal";; esac
 # One push to dev, and it is a fast-forward of the dev that moved: the tip lands whole, in one update.
 [ "$(pushes refs/heads/dev | wc -l | tr -d ' ')" = 1 ] && ok "J: the wave lands in dev with one push" || ko "J: $(pushes refs/heads/dev | wc -l | tr -d ' ') pushes to dev: $(pushes refs/heads/dev)"

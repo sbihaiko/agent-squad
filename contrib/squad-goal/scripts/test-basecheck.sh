@@ -6,7 +6,7 @@
 # proved by the fixture runs of test-branchland.sh and test-wave.sh. Stub gh (every argv logged), a bare local remote, a temp state
 # dir per case. One line per case.
 # usage: bash test-basecheck.sh [scripts dir]
-unset SG_SERIAL_HELD SG_BASE_CI_GATE SG_BASE_CI_RECHECK SG_BASE_CI_GRACE   # an ambient gate or loop setting must not decide these cases
+unset SG_SERIAL_HELD SG_BASE_CI_GATE SG_BASE_CI_RECHECK SG_BASE_CI_GRACE SG_BASE_CI_OK_TTL   # an ambient gate or loop setting must not decide these cases
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/bin" "$T/co"
 cp "$d/basecheck.sh" "$d/ghcall.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/address.sh" "$T/s/"
@@ -22,7 +22,9 @@ case "\$*" in
   *) echo "[]";;
 esac
 J
-chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
+chmod +x "$T/bin/gh"
+# The mv shim logs each rename: sg_base_put must move the temporary file into place, so a plain write fails the case below (#790).
+printf '#!/bin/bash\necho "$*" >> "%s/mv.log"\nexec /bin/mv "$@"\n' "$T" > "$T/bin/mv"; chmod +x "$T/bin/mv"; export PATH="$T/bin:$PATH"
 # The driver: one call of sg_base_red for dev, in the state directory the case names.
 cat > "$T/s/driver.sh" <<J
 #!/bin/bash
@@ -109,5 +111,24 @@ c() { printf '%s' "$1" | bash -c '. "$1"; sg_ci_class' _ "$T/s/basecheck.sh" 2>/
 [ "$(c "$RED")" = red ] && [ "$(c "$RUNNING")" = running ] && [ "$(c "$GREEN")" = green ] && [ "$(c '{"check_runs":[]}')" = none ] && ok "the classifier reads red, running, green and none" || ko "classifier: [$(c "$RED")] [$(c "$RUNNING")] [$(c "$GREEN")] [$(c '{"check_runs":[]}')]"
 [ -z "$(c '{}')" ] && ok "the classifier names no state for an answer that is not a check-run list" || ko "classifier on {}: [$(c '{}')]"
 bash -c '. "$1"; r=$(printf "%s" "$2" | sg_ci_class) || r=none; [ "$r" = red ] && [ "$(printf "%s" "$2" | sg_ci_bad)" = "check (3.11) ended failure" ]' _ "$T/s/basecheck.sh" "$RED" && ok "the classifier names the first red check" || ko "sg_ci_bad: [$(printf '%s' "$RED" | bash -c '. "$1"; sg_ci_bad' _ "$T/s/basecheck.sh")]"
+
+# (#790) The answer is written by one rename: the mv shim sees the temporary file moved onto the cache, so a plain write fails here.
+landed rename; : > "$T/mv.log"; run rename CHECKS="$RED"
+/usr/bin/grep -q -- "-f $T/st-rename/auto/basecheck-$SHA.tmp." "$T/mv.log" && [ -s "$T/st-rename/auto/basecheck-$SHA" ] && ok "the red answer is moved into place by mv" || ko "no rename of the red answer: mv.log [$(cat "$T/mv.log")]"
+
+# (#790) An ok answer expires: inside SG_BASE_CI_OK_TTL it is kept, and once the TTL has passed the head is read again, so a
+# check the owner re-ran red is seen.
+landed okkept; run okkept CHECKS="$GREEN"; run okkept CHECKS="$RED"
+[ "$RC" = 1 ] && [ -z "$OUT" ] && ok "an ok answer inside SG_BASE_CI_OK_TTL is kept" || ko "ok kept: rc $RC out [$OUT]"
+landed okttl; run okttl CHECKS="$GREEN"; run okttl CHECKS="$RED" SG_BASE_CI_OK_TTL=0
+[ "$RC" = 0 ] && [ "$OUT" = "base dev is red at $S9: check (3.11) ended failure" ] && ok "an expired ok answer is read again and a failed re-run blocks" || ko "ok expired: rc $RC out [$OUT]"
+
+# (#790) The base is read once per watch cycle, though no landing runs: basecheckpass.sh is that read, and reports a red head.
+cp "$d/basecheckpass.sh" "$T/s/"; sed '$d' "$T/s/driver.sh" > "$T/s/cycle.sh"; echo "bash \"$T/s/basecheckpass.sh\"" >> "$T/s/cycle.sh"
+landed cycle; mkdir -p "$T/st-cycle/auto"; : > "$T/gh.log"
+OUT=$(env STATE="$T/st-cycle" CHECKS="$RED" bash "$T/s/cycle.sh" 2>&1); RC=$?
+[ "$RC" = 0 ] && [ "$(alerts cycle)" = 1 ] && ok "a watch cycle with no landing reads the base and reports a red head" || ko "cycle pass: rc $RC alerts $(alerts cycle) out [$OUT]"
+OUT=$(env STATE="$T/st-cycle" CHECKS="$RED" bash "$T/s/cycle.sh" 2>&1)
+[ "$(alerts cycle)" = 1 ] && [ "$(reads)" = 1 ] && ok "the next cycle keeps the red answer: no second read, no second line" || ko "cycle repeat: alerts $(alerts cycle) reads $(reads)"
 
 [ "$fail" = 0 ] && echo "PASS test-basecheck" || { echo "FAIL test-basecheck"; exit 1; }

@@ -29,6 +29,8 @@ esac
 J
 chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 GREEN='{"check_runs":[{"id":10,"name":"check (3.11)","status":"completed","conclusion":"success"}]}'
+# OLDG: green with its checks finished long ago, so the base read caches its answer (#790).
+OLDG='{"check_runs":[{"id":10,"name":"check (3.11)","status":"completed","conclusion":"success","completed_at":"2001-01-01T00:00:00Z"}]}'
 RED='{"check_runs":[{"id":10,"name":"check (3.11)","status":"completed","conclusion":"failure"}]}'
 RUNNING='{"check_runs":[{"id":10,"name":"check (3.11)","status":"in_progress","conclusion":null}]}'
 # The review verdict of the branch tip, which the lander waits for beside the check (#357): VERDICT=APPROVE|CHANGES|none, kept
@@ -261,7 +263,9 @@ case "$r" in *"BRANCHLAND WAIT gui/7-x: base dev is red at"*) ok "a red base wit
 [ ! -e "$T/gate.log" ] && ok "a red base: the local gate does not run" || ko "a red base ran the local gate: $(cat "$T/gate.log")"
 [ "$($O rev-parse dev)" = "$before" ] && ok "a red base with no tip check: dev does not move" || ko "a red base with no tip check: dev moved"
 # The hold ends with the base: once dev is green, the same branch lands.
-rm -f "$T/st/auto/basecheck-"* "$T/st/auto/branchland-"*; basehold; r=$(CHECKS="$GREEN" bl)
+rm -f "$T/st/auto/basecheck-"* "$T/st/auto/branchland-"*; basehold; r=$(CHECKS="$OLDG" bl)
 [ "$($O rev-parse dev)" != "$before" ] && ok "a green base: the held branch lands" || ko "a green base: nothing landed: '$r'"
+# (#790) The base is read again right after the landing push: the head it lands on has its own answer, written after the push.
+new=$($O rev-parse dev); [ -e "$T/st/auto/basecheck-$new" ] && ok "a landing reads the base head it pushed" || ko "no read of the pushed head $new: $(ls "$T/st/auto")"
 rm -f "$T/st/auto/basecheck-"*; /usr/bin/grep -v 'gui/6-y' "$T/st/landed.tsv" > "$T/st/landed.tmp" && mv "$T/st/landed.tmp" "$T/st/landed.tsv"
 rm -rf "$T"; exit $fail
