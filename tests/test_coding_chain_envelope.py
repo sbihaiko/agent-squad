@@ -226,3 +226,20 @@ def test_the_loop_passes_the_coding_order_to_the_run(tmp_path):
     r = _launch(tmp_path, coding, ENVELOPE)
     assert r.returncode == 0, r.stdout + r.stderr
     assert f"--model-order {','.join(coding)} " in (tmp_path / "argv").read_text()   # the in-run fallback follows it (#617)
+
+
+@pytest.mark.heavy   # launch.py waits for the run folder, over a second
+def test_the_loop_refuses_a_run_whose_envelope_blocks_the_first_coding_model(tmp_path):    # #778
+    """The router cannot request a coding model outside `allow.models`, so it picks another one in silence. The loop
+    refuses the start by name instead, and starts no run."""
+    r = _launch(tmp_path, ["grok-4.7", "claude-sonnet-5-5"], ENVELOPE)
+    assert r.returncode != 0, r.stdout + r.stderr
+    assert not (tmp_path / "argv").exists(), "a run started with a coding model the router cannot request"
+    assert "grok-4.7 is not in the router envelope" in r.stderr and "SG_ALLOW_MODEL" in r.stderr, r.stderr
+
+
+@pytest.mark.heavy   # launch.py waits for the run folder, over a second
+def test_a_fallback_outside_the_envelope_only_warns(tmp_path):    # #778
+    r = _launch(tmp_path, ["claude-sonnet-5-5", "grok-4.7"], ENVELOPE)
+    assert "grok-4.7 is not in the router envelope" in r.stderr, r.stderr
+    assert (tmp_path / "argv").exists(), r.stdout + r.stderr
