@@ -30,6 +30,13 @@ def test_the_dashboard_embeds_the_engine_schema_registry_and_served_lists_not_a_
     assert {"Read", "claude-deepseek-v4-flash", "medium", "tdd"} <= set(served["tools"] + served["models"] + served["efforts"] + served["skills"])
 
 
+def test_a_display_price_with_no_number_is_not_shown():
+    """#798: an entry whose display price has no input and no output number (gpt-6-luna, all null) is not a price."""
+    prices = engine_data()["models"]["prices"]
+    assert all(isinstance(p.get("input"), (int, float)) or isinstance(p.get("output"), (int, float)) for p in prices.values()), prices
+    assert "gpt-6-luna" not in prices
+
+
 def test_the_dashboard_embeds_the_registry_snapshot_and_the_registry_models():
     """Labels, aliases and display prices come from the one registry, and the served model list is its ids and aliases."""
     reg = modelreg.default_registry()
