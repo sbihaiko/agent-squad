@@ -1361,6 +1361,8 @@ def canon_model(raw):
     ref = modelreg.normalize(raw or "unknown")
     return ref.id if ref.known else (raw or "unknown")
 
+CACHE_READ_RATIO = 0.1   # a cache read costs a tenth of the input rate where the registry names no cache rate
+
 def ledger_calls():
     """The review calls of $SG_STATE/token-usage.tsv (review.sh), one dict per line: t0, model (canonical), in (cache reads
     included, as an outcome's tokens_in is), out, cache and spend. Only review.sh writes the ledger, so every line is a
@@ -1384,11 +1386,16 @@ def ledger_calls():
             rate = modelreg.display_price(m) or {}
             rin, rout = rate.get("input"), rate.get("output")
             if isinstance(rin, (int, float)) and isinstance(rout, (int, float)):
-                spend = ((i + cr) * rin + o * rout) / 1e6
+                # cache reads price at the cache rate: the registry's, else a tenth of the input rate (the Anthropic ratio, #789)
+                rcr = rate.get("cache_read")
+                if not isinstance(rcr, (int, float)): rcr = rin * CACHE_READ_RATIO
+                spend = ((i * rin) + (cr * rcr) + o * rout) / 1e6
             else:
                 spend, unpriced = 0.0, True
                 log_once(f"hub: no price for {m}, its review calls count 0.0 in the Spend totals")
-        out.append({"t0": t0, "model": m, "in": i + cr, "out": o, "cache": cr, "spend": round(spend, 4), "unpriced": unpriced})
+        # a 7th field marks a call with no usage count (tokens.py): it is counted as uncounted, never as a measure (#789)
+        uncounted = len(p) > 6 and bool(p[6].strip())
+        out.append({"t0": t0, "model": m, "in": i + cr, "out": o, "cache": cr, "spend": round(spend, 4), "unpriced": unpriced, "uncounted": uncounted})
     return out
 
 def _billed(src, model, spend):
@@ -1410,7 +1417,8 @@ def stats(period, src="both"):
         x["spend"] += _billed(src, c["model"], c["spend"])
     ks = sorted(b)[-48:]
     rows = [{"t": k, "spend": round(b[k]["spend"], 2), "runs": b[k]["runs"], "median_dur": round(st.median(b[k]["durs"]), 1) if b[k]["durs"] else None} for k in ks]
-    now = time.localtime(); tot = {"today": 0.0, "month": 0.0, "all": 0.0, "unpriced": sum(1 for c in calls if c["unpriced"])}
+    now = time.localtime(); tot = {"today": 0.0, "month": 0.0, "all": 0.0, "unpriced": sum(1 for c in calls if c["unpriced"]),
+           "uncounted": sum(1 for c in calls if c["uncounted"])}
     for r in allr:
         lt = time.localtime(r["t0"]); tot["all"] += r["spend"]
         if lt[:2] == now[:2]: tot["month"] += r["spend"]
@@ -1421,17 +1429,19 @@ def stats(period, src="both"):
         if lt[:3] == now[:3]: tot["today"] += sp
     mt = {}
     for r in allr:
-        for m, v in r["mod"].items():   # a run's spelling is kept: its box reads the route the spelling names (the review calls below are canonical)
+        for raw, v in r["mod"].items():   # keyed on the canonical id, as the review calls are, so one model is one slice (#789)
+            m = canon_model(raw)
             if src == "sub" and not SUBSCRIPTION.match(m) or src == "api" and SUBSCRIPTION.match(m): continue
-            x = mt.setdefault(m, {"model": m, "in": 0, "out": 0, "cache": 0, "spend": 0.0, "calls": 0})
+            x = mt.setdefault(m, {"model": m, "in": 0, "out": 0, "cache": 0, "spend": 0.0, "calls": 0, "src": raw})   # the first spelling names the box's route
             for k in ("in", "out", "cache", "calls"): x[k] += v[k]
             x["spend"] += v["spend"]
     for c in calls:
         m = c["model"]
         if src == "sub" and not SUBSCRIPTION.match(m) or src == "api" and SUBSCRIPTION.match(m): continue
-        x = mt.setdefault(m, {"model": m, "in": 0, "out": 0, "cache": 0, "spend": 0.0, "calls": 0})
+        x = mt.setdefault(m, {"model": m, "in": 0, "out": 0, "cache": 0, "spend": 0.0, "calls": 0, "src": m})
         x["in"] += c["in"]; x["out"] += c["out"]; x["cache"] += c["cache"]; x["calls"] += 1; x["spend"] += c["spend"]
-    models = sorted(({**x, "spend": round(x["spend"], 2), "box": model_box(x["model"])} for x in mt.values()), key=lambda x: -(x["in"] + x["out"]))
+    models = sorted(({**{k: v for k, v in x.items() if k != "src"}, "spend": round(x["spend"], 2), "box": model_box(x["src"])} for x in mt.values()),
+                    key=lambda x: -(x["in"] + x["out"]))
     return {"buckets": rows, "totals": {k: round(v, 2) for k, v in tot.items()}, "models": models}
 
 def adapter_errors():
@@ -2522,7 +2532,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 <div id=side>
 <details id=plans class=sp><summary>subscriptions<span class=sr id=plsr></span></summary><div class=sb><div id=subs></div></div></details>
 <details id=mdl class=sp><summary>squad models<span class=sr id=mdsr></span></summary><div class=sb id=mbody></div></details>
-<details id=stats class=sp><summary>cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><h4>Spend <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Figures at API list prices (API-equivalent)."></span></h4><div class=tot id=tot></div><div class=cash id=cash></div><h4>Spend over time <span class=row id=per></span></h4><div id=chart></div><div id=kpi></div><div id=open></div><h4>Tokens by model <small class=m id=piet>all time</small></h4><div id=pie></div></div></details>
+<details id=stats class=sp><summary>cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><h4>Spend <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Figures at API list prices (API-equivalent)."></span></h4><div class=tot id=tot></div><div class=m id=totnote></div><div class=cash id=cash></div><h4>Spend over time <span class=row id=per></span></h4><div id=chart></div><div id=kpi></div><div id=open></div><h4>Tokens by model <small class=m id=piet>all time</small></h4><div id=pie></div></div></details>
 <div id=list></div>
 </div>
 <div id=main></div>
@@ -2783,6 +2793,7 @@ async function pollStats(){try{pollSubs();
   $("#piet").textContent=tk((st.models||[]).reduce((a,m)=>a+m.in+m.out,0))+" all time";
   const same=st.totals.all===st.totals.month;
   $("#tot").innerHTML=`<div>today<b>${usd(st.totals.today)}</b></div><div>this month<b>${usd(st.totals.month)}</b></div><div>all time<b${same?" class=m":""}>${same?"= this month":usd(st.totals.all)}</b></div>`;
+  $("#totnote").innerHTML=(st.totals.unpriced||st.totals.uncounted)?`floor: ${st.totals.unpriced?st.totals.unpriced+" review call"+(st.totals.unpriced===1?" is":"s are")+" unpriced and count 0.0":""}${st.totals.unpriced&&st.totals.uncounted?"; ":""}${st.totals.uncounted?st.totals.uncounted+" with no usage count":""}. The total is a floor.`:"";
   const b=sp.baseline,n=sp.pr.after.n,cut=b.cutoff.slice(5,16).replace("T"," ");
   $("#kpi").innerHTML=`<h4>Speed <small>since ${cut} UTC · ${n} PR${n===1?"":"s"}</small></h4>`
    +kr("Merge time",", median",sp.pr.after.median,"min",b.pr.median)
