@@ -121,10 +121,10 @@ def test_a_finished_run_cached_under_v14_is_read_again(hub, tmp_path, monkeypatc
 
 
 def test_every_non_claude_model_names_its_cache_read():
-    """#795: a gateway model names cache_read in its display_price, a number or an explicit null (no discount)."""
+    """#795: a gateway model names cache_read in its display_price, a number or an explicit null (unknown, priced at the shared ratio)."""
     reg = json.loads((ROOT / "config/models.registry.json").read_text())
     missing = [m["id"] for m in reg["models"] if m["provider"] != "claude" and "cache_read" not in (m.get("display_price") or {})]
-    assert missing == [], missing
+    assert missing == [], f"each must name cache_read: a number or an explicit null (unknown, priced at the shared ratio): {missing}"
 
 
 def test_a_null_cache_read_is_unknown_and_priced_at_the_ratio(hub, state, monkeypatch):

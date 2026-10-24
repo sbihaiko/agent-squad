@@ -1387,7 +1387,7 @@ def ledger_calls():
             rin, rout = rate.get("input"), rate.get("output")
             if isinstance(rin, (int, float)) and isinstance(rout, (int, float)):
                 # cache reads price at the cache rate: the registry's, else CACHE_READ_RATIO of the input rate (#789, #791)
-                rcr = rate.get("cache_read")   # a null is unknown, not no discount: only a number is a rate (#795)
+                rcr = rate.get("cache_read")   # a null is unknown, priced at the shared ratio: only a number is a rate (#795)
                 if not isinstance(rcr, (int, float)): rcr = rin * CACHE_READ_RATIO
                 spend = ((i * rin) + (cr * rcr) + o * rout) / 1e6
             else:

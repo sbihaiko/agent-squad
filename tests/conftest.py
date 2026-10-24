@@ -1,4 +1,5 @@
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -119,6 +120,8 @@ def gui_tests_off():
 HOST_BOUND_MARKER = "host_bound"
 HOST_ROOTS = ("MESENAI_REPO", "MESENAI_ROOT")
 HOST_ABSENT_REASON = f"no MesenAI checkout on this runner: {' and '.join(HOST_ROOTS)} absent"
+NODE_BOUND_MARKER = "node_bound"
+NODE_ABSENT_REASON = "no node on this runner: the test runs the page's JavaScript under node"
 
 
 def host_present():
@@ -135,6 +138,9 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers",
         "host_bound: needs a MesenAI checkout this runner may not hold; deselected, never skipped, when it is absent (ADR-0139)")
+    config.addinivalue_line(
+        "markers",
+        "node_bound: needs the node binary; deselected, never skipped, when it is absent (ADR-0139)")
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
@@ -142,6 +148,9 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
     n = len(getattr(config, "_host_bound_deselected", []))
     if n:
         terminalreporter.write_line(f"{n} host-bound test(s) deselected: {HOST_ABSENT_REASON}")
+    m = len(getattr(config, "_node_bound_deselected", []))
+    if m:
+        terminalreporter.write_line(f"{m} node-bound test(s) deselected: {NODE_ABSENT_REASON}")
 
 
 def pytest_collection_modifyitems(config, items):
@@ -161,3 +170,10 @@ def pytest_collection_modifyitems(config, items):
             config.hook.pytest_deselected(items=deselected)
             items[:] = [it for it in items if not it.get_closest_marker(HOST_BOUND_MARKER)]
             config._host_bound_deselected = deselected
+    # The same rule for node: a runner without the binary deselects the test that runs the page under it (ADR-0139).
+    if shutil.which("node") is None:
+        deselected = [it for it in items if it.get_closest_marker(NODE_BOUND_MARKER)]
+        if deselected:
+            config.hook.pytest_deselected(items=deselected)
+            items[:] = [it for it in items if not it.get_closest_marker(NODE_BOUND_MARKER)]
+            config._node_bound_deselected = deselected

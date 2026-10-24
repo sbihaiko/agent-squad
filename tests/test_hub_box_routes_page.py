@@ -29,9 +29,18 @@ def page():
 
 
 def _pie(page):
-    m = re.search(r"function pie\(ms\)\{.*?\nconst ago", page, re.S)
-    assert m, "the model pie is not in the page"
-    return m.group(0)
+    """The page's pie() source, from its opening brace to the brace that closes it (#795)."""
+    start = page.find("function pie(ms){")
+    assert start >= 0, "the model pie is not in the page"
+    depth = 0
+    for i in range(start + len("function pie"), len(page)):
+        if page[i] == "{":
+            depth += 1
+        elif page[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return page[start:i + 1]
+    raise AssertionError("the model pie has no closing brace")
 
 
 def test_the_pie_collects_every_route_of_a_model(page):
@@ -50,12 +59,13 @@ def _render_pie(page, models):
     palette = re.search(r"^const PCOL=.*;$", page, re.M).group(0)
     other = re.search(r"^const OTHER=.*;$", page, re.M).group(0)
     prelude = 'const esc=t=>String(t);const usd=v=>"$"+v;'
-    js = prelude + palette + other + _pie(page).rsplit("\nconst ago", 1)[0] + "\nprocess.stdout.write(pie(JSON.parse(require('fs').readFileSync(0,'utf8'))));"
+    js = prelude + palette + other + _pie(page) + "\nprocess.stdout.write(pie(JSON.parse(require('fs').readFileSync(0,'utf8'))));"
     p = subprocess.run(["node", "-e", js], input=json.dumps(models), capture_output=True, text=True, timeout=20)
     assert p.returncode == 0, p.stderr
     return p.stdout
 
 
+@pytest.mark.node_bound
 def test_the_rendered_pie_tooltip_names_every_route(page):
     """#795: a model called through cli and gateway is labelled 'via cli, gateway' in the rendered pie."""
     row = {"model": "deepseek-flash", "in": 10, "out": 10, "cache": 0, "spend": 0.1, "calls": 1, "box": {"llm": "deepseek-flash", "routes": ["cli", "gateway"]}}
