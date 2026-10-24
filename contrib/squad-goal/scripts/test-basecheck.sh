@@ -32,27 +32,27 @@ RED='{"check_runs":[{"id":10,"name":"check (3.11)","status":"completed","conclus
 RUNNING='{"check_runs":[{"id":10,"name":"check (3.11)","status":"in_progress","conclusion":null}]}'
 # run <state name> [VAR=value ...]: the driver in a fresh state dir; sets OUT and RC, the state dir is $T/st-<name>.
 run() { local n=$1; shift; export STATE="$T/st-$n"; mkdir -p "$STATE/auto"; : > "$T/gh.log"; OUT=$(env "$@" bash "$T/s/driver.sh" 2>&1); RC=$?; }
-landed() { printf '1700000000\tgui/7-x\t%s\t7\n' "$SHA" > "$T/st-$1/landed.tsv"; }
+landed() { mkdir -p "$T/st-$1"; printf '1700000000\tgui/7-x\t%s\t7\n' "$SHA" > "$T/st-$1/landed.tsv"; }
 
 # A green head does not block, and its completed answer is cached under auto/basecheck-<sha>.
-run green CHECKS="$GREEN"; landed green
+landed green; run green CHECKS="$GREEN"
 [ "$RC" = 1 ] && [ -z "$OUT" ] && ok "a green base head does not block" || ko "green: rc $RC out [$OUT]"
 [ -e "$T/st-green/auto/basecheck-$SHA" ] && ok "a completed green answer is cached" || ko "no cache for the green head"
 run green CHECKS="$GREEN"; n=$(/usr/bin/grep -c '/check-runs' "$T/gh.log")
 [ "$n" = 0 ] && ok "a cached answer is not read again" || ko "the cached head was read $n times"
 
 # A red completed check blocks, names the base and the check, and is reported once per head.
-run red CHECKS="$RED"; landed red
+landed red; run red CHECKS="$RED"
 [ "$RC" = 0 ] && [ "$OUT" = "base dev is red at $S9: check (3.11) ended failure" ] && ok "a red base head blocks and names the check" || ko "red: rc $RC out [$OUT]"
 [ "$(wc -l < "$T/st-red/alerts.log" 2>/dev/null | tr -d ' ')" = 1 ] && ok "the red head raises one alerts.log line" || ko "alerts.log: $(cat "$T/st-red/alerts.log" 2>/dev/null)"
-[ "$(ls "$T/st-red/cq" 2>/dev/null | wc -l | tr -d ' ')" = 1 ] && /usr/bin/grep -q '^7-' <(ls "$T/st-red/cq") && ok "one queued comment on the issue landed at that head" || ko "cq: $(ls "$T/st-red/cq" 2>/dev/null)"
+[ "$(ls "$T/st-red/cq" 2>/dev/null | wc -l | tr -d ' ')" = 1 ] && /usr/bin/grep -q '#7-' <(ls "$T/st-red/cq") && ok "one queued comment on the issue landed at that head" || ko "cq: $(ls "$T/st-red/cq" 2>/dev/null)"
 run red CHECKS="$RED"
 [ "$RC" = 0 ] && ok "the head stays red for the next landing" || ko "second red call: rc $RC"
 [ "$(wc -l < "$T/st-red/alerts.log" | tr -d ' ')" = 1 ] && [ "$(ls "$T/st-red/cq" | wc -l | tr -d ' ')" = 1 ] && ok "the red head is reported once, not per call" || ko "a repeat report: alerts [$(cat "$T/st-red/alerts.log")] cq [$(ls "$T/st-red/cq")]"
 
 # No landed row at that head: the last landed issue carries the comment.
-run last CHECKS="$RED"; printf '1700000000\tgui/5-x\tdeadbeef\t5\n1700000100\tgui/9-x\tcafef00d\t9\n' > "$T/st-last/landed.tsv"
-[ "$(ls "$T/st-last/cq" 2>/dev/null | /usr/bin/grep -c '^9-')" = 1 ] && ok "without a landed row at the head, the last landed issue is commented" || ko "last-landed cq: $(ls "$T/st-last/cq" 2>/dev/null)"
+mkdir -p "$T/st-last"; printf '1700000000\tgui/5-x\tdeadbeef\t5\n1700000100\tgui/9-x\tcafef00d\t9\n' > "$T/st-last/landed.tsv"; run last CHECKS="$RED"
+[ "$(ls "$T/st-last/cq" 2>/dev/null | /usr/bin/grep -c '#9-')" = 1 ] && ok "without a landed row at the head, the last landed issue is commented" || ko "last-landed cq: $(ls "$T/st-last/cq" 2>/dev/null)"
 
 # A pending check and a missing check do not block; neither is cached.
 run pending CHECKS="$RUNNING"

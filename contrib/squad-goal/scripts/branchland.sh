@@ -18,7 +18,7 @@
 . "$(dirname "$0")/env.sh" 2>/dev/null || exit 0
 here="$(cd "$(dirname "$0")" && pwd)"
 export SG_GH_PASS=branchland
-SG_GHREAD="python3 $here/ghthrottle.py"; . "$here/ghcall.sh"; . "$here/address.sh"; . "$here/workbranches.sh"
+SG_GHREAD="python3 $here/ghthrottle.py"; . "$here/ghcall.sh"; . "$here/address.sh"; . "$here/workbranches.sh"; . "$here/basecheck.sh"
 A="$SG_STATE/auto"; mkdir -p "$A"; land=${SG_LAND_BRANCH:-dev}; remote=${SG_LAND_REMOTE:-https://github.com/$SG_REPO.git}
 export GIT_TERMINAL_PROMPT=0
 cd "$SG_STATE" || exit 0
@@ -121,6 +121,8 @@ while read -r sha br i; do
   head -1 "$rk.md" | grep -q 'VERDICT: APPROVE' || python3 "$here/revformat.py" --summary "$rk.md" 2>/dev/null | grep -q '^blocking=0 ' || { say wait "$br" "$sha" changes "the review of ${sha:0:9} asked for changes or did not approve: $(head -1 "$rk.md")"; continue; }
   if [ -n "$gate" ]; then localgate "$br" "$sha" "$i" || continue; green="The local gate (CI off) passed on ${sha:0:9}."
   else green="The check on ${sha:0:9} was green."; fi
+  # The base's own check (#786): a red completed check on $land holds every landing until its head is green, whatever this branch says.
+  red=$(sg_base_red "$land") && { say wait "$br" "$sha" basered "$red"; continue; }
   fl=$(SG_BASE=$land bash "$here/ffland.sh" "$br" "$i" 2>/dev/null | tail -1)
   case "$fl" in
     "FFLAND "*) ms=${fl#FFLAND };;

@@ -72,6 +72,7 @@
 here="$(cd "$(dirname "$0")" && pwd)"   # fixed at the start: a relative $0 means nothing once the work moves to a child's worktree
 . "$here/env.sh" 2>/dev/null || exit 0
 . "$here/ghcall.sh"   # the close and the board write go through the doors beside this script
+. "$here/basecheck.sh"   # a red base check holds the landing (#786)
 G=/usr/bin/git; remote=${SG_LAND_REMOTE:-https://github.com/$SG_REPO.git}; base=${SG_BASE:-dev}
 export GIT_TERMINAL_PROMPT=0
 wave_of() { case "${1:-}" in wave/*) printf '%s\n' "$1";; *) printf 'wave/%s\n' "$1";; esac; }
@@ -627,6 +628,8 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
       return 0; }
     # The wave tip's check (#377, ADR-0145 rule 11): a red tip names the child that broke it, and that child leaves the wave
     # before it lands. A tip that stays red with no child named is a landing that failed, as any other cause is.
+    # The base's own check (#786): a red completed check on $base holds the landing until its head is green.
+    red=$(sg_base_red "$base") && { echo "WAVE WAIT $w: $red"; rm -rf "$S"; return 1; }
     wave_check "$S" "$w"; rc=$?
     [ $rc = 3 ] && { echo "WAVE WAIT $w: the gate lock or the gate slots are held by another gate, so the tip's check did not run; the wave lands on a later pass"; rm -rf "$S"; return 1; }
     [ $rc = 4 ] && { stuck "$run" "$w" "$S" "the check at the tip of $w is inconclusive, so the wave does not land: $(/usr/bin/grep -v '^$' "$SG_STATE/wave-check-$(printf '%s' "$w" | tr / _).log" 2>/dev/null | tail -1)"; rm -rf "$S"; return 1; }
