@@ -30,6 +30,10 @@ def page():
 
 def _pie(page):
     """The page's pie() source, from its opening brace to the brace that closes it (#795)."""
+    return _pie_source(page)
+
+
+def _pie_source(page):
     start = page.find("function pie(ms){")
     assert start >= 0, "the model pie is not in the page"
     depth = 0
@@ -71,3 +75,17 @@ def test_the_rendered_pie_tooltip_names_every_route(page):
     row = {"model": "deepseek-flash", "in": 10, "out": 10, "cache": 0, "spend": 0.1, "calls": 1, "box": {"llm": "deepseek-flash", "routes": ["cli", "gateway"]}}
     html = _render_pie(page, [row])
     assert "via cli, gateway" in html, html
+
+
+def test_the_pie_matcher_skips_braces_inside_strings():
+    """#798: a brace inside a string literal is text, not a block: the matcher reads the whole pie, not the part before it."""
+    src = 'function pie(ms){return "}";}\nfunction other(){}'
+    assert _pie_source(src) == 'function pie(ms){return "}";}', "the matcher ended at the brace inside the string"
+
+
+@pytest.mark.node_bound
+def test_the_rendered_pie_escapes_a_model_name_with_the_page_esc(page):
+    """#798: the pie runs the page's own esc, not a stub: a model name with markup renders as text."""
+    row = {"model": "<i>luna</i>", "in": 10, "out": 10, "cache": 0, "spend": 0.1, "calls": 1, "box": {"llm": "<i>luna</i>", "routes": ["cli"]}}
+    html = _render_pie(page, [row])
+    assert "&lt;i&gt;luna&lt;/i&gt;" in html and "<i>luna" not in html, html
