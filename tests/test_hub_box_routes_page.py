@@ -28,33 +28,43 @@ def page():
     return mod.PAGE
 
 
-def _pie(page):
-    """The page's pie() source, from its opening brace to the brace that closes it (#795)."""
-    return _pie_source(page)
-
-
 def _pie_source(page):
+    """The pie's source, from its opening brace to the brace that closes it. String literals and line comments are text (#798)."""
     start = page.find("function pie(ms){")
     assert start >= 0, "the model pie is not in the page"
-    depth = 0
-    for i in range(start + len("function pie"), len(page)):
-        if page[i] == "{":
+    depth, i, quote = 0, start + len("function pie"), None
+    while i < len(page):
+        c = page[i]
+        if quote:
+            if c == "\\":
+                i += 1
+            elif c == quote:
+                quote = None
+        elif c in "\"'`":
+            quote = c
+        elif page.startswith("//", i):
+            i = page.find("\n", i)
+            if i < 0:
+                break
+            continue
+        elif c == "{":
             depth += 1
-        elif page[i] == "}":
+        elif c == "}":
             depth -= 1
             if depth == 0:
                 return page[start:i + 1]
+        i += 1
     raise AssertionError("the model pie has no closing brace")
 
 
 def test_the_pie_collects_every_route_of_a_model(page):
-    pie = _pie(page)
+    pie = _pie_source(page)
     assert "m.box.routes" in pie, "the pie reads box.routes, not one route"
     assert "r.routes" in pie and ".join(" in pie, "the routes are merged per model name and joined"
 
 
 def test_the_pie_tooltip_names_every_route(page):
-    pie = _pie(page)
+    pie = _pie_source(page)
     assert '" via "+m.routes.join(", ")' in pie, "the tooltip text names every route"
 
 
@@ -62,8 +72,9 @@ def _render_pie(page, models):
     """#795: run the page's own pie() under node, with the page's palette and the helpers it calls, and return its markup."""
     palette = re.search(r"^const PCOL=.*;$", page, re.M).group(0)
     other = re.search(r"^const OTHER=.*;$", page, re.M).group(0)
-    prelude = 'const esc=t=>String(t);const usd=v=>"$"+v;'
-    js = prelude + palette + other + _pie(page) + "\nprocess.stdout.write(pie(JSON.parse(require('fs').readFileSync(0,'utf8'))));"
+    esc = re.search(r"^const esc=.*;$", page, re.M).group(0)
+    usd = re.search(r"^const usd=.*;$", page, re.M).group(0)
+    js = esc + usd + palette + other + _pie_source(page) + "\nprocess.stdout.write(pie(JSON.parse(require('fs').readFileSync(0,'utf8'))));"
     p = subprocess.run(["node", "-e", js], input=json.dumps(models), capture_output=True, text=True, timeout=20)
     assert p.returncode == 0, p.stderr
     return p.stdout
