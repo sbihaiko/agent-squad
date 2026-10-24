@@ -783,6 +783,7 @@ def reconcile_board():
             else:   # a run that ended with nothing delivered delivered nothing: the card goes back to the queue, never to Code Complete (ADR-0145 rule 12, #464)
                 set_expected(n, os.environ.get("SG_TODO", "Todo"), f"run {i['run_id']} completed with nothing landed", i["run_id"], i["run_ts"], 20)
     for m in sorted((st / "auto").glob("disp-*")):
+        if not m.is_file(): continue   # #794: a marker gone since the glob (a dangling link) holds nothing
         n = m.name[5:]; holder = m.read_text().strip()
         if n.isdigit() and holder in keep and not (read(folder(holder)) or {}).get("verdict"):   # a holder with a verdict is over: its own record ranks the card (Todo, Blocked, Code Complete), not the marker it left
             set_expected(n, "In Progress", f"{m.name} holds live run {holder}", holder, "", 30)
@@ -920,6 +921,7 @@ def reconcile_board():
 reconcile_board()
 # an autobug marker of a launch.py refusal too: that refusal makes no run folder, so rule J never sees it (#523)
 for d in [*(st / "auto").glob("disp-*"), *(st / "auto").glob("bug-*")]:
+    if not d.is_file(): continue   # #794: a marker gone since the glob holds nothing
     req = d.read_text().strip(); lg = st / f"{req}.log"
     n = d.name.split("-", 1)[1]; lt = lg.read_text() if lg.exists() else ""
     if d.name.startswith("bug-") and "refusing to start" not in lt: continue   # a bug marker of a run that started is rule O's
@@ -1034,7 +1036,7 @@ if owner and proj and repo0:
         marks = {}
         for p in (st / "auto").glob("*"):
             mo = re.fullmatch(r"(disp|bug)-(\d+)", p.name)
-            if mo and p.read_text().strip() in (r, f.name): marks.setdefault(mo.group(2), []).append((mo.group(1), p))
+            if mo and p.is_file() and p.read_text().strip() in (r, f.name): marks.setdefault(mo.group(2), []).append((mo.group(1), p))
         for n in sorted(marks, key=int):
             if holding(n) or issue_info(n)[0] != "open" or pr_count(n) != "0": continue
             mks = " and ".join("auto/" + kind + "-" + n for kind, _ in marks[n])
@@ -1050,7 +1052,7 @@ if owner and proj and repo0:
     for n, ms0 in freed_markers.items():
         qm.setdefault(n, {}).update(ms0)
     for n, ms in sorted(qm.items(), key=lambda kv: int(kv[0])):
-        if n in held or n in landed_n or n in delivering or any(m is not None and now - m.stat().st_mtime < 600 for m in ms.values()) or list((st / "auto").glob(f"fork-{n}-*")): continue
+        if n in held or n in landed_n or n in delivering or any(m is not None and m.is_file() and now - m.stat().st_mtime < 600 for m in ms.values()) or list((st / "auto").glob(f"fork-{n}-*")): continue
         seen = st / "auto" / f"janitor-q-seen-{n}"
         if seen.exists() and now - seen.stat().st_mtime < 600: continue
         def no():   # a definite answer that says "not ours": remember it
