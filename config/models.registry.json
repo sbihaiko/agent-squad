@@ -486,6 +486,7 @@
       },
       "display_price": {
         "input": 2.5,
+        "cache_read": 0.25,
         "output": 15,
         "currency": "USD",
         "per": "mtok"
@@ -1346,6 +1347,7 @@
       },
       "display_price": {
         "input": 0.14,
+        "cache_read": 0.006,
         "output": 0.28,
         "currency": "USD",
         "per": "mtok"
