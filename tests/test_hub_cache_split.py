@@ -94,3 +94,26 @@ def test_a_model_keeps_every_route_of_its_spellings(hub, state, monkeypatch):
     box = models["claude-opus-5-5"]["box"]
     routes = {hub.model_box(raw)["route"] for raw in mod}
     assert set(box.get("routes") or []) == routes, box
+
+
+def test_a_registry_cache_rate_prices_a_non_anthropic_review_call(hub, state):
+    """#793: deepseek-flash names its own cache_read in the registry, so its cache reads are not priced at the 0.1 ratio."""
+    reg = hub.modelreg.display_price("deepseek-flash") or {}
+    assert reg.get("cache_read") == pytest.approx(0.006)
+    _ledger(state, ("review:c4", "deepseek-flash", 0, 0, 1000000))
+    assert hub.ledger_calls()[0]["spend"] == pytest.approx(0.006, abs=1e-6)
+
+
+def test_a_finished_run_cached_under_v14_is_read_again(hub, tmp_path, monkeypatch):
+    """#793: the scan cache marker is v15, so a finished run cached under v14 keeps no stale sub/api split."""
+    run = tmp_path / "run-20261001-100000"
+    run.mkdir()
+    (run / "record.jsonl").write_text(json.dumps({"ts": "2026-10-01T10:00:00", "event": "run_start"}) + "\n")
+    monkeypatch.setattr(hub, "HIST", tmp_path / "hist.json")
+    stale = {"v14": 1, "sentinel": True, "sub": 9.9}
+    monkeypatch.setattr(hub, "hist", {str(run / "record.jsonl"): stale})
+    got = hub.scan(run / "record.jsonl")
+    assert got is not stale and "sentinel" not in (got or {}), got
+    fresh = {"v15": 1, "sentinel": True}
+    monkeypatch.setattr(hub, "hist", {str(run / "record.jsonl"): fresh})
+    assert hub.scan(run / "record.jsonl") is fresh
