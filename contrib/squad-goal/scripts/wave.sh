@@ -475,7 +475,16 @@ stuck() {
     return 1
   fi
   echo "WAVE-ERROR $why"
-  all=$(printf '%s\n' $(refs_of "$S" "origin/$base..origin/$w") $(run_issues "${rd:-/nonexistent}") | sort -un | tr '\n' ' ')
+  # Only the run's dispatch set is acted on (#776), as the close does (#775): a `Refs #N` outside it is reported here and in
+  # wave-outside.tsv, and gets no try, label, card move or comment. A run whose record names no issue keeps every `Refs #N`.
+  local refs dset kept="" n2; refs=$(refs_of "$S" "origin/$base..origin/$w"); dset=" $(run_issues "${rd:-/nonexistent}" | tr '\n' ' ') "
+  if [ -n "${dset// /}" ]; then
+    for n2 in $refs; do case "$dset" in *" $n2 "*) kept="${kept:+$kept }$n2";; *)
+      echo "WAVE-NOTE #$n2: $w names it (Refs #$n2) outside the dispatch set of run $run; reported, not frozen"
+      printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$run" "$n2" "$w" >> "$SG_STATE/wave-outside.tsv";; esac; done
+    refs=$kept
+  fi
+  all=$(printf '%s\n' $refs $dset | sort -un | tr '\n' ' ')
   for n in $all; do
     k=$(ledger landtry "$n" "$run" "$why" 2>&1) || { echo "WAVE-LEDGER #$n refused: $k"; continue; }
     [ "$k" -gt "$t" ] 2>/dev/null && t=$k
@@ -483,7 +492,7 @@ stuck() {
   [ -n "${all// /}" ] || { t=${SG_WAVE_LAND_TRIES:-3}; echo "WAVE-NOTE $w names no issue (no Refs ahead of $base, no run record): no ledger counts its tries"; }
   [ "$t" -ge "${SG_WAVE_LAND_TRIES:-3}" ] || return 1
   export SG_GH_PASS=wave
-  for n in $(refs_of "$S" "origin/$base..origin/$w"); do
+  for n in $refs; do
     gh_send -X POST "repos/$SG_REPO/issues/$n/labels" -f "labels[]=frozen:owner" >/dev/null 2>&1
     board_write "${SG_TODO:-Todo}" "$n"   # nothing landed, so the card leaves Code Complete (#657); frozen:owner holds it out of the frontier
     mkdir -p "$SG_STATE/cq"
