@@ -63,7 +63,7 @@ J
   chmod +x "$t/bin/gh"; : > "$t/gh.log"
   cat > "$t/s/issue_state.py" <<'PY'
 import json, os, sys   # the seam's door, stubbed (#550): one board read a pass, every card in Todo
-if sys.argv[1:]: sys.exit(1)
+if sys.argv[1:2] not in ([], ["--go"]): sys.exit(1)   # the plain read and the go-list read (#800) both answer
 for i in json.load(open(os.environ["FIX"] + "/rest.json")): print(f"{i['number']}\tTodo")
 PY
   ( cd "$t" && env SG_SINGLE_AUTOFRONTIER=1 AF_DRY=1 SG_GH_AGGREGATE_WINDOW=0 SG_SQUAD="$(cd "$d/../../.." && pwd)" SQUAD_CAPS_DIR="$t/caps" \

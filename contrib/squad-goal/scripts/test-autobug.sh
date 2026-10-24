@@ -32,7 +32,7 @@ printf 'print("-")\n' > "$T/s/fundroom.py"
 # each, and a missing cards.tsv is a board that does not answer. The kinds are not read here (the label selects).
 cat > "$T/s/issue_state.py" <<PY
 import sys
-if sys.argv[1:]: sys.exit(1)
+if sys.argv[1:2] not in ([], ["--go"]): sys.exit(1)   # the plain read and the go-list read (#800) both answer
 try: sys.stdout.write(open("$T/cards.tsv").read())
 except OSError: print("no board", file=sys.stderr); sys.exit(1)
 PY

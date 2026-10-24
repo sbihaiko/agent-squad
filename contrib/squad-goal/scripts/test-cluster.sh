@@ -27,7 +27,7 @@ printf 'export SG_REPO=x/y SG_STATE=%s SG_BASE=main SG_CHECKOUT=%s SG_FRONTIER_L
 printf '%s' "$I" > "$T/issues.json"; printf '#!/bin/bash\necho READY\n' > "$T/s/stack.sh"; chmod +x "$T/s/stack.sh"
 cat > "$T/s/issue_state.py" <<PY
 import json, sys   # the seam's door, stubbed (#550): every fixture issue's card sits in Todo, the owner's go signal
-if sys.argv[1:]: sys.exit(1)
+if sys.argv[1:2] not in ([], ["--go"]): sys.exit(1)   # the plain read and the go-list read (#800) both answer
 for i in json.load(open("$T/issues.json")): print(f"{i['number']}\\tTodo")
 PY
 cat > "$T/bin/gh" <<J

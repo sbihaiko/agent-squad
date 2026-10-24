@@ -53,7 +53,7 @@ printf '#!/bin/bash\nsg_work_issues() { echo "${WORK_ISSUES:-}"; }\n' > "$T/scri
 # in Todo unless it names its own "card" ("" is no card); CARDS_DOWN is a board that does not answer.
 cat > "$T/scripts/issue_state.py" <<'PY'
 import json, os, sys
-if sys.argv[1:] or os.environ.get("CARDS_DOWN"): print("no board", file=sys.stderr); sys.exit(1)
+if sys.argv[1:2] not in ([], ["--go"]) or os.environ.get("CARDS_DOWN"): print("no board", file=sys.stderr); sys.exit(1)
 for i in json.load(open(os.environ["GH_ISSUES"])):
     if i.get("card", "Todo"): print(f"{i['number']}\t{i.get('card', 'Todo')}")
 PY
