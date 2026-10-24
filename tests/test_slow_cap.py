@@ -1,6 +1,8 @@
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -11,15 +13,23 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def run_inner(tmp_path, body, ini=(), timeout=60, args=()):
     """One nested pytest run. `timeout` is the caller's own bound: a case about a test that never ends must not end the suite
-    it runs in, so the nested run is cut there and the case fails on the exception instead of parking the worker."""
-    (tmp_path / "test_inner.py").write_text(body)
-    env = {**os.environ, "PYTHONPATH": str(ROOT)}
-    opts = [x for i in ini for x in ("-o", i)]
-    return subprocess.run(
-        [sys.executable, "-m", "pytest", "-p", "tests.slowcap", "-o", "slow_cap_seconds=0.2",
-         *opts, *args, "-c", "/dev/null", "--rootdir", str(tmp_path), "test_inner.py"],
-        cwd=tmp_path, env=env, capture_output=True, text=True, timeout=timeout,
-    )
+    it runs in, so the nested run is cut there and the case fails on the exception instead of parking the worker.
+
+    The nested run is cheap by design (#797): its own directory under /tmp, a fresh one per run, with no conftest above it
+    and no plugin that is not named. pytest walks every ancestor of a collected path, and the macOS TMPDIR above
+    `tmp_path` holds over 100,000 entries, so a run there took 25 s alone. `tmp_path` is kept for the caller's signature."""
+    work = Path(tempfile.mkdtemp(prefix="slowcap-", dir="/tmp")).resolve()
+    try:
+        (work / "test_inner.py").write_text(body)
+        env = {**os.environ, "PYTHONPATH": str(ROOT)}
+        opts = [x for i in ini for x in ("-o", i)]
+        return subprocess.run(
+            [sys.executable, "-m", "pytest", "-p", "no:deepeval", "-p", "no:cacheprovider", "-p", "tests.slowcap",
+             "-o", "slow_cap_seconds=0.2", *opts, *args, "-c", "/dev/null", "--rootdir", str(work), "test_inner.py"],
+            cwd=work, env=env, capture_output=True, text=True, timeout=timeout,
+        )
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
 
 
 SLEEP = "import time\n"
