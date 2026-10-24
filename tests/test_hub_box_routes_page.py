@@ -29,7 +29,8 @@ def page():
 
 
 def _pie_source(page):
-    """The pie's source, from its opening brace to the brace that closes it. String literals and line comments are text (#798)."""
+    """The pie's source, from its opening brace to the brace that closes it. String literals, line and block comments and
+    regex literals are text (#798, #799)."""
     start = page.find("function pie(ms){")
     assert start >= 0, "the model pie is not in the page"
     depth, i, quote = 0, start + len("function pie"), None
@@ -37,24 +38,45 @@ def _pie_source(page):
         c = page[i]
         if quote:
             if c == "\\":
-                i += 1
-            elif c == quote:
+                i += 2
+                continue
+            if c == quote:
                 quote = None
-        elif c in "\"'`":
-            quote = c
-        elif page.startswith("//", i):
+            i += 1
+            continue
+        if page.startswith("//", i):
             i = page.find("\n", i)
             if i < 0:
                 break
             continue
-        elif c == "{":
+        if page.startswith("/*", i):
+            i = page.index("*/", i + 2) + 2
+            continue
+        if c == "/" and (page[:i].rstrip().endswith("return") or page[:i].rstrip()[-1:] in "(,=:[!&|?{};+-*%<>~^"):
+            j, in_class = i + 1, False
+            while page[j] != "/" or in_class:
+                if page[j] == "\\":
+                    j += 1
+                elif page[j] == "[":
+                    in_class = True
+                elif page[j] == "]":
+                    in_class = False
+                j += 1
+            i = j + 1
+            continue
+        if c in "\"'`":
+            quote = c
+            i += 1
+            continue
+        if c == "{":
             depth += 1
         elif c == "}":
             depth -= 1
             if depth == 0:
                 return page[start:i + 1]
         i += 1
-    raise AssertionError("the model pie has no closing brace")
+    raise AssertionError("the pie's braces never close")
+
 
 
 def test_the_pie_collects_every_route_of_a_model(page):
