@@ -64,6 +64,7 @@ state = board_state()   # the dispatch pass asks the seam what state an issue ca
 BUDGET = int(os.environ.get("SG_CHILDCC_BUDGET") or 1)   # the children one pass works (#590)
 SHIPPED = os.environ.get("SG_BOARD_VOCAB") == "shipped"   # the old vocabulary has no Code Review column (#603)
 HOLD_TRIES = int(os.environ.get("SG_HOLD_TRIES") or 3)   # the review holds on one head before the child is requeued (#620)
+DEFER_MAX = int(os.environ.get("SG_CHILDCC_DEFER_MAX") or 6)   # the passes one unchanged (run, child, tip) waits before its deferral escalates once (#808)
 HOLDS = set()   # the children this pass held out of their wave, neither entered nor requeued: the landing waits for them (#620)
 INCOMPLETE = 3   # the exit of a pass that left a child for a later pass: not a failure (1, a traceback), and not done (0)
 CURSOR, ROUND = A / "childcc-cursor", A / "childcc-round"
@@ -221,6 +222,15 @@ def run_hold(rd, child, n, d, ok, rnd):
     now = head_of(child_worktree(rd, child, d))
     if now != head: return f"its run approved {head[:9]}, and the child stands at {now[:9] or 'no head'}: a new commit needs a new review"
     return ""
+def moved_tip(rd, child, d, rnd):   # the tip a review read, when the child stands past it (#808); False when no head was read or the tip is not there
+    head = str((rnd or {}).get("head") or "")
+    return bool(head) and head_of(child_worktree(rd, child, d)) not in ("", head)
+def logged(key, line):   # a line printed once per change of its text: a pass that repeats the same line is silent (#808)
+    f = A / "childcc-logged.json"
+    try: last = json.loads(f.read_text())
+    except (OSError, ValueError): last = {}
+    if last.get(key) == line: return
+    last[key] = line; f.write_text(json.dumps(last)); print(line, flush=True)
 def enter(rd, child, n, d, approved=False, own=False):
     """The wave's entry of a finished child, in the tree the engine made for it. Return (entered, why, worked): (None, "") when the
     run cut no wave and the direct move stands, (True, the entry line) when the child is now in the wave branch, and
@@ -343,8 +353,11 @@ for key, r, child, why, n, finished, d, lwhy, ok, own, rnd in pending[k0:] + pen
         print(f"CHILD HELD #{n} ({name} {child}): its run's review requeued it", flush=True); mk.touch(); continue
     if own:   # the approval is read before a failed land's requeue: a run that reviewed the child owns it, and missing evidence holds delivery (#701, ADR-0151 rules 4 and 5)
         held = run_hold(pathlib.Path(r), child, n, d, ok, rnd)
-        if held:   # childcc never reviews or fixes a child its run reviewed: its run's approval is the only evidence, and a land that failed on the review itself (review_held, review_deadline) is missing evidence
-            print(f"CHILD RUN-OWNED #{n} ({name} {child}): {held}; delivery holds", flush=True)
+        if held and finished and lwhy is None and moved_tip(pathlib.Path(r), child, d, rnd):   # #808: the run has ended and its review read an older head, so no run will review the new tip: childcc reviews it, once per head, and enters it on its own review
+            own, ok = False, False
+            print(f"CHILD REVIEW TIP #{n} ({name} {child}): the run ended on {(rnd or {}).get('head', '')[:9]}; the child's new tip is reviewed here", flush=True)
+        elif held:   # childcc never reviews or fixes a child its run reviewed: its run's approval is the only evidence, and a land that failed on the review itself (review_held, review_deadline) is missing evidence
+            logged(f"held {name} {child}", f"CHILD RUN-OWNED #{n} ({name} {child}): {held}; delivery holds")
             RUN_HELD.add(key)
             if subprocess.run(["bash", wave, "expired", name], capture_output=True).returncode: visited.discard(key)   # a wave past its age cap lands and requeues it (#378)
             continue
@@ -380,6 +393,26 @@ for key, r, child, why, n, finished, d, lwhy, *_ in pending:   # a child that wa
     if key not in visited and key not in RUN_HELD and (A / f"wave-{name}").exists(): code_review(name, child, n, "it waits for review")
 if left:
     ROUND.write_text("".join(k + "\n" for k in sorted((rnd & keys) | visited | {k for k in rnd if k.split(" ")[0] not in runs})))
-    print(f"CHILDCC DEFERRED {len(left)} child(ren) wait for a later pass: {', '.join(sorted(left))}", flush=True)
+    logged("deferred", f"CHILDCC DEFERRED {len(left)} child(ren) wait for a later pass: {', '.join(sorted(left))}")
+    info = {p[0]: p for p in pending}
+    for k in left:   # a deferral of a finished run carries a deadline: DEFER_MAX passes on one unchanged (run, child, tip) escalate it once (#808)
+        p = info.get(k)
+        if p is None or not p[5]: continue   # a live run's deferral is unchanged
+        _, r, child, _, n, _, d, *_ = p
+        rp, name = pathlib.Path(r), pathlib.Path(r).name
+        tip = head_of(child_worktree(rp, child, d))
+        if not tip: continue
+        dk = A / f"ccdefer-{name}-{child}"
+        try: was, cnt, esc = dk.read_text().split()
+        except (OSError, ValueError): was, cnt, esc = "", "0", "0"
+        cnt = int(cnt) + 1 if was == tip else 1
+        esc = esc if was == tip else "0"
+        dk.write_text(f"{tip} {cnt} {esc}\n")
+        if cnt < DEFER_MAX or esc == "1": continue
+        dk.write_text(f"{tip} {cnt} 1\n")
+        br = subprocess.run(["git", "-C", str(child_worktree(rp, child, d)), "symbolic-ref", "--quiet", "--short", "HEAD"], capture_output=True, text=True).stdout.strip() or "(detached)"
+        (st / "cq").mkdir(parents=True, exist_ok=True)
+        (st / "cq" / f"{CQ}#{n}-ccdefer-{name}-{child}.md").write_text(f"Squad run {name}, child {child} (issue #{n}): deferred {cnt} childcc passes at branch {br}, sha {tip}, and no review of that tip was requested. Review or land it by hand.\n")
+        with (st / "alerts.log").open("a") as f: f.write(f"{time.strftime('%F %T')} CHILDCC DEFERRED {name} {child} #{n} branch {br} sha {tip[:9]}: waited {cnt} passes, escalated once\n")
     sys.exit(INCOMPLETE)
 ROUND.write_text("".join(k + "\n" for k in sorted(k for k in rnd if k.split(" ")[0] not in runs)))   # this pass closed the round of its runs

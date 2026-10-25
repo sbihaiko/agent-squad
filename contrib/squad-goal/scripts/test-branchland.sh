@@ -249,7 +249,11 @@ IFS=$'\t' read -r _ kind res _ sel < "$T/st/gate-status" 2>/dev/null
 # (#786) A red base holds the landing, and the base is read before the gate: the branch tip is green, the base head (dev) is red.
 # The pass names the base, lands nothing, pushes nothing to dev, and says it once on alerts.log; the issue landed at the dev head
 # gets one queued comment. BASECHECKS answers the check runs of the base head; CHECKS answers the branch tip.
-basehold() { reset; rm -f "$T/gate.log" "$T/st/auto/basecheck-"*; before=$($O rev-parse dev); printf '1700000000\tgui/6-y\t%s\t6\n' "$before" >> "$T/st/landed.tsv"; }
+# (#809) The red head is a commit that dev gained after the branch was cut: the branch does not contain it. rebase_on_red moves the
+# branch on top of that head, as a fix branch is.
+basehold() { reset; rm -f "$T/gate.log" "$T/st/auto/basecheck-"*; $G clone -q "$T/origin.git" "$T/hb" 2>/dev/null
+  (cd "$T/hb" && $G checkout -q dev && echo z > h && $G add h && $G -c user.email=a@b -c user.name=t commit -q -m "red head" && $G push -q origin dev) >/dev/null 2>&1; rm -rf "$T/hb"
+  before=$($O rev-parse dev); printf '1700000000\tgui/6-y\t%s\t6\n' "$before" >> "$T/st/landed.tsv"; }
 basehold; r=$(BASECHECKS="$RED" SG_LOCAL_GATE_CMD="$GATE_OK" CHECKS="$GREEN" bl)
 case "$r" in "BRANCHLAND WAIT gui/7-x: base dev is red at "*": check (3.11) ended failure"*) ok "a red base: the pass names the base and waits";; *) ko "a red base: no wait line: '$r'";; esac
 [ "$($O rev-parse dev)" = "$before" ] && ok "a red base: dev does not move" || ko "a red base: dev moved"
@@ -263,6 +267,22 @@ case "$r" in *"BRANCHLAND WAIT gui/7-x: base dev is red at"*) ok "a red base wit
 [ ! -e "$T/gate.log" ] && ok "a red base: the local gate does not run" || ko "a red base ran the local gate: $(cat "$T/gate.log")"
 [ "$($O rev-parse dev)" = "$before" ] && ok "a red base with no tip check: dev does not move" || ko "a red base with no tip check: dev moved"
 # The hold ends with the base: once dev is green, the same branch lands.
+# (#809) A fix branch on top of the red head lands past the red base when its own evidence is green at that tip.
+rebase_on_red() { rm -rf "$T/rb"; $G clone -q "$T/origin.git" "$T/rb" 2>/dev/null
+  (cd "$T/rb" && $G checkout -q gui/7-x && $G -c user.email=a@b -c user.name=t rebase -q origin/dev && $G push -q -f origin gui/7-x) >/dev/null 2>&1; rm -rf "$T/rb"; rev APPROVE; }
+basehold; rebase_on_red; tip=$($O rev-parse gui/7-x)
+r=$(BASECHECKS="$RED" CHECKS="$GREEN" bl)
+[ "$($O rev-parse dev)" = "$tip" ] && ok "red base, fix on top of the red head: the branch lands" || ko "red base, fix on top of the red head: dev not moved to $tip: '$r'"
+case "$r" in *"BRANCHLAND PAST RED BASE gui/7-x"*"dev is red at"*"contains"*) ok "red base, fix on top of the red head: one line names why it landed past the red base";; *) ko "no past-red line: '$r'";; esac
+# its own check is red at that tip: it waits, past no red base
+basehold; rebase_on_red; r=$(BASECHECKS="$RED" CHECKS="$RED" bl)
+[ "$($O rev-parse dev)" = "$before" ] && ok "red base, fix on top of the red head, red own check: dev does not move" || ko "red own check landed past the red base: '$r'"
+# no check run at that tip, local gate passes: the gate is the own evidence, and the branch lands past the red base
+basehold; rebase_on_red; tip=$($O rev-parse gui/7-x); r=$(BASECHECKS="$RED" SG_LOCAL_GATE_CMD="$GATE_OK" CHECKS='{"check_runs":[]}' bl)
+[ "$($O rev-parse dev)" = "$tip" ] && case "$r" in *"BRANCHLAND PAST RED BASE gui/7-x"*) ok "red base, fix on top of the red head, zero checks, gate passes: lands past the red base";; *) ko "zero checks, gate passes: no past-red line: '$r'";; esac || ko "zero checks, gate passes: dev not moved: '$r'"
+# a branch that does not contain the red head waits, even with its own check green
+basehold; r=$(BASECHECKS="$RED" CHECKS="$GREEN" bl)
+[ "$($O rev-parse dev)" = "$before" ] && case "$r" in *"BRANCHLAND WAIT gui/7-x: base dev is red at"*) ok "red base, branch without the red head: waits";; *) ko "branch without the red head: '$r'";; esac || ko "branch without the red head landed"
 rm -f "$T/st/auto/basecheck-"* "$T/st/auto/branchland-"*; basehold; r=$(CHECKS="$OLDG" bl)
 [ "$($O rev-parse dev)" != "$before" ] && ok "a green base: the held branch lands" || ko "a green base: nothing landed: '$r'"
 # (#790) The base is read again right after the landing push: the head it lands on has its own answer, written after the push.

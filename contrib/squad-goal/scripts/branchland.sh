@@ -7,7 +7,9 @@
 #
 # A branch is landed when, and only when, it names an open issue, the review of its tip approved (#357),
 # and every check run on its tip finished
-# in success, skipped or neutral, or, with zero check runs while CI is off, the local gate passed at the tip rebased onto $SG_LAND_BRANCH (#385). A red, running or missing check is one `BRANCHLAND WAIT <branch>: <why>`; a push a ruleset
+# in success, skipped or neutral, or, with zero check runs while CI is off, the local gate passed at the tip rebased onto $SG_LAND_BRANCH (#385).
+# A red base holds a branch unless the tip is on top of the red head (#809): then its own evidence proves the fix, and one line says so.
+# A red, running or missing check is one `BRANCHLAND WAIT <branch>: <why>`; a push a ruleset
 # refuses, a rebase that conflicts or a branch with nothing ahead is one `BRANCHLAND REFUSE <branch>: <why>`. Each is kept as a
 # marker under $SG_STATE/auto, so it is said once per head and reason, and a refused push lands nothing.
 #
@@ -96,6 +98,18 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>" >/dev/null 2>&1
     printf '%s\n' "$out" | grep -E '^(FAILED|E  |ERROR)' | sort -u | head -20; printf '%s\n' "$out" | tail -30; printf '```\n'; } > "$(sg_cq_status "$i" "branchland$$")"
   say wait "$br" "$sha" "gate$base" "the local gate (CI off) $res on ${sha:0:9} rebased onto $land ${base:-?}: $(printf '%s' "$out" | tail -1)"; return 1; }
 
+# redfix <branch> <tip> <red line>: 0 when the tip is on top of the red base head (#809): the head the red line names is an ancestor
+# of <tip>, and <tip> is the branch's head as read. Its own check or the local gate at that tip is what proves the fix, and the caller
+# reads that first. Any other answer, or an unreadable fetch, is 1, and the branch waits as before.
+redfix() { local br=$1 sha=$2 line=$3 b ref full tip
+  b=$(printf '%s' "$line" | sed -n 's/^base [^ ]* is red at \([0-9a-f]*\):.*/\1/p'); [ -n "$b" ] || return 1
+  ref=$(printf '%s' "$br" | tr '/' '_')
+  /usr/bin/git -C "$SG_CHECKOUT" fetch -q "$remote" "+refs/heads/$land:refs/sg-red/$land" "+refs/heads/$br:refs/sg-red/$ref" >/dev/null 2>&1 || return 1
+  tip=$(/usr/bin/git -C "$SG_CHECKOUT" rev-parse -q --verify "refs/sg-red/$ref^{commit}") && [ "$tip" = "$sha" ] || return 1
+  full=$(/usr/bin/git -C "$SG_CHECKOUT" rev-parse -q --verify "refs/sg-red/$land^{commit}") || return 1
+  case "$full" in "$b"*) ;; *) return 1;; esac
+  /usr/bin/git -C "$SG_CHECKOUT" merge-base --is-ancestor "$full" "$tip" 2>/dev/null; }
+
 # The work branches (workbranches.sh). Only a branch whose issue is open lands (#367): the remote keeps many old work branches whose
 # issue closed under a pull request or was dropped, and one of those would land its old commits in dev again.
 # A `loop-bug:landing` issue names a defect in the landing path: no branch lands while it is open (#641, ADR-0146 decision 3).
@@ -121,9 +135,14 @@ while read -r sha br i; do
   head -1 "$rk.md" | grep -q 'VERDICT: APPROVE' || python3 "$here/revformat.py" --summary "$rk.md" 2>/dev/null | grep -q '^blocking=0 ' || { say wait "$br" "$sha" changes "the review of ${sha:0:9} asked for changes or did not approve: $(head -1 "$rk.md")"; continue; }
   # The base's own check (#786): a red completed check on $land holds every landing until its head is green, whatever this branch
   # says. It is read before the local gate, so a red base costs no gate run.
-  red=$(sg_base_red "$land") && { say wait "$br" "$sha" basered "$red"; continue; }
+  red=$(sg_base_red "$land"); past=
+  if [ -n "$red" ]; then
+    redfix "$br" "$sha" "$red" || { say wait "$br" "$sha" basered "$red"; continue; }
+    past=$(printf '%s' "$red" | sed -n 's/^base [^ ]* is red at \([0-9a-f]*\):.*/\1/p')
+  fi
   if [ -n "$gate" ]; then localgate "$br" "$sha" "$i" || continue; green="The local gate (CI off) passed on ${sha:0:9}."
   else green="The check on ${sha:0:9} was green."; fi
+  [ -n "$past" ] && echo "BRANCHLAND PAST RED BASE $br: $land is red at $past; the tip ${sha:0:9} contains that head and its own evidence is green"
   fl=$(SG_BASE=$land bash "$here/ffland.sh" "$br" "$i" 2>/dev/null | tail -1)
   case "$fl" in
     "FFLAND "*) ms=${fl#FFLAND };;
