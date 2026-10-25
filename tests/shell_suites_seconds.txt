@@ -114,7 +114,7 @@ test-revformat-stall.sh 0.74
 test-revformat.sh 10.21
 test-review.sh 266.80
 test-runreview.sh 4.06
-test-serial.sh 35.76
+test-serial.sh 36.68
 test-shell-suites-gate.sh 4.22
 test-shell-suites-hermetic.sh 0.05
 test-single-owner.sh 0.70

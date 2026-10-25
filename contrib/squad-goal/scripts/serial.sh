@@ -34,6 +34,8 @@ case ":${SG_SERIAL_HELD:-}:" in *":$n:"*) exec "$@";; esac; L="$st/locks/$n"; mk
 hold=${SERIAL_HOLD_SECONDS:-${SG_CALL_DEADLINE_SECONDS:-1800}}; cmdn=$(basename "${1:-command}")
 ppid_of() { $ps_ -o ppid= -p "$1" 2>/dev/null | tr -d ' '; }
 runs_as() { $ps_ -ww -o command= -p "$1" 2>/dev/null | grep -qF -- "$2"; }
+# A pid that is alive and not a zombie: a watchdog that exited but is not yet reaped by its parent is gone (#805).
+alive() { kill -0 "$1" 2>/dev/null && [ "$($ps_ -o stat= -p "$1" 2>/dev/null | cut -c1)" != Z ]; }
 # The incarnation of a pid: its start time, which GNU ps and BSD ps both print. The token is only ever read back against the pid
 # it was written for, so one stable form of it is enough: the fields are squeezed to one space apiece.
 inc_of() { $ps_ -o lstart= -p "$1" 2>/dev/null | awk '{$1=$1};1'; }
@@ -46,11 +48,13 @@ until mkdir "$L" 2>/dev/null; do
   # a reused pid: the lock then keeps the live-pid reading above and the deadline reap below.
   if [ -n "$h" ] && [ -n "$hi" ]; then now=$(inc_of "$h"); if [ -n "$now" ] && [ "$hi" != "$now" ]; then rm -rf "$L"; continue; fi; fi
   [ -z "$h" ] && [ -d "$L" ] && [ $(( $(date +%s) - $(mtime "$L") )) -gt 10 ] && { rm -rf "$L"; continue; }   # a lock with no pid after 10 s: its owner died before writing it
-  # The holder is alive. Past its recorded deadline with no owner left (its parent is pid 1: its run is gone), it is a stop
-  # with nobody behind it, so reap it -- matched by the name it recorded, never by a bare pid that may have been reused.
-  d=$(cat "$L/due" 2>/dev/null); c=$(cat "$L/cmd" 2>/dev/null)
-  if [ -n "$d" ] && [ -n "$c" ] && [ "$(date +%s)" -gt "$d" ] && [ "$(ppid_of "$h")" = 1 ] && runs_as "$h" "$c"; then
-    echo "serial: reaping orphaned lock $n: holder pid $h ($c) is past its deadline and its parent is gone" >&2
+  # The holder is alive. Past its recorded deadline with nothing left to stop its command -- its parent is pid 1 (its run is gone),
+  # or its recorded watchdog is gone (#805: a holder whose parent is not pid 1 is still wedged) -- it is reaped, matched by the
+  # name it recorded, never by a bare pid that may have been reused. A watchdog that fired (timed-out) is releasing the lock itself.
+  d=$(cat "$L/due" 2>/dev/null); c=$(cat "$L/cmd" 2>/dev/null); wdp=$(cat "$L/wd" 2>/dev/null)
+  if [ -n "$d" ] && [ -n "$c" ] && [ "$(date +%s)" -gt "$d" ] && runs_as "$h" "$c" \
+     && { [ "$(ppid_of "$h")" = 1 ] || { [ -n "$wdp" ] && [ ! -e "$L/timed-out" ] && ! alive "$wdp"; }; }; then
+    echo "serial: reaping orphaned lock $n: holder pid $h ($c) is past its deadline and nothing stops it (parent gone or watchdog dead)" >&2
     kill -TERM "$h" 2>/dev/null; sleep 1; kill -KILL "$h" 2>/dev/null; rm -rf "$L"; continue; fi
   # One line, the first time this process has to wait, naming what it waits for: a gate that waits for another gate has to say so
   # once -- silence reads as a hang. `said` keeps it to one line however long the wait runs.
@@ -69,6 +73,7 @@ set -m   # each background job leads its own process group, so the watchdog stop
   [ "$(cat "$L/pid" 2>/dev/null)" = "$hpid" ] || exit 0   # the lock moved on: this watchdog has no command left to stop
   [ "$(date +%s)" -ge "$due" ] || exit 0                  # its sleep was cut short: the deadline has not come
   printf '%s\n' "$hpid" > "$L/timed-out"; kill -TERM -- -"$c" 2>/dev/null; sleep 5; kill -KILL -- -"$c" 2>/dev/null ) >/dev/null 2>&1 & wd=$!
+echo "$wd" > "$L/wd"   # the watchdog's pid: a waiter that finds it gone past the deadline knows nothing will stop the command (#805)
 # The command leads a process group of its own, so a signal to this holder's group does not reach it: a holder that is stopped
 # (a pass past its deadline, #130) stops its command's whole tree and its watchdog before it releases the lock (#393).
 stop() {   # stderr goes first: the shell's job notices would land in the stopped pass's log, over the line that names its deadline
