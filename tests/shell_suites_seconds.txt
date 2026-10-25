@@ -22,7 +22,7 @@ test-branchreview-pass.sh 27.40
 test-branchreview.sh 14.14
 test-check-gh-interface.sh 0.22
 test-check-tdd-red.sh 5.05
-test-childcc.sh 9.14
+test-childcc.sh 17.10
 test-cluster.sh 7.87
 test-codex-reset.sh 0.15
 test-consult.sh 0.57

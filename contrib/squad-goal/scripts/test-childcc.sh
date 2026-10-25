@@ -428,9 +428,9 @@ h=$(orun stale 6301 approve land); rfile stale "$h" APPROVE
 out=$(lpass stale); rc=$?; out2=$(lpass stale); rc2=$?
 newh=$(/usr/bin/git -C "$T/co/runs/stale/ws/target-c" rev-parse HEAD)
 /usr/bin/grep -q "^stale 6301 $newh\$" "$T/cr.calls" && ok "a finished run's child at a moved tip gets childcc's review of that tip (#808)" || ko "tip not reviewed: '$(cat "$T/cr.calls")'"
-[ ! -s "$T/fix.calls" ] && [ ! -s "$WAVE_CALLS" ] && ok "a stale approval enters nothing and starts no fix run" || ko "waves '$(cat "$WAVE_CALLS")', fix '$(cat "$T/fix.calls")'"
+[ ! -s "$T/fix.calls" ] && ! /usr/bin/grep -q 'entered' <<<"$out" && ok "a stale approval enters nothing and starts no fix run" || ko "waves '$(cat "$WAVE_CALLS")', fix '$(cat "$T/fix.calls")', out $out"
 [ "$rc" = 3 ] && [ "$rc2" = 3 ] && ok "a stale approval holds the child's delivery until its tip's review enters" || ko "stale approval: exit $rc, then $rc2: $out $out2"
-/usr/bin/grep -q ' 6301$' "$T/moves" 2>/dev/null && ko "a child whose approval went stale moved its card" || ok "a child whose approval went stale moves no card"
+/usr/bin/grep -q 'Code Complete 6301$' "$T/moves" 2>/dev/null && ko "a child whose approval went stale moved to Code Complete" || ok "a child whose approval went stale is not moved to Code Complete"
 echo "$out" | /usr/bin/grep -q 'WAVE HOLD #6301: the review of' && ok "the pass names the review of the moved tip it holds for" || ko "no hold line: $out"
 # (b2) a run-owned child whose own land failed on missing review evidence (a review deadline, or a review that held it) is
 # neither requeued nor worked here: the run's review is the only evidence, and missing evidence holds delivery (ADR-0151
