@@ -426,11 +426,12 @@ h=$(orun stale 6301 approve land); rfile stale "$h" APPROVE
 /usr/bin/git -C "$T/co/runs/stale/ws/target-c" -c user.email=a@b -c user.name=t commit -q --allow-empty -m after-approval
 : > "$T/cr.calls"; : > "$T/fix.calls"; : > "$WAVE_CALLS"; rm -f "$T/moves"
 out=$(lpass stale); rc=$?; out2=$(lpass stale); rc2=$?
-[ ! -s "$T/cr.calls" ] && ok "a run-owned child whose approval went stale is not reviewed by childcc" || ko "childcc reviewed it: $(cat "$T/cr.calls")"
+newh=$(/usr/bin/git -C "$T/co/runs/stale/ws/target-c" rev-parse HEAD)
+/usr/bin/grep -q "^stale 6301 $newh\$" "$T/cr.calls" && ok "a finished run's child at a moved tip gets childcc's review of that tip (#808)" || ko "tip not reviewed: '$(cat "$T/cr.calls")'"
 [ ! -s "$T/fix.calls" ] && [ ! -s "$WAVE_CALLS" ] && ok "a stale approval enters nothing and starts no fix run" || ko "waves '$(cat "$WAVE_CALLS")', fix '$(cat "$T/fix.calls")'"
-[ "$rc" = 3 ] && [ "$rc2" = 3 ] && ok "a stale approval holds the child's delivery on every pass" || ko "stale approval: exit $rc, then $rc2: $out $out2"
+[ "$rc" = 3 ] && [ "$rc2" = 3 ] && ok "a stale approval holds the child's delivery until its tip's review enters" || ko "stale approval: exit $rc, then $rc2: $out $out2"
 /usr/bin/grep -q ' 6301$' "$T/moves" 2>/dev/null && ko "a child whose approval went stale moved its card" || ok "a child whose approval went stale moves no card"
-echo "$out" | /usr/bin/grep -q 'RUN-OWNED #6301' && ok "the pass names the stale approval it holds" || ko "no hold line: $out"
+echo "$out" | /usr/bin/grep -q 'WAVE HOLD #6301: the review of' && ok "the pass names the review of the moved tip it holds for" || ko "no hold line: $out"
 # (b2) a run-owned child whose own land failed on missing review evidence (a review deadline, or a review that held it) is
 # neither requeued nor worked here: the run's review is the only evidence, and missing evidence holds delivery (ADR-0151
 # rule 5). The failed-land requeue is for a failure unrelated to the review, so it reads the approval first.
@@ -478,5 +479,20 @@ out=$(lpass pick); rc=$?
 [ "$(/usr/bin/grep -c '^enter pick 6311' "$WAVE_CALLS")" = 0 ] && ok "the wave merges no child its run did not approve" || ko "unapproved child entered: $(cat "$WAVE_CALLS")"
 [ ! -s "$T/cr.calls" ] && [ ! -s "$T/fix.calls" ] && ok "neither run-owned child is reviewed or fixed by childcc" || ko "reviews '$(cat "$T/cr.calls")', fix '$(cat "$T/fix.calls")'"
 [ "$rc" = 3 ] && ok "the child its run did not approve holds the pass, so the wave waits for it" || ko "pick: exit $rc: $out"
+
+# A finished run's child whose run approved no head and whose tip did not move is held by its run for ever (#808): the
+# deferral carries a deadline. On the sixth pass on one unchanged (run, child, tip) it escalates once: one queued comment
+# naming the run, child, branch and sha, and one alerts.log line. Each deferral line is logged once per change, not per pass.
+export GH_NUMS="6400:Doing"; orun dfr 6400 hold >/dev/null; h=$(/usr/bin/git -C "$T/co/runs/dfr/ws/target-c" rev-parse HEAD)
+br=$(/usr/bin/git -C "$T/co/runs/dfr/ws/target-c" symbolic-ref --quiet --short HEAD); rm -f "$T/st/alerts.log" "$T"/st/cq/*ccdefer*; : > "$T/dfr.out"; : > "$WAVE_CALLS"
+for i in 1 2 3 4 5; do lpass dfr >> "$T/dfr.out"; done
+[ -z "$(ls "$T"/st/cq/*#6400-ccdefer-* 2>/dev/null)" ] && ok "a deferral does not escalate before its sixth pass" || ko "escalated before its deadline"
+lpass dfr >> "$T/dfr.out"; lpass dfr >> "$T/dfr.out"
+cq=$(ls "$T"/st/cq/*#6400-ccdefer-* 2>/dev/null)
+[ "$(printf '%s\n' $cq | /usr/bin/grep -c .)" = 1 ] && ok "a deferral escalates once, on its sixth pass" || ko "escalations: '$cq'"
+[ -n "$cq" ] && /usr/bin/grep -q "dfr" "$cq" && /usr/bin/grep -qF "$br" "$cq" && /usr/bin/grep -q "$h" "$cq" && ok "the escalation names the run, the child, the branch and the sha" || ko "escalation text: $(cat $cq 2>/dev/null)"
+[ "$(/usr/bin/grep -c 'CHILDCC DEFERRED.* dfr c' "$T/st/alerts.log" 2>/dev/null)" = 1 ] && ok "the escalation writes one alerts.log line" || ko "alerts.log: $(cat "$T/st/alerts.log" 2>/dev/null)"
+[ "$(/usr/bin/grep -c 'RUN-OWNED #6400' "$T/dfr.out")" = 1 ] && ok "the run-owned hold is logged once for an unchanged tip" || ko "RUN-OWNED logged $(/usr/bin/grep -c 'RUN-OWNED #6400' "$T/dfr.out") times"
+[ "$(/usr/bin/grep -c 'CHILDCC DEFERRED' "$T/dfr.out")" = 1 ] && ok "the deferral line is logged once for an unchanged tip" || ko "DEFERRED logged $(/usr/bin/grep -c 'CHILDCC DEFERRED' "$T/dfr.out") times"
 
 rm -rf "$T"; exit $fail
