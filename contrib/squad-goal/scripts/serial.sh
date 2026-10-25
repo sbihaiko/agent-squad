@@ -50,10 +50,10 @@ until mkdir "$L" 2>/dev/null; do
   [ -z "$h" ] && [ -d "$L" ] && [ $(( $(date +%s) - $(mtime "$L") )) -gt 10 ] && { rm -rf "$L"; continue; }   # a lock with no pid after 10 s: its owner died before writing it
   # The holder is alive. Past its recorded deadline with nothing left to stop its command -- its parent is pid 1 (its run is gone),
   # or its recorded watchdog is gone (#805: a holder whose parent is not pid 1 is still wedged) -- it is reaped, matched by the
-  # name it recorded, never by a bare pid that may have been reused.
+  # name it recorded, never by a bare pid that may have been reused. A watchdog that fired (timed-out) is releasing the lock itself.
   d=$(cat "$L/due" 2>/dev/null); c=$(cat "$L/cmd" 2>/dev/null); wdp=$(cat "$L/wd" 2>/dev/null)
   if [ -n "$d" ] && [ -n "$c" ] && [ "$(date +%s)" -gt "$d" ] && runs_as "$h" "$c" \
-     && { [ "$(ppid_of "$h")" = 1 ] || { [ -n "$wdp" ] && ! alive "$wdp"; }; }; then
+     && { [ "$(ppid_of "$h")" = 1 ] || { [ -n "$wdp" ] && [ ! -e "$L/timed-out" ] && ! alive "$wdp"; }; }; then
     echo "serial: reaping orphaned lock $n: holder pid $h ($c) is past its deadline and nothing stops it (parent gone or watchdog dead)" >&2
     kill -TERM "$h" 2>/dev/null; sleep 1; kill -KILL "$h" 2>/dev/null; rm -rf "$L"; continue; fi
   # One line, the first time this process has to wait, naming what it waits for: a gate that waits for another gate has to say so
