@@ -278,7 +278,7 @@ case "$r" in *"BRANCHLAND PAST RED BASE gui/7-x"*"dev is red at"*"contains"*) ok
 basehold; rebase_on_red; r=$(BASECHECKS="$RED" CHECKS="$RED" bl)
 [ "$($O rev-parse dev)" = "$before" ] && ok "red base, fix on top of the red head, red own check: dev does not move" || ko "red own check landed past the red base: '$r'"
 # no check run at that tip, local gate passes: the gate is the own evidence, and the branch lands past the red base
-basehold; rebase_on_red; r=$(BASECHECKS="$RED" SG_LOCAL_GATE_CMD="$GATE_OK" CHECKS='{"check_runs":[]}' bl)
+basehold; rebase_on_red; tip=$($O rev-parse gui/7-x); r=$(BASECHECKS="$RED" SG_LOCAL_GATE_CMD="$GATE_OK" CHECKS='{"check_runs":[]}' bl)
 [ "$($O rev-parse dev)" = "$tip" ] && case "$r" in *"BRANCHLAND PAST RED BASE gui/7-x"*) ok "red base, fix on top of the red head, zero checks, gate passes: lands past the red base";; *) ko "zero checks, gate passes: no past-red line: '$r'";; esac || ko "zero checks, gate passes: dev not moved: '$r'"
 # a branch that does not contain the red head waits, even with its own check green
 basehold; r=$(BASECHECKS="$RED" CHECKS="$GREEN" bl)
