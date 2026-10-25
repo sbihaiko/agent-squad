@@ -55,6 +55,23 @@ out=$(SERIAL_WAIT_SECONDS=4 bash "$src" gate true 2>&1); rc=$?
 [ "$rc" = 75 ] && ok "a held lock whose owner is alive is waited for, never reaped" || ko "an owned holder was reaped (rc=$rc)"
 rm -rf "$SG_STATE/locks/gate"
 
+# (#805) A holder past its deadline whose watchdog is gone is reaped even when its parent is not pid 1: the run that owns it may
+# still be alive, but nothing will stop its command. The stub holder is a sleep of this shell (its parent is not pid 1), its
+# recorded deadline is past, and the watchdog it records is a pid already gone.
+alive() { kill -0 "$1" 2>/dev/null && [ "$(/bin/ps -o stat= -p "$1" 2>/dev/null | cut -c1)" != Z ]; }
+sleep 300 >/dev/null 2>&1 & sp=$!
+true & dw=$!; wait "$dw"
+mkdir -p "$SG_STATE/locks/gate"; echo "$sp" > "$SG_STATE/locks/gate/pid"; echo sleep > "$SG_STATE/locks/gate/cmd"
+echo $(( $(date +%s) - 30 )) > "$SG_STATE/locks/gate/due"; echo "$dw" > "$SG_STATE/locks/gate/wd"
+[ "$(/bin/ps -o ppid= -p "$sp" 2>/dev/null | tr -d ' ')" != 1 ] && ok "the stub holder's parent is not pid 1" || ko "the stub holder is an orphan"
+out=$(SERIAL_WAIT_SECONDS=4 bash "$src" gate sh -c 'echo ran' 2>"$T/reap805.err"); rc=$?
+[ "$rc" = 0 ] && [ "$out" = ran ] && ok "a gate reaps a holder past its deadline whose watchdog is gone, parent not pid 1" || ko "a dead watchdog did not free the gate (rc=$rc out=$out)"
+/usr/bin/grep -q "reaping orphaned lock gate" "$T/reap805.err" && ok "the reaping names the holder with the dead watchdog" || ko "no reaping line: $(cat "$T/reap805.err")"
+alive "$sp" && ko "the holder with a dead watchdog was left alive" || ok "the holder with a dead watchdog is reaped"
+kill -9 "$sp" 2>/dev/null; wait "$sp" 2>/dev/null
+[ -d "$SG_STATE/locks/gate" ] && ko "the lock stayed after the reaping gate" || ok "the lock is released when the reaping gate ends"
+rm -rf "$SG_STATE/locks/gate"
+
 # (#392) The holder's own cleanup TERMs its watchdog's process group when the command ends, and the sleep of that watchdog can be
 # the process that dies. A sleep cut short is not a deadline: the holder keeps its command's exit code. SERIAL_HOLD_SECONDS=4242
 # puts the deadline hours away and names that one sleep, so the cut is the only thing that can end it. Finding that sleep reads the
