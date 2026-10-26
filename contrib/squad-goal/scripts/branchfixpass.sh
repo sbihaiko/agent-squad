@@ -86,8 +86,14 @@ while read -r sha br i; do
   done=$((done+1))
   if ! req=$(bash "$here/mkreq.sh" "auto-branchfix-$key-$s9" "$b"); then rm -f "$b"; echo "BRANCHFIX $br @ $s9 refused by mkreq.sh; the next pass retries" >&2; continue; fi
   rm -f "$b"
-  run=$(cd "$SG_CHECKOUT" && python3 "$here/launch.py" "$req" 2>/dev/null | tail -1)
-  [ -n "$run" ] || { echo "BRANCHFIX $br @ $s9: launch.py printed no run id, so no fix run started; the next pass retries"; continue; }
+  # A refusal is no dispatch (#812): launch.py exits non-zero when it refuses the start, so the pass says launch.py's own last
+  # line instead of swallowing it, writes no fix marker and lets the next pass retry the tip.
+  lf=$(mktemp)
+  if ! (cd "$SG_CHECKOUT" && python3 "$here/launch.py" "$req") >"$lf" 2>&1; then
+    echo "BRANCHFIX $br @ $s9 refused by launch.py: $(tail -1 "$lf"); the next pass retries" >&2; rm -f "$lf"; continue
+  fi
+  run=$(/usr/bin/grep -E '^run-[A-Za-z0-9._-]+$' "$lf" | tail -1); rm -f "$lf"
+  [ -n "$run" ] || { echo "BRANCHFIX $br @ $s9: launch.py printed no run id, so no fix run started; the next pass retries" >&2; continue; }
   /usr/bin/git -C "$SG_CHECKOUT" checkout -q -- docs/squad/workflows/dynamic.graph.json 2>/dev/null   # launch.py renames the graph root in place
   echo "$run" > "$A/branchfix-$key-$s9"; echo "$br $sha" > "$A/branchfix-push-$run";python3 "$here/revformat.py" --record-stall "$A" branchfix "$key" "$fp" "$same"; rm -f "$A/branchfix-stop-$key"
   find "$A" -maxdepth 1 -name "branchfix-$key-?????????" ! -name "*-$s9" -delete 2>/dev/null

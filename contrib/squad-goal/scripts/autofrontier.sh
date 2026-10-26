@@ -306,7 +306,19 @@ dispatch_run() {   # <j>: build, guard, launch and announce run j of the pass
   done
   rm -f "$rep" "$kid"
   log="$SG_STATE/$name.log"
-  (cd "$SG_CHECKOUT" && python3 -c 'import subprocess,sys;subprocess.Popen(["python3",sys.argv[1],sys.argv[2]],stdout=open(sys.argv[3],"w"),stderr=subprocess.STDOUT,start_new_session=True)' "$here/launch.py" "$req" "$log")
+  # A refusal must not consume the dispatch (#812): launch.py exits non-zero when it refuses the start (a coding model out of
+  # the router envelope, a target that is no linked worktree), and the markers written above held the ticket forever with no
+  # run behind them. The launch stays detached; only its refusal window is waited on (a start still waiting for its run
+  # folder after 30 s is no refusal), and a refusal frees exactly what this pass marked so the next pass retries the issue.
+  if ! (cd "$SG_CHECKOUT" && python3 -c 'import subprocess,sys
+p=subprocess.Popen(["python3",sys.argv[1],sys.argv[2]],stdout=open(sys.argv[3],"w"),stderr=subprocess.STDOUT,start_new_session=True)
+try: rc=p.wait(timeout=30)
+except subprocess.TimeoutExpired: rc=0
+sys.exit(rc)' "$here/launch.py" "$req" "$log"); then
+    for n in "${live[@]}"; do rm -f "$A/disp-$n"; done
+    echo "FRONTIER $name refused by launch.py: $(tail -1 "$log" 2>/dev/null); freed its dispatch markers, next pass retries" >&2
+    return 0
+  fi
   for n in "${live[@]}"; do
     printf "Dispatched automatically as soon as its blockers fell (autofrontier, request %s, children: %s). Run id in %s once it starts.\n" "$name" "$(printf '[%s] ' "${kids[@]}")" "${log##*/}" > "$(sg_cq_file "$n-frontier$$.md")"; done
   $BOARD --add $SG_OWNER $SG_PROJECT "$doing" "${live[@]}" 2>&1 >/dev/null | grep -v '^issue_state\.py: items read ' | sed "s/^/FRONTIER-BOARD $doing refused: /"   # a refused write is named, never dropped (#468)
