@@ -138,6 +138,32 @@ async def test_a_failed_node_leaves_the_target_as_it_is(tmp_path):
     assert events(wt / "runs" / "r1", "workspace_commit") == []
 
 
+# #811: a read-only node is no author. A hook regenerates a tracked artifact (a knowledge-graph file) on every tool call, so
+# the target holds churn the node never made; committing it put 31 MB into the branch a review then could not read. A node
+# whose declared tools hold no write tool commits nothing, and the refusal is recorded with its reason.
+READ_ONLY = agent("a", output_key="x", tools=["Read", "Grep", "Glob"], instructions="Read it.\n\nWork:\nClose #73 for good")
+
+
+async def test_a_read_only_node_whose_target_the_environment_dirtied_commits_nothing(tmp_path):
+    repo, wt, eng = target_engine(tmp_path, PASS, node=READ_ONLY)
+    eng.adapter = ScriptedAdapter({"a": {**PASS, "effect": write_file("base.txt", "regenerated\n")}})   # the hook's churn, not the node's work
+    head = git.head(wt)
+    v = await eng.run()
+    a = outs(wt / "runs" / "r1", "a")[0]
+    assert v.verdict == "completed" and a["outcome"] == "pass"          # a read-only node still passes on its output
+    assert git.head(wt) == head and git.dirty(wt, exclude="runs/r1") == [" M base.txt"]   # nothing swept into the branch
+    ev = events(wt / "runs" / "r1", "workspace_commit")
+    assert [(e["status"], e["reason"]) for e in ev] == [("refused", "read_only_node")]
+
+
+async def test_a_node_that_declares_a_write_tool_still_commits_its_target(tmp_path):
+    repo, wt, eng = target_engine(tmp_path, PASS)                        # the default node declares Edit
+    base = git.head(wt)
+    v = await eng.run()
+    assert v.verdict == "completed" and git.head(wt) != base and git.dirty(wt, exclude="runs/r1") == []
+    assert [e["status"] for e in events(wt / "runs" / "r1", "workspace_commit")] == ["committed"]
+
+
 async def test_a_target_worktree_outside_the_run_is_refused_with_the_reason(tmp_path):
     repo, wt, eng = target_engine(tmp_path, PASS, run_dir=tmp_path / "run")   # the run folder is not inside the target
     head = git.head(wt)
