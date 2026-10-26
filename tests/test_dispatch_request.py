@@ -17,7 +17,7 @@ def test_no_dispatch_request_asks_for_a_spawn_tool():
     for name in REQUESTERS:
         text = (SCRIPTS / name).read_text()
         assert "spawn tool" not in text and "spawn call" not in text, f"{name}: the dispatch entry holds no spawn tool (#813)"
-        assert "`spawns`" in text, f"{name}: the request names the field the engine reads (#813)"
+        assert "spawns" in text, f"{name}: the request names the field the engine reads (#813)"
 
 
 def test_the_shipped_router_names_the_field_and_holds_no_spawn_tool():

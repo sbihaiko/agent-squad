@@ -83,7 +83,7 @@ real() { MK_REAL=1 SG_FORK_DIR=$FK SG_FORK_BASE=main "$@"; }   # the real slice 
 run() { SG_SINGLE_AUTOFRONTIER=1 bash "$T/scripts/autofrontier.sh" 2>&1 | /usr/bin/tee -a "$T/pass.out"; /bin/sleep 0.6; }   # the launch is detached: give it time to count itself; pass.out keeps every pass for the fixture check below
 lines() { local c; c=$($G -c . "$1" 2>/dev/null); echo "${c:-0}"; }
 marked() { local n c=0; for n in "$@"; do [ -e "$SG_STATE/auto/disp-$n" ] && c=$((c+1)); done; echo $c; }
-asked() { sed -nE 's/.*call the spawn tool for the ([0-9]+) child.*/\1/p' "$MKLOG.body" | head -1; }
+asked() { sed -nE 's/.*one entry for each of the ([0-9]+) child.*/\1/p' "$MKLOG.body" | head -1; }
 moved() { local n; for n in "$@"; do $G -qE "^(--add )?o 1 In Progress( [0-9]+)* $n( |\$)" "$BOARDLOG" || return 1; done; }   # every issue named is in the card move the pass made
 added() { $G -qE '^--add o 1 In Progress( [0-9]+)*$' "$BOARDLOG"; }   # a dispatch adds a missing board card before its status is written
 seedmax() { python3 - "$repo" <<'PY'
@@ -114,7 +114,7 @@ issues '[{"number":21,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"nu
 r=$(run)
 [ "$(lines "$LAUNCHLOG")" = 3 ] && ok "three startable issues and free slots start three runs" || ko "three startable issues and free slots start three runs: $(lines "$LAUNCHLOG") launches: '$r'"
 [ "$(lines "$MKLOG")" = 3 ] && ok "the pass builds one request per run" || ko "the pass builds one request per run: $(lines "$MKLOG")"
-[ "$(sed -nE 's/.*call the spawn tool for the ([0-9]+) child.*/\1/p' "$MKLOG.body" | sort -u | tr -d '\n')" = 1 ] && ok "each request asks for one child" || ko "each request asks for one child: '$($G -o 'spawn tool for the [0-9]* child' "$MKLOG.body")'"
+[ "$(sed -nE 's/.*one entry for each of the ([0-9]+) child.*/\1/p' "$MKLOG.body" | sort -u | tr -d '\n')" = 1 ] && ok "each request asks for one child" || ko "each request asks for one child: '$($G -o 'entry for each of the [0-9]* child' "$MKLOG.body")'"
 [ "$(childblocks)" = 3 ] && ok "the requests carry three CHILD blocks, one issue each" || ko "the requests carry three CHILD blocks: '$(childblocks)'"
 [ "$(marked 21 22 23)" = 3 ] && ok "every dispatched issue holds its marker" || ko "every dispatched issue holds its marker: $(marked 21 22 23) of 3"
 [ "$(reqs)" = 3 ] && ok "each run has its own request name" || ko "each run has its own request name: $(cat "$d"/st/auto/disp-*)"

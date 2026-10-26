@@ -186,7 +186,7 @@ echo $(( (src_i + 1) % 4 )) > "$A/hunt-source"
 
 open_debt=$(gh api "repos/$SG_REPO/issues?state=open&labels=debt&per_page=100&sort=created&direction=asc" -q '.[]|select(.pull_request|not)|"#"+(.number|tostring)+" "+.title' 2>/dev/null)
 name="hunt-$(date +%Y%m%d-%H%M%S)"; body="$SG_STATE/req/$name.body"
-{ echo "IMPORTANT: your first and only action is to call the spawn tool for the 1 child below, in one turn; ending the turn without a spawn call fails the run. Spawn the child with $(bash "$(dirname "$0")/envelope-spend.sh"). Repo $SG_REPO. One child, coding model from models.json. en-US everywhere; no Co-Authored-By and no \"Generated with Claude Code\" line. Rules: $SG_CODING_RULES."
+{ echo "IMPORTANT: your first and only action is to return the \"spawns\" list in your final output, one entry for the 1 child below, in one turn; ending the turn without that list fails the run. No tool call makes a child: the run reads the list. The child's spend: $(bash "$(dirname "$0")/envelope-spend.sh"). Repo $SG_REPO. One child, coding model from models.json. en-US everywhere; no Co-Authored-By and no \"Generated with Claude Code\" line. Rules: $SG_CODING_RULES."
   echo "This is a read-only bug hunt. Do not edit files, do not run git writes, do not push a branch."
   echo "First source: open debt issues (work these before hunting for new defects) when there is no startable bug."
   if [ -n "$open_debt" ]; then echo "Open debt:"; echo "$open_debt"; else echo "Open debt: none."; fi

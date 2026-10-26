@@ -81,7 +81,7 @@ while read -r sha br i; do
     echo "BRANCHFIX STOP $br @ $s9 (issue #$i): $same fix rounds with no change; card frozen for the owner"; continue
   fi
   b=$(mktemp)
-  { echo "IMPORTANT: your first and only action is to call the spawn tool for the child below; ending the turn without a spawn call fails the run. Spawn the child with $(bash "$here/envelope-spend.sh" 2>/dev/null)."
+  { echo "IMPORTANT: your first and only action is to return the \"spawns\" list in your final output, one entry for the child below; ending the turn without that list fails the run. No tool call makes a child: the run reads the list. The child's spend: $(bash "$here/envelope-spend.sh" 2>/dev/null)."
     bash "$here/branchfix.sh" "$br" "$i"; } > "$b"
   done=$((done+1))
   if ! req=$(bash "$here/mkreq.sh" "auto-branchfix-$key-$s9" "$b"); then rm -f "$b"; echo "BRANCHFIX $br @ $s9 refused by mkreq.sh; the next pass retries" >&2; continue; fi

@@ -12,7 +12,7 @@ br=$(git symbolic-ref --quiet --short HEAD) || { echo "CHILDFIX $PWD is on no br
 wt=$(pwd -P); sha=$(git rev-parse HEAD); f="$SG_STATE/review-$(printf '%s' "$br" | tr / _).md"
 head -1 "$f" 2>/dev/null | /usr/bin/grep -q CHANGES || { echo "CHILDFIX $br: no CHANGES review to fix (#$iss)" >&2; exit 2; }
 b=$(mktemp)
-{ echo "IMPORTANT: your first and only action is to call the spawn tool for the child below; ending the turn without a spawn call fails the run. Spawn the child with $(bash "$here/envelope-spend.sh" 2>/dev/null)."
+{ echo "IMPORTANT: your first and only action is to return the \"spawns\" list in your final output, one entry for the child below; ending the turn without that list fails the run. No tool call makes a child: the run reads the list. The child's spend: $(bash "$here/envelope-spend.sh" 2>/dev/null)."
   echo "One child, a FIX RUN in the kept worktree $wt (branch $br, child of run $run) for GitHub issue #$iss (repo $SG_REPO). Work only in $wt: commit on top of its HEAD ${sha:0:9} there. Push no branch, and open no pull request. Never write outside $wt; never run publish-live.sh and never touch ~/.claude/skills (#658). Keep \"Refs #$iss\" (never Closes). Rules: $SG_CODING_RULES."
   echo; echo "[review] The review of the child's own diff says VERDICT: CHANGES. Address every finding (fix it, or say why it is wrong, with file:line evidence):"
   tail -n +2 "$f"

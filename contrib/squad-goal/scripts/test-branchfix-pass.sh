@@ -51,7 +51,7 @@ rev gui/7-x CHANGES "a.sh:3 the cap is wrong"; rev fix/8-y APPROVE "none"; rev g
 r=$(fp)
 [ "$(n gui/7-x)" = 1 ] && ok "a CHANGES review at the tip dispatches one fix run" || ko "gui/7-x dispatched $(n gui/7-x) times: '$r'"
 /usr/bin/grep -q "FIX RUN on the work branch gui/7-x for GitHub issue #7.*a.sh:3 the cap is wrong" "$T/launch.log" && ok "the request is the branchfix.sh text with the findings" || ko "request: $(cat "$T/launch.log" 2>/dev/null)"
-/usr/bin/grep -q "spawn tool" "$T/launch.log" && ok "the request asks for one spawn, as an autofix request does" || ko "no spawn instruction in the request"
+/usr/bin/grep -q 'one entry for the child below' "$T/launch.log" && ok "the request asks for one child in the spawns list, as an autofix request does" || ko "no spawn instruction in the request"
 [ "$(n fix/8-y)" = 0 ] && ok "an APPROVE review dispatches nothing" || ko "an APPROVE branch was dispatched"
 [ "$(n gui/9-z)" = 0 ] && ok "a review that is not at the tip dispatches nothing" || ko "a review of an old sha was dispatched"
 # 2) a second pass at the same tip dispatches nothing
