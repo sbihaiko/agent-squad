@@ -21,6 +21,7 @@ J
 cat > "$T/s/launch.py" <<J
 import os, sys
 open("$T/launch.log", "a").write(open(sys.argv[1]).read().replace("\n", " ") + "\n")
+if os.environ.get("REFUSE"): print("refused: the first coding model x is not in the router envelope", file=sys.stderr); sys.exit(1)
 if not os.environ.get("NORUN"): print("run-%d" % sum(1 for _ in open("$T/launch.log")))
 J
 printf '#!/bin/bash\necho "a spend envelope"\n' > "$T/s/envelope-spend.sh"
@@ -119,4 +120,12 @@ push gui/17-c; rev gui/17-c CHANGES "j.sh:1 fix"; r=$(OPEN="17" fp); rid=$(cat "
 ch=$($G -C "$T/cw" rev-parse HEAD); b0=$($G -C "$tg" rev-parse "squad/run/$rid"); mkdir -p "$T/co/runs/$rid"
 printf '{"event": "run_start", "target": "%s", "target_branch": "squad/run/%s"}\n{"event": "outcome", "node": "route.router.1", "outcome": "pass", "workspace": {"name": "worktrees/child", "head": "%s"}}\n{"event": "land", "node": "route.router.1", "effect": {"name": "merge_land", "before": "%s", "head": "%s"}}\n{"event": "verdict", "verdict": "completed"}\n' "$tg" "$rid" "$ch" "$b0" "$b0" > "$T/co/runs/$rid/record.jsonl"
 r=$(OPEN="17" fp); [ "$($O rev-parse gui/17-c)" = "$ch" ] && ok "a fix run with a no-op land pushes the child's own head" || ko "the child's head was not pushed: '$r'"
+# 14) (#812) a launch.py that refuses the start is no dispatch: the pass says launch.py's own line, writes no fix marker,
+#     and the next pass retries the tip.
+push gui/18-r; rev gui/18-r CHANGES "k.sh:1 fix"
+r=$(OPEN="18" REFUSE=1 fp)
+case "$r" in *"refused: the first coding model"*) ok "a refused launch says launch.py's own line";; *) ko "no refusal line: '$r'";; esac
+[ -z "$(ls "$T/st/auto"/branchfix-gui_18-r-* 2>/dev/null)" ] && ok "a refused launch writes no fix marker" || ko "a marker survived a refusal: $(ls "$T/st/auto"/branchfix-gui_18-r-*)"
+r=$(OPEN="18" fp)
+[ "$(n gui/18-r)" = 2 ] && ok "the next pass retries the refused fix run" || ko "retry: $(n gui/18-r) dispatch(es): '$r'"
 exit $fail

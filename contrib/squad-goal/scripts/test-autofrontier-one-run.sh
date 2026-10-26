@@ -41,7 +41,7 @@ cp "$(dirname "$src")/startability.sh" "$T/scripts/startability-real.sh"; cp "$(
 printf '#!/bin/bash\n. "$(dirname "$0")/startability-real.sh"\nsg_fork_only() { return 1; }\nsg_not_startable() { return 1; }\nsg_fork_preamble() { :; }\nsg_fork_branch() { echo "gui/$1"; }\nsg_fork_branch_pattern() { echo "gui/%%n"; }\nsg_issue_worktree_note() { :; }\n' > "$T/scripts/startability.sh"
 # mkreq.sh appends the body it was handed (one pass may build several requests, #728) and prints a request path (or refuses when MK_REFUSE is set); launch.py only counts
 printf '#!/bin/bash\n[ -n "$MK_REFUSE" ] && { echo "refusing: stub" >&2; exit 1; }\n[ "$1" = --paths ] && exec bash "$(dirname "$0")/mkreq-real.sh" "$@"\n[ -n "$MK_REAL" ] && { bash "$(dirname "$0")/mkreq-real.sh" "$@" || exit 1; echo x >> "$MKLOG"; cat "$2" >> "$MKLOG.body"; exit 0; }\necho x >> "$MKLOG"; cat "$2" >> "$MKLOG.body"; echo "$HOME/req.txt"\n' > "$T/scripts/mkreq.sh"
-printf 'open(__import__("os").environ["LAUNCHLOG"], "a").write("launch\\n")\n' > "$T/scripts/launch.py"
+printf 'import os,sys\nopen(os.environ["LAUNCHLOG"], "a").write("launch\\n")\nif os.environ.get("LAUNCH_REFUSE"): print("refused: the first coding model x is not in the router envelope", file=sys.stderr); sys.exit(1)\n' > "$T/scripts/launch.py"
 chmod +x "$T/scripts/mkreq.sh"
 # board.sh keeps the call it was handed: <owner> <project> <column> <issue>... (#33: the card move was a bare `true`, so no case could say which cards moved)
 printf '#!/bin/bash\necho "$*" >> "$BOARDLOG"\n' > "$T/board.sh"; chmod +x "$T/board.sh"
@@ -480,6 +480,16 @@ case "$r" in *"DISPATCH HOLD: the promotion proof holds the machine"*) ok "I6: a
 printf '%s 1\n' "$(( $(date +%s) - 8000 ))" > "$SG_STATE/promote-reserve"
 r=$(run)
 [ "$(marked 351)" = 1 ] && ok "I6: a reserve past the lock's bound holds nothing" || ko "I6: a dead reserve held the pass: '$r'"
+
+# I7 (#812): a launch.py that refuses the start is no dispatch. The marker it wrote is freed, launch.py's own last line is
+#     said, and the next pass retries the issue -- the marker never holds a ticket that has no run behind it.
+scene refuse
+issues '[{"number":361,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
+r=$(LAUNCH_REFUSE=1 run)
+case "$r" in *"refused: the first coding model"*) ok "I7: a refused launch says launch.py's own line";; *) ko "I7: no refusal line: '$r'";; esac
+[ "$(marked 361)" = 0 ] && ok "I7: a refused launch frees its dispatch marker" || ko "I7: the marker of a refused launch stayed: $(marked 361)"
+r=$(LAUNCH_REFUSE=1 run)
+[ "$(lines "$LAUNCHLOG")" = 2 ] && ok "I7: the next pass retries the refused issue" || ko "I7: the refused issue was not retried: $(lines "$LAUNCHLOG") attempt(s)"
 
 # #756: the fixture carries every file the pass sources, so no case reads a pass that died on a missing helper.
 # A missing siblings.py is a FRONTIER NOTE the pass prints on purpose; a missing sourced .sh is a pass that ran without its helper.
