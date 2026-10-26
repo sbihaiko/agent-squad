@@ -55,4 +55,12 @@ else ko "a relative interpreter was not caught"; fi
 if values "$T/profiles/absolute.sh" | $G -Eq "$BARE"; then ko "an absolute interpreter was wrongly caught"
 else ok "an absolute interpreter passes"; fi
 
+# The profile this suite owns names the local gate of its own repository. `branchland.sh` falls back to `sg_base_gate`, the
+# squad's own battery (`ruff check squad tests`, `mypy squad`), which cannot pass in a repository that has no `squad/`
+# package: with CI off, every landing is refused for a command that never ran (#679, "Found 1 error." on two approved
+# branches). Other profiles declare their own gates and are not this suite's to judge; `example.sh` is a template.
+gate_of() { bash -c 'set -a; SG_CHECKOUT=/checkout; . "$1" >/dev/null 2>&1 || exit 0; printf "%s" "${SG_LOCAL_GATE_CMD-}"' _ "$1"; }
+if [ -n "$(gate_of "$d/profiles/wz-zesty-agent.sh")" ]; then ok "the profile names its local gate"
+else ko "SG_LOCAL_GATE_CMD is unset (branchland would run the squad's own battery in this repository)"; fi
+
 exit "$fail"
