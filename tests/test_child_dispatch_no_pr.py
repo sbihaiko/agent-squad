@@ -61,9 +61,11 @@ def test_the_request_and_the_fix_run_name_the_worktrees_own_prepush():
         assert "bash contrib/squad-goal/scripts/prepush.sh --local" in text, f
         assert "$here/prepush.sh" not in text, f
     fix = read("childfix.sh")
-    # #740: the command is the profile's, agent-squad's by default, and a relative script path is anchored at the kept worktree.
+    # #740: the command is the profile's, agent-squad's by default, and a relative script path is anchored at the checkout, which
+    # the fix child reaches from its own worktree. It never names the kept worktree as the place to write (#814).
     assert "SG_PREPUSH_CMD-bash contrib/squad-goal/scripts/prepush.sh --local" in fix
-    assert "pc=${pc/#bash contrib\\//bash $wt/contrib/}" in fix
+    assert "pc=${pc/#bash contrib\\//bash $SG_CHECKOUT/contrib/}" in fix
+    assert "Work where you stand" in fix
     assert "$here/prepush.sh" not in fix
 
 
