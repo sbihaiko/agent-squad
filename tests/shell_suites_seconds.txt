@@ -138,6 +138,7 @@ test-watch-land.sh 10.13
 test-watch-single-exec.sh 0.02
 test-watchd-driver-sha.sh 2.30
 test-watchd-token-stop.sh 6.28
+test-watchtail.sh 4.17
 test-wave-lifecycle.sh 18.50
 test-wave-requeue-cap.sh 3.35
 test-wave.sh 46.99
