@@ -22,9 +22,9 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
 
-BACKLOG = {"n": 7, "t": "a ticket", "s": "OPEN", "st": "Backlog", "l": ["enhancement"]}
-TODO = {"n": 8, "t": "already started", "s": "OPEN", "st": "Todo", "l": []}
-SPEC = {"n": 9, "t": "a spec", "s": "OPEN", "st": "Backlog", "l": ["spec"]}
+BACKLOG = {"n": 7, "i": 101, "t": "a ticket", "s": "OPEN", "st": "Backlog", "l": ["enhancement"]}
+TODO = {"n": 8, "i": 102, "t": "already started", "s": "OPEN", "st": "Todo", "l": []}
+SPEC = {"n": 9, "i": 103, "t": "a spec", "s": "OPEN", "st": "Backlog", "l": ["spec"]}
 
 
 @pytest.fixture
@@ -59,9 +59,9 @@ def post(port, body, *, host=None, origin=None, content_type="application/json")
 
 
 def writer(calls, rc=0, err=""):
-    """The board seam as the route calls it: the issue is recorded, and the answer is canned."""
-    def run(issue):
-        calls.append(issue)
+    """The board seam as the route calls it: the issue and the `--add` flag are recorded, and the answer is canned."""
+    def run(issue, add=False):
+        calls.append((issue, add))
         return subprocess.CompletedProcess(["board.sh"], rc, f"#{issue} -> Todo\n", err)
     return run
 
@@ -101,11 +101,23 @@ def test_a_backlog_card_moves_to_todo_and_the_cache_follows(hub):
     mod.promote_write = writer(calls)
     status, out = post(port, {"issue": 7})
     assert status == 200 and out.get("ok") is True, out
-    assert calls == [7], calls
+    assert calls == [(7, False)], calls          # a row with a Project item moves with the plain write
     board = mod.board()
     groups = {g["name"]: [i["n"] for i in g["items"]] for g in board["groups"]}
     assert 7 in groups["Todo"] and 7 not in groups["Backlog"], groups
     assert next(i for i in mod.board_cache["items"] if i["n"] == 7)["st"] == "Todo"
+
+
+def test_a_card_the_board_read_never_carried_is_added_and_moves(hub):
+    """#815: `board_pass` draws an open issue with no Project item as a Backlog row (`st` null, no item id). The route asks
+    the seam for `--add` there, because a plain move is answered `#<n> not on the board` and writes nothing."""
+    mod, port = hub
+    calls = []
+    mod.promote_write = writer(calls)
+    mod.board_cache["items"].append({"n": 12, "t": "filed by hand", "s": "OPEN", "st": None, "l": []})
+    status, out = post(port, {"issue": 12})
+    assert status == 200 and out.get("ok") is True, out
+    assert calls == [(12, True)], calls
 
 
 def test_a_foreign_origin_is_refused(hub):

@@ -2430,17 +2430,22 @@ def board():
     return {"t": board_cache["t"], "err": board_cache["err"], "prs": lane, "groups": groups, "cases": cases, "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {}), "flow": flow_charts()}
 
 PROMOTE_TO = COLUMN["issue_todo"]   # the column the arrow moves a card into: the owner's go signal (ADR-0142)
-def promote_write(issue):
+def promote_write(issue, add=False):
     """The one writer call of the owner's move: `<owner> <project> Todo <n>`, the shape reconcile.py writes, so the
-    board seam (`board.sh`) is the only reach of the carrier. The call carries the state directory this hub resolved:
-    hubctl starts the hub with no SG_STATE, and board.py reads the key to find its caches (#1750)."""
+    board seam (`board.sh`) is the only reach of the carrier. `add` asks the same door for `--add` first, for a card the
+    board holds no item of: the row came from the open-issue read, so a plain move has nothing to set (#815). The call
+    carries the state directory this hub resolved: hubctl starts the hub with no SG_STATE, and board.py reads the key to
+    find its caches (#1750)."""
     env = {**os.environ, "SG_STATE": str(STATE)}
-    return subprocess.run(["bash", str(pathlib.Path(__file__).resolve().parent / "board.sh"), OWNER, str(PROJECT_NO), PROMOTE_TO, str(issue)], capture_output=True, text=True, timeout=120, env=env)
+    argv = ["bash", str(pathlib.Path(__file__).resolve().parent / "board.sh")]
+    if add: argv.append("--add")
+    return subprocess.run(argv + [OWNER, str(PROJECT_NO), PROMOTE_TO, str(issue)], capture_output=True, text=True, timeout=120, env=env)
 def promote(issue):
     """Move one open card from Backlog to Todo through the board seam (#560). Only a card the hub holds in Backlog now
     is accepted: a closed issue keeps its column (ADR-0143), a spec is never work (ADR-0142), and a card already in
-    Todo sends no write (ADR-0144). A proven write updates the cache, so the card moves at the next refresh without a
-    GitHub read right after the write."""
+    Todo sends no write (ADR-0144). A row the board read never carried is an open issue with no Project item, and the seam
+    is asked for `--add` there: a plain move answers it "not on the board" and writes nothing (#815). A proven write
+    updates the cache, so the card moves at the next refresh without a GitHub read right after the write."""
     if isinstance(issue, bool) or not isinstance(issue, int) or issue <= 0: return {"err": "issue: a number"}
     item = next((i for i in board_cache.get("items") or [] if i.get("n") == issue), None)
     if item is None: return {"err": "not on the board"}
@@ -2448,7 +2453,7 @@ def promote(issue):
     col, _ = _columns_module.view_column(item.get("st"), False, item.get("l"))
     if col != COLUMN["unscheduled"]: return {"err": f"the card is in {col}, not {COLUMN['unscheduled']}: only a Backlog card moves"}
     if _columns_module.SPEC_LABEL in (item.get("l") or []): return {"err": "a spec is never work: its tickets are (ADR-0142)"}
-    try: r = promote_write(issue)
+    try: r = promote_write(issue, add=not item.get("i"))   # no item id: the row came from the open-issue read (#815)
     except Exception as e: return {"err": str(e)[:200] or "the writer did not answer"}
     if r.returncode:
         lines = (r.stderr or r.stdout or f"exit {r.returncode}").strip().splitlines()
