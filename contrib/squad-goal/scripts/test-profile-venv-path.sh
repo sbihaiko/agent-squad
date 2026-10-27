@@ -60,7 +60,12 @@ else ok "an absolute interpreter passes"; fi
 # package: with CI off, every landing is refused for a command that never ran (#679, "Found 1 error." on two approved
 # branches). Other profiles declare their own gates and are not this suite's to judge; `example.sh` is a template.
 gate_of() { bash -c 'set -a; SG_CHECKOUT=/checkout; . "$1" >/dev/null 2>&1 || exit 0; printf "%s" "${SG_LOCAL_GATE_CMD-}"' _ "$1"; }
-if [ -n "$(gate_of "$d/profiles/wz-zesty-agent.sh")" ]; then ok "the profile names its local gate"
+# A profile is machine config, not a repository file: the owner keeps `wz-zesty-agent.sh` beside the installed scripts, and this
+# tree holds `example.sh` alone. A tree that carries no such profile is not this suite's to judge (ADR-0139), so the check runs
+# only where the profile it reads is present.
+pw="$d/profiles/wz-zesty-agent.sh"
+if [ ! -f "$pw" ]; then ok "no wz-zesty-agent profile in this tree: its local gate is the profile's, not this suite's (ADR-0139)"
+elif [ -n "$(gate_of "$pw")" ]; then ok "the profile names its local gate"
 else ko "SG_LOCAL_GATE_CMD is unset (branchland would run the squad's own battery in this repository)"; fi
 
 exit "$fail"
