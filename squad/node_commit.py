@@ -21,11 +21,12 @@ PROBE_DEADLINE_S = 10       # the cap of each read-only git call that decides wh
 _REQUEST = re.compile(r"\n\n(?:Work|Task):\n(.*)\Z", re.S)
 
 
-_NAMED = (re.compile(r"\bGitHub issue #(\d+)"), re.compile(r"\bRefs #(\d+)"))
+_NAMED = (re.compile(r"\bGitHub issue #(\d+)"), re.compile(r"\bGitHub issue\(s\) #?(\d+)"), re.compile(r"\bRefs #(\d+)"))
 
 
 def named_issue(text):
-    """The issue a text was dispatched for: its `GitHub issue #<n>` header, else its `Refs #<n>` line, else None.
+    """The issue a text was dispatched for: its `GitHub issue #<n>` header or a frontier child block's `GitHub issue(s) <n>`
+    (its first issue, #820), else its `Refs #<n>` line, else None.
     Prose may name another issue first (a blocker, a waiter), so a bare `#<n>` is never read here (#613, #775)."""
     for pat in _NAMED:
         m = pat.search(text) if isinstance(text, str) else None
