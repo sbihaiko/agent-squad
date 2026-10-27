@@ -110,7 +110,7 @@ test-publish-live.sh 2.50
 test-reconcile.sh 1.60
 test-refusal-comment.sh 1.87
 test-refusal-names.sh 0.10
-test-reopen-note.sh 1.20
+test-reopen-note.sh 1.64
 test-retire-fork-only.sh 1.82
 test-retired-settings.sh 1.85
 test-revformat-stall.sh 0.74

@@ -7,31 +7,34 @@ review approved it against the body. This prints the comments posted since the l
 repository only (OWNER, MEMBER, COLLABORATOR), so text from outside the repository never reaches a child.
 usage: reopen-note.py <owner/repo> <issue>  -> the note on stdout; nothing when the issue was never reopened or the read failed.
 """
-import json
-import subprocess
+import os
 import sys
 
 MEMBERS = {"OWNER", "MEMBER", "COLLABORATOR"}
 MAX_COMMENT = 6000   # characters of one comment
 MAX_NOTE = 20000     # characters of the whole note
+PAGES = 10           # timeline pages of 100 events read at most
 
 
 def timeline(repo, n):
+    """The issue's timeline, oldest first, through the one GitHub door (ADR-0277): a refusal or a failure is no events."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    os.environ.setdefault("SG_GH_PASS", "reopen-note")
     try:
-        r = subprocess.run(["gh", "api", "--paginate", f"repos/{repo}/issues/{n}/timeline?per_page=100", "--jq", ".[]"],
-                           capture_output=True, text=True, timeout=60)
-    except (OSError, subprocess.TimeoutExpired):
-        return []
-    if r.returncode:
+        import ghread
+    except ImportError:
         return []
     out = []
-    for line in r.stdout.splitlines():
+    for page in range(1, PAGES + 1):
         try:
-            e = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(e, dict):
-            out.append(e)
+            r = ghread.read(f"repos/{repo}/issues/{n}/timeline?per_page=100&page={page}")
+        except (OSError, ValueError):   # gh missing, or an answer the door could not decode
+            return []
+        if not r.is_answer or not isinstance(r.answer, list):
+            return []
+        out += [e for e in r.answer if isinstance(e, dict)]
+        if len(r.answer) < 100:
+            break
     return out
 
 

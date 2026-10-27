@@ -10,7 +10,7 @@ mkdir -p "$T/bin"
 cat > "$T/bin/gh" <<'J'
 #!/bin/bash
 [ -n "$GH_FAIL" ] && { echo '{"message":"Bad credentials"}'; exit 1; }
-cat "$GH_TIMELINE"
+case "$*" in *page=1*) python3 -c 'import json,sys; print(json.dumps([json.loads(l) for l in open(sys.argv[1]) if l.strip()]))' "$GH_TIMELINE";; *) echo '[]';; esac
 J
 chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH" GH_TIMELINE="$T/tl"
 note() { python3 "$d/reopen-note.py" x/y 675; }
