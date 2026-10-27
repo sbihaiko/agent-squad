@@ -38,23 +38,29 @@ else bm=$1; fi
 shift; set -- "$(printf '%s' "$bm" | tr / _)" "$@"   # $pr is the branch key
 pr=$1 iss=$2; p=$(mktemp); cfg="$(dirname "$0")/models.json"
 pbase=${SG_REVIEW_BASE:-${SG_LAND_BRANCH:-dev}}
+# #816: SG_REVIEW_EXCLUDE names path prefixes, space-separated, that leave every diff and file list the review reads. A tracked
+# file a hook regenerates (graphify-out/graph.json) once made a 33 MB prompt that every review model refused the same way.
+xdiff() { if [ -z "${SG_REVIEW_EXCLUDE:-}" ]; then cat; else awk -v x="$SG_REVIEW_EXCLUDE" 'BEGIN{n=split(x,p," ")}
+  /^diff --git /{s=0; f=$3; sub(/^a\//,"",f); for(i=1;i<=n;i++) if(index(f,p[i])==1) s=1} !s'; fi; }
+xfiles() { if [ -z "${SG_REVIEW_EXCLUDE:-}" ]; then cat; else awk -v x="$SG_REVIEW_EXCLUDE" 'BEGIN{n=split(x,p," ")}
+  {s=0; for(i=1;i<=n;i++) if(index($0,p[i])==1) s=1} !s'; fi; }
 # head, lbl, curhead, ahead, deltadiff, tipdiff, filesof: the seven reads the review makes of the branch it reads.
 if [ "$mode" = --branch ]; then
   head=$(gh_api repos/$repo/commits/$bm -q .sha); lbl="branch $bm" fetchref=$bm; baseref="origin/$pbase"
   curhead() { gh_api repos/$repo/commits/$bm -q .sha; }
   ahead() { [ "$(gh_api repos/$repo/compare/$1...$2 -q .status 2>/dev/null)" = ahead ]; }
-  deltadiff() { gh_get -H "Accept: application/vnd.github.diff" "repos/$repo/compare/$1...$2" 2>/dev/null; }
-  tipdiff() { gh_get -H "Accept: application/vnd.github.diff" "repos/$repo/compare/$pbase...$bm"; }
-  filesof() { gh_api "repos/$repo/compare/$pbase...$bm" -q '.files[].filename' 2>/dev/null; }
+  deltadiff() { gh_get -H "Accept: application/vnd.github.diff" "repos/$repo/compare/$1...$2" 2>/dev/null | xdiff; }
+  tipdiff() { gh_get -H "Accept: application/vnd.github.diff" "repos/$repo/compare/$pbase...$bm" | xdiff; }
+  filesof() { gh_api "repos/$repo/compare/$pbase...$bm" -q '.files[].filename' 2>/dev/null | xfiles; }
 else
   head=$(git rev-parse HEAD); lbl="worktree $bm" fetchref=""; baseref=$wbase
   wt=$(pwd)   # every read names this worktree: the grok and gemini legs run from SG_CHECKOUT, and the head watch there read the checkout's HEAD (#483)
   curhead() { git -C "$wt" rev-parse HEAD; }
   # "ahead" on the local side is the same question the remote's compare answers: the reviewed sha is an ancestor of the head.
   ahead() { git -C "$wt" merge-base --is-ancestor "$1" "$2" 2>/dev/null; }
-  deltadiff() { git -C "$wt" diff "$1"...HEAD 2>/dev/null; }
-  tipdiff() { git -C "$wt" diff "$wbase"...HEAD 2>/dev/null; }
-  filesof() { git -C "$wt" diff --name-only "$wbase"...HEAD 2>/dev/null; }
+  deltadiff() { git -C "$wt" diff "$1"...HEAD 2>/dev/null | xdiff; }
+  tipdiff() { git -C "$wt" diff "$wbase"...HEAD 2>/dev/null | xdiff; }
+  filesof() { git -C "$wt" diff --name-only "$wbase"...HEAD 2>/dev/null | xfiles; }
 fi
 # #624: one review of a branch at a time. runreview.sh and childcc.py both review a child through childreview.sh, and two
 # chains on the same files read each other's answer: one chain's BLOCKED line became the other model's MODEL_FORMAT, or a
@@ -134,6 +140,16 @@ Only real defects; no style nits."
   echo "=== ISSUE"; gh api repos/$repo/issues/$iss -q '"#\(.number) \(.title)\n\(.body)"'
   echo "=== DIFF"; tipdiff   # the child's own commits against the landing branch, or a local worktree's against its wave branch
   } > $p
+fi
+# #816: a prompt over review_max_prompt_chars calls no model. Every model refuses it the same way, so the chain would spend its
+# retries and end "every review model failed"; the review says what is too large instead, and names the largest files.
+pmax=$(jq -r '.review_max_prompt_chars // 900000' "$cfg"); pn=$(wc -c < "$p" | tr -d ' ')
+if [ "$pn" -gt "$pmax" ]; then
+  top=$(awk '/^diff --git /{f=$3; sub(/^a\//,"",f)} f!=""{n[f]+=length($0)+1} END{for(k in n) print n[k]"\t"k}' "$p" | sort -rn | head -3 \
+        | awk -F'\t' '{printf "%s%s (%s chars)", (NR>1?", ":""), $2, $1}')
+  why="diff too large: $pn chars over review_max_prompt_chars $pmax; largest: ${top:-none}; SG_REVIEW_EXCLUDE leaves generated paths out"
+  printf 'REVIEW_TOO_LARGE review on branch %s: %s.\n' "$bm" "$why" > "$(sg_cq_status "$iss" "mtoolarge$$")"
+  echo "REVIEW $lbl: $why" >&2; publish "VERDICT: BLOCKED ($why)"; exit 1
 fi
 # A reviewer whose registry capabilities say tools:false (#504) reviews from this prompt alone. With tools, DeepSeek explored the repo turn
 # after turn (833 s, 4.3M cache-read tokens) and never answered inside its timeout; the diff is already above.
