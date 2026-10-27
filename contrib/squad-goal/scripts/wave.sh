@@ -603,14 +603,18 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
       # their trees are gone, so no entry exists. The issues the run was dispatched for are named, and each one whose
       # non-RED `Refs #N` commit the base holds (an ancestor of origin/$base by construction) is delivered. A RED commit
       # carries the same line and proves nothing, so it never counts.
-      local dispatched="" delivered="" ent
+      # Only a commit that reached the base after the wave was cut is this run's (#822): an issue landed once, then reopened and
+      # dispatched again, carries its old `Refs #N` commit in the base, and that commit delivers nothing of this run. The cut is
+      # the fork point of the wave branch, read before the rebase moved it.
+      local dispatched="" delivered="" ent cut
+      cut=$(sc merge-base "origin/$w" "origin/$base" 2>/dev/null)
       ent=$(python3 "$here/issue_ledger.py" entered "$SG_REPO" 2>/dev/null | awk -F '\t' -v r="$run" '$1 == r { print $2 }' | tr '\n' ' ')
       for n in $(run_issues "$rd"); do
         dispatched="${dispatched:+$dispatched, }#$n"
         # A child that entered this wave (the entered fact of its ledger, ADR-0149) and still leaves it empty reached the base
         # by another route, whatever its message says: the entry is the proof, so it is delivered, never requeued (#620).
         case " $ent " in *" $n "*) delivered="${delivered:+$delivered }$n"; continue;; esac
-        sc log --format=%B%x1e -E --grep="Refs #$n([^0-9]|\$)" "origin/$base" 2>/dev/null \
+        sc log --format=%B%x1e -E --grep="Refs #$n([^0-9]|\$)" "${cut:+$cut..}origin/$base" 2>/dev/null \
           | awk -v RS='\036' '/Refs #/ && $0 !~ /TDD RED/ {f=1} END {exit !f}' && delivered="${delivered:+$delivered }$n"
       done
       sc push -q origin ":refs/heads/$w" >/dev/null 2>&1 || echo "WAVE-NOTE branch $w was not deleted" >&2
