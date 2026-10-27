@@ -59,11 +59,18 @@ def merge_land(target, worktree, branch, message, timeout=None):
 
     The result carries the tip the merge started from, so a reader compares it with the head it recorded: a landing that
     moved the tip by nothing carries no work and is no delivery (ADR-0145 rule 12: a wave with nothing ahead of its base
-    lands empty and moves no card, #464)."""
+    lands empty and moves no card, #464).
+
+    The merge message carries each `Refs #N` line of the branch's own commits: a check that reads the head's message for its
+    issue reads the merge, not the child's commit (#818). A `Closes` line is never carried."""
     before = git.head(target)
     c = commit(worktree, message, timeout)
     if not c.ok:
         return c
+    log = git.run(["log", "--format=%B", f"HEAD..{branch}"], target, timeout=timeout)
+    refs = dict.fromkeys(m.group(0) for m in re.finditer(r"(?m)^Refs #\d+$", log.stdout if log.returncode == 0 else ""))
+    if refs:
+        message = message + "\n\n" + "\n".join(refs)
     r = git.run(["-c", "user.name=agent-squad", "-c", "user.email=squad@localhost", "merge", "--no-ff", "-m", message, branch], target, timeout=timeout)
     if r.returncode != 0:
         git.run(["merge", "--abort"], target)
