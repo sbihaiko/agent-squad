@@ -88,8 +88,13 @@ $G -C "$kept" merge-base --is-ancestor "$(cat "$rd/child-head" 2>/dev/null || ec
 [ $rc -ne 0 ] && [ ! -s "$T/targets" ] && ok "a run target that is no worktree refuses the start, never a fresh tree" || ko "SG_RUN_TARGET=nowhere started a run: $o"
 cf="$(dirname "$src")/childfix.sh"
 /usr/bin/grep -q 'SG_RUN_TARGET="$wt" python3 "$here/launch.py"' "$cf" && ok "childfix.sh names the kept worktree as the run target" || ko "childfix.sh does not pass SG_RUN_TARGET=\$wt to launch.py"
-/usr/bin/grep -qF 'Never write outside $wt; never run publish-live.sh and never touch ~/.claude/skills' "$cf" \
-  && ok "the fix run's request forbids writes outside the kept worktree and the live skill copy (#658)" || ko "childfix.sh has no live-copy line (#658)"
+# The engine cuts the fix child its own worktree under the run folder and sandboxes every write to it, so a request that names
+# the kept worktree as the place to write cannot be obeyed: the child is denied every Edit and the round writes nothing (#680).
+/usr/bin/grep -qF 'Work where you stand' "$cf" && /usr/bin/grep -qF 'Never write in the kept worktree' "$cf" \
+  && ok "the fix run's request sends the child to its own worktree, never the kept one (#680)" \
+  || ko "childfix.sh still tells the fix child to write in the kept worktree, which the engine denies (#680)"
+/usr/bin/grep -qF 'Never run publish-live.sh and never touch ~/.claude/skills' "$cf" \
+  && ok "the fix run's request forbids the live skill copy (#658)" || ko "childfix.sh has no live-copy line (#658)"
 
 # A fetch that fails refuses the start: no run, no target, and never the local branch.
 $G -C "$co" remote set-url origin "$T/gone.git"; : > "$T/targets"
