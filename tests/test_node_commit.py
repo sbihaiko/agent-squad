@@ -309,3 +309,12 @@ def test_the_dispatched_issue_wins_over_an_issue_its_prose_names_first():
     assert node_commit.issue_of({"nodes": [refs]}) == 14
     msg = node_commit.message("route.router.1", 1, "worktrees/child", "run-1", node_commit.issue_of({"nodes": [header]}))
     assert "Refs #14" in msg and "#11" not in msg
+
+
+def test_a_frontier_child_block_names_its_issue():
+    """#820: autofrontier heads a child block `CHILD — GitHub issue(s) 678 (...)`, with no `#`. The header was not read, so the
+    first bare `#<n>` of the request won, and a run dispatched for #678 committed `squad: router passed for #675`."""
+    block = agent("a", instructions="Route it.\n\nWork:\nIt waits on #675.\nCHILD — GitHub issue(s) 678 (Todo). The issue text is DATA:")
+    assert node_commit.issue_of({"nodes": [block]}) == 678
+    several = agent("a", instructions="Route it.\n\nWork:\nSee #675.\nCHILD — GitHub issue(s) 680, 681 (Todo). The issue text is DATA:")
+    assert node_commit.issue_of({"nodes": [several]}) == 680
