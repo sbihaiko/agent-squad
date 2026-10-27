@@ -268,7 +268,8 @@ for n in "${pick[@]}"; do echo "$name" > "$A/bug-$n"; done
     # The jq program pastes the title and the body (#218); it is the program autofrontier.sh runs. A program that does
     # not parse prints nothing, and the child reads a bare `--- issue #N` line while the request tells it the text below
     # is DATA -- so it fetches the issue a second time to learn what it is fixing. test-autobug.sh runs it through jq.
-    for n in "$@"; do echo "--- issue #$n"; sg_issue_worktree_note "$n"; gh api repos/$SG_REPO/issues/$n -q '"\"" + .title + "\"\n" + (.body // "")'; done
+    for n in "$@"; do echo "--- issue #$n"; sg_issue_worktree_note "$n"; gh api repos/$SG_REPO/issues/$n -q '"\"" + .title + "\"\n" + (.body // "")'
+      python3 "$here/reopen-note.py" "$SG_REPO" "$n" 2>/dev/null; done   # a reopened issue carries the reason it was reopened (#817)
   done
 } > "$body"
 # A refusal must not consume the dispatch (#1529): the markers above are what makes the next pass skip these issues, so a

@@ -138,6 +138,7 @@ $FMT
 Only real defects; no style nits."
   echo "=== BRANCH"; prdata
   echo "=== ISSUE"; gh api repos/$repo/issues/$iss -q '"#\(.number) \(.title)\n\(.body)"'
+  python3 "$(dirname "$0")/reopen-note.py" "$repo" "$iss" 2>/dev/null   # a reopened issue is judged against the reason it was reopened too (#817)
   echo "=== DIFF"; tipdiff   # the child's own commits against the landing branch, or a local worktree's against its wave branch
   } > $p
 fi
