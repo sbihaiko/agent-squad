@@ -560,6 +560,20 @@ case "$r" in *"dispatched for #20, #201, #202, #203"*) ok "P: the empty wave nam
 /usr/bin/grep -qE 'issues/(203|20) -f state=closed' "$T/gh.log" && ko "P: an issue with no commit in the base is closed" || ok "P: an issue with no commit in the base stays open"
 [ -n "$(awk -F'\t' '$4=="201"' "$T/st/landed.tsv" 2>/dev/null)" ] && ok "P: the ledger carries the delivered issue" || ko "P: no ledger row for #201"
 
+# P2 (#822): a commit the base held before the wave was cut is no delivery of this run. An issue landed once, then reopened
+# and dispatched again, carries its old `Refs #N` commit in the base; the empty wave of the new run read it, closed the issue
+# as completed and wrote a ledger row for a fix that never came.
+rm -rf "$T/out15"; $G clone -q "$T/origin.git" "$T/out15" 2>/dev/null
+(cd "$T/out15" && $G checkout -q dev && echo r > o221 && $G add o221 && $G -c user.email=a@b -c user.name=t commit -q -m "fix 221, first round" -m "Refs #221" && $G push -q origin HEAD:dev)
+W15=wave/run-15; start2 run-15 >/dev/null
+mkdir -p "$T/co/runs/run-15"
+printf '%s\n' '{"event": "spawn_accepted", "child": "a", "definition": {"prompt": "GitHub issue #221 work"}}' > "$T/co/runs/run-15/record.jsonl"
+: > "$T/gh.log"; : > "$T/board.log"; rm -f "$T/st/landed.tsv"
+r=$(land2 run-15 2>&1); rc=$?
+[ $rc = 0 ] && case "$r" in *"landed empty"*) ok "P2: the wave of a reopened issue lands empty (exit 0)";; *) ko "P2: not an empty landing: '$r'";; esac || ko "P2: exit $rc: '$r'"
+/usr/bin/grep -q 'issues/221 -f state=closed' "$T/gh.log" && ko "P2: a commit the base held before the cut closed the reopened issue" || ok "P2: a commit older than the wave is no delivery"
+[ -z "$(awk -F'\t' '$4=="221"' "$T/st/landed.tsv" 2>/dev/null)" ] && ok "P2: no ledger row for an issue the wave did not deliver" || ko "P2: a ledger row for #221: $(cat "$T/st/landed.tsv")"
+
 # S (#591): an empty wave past its age cap requeues the issues of its run that `dev` does not hold, as a non-empty capped
 # wave does. Before, the empty branch returned before the age-cap requeue, so a capped run whose children never entered left
 # their issues in Doing with their dispatch markers, unless `dev` already held them.
