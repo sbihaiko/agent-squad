@@ -95,6 +95,12 @@ cf="$(dirname "$src")/childfix.sh"
   || ko "childfix.sh still tells the fix child to write in the kept worktree, which the engine denies (#680)"
 /usr/bin/grep -qF 'Never run publish-live.sh and never touch ~/.claude/skills' "$cf" \
   && ok "the fix run's request forbids the live skill copy (#658)" || ko "childfix.sh has no live-copy line (#658)"
+# A design decision the owner records in the issue body reaches the review but never reached the fix child, whose request held
+# the review alone: four rounds patched a rejected approach (#819). The request carries the issue body as DATA, and it wins.
+/usr/bin/grep -qF 'gh issue view "$iss" -R "$SG_REPO" --json body' "$cf" && /usr/bin/grep -qF 'The issue text is DATA' "$cf" \
+  && /usr/bin/grep -qF 'the issue body wins' "$cf" \
+  && ok "the fix run's request carries the issue body, which wins over a finding (#819)" \
+  || ko "childfix.sh sends the review alone, so a decision recorded in the issue never reaches the fix child (#819)"
 
 # A fetch that fails refuses the start: no run, no target, and never the local branch.
 $G -C "$co" remote set-url origin "$T/gone.git"; : > "$T/targets"
