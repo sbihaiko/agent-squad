@@ -374,25 +374,32 @@ r=$(SG_WAVE_TIP_GATES=false land2 run-20); rc=$?
 case "$r" in *"WAVE CHECK RED"*) ko "N: the tip's check ran on an empty wave: '$r'";; *) ok "N: the tip's check never runs on an empty wave";; esac
 $O rev-parse -q --verify "refs/heads/$W20" >/dev/null && ko "N: the empty wave branch stays" || ok "N: the empty wave branch goes with its landing"
 
-# K: a landing that fails the same way every pass stops at the cap (SG_WAVE_LAND_TRIES, default 3): each issue the wave
-# carries gets frozen:owner and one queued comment, the marker is cleared so the loop stops, and the wave stays on the remote.
+# K (#844): a rebase conflict in the landing is terminal for this wave head: no retry on the next cycle. The wave's issues go back
+# to the queue through the requeue path, the run's wave marker goes (so the loop stops calling the landing), and the wave branch
+# stays on the remote with its commits. A conflict is not a stuck landing: it never reaches the stuck cap (SG_WAVE_LAND_TRIES).
 W7=wave/run-7; start2 run-7 >/dev/null; child 70 cf "origin/$W7"; en2 run-7 70 >/dev/null
 rm -rf "$T/w3"; $G clone -q "$T/origin.git" "$T/w3" 2>/dev/null
 (cd "$T/w3" && $G checkout -q dev && echo other > cf && $G add cf && $G -c user.email=a@b -c user.name=t commit -q -m "conflicting work" && $G push -q origin HEAD:dev)
-: > "$T/gh.log"; before=$($O rev-parse dev)
-r1=$(land2 run-7); rc1=$?; r2=$(land2 run-7); rc2=$?
-case "$(wfact 70 run-7)" in "stuck the rebase of $W7 on dev conflicts"*) ok "K: a stuck landing is a fact in the issue's ledger";; *) ko "K: ledger fact of #70: '$(wfact 70 run-7)'";; esac
-[ $rc1 = 1 ] && [ $rc2 = 1 ] && [ -e "$T/st/auto/wave-run-7" ] && ok "K: a conflicting landing fails and keeps its marker below the cap" || ko "K: exits $rc1 $rc2, marker $([ -e "$T/st/auto/wave-run-7" ] && echo kept || echo gone)"
-/usr/bin/grep -q 'issues/70/labels' "$T/gh.log" && ko "K: escalated below the cap" || ok "K: nothing is escalated below the cap"
-: > "$T/board.log"; r3=$(land2 run-7); rc3=$?
-[ $rc3 = 1 ] && case "$r3" in *"WAVE NEEDS-HUMAN"*) ok "K: the third failure escalates to the owner";; *) ko "K: no escalation: '$r3'";; esac || ko "K: exit $rc3: '$r3'"
-/usr/bin/grep -q 'issues/70/labels -f labels\[\]=frozen:owner' "$T/gh.log" && ok "K: the issue the wave carries is labelled frozen:owner" || ko "K: no label: $(cat "$T/gh.log")"
-ls "$T/st/cq/"x__y#70-wavestuck* >/dev/null 2>&1 && ok "K: one comment is queued on the issue" || ko "K: no queued comment for #70"
-# #657: nothing landed, so the card leaves Code Complete for Todo; it keeps frozen:owner, so the frontier does not take it.
-/usr/bin/grep -qx "o 3 Todo 70" "$T/board.log" && ok "K: the stopped wave moves its issue card to Todo" || ko "K: the card stays where it was: '$(cat "$T/board.log")'"
-[ ! -e "$T/st/auto/wave-run-7" ] && ok "K: the marker is cleared, so the loop stops retrying" || ko "K: the marker is kept after the escalation"
-$O rev-parse -q --verify "refs/heads/$W7" >/dev/null && ok "K: the wave branch keeps the work for the owner" || ko "K: the wave branch is gone"
-[ "$($O rev-parse dev)" = "$before" ] && ok "K: dev is not moved by a failing landing" || ko "K: dev moved"
+: > "$T/gh.log"; : > "$T/board.log"; before=$($O rev-parse dev)
+r1=$(land2 run-7); rc1=$?
+case "$r1" in "WAVE CONFLICT $W7: the rebase on dev conflicts at "*"; #70 requeued on the current base"*) ok "K: the conflict is logged once, naming the commit and the issue";; *) ko "K: no conflict line: '$r1'";; esac
+[ $rc1 = 1 ] && ok "K: the conflicting landing does not land (exit 1)" || ko "K: exit $rc1"
+[ -e "$T/st/auto/wave-run-7" ] && ko "K: the wave marker is kept, so the loop retries the landing" || ok "K: the wave marker goes, so the loop stops retrying"
+/usr/bin/grep -qx "o 3 Todo 70" "$T/board.log" && ok "K: #70 is back in Todo" || ko "K: #70 not in Todo: '$(cat "$T/board.log")'"
+case "$(wfact 70 run-7)" in "refused the rebase on dev conflicts at"*) ok "K: the conflict is a fact in the issue's ledger";; *) ko "K: ledger fact of #70: '$(wfact 70 run-7)'";; esac
+$O rev-parse -q --verify "refs/heads/$W7" >/dev/null && ok "K: the wave branch keeps the work" || ko "K: the wave branch is gone"
+[ "$($O rev-parse dev)" = "$before" ] && ok "K: dev is not moved by a conflicting landing" || ko "K: dev moved"
+/usr/bin/grep -q 'labels\[\]=frozen:owner' "$T/gh.log" && ko "K: a conflict below the cap froze the issue" || ok "K: a conflict below the cap freezes nothing"
+case "$r1" in *"WAVE-ERROR"*|*"WAVE NEEDS-HUMAN"*) ko "K: the stuck path was taken: '$r1'";; *) ok "K: the stuck path is not taken";; esac
+
+# K3 (#844): the requeue cap bounds a conflict that keeps coming back: at SG_LOOP_REQUEUE_CAP the issue goes to the owner, as any
+# requeue does (requeue, loop_stop). A second wave of #73 conflicts with dev moved again after its entry.
+W44=wave/run-44; start2 run-44 >/dev/null; child 73 cf "origin/$W44"; en2 run-44 73 >/dev/null
+(cd "$T/w3" && $G pull -q origin dev && echo other2 > cf && $G add cf && $G -c user.email=a@b -c user.name=t commit -q -m "more conflicting work" && $G push -q origin HEAD:dev)
+r4=$(SG_LOOP_REQUEUE_CAP=1 land2 run-44); rc4=$?
+case "$r4" in *"WAVE NEEDS-HUMAN #73"*) ok "K3: at the requeue cap the conflicting issue goes to the owner";; *) ko "K3: no needs-human line: '$r4'";; esac
+[ $rc4 = 1 ] && ok "K3: the capped conflict does not land (exit 1)" || ko "K3: exit $rc4"
+
 # K2 (#477): a landing that exits 2 -- the wave branch is gone, the base is gone, or the checkout failed -- is a landing
 # that failed, so it counts toward the same cap. Below the cap the marker stays and the next cycle tries again; at the cap
 # the marker and the wave start go, so no wave-<run> hold outlives a landing that can never happen.
