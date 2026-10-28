@@ -155,6 +155,15 @@ def test_a_forwarded_control_from_an_allowed_tailnet_login_appends_one_line(worl
     assert (req["action"], req["nodes"], req["source"]) == ("pause", ["a"], "dashboard")
 
 
+def test_a_forwarded_loopback_control_needs_the_hubs_own_origin_on_its_own_port(world):
+    """#824: the forwarded control is a loopback write too; another local port's Origin is refused before any forward."""
+    path = f"/dash/{RUN}/run/control"
+    assert send(world.hub, "POST", path, origin=f"http://127.0.0.1:{world.hub + 1}", body=CONTROL) == (403, b"forbidden")
+    assert not (world.run / "control.jsonl").exists()
+    status, _ = send(world.hub, "POST", path, origin=f"http://127.0.0.1:{world.hub}", body=CONTROL)
+    assert status == 200
+
+
 def test_the_hub_page_names_no_loopback_frame_or_pip_url(world):
     status, page = send(world.hub, "GET", "/")
     text = page.decode()

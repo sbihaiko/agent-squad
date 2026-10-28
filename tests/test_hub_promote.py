@@ -46,12 +46,12 @@ def hub(monkeypatch, tmp_path):
     srv.server_close()
 
 
-def post(port, body, *, host=None, origin=None, content_type="application/json"):
+def post(port, body, *, host=None, origin=None, content_type="application/json", path="/api/promote"):
     c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
     headers = {"Host": host or f"127.0.0.1:{port}", "Origin": origin if origin is not None else f"http://127.0.0.1:{port}"}
     if content_type:
         headers["Content-Type"] = content_type
-    c.request("POST", "/api/promote", body=json.dumps(body), headers=headers)
+    c.request("POST", path, body=json.dumps(body), headers=headers)
     r = c.getresponse()
     data = json.loads(r.read() or b"{}")
     c.close()
@@ -136,6 +136,25 @@ def test_a_non_loopback_host_is_refused(hub):
     status, out = post(port, {"issue": 7}, host=f"evil.example:{port}")
     assert status == 400 and out == {"err": "forbidden"}, (status, out)
     assert calls == []
+
+
+@pytest.mark.parametrize("route", ["/api/promote", "/api/models", "/api/plans"])
+def test_a_loopback_write_needs_the_hubs_own_origin_on_its_own_port(hub, monkeypatch, route):
+    """#824: a loopback write passes only with the hub's own exact Origin, on either loopback name and the hub's port.
+    Another local port is refused on every write route, and the refusal writes nothing."""
+    mod, port = hub
+    calls = []
+    mod.promote_write = writer(calls)
+    monkeypatch.setattr(mod, "models_set", lambda body: calls.append("models") or {"saved": True})
+    monkeypatch.setattr(mod, "plans_set", lambda body: calls.append("plans") or {"saved": True})
+    body = {"issue": 7} if route == "/api/promote" else {}
+    for origin in (f"http://127.0.0.1:{port + 1}", f"http://localhost:{port + 1}"):
+        assert post(port, body, origin=origin, path=route) == (400, {"err": "forbidden"}), origin
+    assert calls == []
+    for origin in (f"http://127.0.0.1:{port}", f"http://localhost:{port}"):
+        status, out = post(port, body, origin=origin, path=route)
+        assert out != {"err": "forbidden"}, (origin, status, out)
+    assert calls
 
 
 def test_a_plain_text_body_is_refused(hub):
