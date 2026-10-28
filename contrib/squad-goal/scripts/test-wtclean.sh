@@ -164,4 +164,14 @@ chmod 500 .worktrees; out=$(bash "$T/s/wtclean.sh" 2>&1); chmod 700 .worktrees
 case "$out" in *"WT KEPT submodule child c-locked"*) ok "S2: a tree the flag cannot free is reported with its class and its name";; *) ko "S2: the pass kept it in silence: $out";; esac
 case "$out" in *"cannot be moved or removed"*) ko "S2: git's nameless fatal is still the only word: $out";; *) ok "S2: no nameless refusal reaches the log";; esac
 $G worktree prune 2>/dev/null; rm -rf .worktrees
+# U (#836): a finished run's child commit that sits only on a LOCAL branch of the run (never pushed, not in the base) is no
+# delivery. The run's wave landed empty and its child's commit reached no remote: the tree went as CLEAN, and the work lived
+# on the local run branch alone. The tree is kept and reported WT UNPUSHED, the same as a commit on no branch at all.
+cd "$T/co"; mkdir -p runs/run-836/ws; $G worktree add -q -b squad/run-836/child runs/run-836/ws/w HEAD
+$G -C runs/run-836/ws/w -c user.email=a@b -c user.name=t commit -q --allow-empty -m "child work (Refs #836)"
+$G branch -q squad/run/836-run "$($G -C runs/run-836/ws/w rev-parse HEAD)"; echo '{"event": "verdict"}' > runs/run-836/record.jsonl
+out=$(bash "$T/s/wtclean.sh" 2>&1)
+case "$out" in *"WT CLEAN run-836"*) ko "U: a child commit held by a local branch alone was cleaned: $out";; *) ok "U: a child commit held by a local branch alone is not cleaned";; esac
+case "$out" in *"WT UNPUSHED run-836"*) ok "U: that tree is reported WT UNPUSHED";; *) ko "U: no WT UNPUSHED line for run-836: $out";; esac
+[ -d runs/run-836/ws/w ] && ok "U: the tree with the unpushed commit is kept" || ko "U: the tree with the unpushed commit was removed"
 rm -rf "$T"; exit $fail
