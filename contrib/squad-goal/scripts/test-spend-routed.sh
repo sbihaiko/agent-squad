@@ -40,4 +40,21 @@ runpy.run_path(d + "/reconcile.py", run_name="__main__")
 PY
 $G -q "repos/o/r/branches" "$T/st/api.log" 2>/dev/null && ok "2 a reconcile read is logged to api.log" || ko "2 the reconcile read is not in api.log: $(cat "$T/st/api.log" 2>/dev/null) / $(cat "$T/recon.out")"
 
+# 3) every attempt is one line: a 5xx retried three times then answered is four lines, three failed and one answer
+rm -f "$T/st/api.log"
+python3 - "$d" "$T/st" <<'PY' >/dev/null 2>&1
+import sys, types
+sys.path.insert(0, sys.argv[1])
+import issue_state
+b = issue_state.BoardBinding("o", 4, "o/r", kind="users", state_dir=sys.argv[2])
+n = [0]
+def run(*a, **k):
+    n[0] += 1
+    fail = n[0] < 4
+    return types.SimpleNamespace(returncode=1 if fail else 0, stdout="" if fail else "[]", stderr="HTTP 502: Bad Gateway" if fail else "")
+b.run, b.attempts, b.backoff = run, 4, 0
+b.api("repos/o/r/issues/8")
+PY
+[ "$($G -c "repos/o/r/issues/8" "$T/st/api.log" 2>/dev/null)" = 4 ] && ok "3 each retried attempt is its own api.log line" || ko "3 attempts and api.log lines differ: $(cat "$T/st/api.log" 2>/dev/null)"
+
 rm -rf "$T"; exit $fail
