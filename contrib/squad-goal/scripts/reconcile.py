@@ -12,8 +12,14 @@ import json, os, re, subprocess, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
 from board_columns import BY_FACT, COLUMNS, SHIPPED_NAME
 from issue_state import board_state
+import ghread, ghthrottle   # the door's reader and log, and the core quota the floor reads (#847)
 REPO = os.environ.get("SG_REPO"); OWNER = os.environ.get("SG_OWNER"); BOARD = int(os.environ.get("SG_PROJECT") or 0)
 if not (REPO and OWNER and BOARD): sys.exit("reconcile: set SG_REPO, SG_OWNER and SG_PROJECT (env.sh exports them)")
+FLOOR = int(os.environ.get("SG_GH_FLOOR") or 300)   # below this many core requests left, the pass skips its read for the cycle (#847)
+_low = ghthrottle.core_below(FLOOR)
+if _low is not None:
+    print(f"RECONCILE: skipped this pass: core quota {_low} is under SG_GH_FLOOR {FLOOR}; the next pass reads again")
+    sys.exit(0)
 MIN = int(os.environ.get("RECONCILE_MIN", "1102")); APPLY = os.environ.get("RECONCILE") == "apply"
 VOCAB = os.environ.get("SG_BOARD_VOCAB")   # the vocabulary the carrier holds, the switch the janitor reads too: `shipped` writes the shipped names
 MOVES = []   # the cards this pass moves (or would move): the count it prints
@@ -22,9 +28,15 @@ FLOW = {column["name"]: column["flow"] for column in COLUMNS}   # the shipped co
 TERMINAL = {column["name"] for column in COLUMNS if column["terminal"]}   # the columns the work is delivered at, each entered once
 TAG = "reverted"   # what a card carries when its merge was taken back (#246): the tag and the new issue decide what happens next, never a silent move back
 def gh(*a):
-    r = subprocess.run(["gh", *a], capture_output=True, text=True)
-    if r.returncode: print("gh error:", " ".join(a[:3]), r.stderr.strip()[:120], file=sys.stderr); return None
-    return r.stdout
+    if a[:1] == ("api",) and not set(a) & {"--method", "-X", "-f", "-F", "--input"}:   # a read: through the door, logged to api.log (#847)
+        out = ghread.read(a[1]); ghread.log_call(None, a[1], ghread.MISS, out.kind)
+        if out.is_answer: return out.body
+        why = out.line()
+    else:
+        r = subprocess.run(["gh", *a], capture_output=True, text=True)
+        if not r.returncode: return r.stdout
+        why = r.stderr.strip()
+    print("gh error:", " ".join(a[:3]), why[:120], file=sys.stderr); return None
 def js(*a):
     o = gh(*a); return json.loads(o) if o else None
 _here = os.path.dirname(os.path.abspath(__file__)); MOVE = os.path.join(_here, "board.sh")

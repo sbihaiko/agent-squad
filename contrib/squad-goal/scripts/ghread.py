@@ -300,7 +300,7 @@ _PULLS_QUERY = """query($owner: String!, $repo: String!) {
 # What one issue of a fact carries. `comments(last: ...)` is how the TDD RED comment of a fork-only fix is found without a
 # read of the issue's comments, which was one request per candidate (#45).
 _COMMENTS = 50
-_ISSUE_FIELDS = f"number title body state labels(first: 100) {{ nodes {{ name }} }} blockedBy(first: 100) {{ nodes {{ number state }} }} subIssuesSummary {{ total completed }} subIssues(first: 100) {{ nodes {{ number }} }} comments(last: {_COMMENTS}) {{ nodes {{ body }} }}"
+_ISSUE_FIELDS = f"number title body state createdAt labels(first: 100) {{ nodes {{ name }} }} blockedBy(first: 100) {{ nodes {{ number state }} }} subIssuesSummary {{ total completed }} subIssues(first: 100) {{ nodes {{ number }} }} comments(last: {_COMMENTS}) {{ nodes {{ body }} }}"
 _ISSUES_QUERY = """query($owner: String!, $repo: String!) {
   repository(owner: $owner, name: $repo) {
     issues(states: OPEN, first: %d) {
@@ -396,6 +396,7 @@ def _issue(node: Any) -> dict[str, Any]:
         "number": node.get("number"),
         "title": node.get("title"),
         "body": node.get("body"),
+        "created_at": node.get("createdAt"),
         "state": state.lower() if isinstance(state, str) else None,
         "labels": _labels(node.get("labels")),
         "blocked_by": [
@@ -470,6 +471,7 @@ _FACT_ISSUES = Fact(
     lambda data: _connection(_connection(_connection(data).get("repository")).get("issues")).get("pageInfo", {}).get("hasNextPage") is True,
 )
 _AGGREGATE = {"pulls": _FACT_PULLS, "issues": _FACT_ISSUES}
+_AGGREGATE_PARAMS = frozenset({"state", "per_page"})   # the only query parameters the open-list facts answer (#847)
 
 
 def _route(route: Any) -> re.Match[str] | None:
@@ -516,6 +518,10 @@ def aggregate(route: str) -> Fact | None:
     if m is None or m.group("rest") not in _AGGREGATE:
         return None
     params = dict(p.split("=", 1) for p in (m.group("params") or "").split("&") if "=" in p)
+    # A filter the fact does not answer (labels=, sort=, direction=) makes the route a REST list: the fact is the whole
+    # open list, and answering a labelled route with it hands a debt card to the bug pass (#847).
+    if not set(params) <= _AGGREGATE_PARAMS:
+        return None
     return _AGGREGATE[m.group("rest")] if params.get("state") == "open" else None
 
 

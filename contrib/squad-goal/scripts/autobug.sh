@@ -11,27 +11,18 @@
 . "$(dirname "$0")/env.sh"; . "$(dirname "$0")/startability.sh"; . "$(dirname "$0")/refusal-names.sh"; . "$(dirname "$0")/workbranches.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
 export SG_GH_PASS=autobug   # the pass that spends the GitHub calls below, named in the call log (ADR-0277)
 export SG_FILE_PASS="autobug-$$-$(date +%s)"   # the filings of THIS pass share one ceiling (#140): a fresh pass is never held by the ledger of one that ended
-# ONE wrapper owns the refusal (#1855). `gh api` writes the error body to stdout and exits non-zero, and it does not honour
-# -q on a failed request, so every `gh api … 2>/dev/null` here used to treat a 403/404/500 body as a valid answer: on
-# 2026-10-12 a rate-limit body became the whole candidate list and the dispatch spent money on children spawned from it.
-# Three outcomes, never mixed: 0 = the answer in stdout, 2 = GitHub refused it (its own message in $gh_api_err while the
-# body is kept out of stdout), 1 = the command failed before GitHub reached a verdict. `-q` output on a non-zero exit is
-# never data, and a consumer cannot see a refusal as an answer by accident.
-gh_api_err=""
-gh_api() {
-  local o rc
-  o=$(gh api "$@" 2>/dev/null); rc=$?
-  if [ "$rc" -eq 0 ]; then printf '%s' "$o"; gh_api_err=""; return 0; fi
-  gh_api_err=$(printf '%s' "$o" | python3 -c 'import json,sys
-try:
-    v = json.loads(sys.stdin.read() or "{}")
-except Exception:
-    v = {}
-if not isinstance(v, dict): v = {}
-msg = v.get("message"); st = v.get("status")
-print(f"GitHub refused (HTTP {st}): {msg}" if (msg and st) else "no verdict: the request failed before GitHub answered")' 2>/dev/null)
-  [ -n "$gh_api_err" ] || gh_api_err="no verdict: the request failed before GitHub answered"
-  case "$gh_api_err" in "GitHub refused"*) return 2;; *) return 1;; esac
+# The read door is ghcall.sh (gh_api, sourced by startability.sh): three outcomes, never mixed -- 0 = the answer in stdout,
+# 2 = GitHub refused it (its own line in stdout, never an answer), 1 = no verdict. The local wrapper that stood here (#1855)
+# kept the refusal in a variable that a `$(gh_api …)` subshell lost (#847), so every refusal read as an empty message.
+# A rate limit is named once, by ab_rate_limited, and files nothing (#847).
+ab_rate_limit() {   # <refusal text>: 0 when GitHub refused the read for its rate limit (the 403 or 429 body, either form)
+  printf '%s' "$1" | /usr/bin/grep -qiE 'rate limit|HTTP 429|secondary rate'
+}
+ab_rate_limited() {   # the one line a pass prints for a rate-limited read: the UTC reset from gh api rate_limit, or unknown
+  local e reset=""
+  e=$(gh_get rate_limit 2>/dev/null | jq -r '.resources.core.reset // empty' 2>/dev/null)
+  [ -n "$e" ] && reset=$(python3 -c 'import datetime,sys; print(datetime.datetime.fromtimestamp(int(sys.argv[1]), datetime.timezone.utc).strftime("%H:%M UTC"))' "$e" 2>/dev/null)
+  echo "AUTOBUG: rate limited until ${reset:-unknown}; nothing dispatched (UTC reset from gh api rate_limit, or unknown)" >&2
 }
 # ---- The refused write (#145) -------------------------------------------------------------------------------------
 # The card move at the end of this pass ran with `>/dev/null 2>&1`: a write GitHub refused looked like a card that moved,
@@ -144,7 +135,10 @@ gather() {
   local q out rc
   q="repos/$SG_REPO/issues?state=open&${1:+labels=$1&}per_page=100&sort=created&direction=asc"
   out=$(gh_api "$q" -q '.[]|select(.pull_request|not)|select((.title|ascii_downcase|startswith("[duplicate"))|not)|select(.title|test("^(Squad run run-[0-9]{8}-[0-9]{6}-[0-9a-f]+|Run [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} \\([0-9a-f]+\\)( — .*)?)$")|not)|[(.number|tostring),([.labels[].name]|join(","))]|join("\u001f")'); rc=$?
-  if [ "$rc" -ne 0 ]; then echo "AUTOBUG: the ${1} candidate list is not a list: $gh_api_err; nothing dispatched" >&2; return 3; fi
+  if [ "$rc" -ne 0 ]; then
+    if ab_rate_limit "$out"; then ab_rate_limited; return 3; fi
+    echo "AUTOBUG: the ${1:-open issues} candidate list is not readable: $(printf '%s' "$out" | head -c 200 | tr '\n' ' '); nothing dispatched" >&2; return 3
+  fi
   printf '%s\n' "$out"
 }
 # gather_bugs: the bug pass takes an item by the kind the seam answers (issue_state.py --kinds), never by the platform's issue
@@ -169,7 +163,11 @@ refs=" $(sg_work_issues) "
 # blockers and their states, and a bug is a candidate only when stack.sh answers READY. A WAIT is logged when its reason
 # changes, never on every pass (auto/abwait-<n>).
 F=$(mktemp -d); trap 'rm -rf "$F"' EXIT
-gh_aggregate "repos/$SG_REPO/issues?state=open" > "$F/issues.json" || { echo "AUTOBUG: the open issues are not readable for the blocker gate; nothing dispatched" >&2; exit 0; }
+gh_aggregate "repos/$SG_REPO/issues?state=open" > "$F/issues.json"; agg_rc=$?
+if [ "$agg_rc" -ne 0 ]; then
+  if ab_rate_limit "$(cat "$F/issues.json")"; then ab_rate_limited; exit 0; fi   # #847: named once, nothing filed
+  echo "AUTOBUG: the open issues are not readable for the blocker gate; nothing dispatched" >&2; exit 0
+fi
 # A defect in the loop's own machinery is fixed outside the loop (#596, ADR-0146): the pass already holds the open issues,
 # so the stop costs no second read, and it has no marker -- closing the issue resumes dispatch with no other action.
 gh_loop_stop "$F/issues.json" && exit 0
@@ -219,7 +217,7 @@ echo "${nb:-0}" > "$SG_STATE/bugs-waiting"
 for n in "${cand[@]}"; do
   case "$n" in ''|*[!0-9]*) echo "AUTOBUG: dropping candidate '$n': not a decimal issue number" >&2; exit 0;; esac
   j=$(sg_issue_body "$n"); rc=$?
-  [ "$rc" -eq 0 ] || { echo "AUTOBUG: dropping candidate #$n: ${gh_api_err:-not a readable non-PR issue}; nothing dispatched" >&2; exit 0; }
+  [ "$rc" -eq 0 ] || { echo "AUTOBUG: dropping candidate #$n: not a readable non-PR issue; nothing dispatched" >&2; exit 0; }
   cj+="$j,"
 done
 cj="${cj%,}]"
@@ -268,7 +266,7 @@ for n in "${pick[@]}"; do echo "$name" > "$A/bug-$n"; done
     # The jq program pastes the title and the body (#218); it is the program autofrontier.sh runs. A program that does
     # not parse prints nothing, and the child reads a bare `--- issue #N` line while the request tells it the text below
     # is DATA -- so it fetches the issue a second time to learn what it is fixing. test-autobug.sh runs it through jq.
-    for n in "$@"; do echo "--- issue #$n"; sg_issue_worktree_note "$n"; gh api repos/$SG_REPO/issues/$n -q '"\"" + .title + "\"\n" + (.body // "")'
+    for n in "$@"; do echo "--- issue #$n"; sg_issue_worktree_note "$n"; ib=$(gh_api repos/$SG_REPO/issues/$n -q '"\"" + .title + "\"\n" + (.body // "")') && printf '%s\n' "$ib" || echo "(issue #$n: not readable this pass)"
       python3 "$here/reopen-note.py" "$SG_REPO" "$n" 2>/dev/null; done   # a reopened issue carries the reason it was reopened (#817)
   done
 } > "$body"
@@ -285,7 +283,7 @@ log="$SG_STATE/$name.log"
 hunt_fix=0; now=$(date +%s)
 for c in "${clusters[@]}"; do set -- $c; p=$1
   for n in "$@"; do echo "$name" > "$A/bug-$n"
-    if [ "$hunt_fix" = 0 ] && gh api "repos/$SG_REPO/issues/$n" 2>/dev/null | grep -qF "Filed by autohunt"; then
+    if [ "$hunt_fix" = 0 ] && gh_api "repos/$SG_REPO/issues/$n" 2>/dev/null | grep -qF "Filed by autohunt"; then
       hunt_fix=1
       echo "$now" > "$A/hunt-last"; echo "$now" > "$A/hunt-activity"
       day=$(date +%F); d=; k=0

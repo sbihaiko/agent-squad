@@ -13,7 +13,6 @@
 # 2026-10-15, after #361 removed the pull request path: the pull request readers (prland.sh, revci.sh, autopilot.sh,
 # autofix.sh, autopanel.sh, stack.sh, speed.py, retryfix.sh) are gone, so the budget names no pull request caller:
 # 23 reaches in 9 scripts.
-autobug.sh 1
 autohunt.sh 1
 childcc.py 1
 health.sh 1

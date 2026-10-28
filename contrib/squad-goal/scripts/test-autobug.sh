@@ -42,13 +42,17 @@ todo 1228 1229 1400 1401 60 61 62 70 71 72 73   # the graph names no funding bou
 cat > "$T/bin/gh" <<J
 #!/bin/bash
 case "\$*" in
-  *pulls?state=open*) echo "" ;;
+  *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$T/issues.json" ;;
+  *"issue(number:"*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issue\(number: [0-9]+' | /usr/bin/grep -oE '[0-9]+' | head -1); jq -c --arg k "i\$n" --argjson n "\$n" '{data:{repository:{(\$k): (.[]|select(.number==\$n)|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}})}}}' "$T/issues.json" ;;
+  *pulls?state=open*) echo "[]" ;;
   *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$T/issues.json" ;;   # the frontier's one list read (#383)
-  *"issues?state=open"*labels=bug*) jq -r '.[]|select((.labels // [])|index("bug"))|"\(.number)\u001f\(.labels|join(","))"' "$T/issues.json" ;;   # pure jq: a python startup per call is a measured cost (#556)
-  *"issues?state=open"*labels=debt*) jq -r '.[]|select((.labels // [])|index("debt"))|"\(.number)\u001f\(.labels|join(","))"' "$T/issues.json" ;;
-  *"issues?state=open"*wave*|*labels=ready-for-agent*) jq -r '.[]|select((.labels // [])|index("ready-for-agent"))|"wave:01\u001f\(.number)\u001f\(.labels|join(","))"' "$T/issues.json" ;;
+  *"issues?state=open"*labels=bug*) jq -c '[.[]|select((.labels // [])|index("bug"))|.labels=[(.labels//[])[]|{name:.}]]' "$T/issues.json" ;;   # the door applies -q itself, so the stub answers gh's JSON, labels as objects (#847)
+  *"issues?state=open"*labels=debt*) jq -c '[.[]|select((.labels // [])|index("debt"))|.labels=[(.labels//[])[]|{name:.}]]' "$T/issues.json" ;;
+  *"issues?state=open"*wave*|*labels=ready-for-agent*) jq -c '[.[]|select((.labels // [])|index("ready-for-agent"))|.labels=[(.labels//[])[]|{name:.}]]' "$T/issues.json" ;;
+  *"issue(number:"*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issue\(number: [0-9]+' | /usr/bin/grep -oE '[0-9]+' | head -1); jq -c --arg k "i\$n" --argjson n "\$n" '{data:{repository:{(\$k): (.[]|select(.number==\$n)|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}})}}}' "$T/issues.json" ;;   # the door's one-issue query, as GraphQL (#847)
+  *issues/*comments*) echo "[]" ;;   # a comments list is a list: the issue stub below is for the issue itself
   *issues/*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issues/[0-9]+' | cut -d/ -f2); jq -c --argjson n "\$n" '.[]|select(.number==\$n)' "$T/issues.json" ;;
-  *) echo "" ;;
+  *) echo "[]" ;;
 esac
 J
 chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
@@ -180,7 +184,9 @@ JSON
 cat > "$T/bin/gh" <<J
 #!/bin/bash
 case "\$*" in
-  *pulls?state=open*) echo "" ;;
+  *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$T/issues.json" ;;
+  *"issue(number:"*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issue\(number: [0-9]+' | /usr/bin/grep -oE '[0-9]+' | head -1); jq -c --arg k "i\$n" --argjson n "\$n" '{data:{repository:{(\$k): (.[]|select(.number==\$n)|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}})}}}' "$T/issues.json" ;;
+  *pulls?state=open*) echo "[]" ;;
   *"issues?state=open"*) cat "$T/refusal.json"; exit 1 ;;                 # the rate limit: the error body on stdout, exit 1
   *issues/*) echo '{}' ;;
   *) echo "" ;;
@@ -218,7 +224,7 @@ J
 chmod +x "$T/bin/gh"
 r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>"$T/err2")
 $G -q "AUTOBUG would dispatch" <<<"$r" && ko "6c words from a zero-exit line were dispatched: '$r'" || ok "6c words from a zero-exit line dispatch nothing"
-$G -q "not a decimal issue number" "$T/err2" && ok "6c the dropped line is logged" || ko "6c the dropped line was not logged: '$(cat "$T/err2")'"
+$G -q "candidate list is not readable" "$T/err2" && ok "6c the unreadable list is named (a body that is not JSON is no answer)" || ko "6c the dropped line was not logged: '$(cat "$T/err2")'"
 m=($(find "$T/st/auto" -name 'bug-*' 2>/dev/null)); [ ${#m[@]} -eq 0 ] && ok "6c no marker for a word" || ko "6c a word became a marker: ${m[0]##*/}"
 
 # 7) (#1858) an issue the loop already marked not startable is not dispatched again. The health pass writes
@@ -233,13 +239,16 @@ JSON
 cp "$d/autobug.sh" "$T/s/"
 printf '#!/bin/bash\n[ -n "\${AB_DRY:-}" ] && exit 0\ntouch %s/launched\n' "$T" > "$T/s/launch.py"; chmod +x "$T/s/launch.py"
 held() {   # $1: the body of the issue's comments, one line each
+  local cj; cj=$(if [ -n "$1" ]; then jq -Rs '[{body:.}]' <<<"$1"; else echo '[]'; fi)   # gh's list shape (#847)
   cat > "$T/bin/gh" <<J
 #!/bin/bash
 case "\$*" in
-  *pulls?state=open*) echo "" ;;
-  *"issues?state=open"*labels=bug*) printf '1228\x1fbug,ready-for-agent\n' ;;
-  *"issues?state=open"*) echo "" ;;
-  *issues/*/comments*) printf '%s' "$1" ;;
+  *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$T/issues.json" ;;
+  *"issue(number:"*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issue\(number: [0-9]+' | /usr/bin/grep -oE '[0-9]+' | head -1); jq -c --arg k "i\$n" --argjson n "\$n" '{data:{repository:{(\$k): (.[]|select(.number==\$n)|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}})}}}' "$T/issues.json" ;;
+  *pulls?state=open*) echo "[]" ;;
+  *"issues?state=open"*labels=bug*) echo '[{"number":1228,"title":"Core: null deref","body":"step a.py","state":"open","labels":[{"name":"bug"},{"name":"ready-for-agent"}]}]' ;;
+  *"issues?state=open"*) echo "[]" ;;
+  *issues/*/comments*) echo '$cj' ;;
   *issues/*) printf '{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z"}\n' ;;
   *) echo "" ;;
 esac
@@ -274,10 +283,12 @@ chmod +x "$T/s/board.sh" "$T/s/mkreq.sh" "$T/s/launch.py"
 cat > "$T/bin/gh" <<J
 #!/bin/bash
 case "\$*" in
-  *pulls?state=open*) echo "" ;;
-  *"issues?state=open"*labels=bug*) printf '1228\x1fbug,ready-for-agent\n' ;;
-  *"issues?state=open"*) echo "" ;;
-  *issues/*/comments*) echo "" ;;
+  *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$T/issues.json" ;;
+  *"issue(number:"*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issue\(number: [0-9]+' | /usr/bin/grep -oE '[0-9]+' | head -1); jq -c --arg k "i\$n" --argjson n "\$n" '{data:{repository:{(\$k): (.[]|select(.number==\$n)|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}})}}}' "$T/issues.json" ;;
+  *pulls?state=open*) echo "[]" ;;
+  *"issues?state=open"*labels=bug*) echo '[{"number":1228,"title":"Core: null deref","body":"step a.py","state":"open","labels":[{"name":"bug"},{"name":"ready-for-agent"}]}]' ;;
+  *"issues?state=open"*) echo "[]" ;;
+  *issues/*/comments*) echo "[]" ;;
   *"--method POST"*) printf '%s\n' "\$@" >> "$T/filed"
     for a in "\$@"; do case "\$a" in body=@*) cat "\${a#body=@}" >> "$T/filed";; esac; done
     echo '{"number":900}' ;;
@@ -334,10 +345,12 @@ for mark in title body; do
   cat > "$T/bin/gh" <<J
 #!/bin/bash
 case "\$*" in
-  *pulls?state=open*) echo "" ;;
-  *"issues?state=open"*labels=bug*) printf '1228\x1fbug,ready-for-agent\n' ;;
-  *"issues?state=open"*) echo "" ;;
-  *issues/*/comments*) echo "" ;;
+  *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$T/issues.json" ;;
+  *"issue(number:"*) echo '{"data":{"repository":{"i1228":{"number":1228,"title":"$tt","body":"$bb","state":"OPEN","labels":{"nodes":[]},"blockedBy":{"nodes":[]},"comments":{"nodes":[]}}}}}' ;;
+  *pulls?state=open*) echo "[]" ;;
+  *"issues?state=open"*labels=bug*) echo '[{"number":1228,"title":"Core: null deref","body":"step a.py","state":"open","labels":[{"name":"bug"},{"name":"ready-for-agent"}]}]' ;;
+  *"issues?state=open"*) echo "[]" ;;
+  *issues/*/comments*) echo "[]" ;;
   *"--method POST"*) printf '%s\n' "\$@" >> "$T/filed"; echo '{"number":901}' ;;
   *issues/*) printf '{"number":1228,"title":"$tt","body":"$bb"}\n' ;;
   *) echo "" ;;
@@ -378,10 +391,12 @@ chmod +x "$T/s/board.sh" "$T/s/mkreq.sh" "$T/s/launch.py"
 cat > "$T/bin/gh" <<J
 #!/bin/bash
 case "\$*" in
-  *pulls?state=open*) echo "" ;;
-  *"issues?state=open"*labels=bug*) printf '1228\x1fbug,ready-for-agent\n' ;;
-  *"issues?state=open"*) echo "" ;;
-  *issues/*/comments*) echo "" ;;
+  *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$T/issues.json" ;;
+  *"issue(number:"*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issue\(number: [0-9]+' | /usr/bin/grep -oE '[0-9]+' | head -1); jq -c --arg k "i\$n" --argjson n "\$n" '{data:{repository:{(\$k): (.[]|select(.number==\$n)|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}})}}}' "$T/issues.json" ;;
+  *pulls?state=open*) echo "[]" ;;
+  *"issues?state=open"*labels=bug*) echo '[{"number":1228,"title":"Core: null deref","body":"step a.py","state":"open","labels":[{"name":"bug"},{"name":"ready-for-agent"}]}]' ;;
+  *"issues?state=open"*) echo "[]" ;;
+  *issues/*/comments*) echo "[]" ;;
   *"--method POST"*) printf '%s\n' "\$@" >> "$T/filed"
     for a in "\$@"; do case "\$a" in body=@*) cat "\${a#body=@}" >> "$T/filed";; esac; done
     echo '{"number":900}' ;;
@@ -458,10 +473,12 @@ cat > "$T/bin/gh" <<J
 #!/bin/bash
 prog=; prev=; for a in "\$@"; do [ "\$prev" = "-q" ] && prog="\$a"; prev="\$a"; done
 case "\$*" in
-  *pulls?state=open*) echo "" ;;
-  *"issues?state=open"*labels=bug*) printf '1228\x1fbug,ready-for-agent\n' ;;
-  *"issues?state=open"*) echo "" ;;
-  *issues/*/comments*) echo "" ;;
+  *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$T/issues.json" ;;
+  *"issue(number:"*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issue\(number: [0-9]+' | /usr/bin/grep -oE '[0-9]+' | head -1); jq -c --arg k "i\$n" --argjson n "\$n" '{data:{repository:{(\$k): (.[]|select(.number==\$n)|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}})}}}' "$T/issues.json" ;;
+  *pulls?state=open*) echo "[]" ;;
+  *"issues?state=open"*labels=bug*) echo '[{"number":1228,"title":"Core: null deref","body":"step a.py","state":"open","labels":[{"name":"bug"},{"name":"ready-for-agent"}]}]' ;;
+  *"issues?state=open"*) echo "[]" ;;
+  *issues/*/comments*) echo "[]" ;;
   *issues/*)
     j='{"number":1228,"title":"Core: null deref","body":"step a.py"}'
     if [ -n "\$prog" ]; then printf '%s' "\$j" | jq -r "\$prog"; else printf '%s\n' "\$j"; fi ;;
@@ -494,6 +511,8 @@ if [ "\${SG_GH_PASS:-}" = board ] || case "\$a" in *projectsV2*|"api users/o") t
   echo "\$a" >> "$T/board.calls"
   case "\$a" in *"--input -"*) cat > "$T/board.in";; esac
   case "\$a" in
+  *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$T/issues.json" ;;
+  *"issue(number:"*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issue\(number: [0-9]+' | /usr/bin/grep -oE '[0-9]+' | head -1); jq -c --arg k "i\$n" --argjson n "\$n" '{data:{repository:{(\$k): (.[]|select(.number==\$n)|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}})}}}' "$T/issues.json" ;;
     "api users/o") echo '{"type":"User"}' ;;
     *fields?per_page=100*) echo '[{"id":"F_STATUS","name":"Status","options":[{"id":"O_PROG","name":"In Progress"}]}]' ;;
     *items?per_page=100\&fields*) printf '1228\t%s\thttps://api.github.com/repos/x/y\n' "\$(cat "$T/bstatus" 2>/dev/null || echo Todo)"; exit 0 ;;   # the seam's tsv row: the owner's card in Todo until the pass moves it
@@ -508,10 +527,12 @@ if [ "\${SG_GH_PASS:-}" = board ] || case "\$a" in *projectsV2*|"api users/o") t
   exit 0
 fi
 case "\$a" in
-  *pulls?state=open*) echo "" ;;
-  *"issues?state=open"*labels=bug*) printf '1228\x1fbug,ready-for-agent\n' ;;
-  *"issues?state=open"*) printf '1228\x1fbug,ready-for-agent\n' ;;   # the unlabelled list the kinds route reads (#550: the seam now answers the kinds)
-  *issues/*/comments*) echo "" ;;
+  *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$T/issues.json" ;;
+  *"issue(number:"*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issue\(number: [0-9]+' | /usr/bin/grep -oE '[0-9]+' | head -1); jq -c --arg k "i\$n" --argjson n "\$n" '{data:{repository:{(\$k): (.[]|select(.number==\$n)|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}})}}}' "$T/issues.json" ;;
+  *pulls?state=open*) echo "[]" ;;
+  *"issues?state=open"*labels=bug*) echo '[{"number":1228,"title":"Core: null deref","body":"step a.py","state":"open","labels":[{"name":"bug"},{"name":"ready-for-agent"}]}]' ;;
+  *"issues?state=open"*) echo '[{"number":1228,"title":"Core: null deref","body":"step a.py","state":"open","labels":[{"name":"bug"},{"name":"ready-for-agent"}]}]' ;;   # the unlabelled list the kinds route reads (#550: the seam now answers the kinds)
+  *issues/*/comments*) echo "[]" ;;
   *"--method POST"*) printf '%s\n' "\$@" >> "$T/filed"
     for x in "\$@"; do case "\$x" in body=@*) cat "\${x#body=@}" >> "$T/filed";; esac; done
     echo '{"number":900}' ;;
@@ -565,9 +586,11 @@ sys.stdout.write(open("$K/kinds.tsv").read())
 PY
 cat > "$K/bin/gh" <<J
 #!/bin/bash
-list() { jq -r --arg l "\$1" '.[]|select(\$l == "" or ((.labels // [])|index(\$l)))|"\(.number)\u001f\(.labels|join(","))"' "$K/issues.json"; }
+list() { jq -c --arg l "\$1" '[.[]|select(\$l == "" or ((.labels // [])|index(\$l)))|.labels=[(.labels//[])[]|{name:.}]]' "$K/issues.json"; }
 case "\$*" in
-  *pulls?state=open*) echo "" ;;
+  *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$K/issues.json" ;;
+  *"issue(number:"*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issue\(number: [0-9]+' | /usr/bin/grep -oE '[0-9]+' | head -1); jq -c --arg k "i\$n" --argjson n "\$n" '{data:{repository:{(\$k): (.[]|select(.number==\$n)|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}})}}}' "$K/issues.json" ;;
+  *pulls?state=open*) echo "[]" ;;
   *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$K/issues.json" ;;   # the blocker gate's one list read (#479)
   *"issues?state=open"*labels=bug*) list bug ;;
   *"issues?state=open"*labels=debt*) list debt ;;
@@ -607,7 +630,7 @@ JSON
 cat > "$R/bin/gh" <<G
 #!/bin/bash
 q=""; prev=""; for a in "\$@"; do [ "\$prev" = "-q" ] && q="\$a"; prev="\$a"; done
-case "\$*" in *"issues?state=open"*) jq -r "\$q" "$R/issues.json";; *pulls?state=open*) echo "";; *issues/*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issues/[0-9]+' | cut -d/ -f2); jq -c --argjson n "\$n" '.[]|select(.number==\$n)' "$R/issues.json";; *) echo "";; esac
+case "\$*" in *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:.labels},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$R/issues.json";; *"issue(number:"*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issue\(number: [0-9]+' | /usr/bin/grep -oE '[0-9]+' | head -1); jq -c --arg k "i\$n" --argjson n "\$n" '{data:{repository:{(\$k): (.[]|select(.number==\$n)|{number,title,body,state:"OPEN",labels:{nodes:.labels},blockedBy:{nodes:[]},comments:{nodes:[]}})}}}' "$R/issues.json";; *"issues?state=open"*) cat "$R/issues.json";; *pulls?state=open*) echo "[]";; *issues/*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issues/[0-9]+' | cut -d/ -f2); jq -c --argjson n "\$n" '.[]|select(.number==\$n)' "$R/issues.json";; *) echo "";; esac
 G
 chmod +x "$R/bin/gh"
 r=$(PATH="$R/bin:$PATH" AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
@@ -651,7 +674,9 @@ cat > "$M/bin/gh" <<J
 #!/bin/bash
 case "\$*" in
   *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$M/issues.json" ;;
-  *"issues?state=open"*labels=bug*) jq -r '.[]|select((.labels // [])|index("bug"))|"\(.number)\u001f\(.labels|join(","))"' "$M/issues.json" ;;
+  *"issue(number:"*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issue\(number: [0-9]+' | /usr/bin/grep -oE '[0-9]+' | head -1); jq -c --arg k "i\$n" --argjson n "\$n" '{data:{repository:{(\$k): (.[]|select(.number==\$n)|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}})}}}' "$M/issues.json" ;;
+  *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$M/issues.json" ;;
+  *"issues?state=open"*labels=bug*) jq -c '[.[]|select((.labels // [])|index("bug"))|.labels=[(.labels//[])[]|{name:.}]]' "$M/issues.json" ;;
   *issues/*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issues/[0-9]+' | cut -d/ -f2); jq -c --argjson n "\$n" '.[]|select(.number==\$n)' "$M/issues.json" ;;
   *) echo "" ;;
 esac
@@ -700,10 +725,12 @@ JSON
 cat > "$T/bin/gh" <<J
 #!/bin/bash
 case "\$*" in
-  *pulls?state=open*) echo "" ;;
   *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$T/issues.json" ;;
-  *"issues?state=open"*labels=bug*) printf '1228\x1fbug,ready-for-agent\n596\x1fbug,ready-for-agent,loop-bug\n' ;;
-  *"issues?state=open"*) echo "" ;;
+  *"issue(number:"*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issue\(number: [0-9]+' | /usr/bin/grep -oE '[0-9]+' | head -1); jq -c --arg k "i\$n" --argjson n "\$n" '{data:{repository:{(\$k): (.[]|select(.number==\$n)|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}})}}}' "$T/issues.json" ;;
+  *pulls?state=open*) echo "[]" ;;
+  *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$T/issues.json" ;;
+  *"issues?state=open"*labels=bug*) echo '[{"number":1228,"title":"Core: null deref","body":"step a.py","state":"open","labels":[{"name":"bug"},{"name":"ready-for-agent"}]},{"number":596,"title":"Core: null deref","body":"step a.py","state":"open","labels":[{"name":"bug"},{"name":"ready-for-agent"},{"name":"loop-bug"}]}]' ;;
+  *"issues?state=open"*) echo "[]" ;;
   *issues/*) printf '{"number":1228,"title":"Core: null deref","body":"step a.py"}\n' ;;
   *) echo "" ;;
 esac
@@ -742,11 +769,13 @@ JSON
 cat > "$T/bin/gh" <<J
 #!/bin/bash
 case "\$*" in
-  *pulls?state=open*) echo "" ;;
   *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$T/issues.json" ;;
-  *"issues?state=open"*labels=bug*) printf '1228\x1fbug,ready-for-agent\n' ;;
-  *"issues?state=open"*) echo "" ;;
-  *issues/*/comments*) echo "" ;;
+  *"issue(number:"*) echo "read" >> "$T/reads"; n=\$(echo "\$*" | /usr/bin/grep -oE 'issue\(number: [0-9]+' | /usr/bin/grep -oE '[0-9]+' | head -1); jq -c --arg k "i\$n" --argjson n "\$n" '{data:{repository:{(\$k): (.[]|select(.number==\$n)|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}})}}}' "$T/issues.json" ;;
+  *pulls?state=open*) echo "[]" ;;
+  *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$T/issues.json" ;;
+  *"issues?state=open"*labels=bug*) echo '[{"number":1228,"title":"Core: null deref","body":"step a.py","state":"open","labels":[{"name":"bug"},{"name":"ready-for-agent"}]}]' ;;
+  *"issues?state=open"*) echo "[]" ;;
+  *issues/*/comments*) echo "[]" ;;
   "api repos/x/y/issues/1228") echo "read" >> "$T/reads"; printf '{"number":1228,"title":"Core: null deref","body":"step a.py"}\n' ;;
   *issues/*) echo "" ;;
   *) echo "" ;;

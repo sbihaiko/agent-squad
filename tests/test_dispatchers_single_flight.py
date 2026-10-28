@@ -21,8 +21,9 @@ case "$*" in *"pulls?state=open"*) exit 0;; esac
 # autofrontier reads the open-issue list once, through the door: one GraphQL request (#383).
 labels='{"nodes":[{"name":"wave:01"},{"name":"ready-for-agent"}]}'
 case "$*" in *"issues(states: OPEN"*) printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":42,"title":"a bug","body":"b","state":"OPEN","labels":%s,"blockedBy":{"nodes":[]},"comments":{"nodes":[]}}]}}}}\\n' "$labels"; exit 0;; esac
-case "$*" in *"issues?state=open&labels="*) printf '42\\037%s\\n' "$LABELS"; exit 0;; esac
+case "$*" in *"issues?state=open&labels="*) printf '%s' "$LABELS" | jq -Rc '[{number:42,title:"a bug",body:"b",state:"open",labels:(split(",")|map(select(length>0)|{name:.}))}]'; exit 0;; esac   # gh's JSON list: the door projects it (#847)
 case "$*" in *"issues?state=open"*) printf 'wave:01\\03742\\037%s\\n' "$LABELS"; exit 0;; esac
+case "$*" in *"issue(number: 42)"*) printf '{"data":{"repository":{"i42":{"number":42,"title":"a bug","body":"b","state":"OPEN","labels":{"nodes":[]},"blockedBy":{"nodes":[]},"comments":{"nodes":[]}}}}}\n'; exit 0;; esac   # the door's one-issue query (#847)
 case "$*" in *"issues/42"*) printf '{"number":42,"title":"a bug","body":"b","created_at":"2026-10-11T00:00:00Z"}\\n'; exit 0;; esac
 exit 0
 """

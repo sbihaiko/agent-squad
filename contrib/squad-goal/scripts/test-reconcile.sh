@@ -5,6 +5,7 @@
 # usage: bash test-reconcile.sh [path/to/reconcile.py]
 src=${1:-$(dirname "$0")/reconcile.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/s" "$T/bin" "$T/st"; test -f "$(dirname "$src")/board_columns.py" || exit 1; cp "$src" "$T/s/reconcile.py"; cp "$(dirname "$src")/board_columns.py" "$T/s/board_columns.py"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"
+cp "$(dirname "$src")/ghread.py" "$(dirname "$src")/ghthrottle.py" "$T/s/"   # the door reader and the quota floor reader reconcile imports (#847)
 printf '#!/bin/bash\necho "$*" >> "%s/moves"\n' "$T" > "$T/s/board.sh"; chmod +x "$T/s/board.sh"
 cat > "$T/bin/gh" <<'J'
 #!/bin/bash
@@ -14,6 +15,8 @@ case "$*" in
   *"/items"*) printf '1090\tTodo\thttps://api.github.com/repos/x/y\n1092\tTesting\thttps://api.github.com/repos/x/y\n1095\tTodo\thttps://api.github.com/repos/x/y\n1110\tTesting\thttps://api.github.com/repos/x/y\n1120\tTodo\thttps://api.github.com/repos/x/y\n1130\tBlocked\thttps://api.github.com/repos/x/y\n1140\tDone\thttps://api.github.com/repos/x/y\n1150\tTodo\thttps://api.github.com/repos/x/y\n1160\tTodo\thttps://api.github.com/repos/x/y\n1170\tClosed\thttps://api.github.com/repos/x/y\n';;   # the one Status read of the seam: number, state, repository url
   *"--method POST"*"/labels"*) echo "$*" >> "TMPDIR/tags"; echo '[]';;   # the tag a refused move back writes: the tag plus a new issue, never a card moved back
   *"/labels"*) echo "$*" >> "TMPDIR/tagreads"; if [ -n "$HAS_TAG" ]; then echo '[{"name":"reverted"}]'; else echo '[]'; fi;;   # the labels the issue carries now
+  *"issue(number:"*) n=$(echo "$*" | /usr/bin/grep -oE 'issue\(number: [0-9]+' | /usr/bin/grep -oE '[0-9]+'); r=$("$0" api "repos/x/y/issues/$n" 2>/dev/null)
+    jq -c --arg k "i$n" --argjson n "$n" --argjson r "$r" '{data:{repository:{($k):{number:$n,title:"t",body:($r.body//""),state:(($r.state//"open")|ascii_upcase),createdAt:null,labels:{nodes:[]},blockedBy:{nodes:[]},subIssuesSummary:{total:0,completed:0},subIssues:{nodes:[]},comments:{nodes:[]}}}}}' <<<"{}" ;;   # the single-issue read is the GraphQL fact: its state and body are the REST answer below
   *"issues/1090") echo '{"state":"closed","body":""}';;
   *"issues/1092") echo '{"state":"closed","body":""}';;
   *"issues/1093") echo '{"state":"open","body":""}';;

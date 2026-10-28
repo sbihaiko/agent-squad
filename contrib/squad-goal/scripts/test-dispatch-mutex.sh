@@ -17,10 +17,11 @@ JSON
 cat > "$T/bin/gh" <<J
 #!/bin/bash
 case "\$*" in
-  *pulls?state=open*) echo "" ;;
+  *"issue(number:"*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issue\(number: [0-9]+' | /usr/bin/grep -oE '[0-9]+' | head -1); jq -c --arg k "i\$n" --argjson n "\$n" '{data:{repository:{(\$k): (.[]|select(.number==\$n)|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}})}}}' "$T/issues.json" ;;
+  *pulls?state=open*) echo "[]" ;;
   *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$T/issues.json" ;;
-  *"issues?state=open"*labels=bug*) printf '426\037bug,ready-for-agent\n' ;;
-  *"issues?state=open"*) printf '426\037bug,ready-for-agent\n' ;;
+  *"issues?state=open"*labels=bug*) echo '[{"number":426,"title":"Core: null deref","body":"step a.py","state":"open","labels":[{"name":"bug"},{"name":"ready-for-agent"}]}]' ;;
+  *"issues?state=open"*) echo '[{"number":426,"title":"Core: null deref","body":"step a.py","state":"open","labels":[{"name":"bug"},{"name":"ready-for-agent"}]}]' ;;
   *projectsV2/4/fields*) echo FID4 ;;
   *projectsV2/4/items*) printf '426\tTodo\n' ;;   # the card sits in Todo, the owner's go signal (#550)
   *issues/*) cat "$T/issues.json" | jq -c '.[0]' ;;

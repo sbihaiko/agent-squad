@@ -22,10 +22,11 @@ cat > "$T/bin/gh" <<'EOF'
 case "$*" in
   *pulls?state=open*) echo "" ;;
   *"issues(states: OPEN"*) echo '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":65,"title":"Issue 65","body":"body","state":"OPEN","labels":{"nodes":[{"name":"bug"},{"name":"ready-for-agent"}]},"blockedBy":{"nodes":[]},"comments":{"nodes":[]}}]}}}}' ;;   # the blocker gate's one list read (#479)
-  *issues?state=open*labels=bug*) printf '65\037bug,ready-for-agent\n' ;;
-  *issues/65/comments*) echo "" ;;
+  *issues?state=open*labels=bug*) echo '[{"number":65,"title":"Issue 65","labels":[{"name":"bug"},{"name":"ready-for-agent"}]}]' ;;   # the candidate list, as GitHub answers it (JSON)
+  *issues/65/comments*) echo "[]" ;;
   *issues/65\ -q*) printf '"Issue 65"\nbody\n' ;;
   *issues/65*) printf '{"number":65,"title":"Issue 65","body":"body","created_at":"2026-10-13T00:00:00Z"}\n' ;;
+  *"issue(number: 65)"*) echo '{"data":{"repository":{"i65":{"number":65,"title":"Issue 65","body":"body","state":"OPEN","createdAt":"2026-10-13T00:00:00Z","labels":{"nodes":[{"name":"bug"}]},"blockedBy":{"nodes":[]},"subIssuesSummary":{"total":0,"completed":0},"subIssues":{"nodes":[]},"comments":{"nodes":[]}}}}}' ;;   # the single-issue read, as the GraphQL fact answers it
   *) echo "" ;;
 esac
 EOF
