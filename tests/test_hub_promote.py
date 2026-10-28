@@ -86,6 +86,8 @@ def test_the_writer_call_is_the_board_seam(hub, monkeypatch):
     monkeypatch.setattr(mod.subprocess, "run", fake)
     assert mod.promote_write(7).returncode == 0
     assert calls and calls[0][1].endswith("board.sh") and calls[0][2:] == ["x", "4", "Todo", "7"], calls
+    assert mod.promote_write([9, 20, 21], add=True).returncode == 0
+    assert calls[1][1].endswith("board.sh") and calls[1][2:] == ["--add", "x", "4", "Todo", "9", "20", "21"], calls
 
 
 def test_the_writer_call_carries_the_state_directory_the_hub_resolved(hub, monkeypatch):
@@ -275,6 +277,99 @@ def test_a_ticket_that_is_itself_a_spec_keeps_its_column(hub, monkeypatch):
     assert calls == [([9], False)], calls
 
 
+def test_a_ticket_with_an_owner_label_keeps_its_column(hub, monkeypatch):
+    """The janitor's rule (janitor.py, #589): a sub-issue labelled needs-owner or needs-ratification is the owner's decision,
+    and one labelled wontfix is abandoned. The spec's move never puts such a ticket in Todo, where a dispatcher would take it
+    as work (ADR-0142 sections 2 and 6)."""
+    mod, port = hub
+    mod.board_cache["items"] += [{"n": 20, "i": 120, "t": "owner decides", "s": "OPEN", "st": "Backlog", "l": ["needs-owner"]},
+                                 {"n": 21, "i": 121, "t": "ratify", "s": "OPEN", "st": "Backlog", "l": ["needs-ratification"]},
+                                 {"n": 22, "i": 122, "t": "dropped", "s": "OPEN", "st": "Backlog", "l": ["wontfix"]}]
+    sub_issues(monkeypatch, answer=[{"number": 20, "state": "open"}, {"number": 21, "state": "open"}, {"number": 22, "state": "open"}])
+    calls = []
+    mod.promote_write = writer(calls)
+    status, out = post(port, {"issue": 9})
+    assert status == 200 and out.get("moved") == [9], out
+    assert calls == [([9], False)], calls
+    items = {i["n"]: i["st"] for i in mod.board_cache["items"]}
+    assert items[20] == items[21] == items[22] == "Backlog", items
+
+
+def test_a_spec_reads_every_page_of_its_sub_issues(hub, monkeypatch):
+    """The sub-issue read follows pages while a page comes back full: a ticket on the second page moves with the spec."""
+    mod, port = hub
+    gh = sys.modules["ghread"]
+    mod.board_cache["items"].append({"n": 20, "i": 120, "t": "ticket on page two", "s": "OPEN", "st": "Backlog", "l": []})
+    pages = {"page=1": [{"number": 1000 + k, "state": "open"} for k in range(100)], "page=2": [{"number": 20, "state": "open"}]}
+    routes = []
+
+    def read(route, transport=None):
+        routes.append(route)
+        return gh.Read(kind=gh.ANSWER, answer=pages["page=2" if "page=2" in route else "page=1"])
+
+    monkeypatch.setattr(gh, "read", read)
+    calls = []
+    mod.promote_write = writer(calls)
+    status, out = post(port, {"issue": 9})
+    assert status == 200 and out.get("moved") == [9, 20], out
+    assert calls == [([9, 20], False)], calls
+    assert len(routes) == 2 and "page=2" in routes[1], routes
+
+
+def test_a_sub_issue_of_another_repository_is_not_a_card_of_this_board(hub, monkeypatch):
+    """A sub-issue is matched to a card by repository as well as number. Sub-issue 20 of another repository is not card 20 of
+    this board, and it is skipped; sub-issue 21 of this repository (its URL in any letter case) moves with the spec."""
+    mod, port = hub
+    mod.board_cache["items"] += [{"n": 20, "i": 120, "t": "this repo's card 20", "s": "OPEN", "st": "Backlog", "l": []},
+                                 {"n": 21, "i": 121, "t": "this repo's card 21", "s": "OPEN", "st": "Backlog", "l": []}]
+    sub_issues(monkeypatch, answer=[{"number": 20, "state": "open", "repository_url": "https://api.github.com/repos/x/other"},
+                                         {"number": 21, "state": "open", "repository_url": "https://api.github.com/repos/X/Y"}])
+    calls = []
+    mod.promote_write = writer(calls)
+    status, out = post(port, {"issue": 9})
+    assert status == 200 and out.get("moved") == [9, 21], out
+    assert calls == [([9, 21], False)], calls
+    items = {i["n"]: i["st"] for i in mod.board_cache["items"]}
+    assert items[20] == "Backlog" and items[21] == "Todo", items
+
+
+def test_the_writer_timeout_scales_with_the_cards(hub, monkeypatch):
+    """The writer's base is 120 s, and each card after the first adds SG_BOARD_SETTLE_SECONDS (default 60), since board.py
+    settles every card it moves."""
+    mod, _ = hub
+    seen = []
+
+    def fake(cmd, **kw):
+        seen.append(kw.get("timeout"))
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(mod.subprocess, "run", fake)
+    monkeypatch.delenv("SG_BOARD_SETTLE_SECONDS", raising=False)
+    mod.promote_write(7)
+    mod.promote_write([9, 20, 21])
+    monkeypatch.setenv("SG_BOARD_SETTLE_SECONDS", "5")
+    mod.promote_write([9, 20, 21])
+    assert seen == [120, 240, 130], seen
+
+
+def test_a_writer_timeout_names_a_partial_move_and_asks_for_a_read(hub, monkeypatch, tmp_path):
+    """A timed-out writer may have moved some cards. The answer says the move may be partial, the cache is not written over
+    cards the hub cannot prove, and the board-dirty flag asks the next pass to read the real columns."""
+    mod, port = hub
+    monkeypatch.setattr(mod, "STATE", tmp_path)
+    mod.board_cache["items"].append({"n": 20, "i": 120, "t": "ticket", "s": "OPEN", "st": "Backlog", "l": []})
+    sub_issues(monkeypatch, answer=[{"number": 20, "state": "open"}])
+
+    def timed_out(issues, add=False):
+        raise subprocess.TimeoutExpired(["board.sh"], 240)
+
+    mod.promote_write = timed_out
+    status, out = post(port, {"issue": 9})
+    assert status == 400 and "may be partial" in out.get("err", ""), out
+    assert (tmp_path / "board-dirty").exists(), "the next board pass is not asked to read the moved cards"
+    assert next(i for i in mod.board_cache["items"] if i["n"] == 20)["st"] == "Backlog"
+
+
 def test_a_failed_ticket_read_moves_nothing(hub, monkeypatch):
     mod, port = hub
     gh = sys.modules["ghread"]
@@ -299,12 +394,13 @@ def test_a_refused_write_is_the_reason_the_card_shows(hub):
 
 
 def test_the_arrow_is_on_backlog_cards_only(hub):
+    """The arrow shows on every Backlog card, a spec included: the owner's move starts the spec (ADR-0142, section 6)."""
     mod, port = hub
     board = mod.board()
     groups = {g["name"]: {i["n"]: i for i in g["items"]} for g in board["groups"]}
     assert groups["Backlog"][7].get("pm") is True
     assert not groups["Todo"][8].get("pm")
-    assert not groups["Backlog"][9].get("pm"), "a spec card carries no arrow (ADR-0142)"
+    assert groups["Backlog"][9].get("pm") is True, "a spec card carries the arrow: the owner's move starts it (ADR-0142 section 6)"
 
 
 def test_the_page_draws_the_arrow_and_delegates_the_move(hub):
