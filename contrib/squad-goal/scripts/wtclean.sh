@@ -102,9 +102,10 @@ $G worktree list --porcelain | sed -n 's#^worktree \(.*/runs/run-[^/]*/ws/.*\)#\
   [ -z "$(dirt "$w")" ] || { kept "${run##*/}" "$w" dirt "uncommitted work in it"; continue; }
   sha=$($G -C "$w" rev-parse HEAD 2>/dev/null) || continue
   own=$($G -C "$w" branch --show-current)
-  # kept only when HEAD is on no remote branch and on no other local branch (a run that made no commit sits on its base), and
-  # its work is not in the base: a wave that landed rebased the child, so its sha is on no remote and its patch is in the base
-  if ! in_base "$w" && [ -z "$($G branch -r --contains "$sha" 2>/dev/null | head -1)" ] && [ -z "$($G branch --contains "$sha" --format='%(refname:short)' 2>/dev/null | grep -vxF "${own:-//}" | head -1)" ]; then
+  # kept when HEAD is on no remote branch and its work is not in the base: a wave that landed rebased the child, so its sha is on
+  # no remote and its patch is in the base. A local branch holds the sha on this machine only (#836: a run's own branch, never
+  # pushed), so it is no delivery; a run that made no commit sits on its base, which the remote holds.
+  if ! in_base "$w" && [ -z "$($G branch -r --contains "$sha" 2>/dev/null | head -1)" ]; then
     grep -qx "$w" "$seen" && continue
     # #767: the branch passes and the frontier see only `fix/<n>-…` or `gui/<n>-…` (workbranches.sh), so the line names the
     # push under such a name: the tree's own name when it is one and the push is a fast-forward, else a fresh one to fill in
