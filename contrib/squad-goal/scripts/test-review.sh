@@ -256,7 +256,8 @@ unset CLAUDE_ARGS
 # from SG_CHECKOUT, and the head watch ran there too: it read the checkout's HEAD, called the child's head moved within
 # 10 s, and every such review of a child ended "BLOCKED (head moved during the review)" with no verdict.
 W="$T/child"; /usr/bin/git init -q -b main "$W"; /usr/bin/git -C "$W" -c user.email=a@b -c user.name=t commit -q --allow-empty -m base
-/usr/bin/git -C "$W" checkout -q -b gui/9; /usr/bin/git -C "$W" -c user.email=a@b -c user.name=t commit -q --allow-empty -m child
+/usr/bin/git -C "$W" checkout -q -b gui/9; echo child > "$W/c.txt"; /usr/bin/git -C "$W" add c.txt   # a real change: an empty diff is a refused read (#846)
+/usr/bin/git -C "$W" -c user.email=a@b -c user.name=t commit -q -m child
 /usr/bin/git init -q -b main "$T/co"; /usr/bin/git -C "$T/co" -c user.email=a@b -c user.name=t commit -q --allow-empty -m checkout
 sed -i '' "s|SG_CHECKOUT=$T;|SG_CHECKOUT=$T/co;|" "$T/s/env.sh"
 printf '#!/bin/bash\necho "$*" >> "$GROK_ARGS"; sleep 12; echo "VERDICT: APPROVE"\n' > "$T/bin/grok"; chmod +x "$T/bin/grok"

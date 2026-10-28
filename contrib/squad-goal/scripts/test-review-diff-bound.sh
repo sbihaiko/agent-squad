@@ -23,6 +23,7 @@ case "\$*" in
   *Accept*compare*) printf 'diff --git a/gen/graph.json b/gen/graph.json\n+%s\ndiff --git a/src/a.py b/src/a.py\n+small change\n' "$big";;
   *compare*) echo '{"status":"ahead","files":[{"filename":"gen/graph.json"},{"filename":"src/a.py"}]}';;
   *commits/*) echo '{"sha":"aaa111"}';;
+  *issues/*) echo '{"number":8,"title":"t","body":"b"}';;
   *) echo "stub";;
 esac
 J
