@@ -802,30 +802,59 @@ r=$(land2 run-836a); rc=$?
 case "$r" in *"dispatched for #712, #713, #714"*) ok "Y1: the landing names every issue of the request's CHILD header";; *) ko "Y1: the request's issues are not named: '$r'";; esac
 case "$r" in *"#710"*) ko "Y1: a stale marker or record match names #710: '$r'";; *) ok "Y1: the landing names no stale issue";; esac
 
-# Y2: a child commit of this run (Refs #721) on a local run branch only, not in the wave or dev: the wave is refused and kept.
+# Y2: a child commit of this run (Refs #721) on the run's own branch only, in neither the wave nor dev: the wave is refused and kept.
 W22=wave/run-836b; start2 run-836b >/dev/null
 mkdir -p "$T/co/runs/run-836b"; printf '%s\n' 'CHILD — GitHub issue #721 (bug; one root cause, one branch):' > "$T/co/runs/run-836b/request.txt"
 x2=$(mktemp -d); $G clone -q "$T/origin.git" "$x2/c" 2>/dev/null
-(cd "$x2/c" && $G checkout -q -b tmp dev && echo fix > f721 && $G add f721 && $G -c user.email=a@b -c user.name=t commit -q -m "fix 721" -m "Refs #721" && $G push -q origin HEAD:refs/heads/tmp-721 2>/dev/null)
-(cd "$x2/c" && $G fetch -q "$T/co" dev:refs/heads/dev-local 2>/dev/null; true)
-X2SHA=$($G -C "$x2/c" rev-parse HEAD); $G -C "$T/co" fetch -q "$x2/c" HEAD:refs/heads/squad/run/x2-836 2>/dev/null
+(cd "$x2/c" && $G checkout -q -b tmp dev && echo fix > f721 && $G add f721 && $G -c user.email=a@b -c user.name=t commit -q -m "fix 721" -m "Refs #721")
+X2SHA=$($G -C "$x2/c" rev-parse HEAD); $G -C "$T/co" fetch -q "$x2/c" HEAD:refs/heads/squad/run/run-836b 2>/dev/null
 : > "$T/pushes.log"
 r=$(land2 run-836b 2>&1); rc=$?
-[ $rc = 1 ] && ok "Y2: a child commit on a local run branch refuses the empty landing (exit 1)" || ko "Y2: exit $rc: '$r'"
+[ $rc = 1 ] && ok "Y2: a child commit on the run's branch refuses the empty landing (exit 1)" || ko "Y2: exit $rc: '$r'"
 [ "$(printf '%s\n' "$r" | /usr/bin/grep -c '^WAVE REFUSE')" = 1 ] && ok "Y2: one WAVE REFUSE line" || ko "Y2: no single WAVE REFUSE line: '$r'"
 case "$r" in *"${X2SHA:0:9}"*) ok "Y2: the refusal names the child commit";; *) ko "Y2: the commit is not named: '$r'";; esac
 case "$r" in *"landed empty"*) ko "Y2: the wave landed empty: '$r'";; *) ok "Y2: the wave does not land empty";; esac
 $O rev-parse -q --verify "refs/heads/$W22" >/dev/null && ok "Y2: the wave branch is kept on the remote" || ko "Y2: the wave branch was deleted"
 /usr/bin/grep -q ":refs/heads/$W22" "$T/pushes.log" && ko "Y2: the wave branch was pushed for deletion" || ok "Y2: no deletion push for the wave branch"
 
-# Y3: a local branch whose commit names an issue outside the run's request does not hold the wave: it lands empty.
+# Y2b (#836): the same commit already on a remote fix/ branch is salvaged, so it holds nothing: the wave lands empty.
+W25=wave/run-836e; start2 run-836e >/dev/null
+mkdir -p "$T/co/runs/run-836e"; printf '%s\n' 'CHILD — GitHub issue #722 (bug; one root cause, one branch):' > "$T/co/runs/run-836e/request.txt"
+x5=$(mktemp -d); $G clone -q "$T/origin.git" "$x5/c" 2>/dev/null
+(cd "$x5/c" && $G checkout -q -b tmp dev && echo salv > f722 && $G add f722 && $G -c user.email=a@b -c user.name=t commit -q -m "fix 722" -m "Refs #722" && $G push -q origin HEAD:refs/heads/fix/722-salvage 2>/dev/null)
+X5SHA=$($G -C "$x5/c" rev-parse HEAD); $G -C "$T/co" fetch -q "$x5/c" HEAD:refs/heads/squad/run/run-836e 2>/dev/null
+$G -C "$T/co" fetch -q "$T/origin.git" '+refs/heads/*:refs/remotes/origin/*' 2>/dev/null
+[ "$($G -C "$T/co" branch -r --contains "$X5SHA" 2>/dev/null | /usr/bin/grep -c .)" -ge 1 ] && ok "Y2b: the commit is on a remote fix/ branch" || ko "Y2b: the setup did not put the commit on a remote branch"
+r=$(land2 run-836e 2>&1); rc=$?
+[ $rc = 0 ] && case "$r" in *"landed empty"*) ok "Y2b: a commit already on a remote fix/ branch does not hold the wave";; *) ko "Y2b: not an empty landing: '$r'";; esac || ko "Y2b: exit $rc: '$r'"
+case "$r" in *"WAVE REFUSE"*) ko "Y2b: a remote-reachable commit was refused: '$r'";; *) ok "Y2b: no refusal names the salvaged commit";; esac
+
+# Y3 (#836): a leftover squad/ branch of another run, holding a commit that names an issue of this run's request, does not hold
+# this run's wave: only the run's own branch and trees are read, and the commit is local to that other branch only.
 W23=wave/run-836c; start2 run-836c >/dev/null
 mkdir -p "$T/co/runs/run-836c"; printf '%s\n' 'CHILD — GitHub issue #731 (bug; one root cause, one branch):' > "$T/co/runs/run-836c/request.txt"
 x3=$(mktemp -d); $G clone -q "$T/origin.git" "$x3/c" 2>/dev/null
-(cd "$x3/c" && $G checkout -q -b tmp dev && echo other > f999 && $G add f999 && $G -c user.email=a@b -c user.name=t commit -q -m "other 999" -m "Refs #999" && $G push -q origin HEAD:refs/heads/tmp-999 2>/dev/null)
-$G -C "$T/co" fetch -q "$x3/c" HEAD:refs/heads/squad/run/x3-836 2>/dev/null
+(cd "$x3/c" && $G checkout -q -b tmp dev && echo other > f731 && $G add f731 && $G -c user.email=a@b -c user.name=t commit -q -m "other 731" -m "Refs #731")
+$G -C "$T/co" fetch -q "$x3/c" HEAD:refs/heads/squad/run/run-836-old 2>/dev/null
 r=$(land2 run-836c 2>&1); rc=$?
-[ $rc = 0 ] && case "$r" in *"landed empty"*) ok "Y3: a local commit outside the request does not hold the wave";; *) ko "Y3: not empty: '$r'";; esac || ko "Y3: exit $rc: '$r'"
-rm -rf "$x2" "$x3"
+[ $rc = 0 ] && case "$r" in *"landed empty"*) ok "Y3: a leftover branch of another run does not hold the wave";; *) ko "Y3: not empty: '$r'";; esac || ko "Y3: exit $rc: '$r'"
+
+# Y4 (#836): past the age cap an orphan child commit does not hold the wave: the capped wave lands empty and its issue goes back
+# to the queue, as the capped landing requires (ADR-0145 rule 13).
+W26=wave/run-836d; start2 run-836d >/dev/null
+mkdir -p "$T/co/runs/run-836d"; printf '%s\n' 'CHILD — GitHub issue #741 (bug; one root cause, one branch):' > "$T/co/runs/run-836d/request.txt"
+x4=$(mktemp -d); $G clone -q "$T/origin.git" "$x4/c" 2>/dev/null
+(cd "$x4/c" && $G checkout -q -b tmp dev && echo cap > f741 && $G add f741 && $G -c user.email=a@b -c user.name=t commit -q -m "fix 741" -m "Refs #741")
+$G -C "$T/co" fetch -q "$x4/c" HEAD:refs/heads/squad/run/run-836d 2>/dev/null
+printf '%s\n' "$(( $(date +%s) - 7201 ))" > "$T/st/auto/wave-start-run-836d"
+: > "$T/board.log"
+r=$(land2 run-836d 2>&1); rc=$?
+[ $rc = 0 ] && case "$r" in *"landed empty"*) ok "Y4: a capped wave with an orphan child commit lands empty (exit 0)";; *) ko "Y4: not an empty landing: '$r'";; esac || ko "Y4: exit $rc: '$r'"
+case "$r" in *"WAVE REFUSE"*) ko "Y4: the capped wave was refused: '$r'";; *) ok "Y4: the capped wave is not refused";; esac
+case "$r" in *"WAVE REQUEUE #741"*"age cap"*) ok "Y4: the orphan's issue goes back to the queue";; *) ko "Y4: the issue was not requeued: '$r'";; esac
+/usr/bin/grep -qx 'o 3 Todo 741' "$T/board.log" && ok "Y4: the card of the requeued issue reads Todo" || ko "Y4: no Todo card for #741"
+$O rev-parse -q --verify "refs/heads/$W26" >/dev/null && ko "Y4: the capped wave branch is kept" || ok "Y4: the capped wave branch goes"
+rm -rf "$x2" "$x3" "$x4" "$x5"
+
 
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }
