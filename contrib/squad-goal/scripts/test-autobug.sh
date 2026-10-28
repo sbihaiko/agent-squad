@@ -805,4 +805,23 @@ printf 'print("-")\n' > "$T/s/fundroom.py"
 r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
 [ "$(cat "$T/st/bugs-waiting" 2>/dev/null)" = 0 ] && ok "21 a pass that takes every candidate leaves 0 waiting" || ko "21 bugs-waiting '$(cat "$T/st/bugs-waiting" 2>/dev/null)': '$r'"
 
+# 22) (#847) a rate limit at the blocker-gate read is said once, in words a person can act on, and dispatches nothing.
+# Every call answers the 403 body, so the open-issue read is the first one refused. The pass names the reset (HH:MM UTC,
+# or unknown) and files nothing: no refusal bug, no marker, no request. The old text named an empty candidate list.
+rm -rf "$T/st/auto" "$T/st/req"; mkdir -p "$T/st/auto" "$T/st/req"; rm -f "$T/st/cycle.log"
+cat > "$T/bin/gh" <<'J'
+#!/bin/bash
+echo '{"message":"API rate limit exceeded for user ID 122891372.","documentation_url":"https://docs.github.com/rest/overview/rate-limits-for-the-rest-api","status":"403"}'; exit 1
+J
+chmod +x "$T/bin/gh"
+r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>"$T/err22"); rc=$?
+[ "$rc" = 0 ] && ok "22 a rate limit exits 0" || ko "22 a rate limit exited $rc"
+$G -qE "^AUTOBUG: rate limited until ([0-9]{2}:[0-9]{2} UTC|unknown)" "$T/err22" && ok "22 the rate-limited line names the reset" || ko "22 no rate-limited line: '$(cat "$T/err22")'"
+[ "$($G -c "rate limited until" "$T/err22")" = 1 ] && ok "22 the line is printed once per pass" || ko "22 the line repeats: '$(cat "$T/err22")'"
+$G -q "candidate list is not a list\|not readable for the blocker gate" "$T/err22" && ko "22 the old refusal text is still printed: '$(cat "$T/err22")'" || ok "22 the old refusal text is gone"
+$G -q "AUTOBUG would dispatch" <<<"$r" && ko "22 a rate limit dispatched: '$r'" || ok "22 a rate limit dispatches nothing"
+m=($(find "$T/st/auto" -name 'bug-*' 2>/dev/null)); [ ${#m[@]} -eq 0 ] && ok "22 a rate limit writes no marker" || ko "22 a rate limit wrote ${m[0]##*/}"
+[ -e "$T/st/cycle.log" ] && $G -q "REFUSED" "$T/st/cycle.log" && ko "22 a rate limit was filed as a refusal" || ok "22 a rate limit files no refusal"
+[ -z "$(ls -A "$T/st/req" 2>/dev/null)" ] && ok "22 a rate limit builds no request" || ko "22 a rate limit built a request"
+
 rm -rf "$T"; exit $fail
