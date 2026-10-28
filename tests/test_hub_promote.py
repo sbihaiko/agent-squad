@@ -8,12 +8,16 @@ right after it.
 `POST /api/promote` carries the body `{"issue": N}` and the same guard `/api/models` and `/api/plans` carry: a
 loopback Host, the hub's own Origin and a JSON body. The route accepts one open issue whose card is in Backlog now,
 and it writes Status=Todo through the board seam, `board.sh`.
+
+A spec card moves with its open Backlog sub-issues in one write (ADR-0142, #838): the owner starts a spec by moving its
+card, and its tickets follow. A ticket the board holds in another column, or closed, keeps its column (ADR-0143).
 """
 import http.client
 import importlib.util
 import json
 import pathlib
 import subprocess
+import sys
 import threading
 from http.server import ThreadingHTTPServer
 
@@ -21,6 +25,7 @@ import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
+GHREAD_PY = ROOT / "contrib/squad-goal/scripts/ghread.py"
 
 BACKLOG = {"n": 7, "i": 101, "t": "a ticket", "s": "OPEN", "st": "Backlog", "l": ["enhancement"]}
 TODO = {"n": 8, "i": 102, "t": "already started", "s": "OPEN", "st": "Todo", "l": []}
@@ -34,6 +39,10 @@ def hub(monkeypatch, tmp_path):
         monkeypatch.setenv(k, v)
     for k in ("SG_STATE", "SG_STATE_BASE", "SG_SHARED", "SG_PROFILE"):
         monkeypatch.delenv(k, raising=False)
+    gspec = importlib.util.spec_from_file_location("ghread", GHREAD_PY)   # the one GitHub door (ADR-0277), the object the hub imports
+    gh = importlib.util.module_from_spec(gspec)
+    monkeypatch.setitem(sys.modules, "ghread", gh)   # registered before it runs: its dataclasses look the module up by name
+    gspec.loader.exec_module(gh)
     spec = importlib.util.spec_from_file_location("hub_promote", HUB_PY)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -185,14 +194,99 @@ def test_a_closed_issue_is_refused(hub):
     assert calls == []
 
 
-def test_a_spec_card_is_refused(hub):
+def sub_issues(monkeypatch, answer=None, failure=None):
+    """The sub-issue read as the hub makes it through ghread (ADR-0277): one answer, or a refusal or failure the hub must
+    not act on. Returns the routes it was asked for."""
+    gh = sys.modules["ghread"]
+    routes = []
+
+    def read(route, transport=None):
+        routes.append(route)
+        if failure is not None:
+            return failure
+        return gh.Read(kind=gh.ANSWER, answer=answer)
+
+    monkeypatch.setattr(gh, "read", read)
+    return routes
+
+
+def test_a_spec_with_no_ticket_moves_alone(hub, monkeypatch):
     mod, port = hub
+    routes = sub_issues(monkeypatch, answer=[])
     calls = []
     mod.promote_write = writer(calls)
     status, out = post(port, {"issue": 9})
-    assert status == 400 and out.get("err"), out
-    assert calls == []
-    assert not any(i.get("pm") for g in mod.board()["groups"] for i in g["items"] if i["n"] == 9)
+    assert status == 200 and out == {"ok": True, "issue": 9, "to": "Todo", "moved": [9]}, out
+    assert calls == [([9], False)], calls
+    assert routes and routes[0].startswith("repos/x/y/issues/9/sub_issues"), routes
+    assert next(i for i in mod.board_cache["items"] if i["n"] == 9)["st"] == "Todo"
+
+
+def test_a_spec_moves_with_its_backlog_tickets_in_one_write(hub, monkeypatch):
+    mod, port = hub
+    mod.board_cache["items"] += [{"n": 20, "i": 120, "t": "ticket a", "s": "OPEN", "st": "Backlog", "l": []},
+                                 {"n": 21, "i": 121, "t": "ticket b", "s": "OPEN", "st": "Backlog", "l": ["enhancement"]}]
+    sub_issues(monkeypatch, answer=[{"number": 20, "state": "open", "labels": []},
+                                         {"number": 21, "state": "open", "labels": [{"name": "enhancement"}]}])
+    calls = []
+    mod.promote_write = writer(calls)
+    status, out = post(port, {"issue": 9})
+    assert status == 200 and out == {"ok": True, "issue": 9, "to": "Todo", "moved": [9, 20, 21]}, out
+    assert calls == [([9, 20, 21], False)], calls
+    groups = {g["name"]: [i["n"] for i in g["items"]] for g in mod.board()["groups"]}
+    assert {9, 20, 21} <= set(groups["Todo"]) and not {9, 20, 21} & set(groups["Backlog"]), groups
+
+
+def test_a_ticket_without_an_item_id_is_added_with_the_spec(hub, monkeypatch):
+    mod, port = hub
+    mod.board_cache["items"].append({"n": 22, "t": "filed by hand", "s": "OPEN", "st": None, "l": []})
+    sub_issues(monkeypatch, answer=[{"number": 22, "state": "open"}])
+    calls = []
+    mod.promote_write = writer(calls)
+    status, out = post(port, {"issue": 9})
+    assert status == 200 and out.get("moved") == [9, 22], out
+    assert calls == [([9, 22], True)], calls
+
+
+def test_a_closed_ticket_or_one_outside_backlog_keeps_its_column(hub, monkeypatch):
+    mod, port = hub
+    mod.board_cache["items"] += [{"n": 20, "i": 120, "t": "closed", "s": "CLOSED", "st": "Backlog", "l": []},
+                                 {"n": 21, "i": 121, "t": "in progress", "s": "OPEN", "st": "Doing", "l": []}]
+    sub_issues(monkeypatch, answer=[{"number": 20, "state": "closed"}, {"number": 21, "state": "open"},
+                                         {"number": 23, "state": "open"}])   # 23 is on no board the hub holds
+    calls = []
+    mod.promote_write = writer(calls)
+    status, out = post(port, {"issue": 9})
+    assert status == 200 and out.get("moved") == [9], out
+    assert calls == [([9], False)], calls
+    items = {i["n"]: i["st"] for i in mod.board_cache["items"]}
+    assert items[20] == "Backlog" and items[21] == "Doing", items
+
+
+def test_a_ticket_that_is_itself_a_spec_keeps_its_column(hub, monkeypatch):
+    """A spec is never work (ADR-0142): a spec under a spec is named by the read and left where it is."""
+    mod, port = hub
+    mod.board_cache["items"].append({"n": 22, "i": 122, "t": "a sub-spec", "s": "OPEN", "st": "Backlog", "l": ["spec"]})
+    sub_issues(monkeypatch, answer=[{"number": 22, "state": "open"}])
+    calls = []
+    mod.promote_write = writer(calls)
+    status, out = post(port, {"issue": 9})
+    assert status == 200 and out.get("moved") == [9], out
+    assert calls == [([9], False)], calls
+
+
+def test_a_failed_ticket_read_moves_nothing(hub, monkeypatch):
+    mod, port = hub
+    gh = sys.modules["ghread"]
+    for failure in (gh.Read(kind=gh.FAILED, detail="gh timed out"),
+                    gh.Read(kind=gh.REFUSED, message="API rate limit exceeded", request_id="AB12:3C")):
+        sub_issues(monkeypatch, failure=failure)
+        calls = []
+        mod.promote_write = writer(calls)
+        status, out = post(port, {"issue": 9})
+        assert status == 400 and out.get("err"), out
+        assert calls == [], calls
+        assert next(i for i in mod.board_cache["items"] if i["n"] == 9)["st"] == "Backlog"
 
 
 def test_a_refused_write_is_the_reason_the_card_shows(hub):
