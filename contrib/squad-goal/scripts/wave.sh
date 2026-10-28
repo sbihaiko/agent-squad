@@ -580,6 +580,35 @@ deliver() {
   return 0
 }
 
+# wave_conflict <run> <wave> <run folder> <clone> <rebase output> (#844): a rebase of the wave on the base that conflicts is terminal
+# for this wave head. The same rebase on the next cycle cannot succeed, so the landing is not retried: the issues the run was
+# dispatched for (the Refs of the wave when the run names none) go back to the queue through requeue, so its loop cap and the
+# needs-human path apply as they do to any requeue. The run's wave marker goes, so the loop stops calling the landing. The wave
+# branch stays on the remote with its commits: they may exist on no other ref. One line names the commit that conflicts. Returns 1.
+wave_conflict() {
+  local run=$1 w=$2 rd=$3 S=$4 out=$5 at refs dset list n n2 named="" outs=""
+  at=$(printf '%s\n' "$out" | /usr/bin/grep -oE 'Could not apply [0-9a-f]+' | head -1 | awk '{print $4}')
+  at=${at:-unknown}
+  refs=$(refs_of "$S" "origin/$base..origin/$w")
+  dset=$(run_issues "${rd:-/nonexistent}" | tr '\n' ' ')
+  # Only the run's dispatch set is acted on (#776, as stuck and the close do): a `Refs #N` outside it is noted and recorded,
+  # and gets no requeue, label, card move, comment or try.
+  if [ -n "${dset// /}" ]; then list=$dset; for n2 in $refs; do case " $dset " in *" $n2 "*) ;; *) outs="${outs:+$outs }$n2";; esac; done
+  else list=$refs; fi
+  for n in $list; do named="${named:+$named, }#$n"; done
+  echo "WAVE CONFLICT $w: the rebase on $base conflicts at $at; ${named:-no issue} requeued on the current base"
+  for n2 in $outs; do
+    echo "WAVE-NOTE #$n2: $w names it (Refs #$n2) outside the dispatch set of run $run; reported, not frozen"
+    printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$run" "$n2" "$w" >> "$SG_STATE/wave-outside.tsv"
+  done
+  for n in $list; do
+    wave_fact "$run" "$n" refused "the rebase on $base conflicts at $at"
+    requeue "$n" "the rebase on $base conflicts at $at: $w cannot land on the current base"
+  done
+  rm -f "$SG_STATE/auto/wave-$run" "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run"
+  return 1
+}
+
 land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, the one push, and the closes of what it carries.
   local run=$1 w SG_REQUEUE_RUN=$1; w=$(wave_of "$run")
   [ -n "$run" ] || { echo "WAVE-ERROR wave.sh land wants the run's name"; return 2; }
@@ -624,7 +653,7 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
   local out sha try=1 issues n
   while :; do
     out=$(sc rebase "origin/$base" 2>&1) || { sc rebase --abort >/dev/null 2>&1
-      stuck "$run" "$w" "$S" "the rebase of $w on $base conflicts: $(printf '%s' "$out" | tail -1)"; rm -rf "$S"; return 1; }
+      wave_conflict "$run" "$w" "$rd" "$S" "$out"; rm -rf "$S"; return 1; }
     # Nothing ahead of the base is a wave that landed empty (a run with no dispatch, every child failed its gates, no child):
     # there is nothing to push or close, so the wave ref goes, the marker goes, and the run is done, exit 0. It is read
     # BEFORE the tip's check: an empty wave has no child commit to blame for a red check, so that check can only fail the

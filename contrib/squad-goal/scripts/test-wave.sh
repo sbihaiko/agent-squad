@@ -778,7 +778,7 @@ rm -rf "$T/w15"; $G clone -q "$T/origin.git" "$T/w15" 2>/dev/null
 (cd "$T/w15" && $G checkout -q dev && echo other > g150 && $G add g150 && $G -c user.email=a@b -c user.name=t commit -q -m "conflicting work" && $G push -q origin HEAD:dev)
 : > "$T/gh.log"; : > "$T/board.log"; rm -f "$T/st/cq/"*151* "$T/st/wave-outside.tsv"
 r=$(cd "$T/co" && SG_WAVE_LAND_TRIES=1 bash "$T/s/wave.sh" land run-15 "$RD" 2>&1); rc=$?
-[ $rc = 1 ] && /usr/bin/grep -q 'issues/150/labels -f labels\[\]=frozen:owner' "$T/gh.log" && ok "S776: the dispatched issue is frozen when the landing gives up" || ko "S776: #150 not frozen: rc $rc '$r'"
+[ $rc = 1 ] && /usr/bin/grep -qx "o 3 Todo 150" "$T/board.log" && ! /usr/bin/grep -q 'issues/150/labels' "$T/gh.log" && ok "S776: the dispatched issue is requeued when the conflicting landing gives up (#844)" || ko "S776: #150 not requeued: rc $rc '$r'"
 /usr/bin/grep -q 'issues/151/' "$T/gh.log" && ko "S776: #151, outside the dispatch set, was written: '$(cat "$T/gh.log")'" || ok "S776: a Refs outside the dispatch set gets no label"
 /usr/bin/grep -q ' 151$' "$T/board.log" && ko "S776: #151's card moved" || ok "S776: the card of an issue outside the dispatch set does not move"
 [ -z "$(/bin/ls "$T/st/cq" | /usr/bin/grep '151')" ] && ok "S776: no comment is queued for #151" || ko "S776: a comment is queued for #151"
