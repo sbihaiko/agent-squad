@@ -3,7 +3,7 @@
 usage: hub.py [port]   default 7700, loopback only. Read-only: it discovers servers via ps/lsof and reads record.jsonl."""
 import datetime as dt, glob, hashlib, html, importlib.util, itertools, json, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, pathlib, urllib.parse, urllib.request
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
-import agyquota, chainhealth, modelreg, provkey   # the chains and the one registry resolve a model (ADR-0147)
+import agyquota, chainhealth, ghread, modelreg, provkey   # the chains and the one registry resolve a model (ADR-0147); ghread is the one GitHub door (ADR-0277)
 from issue_state import board_state, KINDS, TEST_CASE_TITLE, _utc
 import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -2430,37 +2430,63 @@ def board():
     return {"t": board_cache["t"], "err": board_cache["err"], "prs": lane, "groups": groups, "cases": cases, "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {}), "flow": flow_charts()}
 
 PROMOTE_TO = COLUMN["issue_todo"]   # the column the arrow moves a card into: the owner's go signal (ADR-0142)
-def promote_write(issue, add=False):
-    """The one writer call of the owner's move: `<owner> <project> Todo <n>`, the shape reconcile.py writes, so the
-    board seam (`board.sh`) is the only reach of the carrier. `add` asks the same door for `--add` first, for a card the
-    board holds no item of: the row came from the open-issue read, so a plain move has nothing to set (#815). The call
-    carries the state directory this hub resolved: hubctl starts the hub with no SG_STATE, and board.py reads the key to
-    find its caches (#1750)."""
+def promote_write(issues, add=False):
+    """The one writer call of the owner's move: `<owner> <project> Todo <n>...`, the shape reconcile.py writes, so the
+    board seam (`board.sh`) is the only reach of the carrier. `issues` is one number or a list: a spec and its tickets
+    move in one call (#838). `add` asks the same door for `--add` first, for a card the board holds no item of: the row
+    came from the open-issue read (#815). The call carries the state directory this hub resolved: hubctl starts the hub
+    with no SG_STATE, and board.py reads the key to find its caches (#1750)."""
+    nums = issues if isinstance(issues, list) else [issues]
     env = {**os.environ, "SG_STATE": str(STATE)}
     argv = ["bash", str(pathlib.Path(__file__).resolve().parent / "board.sh")]
     if add: argv.append("--add")
-    return subprocess.run(argv + [OWNER, str(PROJECT_NO), PROMOTE_TO, str(issue)], capture_output=True, text=True, timeout=120, env=env)
+    return subprocess.run(argv + [OWNER, str(PROJECT_NO), PROMOTE_TO, *map(str, nums)], capture_output=True, text=True, timeout=120, env=env)
+def spec_tickets(issue, item):
+    """The tickets a spec moves with (ADR-0142, #838): its open sub-issues that the board cache holds in Backlog. The
+    sub-issue list is read through ghread, so a refusal or a failure is named and never read as "no ticket": it answers
+    `(tickets, None)` or `(None, reason)`. A closed ticket, a ticket in another column and a ticket that is itself a spec
+    keep their column (ADR-0143, ADR-0142)."""
+    closed = lambda v: str(v or "").lower() == "closed"
+    try: r = ghread.read(f"repos/{item.get('r') or REPO}/issues/{issue}/sub_issues?per_page=100")
+    except Exception as e: return None, f"sub-issues: {str(e)[:200] or 'the read did not answer'}"
+    if not r.is_answer: return None, r.line()[:300]
+    if not isinstance(r.answer, list): return None, "sub-issues: the read did not answer a list"
+    cards = {i.get("n"): i for i in board_cache.get("items") or []}
+    tickets = []
+    for sub in r.answer:
+        c = cards.get(sub.get("number")) if isinstance(sub, dict) else None
+        if c is None or closed(sub.get("state")) or closed(c.get("s")): continue
+        if _columns_module.SPEC_LABEL in (c.get("l") or []): continue
+        if _columns_module.view_column(c.get("st"), False, c.get("l"))[0] != COLUMN["unscheduled"]: continue
+        tickets.append(c)
+    return tickets, None
 def promote(issue):
     """Move one open card from Backlog to Todo through the board seam (#560). Only a card the hub holds in Backlog now
-    is accepted: a closed issue keeps its column (ADR-0143), a spec is never work (ADR-0142), and a card already in
-    Todo sends no write (ADR-0144). A row the board read never carried is an open issue with no Project item, and the seam
-    is asked for `--add` there: a plain move answers it "not on the board" and writes nothing (#815). A proven write
-    updates the cache, so the card moves at the next refresh without a GitHub read right after the write."""
+    is accepted: a closed issue keeps its column (ADR-0143), and a card already in Todo sends no write (ADR-0144). A spec
+    moves with its open Backlog tickets in one write (ADR-0142, #838): the owner's move starts the spec and its tickets
+    follow. A spec with no ticket moves alone, and a failed ticket read moves nothing. A row the board read never carried
+    is an open issue with no Project item, and the seam is asked for `--add` there: a plain move answers it "not on the
+    board" and writes nothing (#815). A proven write updates the cache, so the cards move at the next refresh without a
+    GitHub read right after the write. The answer names every card the write moved."""
     if isinstance(issue, bool) or not isinstance(issue, int) or issue <= 0: return {"err": "issue: a number"}
     item = next((i for i in board_cache.get("items") or [] if i.get("n") == issue), None)
     if item is None: return {"err": "not on the board"}
     if str(item.get("s") or "").lower() == "closed": return {"err": "the issue is closed: a closed card keeps its column"}
     col, _ = _columns_module.view_column(item.get("st"), False, item.get("l"))
     if col != COLUMN["unscheduled"]: return {"err": f"the card is in {col}, not {COLUMN['unscheduled']}: only a Backlog card moves"}
-    if _columns_module.SPEC_LABEL in (item.get("l") or []): return {"err": "a spec is never work: its tickets are (ADR-0142)"}
-    try: r = promote_write(issue, add=not item.get("i"))   # no item id: the row came from the open-issue read (#815)
+    tickets = []
+    if _columns_module.SPEC_LABEL in (item.get("l") or []):
+        tickets, err = spec_tickets(issue, item)
+        if err: return {"err": err}
+    cards = [item, *tickets]
+    try: r = promote_write([c["n"] for c in cards], add=any(not c.get("i") for c in cards))   # no item id: the row came from the open-issue read (#815)
     except Exception as e: return {"err": str(e)[:200] or "the writer did not answer"}
     if r.returncode:
         lines = (r.stderr or r.stdout or f"exit {r.returncode}").strip().splitlines()
         return {"err": (next((l for l in lines if l.startswith("#")), lines[0] if lines else "") or "the writer refused")[:300]}
-    item["st"] = PROMOTE_TO   # the cache follows the write, so the next refresh shows the move without a GitHub read after it
+    for c in cards: c["st"] = PROMOTE_TO   # the cache follows the write, so the next refresh shows the move without a GitHub read after it
     save_board()
-    return {"ok": True, "issue": issue, "to": PROMOTE_TO}
+    return {"ok": True, "issue": issue, "to": PROMOTE_TO, "moved": [c["n"] for c in cards]}
 
 _issue_cache = {}
 def gh_json(path, timeout=30):

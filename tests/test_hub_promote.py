@@ -110,7 +110,7 @@ def test_a_backlog_card_moves_to_todo_and_the_cache_follows(hub):
     mod.promote_write = writer(calls)
     status, out = post(port, {"issue": 7})
     assert status == 200 and out.get("ok") is True, out
-    assert calls == [(7, False)], calls          # a row with a Project item moves with the plain write
+    assert calls == [([7], False)], calls        # a row with a Project item moves with the plain write
     board = mod.board()
     groups = {g["name"]: [i["n"] for i in g["items"]] for g in board["groups"]}
     assert 7 in groups["Todo"] and 7 not in groups["Backlog"], groups
@@ -126,7 +126,7 @@ def test_a_card_the_board_read_never_carried_is_added_and_moves(hub):
     mod.board_cache["items"].append({"n": 12, "t": "filed by hand", "s": "OPEN", "st": None, "l": []})
     status, out = post(port, {"issue": 12})
     assert status == 200 and out.get("ok") is True, out
-    assert calls == [(12, True)], calls
+    assert calls == [([12], True)], calls
 
 
 def test_a_foreign_origin_is_refused(hub):
