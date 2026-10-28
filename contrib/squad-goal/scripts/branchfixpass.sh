@@ -11,6 +11,8 @@
 # auto/branchfix-fp-<key> keeps the findings of the last dispatched round and auto/branchfix-same-<key> the count of failed rounds in
 # a row. At SG_BRANCHFIX_STALLS (default 3) the rounds stop: one status line on the issue and the label frozen:owner, once. Changed
 # findings restart the count. At most SG_FIX_PASS_MAX fix runs (default 3) start per pass. watch.sh runs this under single.sh.
+# A loop defect is fixed outside the loop (ADR-0146, #841): no fix run for a branch whose issue carries `loop-bug` or a `loop-bug:*`
+# label, and none at all while LOOP STOP holds. Each such tip gets one BRANCHFIX SKIP line (auto/branchfix-skip-<key>-<sha9>).
 . "$(dirname "$0")/env.sh" 2>/dev/null || exit 0
 here="$(cd "$(dirname "$0")" && pwd)"
 export SG_GH_PASS=branchfix
@@ -59,6 +61,11 @@ done
 # run. The labels come from the open-issue list sg_work_branches already read, so this costs no call.
 held=" $(printf '%s' "$wb_issues" | jq -r --arg s "${SG_FRONTIER_SKIP_LABELS:-}" '($s|split(",")|map(select(.!=""))) as $k
   | .[] | select([.labels[]?.name] | any(. as $l | $k | index($l))) | .number' 2>/dev/null | tr '\n' ' ') "
+# The loop-bug labels come from the same open-issue list; the LOOP STOP reader (gh_loop_stop, ghcall.sh) reads that list too and
+# logs its line as every pass does. Neither reads GitHub again.
+bugs=" $(printf '%s' "$wb_issues" | jq -r '.[] | select([.labels[]?.name] | any(startswith("loop-bug"))) | .number' 2>/dev/null | tr '\n' ' ') "
+lsf=$(mktemp); printf '%s' "$wb_issues" > "$lsf"; lstop=$(gh_loop_stop "$lsf"); rm -f "$lsf"
+[ -n "$lstop" ] && echo "$lstop"
 # The fingerprint of a review's findings and the failed rounds in a row are revformat.py's reading (ADR-0134), so a
 # child fix round asks the same rule: a moved line or a new sha is not a change.
 done=0
@@ -71,6 +78,12 @@ while read -r sha br i; do
   # a CHANGES with no Blocking finding (debt only) is an approval: no fix round, as the loop's own passes treat it (revformat.py count)
   python3 "$here/revformat.py" --summary "$f" 2>/dev/null | grep -q '^blocking=0 ' && continue
   [ -e "$A/branchfix-$key-$s9" ] && continue
+  why=; case "$bugs" in *" $i "*) why="loop-bug, fixed outside the loop";; esac
+  [ -n "$why" ] || [ -z "$lstop" ] || why="LOOP STOP holds, fixed outside the loop"
+  if [ -n "$why" ]; then   # a skip dispatches nothing and keeps no fix marker: the tip is dispatched when the label or the stop lifts
+    [ -e "$A/branchfix-skip-$key-$s9" ] || { echo "BRANCHFIX SKIP $br: $why"; : > "$A/branchfix-skip-$key-$s9"; }
+    continue
+  fi
   fp=$(python3 "$here/revformat.py" --fingerprint "$f"); same=$(python3 "$here/revformat.py" --stall "$A" branchfix "$key" "$fp")
   if [ "$same" -ge "$cap" ]; then
     [ "$(cat "$A/branchfix-stop-$key" 2>/dev/null)" = "$fp" ] && continue
