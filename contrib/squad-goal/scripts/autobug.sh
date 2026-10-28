@@ -5,8 +5,8 @@
 # $SG_FRONTIER_LABEL and a card in Todo (the owner's go signal, #550) is dispatched, all of them in ONE squad start (one child and one
 # per root-cause cluster (cluster.py), TDD with the RED output in the issue status comment), within the free run slots (max_parallel of the workflow graph minus live
 # runs). The marker is never removed after a launch: a run that ends without a pushed branch is surfaced by its RUN verdict, and the
-# coordinator deletes auto/bug-<n> to retry. It IS freed when mkreq.sh refuses the request (#1529): a dispatch that never
-# happened must not mark the issue done. The janitor frees it for a run that never starts (no record.jsonl, rule J, at
+# coordinator deletes auto/bug-<n> to retry. It IS freed when mkreq.sh refuses the request (#1529), and when launch.py refuses the
+# start (#852): a dispatch that never happened must not mark the issue done, and its card goes back to Todo. The janitor frees it for a run that never starts (no record.jsonl, rule J, at
 # most twice) or that ends with a failed verdict and nothing landed (janitor rule O, which also puts the cards back). SG_AUTO_BUGFIX=no turns it off.
 . "$(dirname "$0")/env.sh"; . "$(dirname "$0")/startability.sh"; . "$(dirname "$0")/refusal-names.sh"; . "$(dirname "$0")/workbranches.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
 export SG_GH_PASS=autobug   # the pass that spends the GitHub calls below, named in the call log (ADR-0277)
@@ -279,7 +279,27 @@ if ! req=$("$here/mkreq.sh" "$name" "$body"); then
   exit 0
 fi
 log="$SG_STATE/$name.log"
-(cd "$SG_CHECKOUT" && python3 -c 'import subprocess,sys;subprocess.Popen(["python3",sys.argv[1],sys.argv[2]],stdout=open(sys.argv[3],"w"),stderr=subprocess.STDOUT,start_new_session=True)' "$here/launch.py" "$req" "$log")
+# A refusal must not consume the claim (#852, the same rule as autofrontier.sh, #812): launch.py refuses a start before any run
+# id exists (a coding model out of the router envelope, a target that is no linked worktree). The claim written above then held
+# the issue forever, and its card stayed in Doing with no run behind it. The launch stays detached; only its refusal window is
+# waited on (30 s: a start still waiting for its run folder is no refusal). A refusal frees exactly what this pass claimed, puts
+# the cards back to Todo through the board door, and names the refusal in alerts.log.
+if ! (cd "$SG_CHECKOUT" && python3 -c 'import subprocess,sys
+p=subprocess.Popen(["python3",sys.argv[1],sys.argv[2]],stdout=open(sys.argv[3],"w"),stderr=subprocess.STDOUT,start_new_session=True)
+try: rc=p.wait(timeout=30)
+except subprocess.TimeoutExpired: rc=0
+sys.exit(rc)' "$here/launch.py" "$req" "$log"); then
+  why=$(/usr/bin/grep -m1 -E '^refused' "$log" 2>/dev/null || tail -1 "$log" 2>/dev/null)
+  for n in "${pick[@]}"; do rm -f "$A/bug-$n" "$A/disp-$n"; done
+  refused_cards="$(printf '#%s ' "${pick[@]}")"
+  sg_write BOARD-WRITE-FAILED "$SG_OWNER/$SG_PROJECT ${refused_cards% } -> ${SG_TODO:-Todo}" \
+    "the cards ${refused_cards% } of the refused run this pass requested ($name)" \
+    "contrib/squad-goal/scripts/test-autobug.sh (a refused write opens one bug)" \
+    -- $BOARD --add $SG_OWNER $SG_PROJECT "${SG_TODO:-Todo}" "${pick[@]}"
+  printf '%s AUTOBUG refused: %s launch refused by launch.py (request %s): %s; claim freed, card back to Todo\n' "$(date '+%F %T')" "${refused_cards% }" "$name" "$why" >> "$SG_STATE/alerts.log"
+  echo "AUTOBUG $name refused by launch.py: $why; freed its claim, card back to Todo, next pass retries" >&2
+  exit 0
+fi
 hunt_fix=0; now=$(date +%s)
 for c in "${clusters[@]}"; do set -- $c; p=$1
   for n in "$@"; do echo "$name" > "$A/bug-$n"

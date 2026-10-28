@@ -106,7 +106,7 @@ case "$r" in *"[1400]"*) ok "3 no startable bug: debt dispatched";; *) ko "3 deb
 # with nothing launched and no later pass retried it. mkreq.sh refuses here (stub, exit 1): the marker has to go back.
 mkdir -p "$T/st/req" "$T/st/cq" "$T/st/locks"
 printf '#!/bin/bash\necho "refusing: request x names scripts/a.py, which open PR #7 already changes." >&2; exit 1\n' > "$T/s/mkreq.sh"
-printf '#!/bin/bash\ntouch %s/launched\n' "$T" > "$T/s/launch.py"
+printf 'import os\nopen(os.path.join("%s", "launched"), "w").close()\n' "$T" > "$T/s/launch.py"
 chmod +x "$T/s/mkreq.sh" "$T/s/launch.py"
 r=$(bash "$T/s/autobug.sh" 2>&1); rc=$?
 [ "$rc" = 0 ] && ok "3b a refused dispatch exits 0" || ko "3b refused dispatch exited $rc: '$r'"
@@ -193,8 +193,9 @@ case "\$*" in
 esac
 J
 chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
-printf '#!/bin/bash\n[ -n "\${AB_DRY:-}" ] && exit 0\ntouch %s/launched\n' "$T" > "$T/s/launch.py"
+printf 'import os, sys\nif os.environ.get("AB_DRY"): sys.exit(0)\nopen(os.path.join("%s", "launched"), "w").close()\n' "$T" > "$T/s/launch.py"
 printf '#!/bin/bash\ntouch %s/req-built\n' "$T" > "$T/s/mkreq.sh"; chmod +x "$T/s/mkreq.sh" "$T/s/launch.py"
+rm -f "$T/launched"   # the launch stub of the earlier cases (now a real run) left its marker
 r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>"$T/err"); rc=$?
 [ "$rc" = 0 ] && ok "6 a refused gh api exits 0" || ko "6 a refused gh api exited $rc: '$r'"
 $G -q "AUTOBUG would dispatch" <<<"$r" && ko "6 a refused gh api dispatched candidates: '$r'" || ok "6 a refused gh api dispatches nothing"
@@ -237,7 +238,7 @@ cat > "$T/issues.json" <<'JSON'
 [{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]}]
 JSON
 cp "$d/autobug.sh" "$T/s/"
-printf '#!/bin/bash\n[ -n "\${AB_DRY:-}" ] && exit 0\ntouch %s/launched\n' "$T" > "$T/s/launch.py"; chmod +x "$T/s/launch.py"
+printf 'import os, sys\nif os.environ.get("AB_DRY"): sys.exit(0)\nopen(os.path.join("%s", "launched"), "w").close()\n' "$T" > "$T/s/launch.py"; chmod +x "$T/s/launch.py"
 held() {   # $1: the body of the issue's comments, one line each
   local cj; cj=$(if [ -n "$1" ]; then jq -Rs '[{body:.}]' <<<"$1"; else echo '[]'; fi)   # gh's list shape (#847)
   cat > "$T/bin/gh" <<J
@@ -277,7 +278,7 @@ cat > "$T/issues.json" <<'JSON'
 JSON
 printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %s/board.calls\necho "#1228: GitHub refused the card write (HTTP 403)" >&2\nexit 1\n' "$T" > "$T/s/board.sh"
 printf '#!/bin/bash\necho %s/req.json\n' "$T" > "$T/s/mkreq.sh"
-printf '#!/bin/bash\ntouch %s/launched\n' "$T" > "$T/s/launch.py"
+printf 'import os\nopen(os.path.join("%s", "launched"), "w").close()\n' "$T" > "$T/s/launch.py"
 chmod +x "$T/s/board.sh" "$T/s/mkreq.sh" "$T/s/launch.py"
 : > "$T/filed"; : > "$T/st/cycle.log"
 cat > "$T/bin/gh" <<J
@@ -385,7 +386,7 @@ echo "\$*" >> "$T/board.calls"
 case " \$* " in *" --add "*) echo "#1228 -> In Progress" ;; *) echo "#1228 not on the board" >&2; exit 1 ;; esac
 J
 printf '#!/bin/bash\necho %s/req.json\n' "$T" > "$T/s/mkreq.sh"
-printf '#!/bin/bash\ntouch %s/launched\n' "$T" > "$T/s/launch.py"
+printf 'import os\nopen(os.path.join("%s", "launched"), "w").close()\n' "$T" > "$T/s/launch.py"
 chmod +x "$T/s/board.sh" "$T/s/mkreq.sh" "$T/s/launch.py"
 : > "$T/filed"; : > "$T/st/cycle.log"
 cat > "$T/bin/gh" <<J
@@ -432,7 +433,7 @@ JSON
 : > "$T/board.calls"
 printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %s/board.calls\necho "#1228: GitHub refused the card write (HTTP 403)" >&2\nexit 1\n' "$T" > "$T/s/board.sh"
 printf '#!/bin/bash\necho %s/req.json\n' "$T" > "$T/s/mkreq.sh"
-printf '#!/bin/bash\ntouch %s/launched\n' "$T" > "$T/s/launch.py"
+printf 'import os\nopen(os.path.join("%s", "launched"), "w").close()\n' "$T" > "$T/s/launch.py"
 chmod +x "$T/s/board.sh" "$T/s/mkreq.sh" "$T/s/launch.py"
 : > "$T/filed"; : > "$T/st/cycle.log"
 # The loop board and the bug board are two boards (#140): a distinct bug board makes the two card moves two causes, so
@@ -466,7 +467,7 @@ cat > "$T/issues.json" <<'JSON'
 [{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]}]
 JSON
 printf '#!/bin/bash\ncp "$2" %s/req.body\necho %s/req.json\n' "$T" "$T" > "$T/s/mkreq.sh"
-printf '#!/bin/bash\ntouch %s/launched\n' "$T" > "$T/s/launch.py"
+printf 'import os\nopen(os.path.join("%s", "launched"), "w").close()\n' "$T" > "$T/s/launch.py"
 printf '#!/bin/bash\necho "#1228 -> In Progress"\n' > "$T/s/board.sh"
 chmod +x "$T/s/mkreq.sh" "$T/s/launch.py" "$T/s/board.sh"
 cat > "$T/bin/gh" <<J
@@ -501,7 +502,7 @@ $G -qE 'jq: error' "$T/err218" && ko "11 the pass logged a jq parse error: $(cat
 rm -rf "$T/st/auto"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"; rm -f "$T"/st/owner-kind-* "$T"/st/rest-*
 cp "$d/autobug.sh" "$d/autohunt.sh" "$d/board.sh" "$d/board.py" "$d/issue_state.py" "$T/s/"   # board.py imports the seam
 printf '#!/bin/bash\necho %s/req.json\n' "$T" > "$T/s/mkreq.sh"
-printf '#!/bin/bash\ntouch %s/launched\n' "$T" > "$T/s/launch.py"
+printf 'import os\nopen(os.path.join("%s", "launched"), "w").close()\n' "$T" > "$T/s/launch.py"
 chmod +x "$T/s/mkreq.sh" "$T/s/launch.py"
 : > "$T/filed"; : > "$T/st/cycle.log"; : > "$T/board.calls"; rm -f "$T/b500" "$T/bseen" "$T/bstatus"
 cat > "$T/bin/gh" <<J
@@ -880,7 +881,7 @@ J
 chmod +x "$T/bin/gh"
 printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %s/board.calls\nexit 0\n' "$T" > "$T/s/board.sh"
 printf '#!/bin/bash\necho %s/req.json\n' "$T" > "$T/s/mkreq.sh"
-printf '#!/bin/bash\necho "refused: the first coding model gpt-6-luna is not in the router envelope, so the router would run another model." >&2\nexit 1\n' > "$T/s/launch.py"
+printf 'import sys\nprint("refused: the first coding model gpt-6-luna is not in the router envelope, so the router would run another model.", file=sys.stderr)\nsys.exit(1)\n' > "$T/s/launch.py"
 chmod +x "$T/s/board.sh" "$T/s/mkreq.sh" "$T/s/launch.py"
 out=$(bash "$T/s/autobug.sh" 2>"$T/err23"); rc=$?
 [ "$rc" = 0 ] && ok "23 a refused launch exits 0" || ko "23 a refused launch exited $rc: '$(cat "$T/err23")'"
