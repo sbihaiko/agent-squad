@@ -811,6 +811,7 @@ case "$r" in *"#710"*) ko "Y1: the record's #710 is named beside the request's i
 # Y2: a child commit of this run (Refs #721) on the run's own branch only, in neither the wave nor dev: the wave is refused and kept.
 W22=wave/run-836b; start2 run-836b >/dev/null
 mkdir -p "$T/co/runs/run-836b"; printf '%s\n' 'CHILD — GitHub issue #721 (bug; one root cause, one branch):' > "$T/co/runs/run-836b/request.txt"
+printf '%s\n%s\n' '{"event": "run_start"}' '{"event": "verdict", "verdict": "completed", "reasons": []}' > "$T/co/runs/run-836b/record.jsonl"
 x2=$(mktemp -d); $G clone -q "$T/origin.git" "$x2/c" 2>/dev/null
 (cd "$x2/c" && $G checkout -q -b tmp dev && echo fix > f721 && $G add f721 && $G -c user.email=a@b -c user.name=t commit -q -m "fix 721" -m "Refs #721")
 X2SHA=$($G -C "$x2/c" rev-parse HEAD); $G -C "$T/co" fetch -q "$x2/c" HEAD:refs/heads/squad/run/run-836b 2>/dev/null
@@ -860,6 +861,37 @@ case "$r" in *"WAVE REFUSE"*) ko "Y4: the capped wave was refused: '$r'";; *) ok
 case "$r" in *"WAVE REQUEUE #741"*"age cap"*) ok "Y4: the orphan's issue goes back to the queue";; *) ko "Y4: the issue was not requeued: '$r'";; esac
 /usr/bin/grep -qx 'o 3 Todo 741' "$T/board.log" && ok "Y4: the card of the requeued issue reads Todo" || ko "Y4: no Todo card for #741"
 $O rev-parse -q --verify "refs/heads/$W26" >/dev/null && ko "Y4: the capped wave branch is kept" || ok "Y4: the capped wave branch goes"
+# (#845) The orphan-commit refusal applies only to a run whose verdict is completed. A failed, needs-human, stopped or verdict-less
+# run's child commit never holds its wave: the wave takes its normal path (an empty landing here, with no requeue).
+for k in failed:751 needs-human:752 stopped:753 none:754; do
+  v=${k%%:*}; n=${k##*:}; run=run-845-$v; W=wave/$run; start2 $run >/dev/null
+  mkdir -p "$T/co/runs/$run"; printf 'CHILD — GitHub issue #%s (bug; one root cause, one branch):\n' "$n" > "$T/co/runs/$run/request.txt"
+  if [ "$v" = none ]; then printf '%s\n' '{"event": "run_start"}' > "$T/co/runs/$run/record.jsonl"
+  else printf '%s\n%s\n' '{"event": "run_start"}' "{\"event\": \"verdict\", \"verdict\": \"$v\", \"reasons\": []}" > "$T/co/runs/$run/record.jsonl"; fi
+  x=$(mktemp -d); $G clone -q "$T/origin.git" "$x/c" 2>/dev/null
+  (cd "$x/c" && $G checkout -q -b tmp dev && echo o > "f$n" && $G add "f$n" && $G -c user.email=a@b -c user.name=t commit -q -m "fix $n" -m "Refs #$n")
+  $G -C "$T/co" fetch -q "$x/c" HEAD:refs/heads/squad/run/$run 2>/dev/null
+  r=$(land2 $run 2>&1); rc=$?
+  [ $rc = 0 ] && case "$r" in *"landed empty"*) ok "Z1 $v: the orphan child commit does not hold the wave (exit 0, landed empty)";; *) ko "Z1 $v: not an empty landing: '$r'";; esac || ko "Z1 $v: exit $rc: '$r'"
+  case "$r" in *"WAVE REFUSE"*) ko "Z1 $v: the wave was refused: '$r'";; *) ok "Z1 $v: no WAVE REFUSE line";; esac
+  rm -rf "$x"
+done
+
+# (#845) A completed run's orphan child commit is refused once per wave and commit: over two passes the refusal line appears once,
+# and the wave is kept both times.
+W=wave/run-845-done; start2 run-845-done >/dev/null
+mkdir -p "$T/co/runs/run-845-done"; printf '%s\n' 'CHILD — GitHub issue #755 (bug; one root cause, one branch):' > "$T/co/runs/run-845-done/request.txt"
+printf '%s\n%s\n' '{"event": "run_start"}' '{"event": "verdict", "verdict": "completed", "reasons": []}' > "$T/co/runs/run-845-done/record.jsonl"
+x=$(mktemp -d); $G clone -q "$T/origin.git" "$x/c" 2>/dev/null
+(cd "$x/c" && $G checkout -q -b tmp dev && echo o > f755 && $G add f755 && $G -c user.email=a@b -c user.name=t commit -q -m "fix 755" -m "Refs #755")
+$G -C "$T/co" fetch -q "$x/c" HEAD:refs/heads/squad/run/run-845-done 2>/dev/null
+r1=$(land2 run-845-done 2>&1); rc1=$?
+r2=$(land2 run-845-done 2>&1); rc2=$?
+[ $rc1 = 1 ] && [ $rc2 = 1 ] && ok "Z2: a completed run's orphan commit still refuses the wave on both passes" || ko "Z2: exit $rc1 $rc2: '$r1' / '$r2'"
+[ "$(printf '%s\n%s\n' "$r1" "$r2" | /usr/bin/grep -c '^WAVE REFUSE')" = 1 ] && ok "Z2: the refusal line appears once over two passes" || ko "Z2: refusal lines over two passes: '$r1' / '$r2'"
+$O rev-parse -q --verify "refs/heads/$W" >/dev/null && ok "Z2: the wave branch is kept" || ko "Z2: the wave branch was deleted"
+rm -rf "$x"
+
 rm -rf "$x2" "$x3" "$x4" "$x5"
 
 
