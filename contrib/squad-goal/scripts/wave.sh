@@ -104,6 +104,22 @@ rs=[r for r in (v or {}).get("reasons") or [] if isinstance(r,str)]
 sys.exit(0 if v and v.get("verdict")=="failed" and any(r.startswith("ac-verify:") and r!="ac-verify:no_ac_commands" for r in rs) else 1)' "$(run_dir "$1")/record.jsonl" 2>/dev/null
 }
 
+# run_verdict <run>: the run's last verdict name (completed, failed, needs-human, stopped, conflict), read as gate_failed reads it:
+# the last verdict after the last run_start or resume. It prints nothing for a run with no verdict yet, or no record (#845).
+run_verdict() {
+  python3 -c 'import json,sys
+v=None
+try:
+    for l in open(sys.argv[1]):
+        try: d=json.loads(l)
+        except Exception: continue
+        e=d.get("event") if isinstance(d,dict) else None
+        if e in ("run_start","resume"): v=None
+        elif e=="verdict": v=d
+except OSError: pass
+print((v or {}).get("verdict") or "")' "$(run_dir "$1")/record.jsonl" 2>/dev/null
+}
+
 # expired <run>: 0 when the run's wave reached its age cap (SG_WAVE_MAX_AGE_SECONDS, 7200 s by default, a profile setting).
 # The age is the epoch `mark` wrote into the run's wave start marker, never a second clock. A wave with no marker, or one
 # that is not cut, is never expired: the cap is a fact about a wave that exists.
@@ -692,14 +708,19 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
       # keeps the wave: deleting the wave branch would leave that commit nowhere but on the local branch. One WAVE REFUSE line
       # names it, and nothing is pushed. A commit of an issue the base already delivered is no refusal. A capped wave lands as
       # it is (ADR-0145 rule 13), so the cap frees it here as it does the #667 hold above: no refusal once the cap is reached.
-      local undel="" orph
+      # (#845) Only a completed run's child commit holds the wave: a failed, needs-human, stopped or verdict-less run's commit never
+      # does, so its wave takes the normal path. The refusal is said once per wave and commit: the marker names the commit last said.
+      local undel="" orph refused="$SG_STATE/auto/orphan-refused-$run"
       for n in $(run_issues "$rd"); do case " $delivered " in *" $n "*) ;; *) undel="${undel:+$undel }$n";; esac; done
-      if [ "$capped" != 1 ] && [ -n "$undel" ] && orph=$(orphan_child "$run" "$rd" "$S" "$w" $undel); then
-        echo "WAVE REFUSE $w: child commit ${orph% *} names #${orph#* }; it is on a local branch only and in neither $w nor $base, so the wave is kept"
+      if [ "$capped" != 1 ] && [ -n "$undel" ] && [ "$(run_verdict "$run")" = completed ] && orph=$(orphan_child "$run" "$rd" "$S" "$w" $undel); then
+        if [ "$(cat "$refused" 2>/dev/null)" != "${orph% *}" ]; then
+          mkdir -p "$SG_STATE/auto" && printf '%s\n' "${orph% *}" > "$refused"
+          echo "WAVE REFUSE $w: child commit ${orph% *} names #${orph#* }; it is on a local branch only and in neither $w nor $base, so the wave is kept"
+        fi
         rm -rf "$S"; return 1
       fi
       sc push -q origin ":refs/heads/$w" >/dev/null 2>&1 || echo "WAVE-NOTE branch $w was not deleted" >&2
-      sha=$(sc rev-parse "origin/$base"); rm -rf "$S"; rm -f "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run"
+      sha=$(sc rev-parse "origin/$base"); rm -rf "$S"; rm -f "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run" "$refused"
       echo "WAVE $w landed empty in $base (nothing ahead of it; the wave branch is deleted${dispatched:+; the run was dispatched for $dispatched})"
       # An empty wave past its age cap follows the capped landing's rule too (#591): every issue of the run that `dev` does
       # not hold goes back to the queue, so a child that never entered is built into a later wave instead of staying in Doing.
