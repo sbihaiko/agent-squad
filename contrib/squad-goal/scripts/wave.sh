@@ -124,6 +124,20 @@ expired() {
 # run_issues <run-dir>: every issue the run dispatched, read from its own record as childcc.py reads it (spawn_accepted and
 # its definition prompt), each named once. A run whose directory carries no record names none.
 run_issues() {
+  # The run's own request (request.txt, copied at launch) names its children in its CHILD headers, "GitHub issue(s) N, M", as
+  # autobug.sh writes them and janitor.sh reads them (#836). A stale marker or a record's first match is never read; a run with
+  # no CHILD header falls back to its record.
+  local req="$1/request.txt" out
+  if [ -s "$req" ]; then
+    out=$(python3 -c 'import re,sys
+found=set()
+for l in open(sys.argv[1], errors="replace"):
+    if not l.startswith("CHILD"): continue
+    for m in re.finditer(r"GitHub issue(?:\(s\))? #?([0-9][0-9, ]*)", l):
+        found.update(x.strip() for x in m.group(1).split(",") if x.strip().isdigit())
+for n in sorted(found, key=int): print(n)' "$req" 2>/dev/null)
+    [ -n "$out" ] && { printf '%s\n' "$out"; return 0; }
+  fi
   local f="$1/record.jsonl"; [ -f "$f" ] || return 0
   python3 -c 'import json,sys
 sys.path.insert(0, sys.argv[2]); from child_issues import first   # the one reader childcc.py shares (#555)
@@ -133,6 +147,31 @@ for l in open(sys.argv[1]):
     if d.get("event") != "spawn_accepted": continue
     n = first(json.dumps(d.get("definition")))
     if n: print(n)' "$f" "$here" 2>/dev/null | sort -un
+}
+
+# orphan_child <run> <rd> <S> <wave> <issue>...: the first commit of the run's own work that names one of the issues, lives on a
+# local branch of the owner's checkout (a squad/ branch, or the tip of a child tree of the run) and is in neither the wave nor the
+# base (#836). It prints "<sha> <issue>" and returns 0; it returns 1 when there is none. A RED commit proves nothing and is no
+# work. Each tip is fetched into the scratch clone $S, so the reach is read against the remote's refs, never the checkout's.
+orphan_child() {
+  local run=$1 rd=$2 S=$3 w=$4 tip c msg n refs rda tips; shift 4
+  tips=$($G -C "$SG_CHECKOUT" for-each-ref --format='%(objectname)' refs/heads/squad/ 2>/dev/null)
+  if rda=$(cd "$rd" 2>/dev/null && pwd -P); then
+    tips="$tips
+$($G -C "$SG_CHECKOUT" worktree list --porcelain 2>/dev/null | awk -v d="$rda/" '/^worktree /{w=substr($0,10); if (index(w,d)==1) print w}' | while read -r t; do $G -C "$t" rev-parse HEAD 2>/dev/null; done)"
+  fi
+  git_sc() { $G -C "$S" "$@"; }
+  for tip in $(printf '%s\n' "$tips" | sort -u); do
+    [ -n "$tip" ] || continue
+    git_sc fetch -q "$SG_CHECKOUT" "$tip" 2>/dev/null || continue
+    for c in $(git_sc rev-list "$tip" --not "origin/$base" "origin/$w" 2>/dev/null); do
+      msg=$(git_sc log -1 --format=%B "$c" 2>/dev/null)
+      case "$msg" in *"TDD RED"*) continue;; esac
+      refs=" $(printf '%s\n' "$msg" | /usr/bin/grep -oE 'Refs #[0-9]+' | /usr/bin/grep -oE '[0-9]+' | tr '\n' ' ') "
+      for n in "$@"; do case "$refs" in *" $n "*) printf '%s %s\n' "$c" "$n"; return 0;; esac; done
+    done
+  done
+  return 1
 }
 
 start() {   # <run>: cut wave/<run> from origin/$SG_BASE, unless it is already there. A scratch clone: the owner's checkout is never touched.
@@ -617,6 +656,15 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
         sc log --format=%B%x1e -E --grep="Refs #$n([^0-9]|\$)" "${cut:+$cut..}origin/$base" 2>/dev/null \
           | awk -v RS='\036' '/Refs #/ && $0 !~ /TDD RED/ {f=1} END {exit !f}' && delivered="${delivered:+$delivered }$n"
       done
+      # (#836) A child commit of this run that is in neither the wave nor the base, and lives on a local branch of the checkout only,
+      # keeps the wave: deleting the wave branch would leave that commit nowhere but on the local branch. One WAVE REFUSE line
+      # names it, and nothing is pushed. A commit of an issue the base already delivered is no refusal.
+      local undel="" orph
+      for n in $(run_issues "$rd"); do case " $delivered " in *" $n "*) ;; *) undel="${undel:+$undel }$n";; esac; done
+      if [ -n "$undel" ] && orph=$(orphan_child "$run" "$rd" "$S" "$w" $undel); then
+        echo "WAVE REFUSE $w: child commit ${orph% *} names #${orph#* }; it is on a local branch only and in neither $w nor $base, so the wave is kept"
+        rm -rf "$S"; return 1
+      fi
       sc push -q origin ":refs/heads/$w" >/dev/null 2>&1 || echo "WAVE-NOTE branch $w was not deleted" >&2
       sha=$(sc rev-parse "origin/$base"); rm -rf "$S"; rm -f "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run"
       echo "WAVE $w landed empty in $base (nothing ahead of it; the wave branch is deleted${dispatched:+; the run was dispatched for $dispatched})"
