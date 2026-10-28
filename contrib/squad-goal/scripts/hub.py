@@ -2389,9 +2389,10 @@ def board():
         if pending: row["pd"] = True   # the mark the page draws; the rule lives here, never in the view (ADR-0137)
         if fz: row["fz"] = fz
         if _columns_module.SPEC_LABEL in row["l"]: row["sp"] = True   # a spec is an issue with the spec label: the Specs filter reads this
-        # The owner's one move (#560): a card in Backlog shows the arrow that starts it, and a spec card never does
-        # (ADR-0142). The rule lives here, not in the page: the card renders the fact its row carries (ADR-0137).
-        if st == COLUMN["unscheduled"] and not row.get("sp") and str(i["s"]).lower() != "closed": row["pm"] = True
+        # The owner's one move (#560): a card in Backlog shows the arrow that starts it, a spec included: the owner's move
+        # starts the spec and its open Backlog tickets follow (ADR-0142 section 6, #838). The rule lives here, not in the
+        # page: the card renders the fact its row carries (ADR-0137).
+        if st == COLUMN["unscheduled"] and str(i["s"]).lower() != "closed": row["pm"] = True
         if i.get("b"): row["b"] = i["b"]
         sc = task_count(i)                       # the card's own count, a value: the page renders it and holds no rule
         if sc: row["sc"] = sc
@@ -2440,23 +2441,56 @@ def promote_write(issues, add=False):
     env = {**os.environ, "SG_STATE": str(STATE)}
     argv = ["bash", str(pathlib.Path(__file__).resolve().parent / "board.sh")]
     if add: argv.append("--add")
-    return subprocess.run(argv + [OWNER, str(PROJECT_NO), PROMOTE_TO, *map(str, nums)], capture_output=True, text=True, timeout=120, env=env)
+    # board.py settles each card it moves (SG_BOARD_SETTLE_SECONDS per card), so the budget is the base plus one settle for
+    # every card after the first (#838). A timeout may leave some of the cards moved; promote() says so.
+    timeout = PROMOTE_TIMEOUT_BASE + _settle_seconds() * max(0, len(nums) - 1)
+    return subprocess.run(argv + [OWNER, str(PROJECT_NO), PROMOTE_TO, *map(str, nums)], capture_output=True, text=True, timeout=timeout, env=env)
+PROMOTE_TIMEOUT_BASE = 120.0   # seconds the writer gets for one card before any settle budget (#838)
+def _settle_seconds():
+    """SG_BOARD_SETTLE_SECONDS, the settle budget board.py gives each card (default 60), read as the writer reads it."""
+    try: return max(0.0, float(os.environ.get("SG_BOARD_SETTLE_SECONDS", "60")))
+    except ValueError: return 60.0
+SUB_ISSUES_PAGE = 100          # the page size the sub-issue read asks for
+SUB_ISSUES_MAX_PAGES = 20      # a spec with more sub-issues than this is refused, never half-moved (#838)
+# The labels the janitor's rule holds a child out of the column flow for (janitor.py, #589): an owner decision, or a closure.
+# A spec's move never puts such a ticket in Todo, where a dispatcher would take it as work (ADR-0142 sections 2 and 6).
+TICKET_HOLD_LABELS = ("needs-owner", "needs-ratification", "wontfix")
+def _repo_of(url, fallback):
+    """The lower-case owner/name a REST `repository_url` names (`https://api.github.com/repos/<owner>/<name>`), or the
+    fallback when the answer names none."""
+    tail = str(url or "").rsplit("/repos/", 1)
+    return (tail[1].strip("/") if len(tail) == 2 else fallback).lower()
+def sub_issues(issue, repo):
+    """Every sub-issue of one issue, page by page through ghread (#838): a page that comes back full asks for the next
+    one. A refusal or a failure on any page answers its reason and no list, so a half-read spec never moves."""
+    subs = []
+    for page in range(1, SUB_ISSUES_MAX_PAGES + 1):
+        r = ghread.read(f"repos/{repo}/issues/{issue}/sub_issues?per_page={SUB_ISSUES_PAGE}&page={page}")
+        if not r.is_answer: return None, r.line()[:300]
+        if not isinstance(r.answer, list): return None, "sub-issues: the read did not answer a list"
+        subs += r.answer
+        if len(r.answer) < SUB_ISSUES_PAGE: return subs, None
+    return None, f"sub-issues: more than {SUB_ISSUES_MAX_PAGES * SUB_ISSUES_PAGE} answered: nothing moved"
 def spec_tickets(issue, item):
-    """The tickets a spec moves with (ADR-0142, #838): its open sub-issues that the board cache holds in Backlog. The
-    sub-issue list is read through ghread, so a refusal or a failure is named and never read as "no ticket": it answers
-    `(tickets, None)` or `(None, reason)`. A closed ticket, a ticket in another column and a ticket that is itself a spec
-    keep their column (ADR-0143, ADR-0142)."""
+    """The tickets a spec moves with (ADR-0142, #838): its open sub-issues that the board cache holds in Backlog, in this
+    repository. The sub-issue list is read through ghread, so a refusal or a failure is named and never read as "no ticket":
+    it answers `(tickets, None)` or `(None, reason)`. A closed ticket, a ticket in another column, a ticket that is itself a
+    spec, and a ticket the owner holds (TICKET_HOLD_LABELS) keep their column (ADR-0143, ADR-0142). A sub-issue of another
+    repository is never a card of this board, even when its number is one (write-side: board.sh is bound to SG_REPO)."""
     closed = lambda v: str(v or "").lower() == "closed"
-    try: r = ghread.read(f"repos/{item.get('r') or REPO}/issues/{issue}/sub_issues?per_page=100")
+    repo = item.get("r") or REPO
+    try: subs, err = sub_issues(issue, repo)
     except Exception as e: return None, f"sub-issues: {str(e)[:200] or 'the read did not answer'}"
-    if not r.is_answer: return None, r.line()[:300]
-    if not isinstance(r.answer, list): return None, "sub-issues: the read did not answer a list"
-    cards = {i.get("n"): i for i in board_cache.get("items") or []}
+    if err: return None, err
+    cards = {((i.get("r") or REPO).lower(), i.get("n")): i for i in board_cache.get("items") or []}
     tickets = []
-    for sub in r.answer:
-        c = cards.get(sub.get("number")) if isinstance(sub, dict) else None
-        if c is None or closed(sub.get("state")) or closed(c.get("s")): continue
-        if _columns_module.SPEC_LABEL in (c.get("l") or []): continue
+    for sub in subs:
+        if not isinstance(sub, dict): continue
+        c = cards.get((repo.lower(), sub.get("number")))
+        if c is None or _repo_of(sub.get("repository_url"), repo) != repo.lower(): continue
+        if closed(sub.get("state")) or closed(c.get("s")): continue
+        labels = {*(c.get("l") or []), *(x.get("name") for x in sub.get("labels") or [] if isinstance(x, dict))}
+        if _columns_module.SPEC_LABEL in labels or labels & set(TICKET_HOLD_LABELS): continue
         if _columns_module.view_column(c.get("st"), False, c.get("l"))[0] != COLUMN["unscheduled"]: continue
         tickets.append(c)
     return tickets, None
@@ -2480,6 +2514,12 @@ def promote(issue):
         if err: return {"err": err}
     cards = [item, *tickets]
     try: r = promote_write([c["n"] for c in cards], add=any(not c.get("i") for c in cards))   # no item id: the row came from the open-issue read (#815)
+    except subprocess.TimeoutExpired as e:
+        # board.py may have moved some of the cards before the writer ran out of time. The cache is not written over a move
+        # it cannot prove; the board-dirty flag asks the next pass to read the columns as they now stand (#838).
+        try: (STATE / "board-dirty").touch()
+        except OSError: pass
+        return {"err": f"the writer did not answer in {int(e.timeout)} s: the move may be partial, and the board is read again"}
     except Exception as e: return {"err": str(e)[:200] or "the writer did not answer"}
     if r.returncode:
         lines = (r.stderr or r.stdout or f"exit {r.returncode}").strip().splitlines()
