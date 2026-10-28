@@ -121,12 +121,11 @@ expired() {
   [ $(( now - t - p )) -ge "$cap" ]
 }
 
-# run_issues <run-dir>: every issue the run dispatched, read from its own record as childcc.py reads it (spawn_accepted and
-# its definition prompt), each named once. A run whose directory carries no record names none.
+# run_issues <run-dir>: every issue the run dispatched, each named once: first the request's CHILD headers (request.txt, copied at
+# launch: "GitHub issue(s) N, M", as autobug.sh writes them and janitor.sh reads them, #836), then the run's record as childcc.py
+# reads it (spawn_accepted and its definition prompt). A run with no CHILD header falls back to its record; a run whose directory
+# carries neither names none.
 run_issues() {
-  # The run's own request (request.txt, copied at launch) names its children in its CHILD headers, "GitHub issue(s) N, M", as
-  # autobug.sh writes them and janitor.sh reads them (#836). A stale marker or a record's first match is never read; a run with
-  # no CHILD header falls back to its record.
   local req="$1/request.txt" out
   if [ -s "$req" ]; then
     out=$(python3 -c 'import re,sys
@@ -149,13 +148,15 @@ for l in open(sys.argv[1]):
     if n: print(n)' "$f" "$here" 2>/dev/null | sort -un
 }
 
-# orphan_child <run> <rd> <S> <wave> <issue>...: the first commit of the run's own work that names one of the issues, lives on a
-# local branch of the owner's checkout (a squad/ branch, or the tip of a child tree of the run) and is in neither the wave nor the
-# base (#836). It prints "<sha> <issue>" and returns 0; it returns 1 when there is none. A RED commit proves nothing and is no
-# work. Each tip is fetched into the scratch clone $S, so the reach is read against the remote's refs, never the checkout's.
+# orphan_child <run> <rd> <S> <wave> <issue>...: the first commit of the run's own work that names one of the issues, lives on the
+# run's own branch (squad/run/<run>) or on the tip of a child tree under the run folder, and is in neither the wave nor the base
+# (#836). It prints "<sha> <issue>" and returns 0; it returns 1 when there is none. No other branch is read: a leftover squad/
+# branch of another run holds nothing here. A commit a remote ref already reaches (a fix/ branch that salvaged it) is no orphan,
+# as `branch -r --contains` reads it from the checkout. A RED commit proves nothing and is no work. Each tip is fetched into the
+# scratch clone $S, so the commits are read from that clone, and the wave and the base are the reach that counts.
 orphan_child() {
   local run=$1 rd=$2 S=$3 w=$4 tip c msg n refs rda tips; shift 4
-  tips=$($G -C "$SG_CHECKOUT" for-each-ref --format='%(objectname)' refs/heads/squad/ 2>/dev/null)
+  tips=$($G -C "$SG_CHECKOUT" rev-parse -q --verify "refs/heads/squad/run/$run" 2>/dev/null)
   if rda=$(cd "$rd" 2>/dev/null && pwd -P); then
     tips="$tips
 $($G -C "$SG_CHECKOUT" worktree list --porcelain 2>/dev/null | awk -v d="$rda/" '/^worktree /{w=substr($0,10); if (index(w,d)==1) print w}' | while read -r t; do $G -C "$t" rev-parse HEAD 2>/dev/null; done)"
@@ -168,7 +169,9 @@ $($G -C "$SG_CHECKOUT" worktree list --porcelain 2>/dev/null | awk -v d="$rda/" 
       msg=$(git_sc log -1 --format=%B "$c" 2>/dev/null)
       case "$msg" in *"TDD RED"*) continue;; esac
       refs=" $(printf '%s\n' "$msg" | /usr/bin/grep -oE 'Refs #[0-9]+' | /usr/bin/grep -oE '[0-9]+' | tr '\n' ' ') "
-      for n in "$@"; do case "$refs" in *" $n "*) printf '%s %s\n' "$c" "$n"; return 0;; esac; done
+      for n in "$@"; do case "$refs" in *" $n "*)
+          [ -z "$($G -C "$SG_CHECKOUT" branch -r --contains "$c" 2>/dev/null)" ] || continue 2   # a remote ref reaches it: salvaged
+          printf '%s %s\n' "$c" "$n"; return 0;; esac; done
     done
   done
   return 1
@@ -658,10 +661,11 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
       done
       # (#836) A child commit of this run that is in neither the wave nor the base, and lives on a local branch of the checkout only,
       # keeps the wave: deleting the wave branch would leave that commit nowhere but on the local branch. One WAVE REFUSE line
-      # names it, and nothing is pushed. A commit of an issue the base already delivered is no refusal.
+      # names it, and nothing is pushed. A commit of an issue the base already delivered is no refusal. A capped wave lands as
+      # it is (ADR-0145 rule 13), so the cap frees it here as it does the #667 hold above: no refusal once the cap is reached.
       local undel="" orph
       for n in $(run_issues "$rd"); do case " $delivered " in *" $n "*) ;; *) undel="${undel:+$undel }$n";; esac; done
-      if [ -n "$undel" ] && orph=$(orphan_child "$run" "$rd" "$S" "$w" $undel); then
+      if [ "$capped" != 1 ] && [ -n "$undel" ] && orph=$(orphan_child "$run" "$rd" "$S" "$w" $undel); then
         echo "WAVE REFUSE $w: child commit ${orph% *} names #${orph#* }; it is on a local branch only and in neither $w nor $base, so the wave is kept"
         rm -rf "$S"; return 1
       fi

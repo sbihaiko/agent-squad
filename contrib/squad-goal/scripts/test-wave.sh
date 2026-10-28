@@ -790,17 +790,16 @@ r=$(cd "$T/tipclone" && SG_GATE_WORKERS=3 SG_STATE="$T/st" bash -c "$tipcmd" 2>&
 IFS=$'\t' read -r _ kind res _ sel < "$T/st/gate-status" 2>/dev/null
 [ "$kind $res $sel" = "fast pass selected 1 files" ] && ok "the wave tip check's status line states the selected file count" || ko "tip check status: '$(cat "$T/st/gate-status" 2>&1)'"
 
-# X (#836): the empty landing names the issues of the run's own request (request.txt, its CHILD header), never a stale marker
-# or a record's first match; and a child commit of the run that lives on a local branch only is never lost: the wave is kept.
+# X (#836): the empty landing names the issues of the run's own request (request.txt, its CHILD header), before the record: the
+# record's #710 is not named when the request names other issues.
 W21=wave/run-836a; start2 run-836a >/dev/null
 mkdir -p "$T/co/runs/run-836a"
 printf '%s\n%s\n' 'CHILD — GitHub issue(s) 712, 713, 714 (bug; one root cause, one branch):' '--- issue #712' > "$T/co/runs/run-836a/request.txt"
 printf '%s\n' '{"event": "spawn_accepted", "child": "a", "definition": {"prompt": "GitHub issue #710 work"}}' > "$T/co/runs/run-836a/record.jsonl"
-printf 'run-old\n' > "$T/st/auto/bug-710"
 r=$(land2 run-836a); rc=$?
 [ $rc = 0 ] && case "$r" in *"landed empty"*) ok "Y1: the wave of a bundled request lands empty (exit 0)";; *) ko "Y1: not an empty landing: '$r'";; esac || ko "Y1: exit $rc: '$r'"
 case "$r" in *"dispatched for #712, #713, #714"*) ok "Y1: the landing names every issue of the request's CHILD header";; *) ko "Y1: the request's issues are not named: '$r'";; esac
-case "$r" in *"#710"*) ko "Y1: a stale marker or record match names #710: '$r'";; *) ok "Y1: the landing names no stale issue";; esac
+case "$r" in *"#710"*) ko "Y1: the record's #710 is named beside the request's issues: '$r'";; *) ok "Y1: the landing names no record-only issue";; esac
 
 # Y2: a child commit of this run (Refs #721) on the run's own branch only, in neither the wave nor dev: the wave is refused and kept.
 W22=wave/run-836b; start2 run-836b >/dev/null
