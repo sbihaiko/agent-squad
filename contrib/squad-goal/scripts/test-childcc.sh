@@ -95,6 +95,23 @@ run lnd 5101 v; wtree lnd; echo wave/lnd > "$T/st/auto/waved-lnd"; : > "$WAVE_CA
 out=$(pass lnd)
 [ ! -s "$WAVE_CALLS" ] && ok "a run whose wave landed enters no child" || ko "enter ran for a landed wave: $(cat "$WAVE_CALLS")"
 grep -q ' 5101$' "$T/moves" 2>/dev/null && ko "a child that never entered reads Code Complete after its wave landed" || ok "a child that never entered is never moved to Code Complete after its wave landed"
+# A failed read of the issue's state (rate limit, refusal, network) is no answer (#848): childcc wrote the permanent done
+# marker on it and said nothing, so the run's wave refused the child on every cycle. The read that fails writes no marker,
+# logs the reason, and leaves the child (exit 3) until the read works, when the child enters.
+run gf 5900 v; wtree gf; echo wave/gf > "$T/st/auto/wave-gf"; echo wave/gf > "$T/st/auto/waved-gf"; : > "$WAVE_CALLS"; : > "$GH_STATE_FAIL"
+out=$(pass gf); rc=$?
+[ ! -e "$T/st/auto/cc-gf-c" ] && ok "a failed issue-state read writes no done marker" || ko "marker written on a failed read"
+echo "$out" | /usr/bin/grep -q 'CHILDCC SKIP #5900.*could not be read' && ok "the skip is named" || ko "silent skip: $out"
+[ "$rc" = 3 ] && ok "the pass leaves the child (exit 3)" || ko "exit $rc"
+rm -f "$GH_STATE_FAIL"; pass gf >/dev/null
+[ "$(/usr/bin/grep -c '^enter gf 5900' "$WAVE_CALLS")" = 1 ] && [ -e "$T/st/auto/cc-gf-c" ] && ok "the next pass enters the child" || ko "no entry after the read recovers: $(cat "$WAVE_CALLS")"
+# A closed issue is a settled skip: its marker is written, and the skip is named.
+run clo 5901 v; wtree clo; echo wave/clo > "$T/st/auto/wave-clo"; echo wave/clo > "$T/st/auto/waved-clo"; : > "$WAVE_CALLS"
+out=$(GH_STATE=closed pass clo)
+[ -e "$T/st/auto/cc-clo-c" ] && ok "a closed issue gets its marker" || ko "no marker for a closed issue"
+echo "$out" | /usr/bin/grep -q 'CHILDCC SKIP #5901.*is closed' && ok "the closed skip is named" || ko "closed skip silent: $out"
+[ ! -s "$WAVE_CALLS" ] && ok "a closed issue is not entered" || ko "closed issue entered: $(cat "$WAVE_CALLS")"
+
 # A review claim left by a pass that died mid-review (#502): the loop stopped, childreview.sh was killed, no review head was
 # kept. The claim names the head, so every later pass skipped the review and the entry held the child for good. A claim
 # whose pass is gone is no claim; one whose pass is alive still is.
@@ -494,22 +511,5 @@ cq=$(ls "$T"/st/cq/*#6400-ccdefer-* 2>/dev/null)
 [ "$(/usr/bin/grep -c 'CHILDCC DEFERRED.* dfr c' "$T/st/alerts.log" 2>/dev/null)" = 1 ] && ok "the escalation writes one alerts.log line" || ko "alerts.log: $(cat "$T/st/alerts.log" 2>/dev/null)"
 [ "$(/usr/bin/grep -c 'RUN-OWNED #6400' "$T/dfr.out")" = 1 ] && ok "the run-owned hold is logged once for an unchanged tip" || ko "RUN-OWNED logged $(/usr/bin/grep -c 'RUN-OWNED #6400' "$T/dfr.out") times"
 [ "$(/usr/bin/grep -c 'CHILDCC DEFERRED' "$T/dfr.out")" = 1 ] && ok "the deferral line is logged once for an unchanged tip" || ko "DEFERRED logged $(/usr/bin/grep -c 'CHILDCC DEFERRED' "$T/dfr.out") times"
-
-# A failed read of the issue's state (rate limit, refusal, network) is no answer (#848): childcc wrote the permanent done
-# marker on it and said nothing, so the run's wave refused the child on every cycle. The read that fails writes no marker,
-# logs the reason, and leaves the child (exit 3) until the read works, when the child enters.
-run gf 5900 v; wtree gf; echo wave/gf > "$T/st/auto/wave-gf"; echo wave/gf > "$T/st/auto/waved-gf"; : > "$WAVE_CALLS"; : > "$GH_STATE_FAIL"
-out=$(pass gf); rc=$?
-[ ! -e "$T/st/auto/cc-gf-c" ] && ok "a failed issue-state read writes no done marker" || ko "marker written on a failed read"
-echo "$out" | /usr/bin/grep -q 'CHILDCC SKIP #5900.*could not be read' && ok "the skip is named" || ko "silent skip: $out"
-[ "$rc" = 3 ] && ok "the pass leaves the child (exit 3)" || ko "exit $rc"
-rm -f "$GH_STATE_FAIL"; pass gf >/dev/null
-[ "$(/usr/bin/grep -c '^enter gf 5900' "$WAVE_CALLS")" = 1 ] && [ -e "$T/st/auto/cc-gf-c" ] && ok "the next pass enters the child" || ko "no entry after the read recovers: $(cat "$WAVE_CALLS")"
-# A closed issue is a settled skip: its marker is written, and the skip is named.
-run clo 5901 v; wtree clo; echo wave/clo > "$T/st/auto/wave-clo"; echo wave/clo > "$T/st/auto/waved-clo"; : > "$WAVE_CALLS"
-out=$(GH_STATE=closed pass clo)
-[ -e "$T/st/auto/cc-clo-c" ] && ok "a closed issue gets its marker" || ko "no marker for a closed issue"
-echo "$out" | /usr/bin/grep -q 'CHILDCC SKIP #5901.*is closed' && ok "the closed skip is named" || ko "closed skip silent: $out"
-[ ! -s "$WAVE_CALLS" ] && ok "a closed issue is not entered" || ko "closed issue entered: $(cat "$WAVE_CALLS")"
 
 rm -rf "$T"; exit $fail
