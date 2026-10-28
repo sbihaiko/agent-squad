@@ -78,9 +78,14 @@ $(cd "$wt/tip" && SG_GATE_FAILED="$(printf '%s\n' "$out" | sed -n 's/^FAILED \([
   # Only ruff red, and ruff says it can fix it: `ruff check --fix` (safe fixes only) in the trial, one commit, the gate again.
   # The fixed trial is pushed to the branch (it is rebased on $land), so the fix lands with the branch.
   if [ "$rc" != 0 ] && [ "$rc" != 4 ] && printf '%s' "$out" | /usr/bin/grep -q 'fixable with the'; then
+    # (#837) Stage only the files the fix changed: a file the gate already dirtied (a generated one) is not the fix's.
+    pyhash() { /usr/bin/git -C "$wt/tip" ls-files -m -o --exclude-standard | while IFS= read -r f; do printf '%s %s\n' "$f" "$(/usr/bin/git -C "$wt/tip" hash-object -- "$f")"; done; }
+    before=$(pyhash)
     (cd "$wt/tip" && env $noloop bash -c "$fixcmd") >/dev/null 2>&1
-    if [ -n "$(/usr/bin/git -C "$wt/tip" status --porcelain 2>/dev/null)" ]; then
-      /usr/bin/git -C "$wt/tip" add -A >/dev/null 2>&1; /usr/bin/git -C "$wt/tip" -c user.email=gate@squad -c user.name=squad-gate commit -q -m "Apply ruff --fix at the landing
+    fixed=$(pyhash | while IFS= read -r line; do printf '%s\n' "$before" | /usr/bin/grep -qxF "$line" || printf '%s\n' "${line% *}"; done)
+    if [ -n "$fixed" ]; then
+      printf '%s\n' "$fixed" | while IFS= read -r f; do /usr/bin/git -C "$wt/tip" add -- "$f" >/dev/null 2>&1; done
+      /usr/bin/git -C "$wt/tip" -c user.email=gate@squad -c user.name=squad-gate commit -q -m "Apply ruff --fix at the landing
 
 Co-Authored-By: Claude Code <noreply@anthropic.com>" >/dev/null 2>&1
       out=$(cd "$wt/tip" && PYTHONPATH=. SG_GATE_KIND=fast bash "$here/gate.sh" env $noloop bash -c "$gatecmd" 2>&1); rc=$?; out=$(unwait "$out")
