@@ -373,9 +373,9 @@ class BoardBinding:
             if k and self.backoff: time.sleep(self.backoff * (2 ** (k - 1)))
             r = self.run(["gh", "api", *a], input=inp, capture_output=True, text=True, timeout=self.timeout or timeout)
             if not r.returncode: _log_call(a, "answer"); return r.stdout
+            _log_call(a, "failed")   # each attempt is spent quota, so each is one line (ADR-0277)
             err = r.stderr.strip()[:200]
             if not self.server_error.search(err): break
-        _log_call(a, "failed")
         raise RuntimeError(err)
 
     def _cached(self, name, ttl, fn):
