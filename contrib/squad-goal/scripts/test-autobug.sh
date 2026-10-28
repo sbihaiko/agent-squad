@@ -853,4 +853,41 @@ m=($(find "$T/st/auto" -name 'bug-*' 2>/dev/null)); [ ${#m[@]} -eq 0 ] && ok "22
 [ -e "$T/st/cycle.log" ] && $G -q "REFUSED" "$T/st/cycle.log" && ko "22 a rate limit was filed as a refusal" || ok "22 a rate limit files no refusal"
 [ -z "$(ls -A "$T/st/req" 2>/dev/null)" ] && ok "22 a rate limit builds no request" || ko "22 a rate limit built a request"
 
+# 23) (#852) a launch the launcher refuses before any run id exists frees its claim and puts the card back to Todo, and
+# names the issue and the refusal in alerts.log. Without this the claim stayed forever and the card stayed in Doing.
+rm -rf "$T/st/auto" "$T/st/req"; mkdir -p "$T/st/auto" "$T/st/req"; rm -f "$T/st/cycle.log" "$T/st/alerts.log" "$T/board.calls"
+todo 1228
+cat > "$T/issues.json" <<'JSON'
+[{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]}]
+JSON
+rm -f "$T/st/gh-cooldown.json"   # case 22 left a rate-limit cooldown in the shared state: this case reads GitHub again
+cat > "$T/bin/gh" <<J
+#!/bin/bash
+case "\$*" in
+  *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$T/issues.json" ;;
+  *"issue(number:"*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issue\(number: [0-9]+' | /usr/bin/grep -oE '[0-9]+' | head -1); jq -c --arg k "i\$n" --argjson n "\$n" '{data:{repository:{(\$k): (.[]|select(.number==\$n)|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}})}}}' "$T/issues.json" ;;
+  *pulls?state=open*) echo "[]" ;;
+  *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$T/issues.json" ;;   # the frontier's one list read (#383)
+  *"issues?state=open"*labels=bug*) jq -c '[.[]|select((.labels // [])|index("bug"))|.labels=[(.labels//[])[]|{name:.}]]' "$T/issues.json" ;;   # the door applies -q itself, so the stub answers gh's JSON, labels as objects (#847)
+  *"issues?state=open"*labels=debt*) jq -c '[.[]|select((.labels // [])|index("debt"))|.labels=[(.labels//[])[]|{name:.}]]' "$T/issues.json" ;;
+  *"issues?state=open"*wave*|*labels=ready-for-agent*) jq -c '[.[]|select((.labels // [])|index("ready-for-agent"))|.labels=[(.labels//[])[]|{name:.}]]' "$T/issues.json" ;;
+  *"issue(number:"*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issue\(number: [0-9]+' | /usr/bin/grep -oE '[0-9]+' | head -1); jq -c --arg k "i\$n" --argjson n "\$n" '{data:{repository:{(\$k): (.[]|select(.number==\$n)|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}})}}}' "$T/issues.json" ;;   # the door's one-issue query, as GraphQL (#847)
+  *issues/*comments*) echo "[]" ;;   # a comments list is a list: the issue stub below is for the issue itself
+  *issues/*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issues/[0-9]+' | cut -d/ -f2); jq -c --argjson n "\$n" '.[]|select(.number==\$n)' "$T/issues.json" ;;
+  *) echo "[]" ;;
+esac
+J
+chmod +x "$T/bin/gh"
+printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %s/board.calls\nexit 0\n' "$T" > "$T/s/board.sh"
+printf '#!/bin/bash\necho %s/req.json\n' "$T" > "$T/s/mkreq.sh"
+printf '#!/bin/bash\necho "refused: the first coding model gpt-6-luna is not in the router envelope, so the router would run another model." >&2\nexit 1\n' > "$T/s/launch.py"
+chmod +x "$T/s/board.sh" "$T/s/mkreq.sh" "$T/s/launch.py"
+out=$(bash "$T/s/autobug.sh" 2>"$T/err23"); rc=$?
+[ "$rc" = 0 ] && ok "23 a refused launch exits 0" || ko "23 a refused launch exited $rc: '$(cat "$T/err23")'"
+[ ! -e "$T/st/auto/bug-1228" ] && ok "23 a refused launch frees auto/bug-1228" || ko "23 auto/bug-1228 kept after a refused launch"
+[ ! -e "$T/st/auto/disp-1228" ] && ok "23 a refused launch frees auto/disp-1228" || ko "23 auto/disp-1228 kept after a refused launch"
+$G -qE -- "--add .* Todo .*1228" "$T/board.calls" 2>/dev/null && ok "23 the card goes back to Todo" || ko "23 no card move to Todo: '$(cat "$T/board.calls" 2>/dev/null)'"
+$G -q "#1228" "$T/st/alerts.log" 2>/dev/null && $G -q "router envelope" "$T/st/alerts.log" && ok "23 alerts.log names the issue and the refusal" || ko "23 alerts.log lacks the refusal: '$(cat "$T/st/alerts.log" 2>/dev/null)'"
+$G -q "AUTOBUG dispatched" <<<"$out" && ko "23 a refused launch was reported as dispatched" || ok "23 a refused launch is not reported as dispatched"
+
 rm -rf "$T"; exit $fail
