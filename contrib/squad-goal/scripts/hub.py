@@ -4025,7 +4025,10 @@ DASH_PREFIXES = ("/dash/", "//")
 DASH_PATH = re.compile(r"/dash/([\w-]+)(/[\w./-]*)?")   # a run id, then plain names only: no escape, host or port
 DASH_TIMEOUT_SECS = 60.0
 DASH_REPLY_HEADERS = ("content-type", "content-length", "cache-control", "x-content-type-options", "referrer-policy")
-LOOPBACK_ORIGIN = re.compile(r"^http://(127\.0\.0\.1|localhost)(:\d+)?$")
+def own_origin(h):
+    """A loopback write's one Origin rule: the hub's own exact origin, on either loopback name and its own port (#824)."""
+    org = h.headers.get("Origin") or ""
+    return org in (f"http://127.0.0.1:{h.server.server_port}", f"http://localhost:{h.server.server_port}")
 
 def dash_port(run_id):
     """The port the run list names for this run id, or None: the one address a forwarded request can reach."""
@@ -4119,14 +4122,13 @@ class H(BaseHTTPRequestHandler):
     def do_POST(self):
         # a cross-site page must not be able to write: a loopback write needs our own origin, a tailnet write the tailnet origin (the seam), and a JSON body
         a = access(self, "POST")
-        org = self.headers.get("Origin") or ""
         if request_target(self).startswith(DASH_PREFIXES):   # the body is read before any refusal, as below
             length = self.headers.get("Content-Length") or "0"
             raw = self.rfile.read(min(int(length), 1 << 20)) if length.isdigit() else b""
             if not a.allowed: return self.refuse(a.reason)
-            if not (a.tailnet or LOOPBACK_ORIGIN.match(org)) or "json" not in (self.headers.get("Content-Type") or ""): return self.refuse("forbidden")
+            if not (a.tailnet or own_origin(self)) or "json" not in (self.headers.get("Content-Type") or ""): return self.refuse("forbidden")
             return self.dash("POST", raw)
-        ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote") and (a.tailnet or LOOPBACK_ORIGIN.match(org)) and "json" in (self.headers.get("Content-Type") or "")
+        ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote") and (a.tailnet or own_origin(self)) and "json" in (self.headers.get("Content-Type") or "")
         try:
             raw = self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 1 << 20))   # read before any answer: a refusal that leaves the body unread resets the connection; the models panel posts back ~20 KB of read-only fields (#684)
             if not ok: out = {"err": "forbidden"}
