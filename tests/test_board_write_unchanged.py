@@ -11,11 +11,13 @@ from pathlib import Path
 
 import pytest
 
+from tests import shell_suites
+
 SCRIPTS = Path(__file__).resolve().parents[1] / "contrib/squad-goal/scripts"
 
 
 def _suite(name: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["bash", str(SCRIPTS / name)], capture_output=True, text=True, timeout=120)
+    return shell_suites.run(SCRIPTS / name)
 
 
 @pytest.mark.heavy
@@ -27,4 +29,14 @@ def test_a_move_to_the_column_the_card_holds_sends_no_patch() -> None:
 @pytest.mark.heavy
 def test_the_janitor_writes_run_fields_only_when_the_holder_changes() -> None:
     r = _suite("test-janitor-run-fields-unchanged.sh")
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+@pytest.mark.heavy
+def test_the_move_suite_runs_without_the_loops_exported_variables(monkeypatch) -> None:
+    """env.sh exports SG_MOVE_BY=loop (#861), and a gate the live loop runs inherits it: the suite then reads a dispatch
+    context where it asserts that a move with none records none (#864). The suite is handed a clean environment."""
+    monkeypatch.setenv("SG_MOVE_BY", "loop")
+    monkeypatch.setenv("SG_CHECKOUT", "/live/loop/checkout")
+    r = _suite("test-board-move-unchanged.sh")
     assert r.returncode == 0, r.stdout + r.stderr
