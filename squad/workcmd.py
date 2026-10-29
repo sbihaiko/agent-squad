@@ -47,6 +47,20 @@ COUNT = re.compile(r"(\d+) (passed|failed|error|errors|skipped|xfailed|xpassed|d
 COUNT_KEYS = ("passed", "failed", "errors", "skipped", "xfailed", "xpassed", "deselected")
 
 
+# #862: a command that reads git history reads the tree it was written in, not the target's merge. The list is closed, and
+# this is the one place it lives. `git` must start a command (after a `(`, `;`, `&`, `|`, a quote, or `then`/`do`): `echo git log` is text. A `diff` reads history only when it names a revision (a range, HEAD, or a sha).
+HISTORY_VERBS = ("log", "show", "rev-list", "rev-parse", "blame", "cherry", "merge-base", "describe", "ls-tree", "cat-file",
+                 "for-each-ref", "name-rev", "shortlog", "reflog")
+HISTORY = re.compile(
+    r"(?:^|[(;&|`\"'{]|\bthen|\bdo)\s*git\s+(?:-\S+\s+(?:\S+\s+)?)*"
+    r"(?:(?:" + "|".join(HISTORY_VERBS) + r")\b|diff\b[^;&|]*(?:\.\.|\bHEAD\b|\b[0-9a-f]{7,40}\b))")
+
+
+def reads_history(cmd):
+    """True when the command reads git history, so it runs in the tree its child wrote (#862), never in the target."""
+    return HISTORY.search(cmd) is not None
+
+
 def counts_of(output):
     """The counts of the last pytest summary line in `output`, or None when the output carries none.
 

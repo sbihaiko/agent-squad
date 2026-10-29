@@ -376,17 +376,17 @@ async def test_the_final_gate_runs_a_childs_commands_in_that_childs_worktree(tmp
               "route.router.2": committer("child two", "b.txt")}
     eng = make(tmp_path, script, target=repo)
     assert (await eng.run()).verdict == "completed", [e for e in ev(tmp_path, "outcome") if e["node"] == "final_gate"]
+    assert [e["effect"]["held_out"] for e in lands(tmp_path)] == ["pass", "pass"]   # the landing check runs it in the child's tree too
 
 
 @pytest.mark.anyio
-async def test_a_plain_command_green_in_its_child_and_red_in_the_merged_target_fails_the_final_gate(tmp_path):
+async def test_a_plain_command_green_in_its_child_and_red_in_the_merged_target_fails_the_run(tmp_path):
     """#862 negative: only a git-history command reads its child's tree. A plain command that passes in the child's tree and
-    fails once a sibling's file is merged is the integration check the final gate exists for, so the run must not complete."""
+    fails once a sibling's file is merged is caught as a regression at the sibling's landing, so the run must not complete.
+    (The final gate applies the same routing: test_ac_verify_routes.py.)"""
     repo = sibling_repo(tmp_path)
     script = {"router": routed(req(), req("diagnosing-bugs")),
               "route.router.1": writer("a.txt", cmds=["test ! -e b.txt"]), "route.router.2": writer("b.txt")}
     eng = make(tmp_path, script, target=repo)
     v = await eng.run()
-    gate = [e for e in ev(tmp_path, "outcome") if e["node"] == "final_gate"]
-    assert v.verdict != "completed" and gate[-1]["outcome"] == "fail"
-    assert gate[-1]["reasons"] == ["ac_failed:test ! -e b.txt"]
+    assert v.verdict != "completed" and v.reasons == ["ac_regression:route.router.1"]
