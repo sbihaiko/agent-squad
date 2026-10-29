@@ -13,7 +13,7 @@ OLD=run-20261029-124510-af3898; NEW=run-20261029-124527-5f71a1
 live() {
   mkdir -p "$T/co/runs/$1"; echo "$1" >> "$T/st/active-runs.txt"
   printf 'CHILD — GitHub issue(s) #133 (bug; one PR):\n' > "$T/co/runs/$1/request.txt"
-  (cd "$T/co/runs/$1" && exec sh -c 'sleep 120; :' squad.cli) & p=$!
+  (cd "$T/co/runs/$1" && exec sh -c 'sleep 120; :' squad.cli) </dev/null >/dev/null 2>&1 & p=$!   # no stdout: a sleeper that outlives the test must not hold its pipe
   printf '%s\n' '{"event": "run_start", "run_id": "r", "graph_name": "g", "graph_hash": "h", "engine_options": {}, "root": "main", "plan": ["main"], "pos": 1, "ts": 1}' \
     '{"event": "spawn_accepted", "text": "Fix GitHub issue 133 (Refs #133)"}' > "$T/co/runs/$1/record.jsonl"
   eval "$2=$p"
@@ -31,5 +31,5 @@ kill -0 "$OPID" 2>/dev/null && ok "the older run keeps running" || ko "the older
 /usr/bin/grep -q "DUP issue #133 .*keeping $OLD, killing $NEW" "$T/st/cycle.log" && ok "the pass names the run it keeps and the one it kills" || ko "no keep/kill detail: $(/usr/bin/grep DUP "$T/st/cycle.log")"
 /usr/bin/grep -q "not killed" "$T/st/cycle.log" && ko "the pass still says 'not killed'" || ok "the pass no longer says 'not killed'"
 /usr/bin/grep -q "kill pid=.*duplicate of run $OLD" "$T/st/cycle.log" && ok "each kill is reported with its reason" || ko "no kill line for the duplicate: $(/usr/bin/grep 'kill pid' "$T/st/cycle.log")"
-kill "$OPID" 2>/dev/null; kill "$NPID" 2>/dev/null; wait 2>/dev/null
+for q in "$OPID" "$NPID"; do pkill -P "$q" 2>/dev/null; kill "$q" 2>/dev/null; done; wait 2>/dev/null
 rm -rf "$T"; exit $fail
