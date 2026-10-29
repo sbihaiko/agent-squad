@@ -1,4 +1,4 @@
-<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Hub</title>
+<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Hub</title><link rel=manifest href="/mobile/manifest.webmanifest"><link rel=icon href="/mobile/icon.svg"><meta name=theme-color content="#0f1115"><meta name=apple-mobile-web-app-capable content=yes>
 <style>
 :root{--bg:#0f1115;--panel:#161a21;--line:#2a303b;--fg:#d8dde6;--mute:#8a93a3;--ok:#3ecf8e;--warn:#f5b041;--err:#ff6b6b}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px system-ui,sans-serif;min-height:100vh}
@@ -51,11 +51,15 @@ h2{font-size:17px;margin:6px 0 10px}
 nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:var(--panel);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom)}
 nav button{flex:1;min-height:56px;background:none;border:0;color:var(--mute);font:13px system-ui;padding:6px 0}
 nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 #5aa9ff}
+#reconnect{position:fixed;inset:0;z-index:5;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px;text-align:center}
+#reconnect[hidden]{display:none}
+#reconnect button{min-height:44px;min-width:120px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:6px;font-size:16px}
 </style>
 <header>
 <select id="profile" aria-label="Profile" hidden></select>
 <a id="to-desktop" href="#">Desktop page</a>
 </header>
+<div id="reconnect" hidden><p>The hub does not answer. Check Tailscale and that the machine is awake.</p><button id="retry" type="button">Try again</button></div>
 <main>
 <section data-panel="status">
 <h2>Status</h2>
@@ -126,7 +130,7 @@ tabs.forEach(b => b.onclick = () => show(b.dataset.tab));
 async function call(path) {
   let r;
   try { r = await fetch(path, { cache: "no-store" }); }
-  catch (e) { throw new Error("The hub does not answer. Check Tailscale and that the machine is awake."); }
+  catch (e) { const down = new Error("The hub does not answer. Check Tailscale and that the machine is awake."); down.down = true; throw down; }
   if (r.status === 403) throw new Error("The hub refused this login: " + (await r.text()).trim());
   if (!r.ok) throw new Error("The hub answered " + r.status + ".");
   return r.json();
@@ -138,6 +142,7 @@ async function status() {
   try {
     const s = await call("/api/status");
     $("msg").textContent = "";
+    $("reconnect").hidden = true;
     $("loop").className = s.loop.on ? "on" : "off";
     $("loop-text").textContent = (s.loop.on ? "on" : "off") + " since " + (s.loop.since || "unknown");
     $("t-live").textContent = s.live;
@@ -151,8 +156,10 @@ async function status() {
       return li;
     }));
     $("load").textContent = s.load.line;
-  } catch (e) { $("msg").textContent = e.message; }
+  } catch (e) { $("msg").textContent = e.message; $("reconnect").hidden = !e.down; }
 }
+$("retry").onclick = status;
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("/mobile/sw.js", { scope: "/mobile/" }).catch(() => {});
 status();
 setInterval(status, 5000);
 

@@ -4109,6 +4109,13 @@ def sessions_payload():
 
 GESTURE_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-gesture.js").read_text()
 MOBILE_PAGE = (pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text().replace("/*GESTURE*/", GESTURE_JS).replace("/*BOARD_FILTER*/", BOARD_FILTER_JS)
+MOBILE_SHELL = ["/mobile/", "/mobile/manifest.webmanifest", "/mobile/icon.svg"]
+SW_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-sw.js").read_text().replace("/*SHELL*/[]", json.dumps(MOBILE_SHELL))
+MANIFEST_JSON = json.dumps({"id": "/mobile/", "name": f"Squad hub {REPO}", "short_name": "Hub", "start_url": "/mobile/", "scope": "/mobile/", "display": "standalone", "background_color": "#0f1115", "theme_color": "#0f1115", "icons": [{"src": "/mobile/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}]}).encode()
+MOBILE_ICON = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192"><rect width="192" height="192" rx="36" fill="#0f1115"/><circle cx="96" cy="96" r="52" fill="#3ecf8e"/></svg>'
+MOBILE_ASSETS = {"/mobile": (MOBILE_PAGE.encode(), "text/html; charset=utf-8"), "/mobile/": (MOBILE_PAGE.encode(), "text/html; charset=utf-8"),
+                 "/mobile/manifest.webmanifest": (MANIFEST_JSON, "application/manifest+json"), "/mobile/icon.svg": (MOBILE_ICON, "image/svg+xml"),
+                 "/mobile/sw.js": (SW_JS.encode(), "text/javascript; charset=utf-8")}
 
 def mobile_refusal(reason):
     return ('<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Hub</title>'
@@ -4241,7 +4248,7 @@ class H(BaseHTTPRequestHandler):
         finally: up.close()
     def do_GET(self):
         a = access(self, "GET")
-        if not a.allowed: return self.refuse(a.reason, page=self.path.split("?", 1)[0] == "/mobile")
+        if not a.allowed: return self.refuse(a.reason, page=self.path.split("?", 1)[0] in ("/mobile", "/mobile/"))
         if request_target(self).startswith(DASH_PREFIXES): return self.dash("GET")
         if self.path.startswith("/held/"):   # a run the childcc pass holds: its dashboard, started when none runs (#689)
             name = re.sub(r"[^\w-]", "", self.path[6:].split("?")[0])
@@ -4274,7 +4281,7 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/load"): body, ct = json.dumps(load_payload()).encode(), "application/json"
         elif self.path.startswith("/api/status"): body, ct = json.dumps(status_payload()).encode(), "application/json"
         elif self.path.startswith("/api/sessions"): body, ct = json.dumps(sessions_payload()).encode(), "application/json"
-        elif self.path.split("?", 1)[0] == "/mobile": body, ct = MOBILE_PAGE.encode(), "text/html; charset=utf-8"
+        elif (asset := MOBILE_ASSETS.get(self.path.split("?", 1)[0])): body, ct = asset
         else: body, ct = served_page(a.login).encode(), "text/html; charset=utf-8"
         self.send_response(200); self.send_header("Content-Type", ct); self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(body)
 

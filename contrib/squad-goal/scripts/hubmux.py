@@ -99,11 +99,14 @@ def test_note(slug, apps):
             "The repositories and their live runs are:</p>")
 
 
+REWRITTEN = (b"text/html", b"application/json", b"application/manifest+json", b"text/javascript")
+
+
 def rewrite(body, slug):
-    """A repository's page calls its own API: every absolute /api/, /test/ and /dash/ reference gains the /<slug> prefix, in the page
-    and in the JSON it fetches (a test card's link is `/test/<id>` there; without the slug the path read `test` as a repository)."""
+    """A repository's page calls its own API: every absolute /api/, /test/, /dash/ and /mobile/ reference gains the /<slug> prefix, in the page,
+    the JSON it fetches, the web app manifest and the service worker (a test card's link is `/test/<id>` there; without the slug the path read `test` as a repository)."""
     for q in (b'"', b"'", b"`"):
-        for p in (b"/api/", b"/test/", b"/dash/", b"/held/"):
+        for p in (b"/api/", b"/test/", b"/dash/", b"/held/", b"/mobile/"):
             body = body.replace(q + p, q + b"/" + slug.encode() + p)
     return body
 
@@ -163,7 +166,7 @@ def server(port, apps):
             finally: self.wfile = real
             head, sep, body = buf.getvalue().partition(b"\r\n\r\n")
             head = re.sub(rb"(?im)^(Location: )/(?!/)", rb"\1/" + slug.encode() + b"/", head)   # a redirect to this repository's own path keeps its slug
-            real.write(head + sep + (rewrite(body, slug) if b"text/html" in head or b"application/json" in head else body))
+            real.write(head + sep + (rewrite(body, slug) if any(t in head for t in REWRITTEN) else body))
 
         def do_GET(self): self._route("GET")
         def do_POST(self): self._route("POST")
