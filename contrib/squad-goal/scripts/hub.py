@@ -2125,6 +2125,18 @@ def open_branches_of(repo):
                      "ps": f"ahead {cmp.get('ahead_by', 0)}", "br": True, "r": repo})
     return rows
 
+def open_prs_of(repo):
+    """The open pull requests of ONE repository, one GraphQL read (OPEN_PR_QUERY). Any refusal is an error, so the caller
+    keeps that repository's last good rows instead of an empty lane (#851)."""
+    own, name = repo.split("/", 1)
+    p = subprocess.run(["gh", "api", "graphql", "-f", "query=" + OPEN_PR_QUERY % (own, name)], capture_output=True, text=True, timeout=60)
+    if p.returncode: raise RuntimeError(" ".join((p.stderr or p.stdout).split()) or f"the GitHub read exited {p.returncode}")
+    return prs_from_graphql(json.loads(p.stdout), repo)
+
+def open_rows_of(repo):
+    """Every open row of ONE repository: its open work branches and its open pull requests (#851)."""
+    return open_branches_of(repo) + open_prs_of(repo)
+
 def _landed_ledger():
     """The rows `branchland.sh` keeps for each branch it put in the landing branch: epoch, branch, landed sha, issue."""
     try: lines = (STATE / "landed.tsv").read_text().splitlines()
@@ -2148,7 +2160,7 @@ def prs_pass(fetch_open=None, fetch_landed=None, repos=None):
     A repository the hub cannot read adds its error to the returned `errs` and keeps the last good rows of ITS OWN from
     the cache: an unreachable repository is an error on the lane, never a silently empty one, and never a reason to
     drop the rows of the repository that answered. Returns (rows, landed, errs)."""
-    fetch_open = fetch_open or open_branches_of
+    fetch_open = fetch_open or open_rows_of
     fetch_landed = fetch_landed or landed_branches_of
     repos = REPOS if repos is None else repos
     last_prs, last_landed = board_cache.get("prs") or [], board_cache.get("landed") or []
@@ -2523,7 +2535,10 @@ def board():
     # The lane carries the pull requests only (#440): a work branch has no lane and no other view. Each row names its own
     # kind, so the page reads a pull request by the row, never by the lane's name. An empty lane is still served, `n` 0.
     open_prs = [p for p in prs if p["kind"] == _columns_module.PR_KIND]
-    lane = {"name": COLUMN["pr_open"], "tracking": True, "n": len(open_prs), "err": perr or None,
+    # A count of one or more is a true lower bound even when a repository failed; a zero is a claim about every repository,
+    # so beside a failed read it is `?`, the word the strip uses for a fact not read, never a count (#851).
+    count = "?" if not open_prs and perr else len(open_prs)
+    lane = {"name": COLUMN["pr_open"], "tracking": True, "n": count, "err": perr or None,
             "items": [{"n": p["n"], "t": p["t"], "u": p["u"], "ps": p["ps"], "gs": p.get("gs"), "pb": p.get("pb"),
                        "rollup": p.get("rollup"), "ci": p.get("ci"), "o": p.get("o"), "by": p.get("by"), "cl": p.get("cl"),
                        "r": p.get("r") or REPO, "rt": repo_tag(p.get("r") or REPO), "kind": p["kind"]} for p in open_prs]}

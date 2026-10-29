@@ -274,7 +274,7 @@ def test_a_rate_limited_read_shows_the_open_prs_tile_as_unknown_not_zero(hub, mo
     prs, _, errs = hub.prs_pass(repos=[EMU])
     column = _served(hub, monkeypatch, prs, errs=errs)
     assert errs and "rate limit" in errs[0], "the refusal is named on the column"
-    assert column["n"] is None, f"a failed read is unknown, never a count of zero: {column['n']!r}"
+    assert column["n"] == "?", f"a failed read is unknown, never a count of zero: {column['n']!r}"
 
 
 def test_an_open_prs_tile_reads_zero_only_when_every_repository_answered(hub, monkeypatch):
