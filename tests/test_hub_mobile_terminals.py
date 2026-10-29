@@ -72,3 +72,11 @@ def test_the_composer_posts_one_message_to_the_send_route_with_a_client_id():
 def test_the_composer_limits_the_text_to_4000_characters():
     assert 'id="termview-text"' in page()
     assert 'maxlength="4000"' in page()
+
+
+def test_the_composer_shows_only_sent_uncertain_or_refused():
+    js = terminals_js()
+    for word in ("Sent", "Uncertain", "Refused"):
+        assert f'"{word}' in js
+    for word in ("held", "delivered", "expired", "seen"):
+        assert word not in js.lower()

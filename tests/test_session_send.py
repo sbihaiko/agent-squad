@@ -256,14 +256,18 @@ def test_a_reservation_is_kept_for_24_hours_and_then_purged(home, tmp_path):
     assert inbox_of(home).conns == 3
 
 
-def test_status_is_seen_once_the_transcript_names_the_message(home, tmp_path):
+def test_status_stays_sent_when_the_transcript_names_the_message(home, tmp_path):
     send = load_send()
     transcript = add_session(home, "s1", tmp_path / "app")
     send.send("p1", "s1", "hello", CID, profiles_of=profile_p1, root=home.state)
     assert send.status("p1", "s1", CID, profiles_of=profile_p1, root=home.state) == {"status": "sent"}
     line = {"type": "user", "isMeta": True, "origin": {"kind": "peer", "msg_id": CID}}
     transcript.write_text(transcript.read_text() + json.dumps(line) + "\n")
-    assert send.status("p1", "s1", CID, profiles_of=profile_p1, root=home.state) == {"status": "seen"}
+    assert send.status("p1", "s1", CID, profiles_of=profile_p1, root=home.state) == {"status": "sent"}
+
+
+def test_the_sender_answers_only_sent_uncertain_or_refused():
+    assert load_send().STATES == ("sent", "uncertain", "refused")
 
 
 def load_hub(monkeypatch, home, tmp_path, terminals_send=None, allow=(ANA,)):
@@ -371,7 +375,7 @@ def test_a_field_beyond_session_text_and_client_id_is_refused(home, tmp_path, hu
     assert inbox_of(home).conns == 0
 
 
-def test_the_status_route_reads_seen_for_a_sent_message(home, tmp_path, hub):
+def test_the_status_route_reads_sent_for_a_sent_message(home, tmp_path, hub):
     transcript = add_session(home, "s1", home.path / "p1" / "app")
     h = hub(terminals_send=True)
     post(h.port, msg())
@@ -379,5 +383,5 @@ def test_the_status_route_reads_seen_for_a_sent_message(home, tmp_path, hub):
     conn = HTTPConnection("127.0.0.1", h.port, timeout=10)
     conn.request("GET", f"/api/sessions/send?sid=s1&client_id={CID}", headers={"Host": TAILNET, "Tailscale-User-Login": ANA})
     r = conn.getresponse()
-    assert r.status == 200 and json.loads(r.read())["status"] == "seen"
+    assert r.status == 200 and json.loads(r.read())["status"] == "sent"
     conn.close()
