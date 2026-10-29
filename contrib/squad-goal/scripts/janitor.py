@@ -1152,10 +1152,16 @@ if fd and fb:
 repo = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
 hb = pathlib.Path(os.environ.get("SG_HUB_DIR") or co / "runs" / ".hub") / "hub-board.json"; hm = st / "auto" / "janitor-h-last"
 if hb.exists() and (not hm.exists() or now - hm.stat().st_mtime > 600):
-    if not dry: hm.touch()
+    sys.path.insert(0, str(pathlib.Path(__file__).parent))
+    import ghthrottle
+    floor = int(os.environ.get("SG_GH_FLOOR") or 300)
+    low = ghthrottle.core_below(floor)
+    if low is not None:
+        say(f"skipped comment pass: core quota {low} is under SG_GH_FLOOR {floor}; the next pass reads again")
+    elif not dry: hm.touch()
     try: items = json.loads(hb.read_text()).get("items", [])
     except Exception: items = []
-    for it in items:
+    for it in (items if low is None else []):
         n = it.get("n"); stt = it.get("st"); op = it.get("s") == "open"
         if not (isinstance(n, int) and n >= 1102): continue
         if stt in ("Done", "Closed") and op:
@@ -1168,7 +1174,9 @@ if hb.exists() and (not hm.exists() or now - hm.stat().st_mtime > 600):
                     if not dry: mk.touch()
             continue
         if not (op and stt in ("Todo", "Blocked", "In Progress", "Doing", "Code Review", "Code Complete")): continue
-        cm = [x.split("\t", 1) for x in sh("gh", "api", f"repos/{repo}/issues/{n}/comments?per_page=100", "--paginate", "--jq", r'.[]|[.created_at,(.body|gsub("\n";" "))]|join("\t")').splitlines() if "\t" in x]
+        os.environ["SG_GH_PASS"] = "janitor"
+        r, comments = door("gh_pages", f"repos/{repo}/issues/{n}/comments?per_page=100", "-q", r'.[]|[.created_at,(.body|gsub("\\n";" "))]|join("\\t")')
+        cm = [x.split("\t", 1) for x in comments.splitlines() if "\t" in x] if r == 0 else []
         reds = 0
         for _, b in cm:
             if "the fork suite failed after merging" in b: reds += 1
