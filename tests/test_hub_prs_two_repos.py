@@ -248,3 +248,34 @@ def test_a_repository_the_hub_was_not_told_to_read_is_never_read(hub, monkeypatc
     monkeypatch.setattr(hub, "_issue_cache", {})
     hub.issue_detail(1809, "someone/unlisted")
     assert asked and asked[0].startswith(f"repos/{EMU}/issues/1809"), f"an unlisted repository is never read: {asked}"
+
+
+# --- the Open PRs tile counts every open pull request of the repository (#851) -------------------------------------
+
+def _quiet_branches(monkeypatch, hub):
+    monkeypatch.setattr(hub, "open_branches_of", lambda repo: [])
+    monkeypatch.setattr(hub, "landed_branches_of", lambda repo: [])
+
+
+def test_an_open_pr_on_no_squad_branch_is_counted_in_the_open_prs_tile(hub, monkeypatch):
+    _quiet_branches(monkeypatch, hub)
+    monkeypatch.setattr(hub, "open_prs_of", lambda repo: hub.prs_from_graphql(_payload([737], "dev to staging"), repo), raising=False)
+    prs, _, errs = hub.prs_pass(repos=[EMU])
+    assert errs == [] and 737 in {p["n"] for p in prs}, "a hand-opened pull request reaches the open PRs read"
+    assert _served(hub, monkeypatch, prs)["n"] == 1, "the Open PRs tile counts it"
+
+
+def test_a_rate_limited_read_shows_the_open_prs_tile_as_unknown_not_zero(hub, monkeypatch):
+    def refused(repo):
+        raise RuntimeError("HTTP 403 API rate limit exceeded")
+    _quiet_branches(monkeypatch, hub)
+    monkeypatch.setattr(hub, "open_branches_of", refused)
+    monkeypatch.setattr(hub, "open_prs_of", lambda repo: [], raising=False)
+    prs, _, errs = hub.prs_pass(repos=[EMU])
+    column = _served(hub, monkeypatch, prs, errs=errs)
+    assert errs and "rate limit" in errs[0], "the refusal is named on the column"
+    assert column["n"] is None, f"a failed read is unknown, never a count of zero: {column['n']!r}"
+
+
+def test_an_open_prs_tile_reads_zero_only_when_every_repository_answered(hub, monkeypatch):
+    assert _served(hub, monkeypatch, [], errs=[])["n"] == 0, "no open PR and no failed read is a true zero"
