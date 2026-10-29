@@ -4159,6 +4159,15 @@ def sessions_payload():
     """What /api/sessions serves: this profile's live sessions, grouped by project (#833)."""
     return sessions.list_sessions(os.environ.get("SG_PROFILE", ""), profiles_of=profiles_of_cwd)
 
+def conversation_payload(query):
+    """What /api/sessions/conversation serves: one page of a live session of this profile, None when it is not one (#840)."""
+    q = urllib.parse.parse_qs(query)
+    before = (q.get("before") or [""])[0]
+    return sessions.conversation(os.environ.get("SG_PROFILE", ""), (q.get("sid") or [""])[0], int(before) if before.isdigit() else None,
+                                 profiles_of=profiles_of_cwd)
+
+MOBILE_CSP = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self'"
+
 GESTURE_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-gesture.js").read_text()
 MOBILE_PAGE = (pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text().replace("/*GESTURE*/", GESTURE_JS).replace("/*BOARD_FILTER*/", BOARD_FILTER_JS)
 MOBILE_SHELL = ["/mobile/", "/mobile/manifest.webmanifest", "/mobile/icon.svg"]
@@ -4333,10 +4342,16 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/speed"): body, ct = json.dumps(speed()).encode(), "application/json"
         elif self.path.startswith("/api/load"): body, ct = json.dumps(load_payload()).encode(), "application/json"
         elif self.path.startswith("/api/status"): body, ct = json.dumps(status_payload()).encode(), "application/json"
+        elif self.path.startswith("/api/sessions/conversation"):
+            page = conversation_payload(self.path.partition("?")[2])
+            if page is None: return self.not_found()
+            body, ct = json.dumps(page).encode(), "application/json"
         elif self.path.startswith("/api/sessions"): body, ct = json.dumps(sessions_payload()).encode(), "application/json"
         elif (asset := MOBILE_ASSETS.get(self.path.split("?", 1)[0])): body, ct = asset
         else: body, ct = served_page(a.login).encode(), "text/html; charset=utf-8"
-        self.send_response(200); self.send_header("Content-Type", ct); self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(body)
+        self.send_response(200); self.send_header("Content-Type", ct); self.send_header("Cache-Control", "no-store")
+        if self.path.split("?", 1)[0] in ("/mobile", "/mobile/"): self.send_header("Content-Security-Policy", MOBILE_CSP)
+        self.end_headers(); self.wfile.write(body)
 
     def do_POST(self):
         # a cross-site page must not be able to write: a loopback write needs our own origin, a tailnet write the tailnet origin (the seam), and a JSON body

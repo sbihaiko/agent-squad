@@ -100,6 +100,7 @@ def test_note(slug, apps):
 
 
 REWRITTEN = (b"text/html", b"application/json", b"application/manifest+json", b"text/javascript")
+VERBATIM = ("/api/sessions",)   # a transcript's text quotes paths: the routing rewrite never touches it
 
 
 def rewrite(body, slug):
@@ -166,7 +167,8 @@ def server(port, apps):
             finally: self.wfile = real
             head, sep, body = buf.getvalue().partition(b"\r\n\r\n")
             head = re.sub(rb"(?im)^(Location: )/(?!/)", rb"\1/" + slug.encode() + b"/", head)   # a redirect to this repository's own path keeps its slug
-            real.write(head + sep + (rewrite(body, slug) if any(t in head for t in REWRITTEN) else body))
+            verbatim = self.path.split("?", 1)[0].startswith(VERBATIM)
+            real.write(head + sep + (rewrite(body, slug) if not verbatim and any(t in head for t in REWRITTEN) else body))
 
         def do_GET(self): self._route("GET")
         def do_POST(self): self._route("POST")

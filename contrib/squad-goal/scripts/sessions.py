@@ -8,6 +8,7 @@ RECORD_VERSION = 1
 STATUSES = ("busy", "idle", "waiting")
 SID = re.compile(r"[A-Za-z0-9-]{1,64}")
 TAIL_BYTES = 256 * 1024
+TURN_LIMIT = 200
 PREVIEW_CHARS = 200
 UID = os.getuid()
 CREDENTIAL = re.compile(r"sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{16,}|Bearer\s+[A-Za-z0-9._~+/=-]+")
@@ -32,9 +33,9 @@ def _open_file(dir_fd, name):
         os.close(fd); raise PermissionError(f"{name} is not a private regular file")
     return fd
 
-def _read_under_home(parts, limit=None):
+def _read_under_home(parts, limit=None, end=None):
     """Bytes of a file under the hub's Claude folder, walked by descriptors: no link followed at any level, owner and mode
-    checked on the descriptor opened. The last `limit` bytes when the file is longer; the flag says it was cut."""
+    checked on the descriptor opened. The `limit` bytes before `end` (the file's end when None). Also the offset of the first byte."""
     *dirs, name = parts
     dfd = os.open(claude_home(), os.O_RDONLY | os.O_DIRECTORY)
     try:
@@ -46,11 +47,13 @@ def _read_under_home(parts, limit=None):
         os.close(dfd)
     try:
         size = os.fstat(fd).st_size
-        cut = limit is not None and size > limit
-        if cut: os.lseek(fd, size - limit, os.SEEK_SET)
-        chunks = []
-        while chunk := os.read(fd, 65536): chunks.append(chunk)
-        return b"".join(chunks), cut
+        stop = size if end is None else min(end, size)
+        start = max(0, stop - limit) if limit is not None else 0
+        os.lseek(fd, start, os.SEEK_SET)
+        chunks, left = [], stop - start
+        while left > 0 and (chunk := os.read(fd, min(65536, left))):
+            chunks.append(chunk); left -= len(chunk)
+        return b"".join(chunks), start
     finally:
         os.close(fd)
 
@@ -106,9 +109,9 @@ def profiles_of(cwd):
 def read_last_message(cwd, sid, secrets=()):
     """The text of the last turn in the session's transcript, redacted and cut to a preview; None when it cannot be read."""
     if SID.fullmatch(sid) is None: return None
-    try: raw, cut = _read_under_home(["projects", re.sub(r"[^A-Za-z0-9]", "-", cwd), f"{sid}.jsonl"], limit=TAIL_BYTES)
+    try: raw, start = _read_under_home(["projects", re.sub(r"[^A-Za-z0-9]", "-", cwd), f"{sid}.jsonl"], limit=TAIL_BYTES)
     except OSError as e: _log(f"hub: transcript of session {sid} unreadable: {type(e).__name__}", secrets); return None
-    lines = raw.decode(errors="replace").splitlines()[1 if cut else 0:]
+    lines = raw.decode(errors="replace").splitlines()[1 if start else 0:]
     last = ""
     for line in lines:
         try: turn = json.loads(line)
@@ -118,9 +121,49 @@ def read_last_message(cwd, sid, secrets=()):
         if text.strip(): last = text.strip()
     return redact(last, secrets)[:PREVIEW_CHARS]
 
-def list_sessions(profile, profiles_of=profiles_of):
-    """This profile's live sessions: each record that passes every check, grouped by project, waiting sessions first."""
-    rows = []
+def _turns_of(obj):
+    kind, uid = obj.get("type"), str(obj.get("uuid") or "")
+    content = (obj.get("message") or {}).get("content")
+    if isinstance(content, str): content = [{"type": "text", "text": content}]
+    out = []
+    for p in content if isinstance(content, list) else []:
+        if not isinstance(p, dict): continue
+        text = p.get("text")
+        if kind == "user" and p.get("type") == "text" and isinstance(text, str) and text: out.append(("owner", uid, text))
+        elif kind == "assistant" and p.get("type") == "text" and isinstance(text, str) and text: out.append(("answer", uid, text))
+        elif kind == "assistant" and p.get("type") == "tool_use": out.append(("tool", uid, f"tool: {p.get('name', '')}"))
+    return out
+
+def read_conversation(cwd, sid, secrets=(), before=None):
+    """One page of the session's conversation, oldest first: the newest whole lines before the byte offset `before` (the end of
+    the transcript when None), within TURN_LIMIT turns and one TAIL_BYTES window. `next` is the offset of the older page."""
+    if SID.fullmatch(sid) is None: return None
+    try: raw, start = _read_under_home(["projects", re.sub(r"[^A-Za-z0-9]", "-", cwd), f"{sid}.jsonl"], limit=TAIL_BYTES, end=before)
+    except OSError as e: _log(f"hub: transcript of session {sid} unreadable: {type(e).__name__}", secrets); return None
+    lines, at = [], start
+    for i, piece in enumerate(raw.split(b"\n")):
+        offset, at = at, at + len(piece) + 1
+        if (i == 0 and start) or not piece: continue
+        try: obj = json.loads(piece)
+        except ValueError: continue
+        if isinstance(obj, dict): lines.append((offset, _turns_of(obj)))
+    kept, turns = [], 0
+    for offset, found in reversed(lines):
+        if kept and turns + len(found) > TURN_LIMIT: break
+        kept.append((offset, found)); turns += len(found)
+    kept.reverse()
+    out = [{"id": uid, "role": role, "text": redact(text, secrets)} for _, found in kept for role, uid, text in found]
+    cursor = kept[0][0] if kept else start
+    return {"turns": out, "next": cursor or None}
+
+def conversation(profile, sid, before=None, profiles_of=profiles_of):
+    """One page of a live session's conversation when the session is this profile's; None for any other session."""
+    for rec, secret in live_sessions(profile, profiles_of):
+        if rec["sessionId"] == sid: return read_conversation(rec["cwd"], sid, [secret], before)
+    return None
+
+def live_sessions(profile, profiles_of=profiles_of):
+    """Each record that passes every check and belongs to this profile, with its token: the one membership rule for the routes."""
     for rec in _records():
         sid, pid, cwd = rec["sessionId"], rec["pid"], rec["cwd"]
         if not _socket_ok(rec["socket"]) or not _alive_since(pid, rec["startedAt"]): continue
@@ -128,7 +171,13 @@ def list_sessions(profile, profiles_of=profiles_of):
         if found != [profile]:
             if len(found) > 1: _log(f"hub: session {sid} matches profiles {', '.join(found)}, listed in none", once=True)
             continue
-        secret = _secret(sid)
+        yield rec, _secret(sid)
+
+def list_sessions(profile, profiles_of=profiles_of):
+    """This profile's live sessions: each record that passes every check, grouped by project, waiting sessions first."""
+    rows = []
+    for rec, secret in live_sessions(profile, profiles_of):
+        sid, cwd = rec["sessionId"], rec["cwd"]
         rows.append({"project": os.path.basename(cwd.rstrip("/")) or cwd, "sid": sid, "name": rec["name"], "status": rec["status"],
                      "waiting": rec["status"] == "waiting", "last": read_last_message(cwd, sid, [secret]) or ""})
     groups = {}

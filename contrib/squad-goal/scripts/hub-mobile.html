@@ -74,6 +74,16 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 #5aa9ff}
 #runview-head button{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:0 12px}
 #runview-name{font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #runframe{position:absolute;top:52px;left:0;width:100%;height:calc(100% - 52px);border:0}
+#termview{position:fixed;inset:0;z-index:30;background:var(--bg);display:flex;flex-direction:column}
+#termview[hidden]{display:none}
+#termview-head{display:flex;align-items:center;gap:8px;height:52px;padding:0 12px;background:var(--panel);border-bottom:1px solid var(--line)}
+#termview-head button,#termview-older{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:0 12px}
+#termview-name{font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#termview-older{margin:8px 12px 0}
+#termview-turns{flex:1;overflow:auto;padding:8px 12px;display:grid;gap:8px;align-content:start}
+.turn{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font:14px system-ui,sans-serif}
+.turn b{display:block;color:var(--mute);font-size:12px;margin-bottom:2px}
+.turn div{white-space:pre-wrap;overflow-wrap:anywhere}
 #edge{position:absolute;top:52px;bottom:0;left:0;width:24px;z-index:2;touch-action:pan-y}
 </style>
 <header>
@@ -119,7 +129,11 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 #5aa9ff}
 <div id="runs-ended" class="runlist"></div>
 <p id="runs-msg" class="msg"></p>
 </section>
-<section data-panel="terminals" hidden><h2>Terminals</h2><p>Placeholder: the terminals tab is built by its own ticket.</p></section>
+<section data-panel="terminals" hidden>
+<h2>Terminals</h2>
+<div id="sessions" class="runlist"></div>
+<p id="sessions-msg" class="msg"></p>
+</section>
 <section data-panel="more" hidden>
 <h2>More</h2>
 <div id="more-menu">
@@ -161,6 +175,12 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 #5aa9ff}
 <div id="sh-body"></div>
 <button id="sh-next" type="button">Next card</button>
 </div>
+<section id="termview" hidden>
+<div id="termview-head"><button id="termview-back" type="button">Back</button><span id="termview-name"></span></div>
+<button id="termview-older" type="button" hidden>Older turns</button>
+<div id="termview-turns"></div>
+<p id="termview-msg" class="msg"></p>
+</section>
 <section id="runview" hidden>
 <div id="runview-head"><button id="runview-back" type="button">Back</button><span id="runview-name"></span></div>
 <iframe id="runframe" title="Run dashboard"></iframe>
@@ -191,6 +211,7 @@ function show(name) {
   if (name === "more") showMore();
   else moreScreen = null;
   if (name === "runs") loadRuns();
+  if (name === "terminals") loadSessions();
 }
 tabs.forEach(b => b.onclick = () => show(b.dataset.tab));
 
@@ -490,6 +511,83 @@ document.addEventListener("touchend", e => {
   if (g && g.act === "refresh" && runsShown() && $("runview").hidden) loadRuns();
 }, { passive: true });
 setInterval(() => { if (runsShown() && $("runview").hidden) loadRuns(); }, 10000);
+// terminals:begin
+const termOpen = () => !$("termview").hidden;
+let termSid = null, termCursor = null, termLast = null, termBusy = false;
+function sessionRow(project, s) {
+  const b = document.createElement("button"), name = document.createElement("b"), meta = document.createElement("div");
+  b.type = "button"; b.className = "runrow"; b.dataset.sid = s.sid; b.dataset.name = s.name;
+  name.textContent = s.name;
+  meta.className = "mut";
+  meta.textContent = [project, s.status, s.last].filter(Boolean).join(" · ");
+  b.append(name, meta);
+  return b;
+}
+function turnRow(t) {
+  const d = document.createElement("div"), who = document.createElement("b"), text = document.createElement("div");
+  d.className = "turn"; who.textContent = t.role; text.textContent = t.text;
+  d.append(who, text);
+  return d;
+}
+async function loadSessions() {
+  try {
+    const d = await call("/api/sessions");
+    $("sessions").replaceChildren(...d.groups.flatMap(g => g.sessions.map(s => sessionRow(g.project, s))));
+    $("sessions-msg").textContent = "";
+  } catch (e) { $("sessions-msg").textContent = e.message; }
+}
+function readConversation(before) {
+  return call("/api/sessions/conversation?sid=" + encodeURIComponent(termSid) + (before ? "&before=" + before : ""));
+}
+async function loadConversation() {
+  if (termBusy || !termOpen() || !termSid) return;
+  termBusy = true;
+  const sid = termSid, el = $("termview-turns");
+  try {
+    const page = await readConversation(null);
+    if (sid !== termSid) return;
+    const keys = page.turns.map(t => JSON.stringify(t));
+    const atEnd = termLast === null || el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    if (termLast === null) termCursor = page.next;
+    const fresh = page.turns.slice(termLast === null ? 0 : keys.lastIndexOf(termLast) + 1);
+    if (fresh.length) { el.append(...fresh.map(turnRow)); termLast = keys[keys.length - 1]; }
+    if (atEnd) el.scrollTop = el.scrollHeight;
+    $("termview-older").hidden = termCursor === null;
+    $("termview-msg").textContent = "";
+  } catch (e) { if (sid === termSid) $("termview-msg").textContent = e.message; }
+  finally { termBusy = false; }
+}
+async function loadOlder() {
+  if (termBusy || !termOpen() || termCursor === null) return;
+  termBusy = true;
+  const sid = termSid, el = $("termview-turns"), before = el.scrollHeight;
+  try {
+    const page = await readConversation(termCursor);
+    if (sid !== termSid) return;
+    el.prepend(...page.turns.map(turnRow));
+    el.scrollTop += el.scrollHeight - before;
+    termCursor = page.next;
+    $("termview-older").hidden = termCursor === null;
+  } catch (e) { if (sid === termSid) $("termview-msg").textContent = e.message; }
+  finally { termBusy = false; }
+}
+function openConversation(sid, name) {
+  termSid = sid; termCursor = null; termLast = null;
+  $("termview-turns").replaceChildren();
+  $("termview-name").textContent = name;
+  $("termview-older").hidden = true;
+  $("termview-msg").textContent = "";
+  $("termview").hidden = false;
+  loadConversation();
+}
+function closeConversation() { $("termview").hidden = true; termSid = null; $("termview-turns").replaceChildren(); }
+$("sessions").onclick = e => { const b = e.target.closest(".runrow"); if (b) openConversation(b.dataset.sid, b.dataset.name); };
+$("termview-back").onclick = closeConversation;
+$("termview-older").onclick = loadOlder;
+$("termview-turns").onscroll = () => { if ($("termview-turns").scrollTop < 40) loadOlder(); };
+setInterval(loadConversation, 3000);
+setInterval(() => { if (!termOpen() && !document.querySelector('[data-panel="terminals"]').hidden) loadSessions(); }, 10000);
+// terminals:end
 const last = localStorage.getItem("squad-mobile-tab");
 show(tabs.some(b => b.dataset.tab === last) ? last : tabs[0].dataset.tab);
 </script>
