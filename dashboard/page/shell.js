@@ -112,7 +112,7 @@ async function loadGraph(text, name) {
   if (r.error) { setStatus(r.error, true); return false; }
   S.warnings = []; S.doc = r.doc; S.text = text; S.name = name.replace(/\.graph\.json$|\.json$/, ""); S.fileName = name; S.selected = null; S.link = null;
   S.handle = null; S.stamp = null; S.layoutHandle = null; S.layoutStamp = null; S.offerPending = null; hidePanels();
-  S.layout = Array.isArray(S.doc.nodes) ? core.autoLayout(S.doc) : {};
+  S.layout = Array.isArray(S.doc.nodes) ? core.autoLayout(S.doc, narrowScreen()) : {};
   S.baseText = core.saveText(text); S.baseLayout = JSON.stringify(S.layout);
   try { S.baseHash = (await core.hashChip(text)).full; } catch (e) { S.baseHash = null; }
   S.hist = core.histNew(100);

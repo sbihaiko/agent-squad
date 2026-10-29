@@ -281,7 +281,7 @@ class RunServer(ThreadingHTTPServer):
         return {"whole": whole, "nodes": sorted(held), "released": sorted(released)}
 
     def info(self):
-        return {"name": self.folder.name, "folder": str(self.folder), "issues": issue_count(self.folder), "held": held_count(self.folder), "watch_seconds": self.watch}
+        return {"name": self.folder.name, "folder": str(self.folder), "issues": issue_count(self.folder), "held": held_count(self.folder), "ended": run_ended(self.folder), "watch_seconds": self.watch}
 
     def serve_until_idle(self):
         while self.clock() - self.last < self.idle:

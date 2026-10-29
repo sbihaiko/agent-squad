@@ -2092,7 +2092,7 @@ function layoutModule() {
   //    edge crosses a third node on its way across the page.
   // The grid: a column is COL_STEP wide, a row ROW_STEP tall, and the first cell sits ORIGIN from the corner.
   const COL_STEP = 230, ROW_STEP = 96, ORIGIN = 20;
-  function autoLayout(doc) {
+  function autoLayout(doc, narrow) {
     const nodes = Object.fromEntries(doc.nodes.map((n) => [n.name, n]));
     const names = Object.keys(nodes);
     const kidsOf = (nm) => graphKids(nodes[nm]).filter((c) => nodes[c]);
@@ -2113,6 +2113,10 @@ function layoutModule() {
       }
     }
     const pos = {};
+    if (narrow) {
+      [...names].sort((a, b) => layer[a] - layer[b] || order[a] - order[b]).forEach((n, i) => { pos[n] = { x: ORIGIN, y: ORIGIN + i * ROW_STEP }; });
+      return pos;
+    }
     for (const n of names) pos[n] = { x: ORIGIN + layer[n] * COL_STEP, y: ORIGIN + order[n] * ROW_STEP };
     return pos;
   }
@@ -2664,7 +2668,7 @@ async function loadGraph(text, name) {
   if (r.error) { setStatus(r.error, true); return false; }
   S.warnings = []; S.doc = r.doc; S.text = text; S.name = name.replace(/\.graph\.json$|\.json$/, ""); S.fileName = name; S.selected = null; S.link = null;
   S.handle = null; S.stamp = null; S.layoutHandle = null; S.layoutStamp = null; S.offerPending = null; hidePanels();
-  S.layout = Array.isArray(S.doc.nodes) ? core.autoLayout(S.doc) : {};
+  S.layout = Array.isArray(S.doc.nodes) ? core.autoLayout(S.doc, narrowScreen()) : {};
   S.baseText = core.saveText(text); S.baseLayout = JSON.stringify(S.layout);
   try { S.baseHash = (await core.hashChip(text)).full; } catch (e) { S.baseHash = null; }
   S.hist = core.histNew(100);
@@ -3804,7 +3808,7 @@ function openStream(path, h) {
 }
 async function connectServed() {
   let name = "run", issues = null;
-  try { const r = await fetch("run/info.json", { cache: "no-store" }); if (r.ok) { const j = await r.json(); name = j.name || name; if (typeof j.issues === "number" && j.issues > 0) issues = j.issues; S.issueHeld = typeof j.held === "number" ? j.held : 0; } } catch (e) { /* the server went away: the load below says so */ }
+  try { const r = await fetch("run/info.json", { cache: "no-store" }); if (r.ok) { const j = await r.json(); name = j.name || name; if (j.ended) setStatus("This run ended."); if (typeof j.issues === "number" && j.issues > 0) issues = j.issues; S.issueHeld = typeof j.held === "number" ? j.held : 0; } } catch (e) { /* the server went away: the load below says so */ }
   document.title = `${document.title} \u00b7 ${name}`;
   $("b-folder").style.display = "none"; $("l-folder").style.display = "none"; $("l-record").style.display = "none";
   const src = core.httpSource((p) => fetch(p, { cache: "no-store" }), name, openStream);
@@ -3916,7 +3920,7 @@ async function offerDraft() {
   $("b-restore").onclick = async () => {
     const r = core.parseImport(o.text);
     if (r.error) { setStatus("The draft is not a graph: " + r.error, true); return; }
-    S.doc = r.doc; S.text = o.text; S.layout = o.layout || core.autoLayout(S.doc); S.hist = core.histNew(100); S.selected = null; S.offerPending = null; box.hidden = true;
+    S.doc = r.doc; S.text = o.text; S.layout = o.layout || core.autoLayout(S.doc, narrowScreen()); S.hist = core.histNew(100); S.selected = null; S.offerPending = null; box.hidden = true;
     setStatus(`Restored the draft of ${o.name}. It is not saved to the file yet.`);
     await recompute(); fit();
   };
@@ -4027,6 +4031,7 @@ document.body.appendChild(sideProbe);
 function sidePx(tok) { sideProbe.style.width = `var(${tok})`; return Math.round(sideProbe.getBoundingClientRect().width); }
 // A narrow window turns the drawer into a bottom sheet: the same variable is its height and the grip is sideways.
 function sideRow() { return window.matchMedia("(max-width: 900px)").matches; }
+function narrowScreen() { return window.matchMedia("(max-width: 600px)").matches; }
 function sideWidth() { const r = $("left").getBoundingClientRect(); return Math.round(sideRow() ? r.height : r.width); }
 function sideAria(now) {
   const grip = $("side-grip");

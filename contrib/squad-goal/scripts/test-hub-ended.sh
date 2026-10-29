@@ -13,6 +13,6 @@ spec = importlib.util.spec_from_file_location("hub", sys.argv[1]); hub = importl
 hub.project_dirs = lambda: [pathlib.Path(sys.argv[2])]
 print(json.dumps(sorted(r["id"] for r in hub.ended_today())))
 PY
-got=$(env HOME="$T/home" SG_CHECKOUT="$T/co" SG_HUB_DIR="$T/co" SG_STATE="$T/st" python3 "$T/probe.py" "$src" "$T/runs" 2>"$T/err")
+got=$(env HOME="$T/home" SG_REPO=x/y SG_OWNER=x SG_PROJECT=4 SG_CHECKOUT="$T/co" SG_HUB_DIR="$T/co" SG_STATE="$T/st" python3 "$T/probe.py" "$src" "$T/runs" 2>"$T/err")
 if [ "$got" = '["run-today"]' ]; then ok "today's ended run is listed and yesterday's is not"; else ko "ended list was $got: $(tail -1 "$T/err")"; fi
 exit $fail

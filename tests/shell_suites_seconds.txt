@@ -53,6 +53,7 @@ test-hub-adapter-errors.sh 0.14
 test-hub-caps.sh 0.41
 test-hub-ci.sh 0.08
 test-hub-demote.sh 0.07
+test-hub-ended.sh 0.20
 test-hub-killed.sh 0.06
 test-hub-metrics.sh 1.52
 test-hub-promote.sh 0.28

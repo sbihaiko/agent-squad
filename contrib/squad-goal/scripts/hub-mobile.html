@@ -64,6 +64,17 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 #5aa9ff}
 .row{padding:10px 4px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
 .row .mut{color:var(--mute);font-size:13px}
 [data-screen] .msg{color:var(--err)}
+.sub{font-size:14px;color:var(--mute);margin:14px 0 6px}
+.runlist{display:grid;gap:8px}
+.runrow{display:block;width:100%;text-align:left;min-height:44px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:10px 12px;font:14px system-ui,sans-serif}
+.runrow .mut{color:var(--mute);font-size:12px;margin-top:2px}
+#runview{position:fixed;inset:0;z-index:30;background:var(--bg)}
+#runview[hidden]{display:none}
+#runview-head{display:flex;align-items:center;gap:8px;height:52px;padding:0 12px;background:var(--panel);border-bottom:1px solid var(--line)}
+#runview-head button{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:0 12px}
+#runview-name{font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#runframe{position:absolute;top:52px;left:0;width:100%;height:calc(100% - 52px);border:0}
+#edge{position:absolute;top:52px;bottom:0;left:0;width:24px;z-index:2;touch-action:pan-y}
 </style>
 <header>
 <select id="profile" aria-label="Profile" hidden></select>
@@ -100,7 +111,14 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 #5aa9ff}
 <div id="cards" data-role="gap"></div>
 <p id="bmsg"></p>
 </section>
-<section data-panel="runs" hidden><h2>Runs</h2><p>Placeholder: the runs tab is built by its own ticket.</p></section>
+<section data-panel="runs" hidden>
+<h2>Runs</h2>
+<h3 class="sub">Live</h3>
+<div id="runs-live" class="runlist"></div>
+<h3 class="sub">Ended today</h3>
+<div id="runs-ended" class="runlist"></div>
+<p id="runs-msg" class="msg"></p>
+</section>
 <section data-panel="terminals" hidden><h2>Terminals</h2><p>Placeholder: the terminals tab is built by its own ticket.</p></section>
 <section data-panel="more" hidden>
 <h2>More</h2>
@@ -143,6 +161,11 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 #5aa9ff}
 <div id="sh-body"></div>
 <button id="sh-next" type="button">Next card</button>
 </div>
+<section id="runview" hidden>
+<div id="runview-head"><button id="runview-back" type="button">Back</button><span id="runview-name"></span></div>
+<iframe id="runframe" title="Run dashboard"></iframe>
+<div id="edge" data-role="edge"></div>
+</section>
 <nav>
 <button data-tab="status">Status</button>
 <button data-tab="board">Board</button>
@@ -167,6 +190,7 @@ function show(name) {
   else { view = afterGesture(view, { act: "close" }); renderSheet(); }
   if (name === "more") showMore();
   else moreScreen = null;
+  if (name === "runs") loadRuns();
 }
 tabs.forEach(b => b.onclick = () => show(b.dataset.tab));
 
@@ -432,6 +456,40 @@ setInterval(loadMore, 10000);
   } catch (e) {}
 })();
 
+const runsShown = () => !document.querySelector('[data-panel="runs"]').hidden;
+const ago = s => s < 3600 ? Math.floor(s / 60) + " min" : (s / 3600).toFixed(1) + " h";
+function runRow(r, url) {
+  const b = document.createElement("button"), name = document.createElement("b"), meta = document.createElement("div");
+  b.type = "button"; b.className = "runrow"; b.dataset.url = url; b.dataset.name = r.label || r.id;
+  name.textContent = r.label || r.id;
+  meta.className = "mut";
+  meta.textContent = [r.badge, "age " + ago(r.age || 0), money(r.spend)].join(" · ");
+  b.append(name, meta);
+  return b;
+}
+async function loadRuns() {
+  try {
+    const [live, ended] = await Promise.all([call("/api/runs"), call("/api/ended")]);
+    $("runs-live").replaceChildren(...live.filter(r => r.live).map(r => runRow(r, r.url || "/dash/" + encodeURIComponent(r.id) + "/")));
+    $("runs-ended").replaceChildren(...ended.map(r => runRow(r, "/ended/" + encodeURIComponent(r.id))));
+    $("runs-msg").textContent = "";
+  } catch (e) { $("runs-msg").textContent = e.message; }
+}
+function openRun(url, name) { $("runframe").src = url; $("runview-name").textContent = name; $("runview").hidden = false; }
+function closeRun() { $("runview").hidden = true; $("runframe").src = "about:blank"; }
+for (const id of ["runs-live", "runs-ended"]) $(id).onclick = e => { const b = e.target.closest(".runrow"); if (b) openRun(b.dataset.url, b.dataset.name); };
+$("runview-back").onclick = closeRun;
+let rtouch = null;
+document.addEventListener("touchstart", e => { const p = e.touches[0]; rtouch = { x0: p.clientX, y0: p.clientY, atTop: window.scrollY === 0 }; }, { passive: true });
+document.addEventListener("touchend", e => {
+  if (!rtouch) return;
+  const p = e.changedTouches[0];
+  const g = runsGesture({ x0: rtouch.x0, dx: p.clientX - rtouch.x0, dy: p.clientY - rtouch.y0, atTop: rtouch.atTop });
+  rtouch = null;
+  if (g && g.act === "back" && !$("runview").hidden) closeRun();
+  if (g && g.act === "refresh" && runsShown() && $("runview").hidden) loadRuns();
+}, { passive: true });
+setInterval(() => { if (runsShown() && $("runview").hidden) loadRuns(); }, 10000);
 const last = localStorage.getItem("squad-mobile-tab");
 show(tabs.some(b => b.dataset.tab === last) ? last : tabs[0].dataset.tab);
 </script>

@@ -26,3 +26,10 @@ const afterGesture = (v, g) => {
   return v;
 };
 const afterOpen = (v, card) => ({ ...v, card, sheet: true });
+const EDGE_PX = 24, PULL_MIN = 60;
+const runsGesture = ({ x0, dx, dy, atTop }) => {
+  const ax = Math.abs(dx), ay = Math.abs(dy);
+  if (x0 <= EDGE_PX && dx >= SWIPE_MIN && ax > ay) return { act: "back" };
+  if (atTop && dy >= PULL_MIN && ay > ax) return { act: "refresh" };
+  return null;
+};

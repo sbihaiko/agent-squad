@@ -109,7 +109,7 @@ function openStream(path, h) {
 }
 async function connectServed() {
   let name = "run", issues = null;
-  try { const r = await fetch("run/info.json", { cache: "no-store" }); if (r.ok) { const j = await r.json(); name = j.name || name; if (typeof j.issues === "number" && j.issues > 0) issues = j.issues; S.issueHeld = typeof j.held === "number" ? j.held : 0; } } catch (e) { /* the server went away: the load below says so */ }
+  try { const r = await fetch("run/info.json", { cache: "no-store" }); if (r.ok) { const j = await r.json(); name = j.name || name; if (j.ended) setStatus("This run ended."); if (typeof j.issues === "number" && j.issues > 0) issues = j.issues; S.issueHeld = typeof j.held === "number" ? j.held : 0; } } catch (e) { /* the server went away: the load below says so */ }
   document.title = `${document.title} \u00b7 ${name}`;
   $("b-folder").style.display = "none"; $("l-folder").style.display = "none"; $("l-record").style.display = "none";
   const src = core.httpSource((p) => fetch(p, { cache: "no-store" }), name, openStream);

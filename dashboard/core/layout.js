@@ -20,7 +20,7 @@ function layoutModule() {
   //    edge crosses a third node on its way across the page.
   // The grid: a column is COL_STEP wide, a row ROW_STEP tall, and the first cell sits ORIGIN from the corner.
   const COL_STEP = 230, ROW_STEP = 96, ORIGIN = 20;
-  function autoLayout(doc) {
+  function autoLayout(doc, narrow) {
     const nodes = Object.fromEntries(doc.nodes.map((n) => [n.name, n]));
     const names = Object.keys(nodes);
     const kidsOf = (nm) => graphKids(nodes[nm]).filter((c) => nodes[c]);
@@ -41,6 +41,10 @@ function layoutModule() {
       }
     }
     const pos = {};
+    if (narrow) {
+      [...names].sort((a, b) => layer[a] - layer[b] || order[a] - order[b]).forEach((n, i) => { pos[n] = { x: ORIGIN, y: ORIGIN + i * ROW_STEP }; });
+      return pos;
+    }
     for (const n of names) pos[n] = { x: ORIGIN + layer[n] * COL_STEP, y: ORIGIN + order[n] * ROW_STEP };
     return pos;
   }

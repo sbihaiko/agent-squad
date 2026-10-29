@@ -8,8 +8,8 @@ import subprocess
 
 import pytest
 
-from tests.dashboard_helpers import OUT, core_bundle
 from squad.dashboard_server import RunServer
+from tests.dashboard_helpers import OUT, core_bundle
 
 NODE = shutil.which("node")
 DOC = {"root": "a", "nodes": [

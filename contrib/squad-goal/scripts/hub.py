@@ -1449,7 +1449,26 @@ def held_folder(name):
 def open_held(name, start=None):
     """The port of a dashboard server for a held run, started when none runs (dashboard_server.start), or None. A held run
     orphaned from active-runs has no server, so the hub starts one when the owner opens it (#689)."""
-    folder = held_folder(name)
+    return _open_run(name, held_folder(name), start)
+
+def ended_today():
+    """The run folders whose record ended on the machine's local day, latest end first. Each row carries its end time."""
+    today = dt.date.today(); now = time.time(); out = []
+    for d in sorted(project_dirs()):
+        for rd in d.glob("run-*"):
+            r = scan(rd / "record.jsonl")
+            if not r or r.get("verdict") is None or not r.get("t1"): continue
+            ended = float(r["t1"])
+            if dt.date.fromtimestamp(ended) != today: continue
+            row, _ = run_row(str(rd), "", [])
+            out.append({**row, "dir": str(rd), "live": False, "ended_at": ended, "age": max(0, int(now - ended))})
+    return sorted(out, key=lambda r: -r["ended_at"])
+
+def open_ended(name, start=None):
+    """The port of a dashboard server for a run that ended today, or None. dashboard_server.start reuses a server that runs (ADR-0118)."""
+    return _open_run(name, next((r["dir"] for r in ended_today() if r["id"] == name), None), start)
+
+def _open_run(name, folder, start):
     if folder is None: return None
     if start is None: start = _start_dashboard
     try: return int(start(folder))
@@ -4250,9 +4269,9 @@ class H(BaseHTTPRequestHandler):
         a = access(self, "GET")
         if not a.allowed: return self.refuse(a.reason, page=self.path.split("?", 1)[0] in ("/mobile", "/mobile/"))
         if request_target(self).startswith(DASH_PREFIXES): return self.dash("GET")
-        if self.path.startswith("/held/"):   # a run the childcc pass holds: its dashboard, started when none runs (#689)
-            name = re.sub(r"[^\w-]", "", self.path[6:].split("?")[0])
-            if open_held(name) is None: return self.not_found()
+        if self.path.startswith(("/held/", "/ended/")):   # a run the childcc pass holds, or one that ended today: its dashboard (#689, #830)
+            name = re.sub(r"[^\w-]", "", self.path.split("/", 2)[2].split("?")[0])
+            if (open_held if self.path.startswith("/held/") else open_ended)(name) is None: return self.not_found()
             refresh_runs()   # the run list names the new dashboard, so the forward finds it
             self.send_response(302); self.send_header("Location", f"/dash/{name}/"); self.send_header("Content-Length", "0"); self.end_headers(); return
         if self.path.startswith("/test/"):   # a test.sh pass: its log, refreshed while it runs
@@ -4267,6 +4286,7 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/runs"): body, ct = json.dumps(run_list()).encode(), "application/json"
         elif self.path.startswith("/api/adapter-errors"): body, ct = json.dumps(adapter_errors()).encode(), "application/json"
         elif self.path.startswith("/api/delivery"): body, ct = json.dumps(delivery()).encode(), "application/json"
+        elif self.path.startswith("/api/ended"): body, ct = json.dumps(ended_today()).encode(), "application/json"
         elif self.path.startswith("/api/stats"): body, ct = json.dumps(stats((re.search(r"period=(\w+)", self.path) or [0, "day"])[1] if re.search(r"period=(hour|day|month)", self.path) else "day", (re.search(r"src=(sub|api)", self.path) or [0, "both"])[1])).encode(), "application/json"
         elif self.path.startswith("/api/issue"):
             m = re.search(r"[?&]n=(\d{1,6})\b", self.path); rr = re.search(r"[?&]r=([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)", self.path)
