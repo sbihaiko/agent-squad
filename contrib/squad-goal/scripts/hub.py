@@ -2505,9 +2505,11 @@ def board():
                 # the entry is dropped. The window is the read's clock, never the wall clock, so a cache that stopped
                 # updating never expires a move no read has had a window to agree with (#651).
                 expired[str(i["i"])] = (i["n"], recorded, st)
+            elif read_carried(at, read_at):
+                pass   # the read began after the move and holds another column: the read stands at once, and the entry waits its window for a lagging read to agree
             else:
-                # The read began in or before the move's second, or contradicts it: draw the move at once and keep the
-                # entry until a read that began after the move agrees (#650). A column that matches by coincidence is no proof.
+                # The read began in or before the move's second: draw the move at once and keep the entry until a read that
+                # began after the move agrees (#650). A column that matches by coincidence is no proof.
                 st, pending = recorded, True
                 fz = _columns_module.view_column(recorded, closed, i.get("l"))[1]   # the freeze of the column drawn, over the row's own closedness, never the read's
         row = {"n": i["n"], "t": i["t"], "c": i.get("c"), "l": i.get("l") or []}
