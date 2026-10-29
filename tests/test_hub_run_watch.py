@@ -100,8 +100,8 @@ def test_project_dirs_and_last_model_read_worktree_runs(hub, tmp_path, monkeypat
         d.mkdir(parents=True)
     monkeypatch.setattr(hub, "CHECKOUT", str(co))
     monkeypatch.setattr(hub, "sh", lambda *a: "")
-    monkeypatch.delenv("SG_PROJECTS", raising=False)
-    monkeypatch.delenv("SG_FORK_DIR", raising=False)
+    monkeypatch.setattr(hub, "PROJECTS", "")
+    monkeypatch.setattr(hub, "FORK_DIR", "")
     assert set(hub.project_dirs()) == set(roots)
     rec = co / "worktrees/run/k1/runs/run-1/record.jsonl"
     rec.parent.mkdir()
