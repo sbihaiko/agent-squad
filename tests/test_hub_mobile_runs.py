@@ -13,11 +13,13 @@ SCRIPTS = ROOT / "contrib/squad-goal/scripts"
 PAGE = SCRIPTS / "hub-mobile.html"
 GESTURE_JS = SCRIPTS / "hub-mobile-gesture.js"
 BOARD_FILTER_JS = SCRIPTS / "board-filter.js"
+RUN_JS = SCRIPTS / "hub-mobile-run.js"
 NODE = shutil.which("node")
 
 
 def page():
     return (PAGE.read_text().replace("/*GESTURE*/", GESTURE_JS.read_text())
+            .replace("/*RUN*/", RUN_JS.read_text())
             .replace("/*BOARD_FILTER*/", BOARD_FILTER_JS.read_text()))
 
 

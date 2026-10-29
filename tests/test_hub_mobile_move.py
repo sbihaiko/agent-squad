@@ -139,9 +139,16 @@ const reply = (body, status, ct) => ({
 });
 const jsonReply = (o, status) => reply(JSON.stringify(o), status || 200, "application/json");
 const boot = {
-  __state: { board: __BOARD__, promote: __PROMOTE__, reads: 0 },
+  __state: { board: __BOARD__, promote: __PROMOTE__, reads: 0, routes: __ROUTES__, posts: [] },
   __skew: 0,
   fetch: async (path, opts) => {
+    const name = String(path).split("?")[0];            // a route named here answers as the hub would; a write is recorded
+    if (boot.__state.routes[name]) {
+      if (opts && opts.method === "POST") boot.__state.posts.push({ path: name, opts });
+      const q = boot.__state.routes[name];
+      const row = q.length > 1 ? q.shift() : q[0];
+      return reply(row.body, row.status || 200, row.ct || "application/json");
+    }
     if (String(path).startsWith("/api/promote")) {
       const p = boot.__state.promote || { status: 200, ct: "application/json", body: "{}" };
       return reply(p.body, p.status, p.ct);
@@ -213,12 +220,14 @@ BOARD_ONE = {"t": 1, "err": None, "labels": [], "lc": {}, "cases": [], "flow": N
                         {"name": "Todo", "n": 0, "items": []}]}
 
 
-def run_page(page, driver, board=None, promote=None):
+def run_page(page, driver, board=None, promote=None, routes=None):
     """The served mobile page booted under node over the stub DOM, then one driver run inside it. The driver is one async
-    body: it reads and sets the page's own names (`pending`, `$`, `stageMove`) and returns the facts the test asserts."""
+    body: it reads and sets the page's own names (`pending`, `$`, `stageMove`) and returns the facts the test asserts.
+    `routes` answers any other path the driver's screen asks, and records every POST it takes."""
     script = (DOM_HARNESS.replace("__PAGE__", json.dumps(page))
                          .replace("__DRIVER__", json.dumps(driver))
                          .replace("__BOARD__", json.dumps(board or [BOARD_ONE]))
+                         .replace("__ROUTES__", json.dumps(routes or {}))
                          .replace("__PROMOTE__", json.dumps(promote)))
     path = pathlib.Path(tempfile.mkdtemp()) / "page.js"
     path.write_text(script)
