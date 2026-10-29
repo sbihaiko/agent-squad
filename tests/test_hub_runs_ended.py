@@ -2,6 +2,7 @@
 import datetime
 import importlib.util
 import json
+import os
 import sys
 import threading
 from http.server import ThreadingHTTPServer
@@ -157,3 +158,37 @@ def test_the_resolver_filters_the_name_as_the_held_route_does(hub, runs, dashboa
     status, _, _ = get(port, "/ended/..%2Frun-today")
     assert status == 404
     assert dashboards == []
+
+
+def test_a_run_that_ended_with_its_dashboard_still_up_is_not_running_now(hub, runs):
+    mod, _ = hub
+    folder = write_run(runs, "run-today", NOON_TODAY - 3600, NOON_TODAY)
+    row, _ = mod.run_row(str(folder), "4321", [])
+    assert row["running"] is False
+
+
+def test_a_run_with_no_verdict_is_running_now(hub, runs):
+    mod, _ = hub
+    folder = write_run(runs, "run-live", NOON_TODAY - 60)
+    row, _ = mod.run_row(str(folder), "4321", [])
+    assert row["running"] is True
+
+
+def test_the_ended_list_carries_no_folder_path(hub, runs):
+    mod, port = hub
+    write_run(runs, "run-today", NOON_TODAY - 3600, NOON_TODAY)
+    [row] = mod.ended_today()
+    assert "dir" not in row and row["running"] is False
+    _, _, body = get(port, "/api/ended")
+    assert str(runs) not in body
+
+
+def test_a_record_not_written_today_is_not_parsed(hub, runs, monkeypatch):
+    mod, _ = hub
+    folder = write_run(runs, "run-old", LAST_NIGHT - 3600, LAST_NIGHT)
+    os.utime(folder / "record.jsonl", (LAST_NIGHT, LAST_NIGHT))
+    seen = []
+    real_scan = mod.scan
+    monkeypatch.setattr(mod, "scan", lambda p: (seen.append(str(p)), real_scan(p))[1])
+    assert mod.ended_today() == []
+    assert seen == []
