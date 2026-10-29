@@ -43,12 +43,15 @@ _here = os.path.dirname(os.path.abspath(__file__)); MOVE = os.path.join(_here, "
 try: items = board_state(owner=OWNER, project=BOARD, repo=REPO, kind=None).read_all()   # the state each card carries, asked of the seam (a user or an org owner, cached a month); the carrier is the binding's business (#236)
 except RuntimeError: sys.exit("board unreadable")
 LAND = os.environ.get("SG_LAND_BRANCH") or "dev"   # the branch a work branch lands in: a card is Done when its branch is in it
+OPEN = {int(i["number"]): i for i in js("api", f"repos/{REPO}/issues?state=open") or []}   # the open issues, one read: a card it covers is open and needs no read of its own (#853)
 refs = {}   # issue -> its work branch, for a branch that holds commits the landing branch lacks (the branch read, never a pull request, #358)
+compared = {}   # branch tip -> its compare: branches on one tip cost one compare
 for b in js("api", f"repos/{REPO}/branches?per_page=100") or []:
     m = re.match(r"(?:fix|gui)/(\d+)(?:\D.*)?$", b.get("name") or "")
     if not m: continue
-    cmp = js("api", f"repos/{REPO}/compare/{LAND}...{b['commit']['sha']}") or {}
-    if cmp.get("status") in ("ahead", "diverged"): refs.setdefault(int(m.group(1)), b["name"])
+    sha = b["commit"]["sha"]
+    if sha not in compared: compared[sha] = js("api", f"repos/{REPO}/compare/{LAND}...{sha}") or {}
+    if compared[sha].get("status") in ("ahead", "diverged"): refs.setdefault(int(m.group(1)), b["name"])
 def labels_of(n): return [x.get("name") for x in js("api", f"repos/{REPO}/issues/{n}/labels") or []]
 def shipped_name(to):
     """The name the carrier holds for a column: this module's own until the board carries the shipped vocabulary, and the
@@ -83,7 +86,7 @@ def write(n, name, add=False):
     if r.returncode:
         REFUSED.append(n)
         print(f"WRITE REFUSED #{n} -> {name}: {(r.stderr or r.stdout).strip().replace(chr(10), ' ')[:200] or 'the writer said nothing'}")
-_state = {}
+_state = {n: True for n in OPEN}
 def is_open(d):
     if d not in _state:
         o = js("api", f"repos/{REPO}/issues/{d}"); _state[d] = (o or {}).get("state") != "closed"
@@ -103,7 +106,9 @@ def blockers(body):
 def has_freetext_blocker(body):
     sec = section(body); return bool(re.search(r"^\s*[-*]\s+(?!none\b)\S", sec, re.M | re.I)) and not blockers(body)
 for i, cur in sorted(((int(k), v) for k, v in items.items()), key=lambda kv: kv[0]):
-    n = str(i); cur = cur or None; st = js("api", f"repos/{REPO}/issues/{n}")
+    n = str(i); cur = cur or None
+    if i in OPEN and i < MIN: continue   # an open card below RECONCILE_MIN is out of scope, and the aggregate already says it is open
+    st = OPEN.get(i) or js("api", f"repos/{REPO}/issues/{n}")
     if not st: continue
     if st["state"] != "closed" and i < MIN: continue
     deps = blockers(st.get("body"))

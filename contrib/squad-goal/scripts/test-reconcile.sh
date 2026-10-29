@@ -9,6 +9,7 @@ cp "$(dirname "$src")/ghread.py" "$(dirname "$src")/ghthrottle.py" "$T/s/"   # t
 printf '#!/bin/bash\necho "$*" >> "%s/moves"\n' "$T" > "$T/s/board.sh"; chmod +x "$T/s/board.sh"
 cat > "$T/bin/gh" <<'J'
 #!/bin/bash
+echo "$*" >> "TMPDIR/ghcalls"   # every gh call of a pass, for the call count (#853)
 case "$*" in
   "api users/x") echo '{"type":"User"}';;
   *"/fields"*) echo '[{"id":7,"name":"Status"}]';;
@@ -17,6 +18,7 @@ case "$*" in
   *"/labels"*) echo "$*" >> "TMPDIR/tagreads"; if [ -n "$HAS_TAG" ]; then echo '[{"name":"reverted"}]'; else echo '[]'; fi;;   # the labels the issue carries now
   *"issue(number:"*) n=$(echo "$*" | /usr/bin/grep -oE 'issue\(number: [0-9]+' | /usr/bin/grep -oE '[0-9]+'); r=$("$0" api "repos/x/y/issues/$n" 2>/dev/null)
     jq -c --arg k "i$n" --argjson n "$n" --argjson r "$r" '{data:{repository:{($k):{number:$n,title:"t",body:($r.body//""),state:(($r.state//"open")|ascii_upcase),createdAt:null,labels:{nodes:[]},blockedBy:{nodes:[]},subIssuesSummary:{total:0,completed:0},subIssues:{nodes:[]},comments:{nodes:[]}}}}}' <<<"{}" ;;   # the single-issue read is the GraphQL fact: its state and body are the REST answer below
+  *"issues(states: OPEN"*) echo '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":1093,"title":"t","body":"","state":"OPEN"},{"number":1095,"title":"t","body":"","state":"OPEN"},{"number":1120,"title":"t","body":"## Blocked by\n\n- #1093\n","state":"OPEN"},{"number":1140,"title":"t","body":"","state":"OPEN"},{"number":1150,"title":"t","body":"","state":"OPEN"},{"number":1160,"title":"t","body":"","state":"OPEN"}]}}}}';;   # the open-issue aggregate, one GraphQL request (#853)
   *"issues/1090") echo '{"state":"closed","body":""}';;
   *"issues/1092") echo '{"state":"closed","body":""}';;
   *"issues/1093") echo '{"state":"open","body":""}';;
@@ -26,7 +28,7 @@ case "$*" in
   *"issues/1130") echo '{"state":"closed","body":""}';;
   *"issues/1140") echo '{"state":"open","body":""}';;
   *"pulls?state=open"*) echo "$*" >> "TMPDIR/pullreads"; echo '[{"number":9,"title":"x","body":"Refs #1160"}]';;   # an open PR names #1160: it must move no card
-  *"repos/x/y/branches"*) echo '[{"name":"fix/1150-x","commit":{"sha":"sha1150"}},{"name":"main","commit":{"sha":"shamain"}}]';;   # a work branch names #1150 and is ahead of dev
+  *"repos/x/y/branches"*) echo '[{"name":"fix/1150-x","commit":{"sha":"sha1150"}},{"name":"gui/1170-x","commit":{"sha":"sha1150"}},{"name":"main","commit":{"sha":"shamain"}}]';;   # a work branch names #1150 and is ahead of dev; #1170 shares its tip
   *"compare/dev...sha1150"*) echo '{"status":"ahead"}';;
   *"issues/1150") echo '{"state":"open","body":""}';;
   *"issues/1160") echo '{"state":"open","body":""}';;
@@ -93,4 +95,13 @@ printf '#!/bin/bash\necho "no Status option $3" >&2; exit 1\n' > "$T/s/board.sh"
 r=$(RECONCILE=apply python3 "$T/s/reconcile.py" 2>&1); rc=$?
 case "$r" in *"WRITE REFUSED #1090"*"no Status option"*) ok "a refused write is named with the carrier's own text";; *) ko "a refused write was swallowed: '$r'";; esac
 [ "$rc" != 0 ] && ok "a pass whose write was refused ends non-zero" || ko "the refused write still ended the pass 0"
+# The call count of one dry pass (#853): the open issues come from one aggregate read, an open card the aggregate covers is never
+# read one by one (below RECONCILE_MIN or not), and two cards on one branch tip cost one compare. A closed card is not in the
+# open aggregate, so its state is still read one card at a time.
+rm -f "$T/ghcalls"; SG_BOARD_VOCAB=shipped python3 "$T/s/reconcile.py" >/dev/null 2>&1; calls=$(cat "$T/ghcalls" 2>/dev/null)
+echo "info gh calls in one pass: $(printf '%s\n' "$calls" | /usr/bin/grep -c '^api ')"
+[ "$(printf '%s\n' "$calls" | /usr/bin/grep -c 'issues(states: OPEN')" = 1 ] && ok "one pass reads the open-issue aggregate once" || ko "the open-issue aggregate was not read once: '$calls'"
+cov=$(printf '%s\n' "$calls" | /usr/bin/grep -E 'issue\(number: (1093|1095|1120|1140|1150|1160)[ )]|repos/x/y/issues/(1093|1095|1120|1140|1150|1160)$')
+[ -z "$cov" ] && ok "no open card the aggregate covers is read one by one, below RECONCILE_MIN or not" || ko "an open card was read one by one: '$cov'"
+[ "$(printf '%s\n' "$calls" | /usr/bin/grep -c 'compare/dev\.\.\.sha1150')" = 1 ] && ok "two cards on one branch tip cost one compare" || ko "the shared branch tip was compared $(printf '%s\n' "$calls" | /usr/bin/grep -c 'compare/dev\.\.\.sha1150') times"
 rm -rf "$T"; exit $fail
