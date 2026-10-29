@@ -59,8 +59,7 @@ printf '%s\n' "$H" > "$T/st2/active-runs.txt"
 printf 'Coding model: test-model\nCHILD — GitHub issue(s) #133 (a): do it\n' > "$T/req133.txt"
 rm -f "$SG_ARGV"
 o=$(cd "$T/co" && SG_STATE="$T/st2" SG_CHECKOUT="$T/co" SG_SQUAD="$T/squad" SG_ALLOW_MODEL=1 python3 -I "$T/s/launch.py" "$T/req133.txt" 2>&1); rc=$?
-case "$o" in *"run-20261029-124510-af3898"*"#133"*) [ $rc -ne 0 ] && ok "a start for an issue a live run works is refused, and names the holder" || ko "a clashing start was not refused (rc=$rc): $o";;
-  *) ko "a clashing start names no holder (rc=$rc): $o";; esac
+{ echo "$o" | /usr/bin/grep -q "#133" && echo "$o" | /usr/bin/grep -q "run-20261029-124510-af3898"; } && [ $rc -ne 0 ] && ok "a start for an issue a live run works is refused, and names the holder" || ko "a clashing start was not refused by name (rc=$rc): $o"
 [ ! -e "$SG_ARGV" ] && ok "a refused clashing start launches nothing" || ko "the squad was started for a clashing issue"
 printf '{"event": "verdict"}\n' >> "$H/record.jsonl"
 o=$(cd "$T/co" && SG_STATE="$T/st2" SG_CHECKOUT="$T/co" SG_SQUAD="$T/squad" SG_ALLOW_MODEL=1 python3 -I "$T/s/launch.py" "$T/req133.txt" 2>&1); rc=$?

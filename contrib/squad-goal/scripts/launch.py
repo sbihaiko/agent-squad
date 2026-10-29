@@ -273,6 +273,28 @@ def _named_target(co, path):
 req_text = req_file.read_text()
 if _issue_child_request(req_text): req_text = _wave_request(req_text)   # the run cuts a wave below: its children keep their branches local
 issues = _issue_named(req_text) if _issue_child_request(req_text) else []   # a run that commits on the branch the land reads
+# #865: one issue, one live run (ADR-0150). A start for an issue that a live run of this checkout already works is refused by name, and
+# nothing starts; the caller's refusal path frees the request's dispatch marker. The check reads the loop's own state (active-runs.txt
+# and each live run's request.txt), never GitHub, which is eventually consistent. A run with a verdict holds nothing.
+def _live_holders():   # {issue: run folder name} of each issue a live child run of this checkout works
+    held = {}
+    try: rows = (state / "active-runs.txt").read_text().split()
+    except OSError: return held
+    base = pathlib.Path(co or cwd) / "runs"
+    for row in rows:
+        f = pathlib.Path(row) if row.startswith("/") else base / row
+        rec, rq = f / "record.jsonl", f / "request.txt"
+        if rec.exists():
+            if '"event": "verdict"' in rec.read_text(): continue
+        elif not rq.exists() or time.time() - rq.stat().st_mtime > 300: continue   # no record yet: live only in its launch window
+        if rq.exists() and _issue_child_request(rq.read_text()):
+            for n in _issue_named(rq.read_text()): held.setdefault(n, f.name)
+    return held
+_held = _live_holders() if issues else {}
+_clash = [(n, _held[n]) for n in issues if n in _held]
+if _clash:
+    sys.exit("refused: " + "; ".join(f"issue #{n} is already worked by live run {r}" for n, r in _clash)
+             + ". One issue, one live run (ADR-0150): this start launches nothing.")
 checkout = os.environ.get("SG_CHECKOUT") or str(cwd)
 land = _landing_base(checkout)   # before any tree is made: a fetch that fails refuses the start (#580)
 named = os.environ.get("SG_RUN_TARGET")
