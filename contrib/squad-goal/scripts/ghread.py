@@ -181,7 +181,7 @@ TransportFn = Callable[[str], Transport]
 WriteTransportFn = Callable[[list[str]], Transport]
 
 
-def gh_transport(route: str) -> Transport:
+def gh_transport(route: str, timeout: float | None = None) -> Transport:
     """The default transport: `gh api --include <route>` -- or the aggregate route's one GraphQL request.
 
     `--include` is what puts GitHub's response headers in front of the body, and the request id is one of them. The
@@ -189,7 +189,7 @@ def gh_transport(route: str) -> Transport:
     one answered it.
     """
     argv = ["gh", "api", "--include", *aggregate_argv(route)]
-    p = subprocess.run(argv, capture_output=True, text=True, check=False)
+    p = subprocess.run(argv, capture_output=True, text=True, check=False, timeout=timeout)
     return Transport(rc=p.returncode, body=p.stdout, detail=(p.stderr or "").strip())
 
 
@@ -586,14 +586,15 @@ def read(route: str, transport: TransportFn | None = None) -> Read:
 RevalidateFn = Callable[[str, str], Transport]
 
 
-def gh_conditional_transport(route: str, etag: str) -> Transport:
+def gh_conditional_transport(route: str, etag: str, timeout: float | None = None) -> Transport:
     """`gh api --include -H 'If-None-Match: <etag>' <route>`: GitHub answers 304 when the entity is the one the ETag names.
 
     It is a read like any other (`--include` for the same reason, so the status is in front of the body), and a 304 is
     how a caller learns that what it holds is still the answer without being handed -- or parsing -- the answer again.
     """
     p = subprocess.run(
-        ["gh", "api", "--include", "-H", f"If-None-Match: {etag}", route], capture_output=True, text=True, check=False
+        ["gh", "api", "--include", "-H", f"If-None-Match: {etag}", route], capture_output=True, text=True, check=False,
+        timeout=timeout,
     )
     return Transport(rc=p.returncode, body=p.stdout, detail=(p.stderr or "").strip())
 

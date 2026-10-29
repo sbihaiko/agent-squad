@@ -1740,19 +1740,27 @@ def board_items_jq(repo):
 
 GH_FLOOR = int(os.environ.get("SG_GH_FLOOR") or 300)   # below this many core requests left, a read pass skips its reads (#855)
 LABELS_EVERY = 3600   # seconds between two reads of the repository's labels, and of its closed pull requests (#855)
+REST_TIMEOUT = 120   # a REST page that stalls is abandoned at this deadline (ADR-0051); the pass keeps the rows it held
 _etags = {}   # route -> (the ETag GitHub answered it with, the answer it carried); a 304 keeps that answer
+_SKIPPING = set()   # the reads whose current floor episode has already been logged (#855)
 def _under_floor(what):
-    """True when the core quota is under SG_GH_FLOOR: the pass is skipped, and one line says so (#855)."""
+    """True when the core quota is under SG_GH_FLOOR: the pass is skipped, and one line says so per episode (#855)."""
     low = ghthrottle.core_below(GH_FLOOR)
-    if low is not None: log_once(f"hub: skipped {what}: core quota {low} is under SG_GH_FLOOR {GH_FLOOR}; the next pass reads again")
-    return low is not None
+    if low is None:
+        _SKIPPING.discard(what)
+        return False
+    if what not in _SKIPPING:
+        _SKIPPING.add(what)
+        print(f"hub: skipped {what}: core quota {low} is under SG_GH_FLOOR {GH_FLOOR}; the next pass reads again", file=sys.stderr, flush=True)
+    return True
 def _rest_page(route):
     """One REST page through the door, conditional: the ETag it was answered with rides as If-None-Match, and a 304 keeps
     the answer that ETag named. A page that does not answer raises, and the caller keeps what it had."""
     held = _etags.get(route)
     seen = {}
     def transport(r):
-        res = ghread.gh_conditional_transport(r, held[0]) if held else ghread.gh_transport(r)
+        res = (ghread.gh_conditional_transport(r, held[0], timeout=REST_TIMEOUT) if held
+               else ghread.gh_transport(r, timeout=REST_TIMEOUT))
         m = re.match(r"HTTP/[\d.]+\s+(\d{3})", res.body)
         seen["status"], seen["etag"] = (int(m.group(1)) if m else None), ghread.headers_of(res.body).get("etag", "")
         return res
@@ -1800,9 +1808,9 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
             try: apply_open_blockers(items, ((json.loads(go) or {}).get("data") or {}).get("repository", {}).get("issues", {}).get("nodes") or [])
             except Exception: pass
             if time.time() - board_cache.get("lt", 0) >= LABELS_EVERY:
-                board_cache["lt"] = time.time()
                 lc = {x["name"]: x["color"].lower() for x in gh_list(f"repos/{REPO}/labels")}
-    except Exception as e: board_cache["err"] = str(e)[:80]   # a failed pass keeps the last good rows on the board (#1810)
+                board_cache["lt"] = time.time()
+    except Exception as e: board_cache["err"], items = str(e)[:80], None   # a failed pass keeps the last good rows on the board (#1810)
     if items: apply_holders(items)
     if items: board_cache.update(t=time.time(), rt=int(read_started), repo=REPO, items=items, cases=cases or [], lc=lc or board_cache.get("lc", {}), err=None)
     rs = REPOS if repos is None else repos
@@ -2602,12 +2610,13 @@ try: prs_cache = json.loads(PRS.read_text())     # last good PR data survives a 
 except Exception: prs_cache = {"t": 0, "rows": [], "err": None}
 def refresh_closed_prs():
     if time.time() - prs_cache.get("read", 0) < LABELS_EVERY or _under_floor("closed pull request read"): return
-    prs_cache["read"] = time.time()
     f = lambda s: dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
     rows = [{"n": p["number"], "merged": p["merged_at"], "min": round((f(p["merged_at"]) - f(p["created_at"])).total_seconds() / 60, 1)}
             for p in gh_list(f"repos/{REPO}/pulls", "state=closed&sort=updated&direction=desc") if p.get("merged_at") and p["number"] >= 1115]
-    if rows: prs_cache.update(t=time.time(), rows=sorted(rows, key=lambda r: r["merged"]), err=None)
-    PRS.write_text(json.dumps(prs_cache))
+    prs_cache["read"] = time.time()
+    if rows:
+        prs_cache.update(t=time.time(), rows=sorted(rows, key=lambda r: r["merged"]), err=None)
+        _tmp = _temp_name(PRS); _tmp.write_text(json.dumps(prs_cache)); os.replace(_tmp, PRS)
 def refresh_prs():
     while True:
         try: refresh_closed_prs()

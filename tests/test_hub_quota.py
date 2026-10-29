@@ -107,6 +107,7 @@ def pass_env(hub, monkeypatch, tmp_path):
     monkeypatch.setattr(hub, "board_cache", {"t": 0, "items": [], "prs": [], "lc": {}, "err": None})
     monkeypatch.setattr(hub, "prs_cache", {"t": 0, "rows": [], "err": None})
     monkeypatch.setattr(hub, "_etags", {}, raising=False)
+    monkeypatch.setattr(hub, "_SKIPPING", set())
     hub.CAPS_LOGGED.clear()
     return gh, state
 
