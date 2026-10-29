@@ -32,6 +32,7 @@ EVIDENCE_TAIL = 1500      # the most characters of a failed command's output kep
 # A line that explains a failure, even when it sits above the kept tail. `pytest -q` prints the failure block first and
 # the slowest-durations block last, so a bare tail records the standings and drops the assertion (ADR-0100 rule 10).
 EVIDENCE_SIGNAL = re.compile(r"^(_{5,}|E   |FAILED|ERROR)")
+NAME_SIGNAL = re.compile(r"^(FAILED|ERROR)\b")   # the summary lines that name the failing tests: kept before the detail
 MORE_ELIDED = "[... more failing lines elided]"
 
 # The share of a suite that passes is a fact of the output, and one bit is not progress: 16 of 24 reads as work done
@@ -83,7 +84,7 @@ def evidence_of(output):
     if len(text) <= EVIDENCE_TAIL:
         return text
     head, tail = text[: -EVIDENCE_TAIL], text[-EVIDENCE_TAIL:]
-    signals = [line for line in head.splitlines() if EVIDENCE_SIGNAL.match(line)]
+    signals = sorted((line for line in head.splitlines() if EVIDENCE_SIGNAL.match(line)), key=lambda line: not NAME_SIGNAL.match(line))
     if not signals:
         return tail
     note = f"[{len(head)} characters elided; the failing lines are kept]"

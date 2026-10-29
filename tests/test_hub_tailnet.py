@@ -36,7 +36,7 @@ def serve(monkeypatch, tmp_path):
         for k, v in (("SG_REPO", "x/y"), ("SG_OWNER", "x"), ("SG_PROJECT", "4"), ("HOME", str(tmp_path)),
                      ("SG_CHECKOUT", str(checkout)), ("SG_HUB_DIR", str(tmp_path / "hub"))):
             monkeypatch.setenv(k, v)
-        for k in ("SG_STATE", "SG_STATE_BASE", "SG_SHARED", "SG_PROFILE"):
+        for k in ("SG_STATE", "SG_STATE_BASE", "SG_SHARED", "SG_PROFILE", "SG_FORK_DIR", "SG_PROJECTS"):
             monkeypatch.delenv(k, raising=False)
         spec = importlib.util.spec_from_file_location("hub_tailnet", HUB_PY)
         mod = importlib.util.module_from_spec(spec)

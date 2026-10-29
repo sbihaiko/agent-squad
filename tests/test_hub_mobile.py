@@ -42,7 +42,7 @@ def hub(monkeypatch, tmp_path):
     for k, v in (("SG_REPO", "x/y"), ("SG_OWNER", "x"), ("SG_PROJECT", "4"), ("HOME", str(tmp_path)),
                  ("SG_CHECKOUT", str(tmp_path)), ("SG_HUB_DIR", str(tmp_path))):
         monkeypatch.setenv(k, v)
-    for k in ("SG_STATE", "SG_STATE_BASE", "SG_SHARED", "SG_PROFILE"):
+    for k in ("SG_STATE", "SG_STATE_BASE", "SG_SHARED", "SG_PROFILE", "SG_FORK_DIR", "SG_PROJECTS"):
         monkeypatch.delenv(k, raising=False)
     gspec = importlib.util.spec_from_file_location("ghread", GHREAD_PY)
     gh = importlib.util.module_from_spec(gspec)
@@ -189,6 +189,8 @@ def test_mux_serves_the_mobile_page_under_the_profile_path(tmp_path, monkeypatch
     (prof / "alpha.sh").write_text(f': "${{SG_REPO:=x/alpha}}"; : "${{SG_OWNER:=x}}"; : "${{SG_PROJECT:=3}}"; : "${{SG_CHECKOUT:={co}}}"\n')
     monkeypatch.setenv("SG_PROFILES_DIR", str(prof))
     monkeypatch.setenv("SG_STATE_BASE", str(base))
+    monkeypatch.delenv("SG_FORK_DIR", raising=False)
+    monkeypatch.delenv("SG_PROJECTS", raising=False)
     spec = importlib.util.spec_from_file_location("hubmux_mobile", MUX_PY)
     mux = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mux)
