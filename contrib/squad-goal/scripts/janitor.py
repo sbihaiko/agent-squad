@@ -1175,7 +1175,7 @@ if hb.exists() and (not hm.exists() or now - hm.stat().st_mtime > 600):
             continue
         if not (op and stt in ("Todo", "Blocked", "In Progress", "Doing", "Code Review", "Code Complete")): continue
         os.environ["SG_GH_PASS"] = "janitor"
-        r, comments = door("gh_pages", f"repos/{repo}/issues/{n}/comments?per_page=100", "-q", r'.[]|[.created_at,(.body|gsub("\\n";" "))]|join("\\t")')
+        r, comments = door("gh_pages", f"repos/{repo}/issues/{n}/comments?per_page=100", "-q", r'.[]|[.created_at,(.body|gsub("\\n";" "))]|join("\t")')
         cm = [x.split("\t", 1) for x in comments.splitlines() if "\t" in x] if r == 0 else []
         reds = 0
         for _, b in cm:
