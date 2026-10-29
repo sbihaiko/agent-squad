@@ -758,7 +758,8 @@ $("termview-send").onclick = async () => {
     if (!r.ok) throw new Error("Not sent: the hub refused the request.");
     const d = await r.json();
     if (sid !== termSid) return;
-    out.textContent = "Message " + d.status + (d.reason ? ": " + d.reason : "");
+    const word = { sent: "Sent: the session's inbox accepted the message", uncertain: "Uncertain: the send was interrupted", refused: "Refused: the send failed" }[d.status] || "Uncertain: the send was interrupted";
+    out.textContent = word + (d.reason ? " (" + d.reason + ")" : "");
     if (d.status === "sent") $("termview-text").value = "";
   } catch (err) { if (sid === termSid) out.textContent = err.message; }
 };

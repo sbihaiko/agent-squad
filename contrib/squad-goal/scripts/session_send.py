@@ -10,6 +10,7 @@ DEADLINE_S = 5.0
 KEEP_S = 24 * 3600
 CLIENT_ID = re.compile(r"[A-Za-z0-9-]{8,64}")
 FROM_NAME = "squad-hub"
+STATES = ("sent", "uncertain", "refused")   # owner, #834: the protocol returns nothing for a hold, so no held, delivered or expired
 SOL_LOCAL, LOCAL_PEERPID = 0, 2   # macOS <sys/un.h>
 
 
@@ -172,23 +173,6 @@ def _recorded(d, sid, cid):
     return {"status": state if state in ("sent", "refused") else "uncertain", "reason": ""}
 
 
-def _seen(cwd, sid, cid):
-    if not cwd:
-        return False
-    try:
-        raw, start = sessions._read_under_home(["projects", re.sub(r"[^A-Za-z0-9]", "-", cwd), f"{sid}.jsonl"], limit=sessions.TAIL_BYTES)
-    except OSError:
-        return False
-    for line in raw.decode(errors="replace").splitlines()[1 if start else 0:]:
-        try:
-            obj = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(obj, dict) and isinstance(obj.get("origin"), dict) and obj["origin"].get("msg_id") == cid:
-            return True
-    return False
-
-
 def status(profile, sid, cid, profiles_of=sessions.profiles_of, root=None):
     if not sessions.SID.fullmatch(sid or "") or not CLIENT_ID.fullmatch(cid or ""):
         return {"status": "unknown"}
@@ -197,4 +181,4 @@ def status(profile, sid, cid, profiles_of=sessions.profiles_of, root=None):
         return {"status": "unknown"}
     if body.get("state") != "sent":
         return {"status": "refused" if body.get("state") == "refused" else "uncertain"}
-    return {"status": "seen" if _seen(body.get("cwd"), sid, cid) else "sent"}
+    return {"status": "sent"}
