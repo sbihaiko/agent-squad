@@ -277,5 +277,27 @@ def test_a_rate_limited_read_shows_the_open_prs_tile_as_unknown_not_zero(hub, mo
     assert column["n"] == "?", f"a failed read is unknown, never a count of zero: {column['n']!r}"
 
 
+def _door_answers(monkeypatch, hub, body, rc=0):
+    monkeypatch.setattr(hub.ghread, "gh_transport", lambda route, timeout=None: hub.ghread.Transport(rc=rc, body=json.dumps(body)))
+
+
+def test_the_open_pr_read_goes_through_the_door_and_names_each_pull_request(hub, monkeypatch):
+    node = {"number": 737, "title": "dev to staging", "body": "", "isDraft": False, "headRefName": "dev",
+            "headRefOid": "a" * 40, "baseRefName": "staging", "labels": {"nodes": [{"name": "bug"}]},
+            "reviewThreads": {"totalCount": 0},
+            "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": "SUCCESS", "contexts": {"totalCount": 1, "nodes": [
+                {"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "SUCCESS"}]}}}}]}}
+    _door_answers(monkeypatch, hub, {"data": {"repository": {"pullRequests": {"pageInfo": {"hasNextPage": False}, "nodes": [node]}}}})
+    rows = hub.open_prs_of(EMU)
+    assert [(r["n"], r["r"], r["base"], r["rollup"], r["l"]) for r in rows] == [(737, EMU, "staging", "pass", ["bug"])]
+    assert rows[0]["ms"] == "" and rows[0]["cl"] is None, "a fact the door does not answer stays unknown"
+
+
+def test_a_refused_open_pr_read_raises_so_the_repository_keeps_its_last_good_rows(hub, monkeypatch):
+    _door_answers(monkeypatch, hub, {"message": "API rate limit exceeded", "status": "403"}, rc=1)
+    with pytest.raises(RuntimeError, match="rate limit"):
+        hub.open_prs_of(EMU)
+
+
 def test_an_open_prs_tile_reads_zero_only_when_every_repository_answered(hub, monkeypatch):
     assert _served(hub, monkeypatch, [], errs=[])["n"] == 0, "no open PR and no failed read is a true zero"

@@ -2125,13 +2125,23 @@ def open_branches_of(repo):
                      "ps": f"ahead {cmp.get('ahead_by', 0)}", "br": True, "r": repo})
     return rows
 
+def _door_rollup(check):
+    """The live rollup of a pull request from the door's check counts: the words `_live_rollup` gives, or None when unread."""
+    if not check or check.get("state") is None: return None
+    if check.get("failed"): return "fail"
+    if check.get("pending"): return "pending"
+    return "pass" if check.get("total") else "none"
+
 def open_prs_of(repo):
-    """The open pull requests of ONE repository, one GraphQL read (OPEN_PR_QUERY). Any refusal is an error, so the caller
-    keeps that repository's last good rows instead of an empty lane (#851)."""
-    own, name = repo.split("/", 1)
-    p = subprocess.run(["gh", "api", "graphql", "-f", "query=" + OPEN_PR_QUERY % (own, name)], capture_output=True, text=True, timeout=60)
-    if p.returncode: raise RuntimeError(" ".join((p.stderr or p.stdout).split()) or f"the GitHub read exited {p.returncode}")
-    return prs_from_graphql(json.loads(p.stdout), repo)
+    """The open pull requests of ONE repository, through the door's open-list read (ADR-0277): one aggregate request. A
+    refusal or a failure raises, so the caller keeps that repository's last good rows instead of an empty lane (#851).
+    A fact the door's read does not return stays None, so the page draws `?` for it and never a passing word."""
+    r = ghread.read(f"repos/{repo}/pulls?state=open&per_page=100")
+    if not r.is_answer: raise RuntimeError(r.line())
+    return [{"n": p["number"], "t": p.get("title") or "", "d": bool(p.get("draft")), "u": "", "o": "",
+             "h": (p.get("head") or {}).get("sha") or "", "base": (p.get("base") or {}).get("ref") or None, "ms": "",
+             "l": [l.get("name") for l in p.get("labels") or []], "by": None, "cl": None, "th": None, "ci": None, "checks": [],
+             "hc": None, "rollup": _door_rollup(p.get("check_rollup")), "r": repo, "facts": False} for p in r.answer]
 
 def open_rows_of(repo):
     """Every open row of ONE repository: its open work branches and its open pull requests (#851)."""
