@@ -95,6 +95,12 @@ run lnd 5101 v; wtree lnd; echo wave/lnd > "$T/st/auto/waved-lnd"; : > "$WAVE_CA
 out=$(pass lnd)
 [ ! -s "$WAVE_CALLS" ] && ok "a run whose wave landed enters no child" || ko "enter ran for a landed wave: $(cat "$WAVE_CALLS")"
 grep -q ' 5101$' "$T/moves" 2>/dev/null && ko "a child that never entered reads Code Complete after its wave landed" || ok "a child that never entered is never moved to Code Complete after its wave landed"
+# A child-request run whose wave cut failed has no wave marker (launch.py starts it anyway). Its child's commit is merged into the
+# run's own branch and no entry can follow: the child reads Code Complete with no wave in it (ADR-0145 rule 12). It is named instead.
+run cut 5102 n; printf 'CHILD - GitHub issue #5102\n' > "$T/co/runs/cut/request.txt"; rm -f "$T/moves"; : > "$WAVE_CALLS"
+out=$(pass cut)
+grep -q ' 5102$' "$T/moves" 2>/dev/null && ko "a child of a run with no wave reads Code Complete: $out" || ok "a child of a run with no wave is not moved to Code Complete"
+echo "$out" | /usr/bin/grep -q 'WAVE-SALVAGE #5102' && ok "a child of a run with no wave is named on a salvage line" || ko "no salvage line for the child: $out"
 # A failed read of the issue's state (rate limit, refusal, network) is no answer (#848): childcc wrote the permanent done
 # marker on it and said nothing, so the run's wave refused the child on every cycle. The read that fails writes no marker,
 # logs the reason, and leaves the child (exit 3) until the read works, when the child enters.
