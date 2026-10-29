@@ -215,7 +215,7 @@ def serve(monkeypatch, home, tmp_path):
         srv = ThreadingHTTPServer(("127.0.0.1", 0), mod.H)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         servers.append(srv)
-        return SimpleNamespace(port=srv.server_port)
+        return SimpleNamespace(port=srv.server_port, mod=mod)
 
     yield start
     for srv in servers:
@@ -263,3 +263,158 @@ def test_other_profile_session_is_not_readable_through_the_list_route(home, serv
     status, body = get(srv.port, f"127.0.0.1:{srv.port}")
     assert status == 200 and json.loads(body)["groups"] == []
     assert "other-profile-name" not in body and "s2" not in body
+
+
+def user(uuid, text):
+    return {"type": "user", "uuid": uuid, "message": {"role": "user", "content": text}}
+
+
+def answer(uuid, text):
+    return {"type": "assistant", "uuid": uuid, "message": {"role": "assistant", "content": [{"type": "text", "text": text}]}}
+
+
+def write_transcript(home, cwd, sid, entries):
+    folder = home.projects / re.sub(r"[^A-Za-z0-9]", "-", str(cwd))
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / f"{sid}.jsonl").write_text("".join(json.dumps(e) + "\n" for e in entries))
+
+
+def fetch(port, path, host, login=None):
+    conn = HTTPConnection("127.0.0.1", port, timeout=10)
+    headers = {"Host": host}
+    if login:
+        headers["Tailscale-User-Login"] = login
+    conn.request("GET", path, headers=headers)
+    r = conn.getresponse()
+    body = r.read().decode()
+    head = {k.lower(): v for k, v in r.getheaders()}
+    conn.close()
+    return r.status, body, head
+
+
+def test_a_conversation_page_is_the_last_200_turns(home):
+    mod = load_sessions()
+    cwd = home.path / "p1" / "app"
+    write_transcript(home, cwd, "s1", [user(f"u{i}", f"turn {i}") for i in range(250)])
+    page = mod.read_conversation(str(cwd), "s1")
+    assert len(page["turns"]) == 200
+    assert page["turns"][0]["text"] == "turn 50" and page["turns"][-1]["text"] == "turn 249"
+    assert page["next"] is not None
+
+
+def test_a_conversation_page_is_at_most_256_kb(home):
+    mod = load_sessions()
+    cwd = home.path / "p1" / "app"
+    write_transcript(home, cwd, "s1", [user(f"u{i}", "x" * 40000) for i in range(10)])
+    page = mod.read_conversation(str(cwd), "s1")
+    assert [t["id"] for t in page["turns"]] == [f"u{i}" for i in range(4, 10)]
+    assert sum(len(t["text"]) for t in page["turns"]) <= 256 * 1024
+
+
+def test_older_pages_come_on_request_without_a_gap_or_a_repeat(home):
+    mod = load_sessions()
+    cwd = home.path / "p1" / "app"
+    write_transcript(home, cwd, "s1", [user(f"u{i}", f"turn {i}") for i in range(450)])
+    first = mod.read_conversation(str(cwd), "s1")
+    second = mod.read_conversation(str(cwd), "s1", before=first["next"])
+    third = mod.read_conversation(str(cwd), "s1", before=second["next"])
+    assert [t["id"] for p in (third, second, first) for t in p["turns"]] == [f"u{i}" for i in range(450)]
+    assert third["next"] is None
+
+
+def test_turns_carry_the_message_id_and_role_and_a_tool_call_is_one_line(home):
+    mod = load_sessions()
+    cwd = home.path / "p1" / "app"
+    write_transcript(home, cwd, "s1", [
+        user("u1", "list the files"),
+        {"type": "assistant", "uuid": "a1", "message": {"role": "assistant", "content": [
+            {"type": "text", "text": "Running it."}, {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}}]}},
+        {"type": "user", "uuid": "r1", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "a b"}]}},
+    ])
+    page = mod.read_conversation(str(cwd), "s1")
+    assert [(t["id"], t["role"], t["text"]) for t in page["turns"]] == [
+        ("u1", "owner", "list the files"), ("a1", "answer", "Running it."), ("a1", "tool", "tool: Bash")]
+
+
+def test_the_token_and_credential_shapes_are_in_no_turn_and_no_log(home, capfd):
+    mod = load_sessions()
+    cwd = home.path / "p1" / "app"
+    gh = "ghp_" + "A" * 20
+    write_transcript(home, cwd, "s1", [user("u1", f"key {TOKEN}"), answer("a1", f"gh {gh}")])
+    page = mod.read_conversation(str(cwd), "s1", secrets=(TOKEN,))
+    text = json.dumps(page)
+    assert TOKEN not in text and gh not in text and "[redacted]" in text
+    captured = capfd.readouterr()
+    assert TOKEN not in captured.out + captured.err
+
+
+def test_a_conversation_behind_a_symbolic_link_or_an_odd_id_is_refused(home, tmp_path):
+    mod = load_sessions()
+    cwd = home.path / "p1" / "app"
+    folder = home.projects / re.sub(r"[^A-Za-z0-9]", "-", str(cwd))
+    folder.mkdir(parents=True)
+    real = tmp_path / "real.jsonl"
+    real.write_text(json.dumps(user("u1", "hi")) + "\n")
+    os.symlink(real, folder / "s1.jsonl")
+    assert mod.read_conversation(str(cwd), "s1") is None
+    assert mod.read_conversation(str(cwd), "../s1") is None
+
+
+def test_conversation_route_needs_an_allowed_host_and_login(home, serve):
+    cwd = home.path / "p1" / "app"
+    add_session(home, os.getpid(), "s1", cwd)
+    write_transcript(home, cwd, "s1", [user("u1", "hello there")])
+    srv = serve()
+    path = "/api/sessions/conversation?sid=s1"
+    status, body, _ = fetch(srv.port, path, f"127.0.0.1:{srv.port}")
+    assert status == 200 and json.loads(body)["turns"][0]["text"] == "hello there"
+    assert fetch(srv.port, path, TAILNET)[0] == 403
+    assert fetch(srv.port, path, TAILNET, login=EVE)[0] == 403
+    assert fetch(srv.port, path, TAILNET, login=ANA)[0] == 200
+
+
+def test_conversation_of_an_ended_or_other_profile_session_is_not_found(home, serve):
+    add_session(home, os.getpid(), "s1", home.path / "p1" / "app")
+    add_session(home, dead_pid(), "s2", home.path / "p1" / "gone")
+    add_session(home, os.getppid(), "s3", home.path / "p2" / "app")
+    srv = serve()
+    assert fetch(srv.port, "/api/sessions/conversation?sid=s1", f"127.0.0.1:{srv.port}")[0] == 200
+    assert fetch(srv.port, "/api/sessions/conversation?sid=s2", f"127.0.0.1:{srv.port}")[0] == 404
+    assert fetch(srv.port, "/api/sessions/conversation?sid=s3", f"127.0.0.1:{srv.port}")[0] == 404
+
+
+def test_seeded_token_is_in_no_conversation_answer_and_no_log(home, serve, capfd):
+    add_session(home, os.getpid(), "s1", home.path / "p1" / "app")
+    srv = serve()
+    status, body, _ = fetch(srv.port, "/api/sessions/conversation?sid=s1", f"127.0.0.1:{srv.port}")
+    assert status == 200 and "turns" in json.loads(body) and TOKEN not in body
+    captured = capfd.readouterr()
+    assert TOKEN not in captured.out + captured.err
+
+
+def test_the_hub_mux_leaves_turn_text_and_message_ids_unchanged(home, serve):
+    spec = importlib.util.spec_from_file_location("hubmux_sessions", SCRIPTS / "hubmux.py")
+    mux = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mux)
+    cwd = home.path / "p1" / "app"
+    add_session(home, os.getpid(), "s1", cwd)
+    text = 'open "/api/runs" then "/dash/run-1/" and /api/x'
+    write_transcript(home, cwd, "s1", [user("m-7", text)])
+    srv = serve()
+    httpd = mux.server(0, {"p1": {"mod": srv.mod}})
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    port = httpd.server_address[1]
+    try:
+        status, body, _ = fetch(port, "/p1/api/sessions/conversation?sid=s1", f"127.0.0.1:{port}")
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+    assert status == 200 and json.loads(body)["turns"] == [{"id": "m-7", "role": "owner", "text": text}]
+
+
+def test_the_mobile_page_sends_a_csp_that_loads_nothing_from_outside_the_hub(home, serve):
+    srv = serve()
+    status, _, head = fetch(srv.port, "/mobile/", f"127.0.0.1:{srv.port}")
+    csp = head.get("content-security-policy", "")
+    assert status == 200 and "default-src 'self'" in csp and "img-src 'self'" in csp
+    assert "http:" not in csp and "https:" not in csp and "*" not in csp
