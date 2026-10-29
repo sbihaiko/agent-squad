@@ -48,4 +48,21 @@ o=$(cd "$T/co" && SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_SQUAD="$T/squad" pytho
 [ -z "$(ls "$T/co/runs")" ] && ok "a refused start leaves no run folder" || ko "run folder exists after a refusal"
 o=$(cd "$T/co" && SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_SQUAD="$T/squad" SG_ALLOW_MODEL=1 python3 -I "$T/s/launch.py" "$T/req.txt" 2>&1); rc=$?
 [ $rc -eq 0 ] && ok "SG_ALLOW_MODEL=1 starts it anyway, with a warning" || ko "override still refused (rc=$rc): $o"
+# #865: a start refuses an issue a live run already works, and names the holder. The check reads the loop's own state (active-runs.txt
+# and each live run's request), never GitHub: a card or list read right after a write is eventually consistent. A run with a verdict
+# holds nothing, so the same issue starts again once its run has ended.
+printf '{"coding_models":["test-model"],"hours":{}}\n' > "$T/s/models.json"
+rm -f "$T/co/docs/squad/workflows/default.graph.json"
+H="$T/co/runs/run-20261029-124510-af3898"; mkdir -p "$H" "$T/st2"
+printf 'Coding model: test-model\nCHILD — GitHub issue(s) #133 (a): do it\n' > "$H/request.txt"; printf '{"event": "run_start"}\n' > "$H/record.jsonl"
+printf '%s\n' "$H" > "$T/st2/active-runs.txt"
+printf 'Coding model: test-model\nCHILD — GitHub issue(s) #133 (a): do it\n' > "$T/req133.txt"
+rm -f "$SG_ARGV"
+o=$(cd "$T/co" && SG_STATE="$T/st2" SG_CHECKOUT="$T/co" SG_SQUAD="$T/squad" SG_ALLOW_MODEL=1 python3 -I "$T/s/launch.py" "$T/req133.txt" 2>&1); rc=$?
+case "$o" in *"run-20261029-124510-af3898"*"#133"*) [ $rc -ne 0 ] && ok "a start for an issue a live run works is refused, and names the holder" || ko "a clashing start was not refused (rc=$rc): $o";;
+  *) ko "a clashing start names no holder (rc=$rc): $o";; esac
+[ ! -e "$SG_ARGV" ] && ok "a refused clashing start launches nothing" || ko "the squad was started for a clashing issue"
+printf '{"event": "verdict"}\n' >> "$H/record.jsonl"
+o=$(cd "$T/co" && SG_STATE="$T/st2" SG_CHECKOUT="$T/co" SG_SQUAD="$T/squad" SG_ALLOW_MODEL=1 python3 -I "$T/s/launch.py" "$T/req133.txt" 2>&1); rc=$?
+[ $rc -eq 0 ] && ok "an issue whose holder has a verdict starts again" || ko "an ended holder still blocks the start (rc=$rc): $o"
 rm -rf "$T"; exit $fail
