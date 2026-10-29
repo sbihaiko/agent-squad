@@ -4,7 +4,7 @@ redaction step. The hub's routes call it; nothing else reads a session record, a
 import json, os, pathlib, re, stat, subprocess, sys, time
 
 ADDRESS = pathlib.Path(__file__).resolve().parent / "address.sh"
-RECORD_VERSION = 1
+SOCKET_DIRS = ("/tmp/cc-socks",)   # where Claude Code binds a session socket (docs/design/session-wire-protocol.md)
 STATUSES = ("busy", "idle", "waiting")
 SID = re.compile(r"[A-Za-z0-9-]{1,64}")
 TAIL_BYTES = 256 * 1024
@@ -62,10 +62,10 @@ def _secret(sid):
     except OSError: return ""
 
 def _shape_ok(o):
-    return (isinstance(o, dict) and o.get("version") == RECORD_VERSION and type(o.get("pid")) is int and o["pid"] > 0
+    return (isinstance(o, dict) and isinstance(o.get("version"), str) and type(o.get("pid")) is int and o["pid"] > 0
             and type(o.get("startedAt")) is int and isinstance(o.get("sessionId"), str) and SID.fullmatch(o["sessionId"]) is not None
             and isinstance(o.get("cwd"), str) and os.path.isabs(o["cwd"]) and isinstance(o.get("name"), str) and len(o["name"]) <= 200
-            and o.get("status") in STATUSES and isinstance(o.get("socket"), str))
+            and o.get("status") in STATUSES and isinstance(o.get("messagingSocketPath"), str))
 
 def _records():
     folder = claude_home() / "sessions"
@@ -79,14 +79,15 @@ def _records():
         try: obj = json.loads(raw)
         except ValueError: obj = None
         if not _shape_ok(obj): _log(f"hub: session record {name} has an unknown shape, left out", once=True); continue
-        out.append(obj)
+        out.append({**obj, "socket": obj["messagingSocketPath"]})
     return out
 
 def _socket_ok(path):
     try: st = os.lstat(path)
     except OSError: return False
     if not stat.S_ISSOCK(st.st_mode) or st.st_uid != UID: return False
-    return os.path.realpath(path) == path and os.path.dirname(path) == os.path.realpath(claude_home() / "sessions" / "sockets")
+    allowed = {os.path.realpath(d) for d in (*SOCKET_DIRS, claude_home() / "sessions" / "sockets")}
+    return os.path.realpath(os.path.dirname(path)) in allowed
 
 def _proc_start(pid):
     out = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True).stdout
@@ -96,7 +97,8 @@ def _proc_start(pid):
 def _alive_since(pid, started):
     try: os.kill(pid, 0)
     except OSError: return False
-    return _proc_start(pid) == started
+    start = _proc_start(pid)
+    return start is not None and 0 <= started // 1000 - start <= 30   # startedAt (ms) is written a few seconds after the process starts
 
 def profiles_of(cwd):
     """The profiles whose repository the checkout at `cwd` is, resolved by the address seam (ADR-0138)."""

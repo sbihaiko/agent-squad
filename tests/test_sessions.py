@@ -434,3 +434,10 @@ def test_the_mobile_page_sends_a_csp_that_loads_nothing_from_outside_the_hub(hom
     csp = head.get("content-security-policy", "")
     assert status == 200 and "default-src 'self'" in csp and "img-src 'self'" in csp
     assert "http:" not in csp and "https:" not in csp and "*" not in csp
+
+
+def test_a_record_written_seconds_after_the_process_started_is_listed(home, tmp_path):
+    body = add_session(home, os.getpid(), "s1", tmp_path / "app")
+    (home.sessions / f"{os.getpid()}.json").write_text(json.dumps({**body, "startedAt": body["startedAt"] + 2000}))
+    out = load_sessions().list_sessions("p1", profiles_of=lambda c: ["p1"])
+    assert [s["sid"] for g in out["groups"] for s in g["sessions"]] == ["s1"]
