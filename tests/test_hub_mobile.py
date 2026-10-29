@@ -62,6 +62,19 @@ def hub(monkeypatch, tmp_path):
     srv.server_close()
 
 
+@pytest.fixture
+def machine_fork(monkeypatch, tmp_path):
+    fork = tmp_path / "machine-fork"
+    (fork / "runs" / "run-20261028-000000-aaaaaa").mkdir(parents=True)
+    monkeypatch.setenv("SG_FORK_DIR", str(fork))
+    return fork
+
+
+def test_the_hub_fixture_reads_no_run_folder_of_the_machine(machine_fork, hub):
+    mod, _ = hub
+    assert [d for d in mod.project_dirs() if str(d).startswith(str(machine_fork))] == []
+
+
 def test_mobile_page_names_five_tabs_in_spec_order(hub):
     mod, port = hub
     status, ct, body = get(port, "/mobile")
