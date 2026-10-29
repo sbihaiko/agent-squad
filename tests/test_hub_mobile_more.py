@@ -1,6 +1,7 @@
 """The mobile More tab: three read-only screens, each on its own, reading only the hub's existing GET routes (#832).
 
-The page is read from its files and composed the way the hub composes it. No server runs, and no POST exists to call.
+The page is read from its files and composed the way the hub composes it. No server runs. The More tab is read-only: the
+page's one write is the owner's move on the Board tab (#829).
 """
 import pathlib
 import re
@@ -54,7 +55,8 @@ def test_each_screen_declares_its_existing_get_route():
 def test_every_api_path_the_page_names_is_an_existing_get_route():
     literals = {re.sub(r"\?.*", "", p) for p in re.findall(r'"(/api/[^"]*)"', page())}
     assert literals
-    assert literals <= HUB_GET_ROUTES
+    assert literals <= HUB_GET_ROUTES | {"/api/promote"}, literals - HUB_GET_ROUTES
+    assert '"/api/promote"' in HUB_PY.read_text(), "the owner's move route the page names is not served"   # #829
 
 
 def test_hub_serves_no_route_beyond_the_existing_get_routes():
@@ -75,9 +77,10 @@ def test_cost_chart_fits_the_screen():
 
 
 def test_more_tab_holds_no_form_no_post_and_no_write_control():
-    html = page()
-    more = block(html, "section", "data-panel", "more").lower()
+    """The More tab is read-only: no form and no write of its own. The page's one write is the owner's move on the
+    Board tab, whose body and route the board suite proves (#829)."""
+    more = block(page(), "section", "data-panel", "more").lower()
     for tag in ("<form", "<input", "<select", "<textarea", 'type="submit"', "type=submit"):
         assert tag not in more, tag
-    assert not re.search(r"\bpost\b", html, re.I)
-    assert "method" not in html.lower()
+    assert not re.search(r"\bpost\b", more)
+    assert "method" not in more and "fetch(" not in more

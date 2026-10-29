@@ -1763,6 +1763,19 @@ def apply_open_blockers(items, nodes):
         if open_ns: i["b"] = open_ns
         else: i.pop("b", None)
     return items
+def apply_parent_specs(items, nodes):
+    """Attach the spec each ticket belongs to as `pa` (#829): the parent issue's number, when that parent carries the
+    spec label. One GraphQL page carries the parent relation with the blockers, so the board spends no read per card.
+    A parent that is not a spec is no spec, and its children are ordinary issues that move on their own; a card the
+    read does not name keeps no `pa`, so a ticket the relation never reached is never read as one."""
+    by = {n.get("number"): n for n in nodes or [] if isinstance(n, dict)}
+    for i in items:
+        parent = (by.get(i.get("n")) or {}).get("parent")
+        num = parent.get("number") if isinstance(parent, dict) else None
+        labels = {x.get("name") for x in ((parent.get("labels") or {}).get("nodes") or []) if isinstance(x, dict)} if isinstance(parent, dict) else set()
+        if isinstance(num, int) and _columns_module.SPEC_LABEL in labels: i["pa"] = num
+        else: i.pop("pa", None)
+    return items
 def apply_holders(items):
     """Name on each card the run that holds it, from the seam's one holder read (#241): `h` is {"run", "started"}, and a
     card no run holds carries none. A holder read that fails keeps the holder the last good pass read, never a blank."""
@@ -1837,8 +1850,11 @@ def gh_list(path, query=""):
         if len(answer) < 100: return rows
         page += 1
 
+# One GraphQL page carries the relations a card's rule reads: its open blockers, and the parent issue with its labels, so
+# the board knows a ticket of a spec without a read per card (#829, #1506). Owner and name are filled in by the pass.
+OPEN_RELATIONS_QUERY = 'query{repository(owner:"%s",name:"%s"){issues(first:100,states:OPEN){nodes{number blockedBy(first:20){nodes{number state}} parent{number labels(first:20){nodes{name}}}}}}}'
 def board_pass(fetch_open=None, fetch_landed=None, repos=None):
-    """One board re-read: Board 4 statuses (REST) + one GraphQL page of Issue.blockedBy + the open work branches and the
+    """One board re-read: Board 4 statuses (REST) + one GraphQL page of Issue.blockedBy and Issue.parent + the open work branches and the
     landing ledger of every repository the hub is told to read (#1820). The 60 s loop runs exactly this.
 
     The two reads are independent: the issues are the profile repository's board, the branch lane spans every configured
@@ -1861,9 +1877,12 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
                     items.append({"n": i["number"], "t": i["title"], "s": i["state"], "c": None, "st": None, "l": [x["name"] for x in i["labels"]],
                                   "si": {"total": s.get("total"), "completed": s.get("completed")}, "o": i["created_at"]})
             own, name = REPO.split("/", 1)   # one GraphQL page of open issues; not one REST call per card
-            gq = 'query{repository(owner:"%s",name:"%s"){issues(first:100,states:OPEN){nodes{number blockedBy(first:20){nodes{number state}}}}}}' % (own, name)
-            go = subprocess.run(["gh", "api", "graphql", "-f", "query=" + gq], capture_output=True, text=True, timeout=60).stdout
-            try: apply_open_blockers(items, ((json.loads(go) or {}).get("data") or {}).get("repository", {}).get("issues", {}).get("nodes") or [])
+            go = subprocess.run(["gh", "api", "graphql", "-f", "query=" + OPEN_RELATIONS_QUERY % (own, name)], capture_output=True, text=True, timeout=60).stdout
+            try: nodes = ((json.loads(go) or {}).get("data") or {}).get("repository", {}).get("issues", {}).get("nodes") or []
+            except Exception: nodes = []
+            try: apply_open_blockers(items, nodes)
+            except Exception: pass
+            try: apply_parent_specs(items, nodes)   # the spec a ticket belongs to: a ticket never moves alone (#829)
             except Exception: pass
             if time.time() - board_cache.get("lt", 0) >= LABELS_EVERY:
                 lc = {x["name"]: x["color"].lower() for x in gh_list(f"repos/{REPO}/labels")}
@@ -2525,10 +2544,13 @@ def board():
         if pending: row["pd"] = True   # the mark the page draws; the rule lives here, never in the view (ADR-0137)
         if fz: row["fz"] = fz
         if _columns_module.SPEC_LABEL in row["l"]: row["sp"] = True   # a spec is an issue with the spec label: the Specs filter reads this
-        # The owner's one move (#560): a card in Backlog shows the arrow that starts it, a spec included: the owner's move
-        # starts the spec and its open Backlog tickets follow (ADR-0142 section 6, #838). The rule lives here, not in the
-        # page: the card renders the fact its row carries (ADR-0137).
-        if st == COLUMN["unscheduled"] and str(i["s"]).lower() != "closed": row["pm"] = True
+        # The owner's one move (#560): a card the rule marks promotable carries the arrow that starts it, a spec included:
+        # the owner's move starts the spec and its open Backlog tickets follow (ADR-0142 section 6, #838). The rule lives
+        # here, not in the page: the card renders the fact its row carries (ADR-0137). `pmt` names the column the move
+        # goes to, so the page that drags the card (#829) holds no column list of its own.
+        if promotable({**i, "st": st}):   # the column the board draws, which a proved move's overlay may have changed
+            row["pm"] = True
+            row["pmt"] = PROMOTE_TO
         if i.get("b"): row["b"] = i["b"]
         sc = task_count(i)                       # the card's own count, a value: the page renders it and holds no rule
         if sc: row["sc"] = sc
@@ -2570,6 +2592,17 @@ def board():
     return {"t": board_cache["t"], "err": board_cache["err"], "prs": lane, "groups": groups, "cases": cases, "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {}), "flow": flow_charts()}
 
 PROMOTE_TO = COLUMN["issue_todo"]   # the column the arrow moves a card into: the owner's go signal (ADR-0142)
+def promotable(item):
+    """The one rule of the owner's move (#560, #829): a card is promotable when it is open, the board holds it in Backlog,
+    and it is a spec or an issue that no spec holds. A ticket of a spec moves with its spec, never alone (ADR-0142). The
+    board route serves this rule as the row's `pm` and `pmt`, and the promote route asks the same function before any
+    write, so a card the board marks not promotable is refused by the route that would move it (ADR-0137, #829).
+    `pa` is the parent spec the board read recorded on the row; a row the pass did not read carries none."""
+    if not isinstance(item, dict): return False
+    if str(item.get("s") or "").lower() == "closed": return False
+    if _columns_module.view_column(item.get("st"), False, item.get("l"))[0] != COLUMN["unscheduled"]: return False
+    if _columns_module.SPEC_LABEL in (item.get("l") or []): return True
+    return not item.get("pa")
 def promote_write(issues, add=False):
     """The one writer call of the owner's move: `<owner> <project> Todo <n>...`, the shape reconcile.py writes, so the
     board seam (`board.sh`) is the only reach of the carrier. `issues` is one number or a list: a spec and its tickets
@@ -2635,7 +2668,8 @@ def spec_tickets(issue, item):
     return tickets, None
 def promote(issue):
     """Move one open card from Backlog to Todo through the board seam (#560). Only a card the hub holds in Backlog now
-    is accepted: a closed issue keeps its column (ADR-0143), and a card already in Todo sends no write (ADR-0144). A spec
+    is accepted: a closed issue keeps its column (ADR-0143), and a card already in Todo sends no write (ADR-0144). A card
+    the board marks not promotable is refused (#829): a ticket of a spec moves with its spec, never alone (ADR-0142). A spec
     moves with its open Backlog tickets in one write (ADR-0142, #838): the owner's move starts the spec and its tickets
     follow. A spec with no ticket moves alone, and a failed ticket read moves nothing. A row the board read never carried
     is an open issue with no Project item, and the seam is asked for `--add` there: a plain move answers it "not on the
@@ -2647,6 +2681,7 @@ def promote(issue):
     if str(item.get("s") or "").lower() == "closed": return {"err": "the issue is closed: a closed card keeps its column"}
     col, _ = _columns_module.view_column(item.get("st"), False, item.get("l"))
     if col != COLUMN["unscheduled"]: return {"err": f"the card is in {col}, not {COLUMN['unscheduled']}: only a Backlog card moves"}
+    if not promotable(item): return {"err": "the card is a ticket of a spec: it moves with its spec, never alone (ADR-0142)"}
     tickets = []
     if _columns_module.SPEC_LABEL in (item.get("l") or []):
         tickets, err = spec_tickets(issue, item)
@@ -3421,7 +3456,7 @@ const ageC=o=>{const h=(Date.now()-Date.parse(o))/3600000;return h>=24?"old":h>=
 setInterval(()=>document.querySelectorAll("#bbody .age").forEach(e=>{e.textContent=age(e.dataset.o);e.className="age "+ageC(e.dataset.o)}),30000);
 const gcls=c=>c.v==="?"?"unk":c.v==="debt"?"debt":c.v.startsWith("OK")?"ok":(c.v.startsWith("CHG")||c.v.startsWith("BLK"))?"bad":"";
 const gstrip=s=>`<div class="gstrip${s.old?" old":""}" title="${esc(s.old?`these facts are ${s.age} s old: the strip greys out past 180 s, so nothing here is being claimed as fresh`:"R review · C CI · T threads · B base · H labels and holds")}">`+s.cells.map(c=>`<span class="gc ${gcls(c)}" title="${esc(c.tip||"")}">${c.k}<b>${esc(c.v)}</b></span>`).join("")+`</div>`;
-const cards=(g,it,shown)=>shown.map(x=>{const pr=x.kind==="pr";return `<div class=it data-n="${x.n}" data-r="${esc(x.r||"__REPO__")}"${pr?" data-pr":""} style="--cc:${colOf(g.name,CN)}${tint(x)}"><a class=id target=_blank href="https://github.com/${esc(x.r||"__REPO__")}/${pr?"pull":"issues"}/${x.n}">${pr?"PR ":""}#${x.n}</a>${x.rt?`<span class=rpo title="the repository this card belongs to: ${esc(x.r)}">${esc(x.rt)}</span>`:""}${x.pb?`<span class="pbg ${x.pb.replace(" ","-")}">${esc(x.pb)}</span>`:""}${x.rollup?`<span class="cir ${esc(x.rollup)}" title="CI states on the head${(x.ci||[]).length?": "+esc((x.ci||[]).join(", ")):""}">CI ${esc(x.rollup)}</span>`:""}${x.fz?`<span class=fz title="a freeze is a marker, never a move: the card keeps its column">${esc(x.fz)}</span>`:""}${x.pd?`<span class=pnd title="pending: the board door proved this move and the board read has not carried it yet">pending</span>`:""}${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(x.t)}</span>${x.pm&&!pr?`<button class=pmp data-n="${x.n}" title="move this card to Todo: the owner's go signal (ADR-0142)">→ Todo</button>`:""}${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.ho?`<div class=hld>${esc(x.ho)}</div>`:""}${(x.cl||[]).length?`<div class=clos title="the issues this pull request closes">closes ${x.cl.map(n=>`<a target=_blank rel=noopener href="https://github.com/${esc(x.r||"__REPO__")}/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${(x.o||x.sc||x.by)?`<div class=ft>${x.sc?`<span class=tsk title="sub-issues closed / total: ${esc(x.sc)}">${esc(x.sc)}</span>`:""}${x.o?`<span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span>`:""}${x.by?`<span class=au title="opened by ${esc(x.by)}">${esc(x.by)}</span>`:""}</div>`:""}</div>`}).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"");
+const cards=(g,it,shown)=>shown.map(x=>{const pr=x.kind==="pr";return `<div class=it data-n="${x.n}" data-r="${esc(x.r||"__REPO__")}"${pr?" data-pr":""} style="--cc:${colOf(g.name,CN)}${tint(x)}"><a class=id target=_blank href="https://github.com/${esc(x.r||"__REPO__")}/${pr?"pull":"issues"}/${x.n}">${pr?"PR ":""}#${x.n}</a>${x.rt?`<span class=rpo title="the repository this card belongs to: ${esc(x.r)}">${esc(x.rt)}</span>`:""}${x.pb?`<span class="pbg ${x.pb.replace(" ","-")}">${esc(x.pb)}</span>`:""}${x.rollup?`<span class="cir ${esc(x.rollup)}" title="CI states on the head${(x.ci||[]).length?": "+esc((x.ci||[]).join(", ")):""}">CI ${esc(x.rollup)}</span>`:""}${x.fz?`<span class=fz title="a freeze is a marker, never a move: the card keeps its column">${esc(x.fz)}</span>`:""}${x.pd?`<span class=pnd title="pending: the board door proved this move and the board read has not carried it yet">pending</span>`:""}${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(x.t)}</span>${x.pm&&!pr?`<button class=pmp data-n="${x.n}" title="move this card to ${esc(x.pmt)}: the owner's go signal (ADR-0142)">→ ${esc(x.pmt)}</button>`:""}${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.ho?`<div class=hld>${esc(x.ho)}</div>`:""}${(x.cl||[]).length?`<div class=clos title="the issues this pull request closes">closes ${x.cl.map(n=>`<a target=_blank rel=noopener href="https://github.com/${esc(x.r||"__REPO__")}/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${(x.o||x.sc||x.by)?`<div class=ft>${x.sc?`<span class=tsk title="sub-issues closed / total: ${esc(x.sc)}">${esc(x.sc)}</span>`:""}${x.o?`<span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span>`:""}${x.by?`<span class=au title="opened by ${esc(x.by)}">${esc(x.by)}</span>`:""}</div>`:""}</div>`}).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"");
 // A visible column holding no cards is not drawn at all: the columns that do have cards take the width, and the
 // collapsed one is accounted for by a line at the foot of the hidden: strip. Which columns those are is derived on
 // every render -- from the filtered count, the user's hidden set and the set the line's eye added -- and never
@@ -4180,7 +4215,8 @@ def conversation_payload(query):
 MOBILE_CSP = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self'"
 
 GESTURE_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-gesture.js").read_text()
-MOBILE_PAGE = (pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text().replace("/*GESTURE*/", GESTURE_JS).replace("/*BOARD_FILTER*/", BOARD_FILTER_JS)
+MOVE_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-move.js").read_text()
+MOBILE_PAGE = (pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text().replace("/*GESTURE*/", GESTURE_JS).replace("/*MOVE*/", MOVE_JS).replace("/*BOARD_FILTER*/", BOARD_FILTER_JS)
 MOBILE_SHELL = ["/mobile/", "/mobile/manifest.webmanifest", "/mobile/icon.svg"]
 SW_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-sw.js").read_text().replace("/*SHELL*/[]", json.dumps(MOBILE_SHELL))
 MANIFEST_JSON = json.dumps({"id": "/mobile/", "name": f"Squad hub {REPO}", "short_name": "Hub", "start_url": "/mobile/", "scope": "/mobile/", "display": "standalone", "background_color": "#0f1115", "theme_color": "#0f1115", "icons": [{"src": "/mobile/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}]}).encode()

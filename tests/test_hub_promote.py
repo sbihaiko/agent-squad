@@ -431,10 +431,11 @@ def test_a_ticket_of_a_spec_is_never_promotable(hub):
     assert calls == [], calls
 
 
-def test_the_board_route_and_the_promote_route_ask_one_rule(hub):
+def test_the_board_route_and_the_promote_route_ask_one_rule(hub, monkeypatch):
     """The served `pm` and the route's refusal are the same decision: a card the board marks not promotable is refused,
     and a card it marks promotable is written. The test compares every card against the one rule."""
     mod, port = hub
+    sub_issues(monkeypatch, answer=[])   # a spec reads its sub-issues; the read is the test's, never GitHub's
     mod.board_cache["items"] += [ticket(30), {**ticket(31), "l": ["spec"]},
                                  {"n": 32, "i": 132, "t": "no parent", "s": "OPEN", "st": "Backlog", "l": []}]
     rows = {i["n"]: i for g in mod.board()["groups"] for i in g["items"]}
@@ -449,9 +450,10 @@ def test_the_board_route_and_the_promote_route_ask_one_rule(hub):
         assert bool(calls) is want, (item, calls)
 
 
-def test_a_spec_that_is_itself_a_ticket_moves(hub):
+def test_a_spec_that_is_itself_a_ticket_moves(hub, monkeypatch):
     """A Backlog spec is promotable whether or not a spec holds it: the first clause of the rule is the spec label."""
     mod, port = hub
+    sub_issues(monkeypatch, answer=[])
     mod.board_cache["items"].append({**ticket(31), "l": ["spec"]})
     calls = []
     mod.promote_write = writer(calls)

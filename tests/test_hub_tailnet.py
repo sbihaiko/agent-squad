@@ -28,11 +28,11 @@ HEADER = re.compile(r"<div id=who>(.*?)</div>")
 def serve(monkeypatch, tmp_path):
     servers = []
 
-    def start(allow=(ANA, BO)):
+    def start(allow=(ANA, BO), host=TAILNET):
         checkout = tmp_path / "checkout"
         (checkout / "docs" / "squad").mkdir(parents=True)
         (checkout / "docs" / "squad" / "defaults.yaml").write_text(
-            f"tailnet:\n  host: {TAILNET}\n  allow: {json.dumps(list(allow))}\n")
+            "" if host is None else f"tailnet:\n  host: {host}\n  allow: {json.dumps(list(allow))}\n")
         for k, v in (("SG_REPO", "x/y"), ("SG_OWNER", "x"), ("SG_PROJECT", "4"), ("HOME", str(tmp_path)),
                      ("SG_CHECKOUT", str(checkout)), ("SG_HUB_DIR", str(tmp_path / "hub"))):
             monkeypatch.setenv(k, v)
@@ -92,6 +92,16 @@ def test_loopback_get_is_answered_as_today(serve):
     s = serve()
     status, text = request(s.port, "GET", "/api/version", host=loopback(s.port))
     assert status == 200 and "v" in json.loads(text)
+
+
+def test_the_tailnet_entry_stays_disabled_until_a_host_is_named(serve):
+    """#713 has not proved the forwarded headers, so the project file names no tailnet host: a request on a tailnet name
+    is refused by the seam before any handler, and the owner's move writes nothing (#829)."""
+    s = serve(host=None)
+    assert request(s.port, "GET", "/api/runs", host=TAILNET, login=ANA) == (403, "forbidden host")
+    status, _ = request(s.port, "POST", "/api/promote", host=TAILNET, login=ANA, origin=tailnet_origin(), body={"issue": 5})
+    assert status in (400, 403), status
+    assert s.calls["/api/promote"] == []
 
 
 def test_loopback_page_shows_no_login(serve):

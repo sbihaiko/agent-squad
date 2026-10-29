@@ -32,8 +32,8 @@ def _module(name, path):
     return module
 
 
-def run_js(src, expr):
-    script = f"{src}\nconsole.log(JSON.stringify({expr}));"
+def run_js(src, expr, prelude=""):
+    script = f"{src}\n{prelude}\nconsole.log(JSON.stringify({expr}));"
     p = subprocess.run([NODE, "-"], input=script, capture_output=True, text=True, timeout=30)
     assert p.returncode == 0, p.stderr
     return json.loads(p.stdout)

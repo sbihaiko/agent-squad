@@ -3,7 +3,8 @@
 # Backlog row (`st` null, no item id), and `board.sh` answers a move for that row `#<n> not on the board` and writes nothing,
 # so the arrow failed on every card filed outside the board. The door now asks the seam for `--add` exactly when the row holds no
 # Project item, and the closed refusal still comes first. A spec moves with its Backlog tickets (ADR-0142, #838); its sub-issue
-# read is stubbed here, so the suite makes no network call. No server.
+# read is stubbed here, so the suite makes no network call. A ticket of a spec never moves alone (#829): the route asks the one
+# rule the board serves as `pm`, so a card the board marks not promotable is refused before any write. No server.
 # usage: bash test-hub-promote.sh [path/to/hub.py]
 src=$(cd "$(dirname "${1:-$0}")" && pwd)/$(basename "${1:-hub.py}"); [ -n "$1" ] || src=$(cd "$(dirname "$0")" && pwd)/hub.py; export HUB_SRC=$src
 T=$(mktemp -d); fail=0
@@ -26,6 +27,8 @@ loose = {"n": 8, "s": "open", "st": None, "l": [], "t": "t"}          # an open 
 spec = {"n": 9, "s": "open", "st": None, "l": ["spec"], "t": "t"}
 doing = {"n": 10, "i": 124, "s": "open", "st": "Doing", "l": [], "t": "t"}
 closed = {"n": 11, "i": 125, "s": "closed", "st": "Backlog", "l": [], "t": "t"}
+ticket = {"n": 12, "i": 126, "s": "open", "st": "Backlog", "l": [], "pa": 9, "t": "t"}      # a ticket of spec #9 (#829)
+subspec = {"n": 13, "s": "open", "st": None, "l": ["spec"], "pa": 9, "t": "t"}             # a spec that a spec holds
 def check(label, ok, got=""):
     print(("ok   " if ok else "FAIL ") + label + ("" if ok else f": {got}"))
 got, c = run(card)
@@ -39,6 +42,14 @@ got, c = run(spec)
 check("a spec whose ticket read fails moves nothing", "err" in got and c == [], (got, c))
 subs["answer"] = []
 
+got, c = run(ticket)
+check("a ticket of a spec is refused before any write", "err" in got and "spec" in got["err"] and c == [], (got, c))
+got, c = run(subspec)
+check("a spec that a spec holds still moves", got.get("ok") and got.get("moved") == [13] and c == [([13], True)], (got, c))
+hub.board_cache = {**hub.board_cache, "items": [ticket, dict(card, st="Backlog")]}   # the write above moved `card`; a fresh row is the board's own
+rows = {i["n"]: i for g in hub.board()["groups"] for i in g["items"]}
+check("the board marks no ticket promotable and names the column the move goes to",
+      not rows[12].get("pm") and rows[7].get("pm") is True and rows[7].get("pmt") == hub.PROMOTE_TO, rows)
 got, c = run(doing)
 check("a card past Backlog is refused before any write", "err" in got and c == [], (got, c))
 got, c = run(closed)

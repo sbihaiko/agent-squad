@@ -85,6 +85,15 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 #5aa9ff}
 .turn b{display:block;color:var(--mute);font-size:12px;margin-bottom:2px}
 .turn div{white-space:pre-wrap;overflow-wrap:anywhere}
 #edge{position:absolute;top:52px;bottom:0;left:0;width:24px;z-index:2;touch-action:pan-y}
+.card.armed{border-color:var(--ok);box-shadow:inset 0 0 0 1px var(--ok)}
+.card .cmv{display:none;color:var(--ok);font-size:12px;margin-top:4px}
+.card.armed .cmv{display:block}
+.card .creason{display:block;color:var(--err);font-size:12px;margin-top:4px}
+#undo{position:fixed;left:12px;right:12px;bottom:calc(64px + env(safe-area-inset-bottom));z-index:25;display:flex;gap:8px;align-items:center;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+#undo[hidden]{display:none}
+#undo-text{flex:1;font-size:14px}
+#undo button{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:0 12px;font-size:14px}
+#undo button[hidden]{display:none}
 </style>
 <header>
 <select id="profile" aria-label="Profile" hidden></select>
@@ -119,6 +128,7 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 #5aa9ff}
 <button id="lmode" type="button">by group</button>
 </div>
 <div id="cards" data-role="gap"></div>
+<div id="undo" role="status" hidden><span id="undo-text"></span><button id="undo-btn" type="button" hidden>Undo</button></div>
 <p id="bmsg"></p>
 </section>
 <section data-panel="runs" hidden>
@@ -195,6 +205,7 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 #5aa9ff}
 </nav>
 <script>
 /*GESTURE*/
+/*MOVE*/
 /*BOARD_FILTER*/
 const $ = id => document.getElementById(id);
 const base = location.pathname.replace(/mobile\/?$/, "");
@@ -259,10 +270,17 @@ const rolesOf = el => { const out = []; for (let e = el; e; e = e.parentElement)
 const columnCards = g => g.items.filter(x => labelOk(bo.labels || [], bo.lmode, x) && spOk(x));
 function cardButton(x, i) {
   const b = document.createElement("button");
-  b.className = "card"; b.dataset.role = "card"; b.dataset.i = i;
+  b.className = "card"; b.dataset.role = "card"; b.dataset.i = i; b.dataset.n = x.n;
   const id = document.createElement("span"); id.className = "cid"; id.textContent = "#" + x.n;
   const t = document.createElement("span"); t.textContent = x.t;
   b.append(id, t);
+  // A card the hub marks promotable is the only one that drags, and it names the column the move goes to (`x.pmt`) so
+  // this page holds no column list of its own (#829). The hint is drawn only while the card is dragged.
+  if (x.pm) {
+    b.dataset.pm = "1"; b.dataset.pmt = x.pmt || "";
+    const mv = document.createElement("span"); mv.className = "cmv";
+    b.append(mv);
+  }
   return b;
 }
 function renderBoard() {
@@ -357,22 +375,87 @@ $("col-prev").onclick = () => step({ act: "column", step: -1 });
 $("col-next").onclick = () => step({ act: "column", step: 1 });
 $("sh-next").onclick = () => step({ act: "card", step: 1 });
 $("sh-close").onclick = () => step({ act: "close" });
+// The owner's move from the phone (#829): a drag right past the threshold stages a move to the column the row names
+// (`x.pmt`); the Undo delays the write, and the app going hidden or the profile changing cancels it, so a move the owner
+// walked away from is never written later. The card never leaves its column here: only the hub's read moves it
+// (ADR-0143), and nothing on this page moves a card back or past the column the row names.
+let pending = null, pendingTimer = 0, deadTimer = 0, suppressClick = false;
+const undoText = t => { $("undo-text").textContent = t; $("undo").hidden = !t; };
+function stageMove(x, el) {
+  clearTimeout(pendingTimer); clearTimeout(deadTimer);
+  pending = moveStage(x.n, x.pmt, Date.now());
+  if (el) { el.classList.remove("armed"); el.style.transform = ""; }
+  undoText("#" + x.n + " moves to " + x.pmt + " in a few seconds");
+  $("undo-btn").hidden = false;
+  pendingTimer = setTimeout(writePending, UNDO_MS);
+}
+function cancelMove(why) {
+  if (!pending || !pending.live) return;
+  pending = moveAct(pending, why, Date.now());
+  clearTimeout(pendingTimer); pendingTimer = 0;
+  $("undo-btn").hidden = true;
+  undoText("#" + pending.n + ": move cancelled");
+  clearTimeout(deadTimer);
+  deadTimer = setTimeout(() => { if (!pending || !pending.live) undoText(""); }, 2500);
+}
+async function writePending() {
+  const p = moveAct(pending, "write", Date.now());
+  if (!p || p.why !== "written") return;
+  pending = null; undoText(""); $("undo-btn").hidden = true;
+  try {
+    const r = await fetch("/api/promote", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ issue: p.n }) });
+    const d = await r.json();
+    if (d.err) showCardReason(p.n, d.err);
+    loadBoard();
+  } catch (e) { showCardReason(p.n, "the hub did not answer"); }
+}
+function showCardReason(n, why) {
+  const el = $("cards").querySelector('[data-role="card"][data-n="' + n + '"]');
+  if (!el) { $("bmsg").textContent = why; return; }
+  let r = el.querySelector(".creason");
+  if (!r) { r = document.createElement("span"); r.className = "creason"; el.append(r); }
+  r.textContent = why;
+}
+$("undo-btn").onclick = () => cancelMove("undo");
+addEventListener("visibilitychange", () => { if (document.hidden) cancelMove("hidden"); });
+addEventListener("pagehide", () => cancelMove("hidden"));
 $("cards").onclick = e => {
   const b = e.target.closest(".card");
+  if (suppressClick) { suppressClick = false; return; }
   if (b) { view = afterOpen(view, +b.dataset.i); refresh(); }
+};
+const moveHint = el => {
+  const h = el.querySelector(".cmv");
+  if (!h) return;
+  h.textContent = el.classList.contains("armed") ? "release to move to " + el.dataset.pmt : "drag right, then release past the line, to move to " + el.dataset.pmt;
 };
 document.addEventListener("touchstart", e => {
   const owner = gestureOwner(rolesOf(e.target));
   if (owner === "none") { touch = null; return; }
-  const p = e.touches[0];
-  touch = { owner, x: p.clientX, y: p.clientY, atTop: $("sheet").scrollTop === 0 };
+  const p = e.touches[0], card = e.target.closest ? e.target.closest(".card") : null;
+  touch = { owner, x: p.clientX, y: p.clientY, atTop: $("sheet").scrollTop === 0,
+            card: card && card.closest("#cards") ? card : null, pm: !!(card && card.dataset.pm === "1" && card.closest("#cards")) };
+  suppressClick = false;
+}, { passive: true });
+document.addEventListener("touchmove", e => {
+  if (!touch || !touch.pm || !touch.card) return;
+  const p = e.touches[0], dx = p.clientX - touch.x, dy = p.clientY - touch.y;
+  if (Math.abs(dy) > Math.abs(dx)) return;
+  touch.card.style.transform = "translateX(" + Math.max(0, Math.min(120, dx)) + "px)";
+  touch.card.classList.toggle("armed", moveArmed(dx));
+  moveHint(touch.card);
 }, { passive: true });
 document.addEventListener("touchend", e => {
   if (!touch) return;
-  const p = e.changedTouches[0];
-  const g = gestureAct({ owner: touch.owner, dx: p.clientX - touch.x, dy: p.clientY - touch.y, atTop: touch.atTop });
+  const p = e.changedTouches[0], t = touch, dx = p.clientX - t.x, dy = p.clientY - t.y;
   touch = null;
-  if (g) step(g);
+  if (t.card) { t.card.style.transform = ""; if (Math.abs(dx) > 10) suppressClick = true; }
+  const g = gestureAct({ owner: t.owner, dx, dy, atTop: t.atTop });
+  if (g) { step(g); return; }
+  const mv = moveDrag({ promotable: t.pm, dx, dy });
+  const x = mv && t.card ? shown[+t.card.dataset.i] : null;
+  if (x && x.pm) stageMove(x, t.card);
+  else if (t.card) { t.card.classList.remove("armed"); moveHint(t.card); }
 }, { passive: true });
 
 let moreScreen = null, period = "day", moreSeq = 0;
@@ -472,7 +555,7 @@ setInterval(loadMore, 10000);
     const d = await (await fetch("/" + "api/hub", { cache: "no-store" })).json();
     const sel = $("profile");
     for (const r of d.repos) sel.add(new Option(r.slug, r.slug, false, r.slug === me));
-    sel.onchange = () => { location.href = "/" + sel.value + "/mobile"; };
+    sel.onchange = () => { cancelMove("profile"); location.href = "/" + sel.value + "/mobile"; };
     sel.hidden = false;
   } catch (e) {}
 })();
