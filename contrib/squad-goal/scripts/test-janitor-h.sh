@@ -1,18 +1,19 @@
 #!/bin/bash
 # Regression test for janitor rule H (RED-LOOP, STATE-REGRESSION from the issue's loop comments), stubbed gh. usage: bash test-janitor-h.sh [path/to/janitor.py]
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/bin" "$T/st/auto" "$T/co/runs/.hub"; cp "$src" "$T/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$T/issue_state.py"
+mkdir -p "$T/bin" "$T/st/auto" "$T/co/runs/.hub"; cp "$src" "$T/janitor.py"; for f in "$(dirname "$src")"/*.py "$(dirname "$src")"/*.sh; do [ "$f" -ef "$src" ] || cp "$f" "$T/"; done   # the modules janitor imports sit beside it, as in the live copy
 cat > "$T/co/runs/.hub/hub-board.json" <<J
 {"items":[{"n":1201,"st":"In Progress","s":"open"},{"n":1202,"st":"Blocked","s":"open"},{"n":1203,"st":"Done","s":"open"},{"n":1204,"st":"In Progress","s":"open"},{"n":1205,"st":"Code Complete","s":"open"}]}
 J
 cat > "$T/bin/gh" <<'J'
 #!/bin/bash
 red="Fork-only close: the fork suite failed after merging gui/x (abc) as def. Card back to In Progress."
+c() { printf '{"created_at":"2026-10-10T01:00:00Z","body":"%s"}' "$1"; }   # one comment as the REST list carries it; gh_pages reads JSON
 case "$*" in
-  *issues/1201/comments*) printf '2026-10-10T01:00:00Z\t%s\n' "$red" "$red" "$red";;
-  *issues/1204/comments*) printf '2026-10-10T01:00:00Z\t%s\n' "$red" "$red" "Fork half merged: gui/x at abc into local/next as def, fork suite green (test pass t)." "$red";;
-  *issues/1202/comments*) printf '2026-10-10T01:00:00Z\t%s\n' "Child c finished: pass. Card -> Code Complete (Testing starts later).";;
-  *issues/1205/comments*) printf '2026-10-10T01:00:00Z\t%s\n' "Child c finished: pass. Card -> Code Complete (Testing starts later).";;
+  *issues/1201/comments*) echo "[$(c "$red"),$(c "$red"),$(c "$red")]";;
+  *issues/1204/comments*) echo "[$(c "$red"),$(c "$red"),$(c "Fork half merged: gui/x at abc into local/next as def, fork suite green (test pass t)."),$(c "$red")]";;
+  *issues/1202/comments*|*issues/1205/comments*) echo "[$(c "Child c finished: pass. Card -> Code Complete (Testing starts later).")]";;
+  *) echo "[]";;
 esac
 J
 chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
