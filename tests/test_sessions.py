@@ -14,8 +14,8 @@ import subprocess
 import tempfile
 import threading
 import time
-from http.server import ThreadingHTTPServer
 from http.client import HTTPConnection
+from http.server import ThreadingHTTPServer
 from types import SimpleNamespace
 
 import pytest
@@ -38,8 +38,10 @@ def load_sessions():
 
 def start_of(pid):
     out = " ".join(subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True).stdout.split())
-    try: return int(time.mktime(time.strptime(out, "%a %b %d %H:%M:%S %Y")))
-    except ValueError: return 0
+    try:
+        return int(time.mktime(time.strptime(out, "%a %b %d %H:%M:%S %Y")))
+    except ValueError:
+        return 0
 
 
 @pytest.fixture
@@ -224,7 +226,8 @@ def serve(monkeypatch, home, tmp_path):
 def get(port, host, login=None):
     conn = HTTPConnection("127.0.0.1", port, timeout=10)
     headers = {"Host": host}
-    if login: headers["Tailscale-User-Login"] = login
+    if login:
+        headers["Tailscale-User-Login"] = login
     conn.request("GET", "/api/sessions", headers=headers)
     r = conn.getresponse()
     body = r.read().decode()
