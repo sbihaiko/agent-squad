@@ -170,3 +170,116 @@ def test_a_304_on_the_labels_keeps_the_colours_held(hub, pass_env):
     hub.board_pass()
     assert f"If-None-Match: {ETAG}" in gh.reads("labels?")[-1]
     assert hub.board_cache["lc"] == {"bug": "d73a4a"}
+
+
+def test_every_gh_read_the_pass_makes_carries_a_deadline(hub, pass_env, monkeypatch):
+    gh, _ = pass_env
+    deadlines = []
+
+    def run(cmd, **kw):
+        deadlines.append(kw.get("timeout"))
+        return gh(cmd, **kw)
+
+    monkeypatch.setattr(hub.subprocess, "run", run)
+    hub.board_pass()
+    _one_refresh_prs_iteration(hub, monkeypatch)
+    assert deadlines and all(t is not None for t in deadlines), deadlines
+
+
+def test_a_stalled_rest_page_keeps_the_rows_held_and_sets_the_error(hub, pass_env, monkeypatch):
+    gh, _ = pass_env
+    seam_row = {"n": 7, "t": "a card", "s": "open", "c": None, "st": "Todo", "k": None, "l": [], "si": {"total": None, "completed": None}, "o": None}
+
+    class _Rows:
+        def rows(self, *a, **k):
+            return json.dumps(seam_row) + "\n"
+
+    monkeypatch.setattr(hub, "board_seam", lambda: _Rows())
+    hub.board_pass()
+    held = hub.board_cache["items"]
+    assert [i["n"] for i in held] == [7, 5]
+
+    def stalled(cmd, **kw):
+        if "issues?state=open" in " ".join(cmd):
+            raise subprocess.TimeoutExpired(cmd, kw.get("timeout"))
+        return gh(cmd, **kw)
+
+    monkeypatch.setattr(hub.subprocess, "run", stalled)
+    hub.board_pass()
+    assert hub.board_cache["items"] == held
+    assert hub.board_cache["err"]
+
+
+def test_a_failed_label_read_is_read_again_on_the_next_pass(hub, pass_env, monkeypatch):
+    gh, _ = pass_env
+
+    def broken(cmd, **kw):
+        if "labels?" in " ".join(cmd):
+            raise subprocess.TimeoutExpired(cmd, kw.get("timeout"))
+        return gh(cmd, **kw)
+
+    monkeypatch.setattr(hub.subprocess, "run", broken)
+    hub.board_pass()
+    monkeypatch.setattr(hub.subprocess, "run", gh)
+    hub.board_pass()
+    assert len(gh.reads("labels?")) == 1
+    assert hub.board_cache["lc"] == {"bug": "d73a4a"}
+
+
+def test_a_failed_closed_pull_read_is_read_again_on_the_next_pass(hub, pass_env, monkeypatch):
+    gh, _ = pass_env
+    failed = []
+
+    def broken(cmd, **kw):
+        if "pulls?state=closed" in " ".join(cmd):
+            failed.append(cmd)
+            raise subprocess.TimeoutExpired(cmd, kw.get("timeout"))
+        return gh(cmd, **kw)
+
+    monkeypatch.setattr(hub.subprocess, "run", broken)
+    _one_refresh_prs_iteration(hub, monkeypatch)
+    monkeypatch.setattr(hub.subprocess, "run", gh)
+    _one_refresh_prs_iteration(hub, monkeypatch)
+    assert len(failed) == 1
+    assert len(gh.reads("pulls?state=closed")) == 1
+    assert hub.prs_cache["rows"][0]["n"] == 1200
+
+
+def test_the_skip_line_is_one_per_floor_episode_not_per_remaining_count(hub, pass_env, capsys):
+    gh, state = pass_env
+    _quota_below_floor(state)
+    hub.board_pass()
+    (state / "gh-ratelimit.json").write_text(json.dumps({"core": {"remaining": 110, "reset": time.time() + 1800}}))
+    hub.board_pass()
+    assert gh.calls == []
+    assert capsys.readouterr().err.count("skipped board pass") == 1
+
+
+def test_a_new_floor_episode_after_recovery_says_so_again(hub, pass_env, capsys):
+    gh, state = pass_env
+    _quota_below_floor(state)
+    hub.board_pass()
+    (state / "gh-ratelimit.json").write_text(json.dumps({"core": {"remaining": 4000, "reset": time.time() + 1800}}))
+    hub.board_pass()
+    _quota_below_floor(state)
+    hub.board_pass()
+    assert capsys.readouterr().err.count("skipped board pass") == 2
+
+
+def test_the_closed_pull_cache_is_written_through_a_temp_file(hub, pass_env, monkeypatch, tmp_path):
+    prs_file = tmp_path / "hub-prs.json"
+    monkeypatch.setattr(hub, "PRS", prs_file)
+    replaced = []
+    real_replace = os.replace
+    monkeypatch.setattr(hub.os, "replace", lambda a, b: (replaced.append(str(b)), real_replace(a, b)))
+    hub.refresh_closed_prs()
+    assert replaced == [str(prs_file)]
+    assert json.loads(prs_file.read_text())["rows"][0]["n"] == 1200
+
+
+def test_a_closed_pull_read_with_no_rows_writes_no_cache_file(hub, pass_env, monkeypatch, tmp_path):
+    prs_file = tmp_path / "hub-prs.json"
+    monkeypatch.setattr(hub, "PRS", prs_file)
+    monkeypatch.setattr(hub, "gh_list", lambda path, query="": [])
+    hub.refresh_closed_prs()
+    assert not prs_file.exists()
