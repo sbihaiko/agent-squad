@@ -37,8 +37,9 @@ def load_sessions():
 
 
 def start_of(pid):
-    out = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
-    return int(time.mktime(time.strptime(out, "%a %b %d %H:%M:%S %Y")))
+    out = " ".join(subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True).stdout.split())
+    try: return int(time.mktime(time.strptime(out, "%a %b %d %H:%M:%S %Y")))
+    except ValueError: return 0
 
 
 @pytest.fixture

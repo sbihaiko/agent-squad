@@ -3,7 +3,7 @@
 usage: hub.py [port]   default 7700, loopback only. Read-only: it discovers servers via ps/lsof and reads record.jsonl."""
 import datetime as dt, glob, hashlib, html, importlib.util, itertools, json, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, pathlib, urllib.parse, urllib.request
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
-import agyquota, chainhealth, ghread, ghthrottle, modelreg, provkey   # the chains and the one registry resolve a model (ADR-0147); ghread is the one GitHub door (ADR-0277)
+import agyquota, chainhealth, ghread, ghthrottle, modelreg, provkey, sessions   # the chains and the one registry resolve a model (ADR-0147); ghread is the one GitHub door (ADR-0277)
 from issue_state import board_state, KINDS, TEST_CASE_TITLE, _utc
 import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -4101,6 +4101,12 @@ def _models_set(new):
     modelreg.write_chains(MODELS, chains, d)
     return models_get()
 
+profiles_of_cwd = sessions.profiles_of
+
+def sessions_payload():
+    """What /api/sessions serves: this profile's live sessions, grouped by project (#833)."""
+    return sessions.list_sessions(os.environ.get("SG_PROFILE", ""), profiles_of=profiles_of_cwd)
+
 GESTURE_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-gesture.js").read_text()
 MOBILE_PAGE = (pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text().replace("/*GESTURE*/", GESTURE_JS).replace("/*BOARD_FILTER*/", BOARD_FILTER_JS)
 
@@ -4267,6 +4273,7 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/speed"): body, ct = json.dumps(speed()).encode(), "application/json"
         elif self.path.startswith("/api/load"): body, ct = json.dumps(load_payload()).encode(), "application/json"
         elif self.path.startswith("/api/status"): body, ct = json.dumps(status_payload()).encode(), "application/json"
+        elif self.path.startswith("/api/sessions"): body, ct = json.dumps(sessions_payload()).encode(), "application/json"
         elif self.path.split("?", 1)[0] == "/mobile": body, ct = MOBILE_PAGE.encode(), "text/html; charset=utf-8"
         else: body, ct = served_page(a.login).encode(), "text/html; charset=utf-8"
         self.send_response(200); self.send_header("Content-Type", ct); self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(body)
