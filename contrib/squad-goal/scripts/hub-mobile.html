@@ -470,7 +470,7 @@ function runRow(r, url) {
 async function loadRuns() {
   try {
     const [live, ended] = await Promise.all([call("/api/runs"), call("/api/ended")]);
-    $("runs-live").replaceChildren(...live.filter(r => r.live).map(r => runRow(r, r.url || "/dash/" + encodeURIComponent(r.id) + "/")));
+    $("runs-live").replaceChildren(...live.filter(r => r.running).map(r => runRow(r, r.url || "/dash/" + encodeURIComponent(r.id) + "/")));
     $("runs-ended").replaceChildren(...ended.map(r => runRow(r, "/ended/" + encodeURIComponent(r.id))));
     $("runs-msg").textContent = "";
   } catch (e) { $("runs-msg").textContent = e.message; }

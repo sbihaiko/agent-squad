@@ -1451,22 +1451,30 @@ def open_held(name, start=None):
     orphaned from active-runs has no server, so the hub starts one when the owner opens it (#689)."""
     return _open_run(name, held_folder(name), start)
 
-def ended_today():
-    """The run folders whose record ended on the machine's local day, latest end first. Each row carries its end time."""
-    today = dt.date.today(); now = time.time(); out = []
+def ended_folders():
+    """(folder, row) of each run folder whose record ended on the machine's local day, latest end first. A run that ended today
+    wrote its record today, so a record last written before midnight is not read."""
+    today = dt.date.today(); now = time.time(); midnight = dt.datetime.combine(today, dt.time()).timestamp(); out = []
     for d in sorted(project_dirs()):
         for rd in d.glob("run-*"):
+            try:
+                if (rd / "record.jsonl").stat().st_mtime < midnight: continue
+            except OSError: continue
             r = scan(rd / "record.jsonl")
             if not r or r.get("verdict") is None or not r.get("t1"): continue
             ended = float(r["t1"])
             if dt.date.fromtimestamp(ended) != today: continue
             row, _ = run_row(str(rd), "", [])
-            out.append({**row, "dir": str(rd), "live": False, "ended_at": ended, "age": max(0, int(now - ended))})
-    return sorted(out, key=lambda r: -r["ended_at"])
+            out.append((str(rd), {**row, "live": False, "running": False, "ended_at": ended, "age": max(0, int(now - ended))}))
+    return sorted(out, key=lambda x: -x[1]["ended_at"])
+
+def ended_today():
+    """The runs that ended on the machine's local day, latest end first, each with its end time."""
+    return [row for _, row in ended_folders()]
 
 def open_ended(name, start=None):
     """The port of a dashboard server for a run that ended today, or None. dashboard_server.start reuses a server that runs (ADR-0118)."""
-    return _open_run(name, next((r["dir"] for r in ended_today() if r["id"] == name), None), start)
+    return _open_run(name, next((folder for folder, row in ended_folders() if row["id"] == name), None), start)
 
 def _open_run(name, folder, start):
     if folder is None: return None
@@ -1492,7 +1500,7 @@ def run_row(d, port, ps_lines):
     r = scan(p)
     if r is None:
         b = badge_of("starting")
-        return {"id": os.path.basename(d), "port": port, "state": "starting", "badge": b["text"], "tip": b["title"], "label": "run " + os.path.basename(d)[-6:], "issues": [], "age": 0, "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": 0, "spend": 0, "dur": 0, "kind": "code", "live": True, "agents": 0}, None
+        return {"id": os.path.basename(d), "port": port, "state": "starting", "badge": b["text"], "tip": b["title"], "label": "run " + os.path.basename(d)[-6:], "issues": [], "age": 0, "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": 0, "spend": 0, "dur": 0, "kind": "code", "live": True, "running": True, "agents": 0}, None
     age = time.time() - p.stat().st_mtime; st = state_of(r, age)
     try: request = (pathlib.Path(d) / "request.txt").read_text(errors="replace")
     except OSError: request = None
@@ -1504,7 +1512,7 @@ def run_row(d, port, ps_lines):
     if gone: b = gone_badge(b)
     rank = run_rank(st, live=not gone)
     t1 = r["t1"] or time.time()
-    return {"id": os.path.basename(d), "port": port, "state": st, "badge": b["text"], "tip": b["title"], "label": r.get("label"), "issues": r["issues"], "issue_src": r.get("issue_src"), "issue_why": r.get("issue_why"), "age": int(age), "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": rank, "spend": r["spend"], "dur": round((t1 - (r["t0"] or t1)) / 60, 1), "kind": r.get("kind", "code"), "fix": r.get("fix"), "stack": r.get("stack"), "bug": r.get("bug"), "merge": r.get("merge"), "titles": {i: TITLE.get(int(i), "") for i in r["issues"]}, "live": not gone, "agents": 0 if gone else r.get("agents") or 0, "share": r.get("share")}, {"id": os.path.basename(d), "dir": d, "wts": r.get("wts") or []}   # the row, and what the load attribution needs and nothing else
+    return {"id": os.path.basename(d), "port": port, "state": st, "badge": b["text"], "tip": b["title"], "label": r.get("label"), "issues": r["issues"], "issue_src": r.get("issue_src"), "issue_why": r.get("issue_why"), "age": int(age), "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": rank, "spend": r["spend"], "dur": round((t1 - (r["t0"] or t1)) / 60, 1), "kind": r.get("kind", "code"), "fix": r.get("fix"), "stack": r.get("stack"), "bug": r.get("bug"), "merge": r.get("merge"), "titles": {i: TITLE.get(int(i), "") for i in r["issues"]}, "live": not gone, "running": r["verdict"] is None and not gone, "agents": 0 if gone else r.get("agents") or 0, "share": r.get("share")}, {"id": os.path.basename(d), "dir": d, "wts": r.get("wts") or []}   # the row, and what the load attribution needs and nothing else
 
 def runs():
     _titles()
@@ -1542,7 +1550,7 @@ def runs():
         st = handled_of("stalled" if lost else raw, rec); t1 = d.get("t1") or time.time(); b = badge_of(st, rec)
         tip = LOST_NOTE if lost else b["title"]
         if lost: b = {**b, "text": b["text"] + " · lost"}   # the badge carries the note too: the state alone reads as a live stall
-        out.append({"id": f.stem, "port": "", "url": "/test/" + f.stem, "state": st, "badge": b["text"], "tip": tip, "label": "test #" + str(d.get("issue")), "issues": [str(d.get("issue"))], "age": int(age), "project": "test", "rank": run_rank(st, live=not lost), "spend": 0, "dur": round((t1 - d.get("t0", t1)) / 60, 1), "kind": "test", "titles": {str(d.get("issue")): TITLE.get(int(d.get("issue") or 0), "")}, "live": not lost and st in LIVE_STATES, "agents": 0})
+        out.append({"id": f.stem, "port": "", "url": "/test/" + f.stem, "state": st, "badge": b["text"], "tip": tip, "label": "test #" + str(d.get("issue")), "issues": [str(d.get("issue"))], "age": int(age), "project": "test", "rank": run_rank(st, live=not lost), "spend": 0, "dur": round((t1 - d.get("t0", t1)) / 60, 1), "kind": "test", "titles": {str(d.get("issue")): TITLE.get(int(d.get("issue") or 0), "")}, "live": not lost and st in LIVE_STATES, "running": not lost and st in LIVE_STATES, "agents": 0})
     cc = childcc_row()
     if cc: out.append(cc)   # the pass is a worker beside the runs, never one of them: working() and the header count skip its kind
     LOAD_RUNS[:] = load_rows   # the attribution works off the runs the hub just showed, so it never needs a query of its own
