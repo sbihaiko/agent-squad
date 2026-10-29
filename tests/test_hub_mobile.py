@@ -167,6 +167,7 @@ def test_refused_mobile_page_names_the_reason(hub, monkeypatch):
     assert "login not on the allow list" in body
 
 
+@pytest.mark.heavy
 def test_mux_serves_the_mobile_page_under_the_profile_path(tmp_path, monkeypatch):
     prof, base, co = tmp_path / "profiles", tmp_path / "state", tmp_path / "co-alpha"
     (co / "docs" / "squad").mkdir(parents=True)

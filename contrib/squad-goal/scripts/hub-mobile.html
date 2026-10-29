@@ -18,7 +18,36 @@ h2{font-size:17px;margin:6px 0 10px}
 #warnings li{padding:12px 4px;border-bottom:1px solid var(--line);color:var(--warn);min-height:44px}
 #warn-detail{margin-top:10px;padding:12px;background:var(--panel);border-radius:8px;color:var(--mute);white-space:pre-wrap}
 #load{color:var(--mute);margin-top:12px;font-variant-numeric:tabular-nums}
-#msg{color:var(--err)}
+#msg,#bmsg{color:var(--err)}
+#bhead{display:flex;align-items:center;gap:8px;touch-action:pan-y}
+#bhead button{min-width:44px;min-height:44px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:6px;font-size:22px}
+#bhead button:disabled{opacity:.35}
+#col-title{flex:1;text-align:center;min-height:44px;display:flex;flex-direction:column;justify-content:center}
+#col-name{font-size:17px;font-weight:600}
+#col-count{color:var(--mute);font-size:13px;font-variant-numeric:tabular-nums}
+#dots{display:flex;justify-content:center;gap:6px;margin:8px 0 12px}
+#dots i{width:7px;height:7px;border-radius:50%;background:var(--line)}
+#dots i.on{background:var(--fg)}
+#bfilter{display:flex;gap:8px;align-items:flex-start;margin-bottom:10px;flex-wrap:wrap}
+#bfilter button,#bfilter summary{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:0 10px;font-size:14px;min-height:40px;line-height:40px}
+#lf{position:relative}
+#lfl{position:absolute;z-index:5;top:44px;left:0;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:8px;display:grid;gap:4px;min-width:200px;max-height:60vh;overflow:auto}
+#lfl label{font-size:14px;display:flex;align-items:center;gap:6px;min-height:36px}
+#cards{touch-action:pan-y;min-height:50vh;display:flex;flex-direction:column;gap:8px}
+.card{display:block;width:100%;text-align:left;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:10px 12px;font:14px system-ui,sans-serif;min-height:44px}
+.card .cid{display:block;color:var(--mute);font-size:12px;margin-bottom:2px}
+.empty{color:var(--mute);text-align:center;padding:24px 0}
+#sheet{position:fixed;left:0;right:0;bottom:0;max-height:82vh;overflow:auto;overscroll-behavior:contain;touch-action:pan-y;background:var(--panel);border-top:1px solid var(--line);border-radius:14px 14px 0 0;padding:10px 14px calc(12px + env(safe-area-inset-bottom));z-index:20}
+#sheet[hidden]{display:none}
+.grab{width:40px;height:4px;border-radius:2px;background:var(--line);margin:0 auto 10px}
+#sh-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px}
+#sh-head button,#sh-next{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:0 12px;font-size:14px}
+#sh-link{color:#5aa9ff;font-size:14px}
+#sh-title{font-size:16px;margin:6px 0}
+#sh-labels{color:var(--mute);font-size:12px;margin-bottom:8px}
+#sh-body{white-space:pre-wrap;color:var(--fg);font-size:14px;margin:10px 0;overflow-wrap:anywhere}
+#sh-next{width:100%;margin-top:8px}
+#sh-next:disabled{opacity:.35}
 nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:var(--panel);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom)}
 nav button{flex:1;min-height:56px;background:none;border:0;color:var(--mute);font:13px system-ui;padding:6px 0}
 nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 #5aa9ff}
@@ -42,11 +71,33 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 #5aa9ff}
 <div id=load></div>
 <p id=msg></p>
 </section>
-<section data-panel="board" hidden><h2>Board</h2><p>Placeholder: the board tab is built by its own ticket.</p></section>
+<section data-panel="board" hidden>
+<div id="bhead" data-role="header">
+<button id="col-prev" aria-label="Previous column">&lsaquo;</button>
+<div id="col-title"><span id="col-name"></span><span id="col-count"></span></div>
+<button id="col-next" aria-label="Next column">&rsaquo;</button>
+</div>
+<div id="dots"></div>
+<div id="bfilter">
+<button id="bsp" type="button">Specs: all</button>
+<details id="lf"><summary>labels</summary><div id="lfl"></div></details>
+<button id="lmode" type="button">by group</button>
+</div>
+<div id="cards" data-role="gap"></div>
+<p id="bmsg"></p>
+</section>
 <section data-panel="runs" hidden><h2>Runs</h2><p>Placeholder: the runs tab is built by its own ticket.</p></section>
 <section data-panel="terminals" hidden><h2>Terminals</h2><p>Placeholder: the terminals tab is built by its own ticket.</p></section>
 <section data-panel="more" hidden><h2>More</h2><p>Placeholder: the more tab is built by its own ticket.</p></section>
 </main>
+<div id="sheet" data-role="sheet" role="dialog" aria-labelledby="sh-title" hidden>
+<div class="grab"></div>
+<div id="sh-head"><a id="sh-link" target="_blank" rel="noopener">Open on GitHub</a><button id="sh-close" type="button">Close</button></div>
+<h2 id="sh-title"></h2>
+<div id="sh-labels"></div>
+<div id="sh-body"></div>
+<button id="sh-next" type="button">Next card</button>
+</div>
 <nav>
 <button data-tab="status">Status</button>
 <button data-tab="board">Board</button>
@@ -55,6 +106,8 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 #5aa9ff}
 <button data-tab="more">More</button>
 </nav>
 <script>
+/*GESTURE*/
+/*BOARD_FILTER*/
 const $ = id => document.getElementById(id);
 const base = location.pathname.replace(/mobile\/?$/, "");
 $("to-desktop").href = base;
@@ -65,9 +118,9 @@ function show(name) {
   for (const p of document.querySelectorAll("[data-panel]")) p.hidden = p.dataset.panel !== name;
   for (const b of tabs) b.dataset.tab === name ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current");
   localStorage.setItem("squad-mobile-tab", name);
+  if (name === "board") loadBoard();
+  else { view = afterGesture(view, { act: "close" }); renderSheet(); }
 }
-const last = localStorage.getItem("squad-mobile-tab");
-show(tabs.some(b => b.dataset.tab === last) ? last : tabs[0].dataset.tab);
 tabs.forEach(b => b.onclick = () => show(b.dataset.tab));
 
 async function call(path) {
@@ -103,6 +156,130 @@ async function status() {
 status();
 setInterval(status, 5000);
 
+let board = null, shown = [], issueKey = "", touch = null;
+let view = { col: 0, cols: 0, card: 0, cards: 0, sheet: false };
+let bo = JSON.parse(localStorage.getItem("squad-mobile-board") || "{}");
+const saveB = () => localStorage.setItem("squad-mobile-board", JSON.stringify(bo));
+const rolesOf = el => { const out = []; for (let e = el; e; e = e.parentElement) if (e.dataset && e.dataset.role) out.push(e.dataset.role); return out; };
+const columnCards = g => g.items.filter(x => labelOk(bo.labels || [], bo.lmode, x) && spOk(x));
+function cardButton(x, i) {
+  const b = document.createElement("button");
+  b.className = "card"; b.dataset.role = "card"; b.dataset.i = i;
+  const id = document.createElement("span"); id.className = "cid"; id.textContent = "#" + x.n;
+  const t = document.createElement("span"); t.textContent = x.t;
+  b.append(id, t);
+  return b;
+}
+function renderBoard() {
+  const cols = board && board.groups ? board.groups : [];
+  view.cols = cols.length;
+  view.col = Math.min(view.col, Math.max(0, cols.length - 1));
+  const g = cols[view.col];
+  shown = g ? columnCards(g) : [];
+  view.cards = shown.length;
+  view.card = Math.min(view.card, Math.max(0, shown.length - 1));
+  $("col-name").textContent = g ? g.name : "";
+  $("col-count").textContent = g ? (shown.length === g.items.length ? String(g.n) : shown.length + " of " + g.n) : "";
+  $("col-prev").disabled = view.col <= 0;
+  $("col-next").disabled = view.col >= cols.length - 1;
+  $("dots").replaceChildren(...cols.map((c, i) => { const d = document.createElement("i"); if (i === view.col) d.className = "on"; return d; }));
+  const empty = document.createElement("p");
+  empty.className = "empty";
+  empty.textContent = g ? "No card in this column with these filters." : "Loading the board.";
+  $("cards").replaceChildren(...(shown.length ? shown.map(cardButton) : [empty]));
+}
+function setLink(url) {
+  const ok = /^https:\/\/github\.com\//.test(url || "");
+  $("sh-link").hidden = !ok;
+  $("sh-link").href = ok ? url : "#";
+}
+async function loadIssue(x, key) {
+  try {
+    const d = await call("/api/issue?n=" + x.n + (x.r ? "&r=" + encodeURIComponent(x.r) : ""));
+    if (key !== issueKey) return;
+    if (d.err) { $("sh-body").textContent = d.err; return; }
+    setLink(d.url);
+    $("sh-title").textContent = "#" + d.n + " " + d.title;
+    $("sh-labels").textContent = (d.labels || []).join(" · ");
+    $("sh-body").textContent = d.body || "No description.";
+  } catch (e) { if (key === issueKey) $("sh-body").textContent = e.message; }
+}
+function renderSheet() {
+  const x = shown[view.card];
+  const open = view.sheet && !!x;
+  $("sheet").hidden = !open;
+  if (!open) return;
+  const key = (x.r || "") + "#" + x.n;
+  $("sh-next").disabled = view.card >= shown.length - 1;
+  if (key === issueKey) return;
+  issueKey = key;
+  $("sheet").scrollTop = 0;
+  $("sh-title").textContent = "#" + x.n + " " + x.t;
+  $("sh-labels").textContent = (x.l || []).join(" · ");
+  $("sh-body").textContent = "Loading the issue.";
+  setLink(x.r ? "https://github.com/" + x.r + "/issues/" + x.n : "");
+  loadIssue(x, key);
+}
+function renderFilters() {
+  const m = specMode(), sel = bo.labels || [];
+  $("bsp").textContent = "Specs: " + SP[m][0];
+  $("lmode").textContent = bo.lmode === "all" ? "all" : "by group";
+  const LB = [...new Set([...((board && board.labels) || []), ...sel])].sort();
+  const lfl = $("lfl");
+  if (lfl.dataset.k !== LB.join("\n")) {
+    lfl.dataset.k = LB.join("\n");
+    lfl.replaceChildren(...LB.map(l => {
+      const lab = document.createElement("label"), c = document.createElement("input");
+      c.type = "checkbox"; c.value = l;
+      lab.append(c, document.createTextNode(" " + l));
+      return lab;
+    }));
+  }
+  lfl.querySelectorAll("input").forEach(c => c.checked = sel.includes(c.value));
+  $("lf").querySelector("summary").textContent = sel.length ? sel.join(", ") : "labels";
+}
+const refresh = () => { renderBoard(); renderSheet(); renderFilters(); };
+const step = g => { view = afterGesture(view, g); refresh(); };
+async function loadBoard() {
+  try {
+    const b = await call("/api/board");
+    if (!b.groups) throw new Error(b.error || "The board is not ready.");
+    board = b;
+    $("bmsg").textContent = b.err ? "(stale)" : "";
+    refresh();
+  } catch (e) { $("bmsg").textContent = e.message; }
+}
+setInterval(() => { if (!document.querySelector('[data-panel="board"]').hidden) loadBoard(); }, 10000);
+
+$("bsp").onclick = () => { bo.specs = (specMode() + 1) % 3; saveB(); refresh(); };
+$("lmode").onclick = () => { bo.lmode = bo.lmode === "all" ? "any" : "all"; saveB(); refresh(); };
+$("lfl").onchange = e => {
+  const h = new Set(bo.labels || []);
+  if (e.target.checked) h.add(e.target.value); else h.delete(e.target.value);
+  bo.labels = [...h]; saveB(); refresh();
+};
+$("col-prev").onclick = () => step({ act: "column", step: -1 });
+$("col-next").onclick = () => step({ act: "column", step: 1 });
+$("sh-next").onclick = () => step({ act: "card", step: 1 });
+$("sh-close").onclick = () => step({ act: "close" });
+$("cards").onclick = e => {
+  const b = e.target.closest(".card");
+  if (b) { view = afterOpen(view, +b.dataset.i); refresh(); }
+};
+document.addEventListener("touchstart", e => {
+  const owner = gestureOwner(rolesOf(e.target));
+  if (owner === "none") { touch = null; return; }
+  const p = e.touches[0];
+  touch = { owner, x: p.clientX, y: p.clientY, atTop: $("sheet").scrollTop === 0 };
+}, { passive: true });
+document.addEventListener("touchend", e => {
+  if (!touch) return;
+  const p = e.changedTouches[0];
+  const g = gestureAct({ owner: touch.owner, dx: p.clientX - touch.x, dy: p.clientY - touch.y, atTop: touch.atTop });
+  touch = null;
+  if (g) step(g);
+}, { passive: true });
+
 (async () => {
   const me = location.pathname.split("/")[1];
   try {
@@ -113,4 +290,7 @@ setInterval(status, 5000);
     sel.hidden = false;
   } catch (e) {}
 })();
+
+const last = localStorage.getItem("squad-mobile-tab");
+show(tabs.some(b => b.dataset.tab === last) ? last : tabs[0].dataset.tab);
 </script>

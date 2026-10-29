@@ -3347,7 +3347,7 @@ const sel=bo.labels=bo.labels||[],LB=[...new Set([...(b.labels||[]),...sel])].so
 if(lfl.dataset.k!==LB.join("\n")){lfl.dataset.k=LB.join("\n");lfl.innerHTML=`<div class=lft><span><button data-lm=any title="OR inside a group (same prefix, like wave:*; labels without a prefix form one group), AND across groups">by group</button> <button data-lm=all title="a card with every selected label">all</button></span><button data-lc=1>clear</button></div>`+LB.map(l=>`<label><input type=checkbox value="${esc(l)}">${esc(l)}</label>`).join("")}
 lfl.querySelectorAll("input").forEach(c=>c.checked=sel.includes(c.value));lfl.querySelectorAll("[data-lm]").forEach(x=>x.classList.toggle("on",(bo.lmode||"any")===x.dataset.lm));
 lf.classList.toggle("set",sel.length>0);lf.querySelector("summary").textContent=sel.length?(bo.lmode==="all"&&sel.length>1?"all of: ":"")+(bo.lmode==="all"?sel.join(", "):Object.values(fam(sel)).map(g=>g.length>1?"("+g.join(" | ")+")":g[0]).join(" & ")):"labels";
-const lok=x=>!sel.length||(bo.lmode==="all"?sel.every(l=>(x.l||[]).includes(l)):Object.values(fam(sel)).every(g=>g.some(l=>(x.l||[]).includes(l))));
+const lok=x=>labelOk(sel,bo.lmode,x);
 const hid=new Set(bo.hidden||[]),bottom=bo.dock==="bottom",eye=(g,off=hid.has(g.name))=>`<span class=eye data-eye="${esc(g.name)}" title="${off?"show":"hide"} this column"><svg viewBox="0 0 24 24" width=14 height=14 fill=none stroke=currentColor stroke-width=2 stroke-linecap=round stroke-linejoin=round><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx=12 cy=12 r=3 />${off?'<path d="M3 3l18 18"/>':""}</svg></span>`;
 const LC=b.lc||{},rgb=h=>[0,2,4].map(i=>parseInt(h.slice(i,i+2),16)),mix=(a,t)=>a.map((v,i)=>Math.round(v*t+[28,34,44][i]*(1-t))),   // label color blended into the card's #1c222c
 tint=x=>{const cs=(x.l||[]).map(l=>LC[l]).filter(c=>/^[0-9a-f]{6}$/.test(c||"")).map(rgb);if(!cs.length)return"";const avg=[0,1,2].map(i=>cs.reduce((s,c)=>s+c[i],0)/cs.length);return`;--bg:rgb(${mix(avg,.10)});--bgh:rgb(${mix(avg,.16)})`},
@@ -3385,10 +3385,7 @@ if($("#bbody").dataset.h!==html){$("#bbody").dataset.h=html;$("#bbody").innerHTM
 // is the mode; the boolean an older page stored is read as the two modes it named (true = only, false = all), so a board
 // opens where it was left. `spOk` is the whole rule, and the columns ask it once per card: the modes are the page's, the
 // spec label is the hub's (`x.sp`, from the table's own SPEC_LABEL), and no column is named here.
-const SP=[["all","every card the other filters leave"],["only","only the cards that carry the spec label"],["hidden","every card but those"]];
-const specMode=()=>{const v=bo.specs;if(v===true)return 1;if(v===false||v===undefined||v===null)return 0;
- const n=Math.trunc(+v);return n===1||n===2?n:0};   // 1 = only, 2 = hidden: a value the page cannot read is `all`, never a silent hide
-const spOk=x=>{const m=specMode();return m===0||(m===1?!!x.sp:!x.sp)};
+/*BOARD_FILTER*/
 const spPaint=()=>{const m=specMode(),b=$("#bsp");b.dataset.m=SP[m][0];b.textContent="Specs: "+SP[m][0];b.title=`the Specs filter holds ${SP[m][0]}: a press moves it to ${SP[(m+1)%3][0]}, and this mode draws ${SP[m][1]}.`};
 $("#bsp").onclick=()=>{bo.specs=(specMode()+1)%3;saveB();spPaint();pollBoard()};
 spPaint();
@@ -3405,6 +3402,8 @@ pollBoard();setInterval(pollBoard,5000);
 let ver=null;setInterval(async()=>{try{const v=(await (await fetch("/api/version")).json()).v;if(ver===null)ver=v;else if(v!==ver)location.reload()}catch(e){}},3000);
 </script>"""
 PAGE = PAGE.replace("/*PANES_JS*/", (pathlib.Path(__file__).resolve().parent / "panes.js").read_text())
+BOARD_FILTER_JS = (pathlib.Path(__file__).resolve().parent / "board-filter.js").read_text()
+PAGE = PAGE.replace("/*BOARD_FILTER*/", BOARD_FILTER_JS)
 # The strip paints one rule per category, keyed by the fact that sets the column: the name comes from the table.
 HID_CHIP_TOKENS = (("abandoned", "err"), ("dev_ci", "run"), ("unscheduled", "warn"), ("issue_closed", "ok"), ("pr_open", "pin"))
 PAGE = PAGE.replace("/*HID_CHIP_RULES*/", "\n".join('.hidbar .chip[data-col="%s"] b{color:var(--%s)}' % (COLUMN[fact], token) for fact, token in HID_CHIP_TOKENS))
@@ -4101,7 +4100,8 @@ def _models_set(new):
     modelreg.write_chains(MODELS, chains, d)
     return models_get()
 
-MOBILE_PAGE = (pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text()
+GESTURE_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-gesture.js").read_text()
+MOBILE_PAGE = (pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text().replace("/*GESTURE*/", GESTURE_JS).replace("/*BOARD_FILTER*/", BOARD_FILTER_JS)
 
 def mobile_refusal(reason):
     return ('<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Hub</title>'
