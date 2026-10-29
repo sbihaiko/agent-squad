@@ -30,7 +30,7 @@ only reads, so a card another writer moved meanwhile is never moved back. A card
 read for at most SG_BOARD_OLD_SETTLE_SECONDS (default 10) of that bound: a write it never carries is likelier lost than late (#438).
 A move to the Status the card already carries is skipped: one read of the board, no PATCH, no proving read (#327).
 Touches $SG_STATE/board-dirty so the hub refreshes within 2 s. Each move it proved is recorded in
-$SG_STATE/board-moves.json by that same step: one entry per item, the column it set and the instant, replaced by a
+$SG_STATE/board-moves.json by that same step: one entry per item, the column it set, the instant and the dispatch context `SG_MOVE_BY` names (`owner` or `loop`, when set), replaced by a
 later move of the same item. The file is formed in a temp file beside it and renamed, so a reader sees the old record
 or the new one, never a part-written one (ADR-0030). A skipped or unproven move records nothing, and a holder or
 test-case write records nothing."""
@@ -111,7 +111,8 @@ if proved:   # the record and the refresh flag are one step: one move, one write
     except (OSError, ValueError): moves = {}
     if not isinstance(moves, dict): moves = {}
     at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    for iid, col in proved: moves[str(iid)] = {"column": col, "at": at}   # a later move of the same item replaces its entry; the key is text, as the record reads back (#652)
+    by = os.environ.get("SG_MOVE_BY") or None   # the dispatch context the caller names; a move with none records none (#861)
+    for iid, col in proved: moves[str(iid)] = {"column": col, "at": at, **({"by": by} if by else {})}   # a later move of the same item replaces its entry; the key is text, as the record reads back (#652)
     tmp = p.with_name(f"{p.name}.{os.getpid()}.tmp")   # formed whole beside the record, then one atomic rename (ADR-0030)
     tmp.write_text(json.dumps(moves, sort_keys=True) + "\n"); os.replace(tmp, p)
 (st / "board-dirty").touch(); sys.exit(rc)

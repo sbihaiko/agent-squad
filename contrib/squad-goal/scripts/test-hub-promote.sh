@@ -12,6 +12,7 @@ out=$(python3 - <<'PY' 2>&1
 import importlib.util, os
 spec = importlib.util.spec_from_file_location("hub", os.environ["HUB_SRC"]); hub = importlib.util.module_from_spec(spec); spec.loader.exec_module(hub)
 calls = []
+real_write = hub.promote_write
 hub.promote_write = lambda issues, add=False: calls.append((issues, add)) or type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 hub.save_board = lambda: None
 subs = {"answer": []}   # the sub-issue read a spec makes (ghread): a list answer, or a failure the hub must not act on
@@ -44,6 +45,10 @@ got, c = run(closed)
 check("a closed card is refused before any write", "err" in got and c == [], (got, c))
 got, c = run(card, issue="7")
 check("an issue given as a string is refused", "err" in got and c == [], (got, c))
+seen = {}
+hub.subprocess.run = lambda argv, **kw: seen.update(env=kw.get("env") or {}) or type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+real_write([7])
+check("the owner's arrow names the owner as its dispatch context", seen["env"].get("SG_MOVE_BY") == "owner", seen)
 PY
 )
 echo "$out"; case "$out" in *FAIL*|*Error*|*Traceback*) fail=1;; esac

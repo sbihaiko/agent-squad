@@ -70,6 +70,7 @@ o=$(SG_MOVE_BY=loop run o 4 Todo 2001 2>&1); rc=$?   # a move a loop script make
 rm -f "$T/st/board-moves.json"
 o=$(run o 4 Doing 2001 2>&1); rc=$?   # no context named: the entry carries no `by`
 [ "$rc" -eq 0 ] && [ -e "$T/st/board-moves.json" ] && ! grep -q '"by"' "$T/st/board-moves.json" && ok "a move with no dispatch context records no context" || ko "a move with no context recorded one: exit $rc, record $(rec): $o"
+grep -q '^export SG_MOVE_BY=loop' "$(dirname "$src")/env.sh" && ok "env.sh exports the loop as the dispatch context of a loop script's move" || ko "env.sh exports no loop dispatch context"
 rm -f "$T/st/board-moves.json" "$T/st/board-dirty"; touch "$T/drop"
 o=$(run o 4 Todo 2001 2>&1); rc=$?   # the PATCH is answered ok and the card never carries it
 [ "$rc" -ne 0 ] && [ ! -e "$T/st/board-moves.json" ] && ok "a move the door cannot prove writes no entry" || ko "unproved move: exit $rc, record $(rec): $o"
