@@ -16,8 +16,15 @@
 export SG_GH_PASS=frontier   # the pass that spends the GitHub calls below, named in the call log (ADR-0277)
 [ -n "${SG_FRONTIER_LABEL:-}" ] || exit 0; [ -e "$A/off" ] && exit 0
 [ -e "$SG_STATE/token-pause" ] && exit 0   # the token guard paused dispatch: the hourly burn stays over 3x the cap (token-guard.sh)
-F=$(mktemp -d "${TMPDIR:-/tmp}/frontier.XXXXXX"); trap 'rm -rf "$F"' EXIT   # the pass's scratch: the issue list, a card's entry, and the reasons a card waits (#733)
-pick=(); notes=(); ready=(); kids=(); full=""; broke=   # the walk's facts, declared here so the idle line can read them at any exit
+F=$(mktemp -d "${TMPDIR:-/tmp}/frontier.XXXXXX"); trap 'release_pending; rm -rf "$F"' EXIT   # the pass's scratch: the issue list, a card's entry, and the reasons a card waits (#733)
+pick=(); notes=(); ready=(); kids=(); full=""; broke=; claimed=()   # the walk's facts, declared here so the idle line can read them at any exit
+# claim_issue <n> <token>: the dispatch marker as one atomic create (#865). The walk's check of the marker is only a hint: the walk
+# reads an issue's facts for seconds before it picks it, and a second pass in that window used to see no marker and launch the same
+# issue. The claim is the create itself (noclobber), so exactly one pass takes an issue, however the passes overlapped.
+claim_issue() { ( set -C; printf '%s\n' "$2" > "$A/disp-$1" ) 2>/dev/null; }
+# release_pending: a pass that exits before it writes its request drops the claims it took but never dispatched (#865). A claim the
+# marker loop already rewrote with a request name is not this pass's pending token any more, so it stays.
+release_pending() { local n; for n in ${claimed[@]+"${claimed[@]}"}; do [ "$(cat "$A/disp-$n" 2>/dev/null)" = "pending-$$" ] && rm -f "$A/disp-$n"; done; return 0; }
 # The idle summary (#733): a pass that leaves Todo cards and picks none says so in one line, always -- a silent frontier and a
 # stuck one read the same in the log, and the owner found the last stall, not the loop. The counts name every reason a card
 # waits, in this fixed order; a reason no card carries still prints as 0, so the shape of the line never changes. The per-card
@@ -226,7 +233,8 @@ while [ $i -lt ${#cands[@]} ]; do
       *) echo "FRONTIER NOTE siblings.py failed ($rc): ${why%%$'\n'*}; no sibling filter for #$n" >&2;; esac
   fi
   [ -z "$full" ] || joins "$g" "$n" || { broke=1; break; }
-  pick+=("$n"); notes+=("$nt"); ready+=("$n")
+  claim_issue "$n" "pending-$$" || { why_card "$n" claimed "a dispatch marker holds it"; continue; }   # the claim, atomic (#865)
+  claimed+=("$n"); pick+=("$n"); notes+=("$nt"); ready+=("$n")
   [ -n "$full" ] || [ ${#pick[@]} -lt "$cap" ] || full=1
 done
 if [ -n "$broke" ]; then   # the walk ended at the envelope: the cards past it wait for a slot, not for a reason of their own
