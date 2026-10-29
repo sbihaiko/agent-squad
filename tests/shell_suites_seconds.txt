@@ -71,6 +71,7 @@ test-janitor-comment-quota.sh 1.36
 test-janitor-dashboard-ceiling.sh 2.34
 test-janitor-deadline.sh 12.95
 test-janitor-disp-expiry.sh 1.41
+test-janitor-dup.sh 1.24
 test-janitor-env-hermetic.sh 28.13
 test-janitor-f.sh 1.39
 test-janitor-failed-dispatch.sh 0.88
