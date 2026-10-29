@@ -661,13 +661,16 @@ def board_state(owner=None, project=None, repo=None, **kw):
     return State(BoardBinding(owner, project, repo, env=env, **kw))
 
 
-def _fresh_hub_items(require_fresh=True):
-    """Return the hub's board rows, optionally requiring a recent refresh stamp."""
+def _fresh_hub_items(require_fresh=True, repo=None):
+    """Return verified rows for this repository, optionally requiring a recent refresh stamp."""
     path = pathlib.Path(os.environ.get("SG_BOARD_CACHE", "/nonexistent"))
     try:
         data = json.loads(path.read_text())
         age = time.time() - float(data["t"]) if require_fresh else 0
         items = data["items"]
+        expected_repo = repo if repo is not None else os.environ.get("SG_REPO", "")
+        if not expected_repo or data.get("repo") != expected_repo:
+            return None
         if 0 <= age < 300 and (not require_fresh or not data.get("err")) and isinstance(items, list):
             return items
     except (OSError, ValueError, TypeError, KeyError):
@@ -681,7 +684,7 @@ def main(argv):
     repo = ""
     if args[:1] == ["--repo"]: repo = args[1]; args = args[2:]
     if args[:1] == ["--hub-todos"]:
-        cached = _fresh_hub_items(require_fresh=False)
+        cached = _fresh_hub_items(require_fresh=False, repo=repo or None)
         if cached is not None:
             todo = os.environ.get("SG_TODO", "Todo")
             for item in sorted(cached, key=lambda i: int(i.get("n") or 0)):
@@ -689,12 +692,19 @@ def main(argv):
                     print(item["n"])
         return 0
     if args[:1] == ["--go"]:   # the rows a dispatch pass reads, with the go-labelled issues the board does not carry named (#800)
-        cached = _fresh_hub_items()
+        cached = _fresh_hub_items(repo=repo or None)
         if cached is not None:
             rows = {str(i["n"]): i.get("st") or "" for i in cached if i.get("n") is not None}
             requested = [n for n in (args[1].split(",") if len(args) > 1 and args[1] else []) if n]
+            state = board_state(repo=repo or None)
+            rescued, missing = {}, []
+            for n in requested:
+                if n in rows: continue
+                status = state.binding.node_status(n)
+                if status: rescued[n] = status
+                else: missing.append(n)
+            rows.update(rescued)
             for n, s in sorted(rows.items(), key=lambda kv: int(kv[0])): print(f"{n}\t{s}")
-            missing = [n for n in requested if n not in rows]
             if missing:
                 print("UNREAD\t" + ",".join(missing))
                 alerts = os.environ.get("SG_STATE")
@@ -714,7 +724,7 @@ def main(argv):
                     f.write(f"{stamp} FRONTIER unread: go-labelled {', '.join('#' + m for m in missing)} has no readable card on the board\n")
         return 0
     if args[:1] == ["--kinds"]:
-        cached = _fresh_hub_items()
+        cached = _fresh_hub_items(repo=repo or None)
         rows = ({str(i["n"]): i["k"] for i in cached if i.get("n") is not None and i.get("k")}
                 if cached is not None else board_state(repo=repo).kinds())
         for n, k in sorted(rows.items(), key=lambda kv: int(kv[0])): print(f"{n}\t{k}")
@@ -723,7 +733,7 @@ def main(argv):
         for k in board_state(repo=repo).kind_gaps(): print(k)
         return 0
     if not args or args[0] not in ("--state",):
-        cached = _fresh_hub_items()
+        cached = _fresh_hub_items(repo=repo or None)
         if cached is not None:
             rows = {str(i["n"]): i["st"] for i in cached if i.get("n") is not None and i.get("st") is not None}
         else:

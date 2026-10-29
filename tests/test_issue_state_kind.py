@@ -116,7 +116,7 @@ def test_a_shell_caller_reads_the_gaps_through_the_door(tmp_path, monkeypatch, c
 
 def test_fresh_hub_board_cache_serves_status_and_kind_without_a_board_read(tmp_path, monkeypatch, capsys):
     cache = tmp_path / "hub-board.json"
-    cache.write_text(json.dumps({"t": time.time(), "items": [
+    cache.write_text(json.dumps({"t": time.time(), "repo": "x/y", "items": [
         {"n": 854, "st": "Todo", "s": "open", "k": "bug"}
     ]}))
     monkeypatch.setenv("SG_BOARD_CACHE", str(cache))
@@ -142,7 +142,7 @@ def test_fresh_hub_board_cache_serves_status_and_kind_without_a_board_read(tmp_p
 def test_missing_or_stale_hub_board_cache_falls_back_to_live_read(tmp_path, monkeypatch, cache_state):
     cache = tmp_path / "hub-board.json"
     if cache_state == "stale":
-        cache.write_text(json.dumps({"t": 1, "items": []}))
+        cache.write_text(json.dumps({"t": 1, "repo": "x/y", "items": []}))
     monkeypatch.setenv("SG_BOARD_CACHE", str(cache))
     monkeypatch.setenv("SG_OWNER", "o")
     monkeypatch.setenv("SG_PROJECT", "4")

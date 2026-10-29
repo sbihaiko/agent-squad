@@ -24,7 +24,7 @@ F=$T/lane; mkdir -p "$F" "$T/lst"; cp "$d/fastloop.sh" "$d/single.sh" "$d/issue_
 printf 'export SG_STATE=%s SG_STATE_BASE=%s SG_REPO=x/alpha SG_OWNER=x SG_PROJECT=1 SG_BOARD_CACHE=%s\n' "$T/lst" "$T/cache" "$BC" > "$F/env.sh"
 printf 'open("%s","a").write("beat\\n")\n' "$LOG" > "$F/childcc.py"
 for s in autofrontier autobug; do printf '#!/bin/bash\nexit 0\n' > "$F/$s.sh"; chmod +x "$F/$s.sh"; done
-board() { printf '{"items": [%s]}\n' "$1" > "$BC"; }   # board <items json>: the cache the hub writes
+board() { printf '{"repo":"x/alpha","items": [%s]}\n' "$1" > "$BC"; }   # board <items json>: the cache the hub writes
 card() { printf '{"n": %s, "t": "t", "s": "OPEN", "st": "%s", "l": []}' "$1" "$2"; }
 beats() { local c; c=$(/usr/bin/grep -c beat "$LOG" 2>/dev/null); echo "${c:-0}"; }
 lane() { : > "$LOG"; rm -f "$T/lst/fastloop.pid"; env SG_FAST_INTERVAL=$1 SG_FAST_POLL=0.2 bash "$F/fastloop.sh" >"$T/lane.out" 2>&1 & LP=$!; }

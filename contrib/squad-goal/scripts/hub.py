@@ -1767,7 +1767,7 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
             lc = {x["n"]: x["c"].lower() for x in (json.loads(l) for l in lo.splitlines() if l.strip())}
     except Exception as e: board_cache["err"] = str(e)[:80]   # a failed pass keeps the last good rows on the board (#1810)
     if items: apply_holders(items)
-    if items: board_cache.update(t=time.time(), rt=int(read_started), items=items, cases=cases or [], lc=lc or board_cache.get("lc", {}), err=None)
+    if items: board_cache.update(t=time.time(), rt=int(read_started), repo=REPO, items=items, cases=cases or [], lc=lc or board_cache.get("lc", {}), err=None)
     rs = REPOS if repos is None else repos
     try:
             prs, landed, errs = prs_pass(fetch_open, fetch_landed, rs)

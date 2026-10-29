@@ -17,8 +17,10 @@ class FakeBinding:
         self.carried = carried
         self.nodes = nodes or {}
         self.asked = []
+        self.reads = 0
 
     def read_all(self):
+        self.reads += 1
         return dict(self.carried)
 
     def node_status(self, issue):
@@ -91,6 +93,58 @@ def test_a_node_id_seen_in_one_read_is_kept_for_the_next(tmp_path):
     b._save_items()
 
     assert json.loads((tmp_path / b._known_file).read_text()) == {"800": "PVTI_x", "801": "PVTI_y"}
+
+
+def test_fresh_cache_go_read_rescues_missing_requested_issue_without_board_read(tmp_path, monkeypatch, capsys):
+    cache = tmp_path / "hub-board.json"
+    cache.write_text(json.dumps({"t": issue_state.time.time(), "repo": "owner/ariel",
+                                 "items": [{"n": 801, "st": "Todo"}]}))
+    monkeypatch.setenv("SG_BOARD_CACHE", str(cache))
+    monkeypatch.setenv("SG_REPO", "owner/ariel")
+    binding = FakeBinding({"801": "Todo"}, nodes={"800": "Todo"})
+    monkeypatch.setattr(issue_state, "board_state", lambda repo="": issue_state.State(binding))
+
+    assert issue_state.main(["issue_state.py", "--go", "800,801"]) == 0
+
+    assert capsys.readouterr().out.splitlines() == ["800\tTodo", "801\tTodo"]
+    assert binding.reads == 0
+    assert binding.asked == ["800"]
+
+
+def test_fresh_cache_is_bypassed_for_another_repository(tmp_path, monkeypatch):
+    cache = tmp_path / "hub-board.json"
+    cache.write_text(json.dumps({"t": issue_state.time.time(), "repo": "owner/ariel",
+                                 "items": [{"n": 801, "st": "Todo"}]}))
+    monkeypatch.setenv("SG_BOARD_CACHE", str(cache))
+    monkeypatch.setenv("SG_REPO", "owner/ariel")
+    monkeypatch.setattr(issue_state, "board_state", lambda repo="": issue_state.State(FakeBinding({"999": "Done"})))
+    import io
+    from contextlib import redirect_stdout
+    out = io.StringIO()
+    with redirect_stdout(out):
+        assert issue_state.main(["issue_state.py", "--repo", "other/repo", "--go", "801"]) == 0
+    assert out.getvalue().splitlines() == ["999\tDone", "UNREAD\t801"]
+
+
+def test_missing_and_stale_cache_fall_back_to_board_read(tmp_path, monkeypatch, capsys):
+    cache = tmp_path / "hub-board.json"
+    monkeypatch.setenv("SG_BOARD_CACHE", str(cache))
+    monkeypatch.setenv("SG_REPO", "owner/ariel")
+    calls = []
+
+    def read(repo=None):
+        calls.append(repo)
+        return issue_state.State(FakeBinding({"801": "Todo"}))
+
+    monkeypatch.setattr(issue_state, "board_state", read)
+    for payload in (None, {"t": issue_state.time.time() - 301, "repo": "owner/ariel", "items": []}):
+        if payload is None:
+            cache.unlink(missing_ok=True)
+        else:
+            cache.write_text(json.dumps(payload))
+        assert issue_state.main(["issue_state.py", "--go", "801"]) == 0
+        assert capsys.readouterr().out.splitlines() == ["801\tTodo"]
+    assert calls == [None, None]
 
 
 def test_go_check_prints_the_unread_line_and_alerts(tmp_path, monkeypatch, capsys):
