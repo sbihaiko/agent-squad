@@ -205,6 +205,9 @@ def test_a_landed_wave_is_in_dev_by_one_push_and_logged(wave):
 
 @pytest.mark.heavy
 def test_a_landing_that_conflicts_exits_1_and_lands_nothing(wave):
+    """A conflicting rebase is terminal for the wave (#844, `wave_conflict`): the landing lands nothing and exits 1, the
+    run's issues go back to the queue, and the wave marker is removed so the loop retires the wave and never retries it.
+    The wave branch stays on the remote with its commits (#844)."""
     wave.child("run-1", 7, "work 7 (Refs #7)")
     # the base moves under the wave on the very file the child wrote
     wave.base_moves("g7-0", "someone else\n")
@@ -214,7 +217,8 @@ def test_a_landing_that_conflicts_exits_1_and_lands_nothing(wave):
     assert wave.rev("refs/heads/dev") == moved, "a refused landing moved dev"
     assert wave.remote_refs("refs/heads/wave/run-1") != [], "a refused landing deleted the wave branch"
     assert wave.ledger() == [] and wave.closed() == []
-    assert (wave.state / "auto" / "wave-run-1").exists(), "the run's wave marker was cleared by a landing that did not happen"
+    assert not (wave.state / "auto" / "wave-run-1").exists(), "a conflicted wave kept its marker, so the loop would retry it (#844)"
+    assert "o 3 Todo 7" in (wave.root / "board.log").read_text().splitlines(), "the conflicted wave's issue was not requeued (#844)"
 
 
 @pytest.mark.heavy
