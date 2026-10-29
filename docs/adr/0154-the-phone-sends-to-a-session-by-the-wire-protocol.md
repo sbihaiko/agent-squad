@@ -18,7 +18,8 @@ A message sent this way reaches the session as a message from another session. A
 4. **The recorded process is the only target.** At send time the hub finds the session again, and the socket peer pid must be the recorded pid. The hub never filters a session by its permission mode, because the record holds none. Guard: `tests/test_session_send.py`.
 5. **A send is reserved before it is written.** One exclusive file per profile, session and client message id is created before any byte is written. A failure to create it refuses the send. A reservation that never reached a final state reads as uncertain, and a repeated id sends nothing. Reservations are kept 24 hours. Guard: `tests/test_session_send.py`.
 6. **Limits.** A message is at most 4,000 characters. The socket deadline is 5 s. Guard: `tests/test_session_send.py`.
-7. **The phone says what the message is.** The composer states that the message arrives as a message from another session, never as the owner's typed input or approval. Guard: `tests/test_hub_mobile_terminals.py`.
+7. **A send has three outcomes.** Sent: the session socket accepted the message. Uncertain: the send was interrupted. Refused: the send failed. The protocol answers nothing after a send, so the hub claims no held, delivered or expired state. Guard: `tests/test_session_send.py`, `tests/test_hub_mobile_terminals.py`.
+8. **The phone says what the message is.** The composer states that the message arrives as a message from another session, never as the owner's typed input or approval. Guard: `tests/test_hub_mobile_terminals.py`.
 
 ## Consequences
 

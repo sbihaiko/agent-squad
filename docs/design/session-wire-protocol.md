@@ -9,6 +9,7 @@ Probe: `contrib/squad-goal/scripts/probe-session-send.py`.
 - Folder: `~/.claude/sessions/`.
 - `<pid>.json`: one record for each live session. Fields used: `pid`, `sessionId`, `messagingSocketPath` (for example `/tmp/cc-socks/<pid>.sock`), `procStart`, `status` (`busy`, `idle`), `name`, `kind`, `entrypoint`, `peerProtocol`, `peerFeatures`, `pidDomain`.
 - `<pid>.<sha256-hex>.key`: the inbox key, mode 0600. The hex is the SHA-256 of the absolute socket path (`path.resolve`, no symlink resolution). The file is JSON: `peerToken` (32 hex chars, 16 random bytes), `procStart`, `pidDomain`. Never print, log or commit `peerToken`.
+- `version` is the Claude Code version string. `startedAt` is in milliseconds and is written a few seconds after the process starts.
 - A session started with `CLAUDE_CODE_CHILD_SESSION` in its environment writes a key but no `<pid>.json`. Start a target with a clean environment.
 
 ## Find and verify the peer
@@ -78,3 +79,12 @@ On macOS the inbox runs with auth optional. The CLI logs "peers will send unauth
 - A second connection with a 32-zero token and no `from` was also delivered: auth is not enforced on macOS.
 - Token values were never printed; only field names and lengths (`peerToken` 32, `procStart` 24, `pidDomain` 6).
 - Side effect: the trust prompt for `/tmp/probe834` was accepted, which adds that folder to the Claude user config.
+
+## Evidence (#834 hub send)
+
+- Sender: the hub's own module, `session_send.send`, called in-process with a profile that matches only the target folder. The probe script was not used.
+- Target: a disposable interactive session, started with `env -i` (HOME, PATH, TERM, USER only) in a `mktemp -d` folder under a Python pty, killed after the send. No other session was addressed.
+- The first try was refused: the registry left out every real record, because it read an invented shape. Fixed in `sessions.py`; the test fixtures now use the real shape.
+- After the fix: `send` returned `sent`; a repeat with the same client id returned `sent` and wrote nothing.
+- The transcript entry: `type: user`, `origin: {kind: peer, msg_id: <the client id>}`.
+- No token value was printed or logged. The folder, its transcript and its trust entry in the Claude user config were removed after.
