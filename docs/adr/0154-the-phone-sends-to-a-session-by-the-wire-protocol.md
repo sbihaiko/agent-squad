@@ -12,7 +12,7 @@ A message sent this way reaches the session as a message from another session. A
 
 ## Decision
 
-1. **The hub writes the protocol itself.** It sends the auth line and the message line over the session's socket. No Claude client code runs. Guard: `tests/test_session_send.py`, `contrib/squad-goal/scripts/test-probe-session-send.sh`.
+1. **The hub writes the protocol itself.** It sends the auth line and the message line over the session's socket. No Claude client code runs. Guard: `tests/test_session_send.py`.
 2. **Sending is off until the profile sets it.** `tailnet.terminals_send` is a `bool` in the project file, false by default. The grant holds for every allowed login of the profile; no login has its own exception. The `tailnet` block stays outside the resume hash (ADR-0152, rule 6). Guard: `tests/test_tailnet_settings.py`, `tests/test_session_send.py`.
 3. **A send needs an allowed tailnet login, the tailnet Origin, and a JSON body.** A loopback request is refused. The body has exactly three fields: the session id, the text and a client message id. The hub builds the envelope and the sender name. Guard: `tests/test_session_send.py`.
 4. **The recorded process is the only target.** At send time the hub finds the session again, and the socket peer pid must be the recorded pid. The hub never filters a session by its permission mode, because the record holds none. Guard: `tests/test_session_send.py`.
