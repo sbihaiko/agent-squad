@@ -2,7 +2,8 @@
 """A child that finished with outcome pass moves its issue to Code Complete (called by watch.sh every loop).
 A child of a run that cut a wave enters it first (#375, ADR-0145 rules 9 and 12): `wave.sh enter <run> <issue>` runs in the
 child's own worktree, is the only route into the wave branch, and its entry is what moves the card; a child that did not
-enter has no card to move, its issue went back to the queue. A run that cut no wave keeps the direct move.
+enter has no card to move, its issue went back to the queue. A run that cut no wave keeps the direct move, unless it was dispatched
+for a child: then its cut failed, and the child is named on a salvage line instead of moved.
 The child's own diff is reviewed before that entry, here, once per head (childreview.sh, #448): the entry waits for the review
 of the child's own commits against the wave branch (#376), and a child's branch is pushed nowhere (#375), so the review lane
 that lists pushed work branches never saw it and every child was held out of its wave for good.
@@ -242,7 +243,9 @@ def enter(rd, child, n, d, approved=False, own=False):
     branches, and a child's branch is pushed nowhere), so its issue goes back to the queue -- live run or not, its next head
     is read again. A child its run reviewed is never reviewed or fixed here (`own`, ADR-0151 rule 5): its run's approval is
     the only evidence, and it enters on that alone, bound to the head the run read (rule 4)."""
-    if not (A / f"waved-{rd.name}").exists() and not (A / f"wave-{rd.name}").exists(): return None, "", False   # `waved-` is the durable record: a landing removes `wave-`, never this
+    if not (A / f"waved-{rd.name}").exists() and not (A / f"wave-{rd.name}").exists():   # `waved-` is the durable record: a landing removes `wave-`, never this
+        if child_request(rd): return False, f"WAVE-SALVAGE #{n} ({rd.name} {child}): the run cut no wave, so this child's commit is on its run's branch and in no wave; no card moves", False
+        return None, "", False
     wt = child_worktree(rd, child, d)
     if not wt.is_dir(): return False, f"WAVE no entry for #{n}: the child's worktree {wt} is not there", False
     rq = requeue_head(rd.name, n)   # the sha a refused entry left the child on: the same sha would fail the same gates again, so the pass waits for a new commit
@@ -279,6 +282,10 @@ def card_status(n):   # the state the card carries, "" when it carries none or t
 def issue_from(df):
     n = child_issues.first(df)   # the one reader the janitor's sibling passes share (#555)
     return int(n) if n else None
+def child_request(rd):   # the run was dispatched for a child (launch.py's _issue_child_request), so it had a wave to cut
+    try: txt = (rd / "request.txt").read_text(errors="replace")
+    except OSError: return False
+    return bool(re.search(r"^CHILD[^\n]*GitHub issue", txt, re.M) or re.search(r"^FORK-ONLY", txt, re.M))
 pending, runs = [], set()   # every finished child with no marker yet, as (key, run, child, why, issue, finished, definition)
 for r in (sys.argv[1:] or (st / "active-runs.txt").read_text().split()):
     rec = pathlib.Path(r if r.startswith("/") else "runs/" + r) / "record.jsonl"
