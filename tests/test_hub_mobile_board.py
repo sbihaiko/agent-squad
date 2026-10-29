@@ -21,7 +21,8 @@ HUB_PY = SCRIPTS / "hub.py"
 GESTURE_JS = SCRIPTS / "hub-mobile-gesture.js"
 FILTER_JS = SCRIPTS / "board-filter.js"
 NODE = shutil.which("node")
-ROUTES = {"/api/status", "/api/hub", "/api/board", "/api/issue", "/api/subs", "/api/models", "/api/stats", "/api/runs", "/api/ended"}
+ROUTES = {"/api/status", "/api/hub", "/api/board", "/api/issue", "/api/subs", "/api/models", "/api/stats", "/api/runs", "/api/ended",
+          "/api/sessions", "/api/sessions/conversation"}
 
 
 def run_js(src, expr, prelude=""):

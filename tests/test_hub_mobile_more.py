@@ -15,7 +15,7 @@ SCREEN_ROUTES = {"subs": "/api/subs", "models": "/api/models", "cost": "/api/sta
 PERIODS = ["hour", "day", "month"]
 HUB_GET_ROUTES = {
     "/api/adapter-errors", "/api/board", "/api/delivery", "/api/ended", "/api/issue", "/api/load", "/api/models", "/api/runs",
-    "/api/sessions", "/api/speed", "/api/stats", "/api/status", "/api/subs", "/api/version",
+    "/api/sessions", "/api/sessions/conversation", "/api/speed", "/api/stats", "/api/status", "/api/subs", "/api/version",
 }
 
 
@@ -58,7 +58,7 @@ def test_every_api_path_the_page_names_is_an_existing_get_route():
 
 
 def test_hub_serves_no_route_beyond_the_existing_get_routes():
-    served = set(re.findall(r'self\.path\.startswith\("(/api/[\w-]+)"\)', HUB_PY.read_text()))
+    served = set(re.findall(r'self\.path\.startswith\("(/api/[\w/-]+)"\)', HUB_PY.read_text()))
     assert served == HUB_GET_ROUTES
 
 
