@@ -120,6 +120,7 @@ def test_fresh_hub_board_cache_serves_status_and_kind_without_a_board_read(tmp_p
         {"n": 854, "st": "Todo", "s": "open", "k": "bug"}
     ]}))
     monkeypatch.setenv("SG_BOARD_CACHE", str(cache))
+    monkeypatch.setenv("SG_STATE", str(tmp_path))   # main reads SG_STATE: the test sets it, never the caller's env
     monkeypatch.setenv("SG_OWNER", "o")
     monkeypatch.setenv("SG_PROJECT", "4")
     monkeypatch.setenv("SG_REPO", "x/y")
@@ -144,6 +145,7 @@ def test_missing_or_stale_hub_board_cache_falls_back_to_live_read(tmp_path, monk
     if cache_state == "stale":
         cache.write_text(json.dumps({"t": 1, "repo": "x/y", "items": []}))
     monkeypatch.setenv("SG_BOARD_CACHE", str(cache))
+    monkeypatch.setenv("SG_STATE", str(tmp_path))   # main reads SG_STATE: the test sets it, never the caller's env
     monkeypatch.setenv("SG_OWNER", "o")
     monkeypatch.setenv("SG_PROJECT", "4")
     monkeypatch.setenv("SG_REPO", "x/y")
