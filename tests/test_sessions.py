@@ -72,8 +72,8 @@ def bind_socket(home, sid, folder=None):
 
 def add_session(home, pid, sid, cwd, name="build", status="busy", **over):
     sock = bind_socket(home, sid)
-    body = {"version": 1, "pid": pid, "startedAt": start_of(pid), "sessionId": sid, "cwd": str(cwd),
-            "name": name, "status": status, "socket": str(sock)}
+    body = {"version": "2.1.312", "pid": pid, "startedAt": start_of(pid) * 1000 + 296, "sessionId": sid, "cwd": str(cwd),
+            "name": name, "status": status, "messagingSocketPath": str(sock), "kind": "interactive", "peerProtocol": 1}
     body.update(over)
     (home.sessions / f"{pid}.json").write_text(json.dumps(body))
     (home.sessions / f"{sid}.token").write_text(TOKEN + "\n")
@@ -122,17 +122,17 @@ def test_record_listed_only_when_every_check_holds(home, tmp_path, breaks):
     body = add_session(home, pid, "s1", cwd)
     rec = home.sessions / f"{pid}.json"
     if breaks == "socket_is_plain_file":
-        sock = pathlib.Path(body["socket"]); sock.unlink(); sock.write_text("not a socket")
+        sock = pathlib.Path(body["messagingSocketPath"]); sock.unlink(); sock.write_text("not a socket")
     elif breaks == "socket_path_is_link":
-        link = home.sockets / "s1-link.sock"; link.symlink_to(body["socket"])
-        rec.write_text(json.dumps({**body, "socket": str(link)}))
+        link = home.sockets / "s1-link.sock"; link.symlink_to(body["messagingSocketPath"])
+        rec.write_text(json.dumps({**body, "messagingSocketPath": str(link)}))
     elif breaks == "socket_outside_folder":
         outside = bind_socket(home, "s1", folder=home.path / "elsewhere")
-        rec.write_text(json.dumps({**body, "socket": str(outside)}))
+        rec.write_text(json.dumps({**body, "messagingSocketPath": str(outside)}))
     elif breaks == "record_is_link":
         real = home.path / "real.json"; real.write_text(rec.read_text()); rec.unlink(); rec.symlink_to(real)
     elif breaks == "start_time_differs":
-        rec.write_text(json.dumps({**body, "startedAt": body["startedAt"] + 100}))
+        rec.write_text(json.dumps({**body, "startedAt": body["startedAt"] + 100_000}))
     mod = load_sessions()
     if breaks == "other_user":
         mod.UID = os.getuid() + 1

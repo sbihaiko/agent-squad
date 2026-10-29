@@ -102,8 +102,8 @@ def add_session(home, sid, cwd, pid=None, hang=False, name="build", status="busy
     pid = pid or os.getpid()
     sock = home.sockets / f"{sid}.sock"
     home.inboxes.append(Inbox(sock, hang=hang))
-    body = {"version": 1, "pid": pid, "startedAt": start_of(pid), "sessionId": sid, "cwd": str(cwd),
-            "name": name, "status": status, "socket": str(sock)}
+    body = {"version": "2.1.312", "pid": pid, "startedAt": start_of(pid) * 1000 + 296, "sessionId": sid, "cwd": str(cwd),
+            "name": name, "status": status, "messagingSocketPath": str(sock), "kind": "interactive", "peerProtocol": 1}
     (home.sessions / f"{pid}.json").write_text(json.dumps(body))
     key = home.sessions / f"{pid}.{__import__('hashlib').sha256(os.path.abspath(sock).encode()).hexdigest()}.key"
     key.write_text(json.dumps({"peerToken": KEY, "procStart": "x", "pidDomain": "x"}))
