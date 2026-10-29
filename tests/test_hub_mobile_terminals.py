@@ -55,3 +55,20 @@ def test_turns_are_drawn_as_text_only():
 
 def test_the_terminals_script_loads_nothing_from_outside_the_hub():
     assert "https://" not in terminals_js() and "http://" not in terminals_js()
+
+
+def test_the_composer_says_the_message_arrives_as_from_another_session():
+    panel = terminals_panel() + page()
+    assert "arrives as a message from another session" in panel
+    assert "not as your typed input or approval" in panel
+
+
+def test_the_composer_posts_one_message_to_the_send_route_with_a_client_id():
+    js = terminals_js()
+    assert "/api/sessions/send" in js
+    assert "client_id" in js and "crypto.randomUUID" in js
+
+
+def test_the_composer_limits_the_text_to_4000_characters():
+    assert 'id="termview-text"' in page()
+    assert 'maxlength="4000"' in page()
