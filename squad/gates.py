@@ -110,16 +110,20 @@ def ac_verify(params, inp):
     counts never enter the verdict -- the exit code alone decides that (ADR-0019).
     """
     src = params["commands_from"]
-    cmds = []
+    runs = []
     for name in [src] if isinstance(src, str) else src:     # the first artifact that lists commands wins
-        cmds = (inp.artifacts.get(name) or {}).get("ac_commands", [])
-        if cmds:
+        art = inp.artifacts.get(name) or {}
+        # a dispatch names the worktree of the child each command came from (#862); any other command has no tree of its own
+        runs = [tuple(r) for r in art["ac_runs"]] if art.get("ac_runs") else [(c, None) for c in art.get("ac_commands", [])]
+        if runs:
             break
-    if not cmds:
+    if not runs:
         return GateResult(False, ["no_ac_commands"])
     findings, evidence, counts = [], {}, {}
-    for c in cmds:
+    for c, own in runs:
         r = workcmd.run(c, inp.cwd)
+        if not r.ok and own and own != inp.cwd:     # a command that reads its child's own tree ("git log -1") passes there, never in the target's merge (#862)
+            r = workcmd.run(c, own)
         if r.counts:
             counts[c] = r.counts
         if not r.ok:

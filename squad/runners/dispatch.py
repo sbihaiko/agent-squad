@@ -54,15 +54,21 @@ class Dispatch:
             self.landed[ev["node"]] = ev
 
     def payload(self, name):
-        """The dispatch artifact: every held-out command of every child that passed, in all waves (a later wave re-runs the earlier ones)."""
+        """The dispatch artifact: every held-out command of every child that passed, in all waves (a later wave re-runs the earlier ones).
+        `runs` pairs each command with the worktree of the child that wrote it: a command reads its own child's tree, never the target's merge (#862)."""
         ledger = self.ledger(name)
-        cmds = []
+        cmds, runs = [], []
         for row in ledger:
             out = self.e.artifacts.get(row["child"], None)
+            acc = self.children.get(row["child"])
+            path = self.e.runs.workspace(row["child"], acc["definition"]) if acc and self.e.runs.isolated(acc["definition"]) else None
             for c in session.ac_commands(out)[0] if row["outcome"] == "pass" else []:
                 if c not in cmds:
                     cmds.append(c)
-        return ledger, cmds
+                run = [c, str(path) if path is not None and path.exists() else None]
+                if run not in runs:
+                    runs.append(run)
+        return ledger, cmds, runs
 
     def spawn_events(self, parent, pentry):
         return [e for e in self.e.record.events if e["event"] == "spawn_requested" and e["parent"] == parent and e.get("parent_entry") == pentry]
@@ -620,6 +626,6 @@ class DispatchRunner:
         done = stop and not seen
         if done:
             outcome, reasons = "pass", ["done"]
-        ledger, cmds = d.payload(node["name"])
-        rel = ctx.artifacts.put(node["name"], sc.item, entry, {"children": [n for n, _, _ in seen], "ac_commands": cmds, "ledger": ledger})
+        ledger, cmds, runs = d.payload(node["name"])
+        rel = ctx.artifacts.put(node["name"], sc.item, entry, {"children": [n for n, _, _ in seen], "ac_commands": cmds, "ac_runs": runs, "ledger": ledger})
         return ctx.finish(node, entry, sc, outcome, reasons, rel, elapsed=ctx.clock() - t0, **({"routed": "exit:pass"} if done else {}))
