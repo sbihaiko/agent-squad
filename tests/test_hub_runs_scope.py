@@ -60,7 +60,7 @@ def test_runs_lists_no_dashboard_of_another_profile(hub, machine):
 
 def test_a_run_root_named_by_sg_projects_or_the_fork_dir_is_still_listed(hub, machine, monkeypatch):
     mine, other = machine
-    monkeypatch.setenv("SG_FORK_DIR", str(other))
+    monkeypatch.setattr(hub, "FORK_DIR", str(other))   # read at import (#859): the module constant is the seam
     assert len([r for r in hub.runs() if r.get("port")]) == 2
 
 

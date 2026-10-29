@@ -31,6 +31,7 @@ def load_apps():
             continue
         pinned = {"SG_REPO": c.get("SG_REPO", ""), "SG_OWNER": c.get("SG_OWNER", ""), "SG_PROJECT": c.get("SG_PROJECT", ""),
                   "SG_CHECKOUT": c.get("SG_CHECKOUT", ""), "SG_STATE": c.get("SG_STATE", ""), "SG_PROFILE": slug, "SG_HUB_DIR": "",
+                  "SG_PROJECTS": c.get("SG_PROJECTS", ""), "SG_FORK_DIR": c.get("SG_FORK_DIR", ""),   # the profile's own run roots, never the shell's (#859)
                   "SG_BOARD_CACHE": c.get("SG_BOARD_CACHE", ""),   # the profile's own board cache, never the shell's (#512)
                   "SG_SHARED": c.get("SG_SHARED", "")}   # the one shared directory the loop reads, never the profile's state (#678)
         before = {k: os.environ.get(k) for k in pinned}
@@ -172,7 +173,7 @@ def server(port, apps):
 
 if __name__ == "__main__":
     apps = load_apps()
-    for k in ("SG_REPO", "SG_OWNER", "SG_PROJECT", "SG_CHECKOUT", "SG_STATE"):   # each page reads its own profile, never the shell's
+    for k in ("SG_REPO", "SG_OWNER", "SG_PROJECT", "SG_CHECKOUT", "SG_STATE", "SG_PROJECTS", "SG_FORK_DIR"):   # each page reads its own profile, never the shell's
         os.environ.pop(k, None)
     for a in apps.values():
         m = a.get("mod")

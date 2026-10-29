@@ -48,6 +48,7 @@ PROF = _profile(); REPO, OWNER, PROJECT_NO = PROF["SG_REPO"], PROF["SG_OWNER"], 
 _PROFILE_ENV = {**os.environ, "SG_REPO": REPO, "SG_OWNER": OWNER, "SG_PROJECT": PROJECT_NO}   # the environment the hub was loaded in, kept for the seam
 if not REPO: sys.exit("hub: no SG_REPO (set SG_PROFILE to a profile address.sh knows)")
 CHECKOUT = PROF["SG_CHECKOUT"]
+PROJECTS, FORK_DIR = os.environ.get("SG_PROJECTS", ""), os.environ.get("SG_FORK_DIR", "")   # read once at import: the mux pins them per profile (#859)
 if not CHECKOUT: sys.exit("hub: no SG_CHECKOUT (the profile in force names no checkout)")
 def repos_from(primary, *others):
     """The repositories the board reads, named in ONE place and never guessed: the profile's SG_REPO, plus each
@@ -449,7 +450,7 @@ def run_roots(co):   # where a checkout keeps run folders: its runs/, and each r
 def own_roots():
     """The run roots of this profile: its checkout, SG_PROJECTS and SG_FORK_DIR. A dashboard outside them is another profile's."""
     ds = set(run_roots(CHECKOUT))
-    for x in [*os.environ.get("SG_PROJECTS", "").split(":"), os.environ.get("SG_FORK_DIR", "")]:
+    for x in [*PROJECTS.split(":"), FORK_DIR]:
         if x: ds.update(run_roots(x))
     return ds
 
