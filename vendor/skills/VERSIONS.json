@@ -1,7 +1,7 @@
 {
   "ask-matt": {
     "files": 3,
-    "sha256": "0173067a65de11c925d4dcf89408698ca5df828d2ab5effbe21997332107e679",
+    "sha256": "70c59ebfe4f83b849b84ef5a4507bd29b45e8ec7a6b7fa1ed770d68d00334f0c",
     "source": "skill:ask-matt"
   },
   "codebase-design": {
@@ -11,7 +11,7 @@
   },
   "diagnosing-bugs": {
     "files": 3,
-    "sha256": "79cca571387cbb4e9f254c3f93fb8be51d36ebe6f3854d26d006c1f9e7c87b82",
+    "sha256": "29faf0d352422aa58beb0ce4666a49bdfdd5d2cc065c9dfe9be7b7e89fbdf584",
     "source": "skill:diagnosing-bugs"
   },
   "ego-browser": {
@@ -21,7 +21,7 @@
   },
   "tdd": {
     "files": 4,
-    "sha256": "c4236fd83d4629d4aed684403fd277aece9feb347c798e964a9a78a2ae1eb654",
+    "sha256": "aaed5857190bc8088332725c9c8deecf560744f6f7ef0bdfccf4bdf3fe678c16",
     "source": "skill:tdd"
   },
   "to-spec": {
