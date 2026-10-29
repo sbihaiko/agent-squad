@@ -16,7 +16,7 @@
 autohunt.sh 1
 childcc.py 1
 health.sh 1
-hub.py 6
+hub.py 3
 issue_state.py 1
 janitor.py 9
 reconcile.py 2

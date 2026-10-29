@@ -3,7 +3,7 @@
 usage: hub.py [port]   default 7700, loopback only. Read-only: it discovers servers via ps/lsof and reads record.jsonl."""
 import datetime as dt, glob, hashlib, html, importlib.util, itertools, json, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, pathlib, urllib.parse, urllib.request
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
-import agyquota, chainhealth, ghread, modelreg, provkey   # the chains and the one registry resolve a model (ADR-0147); ghread is the one GitHub door (ADR-0277)
+import agyquota, chainhealth, ghread, ghthrottle, modelreg, provkey   # the chains and the one registry resolve a model (ADR-0147); ghread is the one GitHub door (ADR-0277)
 from issue_state import board_state, KINDS, TEST_CASE_TITLE, _utc
 import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1738,6 +1738,39 @@ def board_items_jq(repo):
     Issue item counts only when its repository is `repo`; a draft item has no repository."""
     return ('''.[]|select((.content_type=="Issue" and ((.content.repository_url//"")|endswith("/" + $repo))) or .content_type=="DraftIssue")|{n:.content.number,i:.id,t:.content.title,s:.content.state,c:.content.closed_at,st:((.fields[]|select(.name=="Status")|.value.name.raw)//null),k:(((.fields[]?|select(.name=="Kind")|.value.name|if type=="object" then .raw else . end)//"")|ascii_downcase|if .=="" then null else . end),l:[.content.labels[]?.name],si:{total:.content.sub_issues_summary.total,completed:.content.sub_issues_summary.completed},o:.content.created_at}''').replace("$repo", json.dumps(repo))
 
+GH_FLOOR = int(os.environ.get("SG_GH_FLOOR") or 300)   # below this many core requests left, a read pass skips its reads (#855)
+LABELS_EVERY = 3600   # seconds between two reads of the repository's labels, and of its closed pull requests (#855)
+_etags = {}   # route -> (the ETag GitHub answered it with, the answer it carried); a 304 keeps that answer
+def _under_floor(what):
+    """True when the core quota is under SG_GH_FLOOR: the pass is skipped, and one line says so (#855)."""
+    low = ghthrottle.core_below(GH_FLOOR)
+    if low is not None: log_once(f"hub: skipped {what}: core quota {low} is under SG_GH_FLOOR {GH_FLOOR}; the next pass reads again")
+    return low is not None
+def _rest_page(route):
+    """One REST page through the door, conditional: the ETag it was answered with rides as If-None-Match, and a 304 keeps
+    the answer that ETag named. A page that does not answer raises, and the caller keeps what it had."""
+    held = _etags.get(route)
+    seen = {}
+    def transport(r):
+        res = ghread.gh_conditional_transport(r, held[0]) if held else ghread.gh_transport(r)
+        m = re.match(r"HTTP/[\d.]+\s+(\d{3})", res.body)
+        seen["status"], seen["etag"] = (int(m.group(1)) if m else None), ghread.headers_of(res.body).get("etag", "")
+        return res
+    out = ghread.read(route, transport)
+    if seen["status"] == 304: return held[1]
+    if not out.is_answer: raise RuntimeError(out.line())
+    answer = out.answer or []
+    if seen["etag"]: _etags[route] = (seen["etag"], answer)
+    return answer
+def gh_list(path, query=""):
+    """Every page of a REST list, 100 to a page (ADR-0277): a page shorter than 100 is the last one."""
+    rows, page = [], 1
+    while True:
+        answer = _rest_page(f"{path}?{query + '&' if query else ''}per_page=100&page={page}")
+        rows += answer
+        if len(answer) < 100: return rows
+        page += 1
+
 def board_pass(fetch_open=None, fetch_landed=None, repos=None):
     """One board re-read: Board 4 statuses (REST) + one GraphQL page of Issue.blockedBy + the open work branches and the
     landing ledger of every repository the hub is told to read (#1820). The 60 s loop runs exactly this.
@@ -1745,6 +1778,7 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
     The two reads are independent: the issues are the profile repository's board, the branch lane spans every configured
     repository. A read that fails keeps the last good rows it already had and says so (the pass's error, or the
     repository's own error on the lane), so a failed pass never writes a fresh empty board (#1772, #1820)."""
+    if _under_floor("board pass"): return board_cache
     items = lc = cases = None
     read_started = time.time()   # when the list read begins: the only stamp the overlay may compare a proved move against
     try:
@@ -1754,17 +1788,20 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
             items = [json.loads(l) for l in out.splitlines() if l.strip()]
             cases = [i["t"] for i in items if i.get("n") is None and i.get("k") == "test case"]   # a test case is a draft item: it has no number, so it is a row and never a card (#306)
             items = [i for i in items if i.get("n") is not None]
-            oi = subprocess.run(["gh", "api", "--paginate", f"repos/{REPO}/issues?state=open&per_page=100", "--jq",
-                '.[]|select(.pull_request==null)|{n:.number,t:.title,s:.state,c:null,st:null,l:[.labels[].name],si:{total:.sub_issues_summary.total,completed:.sub_issues_summary.completed},o:.created_at}'], capture_output=True, text=True, timeout=120).stdout
             have = {i["n"] for i in items}   # open issues that never reached the board have no state either
-            items += [i for i in (json.loads(l) for l in oi.splitlines() if l.strip()) if i["n"] not in have]
+            for i in gh_list(f"repos/{REPO}/issues", "state=open"):
+                if i.get("pull_request") is None and i["number"] not in have:
+                    s = i.get("sub_issues_summary") or {}
+                    items.append({"n": i["number"], "t": i["title"], "s": i["state"], "c": None, "st": None, "l": [x["name"] for x in i["labels"]],
+                                  "si": {"total": s.get("total"), "completed": s.get("completed")}, "o": i["created_at"]})
             own, name = REPO.split("/", 1)   # one GraphQL page of open issues; not one REST call per card
             gq = 'query{repository(owner:"%s",name:"%s"){issues(first:100,states:OPEN){nodes{number blockedBy(first:20){nodes{number state}}}}}}' % (own, name)
             go = subprocess.run(["gh", "api", "graphql", "-f", "query=" + gq], capture_output=True, text=True, timeout=60).stdout
             try: apply_open_blockers(items, ((json.loads(go) or {}).get("data") or {}).get("repository", {}).get("issues", {}).get("nodes") or [])
             except Exception: pass
-            lo = subprocess.run(["gh", "api", "--paginate", f"repos/{REPO}/labels?per_page=100", "--jq", '.[]|{n:.name,c:.color}'], capture_output=True, text=True, timeout=60).stdout
-            lc = {x["n"]: x["c"].lower() for x in (json.loads(l) for l in lo.splitlines() if l.strip())}
+            if time.time() - board_cache.get("lt", 0) >= LABELS_EVERY:
+                board_cache["lt"] = time.time()
+                lc = {x["name"]: x["color"].lower() for x in gh_list(f"repos/{REPO}/labels")}
     except Exception as e: board_cache["err"] = str(e)[:80]   # a failed pass keeps the last good rows on the board (#1810)
     if items: apply_holders(items)
     if items: board_cache.update(t=time.time(), rt=int(read_started), repo=REPO, items=items, cases=cases or [], lc=lc or board_cache.get("lc", {}), err=None)
@@ -2563,18 +2600,17 @@ def issue_detail(n, repo=None):
 PRS = HUBDIR / "hub-prs.json"
 try: prs_cache = json.loads(PRS.read_text())     # last good PR data survives a restart
 except Exception: prs_cache = {"t": 0, "rows": [], "err": None}
+def refresh_closed_prs():
+    if time.time() - prs_cache.get("read", 0) < LABELS_EVERY or _under_floor("closed pull request read"): return
+    prs_cache["read"] = time.time()
+    f = lambda s: dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
+    rows = [{"n": p["number"], "merged": p["merged_at"], "min": round((f(p["merged_at"]) - f(p["created_at"])).total_seconds() / 60, 1)}
+            for p in gh_list(f"repos/{REPO}/pulls", "state=closed&sort=updated&direction=desc") if p.get("merged_at") and p["number"] >= 1115]
+    if rows: prs_cache.update(t=time.time(), rows=sorted(rows, key=lambda r: r["merged"]), err=None)
+    PRS.write_text(json.dumps(prs_cache))
 def refresh_prs():
     while True:
-        try:
-            out = subprocess.run(["gh", "api", "--paginate", f"repos/{REPO}/pulls?state=closed&per_page=100&sort=updated&direction=desc", "--jq", ".[]|select(.merged_at!=null)|{n:.number,c:.created_at,m:.merged_at}"], capture_output=True, text=True, timeout=120).stdout
-            rows = []
-            for l in out.splitlines():
-                p = json.loads(l)
-                if p["n"] < 1115: continue
-                f = lambda s: dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
-                rows.append({"n": p["n"], "merged": p["m"], "min": round((f(p["m"]) - f(p["c"])).total_seconds() / 60, 1)})
-            if rows: prs_cache.update(t=time.time(), rows=sorted(rows, key=lambda r: r["merged"]), err=None)
-            if rows: PRS.write_text(json.dumps(prs_cache))
+        try: refresh_closed_prs()
         except Exception as e: prs_cache["err"] = str(e)[:80]
         time.sleep(600)
 
