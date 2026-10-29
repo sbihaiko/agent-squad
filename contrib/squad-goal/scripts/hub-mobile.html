@@ -54,6 +54,16 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 #5aa9ff}
 #reconnect{position:fixed;inset:0;z-index:5;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px;text-align:center}
 #reconnect[hidden]{display:none}
 #reconnect button{min-height:44px;min-width:120px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:6px;font-size:16px}
+#more-menu{display:grid;gap:8px}
+#more-menu button,[data-screen] button{min-height:44px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:8px;font-size:15px;padding:0 12px;text-align:left}
+#periods{display:flex;gap:8px;margin:10px 0 12px}
+#periods button{flex:1;text-align:center}
+#periods button[aria-pressed=true]{box-shadow:inset 0 -2px 0 #5aa9ff}
+#cchart{width:100%;margin:8px 0}
+#cchart svg{width:100%;height:auto;display:block}
+.row{padding:10px 4px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+.row .mut{color:var(--mute);font-size:13px}
+[data-screen] .msg{color:var(--err)}
 </style>
 <header>
 <select id="profile" aria-label="Profile" hidden></select>
@@ -92,7 +102,38 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 #5aa9ff}
 </section>
 <section data-panel="runs" hidden><h2>Runs</h2><p>Placeholder: the runs tab is built by its own ticket.</p></section>
 <section data-panel="terminals" hidden><h2>Terminals</h2><p>Placeholder: the terminals tab is built by its own ticket.</p></section>
-<section data-panel="more" hidden><h2>More</h2><p>Placeholder: the more tab is built by its own ticket.</p></section>
+<section data-panel="more" hidden>
+<h2>More</h2>
+<div id="more-menu">
+<button data-more="subs" type="button">Subscriptions</button>
+<button data-more="models" type="button">Squad models</button>
+<button data-more="cost" type="button">Cost and usage</button>
+</div>
+<article data-screen="subs" data-src="/api/subs" hidden>
+<button data-back type="button">Back</button>
+<h2>Subscriptions</h2>
+<div class="list"></div>
+<p class="msg"></p>
+</article>
+<article data-screen="models" data-src="/api/models" hidden>
+<button data-back type="button">Back</button>
+<h2>Squad models</h2>
+<div class="list"></div>
+<p class="msg"></p>
+</article>
+<article data-screen="cost" data-src="/api/stats" hidden>
+<button data-back type="button">Back</button>
+<h2>Cost and usage</h2>
+<div id="periods">
+<button data-period="hour" type="button">Per hour</button>
+<button data-period="day" type="button">Per day</button>
+<button data-period="month" type="button">Per month</button>
+</div>
+<div id="cchart"></div>
+<div class="list"></div>
+<p class="msg"></p>
+</article>
+</section>
 </main>
 <div id="sheet" data-role="sheet" role="dialog" aria-labelledby="sh-title" hidden>
 <div class="grab"></div>
@@ -124,6 +165,8 @@ function show(name) {
   localStorage.setItem("squad-mobile-tab", name);
   if (name === "board") loadBoard();
   else { view = afterGesture(view, { act: "close" }); renderSheet(); }
+  if (name === "more") showMore();
+  else moreScreen = null;
 }
 tabs.forEach(b => b.onclick = () => show(b.dataset.tab));
 
@@ -286,6 +329,97 @@ document.addEventListener("touchend", e => {
   touch = null;
   if (g) step(g);
 }, { passive: true });
+
+let moreScreen = null, period = "day", moreSeq = 0;
+const MORE_CHAINS = [["coding_models", "Coding"], ["review_models", "Review"], ["vision_models", "Vision"], ["router_models", "Router"]];
+const CH_W = 280, CH_H = 90;
+function rowEl(title, lines) {
+  const row = document.createElement("div");
+  row.className = "row";
+  const t = document.createElement("b");
+  t.textContent = title;
+  const kids = (lines.length ? lines : ["none"]).map(text => {
+    const s = document.createElement("div");
+    s.className = "mut";
+    s.textContent = text;
+    return s;
+  });
+  row.append(t, ...kids);
+  return row;
+}
+function chartEl(buckets) {
+  const NS = "http://www.w3.org/2000/svg";
+  const max = Math.max(0.01, ...buckets.map(b => b.spend)), bw = CH_W / buckets.length;
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("viewBox", `0 0 ${CH_W} ${CH_H}`);
+  buckets.forEach((b, i) => {
+    const h = b.spend / max * (CH_H - 4), r = document.createElementNS(NS, "rect"), t = document.createElementNS(NS, "title");
+    r.setAttribute("x", i * bw + 1);
+    r.setAttribute("y", CH_H - h);
+    r.setAttribute("width", Math.max(1, bw - 2));
+    r.setAttribute("height", h);
+    r.setAttribute("fill", "#5aa9ff");
+    t.textContent = `${b.t}: ${money(b.spend)} · ${b.runs} runs`;
+    r.append(t);
+    svg.append(r);
+  });
+  return svg;
+}
+const MORE = {
+  subs(el, d) {
+    const rows = Object.values(d.subs).map(v => {
+      const w = v.quota && v.quota.windows && v.quota.windows[0];
+      return rowEl(v.name, [
+        v.usd == null ? "no plan price set" : `plan ${money(v.usd)} a month`,
+        `API-equivalent used this month ${money(v.eq)}`,
+        w ? `${w.label}: ${Math.round(w.pct)}% used` : v.quota && v.quota.unavailable ? `quota unavailable: ${v.quota.err}` : ""
+      ].filter(Boolean));
+    });
+    rows.push(rowEl("This month", [`cash: plans ${money(d.plans)} + API ${money(d.api)} = ${money(d.total)}`]));
+    el.querySelector(".list").replaceChildren(...rows);
+  },
+  models(el, d) {
+    const rows = [rowEl("Last run coded with", [d.last_coding || ""])];
+    for (const [k, label] of MORE_CHAINS) {
+      rows.push(rowEl(label, (d[k] || []).map((m, i) => `${i + 1}. ${m}${d.off && d.off[k] && d.off[k][m] ? " · off" : ""}`)));
+    }
+    el.querySelector(".list").replaceChildren(...rows);
+  },
+  cost(el, d) {
+    el.querySelector("#cchart").replaceChildren(...(d.buckets.length ? [chartEl(d.buckets)] : []));
+    const t = d.totals;
+    const rows = [rowEl("Today", [money(t.today)]), rowEl("This month", [money(t.month)]), rowEl("All time", [money(t.all)])];
+    if (t.unpriced || t.uncounted) rows.push(rowEl("Note", [`${t.unpriced} review calls unpriced, ${t.uncounted} with no usage count: the total is a floor.`]));
+    rows.push(...d.models.map(m => rowEl(m.model, [`${money(m.spend)} · ${m.calls} calls`])));
+    el.querySelector(".list").replaceChildren(...rows);
+  }
+};
+async function loadMore() {
+  if (!moreScreen) return;
+  const name = moreScreen, seq = ++moreSeq, el = document.querySelector(`[data-screen="${name}"]`);
+  try {
+    const d = await call(el.dataset.src + (name === "cost" ? "?period=" + period : ""));
+    if (seq !== moreSeq) return;
+    MORE[name](el, d);
+    el.querySelector(".msg").textContent = "";
+  } catch (e) { if (seq === moreSeq) el.querySelector(".msg").textContent = e.message; }
+}
+function showMore() {
+  for (const a of document.querySelectorAll("[data-screen]")) a.hidden = a.dataset.screen !== moreScreen;
+  document.getElementById("more-menu").hidden = !!moreScreen;
+  for (const b of document.querySelectorAll("[data-period]")) b.setAttribute("aria-pressed", String(b.dataset.period === period));
+  loadMore();
+}
+document.querySelector('[data-panel="more"]').onclick = e => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  if (b.dataset.more) moreScreen = b.dataset.more;
+  else if ("back" in b.dataset) moreScreen = null;
+  else if (b.dataset.period) period = b.dataset.period;
+  else return;
+  showMore();
+};
+setInterval(loadMore, 10000);
 
 (async () => {
   const me = location.pathname.split("/")[1];
