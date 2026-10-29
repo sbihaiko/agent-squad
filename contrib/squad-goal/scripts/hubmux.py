@@ -132,7 +132,9 @@ def server(port, apps):
         def _send(self, code, body, ct):
             self.send_response(code); self.send_header("Content-Type", ct); self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(body)
 
-        def refuse(self, reason): self._send(403, reason.encode(), "text/plain; charset=utf-8")
+        def refuse(self, reason, page=False):
+            if page: return self.profile.refuse(self, reason, page)
+            self._send(403, reason.encode(), "text/plain; charset=utf-8")
         def not_found(self): return self.profile.not_found(self)
         def dash(self, method, body=b""): return self.profile.dash(self, method, body)
 

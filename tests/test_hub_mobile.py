@@ -7,8 +7,9 @@ names the board's columns and checks the mobile page holds none of them.
 import http.client
 import importlib.util
 import json
-import os
 import pathlib
+import re
+import sys
 import threading
 from http.server import ThreadingHTTPServer
 
@@ -45,7 +46,7 @@ def hub(monkeypatch, tmp_path):
         monkeypatch.delenv(k, raising=False)
     gspec = importlib.util.spec_from_file_location("ghread", GHREAD_PY)
     gh = importlib.util.module_from_spec(gspec)
-    monkeypatch.setitem(__import__("sys").modules, "ghread", gh)
+    monkeypatch.setitem(sys.modules, "ghread", gh)
     gspec.loader.exec_module(gh)
     spec = importlib.util.spec_from_file_location("hub_mobile", HUB_PY)
     mod = importlib.util.module_from_spec(spec)
@@ -65,7 +66,7 @@ def test_mobile_page_names_five_tabs_in_spec_order(hub):
     mod, port = hub
     status, ct, body = get(port, "/mobile")
     assert status == 200 and ct.startswith("text/html")
-    assert [t for t in __import__("re").findall(r'data-tab="(\w+)"', body)] == TABS
+    assert [t for t in re.findall(r'data-tab="(\w+)"', body)] == TABS
 
 
 def test_desktop_page_links_to_mobile_and_redirects_narrow_screens(hub):
@@ -112,6 +113,17 @@ def test_loop_stamp_rule_is_pure(hub):
     assert mod.loop_stamp_next(None, True, "T") == {"on": True, "since": None}
     assert mod.loop_stamp_next({"on": True, "since": "S"}, True, "T") == {"on": True, "since": "S"}
     assert mod.loop_stamp_next({"on": True, "since": "S"}, False, "T") == {"on": False, "since": "T"}
+
+
+def test_loop_seen_stamps_each_change_with_the_local_time(hub):
+    mod, _ = hub
+    import datetime as dt
+    first, later = 1793000000.0, 1793003600.0
+    mod.loop_seen(True, first)
+    assert json.loads(mod.LOOP_STAMP.read_text()) == {"on": True, "since": None}
+    mod.loop_seen(False, later)
+    assert json.loads(mod.LOOP_STAMP.read_text()) == {
+        "on": False, "since": dt.datetime.fromtimestamp(later).astimezone().isoformat(timespec="seconds")}
 
 
 def test_mobile_page_holds_no_board_rule_code(hub):
@@ -174,7 +186,7 @@ def test_mux_serves_the_mobile_page_under_the_profile_path(tmp_path, monkeypatch
     try:
         port = srv.server_address[1]
         status, _, body = get(port, "/alpha/mobile")
-        assert status == 200 and [t for t in __import__("re").findall(r'data-tab="(\w+)"', body)] == TABS
+        assert status == 200 and [t for t in re.findall(r'data-tab="(\w+)"', body)] == TABS
         assert '"/alpha/api/status"' in body
         status, _, s = get(port, "/alpha/api/status")
         assert status == 200 and "loop" in json.loads(s)

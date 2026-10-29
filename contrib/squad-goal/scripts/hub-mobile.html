@@ -1,0 +1,116 @@
+<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Hub</title>
+<style>
+:root{--bg:#0f1115;--panel:#161a21;--line:#2a303b;--fg:#d8dde6;--mute:#8a93a3;--ok:#3ecf8e;--warn:#f5b041;--err:#ff6b6b}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px system-ui,sans-serif;min-height:100vh}
+header{display:flex;gap:8px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--line)}
+header select{flex:1;background:var(--panel);color:var(--fg);border:1px solid var(--line);padding:8px;font-size:16px;border-radius:6px}
+header a{color:#5aa9ff;font-size:13px;white-space:nowrap}
+main{padding:12px 12px 84px}
+section[hidden]{display:none}
+h2{font-size:17px;margin:6px 0 10px}
+#loop{padding:12px;border-radius:8px;background:var(--panel);border:1px solid var(--line)}
+#loop.on #loop-text{color:var(--ok)}#loop.off #loop-text{color:var(--err)}
+.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:12px 0}
+.tile{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 6px;text-align:center}
+.tile b{display:block;font-size:22px}
+.tile span{color:var(--mute);font-size:12px}
+#warnings{list-style:none;padding:0;margin:0}
+#warnings li{padding:12px 4px;border-bottom:1px solid var(--line);color:var(--warn);min-height:44px}
+#warn-detail{margin-top:10px;padding:12px;background:var(--panel);border-radius:8px;color:var(--mute);white-space:pre-wrap}
+#load{color:var(--mute);margin-top:12px;font-variant-numeric:tabular-nums}
+#msg{color:var(--err)}
+nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:var(--panel);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom)}
+nav button{flex:1;min-height:56px;background:none;border:0;color:var(--mute);font:13px system-ui;padding:6px 0}
+nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 #5aa9ff}
+</style>
+<header>
+<select id="profile" aria-label="Profile" hidden></select>
+<a id="to-desktop" href="#">Desktop page</a>
+</header>
+<main>
+<section data-panel="status">
+<h2>Status</h2>
+<div id=loop><span id=loop-text>loading</span></div>
+<div class=tiles>
+<div class=tile><b id=t-live>-</b><span>live runs</span></div>
+<div class=tile><b id=t-spend>-</b><span>spend today</span></div>
+<div class=tile><b id=t-bugs>-</b><span>open bugs</span></div>
+</div>
+<h2>Warnings</h2>
+<ul id=warnings></ul>
+<div id=warn-detail hidden></div>
+<div id=load></div>
+<p id=msg></p>
+</section>
+<section data-panel="board" hidden><h2>Board</h2><p>Placeholder: the board tab is built by its own ticket.</p></section>
+<section data-panel="runs" hidden><h2>Runs</h2><p>Placeholder: the runs tab is built by its own ticket.</p></section>
+<section data-panel="terminals" hidden><h2>Terminals</h2><p>Placeholder: the terminals tab is built by its own ticket.</p></section>
+<section data-panel="more" hidden><h2>More</h2><p>Placeholder: the more tab is built by its own ticket.</p></section>
+</main>
+<nav>
+<button data-tab="status">Status</button>
+<button data-tab="board">Board</button>
+<button data-tab="runs">Runs</button>
+<button data-tab="terminals">Terminals</button>
+<button data-tab="more">More</button>
+</nav>
+<script>
+const $ = id => document.getElementById(id);
+const base = location.pathname.replace(/mobile\/?$/, "");
+$("to-desktop").href = base;
+$("to-desktop").onclick = () => sessionStorage.setItem("squad-view","desktop");
+
+const tabs = [...document.querySelectorAll("nav [data-tab]")];
+function show(name) {
+  for (const p of document.querySelectorAll("[data-panel]")) p.hidden = p.dataset.panel !== name;
+  for (const b of tabs) b.dataset.tab === name ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current");
+  localStorage.setItem("squad-mobile-tab", name);
+}
+const last = localStorage.getItem("squad-mobile-tab");
+show(tabs.some(b => b.dataset.tab === last) ? last : tabs[0].dataset.tab);
+tabs.forEach(b => b.onclick = () => show(b.dataset.tab));
+
+async function call(path) {
+  let r;
+  try { r = await fetch(path, { cache: "no-store" }); }
+  catch (e) { throw new Error("The hub does not answer. Check Tailscale and that the machine is awake."); }
+  if (r.status === 403) throw new Error("The hub refused this login: " + (await r.text()).trim());
+  if (!r.ok) throw new Error("The hub answered " + r.status + ".");
+  return r.json();
+}
+
+const money = v => "$" + Number(v || 0).toFixed(2);
+function detail(w) { $("warn-detail").textContent = w.tip || w.text; $("warn-detail").hidden = false; }
+async function status() {
+  try {
+    const s = await call("/api/status");
+    $("msg").textContent = "";
+    $("loop").className = s.loop.on ? "on" : "off";
+    $("loop-text").textContent = (s.loop.on ? "on" : "off") + " since " + (s.loop.since || "unknown");
+    $("t-live").textContent = s.live;
+    $("t-spend").textContent = money(s.spend_today);
+    $("t-bugs").textContent = s.open_bugs;
+    $("warnings").replaceChildren(...s.warnings.map(w => {
+      const li = document.createElement("li");
+      li.textContent = w.text;
+      li.tabIndex = 0;
+      li.onclick = () => detail(w);
+      return li;
+    }));
+    $("load").textContent = s.load.line;
+  } catch (e) { $("msg").textContent = e.message; }
+}
+status();
+setInterval(status, 5000);
+
+(async () => {
+  const me = location.pathname.split("/")[1];
+  try {
+    const d = await (await fetch("/" + "api/hub", { cache: "no-store" })).json();
+    const sel = $("profile");
+    for (const r of d.repos) sel.add(new Option(r.slug, r.slug, false, r.slug === me));
+    sel.onchange = () => { location.href = "/" + sel.value + "/mobile"; };
+    sel.hidden = false;
+  } catch (e) {}
+})();
+</script>

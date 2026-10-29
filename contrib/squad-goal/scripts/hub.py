@@ -1303,6 +1303,26 @@ def _loop_on(pid_file=None):
     except OSError: return False
     return True
 
+LOOP_STAMP = HUBDIR / "loop-stamp.json"   # each on/off change the sampler saw, with the machine's local time of it (#826)
+
+def loop_stamp_next(prev, on, when):
+    """The stamp after one sighting: a state never seen before has no time, and a change takes the time it was seen."""
+    if not prev or "on" not in prev: return {"on": on, "since": None}
+    if bool(prev["on"]) == on: return prev
+    return {"on": on, "since": when}
+
+def loop_seen(on, now=None):
+    now = time.time() if now is None else now
+    prev = _json(LOOP_STAMP)
+    nxt = loop_stamp_next(prev, on, dt.datetime.fromtimestamp(now).astimezone().isoformat(timespec="seconds"))
+    if nxt != prev:
+        tmp = LOOP_STAMP.with_suffix(".tmp"); tmp.write_text(json.dumps(nxt)); os.replace(tmp, LOOP_STAMP)
+    return on
+
+def loop_status():
+    on = _loop_on(); prev = _json(LOOP_STAMP) or {}
+    return {"on": on, "since": prev.get("since") if bool(prev.get("on")) == on else None}
+
 def foot_sources(now=None):
     """One reading of every source the line draws on. A source that is not there reads as `None` for its own fact only,
     so one unreadable file costs one `?` and never the rest of the line."""
@@ -1313,7 +1333,7 @@ def foot_sources(now=None):
     plans = plans_get()   # the hand-entered percentage, for a probe that did not answer: the two things #1839's tokens read
     out["burn"] = burn_cached(now)
     out["cycle"] = _cycle_state(now)
-    out["loop"] = _loop_on()
+    out["loop"] = loop_seen(_loop_on(), now)
     out["subs"] = {k: {"probe": quota_row(k, now), "quota": (plans.get(k) or {}).get("quota")} for k in SUBS}
     return out
 
@@ -1337,6 +1357,16 @@ def load_payload():
             "warn": sustained(hist), "runs": dict(LOAD_STATE.get("runs") or {}),
             "facts": list(LOAD_STATE.get("facts") or []),
             "secs": LOAD_SAMPLE_SECS, "asof": LOAD_STATE.get("asof", 0.0)}
+
+def status_payload():
+    """What the mobile Status tab reads: the facts the hub computes, never a figure the page works out."""
+    items = board_cache.get("items") or []
+    return {"loop": loop_status(),
+            "live": sum(1 for r in run_list() if r.get("live")),
+            "spend_today": stats("day")["totals"]["today"],
+            "open_bugs": sum(1 for i in items if str(i.get("s")).upper() == "OPEN" and "bug" in (i.get("l") or [])),
+            "warnings": [{"text": f["text"], "tip": f.get("tip")} for f in (LOAD_STATE.get("facts") or []) if f.get("bad")],
+            "load": load_payload()}
 
 def load_sampler():
     """The one sampler thread: a failed pass leaves the last reading in place rather than breaking the page."""
@@ -2661,6 +2691,7 @@ RUN_STATES = [
 ]
 
 PAGE = r"""<!doctype html><meta charset=utf-8><title>Hub</title>
+<script>if(matchMedia("(max-width: 600px)").matches&&sessionStorage.getItem("squad-view")!=="desktop")location.replace(location.pathname.replace(/\/?$/,"/")+"mobile")</script>
 <style>
 :root{--bg:#0f1115;--panel:#161a21;--line:#2a303b;--fg:#d8dde6;--mute:#8a93a3;--ok:#3ecf8e;--warn:#f5b041;--err:#ff6b6b;--run:#2dd4bf;--none:#b79cf6;--wait:#e8d44d;--pin:#5aa9ff}
 :root{--col-w:185px}   /* the docked strip's column geometry: the one place its width is set (#1791); a column holding no cards is not drawn at all, so it reserves none (#1809) */
@@ -2847,6 +2878,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 #who{padding:3px 12px;color:var(--mute);border-bottom:1px solid var(--line)}#who:empty{display:none}
 </style>
 <div id=who>__WHO__</div>
+<a id=mobile-link href="#" style="margin:0 12px;color:#8a93a3;font-size:12px">mobile view</a><script>document.getElementById("mobile-link").href=location.pathname.replace(/\/?$/,"/")+"mobile"</script>
 <div id=win>
 <div id=side>
 <details id=plans class=sp><summary>subscriptions<span class=sr id=plsr></span></summary><div class=sb><div id=subs></div></div></details>
@@ -4069,6 +4101,12 @@ def _models_set(new):
     modelreg.write_chains(MODELS, chains, d)
     return models_get()
 
+MOBILE_PAGE = (pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text()
+
+def mobile_refusal(reason):
+    return ('<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Hub</title>'
+            f'<body style="font:16px system-ui;margin:24px"><h1>The hub refused this login</h1><p>{html.escape(reason)}</p>').encode()
+
 def served_page(login=""):
     """The page as the hub serves it, every placeholder substituted. The model-id shape replaces its quoted placeholder:
     json.dumps brings its own quotes, and a second pair is a syntax error that empties the page."""
@@ -4162,9 +4200,9 @@ def request_target(h):
 
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
-    def refuse(self, reason):
-        body = reason.encode()
-        self.send_response(403); self.send_header("Content-Type", "text/plain; charset=utf-8"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+    def refuse(self, reason, page=False):
+        body = mobile_refusal(reason) if page else reason.encode()
+        self.send_response(403); self.send_header("Content-Type", "text/html; charset=utf-8" if page else "text/plain; charset=utf-8"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
     def not_found(self):
         self.send_response(404); self.send_header("Content-Length", "0"); self.end_headers()
     def dash(self, method, body=b""):
@@ -4196,7 +4234,7 @@ class H(BaseHTTPRequestHandler):
         finally: up.close()
     def do_GET(self):
         a = access(self, "GET")
-        if not a.allowed: return self.refuse(a.reason)
+        if not a.allowed: return self.refuse(a.reason, page=self.path.split("?", 1)[0] == "/mobile")
         if request_target(self).startswith(DASH_PREFIXES): return self.dash("GET")
         if self.path.startswith("/held/"):   # a run the childcc pass holds: its dashboard, started when none runs (#689)
             name = re.sub(r"[^\w-]", "", self.path[6:].split("?")[0])
@@ -4227,6 +4265,8 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/models"): body, ct = json.dumps(models_get()).encode(), "application/json"
         elif self.path.startswith("/api/speed"): body, ct = json.dumps(speed()).encode(), "application/json"
         elif self.path.startswith("/api/load"): body, ct = json.dumps(load_payload()).encode(), "application/json"
+        elif self.path.startswith("/api/status"): body, ct = json.dumps(status_payload()).encode(), "application/json"
+        elif self.path.split("?", 1)[0] == "/mobile": body, ct = MOBILE_PAGE.encode(), "text/html; charset=utf-8"
         else: body, ct = served_page(a.login).encode(), "text/html; charset=utf-8"
         self.send_response(200); self.send_header("Content-Type", ct); self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(body)
 
