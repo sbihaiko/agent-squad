@@ -412,6 +412,17 @@ def test_the_hub_mux_leaves_turn_text_and_message_ids_unchanged(home, serve):
     assert status == 200 and json.loads(body)["turns"] == [{"id": "m-7", "role": "owner", "text": text}]
 
 
+def test_a_turn_with_markup_is_returned_as_its_plain_text(home, serve):
+    cwd = home.path / "p1" / "app"
+    add_session(home, os.getpid(), "s1", cwd)
+    markup = '<script>alert(1)</script><img src="https://x.example/a.png" onerror="x()"> <b>hi</b>'
+    write_transcript(home, cwd, "s1", [answer("a1", markup)])
+    srv = serve()
+    status, body, head = fetch(srv.port, "/api/sessions/conversation?sid=s1", f"127.0.0.1:{srv.port}")
+    assert status == 200 and head["content-type"].startswith("application/json")
+    assert json.loads(body)["turns"] == [{"id": "a1", "role": "answer", "text": markup}]
+
+
 def test_the_mobile_page_sends_a_csp_that_loads_nothing_from_outside_the_hub(home, serve):
     srv = serve()
     status, _, head = fetch(srv.port, "/mobile/", f"127.0.0.1:{srv.port}")
