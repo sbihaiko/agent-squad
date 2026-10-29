@@ -486,3 +486,84 @@ def test_the_board_pass_asks_for_each_issues_parent(hub):
     """One GraphQL page carries the parent, so the board needs no read per card."""
     mod, _ = hub
     assert "parent{number labels(first:20){nodes{name}}}" in mod.OPEN_RELATIONS_QUERY
+
+
+def test_the_parent_read_pages_every_open_issue(hub, monkeypatch):
+    """The relation read pages with pageInfo/endCursor. One page is not the repository: a ticket whose spec sits past the
+    first page is a ticket all the same, and a read that stops early is named incomplete (#829)."""
+    mod, _ = hub
+    pages = [
+        {"data": {"repository": {"issues": {"pageInfo": {"hasNextPage": True, "endCursor": "c1"}, "nodes": [{"number": 30}]}}}},
+        {"data": {"repository": {"issues": {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": [{"number": 31}]}}}},
+    ]
+    calls = []
+
+    def fake(cmd, **kw):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, json.dumps(pages[len(calls) - 1]), "")
+
+    monkeypatch.setattr(mod.subprocess, "run", fake)
+    nodes, complete = mod.open_relations()
+    assert [n["number"] for n in nodes] == [30, 31], nodes
+    assert complete is True
+    assert "cursor=c1" in calls[1], calls
+
+
+def test_a_parent_read_that_fails_is_incomplete(hub, monkeypatch):
+    """A failed read never reads as "no parent": it is incomplete, and the rule fails closed on what it did not read."""
+    mod, _ = hub
+    monkeypatch.setattr(mod.subprocess, "run",
+                        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "gh: HTTP 502"))
+    nodes, complete = mod.open_relations()
+    assert nodes == [] and complete is False
+
+
+def test_an_incomplete_parent_read_keeps_the_last_good_parent(hub):
+    """A card the incomplete read never reached keeps the `pa` the last good pass recorded, so it stays a ticket."""
+    mod, _ = hub
+    items = [{"n": 30}, {"n": 31}]
+    nodes = [{"number": 30, "parent": {"number": 8, "labels": {"nodes": [{"name": "spec"}]}}}]
+    mod.apply_parent_specs(items, nodes, complete=False, previous=[{"n": 31, "pa": 9}])
+    assert {i["n"]: i.get("pa") for i in items} == {30: 8, 31: 9}
+
+
+def test_a_card_the_parent_read_never_named_is_not_promotable(hub):
+    """A Backlog card whose parent no read named, and no last good read held, is not promotable: an unknown parent is
+    never "no spec parent" (ADR-0142)."""
+    mod, _ = hub
+    items = [{"n": 33}]
+    mod.apply_parent_specs(items, [], complete=False, previous=[])
+    assert items[0].get("pau") is True and items[0].get("pa") is None
+    assert mod.promotable({**items[0], "s": "OPEN", "st": "Backlog", "l": []}) is False
+
+
+def test_a_backlog_card_with_an_unread_parent_is_refused_by_both_routes(hub):
+    """The board does not mark it, and the route refuses it before any write: the same rule on the same input."""
+    mod, port = hub
+    mod.board_cache["items"].append({"n": 33, "i": 133, "t": "parent not read", "s": "OPEN", "st": "Backlog",
+                                     "l": [], "pau": True})
+    rows = {g["name"]: {i["n"]: i for i in g["items"]} for g in mod.board()["groups"]}
+    assert not rows["Backlog"][33].get("pm")
+    calls = []
+    mod.promote_write = writer(calls)
+    status, out = post(port, {"issue": 33})
+    assert status == 400 and calls == [], (status, out, calls)
+
+
+def test_a_proved_move_is_the_same_column_in_both_routes(hub, monkeypatch, tmp_path):
+    """The board draws a proved move the read has not carried yet, and the route reads the column the board draws. While
+    the move stands pending, the card is not promotable in either route: one rule over one input (#829, AC3)."""
+    mod, port = hub
+    moves = tmp_path / "board-moves.json"
+    moves.write_text(json.dumps({"101": {"column": mod.PROMOTE_TO, "at": "2026-10-29T12:00:00Z", "by": "owner"}}))
+    monkeypatch.setattr(mod, "MOVES", moves)
+    monkeypatch.setenv("SG_PENDING_OVERLAY", "on")
+    mod.board_cache["rt"] = int(mod._utc("2026-10-29T09:00:00Z").timestamp())   # the list read began before the move
+    rows = {g["name"]: {i["n"]: i for i in g["items"]} for g in mod.board()["groups"]}
+    assert 7 in rows[mod.PROMOTE_TO], rows          # the board draws the proved move
+    assert not rows[mod.PROMOTE_TO][7].get("pm"), "the board marks a pending-move card promotable"
+    calls = []
+    mod.promote_write = writer(calls)
+    status, out = post(port, {"issue": 7})
+    assert status == 400 and calls == [], (status, out, calls)
+    assert "not Backlog" in out.get("err", ""), out

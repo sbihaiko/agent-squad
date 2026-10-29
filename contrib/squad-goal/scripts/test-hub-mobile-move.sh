@@ -1,8 +1,9 @@
 #!/bin/bash
 # Guard for #829: the move rules of the phone's Board tab are one client module, and the rules are the whole of it. A
 # release before the threshold does nothing; a card the hub does not mark promotable never stages; the Undo, the app going
-# hidden and a profile change all cancel a staged move, and a cancelled move is never written, however late the write is
-# asked for. The module names no column: the row's own `pmt` names the destination, so this suite names none either.
+# hidden, a profile change and a second move staged over this one all cancel a staged move, and a cancelled move is never
+# written, however late the write is asked for. The module names no column: the row's own `pmt` names the destination, so
+# this suite names none either.
 # The module is run by node with no DOM and no server. When node is not on PATH the run says so and makes no claim.
 # usage: bash test-hub-mobile-move.sh [path/to/hub-mobile-move.js]
 d=$(cd "$(dirname "$0")" && pwd); js=${1:-$d/hub-mobile-move.js}
@@ -25,6 +26,8 @@ const checks = [
   ["the Undo cancels the move", "moveAct(moveStage(7,'x',1000),'undo',2000).why", '"undo"'],
   ["a hidden app cancels the move", "moveAct(moveStage(7,'x',1000),'hidden',2000).why", '"hidden"'],
   ["a profile change cancels the move", "moveAct(moveStage(7,'x',1000),'profile',2000).why", '"profile"'],
+  ["a second move staged over this one cancels it", "moveAct(moveStage(7,'x',1000),'superseded',2000).why", '"superseded"'],
+  ["a superseded move is never written later", "(()=>{const p=moveAct(moveStage(7,'x',1000),'superseded',2000);return moveAct(p,'write',99999).why})()", '"superseded"'],
   ["a cancelled move is never written later", "(()=>{const p=moveAct(moveStage(7,'x',1000),'undo',2000);return moveAct(p,'write',99999).why})()", '"undo"'],
   ["a write before its delay does not fire", "moveAct(moveStage(7,'x',1000),'write',1500).live", "true"],
 ];

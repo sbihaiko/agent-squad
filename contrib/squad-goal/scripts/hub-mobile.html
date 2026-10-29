@@ -263,6 +263,8 @@ status();
 setInterval(status, 5000);
 
 let board = null, shown = [], issueKey = "", touch = null;
+const reasons = {};   // issue number -> {why, col}: a refusal the card reads on every render, until its card moves again
+const rowColumn = n => { for (const g of (board && board.groups) || []) if (g.items.some(i => i.n === n)) return g.name; return ""; };
 let view = { col: 0, cols: 0, card: 0, cards: 0, sheet: false };
 let bo = JSON.parse(localStorage.getItem("squad-mobile-board") || "{}");
 const saveB = () => localStorage.setItem("squad-mobile-board", JSON.stringify(bo));
@@ -274,6 +276,10 @@ function cardButton(x, i) {
   const id = document.createElement("span"); id.className = "cid"; id.textContent = "#" + x.n;
   const t = document.createElement("span"); t.textContent = x.t;
   b.append(id, t);
+  // The reason the hub refused this card's move is page state the card reads, so every render after the refusal draws it
+  // again (#829): a span put on the card once is dropped by the next read of the board.
+  const why = reasons[x.n];
+  if (why) { const r = document.createElement("span"); r.className = "creason"; r.textContent = why.why; b.append(r); }
   // A card the hub marks promotable is the only one that drags, and it names the column the move goes to (`x.pmt`) so
   // this page holds no column list of its own (#829). The hint is drawn only while the card is dragged.
   if (x.pm) {
@@ -358,6 +364,8 @@ async function loadBoard() {
     const b = await call("/api/board");
     if (!b.groups) throw new Error(b.error || "The board is not ready.");
     board = b;
+    // A refusal stays on its card while the card keeps the column it was refused in; a read the move reached clears it.
+    for (const n of Object.keys(reasons)) if (rowColumn(+n) !== reasons[n].col) delete reasons[n];
     $("bmsg").textContent = b.err ? "(stale)" : "";
     refresh();
   } catch (e) { $("bmsg").textContent = e.message; }
@@ -382,12 +390,18 @@ $("sh-close").onclick = () => step({ act: "close" });
 let pending = null, pendingTimer = 0, deadTimer = 0, suppressClick = false;
 const undoText = t => { $("undo-text").textContent = t; $("undo").hidden = !t; };
 function stageMove(x, el) {
+  // A second move staged over a live one cancels it, and the Undo line names it: the owner never believes the first card
+  // is still moving (#829). The card's own last refusal is answered by this new move.
+  const prior = pending && pending.live ? pending.n : 0;
+  if (prior) cancelMove("superseded");
+  delete reasons[x.n];
   clearTimeout(pendingTimer); clearTimeout(deadTimer);
   pending = moveStage(x.n, x.pmt, Date.now());
   if (el) { el.classList.remove("armed"); el.style.transform = ""; }
-  undoText("#" + x.n + " moves to " + x.pmt + " in a few seconds");
+  undoText((prior ? "#" + prior + ": move cancelled · " : "") + "#" + x.n + " moves to " + x.pmt + " in a few seconds");
   $("undo-btn").hidden = false;
   pendingTimer = setTimeout(writePending, UNDO_MS);
+  refresh();
 }
 function cancelMove(why) {
   if (!pending || !pending.live) return;
@@ -402,19 +416,28 @@ async function writePending() {
   const p = moveAct(pending, "write", Date.now());
   if (!p || p.why !== "written") return;
   pending = null; undoText(""); $("undo-btn").hidden = true;
+  let r;
+  try { r = await fetch("/api/promote", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ issue: p.n }) }); }
+  catch (e) { showCardReason(p.n, "the hub did not answer"); return; }   // a failed request is the only "did not answer"
+  let d = {};
   try {
-    const r = await fetch("/api/promote", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ issue: p.n }) });
-    const d = await r.json();
-    if (d.err) showCardReason(p.n, d.err);
-    loadBoard();
-  } catch (e) { showCardReason(p.n, "the hub did not answer"); }
+    // A refusal the hub answers as plain text (the seam's own 403) carries the reason in its body: it is never read as a
+    // failed request (#829).
+    if (((r.headers.get("Content-Type") || "").indexOf("json")) < 0) {
+      const text = (await r.text()).trim();
+      if (!r.ok) { showCardReason(p.n, text || "the hub answered " + r.status); loadBoard(); return; }
+    } else d = await r.json();
+  } catch (e) { d = { err: "the hub answered " + r.status + " with a body this page cannot read" }; }
+  if (!r.ok && !d.err) d.err = "the hub answered " + r.status;
+  if (d.err) showCardReason(p.n, d.err); else delete reasons[p.n];
+  loadBoard();
 }
 function showCardReason(n, why) {
-  const el = $("cards").querySelector('[data-role="card"][data-n="' + n + '"]');
-  if (!el) { $("bmsg").textContent = why; return; }
-  let r = el.querySelector(".creason");
-  if (!r) { r = document.createElement("span"); r.className = "creason"; el.append(r); }
-  r.textContent = why;
+  // The refusal is page state keyed by issue number, and the card draws it on every render (#829): the read that follows
+  // the write rebuilds every card, and the 10 s poll rebuilds them again, so a span put on the card once is lost.
+  reasons[n] = { why: why, col: rowColumn(n) };
+  if (rowColumn(n)) refresh();
+  else $("bmsg").textContent = why;   // no card on screen with these filters: the line names the card and the reason
 }
 $("undo-btn").onclick = () => cancelMove("undo");
 addEventListener("visibilitychange", () => { if (document.hidden) cancelMove("hidden"); });
@@ -453,9 +476,13 @@ document.addEventListener("touchend", e => {
   const g = gestureAct({ owner: t.owner, dx, dy, atTop: t.atTop });
   if (g) { step(g); return; }
   const mv = moveDrag({ promotable: t.pm, dx, dy });
-  const x = mv && t.card ? shown[+t.card.dataset.i] : null;
-  if (x && x.pm) stageMove(x, t.card);
-  else if (t.card) { t.card.classList.remove("armed"); moveHint(t.card); }
+  // The released card is resolved by its number against the board as it now stands: a 10 s read can reorder the column
+  // during the drag, and the index taken at touchstart would then name another card (#829).
+  const n = t.card ? String(t.card.dataset.n) : "";
+  const x = mv && t.card ? shown.find(r => String(r.n) === n) : null;
+  const el = t.card ? $("cards").querySelector('[data-role="card"][data-n="' + n + '"]') || t.card : null;
+  if (x && x.pm) stageMove(x, el);
+  else if (el) { el.classList.remove("armed"); moveHint(el); }
 }, { passive: true });
 
 let moreScreen = null, period = "day", moreSeq = 0;

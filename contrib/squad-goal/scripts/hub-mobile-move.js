@@ -11,11 +11,13 @@ const moveDrag = ({ promotable, dx, dy }) => {
 // A staged move: the number, the column the row names, and the instant the hub may write. The card never leaves its
 // column here: only the hub's read moves it (ADR-0143), and no rule moves it back.
 const moveStage = (n, to, at) => ({ n, to, until: at + UNDO_MS, live: true, why: "" });
-// The one transition of a staged move. The Undo, the app going hidden and a profile change all cancel it, and a
-// cancelled move is never written, however late the write is asked for. The write happens only at or after its delay.
+// The one transition of a staged move. The Undo, the app going hidden, a profile change and a second move staged over
+// this one all cancel it, and a cancelled move is never written, however late the write is asked for. The write happens
+// only at or after its delay.
+const MOVE_CANCEL = ["undo", "hidden", "profile", "superseded"];
 const moveAct = (p, act, at) => {
   if (!p || !p.live) return p;
-  if (act === "undo" || act === "hidden" || act === "profile") return { ...p, live: false, why: act };
+  if (MOVE_CANCEL.includes(act)) return { ...p, live: false, why: act };
   if (act === "write") return at >= p.until ? { ...p, live: false, why: "written" } : p;
   return p;
 };

@@ -1763,14 +1763,24 @@ def apply_open_blockers(items, nodes):
         if open_ns: i["b"] = open_ns
         else: i.pop("b", None)
     return items
-def apply_parent_specs(items, nodes):
+def apply_parent_specs(items, nodes, complete=True, previous=None):
     """Attach the spec each ticket belongs to as `pa` (#829): the parent issue's number, when that parent carries the
-    spec label. One GraphQL page carries the parent relation with the blockers, so the board spends no read per card.
-    A parent that is not a spec is no spec, and its children are ordinary issues that move on their own; a card the
-    read does not name keeps no `pa`, so a ticket the relation never reached is never read as one."""
+    spec label. The relation read carries the parent with the blockers, so the board spends no read per card.
+    A parent that is not a spec is no spec, and its children are ordinary issues that move on their own. A card the read
+    names keeps exactly what that read says. A card a read that is not complete never reached keeps the `pa` the last
+    good pass recorded, and a card with none is marked `pau`: an unread parent is never "no spec parent", so the rule
+    fails closed, never open (ADR-0142)."""
     by = {n.get("number"): n for n in nodes or [] if isinstance(n, dict)}
+    had = {i.get("n"): i for i in previous or [] if isinstance(i, dict)}
     for i in items:
-        parent = (by.get(i.get("n")) or {}).get("parent")
+        node = by.get(i.get("n"))
+        if node is None and not complete:
+            kept = (had.get(i.get("n")) or {}).get("pa")
+            if isinstance(kept, int): i["pa"] = kept
+            else: i["pau"] = True   # the parent is unknown, not absent: promotable() refuses it until a read names it
+            continue
+        i.pop("pau", None)
+        parent = (node or {}).get("parent")
         num = parent.get("number") if isinstance(parent, dict) else None
         labels = {x.get("name") for x in ((parent.get("labels") or {}).get("nodes") or []) if isinstance(x, dict)} if isinstance(parent, dict) else set()
         if isinstance(num, int) and _columns_module.SPEC_LABEL in labels: i["pa"] = num
@@ -1850,11 +1860,35 @@ def gh_list(path, query=""):
         if len(answer) < 100: return rows
         page += 1
 
-# One GraphQL page carries the relations a card's rule reads: its open blockers, and the parent issue with its labels, so
-# the board knows a ticket of a spec without a read per card (#829, #1506). Owner and name are filled in by the pass.
-OPEN_RELATIONS_QUERY = 'query{repository(owner:"%s",name:"%s"){issues(first:100,states:OPEN){nodes{number blockedBy(first:20){nodes{number state}} parent{number labels(first:20){nodes{name}}}}}}}'
+# The relations a card's rule reads: its open blockers, and the parent issue with its labels, so the board knows a ticket
+# of a spec without a read per card (#829, #1506). Owner, name and page size are filled in by the read.
+OPEN_RELATIONS_QUERY = ('query($cursor:String){repository(owner:"%s",name:"%s"){issues(first:%d,states:OPEN,after:$cursor)'
+                        '{pageInfo{hasNextPage endCursor}nodes{number blockedBy(first:20){nodes{number state}} '
+                        'parent{number labels(first:20){nodes{name}}}}}}}')
+RELATIONS_PAGE = 100       # the page size the relations read asks for
+RELATIONS_MAX_PAGES = 20   # a read that would need more pages than this is incomplete, never a silent stop
+def open_relations():
+    """Every open issue's blockers and parent, page by page through `gh api graphql` (#829). It returns `(nodes, complete)`:
+    a read that fails, asks for another page without a cursor, or runs past the page cap is incomplete, so a caller never
+    reads the cards it did not reach as issues with no parent."""
+    own, name = REPO.split("/", 1)
+    nodes, after = [], None
+    for _ in range(RELATIONS_MAX_PAGES):
+        argv = ["gh", "api", "graphql", "-f", "query=" + OPEN_RELATIONS_QUERY % (own, name, RELATIONS_PAGE)]
+        if after: argv += ["-f", "cursor=" + after]
+        out = subprocess.run(argv, capture_output=True, text=True, timeout=60).stdout   # a call that fails raises, and the pass keeps the rows it had
+        try: page = (((json.loads(out) or {}).get("data") or {}).get("repository") or {}).get("issues") or {}
+        except (TypeError, ValueError):
+            return nodes, False
+        if not isinstance(page, dict): return nodes, False
+        nodes += [n for n in page.get("nodes") or [] if isinstance(n, dict)]
+        info = page.get("pageInfo") or {}
+        if not info.get("hasNextPage"): return nodes, True
+        after = info.get("endCursor")
+        if not after: return nodes, False   # a page that asks for another and names no cursor is incomplete
+    return nodes, False
 def board_pass(fetch_open=None, fetch_landed=None, repos=None):
-    """One board re-read: Board 4 statuses (REST) + one GraphQL page of Issue.blockedBy and Issue.parent + the open work branches and the
+    """One board re-read: Board 4 statuses (REST) + every GraphQL page of Issue.blockedBy and Issue.parent + the open work branches and the
     landing ledger of every repository the hub is told to read (#1820). The 60 s loop runs exactly this.
 
     The two reads are independent: the issues are the profile repository's board, the branch lane spans every configured
@@ -1876,13 +1910,12 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
                     s = i.get("sub_issues_summary") or {}
                     items.append({"n": i["number"], "t": i["title"], "s": i["state"], "c": None, "st": None, "l": [x["name"] for x in i["labels"]],
                                   "si": {"total": s.get("total"), "completed": s.get("completed")}, "o": i["created_at"]})
-            own, name = REPO.split("/", 1)   # one GraphQL page of open issues; not one REST call per card
-            go = subprocess.run(["gh", "api", "graphql", "-f", "query=" + OPEN_RELATIONS_QUERY % (own, name)], capture_output=True, text=True, timeout=60).stdout
-            try: nodes = ((json.loads(go) or {}).get("data") or {}).get("repository", {}).get("issues", {}).get("nodes") or []
-            except Exception: nodes = []
+            nodes, complete = open_relations()   # every page of open issues; never one REST call per card
             try: apply_open_blockers(items, nodes)
             except Exception: pass
-            try: apply_parent_specs(items, nodes)   # the spec a ticket belongs to: a ticket never moves alone (#829)
+            # The spec a ticket belongs to: a ticket never moves alone (#829). A read that is not complete keeps what the
+            # last good pass recorded, and marks the cards it never reached.
+            try: apply_parent_specs(items, nodes, complete, board_cache.get("items") or [])
             except Exception: pass
             if time.time() - board_cache.get("lt", 0) >= LABELS_EVERY:
                 lc = {x["name"]: x["color"].lower() for x in gh_list(f"repos/{REPO}/labels")}
@@ -2509,6 +2542,36 @@ def flow_charts():
     }
 
 
+def drawn_column(i, moves, read_at, window):
+    """The column the served board draws for one row, the freeze that column carries, and what the serve acts on:
+    `read` (no entry names a column this board ships, or the read's column stands), `agree` (the read began after the
+    move and carries its column), `expired` (the window passed with no read agreeing) or `pending` (the move is drawn at
+    once and wears the mark). The board and the promote route ask this one function, so a card is promotable by the
+    column both of them draw, never by two different columns (#829, ADR-0144)."""
+    closed = str(i["s"]).lower() == "closed"   # the row's own closedness: the freeze below is the card's, not the read's
+    st, fz = _columns_module.view_column(i["st"], closed, i.get("l"))   # the column the table names, and the freeze over it
+    entry = moves.get(str(i["i"])) if i.get("i") else None   # the door keys an entry by the Project item id
+    if not (isinstance(entry, dict) and entry.get("column")):
+        return {"st": st, "fz": fz, "state": "read", "recorded": None, "entry": None}
+    recorded = _columns_module.SHIPPED_NAME.get(entry["column"], entry["column"])   # an old Status name reads as its shipped column
+    if recorded not in ORDER:   # no column this board ships: the entry is never drawn, and the read says nothing about it, so the hub leaves it (never writes the record for it)
+        return {"st": st, "fz": fz, "state": "read", "recorded": recorded, "entry": entry}
+    at = move_time(entry)   # the instant the door proved the move, in whole epoch seconds
+    if recorded == st and read_carried(at, read_at):   # the read began after the move and carries its column: the entry's work is done, however old it is
+        return {"st": st, "fz": fz, "state": "agree", "recorded": recorded, "entry": entry}
+    if at is not None and read_at is not None and read_at - at >= window:
+        # The move is past its window at the read's own instant with no agreement: the read's column stands and the entry
+        # is dropped. The window is the read's clock, never the wall clock, so a cache that stopped updating never expires
+        # a move no read has had a window to agree with (#651).
+        return {"st": st, "fz": fz, "state": "expired", "recorded": recorded, "entry": entry}
+    if read_carried(at, read_at) and not has_context(entry):
+        return {"st": st, "fz": fz, "state": "read", "recorded": recorded, "entry": entry}   # a move with no dispatch context stands aside for a read that began after it
+    # Draw the move at once and keep the mark until a read that began after it agrees (#650). A move with a dispatch
+    # context keeps the mark through a contradicting read too, for the whole window. A column that matches by coincidence is no proof.
+    return {"st": recorded, "fz": _columns_module.view_column(recorded, closed, i.get("l"))[1], "state": "pending",
+            "recorded": recorded, "entry": entry}
+
+
 def board():
     overlay = overlay_on()   # one setting turns the overlay off: the served board is then the list read alone (#651)
     moves = read_moves() if overlay else {}   # the record is read on every serve, so a page reload sees the same overlay (#650)
@@ -2517,31 +2580,12 @@ def board():
     agreed, expired = set(), {}   # expired: item id -> (card number, the recorded column, the column the read holds, the move's dispatch context)
     by = {}
     for i in board_cache["items"]:
-        closed = str(i["s"]).lower() == "closed"   # the row's own closedness: the freeze below is the card's, not the read's
-        st, fz = _columns_module.view_column(i["st"], closed, i.get("l"))   # the column the table names, and the freeze over it
-        pending = False
-        entry = moves.get(str(i["i"])) if i.get("i") else None   # the door keys an entry by the Project item id
-        if isinstance(entry, dict) and entry.get("column"):
-            recorded = _columns_module.SHIPPED_NAME.get(entry["column"], entry["column"])   # an old Status name reads as its shipped column
-            at = move_time(entry)   # the instant the door proved the move, in whole epoch seconds
-            if recorded not in ORDER:
-                pass   # no column this board ships: the entry is never drawn, and the read says nothing about it, so the hub leaves it (never writes the record for it)
-            elif recorded == st and read_carried(at, read_at):   # the read began after the move and carries its column: the entry's work is done, however old it is
-                agreed.add(str(i["i"]))
-            elif at is not None and read_at is not None and read_at - at >= window:
-                # The move is past its window at the read's own instant with no agreement: the read's column stands and
-                # the entry is dropped. The window is the read's clock, never the wall clock, so a cache that stopped
-                # updating never expires a move no read has had a window to agree with (#651).
-                expired[str(i["i"])] = (i["n"], recorded, st, has_context(entry))
-            elif read_carried(at, read_at) and not has_context(entry):
-                pass   # a move with no dispatch context stands aside for a read that began after it: that read's column is drawn, and the entry waits its window
-            else:
-                # Draw the move at once and keep the mark until a read that began after it agrees (#650). A move with a dispatch
-                # context keeps the mark through a contradicting read too, for the whole window. A column that matches by coincidence is no proof.
-                st, pending = recorded, True
-                fz = _columns_module.view_column(recorded, closed, i.get("l"))[1]   # the freeze of the column drawn, over the row's own closedness, never the read's
+        d = drawn_column(i, moves, read_at, window)   # the one overlay rule the promote route asks too (#829)
+        st, fz = d["st"], d["fz"]
+        if d["state"] == "agree": agreed.add(str(i["i"]))
+        elif d["state"] == "expired": expired[str(i["i"])] = (i["n"], d["recorded"], st, has_context(d["entry"]))
         row = {"n": i["n"], "t": i["t"], "c": i.get("c"), "l": i.get("l") or []}
-        if pending: row["pd"] = True   # the mark the page draws; the rule lives here, never in the view (ADR-0137)
+        if d["state"] == "pending": row["pd"] = True   # the mark the page draws; the rule lives here, never in the view (ADR-0137)
         if fz: row["fz"] = fz
         if _columns_module.SPEC_LABEL in row["l"]: row["sp"] = True   # a spec is an issue with the spec label: the Specs filter reads this
         # The owner's one move (#560): a card the rule marks promotable carries the arrow that starts it, a spec included:
@@ -2597,12 +2641,14 @@ def promotable(item):
     and it is a spec or an issue that no spec holds. A ticket of a spec moves with its spec, never alone (ADR-0142). The
     board route serves this rule as the row's `pm` and `pmt`, and the promote route asks the same function before any
     write, so a card the board marks not promotable is refused by the route that would move it (ADR-0137, #829).
-    `pa` is the parent spec the board read recorded on the row; a row the pass did not read carries none."""
+    `pa` is the parent spec the board read recorded on the row; `pau` marks a card whose parent the read never reached,
+    and no read has named it since: an unknown parent is never read as no spec parent, so the rule fails closed."""
     if not isinstance(item, dict): return False
     if str(item.get("s") or "").lower() == "closed": return False
     if _columns_module.view_column(item.get("st"), False, item.get("l"))[0] != COLUMN["unscheduled"]: return False
     if _columns_module.SPEC_LABEL in (item.get("l") or []): return True
-    return not item.get("pa")
+    if item.get("pa"): return False
+    return not item.get("pau")
 def promote_write(issues, add=False):
     """The one writer call of the owner's move: `<owner> <project> Todo <n>...`, the shape reconcile.py writes, so the
     board seam (`board.sh`) is the only reach of the carrier. `issues` is one number or a list: a spec and its tickets
@@ -2679,9 +2725,12 @@ def promote(issue):
     item = next((i for i in board_cache.get("items") or [] if i.get("n") == issue), None)
     if item is None: return {"err": "not on the board"}
     if str(item.get("s") or "").lower() == "closed": return {"err": "the issue is closed: a closed card keeps its column"}
-    col, _ = _columns_module.view_column(item.get("st"), False, item.get("l"))
+    # The column the board draws, a proved move's overlay included: the same function the board route asks, so the rule
+    # reads one column in both routes and a card drawn as moved is never written again (#829).
+    st = drawn_column(item, read_moves() if overlay_on() else {}, board_cache.get("rt"), pending_window())["st"]
+    col, _ = _columns_module.view_column(st, False, item.get("l"))
     if col != COLUMN["unscheduled"]: return {"err": f"the card is in {col}, not {COLUMN['unscheduled']}: only a Backlog card moves"}
-    if not promotable(item): return {"err": "the card is a ticket of a spec: it moves with its spec, never alone (ADR-0142)"}
+    if not promotable({**item, "st": st}): return {"err": "the card is a ticket of a spec: it moves with its spec, never alone (ADR-0142)"}
     tickets = []
     if _columns_module.SPEC_LABEL in (item.get("l") or []):
         tickets, err = spec_tickets(issue, item)
