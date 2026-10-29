@@ -5,8 +5,8 @@ empty list; `squad config set` writes and reads both keys; a change only to the 
 a change to any other key still refuses; a record with the old raw-bytes hash is compared by that method.
 """
 import hashlib
-import pathlib
 import json
+import pathlib
 
 import pytest
 

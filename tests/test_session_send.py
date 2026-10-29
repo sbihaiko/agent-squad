@@ -24,7 +24,6 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib/squad-goal/scripts"
 HUB_PY = SCRIPTS / "hub.py"
 sys.path.insert(0, str(SCRIPTS))
-import sessions  # noqa: E402
 
 KEY = "cd" * 16
 TAILNET = "hub.tail1234.ts.net"
@@ -270,7 +269,7 @@ def test_status_is_seen_once_the_transcript_names_the_message(home, tmp_path):
 def load_hub(monkeypatch, home, tmp_path, terminals_send=None, allow=(ANA,)):
     checkout = tmp_path / "checkout"
     (checkout / "docs" / "squad").mkdir(parents=True)
-    lines = [f"tailnet:", f"  host: {TAILNET}", f"  allow: {json.dumps(list(allow))}"]
+    lines = ["tailnet:", f"  host: {TAILNET}", f"  allow: {json.dumps(list(allow))}"]
     if terminals_send is not None:
         lines.append(f"  terminals_send: {str(terminals_send).lower()}")
     (checkout / "docs" / "squad" / "defaults.yaml").write_text("\n".join(lines) + "\n")
