@@ -384,12 +384,17 @@ def test_conversation_of_an_ended_or_other_profile_session_is_not_found(home, se
 
 
 def test_seeded_token_is_in_no_conversation_answer_and_no_log(home, serve, capfd):
-    add_session(home, os.getpid(), "s1", home.path / "p1" / "app")
+    cwd = home.path / "p1" / "app"
+    add_session(home, os.getpid(), "s1", cwd)
+    plain = "plainmsgtoken0042"
+    (home.sessions / "s1.token").write_text(plain + "\n")
+    write_transcript(home, cwd, "s1", [user("m-1", f"key is {plain}"), answer("a-1", f"echo {plain}")])
     srv = serve()
     status, body, _ = fetch(srv.port, "/api/sessions/conversation?sid=s1", f"127.0.0.1:{srv.port}")
-    assert status == 200 and "turns" in json.loads(body) and TOKEN not in body
+    assert status == 200 and plain not in body
+    assert [t["text"] for t in json.loads(body)["turns"]] == ["key is [redacted]", "echo [redacted]"]
     captured = capfd.readouterr()
-    assert TOKEN not in captured.out + captured.err
+    assert plain not in captured.out + captured.err
 
 
 def test_the_hub_mux_leaves_turn_text_and_message_ids_unchanged(home, serve):
