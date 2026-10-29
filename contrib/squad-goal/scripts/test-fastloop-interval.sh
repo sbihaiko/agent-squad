@@ -20,7 +20,7 @@ got() { (cd "$T" && env "$@" perl -e 'alarm 5; exec @ARGV' bash "$d/fastloop.sh"
 ! /usr/bin/grep -q 'sleep 30' "$d/fastloop.sh" && ok "no fixed 30 s sleep is left" || ko "sleep 30 remains"
 # (#569) the wait between two beats ends early on a NEW Todo card in the local board cache, and runs to its bound with no event.
 # The lane runs for real in a fixture dir: stubbed passes log a line each, and a beat is one childcc line. No network, no model.
-F=$T/lane; mkdir -p "$F" "$T/lst"; cp "$d/fastloop.sh" "$d/single.sh" "$F/"; BC=$T/lst/board.json; LOG=$T/lane.log
+F=$T/lane; mkdir -p "$F" "$T/lst"; cp "$d/fastloop.sh" "$d/single.sh" "$d/issue_state.py" "$F/"; BC=$T/lst/board.json; LOG=$T/lane.log
 printf 'export SG_STATE=%s SG_STATE_BASE=%s SG_REPO=x/alpha SG_OWNER=x SG_PROJECT=1 SG_BOARD_CACHE=%s\n' "$T/lst" "$T/cache" "$BC" > "$F/env.sh"
 printf 'open("%s","a").write("beat\\n")\n' "$LOG" > "$F/childcc.py"
 for s in autofrontier autobug; do printf '#!/bin/bash\nexit 0\n' > "$F/$s.sh"; chmod +x "$F/$s.sh"; done

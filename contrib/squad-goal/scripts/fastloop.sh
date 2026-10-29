@@ -11,8 +11,8 @@
 # The cache is the hub's one board (SG_PROJECT): the bug project's own Todo column (SG_BUG_*) is not in it, so a bug filed there waits for the beat.
 # --interval prints the resolved beat and exits (tests). SG_FASTLOOP_ONCE=1 runs one iteration and exits (tests).
 . "$(dirname "$0")/env.sh"; [ "${1:-}" = --interval ] && { echo "$SG_FAST_INTERVAL"; exit 0; }; here="$(dirname "$0")"; P="$SG_STATE/fastloop.pid"
-# todos: the numbers of the cards that sit in Todo in the hub's board cache (items n, st, s), one a line; nothing when the cache is missing or unreadable.
-todos() { jq -r --arg t "${SG_TODO:-Todo}" '.items[]?|select(.st == $t and ((.s // "")|ascii_downcase) != "closed")|.n' "${SG_BOARD_CACHE:-/nonexistent}" 2>/dev/null | sort -n; }
+# todos: the numbers of Todo cards in the fresh hub board cache; nothing when it is missing, stale or unreadable.
+todos() { python3 "${here:-$(dirname "$0")}/issue_state.py" --hub-todos 2>/dev/null; }
 # A lane removes the pid file only when the file names it: the lane of a later start may own it by then (#527).
 mine() { [ "$(cat "$P" 2>/dev/null)" = "$$" ] && rm -f "$P"; }
 [ -n "${SG_FASTLOOP_ONCE:-}" ] || { echo $$ > "$P"; trap 'mine; exit 0' TERM INT; }; cc=

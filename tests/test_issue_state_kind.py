@@ -9,6 +9,8 @@ board does: a PATCH sets an option id, the items read answers the option's name.
 import importlib.util
 import json
 import subprocess
+import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -110,3 +112,47 @@ def test_a_shell_caller_reads_the_gaps_through_the_door(tmp_path, monkeypatch, c
     monkeypatch.setattr(issue_state, "board_state", lambda **kw: state)
     assert issue_state.main(["issue_state.py", "--kind-gaps"]) == 0
     assert capsys.readouterr().out == "spec\ntest case\n"
+
+
+def test_fresh_hub_board_cache_serves_status_and_kind_without_a_board_read(tmp_path, monkeypatch, capsys):
+    cache = tmp_path / "hub-board.json"
+    cache.write_text(json.dumps({"t": time.time(), "items": [
+        {"n": 854, "st": "Todo", "s": "open", "k": "bug"}
+    ]}))
+    monkeypatch.setenv("SG_BOARD_CACHE", str(cache))
+    monkeypatch.setenv("SG_OWNER", "o")
+    monkeypatch.setenv("SG_PROJECT", "4")
+    monkeypatch.setenv("SG_REPO", "x/y")
+    calls = []
+    def unexpected(self, *args, **kwargs):
+        calls.append(args)
+        raise RuntimeError("unexpected board read")
+    monkeypatch.setattr(issue_state.BoardBinding, "api", unexpected)
+    monkeypatch.setattr(sys, "argv", [str(SCRIPT)])
+    assert issue_state.main(sys.argv) == 0
+    assert capsys.readouterr().out == "854\tTodo\n"
+    assert calls == []
+    monkeypatch.setattr(sys, "argv", [str(SCRIPT), "--kinds"])
+    assert issue_state.main(sys.argv) == 0
+    assert capsys.readouterr().out == "854\tbug\n"
+    assert calls == []
+
+
+@pytest.mark.parametrize("cache_state", ["missing", "stale"])
+def test_missing_or_stale_hub_board_cache_falls_back_to_live_read(tmp_path, monkeypatch, cache_state):
+    cache = tmp_path / "hub-board.json"
+    if cache_state == "stale":
+        cache.write_text(json.dumps({"t": 1, "items": []}))
+    monkeypatch.setenv("SG_BOARD_CACHE", str(cache))
+    monkeypatch.setenv("SG_OWNER", "o")
+    monkeypatch.setenv("SG_PROJECT", "4")
+    monkeypatch.setenv("SG_REPO", "x/y")
+    calls = []
+    def read(self, *args, **kwargs):
+        calls.append(args)
+        raise RuntimeError("stubbed live read")
+    monkeypatch.setattr(issue_state.BoardBinding, "api", read)
+    monkeypatch.setattr(sys, "argv", [str(SCRIPT)])
+    with pytest.raises(RuntimeError):
+        issue_state.main(sys.argv)
+    assert calls

@@ -12,7 +12,7 @@ cp "$d/autobug.sh" "$d/autofrontier.sh" "$d/cluster.py" "$d/single.sh" "$d/start
 # and an unset remote took every pass to github.com -- 0.7 s per pass at best, a stall at worst. git refuses the
 # transport itself, so the read answers "no branch" at once, the same fact a 404 gives, and no pass leaves the machine.
 export GIT_ALLOW_PROTOCOL=file
-unset SG_BOARD_VOCAB   # the loop that runs a child exports it; the cases that need the shipped vocabulary set it themselves
+unset SG_BOARD_VOCAB SG_PROFILE SG_BOARD_CACHE   # fixture runs must not borrow an owner profile or live hub cache
 export SG_GH_AGGREGATE_WINDOW=0   # the open-issue list changes between cases: no snapshot answers a later one
 : > "$T/st/active-runs.txt"
 printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"   # the project lowers the machine-wide caps.runs
