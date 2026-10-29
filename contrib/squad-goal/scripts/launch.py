@@ -278,17 +278,22 @@ issues = _issue_named(req_text) if _issue_child_request(req_text) else []   # a 
 # and each live run's request.txt), never GitHub, which is eventually consistent. A run with a verdict holds nothing.
 def _live_holders():   # {issue: run folder name} of each issue a live child run of this checkout works
     held = {}
-    try: rows = (state / "active-runs.txt").read_text().split()
-    except OSError: return held
+    try:
+        rows = (state / "active-runs.txt").read_text().split()
+    except OSError:
+        return held
     base = pathlib.Path(co or cwd) / "runs"
     for row in rows:
         f = pathlib.Path(row) if row.startswith("/") else base / row
         rec, rq = f / "record.jsonl", f / "request.txt"
         if rec.exists():
-            if '"event": "verdict"' in rec.read_text(): continue
-        elif not rq.exists() or time.time() - rq.stat().st_mtime > 300: continue   # no record yet: live only in its launch window
+            if '"event": "verdict"' in rec.read_text():
+                continue
+        elif not rq.exists() or time.time() - rq.stat().st_mtime > 300:   # no record yet: live only in its launch window
+            continue
         if rq.exists() and _issue_child_request(rq.read_text()):
-            for n in _issue_named(rq.read_text()): held.setdefault(n, f.name)
+            for n in _issue_named(rq.read_text()):
+                held.setdefault(n, f.name)
     return held
 _held = _live_holders() if issues else {}
 _clash = [(n, _held[n]) for n in issues if n in _held]

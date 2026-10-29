@@ -408,9 +408,11 @@ for x, rs in byissue.items():
         say(f"DUP issue #{x} accepted by live runs {', '.join(rs)}; keeping {keep_r}, killing {', '.join(dups)}")
         for r in dups:
             why = f"duplicate of run {keep_r} for issue #{x}"
-            if live[r]["pid"] and live[r]["pid"] in procs: kill(live[r]["pid"], why)
+            if live[r]["pid"] and live[r]["pid"] in procs:
+                kill(live[r]["pid"], why)
             for q in inside(livef[r]):
-                if not own_pass(q): kill(q, why)
+                if not own_pass(q):
+                    kill(q, why)
         if not dry: mk.touch()
 # An issue is held from its dispatch until its delivery ends (#539): a run with a verdict whose wave marker auto/wave-<run>
 # stands (wave.sh clears it when the wave lands) still delivers its issues, and so does a child that entered such a wave (the
