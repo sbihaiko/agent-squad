@@ -14,7 +14,7 @@ BOARD_FILTER_JS = SCRIPTS / "board-filter.js"
 SCREEN_ROUTES = {"subs": "/api/subs", "models": "/api/models", "cost": "/api/stats"}
 PERIODS = ["hour", "day", "month"]
 HUB_GET_ROUTES = {
-    "/api/adapter-errors", "/api/board", "/api/delivery", "/api/issue", "/api/load", "/api/models", "/api/runs",
+    "/api/adapter-errors", "/api/board", "/api/delivery", "/api/ended", "/api/issue", "/api/load", "/api/models", "/api/runs",
     "/api/sessions", "/api/speed", "/api/stats", "/api/status", "/api/subs", "/api/version",
 }
 
