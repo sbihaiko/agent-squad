@@ -18,6 +18,6 @@ childcc.py 1
 health.sh 1
 hub.py 3
 issue_state.py 1
-janitor.py 9
+janitor.py 8
 reconcile.py 2
 wtclean.sh 1
