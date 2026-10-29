@@ -52,6 +52,7 @@ CATALOG = {
     "claude_md.max_section_lines": ("int", 5, 10000, "lines", "length of one CLAUDE.md section before `squad setup --check` flags it"),
     "tailnet.host": ("str", None, None, "MagicDNS name", "name of this machine on the tailnet"),
     "tailnet.allow": ("emails", None, None, "login names", "logins a tailnet request may come from"),
+    "tailnet.terminals_send": ("bool", None, None, "true or false", "the phone may send a message to a live session of this profile; the grant holds for every allowed login of the profile"),
 }
 # The keys the plugin defaults must hold; a missing one is a defect of that file. The rest are optional.
 REQUIRED = {"options.effort", "options.permission_mode", "limits.max_stalls", "limits.max_budget_usd", "limits.max_output_tokens", "limits.context_tokens",
@@ -121,6 +122,9 @@ def value_defect(spec, v, key=""):
     elif kind == "list":
         if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
             return "must be a list of strings"
+    elif kind == "bool":
+        if not isinstance(v, bool):
+            return "must be true or false"
     else:
         if isinstance(v, bool) or not isinstance(v, (int, float)) or (kind == "int" and int(v) != v):
             return f"must be {'an integer' if kind == 'int' else 'a number'} ({unit})"

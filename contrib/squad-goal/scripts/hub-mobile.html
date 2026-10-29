@@ -84,7 +84,9 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 #5aa9ff}
 #termview{position:fixed;inset:0;z-index:30;background:var(--bg);display:flex;flex-direction:column}
 #termview[hidden]{display:none}
 #termview-head{display:flex;align-items:center;gap:8px;height:52px;padding:0 12px;background:var(--panel);border-bottom:1px solid var(--line)}
-#termview-head button,#termview-older{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:0 12px}
+#termview-head button,#termview-older,#termview-send{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:0 12px}
+#termview-compose{display:grid;gap:6px;padding:8px 12px;border-top:1px solid var(--line)}
+#termview-text{min-height:44px;font:inherit;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:8px}
 #termview-name{font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #termview-older{margin:8px 12px 0}
 #termview-turns{flex:1;overflow:auto;padding:8px 12px;display:grid;gap:8px;align-content:start}
@@ -197,6 +199,12 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 #5aa9ff}
 <button id="termview-older" type="button" hidden>Older turns</button>
 <div id="termview-turns"></div>
 <p id="termview-msg" class="msg"></p>
+<div id="termview-compose">
+<p class="mut" id="termview-note">Your message arrives as a message from another session, not as your typed input or approval.</p>
+<textarea id="termview-text" maxlength="4000" rows="3" aria-label="Message to this session"></textarea>
+<button id="termview-send" type="button">Send</button>
+<p id="termview-sent" class="msg"></p>
+</div>
 </section>
 <section id="runview" hidden>
 <div id="runview-head"><button id="runview-back" type="button">Back</button><span id="runview-name"></span></div>
@@ -741,6 +749,19 @@ $("termview-back").onclick = closeConversation;
 $("termview-older").onclick = loadOlder;
 $("termview-turns").onscroll = () => { if ($("termview-turns").scrollTop < 40) loadOlder(); };
 setInterval(loadConversation, 3000);
+$("termview-send").onclick = async () => {
+  const text = $("termview-text").value.trim(), sid = termSid, out = $("termview-sent");
+  if (!text || !sid) return;
+  out.textContent = "Sending";
+  try {
+    const r = await fetch("/api/sessions/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sid, text, client_id: crypto.randomUUID() }) });
+    if (!r.ok) throw new Error("Not sent: the hub refused the request.");
+    const d = await r.json();
+    if (sid !== termSid) return;
+    out.textContent = "Message " + d.status + (d.reason ? ": " + d.reason : "");
+    if (d.status === "sent") $("termview-text").value = "";
+  } catch (err) { if (sid === termSid) out.textContent = err.message; }
+};
 setInterval(() => { if (!termOpen() && !document.querySelector('[data-panel="terminals"]').hidden) loadSessions(); }, 10000);
 // terminals:end
 const last = localStorage.getItem("squad-mobile-tab");
