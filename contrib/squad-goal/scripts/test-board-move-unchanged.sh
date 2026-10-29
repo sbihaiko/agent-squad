@@ -64,6 +64,12 @@ o=$(run o 4 Doing 2001 2>&1); rc=$?   # a proved move to Doing
 r=$(rec)
 [ "$rc" -eq 0 ] && [ "$(entries)" = 1 ] && case "$r" in "ITEM2001 Doing "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z) ok "a proved move writes one entry with the item, the column and the instant";; *) ko "entry: $r";; esac || ko "proved move: exit $rc, entries $(entries): $o"
 [ -e "$T/st/board-dirty" ] && ok "the proved move touches the refresh flag in the same step" || ko "board-dirty not touched by a proved move"
+rm -f "$T/st/board-moves.json"
+o=$(SG_MOVE_BY=loop run o 4 Todo 2001 2>&1); rc=$?   # a move a loop script makes names its dispatch context
+[ "$rc" -eq 0 ] && grep -q '"by": "loop"' "$T/st/board-moves.json" && ok "a move made with a dispatch context records it in the entry" || ko "a loop move records no dispatch context: exit $rc, record $(rec): $o"
+rm -f "$T/st/board-moves.json"
+o=$(run o 4 Doing 2001 2>&1); rc=$?   # no context named: the entry carries no `by`
+[ "$rc" -eq 0 ] && [ -e "$T/st/board-moves.json" ] && ! grep -q '"by"' "$T/st/board-moves.json" && ok "a move with no dispatch context records no context" || ko "a move with no context recorded one: exit $rc, record $(rec): $o"
 rm -f "$T/st/board-moves.json" "$T/st/board-dirty"; touch "$T/drop"
 o=$(run o 4 Todo 2001 2>&1); rc=$?   # the PATCH is answered ok and the card never carries it
 [ "$rc" -ne 0 ] && [ ! -e "$T/st/board-moves.json" ] && ok "a move the door cannot prove writes no entry" || ko "unproved move: exit $rc, record $(rec): $o"
