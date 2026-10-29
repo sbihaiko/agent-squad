@@ -410,3 +410,77 @@ def test_the_page_draws_the_arrow_and_delegates_the_move(hub):
     assert "x.pm&&!pr" in page, "the arrow is not bound to the row's own promotable fact"
     assert 'fetch("/api/promote"' in page and "JSON.stringify({issue:n})" in page, "the click does not delegate the move"
     assert 'e.target.closest("button")' in page, "a click on the arrow also opens the card's GitHub page"
+
+
+def ticket(n, **extra):
+    """A Backlog card the board read recorded as a sub-issue of spec #9: `pa` is that parent (#829)."""
+    return {"n": n, "i": 100 + n, "t": f"ticket {n}", "s": "OPEN", "st": "Backlog", "l": [], "pa": 9, **extra}
+
+
+def test_a_ticket_of_a_spec_is_never_promotable(hub):
+    """ADR-0142: a ticket moves with its spec, never alone. The board does not mark the ticket, and the route refuses it
+    before any write, so a drag or an arrow on it can never move the ticket by itself."""
+    mod, port = hub
+    mod.board_cache["items"].append(ticket(30))
+    groups = {g["name"]: {i["n"]: i for i in g["items"]} for g in mod.board()["groups"]}
+    assert not groups["Backlog"][30].get("pm"), "a ticket of a spec was marked promotable"
+    calls = []
+    mod.promote_write = writer(calls)
+    status, out = post(port, {"issue": 30})
+    assert status == 400 and "spec" in out.get("err", ""), out
+    assert calls == [], calls
+
+
+def test_the_board_route_and_the_promote_route_ask_one_rule(hub):
+    """The served `pm` and the route's refusal are the same decision: a card the board marks not promotable is refused,
+    and a card it marks promotable is written. The test compares every card against the one rule."""
+    mod, port = hub
+    mod.board_cache["items"] += [ticket(30), {**ticket(31), "l": ["spec"]},
+                                 {"n": 32, "i": 132, "t": "no parent", "s": "OPEN", "st": "Backlog", "l": []}]
+    rows = {i["n"]: i for g in mod.board()["groups"] for i in g["items"]}
+    for item in mod.board_cache["items"]:
+        assert bool(rows[item["n"]].get("pm")) == mod.promotable(item), (item, rows[item["n"]])
+    for item, want in ((ticket(30), False), ({**ticket(31), "l": ["spec"]}, True)):
+        mod.board_cache["items"] = [dict(item)]
+        calls = []
+        mod.promote_write = writer(calls)
+        status, out = post(port, {"issue": item["n"]})
+        assert (status == 200) is want, (item, status, out)
+        assert bool(calls) is want, (item, calls)
+
+
+def test_a_spec_that_is_itself_a_ticket_moves(hub):
+    """A Backlog spec is promotable whether or not a spec holds it: the first clause of the rule is the spec label."""
+    mod, port = hub
+    mod.board_cache["items"].append({**ticket(31), "l": ["spec"]})
+    calls = []
+    mod.promote_write = writer(calls)
+    assert post(port, {"issue": 31})[0] == 200
+    assert calls == [([31], False)], calls
+
+
+def test_the_row_names_the_column_the_move_goes_to(hub):
+    """The page names no column of its own: the destination is the row's `pmt`, the same column the route writes."""
+    mod, _ = hub
+    rows = {i["n"]: i for g in mod.board()["groups"] for i in g["items"]}
+    assert rows[7]["pm"] is True and rows[7]["pmt"] == mod.PROMOTE_TO
+    assert rows[9]["pmt"] == mod.PROMOTE_TO
+    assert "pmt" not in rows[8]
+
+
+def test_the_board_pass_records_the_spec_a_ticket_belongs_to(hub):
+    """The parent read: a card whose parent carries the spec label is a ticket, recorded as `pa`. A parent that is not a
+    spec is no spec, and a card with no parent is an ordinary issue."""
+    mod, _ = hub
+    items = [{"n": 30}, {"n": 31}, {"n": 32}]
+    nodes = [{"number": 30, "parent": {"number": 9, "labels": {"nodes": [{"name": "spec"}]}}},
+             {"number": 31, "parent": {"number": 5, "labels": {"nodes": [{"name": "enhancement"}]}}},
+             {"number": 32, "parent": None}]
+    mod.apply_parent_specs(items, nodes)
+    assert {i["n"]: i.get("pa") for i in items} == {30: 9, 31: None, 32: None}
+
+
+def test_the_board_pass_asks_for_each_issues_parent(hub):
+    """One GraphQL page carries the parent, so the board needs no read per card."""
+    mod, _ = hub
+    assert "parent{number labels(first:20){nodes{name}}}" in mod.OPEN_RELATIONS_QUERY

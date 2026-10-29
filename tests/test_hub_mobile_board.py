@@ -22,7 +22,7 @@ GESTURE_JS = SCRIPTS / "hub-mobile-gesture.js"
 FILTER_JS = SCRIPTS / "board-filter.js"
 NODE = shutil.which("node")
 ROUTES = {"/api/status", "/api/hub", "/api/board", "/api/issue", "/api/subs", "/api/models", "/api/stats", "/api/runs", "/api/ended",
-          "/api/sessions", "/api/sessions/conversation"}
+          "/api/sessions", "/api/sessions/conversation", "/api/promote"}   # the owner's move is the one write (#829)
 
 
 def run_js(src, expr, prelude=""):
@@ -162,7 +162,8 @@ def test_the_board_tab_has_the_column_and_sheet_controls(hub):
 def test_the_mobile_page_reads_only_the_existing_routes(hub):
     found = set(re.findall(r'"(/api/[^"?]*)', hub.MOBILE_PAGE))
     assert found <= ROUTES, f"the mobile page reads routes the hub does not serve: {sorted(found - ROUTES)}"
-    assert "POST" not in hub.MOBILE_PAGE and "method:" not in hub.MOBILE_PAGE
+    writes = set(re.findall(r'fetch\("(/api/[^"?]*)"[^)]*method:', hub.MOBILE_PAGE))
+    assert writes == {"/api/promote"}, f"the mobile page writes routes other than the owner's move: {sorted(writes)}"
 
 
 def test_the_sheet_links_to_the_issue_on_github(hub):
