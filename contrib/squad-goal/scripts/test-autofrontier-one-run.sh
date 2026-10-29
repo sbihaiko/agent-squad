@@ -495,6 +495,17 @@ r=$(LAUNCH_REFUSE=1 run)
 # A missing siblings.py is a FRONTIER NOTE the pass prints on purpose; a missing sourced .sh is a pass that ran without its helper.
 /usr/bin/grep -qE '\.sh: No such file or directory' "$T/pass.out" && ko "a pass sourced a file the fixture lacks: $(/usr/bin/grep -m1 -E '\.sh: No such file' "$T/pass.out")" || ok "every file the pass sources is in the fixture"
 
+# I8 (#865): two passes that walk at once never both launch one issue. The walk checks the dispatch marker at the top, but the
+#     marker is written only after the whole walk (stack.sh per issue takes seconds), so a second pass in that window saw no claim
+#     and launched the same issue 17 s later. Both passes run with the single-flight lock bypassed (SG_SINGLE_AUTOFRONTIER=1), so
+#     only the claim can keep one issue to one run. Each stack.sh holds its walk open for a second, so both reach the pick together.
+scene race
+issues '[{"number":133,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
+printf '#!/bin/bash\nsleep 1\necho READY\n' > "$T/scripts/stack.sh"
+( SG_SINGLE_AUTOFRONTIER=1 bash "$T/scripts/autofrontier.sh" > "$d/pass-a.out" 2>&1 & SG_SINGLE_AUTOFRONTIER=1 bash "$T/scripts/autofrontier.sh" > "$d/pass-b.out" 2>&1 & wait )
+[ "$(lines "$LAUNCHLOG")" = 1 ] && ok "I8: two overlapping passes launch one issue once" || ko "I8: $(lines "$LAUNCHLOG") launch(es) for #133 from two overlapping passes: $(cat "$d/pass-a.out" "$d/pass-b.out" | /usr/bin/grep FRONTIER)"
+[ "$(marked 133)" = 1 ] && ok "I8: one dispatch marker holds #133" || ko "I8: markers for #133: $(marked 133)"
+
 rm -rf "$T"
 [ "$fail" = 0 ] && { echo "autofrontier one-run: all checks green"; exit 0; }
 echo "autofrontier one-run: FAILED"; exit 1
