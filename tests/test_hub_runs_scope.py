@@ -82,3 +82,11 @@ def test_a_dashboard_started_by_any_interpreter_is_listed(hub, machine, monkeypa
 
     monkeypatch.setattr(hub, "sh", fake_sh)
     assert [r["project"] for r in hub.runs() if r.get("port")] == ["mine"]
+
+
+def test_the_fork_dir_is_read_at_import_not_at_call(hub, machine, monkeypatch):
+    """hub.py reads SG_FORK_DIR once, at import (#859): a shell that sets it later lends no roots to this profile."""
+    mine, other = machine
+    monkeypatch.setenv("SG_FORK_DIR", str(other))
+    assert [r["project"] for r in hub.runs() if r.get("port")] == ["mine"]
+    assert not any(str(other) in str(d) for d in hub.project_dirs())
