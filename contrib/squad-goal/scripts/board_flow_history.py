@@ -1,7 +1,12 @@
-"""One flow sample per board pass: the cards each kind holds in each column, kept in hub-flow.jsonl (SPEC 111).
+"""One flow sample per board pass: the cards each kind holds in each column, kept in hub-flow.<owner>_<name>.jsonl (SPEC 111).
 
 Stdlib and board_columns only: no hub and no GitHub client (ADR-0137). Each repository keeps its own file (history_path),
-because two profiles on one board see different cards (#894)."""
+because two profiles on one board see different cards (#894).
+
+The one shared hub-flow.jsonl of before #894 is renamed to hub-flow.jsonl.legacy at first use, and its samples are NOT
+migrated into the per-repository files: a legacy sample holds every repository's cards, so no repository's share of it is
+known. A repository's cfd starts at its first sample after the upgrade. The legacy bytes stay on disk for anyone who needs
+them."""
 import importlib.util
 import json
 import os
@@ -64,12 +69,18 @@ def _total(s):
     return sum(n for by_column in s["counts"].values() for n in by_column.values()) + s["none"]
 
 
+_RETIRED = set()   # the shared files this process has already renamed: an old hub may write the shared file again (#894)
+
+
 def _retire_legacy(path):
-    """At first use of a repository's history, the shared hub-flow.jsonl is renamed to hub-flow.jsonl.legacy: its bytes stay,
-    and nothing is deleted. A legacy name already taken is never overwritten. A file another process renamed first is no error."""
+    """At first use of a repository's history in this process, the shared hub-flow.jsonl is renamed to hub-flow.jsonl.legacy:
+    its bytes stay, and nothing is deleted. A legacy name already taken is never overwritten. A file another process renamed
+    first is no error. A hub that still runs the old code writes the shared file again; this process renames it once only,
+    so a restart is the only thing that can add a legacy file."""
     shared = path.with_name(SHARED_NAME)
-    if not shared.exists():
+    if str(shared) in _RETIRED or not shared.exists():
         return
+    _RETIRED.add(str(shared))
     target = shared.with_name(f"{SHARED_NAME}.legacy")
     if target.exists():
         target = shared.with_name(f"{SHARED_NAME}.legacy.{os.getpid()}.{time.time_ns()}")
@@ -81,6 +92,11 @@ def _retire_legacy(path):
 
 def samples(path):
     return [obj for _, obj in _read(pathlib.Path(path)) if _is_sample(obj)]
+
+
+def skips(path):
+    """The flow_skip records of one history: a read that was not whole, with the day it fell on (#894)."""
+    return [obj for _, obj in _read(pathlib.Path(path)) if _is_skip(obj)]
 
 
 def _is_sample(obj):

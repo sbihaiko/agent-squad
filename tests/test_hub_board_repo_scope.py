@@ -40,6 +40,8 @@ def test_the_board_read_drops_a_card_of_another_repository_with_the_same_number(
     items = [item(635, "mine/app"), item(635, "other/app"), item(7, "other/app"), item(None, None, "DraftIssue")]
     out = subprocess.run(["jq", "-c", hub.board_items_jq("mine/app")], input=json.dumps(items), capture_output=True, text=True, check=True).stdout
     rows = [json.loads(line) for line in out.splitlines()]
+    assert rows[-1] == {"_page": 4}, "the last line is the page's own item count (#894)"
+    rows = [r for r in rows if "_page" not in r]
     assert [r["n"] for r in rows] == [635, None]
     assert [r["i"] for r in rows if r["n"] == 635] == ["i635"]
     assert 7 not in [r["n"] for r in rows]

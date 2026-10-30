@@ -1814,10 +1814,12 @@ def task_count(i):
     t, c = s.get("total"), s.get("completed")
     if isinstance(t, bool) or isinstance(c, bool) or not isinstance(t, int) or not isinstance(c, int): return None
     return f"{c}/{t}" if t > 0 else None
+ITEMS_PAGE = 100   # the page size the items read asks for: a page this full may be followed by more (#894)
 def board_items_jq(repo):
     """The board read's jq. A project may hold cards of several repositories and an issue number repeats between them, so an
-    Issue item counts only when its repository is `repo`; a draft item has no repository."""
-    return ('''.[]|select((.content_type=="Issue" and ((.content.repository_url//"")|endswith("/" + $repo))) or .content_type=="DraftIssue")|{n:.content.number,i:.id,t:.content.title,s:.content.state,c:.content.closed_at,st:((.fields[]|select(.name=="Status")|.value.name.raw)//null),k:(((.fields[]?|select(.name=="Kind")|.value.name|if type=="object" then .raw else . end)//"")|ascii_downcase|if .=="" then null else . end),l:[.content.labels[]?.name],si:{total:.content.sub_issues_summary.total,completed:.content.sub_issues_summary.completed},o:.content.created_at}''').replace("$repo", json.dumps(repo))
+    Issue item counts only when its repository is `repo`; a draft item has no repository. After each page's items it emits
+    one {"_page": n} line, n the page's own item count, so the read says whether its last page was short (#894)."""
+    return ('''length as $n|(.[]|select((.content_type=="Issue" and ((.content.repository_url//"")|endswith("/" + $repo))) or .content_type=="DraftIssue")|{n:.content.number,i:.id,t:.content.title,s:.content.state,c:.content.closed_at,st:((.fields[]|select(.name=="Status")|.value.name.raw)//null),k:(((.fields[]?|select(.name=="Kind")|.value.name|if type=="object" then .raw else . end)//"")|ascii_downcase|if .=="" then null else . end),l:[.content.labels[]?.name],si:{total:.content.sub_issues_summary.total,completed:.content.sub_issues_summary.completed},o:.content.created_at}),{_page:$n}''').replace("$repo", json.dumps(repo))
 
 GH_FLOOR = int(os.environ.get("SG_GH_FLOOR") or 300)   # below this many core requests left, a read pass skips its reads (#855)
 LABELS_EVERY = 3600   # seconds between two reads of the repository's labels, and of its closed pull requests (#855)
@@ -1896,13 +1898,16 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
     repository's own error on the lane), so a failed pass never writes a fresh empty board (#1772, #1820)."""
     if _under_floor("board pass"): return board_cache
     items = lc = cases = None
-    read_gap = None   # why the flow sample is skipped when the read answered but is not whole (#894); None when it is whole
+    gaps = []   # why the flow sample is skipped when the reads answered but are not whole (#894); none when they are whole
     read_started = time.time()   # when the list read begins: the only stamp the overlay may compare a proved move against
     try:
             out = board_seam().rows(
                 board_items_jq(REPO),
                 kind=True, timeout=120)
-            items = [json.loads(l) for l in out.splitlines() if l.strip()]
+            lines = [json.loads(l) for l in out.splitlines() if l.strip()]
+            pages = [x["_page"] for x in lines if "_page" in x]   # one count per page: a last page of ITEMS_PAGE is followed by more (#894)
+            if not pages or pages[-1] >= ITEMS_PAGE: gaps.append("items read incomplete: its last page is full, or no page count came back")
+            items = [x for x in lines if "_page" not in x]
             cases = [i["t"] for i in items if i.get("n") is None and i.get("k") == "test case"]   # a test case is a draft item: it has no number, so it is a row and never a card (#306)
             items = [i for i in items if i.get("n") is not None]
             have = {i["n"] for i in items}   # open issues that never reached the board have no state either
@@ -1912,7 +1917,7 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
                     items.append({"n": i["number"], "t": i["title"], "s": i["state"], "c": None, "st": None, "l": [x["name"] for x in i["labels"]],
                                   "si": {"total": s.get("total"), "completed": s.get("completed")}, "o": i["created_at"]})
             nodes, complete = open_relations()   # every page of open issues; never one REST call per card
-            if not complete: read_gap = "relations read incomplete: a page with no cursor, or past the page cap"
+            if not complete: gaps.append("relations read incomplete: a page with no cursor, or past the page cap")
             try: apply_open_blockers(items, nodes)
             except Exception: pass
             # The spec a ticket belongs to: a ticket never moves alone (#829). A read that is not complete keeps what the
@@ -1934,7 +1939,7 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
             if len(errs) < len(rs): board_cache["t"] = time.time()
     except Exception as e: board_cache["err"] = str(e)[:80]
     save_board()
-    if items: _flow.append(_flow.history_path(BOARD, REPO), items, incomplete=read_gap)
+    if items: _flow.append(_flow.history_path(BOARD, REPO), items, incomplete="; ".join(gaps) or None)
     return board_cache
 _WRITE_SEQ = itertools.count(1)   # one temp name per write, never one per writer: a thread id is reused once its thread ends (#512)
 def _temp_name(path):
@@ -2528,7 +2533,8 @@ def _band_extents(bands):
 
 def flow_charts():
     """The two diagrams' numbers, computed here from board_cfd and board_leadtime; the page draws them and computes none."""
-    cfd = _cfd.cfd(_flow.samples(_flow.history_path(BOARD, REPO)), ORDER)
+    path = _flow.history_path(BOARD, REPO)
+    cfd = _cfd.cfd(_flow.samples(path), ORDER, skips=_flow.skips(path))
     extents = {p["day"]: _band_extents(p["bands"]) for p in cfd["points"]}
     days = sorted([*extents, *cfd["gaps"]])   # one entry per calendar day: a day with no sample carries no value (#894)
     ymax = max((e[ORDER[0]][1] for e in extents.values()), default=0)
@@ -3472,7 +3478,10 @@ const flowAxis=(max,unit)=>`<line x1=${flowP} y1=${flowH-flowP} x2=${flowW-flowP
 const flowCFD=c=>{if(!c.days.length)return "<p class=fnote>the flow history has no sample yet</p>";
   const n=c.days.length;
   const runs=b=>{const out=[];let cur=null;c.days.forEach((_,i)=>{if(b.upper[i]===null){cur=null;return}if(!cur){cur=[];out.push(cur)}cur.push(i)});return out};
-  const band=(b,run)=>[...run.map(i=>`${flowX(i,n)},${flowY(b.upper[i],c.ymax)}`),...[...run].reverse().map(i=>`${flowX(i,n)},${flowY(b.lower[i],c.ymax)}`)].join(" ");
+  const band=(b,run)=>{const one=run.length===1,h=3;   // a one-point run is a mark 2h wide, never a zero-width line (#894)
+    const up=run.flatMap(i=>one?[[flowX(i,n)-h,b.upper[i]],[flowX(i,n)+h,b.upper[i]]]:[[flowX(i,n),b.upper[i]]]);
+    const low=[...run].reverse().flatMap(i=>one?[[flowX(i,n)+h,b.lower[i]],[flowX(i,n)-h,b.lower[i]]]:[[flowX(i,n),b.lower[i]]]);
+    return [...up,...low].map(([x,v])=>`${x},${flowY(v,c.ymax)}`).join(" ");};
   const polys=b=>runs(b).map(run=>`<polygon points="${band(b,run)}" fill="${COLORS[b.name]||"#888"}" fill-opacity=".85"><title>${esc(b.name)}</title></polygon>`).join("");
   return `<svg viewBox="0 0 ${flowW} ${flowH}">${c.bands.map(polys).join("")}${flowAxis(c.ymax,"cards")}</svg>`+
     `<p class=fnote>history from ${esc(c.start)} UTC</p><p>${c.bands.map(b=>`<span class=flg><i style="background:${COLORS[b.name]||"#888"}"></i>${esc(b.name)}</span>`).join("")}</p>`;};
