@@ -84,6 +84,19 @@ def test_the_to_tickets_skill_states_the_spec_prefix_rule():
             assert m in source, f"the personal to-tickets skill does not state: {m}"
 
 
+def test_the_publish_skills_add_the_triage_label_only_after_the_status_reads_back():
+    """#895: a new card is Todo the moment it joins the board, so ready-for-agent waits for the Status (vendored copies)."""
+    markers = {
+        "to-tickets": ("create the issue without `ready-for-agent`", "Read the Status back",
+                       "add `ready-for-agent` only after", "then link the ticket to its parent"),
+        "to-spec": ("Read the Status back",),
+    }
+    for name, found in markers.items():
+        vendored = (VENDOR / "skills" / name / "SKILL.md").read_text()
+        for m in found:
+            assert m in vendored, f"the vendored {name} skill does not state: {m}"
+
+
 def test_a_source_with_no_skill_file_is_a_problem(tmp_path):
     cfg = tmp_path / "v.yaml"
     cfg.write_text(yaml.safe_dump({"skills": [{"name": "ghost", "source": str(tmp_path / "nowhere")}]}))

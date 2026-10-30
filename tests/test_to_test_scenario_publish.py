@@ -15,6 +15,7 @@ from squad.to_test_scenario import (  # noqa: F401
     PARENT_LABEL,
     RateLimited,
     ScenarioError,
+    TRIAGE_LABEL,
     build_plan,
     case_hash,
     issues_path,
@@ -156,7 +157,7 @@ def test_a_full_publish_ensures_the_labels_creates_the_parent_and_links_every_ca
     assert linked >= {(container, made["⚪ " + i["title"]]) for i in plan["issues"]}
     assert len(gh.of("add_sub_issue")) == len(plan["issues"]) + 2      # and the area and its container, top-down
     # Only the parent reaches the board: no card is created for a sub-issue.
-    assert gh.of("board") == [{"number": out["parent"]}]
+    assert gh.of("board") == [{"number": out["parent"], "status": "Backlog"}]
 
 
 def test_a_full_publish_maps_every_case_to_its_issue_number_and_content_hash(tmp_path):
@@ -175,7 +176,7 @@ def test_a_publish_with_no_map_path_still_publishes_and_keeps_the_map_in_memory(
     gh = FakeGitHub()
     out = publish(plan, gh)
     assert out["map_path"] is None and out["parent"] and len(out["cases"]) == len(plan["issues"])
-    assert gh.of("board") == [{"number": out["parent"]}]
+    assert gh.of("board") == [{"number": out["parent"], "status": "Backlog"}]
 
 
 def test_the_map_is_written_beside_the_script_under_the_documented_name(tmp_path):
@@ -229,7 +230,7 @@ def test_a_publish_interrupted_before_the_board_add_finishes_the_board_add_on_re
     assert read_issues(map_path)["boarded"] is False
     resumed = FakeGitHub(start=200)
     out = publish(plan, resumed, map_path=map_path)
-    assert resumed.of("board") == [{"number": out["parent"]}]
+    assert resumed.of("board") == [{"number": out["parent"], "status": "Backlog"}]
     # The parent was already made; only its cases are still to create.
     assert plan["parent"]["title"] not in resumed.created_titles()
 
@@ -348,6 +349,84 @@ def test_rest_runner_creates_and_links_issues_over_rest_and_adds_only_what_it_is
     assert sub[sub.index("sub_issue_id=800") - 1] == "-F"   # an integer field: `-f` would send a string, a 422
     item = next(a for a in seen if a[:3] == ["gh", "project", "item-add"])
     assert item[3:6] == ["3", "--owner", "sbihaiko"] and item[item.index("--url") + 1].endswith("/issues/7")
+    assert not [a for a in seen if a[:3] == ["gh", "project", "item-edit"]]
+
+
+def test_the_parent_is_boarded_in_backlog_before_ready_for_agent_is_added(tmp_path):
+    """#895: a card is Todo the moment it joins the board, and Todo plus ready-for-agent is the dispatch signal."""
+    _, _, plan = tiny_plan(tmp_path)
+    gh = FakeGitHub()
+    out = publish(plan, gh, map_path=tmp_path / "tiny.gui-test.issues.json")
+    parent = out["parent"]
+    created = next(kw for kw in gh.of("create_issue") if kw["title"] == plan["parent"]["title"])
+    assert TRIAGE_LABEL not in created["labels"]
+    board_at = next(i for i, (op, _) in enumerate(gh.calls) if op == "board")
+    assert gh.calls[board_at][1] == {"number": parent, "status": "Backlog"}
+    labelled = [i for i, (op, kw) in enumerate(gh.calls)
+                if op == "update_issue" and kw["number"] == parent and TRIAGE_LABEL in kw["labels"]]
+    assert labelled and labelled[0] > board_at
+
+
+def test_a_resumed_publish_adds_ready_for_agent_to_the_parent_only_after_its_board_status(tmp_path):
+    _, _, plan = tiny_plan(tmp_path)
+    map_path = tmp_path / "tiny.gui-test.issues.json"
+
+    class DropsOnBoard(FakeGitHub):
+        def __call__(self, op, **kw):
+            if op == "board":
+                self.calls.append((op, kw))
+                raise RuntimeError("the connection dropped")
+            return super().__call__(op, **kw)
+
+    with pytest.raises(RuntimeError):
+        publish(plan, DropsOnBoard(), map_path=map_path)
+    resumed = FakeGitHub(start=200)
+    out = publish(plan, resumed, map_path=map_path)
+    board_at = next(i for i, (op, _) in enumerate(resumed.calls) if op == "board")
+    labelled = [i for i, (op, kw) in enumerate(resumed.calls)
+                if op == "update_issue" and kw["number"] == out["parent"] and TRIAGE_LABEL in kw["labels"]]
+    assert labelled and labelled[0] > board_at
+
+
+def test_rest_runner_sets_a_named_status_by_its_field_and_option_ids_never_as_text():
+    seen = []
+
+    def shell(args, **kw):
+        seen.append(args)
+        if args[:3] == ["gh", "project", "item-add"]:
+            return json.dumps({"id": "PVTI_x"})
+        if args[:3] == ["gh", "project", "view"]:
+            return json.dumps({"id": "PVT_p"})
+        if args[:3] == ["gh", "project", "field-list"]:
+            return json.dumps({"fields": [
+                {"id": "F_title", "name": "Title", "options": []},
+                {"id": "F_status", "name": "Status",
+                 "options": [{"id": "O_todo", "name": "Todo"}, {"id": "O_backlog", "name": "Backlog"}]}]})
+        return "{}"
+
+    gh = rest_runner("sbihaiko/MesenAI", shell=shell, project="users/sbihaiko/projects/3")
+    gh("board", number=7, status="Backlog")
+    edit = next(a for a in seen if a[:3] == ["gh", "project", "item-edit"])
+    assert edit[edit.index("--id") + 1] == "PVTI_x" and edit[edit.index("--project-id") + 1] == "PVT_p"
+    assert edit[edit.index("--field-id") + 1] == "F_status"
+    assert edit[edit.index("--single-select-option-id") + 1] == "O_backlog"
+    assert "--text" not in edit
+
+
+def test_rest_runner_names_a_status_the_board_does_not_offer_and_writes_nothing():
+    seen = []
+
+    def shell(args, **kw):
+        seen.append(args)
+        if args[:3] == ["gh", "project", "item-add"]:
+            return json.dumps({"id": "PVTI_x"})
+        if args[:3] == ["gh", "project", "field-list"]:
+            return json.dumps({"fields": [{"id": "F_status", "name": "Status", "options": [{"id": "O_todo", "name": "Todo"}]}]})
+        return json.dumps({"id": "PVT_p"})
+
+    gh = rest_runner("sbihaiko/MesenAI", shell=shell, project="users/sbihaiko/projects/3")
+    with pytest.raises(ValueError, match="no Status option 'Backlog'"):
+        gh("board", number=7, status="Backlog")
     assert not [a for a in seen if a[:3] == ["gh", "project", "item-edit"]]
 
 
