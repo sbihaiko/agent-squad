@@ -36,7 +36,7 @@
   },
   "to-tickets": {
     "files": 2,
-    "sha256": "0c30ae4b695ce033d103ce1d89fce39a8d327ebcc2190b5308c6319da5f2f63f",
+    "sha256": "a388af10502ce7cfdde9593055e3d6f72ff5607fae45ed82f9581a2610fb2a20",
     "source": "skill:to-tickets"
   }
 }

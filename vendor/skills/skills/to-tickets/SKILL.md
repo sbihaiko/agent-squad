@@ -70,7 +70,7 @@ Only the owner approves a breakdown. The autonomy panel never approves one unles
 Publish the approved tickets. **How** depends on the tracker `/setup-matt-pocock-skills` configured; the tickets are the same either way, only the shape of the blocking edges changes:
 
 - **Local files** → write one file per ticket under `.scratch/<feature-slug>/issues/<NN>-<slug>.md`, numbered from `01` in dependency order (blockers first). Each file's "Blocked by" lists the numbers/titles it depends on. Use the per-ticket file template below: one ticket per file, never a single combined file.
-- **A real issue tracker (GitHub, Linear, …)** → publish one issue per ticket in dependency order (blockers first) so each ticket's blocking edges can reference real identifiers. **Attach every ticket to the parent issue as the platform's own relationship**, so the parent shows its tasks without anyone reading a body: on GitHub that is the sub-issue relation, and it is the first thing the parent must carry.
+- **A real issue tracker (GitHub, Linear, …)** → publish one issue per ticket in dependency order (blockers first) so each ticket's blocking edges can reference real identifiers. **Attach every ticket to the parent issue as the platform's own relationship**, so the parent shows its tasks without anyone reading a body. On GitHub that is the sub-issue relation. Make the link last, for each ticket, in the publish order below.
   ```sh
   id=$(gh api "repos/$OWNER/$REPO/issues/$TICKET" --jq .id)   # the numeric database id, NOT `gh issue view --json id`, which answers the GraphQL node id and the endpoint rejects it
   gh api "repos/$OWNER/$REPO/issues/$PARENT/sub_issues" -F sub_issue_id="$id"   # -F, so the value is sent as an integer
