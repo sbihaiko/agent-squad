@@ -158,6 +158,50 @@ def test_a_held_run_link_and_its_redirect_carry_their_repository():
     assert loc == "/alpha/dash/r1/", loc
 
 
+def test_an_ended_run_link_in_a_page_and_its_redirect_carry_their_repository():
+    """The mobile page links an ended run as `"/ended/" + id`: without the slug the mux read `ended` as a repository and
+    the link answered "no repository at /ended". `/<slug>/ended/<id>` must reach the profile's ended-run page (#907)."""
+    spec = importlib.util.spec_from_file_location("hubmux_ended_under_test", SCRIPTS / "hubmux.py")
+    mux = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mux)
+    assert mux.rewrite(b'runRow(r, "/ended/" + id)', "alpha") == b'runRow(r, "/alpha/ended/" + id)'
+    assert mux.rewrite(b"open('/ended/r1')", "alpha") == b"open('/alpha/ended/r1')"
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path.startswith("/ended/"):
+                self.send_response(302)
+                self.send_header("Location", "/dash/r1/")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            body = b'<script>runRow(r, "/ended/" + id)</script>'
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(body)
+
+    stub = type("M", (), {"H": H})
+    srv = mux.server(0, {"alpha": {"mod": stub, "repo": "x/alpha"}})
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+
+    class NoFollow(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *a, **k):
+            return None
+
+    try:
+        _, page = _get(base + "/alpha/mobile")
+        try:
+            urllib.request.build_opener(NoFollow).open(base + "/alpha/ended/r1")
+        except urllib.error.HTTPError as e:
+            loc = e.headers["Location"]
+    finally:
+        srv.shutdown()
+    assert '"/alpha/ended/" + id' in page, page
+    assert loc == "/alpha/dash/r1/", loc
+
+
 def test_an_unknown_path_answers_404_with_the_list(fleet):
     code, body = _get(fleet["url"] + "/gamma")
     assert code == 404
