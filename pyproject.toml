@@ -65,5 +65,5 @@ select = ["E", "F", "I", "B", "BLE", "UP"]
 # The one-off quality reading of #881 (radon, coverage, pylint, mutmut are the `dev` extra, never a runtime dep).
 # `squad` is the code under mutation; the runner needs these two trees present and these pytest flags.
 source_paths = ["squad"]
-also_copy = ["docs", "config"]
+also_copy = ["docs", "config", "prompts", "contrib", "dashboard", "commands", "scripts", "bench", "vendor", ".github", "CLAUDE.md", "pyproject.toml"]
 pytest_add_cli_args = ["-x", "-q", "-p", "no:deepeval", "-p", "no:cacheprovider"]

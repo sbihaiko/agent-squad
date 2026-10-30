@@ -61,6 +61,9 @@ for try in 1 2; do
     *) echo "fast-gate: $cls: $detail ($lg)"; exit 1;;
   esac
 done
+# (#885) The pytest tally and the code-quality reading print together; the pipe's status is tee's, so the reading never changes the exit.
+tally=$(/usr/bin/grep -E '[0-9]+ (passed|failed|errors?)' "$lg" | tail -n 1)
+{ echo "fast-gate: pytest tally: ${tally:-none: no pytest count in the battery log}"; "$py" "$here/quality-reading.py" "$base"; } 2>&1 | tee -a "$lg"
 suites=$(git diff --name-only --diff-filter=d "$mb" HEAD | sed -n -e 's|^contrib/squad-goal/scripts/\(.*\)\.sh$|\1|p' -e 's|^contrib/squad-goal/scripts/\(.*\)\.py$|\1|p' | grep -v / \
   | sed 's|^test-||' | sort -u)
 failed=""
