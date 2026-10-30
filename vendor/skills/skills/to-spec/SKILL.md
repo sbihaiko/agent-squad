@@ -16,7 +16,7 @@ The issue tracker and triage label vocabulary should have been provided to you. 
 
 Check with the user that these seams match their expectations.
 
-3. Write the spec using the template below, then publish it to the project issue tracker. Apply the `spec` label and no `ready-for-agent` label: a spec is never work, its tickets are, and they carry `ready-for-agent`. Where the tracker has a board, create the spec's card in **Backlog** (see the next paragraph for the project). The owner starts the spec by moving its card to Todo, and its tickets in Backlog follow it there. The loop never moves a card into Backlog or Todo on its own.
+3. Write the spec using the template below, then publish it to the project issue tracker. Apply the `spec` label and no `ready-for-agent` label: a spec is never work, its tickets are, and they carry `ready-for-agent`. The Status-then-label order of the to-tickets publish applies to tickets only: a spec never takes the triage label, so it has no order to keep. Where the tracker has a board, create the spec's card in **Backlog** (see the next paragraph for the project). The owner starts the spec by moving its card to Todo, and its tickets in Backlog follow it there. The loop never moves a card into Backlog or Todo on its own.
 
    **Set the project to "Squad Board" when you create the issue.** On GitHub the card is the issue's project item, and the board is the project titled `Squad Board` in the repository's owner (the wellzesta org for wz-zesty-agent), never a project looked up by number or by any other title:
    ```sh
