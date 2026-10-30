@@ -256,7 +256,8 @@ class Dispatch:
         resume, or its task died: then this reads the head itself, and `tries` replays what the record holds.
         Identical findings twice move the fix round to the next coder of the chain, and a fix round that wrote no artifact
         is the finding unanswered: it moves the coder at once, and because the head did not move the review stands and is
-        not read again (`review_round.repeated`, ADR-0151, #735).
+        not read again (`review_round.repeated`, ADR-0151, #735). A fix round that answers a repeated finding also tells the
+        coder to test the premise of its last fix before a third one (`repeated_round`, #882).
         Return (the last review, the rounds, the reasons that hold the child or None)."""
         e, n = self.e, 1
         standing = None          # the review of a head a failed fix entry left in place: the same findings, not a new reading
@@ -303,7 +304,7 @@ class Dispatch:
             elif out is None:
                 if fund is not None:
                     self.held[name] = fund      # the fix entry's call takes this grant
-                out = await e.runs.fix(node, name, n + 1, review, sc.deadline_at, coder)
+                out = await e.runs.fix(node, name, n + 1, review, sc.deadline_at, coder, self.repeated_round(name, n))
             elif fund is not None:
                 e.budget.release(fund)
             if out["outcome"] != "pass":
@@ -328,6 +329,12 @@ class Dispatch:
             repeat.append(x["verdict"] == "fix" and out is not None
                           and review_streak.unanswered(out["outcome"], out["reasons"]))
         return review_streak.with_unanswered(seq, repeat)
+
+    def repeated_round(self, name, round_n):
+        """True when the child's review at `round_n` repeats the finding before it: the one reading of "repeat" the streak
+        keeps (`review_streak.repeated` over `findings_seq`), never a second one. A fix round that answers a repeat is told
+        to test the premise of the last fix before it attempts a third one (#882, ADR-0151)."""
+        return review_streak.repeated(self.findings_seq(name, round_n, round_n))
 
     def kind_models(self, d):
         """The chain of a child's kind, in order (SPEC 750), or None for a child of a legacy envelope with no kind."""

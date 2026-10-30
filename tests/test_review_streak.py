@@ -10,11 +10,14 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from squad import review_streak as R
 from squad.adapter import CallResult
+from squad.runners import dispatch as D
+from squad.runners.children import Children
 from tests.gitrepo import sh, sibling_repo
 from tests.helpers import node
 from tests.test_dispatch import CHAINS, MODEL, child_outs, ev, make, req, routed
@@ -51,6 +54,63 @@ def test_a_fix_round_that_wrote_no_artifact_repeats_the_finding():
 
 def test_a_moved_line_is_not_a_changed_finding():
     assert fp("- a.txt:12 — no test — it fails — add one") == fp("- a.txt:41 — no test — it fails — add one")
+
+
+PREMISE = "Name the premise the last fix rested on, and test that premise before you attempt a third fix."
+FINDING = "- a.txt — the file has no test — it fails — add one"
+
+
+def fix_prompt(repeated):
+    """The prompt one fix entry of the child receives, as `Children.request` builds it, for the review of one finding.
+    The engine it reads carries only the two fields that call needs, so no session starts."""
+    d = {"prompt": "Fix the finding on this branch.", "skill": {"name": "tdd"}, "model": MODEL, "effort": "medium",
+         "tools": ["Read", "Edit"], "stalls": 4}
+    eng = SimpleNamespace(run_id="run-1", limits={})
+    return Children(eng).request(CHILD, d, SimpleNamespace(amount=1.0), "/tmp/wt", 100.0, MODEL, 2,
+                                 {"findings": FINDING}, repeated).prompt
+
+
+def test_a_first_finding_gets_the_fix_prompt_of_today():
+    """#882: the fix round that answers a finding first reads what it reads today. The premise sentence is the second
+    round's alone."""
+    prompt = fix_prompt(False)
+    assert PREMISE not in prompt
+    assert FINDING in prompt, "the fix entry still reads the full review"
+
+
+def test_a_repeated_finding_tells_the_fix_round_to_test_the_premise():
+    """#882 (ADR-0151): a finding that repeats the one before it adds exactly one sentence to the fix prompt. The coder
+    names the premise its last fix rested on and tests that premise before it attempts a third fix."""
+    first = fix_prompt(False)
+    assert fix_prompt(True) == first + "\n\n" + PREMISE
+
+
+class Recorded:
+    """The fields of an engine's record the repeat reading reads: its events, and no outcome for a fix entry."""
+
+    def __init__(self):
+        self.events = []
+
+    def append(self, event, **kw):
+        self.events.append({"event": event, "pos": len(self.events), **kw})
+
+
+def with_rounds(findings):
+    """A dispatch over a record that holds one review round per finding, in order: the child's reviews, nothing run."""
+    e = SimpleNamespace(record=Recorded(), outcomes=SimpleNamespace(event=lambda name, entry: None))
+    disp = D.Dispatch(e)
+    for n, text in enumerate(findings, 1):
+        e.record.append("review_round", node=CHILD, round=n, head=f"h{n}", verdict="fix", offered=True,
+                        review={"findings": text})
+    return disp
+
+
+def test_the_repeat_a_fix_round_answers_is_read_from_the_childs_reviews():
+    """#882 (ADR-0151): "repeat" is the one reading `review_streak.repeated` already makes over the child's recorded
+    reviews. A first finding is no repeat, the same finding twice is one, and two different findings are none."""
+    assert with_rounds([FINDING]).repeated_round(CHILD, 1) is False
+    assert with_rounds([FINDING, FINDING]).repeated_round(CHILD, 2) is True
+    assert with_rounds([FINDING, "- b.txt — no docs — it is undocumented — document it"]).repeated_round(CHILD, 2) is False
 
 
 def test_the_coder_moves_one_place_per_repeated_finding_until_the_chain_ends():
@@ -103,6 +163,8 @@ async def test_a_fix_round_with_no_artifact_changes_the_coder_on_the_first_repet
                          f"{CHILD}@3": [no_artifact("still nothing written: the same finding stands")]}, same)
     assert (await eng.run()).verdict == "failed"
     assert calls(eng) == [(1, MODEL), (2, MODEL), (3, OTHER)]      # the first repetition moves the coder, not the second
+    prompts = [c.prompt for c in eng.adapter.calls if c.node == CHILD]
+    assert PREMISE not in prompts[1] and PREMISE in prompts[2]     # #882: only the fix round that answers the repeat is told
     assert [e["entry"] for e in outcomes(tmp_path)] == [1, 2, 3]
     last = outcomes(tmp_path)[1]
     assert last["outcome"] == "fail" and last["reasons"] == ["artifact_missing"]
