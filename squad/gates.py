@@ -123,9 +123,9 @@ def ac_verify(params, inp):
     runs, dispatch = [], False
     for name in [src] if isinstance(src, str) else src:     # the first artifact that lists commands wins
         art = inp.artifacts.get(name) or {}
-        # a dispatch names, for each command, the tree of the child that wrote it (#862); an artifact with no dispatch has no child
-        dispatch = "ac_runs" in art
-        runs = [tuple(r) for r in art["ac_runs"]] if dispatch else [(c, None) for c in art.get("ac_commands", [])]
+        # a dispatch names, for each command, the tree of the child that wrote it (#862); a dispatch with no ac_runs names none (#867)
+        dispatch = "ac_runs" in art or "ledger" in art     # an older engine wrote a dispatch with no ac_runs (#867): still a dispatch
+        runs = [tuple(r) for r in art["ac_runs"]] if "ac_runs" in art else [(c, None) for c in art.get("ac_commands", [])]
         if runs:
             break
     if not runs:
