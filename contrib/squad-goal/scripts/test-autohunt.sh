@@ -325,7 +325,13 @@ case "$n" in *"rate limit"*|*"403"*) ko "20 the refusal's own words became the f
 # the owner has not moved to Todo. The board door is a spy that records its arguments; test 18 runs the real door.
 scene huntlabel
 f=$T/huntlabel
-printf '#!/bin/bash\necho "$*" >> "$SGH_BOARD/board.calls"; echo "card ok"\n' > "$S/board-spy.sh"; chmod +x "$S/board-spy.sh"
+cat > "$S/board-spy.sh" <<'SPY'
+#!/bin/bash
+echo "$*" >> "$SGH_BOARD/board.calls"
+echo "posted=$(/usr/bin/grep -c POST "$GHPOST")" >> "$SGH_BOARD/board.calls"   # the filing POST is already written when the card is added
+echo "card ok"
+SPY
+chmod +x "$S/board-spy.sh"
 printf 'export SG_REPO SG_OWNER SG_PROJECT SG_STATE SG_CHECKOUT\nexport BOARD="%s/board-spy.sh"\n' "$S" >> "$S/env.sh"
 export SGH_BOARD=$f
 : > "$f/ghpost"; : > "$f/board.calls"; printf 'repro\n' > "$f/body.md"
@@ -335,6 +341,7 @@ case "$n" in *"HUNT filed #42"*) ok "21 the hunt logs the bug it filed";; *) ko 
 labels=$($G -oE 'labels\[\]=[^ ]+' "$f/ghpost" | sort -u | tr '\n' ' ')
 [ "$labels" = "labels[]=bug " ] && ok "21 the hunt labels the bug kind and nothing else" || ko "21 the hunt's labels: '$labels'"
 $G -qxF -- "--add o 1 Todo 42" "$f/board.calls" && ok "21 the card joins the board in Todo" || ko "21 the card's column: $(cat "$f/board.calls")"
+$G -qxF "posted=1" "$f/board.calls" && ok "21 the card is added after the filing POST, so its number is real" || ko "21 the card came before the filing: $(cat "$f/board.calls")"
 : > "$f/ghpost"; : > "$f/board.calls"
 n=$(SG_FILED_BY=autobug SG_FILED_LABELS=ready-for-agent bash "$S/autohunt.sh" --file "a second defect" "$f/body.md" 2>&1)
 labels=$($G -oE 'labels\[\]=[^ ]+' "$f/ghpost" | sort -u | tr '\n' ' ')

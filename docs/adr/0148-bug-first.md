@@ -12,7 +12,7 @@ The loop has two dispatch passes. `autobug.sh` dispatches open `bug` issues. `au
 
 ## Decision
 
-1. **Zero bugs is the policy.** A bug is filed at once, as an issue with the `bug` label, and its card goes to Todo at once. `reconcile.py` adds an open `bug` issue that is not on the board, in Todo, or in Code Complete when a work branch names it.
+1. **Zero bugs is the policy.** A bug is filed at once, as an issue with the `bug` label, and its card goes to Todo at once. `reconcile.py` adds an open `bug` issue that is not on the board, in Todo, or in Code Complete when a work branch names it. A bug is startable by design, so its card is Todo before its triage label is set, in the same filing; the Backlog-then-label order of the feature and spec publish does not apply to it.
 2. **A bug is dispatched before a feature.** Each fast-lane beat (`fastloop.sh`) and each slow cycle (`watch.sh`) runs `autobug.sh` first, and `autofrontier.sh` only after it ends.
 3. **A waiting bug holds the frontier.** `autobug.sh` writes the count of startable bugs it left with no run to `$SG_STATE/bugs-waiting`. While that count is over 0 and fresh (30 min), `autofrontier.sh` dispatches nothing (`gh_bug_first` in `ghcall.sh`). The pass prints `BUG FIRST: <n> startable bug(s) wait for a run; no feature run this pass` and writes it to `cycle.log`.
 4. **A missing, unreadable or stale count holds nothing.** A dead `autobug.sh` must not stop feature work forever.
@@ -27,4 +27,4 @@ The loop has two dispatch passes. `autobug.sh` dispatches open `bug` issues. `au
 
 ## Guard
 
-`contrib/squad-goal/scripts/test-autobug.sh` (a pass writes the startable bugs it leaves with no run to `bugs-waiting`) and `contrib/squad-goal/scripts/test-autofrontier-one-run.sh` (a waiting bug halts the frontier pass, names the count and writes `cycle.log`; a zero, missing or stale count holds nothing). The order of the two passes in `fastloop.sh` and `watch.sh`, and the Todo card for a new bug, have no guard yet; that part is a draft.
+`contrib/squad-goal/scripts/test-autobug.sh` (a pass writes the startable bugs it leaves with no run to `bugs-waiting`) and `contrib/squad-goal/scripts/test-autofrontier-one-run.sh` (a waiting bug halts the frontier pass, names the count and writes `cycle.log`; a zero, missing or stale count holds nothing). The bug's label set and its card's Todo column are pinned by test 21 of `contrib/squad-goal/scripts/test-autohunt.sh`. The order of the two passes in `fastloop.sh` and `watch.sh` has no guard yet; that part is a draft.
