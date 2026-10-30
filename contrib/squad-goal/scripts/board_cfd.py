@@ -3,7 +3,7 @@
 A sample is {"t": epoch seconds UTC, "counts": {kind: {column: n}}, "frozen": n, "none": n}.
 """
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from board_columns import TERMINAL
@@ -15,13 +15,13 @@ NO_COLUMN = "No column"
 
 def cfd(samples, columns, zone="UTC", kind=None):
     if not samples:
-        return {"start": None, "points": [], "average_throughput": None}
+        return {"start": None, "points": [], "gaps": [], "average_throughput": None}
     tz = ZoneInfo(zone)
     ordered = sorted(samples, key=lambda s: s["t"])
     last_of_day = {}
     for s in ordered:
         last_of_day[datetime.fromtimestamp(s["t"], tz).date()] = s
-    points = []
+    points, gaps = [], []
     previous = None
     for day, s in last_of_day.items():
         totals = _totals(s, kind)
@@ -33,10 +33,12 @@ def cfd(samples, columns, zone="UTC", kind=None):
         throughput = None
         if previous is not None and (day - previous[0]).days == 1:
             throughput = closed - previous[1]
+        if previous is not None:   # a day with no sample between two sampled days is a break in the data, never a point
+            gaps += [(previous[0] + timedelta(days=k)).isoformat() for k in range((day - previous[0]).days)[1:]]
         points.append({"day": day.isoformat(), "t": s["t"], "bands": bands, "wip": wip, "throughput": throughput})
         previous = (day, closed)
     daily = [p["throughput"] for p in points if p["throughput"] is not None]
-    return {"start": ordered[0]["t"], "points": points,
+    return {"start": ordered[0]["t"], "points": points, "gaps": gaps,
             "average_throughput": sum(daily) / len(daily) if daily else None}
 
 

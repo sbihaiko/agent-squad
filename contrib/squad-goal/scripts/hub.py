@@ -1896,6 +1896,7 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
     repository's own error on the lane), so a failed pass never writes a fresh empty board (#1772, #1820)."""
     if _under_floor("board pass"): return board_cache
     items = lc = cases = None
+    read_gap = None   # why the flow sample is skipped when the read answered but is not whole (#894); None when it is whole
     read_started = time.time()   # when the list read begins: the only stamp the overlay may compare a proved move against
     try:
             out = board_seam().rows(
@@ -1911,6 +1912,7 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
                     items.append({"n": i["number"], "t": i["title"], "s": i["state"], "c": None, "st": None, "l": [x["name"] for x in i["labels"]],
                                   "si": {"total": s.get("total"), "completed": s.get("completed")}, "o": i["created_at"]})
             nodes, complete = open_relations()   # every page of open issues; never one REST call per card
+            if not complete: read_gap = "relations read incomplete: a page with no cursor, or past the page cap"
             try: apply_open_blockers(items, nodes)
             except Exception: pass
             # The spec a ticket belongs to: a ticket never moves alone (#829). A read that is not complete keeps what the
@@ -1932,7 +1934,7 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
             if len(errs) < len(rs): board_cache["t"] = time.time()
     except Exception as e: board_cache["err"] = str(e)[:80]
     save_board()
-    if items: _flow.append(_flow.history_path(BOARD, REPO), items)
+    if items: _flow.append(_flow.history_path(BOARD, REPO), items, incomplete=read_gap)
     return board_cache
 _WRITE_SEQ = itertools.count(1)   # one temp name per write, never one per writer: a thread id is reused once its thread ends (#512)
 def _temp_name(path):
@@ -2527,15 +2529,17 @@ def _band_extents(bands):
 def flow_charts():
     """The two diagrams' numbers, computed here from board_cfd and board_leadtime; the page draws them and computes none."""
     cfd = _cfd.cfd(_flow.samples(_flow.history_path(BOARD, REPO)), ORDER)
-    extents = [_band_extents(p["bands"]) for p in cfd["points"]]
-    ymax = max((e[ORDER[0]][1] for e in extents), default=0)
+    extents = {p["day"]: _band_extents(p["bands"]) for p in cfd["points"]}
+    days = sorted([*extents, *cfd["gaps"]])   # one entry per calendar day: a day with no sample carries no value (#894)
+    ymax = max((e[ORDER[0]][1] for e in extents.values()), default=0)
+    def values(name, k): return [extents[d][name][k] if d in extents else None for d in days]
     rows = [{"n": i["n"], "column": _columns_module.view_column(i["st"], str(i["s"]).lower() == "closed", i.get("l"))[0],
              "c": i.get("c") if str(i["s"]).lower() == "closed" else None, "o": i.get("o")} for i in board_cache["items"]]
     lead = _leadtime.lead_time(rows)
     return {
         "cfd": {"start": dt.datetime.fromtimestamp(cfd["start"], dt.UTC).date().isoformat() if cfd["start"] is not None else None,
-                "days": [p["day"] for p in cfd["points"]], "ymax": ymax,
-                "bands": [{"name": n, "lower": [e[n][0] for e in extents], "upper": [e[n][1] for e in extents]} for n in ORDER] if extents else []},
+                "days": days, "ymax": ymax,
+                "bands": [{"name": n, "lower": values(n, 0), "upper": values(n, 1)} for n in ORDER] if extents else []},
         "lead": {"measure": lead["measure"], "window": lead["window"],
                  "excluded": [{"reason": r, "count": c} for r, c in lead["excluded"].items()],
                  "excluded_total": sum(lead["excluded"].values()), "series": lead["series"], "summary": lead["summary"]},
@@ -3466,9 +3470,11 @@ const flowX=(i,n)=>n<2?flowP:flowP+i*(flowW-2*flowP)/(n-1);
 const flowY=(v,max)=>max?flowH-flowP-v*(flowH-2*flowP)/max:flowH-flowP;
 const flowAxis=(max,unit)=>`<line x1=${flowP} y1=${flowH-flowP} x2=${flowW-flowP} y2=${flowH-flowP} stroke=var(--line)></line><text x=${flowP-6} y=${flowY(max,max)+4} text-anchor=end fill=var(--mute) font-size=11>${max} ${unit}</text>`;
 const flowCFD=c=>{if(!c.days.length)return "<p class=fnote>the flow history has no sample yet</p>";
-  const idx=[...c.days.keys()],rev=[...idx].reverse(),n=idx.length;
-  const band=b=>[...idx.map(i=>`${flowX(i,n)},${flowY(b.upper[i],c.ymax)}`),...rev.map(i=>`${flowX(i,n)},${flowY(b.lower[i],c.ymax)}`)].join(" ");
-  return `<svg viewBox="0 0 ${flowW} ${flowH}">${c.bands.map(b=>`<polygon points="${band(b)}" fill="${COLORS[b.name]||"#888"}" fill-opacity=".85"><title>${esc(b.name)}</title></polygon>`).join("")}${flowAxis(c.ymax,"cards")}</svg>`+
+  const n=c.days.length;
+  const runs=b=>{const out=[];let cur=null;c.days.forEach((_,i)=>{if(b.upper[i]===null){cur=null;return}if(!cur){cur=[];out.push(cur)}cur.push(i)});return out};
+  const band=(b,run)=>[...run.map(i=>`${flowX(i,n)},${flowY(b.upper[i],c.ymax)}`),...[...run].reverse().map(i=>`${flowX(i,n)},${flowY(b.lower[i],c.ymax)}`)].join(" ");
+  const polys=b=>runs(b).map(run=>`<polygon points="${band(b,run)}" fill="${COLORS[b.name]||"#888"}" fill-opacity=".85"><title>${esc(b.name)}</title></polygon>`).join("");
+  return `<svg viewBox="0 0 ${flowW} ${flowH}">${c.bands.map(polys).join("")}${flowAxis(c.ymax,"cards")}</svg>`+
     `<p class=fnote>history from ${esc(c.start)} UTC</p><p>${c.bands.map(b=>`<span class=flg><i style="background:${COLORS[b.name]||"#888"}"></i>${esc(b.name)}</span>`).join("")}</p>`;};
 const flowLead=l=>{const S=l.summary,ex=l.excluded.map(e=>`${esc(e.reason)} ${e.count}`).join(", ");
   const head=`<p class=fhead><b>${esc(l.measure)}</b> · window ${l.window.size} ${esc(l.window.unit)} · excluded ${l.excluded_total}${ex?" ("+ex+")":""}</p>`;

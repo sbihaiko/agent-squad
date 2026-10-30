@@ -16,6 +16,7 @@ _columns = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(_col
 DEFAULT_KIND = "issue"
 RAW_DAYS = 30
 DAY = 86400
+SHARED_NAME = "hub-flow.jsonl"   # the one history every repository on a board wrote before #894
 
 
 def history_path(board, repo):
@@ -39,21 +40,21 @@ def sample(rows, now=None):
     return {"t": int(time.time() if now is None else now), "counts": counts, "frozen": frozen, "none": none}
 
 
-def append(path, rows, now=None):
-    """Append one sample of `rows` when its counts differ from the last sample, rolling up samples older than RAW_DAYS.
-    A read under half the last sample's cards is a truncated read: it is recorded as a flow_skip line, not a sample, and
-    a second read that repeats it is taken as the truth. Returns the new sample, or None when nothing was appended."""
+def append(path, rows, now=None, incomplete=None):
+    """Append one sample of `rows` when its counts differ from the last sample, rolling up old lines past RAW_DAYS.
+    `incomplete` is the reason the read is not whole (the caller's completeness signal): such a read is never a sample,
+    at any total, and is recorded as a flow_skip line that names the reason. Returns the new sample, or None."""
     path = pathlib.Path(path)
+    _retire_legacy(path)
     s = sample(rows, now)
     lines = _read(path)
+    if incomplete:
+        skip = {"flow_skip": _total(s), "t": s["t"], "reason": incomplete}
+        lines.append((json.dumps(skip), skip))
+        _write(path, _rollup(lines, s["t"]))
+        return None
     samples = [obj for _, obj in lines if _is_sample(obj)]
     if samples and samples[-1]["counts"] == s["counts"]: return None
-    total = _total(s)
-    if samples and total * 2 < _total(samples[-1]) and not _repeats_skip(lines, total):
-        skip = {"flow_skip": total, "t": s["t"], "reason": f"{total} cards read, {_total(samples[-1])} in the last sample"}
-        lines.append((json.dumps(skip), skip))
-        _write(path, lines)
-        return None
     lines.append((json.dumps(s), s))
     _write(path, _rollup(lines, s["t"]))
     return s
@@ -63,10 +64,19 @@ def _total(s):
     return sum(n for by_column in s["counts"].values() for n in by_column.values()) + s["none"]
 
 
-def _repeats_skip(lines, total):
-    """True when the last line is a flow_skip that named the same total: the read is the board's, not a truncation."""
-    last = lines[-1][1] if lines else None
-    return isinstance(last, dict) and last.get("flow_skip") == total
+def _retire_legacy(path):
+    """At first use of a repository's history, the shared hub-flow.jsonl is renamed to hub-flow.jsonl.legacy: its bytes stay,
+    and nothing is deleted. A legacy name already taken is never overwritten. A file another process renamed first is no error."""
+    shared = path.with_name(SHARED_NAME)
+    if not shared.exists():
+        return
+    target = shared.with_name(f"{SHARED_NAME}.legacy")
+    if target.exists():
+        target = shared.with_name(f"{SHARED_NAME}.legacy.{os.getpid()}.{time.time_ns()}")
+    try:
+        os.replace(shared, target)
+    except FileNotFoundError:
+        pass
 
 
 def samples(path):
@@ -75,6 +85,10 @@ def samples(path):
 
 def _is_sample(obj):
     return isinstance(obj, dict) and isinstance(obj.get("t"), (int, float)) and isinstance(obj.get("counts"), dict)
+
+
+def _is_skip(obj):
+    return isinstance(obj, dict) and isinstance(obj.get("t"), (int, float)) and "flow_skip" in obj
 
 
 def _read(path):
@@ -90,10 +104,12 @@ def _read(path):
 
 
 def _rollup(lines, now):
+    """Past RAW_DAYS, the last sample and the last flow_skip of each UTC day stay; the other lines of that day go."""
     cutoff = now - RAW_DAYS * DAY
-    old = [i for i, (_, obj) in enumerate(lines) if _is_sample(obj) and obj["t"] < cutoff]
-    last_of_day = {_day(lines[i][1]["t"]): i for i in old}
-    drop = {i for i in old if last_of_day[_day(lines[i][1]["t"])] != i}
+    old = [(i, (_is_sample(obj), _day(obj["t"]))) for i, (_, obj) in enumerate(lines)
+           if (_is_sample(obj) or _is_skip(obj)) and obj["t"] < cutoff]
+    last_of_day = {key: i for i, key in old}
+    drop = {i for i, key in old if last_of_day[key] != i}
     return [line for i, line in enumerate(lines) if i not in drop]
 
 
