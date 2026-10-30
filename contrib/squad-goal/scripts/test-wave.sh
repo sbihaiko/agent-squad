@@ -989,4 +989,18 @@ r=$(land2 run-20 2>&1); rc=$?
 /usr/bin/grep -qx 'o 3 Todo 940' "$T/board.log" && ko "Z6: a child that entered the wave was requeued as missing: '$r'" || ok "Z6: a child that entered the wave is not requeued"
 [ "$(/usr/bin/grep -c 'issues/941 -f state=closed' "$T/gh.log")" = 1 ] && ok "Z6: the sibling the wave carries closes" || ko "Z6: closes for #941: '$(cat "$T/gh.log")'"
 
+# Z7 (#872): a squashed RED+fix commit delivers its Refs. Only a commit whose SUBJECT starts with "TDD RED" is skipped; a body
+# line that names "TDD RED" (prepush needs it) does not hide the `Refs #N` of its commit.
+W21=wave/run-21; start2 run-21 >/dev/null
+rm -rf "$T/c895"; $G clone -q "$T/origin.git" "$T/c895" 2>/dev/null
+(cd "$T/c895" && $G checkout -q -b gui/895 "origin/$W21" && echo r895 > g895 && $G add g895 && $G -c user.email=a@b -c user.name=t commit -q -m "fix 895" -m "TDD RED: test_x
+Refs #895" && echo r896 > g896 && $G add g896 && $G -c user.email=a@b -c user.name=t commit -q -m "TDD RED: test_y" -m "Refs #896")
+en2 run-21 895 >/dev/null; mkdir -p "$T/co/runs/run-21"
+printf '%s\n%s\n' '{"event": "spawn_accepted", "child": "a", "definition": {"prompt": "GitHub issue #895 work"}}' \
+  '{"event": "spawn_accepted", "child": "b", "definition": {"prompt": "GitHub issue #896 work"}}' > "$T/co/runs/run-21/record.jsonl"
+: > "$T/gh.log"; : > "$T/board.log"; rm -f "$T/st/landed.tsv"
+r=$(land2 run-21 2>&1); rc=$?
+[ "$(/usr/bin/grep -c 'issues/895 -f state=closed' "$T/gh.log")" = 1 ] && ok "Z7: a squashed RED+fix commit closes its Refs #895 once" || ko "Z7: closes for #895: '$(cat "$T/gh.log")' (exit $rc: '$r')"
+/usr/bin/grep -q 'issues/896 -f state=closed' "$T/gh.log" && ko "Z7: a commit whose subject is TDD RED closed #896" || ok "Z7: a commit whose subject is TDD RED does not close #896"
+
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }
