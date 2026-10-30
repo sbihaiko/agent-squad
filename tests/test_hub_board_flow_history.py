@@ -73,9 +73,14 @@ def _rest_issue(c):
             "created_at": c.get("o"), "sub_issues_summary": c["si"]}
 
 
-def _gh(calls, cards=(), open_issues=(), fail=False, last_page=None):
+def _pages(total):
+    """The page counts the items read answers: one per page of 100, as board_items_jq emits them."""
+    return [min(100, total - i) for i in range(0, total, 100)] or [0]
+
+
+def _gh(calls, cards=(), open_issues=(), fail=False, unparseable=False):
     """The gh CLI as one pass uses it: each call is recorded, and the answer is canned per endpoint. The items read ends
-    with one page count (board_items_jq); `last_page` overrides the count of its last page (a short read names a full page)."""
+    with one page count per page (board_items_jq); `unparseable` answers the items read with no JSON at all."""
     def run(cmd, **kw):
         calls.append(cmd)
         if fail:
@@ -84,8 +89,9 @@ def _gh(calls, cards=(), open_issues=(), fail=False, last_page=None):
         if "/fields?" in s:
             out = "PVTSSF_status\n"
         elif "projectsV2" in s and "/items" in s:
-            page = len(cards) if last_page is None else last_page
-            out = "".join(json.dumps(c) + "\n" for c in cards) + json.dumps({"_page": page}) + "\n"
+            if unparseable:
+                return subprocess.CompletedProcess(cmd, 0, "<html>bad gateway</html>\n", "")
+            out = "".join(json.dumps(c) + "\n" for c in cards) + "".join(json.dumps({"_page": n}) + "\n" for n in _pages(len(cards)))
         elif "search/issues" in s:
             out = "0\n"
         elif "issues?state=open" in s:
@@ -98,9 +104,9 @@ def _gh(calls, cards=(), open_issues=(), fail=False, last_page=None):
     return run
 
 
-def _pass(hub, monkeypatch, cards=(), open_issues=(), fail=False, last_page=None):
+def _pass(hub, monkeypatch, cards=(), open_issues=(), fail=False, unparseable=False):
     calls = []
-    monkeypatch.setattr(hub.subprocess, "run", _gh(calls, cards, open_issues, fail, last_page))
+    monkeypatch.setattr(hub.subprocess, "run", _gh(calls, cards, open_issues, fail, unparseable))
     hub.board_pass(repos=[])
     return calls
 
@@ -139,12 +145,22 @@ def test_a_pass_with_the_same_counts_appends_no_row(hub, board, monkeypatch):
     assert len(_samples(board)) == 2, "a pass whose counts moved appends its sample"
 
 
-def test_a_failed_items_read_appends_nothing_and_leaves_the_file_unchanged(hub, board, monkeypatch):
+def test_a_failed_items_read_is_a_flow_skip_and_no_sample(hub, board, monkeypatch):
     _flow(board).write_text(json.dumps(_sample(1.0, {"issue": {"Todo": 9}})) + "\n")
-    before = _flow(board).read_bytes()
     _pass(hub, monkeypatch, fail=True)
     assert hub.board_cache["err"], "the failed read is surfaced on the board"
-    assert _flow(board).read_bytes() == before
+    assert [s["counts"] for s in _samples(board)] == [{"issue": {"Todo": 9}}], "a failed read is no sample"
+    records = _skip_records(board)
+    assert len(records) == 1 and "items" in records[0]["reason"]
+
+
+def test_an_unparseable_items_read_is_a_flow_skip_and_no_sample(hub, board, monkeypatch):
+    _pass(hub, monkeypatch, _rows(3))
+    _pass(hub, monkeypatch, _rows(5), unparseable=True)
+    assert [s["counts"] for s in _samples(board)] == [{"issue": {"Todo": 3}}], "an unparseable read is no sample"
+    records = _skip_records(board)
+    assert [r["flow_skip"] for r in records] == [3], "the skip counts the last whole read's cards"
+    assert "items" in records[0]["reason"]
 
 
 def test_counts_key_by_kind_and_column_and_a_frozen_card_stays_in_its_column(hub, board, monkeypatch):
@@ -344,18 +360,33 @@ def test_the_cfd_of_a_history_with_a_skipped_read_has_no_tooth(board):
 
 
 def test_a_quiet_day_between_two_whole_reads_is_a_point_not_a_gap(tmp_path):
-    """The dedupe writes no row for a day whose counts did not move: the CFD must not read that day as a skipped read."""
+    """The first whole read of a day writes a sample even when its counts did not move: the CFD must not read that day as a gap."""
     flow = _load_flow()
     cfd = _load("board_cfd_quiet", SCRIPTS / "board_cfd.py").cfd
     path = tmp_path / "hub-flow.x_y.jsonl"
     day = datetime(2026, 10, 20, 12, tzinfo=UTC).timestamp()
     flow.append(path, _rows(9), now=day)
-    assert flow.append(path, _rows(9), now=day + DAY) is None, "the same counts write no row"
+    assert flow.append(path, _rows(9), now=day + DAY) is not None, "the first unchanged read of a day writes one sample"
     flow.append(path, _rows(9, column="Doing"), now=day + 2 * DAY)
     result = cfd(flow.samples(path), ["Todo", "Doing", "Closed"], skips=flow.skips(path))
     assert [p["day"] for p in result["points"]] == ["2026-10-20", "2026-10-21", "2026-10-22"]
     assert [p["wip"] for p in result["points"]] == [9, 9, 9]
     assert result["gaps"] == []
+
+
+def test_a_day_with_a_skip_and_a_whole_unchanged_read_is_a_point(tmp_path):
+    flow = _load_flow()
+    cfd = _load("board_cfd_quiet_skip", SCRIPTS / "board_cfd.py").cfd
+    path = tmp_path / "hub-flow.x_y.jsonl"
+    day = datetime(2026, 10, 20, 12, tzinfo=UTC).timestamp()
+    flow.append(path, _rows(9), now=day)
+    assert flow.append(path, _rows(9), now=day + DAY, incomplete="relations read incomplete") is None
+    assert flow.append(path, _rows(9), now=day + DAY + HOUR) is not None, "the day's first whole read writes its sample"
+    assert flow.append(path, _rows(9), now=day + DAY + 2 * HOUR) is None, "a second unchanged read that day writes nothing"
+    flow.append(path, _rows(9, column="Doing"), now=day + 2 * DAY)
+    result = cfd(flow.samples(path), ["Todo", "Doing", "Closed"], skips=flow.skips(path))
+    assert [p["day"] for p in result["points"]] == ["2026-10-20", "2026-10-21", "2026-10-22"]
+    assert result["gaps"] == [], "a day with a whole read is a point, even when it also has a skip"
 
 
 def test_a_legacy_file_recreated_by_an_old_hub_is_not_renamed_again_in_this_process(tmp_path):
@@ -372,17 +403,15 @@ def test_a_legacy_file_recreated_by_an_old_hub_is_not_renamed_again_in_this_proc
     assert shared.read_text() == "second\n", "the recreated file is left alone, never deleted"
 
 
-def test_an_items_read_whose_last_page_is_full_is_never_a_sample(hub, board, monkeypatch):
-    _pass(hub, monkeypatch, _rows(2), last_page=100)
-    assert _samples(board) == [], "a read that stopped on a full page is missing pages: no sample"
-    records = _skip_records(board)
-    assert [r["flow_skip"] for r in records] == [2]
-    assert "items" in records[0]["reason"]
+def test_a_whole_read_of_exactly_200_items_is_a_sample(hub, board, monkeypatch):
+    _pass(hub, monkeypatch, _rows(200))
+    assert [s["counts"] for s in _samples(board)] == [{"issue": {"Todo": 200}}], "a full last page is no proof of a missing page"
+    assert _skip_records(board) == []
 
 
 def test_an_items_read_that_ends_on_a_short_page_is_whole(hub, board, monkeypatch):
-    _pass(hub, monkeypatch, _rows(100), last_page=37)
-    assert [s["counts"] for s in _samples(board)] == [{"issue": {"Todo": 100}}]
+    _pass(hub, monkeypatch, _rows(137))
+    assert [s["counts"] for s in _samples(board)] == [{"issue": {"Todo": 137}}]
 
 
 def test_the_items_jq_answers_one_page_count_per_page(hub, tmp_path):
