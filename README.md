@@ -90,20 +90,19 @@ issues ──► frontier (stack.sh) ──► squad run: router ──► child
 - **`branchreviewpass.sh`** reviews each pushed work branch tip that has no kept review, through **`review.sh`** and its chain. **`branchfixpass.sh`** dispatches one fix run for a tip whose review says `CHANGES`, and stops when a round does not change the findings (`SG_BRANCHFIX_STALLS`, ADR-0134).
 - **`branchland.sh`** lands a tip whose review approved and whose checks are green in `dev`, through **`ffland.sh`** (rebase on the base, one fast-forward push, the branch deleted), then closes the issue and moves the card to Done. **`prepush.sh`** checks the pushed head before CI is asked.
 - **`check-tdd-red.sh`** refuses a bug fix whose push carries no red test. **`check-gh-interface.sh`** refuses a loop script that reaches GitHub with a call site of its own: every script goes through the door beside it (`. ghcall.sh`), because a refused read looks like an answer and a refused write looks like success (ADR-0277). `acscan.sh` writes a read-only brief of the acceptance criteria an issue's citations conflict over; `acpr.sh` runs a run's acceptance command against the pushed work branch in a throwaway worktree.
-- **`forkclose.sh`** lands the work of a repository that pushes no branch (see [How delivery works](#how-delivery-works)). **`fork-gate.sh`** is the gate that pass runs, and **`gate-suites.sh`** decides which suite set a diff needs (`full` boots the emulator, `offline`, `shell`, `python`).
+- **`gate-suites.sh`** decides which suite set a diff needs (`full` boots the emulator, `offline`, `shell`, `python`). **`test-retire-fork-only.sh`** guards the retired local landing path: no script may name one of its passes.
 
 ### Keeping the loop honest
 
 - **`health.sh`** reads the loop's own state and names what is wrong (`HEALTH frontier-idle`, a stranded dispatch, a base that has been red too long). **`health-install.sh`** installs a launchd agent that runs it every two minutes, outside the loop, because a loop cannot notice its own death. **`heartbeat.sh`** finds a hung test host.
-- **`janitor.py`** releases issues a dead run stranded, expires stale dispatches, and reports the loop's own failures. It derives the card column from the base's own state: a run whose branch is still ahead of the base leaves the card at `Code Complete`, never `Done`, because the card in `Done` over an unlanded branch is a false delivery. **`ensure_labels.sh`** idempotently ensures the repository's labels; **`wtclean.sh`** removes worktrees a finished run left behind.
-- **`forkrescue.py`** places a fork commit a child left on the wrong branch onto the branch the land reads (fast-forward only), and **`forkstrand.py`** reports a fork commit no landing path reads, so a card cannot sit at `Code Complete` while the land waits for a branch nobody wrote.
+- **`janitor.py`** releases issues a dead run stranded, expires stale dispatches, and reports the loop's own failures. It derives the card column from the base's own state: a run whose branch is still ahead of the base leaves the card at `Code Complete`, never `Done`, because the card in `Done` over an unlanded branch is a false delivery. **`wtclean.sh`** removes worktrees a finished run left behind.
 - **`models.json`** is the whole model policy: the coding, review and vision chains, the per-model time window, the per-model on/off switch, the retry budgets and the timeouts. Nothing is hard-coded in a script.
 
 ### Settings and the contract they carry
 
-Per-repository settings live in a profile ([`scripts/profiles/example.sh`](contrib/squad-goal/scripts/profiles/example.sh)): `SG_REPOS`, `SG_PROJECT`, `SG_BASE`, `SG_FORK_DIR`, the test commands. Profiles are live-only — never shipped, never edited by the refresh.
+Per-repository settings live in a profile ([`scripts/profiles/example.sh`](contrib/squad-goal/scripts/profiles/example.sh)): `SG_REPOS`, `SG_PROJECT`, `SG_BASE`, `SG_FORK_DIR`, the test commands. Profiles are live-only: a publish ships an explicit file list and never names one.
 
-A profile is not free-form: shipped code may require a setting, and `env.sh` declares that contract in one place (`SG_REQUIRED_SETTINGS`, `<setting>:<the setting that engages it>`). `refresh-from-fork.sh --check` reads it against every live profile and names the profile, the setting and the cause. A retired setting keeps working: `env.sh` maps `SG_TOOLING_REPO` onto `SG_REPOS` and warns once.
+A profile is not free-form: shipped code may require a setting, and `env.sh` declares that contract in one place (`SG_REQUIRED_SETTINGS`, `<setting>:<the setting that engages it>`). `env.sh` reads the contract when a pass loads a profile, so a missing or retired setting is named where it is used. A retired setting keeps working: `env.sh` maps `SG_TOOLING_REPO` onto `SG_REPOS` and warns once.
 
 The loop's operating rules are in the skill, and they are why it can run unattended: GitHub is live state and is updated at once; a stall is recoverable, never a wait; a failing gate is a defect, never retuned; every event and decision lands on the issue it belongs to.
 
@@ -119,6 +118,9 @@ The loop's operating rules are in the skill, and they are why it can run unatten
 | `/agent-squad:dashboard [run]` | Opens the dashboard page for one run; the latest when empty. It never starts a run. |
 | `/agent-squad:config <show\|set\|reset\|init\|check>` | Shows or changes the project settings file `docs/squad/defaults.yaml`. |
 | `/agent-squad:skill-update` | After a skill update, checks that every borrowed skill still resolves. It never edits `~`. |
+| `/agent-squad:setup` | Prepares a project for agent-squad: `squad setup`, then the global setup skill, committed once. |
+| `/agent-squad:start-mobile` | Checks, or sets up, phone access to the hub over the tailnet. `--apply` is the owner's call. |
+| `/premise-check <spec>` | One round over a published spec: each premise becomes a fact the repository proves, a refuted claim, a probe it needs, or a question for the owner. It writes one comment on the spec. |
 
 Every start command takes `--workflow <id>`. Without it, the run uses the **dynamic workflow**; with it, the run uses `docs/squad/workflows/<id>.graph.json`. The editor saves to the same folder.
 
@@ -141,7 +143,7 @@ contrib/squad-goal/scripts/hubctl.sh            # prints the URL, http://127.0.0
 contrib/squad-goal/scripts/hubctl.sh --restart  # stops the hub that answers and starts it from the files on disk
 ```
 
-One process serves every repository, on one path each. The board columns are read from the GitHub Project by REST: status, priority, size, blockers, the open and closed pull requests. Every live run embeds its own dashboard, started headless so no tab opens for it.
+One process serves every repository, on one path each. A phone reaches it over the tailnet through Tailscale Serve, behind the owner's login allow-list (ADR-0152); `/agent-squad:start-mobile` checks each step and prints the owner's. The bind stays loopback, and Funnel stays off. The board columns are read from the GitHub Project by REST: status, priority, size, blockers, the open and closed pull requests. Every live run embeds its own dashboard, started headless so no tab opens for it.
 
 The models panel is the model policy you can edit: the four chains with rank, effort, time window and an on/off switch per row, and the quota cache (`codex-reset.py` reads the same cache). The coding, review and vision chains name the models a child of that kind runs on; the **router chain** names the models the router agent itself runs on, in rank order. All four live in `models.json`, so the panel reads that one file and writes it. The run graph's dispatch envelope names kinds and no model, and the panel never writes the graph.
 
@@ -155,10 +157,7 @@ The page is one Python file — `http.server` from the standard library, and the
 
 An issue carries a route, and the route decides how its work is delivered:
 
-| Route | Deliverable | Closes the issue |
-| --- | --- | --- |
-| Default | A **work branch** (`fix/<n>…` or `gui/<n>…`) pushed to the remote, landed in `dev` by a fast-forward push | The landing pass, after the review approved its tip and its checks are green |
-| `squad-only` label, or a `Fork-only work` line in the body | A **local commit** on `gui/<n>`, merged by `forkclose.sh`, pushed nowhere | The close pass, after its gate is green |
+One route delivers: a **work branch** (`fix/<n>…` or `gui/<n>…`) pushed to the remote and landed in `dev` by a fast-forward push. The landing pass closes the issue, after the review approved its tip and its checks are green. The fork-only route, which merged a local commit and pushed nothing, was retired; `test-retire-fork-only.sh` refuses a script that names one of its passes.
 
 The work branch is the unit of work: no loop script opens, reads or merges a pull request (#361, ADR-0145). A branch names its issue in its own name (`fix/<n>…`). `branchreviewpass.sh` reviews each tip once, `branchfixpass.sh` dispatches one fix run for a tip whose review says `CHANGES`, and `branchland.sh` lands the tip whose review approved and whose checks are green: `ffland.sh` rebases it in a throwaway clone and pushes the tip straight to the landing branch. The landing pass then closes the issue through the API and moves the card to Done.
 
@@ -234,7 +233,7 @@ The CLI prices a model it does not know at about 14 times its real rate, so a sp
 ## Develop
 
 ```bash
-uv sync --extra dev --extra sdk
+uv sync --extra dev --extra sdk   # dev also ships radon, coverage, pylint and mutmut for the code-quality reading
 python3 -m pytest -n auto       # parallel
 python3 -m pytest -p no:xdist   # serial: both modes must pass
 ruff check squad tests && mypy squad
@@ -246,7 +245,7 @@ The loop's own scripts are covered by shell suites that run every `test-*.sh` be
 contrib/squad-goal/scripts/shell-suites.sh    # the loop's suites
 ```
 
-This checkout is a **fork**: the engine tracks upstream (0.2.0, kept as `local/base-0.2.0`), and everything built on top of it is committed on `main`. The **live skill** (`~/.claude/skills/squad-goal/`) follows `contrib/squad-goal` on `main` through `publish-live.sh`, and the loop runs the copy.
+This checkout is a **fork**: the engine tracks upstream (0.2.0, kept as `local/base-0.2.0`), and everything built on top of it is committed on the three branches (ADR-0145): a work branch lands in `dev` by a fast-forward push, `dev` reaches `stg` by one pull request, and the owner promotes `stg` to `main`. The **live skill** (`~/.claude/skills/squad-goal/`) follows `contrib/squad-goal` from a tree at `origin/stg` through `publish-live.sh`, and the loop runs the copy.
 
 ```bash
 contrib/squad-goal/scripts/publish-live.sh        # fork -> live skill, an explicit file list (--check compares, changes nothing)
@@ -283,4 +282,4 @@ contrib/squad-goal/scripts/export-agent-squad.sh  # the ZIP for upstream
 
 ## Status
 
-agent-squad is the next version of `dev_squad`, rebuilt on the Claude Agent SDK. This checkout is the fork at **0.2.31** on `main` (upstream 0.2.0 kept as `local/base-0.2.0`), and it changes fast: the loop, the hub and the fork workflow are built here, released release by release, and sent upstream as a ZIP.
+agent-squad is the next version of `dev_squad`, rebuilt on the Claude Agent SDK. This checkout is the fork at **0.2.34** on `dev` (upstream 0.2.0 kept as `local/base-0.2.0`), and it changes fast: the loop and the hub are built here, released release by release, and sent upstream as a ZIP.
