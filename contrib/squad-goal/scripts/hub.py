@@ -1814,7 +1814,6 @@ def task_count(i):
     t, c = s.get("total"), s.get("completed")
     if isinstance(t, bool) or isinstance(c, bool) or not isinstance(t, int) or not isinstance(c, int): return None
     return f"{c}/{t}" if t > 0 else None
-ITEMS_PAGE = 100   # the page size the items read asks for: a page this full may be followed by more (#894)
 def board_items_jq(repo):
     """The board read's jq. A project may hold cards of several repositories and an issue number repeats between them, so an
     Issue item counts only when its repository is `repo`; a draft item has no repository. After each page's items it emits
@@ -1905,8 +1904,10 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
                 board_items_jq(REPO),
                 kind=True, timeout=120)
             lines = [json.loads(l) for l in out.splitlines() if l.strip()]
-            pages = [x["_page"] for x in lines if "_page" in x]   # one count per page: a last page of ITEMS_PAGE is followed by more (#894)
-            if not pages or pages[-1] >= ITEMS_PAGE: gaps.append("items read incomplete: its last page is full, or no page count came back")
+            # The jq answer always ends each page with its count (board_items_jq), even for no card: a read with none answered nothing (#894).
+            # A full last page is no sign of a missing page: a project of exactly 100 items answers the same way.
+            if not any("_page" in x for x in lines):
+                gaps.append("items read unparseable: no page count came back")
             items = [x for x in lines if "_page" not in x]
             cases = [i["t"] for i in items if i.get("n") is None and i.get("k") == "test case"]   # a test case is a draft item: it has no number, so it is a row and never a card (#306)
             items = [i for i in items if i.get("n") is not None]
@@ -1939,7 +1940,11 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
             if len(errs) < len(rs): board_cache["t"] = time.time()
     except Exception as e: board_cache["err"] = str(e)[:80]
     save_board()
-    if items: _flow.append(_flow.history_path(BOARD, REPO), items, incomplete="; ".join(gaps) or None)
+    # Every pass writes its flow read, whole or not (#894): a failed read is a flow_skip that counts the last whole read's cards.
+    rows = items if items is not None else (board_cache.get("items") or [])
+    if items is None:
+        gaps.insert(0, f"items read failed: {board_cache.get('err')}")
+    _flow.append(_flow.history_path(BOARD, REPO), rows, incomplete="; ".join(gaps) or None)
     return board_cache
 _WRITE_SEQ = itertools.count(1)   # one temp name per write, never one per writer: a thread id is reused once its thread ends (#512)
 def _temp_name(path):

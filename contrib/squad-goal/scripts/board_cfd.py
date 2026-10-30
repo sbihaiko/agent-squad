@@ -16,9 +16,10 @@ NO_COLUMN = "No column"
 def cfd(samples, columns, zone="UTC", kind=None, skips=()):
     """One point per calendar day from the first sample on, in the named zone (#894).
 
-    A day with a sample takes its last sample. A day with no sample and a flow_skip record (`skips`) is a gap: the read
-    of that day was not whole, so there is no value to draw. Any other day with no sample carries the last sample: the
-    board's counts did not move that day, and board_flow_history writes no row for an unchanged read.
+    A day with a sample takes its last sample. A day with no sample and a flow_skip record (`skips`) is a gap: no read of
+    that day was whole, so there is no value to draw. Any other day with no sample carries the last sample: no read of that
+    day was made. A whole read of a day always writes a sample (board_flow_history writes one unchanged sample a day), so
+    a quiet day is a point, never a gap (#894).
     """
     if not samples:
         return {"start": None, "points": [], "gaps": [], "average_throughput": None}

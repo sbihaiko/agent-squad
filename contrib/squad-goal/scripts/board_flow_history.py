@@ -46,9 +46,10 @@ def sample(rows, now=None):
 
 
 def append(path, rows, now=None, incomplete=None):
-    """Append one sample of `rows` when its counts differ from the last sample, rolling up old lines past RAW_DAYS.
-    `incomplete` is the reason the read is not whole (the caller's completeness signal): such a read is never a sample,
-    at any total, and is recorded as a flow_skip line that names the reason. Returns the new sample, or None."""
+    """Append one sample of `rows` when its counts differ from the last sample. Equal counts write a sample only when no
+    sample was written on this UTC day yet: at most one unchanged sample a day, so a quiet day is a point (#894). Old lines
+    roll up past RAW_DAYS. `incomplete` is the reason the read is not whole (the caller's completeness signal): such a read
+    is never a sample, at any total, and is recorded as a flow_skip line that names the reason. Returns the new sample, or None."""
     path = pathlib.Path(path)
     _retire_legacy(path)
     s = sample(rows, now)
@@ -59,7 +60,8 @@ def append(path, rows, now=None, incomplete=None):
         _write(path, _rollup(lines, s["t"]))
         return None
     samples = [obj for _, obj in lines if _is_sample(obj)]
-    if samples and samples[-1]["counts"] == s["counts"]: return None
+    if samples and samples[-1]["counts"] == s["counts"] and _day(samples[-1]["t"]) == _day(s["t"]):
+        return None
     lines.append((json.dumps(s), s))
     _write(path, _rollup(lines, s["t"]))
     return s
