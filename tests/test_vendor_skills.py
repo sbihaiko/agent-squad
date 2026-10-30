@@ -85,16 +85,19 @@ def test_the_to_tickets_skill_states_the_spec_prefix_rule():
 
 
 def test_the_publish_skills_add_the_triage_label_only_after_the_status_reads_back():
-    """#895: a new card is Todo the moment it joins the board, so ready-for-agent waits for the Status (vendored copies)."""
-    markers = {
-        "to-tickets": ("create the issue without `ready-for-agent`", "Read the Status back",
-                       "add `ready-for-agent` only after", "then link the ticket to its parent"),
-        "to-spec": ("Read the Status back",),
-    }
-    for name, found in markers.items():
-        vendored = (VENDOR / "skills" / name / "SKILL.md").read_text()
-        for m in found:
-            assert m in vendored, f"the vendored {name} skill does not state: {m}"
+    """#895: a new card is Todo the moment it joins the board, so ready-for-agent waits for the Status (vendored copies).
+
+    The order is checked, not only the words: in to-tickets the Status write and its read-back come before the label, and
+    the parent link comes last. A spec never takes the triage label, so to-spec says the order does not apply to it.
+    """
+    tickets = (VENDOR / "skills" / "to-tickets" / "SKILL.md").read_text()
+    order = ("**Publish order, per ticket.**", "create the issue without `ready-for-agent`", "Read the Status back",
+             "add `ready-for-agent` only after the Status reads back", "then link the ticket to its parent")
+    where = [tickets.index(m) for m in order]      # raises when a step is missing
+    assert where == sorted(where), "the to-tickets publish order is out of order"
+    spec = (VENDOR / "skills" / "to-spec" / "SKILL.md").read_text()
+    for m in ("Read the Status back", "a spec never takes the triage label"):
+        assert m in spec, f"the vendored to-spec skill does not state: {m}"
 
 
 def test_a_source_with_no_skill_file_is_a_problem(tmp_path):
