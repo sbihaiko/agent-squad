@@ -24,7 +24,7 @@ Check with the user that these seams match their expectations.
    NUM=$(gh project list --owner "$OWNER" --format json --jq '.projects[]|select(.title=="Squad Board").number')   # exactly one number, or stop
    gh project item-add "$NUM" --owner "$OWNER" --url "$ISSUE_URL" --format json --jq .id   # the item id; then set its Status to Backlog (a bug's to Todo) with gh project item-edit
    ```
-   Read the project back (`gh issue view <n> --json projectItems`): it must list `Squad Board`. Where the repository has no `Squad Board` project, say so to the owner instead of guessing another project.
+   Read the project back (`gh issue view <n> --json projectItems`): it must list `Squad Board`. Read the Status back too: the card must read Backlog (a bug's Todo); a new card can read late, so read again before you report it. Where the repository has no `Squad Board` project, say so to the owner instead of guessing another project.
 
    **Verify the spec label before you report the spec published.** A spec without it is invisible to the squad hub's Specs filter and can be dispatched as work.
    - Before creating the issue, make sure the label exists (on GitHub: `gh label create spec --color 5319E7 --description "A spec: never work itself; its sub-issue tickets are" --force`).

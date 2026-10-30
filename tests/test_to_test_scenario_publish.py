@@ -13,9 +13,9 @@ import pytest
 from squad.to_test_scenario import (  # noqa: F401
     CASE_LABEL,
     PARENT_LABEL,
+    TRIAGE_LABEL,
     RateLimited,
     ScenarioError,
-    TRIAGE_LABEL,
     build_plan,
     case_hash,
     issues_path,

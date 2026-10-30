@@ -61,6 +61,7 @@ from squad.gui_test_report import EVIDENCE_FAMILIES, WITHHELD
 CASE_ID = re.compile(r"[A-Z][A-Z0-9]*-\d+$")
 CASE_LABEL = "Test-Case"
 TRIAGE_LABEL = "ready-for-agent"
+PARENT_STATUS = "Backlog"     # the parent's card, set before its triage label is added (#895)
 INITIAL_STATUS = "To triage"
 SETUP_ROLES = {"setup", "recovery"}
 AUTO_MODES = {"automated"}
@@ -839,18 +840,24 @@ def publish(plan, github, *, script_path=None, map_path=None, saved=None, sleep=
     updated, created, issues = [], [], {}
     areas_done = {"created": [], "updated": []}
     containers_created = []
+    # #895: a new card is Todo the moment it joins the board, and Todo plus ready-for-agent is the dispatch signal. So the
+    # parent is created and boarded in Backlog without the triage label, and the label is added only after that write.
+    gated = [x for x in plan["parent"]["labels"] if x != TRIAGE_LABEL]
     if state["parent"]:
         body = _with_dashboard(plan["parent"]["body"], call("issue_body", number=state["parent"]))
-        refresh(state["parent"], plan["parent"]["title"], body, plan["parent"]["labels"], None)
+        refresh(state["parent"], plan["parent"]["title"], body, gated, None)
         updated.append("parent")
     else:
-        made = create(plan["parent"]["title"], plan["parent"]["body"], plan["parent"]["labels"])
+        made = create(plan["parent"]["title"], plan["parent"]["body"], gated)
         state["parent"] = made["number"]
         flush()                     # known from here on, so an interrupt below never buys a second parent
     if not state["boarded"]:
-        call("board", number=state["parent"])
+        call("board", number=state["parent"], status=PARENT_STATUS)
         state["boarded"] = True
         flush()
+    if TRIAGE_LABEL in plan["parent"]["labels"]:
+        refresh(state["parent"], plan["parent"]["title"], call("issue_body", number=state["parent"]) or "",
+                plan["parent"]["labels"], None)
     scenario = state["parent"]
 
     def place(issue, area_key, container):
@@ -1838,8 +1845,16 @@ def rest_runner(repo, shell=_sh, project=None, bug_helper=None, initial_status=I
             item = json.loads(call(["gh", "project", "item-add", number, "--owner", owner, "--url", url,
                                     "--format", "json"]))
             if kw.get("status") is not None:     # a caller that names a status wants it set on the new item
-                call(["gh", "project", "item-edit", "--id", item["id"], "--field", "Status",
-                      "--text", kw["status"], "--project-id", project])
+                # A Status is a single-select field: the write names its field id and its option id, never `--text`.
+                pid = json.loads(call(["gh", "project", "view", number, "--owner", owner, "--format", "json"]))["id"]
+                fields = json.loads(call(["gh", "project", "field-list", number, "--owner", owner, "--format", "json",
+                                          "--limit", "100"]))["fields"]
+                field = next(f for f in fields if f.get("name") == "Status")
+                option = next((o for o in field.get("options") or [] if o.get("name") == kw["status"]), None)
+                if option is None:
+                    raise ValueError(f"no Status option {kw['status']!r} on {project}")
+                call(["gh", "project", "item-edit", "--id", item["id"], "--project-id", pid,
+                      "--field-id", field["id"], "--single-select-option-id", option["id"]])
             return item
         if op == "file_bug":
             if not bug_helper:
