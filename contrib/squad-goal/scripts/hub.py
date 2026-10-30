@@ -1818,7 +1818,7 @@ def board_items_jq(repo):
     """The board read's jq. A project may hold cards of several repositories and an issue number repeats between them, so an
     Issue item counts only when its repository is `repo`; a draft item has no repository. After each page's items it emits
     one {"_page": n} line, n the page's own item count, so the read says whether its last page was short (#894)."""
-    return ('''length as $n|(.[]|select((.content_type=="Issue" and ((.content.repository_url//"")|endswith("/" + $repo))) or .content_type=="DraftIssue")|{n:.content.number,i:.id,t:.content.title,s:.content.state,c:.content.closed_at,st:((.fields[]|select(.name=="Status")|.value.name.raw)//null),k:(((.fields[]?|select(.name=="Kind")|.value.name|if type=="object" then .raw else . end)//"")|ascii_downcase|if .=="" then null else . end),l:[.content.labels[]?.name],si:{total:.content.sub_issues_summary.total,completed:.content.sub_issues_summary.completed},o:.content.created_at}),{_page:$n}''').replace("$repo", json.dumps(repo))
+    return ('''length as $n|(.[]|select((.content_type=="Issue" and ((.content.repository_url//"")|endswith("/" + $repo))) or .content_type=="DraftIssue")|{n:.content.number,i:.id,t:.content.title,s:.content.state,r:(.content.state_reason//null),c:.content.closed_at,st:((.fields[]|select(.name=="Status")|.value.name.raw)//null),k:(((.fields[]?|select(.name=="Kind")|.value.name|if type=="object" then .raw else . end)//"")|ascii_downcase|if .=="" then null else . end),l:[.content.labels[]?.name],si:{total:.content.sub_issues_summary.total,completed:.content.sub_issues_summary.completed},o:.content.created_at}),{_page:$n}''').replace("$repo", json.dumps(repo))
 
 GH_FLOOR = int(os.environ.get("SG_GH_FLOOR") or 300)   # below this many core requests left, a read pass skips its reads (#855)
 LABELS_EVERY = 3600   # seconds between two reads of the repository's labels, and of its closed pull requests (#855)
@@ -2544,7 +2544,8 @@ def flow_charts():
     days = sorted([*extents, *cfd["gaps"]])   # one entry per calendar day: a day with no sample carries no value (#894)
     ymax = max((e[ORDER[0]][1] for e in extents.values()), default=0)
     def values(name, k): return [extents[d][name][k] if d in extents else None for d in days]
-    rows = [{"n": i["n"], "column": _columns_module.view_column(i["st"], str(i["s"]).lower() == "closed", i.get("l"))[0],
+    rows = [{"n": i["n"], "column": _columns_module.view_column(i["st"], str(i["s"]).lower() == "closed", i.get("l"), i.get("r"))[0],
+             "reason": i.get("r"),   # the close reason the read carried, so a card closed as not planned is no delivery (#921)
              "c": i.get("c") if str(i["s"]).lower() == "closed" else None, "o": i.get("o")} for i in board_cache["items"]]
     lead = _leadtime.lead_time(rows)
     return {
@@ -2564,7 +2565,7 @@ def drawn_column(i, moves, read_at, window):
     once and wears the mark). The board and the promote route ask this one function, so a card is promotable by the
     column both of them draw, never by two different columns (#829, ADR-0144)."""
     closed = str(i["s"]).lower() == "closed"   # the row's own closedness: the freeze below is the card's, not the read's
-    st, fz = _columns_module.view_column(i["st"], closed, i.get("l"))   # the column the table names, and the freeze over it
+    st, fz = _columns_module.view_column(i["st"], closed, i.get("l"), i.get("r"))   # the column the table names, and the freeze over it
     entry = moves.get(str(i["i"])) if i.get("i") else None   # the door keys an entry by the Project item id
     if not (isinstance(entry, dict) and entry.get("column")):
         return {"st": st, "fz": fz, "state": "read", "recorded": None, "entry": None}
@@ -2583,7 +2584,7 @@ def drawn_column(i, moves, read_at, window):
         return {"st": st, "fz": fz, "state": "read", "recorded": recorded, "entry": entry}   # a move with no dispatch context stands aside for a read that began after it
     # Draw the move at once and keep the mark until a read that began after it agrees (#650). A move with a dispatch
     # context keeps the mark through a contradicting read too, for the whole window. A column that matches by coincidence is no proof.
-    return {"st": recorded, "fz": _columns_module.view_column(recorded, closed, i.get("l"))[1], "state": "pending",
+    return {"st": recorded, "fz": _columns_module.view_column(recorded, closed, i.get("l"), i.get("r"))[1], "state": "pending",
             "recorded": recorded, "entry": entry}
 
 
@@ -3490,7 +3491,8 @@ const flowCFD=c=>{if(!c.days.length)return "<p class=fnote>the flow history has 
   const polys=b=>runs(b).map(run=>`<polygon points="${band(b,run)}" fill="${COLORS[b.name]||"#888"}" fill-opacity=".85"><title>${esc(b.name)}</title></polygon>`).join("");
   return `<svg viewBox="0 0 ${flowW} ${flowH}">${c.bands.map(polys).join("")}${flowAxis(c.ymax,"cards")}</svg>`+
     `<p class=fnote>history from ${esc(c.start)} UTC</p><p>${c.bands.map(b=>`<span class=flg><i style="background:${COLORS[b.name]||"#888"}"></i>${esc(b.name)}</span>`).join("")}</p>`;};
-const flowLead=l=>{const S=l.summary,ex=l.excluded.map(e=>`${esc(e.reason)} ${e.count}`).join(", ");
+const EXREASON={not_planned:"closed as not planned",abandoned:"closed as abandoned",open:"still open",no_opened:"no opened date"};   // the cards the chart leaves out, in words (#921)
+const flowLead=l=>{const S=l.summary,ex=l.excluded.map(e=>`${e.count} ${esc(EXREASON[e.reason]||e.reason)}`).join(", ");
   const head=`<p class=fhead><b>${esc(l.measure)}</b> · window ${l.window.size} ${esc(l.window.unit)} · excluded ${l.excluded_total}${ex?" ("+ex+")":""}</p>`;
   if(!S)return head+"<p class=fnote>no closed card yet</p>";
   const stat=(k,v)=>`${k} <b>${esc(v.text)}</b>`;

@@ -103,16 +103,23 @@ def past(have, want):
     return have in order and want in order and order.index(have) > order.index(want)
 
 
-def view_column(status, closed, labels=()):
+# GitHub's NOT_PLANNED verdict as the carrier spells it: the issue was abandoned or is a duplicate, so it was never
+# delivered whatever its Status says (#921). REST answers it as `state_reason` on the issue the card's item carries.
+NOT_PLANNED = ("not_planned", "duplicate")
+
+
+def view_column(status, closed, labels=(), reason=None):
     """(column, freeze label or None) the hub draws one card in, from its Status (old or shipped name), state and labels.
 
     Blocked is no column: it is the owner freeze over the column the work reached, Backlog when the Status names none.
-    A card with no Status is not scheduled, so it is Backlog. A closed card is Closed, unless its Status says Abandoned."""
+    A card with no Status is not scheduled, so it is Backlog. A closed card is Closed, unless its Status says Abandoned
+    or its close reason is not planned: that card was not delivered, so it is Abandoned too (#921)."""
     labels = set(labels or ())
     owner = status == "Blocked" or FREEZE_LABEL["owner"] in labels
     freeze = FREEZE_LABEL["owner"] if owner else FREEZE_LABEL["gated"] if FREEZE_LABEL["gated"] in labels else None
     name = SHIPPED_NAME.get(status, status) if status else None
-    if closed: return (name if name == ROLE["abandoned"] else ROLE["issue_closed"]), None
+    if closed:
+        return (ROLE["abandoned"] if name == ROLE["abandoned"] or reason in NOT_PLANNED else ROLE["issue_closed"]), None
     return (name or ROLE["unscheduled"]), freeze
 
 

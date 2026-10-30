@@ -35,7 +35,7 @@ def sample(rows, now=None):
     counts, frozen, none = {}, 0, 0
     for r in rows:
         closed = str(r.get("s", "")).lower() == "closed"
-        column, freeze = _columns.view_column(r.get("st"), closed, r.get("l"))
+        column, freeze = _columns.view_column(r.get("st"), closed, r.get("l"), r.get("r"))
         if freeze: frozen += 1
         if column not in names:
             none += 1

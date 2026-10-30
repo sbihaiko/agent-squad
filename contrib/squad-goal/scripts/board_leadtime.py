@@ -5,9 +5,14 @@ from datetime import datetime
 
 MEASURE = "opened -> closed"
 ABANDONED = "Abandoned"
+# GitHub's NOT_PLANNED verdict (abandoned or duplicate), as the carrier spells it: no delivery, so no dot (#921). The
+# chart counts it under the one reason it is known by, `not_planned`, whichever of the two words the read answered.
+NOT_PLANNED = ("not_planned", "duplicate")
 
 
 def _exclusion(row):
+    if row.get("reason") in NOT_PLANNED:
+        return "not_planned"
     if row["column"] == ABANDONED:
         return "abandoned"
     if row["c"] is None:
