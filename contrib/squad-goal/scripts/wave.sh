@@ -248,7 +248,7 @@ freeze_owner() {   # <issue>: the freeze is a marker over the column reached, ne
 # (#609, ADR-0134): the work the base holds for the issue. A RED commit carries the same line and proves nothing.
 landed_key() {
   $G -C "${SG_CHECKOUT:-/nonexistent}" log -n 500 --format='%H%x1f%B%x1e' -E --grep="Refs #$1([^0-9]|\$)" "origin/$base" 2>/dev/null \
-    | awk -v RS='\036' -F'\037' 'NF > 1 && $2 !~ /TDD RED/ { sub(/^\n/, "", $1); print $1; exit }'
+    | awk -v RS='\036' -F'\037' 'NF > 1 && $2 !~ /^\n*TDD RED/ { sub(/^\n/, "", $1); print $1; exit }'
 }
 
 # ledger <op> <issue> ...: the issue's one ledger file (#673, issue_ledger.py), keyed <owner>/<repo>#<n> (ADR-0138). It holds
@@ -522,7 +522,7 @@ refs_of() { $G -C "$1" log --format=%B "$2" 2>/dev/null | /usr/bin/grep -oE 'Ref
 # cluster child that wrote one commit for its block did not say which issue the commit fixed, so it delivers none of them.
 commit_refs() {
   $G -C "$1" log --format='%H%x1f%B%x1e' "$2" 2>/dev/null | awk -v RS='\036' -F'\037' '
-    NF > 1 && $2 !~ /TDD RED/ {
+    NF > 1 && $2 !~ /^\n*TDD RED/ {
       sha = $1; sub(/^\n+/, "", sha)
       k = 0; split("", seen); s = $2
       while (match(s, /Refs #[0-9]+/)) {
