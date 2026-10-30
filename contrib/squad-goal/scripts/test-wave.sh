@@ -892,6 +892,36 @@ r2=$(land2 run-845-done 2>&1); rc2=$?
 $O rev-parse -q --verify "refs/heads/$W" >/dev/null && ok "Z2: the wave branch is kept" || ko "Z2: the wave branch was deleted"
 rm -rf "$x"
 
+# (#866) A reviewed child commit that names an issue of the run never leaves the wave closed empty while it sits on a local branch
+# only. R1: a completed run whose child's fix run committed the fix in its own worktree: the fix run's squad/<fix run>/ branch
+# holds the only copy, so the wave is kept and refused. R2: a failed run whose reviewed head (auto/rvd-<run>-<child>) is a local-only
+# commit that names its issue: the wave is kept and refused too. Z1 still lets an unreviewed commit of a failed run go.
+W=wave/run-866a; start2 run-866a >/dev/null
+mkdir -p "$T/co/runs/run-866a" "$T/co/runs/run-866fix"; printf '%s\n' 'CHILD — GitHub issue #787 (bug; one root cause, one branch):' > "$T/co/runs/run-866a/request.txt"
+printf '%s\n%s\n' '{"event": "run_start"}' '{"event": "verdict", "verdict": "completed", "reasons": []}' > "$T/co/runs/run-866a/record.jsonl"
+printf '%s\n%s\n' '{"event": "run_start"}' '{"event": "verdict", "verdict": "completed", "reasons": []}' > "$T/co/runs/run-866fix/record.jsonl"
+x=$(mktemp -d); $G clone -q "$T/origin.git" "$x/c" 2>/dev/null
+(cd "$x/c" && $G checkout -q -b tmp dev && echo fix > f787 && $G add f787 && $G -c user.email=a@b -c user.name=t commit -q -m "fix 787" -m "Refs #787")
+$G -C "$T/co" fetch -q "$x/c" HEAD:refs/heads/squad/run-866fix/worktrees_child-route.router.1 2>/dev/null
+printf '%s\n' "$T/co/runs/run-866fix" > "$T/st/auto/ccfix-run-866a-route.router.1"
+r=$(land2 run-866a 2>&1); rc=$?
+[ $rc = 1 ] && case "$r" in *"WAVE REFUSE"*"787"*) ok "R1: a fix run's reviewed commit keeps its completed run's wave (refused, exit 1)";; *) ko "R1: not refused: '$r' (exit $rc)";; esac || ko "R1: exit $rc: '$r'"
+$O rev-parse -q --verify "refs/heads/$W" >/dev/null && ok "R1: the wave branch is kept" || ko "R1: the wave branch was deleted"
+case "$r" in *"landed empty"*) ko "R1: the wave landed empty: '$r'";; *) ok "R1: the wave does not land empty";; esac
+rm -f "$T/st/auto/ccfix-run-866a-route.router.1"; rm -rf "$x"
+
+W=wave/run-866b; start2 run-866b >/dev/null
+mkdir -p "$T/co/runs/run-866b"; printf '%s\n' 'CHILD — GitHub issue #794 (bug; one root cause, one branch):' > "$T/co/runs/run-866b/request.txt"
+printf '%s\n%s\n' '{"event": "run_start"}' '{"event": "verdict", "verdict": "failed", "reasons": ["ac-verify:ac_failed"]}' > "$T/co/runs/run-866b/record.jsonl"
+x=$(mktemp -d); $G clone -q "$T/origin.git" "$x/c" 2>/dev/null
+(cd "$x/c" && $G checkout -q -b tmp dev && echo fix > f794 && $G add f794 && $G -c user.email=a@b -c user.name=t commit -q -m "fix 794" -m "Refs #794")
+$G -C "$T/co" fetch -q "$x/c" HEAD:refs/heads/squad/run/run-866b 2>/dev/null
+printf '%s 4242\n' "$($G -C "$x/c" rev-parse HEAD)" > "$T/st/auto/rvd-run-866b-route.router.1"
+r=$(land2 run-866b 2>&1); rc=$?
+[ $rc = 1 ] && case "$r" in *"WAVE REFUSE"*"794"*) ok "R2: a failed run's reviewed commit keeps its wave (refused, exit 1)";; *) ko "R2: not refused: '$r' (exit $rc)";; esac || ko "R2: exit $rc: '$r'"
+$O rev-parse -q --verify "refs/heads/$W" >/dev/null && ok "R2: the wave branch is kept" || ko "R2: the wave branch was deleted"
+rm -f "$T/st/auto/rvd-run-866b-route.router.1"; rm -rf "$x"
+
 rm -rf "$x2" "$x3" "$x4" "$x5"
 
 
