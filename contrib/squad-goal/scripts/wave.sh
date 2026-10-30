@@ -164,19 +164,32 @@ for l in open(sys.argv[1]):
     if n: print(n)' "$f" "$here" 2>/dev/null | sort -un
 }
 
-# orphan_child <run> <rd> <S> <wave> <issue>...: the first commit of the run's own work that names one of the issues, lives on the
-# run's own branch (squad/run/<run>) or on the tip of a child tree under the run folder, and is in neither the wave nor the base
-# (#836). It prints "<sha> <issue>" and returns 0; it returns 1 when there is none. No other branch is read: a leftover squad/
-# branch of another run holds nothing here. A commit a remote ref already reaches (a fix/ branch that salvaged it) is no orphan,
+# orphan_child <run> <rd> <S> <wave> <issue>...: the first commit of the run's own work that names one of the issues, lives on a
+# branch or a child tree of the run (squad/run/<run>, a tree under the run folder) or of a fix run the run's children started (#866),
+# and is in neither the wave nor the base (#836). It prints "<sha> <issue>" and returns 0; it returns 1 when there is none. A leftover
+# squad/ branch of another run holds nothing here. A commit a remote ref already reaches (a fix/ branch that salvaged it) is no orphan,
 # as `branch -r --contains` reads it from the checkout. A RED commit proves nothing and is no work. Each tip is fetched into the
 # scratch clone $S, so the commits are read from that clone, and the wave and the base are the reach that counts.
+# (#866) A fix run cuts its own worktree of the child's branch and commits there (childfix.sh), so its reviewed commit lives in that
+# run's tree and its squad/<fix run>/ branches. Those folders come from the run's own markers: auto/wave-pause-<run> and auto/ccfix-<run>-*.
+# A run whose verdict is not completed holds a commit only when a review read that commit's head (auto/rvd-<run>-<child>): the
+# unreviewed work of a failed, needs-human, stopped or verdict-less run never holds its wave (#845), and a reviewed one never goes
+# away with it.
 orphan_child() {
-  local run=$1 rd=$2 S=$3 w=$4 tip c msg n refs rda tips; shift 4
+  local run=$1 rd=$2 S=$3 w=$4 tip c msg n refs rda tips dir dirs reviewed verdict f; shift 4
+  verdict=$(run_verdict "$run")
+  dirs=$( { printf '%s\n' "$rd"; for f in "$SG_STATE/auto/wave-pause-$run" "$SG_STATE/auto/ccfix-$run"-*; do [ -f "$f" ] && { cat "$f"; echo; }; done; } | sort -u)
+  reviewed=$(for f in "$SG_STATE/auto/rvd-$run"-*; do [ -f "$f" ] && awk '{print $1}' "$f"; done | tr '\n' ' ')
   tips=$($G -C "$SG_CHECKOUT" rev-parse -q --verify "refs/heads/squad/run/$run" 2>/dev/null)
-  if rda=$(cd "$rd" 2>/dev/null && pwd -P); then
-    tips="$tips
+  while IFS= read -r dir; do
+    [ -n "$dir" ] || continue
+    if rda=$(cd "$dir" 2>/dev/null && pwd -P); then
+      tips="$tips
+$($G -C "$SG_CHECKOUT" for-each-ref --format='%(objectname)' "refs/heads/squad/$(basename "$rda")/" 2>/dev/null)"
+      tips="$tips
 $($G -C "$SG_CHECKOUT" worktree list --porcelain 2>/dev/null | awk -v d="$rda/" '/^worktree /{w=substr($0,10); if (index(w,d)==1) print w}' | while read -r t; do $G -C "$t" rev-parse HEAD 2>/dev/null; done)"
-  fi
+    fi
+  done <<< "$dirs"
   git_sc() { $G -C "$S" "$@"; }
   for tip in $(printf '%s\n' "$tips" | sort -u); do
     [ -n "$tip" ] || continue
@@ -184,6 +197,7 @@ $($G -C "$SG_CHECKOUT" worktree list --porcelain 2>/dev/null | awk -v d="$rda/" 
     for c in $(git_sc rev-list "$tip" --not "origin/$base" "origin/$w" 2>/dev/null); do
       msg=$(git_sc log -1 --format=%B "$c" 2>/dev/null)
       case "$msg" in *"TDD RED"*) continue;; esac
+      if [ "$verdict" != completed ]; then case " $reviewed " in *" $c "*) ;; *) continue;; esac; fi
       refs=" $(printf '%s\n' "$msg" | /usr/bin/grep -oE 'Refs #[0-9]+' | /usr/bin/grep -oE '[0-9]+' | tr '\n' ' ') "
       for n in "$@"; do case "$refs" in *" $n "*)
           [ -z "$($G -C "$SG_CHECKOUT" branch -r --contains "$c" 2>/dev/null)" ] || continue 2   # a remote ref reaches it: salvaged
@@ -712,7 +726,7 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
       # does, so its wave takes the normal path. The refusal is said once per wave and commit: the marker names the commit last said.
       local undel="" orph refused="$SG_STATE/auto/orphan-refused-$run"
       for n in $(run_issues "$rd"); do case " $delivered " in *" $n "*) ;; *) undel="${undel:+$undel }$n";; esac; done
-      if [ "$capped" != 1 ] && [ -n "$undel" ] && [ "$(run_verdict "$run")" = completed ] && orph=$(orphan_child "$run" "$rd" "$S" "$w" $undel); then
+      if [ "$capped" != 1 ] && [ -n "$undel" ] && orph=$(orphan_child "$run" "$rd" "$S" "$w" $undel); then
         if [ "$(cat "$refused" 2>/dev/null)" != "${orph% *}" ]; then
           mkdir -p "$SG_STATE/auto" && printf '%s\n' "${orph% *}" > "$refused"
           echo "WAVE REFUSE $w: child commit ${orph% *} names #${orph#* }; it is on a local branch only and in neither $w nor $base, so the wave is kept"
