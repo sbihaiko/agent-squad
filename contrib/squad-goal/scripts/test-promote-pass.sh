@@ -105,13 +105,21 @@ adv stg stg-only; adv dev dev-only; t6=$(tip dev); before=$(tip stg); n=$(runs);
 # The proof is a measurement on a machine the loop shares (#738): a loaded box yields "not proven: machine loaded", spends no
 # suite and writes no marker, so a later pass retries the same tip. The worker count is bounded by the machine, never auto.
 git -C "$R" update-ref refs/heads/stg "$(tip dev)"   # the diverged case above left stg ahead: a fast-forward needs it behind again
-adv dev loaded; t7=$(tip dev); before=$(tip stg); n=$(runs); printf 'a live run\n' > "$SG_STATE/active-runs.txt"
-SG_PROMOTE_LOAD_LIMIT=1000000 pass; rc=$?
-[ $rc = 0 ] && [ "$(runs)" = "$n" ] && [ "$(tip stg)" = "$before" ] && ok "a live run marks the tip not proven instead of measuring under it" || ko "loaded: rc $rc, runs $(runs), stg $(tip stg)"
+# A live run no longer refuses the proof (owner ask, settled by Fable): the ledger's line count was a proxy for load, the load is
+# measured directly and again while the suite runs, and the proxy never opened on a busy loop -- stg froze while dev took landings
+# all day. Memory left on the box, and a nightly that already owns the machine, still refuse it: two full suites at once saturate
+# memory before either shows in the load average.
+adv dev live; tl=$(tip dev); printf 'a live run\n' > "$SG_STATE/active-runs.txt"; n=$(runs)
+pass; rc=$?
+[ $rc = 0 ] && [ "$(runs)" -gt "$n" ] && [ "$(tip stg)" = "$tl" ] && ok "a live run no longer holds the proof" || ko "a live run still held the proof: rc $rc, runs $(runs), stg $(tip stg)"
+git -C "$R" update-ref refs/heads/stg "$(tip dev)"; rm -f "$SG_STATE/active-runs.txt"; adv dev loaded; t7=$(tip dev); before=$(tip stg); n=$(runs); SG_PROMOTE_LOAD_LIMIT=0 pass; rc=$?
+[ $rc = 0 ] && [ "$(runs)" = "$n" ] && [ "$(tip stg)" = "$before" ] && ok "a load average at its bound marks the tip not proven" || ko "load bound: rc $rc, runs $(runs), stg $(tip stg)"
 /usr/bin/grep -q "promote-pass: $t7 not proven: machine loaded" "$SG_STATE/promote.log" && ok "the loaded line names the tip and the reason" || ko "loaded line: $(tail -2 "$SG_STATE/promote.log")"
 [ "$(/usr/bin/grep -c "^$t7 " "$SG_STATE/promote-pass.tips" 2>/dev/null)" = 0 ] && ok "a loaded skip writes no marker: the tip is retried later" || ko "a loaded skip marked the tip refused"
-rm -f "$SG_STATE/active-runs.txt"; n=$(runs); SG_PROMOTE_LOAD_LIMIT=0 pass; rc=$?
-[ $rc = 0 ] && [ "$(runs)" = "$n" ] && [ "$(tip stg)" = "$before" ] && ok "a load average at its bound, with no live run, marks the tip not proven too" || ko "load bound: rc $rc, runs $(runs), stg $(tip stg)"
+mkdir -p "$SG_STATE/locks/nightly"; n=$(runs); pass; rc=$?
+[ $rc = 0 ] && [ "$(runs)" = "$n" ] && [ "$(tip stg)" = "$before" ] && ok "a held nightly refuses the proof: two full suites never share the box" || ko "nightly: rc $rc, runs $(runs), stg $(tip stg)"
+rmdir "$SG_STATE/locks/nightly"; SG_PROMOTE_MEM_MIN_MB=99999999 pass; rc=$?
+[ $rc = 0 ] && [ "$(runs)" = "$n" ] && [ "$(tip stg)" = "$before" ] && ok "too little memory left refuses the proof" || ko "memory: rc $rc, runs $(runs), stg $(tip stg)"
 # (#748) A run's removal can leave the last line empty, and a file of blank lines is no live run: the pre-check reads the
 # non-empty lines, as its own message does, never the file's size.
 printf '\n' > "$SG_STATE/active-runs.txt"; pass; rc=$?
@@ -126,7 +134,7 @@ touch -t 202001010000 "$T/deadrun/record.jsonl"; git -C "$R" update-ref refs/hea
 adv dev deadrun; t8=$(tip dev); printf '%s\n' "$T/deadrun" > "$SG_STATE/active-runs.txt"; n=$(runs); pass; rc=$?
 [ $rc = 0 ] && [ "$(runs)" -gt "$n" ] && ok "a listed run that is over holds no proof" || ko "an over run held the proof: rc $rc, runs $(runs), dev $t8"
 printf '%s\n' "$T/deadrun" "$T" > "$SG_STATE/active-runs.txt"; n=$(runs); git -C "$R" update-ref refs/heads/stg "$(tip dev)"; adv dev unresolvable; pass; rc=$?
-[ $rc = 0 ] && [ "$(runs)" = "$n" ] && ok "a line the pass cannot resolve is read as live" || ko "an unresolvable line let the proof run: rc $rc, runs $(runs)"
+[ $rc = 0 ] && [ "$(runs)" -gt "$n" ] && ok "a ledger line the pass cannot resolve does not hold the proof either" || ko "an unresolvable line held the proof: rc $rc, runs $(runs)"
 rm -f "$SG_STATE/active-runs.txt"
 /usr/bin/grep -q -- '-n auto' "$d/promote-pass.sh" && ko "the default suite still takes every core (-n auto)" || ok "the default suite bounds its workers (#738)"
 /usr/bin/grep -q 'sg_battery_workers' "$d/promote-pass.sh" && ok "the worker count comes from the one machine bound" || ko "promote-pass.sh carries its own worker count"
