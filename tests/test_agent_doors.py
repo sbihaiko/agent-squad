@@ -6,6 +6,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SKILLS = ROOT / ".agents" / "skills"
 LINKS = ROOT / ".claude" / "skills"
+# Doors to this repository's own skills. There is no borrowed skill to find by name, so the door names the file in the
+# checkout instead (ADR-0129 covers the borrowed ones); `test_a_repo_own_door_names_the_repo_skill_it_runs` proves it.
+REPO_OWN = {"agent-squad-dashboard", "agent-premise-check"}
 
 
 def _doors() -> list[Path]:
@@ -44,13 +47,28 @@ def test_each_door_is_named_in_claude_md():
 
 def test_each_agent_door_finds_its_global_skill_by_name_not_by_path():
     for door in _doors():
-        if door.name == "agent-squad-dashboard":
+        if door.name in REPO_OWN:
             continue
         want = door.name.removeprefix("agent-")
         text = (door / "SKILL.md").read_text()
         assert f"python3 -m squad.skillpath {want}`" in text, door.name
         assert "~/.claude/skills" not in text, f"{door.name} hard-codes a path an upgrade can move"
         assert "removed or renamed upstream" in text, f"{door.name} does not say what to do when the skill is gone"
+
+
+REPO_OWN_RUNS = {
+    "agent-squad-dashboard": "uv run squad dashboard",
+    "agent-premise-check": "`.claude/skills/premise-check/SKILL.md`",
+}
+
+
+def test_a_repo_own_door_names_what_it_runs_in_the_checkout():
+    """A door with no borrowed skill behind it names a file or a command in the checkout, and reads nothing under `~`."""
+    assert set(REPO_OWN_RUNS) == REPO_OWN
+    for name, wanted in REPO_OWN_RUNS.items():
+        text = (SKILLS / name / "SKILL.md").read_text()
+        assert wanted in text, f"{name} does not name {wanted}"
+        assert "~/" not in text, f"{name} reaches outside the checkout"
 
 
 def test_the_ask_matt_door_checks_each_skill_it_recommends():
