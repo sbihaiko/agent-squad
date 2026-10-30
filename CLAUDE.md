@@ -62,6 +62,7 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 - **A defect an agent finds is its own, whoever caused it and whenever it began** ([ADR-0133](docs/adr/0133-a-defect-an-agent-finds-is-its-own.md)). Guard: none yet; a draft.
 - **`/implement` works in its own worktree and lands in `dev` by a fast-forward push, with no pull request; commit and push are automatic** ([ADR-0116](docs/adr/0116-implement-in-a-worktree.md)). Guard: `tests/test_repo_hygiene.py`.
 - **Three branches: `dev` takes landings, `dev` reaches `stg` by one pull request, the owner promotes `stg` to `main`** ([ADR-0145](docs/adr/0145-a-work-branch-lands-in-dev-by-fast-forward.md)). Guard: `tests/test_no_pr_path.py`, `contrib/squad-goal/scripts/test-promote.sh`; the rest is a draft.
+- **A premise is checked, never assumed: one round proves what reading proves, probes what only a run settles, and asks the owner at most five questions with a recommended answer** ([ADR-0155](docs/adr/0155-a-premise-is-checked-never-assumed.md)). Guard: `tests/test_premise_check.py`.
 
 ### Run engine
 
@@ -153,6 +154,8 @@ An agent that needs `/to-tickets` runs `agent-to-tickets`. A door finds the glob
 A plugin update, a move or a removal then cannot break it silently, and `python3 -m squad.skillpath --check` reports drift.
 The door follows the skill it finds; where it would interview the Owner and the Owner is away, the panel answers (`/autonomy`).
 A door does not lift an owner-only action. Guard: `tests/test_agent_doors.py` (each door is symlinked, named here, and finds its global skill by name) and `tests/test_skillpath.py` (ADR-0018).
+`agent-premise-check` is the door to this repository's own `/premise-check` skill (ADR-0155): it names `.claude/skills/premise-check/SKILL.md` in the checkout, because there is no borrowed skill to find by name.
+Guard: `tests/test_premise_check.py`.
 
 ### Skill updates
 
