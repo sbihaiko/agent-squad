@@ -16,6 +16,7 @@ import http.client
 import importlib.util
 import json
 import pathlib
+import shutil
 import subprocess
 import sys
 import threading
@@ -237,6 +238,36 @@ def test_a_spec_moves_with_its_backlog_tickets_in_one_write(hub, monkeypatch):
     assert calls == [([9, 20, 21], False)], calls
     groups = {g["name"]: [i["n"] for i in g["items"]] for g in mod.board()["groups"]}
     assert {9, 20, 21} <= set(groups["Todo"]) and not {9, 20, 21} & set(groups["Backlog"]), groups
+
+
+def project_item(n, reason, labels=()):
+    """One project item as the REST items read answers it: an open issue of this repository, with a close reason."""
+    return {"content_type": "Issue", "id": f"PVT_{n}",
+            "fields": [{"name": "Status", "value": {"name": {"raw": "Backlog"}}}],
+            "content": {"number": n, "repository_url": "https://api.github.com/repos/x/y", "title": f"t{n}",
+                        "state": "OPEN", "state_reason": reason, "closed_at": None,
+                        "labels": [{"name": x} for x in labels],
+                        "sub_issues_summary": {"total": 0, "completed": 0},
+                        "created_at": "2026-10-01T00:00:00Z"}}
+
+
+def test_a_reopened_card_keeps_its_repository_so_its_spec_moves_its_tickets(hub, monkeypatch):
+    """#921: REST answers state_reason "reopened" for an issue closed and reopened (#817). The close reason rides its own
+    key, never the row's repository: the spec's sub-issue read goes to x/y, and a reopened Backlog ticket moves with its
+    spec (ADR-0142)."""
+    mod, port = hub
+    jq = shutil.which("jq")
+    if jq is None: pytest.skip("jq is not installed")
+    read = subprocess.run([jq, "-c", mod.board_items_jq("x/y")],
+                          input=json.dumps([project_item(9, "reopened", ["spec"]), project_item(20, "reopened")]),
+                          capture_output=True, text=True, check=True).stdout
+    mod.board_cache["items"] = [row for row in (json.loads(line) for line in read.splitlines()) if "_page" not in row]
+    routes = sub_issues(monkeypatch, answer=[{"number": 20, "state": "open"}])
+    calls = []
+    mod.promote_write = writer(calls)
+    status, out = post(port, {"issue": 9})
+    assert routes and routes[0].startswith("repos/x/y/issues/9/sub_issues"), routes
+    assert status == 200 and out.get("moved") == [9, 20], out
 
 
 def test_a_ticket_without_an_item_id_is_added_with_the_spec(hub, monkeypatch):

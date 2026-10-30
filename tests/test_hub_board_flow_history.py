@@ -178,8 +178,8 @@ def test_a_card_closed_as_not_planned_counts_in_abandoned_not_closed(hub, board,
     """#921: the flow sample counts a card closed as NOT_PLANNED with Status Closed in Abandoned, so the CFD's Closed
     band and its throughput leave it out of delivered work."""
     cards = [_card(1, st="Closed", s="CLOSED"),
-             {**_card(2, st="Closed", s="CLOSED"), "r": "not_planned"},
-             {**_card(3, st="Closed", s="CLOSED"), "r": "completed"}]
+             {**_card(2, st="Closed", s="CLOSED"), "cr": "not_planned"},
+             {**_card(3, st="Closed", s="CLOSED"), "cr": "completed"}]
     _pass(hub, monkeypatch, cards)
     assert _samples(board)[-1]["counts"] == {"issue": {"Abandoned": 1, "Closed": 2}}
 
@@ -478,8 +478,9 @@ def test_the_items_read_carries_the_close_reason_so_no_card_is_read_again(hub, t
     src.write_text(json.dumps([item(1, "not_planned"), item(2, "completed")]))
     out = subprocess.run([jq, "-c", hub.board_items_jq("x/y"), str(src)], capture_output=True, text=True, check=True).stdout
     rows = {r["n"]: r for r in (json.loads(line) for line in out.splitlines()) if "_page" not in r}
-    assert rows[1]["r"] == "not_planned"
-    assert rows[2]["r"] == "completed"
+    assert rows[1]["cr"] == "not_planned"
+    assert rows[2]["cr"] == "completed"
+    assert all("r" not in row for row in rows.values()), "the close reason owns its own key; `r` stays the row's repository"
 
 
 def test_the_history_name_is_derived_from_the_repository(tmp_path):

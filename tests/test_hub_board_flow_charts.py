@@ -146,8 +146,8 @@ def test_a_card_closed_as_not_planned_is_no_delivery_and_the_chart_names_it(hub,
     beside the chart's excluded total."""
     hub.board_cache["items"] = [
         _card(1, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-01T15:00:00Z"),
-        {**_card(2, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-02T09:00:00Z"), "r": "not_planned"},
-        {**_card(3, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-03T09:00:00Z"), "r": "not_planned"},
+        {**_card(2, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-02T09:00:00Z"), "cr": "not_planned"},
+        {**_card(3, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-03T09:00:00Z"), "cr": "not_planned"},
     ]
 
     served = hub.board()

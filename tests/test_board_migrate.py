@@ -53,8 +53,8 @@ def test_a_blocked_card_lands_where_its_work_reached_with_the_owner_marker(mig):
 
 def test_a_card_closed_as_not_planned_moves_to_abandoned(mig):
     """#921: the issue closed as NOT_PLANNED was not delivered, so the migration moves its card to Abandoned."""
-    items = [{"n": 11, "st": "Done", "s": "CLOSED", "l": [], "r": "not_planned"},
-             {"n": 12, "st": "Done", "s": "CLOSED", "l": [], "r": "completed"}]
+    items = [{"n": 11, "st": "Done", "s": "CLOSED", "l": [], "cr": "not_planned"},
+             {"n": 12, "st": "Done", "s": "CLOSED", "l": [], "cr": "completed"}]
 
     plan = mig.plan(items)
 

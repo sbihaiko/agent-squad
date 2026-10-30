@@ -64,11 +64,11 @@ def test_abandoned_open_and_no_opened_rows_give_no_dot_and_count_each_reason(lt)
 
 
 def test_a_card_closed_as_not_planned_is_no_dot_and_is_counted_not_planned(lt):
-    # #921: GitHub's NOT_PLANNED verdict (abandoned or duplicate) is no delivery, so it never enters the series.
+    # #921: the hub names a card closed by GitHub as not planned with the chart's own reason, so it never enters the series.
     items = [
         _card(1, 5),
         {**_card(2, 9), "reason": "not_planned"},
-        {**_card(3, 7), "reason": "duplicate"},
+        {**_card(3, 7), "reason": "not_planned"},
     ]
 
     result = lt.lead_time(items)
@@ -76,6 +76,15 @@ def test_a_card_closed_as_not_planned_is_no_dot_and_is_counted_not_planned(lt):
     assert [dot["n"] for dot in result["series"]] == [1]
     assert result["excluded"] == {"not_planned": 2}
     assert result["summary"]["median"]["hours"] == 5.0
+
+
+def test_the_carrier_spelling_never_reaches_the_chart(lt):
+    """The chart reads the hub's own reason word: a carrier spelling the chart does not own (`duplicate`, `reopened`)
+    excludes nothing, because board_columns maps the carrier's vocabulary, not this module."""
+    result = lt.lead_time([{**_card(1, 5), "reason": "duplicate"}, {**_card(2, 7), "reason": "reopened"}])
+
+    assert [dot["n"] for dot in result["series"]] == [1, 2]
+    assert result["excluded"] == {}
 
 
 def test_a_completed_close_is_delivered_whatever_the_reason_field_says(lt):

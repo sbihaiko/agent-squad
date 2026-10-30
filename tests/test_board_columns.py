@@ -77,10 +77,12 @@ def test_the_hub_vocabulary_is_the_table(table, hub):
 
 def test_a_card_closed_as_not_planned_draws_abandoned_whatever_its_status(table):
     """#921: the issue closed as NOT_PLANNED was not delivered, so the board draws it Abandoned (the fact the definition
-    names for that column), never Closed."""
+    names for that column), never Closed. The carrier answers lowercase; the GraphQL enum's uppercase spelling is read
+    too, and `reopened` is a real reason that names no close verdict."""
     assert table.view_column("Closed", True, reason="not_planned") == ("Abandoned", None)
-    assert table.view_column("Closed", True, reason="duplicate") == ("Abandoned", None)
+    assert table.view_column("Closed", True, reason="NOT_PLANNED") == ("Abandoned", None)
     assert table.view_column("Closed", True, reason="completed") == ("Closed", None)
+    assert table.view_column("Closed", True, reason="reopened") == ("Closed", None)
     assert table.view_column("Closed", True) == ("Closed", None), "a read that carries no reason keeps the Status's word"
 
 

@@ -4,6 +4,8 @@ is named option by option, and the dry run reads the fields once and sends no wr
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -121,6 +123,49 @@ def test_migrate_apply_moves_each_card_and_the_read_proves_it(monkeypatch, tmp_p
     assert run(board, monkeypatch, tmp_path, "--migrate", "--apply") == 0
     assert {c["st"] for c in board.cards.values()} == {"Closed", "Doing"}
     assert "done: 2 of 2 move(s) carried" in capsys.readouterr().out
+
+
+def project_item(number, reason):
+    """One item as the REST items read answers it: a closed issue of a/x carrying the Status Done."""
+    return {"id": f"PVT_{number}", "content_type": "Issue",
+            "fields": [{"name": "Status", "value": {"name": {"raw": "Done"}}}],
+            "content": {"number": number, "repository_url": "https://api.github.com/repos/a/x", "title": f"t{number}",
+                        "state": "closed", "state_reason": reason, "labels": [],
+                        "sub_issues_summary": {}, "created_at": "2026-10-01T00:00:00Z"}}
+
+
+ABANDONED_STATUS = [{**STATUS[0], "options": [*STATUS[0]["options"],
+    {"id": "ab", "name": {"raw": "Abandoned"}, "color": "GRAY", "description": {"raw": ""}}]}]
+
+
+class ReadThroughJq(Board):
+    """The applier's read as it really runs: cards()'s own jq over the REST items, so the planner sees the row the
+    carrier's answer produces, never a row the test shaped."""
+
+    def __init__(self, cards, items):
+        super().__init__(cards)
+        self.items = items
+        self.names = {o["id"]: o["name"]["raw"] for o in ABANDONED_STATUS[0]["options"]}
+
+    def api(self, *a, inp=None, timeout=None):
+        if a[0] == "--paginate":
+            program = a[a.index("--jq") + 1]
+            return subprocess.run([shutil.which("jq"), "-cr", program], input=json.dumps(self.items),
+                                  capture_output=True, text=True, check=True).stdout
+        if a[0].endswith("/fields?per_page=100"):
+            return json.dumps(ABANDONED_STATUS)
+        return super().api(*a, inp=inp)
+
+
+def test_the_applier_read_carries_the_close_reason_so_migration_plans_abandoned(monkeypatch, tmp_path, capsys):
+    """#921: the close reason rides the applier's own items read, so `--migrate` moves a card closed as NOT_PLANNED to
+    Abandoned, never to Closed."""
+    if shutil.which("jq") is None: pytest.skip("jq is not installed")
+    board = ReadThroughJq([card(1, "a/x", 5, "Done"), card(2, "a/x", 6, "Done")],
+                          [project_item(5, "not_planned"), project_item(6, "completed")])
+    assert run(board, monkeypatch, tmp_path, "--migrate") == 0
+    out = capsys.readouterr().out
+    assert "MOVE a/x#5 Done -> Abandoned" in out and "MOVE a/x#6 Done -> Closed" in out, out
 
 
 def test_migrate_names_a_move_the_read_does_not_carry(monkeypatch, tmp_path, capsys):
