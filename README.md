@@ -278,7 +278,7 @@ contrib/squad-goal/scripts/export-agent-squad.sh  # the ZIP for upstream
 
 ## License
 
-[MIT](LICENSE). Copyright (c) 2026 Rafael Aguilher da Costa.
+[MIT](LICENSE). Copyright (c) 2026 Rafael Aguilher da Costa and Sandro Bihaiko.
 
 ## Status
 
