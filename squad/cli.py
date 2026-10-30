@@ -75,6 +75,7 @@ def parser():
     pchk.add_argument("--answers", help="the owner's answers, a JSON array of objects; each rewrites the spec and opens the next round")
     pchk.add_argument("--round", dest="round_no", type=int, default=None, help="the round number (default: the next one after the recorded round)")
     pchk.add_argument("--reviewer", help="the model this round ran under: checked against the registry; a no-tools model is refused")
+    pchk.add_argument("--proxy", help="the registry model or 'panel' that answers while the owner is away; it must differ from the reviewer")
     pchk.add_argument("--repo", default="sbihaiko/agent-squad", help="OWNER/NAME of the repository that holds the spec")
     pchk.add_argument("--dry-run", action="store_true", help="print the comment and write nothing")
     su = sub.add_parser("setup", help="print the plan to prepare a project (an ADR index); --apply writes it, only adding")
@@ -179,7 +180,8 @@ def main(argv=None):
             return premise_check.main([str(a.spec), "--findings", a.findings, "--repo", a.repo]
                                       + (["--answers", a.answers] if a.answers else [])
                                       + (["--round", str(a.round_no)] if a.round_no is not None else [])
-                                      + (["--reviewer", a.reviewer] if a.reviewer else []) + (["--dry-run"] if a.dry_run else []))
+                                      + (["--reviewer", a.reviewer] if a.reviewer else [])
+                                      + (["--proxy", a.proxy] if a.proxy else []) + (["--dry-run"] if a.dry_run else []))
         if a.cmd == "config":
             return _config(a)
         if a.cmd == "tailnet":

@@ -23,6 +23,7 @@ The findings are the reviewer's judgment and come from a file; this module is th
     uv run squad premise-check <spec> --findings findings.json                          one round, written to the spec
     uv run squad premise-check <spec> --findings findings.json --answers answers.json   the next round, after answers
     uv run squad premise-check <spec> --findings findings.json --dry-run                print the comment, write nothing
+    uv run squad premise-check <spec> --findings findings.json --answers answers.json --proxy <model>   a proxy's answers that may stand
 """
 import argparse
 import hashlib
@@ -45,6 +46,8 @@ MAX_QUESTIONS = 5
 STATES = ("proven", "refuted", "needs a probe", "decided", "open")
 KINDS = ("fact", "run", "decision")
 ANSWER_KINDS = ("decision", "glossary", "adr")
+PROXY = "proxy"
+PANEL = "panel"
 ENDINGS = ("awaiting answers", "awaiting probes", "blocked", "open risks", "settled", "stopped")
 STALL = "the same refutation repeated with no change in the spec"
 READING = "reading"
@@ -62,11 +65,15 @@ UNKNOWN = ("i don't know", "i do not know", "i dont know", "don't know", "do not
 _CITE = re.compile(r"^(?P<path>[^\s:]+):(?P<start>\d+)(?:-(?P<end>\d+))?$")
 _STATE = re.compile(r"<!-- premise-check-state: round=(?P<round>\d+) body=(?P<sha>[0-9a-f]+) refuted=(?P<refuted>.*?) -->")
 _ANSWER_BLOCK = re.compile(r"\n*" + re.escape(ANSWERS_OPEN) + r"(?P<content>.*?)" + re.escape(ANSWERS_CLOSE) + r"\n*", re.S)
-_ANSWER_LINE = re.compile(r"^- \*\*(?P<premise>.+?)\*\* — (?P<text>.*)$")
+_ANSWER_LINE = re.compile(r"^- \*\*(?P<premise>.+?)\*\* — (?P<text>.*?)(?: \(proxy: (?P<by>[^()]+)\))?$")
 
 
 class NoReviewer(Exception):
     """No model may review this round: none can read the repository, none is in the registry, or the named one is not."""
+
+
+class NoProxy(Exception):
+    """The proxy is the reviewer: a model never answers its own check."""
 
 
 @dataclass(frozen=True)
@@ -81,6 +88,8 @@ class Finding:
     answered_by: str = ""       # who answered that decision
     recommends: str = ""        # the recommended answer of an open decision; "yes" accepts it
     depends_on: str = ""        # the premise of another gap this one waits on
+    owner_only: bool = False    # the question touches an owner-only action: a proxy never answers it
+    breakdown: bool = False     # the question approves a ticket breakdown: a proxy never approves one
 
     @classmethod
     def of(cls, raw) -> "Finding":
@@ -96,7 +105,8 @@ class Finding:
             raise ValueError("a finding needs a premise")
         return cls(premise=premise, kind=kind, proof=str(raw.get("proof") or ""), holds=bool(raw.get("holds", True)),
                    answer=str(raw.get("answer") or ""), answered_by=str(raw.get("answered_by") or ""),
-                   recommends=str(raw.get("recommends") or ""), depends_on=str(raw.get("depends_on") or ""))
+                   recommends=str(raw.get("recommends") or ""), depends_on=str(raw.get("depends_on") or ""),
+                   owner_only=bool(raw.get("owner_only", False)), breakdown=bool(raw.get("breakdown", False)))
 
 
 @dataclass(frozen=True)
@@ -111,6 +121,7 @@ class Answer:
     definition: str = ""        # glossary: what the term means
     title: str = ""             # adr: the decision's one-line title
     decision: str = ""          # adr: the durable decision it records
+    confident: bool = False     # a proxy answer stands only when the proxy is confident
 
     @property
     def text(self) -> str:
@@ -120,6 +131,14 @@ class Answer:
         if self.kind == "adr":
             return self.title
         return self.answer
+
+    @property
+    def by_proxy(self) -> bool:
+        return self.answered_by == PROXY or self.answered_by.startswith(f"{PROXY}: ")
+
+    @property
+    def proxy_id(self) -> str:
+        return self.answered_by.partition(": ")[2] if self.by_proxy else ""
 
     @classmethod
     def of(cls, raw) -> "Answer":
@@ -136,7 +155,8 @@ class Answer:
         answer = cls(premise=premise, answer=str(raw.get("answer") or ""),
                      answered_by=str(raw.get("answered_by") or "owner"), kind=kind,
                      term=str(raw.get("term") or ""), definition=str(raw.get("definition") or ""),
-                     title=str(raw.get("title") or ""), decision=str(raw.get("decision") or ""))
+                     title=str(raw.get("title") or ""), decision=str(raw.get("decision") or ""),
+                     confident=bool(raw.get("confident", False)))
         if kind == "decision" and not answer.answer:
             raise ValueError(f"the answer to {premise!r} is empty")
         if kind == "glossary" and not (answer.term and answer.definition):
@@ -358,8 +378,8 @@ def upsert(github, spec: int, body: str) -> str:
 
 # --- an owner answer: the spec body, the glossary, the ADRs -------------------------------------------------
 
-def _recorded_answers(body: str) -> list[tuple[str, str]]:
-    """The answers a previous round wrote into the spec body, in the order the block carries them."""
+def _recorded_answers(body: str) -> list[tuple[str, str, str]]:
+    """The answers a previous round wrote into the spec body: premise, text, and the proxy that answered ("" for the owner)."""
     m = _ANSWER_BLOCK.search(body or "")
     if not m:
         return []
@@ -367,7 +387,7 @@ def _recorded_answers(body: str) -> list[tuple[str, str]]:
     for line in m["content"].splitlines():
         hit = _ANSWER_LINE.match(line.strip())
         if hit:
-            out.append((hit["premise"].strip(), hit["text"].strip()))
+            out.append((hit["premise"].strip(), hit["text"].strip(), (hit["by"] or "").strip()))
     return out
 
 
@@ -378,14 +398,15 @@ def apply_answers(body: str, answers) -> str:
         return body
     merged = _recorded_answers(body)     # the block is the spec's memory: a later round never drops an earlier answer
     for a in answers:
-        for i, (premise, _) in enumerate(merged):
+        for i, (premise, _, _) in enumerate(merged):
             if premise == a.premise:
-                merged[i] = (a.premise, a.text)
+                merged[i] = (a.premise, a.text, a.proxy_id)
                 break
         else:
-            merged.append((a.premise, a.text))
+            merged.append((a.premise, a.text, a.proxy_id))
     base = _ANSWER_BLOCK.sub("\n\n", body or "").rstrip()
-    block = [ANSWERS_OPEN, ANSWERS_HEADING, ""] + [f"- **{p}** — {t}" for p, t in merged] + [ANSWERS_CLOSE]
+    block = [ANSWERS_OPEN, ANSWERS_HEADING, ""] + \
+            [f"- **{p}** — {t}" + (f" ({PROXY}: {by})" if by else "") for p, t, by in merged] + [ANSWERS_CLOSE]
     return base + "\n\n" + "\n".join(block) + "\n"
 
 
@@ -505,9 +526,11 @@ class Report:
 
 
 def run_round(spec: int, findings, answers=(), *, github, root=None, round_no: int | None = None,
-              who: Reviewer, dry_run: bool = False) -> Report:
+              who: Reviewer, dry_run: bool = False, proxy: Reviewer | None = None) -> Report:
     """One round after the owner's answers: rewrite the spec body, fold the answers in, and record the round."""
     root = Path(root) if root is not None else ROOT
+    if proxy is not None and proxy.id == who.id:
+        raise NoProxy(f"{proxy.id} is the reviewer, so it never answers its own check")
     answers = [Answer.of(a) for a in answers]
     found, before, body = None, None, ""
     if github is not None:             # a dry run reads the round it would write, and writes nothing
@@ -516,6 +539,8 @@ def run_round(spec: int, findings, answers=(), *, github, root=None, round_no: i
         body = (github("issue", number=spec) or {}).get("body") or ""
     if round_no is None:
         round_no = (before["round"] + 1) if before else 1
+    owner_decided = {premise for premise, _, by in _recorded_answers(body) if not by}
+    answers = proxied(answers, findings, proxy, owner_decided)
     rows = check(merge_answers(findings, answers))
     new_body = apply_answers(body, answers)
     applied = new_body != body
@@ -574,6 +599,40 @@ def reviewer(models=None, reg=None, shared=None, hour=None) -> Reviewer:
     raise NoReviewer("no model in the review chain can review now: " + "; ".join(skipped))
 
 
+def proxy_named(raw: str, reg=None) -> Reviewer:
+    """The proxy the run names: the autonomy panel, or a registry model that can read the repository."""
+    if raw == PANEL:
+        return Reviewer(id=PANEL, label="autonomy panel", wire=PANEL, route=PANEL)
+    return named(raw, reg)
+
+
+def _may_proxy(a: Answer, f: Finding | None) -> bool:
+    """Only a confident decision the owner did not reserve; an unknown premise passes so `merge_answers` names it."""
+    if f is None:
+        return True
+    return a.kind == "decision" and a.confident and not (f.owner_only or f.breakdown)
+
+
+def proxied(answers, findings, proxy: Reviewer | None, owner_decided=frozenset()) -> list[Answer]:
+    """The answers that stand: an owner answer always wins, and a proxy answer stands only where the proxy may answer it."""
+    answers = [Answer.of(a) for a in answers]
+    if not any(a.by_proxy for a in answers):
+        return answers
+    if proxy is None:
+        raise ValueError("a proxy answer needs --proxy: with no proxy named, every question waits for the owner")
+    owned = set(owner_decided) | {a.premise for a in answers if not a.by_proxy}
+    gates = {f.premise: f for f in (Finding.of(raw) for raw in findings)}
+    out = []
+    for a in answers:
+        if not a.by_proxy:
+            out.append(a)
+        elif a.premise in owned or not _may_proxy(a, gates.get(a.premise)):
+            continue
+        else:
+            out.append(replace(a, answered_by=f"{PROXY}: {proxy.id}"))
+    return out
+
+
 # --- the real GitHub runner --------------------------------------------------------------------------------
 
 def _sh(args, **kw):
@@ -622,6 +681,7 @@ def parser():
     p.add_argument("--answers", help="the owner's answers, a JSON array of objects; each rewrites the spec and opens the next round")
     p.add_argument("--round", dest="round_no", type=int, default=None, help="the round number; the next one after the recorded round by default")
     p.add_argument("--reviewer", help="the model this round actually ran under: checked against the registry")
+    p.add_argument("--proxy", help="the registry model or 'panel' that answers while the owner is away; it must differ from the reviewer")
     p.add_argument("--repo", default="sbihaiko/agent-squad", help="OWNER/NAME of the repository that holds the spec")
     p.add_argument("--root", default=None, help="the checkout that holds the spec's repository; the durable records go there")
     p.add_argument("--dry-run", action="store_true", help="print the comment the round would post, and write nothing")
@@ -634,11 +694,12 @@ def main(argv=None) -> int:
         findings = json.loads(Path(a.findings).read_text())
         answers = json.loads(Path(a.answers).read_text()) if a.answers else []
         who = named(a.reviewer) if a.reviewer else reviewer()
+        proxy = proxy_named(a.proxy) if a.proxy else None
         root = artifact_root(a.repo, a.root)
         github = rest_runner(a.repo)     # a dry run reads the round it would write, and writes nothing
         report = run_round(a.spec, findings, answers, github=github, root=root, round_no=a.round_no,
-                           who=who, dry_run=a.dry_run)
-    except (OSError, ValueError, NoReviewer) as e:
+                           who=who, dry_run=a.dry_run, proxy=proxy)
+    except (OSError, ValueError, NoReviewer, NoProxy) as e:
         print(f"premise-check: {e}", file=sys.stderr)
         return 2
     if a.dry_run:

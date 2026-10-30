@@ -581,3 +581,104 @@ def test_the_skill_names_the_answers_input_and_the_end_states():
     assert "rewrite the spec body" in text or "rewrites the spec body" in text
     assert "ADR-0142" in text         # the round still never starts the spec's tickets
     assert "draft" in text and "CLAUDE.md" in text      # a generated ADR is a draft and gets no rule line
+
+
+# --- a proxy answers while the owner is away; an owner answer always wins --------------------------------------
+
+DECISION = {"premise": "the format", "kind": "decision", "recommends": "a table"}
+
+
+def proxy_answer(premise, answer="one table", **kw):
+    base = {"premise": premise, "answer": answer, "answered_by": "proxy", "confident": True}
+    base.update(kw)
+    return base
+
+
+def proxied_round(tmp_path, gh, *findings, answers=(), proxy=None, round_no=1):
+    return pc.run_round(878, [pc.Finding.of(f) for f in findings], answers, github=gh, root=tmp_path,
+                        round_no=round_no, who=reviewer(), proxy=proxy)
+
+
+def test_a_proxy_equal_to_the_reviewer_is_refused(tmp_path):
+    gh = StubRepo("# Spec\n")
+    with pytest.raises(pc.NoProxy, match="claude-opus-5-5"):
+        proxied_round(tmp_path, gh, DECISION, proxy=pc.proxy_named("opus"))
+    assert not {"comment", "update_comment", "update_issue"} & set(gh.calls)
+
+
+def test_every_proxy_answer_carries_its_model_id(tmp_path):
+    gh = StubRepo("# Spec\n")
+    report = proxied_round(tmp_path, gh, DECISION, answers=[proxy_answer("the format")], proxy=pc.proxy_named("sonnet"))
+    row = report.rows[0]
+    assert row.state == "decided" and row.answered_by == "proxy: claude-sonnet-5-5"
+    assert "| proxy: claude-sonnet-5-5 |" in report.body
+    assert "- **the format** — one table (proxy: claude-sonnet-5-5)" in gh.issue["body"]
+
+
+def test_an_owner_answer_overrides_a_proxy_answer_for_the_same_premise(tmp_path):
+    gh = StubRepo("# Spec\n")
+    owner = {"premise": "the format", "answer": "a list"}
+    report = proxied_round(tmp_path, gh, DECISION, answers=[proxy_answer("the format"), owner], proxy=pc.proxy_named("sonnet"))
+    row = report.rows[0]
+    assert row.answered_by == "owner" and row.detail == "a list"
+    assert "proxy" not in gh.issue["body"]
+
+
+def test_a_later_proxy_answer_never_replaces_an_owner_answer_in_the_spec(tmp_path):
+    gh = StubRepo("# Spec\n")
+    proxied_round(tmp_path, gh, DECISION, answers=[{"premise": "the format", "answer": "a list"}], round_no=1)
+    report = proxied_round(tmp_path, gh, DECISION, answers=[proxy_answer("the format", "a table")],
+                           proxy=pc.proxy_named("sonnet"), round_no=2)
+    assert "- **the format** — a list" in gh.issue["body"]
+    assert "a table" not in gh.issue["body"]
+    assert report.rows[0].state == "open" and report.rows[0].answered_by != "proxy: claude-sonnet-5-5"
+
+
+def test_a_proxy_never_answers_a_question_that_touches_an_owner_only_action(tmp_path):
+    gh = StubRepo("# Spec\n")
+    report = proxied_round(tmp_path, gh, dict(DECISION, owner_only=True), answers=[proxy_answer("the format")],
+                           proxy=pc.proxy_named("sonnet"))
+    assert report.rows[0].state == "open" and report.rows[0].question == 1
+    assert "update_issue" not in gh.calls
+
+
+def test_a_proxy_never_approves_a_breakdown(tmp_path):
+    gh = StubRepo("# Spec\n")
+    finding = {"premise": "the breakdown into tickets", "kind": "decision", "recommends": "approve", "breakdown": True}
+    report = proxied_round(tmp_path, gh, finding, answers=[proxy_answer("the breakdown into tickets", "approve")],
+                           proxy=pc.proxy_named("sonnet"))
+    assert report.rows[0].state == "open" and report.rows[0].question == 1
+    assert "update_issue" not in gh.calls
+
+
+def test_an_unconfident_proxy_answer_leaves_the_question_open(tmp_path):
+    gh = StubRepo("# Spec\n")
+    report = proxied_round(tmp_path, gh, DECISION, answers=[proxy_answer("the format", confident=False)],
+                           proxy=pc.proxy_named("sonnet"))
+    assert report.rows[0].state == "open" and report.rows[0].question == 1
+
+
+def test_with_no_proxy_set_every_question_waits_for_the_owner(tmp_path):
+    gh = StubRepo("# Spec\n")
+    report = proxied_round(tmp_path, gh, DECISION)
+    assert report.rows[0].state == "open" and report.rows[0].question == 1
+    with pytest.raises(ValueError, match="needs --proxy"):
+        proxied_round(tmp_path, gh, DECISION, answers=[proxy_answer("the format")])
+    assert "update_issue" not in gh.calls
+
+
+def test_the_autonomy_panel_is_a_named_proxy(tmp_path):
+    gh = StubRepo("# Spec\n")
+    report = proxied_round(tmp_path, gh, DECISION, answers=[proxy_answer("the format")], proxy=pc.proxy_named("panel"))
+    assert report.rows[0].answered_by == "proxy: panel"
+
+
+def test_the_command_takes_a_proxy():
+    assert pc.parser().parse_args(["878", "--findings", "f.json", "--proxy", "sonnet"]).proxy == "sonnet"
+    assert pc.parser().parse_args(["878", "--findings", "f.json"]).proxy is None
+
+
+def test_the_squad_command_forwards_a_proxy_to_the_round():
+    from squad import cli
+    a = cli.parser().parse_args(["premise-check", "878", "--findings", "f.json", "--proxy", "sonnet"])
+    assert a.proxy == "sonnet"
