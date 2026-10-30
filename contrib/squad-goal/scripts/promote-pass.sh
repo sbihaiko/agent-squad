@@ -57,8 +57,21 @@ cores=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 1)
 limit=${SG_PROMOTE_LOAD_LIMIT:-$cores}
 load1=$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}' | tr -d '{}')
 load1=${load1:-$(cut -d' ' -f1 /proc/loadavg 2>/dev/null)}; load1=${load1:-0}
-if /usr/bin/grep -q . "$live" 2>/dev/null || awk -v l="$load1" -v m="$limit" 'BEGIN { exit !(l + 0 >= m + 0) }'; then
-  l="promote-pass: $tip not proven: machine loaded (load $load1 on $cores cores, limit $limit, $(/usr/bin/grep -c . "$live" 2>/dev/null || echo 0) live runs)"
+# A listed run is live while its own record moves, or while it has no verdict yet (#944): the ledger keeps a run with a verdict
+# until its issue closes, and a failed run leaves its issue open, so reading the file's line count held every proof on a busy
+# loop and stg fell further behind dev each hour. A line the pass cannot resolve is still read as live, the safe way.
+mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
+now=$(date +%s); idle=${SG_PROMOTE_LIVE_IDLE:-1200}; nlive=0
+while IFS= read -r r; do
+  [ -n "$r" ] || continue
+  [ -d "$r" ] || { nlive=$((nlive + 1)); continue; }
+  f=$r/record.jsonl
+  [ -f "$f" ] || { nlive=$((nlive + 1)); continue; }
+  /usr/bin/grep -q '"verdict"' "$f" 2>/dev/null || { nlive=$((nlive + 1)); continue; }
+  [ $((now - $(mtime "$f"))) -lt "$idle" ] && nlive=$((nlive + 1))
+done < "$live" 2>/dev/null
+if [ "$nlive" -gt 0 ] || awk -v l="$load1" -v m="$limit" 'BEGIN { exit !(l + 0 >= m + 0) }'; then
+  l="promote-pass: $tip not proven: machine loaded (load $load1 on $cores cores, limit $limit, $nlive live runs)"
   echo "$(date -u +%FT%TZ) $l" >> "$log"; echo "$l"; exit 0
 fi
 [ -d "$tree/.git" ] || { mkdir -p "$tree" && g init -q . && g remote add origin "$remote"; } || exit 1

@@ -118,6 +118,16 @@ printf '\n' > "$SG_STATE/active-runs.txt"; pass; rc=$?
 [ $rc = 0 ] && [ "$(tip stg)" = "$t7" ] && ok "an active-runs file of blank lines is no live run" || ko "a blank line held the promotion: rc $rc, stg $(tip stg), dev $t7"
 pass; rc=$?
 [ $rc = 0 ] && [ "$(tip stg)" = "$t7" ] && ok "the same tip is proved once the machine is free" || ko "retry after load: rc $rc, stg $(tip stg)"
+# (#944) The ledger keeps a run with a verdict until its issue closes, and a failed run leaves its issue open, so a busy loop
+# never reaches an empty file. A listed run whose record has not moved for the live window and that already recorded a verdict
+# is over: it holds no load, so it holds no proof. A line the pass cannot resolve is still read as live, the safe way.
+mkdir -p "$T/deadrun"; printf '{"event":"verdict","verdict":"failed"}\n' > "$T/deadrun/record.jsonl"
+touch -t 202001010000 "$T/deadrun/record.jsonl"; git -C "$R" update-ref refs/heads/stg "$(tip dev)"
+adv dev deadrun; t8=$(tip dev); printf '%s\n' "$T/deadrun" > "$SG_STATE/active-runs.txt"; n=$(runs); pass; rc=$?
+[ $rc = 0 ] && [ "$(runs)" -gt "$n" ] && ok "a listed run that is over holds no proof" || ko "an over run held the proof: rc $rc, runs $(runs), dev $t8"
+printf '%s\n' "$T/deadrun" "$T" > "$SG_STATE/active-runs.txt"; n=$(runs); git -C "$R" update-ref refs/heads/stg "$(tip dev)"; adv dev unresolvable; pass; rc=$?
+[ $rc = 0 ] && [ "$(runs)" = "$n" ] && ok "a line the pass cannot resolve is read as live" || ko "an unresolvable line let the proof run: rc $rc, runs $(runs)"
+rm -f "$SG_STATE/active-runs.txt"
 /usr/bin/grep -q -- '-n auto' "$d/promote-pass.sh" && ko "the default suite still takes every core (-n auto)" || ok "the default suite bounds its workers (#738)"
 /usr/bin/grep -q 'sg_battery_workers' "$d/promote-pass.sh" && ok "the worker count comes from the one machine bound" || ko "promote-pass.sh carries its own worker count"
 
