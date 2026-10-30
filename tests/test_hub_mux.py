@@ -191,15 +191,18 @@ def test_an_ended_run_link_in_a_page_and_its_redirect_carry_their_repository():
         def redirect_request(self, *a, **k):
             return None
 
+    code, loc = None, None
     try:
         _, page = _get(base + "/alpha/mobile")
         try:
-            urllib.request.build_opener(NoFollow).open(base + "/alpha/ended/r1")
+            with urllib.request.build_opener(NoFollow).open(base + "/alpha/ended/r1") as r:
+                code = r.status
         except urllib.error.HTTPError as e:
-            loc = e.headers["Location"]
+            code, loc = e.code, e.headers.get("Location")
     finally:
         srv.shutdown()
     assert '"/alpha/ended/" + id' in page, page
+    assert code == 302, code
     assert loc == "/alpha/dash/r1/", loc
 
 
@@ -214,12 +217,11 @@ def test_a_real_profile_opens_its_ended_run_behind_the_prefix(tmp_path, monkeypa
     run = t / "co-alpha" / "runs" / "run-ended-1"
     run.mkdir(parents=True)
     now = datetime.datetime.now()
-    noon = datetime.datetime.combine(now.date(), datetime.time(12, 0)).timestamp()
-    if now.timestamp() < noon:
-        noon = now.timestamp() - 60   # before noon: a verdict a minute ago is still today
+    midnight = datetime.datetime.combine(now.date(), datetime.time(0, 0)).timestamp()
+    ended = max(now.timestamp() - 60, midnight + 1)   # a minute ago, but never before today's local midnight
     (run / "record.jsonl").write_text("".join(json.dumps(e) + "\n" for e in (
-        {"ts": noon - 3600, "event": "run_start", "pos": 1},
-        {"ts": noon, "event": "verdict", "verdict": "completed", "reasons": [], "exit_code": 0, "pos": 2})))
+        {"ts": ended - 1, "event": "run_start", "pos": 1},
+        {"ts": ended, "event": "verdict", "verdict": "completed", "reasons": [], "exit_code": 0, "pos": 2})))
     monkeypatch.setenv("SG_PROFILES_DIR", str(prof))
     monkeypatch.setenv("SG_STATE_BASE", str(base))
     spec = importlib.util.spec_from_file_location("hubmux_ended_real", SCRIPTS / "hubmux.py")
