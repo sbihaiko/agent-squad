@@ -174,6 +174,16 @@ def test_counts_key_by_kind_and_column_and_a_frozen_card_stays_in_its_column(hub
     assert s["none"] == 0
 
 
+def test_a_card_closed_as_not_planned_counts_in_abandoned_not_closed(hub, board, monkeypatch):
+    """#921: the flow sample counts a card closed as NOT_PLANNED with Status Closed in Abandoned, so the CFD's Closed
+    band and its throughput leave it out of delivered work."""
+    cards = [_card(1, st="Closed", s="CLOSED"),
+             {**_card(2, st="Closed", s="CLOSED"), "r": "not_planned"},
+             {**_card(3, st="Closed", s="CLOSED"), "r": "completed"}]
+    _pass(hub, monkeypatch, cards)
+    assert _samples(board)[-1]["counts"] == {"issue": {"Abandoned": 1, "Closed": 2}}
+
+
 def test_each_cached_card_row_carries_its_opened_time(hub, board, monkeypatch):
     open_only = {"n": 12, "t": "open only", "s": "OPEN", "c": None, "st": None, "l": [],
                  "si": {"total": None, "completed": None}, "o": "2026-10-02T09:00:00Z"}
@@ -451,6 +461,25 @@ def test_the_items_jq_answers_one_page_count_per_page(hub, tmp_path):
     lines = [json.loads(line) for line in out.splitlines()]
     assert lines[-1] == {"_page": 100}
     assert sum(1 for line in lines if "_page" not in line) == 100
+
+
+def test_the_items_read_carries_the_close_reason_so_no_card_is_read_again(hub, tmp_path):
+    """#921: the charts tell a delivered card from one closed as not planned, and the items read already answers
+    `state_reason` on the issue content, so the reason rides the same read."""
+    jq = shutil.which("jq")
+    if jq is None:
+        pytest.skip("jq is not installed")
+    def item(n, reason):
+        return {"content_type": "Issue", "id": f"PVT_{n}", "fields": [],
+                "content": {"number": n, "repository_url": "https://api.github.com/repos/x/y", "title": f"t{n}",
+                            "state": "CLOSED", "state_reason": reason, "closed_at": "2026-10-02T00:00:00Z",
+                            "labels": [], "sub_issues_summary": {}, "created_at": OPENED}}
+    src = tmp_path / "items.json"
+    src.write_text(json.dumps([item(1, "not_planned"), item(2, "completed")]))
+    out = subprocess.run([jq, "-c", hub.board_items_jq("x/y"), str(src)], capture_output=True, text=True, check=True).stdout
+    rows = {r["n"]: r for r in (json.loads(line) for line in out.splitlines()) if "_page" not in r}
+    assert rows[1]["r"] == "not_planned"
+    assert rows[2]["r"] == "completed"
 
 
 def test_the_history_name_is_derived_from_the_repository(tmp_path):

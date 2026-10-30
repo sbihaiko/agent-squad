@@ -63,6 +63,28 @@ def test_abandoned_open_and_no_opened_rows_give_no_dot_and_count_each_reason(lt)
     assert result["excluded"] == {"abandoned": 1, "open": 2, "no_opened": 1}
 
 
+def test_a_card_closed_as_not_planned_is_no_dot_and_is_counted_not_planned(lt):
+    # #921: GitHub's NOT_PLANNED verdict (abandoned or duplicate) is no delivery, so it never enters the series.
+    items = [
+        _card(1, 5),
+        {**_card(2, 9), "reason": "not_planned"},
+        {**_card(3, 7), "reason": "duplicate"},
+    ]
+
+    result = lt.lead_time(items)
+
+    assert [dot["n"] for dot in result["series"]] == [1]
+    assert result["excluded"] == {"not_planned": 2}
+    assert result["summary"]["median"]["hours"] == 5.0
+
+
+def test_a_completed_close_is_delivered_whatever_the_reason_field_says(lt):
+    result = lt.lead_time([{**_card(1, 5), "reason": "completed"}])
+
+    assert [dot["n"] for dot in result["series"]] == [1]
+    assert result["excluded"] == {}
+
+
 def test_dots_sort_by_close_time_not_input_order(lt):
     items = [_card(1, 30), _card(2, 10), _card(3, 20)]
 

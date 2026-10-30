@@ -75,6 +75,15 @@ def test_the_hub_vocabulary_is_the_table(table, hub):
         "the page's colour map is not the table's, so a column wears a colour of its own"
 
 
+def test_a_card_closed_as_not_planned_draws_abandoned_whatever_its_status(table):
+    """#921: the issue closed as NOT_PLANNED was not delivered, so the board draws it Abandoned (the fact the definition
+    names for that column), never Closed."""
+    assert table.view_column("Closed", True, reason="not_planned") == ("Abandoned", None)
+    assert table.view_column("Closed", True, reason="duplicate") == ("Abandoned", None)
+    assert table.view_column("Closed", True, reason="completed") == ("Closed", None)
+    assert table.view_column("Closed", True) == ("Closed", None), "a read that carries no reason keeps the Status's word"
+
+
 def test_the_hub_names_no_column_literal_of_its_own(columns):
     source = HUB_PY.read_text()
 

@@ -51,6 +51,17 @@ def test_a_blocked_card_lands_where_its_work_reached_with_the_owner_marker(mig):
     assert _move(plan, 4)["new"] == "Backlog"
 
 
+def test_a_card_closed_as_not_planned_moves_to_abandoned(mig):
+    """#921: the issue closed as NOT_PLANNED was not delivered, so the migration moves its card to Abandoned."""
+    items = [{"n": 11, "st": "Done", "s": "CLOSED", "l": [], "r": "not_planned"},
+             {"n": 12, "st": "Done", "s": "CLOSED", "l": [], "r": "completed"}]
+
+    plan = mig.plan(items)
+
+    assert _move(plan, 11)["new"] == "Abandoned"
+    assert _move(plan, 12)["new"] == "Closed"
+
+
 def test_merging_and_landing_take_their_shipped_name_pushing(mig):
     plan = mig.plan(ITEMS)
 

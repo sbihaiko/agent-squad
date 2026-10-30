@@ -141,6 +141,42 @@ def test_lead_time_summary_measure_window_and_excluded_count(hub, board):
     assert lead["excluded_total"] == 1
 
 
+def test_a_card_closed_as_not_planned_is_no_delivery_and_the_chart_names_it(hub, board):
+    """#921: a card closed as NOT_PLANNED with Status Closed draws Abandoned, is no lead-time dot, and its count is named
+    beside the chart's excluded total."""
+    hub.board_cache["items"] = [
+        _card(1, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-01T15:00:00Z"),
+        {**_card(2, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-02T09:00:00Z"), "r": "not_planned"},
+        {**_card(3, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-03T09:00:00Z"), "r": "not_planned"},
+    ]
+
+    served = hub.board()
+
+    assert [p["n"] for p in served["flow"]["lead"]["series"]] == [1]
+    assert served["flow"]["lead"]["summary"]["median"]["text"] == "6h"
+    assert served["flow"]["lead"]["excluded"] == [{"reason": "not_planned", "count": 2}]
+    assert served["flow"]["lead"]["excluded_total"] == 2
+    abandoned = next(g for g in served["groups"] if g["name"] == "Abandoned")
+    assert [r["n"] for r in abandoned["items"]] == [2, 3], "a card closed as not planned is drawn Abandoned, never Closed"
+    closed = next(g for g in served["groups"] if g["name"] == hub.COLUMN["issue_closed"])
+    assert [r["n"] for r in closed["items"]] == [1]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_lead_time_chart_names_the_cards_closed_as_not_planned(hub, tmp_path):
+    block = _flow_block(hub).split("const drawFlow")[0]
+    drawing = "\n".join([
+        "const COLORS={},COLNAME={};", "const esc=s=>String(s);", block,
+        'process.stdout.write(flowLead({measure:"opened -> closed",window:{size:20,unit:"issues"},'
+        'excluded:[{reason:"not_planned",count:3}],excluded_total:3,series:[],summary:null}));',
+    ])
+    path = tmp_path / "flow-lead-not-planned.js"
+    path.write_text(drawing)
+    result = subprocess.run(["node", str(path)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert "3 closed as not planned" in result.stdout
+
+
 def test_opening_the_diagrams_makes_no_gh_call(hub, board, monkeypatch):
     board_cache = hub.board_cache
     board_cache["items"] = [_card(1, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-02T09:00:00Z")]
