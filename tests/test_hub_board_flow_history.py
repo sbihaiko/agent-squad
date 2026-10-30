@@ -17,6 +17,13 @@ DAY = 86400
 OPENED = "2026-10-01T09:00:00Z"
 
 
+def _load(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def _load_hub(tag):
     spec = importlib.util.spec_from_file_location(f"hub_flow_{tag}", HUB_PY)
     mod = importlib.util.module_from_spec(spec)
@@ -93,8 +100,8 @@ def _pass(hub, monkeypatch, cards=(), open_issues=(), fail=False):
     return calls
 
 
-def _flow(board):
-    return board.with_name("hub-flow.jsonl")
+def _flow(board, repo="x_y"):
+    return board.with_name(f"hub-flow.{repo}.jsonl")
 
 
 def _samples(board):
@@ -163,7 +170,7 @@ def test_samples_older_than_thirty_days_keep_one_per_utc_day_and_newer_ones_stay
     d0 = day0.timestamp()
     old = [d0 + 1 * HOUR, d0 + 5 * HOUR, d0 + 20 * HOUR, d0 + DAY + 2 * HOUR, d0 + DAY + 3 * HOUR]
     recent = [now - 2 * DAY, now - HOUR]
-    seeded = [_sample(t, {"issue": {"Todo": 9}}) for t in old + recent]
+    seeded = [_sample(t, {"issue": {"Todo": 1}}) for t in old + recent]
     _flow(board).write_text("".join(json.dumps(s) + "\n" for s in seeded))
     _pass(hub, monkeypatch, [_card(1, st="Todo")])
     samples = _samples(board)
@@ -195,6 +202,77 @@ def test_the_history_file_sits_beside_the_board_cache_of_each_profile(tmp_path, 
     assert histories["a"] != histories["b"]
     assert [s["counts"] for s in _samples(base / "a" / "cache" / "hub-board.json")] == [{"issue": {"Todo": 1}}]
     assert [s["counts"] for s in _samples(base / "b" / "cache" / "hub-board.json")] == [{"issue": {"Doing": 1}}]
+
+
+def _load_flow():
+    spec = importlib.util.spec_from_file_location("board_flow_history_under_test", FLOW_PY)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _rows(total, column="Todo"):
+    return [_card(n, st=column) for n in range(1, total + 1)]
+
+
+def test_two_repositories_on_one_board_write_two_histories(tmp_path, monkeypatch):
+    cache = tmp_path / "cache" / "hub-board.json"
+    cache.parent.mkdir()
+    base = tmp_path / "profiles"
+    for name in ("checkout", "state", "hub"):
+        (base / name).mkdir(parents=True)
+    monkeypatch.setenv("SG_OWNER", "x")
+    monkeypatch.setenv("SG_PROJECT", "5")
+    monkeypatch.setenv("SG_CHECKOUT", str(base / "checkout"))
+    monkeypatch.setenv("SG_STATE", str(base / "state"))
+    monkeypatch.setenv("SG_HUB_DIR", str(base / "hub"))
+    monkeypatch.setenv("SG_BOARD_CACHE", str(cache))
+    reads = {"x/alpha": _rows(3), "x/beta": _rows(1, column="Doing")}
+    for repo, rows in reads.items():
+        monkeypatch.setenv("SG_REPO", repo)
+        mod = _load_hub(repo.split("/")[1])
+        monkeypatch.setattr(mod, "board_cache", {"t": 1.0, "items": [], "prs": [], "lc": {}, "err": None})
+        _pass(mod, monkeypatch, rows)
+    assert not cache.with_name("hub-flow.jsonl").exists(), "no shared history is written"
+    assert [s["counts"] for s in _samples(_flow(cache, "x_alpha"))] == [{"issue": {"Todo": 3}}]
+    assert [s["counts"] for s in _samples(_flow(cache, "x_beta"))] == [{"issue": {"Doing": 1}}]
+
+
+def test_a_truncated_read_is_not_appended_and_its_reason_is_kept(hub, board, monkeypatch):
+    _pass(hub, monkeypatch, _rows(9))
+    _pass(hub, monkeypatch, _rows(1))
+    assert len(_samples(board)) == 1, "a read far under the last sample is not a sample"
+    records = [json.loads(line) for line in _flow(board).read_text().splitlines() if '"flow_skip"' in line]
+    assert len(records) == 1
+    assert set(records[0]) == {"flow_skip", "t", "reason"}
+    assert records[0]["flow_skip"] == 1 and records[0]["reason"]
+
+
+def test_a_short_read_that_repeats_the_next_pass_is_accepted(hub, board, monkeypatch):
+    _pass(hub, monkeypatch, _rows(9))
+    _pass(hub, monkeypatch, _rows(1))
+    _pass(hub, monkeypatch, _rows(1))
+    assert [s["counts"] for s in _samples(board)] == [{"issue": {"Todo": 9}}, {"issue": {"Todo": 1}}]
+    assert sum('"flow_skip"' in line for line in _flow(board).read_text().splitlines()) == 1
+
+
+def test_the_cfd_of_a_history_with_a_skipped_read_has_no_tooth(board):
+    flow = _load_flow()
+    cfd = _load("board_cfd_tooth", SCRIPTS / "board_cfd.py").cfd
+    path = _flow(board)
+    day = datetime(2026, 10, 20, 12, tzinfo=UTC).timestamp()
+    flow.append(path, _rows(9), now=day)
+    flow.append(path, _rows(1), now=day + DAY)
+    flow.append(path, _rows(9, column="Doing"), now=day + 2 * DAY)
+    result = cfd(flow.samples(path), ["Todo", "Doing", "Closed"])
+    assert [p["wip"] for p in result["points"]] == [9, 9]
+    assert [p["day"] for p in result["points"]] == ["2026-10-20", "2026-10-22"]
+
+
+def test_the_history_name_is_derived_from_the_repository(tmp_path):
+    flow = _load_flow()
+    assert flow.history_path(tmp_path / "hub-board.json", "sbihaiko/agent-squad") == tmp_path / "hub-flow.sbihaiko_agent-squad.jsonl"
+    assert flow.history_path(tmp_path / "hub-board.json", "x/y") != flow.history_path(tmp_path / "hub-board.json", "x/z")
 
 
 def test_the_flow_module_imports_no_hub_and_no_github_code():

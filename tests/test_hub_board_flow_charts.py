@@ -63,8 +63,8 @@ def _sample(day, counts, frozen=0, none=0):
     return {"t": int(datetime(2026, 10, day, 12, tzinfo=UTC).timestamp()), "counts": counts, "frozen": frozen, "none": none}
 
 
-def _history(directory, samples):
-    (directory / "hub-flow.jsonl").write_text("".join(json.dumps(s) + "\n" for s in samples))
+def _history(directory, samples, repo="x_y"):
+    (directory / f"hub-flow.{repo}.jsonl").write_text("".join(json.dumps(s) + "\n" for s in samples))
 
 
 def _flow_block(hub):
@@ -105,6 +105,13 @@ def test_cfd_band_extents_are_the_board_cfd_counts(hub, board):
     assert backlog["upper"][0] - backlog["lower"][0] == 2
     assert closed["upper"][0] - closed["lower"][0] == 1
     assert closed["lower"][0] == 0
+
+
+def test_another_repositorys_history_is_not_drawn(hub, board):
+    _history(board, [_sample(1, {"issue": {hub.COLUMN["unscheduled"]: 5}})], repo="x_other")
+    cfd = hub.board()["flow"]["cfd"]
+    assert cfd["start"] is None
+    assert cfd["bands"] == []
 
 
 def test_no_history_file_says_no_sample_and_draws_no_band(hub, board):
