@@ -118,6 +118,12 @@ def free_never_started(f):   # drop auto/bug-<n> and auto/disp-<n> for the issue
     for n in sorted(nums, key=int):
         marks = [m for m in (st / "auto" / f"{kind}-{n}" for kind in ("bug", "disp")) if owns(f, None, m)]
         if not marks: continue   # nothing this run's request dispatched: not ours to free, and no comment
+        if issue_read(n)[0] == "closed":   # a closed issue is never dispatched again: its stale marker goes with no retry and no comment, so nothing re-arms it (#868)
+            say(f"NEVER-STARTED #{n}: its issue is closed; {'+'.join(m.name for m in marks)} released, no retry")
+            if not dry:
+                for mk in marks:
+                    if mk.exists(): mk.unlink()
+            continue
         ctr = st / "auto" / f"neverstart-{n}"
         try: k = int(ctr.read_text().strip() or "0")
         except (ValueError, OSError): k = 0
