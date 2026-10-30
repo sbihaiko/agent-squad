@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.33 (local fork, 2026-10-29)
+- **#862, #867 — the engine cache takes the loop-bug fixes.** The live loop runs the engine from the plugin cache keyed by version; 0.2.32 never refreshed it, so the #862 and #867 engine fixes did not reach the loop. This release bumps the manifest so `claude plugin update` installs them.
+
 ## 0.2.32 (local fork, 2026-10-21)
 - **#743 — the consolidation of `dev` into `stg` is one pull request, never a push.** `promote-stg.sh` opens or reuses the open `dev` → `stg` pull request and merges it with a merge commit once the proof is green; no loop script writes `refs/heads/stg`. A tip already in `stg` is read by ancestry, and a plain commit `stg` holds that `dev` lacks stays the owner's to resolve. `promote-pass.sh` reads the same precondition, so no suite is spent on a tip that cannot merge. CI runs on that pull request only.
 - **#743 — the open-PR fact carries the base ref.** The aggregate read ignores the `base` query, so the promotion names both the head and the base and cannot merge a `dev`-headed pull request for another base.
