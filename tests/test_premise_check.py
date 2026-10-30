@@ -612,7 +612,7 @@ def test_every_proxy_answer_carries_its_model_id(tmp_path):
     row = report.rows[0]
     assert row.state == "decided" and row.answered_by == "proxy: claude-sonnet-5-5"
     assert "| proxy: claude-sonnet-5-5 |" in report.body
-    assert "- **the format** — one table (proxy: claude-sonnet-5-5)" in gh.issue["body"]
+    assert "- **the format** — one table <!-- answered-by: proxy: claude-sonnet-5-5 -->" in gh.issue["body"]
 
 
 def test_an_owner_answer_overrides_a_proxy_answer_for_the_same_premise(tmp_path):
@@ -682,3 +682,75 @@ def test_the_squad_command_forwards_a_proxy_to_the_round():
     from squad import cli
     a = cli.parser().parse_args(["premise-check", "878", "--findings", "f.json", "--proxy", "sonnet"])
     assert a.proxy == "sonnet"
+
+
+def test_an_owner_answer_ending_in_a_proxy_marker_keeps_its_text_and_stays_owner_decided(tmp_path):
+    gh = StubRepo("# Spec\n")
+    proxied_round(tmp_path, gh, DECISION, answers=[{"premise": "the format", "answer": "use X (proxy: ours)"}], round_no=1)
+    assert "- **the format** — use X (proxy: ours)" in gh.issue["body"]
+    report = proxied_round(tmp_path, gh, DECISION, answers=[proxy_answer("the format", "a table")],
+                           proxy=pc.proxy_named("sonnet"), round_no=2)
+    assert pc._recorded_answers(gh.issue["body"]) == [("the format", "use X (proxy: ours)", "")]
+    assert report.refused == (("the format", "the owner answered this premise"),)
+
+
+def test_an_answer_carrying_an_html_comment_is_refused(tmp_path):
+    with pytest.raises(ValueError, match="HTML comment"):
+        pc.Answer.of({"premise": "the format", "answer": "x <!-- answered-by: proxy: y -->"})
+
+
+@pytest.mark.parametrize("finding, answer, reason", [
+    (dict(DECISION, owner_only=True), proxy_answer("the format"), "a proxy never answers an owner-only action"),
+    (dict(DECISION, breakdown=True), proxy_answer("the format"), "a proxy never approves a breakdown"),
+    (DECISION, proxy_answer("the format", confident=False), "a proxy answers only when it is confident"),
+])
+def test_a_refused_proxy_answer_is_named_in_the_comment_and_the_report(tmp_path, finding, answer, reason):
+    gh = StubRepo("# Spec\n")
+    report = proxied_round(tmp_path, gh, finding, answers=[answer], proxy=pc.proxy_named("sonnet"))
+    assert report.rows[0].state == "open" and report.rows[0].question == 1
+    assert report.rows[0].refused == reason
+    assert f"Proxy not taken: {reason}." in report.body
+    assert report.refused == (("the format", reason),)
+    assert "update_issue" not in gh.calls
+
+
+def test_a_proxy_never_answers_a_premise_naming_an_owner_only_action_without_the_flag(tmp_path):
+    gh = StubRepo("# Spec\n")
+    finding = {"premise": "share the credentials with the vendor", "kind": "decision", "recommends": "yes"}
+    report = proxied_round(tmp_path, gh, finding, answers=[proxy_answer("share the credentials with the vendor", "yes")],
+                           proxy=pc.proxy_named("sonnet"))
+    assert report.rows[0].state == "open" and report.rows[0].question == 1
+    assert report.rows[0].refused == "a proxy never answers an owner-only action"
+    assert "update_issue" not in gh.calls
+
+
+def test_a_proxy_answer_naming_another_model_is_refused(tmp_path):
+    gh = StubRepo("# Spec\n")
+    with pytest.raises(ValueError, match="claude-sonnet-5-5.*panel"):
+        proxied_round(tmp_path, gh, DECISION, answers=[proxy_answer("the format", answered_by="proxy: claude-sonnet-5-5")],
+                      proxy=pc.proxy_named("panel"))
+    assert "update_issue" not in gh.calls
+
+
+def test_a_proxy_answer_naming_the_runs_proxy_is_recorded_as_that_model(tmp_path):
+    gh = StubRepo("# Spec\n")
+    report = proxied_round(tmp_path, gh, DECISION, answers=[proxy_answer("the format", answered_by="proxy: claude-sonnet-5-5")],
+                           proxy=pc.proxy_named("sonnet"))
+    assert report.rows[0].answered_by == "proxy: claude-sonnet-5-5"
+
+
+def test_the_skill_and_door_document_the_proxy_its_flags_and_its_refusals():
+    skill = (ROOT / ".claude/skills/premise-check/SKILL.md").read_text()
+    door = (ROOT / ".agents/skills/agent-premise-check/SKILL.md").read_text()
+    for word in ("--proxy", "panel", "confident", "owner_only", "breakdown", '"answered_by": "proxy"'):
+        assert word in skill, word
+    assert "--proxy" in door
+    assert "Do not answer a question the owner has not answered" not in skill
+
+
+def test_the_adr_and_claude_md_admit_a_named_proxy():
+    adr = next((ROOT / "docs/adr").glob("0155-*.md")).read_text()
+    assert "holds no way to run a probe or to answer a question" not in adr
+    assert "proxy" in adr.partition("## Decision")[2]
+    line = next(ln for ln in (ROOT / "CLAUDE.md").read_text().splitlines() if "](docs/adr/0155-" in ln)
+    assert "proxy" in line

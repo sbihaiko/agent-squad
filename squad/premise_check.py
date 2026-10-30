@@ -35,7 +35,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from squad import modelreg
+from squad import defaults, modelreg
 from squad.record import atomic_write
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -65,7 +65,7 @@ UNKNOWN = ("i don't know", "i do not know", "i dont know", "don't know", "do not
 _CITE = re.compile(r"^(?P<path>[^\s:]+):(?P<start>\d+)(?:-(?P<end>\d+))?$")
 _STATE = re.compile(r"<!-- premise-check-state: round=(?P<round>\d+) body=(?P<sha>[0-9a-f]+) refuted=(?P<refuted>.*?) -->")
 _ANSWER_BLOCK = re.compile(r"\n*" + re.escape(ANSWERS_OPEN) + r"(?P<content>.*?)" + re.escape(ANSWERS_CLOSE) + r"\n*", re.S)
-_ANSWER_LINE = re.compile(r"^- \*\*(?P<premise>.+?)\*\* — (?P<text>.*?)(?: \(proxy: (?P<by>[^()]+)\))?$")
+_ANSWER_LINE = re.compile(r"^- \*\*(?P<premise>.+?)\*\* — (?P<text>.*?)(?: <!-- answered-by: proxy: (?P<by>[^<>]+) -->)?$")
 
 
 class NoReviewer(Exception):
@@ -163,6 +163,9 @@ class Answer:
             raise ValueError(f"the glossary answer to {premise!r} needs a term and a definition")
         if kind == "adr" and not (answer.title and answer.decision):
             raise ValueError(f"the ADR answer to {premise!r} needs a title and a decision")
+        line = f"{premise} {answer.text}"
+        if "<!--" in line or "-->" in line:
+            raise ValueError(f"the answer to {premise!r} carries an HTML comment, which the spec body reserves for its proxy marker")
         return answer
 
 
@@ -178,6 +181,7 @@ class Row:
     question: int | None = None     # the number it is asked as this round
     held: str = ""                  # why it is not asked this round
     risk: bool = False              # a recorded open risk: the owner does not know, so it is never assumed
+    refused: str = ""               # why a proxy's answer to it did not stand this round
 
     @property
     def asked(self) -> bool:
@@ -337,6 +341,8 @@ def render(spec: int, round_no: int, reviewer: Reviewer, rows: list[Row], ending
             answer = r.held
         else:
             answer = r.detail
+        if r.refused:
+            answer = " ".join(x for x in (answer, f"Proxy not taken: {r.refused}.") if x)
         lines.append(f"| {_cell(premise)} | {r.state} | {_cell(answer)} | {_cell(r.answered_by)} |")
     if ending:
         lines += ["", f"**End state:** {ending}."]
@@ -406,7 +412,7 @@ def apply_answers(body: str, answers) -> str:
             merged.append((a.premise, a.text, a.proxy_id))
     base = _ANSWER_BLOCK.sub("\n\n", body or "").rstrip()
     block = [ANSWERS_OPEN, ANSWERS_HEADING, ""] + \
-            [f"- **{p}** — {t}" + (f" ({PROXY}: {by})" if by else "") for p, t, by in merged] + [ANSWERS_CLOSE]
+            [f"- **{p}** — {t}" + (f" <!-- answered-by: {PROXY}: {by} -->" if by else "") for p, t, by in merged] + [ANSWERS_CLOSE]
     return base + "\n\n" + "\n".join(block) + "\n"
 
 
@@ -523,6 +529,7 @@ class Report:
     rows: tuple[Row, ...] = ()
     glossary: tuple[Path, ...] = ()
     adrs: tuple[Path, ...] = ()
+    refused: tuple[tuple[str, str], ...] = ()
 
 
 def run_round(spec: int, findings, answers=(), *, github, root=None, round_no: int | None = None,
@@ -540,8 +547,9 @@ def run_round(spec: int, findings, answers=(), *, github, root=None, round_no: i
     if round_no is None:
         round_no = (before["round"] + 1) if before else 1
     owner_decided = {premise for premise, _, by in _recorded_answers(body) if not by}
-    answers = proxied(answers, findings, proxy, owner_decided)
-    rows = check(merge_answers(findings, answers))
+    answers, refused = proxied(answers, findings, proxy, owner_decided)
+    rows = [replace(r, refused=refused[r.premise]) if r.premise in refused else r
+            for r in check(merge_answers(findings, answers))]
     new_body = apply_answers(body, answers)
     applied = new_body != body
     sha = hashlib.sha256(new_body.encode()).hexdigest()
@@ -553,13 +561,13 @@ def run_round(spec: int, findings, answers=(), *, github, root=None, round_no: i
     comment = render(spec, round_no, who, rows, ending=end, body_sha=sha, stop_reason=stop_reason)
     if github is None or dry_run:
         return Report(body=comment, ending=end, round_no=round_no, stop_reason=stop_reason,
-                      applied=applied, rows=tuple(rows))
+                      applied=applied, rows=tuple(rows), refused=tuple(refused.items()))
     glossary, adrs = (write_artifacts(root, answers) if answers else ((), ()))
     if applied:
         github("update_issue", number=spec, body=new_body)
     action = write_comment(github, spec, found, comment)
     return Report(body=comment, ending=end, round_no=round_no, action=action, stop_reason=stop_reason,
-                  applied=applied, rows=tuple(rows), glossary=glossary, adrs=adrs)
+                  applied=applied, rows=tuple(rows), glossary=glossary, adrs=adrs, refused=tuple(refused.items()))
 
 
 def named(raw: str, reg=None) -> Reviewer:
@@ -606,31 +614,49 @@ def proxy_named(raw: str, reg=None) -> Reviewer:
     return named(raw, reg)
 
 
-def _may_proxy(a: Answer, f: Finding | None) -> bool:
-    """Only a confident decision the owner did not reserve; an unknown premise passes so `merge_answers` names it."""
-    if f is None:
-        return True
-    return a.kind == "decision" and a.confident and not (f.owner_only or f.breakdown)
+def touches_owner_only(text: str) -> bool:
+    """Whether the text names an action on the owner-only list the autonomy fragment carries."""
+    norm = " ".join(text.lower().split())
+    return any(item.lower() in norm for item in defaults.owner_only())
 
 
-def proxied(answers, findings, proxy: Reviewer | None, owner_decided=frozenset()) -> list[Answer]:
-    """The answers that stand: an owner answer always wins, and a proxy answer stands only where the proxy may answer it."""
+def _refusal(a: Answer, f: Finding) -> str:
+    """Why a proxy may not stand for this answer, or '' when it may."""
+    if a.kind != "decision":
+        return "a proxy answers only a decision"
+    if f.breakdown:
+        return "a proxy never approves a breakdown"
+    if f.owner_only or touches_owner_only(f"{a.premise} {a.answer}"):
+        return "a proxy never answers an owner-only action"
+    if not a.confident:
+        return "a proxy answers only when it is confident"
+    return ""
+
+
+def proxied(answers, findings, proxy: Reviewer | None, owner_decided=frozenset()) -> tuple[list[Answer], dict[str, str]]:
+    """The answers that stand, and the premises whose proxy answer did not, with why: an owner answer always wins."""
     answers = [Answer.of(a) for a in answers]
     if not any(a.by_proxy for a in answers):
-        return answers
+        return answers, {}
     if proxy is None:
         raise ValueError("a proxy answer needs --proxy: with no proxy named, every question waits for the owner")
     owned = set(owner_decided) | {a.premise for a in answers if not a.by_proxy}
     gates = {f.premise: f for f in (Finding.of(raw) for raw in findings)}
-    out = []
+    out, refused = [], {}
     for a in answers:
         if not a.by_proxy:
             out.append(a)
-        elif a.premise in owned or not _may_proxy(a, gates.get(a.premise)):
             continue
+        if a.premise not in gates:
+            raise ValueError(f"the answer to {a.premise!r} names a premise no finding carries")
+        if a.proxy_id not in ("", proxy.id):
+            raise ValueError(f"the answer to {a.premise!r} names proxy {a.proxy_id!r}, but this run's proxy is {proxy.id!r}")
+        why = "the owner answered this premise" if a.premise in owned else _refusal(a, gates[a.premise])
+        if why:
+            refused[a.premise] = why
         else:
             out.append(replace(a, answered_by=f"{PROXY}: {proxy.id}"))
-    return out
+    return out, refused
 
 
 # --- the real GitHub runner --------------------------------------------------------------------------------

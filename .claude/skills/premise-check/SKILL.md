@@ -25,6 +25,8 @@ goes, and asks only the questions the answers left open.
    - `decision` — only the owner can settle it. If the owner already answered, set `answer` and `answered_by`. If not,
      set `recommends`: the answer you would give, worded so that "yes" accepts it.
    - Set `depends_on` to the premise of another finding when this one cannot be answered before that one is.
+   - Set `"owner_only": true` when the question touches an owner-only action (CLAUDE.md, "Owner-only actions"), and
+     `"breakdown": true` when it approves a ticket breakdown. A proxy never answers either.
 3. Write the findings to a file as a JSON array of objects with `premise`, `kind` and the fields above.
 4. If the owner answered the last round, write the answers to a file as a JSON array of objects with `premise` and
    `answer` (plus `answered_by`). An answer that defines a term also sets `"kind": "glossary"` with `term` and
@@ -36,6 +38,13 @@ goes, and asks only the questions the answers left open.
    uv run squad premise-check <spec> --findings findings.json --reviewer <your model>
    uv run squad premise-check <spec> --findings findings.json --answers answers.json --reviewer <your model>
    ```
+
+   While the owner is away, name a proxy with `--proxy <registry model or panel>` on the answered round. It answers
+   only what the rules below let it, and it must differ from the reviewer. With no `--proxy`, every question waits for
+   the owner.
+
+   A proxy's answer is an object in `answers.json` with `"answered_by": "proxy"` and `"confident": true` only when you
+   are sure. The round records it as `proxy: <model id>`, and an answer that names a different model is refused.
 
    The round writes its durable records into the checkout of the repository that holds the spec. That is this
    checkout by default; when `--repo` names another repository, pass `--root <its checkout>` or the command refuses,
@@ -50,6 +59,9 @@ The command holds the round's rules, so you do not apply them yourself:
 - a fact whose citation the repository carries is `proven`, and a citation the repository does not carry leaves the
   fact `open`, so a fabricated proof cannot pass;
 - a run-only finding is `needs a probe` and is never asked as a question;
+- a proxy answer stands only when it is `confident`, the finding is neither `owner_only` nor `breakdown`, and the
+  question names no owner-only action; otherwise the question stays open and the comment says why ("Proxy not taken");
+  an owner answer, given or already recorded, always wins over a proxy answer for the same premise;
 - the round asks at most five questions, each with its recommended answer, and a finding that depends on another open
   finding waits for the next round; once its dependency is `decided`, the next round asks it;
 - an answer rewrites the spec body in place under `## Answers`: a new answer is appended, an answer already recorded
@@ -84,7 +96,8 @@ the reviewer it names with `--reviewer` omitted, or stop and say so: never revie
 
 ## What not to do
 
-- Do not answer a question the owner has not answered, and do not treat "yes" as given.
+- Do not answer a question as the owner, and do not treat "yes" as given. A proxy answers only when the command names
+  one with `--proxy`, and then only as the rules above allow.
 - Do not run more than one round in one invocation, and do not act on the spec by starting its tickets: the tickets a
   spec becomes are started by the owner (ADR-0142).
 - Do not rewrite the spec body yourself. Only `--answers` rewrites it, from the owner's answers; the round records its

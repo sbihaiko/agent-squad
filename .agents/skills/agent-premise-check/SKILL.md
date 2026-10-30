@@ -16,4 +16,6 @@ rather than a skill found by name (ADR-0129 covers the borrowed ones).
    round. Use the form the skill's step 5 names for the round you are in; do not reimplement a rule in the chat.
 3. Where a question would reach the Owner and the Owner is away, use the panel skill (`autonomy:panel`, from the
    `autonomy` plugin), as `/autonomy` says. Only the owner answers a decision a round asks; the panel stands in for
-   the owner, and its answer is recorded in `answered_by`.
+   the owner, and its answer is recorded in `answered_by`. Name that proxy on the command with `--proxy <registry model
+   or panel>`, and it records as `proxy: <model id>`; the skill's rules on `--proxy`, `confident`, `owner_only` and
+   `breakdown` apply.

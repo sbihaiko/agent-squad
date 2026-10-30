@@ -62,7 +62,7 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 - **A defect an agent finds is its own, whoever caused it and whenever it began** ([ADR-0133](docs/adr/0133-a-defect-an-agent-finds-is-its-own.md)). Guard: none yet; a draft.
 - **`/implement` works in its own worktree and lands in `dev` by a fast-forward push, with no pull request; commit and push are automatic** ([ADR-0116](docs/adr/0116-implement-in-a-worktree.md)). Guard: `tests/test_repo_hygiene.py`.
 - **Three branches: `dev` takes landings, `dev` reaches `stg` by one pull request, the owner promotes `stg` to `main`** ([ADR-0145](docs/adr/0145-a-work-branch-lands-in-dev-by-fast-forward.md)). Guard: `tests/test_no_pr_path.py`, `contrib/squad-goal/scripts/test-promote.sh`; the rest is a draft.
-- **A premise is checked, never assumed: one round proves what reading proves, probes what only a run settles, and asks the owner at most five questions with a recommended answer** ([ADR-0155](docs/adr/0155-a-premise-is-checked-never-assumed.md)). Guard: `tests/test_premise_check.py`.
+- **A premise is checked, never assumed: a round proves what reading proves, probes what runs settle, asks the owner at most five; a named proxy answers when the owner is away; the owner wins** ([ADR-0155](docs/adr/0155-a-premise-is-checked-never-assumed.md)). Guard: `tests/test_premise_check.py`.
 
 ### Run engine
 
