@@ -13,7 +13,8 @@ Two outside dependencies are injected, and they are the only ones this module ha
 - **the GitHub runner** — a callable `runner(op, **kwargs)`; the ops are `ensure_label`, `create_issue`,
   `update_issue`, `add_sub_issue`, `remove_sub_issue`, `list_sub_issues`, `set_title`, `issue_body`,
   `search_open_bug`, `comment`, `close`, `reopen`, `issue_state`, `board` and `file_bug`. `rest_runner`
-  builds the real one on `gh api` (REST, never GraphQL: a scenario publishes dozens of sub-issues). This module reads
+  builds the real one on `gh api` (REST, except `item_status`, which reads GraphQL: a scenario publishes dozens of
+  sub-issues). This module reads
   `issue_state` to know whether a verdict changed and whether a case is closed, and to read a record's numeric `id`
   when the map holds none (#1565), and it **never** calls `file_bug`: the
   run command owns the one bug a red run files, and the write-back only links it.
@@ -33,7 +34,7 @@ resumes from that map and creates nothing twice; publishing again updates what t
 no longer covers is reported in `removed` and left open, because only a person closes a case. A secondary rate limit
 is not a failure: the runner raises `RateLimited` and the publish waits it out (the API's own `retry_after` when it
 gives one, an exponential back-off otherwise) and retries the same call. `rest_runner` builds the real runner on
-`gh api` (REST, never GraphQL: a scenario publishes hundreds of sub-issues).
+`gh api` (REST, except `item_status`, which reads GraphQL: a scenario publishes hundreds of sub-issues).
 
 `build_plan` serves both halves: with the script alone (plus `markdown=`, `script_path=`, `purpose=`) it is the #1223
 plan from the script; with a parsed scenario and its script it is the #1224 plan, gated on the content hash coverage.
@@ -749,7 +750,7 @@ def _dry_counts(plan, state):
 
 
 def publish(plan, github, *, script_path=None, map_path=None, saved=None, sleep=None, attempts=4, backoff=1.0,
-            dry_run=False, status_reads=4, board=True):
+            dry_run=False, status_reads=4, board):
     """Publish the plan as a tree: the scenario, its areas, each area's containers, each container's case records.
 
     Idempotent and resumable through the map beside the script, flushed after every issue created and every link
@@ -1738,7 +1739,7 @@ def start_run(script_path, *, command=None, out_dir=None, adapter="mesen-gui", b
 
 
 def run_scenario(markdown, script, github, run_command=None, granularity="per-case", script_path=None,
-                 purpose=None, title=None, saved=None, parent=None, map_path=None, board=True):
+                 purpose=None, title=None, saved=None, parent=None, map_path=None, *, board):
     """Publish the scenario and, when a run command exists, run it and write every verdict back.
 
     Without a run command the scenario stops after publishing and says so: a result is never simulated (#1222 is the
@@ -1783,6 +1784,9 @@ def _rate_limit(exc):
 
 def rest_runner(repo, shell=_sh, project=None, bug_helper=None, initial_status=INITIAL_STATUS):
     """The real GitHub runner: REST through `gh api` (number, not GraphQL), plus the repo's label and board helpers.
+
+    `item_status` is the one op that reads GraphQL: a card's Status is on the issue's own project items, which REST
+    does not list by board.
 
     `project` is the board to add every issue to, e.g. `users/sbihaiko/projects/1`; without it the board op is a no-op.
     `bug_helper` is the path of the repo's own bug helper (`scripts/report-bug.sh` in the checkout), the one route a
@@ -1892,8 +1896,9 @@ def rest_runner(repo, shell=_sh, project=None, bug_helper=None, initial_status=I
             query = ("query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){issue(number:$number)"
                      "{projectItems(first:50){nodes{project{url} fieldValueByName(name:\"Status\")"
                      "{... on ProjectV2ItemFieldSingleSelectValue{name}}}}}}}")
-            found = json.loads(call(["gh", "api", "graphql", "-f", f"query={query}", "-F", f"owner={owner}",
-                                     "-F", f"name={name}", "-F", f"number={kw['number']}"]))
+            # owner and name are strings (-f); only the issue number is typed (-F).
+            found = json.loads(call(["gh", "api", "graphql", "-f", f"query={query}", "-f", f"owner={owner}",
+                                     "-f", f"name={name}", "-F", f"number={kw['number']}"]))
             nodes = (((found.get("data") or {}).get("repository") or {}).get("issue") or {}).get("projectItems") or {}
             want = "/" + str(project).strip("/")
             hit = next((n for n in nodes.get("nodes") or [] if str((n.get("project") or {}).get("url") or "").endswith(want)),

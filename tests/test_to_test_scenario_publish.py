@@ -158,7 +158,7 @@ class Sleeps:
 def test_a_full_publish_ensures_the_labels_creates_the_parent_and_links_every_case_natively(tmp_path):
     _, _, plan = tiny_plan(tmp_path)
     gh = FakeGitHub()
-    out = publish(plan, gh, map_path=tmp_path / "tiny.gui-test.issues.json")
+    out = publish(plan, gh, map_path=tmp_path / "tiny.gui-test.issues.json", board=True)
     labels = {kw["name"] for kw in gh.of("ensure_label")}
     assert CASE_LABEL in labels and PARENT_LABEL in labels
     titles = gh.created_titles()
@@ -178,7 +178,7 @@ def test_a_full_publish_ensures_the_labels_creates_the_parent_and_links_every_ca
 def test_a_full_publish_maps_every_case_to_its_issue_number_and_content_hash(tmp_path):
     _, _, plan = tiny_plan(tmp_path)
     gh = FakeGitHub()
-    out = publish(plan, gh, map_path=tmp_path / "tiny.gui-test.issues.json")
+    out = publish(plan, gh, map_path=tmp_path / "tiny.gui-test.issues.json", board=True)
     numbers = {kw["title"]: made["number"] for kw, made in gh.made}
     assert {k: {"number": c["number"], "hash": c["hash"]} for k, c in out["cases"].items()} == {
         i["id"]: {"number": numbers["⚪ " + i["title"]], "hash": i["hash"]} for i in plan["issues"]}
@@ -189,7 +189,7 @@ def test_a_full_publish_maps_every_case_to_its_issue_number_and_content_hash(tmp
 def test_a_publish_with_no_map_path_still_publishes_and_keeps_the_map_in_memory(tmp_path):
     _, _, plan = tiny_plan(tmp_path)
     gh = FakeGitHub()
-    out = publish(plan, gh)
+    out = publish(plan, gh, board=True)
     assert out["map_path"] is None and out["parent"] and len(out["cases"]) == len(plan["issues"])
     assert gh.of("board") == [{"number": out["parent"], "status": "Backlog"}]
 
@@ -200,7 +200,7 @@ def test_the_map_is_written_beside_the_script_under_the_documented_name(tmp_path
     _, _, plan = tiny_plan(tmp_path)
     script_path = tmp_path / "p.gui-test.json"
     script_path.write_text("{}", encoding="utf-8")
-    out = publish(plan, FakeGitHub(), script_path=script_path)
+    out = publish(plan, FakeGitHub(), script_path=script_path, board=True)
     assert out["map_path"] == str(tmp_path / "p.gui-test.issues.json")
     assert read_issues(out["map_path"]) == out["map"] and out["map"]["parent"] == out["parent"]
 
@@ -212,7 +212,7 @@ def test_an_interrupted_publish_resumes_from_the_map_and_creates_no_duplicate(tm
     map_path = tmp_path / "tiny.gui-test.issues.json"
     interrupted = FakeGitHub(fail_on_create=5)          # the parent, its area and container, then one case
     with pytest.raises(RuntimeError):
-        publish(plan, interrupted, map_path=map_path)
+        publish(plan, interrupted, map_path=map_path, board=True)
     saved = read_issues(map_path)
     assert saved["parent"] and len(saved["cases"]) == 1
     assert [c["title"] for c in interrupted.of("create_issue")] == \
@@ -220,7 +220,7 @@ def test_an_interrupted_publish_resumes_from_the_map_and_creates_no_duplicate(tm
          "⚪ " + plan["issues"][1]["title"]]
 
     resumed = interrupted.again(start=200)
-    out = publish(plan, resumed, map_path=map_path)
+    out = publish(plan, resumed, map_path=map_path, board=True)
     assert [kw["title"] for kw in resumed.of("create_issue")] == ["⚪ " + i["title"] for i in plan["issues"][1:]]
     assert out["parent"] == saved["parent"] and len(out["cases"]) == len(plan["issues"])
     assert len(resumed.of("board")) == 0                # the parent is already on the board
@@ -241,10 +241,10 @@ def test_a_publish_interrupted_before_the_board_add_finishes_the_board_add_on_re
             return super().__call__(op, **kw)
 
     with pytest.raises(RuntimeError):
-        publish(plan, DropsOnBoard(), map_path=map_path)
+        publish(plan, DropsOnBoard(), map_path=map_path, board=True)
     assert read_issues(map_path)["boarded"] is False
     resumed = FakeGitHub(start=200)
-    out = publish(plan, resumed, map_path=map_path)
+    out = publish(plan, resumed, map_path=map_path, board=True)
     assert resumed.of("board") == [{"number": out["parent"], "status": "Backlog"}]
     # The parent was already made; only its cases are still to create.
     assert plan["parent"]["title"] not in resumed.created_titles()
@@ -255,7 +255,7 @@ def test_a_publish_interrupted_before_the_board_add_finishes_the_board_add_on_re
 def test_a_secondary_rate_limit_backs_off_and_retries_instead_of_failing(tmp_path):
     _, _, plan = tiny_plan(tmp_path)
     sleeps, gh = Sleeps(), FakeGitHub(rate_limited_once=1)
-    out = publish(plan, gh, map_path=tmp_path / "tiny.gui-test.issues.json", sleep=sleeps)
+    out = publish(plan, gh, map_path=tmp_path / "tiny.gui-test.issues.json", sleep=sleeps, board=True)
     assert sleeps.seconds and sleeps.seconds[0] == 7    # the API's own retry-after wins over the back-off
     titles = gh.created_titles()
     assert titles.count(plan["parent"]["title"]) == 1   # the retry created one parent, not two
@@ -275,7 +275,7 @@ def test_the_back_off_grows_when_the_api_keeps_signalling_a_rate_limit(tmp_path)
     sleeps = Sleeps()
     with pytest.raises(RateLimited):
         publish(plan, AlwaysLimited(), map_path=tmp_path / "tiny.gui-test.issues.json", sleep=sleeps,
-                attempts=3, backoff=2.0)
+                attempts=3, backoff=2.0, board=True)
     assert sleeps.seconds == [2.0, 4.0]
 
 
@@ -285,11 +285,11 @@ def test_a_second_publish_updates_and_reports_a_removed_case_without_closing_it(
     _, _, plan = tiny_plan(tmp_path)
     map_path = tmp_path / "tiny.gui-test.issues.json"
     gh = FakeGitHub()
-    first = publish(plan, gh, map_path=map_path)
+    first = publish(plan, gh, map_path=map_path, board=True)
 
     smaller = without_last_case(plan)
     again = gh.again()
-    out = publish(smaller, again, map_path=map_path)
+    out = publish(smaller, again, map_path=map_path, board=True)
     assert again.of("create_issue") == [] and again.of("add_sub_issue") == [] and again.of("board") == []
     assert out["updated"] == ["parent"] + [i["id"] for i in smaller["issues"]]
     area = first["map"]["areas"]["launch"]["number"]
@@ -303,12 +303,12 @@ def test_a_case_whose_text_changed_is_updated_with_its_new_hash_not_recreated(tm
     _, _, plan = tiny_plan(tmp_path)
     map_path = tmp_path / "tiny.gui-test.issues.json"
     gh = FakeGitHub()
-    first = publish(plan, gh, map_path=map_path)
+    first = publish(plan, gh, map_path=map_path, board=True)
 
     changed = SCENARIO.replace("| Home is back |", "| Home is back with the ring on the opener |")
     _, _, plan2 = tiny_plan(tmp_path, text=changed)
     again = gh.again()
-    out = publish(plan2, again, map_path=map_path)
+    out = publish(plan2, again, map_path=map_path, board=True)
     assert again.of("create_issue") == []
     assert out["cases"]["launch.return"]["number"] == first["cases"]["launch.return"]["number"]
     assert out["cases"]["launch.return"]["hash"] != first["cases"]["launch.return"]["hash"]
@@ -326,7 +326,7 @@ _PT_BR = re.compile(r"\b(não|uma|para|com|sem|caso|casos|jogo|tela|janela|botã
 def test_every_published_string_is_en_us_and_carries_no_attribution_line(tmp_path):
     _, _, plan = tiny_plan(tmp_path)
     gh = FakeGitHub()
-    publish(plan, gh, map_path=tmp_path / "tiny.gui-test.issues.json")
+    publish(plan, gh, map_path=tmp_path / "tiny.gui-test.issues.json", board=True)
     bodies = [kw["body"] for kw in gh.of("create_issue")] + [kw["title"] for kw in gh.of("create_issue")]
     assert bodies
     for body in bodies:
@@ -371,7 +371,7 @@ def test_the_parent_is_boarded_in_backlog_before_ready_for_agent_is_added(tmp_pa
     """#895: a card is Todo the moment it joins the board, and Todo plus ready-for-agent is the dispatch signal."""
     _, _, plan = tiny_plan(tmp_path)
     gh = FakeGitHub()
-    out = publish(plan, gh, map_path=tmp_path / "tiny.gui-test.issues.json")
+    out = publish(plan, gh, map_path=tmp_path / "tiny.gui-test.issues.json", board=True)
     parent = out["parent"]
     created = next(kw for kw in gh.of("create_issue") if kw["title"] == plan["parent"]["title"])
     assert TRIAGE_LABEL not in created["labels"]
@@ -394,9 +394,9 @@ def test_a_resumed_publish_adds_ready_for_agent_to_the_parent_only_after_its_boa
             return super().__call__(op, **kw)
 
     with pytest.raises(RuntimeError):
-        publish(plan, DropsOnBoard(), map_path=map_path)
+        publish(plan, DropsOnBoard(), map_path=map_path, board=True)
     resumed = FakeGitHub(start=200)
-    out = publish(plan, resumed, map_path=map_path)
+    out = publish(plan, resumed, map_path=map_path, board=True)
     board_at = next(i for i, (op, _) in enumerate(resumed.calls) if op == "board")
     labelled = [i for i, (op, kw) in enumerate(resumed.calls)
                 if op == "update_issue" and kw["number"] == out["parent"] and TRIAGE_LABEL in kw["labels"]]
@@ -478,7 +478,7 @@ def test_a_plan_over_the_sub_issue_cap_is_refused_before_anything_is_created(tmp
     plan["issues"] = [dict(plan["issues"][0], id=f"c{n}") for n in range(101)]
     gh = FakeGitHub()
     with pytest.raises(ScenarioError, match="100 sub-issues"):
-        publish(plan, gh, map_path=tmp_path / "m.json")
+        publish(plan, gh, map_path=tmp_path / "m.json", board=True)
     assert gh.calls == []
 
 
@@ -501,10 +501,10 @@ def test_a_republish_keeps_ready_for_agent_and_reads_no_status_once_the_owner_mo
     _, _, plan = tiny_plan(tmp_path)
     map_path = tmp_path / "tiny.gui-test.issues.json"
     first = FakeGitHub()
-    out = publish(plan, first, map_path=map_path)
+    out = publish(plan, first, map_path=map_path, board=True)
     first.world["status"][out["parent"]] = "Todo"
     again = first.again(start=200)
-    out2 = publish(plan, again, map_path=map_path)
+    out2 = publish(plan, again, map_path=map_path, board=True)
     assert out2["parent"] == out["parent"]
     assert not again.of("item_status")
     parent_labels = [kw["labels"] for kw in again.of("update_issue") if kw["number"] == out["parent"]]
@@ -525,9 +525,9 @@ def test_a_publish_interrupted_after_the_board_add_still_adds_ready_for_agent_on
 
     first = DropsOnTheLabel()
     with pytest.raises(RuntimeError):
-        publish(plan, first, map_path=map_path)
+        publish(plan, first, map_path=map_path, board=True)
     resumed = FakeGitHub(start=200, world=first.world)
-    out = publish(plan, resumed, map_path=map_path)
+    out = publish(plan, resumed, map_path=map_path, board=True)
     assert not resumed.of("board")
     labelled = [kw for kw in resumed.of("update_issue") if kw["number"] == out["parent"] and TRIAGE_LABEL in kw["labels"]]
     assert labelled
@@ -535,7 +535,7 @@ def test_a_publish_interrupted_after_the_board_add_still_adds_ready_for_agent_on
 def test_the_triage_label_is_added_only_after_the_parent_status_reads_back(tmp_path):
     _, _, plan = tiny_plan(tmp_path)
     gh, sleeps = FakeGitHub(status_lag=2), Sleeps()
-    out = publish(plan, gh, map_path=tmp_path / "tiny.gui-test.issues.json", sleep=sleeps)
+    out = publish(plan, gh, map_path=tmp_path / "tiny.gui-test.issues.json", sleep=sleeps, board=True)
     reads = [i for i, (op, kw) in enumerate(gh.calls) if op == "item_status" and kw["number"] == out["parent"]]
     assert len(reads) == 3 and len(sleeps.seconds) == 2          # two empty reads, waited out, then the Status
     labelled = [i for i, (op, kw) in enumerate(gh.calls)
@@ -557,7 +557,7 @@ def test_a_status_that_never_reads_back_adds_no_label_and_names_the_failure(tmp_
     gh, sleeps = NeverReads(), Sleeps()
     map_path = tmp_path / "tiny.gui-test.issues.json"
     with pytest.raises(StatusUnread, match="never read back as 'Backlog'"):
-        publish(plan, gh, map_path=map_path, sleep=sleeps)
+        publish(plan, gh, map_path=map_path, sleep=sleeps, board=True)
     assert len(gh.of("item_status")) == 4 and len(sleeps.seconds) == 3   # bounded: four reads, three waits
     assert not [kw for kw in gh.of("update_issue") if TRIAGE_LABEL in kw["labels"]]
     assert read_issues(map_path)["boarded"] is True                      # the card is kept; a resume re-reads it
