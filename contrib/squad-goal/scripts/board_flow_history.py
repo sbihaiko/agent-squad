@@ -1,6 +1,7 @@
 """One flow sample per board pass: the cards each kind holds in each column, kept in hub-flow.jsonl (SPEC 111).
 
-Stdlib and board_columns only: no hub and no GitHub client (ADR-0137). The caller names the history file."""
+Stdlib and board_columns only: no hub and no GitHub client (ADR-0137). Each repository keeps its own file (history_path),
+because two profiles on one board see different cards (#894)."""
 import importlib.util
 import json
 import os
@@ -15,6 +16,12 @@ _columns = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(_col
 DEFAULT_KIND = "issue"
 RAW_DAYS = 30
 DAY = 86400
+
+
+def history_path(board, repo):
+    """The history one repository keeps beside the board cache: hub-flow.<owner>_<name>.jsonl. An owner has no underscore,
+    so the name cannot collide with another repository's."""
+    return pathlib.Path(board).with_name(f"hub-flow.{repo.replace('/', '_')}.jsonl")
 
 
 def sample(rows, now=None):
@@ -34,15 +41,32 @@ def sample(rows, now=None):
 
 def append(path, rows, now=None):
     """Append one sample of `rows` when its counts differ from the last sample, rolling up samples older than RAW_DAYS.
-    Returns the new sample, or None when nothing was appended."""
+    A read under half the last sample's cards is a truncated read: it is recorded as a flow_skip line, not a sample, and
+    a second read that repeats it is taken as the truth. Returns the new sample, or None when nothing was appended."""
     path = pathlib.Path(path)
     s = sample(rows, now)
     lines = _read(path)
     samples = [obj for _, obj in lines if _is_sample(obj)]
     if samples and samples[-1]["counts"] == s["counts"]: return None
+    total = _total(s)
+    if samples and total * 2 < _total(samples[-1]) and not _repeats_skip(lines, total):
+        skip = {"flow_skip": total, "t": s["t"], "reason": f"{total} cards read, {_total(samples[-1])} in the last sample"}
+        lines.append((json.dumps(skip), skip))
+        _write(path, lines)
+        return None
     lines.append((json.dumps(s), s))
     _write(path, _rollup(lines, s["t"]))
     return s
+
+
+def _total(s):
+    return sum(n for by_column in s["counts"].values() for n in by_column.values()) + s["none"]
+
+
+def _repeats_skip(lines, total):
+    """True when the last line is a flow_skip that named the same total: the read is the board's, not a truncation."""
+    last = lines[-1][1] if lines else None
+    return isinstance(last, dict) and last.get("flow_skip") == total
 
 
 def samples(path):

@@ -1932,7 +1932,7 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
             if len(errs) < len(rs): board_cache["t"] = time.time()
     except Exception as e: board_cache["err"] = str(e)[:80]
     save_board()
-    if items: _flow.append(BOARD.with_name("hub-flow.jsonl"), items)
+    if items: _flow.append(_flow.history_path(BOARD, REPO), items)
     return board_cache
 _WRITE_SEQ = itertools.count(1)   # one temp name per write, never one per writer: a thread id is reused once its thread ends (#512)
 def _temp_name(path):
@@ -2526,7 +2526,7 @@ def _band_extents(bands):
 
 def flow_charts():
     """The two diagrams' numbers, computed here from board_cfd and board_leadtime; the page draws them and computes none."""
-    cfd = _cfd.cfd(_flow.samples(BOARD.with_name("hub-flow.jsonl")), ORDER)
+    cfd = _cfd.cfd(_flow.samples(_flow.history_path(BOARD, REPO)), ORDER)
     extents = [_band_extents(p["bands"]) for p in cfd["points"]]
     ymax = max((e[ORDER[0]][1] for e in extents), default=0)
     rows = [{"n": i["n"], "column": _columns_module.view_column(i["st"], str(i["s"]).lower() == "closed", i.get("l"))[0],
