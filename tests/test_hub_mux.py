@@ -4,6 +4,7 @@ The seam is HTTP: `hubmux.py` serves every profile the machine knows under `/<pr
 repositories and their live workers, and a path no profile owns answers 404 with that list. `hubctl.sh` takes a port as
 proof only when the squad hub answers on it. Fixture profiles over temp checkouts; no network, no refresh threads.
 """
+import datetime
 import http.server
 import importlib.util
 import json
@@ -200,6 +201,53 @@ def test_an_ended_run_link_in_a_page_and_its_redirect_carry_their_repository():
         srv.shutdown()
     assert '"/alpha/ended/" + id' in page, page
     assert loc == "/alpha/dash/r1/", loc
+
+
+def test_a_real_profile_opens_its_ended_run_behind_the_prefix(tmp_path, monkeypatch):
+    """The real hub.py (no stub) mounted as profile `alpha`: a run that ended today in its runs/ opens at `/alpha/ended/<id>`
+    as a 302 to `/alpha/dash/<id>/`, never 404. The dashboard start is a no-op port (#907)."""
+    t = tmp_path
+    prof, base = t / "profiles", t / "state"
+    prof.mkdir()
+    (t / "co-alpha").mkdir()
+    _profile(prof, "alpha", "x/alpha", t / "co-alpha")
+    run = t / "co-alpha" / "runs" / "run-ended-1"
+    run.mkdir(parents=True)
+    now = datetime.datetime.now()
+    noon = datetime.datetime.combine(now.date(), datetime.time(12, 0)).timestamp()
+    if now.timestamp() < noon:
+        noon = now.timestamp() - 60   # before noon: a verdict a minute ago is still today
+    (run / "record.jsonl").write_text("".join(json.dumps(e) + "\n" for e in (
+        {"ts": noon - 3600, "event": "run_start", "pos": 1},
+        {"ts": noon, "event": "verdict", "verdict": "completed", "reasons": [], "exit_code": 0, "pos": 2})))
+    monkeypatch.setenv("SG_PROFILES_DIR", str(prof))
+    monkeypatch.setenv("SG_STATE_BASE", str(base))
+    spec = importlib.util.spec_from_file_location("hubmux_ended_real", SCRIPTS / "hubmux.py")
+    mux = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mux)
+    apps = mux.load_apps()
+    hub_mod = apps["alpha"]["mod"]
+    monkeypatch.setattr(hub_mod, "project_dirs", lambda: [t / "co-alpha" / "runs"])
+    monkeypatch.setattr(hub_mod, "refresh_runs", lambda: [])
+    monkeypatch.setattr(hub_mod, "_start_dashboard", lambda folder: 4321)
+    srv = mux.server(0, apps)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+    class NoFollow(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *a, **k):
+            return None
+
+    try:
+        url = f"http://127.0.0.1:{srv.server_address[1]}/alpha/ended/run-ended-1"
+        try:
+            with urllib.request.build_opener(NoFollow).open(url) as r:
+                code, loc = r.status, None
+        except urllib.error.HTTPError as e:
+            code, loc = e.code, e.headers.get("Location")
+    finally:
+        srv.shutdown()
+    assert code == 302, code
+    assert loc == "/alpha/dash/run-ended-1/", loc
 
 
 def test_an_unknown_path_answers_404_with_the_list(fleet):
