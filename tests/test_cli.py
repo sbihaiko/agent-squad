@@ -217,6 +217,7 @@ def test_dashboard_serves_the_run_and_prints_a_loopback_url_the_page_loads_with_
         d = tmp_path / name
         d.mkdir()
         (d / "record.jsonl").write_text(json.dumps({"event": "run_start", "run_id": f"run-{name}", "ts": ts, "pos": 1}) + "\n")
+    monkeypatch.chdir(tmp_path)   # the project settings come from the working directory; the checkout's own .env is no input
     started, opened = [], []
     monkeypatch.setattr(dashboard_server, "start", lambda folder, **kw: started.append((folder, kw)) or 4242)
     import webbrowser
