@@ -35,6 +35,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from squad import modelreg
+from squad.record import atomic_write
 
 ROOT = Path(__file__).resolve().parent.parent
 REGISTRY = "config/models.registry.json"
@@ -44,7 +45,7 @@ MAX_QUESTIONS = 5
 STATES = ("proven", "refuted", "needs a probe", "decided", "open")
 KINDS = ("fact", "run", "decision")
 ANSWER_KINDS = ("decision", "glossary", "adr")
-ENDINGS = ("awaiting answers", "awaiting probes", "blocked", "settled", "stopped")
+ENDINGS = ("awaiting answers", "awaiting probes", "blocked", "open risks", "settled", "stopped")
 STALL = "the same refutation repeated with no change in the spec"
 READING = "reading"
 NOBODY = "—"
@@ -52,13 +53,16 @@ MARKER = "<!-- premise-check: spec={spec} -->"
 ANSWERS_OPEN = "<!-- premise-answers -->"
 ANSWERS_CLOSE = "<!-- /premise-answers -->"
 ANSWERS_HEADING = "## Answers"
+# Marks an ADR this tool wrote: a round reuses only such an ADR, never an accepted one whose title shares its slug.
+ADR_MARKER = "<!-- premise-check-adr -->"
 # An answer the owner does not know: it settles nothing and is never read as a settled premise.
 UNKNOWN = ("i don't know", "i do not know", "i dont know", "don't know", "do not know", "unknown", "not sure",
            "no idea", "unsure", "idk")
 
 _CITE = re.compile(r"^(?P<path>[^\s:]+):(?P<start>\d+)(?:-(?P<end>\d+))?$")
 _STATE = re.compile(r"<!-- premise-check-state: round=(?P<round>\d+) body=(?P<sha>[0-9a-f]+) refuted=(?P<refuted>.*?) -->")
-_ANSWER_BLOCK = re.compile(r"\n*" + re.escape(ANSWERS_OPEN) + r".*?" + re.escape(ANSWERS_CLOSE) + r"\n*", re.S)
+_ANSWER_BLOCK = re.compile(r"\n*" + re.escape(ANSWERS_OPEN) + r"(?P<content>.*?)" + re.escape(ANSWERS_CLOSE) + r"\n*", re.S)
+_ANSWER_LINE = re.compile(r"^- \*\*(?P<premise>.+?)\*\* — (?P<text>.*)$")
 
 
 class NoReviewer(Exception):
@@ -173,6 +177,26 @@ def _repo_read(path: str) -> str:
     return (ROOT / path).read_text()
 
 
+def checkout_repo(root: Path) -> str:
+    """The OWNER/NAME the checkout's origin names, or '' when the checkout has no readable origin."""
+    try:
+        url = subprocess.run(["git", "-C", str(root), "remote", "get-url", "origin"],
+                             check=True, capture_output=True, text=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return ""
+    m = re.search(r"[:/]([^/:]+)/([^/]+?)(?:\.git)?$", url)
+    return f"{m.group(1)}/{m.group(2)}" if m else ""
+
+
+def artifact_root(repo: str, root=None) -> Path:
+    """The checkout of the repository that holds the spec: its durable records are written there, never elsewhere."""
+    root = Path(root) if root is not None else ROOT
+    named = checkout_repo(root)
+    if named and named.lower() != repo.lower():
+        raise ValueError(f"{root} holds {named}, not {repo}: the durable records are written in the spec's own checkout")
+    return root
+
+
 def cited(proof: str, read: Callable[[str], str]) -> str | None:
     """The citation when the repository carries it: the path reads and the cited lines are there and not blank."""
     m = _CITE.match((proof or "").strip())
@@ -253,7 +277,7 @@ def ask(rows: list[Row], depends: dict[str, str] | None = None) -> list[Row]:
 
 
 def ending(rows: list[Row]) -> str:
-    """The check's end state: it waits for answers, waits for probes, is blocked, or is settled when no question is open."""
+    """The check's end state: it waits for answers or probes, is blocked, records its open risks, or is settled."""
     open_rows = [r for r in rows if r.state == "open" and not r.risk]
     if any(r.asked for r in open_rows):
         return "awaiting answers"
@@ -261,6 +285,8 @@ def ending(rows: list[Row]) -> str:
         return "blocked"
     if any(r.state == "needs a probe" for r in rows):
         return "awaiting probes"
+    if any(r.risk for r in rows):
+        return "open risks"
     return "settled"
 
 
@@ -332,23 +358,48 @@ def upsert(github, spec: int, body: str) -> str:
 
 # --- an owner answer: the spec body, the glossary, the ADRs -------------------------------------------------
 
+def _recorded_answers(body: str) -> list[tuple[str, str]]:
+    """The answers a previous round wrote into the spec body, in the order the block carries them."""
+    m = _ANSWER_BLOCK.search(body or "")
+    if not m:
+        return []
+    out = []
+    for line in m["content"].splitlines():
+        hit = _ANSWER_LINE.match(line.strip())
+        if hit:
+            out.append((hit["premise"].strip(), hit["text"].strip()))
+    return out
+
+
 def apply_answers(body: str, answers) -> str:
-    """Rewrite the spec body's answers block: the text before it is kept, and the same answers rewrite nothing twice."""
+    """Rewrite the spec body's answers block: an answer already recorded is replaced, a new one appended, the rest kept."""
     answers = [Answer.of(a) for a in answers]
     if not answers:
         return body
+    merged = _recorded_answers(body)     # the block is the spec's memory: a later round never drops an earlier answer
+    for a in answers:
+        for i, (premise, _) in enumerate(merged):
+            if premise == a.premise:
+                merged[i] = (a.premise, a.text)
+                break
+        else:
+            merged.append((a.premise, a.text))
     base = _ANSWER_BLOCK.sub("\n\n", body or "").rstrip()
-    block = [ANSWERS_OPEN, ANSWERS_HEADING, ""] + [f"- **{a.premise}** — {a.text}" for a in answers] + [ANSWERS_CLOSE]
+    block = [ANSWERS_OPEN, ANSWERS_HEADING, ""] + [f"- **{p}** — {t}" for p, t in merged] + [ANSWERS_CLOSE]
     return base + "\n\n" + "\n".join(block) + "\n"
 
 
 def merge_answers(findings, answers) -> list[Finding]:
     """Fold each owner answer into the finding it answers, so the next round reads that premise as decided."""
     answers = [Answer.of(a) for a in answers]
+    parsed = [Finding.of(f) for f in findings]
+    premises = {f.premise for f in parsed}
+    for a in answers:
+        if a.premise not in premises:
+            raise ValueError(f"the answer to {a.premise!r} names a premise no finding carries")
     by_premise = {a.premise: a for a in answers}
     out = []
-    for raw in findings:
-        f = Finding.of(raw)
+    for f in parsed:
         a = by_premise.get(f.premise)
         if a and not f.answer:
             f = replace(f, answer=a.text, answered_by=a.answered_by)
@@ -363,7 +414,7 @@ def write_glossary(root: Path, answer) -> Path:
     text = path.read_text() if path.exists() else "# Glossary\n"
     if f"**{answer.term}**:" in text:
         return path
-    path.write_text(text.rstrip() + f"\n\n**{answer.term}**:\n{answer.definition}\n")
+    atomic_write(path, text.rstrip() + f"\n\n**{answer.term}**:\n{answer.definition}\n")
     return path
 
 
@@ -371,22 +422,31 @@ def _slug(title: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-") or "decision"
 
 
+def _adr_target(d: Path, answer) -> tuple[Path, str]:
+    """The ADR this answer writes: the one this tool wrote for the title, or the next free number."""
+    slug = _slug(answer.title)
+    existing = sorted(d.glob(f"[0-9][0-9][0-9][0-9]-{slug}.md"))
+    if existing:
+        path = existing[0]
+        if ADR_MARKER not in path.read_text():
+            raise ValueError(f"docs/adr/{path.name} already records a different decision, and a round never rewrites "
+                             "an ADR it did not write")
+        return path, path.name[:4]
+    numbers = [int(p.name[:4]) for p in d.glob("[0-9][0-9][0-9][0-9]-*.md")]
+    number = f"{(max(numbers) + 1) if numbers else 1:04d}"
+    return d / f"{number}-{slug}.md", number
+
+
 def write_adr(root: Path, answer) -> Path:
     """Record a durable decision as an ADR: no date, count, status, issue number or run id, and one index line."""
     answer = Answer.of(answer)
     d = Path(root) / "docs/adr"
     d.mkdir(parents=True, exist_ok=True)
-    slug = _slug(answer.title)
-    existing = sorted(d.glob(f"*-{slug}.md"))
-    if existing:
-        path = existing[0]
-        number = path.name[:4]
-    else:
-        numbers = [int(p.name[:4]) for p in d.glob("[0-9][0-9][0-9][0-9]-*.md")]
-        number = f"{(max(numbers) + 1) if numbers else 1:04d}"
-        path = d / f"{number}-{slug}.md"
-    path.write_text(
+    path, number = _adr_target(d, answer)
+    atomic_write(
+        path,
         f"# ADR-{number}: {answer.title}\n\n"
+        f"{ADR_MARKER}\n\n"
         "## Context\n\n"
         "A spec's premise needed the owner's decision, and the owner answered it.\n\n"
         "## Decision\n\n"
@@ -410,14 +470,18 @@ def _index_adr(d: Path, filename: str, number: str, title: str) -> None:
         lines += [row]
     else:
         lines.insert(last + 1, row)
-    readme.write_text("\n".join(lines) + "\n")
+    atomic_write(readme, "\n".join(lines) + "\n")
 
 
 def write_artifacts(root: Path, answers) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
     """Write every durable answer where it belongs: a defined term to the glossary, a decision to an ADR."""
+    answers = [Answer.of(a) for a in answers]
+    d = Path(root) / "docs/adr"
+    for a in answers:                     # preflight: a refused ADR leaves every file as it was
+        if a.kind == "adr":
+            _adr_target(d, a)
     glossary, adrs = [], []
-    for raw in answers:
-        a = Answer.of(raw)
+    for a in answers:
         if a.kind == "glossary":
             glossary.append(write_glossary(root, a))
         elif a.kind == "adr":
@@ -445,22 +509,16 @@ def run_round(spec: int, findings, answers=(), *, github, root=None, round_no: i
     """One round after the owner's answers: rewrite the spec body, fold the answers in, and record the round."""
     root = Path(root) if root is not None else ROOT
     answers = [Answer.of(a) for a in answers]
-    found, before, body, action = None, None, "", ""
-    if github is not None and not dry_run:
+    found, before, body = None, None, ""
+    if github is not None:             # a dry run reads the round it would write, and writes nothing
         found = find_comment(github, spec)
         before = state_of((found or {}).get("body") or "")
         body = (github("issue", number=spec) or {}).get("body") or ""
     if round_no is None:
         round_no = (before["round"] + 1) if before else 1
     rows = check(merge_answers(findings, answers))
-    if dry_run or github is None:
-        return Report(body=render(spec, round_no, who, rows, ending=ending(rows)), ending=ending(rows),
-                      round_no=round_no, rows=tuple(rows))
     new_body = apply_answers(body, answers)
     applied = new_body != body
-    if applied:
-        github("update_issue", number=spec, body=new_body)
-    glossary, adrs = (write_artifacts(root, answers) if answers else ((), ()))
     sha = hashlib.sha256(new_body.encode()).hexdigest()
     refuted = sorted(r.premise for r in rows if r.state == "refuted")
     stop_reason = STALL if before and refuted and before["refuted"] == refuted and before["sha"] == sha else ""
@@ -468,6 +526,12 @@ def run_round(spec: int, findings, answers=(), *, github, root=None, round_no: i
     if stop_reason:
         rows = [replace(r, question=None, held="not asked: the check stopped") if r.asked else r for r in rows]
     comment = render(spec, round_no, who, rows, ending=end, body_sha=sha, stop_reason=stop_reason)
+    if github is None or dry_run:
+        return Report(body=comment, ending=end, round_no=round_no, stop_reason=stop_reason,
+                      applied=applied, rows=tuple(rows))
+    glossary, adrs = (write_artifacts(root, answers) if answers else ((), ()))
+    if applied:
+        github("update_issue", number=spec, body=new_body)
     action = write_comment(github, spec, found, comment)
     return Report(body=comment, ending=end, round_no=round_no, action=action, stop_reason=stop_reason,
                   applied=applied, rows=tuple(rows), glossary=glossary, adrs=adrs)
@@ -559,7 +623,8 @@ def parser():
     p.add_argument("--round", dest="round_no", type=int, default=None, help="the round number; the next one after the recorded round by default")
     p.add_argument("--reviewer", help="the model this round actually ran under: checked against the registry")
     p.add_argument("--repo", default="sbihaiko/agent-squad", help="OWNER/NAME of the repository that holds the spec")
-    p.add_argument("--dry-run", action="store_true", help="print the comment and write nothing")
+    p.add_argument("--root", default=None, help="the checkout that holds the spec's repository; the durable records go there")
+    p.add_argument("--dry-run", action="store_true", help="print the comment the round would post, and write nothing")
     return p
 
 
@@ -569,8 +634,9 @@ def main(argv=None) -> int:
         findings = json.loads(Path(a.findings).read_text())
         answers = json.loads(Path(a.answers).read_text()) if a.answers else []
         who = named(a.reviewer) if a.reviewer else reviewer()
-        github = None if a.dry_run else rest_runner(a.repo)
-        report = run_round(a.spec, findings, answers, github=github, root=ROOT, round_no=a.round_no,
+        root = artifact_root(a.repo, a.root)
+        github = rest_runner(a.repo)     # a dry run reads the round it would write, and writes nothing
+        report = run_round(a.spec, findings, answers, github=github, root=root, round_no=a.round_no,
                            who=who, dry_run=a.dry_run)
     except (OSError, ValueError, NoReviewer) as e:
         print(f"premise-check: {e}", file=sys.stderr)
@@ -578,7 +644,9 @@ def main(argv=None) -> int:
     if a.dry_run:
         print(report.body)
         return 0
-    print(f"{report.action}: {report.ending}" + (f", stopped — {report.stop_reason}" if report.stop_reason else ""))
+    wrote = ", ".join(str(p) for p in report.glossary + report.adrs)
+    print(f"{report.action}: {report.ending}" + (f", stopped — {report.stop_reason}" if report.stop_reason else "")
+          + (f"; wrote {wrote}" if wrote else ""))
     return 0
 
 

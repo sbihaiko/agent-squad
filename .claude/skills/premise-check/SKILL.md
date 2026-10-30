@@ -37,8 +37,13 @@ goes, and asks only the questions the answers left open.
    uv run squad premise-check <spec> --findings findings.json --answers answers.json --reviewer <your model>
    ```
 
-6. If the command exits 2, read its one line: it says which reviewer was refused or which finding or answer is
-   malformed. Fix that, and run again. Never edit the comment or the spec by hand.
+   The round writes its durable records into the checkout of the repository that holds the spec. That is this
+   checkout by default; when `--repo` names another repository, pass `--root <its checkout>` or the command refuses,
+   so a decision is never recorded in the wrong repository.
+
+6. If the command exits 2, read its one line: it says which reviewer was refused, which finding or answer is
+   malformed, or which answer names a premise no finding carries. Fix that, and run again. Never edit the comment
+   or the spec by hand.
 
 The command holds the round's rules, so you do not apply them yourself:
 
@@ -47,9 +52,12 @@ The command holds the round's rules, so you do not apply them yourself:
 - a run-only finding is `needs a probe` and is never asked as a question;
 - the round asks at most five questions, each with its recommended answer, and a finding that depends on another open
   finding waits for the next round; once its dependency is `decided`, the next round asks it;
-- an answer rewrites the spec body in place under `## Answers`, so the same answers rewrite nothing twice;
+- an answer rewrites the spec body in place under `## Answers`: a new answer is appended, an answer already recorded
+  stays there, and the same answers rewrite nothing twice, so a later round never drops an earlier owner decision;
 - an answer that defines a term is written into `GLOSSARY.md`; a durable decision is recorded as an ADR under
-  `docs/adr/` with its line in the index;
+  `docs/adr/` with its line in the index. A generated ADR is a draft: it names no guard and adds no `CLAUDE.md` rule
+  line until a named guard test exists (ADR-0018). A round reuses only an ADR it wrote itself; it never overwrites an
+  accepted ADR, and it exits 2 when the title's slug matches one;
 - an answer of "I don't know" becomes a probe entry or a recorded open risk, never `proven` or `decided`;
 - the comment carries the marker `<!-- premise-check: spec=<spec> -->`: a later round rewrites that one comment in
   place, so the spec never collects copies.
@@ -61,7 +69,9 @@ Every round names how the check ends:
 - `awaiting answers` — this round asked questions; the owner answers them, and the next round runs with `--answers`.
 - `awaiting probes` — no question is open, but a premise still needs a probe to settle it.
 - `blocked` — an open gap this round could not ask, because it names no recommended answer.
-- `settled` — no question is open: every premise is proven, refuted, decided, or a recorded open risk.
+- `open risks` — no question is open, but the owner answered "I don't know" and no probe can settle the gap, so the
+  comment carries an `open` row marked as a recorded risk. The check never calls itself `settled` beside that row.
+- `settled` — no question is open: every premise is proven, refuted or decided, and no recorded risk is left.
 - `stopped` — the same refutation repeated with no change in the spec (ADR-0134: stop on attempts that do not change,
   never on totals). The comment names the reason; report it and stop.
 

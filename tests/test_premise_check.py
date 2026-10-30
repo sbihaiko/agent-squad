@@ -4,13 +4,15 @@ The reviewer is a stub here. A round resolves what reading proves, sends what on
 asks the owner at most five questions, each with a recommended answer that "yes" accepts. The result is one comment
 on the spec, found by its marker and rewritten in place.
 """
+import hashlib
 import json
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
 
-from squad import modelreg
+from squad import modelreg, record
 from squad import premise_check as pc
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -291,6 +293,7 @@ def test_the_skill_and_its_agent_door_are_wired():
     assert link.is_symlink() and link.resolve() == door.parent.resolve()
     assert "squad premise-check" in skill.read_text()
     assert "squad premise-check" in door.read_text() and "premise-check/SKILL.md" in door.read_text()
+    assert "--answers" in door.read_text()        # the door names the answered round too, not only the plain one
     assert "`agent-premise-check`" in (ROOT / "CLAUDE.md").read_text()
 
 
@@ -344,16 +347,36 @@ def test_an_answer_rewrites_the_spec_body_and_the_comment(tmp_path):
     assert report2.applied is False
 
 
+def test_an_answer_from_an_earlier_round_survives_a_later_round(tmp_path):
+    """The answers block is the spec's record of every owner decision, so a later round adds to it, never replaces it."""
+    gh = StubRepo("# Spec\n")
+    first = {"premise": "the check comments on the spec", "kind": "decision", "recommends": "comment on the spec"}
+    second = {"premise": "the comment carries a table", "kind": "decision", "recommends": "one table"}
+    answer_a = {"premise": "the check comments on the spec", "answer": "comment on the spec"}
+    answer_b = {"premise": "the comment carries a table", "answer": "one table"}
+    round_of(tmp_path, gh, first, second, answers=[answer_a], round_no=2)
+    # the reviewer reads answer A back from the spec body, and this round answers only B
+    first.update(answer="comment on the spec", answered_by="owner")
+    report = round_of(tmp_path, gh, first, second, answers=[answer_b], round_no=3)
+    body = gh.issue["body"]
+    assert "- **the check comments on the spec** — comment on the spec" in body
+    assert "- **the comment carries a table** — one table" in body
+    assert body.count("## Answers") == 1
+    by = {r.premise: r.state for r in report.rows}
+    assert by == {"the check comments on the spec": "decided", "the comment carries a table": "decided"}
+
+
 def test_a_glossary_answer_writes_the_term_into_the_glossary(tmp_path):
     (tmp_path / "GLOSSARY.md").write_text("# Glossary\n\n**Node**:\nOne unit of the graph.\n")
+    finding = {"premise": "the term round", "kind": "decision", "recommends": "define the term"}
     answer = {"premise": "the term round", "kind": "glossary", "term": "Round",
               "definition": "One invocation of the premise check."}
-    report = round_of(tmp_path, StubRepo("# Spec\n"), answers=[answer])
+    report = round_of(tmp_path, StubRepo("# Spec\n"), finding, answers=[answer])
     text = (tmp_path / "GLOSSARY.md").read_text()
     assert "**Round**:" in text and "One invocation of the premise check." in text
     assert text.count("**Round**:") == 1
     assert report.glossary == (tmp_path / "GLOSSARY.md",)
-    round_of(tmp_path, StubRepo("# Spec\n"), answers=[answer])
+    round_of(tmp_path, StubRepo("# Spec\n"), finding, answers=[answer])
     assert (tmp_path / "GLOSSARY.md").read_text().count("**Round**:") == 1
 
 
@@ -361,23 +384,75 @@ def test_a_durable_decision_becomes_an_adr_with_a_readme_line(tmp_path):
     (tmp_path / "docs/adr").mkdir(parents=True)
     (tmp_path / "docs/adr/README.md").write_text(
         "# ADR index\n\n| ADR | Rule |\n| --- | --- |\n| [0000](0000-a-rule.md) | A rule |\n\n## Adding an ADR\n\nTake the next free number.\n")
+    finding = {"premise": "answers rewrite the spec", "kind": "decision", "recommends": "rewrite in place"}
     answer = {"premise": "answers rewrite the spec", "kind": "adr",
               "title": "An answer rewrites the spec in place",
               "decision": "An owner answer rewrites the spec body and opens the next round."}
-    report = round_of(tmp_path, StubRepo("# Spec\n"), answers=[answer])
+    report = round_of(tmp_path, StubRepo("# Spec\n"), finding, answers=[answer])
     adr = tmp_path / "docs/adr/0001-an-answer-rewrites-the-spec-in-place.md"
     assert adr.is_file() and report.adrs == (adr,)
     text = adr.read_text()
     assert "An answer rewrites the spec in place" in text and "opens the next round" in text
     assert "## Status" not in text and not re.search(r"\d{4}-\d{2}-\d{2}", text)
     assert "#883" not in text and "Refs" not in text and "run-" not in text
+    assert pc.ADR_MARKER in text              # only an ADR this tool wrote is reused by a later answer
     line = "| [0001](0001-an-answer-rewrites-the-spec-in-place.md) | An answer rewrites the spec in place |"
     assert line in (tmp_path / "docs/adr/README.md").read_text()
     # the same durable decision reuses its ADR and adds no second README line
-    round_of(tmp_path, StubRepo("# Spec\n"), answers=[answer])
+    round_of(tmp_path, StubRepo("# Spec\n"), finding, answers=[answer])
     readme = (tmp_path / "docs/adr/README.md").read_text()
     assert readme.count("0001-an-answer-rewrites-the-spec-in-place.md") == 1
     assert not (tmp_path / "docs/adr/0002-an-answer-rewrites-the-spec-in-place.md").exists()
+
+
+def test_an_accepted_adr_with_the_same_slug_is_never_overwritten(tmp_path):
+    """Only an ADR this tool wrote is reused: a title whose slug matches an accepted ADR must not rewrite it."""
+    d = tmp_path / "docs/adr"
+    d.mkdir(parents=True)
+    accepted = d / "0148-bug-first.md"
+    original = "# ADR-0148: Bug first\n\n## Status\n\nAccepted.\n\n## Decision\n\n1. Zero bugs.\n"
+    accepted.write_text(original)
+    answer = {"premise": "the bug order", "kind": "adr", "title": "Bug first", "decision": "Bugs first."}
+    finding = {"premise": "the bug order", "kind": "decision", "recommends": "bugs first"}
+    gh = StubRepo("# Spec\n")
+    with pytest.raises(ValueError, match="0148-bug-first.md"):
+        round_of(tmp_path, gh, finding, answers=[answer])
+    assert accepted.read_text() == original
+    assert "premise-check-adr" not in accepted.read_text()
+    assert gh.issue["body"] == "# Spec\n"                 # a refused answer leaves the spec alone
+    assert "update_issue" not in gh.calls
+
+
+def test_each_durable_write_is_atomic(tmp_path, monkeypatch):
+    """A kill before the rename leaves the glossary, the ADR and the index exactly as they were (ADR-0030)."""
+    glossary = tmp_path / "GLOSSARY.md"
+    glossary_text = "# Glossary\n\n**Node**:\nOne unit.\n"
+    glossary.write_text(glossary_text)
+    d = tmp_path / "docs/adr"
+    d.mkdir(parents=True)
+    accepted = d / "0000-an-old-rule.md"
+    adr_text = "# ADR-0000: An old rule\n\n## Decision\n\n1. Old.\n"
+    accepted.write_text(adr_text)
+    readme = d / "README.md"
+    readme_text = "# ADR index\n\n| ADR | Rule |\n| --- | --- |\n| [0000](0000-an-old-rule.md) | An old rule |\n"
+    readme.write_text(readme_text)
+
+    def boom(src, dst):
+        raise KeyboardInterrupt("killed mid-write")
+    monkeypatch.setattr(record.os, "replace", boom)
+    with pytest.raises(KeyboardInterrupt):
+        pc.write_glossary(tmp_path, {"premise": "a term", "kind": "glossary", "term": "Round",
+                                     "definition": "One invocation."})
+    with pytest.raises(KeyboardInterrupt):
+        pc.write_adr(tmp_path, {"premise": "a decision", "kind": "adr", "title": "A new rule", "decision": "New."})
+    with pytest.raises(KeyboardInterrupt):
+        pc._index_adr(d, "0001-a-new-rule.md", "0001", "A new rule")
+    assert glossary.read_text() == glossary_text
+    assert accepted.read_text() == adr_text
+    assert readme.read_text() == readme_text
+    assert not (d / "0001-a-new-rule.md").exists()
+    assert [p.name for p in tmp_path.iterdir() if p.name.startswith(".")] == []
+    assert [p.name for p in d.iterdir() if p.name.startswith(".")] == []
 
 
 def test_a_question_unblocked_by_an_answer_is_asked_in_the_next_round(tmp_path):
@@ -424,8 +499,9 @@ def test_a_repeated_refutation_with_no_spec_change_stops_the_check(tmp_path):
     # a changed spec restarts the count: an answer rewrote the body
     gh2 = StubRepo("# Spec\n\nThe registry decides the route.\n")
     round_of(tmp_path, gh2, refutation, round_no=1)
-    answer = {"premise": "an unrelated premise", "answer": "yes"}
-    assert round_of(tmp_path, gh2, refutation, answers=[answer], round_no=2).stop_reason == ""
+    open_decision = {"premise": "the spec keeps its answers", "kind": "decision", "recommends": "keep them"}
+    answer = {"premise": "the spec keeps its answers", "answer": "keep them"}
+    assert round_of(tmp_path, gh2, refutation, open_decision, answers=[answer], round_no=2).stop_reason == ""
     # a changed refutation is a different failure, so the streak restarts
     gh3 = StubRepo("# Spec\n")
     round_of(tmp_path, gh3, refutation, round_no=1)
@@ -444,17 +520,64 @@ def test_the_check_ends_when_no_question_is_open(tmp_path):
     assert "End state:** settled" in body
 
 
+def test_a_recorded_open_risk_is_named_and_never_called_settled(tmp_path):
+    """An open risk is a gap the owner could not close, so the end state says so instead of claiming the check settled."""
+    rows = rows_of(tmp_path, {"premise": "the format", "kind": "decision", "recommends": "a table",
+                              "answer": "I don't know"})
+    assert rows[0].risk is True
+    assert pc.ending(rows) == "open risks"
+    body = pc.render(spec=878, round_no=1, reviewer=reviewer(), rows=rows, ending=pc.ending(rows))
+    assert "**End state:** open risks." in body
+    assert "settled" not in body
+    assert "| open |" in body
+
+
+def test_an_answer_that_names_no_finding_is_refused(tmp_path):
+    """A typo in an answer's premise must exit 2, not record an answer that settles nothing."""
+    with pytest.raises(ValueError, match="names a premise no finding carries"):
+        pc.merge_answers([{"premise": "a real premise", "kind": "decision", "recommends": "yes"}],
+                         [{"premise": "a typo", "answer": "yes"}])
+
+
+def test_a_dry_run_prints_the_comment_the_live_round_would_post(tmp_path):
+    """The printed comment carries the same round and body marker the next round's stall check compares."""
+    gh = StubRepo("# Spec\n")
+    finding = {"premise": "one comment per spec", "kind": "decision", "recommends": "one"}
+    report = pc.run_round(878, [pc.Finding.of(finding)], [], github=gh, root=tmp_path, round_no=1,
+                          who=reviewer(), dry_run=True)
+    assert "comment" not in gh.calls and "update_comment" not in gh.calls and "update_issue" not in gh.calls
+    sha = hashlib.sha256(b"# Spec\n").hexdigest()
+    assert f"<!-- premise-check-state: round=1 body={sha} " in report.body
+
+
 def test_the_command_takes_an_answers_file():
     a = pc.parser().parse_args(["878", "--findings", "findings.json", "--answers", "answers.json"])
     assert a.answers == "answers.json"
     assert pc.parser().parse_args(["878", "--findings", "findings.json"]).answers is None
 
 
+def test_the_command_takes_a_root_for_the_specs_checkout(tmp_path):
+    a = pc.parser().parse_args(["878", "--findings", "findings.json", "--root", str(tmp_path)])
+    assert a.root == str(tmp_path)
+    assert pc.parser().parse_args(["878", "--findings", "findings.json"]).root is None
+
+
+def test_the_artifact_root_must_be_the_specs_checkout(tmp_path):
+    """A round on another repository's spec refuses a root whose origin names yet another repository."""
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "remote", "add", "origin",
+                    "https://github.com/other/project"], check=True)
+    with pytest.raises(ValueError, match="other/project"):
+        pc.artifact_root("sbihaiko/agent-squad", tmp_path)
+    assert pc.artifact_root("other/project", tmp_path) == tmp_path
+
+
 def test_the_skill_names_the_answers_input_and_the_end_states():
     text = (ROOT / ".claude/skills/premise-check/SKILL.md").read_text()
     assert "--answers" in text
-    for word in ("settled", "awaiting answers", "stopped"):
+    for word in ("settled", "awaiting answers", "stopped", "open risks"):
         assert word in text, word
     assert "Do not rewrite the spec's text" not in text
     assert "rewrite the spec body" in text or "rewrites the spec body" in text
     assert "ADR-0142" in text         # the round still never starts the spec's tickets
+    assert "draft" in text and "CLAUDE.md" in text      # a generated ADR is a draft and gets no rule line
