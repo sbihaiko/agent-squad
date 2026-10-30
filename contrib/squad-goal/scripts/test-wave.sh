@@ -306,7 +306,7 @@ r=$(land2 run-3); rc=$?
 [ ! -e "$T/st/auto/wave-run-3" ] && ok "E3b: the wave marker goes once the issue is delivered" || ko "E3b: the wave marker stays after delivery"
 case "$(wfact 40 run-3)" in "delivered "*) ok "E3b: the owed fact turns delivered";; *) ko "E3b: ledger fact of #40 after delivery: '$(wfact 40 run-3)'";; esac
 
-# E4: the issues a wave carries are read from the whole message of each commit and named once (#375 review). A `Refs #N`
+# E4 (#869, re-anchored: each commit here names one issue, so the one-issue-per-commit rule expects the same closes): the issues a wave carries are read from the whole message of each commit and named once (#375 review). A `Refs #N`
 # that sits in a commit body closes its issue like one in a subject, and an issue two commits (or one commit twice) name is
 # closed one time.
 W4=wave/run-4; start2 run-4 >/dev/null

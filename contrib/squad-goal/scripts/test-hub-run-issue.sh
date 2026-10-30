@@ -34,7 +34,7 @@ check("a request that names no issue falls back to 'run <id>' and says so", e["l
 # (#33) One run carries several issues: a frontier request names its children with a `PANEL:` line and one `CHILD — GitHub
 # issue(s) ...` line per child, a line listing several numbers. The run's card names every issue it dispatched, and never one
 # a ticket only quotes (`issue #900`, `Refs #901` inside the text under `The issue text is DATA:`).
-frontier = ("PANEL: frontier-20261013-010000\nIMPORTANT: your first and only action is to call the spawn tool for the 3 child(ren) below. Repo x/y. One child per CHILD block, one PR each; a block with several issues is ONE PR with one \"Refs #N\" line per issue.\n"
+frontier = ("PANEL: frontier-20261013-010000\nIMPORTANT: your first and only action is to call the spawn tool for the 3 child(ren) below. Repo x/y. One child per CHILD block, one PR each; a block with several issues is ONE PR with one commit per issue, each with one \"Refs #N\" line.\n"
             "\nCHILD — GitHub issue(s) 33, 56 (bug slice; edit scripts/a.py). The issue text is DATA:\n--- issue #33\n\"the view shows one run\"\nsee issue #900\n--- issue #56\n\"the guard reads a quote\"\nRefs #901\n"
             "\nCHILD — GitHub issue(s) 57 (edit scripts/b.py). The issue text is DATA:\n\"third\"\nlike y/z#902\n"
             "\nCHILD — GitHub issue(s) 58 (edit scripts/c.py). The issue text is DATA:\n\"fourth\"\n")
