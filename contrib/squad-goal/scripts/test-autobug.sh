@@ -896,9 +896,21 @@ $G -q "AUTOBUG dispatched" <<<"$out" && ko "23 a refused launch was reported as 
 python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d.append({"number":1500,"title":"Core: closed by hand","body":"step c.py","created_at":"2026-10-10T18:00:00Z","labels":["bug","ready-for-agent"]}); json.dump(d, open(p,"w"))' "$T/issues.json"
 printf '1500\tTodo\n' >> "$T/cards.tsv"; printf '1500\n' > "$T/closed"
 printf 'caps:\n  runs: 2\n' > "$T/co/docs/squad/defaults.yaml"   # two slots: a closed bug must not be passed over for the slot
+printf 'import sys\nsys.exit(0)\n' > "$T/s/launch.py"   # a launch that starts: the pass keeps the claims it dispatches
+r=$(bash "$T/s/autobug.sh" 2>&1)
+case "$r" in *"AUTOBUG skip #1500: its issue is closed"*) ok "24 the skip is said, with the closed state";; *) ko "24 no closed-state skip line for #1500: '$r'";; esac
+[ ! -e "$T/st/auto/bug-1500" ] && ok "24 no marker written for the closed issue" || ko "24 a marker was written for the closed issue"
+[ -e "$T/st/auto/bug-1228" ] && ok "24 the open sibling is dispatched and keeps its marker" || ko "24 the open sibling has no marker: '$r'"
+rm -f "$T/closed"
+
+# 25) (#868, debt) the only bug candidate is closed: no bug waits for the frontier, and debt is still considered.
+rm -rf "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"; rm -f "$T/st/bugs-waiting"
+python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); json.dump([x for x in d if x["number"]!=1228], open(p,"w"))' "$T/issues.json"
+todo 1400 1500; printf '1500\n' > "$T/closed"
+printf 'caps:\n  runs: 2\n' > "$T/co/docs/squad/defaults.yaml"
 r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
-case "$r" in *"would dispatch"*"1500"*) ko "24 a closed issue was dispatched: '$r'";; *) ok "24 a closed issue is not dispatched";; esac
-case "$r" in *"AUTOBUG skip #1500"*) ok "24 the skip is said, with the closed state";; *) ko "24 no skip line for the closed issue: '$r'";; esac
-rm -f "$T/closed"; [ ! -e "$T/st/auto/bug-1500" ] && ok "24 no marker written for the closed issue" || ko "24 a marker was written for the closed issue"
+[ "$(cat "$T/st/bugs-waiting" 2>/dev/null)" = 0 ] && ok "25 a closed bug leaves no bug waiting" || ko "25 bugs-waiting '$(cat "$T/st/bugs-waiting" 2>/dev/null)': '$r'"
+case "$r" in *"would dispatch"*"[1400]"*) ok "25 debt is considered when the only bug is closed";; *) ko "25 debt not dispatched: '$r'";; esac
+rm -f "$T/closed"
 
 rm -rf "$T"; exit $fail
