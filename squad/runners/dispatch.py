@@ -257,7 +257,8 @@ class Dispatch:
         Identical findings twice move the fix round to the next coder of the chain, and a fix round that wrote no artifact
         is the finding unanswered: it moves the coder at once, and because the head did not move the review stands and is
         not read again (`review_round.repeated`, ADR-0151, #735). A fix round that answers a repeated finding also tells the
-        coder to test the premise of its last fix before a third one (`repeated_round`, #882).
+        coder to test the premise of its last fix before a third one (`repeated_round`, #882: a repeat of the record's
+        rounds, since a requeued worktree holds no last fix).
         Return (the last review, the rounds, the reasons that hold the child or None)."""
         e, n = self.e, 1
         standing = None          # the review of a head a failed fix entry left in place: the same findings, not a new reading
@@ -331,9 +332,11 @@ class Dispatch:
         return review_streak.with_unanswered(seq, repeat)
 
     def repeated_round(self, name, round_n):
-        """True when the child's review at `round_n` repeats the finding before it: the one reading of "repeat" the streak
-        keeps (`review_streak.repeated` over `findings_seq`), never a second one. A fix round that answers a repeat is told
-        to test the premise of the last fix before it attempts a third one (#882, ADR-0151)."""
+        """True when the child's review at `round_n` repeats the finding before it, read by `review_streak.repeated`
+        over the child's recorded rounds (`findings_seq`). The record is the one source: a requeue cuts a fresh
+        worktree where the last fix's commit is not, so a repeat that only the issue ledger holds moves the coder
+        (`coder`) but adds no premise sentence (ADR-0151). A fix round that answers a record repeat is told to test
+        the premise of the last fix before it attempts a third one (#882)."""
         return review_streak.repeated(self.findings_seq(name, round_n, round_n))
 
     def kind_models(self, d):

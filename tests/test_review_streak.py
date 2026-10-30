@@ -113,6 +113,15 @@ def test_the_repeat_a_fix_round_answers_is_read_from_the_childs_reviews():
     assert with_rounds([FINDING, "- b.txt — no docs — it is undocumented — document it"]).repeated_round(CHILD, 2) is False
 
 
+def test_a_requeued_issues_first_fix_round_is_not_told_of_the_last_fix():
+    """#882 (ADR-0151): a requeue cuts a fresh worktree, where the last fix's commit is not, so its first fix round
+    cannot name that fix's premise. The issue ledger still moves the coder one place down the chain, and the record is
+    the one source of the premise sentence: no premise sentence here."""
+    disp = with_rounds([FINDING])
+    disp.ledger_moves = lambda d: 1        # the ledger moved this issue's coder across a run
+    assert disp.repeated_round(CHILD, 1) is False
+
+
 def test_the_coder_moves_one_place_per_repeated_finding_until_the_chain_ends():
     """#702: the ledger holds how many times identical findings repeated; the chain moves that many places, and the last
     entry stays when the chain has no further one."""
