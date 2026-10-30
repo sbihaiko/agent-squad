@@ -28,3 +28,5 @@ This assumption is unverified. The access seam (`squad/tailnet_access.py`) assum
 A listed login reaches what a loopback caller reaches on the hub, limited to the profiles that list that login. The owner's list is the only source of tailnet access, and the owner must keep it current.
 
 A run dashboard server also answers a tailnet Host when its project file names `tailnet.host`. Rule 2 keeps it off the tailnet, because the owner's `tailscale serve` publishes only the hub port.
+
+The `tailnet` block is personal: a machine name and logins. `squad config set tailnet.*` writes it to the project's gitignored `.env` (`SQUAD_TAILNET_HOST`, `SQUAD_TAILNET_ALLOW`, `SQUAD_TAILNET_TERMINALS_SEND`) and refuses when git would track that file. A value there wins over one in the project file. Guard: `tests/test_tailnet_env.py`.

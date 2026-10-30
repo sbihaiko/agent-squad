@@ -11,6 +11,7 @@ Guards: `tests/test_project_settings.py`, `tests/test_config_write.py`.
 import copy
 import hashlib
 import re
+import subprocess
 from pathlib import Path
 
 import yaml
@@ -60,6 +61,46 @@ REQUIRED = {"options.effort", "options.permission_mode", "limits.max_stalls", "l
 ROLE_KEYS = {k.split(".", 1)[1] for k in CATALOG if k.startswith("options.")}
 # The keys that reach a call: a request carries the two token limits, and each cap is a ceiling a node can only narrow.
 CALL = ("limits.max_output_tokens", "limits.context_tokens", "limits.max_stalls", "limits.max_budget_usd", "limits.deadline_seconds")
+
+
+# The tailnet block is personal (a machine name, a login), so it lives in the project's gitignored `.env`, never in the tracked file.
+ENV = ".env"
+ENV_KEYS = {"tailnet.host": "SQUAD_TAILNET_HOST", "tailnet.allow": "SQUAD_TAILNET_ALLOW", "tailnet.terminals_send": "SQUAD_TAILNET_TERMINALS_SEND"}
+
+
+def _env_lines(target):
+    path = Path(target or ".") / ENV
+    return path, (path.read_text().splitlines() if path.is_file() else [])
+
+
+def env_tailnet(target):
+    """The tailnet keys the project's `.env` sets, as a `tailnet` block; empty when it sets none."""
+    _, lines = _env_lines(target)
+    names = {v: k.split(".", 1)[1] for k, v in ENV_KEYS.items()}
+    out = {}
+    for line in lines:
+        name, sep, raw = line.partition("=")
+        if sep and name.strip() in names:
+            key, raw = names[name.strip()], raw.strip().strip('"\'')
+            out[key] = [x.strip() for x in raw.split(",") if x.strip()] if key == "allow" else yaml.safe_load(raw) if key == "terminals_send" else raw
+    return out
+
+
+def _env_write(target, key, value):
+    """Set (or, with None, remove) one tailnet key in the project's `.env`. Refuse when git would track that file."""
+    path, lines = _env_lines(target)
+    if value is not None:
+        tracked = subprocess.run(["git", "-C", str(path.parent), "check-ignore", "-q", ENV], capture_output=True).returncode == 1
+        if tracked:
+            _refuse(key, f"{path} is not in .gitignore; add it there first, so a personal value never reaches git")
+    name = ENV_KEYS[key]
+    kept = [ln for ln in lines if ln.partition("=")[0].strip() != name]
+    if value is not None:
+        kept.append(f"{name}={','.join(value) if isinstance(value, list) else str(value).lower() if isinstance(value, bool) else value}")
+    if kept == lines:
+        return False
+    path.write_text("".join(ln + "\n" for ln in kept))
+    return True
 
 
 def path_for(target):
@@ -182,13 +223,23 @@ def check_file(target):
 def load(target):
     """Return (data, record) for the project file under `target`, or (None, None) when there is none. A bad file raises OptionError."""
     path = path_for(target)
+    env = env_tailnet(target)
     if not path.is_file():
-        return None, None
+        if not env:
+            return None, None
+        data = {"tailnet": env}
+        try:
+            validate(data)
+        except OptionError as e:
+            raise OptionError(f"{Path(target or '.') / ENV}: {e}") from e
+        return data, None
     try:
         data = yaml.safe_load(path.read_text())
     except yaml.YAMLError as e:
         raise OptionError(f"{path} is not valid YAML: {e}") from e
     data = {} if data is None else data
+    if env:
+        data["tailnet"] = {**(data.get("tailnet") or {}), **env}
     try:
         validate(data)
     except OptionError as e:
@@ -250,7 +301,12 @@ def _write(path, data):
 
 
 def set_key(target, key, raw):
-    """Write one key. Return True when the file changed. An unknown key, a credential key or an unsound value raises OptionError and writes nothing."""
+    """Write one key. Return True when the file changed. An unknown key, a credential key or an unsound value raises OptionError and writes nothing.
+    A tailnet key goes to the project's `.env` instead (ENV_KEYS)."""
+    if key in ENV_KEYS:
+        value = _coerce(key, raw)
+        validate({"tailnet": {key.split(".", 1)[1]: value}})
+        return _env_write(target, key, value)
     path, data = _read(target)
     parts = _parts(key)
     new = copy.deepcopy(data)
@@ -267,6 +323,8 @@ def set_key(target, key, raw):
 
 def reset_key(target, key):
     """Remove one key and keep the others; drop a section left empty. Return True when the file changed."""
+    if key in ENV_KEYS:
+        return _env_write(target, key, None)
     path, data = _read(target)
     parts = _parts(key)
     if key not in CATALOG and parts[0] != "roles":

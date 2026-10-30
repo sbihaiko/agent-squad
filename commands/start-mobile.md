@@ -1,5 +1,5 @@
 ---
-description: Reach the squad hub from the owner's phone over the tailnet. No argument checks each step; --apply (owner only) serves the hub and sets the tailnet config.
+description: Reach the squad hub from the owner's phone over the tailnet. No argument checks each step; --apply (owner only) serves the hub on the tailnet.
 argument-hint: "[--apply]"
 allowed-tools: Bash(bash:*)
 ---
@@ -9,8 +9,8 @@ Check, or set up, phone access to the hub over the tailnet (ADR-0152, `docs/quic
 Personal and machine values live in the project's gitignored `.env`:
 
 ```
-TAILNET_HOST=<MagicDNS name of this machine>
-TAILNET_ALLOW=<tailnet login allowed to reach the hub>
+SQUAD_TAILNET_HOST=<MagicDNS name of this machine>
+SQUAD_TAILNET_ALLOW=<tailnet logins allowed to reach the hub, comma-separated>
 TAILSCALE_BIN=<path to the tailscale CLI>
 HUB_PORT=7700
 ```
