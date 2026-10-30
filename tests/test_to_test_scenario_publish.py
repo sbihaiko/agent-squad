@@ -84,7 +84,8 @@ class FakeGitHub:
     """A recording stand-in for the real REST runner: no network, no `gh`, and a `next` counter for numbers."""
 
     def __init__(self, fail_on_create=None, rate_limited_once=None, start=100, world=None, status_lag=0):
-        self.world = world if world is not None else {"titles": {}, "kids": {}, "status": {}}   # what GitHub remembers
+        self.world = world if world is not None else {"titles": {}, "kids": {}, "status": {}, "labels": {}}   # what GitHub remembers
+        self.world.setdefault("labels", {})
         self.calls = []
         self.made = []
         self.next = start
@@ -106,6 +107,7 @@ class FakeGitHub:
             made = {"number": self.next, "id": 900 + self.next}
             self.made.append((kw, made))
             self.world["titles"][self.next] = kw["title"]
+            self.world["labels"][self.next] = list(kw["labels"])
             return made
         if op == "add_sub_issue":
             number = kw["sub"] - 900
@@ -113,6 +115,10 @@ class FakeGitHub:
                 {"number": number, "id": kw["sub"], "title": self.world["titles"].get(number, "")})
         if op == "list_sub_issues":
             return list(self.world["kids"].get(kw["number"], []))
+        if op == "update_issue":
+            self.world["labels"][kw["number"]] = list(kw["labels"])
+        if op == "issue_state":
+            return {"labels": list(self.world["labels"].get(kw["number"], []))}
         if op == "board":
             self.world.setdefault("status", {})[kw["number"]] = kw.get("status")
         if op == "item_status":
@@ -478,6 +484,54 @@ def test_a_plan_over_the_sub_issue_cap_is_refused_before_anything_is_created(tmp
 
 # --- #895 follow-up: the triage label waits for the Status read-back ------------------------------
 
+def test_a_publish_with_no_board_adds_the_triage_label_straight_after_the_create_and_reads_no_status(tmp_path):
+    """No board means no card and no Status: the read-back would wait for a card that never comes."""
+    _, _, plan = tiny_plan(tmp_path)
+    gh = FakeGitHub()
+    out = publish(plan, gh, map_path=tmp_path / "tiny.gui-test.issues.json", board=False)
+    assert not gh.of("item_status")
+    created_at = next(i for i, (op, kw) in enumerate(gh.calls) if op == "create_issue" and kw["title"] == plan["parent"]["title"])
+    labelled = [i for i, (op, kw) in enumerate(gh.calls)
+                if op == "update_issue" and kw["number"] == out["parent"] and TRIAGE_LABEL in kw["labels"]]
+    assert labelled and labelled[0] > created_at
+
+
+def test_a_republish_keeps_ready_for_agent_and_reads_no_status_once_the_owner_moved_the_card(tmp_path):
+    """A known parent keeps its triage label and is not read back: the owner may have moved its card to Todo."""
+    _, _, plan = tiny_plan(tmp_path)
+    map_path = tmp_path / "tiny.gui-test.issues.json"
+    first = FakeGitHub()
+    out = publish(plan, first, map_path=map_path)
+    first.world["status"][out["parent"]] = "Todo"
+    again = first.again(start=200)
+    out2 = publish(plan, again, map_path=map_path)
+    assert out2["parent"] == out["parent"]
+    assert not again.of("item_status")
+    parent_labels = [kw["labels"] for kw in again.of("update_issue") if kw["number"] == out["parent"]]
+    assert parent_labels and all(TRIAGE_LABEL in labels for labels in parent_labels)
+
+
+def test_a_publish_interrupted_after_the_board_add_still_adds_ready_for_agent_on_resume(tmp_path):
+    """The board add is done and the label write dies: a resume must add the label without boarding the card twice."""
+    _, _, plan = tiny_plan(tmp_path)
+    map_path = tmp_path / "tiny.gui-test.issues.json"
+
+    class DropsOnTheLabel(FakeGitHub):
+        def __call__(self, op, **kw):
+            if op == "update_issue" and TRIAGE_LABEL in kw["labels"]:
+                self.calls.append((op, kw))
+                raise RuntimeError("the connection dropped")
+            return super().__call__(op, **kw)
+
+    first = DropsOnTheLabel()
+    with pytest.raises(RuntimeError):
+        publish(plan, first, map_path=map_path)
+    resumed = FakeGitHub(start=200, world=first.world)
+    out = publish(plan, resumed, map_path=map_path)
+    assert not resumed.of("board")
+    labelled = [kw for kw in resumed.of("update_issue") if kw["number"] == out["parent"] and TRIAGE_LABEL in kw["labels"]]
+    assert labelled
+
 def test_the_triage_label_is_added_only_after_the_parent_status_reads_back(tmp_path):
     _, _, plan = tiny_plan(tmp_path)
     gh, sleeps = FakeGitHub(status_lag=2), Sleeps()
@@ -509,19 +563,35 @@ def test_a_status_that_never_reads_back_adds_no_label_and_names_the_failure(tmp_
     assert read_issues(map_path)["boarded"] is True                      # the card is kept; a resume re-reads it
 
 
-def test_rest_runner_reads_a_cards_status_by_its_issue_number_from_the_project_items():
+def _project_items(*nodes):
+    """A GraphQL answer: the issue's own project items, each with its project's URL and its Status."""
+    return json.dumps({"data": {"repository": {"issue": {"projectItems": {"nodes": [
+        {"project": {"url": f"https://github.com/{url}"}, "fieldValueByName": {"name": status} if status else None}
+        for url, status in nodes]}}}}})
+
+
+def test_rest_runner_reads_a_cards_status_from_its_own_issue_on_the_named_board():
     seen = []
 
     def shell(args, **kw):
         seen.append(args)
-        if args[:3] == ["gh", "project", "item-list"]:
-            return json.dumps({"items": [
-                {"id": "PVTI_a", "status": "Todo", "content": {"number": 7, "type": "Issue"}},
-                {"id": "PVTI_b", "status": "Backlog", "content": {"number": 8, "type": "Issue"}}]})
-        return "{}"
+        return _project_items(("users/sbihaiko/projects/9", "Todo"), ("users/sbihaiko/projects/3", "Backlog"))
 
     gh = rest_runner("sbihaiko/MesenAI", shell=shell, project="users/sbihaiko/projects/3")
     assert gh("item_status", number=8) == "Backlog"
-    assert gh("item_status", number=9) is None           # not on the board yet: the caller reads again
-    listed = next(a for a in seen if a[:3] == ["gh", "project", "item-list"])
-    assert listed[3:6] == ["3", "--owner", "sbihaiko"] and listed[listed.index("--limit") + 1] == "1000"
+    assert seen[0][:3] == ["gh", "api", "graphql"] and "number=8" in seen[0] and "owner=sbihaiko" in seen[0]
+    assert not [a for a in seen if a[:3] == ["gh", "project", "item-list"]]
+
+
+def test_rest_runner_reads_no_status_for_an_issue_that_is_not_on_the_named_board():
+    gh = rest_runner("sbihaiko/MesenAI", shell=lambda args, **kw: _project_items(("users/sbihaiko/projects/9", "Todo")),
+                     project="users/sbihaiko/projects/3")
+    assert gh("item_status", number=8) is None           # not on that board yet: the caller reads again
+
+
+def test_rest_runner_names_the_missing_board_when_it_reads_a_status_with_no_project():
+    seen = []
+    gh = rest_runner("sbihaiko/MesenAI", shell=lambda args, **kw: seen.append(args) or "{}")
+    with pytest.raises(ValueError, match="needs a project board"):
+        gh("item_status", number=8)
+    assert seen == []
