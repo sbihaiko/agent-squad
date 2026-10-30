@@ -905,7 +905,10 @@ rm -f "$T/closed"
 
 # 25) (#868, debt) the only bug candidate is closed: no bug waits for the frontier, and debt is still considered.
 rm -rf "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"; rm -f "$T/st/bugs-waiting"
-python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); json.dump([x for x in d if x["number"]!=1228], open(p,"w"))' "$T/issues.json"
+cat > "$T/issues.json" <<'JSON'
+[{"number":1400,"title":"Debt: retry has no backoff","body":"<!-- debt-key:abcd -->","created_at":"2026-10-10T16:00:00Z","labels":["debt","ready-for-agent"]},
+ {"number":1500,"title":"Core: closed by hand","body":"step c.py","created_at":"2026-10-10T18:00:00Z","labels":["bug","ready-for-agent"]}]
+JSON
 todo 1400 1500; printf '1500\n' > "$T/closed"
 printf 'caps:\n  runs: 2\n' > "$T/co/docs/squad/defaults.yaml"
 r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)

@@ -187,6 +187,18 @@ ready_now() {   # <issue>: 0 when stack.sh answers READY
   [ "$(cat "$A/abwait-$n" 2>/dev/null)" = "$w" ] || { echo "AUTOBUG skip #$n: $w"; printf '%s\n' "$w" > "$A/abwait-$n"; }
   return 1
 }
+# ab_check_open <issue>...: sets live to the ones whose own read says open. That read is the check before the claim (#868): the
+# open list was read earlier, and an issue closed since is skipped. A read that fails exits the pass, as before (#556).
+ab_check_open() {
+  local n j rc
+  live=()
+  for n in "$@"; do
+    j=$(sg_issue_body "$n"); rc=$?
+    [ "$rc" -eq 0 ] || { echo "AUTOBUG: dropping candidate #$n: not a readable non-PR issue; nothing dispatched" >&2; exit 0; }
+    [ "$(printf '%s' "$j" | jq -r '.state // ""')" = closed ] && { echo "AUTOBUG skip #$n: its issue is closed, so it is not dispatched"; continue; }
+    printf '%s' "$j" > "$F/body-$n.json"; live+=("$n")
+  done
+}
 # candidates first, then clusters (cluster.py: same area + time window, or a shared file path) -> one child per cluster
 cand=(); cj="["; nb=0
 for sel in "$lab" debt; do
@@ -206,26 +218,20 @@ for sel in "$lab" debt; do
     sg_ac_refused "$n" "$F/issue-$n.json" AUTOBUG && continue   # an acceptance command on a missing script (#729)
     cand+=("$n")
   done <<<"$list"
-  [ "$sel" = "$lab" ] && nb=${#cand[@]}   # the bugs among the candidates; debt is read only when there is none (#616)
+  if [ "$sel" = "$lab" ]; then
+    # The startable bugs this pass leaves without a run (#616), read by the frontier pass: every candidate until the pick is known.
+    nb=${#cand[@]}; echo "$nb" > "$SG_STATE/bugs-waiting"
+    ab_check_open "${cand[@]}"; cand=("${live[@]}")   # a bug closed since the open list is no candidate: it waits for no slot (#868)
+    nb=${#cand[@]}; echo "$nb" > "$SG_STATE/bugs-waiting"   # the live count; debt is considered only when it is 0 (#616)
+  else
+    ab_check_open "${cand[@]}"; cand=("${live[@]}")
+  fi
 done
-# The startable bugs this pass leaves without a run (#616), read by the frontier pass: every candidate until the pick is known.
-echo "${nb:-0}" > "$SG_STATE/bugs-waiting"
 [ ${#cand[@]} -gt 0 ] || exit 0
 # every candidate is a decimal issue number that resolves to a non-PR issue; anything else is dropped and logged. On
 # 2026-10-12 the exit-code fix alone was not enough: one line of rate-limit text reached here and its words became
 # "issues" -- so the check is on the whole cluster, never on the number alone (#1855).
-live=()
-for n in "${cand[@]}"; do
-  case "$n" in ''|*[!0-9]*) echo "AUTOBUG: dropping candidate '$n': not a decimal issue number" >&2; exit 0;; esac
-  j=$(sg_issue_body "$n"); rc=$?
-  [ "$rc" -eq 0 ] || { echo "AUTOBUG: dropping candidate #$n: not a readable non-PR issue; nothing dispatched" >&2; exit 0; }
-  # The state this read carries is the check before the claim (#868): the open list was read earlier, and an issue closed
-  # since then is not dispatched. One read per candidate, as before (#556).
-  [ "$(printf '%s' "$j" | jq -r '.state // ""')" = closed ] && { echo "AUTOBUG skip #$n: its issue is closed, so it is not dispatched"; continue; }
-  cj+="$j,"; live+=("$n")
-done
-cand=("${live[@]}")
-[ ${#cand[@]} -gt 0 ] || exit 0
+for n in "${cand[@]}"; do cj+="$(cat "$F/body-$n.json"),"; done   # one read per candidate, made by ab_check_open (#556)
 cj="${cj%,}]"
 # One candidate is already one cluster of one, so the pass spends no Python startup on cluster.py for it (#556).
 if [ ${#cand[@]} -eq 1 ]; then cl=${cand[0]}; else cl=$(python3 "$here/cluster.py" <<<"$cj" 2>/dev/null) || exit 0; fi   # cluster.py itself never answered: no cluster to trust
