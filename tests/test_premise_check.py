@@ -5,6 +5,7 @@ asks the owner at most five questions, each with a recommended answer that "yes"
 on the spec, found by its marker and rewritten in place.
 """
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -291,3 +292,169 @@ def test_the_skill_and_its_agent_door_are_wired():
     assert "squad premise-check" in skill.read_text()
     assert "squad premise-check" in door.read_text() and "premise-check/SKILL.md" in door.read_text()
     assert "`agent-premise-check`" in (ROOT / "CLAUDE.md").read_text()
+
+
+# --- an answer rewrites the spec in place and opens the next round -------------------------------------------
+
+class StubRepo:
+    """A stub GitHub that also holds the spec's body: the ops an answer round uses, on the one injectable runner."""
+
+    def __init__(self, body=""):
+        self.calls = []
+        self.comments = {}
+        self.issue = {"number": 878, "body": body}
+
+    def __call__(self, op, **kw):
+        self.calls.append(op)
+        if op == "comments":
+            return [{"id": i, "body": b} for i, b in self.comments.items()]
+        if op == "comment":
+            self.comments[len(self.comments) + 1] = kw["body"]
+            return {"id": len(self.comments)}
+        if op == "update_comment":
+            self.comments[kw["comment_id"]] = kw["body"]
+            return {"id": kw["comment_id"]}
+        if op == "issue":
+            return self.issue
+        if op == "update_issue":
+            self.issue["body"] = kw["body"]
+            return self.issue
+        raise AssertionError(op)
+
+
+def round_of(tmp_path, gh, *findings, answers=(), round_no=1):
+    return pc.run_round(878, [pc.Finding.of(f) for f in findings], answers,
+                        github=gh, root=tmp_path, round_no=round_no, who=reviewer())
+
+
+def test_an_answer_rewrites_the_spec_body_and_the_comment(tmp_path):
+    gh = StubRepo("# Spec\n\nThe check runs one round.\n")
+    finding = {"premise": "one comment per spec", "kind": "decision", "recommends": "one comment, rewritten in place"}
+    answer = {"premise": "one comment per spec", "answer": "one comment, rewritten in place"}
+    report = round_of(tmp_path, gh, finding, answers=[answer])
+    assert "## Answers" in gh.issue["body"]
+    assert "one comment, rewritten in place" in gh.issue["body"]
+    assert gh.calls.count("update_issue") == 1 and "update_comment" not in gh.calls
+    assert "| decided |" in report.body and "one comment, rewritten in place" in report.body
+    assert report.applied is True
+    # the same answers rewrite nothing twice
+    before = gh.issue["body"]
+    report2 = round_of(tmp_path, gh, finding, answers=[answer], round_no=2)
+    assert gh.issue["body"] == before
+    assert report2.applied is False
+
+
+def test_a_glossary_answer_writes_the_term_into_the_glossary(tmp_path):
+    (tmp_path / "GLOSSARY.md").write_text("# Glossary\n\n**Node**:\nOne unit of the graph.\n")
+    answer = {"premise": "the term round", "kind": "glossary", "term": "Round",
+              "definition": "One invocation of the premise check."}
+    report = round_of(tmp_path, StubRepo("# Spec\n"), answers=[answer])
+    text = (tmp_path / "GLOSSARY.md").read_text()
+    assert "**Round**:" in text and "One invocation of the premise check." in text
+    assert text.count("**Round**:") == 1
+    assert report.glossary == (tmp_path / "GLOSSARY.md",)
+    round_of(tmp_path, StubRepo("# Spec\n"), answers=[answer])
+    assert (tmp_path / "GLOSSARY.md").read_text().count("**Round**:") == 1
+
+
+def test_a_durable_decision_becomes_an_adr_with_a_readme_line(tmp_path):
+    (tmp_path / "docs/adr").mkdir(parents=True)
+    (tmp_path / "docs/adr/README.md").write_text(
+        "# ADR index\n\n| ADR | Rule |\n| --- | --- |\n| [0000](0000-a-rule.md) | A rule |\n\n## Adding an ADR\n\nTake the next free number.\n")
+    answer = {"premise": "answers rewrite the spec", "kind": "adr",
+              "title": "An answer rewrites the spec in place",
+              "decision": "An owner answer rewrites the spec body and opens the next round."}
+    report = round_of(tmp_path, StubRepo("# Spec\n"), answers=[answer])
+    adr = tmp_path / "docs/adr/0001-an-answer-rewrites-the-spec-in-place.md"
+    assert adr.is_file() and report.adrs == (adr,)
+    text = adr.read_text()
+    assert "An answer rewrites the spec in place" in text and "opens the next round" in text
+    assert "## Status" not in text and not re.search(r"\d{4}-\d{2}-\d{2}", text)
+    assert "#883" not in text and "Refs" not in text and "run-" not in text
+    line = "| [0001](0001-an-answer-rewrites-the-spec-in-place.md) | An answer rewrites the spec in place |"
+    assert line in (tmp_path / "docs/adr/README.md").read_text()
+    # the same durable decision reuses its ADR and adds no second README line
+    round_of(tmp_path, StubRepo("# Spec\n"), answers=[answer])
+    readme = (tmp_path / "docs/adr/README.md").read_text()
+    assert readme.count("0001-an-answer-rewrites-the-spec-in-place.md") == 1
+    assert not (tmp_path / "docs/adr/0002-an-answer-rewrites-the-spec-in-place.md").exists()
+
+
+def test_a_question_unblocked_by_an_answer_is_asked_in_the_next_round(tmp_path):
+    gh = StubRepo("# Spec\n")
+    first = {"premise": "the check comments on the spec", "kind": "decision", "recommends": "comment on the spec"}
+    dependent = {"premise": "the comment carries a table", "kind": "decision", "recommends": "one table",
+                 "depends_on": "the check comments on the spec"}
+    r1 = round_of(tmp_path, gh, first, dependent)
+    by1 = {r.premise: r for r in r1.rows}
+    assert by1["the check comments on the spec"].question == 1
+    assert by1["the comment carries a table"].question is None and "waits on" in by1["the comment carries a table"].held
+    answer = {"premise": "the check comments on the spec", "answer": "comment on the spec", "answered_by": "owner"}
+    r2 = round_of(tmp_path, gh, first, dependent, answers=[answer], round_no=2)
+    by2 = {r.premise: r for r in r2.rows}
+    assert by2["the check comments on the spec"].state == "decided"
+    assert by2["the comment carries a table"].question == 1     # unblocked, asked now and not before
+
+
+def test_i_dont_know_becomes_a_probe_or_a_recorded_open_risk_never_decided(tmp_path):
+    with_probe = {"premise": "the wave lands in under ten minutes", "kind": "decision",
+                  "proof": "run the default workflow once and read the run record", "recommends": "it lands"}
+    no_probe = {"premise": "the format of the comment", "kind": "decision", "recommends": "one table"}
+    answers = [{"premise": "the wave lands in under ten minutes", "answer": "I don't know"},
+               {"premise": "the format of the comment", "answer": "I don't know"}]
+    report = round_of(tmp_path, StubRepo("# Spec\n"), with_probe, no_probe, answers=answers)
+    by = {r.premise: r for r in report.rows}
+    assert by["the wave lands in under ten minutes"].state == "needs a probe"
+    assert "run the default workflow once" in by["the wave lands in under ten minutes"].detail
+    assert by["the format of the comment"].state == "open"
+    assert by["the format of the comment"].risk is True and "open risk" in by["the format of the comment"].detail
+    assert all(r.state not in ("proven", "decided") for r in report.rows)
+    assert "open risk" in report.body
+
+
+def test_a_repeated_refutation_with_no_spec_change_stops_the_check(tmp_path):
+    refutation = {"premise": "the module never writes the spec", "kind": "fact",
+                  "proof": "squad/premise_check.py:1", "holds": False}
+    gh = StubRepo("# Spec\n\nThe registry decides the route.\n")
+    first = round_of(tmp_path, gh, refutation, round_no=1)
+    assert first.stop_reason == "" and first.ending != "stopped"
+    second = round_of(tmp_path, gh, refutation, round_no=2)
+    assert second.stop_reason == pc.STALL and second.ending == "stopped"
+    assert pc.STALL in second.body
+    # a changed spec restarts the count: an answer rewrote the body
+    gh2 = StubRepo("# Spec\n\nThe registry decides the route.\n")
+    round_of(tmp_path, gh2, refutation, round_no=1)
+    answer = {"premise": "an unrelated premise", "answer": "yes"}
+    assert round_of(tmp_path, gh2, refutation, answers=[answer], round_no=2).stop_reason == ""
+    # a changed refutation is a different failure, so the streak restarts
+    gh3 = StubRepo("# Spec\n")
+    round_of(tmp_path, gh3, refutation, round_no=1)
+    other = {"premise": "the module reads a file", "kind": "fact", "proof": "squad/premise_check.py:2", "holds": False}
+    assert round_of(tmp_path, gh3, other, round_no=2).stop_reason == ""
+
+
+def test_the_check_ends_when_no_question_is_open(tmp_path):
+    assert "settled" in pc.ENDINGS and "stopped" in pc.ENDINGS
+    settled = rows_of(tmp_path, one_fact(),
+                      {"premise": "one comment per spec", "kind": "decision", "answer": "one", "answered_by": "owner"})
+    assert pc.ending(settled) == "settled"
+    assert pc.ending(rows_of(tmp_path, {"premise": "the format", "kind": "decision", "recommends": "a table"})) == "awaiting answers"
+    assert pc.ending(rows_of(tmp_path, {"premise": "the wave lands", "kind": "run", "proof": "run it once"})) == "awaiting probes"
+    body = pc.render(spec=878, round_no=1, reviewer=reviewer(), rows=settled, ending=pc.ending(settled))
+    assert "End state:** settled" in body
+
+
+def test_the_command_takes_an_answers_file():
+    a = pc.parser().parse_args(["878", "--findings", "findings.json", "--answers", "answers.json"])
+    assert a.answers == "answers.json"
+    assert pc.parser().parse_args(["878", "--findings", "findings.json"]).answers is None
+
+
+def test_the_skill_names_the_answers_input_and_the_end_states():
+    text = (ROOT / ".claude/skills/premise-check/SKILL.md").read_text()
+    assert "--answers" in text
+    for word in ("settled", "awaiting answers", "stopped"):
+        assert word in text, word
+    assert "Do not rewrite the spec's text" not in text
+    assert "rewrite the spec body" in text or "rewrites the spec body" in text
+    assert "ADR-0142" in text         # the round still never starts the spec's tickets

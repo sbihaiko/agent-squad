@@ -13,12 +13,19 @@ repository, so it never reviews. This module holds the rules of a round, so the 
 The round writes ONE comment on the spec, found by its marker and rewritten in place, so a second round replaces
 the first instead of adding to it.
 
+An owner answer rewrites the spec body in place and opens the next round. One answer that defines a term is written
+into `GLOSSARY.md`, one that records a durable decision becomes an ADR under `docs/adr/`, and "I don't know" becomes
+a probe entry or a recorded open risk, never a settled premise. A question unblocked by an answer is asked in the
+next round, and the same refutation repeated with no change in the spec stops the check (ADR-0134).
+
 The findings are the reviewer's judgment and come from a file; this module is the deterministic part:
 
-    uv run squad premise-check <spec> --findings findings.json                one round, written to the spec
-    uv run squad premise-check <spec> --findings findings.json --dry-run      print the comment, write nothing
+    uv run squad premise-check <spec> --findings findings.json                          one round, written to the spec
+    uv run squad premise-check <spec> --findings findings.json --answers answers.json   the next round, after answers
+    uv run squad premise-check <spec> --findings findings.json --dry-run                print the comment, write nothing
 """
 import argparse
+import hashlib
 import json
 import re
 import subprocess
@@ -36,11 +43,22 @@ MODELS = "contrib/squad-goal/scripts/models.json"
 MAX_QUESTIONS = 5
 STATES = ("proven", "refuted", "needs a probe", "decided", "open")
 KINDS = ("fact", "run", "decision")
+ANSWER_KINDS = ("decision", "glossary", "adr")
+ENDINGS = ("awaiting answers", "awaiting probes", "blocked", "settled", "stopped")
+STALL = "the same refutation repeated with no change in the spec"
 READING = "reading"
 NOBODY = "—"
 MARKER = "<!-- premise-check: spec={spec} -->"
+ANSWERS_OPEN = "<!-- premise-answers -->"
+ANSWERS_CLOSE = "<!-- /premise-answers -->"
+ANSWERS_HEADING = "## Answers"
+# An answer the owner does not know: it settles nothing and is never read as a settled premise.
+UNKNOWN = ("i don't know", "i do not know", "i dont know", "don't know", "do not know", "unknown", "not sure",
+           "no idea", "unsure", "idk")
 
 _CITE = re.compile(r"^(?P<path>[^\s:]+):(?P<start>\d+)(?:-(?P<end>\d+))?$")
+_STATE = re.compile(r"<!-- premise-check-state: round=(?P<round>\d+) body=(?P<sha>[0-9a-f]+) refuted=(?P<refuted>.*?) -->")
+_ANSWER_BLOCK = re.compile(r"\n*" + re.escape(ANSWERS_OPEN) + r".*?" + re.escape(ANSWERS_CLOSE) + r"\n*", re.S)
 
 
 class NoReviewer(Exception):
@@ -78,6 +96,53 @@ class Finding:
 
 
 @dataclass(frozen=True)
+class Answer:
+    """One owner answer: the premise it settles, its text, and where a durable record of it goes."""
+
+    premise: str
+    answer: str = ""            # the owner's words for a decision
+    answered_by: str = "owner"
+    kind: str = "decision"      # decision | glossary | adr
+    term: str = ""              # glossary: the term it defines
+    definition: str = ""        # glossary: what the term means
+    title: str = ""             # adr: the decision's one-line title
+    decision: str = ""          # adr: the durable decision it records
+
+    @property
+    def text(self) -> str:
+        """The answer as the spec body carries it."""
+        if self.kind == "glossary":
+            return f"{self.term}: {self.definition}"
+        if self.kind == "adr":
+            return self.title
+        return self.answer
+
+    @classmethod
+    def of(cls, raw) -> "Answer":
+        if isinstance(raw, cls):
+            return raw
+        if not isinstance(raw, dict):
+            raise ValueError(f"an answer is an object, not {type(raw).__name__}")
+        kind = raw.get("kind", "decision")
+        if kind not in ANSWER_KINDS:
+            raise ValueError(f"an answer's kind is one of {ANSWER_KINDS}, not {kind!r}")
+        premise = str(raw.get("premise") or "").strip()
+        if not premise:
+            raise ValueError("an answer needs a premise")
+        answer = cls(premise=premise, answer=str(raw.get("answer") or ""),
+                     answered_by=str(raw.get("answered_by") or "owner"), kind=kind,
+                     term=str(raw.get("term") or ""), definition=str(raw.get("definition") or ""),
+                     title=str(raw.get("title") or ""), decision=str(raw.get("decision") or ""))
+        if kind == "decision" and not answer.answer:
+            raise ValueError(f"the answer to {premise!r} is empty")
+        if kind == "glossary" and not (answer.term and answer.definition):
+            raise ValueError(f"the glossary answer to {premise!r} needs a term and a definition")
+        if kind == "adr" and not (answer.title and answer.decision):
+            raise ValueError(f"the ADR answer to {premise!r} needs a title and a decision")
+        return answer
+
+
+@dataclass(frozen=True)
 class Row:
     """One line of the check: the premise, its state, the proof or the answer, and who answered."""
 
@@ -88,6 +153,7 @@ class Row:
     recommends: str = ""
     question: int | None = None     # the number it is asked as this round
     held: str = ""                  # why it is not asked this round
+    risk: bool = False              # a recorded open risk: the owner does not know, so it is never assumed
 
     @property
     def asked(self) -> bool:
@@ -125,6 +191,11 @@ def cited(proof: str, read: Callable[[str], str]) -> str | None:
     return m.group(0)
 
 
+def unknown(answer: str) -> bool:
+    """The owner does not know: the words settle nothing, so they are never read as a decided premise."""
+    return " ".join(str(answer).lower().split()).strip(" .!?") in UNKNOWN
+
+
 def resolve(findings, read: Callable[[str], str] | None = None) -> list[Row]:
     """One row per finding: what reading proves, what only running proves, what is decided, and what is still open."""
     read = read or _repo_read
@@ -141,6 +212,11 @@ def resolve(findings, read: Callable[[str], str] | None = None) -> list[Row]:
                 rows.append(Row(f.premise, "open", reason, NOBODY, f.recommends))
             else:
                 rows.append(Row(f.premise, "proven" if f.holds else "refuted", f"`{cite}`", READING, f.recommends))
+        elif f.answer and unknown(f.answer):
+            if f.proof:
+                rows.append(Row(f.premise, "needs a probe", f"probe: {f.proof}", NOBODY, f.recommends))
+            else:
+                rows.append(Row(f.premise, "open", "open risk: the owner does not know", NOBODY, "", risk=True))
         elif f.answer:
             rows.append(Row(f.premise, "decided", f.answer, f.answered_by or "owner", f.recommends))
         else:
@@ -158,6 +234,9 @@ def ask(rows: list[Row], depends: dict[str, str] | None = None) -> list[Row]:
         if r.state != "open":
             out.append(r)
             continue
+        if r.risk:
+            out.append(replace(r, held="recorded open risk: the owner does not know, so it is never assumed"))
+            continue
         if not r.recommends:
             out.append(replace(r, held="not asked: it names no recommended answer"))
             continue
@@ -173,6 +252,18 @@ def ask(rows: list[Row], depends: dict[str, str] | None = None) -> list[Row]:
     return out
 
 
+def ending(rows: list[Row]) -> str:
+    """The check's end state: it waits for answers, waits for probes, is blocked, or is settled when no question is open."""
+    open_rows = [r for r in rows if r.state == "open" and not r.risk]
+    if any(r.asked for r in open_rows):
+        return "awaiting answers"
+    if open_rows:
+        return "blocked"
+    if any(r.state == "needs a probe" for r in rows):
+        return "awaiting probes"
+    return "settled"
+
+
 def check(findings, read: Callable[[str], str] | None = None) -> list[Row]:
     """One round: resolve every finding, then number the questions the owner is asked."""
     parsed = [Finding.of(f) for f in findings]
@@ -184,8 +275,9 @@ def _cell(text: str) -> str:
     return " ".join(str(text).split()).replace("|", "\\|")
 
 
-def render(spec: int, round_no: int, reviewer: Reviewer, rows: list[Row]) -> str:
-    """The round's one comment: the marker, the reviewer, and one table of premise, state, proof or answer, who."""
+def render(spec: int, round_no: int, reviewer: Reviewer, rows: list[Row], ending: str = "",
+           body_sha: str = "", stop_reason: str = "") -> str:
+    """The round's one comment: the marker, the reviewer, one table of premise, state, proof or answer, who, its end."""
     lines = [MARKER.format(spec=spec), "",
              f"Premise check, round {round_no}. Reviewer: {reviewer.label} (`{reviewer.wire}`), route `{reviewer.route}`.",
              "",
@@ -200,18 +292,185 @@ def render(spec: int, round_no: int, reviewer: Reviewer, rows: list[Row]) -> str
         else:
             answer = r.detail
         lines.append(f"| {_cell(premise)} | {r.state} | {_cell(answer)} | {_cell(r.answered_by)} |")
+    if ending:
+        lines += ["", f"**End state:** {ending}."]
+    if stop_reason:
+        lines += ["", f"**Stopped:** {stop_reason}."]
+    if body_sha:
+        refuted = json.dumps(sorted(r.premise for r in rows if r.state == "refuted"))
+        lines += ["", f"<!-- premise-check-state: round={round_no} body={body_sha} refuted={refuted} -->"]
     return "\n".join(lines) + "\n"
 
 
-def upsert(github, spec: int, body: str) -> str:
-    """Write the check on the spec once: the comment is found by its marker, so a later round rewrites it in place."""
+def state_of(text: str) -> dict | None:
+    """The state a previous round recorded in its comment: the round, the spec body it read, and its refutations."""
+    m = _STATE.search(text or "")
+    if not m:
+        return None
+    return {"round": int(m["round"]), "sha": m["sha"], "refuted": json.loads(m["refuted"])}
+
+
+def find_comment(github, spec: int) -> dict | None:
+    """The check's one comment on the spec, found by its marker, or None before the first round."""
     marker = MARKER.format(spec=spec)
-    found = next((c for c in github("comments", number=spec) or [] if marker in (c.get("body") or "")), None)
+    return next((c for c in github("comments", number=spec) or [] if marker in (c.get("body") or "")), None)
+
+
+def write_comment(github, spec: int, found: dict | None, body: str) -> str:
+    """Write the check on the spec once, rewriting the comment found by its marker in place."""
     if found is None:
         github("comment", number=spec, body=body)
         return "created"
     github("update_comment", comment_id=found["id"], body=body)
     return "updated"
+
+
+def upsert(github, spec: int, body: str) -> str:
+    """Write the check on the spec once: the comment is found by its marker, so a later round rewrites it in place."""
+    return write_comment(github, spec, find_comment(github, spec), body)
+
+
+# --- an owner answer: the spec body, the glossary, the ADRs -------------------------------------------------
+
+def apply_answers(body: str, answers) -> str:
+    """Rewrite the spec body's answers block: the text before it is kept, and the same answers rewrite nothing twice."""
+    answers = [Answer.of(a) for a in answers]
+    if not answers:
+        return body
+    base = _ANSWER_BLOCK.sub("\n\n", body or "").rstrip()
+    block = [ANSWERS_OPEN, ANSWERS_HEADING, ""] + [f"- **{a.premise}** — {a.text}" for a in answers] + [ANSWERS_CLOSE]
+    return base + "\n\n" + "\n".join(block) + "\n"
+
+
+def merge_answers(findings, answers) -> list[Finding]:
+    """Fold each owner answer into the finding it answers, so the next round reads that premise as decided."""
+    answers = [Answer.of(a) for a in answers]
+    by_premise = {a.premise: a for a in answers}
+    out = []
+    for raw in findings:
+        f = Finding.of(raw)
+        a = by_premise.get(f.premise)
+        if a and not f.answer:
+            f = replace(f, answer=a.text, answered_by=a.answered_by)
+        out.append(f)
+    return out
+
+
+def write_glossary(root: Path, answer) -> Path:
+    """Write a term the owner defined into GLOSSARY.md, once."""
+    answer = Answer.of(answer)
+    path = Path(root) / "GLOSSARY.md"
+    text = path.read_text() if path.exists() else "# Glossary\n"
+    if f"**{answer.term}**:" in text:
+        return path
+    path.write_text(text.rstrip() + f"\n\n**{answer.term}**:\n{answer.definition}\n")
+    return path
+
+
+def _slug(title: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-") or "decision"
+
+
+def write_adr(root: Path, answer) -> Path:
+    """Record a durable decision as an ADR: no date, count, status, issue number or run id, and one index line."""
+    answer = Answer.of(answer)
+    d = Path(root) / "docs/adr"
+    d.mkdir(parents=True, exist_ok=True)
+    slug = _slug(answer.title)
+    existing = sorted(d.glob(f"*-{slug}.md"))
+    if existing:
+        path = existing[0]
+        number = path.name[:4]
+    else:
+        numbers = [int(p.name[:4]) for p in d.glob("[0-9][0-9][0-9][0-9]-*.md")]
+        number = f"{(max(numbers) + 1) if numbers else 1:04d}"
+        path = d / f"{number}-{slug}.md"
+    path.write_text(
+        f"# ADR-{number}: {answer.title}\n\n"
+        "## Context\n\n"
+        "A spec's premise needed the owner's decision, and the owner answered it.\n\n"
+        "## Decision\n\n"
+        f"1. {answer.decision}\n\n"
+        "## Guard\n\n"
+        "None yet. This rule is a draft until a named guard test exists (ADR-0018).\n")
+    _index_adr(d, path.name, number, answer.title)
+    return path
+
+
+def _index_adr(d: Path, filename: str, number: str, title: str) -> None:
+    """Add the ADR's one line to the index, after the last row, and never twice."""
+    readme = d / "README.md"
+    text = readme.read_text() if readme.exists() else "# ADR index\n\n| ADR | Rule |\n| --- | --- |\n\n"
+    if f"]({filename})" in text:
+        return
+    lines = text.splitlines()
+    last = max((i for i, ln in enumerate(lines) if ln.startswith("| [")), default=None)
+    row = f"| [{number}]({filename}) | {title} |"
+    if last is None:
+        lines += [row]
+    else:
+        lines.insert(last + 1, row)
+    readme.write_text("\n".join(lines) + "\n")
+
+
+def write_artifacts(root: Path, answers) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
+    """Write every durable answer where it belongs: a defined term to the glossary, a decision to an ADR."""
+    glossary, adrs = [], []
+    for raw in answers:
+        a = Answer.of(raw)
+        if a.kind == "glossary":
+            glossary.append(write_glossary(root, a))
+        elif a.kind == "adr":
+            adrs.append(write_adr(root, a))
+    return tuple(glossary), tuple(adrs)
+
+
+@dataclass(frozen=True)
+class Report:
+    """What one round did: its comment, its end state, whether it applied answers, and where the durable records went."""
+
+    body: str
+    ending: str
+    round_no: int
+    action: str = ""
+    stop_reason: str = ""
+    applied: bool = False
+    rows: tuple[Row, ...] = ()
+    glossary: tuple[Path, ...] = ()
+    adrs: tuple[Path, ...] = ()
+
+
+def run_round(spec: int, findings, answers=(), *, github, root=None, round_no: int | None = None,
+              who: Reviewer, dry_run: bool = False) -> Report:
+    """One round after the owner's answers: rewrite the spec body, fold the answers in, and record the round."""
+    root = Path(root) if root is not None else ROOT
+    answers = [Answer.of(a) for a in answers]
+    found, before, body, action = None, None, "", ""
+    if github is not None and not dry_run:
+        found = find_comment(github, spec)
+        before = state_of((found or {}).get("body") or "")
+        body = (github("issue", number=spec) or {}).get("body") or ""
+    if round_no is None:
+        round_no = (before["round"] + 1) if before else 1
+    rows = check(merge_answers(findings, answers))
+    if dry_run or github is None:
+        return Report(body=render(spec, round_no, who, rows, ending=ending(rows)), ending=ending(rows),
+                      round_no=round_no, rows=tuple(rows))
+    new_body = apply_answers(body, answers)
+    applied = new_body != body
+    if applied:
+        github("update_issue", number=spec, body=new_body)
+    glossary, adrs = (write_artifacts(root, answers) if answers else ((), ()))
+    sha = hashlib.sha256(new_body.encode()).hexdigest()
+    refuted = sorted(r.premise for r in rows if r.state == "refuted")
+    stop_reason = STALL if before and refuted and before["refuted"] == refuted and before["sha"] == sha else ""
+    end = "stopped" if stop_reason else ending(rows)
+    if stop_reason:
+        rows = [replace(r, question=None, held="not asked: the check stopped") if r.asked else r for r in rows]
+    comment = render(spec, round_no, who, rows, ending=end, body_sha=sha, stop_reason=stop_reason)
+    action = write_comment(github, spec, found, comment)
+    return Report(body=comment, ending=end, round_no=round_no, action=action, stop_reason=stop_reason,
+                  applied=applied, rows=tuple(rows), glossary=glossary, adrs=adrs)
 
 
 def named(raw: str, reg=None) -> Reviewer:
@@ -258,7 +517,7 @@ def _sh(args, **kw):
 
 
 def rest_runner(repo: str, shell=None):
-    """The real runner: REST through `gh api`; the ops are `comments`, `comment` and `update_comment`."""
+    """The real runner: REST through `gh api`; the ops are the comment path and the issue body an answer rewrites."""
     call = shell or _sh
 
     def api(method, path, fields=(), json_out=False):
@@ -281,6 +540,10 @@ def rest_runner(repo: str, shell=None):
             return api("POST", f"issues/{kw['number']}/comments", [("body", kw["body"])], json_out=True)
         if op == "update_comment":
             return api("PATCH", f"issues/comments/{kw['comment_id']}", [("body", kw["body"])], json_out=True)
+        if op == "issue":
+            return api("GET", f"issues/{kw['number']}", json_out=True)
+        if op == "update_issue":
+            return api("PATCH", f"issues/{kw['number']}", [("body", kw["body"])], json_out=True)
         raise ValueError(f"unknown op {op!r}")
 
     return gh
@@ -292,7 +555,8 @@ def parser():
     p = argparse.ArgumentParser(prog="squad premise-check", description="run one premise-check round on a spec and record it there")
     p.add_argument("spec", type=int, help="the number of the published spec the round checks")
     p.add_argument("--findings", required=True, help="the reviewer's findings, a JSON array of objects")
-    p.add_argument("--round", dest="round_no", type=int, default=1, help="the round number this check is")
+    p.add_argument("--answers", help="the owner's answers, a JSON array of objects; each rewrites the spec and opens the next round")
+    p.add_argument("--round", dest="round_no", type=int, default=None, help="the round number; the next one after the recorded round by default")
     p.add_argument("--reviewer", help="the model this round actually ran under: checked against the registry")
     p.add_argument("--repo", default="sbihaiko/agent-squad", help="OWNER/NAME of the repository that holds the spec")
     p.add_argument("--dry-run", action="store_true", help="print the comment and write nothing")
@@ -303,16 +567,18 @@ def main(argv=None) -> int:
     a = parser().parse_args(sys.argv[1:] if argv is None else argv)
     try:
         findings = json.loads(Path(a.findings).read_text())
+        answers = json.loads(Path(a.answers).read_text()) if a.answers else []
         who = named(a.reviewer) if a.reviewer else reviewer()
-        rows = check(findings)
+        github = None if a.dry_run else rest_runner(a.repo)
+        report = run_round(a.spec, findings, answers, github=github, root=ROOT, round_no=a.round_no,
+                           who=who, dry_run=a.dry_run)
     except (OSError, ValueError, NoReviewer) as e:
         print(f"premise-check: {e}", file=sys.stderr)
         return 2
-    body = render(a.spec, a.round_no, who, rows)
     if a.dry_run:
-        print(body)
+        print(report.body)
         return 0
-    print(upsert(rest_runner(a.repo), a.spec, body))
+    print(f"{report.action}: {report.ending}" + (f", stopped — {report.stop_reason}" if report.stop_reason else ""))
     return 0
 
 

@@ -1,6 +1,6 @@
 ---
 name: premise-check
-description: "Run one round of a premise check on a published spec: prove what reading proves, send what only running proves to a probe, and ask the owner at most five questions. The result is one comment on the spec."
+description: "Run one round of a premise check on a published spec: prove what reading proves, send what only running proves to a probe, and ask the owner at most five questions. The result is one comment on the spec. An owner answer rewrites the spec body in place and opens the next round."
 ---
 
 # premise-check
@@ -10,7 +10,8 @@ settled by running something. Some are the owner's decisions, not facts at all. 
 ticket built on sand.
 
 One invocation is one round. It never runs to completion on its own: the owner answers, and the next round reads the
-answers.
+answers. An answer is an input: the round applies it to the spec body in place, records where a durable record of it
+goes, and asks only the questions the answers left open.
 
 ## What a round does
 
@@ -25,10 +26,19 @@ answers.
      set `recommends`: the answer you would give, worded so that "yes" accepts it.
    - Set `depends_on` to the premise of another finding when this one cannot be answered before that one is.
 3. Write the findings to a file as a JSON array of objects with `premise`, `kind` and the fields above.
-4. Run `uv run squad premise-check <spec> --findings findings.json --reviewer <your model>`, where `<spec>` is the
-   spec's issue number.
-5. If the command exits 2, read its one line: it says which reviewer was refused or which finding is malformed. Fix
-   that, and run again. Never edit the comment by hand.
+4. If the owner answered the last round, write the answers to a file as a JSON array of objects with `premise` and
+   `answer` (plus `answered_by`). An answer that defines a term also sets `"kind": "glossary"` with `term` and
+   `definition`; a durable decision sets `"kind": "adr"` with `title` and `decision`. Then run the command with
+   `--answers`.
+5. Run the command, where `<spec>` is the spec's issue number:
+
+   ```
+   uv run squad premise-check <spec> --findings findings.json --reviewer <your model>
+   uv run squad premise-check <spec> --findings findings.json --answers answers.json --reviewer <your model>
+   ```
+
+6. If the command exits 2, read its one line: it says which reviewer was refused or which finding or answer is
+   malformed. Fix that, and run again. Never edit the comment or the spec by hand.
 
 The command holds the round's rules, so you do not apply them yourself:
 
@@ -36,9 +46,24 @@ The command holds the round's rules, so you do not apply them yourself:
   fact `open`, so a fabricated proof cannot pass;
 - a run-only finding is `needs a probe` and is never asked as a question;
 - the round asks at most five questions, each with its recommended answer, and a finding that depends on another open
-  finding waits for the next round;
+  finding waits for the next round; once its dependency is `decided`, the next round asks it;
+- an answer rewrites the spec body in place under `## Answers`, so the same answers rewrite nothing twice;
+- an answer that defines a term is written into `GLOSSARY.md`; a durable decision is recorded as an ADR under
+  `docs/adr/` with its line in the index;
+- an answer of "I don't know" becomes a probe entry or a recorded open risk, never `proven` or `decided`;
 - the comment carries the marker `<!-- premise-check: spec=<spec> -->`: a later round rewrites that one comment in
   place, so the spec never collects copies.
+
+## End states
+
+Every round names how the check ends:
+
+- `awaiting answers` — this round asked questions; the owner answers them, and the next round runs with `--answers`.
+- `awaiting probes` — no question is open, but a premise still needs a probe to settle it.
+- `blocked` — an open gap this round could not ask, because it names no recommended answer.
+- `settled` — no question is open: every premise is proven, refuted, decided, or a recorded open risk.
+- `stopped` — the same refutation repeated with no change in the spec (ADR-0134: stop on attempts that do not change,
+  never on totals). The comment names the reason; report it and stop.
 
 ## Who reviews
 
@@ -50,9 +75,10 @@ the reviewer it names with `--reviewer` omitted, or stop and say so: never revie
 ## What not to do
 
 - Do not answer a question the owner has not answered, and do not treat "yes" as given.
-- Do not run more than one round in one invocation, and do not act on the spec: the tickets a spec becomes are
-  started by the owner (ADR-0142).
-- Do not rewrite the spec's text. The round records its check in the comment, and the owner edits the spec.
+- Do not run more than one round in one invocation, and do not act on the spec by starting its tickets: the tickets a
+  spec becomes are started by the owner (ADR-0142).
+- Do not rewrite the spec body yourself. Only `--answers` rewrites it, from the owner's answers; the round records its
+  check in the comment otherwise.
 
 Its sources are the `ub-mode` skill and the mattpocock skills `grilling`, `to-questionnaire`, `domain-modeling` and
 `wayfinder`; ADR-0155 records what each one gave.
