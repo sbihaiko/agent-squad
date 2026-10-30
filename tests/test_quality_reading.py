@@ -42,3 +42,12 @@ def test_no_squad_module_imports_a_quality_tool():
 def test_mutmut_is_configured_to_read_squad():
     """`mutmut run` crashes before its first mutant without `source_paths`; the config names the package it reads."""
     assert PYPROJECT["tool"]["mutmut"]["source_paths"] == ["squad"]
+
+
+def test_mutmut_copies_every_tree_the_suite_reads():
+    """mutmut copies only source_paths, tests and also_copy; a tree the suite reads and mutmut does not copy fails every mutant."""
+    read_at_test_time = {"pyproject.toml", "CLAUDE.md", "prompts", "contrib", "scripts", "dashboard", "commands", "docs",
+                         "config", "bench", "vendor", ".github"}
+    present = {name for name in read_at_test_time if (ROOT / name).exists()}
+    also_copy = set(PYPROJECT["tool"]["mutmut"]["also_copy"])
+    assert present <= also_copy, f"not copied into the mutation tree: {sorted(present - also_copy)}"

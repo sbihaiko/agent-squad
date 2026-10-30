@@ -174,5 +174,8 @@ out=$(selrun PY_FAIL=1); rc=$?
 # real pytest, so every case sets one.
 /usr/bin/grep -qE 'SG_FAST_(CMD|RETRY_CMD)="\$T/' "$0" && ko "a fixture stub is executed directly, not through bash (#801)" || ok "every fixture stub runs through bash"
 /usr/bin/grep -qE '^fg\(\) \{.*SG_FAST_RETRY_CMD=' "$0" && ok "the base-fail case names its retry, and runs no real pytest" || ko "fg runs the real pytest retry (#801)"
+# (#885) The pytest tally and the code-quality reading print together after a green battery, and the reading never changes the exit.
+out=$(cd "$R" && SG_FAST_BASE=dev SG_FAST_CMD="echo '5 passed in 0.1s'" SG_FAST_RETRY_CMD=false bash "$d/fast-gate.sh" 2>&1); rc=$?
+[ $rc = 0 ] && /usr/bin/grep -q "fast-gate: pytest tally: 5 passed in 0.1s" "$SG_STATE"/fast-gate-*.log && /usr/bin/grep -q "quality: no changed squad module, skipped" "$SG_STATE"/fast-gate-*.log && ok "the tally and the quality reading land in the battery log and the gate exits 0" || ko "tally beside reading: rc $rc: $out $(cat "$SG_STATE"/fast-gate-*.log 2>&1)"
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 rm -rf "$T"; exit $fail
