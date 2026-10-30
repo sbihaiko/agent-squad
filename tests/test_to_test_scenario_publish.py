@@ -579,7 +579,12 @@ def test_rest_runner_reads_a_cards_status_from_its_own_issue_on_the_named_board(
 
     gh = rest_runner("sbihaiko/MesenAI", shell=shell, project="users/sbihaiko/projects/3")
     assert gh("item_status", number=8) == "Backlog"
-    assert seen[0][:3] == ["gh", "api", "graphql"] and "number=8" in seen[0] and "owner=sbihaiko" in seen[0]
+    argv = seen[0]
+    assert argv[:3] == ["gh", "api", "graphql"]
+    # owner and name are strings (-f); only the issue number is typed (-F). A typed owner or name would send a non-string.
+    assert argv[argv.index("owner=sbihaiko") - 1] == "-f"
+    assert argv[argv.index("name=MesenAI") - 1] == "-f"
+    assert argv[argv.index("number=8") - 1] == "-F"
     assert not [a for a in seen if a[:3] == ["gh", "project", "item-list"]]
 
 
@@ -587,6 +592,15 @@ def test_rest_runner_reads_no_status_for_an_issue_that_is_not_on_the_named_board
     gh = rest_runner("sbihaiko/MesenAI", shell=lambda args, **kw: _project_items(("users/sbihaiko/projects/9", "Todo")),
                      project="users/sbihaiko/projects/3")
     assert gh("item_status", number=8) is None           # not on that board yet: the caller reads again
+
+
+def test_publish_refuses_to_guess_the_board_when_the_caller_does_not_name_one(tmp_path):
+    """No default board: a caller that omits `board` must fail at once, before any GitHub call."""
+    _, _, plan = tiny_plan(tmp_path)
+    gh = FakeGitHub()
+    with pytest.raises(TypeError, match="board"):
+        publish(plan, gh, map_path=tmp_path / "tiny.gui-test.issues.json")
+    assert gh.calls == []
 
 
 def test_rest_runner_names_the_missing_board_when_it_reads_a_status_with_no_project():

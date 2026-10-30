@@ -345,6 +345,27 @@ def test_the_scenario_publishes_then_runs_and_writes_every_verdict_back():
     assert [c["script"] for c in cmd.calls] == ["tiny"]
 
 
+def test_a_run_scenario_on_a_board_less_runner_never_asks_for_a_status():
+    """The run's publish takes `board=False` from its caller: a runner with no board never answers item_status."""
+    class BoardlessGitHub(FakeGitHub):
+        def __call__(self, op, **kw):
+            if op == "item_status":
+                raise AssertionError("a board-less publish must not read a card's Status")
+            return super().__call__(op, **kw)
+
+    gh = BoardlessGitHub()
+    out = tts.run_scenario(MARKDOWN, covered_script(), gh, run_command=None, board=False)
+    assert out["run"] is None and out["published"]["parent"] == 101
+    assert "item_status" not in gh.ops()
+
+
+def test_run_scenario_refuses_to_guess_the_board_when_the_caller_does_not_name_one():
+    gh = FakeGitHub()
+    with pytest.raises(TypeError, match="board"):
+        tts.run_scenario(MARKDOWN, covered_script(), gh, run_command=None)
+    assert gh.calls == []
+
+
 def test_the_scenario_reports_a_gap_and_publishes_nothing():
     gh = FakeGitHub()
     out = tts.run_scenario(MARKDOWN, script(batches=[{"id": "b", "setup": [], "teardown": [],
