@@ -16,6 +16,7 @@ from squad.to_test_scenario import (  # noqa: F401
     TRIAGE_LABEL,
     RateLimited,
     ScenarioError,
+    StatusUnread,
     build_plan,
     case_hash,
     issues_path,
@@ -82,14 +83,15 @@ def tiny_plan(tmp_path, *, granularity="case", text=SCENARIO):
 class FakeGitHub:
     """A recording stand-in for the real REST runner: no network, no `gh`, and a `next` counter for numbers."""
 
-    def __init__(self, fail_on_create=None, rate_limited_once=None, start=100, world=None):
-        self.world = world if world is not None else {"titles": {}, "kids": {}}   # what GitHub itself remembers
+    def __init__(self, fail_on_create=None, rate_limited_once=None, start=100, world=None, status_lag=0):
+        self.world = world if world is not None else {"titles": {}, "kids": {}, "status": {}}   # what GitHub remembers
         self.calls = []
         self.made = []
         self.next = start
         self.creates = 0
         self.fail_on_create = fail_on_create
         self.rate_limited_once = rate_limited_once
+        self.status_lag = status_lag      # the first reads of a card's Status answer nothing: the board is eventually consistent
 
     def __call__(self, op, **kw):
         self.calls.append((op, kw))          # every attempt, including one that fails
@@ -111,6 +113,13 @@ class FakeGitHub:
                 {"number": number, "id": kw["sub"], "title": self.world["titles"].get(number, "")})
         if op == "list_sub_issues":
             return list(self.world["kids"].get(kw["number"], []))
+        if op == "board":
+            self.world.setdefault("status", {})[kw["number"]] = kw.get("status")
+        if op == "item_status":
+            if self.status_lag:
+                self.status_lag -= 1
+                return None
+            return self.world.get("status", {}).get(kw["number"])
         return {}
 
     def again(self, start=100):
@@ -448,3 +457,71 @@ def test_a_plan_over_the_sub_issue_cap_is_refused_before_anything_is_created(tmp
     with pytest.raises(ScenarioError, match="100 sub-issues"):
         publish(plan, gh, map_path=tmp_path / "m.json")
     assert gh.calls == []
+
+
+# --- #895 follow-up: the triage label waits for the Status read-back ------------------------------
+
+def test_the_triage_label_is_added_only_after_the_parent_status_reads_back(tmp_path):
+    _, _, plan = tiny_plan(tmp_path)
+    gh, sleeps = FakeGitHub(status_lag=2), Sleeps()
+    out = publish(plan, gh, map_path=tmp_path / "tiny.gui-test.issues.json", sleep=sleeps)
+    reads = [i for i, (op, kw) in enumerate(gh.calls) if op == "item_status" and kw["number"] == out["parent"]]
+    assert len(reads) == 3 and len(sleeps.seconds) == 2          # two empty reads, waited out, then the Status
+    labelled = [i for i, (op, kw) in enumerate(gh.calls)
+                if op == "update_issue" and kw["number"] == out["parent"] and TRIAGE_LABEL in kw["labels"]]
+    assert labelled and labelled[0] > reads[-1]                   # the first label update follows the good read
+    assert {kw["number"] for kw in gh.of("item_status")} == {out["parent"]}
+
+
+def test_a_status_that_never_reads_back_adds_no_label_and_names_the_failure(tmp_path):
+    _, _, plan = tiny_plan(tmp_path)
+
+    class NeverReads(FakeGitHub):
+        def __call__(self, op, **kw):
+            if op == "item_status":
+                self.calls.append((op, kw))
+                return "To triage"                      # the card reads back the wrong status, every time
+            return super().__call__(op, **kw)
+
+    gh, sleeps = NeverReads(), Sleeps()
+    map_path = tmp_path / "tiny.gui-test.issues.json"
+    with pytest.raises(StatusUnread, match="never read back as 'Backlog'"):
+        publish(plan, gh, map_path=map_path, sleep=sleeps)
+    assert len(gh.of("item_status")) == 4 and len(sleeps.seconds) == 3   # bounded: four reads, three waits
+    assert not [kw for kw in gh.of("update_issue") if TRIAGE_LABEL in kw["labels"]]
+    assert read_issues(map_path)["boarded"] is True                      # the card is kept; a resume re-reads it
+
+
+def test_rest_runner_reads_a_cards_status_by_its_issue_number_from_the_project_items():
+    seen = []
+
+    def shell(args, **kw):
+        seen.append(args)
+        if args[:3] == ["gh", "project", "item-list"]:
+            return json.dumps({"items": [
+                {"id": "PVTI_a", "status": "Todo", "content": {"number": 7, "type": "Issue"}},
+                {"id": "PVTI_b", "status": "Backlog", "content": {"number": 8, "type": "Issue"}}]})
+        return "{}"
+
+    gh = rest_runner("sbihaiko/MesenAI", shell=shell, project="users/sbihaiko/projects/3")
+    assert gh("item_status", number=8) == "Backlog"
+    assert gh("item_status", number=9) is None           # not on the board yet: the caller reads again
+    listed = next(a for a in seen if a[:3] == ["gh", "project", "item-list"])
+    assert listed[3:6] == ["3", "--owner", "sbihaiko"] and listed[listed.index("--limit") + 1] == "1000"
+
+
+def test_rest_runner_names_a_board_with_no_status_field_and_writes_nothing():
+    seen = []
+
+    def shell(args, **kw):
+        seen.append(args)
+        if args[:3] == ["gh", "project", "item-add"]:
+            return json.dumps({"id": "PVTI_x"})
+        if args[:3] == ["gh", "project", "field-list"]:
+            return json.dumps({"fields": [{"id": "F_title", "name": "Title", "options": []}]})
+        return json.dumps({"id": "PVT_p"})
+
+    gh = rest_runner("sbihaiko/MesenAI", shell=shell, project="users/sbihaiko/projects/3")
+    with pytest.raises(ValueError, match="no Status field on users/sbihaiko/projects/3"):
+        gh("board", number=7, status="Backlog")
+    assert not [a for a in seen if a[:3] == ["gh", "project", "item-edit"]]

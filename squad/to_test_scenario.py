@@ -110,6 +110,14 @@ class RateLimited(Exception):
         super().__init__("secondary rate limit" + (f", retry after {retry_after}s" if retry_after else ""))
 
 
+class StatusUnread(ScenarioError):
+    """The board never read a card back with the Status it was written with: no triage label is added (#895)."""
+
+    def __init__(self, number, status):
+        self.number, self.status = number, status
+        super().__init__([f"the Status of issue #{number} never read back as {status!r}; ready-for-agent was not added"])
+
+
 def case_hash(precondition, steps, expected):
     """The content hash of one case: its text with whitespace collapsed, so reflowing a row is not an edit."""
     text = "\n".join(" ".join(str(part).split()) for part in (precondition, steps, expected))
