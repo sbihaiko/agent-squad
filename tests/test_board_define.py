@@ -160,7 +160,8 @@ class ReadThroughJq(Board):
 def test_the_applier_read_carries_the_close_reason_so_migration_plans_abandoned(monkeypatch, tmp_path, capsys):
     """#921: the close reason rides the applier's own items read, so `--migrate` moves a card closed as NOT_PLANNED to
     Abandoned, never to Closed."""
-    if shutil.which("jq") is None: pytest.skip("jq is not installed")
+    if shutil.which("jq") is None:
+        pytest.skip("jq is not installed")
     board = ReadThroughJq([card(1, "a/x", 5, "Done"), card(2, "a/x", 6, "Done")],
                           [project_item(5, "not_planned"), project_item(6, "completed")])
     assert run(board, monkeypatch, tmp_path, "--migrate") == 0

@@ -4,7 +4,7 @@
 usage: board_migrate.py --plan  <items.json>   a dry run: every card move and every option removal; nothing is written
        board_migrate.py --check <items.json>   exit 3, with the counts, while a card carries an old option
 
-The items are the list the board cache holds: n (issue), st (Status option), s (state), l (labels), r (the close reason), and optionally facts
+The items are the list the board cache holds: n (issue), st (Status option), s (state), l (labels), cr (the close reason), and optionally facts
 (what board_columns.column_for reads, to place a Blocked card where its work reached). The target of every move comes from
 board_columns, never from a table here. This script has no write mode: the applier lives with the board definition (ADR-0141).
 """
@@ -20,7 +20,7 @@ REFUSED = 3
 def _target(item):
     """(column, labels to add) for one card on an old option."""
     labels = list(item.get("l") or [])
-    column, _ = view_column(item.get("st"), str(item.get("s")).lower() == "closed", labels, item.get("r"))
+    column, _ = view_column(item.get("st"), str(item.get("s")).lower() == "closed", labels, item.get("cr"))
     add = []
     if item.get("st") == "Blocked":
         if item.get("facts") and column != "Closed": column = column_for(item["facts"])[0]   # the column the work reached

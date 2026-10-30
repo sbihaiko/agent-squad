@@ -257,7 +257,8 @@ def test_a_reopened_card_keeps_its_repository_so_its_spec_moves_its_tickets(hub,
     spec (ADR-0142)."""
     mod, port = hub
     jq = shutil.which("jq")
-    if jq is None: pytest.skip("jq is not installed")
+    if jq is None:
+        pytest.skip("jq is not installed")
     read = subprocess.run([jq, "-c", mod.board_items_jq("x/y")],
                           input=json.dumps([project_item(9, "reopened", ["spec"]), project_item(20, "reopened")]),
                           capture_output=True, text=True, check=True).stdout

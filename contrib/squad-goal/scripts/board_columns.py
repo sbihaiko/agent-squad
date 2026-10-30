@@ -103,9 +103,16 @@ def past(have, want):
     return have in order and want in order and order.index(have) > order.index(want)
 
 
-# GitHub's NOT_PLANNED verdict as the carrier spells it: the issue was abandoned or is a duplicate, so it was never
-# delivered whatever its Status says (#921). REST answers it as `state_reason` on the issue the card's item carries.
-NOT_PLANNED = ("not_planned", "duplicate")
+# The close reason GitHub's issue carrier answers for an issue it closed without delivering it (#921): `state_reason`
+# answers `completed`, `not_planned` or `reopened`, and only `not_planned` says the issue was never delivered. The read
+# parses no delivery out of `reopened`: a reopened issue is open, so no closed card carries that reason.
+NOT_PLANNED = ("not_planned",)
+
+
+def not_planned(reason):
+    """True when the carrier's close reason says the issue was not delivered (#921). The carrier answers lowercase and
+    the GraphQL enum spells it uppercase, so the comparison folds the case either way."""
+    return str(reason or "").strip().lower() in NOT_PLANNED
 
 
 def view_column(status, closed, labels=(), reason=None):
@@ -119,7 +126,7 @@ def view_column(status, closed, labels=(), reason=None):
     freeze = FREEZE_LABEL["owner"] if owner else FREEZE_LABEL["gated"] if FREEZE_LABEL["gated"] in labels else None
     name = SHIPPED_NAME.get(status, status) if status else None
     if closed:
-        return (ROLE["abandoned"] if name == ROLE["abandoned"] or reason in NOT_PLANNED else ROLE["issue_closed"]), None
+        return (ROLE["abandoned"] if name == ROLE["abandoned"] or not_planned(reason) else ROLE["issue_closed"]), None
     return (name or ROLE["unscheduled"]), freeze
 
 
@@ -227,7 +234,7 @@ def terminal_comment(column, facts):
         sha = str(facts.get("sha") or "")[:7]
         test = facts.get("test") or (f"no check ran on merge commit {sha}" if sha else "no merge commit to test")
         body = f"Closed: pull request #{facts['pr']} merged into {facts.get('base') or 'the base'} carries this issue (merge commit {sha or 'unknown'}). Test on the merge: {test}."
-    elif column == "Closed" and facts.get("reason") in ("not_planned", "duplicate"):
+    elif column == "Closed" and not_planned(facts.get("reason")):
         return None   # it was not delivered: "completed" would be false, and the card belongs in Abandoned (#517)
     elif column == "Closed" and facts.get("closed_by"):
         body = f"Closed: @{facts['closed_by']} closed it as completed; no merged pull request into {facts.get('base') or 'the base'} names it."

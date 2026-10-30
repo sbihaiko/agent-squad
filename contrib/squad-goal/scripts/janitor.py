@@ -43,7 +43,7 @@
     Text fields: Run and Run started carry the run id and its start time while the card is In Progress, and are cleared when it is anything else. A card already in its expected status is not written again, and a write GitHub refuses is named in cycle.log (BOARD-RECONCILE / BOARD-WRITE-FAILED), never swallowed.
     The board is read once per pass (one fields read, one items read per project), and the card cache follows every status the pass writes, so a later rule (O, Q, P) reads the column the pass set, never the stale read. An issue the board answers no card for is added with its expected status in one write (board.sh --add);
     a board that does not answer at all (a refusal, a deadline miss) is told apart from that: nothing is moved on a guess, nothing is reported as a defect.
-    With SG_BOARD_VOCAB=shipped every terminal entry carries its condition in one queued comment (#245): Closed names the branch in the landing line (or who closed it, when no branch names it); Abandoned names who decided and why (wontfix, closed as not planned or as a duplicate).
+    With SG_BOARD_VOCAB=shipped every terminal entry carries its condition in one queued comment (#245): Closed names the branch in the landing line (or who closed it, when no branch names it); Abandoned names who decided and why (wontfix, or closed as not planned).
     A terminal write whose condition no read answers is not made (TERMINAL-NO-CONDITION), and a card settled in a terminal column with no tagged comment
     gets one, once (TERMINAL-BACKFILL, JANITOR_TERMINAL_BACKFILL per pass, default 5).
     With SG_BOARD_VOCAB=shipped R is also the one producer of the board facts (board_facts.py, ADR-0145): a run's wave branch on the remote, the review of its tip, and the check runs of the dev tip give wave_branch, landing and dev_ci, and a work branch whose review waits gives review_wait; board_columns.column_for names the column (Code Complete, Pushing, Testing, Code Review, Doing).
@@ -428,6 +428,10 @@ def ledger():   # the issue ledger module beside this script (ADR-0149); -I keep
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
     import issue_ledger
     return issue_ledger
+def not_planned(reason):   # the close-reason vocabulary board_columns owns (#921): one copy, so the passes never drift
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+    from board_columns import not_planned as verdict
+    return verdict(reason)
 _entered = None
 def entered():   # {(run, issue)} of each child of repo0 that entered a wave, read from the ledgers once a pass
     global _entered
@@ -495,7 +499,7 @@ for n, i in live.items():
     if mk.exists() or not i["acc"] or i["idle"] > 3600: continue
     infos = {x: issue_info(x) for x in sorted(i["acc"])}
     if any(v[0] != "closed" for v in infos.values()): continue
-    dup = all(v[1] == "not_planned" or v[2].startswith("[duplicate") for v in infos.values())
+    dup = all(not_planned(v[1]) or v[2].startswith("[duplicate") for v in infos.values())
     nums = ", ".join("#" + x for x in infos)
     if dup:
         say(f"RUN-ON-CLOSED-ISSUES {n}: every issue ({nums}) is closed as a duplicate / not planned; stopping the run")
@@ -657,9 +661,9 @@ def terminal_facts(n, col):   # the facts a terminal comment states (#245), or N
     if "wontfix" in issue_labels(n):
         ok, who = door_read(f"repos/{repo0}/issues/{n}/events?per_page=100", '[.[] | select(.event == "labeled" and .label.name == "wontfix") | .actor.login] | last // ""')
         return {"who": who, "why": "labelled wontfix"} if ok else None
-    if state == "closed" and reason in ("not_planned", "duplicate"):
+    if state == "closed" and not_planned(reason):
         ok, who = door_read(f"repos/{repo0}/issues/{n}/events?per_page=100", CLOSER)
-        return {"who": who, "why": "closed as a duplicate (superseded by another issue)" if reason == "duplicate" else "closed as not planned"} if ok else None
+        return {"who": who, "why": "closed as not planned"} if ok else None
     return None
 def run_summary(n):   # the run that worked issue n as a child, as text for its terminal comment (#559): the run id, the other children, the verdict and the dashboard command; "" when no run held it
     best = None
@@ -864,7 +868,7 @@ def reconcile_board():
     for n in sorted(set(expected) | (set(olabels) if oans else set()), key=int):   # every open issue, as when the floor named each one: a rule below can still move a card forward
         state, reason, _ = issue_info(n)
         if state == "closed": set_expected(n, "Done", "issue is closed", "", "", 90)
-        if shipped and state == "closed" and reason in ("not_planned", "duplicate"): set_expected(n, "Abandoned", f"issue is closed as {reason}", "", "", 95)   # not delivered, by decision (spec #132)
+        if shipped and state == "closed" and not_planned(reason): set_expected(n, "Abandoned", f"issue is closed as {reason}", "", "", 95)   # not delivered, by decision (spec #132)
         labels = issue_labels(n)
         if labels & {"needs-owner", "needs-ratification"}: set_expected(n, "Blocked", "issue is blocked by owner label", "", "", 100)
         if n not in specs and str(n) in named_in_land(): set_expected(n, "Code Complete", "a commit in the landing branch names the issue", "", "", 50)   # a hand fix in dev: the floor never moves it back (ADR-0143, #519). Never a spec: a commit that names one is its child's (#665)
@@ -935,7 +939,7 @@ def reconcile_board():
         note = terminal_comment(have, facts)
         if note is None:
             reason = (facts or {}).get("reason")   # the read's own answer: a close by decision belongs to Abandoned, and a terminal card is not moved (ADR-0143, #517)
-            if reason in ("not_planned", "duplicate"):
+            if not_planned(reason):
                 say(f"TERMINAL-NO-CONDITION #{n}: settled in {have}, but the issue is closed as {reason}; its condition is Abandoned, and a terminal card is not moved")
             else:
                 say(f"TERMINAL-NO-CONDITION #{n}: settled in {have} with no comment, and its condition could not be read")

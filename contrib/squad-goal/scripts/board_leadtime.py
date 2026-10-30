@@ -5,13 +5,14 @@ from datetime import datetime
 
 MEASURE = "opened -> closed"
 ABANDONED = "Abandoned"
-# GitHub's NOT_PLANNED verdict (abandoned or duplicate), as the carrier spells it: no delivery, so no dot (#921). The
-# chart counts it under the one reason it is known by, `not_planned`, whichever of the two words the read answered.
-NOT_PLANNED = ("not_planned", "duplicate")
+# The chart's own reason for a card the hub names as closed without delivery (#921). It is a label, not the carrier's
+# vocabulary: board_columns reads the carrier's `state_reason` and hands this row its word, so the chart holds no copy
+# of the reasons GitHub answers.
+NOT_DELIVERED = "not_planned"
 
 
 def _exclusion(row):
-    if row.get("reason") in NOT_PLANNED:
+    if row.get("reason") == NOT_DELIVERED:
         return "not_planned"
     if row["column"] == ABANDONED:
         return "abandoned"
