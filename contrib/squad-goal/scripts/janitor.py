@@ -831,14 +831,17 @@ def reconcile_board():
             if shipped and "wontfix" in olabels[n]: set_expected(n, "Abandoned", "issue carries wontfix", rank=95)
             # A spec is written and not scheduled, so the floor opens it in Backlog, and the owner starts it (ADR-0142). The fold
             # moves it forward only. Its rank sits above the floor and below every rule a run, a marker or a branch raises.
-            if "spec" in olabels[n]:
-                # A spec's column is a fold over its sub-issues' cards (spec_fold.py): the relation came with the one read above and
-                # the cards are read once per pass, so the fold adds no call. The close rule below closes the spec issue itself.
+            is_spec = "spec" in olabels[n]
+            if is_spec or (_kids.get(n) and RUN_PARENT not in olabels[n]):
+                # A parent's column is a fold over its sub-issues' cards (spec_fold.py): the relation came with the one read above and
+                # the cards are read once per pass, so the fold adds no call. A parent that is not a spec takes the Doing lift only
+                # (#942): the spec vocabulary's Closed and Abandoned are never written to it.
                 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the fold sits beside this script; -I keeps the script's directory off sys.path
                 import spec_fold
                 have_cards = cards(proj)[1]
                 col, reverted = spec_fold.fold([have_cards.get(k, "") for k in _kids.get(n, [])], have_cards.get(n, ""))
-                if col: set_expected(n, col, "spec folds over its sub-issues" + (": a child reopened, the card keeps its column" if reverted else ""), rank=15)   # forward only: below Doing the fold writes nothing, and the spec keeps the owner's column (#550)
+                if col and (is_spec or col == spec_fold.DOING): set_expected(n, col, ("spec" if is_spec else "parent") + " folds over its sub-issues" + (": a child reopened, the card keeps its column" if reverted else ""), rank=15)   # forward only: below Doing the fold writes nothing, and the spec keeps the owner's column (#550)
+            if is_spec:
                 # The owner starts a spec by moving its card to Todo, and its children follow it there (#589): a child in Backlog,
                 # or with no column yet, goes to Todo. Forward only: a child past Backlog keeps its column (ADR-0143). The fold
                 # writes nothing below Doing, so the two rules never fight; every rule a run, a label or a closure raises outranks it.
