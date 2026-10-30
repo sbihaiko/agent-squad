@@ -50,10 +50,10 @@ def test_a_condition_the_facts_do_not_state_is_no_comment(columns, column, facts
     assert columns.terminal_comment(column, facts) is None
 
 
-@pytest.mark.parametrize("reason", ["not_planned", "NOT_PLANNED"])
+@pytest.mark.parametrize("reason", ["not_planned", "NOT_PLANNED", "duplicate", "DUPLICATE"])
 def test_closed_never_says_completed_for_an_issue_closed_as_not_planned(columns, reason):
-    """#517: a not-planned issue moved into Closed by hand got "closed it as completed", a false record. The carrier
-    answers lowercase, and the GraphQL enum's uppercase spelling is read too (#921)."""
+    """#517: a not-planned issue moved into Closed by hand got "closed it as completed", a false record. A duplicate is
+    no delivery either. The carrier answers lowercase, and the GraphQL enum's uppercase spelling is read too (#921)."""
     assert columns.terminal_comment("Closed", {"base": "dev", "closed_by": "rafael", "reason": reason}) is None
 
 

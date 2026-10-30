@@ -34,6 +34,8 @@ case "$a" in
   *--include*issues/2208/events*) echo '[{"event":"closed","actor":{"login":"owner1"},"state_reason":"not_planned"}]';;
   *--include*issues/2208/comments*) echo '[]';;
   *--include*issues/2209/comments*) echo '[]';;
+  *--include*issues/2210/comments*) echo '[]';;
+  *--include*issues/2210/events*) echo '[{"event":"closed","actor":{"login":"owner2"},"state_reason":"duplicate"}]';;
   *--include*issues/2209/events*) echo '[{"event":"closed","actor":{"login":"sbihaiko"}},{"event":"reopened","actor":{"login":"sbihaiko"}}]';;
   *search/issues*) echo 0;;
   *projectsV2/4/fields*) echo FID4;;
@@ -41,7 +43,8 @@ case "$a" in
     printf '2201\tCode Complete\thttps://api.github.com/repos/x/y\n2202\tTodo\thttps://api.github.com/repos/x/y\n'
     printf '2203\tTodo\thttps://api.github.com/repos/x/y\n2204\tCode Complete\thttps://api.github.com/repos/x/y\n'
     printf '2205\tClosed\thttps://api.github.com/repos/x/y\n2206\tClosed\thttps://api.github.com/repos/x/y\n'
-    printf '2208\tClosed\thttps://api.github.com/repos/x/y\n2209\tClosed\thttps://api.github.com/repos/x/y\n';;
+    printf '2208\tClosed\thttps://api.github.com/repos/x/y\n2209\tClosed\thttps://api.github.com/repos/x/y\n'
+    printf '2210\tTodo\thttps://api.github.com/repos/x/y\n';;
   *graphql*)
     printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":['
     printf '{"number":2202,"title":"Issue 2202","body":"","state":"OPEN","labels":{"nodes":[{"name":"wontfix"}]},"subIssuesSummary":{"total":0,"completed":0},"comments":{"nodes":[]}}'
@@ -49,13 +52,14 @@ case "$a" in
   *issues/2201*|*issues/2204*|*issues/2205*) echo $'closed\tcompleted\tIssue';;
   *issues/2203*) echo $'closed\tnot_planned\tIssue';;
   *issues/2208*) echo $'closed\tnot_planned\tIssue';;
+  *issues/2210*) echo $'closed\tduplicate\tIssue';;
   *issues/22*) echo $'open\t\tIssue\twontfix';;
 esac
 J
 sed -i '' "s|TMPDIR|$T|" "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 mkdir -p "$T/co/runs/run-a"; echo run-a > "$T/st/active-runs.txt"
-printf 'CHILD — GitHub issue(s) 2201, 2203, 2204:\n' > "$T/co/runs/run-a/request.txt"
-printf '%s\n' '{"event":"run_start","run_id":"run-a","ts":"2026-10-14T08:00:00Z"}' '{"event":"spawn_accepted","child":"a","definition":"GitHub issue #2201"}' '{"event":"spawn_accepted","child":"b","definition":"GitHub issue #2203"}' '{"event":"verdict","verdict":"pass","reasons":[],"exit_code":0}' > "$T/co/runs/run-a/record.jsonl"
+printf 'CHILD — GitHub issue(s) 2201, 2203, 2204, 2210:\n' > "$T/co/runs/run-a/request.txt"
+printf '%s\n' '{"event":"run_start","run_id":"run-a","ts":"2026-10-14T08:00:00Z"}' '{"event":"spawn_accepted","child":"a","definition":"GitHub issue #2201"}' '{"event":"spawn_accepted","child":"b","definition":"GitHub issue #2203"}' '{"event":"spawn_accepted","child":"c","definition":"GitHub issue #2210"}' '{"event":"verdict","verdict":"pass","reasons":[],"exit_code":0}' > "$T/co/runs/run-a/record.jsonl"
 run() { SG_BOARD_VOCAB=shipped SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_LAND_BRANCH=dev SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1; }
 o=$(run); r1=$(/usr/bin/grep -c 'issues/2208' "$T/gh.calls" 2>/dev/null); : > "$T/gh.calls"; o2=$(run); r2=$(/usr/bin/grep -c 'issues/2208' "$T/gh.calls" 2>/dev/null)
 has() { /usr/bin/grep -q "$1" "$T/board.calls" 2>/dev/null; }
@@ -68,6 +72,8 @@ has '^STATUS o 4 Abandoned 2202$' && ok "a wontfix issue moves into Abandoned" |
 note 2202 | /usr/bin/grep -q 'wontfix' && note 2202 | /usr/bin/grep -q '@rafael' && ok "the Abandoned comment names who labelled wontfix" || ko "#2202 comment: $(note 2202)"
 has '^STATUS o 4 Abandoned 2203$' && ok "an issue closed as not planned moves into Abandoned" || ko "#2203 not Abandoned: $(cat "$T/board.calls")"
 note 2203 | /usr/bin/grep -q 'not planned' && note 2203 | /usr/bin/grep -q '@owner1' && ok "the Abandoned comment names who closed it and why" || ko "#2203 comment: $(note 2203)"
+has '^STATUS o 4 Abandoned 2210$' && ok "an issue closed as a duplicate moves into Abandoned" || ko "#2210 not Abandoned: $(cat "$T/board.calls")"
+note 2210 | /usr/bin/grep -q 'duplicate' && note 2210 | /usr/bin/grep -q '@owner2' && ok "the Abandoned comment names the duplicate and who closed it" || ko "#2210 comment: $(note 2210)"
 ! has ' 2204$' && ok "a terminal write whose condition cannot be read is not made" || ko "#2204 written with no comment: $(cat "$T/board.calls")"
 [ "$(count 2204)" = 0 ] && /usr/bin/grep -q "TERMINAL-NO-CONDITION #2204" "$T/st/cycle.log" && ok "the refused terminal write is named" || ko "#2204 not named: $o"
 note 2205 | /usr/bin/grep -q 'gui/2205-b' && ok "a settled Closed card with no comment is backfilled" || ko "#2205 not backfilled: $(note 2205) $o"
@@ -80,7 +86,7 @@ note 2205 | /usr/bin/grep -q 'gui/2205-b' && ok "a settled Closed card with no c
   && ok "the one report names the condition the issue actually carries" || ko "#2208 report: $(/usr/bin/grep 'TERMINAL-NO-CONDITION #2208' "$T/st/cycle.log")"
 [ "$r1" -gt 0 ] && [ "$r2" = 0 ] && ok "a second pass over the same unreadable issue makes no read" || ko "#2208 reads: first $r1, second $r2: $o$o2"
 [ "$(count 2208)" = 0 ] && ok "a remembered unreadable card gets no terminal comment" || ko "#2208 commented"
-for n in 2201 2202 2203 2205; do [ "$(count $n)" = 1 ] || ko "#$n has $(count $n) terminal comments after two passes, not one"; done
+for n in 2201 2202 2203 2205 2210; do [ "$(count $n)" = 1 ] || ko "#$n has $(count $n) terminal comments after two passes, not one"; done
 [ "$fail" = 0 ] && ok "every terminal entry has exactly one comment after two passes"
 note 2201 | /usr/bin/grep -q 'squad-goal:terminal' && ok "the comment carries the tag the backfill reads" || ko "no tag: $(note 2201)"
 # The run's summary rides each child's terminal comment, so a run parent is never needed (#559): the run id, the other

@@ -84,6 +84,41 @@ def test_a_pass_reads_the_project_the_blockers_and_the_prs(hub, monkeypatch):
     assert isinstance(hub.board_cache["prs"], list)
 
 
+def _load_hub_with_cache(tag, cache, tmp_path, monkeypatch):
+    """A fresh hub process reading one board cache file: the module's load is what a restart does."""
+    for name in ("checkout", "hub", "state"):
+        (tmp_path / name).mkdir(exist_ok=True)
+    for key, value in (("SG_REPO", "x/y"), ("SG_OWNER", "x"), ("SG_PROJECT", "4"),
+                       ("SG_CHECKOUT", str(tmp_path / "checkout")), ("SG_HUB_DIR", str(tmp_path / "hub")),
+                       ("SG_STATE", str(tmp_path / "state")), ("SG_BOARD_CACHE", str(cache))):
+        monkeypatch.setenv(key, value)
+    spec = importlib.util.spec_from_file_location(f"hub_cache_{tag}", HUB_PY)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_a_board_cache_written_before_the_close_reason_is_read_again(tmp_path, monkeypatch):
+    """#921 (DEBT 2): a cache written before the rows carried the close reason answers no `cr`, so a card closed as not
+    planned would draw Closed and count as delivered. The marker makes such a cache read again; a cache this read wrote
+    keeps its rows across a restart."""
+    cache = tmp_path / "hub-board.json"
+    row = {"n": 7, "t": "a closed card", "s": "closed", "c": "2026-10-02T00:00:00Z", "st": "Closed", "l": []}
+    cache.write_text(json.dumps({"t": 99.0, "items": [row], "prs": [], "lc": {}, "err": None}))
+
+    stale = _load_hub_with_cache("stale", cache, tmp_path, monkeypatch)
+
+    assert stale.board_cache["items"] == [] and stale.board_cache["t"] == 0, \
+        "a cache with no close reason on its rows is read again, never drawn as delivered"
+    assert stale.board_cache["rv"] == stale.BOARD_READ
+
+    stale.board_cache["items"] = [{**row, "cr": "not_planned"}]
+    stale.save_board()
+    fresh = _load_hub_with_cache("fresh", cache, tmp_path, monkeypatch)
+
+    assert [i["n"] for i in fresh.board_cache["items"]] == [7], "a cache this read wrote keeps its rows across a restart"
+
+
 def test_the_tasks_header_has_no_refresh_button(hub):
     """The board re-reads itself every 60 s and within 2 s of a board move; a hand refresh only adds GitHub reads."""
     head = re.search(r"<div id=bhead>.*?</div>\n", hub.PAGE, re.S).group(0)

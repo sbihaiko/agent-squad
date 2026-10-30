@@ -175,13 +175,41 @@ def test_counts_key_by_kind_and_column_and_a_frozen_card_stays_in_its_column(hub
 
 
 def test_a_card_closed_as_not_planned_counts_in_abandoned_not_closed(hub, board, monkeypatch):
-    """#921: the flow sample counts a card closed as NOT_PLANNED with Status Closed in Abandoned, so the CFD's Closed
-    band and its throughput leave it out of delivered work."""
+    """#921: the flow sample counts a card closed as NOT_PLANNED, or as a duplicate, with Status Closed in Abandoned, so
+    the CFD's Closed band and its throughput leave it out of delivered work."""
     cards = [_card(1, st="Closed", s="CLOSED"),
              {**_card(2, st="Closed", s="CLOSED"), "cr": "not_planned"},
-             {**_card(3, st="Closed", s="CLOSED"), "cr": "completed"}]
+             {**_card(3, st="Closed", s="CLOSED"), "cr": "completed"},
+             {**_card(4, st="Closed", s="CLOSED"), "cr": "duplicate"}]
     _pass(hub, monkeypatch, cards)
-    assert _samples(board)[-1]["counts"] == {"issue": {"Abandoned": 1, "Closed": 2}}
+    assert _samples(board)[-1]["counts"] == {"issue": {"Abandoned": 2, "Closed": 2}}
+
+
+def test_a_history_written_before_the_close_reason_is_re_bucketed_once(hub, board, monkeypatch):
+    """#921 (DEBT 1): a sample written before the close reason counted put a not-planned card in Closed. The first
+    append after the upgrade moves it across in the past samples, once, and records the boundary."""
+    _flow(board).write_text(json.dumps(_sample(1.0, {"issue": {"Closed": 3}})) + "\n")
+    first = [{**_card(1, st="Closed", s="CLOSED"), "cr": "completed"},
+             {**_card(2, st="Closed", s="CLOSED"), "cr": "completed"},
+             {**_card(3, st="Closed", s="CLOSED"), "cr": "not_planned"}]
+
+    _pass(hub, monkeypatch, first)
+
+    samples = _samples(board)
+    assert samples[0]["counts"] == {"issue": {"Closed": 2, "Abandoned": 1}}, "the past sample kept the card in Closed"
+    assert samples[1]["counts"] == {"issue": {"Closed": 2, "Abandoned": 1}}
+    markers = [json.loads(line) for line in _flow(board).read_text().splitlines() if "flow_rebucket" in line]
+    assert [m["flow_rebucket"] for m in markers] == [1], "the boundary is recorded once"
+
+    second = [*first, {**_card(4, st="Closed", s="CLOSED"), "cr": "not_planned"}]
+    _pass(hub, monkeypatch, second)
+
+    samples = _samples(board)
+    assert samples[0]["counts"] == {"issue": {"Closed": 2, "Abandoned": 1}}, "the past is corrected once, never again"
+    assert samples[1]["counts"] == {"issue": {"Closed": 2, "Abandoned": 1}}
+    assert samples[2]["counts"] == {"issue": {"Closed": 2, "Abandoned": 2}}
+    markers = [json.loads(line) for line in _flow(board).read_text().splitlines() if "flow_rebucket" in line]
+    assert [m["flow_rebucket"] for m in markers] == [1], "a second pass adds no boundary"
 
 
 def test_each_cached_card_row_carries_its_opened_time(hub, board, monkeypatch):

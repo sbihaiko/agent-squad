@@ -79,9 +79,10 @@ def test_a_card_closed_as_not_planned_is_no_dot_and_is_counted_not_planned(lt):
 
 
 def test_the_carrier_spelling_never_reaches_the_chart(lt):
-    """The chart reads the hub's own reason word: a carrier spelling the chart does not own (`duplicate`, `reopened`)
-    excludes nothing, because board_columns maps the carrier's vocabulary, not this module."""
-    result = lt.lead_time([{**_card(1, 5), "reason": "duplicate"}, {**_card(2, 7), "reason": "reopened"}])
+    """The chart reads the hub's own reason word: a spelling the chart does not own (`reopened`, `superseded`) excludes
+    nothing, because board_columns maps the carrier's vocabulary, not this module. `duplicate` belongs to that mapping,
+    so it never arrives here as a reason of its own."""
+    result = lt.lead_time([{**_card(1, 5), "reason": "superseded"}, {**_card(2, 7), "reason": "reopened"}])
 
     assert [dot["n"] for dot in result["series"]] == [1, 2]
     assert result["excluded"] == {}

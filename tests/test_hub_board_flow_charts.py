@@ -142,24 +142,44 @@ def test_lead_time_summary_measure_window_and_excluded_count(hub, board):
 
 
 def test_a_card_closed_as_not_planned_is_no_delivery_and_the_chart_names_it(hub, board):
-    """#921: a card closed as NOT_PLANNED with Status Closed draws Abandoned, is no lead-time dot, and its count is named
-    beside the chart's excluded total."""
+    """#921: a card closed as NOT_PLANNED, or as a duplicate, with Status Closed draws Abandoned, is no lead-time dot, and
+    its count is named beside the chart's excluded total."""
     hub.board_cache["items"] = [
         _card(1, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-01T15:00:00Z"),
         {**_card(2, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-02T09:00:00Z"), "cr": "not_planned"},
         {**_card(3, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-03T09:00:00Z"), "cr": "not_planned"},
+        {**_card(4, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-04T09:00:00Z"), "cr": "duplicate"},
     ]
 
     served = hub.board()
 
     assert [p["n"] for p in served["flow"]["lead"]["series"]] == [1]
     assert served["flow"]["lead"]["summary"]["median"]["text"] == "6h"
-    assert served["flow"]["lead"]["excluded"] == [{"reason": "not_planned", "count": 2}]
-    assert served["flow"]["lead"]["excluded_total"] == 2
+    assert served["flow"]["lead"]["excluded"] == [{"reason": "not_planned", "count": 3}]
+    assert served["flow"]["lead"]["excluded_total"] == 3
     abandoned = next(g for g in served["groups"] if g["name"] == "Abandoned")
-    assert [r["n"] for r in abandoned["items"]] == [2, 3], "a card closed as not planned is drawn Abandoned, never Closed"
+    assert [r["n"] for r in abandoned["items"]] == [2, 3, 4], "a card closed as not planned is drawn Abandoned, never Closed"
     closed = next(g for g in served["groups"] if g["name"] == hub.COLUMN["issue_closed"])
     assert [r["n"] for r in closed["items"]] == [1]
+
+
+def test_the_closed_band_never_steps_down_where_the_close_reason_began(hub, board):
+    """#921 (DEBT 1): the samples written before the close reason counted put a not-planned card in the Closed band.
+    The one re-bucket moves that card across in the past samples, so the Closed band never takes a step down at the
+    boundary, and a reader never takes the step for a data error."""
+    flow = _load("board_flow_history_rebucket", SCRIPTS / "board_flow_history.py")
+    closed = hub.COLUMN["issue_closed"]
+    _history(board, [_sample(1, {"issue": {closed: 5}}), _sample(2, {"issue": {closed: 5}})])
+    rows = [{**_card(n, st=closed, s="CLOSED"), "cr": "completed"} for n in range(1, 5)]
+    rows.append({**_card(9, st=closed, s="CLOSED"), "cr": "not_planned"})
+
+    flow.append(board / "hub-flow.x_y.jsonl", rows, now=datetime(2026, 10, 3, 12, tzinfo=UTC).timestamp())
+
+    bands = {b["name"]: b for b in hub.board()["flow"]["cfd"]["bands"]}
+    values = [hi - lo for hi, lo in zip(bands[closed]["upper"], bands[closed]["lower"], strict=True)]
+    assert values == sorted(values), f"the Closed band steps down at the boundary: {values}"
+    abandoned = [hi - lo for hi, lo in zip(bands["Abandoned"]["upper"], bands["Abandoned"]["lower"], strict=True)]
+    assert abandoned == [1, 1, 1], "the past samples and the new one count the card in Abandoned"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
