@@ -446,7 +446,9 @@ for m in $chain; do fmt=0; timed_out=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9
     grep -q 'VERDICT' "$o" 2>/dev/null && [ $rc = 0 ] && { if [ -s "$o.answer" ]; then mv -f "$o.answer" "$SG_STATE/review-$pr.answer.json"; else rm -f "$SG_STATE/review-$pr.answer.json"; fi; mv -f "$o" "$out"; echo "$head" > "$o.sha" && mv -f "$o.sha" "$last"; echo "model=$m${delta:+ (fix round, delta)}$lane $(head -1 "$out")"; git -C "$SG_CHECKOUT" status --porcelain | head -3; streak clear "$m"; exit 0; }
   done
   [ "$timed_out" = 1 ] || streak clear "$m"
-  [ "$fmt" = 1 ] || printf "MODEL_FAIL review %s on branch %s: exit %s, %s\n" "$m" "$bm" "$rc" "$({ tail -c 300 "$e"; [ "$rc" != 0 ] && tail -c 300 "$o"; } 2>/dev/null | tr '\n' ' ')" > "$(sg_cq_status "$iss" "mfail$$-$ms-$i")"   # claude -p prints its API error on stdout, the answer file
+  # #925: a timed-out try is no model failure. The MODEL_TIMEOUT above already names what happened; a MODEL_FAIL beside it
+  # quoted the CLI's stderr notice as the cause, so the issue read a model fault where the deadline alone had fired.
+  [ "$fmt" = 1 ] || [ "$timed_out" = 1 ] || printf "MODEL_FAIL review %s on branch %s: exit %s, %s\n" "$m" "$bm" "$rc" "$({ tail -c 300 "$e"; [ "$rc" != 0 ] && tail -c 300 "$o"; } 2>/dev/null | tr '\n' ' ')" > "$(sg_cq_status "$iss" "mfail$$-$ms-$i")"   # claude -p prints its API error on stdout, the answer file
   prev=$m   # this model's tries failed (MODEL_FAIL or MODEL_FORMAT), so the next model's turn queues a MODEL_SWITCH (#631)
 done
 publish "VERDICT: BLOCKED (every review model failed)"; exit 1
