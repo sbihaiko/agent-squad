@@ -26,8 +26,8 @@ records that hash on the step it produced. A case whose id is there but whose te
 to conversion for that case only, so an edited case is never silently ignored.
 
 Publishing (#1225) is idempotent, resumable and paced. It takes one injected **GitHub runner** — a callable
-`github(op, **kwargs)` whose ops are `ensure_label`, `create_issue`, `update_issue`, `add_sub_issue` and `board` —
-and it writes a map beside the script (`<script>.gui-test.issues.json`: the parent's number, and per case id the
+`github(op, **kwargs)` whose ops are `ensure_label`, `create_issue`, `update_issue`, `add_sub_issue`, `board` and
+`item_status` — and it writes a map beside the script (`<script>.gui-test.issues.json`: the parent's number, and per case id the
 issue number and the case's content hash) after every issue it creates. An interrupted publish, or a second machine,
 resumes from that map and creates nothing twice; publishing again updates what the map knows, and a case the script
 no longer covers is reported in `removed` and left open, because only a person closes a case. A secondary rate limit
@@ -749,7 +749,7 @@ def _dry_counts(plan, state):
 
 
 def publish(plan, github, *, script_path=None, map_path=None, saved=None, sleep=None, attempts=4, backoff=1.0,
-            dry_run=False):
+            dry_run=False, status_reads=4):
     """Publish the plan as a tree: the scenario, its areas, each area's containers, each container's case records.
 
     Idempotent and resumable through the map beside the script, flushed after every issue created and every link
@@ -864,6 +864,15 @@ def publish(plan, github, *, script_path=None, map_path=None, saved=None, sleep=
         state["boarded"] = True
         flush()
     if TRIAGE_LABEL in plan["parent"]["labels"]:
+        # #895 follow-up: the board is eventually consistent, so the card's Status is read back, bounded, before the
+        # triage label that makes it dispatchable. A Status that never reads back adds no label and is named.
+        delay, read = backoff, 0
+        while call("item_status", number=state["parent"]) != PARENT_STATUS:
+            read += 1
+            if read >= status_reads:
+                raise StatusUnread(state["parent"], PARENT_STATUS)
+            wait(delay)
+            delay *= 2
         refresh(state["parent"], plan["parent"]["title"], call("issue_body", number=state["parent"]) or "",
                 plan["parent"]["labels"], None)
     scenario = state["parent"]
@@ -1857,13 +1866,23 @@ def rest_runner(repo, shell=_sh, project=None, bug_helper=None, initial_status=I
                 pid = json.loads(call(["gh", "project", "view", number, "--owner", owner, "--format", "json"]))["id"]
                 fields = json.loads(call(["gh", "project", "field-list", number, "--owner", owner, "--format", "json",
                                           "--limit", "100"]))["fields"]
-                field = next(f for f in fields if f.get("name") == "Status")
+                field = next((f for f in fields if f.get("name") == "Status"), None)
+                if field is None:
+                    raise ValueError(f"no Status field on {project}")
                 option = next((o for o in field.get("options") or [] if o.get("name") == kw["status"]), None)
                 if option is None:
                     raise ValueError(f"no Status option {kw['status']!r} on {project}")
                 call(["gh", "project", "item-edit", "--id", item["id"], "--project-id", pid,
                       "--field-id", field["id"], "--single-select-option-id", option["id"]])
             return item
+        if op == "item_status":
+            # The Status a card reads back now, by its issue number; None while the board does not list it yet.
+            owner, number = _project_ref(project)
+            listed = json.loads(call(["gh", "project", "item-list", number, "--owner", owner, "--format", "json",
+                                      "--limit", "1000"]))
+            hit = next((i for i in listed.get("items") or [] if (i.get("content") or {}).get("number") == kw["number"]),
+                       None)
+            return None if hit is None else hit.get("status")
         if op == "file_bug":
             if not bug_helper:
                 raise ValueError("file_bug needs bug_helper (the repo's scripts/report-bug.sh path)")

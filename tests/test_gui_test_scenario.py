@@ -69,6 +69,8 @@ class FakeGitHub:
 
     def __call__(self, op, **kw):
         self.calls.append((op, kw))
+        if op == "item_status":
+            return "Backlog"           # the parent is boarded in Backlog (#895)
         if op == "issue_state":
             return self.states.get(kw["number"], {"state": "open", "verdict": None})
         if op == "create_issue":

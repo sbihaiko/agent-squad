@@ -439,6 +439,23 @@ def test_rest_runner_names_a_status_the_board_does_not_offer_and_writes_nothing(
     assert not [a for a in seen if a[:3] == ["gh", "project", "item-edit"]]
 
 
+def test_rest_runner_names_a_board_with_no_status_field_and_writes_nothing():
+    seen = []
+
+    def shell(args, **kw):
+        seen.append(args)
+        if args[:3] == ["gh", "project", "item-add"]:
+            return json.dumps({"id": "PVTI_x"})
+        if args[:3] == ["gh", "project", "field-list"]:
+            return json.dumps({"fields": [{"id": "F_title", "name": "Title", "options": []}]})
+        return json.dumps({"id": "PVT_p"})
+
+    gh = rest_runner("sbihaiko/MesenAI", shell=shell, project="users/sbihaiko/projects/3")
+    with pytest.raises(ValueError, match="no Status field on users/sbihaiko/projects/3"):
+        gh("board", number=7, status="Backlog")
+    assert not [a for a in seen if a[:3] == ["gh", "project", "item-edit"]]
+
+
 def test_rest_runner_turns_a_secondary_rate_limit_answer_into_a_back_off():
     def shell(args, **kw):
         raise subprocess.CalledProcessError(1, args, stderr="gh: You have exceeded a secondary rate limit")
@@ -508,20 +525,3 @@ def test_rest_runner_reads_a_cards_status_by_its_issue_number_from_the_project_i
     assert gh("item_status", number=9) is None           # not on the board yet: the caller reads again
     listed = next(a for a in seen if a[:3] == ["gh", "project", "item-list"])
     assert listed[3:6] == ["3", "--owner", "sbihaiko"] and listed[listed.index("--limit") + 1] == "1000"
-
-
-def test_rest_runner_names_a_board_with_no_status_field_and_writes_nothing():
-    seen = []
-
-    def shell(args, **kw):
-        seen.append(args)
-        if args[:3] == ["gh", "project", "item-add"]:
-            return json.dumps({"id": "PVTI_x"})
-        if args[:3] == ["gh", "project", "field-list"]:
-            return json.dumps({"fields": [{"id": "F_title", "name": "Title", "options": []}]})
-        return json.dumps({"id": "PVT_p"})
-
-    gh = rest_runner("sbihaiko/MesenAI", shell=shell, project="users/sbihaiko/projects/3")
-    with pytest.raises(ValueError, match="no Status field on users/sbihaiko/projects/3"):
-        gh("board", number=7, status="Backlog")
-    assert not [a for a in seen if a[:3] == ["gh", "project", "item-edit"]]

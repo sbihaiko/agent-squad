@@ -25,6 +25,8 @@ class TreeGitHub:
 
     def __call__(self, op, **kw):
         self.calls.append((op, kw))
+        if op == "item_status":
+            return "Backlog"           # the parent is boarded in Backlog (#895)
         if op == "create_issue":
             self.creates += 1
             if self.fail_on_create and self.creates == self.fail_on_create:
@@ -92,7 +94,7 @@ def test_a_281_case_plan_publishes_16_areas_and_their_containers_top_down(tmp_pa
         assert gh.kids[container] == [cases[i["cases"][0]] for c in area["containers"] for i in c["cases"]]
     assert not set(cases.values()) & set(gh.kids[scenario])     # a record is never linked to the scenario
     assert sum(len(v) for v in gh.kids.values()) == 16 + 16 + 281
-    assert len(gh.of("board")) == 1 and gh.of("board") == [{"number": scenario}]
+    assert len(gh.of("board")) == 1 and gh.of("board") == [{"number": scenario, "status": "Backlog"}]
 
 
 @pytest.mark.heavy

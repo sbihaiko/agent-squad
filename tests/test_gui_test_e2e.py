@@ -2333,6 +2333,8 @@ class _ScenarioGitHub:
 
     def __call__(self, op, **kw):
         self.calls.append((op, kw))
+        if op == "item_status":
+            return "Backlog"           # the parent is boarded in Backlog (#895)
         if op == "create_issue":
             self._next += 1
             return {"number": self._next, "id": 900 + self._next}
@@ -3202,6 +3204,8 @@ class _PublishGitHub:
 
     def __call__(self, op, **kw):
         self.calls.append((op, kw))
+        if op == "item_status":
+            return "Backlog"           # the parent is boarded in Backlog (#895)
         if op == "create_issue":
             self.creates += 1
             if self.fail_on_create and self.creates == self.fail_on_create:
