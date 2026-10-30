@@ -116,3 +116,13 @@ def test_a_non_dispatch_artifact_runs_every_command_in_the_target(tmp_path):
     r = gates.ac_verify({"commands_from": "spec"}, GateInput(artifacts={"spec": {"ac_commands": [SUBJECT.format("merge")]}}, facts={}, cwd=str(target)))
     assert r.ok, r.findings
 
+
+
+def test_a_dispatch_artifact_with_no_ac_runs_never_runs_a_history_command_in_the_target(tmp_path):
+    """#867: an artifact an older engine wrote has the dispatch keys but no `ac_runs`, so it names no child tree. Its history
+    command must fail as child_tree_missing; it must never run in the target, whose HEAD can satisfy it."""
+    target = repo_with_head(tmp_path / "target", "child one")
+    cmd = SUBJECT.format("child one")
+    art = {"ac_commands": [cmd], "children": ["route.router.1"], "ledger": [{"child": "route.router.1", "outcome": "pass"}]}
+    r = gates.ac_verify({"commands_from": "route"}, GateInput(artifacts={"route": art}, facts={}, cwd=str(target)))
+    assert not r.ok and r.findings == [f"child_tree_missing:{cmd}"]
