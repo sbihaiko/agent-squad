@@ -84,7 +84,7 @@ def test_start_is_the_first_sample_time_and_no_samples_gives_an_empty_series(cfd
     samples = [_sample(first + 86400, {"card": {"Todo": 1}}), _sample(first, {"card": {"Todo": 1}})]
     assert cfd(samples, COLUMNS)["start"] == first
     empty = cfd([], COLUMNS)
-    assert empty == {"start": None, "points": [], "average_throughput": None}
+    assert empty == {"start": None, "points": [], "gaps": [], "average_throughput": None}
 
 
 def test_a_day_with_no_sample_is_absent_not_zero(cfd):
@@ -107,3 +107,21 @@ def test_module_imports_no_hub_github_client_or_file_api():
             names.add(node.module.split(".")[0])
     forbidden = {"hub", "hub_client", "github", "gh", "subprocess", "requests", "urllib", "http", "pathlib", "os", "io", "shutil"}
     assert not names & forbidden, sorted(names & forbidden)
+
+
+def test_a_skipped_day_is_a_gap_in_the_data_and_no_point(cfd):
+    samples = [
+        _sample(_epoch(2026, 10, 20, 12), {"card": {"Todo": 1}}),
+        _sample(_epoch(2026, 10, 23, 12), {"card": {"Todo": 2}}),
+    ]
+    result = cfd(samples, COLUMNS)
+    assert result["gaps"] == ["2026-10-21", "2026-10-22"], "each missing day between two sampled days is a gap"
+    assert [p["day"] for p in result["points"]] == ["2026-10-20", "2026-10-23"]
+
+
+def test_consecutive_sampled_days_have_no_gap(cfd):
+    samples = [
+        _sample(_epoch(2026, 10, 20, 12), {"card": {"Todo": 1}}),
+        _sample(_epoch(2026, 10, 21, 12), {"card": {"Todo": 2}}),
+    ]
+    assert cfd(samples, COLUMNS)["gaps"] == []

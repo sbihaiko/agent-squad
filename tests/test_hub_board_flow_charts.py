@@ -158,6 +158,36 @@ def test_opening_the_diagrams_makes_no_gh_call(hub, board, monkeypatch):
     assert 'id=flowov hidden' in hub.PAGE
 
 
+def test_a_skipped_day_is_a_calendar_day_with_no_band_values(hub, board):
+    _history(board, [
+        _sample(1, {"issue": {hub.COLUMN["unscheduled"]: 2}}),
+        _sample(3, {"issue": {hub.COLUMN["unscheduled"]: 1}}),
+    ])
+    cfd = hub.board()["flow"]["cfd"]
+    assert len(cfd["days"]) == 3, "the calendar runs over the missing day, so points sit by date"
+    for band in cfd["bands"]:
+        assert band["upper"][1] is None and band["lower"][1] is None, "a gap carries no value to interpolate"
+        assert band["upper"][0] is not None and band["upper"][2] is not None
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_page_splits_each_band_at_a_gap(hub, tmp_path):
+    block = _flow_block(hub).split("const drawFlow")[0]
+    drawing = "\n".join([
+        "const COLORS={};", "const esc=s=>String(s);", block,
+        'process.stdout.write(flowCFD({days:["a","b","c","d","e"],ymax:4,start:"2026-10-01",'
+        'bands:[{name:"Todo",lower:[0,0,null,0,0],upper:[2,3,null,1,2]}]}));',
+    ])
+    path = tmp_path / "flow-cfd.js"
+    path.write_text(drawing)
+    result = subprocess.run(["node", str(path)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    polygons = [[float(p.split(",")[0]) for p in m.split()] for m in re.findall(r'points="([^"]*)"', result.stdout)]
+    assert len(polygons) == 2, "one polygon per run of sampled days, never one across the gap"
+    x = {i: 36 + i * (800 - 2 * 36) / 4 for i in range(5)}
+    assert all(v in (x[0], x[1]) for v in polygons[0]) and all(v in (x[3], x[4]) for v in polygons[1])
+
+
 def test_page_draws_the_hub_numbers_and_does_no_arithmetic(hub, board):
     block = _flow_block(hub)
     for forbidden in ("reduce(", "Math.", "+=", "-=", "fmean(", "median(", "average(", "saveB(", "bo.", "#bbody"):

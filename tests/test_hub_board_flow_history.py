@@ -1,6 +1,8 @@
 """Each board pass appends one flow sample to hub-flow.jsonl beside the board cache, and keeps the opened time of each card."""
 import importlib.util
 import json
+import os
+import pathlib
 import subprocess
 import time
 from datetime import UTC, datetime, timedelta
@@ -238,22 +240,90 @@ def test_two_repositories_on_one_board_write_two_histories(tmp_path, monkeypatch
     assert [s["counts"] for s in _samples(cache, "x_beta")] == [{"issue": {"Doing": 1}}]
 
 
-def test_a_truncated_read_is_not_appended_and_its_reason_is_kept(hub, board, monkeypatch):
-    _pass(hub, monkeypatch, _rows(9))
-    _pass(hub, monkeypatch, _rows(1))
-    assert len(_samples(board)) == 1, "a read far under the last sample is not a sample"
-    records = [json.loads(line) for line in _flow(board).read_text().splitlines() if '"flow_skip"' in line]
-    assert len(records) == 1
-    assert set(records[0]) == {"flow_skip", "t", "reason"}
-    assert records[0]["flow_skip"] == 1 and records[0]["reason"]
+def _relations_incomplete(hub, monkeypatch):
+    """The relations read ran past its page cap, or asked for a page with no cursor: the pass keeps its rows, and the read is incomplete."""
+    monkeypatch.setattr(hub, "open_relations", lambda: ([], False))
 
 
-def test_a_short_read_that_repeats_the_next_pass_is_accepted(hub, board, monkeypatch):
+def _skip_records(board):
+    return [json.loads(line) for line in _flow(board).read_text().splitlines() if '"flow_skip"' in line]
+
+
+def test_an_incomplete_read_is_never_appended_even_when_it_repeats_the_same_total(hub, board, monkeypatch):
+    _pass(hub, monkeypatch, _rows(9))
+    _relations_incomplete(hub, monkeypatch)
+    _pass(hub, monkeypatch, _rows(9, column="Doing"))
+    _pass(hub, monkeypatch, _rows(9, column="Doing"))
+    assert [s["counts"] for s in _samples(board)] == [{"issue": {"Todo": 9}}], "an incomplete read is no sample, at any total"
+    records = _skip_records(board)
+    assert [r["flow_skip"] for r in records] == [9, 9]
+    assert all(set(r) == {"flow_skip", "t", "reason"} and r["reason"] for r in records)
+
+
+def test_a_complete_read_under_the_last_sample_is_a_sample(hub, board, monkeypatch):
     _pass(hub, monkeypatch, _rows(9))
     _pass(hub, monkeypatch, _rows(1))
-    _pass(hub, monkeypatch, _rows(1))
-    assert [s["counts"] for s in _samples(board)] == [{"issue": {"Todo": 9}}, {"issue": {"Todo": 1}}]
-    assert sum('"flow_skip"' in line for line in _flow(board).read_text().splitlines()) == 1
+    assert [s["counts"] for s in _samples(board)] == [{"issue": {"Todo": 9}}, {"issue": {"Todo": 1}}], "a size alone never rejects a complete read"
+    assert _skip_records(board) == []
+
+
+def test_the_shared_legacy_history_is_renamed_never_deleted_at_first_use(tmp_path):
+    flow = _load_flow()
+    board = tmp_path / "hub-board.json"
+    shared = tmp_path / "hub-flow.jsonl"
+    old = json.dumps(_sample(1.0, {"issue": {"Todo": 4}})) + "\n"
+    shared.write_text(old)
+    path = flow.history_path(board, "x/y")
+    flow.append(path, _rows(2), now=time.time())
+    assert not shared.exists(), "the shared file is retired at first use"
+    assert (tmp_path / "hub-flow.jsonl.legacy").read_text() == old, "its bytes survive under the legacy name"
+    assert [s["counts"] for s in flow.samples(path)] == [{"issue": {"Todo": 2}}]
+    flow.append(path, _rows(3), now=time.time() + 60)
+    assert (tmp_path / "hub-flow.jsonl.legacy").read_text() == old, "a second use changes nothing and raises nothing"
+
+
+def test_a_legacy_name_already_taken_is_never_overwritten(tmp_path):
+    flow = _load_flow()
+    board = tmp_path / "hub-board.json"
+    (tmp_path / "hub-flow.jsonl.legacy").write_text("earlier\n")
+    (tmp_path / "hub-flow.jsonl").write_text("later\n")
+    flow.append(flow.history_path(board, "x/y"), _rows(2), now=time.time())
+    assert (tmp_path / "hub-flow.jsonl.legacy").read_text() == "earlier\n"
+    kept = [p for p in tmp_path.glob("hub-flow.jsonl.legacy*") if p.read_text() == "later\n"]
+    assert len(kept) == 1, "the later file keeps its bytes under a name of its own"
+
+
+def test_a_legacy_file_another_process_renamed_first_is_no_error(tmp_path, monkeypatch):
+    flow = _load_flow()
+    board = tmp_path / "hub-board.json"
+    (tmp_path / "hub-flow.jsonl").write_text("shared\n")
+    real_replace = os.replace
+
+    def renamed_by_someone_else(src, dst):
+        if pathlib.Path(src).name == "hub-flow.jsonl":
+            raise FileNotFoundError(src)
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(flow.os, "replace", renamed_by_someone_else)
+    path = flow.history_path(board, "x/y")
+    flow.append(path, _rows(2), now=time.time())
+    assert [s["counts"] for s in flow.samples(path)] == [{"issue": {"Todo": 2}}]
+
+
+def test_flow_skip_lines_older_than_thirty_days_keep_one_per_utc_day(tmp_path):
+    flow = _load_flow()
+    now = time.time()
+    day0 = datetime.fromtimestamp(now, UTC).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=40)
+    d0 = day0.timestamp()
+    skips = [d0 + 1 * HOUR, d0 + 5 * HOUR, d0 + DAY + 2 * HOUR, d0 + DAY + 3 * HOUR]
+    recent = now - HOUR
+    lines = [{"flow_skip": 1, "t": int(t), "reason": "incomplete"} for t in skips]
+    lines.append({"flow_skip": 2, "t": int(recent), "reason": "incomplete"})
+    path = tmp_path / "hub-flow.x_y.jsonl"
+    path.write_text("".join(json.dumps(line) + "\n" for line in lines))
+    flow.append(path, _rows(3), now=now)
+    kept = [json.loads(line)["t"] for line in path.read_text().splitlines() if '"flow_skip"' in line]
+    assert kept == [int(d0 + 5 * HOUR), int(d0 + DAY + 3 * HOUR), int(recent)], "the last skip of each old UTC day stays; recent ones stay raw"
 
 
 def test_the_cfd_of_a_history_with_a_skipped_read_has_no_tooth(board):
@@ -262,11 +332,12 @@ def test_the_cfd_of_a_history_with_a_skipped_read_has_no_tooth(board):
     path = _flow(board)
     day = datetime(2026, 10, 20, 12, tzinfo=UTC).timestamp()
     flow.append(path, _rows(9), now=day)
-    flow.append(path, _rows(1), now=day + DAY)
+    flow.append(path, _rows(1), now=day + DAY, incomplete="relations read incomplete")
     flow.append(path, _rows(9, column="Doing"), now=day + 2 * DAY)
     result = cfd(flow.samples(path), ["Todo", "Doing", "Closed"])
     assert [p["wip"] for p in result["points"]] == [9, 9]
     assert [p["day"] for p in result["points"]] == ["2026-10-20", "2026-10-22"]
+    assert result["gaps"] == ["2026-10-21"], "the skipped day is a break in the data, not a tooth"
 
 
 def test_the_history_name_is_derived_from_the_repository(tmp_path):
