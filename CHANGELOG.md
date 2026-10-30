@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.34 (local fork, 2026-10-30)
+- **The tailnet block lives in the project's `.env`; `/agent-squad:start-mobile`.** `squad config set tailnet.*` writes `SQUAD_TAILNET_*` to the gitignored `.env`, never the tracked `docs/squad/defaults.yaml`. The hub reads a host profile's block through the plugin install (#871), so the install needs this release.
+
 ## 0.2.33 (local fork, 2026-10-29)
 - **#862, #867 — the engine cache takes the loop-bug fixes.** The live loop runs the engine from the plugin cache keyed by version; 0.2.32 never refreshed it, so the #862 and #867 engine fixes did not reach the loop. This release bumps the manifest so `claude plugin update` installs them.
 
