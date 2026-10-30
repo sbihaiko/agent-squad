@@ -388,7 +388,7 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
   local rk="$SG_STATE/review-$(printf '%s' "$br" | tr / _)" rsha
   rsha=$($G rev-parse HEAD)
   # hold <why> and refuse <why> [cap]: the child stays out, held or requeued, and the cause is recorded for the janitor (#682).
-  hold() { wave_fact "$run" "$iss" held "$1"; echo "WAVE HOLD #$iss: $1"; return 1; }
+  hold() { wave_fact "$run" "$iss" held "$1"; echo "$(date -u '+%F %T') WAVE HOLD #$iss: $1"; return 1; }
   refuse() { wave_fact "$run" "$iss" refused "$1"; requeue "$iss" "$@"; return 1; }
   # A run whose final gate failed takes no child into its wave (#694): what its gate read failed, so the wave would carry a
   # failed tree and conflict on the base. The child stays out, its issue goes back to the queue, and the wave lands empty.

@@ -39,6 +39,7 @@ test-envelope-spend.sh 0.13
 test-fast-gate.sh 8.46
 test-fastloop-childcc.sh 0.97
 test-fastloop-interval.sh 8.33
+test-fastloop-load.sh 0.11
 test-fastloop-orphan.sh 0.73
 test-fastloop-pid.sh 0.05
 test-gate-lock.sh 14.58

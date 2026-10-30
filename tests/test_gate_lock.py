@@ -223,7 +223,7 @@ def test_a_wave_entry_under_a_held_gate_lock_holds_the_child_and_enters_on_a_lat
         assert pid.exists(), "the holder never took the gate lock"
         held = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=60)
         out = held.stdout + held.stderr
-        assert held.returncode != 0 and re.search(r"^WAVE HOLD #1: the gate lock is held by pid [0-9]+", out, re.M), out
+        assert held.returncode != 0 and re.search(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d WAVE HOLD #1: the gate lock is held by pid [0-9]+", out, re.M), out
         assert subprocess.run(["bash", "-c", ran]).returncode != 0, f"the entry ran its gate beside the holder: {out}"
     finally:
         release.touch()

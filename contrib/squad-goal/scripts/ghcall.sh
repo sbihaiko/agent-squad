@@ -178,7 +178,7 @@ gh_dispatch_hold() {
     case "$ts" in
       ''|*[!0-9]*) ;;
       *) if [ $(( $(date +%s) - ts )) -lt "${SERIAL_HOLD_SECONDS:-7200}" ]; then
-           line="DISPATCH HOLD: the promotion proof holds the machine (since $(date -r "$SG_STATE/promote-reserve" +%T 2>/dev/null || echo "$ts")); no new run this pass"
+           line="$(date -u '+%F %T') DISPATCH HOLD: the promotion proof holds the machine (since $(date -r "$SG_STATE/promote-reserve" +%T 2>/dev/null || echo "$ts")); no new run this pass"
            printf '%s\n' "$line"; printf '%s\n' "$line" >> "$SG_STATE/cycle.log"
            return 0
          fi;;
@@ -198,22 +198,22 @@ gh_dispatch_hold() {
       printf '%s\n' "$line"; printf '%s\n' "$line" >> "$SG_STATE/cycle.log"
       return 1
     fi
-    line="DISPATCH HOLD: the nightly full suite is red (${nids:-no test named}); no new run until one green nightly"
+    line="$(date -u '+%F %T') DISPATCH HOLD: the nightly full suite is red (${nids:-no test named}); no new run until one green nightly"
     printf '%s\n' "$line"
     printf '%s\n' "$line" >> "$SG_STATE/cycle.log"
     return 0
   fi
   [ -n "$m" ] || return 1
-  case "$m" in *[!0-9]*) echo "DISPATCH HOLD: SG_DISPATCH_MAX_WAITING='$m' is not a non-negative integer; no limit"; return 1;; esac
+  case "$m" in *[!0-9]*) echo "$(date -u '+%F %T') DISPATCH HOLD: SG_DISPATCH_MAX_WAITING='$m' is not a non-negative integer; no limit"; return 1;; esac
   [ -r "$f" ] || return 1
   n=$(head -n 1 "$f" 2>/dev/null | tr -d '[:space:]')
   case "$n" in ''|*[!0-9]*) return 1;; esac
   t=$(date -r "$f" +%s 2>/dev/null) || return 1
   if [ $(( $(date +%s) - t )) -gt 1800 ]; then
-    echo "DISPATCH HOLD skipped: the childcc count is older than 30 min (stale childcc); no limit this pass"; return 1
+    echo "$(date -u '+%F %T') DISPATCH HOLD skipped: the childcc count is older than 30 min (stale childcc); no limit this pass"; return 1
   fi
   [ $((10#$n)) -gt $((10#$m)) ] || return 1
-  line="DISPATCH HOLD: $((10#$n)) children wait for review (cap $((10#$m))); no new run this pass"
+  line="$(date -u '+%F %T') DISPATCH HOLD: $((10#$n)) children wait for review (cap $((10#$m))); no new run this pass"
   printf '%s\n' "$line"
   printf '%s\n' "$line" >> "$SG_STATE/cycle.log"
   return 0

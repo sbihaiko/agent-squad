@@ -1012,6 +1012,13 @@ def _cycle_state(now):
     end = time.mktime(time.strptime(day + rows[-1][0], "%Y-%m-%d %H:%M:%S"))
     if end > now: end -= 86400   # the line is from before midnight
     return {"end": end, "secs": [int(r[1]) for r in rows[-5:]]}
+def loop_log_stamp(line):
+    """The UTC time a loop-log line starts with, as epoch seconds. None for a line written with no stamp: its age is unknown, never zero."""
+    m = re.match(r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) ", line)
+    if not m: return None
+    try: return dt.datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S").replace(tzinfo=dt.timezone.utc).timestamp()
+    except ValueError: return None
+
 def _span(s):
     s = int(abs(s)); h, m = divmod(s // 60, 60)
     return f"{h}h{m:02d}m" if h else f"{m}m{s % 60:02d}s"
