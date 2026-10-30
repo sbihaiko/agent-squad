@@ -59,10 +59,11 @@ case "$a" in
     printf '2041\tBacklog\thttps://api.github.com/repos/x/y\n'   # a run parent that already has a card
     printf '2042\tTodo\thttps://api.github.com/repos/x/y\n2043\tBacklog\thttps://api.github.com/repos/x/y\n2044\tBlocked\thttps://api.github.com/repos/x/y\n'   # the owner moved spec #2042 to Todo
     printf '2046\tBacklog\thttps://api.github.com/repos/x/y\n2047\tBacklog\thttps://api.github.com/repos/x/y\n'   # spec #2046 still sits in Backlog
-    printf '2015\tBlocked\thttps://api.github.com/repos/x/y\n';;   # stale Blocked card with no current blocking cause
+    printf '2015\tBlocked\thttps://api.github.com/repos/x/y\n'   # stale Blocked card with no current blocking cause
+    printf '2070\tBacklog\thttps://api.github.com/repos/x/y\n2071\tDoing\thttps://api.github.com/repos/x/y\n2072\tBacklog\thttps://api.github.com/repos/x/y\n2073\tTodo\thttps://api.github.com/repos/x/y\n2075\tDoing\thttps://api.github.com/repos/x/y\n2076\tBacklog\thttps://api.github.com/repos/x/y\n2077\tDone\thttps://api.github.com/repos/x/y\n';;   # #942: parents that are not specs, and their children
   *graphql*)   # the open-issue list in ONE request: every open issue of the repository, with its labels
     printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":['
-    sep=""; for n in 2001 2002 2003 2004 2005 2006 2007 2008 2009 2011 2012 2013 2014 2015 2016 2017 2018 2019 2020 2021 2027 2028 2029 2032 2040 2041 2042 2043 2044 2045 2046 2047 2050 2051 2052 2053 2054 2060; do
+    sep=""; for n in 2001 2002 2003 2004 2005 2006 2007 2008 2009 2011 2012 2013 2014 2015 2016 2017 2018 2019 2020 2021 2027 2028 2029 2032 2040 2041 2042 2043 2044 2045 2046 2047 2050 2051 2052 2053 2054 2060 2070 2071 2072 2073 2074 2075 2076 2077; do
       body=""; subs='{"total":0,"completed":0}'; kids='[]'
       case $n in
         2007|2016) labs='{"nodes":[{"name":"needs-owner"}]}';;
@@ -90,6 +91,13 @@ case "$a" in
         # wrongly at Code Complete while one child is still in flight; #2053 is still queued.
         2050) labs='{"nodes":[{"name":"spec"}]}'; subs='{"total":2,"completed":1}'; kids='[{"number":2051},{"number":2052}]';;
         2053) labs='{"nodes":[{"name":"spec"}]}'; subs='{"total":1,"completed":0}'; kids='[{"number":2054}]';;
+        # #942: a parent that is not a spec folds its children's columns too. #2070 has a child at Doing; #2072's child is still
+        # in Todo; #2074 is a run parent, never work; #2076's child is Done, so the parent is delivered by its own children but never closed.
+        2070) labs='{"nodes":[]}'; subs='{"total":1,"completed":0}'; kids='[{"number":2071}]';;
+        2072) labs='{"nodes":[]}'; subs='{"total":1,"completed":0}'; kids='[{"number":2073}]';;
+        2074) labs='{"nodes":[{"name":"run-parent"}]}'; subs='{"total":1,"completed":0}'; kids='[{"number":2075}]';;
+        2076) labs='{"nodes":[]}'; subs='{"total":1,"completed":1}'; kids='[{"number":2077}]';;
+        2071|2073|2075|2077) labs='{"nodes":[]}';;
         2043|2044|2045|2047|2051|2052|2054) labs='{"nodes":[{"name":"ready-for-agent"}]}';;
         2019) labs='{"nodes":[{"name":"ready-for-agent"},{"name":"wave:02"}]}'; body='## Blocked by\n\n- #2006 the shape lands first';;
         *) labs='{"nodes":[]}';;
@@ -294,6 +302,15 @@ done
 [ "$(/usr/bin/grep -c ' 2041$' "$T/board.calls")" = 1 ] && ok "the card of a run parent is removed in one write, never given a status" || ko "#2041 writes: $(/usr/bin/grep ' 2041$' "$T/board.calls")"
 /usr/bin/grep -q 'BOARD-RECONCILE #2041: card removed (run-parent' "$T/st/cycle.log" 2>/dev/null && ok "the removal is named in cycle.log" || ko "#2041 removal not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
 ! /usr/bin/grep -q 'issues/204[01]\(/comments\| -X \| -f \)' "$T/gh.calls" 2>/dev/null && ok "the roll-up stays in GitHub: its issue is neither closed nor changed" || ko "a run parent issue was written: $(/usr/bin/grep 'issues/204[01]' "$T/gh.calls")"
+# A parent that is not a spec carries Doing when one child is at Doing (#942), and the control whose children are all below
+# Doing is not written. A run parent with a child at Doing still gets no card (#500). A non-spec parent whose children are all
+# closed is neither closed nor written: only a spec closes, and its Closed column is the spec vocabulary (#942).
+/usr/bin/grep -q '^STATUS o 4 Doing 2070$' "$T/board.calls" 2>/dev/null && ok "a non-spec parent with a child in Doing carries Doing (#942)" || ko "#2070 not Doing: $(bc) $o"
+/usr/bin/grep -q 'BOARD-RECONCILE #2070: card -> Doing (parent folds over its sub-issues)' "$T/st/cycle.log" 2>/dev/null && ok "the non-spec lift is named in cycle.log without the word spec" || ko "#2070 lift not named: $(/usr/bin/grep '2070' "$T/st/cycle.log" 2>/dev/null)"
+! /usr/bin/grep -q ' 2072$' "$T/board.calls" 2>/dev/null && ok "a non-spec parent whose children are all below Doing is not written" || ko "#2072 written: $(/usr/bin/grep ' 2072$' "$T/board.calls")"
+! /usr/bin/grep -q ' 2074$' "$T/board.calls" 2>/dev/null && ok "a run parent with a child in Doing gets no card" || ko "#2074 written: $(/usr/bin/grep ' 2074$' "$T/board.calls")"
+! /usr/bin/grep -q ' 2076$' "$T/board.calls" 2>/dev/null && ok "a non-spec parent whose children are all closed is not written" || ko "#2076 written: $(/usr/bin/grep ' 2076$' "$T/board.calls")"
+! /usr/bin/grep -q 'issues/2076\(/comments\| -X PATCH\| -f state\)' "$T/gh.calls" 2>/dev/null && ok "a non-spec parent is never closed" || ko "#2076 closed: $(/usr/bin/grep 'issues/2076' "$T/gh.calls")"
 rm -f "$T/board.calls" "$T/st/cycle.log"; touch "$T/board-down"
 o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1)
 ! /usr/bin/grep -q '^\(STATUS\|ADD\|RUN\|CLEAR\)' "$T/board.calls" 2>/dev/null && ok "board down: nothing is written on a guess" || ko "board down, written: $(bc)"
