@@ -43,7 +43,7 @@
     Text fields: Run and Run started carry the run id and its start time while the card is In Progress, and are cleared when it is anything else. A card already in its expected status is not written again, and a write GitHub refuses is named in cycle.log (BOARD-RECONCILE / BOARD-WRITE-FAILED), never swallowed.
     The board is read once per pass (one fields read, one items read per project), and the card cache follows every status the pass writes, so a later rule (O, Q, P) reads the column the pass set, never the stale read. An issue the board answers no card for is added with its expected status in one write (board.sh --add);
     a board that does not answer at all (a refusal, a deadline miss) is told apart from that: nothing is moved on a guess, nothing is reported as a defect.
-    With SG_BOARD_VOCAB=shipped every terminal entry carries its condition in one queued comment (#245): Closed names the branch in the landing line (or who closed it, when no branch names it); Abandoned names who decided and why (wontfix, or closed as not planned).
+    With SG_BOARD_VOCAB=shipped every terminal entry carries its condition in one queued comment (#245): Closed names the branch in the landing line (or who closed it, when no branch names it); Abandoned names who decided and why (wontfix, closed as not planned or as a duplicate).
     A terminal write whose condition no read answers is not made (TERMINAL-NO-CONDITION), and a card settled in a terminal column with no tagged comment
     gets one, once (TERMINAL-BACKFILL, JANITOR_TERMINAL_BACKFILL per pass, default 5).
     With SG_BOARD_VOCAB=shipped R is also the one producer of the board facts (board_facts.py, ADR-0145): a run's wave branch on the remote, the review of its tip, and the check runs of the dev tip give wave_branch, landing and dev_ci, and a work branch whose review waits gives review_wait; board_columns.column_for names the column (Code Complete, Pushing, Testing, Code Review, Doing).
@@ -663,7 +663,7 @@ def terminal_facts(n, col):   # the facts a terminal comment states (#245), or N
         return {"who": who, "why": "labelled wontfix"} if ok else None
     if state == "closed" and not_planned(reason):
         ok, who = door_read(f"repos/{repo0}/issues/{n}/events?per_page=100", CLOSER)
-        return {"who": who, "why": "closed as not planned"} if ok else None
+        return {"who": who, "why": "closed as a duplicate (superseded by another issue)" if str(reason).strip().lower() == "duplicate" else "closed as not planned"} if ok else None
     return None
 def run_summary(n):   # the run that worked issue n as a child, as text for its terminal comment (#559): the run id, the other children, the verdict and the dashboard command; "" when no run held it
     best = None

@@ -104,9 +104,10 @@ def past(have, want):
 
 
 # The close reason GitHub's issue carrier answers for an issue it closed without delivering it (#921): `state_reason`
-# answers `completed`, `not_planned` or `reopened`, and only `not_planned` says the issue was never delivered. The read
-# parses no delivery out of `reopened`: a reopened issue is open, so no closed card carries that reason.
-NOT_PLANNED = ("not_planned",)
+# answers `completed`, `not_planned`, `duplicate` or `reopened`. `not_planned` and `duplicate` both say the issue was
+# never delivered, so both name Abandoned (#517). The read parses no delivery out of `reopened`: a reopened issue is
+# open, so no closed card carries that reason.
+NOT_PLANNED = ("not_planned", "duplicate")
 
 
 def not_planned(reason):
@@ -120,7 +121,7 @@ def view_column(status, closed, labels=(), reason=None):
 
     Blocked is no column: it is the owner freeze over the column the work reached, Backlog when the Status names none.
     A card with no Status is not scheduled, so it is Backlog. A closed card is Closed, unless its Status says Abandoned
-    or its close reason is not planned: that card was not delivered, so it is Abandoned too (#921)."""
+    or its close reason is not planned, or duplicate: that card was not delivered, so it is Abandoned too (#921)."""
     labels = set(labels or ())
     owner = status == "Blocked" or FREEZE_LABEL["owner"] in labels
     freeze = FREEZE_LABEL["owner"] if owner else FREEZE_LABEL["gated"] if FREEZE_LABEL["gated"] in labels else None

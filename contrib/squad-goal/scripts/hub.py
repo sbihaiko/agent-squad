@@ -1746,8 +1746,15 @@ def delivery():
     return out
 
 BOARD = pathlib.Path(os.environ.get("SG_BOARD_CACHE") or HUBDIR / "hub-board.json"); BOARD.parent.mkdir(parents=True, exist_ok=True)
+BOARD_READ = 1   # the version of the items read that wrote the cached rows: a cache that names another is read again (#921)
 try: board_cache = json.loads(BOARD.read_text())
 except Exception: board_cache = {"t": 0, "items": [], "prs": [], "err": None}
+if board_cache.get("rv") != BOARD_READ:
+    # A cache written before the rows carried the close reason (#921) answers no `cr`, so a card closed as not planned
+    # would draw Closed and count as delivered until the next whole items read. Its rows are dropped, and the pass reads
+    # them again; the rows of a read this version wrote stay. A board with no row is safer than one that miscounts.
+    board_cache.update(items=[], cases=[], t=0, rt=None)
+    board_cache["rv"] = BOARD_READ
 # A cache written before the board read more than one repository (#1820) has rows with no repository on them: they are
 # the profile repository's, which is the only one that pass read.
 for _k in ("prs", "landed"):

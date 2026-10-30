@@ -6,7 +6,12 @@ because two profiles on one board see different cards (#894).
 The one shared hub-flow.jsonl of before #894 is renamed to hub-flow.jsonl.legacy at first use, and its samples are NOT
 migrated into the per-repository files: a legacy sample holds every repository's cards, so no repository's share of it is
 known. A repository's cfd starts at its first sample after the upgrade. The legacy bytes stay on disk for anyone who needs
-them."""
+them.
+
+The samples written before the close reason counted (#921) put a card closed as not planned in the Closed band; the
+samples from that read on count it in Abandoned. The first append after the upgrade moves that count across in the past
+samples once, and writes a flow_rebucket line that records the boundary, so the Closed band takes no step down that a
+reader could take for a data error."""
 import importlib.util
 import json
 import os
@@ -22,6 +27,7 @@ DEFAULT_KIND = "issue"
 RAW_DAYS = 30
 DAY = 86400
 SHARED_NAME = "hub-flow.jsonl"   # the one history every repository on a board wrote before #894
+REBUCKET = "flow_rebucket"       # the line that records the one re-bucket of a history (#921)
 
 
 def history_path(board, repo):
@@ -58,12 +64,52 @@ def append(path, rows, now=None, incomplete=None):
         _record_skip(lines, _total(s), s["t"], incomplete)
         _write(path, _rollup(lines, s["t"]))
         return None
+    lines, rebucketed = _rebucket_once(lines, rows, s["t"])
     samples = [obj for _, obj in lines if _is_sample(obj)]
     if samples and samples[-1]["counts"] == s["counts"] and _day(samples[-1]["t"]) == _day(s["t"]):
+        if rebucketed: _write(path, _rollup(lines, s["t"]))
         return None
     lines.append((json.dumps(s), s))
     _write(path, _rollup(lines, s["t"]))
     return s
+
+
+def _rebucket_once(lines, rows, now):
+    """(lines, changed): the past samples with the cards closed as not planned moved from Closed to Abandoned, once (#921).
+
+    A history with samples was written by a read that counted such a card in Closed. The samples from this read on count
+    it in Abandoned, so without the move the Closed band steps down by that count at the boundary. A flow_rebucket line
+    records the boundary, and a history that carries one is never touched again: a later close is already Abandoned in
+    every sample, so moving it across would be false. A history with no sample yet has nothing to re-bucket."""
+    if any(_is_rebucket(obj) for _, obj in lines) or not any(_is_sample(obj) for _, obj in lines):
+        return lines, False
+    n = sum(1 for r in rows
+            if str(r.get("s", "")).lower() == "closed" and _columns.not_planned(r.get("cr")))
+    if n:
+        moved = []
+        for text, obj in lines:
+            if _is_sample(obj):
+                obj = _rebucket_sample(obj, n)
+                text = json.dumps(obj)
+            moved.append((text, obj))
+        lines = moved
+    mark = {REBUCKET: n, "t": int(now)}
+    lines = [*lines, (json.dumps(mark), mark)]
+    return lines, True
+
+
+def _rebucket_sample(s, n):
+    """One sample with up to n closed cards moved from Closed to Abandoned, taken from the kinds that hold Closed."""
+    counts, left = {k: dict(v) for k, v in s["counts"].items()}, n
+    closed, abandoned = _columns.ROLE["issue_closed"], _columns.ROLE["abandoned"]
+    for by_column in counts.values():
+        if not left: break
+        take = min(by_column.get(closed, 0), left)
+        if take:
+            by_column[closed] -= take
+            by_column[abandoned] = by_column.get(abandoned, 0) + take
+            left -= take
+    return {**s, "counts": counts}
 
 
 def _record_skip(lines, total, t, reason):
@@ -118,6 +164,10 @@ def _is_sample(obj):
 
 def _is_skip(obj):
     return isinstance(obj, dict) and isinstance(obj.get("t"), (int, float)) and "flow_skip" in obj
+
+
+def _is_rebucket(obj):
+    return isinstance(obj, dict) and REBUCKET in obj
 
 
 def _read(path):
