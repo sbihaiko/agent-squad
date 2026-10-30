@@ -87,25 +87,27 @@ def test_start_is_the_first_sample_time_and_no_samples_gives_an_empty_series(cfd
     assert empty == {"start": None, "points": [], "gaps": [], "average_throughput": None}
 
 
-def test_a_day_with_no_sample_and_no_skip_carries_the_last_sample(cfd):
-    # The counts did not move, so board_flow_history wrote no row: the day is a point, not a gap and not zero.
+def test_a_day_with_no_record_at_all_is_a_gap(cfd):
+    # No sample and no flow_skip: the hub was down, so the day's count is unknown. It is never a carried value.
     samples = [
         _sample(_epoch(2026, 10, 20, 12), {"card": {"Todo": 1}}),
         _sample(_epoch(2026, 10, 23, 12), {"card": {"Todo": 2}}),
     ]
     result = cfd(samples, COLUMNS)
-    assert [p["day"] for p in result["points"]] == ["2026-10-20", "2026-10-21", "2026-10-22", "2026-10-23"]
-    assert [p["bands"]["Todo"] for p in result["points"]] == [1, 1, 1, 2]
-    assert result["gaps"] == []
+    assert [p["day"] for p in result["points"]] == ["2026-10-20", "2026-10-23"]
+    assert [p["bands"]["Todo"] for p in result["points"]] == [1, 2]
+    assert result["gaps"] == ["2026-10-21", "2026-10-22"], "each day with no record is a gap"
+    assert result["points"][1]["throughput"] is None, "no throughput across a gap"
 
 
-def test_a_quiet_day_between_two_sampled_days_is_a_point_not_a_gap(cfd):
+def test_a_quiet_day_with_its_own_sample_is_a_point_not_a_gap(cfd):
     samples = [
         _sample(_epoch(2026, 10, 20, 12), {"card": {"Todo": 1}}),
+        _sample(_epoch(2026, 10, 21, 12), {"card": {"Todo": 1}}),
         _sample(_epoch(2026, 10, 22, 12), {"card": {"Todo": 2}}),
     ]
     result = cfd(samples, COLUMNS)
-    assert [p["day"] for p in result["points"]][1] == "2026-10-21", "day 2 has no sample and no skip: a point"
+    assert [p["day"] for p in result["points"]] == ["2026-10-20", "2026-10-21", "2026-10-22"]
     assert result["points"][1]["bands"] == result["points"][0]["bands"]
     assert result["gaps"] == []
 

@@ -275,8 +275,31 @@ def test_an_incomplete_read_is_never_appended_even_when_it_repeats_the_same_tota
     _pass(hub, monkeypatch, _rows(9, column="Doing"))
     assert [s["counts"] for s in _samples(board)] == [{"issue": {"Todo": 9}}], "an incomplete read is no sample, at any total"
     records = _skip_records(board)
-    assert [r["flow_skip"] for r in records] == [9, 9]
+    assert [r["flow_skip"] for r in records] == [9], "the day's skip line is one line: the repeat updates it"
     assert all(set(r) == {"flow_skip", "t", "reason"} and r["reason"] for r in records)
+
+
+def test_a_hundred_failed_reads_on_one_day_leave_one_skip_line(tmp_path):
+    flow = _load_flow()
+    day = datetime(2026, 10, 20, 0, 0, tzinfo=UTC).timestamp()
+    path = tmp_path / "hub-flow.x_y.jsonl"
+    for k in range(100):
+        flow.append(path, _rows(k % 5 + 1), now=day + 60 * k, incomplete="items read incomplete")
+    records = flow.skips(path)
+    assert len(records) == 1, "one flow_skip line per UTC day and reason"
+    assert records[0] == {"flow_skip": 5, "t": int(day + 60 * 99), "reason": "items read incomplete"}, "latest t and count"
+    assert flow.samples(path) == []
+
+
+def test_a_skip_of_another_reason_or_another_day_is_its_own_line(tmp_path):
+    flow = _load_flow()
+    day = datetime(2026, 10, 20, 12, tzinfo=UTC).timestamp()
+    path = tmp_path / "hub-flow.x_y.jsonl"
+    flow.append(path, _rows(2), now=day, incomplete="items read incomplete")
+    flow.append(path, _rows(3), now=day + HOUR, incomplete="relations read incomplete")
+    flow.append(path, _rows(4), now=day + DAY, incomplete="items read incomplete")
+    assert [(r["reason"], r["flow_skip"]) for r in flow.skips(path)] == [
+        ("items read incomplete", 2), ("relations read incomplete", 3), ("items read incomplete", 4)]
 
 
 def test_a_complete_read_under_the_last_sample_is_a_sample(hub, board, monkeypatch):

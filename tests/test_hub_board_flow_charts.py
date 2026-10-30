@@ -162,16 +162,28 @@ def _skip(day):
     return {"flow_skip": 2, "t": int(datetime(2026, 10, day, 12, tzinfo=UTC).timestamp()), "reason": "items read incomplete"}
 
 
-def test_a_quiet_day_is_a_calendar_day_that_carries_the_last_sample(hub, board):
+def test_a_quiet_day_with_a_whole_read_is_a_point(hub, board):
     _history(board, [
         _sample(1, {"issue": {hub.COLUMN["unscheduled"]: 2}}),
+        _sample(2, {"issue": {hub.COLUMN["unscheduled"]: 2}}),
         _sample(3, {"issue": {hub.COLUMN["unscheduled"]: 1}}),
     ])
     cfd = hub.board()["flow"]["cfd"]
     assert len(cfd["days"]) == 3, "the calendar runs over the quiet day, so points sit by date"
     for band in cfd["bands"]:
-        assert band["upper"][1] is not None and band["lower"][1] is not None, "no skip: the counts did not move, a point"
+        assert band["upper"][1] is not None and band["lower"][1] is not None, "the quiet day has its own sample: a point"
     assert [b["upper"][1] for b in cfd["bands"] if b["name"] == hub.COLUMN["unscheduled"]] == [2]
+
+
+def test_a_day_with_no_record_at_all_is_a_gap_and_never_a_carried_value(hub, board):
+    _history(board, [
+        _sample(1, {"issue": {hub.COLUMN["unscheduled"]: 2}}),
+        _sample(3, {"issue": {hub.COLUMN["unscheduled"]: 1}}),
+    ])
+    cfd = hub.board()["flow"]["cfd"]
+    assert len(cfd["days"]) == 3
+    for band in cfd["bands"]:
+        assert band["upper"][1] is None and band["lower"][1] is None, "no record: the hub was down, its count is unknown"
 
 
 def test_a_skipped_read_is_a_calendar_day_with_no_band_values(hub, board):
