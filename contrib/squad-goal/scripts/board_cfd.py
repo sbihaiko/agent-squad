@@ -16,10 +16,10 @@ NO_COLUMN = "No column"
 def cfd(samples, columns, zone="UTC", kind=None, skips=()):
     """One point per calendar day from the first sample on, in the named zone (#894).
 
-    A day with a sample takes its last sample. A day with no sample and a flow_skip record (`skips`) is a gap: no read of
-    that day was whole, so there is no value to draw. Any other day with no sample carries the last sample: no read of that
-    day was made. A whole read of a day always writes a sample (board_flow_history writes one unchanged sample a day), so
-    a quiet day is a point, never a gap (#894).
+    A day with a sample takes its last sample. A day with no sample is a gap: either a flow_skip record (`skips`) says a read
+    of that day was not whole, or no read of it was made at all (the hub was down). Either way its count is unknown, so
+    nothing is carried forward. board_flow_history writes one sample per UTC day for each whole read, so a quiet day with a
+    whole read is a point (#894).
     """
     if not samples:
         return {"start": None, "points": [], "gaps": [], "average_throughput": None}
@@ -32,16 +32,14 @@ def cfd(samples, columns, zone="UTC", kind=None, skips=()):
     first = _day(ordered[0]["t"], tz)
     last = max([*last_of_day, *(d for d in skipped if d >= first)])
     points, gaps = [], []
-    carried = None
     previous = None   # the closed count of the day before, when that day is a point; None after a gap and at the start
     for k in range((last - first).days + 1):
         day = first + timedelta(days=k)
-        if day in last_of_day:
-            carried = last_of_day[day]
-        elif day in skipped:
+        if day not in last_of_day:
             gaps.append(day.isoformat())
             previous = None
             continue
+        carried = last_of_day[day]
         totals = _totals(carried, kind)
         bands = {c: totals.get(c, 0) for c in columns}
         bands[FROZEN] = carried["frozen"]

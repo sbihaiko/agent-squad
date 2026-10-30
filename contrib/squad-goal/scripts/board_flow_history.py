@@ -55,8 +55,7 @@ def append(path, rows, now=None, incomplete=None):
     s = sample(rows, now)
     lines = _read(path)
     if incomplete:
-        skip = {"flow_skip": _total(s), "t": s["t"], "reason": incomplete}
-        lines.append((json.dumps(skip), skip))
+        _record_skip(lines, _total(s), s["t"], incomplete)
         _write(path, _rollup(lines, s["t"]))
         return None
     samples = [obj for _, obj in lines if _is_sample(obj)]
@@ -65,6 +64,18 @@ def append(path, rows, now=None, incomplete=None):
     lines.append((json.dumps(s), s))
     _write(path, _rollup(lines, s["t"]))
     return s
+
+
+def _record_skip(lines, total, t, reason):
+    """One flow_skip line per UTC day and reason (#894): a later skip of the same day and reason updates that line in place,
+    with its latest time and count. A skip of another reason, or of another day, is a line of its own."""
+    day = _day(t)
+    skip = {"flow_skip": total, "t": t, "reason": reason}
+    for i, (_, obj) in enumerate(lines):
+        if _is_skip(obj) and obj.get("reason") == reason and _day(obj["t"]) == day:
+            lines[i] = (json.dumps(skip), skip)
+            return
+    lines.append((json.dumps(skip), skip))
 
 
 def _total(s):
