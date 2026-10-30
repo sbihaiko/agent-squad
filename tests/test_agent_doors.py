@@ -76,6 +76,26 @@ def test_the_ask_matt_door_checks_each_skill_it_recommends():
     assert "run `python3 -m squad.skillpath <that skill>`" in text and "do not recommend it" in text
 
 
+def test_the_agent_to_tickets_door_reads_the_premise_check_before_it_drafts():
+    """#884: a breakdown of a spec reads the spec's check comment before it drafts, and each rule of the check comes in the order the skill needs."""
+    text = (SKILLS / "agent-to-tickets" / "SKILL.md").read_text()
+    order = (
+        "Read the parent's check comment before you draft",
+        "<!-- premise-check: spec=<n> -->",
+        "no premise-check comment on spec",
+        "Refuse a check with an open question",
+        "exactly one wave-01 probe ticket",
+        "List the proxy answers before the owner approves",
+        "Only the owner approves",
+    )
+    for m in order:
+        assert m in text, f"agent-to-tickets does not state: {m}"
+    where = [text.index(m) for m in order]
+    assert where == sorted(where), "the agent-to-tickets premise-check rules are out of order"
+    assert "before its step 3" in text
+    assert "`needs a probe`" in text and "`wave:01`" in text and "`decided`" in text and "not the owner" in text
+
+
 def test_the_squad_skill_update_command_is_symlinked_named_and_names_each_command_it_runs():
     link = LINKS / "squad-skill-update"
     assert link.is_symlink() and link.resolve() == (SKILLS / "squad-skill-update").resolve()
