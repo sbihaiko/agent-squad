@@ -158,16 +158,51 @@ def test_opening_the_diagrams_makes_no_gh_call(hub, board, monkeypatch):
     assert 'id=flowov hidden' in hub.PAGE
 
 
-def test_a_skipped_day_is_a_calendar_day_with_no_band_values(hub, board):
+def _skip(day):
+    return {"flow_skip": 2, "t": int(datetime(2026, 10, day, 12, tzinfo=UTC).timestamp()), "reason": "items read incomplete"}
+
+
+def test_a_quiet_day_is_a_calendar_day_that_carries_the_last_sample(hub, board):
     _history(board, [
         _sample(1, {"issue": {hub.COLUMN["unscheduled"]: 2}}),
         _sample(3, {"issue": {hub.COLUMN["unscheduled"]: 1}}),
     ])
     cfd = hub.board()["flow"]["cfd"]
-    assert len(cfd["days"]) == 3, "the calendar runs over the missing day, so points sit by date"
+    assert len(cfd["days"]) == 3, "the calendar runs over the quiet day, so points sit by date"
+    for band in cfd["bands"]:
+        assert band["upper"][1] is not None and band["lower"][1] is not None, "no skip: the counts did not move, a point"
+    assert [b["upper"][1] for b in cfd["bands"] if b["name"] == hub.COLUMN["unscheduled"]] == [2]
+
+
+def test_a_skipped_read_is_a_calendar_day_with_no_band_values(hub, board):
+    _history(board, [
+        _sample(1, {"issue": {hub.COLUMN["unscheduled"]: 2}}),
+        _skip(2),
+        _sample(3, {"issue": {hub.COLUMN["unscheduled"]: 1}}),
+    ])
+    cfd = hub.board()["flow"]["cfd"]
+    assert len(cfd["days"]) == 3
     for band in cfd["bands"]:
         assert band["upper"][1] is None and band["lower"][1] is None, "a gap carries no value to interpolate"
         assert band["upper"][0] is not None and band["upper"][2] is not None
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_one_point_run_is_drawn_as_a_visible_mark(hub, tmp_path):
+    block = _flow_block(hub).split("const drawFlow")[0]
+    drawing = "\n".join([
+        "const COLORS={};", "const esc=s=>String(s);", block,
+        'process.stdout.write(flowCFD({days:["a","b","c"],ymax:4,start:"2026-10-01",'
+        'bands:[{name:"Todo",lower:[0,null,0],upper:[2,null,1]}]}));',
+    ])
+    path = tmp_path / "flow-one.js"
+    path.write_text(drawing)
+    result = subprocess.run(["node", str(path)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    polygons = [[float(p.split(",")[0]) for p in m.split()] for m in re.findall(r'points="([^"]*)"', result.stdout)]
+    assert len(polygons) == 2
+    for xs in polygons:
+        assert max(xs) - min(xs) > 0, "a one-point run has width: it is a mark, not a zero-width line"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")

@@ -87,14 +87,27 @@ def test_start_is_the_first_sample_time_and_no_samples_gives_an_empty_series(cfd
     assert empty == {"start": None, "points": [], "gaps": [], "average_throughput": None}
 
 
-def test_a_day_with_no_sample_is_absent_not_zero(cfd):
+def test_a_day_with_no_sample_and_no_skip_carries_the_last_sample(cfd):
+    # The counts did not move, so board_flow_history wrote no row: the day is a point, not a gap and not zero.
     samples = [
         _sample(_epoch(2026, 10, 20, 12), {"card": {"Todo": 1}}),
         _sample(_epoch(2026, 10, 23, 12), {"card": {"Todo": 2}}),
     ]
     result = cfd(samples, COLUMNS)
-    assert [p["day"] for p in result["points"]] == ["2026-10-20", "2026-10-23"]
-    assert result["points"][1]["throughput"] is None
+    assert [p["day"] for p in result["points"]] == ["2026-10-20", "2026-10-21", "2026-10-22", "2026-10-23"]
+    assert [p["bands"]["Todo"] for p in result["points"]] == [1, 1, 1, 2]
+    assert result["gaps"] == []
+
+
+def test_a_quiet_day_between_two_sampled_days_is_a_point_not_a_gap(cfd):
+    samples = [
+        _sample(_epoch(2026, 10, 20, 12), {"card": {"Todo": 1}}),
+        _sample(_epoch(2026, 10, 22, 12), {"card": {"Todo": 2}}),
+    ]
+    result = cfd(samples, COLUMNS)
+    assert [p["day"] for p in result["points"]][1] == "2026-10-21", "day 2 has no sample and no skip: a point"
+    assert result["points"][1]["bands"] == result["points"][0]["bands"]
+    assert result["gaps"] == []
 
 
 def test_module_imports_no_hub_github_client_or_file_api():
@@ -114,9 +127,33 @@ def test_a_skipped_day_is_a_gap_in_the_data_and_no_point(cfd):
         _sample(_epoch(2026, 10, 20, 12), {"card": {"Todo": 1}}),
         _sample(_epoch(2026, 10, 23, 12), {"card": {"Todo": 2}}),
     ]
-    result = cfd(samples, COLUMNS)
-    assert result["gaps"] == ["2026-10-21", "2026-10-22"], "each missing day between two sampled days is a gap"
+    skips = [{"flow_skip": 1, "t": int(_epoch(2026, 10, 21, 12)), "reason": "incomplete"},
+             {"flow_skip": 1, "t": int(_epoch(2026, 10, 22, 12)), "reason": "incomplete"}]
+    result = cfd(samples, COLUMNS, skips=skips)
+    assert result["gaps"] == ["2026-10-21", "2026-10-22"], "each skipped day with no sample is a gap"
     assert [p["day"] for p in result["points"]] == ["2026-10-20", "2026-10-23"]
+
+
+def test_a_skip_on_a_day_that_has_a_sample_is_no_gap(cfd):
+    samples = [
+        _sample(_epoch(2026, 10, 20, 12), {"card": {"Todo": 1}}),
+        _sample(_epoch(2026, 10, 21, 12), {"card": {"Todo": 3}}),
+    ]
+    skips = [{"flow_skip": 3, "t": int(_epoch(2026, 10, 21, 18)), "reason": "incomplete"}]
+    result = cfd(samples, COLUMNS, skips=skips)
+    assert result["gaps"] == []
+    assert result["points"][1]["bands"]["Todo"] == 3
+
+
+def test_throughput_across_a_gap_is_absent(cfd):
+    samples = [
+        _sample(_epoch(2026, 10, 20, 12), {"card": {"Closed": 1}}),
+        _sample(_epoch(2026, 10, 22, 12), {"card": {"Closed": 4}}),
+        _sample(_epoch(2026, 10, 23, 12), {"card": {"Closed": 5}}),
+    ]
+    skips = [{"flow_skip": 1, "t": int(_epoch(2026, 10, 21, 12)), "reason": "incomplete"}]
+    result = cfd(samples, COLUMNS, skips=skips)
+    assert [p["throughput"] for p in result["points"]] == [None, None, 1]
 
 
 def test_consecutive_sampled_days_have_no_gap(cfd):

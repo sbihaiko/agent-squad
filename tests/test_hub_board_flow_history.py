@@ -3,6 +3,7 @@ import importlib.util
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 import time
 from datetime import UTC, datetime, timedelta
@@ -72,8 +73,9 @@ def _rest_issue(c):
             "created_at": c.get("o"), "sub_issues_summary": c["si"]}
 
 
-def _gh(calls, cards=(), open_issues=(), fail=False):
-    """The gh CLI as one pass uses it: each call is recorded, and the answer is canned per endpoint."""
+def _gh(calls, cards=(), open_issues=(), fail=False, last_page=None):
+    """The gh CLI as one pass uses it: each call is recorded, and the answer is canned per endpoint. The items read ends
+    with one page count (board_items_jq); `last_page` overrides the count of its last page (a short read names a full page)."""
     def run(cmd, **kw):
         calls.append(cmd)
         if fail:
@@ -82,7 +84,8 @@ def _gh(calls, cards=(), open_issues=(), fail=False):
         if "/fields?" in s:
             out = "PVTSSF_status\n"
         elif "projectsV2" in s and "/items" in s:
-            out = "".join(json.dumps(c) + "\n" for c in cards)
+            page = len(cards) if last_page is None else last_page
+            out = "".join(json.dumps(c) + "\n" for c in cards) + json.dumps({"_page": page}) + "\n"
         elif "search/issues" in s:
             out = "0\n"
         elif "issues?state=open" in s:
@@ -95,9 +98,9 @@ def _gh(calls, cards=(), open_issues=(), fail=False):
     return run
 
 
-def _pass(hub, monkeypatch, cards=(), open_issues=(), fail=False):
+def _pass(hub, monkeypatch, cards=(), open_issues=(), fail=False, last_page=None):
     calls = []
-    monkeypatch.setattr(hub.subprocess, "run", _gh(calls, cards, open_issues, fail))
+    monkeypatch.setattr(hub.subprocess, "run", _gh(calls, cards, open_issues, fail, last_page))
     hub.board_pass(repos=[])
     return calls
 
@@ -334,10 +337,68 @@ def test_the_cfd_of_a_history_with_a_skipped_read_has_no_tooth(board):
     flow.append(path, _rows(9), now=day)
     flow.append(path, _rows(1), now=day + DAY, incomplete="relations read incomplete")
     flow.append(path, _rows(9, column="Doing"), now=day + 2 * DAY)
-    result = cfd(flow.samples(path), ["Todo", "Doing", "Closed"])
+    result = cfd(flow.samples(path), ["Todo", "Doing", "Closed"], skips=flow.skips(path))
     assert [p["wip"] for p in result["points"]] == [9, 9]
     assert [p["day"] for p in result["points"]] == ["2026-10-20", "2026-10-22"]
     assert result["gaps"] == ["2026-10-21"], "the skipped day is a break in the data, not a tooth"
+
+
+def test_a_quiet_day_between_two_whole_reads_is_a_point_not_a_gap(tmp_path):
+    """The dedupe writes no row for a day whose counts did not move: the CFD must not read that day as a skipped read."""
+    flow = _load_flow()
+    cfd = _load("board_cfd_quiet", SCRIPTS / "board_cfd.py").cfd
+    path = tmp_path / "hub-flow.x_y.jsonl"
+    day = datetime(2026, 10, 20, 12, tzinfo=UTC).timestamp()
+    flow.append(path, _rows(9), now=day)
+    assert flow.append(path, _rows(9), now=day + DAY) is None, "the same counts write no row"
+    flow.append(path, _rows(9, column="Doing"), now=day + 2 * DAY)
+    result = cfd(flow.samples(path), ["Todo", "Doing", "Closed"], skips=flow.skips(path))
+    assert [p["day"] for p in result["points"]] == ["2026-10-20", "2026-10-21", "2026-10-22"]
+    assert [p["wip"] for p in result["points"]] == [9, 9, 9]
+    assert result["gaps"] == []
+
+
+def test_a_legacy_file_recreated_by_an_old_hub_is_not_renamed_again_in_this_process(tmp_path):
+    flow = _load_flow()
+    board = tmp_path / "hub-board.json"
+    shared = tmp_path / "hub-flow.jsonl"
+    path = flow.history_path(board, "x/y")
+    shared.write_text("first\n")
+    flow.append(path, _rows(2), now=time.time())
+    shared.write_text("second\n")   # an old hub still running the old code writes the shared file again
+    flow.append(path, _rows(3), now=time.time() + 60)
+    legacy = sorted(p.name for p in tmp_path.glob("hub-flow.jsonl.legacy*"))
+    assert legacy == ["hub-flow.jsonl.legacy"], "one rename per process, never one file per pass"
+    assert shared.read_text() == "second\n", "the recreated file is left alone, never deleted"
+
+
+def test_an_items_read_whose_last_page_is_full_is_never_a_sample(hub, board, monkeypatch):
+    _pass(hub, monkeypatch, _rows(2), last_page=100)
+    assert _samples(board) == [], "a read that stopped on a full page is missing pages: no sample"
+    records = _skip_records(board)
+    assert [r["flow_skip"] for r in records] == [2]
+    assert "items" in records[0]["reason"]
+
+
+def test_an_items_read_that_ends_on_a_short_page_is_whole(hub, board, monkeypatch):
+    _pass(hub, monkeypatch, _rows(100), last_page=37)
+    assert [s["counts"] for s in _samples(board)] == [{"issue": {"Todo": 100}}]
+
+
+def test_the_items_jq_answers_one_page_count_per_page(hub, tmp_path):
+    jq = shutil.which("jq")
+    if jq is None:
+        pytest.skip("jq is not installed")
+    page = [{"content_type": "Issue", "id": f"PVT_{n}", "fields": [],
+             "content": {"number": n, "repository_url": "https://api.github.com/repos/x/y", "title": "t", "state": "OPEN",
+                         "closed_at": None, "labels": [], "sub_issues_summary": {}, "created_at": OPENED}}
+            for n in range(1, 101)]
+    src = tmp_path / "page.json"
+    src.write_text(json.dumps(page))
+    out = subprocess.run([jq, "-c", hub.board_items_jq("x/y"), str(src)], capture_output=True, text=True, check=True).stdout
+    lines = [json.loads(line) for line in out.splitlines()]
+    assert lines[-1] == {"_page": 100}
+    assert sum(1 for line in lines if "_page" not in line) == 100
 
 
 def test_the_history_name_is_derived_from_the_repository(tmp_path):
