@@ -32,6 +32,7 @@ EVIDENCE_TAIL = 1500      # the most characters of a failed command's output kep
 # A line that explains a failure, even when it sits above the kept tail. `pytest -q` prints the failure block first and
 # the slowest-durations block last, so a bare tail records the standings and drops the assertion (ADR-0100 rule 10).
 EVIDENCE_SIGNAL = re.compile(r"^(_{5,}|E   |FAILED|ERROR)")
+NAME_SIGNAL = re.compile(r"^(FAILED|ERROR)\b")   # the summary lines that name the failing tests: kept before the detail
 MORE_ELIDED = "[... more failing lines elided]"
 
 # The share of a suite that passes is a fact of the output, and one bit is not progress: 16 of 24 reads as work done
@@ -44,6 +45,20 @@ MORE_ELIDED = "[... more failing lines elided]"
 SUMMARY = re.compile(r"\bin [0-9.]+s(?:\s*\([0-9:]+\))?\s*=?\s*$")
 COUNT = re.compile(r"(\d+) (passed|failed|error|errors|skipped|xfailed|xpassed|deselected|warning|warnings)\b")
 COUNT_KEYS = ("passed", "failed", "errors", "skipped", "xfailed", "xpassed", "deselected")
+
+
+# #862: a command that reads git history reads the tree it was written in, not the target's merge. The list is closed, and
+# this is the one place it lives. `git` must start a command (after a `(`, `;`, `&`, `|`, a quote, or `then`/`do`): `echo git log` is text. A `diff` reads history only when it names a revision (a range, HEAD, or a sha).
+HISTORY_VERBS = ("log", "show", "rev-list", "rev-parse", "blame", "cherry", "merge-base", "describe", "ls-tree", "cat-file",
+                 "for-each-ref", "name-rev", "shortlog", "reflog")
+HISTORY = re.compile(
+    r"(?:^|[(;&|`\"'{]|\bthen|\bdo)\s*git\s+(?:-\S+\s+(?:\S+\s+)?)*"
+    r"(?:(?:" + "|".join(HISTORY_VERBS) + r")\b|diff\b[^;&|]*(?:\.\.|\bHEAD\b|\b[0-9a-f]{7,40}\b))")
+
+
+def reads_history(cmd):
+    """True when the command reads git history, so it runs in the tree its child wrote (#862), never in the target."""
+    return HISTORY.search(cmd) is not None
 
 
 def counts_of(output):
@@ -83,7 +98,7 @@ def evidence_of(output):
     if len(text) <= EVIDENCE_TAIL:
         return text
     head, tail = text[: -EVIDENCE_TAIL], text[-EVIDENCE_TAIL:]
-    signals = [line for line in head.splitlines() if EVIDENCE_SIGNAL.match(line)]
+    signals = sorted((line for line in head.splitlines() if EVIDENCE_SIGNAL.match(line)), key=lambda line: not NAME_SIGNAL.match(line))
     if not signals:
         return tail
     note = f"[{len(head)} characters elided; the failing lines are kept]"

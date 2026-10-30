@@ -41,7 +41,7 @@ cp "$(dirname "$src")/startability.sh" "$T/scripts/startability-real.sh"; cp "$(
 printf '#!/bin/bash\n. "$(dirname "$0")/startability-real.sh"\nsg_fork_only() { return 1; }\nsg_not_startable() { return 1; }\nsg_fork_preamble() { :; }\nsg_fork_branch() { echo "gui/$1"; }\nsg_fork_branch_pattern() { echo "gui/%%n"; }\nsg_issue_worktree_note() { :; }\n' > "$T/scripts/startability.sh"
 # mkreq.sh appends the body it was handed (one pass may build several requests, #728) and prints a request path (or refuses when MK_REFUSE is set); launch.py only counts
 printf '#!/bin/bash\n[ -n "$MK_REFUSE" ] && { echo "refusing: stub" >&2; exit 1; }\n[ "$1" = --paths ] && exec bash "$(dirname "$0")/mkreq-real.sh" "$@"\n[ -n "$MK_REAL" ] && { bash "$(dirname "$0")/mkreq-real.sh" "$@" || exit 1; echo x >> "$MKLOG"; cat "$2" >> "$MKLOG.body"; exit 0; }\necho x >> "$MKLOG"; cat "$2" >> "$MKLOG.body"; echo "$HOME/req.txt"\n' > "$T/scripts/mkreq.sh"
-printf 'open(__import__("os").environ["LAUNCHLOG"], "a").write("launch\\n")\n' > "$T/scripts/launch.py"
+printf 'import os,sys\nopen(os.environ["LAUNCHLOG"], "a").write("launch\\n")\nif os.environ.get("LAUNCH_REFUSE"): print("refused: the first coding model x is not in the router envelope", file=sys.stderr); sys.exit(1)\n' > "$T/scripts/launch.py"
 chmod +x "$T/scripts/mkreq.sh"
 # board.sh keeps the call it was handed: <owner> <project> <column> <issue>... (#33: the card move was a bare `true`, so no case could say which cards moved)
 printf '#!/bin/bash\necho "$*" >> "$BOARDLOG"\n' > "$T/board.sh"; chmod +x "$T/board.sh"
@@ -83,7 +83,7 @@ real() { MK_REAL=1 SG_FORK_DIR=$FK SG_FORK_BASE=main "$@"; }   # the real slice 
 run() { SG_SINGLE_AUTOFRONTIER=1 bash "$T/scripts/autofrontier.sh" 2>&1 | /usr/bin/tee -a "$T/pass.out"; /bin/sleep 0.6; }   # the launch is detached: give it time to count itself; pass.out keeps every pass for the fixture check below
 lines() { local c; c=$($G -c . "$1" 2>/dev/null); echo "${c:-0}"; }
 marked() { local n c=0; for n in "$@"; do [ -e "$SG_STATE/auto/disp-$n" ] && c=$((c+1)); done; echo $c; }
-asked() { sed -nE 's/.*call the spawn tool for the ([0-9]+) child.*/\1/p' "$MKLOG.body" | head -1; }
+asked() { sed -nE 's/.*one entry for each of the ([0-9]+) child.*/\1/p' "$MKLOG.body" | head -1; }
 moved() { local n; for n in "$@"; do $G -qE "^(--add )?o 1 In Progress( [0-9]+)* $n( |\$)" "$BOARDLOG" || return 1; done; }   # every issue named is in the card move the pass made
 added() { $G -qE '^--add o 1 In Progress( [0-9]+)*$' "$BOARDLOG"; }   # a dispatch adds a missing board card before its status is written
 seedmax() { python3 - "$repo" <<'PY'
@@ -114,7 +114,7 @@ issues '[{"number":21,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"nu
 r=$(run)
 [ "$(lines "$LAUNCHLOG")" = 3 ] && ok "three startable issues and free slots start three runs" || ko "three startable issues and free slots start three runs: $(lines "$LAUNCHLOG") launches: '$r'"
 [ "$(lines "$MKLOG")" = 3 ] && ok "the pass builds one request per run" || ko "the pass builds one request per run: $(lines "$MKLOG")"
-[ "$(sed -nE 's/.*call the spawn tool for the ([0-9]+) child.*/\1/p' "$MKLOG.body" | sort -u | tr -d '\n')" = 1 ] && ok "each request asks for one child" || ko "each request asks for one child: '$($G -o 'spawn tool for the [0-9]* child' "$MKLOG.body")'"
+[ "$(sed -nE 's/.*one entry for each of the ([0-9]+) child.*/\1/p' "$MKLOG.body" | sort -u | tr -d '\n')" = 1 ] && ok "each request asks for one child" || ko "each request asks for one child: '$($G -o 'entry for each of the [0-9]* child' "$MKLOG.body")'"
 [ "$(childblocks)" = 3 ] && ok "the requests carry three CHILD blocks, one issue each" || ko "the requests carry three CHILD blocks: '$(childblocks)'"
 [ "$(marked 21 22 23)" = 3 ] && ok "every dispatched issue holds its marker" || ko "every dispatched issue holds its marker: $(marked 21 22 23) of 3"
 [ "$(reqs)" = 3 ] && ok "each run has its own request name" || ko "each run has its own request name: $(cat "$d"/st/auto/disp-*)"
@@ -481,9 +481,30 @@ printf '%s 1\n' "$(( $(date +%s) - 8000 ))" > "$SG_STATE/promote-reserve"
 r=$(run)
 [ "$(marked 351)" = 1 ] && ok "I6: a reserve past the lock's bound holds nothing" || ko "I6: a dead reserve held the pass: '$r'"
 
+# I7 (#812): a launch.py that refuses the start is no dispatch. The marker it wrote is freed, launch.py's own last line is
+#     said, and the next pass retries the issue -- the marker never holds a ticket that has no run behind it.
+scene refuse
+issues '[{"number":361,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
+r=$(LAUNCH_REFUSE=1 run)
+case "$r" in *"refused: the first coding model"*) ok "I7: a refused launch says launch.py's own line";; *) ko "I7: no refusal line: '$r'";; esac
+[ "$(marked 361)" = 0 ] && ok "I7: a refused launch frees its dispatch marker" || ko "I7: the marker of a refused launch stayed: $(marked 361)"
+r=$(LAUNCH_REFUSE=1 run)
+[ "$(lines "$LAUNCHLOG")" = 2 ] && ok "I7: the next pass retries the refused issue" || ko "I7: the refused issue was not retried: $(lines "$LAUNCHLOG") attempt(s)"
+
 # #756: the fixture carries every file the pass sources, so no case reads a pass that died on a missing helper.
 # A missing siblings.py is a FRONTIER NOTE the pass prints on purpose; a missing sourced .sh is a pass that ran without its helper.
 /usr/bin/grep -qE '\.sh: No such file or directory' "$T/pass.out" && ko "a pass sourced a file the fixture lacks: $(/usr/bin/grep -m1 -E '\.sh: No such file' "$T/pass.out")" || ok "every file the pass sources is in the fixture"
+
+# I8 (#865): two passes that walk at once never both launch one issue. The walk checks the dispatch marker at the top, but the
+#     marker is written only after the whole walk (stack.sh per issue takes seconds), so a second pass in that window saw no claim
+#     and launched the same issue 17 s later. Both passes run with the single-flight lock bypassed (SG_SINGLE_AUTOFRONTIER=1), so
+#     only the claim can keep one issue to one run. Each stack.sh holds its walk open for a second, so both reach the pick together.
+scene race
+issues '[{"number":133,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
+printf '#!/bin/bash\nsleep 1\necho READY\n' > "$T/scripts/stack.sh"
+( SG_SINGLE_AUTOFRONTIER=1 bash "$T/scripts/autofrontier.sh" > "$d/pass-a.out" 2>&1 & SG_SINGLE_AUTOFRONTIER=1 bash "$T/scripts/autofrontier.sh" > "$d/pass-b.out" 2>&1 & wait )
+[ "$(lines "$LAUNCHLOG")" = 1 ] && ok "I8: two overlapping passes launch one issue once" || ko "I8: $(lines "$LAUNCHLOG") launch(es) for #133 from two overlapping passes: $(cat "$d/pass-a.out" "$d/pass-b.out" | /usr/bin/grep FRONTIER)"
+[ "$(marked 133)" = 1 ] && ok "I8: one dispatch marker holds #133" || ko "I8: markers for #133: $(marked 133)"
 
 rm -rf "$T"
 [ "$fail" = 0 ] && { echo "autofrontier one-run: all checks green"; exit 0; }

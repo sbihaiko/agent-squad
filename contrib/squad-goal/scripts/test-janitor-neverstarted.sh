@@ -12,7 +12,7 @@ printf '#!/bin/bash\necho "$*" >> %s/notify.calls\n' "$T" > "$T/notify"; chmod +
 cat > "$T/bin/gh" <<'J'
 #!/bin/bash
 case "$*" in
-  *issues/*) echo open;;
+  *issues/*) if [ -n "${CLOSED:-}" ] && /usr/bin/grep -Eq "issues/${CLOSED}( |\$)" <<<"$*"; then echo closed; else echo open; fi;;
   *search/issues*) echo 0;;
   *pulls?state=open*) ;;
 esac
@@ -66,5 +66,13 @@ echo frontier-x > "$T/st/auto/disp-77"
 o=$(runj)
 [ ! -e "$T/st/auto/disp-77" ] && ok "first never-started run drops auto/disp-N" || ko "disp marker kept: $o"
 /usr/bin/grep -q 'never started, dispatching again' "$T/st/cq"/*#77-*.md && ok "disp retry comment queued" || ko "no disp comment: $o"
+
+# 4. (#868) an issue closed after its run was dispatched: its stale marker is released with no retry and no comment, so the
+# closed issue is not re-armed by a "dispatching again" comment.
+mkrun run-never-e 1603 autobug-c
+echo autobug-c > "$T/st/auto/bug-1603"
+export CLOSED=1603; o=$(runj); unset CLOSED
+[ ! -e "$T/st/auto/bug-1603" ] && ok "a closed issue's stale marker is released" || ko "closed issue's marker kept: $o"
+[ -z "$(ls "$T/st/cq"/*#1603-*.md 2>/dev/null)" ] && ok "no retry comment on a closed issue" || ko "retry queued for a closed issue: $(ls "$T/st/cq" 2>/dev/null)"
 
 rm -rf "$T"; exit $fail

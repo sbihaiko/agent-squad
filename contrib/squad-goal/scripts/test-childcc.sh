@@ -10,7 +10,7 @@ cat > "$T/bin/gh" <<'GH'
 a="$*"
 case $a in
   *"graphql"*) cat "$GH_ISSUES_OPEN";;   # the open-issue list the pass reads once for a loop defect (#596)
-  *"-q .state"*) echo open;;
+  *"-q .state"*) [ -e "$GH_STATE_FAIL" ] && { echo "HTTP 403: rate limit" >&2; exit 1; }; echo "${GH_STATE:-open}";;   # a failed read is no answer (#848)
   *"POST"*"/sub_issues"*) echo "link $a $(cat)" >> "$GH_LOG";;   # the body names the child by its id, which is its number here
   *"/sub_issues"*) sed -n 's/^link .*"sub_issue_id": *\([0-9]*\).*/\1/p' "$GH_LOG" 2>/dev/null;;   # the sub-issues read carries each child linked so far: a read that never carried a link cost the backoff, 7 s a pass (#597)
   *"POST"*"repos/x/y/issues"*) echo "create $(cat)" >> "$GH_LOG"; echo '{"number":900}';;
@@ -40,7 +40,7 @@ run_def unmapped c "a child whose prompt names no issue at all" pass
 run_def refs c "Every commit message carries the line \`Refs #1493\` on its own line. GOAL (issue 1493, SPEC 9 child): fix it." pass
 printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}}' > "$T/issues-open.json"
 export SG_SQUAD=$(cd "$(dirname "$src")/../../.." && pwd) SQUAD_CAPS_DIR=$T/caps   # a review takes a review slot (caps.reviews): a throwaway budget, this repository's squad.caps
-export GH_LOG=$T/gh.log GH_ISSUES_OPEN=$T/issues-open.json; export SG_STATE=$T/st SG_REPO=x/y SG_OWNER=x SG_PROJECT=4 PATH="$T/bin:$PATH" GH_NUMS="2:Todo 3:Testing 4:In_Progress 5101:Todo"
+export GH_LOG=$T/gh.log GH_ISSUES_OPEN=$T/issues-open.json; export GH_STATE_FAIL=$T/gh.statefail SG_STATE=$T/st SG_REPO=x/y SG_OWNER=x SG_PROJECT=4 PATH="$T/bin:$PATH" GH_NUMS="2:Todo 3:Testing 4:In_Progress 5101:Todo"
 cp "$T/childcc.py" "$T/childcc.py.run"; sed -i.bak "s#^board = .*#board = '$T/board.sh'#" "$T/childcc.py.run"
 out=$(cd "$T/co" && python3 "$T/childcc.py.run" 2>&1)
 echo "$out" | tail -20 >&2
@@ -95,6 +95,29 @@ run lnd 5101 v; wtree lnd; echo wave/lnd > "$T/st/auto/waved-lnd"; : > "$WAVE_CA
 out=$(pass lnd)
 [ ! -s "$WAVE_CALLS" ] && ok "a run whose wave landed enters no child" || ko "enter ran for a landed wave: $(cat "$WAVE_CALLS")"
 grep -q ' 5101$' "$T/moves" 2>/dev/null && ko "a child that never entered reads Code Complete after its wave landed" || ok "a child that never entered is never moved to Code Complete after its wave landed"
+# A child-request run whose wave cut failed has no wave marker (launch.py starts it anyway). Its child's commit is merged into the
+# run's own branch and no entry can follow: the child reads Code Complete with no wave in it (ADR-0145 rule 12). It is named instead.
+run cut 5102 n; printf 'CHILD - GitHub issue #5102\n' > "$T/co/runs/cut/request.txt"; rm -f "$T/moves"; : > "$WAVE_CALLS"
+out=$(pass cut)
+grep -q ' 5102$' "$T/moves" 2>/dev/null && ko "a child of a run with no wave reads Code Complete: $out" || ok "a child of a run with no wave is not moved to Code Complete"
+echo "$out" | /usr/bin/grep -q 'WAVE-SALVAGE #5102' && ok "a child of a run with no wave is named on a salvage line" || ko "no salvage line for the child: $out"
+# A failed read of the issue's state (rate limit, refusal, network) is no answer (#848): childcc wrote the permanent done
+# marker on it and said nothing, so the run's wave refused the child on every cycle. The read that fails writes no marker,
+# logs the reason, and leaves the child (exit 3) until the read works, when the child enters.
+run gf 5900 v; wtree gf; echo wave/gf > "$T/st/auto/wave-gf"; echo wave/gf > "$T/st/auto/waved-gf"; : > "$WAVE_CALLS"; : > "$GH_STATE_FAIL"
+out=$(pass gf); rc=$?
+[ ! -e "$T/st/auto/cc-gf-c" ] && ok "a failed issue-state read writes no done marker" || ko "marker written on a failed read"
+echo "$out" | /usr/bin/grep -q 'CHILDCC SKIP #5900.*could not be read' && ok "the skip is named" || ko "silent skip: $out"
+[ "$rc" = 3 ] && ok "the pass leaves the child (exit 3)" || ko "exit $rc"
+rm -f "$GH_STATE_FAIL"; pass gf >/dev/null
+[ "$(/usr/bin/grep -c '^enter gf 5900' "$WAVE_CALLS")" = 1 ] && [ -e "$T/st/auto/cc-gf-c" ] && ok "the next pass enters the child" || ko "no entry after the read recovers: $(cat "$WAVE_CALLS")"
+# A closed issue is a settled skip: its marker is written, and the skip is named.
+run clo 5901 v; wtree clo; echo wave/clo > "$T/st/auto/wave-clo"; echo wave/clo > "$T/st/auto/waved-clo"; : > "$WAVE_CALLS"
+out=$(GH_STATE=closed pass clo)
+[ -e "$T/st/auto/cc-clo-c" ] && ok "a closed issue gets its marker" || ko "no marker for a closed issue"
+echo "$out" | /usr/bin/grep -q 'CHILDCC SKIP #5901.*is closed' && ok "the closed skip is named" || ko "closed skip silent: $out"
+[ ! -s "$WAVE_CALLS" ] && ok "a closed issue is not entered" || ko "closed issue entered: $(cat "$WAVE_CALLS")"
+
 # A review claim left by a pass that died mid-review (#502): the loop stopped, childreview.sh was killed, no review head was
 # kept. The claim names the head, so every later pass skipped the review and the entry held the child for good. A claim
 # whose pass is gone is no claim; one whose pass is alive still is.

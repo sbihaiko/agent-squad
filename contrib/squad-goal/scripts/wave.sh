@@ -104,6 +104,22 @@ rs=[r for r in (v or {}).get("reasons") or [] if isinstance(r,str)]
 sys.exit(0 if v and v.get("verdict")=="failed" and any(r.startswith("ac-verify:") and r!="ac-verify:no_ac_commands" for r in rs) else 1)' "$(run_dir "$1")/record.jsonl" 2>/dev/null
 }
 
+# run_verdict <run>: the run's last verdict name (completed, failed, needs-human, stopped, conflict), read as gate_failed reads it:
+# the last verdict after the last run_start or resume. It prints nothing for a run with no verdict yet, or no record (#845).
+run_verdict() {
+  python3 -c 'import json,sys
+v=None
+try:
+    for l in open(sys.argv[1]):
+        try: d=json.loads(l)
+        except Exception: continue
+        e=d.get("event") if isinstance(d,dict) else None
+        if e in ("run_start","resume"): v=None
+        elif e=="verdict": v=d
+except OSError: pass
+print((v or {}).get("verdict") or "")' "$(run_dir "$1")/record.jsonl" 2>/dev/null
+}
+
 # expired <run>: 0 when the run's wave reached its age cap (SG_WAVE_MAX_AGE_SECONDS, 7200 s by default, a profile setting).
 # The age is the epoch `mark` wrote into the run's wave start marker, never a second clock. A wave with no marker, or one
 # that is not cut, is never expired: the cap is a fact about a wave that exists.
@@ -121,9 +137,22 @@ expired() {
   [ $(( now - t - p )) -ge "$cap" ]
 }
 
-# run_issues <run-dir>: every issue the run dispatched, read from its own record as childcc.py reads it (spawn_accepted and
-# its definition prompt), each named once. A run whose directory carries no record names none.
+# run_issues <run-dir>: every issue the run dispatched, each named once: first the request's CHILD headers (request.txt, copied at
+# launch: "GitHub issue(s) N, M", as autobug.sh writes them and janitor.sh reads them, #836), then the run's record as childcc.py
+# reads it (spawn_accepted and its definition prompt). A run with no CHILD header falls back to its record; a run whose directory
+# carries neither names none.
 run_issues() {
+  local req="$1/request.txt" out
+  if [ -s "$req" ]; then
+    out=$(python3 -c 'import re,sys
+found=set()
+for l in open(sys.argv[1], errors="replace"):
+    if not l.startswith("CHILD"): continue
+    for m in re.finditer(r"GitHub issue(?:\(s\))? #?([0-9][0-9, ]*)", l):
+        found.update(x.strip() for x in m.group(1).split(",") if x.strip().isdigit())
+for n in sorted(found, key=int): print(n)' "$req" 2>/dev/null)
+    [ -n "$out" ] && { printf '%s\n' "$out"; return 0; }
+  fi
   local f="$1/record.jsonl"; [ -f "$f" ] || return 0
   python3 -c 'import json,sys
 sys.path.insert(0, sys.argv[2]); from child_issues import first   # the one reader childcc.py shares (#555)
@@ -133,6 +162,49 @@ for l in open(sys.argv[1]):
     if d.get("event") != "spawn_accepted": continue
     n = first(json.dumps(d.get("definition")))
     if n: print(n)' "$f" "$here" 2>/dev/null | sort -un
+}
+
+# orphan_child <run> <rd> <S> <wave> <issue>...: the first commit of the run's own work that names one of the issues, lives on a
+# branch or a child tree of the run (squad/run/<run>, a tree under the run folder) or of a fix run the run's children started (#866),
+# and is in neither the wave nor the base (#836). It prints "<sha> <issue>" and returns 0; it returns 1 when there is none. A leftover
+# squad/ branch of another run holds nothing here. A commit a remote ref already reaches (a fix/ branch that salvaged it) is no orphan,
+# as `branch -r --contains` reads it from the checkout. A RED commit proves nothing and is no work. Each tip is fetched into the
+# scratch clone $S, so the commits are read from that clone, and the wave and the base are the reach that counts.
+# (#866) A fix run cuts its own worktree of the child's branch and commits there (childfix.sh), so its reviewed commit lives in that
+# run's tree and its squad/<fix run>/ branches. Those folders come from the run's own markers: auto/wave-pause-<run> and auto/ccfix-<run>-*.
+# A run whose verdict is not completed holds a commit only when a review read that commit's head (auto/rvd-<run>-<child>): the
+# unreviewed work of a failed, needs-human, stopped or verdict-less run never holds its wave (#845), and a reviewed one never goes
+# away with it.
+orphan_child() {
+  local run=$1 rd=$2 S=$3 w=$4 tip c msg n refs rda tips dir dirs reviewed verdict f; shift 4
+  verdict=$(run_verdict "$run")
+  dirs=$( { printf '%s\n' "$rd"; for f in "$SG_STATE/auto/wave-pause-$run" "$SG_STATE/auto/ccfix-$run"-*; do [ -f "$f" ] && { cat "$f"; echo; }; done; } | sort -u)
+  reviewed=$(for f in "$SG_STATE/auto/rvd-$run"-*; do [ -f "$f" ] && awk '{print $1}' "$f"; done | tr '\n' ' ')
+  tips=$($G -C "$SG_CHECKOUT" rev-parse -q --verify "refs/heads/squad/run/$run" 2>/dev/null)
+  while IFS= read -r dir; do
+    [ -n "$dir" ] || continue
+    if rda=$(cd "$dir" 2>/dev/null && pwd -P); then
+      tips="$tips
+$($G -C "$SG_CHECKOUT" for-each-ref --format='%(objectname)' "refs/heads/squad/$(basename "$rda")/" 2>/dev/null)"
+      tips="$tips
+$($G -C "$SG_CHECKOUT" worktree list --porcelain 2>/dev/null | awk -v d="$rda/" '/^worktree /{w=substr($0,10); if (index(w,d)==1) print w}' | while read -r t; do $G -C "$t" rev-parse HEAD 2>/dev/null; done)"
+    fi
+  done <<< "$dirs"
+  git_sc() { $G -C "$S" "$@"; }
+  for tip in $(printf '%s\n' "$tips" | sort -u); do
+    [ -n "$tip" ] || continue
+    git_sc fetch -q "$SG_CHECKOUT" "$tip" 2>/dev/null || continue
+    for c in $(git_sc rev-list "$tip" --not "origin/$base" "origin/$w" 2>/dev/null); do
+      msg=$(git_sc log -1 --format=%B "$c" 2>/dev/null)
+      case "$msg" in *"TDD RED"*) continue;; esac
+      if [ "$verdict" != completed ]; then case " $reviewed " in *" $c "*) ;; *) continue;; esac; fi
+      refs=" $(printf '%s\n' "$msg" | /usr/bin/grep -oE 'Refs #[0-9]+' | /usr/bin/grep -oE '[0-9]+' | tr '\n' ' ') "
+      for n in "$@"; do case "$refs" in *" $n "*)
+          [ -z "$($G -C "$SG_CHECKOUT" branch -r --contains "$c" 2>/dev/null)" ] || continue 2   # a remote ref reaches it: salvaged
+          printf '%s %s\n' "$c" "$n"; return 0;; esac; done
+    done
+  done
+  return 1
 }
 
 start() {   # <run>: cut wave/<run> from origin/$SG_BASE, unless it is already there. A scratch clone: the owner's checkout is never touched.
@@ -176,7 +248,7 @@ freeze_owner() {   # <issue>: the freeze is a marker over the column reached, ne
 # (#609, ADR-0134): the work the base holds for the issue. A RED commit carries the same line and proves nothing.
 landed_key() {
   $G -C "${SG_CHECKOUT:-/nonexistent}" log -n 500 --format='%H%x1f%B%x1e' -E --grep="Refs #$1([^0-9]|\$)" "origin/$base" 2>/dev/null \
-    | awk -v RS='\036' -F'\037' 'NF > 1 && $2 !~ /TDD RED/ { sub(/^\n/, "", $1); print $1; exit }'
+    | awk -v RS='\036' -F'\037' 'NF > 1 && $2 !~ /^\n*TDD RED/ { sub(/^\n/, "", $1); print $1; exit }'
 }
 
 # ledger <op> <issue> ...: the issue's one ledger file (#673, issue_ledger.py), keyed <owner>/<repo>#<n> (ADR-0138). It holds
@@ -445,6 +517,24 @@ wave_check() {
 # refs_of <clone> <range>: every `Refs #N` in the whole message of each commit of the range, each named once.
 refs_of() { $G -C "$1" log --format=%B "$2" 2>/dev/null | /usr/bin/grep -oE 'Refs #[0-9]+' | /usr/bin/grep -oE '[0-9]+' | sort -un | tr '\n' ' '; }
 
+# commit_refs <clone> <range> (#869): one line per non-RED commit of the range that names an issue. `D <sha> <n>`: the commit
+# names exactly one issue (each `Refs #N` counted once), so it delivers that issue. `A <sha> <n> ...`: it names several, and a
+# cluster child that wrote one commit for its block did not say which issue the commit fixed, so it delivers none of them.
+commit_refs() {
+  $G -C "$1" log --format='%H%x1f%B%x1e' "$2" 2>/dev/null | awk -v RS='\036' -F'\037' '
+    NF > 1 && $2 !~ /^\n*TDD RED/ {
+      sha = $1; sub(/^\n+/, "", sha)
+      k = 0; split("", seen); s = $2
+      while (match(s, /Refs #[0-9]+/)) {
+        n = substr(s, RSTART + 6, RLENGTH - 6)
+        if (!(n in seen)) { seen[n] = 1; list[++k] = n }
+        s = substr(s, RSTART + RLENGTH)
+      }
+      if (k == 1) print "D " sha " " list[1]
+      else if (k > 1) { out = "A " sha; for (i = 1; i <= k; i++) out = out " " list[i]; print out }
+    }'
+}
+
 # netfail <what> <stderr>: a fetch or a push that failed on the network (DNS, connect, timeout, a 5xx answer, a TLS
 # handshake) is no cause a repeat does not change: the next cycle can land (#656). It prints one WAVE-NETWORK line with the
 # last line that names the network error and returns 0; the caller then exits 2 with no call to stuck, so no try is counted
@@ -538,6 +628,35 @@ deliver() {
   return 0
 }
 
+# wave_conflict <run> <wave> <run folder> <clone> <rebase output> (#844): a rebase of the wave on the base that conflicts is terminal
+# for this wave head. The same rebase on the next cycle cannot succeed, so the landing is not retried: the issues the run was
+# dispatched for (the Refs of the wave when the run names none) go back to the queue through requeue, so its loop cap and the
+# needs-human path apply as they do to any requeue. The run's wave marker goes, so the loop stops calling the landing. The wave
+# branch stays on the remote with its commits: they may exist on no other ref. One line names the commit that conflicts. Returns 1.
+wave_conflict() {
+  local run=$1 w=$2 rd=$3 S=$4 out=$5 at refs dset list n n2 named="" outs=""
+  at=$(printf '%s\n' "$out" | /usr/bin/grep -oE 'Could not apply [0-9a-f]+' | head -1 | awk '{print $4}')
+  at=${at:-unknown}
+  refs=$(refs_of "$S" "origin/$base..origin/$w")
+  dset=$(run_issues "${rd:-/nonexistent}" | tr '\n' ' ')
+  # Only the run's dispatch set is acted on (#776, as stuck and the close do): a `Refs #N` outside it is noted and recorded,
+  # and gets no requeue, label, card move, comment or try.
+  if [ -n "${dset// /}" ]; then list=$dset; for n2 in $refs; do case " $dset " in *" $n2 "*) ;; *) outs="${outs:+$outs }$n2";; esac; done
+  else list=$refs; fi
+  for n in $list; do named="${named:+$named, }#$n"; done
+  echo "WAVE CONFLICT $w: the rebase on $base conflicts at $at; ${named:-no issue} requeued on the current base"
+  for n2 in $outs; do
+    echo "WAVE-NOTE #$n2: $w names it (Refs #$n2) outside the dispatch set of run $run; reported, not frozen"
+    printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$run" "$n2" "$w" >> "$SG_STATE/wave-outside.tsv"
+  done
+  for n in $list; do
+    wave_fact "$run" "$n" refused "the rebase on $base conflicts at $at"
+    requeue "$n" "the rebase on $base conflicts at $at: $w cannot land on the current base"
+  done
+  rm -f "$SG_STATE/auto/wave-$run" "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run"
+  return 1
+}
+
 land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, the one push, and the closes of what it carries.
   local run=$1 w SG_REQUEUE_RUN=$1; w=$(wave_of "$run")
   [ -n "$run" ] || { echo "WAVE-ERROR wave.sh land wants the run's name"; return 2; }
@@ -582,7 +701,7 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
   local out sha try=1 issues n
   while :; do
     out=$(sc rebase "origin/$base" 2>&1) || { sc rebase --abort >/dev/null 2>&1
-      stuck "$run" "$w" "$S" "the rebase of $w on $base conflicts: $(printf '%s' "$out" | tail -1)"; rm -rf "$S"; return 1; }
+      wave_conflict "$run" "$w" "$rd" "$S" "$out"; rm -rf "$S"; return 1; }
     # Nothing ahead of the base is a wave that landed empty (a run with no dispatch, every child failed its gates, no child):
     # there is nothing to push or close, so the wave ref goes, the marker goes, and the run is done, exit 0. It is read
     # BEFORE the tip's check: an empty wave has no child commit to blame for a red check, so that check can only fail the
@@ -603,18 +722,40 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
       # their trees are gone, so no entry exists. The issues the run was dispatched for are named, and each one whose
       # non-RED `Refs #N` commit the base holds (an ancestor of origin/$base by construction) is delivered. A RED commit
       # carries the same line and proves nothing, so it never counts.
-      local dispatched="" delivered="" ent
+      # Only a commit that reached the base after the wave was cut is this run's (#822): an issue landed once, then reopened and
+      # dispatched again, carries its old `Refs #N` commit in the base, and that commit delivers nothing of this run. The cut is
+      # the fork point of the wave branch, read before the rebase moved it.
+      local dispatched="" delivered="" ent cut rows
+      cut=$(sc merge-base "origin/$w" "origin/$base" 2>/dev/null)
       ent=$(python3 "$here/issue_ledger.py" entered "$SG_REPO" 2>/dev/null | awk -F '\t' -v r="$run" '$1 == r { print $2 }' | tr '\n' ' ')
+      # (#869) The commits since the cut deliver by commit_refs: a commit that names several issues delivers none of them.
+      rows=$(commit_refs "$S" "${cut:+$cut..}origin/$base")
+      printf '%s\n' "$rows" | while read -r k sha ns; do
+        [ "$k" = A ] && echo "WAVE-NOTE $w: commit ${sha:0:9} names several issues ($ns) and closes none of them"; done
       for n in $(run_issues "$rd"); do
         dispatched="${dispatched:+$dispatched, }#$n"
         # A child that entered this wave (the entered fact of its ledger, ADR-0149) and still leaves it empty reached the base
         # by another route, whatever its message says: the entry is the proof, so it is delivered, never requeued (#620).
         case " $ent " in *" $n "*) delivered="${delivered:+$delivered }$n"; continue;; esac
-        sc log --format=%B%x1e -E --grep="Refs #$n([^0-9]|\$)" "origin/$base" 2>/dev/null \
-          | awk -v RS='\036' '/Refs #/ && $0 !~ /TDD RED/ {f=1} END {exit !f}' && delivered="${delivered:+$delivered }$n"
+        printf '%s\n' "$rows" | awk -v n="$n" '$1 == "D" && $3 == n { f = 1 } END { exit !f }' && delivered="${delivered:+$delivered }$n"
       done
+      # (#836) A child commit of this run that is in neither the wave nor the base, and lives on a local branch of the checkout only,
+      # keeps the wave: deleting the wave branch would leave that commit nowhere but on the local branch. One WAVE REFUSE line
+      # names it, and nothing is pushed. A commit of an issue the base already delivered is no refusal. A capped wave lands as
+      # it is (ADR-0145 rule 13), so the cap frees it here as it does the #667 hold above: no refusal once the cap is reached.
+      # (#845) Only a completed run's child commit holds the wave: a failed, needs-human, stopped or verdict-less run's commit never
+      # does, so its wave takes the normal path. The refusal is said once per wave and commit: the marker names the commit last said.
+      local undel="" orph refused="$SG_STATE/auto/orphan-refused-$run"
+      for n in $(run_issues "$rd"); do case " $delivered " in *" $n "*) ;; *) undel="${undel:+$undel }$n";; esac; done
+      if [ "$capped" != 1 ] && [ -n "$undel" ] && orph=$(orphan_child "$run" "$rd" "$S" "$w" $undel); then
+        if [ "$(cat "$refused" 2>/dev/null)" != "${orph% *}" ]; then
+          mkdir -p "$SG_STATE/auto" && printf '%s\n' "${orph% *}" > "$refused"
+          echo "WAVE REFUSE $w: child commit ${orph% *} names #${orph#* }; it is on a local branch only and in neither $w nor $base, so the wave is kept"
+        fi
+        rm -rf "$S"; return 1
+      fi
       sc push -q origin ":refs/heads/$w" >/dev/null 2>&1 || echo "WAVE-NOTE branch $w was not deleted" >&2
-      sha=$(sc rev-parse "origin/$base"); rm -rf "$S"; rm -f "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run"
+      sha=$(sc rev-parse "origin/$base"); rm -rf "$S"; rm -f "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run" "$refused"
       echo "WAVE $w landed empty in $base (nothing ahead of it; the wave branch is deleted${dispatched:+; the run was dispatched for $dispatched})"
       # An empty wave past its age cap follows the capped landing's rule too (#591): every issue of the run that `dev` does
       # not hold goes back to the queue, so a child that never entered is built into a later wave instead of staying in Doing.
@@ -635,11 +776,13 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
     [ $rc = 4 ] && { stuck "$run" "$w" "$S" "the check at the tip of $w is inconclusive, so the wave does not land: $(/usr/bin/grep -v '^$' "$SG_STATE/wave-check-$(printf '%s' "$w" | tr / _).log" 2>/dev/null | tail -1)"; rm -rf "$S"; return 1; }
     [ $rc = 0 ] || { stuck "$run" "$w" "$S" "the check at the tip of $w is red and no child's own suite names the cause"; rm -rf "$S"; return 1; }
     sha=$(sc rev-parse HEAD)
-    # The issues the wave carries: every `Refs #N` in a commit message, subject or body (a child never writes Closes), each
-    # named once. They are read here, after the rebase, from what is ahead of the base: a commit the base already holds is
-    # dropped by the rebase, and its issue was not delivered by this landing. A repeat from a refused push reads them again.
-    issues=""; while read -r n; do [ -n "$n" ] && issues="${issues:+$issues }$n"; done < <(
-      sc log --format=%B "origin/$base..HEAD" 2>/dev/null | /usr/bin/grep -oE 'Refs #[0-9]+' | /usr/bin/grep -oE '[0-9]+' | sort -un)
+    # The issues the wave delivers, read here, after the rebase, from what is ahead of the base: a commit the base already holds
+    # is dropped by the rebase, and its issue was not delivered by this landing. A repeat from a refused push reads them again.
+    # (#869) A commit that names exactly one issue delivers it (commit_refs). A commit that names several delivers none of them:
+    # the cluster child did not say which it fixed, so those issues are named and requeued below, never closed.
+    rows=$(commit_refs "$S" "origin/$base..HEAD")
+    issues=$(printf '%s\n' "$rows" | awk '$1 == "D" { print $3 }' | sort -un | tr '\n' ' ')
+    amb=$(printf '%s\n' "$rows" | awk '$1 == "A" { for (i = 3; i <= NF; i++) print $i }' | sort -un | tr '\n' ' ')
     # ONE push of the wave's tip to the base: one ref update, one CI run, and a push git refuses unless it is a fast-forward,
     # so no merge commit can land. Nothing else is pushed -- no child branch, and the wave branch goes once its work is in.
     out=$(sc push -q origin "HEAD:refs/heads/$base" 2>&1) && break
@@ -653,11 +796,24 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
   rm -rf "$S"
   rm -f "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run"   # the wave is in $base; wave-$run goes once every issue is delivered (deliver)
   sg_base_red "$base" >/dev/null   # the base right after the push (#786): a red head the wave lands on is reported now
+  printf '%s\n' "$rows" | while read -r k sha ns; do
+    [ "$k" = A ] && echo "WAVE-NOTE $w: commit ${sha:0:9} names several issues ($ns) and closes none of them"; done
+  # (#869) The run's issues a multi-issue commit names, and the wave did not deliver, go back to the queue with that reason. Their
+  # work is in $base, so the cap: a requeue for it counts no failed dispatch.
+  ent=$(python3 "$here/issue_ledger.py" entered "$SG_REPO" 2>/dev/null | awk -F '\t' -v r="$run" '$1 == r { print $2 }' | tr '\n' ' ')
+  for n in $(run_issues "$rd"); do case " $amb " in *" $n "*) ;; *) continue;; esac
+    case " $issues " in *" $n "*) continue;; esac
+    why="a commit names several issues, so it closes none of them: one commit per issue closes each one"
+    wave_fact "$run" "$n" refused "$why" keep
+    requeue "$n" "$why" cap
+  done
   # A wave that reached its age cap landed as it is (#378, ADR-0145 rule 13): the children the run dispatched that never
   # entered it go back to the queue, so the loop builds them into a later wave. They are read from the run's own record
   # (run_issues); an issue the wave carried just closed above, and is never requeued.
   if [ "$capped" = 1 ]; then
-    for n in $(run_issues "$rd"); do case " $issues " in *" $n "*) ;; *)
+    # (#869) A child that entered the wave is not missing from it, even when its commit is not ahead of the base any more (the
+    # rebase dropped it), and an issue a multi-issue commit named was requeued above with its own reason.
+    for n in $(run_issues "$rd"); do case " $issues $amb $ent " in *" $n "*) ;; *)
       wave_fact "$run" "$n" refused "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed without this child" keep
       requeue "$n" "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed without this child: it is back in the queue" cap;; esac; done
   fi

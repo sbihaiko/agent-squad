@@ -67,7 +67,7 @@ async function offerDraft() {
   $("b-restore").onclick = async () => {
     const r = core.parseImport(o.text);
     if (r.error) { setStatus("The draft is not a graph: " + r.error, true); return; }
-    S.doc = r.doc; S.text = o.text; S.layout = o.layout || core.autoLayout(S.doc); S.hist = core.histNew(100); S.selected = null; S.offerPending = null; box.hidden = true;
+    S.doc = r.doc; S.text = o.text; S.layout = o.layout || core.autoLayout(S.doc, narrowScreen()); S.hist = core.histNew(100); S.selected = null; S.offerPending = null; box.hidden = true;
     setStatus(`Restored the draft of ${o.name}. It is not saved to the file yet.`);
     await recompute(); fit();
   };

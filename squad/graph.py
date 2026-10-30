@@ -18,6 +18,17 @@ KINDS = ("agent", "gate", "wait", "loop", "each", "action", "dispatch")
 BUILTIN_FACTS = {"depth", "children_count", "spawn_rejected_count", "run_spend", "run_spend_remaining", "tier_pin"}
 SEES_FORBIDDEN = {"tier"}  # a `when` may read tier, a proposer may not
 WRITE_TOOLS = {"Edit", "Write", "Bash", "NotebookEdit"}
+
+
+def writes(n):
+    """True when the node may change its tree: an action other than `worktree_create`, or an agent whose declared `tools`
+    hold a write tool. An agent node declares its tools (the schema requires the list), so a list without one is read-only:
+    whatever dirties its tree is the environment's, such as a hook that regenerates a tracked artifact (#811)."""
+    if n.get("kind") == "action":
+        return n.get("effect") != "worktree_create"
+    if n.get("kind") != "agent":
+        return False
+    return bool(WRITE_TOOLS & set(n.get("tools") or []))
 FORBIDDEN_NAME = re.compile(r"(pass_rate|finding|trend|self_report|judge|confidence|effectiveness|learning_count)")
 FORBIDDEN_INSTRUMENT = re.compile(r"(\bmodel\b|\bjudge\b|self-report|self report|confidence|pass rate|finding count|\btrend\b|\b(another|other|previous|past|earlier) run\b|adaptation report)", re.I)
 
@@ -131,8 +142,7 @@ def _each_workspace_errors(nm, each, nodes, run):
     errs = [GraphError(nm, f"parallel items share workspace {w!r}: created by {', '.join(ns)}") for w, ns in created.items() if len(ns) > 1]
     for n in sub:
         ws = n.get("workspace")
-        writes = n["kind"] == "action" and n["effect"] != "worktree_create" or (n["kind"] == "agent" and WRITE_TOOLS & set(n["tools"]))
-        if n["kind"] not in ("agent", "action") or not writes:
+        if n["kind"] not in ("agent", "action") or not writes(n):
             continue
         if ws is None or ws == "." or ws not in created:
             errs.append(GraphError(nm, f"parallel items share workspace {ws!r} at {n['name']}: no worktree_create makes one per item"))

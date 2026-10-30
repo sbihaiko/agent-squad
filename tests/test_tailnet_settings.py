@@ -6,6 +6,7 @@ a change to any other key still refuses; a record with the old raw-bytes hash is
 """
 import hashlib
 import json
+import pathlib
 
 import pytest
 
@@ -138,3 +139,15 @@ async def test_a_record_with_the_old_raw_hash_is_compared_by_the_old_method(tmp_
     settings(tmp_path, BASE + BLOCK)
     with pytest.raises(ResumeRefused, match="project settings file .* changed"):
         await resumed(tmp_path).resume(answer="pass")
+
+
+def test_terminals_send_takes_true_or_false_and_names_its_key_otherwise():
+    P.validate({"tailnet": {"terminals_send": True}})
+    P.validate({"tailnet": {"terminals_send": False}})
+    with pytest.raises(OptionError, match="tailnet.terminals_send"):
+        P.validate({"tailnet": {"terminals_send": "yes"}})
+
+
+def test_the_shipped_default_leaves_the_phone_send_off():
+    text = (pathlib.Path(__file__).resolve().parent.parent / "config" / "agent-defaults.yaml").read_text()
+    assert "terminals_send: false" in text.split("tailnet:", 1)[1].split("\nwatch:", 1)[0]

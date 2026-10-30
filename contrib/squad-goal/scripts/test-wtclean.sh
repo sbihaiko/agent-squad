@@ -164,4 +164,19 @@ chmod 500 .worktrees; out=$(bash "$T/s/wtclean.sh" 2>&1); chmod 700 .worktrees
 case "$out" in *"WT KEPT submodule child c-locked"*) ok "S2: a tree the flag cannot free is reported with its class and its name";; *) ko "S2: the pass kept it in silence: $out";; esac
 case "$out" in *"cannot be moved or removed"*) ko "S2: git's nameless fatal is still the only word: $out";; *) ok "S2: no nameless refusal reaches the log";; esac
 $G worktree prune 2>/dev/null; rm -rf .worktrees
+# U (#842): local branches keep only the exceptional trees, not ordinary work.
+cd "$T/co"; mkdir -p runs/run-842-clean/ws; $G worktree add -q -b squad/run-842-clean/child runs/run-842-clean/ws/w HEAD
+$G -C runs/run-842-clean/ws/w -c user.email=a@b -c user.name=t commit -q --allow-empty -m "child work"
+$G branch -q squad/run/842-clean "$($G -C runs/run-842-clean/ws/w rev-parse HEAD)"; echo '{"event": "verdict"}' > runs/run-842-clean/record.jsonl
+mkdir -p runs/run-842-refs/ws; $G worktree add -q -b squad/run-842-refs/child runs/run-842-refs/ws/w HEAD
+$G -C runs/run-842-refs/ws/w -c user.email=a@b -c user.name=t commit -q --allow-empty -m "child work (Refs #842)"
+$G branch -q squad/run/842-refs "$($G -C runs/run-842-refs/ws/w rev-parse HEAD)"; echo '{"event": "verdict"}' > runs/run-842-refs/record.jsonl
+mkdir -p runs/run-842-empty/ws; $G worktree add -q -b squad/run-842-empty/child runs/run-842-empty/ws/w HEAD
+$G -C runs/run-842-empty/ws/w -c user.email=a@b -c user.name=t commit -q --allow-empty -m "child work"
+$G branch -q squad/run/842-empty "$($G -C runs/run-842-empty/ws/w rev-parse HEAD)"; echo '{"event": "verdict"}' > runs/run-842-empty/record.jsonl
+printf 'issue 842\n' > "$T/st/auto/waved-run-842-empty"
+out=$(bash "$T/s/wtclean.sh" 2>&1)
+[ ! -d runs/run-842-clean/ws/w ] && ok "U: local-only branch without undelivered Refs is cleanable" || ko "U: ordinary local-only work was kept: $out"
+if [ -d runs/run-842-refs/ws/w ]; then case "$out" in *"WT UNPUSHED run-842-refs"*) ok "U: undelivered non-RED Refs work is kept and reported";; *) ko "U: undelivered Refs work lacks WT UNPUSHED: $out";; esac; else ko "U: undelivered Refs work was removed: $out"; fi
+[ -d runs/run-842-empty/ws/w ] && ok "U: a run whose landed wave was empty is kept" || ko "U: empty-wave work was removed: $out"
 rm -rf "$T"; exit $fail

@@ -166,13 +166,12 @@ def test_two_writers_in_one_process_never_share_a_temp_file(hub, monkeypatch):
         t.start()
     for t in ts:
         t.join()
-    # The pass writes two files, the board and the flow, so the two writers make two temp names per file, never one.
-    groups = {}
-    for src in srcs:
-        groups.setdefault(src.rsplit(".", 2)[0], []).append(src)
-    assert groups, "the pass wrote no file"
-    for name, temps in groups.items():
-        assert len(temps) == 2 and temps[0] != temps[1], f"{name}: the two writers shared a temp file: {temps}"
+    # No two writes share a temp name. Both writers write the board cache; the flow history appends only when its counts
+    # changed, so the second writer may find the first's sample and write nothing there (#835).
+    assert srcs, "the pass wrote no file"
+    assert len(set(srcs)) == len(srcs), f"two writers shared a temp file: {srcs}"
+    board = [s for s in srcs if Path(s).name.startswith(hub.BOARD.name + ".")]
+    assert len(board) == 2, f"both writers write the board cache: {srcs}"
 
 
 def test_a_move_pass_is_read_again_after_the_board_settles(hub, monkeypatch):

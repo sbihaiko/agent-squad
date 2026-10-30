@@ -57,6 +57,12 @@ def _card(n, st="Todo", s="OPEN", k=None, labels=(), o=OPENED):
             "si": {"total": None, "completed": None}, "o": o}
 
 
+def _rest_issue(c):
+    """An open issue as the REST list answers it: GitHub's own fields."""
+    return {"number": c["n"], "title": c["t"], "state": c["s"].lower(), "labels": [{"name": x} for x in c["l"]],
+            "created_at": c.get("o"), "sub_issues_summary": c["si"]}
+
+
 def _gh(calls, cards=(), open_issues=(), fail=False):
     """The gh CLI as one pass uses it: each call is recorded, and the answer is canned per endpoint."""
     def run(cmd, **kw):
@@ -71,7 +77,7 @@ def _gh(calls, cards=(), open_issues=(), fail=False):
         elif "search/issues" in s:
             out = "0\n"
         elif "issues?state=open" in s:
-            out = "".join(json.dumps(c) + "\n" for c in open_issues)
+            out = json.dumps([_rest_issue(c) for c in open_issues])
         elif "blockedBy" in s:
             out = json.dumps({"data": {"repository": {"issues": {"nodes": []}}}})
         else:
@@ -148,9 +154,7 @@ def test_each_cached_card_row_carries_its_opened_time(hub, board, monkeypatch):
     assert rows[11]["o"] == OPENED
     assert rows[12]["o"] == "2026-10-02T09:00:00Z"
     items_call = next(" ".join(c) for c in calls if "projectsV2" in " ".join(c) and "/items" in " ".join(c))
-    issues_call = next(" ".join(c) for c in calls if "issues?state=open" in " ".join(c))
     assert "o:.content.created_at" in items_call, "the project items route reads the opened time"
-    assert "o:.created_at" in issues_call, "the open-issues route reads the opened time"
 
 
 def test_samples_older_than_thirty_days_keep_one_per_utc_day_and_newer_ones_stay_raw(hub, board, monkeypatch):

@@ -118,6 +118,12 @@ def free_never_started(f):   # drop auto/bug-<n> and auto/disp-<n> for the issue
     for n in sorted(nums, key=int):
         marks = [m for m in (st / "auto" / f"{kind}-{n}" for kind in ("bug", "disp")) if owns(f, None, m)]
         if not marks: continue   # nothing this run's request dispatched: not ours to free, and no comment
+        if issue_read(n)[0] == "closed":   # a closed issue is never dispatched again: its stale marker goes with no retry and no comment, so nothing re-arms it (#868)
+            say(f"NEVER-STARTED #{n}: its issue is closed; {'+'.join(m.name for m in marks)} released, no retry")
+            if not dry:
+                for mk in marks:
+                    if mk.exists(): mk.unlink()
+            continue
         ctr = st / "auto" / f"neverstart-{n}"
         try: k = int(ctr.read_text().strip() or "0")
         except (ValueError, OSError): k = 0
@@ -401,7 +407,18 @@ for n, i in live.items():
 for x, rs in byissue.items():
     mk = st / "auto" / f"janitor-dup-{x}-{'-'.join(sorted(r[-6:] for r in rs))}"
     if len(rs) > 1 and not mk.exists():
-        say(f"DUP issue #{x} accepted by live runs {', '.join(rs)} (not killed)")
+        # #865: one issue, one live run (ADR-0150). The older run keeps it (a run id starts with its start time, so the sort is the
+        # start order); every newer run that accepted it is ended with its process tree, and the pass says which. A dry run names the
+        # same kills and ends none.
+        keep_r, *dups = sorted(rs)
+        say(f"DUP issue #{x} accepted by live runs {', '.join(rs)}; keeping {keep_r}, killing {', '.join(dups)}")
+        for r in dups:
+            why = f"duplicate of run {keep_r} for issue #{x}"
+            if live[r]["pid"] and live[r]["pid"] in procs:
+                kill(live[r]["pid"], why)
+            for q in inside(livef[r]):
+                if not own_pass(q):
+                    kill(q, why)
         if not dry: mk.touch()
 # An issue is held from its dispatch until its delivery ends (#539): a run with a verdict whose wave marker auto/wave-<run>
 # stands (wave.sh clears it when the wave lands) still delivers its issues, and so does a child that entered such a wave (the
@@ -1152,10 +1169,16 @@ if fd and fb:
 repo = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
 hb = pathlib.Path(os.environ.get("SG_HUB_DIR") or co / "runs" / ".hub") / "hub-board.json"; hm = st / "auto" / "janitor-h-last"
 if hb.exists() and (not hm.exists() or now - hm.stat().st_mtime > 600):
-    if not dry: hm.touch()
+    sys.path.insert(0, str(pathlib.Path(__file__).parent))
+    import ghthrottle
+    floor = int(os.environ.get("SG_GH_FLOOR") or 300)
+    low = ghthrottle.core_below(floor)
+    if low is not None:
+        say(f"skipped comment pass: core quota {low} is under SG_GH_FLOOR {floor}; the next pass reads again")
+    elif not dry: hm.touch()
     try: items = json.loads(hb.read_text()).get("items", [])
     except Exception: items = []
-    for it in items:
+    for it in (items if low is None else []):
         n = it.get("n"); stt = it.get("st"); op = it.get("s") == "open"
         if not (isinstance(n, int) and n >= 1102): continue
         if stt in ("Done", "Closed") and op:
@@ -1168,7 +1191,9 @@ if hb.exists() and (not hm.exists() or now - hm.stat().st_mtime > 600):
                     if not dry: mk.touch()
             continue
         if not (op and stt in ("Todo", "Blocked", "In Progress", "Doing", "Code Review", "Code Complete")): continue
-        cm = [x.split("\t", 1) for x in sh("gh", "api", f"repos/{repo}/issues/{n}/comments?per_page=100", "--paginate", "--jq", r'.[]|[.created_at,(.body|gsub("\n";" "))]|join("\t")').splitlines() if "\t" in x]
+        os.environ["SG_GH_PASS"] = "janitor"
+        r, comments = door("gh_pages", f"repos/{repo}/issues/{n}/comments?per_page=100", "-q", r'.[]|[.created_at,(.body|gsub("\\n";" "))]|join("\t")')
+        cm = [x.split("\t", 1) for x in comments.splitlines() if "\t" in x] if r == 0 else []
         reds = 0
         for _, b in cm:
             if "the fork suite failed after merging" in b: reds += 1

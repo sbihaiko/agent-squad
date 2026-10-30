@@ -20,10 +20,12 @@ cat > "$T/bin/gh" <<'J'
 #!/bin/bash
 printf '%s\n' "gh $*" >> "${GHLOG:-/dev/null}"
 case "$*" in
-  *Accept*compare*) printf 'diff --git a/f b/f\n+x\n';;
+  *Accept*compare*) [ -n "${GH_DIFF_EMPTY:-}" ] || printf 'diff --git a/f b/f\n+x\n';;
   # one answer for both compare reads: `.status` (is the tip ahead of the reviewed one) and `.files[].filename` (the fast lane)
   *compare*) printf '{"status":"ahead","files":['; sep=""; for f in ${GH_FILES:-UI/a.cs}; do printf '%s{"filename":"%s"}' "$sep" "$f"; sep=,; done; printf ']}\n';;
   *commits/*) if [ -n "$GH_MOVE" ] && [ -e "$GH_MOVE" ]; then echo '{"sha":"bbb222"}'; else echo '{"sha":"aaa111"}'; fi;;
+  *issues/*) if [ -n "${GH_ISSUE_REFUSE:-}" ]; then printf '%s\n' '{"message":"API rate limit exceeded for 203.0.113.7.","documentation_url":"https://docs.github.com/rest/overview/rate-limits-for-the-rest-api","status":"403"}'; exit 1; fi
+    echo '{"number":8,"title":"the issue","body":"the acceptance criteria"}';;
   *) echo "stub";;
 esac
 J
@@ -254,7 +256,8 @@ unset CLAUDE_ARGS
 # from SG_CHECKOUT, and the head watch ran there too: it read the checkout's HEAD, called the child's head moved within
 # 10 s, and every such review of a child ended "BLOCKED (head moved during the review)" with no verdict.
 W="$T/child"; /usr/bin/git init -q -b main "$W"; /usr/bin/git -C "$W" -c user.email=a@b -c user.name=t commit -q --allow-empty -m base
-/usr/bin/git -C "$W" checkout -q -b gui/9; /usr/bin/git -C "$W" -c user.email=a@b -c user.name=t commit -q --allow-empty -m child
+/usr/bin/git -C "$W" checkout -q -b gui/9; echo child > "$W/c.txt"; /usr/bin/git -C "$W" add c.txt   # a real change: an empty diff is a refused read (#846)
+/usr/bin/git -C "$W" -c user.email=a@b -c user.name=t commit -q -m child
 /usr/bin/git init -q -b main "$T/co"; /usr/bin/git -C "$T/co" -c user.email=a@b -c user.name=t commit -q --allow-empty -m checkout
 sed -i '' "s|SG_CHECKOUT=$T;|SG_CHECKOUT=$T/co;|" "$T/s/env.sh"
 printf '#!/bin/bash\necho "$*" >> "$GROK_ARGS"; sleep 12; echo "VERDICT: APPROVE"\n' > "$T/bin/grok"; chmod +x "$T/bin/grok"
@@ -615,6 +618,31 @@ case "$out" in model=claude:fast*) ok "28 the author file names the model too";;
 printf '{"review_models":["claude:slow"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
 rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"*; out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rm -f "$T/st/author-fix_1-x"
 case "$out" in model=claude:slow*) ok "28 with no other reviewer the author's model still reviews";; *) ko "28 lone reviewer: '$out'";; esac
+# 13) #846: a read the prompt carries as DATA must be an answer. A refused issue read (GitHub's rate-limit 403) or an empty
+# diff ends the try BLOCKED before any model is called: the reviewer never judges the text of an error as the code.
+printf '{"review_models":["claude:claude-opus-5-5"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+cat > "$T/bin/claude" <<'J'
+#!/bin/bash
+cat > "${CLAUDE_PROMPT:-/dev/null}"; echo "$*" >> "${CLAUDE_ARGS:-/dev/null}"; echo "VERDICT: APPROVE"
+J
+chmod +x "$T/bin/claude"; export CLAUDE_ARGS="$T/args-846" CLAUDE_PROMPT="$T/prompt-846"
+rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/args-846"
+out=$(GH_ISSUE_REFUSE=1 GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+[ $rc != 0 ] && head -1 "$T/st/review-fix_1-x.md" 2>/dev/null | /usr/bin/grep -q 'VERDICT: BLOCKED (the issue read refused' && [ ! -s "$T/args-846" ] \
+  && ok "a refused issue read (403 rate limit) is BLOCKED and no model is called (#846)" \
+  || ko "refused issue read: rc=$rc '$(head -1 "$T/st/review-fix_1-x.md" 2>/dev/null)' called=$(head -1 "$T/args-846" 2>/dev/null)"
+rm -f "$T/st/review-fix_1-x".* "$T/args-846"
+out=$(GH_DIFF_EMPTY=1 GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+[ $rc != 0 ] && head -1 "$T/st/review-fix_1-x.md" 2>/dev/null | /usr/bin/grep -q 'VERDICT: BLOCKED (the diff read is empty' && [ ! -s "$T/args-846" ] \
+  && ok "an empty diff is BLOCKED and no model is called (#846)" \
+  || ko "empty diff: rc=$rc '$(head -1 "$T/st/review-fix_1-x.md" 2>/dev/null)' called=$(head -1 "$T/args-846" 2>/dev/null)"
+rm -f "$T/st/review-fix_1-x".* "$T/args-846" "$T/prompt-846"
+out=$(GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+[ $rc = 0 ] && [ -s "$T/args-846" ] && /usr/bin/grep -q 'the acceptance criteria' "$T/prompt-846" 2>/dev/null \
+  && ok "a normal issue and diff read still reach the reviewer (#846)" \
+  || ko "normal read: rc=$rc '$out' called=$(head -1 "$T/args-846" 2>/dev/null)"
+unset CLAUDE_ARGS CLAUDE_PROMPT
+
 # 27) a models.json with no model_retry_budget, or with it explicitly null, takes the shipped default of 2 tries -- never
 # jq's literal "null". That string made `[ "$i" -lt "$lim" ]` fail with "integer expression expected", the loop body never
 # ran, and every review ended BLOCKED while the run retried once a minute.

@@ -262,6 +262,7 @@ LIVE = pytest.mark.skipif(not (Path.home() / ".claude" / "skills").is_dir(), rea
 
 
 @LIVE
+@pytest.mark.heavy
 def test_on_this_machine_every_skill_a_door_opens_or_the_vendor_builder_copies_still_resolves():
     problems, _ = sp.check(ROOT)
     assert not problems, f"{problems}; a plugin or npx update moved or removed it: reinstall it or retire its door"

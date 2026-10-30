@@ -62,3 +62,23 @@ def test_an_output_with_no_failing_line_keeps_the_plain_tail(tmp_path):
     r = workcmd.run(script, str(tmp_path))
     assert not r.ok and r.evidence.endswith("line400")
     assert len(r.evidence) <= workcmd.EVIDENCE_TAIL and "start" not in r.evidence
+
+
+def test_the_failing_test_name_survives_a_long_detail_block(tmp_path):
+    """A noisy failure's detail lines fill the kept budget before the summary that names the failing test."""
+    target = "FAILED tests/test_hub_mobile.py::test_mux_serves_the_mobile_page - TimeoutError: timed out"
+    noisy = "".join(f"E       detail line {i:03d} " + "x" * 90 + "\n" for i in range(40))
+    text = (
+        "collected 2 items\n=== FAILURES ===\n"
+        + "_" * 40 + " test_noisy " + "_" * 40 + "\n"
+        + noisy
+        + "=========================== short test summary info ============================\n"
+        + target + "\n"
+        + "tests/x.py::test_slow 0.10s call\n" * 200
+        + "2 failed in 4.2s\n"
+    )
+    (tmp_path / "out.txt").write_text(text)
+    (tmp_path / "t.sh").write_text("cat out.txt\nexit 1\n")
+    r = workcmd.run("sh t.sh", str(tmp_path))
+    assert not r.ok and target in r.evidence
+    assert len(r.evidence) <= workcmd.EVIDENCE_TAIL

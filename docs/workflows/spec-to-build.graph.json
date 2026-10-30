@@ -65,10 +65,8 @@
    "deadline": 7200,
    "join": "all",
    "allow": {
-    "models": [
-     "opus",
-     "sonnet",
-     "haiku"
+    "kinds": [
+     "coding"
     ],
     "efforts": [
      "low",

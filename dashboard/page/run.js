@@ -12,7 +12,7 @@ async function loadRunSource(src) {
   const g = await src.graph();
   if (g === null || !(await loadGraph(g, src.name + "/graph.json"))) { await recompute(); if (g !== null) return true; }
   // A short toast: the folder name is already in the top bar, and a push or a reread needs no words after the load.
-  setStatus(`Opened run ${pr.events[0].run_id} (read-only).` + (src.live ? "" : " A folder list is a snapshot: connect the folder to follow a live run.") + (g === null ? " The folder has no graph.json: open the graph to see the nodes." : ""));
+  setStatus((S.ended ? "This run ended. " : "") + `Opened run ${pr.events[0].run_id} (read-only).` + (src.live ? "" : " A folder list is a snapshot: connect the folder to follow a live run.") + (g === null ? " The folder has no graph.json: open the graph to see the nodes." : ""));
   return true;
 }
 // While a run lives, the page follows it one of two ways. A source with a `stream` is followed by push: each pushed event extends the
@@ -109,7 +109,7 @@ function openStream(path, h) {
 }
 async function connectServed() {
   let name = "run", issues = null;
-  try { const r = await fetch("run/info.json", { cache: "no-store" }); if (r.ok) { const j = await r.json(); name = j.name || name; if (typeof j.issues === "number" && j.issues > 0) issues = j.issues; S.issueHeld = typeof j.held === "number" ? j.held : 0; } } catch (e) { /* the server went away: the load below says so */ }
+  try { const r = await fetch("run/info.json", { cache: "no-store" }); if (r.ok) { const j = await r.json(); name = j.name || name; S.ended = j.ended === true; if (typeof j.issues === "number" && j.issues > 0) issues = j.issues; S.issueHeld = typeof j.held === "number" ? j.held : 0; } } catch (e) { /* the server went away: the load below says so */ }
   document.title = `${document.title} \u00b7 ${name}`;
   $("b-folder").style.display = "none"; $("l-folder").style.display = "none"; $("l-record").style.display = "none";
   const src = core.httpSource((p) => fetch(p, { cache: "no-store" }), name, openStream);

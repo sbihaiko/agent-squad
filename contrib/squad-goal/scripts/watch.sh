@@ -40,7 +40,7 @@ verdicts() { local r f; for r in $(cat "$SG_STATE/active-runs.txt"); do case "$r
 # children had their pass and the wave is in $SG_BASE: a pass still running elsewhere, a pass that failed (its traceback is
 # in this log) and a landing that failed (a rebase conflict, a push refused twice) each leave the run unread, never a marker.
 land_wave() {   # <run>: 0 the wave is done (landed), 1 the pass that enters its children, or the landing, did not get through, so the run stays unread
-  local run=$1 ran pass L h; ran="$SG_STATE/auto/wland-${run##*/}"; pass="$ran.pass"; L="$SG_STATE/locks/single-childcc"
+  local run=$1 ran pass L h wout c; ran="$SG_STATE/auto/wland-${run##*/}"; pass="$ran.pass"; L="$SG_STATE/locks/single-childcc"
   mkdir -p "$SG_STATE/auto"; rm -f "$ran" "$pass" "$pass.left"
   # A plain `loop-bug` stops intake, never this landing; a `loop-bug:landing` issue names the landing path, so the wave waits
   # and the run stays unread until it closes (#641, ADR-0146 decision 3).
@@ -54,8 +54,13 @@ land_wave() {   # <run>: 0 the wave is done (landed), 1 the pass that enters its
   [ -e "$pass.left" ] && { rm -f "$pass.left"
     echo "WATCH: ${run##*/} waits: its landing is deferred, the childcc pass left children of the run for a later pass, so its wave lands on a later cycle"; return 1; }
   if [ -e "$pass" ]; then
-    tm bash "${wme%/*}/single.sh" wland sh -c 'bash "$1" land "$2" "$3" && : > "$4"' landwave "${wme%/*}/wave.sh" "${run##*/}" "$run" "$ran" 2>&1
+    wout=$(tm bash "${wme%/*}/single.sh" wland sh -c 'bash "$1" land "$2" "$3" && : > "$4"' landwave "${wme%/*}/wave.sh" "${run##*/}" "$run" "$ran" 2>&1)
+    [ -n "$wout" ] && printf '%s\n' "$wout"
     [ -e "$ran" ] && { rm -f "$ran" "$pass"; return 0; }
+    # A rebase conflict is terminal for the wave (#844): wave.sh retired it and requeued its issues, so the wait names the conflict
+    # and the run is not retried through the landing lock.
+    c=$(printf '%s\n' "$wout" | /usr/bin/grep '^WAVE CONFLICT ' | tail -1)
+    [ -n "$c" ] && { echo "WATCH: ${run##*/} waits: its wave did not land, a rebase conflict (${c#WAVE CONFLICT }); the wave is retired, not retried"; rm -f "$pass"; return 1; }
     h=$(cat "$SG_STATE/locks/single-wland/pid" 2>/dev/null)
     echo "WATCH: ${run##*/} waits: its wave did not land (the landing lock is held by pid ${h:-none}, or the landing failed), so it lands on a later cycle"
     rm -f "$pass"; return 1

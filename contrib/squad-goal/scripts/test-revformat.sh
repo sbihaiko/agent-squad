@@ -160,6 +160,7 @@ case "$*" in
   *Accept*compare*) printf 'diff --git a/f b/f\n+x\n';;
   *compare*) echo '{"status":"ahead","files":[{"filename":"UI/a.cs"}]}';;
   *commits/*) echo '{"sha":"aaa111"}';;
+  *issues/*) echo '{"number":8,"title":"t","body":"b"}';;
   *) echo stub;;
 esac
 J

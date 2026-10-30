@@ -33,10 +33,12 @@ PY
 cat > "$T/bin/gh" <<J
 #!/bin/bash
 case "\$*" in
-  *pulls?state=open*) echo "" ;;
+  *"issue(number:"*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issue\(number: [0-9]+' | /usr/bin/grep -oE '[0-9]+' | head -1); jq -c --arg k "i\$n" --argjson n "\$n" '{data:{repository:{(\$k): (.[]|select(.number==\$n)|{number,title,body,state:"OPEN",createdAt:.created_at,labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}})}}}' "$T/issues.json" ;;
+  *pulls?state=open*) echo "[]" ;;
   *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:(.labels//[{name:"ready-for-agent"}])},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$T/issues.json" ;;   # the frontier's one list read (#383)
-  *"issues?state=open"*wave*) python3 -c 'import json;[print("wave:01\x1f"+str(i["number"])+"\x1fready-for-agent") for i in json.load(open("$T/issues.json"))]' ;;
-  *"issues?state=open"*) python3 -c 'import json;[print(str(i["number"])+"\x1f"+"bug,ready-for-agent") for i in json.load(open("$T/issues.json"))]' ;;
+  *"issues?state=open"*wave*) jq -c '[.[]|{number,title:"t",labels:[{name:"wave:01"},{name:"ready-for-agent"}]}]' "$T/issues.json" ;;
+  *"issues?state=open"*) jq -c '[.[]|{number,title:"t",labels:[{name:"bug"},{name:"ready-for-agent"}]}]' "$T/issues.json" ;;   # the candidate list, as GitHub answers it (JSON; the door applies -q)
+  *issues/*/comments*) echo "[]" ;;   # no comment on any fixture issue
   *issues/*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issues/[0-9]+' | cut -d/ -f2); python3 -c 'import json,sys;print(json.dumps([i for i in json.load(open("$T/issues.json")) if i["number"]==int(sys.argv[1])][0]))' "\$n" ;;
   *) echo "" ;;
 esac

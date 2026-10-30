@@ -102,9 +102,14 @@ $G worktree list --porcelain | sed -n 's#^worktree \(.*/runs/run-[^/]*/ws/.*\)#\
   [ -z "$(dirt "$w")" ] || { kept "${run##*/}" "$w" dirt "uncommitted work in it"; continue; }
   sha=$($G -C "$w" rev-parse HEAD 2>/dev/null) || continue
   own=$($G -C "$w" branch --show-current)
-  # kept only when HEAD is on no remote branch and on no other local branch (a run that made no commit sits on its base), and
-  # its work is not in the base: a wave that landed rebased the child, so its sha is on no remote and its patch is in the base
-  if ! in_base "$w" && [ -z "$($G branch -r --contains "$sha" 2>/dev/null | head -1)" ] && [ -z "$($G branch --contains "$sha" --format='%(refname:short)' 2>/dev/null | grep -vxF "${own:-//}" | head -1)" ]; then
+  local_only=$($G branch --format='%(refname:short)' --contains "$sha" 2>/dev/null | grep '^squad/run/' | head -1)
+  local_refs=
+  if ! in_base "$w" && [ -z "$($G branch -r --contains "$sha" 2>/dev/null | head -1)" ]; then
+    local_refs=$($G -C "$w" log --format=%B%x1e "origin/$SG_BASE..$sha" 2>/dev/null | awk -v RS='\036' '/Refs #[0-9]+/ && $0 !~ /TDD RED/ {f=1} END {print f}')
+    empty_wave=; [ -e "$SG_STATE/auto/waved-${run##*/}" ] && empty_wave=1
+    # A local branch is not a salvage destination. Keep it only for undelivered issue work or an empty landed wave.
+  fi
+  if ! in_base "$w" && [ -z "$($G branch -r --contains "$sha" 2>/dev/null | head -1)" ] && { [ -z "$local_only" ] || [ "$local_refs" = 1 ] || [ -n "$empty_wave" ]; }; then
     grep -qx "$w" "$seen" && continue
     # #767: the branch passes and the frontier see only `fix/<n>-…` or `gui/<n>-…` (workbranches.sh), so the line names the
     # push under such a name: the tree's own name when it is one and the push is a fast-forward, else a fresh one to fill in

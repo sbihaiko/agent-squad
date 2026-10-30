@@ -28,7 +28,7 @@ case "$*" in
   *compare/dev...gui/7-x*) echo '{"files":[{"filename":"UI/a.cs"}]}';;
   *Accept*compare*) printf 'diff --git a/f b/f\n+delta-line\n';;
   *compare*) echo '{"status":"ahead"}';;
-  *issues/7*) echo '#7 title';;
+  *issues/7*) echo '{"number":7,"title":"title","body":""}';;
   *) echo stub;;
 esac
 J

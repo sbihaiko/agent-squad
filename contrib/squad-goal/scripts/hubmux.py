@@ -31,6 +31,7 @@ def load_apps():
             continue
         pinned = {"SG_REPO": c.get("SG_REPO", ""), "SG_OWNER": c.get("SG_OWNER", ""), "SG_PROJECT": c.get("SG_PROJECT", ""),
                   "SG_CHECKOUT": c.get("SG_CHECKOUT", ""), "SG_STATE": c.get("SG_STATE", ""), "SG_PROFILE": slug, "SG_HUB_DIR": "",
+                  "SG_PROJECTS": c.get("SG_PROJECTS", ""), "SG_FORK_DIR": c.get("SG_FORK_DIR", ""),   # the profile's own run roots, never the shell's (#859)
                   "SG_BOARD_CACHE": c.get("SG_BOARD_CACHE", ""),   # the profile's own board cache, never the shell's (#512)
                   "SG_SHARED": c.get("SG_SHARED", "")}   # the one shared directory the loop reads, never the profile's state (#678)
         before = {k: os.environ.get(k) for k in pinned}
@@ -98,11 +99,15 @@ def test_note(slug, apps):
             "The repositories and their live runs are:</p>")
 
 
+REWRITTEN = (b"text/html", b"application/json", b"application/manifest+json", b"text/javascript")
+VERBATIM = ("/api/sessions",)   # a transcript's text quotes paths: the routing rewrite never touches it
+
+
 def rewrite(body, slug):
-    """A repository's page calls its own API: every absolute /api/, /test/ and /dash/ reference gains the /<slug> prefix, in the page
-    and in the JSON it fetches (a test card's link is `/test/<id>` there; without the slug the path read `test` as a repository)."""
+    """A repository's page calls its own API: every absolute /api/, /test/, /dash/ and /mobile/ reference gains the /<slug> prefix, in the page,
+    the JSON it fetches, the web app manifest and the service worker (a test card's link is `/test/<id>` there; without the slug the path read `test` as a repository)."""
     for q in (b'"', b"'", b"`"):
-        for p in (b"/api/", b"/test/", b"/dash/", b"/held/"):
+        for p in (b"/api/", b"/test/", b"/dash/", b"/held/", b"/mobile/"):
             body = body.replace(q + p, q + b"/" + slug.encode() + p)
     return body
 
@@ -132,7 +137,9 @@ def server(port, apps):
         def _send(self, code, body, ct):
             self.send_response(code); self.send_header("Content-Type", ct); self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(body)
 
-        def refuse(self, reason): self._send(403, reason.encode(), "text/plain; charset=utf-8")
+        def refuse(self, reason, page=False):
+            if page: return self.profile.refuse(self, reason, page)
+            self._send(403, reason.encode(), "text/plain; charset=utf-8")
         def not_found(self): return self.profile.not_found(self)
         def dash(self, method, body=b""): return self.profile.dash(self, method, body)
 
@@ -160,7 +167,8 @@ def server(port, apps):
             finally: self.wfile = real
             head, sep, body = buf.getvalue().partition(b"\r\n\r\n")
             head = re.sub(rb"(?im)^(Location: )/(?!/)", rb"\1/" + slug.encode() + b"/", head)   # a redirect to this repository's own path keeps its slug
-            real.write(head + sep + (rewrite(body, slug) if b"text/html" in head or b"application/json" in head else body))
+            verbatim = self.path.split("?", 1)[0].startswith(VERBATIM)
+            real.write(head + sep + (rewrite(body, slug) if not verbatim and any(t in head for t in REWRITTEN) else body))
 
         def do_GET(self): self._route("GET")
         def do_POST(self): self._route("POST")
@@ -170,7 +178,7 @@ def server(port, apps):
 
 if __name__ == "__main__":
     apps = load_apps()
-    for k in ("SG_REPO", "SG_OWNER", "SG_PROJECT", "SG_CHECKOUT", "SG_STATE"):   # each page reads its own profile, never the shell's
+    for k in ("SG_REPO", "SG_OWNER", "SG_PROJECT", "SG_CHECKOUT", "SG_STATE", "SG_PROJECTS", "SG_FORK_DIR"):   # each page reads its own profile, never the shell's
         os.environ.pop(k, None)
     for a in apps.values():
         m = a.get("mod")

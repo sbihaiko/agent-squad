@@ -5,33 +5,24 @@
 # $SG_FRONTIER_LABEL and a card in Todo (the owner's go signal, #550) is dispatched, all of them in ONE squad start (one child and one
 # per root-cause cluster (cluster.py), TDD with the RED output in the issue status comment), within the free run slots (max_parallel of the workflow graph minus live
 # runs). The marker is never removed after a launch: a run that ends without a pushed branch is surfaced by its RUN verdict, and the
-# coordinator deletes auto/bug-<n> to retry. It IS freed when mkreq.sh refuses the request (#1529): a dispatch that never
-# happened must not mark the issue done. The janitor frees it for a run that never starts (no record.jsonl, rule J, at
+# coordinator deletes auto/bug-<n> to retry. It IS freed when mkreq.sh refuses the request (#1529), and when launch.py refuses the
+# start (#852): a dispatch that never happened must not mark the issue done, and its card goes back to Todo. The janitor frees it for a run that never starts (no record.jsonl, rule J, at
 # most twice) or that ends with a failed verdict and nothing landed (janitor rule O, which also puts the cards back). SG_AUTO_BUGFIX=no turns it off.
 . "$(dirname "$0")/env.sh"; . "$(dirname "$0")/startability.sh"; . "$(dirname "$0")/refusal-names.sh"; . "$(dirname "$0")/workbranches.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
 export SG_GH_PASS=autobug   # the pass that spends the GitHub calls below, named in the call log (ADR-0277)
 export SG_FILE_PASS="autobug-$$-$(date +%s)"   # the filings of THIS pass share one ceiling (#140): a fresh pass is never held by the ledger of one that ended
-# ONE wrapper owns the refusal (#1855). `gh api` writes the error body to stdout and exits non-zero, and it does not honour
-# -q on a failed request, so every `gh api … 2>/dev/null` here used to treat a 403/404/500 body as a valid answer: on
-# 2026-10-12 a rate-limit body became the whole candidate list and the dispatch spent money on children spawned from it.
-# Three outcomes, never mixed: 0 = the answer in stdout, 2 = GitHub refused it (its own message in $gh_api_err while the
-# body is kept out of stdout), 1 = the command failed before GitHub reached a verdict. `-q` output on a non-zero exit is
-# never data, and a consumer cannot see a refusal as an answer by accident.
-gh_api_err=""
-gh_api() {
-  local o rc
-  o=$(gh api "$@" 2>/dev/null); rc=$?
-  if [ "$rc" -eq 0 ]; then printf '%s' "$o"; gh_api_err=""; return 0; fi
-  gh_api_err=$(printf '%s' "$o" | python3 -c 'import json,sys
-try:
-    v = json.loads(sys.stdin.read() or "{}")
-except Exception:
-    v = {}
-if not isinstance(v, dict): v = {}
-msg = v.get("message"); st = v.get("status")
-print(f"GitHub refused (HTTP {st}): {msg}" if (msg and st) else "no verdict: the request failed before GitHub answered")' 2>/dev/null)
-  [ -n "$gh_api_err" ] || gh_api_err="no verdict: the request failed before GitHub answered"
-  case "$gh_api_err" in "GitHub refused"*) return 2;; *) return 1;; esac
+# The read door is ghcall.sh (gh_api, sourced by startability.sh): three outcomes, never mixed -- 0 = the answer in stdout,
+# 2 = GitHub refused it (its own line in stdout, never an answer), 1 = no verdict. The local wrapper that stood here (#1855)
+# kept the refusal in a variable that a `$(gh_api …)` subshell lost (#847), so every refusal read as an empty message.
+# A rate limit is named once, by ab_rate_limited, and files nothing (#847).
+ab_rate_limit() {   # <refusal text>: 0 when GitHub refused the read for its rate limit (the 403 or 429 body, either form)
+  printf '%s' "$1" | /usr/bin/grep -qiE 'rate limit|HTTP 429|secondary rate'
+}
+ab_rate_limited() {   # the one line a pass prints for a rate-limited read: the UTC reset from gh api rate_limit, or unknown
+  local e reset=""
+  e=$(gh_get rate_limit 2>/dev/null | jq -r '.resources.core.reset // empty' 2>/dev/null)
+  [ -n "$e" ] && reset=$(python3 -c 'import datetime,sys; print(datetime.datetime.fromtimestamp(int(sys.argv[1]), datetime.timezone.utc).strftime("%H:%M UTC"))' "$e" 2>/dev/null)
+  echo "AUTOBUG: rate limited until ${reset:-unknown}; nothing dispatched (UTC reset from gh api rate_limit, or unknown)" >&2
 }
 # ---- The refused write (#145) -------------------------------------------------------------------------------------
 # The card move at the end of this pass ran with `>/dev/null 2>&1`: a write GitHub refused looked like a card that moved,
@@ -144,7 +135,10 @@ gather() {
   local q out rc
   q="repos/$SG_REPO/issues?state=open&${1:+labels=$1&}per_page=100&sort=created&direction=asc"
   out=$(gh_api "$q" -q '.[]|select(.pull_request|not)|select((.title|ascii_downcase|startswith("[duplicate"))|not)|select(.title|test("^(Squad run run-[0-9]{8}-[0-9]{6}-[0-9a-f]+|Run [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} \\([0-9a-f]+\\)( — .*)?)$")|not)|[(.number|tostring),([.labels[].name]|join(","))]|join("\u001f")'); rc=$?
-  if [ "$rc" -ne 0 ]; then echo "AUTOBUG: the ${1} candidate list is not a list: $gh_api_err; nothing dispatched" >&2; return 3; fi
+  if [ "$rc" -ne 0 ]; then
+    if ab_rate_limit "$out"; then ab_rate_limited; return 3; fi
+    echo "AUTOBUG: the ${1:-open issues} candidate list is not readable: $(printf '%s' "$out" | head -c 200 | tr '\n' ' '); nothing dispatched" >&2; return 3
+  fi
   printf '%s\n' "$out"
 }
 # gather_bugs: the bug pass takes an item by the kind the seam answers (issue_state.py --kinds), never by the platform's issue
@@ -169,7 +163,11 @@ refs=" $(sg_work_issues) "
 # blockers and their states, and a bug is a candidate only when stack.sh answers READY. A WAIT is logged when its reason
 # changes, never on every pass (auto/abwait-<n>).
 F=$(mktemp -d); trap 'rm -rf "$F"' EXIT
-gh_aggregate "repos/$SG_REPO/issues?state=open" > "$F/issues.json" || { echo "AUTOBUG: the open issues are not readable for the blocker gate; nothing dispatched" >&2; exit 0; }
+gh_aggregate "repos/$SG_REPO/issues?state=open" > "$F/issues.json"; agg_rc=$?
+if [ "$agg_rc" -ne 0 ]; then
+  if ab_rate_limit "$(cat "$F/issues.json")"; then ab_rate_limited; exit 0; fi   # #847: named once, nothing filed
+  echo "AUTOBUG: the open issues are not readable for the blocker gate; nothing dispatched" >&2; exit 0
+fi
 # A defect in the loop's own machinery is fixed outside the loop (#596, ADR-0146): the pass already holds the open issues,
 # so the stop costs no second read, and it has no marker -- closing the issue resumes dispatch with no other action.
 gh_loop_stop "$F/issues.json" && exit 0
@@ -188,6 +186,18 @@ ready_now() {   # <issue>: 0 when stack.sh answers READY
   w=${out:-WAIT stack.sh gave no answer}
   [ "$(cat "$A/abwait-$n" 2>/dev/null)" = "$w" ] || { echo "AUTOBUG skip #$n: $w"; printf '%s\n' "$w" > "$A/abwait-$n"; }
   return 1
+}
+# ab_check_open <issue>...: sets live to the ones whose own read says open. That read is the check before the claim (#868): the
+# open list was read earlier, and an issue closed since is skipped. A read that fails exits the pass, as before (#556).
+ab_check_open() {
+  local n j rc
+  live=()
+  for n in "$@"; do
+    j=$(sg_issue_body "$n"); rc=$?
+    [ "$rc" -eq 0 ] || { echo "AUTOBUG: dropping candidate #$n: not a readable non-PR issue; nothing dispatched" >&2; exit 0; }
+    [ "$(printf '%s' "$j" | jq -r '.state // ""')" = closed ] && { echo "AUTOBUG skip #$n: its issue is closed, so it is not dispatched"; continue; }
+    printf '%s' "$j" > "$F/body-$n.json"; live+=("$n")
+  done
 }
 # candidates first, then clusters (cluster.py: same area + time window, or a shared file path) -> one child per cluster
 cand=(); cj="["; nb=0
@@ -208,20 +218,20 @@ for sel in "$lab" debt; do
     sg_ac_refused "$n" "$F/issue-$n.json" AUTOBUG && continue   # an acceptance command on a missing script (#729)
     cand+=("$n")
   done <<<"$list"
-  [ "$sel" = "$lab" ] && nb=${#cand[@]}   # the bugs among the candidates; debt is read only when there is none (#616)
+  if [ "$sel" = "$lab" ]; then
+    # The startable bugs this pass leaves without a run (#616), read by the frontier pass: every candidate until the pick is known.
+    nb=${#cand[@]}; echo "$nb" > "$SG_STATE/bugs-waiting"
+    ab_check_open "${cand[@]}"; cand=("${live[@]}")   # a bug closed since the open list is no candidate: it waits for no slot (#868)
+    nb=${#cand[@]}; echo "$nb" > "$SG_STATE/bugs-waiting"   # the live count; debt is considered only when it is 0 (#616)
+  else
+    ab_check_open "${cand[@]}"; cand=("${live[@]}")
+  fi
 done
-# The startable bugs this pass leaves without a run (#616), read by the frontier pass: every candidate until the pick is known.
-echo "${nb:-0}" > "$SG_STATE/bugs-waiting"
 [ ${#cand[@]} -gt 0 ] || exit 0
 # every candidate is a decimal issue number that resolves to a non-PR issue; anything else is dropped and logged. On
 # 2026-10-12 the exit-code fix alone was not enough: one line of rate-limit text reached here and its words became
 # "issues" -- so the check is on the whole cluster, never on the number alone (#1855).
-for n in "${cand[@]}"; do
-  case "$n" in ''|*[!0-9]*) echo "AUTOBUG: dropping candidate '$n': not a decimal issue number" >&2; exit 0;; esac
-  j=$(sg_issue_body "$n"); rc=$?
-  [ "$rc" -eq 0 ] || { echo "AUTOBUG: dropping candidate #$n: ${gh_api_err:-not a readable non-PR issue}; nothing dispatched" >&2; exit 0; }
-  cj+="$j,"
-done
+for n in "${cand[@]}"; do cj+="$(cat "$F/body-$n.json"),"; done   # one read per candidate, made by ab_check_open (#556)
 cj="${cj%,}]"
 # One candidate is already one cluster of one, so the pass spends no Python startup on cluster.py for it (#556).
 if [ ${#cand[@]} -eq 1 ]; then cl=${cand[0]}; else cl=$(python3 "$here/cluster.py" <<<"$cj" 2>/dev/null) || exit 0; fi   # cluster.py itself never answered: no cluster to trust
@@ -252,8 +262,8 @@ name="autobug-$(date +%Y%m%d-%H%M%S)"; body="$SG_STATE/req/$name.body"
 # reads only `disp-*` markers, so a bug- marker is never released by that sweep, but its rule O does read a bug- marker
 # and drops it with the cards when the run ended failed and landed nothing.
 for n in "${pick[@]}"; do echo "$name" > "$A/bug-$n"; done
-{ echo "IMPORTANT: your first and only action is to call the spawn tool for the ${#clusters[@]} child(ren) below, all in one turn; ending the turn without a spawn call fails the run. Spawn each child with $(bash "$(dirname "$0")/envelope-spend.sh"). Repo $SG_REPO. One child per CHILD block: the run cut each child's own worktree and checked out its branch there. en-US everywhere; no Co-Authored-By and no \"Generated with Claude Code\" line."
-  echo "Every child: work where you stand -- the run cut you a worktree of your own and checked out your branch there, so your own working directory is that worktree, and you name no path for it. Commit there. Create no worktree and no branch of your own; push nothing. The loop reads that worktree, enters your commits into the run's wave branch, and lands the wave in $SG_BASE with one push (ADR-0145 rule 9). The commit message carries one \"Refs #N\" line per issue of the block (never Closes). A block with several issues is ONE probable root cause seen as several symptoms: find the shared cause and fix it once, test-side and product-side in the same worktree; if an issue of the block turns out unrelated, say so in the issue status comment and leave it out. Rules: $SG_CODING_RULES."
+{ echo "IMPORTANT: your first and only action is to return the \"spawns\" list in your final output, one entry for each of the ${#clusters[@]} child(ren) below, all in one turn; ending the turn without that list fails the run. No tool call makes a child: the run reads the list. Each child's spend: $(bash "$(dirname "$0")/envelope-spend.sh"). Repo $SG_REPO. One child per CHILD block: the run cut each child's own worktree and checked out its branch there. en-US everywhere; no Co-Authored-By and no \"Generated with Claude Code\" line."
+  echo "Every child: work where you stand -- the run cut you a worktree of your own and checked out your branch there, so your own working directory is that worktree, and you name no path for it. Commit there. Create no worktree and no branch of your own; push nothing. The loop reads that worktree, enters your commits into the run's wave branch, and lands the wave in $SG_BASE with one push (ADR-0145 rule 9). Each commit's message carries exactly one \"Refs #N\" line, for the one issue it fixes, and never Closes: a block of several issues gets one commit per issue (a commit naming several issues closes none of them). A block with several issues is ONE probable root cause seen as several symptoms: find the shared cause and fix it once, test-side and product-side in the same worktree, and the commit for each other issue of the block is empty (git commit --allow-empty) and names only its own issue; if an issue of the block turns out unrelated, say so in the issue status comment and leave it out. Rules: $SG_CODING_RULES."
   pc=${SG_PREPUSH_CMD-bash contrib/squad-goal/scripts/prepush.sh --local}   # (#740) the profile's prepush command, or none
   if sg_profile_resolves && [ -n "$pc" ]; then
     echo "Before you report done, run \"$pc\" in that worktree: it must print nothing."
@@ -268,7 +278,8 @@ for n in "${pick[@]}"; do echo "$name" > "$A/bug-$n"; done
     # The jq program pastes the title and the body (#218); it is the program autofrontier.sh runs. A program that does
     # not parse prints nothing, and the child reads a bare `--- issue #N` line while the request tells it the text below
     # is DATA -- so it fetches the issue a second time to learn what it is fixing. test-autobug.sh runs it through jq.
-    for n in "$@"; do echo "--- issue #$n"; sg_issue_worktree_note "$n"; gh api repos/$SG_REPO/issues/$n -q '"\"" + .title + "\"\n" + (.body // "")'; done
+    for n in "$@"; do echo "--- issue #$n"; sg_issue_worktree_note "$n"; ib=$(gh_api repos/$SG_REPO/issues/$n -q '"\"" + .title + "\"\n" + (.body // "")') && printf '%s\n' "$ib" || echo "(issue #$n: not readable this pass)"
+      python3 "$here/reopen-note.py" "$SG_REPO" "$n" 2>/dev/null; done   # a reopened issue carries the reason it was reopened (#817)
   done
 } > "$body"
 # A refusal must not consume the dispatch (#1529): the markers above are what makes the next pass skip these issues, so a
@@ -280,11 +291,31 @@ if ! req=$("$here/mkreq.sh" "$name" "$body"); then
   exit 0
 fi
 log="$SG_STATE/$name.log"
-(cd "$SG_CHECKOUT" && python3 -c 'import subprocess,sys;subprocess.Popen(["python3",sys.argv[1],sys.argv[2]],stdout=open(sys.argv[3],"w"),stderr=subprocess.STDOUT,start_new_session=True)' "$here/launch.py" "$req" "$log")
+# A refusal must not consume the claim (#852, the same rule as autofrontier.sh, #812): launch.py refuses a start before any run
+# id exists (a coding model out of the router envelope, a target that is no linked worktree). The claim written above then held
+# the issue forever, and its card stayed in Doing with no run behind it. The launch stays detached; only its refusal window is
+# waited on (30 s: a start still waiting for its run folder is no refusal). A refusal frees exactly what this pass claimed, puts
+# the cards back to Todo through the board door, and names the refusal in alerts.log.
+if ! (cd "$SG_CHECKOUT" && python3 -c 'import subprocess,sys
+p=subprocess.Popen(["python3",sys.argv[1],sys.argv[2]],stdout=open(sys.argv[3],"w"),stderr=subprocess.STDOUT,start_new_session=True)
+try: rc=p.wait(timeout=30)
+except subprocess.TimeoutExpired: rc=0
+sys.exit(rc)' "$here/launch.py" "$req" "$log"); then
+  why=$(/usr/bin/grep -m1 -E '^refused' "$log" 2>/dev/null || tail -1 "$log" 2>/dev/null)
+  for n in "${pick[@]}"; do rm -f "$A/bug-$n" "$A/disp-$n"; done
+  refused_cards="$(printf '#%s ' "${pick[@]}")"
+  sg_write BOARD-WRITE-FAILED "$SG_OWNER/$SG_PROJECT ${refused_cards% } -> ${SG_TODO:-Todo}" \
+    "the cards ${refused_cards% } of the refused run this pass requested ($name)" \
+    "contrib/squad-goal/scripts/test-autobug.sh (a refused write opens one bug)" \
+    -- $BOARD --add $SG_OWNER $SG_PROJECT "${SG_TODO:-Todo}" "${pick[@]}"
+  printf '%s AUTOBUG refused: %s launch refused by launch.py (request %s): %s; claim freed, card back to Todo\n' "$(date '+%F %T')" "${refused_cards% }" "$name" "$why" >> "$SG_STATE/alerts.log"
+  echo "AUTOBUG $name refused by launch.py: $why; freed its claim, card back to Todo, next pass retries" >&2
+  exit 0
+fi
 hunt_fix=0; now=$(date +%s)
 for c in "${clusters[@]}"; do set -- $c; p=$1
   for n in "$@"; do echo "$name" > "$A/bug-$n"
-    if [ "$hunt_fix" = 0 ] && gh api "repos/$SG_REPO/issues/$n" 2>/dev/null | grep -qF "Filed by autohunt"; then
+    if [ "$hunt_fix" = 0 ] && gh_api "repos/$SG_REPO/issues/$n" 2>/dev/null | grep -qF "Filed by autohunt"; then
       hunt_fix=1
       echo "$now" > "$A/hunt-last"; echo "$now" > "$A/hunt-activity"
       day=$(date +%F); d=; k=0

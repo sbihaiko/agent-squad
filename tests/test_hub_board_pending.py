@@ -1,8 +1,10 @@
 """The hub draws a proved move at once, marked pending, until the board read agrees (#650).
 
 The board door records each move it proved in `$SG_STATE/board-moves.json`, keyed by the item, with the column it
-set and the instant (#649). The board the hub serves applies that record on top of the list read: a card the list
-read contradicts is drawn in the recorded column and wears a pending mark, and the column counts are taken after the
+set and the instant (#649). The board the hub serves applies that record on top of the list read: a card a list read
+began before the move holds is drawn in the recorded column and wears a pending mark. A move the door proved with a
+dispatch context (`by`: `owner` or `loop`) keeps that mark against a list read that began after the move and holds
+another column. A move with no context stands aside for such a read at once. The column counts are taken after the
 overlay. A move is agreed only by a list read that began in a later whole second than the move and carries the
 recorded column for that item; then the hub drops the entry and the mark goes with no flicker. A read that began
 before or in the move's own second says nothing about it, so the mark stays until a later read agrees. The hub
@@ -256,6 +258,45 @@ def test_a_read_that_began_a_later_whole_second_does_agree(served):
     placed = where(get_board(port), 7)
     assert [p[0] for p in placed] == ["Doing"] and "pd" not in placed[0][1], f"the agreeing read left a mark: {placed}"
     assert "ITEM7" not in recorded(state), "a read that began a later second than the move did not drop it"
+
+
+def test_a_read_that_began_after_the_move_and_holds_another_column_stands_at_once(served):
+    """A move with no dispatch context (no `by`) does not outrank a live read: the read began after the move and holds
+    another column, so the served board shows that column with no mark. The entry stays for a lagging read to agree, until its window."""
+    mod, state, port = served
+    read_at = now() - 10
+    lagging(mod, [card(7, "Backlog")], read_at)
+    record(state, {"ITEM7": {"column": "Todo", "at": at(read_at - 5)}})
+    placed = where(get_board(port), 7)
+    assert [p[0] for p in placed] == ["Backlog"] and "pd" not in placed[0][1], \
+        f"the recorded move outranked the live read for its window: {placed}"
+    assert "ITEM7" in recorded(state), "the entry no read has agreed with yet was dropped before its window"
+
+
+def test_a_loop_move_keeps_its_mark_against_a_read_begun_after_it(served):
+    """A move the loop made carries its dispatch context: a lagging list read that began after the move and holds
+    another column does not outrank it, so the card keeps the recorded column and its pending mark until the window."""
+    mod, state, port = served
+    read_at = now() - 10
+    lagging(mod, [card(7, "Backlog")], read_at)
+    record(state, {"ITEM7": {"column": "Todo", "at": at(read_at - 5), "by": "loop"}})
+    placed = where(get_board(port), 7)
+    assert [p[0] for p in placed] == ["Todo"] and placed[0][1].get("pd") is True, \
+        f"a loop move lost its pending mark to a lagging read: {placed}"
+    assert "ITEM7" in recorded(state), "a loop move no read has agreed with was dropped before its window"
+
+
+def test_an_owner_promote_keeps_its_mark_against_a_read_begun_after_it(served):
+    """The owner's arrow carries its dispatch context too: its move stays drawn as pending against a read that began
+    after the move and holds another column."""
+    mod, state, port = served
+    read_at = now() - 10
+    lagging(mod, [card(7, "Backlog")], read_at)
+    record(state, {"ITEM7": {"column": "Todo", "at": at(read_at - 5), "by": "owner"}})
+    placed = where(get_board(port), 7)
+    assert [p[0] for p in placed] == ["Todo"] and placed[0][1].get("pd") is True, \
+        f"an owner promote lost its pending mark to a lagging read: {placed}"
+    assert "ITEM7" in recorded(state), "an owner promote no read has agreed with was dropped before its window"
 
 
 def test_a_move_the_door_writes_during_the_pass_is_never_lost(served, monkeypatch):
@@ -560,7 +601,7 @@ def test_a_read_that_agrees_settles_an_entry_past_the_window(served):
 
 def test_a_stale_board_cache_never_expires_by_the_wall_clock(served):
     """The window is measured against the instant the list read began, not the wall clock: a cache that stopped
-    updating has not given the move its window of reads, so the mark stays until a read past the window disagrees."""
+    updating has not given the move its window of reads, so the entry is kept and its mark stays."""
     mod, state, port = served
     read_at = now() - 1000   # the last read began long ago and has not been refreshed since
     lagging(mod, [card(7, "Todo")], read_at, completed=read_at + 2)
@@ -625,17 +666,20 @@ def test_a_window_that_is_not_a_number_warns_and_uses_the_default(hub, monkeypat
 
 
 def test_the_window_defaults_to_120_seconds(served):
-    """An entry 100 s old is still pending; one 130 s old has expired, with no setting in the environment."""
+    """An entry 100 s past its read's start is still pending; one 120 s past it has expired, with no setting in the
+    environment. The entries carry the loop's dispatch context, so the mark is what the window governs."""
     mod, state, port = served
     lagging(mod, [card(7, "Todo"), card(8, "Todo")], now() - 10)
-    record(state, {"ITEM7": {"column": "Doing", "at": at(now() - 100)},
-                   "ITEM8": {"column": "Doing", "at": at(now() - 130)}})
+    record(state, {"ITEM7": {"column": "Doing", "at": at(now() - 100), "by": "loop"},
+                   "ITEM8": {"column": "Doing", "at": at(now() - 130), "by": "loop"}})
     board = get_board(port)
     inside, past = where(board, 7), where(board, 8)
     assert [p[0] for p in inside] == ["Doing"] and inside[0][1].get("pd") is True, \
         f"an entry inside the 120 s default window was not drawn as pending: {inside}"
     assert [p[0] for p in past] == ["Todo"] and "pd" not in past[0][1], \
         f"an entry past the 120 s default window did not expire: {past}"
+    assert "ITEM7" in recorded(state), "an entry inside the 120 s default window was dropped"
+    assert "ITEM8" not in recorded(state), "an entry past the 120 s default window was kept"
 
 
 def test_the_window_is_a_setting(served, monkeypatch):
@@ -643,10 +687,11 @@ def test_the_window_is_a_setting(served, monkeypatch):
     mod, state, port = served
     monkeypatch.setenv("SG_PENDING_WINDOW_SECONDS", "60")
     lagging(mod, [card(7, "Todo")], now() - 10)
-    record(state, {"ITEM7": {"column": "Doing", "at": at(now() - 100)}})
+    record(state, {"ITEM7": {"column": "Doing", "at": at(now() - 100), "by": "loop"}})
     placed = where(get_board(port), 7)
     assert [p[0] for p in placed] == ["Todo"], f"the 60 s window did not expire a 100 s old entry: {placed}"
     assert "pd" not in placed[0][1], "the card whose entry expired under the setting still wears the mark"
+    assert "ITEM7" not in recorded(state), "the 60 s window did not drop a 100 s old entry"
 
 
 @pytest.mark.parametrize("off", ["off", "0"])

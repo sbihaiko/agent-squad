@@ -11,6 +11,8 @@
 # auto/branchfix-fp-<key> keeps the findings of the last dispatched round and auto/branchfix-same-<key> the count of failed rounds in
 # a row. At SG_BRANCHFIX_STALLS (default 3) the rounds stop: one status line on the issue and the label frozen:owner, once. Changed
 # findings restart the count. At most SG_FIX_PASS_MAX fix runs (default 3) start per pass. watch.sh runs this under single.sh.
+# A loop defect is fixed outside the loop (ADR-0146, #841): no fix run for a branch whose issue carries `loop-bug` or a `loop-bug:*`
+# label, and none at all while LOOP STOP holds. Each such tip gets one BRANCHFIX SKIP line (auto/branchfix-skip-<key>-<sha9>).
 . "$(dirname "$0")/env.sh" 2>/dev/null || exit 0
 here="$(cd "$(dirname "$0")" && pwd)"
 export SG_GH_PASS=branchfix
@@ -59,6 +61,11 @@ done
 # run. The labels come from the open-issue list sg_work_branches already read, so this costs no call.
 held=" $(printf '%s' "$wb_issues" | jq -r --arg s "${SG_FRONTIER_SKIP_LABELS:-}" '($s|split(",")|map(select(.!=""))) as $k
   | .[] | select([.labels[]?.name] | any(. as $l | $k | index($l))) | .number' 2>/dev/null | tr '\n' ' ') "
+# The loop-bug labels come from the same open-issue list; the LOOP STOP reader (gh_loop_stop, ghcall.sh) reads that list too and
+# logs its line as every pass does. Neither reads GitHub again.
+bugs=" $(printf '%s' "$wb_issues" | jq -r '.[] | select([.labels[]?.name] | any(startswith("loop-bug"))) | .number' 2>/dev/null | tr '\n' ' ') "
+lsf=$(mktemp); printf '%s' "$wb_issues" > "$lsf"; lstop=$(gh_loop_stop "$lsf"); rm -f "$lsf"
+[ -n "$lstop" ] && echo "$lstop"
 # The fingerprint of a review's findings and the failed rounds in a row are revformat.py's reading (ADR-0134), so a
 # child fix round asks the same rule: a moved line or a new sha is not a change.
 done=0
@@ -71,6 +78,12 @@ while read -r sha br i; do
   # a CHANGES with no Blocking finding (debt only) is an approval: no fix round, as the loop's own passes treat it (revformat.py count)
   python3 "$here/revformat.py" --summary "$f" 2>/dev/null | grep -q '^blocking=0 ' && continue
   [ -e "$A/branchfix-$key-$s9" ] && continue
+  why=; case "$bugs" in *" $i "*) why="loop-bug, fixed outside the loop";; esac
+  [ -n "$why" ] || [ -z "$lstop" ] || why="LOOP STOP holds, fixed outside the loop"
+  if [ -n "$why" ]; then   # a skip dispatches nothing and keeps no fix marker: the tip is dispatched when the label or the stop lifts
+    [ -e "$A/branchfix-skip-$key-$s9" ] || { echo "BRANCHFIX SKIP $br: $why"; : > "$A/branchfix-skip-$key-$s9"; }
+    continue
+  fi
   fp=$(python3 "$here/revformat.py" --fingerprint "$f"); same=$(python3 "$here/revformat.py" --stall "$A" branchfix "$key" "$fp")
   if [ "$same" -ge "$cap" ]; then
     [ "$(cat "$A/branchfix-stop-$key" 2>/dev/null)" = "$fp" ] && continue
@@ -81,13 +94,19 @@ while read -r sha br i; do
     echo "BRANCHFIX STOP $br @ $s9 (issue #$i): $same fix rounds with no change; card frozen for the owner"; continue
   fi
   b=$(mktemp)
-  { echo "IMPORTANT: your first and only action is to call the spawn tool for the child below; ending the turn without a spawn call fails the run. Spawn the child with $(bash "$here/envelope-spend.sh" 2>/dev/null)."
+  { echo "IMPORTANT: your first and only action is to return the \"spawns\" list in your final output, one entry for the child below; ending the turn without that list fails the run. No tool call makes a child: the run reads the list. The child's spend: $(bash "$here/envelope-spend.sh" 2>/dev/null)."
     bash "$here/branchfix.sh" "$br" "$i"; } > "$b"
   done=$((done+1))
   if ! req=$(bash "$here/mkreq.sh" "auto-branchfix-$key-$s9" "$b"); then rm -f "$b"; echo "BRANCHFIX $br @ $s9 refused by mkreq.sh; the next pass retries" >&2; continue; fi
   rm -f "$b"
-  run=$(cd "$SG_CHECKOUT" && python3 "$here/launch.py" "$req" 2>/dev/null | tail -1)
-  [ -n "$run" ] || { echo "BRANCHFIX $br @ $s9: launch.py printed no run id, so no fix run started; the next pass retries"; continue; }
+  # A refusal is no dispatch (#812): launch.py exits non-zero when it refuses the start, so the pass says launch.py's own last
+  # line instead of swallowing it, writes no fix marker and lets the next pass retry the tip.
+  lf=$(mktemp)
+  if ! (cd "$SG_CHECKOUT" && python3 "$here/launch.py" "$req") >"$lf" 2>&1; then
+    echo "BRANCHFIX $br @ $s9 refused by launch.py: $(tail -1 "$lf"); the next pass retries" >&2; rm -f "$lf"; continue
+  fi
+  run=$(/usr/bin/grep -E '^run-[A-Za-z0-9._-]+$' "$lf" | tail -1); rm -f "$lf"
+  [ -n "$run" ] || { echo "BRANCHFIX $br @ $s9: launch.py printed no run id, so no fix run started; the next pass retries" >&2; continue; }
   /usr/bin/git -C "$SG_CHECKOUT" checkout -q -- docs/squad/workflows/dynamic.graph.json 2>/dev/null   # launch.py renames the graph root in place
   echo "$run" > "$A/branchfix-$key-$s9"; echo "$br $sha" > "$A/branchfix-push-$run";python3 "$here/revformat.py" --record-stall "$A" branchfix "$key" "$fp" "$same"; rm -f "$A/branchfix-stop-$key"
   find "$A" -maxdepth 1 -name "branchfix-$key-?????????" ! -name "*-$s9" -delete 2>/dev/null

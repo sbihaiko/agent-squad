@@ -3,7 +3,7 @@
 usage: hub.py [port]   default 7700, loopback only. Read-only: it discovers servers via ps/lsof and reads record.jsonl."""
 import datetime as dt, glob, hashlib, html, importlib.util, itertools, json, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, pathlib, urllib.parse, urllib.request
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
-import agyquota, chainhealth, modelreg, provkey   # the chains and the one registry resolve a model (ADR-0147)
+import agyquota, chainhealth, ghread, ghthrottle, modelreg, provkey, session_send, sessions   # the chains and the one registry resolve a model (ADR-0147); ghread is the one GitHub door (ADR-0277)
 from issue_state import board_state, KINDS, TEST_CASE_TITLE, _utc
 import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -48,6 +48,7 @@ PROF = _profile(); REPO, OWNER, PROJECT_NO = PROF["SG_REPO"], PROF["SG_OWNER"], 
 _PROFILE_ENV = {**os.environ, "SG_REPO": REPO, "SG_OWNER": OWNER, "SG_PROJECT": PROJECT_NO}   # the environment the hub was loaded in, kept for the seam
 if not REPO: sys.exit("hub: no SG_REPO (set SG_PROFILE to a profile address.sh knows)")
 CHECKOUT = PROF["SG_CHECKOUT"]
+PROJECTS, FORK_DIR = os.environ.get("SG_PROJECTS", ""), os.environ.get("SG_FORK_DIR", "")   # read once at import: the mux pins them per profile (#859)
 if not CHECKOUT: sys.exit("hub: no SG_CHECKOUT (the profile in force names no checkout)")
 def repos_from(primary, *others):
     """The repositories the board reads, named in ONE place and never guessed: the profile's SG_REPO, plus each
@@ -449,7 +450,7 @@ def run_roots(co):   # where a checkout keeps run folders: its runs/, and each r
 def own_roots():
     """The run roots of this profile: its checkout, SG_PROJECTS and SG_FORK_DIR. A dashboard outside them is another profile's."""
     ds = set(run_roots(CHECKOUT))
-    for x in [*os.environ.get("SG_PROJECTS", "").split(":"), os.environ.get("SG_FORK_DIR", "")]:
+    for x in [*PROJECTS.split(":"), FORK_DIR]:
         if x: ds.update(run_roots(x))
     return ds
 
@@ -1303,6 +1304,26 @@ def _loop_on(pid_file=None):
     except OSError: return False
     return True
 
+LOOP_STAMP = HUBDIR / "loop-stamp.json"   # each on/off change the sampler saw, with the machine's local time of it (#826)
+
+def loop_stamp_next(prev, on, when):
+    """The stamp after one sighting: a state never seen before has no time, and a change takes the time it was seen."""
+    if not prev or "on" not in prev: return {"on": on, "since": None}
+    if bool(prev["on"]) == on: return prev
+    return {"on": on, "since": when}
+
+def loop_seen(on, now=None):
+    now = time.time() if now is None else now
+    prev = _json(LOOP_STAMP)
+    nxt = loop_stamp_next(prev, on, dt.datetime.fromtimestamp(now).astimezone().isoformat(timespec="seconds"))
+    if nxt != prev:
+        tmp = LOOP_STAMP.with_suffix(".tmp"); tmp.write_text(json.dumps(nxt)); os.replace(tmp, LOOP_STAMP)
+    return on
+
+def loop_status():
+    on = _loop_on(); prev = _json(LOOP_STAMP) or {}
+    return {"on": on, "since": prev.get("since") if bool(prev.get("on")) == on else None}
+
 def foot_sources(now=None):
     """One reading of every source the line draws on. A source that is not there reads as `None` for its own fact only,
     so one unreadable file costs one `?` and never the rest of the line."""
@@ -1313,7 +1334,7 @@ def foot_sources(now=None):
     plans = plans_get()   # the hand-entered percentage, for a probe that did not answer: the two things #1839's tokens read
     out["burn"] = burn_cached(now)
     out["cycle"] = _cycle_state(now)
-    out["loop"] = _loop_on()
+    out["loop"] = loop_seen(_loop_on(), now)
     out["subs"] = {k: {"probe": quota_row(k, now), "quota": (plans.get(k) or {}).get("quota")} for k in SUBS}
     return out
 
@@ -1337,6 +1358,16 @@ def load_payload():
             "warn": sustained(hist), "runs": dict(LOAD_STATE.get("runs") or {}),
             "facts": list(LOAD_STATE.get("facts") or []),
             "secs": LOAD_SAMPLE_SECS, "asof": LOAD_STATE.get("asof", 0.0)}
+
+def status_payload():
+    """What the mobile Status tab reads: the facts the hub computes, never a figure the page works out."""
+    items = board_cache.get("items") or []
+    return {"loop": loop_status(),
+            "live": sum(1 for r in run_list() if r.get("live")),
+            "spend_today": stats("day")["totals"]["today"],
+            "open_bugs": sum(1 for i in items if str(i.get("s")).upper() == "OPEN" and "bug" in (i.get("l") or [])),
+            "warnings": [{"text": f["text"], "tip": f.get("tip")} for f in (LOAD_STATE.get("facts") or []) if f.get("bad")],
+            "load": load_payload()}
 
 def load_sampler():
     """The one sampler thread: a failed pass leaves the last reading in place rather than breaking the page."""
@@ -1418,7 +1449,34 @@ def held_folder(name):
 def open_held(name, start=None):
     """The port of a dashboard server for a held run, started when none runs (dashboard_server.start), or None. A held run
     orphaned from active-runs has no server, so the hub starts one when the owner opens it (#689)."""
-    folder = held_folder(name)
+    return _open_run(name, held_folder(name), start)
+
+def ended_folders():
+    """(folder, row) of each run folder whose record ended on the machine's local day, latest end first. A run that ended today
+    wrote its record today, so a record last written before midnight is not read."""
+    today = dt.date.today(); now = time.time(); midnight = dt.datetime.combine(today, dt.time()).timestamp(); out = []
+    for d in sorted(project_dirs()):
+        for rd in d.glob("run-*"):
+            try:
+                if (rd / "record.jsonl").stat().st_mtime < midnight: continue
+            except OSError: continue
+            r = scan(rd / "record.jsonl")
+            if not r or r.get("verdict") is None or not r.get("t1"): continue
+            ended = float(r["t1"])
+            if dt.date.fromtimestamp(ended) != today: continue
+            row, _ = run_row(str(rd), "", [])
+            out.append((str(rd), {**row, "live": False, "running": False, "ended_at": ended, "age": max(0, int(now - ended))}))
+    return sorted(out, key=lambda x: -x[1]["ended_at"])
+
+def ended_today():
+    """The runs that ended on the machine's local day, latest end first, each with its end time."""
+    return [row for _, row in ended_folders()]
+
+def open_ended(name, start=None):
+    """The port of a dashboard server for a run that ended today, or None. dashboard_server.start reuses a server that runs (ADR-0118)."""
+    return _open_run(name, next((folder for folder, row in ended_folders() if row["id"] == name), None), start)
+
+def _open_run(name, folder, start):
     if folder is None: return None
     if start is None: start = _start_dashboard
     try: return int(start(folder))
@@ -1442,7 +1500,7 @@ def run_row(d, port, ps_lines):
     r = scan(p)
     if r is None:
         b = badge_of("starting")
-        return {"id": os.path.basename(d), "port": port, "state": "starting", "badge": b["text"], "tip": b["title"], "label": "run " + os.path.basename(d)[-6:], "issues": [], "age": 0, "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": 0, "spend": 0, "dur": 0, "kind": "code", "live": True, "agents": 0}, None
+        return {"id": os.path.basename(d), "port": port, "state": "starting", "badge": b["text"], "tip": b["title"], "label": "run " + os.path.basename(d)[-6:], "issues": [], "age": 0, "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": 0, "spend": 0, "dur": 0, "kind": "code", "live": True, "running": True, "agents": 0}, None
     age = time.time() - p.stat().st_mtime; st = state_of(r, age)
     try: request = (pathlib.Path(d) / "request.txt").read_text(errors="replace")
     except OSError: request = None
@@ -1454,7 +1512,7 @@ def run_row(d, port, ps_lines):
     if gone: b = gone_badge(b)
     rank = run_rank(st, live=not gone)
     t1 = r["t1"] or time.time()
-    return {"id": os.path.basename(d), "port": port, "state": st, "badge": b["text"], "tip": b["title"], "label": r.get("label"), "issues": r["issues"], "issue_src": r.get("issue_src"), "issue_why": r.get("issue_why"), "age": int(age), "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": rank, "spend": r["spend"], "dur": round((t1 - (r["t0"] or t1)) / 60, 1), "kind": r.get("kind", "code"), "fix": r.get("fix"), "stack": r.get("stack"), "bug": r.get("bug"), "merge": r.get("merge"), "titles": {i: TITLE.get(int(i), "") for i in r["issues"]}, "live": not gone, "agents": 0 if gone else r.get("agents") or 0, "share": r.get("share")}, {"id": os.path.basename(d), "dir": d, "wts": r.get("wts") or []}   # the row, and what the load attribution needs and nothing else
+    return {"id": os.path.basename(d), "port": port, "state": st, "badge": b["text"], "tip": b["title"], "label": r.get("label"), "issues": r["issues"], "issue_src": r.get("issue_src"), "issue_why": r.get("issue_why"), "age": int(age), "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": rank, "spend": r["spend"], "dur": round((t1 - (r["t0"] or t1)) / 60, 1), "kind": r.get("kind", "code"), "fix": r.get("fix"), "stack": r.get("stack"), "bug": r.get("bug"), "merge": r.get("merge"), "titles": {i: TITLE.get(int(i), "") for i in r["issues"]}, "live": not gone, "running": r["verdict"] is None and not gone, "agents": 0 if gone else r.get("agents") or 0, "share": r.get("share")}, {"id": os.path.basename(d), "dir": d, "wts": r.get("wts") or []}   # the row, and what the load attribution needs and nothing else
 
 def runs():
     _titles()
@@ -1492,7 +1550,7 @@ def runs():
         st = handled_of("stalled" if lost else raw, rec); t1 = d.get("t1") or time.time(); b = badge_of(st, rec)
         tip = LOST_NOTE if lost else b["title"]
         if lost: b = {**b, "text": b["text"] + " · lost"}   # the badge carries the note too: the state alone reads as a live stall
-        out.append({"id": f.stem, "port": "", "url": "/test/" + f.stem, "state": st, "badge": b["text"], "tip": tip, "label": "test #" + str(d.get("issue")), "issues": [str(d.get("issue"))], "age": int(age), "project": "test", "rank": run_rank(st, live=not lost), "spend": 0, "dur": round((t1 - d.get("t0", t1)) / 60, 1), "kind": "test", "titles": {str(d.get("issue")): TITLE.get(int(d.get("issue") or 0), "")}, "live": not lost and st in LIVE_STATES, "agents": 0})
+        out.append({"id": f.stem, "port": "", "url": "/test/" + f.stem, "state": st, "badge": b["text"], "tip": tip, "label": "test #" + str(d.get("issue")), "issues": [str(d.get("issue"))], "age": int(age), "project": "test", "rank": run_rank(st, live=not lost), "spend": 0, "dur": round((t1 - d.get("t0", t1)) / 60, 1), "kind": "test", "titles": {str(d.get("issue")): TITLE.get(int(d.get("issue") or 0), "")}, "live": not lost and st in LIVE_STATES, "running": not lost and st in LIVE_STATES, "agents": 0})
     cc = childcc_row()
     if cc: out.append(cc)   # the pass is a worker beside the runs, never one of them: working() and the header count skip its kind
     LOAD_RUNS[:] = load_rows   # the attribution works off the runs the hub just showed, so it never needs a query of its own
@@ -1705,6 +1763,29 @@ def apply_open_blockers(items, nodes):
         if open_ns: i["b"] = open_ns
         else: i.pop("b", None)
     return items
+def apply_parent_specs(items, nodes, complete=True, previous=None):
+    """Attach the spec each ticket belongs to as `pa` (#829): the parent issue's number, when that parent carries the
+    spec label. The relation read carries the parent with the blockers, so the board spends no read per card.
+    A parent that is not a spec is no spec, and its children are ordinary issues that move on their own. A card the read
+    names keeps exactly what that read says. A card a read that is not complete never reached keeps the `pa` the last
+    good pass recorded, and a card with none is marked `pau`: an unread parent is never "no spec parent", so the rule
+    fails closed, never open (ADR-0142)."""
+    by = {n.get("number"): n for n in nodes or [] if isinstance(n, dict)}
+    had = {i.get("n"): i for i in previous or [] if isinstance(i, dict)}
+    for i in items:
+        node = by.get(i.get("n"))
+        if node is None and not complete:
+            kept = (had.get(i.get("n")) or {}).get("pa")
+            if isinstance(kept, int): i["pa"] = kept
+            else: i["pau"] = True   # the parent is unknown, not absent: promotable() refuses it until a read names it
+            continue
+        i.pop("pau", None)
+        parent = (node or {}).get("parent")
+        num = parent.get("number") if isinstance(parent, dict) else None
+        labels = {x.get("name") for x in ((parent.get("labels") or {}).get("nodes") or []) if isinstance(x, dict)} if isinstance(parent, dict) else set()
+        if isinstance(num, int) and _columns_module.SPEC_LABEL in labels: i["pa"] = num
+        else: i.pop("pa", None)
+    return items
 def apply_holders(items):
     """Name on each card the run that holds it, from the seam's one holder read (#241): `h` is {"run", "started"}, and a
     card no run holds carries none. A holder read that fails keeps the holder the last good pass read, never a blank."""
@@ -1738,13 +1819,82 @@ def board_items_jq(repo):
     Issue item counts only when its repository is `repo`; a draft item has no repository."""
     return ('''.[]|select((.content_type=="Issue" and ((.content.repository_url//"")|endswith("/" + $repo))) or .content_type=="DraftIssue")|{n:.content.number,i:.id,t:.content.title,s:.content.state,c:.content.closed_at,st:((.fields[]|select(.name=="Status")|.value.name.raw)//null),k:(((.fields[]?|select(.name=="Kind")|.value.name|if type=="object" then .raw else . end)//"")|ascii_downcase|if .=="" then null else . end),l:[.content.labels[]?.name],si:{total:.content.sub_issues_summary.total,completed:.content.sub_issues_summary.completed},o:.content.created_at}''').replace("$repo", json.dumps(repo))
 
+GH_FLOOR = int(os.environ.get("SG_GH_FLOOR") or 300)   # below this many core requests left, a read pass skips its reads (#855)
+LABELS_EVERY = 3600   # seconds between two reads of the repository's labels, and of its closed pull requests (#855)
+REST_TIMEOUT = 120   # a REST page that stalls is abandoned at this deadline (ADR-0051); the pass keeps the rows it held
+_etags = {}   # route -> (the ETag GitHub answered it with, the answer it carried); a 304 keeps that answer
+_SKIPPING = set()   # the reads whose current floor episode has already been logged (#855)
+def _under_floor(what):
+    """True when the core quota is under SG_GH_FLOOR: the pass is skipped, and one line says so per episode (#855)."""
+    low = ghthrottle.core_below(GH_FLOOR)
+    if low is None:
+        _SKIPPING.discard(what)
+        return False
+    if what not in _SKIPPING:
+        _SKIPPING.add(what)
+        print(f"hub: skipped {what}: core quota {low} is under SG_GH_FLOOR {GH_FLOOR}; the next pass reads again", file=sys.stderr, flush=True)
+    return True
+def _rest_page(route):
+    """One REST page through the door, conditional: the ETag it was answered with rides as If-None-Match, and a 304 keeps
+    the answer that ETag named. A page that does not answer raises, and the caller keeps what it had."""
+    held = _etags.get(route)
+    seen = {}
+    def transport(r):
+        res = (ghread.gh_conditional_transport(r, held[0], timeout=REST_TIMEOUT) if held
+               else ghread.gh_transport(r, timeout=REST_TIMEOUT))
+        m = re.match(r"HTTP/[\d.]+\s+(\d{3})", res.body)
+        seen["status"], seen["etag"] = (int(m.group(1)) if m else None), ghread.headers_of(res.body).get("etag", "")
+        return res
+    out = ghread.read(route, transport)
+    if seen["status"] == 304: return held[1]
+    if not out.is_answer: raise RuntimeError(out.line())
+    answer = out.answer or []
+    if seen["etag"]: _etags[route] = (seen["etag"], answer)
+    return answer
+def gh_list(path, query=""):
+    """Every page of a REST list, 100 to a page (ADR-0277): a page shorter than 100 is the last one."""
+    rows, page = [], 1
+    while True:
+        answer = _rest_page(f"{path}?{query + '&' if query else ''}per_page=100&page={page}")
+        rows += answer
+        if len(answer) < 100: return rows
+        page += 1
+
+# The relations a card's rule reads: its open blockers, and the parent issue with its labels, so the board knows a ticket
+# of a spec without a read per card (#829, #1506). Owner, name and page size are filled in by the read.
+OPEN_RELATIONS_QUERY = ('query($cursor:String){repository(owner:"%s",name:"%s"){issues(first:%d,states:OPEN,after:$cursor)'
+                        '{pageInfo{hasNextPage endCursor}nodes{number blockedBy(first:20){nodes{number state}} '
+                        'parent{number labels(first:20){nodes{name}}}}}}}')
+RELATIONS_PAGE = 100       # the page size the relations read asks for
+RELATIONS_MAX_PAGES = 20   # a read that would need more pages than this is incomplete, never a silent stop
+def open_relations():
+    """Every open issue's blockers and parent, page by page through `gh api graphql` (#829). It returns `(nodes, complete)`:
+    a read that fails, asks for another page without a cursor, or runs past the page cap is incomplete, so a caller never
+    reads the cards it did not reach as issues with no parent."""
+    own, name = REPO.split("/", 1)
+    nodes, after = [], None
+    for _ in range(RELATIONS_MAX_PAGES):
+        argv = ["gh", "api", "graphql", "-f", "query=" + OPEN_RELATIONS_QUERY % (own, name, RELATIONS_PAGE)]
+        if after: argv += ["-f", "cursor=" + after]
+        out = subprocess.run(argv, capture_output=True, text=True, timeout=60).stdout   # a call that fails raises, and the pass keeps the rows it had
+        try: page = (((json.loads(out) or {}).get("data") or {}).get("repository") or {}).get("issues") or {}
+        except (TypeError, ValueError):
+            return nodes, False
+        if not isinstance(page, dict): return nodes, False
+        nodes += [n for n in page.get("nodes") or [] if isinstance(n, dict)]
+        info = page.get("pageInfo") or {}
+        if not info.get("hasNextPage"): return nodes, True
+        after = info.get("endCursor")
+        if not after: return nodes, False   # a page that asks for another and names no cursor is incomplete
+    return nodes, False
 def board_pass(fetch_open=None, fetch_landed=None, repos=None):
-    """One board re-read: Board 4 statuses (REST) + one GraphQL page of Issue.blockedBy + the open work branches and the
+    """One board re-read: Board 4 statuses (REST) + every GraphQL page of Issue.blockedBy and Issue.parent + the open work branches and the
     landing ledger of every repository the hub is told to read (#1820). The 60 s loop runs exactly this.
 
     The two reads are independent: the issues are the profile repository's board, the branch lane spans every configured
     repository. A read that fails keeps the last good rows it already had and says so (the pass's error, or the
     repository's own error on the lane), so a failed pass never writes a fresh empty board (#1772, #1820)."""
+    if _under_floor("board pass"): return board_cache
     items = lc = cases = None
     read_started = time.time()   # when the list read begins: the only stamp the overlay may compare a proved move against
     try:
@@ -1754,20 +1904,25 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
             items = [json.loads(l) for l in out.splitlines() if l.strip()]
             cases = [i["t"] for i in items if i.get("n") is None and i.get("k") == "test case"]   # a test case is a draft item: it has no number, so it is a row and never a card (#306)
             items = [i for i in items if i.get("n") is not None]
-            oi = subprocess.run(["gh", "api", "--paginate", f"repos/{REPO}/issues?state=open&per_page=100", "--jq",
-                '.[]|select(.pull_request==null)|{n:.number,t:.title,s:.state,c:null,st:null,l:[.labels[].name],si:{total:.sub_issues_summary.total,completed:.sub_issues_summary.completed},o:.created_at}'], capture_output=True, text=True, timeout=120).stdout
             have = {i["n"] for i in items}   # open issues that never reached the board have no state either
-            items += [i for i in (json.loads(l) for l in oi.splitlines() if l.strip()) if i["n"] not in have]
-            own, name = REPO.split("/", 1)   # one GraphQL page of open issues; not one REST call per card
-            gq = 'query{repository(owner:"%s",name:"%s"){issues(first:100,states:OPEN){nodes{number blockedBy(first:20){nodes{number state}}}}}}' % (own, name)
-            go = subprocess.run(["gh", "api", "graphql", "-f", "query=" + gq], capture_output=True, text=True, timeout=60).stdout
-            try: apply_open_blockers(items, ((json.loads(go) or {}).get("data") or {}).get("repository", {}).get("issues", {}).get("nodes") or [])
+            for i in gh_list(f"repos/{REPO}/issues", "state=open"):
+                if i.get("pull_request") is None and i["number"] not in have:
+                    s = i.get("sub_issues_summary") or {}
+                    items.append({"n": i["number"], "t": i["title"], "s": i["state"], "c": None, "st": None, "l": [x["name"] for x in i["labels"]],
+                                  "si": {"total": s.get("total"), "completed": s.get("completed")}, "o": i["created_at"]})
+            nodes, complete = open_relations()   # every page of open issues; never one REST call per card
+            try: apply_open_blockers(items, nodes)
             except Exception: pass
-            lo = subprocess.run(["gh", "api", "--paginate", f"repos/{REPO}/labels?per_page=100", "--jq", '.[]|{n:.name,c:.color}'], capture_output=True, text=True, timeout=60).stdout
-            lc = {x["n"]: x["c"].lower() for x in (json.loads(l) for l in lo.splitlines() if l.strip())}
-    except Exception as e: board_cache["err"] = str(e)[:80]   # a failed pass keeps the last good rows on the board (#1810)
+            # The spec a ticket belongs to: a ticket never moves alone (#829). A read that is not complete keeps what the
+            # last good pass recorded, and marks the cards it never reached.
+            try: apply_parent_specs(items, nodes, complete, board_cache.get("items") or [])
+            except Exception: pass
+            if time.time() - board_cache.get("lt", 0) >= LABELS_EVERY:
+                lc = {x["name"]: x["color"].lower() for x in gh_list(f"repos/{REPO}/labels")}
+                board_cache["lt"] = time.time()
+    except Exception as e: board_cache["err"], items = str(e)[:80], None   # a failed pass keeps the last good rows on the board (#1810)
     if items: apply_holders(items)
-    if items: board_cache.update(t=time.time(), rt=int(read_started), items=items, cases=cases or [], lc=lc or board_cache.get("lc", {}), err=None)
+    if items: board_cache.update(t=time.time(), rt=int(read_started), repo=REPO, items=items, cases=cases or [], lc=lc or board_cache.get("lc", {}), err=None)
     rs = REPOS if repos is None else repos
     try:
             prs, landed, errs = prs_pass(fetch_open, fetch_landed, rs)
@@ -2022,6 +2177,28 @@ def open_branches_of(repo):
                      "ps": f"ahead {cmp.get('ahead_by', 0)}", "br": True, "r": repo})
     return rows
 
+def _door_rollup(check):
+    """The live rollup of a pull request from the door's check counts: the words `_live_rollup` gives, or None when unread."""
+    if not check or check.get("state") is None: return None
+    if check.get("failed"): return "fail"
+    if check.get("pending"): return "pending"
+    return "pass" if check.get("total") else "none"
+
+def open_prs_of(repo):
+    """The open pull requests of ONE repository, through the door's open-list read (ADR-0277): one aggregate request. A
+    refusal or a failure raises, so the caller keeps that repository's last good rows instead of an empty lane (#851).
+    A fact the door's read does not return stays None, so the page draws `?` for it and never a passing word."""
+    r = ghread.read(f"repos/{repo}/pulls?state=open&per_page=100")
+    if not r.is_answer: raise RuntimeError(r.line())
+    return [{"n": p["number"], "t": p.get("title") or "", "d": bool(p.get("draft")), "u": "", "o": "",
+             "h": (p.get("head") or {}).get("sha") or "", "base": (p.get("base") or {}).get("ref") or None, "ms": "",
+             "l": [l.get("name") for l in p.get("labels") or []], "by": None, "cl": None, "th": None, "ci": None, "checks": [],
+             "hc": None, "rollup": _door_rollup(p.get("check_rollup")), "r": repo, "facts": False} for p in r.answer]
+
+def open_rows_of(repo):
+    """Every open row of ONE repository: its open work branches and its open pull requests (#851)."""
+    return open_branches_of(repo) + open_prs_of(repo)
+
 def _landed_ledger():
     """The rows `branchland.sh` keeps for each branch it put in the landing branch: epoch, branch, landed sha, issue."""
     try: lines = (STATE / "landed.tsv").read_text().splitlines()
@@ -2045,7 +2222,7 @@ def prs_pass(fetch_open=None, fetch_landed=None, repos=None):
     A repository the hub cannot read adds its error to the returned `errs` and keeps the last good rows of ITS OWN from
     the cache: an unreachable repository is an error on the lane, never a silently empty one, and never a reason to
     drop the rows of the repository that answered. Returns (rows, landed, errs)."""
-    fetch_open = fetch_open or open_branches_of
+    fetch_open = fetch_open or open_rows_of
     fetch_landed = fetch_landed or landed_branches_of
     repos = REPOS if repos is None else repos
     last_prs, last_landed = board_cache.get("prs") or [], board_cache.get("landed") or []
@@ -2270,6 +2447,10 @@ def read_carried(move_at, read_at):
     seconds. The read must have begun in a later second: in the same second nothing tells which came first, so the
     mark stays rather than lose a proved move (a later read drops it)."""
     return move_at is not None and read_at is not None and move_at < read_at
+MOVE_CONTEXTS = ("owner", "loop")   # the dispatch contexts board.py records with a move (`SG_MOVE_BY`)
+def has_context(entry):
+    """Whether the door recorded a dispatch context for the move: a move with none does not outrank a read that began after it (#861)."""
+    return entry.get("by") in MOVE_CONTEXTS
 PENDING_WINDOW_DEFAULT = 120.0   # seconds a proved move may stand with no list read agreeing (#651)
 PENDING_WARNED = set()           # bad window values already named on stderr, so a page reload never repeats the line
 def pending_window():
@@ -2291,13 +2472,18 @@ def overlay_on():
     """Whether the served board applies the door's record (`SG_PENDING_OVERLAY`, on by default). `off`, `0`, `false`
     or `no` serves the list read alone, so a suspected overlay defect is ruled out without a code change (#651)."""
     return (os.environ.get("SG_PENDING_OVERLAY") or "").strip().lower() not in ("0", "off", "false", "no")
-def report_expired(n, item, recorded, read, window):
+def report_expired(n, item, recorded, read, window, context):
     """One line in the loop's log (`$SG_STATE/cycle.log`) for an entry that outlived its window with no list read
-    agreeing (#651): the item, the column the door recorded and the column the read holds. It is called only for an
+    agreeing (#651): the item, the column the door recorded and the column the read holds. A move with a dispatch context
+    was drawn pending for the window; one without was drawn at the read's column at once (#861). It is called only for an
     entry the drop really removed, so the report is idempotent without process memory: the retry that succeeds reports
     once, and every later serve finds no entry to report."""
-    line = (f"{time.strftime('%T')} hub PENDING-EXPIRED #{n} (item {item}): the door recorded {recorded}, "
-            f"the board read holds {read}; no read agreed within {window:g} s, so the entry was dropped")
+    if context:
+        line = (f"{time.strftime('%T')} hub PENDING-EXPIRED #{n} (item {item}): the door recorded {recorded}, "
+                f"the board read holds {read}; no read agreed within {window:g} s, so the entry was dropped")
+    else:
+        line = (f"{time.strftime('%T')} hub PENDING-EXPIRED #{n} (item {item}): the door recorded {recorded} with no dispatch "
+                f"context, so the board drew the read's {read} at once; no read agreed within {window:g} s, so the entry was dropped")
     try:
         with (STATE / "cycle.log").open("a") as f: f.write(line + "\n")
     except OSError:
@@ -2356,42 +2542,59 @@ def flow_charts():
     }
 
 
+def drawn_column(i, moves, read_at, window):
+    """The column the served board draws for one row, the freeze that column carries, and what the serve acts on:
+    `read` (no entry names a column this board ships, or the read's column stands), `agree` (the read began after the
+    move and carries its column), `expired` (the window passed with no read agreeing) or `pending` (the move is drawn at
+    once and wears the mark). The board and the promote route ask this one function, so a card is promotable by the
+    column both of them draw, never by two different columns (#829, ADR-0144)."""
+    closed = str(i["s"]).lower() == "closed"   # the row's own closedness: the freeze below is the card's, not the read's
+    st, fz = _columns_module.view_column(i["st"], closed, i.get("l"))   # the column the table names, and the freeze over it
+    entry = moves.get(str(i["i"])) if i.get("i") else None   # the door keys an entry by the Project item id
+    if not (isinstance(entry, dict) and entry.get("column")):
+        return {"st": st, "fz": fz, "state": "read", "recorded": None, "entry": None}
+    recorded = _columns_module.SHIPPED_NAME.get(entry["column"], entry["column"])   # an old Status name reads as its shipped column
+    if recorded not in ORDER:   # no column this board ships: the entry is never drawn, and the read says nothing about it, so the hub leaves it (never writes the record for it)
+        return {"st": st, "fz": fz, "state": "read", "recorded": recorded, "entry": entry}
+    at = move_time(entry)   # the instant the door proved the move, in whole epoch seconds
+    if recorded == st and read_carried(at, read_at):   # the read began after the move and carries its column: the entry's work is done, however old it is
+        return {"st": st, "fz": fz, "state": "agree", "recorded": recorded, "entry": entry}
+    if at is not None and read_at is not None and read_at - at >= window:
+        # The move is past its window at the read's own instant with no agreement: the read's column stands and the entry
+        # is dropped. The window is the read's clock, never the wall clock, so a cache that stopped updating never expires
+        # a move no read has had a window to agree with (#651).
+        return {"st": st, "fz": fz, "state": "expired", "recorded": recorded, "entry": entry}
+    if read_carried(at, read_at) and not has_context(entry):
+        return {"st": st, "fz": fz, "state": "read", "recorded": recorded, "entry": entry}   # a move with no dispatch context stands aside for a read that began after it
+    # Draw the move at once and keep the mark until a read that began after it agrees (#650). A move with a dispatch
+    # context keeps the mark through a contradicting read too, for the whole window. A column that matches by coincidence is no proof.
+    return {"st": recorded, "fz": _columns_module.view_column(recorded, closed, i.get("l"))[1], "state": "pending",
+            "recorded": recorded, "entry": entry}
+
+
 def board():
     overlay = overlay_on()   # one setting turns the overlay off: the served board is then the list read alone (#651)
     moves = read_moves() if overlay else {}   # the record is read on every serve, so a page reload sees the same overlay (#650)
     read_at = board_cache.get("rt")   # the instant the list read began, never the completion stamp `t`: a read that began before a move cannot have carried it, however late it finished
     window = pending_window()   # an entry older than the window expires even with no read agreeing (#651)
-    agreed, expired = set(), {}   # expired: item id -> (card number, the recorded column, the column the read holds)
+    agreed, expired = set(), {}   # expired: item id -> (card number, the recorded column, the column the read holds, the move's dispatch context)
     by = {}
     for i in board_cache["items"]:
-        closed = str(i["s"]).lower() == "closed"   # the row's own closedness: the freeze below is the card's, not the read's
-        st, fz = _columns_module.view_column(i["st"], closed, i.get("l"))   # the column the table names, and the freeze over it
-        pending = False
-        entry = moves.get(str(i["i"])) if i.get("i") else None   # the door keys an entry by the Project item id
-        if isinstance(entry, dict) and entry.get("column"):
-            recorded = _columns_module.SHIPPED_NAME.get(entry["column"], entry["column"])   # an old Status name reads as its shipped column
-            at = move_time(entry)   # the instant the door proved the move, in whole epoch seconds
-            if recorded not in ORDER:
-                pass   # no column this board ships: the entry is never drawn, and the read says nothing about it, so the hub leaves it (never writes the record for it)
-            elif recorded == st and read_carried(at, read_at):   # the read began after the move and carries its column: the entry's work is done, however old it is
-                agreed.add(str(i["i"]))
-            elif at is not None and read_at is not None and read_at - at >= window:
-                # The move is past its window at the read's own instant with no agreement: the read's column stands and
-                # the entry is dropped. The window is the read's clock, never the wall clock, so a cache that stopped
-                # updating never expires a move no read has had a window to agree with (#651).
-                expired[str(i["i"])] = (i["n"], recorded, st)
-            else:
-                # The read began in or before the move's second, or contradicts it: draw the move at once and keep the
-                # entry until a read that began after the move agrees (#650). A column that matches by coincidence is no proof.
-                st, pending = recorded, True
-                fz = _columns_module.view_column(recorded, closed, i.get("l"))[1]   # the freeze of the column drawn, over the row's own closedness, never the read's
+        d = drawn_column(i, moves, read_at, window)   # the one overlay rule the promote route asks too (#829)
+        st, fz = d["st"], d["fz"]
+        if d["state"] == "agree": agreed.add(str(i["i"]))
+        elif d["state"] == "expired": expired[str(i["i"])] = (i["n"], d["recorded"], st, has_context(d["entry"]))
         row = {"n": i["n"], "t": i["t"], "c": i.get("c"), "l": i.get("l") or []}
-        if pending: row["pd"] = True   # the mark the page draws; the rule lives here, never in the view (ADR-0137)
+        if d["state"] == "pending": row["pd"] = True   # the mark the page draws; the rule lives here, never in the view (ADR-0137)
         if fz: row["fz"] = fz
         if _columns_module.SPEC_LABEL in row["l"]: row["sp"] = True   # a spec is an issue with the spec label: the Specs filter reads this
-        # The owner's one move (#560): a card in Backlog shows the arrow that starts it, and a spec card never does
-        # (ADR-0142). The rule lives here, not in the page: the card renders the fact its row carries (ADR-0137).
-        if st == COLUMN["unscheduled"] and not row.get("sp") and str(i["s"]).lower() != "closed": row["pm"] = True
+        # The owner's one move (#560): a card the rule marks promotable carries the arrow that starts it, a spec included:
+        # the owner's move starts the spec and its open Backlog tickets follow (ADR-0142 section 6, #838). The rule lives
+        # here, not in the page: the card renders the fact its row carries (ADR-0137). `pmt` names the column the move
+        # goes to, so the page that drags the card (#829) holds no column list of its own.
+        if promotable({**i, "st": st}):   # the column the board draws, which a proved move's overlay may have changed
+            row["pm"] = True
+            row["pmt"] = PROMOTE_TO
         if i.get("b"): row["b"] = i["b"]
         sc = task_count(i)                       # the card's own count, a value: the page renders it and holds no rule
         if sc: row["sc"] = sc
@@ -2419,43 +2622,134 @@ def board():
     # The lane carries the pull requests only (#440): a work branch has no lane and no other view. Each row names its own
     # kind, so the page reads a pull request by the row, never by the lane's name. An empty lane is still served, `n` 0.
     open_prs = [p for p in prs if p["kind"] == _columns_module.PR_KIND]
-    lane = {"name": COLUMN["pr_open"], "tracking": True, "n": len(open_prs), "err": perr or None,
+    # A count of one or more is a true lower bound even when a repository failed; a zero is a claim about every repository,
+    # so beside a failed read it is `?`, the word the strip uses for a fact not read, never a count (#851).
+    count = "?" if not open_prs and perr else len(open_prs)
+    lane = {"name": COLUMN["pr_open"], "tracking": True, "n": count, "err": perr or None,
             "items": [{"n": p["n"], "t": p["t"], "u": p["u"], "ps": p["ps"], "gs": p.get("gs"), "pb": p.get("pb"),
                        "rollup": p.get("rollup"), "ci": p.get("ci"), "o": p.get("o"), "by": p.get("by"), "cl": p.get("cl"),
                        "r": p.get("r") or REPO, "rt": repo_tag(p.get("r") or REPO), "kind": p["kind"]} for p in open_prs]}
     if agreed or expired:
         dropped = drop_moves(agreed | set(expired))   # agreement settles an entry; the window settles one no read ever agreed with (#651)
-        for item, (n, recorded, read) in expired.items():
-            if dropped and item in dropped: report_expired(n, item, recorded, read, window)   # only a drop that really happened is reported, so a retry never repeats a line
+        for item, (n, recorded, read, context) in expired.items():
+            if dropped and item in dropped: report_expired(n, item, recorded, read, window, context)   # only a drop that really happened is reported, so a retry never repeats a line
     return {"t": board_cache["t"], "err": board_cache["err"], "prs": lane, "groups": groups, "cases": cases, "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {}), "flow": flow_charts()}
 
 PROMOTE_TO = COLUMN["issue_todo"]   # the column the arrow moves a card into: the owner's go signal (ADR-0142)
-def promote_write(issue):
-    """The one writer call of the owner's move: `<owner> <project> Todo <n>`, the shape reconcile.py writes, so the
-    board seam (`board.sh`) is the only reach of the carrier. The call carries the state directory this hub resolved:
-    hubctl starts the hub with no SG_STATE, and board.py reads the key to find its caches (#1750)."""
-    env = {**os.environ, "SG_STATE": str(STATE)}
-    return subprocess.run(["bash", str(pathlib.Path(__file__).resolve().parent / "board.sh"), OWNER, str(PROJECT_NO), PROMOTE_TO, str(issue)], capture_output=True, text=True, timeout=120, env=env)
+def promotable(item):
+    """The one rule of the owner's move (#560, #829): a card is promotable when it is open, the board holds it in Backlog,
+    and it is a spec or an issue that no spec holds. A ticket of a spec moves with its spec, never alone (ADR-0142). The
+    board route serves this rule as the row's `pm` and `pmt`, and the promote route asks the same function before any
+    write, so a card the board marks not promotable is refused by the route that would move it (ADR-0137, #829).
+    `pa` is the parent spec the board read recorded on the row; `pau` marks a card whose parent the read never reached,
+    and no read has named it since: an unknown parent is never read as no spec parent, so the rule fails closed."""
+    if not isinstance(item, dict): return False
+    if str(item.get("s") or "").lower() == "closed": return False
+    if _columns_module.view_column(item.get("st"), False, item.get("l"))[0] != COLUMN["unscheduled"]: return False
+    if _columns_module.SPEC_LABEL in (item.get("l") or []): return True
+    if item.get("pa"): return False
+    return not item.get("pau")
+def promote_write(issues, add=False):
+    """The one writer call of the owner's move: `<owner> <project> Todo <n>...`, the shape reconcile.py writes, so the
+    board seam (`board.sh`) is the only reach of the carrier. `issues` is one number or a list: a spec and its tickets
+    move in one call (#838). `add` asks the same door for `--add` first, for a card the board holds no item of: the row
+    came from the open-issue read (#815). The call carries the state directory this hub resolved: hubctl starts the hub
+    with no SG_STATE, and board.py reads the key to find its caches (#1750)."""
+    nums = issues if isinstance(issues, list) else [issues]
+    env = {**os.environ, "SG_STATE": str(STATE), "SG_MOVE_BY": "owner"}   # the owner's arrow names its dispatch context (#861)
+    argv = ["bash", str(pathlib.Path(__file__).resolve().parent / "board.sh")]
+    if add: argv.append("--add")
+    # board.py settles each card it moves (SG_BOARD_SETTLE_SECONDS per card), so the budget is the base plus one settle for
+    # every card after the first (#838). A timeout may leave some of the cards moved; promote() says so.
+    timeout = PROMOTE_TIMEOUT_BASE + _settle_seconds() * max(0, len(nums) - 1)
+    return subprocess.run(argv + [OWNER, str(PROJECT_NO), PROMOTE_TO, *map(str, nums)], capture_output=True, text=True, timeout=timeout, env=env)
+PROMOTE_TIMEOUT_BASE = 120.0   # seconds the writer gets for one card before any settle budget (#838)
+def _settle_seconds():
+    """SG_BOARD_SETTLE_SECONDS, the settle budget board.py gives each card (default 60), read as the writer reads it."""
+    try: return max(0.0, float(os.environ.get("SG_BOARD_SETTLE_SECONDS", "60")))
+    except ValueError: return 60.0
+SUB_ISSUES_PAGE = 100          # the page size the sub-issue read asks for
+SUB_ISSUES_MAX_PAGES = 20      # a spec with more sub-issues than this is refused, never half-moved (#838)
+# The labels the janitor's rule holds a child out of the column flow for (janitor.py, #589): an owner decision, or a closure.
+# A spec's move never puts such a ticket in Todo, where a dispatcher would take it as work (ADR-0142 sections 2 and 6).
+TICKET_HOLD_LABELS = ("needs-owner", "needs-ratification", "wontfix")
+def _repo_of(url, fallback):
+    """The lower-case owner/name a REST `repository_url` names (`https://api.github.com/repos/<owner>/<name>`), or the
+    fallback when the answer names none."""
+    tail = str(url or "").rsplit("/repos/", 1)
+    return (tail[1].strip("/") if len(tail) == 2 else fallback).lower()
+def sub_issues(issue, repo):
+    """Every sub-issue of one issue, page by page through ghread (#838): a page that comes back full asks for the next
+    one. A refusal or a failure on any page answers its reason and no list, so a half-read spec never moves."""
+    subs = []
+    for page in range(1, SUB_ISSUES_MAX_PAGES + 1):
+        r = ghread.read(f"repos/{repo}/issues/{issue}/sub_issues?per_page={SUB_ISSUES_PAGE}&page={page}")
+        if not r.is_answer: return None, r.line()[:300]
+        if not isinstance(r.answer, list): return None, "sub-issues: the read did not answer a list"
+        subs += r.answer
+        if len(r.answer) < SUB_ISSUES_PAGE: return subs, None
+    return None, f"sub-issues: more than {SUB_ISSUES_MAX_PAGES * SUB_ISSUES_PAGE} answered: nothing moved"
+def spec_tickets(issue, item):
+    """The tickets a spec moves with (ADR-0142, #838): its open sub-issues that the board cache holds in Backlog, in this
+    repository. The sub-issue list is read through ghread, so a refusal or a failure is named and never read as "no ticket":
+    it answers `(tickets, None)` or `(None, reason)`. A closed ticket, a ticket in another column, a ticket that is itself a
+    spec, and a ticket the owner holds (TICKET_HOLD_LABELS) keep their column (ADR-0143, ADR-0142). A sub-issue of another
+    repository is never a card of this board, even when its number is one (write-side: board.sh is bound to SG_REPO)."""
+    closed = lambda v: str(v or "").lower() == "closed"
+    repo = item.get("r") or REPO
+    try: subs, err = sub_issues(issue, repo)
+    except Exception as e: return None, f"sub-issues: {str(e)[:200] or 'the read did not answer'}"
+    if err: return None, err
+    cards = {((i.get("r") or REPO).lower(), i.get("n")): i for i in board_cache.get("items") or []}
+    tickets = []
+    for sub in subs:
+        if not isinstance(sub, dict): continue
+        c = cards.get((repo.lower(), sub.get("number")))
+        if c is None or _repo_of(sub.get("repository_url"), repo) != repo.lower(): continue
+        if closed(sub.get("state")) or closed(c.get("s")): continue
+        labels = {*(c.get("l") or []), *(x.get("name") for x in sub.get("labels") or [] if isinstance(x, dict))}
+        if _columns_module.SPEC_LABEL in labels or labels & set(TICKET_HOLD_LABELS): continue
+        if _columns_module.view_column(c.get("st"), False, c.get("l"))[0] != COLUMN["unscheduled"]: continue
+        tickets.append(c)
+    return tickets, None
 def promote(issue):
     """Move one open card from Backlog to Todo through the board seam (#560). Only a card the hub holds in Backlog now
-    is accepted: a closed issue keeps its column (ADR-0143), a spec is never work (ADR-0142), and a card already in
-    Todo sends no write (ADR-0144). A proven write updates the cache, so the card moves at the next refresh without a
-    GitHub read right after the write."""
+    is accepted: a closed issue keeps its column (ADR-0143), and a card already in Todo sends no write (ADR-0144). A card
+    the board marks not promotable is refused (#829): a ticket of a spec moves with its spec, never alone (ADR-0142). A spec
+    moves with its open Backlog tickets in one write (ADR-0142, #838): the owner's move starts the spec and its tickets
+    follow. A spec with no ticket moves alone, and a failed ticket read moves nothing. A row the board read never carried
+    is an open issue with no Project item, and the seam is asked for `--add` there: a plain move answers it "not on the
+    board" and writes nothing (#815). A proven write updates the cache, so the cards move at the next refresh without a
+    GitHub read right after the write. The answer names every card the write moved."""
     if isinstance(issue, bool) or not isinstance(issue, int) or issue <= 0: return {"err": "issue: a number"}
     item = next((i for i in board_cache.get("items") or [] if i.get("n") == issue), None)
     if item is None: return {"err": "not on the board"}
     if str(item.get("s") or "").lower() == "closed": return {"err": "the issue is closed: a closed card keeps its column"}
-    col, _ = _columns_module.view_column(item.get("st"), False, item.get("l"))
+    # The column the board draws, a proved move's overlay included: the same function the board route asks, so the rule
+    # reads one column in both routes and a card drawn as moved is never written again (#829).
+    st = drawn_column(item, read_moves() if overlay_on() else {}, board_cache.get("rt"), pending_window())["st"]
+    col, _ = _columns_module.view_column(st, False, item.get("l"))
     if col != COLUMN["unscheduled"]: return {"err": f"the card is in {col}, not {COLUMN['unscheduled']}: only a Backlog card moves"}
-    if _columns_module.SPEC_LABEL in (item.get("l") or []): return {"err": "a spec is never work: its tickets are (ADR-0142)"}
-    try: r = promote_write(issue)
+    if not promotable({**item, "st": st}): return {"err": "the card is a ticket of a spec: it moves with its spec, never alone (ADR-0142)"}
+    tickets = []
+    if _columns_module.SPEC_LABEL in (item.get("l") or []):
+        tickets, err = spec_tickets(issue, item)
+        if err: return {"err": err}
+    cards = [item, *tickets]
+    try: r = promote_write([c["n"] for c in cards], add=any(not c.get("i") for c in cards))   # no item id: the row came from the open-issue read (#815)
+    except subprocess.TimeoutExpired as e:
+        # board.py may have moved some of the cards before the writer ran out of time. The cache is not written over a move
+        # it cannot prove; the board-dirty flag asks the next pass to read the columns as they now stand (#838).
+        try: (STATE / "board-dirty").touch()
+        except OSError: pass
+        return {"err": f"the writer did not answer in {int(e.timeout)} s: the move may be partial, and the board is read again"}
     except Exception as e: return {"err": str(e)[:200] or "the writer did not answer"}
     if r.returncode:
         lines = (r.stderr or r.stdout or f"exit {r.returncode}").strip().splitlines()
         return {"err": (next((l for l in lines if l.startswith("#")), lines[0] if lines else "") or "the writer refused")[:300]}
-    item["st"] = PROMOTE_TO   # the cache follows the write, so the next refresh shows the move without a GitHub read after it
+    for c in cards: c["st"] = PROMOTE_TO   # the cache follows the write, so the next refresh shows the move without a GitHub read after it
     save_board()
-    return {"ok": True, "issue": issue, "to": PROMOTE_TO}
+    return {"ok": True, "issue": issue, "to": PROMOTE_TO, "moved": [c["n"] for c in cards]}
 
 _issue_cache = {}
 def gh_json(path, timeout=30):
@@ -2492,18 +2786,18 @@ def issue_detail(n, repo=None):
 PRS = HUBDIR / "hub-prs.json"
 try: prs_cache = json.loads(PRS.read_text())     # last good PR data survives a restart
 except Exception: prs_cache = {"t": 0, "rows": [], "err": None}
+def refresh_closed_prs():
+    if time.time() - prs_cache.get("read", 0) < LABELS_EVERY or _under_floor("closed pull request read"): return
+    f = lambda s: dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
+    rows = [{"n": p["number"], "merged": p["merged_at"], "min": round((f(p["merged_at"]) - f(p["created_at"])).total_seconds() / 60, 1)}
+            for p in gh_list(f"repos/{REPO}/pulls", "state=closed&sort=updated&direction=desc") if p.get("merged_at") and p["number"] >= 1115]
+    prs_cache["read"] = time.time()
+    if rows:
+        prs_cache.update(t=time.time(), rows=sorted(rows, key=lambda r: r["merged"]), err=None)
+        _tmp = _temp_name(PRS); _tmp.write_text(json.dumps(prs_cache)); os.replace(_tmp, PRS)
 def refresh_prs():
     while True:
-        try:
-            out = subprocess.run(["gh", "api", "--paginate", f"repos/{REPO}/pulls?state=closed&per_page=100&sort=updated&direction=desc", "--jq", ".[]|select(.merged_at!=null)|{n:.number,c:.created_at,m:.merged_at}"], capture_output=True, text=True, timeout=120).stdout
-            rows = []
-            for l in out.splitlines():
-                p = json.loads(l)
-                if p["n"] < 1115: continue
-                f = lambda s: dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
-                rows.append({"n": p["n"], "merged": p["m"], "min": round((f(p["m"]) - f(p["c"])).total_seconds() / 60, 1)})
-            if rows: prs_cache.update(t=time.time(), rows=sorted(rows, key=lambda r: r["merged"]), err=None)
-            if rows: PRS.write_text(json.dumps(prs_cache))
+        try: refresh_closed_prs()
         except Exception as e: prs_cache["err"] = str(e)[:80]
         time.sleep(600)
 
@@ -2545,6 +2839,7 @@ RUN_STATES = [
 ]
 
 PAGE = r"""<!doctype html><meta charset=utf-8><title>Hub</title>
+<script>if(matchMedia("(max-width: 600px)").matches&&sessionStorage.getItem("squad-view")!=="desktop")location.replace(location.pathname.replace(/\/?$/,"/")+"mobile")</script>
 <style>
 :root{--bg:#0f1115;--panel:#161a21;--line:#2a303b;--fg:#d8dde6;--mute:#8a93a3;--ok:#3ecf8e;--warn:#f5b041;--err:#ff6b6b;--run:#2dd4bf;--none:#b79cf6;--wait:#e8d44d;--pin:#5aa9ff}
 :root{--col-w:185px}   /* the docked strip's column geometry: the one place its width is set (#1791); a column holding no cards is not drawn at all, so it reserves none (#1809) */
@@ -2731,6 +3026,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 #who{padding:3px 12px;color:var(--mute);border-bottom:1px solid var(--line)}#who:empty{display:none}
 </style>
 <div id=who>__WHO__</div>
+<a id=mobile-link href="#" style="margin:0 12px;color:#8a93a3;font-size:12px">mobile view</a><script>document.getElementById("mobile-link").href=location.pathname.replace(/\/?$/,"/")+"mobile"</script>
 <div id=win>
 <div id=side>
 <details id=plans class=sp><summary>subscriptions<span class=sr id=plsr></span></summary><div class=sb><div id=subs></div></div></details>
@@ -3199,7 +3495,7 @@ const sel=bo.labels=bo.labels||[],LB=[...new Set([...(b.labels||[]),...sel])].so
 if(lfl.dataset.k!==LB.join("\n")){lfl.dataset.k=LB.join("\n");lfl.innerHTML=`<div class=lft><span><button data-lm=any title="OR inside a group (same prefix, like wave:*; labels without a prefix form one group), AND across groups">by group</button> <button data-lm=all title="a card with every selected label">all</button></span><button data-lc=1>clear</button></div>`+LB.map(l=>`<label><input type=checkbox value="${esc(l)}">${esc(l)}</label>`).join("")}
 lfl.querySelectorAll("input").forEach(c=>c.checked=sel.includes(c.value));lfl.querySelectorAll("[data-lm]").forEach(x=>x.classList.toggle("on",(bo.lmode||"any")===x.dataset.lm));
 lf.classList.toggle("set",sel.length>0);lf.querySelector("summary").textContent=sel.length?(bo.lmode==="all"&&sel.length>1?"all of: ":"")+(bo.lmode==="all"?sel.join(", "):Object.values(fam(sel)).map(g=>g.length>1?"("+g.join(" | ")+")":g[0]).join(" & ")):"labels";
-const lok=x=>!sel.length||(bo.lmode==="all"?sel.every(l=>(x.l||[]).includes(l)):Object.values(fam(sel)).every(g=>g.some(l=>(x.l||[]).includes(l))));
+const lok=x=>labelOk(sel,bo.lmode,x);
 const hid=new Set(bo.hidden||[]),bottom=bo.dock==="bottom",eye=(g,off=hid.has(g.name))=>`<span class=eye data-eye="${esc(g.name)}" title="${off?"show":"hide"} this column"><svg viewBox="0 0 24 24" width=14 height=14 fill=none stroke=currentColor stroke-width=2 stroke-linecap=round stroke-linejoin=round><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx=12 cy=12 r=3 />${off?'<path d="M3 3l18 18"/>':""}</svg></span>`;
 const LC=b.lc||{},rgb=h=>[0,2,4].map(i=>parseInt(h.slice(i,i+2),16)),mix=(a,t)=>a.map((v,i)=>Math.round(v*t+[28,34,44][i]*(1-t))),   // label color blended into the card's #1c222c
 tint=x=>{const cs=(x.l||[]).map(l=>LC[l]).filter(c=>/^[0-9a-f]{6}$/.test(c||"")).map(rgb);if(!cs.length)return"";const avg=[0,1,2].map(i=>cs.reduce((s,c)=>s+c[i],0)/cs.length);return`;--bg:rgb(${mix(avg,.10)});--bgh:rgb(${mix(avg,.16)})`},
@@ -3209,7 +3505,7 @@ const ageC=o=>{const h=(Date.now()-Date.parse(o))/3600000;return h>=24?"old":h>=
 setInterval(()=>document.querySelectorAll("#bbody .age").forEach(e=>{e.textContent=age(e.dataset.o);e.className="age "+ageC(e.dataset.o)}),30000);
 const gcls=c=>c.v==="?"?"unk":c.v==="debt"?"debt":c.v.startsWith("OK")?"ok":(c.v.startsWith("CHG")||c.v.startsWith("BLK"))?"bad":"";
 const gstrip=s=>`<div class="gstrip${s.old?" old":""}" title="${esc(s.old?`these facts are ${s.age} s old: the strip greys out past 180 s, so nothing here is being claimed as fresh`:"R review · C CI · T threads · B base · H labels and holds")}">`+s.cells.map(c=>`<span class="gc ${gcls(c)}" title="${esc(c.tip||"")}">${c.k}<b>${esc(c.v)}</b></span>`).join("")+`</div>`;
-const cards=(g,it,shown)=>shown.map(x=>{const pr=x.kind==="pr";return `<div class=it data-n="${x.n}" data-r="${esc(x.r||"__REPO__")}"${pr?" data-pr":""} style="--cc:${colOf(g.name,CN)}${tint(x)}"><a class=id target=_blank href="https://github.com/${esc(x.r||"__REPO__")}/${pr?"pull":"issues"}/${x.n}">${pr?"PR ":""}#${x.n}</a>${x.rt?`<span class=rpo title="the repository this card belongs to: ${esc(x.r)}">${esc(x.rt)}</span>`:""}${x.pb?`<span class="pbg ${x.pb.replace(" ","-")}">${esc(x.pb)}</span>`:""}${x.rollup?`<span class="cir ${esc(x.rollup)}" title="CI states on the head${(x.ci||[]).length?": "+esc((x.ci||[]).join(", ")):""}">CI ${esc(x.rollup)}</span>`:""}${x.fz?`<span class=fz title="a freeze is a marker, never a move: the card keeps its column">${esc(x.fz)}</span>`:""}${x.pd?`<span class=pnd title="pending: the board door proved this move and the board read has not carried it yet">pending</span>`:""}${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(x.t)}</span>${x.pm&&!pr?`<button class=pmp data-n="${x.n}" title="move this card to Todo: the owner's go signal (ADR-0142)">→ Todo</button>`:""}${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.ho?`<div class=hld>${esc(x.ho)}</div>`:""}${(x.cl||[]).length?`<div class=clos title="the issues this pull request closes">closes ${x.cl.map(n=>`<a target=_blank rel=noopener href="https://github.com/${esc(x.r||"__REPO__")}/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${(x.o||x.sc||x.by)?`<div class=ft>${x.sc?`<span class=tsk title="sub-issues closed / total: ${esc(x.sc)}">${esc(x.sc)}</span>`:""}${x.o?`<span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span>`:""}${x.by?`<span class=au title="opened by ${esc(x.by)}">${esc(x.by)}</span>`:""}</div>`:""}</div>`}).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"");
+const cards=(g,it,shown)=>shown.map(x=>{const pr=x.kind==="pr";return `<div class=it data-n="${x.n}" data-r="${esc(x.r||"__REPO__")}"${pr?" data-pr":""} style="--cc:${colOf(g.name,CN)}${tint(x)}"><a class=id target=_blank href="https://github.com/${esc(x.r||"__REPO__")}/${pr?"pull":"issues"}/${x.n}">${pr?"PR ":""}#${x.n}</a>${x.rt?`<span class=rpo title="the repository this card belongs to: ${esc(x.r)}">${esc(x.rt)}</span>`:""}${x.pb?`<span class="pbg ${x.pb.replace(" ","-")}">${esc(x.pb)}</span>`:""}${x.rollup?`<span class="cir ${esc(x.rollup)}" title="CI states on the head${(x.ci||[]).length?": "+esc((x.ci||[]).join(", ")):""}">CI ${esc(x.rollup)}</span>`:""}${x.fz?`<span class=fz title="a freeze is a marker, never a move: the card keeps its column">${esc(x.fz)}</span>`:""}${x.pd?`<span class=pnd title="pending: the board door proved this move and the board read has not carried it yet">pending</span>`:""}${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(x.t)}</span>${x.pm&&!pr?`<button class=pmp data-n="${x.n}" title="move this card to ${esc(x.pmt)}: the owner's go signal (ADR-0142)">→ ${esc(x.pmt)}</button>`:""}${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.ho?`<div class=hld>${esc(x.ho)}</div>`:""}${(x.cl||[]).length?`<div class=clos title="the issues this pull request closes">closes ${x.cl.map(n=>`<a target=_blank rel=noopener href="https://github.com/${esc(x.r||"__REPO__")}/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${(x.o||x.sc||x.by)?`<div class=ft>${x.sc?`<span class=tsk title="sub-issues closed / total: ${esc(x.sc)}">${esc(x.sc)}</span>`:""}${x.o?`<span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span>`:""}${x.by?`<span class=au title="opened by ${esc(x.by)}">${esc(x.by)}</span>`:""}</div>`:""}</div>`}).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"");
 // A visible column holding no cards is not drawn at all: the columns that do have cards take the width, and the
 // collapsed one is accounted for by a line at the foot of the hidden: strip. Which columns those are is derived on
 // every render -- from the filtered count, the user's hidden set and the set the line's eye added -- and never
@@ -3237,10 +3533,7 @@ if($("#bbody").dataset.h!==html){$("#bbody").dataset.h=html;$("#bbody").innerHTM
 // is the mode; the boolean an older page stored is read as the two modes it named (true = only, false = all), so a board
 // opens where it was left. `spOk` is the whole rule, and the columns ask it once per card: the modes are the page's, the
 // spec label is the hub's (`x.sp`, from the table's own SPEC_LABEL), and no column is named here.
-const SP=[["all","every card the other filters leave"],["only","only the cards that carry the spec label"],["hidden","every card but those"]];
-const specMode=()=>{const v=bo.specs;if(v===true)return 1;if(v===false||v===undefined||v===null)return 0;
- const n=Math.trunc(+v);return n===1||n===2?n:0};   // 1 = only, 2 = hidden: a value the page cannot read is `all`, never a silent hide
-const spOk=x=>{const m=specMode();return m===0||(m===1?!!x.sp:!x.sp)};
+/*BOARD_FILTER*/
 const spPaint=()=>{const m=specMode(),b=$("#bsp");b.dataset.m=SP[m][0];b.textContent="Specs: "+SP[m][0];b.title=`the Specs filter holds ${SP[m][0]}: a press moves it to ${SP[(m+1)%3][0]}, and this mode draws ${SP[m][1]}.`};
 $("#bsp").onclick=()=>{bo.specs=(specMode()+1)%3;saveB();spPaint();pollBoard()};
 spPaint();
@@ -3257,6 +3550,8 @@ pollBoard();setInterval(pollBoard,5000);
 let ver=null;setInterval(async()=>{try{const v=(await (await fetch("/api/version")).json()).v;if(ver===null)ver=v;else if(v!==ver)location.reload()}catch(e){}},3000);
 </script>"""
 PAGE = PAGE.replace("/*PANES_JS*/", (pathlib.Path(__file__).resolve().parent / "panes.js").read_text())
+BOARD_FILTER_JS = (pathlib.Path(__file__).resolve().parent / "board-filter.js").read_text()
+PAGE = PAGE.replace("/*BOARD_FILTER*/", BOARD_FILTER_JS)
 # The strip paints one rule per category, keyed by the fact that sets the column: the name comes from the table.
 HID_CHIP_TOKENS = (("abandoned", "err"), ("dev_ci", "run"), ("unscheduled", "warn"), ("issue_closed", "ok"), ("pr_open", "pin"))
 PAGE = PAGE.replace("/*HID_CHIP_RULES*/", "\n".join('.hidbar .chip[data-col="%s"] b{color:var(--%s)}' % (COLUMN[fact], token) for fact, token in HID_CHIP_TOKENS))
@@ -3953,6 +4248,37 @@ def _models_set(new):
     modelreg.write_chains(MODELS, chains, d)
     return models_get()
 
+profiles_of_cwd = sessions.profiles_of
+
+def sessions_payload():
+    """What /api/sessions serves: this profile's live sessions, grouped by project (#833)."""
+    return sessions.list_sessions(os.environ.get("SG_PROFILE", ""), profiles_of=profiles_of_cwd)
+
+def conversation_payload(query):
+    """What /api/sessions/conversation serves: one page of a live session of this profile, None when it is not one (#840)."""
+    q = urllib.parse.parse_qs(query)
+    before = (q.get("before") or [""])[0]
+    return sessions.conversation(os.environ.get("SG_PROFILE", ""), (q.get("sid") or [""])[0], int(before) if before.isdigit() else None,
+                                 profiles_of=profiles_of_cwd)
+
+MOBILE_CSP = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self'"
+
+GESTURE_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-gesture.js").read_text()
+MOVE_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-move.js").read_text()
+RUN_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-run.js").read_text()
+MOBILE_PAGE = (pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text().replace("/*GESTURE*/", GESTURE_JS).replace("/*MOVE*/", MOVE_JS).replace("/*RUN*/", RUN_JS).replace("/*BOARD_FILTER*/", BOARD_FILTER_JS)
+MOBILE_SHELL = ["/mobile/", "/mobile/manifest.webmanifest", "/mobile/icon.svg"]
+SW_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-sw.js").read_text().replace("/*SHELL*/[]", json.dumps(MOBILE_SHELL))
+MANIFEST_JSON = json.dumps({"id": "/mobile/", "name": f"Squad hub {REPO}", "short_name": "Hub", "start_url": "/mobile/", "scope": "/mobile/", "display": "standalone", "background_color": "#0f1115", "theme_color": "#0f1115", "icons": [{"src": "/mobile/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}]}).encode()
+MOBILE_ICON = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192"><rect width="192" height="192" rx="36" fill="#0f1115"/><circle cx="96" cy="96" r="52" fill="#3ecf8e"/></svg>'
+MOBILE_ASSETS = {"/mobile": (MOBILE_PAGE.encode(), "text/html; charset=utf-8"), "/mobile/": (MOBILE_PAGE.encode(), "text/html; charset=utf-8"),
+                 "/mobile/manifest.webmanifest": (MANIFEST_JSON, "application/manifest+json"), "/mobile/icon.svg": (MOBILE_ICON, "image/svg+xml"),
+                 "/mobile/sw.js": (SW_JS.encode(), "text/javascript; charset=utf-8")}
+
+def mobile_refusal(reason):
+    return ('<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Hub</title>'
+            f'<body style="font:16px system-ui;margin:24px"><h1>The hub refused this login</h1><p>{html.escape(reason)}</p>').encode()
+
 def served_page(login=""):
     """The page as the hub serves it, every placeholder substituted. The model-id shape replaces its quoted placeholder:
     json.dumps brings its own quotes, and a second pair is a syntax error that empties the page."""
@@ -3965,9 +4291,25 @@ def own_host(h):
     return (h.headers.get("Host") or "") in (f"127.0.0.1:{h.server.server_port}", f"localhost:{h.server.server_port}")
 
 
+PLUGIN_ID = "agent-squad@agent-squad"
+def plugin_squad():
+    """The agent-squad `squad` package a host profile's hub reads its settings through: SG_SQUAD when it names one, else the
+    install path the plugin registry records, as env.sh and launch.py already resolve it (#871). Empty when neither answers,
+    so a hub with no package refuses every tailnet request as before. Rule layer: one registry read, no hub state."""
+    if os.environ.get("SG_SQUAD"): return os.environ["SG_SQUAD"]
+    try:
+        registry = pathlib.Path.home() / ".claude" / "plugins" / "installed_plugins.json"
+        return json.loads(registry.read_text())["plugins"][PLUGIN_ID][0]["installPath"]
+    except (OSError, ValueError, KeyError, IndexError, TypeError):
+        return ""
+
 def tailnet_roots():
-    """Where the tailnet rule reads its seam and settings reader: the tree this file sits in first, so a stale SG_SQUAD never answers for the hub's own code."""
-    return [str(pathlib.Path(__file__).resolve().parents[3]), *squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__)]
+    """Where the tailnet rule reads its seam and settings reader: the tree this file sits in first, so a stale SG_SQUAD never
+    answers for the hub's own code; then the profile's roots; then the agent-squad package the plugin install holds, so a host
+    profile whose tree and checkout both hold no squad package still reads its own project file (#871)."""
+    roots = [str(pathlib.Path(__file__).resolve().parents[3]),
+             *squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__), plugin_squad()]
+    return [r for i, r in enumerate(roots) if r and r not in roots[:i]]
 
 _SEAM = {}
 def tailnet_seam():
@@ -4020,7 +4362,10 @@ DASH_PREFIXES = ("/dash/", "//")
 DASH_PATH = re.compile(r"/dash/([\w-]+)(/[\w./-]*)?")   # a run id, then plain names only: no escape, host or port
 DASH_TIMEOUT_SECS = 60.0
 DASH_REPLY_HEADERS = ("content-type", "content-length", "cache-control", "x-content-type-options", "referrer-policy")
-LOOPBACK_ORIGIN = re.compile(r"^http://(127\.0\.0\.1|localhost)(:\d+)?$")
+def own_origin(h):
+    """A loopback write's one Origin rule: the hub's own exact origin, on either loopback name and its own port (#824)."""
+    org = h.headers.get("Origin") or ""
+    return org in (f"http://127.0.0.1:{h.server.server_port}", f"http://localhost:{h.server.server_port}")
 
 def dash_port(run_id):
     """The port the run list names for this run id, or None: the one address a forwarded request can reach."""
@@ -4043,9 +4388,9 @@ def request_target(h):
 
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
-    def refuse(self, reason):
-        body = reason.encode()
-        self.send_response(403); self.send_header("Content-Type", "text/plain; charset=utf-8"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+    def refuse(self, reason, page=False):
+        body = mobile_refusal(reason) if page else reason.encode()
+        self.send_response(403); self.send_header("Content-Type", "text/html; charset=utf-8" if page else "text/plain; charset=utf-8"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
     def not_found(self):
         self.send_response(404); self.send_header("Content-Length", "0"); self.end_headers()
     def dash(self, method, body=b""):
@@ -4077,11 +4422,11 @@ class H(BaseHTTPRequestHandler):
         finally: up.close()
     def do_GET(self):
         a = access(self, "GET")
-        if not a.allowed: return self.refuse(a.reason)
+        if not a.allowed: return self.refuse(a.reason, page=self.path.split("?", 1)[0] in ("/mobile", "/mobile/"))
         if request_target(self).startswith(DASH_PREFIXES): return self.dash("GET")
-        if self.path.startswith("/held/"):   # a run the childcc pass holds: its dashboard, started when none runs (#689)
-            name = re.sub(r"[^\w-]", "", self.path[6:].split("?")[0])
-            if open_held(name) is None: return self.not_found()
+        if self.path.startswith(("/held/", "/ended/")):   # a run the childcc pass holds, or one that ended today: its dashboard (#689, #830)
+            name = re.sub(r"[^\w-]", "", self.path.split("/", 2)[2].split("?")[0])
+            if (open_held if self.path.startswith("/held/") else open_ended)(name) is None: return self.not_found()
             refresh_runs()   # the run list names the new dashboard, so the forward finds it
             self.send_response(302); self.send_header("Location", f"/dash/{name}/"); self.send_header("Content-Length", "0"); self.end_headers(); return
         if self.path.startswith("/test/"):   # a test.sh pass: its log, refreshed while it runs
@@ -4096,6 +4441,7 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/runs"): body, ct = json.dumps(run_list()).encode(), "application/json"
         elif self.path.startswith("/api/adapter-errors"): body, ct = json.dumps(adapter_errors()).encode(), "application/json"
         elif self.path.startswith("/api/delivery"): body, ct = json.dumps(delivery()).encode(), "application/json"
+        elif self.path.startswith("/api/ended"): body, ct = json.dumps(ended_today()).encode(), "application/json"
         elif self.path.startswith("/api/stats"): body, ct = json.dumps(stats((re.search(r"period=(\w+)", self.path) or [0, "day"])[1] if re.search(r"period=(hour|day|month)", self.path) else "day", (re.search(r"src=(sub|api)", self.path) or [0, "both"])[1])).encode(), "application/json"
         elif self.path.startswith("/api/issue"):
             m = re.search(r"[?&]n=(\d{1,6})\b", self.path); rr = re.search(r"[?&]r=([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)", self.path)
@@ -4108,20 +4454,49 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/models"): body, ct = json.dumps(models_get()).encode(), "application/json"
         elif self.path.startswith("/api/speed"): body, ct = json.dumps(speed()).encode(), "application/json"
         elif self.path.startswith("/api/load"): body, ct = json.dumps(load_payload()).encode(), "application/json"
+        elif self.path.startswith("/api/status"): body, ct = json.dumps(status_payload()).encode(), "application/json"
+        elif self.path.startswith("/api/sessions/send"):
+            q = urllib.parse.parse_qs(self.path.partition("?")[2])
+            out = session_send.status(os.environ.get("SG_PROFILE", ""), (q.get("sid") or [""])[0], (q.get("client_id") or [""])[0], profiles_of=profiles_of_cwd, root=STATE)
+            body, ct = json.dumps(out).encode(), "application/json"
+        elif self.path.startswith("/api/sessions/conversation"):
+            page = conversation_payload(self.path.partition("?")[2])
+            if page is None: return self.not_found()
+            body, ct = json.dumps(page).encode(), "application/json"
+        elif self.path.startswith("/api/sessions"): body, ct = json.dumps(sessions_payload()).encode(), "application/json"
+        elif (asset := MOBILE_ASSETS.get(self.path.split("?", 1)[0])): body, ct = asset
         else: body, ct = served_page(a.login).encode(), "text/html; charset=utf-8"
-        self.send_response(200); self.send_header("Content-Type", ct); self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(body)
+        self.send_response(200); self.send_header("Content-Type", ct); self.send_header("Cache-Control", "no-store")
+        if self.path.split("?", 1)[0] in ("/mobile", "/mobile/"): self.send_header("Content-Security-Policy", MOBILE_CSP)
+        self.end_headers(); self.wfile.write(body)
+
+    def send_to_session(self, a):
+        """The phone's message to a live session (#834): a tailnet login the profile allows, the tailnet Origin, a JSON body, and the grant."""
+        length = self.headers.get("Content-Length") or "0"
+        raw = self.rfile.read(min(int(length), 1 << 20)) if length.isdigit() else b""
+        if not a.allowed: return self.refuse(a.reason)
+        tn = tailnet_block()
+        if not (a.tailnet and tn.get("terminals_send") is True and (self.headers.get("Origin") or "") == f"https://{tn.get('host')}"
+                and "json" in (self.headers.get("Content-Type") or "")): return self.refuse("forbidden")
+        try: body = json.loads(raw)
+        except ValueError: body = None
+        if not isinstance(body, dict) or set(body) != {"sid", "text", "client_id"}:
+            out, code = {"err": "bad request"}, 400
+        else:
+            out, code = session_send.send(os.environ.get("SG_PROFILE", ""), body["sid"], body["text"], body["client_id"], profiles_of=profiles_of_cwd, root=STATE), 200
+        data = json.dumps(out).encode(); self.send_response(code); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
 
     def do_POST(self):
         # a cross-site page must not be able to write: a loopback write needs our own origin, a tailnet write the tailnet origin (the seam), and a JSON body
         a = access(self, "POST")
-        org = self.headers.get("Origin") or ""
         if request_target(self).startswith(DASH_PREFIXES):   # the body is read before any refusal, as below
             length = self.headers.get("Content-Length") or "0"
             raw = self.rfile.read(min(int(length), 1 << 20)) if length.isdigit() else b""
             if not a.allowed: return self.refuse(a.reason)
-            if not (a.tailnet or LOOPBACK_ORIGIN.match(org)) or "json" not in (self.headers.get("Content-Type") or ""): return self.refuse("forbidden")
+            if not (a.tailnet or own_origin(self)) or "json" not in (self.headers.get("Content-Type") or ""): return self.refuse("forbidden")
             return self.dash("POST", raw)
-        ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote") and (a.tailnet or LOOPBACK_ORIGIN.match(org)) and "json" in (self.headers.get("Content-Type") or "")
+        if self.path.split("?", 1)[0] == "/api/sessions/send": return self.send_to_session(a)
+        ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote") and (a.tailnet or own_origin(self)) and "json" in (self.headers.get("Content-Type") or "")
         try:
             raw = self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 1 << 20))   # read before any answer: a refusal that leaves the body unread resets the connection; the models panel posts back ~20 KB of read-only fields (#684)
             if not ok: out = {"err": "forbidden"}

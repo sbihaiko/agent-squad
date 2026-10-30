@@ -213,10 +213,12 @@ echo "$*" >> "${GHLOG:-/dev/null}"
 case "$*" in
   *pulls*) ;;
   *"issues(states: OPEN"*) echo '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":42,"title":"a hunt bug","body":"","state":"OPEN","labels":{"nodes":[{"name":"bug"},{"name":"ready-for-agent"}]},"blockedBy":{"nodes":[]},"comments":{"nodes":[]}}]}}}}';;   # the blocker gate's one list read (#479)
-  *"issues?state=open"*) printf '42\x1fbug,ready-for-agent\n';;
+  *"issues?state=open"*) echo '[{"number":42,"title":"a hunt bug","labels":[{"name":"bug"},{"name":"ready-for-agent"}]}]';;   # the candidate list as GitHub answers it (JSON)
   *POST*)
     echo "$*" >> "${GHPOST:-/dev/null}"
     echo "{\"number\":${GH_NEW:-42}}";;
+  *"issue(number: 42)"*) echo '{"data":{"repository":{"i42":{"number":42,"title":"a hunt bug","body":"repro\\nFiled by autohunt\\n","state":"OPEN","createdAt":"2026-10-11T00:00:00Z","labels":{"nodes":[{"name":"bug"}]},"blockedBy":{"nodes":[]},"subIssuesSummary":{"total":0,"completed":0},"subIssues":{"nodes":[]},"comments":{"nodes":[]}}}}}';;   # the single-issue read, as the GraphQL fact answers it
+  *issues/42/comments*) echo '[]';;
   *issues/42*)
     printf '{"number":42,"title":"a hunt bug","body":"repro\\nFiled by autohunt\\n","created_at":"2026-10-11T00:00:00Z","labels":[{"name":"bug"}],"state":"open"}\n';;
   *) ;;

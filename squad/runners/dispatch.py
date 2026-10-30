@@ -53,16 +53,26 @@ class Dispatch:
         elif ev["event"] == "land":
             self.landed[ev["node"]] = ev
 
+    def child_tree(self, name):
+        """The tree a child wrote, as a string, or None when the child was never accepted: a git-history command reads it (#862)."""
+        acc = self.children.get(name)
+        return str(self.e.runs.workspace(name, acc["definition"])) if acc else None
+
     def payload(self, name):
-        """The dispatch artifact: every held-out command of every child that passed, in all waves (a later wave re-runs the earlier ones)."""
+        """The held-out commands of every child that passed, in all waves (a later wave re-runs the earlier ones).
+        `runs` is the source: one [command, tree] pair per command. A git-history command names the tree its child wrote, so it
+        reads that tree and never the target's merge (#862); any other command names none and runs in the target. The tree is
+        recorded even if it is gone now: the gate reports that as `child_tree_missing`, never as a silent run in the target."""
         ledger = self.ledger(name)
-        cmds = []
+        runs = []
         for row in ledger:
             out = self.e.artifacts.get(row["child"], None)
+            tree = self.child_tree(row["child"])
             for c in session.ac_commands(out)[0] if row["outcome"] == "pass" else []:
-                if c not in cmds:
-                    cmds.append(c)
-        return ledger, cmds
+                run = [c, tree if workcmd.reads_history(c) else None]
+                if run not in runs:
+                    runs.append(run)
+        return ledger, list(dict.fromkeys(c for c, _ in runs)), runs     # ac_commands derives from runs, for the readers that list them
 
     def spawn_events(self, parent, pentry):
         return [e for e in self.e.record.events if e["event"] == "spawn_requested" and e["parent"] == parent and e.get("parent_entry") == pentry]
@@ -476,14 +486,20 @@ class Dispatch:
         return rows
 
     async def ac_survey(self, extra=None):
-        """Run the held-out commands of every landed child against the target. Use `workcmd`, the policy of the gate.
+        """Run the held-out commands of every landed child: a history command in its child's tree, the rest in the target (#862).
+        Use `workcmd`, the policy of the gate.
         Return ({child: all its commands passed}, {child: {"ac_failed:<command>": output tail or timeout note}}).
         The evidence holds every failing command of a child."""
         got, evidence = {}, {}
         for name, cmds in self.landed_commands(extra):
             got[name] = True
+            tree = self.child_tree(name)
             for c in cmds:
-                r = await anyio.to_thread.run_sync(lambda c=c: workcmd.run(c, self.e.target))
+                if gates.held_out_tree_missing(c, tree):     # #862: a history command reads its child's tree, never the merged target
+                    r = workcmd.CmdResult(False, f"child worktree not found: {tree}" if tree else "no child worktree recorded")
+                else:
+                    where = tree if workcmd.reads_history(c) else self.e.target
+                    r = await anyio.to_thread.run_sync(lambda c=c, w=where: workcmd.run(c, w))
                 if not r.ok:
                     got[name] = False
                     evidence.setdefault(name, {})[f"{'malformed' if r.malformed else 'ac_failed'}:{c}"] = r.evidence
@@ -620,6 +636,6 @@ class DispatchRunner:
         done = stop and not seen
         if done:
             outcome, reasons = "pass", ["done"]
-        ledger, cmds = d.payload(node["name"])
-        rel = ctx.artifacts.put(node["name"], sc.item, entry, {"children": [n for n, _, _ in seen], "ac_commands": cmds, "ledger": ledger})
+        ledger, cmds, runs = d.payload(node["name"])
+        rel = ctx.artifacts.put(node["name"], sc.item, entry, {"children": [n for n, _, _ in seen], "ac_commands": cmds, "ac_runs": runs, "ledger": ledger})
         return ctx.finish(node, entry, sc, outcome, reasons, rel, elapsed=ctx.clock() - t0, **({"routed": "exit:pass"} if done else {}))

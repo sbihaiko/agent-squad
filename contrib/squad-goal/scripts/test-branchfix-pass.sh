@@ -21,6 +21,7 @@ J
 cat > "$T/s/launch.py" <<J
 import os, sys
 open("$T/launch.log", "a").write(open(sys.argv[1]).read().replace("\n", " ") + "\n")
+if os.environ.get("REFUSE"): print("refused: the first coding model x is not in the router envelope", file=sys.stderr); sys.exit(1)
 if not os.environ.get("NORUN"): print("run-%d" % sum(1 for _ in open("$T/launch.log")))
 J
 printf '#!/bin/bash\necho "a spend envelope"\n' > "$T/s/envelope-spend.sh"
@@ -50,7 +51,7 @@ rev gui/7-x CHANGES "a.sh:3 the cap is wrong"; rev fix/8-y APPROVE "none"; rev g
 r=$(fp)
 [ "$(n gui/7-x)" = 1 ] && ok "a CHANGES review at the tip dispatches one fix run" || ko "gui/7-x dispatched $(n gui/7-x) times: '$r'"
 /usr/bin/grep -q "FIX RUN on the work branch gui/7-x for GitHub issue #7.*a.sh:3 the cap is wrong" "$T/launch.log" && ok "the request is the branchfix.sh text with the findings" || ko "request: $(cat "$T/launch.log" 2>/dev/null)"
-/usr/bin/grep -q "spawn tool" "$T/launch.log" && ok "the request asks for one spawn, as an autofix request does" || ko "no spawn instruction in the request"
+/usr/bin/grep -q 'one entry for the child below' "$T/launch.log" && ok "the request asks for one child in the spawns list, as an autofix request does" || ko "no spawn instruction in the request"
 [ "$(n fix/8-y)" = 0 ] && ok "an APPROVE review dispatches nothing" || ko "an APPROVE branch was dispatched"
 [ "$(n gui/9-z)" = 0 ] && ok "a review that is not at the tip dispatches nothing" || ko "a review of an old sha was dispatched"
 # 2) a second pass at the same tip dispatches nothing
@@ -119,4 +120,33 @@ push gui/17-c; rev gui/17-c CHANGES "j.sh:1 fix"; r=$(OPEN="17" fp); rid=$(cat "
 ch=$($G -C "$T/cw" rev-parse HEAD); b0=$($G -C "$tg" rev-parse "squad/run/$rid"); mkdir -p "$T/co/runs/$rid"
 printf '{"event": "run_start", "target": "%s", "target_branch": "squad/run/%s"}\n{"event": "outcome", "node": "route.router.1", "outcome": "pass", "workspace": {"name": "worktrees/child", "head": "%s"}}\n{"event": "land", "node": "route.router.1", "effect": {"name": "merge_land", "before": "%s", "head": "%s"}}\n{"event": "verdict", "verdict": "completed"}\n' "$tg" "$rid" "$ch" "$b0" "$b0" > "$T/co/runs/$rid/record.jsonl"
 r=$(OPEN="17" fp); [ "$($O rev-parse gui/17-c)" = "$ch" ] && ok "a fix run with a no-op land pushes the child's own head" || ko "the child's head was not pushed: '$r'"
+# 14) (#812) a launch.py that refuses the start is no dispatch: the pass says launch.py's own line, writes no fix marker,
+#     and the next pass retries the tip.
+push gui/18-r; rev gui/18-r CHANGES "k.sh:1 fix"
+r=$(OPEN="18" REFUSE=1 fp)
+case "$r" in *"refused: the first coding model"*) ok "a refused launch says launch.py's own line";; *) ko "no refusal line: '$r'";; esac
+[ -z "$(ls "$T/st/auto"/branchfix-gui_18-r-* 2>/dev/null)" ] && ok "a refused launch writes no fix marker" || ko "a marker survived a refusal: $(ls "$T/st/auto"/branchfix-gui_18-r-*)"
+r=$(OPEN="18" fp)
+[ "$(n gui/18-r)" = 2 ] && ok "the next pass retries the refused fix run" || ko "retry: $(n gui/18-r) dispatch(es): '$r'"
+# 15) (#841, ADR-0146) a branch whose issue carries `loop-bug` gets no fix run; the pass says why, once per tip (and dispatches
+#     nothing on later passes while the label holds)
+: > "$T/launch.log"; push gui/20-lb; rev gui/20-lb CHANGES "l.sh:1 fix"
+r=$(OPEN="20" LABELED="20=loop-bug" fp); r="$r"$'\n'"$(OPEN="20" LABELED="20=loop-bug" fp)"
+[ "$(n gui/20-lb)" = 0 ] && ok "a loop-bug branch gets no fix run" || ko "a loop-bug branch was dispatched: '$r'"
+[ "$(printf '%s' "$r" | /usr/bin/grep -c '^BRANCHFIX SKIP gui/20-lb: loop-bug, fixed outside the loop$')" = 1 ] && ok "the skip is said once per tip" || ko "skip lines: '$r'"
+# 16) (#841) while LOOP STOP holds, no fix run starts, even for a plain bug; the skip says LOOP STOP
+: > "$T/launch.log"; push gui/21-ls; rev gui/21-ls CHANGES "m.sh:1 fix"
+r=$(OPEN="21 90" LABELED="90=loop-bug" fp)
+[ "$(n gui/21-ls)" = 0 ] && ok "LOOP STOP holds the fix pass for a plain bug" || ko "a fix run started under LOOP STOP: '$r'"
+case "$r" in *"BRANCHFIX SKIP gui/21-ls: LOOP STOP holds, fixed outside the loop"*) ok "the skip names LOOP STOP";; *) ko "no LOOP STOP skip line: '$r'";; esac
+# 17) (#841) a loop-bug:* label on one branch skips that branch only; a plain bug on another branch still gets its one launch
+: > "$T/launch.log"; push gui/22-lx; push gui/23-pl; rev gui/22-lx CHANGES "p.sh:1 fix"; rev gui/23-pl CHANGES "q.sh:1 fix"
+r=$(OPEN="22 23" LABELED="22=loop-bug:other" fp)
+[ "$(n gui/22-lx)" = 0 ] && ok "a loop-bug:* branch gets no fix run" || ko "a loop-bug:* branch was dispatched: '$r'"
+[ "$(n gui/23-pl)" = 1 ] && ok "a plain bug branch still gets one fix run" || ko "a plain bug branch dispatched $(n gui/23-pl) times: '$r'"
+# 18) (#841) a plain bug alone: one launch, no skip line
+: > "$T/launch.log"; push gui/24-pb; rev gui/24-pb CHANGES "r.sh:1 fix"
+r=$(OPEN="24" LABELED="24=bug" fp)
+[ "$(n gui/24-pb)" = 1 ] && ok "a plain bug gets one fix run" || ko "a plain bug dispatched $(n gui/24-pb) times: '$r'"
+case "$r" in *"BRANCHFIX SKIP"*) ko "a plain bug was skipped: '$r'";; *) ok "a plain bug prints no skip line";; esac
 exit $fail

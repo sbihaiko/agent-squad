@@ -8,6 +8,7 @@ import importlib.util
 import json
 import pathlib
 import re
+import shutil
 import threading
 from http.server import ThreadingHTTPServer
 from types import SimpleNamespace
@@ -28,15 +29,15 @@ HEADER = re.compile(r"<div id=who>(.*?)</div>")
 def serve(monkeypatch, tmp_path):
     servers = []
 
-    def start(allow=(ANA, BO)):
+    def start(allow=(ANA, BO), host=TAILNET):
         checkout = tmp_path / "checkout"
         (checkout / "docs" / "squad").mkdir(parents=True)
         (checkout / "docs" / "squad" / "defaults.yaml").write_text(
-            f"tailnet:\n  host: {TAILNET}\n  allow: {json.dumps(list(allow))}\n")
+            "" if host is None else f"tailnet:\n  host: {host}\n  allow: {json.dumps(list(allow))}\n")
         for k, v in (("SG_REPO", "x/y"), ("SG_OWNER", "x"), ("SG_PROJECT", "4"), ("HOME", str(tmp_path)),
                      ("SG_CHECKOUT", str(checkout)), ("SG_HUB_DIR", str(tmp_path / "hub"))):
             monkeypatch.setenv(k, v)
-        for k in ("SG_STATE", "SG_STATE_BASE", "SG_SHARED", "SG_PROFILE"):
+        for k in ("SG_STATE", "SG_STATE_BASE", "SG_SHARED", "SG_PROFILE", "SG_FORK_DIR", "SG_PROJECTS"):
             monkeypatch.delenv(k, raising=False)
         spec = importlib.util.spec_from_file_location("hub_tailnet", HUB_PY)
         mod = importlib.util.module_from_spec(spec)
@@ -94,6 +95,16 @@ def test_loopback_get_is_answered_as_today(serve):
     assert status == 200 and "v" in json.loads(text)
 
 
+def test_the_tailnet_entry_stays_disabled_until_a_host_is_named(serve):
+    """#713 has not proved the forwarded headers, so the project file names no tailnet host: a request on a tailnet name
+    is refused by the seam before any handler, and the owner's move writes nothing (#829)."""
+    s = serve(host=None)
+    assert request(s.port, "GET", "/api/runs", host=TAILNET, login=ANA) == (403, "forbidden host")
+    status, _ = request(s.port, "POST", "/api/promote", host=TAILNET, login=ANA, origin=tailnet_origin(), body={"issue": 5})
+    assert status in (400, 403), status
+    assert s.calls["/api/promote"] == []
+
+
 def test_loopback_page_shows_no_login(serve):
     s = serve()
     status, page = request(s.port, "GET", "/", host=loopback(s.port), login=ANA)
@@ -146,6 +157,36 @@ def test_tailnet_write_by_an_unknown_login_is_refused_and_writes_nothing(serve, 
     status, text = request(s.port, "POST", route, host=TAILNET, login=EVE, origin=tailnet_origin(), body={"issue": 5})
     assert (status, text) == (403, "login not allowed")
     assert s.calls[route] == []
+
+
+LIVE_SCRIPTS = ROOT / "contrib/squad-goal/scripts"   # the live copy holds these beside hub.py, never the `squad` package
+
+
+def test_a_host_profile_reads_its_tailnet_block_through_the_plugin_install(tmp_path, monkeypatch):
+    """#871: hubmux loads the hub from the live copy (~/.claude, no squad package) for a host checkout that holds none either,
+    and pins no SG_SQUAD per profile. The settings reader comes from the agent-squad plugin install, so the profile's own
+    tailnet.allow admits its login instead of every tailnet request being refused."""
+    live = tmp_path / ".claude" / "skills" / "squad-goal" / "scripts"
+    live.mkdir(parents=True)
+    for src in LIVE_SCRIPTS.iterdir():
+        if src.suffix in (".py", ".js", ".html", ".json"):
+            shutil.copy(src, live / src.name)
+    checkout = tmp_path / "host"
+    (checkout / "docs" / "squad").mkdir(parents=True)
+    (checkout / "docs" / "squad" / "defaults.yaml").write_text(f"tailnet:\n  host: {TAILNET}\n  allow: {json.dumps([ANA])}\n")
+    (tmp_path / ".claude" / "plugins").mkdir()
+    (tmp_path / ".claude" / "plugins" / "installed_plugins.json").write_text(
+        json.dumps({"plugins": {"agent-squad@agent-squad": [{"installPath": str(ROOT)}]}}))
+    for k, v in (("SG_REPO", "x/y"), ("SG_OWNER", "x"), ("SG_PROJECT", "4"), ("HOME", str(tmp_path)),
+                 ("SG_CHECKOUT", str(checkout)), ("SG_STATE", str(tmp_path / "state")), ("SG_HUB_DIR", str(tmp_path / "hub"))):
+        monkeypatch.setenv(k, v)
+    for k in ("SG_STATE_BASE", "SG_SHARED", "SG_PROFILE", "SG_FORK_DIR", "SG_PROJECTS", "SG_SQUAD"):
+        monkeypatch.delenv(k, raising=False)
+    spec = importlib.util.spec_from_file_location("hub_host_tailnet", live / "hub.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.CHECKOUT == str(checkout)
+    assert mod.tailnet_block() == {"host": TAILNET, "allow": [ANA]}
 
 
 def test_a_tailnet_request_is_refused_when_the_seam_cannot_load(serve, tmp_path, monkeypatch):

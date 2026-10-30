@@ -5,14 +5,15 @@ worktree the run owns: a workspace the run made under its own `ws` folder (#84),
 a linked worktree that holds the run folder (#90: the loop starts a run with `--target <issue worktree>`, so its nodes
 declare no workspace and the target is the workspace). The owner's checkout, the main worktree of the repository, is
 never touched, and nor is a path outside the run: each is one `workspace_commit` event naming the reason. A failed node
-leaves its tree as it is: a person reads it. A clean tree writes nothing. A refusal never fails the node. Every git call
-has a deadline (ADR-0051); a timeout commits nothing.
+leaves its tree as it is: a person reads it. A clean tree writes nothing. A read-only agent node commits nothing: a hook that
+regenerates a tracked artifact is not the node's work (#811). A refusal never fails the node. Every git call has a deadline
+(ADR-0051); a timeout commits nothing.
 """
 import re
 import subprocess
 from pathlib import Path
 
-from squad import actions, git
+from squad import actions, git, graph
 
 COMMIT_DEADLINE_S = 60      # the wall-clock cap of the one git call; a timeout commits nothing
 PROBE_DEADLINE_S = 10       # the cap of each read-only git call that decides whether the tree is the run's to commit
@@ -20,11 +21,12 @@ PROBE_DEADLINE_S = 10       # the cap of each read-only git call that decides wh
 _REQUEST = re.compile(r"\n\n(?:Work|Task):\n(.*)\Z", re.S)
 
 
-_NAMED = (re.compile(r"\bGitHub issue #(\d+)"), re.compile(r"\bRefs #(\d+)"))
+_NAMED = (re.compile(r"\bGitHub issue #(\d+)"), re.compile(r"\bGitHub issue\(s\) #?(\d+)"), re.compile(r"\bRefs #(\d+)"))
 
 
 def named_issue(text):
-    """The issue a text was dispatched for: its `GitHub issue #<n>` header, else its `Refs #<n>` line, else None.
+    """The issue a text was dispatched for: its `GitHub issue #<n>` header or a frontier child block's `GitHub issue(s) <n>`
+    (its first issue, #820), else its `Refs #<n>` line, else None.
     Prose may name another issue first (a blocker, a waiter), so a bare `#<n>` is never read here (#613, #775)."""
     for pat in _NAMED:
         m = pat.search(text) if isinstance(text, str) else None
@@ -95,6 +97,9 @@ def commit_after(engine, *, node, entry, item, logical, path, outcome):
         exclude = run_folder_under(engine, p)
         if not git.dirty(p, exclude, PROBE_DEADLINE_S):
             return None
+        n = engine.nodes.get(node)
+        if n is not None and n.get("kind") == "agent" and not graph.writes(n):
+            return refuse("read_only_node")   # its tree was dirtied by something else: a hook, a person, an earlier run (#811)
         reason = ownership(engine, p, is_target)
         if reason:
             return refuse(reason)

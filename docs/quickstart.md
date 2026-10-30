@@ -59,7 +59,7 @@ The verdict prints the exact command, with the absolute run folder, so it works 
 2. In the admin console, enable MagicDNS and HTTPS certificates.
 3. Set any ACL or grant that lets your other devices reach the hub.
 4. Type the `tailscale serve` command that `squad tailnet serve-command` prints, for the hub port. Do this once.
-5. Set `tailnet.host` and `tailnet.allow` with `squad config set`. You name the logins.
+5. Set `tailnet.host` and `tailnet.allow` with `squad config set`. You name the logins. The values are personal, so they go to the project's gitignored `.env` (`SQUAD_TAILNET_HOST`, `SQUAD_TAILNET_ALLOW`), never to the tracked `docs/squad/defaults.yaml`.
 6. Never enable Funnel for the hub port. Prove it is off with `squad tailnet check`.
 
 The owner does these steps. An agent points the owner here and never runs them. The servers keep their loopback bind. The editor stays a local `file://` page.

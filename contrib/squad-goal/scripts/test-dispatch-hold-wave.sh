@@ -33,15 +33,14 @@ JSON
 cat > "$T/bin/gh" <<J
 #!/bin/bash
 case "\$*" in
-  *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$T/issues.json" ;;
-  *"issues?state=open"*labels=bug*) python3 -c 'import json
-for i in json.load(open("$T/issues.json")):
-  if "bug" in i["labels"]: print(str(i["number"])+"\x1f"+",".join(i["labels"]))' ;;
+  *"issue(number:"*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issue\(number: [0-9]+' | /usr/bin/grep -oE '[0-9]+' | head -1); jq -c --arg k "i\$n" --argjson n "\$n" '{data:{repository:{(\$k): (.[]|select(.number==\$n)|{number,title,body,state:"OPEN",createdAt:.created_at,labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}})}}}' "$T/issues.json" ;;
+  *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",createdAt:.created_at,labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$T/issues.json" ;;
+  *"issues?state=open"*labels=bug*) jq -c '[.[]|select(.labels|index("bug"))|{number,title,labels:[.labels[]|{name:.}]}]' "$T/issues.json" ;;   # the bug candidates, as GitHub answers the list (JSON)
   *"issues?state=open"*labels=*) ;;
   *repos/x/y/branches*) printf 'main shaM\n' ;;   # no fix/ or gui/ branch names any issue
   *projectsV2/4/fields*) echo FID4 ;;
   *projectsV2/4/items*) if [ -n "\${CARDS_TODO:-}" ]; then printf '536\tTodo\n537\tTodo\n600\tTodo\n601\tTodo\n'; else printf '536\tCode Complete\n537\tCode Complete\n'; fi ;;   # the dispatchers read every card in Todo (#550): the hold, not the column, is under test
-  *"issues/"*comments*) echo "" ;;
+  *"issues/"*comments*) echo "[]" ;;
   *"issues/"*"-q"*) echo open ;;
   *issues/*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issues/[0-9]+' | cut -d/ -f2); python3 -c 'import json,sys;print(json.dumps([i for i in json.load(open("$T/issues.json")) if i["number"]==int(sys.argv[1])][0]))' "\$n" ;;
   *) echo "" ;;

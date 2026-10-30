@@ -58,6 +58,7 @@ dashboard:                          # the run dashboard page; run_start records 
 tailnet:                            # the project file's tailnet block; its edits never refuse a resume (squad/project_settings.py)
   host: null                        # MagicDNS name of this machine; unset refuses every tailnet request
   allow: []                         # login names in email form; empty refuses every tailnet request
+  terminals_send: false             # the phone may send a message to a live session of this profile, for every allowed login; off until the owner sets it true
 
 watch:                              # what starts with a run from `work` or `task`
   dashboard: true                   # open the run dashboard page on the new run. A headless environment prints the URL. A failed open is a warning, never a verdict. A resume reuses a page already open.

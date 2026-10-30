@@ -28,6 +28,7 @@ document.body.appendChild(sideProbe);
 function sidePx(tok) { sideProbe.style.width = `var(${tok})`; return Math.round(sideProbe.getBoundingClientRect().width); }
 // A narrow window turns the drawer into a bottom sheet: the same variable is its height and the grip is sideways.
 function sideRow() { return window.matchMedia("(max-width: 900px)").matches; }
+function narrowScreen() { return window.matchMedia("(max-width: 600px)").matches; }
 function sideWidth() { const r = $("left").getBoundingClientRect(); return Math.round(sideRow() ? r.height : r.width); }
 function sideAria(now) {
   const grip = $("side-grip");

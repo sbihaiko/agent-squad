@@ -11,6 +11,7 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
+from pathlib import Path
 
 from squad import workcmd
 
@@ -101,6 +102,12 @@ def security(params, inp):
     return GateResult(not bad, [f"sensitive_path:{p}" for p in bad])
 
 
+def held_out_tree_missing(c, tree):
+    """True when a git-history command has no child tree to read: none recorded, or the recorded one is gone (#862).
+    The one rule both the final gate and the landing check apply: it fails the command, never runs it in the target."""
+    return workcmd.reads_history(c) and (tree is None or not Path(tree).is_dir())
+
+
 def ac_verify(params, inp):
     """Run the acceptance commands that the named artifact lists, in the workspace. A command is code, not a model.
 
@@ -108,24 +115,39 @@ def ac_verify(params, inp):
     for the same command (ADR-0100 rule 10). A command that printed a pytest summary reports its counts beside the
     outcome (#80): the share of the suite that passed is progress a reader can see while the gate is still red. The
     counts never enter the verdict -- the exit code alone decides that (ADR-0019).
+
+    Routing (#862): a git-history command runs only in the tree its child wrote; every other command runs only in the target.
+    No fallback: a red result is never replaced by another tree's green (ADR-0018).
     """
     src = params["commands_from"]
-    cmds = []
+    runs, dispatch = [], False
     for name in [src] if isinstance(src, str) else src:     # the first artifact that lists commands wins
-        cmds = (inp.artifacts.get(name) or {}).get("ac_commands", [])
-        if cmds:
+        art = inp.artifacts.get(name) or {}
+        # a dispatch names, for each command, the tree of the child that wrote it (#862); a dispatch with no ac_runs names none (#867)
+        dispatch = "ac_runs" in art or "ledger" in art     # an older engine wrote a dispatch with no ac_runs (#867): still a dispatch
+        runs = [tuple(r) for r in art["ac_runs"]] if "ac_runs" in art else [(c, None) for c in art.get("ac_commands", [])]
+        if runs:
             break
-    if not cmds:
+    if not runs:
         return GateResult(False, ["no_ac_commands"])
     findings, evidence, counts = [], {}, {}
-    for c in cmds:
-        r = workcmd.run(c, inp.cwd)
+    for c, tree in dict.fromkeys(runs):     # each (command, tree) runs once, however many children named it
+        history = dispatch and workcmd.reads_history(c)
+        label = f"{c} @{Path(tree).name}" if history and tree else c     # a history command's result names the tree it ran in
+        if not history:
+            r = workcmd.run(c, inp.cwd)     # the target: the merged head is what every other command must hold on
+        elif held_out_tree_missing(c, tree):
+            findings.append(f"child_tree_missing:{label}")     # never a silent run in the target: that is the false red of #862
+            evidence[f"child_tree_missing:{label}"] = f"child worktree not found: {tree}" if tree else "no child worktree recorded"
+            continue
+        else:
+            r = workcmd.run(c, tree)
         if r.counts:
-            counts[c] = r.counts
+            counts[label] = r.counts
         if not r.ok:
             kind = "malformed" if r.malformed else "ac_failed"     # prose in a command is a bad check, not a failed one
-            findings.append(f"{kind}:{c}")
-            evidence[f"{kind}:{c}"] = r.evidence
+            findings.append(f"{kind}:{label}")
+            evidence[f"{kind}:{label}"] = r.evidence
     return GateResult(not findings, findings, evidence, counts)
 
 

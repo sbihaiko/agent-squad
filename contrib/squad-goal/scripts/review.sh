@@ -38,23 +38,29 @@ else bm=$1; fi
 shift; set -- "$(printf '%s' "$bm" | tr / _)" "$@"   # $pr is the branch key
 pr=$1 iss=$2; p=$(mktemp); cfg="$(dirname "$0")/models.json"
 pbase=${SG_REVIEW_BASE:-${SG_LAND_BRANCH:-dev}}
+# #816: SG_REVIEW_EXCLUDE names path prefixes, space-separated, that leave every diff and file list the review reads. A tracked
+# file a hook regenerates (graphify-out/graph.json) once made a 33 MB prompt that every review model refused the same way.
+xdiff() { if [ -z "${SG_REVIEW_EXCLUDE:-}" ]; then cat; else awk -v x="$SG_REVIEW_EXCLUDE" 'BEGIN{n=split(x,p," ")}
+  /^diff --git /{s=0; f=$3; sub(/^a\//,"",f); for(i=1;i<=n;i++) if(index(f,p[i])==1) s=1} !s'; fi; }
+xfiles() { if [ -z "${SG_REVIEW_EXCLUDE:-}" ]; then cat; else awk -v x="$SG_REVIEW_EXCLUDE" 'BEGIN{n=split(x,p," ")}
+  {s=0; for(i=1;i<=n;i++) if(index($0,p[i])==1) s=1} !s'; fi; }
 # head, lbl, curhead, ahead, deltadiff, tipdiff, filesof: the seven reads the review makes of the branch it reads.
 if [ "$mode" = --branch ]; then
   head=$(gh_api repos/$repo/commits/$bm -q .sha); lbl="branch $bm" fetchref=$bm; baseref="origin/$pbase"
   curhead() { gh_api repos/$repo/commits/$bm -q .sha; }
   ahead() { [ "$(gh_api repos/$repo/compare/$1...$2 -q .status 2>/dev/null)" = ahead ]; }
-  deltadiff() { gh_get -H "Accept: application/vnd.github.diff" "repos/$repo/compare/$1...$2" 2>/dev/null; }
-  tipdiff() { gh_get -H "Accept: application/vnd.github.diff" "repos/$repo/compare/$pbase...$bm"; }
-  filesof() { gh_api "repos/$repo/compare/$pbase...$bm" -q '.files[].filename' 2>/dev/null; }
+  deltadiff() { gh_get -H "Accept: application/vnd.github.diff" "repos/$repo/compare/$1...$2" 2>/dev/null | xdiff; }
+  tipdiff() { gh_get -H "Accept: application/vnd.github.diff" "repos/$repo/compare/$pbase...$bm" | xdiff; }
+  filesof() { gh_api "repos/$repo/compare/$pbase...$bm" -q '.files[].filename' 2>/dev/null | xfiles; }
 else
   head=$(git rev-parse HEAD); lbl="worktree $bm" fetchref=""; baseref=$wbase
   wt=$(pwd)   # every read names this worktree: the grok and gemini legs run from SG_CHECKOUT, and the head watch there read the checkout's HEAD (#483)
   curhead() { git -C "$wt" rev-parse HEAD; }
   # "ahead" on the local side is the same question the remote's compare answers: the reviewed sha is an ancestor of the head.
   ahead() { git -C "$wt" merge-base --is-ancestor "$1" "$2" 2>/dev/null; }
-  deltadiff() { git -C "$wt" diff "$1"...HEAD 2>/dev/null; }
-  tipdiff() { git -C "$wt" diff "$wbase"...HEAD 2>/dev/null; }
-  filesof() { git -C "$wt" diff --name-only "$wbase"...HEAD 2>/dev/null; }
+  deltadiff() { git -C "$wt" diff "$1"...HEAD 2>/dev/null | xdiff; }
+  tipdiff() { git -C "$wt" diff "$wbase"...HEAD 2>/dev/null | xdiff; }
+  filesof() { git -C "$wt" diff --name-only "$wbase"...HEAD 2>/dev/null | xfiles; }
 fi
 # #624: one review of a branch at a time. runreview.sh and childcc.py both review a child through childreview.sh, and two
 # chains on the same files read each other's answer: one chain's BLOCKED line became the other model's MODEL_FORMAT, or a
@@ -83,6 +89,29 @@ if [ -s "$last" ] && [ -s "$SG_STATE/review-$pr.md" ] && head -1 "$SG_STATE/revi
   delta=$(deltadiff "$(cat "$last")" "$head")
   [ "$(printf '%s\n' "$delta" | wc -l)" -le "$(jq -r '.review_delta_max_lines // 3000' "$cfg")" ] && cp "$SG_STATE/review-$pr.md" "$prevmd" || delta=""
 fi
+# #846: the reads the prompt carries as DATA are answers or nothing. A refused or failed read (gh exit non-zero, GitHub's
+# refusal line, a 403/429 or rate-limit message) and an empty diff end the try BLOCKED before any model is called: the reviewer
+# would judge the text of an error as the code, and a CHANGES verdict from that would reach a fix round. A BLOCKED try is a
+# failed try for branchreviewpass.sh, so the tip is reviewed again on a later pass.
+read_refusal() {   # <name> <text> <gh exit>: the reason the read is not an answer; prints nothing when it is one
+  local name=$1 txt=$2 rc=$3 first
+  first=$(printf '%s\n' "$txt" | head -1)
+  if [ "$rc" -ne 0 ]; then echo "the $name read refused (gh exit $rc): ${first:0:160}"; return 0; fi
+  if [ -z "$(printf '%s' "$txt" | tr -d '[:space:]')" ]; then echo "the $name read is empty"; return 0; fi
+  if printf '%s' "$first" | /usr/bin/grep -qE '^(refused:|failed:|gh: |HTTP (403|429)|API rate limit|secondary rate limit)'; then
+    echo "the $name read refused: ${first:0:160}"; return 0; fi
+  case "$first" in "{"*) printf '%s' "$txt" | jq -e 'type == "object" and has("message") and has("status")' >/dev/null 2>&1 \
+    && { echo "the $name read refused: ${first:0:160}"; return 0; };; esac
+  return 1
+}
+if [ -n "$delta" ]; then rwhy=$(read_refusal "delta" "$delta" 0)
+else
+  iss_raw=$(gh_get repos/$repo/issues/$iss); iss_rc=$?   # a raw REST read: a refusal is exit 2 and its line, a failure exit 1
+  iss_txt=$iss_raw; [ "$iss_rc" -eq 0 ] && iss_txt=$(printf '%s' "$iss_raw" | jq -r '"#\(.number) \(.title)\n\(.body)"' 2>/dev/null)
+  diff_txt=$(tipdiff)
+  rwhy=$(read_refusal "issue" "$iss_txt" "$iss_rc"); [ -n "$rwhy" ] || rwhy=$(read_refusal "diff" "$diff_txt" 0)
+fi
+if [ -n "$rwhy" ]; then echo "REVIEW $lbl: $rwhy" >&2; publish "VERDICT: BLOCKED ($rwhy)"; exit 1; fi
 # the mode the answer was asked for: a fix round answers its previous findings, and may do it in a '## Resolved'
 # section of their own (#1834) -- a full review may not write that heading, so revformat.py is told which one this is.
 fr=""; [ -n "$delta" ] && fr=--fix-round
@@ -131,9 +160,20 @@ $SEV
 $FMT
 Only real defects; no style nits."
   echo "=== BRANCH"; prdata
-  echo "=== ISSUE"; gh api repos/$repo/issues/$iss -q '"#\(.number) \(.title)\n\(.body)"'
-  echo "=== DIFF"; tipdiff   # the child's own commits against the landing branch, or a local worktree's against its wave branch
+  echo "=== ISSUE"; printf '%s\n' "$iss_txt"
+  python3 "$(dirname "$0")/reopen-note.py" "$repo" "$iss" 2>/dev/null   # a reopened issue is judged against the reason it was reopened too (#817)
+  echo "=== DIFF"; printf '%s\n' "$diff_txt"   # the child's own commits against the landing branch, or a local worktree's against its wave branch
   } > $p
+fi
+# #816: a prompt over review_max_prompt_chars calls no model. Every model refuses it the same way, so the chain would spend its
+# retries and end "every review model failed"; the review says what is too large instead, and names the largest files.
+pmax=$(jq -r '.review_max_prompt_chars // 900000' "$cfg"); pn=$(wc -c < "$p" | tr -d ' ')
+if [ "$pn" -gt "$pmax" ]; then
+  top=$(awk '/^diff --git /{f=$3; sub(/^a\//,"",f)} f!=""{n[f]+=length($0)+1} END{for(k in n) print n[k]"\t"k}' "$p" | sort -rn | head -3 \
+        | awk -F'\t' '{printf "%s%s (%s chars)", (NR>1?", ":""), $2, $1}')
+  why="diff too large: $pn chars over review_max_prompt_chars $pmax; largest: ${top:-none}; SG_REVIEW_EXCLUDE leaves generated paths out"
+  printf 'REVIEW_TOO_LARGE review on branch %s: %s.\n' "$bm" "$why" > "$(sg_cq_status "$iss" "mtoolarge$$")"
+  echo "REVIEW $lbl: $why" >&2; publish "VERDICT: BLOCKED ($why)"; exit 1
 fi
 # A reviewer whose registry capabilities say tools:false (#504) reviews from this prompt alone. With tools, DeepSeek explored the repo turn
 # after turn (833 s, 4.3M cache-read tokens) and never answered inside its timeout; the diff is already above.

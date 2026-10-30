@@ -2,7 +2,8 @@
 """A child that finished with outcome pass moves its issue to Code Complete (called by watch.sh every loop).
 A child of a run that cut a wave enters it first (#375, ADR-0145 rules 9 and 12): `wave.sh enter <run> <issue>` runs in the
 child's own worktree, is the only route into the wave branch, and its entry is what moves the card; a child that did not
-enter has no card to move, its issue went back to the queue. A run that cut no wave keeps the direct move.
+enter has no card to move, its issue went back to the queue. A run that cut no wave keeps the direct move, unless it was dispatched
+for a child: then its cut failed, and the child is named on a salvage line instead of moved.
 The child's own diff is reviewed before that entry, here, once per head (childreview.sh, #448): the entry waits for the review
 of the child's own commits against the wave branch (#376), and a child's branch is pushed nowhere (#375), so the review lane
 that lists pushed work branches never saw it and every child was held out of its wave for good.
@@ -242,7 +243,9 @@ def enter(rd, child, n, d, approved=False, own=False):
     branches, and a child's branch is pushed nowhere), so its issue goes back to the queue -- live run or not, its next head
     is read again. A child its run reviewed is never reviewed or fixed here (`own`, ADR-0151 rule 5): its run's approval is
     the only evidence, and it enters on that alone, bound to the head the run read (rule 4)."""
-    if not (A / f"waved-{rd.name}").exists() and not (A / f"wave-{rd.name}").exists(): return None, "", False   # `waved-` is the durable record: a landing removes `wave-`, never this
+    if not (A / f"waved-{rd.name}").exists() and not (A / f"wave-{rd.name}").exists():   # `waved-` is the durable record: a landing removes `wave-`, never this
+        if child_request(rd): return False, f"WAVE-SALVAGE #{n} ({rd.name} {child}): the run cut no wave, so this child's commit is on its run's branch and in no wave; no card moves", False
+        return None, "", False
     wt = child_worktree(rd, child, d)
     if not wt.is_dir(): return False, f"WAVE no entry for #{n}: the child's worktree {wt} is not there", False
     rq = requeue_head(rd.name, n)   # the sha a refused entry left the child on: the same sha would fail the same gates again, so the pass waits for a new commit
@@ -279,6 +282,10 @@ def card_status(n):   # the state the card carries, "" when it carries none or t
 def issue_from(df):
     n = child_issues.first(df)   # the one reader the janitor's sibling passes share (#555)
     return int(n) if n else None
+def child_request(rd):   # the run was dispatched for a child (launch.py's _issue_child_request), so it had a wave to cut
+    try: txt = (rd / "request.txt").read_text(errors="replace")
+    except OSError: return False
+    return bool(re.search(r"^CHILD[^\n]*GitHub issue", txt, re.M) or re.search(r"^FORK-ONLY", txt, re.M))
 pending, runs = [], set()   # every finished child with no marker yet, as (key, run, child, why, issue, finished, definition)
 for r in (sys.argv[1:] or (st / "active-runs.txt").read_text().split()):
     rec = pathlib.Path(r if r.startswith("/") else "runs/" + r) / "record.jsonl"
@@ -345,10 +352,14 @@ for key, r, child, why, n, finished, d, lwhy, ok, own, rnd in pending[k0:] + pen
     visited.add(key)
     HELD.update(key=key, step="enter", rk=None); publish()
     name = pathlib.Path(r).name; mk = A / f"cc-{name}-{child}"
-    s = subprocess.run(["gh", "api", f"repos/{repo}/issues/{n}", "-q", ".state"], capture_output=True, text=True).stdout.strip()
-    if s != "open": mk.touch(); continue
+    e = subprocess.run(["gh", "api", f"repos/{repo}/issues/{n}", "-q", ".state"], capture_output=True, text=True); s = e.stdout.strip()
+    if e.returncode or s not in ("open", "closed"):   # a failed read is no answer: no done marker, so the child is tried again on the next pass (#848)
+        logged(f"state {name} {child}", f"CHILDCC SKIP #{n} ({name} {child}): its issue state could not be read ({(e.stderr or s).strip()[:200] or f'exit {e.returncode}'}); no marker, tried on the next pass")
+        visited.discard(key); continue
+    if s == "closed": logged(f"closed {name} {child}", f"CHILDCC SKIP #{n} ({name} {child}): its issue is closed; no entry, no card move"); mk.touch(); continue
     waved = (A / f"wave-{name}").exists()   # the run's wave is not landed yet: its marker, not the card, says the child still has an entry to make
-    if (A / f"waved-{name}").exists() and not waved: mk.touch(); continue   # the wave is landed and this child is not in it: its issue went back to the queue, so no card moves (never the direct Code Complete move)
+    if (A / f"waved-{name}").exists() and not waved:   # the wave is landed and this child is not in it: its issue went back to the queue, so no card moves (never the direct Code Complete move)
+        logged(f"landed {name} {child}", f"CHILDCC SKIP #{n} ({name} {child}): its run's wave landed without it; no entry, no card move"); mk.touch(); continue
     if lwhy is not None and requeue_head(name, n):   # its run's own review held it and requeued it already (#601): never twice
         print(f"CHILD HELD #{n} ({name} {child}): its run's review requeued it", flush=True); mk.touch(); continue
     if own:   # the approval is read before a failed land's requeue: a run that reviewed the child owns it, and missing evidence holds delivery (#701, ADR-0151 rules 4 and 5)
@@ -364,7 +375,8 @@ for key, r, child, why, n, finished, d, lwhy, ok, own, rnd in pending[k0:] + pen
     if lwhy is not None:   # the child's own engine landing failed: its work never reached the run's target, so no entry and no card move (#592); for a run-owned child only a standing approval at its reviewed head reaches here, so the failure is not the review's
         subprocess.run(["bash", wave, "requeue", str(n), f"its landing failed: {lwhy}"], capture_output=True, env={**os.environ, "SG_REQUEUE_RUN": name})
         print(f"CHILD LAND REQUEUE #{n} ({name} {child}): {lwhy}", flush=True); mk.touch(); continue
-    if finished and not waved and card_status(n) not in ("Todo", "In Progress", "Blocked"): mk.touch(); continue   # backfill never moves a card past (or out of) its column
+    if finished and not waved and card_status(n) not in ("Todo", "In Progress", "Blocked"):   # backfill never moves a card past (or out of) its column
+        logged(f"backfill {name} {child}", f"CHILDCC SKIP #{n} ({name} {child}): its run ended and its card is past the backfill; no entry, no card move"); mk.touch(); continue
     entered, why, worked = enter(pathlib.Path(r), child, n, d, ok, own)
     if worked is None: visited.discard(key); continue   # the review budget was full: this child had no turn, so the pass leaves it (exit 3) and the next one tries it first
     if worked: spent += 1; CURSOR.write_text(key + "\n")

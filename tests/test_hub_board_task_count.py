@@ -92,6 +92,12 @@ def test_a_summary_the_hub_cannot_read_exposes_no_counter(hub, monkeypatch):
 
 # ---- the fact, off the route the pass already reads (board_pass()) -----------------------------------
 
+def _rest_issue(i):
+    """An open issue as the REST list answers it: the summary is one of GitHub's own fields."""
+    return {"number": i["n"], "title": i["t"], "state": i["s"].lower(), "labels": [{"name": x} for x in i["l"]],
+            "created_at": None, "sub_issues_summary": i["si"]}
+
+
 def _fake_gh(calls, items, fallback=()):
     """The gh CLI as board_pass uses it: every call is recorded, and the two issue routes answer from the lists given."""
     def run(cmd, **kw):
@@ -100,7 +106,7 @@ def _fake_gh(calls, items, fallback=()):
         if "projectsV2" in s and "/items" in s:
             out = "".join(json.dumps(i) + "\n" for i in items)
         elif "issues?state=open" in s:
-            out = "".join(json.dumps(i) + "\n" for i in fallback)
+            out = json.dumps([_rest_issue(i) for i in fallback])
         elif "/fields?" in s:
             out = "PVTSSF_status\n"
         elif "blockedBy" in s:
@@ -153,7 +159,6 @@ def test_a_card_that_only_the_fallback_read_returned_gets_its_count_too(hub, mon
     calls = _pass_calls(hub, monkeypatch, [], fallback)
     read = [c for c in calls if "issues?state=open" in " ".join(c)]
     assert len(read) == 1
-    assert "sub_issues_summary" in _jq(read[0]), f"the fallback projection drops the fact too: {_jq(read[0])}"
     assert hub.board_cache["items"][0]["si"] == {"total": 5, "completed": 3}
     assert _row(hub.board(), 153)["sc"] == "3/5"
 

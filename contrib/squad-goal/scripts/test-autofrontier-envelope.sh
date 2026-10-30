@@ -67,7 +67,7 @@ issues() { printf '%s' "$1" | jq -c '[.[]|if .unready then . else .labels=((.lab
 four() { issues '[{"number":41,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":42,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":43,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":44,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'; }
 run() { SG_SINGLE_AUTOFRONTIER=1 bash "$T/scripts/autofrontier.sh" 2>&1; /bin/sleep 0.6; }
 spent() { sed -nE 's/.*spend ([0-9.]+).*/\1/p' "$MKLOG.body" | head -1; }
-asked() { sed -nE 's/.*call the spawn tool for the ([0-9]+) child.*/\1/p' "$MKLOG.body" | head -1; }
+asked() { sed -nE 's/.*one entry for each of the ([0-9]+) child.*/\1/p' "$MKLOG.body" | head -1; }
 seedfield() { python3 - "$repo" "$1" <<'PY'
 import json, pathlib, sys
 d = json.loads((pathlib.Path(sys.argv[1]) / "docs/design/router.graph.json").read_text())

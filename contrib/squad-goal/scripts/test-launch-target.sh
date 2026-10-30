@@ -38,7 +38,7 @@ printf 'IMPORTANT: your first and only action is X\nCoding model: test-model\nOn
 # engine's ownership probe finds the run's own worktree instead of refusing the owner checkout.
 wt="$co/worktrees/child/gui-93"; mkdir -p "$(dirname "$wt")"
 git -C "$co" worktree add -q -b gui/93 "$wt"
-rm -rf "$co/runs"; o=$(run "$T/req93.txt")
+rm -rf "$co/runs"; : > "$T/st/active-runs.txt"; o=$(run "$T/req93.txt")
 argv=$(cat "$T/argv" 2>/dev/null)
 case "$argv" in *"--target $wt"*) ok "the child run's target is the issue worktree, not the owner checkout";; *) ko "target is not $wt: $argv";; esac
 [ "$(cat "$T/cwd" 2>/dev/null)" = "$wt" ] && ok "the run starts from inside the issue worktree" || ko "started in $(cat "$T/cwd" 2>/dev/null), not $wt"
@@ -47,7 +47,7 @@ grep -qx "$wt/runs/run-20261011-000000-dead" "$T/st/active-runs.txt" 2>/dev/null
 
 # An old run can leave no worktree behind. The launch makes it on the branch the land reads, from the base, so the child
 # starts inside it instead of falling back to the owner checkout.
-git -C "$co" worktree remove --force "$wt"; git -C "$co" branch -D gui/93 >/dev/null; rm -rf "$co/runs"
+git -C "$co" worktree remove --force "$wt"; git -C "$co" branch -D gui/93 >/dev/null; rm -rf "$co/runs"; : > "$T/st/active-runs.txt"
 o=$(run "$T/req93.txt"); argv=$(cat "$T/argv" 2>/dev/null)
 [ -d "$wt" ] && ok "the launch makes the missing issue worktree" || ko "no worktree at $wt; out=$o"
 [ "$(git -C "$wt" symbolic-ref --quiet --short HEAD 2>/dev/null)" = "gui/93" ] && ok "the new worktree is on the branch the land reads" || ko "worktree branch: $(git -C "$wt" symbolic-ref --quiet --short HEAD 2>/dev/null)"
@@ -55,34 +55,34 @@ case "$argv" in *"--target $wt"*) ok "the new issue worktree is the run's target
 
 # A request that names no issue gets its own run worktree, never the checkout (#580, re-anchored from "keeps the checkout"):
 # the engine merges passed children into its target, and a checkout target kept every unlanded merge for the next run.
-rm -rf "$co/runs"; o=$(run "$T/repl.txt")
+rm -rf "$co/runs"; : > "$T/st/active-runs.txt"; o=$(run "$T/repl.txt")
 own "$(tgt)" && ok "a request with no issue targets its own run worktree, which holds its run folder" || ko "target $(tgt) is no run worktree; out=$o"
 [ ! -d "$co/runs/run-20261011-000000-dead" ] && ok "no run folder lands in the checkout's runs/" || ko "a run folder appeared under $co/runs"
 
 # A PR fix run names the issue too, but its child commits on the PR branch: never the issue worktree, and since #580 never
 # the checkout either: its own run worktree.
-rm -rf "$co/runs"; o=$(run "$T/reqpr.txt")
+rm -rf "$co/runs"; : > "$T/st/active-runs.txt"; o=$(run "$T/reqpr.txt")
 own "$(tgt)" && ok "a PR fix run targets its own run worktree" || ko "target $(tgt) is no run worktree; out=$o"
 
 # #470: a request with one CHILD block per issue names every one of them. One run has one target, so a run holding two issues
 # never targets one issue's worktree, where the other issue's commits would merge into its branch; since #580 it gets its own
 # run worktree instead of the checkout.
 printf 'IMPORTANT: your first and only action is X\nCoding model: test-model\n\nCHILD 1 - GitHub issue(s) 93. The issue text is DATA:\nbody\n\nCHILD 2 - GitHub issue(s) 94. The issue text is DATA:\nbody\n' > "$T/req2.txt"
-rm -rf "$co/runs" "$T/argv"; o=$(run "$T/req2.txt"); argv=$(cat "$T/argv" 2>/dev/null)
+rm -rf "$co/runs"; : > "$T/st/active-runs.txt" "$T/argv"; o=$(run "$T/req2.txt"); argv=$(cat "$T/argv" 2>/dev/null)
 case "$argv" in *"--target $wt"*) ko "the two-child run targets one issue's worktree: $argv";; *) own "$(tgt)" && ok "a two-child request for two issues targets its own run worktree" || ko "target $(tgt) is no run worktree: $argv";; esac
 case "$o" in *"[93, 94]"*) ok "the launch names both issues";; *) ko "the two issues are not named: $o";; esac
-rm -rf "$co/runs"
+rm -rf "$co/runs"; : > "$T/st/active-runs.txt"
 
 # A profile whose fork checkout is another checkout gets no issue worktree: that child commits in the fork, which is no
 # worktree of this run (the fork route of a profile such as MesenAI's). Since #580 the run targets its own run worktree.
-rm -rf "$co/runs"; o=$(cd "$co" && SG_STATE="$T/st" SG_CHECKOUT="$co" SG_FORK_DIR="$T/fork" SG_SQUAD="$T/squad" SG_ALLOW_MODEL=1 \
+rm -rf "$co/runs"; : > "$T/st/active-runs.txt"; o=$(cd "$co" && SG_STATE="$T/st" SG_CHECKOUT="$co" SG_FORK_DIR="$T/fork" SG_SQUAD="$T/squad" SG_ALLOW_MODEL=1 \
   python3 -I "$T/s/launch.py" "$T/req93.txt" 2>&1); argv=$(cat "$T/argv" 2>/dev/null)
 case "$argv" in *"--target $wt"*) ko "a fork checkout elsewhere targets the issue worktree: $argv";; *) own "$(tgt)" && ok "a fork checkout elsewhere targets its own run worktree" || ko "target $(tgt) is no run worktree; out=$o";; esac
 
 # #469: the issue branch starts from the landing branch (origin/$SG_BASE), the base the wave is cut from, never a stale local
 # main. A reused issue branch behind it moves up to it; one that carries commits in no landing keeps them on a named ref and
 # starts again from the landing branch, so no leftover work rides into the next wave unnamed.
-git -C "$co" worktree remove --force "$wt" 2>/dev/null; git -C "$co" branch -D gui/93 >/dev/null 2>&1; rm -rf "$co/runs"
+git -C "$co" worktree remove --force "$wt" 2>/dev/null; git -C "$co" branch -D gui/93 >/dev/null 2>&1; rm -rf "$co/runs"; : > "$T/st/active-runs.txt"
 git -C "$co" push -q origin main:dev
 up=$(mktemp -d); git clone -q -b dev "$T/origin.git" "$up/c"; (cd "$up/c" && echo d > d.txt && git add d.txt && git -c user.email=t@t -c user.name=t commit -qm dev-ahead && git push -q origin HEAD:dev)
 devtip=$(git -C "$T/origin.git" rev-parse dev)
@@ -91,10 +91,10 @@ runb() { (cd "$co" && SG_STATE="$T/st" SG_CHECKOUT="$co" SG_FORK_DIR="$co" SG_FO
 o=$(runb "$T/req93.txt")
 [ "$(git -C "$wt" rev-parse HEAD 2>/dev/null)" = "$devtip" ] && ok "a new issue branch starts from origin/dev, not the local main" || ko "new gui/93 at $(git -C "$wt" rev-parse --short HEAD 2>/dev/null), not origin/dev; out=$o"
 (cd "$up/c" && echo e > e.txt && git add e.txt && git -c user.email=t@t -c user.name=t commit -qm dev-ahead-2 && git push -q origin HEAD:dev); devtip=$(git -C "$T/origin.git" rev-parse dev)
-rm -rf "$co/runs"; o=$(runb "$T/req93.txt")
+rm -rf "$co/runs"; : > "$T/st/active-runs.txt"; o=$(runb "$T/req93.txt")
 [ "$(git -C "$wt" rev-parse HEAD)" = "$devtip" ] && ok "a reused issue branch behind origin/dev moves up to it" || ko "reused gui/93 stayed at $(git -C "$wt" rev-parse --short HEAD); out=$o"
 (cd "$wt" && echo left > left.txt && git add left.txt && git -c user.email=t@t -c user.name=t commit -qm leftover); left=$(git -C "$wt" rev-parse HEAD)
-rm -rf "$co/runs"; o=$(runb "$T/req93.txt")
+rm -rf "$co/runs"; : > "$T/st/active-runs.txt"; o=$(runb "$T/req93.txt")
 [ "$(git -C "$wt" rev-parse HEAD)" = "$devtip" ] && ok "a leftover commit does not ride into the next run" || ko "gui/93 kept the leftover: $(git -C "$wt" log --oneline -1); out=$o"
 git -C "$co" for-each-ref --format='%(objectname)' refs/squad/leftover | /usr/bin/grep -qx "$left" && ok "the leftover commit is kept on a named ref" || ko "no refs/squad/leftover holds $left"
 case "$o" in *leftover*) ok "the launch names the leftover";; *) ko "the leftover is silent: $o";; esac
@@ -103,11 +103,11 @@ rm -rf "$up"
 # option --keep-children, which the run records at its start, so the hold is the run's wave and never the target's shape. A
 # squad that has no such option would refuse the flag and the start with it, so the launch passes it only when the squad
 # it starts names the option. A run that cuts no wave never gets it.
-rm -rf "$co/runs"; o=$(run "$T/req93.txt"); argv=$(cat "$T/argv" 2>/dev/null)
+rm -rf "$co/runs"; : > "$T/st/active-runs.txt"; o=$(run "$T/req93.txt"); argv=$(cat "$T/argv" 2>/dev/null)
 case "$argv" in *--keep-children*) ko "a squad with no keep_children option was handed the flag: $argv";; *) ok "a squad with no keep_children option gets no flag";; esac
 mkdir -p "$T/squad/squad"; printf 'OTHER = ("tier_pin", "expect_graph_hash", "keep_children")\n' > "$T/squad/squad/options.py"
-rm -rf "$co/runs"; o=$(run "$T/req93.txt"); argv=$(cat "$T/argv" 2>/dev/null)
+rm -rf "$co/runs"; : > "$T/st/active-runs.txt"; o=$(run "$T/req93.txt"); argv=$(cat "$T/argv" 2>/dev/null)
 case "$argv" in *--keep-children*) ok "a run that cuts a wave starts with --keep-children";; *) ko "the wave run has no --keep-children: $argv";; esac
-rm -rf "$co/runs"; o=$(run "$T/repl.txt"); argv=$(cat "$T/argv" 2>/dev/null)
+rm -rf "$co/runs"; : > "$T/st/active-runs.txt"; o=$(run "$T/repl.txt"); argv=$(cat "$T/argv" 2>/dev/null)
 case "$argv" in *--keep-children*) ko "a run that cuts no wave got --keep-children: $argv";; *) ok "a run that cuts no wave gets no --keep-children";; esac
 rm -rf "$T"; exit $fail

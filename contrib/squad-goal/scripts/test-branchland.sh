@@ -288,4 +288,14 @@ rm -f "$T/st/auto/basecheck-"* "$T/st/auto/branchland-"*; basehold; r=$(CHECKS="
 # (#790) The base is read again right after the landing push: the head it lands on has its own answer, written after the push.
 new=$($O rev-parse dev); [ -e "$T/st/auto/basecheck-$new" ] && ok "a landing reads the base head it pushed" || ko "no read of the pushed head $new: $(ls "$T/st/auto")"
 rm -f "$T/st/auto/basecheck-"*; /usr/bin/grep -v 'gui/6-y' "$T/st/landed.tsv" > "$T/st/landed.tmp" && mv "$T/st/landed.tmp" "$T/st/landed.tsv"
+# (#837) The ruff fix stages only the files it changed. A generated file the gate rewrote in the trial (graphify-out/graph.json,
+# as the post-checkout hook does) is not in the landing commit; the commit carries the one file ruff fixed.
+reset; $G clone -q "$T/origin.git" "$T/lb" 2>/dev/null
+(cd "$T/lb" && $G checkout -q gui/7-x && mkdir -p graphify-out && echo '{}' > graphify-out/graph.json && echo broken > lint.py && $G add graphify-out lint.py && $G -c user.email=a@b -c user.name=t commit -q -m "lint and graph" && $G push -q origin gui/7-x) >/dev/null 2>&1; rm -rf "$T/lb"; rev APPROVE
+RUFF_PY="echo changed > graphify-out/graph.json; grep -qx fixed lint.py || { echo 'Found 1 error.'; echo '[*] 1 fixable with the \`--fix\` option.'; exit 1; }"
+r=$(SG_LOCAL_GATE_CMD="$RUFF_PY" SG_LOCAL_GATE_RERUN_CMD="exit 1" SG_RUFF_FIX_CMD="echo fixed > lint.py" CHECKS='{"check_runs":[]}' bl)
+case "$r" in *"BRANCHLAND LANDED gui/7-x"*) ok "a ruff fix beside a generated tracked file: the branch lands";; *) ko "no landing with a generated file dirty: '$r'";; esac
+fixc=$($O log --format=%H -n1 --grep='^Apply ruff --fix at the landing' dev)
+[ -n "$fixc" ] && [ "$($O show --name-only --format= "$fixc")" = "lint.py" ] && ok "the ruff fix commit carries only the .py file" || ko "the ruff fix commit carries: '$($O show --name-only --format= "$fixc" 2>&1 | tr '\n' ' ')'"
+[ "$($O show dev:graphify-out/graph.json 2>/dev/null)" = "{}" ] && ok "the generated file on dev is the branch's, not the trial's" || ko "dev carries the generated file the gate rewrote"
 rm -rf "$T"; exit $fail

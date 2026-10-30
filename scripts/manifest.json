@@ -1,44 +1,21 @@
 [
   {
-    "path": "scripts/build_dashboard.py",
-    "status": "live",
-    "reason": "Builds the run dashboard page; tests/test_dashboard.py"
-  },
-  {
-    "path": "scripts/build_vendor_skills.py",
-    "status": "live",
-    "reason": "Builds vendor/skills; tests/test_vendor_skills.py"
-  },
-  {
-    "path": "scripts/jev_screen_set.py",
-    "status": "live",
-    "reason": "Labeled set for the Jev screen; tests/test_jev_screen_set.py"
-  },
-  {
-    "path": "scripts/run_router.py",
-    "status": "live",
-    "reason": "Router run named in config/subject.yaml"
-  },
-  {
-    "path": "scripts/stamp_router_record.py",
-    "status": "live",
-    "reason": "Restamps docs/design/router.record.jsonl to the graph it ships beside; called by the hub models panel; tests/test_hub_router_envelope.py"
-  },
-  {
-    "path": "scripts/run_subject.py",
-    "status": "live",
-    "reason": "Subject run driver; results in docs/research/subject-run-01.md"
-  },
-  {
-    "path": "scripts/run_subject_chain.py",
-    "status": "live",
-    "reason": "Chains every subject issue on one growing tree with the fixed graph"
-  },
-  {
-    "path": "scripts/jev_shadow_report.py",
+    "path": "scripts/archive/jev_data",
     "status": "archived",
-    "reason": "Prints Jev shadow pairs; output in docs/research/jev-shadow-runs.md",
-    "result": "docs/research/jev-shadow-runs.md"
+    "reason": "Input and results of the Jev screen set; result in docs/research/jev-screen-set.md",
+    "result": "docs/research/jev-screen-set.md"
+  },
+  {
+    "path": "scripts/archive/jev_real",
+    "status": "archived",
+    "reason": "Real-usage Jev probes; result in docs/research/jev-real-usage.md",
+    "result": "docs/research/jev-real-usage.md"
+  },
+  {
+    "path": "scripts/archive/jev_results_real",
+    "status": "archived",
+    "reason": "Raw results of jev_real; result in docs/research/jev-real-usage.md",
+    "result": "docs/research/jev-real-usage.md"
   },
   {
     "path": "scripts/archive/probe_commands.py",
@@ -77,32 +54,30 @@
     "result": "docs/research/agent-sdk-command-map.md"
   },
   {
-    "path": "scripts/archive/jev_real",
-    "status": "archived",
-    "reason": "Real-usage Jev probes; result in docs/research/jev-real-usage.md",
-    "result": "docs/research/jev-real-usage.md"
-  },
-  {
-    "path": "scripts/archive/jev_data",
-    "status": "archived",
-    "reason": "Input and results of the Jev screen set; result in docs/research/jev-screen-set.md",
-    "result": "docs/research/jev-screen-set.md"
-  },
-  {
-    "path": "scripts/archive/jev_results_real",
-    "status": "archived",
-    "reason": "Raw results of jev_real; result in docs/research/jev-real-usage.md",
-    "result": "docs/research/jev-real-usage.md"
-  },
-  {
-    "path": "scripts/probe_gateway_cache.py",
+    "path": "scripts/build_dashboard.py",
     "status": "live",
-    "reason": "Probes whether a gateway returns cache_read; tests/test_probe_gateway_cache.py"
+    "reason": "Builds the run dashboard page; tests/test_dashboard.py"
+  },
+  {
+    "path": "scripts/build_vendor_skills.py",
+    "status": "live",
+    "reason": "Builds vendor/skills; tests/test_vendor_skills.py"
   },
   {
     "path": "scripts/gui_test_run_script.py",
     "status": "live",
     "reason": "Runs a whole gui-test/1 script end to end; the /to-test-scenario Run step; tests/test_gui_test_e2e.py"
+  },
+  {
+    "path": "scripts/jev_screen_set.py",
+    "status": "live",
+    "reason": "Labeled set for the Jev screen; tests/test_jev_screen_set.py"
+  },
+  {
+    "path": "scripts/jev_shadow_report.py",
+    "status": "archived",
+    "reason": "Prints Jev shadow pairs; output in docs/research/jev-shadow-runs.md",
+    "result": "docs/research/jev-shadow-runs.md"
   },
   {
     "path": "scripts/make_gui_vision_fixtures.py",
@@ -113,5 +88,35 @@
     "path": "scripts/measure_gui_vision.py",
     "status": "live",
     "reason": "Measures the vision model on the fixed screenshot set; tests/test_gui_test_vision.py"
+  },
+  {
+    "path": "scripts/probe_gateway_cache.py",
+    "status": "live",
+    "reason": "Probes whether a gateway returns cache_read; tests/test_probe_gateway_cache.py"
+  },
+  {
+    "path": "scripts/run_router.py",
+    "status": "live",
+    "reason": "Router run named in config/subject.yaml"
+  },
+  {
+    "path": "scripts/run_subject.py",
+    "status": "live",
+    "reason": "Subject run driver; results in docs/research/subject-run-01.md"
+  },
+  {
+    "path": "scripts/run_subject_chain.py",
+    "status": "live",
+    "reason": "Chains every subject issue on one growing tree with the fixed graph"
+  },
+  {
+    "path": "scripts/stamp_router_record.py",
+    "status": "live",
+    "reason": "Restamps docs/design/router.record.jsonl to the graph it ships beside; called by the hub models panel; tests/test_hub_router_envelope.py"
+  },
+  {
+    "path": "scripts/start-mobile.sh",
+    "status": "live",
+    "reason": "Checks, and with --apply serves, the hub on the tailnet for the phone; commands/start-mobile.md"
   }
 ]

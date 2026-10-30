@@ -100,6 +100,25 @@ async def test_a_merge_land_records_the_tip_it_started_from(tmp_path):
     assert git.head(repo) == head
 
 
+def test_a_merge_land_carries_the_refs_trailers_of_the_branch(tmp_path):
+    """#818: a fix run lands its child with a merge commit, and the child's AC reads the head's message for its trailer
+    (`git log -1 --format=%B | grep -qx 'Refs #675'`). The merge message named only the land, so the run failed at its final
+    gate with the work kept. The merge carries each `Refs #N` line the branch's own commits carry, and never a `Closes`."""
+    from squad import actions
+    repo = make_repo(tmp_path / "repo")
+    wt = tmp_path / "wt"
+    sh(repo, "git", "worktree", "add", "-q", "-b", "child", str(wt))
+    (wt / "fix.txt").write_text("f\n")
+    sh(wt, "git", "add", "-A")
+    sh(wt, "git", "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "-m", "fix it\n\nRefs #675\nCloses #9")
+    sh(repo, "git", "commit", "-q", "--allow-empty", "-m", "a sibling moved the target")     # so the land is a true merge
+    r = actions.merge_land(repo, wt, "child", "squad: land c (r1)")
+    msg = sh(repo, "git", "log", "-1", "--format=%B")
+    assert r.ok and len(sh(repo, "git", "log", "-1", "--format=%P").split()) == 2, msg
+    assert "Refs #675" in msg.splitlines() and "squad: land c (r1)" in msg, msg
+    assert "Closes #9" not in msg and "Refs #9" not in msg, msg
+
+
 async def test_a_merge_conflict_fails_the_node_and_leaves_the_target_clean(tmp_path):
     repo = make_repo(tmp_path / "repo")
 

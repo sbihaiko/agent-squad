@@ -356,3 +356,37 @@ async def test_the_ledger_tells_the_router_when_a_landed_childs_own_held_out_com
     ledger = seen([c for c in eng.adapter.calls if c.node == "router"][1])["ledger"]
     assert [(r["child"], r["outcome"], r["held_out"]) for r in ledger] == [("route.router.1", "pass", "fail"), ("route.router.2", "pass", "pass")]
     assert [e["outcome"] for e in lands(tmp_path)] == ["pass", "pass"]   # a red own command does not undo the landing
+
+
+@pytest.mark.anyio
+async def test_the_final_gate_runs_a_childs_commands_in_that_childs_worktree(tmp_path):
+    """#862: a child's held-out command reads its own tree ("git log -1"). The final gate ran it in the target, whose
+    head is the landing merge, so a correct child failed `ac-verify` and its wave landed nothing."""
+    repo = sibling_repo(tmp_path)
+
+    def committer(subject, name):
+        step = writer(name, cmds=[f'test "$(git log -1 --format=%s)" = "{subject}"'])
+
+        def effect(r):
+            step["effect"](r)
+            sh(Path(r.workspace), "git", "add", "-A")
+            sh(Path(r.workspace), "git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", subject)
+        return {**step, "effect": effect}
+    script = {"router": routed(req(), req("diagnosing-bugs")), "route.router.1": committer("child one", "a.txt"),
+              "route.router.2": committer("child two", "b.txt")}
+    eng = make(tmp_path, script, target=repo)
+    assert (await eng.run()).verdict == "completed", [e for e in ev(tmp_path, "outcome") if e["node"] == "final_gate"]
+    assert [e["effect"]["held_out"] for e in lands(tmp_path)] == ["pass", "pass"]   # the landing check runs it in the child's tree too
+
+
+@pytest.mark.anyio
+async def test_a_plain_command_green_in_its_child_and_red_in_the_merged_target_fails_the_run(tmp_path):
+    """#862 negative: only a git-history command reads its child's tree. A plain command that passes in the child's tree and
+    fails once a sibling's file is merged is caught as a regression at the sibling's landing, so the run must not complete.
+    (The final gate applies the same routing: test_ac_verify_routes.py.)"""
+    repo = sibling_repo(tmp_path)
+    script = {"router": routed(req(), req("diagnosing-bugs")),
+              "route.router.1": writer("a.txt", cmds=["test ! -e b.txt"]), "route.router.2": writer("b.txt")}
+    eng = make(tmp_path, script, target=repo)
+    v = await eng.run()
+    assert v.verdict != "completed" and v.reasons == ["ac_regression:route.router.1"]

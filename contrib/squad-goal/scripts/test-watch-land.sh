@@ -140,4 +140,28 @@ run_cycle 1
 rm -f "$T/openissues"; run_cycle 1
 [ "$(/usr/bin/grep -cxE 'wave land run-9 /.*/run-9' "$STEPS")" = 1 ] && ok "closing the issue lands the wave with no other action" || ko "run-9 not landed after the close: '$(cat "$STEPS")'"
 
+# 9) (#844) a landing that fails on a rebase conflict is terminal for its wave: the landing runs once, the wave marker goes with
+# the conflict (wave.sh does that), so the next cycle does not call the landing again, and the wait line names the conflict,
+# never a lock. The stub is the real landing's shape: one WAVE CONFLICT line, the marker removed, exit 1.
+cp "$S/wave.sh" "$T/wave.stub"
+cat > "$S/wave.sh" <<EOS
+#!/bin/bash
+echo "wave \$*" >> "$STEPS"
+[ -e "$T/conflictfail" ] || exit 0
+rm -f "$ST/auto/wave-\$2"
+echo "WAVE CONFLICT wave/\$2: the rebase on dev conflicts at c9c5ccbf; #5 requeued on the current base"
+exit 1
+EOS
+chmod +x "$S/wave.sh"
+run run-c pass; printf 'wave/run-c\n' > "$ST/auto/wave-run-c"; printf '%s\n' "$T/run-c" > "$ST/active-runs.txt"
+: > "$T/conflictfail"; run_cycle 2
+[ "$(/usr/bin/grep -cxE 'wave land run-c /.*/run-c' "$STEPS")" = 1 ] && ok "a conflicting landing is not retried on the next cycle" \
+  || ko "the conflicting landing ran $(/usr/bin/grep -cxE 'wave land run-c /.*/run-c' "$STEPS")x in 2 cycles: '$(cat "$STEPS")'"
+/usr/bin/grep -E 'WATCH: run-c waits' "$T/watch.out" | /usr/bin/grep -q 'conflict' \
+  && ok "the wait line names the conflict" || ko "the wait line does not name the conflict: '$(/usr/bin/grep 'WATCH: run-c' "$T/watch.out")'"
+/usr/bin/grep -q 'pid none' "$T/watch.out" && ko "the wait line blames a lock that is not held (pid none)" || ok "the wait line never blames pid none for a conflict"
+[ "$(/usr/bin/grep -c 'RUN run-c verdict' "$T/watch.out")" = 1 ] && ok "the retired wave's run is read on the next cycle" \
+  || ko "the retired run was not read: '$(cat "$T/watch.out")'"
+cp "$T/wave.stub" "$S/wave.sh"; rm -f "$T/conflictfail"
+
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }
