@@ -439,3 +439,16 @@ def test_each_profile_reads_the_one_shared_quota_directory(tmp_path, monkeypatch
     apps = mux.load_apps()
     for slug in ("alpha", "beta"):
         assert apps[slug]["mod"].QUOTA == base / "_shared" / "hub-quota.json", apps[slug]["mod"].QUOTA
+
+
+def test_every_ended_run_link_in_the_real_mobile_page_gains_the_profile_prefix():
+    """The real hub-mobile.html builds its ended-run link; the mux must prefix every such link in that page, not only a
+    stub's literal (#907)."""
+    spec = importlib.util.spec_from_file_location("hubmux_real_page_under_test", SCRIPTS / "hubmux.py")
+    mux = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mux)
+    html = (SCRIPTS / "hub-mobile.html").read_bytes().decode()
+    assert html.count("/ended/") >= 1, "the mobile page has no ended-run link to check"
+    out = mux.rewrite(html.encode(), "alpha").decode()
+    assert out.count("/alpha/ended/") == html.count("/ended/") == out.count("/ended/"), (
+        html.count("/ended/"), out.count("/alpha/ended/"), out.count("/ended/"))
