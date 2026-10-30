@@ -319,4 +319,25 @@ case "$n" in *"HUNT filed #"*)   ko "20 a refused filing is never read back as a
 case "$n" in *"rate limit"*|*"403"*) ko "20 the refusal's own words became the filer's line: '$n'";;
              *)                      ok "20 the refusal's own words are never read as an issue number";; esac
 
+# 21) (#895) the hunt files a bug alone, and its card joins the Todo column: the bug kind is the only label the hunt
+# writes, and the card is added in Todo, the column the dispatcher reads. ready-for-agent is named by the caller that
+# dispatches the filing (autobug, through SG_FILED_LABELS), never by the hunt: a hunt that named it would start work
+# the owner has not moved to Todo. The board door is a spy that records its arguments; test 18 runs the real door.
+scene huntlabel
+f=$T/huntlabel
+printf '#!/bin/bash\necho "$*" >> "$SGH_BOARD/board.calls"; echo "card ok"\n' > "$S/board-spy.sh"; chmod +x "$S/board-spy.sh"
+printf 'export SG_REPO SG_OWNER SG_PROJECT SG_STATE SG_CHECKOUT\nexport BOARD="%s/board-spy.sh"\n' "$S" >> "$S/env.sh"
+export SGH_BOARD=$f
+: > "$f/ghpost"; : > "$f/board.calls"; printf 'repro\n' > "$f/body.md"
+unset SG_FILED_LABELS SG_FILED_BY SG_TODO SG_FILE_PASS
+n=$(bash "$S/autohunt.sh" --file "a defect" "$f/body.md" 2>&1)
+case "$n" in *"HUNT filed #42"*) ok "21 the hunt logs the bug it filed";; *) ko "21 the hunt did not file: '$n'";; esac
+labels=$($G -oE 'labels\[\]=[^ ]+' "$f/ghpost" | sort -u | tr '\n' ' ')
+[ "$labels" = "labels[]=bug " ] && ok "21 the hunt labels the bug kind and nothing else" || ko "21 the hunt's labels: '$labels'"
+$G -qxF -- "--add o 1 Todo 42" "$f/board.calls" && ok "21 the card joins the board in Todo" || ko "21 the card's column: $(cat "$f/board.calls")"
+: > "$f/ghpost"; : > "$f/board.calls"
+n=$(SG_FILED_BY=autobug SG_FILED_LABELS=ready-for-agent bash "$S/autohunt.sh" --file "a second defect" "$f/body.md" 2>&1)
+labels=$($G -oE 'labels\[\]=[^ ]+' "$f/ghpost" | sort -u | tr '\n' ' ')
+[ "$labels" = "labels[]=bug labels[]=ready-for-agent " ] && ok "21 only a named caller adds the startable label" || ko "21 a caller's labels: '$labels'"
+
 rm -rf "$T"; exit $fail
