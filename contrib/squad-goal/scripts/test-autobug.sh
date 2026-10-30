@@ -51,7 +51,7 @@ case "\$*" in
   *"issues?state=open"*wave*|*labels=ready-for-agent*) jq -c '[.[]|select((.labels // [])|index("ready-for-agent"))|.labels=[(.labels//[])[]|{name:.}]]' "$T/issues.json" ;;
   *"issue(number:"*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issue\(number: [0-9]+' | /usr/bin/grep -oE '[0-9]+' | head -1); jq -c --arg k "i\$n" --argjson n "\$n" '{data:{repository:{(\$k): (.[]|select(.number==\$n)|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}})}}}' "$T/issues.json" ;;   # the door's one-issue query, as GraphQL (#847)
   *issues/*comments*) echo "[]" ;;   # a comments list is a list: the issue stub below is for the issue itself
-  *issues/*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issues/[0-9]+' | cut -d/ -f2); jq -c --argjson n "\$n" '.[]|select(.number==\$n)' "$T/issues.json" ;;
+  *issues/*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issues/[0-9]+' | cut -d/ -f2); jq -c --argjson n "\$n" '.[]|select(.number==\$n)' "$T/issues.json" | { if /usr/bin/grep -qx "\$n" "$T/closed" 2>/dev/null; then jq -c '.state="closed"'; else cat; fi } ;;
   *) echo "[]" ;;
 esac
 J
@@ -874,7 +874,7 @@ case "\$*" in
   *"issues?state=open"*wave*|*labels=ready-for-agent*) jq -c '[.[]|select((.labels // [])|index("ready-for-agent"))|.labels=[(.labels//[])[]|{name:.}]]' "$T/issues.json" ;;
   *"issue(number:"*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issue\(number: [0-9]+' | /usr/bin/grep -oE '[0-9]+' | head -1); jq -c --arg k "i\$n" --argjson n "\$n" '{data:{repository:{(\$k): (.[]|select(.number==\$n)|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}})}}}' "$T/issues.json" ;;   # the door's one-issue query, as GraphQL (#847)
   *issues/*comments*) echo "[]" ;;   # a comments list is a list: the issue stub below is for the issue itself
-  *issues/*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issues/[0-9]+' | cut -d/ -f2); jq -c --argjson n "\$n" '.[]|select(.number==\$n)' "$T/issues.json" ;;
+  *issues/*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issues/[0-9]+' | cut -d/ -f2); jq -c --argjson n "\$n" '.[]|select(.number==\$n)' "$T/issues.json" | { if /usr/bin/grep -qx "\$n" "$T/closed" 2>/dev/null; then jq -c '.state="closed"'; else cat; fi } ;;
   *) echo "[]" ;;
 esac
 J
@@ -890,5 +890,15 @@ out=$(bash "$T/s/autobug.sh" 2>"$T/err23"); rc=$?
 $G -qE -- "--add .* Todo .*1228" "$T/board.calls" 2>/dev/null && ok "23 the card goes back to Todo" || ko "23 no card move to Todo: '$(cat "$T/board.calls" 2>/dev/null)'"
 $G -q "#1228" "$T/st/alerts.log" 2>/dev/null && $G -q "router envelope" "$T/st/alerts.log" && ok "23 alerts.log names the issue and the refusal" || ko "23 alerts.log lacks the refusal: '$(cat "$T/st/alerts.log" 2>/dev/null)'"
 $G -q "AUTOBUG dispatched" <<<"$out" && ko "23 a refused launch was reported as dispatched" || ok "23 a refused launch is not reported as dispatched"
+
+# 24) (#868) the open list is read before a close lands: an issue closed after that list was read is not dispatched. The list
+# still names #1500 open, its own read says closed, and the pass skips it: no dispatch, no marker.
+python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d.append({"number":1500,"title":"Core: closed by hand","body":"step c.py","created_at":"2026-10-10T18:00:00Z","labels":["bug","ready-for-agent"]}); json.dump(d, open(p,"w"))' "$T/issues.json"
+printf '1500\tTodo\n' >> "$T/cards.tsv"; printf '1500\n' > "$T/closed"
+printf 'caps:\n  runs: 2\n' > "$T/co/docs/squad/defaults.yaml"   # two slots: a closed bug must not be passed over for the slot
+r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+case "$r" in *"would dispatch"*"1500"*) ko "24 a closed issue was dispatched: '$r'";; *) ok "24 a closed issue is not dispatched";; esac
+case "$r" in *"AUTOBUG skip #1500"*) ok "24 the skip is said, with the closed state";; *) ko "24 no skip line for the closed issue: '$r'";; esac
+rm -f "$T/closed"; [ ! -e "$T/st/auto/bug-1500" ] && ok "24 no marker written for the closed issue" || ko "24 a marker was written for the closed issue"
 
 rm -rf "$T"; exit $fail
