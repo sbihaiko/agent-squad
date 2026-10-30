@@ -24,7 +24,9 @@ echo "mutmut $*" >> "$ARGV_LOG"
 case " $* " in *" --paths-to-mutate "*|*" --paths-to-mutate="*) echo "Error: No such option: --paths-to-mutate" >&2; exit 2;; esac
 case $1 in
   run) [ -n "$MUTMUT_SLOW" ] && sleep 5; mkdir -p mutants; exit "${MUTMUT_RUN_RC:-0}" ;;
-  export-cicd-stats) mkdir -p mutants; echo '{"total": 10, "survived": 2, "killed": 8}' > mutants/mutmut-cicd-stats.json ;;
+  export-cicd-stats)
+    [ -n "$MUTMUT_NO_STATS" ] && { echo "Usage: mutmut export-cicd-stats [OPTIONS]" >&2; exit 2; }
+    mkdir -p mutants; echo '{"total": 10, "survived": 2, "killed": 8}' > mutants/mutmut-cicd-stats.json ;;
 esac
 S
 chmod +x "$T/with/radon" "$T/with/mutmut"
@@ -57,6 +59,16 @@ rm -f "$T/argv.log"; out=$(rd "$T/radonly"); rc=$?
 
 rm -f "$T/argv.log"; t0=$SECONDS; out=$(MUTMUT_SLOW=1 DL=1 rd "$T/with"); rc=$?; el=$((SECONDS - t0))
 [ $rc = 0 ] && [ "$el" -lt 4 ] && case $out in *"quality: mutmut deadline of 1s passed, skipped"*) true;; *) false;; esac && ok "a mutation run past its deadline is a named skip, stopped in time" || ko "deadline: rc $rc in ${el}s: $out"
+
+rm -f "$T/argv.log"; out=$(MUTMUT_NO_STATS=1 rd "$T/with"); rc=$?
+[ $rc = 0 ] && case $out in *"quality: mutmut wrote no stats (Usage: mutmut export-cicd-stats [OPTIONS]), skipped"*) true;; *) false;; esac && ok "a mutmut that writes no stats names its first stderr line, exit 0" || ko "no stats: rc $rc: $out"
+
+$G -C "$R" checkout -q -b gui/if dev; printf 'if True:\n    def h(z):\n        return z\n' > "$R/squad/c.py"
+$G -C "$R" add -A; $G -C "$R" commit -q -m if-work
+rm -f "$T/argv.log"; out=$(rd "$T/with"); rc=$?
+[ "$(cat "$T/argv.log" 2>/dev/null)" = "radon cc -s -j squad/c.py
+mutmut run squad.c.x_h__mutmut_*
+mutmut export-cicd-stats" ] && ok "a function under a module-level if is named for mutation" || ko "if-block argv: '$(cat "$T/argv.log" 2>&1)'"
 
 $G -C "$R" checkout -q -b gui/docs dev; echo more >> "$R/README.md"; $G -C "$R" commit -qam docs
 rm -f "$T/argv.log"; out=$(rd "$T/with"); rc=$?

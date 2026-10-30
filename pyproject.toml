@@ -10,7 +10,7 @@ dependencies = ["anyio>=4", "jsonschema>=4", "pyyaml>=6"]
 [project.optional-dependencies]
 sdk = ["claude-agent-sdk==0.2.161"]
 dev = ["ruff", "pytest>=8", "pytest-json-report", "pytest-xdist", "mypy", "types-PyYAML", "types-jsonschema",
-       "radon", "coverage", "pylint", "mutmut"]
+       "radon", "coverage", "pylint", "mutmut==3.8.1"]
 
 [project.scripts]
 squad = "squad.cli:main"

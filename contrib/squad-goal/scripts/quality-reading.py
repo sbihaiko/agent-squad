@@ -36,15 +36,19 @@ def git(*args, check=True):
 
 
 def call(argv, cwd, limit):
-    proc = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+    proc = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             text=True, start_new_session=True)
     try:
-        out, _ = proc.communicate(timeout=max(limit, 0.01))
+        out, err = proc.communicate(timeout=max(limit, 0.01))
     except subprocess.TimeoutExpired:
         os.killpg(proc.pid, signal.SIGKILL)
         proc.communicate()
-        return None, ""
-    return proc.returncode, out
+        return None, "", ""
+    return proc.returncode, out, err
+
+
+def first_line(text):
+    return next((line.strip() for line in text.splitlines() if line.strip()), "no stderr")
 
 
 def radon_line(files):
@@ -52,7 +56,7 @@ def radon_line(files):
     if tool is None:
         return "quality: radon not installed, skipped"
     limit = deadline("RADON", RADON_DEADLINE)
-    rc, out = call([tool, "cc", "-s", "-j", *files], os.getcwd(), limit)
+    rc, out, _ = call([tool, "cc", "-s", "-j", *files], os.getcwd(), limit)
     if rc is None:
         return f"quality: radon deadline of {limit:g}s passed, skipped"
     if rc != 0:
@@ -63,7 +67,7 @@ def radon_line(files):
         return "quality: radon cc: no block in the changed modules"
     mean = sum(complexity for _, _, complexity in blocks) / len(blocks)
     path, name, worst = max(blocks, key=lambda block: block[2])
-    return (f"quality: radon cc: {len(blocks)} blocks in {plural(len(files), 'changed module')}, "
+    return (f"quality: radon cc: {plural(len(blocks), 'block')} in {plural(len(files), 'changed module')}, "
             f"mean CC {mean:.1f}, max CC {worst} ({path}::{name})")
 
 
@@ -77,14 +81,16 @@ def changed_lines(merge_base, path):
     return lines
 
 
-def functions(tree):
-    for node in tree.body:
+def functions(nodes, owner=None):
+    for node in nodes:
         if isinstance(node, FUNCTIONS):
-            yield f"x_{node.name}", node
+            key = f"x_{node.name}" if owner is None else f"x{CLASS_SEPARATOR}{owner}{CLASS_SEPARATOR}{node.name}"
+            yield key, node
         elif isinstance(node, ast.ClassDef):
-            for child in node.body:
-                if isinstance(child, FUNCTIONS):
-                    yield f"x{CLASS_SEPARATOR}{node.name}{CLASS_SEPARATOR}{child.name}", child
+            if owner is None:
+                yield from functions(node.body, node.name)
+        else:
+            yield from functions(list(ast.iter_child_nodes(node)), owner)
 
 
 def mutant_names(merge_base, files):
@@ -92,7 +98,7 @@ def mutant_names(merge_base, files):
     for path in files:
         module = path[: -len(".py")].replace("/", ".").removesuffix(".__init__")
         lines = changed_lines(merge_base, path)
-        for key, func in functions(ast.parse(git("show", f"HEAD:{path}"))):
+        for key, func in functions(ast.parse(git("show", f"HEAD:{path}")).body):
             first = min([func.lineno, *(decorator.lineno for decorator in func.decorator_list)])
             if lines.intersection(range(first, func.end_lineno + 1)):
                 names.append(f"{module}.{key}__mutmut_*")
@@ -111,13 +117,15 @@ def mutmut_line(tool, names):
     try:
         archive = subprocess.run(["git", "archive", "HEAD"], capture_output=True, check=True, timeout=remaining()).stdout
         subprocess.run(["tar", "-x", "-f", "-", "-C", tmp], input=archive, check=True, timeout=remaining())
-        if call([tool, "run", *names], tmp, remaining())[0] is None:
+        run_rc, _, run_err = call([tool, "run", *names], tmp, remaining())
+        if run_rc is None:
             return expired
-        if call([tool, "export-cicd-stats"], tmp, remaining())[0] is None:
+        export_rc, _, export_err = call([tool, "export-cicd-stats"], tmp, remaining())
+        if export_rc is None:
             return expired
         stats_path = os.path.join(tmp, "mutants", "mutmut-cicd-stats.json")
         if not os.path.exists(stats_path):
-            return "quality: mutmut wrote no stats, skipped"
+            return f"quality: mutmut wrote no stats ({first_line(run_err + export_err)}), skipped"
         with open(stats_path) as handle:
             stats = json.load(handle)
     except subprocess.TimeoutExpired:

@@ -1,8 +1,8 @@
-"""The quality readings of #881 ship as optional dev tools, never as a runtime dependency of the plugin (ADR-0019).
+"""The quality readings of #881 ship as optional dev tools, never as a runtime dependency of the plugin.
 
-The three readings are CRAP (radon + coverage), structural duplication (pylint) and surviving mutants (mutmut).
-They are hand-run, one-off measurements: no gate, no threshold and no CI wiring reads them, so installing them
-must not touch what `pip install agent-squad` puts on a machine.
+The fast gate prints radon's complexity and mutmut's surviving mutants beside the pytest tally, as a report.
+No threshold and no exit code reads them (ADR-0012, ADR-0018), so installing the tools must not touch what
+`pip install agent-squad` puts on a machine.
 """
 import ast
 import tomllib

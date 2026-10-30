@@ -174,8 +174,43 @@ out=$(selrun PY_FAIL=1); rc=$?
 # real pytest, so every case sets one.
 /usr/bin/grep -qE 'SG_FAST_(CMD|RETRY_CMD)="\$T/' "$0" && ko "a fixture stub is executed directly, not through bash (#801)" || ok "every fixture stub runs through bash"
 /usr/bin/grep -qE '^fg\(\) \{.*SG_FAST_RETRY_CMD=' "$0" && ok "the base-fail case names its retry, and runs no real pytest" || ko "fg runs the real pytest retry (#801)"
-# (#885) The pytest tally and the code-quality reading print together after a green battery, and the reading never changes the exit.
-out=$(cd "$R" && SG_FAST_BASE=dev SG_FAST_CMD="echo '5 passed in 0.1s'" SG_FAST_RETRY_CMD=false bash "$d/fast-gate.sh" 2>&1); rc=$?
-[ $rc = 0 ] && /usr/bin/grep -q "fast-gate: pytest tally: 5 passed in 0.1s" "$SG_STATE"/fast-gate-*.log && /usr/bin/grep -q "quality: no changed squad module, skipped" "$SG_STATE"/fast-gate-*.log && ok "the tally and the quality reading land in the battery log and the gate exits 0" || ko "tally beside reading: rc $rc: $out $(cat "$SG_STATE"/fast-gate-*.log 2>&1)"
+# (#885) The pytest tally and the code-quality reading print together in the log this run writes, the reading after the tally, and
+# the reading never changes the exit. Each case has its own state directory, so no earlier case's log can satisfy a check.
+q=$T/quality-none; mkdir -p "$q"
+out=$(cd "$R" && SG_STATE=$q SG_FAST_BASE=dev SG_FAST_CMD="echo '5 passed in 0.1s'" SG_FAST_RETRY_CMD=false bash "$d/fast-gate.sh" 2>&1); rc=$?
+lg=$q/fast-gate-$(git -C "$R" rev-parse --short HEAD).log
+t=$(/usr/bin/grep -n "^fast-gate: pytest tally: 5 passed in 0.1s$" "$lg" 2>/dev/null | cut -d: -f1)
+qn=$(/usr/bin/grep -n "^quality: no changed squad module, skipped$" "$lg" 2>/dev/null | cut -d: -f1)
+[ $rc = 0 ] && [ -n "$t" ] && [ -n "$qn" ] && [ "$qn" -gt "$t" ] && ok "the tally and the quality reading land in one battery log, the reading after the tally, and the gate exits 0" || ko "tally beside reading: rc $rc, tally line '$t', reading line '$qn': $out $(cat "$lg" 2>&1)"
+
+# (#885) With a changed squad module and stub radon and mutmut first on PATH, both numbers print beside the tally in that log, and
+# each tool's argv is compared exactly. The stubs log to QARGV and answer with canned output.
+qb=$T/qbin; mkdir -p "$qb"
+cat > "$qb/radon" <<'S'
+#!/bin/bash
+echo "radon $*" >> "$QARGV"
+echo '{"squad/a.py": [{"name": "f", "complexity": 3}]}'
+S
+cat > "$qb/mutmut" <<'S'
+#!/bin/bash
+echo "mutmut $*" >> "$QARGV"
+case $1 in
+  run) mkdir -p mutants ;;
+  export-cicd-stats) mkdir -p mutants; echo '{"total": 4, "survived": 1, "killed": 3}' > mutants/mutmut-cicd-stats.json ;;
+esac
+S
+chmod +x "$qb/radon" "$qb/mutmut"
+$G -C "$R" checkout -q -b gui/quality dev; mkdir -p "$R/squad"; printf 'def f(x):\n    return x + 1\n' > "$R/squad/a.py"
+$G -C "$R" add -A; $G -C "$R" commit -q -m quality-work
+qs=$T/quality-numbers; mkdir -p "$qs"; : > "$T/qargv.log"
+out=$(cd "$R" && PATH="$qb:$PATH" QARGV="$T/qargv.log" SG_STATE=$qs SG_FAST_BASE=dev SG_FAST_CMD="echo '5 passed in 0.1s'" SG_FAST_RETRY_CMD=false bash "$d/fast-gate.sh" 2>&1); rc=$?
+lg=$qs/fast-gate-$(git -C "$R" rev-parse --short HEAD).log
+ta=$(/usr/bin/grep -n "^fast-gate: pytest tally: 5 passed in 0.1s$" "$lg" 2>/dev/null | cut -d: -f1)
+ra=$(/usr/bin/grep -n "^quality: radon cc: 1 block in 1 changed module, mean CC 3.0, max CC 3 (squad/a.py::f)$" "$lg" 2>/dev/null | cut -d: -f1)
+ma=$(/usr/bin/grep -n "^quality: mutmut: 1 survived of 4 mutants in 1 changed function$" "$lg" 2>/dev/null | cut -d: -f1)
+[ "$(cat "$T/qargv.log")" = "radon cc -s -j squad/a.py
+mutmut run squad.a.x_f__mutmut_*
+mutmut export-cicd-stats" ] && argv_ok=1 || argv_ok=0
+[ $rc = 0 ] && [ $argv_ok = 1 ] && [ -n "$ta" ] && [ -n "$ra" ] && [ -n "$ma" ] && [ "$ta" -lt "$ra" ] && [ "$ra" -lt "$ma" ] && ok "stub radon and mutmut numbers print beside the tally in the battery log, in order, and the gate exits 0" || ko "numbers beside tally: rc $rc, argv ok $argv_ok, lines '$ta' '$ra' '$ma': $out $(cat "$lg" 2>&1)"
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 rm -rf "$T"; exit $fail
