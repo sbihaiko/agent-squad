@@ -925,4 +925,68 @@ rm -f "$T/st/auto/rvd-run-866b-route.router.1"; rm -rf "$x"
 rm -rf "$x2" "$x3" "$x4" "$x5"
 
 
+# Z3 (#869): one commit per issue. A cluster child that writes one fix commit per issue (each naming exactly one `Refs #N`)
+# closes every issue its commits fix: the wave closes the siblings, not only the first issue its tip names.
+W17=wave/run-17; start2 run-17 >/dev/null
+rm -rf "$T/c870"; $G clone -q "$T/origin.git" "$T/c870" 2>/dev/null
+(cd "$T/c870" && $G checkout -q -b gui/870 "origin/$W17" && for n in 870 871 872; do echo "$n" > "g$n" && $G add "g$n" && $G -c user.email=a@b -c user.name=t commit -q -m "fix $n" -m "Refs #$n"; done)
+en2 run-17 870 >/dev/null; mkdir -p "$T/co/runs/run-17"
+printf '%s\n%s\n%s\n' '{"event": "spawn_accepted", "child": "a", "definition": {"prompt": "GitHub issue #870 work"}}' \
+  '{"event": "spawn_accepted", "child": "b", "definition": {"prompt": "GitHub issue #871 work"}}' \
+  '{"event": "spawn_accepted", "child": "c", "definition": {"prompt": "GitHub issue #872 work"}}' > "$T/co/runs/run-17/record.jsonl"
+: > "$T/gh.log"; : > "$T/board.log"; rm -f "$T/st/landed.tsv"
+r=$(land2 run-17 2>&1); rc=$?
+[ $rc = 0 ] && [ "$($O cat-file -e dev:g871 2>/dev/null && echo yes)" = yes ] && ok "Z3: the cluster wave lands one commit per issue (exit 0)" || ko "Z3: the cluster wave did not land: '$r' (exit $rc)"
+for n in 870 871 872; do [ "$(/usr/bin/grep -c "issues/$n -f state=closed" "$T/gh.log")" = 1 ] && ok "Z3: #$n, fixed by its own commit, closes once" || ko "Z3: closes for #$n: '$(cat "$T/gh.log")'"; done
+
+# Z4 (#869): a commit that names several issues delivers none of them. The wave closes none of them, and each one of the run's
+# issues is requeued with that reason (cap: it counts no failed dispatch, since its work reached the base).
+W18=wave/run-18; start2 run-18 >/dev/null
+rm -rf "$T/c880"; $G clone -q "$T/origin.git" "$T/c880" 2>/dev/null
+(cd "$T/c880" && $G checkout -q -b gui/880 "origin/$W18" && echo cluster > g880 && $G add g880 && $G -c user.email=a@b -c user.name=t commit -q -m "cluster work" -m "Refs #880
+Refs #881
+Refs #882")
+en2 run-18 880 >/dev/null; mkdir -p "$T/co/runs/run-18"
+printf '%s\n%s\n%s\n' '{"event": "spawn_accepted", "child": "a", "definition": {"prompt": "GitHub issue #880 work"}}' \
+  '{"event": "spawn_accepted", "child": "b", "definition": {"prompt": "GitHub issue #881 work"}}' \
+  '{"event": "spawn_accepted", "child": "c", "definition": {"prompt": "GitHub issue #882 work"}}' > "$T/co/runs/run-18/record.jsonl"
+: > "$T/gh.log"; : > "$T/board.log"; rm -f "$T/st/landed.tsv"
+r=$(land2 run-18 2>&1); rc=$?
+[ $rc = 0 ] && [ "$($O cat-file -e dev:g880 2>/dev/null && echo yes)" = yes ] && ok "Z4: the multi-issue commit lands (exit 0)" || ko "Z4: did not land: '$r' (exit $rc)"
+[ -z "$(/usr/bin/grep 'issues/[0-9]* -f state=closed' "$T/gh.log")" ] && ok "Z4: a commit naming several issues closes none of them" || ko "Z4: closes: '$(cat "$T/gh.log")'"
+for n in 880 881 882; do /usr/bin/grep -qx "o 3 Todo $n" "$T/board.log" && ok "Z4: #$n is requeued" || ko "Z4: #$n not requeued: '$(cat "$T/board.log")'"; done
+case "$r" in *"WAVE REQUEUE #881"*"several issues"*) ok "Z4: the requeue names the multi-issue commit as its reason";; *) ko "Z4: no reason named for #881: '$r'";; esac
+
+# Z5 (#869): the empty-wave route reads the same rule. A multi-issue commit that reached the base after the wave was cut
+# delivers none of its issues to a later empty wave of a run dispatched for one of them; a single-issue commit still does.
+W19=wave/run-19; start2 run-19 >/dev/null
+rm -rf "$T/out19"; $G clone -q "$T/origin.git" "$T/out19" 2>/dev/null
+(cd "$T/out19" && $G checkout -q dev && echo m > o890 && $G add o890 && $G -c user.email=a@b -c user.name=t commit -q -m "cluster work" -m "Refs #890
+Refs #891
+Refs #892" && echo s > o893 && $G add o893 && $G -c user.email=a@b -c user.name=t commit -q -m "fix 893" -m "Refs #893" && $G push -q origin HEAD:dev)
+mkdir -p "$T/co/runs/run-19"
+printf '%s\n%s\n' '{"event": "spawn_accepted", "child": "a", "definition": {"prompt": "GitHub issue #891 work"}}' \
+  '{"event": "spawn_accepted", "child": "b", "definition": {"prompt": "GitHub issue #893 work"}}' > "$T/co/runs/run-19/record.jsonl"
+: > "$T/gh.log"; : > "$T/board.log"; rm -f "$T/st/landed.tsv"
+r=$(land2 run-19 2>&1); rc=$?
+case "$r" in *"landed empty"*) ok "Z5: the wave lands empty (exit 0)";; *) ko "Z5: not an empty landing: '$r' (exit $rc)";; esac
+/usr/bin/grep -q 'issues/891 -f state=closed' "$T/gh.log" && ko "Z5: a sibling of a multi-issue commit was closed" || ok "Z5: a multi-issue commit delivers none of its issues to an empty wave"
+[ "$(/usr/bin/grep -c 'issues/893 -f state=closed' "$T/gh.log")" = 1 ] && ok "Z5: a single-issue commit still delivers to an empty wave" || ko "Z5: closes for #893: '$(cat "$T/gh.log")'"
+
+# Z6 (#869): a capped landing requeues no child that entered the wave. Child 940 entered; its commit reached the base before the
+# landing, so the rebase drops it and $issues does not carry it. It is not missing from the wave, so it is not requeued.
+W20=wave/run-20; start2 run-20 >/dev/null
+child 940 g940 "origin/$W20"; en2 run-20 940 >/dev/null
+child 941 g941 "origin/$W20"; en2 run-20 941 >/dev/null
+rm -rf "$T/dup20"; $G clone -q "$T/origin.git" "$T/dup20" 2>/dev/null
+(cd "$T/dup20" && $G checkout -q dev && $G fetch -q "$T/c940" gui/940 && GIT_COMMITTER_NAME=other $G -c user.email=a@b -c user.name=t cherry-pick FETCH_HEAD >/dev/null 2>&1 && $G push -q origin HEAD:dev)
+mkdir -p "$T/co/runs/run-20"; printf '%s\n%s\n' '{"event": "spawn_accepted", "child": "a", "definition": {"prompt": "GitHub issue #940 work"}}' \
+  '{"event": "spawn_accepted", "child": "b", "definition": {"prompt": "GitHub issue #941 work"}}' > "$T/co/runs/run-20/record.jsonl"
+printf '%s\n' "$(( $(date +%s) - 7201 ))" > "$T/st/auto/wave-start-run-20"
+: > "$T/gh.log"; : > "$T/board.log"; rm -f "$T/st/landed.tsv"
+r=$(land2 run-20 2>&1); rc=$?
+[ $rc = 0 ] && ok "Z6: the capped wave lands (exit 0)" || ko "Z6: exit $rc: '$r'"
+/usr/bin/grep -qx 'o 3 Todo 940' "$T/board.log" && ko "Z6: a child that entered the wave was requeued as missing: '$r'" || ok "Z6: a child that entered the wave is not requeued"
+[ "$(/usr/bin/grep -c 'issues/941 -f state=closed' "$T/gh.log")" = 1 ] && ok "Z6: the sibling the wave carries closes" || ko "Z6: closes for #941: '$(cat "$T/gh.log")'"
+
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }
