@@ -74,6 +74,7 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 - **An interruptible write is atomic** ([ADR-0030](docs/adr/0030-atomic-writes.md)). Guard: `tests/test_record.py`.
 - **Nightly, both modes, heavy included, in its own tree and lock; a red record holds delivery, naming the dev tip; a proof in flight or `SG_NIGHTLY_OFF` holds it** ([ADR-0153](docs/adr/0153-the-full-suite-runs-nightly-in-both-modes.md)). Guard: `contrib/squad-goal/scripts/test-nightly.sh`.
 - **A proof never holds dispatch, and it is killed at two hours with its tip recorded indeterminate, not tested** ([ADR-0157](docs/adr/0157-a-proof-is-bounded.md)). Guard: `contrib/squad-goal/scripts/test-promote-pass.sh`.
+- **A file batch is capped at two tickets by default, and the cap splits without dropping a ticket** ([ADR-0158](docs/adr/0158-a-file-batch-is-capped.md)). Guard: `contrib/squad-goal/scripts/test-cluster.sh`.
 - **A call has a deadline; a stuck agent is found without a caller** ([ADR-0051](docs/adr/0051-call-deadline-and-stuck-agent.md)). Guard: `tests/test_deadlines.py`, `tests/test_monitor.py`.
 - **A wedged run is killed, not merely logged** ([ADR-0051](docs/adr/0051-call-deadline-and-stuck-agent.md)). Guard: `tests/test_heartbeat.py`.
 - **A call or a loop stops on failed attempts that do not change, never on total turns or entries** ([ADR-0134](docs/adr/0134-stall-cap-counts-failures-without-evolution.md)). Guard: `tests/test_stall.py`, `tests/test_engine_skeleton.py`, `tests/test_sdk_adapter.py`.

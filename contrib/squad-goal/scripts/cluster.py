@@ -9,6 +9,8 @@ Two issues join a cluster when either holds:
 CL_MODE=files keeps only the files rule (the frontier: tickets cut from one spec share an area and a creation time
 without sharing a cause).
 A path is compared in its normal form (paths below): "./squad/a.py" and "squad/x/../a.py" are one file (#703).
+A cluster is capped at CL_MAX tickets (default 2): one child over many tickets of one large file is one run that dies
+out_of_budget, so the cluster is split in ascending number order and no ticket is dropped (ADR-0158).
 Prints one cluster per line, issue numbers ascending (the first is the primary), input order of clusters by primary."""
 import json, os, posixpath, re, sys, time
 
@@ -54,7 +56,13 @@ def main():
             elif af & bf: join(a, b)
     groups = {}
     for n, *_ in info: groups.setdefault(find(n), []).append(n)
-    for g in sorted((sorted(v) for v in groups.values()), key=lambda v: v[0]): print(" ".join(map(str, g)))
+    # A cluster is capped (CL_MAX, default 2): one child over five tickets of one large file is one run that dies
+    # `out_of_budget`, so the cluster is split in ascending number order and no ticket is dropped (ADR-0158).
+    try: cap = int(os.environ.get("CL_MAX", "2"))
+    except ValueError: cap = 2
+    cap = cap if cap > 0 else 2
+    for g in sorted((sorted(v) for v in groups.values()), key=lambda v: v[0]):
+        for i in range(0, len(g), cap): print(" ".join(map(str, g[i:i + cap])))
 
 
 if __name__ == "__main__":

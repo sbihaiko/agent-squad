@@ -60,6 +60,8 @@ An ADR holds a decision and its reason. It is not a ledger: no dates, counts, st
 
 | [0157](0157-a-proof-is-bounded.md) | A proof is bounded: it reserves the machine for 30 minutes, past which the reserve lifts and the loop works beside it; past two hours it is killed and its tip recorded indeterminate, not tested, with no promotion and no refusal |
 
+| [0158](0158-a-file-batch-is-capped.md) | A file batch is capped at two tickets by default: the cap splits a cluster in ascending number order and drops no ticket, so one large file never becomes one run that dies out_of_budget |
+
 ## Adding an ADR
 
 Take the next free number. Rewrite an ADR in place when a decision changes; never append an amendment. A rule with no named guard test is a draft ([ADR-0018](0018-failing-gate-is-a-defect.md)). Add one line to `CLAUDE.md` Design rules with the guard.
