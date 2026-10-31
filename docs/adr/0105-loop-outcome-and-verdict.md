@@ -23,6 +23,11 @@ The run needs one fold from node outcomes to a run verdict and an exit code. Sev
 11. **A call in flight records progress.** The adapter writes at most one `progress` event per call per `progress.seconds` (a setting; `null` writes none). The event carries the newest reading of the call (messages so far, context size, last tool), never a sum. An unreported figure is null, never zero. The dashboard reads a child card in flight with the same rule as a node card.
 12. **A run whose process is gone gets a `failed` verdict, reason `killed/no-process`.** A run that is killed (the operator, a restart, a crash) never reaches its own fold, so its record would end with no verdict, and a reader would see a stalled run for ever. `squad.verdict.killed` builds that verdict, and `squad.killed` is the one writer: it appends the verdict to the record with the record's own atomic append (ADR-0030), and writes nothing when the record already ends in a verdict. The heartbeat and the janitor call it when no process of the run is left. A reader that finds a run with no verdict, past the stall limit and with no process of its own, does not count it as live.
 
+13. **A reason a model writes about itself is a claim, never a budget fact.** The claim map reads the reason as a
+    prefix, so `out_of_budget` and `out_of_budget: <the child's words>` are one claim, `child_said_out_of_budget` with
+    the child's words kept after it. A run read the child's sentence as its own budget verdict and ended with $39 of a
+    $40 cap unspent (#960). The engine's own cap reasons (`CAP_REASON`) stay apart from every claim.
+
 Rejected: a deadline with its own exit code, because the codes are a contract (ADR-0029). Rejected: `conflict` as a graph field, because run truth is not graph data.
 
 ## Guard

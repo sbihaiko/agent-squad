@@ -2633,7 +2633,16 @@ def board():
         if sc: row["sc"] = sc
         ho = holder_text(i)                      # the run that holds the card, read from the seam (#241)
         if ho: row["ho"] = ho
+        if (i.get("h") or {}).get("run"): row["hr"] = i["h"]["run"]   # the run id the sheet selects its cards by (#919)
         by.setdefault(st, []).append(row)
+    # The reverse of `blocked by`, one map so the view holds no rule of its own (ADR-0137, #919): a card carries the cards
+    # it blocks, and the sheet renders that served fact.
+    allrows = [r for rs in by.values() for r in rs]
+    blocks = {}
+    for r in allrows:
+        for b in r.get("b") or []: blocks.setdefault(b, []).append(r["n"])
+    for r in allrows:
+        if r["n"] in blocks: r["bl"] = sorted(blocks[r["n"]])
     names = ORDER + sorted(n for n in by if n not in ORDER)   # every shipped column shows, even at 0; a user column follows
     def wave(x):   # `wave:NN` label first, then issue number; cards with no wave go last
         w = [int(m.group(1)) for l in x["l"] for m in [re.match(r"wave:(\d+)$", l)] if m]
@@ -2655,6 +2664,16 @@ def board():
     # The lane carries the pull requests only (#440): a work branch has no lane and no other view. Each row names its own
     # kind, so the page reads a pull request by the row, never by the lane's name. An empty lane is still served, `n` 0.
     open_prs = [p for p in prs if p["kind"] == _columns_module.PR_KIND]
+    # The open pull requests that close a card, on that card's row (#919): the sheet names the PR and its CI from served
+    # facts, the same reverse lookup `blocks` makes, never from a rule in the view (ADR-0137).
+    closes = {}
+    for x in open_prs:
+        for n in x.get("cl") or []:
+            closes.setdefault(n, []).append({"n": x["n"], "t": x["t"], "st": (x.get("ps") or [None, None])[1] if isinstance(x.get("ps"), list) else None,
+                                             "ci": x.get("rollup"), "r": x.get("r") or REPO})
+    for g in groups:
+        for r in g["items"]:
+            if r["n"] in closes: r["prf"] = sorted(closes[r["n"]], key=lambda p: p["n"])
     # A count of one or more is a true lower bound even when a repository failed; a zero is a claim about every repository,
     # so beside a failed read it is `?`, the word the strip uses for a fact not read, never a count (#851).
     count = "?" if not open_prs and perr else len(open_prs)
@@ -2788,6 +2807,74 @@ _issue_cache = {}
 def gh_json(path, timeout=30):
     """One `gh api` read as JSON, or None when it returned nothing (the one seam the issue panel reads through)."""
     return json.loads(subprocess.run(["gh", "api", path], capture_output=True, text=True, timeout=timeout).stdout or "null")
+
+def gh_graphql(query, timeout=30, **vars):
+    """One GraphQL read as JSON, or None when it answered nothing (`-F` carries the typed variables, so `number` is an
+    Int): the one seam the rendered issue body reads through, and it goes through the door like every other read
+    (ADR-0277), so a refusal is never read as an answer."""
+    try:
+        r = ghread.graphql_read(query, vars, timeout=timeout)
+        return r.answer if r.is_answer else None
+    except (OSError, subprocess.TimeoutExpired, ValueError): return None
+
+# REST carries no rendered body, so the sheet reads GitHub's own HTML through GraphQL (X-Frame-Options keeps the page from
+# framing GitHub itself). One read carries the body and the last comment for an issue or a pull request (#919).
+ISSUE_HTML_QUERY = ("query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){"
+                    "issueOrPullRequest(number:$number){"
+                    "... on Issue{bodyHTML comments(last:1){totalCount nodes{author{login} createdAt bodyHTML url}}}"
+                    "... on PullRequest{bodyHTML comments(last:1){totalCount nodes{author{login} createdAt bodyHTML url}}}}}}")
+def issue_html(n, repo=None):
+    """GitHub's rendered HTML for the issue's body and its last comment (#919): `body`, `total`, and `last`, or `{}` when
+    the read failed. A failed rendered read never fails the issue read: the sheet falls back to the plain body."""
+    repo = repo if repo in REPOS else REPO
+    owner, _, name = repo.partition("/")
+    p = gh_graphql(ISSUE_HTML_QUERY, owner=owner, name=name, number=int(n)) or {}
+    node = (((p.get("data") or {}).get("repository") or {}).get("issueOrPullRequest")) or {}
+    if not node: return {}
+    cm = node.get("comments") or {}
+    nodes = [x for x in (cm.get("nodes") or []) if isinstance(x, dict)]
+    last = nodes[-1] if nodes else None
+    d = {"body": render_html(node.get("bodyHTML") or ""), "total": cm.get("totalCount") or 0, "last": None}
+    if last:
+        d["last"] = {"by": (last.get("author") or {}).get("login") or "", "at": last.get("createdAt") or "",
+                     "html": render_html(last.get("bodyHTML") or ""), "url": last.get("url") or ""}
+    return d
+
+# The rendered body is GitHub's own HTML, so the hub keeps its structure in its own type and colors and allows only what
+# cannot run: one allow-list, on this side of the wire, so neither page holds a sanitizer of its own (ADR-0137, #919).
+HTML_TAGS = frozenset("details summary hr br b i strong em code kbd sub sup p div span ul ol li table thead tbody tr th td "
+                      "h1 h2 h3 h4 h5 h6 blockquote pre a img del s u input".split())
+HTML_ATTR = {"a": ("href",), "img": ("src", "alt", "width", "height"), "td": ("colspan", "rowspan", "align"),
+             "th": ("colspan", "rowspan", "align"), "details": ("open",), "input": ("type", "checked", "disabled")}
+HTML_VOID = frozenset(("br", "hr", "img", "input"))
+HTML_SCAFFOLD = re.compile(r"(?is)<(script|style|svg|iframe|object|embed|video|audio)\b[^>]*>.*?</\1\s*>")
+HTML_COMMENT = re.compile(r"(?s)<!--.*?-->")
+HTML_TAG = re.compile(r"(?s)<(/?)([a-zA-Z][a-zA-Z0-9]*)((?:\s[^<>]*?)?)\s*/?>")
+HTML_PAIR = re.compile(r"""([a-zA-Z-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')""")
+HTML_BARE = re.compile(r"(?<![=\w-])(checked|disabled|open)(?=[\s/>]|$)")
+def render_html(src):
+    """GitHub's rendered body passed through the allow-list: the tags it renders keep their structure, a class or style
+    never rides, a relative or `javascript:` link is dropped, and a task-list checkbox keeps its look. Anything else is
+    its text alone, so a body never reaches the page with a script, a frame or a handler."""
+    t = HTML_COMMENT.sub("", HTML_SCAFFOLD.sub("", src or ""))
+    def one(m):
+        close, name, attrs = bool(m.group(1)), (m.group(2) or "").lower(), m.group(3) or ""
+        if name not in HTML_TAGS: return ""
+        if close: return "" if name in HTML_VOID else f"</{name}>"
+        kept = []
+        for am in HTML_PAIR.finditer(attrs):
+            k, v = am.group(1).lower(), am.group(2) if am.group(2) is not None else am.group(3)
+            if k not in HTML_ATTR.get(name, ()): continue
+            if k in ("href", "src") and not re.match(r"(?i)^https?://", v): continue
+            if k == "type" and v.lower() != "checkbox": continue
+            kept.append(f' {k}="{html.escape(v, quote=True)}"')
+        for bare in HTML_BARE.finditer(attrs):
+            if bare.group(1) in HTML_ATTR.get(name, ()): kept.append(" " + bare.group(1))
+        kept = list(dict.fromkeys(kept))
+        if name == "a" and any(k.startswith(" href=") for k in kept): kept += [' target="_blank" rel="noopener"']
+        if name == "img": kept += [' referrerpolicy="no-referrer" loading="lazy"']
+        return f"<{name}{''.join(kept)}>"
+    return HTML_TAG.sub(one, t)
 def issue_detail(n, repo=None):
     """Issue (or PR) body + the last 5 comments, fetched on click and cached 60 s. n is an int, never interpolated raw.
     `repo` is the repository the card belongs to (#1820): a number is only a number, and PR #1821 of the tooling
@@ -2802,7 +2889,8 @@ def issue_detail(n, repo=None):
     cm = g(f"repos/{repo}/issues/{n}/comments?per_page=100") or []
     d = {"n": n, "r": repo, "title": it["title"], "state": it["state"], "pr": "pull_request" in it, "url": it["html_url"], "by": it["user"]["login"],
          "created": it["created_at"], "updated": it["updated_at"], "labels": [l["name"] for l in it["labels"]], "body": (it.get("body") or "")[:3000],
-         "total": len(cm), "comments": [{"by": c["user"]["login"], "at": c["created_at"], "body": (c.get("body") or "")[:1200]} for c in cm[-5:]]}
+         "total": len(cm), "comments": [{"by": c["user"]["login"], "at": c["created_at"], "body": (c.get("body") or "")[:1200]} for c in cm[-5:]],
+         "html": "", "last": None}   # the rendered body and last comment are read below, on open (#919)
     if d["pr"]:   # a PR also gets its branch, size, merge state, CI summary and the latest review verdicts
         p = g(f"repos/{repo}/pulls/{n}") or {}
         ck = (g(f"repos/{repo}/commits/{p['head']['sha']}/check-runs?per_page=100") or {}).get("check_runs", []) if p.get("head") else []
@@ -2814,6 +2902,11 @@ def issue_detail(n, repo=None):
         d["pull"] = {"head": p.get("head", {}).get("ref"), "base": p.get("base", {}).get("ref"), "add": p.get("additions"), "del": p.get("deletions"), "files": p.get("changed_files"),
                      "draft": p.get("draft"), "merged": bool(p.get("merged_at")), "mstate": p.get("mergeable_state"), "checks": cnt, "reviews": rv}
         if d["pull"]["merged"]: d["state"] = "merged"
+    try:
+        h = issue_html(n, repo)
+        d["html"], d["last"] = h.get("body") or "", h.get("last")
+    except Exception:
+        pass   # a failed rendered read is a plain body in the sheet, never a failed issue read (#919)
     _issue_cache[(repo, n)] = (time.time(), d); return d
 
 PRS = HUBDIR / "hub-prs.json"
@@ -2971,35 +3064,53 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #bbody .prs .it .clos{display:block;margin-top:2px;font-size:var(--fs-min);color:var(--mute)}#bbody .prs .it .clos a{color:var(--acc);text-decoration:none}   /* the issues the pull request closes (#440) */
 #bbody .it.m{border-style:dashed;text-align:center;background:none;box-shadow:none}
 #bbody .pad{height:6px}#bbody .sc{max-height:58vh;overflow:auto}#bbody .it .dt{float:right;color:var(--mute);font-size:var(--fs-min)}#bbody .it .hld{color:var(--mute);font-size:var(--fs-min)}
-#pop{position:fixed;inset:0;background:#000a;display:none;align-items:center;justify-content:center;z-index:50}#pop.on{display:flex}
-#pbox{width:min(760px,92vw);max-height:86vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px;box-shadow:0 10px 40px #000c}
-#pbox h2{margin:0 0 6px;font-size:var(--fs-body);line-height:1.35}#pbox .meta{color:var(--mute);font-size:var(--fs-min);margin-bottom:8px}
-#pbox .lb{display:inline-block;background:#2a303b;border-radius:9px;padding:0 8px;margin:0 4px 4px 0;font-size:var(--fs-min)}
-#pbox pre{white-space:pre-wrap;overflow-wrap:anywhere;font:var(--fs-min)/1.45 ui-monospace,Menlo,monospace;background:#12161c;border:1px solid var(--line);border-radius:6px;padding:8px 10px;margin:6px 0}
-#pbox h3{font-size:var(--fs-min);color:var(--mute);margin:14px 0 4px}#pbox .cm{border-left:3px solid var(--acc);padding-left:8px;margin:8px 0}
-#pbox .bar button{min-width:28px}#pbox .bar button:disabled{opacity:.35;cursor:default}#pbox .bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}#pbox a.gh{color:var(--acc);font-weight:700}
-#bbody .it{cursor:pointer}
-#pbox{width:min(860px,94vw);padding:22px 28px}#pbox h2{font:600 var(--fs-md)/1.35 -apple-system,system-ui,sans-serif;margin:4px 0 8px}
-#pbox .md{font:var(--fs-body)/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;color:#d8dde6;overflow-wrap:anywhere}
-#pbox .md>:first-child{margin-top:0}#pbox .md p{margin:.6em 0}#pbox .md h2,#pbox .md h3,#pbox .md h4,#pbox .md h5{font-weight:600;margin:1.3em 0 .4em;line-height:1.3;color:#eef1f6}
-#pbox .md h2{font-size:var(--fs-body);border-bottom:1px solid var(--line);padding-bottom:4px}#pbox .md h3{font-size:var(--fs-body)}#pbox .md h4,#pbox .md h5{font-size:var(--fs-body);color:var(--mute)}
-#pbox .md ul,#pbox .md ol{margin:.5em 0;padding-left:1.4em}#pbox .md li{margin:.25em 0}#pbox .md li:has(.ck){list-style:none;margin-left:-1.2em}
-#pbox .md code{font:var(--fs-min) ui-monospace,Menlo,monospace;background:#232b37;border-radius:4px;padding:1px 5px}
-#pbox .md pre{background:#12161c;border:1px solid var(--line);border-radius:6px;padding:10px 12px;margin:.7em 0;overflow:auto}#pbox .md pre code{background:none;padding:0;white-space:pre}
-#pbox .md a{color:var(--acc);text-decoration:none}#pbox .md a:hover{text-decoration:underline}#pbox .md hr{border:0;border-top:1px solid var(--line);margin:1.2em 0}
-#pbox .md blockquote{margin:.7em 0;padding:2px 12px;border-left:3px solid var(--line);color:var(--mute)}
-#pbox .md table{border-collapse:collapse;margin:.7em 0;font-size:var(--fs-min)}#pbox .md th,#pbox .md td{border:1px solid var(--line);padding:4px 10px;text-align:left}#pbox .md th{background:#1b212b}
-#pbox .md details{border:1px solid var(--line);border-radius:6px;margin:.6em 0;padding:2px 12px;background:#161b22}#pbox .md details[open]{padding-bottom:8px}
-#pbox .md summary{cursor:pointer;font-weight:600;padding:4px 0;color:#eef1f6}#pbox .md img{max-width:100%;border-radius:4px}#pbox .md kbd{font:var(--fs-min) ui-monospace,monospace;border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:0 5px;background:#232b37}
-#pbox .md blockquote.alert{border-left-width:4px;background:#1b212b;border-radius:0 6px 6px 0;color:var(--fg)}#pbox .md .at{font-size:var(--fs-min);font-weight:700;letter-spacing:.06em;text-transform:uppercase;margin-top:4px}
-#pbox .md .alert.note{border-color:var(--acc)}#pbox .md .alert.tip{border-color:var(--ok)}#pbox .md .alert.important{border-color:#b48ead}#pbox .md .alert.warning{border-color:var(--warn)}#pbox .md .alert.caution{border-color:var(--err)}
-#pbox .md .alert.warning .at{color:var(--warn)}#pbox .md .alert.caution .at{color:var(--err)}#pbox .md .alert.note .at{color:var(--acc)}#pbox .md .alert.tip .at{color:var(--ok)}#pbox .md .alert.important .at{color:#b48ead}
-#pbox .md blockquote>:first-child{margin-top:.3em}#pbox .md blockquote>:last-child{margin-bottom:.3em}
-#pbox .ck{display:inline-block;width:13px;height:13px;border:1.5px solid var(--mute);border-radius:3px;margin-right:8px;vertical-align:-2px;position:relative}
-#pbox .ck.on{background:var(--ok);border-color:var(--ok)}#pbox .ck.on::after{content:"";position:absolute;left:3px;top:0;width:3px;height:7px;border:solid #0f1115;border-width:0 2px 2px 0;transform:rotate(45deg)}
-#pbox .cm{border:1px solid var(--line);border-left:3px solid var(--acc);border-radius:8px;background:#1a2029;padding:8px 14px 10px;margin:10px 0}#pbox .cm .meta{margin-bottom:2px}
-#pbox .prbar{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 8px}#pbox .pill{font-size:var(--fs-min);border:1px solid var(--line);background:#1b212b;border-radius:10px;padding:1px 9px}#pbox .pill.ok{border-color:#3ecf8e88;color:var(--ok)}#pbox .pill.bad{border-color:#ff6b6b88;color:var(--err)}
-#pbox h3.sec{font-size:var(--fs-min);text-transform:uppercase;letter-spacing:.06em;color:var(--mute);margin:20px 0 4px}
+/* The ticket sheet (#919): a side panel on the desktop that pushes the page instead of covering it, so the board keeps
+   the card in view. One panel, one read: the card data rides the card, the body and the last comment come from the route. */
+#tk{position:fixed;top:0;right:0;bottom:0;width:420px;background:var(--panel);border-left:1px solid var(--line);box-shadow:-12px 0 40px #000a;display:none;flex-direction:column;z-index:50}
+#tk.on{display:flex}
+body.tkopen #win{margin-right:420px}body.tkopen #board{width:300px}
+#tk>header{display:flex;gap:8px;align-items:center;padding:10px 12px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+#tk>header .sp{flex:1}
+#tk>footer{display:flex;gap:8px;padding:10px 12px;border-top:1px solid var(--line);flex-wrap:wrap}
+#tk>footer button,#tk>footer a{min-height:32px}
+#tk a.btn{display:inline-flex;align-items:center;padding:3px 12px;border:1px solid var(--line);border-radius:6px;color:var(--fg);text-decoration:none}
+#tk .chip{border-radius:9px;padding:0 7px;font-size:var(--fs-min);font-weight:600;border:1px solid var(--line);color:var(--mute)}
+#tk .chip.spec{border-color:var(--acc);color:var(--acc)}#tk .chip.wave{color:var(--fg)}
+#tkset{display:flex;gap:6px;flex-wrap:wrap;padding:8px 12px 0}#tkset:empty{display:none}#tkset button.on{border-color:var(--acc);color:var(--acc)}
+#tknav{display:flex;gap:6px;align-items:center}#tknav button{min-width:36px}
+#tk .row{display:flex;gap:8px;font-size:var(--fs-min);color:var(--mute);margin:6px 0}#tk .row b{min-width:84px;font-weight:500}#tk .row span{color:var(--fg)}
+#tk .lab{display:inline-block;border:1px solid var(--line);border-radius:9px;padding:0 7px;margin:0 4px 4px 0}
+#tk .sec{font-size:var(--fs-min);text-transform:uppercase;letter-spacing:.06em;color:var(--mute);margin:14px 0 4px}
+#tk .tkbody{background:#0b0d11;border-radius:6px;padding:10px 12px;margin-top:6px}
+#tkb{flex:1;min-height:0;overflow:auto;padding:12px 16px}
+#tkb .tkbody input[type=checkbox]{transform:scale(1.05);transform-origin:left center;vertical-align:-2px;margin:0 6px 0 0;accent-color:var(--ok);pointer-events:none}
+#tkb h2{margin:0 0 6px;font-size:var(--fs-body);line-height:1.35}#tkb .meta{color:var(--mute);font-size:var(--fs-min);margin-bottom:8px}
+#tkb .lb{display:inline-block;background:#2a303b;border-radius:9px;padding:0 8px;margin:0 4px 4px 0;font-size:var(--fs-min)}
+#tkb pre{white-space:pre-wrap;overflow-wrap:anywhere;font:var(--fs-min)/1.45 ui-monospace,Menlo,monospace;background:#12161c;border:1px solid var(--line);border-radius:6px;padding:8px 10px;margin:6px 0}
+#tkb h3{font-size:var(--fs-min);color:var(--mute);margin:14px 0 4px}#tkb .cm{border-left:3px solid var(--acc);padding-left:8px;margin:8px 0}
+#tkb .bar button{min-width:28px}#tkb .bar button:disabled{opacity:.35;cursor:default}#tkb .bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}#tkb a.gh{color:var(--acc);font-weight:700}
+#bbody .it{cursor:pointer}#bbody .it.hit{box-shadow:0 0 0 2px var(--warn)}   /* the cards the sheet's Highlight related marks (#919) */
+#tkb h2{font:600 var(--fs-md)/1.35 -apple-system,system-ui,sans-serif;margin:4px 0 8px}
+#tkb .md{font:var(--fs-body)/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;color:#d8dde6;overflow-wrap:anywhere}
+#tkb .md>:first-child{margin-top:0}#tkb .md p{margin:.6em 0}#tkb .md h2,#tkb .md h3,#tkb .md h4,#tkb .md h5{font-weight:600;margin:1.3em 0 .4em;line-height:1.3;color:#eef1f6}
+#tkb .md h2{font-size:var(--fs-body);border-bottom:1px solid var(--line);padding-bottom:4px}#tkb .md h3{font-size:var(--fs-body)}#tkb .md h4,#tkb .md h5{font-size:var(--fs-body);color:var(--mute)}
+#tkb .md ul,#tkb .md ol{margin:.5em 0;padding-left:1.4em}#tkb .md li{margin:.25em 0}#tkb .md li:has(.ck){list-style:none;margin-left:-1.2em}
+#tkb .md code{font:var(--fs-min) ui-monospace,Menlo,monospace;background:#232b37;border-radius:4px;padding:1px 5px}
+#tkb .md pre{background:#12161c;border:1px solid var(--line);border-radius:6px;padding:10px 12px;margin:.7em 0;overflow:auto}#tkb .md pre code{background:none;padding:0;white-space:pre}
+#tkb .md a{color:var(--acc);text-decoration:none}#tkb .md a:hover{text-decoration:underline}#tkb .md hr{border:0;border-top:1px solid var(--line);margin:1.2em 0}
+#tkb .md blockquote{margin:.7em 0;padding:2px 12px;border-left:3px solid var(--line);color:var(--mute)}
+#tkb .md table{border-collapse:collapse;margin:.7em 0;font-size:var(--fs-min)}#tkb .md th,#tkb .md td{border:1px solid var(--line);padding:4px 10px;text-align:left}#tkb .md th{background:#1b212b}
+#tkb .md details{border:1px solid var(--line);border-radius:6px;margin:.6em 0;padding:2px 12px;background:#161b22}#tkb .md details[open]{padding-bottom:8px}
+#tkb .md summary{cursor:pointer;font-weight:600;padding:4px 0;color:#eef1f6}#tkb .md img{max-width:100%;border-radius:4px}#tkb .md kbd{font:var(--fs-min) ui-monospace,monospace;border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:0 5px;background:#232b37}
+#tkb .md blockquote.alert{border-left-width:4px;background:#1b212b;border-radius:0 6px 6px 0;color:var(--fg)}#tkb .md .at{font-size:var(--fs-min);font-weight:700;letter-spacing:.06em;text-transform:uppercase;margin-top:4px}
+#tkb .md .alert.note{border-color:var(--acc)}#tkb .md .alert.tip{border-color:var(--ok)}#tkb .md .alert.important{border-color:#b48ead}#tkb .md .alert.warning{border-color:var(--warn)}#tkb .md .alert.caution{border-color:var(--err)}
+#tkb .md .alert.warning .at{color:var(--warn)}#tkb .md .alert.caution .at{color:var(--err)}#tkb .md .alert.note .at{color:var(--acc)}#tkb .md .alert.tip .at{color:var(--ok)}#tkb .md .alert.important .at{color:#b48ead}
+#tkb .md blockquote>:first-child{margin-top:.3em}#tkb .md blockquote>:last-child{margin-bottom:.3em}
+#tkb .ck{display:inline-block;width:13px;height:13px;border:1.5px solid var(--mute);border-radius:3px;margin-right:8px;vertical-align:-2px;position:relative}
+#tkb .ck.on{background:var(--ok);border-color:var(--ok)}#tkb .ck.on::after{content:"";position:absolute;left:3px;top:0;width:3px;height:7px;border:solid #0f1115;border-width:0 2px 2px 0;transform:rotate(45deg)}
+#tkb .cm{border:1px solid var(--line);border-left:3px solid var(--acc);border-radius:8px;background:#1a2029;padding:8px 14px 10px;margin:10px 0}#tkb .cm .meta{margin-bottom:2px}
+#tkb .prbar{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 8px}#tkb .pill{font-size:var(--fs-min);border:1px solid var(--line);background:#1b212b;border-radius:10px;padding:1px 9px}#tkb .pill.ok{border-color:#3ecf8e88;color:var(--ok)}#tkb .pill.bad{border-color:#ff6b6b88;color:var(--err)}
+#tkb h3.sec{font-size:var(--fs-min);text-transform:uppercase;letter-spacing:.06em;color:var(--mute);margin:20px 0 4px}
 body.dockb #win{display:grid;grid-template-columns:300px 1fr;grid-template-rows:minmax(0,1fr) auto}
 body.dockb #side{grid-row:1/3}body.dockb #main{grid-column:2;grid-row:1}
 body.dockb #board{grid-column:2;grid-row:2;width:auto;height:320px;border-left:0;border-top:1px solid var(--line);display:flex;flex-direction:column}
@@ -3069,7 +3180,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 <div id=list></div>
 </div>
 <div id=main></div>
-<div id=pop><div id=pbox></div></div>
+<div id=tk role=dialog aria-label=Ticket><header><span id=tkchips></span><span class=sp></span><span id=tknav></span><button id=tkx aria-label=Close>✕</button></header><div id=tkset></div><div id=tkb></div><footer><a class=btn id=tkgh target=_blank rel=noopener>Open on GitHub ↗</a><button id=tktodo>→ Todo</button><button id=tkrel>Highlight related</button></footer></div>
 <div id=board><div id=grip title="drag to resize"></div><div id=bhead><span id=btitle><b>TASKS <span id=bt class=m></span></b> <span id=bcharts><button id=bflow title="the development flow: the cards in each column over time, from the flow history (SPEC 111)">Flow</button> <button id=blead title="the lead time of the closed cards, opened to closed (SPEC 111)">Lead time</button></span></span><span><details id=lf><summary title="filter cards by label">labels</summary><div id=lfl></div></details> <button id=bsp data-m=all title="the Specs filter holds a mode: every card, only the spec-labelled cards, or every card but those. A press cycles the three, and the label states the one it holds.">Specs: all</button> <button id=bz title="maximize the board over the run pane" aria-pressed=false></button> <button id=bx title="collapse" aria-pressed=false>&raquo;</button></span></div><div id="pip"><div id="piph" tabindex="0" title="drag to move the window; arrow keys move it 16px (64 with shift); Esc collapses it"><b id="pipt"></b><button id=pipx title="collapse the window to its header">&#8211;</button><button id=pipo title="close the window and restore the split">&#215;</button></div><div id="pipb"><iframe id="pipf" title="one card of the run panel"></iframe></div><div id="pipm"></div></div><div id=bcases></div><div id=bbody></div><div id=flowov hidden><div id=flowh><b id=flowt></b><button id=flowx title="close the diagram">&#215;</button></div><div id=flowb></div></div></div>
 </div>
 <div id=foot title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"><span>load</span><b id=ldline>CPU ? · RAM ? · GPU ?</b><span id=ldfacts title="the squad's own state: health, progress, occupancy, quotas, subscriptions"></span></div>
@@ -3393,20 +3504,57 @@ else if(!l.trim())i++;
 else{const p=[];while(i<L.length&&L[i].trim()&&!onlyHold(L[i])&&!/^(#{1,4}\s|\s*([-*]|\d+\.)\s|&gt;|\|.*\||\s*-{3,}\s*$)/.test(L[i])){p.push(inl(L[i]));i++}out.push("<p>"+p.join("<br>")+"</p>")}}
 return out.join("")}
 let html=block(t);for(let k=0;k<3;k++)html=html.replace(/\u0001(\d+)\u0001/g,(_,n)=>keep[+n]);return html.replace(/<p>(<summary>[\s\S]*?<\/summary>)<\/p>/g,"$1")}
-const pop=$("#pop"),when=t=>t.slice(0,16).replace("T"," ");
-pop.onclick=e=>{if(e.target===pop)pop.classList.remove("on")};addEventListener("keydown",e=>{if(e.key==="Escape"){pop.classList.remove("on");escBoard()}else if(pop.classList.contains("on")&&(e.key==="ArrowLeft"||e.key==="ArrowRight")&&!/INPUT|TEXTAREA/.test(document.activeElement.tagName))step(e.key==="ArrowLeft"?-1:1)});
+const tsheet=$("#tk"),when=t=>t.slice(0,16).replace("T"," ");
+// The card data the page already holds rides the card (`data-*`); the sheet reads it, and the body and the last comment
+// come from `/api/issue` on open. An empty array encodes as `%5B%5D`, so a card with no blockers decodes to `[]`.
+const encArr=a=>encodeURIComponent(JSON.stringify(a||[])),decArr=s=>{try{return JSON.parse(decodeURIComponent(s||"%5B%5D"))||[]}catch(e){return []}};
+const decQ=v=>{try{return decodeURIComponent(v||"")}catch(e){return v||""}};
+const cardOf=el=>el&&el.dataset?{n:+el.dataset.n,r:el.dataset.r||"__REPO__",col:decQ(el.dataset.col),pm:el.dataset.pm==="1",
+  b:decArr(decQ(el.dataset.b)),bl:decArr(decQ(el.dataset.bl)),ho:decQ(el.dataset.ho),hr:decQ(el.dataset.hr),prf:decArr(decQ(el.dataset.prf))}:null;
+const boardCards=()=>[...document.querySelectorAll("#bbody .it[data-n]")];
 let nav=[],cur=0,irepo="__REPO__";   // nav carries [number, repository] pairs: a number alone does not name a card now that two repositories fill the column (#1820)
 const ni=()=>nav.findIndex(x=>x[0]===cur&&x[1]===irepo);
+function openCard(n,r){const el=boardCards().find(x=>+x.dataset.n===+n&&(x.dataset.r||"__REPO__")===(r||"__REPO__"));if(el)showIssue(n,r,el);else{nav=[[+n,r||"__REPO__"]];showIssue(n,r)}}   // a blocker link opens the same sheet, never a new tab
 const step=k=>{const i=ni()+k;if(i>=0&&i<nav.length)showIssue(nav[i][0],nav[i][1])};
-async function showIssue(n,r){cur=+n;irepo=r||"__REPO__";pop.classList.add("on");$("#pbox").innerHTML="<span class=m>loading #"+n+"…</span>";
-try{const d=await (await fetch("/api/issue?n="+n+(r?"&r="+encodeURIComponent(r):""))).json();if(d.err){$("#pbox").textContent=d.err;return}
-$("#pbox").innerHTML=`<div class=bar><span class=m>${d.pr?"PR":"Issue"} #${d.n} · ${d.state}${d.r&&d.r!=="__REPO__"?` · ${esc(d.r)}`:""}</span><span><button id=pprev title="previous card (←)" ${ni()>0?"":"disabled"}>‹</button> <span class=m>${nav.length>1?ni()+1+"/"+nav.length:""}</span> <button id=pnext title="next card (→)" ${ni()>=0&&ni()<nav.length-1?"":"disabled"}>›</button> <a class=gh target=_blank href="${esc(d.url)}">Open on GitHub ↗</a> <button id=px>✕</button></span></div><h2>${esc(d.title)}</h2>
-${d.pull?`<div class=prbar><span class=pill>${esc(d.pull.head||"?")} &rarr; ${esc(d.pull.base||"?")}</span><span class=pill>+${d.pull.add??0} &minus;${d.pull.del??0} · ${d.pull.files??0} files</span>${d.pull.draft?"<span class=pill>draft</span>":""}<span class="pill ${d.pull.mstate==="clean"?"ok":d.pull.mstate==="dirty"?"bad":""}">merge: ${esc(d.pull.mstate||"?")}</span>${Object.entries(d.pull.checks).map(([k,v])=>`<span class="pill ${k==="success"?"ok":/failure|cancelled|timed_out|action_required/.test(k)?"bad":""}">CI ${esc(k)} ${v}</span>`).join("")}${Object.entries(d.pull.reviews).map(([u,st])=>`<span class="pill ${st==="APPROVED"?"ok":st==="CHANGES_REQUESTED"?"bad":""}">${esc(u)}: ${esc(st.toLowerCase().replace("_"," "))}</span>`).join("")}</div>`:""}<div class=meta>by ${esc(d.by)} · opened ${when(d.created)} · updated ${when(d.updated)}</div>${d.labels.map(l=>`<span class=lb>${esc(l)}</span>`).join("")}
-<div class=md>${d.body?md(d.body):"<span class=m>(no description)</span>"}</div><h3 class=sec>Last ${d.comments.length} of ${d.total} comments</h3>`+(d.comments.map(c=>`<div class=cm><div class=meta>${esc(c.by)} · ${when(c.at)}</div><div class=md>${md(c.body)}</div></div>`).join("")||"<span class=m>no comments</span>");
-$("#px").onclick=()=>pop.classList.remove("on");$("#pprev").onclick=()=>step(-1);$("#pnext").onclick=()=>step(1);$("#pbox").scrollTop=0}catch(e){$("#pbox").textContent="failed to load"}}
-document.addEventListener("click",e=>{const c=e.target.closest("#bbody .it");if(!c||e.target.closest("a")||e.target.closest("button")||c.classList.contains("m"))return;window.open("https://github.com/"+(c.dataset.r||"__REPO__")+"/"+(c.dataset.pr!==undefined?"pull/":"issues/")+c.dataset.n,"_blank","noopener");return;   // every card opens its GitHub page; the popup is no longer used from the board   // a PR card opens its GitHub page in a new tab (owner, 2026-10-09); an issue card keeps the popup
-nav=[...c.closest(".sc").querySelectorAll(".it[data-n]")].map(x=>[+x.dataset.n,x.dataset.r||"__REPO__"]);showIssue(c.dataset.n,c.dataset.r)});
-const hm=location.hash.match(/issue=(\d+)/);if(hm)showIssue(+hm[1]);   // deep link: /#issue=1171
+// One close rule: the panel goes, the page widens, and the selection the run or the column drew is cleared.
+function closeSheet(){tsheet.classList.remove("on");document.body.classList.remove("tkopen");document.querySelectorAll("#bbody .it.hit").forEach(x=>x.classList.remove("hit"));nav=[];cur=0;irepo="__REPO__";$("#tkset").innerHTML="";$("#tknav").innerHTML="";escBoard()}
+async function showIssue(n,r,el){cur=+n;irepo=r||"__REPO__";
+ // A card a run holds steps through that run's cards; any other card steps through its column (the selection the board shows).
+ if(el){const c=cardOf(el),set=c.hr?boardCards().filter(x=>(x.dataset.hr||"")===c.hr):[...el.closest(".sc").querySelectorAll(".it[data-n]")];nav=set.map(x=>[+x.dataset.n,x.dataset.r||"__REPO__"])}
+ if(!nav.length)nav=[[cur,irepo]];
+ tsheet.classList.add("on");document.body.classList.add("tkopen");$("#tkb").innerHTML="<span class=m>loading #"+n+"…</span>";
+try{const d=await (await fetch("/api/issue?n="+n+(r?"&r="+encodeURIComponent(r):""))).json();if(d.err){$("#tkb").textContent=d.err;return}
+const c=cardOf(el)||cardOf(boardCards().find(x=>+x.dataset.n===+n&&(x.dataset.r||"__REPO__")===irepo))||{n:+n,r:irepo,col:"",pm:false,b:[],bl:[],ho:"",hr:"",prf:[]};
+const wave=(d.labels||[]).map(l=>(String(l).match(/^wave:(\d+)$/)||[])[1]).filter(Boolean)[0];
+$("#tkchips").innerHTML=`${(d.labels||[]).includes("spec")?'<span class="chip spec">SPEC</span>':""}${wave?`<span class="chip wave">W${wave}</span>`:""}<span class=m>#${d.n}${d.r&&d.r!=="__REPO__"?" · "+esc(d.r):""}</span>`;
+const link=m=>`<a href="#" data-o="${m}">#${m}</a>`,k=ni();
+$("#tknav").innerHTML=nav.length>1?`<button id=tkp aria-label="previous card" ${k>0?"":"disabled"}>‹</button><span class=m>${k+1} of ${nav.length}</span><button id=tkn aria-label="next card" ${k<nav.length-1?"":"disabled"}>›</button>`:"";
+$("#tkset").innerHTML=nav.length>1?nav.map(([m,rr])=>`<button data-o="${m}" data-r="${rr}" class="${m===cur&&rr===irepo?"on":""}">#${m}</button>`).join(""):"";
+$("#tkb").innerHTML=`<h2>${esc(d.title)}</h2>
+<div class=row><b>Column</b><span>${esc(c.col||"—")}</span></div>
+<div class=row><b>Labels</b><span>${(d.labels||[]).length?d.labels.map(l=>`<span class=lab>${esc(l)}</span>`).join(""):"none"}</span></div>
+<div class=row><b>Blocked by</b><span>${c.b.length?c.b.map(link).join(", "):"none"}</span></div>
+<div class=row><b>Blocks</b><span>${c.bl.length?c.bl.map(link).join(", "):"none"}</span></div>
+<div class=row><b>Runs</b><span>${c.ho?esc(c.ho):"none yet"}</span></div>
+<div class=row><b>PR · CI</b><span>${c.prf.length?c.prf.map(x=>`PR #${x.n} · ${esc(x.st||"")}${x.ci?` · CI ${esc(x.ci)}`:""}`).join("<br>"):"none"}</span></div>
+<div class=row><b>Opened</b><span>${when(d.created)} by ${esc(d.by)}</span></div>
+<div class=sec>Issue</div>${d.html?`<div class="md tkbody">${d.html}</div>`:`<div class="md tkbody">${d.body?md(d.body):"<span class=m>(no description)</span>"}</div>`}
+<div class=sec>Last comment</div>${d.last?`<div class="cm md"><div class=meta>${esc(d.last.by)} · ${when(d.last.at)}</div><div class=md>${d.last.html||(d.last.by?"":"")}</div></div>`:"<span class=m>no comments</span>"}`;
+$("#tktodo").hidden=!(c.pm&&!d.pr);   // the owner's go signal, only for a card the board marks promotable (ADR-0142)
+$("#tkgh").href=/^https:\/\/github\.com\//.test(d.url||"")?d.url:"#";
+$("#tkb").scrollTop=0;
+const shown=boardCards().find(x=>+x.dataset.n===+n&&(x.dataset.r||"__REPO__")===irepo);if(shown)shown.scrollIntoView({block:"nearest",inline:"nearest",behavior:"smooth"});
+}catch(e){$("#tkb").textContent="failed to load"}}
+tsheet.addEventListener("click",e=>{if(e.target.id==="tkp")step(-1);else if(e.target.id==="tkn")step(1);const b=e.target.closest("#tkset button");if(b)openCard(+b.dataset.o,b.dataset.r)});
+$("#tkb").addEventListener("click",e=>{const a=e.target.closest("a[data-o]");if(a){e.preventDefault();openCard(+a.dataset.o,irepo)}});
+$("#tkx").onclick=closeSheet;
+$("#tkrel").onclick=()=>{const on=!nav.every(([m,rr])=>boardCards().some(x=>+x.dataset.n===m&&(x.dataset.r||"__REPO__")===rr&&x.classList.contains("hit")));nav.forEach(([m,rr])=>boardCards().forEach(x=>{if(+x.dataset.n===m&&(x.dataset.r||"__REPO__")===rr)x.classList.toggle("hit",on)}))};
+$("#tktodo").onclick=()=>{const b=boardCards().find(x=>+x.dataset.n===cur&&(x.dataset.r||"__REPO__")===irepo),p=b&&b.querySelector(".pmp");if(p)p.click()};   // the one write the sheet makes is the card's own move
+addEventListener("keydown",e=>{if(e.key==="Escape"){if(tsheet.classList.contains("on"))closeSheet();else escBoard();return}
+ if(!tsheet.classList.contains("on")||/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName))return;
+ if(e.key==="ArrowRight"||e.key==="j")step(1);if(e.key==="ArrowLeft"||e.key==="k")step(-1)});
+document.addEventListener("click",e=>{const c=e.target.closest("#bbody .it");if(!c||e.target.closest("a")||e.target.closest("button")||c.classList.contains("m"))return;showIssue(c.dataset.n,c.dataset.r,c)});   // a card opens the sheet in place: the hub is never left
+const hm=location.hash.match(/issue=(\d+)/);if(hm)openCard(+hm[1]);   // deep link: /#issue=1171
 document.addEventListener("click",e=>{const h=e.target.closest("#bbody .ah");if(!h||e.target.closest("[data-eye]"))return;const g=h.parentElement.dataset.g;if(g===COLNAME.pr_open)bo.prOpen=bo.prOpen===false;else bo.open=g;saveB();pollBoard()});
 $("#grip").onpointerdown=e=>{e.preventDefault();document.body.classList.remove("dragging");const g=e.currentTarget;g.setPointerCapture(e.pointerId);g.classList.add("drag");document.body.classList.add("dragging");
 const mv=ev=>{if(!ev.buttons){up();return}bo.h=Math.round(Math.min(innerHeight-160,Math.max(90,innerHeight-ev.clientY)));sizeBoard()},up=()=>{g.classList.remove("drag");document.body.classList.remove("dragging");g.removeEventListener("pointermove",mv);g.removeEventListener("pointerup",up);g.removeEventListener("pointercancel",up);g.removeEventListener("lostpointercapture",up);saveB()};
@@ -3545,7 +3693,7 @@ const ageC=o=>{const h=(Date.now()-Date.parse(o))/3600000;return h>=24?"old":h>=
 setInterval(()=>document.querySelectorAll("#bbody .age").forEach(e=>{e.textContent=age(e.dataset.o);e.className="age "+ageC(e.dataset.o)}),30000);
 const gcls=c=>c.v==="?"?"unk":c.v==="debt"?"debt":c.v.startsWith("OK")?"ok":(c.v.startsWith("CHG")||c.v.startsWith("BLK"))?"bad":"";
 const gstrip=s=>`<div class="gstrip${s.old?" old":""}" title="${esc(s.old?`these facts are ${s.age} s old: the strip greys out past 180 s, so nothing here is being claimed as fresh`:"R review · C CI · T threads · B base · H labels and holds")}">`+s.cells.map(c=>`<span class="gc ${gcls(c)}" title="${esc(c.tip||"")}">${c.k}<b>${esc(c.v)}</b></span>`).join("")+`</div>`;
-const cards=(g,it,shown)=>shown.map(x=>{const pr=x.kind==="pr";return `<div class=it data-n="${x.n}" data-r="${esc(x.r||"__REPO__")}"${pr?" data-pr":""} style="--cc:${colOf(g.name,CN)}${tint(x)}"><a class=id target=_blank href="https://github.com/${esc(x.r||"__REPO__")}/${pr?"pull":"issues"}/${x.n}">${pr?"PR ":""}#${x.n}</a>${x.rt?`<span class=rpo title="the repository this card belongs to: ${esc(x.r)}">${esc(x.rt)}</span>`:""}${x.pb?`<span class="pbg ${x.pb.replace(" ","-")}">${esc(x.pb)}</span>`:""}${x.rollup?`<span class="cir ${esc(x.rollup)}" title="CI states on the head${(x.ci||[]).length?": "+esc((x.ci||[]).join(", ")):""}">CI ${esc(x.rollup)}</span>`:""}${x.fz?`<span class=fz title="a freeze is a marker, never a move: the card keeps its column">${esc(x.fz)}</span>`:""}${x.pd?`<span class=pnd title="pending: the board door proved this move and the board read has not carried it yet">pending</span>`:""}${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(x.t)}</span>${x.pm&&!pr?`<button class=pmp data-n="${x.n}" title="move this card to ${esc(x.pmt)}: the owner's go signal (ADR-0142)">→ ${esc(x.pmt)}</button>`:""}${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.ho?`<div class=hld>${esc(x.ho)}</div>`:""}${(x.cl||[]).length?`<div class=clos title="the issues this pull request closes">closes ${x.cl.map(n=>`<a target=_blank rel=noopener href="https://github.com/${esc(x.r||"__REPO__")}/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${(x.o||x.sc||x.by)?`<div class=ft>${x.sc?`<span class=tsk title="sub-issues closed / total: ${esc(x.sc)}">${esc(x.sc)}</span>`:""}${x.o?`<span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span>`:""}${x.by?`<span class=au title="opened by ${esc(x.by)}">${esc(x.by)}</span>`:""}</div>`:""}</div>`}).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"");
+const cards=(g,it,shown)=>shown.map(x=>{const pr=x.kind==="pr";return `<div class=it data-n="${x.n}" data-r="${esc(x.r||"__REPO__")}"${pr?" data-pr":""} data-col="${encodeURIComponent(g.name==null?"":String(g.name))}" data-pm="${x.pm&&!pr?1:""}" data-b="${encodeURIComponent(JSON.stringify(x.b||[]))}" data-bl="${encodeURIComponent(JSON.stringify(x.bl||[]))}" data-ho="${encodeURIComponent(x.ho==null?"":String(x.ho))}" data-hr="${encodeURIComponent(x.hr==null?"":String(x.hr))}" data-prf="${encodeURIComponent(JSON.stringify(x.prf||[]))}" style="--cc:${colOf(g.name,CN)}${tint(x)}"><a class=id target=_blank href="https://github.com/${esc(x.r||"__REPO__")}/${pr?"pull":"issues"}/${x.n}">${pr?"PR ":""}#${x.n}</a>${x.rt?`<span class=rpo title="the repository this card belongs to: ${esc(x.r)}">${esc(x.rt)}</span>`:""}${x.pb?`<span class="pbg ${x.pb.replace(" ","-")}">${esc(x.pb)}</span>`:""}${x.rollup?`<span class="cir ${esc(x.rollup)}" title="CI states on the head${(x.ci||[]).length?": "+esc((x.ci||[]).join(", ")):""}">CI ${esc(x.rollup)}</span>`:""}${x.fz?`<span class=fz title="a freeze is a marker, never a move: the card keeps its column">${esc(x.fz)}</span>`:""}${x.pd?`<span class=pnd title="pending: the board door proved this move and the board read has not carried it yet">pending</span>`:""}${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(x.t)}</span>${x.pm&&!pr?`<button class=pmp data-n="${x.n}" title="move this card to ${esc(x.pmt)}: the owner's go signal (ADR-0142)">→ ${esc(x.pmt)}</button>`:""}${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.ho?`<div class=hld>${esc(x.ho)}</div>`:""}${(x.cl||[]).length?`<div class=clos title="the issues this pull request closes">closes ${x.cl.map(n=>`<a target=_blank rel=noopener href="https://github.com/${esc(x.r||"__REPO__")}/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${(x.o||x.sc||x.by)?`<div class=ft>${x.sc?`<span class=tsk title="sub-issues closed / total: ${esc(x.sc)}">${esc(x.sc)}</span>`:""}${x.o?`<span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span>`:""}${x.by?`<span class=au title="opened by ${esc(x.by)}">${esc(x.by)}</span>`:""}</div>`:""}</div>`}).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"");
 // A visible column holding no cards is not drawn at all: the columns that do have cards take the width, and the
 // collapsed one is accounted for by a line at the foot of the hidden: strip. Which columns those are is derived on
 // every render -- from the filtered count, the user's hidden set and the set the line's eye added -- and never

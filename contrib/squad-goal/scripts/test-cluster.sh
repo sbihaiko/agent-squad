@@ -81,4 +81,18 @@ printf 'PANEL: p1\nIMPORTANT: your first and only action is to call the spawn to
 printf 'PANEL: p1\nIMPORTANT: your first and only action is to call the spawn tool\nCHILD\nalso scripts/hub.py\n' > "$T/b2.body"
 HOME="$T/home" bash "$T/s/mkreq.sh" c1 "$T/b1.body" >/dev/null 2>&1 && ok "mkreq: the first child of a panel is accepted" || ko "mkreq: the first child was refused"
 HOME="$T/home" bash "$T/s/mkreq.sh" c2 "$T/b2.body" >"$T/mk.err" 2>&1 && ko "mkreq: a sibling naming the same file was launched anyway" || { /usr/bin/grep -q "same panel p1" "$T/mk.err" && ok "mkreq: a sibling naming the same file is refused (slice_guard)" || ko "mkreq: refused for another reason: $(cat $T/mk.err)"; }
+# ADR-0158: a files-cluster is capped, so one batch over one large file becomes several runs instead of one run that dies
+# `out_of_budget`. The cap splits the cluster in ascending number order and drops no ticket; the default is two.
+J='[{"number":1,"title":"a","created_at":"2026-10-31T00:00:00Z","body":"touches scripts/hub.py"},
+    {"number":2,"title":"b","created_at":"2026-10-31T00:00:00Z","body":"touches scripts/hub.py"},
+    {"number":3,"title":"c","created_at":"2026-10-31T00:00:00Z","body":"touches scripts/hub.py"},
+    {"number":4,"title":"d","created_at":"2026-10-31T00:00:00Z","body":"touches scripts/hub.py"},
+    {"number":5,"title":"e","created_at":"2026-10-31T00:00:00Z","body":"touches scripts/hub.py"}]'
+r=$(printf '%s' "$J" | CL_MODE=files python3 "$d/cluster.py" | tr '\n' '|')
+[ "$r" = "1 2|3 4|5|" ] && ok "cluster: the default cap splits a five-ticket file batch into runs of two" || ko "default cap: '$r'"
+r=$(printf '%s' "$J" | CL_MODE=files CL_MAX=3 python3 "$d/cluster.py" | tr '\n' '|')
+[ "$r" = "1 2 3|4 5|" ] && ok "cluster: a named cap of three splits the same batch in threes" || ko "named cap: '$r'"
+r=$(printf '%s' "$J" | CL_MODE=files CL_MAX=0 python3 "$d/cluster.py" | tr '\n' '|')
+[ "$r" = "1 2|3 4|5|" ] && ok "cluster: a cap of zero falls back to the default rather than dropping tickets" || ko "zero cap: '$r'"
+
 rm -rf "$T"; exit $fail

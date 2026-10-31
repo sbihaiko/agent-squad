@@ -176,3 +176,85 @@ def test_the_sheet_links_to_the_issue_on_github(hub):
     body = hub.MOBILE_PAGE
     assert "https://github.com/" in body and "/issues/" in body
     assert "__REPO__" not in body
+
+
+# --- the ticket sheet on the phone (#919) ------------------------------------------------------------------------
+
+SHEET_FIELDS = ("Column", "Labels", "Blocked by", "Blocks", "Runs", "PR · CI", "Opened")
+
+
+def test_the_phone_sheet_carries_every_card_field(hub):
+    """The sheet reads the card data the board read already holds, so every field is drawn from the row (#919)."""
+    body = hub.MOBILE_PAGE
+    for ident in ("sh-chips", "sh-meta", "sh-pos", "sh-set", "sh-prev", "sh-todo", "sh-last"):
+        assert f'id="{ident}"' in body, f"the phone sheet has no #{ident}"
+    for field in SHEET_FIELDS:
+        assert f'"{field}"' in body, f"the phone sheet shows no {field!r} row"
+    assert "ROWS.map(" in body, "the sheet draws the rows it names, never a subset of them"
+
+
+def test_the_phone_sheet_takes_about_sixty_percent_of_the_screen(hub):
+    """The sheet takes about 60% of the height, so the selected card scrolls above it (#919)."""
+    m = re.search(r"#sheet\{[^}]*\}", hub.MOBILE_PAGE)
+    assert m, "the phone sheet has no style rule"
+    rule = m.group(0)
+    assert "60vh" in rule and "82vh" not in rule, f"the sheet does not take 60% of the screen: {rule}"
+
+
+def test_the_phone_sheet_renders_githubs_html_and_never_frames_it(hub):
+    body = hub.MOBILE_PAGE
+    assert "innerHTML = d.html" in body, "the phone body is GitHub's rendered HTML the route serves"
+    assert "d.last" in body, "the last comment is read with the body"
+    sheet = body[body.index('id="sheet"'):body.index('id="termview"')]
+    assert "<iframe" not in sheet, "the sheet holds no frame"
+
+
+def test_the_phone_sheet_shows_the_spec_and_wave_chips_the_card_carries(hub):
+    body = hub.MOBILE_PAGE
+    assert "chip spec" in body and "chip wave" in body, "the title carries the spec and wave chips"
+    assert "x.sp" in body, "the spec chip reads the card's own fact, never a label rule of the view"
+    assert "wave:" in body, "the wave chip reads the card's wave label"
+
+
+def test_the_phone_todo_button_shows_only_for_a_promotable_card(hub):
+    body = hub.MOBILE_PAGE
+    assert '$("sh-todo").hidden = !x.pm' in body, "the → Todo button reads the served promotable fact"
+    assert "stageMove(x" in body, "→ Todo starts the card's own move, the one write the page already makes"
+
+
+def test_the_phone_sheet_names_the_position_and_steps_with_chips_and_keys(hub):
+    body = hub.MOBILE_PAGE
+    assert '(view.card + 1) + " of " + shown.length' in body, "the sheet names where the card stands in its selection"
+    assert 'data-i="${i}"' in body, "the number chips pick a card"
+    assert '$("sh-prev").onclick' in body and '$("sh-next").onclick' in body, "the previous and next buttons step"
+    assert 'e.key === "ArrowLeft"' in body and 'e.key === "ArrowRight"' in body, "the arrow keys step"
+    assert 'e.key === "j"' in body and 'e.key === "k"' in body, "j and k step"
+
+
+def test_escape_or_a_swipe_down_closes_the_phone_sheet_and_clears_the_selection(hub):
+    body = hub.MOBILE_PAGE
+    assert 'e.key === "Escape"' in body, "Escape closes the phone sheet"
+    assert '$("sh-set").innerHTML = ""' in body, "a closed sheet clears the selection it drew"
+    assert 'gestureAct({ owner: t.owner, dx, dy, atTop: t.atTop })' in body, "a swipe down goes through the gesture rules"
+    assert run_js(GESTURE_JS.read_text(), 'gestureAct({owner:"sheet",dx:0,dy:90,atTop:true})') == {"act": "close"}
+
+
+def test_every_phone_sheet_target_is_at_least_44px(hub):
+    body = hub.MOBILE_PAGE
+    rule = re.search(r"#sh-nav[^{]*\{[^}]*\}", body)
+    assert rule and "min-height:44px" in rule.group(0), "a target in the sheet's number row is smaller than 44px"
+    chips = re.search(r"#sh-set[^{]*button[^{]*\{[^}]*\}", body)
+    assert chips and "min-height:44px" in chips.group(0), "a number chip is smaller than 44px"
+    todo = re.search(r"#sh-todo\{[^}]*\}", body)
+    assert todo and "min-height:44px" in todo.group(0), "the → Todo button is smaller than 44px"
+
+
+def test_a_blocker_in_the_phone_sheet_opens_that_ticket_in_the_same_sheet(hub):
+    body = hub.MOBILE_PAGE
+    assert 'class="shb" data-n=' in body, "a blocker link carries the number it opens"
+    assert "openCard(n)" in body, "a blocker link opens that ticket in the same sheet, never a new tab"
+
+
+def test_the_selected_phone_card_scrolls_above_the_sheet(hub):
+    body = hub.MOBILE_PAGE
+    assert 'scrollIntoView({ block: "start" })' in body, "the opened card is scrolled above the sheet"

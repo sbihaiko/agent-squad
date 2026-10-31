@@ -203,9 +203,10 @@ def test_a_card_links_and_opens_in_its_own_repository(hub):
     assert "data-r=" in card, "the card carries the repository it belongs to, for the link and the popup"
     assert 'github.com/${esc(x.r||"__REPO__")}/' in card, "the id links to the card's own repository"
     click = _page_block(hub, 'document.addEventListener("click",e=>{const c=e.target.closest("#bbody .it")', 'const hm=location.hash')
-    assert 'github.com/"+(c.dataset.r||"__REPO__")+"/' in click, "clicking a card opens its own repository"
-    assert "showIssue(c.dataset.n,c.dataset.r)" in click, "the popup is asked for the card's own repository"
-    assert "x.dataset.r||\"__REPO__\"" in click, "the popup's arrows walk the column's cards with their repositories"
+    # A card click opens the ticket sheet in place, never a new tab (#919): the sheet reads that card in its own repository.
+    assert "showIssue(c.dataset.n,c.dataset.r,c)" in click, "the sheet is asked for the card's own repository"
+    assert "nav=set.map(x=>[+x.dataset.n,x.dataset.r||\"__REPO__\"])" in hub.PAGE, \
+        "the sheet's arrows walk the cards with their repositories"
 
 
 def test_a_refs_number_in_a_tooling_pr_links_that_repositorys_issue(hub):
