@@ -304,3 +304,44 @@ def test_no_closed_card_gives_no_dots_and_no_lines(lt):
     assert result["dots"] == []
     assert result["average"] is None
     assert result["text"] == "all closed cards, 1 excluded because still open"
+
+
+# SPEC 889 #900: a drag across the plot zooms to a date range. The hub recomputes the chart for that range.
+def test_a_zoom_range_keeps_only_the_cards_closed_inside_it(lt):
+    items = [_closed(1, 5, days_ago=1), _closed(2, 5, days_ago=5), _closed(3, 5, days_ago=20)]
+    start, end = NOW - timedelta(days=6), NOW - timedelta(days=2)
+
+    result = _chart(lt, items, start=start, end=end)
+
+    assert sorted(dot["n"] for dot in result["dots"]) == [2]
+
+
+def test_a_zoom_range_places_its_start_on_the_left_edge_and_its_end_on_the_right(lt):
+    start, end = NOW - timedelta(days=10), NOW
+    result = _chart(lt, [_closed(1, 5, days_ago=0), _closed(2, 5, days_ago=5)], start=start, end=end)
+
+    xs = {dot["n"]: dot["x"] for dot in result["dots"]}
+    assert xs[1] == 1.0, "a card closed at the zoom end sits on the right edge"
+    assert xs[2] == pytest.approx(0.5), "a card closed 5 of 10 days ago sits in the middle"
+
+
+def test_the_chart_reports_the_range_it_plots(lt):
+    start, end = NOW - timedelta(days=10), NOW
+    result = _chart(lt, [_closed(1, 5, days_ago=1)], start=start, end=end)
+
+    assert result["range"] == {"start": _iso(start), "end": _iso(end)}
+
+
+def test_a_zoom_range_names_its_dates_in_the_window_text(lt):
+    start, end = datetime(2026, 9, 30, tzinfo=UTC), datetime(2026, 10, 8, tzinfo=UTC)
+    result = _chart(lt, [_closed(1, 5, days_ago=20)], start=start, end=end)
+
+    assert result["text"] == "Sep 30 to Oct 8"
+
+
+def test_a_zoom_range_with_no_card_keeps_its_range_and_no_dots(lt):
+    start, end = NOW - timedelta(days=3), NOW - timedelta(days=2)
+    result = _chart(lt, [_closed(1, 5, days_ago=20)], start=start, end=end)
+
+    assert result["dots"] == []
+    assert result["range"] == {"start": _iso(start), "end": _iso(end)}
