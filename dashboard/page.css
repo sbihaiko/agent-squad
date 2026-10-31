@@ -13,6 +13,9 @@
   .tools { display:flex; flex-wrap:wrap; gap:6px; }
   button, label.btn, textarea, select, input[type=text], input:not([type]) { background:#0c0e12; color:var(--fg); border:1px solid var(--line); border-radius:4px; padding:4px 8px; font:var(--fs-min) var(--font-mono); }
   button, label.btn { cursor:pointer; }
+  /* A file label wraps a hidden input; it takes the same tap height as a button only as a flex box, since min-height has no
+     effect on an inline one. */
+  label.btn { display:inline-flex; align-items:center; justify-content:center; min-height:var(--ctl-h); }
   .row { display:flex; gap:6px; align-items:center; margin:4px 0; }
   .row input { flex:1; min-width:0; }
   button:hover, label.btn:hover { border-color:var(--acc); }
@@ -250,13 +253,25 @@
 /* Under 900px the drawer becomes a bottom sheet: full width, 52vh tall, and the grip turns sideways between 30vh and 75vh.
    The map reserves the sheet's height, and the footer row — the hint and the replay bar together — rises clear of it. */
 @media (max-width: 900px) {
-  body { --side-w:52vh; --side-min:30vh; --side-max:75vh; }
+  body { --side-w:52vh; --side-min:30vh; --side-max:75vh; grid-template-rows:auto 1fr; }
+  /* The top bar wraps to as many rows as its controls need (#916). The map's row is the rest of the screen, so the page
+     never runs sideways at a tablet or phone width; #left docks below this breakpoint, so its top edge follows no fixed bar height. */
+  #topbar { height:auto; min-height:37px; flex-wrap:wrap; row-gap:6px; }
   #left { top:auto; left:0; right:0; width:auto; height:var(--side-w,52vh); border-top:1px solid var(--line); border-left:0; }
   #side-grip { top:auto; bottom:calc(var(--side-w,52vh) - 8px); left:0; right:0; width:auto; height:8px; cursor:row-resize; }
   #left::before { top:auto; bottom:var(--side-w,52vh); left:0; right:0; width:auto; height:8px; cursor:row-resize; }
   body:not(.noside) #mapbox { padding-bottom:52vh; }
   body:not(.noside) #view { right:12px; }
   body:not(.noside) #footer { bottom:calc(var(--side-w,52vh) + 10px); right:12px; }   /* the whole row clears the sheet: the bar rides in it, and the sheet takes no width off the row */
+}
+
+/* A phone (#916): the footer row keeps only the transport, which may wrap inside its middle column, and the hint goes;
+   a file-menu label takes the phone's own tap height. The top bar already wraps under the 900px side-panel breakpoint,
+   so nothing here adds width. */
+@media (max-width: 600px) {
+  #hint { display:none; }
+  #replay { flex-wrap:wrap; }
+  label.btn { min-height:var(--ctl-h-phone); }
 }
 
 /* The single-card mode (#1782): `?card=<name>` paints ONE card of the panel and nothing else, for the second view the
