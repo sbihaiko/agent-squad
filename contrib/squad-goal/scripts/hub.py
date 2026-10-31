@@ -3422,6 +3422,11 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 </style>
 <div id=psw aria-label="Projects"></div>
 <div id=who>__WHO__</div>
+<script>// One read per URL at a time (#917): a timer fires on a fixed beat whether or not its last read came back, and a slow route
+// (models, stats) under load then filled the browser's six connections, so no read finished and the page drew nothing.
+// A read already in flight is shared: the caller gets a clone of the same answer.
+(()=>{const f=window.fetch.bind(window),live=new Map();window.fetch=(u,o)=>{if(o&&o.method&&o.method!=="GET"||o&&o.signal)return f(u,o);
+ const k=String(u);if(!live.has(k))live.set(k,f(u,o).finally(()=>live.delete(k)));return live.get(k).then(r=>r.clone())}})();</script>
 <a id=mobile-link href="#" style="margin:0 12px;color:#8a93a3;font-size:var(--fs-min)">mobile view</a><script>document.getElementById("mobile-link").href=location.pathname.replace(/\/?$/,"/")+"mobile"</script>
 <div id=win>
 <div id=side>
@@ -3861,7 +3866,7 @@ const mv=ev=>{if(!ev.buttons){up();return}bo.h=Math.round(Math.min(innerHeight-1
 g.addEventListener("pointermove",mv);g.addEventListener("pointerup",up);g.addEventListener("pointercancel",up);g.addEventListener("lostpointercapture",up)};
 document.addEventListener("click",e=>{const t=e.target.closest("[data-eye]");if(!t)return;e.preventDefault();e.stopPropagation();const g=t.dataset.eye;
  if(t.closest(".hidline")){const k=new Set(bo.kept||[]);k.add(g);bo.kept=[...k]}   // the hidden: strip's line: show the column again and keep it shown, even while it holds nothing (#1809)
- else{const h=new Set(bo.hidden||[]),k=new Set(bo.kept||[]);if(h.has(g))h.delete(g);else{h.add(g);k.delete(g)}bo.hidden=[...h];bo.kept=[...k]}   // the header's eye: the user's own hidden set, and the keep it ends
+ else{const h=new Set(hidCols()),k=new Set(bo.kept||[]);if(h.has(g))h.delete(g);else{h.add(g);k.delete(g)}bo.hidden=[...h];bo.kept=[...k]}   // the header's eye: the user's own hidden set, and the keep it ends
  saveB();pollBoard()},true);
 const lim={},scr={};
 function restore(){document.querySelectorAll("#bbody .sc").forEach(e=>{e.scrollTop=scr[e.dataset.g]||0;e.onscroll=()=>{scr[e.dataset.g]=e.scrollTop;if(e.scrollTop+e.clientHeight>=e.scrollHeight-40&&e.querySelector(".it.m")&&!lim.busy){const g=e.dataset.g;lim[g]=(lim[g]||25)+25;pollBoard()}}})}
@@ -3875,6 +3880,7 @@ function restore(){document.querySelectorAll("#bbody .sc").forEach(e=>{e.scrollT
 // the only one — which is what lets the ring cycle.
 const COLORS=/*BOARD_COLORS*/;
 const COLNAME=/*BOARD_NAMES*/;   // the columns' names by the fact that sets them: the board's script holds no column name of its own
+const hidCols=()=>bo.hidden??[COLNAME.issue_closed,COLNAME.abandoned].filter(Boolean);   // Closed and Abandoned are history: hidden until the user shows them
 const RING=["#a3e635","#d8b4fe","#ff9ecd","#7dd3fc"];   // reserved for the columns the user creates, and never one of the named columns
 const colOf=(n,names)=>{const u=(names||[]).filter(x=>!Object.hasOwn(COLORS,x)).sort(),i=u.indexOf(n);return COLORS[n]||RING[(i<0?0:i)%RING.length]};
 const caseRows=cs=>(cs||[]).map(c=>{const a=c.age<3600?Math.max(1,Math.round(c.age/60))+"m":c.age<172800?Math.round(c.age/3600)+"h":Math.round(c.age/86400)+"d";return `<div class="tcrow ${c.result==="fail"?"fail":"pass"}" data-key="test case:${c.issue}@${esc(c.commit)}"><span class=tr>${esc(c.result)}</span><span class=id>#${c.issue}</span><span class=ta>${a}</span><code class=tm>${esc(c.commit)}</code></div>`}).join("");   // one row for each test case item, in the model's order: a strip beside the axis, never a column, and the pane reads no cache of its own
@@ -3975,7 +3981,7 @@ const fillBar=(id,opts,label,sel,name)=>{const box=$("#"+id),k=opts.join("|");
  box.parentElement.querySelector("summary").textContent=sel.length?`${name} (${sel.length})`:name;box.parentElement.classList.toggle("set",sel.length>0)};
 fillBar("fwl",wOpts,w=>w==="none"?"No wave":"Wave "+w,fw,"Waves");
 fillBar("fsl",sOpts,s=>s==="none"?"No spec":"#"+s+(specTitle.get(s)?" "+specTitle.get(s):""),fs,"Specs");
-const hid=new Set(bo.hidden||[]),bottom=bo.dock==="bottom",eye=(g,off=hid.has(g.name))=>`<span class=eye data-eye="${esc(g.name)}" title="${off?"show":"hide"} this column"><svg viewBox="0 0 24 24" width=14 height=14 fill=none stroke=currentColor stroke-width=2 stroke-linecap=round stroke-linejoin=round><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx=12 cy=12 r=3 />${off?'<path d="M3 3l18 18"/>':""}</svg></span>`;
+const hid=new Set(hidCols()),bottom=bo.dock==="bottom",eye=(g,off=hid.has(g.name))=>`<span class=eye data-eye="${esc(g.name)}" title="${off?"show":"hide"} this column"><svg viewBox="0 0 24 24" width=14 height=14 fill=none stroke=currentColor stroke-width=2 stroke-linecap=round stroke-linejoin=round><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx=12 cy=12 r=3 />${off?'<path d="M3 3l18 18"/>':""}</svg></span>`;
 const LC=b.lc||{},rgb=h=>[0,2,4].map(i=>parseInt(h.slice(i,i+2),16)),mix=(a,t)=>a.map((v,i)=>Math.round(v*t+[28,34,44][i]*(1-t))),   // label color blended into the card's #1c222c
 tint=x=>{const cs=(x.l||[]).map(l=>LC[l]).filter(c=>/^[0-9a-f]{6}$/.test(c||"")).map(rgb);if(!cs.length)return"";const avg=[0,1,2].map(i=>cs.reduce((s,c)=>s+c[i],0)/cs.length);return`;--bg:rgb(${mix(avg,.10)});--bgh:rgb(${mix(avg,.16)})`},
 lbc=l=>/^[0-9a-f]{6}$/.test(LC[l]||"")?` style="--lb:rgba(${rgb(LC[l])},.30)"`:"";
@@ -3991,7 +3997,7 @@ const cards=(g,it,shown)=>shown.map(x=>{const pr=x.kind==="pr";return `<div clas
 // stored, so a card appearing brings the column back on its own and the last one leaving collapses it again (#1809).
 const laneHtml=m=>{const ccount=c=>m.lanes.reduce((s,l)=>s+(l.counts[c]||0),0),pct=l=>l.total?Math.round(l.closed/l.total*100):0;
  if(!m.lanes.length)return `<div class=lempty>${f?"No card matches this search.":"No card on the board."}</div>`;
- let h=`<div class=lgrid style="--vc:${Math.max(1,m.vc.length)}">`+m.vc.map(c=>`<div class=lcolh style="--cc:${colOf(c,CN)}"><span>${esc(c)}</span><b>${ccount(c)}</b></div>`).join("");
+ let h=`<div class=lgrid style="--vc:${Math.max(1,m.vc.length)}">`+m.vc.map(c=>`<div class=lcolh style="--cc:${colOf(c,CN)}"><span>${esc(c)}</span><b>${ccount(c)}</b>${eye({name:c})}</div>`).join("");
  for(const l of m.lanes){const cl=l.collapsed,lc=l.kind==="bugs"?"var(--err,#f85149)":colOf(l.st||"",CN);
   h+=`<section class="lane${cl?" coll":""}${l.kind==="bugs"?" alarm":""}${l.done?" done":""}" data-lane="${esc(l.id)}" style="--lc:${lc}"><header class=lh role=button tabindex=0 aria-expanded="${!cl}" data-lane="${esc(l.id)}"><span class=tw>${cl?"&#9656;":"&#9662;"}</span>`
     +(l.kind==="s"?`<span class=lid>#${l.num}</span>`:"")+`<span class=ltt>${esc(l.title)}</span>`
@@ -4015,21 +4021,33 @@ const fmtN=n=>n>=1000?n.toLocaleString("en-US"):""+n;   // "688" is one token; o
 // exception is a column #1793's map does not name, which takes the ring colour and can only come from colOf here.
 const hidchip=g=>{const c=colOf(g.name,CN),ring=!Object.hasOwn(COLORS,g.name);return `<span class=chip data-eye="${esc(g.name)}" data-col="${esc(g.name)}" title="${esc(g.name+" — "+fmtN(g.n))}"><span class=lbl>${esc(g.name)}</span><b${ring?` style="color:${c}"`:""}>${fmtN(g.n)}</b></span>`};
 const html=vis.map(one).join("")+(bottom&&hid.size?`<div class=hidbar>${all.filter(g=>hid.has(g.name)).map(hidchip).join("")}`:"")+(bottom&&(hid.size||autos.length)?`${hid.size?"":`<div class=hidbar>`}${autos.length?(hid.size?'<div class=hidsep></div>':"")+autos.map(g=>`<span class=hidline style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><span>${esc(g.name)}</span><b>${badge(g)}</b>${eye(g,true)}</span>`).join(""):""}</div>`:"");   // one quiet line per column hidden only because it is empty, behind a divider (#1809)
-const model=bo.lmode==="none"?null:buildBoard(all.filter(g=>!isPR(g.name)),{mode:bo.lmode||"spec",fw:bo.fw||[],fs:bo.fs||[],closed:COLNAME.issue_closed,lc:bo.lc||{},hideDone:!!bo.hideDone,search:!!f,text:x=>!f||String(x.n).includes(f)||x.t.toLowerCase().includes(f.toLowerCase())});   // the lanes read every row; the search and the filters only hide rows (#890)
+const model=bo.lmode==="none"?null:buildBoard(all.filter(g=>!isPR(g.name)),{mode:bo.lmode||"spec",fw:bo.fw||[],fs:bo.fs||[],closed:COLNAME.issue_closed,abandoned:COLNAME.abandoned,hidden:hidCols(),lc:bo.lc||{},hideDone:!!bo.hideDone,search:!!f,text:x=>!f||String(x.n).includes(f)||x.t.toLowerCase().includes(f.toLowerCase())});   // the lanes read every row; the search and the filters only hide rows (#890)
 const lanesHtml=model?laneHtml(model):null;lanesNow=model;$("#lhd").checked=!!bo.hideDone;
 $("#lmode").value=bo.lmode||"spec";$("#bbody").classList.toggle("lanes",!!model);
-$("#lhc").innerHTML=model&&model.hc.length?`<button class=hcpill id=lhcx title="columns with no card in an expanded lane: click to expand the lanes that hold their cards">+${model.hc.length} hidden: ${model.hc.map(x=>esc(x.name)+" <b>"+x.count+"</b>").join(" · ")}</button>`:"";
+$("#lhc").innerHTML=model&&model.hc.length?`<button class=hcpill id=lhcx title="columns with no card in an expanded lane: click to expand the lanes that hold their cards">+${model.hc.length} hidden: ${model.hc.map(x=>x.user?`<span class=hcu data-eye="${esc(x.name)}" title="show this column">${esc(x.name)} <b>${x.count}</b></span>`:esc(x.name)+" <b>"+x.count+"</b>").join(" · ")}</button>`:"";
 if(lanesHtml!==null){if($("#bbody").dataset.h!==lanesHtml){$("#bbody").dataset.h=lanesHtml;$("#bbody").innerHTML=lanesHtml;restore()}}
 else if($("#bbody").dataset.h!==html){$("#bbody").dataset.h=html;$("#bbody").innerHTML=html;restore()}   // same cards: leave the DOM alone, so a scroll in progress is never interrupted
 }catch(e){}finally{lim.busy=0}}
 /*BOARD_LANES*/
 $("#lmode").onchange=e=>{bo.lmode=e.target.value;saveB();pollBoard()};
 // The swimlanes' state (#891): collapse and open state live in `bo`, so the device keeps them across a reload.
+// A lane opens and closes with an eased height (Web Animations on its cells; the lane itself is display:contents). Closing
+// runs first and the board redraws after it; opening shows a loading mark in the lane until the read redraws it, then grows.
+const LANE_MS=matchMedia("(prefers-reduced-motion: reduce)").matches?0:220;
+const laneCells=id=>[...document.querySelectorAll(`#bbody .cell[data-lane="${CSS.escape(id)}"]`)];
+const laneGrow=(id,dir)=>Promise.all(laneCells(id).map(c=>{const hh=c.scrollHeight;c.style.overflow="hidden";
+ const a=c.animate(dir>0?[{height:"0px",opacity:0},{height:hh+"px",opacity:1}]:[{height:hh+"px",opacity:1},{height:"0px",opacity:0}],{duration:LANE_MS,easing:"ease-in-out",fill:dir>0?"none":"forwards"});
+ return a.finished.then(()=>{if(dir>0)c.style.overflow=""}).catch(()=>{})}));
+async function laneToggle(id,open){
+ if(!open){await laneGrow(id,-1);bo.lc[id]=true;saveB();await pollBoard();return}
+ const s=document.querySelector(`#bbody .lane[data-lane="${CSS.escape(id)}"]`);
+ if(s&&!s.querySelector(".lload"))s.querySelector(".lh").insertAdjacentHTML("afterend",`<div class=lload role=status aria-live=polite><i></i><span>loading…</span></div>`);
+ bo.lc[id]=false;saveB();await pollBoard();laneGrow(id,1)}
 let lanesNow=null;   // the model the board last drew: the controls act on its lanes and its hidden columns
 $("#lhd").onchange=e=>{bo.hideDone=e.target.checked;saveB();pollBoard()};
 const laneSet=v=>{bo.lc=bo.lc||{};for(const l of(lanesNow?lanesNow.lanes:[]))bo.lc[l.id]=v;saveB();pollBoard()};
 $("#lcall").onclick=()=>laneSet(true);$("#lexp").onclick=()=>laneSet(false);
-document.addEventListener("click",e=>{const h=e.target.closest("#bbody .lh");if(h){const coll=h.closest(".lane").classList.contains("coll");bo.lc=bo.lc||{};bo.lc[h.dataset.lane]=!coll;saveB();pollBoard();return}
+document.addEventListener("click",e=>{const h=e.target.closest("#bbody .lh");if(h){const id=h.dataset.lane,coll=h.closest(".lane").classList.contains("coll");bo.lc=bo.lc||{};laneToggle(id,coll);return}
  const m=e.target.closest("#bbody .more");if(m){bo.cx=bo.cx||{};bo.cx[m.dataset.cell]=true;saveB();pollBoard();return}   // a more click opens its own cell only
  const p=e.target.closest("#lhcx");if(p&&lanesNow){const names=new Set(lanesNow.hc.map(x=>x.name));bo.lc=bo.lc||{};   // a hidden column's pill expands the lanes that hold its cards
   for(const l of lanesNow.lanes)if(l.collapsed&&Object.keys(l.counts).some(c=>names.has(c)))bo.lc[l.id]=false;saveB();pollBoard()}});

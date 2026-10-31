@@ -3,16 +3,15 @@
 // (the parent the read carries, #829). Loop bugs (ADR-0146) sit in the first lane; cards with no spec sit in the last.
 // Each column the board draws is a name from the page's own column list, so no column is named here.
 const hasLabel=(x,l)=>(x.l||[]).includes(l);
-// A cell shows its first three cards and a "+N more" control for the rest; an open cell shows them all (#891).
-const LANE_CELL=3;
-const cellView=(rows,open)=>open?{shown:rows,more:0}:{shown:rows.slice(0,LANE_CELL),more:Math.max(0,rows.length-LANE_CELL)};
+// A cell shows every card it holds: the owner reads the whole lane at once, so no cap and no "+N more" (#891).
+const cellView=rows=>({shown:rows,more:0});
 const laneWaveOf=x=>{const w=(x.l||[]).map(l=>(String(l).match(/^wave:(\d+)$/)||[])[1]).filter(v=>v!==undefined).map(Number);return w.length?Math.min(...w):null};
 const waveKey=x=>{const w=laneWaveOf(x);return w===null?"none":String(w)};
 const specKey=x=>x.pa==null?"none":String(x.pa);
 // The filters (#899): an empty list means all; the two lists combine with AND. Keys are the values the bar offers.
 const boardOk=(x,fw,fs)=>(!fw.length||fw.includes(waveKey(x)))&&(!fs.length||fs.includes(specKey(x)));
 // groups: the issue columns in board order, each { name, items }. o: { mode: "spec"|"wave", fw, fs, text, lc, hideDone,
-// closed }. `text` is the search predicate; progress counts every row, so a search or a filter never moves a bar.
+// closed, hidden }. `text` is the search predicate; progress counts every row, so a search or a filter never moves a bar.
 // Returns { cols, vc, hc, lanes }: vc are the columns drawn, hc the hidden ones with their counts, lanes the shown lanes in order.
 function buildBoard(groups,o){
   const mode=o.mode,cols=groups.map(g=>g.name),closed=o.closed,fw=o.fw||[],fs=o.fs||[],text=o.text||(()=>true);
@@ -41,8 +40,10 @@ const[id,meta]=laneOf(x),l=ensure(id,meta);l.all.push(x);if(boardOk(x,fw,fs)&&te
   const lc=o.lc||{};
   list.forEach(l=>{l.collapsed=Object.prototype.hasOwnProperty.call(lc,l.id)?!!lc[l.id]:l.done});   // a done lane starts collapsed (#891)
   const open=list.filter(l=>!l.collapsed);
-  const vc=cols.filter(c=>open.some(l=>l.counts[c]));   // a column with no card in an expanded lane is not drawn
-  const hc=cols.filter(c=>!vc.includes(c)&&list.some(l=>l.counts[c])).map(c=>({name:c,count:list.reduce((s,l)=>s+(l.counts[c]||0),0)}));
+  const hide=new Set(o.hidden||[]);   // the user's hidden columns: never drawn, named in the pill with their whole total
+  const vc=cols.filter(c=>!hide.has(c)&&open.some(l=>l.counts[c]));   // a column with no card in an expanded lane is not drawn
+  const hc=cols.filter(c=>!vc.includes(c)&&!hide.has(c)&&list.some(l=>l.counts[c])).map(c=>({name:c,count:list.reduce((s,l)=>s+(l.counts[c]||0),0)}))
+    .concat(groups.filter(g=>hide.has(g.name)).map(g=>({name:g.name,count:g.items.length,user:true})));
   list.forEach(l=>{l.cells={};cols.forEach(c=>{l.cells[c]=l.vis.filter(x=>x.col===c)})});
   return{cols,vc,hc,lanes:list};
 }
