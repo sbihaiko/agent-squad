@@ -1,8 +1,8 @@
 """The lead-time chart arithmetic turns closed board cards into dots, a rolling average and a p85 summary (SPEC 111)."""
 import ast
 import importlib.util
-import math
 import json
+import math
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
