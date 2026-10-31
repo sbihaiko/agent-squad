@@ -295,6 +295,7 @@ def test_on_this_machine_every_command_the_ask_matt_router_names_is_registered_a
 
 
 @LIVE
+@pytest.mark.heavy   # it hashes eight skill trees on disk: 0.8 s idle, 2.3 s on a loaded box, over the serial line
 def test_on_this_machine_the_vendored_copy_matches_the_skills_it_was_built_from():
     if any(sp.resolve(n) is None for n in sp.vendored(ROOT)):
         pytest.skip("a vendored skill does not resolve here; the test above says which")
