@@ -2788,6 +2788,37 @@ _issue_cache = {}
 def gh_json(path, timeout=30):
     """One `gh api` read as JSON, or None when it returned nothing (the one seam the issue panel reads through)."""
     return json.loads(subprocess.run(["gh", "api", path], capture_output=True, text=True, timeout=timeout).stdout or "null")
+
+def gh_graphql(query, timeout=30, **vars):
+    """One GraphQL read as JSON, or None when it answered nothing. `-F` carries the typed variables (`number` is an Int);
+    the one seam the rendered issue body reads through."""
+    args = ["gh", "api", "graphql", "-f", "query=" + query]
+    for k, v in vars.items(): args += ["-F", f"{k}={v}"]
+    try: return json.loads(subprocess.run(args, capture_output=True, text=True, timeout=timeout).stdout or "null")
+    except (OSError, subprocess.TimeoutExpired, ValueError): return None
+
+# REST carries no rendered body, so the sheet reads GitHub's own HTML through GraphQL (X-Frame-Options keeps the page from
+# framing GitHub itself). One read carries the body and the last comment for an issue or a pull request (#919).
+ISSUE_HTML_QUERY = ("query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){"
+                    "issueOrPullRequest(number:$number){"
+                    "... on Issue{bodyHTML comments(last:1){totalCount nodes{author{login} createdAt bodyHTML url}}}"
+                    "... on PullRequest{bodyHTML comments(last:1){totalCount nodes{author{login} createdAt bodyHTML url}}}}}}")
+def issue_html(n, repo=None):
+    """GitHub's rendered HTML for the issue's body and its last comment (#919): `body`, `total`, and `last`, or `{}` when
+    the read failed. A failed rendered read never fails the issue read: the sheet falls back to the plain body."""
+    repo = repo if repo in REPOS else REPO
+    owner, _, name = repo.partition("/")
+    p = gh_graphql(ISSUE_HTML_QUERY, owner=owner, name=name, number=int(n)) or {}
+    node = (((p.get("data") or {}).get("repository") or {}).get("issueOrPullRequest")) or {}
+    if not node: return {}
+    cm = node.get("comments") or {}
+    nodes = [x for x in (cm.get("nodes") or []) if isinstance(x, dict)]
+    last = nodes[-1] if nodes else None
+    d = {"body": node.get("bodyHTML") or "", "total": cm.get("totalCount") or 0, "last": None}
+    if last:
+        d["last"] = {"by": (last.get("author") or {}).get("login") or "", "at": last.get("createdAt") or "",
+                     "html": last.get("bodyHTML") or "", "url": last.get("url") or ""}
+    return d
 def issue_detail(n, repo=None):
     """Issue (or PR) body + the last 5 comments, fetched on click and cached 60 s. n is an int, never interpolated raw.
     `repo` is the repository the card belongs to (#1820): a number is only a number, and PR #1821 of the tooling
@@ -2802,7 +2833,8 @@ def issue_detail(n, repo=None):
     cm = g(f"repos/{repo}/issues/{n}/comments?per_page=100") or []
     d = {"n": n, "r": repo, "title": it["title"], "state": it["state"], "pr": "pull_request" in it, "url": it["html_url"], "by": it["user"]["login"],
          "created": it["created_at"], "updated": it["updated_at"], "labels": [l["name"] for l in it["labels"]], "body": (it.get("body") or "")[:3000],
-         "total": len(cm), "comments": [{"by": c["user"]["login"], "at": c["created_at"], "body": (c.get("body") or "")[:1200]} for c in cm[-5:]]}
+         "total": len(cm), "comments": [{"by": c["user"]["login"], "at": c["created_at"], "body": (c.get("body") or "")[:1200]} for c in cm[-5:]],
+         "html": "", "last": None}   # the rendered body and last comment are read below, on open (#919)
     if d["pr"]:   # a PR also gets its branch, size, merge state, CI summary and the latest review verdicts
         p = g(f"repos/{repo}/pulls/{n}") or {}
         ck = (g(f"repos/{repo}/commits/{p['head']['sha']}/check-runs?per_page=100") or {}).get("check_runs", []) if p.get("head") else []
@@ -2814,6 +2846,11 @@ def issue_detail(n, repo=None):
         d["pull"] = {"head": p.get("head", {}).get("ref"), "base": p.get("base", {}).get("ref"), "add": p.get("additions"), "del": p.get("deletions"), "files": p.get("changed_files"),
                      "draft": p.get("draft"), "merged": bool(p.get("merged_at")), "mstate": p.get("mergeable_state"), "checks": cnt, "reviews": rv}
         if d["pull"]["merged"]: d["state"] = "merged"
+    try:
+        h = issue_html(n, repo)
+        d["html"], d["last"] = h.get("body") or "", h.get("last")
+    except Exception:
+        pass   # a failed rendered read is a plain body in the sheet, never a failed issue read (#919)
     _issue_cache[(repo, n)] = (time.time(), d); return d
 
 PRS = HUBDIR / "hub-prs.json"
