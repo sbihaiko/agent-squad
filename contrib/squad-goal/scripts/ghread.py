@@ -582,6 +582,51 @@ def read(route: str, transport: TransportFn | None = None) -> Read:
     return Read(kind=kind, answer=value, body=raw, message=message, request_id=request_id, detail=detail)
 
 
+def graphql_argv(query: str, variables: dict[str, Any] | None = None) -> list[str]:
+    """The argv a GraphQL read runs: `graphql -f query=<query>`, then one typed `-F` per variable.
+
+    It is the same door: a query no aggregate route names still asks GitHub once, and its answer, its refusal and its
+    failure are read exactly as every other read's. `-F` types the variables (`number` is an Int), because `-f` would
+    send a string where the query declares an integer.
+    """
+    argv = ["graphql", "-f", f"query={query}"]
+    for k, v in (variables or {}).items():
+        argv += ["-F", f"{k}={v}"]
+    return argv
+
+
+def graphql_read(query: str, variables: dict[str, Any] | None = None, transport: TransportFn | None = None,
+                 timeout: float | None = None) -> Read:
+    """One GraphQL read of a query no aggregate route names, through the same three-outcome contract (`read`).
+
+    The transport is injectable like every other read's, so a caller's test names the outcomes and no test touches the
+    network. The default transport runs the argv `graphql_argv` builds, with `--include` for the request id.
+    """
+    argv = graphql_argv(query, variables)
+
+    def run(route: str, when: float | None = None) -> Transport:
+        p = subprocess.run(["gh", "api", "--include", *argv], capture_output=True, text=True, check=False,
+                           timeout=timeout if when is None else when)
+        return Transport(rc=p.returncode, body=p.stdout, detail=(p.stderr or "").strip())
+
+    res = (transport or run)("graphql")
+    body, headers = _split_headers(res.body)
+    value, parsed = _decode(body)
+    # A GraphQL answer is `data`, an `errors` list or both; `errors` with no `data` is a refusal, and a field that failed
+    # beside a `data` is partial, exactly as an aggregate route's answer is read (#1893).
+    if parsed and isinstance(value, dict) and ("data" in value or "errors" in value):
+        errors = tuple(str(e.get("message", e)) if isinstance(e, dict) else str(e) for e in value.get("errors") or [])
+        if value.get("data") is None:
+            if errors:
+                request_id = headers.get("x-github-request-id") or (
+                    _REQUEST_ID_IN_MESSAGE.search("; ".join(errors)) or [None, ""])[1]
+                return Read(kind=REFUSED, message="; ".join(errors), request_id=str(request_id))
+            return Read(kind=FAILED, detail="the query answered no data")
+        return Read(kind=ANSWER, answer=value, body=json.dumps(value), partial=errors)
+    kind, answer, message, request_id, detail, raw = _verdict(res, ANSWER)
+    return Read(kind=kind, answer=answer, body=raw, message=message, request_id=request_id, detail=detail)
+
+
 # A conditional read hands its transport the route and the ETag the caller already holds for it.
 RevalidateFn = Callable[[str, str], Transport]
 

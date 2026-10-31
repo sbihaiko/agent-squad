@@ -353,3 +353,20 @@ def test_the_cli_reports_a_refused_write_and_never_exits_zero(tmp_path):
     assert r.returncode == 2, f"a refusal has its own exit code, never 0: {r.stdout!r}"
     assert RATE_LIMIT_MESSAGE in r.stdout and REQUEST_ID in r.stdout, f"the refusal names GitHub's words: {r.stdout!r}"
     assert "state=closed" in rec.read_text(), "the refused close still reached gh as the write it was"
+
+
+# --- one GraphQL read no aggregate route names, through the same door (#919) ----------------------------------------
+
+def test_a_graphql_query_is_the_argv_the_door_runs():
+    """The rendered issue body is one GraphQL read; the door builds the argv, so the page's reader carries no `gh` call."""
+    argv = ghread.graphql_argv("query($number:Int!){x}", {"number": 7})
+    assert argv[:3] == ["graphql", "-f", "query=query($number:Int!){x}"], argv
+    assert argv[3:] == ["-F", "number=7"], f"a variable goes through `-F`: {argv}"
+
+
+def test_a_graphql_read_is_an_answer_or_a_refusal_like_every_other_read():
+    body = '{"data":{"repository":{"issueOrPullRequest":{"bodyHTML":"<p>x</p>"}}}}'
+    out = ghread.graphql_read("query{x}", transport=stub(0, body))
+    assert out.kind == "answer" and out.answer["data"]["repository"]["issueOrPullRequest"]["bodyHTML"] == "<p>x</p>"
+    refused = ghread.graphql_read("query{x}", transport=stub(0, '{"errors":[{"message":"API rate limit exceeded"}]}'))
+    assert refused.kind == "refused" and "rate limit" in refused.message, refused

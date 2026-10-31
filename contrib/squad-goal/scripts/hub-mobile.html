@@ -69,7 +69,7 @@ h2{font-size:var(--fs-md);margin:6px 0 10px}
 #sh-body a{color:#5aa9ff}
 #sh-body table{display:block;overflow:auto}
 #sh-body blockquote{margin:8px 0;padding-left:10px;border-left:3px solid var(--line);color:var(--mute)}
-#sh-body input[type=checkbox]{width:16px;height:16px;vertical-align:-3px;margin:0 6px 0 0;accent-color:#4caf50;pointer-events:none}
+#sh-body input[type=checkbox]{transform:scale(1.1);transform-origin:left center;vertical-align:-3px;margin:0 6px 0 0;accent-color:#4caf50;pointer-events:none}
 #sh-last{margin:10px 0}
 #sh-last h3{font-size:var(--fs-body);margin:12px 0 4px;padding-top:8px;border-top:1px solid var(--line)}
 #sh-last .mut{color:var(--mute);font-size:var(--fs-min);margin:0 0 6px}
@@ -222,7 +222,7 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 #5aa9ff}
 <div id="sh-meta"></div>
 <div id="sh-body"></div>
 <div id="sh-last"></div>
-<button id="sh-todo" type="button" hidden>&#8594; Todo</button>
+<button id="sh-todo" type="button" hidden></button>
 </div>
 <section id="termview" hidden>
 <div id="termview-head"><button id="termview-back" type="button">Back</button><span id="termview-name"></span></div>
@@ -428,8 +428,9 @@ function renderSheet() {
   $("sh-next").disabled = view.card >= shown.length - 1;
   $("sh-set").innerHTML = shown.map((c, i) =>
     `<button type="button" data-i="${i}" class="${i === view.card ? "on" : ""}" title="card ${i + 1} of ${shown.length}">#${escHTML(c.n)}</button>`).join("");
+  // The button names the column the hub serves on the row (`x.pmt`), so this page holds no column name of its own.
   $("sh-todo").hidden = !x.pm;
-  $("sh-todo").textContent = "→ " + (x.pmt || "Todo");
+  if (x.pmt) $("sh-todo").textContent = "→ " + x.pmt;
   if (key === issueKey) return;
   issueKey = key;
   $("sheet").scrollTop = 0;
@@ -497,8 +498,8 @@ $("sh-meta").onclick = e => {
   const a = e.target.closest("a.shb[data-n]");
   if (a) { e.preventDefault(); openCard(+a.dataset.n); }
 };
-// → Todo starts the card's own move, the one write the page already makes (#829); it is drawn only for a card the hub
-// marks promotable (#919, ADR-0142).
+// The move button starts the card's own move, the one write the page already makes (#829); it is drawn only for a card
+// the hub marks promotable, and its column comes from the row (#919, ADR-0142).
 $("sh-todo").onclick = () => {
   const x = shown[view.card];
   const el = x && $("cards").querySelector('[data-role="card"][data-n="' + x.n + '"]');
