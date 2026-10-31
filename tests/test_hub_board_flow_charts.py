@@ -512,7 +512,7 @@ def test_the_cfd_names_a_range_selector_and_a_day_hover_with_counts(hub, board, 
     view = hub.board()["flow"]["cfd"]["ranges"]["all"]
     block = _flow_block(hub).split("const drawFlow")[0]
     drawing = "\n".join([
-        "const COLORS={},COLNAME={};", "const esc=s=>String(s);", "let CF={r:'all'};", block,
+        "const COLORS={},COLNAME={};", "const esc=s=>String(s);", block,
         f"process.stdout.write(flowCFD({json.dumps(view)}));",
     ])
     path = tmp_path / "flow-cfd-range.js"
