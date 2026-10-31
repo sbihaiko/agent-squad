@@ -83,9 +83,11 @@ Every round names how the check ends:
 - `awaiting answers` — this round asked questions; the owner answers them, and the next round runs with `--answers`.
 - `awaiting probes` — no question is open, but a premise still needs a probe to settle it.
 - `blocked` — an open gap this round could not ask, because it names no recommended answer.
+- `refuted` — no question is open and no probe is pending, but a premise is refuted: a probe disproved it, or the reading
+  contradicts it. The spec goes back to the check, so `/to-tickets` refuses it until a new round settles the premise.
 - `open risks` — no question is open, but the owner answered "I don't know" and no probe can settle the gap, so the
   comment carries an `open` row marked as a recorded risk. The check never calls itself `settled` beside that row.
-- `settled` — no question is open: every premise is proven, refuted or decided, and no recorded risk is left.
+- `settled` — no question is open: every premise is proven or decided, no premise is refuted, and no recorded risk is left.
 - `stopped` — the same refutation repeated with no change in the spec (ADR-0134: stop on attempts that do not change,
   never on totals). The comment names the reason; report it and stop.
 

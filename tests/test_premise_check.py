@@ -840,3 +840,85 @@ def test_an_answer_the_owner_does_not_know_settles_nothing(tmp_path):
 def test_the_skill_documents_answering_in_a_comment():
     skill = (ROOT / ".claude/skills/premise-check/SKILL.md").read_text()
     assert "--answers-from-comment" in skill
+
+
+# --- a refuted probe sends its spec back to the check (#888) -------------------------------------------------
+
+PROBE_PREMISE = "the loop never reads the probe ticket"
+PROBE = {"premise": PROBE_PREMISE, "kind": "run", "proof": "pytest tests/test_x.py"}
+
+
+def probe_comment(tmp_path, *findings, round_no=1):
+    rows = rows_of(tmp_path, *findings)
+    return pc.render(spec=878, round_no=round_no, reviewer=reviewer(), rows=rows, ending=pc.ending(rows), body_sha="a1b2c3")
+
+
+def test_a_refuted_probe_records_its_premise_as_refuted_and_opens_a_round(tmp_path):
+    gh = StubGithub()
+    gh.say(probe_comment(tmp_path, PROBE), login="squad-loop")
+    report = pc.refute(878, PROBE_PREMISE, github=gh, who=reviewer())
+    body = gh.comments[1]
+    assert f"| {PROBE_PREMISE} | refuted |" in body
+    state = pc.state_of(body)
+    assert state["refuted"] == [PROBE_PREMISE]
+    assert state["round"] == 2
+    assert report.ending == "refuted"
+
+
+def test_a_refuted_check_is_never_settled(tmp_path):
+    rows = rows_of(tmp_path, one_fact(holds=False))
+    assert pc.ending(rows) == "refuted"
+    assert "refuted" in pc.ENDINGS
+
+
+def test_refuting_a_premise_the_check_never_recorded_as_a_probe_is_refused_by_name(tmp_path):
+    gh = StubGithub()
+    gh.say(probe_comment(tmp_path, PROBE), login="squad-loop")
+    with pytest.raises(ValueError, match="never recorded"):
+        pc.refute(878, "a premise the check never named", github=gh, who=reviewer())
+    assert "update_comment" not in gh.calls
+
+
+def test_refuting_a_settled_premise_is_refused_by_name(tmp_path):
+    decided = {"premise": "the check comments on the spec", "kind": "decision", "answer": "one comment", "answered_by": "owner"}
+    gh = StubGithub()
+    gh.say(probe_comment(tmp_path, PROBE, decided), login="squad-loop")
+    with pytest.raises(ValueError, match="the check comments on the spec"):
+        pc.refute(878, "the check comments on the spec", github=gh, who=reviewer())
+
+
+def test_a_refutation_keeps_an_open_question_asked_by_its_number(tmp_path):
+    question = {"premise": "the owner names the probe", "kind": "decision", "recommends": "yes"}
+    gh = StubGithub()
+    gh.say(probe_comment(tmp_path, PROBE, question), login="squad-loop")
+    pc.refute(878, PROBE_PREMISE, github=gh, who=reviewer())
+    state = pc.state_of(gh.comments[1])
+    assert state["asked"][1]["premise"] == "the owner names the probe"
+    assert "**Q1** the owner names the probe" in gh.comments[1]
+
+
+def test_the_refute_flag_needs_no_findings_and_reaches_the_round():
+    a = pc.parser().parse_args(["878", "--refute", PROBE_PREMISE])
+    assert a.refute == PROBE_PREMISE and a.findings is None
+
+
+def test_the_squad_command_forwards_a_refutation_to_the_round():
+    from squad import cli
+    a = cli.parser().parse_args(["premise-check", "878", "--refute", PROBE_PREMISE])
+    assert a.refute == PROBE_PREMISE and a.findings is None
+
+
+def test_a_confirming_probe_or_a_non_probe_ticket_refutes_nothing(tmp_path):
+    gh = StubGithub()
+    gh.say(probe_comment(tmp_path, PROBE), login="squad-loop")
+    assert pc.probe_closed(878, PROBE_PREMISE, labels=["probe"], passed=True, github=gh, who=reviewer()) is None
+    assert pc.probe_closed(878, PROBE_PREMISE, labels=["bug"], passed=False, github=gh, who=reviewer()) is None
+    assert "update_comment" not in gh.calls
+
+
+def test_an_unmet_probe_ticket_refutes_its_premise(tmp_path):
+    gh = StubGithub()
+    gh.say(probe_comment(tmp_path, PROBE), login="squad-loop")
+    report = pc.probe_closed(878, PROBE_PREMISE, labels=["probe", "wave:01"], passed=False, github=gh, who=reviewer())
+    assert report.ending == "refuted"
+    assert pc.state_of(gh.comments[1])["refuted"] == [PROBE_PREMISE]

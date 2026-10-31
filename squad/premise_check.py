@@ -48,7 +48,7 @@ KINDS = ("fact", "run", "decision")
 ANSWER_KINDS = ("decision", "glossary", "adr")
 PROXY = "proxy"
 PANEL = "panel"
-ENDINGS = ("awaiting answers", "awaiting probes", "blocked", "open risks", "settled", "stopped")
+ENDINGS = ("awaiting answers", "awaiting probes", "blocked", "refuted", "open risks", "settled", "stopped")
 STALL = "the same refutation repeated with no change in the spec"
 READING = "reading"
 NOBODY = "—"
@@ -312,6 +312,8 @@ def ending(rows: list[Row]) -> str:
         return "blocked"
     if any(r.state == "needs a probe" for r in rows):
         return "awaiting probes"
+    if any(r.state == "refuted" for r in rows):
+        return "refuted"
     if any(r.risk for r in rows):
         return "open risks"
     return "settled"
@@ -370,6 +372,26 @@ def state_of(text: str) -> dict | None:
     asked = json.loads(m["asked"]) if m["asked"] else []
     return {"round": int(m["round"]), "sha": m["sha"], "refuted": json.loads(m["refuted"] or "[]"),
             "asked": {int(q["n"]): q for q in asked}}
+
+
+_CELL = r"((?:\\.|[^|\\])*)"
+_TABLE_ROW = re.compile(rf"^\| {_CELL} \| {_CELL} \| {_CELL} \| {_CELL} \|$")
+_QUESTION_PREFIX = re.compile(r"^\*\*Q\d+\*\* ")
+
+
+def _parse_rows(text: str) -> list[Row]:
+    """The rows a previous round's table recorded: premise, state, proof or answer, who answered. A row names a state the round writes."""
+    out = []
+    for line in (text or "").splitlines():
+        hit = _TABLE_ROW.match(line)
+        if not hit:
+            continue
+        premise, state, detail, by = (c.replace("\\|", "|").strip() for c in hit.groups())
+        if state not in STATES:
+            continue
+        premise = _QUESTION_PREFIX.sub("", premise)
+        out.append(Row(premise, state, detail, by, risk=detail.startswith("open risk:")))
+    return out
 
 
 def find_comment(github, spec: int) -> dict | None:
@@ -617,6 +639,40 @@ def run_round(spec: int, findings, answers=(), *, github, root=None, round_no: i
                   applied=applied, rows=tuple(rows), glossary=glossary, adrs=adrs, refused=tuple(refused.items()))
 
 
+def refute(spec: int, premise: str, *, github, who: Reviewer, dry_run: bool = False) -> Report:
+    """A probe refuted one premise: its row becomes refuted, the state line names it, and the next round is recorded."""
+    found = find_comment(github, spec)
+    before = state_of((found or {}).get("body") or "")
+    if before is None:
+        raise ValueError(f"no premise-check comment on spec {spec}")
+    rows = _parse_rows(found["body"])
+    if not any(r.premise == premise and r.state == "needs a probe" for r in rows):
+        raise ValueError(f"{premise!r} was never recorded as needs a probe, so no probe settles it")
+    asked = {q["premise"]: (n, q) for n, q in before["asked"].items()}
+    out = []
+    for r in rows:
+        if r.premise == premise:
+            r = replace(r, state="refuted", detail=f"refuted by {r.detail}")
+        elif r.premise in asked and r.state == "open":
+            n, q = asked[r.premise]
+            r = replace(r, question=n, recommends=q["recommends"])
+        out.append(r)
+    round_no = before["round"] + 1
+    end = ending(out)
+    comment = render(spec, round_no, who, out, ending=end, body_sha=before["sha"])
+    if dry_run:
+        return Report(body=comment, ending=end, round_no=round_no, rows=tuple(out))
+    action = write_comment(github, spec, found, comment)
+    return Report(body=comment, ending=end, round_no=round_no, action=action, rows=tuple(out))
+
+
+def probe_closed(spec: int, premise: str, *, labels, passed: bool, github, who: Reviewer, dry_run: bool = False) -> Report | None:
+    """The loop's close path for one ticket: a probe whose acceptance command is unmet refutes its premise; any other ticket refutes nothing."""
+    if "probe" not in labels or passed:
+        return None
+    return refute(spec, premise, github=github, who=who, dry_run=dry_run)
+
+
 def named(raw: str, reg=None) -> Reviewer:
     """A reviewer the caller names, checked against the registry: an unknown, retired or no-tools model never reviews."""
     reg = reg or modelreg.load(ROOT / REGISTRY)
@@ -750,7 +806,8 @@ def rest_runner(repo: str, shell=None):
 def parser():
     p = argparse.ArgumentParser(prog="squad premise-check", description="run one premise-check round on a spec and record it there")
     p.add_argument("spec", type=int, help="the number of the published spec the round checks")
-    p.add_argument("--findings", required=True, help="the reviewer's findings, a JSON array of objects")
+    p.add_argument("--findings", help="the reviewer's findings, a JSON array of objects (required unless --refute)")
+    p.add_argument("--refute", metavar="PREMISE", help="a probe refuted this premise: it must be one the check records as needs a probe")
     p.add_argument("--answers", help="the owner's answers, a JSON array of objects; each rewrites the spec and opens the next round")
     p.add_argument("--answers-from-comment", dest="from_comment", action="store_true",
                    help="read the owner's answers from a comment on the spec: only the owner's words, and a partial answer "
@@ -765,20 +822,26 @@ def parser():
 
 
 def main(argv=None) -> int:
-    a = parser().parse_args(sys.argv[1:] if argv is None else argv)
+    p = parser()
+    a = p.parse_args(sys.argv[1:] if argv is None else argv)
+    if a.refute is None and a.findings is None:
+        p.error("--findings is required unless --refute names a premise")
     try:
-        findings = json.loads(Path(a.findings).read_text())
-        answers = list(json.loads(Path(a.answers).read_text())) if a.answers else []
         who = named(a.reviewer) if a.reviewer else reviewer()
-        proxy = proxy_named(a.proxy) if a.proxy else None
-        root = artifact_root(a.repo, a.root)
         github = rest_runner(a.repo)     # a dry run reads the round it would write, and writes nothing
         refused: list[tuple[str, str]] = []
-        if a.from_comment:               # the async mode (#886): the owner's own comment on the spec is the answer
-            said, refused = answers_from_comment(github, a.spec, a.repo.split("/")[0])
-            answers += said
-        report = run_round(a.spec, findings, answers, github=github, root=root, round_no=a.round_no,
-                           who=who, dry_run=a.dry_run, proxy=proxy)
+        if a.refute is not None:
+            report = refute(a.spec, a.refute, github=github, who=who, dry_run=a.dry_run)
+        else:
+            findings = json.loads(Path(a.findings).read_text())
+            answers = list(json.loads(Path(a.answers).read_text())) if a.answers else []
+            proxy = proxy_named(a.proxy) if a.proxy else None
+            root = artifact_root(a.repo, a.root)
+            if a.from_comment:           # the async mode (#886): the owner's own comment on the spec is the answer
+                said, refused = answers_from_comment(github, a.spec, a.repo.split("/")[0])
+                answers += said
+            report = run_round(a.spec, findings, answers, github=github, root=root, round_no=a.round_no,
+                               who=who, dry_run=a.dry_run, proxy=proxy)
     except (OSError, ValueError, NoReviewer, NoProxy) as e:
         print(f"premise-check: {e}", file=sys.stderr)
         return 2
