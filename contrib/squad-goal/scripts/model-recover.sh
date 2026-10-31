@@ -5,7 +5,6 @@
 # usage: model-recover.sh <model> [--timeout S]
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
-[ -f "$here/env.sh" ] && . "$here/env.sh" >/dev/null 2>&1
 m=${1:?usage: model-recover.sh <model> [--timeout S]}
 tmo=60; [ "${2:-}" = "--timeout" ] && tmo=${3:-60}
 state=${SG_STATE:?model-recover.sh needs SG_STATE; source env.sh first}
