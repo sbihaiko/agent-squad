@@ -68,6 +68,7 @@ cpass() { echo "$rd" > "$T/st/active-runs.txt"; (cd "$T/co" && SG_STATE="$T/st" 
 o1=$(cpass); r1=$?
 [ "$r1" = 3 ] && [ -e "$T/st/auto/dwait-run-f-c" ] && ok "childcc opens its deferral counter on the first pass" || ko "pass 1: exit $r1: $o1"
 printf 'abc 1 0\n' > "$T/st/auto/ccdefer-run-f-c"   # a stale escalation marker, as a prior pass might have left it
+echo run-f > "$T/st/active-runs.txt"   # the janitor reads active-runs by name, so its ccdefer_owner prefixes by the run's own name
 : > "$T/st/cycle.log"; o2=$(run)
 [ ! -e "$T/st/auto/ccdefer-run-f-c" ] && ok "the janitor drops the finished run's ccdefer marker between two passes" || ko "ccdefer survived: $o2"
 [ -e "$T/st/auto/dwait-run-f-c" ] && ok "the janitor never removes the deferral counter the deadline reads" || ko "the janitor took the deadline counter: $o2"

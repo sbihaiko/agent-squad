@@ -567,6 +567,7 @@ mkdir -p "$T/co/runs/dsb"
 rm -f "$T"/st/review-*
 for c in a b c; do wtree dsb "$c"; /usr/bin/git -C "$T/co/runs/dsb/ws/target-$c" checkout -q -b "dsb-$c"; hh=$(/usr/bin/git -C "$T/co/runs/dsb/ws/target-$c" rev-parse HEAD)
   echo '{"event": "review_round", "node": "'$c'", "round": 1, "head": "'$hh'", "verdict": "approve", "offered": false, "review": {"verdict": "approve", "findings": "x"}}' >> "$T/co/runs/dsb/record.jsonl"
+  echo '{"event": "land", "node": "'$c'", "parent": "route", "entry": 1, "outcome": "pass", "reasons": [], "effect": {"name": "review", "review": {"verdict": "approve", "findings": "x"}}}' >> "$T/co/runs/dsb/record.jsonl"
   printf '**VERDICT: APPROVE**\n' > "$T/st/review-dsb-$c.md"; echo wave/dsb > "$T/st/review-dsb-$c.base"; echo "$hh" > "$T/st/review-dsb-$c.sha"; done
 echo '{"event": "verdict"}' >> "$T/co/runs/dsb/record.jsonl"; echo wave/dsb > "$T/st/auto/wave-dsb"; echo wave/dsb > "$T/st/auto/waved-dsb"
 export GH_NUMS="6410:Doing 6411:Doing 6412:Doing"; : > "$WAVE_CALLS"; rm -f "$T/st/auto/dwait-dsb"* "$T/st/auto/cc-dsb"*

@@ -21,9 +21,18 @@ work when its entry reaches the review and the gates; a child its requeue holds 
 costs nothing. The cursor (auto/childcc-cursor) names the last child worked, and the next pass starts after it, so a child
 held on every pass does not take every pass. A review takes one review slot of the machine-wide budget (caps.reviews, squad/caps.py), in try mode: a full budget skips the review for this pass with one log line and leaves the child for a later pass, so this pass never waits for a slot while it holds the childcc lock (SG_LAND_WAIT).
 A pass that leaves a child that had no turn since the last complete pass
-(auto/childcc-round) exits 3, never 0: the landing waits for that child, and a 0 would land the wave without it. A child
+(auto/childcc-round) exits 3, never 0: the landing waits for that child, and a 0 would land the wave without it. Every child
+the pass leaves is named with its cause, one line per child each pass (CHILDCC DEFERRED <run> <child> #<n>: <cause>), so a
+deferral is diagnosable from the log without a hand run (#931). A child
 its entry held (WAVE HOLD: neither entered nor requeued) is no ruling either, so it stays left until its wave reaches its
 age cap; SG_HOLD_TRIES review holds on one head (3 by default) requeue it with that reason, so the wave can land (#620).
+A child the pass tried and could not enter waits on a deadline (ADR-0134): SG_CHILDCC_DEFER_MAX passes (6 by default) on an
+unchanged (tip, cause) requeue the issue with that cause, and record the head, so the wave lands and the next pass costs
+nothing (#931). The counter is auto/dwait-<run>-<child>, a name the janitor never removes; the escalation marker stays
+auto/ccdefer-<run>-<child>, which the janitor drops once the run has its verdict. A machine-wide hold -- the gate lock, the
+gate slots, an inconclusive gate, a full review budget -- clears by itself, so it never counts and never requeues; a child a
+finished run never approved is missing review evidence, so it is never requeued either (ADR-0151 rule 5): the wave age cap
+owns it. A child the pass never reached (its budget, its cursor) has no deadline, because the pass did not try it (#590).
 A child whose own engine landing failed never enters: its work did not reach the run's target, so its issue goes back to
 the queue once with the landing's reason, and no card moves (#592).
 With the shipped vocabulary a child whose review starts, or that is deferred while it waits for review, moves its card from
@@ -65,8 +74,10 @@ state = board_state()   # the dispatch pass asks the seam what state an issue ca
 BUDGET = int(os.environ.get("SG_CHILDCC_BUDGET") or 1)   # the children one pass works (#590)
 SHIPPED = os.environ.get("SG_BOARD_VOCAB") == "shipped"   # the old vocabulary has no Code Review column (#603)
 HOLD_TRIES = int(os.environ.get("SG_HOLD_TRIES") or 3)   # the review holds on one head before the child is requeued (#620)
-DEFER_MAX = int(os.environ.get("SG_CHILDCC_DEFER_MAX") or 6)   # the passes one unchanged (run, child, tip) waits before its deferral escalates once (#808)
+DEFER_MAX = int(os.environ.get("SG_CHILDCC_DEFER_MAX") or 6)   # the passes one attempted child waits on one unchanged (tip, cause) before its issue goes back to the queue (#931, ADR-0134)
 HOLDS = set()   # the children this pass held out of their wave, neither entered nor requeued: the landing waits for them (#620)
+CAUSE = {}   # why this pass left each child out of its turn: the one diagnosis a deferral carries (#931)
+ATTEMPTED = set()   # the children this pass tried to enter and could not: only these have a deferral deadline, never one the budget left (#931)
 INCOMPLETE = 3   # the exit of a pass that left a child for a later pass: not a failure (1, a traceback), and not done (0)
 CURSOR, ROUND = A / "childcc-cursor", A / "childcc-round"
 NOW = A / "childcc-now.json"   # what the hub shows of this pass (#598): its pid and start, and each child it holds with its step and since when it waits
@@ -223,6 +234,9 @@ def run_hold(rd, child, n, d, ok, rnd):
     now = head_of(child_worktree(rd, child, d))
     if now != head: return f"its run approved {head[:9]}, and the child stands at {now[:9] or 'no head'}: a new commit needs a new review"
     return ""
+def machine_hold(cause):   # a machine-wide hold clears by itself, so it never counts toward a deferral deadline and never requeues (#931, #567)
+    return any(s in cause for s in ("the gate lock is held", "the gate slots (caps.gates) are full",
+                                    "the local gates were inconclusive", "no review slot this pass"))
 def moved_tip(rd, child, d, rnd):   # the tip a review read, when the child stands past it (#808); False when no head was read or the tip is not there
     head = str((rnd or {}).get("head") or "")
     return bool(head) and head_of(child_worktree(rd, child, d)) not in ("", head)
@@ -354,7 +368,8 @@ for key, r, child, why, n, finished, d, lwhy, ok, own, rnd in pending[k0:] + pen
     name = pathlib.Path(r).name; mk = A / f"cc-{name}-{child}"
     e = subprocess.run(["gh", "api", f"repos/{repo}/issues/{n}", "-q", ".state"], capture_output=True, text=True); s = e.stdout.strip()
     if e.returncode or s not in ("open", "closed"):   # a failed read is no answer: no done marker, so the child is tried again on the next pass (#848)
-        logged(f"state {name} {child}", f"CHILDCC SKIP #{n} ({name} {child}): its issue state could not be read ({(e.stderr or s).strip()[:200] or f'exit {e.returncode}'}); no marker, tried on the next pass")
+        CAUSE[key] = f"its issue state could not be read ({(e.stderr or s).strip()[:200] or f'exit {e.returncode}'})"
+        logged(f"state {name} {child}", f"CHILDCC SKIP #{n} ({name} {child}): {CAUSE[key]}; no marker, tried on the next pass")
         visited.discard(key); continue
     if s == "closed": logged(f"closed {name} {child}", f"CHILDCC SKIP #{n} ({name} {child}): its issue is closed; no entry, no card move"); mk.touch(); continue
     waved = (A / f"wave-{name}").exists()   # the run's wave is not landed yet: its marker, not the card, says the child still has an entry to make
@@ -368,6 +383,7 @@ for key, r, child, why, n, finished, d, lwhy, ok, own, rnd in pending[k0:] + pen
             own, ok = False, False
             print(f"CHILD REVIEW TIP #{n} ({name} {child}): the run ended on {(rnd or {}).get('head', '')[:9]}; the child's new tip is reviewed here", flush=True)
         elif held:   # childcc never reviews or fixes a child its run reviewed: its run's approval is the only evidence, and a land that failed on the review itself (review_held, review_deadline) is missing evidence
+            CAUSE[key] = held
             logged(f"held {name} {child}", f"CHILD RUN-OWNED #{n} ({name} {child}): {held}; delivery holds")
             RUN_HELD.add(key)
             if subprocess.run(["bash", wave, "expired", name], capture_output=True).returncode: visited.discard(key)   # a wave past its age cap lands and requeues it (#378)
@@ -378,11 +394,16 @@ for key, r, child, why, n, finished, d, lwhy, ok, own, rnd in pending[k0:] + pen
     if finished and not waved and card_status(n) not in ("Todo", "In Progress", "Blocked"):   # backfill never moves a card past (or out of) its column
         logged(f"backfill {name} {child}", f"CHILDCC SKIP #{n} ({name} {child}): its run ended and its card is past the backfill; no entry, no card move"); mk.touch(); continue
     entered, why, worked = enter(pathlib.Path(r), child, n, d, ok, own)
-    if worked is None: visited.discard(key); continue   # the review budget was full: this child had no turn, so the pass leaves it (exit 3) and the next one tries it first
+    if worked is None:   # the review budget was full: this child had no turn, so the pass leaves it (exit 3) and the next one tries it first
+        CAUSE[key] = "no review slot this pass: caps.reviews is full"
+        visited.discard(key); continue
     if worked: spent += 1; CURSOR.write_text(key + "\n")
     if why: print(why, flush=True)
-    if key in HOLDS and subprocess.run(["bash", wave, "expired", name], capture_output=True).returncode:   # a held child is no ruling: it stays left, so the pass exits 3 and the wave waits, until its age cap (#620)
-        visited.discard(key)
+    if key in HOLDS:   # a held child is no ruling: it stays left, so the pass exits 3 and the wave waits, until its age cap (#620)
+        CAUSE[key] = why or "its entry held it on this head"
+        if subprocess.run(["bash", wave, "expired", name], capture_output=True).returncode:
+            visited.discard(key)
+            ATTEMPTED.add(key)   # only a child this pass tried and could not enter has a deadline; a budget or cursor child does not (#931)
     if entered is False: continue   # the child never entered the wave: no marker, so the next pass tries it again; no card moves, its issue went back to the queue
     mk.touch()
     if entered is None: subprocess.run([board, owner, proj, "Code Complete", str(n)], capture_output=True)   # no wave: the pass moves the card itself
@@ -403,28 +424,50 @@ HELD.update(key=None, step=None, rk=None); publish(live=False)
 for key, r, child, why, n, finished, d, lwhy, *_ in pending:   # a child that waits for review: its card reads Code Review (#603)
     name = pathlib.Path(r).name
     if key not in visited and key not in RUN_HELD and (A / f"wave-{name}").exists(): code_review(name, child, n, "it waits for review")
+info = {p[0]: p for p in pending}
+for k in sorted(keys - visited):   # every child the pass leaves is named with its cause, every pass, so a deferral is diagnosable without a hand run (#931)
+    p = info.get(k)
+    if p is None: continue
+    cause = CAUSE.get(k) or (f"the pass budget (SG_CHILDCC_BUDGET={BUDGET}) was spent before it" if spent >= BUDGET else "it waits for a later pass in this round")
+    print(f"CHILDCC DEFERRED {pathlib.Path(p[1]).name} {p[2]} #{p[4]}: {cause}", flush=True)
 if left:
     ROUND.write_text("".join(k + "\n" for k in sorted((rnd & keys) | visited | {k for k in rnd if k.split(" ")[0] not in runs})))
-    logged("deferred", f"CHILDCC DEFERRED {len(left)} child(ren) wait for a later pass: {', '.join(sorted(left))}")
-    info = {p[0]: p for p in pending}
-    for k in left:   # a deferral of a finished run carries a deadline: DEFER_MAX passes on one unchanged (run, child, tip) escalate it once (#808)
+    ended = set()
+    for k in sorted(left):
         p = info.get(k)
-        if p is None or not p[5]: continue   # a live run's deferral is unchanged
+        if p is None or not p[5]: continue   # a live run's deferral is its own session's to resolve
+        if k not in ATTEMPTED: continue      # a child the pass never tried has no deadline (#590, #931)
         _, r, child, _, n, _, d, *_ = p
+        cause = CAUSE.get(k) or "it had no turn in this pass"
+        if machine_hold(cause): continue     # a machine-wide hold clears by itself: never counted, never requeued (#931)
         rp, name = pathlib.Path(r), pathlib.Path(r).name
         tip = head_of(child_worktree(rp, child, d))
         if not tip: continue
-        dk = A / f"ccdefer-{name}-{child}"
-        try: was, cnt, esc = dk.read_text().split()
-        except (OSError, ValueError): was, cnt, esc = "", "0", "0"
-        cnt = int(cnt) + 1 if was == tip else 1
-        esc = esc if was == tip else "0"
-        dk.write_text(f"{tip} {cnt} {esc}\n")
-        if cnt < DEFER_MAX or esc == "1": continue
-        dk.write_text(f"{tip} {cnt} 1\n")
-        br = subprocess.run(["git", "-C", str(child_worktree(rp, child, d)), "symbolic-ref", "--quiet", "--short", "HEAD"], capture_output=True, text=True).stdout.strip() or "(detached)"
-        (st / "cq").mkdir(parents=True, exist_ok=True)
-        (st / "cq" / f"{CQ}#{n}-ccdefer-{name}-{child}.md").write_text(f"Squad run {name}, child {child} (issue #{n}): deferred {cnt} childcc passes at branch {br}, sha {tip}, and no review of that tip was requested. Review or land it by hand.\n")
-        with (st / "alerts.log").open("a") as f: f.write(f"{time.strftime('%F %T')} CHILDCC DEFERRED {name} {child} #{n} branch {br} sha {tip[:9]}: waited {cnt} passes, escalated once\n")
-    sys.exit(INCOMPLETE)
+        # The counter has its own name: the janitor drops a finished run's auto/ccdefer-* markers every cycle, so a count kept
+        # there restarts at one before it reaches its bound (#945, #931).
+        dk = A / f"dwait-{name}-{child}"
+        try: was = json.loads(dk.read_text())
+        except (OSError, ValueError): was = {}
+        same = was.get("tip") == tip and was.get("cause") == cause
+        cnt = int(was.get("cnt") or 0) + 1 if same else 1
+        esc = str(was.get("esc") or "0") if same else "0"
+        dk.write_text(json.dumps({"tip": tip, "cause": cause, "cnt": cnt, "esc": esc}))
+        if cnt < DEFER_MAX: continue
+        e = subprocess.run(["bash", wave, "requeue", str(n), cause], capture_output=True, text=True, env={**os.environ, "SG_REQUEUE_RUN": name})
+        if e.returncode or "WAVE REQUEUE" not in (e.stdout + e.stderr):   # a refused requeue is no delivery: name it, keep the child and its count, retry next pass (#931)
+            print(f"CHILD DEFER REQUEUE #{n} ({name} {child}) refused: {(e.stdout + e.stderr).strip()[:300] or f'exit {e.returncode}'}", flush=True)
+            continue
+        if esc != "1":   # the escalation is reported once, and only after the requeue stands (#808)
+            dk.write_text(json.dumps({"tip": tip, "cause": cause, "cnt": cnt, "esc": "1"}))
+            (A / f"ccdefer-{name}-{child}").write_text(f"{tip} {cnt} 1\n")   # the escalation marker the janitor drops once the run is over
+            br = subprocess.run(["git", "-C", str(child_worktree(rp, child, d)), "symbolic-ref", "--quiet", "--short", "HEAD"], capture_output=True, text=True).stdout.strip() or "(detached)"
+            (st / "cq").mkdir(parents=True, exist_ok=True)
+            (st / "cq" / f"{CQ}#{n}-ccdefer-{name}-{child}.md").write_text(f"Squad run {name}, child {child} (issue #{n}): deferred {cnt} childcc passes at branch {br}, sha {tip}; it cannot have its turn here because {cause}. Its issue went back to the queue.\n")
+            with (st / "alerts.log").open("a") as f: f.write(f"{time.strftime('%F %T')} CHILDCC DEFERRED {name} {child} #{n} branch {br} sha {tip[:9]}: waited {cnt} passes, requeued: {cause}\n")
+        record_requeue(name, n, tip)   # the head it was requeued on, so the next pass costs nothing (ADR-0149)
+        dk.unlink(missing_ok=True)
+        ended.add(k)
+        print(f"CHILD DEFER REQUEUE #{n} ({name} {child}): {cause}", flush=True)
+    left = [k for k in left if k not in ended]
+    if left: sys.exit(INCOMPLETE)
 ROUND.write_text("".join(k + "\n" for k in sorted(k for k in rnd if k.split(" ")[0] not in runs)))   # this pass closed the round of its runs

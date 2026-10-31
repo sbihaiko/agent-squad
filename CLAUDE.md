@@ -40,7 +40,8 @@ ADRs and this file are never ledgers (see Design rules): no dates, counts, statu
   The CLI and both harness scripts call it and never build an `Engine`. A run keeps its record in its run folder. Guard: `tests/test_launch.py`.
 - **A child session writes only inside its worktree and never touches the live skill copy or the loop state** (`squad/sandbox.py`).
   `bypassPermissions` skips `can_use_tool`, so a PreToolUse hook on every adapter session denies the call with a reason and records `sandbox_deny`.
-  The janitor alerts when the live copy changes with no publish. Guard: `tests/test_sandbox.py`, `contrib/squad-goal/scripts/test-janitor-live-mtime.sh`.
+  The janitor alerts when the live copy changes with no publish. A child that runs the fast gate reads its result from one printed verdict line and a log outside the state directory, which the wall leaves readable.
+  Guard: `tests/test_sandbox.py`, `contrib/squad-goal/scripts/test-janitor-live-mtime.sh`, `contrib/squad-goal/scripts/test-fast-gate.sh`.
 - **A project settings file overlays the plugin defaults** (`docs/squad/defaults.yaml`, `squad/project_settings.py`).
   Order: plugin defaults, project file, roles, graph run block, node; only the project file may raise a default.
   `run_start` records its path and hash, and a resume refuses when it changed. Guard: `tests/test_project_settings.py`.
@@ -74,6 +75,7 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 - **A call has a deadline; a stuck agent is found without a caller** ([ADR-0051](docs/adr/0051-call-deadline-and-stuck-agent.md)). Guard: `tests/test_deadlines.py`, `tests/test_monitor.py`.
 - **A wedged run is killed, not merely logged** ([ADR-0051](docs/adr/0051-call-deadline-and-stuck-agent.md)). Guard: `tests/test_heartbeat.py`.
 - **A call or a loop stops on failed attempts that do not change, never on total turns or entries** ([ADR-0134](docs/adr/0134-stall-cap-counts-failures-without-evolution.md)). Guard: `tests/test_stall.py`, `tests/test_engine_skeleton.py`, `tests/test_sdk_adapter.py`.
+- **A childcc deferral deadline counts an attempted child on one unchanged (tip, cause) and requeues it; a machine-wide hold, a child the budget left, and a run-owned child its run never approved never count. The counter is `auto/dwait-*`, which the janitor never removes** ([ADR-0134](docs/adr/0134-stall-cap-counts-failures-without-evolution.md), [ADR-0151](docs/adr/0151-a-review-streak-escalates.md)). Guard: `contrib/squad-goal/scripts/test-childcc.sh`, `contrib/squad-goal/scripts/test-janitor-ccdefer.sh`.
 - **Seven node kinds; a gate is never skipped; control is order-based** ([ADR-0100](docs/adr/0100-node-kinds-gate-control.md)). Guard: `tests/test_graph.py`, `tests/test_engine_skeleton.py`, `tests/test_each.py`.
 - **A node is one fresh session with a deadline and a declared workspace** ([ADR-0102](docs/adr/0102-node-is-one-fresh-session.md)). Guard: `tests/test_graph.py`, `tests/test_record.py`, `tests/test_engine_skeleton.py`.
 - **A node that passed commits its workspace, declared or the run-owned target, so a branch tip is the run's final state; the owner's checkout is never touched** ([ADR-0106](docs/adr/0106-run-option-graph-or-engine.md)). Guard: `tests/test_node_commit.py`.
