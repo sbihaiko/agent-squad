@@ -221,3 +221,14 @@ squad/testselect.py	tests/test_testselect.py
 squad/to_test_scenario.py	tests/test_to_test_scenario.py
 squad/verdict.py	tests/test_verdict.py
 squad/workcmd.py	tests/test_workcmd.py
+tests/*.py	SELF
+dashboard/*	tests/test_dashboard_layout.py
+commands/*	tests/test_plugin.py
+.claude-plugin/*	tests/test_plugin.py
+prompts/*	tests/test_autonomy_fragment.py
+config/*	tests/test_defaults.py
+vendor/*	tests/test_vendor_skills.py
+scripts/build_dashboard.py	tests/test_dashboard_layout.py
+contrib/squad-goal/scripts/*.css	tests/test_web_tokens.py
+contrib/squad-goal/scripts/hub-mobile.html	contrib/squad-goal/scripts/test-hub-mobile-run.sh
+*.md	tests/test_setup.py

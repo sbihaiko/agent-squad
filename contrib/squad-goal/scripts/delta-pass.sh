@@ -42,7 +42,7 @@ while IFS= read -r p; do
   hit=""
   while IFS=$'\t' read -r glob cmd; do
     case "$glob" in ""|\#*) continue;; esac
-    if [[ "$p" == $glob ]]; then hit=1; guards+=("$cmd"); fi
+    if [[ "$p" == $glob ]]; then hit=1; [ "$cmd" = SELF ] && cmd=$p; guards+=("$cmd"); fi
   done < "$d/delta-guards.txt"
   [ -n "$hit" ] || refuse "uncovered path: $p has no line in delta-guards.txt; the full proof is needed"
 done <<< "$changed"
@@ -54,6 +54,8 @@ if [ -z "${SG_DELTA_SUITE:-}" ]; then
   while IFS= read -r c; do
     case "$c" in *.py) suite="$suite && $py -m pytest -p no:deepeval $c";; *) suite="$suite && bash $c";; esac
   done < <(printf '%s\n' "${guards[@]:-}" | awk 'NF' | LC_ALL=C sort -u)
+  # The assembled suite is what the map decides; a test reads it here instead of running ruff, mypy and the battery.
+  [ -n "${SG_DELTA_PRINT_SUITE:-}" ] && { printf '%s\n' "$suite"; exit 0; }
 fi
 h=$(printf '%s\n' "$changed" | hash_list)
 SG_DELTA_RUN=$suite SERIAL_TRY=1 SERIAL_HOLD_SECONDS=${SG_DELTA_HOLD_SECONDS:-10800} \
