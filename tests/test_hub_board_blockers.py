@@ -136,7 +136,7 @@ def test_a_column_hidden_by_the_eye_keeps_its_chip_and_never_gets_a_line(hub):
 
 def test_a_filter_change_recomputes_the_collapse_without_a_reload(hub):
     page = hub.PAGE
-    handler = re.search(r'\$\("#lfl"\)\.onchange=[^\n]*', page).group(0)
+    handler = re.search(r'const pickFilter=[^\n]*', page).group(0)   # the filter bar's one handler, for waves and specs (#899)
     assert "pollBoard()" in handler and "location.reload" not in handler
     poll = page[page.index("async function pollBoard()"): page.index("finally{lim.busy=0}}")]
     assert 'if($("#bbody").dataset.h!==html)' in poll and "location.reload" not in poll

@@ -115,9 +115,9 @@ def test_the_specs_filter_asks_the_items_and_no_column_holds_them(table, hub, bo
     assert [n for n, x in rows.items() if x.get("sp")] == [3], "only the spec-labelled item is a spec"
     assert "Open Specs" not in hub.ORDER and "Open Specs" not in [g["name"] for g in board["groups"]]
     page = hub.PAGE
-    assert re.search(r"<button id=bsp[^>]*>Specs: all</button>", page), "the board has no Specs filter"
-    assert "(isPR(g.name)||spOk(x))" in page, "the Specs filter is not a filter over the same items"
-    assert "spOk=" in page and "specMode=" in page, "the three modes are not the page's own"
+    assert '<details id=fs' in page, "the board has no Specs filter"
+    assert "(isPR(g.name)||boardOk(x,fw,fs))" in page, "the Specs filter is not a filter over the same items"
+    assert "boardOk=" in page, "the filter rule is not the page's own"
 
 
 def test_the_hub_holds_no_column_name_of_its_own(table):

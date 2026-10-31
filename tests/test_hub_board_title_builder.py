@@ -37,9 +37,9 @@ def _css(hub, selector):
 
 
 def _bhead(hub):
-    """The docked board header's markup, from `<div id=bhead>` to the pip that follows it."""
+    """The docked board header's markup, from `<div id=bhead>` to the board's column area that follows it."""
     i = hub.PAGE.index("<div id=bhead>")
-    return hub.PAGE[i : hub.PAGE.index('<div id="pip"', i)]
+    return hub.PAGE[i : hub.PAGE.index("<div id=bcases>", i)]
 
 
 def _groups(hub):
@@ -66,12 +66,11 @@ def test_board_header_collapsed_reads_the_same_tasks(hub):
 
 
 def test_board_header_keeps_its_count_and_its_controls(hub):
-    """Only the words change: the count span, the label filter and the two buttons stay as they are."""
+    """The count span stays; the header keeps the swimlane selector and the filter bar, and no maximize or collapse (#899)."""
     head = _bhead(hub)
     assert '<span id=bt class=m></span>' in head
-    assert '<summary title="filter cards by label">labels</summary>' in head
-    assert 'id=bz title="maximize the board over the run pane"' in head
-    assert 'id=bx title="collapse"' in head
+    assert '<select id=lmode' in head and '<details id=fw' in head and '<details id=fs' in head
+    assert 'id=bz' not in head and 'id=bx' not in head
 
 
 def test_no_issues_and_prs_title_is_left_on_the_page(hub):
