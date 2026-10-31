@@ -247,7 +247,7 @@ Guard: `contrib/squad-goal/scripts/test-autofrontier-one-run.sh` (intake stops o
 
 The loop runs on events; the check runs on a timer. Read these in order and act on the first that fails. A check with no numbers is not a check.
 
-1. **Parallelism.** Live runs against the ceiling: `python3 -m squad.caps occupancy` and `caps.runs` in `docs/squad/defaults.yaml` (6). A finished run still listed in `active-runs.txt` is waiting for its wave, not working: count it, read its wave age, and past `SG_WAVE_MAX_AGE_SECONDS` (7200) it lands on a later pass. A run's accepted children never count as run slots.
+1. **Parallelism.** Live runs against the ceiling: `python3 -m squad.caps`, whose one JSON line names the ceiling and its occupancy (its `occupancy.runs` is what is live now, its `runs` is the cap). The cap comes from the config the project resolves, since the project file overlays the plugin default. A finished run still listed in `active-runs.txt` is waiting for its wave, not working: count it, read its wave age, and past `SG_WAVE_MAX_AGE_SECONDS` (7200) it lands on a later pass. A run's accepted children never count as run slots.
 2. **Delivery speed.** Rows added to `$SG_STATE/landed.tsv` in the last hour, and the age of the oldest `WATCH: <run> waits` or `BRANCHLAND WAIT` line in `watch.log`. Zero landings in an hour with live runs is a stall, whatever the log says about progress.
 3. **Runs against cards in Doing.** Every live run has a Doing card, and every startable Doing card has one live run or one open work branch. `janitor.py` reports the drift as `runs-board-drift` and two runs on one issue as `DUP`. A card with neither goes back to Todo; a run with no card is an orphan.
 4. **Tokens.** `python3 scripts/tokens.py` over the last hour against the cap's hourly share (`token-guard.sh`). A burn over the cap is a report and an alert, never a stop; dispatch pauses only while the last hour burns over 3x the cap and resumes by itself under it.
@@ -319,7 +319,7 @@ A separate run is justified only for:
 - work that genuinely must start at a different moment or base;
 - a recovery that cannot safely join the current panel.
 
-**Parallelism:** the machine ceiling and a run's envelope are two different numbers, and both are read from disk, never remembered. `caps.runs` (6) in `docs/squad/defaults.yaml` bounds the whole machine. `docs/design/router.graph.json` holds a run's own envelope: `run.max_parallel` 2, the dispatch node's `max_children` 4, `spend_cap` 40. Give each child a disjoint slice. A file that two children would both append to belongs to exactly one of them.
+**Parallelism:** the machine ceiling and a run's envelope are two different numbers, and both are read from disk, never remembered. `caps.runs` in the config the project resolves (the plugin default in `docs/squad/defaults.yaml`, overlaid by the project file) bounds the whole machine. `docs/design/router.graph.json` holds a run's own envelope: `run.max_parallel` 2, the dispatch node's `max_children` 4, `spend_cap` 40. Give each child a disjoint slice. A file that two children would both append to belongs to exactly one of them.
 
 Before every launch, recompute the complete frontier and fill as much available capacity as possible.
 
