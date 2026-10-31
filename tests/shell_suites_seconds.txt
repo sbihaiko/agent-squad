@@ -141,6 +141,7 @@ test-throughput.sh 1.04
 test-todo-unread.sh 0.53
 test-token-guard.sh 2.43
 test-token-ledger.sh 12.98
+test-tune-report.sh 0.81
 test-vendor-guard.sh 1.38
 test-view-domain-firewall.sh 0.37
 test-watch-cycle.sh 61.41
