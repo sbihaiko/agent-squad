@@ -102,6 +102,8 @@ process.stdin.on("end", async () => {
     else if (o.op === "roster") out.push(core.childRoster(o.children, o.dispatch));
     else if (o.op === "grouplayout") out.push(core.groupLayout(o.groups, o.layout, o.taken, o.box, o.gap, o.doc));
     else if (o.op === "bus") out.push(core.childBus(o.anchor, o.pos, o.box));
+    else if (o.op === "kindmark") out.push(core.kindMark(o.kind));
+    else if (o.op === "edgeroutes") out.push(core.edgeRoutes(o.layout, o.pairs, o.box));
     else if (o.op === "live") out.push(core.liveState(o.events, o.now));
     else if (o.op === "replay") out.push(core.replayAt(o.events, o.cursor));
     else if (o.op === "move") out.push(core.moveCursor(o.events, o.cursor, o.move, o.to));
