@@ -175,6 +175,7 @@ const GROUPS=[["running","WORKERS"]],groupOf=r=>"running",groupHeader=()=>({text
 let openGroups=new Set(["running"]);const saveGroups=()=>{},save=()=>{};
 let N=1,focus=null,slots=[],pins=new Set(),allRuns=__RUNS__,runs=allRuns.filter(r=>r.kind!=="childcc");
 const refresh=()=>{};
+let hl=null;const paintHL=()=>{};
 __DRAW__
 drawList();
 const ids=[...HTML.list.matchAll(/data-id="([^"]+)"/g)].map(m=>m[1]);

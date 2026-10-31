@@ -9,6 +9,9 @@ __pycache__/
 .venv/
 .venv
 *.egg-info/
+# per-profile Slack settings: channel ids and names live only here (#924)
+contrib/squad-goal/scripts/profiles/*.slack.json
+
 # Claude Code local state
 build/
 runs/

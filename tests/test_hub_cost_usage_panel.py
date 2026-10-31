@@ -110,7 +110,7 @@ def test_totals_tiles_live_in_cost_panel_not_subscriptions():
 
 
 def test_cost_panel_is_named_cost_and_usage():
-    assert "<summary>cost &amp; usage<" in _panel("stats")
+    assert "<summary>Cost &amp; usage<" in _panel("stats")   # re-anchored to the mock (#889): the card title is sentence case
     assert "cost &amp; speed" not in SRC and "cost & speed" not in SRC
 
 
@@ -334,19 +334,16 @@ def test_tokens_header_small_text_reads_the_total():
     assert re.fullmatch(r"[\d.]+[KMB] all time", html.strip()), html
 
 
-def test_closed_summary_reads_the_month_cash():
-    txt = _render("const d={plans:254.99,api:27.24,total:282.23};",
-                  _stmt('$("#stsr").textContent=')).strip()
-    assert re.fullmatch(r"month \$[\d.,]+", txt), txt
-    assert txt == "month $282.23", txt
-    assert "today" not in txt
+def test_closed_summary_reads_todays_spend():
+    """Re-anchored to the owner-approved mock (#889): the closed card's right-hand summary reads `$41 today`; the month cash stays in the body (#cash)."""
+    txt = _render("const st={totals:{today:41.2}};", _stmt('$("#stsr").textContent=')).strip()
+    assert txt == "$41.20 today", txt
+    assert "month" not in txt
 
 
-def test_closed_summary_reads_the_api_part_without_a_plan_price():
-    txt = _render("const d={plans:0,api:27.24,total:27.24};",
-                  _stmt('$("#stsr").textContent=')).strip()
-    assert txt == "month $27.24", txt
-    assert "today" not in txt
+def test_closed_summary_reads_no_spend_today_as_zero():
+    txt = _render("const st={totals:{today:0}};", _stmt('$("#stsr").textContent=')).strip()
+    assert txt == "$0.00 today", txt
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is required")

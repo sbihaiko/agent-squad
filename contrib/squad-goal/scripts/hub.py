@@ -1331,6 +1331,179 @@ def limits_set(body):
         limits_record(diff)
     return {"diff": diff, "state": limits_read()}
 
+# --- Settings > Communication (#924). How the agent reads and writes Slack for this profile: the prefix, the cadence, the
+# channels and the people it answers. The page renders; reading, validating, diffing and writing live here (ADR-0137). The
+# file is per profile, gitignored and written through a temp file and a rename (ADR-0030). The hub holds no token: posting
+# goes through the owner's Slack account by the Claude Slack connector, and nothing reads this file until a bridge does.
+SLACK_LANGS = ("pt-br", "en-US", "es")
+SLACK_ROLES = ("Manager", "Colleague")
+SLACK_EVENTS = ("stg", "prod", "dev", "bug", "fix")
+SLACK_DEFAULT = {"connection": "not connected", "prefix": "[agent]", "lang": "en-US", "tick": 5, "max": 30, "quiet": "",
+                 "other": "ignore", "dm": False, "audio": False, "channels": [], "people": [],
+                 "templates": {"stg": "<prefix>\nDeployed to STG and the e2e run is green. PR <pr>: <title> (<issue>). Please test on stg.",
+                               "prod": "<prefix>\nDeployed to PROD. PR <pr>: <title> (<issue>).",
+                               "dev": "<prefix>\nLanded in dev. PR <pr>: <title> (<issue>). Next: promotion to stg.",
+                               "bug": "<prefix>\nI confirmed this is a bug: <mechanism>. Filed as <issue>, in Todo. I will post here when the fix reaches stg.",
+                               "fix": "<prefix>\n<real state, with dates and links>. Next step: <who>."}}
+SLACK_NEW_CHANNEL = {"watch": True, "thread": True, "mention": False,
+                     "events": {"stg": True, "prod": True, "dev": False, "bug": True, "fix": True}}
+SLACK_LABEL = {"prefix": "prefix", "lang": "default language", "tick": "read every", "max": "up to",
+               "quiet": "quiet hours", "other": "anyone not listed", "dm": "owner self-DM", "audio": "audio"}
+SLACK_DIFF = "Communication · Slack · "
+_SLACK_HHMM = re.compile(r"^([01]\d|2[0-3])-([01]\d|2[0-3])$")
+_SLACK_CHANNEL = re.compile(r"^#?[^\s#]{1,80}$")
+
+def slack_file():
+    """The per-profile Slack settings beside the profile, or None when no profile is in force."""
+    slug, d = os.environ.get("SG_PROFILE", ""), profiles_dir()
+    return d / f"{slug}.slack.json" if slug and d is not None else None
+
+def slack_read(path):
+    """The saved settings over the defaults; the defaults alone when the file is absent, unreadable or not an object."""
+    cfg = json.loads(json.dumps(SLACK_DEFAULT))
+    try: saved = json.loads(path.read_text()) if path else {}
+    except (OSError, ValueError): saved = {}
+    if isinstance(saved, dict): cfg.update({k: v for k, v in saved.items() if k in SLACK_DEFAULT})
+    return cfg
+
+def slack_view(path):
+    """What the page draws: the saved settings, and the defaults a new channel starts from."""
+    return {**slack_read(path), "new_channel": SLACK_NEW_CHANNEL}
+
+def _slack_int(v, lo, hi):
+    if isinstance(v, bool): return None
+    try: n = int(str(v).strip())
+    except (TypeError, ValueError): return None
+    return n if lo <= n <= hi and str(v).strip() == str(n) else None
+
+def _slack_rows(items, check):
+    """The rows of one list from the form, each checked; a name that appears twice is refused."""
+    if not isinstance(items, list): return None, "the list is not a list"
+    out = []
+    for it in items:
+        if not isinstance(it, dict): return None, "a row is not an object"
+        row, msg = check(it)
+        if msg: return None, msg
+        out.append(row)
+    if len({r["name"] for r in out}) != len(out): return None, "a name appears more than once"
+    return out, None
+
+def _slack_channel(it):
+    name = str(it.get("name", "")).strip()
+    if not _SLACK_CHANNEL.match(name): return None, "a channel is a name or id with no space"
+    if it.get("lang") not in SLACK_LANGS: return None, "a channel language is one of " + ", ".join(SLACK_LANGS)
+    flags = {k: it.get(k) for k in ("watch", "thread", "mention")}
+    if not all(isinstance(v, bool) for v in flags.values()): return None, "a channel switch is on or off"
+    ev = it.get("events") if isinstance(it.get("events"), dict) else None
+    if ev is None or set(ev) - set(SLACK_EVENTS) or not all(isinstance(v, bool) for v in ev.values()):
+        return None, "a channel announces only the release events, on or off"
+    return {"name": name, "lang": it["lang"], **flags, "events": {k: bool(ev.get(k, False)) for k in SLACK_EVENTS}}, None
+
+def _slack_person(it):
+    name = str(it.get("name", "")).strip()
+    if not name or len(name) > 80: return None, "a person has a name of 1 to 80 characters"
+    if it.get("role") not in SLACK_ROLES: return None, "role is Manager or Colleague"
+    return {"name": name, "role": it["role"]}, None
+
+def _slack_templates(items):
+    if not isinstance(items, dict) or set(items) != set(SLACK_EVENTS): return None, "a template is kept for each release event"
+    if not all(isinstance(t, str) and 1 <= len(t) <= 600 for t in items.values()): return None, "a template is text of 1 to 600 characters"
+    return {k: items[k] for k in SLACK_EVENTS}, None
+
+def _slack_untracked(path):
+    """True when the folder is in a git work tree and git would not ignore the file there."""
+    r = subprocess.run(["git", "-C", str(path.parent), "check-ignore", "-q", str(path)], capture_output=True, timeout=20)
+    return r.returncode == 1
+
+def slack_clean(body, cur):
+    """The typed settings, checked: (settings, None), or (None, the message for the first value that breaks its rule)."""
+    prefix = str(body.get("prefix", cur["prefix"])).strip()
+    if not prefix or "\n" in prefix or len(prefix) > 40: return None, "prefix is one line of 1 to 40 characters"
+    lang = body.get("lang", cur["lang"])
+    if lang not in SLACK_LANGS: return None, "default language is one of " + ", ".join(SLACK_LANGS)
+    tick = _slack_int(body.get("tick", cur["tick"]), 1, 30)
+    if tick is None: return None, "read every is a whole number of minutes from 1 to 30"
+    mx = _slack_int(body.get("max", cur["max"]), 2, 120)
+    if mx is None or mx < tick: return None, "up to is a whole number of minutes from 2 to 120, not less than read every"
+    quiet = str(body.get("quiet", cur["quiet"])).strip()
+    if quiet and not _SLACK_HHMM.match(quiet): return None, "quiet hours are HH-HH local time, or empty"
+    other = body.get("other", cur["other"])
+    if other not in ("ignore", "reply"): return None, "anyone not listed is ignored or gets a fixed reply"
+    dm = body.get("dm", cur["dm"])
+    audio = body.get("audio", cur["audio"])
+    if not isinstance(dm, bool) or not isinstance(audio, bool): return None, "owner self-DM and audio are on or off"
+    channels, msg = _slack_rows(body.get("channels", cur["channels"]), _slack_channel)
+    if msg: return None, msg
+    people, msg = _slack_rows(body.get("people", cur["people"]), _slack_person)
+    if msg: return None, msg
+    templates, msg = _slack_templates(body.get("templates", cur["templates"]))
+    if msg: return None, msg
+    return {"connection": cur["connection"], "prefix": prefix, "lang": lang, "tick": tick, "max": mx, "quiet": quiet,
+            "other": other, "dm": dm, "audio": audio and dm, "channels": channels, "people": people,
+            "templates": templates}, None
+
+def _slack_show(v):
+    if v is True: return "on"
+    if v is False: return "off"
+    return str(v) if str(v) else "always on"
+
+def _slack_rowdiff(kind, name, old, new):
+    """The diff lines for one channel or person kept in both lists, by name."""
+    if kind == "person":
+        return [f"{SLACK_DIFF}person {name} · role: {old['role']} -> {new['role']}"] if old["role"] != new["role"] else []
+    out = [f"{SLACK_DIFF}channel {name} · {f}: {_slack_show(old[f])} -> {_slack_show(new[f])}"
+           for f in ("lang", "watch", "thread", "mention") if old[f] != new[f]]
+    out += [f"{SLACK_DIFF}channel {name} · {ev} posts: {_slack_show(old['events'][ev])} -> {_slack_show(new['events'][ev])}"
+            for ev in SLACK_EVENTS if old["events"][ev] != new["events"][ev]]
+    return out
+
+def slack_diff(old, new):
+    """The diff a Save shows before it writes: one line per changed setting, row or switch, each prefixed for this theme."""
+    out = []
+    for key, label in SLACK_LABEL.items():
+        if new[key] != old[key]: out.append(f"{SLACK_DIFF}{label}: {_slack_show(old[key])} -> {_slack_show(new[key])}")
+    for kind, key in (("channel", "channels"), ("person", "people")):
+        before = {r["name"]: r for r in old[key]}
+        after = {r["name"]: r for r in new[key]}
+        for name in after.keys() - before.keys():
+            out.append(f"{SLACK_DIFF}{kind} {name} added")
+        for name in before.keys() - after.keys():
+            out.append(f"{SLACK_DIFF}{kind} {name} removed")
+        for name in after.keys() & before.keys():
+            out += _slack_rowdiff(kind, name, before[name], after[name])
+    out += [f"{SLACK_DIFF}template {ev}: changed" for ev in SLACK_EVENTS if new["templates"][ev] != old["templates"][ev]]
+    return out
+
+def slack_write(path, cfg):
+    """The settings file, whole or not at all: a temp file, then a rename. Returns an error, or None."""
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n")
+        os.replace(tmp, path)
+    except OSError as e:
+        return f"the settings could not be written: {e.strerror or e}"
+    finally:
+        try: tmp.unlink()
+        except OSError: pass
+    return None
+
+def slack_set(body):
+    """POST /api/slack: validate, diff, then write. With `confirm` false it answers the diff and writes nothing."""
+    if not isinstance(body, dict): return {"err": "bad request"}
+    path = slack_file()
+    if path is None: return {"err": "no profile in force: SG_PROFILE and SG_PROFILES_DIR name none"}
+    cur = slack_read(path)
+    new, err = slack_clean(body, cur)
+    if err: return {"err": err}
+    diff = slack_diff(cur, new)
+    if body.get("confirm") is not True: return {"diff": diff}
+    if diff:
+        if _slack_untracked(path):
+            return {"err": "the settings file would be tracked: its folder is in a git work tree and git does not ignore it"}
+        err = slack_write(path, new)
+        if err: return {"err": err}
+    return {"diff": diff, "state": slack_view(path)}
+
 def _tok(n):
     n = int(n)
     return f"{n/1e6:.1f}M".replace(".0M", "M") if n >= 1e6 else f"{n/1e3:.0f}k" if n >= 1e3 else str(n)
@@ -3217,12 +3390,14 @@ PAGE = r"""<!doctype html><meta charset=utf-8><meta name=viewport content="width
 <style>
 /*WEB_TOKENS*/
 :root{--col-w:185px}   /* the docked strip's column geometry: the one place its width is set (#1791); a column holding no cards is not drawn at all, so it reserves none (#1809) */
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:var(--fs-body) ui-monospace,Menlo,monospace;display:flex;flex-direction:column;height:100vh}
+/* The mock's palette (#889): one dark theme, brighter text, one more card step. The token block above still floors every size and height. */
+:root{--card:#1c212b;--fg:#e6e8ee;--mute:#b8c0cf;--acc:#7aa2ff;--ok:#5fd38d;--warn:#f2c14e;--bad:#ff6b7f;--s1:#7aa2ff;--s2:#c792ea;--s3:#5fd3c4;--s4:#f2c14e;--s5:#ff8a5c;--s6:#9ccc65;--s7:#f48fb1;--s8:#90a4ae;--sep:#353d4b}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:var(--fs-body)/1.55 var(--font-ui);display:flex;flex-direction:column;height:100vh}
 #win{flex:1;min-height:0;display:flex;overflow:hidden}
-#side{width:300px;border-right:1px solid var(--line);overflow:auto;background:var(--panel);flex:none}
+#side{width:280px;padding:12px;border-right:1px solid #232833;overflow:auto;background:#121519;flex:none}#content{flex:1;min-width:0;overflow:auto}.pane{display:none;padding:12px 16px}.pane.on{display:block}.pane>h2{font-size:var(--fs-min);text-transform:uppercase;letter-spacing:.06em;color:var(--mute);margin:4px 0 8px}
 #top{position:sticky;top:0;background:linear-gradient(#162033,#121a28);padding:10px 10px 10px 12px;border-bottom:2px solid var(--acc);border-left:3px solid var(--acc);z-index:2;box-shadow:0 2px 8px #0008}#top>b{font-size:var(--fs-min);letter-spacing:.12em;color:var(--acc)}
 #top .row{display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin-top:6px}
-button{background:#222a35;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:2px 8px;cursor:pointer;font:inherit}
+button{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:4px 12px;cursor:pointer;font:inherit}button:hover{border-color:#3a4252}
 button.on{border-color:var(--acc);color:var(--acc)}
 .kd{margin-right:5px;font-size:var(--fs-min)}.r{padding:7px 10px;border-top:1px solid var(--line);cursor:pointer;display:flex;gap:6px;justify-content:space-between}.r:hover{background:#1c222b}
 .r .st{font-size:var(--fs-min);color:#c9d1d9;opacity:.8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px}
@@ -3237,9 +3412,9 @@ button.on{border-color:var(--acc);color:var(--acc)}
 /*RUN_STATE_CSS*/
 .m{color:var(--mute);font-size:var(--fs-min);margin-top:2px}
 #q{width:100%;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:3px 6px;font:inherit;margin-top:6px}
-.sp{border-bottom:1px solid var(--line);font-size:var(--fs-min)}#mdl>summary{border-top:0}.sp>summary,.gh{list-style:none;display:flex;align-items:center;gap:6px;height:34px;padding:0 10px;font-size:var(--fs-min);font-weight:600;color:var(--fg);cursor:pointer;user-select:none;background:#10141a;border-top:1px solid var(--line);outline:var(--focus-w) solid var(--focus)}
+.sp:is(details){border:1px solid #232833;border-radius:8px;margin-bottom:10px;background:#171b22;font-size:var(--fs-min)}.sp>summary{list-style:none;display:flex;align-items:center;gap:6px;min-height:36px;padding:8px 10px;font-size:var(--fs-body);font-weight:600;color:var(--fg);cursor:pointer;user-select:none}.gh{list-style:none;display:flex;align-items:center;gap:6px;height:34px;padding:0 10px;font-size:var(--fs-min);font-weight:600;color:var(--fg);cursor:pointer;user-select:none;background:#10141a;border-top:1px solid var(--line)}
 .sp>summary::-webkit-details-marker{display:none}.sp>summary::before,.gh::before{content:"▸";flex:none;width:10px;color:var(--mute);font-weight:400}.sp[open]>summary::before,.gh.op::before{content:"▾"}.sp>summary:hover,.gh:hover{background:#171c24}.sp>summary:focus-visible,.gh:focus-visible{box-shadow:inset 0 0 0 1px var(--acc)}
-.sp>summary .sr,.gh .sr{margin-left:auto;font-weight:400;color:var(--mute);font-size:var(--fs-min);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}.sp[open]>summary .sr{display:none}.sp .sb{padding:4px 10px 10px}
+.sp>summary .sr,.gh .sr{margin-left:auto;font-weight:400;color:var(--mute);font-size:var(--fs-min);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}.sp .sb{padding:4px 10px 10px}
 .sp h4{display:flex;align-items:baseline;justify-content:space-between;gap:4px;margin:10px 0 6px;font-size:var(--fs-min);color:var(--fg);font-weight:600;white-space:nowrap}.sp h4 small{font-weight:400;color:var(--mute);font-size:var(--fs-min);white-space:nowrap}
 .tot{display:grid;grid-template-columns:repeat(3,1fr);gap:4px}.tot div{background:#10141a;border:1px solid var(--line);border-radius:6px;padding:4px 6px;font-size:var(--fs-min);color:var(--mute)}.tot b{display:block;font-size:var(--fs-body);color:var(--fg);font-weight:600}.tot b.m{color:var(--mute);font-size:var(--fs-min);line-height:1.5}
 .tot .cash,.cash{grid-column:1/-1;background:none;border:0;padding:0;margin:2px 0 0;font-size:var(--fs-min);color:var(--mute);line-height:1.35}
@@ -3272,18 +3447,16 @@ button.on{border-color:var(--acc);color:var(--acc)}
 .up{color:var(--err)}.dn{color:var(--ok)}svg{display:block;width:100%}
 #main{flex:1;min-width:0;display:grid;gap:4px;padding:4px}
 .cell{display:flex;flex-direction:column;min-height:0;min-width:0}.cell small{color:var(--mute);padding:2px 4px;display:flex;justify-content:space-between}.cell .snap{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:12px;overflow:hidden;color:var(--mute);border:1px solid var(--line);background:#0f1115}.cell[tabindex]{cursor:pointer}.cell[tabindex]:hover .snap,.cell[tabindex]:focus-visible .snap{border-color:var(--acc);color:var(--fg,inherit)}
-#board{position:relative;width:360px;border-left:1px solid var(--line);overflow:auto;background:var(--panel);flex:none}
-#board.off{width:26px;overflow:hidden}#board.off #bbody{display:none}#bhead{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel);z-index:2}
-#board.off #bhead b{display:none}#board.off #bhead{padding:8px 3px}
-#bcharts{margin-left:8px}#bcharts button{font-size:var(--fs-min)}#board.off #bcharts,#board.off #flowov{display:none}
-#flowov{position:absolute;inset:0;z-index:4;background:var(--panel);display:flex;flex-direction:column;overflow:auto}#flowov[hidden]{display:none}
+#board{position:relative;width:auto}
+#bhead{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}#bhead>label{display:inline-flex;align-items:center;gap:8px}#bhead label.hck{border:1px solid var(--line);border-radius:6px;padding:0 12px 0 10px;min-height:32px;background:var(--panel);cursor:pointer}#bhead label.hck input{margin:0;accent-color:var(--acc)}#bt:empty{display:none}
+#flowov{background:var(--panel);border:1px solid var(--line);border-radius:8px;display:flex;flex-direction:column}#flowov[hidden]{display:none}
 #flowh{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel)}
 #flowb{padding:10px;font-size:var(--fs-min)}#flowb svg{width:100%;height:auto;display:block;margin:6px 0;user-select:none;touch-action:pan-y}#flowb .fnote,#flowb .fhead{color:var(--mute);margin:4px 0}#flowb .fhead b{color:var(--fg,inherit)}
 #flowb .flg{margin-right:10px;white-space:nowrap}#flowb .flg i{display:inline-block;width:9px;height:9px;margin-right:4px;vertical-align:middle;border-radius:2px}
 #bbody .ah{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);cursor:pointer;font-weight:600;position:sticky;top:34px;background:#1b212b;z-index:1}   /* the same gap as the docked header: `Todo0` is never a reading, in either rendering (#1809) */
 #bbody .ah .n{background:#2a303b;border-radius:9px;padding:0 8px;font-weight:400}
 #bbody .ah i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;background:var(--mute)}
-#bbody .it{margin:6px 8px;padding:8px 10px;border:1px solid var(--line);border-left:3px solid var(--cc,var(--mute));border-radius:6px;background:var(--bg,#1c222c);line-height:1.35;font-size:var(--fs-min);white-space:normal;overflow-wrap:anywhere;box-shadow:0 1px 2px #0006}
+#bbody .it{margin:6px 0;padding:8px 10px 9px;border:1px solid #2f3643;border-top:3px solid var(--lc,var(--cc,var(--mute)));border-radius:8px;background:var(--card);line-height:1.4;font-size:var(--fs-min);white-space:normal;overflow-wrap:anywhere;display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;transition:border-color .15s}
 #bbody .it .ft{display:flex;justify-content:flex-end;gap:6px;margin-top:6px}#bbody .age,#bbody .tsk{display:inline-block;padding:0 6px;border-radius:9px;font-size:var(--fs-min);font-variant-numeric:tabular-nums;color:var(--mute);border:1px solid var(--line)}#bbody .age.warm{color:#e3b341;border-color:#6b5223}#bbody .age.old{color:#f85149;border-color:#6e2a27}
 #bbody .pbg{display:inline-block;margin-left:6px;padding:0 7px;border-radius:9px;font-size:var(--fs-min);font-weight:700;border:1px solid}#bbody .pbg.conflict,#bbody .pbg.checks-red{color:#f85149;border-color:#6e2a27}#bbody .pbg.green{color:#3fb950;border-color:#2e6b3a}#bbody .pbg.approved{color:#3fb950;border-color:#3fb950;background:#12261a}   /* the lane badge (#247) */
 #bbody .fz{display:inline-block;margin-left:6px;padding:0 6px;border-radius:9px;font-size:var(--fs-min);color:var(--warn);border:1px dashed var(--warn)}   /* the freeze marker: the card keeps its column */
@@ -3299,11 +3472,12 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #bbody .gc b{color:var(--fg);font-weight:600;margin-left:3px}
 #bbody .gc.ok b{color:#3fb950}#bbody .gc.warn b{color:#e3b341}#bbody .gc.bad b{color:#f85149}
 #bbody .gc.debt b{color:#5aa9ff}#bbody .gc.unk{border-color:#6b5223}#bbody .gc.unk b{color:#e3b341}
-#bbody .it:hover{background:var(--bgh,#232b37);border-color:#3a4352}
-#bbody .it .id{display:inline-block;background:#12161c;border:1px solid var(--line);border-radius:4px;padding:0 6px;margin-bottom:4px;font-size:var(--fs-min);color:var(--acc);text-decoration:none;font-weight:700}
+#bbody .it:hover{border-color:#4a5262;border-top-color:var(--lc,var(--cc,var(--mute)))}
+#bbody .it .id{order:1;margin:0 0 0 auto;background:none;border:0;border-radius:0;padding:0;color:var(--mute);font-size:var(--fs-min);font-weight:400;font-variant-numeric:tabular-nums;white-space:nowrap;text-decoration:none}
 
 #bbody .it .lbs{display:block;margin-top:4px}#bbody .it .lbs span{display:inline-block;background:var(--lb,#2a303b);border:1px solid transparent;border-radius:9px;padding:0 6px;margin:0 3px 2px 0;font-size:var(--fs-min);color:#c9d1d9}#bbody .it .lbs span.on{border-color:var(--warn);color:var(--fg)}
-#bbody .it .id:hover{border-color:var(--acc)}#bbody .it .tt{display:block}
+#bbody .it .id:hover{color:var(--acc)}#bbody .it .tt{order:2;flex:1 1 100%;font-size:var(--fs-body);color:var(--fg)}#bbody .it>*{order:3}#bbody .it>.id{order:1}#bbody .it>.tt{order:2}#bbody .it>.lchip,#bbody .it>.bugc,#bbody .it>.rpo,#bbody .it>.pbg,#bbody .it>.cir,#bbody .it>.fz,#bbody .it>.pnd,#bbody .it>.pst{order:0;margin:0}#bbody .it>.dt{float:none}#bbody .it>.gstrip,#bbody .it>.blk,#bbody .it>.clos,#bbody .it>.prr,#bbody .it>.perr,#bbody .it>.ft{flex:1 1 100%;margin-top:2px}#bbody .it .hld{flex:1 1 100%;font-size:var(--fs-min);color:var(--mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#bbody .it .hld::before{content:"\25CF ";color:var(--s5)}#bbody .cell .it .lbs{display:none}
+#bbody .lchip{border-radius:10px;padding:0 8px;font-size:var(--fs-min);font-weight:600;border:1px solid #3a4252;line-height:20px;white-space:nowrap;color:var(--mute)}#bbody .lchip[data-k=spec]{color:var(--lc,var(--mute));border-color:var(--lc,#3a4252)}
 #bbody .it .pmp{display:inline-block;margin-top:4px;font:inherit;font-size:var(--fs-min);padding:0 7px;border-radius:9px;cursor:pointer;color:var(--acc);background:#12161c;border:1px solid var(--line)}#bbody .it .pmp:hover{border-color:var(--acc)}#bbody .it .pmp:disabled{opacity:.5;cursor:default}   /* the owner's move, on a Backlog card only (#560) */
 #bbody .it .prr{display:block;margin-top:2px;font-size:var(--fs-min);color:var(--mute);max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #bbody .it .blk{display:block;margin-top:4px;font-size:var(--fs-min);color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}#bbody .it .blk a{color:var(--acc);text-decoration:none}
@@ -3316,7 +3490,7 @@ button.on{border-color:var(--acc);color:var(--acc)}
    the card in view. One panel, one read: the card data rides the card, the body and the last comment come from the route. */
 #tk{position:fixed;top:0;right:0;bottom:0;width:420px;background:var(--panel);border-left:1px solid var(--line);box-shadow:-12px 0 40px #000a;display:none;flex-direction:column;z-index:50}
 #tk.on{display:flex}
-body.tkopen #win{margin-right:420px}body.tkopen #board{width:300px}
+body.tkopen #win{margin-right:420px}
 #tk>header{display:flex;gap:8px;align-items:center;padding:10px 12px;border-bottom:1px solid var(--line);flex-wrap:wrap}
 #tk>header .sp{flex:1}
 #tk>footer{display:flex;gap:8px;padding:10px 12px;border-top:1px solid var(--line);flex-wrap:wrap}
@@ -3337,7 +3511,7 @@ body.tkopen #win{margin-right:420px}body.tkopen #board{width:300px}
 #tkb pre{white-space:pre-wrap;overflow-wrap:anywhere;font:var(--fs-min)/1.45 ui-monospace,Menlo,monospace;background:#12161c;border:1px solid var(--line);border-radius:6px;padding:8px 10px;margin:6px 0}
 #tkb h3{font-size:var(--fs-min);color:var(--mute);margin:14px 0 4px}#tkb .cm{border-left:3px solid var(--acc);padding-left:8px;margin:8px 0}
 #tkb .bar button{min-width:28px}#tkb .bar button:disabled{opacity:.35;cursor:default}#tkb .bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}#tkb a.gh{color:var(--acc);font-weight:700}
-#bbody .it{cursor:pointer}#bbody .it.hit{box-shadow:0 0 0 2px var(--warn)}   /* the cards the sheet's Highlight related marks (#919) */
+#bbody .it{cursor:pointer}#bbody .it.hit{box-shadow:0 0 0 2px var(--warn)}#bbody .it.hl{box-shadow:0 0 0 2px var(--acc)}#bbody .it.dim{opacity:.35}#list .r.hlr{outline:2px solid var(--acc);outline-offset:-2px}.hlrel{color:var(--acc);font-size:var(--fs-min);margin-left:6px}.hlrel[hidden]{display:none}   /* the cards the sheet's Highlight related marks (#919) */
 #tkb h2{font:600 var(--fs-md)/1.35 -apple-system,system-ui,sans-serif;margin:4px 0 8px}
 #tkb .md{font:var(--fs-body)/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;color:#d8dde6;overflow-wrap:anywhere}
 #tkb .md>:first-child{margin-top:0}#tkb .md p{margin:.6em 0}#tkb .md h2,#tkb .md h3,#tkb .md h4,#tkb .md h5{font-weight:600;margin:1.3em 0 .4em;line-height:1.3;color:#eef1f6}
@@ -3359,14 +3533,9 @@ body.tkopen #win{margin-right:420px}body.tkopen #board{width:300px}
 #tkb .cm{border:1px solid var(--line);border-left:3px solid var(--acc);border-radius:8px;background:#1a2029;padding:8px 14px 10px;margin:10px 0}#tkb .cm .meta{margin-bottom:2px}
 #tkb .prbar{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 8px}#tkb .pill{font-size:var(--fs-min);border:1px solid var(--line);background:#1b212b;border-radius:10px;padding:1px 9px}#tkb .pill.ok{border-color:#3ecf8e88;color:var(--ok)}#tkb .pill.bad{border-color:#ff6b6b88;color:var(--err)}
 #tkb h3.sec{font-size:var(--fs-min);text-transform:uppercase;letter-spacing:.06em;color:var(--mute);margin:20px 0 4px}
-body.dockb #win{display:grid;grid-template-columns:300px 1fr;grid-template-rows:minmax(0,1fr) auto}
-body.dockb #side{grid-row:1/3}body.dockb #main{grid-column:2;grid-row:1}
-body.dockb #board{grid-column:2;grid-row:2;width:auto;height:320px;border-left:0;border-top:1px solid var(--line);display:flex;flex-direction:column}
-body.dockb #board.off{height:34px;width:auto}body.dockb #board.off #bhead b{display:inline}body.dockb #board.off #bhead{padding:8px 10px}
-body.dockb #bbody{flex:none;height:calc(100% - 41px);min-height:0;display:flex;overflow-x:auto;overflow-y:hidden}
+body.dockb #bbody{display:flex;overflow-x:auto;min-height:320px}
 
-body.dockb #bhead{position:static}
-#grip{display:none}body.dockb #grip{display:block;height:7px;margin-bottom:-3px;cursor:ns-resize;flex:none;position:relative;z-index:3}body.dockb #grip:hover,body.dockb #grip.drag{background:var(--acc);opacity:.6}body.dragging{user-select:none;cursor:ns-resize}body.dragging iframe{pointer-events:none}body.dockb.max #grip{display:none}
+
 body.dockb #bbody>.col{flex:1 1 0;min-width:var(--col-w);display:flex;flex-direction:column;height:100%;border-right:1px solid var(--line);min-height:0}
 body.dockb .ch{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);font-weight:600;background:#1b212b;flex:none}   /* the gap is stated: without it a header that is asked to pack its spans reads `Todo0` (#1809) */
 body.dockb .col>.sc{flex:1 1 0;min-height:0;max-height:none;overflow-y:auto;overscroll-behavior:contain}
@@ -3404,8 +3573,8 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 .load{display:inline-block;margin-left:4px;padding:0 5px;border-radius:9px;background:#3a2a12;color:var(--warn);font-size:var(--fs-min);border:1px solid #6b5223}
 #who{padding:3px 12px;color:var(--mute);border-bottom:1px solid var(--line)}#who:empty{display:none}
 /* The project switcher (#876): one link per project, its live count and worst alert as text; one click switches. */
-#psw{display:flex;flex-wrap:wrap;gap:4px 14px;padding:4px 12px;border-bottom:1px solid var(--line);font-size:var(--fs-min)}
-#psw a{color:var(--acc);text-decoration:none;white-space:nowrap}#psw a:hover{text-decoration:underline}
+#psw{display:none;position:absolute;top:calc(100% - 4px);left:16px;z-index:55;min-width:340px;flex-direction:column;gap:2px;background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:0 12px 40px #000c;padding:6px;font-size:var(--fs-body)}#psw.on{display:flex}
+#psw a{color:var(--fg);text-decoration:none;white-space:nowrap;display:flex;gap:10px;align-items:center;padding:8px 10px;border-radius:8px;min-height:36px}#psw a:hover{background:#1f2430}
 #psw a[aria-current=page]{color:var(--fg);font-weight:600}#psw .repo,#psw .psw-m{color:var(--mute)}#psw .psw-all{color:var(--ok)}
 /* Settings > Spend & limits (#926): the guard's switch, cap and factor, the burn it measures, and the diff before a write. */
 #lbody select,#lbody input{background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;font-size:var(--fs-min);height:var(--ctl-h);padding:0 6px;min-width:0;max-width:100%}
@@ -3414,40 +3583,99 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 #lbody .ldiff{margin:8px 0 0;padding:8px 10px;background:#1f1b12;border:1px solid #6b5223;border-radius:6px;font-size:var(--fs-min)}
 #lbody .ldiff b{display:block;margin-bottom:4px;color:var(--warn)}#lbody .ldiff .ln{font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
 #lbody .lact{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap}#lbody .lact button{height:var(--ctl-h);padding:0 12px}
+/* Settings > Communication (#924): a channel or a person is one row. A row is a grid on a desktop and stacks on a phone, and
+   each switch carries its own text label. */
+#sbody select,#sbody input{background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;font-size:var(--fs-min);height:var(--ctl-h);padding:0 6px;min-width:0;max-width:100%}
+#sbody input[type=number]{width:72px}
+#sbody .slt{display:grid;gap:4px;margin:4px 0 8px}
+.slc{display:grid;grid-template-columns:minmax(0,1.6fr) repeat(5,minmax(0,1fr)) auto;gap:6px;align-items:center;padding:4px 0;border-bottom:1px solid var(--line);font-size:var(--fs-min)}
+.slc.slh{font-weight:600;color:var(--mute);border-bottom:0}
+.slc.off b{text-decoration:line-through;color:var(--mute)}
+.slc .c1{min-width:0;overflow-wrap:anywhere}
+.slc small{display:block;color:var(--warn)}
+.slc .swt{display:inline-flex;gap:4px;align-items:center;min-height:32px}
+.slc .sev{display:inline-flex;gap:2px;align-items:center;margin-right:6px}
+#sbody .slad{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0}
+#sbody .sdiff{margin:8px 0 0;padding:8px 10px;background:#1f1b12;border:1px solid #6b5223;border-radius:6px;font-size:var(--fs-min)}
+#sbody .sdiff b{display:block;margin-bottom:4px;color:var(--warn)}#sbody .sdiff .ln{overflow-wrap:anywhere}
+#sbody .sact{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap}#sbody .sact button{height:var(--ctl-h);padding:0 12px}
+@media (max-width:600px){.slc{grid-template-columns:1fr}.slc.slh{display:none}.slc [data-l]:not(.swc)::before{content:attr(data-l) ": ";color:var(--mute)}.slc .swt{min-height:44px}}
 /* A phone forced into the desktop view (#926): one column, a full-width sidebar, and nothing wider than 390 px. The docked
    board lays the window out as a two-column grid of its own (`body.dockb`), so the phone states both layouts: on a 390 px
    screen the 300 px sidebar and the board column are what a reader has to scroll sideways to reach. */
 @media (max-width:600px){body{height:auto}body.tkopen #win{margin-right:0}body.tkopen #board{width:auto}#win{display:block;overflow:visible}body.dockb #win{display:block;grid-template-columns:none;grid-template-rows:none}#side{width:auto;border-right:0;border-bottom:1px solid var(--line)}body.dockb #side{grid-row:auto;grid-column:auto}#main{min-height:50vh}body.dockb #main{grid-column:auto;grid-row:auto}#board{width:auto}body.dockb #board{grid-column:auto;grid-row:auto;height:60vh}#foot{flex-wrap:wrap}#ldfacts{margin-left:0;white-space:normal}#lbody input{width:92px}}
+/* The page frame of the mock (#889): the alert strip, the header with its tabs, and the sidebar cards. */
+#alert{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:6px 16px;background:#3a1d24;border-bottom:1px solid #5a2a33;font-size:var(--fs-body);flex:none}
+#alert:empty{display:none}#alert.calm{background:var(--panel);border-bottom-color:var(--line)}
+#alert b{color:var(--bad)}#alert .ai+.ai::before,#alert button+.ai::before{content:"\00b7";color:var(--mute);margin-right:10px}#alert .w{color:var(--warn)}
+#alert .ls{font-weight:600}#alert .ls.on{color:var(--ok)}#alert .ls.off{color:var(--warn)}#alert .ls small{color:var(--mute);font-weight:400;margin-left:4px}
+#loopbtn{padding:2px 10px;font-size:var(--fs-min)}#loopbtn:disabled{opacity:.6;cursor:default}
+header.top{position:relative;display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--line);flex:none}
+header.top h1{font-size:var(--fs-xl);margin:0}header.top .spx{flex:1}
+header.top .pill{font-size:var(--fs-min);color:var(--mute)}
+#pj{font:inherit;font-weight:700;background:none;border:1px solid transparent;padding:2px 8px;min-height:36px}#pj:hover{border-color:var(--line)}
+.tabs{display:flex;gap:4px}.tabs button{white-space:nowrap}.tabs button.on{border-color:var(--acc);color:var(--acc)}
+.rkt{display:flex;gap:4px;border-bottom:1px solid var(--line);margin:0 0 12px}.rkt button{background:none;border:0;border-bottom:2px solid transparent;border-radius:0;padding:6px 10px;min-height:36px;color:var(--mute);font-weight:600}.rkt button.on{color:var(--fg);border-bottom-color:var(--acc)}.rkt button:hover{color:var(--fg)}
+#tab-flow:has(#flowov:not([hidden])) #main{display:none}#tab-flow #main{min-height:60vh}
+#side .sp .sb{padding:0 10px 10px}#side .sp>summary::before{content:"\25B8";color:var(--mute);width:10px}#side .sp[open]>summary::before{content:"\25BE"}
+#side .sp>summary .sr{font-size:var(--fs-min)}#enall{color:var(--acc);text-decoration:none;white-space:nowrap;font-weight:500}#enall:hover{text-decoration:underline}
+#lrun .r,#ended .r{border:1px solid var(--line);border-radius:8px;margin-bottom:8px;background:var(--card);min-width:0;overflow:hidden}#lrun .r>div,#ended .r>div{min-width:0;flex:1}#lrun .r .st,#lrun .r .m{white-space:normal;overflow-wrap:anywhere;max-width:none}#lrun .r:last-child,#ended .r:last-child{margin-bottom:0}
+#sqm .chr{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin-top:6px}#sqm .chr>b{min-width:64px;font-weight:600}#sqm .chr>span{display:flex;gap:6px;flex-wrap:wrap}
+#sqm .cm{display:inline-flex;padding:2px 8px;border:1px solid var(--line);border-radius:8px;background:var(--card);font-size:var(--fs-min);font-weight:600}#sqm .cm.off{opacity:.6;text-decoration:line-through}
+#flowb svg{max-width:none}#tab-set details.sp{max-width:1120px}#tab-hist #list{max-width:900px}
 /*BOARD_LANES_CSS*/
+#bhead select{min-height:32px;padding:4px 12px;font-size:var(--fs-body);border-radius:6px}#bhead label.hck input{width:18px;aspect-ratio:1;padding:0}
+#bbody .it>.hld{order:1;flex:0 0 auto;margin:0;font-size:var(--fs-min);font-weight:600;color:var(--s5);white-space:nowrap}#bbody .it>.hld::before{content:"\25CF";margin-right:4px;color:var(--s5)}
+#plans .sb,#stats .sb{max-height:340px;overflow:auto}
+#tab-set .sp .sb{padding:0 12px 12px}#mbody .mchs,#mbody .mch-row{padding:6px 0 8px}
+#tab-set #foot{border:1px solid var(--line);border-radius:8px;flex-wrap:wrap;padding:8px 12px}#tab-set #ldfacts{margin-left:0;white-space:normal}
+#mobile-link{color:var(--acc)}
 </style>
-<div id=psw aria-label="Projects"></div>
 <div id=who>__WHO__</div>
 <script>// One read per URL at a time (#917): a timer fires on a fixed beat whether or not its last read came back, and a slow route
 // (models, stats) under load then filled the browser's six connections, so no read finished and the page drew nothing.
 // A read already in flight is shared: the caller gets a clone of the same answer.
 (()=>{const f=window.fetch.bind(window),live=new Map();window.fetch=(u,o)=>{if(o&&o.method&&o.method!=="GET"||o&&o.signal)return f(u,o);
  const k=String(u);if(!live.has(k))live.set(k,f(u,o).finally(()=>live.delete(k)));return live.get(k).then(r=>r.clone())}})();</script>
-<a id=mobile-link href="#" style="margin:0 12px;color:#8a93a3;font-size:var(--fs-min)">mobile view</a><script>document.getElementById("mobile-link").href=location.pathname.replace(/\/?$/,"/")+"mobile"</script>
+<div id=alert role=alert></div>
+<header class=top><h1><span class=hb>Squad hub &middot; </span><button id=pj aria-haspopup=menu aria-expanded=false><span id=pjn></span> &#9662;</button></h1><div id=psw aria-label="Projects"></div><div class=tabs role=tablist><button data-t=board role=tab>Board</button><button data-t=flow role=tab>Flow charts</button><button data-t=hist role=tab>History</button><button data-t=set role=tab>Settings</button></div><span class=spx></span>
+<span class=pill id=bread></span></header>
 <div id=win>
 <div id=side>
-<details id=plans class=sp><summary>subscriptions<span class=sr id=plsr></span></summary><div class=sb><div id=subs></div></div></details>
-<details id=mdl class=sp><summary>squad models<span class=sr id=mdsr></span></summary><div class=sb id=mbody></div></details>
-<details id=stats class=sp><summary>cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><h4>Spend <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Figures at API list prices (API-equivalent)."></span></h4><div class=tot id=tot></div><div class=m id=totnote></div><div class=cash id=cash></div><h4>Spend over time <span class=row id=per></span></h4><div id=chart></div><div id=kpi></div><div id=open></div><h4>Tokens by model <small class=m id=piet>all time</small></h4><div id=pie></div></div></details>
-<details id=lim class=sp><summary>Spend &amp; limits<span class=sr id=limsr></span></summary><div class=sb id=lbody></div></details>
-<div id=list></div>
+<details id=lrd class=sp open><summary>Live runs<span class=sr id=lrs></span></summary><div class=sb id=lrun></div></details>
+<details id=led class=sp><summary>Last ended<span class=sr><span id=les></span> <a href="#" id=enall data-t=hist>History</a></span></summary><div class=sb id=ended></div></details>
+<details id=plans class=sp><summary>Subscriptions<span class=sr id=plsr></span></summary><div class=sb><div id=subs></div></div></details>
+<details id=stats class=sp><summary>Cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><h4>Spend <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Figures at API list prices (API-equivalent)."></span></h4><div class=tot id=tot></div><div class=m id=totnote></div><div class=cash id=cash></div><h4>Spend over time <span class=row id=per></span></h4><div id=chart></div><div id=kpi></div><div id=open></div><h4>Tokens by model <small class=m id=piet>all time</small></h4><div id=pie></div></div></details>
+<details id=sqd class=sp open><summary>Squad models<span class=sr id=sqsr></span></summary><div class=sb id=sqm></div></details>
 </div>
+<div id=content>
+<section id=tab-board class="pane on" aria-label=Board>
+<div id=board><div id=bhead><label>Swimlanes <select id=lmode title="swimlanes: one lane per spec (Spec), per wave (Wave), or no lanes, today's board (None)"><option value=spec>Spec</option><option value=wave>Wave</option><option value=none>None</option></select></label> <details id=fw class=fsel><summary>Waves: all</summary><div class=fpop id=fwl></div></details> <details id=fs class=fsel><summary>Specs: all</summary><div class=fpop id=fsl></div></details> <button id=lcall title="collapse every swimlane">Collapse all</button> <button id=lexp title="expand every swimlane">Expand all</button> <label class=hck title="hide the swimlanes whose every ticket is closed"><input type=checkbox id=lhd> Hide done lanes</label> <span id=lhc></span><span id=bt class=m></span> <span id=hlrel class=hlrel hidden></span></div><div id=bcases></div><div id=bbody></div></div>
+</section>
+<section id=tab-flow class=pane aria-label="Flow charts">
+<div class=rkt id=flowtabs><button id=bruns title="the live run dashboards">Run panes</button><button id=bflow title="the development flow: the cards in each column over time, from the flow history (SPEC 111)">Flow</button><button id=blead title="the lead time of the closed cards, opened to closed (SPEC 111)">Lead time</button></div>
 <div id=main></div>
-<div id=tk role=dialog aria-label=Ticket><header><span id=tkchips></span><span class=sp></span><span id=tknav></span><button id=tkx aria-label=Close>✕</button></header><div id=tkset></div><div id=tkb></div><footer><a class=btn id=tkgh target=_blank rel=noopener>Open on GitHub ↗</a><button id=tktodo>→ Todo</button><button id=tkrel>Highlight related</button></footer></div>
-<div id=board><div id=grip title="drag to resize"></div><div id=bhead><span id=btitle><b>TASKS <span id=bt class=m></span></b> <span id=bcharts><button id=bflow title="the development flow: the cards in each column over time, from the flow history (SPEC 111)">Flow</button> <button id=blead title="the lead time of the closed cards, opened to closed (SPEC 111)">Lead time</button></span></span><span><select id=lmode title="swimlanes: one lane per spec (Spec), per wave (Wave), or no lanes, today's board (None)"><option value=spec>Spec</option><option value=wave>Wave</option><option value=none>None</option></select> <button id=lcall title="collapse every swimlane">Collapse all</button> <button id=lexp title="expand every swimlane">Expand all</button> <label title="hide the swimlanes whose every ticket is closed"><input type=checkbox id=lhd> Hide done lanes</label> <span id=lhc></span> <details id=fw class=fsel><summary>Waves</summary><div class=fpop id=fwl></div></details> <details id=fs class=fsel><summary>Specs</summary><div class=fpop id=fsl></div></details></span></div><div id=bcases></div><div id=bbody></div><div id=flowov hidden><div id=flowh><b id=flowt></b><button id=flowx title="close the diagram">&#215;</button></div><div id=flowb></div></div></div>
+<div id=flowov hidden><div id=flowh><b id=flowt></b><button id=flowx title="close the diagram">&#215;</button></div><div id=flowb></div></div>
+</section>
+<section id=tab-hist class=pane aria-label=History><h2>Run history</h2><div id=list></div></section>
+<section id=tab-set class=pane aria-label=Settings><h2>Settings</h2>
+<details id=lim class=sp open><summary>Spend &amp; limits<span class=sr id=limsr></span></summary><div class=sb id=lbody></div></details>
+<details id=mdl class=sp open><summary>Models &amp; chains<span class=sr id=mdsr></span></summary><div class=sb id=mbody></div></details>
+<details id=slk class=sp><summary>Communication<span class=sr id=slksr></span></summary><div class=sb id=sbody></div></details>
+<details id=sts class=sp open><summary>Machine &amp; loop status<span class=sr>load, tokens, gate, nightly, cycle, quotas</span></summary><div class=sb><div id=foot title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"><span>load</span><b id=ldline>CPU ? · RAM ? · GPU ?</b><span id=ldfacts title="the squad's own state: health, progress, occupancy, quotas, subscriptions"></span></div></div></details>
+<details id=dev class=sp open><summary>This device<span class=sr>desktop or phone view</span></summary><div class=sb><a id=mobile-link href="#">mobile view</a><script>document.getElementById("mobile-link").href=location.pathname.replace(/\/?$/,"/")+"mobile"</script></div></details>
+</section>
 </div>
-<div id=foot title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"><span>load</span><b id=ldline>CPU ? · RAM ? · GPU ?</b><span id=ldfacts title="the squad's own state: health, progress, occupancy, quotas, subscriptions"></span></div>
+</div>
+<div id=tk role=dialog aria-label=Ticket><header><span id=tkchips></span><span class=sp></span><span id=tknav></span><button id=tkx aria-label=Close>✕</button></header><div id=tkset></div><div id=tkb></div><footer><a class=btn id=tkgh target=_blank rel=noopener>Open on GitHub ↗</a><button id=tktodo>→ Todo</button><button id=tkrel>Highlight related</button></footer></div>
 <script>/*SWITCHER_JS*/
 {const swMe=(location.pathname.match(/^\/([^/?#]+)/)||[])[1]||"";switcherPoll(d=>switcherPaint(document.getElementById("psw"),d,swMe,"/"));}</script>
 <script>
 {const p=(location.pathname.match(/^\/([^/?#]+)/)||[])[1]||"";document.title=p?`Hub | ${decodeURIComponent(p)}`:"Hub";}   // the tab names the profile it shows, so two open hubs are told apart
 const LAYOUTS={1:[1,1],2:[2,1],3:[3,1],4:[2,2],6:[3,2]};
 const $=s=>document.querySelector(s),ls=JSON.parse(localStorage.hub||"{}");
-let allRuns=[],runs=[],q=ls.q||"",per=ls.per||"day",src=ls.src||"both",N=1,pins=new Set((ls.pins||[]).slice(0,1)),slots=[],frames=new Map();
+const HUB_REPO=/*HUB_REPO*/;
+let allRuns=[],runs=[],q=ls.q||"",per=ls.per||"day",src=ls.src||"both",N=1,pins=new Set((ls.pins||[]).slice(0,1)),slots=[],frames=new Map(),hl=null,boardRows=[];
 const save=()=>localStorage.hub=JSON.stringify({...ls,pins:[...pins],q,per,src});
 const usd=v=>v==null?"—":v>=100?"$"+Math.round(v):"$"+v.toFixed(2);
 const usdc=v=>v==null?"—":"$"+(+v).toFixed(2);   // plan prices carry cents, so a month's cash total keeps them: usd would round $282.23 to $282
@@ -3541,11 +3769,13 @@ function drawList(){
   const filled=GROUPS;   // the whole age ladder stays visible, so a band that holds no run still draws its header, and an open group that emptied keeps its header and shows no rows
   const ccRow=r=>{const h=r.held&&runs.some(x=>x.id===r.held)?r.held:null;return `<div class="r cc ${h&&shown.has(h)?"show":""}"${h?` data-id="${esc(h)}" title="open ${esc(h)}"`:""}><div><span class="b ${r.state}"${r.tip?` title="${esc(r.tip)}"`:""}>${esc(r.badge)}</span> <b>${esc(r.label)}</b>${r.sub?`<div class=st title="${esc(r.sub)}">${esc(r.sub)}</div>`:""}${(r.lines||[]).map(l=>`<div class=st>${esc(l)}</div>`).join("")}${r.live?`<div class=m>age ${age(r.age)}</div>`:""}</div></div>`};
   const row=r=>r.kind==="childcc"?ccRow(r):`<div class="r ${shown.has(r.id)?"show":""} ${pins.has(r.id)?"pinned":""}" data-id="${r.id}"><div>${r.kind==="test"?`<span class=kd title="GUI test run">🧪</span>`:""}<span class="b ${r.state}"${r.tip?` title="${esc(r.tip)}"`:""}>${esc(r.badge||r.state)}</span> <b title="${esc(labelTip(r))}">${esc(name(r))}</b>${loadMark(r)}${!(r.issues||[]).length&&r.issue_why&&!r.fix&&!r.url?`<div class=st>${esc(labelTip(r))}</div>`:""}${sub(r)?`<div class=st title="${esc(sub(r))}">${esc(sub(r))}</div>`:""}<div class=m>${r.share?`<span class="sh${r.share.pct===100?" done":""}" title="the newest gate that counted ran ${r.share.total} tests, ${r.share.passed} passed">${r.share.passed}/${r.share.total} · ${r.share.pct}%</span> · `:""}${usd(r.spend)} · ${Math.round(r.dur)}m · ${age(r.age)} ago · ${r.id.slice(-6)} · :${r.port}</div></div><span class=pn title="shown in the panel">${pins.has(r.id)?"●":"○"}</span></div>`;
+  {const live=runs.filter(r=>r.rank===0);$("#lrun").innerHTML=live.map(row).join("")||"<div class=m>no live runs</div>";$("#lrs").textContent=live.length?`${live.length} \u00b7 ${live.filter(r=>r.state==="running").length} running`:"none"}   // the sidebar card: the runs that are live now, the same rows as the history
   $("#list").innerHTML=filled.map(([k,t])=>{const rows=by[k]||[],h=groupHeader(k,rows);return `<div class="gh ${openGroups.has(k)?"op":""}" data-g="${k}" tabindex=0>${t}<span class=sr title="${esc(h.title)}">${h.text}</span></div>${openGroups.has(k)?rows.map(row).join(""):""}`}).join("")||"<div class=m style=padding:10px>no live dashboards</div>";
   document.querySelectorAll(".gh").forEach(e=>e.onclick=()=>{const k=e.dataset.g;   // the header is the only writer: a click toggles this group and nothing else
     if(openGroups.has(k))openGroups.delete(k);else openGroups.add(k);saveGroups();drawList()});
   document.querySelectorAll(".r[data-id]").forEach(e=>e.onclick=()=>{const id=e.dataset.id;   // the childcc row carries the id of the run it holds, never its own (#598, #689)
     if(pins.has(id))pins.delete(id);else{if(N===1)pins.clear();pins.add(id);focus=id}
+    hl=hl&&hl.run===id?null:{run:id};paintHL();
     save();refresh(true)});
 }
 let built="",focus=null;
@@ -3556,6 +3786,7 @@ const snapText=r=>r.state+" · "+usd(r.spend)+" · "+age(r.age)+" ago · :"+r.po
 const paintCell=(cell,r,id,live)=>{cell.head.innerHTML=`<span>${name(r)} · ${r.state}</span><span>${pins.has(id)?"pinned":"auto"}${id===live?" · live":""}</span>`;
   if(cell.snap)cell.snap.textContent=snapText(r)};
 function drawMain(force){
+  if(typeof TAB==="string"&&TAB!=="flow"){if(built||frames.size){built="";frames.clear();$("#main").innerHTML=""}return}   // the run panes live on the Flow charts tab: off it, no frame stays in the DOM (#889, #34)
   const [c,rw]=LAYOUTS[N],live=embedPlan(slots,focus).pane,key=N+":"+slots.join(",")+"|"+live;
   const main=$("#main");main.style.gridTemplateColumns=`repeat(${c},1fr)`;main.style.gridTemplateRows=`repeat(${rw},1fr)`;
   const byId=new Map(runs.map(r=>[r.id,r]));
@@ -3573,7 +3804,7 @@ function drawMain(force){
   for(const cell of main.children){const r=byId.get(cell.dataset.id);if(r)paintCell(cell,r,cell.dataset.id,live)}
 }
 function liveSync(){drawMain()}   // the run pane went out of sight or came back: the frame follows the plan
-function refresh(){plan();drawList();liveSync()}
+function refresh(){plan();drawList();liveSync();paintHL()}
 function applyFilter(){runs=allRuns.filter(r=>r.kind!=="childcc")}   // the childcc pass is drawn in the WORKERS group, never a pane (#598)
 let known=null;   // run ids already seen: a run that appears running after the first poll is selected on its own (pinned, its group opened)
 function selectNew(){const ids=allRuns.filter(r=>r.kind!=="childcc").map(r=>r.id);if(known===null){known=new Set(ids);return}
@@ -3628,6 +3859,7 @@ function mdlDiff(){const s=JSON.parse(mdlSrv),out=[];
  return out}
 function mdlRender(){const b=$("#mbody");if(!mdl){b.innerHTML="<span class=m>loading…</span>";return}
  {const lc=mdl.last_coding||(mdl.coding_models||[])[0]||"",x=lc?mdlBox("coding_models",lc):MBOX0;$("#mdsr").textContent=x.llm?`${x.llm} · ${lc}`:lc}   // the model the last run coded with, not the chain's head
+ {const roles=Object.keys(MLAB);$("#sqm").innerHTML=roles.map(k=>`<div class=chr><b>${MLAB[k]}</b><span>${(mdl[k]||[]).map(m=>`<span class="cm${mdlOffM(m)?" off":""}" title="${esc(m)}">${mdlName(mdlBox(k,m),m)}</span>`).join("")}</span></div>`).join("");$("#sqsr").textContent=roles.length+" roles"}   // the sidebar card: the chains by role, read only; the editor is on the Settings tab
  const dirty=JSON.stringify(mdl)!==mdlSrv;   // the dropdowns read mdl.suggest: the label first, the saved value stays the id (#672, #687)
  const ch=mdl.chain||{},chOut=ch.out||[],chHit=(m)=>chOut.find(o=>o.until_text&&o.model.split(':').pop()===String(m).split(':').pop()),chTag=(m)=>{const o=chHit(m);return o?`<span class=bk title="${esc(o.reason)}">${esc(o.reason)}, resets ${esc(o.until_text)}</span>`:''},chBan=ch.banner?`<div class="mx err" role=alert>${esc(ch.banner)}</div>`:(ch.notice?`<div class=mx>${esc(ch.notice)}</div>`:"");
  const diff=dirty?mdlDiff():[];
@@ -3687,12 +3919,78 @@ $("#lbody").addEventListener("click",e=>{const t=e.target.closest("button");if(!
  if(t.id==="limok")limPost(true);else if(t.id==="limsv")limPost(false);
  else if(t.id==="limrv"||t.id==="limno"){limDiff=null;limPend=null;limMsg="";limRender()}});
 $("#lbody").addEventListener("input",e=>{if(e.target.id==="limc"||e.target.id==="limf"){limMsg="";const st=$("#lbody .msave .st");if(st)st.textContent="unsaved changes"}});
-/* accordions: each of the four answers its own header and leaves the others alone; the open set is stored like the pins */
-const ACC=["plans","stats","mdl","lim"];
+/* Settings > Communication (#924): how the agent reads and writes Slack for this profile. The page renders and asks; the hub
+   validates, shows the diff and writes the profile's gitignored file on confirm (ADR-0137). The hub holds no token. */
+let slS=null,slDraft=null,slD=null,slMsg="";
+const SL_LANG=["pt-br","en-US","es"],SL_ROLE={Manager:"drafts the answer; posts only after the owner's OK",Colleague:"answered directly; a bug it reports becomes an issue in Todo at once, with an acknowledgment and the link"};
+const SL_EV={stg:"STG release",prod:"PROD release",dev:"dev landing",bug:"bug acknowledgment",fix:"status correction"};
+const slA=t=>esc(t).replace(/"/g,"&quot;");
+const slClone=o=>JSON.parse(JSON.stringify(o));
+const slDirty=()=>!!slDraft&&JSON.stringify(slDraft)!==JSON.stringify(slS);
+const slOpts=(list,cur)=>list.map(x=>`<option${x===cur?" selected":""}>${slA(x)}</option>`).join("");
+const slChan=(c,i)=>{const on=c.watch?"":" disabled",n=slA(c.name);
+ return `<div class="slc${c.watch?"":" off"}" role=row><span class=c1 role=cell><b>${esc(c.name)}</b>${c.watch?"":"<small>do not watch</small>"}</span>`
+ +`<span role=cell data-l="language"><select data-sl="ch:${i}:lang" aria-label="${n}: language"${on}>${slOpts(SL_LANG,c.lang)}</select></span>`
+ +`<span class=swc role=cell data-l="watch"><label class=swt><input type=checkbox data-sl="ch:${i}:watch"${c.watch?" checked":""} aria-label="${n}: watch"> watch</label></span>`
+ +`<span class=swc role=cell data-l="thread only"><label class=swt><input type=checkbox data-sl="ch:${i}:thread"${c.thread?" checked":""}${on} aria-label="${n}: thread only"> thread only</label></span>`
+ +`<span class=swc role=cell data-l="mention only"><label class=swt><input type=checkbox data-sl="ch:${i}:mention"${c.mention?" checked":""}${on} aria-label="${n}: mention only"> mention only</label></span>`
+ +`<span role=cell data-l="announce">${Object.keys(SL_EV).map(k=>`<label class=sev title="${SL_EV[k]} posted here"><input type=checkbox data-sl="ch:${i}:ev:${k}"${c.events[k]?" checked":""}${on} aria-label="${n}: ${k} posts"> ${k}</label>`).join("")}</span>`
+ +`<span class=swc role=cell><button data-slrm="ch:${i}" aria-label="remove ${n}">Remove</button></span></div>`};
+const slPerson=(p,i)=>`<div class=slc role=row><span class=c1 role=cell><b>${esc(p.name)}</b></span>`
+ +`<span role=cell data-l="role"><select data-sl="pp:${i}:role" aria-label="${slA(p.name)}: role">${slOpts(Object.keys(SL_ROLE),p.role)}</select></span>`
+ +`<span class=c1 role=cell data-l="the agent">${esc(SL_ROLE[p.role])}</span>`
+ +`<span class=swc role=cell><button data-slrm="pp:${i}" aria-label="remove ${slA(p.name)}">Remove</button></span></div>`;
+function slRender(){const b=$("#sbody");if(!b)return;if(!slS){b.innerHTML="<span class=m>loading…</span>";return}
+ const d=slDraft,sr=$("#slksr");if(sr)sr.textContent=slS.connection;
+ let h=`<div class=kr><span class=l>connection</span><b class="${slS.connection==="connected"?"ok":"w"}">${esc(slS.connection)}</b></div>`
+ +`<p class=m>Posts through your own account by the Claude Slack connector. No token is stored here.</p>`
+ +`<div class=kr><span class=l>prefix</span><input data-sl=prefix value="${slA(d.prefix)}" maxlength=40 aria-label="prefix"></div>`
+ +`<div class=kr><span class=l>default language</span><select data-sl=lang aria-label="default language">${slOpts(SL_LANG,d.lang)}</select></div>`
+ +`<div class=kr><span class=l>read every</span><span><input data-sl=tick type=number min=1 max=30 value="${slA(d.tick)}" aria-label="read every, minutes"> min</span></div>`
+ +`<div class=kr><span class=l>up to, when quiet</span><span><input data-sl=max type=number min=2 max=120 value="${slA(d.max)}" aria-label="up to, minutes"> min</span></div>`
+ +`<div class=kr><span class=l>quiet hours</span><input data-sl=quiet value="${slA(d.quiet)}" placeholder="always on" aria-label="quiet hours, HH-HH"></div>`
+ +`<div class=kr><span class=l>anyone not listed</span><select data-sl=other aria-label="anyone not listed"><option value=ignore${d.other==="ignore"?" selected":""}>is ignored</option><option value=reply${d.other==="reply"?" selected":""}>gets a fixed reply</option></select></div>`
+ +`<h4>Channels</h4><div class=slt role=table><div class="slc slh" role=row><span>Channel</span><span>Language</span><span>Watch</span><span>Thread only</span><span>Mention only</span><span>Announce</span><span></span></div>`
+ +(d.channels.map(slChan).join("")||`<p class=m>No channel: the agent reads and posts nowhere.</p>`)+`</div>`
+ +`<div class=slad><input id=slch placeholder="#channel or id" aria-label="channel to add"><button id=slcha>Add channel</button></div>`
+ +`<h4>People</h4><div class=slt role=table><div class="slc slh" role=row><span>Person</span><span>Role</span><span>What the agent does</span><span></span></div>`
+ +(d.people.map(slPerson).join("")||`<p class=m>No person: the agent answers nobody by name.</p>`)+`</div>`
+ +`<div class=slad><input id=slpn placeholder="name" aria-label="person to add"><select id=slpr aria-label="role">${slOpts(Object.keys(SL_ROLE),"Colleague")}</select><button id=slpa>Add person</button></div>`
+ +`<h4>Templates</h4>`+Object.keys(SL_EV).map(k=>`<details class=tp><summary>${SL_EV[k]} <span class=m>${d.channels.filter(c=>c.watch&&c.events[k]).map(c=>esc(c.name)).join(", ")||"no channel"}</span></summary><textarea data-sl="tpl:${k}" rows=3 maxlength=600 aria-label="${SL_EV[k]} template">${esc(d.templates[k])}</textarea></details>`).join("")
+ +`<h4>Optional</h4><div class=kr><label class=swt><input type=checkbox data-sl=dm${d.dm?" checked":""} aria-label="owner self-DM as an inbox"> Owner self-DM as an inbox</label></div>`
+ +`<div class=kr><label class=swt><input type=checkbox data-sl=audio${d.audio?" checked":""}${d.dm?"":" disabled"} aria-label="audio in and out"> Audio in and out</label></div>`;
+ if(slD)h+=`<div class=sdiff role=alert><b>Save these changes?</b>${slD.map(x=>`<div class=ln>${esc(x)}</div>`).join("")}<div class=sact><button id=slok>Confirm</button><button id=slno>Cancel</button></div></div>`;
+ h+=`<div class="msave${slDirty()?" dirty":""}"><button id=slsv>Save</button><button id=slrv>Discard</button><span class="st${slMsg.startsWith("!")?" err":slMsg?" okm":""}">${slMsg?esc(slMsg.replace(/^!/,"")):(slDirty()?"unsaved changes":"no change")}</span></div>`;
+ b.innerHTML=h}
+function slEdit(k,t){const p=k.split(":"),v=t.type==="checkbox"?t.checked:t.value;
+ if(p[0]==="ch"){const c=slDraft.channels[+p[1]];if(p[2]==="ev")c.events[p[3]]=v;else c[p[2]]=v}
+ else if(p[0]==="pp")slDraft.people[+p[1]].role=v;
+ else if(p[0]==="tpl")slDraft.templates[p[1]]=v;
+ else if(k==="tick"||k==="max")slDraft[k]=Number(v);
+ else slDraft[k]=v}
+async function slLoad(){try{slS=await (await fetch("/api/slack")).json();slDraft=slClone(slS);slD=null;slMsg="";slRender()}catch(e){slMsg="!load failed";slRender()}}
+async function slPost(confirm){try{const r=await fetch("/api/slack",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...slDraft,confirm})}),d=await r.json();
+ if(d.err){slD=null;slMsg="!"+d.err}
+ else if(confirm){slS=d.state;slDraft=slClone(slS);slD=null;slMsg="saved"}
+ else if((d.diff||[]).length){slD=d.diff;slMsg=""}
+ else{slD=null;slMsg="nothing changed"}}catch(x){slMsg="!save failed"}
+ slRender()}
+$("#sbody").addEventListener("change",e=>{const k=e.target.dataset.sl;if(!k||!slDraft)return;slD=null;slMsg="";slEdit(k,e.target);slRender()});
+$("#sbody").addEventListener("click",e=>{const b=e.target.closest("button");if(!b||!slDraft)return;
+ if(b.dataset.slrm){const[t,i]=b.dataset.slrm.split(":");(t==="ch"?slDraft.channels:slDraft.people).splice(+i,1);slD=null;slRender()}
+ else if(b.id==="slcha"){const v=$("#slch").value.trim();if(v)slDraft.channels.push({name:v,lang:slDraft.lang,...slS.new_channel,events:{...slS.new_channel.events}});slD=null;slRender()}
+ else if(b.id==="slpa"){const v=$("#slpn").value.trim();if(v&&!slDraft.people.some(p=>p.name===v))slDraft.people.push({name:v,role:$("#slpr").value});slD=null;slRender()}
+ else if(b.id==="slsv")slPost(false);
+ else if(b.id==="slok")slPost(true);
+ else if(b.id==="slno"){slD=null;slRender()}
+ else if(b.id==="slrv"){slDraft=slClone(slS);slD=null;slMsg="";slRender()}});
+/* accordions: each of the five answers its own header and leaves the others alone; the open set is stored like the pins */
+const ACC=["plans","stats","mdl","lim","slk"];
 let openAcc=new Set(Array.isArray(ls.acc)?ls.acc.filter(i=>ACC.includes(i)):[]);   // the old single-id string is ignored, not trusted, and not fatal
 const saveAcc=()=>{ls.acc=[...openAcc];save()};
-ACC.forEach(i=>{const e=$("#"+i);e.open=openAcc.has(i);e.addEventListener("toggle",()=>{if(e.open)openAcc.add(i);else openAcc.delete(i);saveAcc();if(i==="mdl"&&e.open){mdlLoad()}else if(i==="lim"&&e.open){limLoad()}})});mdlLoad();
+ACC.forEach(i=>{const e=$("#"+i);e.open=openAcc.has(i);e.addEventListener("toggle",()=>{if(e.open)openAcc.add(i);else openAcc.delete(i);saveAcc();if(i==="mdl"&&e.open){mdlLoad()}else if(i==="lim"&&e.open){limLoad()}else if(i==="slk"&&e.open){slLoad()}})});mdlLoad();
 if(openAcc.has("lim"))limLoad();
+if(openAcc.has("slk"))slLoad();
 const PCOL=["#5aa9ff","#3ecf8e","#f5b041","#b79cf6","#2dd4bf","#ff6b6b","#c678dd","#e5c07b","#8a93a3"],tk=n=>n>=1e9?(n/1e9).toFixed(2)+"B":n>=1e6?(n/1e6).toFixed(1)+"M":n>=1e3?(n/1e3).toFixed(0)+"K":""+n;
 const OTHER=0.01;
 function pie(ms){
@@ -3729,9 +4027,9 @@ const autoq=a=>{const QT="Quota used, read from the provider's own CLI. 100% = q
 const CUR={"R$":"BRL","U$":"USD","US$":"USD","$":"USD","€":"EUR","£":"GBP","¥":"JPY"},curOf=v=>{v=v.trim().toUpperCase();return CUR[v]||v};
 const money=(a,c)=>{try{return new Intl.NumberFormat(undefined,{style:"currency",currency:c}).format(a)}catch(e){return a+" "+c}};
 async function pollSubs(){try{const d=await (await fetch("/api/subs")).json(),ae=document.activeElement;if(ae&&ae.closest&&ae.closest("#subs")&&ae.tagName==="INPUT")return;
- const tot=Object.values(d.subs).reduce((a,v)=>a+(v.saved||0),0),any=Object.values(d.subs).some(v=>v.saved!=null);$("#plsr").textContent=any||d.api?`plans ${usd(d.plans)} + API ${usd(d.api)} = ${usd(d.total)}`:"set plan prices";
+ const tot=Object.values(d.subs).reduce((a,v)=>a+(v.saved||0),0),any=Object.values(d.subs).some(v=>v.saved!=null);{const lims=Object.values(d.subs).filter(v=>{const aq=v.quota,aw=aq&&aq.windows&&aq.windows[0],pl=v.plan,q=aw?aw.pct:(pl&&pl.quota!=null?pl.quota:null);return q!=null&&q>=100});subWarn=lims.map(v=>v.name);
+ $("#plsr").textContent=lims.length?`${lims.length} at limit`:(any||d.api?"none at limit":"set plan prices")}   // the card says what needs a look; the prices stay in the cost card
  $("#cash").textContent="at API list prices (API-equivalent) · cash this month: "+(any||d.api?`plans ${usd(d.plans)} + API ${usd(d.api)} = ${usd(d.total)}`:"set plan prices");
- $("#stsr").textContent=`month ${usdc(d.total)}`;
  $("#subs").innerHTML=`<div class=subx>Per subscription: quota used, as each provider's CLI reports it. With no reading, the bar is the API-equivalent usage vs the plan price.</div><datalist id=curs>${["USD","BRL","EUR","GBP","ARS","MXN","CAD","JPY"].map(c=>`<option value=${c}>`).join("")}</datalist>`+Object.entries(d.subs).map(([k,v])=>{const ok=v.saved!=null,pl=v.plan,pr=d.presets[k],custom=pl&&pl.plan==="custom";
   const sel=`<select data-plan=${k} data-f=plan><option value="" ${pl?"":"selected"}>choose a plan…</option>${Object.entries(pr).map(([i,p])=>`<option value=${i} ${pl&&pl.plan===i?"selected":""}>${esc(p.name)} · US$${p.usd}</option>`).join("")}<option value=custom ${custom?"selected":""}>Custom amount…</option></select>`;
   const cust=custom?`<span class=pr><span>amount</span><input data-plan=${k} data-f=amount type=number min=0 step=0.01 value="${pl.amount}"> <input data-plan=${k} data-f=cur list=curs value="${esc(pl.currency)}" placeholder="BRL" title="R$, U$, € or any 3-letter code"></span>`:"";
@@ -3753,6 +4051,7 @@ async function pollStats(){try{pollSubs();
   $("#src").innerHTML=[["both","all"],["sub","plans"],["api","API"]].map(([v,l])=>`<button data-s=${v} class="${v===src?"on":""}">${l}</button>`).join("");
   document.querySelectorAll("#src button").forEach(b=>b.onclick=()=>{src=b.dataset.s;save();pollStats()});
   document.querySelectorAll("#per button").forEach(b=>b.onclick=()=>{per=b.dataset.p;save();pollStats()});
+  $("#stsr").textContent=usd(st.totals.today)+" today";
   $("#chart").innerHTML=bars(st.buckets);$("#pie").innerHTML=pie(st.models||[]);
   $("#piet").textContent=tk((st.models||[]).reduce((a,m)=>a+m.in+m.out,0))+" all time";
   const same=st.totals.all===st.totals.month;
@@ -3774,8 +4073,8 @@ loadPoll();setInterval(loadPoll,LOAD_MS);   // the window owns the reading: one 
 const bo=ls.bo||{},saveB=()=>{ls.bo=bo;localStorage.hub=JSON.stringify({...ls,pins:[...pins],q,per,bo})};
 bo.dock="bottom";   // the board always docks at the bottom
 dropRemoved(bo);   // a saved state from a control the board no longer has is dropped (#899)
-const sizeBoard=()=>{$("#board").style.height=document.body.classList.contains("dockb")?(bo.h||320)+"px":""};
-const paintBoard=()=>{document.body.classList.toggle("dockb",bo.dock==="bottom");sizeBoard()};
+const sizeBoard=()=>{$("#board").style.height=""};   // the board is one pane of the Board tab: its height is the page's, never a dragged one (#889)
+const paintBoard=()=>{document.body.classList.add("dockb");sizeBoard()};
 const applyDock=paintBoard;
 paintBoard();
 const isPR=n=>n===COLNAME.pr_open;   // the one lane beside the axis: open work branches, for tracking only (#384)
@@ -3822,8 +4121,8 @@ const ni=()=>nav.findIndex(x=>x[0]===cur&&x[1]===irepo);
 function openCard(n,r){const el=boardCards().find(x=>+x.dataset.n===+n&&(x.dataset.r||"__REPO__")===(r||"__REPO__"));if(el)showIssue(n,r,el);else{nav=[[+n,r||"__REPO__"]];showIssue(n,r)}}   // a blocker link opens the same sheet, never a new tab
 const step=k=>{const i=ni()+k;if(i>=0&&i<nav.length)showIssue(nav[i][0],nav[i][1])};
 // One close rule: the panel goes, the page widens, and the selection the run or the column drew is cleared.
-function closeSheet(){tsheet.classList.remove("on");document.body.classList.remove("tkopen");document.querySelectorAll("#bbody .it.hit").forEach(x=>x.classList.remove("hit"));nav=[];cur=0;irepo="__REPO__";$("#tkset").innerHTML="";$("#tknav").innerHTML="";escBoard()}
-async function showIssue(n,r,el){cur=+n;irepo=r||"__REPO__";
+function closeSheet(){tsheet.classList.remove("on");document.body.classList.remove("tkopen");document.querySelectorAll("#bbody .it.hit").forEach(x=>x.classList.remove("hit"));nav=[];cur=0;irepo="__REPO__";$("#tkset").innerHTML="";$("#tknav").innerHTML="";if(hl&&hl.run==null)hl=null;paintHL();escBoard()}
+async function showIssue(n,r,el){cur=+n;irepo=r||"__REPO__";hl={n:+n,r:irepo,kind:boardRows.some(x=>x.kind==="pr"&&+x.n===+n&&x.r===irepo)?"pr":"issue"};paintHL();
  // A card a run holds steps through that run's cards; any other card steps through its column (the selection the board shows).
  if(el){const c=cardOf(el),set=c.hr?boardCards().filter(x=>(x.dataset.hr||"")===c.hr):[...el.closest(".sc").querySelectorAll(".it[data-n]")];nav=set.map(x=>[+x.dataset.n,x.dataset.r||"__REPO__"])}
  if(!nav.length)nav=[[cur,irepo]];
@@ -3861,9 +4160,6 @@ addEventListener("keydown",e=>{if(e.key==="Escape"){if(tsheet.classList.contains
 document.addEventListener("click",e=>{const c=e.target.closest("#bbody .it");if(!c||e.target.closest("a")||e.target.closest("button")||c.classList.contains("m"))return;showIssue(c.dataset.n,c.dataset.r,c)});   // a card opens the sheet in place: the hub is never left
 const hm=location.hash.match(/issue=(\d+)/);if(hm)openCard(+hm[1]);   // deep link: /#issue=1171
 document.addEventListener("click",e=>{const h=e.target.closest("#bbody .ah");if(!h||e.target.closest("[data-eye]"))return;const g=h.parentElement.dataset.g;if(g===COLNAME.pr_open)bo.prOpen=bo.prOpen===false;else bo.open=g;saveB();pollBoard()});
-$("#grip").onpointerdown=e=>{e.preventDefault();document.body.classList.remove("dragging");const g=e.currentTarget;g.setPointerCapture(e.pointerId);g.classList.add("drag");document.body.classList.add("dragging");
-const mv=ev=>{if(!ev.buttons){up();return}bo.h=Math.round(Math.min(innerHeight-160,Math.max(90,innerHeight-ev.clientY)));sizeBoard()},up=()=>{g.classList.remove("drag");document.body.classList.remove("dragging");g.removeEventListener("pointermove",mv);g.removeEventListener("pointerup",up);g.removeEventListener("pointercancel",up);g.removeEventListener("lostpointercapture",up);saveB()};
-g.addEventListener("pointermove",mv);g.addEventListener("pointerup",up);g.addEventListener("pointercancel",up);g.addEventListener("lostpointercapture",up)};
 document.addEventListener("click",e=>{const t=e.target.closest("[data-eye]");if(!t)return;e.preventDefault();e.stopPropagation();const g=t.dataset.eye;
  if(t.closest(".hidline")){const k=new Set(bo.kept||[]);k.add(g);bo.kept=[...k]}   // the hidden: strip's line: show the column again and keep it shown, even while it holds nothing (#1809)
  else{const h=new Set(hidCols()),k=new Set(bo.kept||[]);if(h.has(g))h.delete(g);else{h.add(g);k.delete(g)}bo.hidden=[...h];bo.kept=[...k]}   // the header's eye: the user's own hidden set, and the keep it ends
@@ -3886,7 +4182,7 @@ const colOf=(n,names)=>{const u=(names||[]).filter(x=>!Object.hasOwn(COLORS,x)).
 const caseRows=cs=>(cs||[]).map(c=>{const a=c.age<3600?Math.max(1,Math.round(c.age/60))+"m":c.age<172800?Math.round(c.age/3600)+"h":Math.round(c.age/86400)+"d";return `<div class="tcrow ${c.result==="fail"?"fail":"pass"}" data-key="test case:${c.issue}@${esc(c.commit)}"><span class=tr>${esc(c.result)}</span><span class=id>#${c.issue}</span><span class=ta>${a}</span><code class=tm>${esc(c.commit)}</code></div>`}).join("");   // one row for each test case item, in the model's order: a strip beside the axis, never a column, and the pane reads no cache of its own
 // flow-charts:
 let FLOWK=null,FLOWD=null;
-const flowW=800,flowH=340,flowP=36;
+let flowW=800;const flowH=340,flowP=36;   // the width follows the pane, so the chart fills it and its text keeps its size (#889)
 const flowX=(i,n)=>n<2?flowP:flowP+i*(flowW-2*flowP)/(n-1);
 const flowY=(v,max)=>max?flowH-flowP-v*(flowH-2*flowP)/max:flowH-flowP;
 const flowAxis=(max,unit)=>`<line x1=${flowP} y1=${flowH-flowP} x2=${flowW-flowP} y2=${flowH-flowP} stroke=var(--line)></line><text x=${flowP-6} y=${flowY(max,max)+4} text-anchor=end fill=var(--mute) style="font-size:var(--fs-min)">${max} ${unit}</text>`;
@@ -3894,7 +4190,7 @@ const cfdAxis=c=>{const n=c.days.length,base=flowH-flowP;   // every number and 
   const ys=c.yticks.map(v=>{const y=flowY(v,c.ymax);return `<line x1=${flowP-4} y1=${y} x2=${flowP} y2=${y} stroke=var(--mute)></line><text x=${flowP-7} y=${y+4} text-anchor=end fill=var(--mute) style="font-size:var(--fs-min)">${v}</text>`}).join("");
   const xs=c.xticks.map(t=>{const x=flowX(t.i,n);return `<line x1=${x} y1=${base} x2=${x} y2=${base+4} stroke=var(--mute)></line><text x=${x} y=${base+17} text-anchor=middle fill=var(--mute) style="font-size:var(--fs-min)">${esc(t.day)}</text>`}).join("");
   return `<line x1=${flowP} y1=${flowP-10} x2=${flowP} y2=${base} stroke=var(--line)></line><line x1=${flowP} y1=${base} x2=${flowW-flowP} y2=${base} stroke=var(--line)></line>${ys}${xs}`+
-    `<text x=${flowP-7} y=${flowP-16} text-anchor=end fill=var(--mute) style="font-size:var(--fs-min)">cards</text>`+
+    `<text x=4 y=${flowP-16} text-anchor=start fill=var(--mute) style="font-size:var(--fs-min)">cards</text>`+
     `<text x=${flowW-flowP} y=${base+31} text-anchor=end fill=var(--mute) style="font-size:var(--fs-min)">day (UTC)</text>`;};
 let CF={r:"30"};   // the cumulative flow's range, 30 days at first (#901)
 const CFD_R=[["7","7 days"],["30","30 days"],["90","90 days"],["all","All"]];   // the cumulative flow's range views (#901)
@@ -3945,7 +4241,7 @@ const flowLead=l=>{const S=l.summary,ex=l.excluded.map(e=>`${e.count} ${esc(EXRE
   const head=`<p class=fhead><b>${esc(l.measure)}</b> · window ${l.window.size} ${esc(l.window.unit)} · excluded ${l.excluded_total}${ex?" ("+ex+")":""}</p>`;
   if(!S)return head+"<p class=fnote>no closed card yet</p>";
   return head+ltChart(LT.zc||l.control[LT.log?"log":"jira"][LT.tf]);};
-const drawFlow=()=>{const cfd=FLOWK==="cfd";$("#flowt").textContent=cfd?"Cumulative flow":"Lead time";
+const drawFlow=()=>{{const w=$("#flowb").clientWidth-20;flowW=w<600?600:w>1600?1600:(w|0)}const cfd=FLOWK==="cfd";$("#flowt").textContent=cfd?"Cumulative flow":"Lead time";
   $("#flowb").innerHTML=!FLOWD?"<p class=fnote>the board has not loaded yet</p>":cfd?flowCFD(FLOWD.cfd.ranges[CF.r]):flowLead(FLOWD.lead)};
 const flowOpen=k=>{FLOWK=k;$("#flowov").hidden=false;drawFlow()};
 const ltZoom=async(f,t)=>{const tok=++LT.tok;try{const c=await (await fetch(`/api/leadtime?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}&scale=${LT.log?"log":"jira"}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;LT.zr=[f,t];LT.pick=null;drawFlow()}catch(e){}};   // the hub recomputes the chart for the dragged range (#900)
@@ -3964,13 +4260,13 @@ $("#flowb").onchange=e=>{if(e.target.id==="cfdr"){CF.r=e.target.value;drawFlow()
 $("#flowb").onclick=e=>{if(LT.noclick){LT.noclick=false;return}
   if(e.target.id==="ltz"){LT.tok++;LT.zc=null;LT.zr=null;LT.pick=null;drawFlow();return}
   const k=e.target.closest("circle[data-k]");if(k){LT.pick=+k.dataset.k;drawFlow();return}const r=e.target.closest("tr[data-o]");if(r)showIssue(+r.dataset.o,"__REPO__")};
-$("#bflow").onclick=()=>flowOpen("cfd");$("#blead").onclick=()=>flowOpen("lead");$("#flowx").onclick=()=>{$("#flowov").hidden=true};
+$("#bflow").onclick=()=>flowOpen("cfd");$("#blead").onclick=()=>flowOpen("lead");$("#flowx").onclick=()=>{$("#flowov").hidden=true};addEventListener("resize",()=>{if(!$("#flowov").hidden)drawFlow()});
 // flow-charts:end
 async function pollBoard(){lim.busy=1;try{const b=await (await fetch("/api/board")).json(),FLOW=/*BOARD_FLOW*/,   // development flow, left to right
 all=[b.prs,...b.groups.sort((x,y)=>{const i=n=>{const k=FLOW.indexOf(n);return k<0?FLOW.length:k};return i(x.name)-i(y.name)})],f=q.trim().replace(/^#/,"");
 if(bo.open===undefined||!all.some(g=>g.name===bo.open))bo.open=(all.find(g=>g.n&&g.name!==COLNAME.issue_closed&&!isPR(g.name))||all[2]).name;
 const CN=all.map(g=>g.name);   // every column of this board: what colOf reads the user columns out of, never a colour of its own
-FLOWD=b.flow;if(!$("#flowov").hidden)drawFlow();$("#bcases").innerHTML=caseRows(b.cases);$("#bt").textContent=b.err?"(stale)":"";
+lastRead=Date.now();readStale=!!b.err;FLOWD=b.flow;if(!$("#flowov").hidden)drawFlow();$("#bcases").innerHTML=caseRows(b.cases);$("#bt").textContent=b.err?"(stale)":"";
 const fw=bo.fw||[],fs=bo.fs||[],allRows=all.filter(g=>!isPR(g.name)).flatMap(g=>g.items),specTitle=new Map();   // the filter bar: the waves and specs the board holds (#899)
 allRows.forEach(x=>{if(x.sp)specTitle.set(String(x.n),x.t)});
 const numKeys=(a,b)=>a==="none"?1:b==="none"?-1:+a-+b;
@@ -3978,10 +4274,10 @@ const wOpts=[...new Set(allRows.filter(x=>!x.sp).map(waveKey))].sort(numKeys),sO
 const fillBar=(id,opts,label,sel,name)=>{const box=$("#"+id),k=opts.join("|");
  if(box.dataset.k!==k){box.dataset.k=k;box.innerHTML=`<div class=fpopb><button type=button data-clear>clear</button></div>`+opts.map(v=>`<label><input type=checkbox value="${esc(v)}"> ${esc(label(v))}</label>`).join("")}
  box.querySelectorAll("input").forEach(c=>c.checked=sel.includes(c.value));
- box.parentElement.querySelector("summary").textContent=sel.length?`${name} (${sel.length})`:name;box.parentElement.classList.toggle("set",sel.length>0)};
+ box.parentElement.querySelector("summary").textContent=sel.length?`${name} (${sel.length})`:`${name}: all`;box.parentElement.classList.toggle("set",sel.length>0)};
 fillBar("fwl",wOpts,w=>w==="none"?"No wave":"Wave "+w,fw,"Waves");
 fillBar("fsl",sOpts,s=>s==="none"?"No spec":"#"+s+(specTitle.get(s)?" "+specTitle.get(s):""),fs,"Specs");
-const hid=new Set(hidCols()),bottom=bo.dock==="bottom",eye=(g,off=hid.has(g.name))=>`<span class=eye data-eye="${esc(g.name)}" title="${off?"show":"hide"} this column"><svg viewBox="0 0 24 24" width=14 height=14 fill=none stroke=currentColor stroke-width=2 stroke-linecap=round stroke-linejoin=round><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx=12 cy=12 r=3 />${off?'<path d="M3 3l18 18"/>':""}</svg></span>`;
+const hid=new Set(hidCols()),bottom=true,eye=(g,off=hid.has(g.name))=>`<span class=eye data-eye="${esc(g.name)}" title="${off?"show":"hide"} this column"><svg viewBox="0 0 24 24" width=14 height=14 fill=none stroke=currentColor stroke-width=2 stroke-linecap=round stroke-linejoin=round><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx=12 cy=12 r=3 />${off?'<path d="M3 3l18 18"/>':""}</svg></span>`;
 const LC=b.lc||{},rgb=h=>[0,2,4].map(i=>parseInt(h.slice(i,i+2),16)),mix=(a,t)=>a.map((v,i)=>Math.round(v*t+[28,34,44][i]*(1-t))),   // label color blended into the card's #1c222c
 tint=x=>{const cs=(x.l||[]).map(l=>LC[l]).filter(c=>/^[0-9a-f]{6}$/.test(c||"")).map(rgb);if(!cs.length)return"";const avg=[0,1,2].map(i=>cs.reduce((s,c)=>s+c[i],0)/cs.length);return`;--bg:rgb(${mix(avg,.10)});--bgh:rgb(${mix(avg,.16)})`},
 lbc=l=>/^[0-9a-f]{6}$/.test(LC[l]||"")?` style="--lb:rgba(${rgb(LC[l])},.30)"`:"";
@@ -3990,7 +4286,7 @@ const ageC=o=>{const h=(Date.now()-Date.parse(o))/3600000;return h>=24?"old":h>=
 setInterval(()=>document.querySelectorAll("#bbody .age").forEach(e=>{e.textContent=age(e.dataset.o);e.className="age "+ageC(e.dataset.o)}),30000);
 const gcls=c=>c.v==="?"?"unk":c.v==="debt"?"debt":c.v.startsWith("OK")?"ok":(c.v.startsWith("CHG")||c.v.startsWith("BLK"))?"bad":"";
 const gstrip=s=>`<div class="gstrip${s.old?" old":""}" title="${esc(s.old?`these facts are ${s.age} s old: the strip greys out past 180 s, so nothing here is being claimed as fresh`:"R review · C CI · T threads · B base · H labels and holds")}">`+s.cells.map(c=>`<span class="gc ${gcls(c)}" title="${esc(c.tip||"")}">${c.k}<b>${esc(c.v)}</b></span>`).join("")+`</div>`;
-const cards=(g,it,shown)=>shown.map(x=>{const pr=x.kind==="pr";return `<div class=it data-n="${x.n}" data-r="${esc(x.r||"__REPO__")}"${pr?" data-pr":""} data-col="${encodeURIComponent(g.name==null?"":String(g.name))}" data-pm="${x.pm&&!pr?1:""}" data-b="${encodeURIComponent(JSON.stringify(x.b||[]))}" data-bl="${encodeURIComponent(JSON.stringify(x.bl||[]))}" data-ho="${encodeURIComponent(x.ho==null?"":String(x.ho))}" data-hr="${encodeURIComponent(x.hr==null?"":String(x.hr))}" data-prf="${encodeURIComponent(JSON.stringify(x.prf||[]))}" style="--cc:${colOf(g.name,CN)}${tint(x)}"><a class=id target=_blank href="https://github.com/${esc(x.r||"__REPO__")}/${pr?"pull":"issues"}/${x.n}">${pr?"PR ":""}#${x.n}</a>${(x.l||[]).includes("loop-bug")?'<span class="bugc loop">loop-bug</span>':(x.l||[]).includes("bug")?'<span class="bugc">bug</span>':""}${x.rt?`<span class=rpo title="the repository this card belongs to: ${esc(x.r)}">${esc(x.rt)}</span>`:""}${x.pb?`<span class="pbg ${x.pb.replace(" ","-")}">${esc(x.pb)}</span>`:""}${x.rollup?`<span class="cir ${esc(x.rollup)}" title="CI states on the head${(x.ci||[]).length?": "+esc((x.ci||[]).join(", ")):""}">CI ${esc(x.rollup)}</span>`:""}${x.fz?`<span class=fz title="a freeze is a marker, never a move: the card keeps its column">${esc(x.fz)}</span>`:""}${x.pd?`<span class=pnd title="pending: the board door proved this move and the board read has not carried it yet">pending</span>`:""}${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(x.t)}</span>${x.pm&&!pr?`<button class=pmp data-n="${x.n}" title="move this card to ${esc(x.pmt)}: the owner's go signal (ADR-0142)">→ ${esc(x.pmt)}</button>`:""}${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.ho?`<div class=hld>${esc(x.ho)}</div>`:""}${(x.cl||[]).length?`<div class=clos title="the issues this pull request closes">closes ${x.cl.map(n=>`<a target=_blank rel=noopener href="https://github.com/${esc(x.r||"__REPO__")}/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${(x.o||x.sc||x.by)?`<div class=ft>${x.sc?`<span class=tsk title="sub-issues closed / total: ${esc(x.sc)}">${esc(x.sc)}</span>`:""}${x.o?`<span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span>`:""}${x.by?`<span class=au title="opened by ${esc(x.by)}">${esc(x.by)}</span>`:""}</div>`:""}</div>`}).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"");
+const cards=(g,it,shown)=>shown.map(x=>{const pr=x.kind==="pr";return `<div class=it data-n="${x.n}" data-r="${esc(x.r||"__REPO__")}"${pr?" data-pr":""} data-col="${encodeURIComponent(g.name==null?"":String(g.name))}" data-pm="${x.pm&&!pr?1:""}" data-b="${encodeURIComponent(JSON.stringify(x.b||[]))}" data-bl="${encodeURIComponent(JSON.stringify(x.bl||[]))}" data-ho="${encodeURIComponent(x.ho==null?"":String(x.ho))}" data-hr="${encodeURIComponent(x.hr==null?"":String(x.hr))}" data-prf="${encodeURIComponent(JSON.stringify(x.prf||[]))}" style="--cc:${colOf(g.name,CN)}${tint(x)}"><a class=id target=_blank href="https://github.com/${esc(x.r||"__REPO__")}/${pr?"pull":"issues"}/${x.n}">${pr?"PR ":""}#${x.n}</a>${x.kind!=="pr"&&x.pa!=null&&!x.sp?`<span class=lchip data-k=spec title="spec #${x.pa}">${x.pa}</span>`:""}${(w=>w?`<span class=lchip data-k=wave title="wave ${+w}">W${+w}</span>`:"")(((x.l||[]).map(l=>String(l).match(/^wave:(\d+)$/)).filter(Boolean)[0]||[])[1])}${(x.l||[]).includes("loop-bug")?'<span class="bugc loop">loop-bug</span>':(x.l||[]).includes("bug")?'<span class="bugc">bug</span>':""}${x.rt?`<span class=rpo title="the repository this card belongs to: ${esc(x.r)}">${esc(x.rt)}</span>`:""}${x.pb?`<span class="pbg ${x.pb.replace(" ","-")}">${esc(x.pb)}</span>`:""}${x.rollup?`<span class="cir ${esc(x.rollup)}" title="CI states on the head${(x.ci||[]).length?": "+esc((x.ci||[]).join(", ")):""}">CI ${esc(x.rollup)}</span>`:""}${x.fz?`<span class=fz title="a freeze is a marker, never a move: the card keeps its column">${esc(x.fz)}</span>`:""}${x.pd?`<span class=pnd title="pending: the board door proved this move and the board read has not carried it yet">pending</span>`:""}${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(String(x.t).replace(/^\s*\[SPEC(?:\s*#?\d+)?\]\s*/i,""))}</span>${x.pm&&!pr?`<button class=pmp data-n="${x.n}" title="move this card to ${esc(x.pmt)}: the owner's go signal (ADR-0142)">→ ${esc(x.pmt)}</button>`:""}${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.ho?`<span class=hld title="${esc(x.ho)}">running</span>`:""}${(x.cl||[]).length?`<div class=clos title="the issues this pull request closes">closes ${x.cl.map(n=>`<a target=_blank rel=noopener href="https://github.com/${esc(x.r||"__REPO__")}/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${(x.o||x.sc||x.by)?`<div class=ft>${x.sc?`<span class=tsk title="sub-issues closed / total: ${esc(x.sc)}">${esc(x.sc)}</span>`:""}${x.o?`<span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span>`:""}${x.by?`<span class=au title="opened by ${esc(x.by)}">${esc(x.by)}</span>`:""}</div>`:""}</div>`}).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"");
 // A visible column holding no cards is not drawn at all: the columns that do have cards take the width, and the
 // collapsed one is accounted for by a line at the foot of the hidden: strip. Which columns those are is derived on
 // every render -- from the filtered count, the user's hidden set and the set the line's eye added -- and never
@@ -3998,9 +4294,11 @@ const cards=(g,it,shown)=>shown.map(x=>{const pr=x.kind==="pr";return `<div clas
 const laneHtml=m=>{const ccount=c=>m.lanes.reduce((s,l)=>s+(l.counts[c]||0),0),pct=l=>l.total?Math.round(l.closed/l.total*100):0;
  if(!m.lanes.length)return `<div class=lempty>${f?"No card matches this search.":"No card on the board."}</div>`;
  let h=`<div class=lgrid style="--vc:${Math.max(1,m.vc.length)}">`+m.vc.map(c=>`<div class=lcolh style="--cc:${colOf(c,CN)}"><span>${esc(c)}</span><b>${ccount(c)}</b>${eye({name:c})}</div>`).join("");
- for(const l of m.lanes){const cl=l.collapsed,lc=l.kind==="bugs"?"var(--err,#f85149)":colOf(l.st||"",CN);
+ let si=0;const SPECC=["var(--s1)","var(--s2)","var(--s3)","var(--s4)","var(--s5)","var(--s6)","var(--s7)","var(--s8)"];
+ for(const l of m.lanes){const cl=l.collapsed,bugs=l.kind==="bugs",lc=bugs?"var(--bad)":l.kind==="s"?SPECC[si++%SPECC.length]:"var(--s8)",
+   lid=l.kind==="s"?"SPEC "+l.num:bugs?"Loop bugs":l.title,ltt=l.kind==="s"?l.title:bugs?"defects of the loop itself: they halt dispatch, never a landing (ADR-0146)":l.kind==="none"?"bugs and single tickets":"";   // the lane reads as the mock: a coloured id, then its title or its subtitle (#889)
   h+=`<section class="lane${cl?" coll":""}${l.kind==="bugs"?" alarm":""}${l.done?" done":""}" data-lane="${esc(l.id)}" style="--lc:${lc}"><header class=lh role=button tabindex=0 aria-expanded="${!cl}" data-lane="${esc(l.id)}"><span class=tw>${cl?"&#9656;":"&#9662;"}</span>`
-    +(l.kind==="s"?`<span class=lid>#${l.num}</span>`:"")+`<span class=ltt>${esc(l.title)}</span>`
+    +`<span class=lid>${esc(lid)}</span>`+(ltt?`<span class="ltt${l.kind==="s"?"":" subt"}">${esc(ltt)}</span>`:"")
     +(l.kind==="s"?`<span class=bar title="${l.closed} of ${l.total} closed"><i style="width:${pct(l)}%"></i></span><span class=pc>${l.closed}/${l.total}</span>`+(l.st?`<span class=lst>${esc(l.st)}</span>`:""):"")
     +`<span class=sum>${cl?m.cols.filter(c=>l.counts[c]).map(c=>`<span>${esc(c)} <b>${l.counts[c]}</b></span>`).join(""):""}</span></header>`;
   if(!cl)for(const c of m.vc){const key=l.id+"|"+c,v=cellView(l.cells[c],!!(bo.cx||{})[key]);h+=`<div class=cell data-lane="${esc(l.id)}" data-col="${esc(c)}">${cards({name:c},v.shown,v.shown)}${v.more?`<button class=more data-cell="${esc(key)}" title="show every card of this cell">+${v.more} more</button>`:""}</div>`}
@@ -4027,7 +4325,67 @@ $("#lmode").value=bo.lmode||"spec";$("#bbody").classList.toggle("lanes",!!model)
 $("#lhc").innerHTML=model&&model.hc.length?`<button class=hcpill id=lhcx title="columns with no card in an expanded lane: click to expand the lanes that hold their cards">+${model.hc.length} hidden: ${model.hc.map(x=>x.user?`<span class=hcu data-eye="${esc(x.name)}" title="show this column">${esc(x.name)} <b>${x.count}</b></span>`:esc(x.name)+" <b>"+x.count+"</b>").join(" · ")}</button>`:"";
 if(lanesHtml!==null){if($("#bbody").dataset.h!==lanesHtml){$("#bbody").dataset.h=lanesHtml;$("#bbody").innerHTML=lanesHtml;restore()}}
 else if($("#bbody").dataset.h!==html){$("#bbody").dataset.h=html;$("#bbody").innerHTML=html;restore()}   // same cards: leave the DOM alone, so a scroll in progress is never interrupted
+boardRows=all.flatMap(g=>g.items);paintHL();
 }catch(e){}finally{lim.busy=0}}
+// highlight:begin
+// The highlight follows the selection and is never stored: `hl` is {run: id} for a run, or {n, r, kind} for a card. Its
+// matches come from the rows the page already holds, so the rule adds no read.
+const hlKind=x=>x.kind==="pr"?"pr":"issue",hlRepo=x=>x.r||HUB_REPO,hlKey=x=>hlRepo(x)+"#"+hlKind(x)+"#"+x.n;
+const hlRunNames=(run,x)=>!!run&&hlRepo(x)===HUB_REPO&&(hlKind(x)==="pr"?run.fix!=null&&+x.n===+run.fix:(run.issues||[]).some(i=>+i===+x.n));
+const hlCards=(run,items)=>run?items.filter(x=>hlRunNames(run,x)):[];
+const hlRuns=(card,runList)=>card?runList.filter(r=>hlRunNames(r,card)):[];
+const hlHidden=(matched,rendered)=>matched.filter(x=>!rendered.has(hlKey(x)));
+function paintHL(){
+  if(hl&&hl.run!=null&&!runs.some(r=>r.id===hl.run))hl=null;
+  const run=hl&&hl.run!=null?runs.find(r=>r.id===hl.run):null,card=hl&&hl.run==null?hl:null;
+  const matched=hlCards(run,boardRows),mk=new Set(matched.map(hlKey)),rendered=new Set();
+  document.querySelectorAll("#bbody .it[data-n]").forEach(el=>{const k=el.dataset.r+"#"+(el.hasAttribute("data-pr")?"pr":"issue")+"#"+el.dataset.n;
+    rendered.add(k);   // a card the board draws is in #bbody; a collapsed swimlane and a filter both leave it out
+    el.classList.toggle("hl",mk.has(k));el.classList.toggle("dim",!!run&&!mk.has(k))});
+  const hidden=hlHidden(matched,rendered),hb=$("#hlrel");hb.hidden=!hidden.length;hb.textContent=hidden.length+" related";
+  document.querySelectorAll("#bbody .lane[data-lane]").forEach(e=>{const l=(lanesNow&&lanesNow.lanes||[]).find(x=>x.id===e.dataset.lane),n=l&&run?hlHidden(hlCards(run,l.all),rendered).length:0;
+    let s=e.querySelector(".lhrel");if(!n){s&&s.remove();return}
+    if(!s){s=document.createElement("span");s.className="hlrel lhrel";e.querySelector(".lh").append(s)}
+    s.textContent=n+" related"});
+  const hits=new Set(hlRuns(card,runs).map(r=>r.id));
+  document.querySelectorAll("#list .r[data-id]").forEach(e=>e.classList.toggle("hlr",hits.has(e.dataset.id)));
+}
+// highlight:end
+
+// The frame of the mock (#889): four tabs over one page. A tab only shows one pane; every pane keeps its own poll.
+let TAB="board",lastRead=0,readStale=false;
+const TABS={board:"#tab-board",flow:"#tab-flow",hist:"#tab-hist",set:"#tab-set"};
+function setTab(t,o){if(!TABS[t])t="board";TAB=t;ls.tab=t;save();
+ for(const k in TABS)$(TABS[k]).classList.toggle("on",k===t);
+ document.querySelectorAll(".tabs button").forEach(b=>b.classList.toggle("on",b.dataset.t===t));
+ if(t==="set")for(const id of["lim","mdl"]){const e=$("#"+id);if(!e.open)e.open=true}   // the two sections are the tab: entering it opens them (#889)
+ if(t==="flow"){if(o&&o.runs)$("#flowov").hidden=true;else if(!o||!o.keep){if($("#flowov").hidden)flowOpen("cfd")}}
+ drawMain()}
+document.querySelector(".tabs").addEventListener("click",e=>{const b=e.target.closest("button[data-t]");if(b)setTab(b.dataset.t)});
+$("#enall").addEventListener("click",e=>{e.preventDefault();e.stopPropagation();setTab("hist")});
+$("#lrun").addEventListener("click",e=>{const r=e.target.closest(".r[data-id]");if(r&&pins.has(r.dataset.id))setTab("flow",{runs:true})});   // a live run picked in the sidebar shows its pane on the Flow charts tab
+$("#bruns").onclick=()=>{$("#flowov").hidden=true;flowTabs()};
+function flowTabs(){const h=$("#flowov").hidden,k=typeof FLOWK==="string"?FLOWK:"cfd";$("#bruns").classList.toggle("on",h);$("#bflow").classList.toggle("on",!h&&k==="cfd");$("#blead").classList.toggle("on",!h&&k!=="cfd")}
+new MutationObserver(flowTabs).observe($("#flowov"),{attributes:true});
+{const pn=(location.pathname.match(/^\/([^/?#]+)/)||[])[1]||"";$("#pjn").textContent=pn?decodeURIComponent(pn):"hub";
+ const pj=$("#pj"),psw=$("#psw");pj.onclick=e=>{e.stopPropagation();const on=!psw.classList.contains("on");psw.classList.toggle("on",on);pj.setAttribute("aria-expanded",on)};
+ document.addEventListener("click",e=>{if(!e.target.closest("#psw")&&psw.classList.contains("on")){psw.classList.remove("on");pj.setAttribute("aria-expanded","false")}})}
+// "board read N s ago": the stamp of the last board answer
+setInterval(()=>{const b=$("#bread");if(!b)return;b.textContent=lastRead?`board read ${Math.max(0,Math.round((Date.now()-lastRead)/1000))} s ago${readStale?" (stale)":""}`:""},1000);
+// The alert strip: what the page already fetches. /api/status carries the loop and the warnings (the nightly among them); the
+// subscriptions poll adds a limit warning. An item with no data is left out, and a strip with no item is not drawn.
+let alertLoop=null,alertWarn=[],subWarn=[];
+function alertDraw(){const items=[],nw=alertWarn.filter(w=>/nightly/i.test(w.text)),ow=alertWarn.filter(w=>!/nightly/i.test(w.text));
+ nw.forEach(w=>{const bad=/fail/i.test(w.text),sha=(String(w.tip||"").match(/ran at ([0-9a-f]{7,40})/)||[])[1];   // the mock's wording: "Nightly suite failed on dev <sha>"; the age stays in the tip
+  items.push(`<span class=ai title="${esc((w.text+" "+(w.tip||"")).trim())}">${bad?"<b>&#9679; Nightly suite failed</b>":"Nightly suite passed"}${sha?` on dev ${esc(sha.slice(0,8))}`:""}</span>`)});
+ if(alertLoop){const on=!!alertLoop.on,since=alertLoop.since?` <small>since ${esc(String(alertLoop.since).slice(0,16).replace("T"," ").replace(new Date().toLocaleDateString("sv")+" ",""))}</small>`:"";
+  items.push(`<span class=ai id=loopst>Loop: <span class="ls ${on?"on":"off"}">${on?"on":"off"}${since}</span></span>`);
+  if(!on)items.push(`<button id=loopbtn disabled title="The hub has no route that starts the loop: start it from the terminal.">Start loop</button>`)}
+ ow.forEach(w=>items.push(`<span class="ai w" title="${esc(w.tip||"")}">${esc(w.text)}</span>`));
+ subWarn.filter(n=>!alertWarn.some(w=>w.text.toLowerCase().includes(n.toLowerCase()))).forEach(n=>items.push(`<span class="ai w">${esc(n)} at 100% of its limit</span>`));
+ const a=$("#alert"),h=items.join("");if(a.dataset.h!==h){a.dataset.h=h;a.innerHTML=h}a.classList.toggle("calm",!nw.length&&!ow.length&&!subWarn.length&&(!alertLoop||alertLoop.on))}
+async function alertPoll(){try{const d=await (await fetch("/api/status")).json();alertLoop=d.loop||null;alertWarn=(d.warnings||[]).filter(w=>w&&w.text);alertDraw()}catch(e){}}
+alertPoll();setInterval(alertPoll,5000);
 /*BOARD_LANES*/
 $("#lmode").onchange=e=>{bo.lmode=e.target.value;saveB();pollBoard()};
 // The swimlanes' state (#891): collapse and open state live in `bo`, so the device keeps them across a reload.
@@ -4049,7 +4407,8 @@ const laneSet=v=>{bo.lc=bo.lc||{};for(const l of(lanesNow?lanesNow.lanes:[]))bo.
 $("#lcall").onclick=()=>laneSet(true);$("#lexp").onclick=()=>laneSet(false);
 document.addEventListener("click",e=>{const h=e.target.closest("#bbody .lh");if(h){const id=h.dataset.lane,coll=h.closest(".lane").classList.contains("coll");bo.lc=bo.lc||{};laneToggle(id,coll);return}
  const m=e.target.closest("#bbody .more");if(m){bo.cx=bo.cx||{};bo.cx[m.dataset.cell]=true;saveB();pollBoard();return}   // a more click opens its own cell only
- const p=e.target.closest("#lhcx");if(p&&lanesNow){const names=new Set(lanesNow.hc.map(x=>x.name));bo.lc=bo.lc||{};   // a hidden column's pill expands the lanes that hold its cards
+ const p=e.target.closest("#lhcx");if(p&&lanesNow){if(p.hasAttribute("data-hide")){bo.showClosed=false;saveB();pollBoard();return}
+  const end=new Set([COLNAME.issue_closed,COLNAME.abandoned]),names=new Set(lanesNow.hc.map(x=>x.name).filter(c=>!end.has(c)));bo.lc=bo.lc||{};   // a hidden column's pill expands the lanes that hold its cards; the end columns are drawn, never a lane opened for them
   for(const l of lanesNow.lanes)if(l.collapsed&&Object.keys(l.counts).some(c=>names.has(c)))bo.lc[l.id]=false;saveB();pollBoard()}});
 const pickFilter=(id,key)=>{const box=$("#"+id);box.addEventListener("change",e=>{const v=e.target.value,h=new Set(bo[key]||[]);e.target.checked?h.add(v):h.delete(v);bo[key]=[...h];saveB();pollBoard()});box.addEventListener("click",e=>{if(!e.target.closest("[data-clear]"))return;e.preventDefault();bo[key]=[];saveB();pollBoard()})};
 pickFilter("fwl","fw");pickFilter("fsl","fs");
@@ -4061,6 +4420,10 @@ try{const r=await fetch("/api/promote",{method:"POST",headers:{"Content-Type":"a
  else{b.textContent="moved to Todo ✓";pollBoard()}}catch(x){card.insertAdjacentHTML("beforeend","<div class=perr>the hub did not answer</div>");b.disabled=false}});
 document.addEventListener("click",e=>{for(const d of["#fw","#fs"])if($(d)&&!e.target.closest(d))$(d).open=false});
 pollBoard();setInterval(pollBoard,5000);
+// Last ended: the runs that ended today, read from the hub (#889)
+async function endedPoll(){try{const rows=await (await fetch("/api/ended")).json();$("#les").textContent=rows.length+" today";$("#ended").innerHTML=rows.slice(0,5).map(r=>`<div class=r><div><span class="b ${r.state}">${esc(r.badge||r.state)}</span> <a href="${esc(r.url||"/dash/"+encodeURIComponent(r.id)+"/")}" target=_blank rel=noopener><b>${esc(name(r))}</b></a><div class=m>${usd(r.spend)} \u00b7 ${age(r.age)} ago</div></div></div>`).join("")||"<div class=m>no run ended today</div>"}catch(e){}}
+endedPoll();setInterval(endedPoll,30000);
+setTab(TABS[ls.tab]?ls.tab:"board");
 let ver=null;setInterval(async()=>{try{const v=(await (await fetch("/api/version")).json()).v;if(ver===null)ver=v;else if(v!==ver)location.reload()}catch(e){}},3000);
 </script>"""
 PAGE = PAGE.replace("/*WEB_TOKENS*/", WEB_TOKENS)
@@ -4073,7 +4436,7 @@ PAGE = PAGE.replace("/*BOARD_LANES_CSS*/", (pathlib.Path(__file__).resolve().par
 # The strip paints one rule per category, keyed by the fact that sets the column: the name comes from the table.
 HID_CHIP_TOKENS = (("abandoned", "err"), ("dev_ci", "run"), ("unscheduled", "warn"), ("issue_closed", "ok"), ("pr_open", "pin"))
 PAGE = PAGE.replace("/*HID_CHIP_RULES*/", "\n".join('.hidbar .chip[data-col="%s"] b{color:var(--%s)}' % (COLUMN[fact], token) for fact, token in HID_CHIP_TOKENS))
-PAGE = PAGE.replace("/*BOARD_COLORS*/", BOARD_COLORS_JSON).replace("/*BOARD_FLOW*/", BOARD_FLOW_JSON).replace("/*BOARD_NAMES*/", BOARD_NAMES_JSON)
+PAGE = PAGE.replace("/*BOARD_COLORS*/", BOARD_COLORS_JSON).replace("/*BOARD_FLOW*/", BOARD_FLOW_JSON).replace("/*BOARD_NAMES*/", BOARD_NAMES_JSON).replace("/*HUB_REPO*/", json.dumps(REPO))
 PAGE = PAGE.replace("/*RUN_STATE_CSS*/", "".join(".b.%s{color:var(--%s);%s}" % (r["state"].replace(" ", "-"), r["color"], r["css"]) for r in RUN_STATES))
 
 
@@ -5051,6 +5414,7 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/subs"): body, ct = json.dumps({**subs_month(), "presets": {k: {i: {"name": n, "usd": p} for i, (n, p) in v.items()} for k, v in PRESETS.items()}}).encode(), "application/json"
         elif self.path.startswith("/api/models"): body, ct = json.dumps(models_get()).encode(), "application/json"
         elif self.path.startswith("/api/limits"): body, ct = json.dumps(limits_read()).encode(), "application/json"   # Settings > Spend & limits (#926)
+        elif self.path.startswith("/api/slack"): body, ct = json.dumps(slack_view(slack_file())).encode(), "application/json"   # Settings > Communication (#924)
         elif self.path.startswith("/api/speed"): body, ct = json.dumps(speed()).encode(), "application/json"
         elif self.path.startswith("/api/load"): body, ct = json.dumps(load_payload()).encode(), "application/json"
         elif self.path.startswith("/api/status"): body, ct = json.dumps(status_payload()).encode(), "application/json"
@@ -5095,7 +5459,7 @@ class H(BaseHTTPRequestHandler):
             if not (a.tailnet or own_origin(self)) or "json" not in (self.headers.get("Content-Type") or ""): return self.refuse("forbidden")
             return self.dash("POST", raw)
         if self.path.split("?", 1)[0] == "/api/sessions/send": return self.send_to_session(a)
-        ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote", "/api/limits") and (a.tailnet or own_origin(self)) and "json" in (self.headers.get("Content-Type") or "")
+        ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote", "/api/limits", "/api/slack") and (a.tailnet or own_origin(self)) and "json" in (self.headers.get("Content-Type") or "")
         try:
             raw = self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 1 << 20))   # read before any answer: a refusal that leaves the body unread resets the connection; the models panel posts back ~20 KB of read-only fields (#684)
             if not ok: out = {"err": "forbidden"}
@@ -5103,6 +5467,7 @@ class H(BaseHTTPRequestHandler):
                 body = json.loads(raw or b"{}")
                 if self.path == "/api/promote": out = promote(body.get("issue")) if isinstance(body, dict) else {"err": "bad request"}   # the owner's move (#560)
                 elif self.path == "/api/limits": out = limits_set(body)   # Settings > Spend & limits (#926)
+                elif self.path == "/api/slack": out = slack_set(body)   # Settings > Communication (#924)
                 else: out = (plans_set if self.path == "/api/plans" else models_set)(body)
         except Exception as e: out = {"err": "bad request"}
         if not a.allowed and a.tailnet: return self.refuse(a.reason)
