@@ -1,0 +1,28 @@
+/* The swimlanes (#890, #891): one grid per board. Each lane is a header across the grid and one cell per drawn column. */
+body.dockb #bbody.lanes{display:block;overflow:auto}
+#bbody .lgrid{display:grid;grid-template-columns:repeat(var(--vc,1),minmax(170px,1fr));gap:6px 8px;align-items:start;padding:6px 8px}
+#bbody .lcolh{position:sticky;top:0;z-index:1;display:flex;justify-content:space-between;align-items:center;gap:6px;padding:4px 6px;background:var(--panel);border-bottom:2px solid var(--cc,var(--line));font-size:var(--fs-min,13px);color:var(--fg)}
+#bbody .lcolh b{background:#2a303b;border-radius:9px;padding:0 7px;font-weight:600}
+#bbody .lane{display:contents}
+#bbody .lh{grid-column:1/-1;display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:6px 10px;margin-top:6px;border:1px solid var(--line);border-top:3px solid var(--lc,var(--line));border-radius:6px;background:var(--panel);cursor:pointer;color:var(--fg)}
+#bbody .lh:hover,#bbody .lh:focus-visible{outline:2px solid var(--acc,#5aa9ff);outline-offset:1px}
+#bbody .lh .tw{color:var(--mute);width:12px}
+#bbody .lh .lid{font-weight:700;font-variant-numeric:tabular-nums;color:var(--lc,var(--fg))}
+#bbody .lh .ltt{font-size:15px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:46ch}
+#bbody .lh .bar{display:inline-block;width:90px;height:6px;border-radius:3px;background:#2a303b;overflow:hidden}
+#bbody .lh .bar i{display:block;height:100%;background:var(--lc,var(--acc,#5aa9ff))}
+#bbody .lh .pc,#bbody .lh .lst{font-size:var(--fs-min,13px);color:var(--mute);font-variant-numeric:tabular-nums}
+#bbody .lh .lst{border:1px solid var(--line);border-radius:7px;padding:0 6px}
+#bbody .lh .sum{margin-left:auto;display:flex;gap:10px;font-size:var(--fs-min,13px);color:var(--mute)}
+#bbody .lh .sum b{color:var(--fg);font-weight:600}
+#bbody .lane.alarm .lh{border-top-color:var(--err,#f85149);background:#2a1416}
+#bbody .lane.alarm .lh .lid{color:var(--err,#f85149)}
+#bbody .lane.done .lh .bar i{background:#3fb950}
+#bbody .cell{min-width:0;display:flex;flex-direction:column;gap:4px;min-height:4px}
+#bbody .cell .it{margin:0}
+#bbody .bugc{display:inline-block;margin-left:6px;padding:0 6px;border-radius:9px;border:1px solid #6b5223;color:var(--warn,#e3b341);font-size:var(--fs-min,13px)}
+#bbody .bugc.loop{border-color:var(--err,#f85149);color:var(--err,#f85149)}
+#bbody .lempty{padding:24px;color:var(--mute);font-size:15px}
+#lhc:empty{display:none}
+#lhc .hcpill{font:inherit;font-size:var(--fs-min,13px);border:1px solid var(--line);border-radius:12px;background:var(--panel);color:var(--fg);padding:2px 10px;cursor:pointer;min-height:28px}
+#lhc .hcpill b{font-weight:600}

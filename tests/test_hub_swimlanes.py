@@ -65,8 +65,8 @@ def _node(script):
 
 
 def _build(groups, mode="spec", **o):
-    opts = {"fw": [], "fs": [], "lc": {}, "hideDone": False, "closed": "Closed", **o}
-    return _node(f"console.log(JSON.stringify(buildBoard({json.dumps(groups)},{json.dumps(mode)},{json.dumps(opts)})));")
+    opts = {"mode": mode, "fw": [], "fs": [], "lc": {}, "hideDone": False, "closed": "Closed", **o}
+    return _node(f"console.log(JSON.stringify(buildBoard({json.dumps(groups)},{json.dumps(opts)})));")
 
 
 # ---- the server serves the parent spec on the row ----
@@ -172,6 +172,7 @@ def test_spec_mode_draws_no_spec_cards_as_cards_only_in_their_lane(hub):
     assert 889 not in seen and 41 not in seen, "a spec card is drawn as a card, not as a lane header"
 
 
-def test_card_chip_names_a_loop_bug_or_a_bug(hub):
-    assert _node('console.log(JSON.stringify([cardChip({l:["bug","loop-bug"]}),cardChip({l:["bug"]}),cardChip({l:[]})]));') \
-        == ["loop-bug", "bug", ""]
+def test_a_card_shows_a_loop_bug_chip_or_a_bug_chip_as_text(hub):
+    page = hub.PAGE
+    assert '<span class="bugc loop">loop-bug</span>' in page, "a loop-bug card shows no loop-bug chip"
+    assert '<span class="bugc">bug</span>' in page, "a bug card shows no bug chip"
