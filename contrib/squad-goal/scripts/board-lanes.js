@@ -19,19 +19,22 @@ function buildBoard(groups,o){
   const hasFilter=!!(fw.length||fs.length||o.search);
   const specs=new Map(),rows=[];
   const gone=new Set([closed,o.abandoned||"Abandoned"]),goneSpecs=new Set();   // a spec whose card is closed or abandoned has no work left: no lane (#890)
-groups.forEach(g=>g.items.forEach(x=>{if(x.sp){if(gone.has(g.name))goneSpecs.add(x.n);else if(!specs.has(x.n))specs.set(x.n,{title:x.t,st:g.name});return}rows.push({...x,col:g.name})}));
+groups.forEach(g=>g.items.forEach(x=>{if(x.sp){if(gone.has(g.name))goneSpecs.add(x.n);else if(!specs.has(x.n))specs.set(x.n,{title:x.t,st:g.name,sc:x.sc});   // a spec card carries its own closed/total (#890)
+ return}rows.push({...x,col:g.name})}));
   const lanes=new Map(),ensure=(id,meta)=>{if(!lanes.has(id))lanes.set(id,{id,...meta,all:[],vis:[]});return lanes.get(id)};
   const laneOf=x=>{
     if(hasLabel(x,"loop-bug"))return["bugs",{kind:"bugs",title:"Loop bugs"}];
     if(mode==="wave"){const w=laneWaveOf(x);return w===null?["nowave",{kind:"nowave",title:"No wave"}]:["w"+w,{kind:"w",num:w,title:"Wave "+w}]}
     if(x.pa==null)return["none",{kind:"none",title:"No spec"}];
     const sp=specs.get(x.pa)||{title:"",st:""};
-    return["s"+x.pa,{kind:"s",num:x.pa,title:sp.title,st:sp.st}]};
-  if(mode!=="wave")specs.forEach((sp,num)=>ensure("s"+num,{kind:"s",num,title:sp.title,st:sp.st}));   // a spec card on the board is always a lane
+    return["s"+x.pa,{kind:"s",num:x.pa,title:sp.title,st:sp.st,sc:sp.sc}]};
+  if(mode!=="wave")specs.forEach((sp,num)=>ensure("s"+num,{kind:"s",num,title:sp.title,st:sp.st,sc:sp.sc}));   // a spec card on the board is always a lane
   rows.forEach(x=>{if(goneSpecs.has(x.pa)){if(gone.has(x.col))return;const l=ensure("none",{kind:"none",title:"No spec"});l.all.push(x);if(boardOk(x,fw,fs)&&text(x))l.vis.push(x);return}   // a closed spec keeps no lane: its open card falls to No spec, its closed card is history (#890)
 const[id,meta]=laneOf(x),l=ensure(id,meta);l.all.push(x);if(boardOk(x,fw,fs)&&text(x))l.vis.push(x)});
   const shown=[...lanes.values()].filter(l=>l.vis.length>0||(!hasFilter&&l.kind==="s"));
   shown.forEach(l=>{l.n=l.vis.length;l.total=l.all.length;l.closed=l.all.filter(x=>x.col===closed).length;
+    const m=/^(\d+)\/(\d+)$/.exec(String(l.sc||""));   // a closed ticket never reaches the board with its parent, so the count comes from the spec card
+    if(l.kind==="s"&&m){l.closed=+m[1];l.total=+m[2]}
     l.done=l.total>0&&l.closed===l.total;l.live=l.vis.some(x=>!!x.ho);l.counts={};l.vis.forEach(x=>{l.counts[x.col]=(l.counts[x.col]||0)+1})});
   const rank=l=>l.kind==="bugs"?0:(l.kind==="none"||l.kind==="nowave")?2:1;
   const list=shown.filter(l=>!(o.hideDone&&l.done)).sort((a,b)=>rank(a)-rank(b)||(b.live-a.live)||((a.num??0)-(b.num??0)));

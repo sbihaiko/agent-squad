@@ -54,6 +54,23 @@ def test_an_abandoned_spec_draws_no_lane():
     assert "s492" not in ids, f"an abandoned spec drew a lane: {ids}"
 
 
+def test_progress_reads_the_spec_sub_issue_count_not_the_served_rows():
+    """A closed ticket carries no parent on the board, so counting rows would answer 0 of 2: the spec card's own
+    sub-issue count is the completeness (#890)."""
+    groups = [
+        {"name": "Doing", "items": [{"n": 889, "t": "SPEC 889", "l": ["spec"], "sp": True, "sc": "26/34"}]},
+        {"name": "Doing", "items": [_row(890, "Doing", pa=889)]},
+    ]
+    if NODE is None:
+        pytest.skip("node is required")
+    opts = {"mode": "spec", "fw": [], "fs": [], "lc": {}, "hideDone": False, "closed": "Closed", "abandoned": "Abandoned"}
+    src = LANES_JS.read_text() + f"\nconsole.log(JSON.stringify(buildBoard({json.dumps(groups)},{json.dumps(opts)})));"
+    p = subprocess.run([NODE, "-"], input=src, capture_output=True, text=True, timeout=30)
+    assert p.returncode == 0, p.stderr
+    lane = next(ln for ln in json.loads(p.stdout)["lanes"] if ln["id"] == "s889")
+    assert (lane["closed"], lane["total"]) == (26, 34), lane
+
+
 def test_a_spec_with_open_cards_still_draws_its_lane():
     lane = next((ln for ln in _build()["lanes"] if ln["id"] == "s889"), None)
     assert lane is not None, "the open spec lost its lane"
