@@ -29,6 +29,7 @@ test-codex-reset.sh 0.15
 test-consult.sh 0.57
 test-cqflush-address.sh 1.82
 test-cqflush-interval.sh 0.13
+test-cqflush-orphan.sh 3.18
 test-cqflush-status.sh 1.54
 test-cqflush-term.sh 3.28
 test-cqflush-terminal.sh 1.70
@@ -100,6 +101,7 @@ test-janitor-run-fields-unchanged.sh 1.75
 test-janitor-stale-card.sh 1.32
 test-janitor-terminal-comment.sh 2.71
 test-janitor-unlanded-branch.sh 0.97
+test-janitor-watchd-orphan.sh 3.78
 test-janitor-wave-exclusion.sh 0.65
 test-land-target.sh 0.12
 test-launch-run-target.sh 1.98
@@ -113,8 +115,8 @@ test-pass-deadline.sh 15.65
 test-prepush.sh 1.28
 test-profile-check.sh 1.16
 test-profile-venv-path.sh 0.07
-test-promote-delta.sh 19.0
-test-promote-pass.sh 85.0
+test-promote-delta.sh 19.00
+test-promote-pass.sh 85.00
 test-promote.sh 16.53
 test-publish-live.sh 2.50
 test-quality-reading.sh 2.06
@@ -149,10 +151,12 @@ test-vendor-guard.sh 1.38
 test-view-domain-firewall.sh 0.37
 test-watch-cycle.sh 61.41
 test-watch-land.sh 10.13
+test-watch-orphan.sh 2.59
 test-watch-single-exec.sh 0.02
 test-watchd-driver-sha.sh 2.30
 test-watchd-lock.sh 4.15
 test-watchd-reload.sh 3.37
+test-watchd-supervisor.sh 2.68
 test-watchd-token-stop.sh 6.28
 test-watchtail.sh 4.17
 test-wave-lifecycle.sh 18.50
