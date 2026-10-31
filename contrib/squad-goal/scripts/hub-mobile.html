@@ -37,17 +37,44 @@ h2{font-size:var(--fs-md);margin:6px 0 10px}
 .card{display:block;width:100%;text-align:left;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:10px 12px;font:var(--fs-body) system-ui,sans-serif;min-height:44px}
 .card .cid{display:block;color:var(--mute);font-size:var(--fs-min);margin-bottom:2px}
 .empty{color:var(--mute);text-align:center;padding:24px 0}
-#sheet{position:fixed;left:0;right:0;bottom:0;max-height:82vh;overflow:auto;overscroll-behavior:contain;touch-action:pan-y;background:var(--panel);border-top:1px solid var(--line);border-radius:14px 14px 0 0;padding:10px 14px calc(12px + env(safe-area-inset-bottom));z-index:20}
+/* The ticket sheet takes about 60% of the screen (#919), so the card it names stays visible above it. */
+#sheet{position:fixed;left:0;right:0;bottom:0;height:60vh;max-height:60vh;overflow:auto;overscroll-behavior:contain;touch-action:pan-y;background:var(--panel);border-top:1px solid var(--line);border-radius:14px 14px 0 0;padding:10px 14px calc(68px + env(safe-area-inset-bottom));z-index:20}
 #sheet[hidden]{display:none}
 .grab{width:40px;height:4px;border-radius:2px;background:var(--line);margin:0 auto 10px}
 #sh-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px}
 #sh-head button,#sh-next{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:0 12px;font-size:var(--fs-body)}
-#sh-link{color:#5aa9ff;font-size:var(--fs-body)}
+#sh-pos{color:var(--mute);font-size:var(--fs-min)}
+#sh-link{color:#5aa9ff;font-size:var(--fs-body);min-height:44px;display:inline-flex;align-items:center}
+#sh-nav{display:flex;gap:6px;align-items:center;min-height:44px;margin:6px 0}
+#sh-nav button{min-height:44px;min-width:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;font-size:var(--fs-body)}
+#sh-nav button:disabled{opacity:.35}
+#sh-set{display:flex;gap:6px;overflow:auto;flex:1}
+#sh-set button{min-height:44px;min-width:44px;padding:0 8px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;font-size:var(--fs-min)}
+#sh-set button.on{border-color:#5aa9ff;color:#5aa9ff}
 #sh-title{font-size:var(--fs-body);margin:6px 0}
-#sh-labels{color:var(--mute);font-size:var(--fs-min);margin-bottom:8px}
-#sh-body{white-space:pre-wrap;color:var(--fg);font-size:var(--fs-body);margin:10px 0;overflow-wrap:anywhere}
-#sh-next{width:100%;margin-top:8px}
-#sh-next:disabled{opacity:.35}
+#sh-chips{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px}
+#sh-chips .chip{padding:2px 8px;border:1px solid var(--line);border-radius:9px;font-size:var(--fs-min);color:var(--mute)}
+#sh-chips .chip.spec{border-color:#5aa9ff;color:#5aa9ff}
+#sh-chips .chip.wave{color:var(--fg)}
+#sh-meta{margin:4px 0 10px}
+#sh-meta .mrow{display:flex;gap:8px;padding:4px 0;border-bottom:1px solid var(--line);font-size:var(--fs-min)}
+#sh-meta b{flex:0 0 84px;min-width:84px;color:var(--mute);font-weight:600}
+#sh-meta .shb{display:inline-flex;align-items:center;min-height:44px;padding:0 10px;color:#5aa9ff;text-decoration:none;border:1px solid var(--line);border-radius:6px}
+#sh-body{color:var(--fg);font-size:var(--fs-body);margin:10px 0;overflow-wrap:anywhere}
+#sh-body h1,#sh-body h2,#sh-body h3,#sh-body h4,#sh-body h5,#sh-body h6{font-size:var(--fs-body)}
+#sh-body img{max-width:100%}
+#sh-body pre{overflow:auto;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:8px}
+#sh-body code{background:var(--bg);border-radius:4px;padding:0 4px}
+#sh-body pre code{padding:0}
+#sh-body a{color:#5aa9ff}
+#sh-body table{display:block;overflow:auto}
+#sh-body blockquote{margin:8px 0;padding-left:10px;border-left:3px solid var(--line);color:var(--mute)}
+#sh-body input[type=checkbox]{width:16px;height:16px;vertical-align:-3px;margin:0 6px 0 0;accent-color:#4caf50;pointer-events:none}
+#sh-last{margin:10px 0}
+#sh-last h3{font-size:var(--fs-body);margin:12px 0 4px;padding-top:8px;border-top:1px solid var(--line)}
+#sh-last .mut{color:var(--mute);font-size:var(--fs-min);margin:0 0 6px}
+#sh-todo{width:100%;min-height:44px;margin-top:8px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;font-size:var(--fs-body)}
+#sh-todo[hidden]{display:none}
 nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:var(--panel);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom)}
 nav button{flex:1;min-height:56px;background:none;border:0;color:var(--mute);font:var(--fs-min) system-ui;padding:6px 0}
 nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 #5aa9ff}
@@ -188,11 +215,14 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 #5aa9ff}
 </main>
 <div id="sheet" data-role="sheet" role="dialog" aria-labelledby="sh-title" hidden>
 <div class="grab"></div>
-<div id="sh-head"><a id="sh-link" target="_blank" rel="noopener">Open on GitHub</a><button id="sh-close" type="button">Close</button></div>
+<div id="sh-head"><span id="sh-pos"></span><a id="sh-link" target="_blank" rel="noopener">Open on GitHub</a><button id="sh-close" type="button">Close</button></div>
+<div id="sh-nav"><button id="sh-prev" type="button" aria-label="Previous card">&#8249;</button><span id="sh-set"></span><button id="sh-next" type="button" aria-label="Next card">&#8250;</button></div>
 <h2 id="sh-title"></h2>
-<div id="sh-labels"></div>
+<div id="sh-chips"></div>
+<div id="sh-meta"></div>
 <div id="sh-body"></div>
-<button id="sh-next" type="button">Next card</button>
+<div id="sh-last"></div>
+<button id="sh-todo" type="button" hidden>&#8594; Todo</button>
 </div>
 <section id="termview" hidden>
 <div id="termview-head"><button id="termview-back" type="button">Back</button><span id="termview-name"></span></div>
@@ -323,6 +353,30 @@ function renderBoard() {
   empty.textContent = g ? "No card in this column with these filters." : "Loading the board.";
   $("cards").replaceChildren(...(shown.length ? shown.map(cardButton) : [empty]));
 }
+// The sheet draws the card data the board read already holds (#919): the row carries the blockers, the cards it blocks,
+// the run that holds it and the pull request that closes it, so the view holds no rule of its own (ADR-0137).
+const escHTML = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const chipOf = (n, r) => `<a class="shb" data-n="${escHTML(n)}" data-r="${escHTML(r || "")}" title="open #${escHTML(n)} in this sheet">#${escHTML(n)}</a>`;
+const rowHTML = (label, html) => '<div class="mrow"><b>' + label + '</b><span>' + html + "</span></div>";
+const ROWS = ["Column", "Labels", "Blocked by", "Blocks", "Runs", "PR · CI", "Opened"];
+function sheetChips(x) {
+  const wave = (x.l || []).map(l => (String(l).match(/^wave:(\d+)$/) || [])[1]).filter(Boolean)[0];
+  return (x.sp ? '<span class="chip spec">SPEC</span>' : "") + (wave ? '<span class="chip wave">W' + escHTML(wave) + "</span>" : "");
+}
+function sheetMeta(x, d) {
+  const prs = (x.prf || []).map(p => `<a class="shb" target="_blank" rel="noopener" href="https://github.com/${escHTML(p.r || x.r || "")}/pull/${escHTML(p.n)}">#${escHTML(p.n)}${p.ci ? " · CI " + escHTML(p.ci) : ""}</a>`);
+  const opened = d ? (d.by ? "by " + escHTML(d.by) : "unknown") + (d.created ? " on " + escHTML(String(d.created).slice(0, 10)) : "") : "…";
+  const v = {
+    "Column": escHTML(rowColumn(x.n) || ""),
+    "Labels": escHTML((x.l || []).join(" · ") || "none"),
+    "Blocked by": (x.b || []).map(n => chipOf(n, x.r)).join(" ") || "none",
+    "Blocks": (x.bl || []).map(n => chipOf(n, x.r)).join(" ") || "none",
+    "Runs": x.hr ? `<span class="shb">${escHTML(x.hr)}</span>` : "none",
+    "PR · CI": prs.join(" ") || "none",
+    "Opened": opened,
+  };
+  return ROWS.map(l => rowHTML(l, v[l])).join("");
+}
 function setLink(url) {
   const ok = /^https:\/\/github\.com\//.test(url || "");
   $("sh-link").hidden = !ok;
@@ -332,27 +386,60 @@ async function loadIssue(x, key) {
   try {
     const d = await call("/api/issue?n=" + x.n + (x.r ? "&r=" + encodeURIComponent(x.r) : ""));
     if (key !== issueKey) return;
-    if (d.err) { $("sh-body").textContent = d.err; return; }
+    if (d.err) { $("sh-meta").innerHTML = sheetMeta(x, null); $("sh-body").textContent = d.err; return; }
     setLink(d.url);
     $("sh-title").textContent = "#" + d.n + " " + d.title;
-    $("sh-labels").textContent = (d.labels || []).join(" · ");
-    $("sh-body").textContent = d.body || "No description.";
+    $("sh-chips").innerHTML = sheetChips(x);
+    $("sh-meta").innerHTML = sheetMeta(x, d);
+    // GitHub's rendered body, passed through the hub's allow-list (#919): no frame, no script, checkboxes and code keep
+    // their look. A failed rendered read leaves the plain body the same read carried.
+    if (d.html) $("sh-body").innerHTML = d.html; else $("sh-body").textContent = d.body || "No description.";
+    $("sh-last").innerHTML = d.last
+      ? `<h3>Last comment</h3><p class="mut">${escHTML(d.last.by || "")} · ${escHTML(String(d.last.at || "").slice(0, 16).replace("T", " "))}</p>${d.last.html}`
+      : "";
   } catch (e) { if (key === issueKey) $("sh-body").textContent = e.message; }
+}
+// A card of the selection is scrolled above the sheet (#919): the sheet covers 60% of the screen, so the card it names
+// stays in sight above it.
+function scrollCardIntoView(x) {
+  const el = $("cards").querySelector('[data-role="card"][data-n="' + x.n + '"]');
+  if (el) el.scrollIntoView({ block: "start" });
+}
+function openCard(n) {
+  // A blocker link opens that ticket in the same sheet (#919), never a new tab: the card is found in its own column, and
+  // the board is drawn there before the sheet reads it.
+  const cols = (board && board.groups) || [];
+  for (let ci = 0; ci < cols.length; ci++) {
+    const idx = columnCards(cols[ci]).findIndex(r => r.n === n);
+    if (idx >= 0) { view = { ...view, col: ci, card: idx, sheet: true }; renderBoard(); renderSheet(); return; }
+  }
+  $("bmsg").textContent = "#" + n + " is not on the board with these filters";
 }
 function renderSheet() {
   const x = shown[view.card];
   const open = view.sheet && !!x;
   $("sheet").hidden = !open;
-  if (!open) return;
+  if (!open) { issueKey = ""; return; }
   const key = (x.r || "") + "#" + x.n;
+  // The selection is the cards this column shows (#919): the position, the previous and next buttons and the number
+  // chips all read it, and a closed sheet clears the read key, so opening it again reads the issue again.
+  $("sh-pos").textContent = (view.card + 1) + " of " + shown.length;
+  $("sh-prev").disabled = view.card <= 0;
   $("sh-next").disabled = view.card >= shown.length - 1;
+  $("sh-set").innerHTML = shown.map((c, i) =>
+    `<button type="button" data-i="${i}" class="${i === view.card ? "on" : ""}" title="card ${i + 1} of ${shown.length}">#${escHTML(c.n)}</button>`).join("");
+  $("sh-todo").hidden = !x.pm;
+  $("sh-todo").textContent = "→ " + (x.pmt || "Todo");
   if (key === issueKey) return;
   issueKey = key;
   $("sheet").scrollTop = 0;
   $("sh-title").textContent = "#" + x.n + " " + x.t;
-  $("sh-labels").textContent = (x.l || []).join(" · ");
+  $("sh-chips").innerHTML = sheetChips(x);
+  $("sh-meta").innerHTML = sheetMeta(x, null);
   $("sh-body").textContent = "Loading the issue.";
+  $("sh-last").innerHTML = "";
   setLink(x.r ? "https://github.com/" + x.r + "/issues/" + x.n : "");
+  scrollCardIntoView(x);
   loadIssue(x, key);
 }
 function renderFilters() {
@@ -398,7 +485,31 @@ $("lfl").onchange = e => {
 $("col-prev").onclick = () => step({ act: "column", step: -1 });
 $("col-next").onclick = () => step({ act: "column", step: 1 });
 $("sh-next").onclick = () => step({ act: "card", step: 1 });
+$("sh-prev").onclick = () => step({ act: "card", step: -1 });
 $("sh-close").onclick = () => step({ act: "close" });
+$("sh-set").onclick = e => {
+  const b = e.target.closest("button[data-i]");
+  if (b) { view = { ...view, card: +b.dataset.i, sheet: true }; renderSheet(); }
+};
+// A blocker or the pull request that closes the card opens the ticket in the same sheet (#919); "Open on GitHub" is the
+// only link that leaves the hub.
+$("sh-meta").onclick = e => {
+  const a = e.target.closest("a.shb[data-n]");
+  if (a) { e.preventDefault(); openCard(+a.dataset.n); }
+};
+// → Todo starts the card's own move, the one write the page already makes (#829); it is drawn only for a card the hub
+// marks promotable (#919, ADR-0142).
+$("sh-todo").onclick = () => {
+  const x = shown[view.card];
+  const el = x && $("cards").querySelector('[data-role="card"][data-n="' + x.n + '"]');
+  if (x && x.pm && el) stageMove(x, el);
+};
+addEventListener("keydown", e => {
+  if (e.key === "Escape") { if (view.sheet) step({ act: "close" }); return; }
+  if (!view.sheet) return;
+  if (e.key === "ArrowLeft" || e.key === "k") step({ act: "card", step: -1 });
+  else if (e.key === "ArrowRight" || e.key === "j") step({ act: "card", step: 1 });
+});
 // The owner's move from the phone (#829): a drag right past the threshold stages a move to the column the row names
 // (`x.pmt`); the Undo delays the write, and the app going hidden or the profile changing cancels it, so a move the owner
 // walked away from is never written later. The card never leaves its column here: only the hub's read moves it
