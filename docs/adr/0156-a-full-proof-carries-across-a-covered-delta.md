@@ -20,6 +20,9 @@ The full proof stays the base of every promotion. A cheaper proof must never wea
 6. **The delta record names what it proved.** `$SG_STATE/gate-status-delta` holds `<epoch> TAB delta TAB <pass|fail> TAB <P> TAB <T> TAB <sha256 of the changed-file list>`. The record is written by a temp file and a rename ([ADR-0030](0030-atomic-writes.md)). A refusal runs nothing and writes no pass record.
 7. **The promotion checks the record again.** `promote-stg.sh` accepts a delta only when it says pass, its T is the dev tip, its P carries a full pass, P is an ancestor of the tip, and the changed-file list it proved hashes to the same set as P..T now.
 8. **A delta expires with its tip.** A commit on top makes the record stale, and the promotion refuses it, as it refuses a stale full proof.
+8a. **The promotion pass runs the delta first.** `promote-pass.sh` tries `delta-pass.sh` before its own full suite, and falls through
+   to the full suite on every refusal and on a held `full-proof-delta` lock: the carry is an optimization on the promotion path,
+   never a weaker gate, and no other step is allowed to skip the full suite on its own.
 9. **Each P carries once.** A P that a delta has already carried refuses a second carry.
 10. **The delta does not replace the heavy or serial coverage.** The nightly ([ADR-0153](0153-the-full-suite-runs-nightly-in-both-modes.md)) and the promotion proof remain the instruments of the heavy and serial coverage. A delta answers only for the delta it names.
 

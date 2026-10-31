@@ -4,6 +4,8 @@
 # machine-wide /tmp/sg-state, a different file from the profile's state directory (exit 2).
 # Debounce: no suite for a tip already proved or refused ($SG_STATE/promote-pass.tips, last 50), nor while the latest landing in
 # $SG_STATE/landed.tsv is younger than SG_PROMOTE_QUIET_SECONDS (default 900): a burst of landings earns one proof.
+# A full pass carries across a covered delta (ADR-0156): `delta-pass.sh` runs first, and any refusal or a held delta lock falls
+# through to the full suite, so a tip that moved by a covered path promotes in minutes and never by a weaker proof.
 # One hold of the proof's own lock, in try mode (serial.sh SERIAL_TRY, name `full-proof`): a held lock skips the tick, never
 # queues. The proof never takes the `gate` lock, which the landing gate, the wave entry and the promotion all wait on, so a proof
 # in flight holds no landing up and a landing holds no proof up (ADR-0145 rule 3, as the nightly of ADR-0153 does). Inside the
