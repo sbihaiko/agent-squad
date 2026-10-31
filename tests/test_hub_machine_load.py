@@ -277,8 +277,9 @@ def test_the_bar_is_a_row_of_the_windows_column_so_nothing_pushes_it_off(hub, pg
 
 
 def test_the_docked_board_stays_inside_the_panes_so_the_bar_keeps_the_full_width(hub, pg):
-    dock = _css(hub, "body.dockb #win")
-    assert "grid-template-columns:300px 1fr" in dock and "grid-template-rows:minmax(0,1fr) auto" in dock
+    # Re-anchored to the owner-approved mock (#889): the board is the Board tab's pane, inside the content column of the window row; the bar is still below both
+    assert "win" in pg.parents["content"] and "content" in pg.parents["board"]
+    assert "display:flex" in _css(hub, "#win")
 
 
 def test_one_element_carries_the_reading_however_often_it_is_repainted(hub, pg):
@@ -319,8 +320,9 @@ def _board_slice(hub):
     return hub.PAGE[a:b]
 
 
-def test_the_grip_has_nothing_to_resize_while_the_board_is_maximized(hub):
-    assert "display:none" in _css(hub, "body.dockb.max #grip")
+def test_the_board_has_no_grip_its_height_is_the_pages(hub):
+    """Re-anchored to the owner-approved mock (#889): the board is a tab pane, so there is no dock height to drag."""
+    assert "id=grip" not in hub.PAGE and "#grip" not in hub.PAGE
 
 
 _NODE_PRE = r"""
@@ -648,7 +650,7 @@ def test_the_gate_and_the_landing_stay_on_the_line_beside_the_burn(hub):
 def test_the_left_pane_carries_three_accordions_and_no_worktree_one(hub):
     """The removal is the rule: a fourth accordion named here is a defect, and one that came back would be read by name."""
     left = [i for i in re.findall(r"<details id=(\w+)", hub.PAGE) if i in ("plans", "mdl", "stats", "wts")]
-    assert left == ["plans", "mdl", "stats"]
+    assert left == ["plans", "stats", "mdl"]   # re-anchored (#889): the models editor moved to the Settings tab, after the sidebar's two cards
     for gone in ("id=wts", "id=wtsr", "id=wtb", "id=wtcl", "id=wtmsg", "wtDraw", "wtClean", "wtSay", "wtBusy"):
         assert gone not in hub.PAGE, gone
 

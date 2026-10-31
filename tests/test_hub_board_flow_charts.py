@@ -75,10 +75,13 @@ def _flow_block(hub):
 
 
 def test_tasks_header_has_flow_and_lead_time_buttons_and_keeps_its_controls(hub):
+    # Re-anchored to the owner-approved mock (#889): Flow and Lead time sit on the Flow charts tab, not in the board's toolbar.
+    tabs = hub.PAGE[hub.PAGE.index("<div class=rkt id=flowtabs>"):hub.PAGE.index("<div id=main>")]
+    assert re.search(r"<button id=bflow[^>]*>Flow</button>", tabs)
+    assert re.search(r"<button id=blead[^>]*>Lead time</button>", tabs)
     head = hub.PAGE[hub.PAGE.index("<div id=bhead>"):hub.PAGE.index("<div id=bcases>", hub.PAGE.index("<div id=bhead>"))]
-    assert re.search(r"<button id=bflow[^>]*>Flow</button>", head)
-    assert re.search(r"<button id=blead[^>]*>Lead time</button>", head)
-    assert "<b>TASKS <span id=bt class=m></span></b>" in head
+    assert "<span id=bt class=m></span>" in head
+    assert "id=bflow" not in head and "id=blead" not in head
     assert '<details id=fw' in head and '<details id=fs' in head, "the header lost the filter bar"
     assert 'id=bsp' not in head and 'id=bz' not in head and 'id=bx' not in head, "a removed control is still in the header"
 

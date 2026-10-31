@@ -51,18 +51,17 @@ def _groups(hub):
 # --- the board pane's title ---
 
 
-def test_board_header_docked_reads_tasks(hub):
-    """The `<b>` of `#bhead` — what the docked header prints — reads TASKS, and it is the only title there."""
+def test_board_header_reads_no_title_and_the_tab_names_the_pane(hub):
+    """Re-anchored to the owner-approved mock (#889): the board's toolbar carries no `TASKS` title; the `Board` tab names the pane."""
     head = _bhead(hub)
-    bs = re.findall(r"<b>(.*?)</b>", head, re.S)
-    assert len(bs) == 1, "the board header carries more than one bold element: the title is no longer one label"
-    assert re.sub(r"<[^>]*>", "", bs[0]).strip() == "TASKS"
+    assert "<b>" not in head, "the board toolbar carries a bold title again"
+    tabs = hub.PAGE[hub.PAGE.index("<div class=tabs"):hub.PAGE.index("</div>", hub.PAGE.index("<div class=tabs"))]
+    assert [re.sub(r"<[^>]*>", "", t) for t in re.findall(r"<button[^>]*>.*?</button>", tabs)] == ["Board", "Flow charts", "History", "Settings"]
 
 
-def test_board_header_collapsed_reads_the_same_tasks(hub):
-    """The collapsed header draws that same `<b>`: `#board.off` hides it and a docked collapse reveals it again."""
-    assert "display:none" in _css(hub, "#board.off #bhead b")
-    assert "display:inline" in _css(hub, "body.dockb #board.off #bhead b")
+def test_board_has_no_collapsed_state(hub):
+    """The docked board's collapse left with the tab layout (#889): no `#board.off` header rule remains."""
+    assert "#board.off #bhead b" not in hub.PAGE
 
 
 def test_board_header_keeps_its_count_and_its_controls(hub):

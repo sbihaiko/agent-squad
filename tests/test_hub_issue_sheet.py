@@ -188,7 +188,7 @@ def test_the_sheet_is_a_side_panel_that_pushes_the_board(hub):
     page = hub[0].PAGE
     assert "#tk{position:fixed;top:0;right:0;bottom:0;width:420px" in page, "the sheet is a side panel on the right"
     assert "body.tkopen #win{margin-right:420px}" in page, "the sheet pushes the page instead of covering it"
-    assert "body.tkopen #board{width:300px}" in page, "the board narrows while the sheet is open"
+    assert "#content{flex:1;min-width:0;overflow:auto}" in page, "the content pane takes what the sheet leaves (#889: the board is a full-width pane, so the push narrows it)"
     assert "scrollIntoView" in page, "the selected card is scrolled into view"
 
 

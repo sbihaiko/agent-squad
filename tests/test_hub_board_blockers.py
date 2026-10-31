@@ -85,7 +85,7 @@ def test_blocker_line_stays_inside_a_300px_card(hub):
     rule = blk.group(0)
     assert "overflow:hidden" in rule and "text-overflow:ellipsis" in rule
     assert "white-space:nowrap" in rule
-    assert "#side{width:300px" in css
+    assert "#side{width:280px" in css   # re-anchored to the owner-approved mock (#889): the sidebar is 280 px
 
 
 def _css(hub):

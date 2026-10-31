@@ -47,7 +47,7 @@ def _node(script, *files):
 # ---- the removed controls are gone from the page ----
 
 @pytest.mark.parametrize("marker", ['id=lf>', 'id=lf ', 'id=bsp', 'id=bz', 'id=bx', 'id="pip"', 'id=pip', 'id=pipf',
-                                    'id=lfl', 'id="pipf"', 'Specs: all', 'maximize the board'])
+                                    'id=lfl', 'id="pipf"', 'maximize the board'])   # 'Specs: all' left the list (#889): the mock's filter summaries read `Waves: all` and `Specs: all`
 def test_the_removed_controls_are_not_on_the_page(hub, marker):
     assert marker not in hub.PAGE, f"{marker!r} is still on the page"
 
@@ -57,6 +57,7 @@ def test_the_filter_bar_has_a_waves_and_a_specs_multi_select(hub):
     assert '<details id=fw' in page and "<summary" in page
     assert '<details id=fs' in page
     assert 'bo.fw' in page and 'bo.fs' in page, "the selections are not kept in bo"
+    assert "<summary>Waves: all</summary>" in page and "<summary>Specs: all</summary>" in page, "the mock's filter summaries (#889)"
 
 
 def test_a_saved_state_from_a_removed_control_is_dropped_on_load(hub):
