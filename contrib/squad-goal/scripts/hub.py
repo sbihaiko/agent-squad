@@ -4071,6 +4071,7 @@ pollStats();setInterval(pollStats,30000);
 poll();setInterval(poll,3000);
 loadPoll();setInterval(loadPoll,LOAD_MS);   // the window owns the reading: one timer and one /api/load per tick, whatever else the page renders
 const bo=ls.bo||{},saveB=()=>{ls.bo=bo;localStorage.hub=JSON.stringify({...ls,pins:[...pins],q,per,bo})};
+if(!["spec","wave","none"].includes(bo.lmode))bo.lmode="spec";   // an older page saved a mode no option names, and the select drew blank (#978)
 bo.dock="bottom";   // the board always docks at the bottom
 dropRemoved(bo);   // a saved state from a control the board no longer has is dropped (#899)
 const sizeBoard=()=>{$("#board").style.height=""};   // the board is one pane of the Board tab: its height is the page's, never a dragged one (#889)
