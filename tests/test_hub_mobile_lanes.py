@@ -49,7 +49,7 @@ TODO_CARDS = [BOARD[1]["items"][i] for i in range(4)]
 @pytest.mark.node_bound
 def test_a_column_groups_its_cards_by_spec_in_spec_number_order():
     out = lanes(TODO_CARDS)
-    assert [l["id"] for l in out["lanes"]] == ["10", "20", "none"]
+    assert [ln["id"] for ln in out["lanes"]] == ["10", "20", "none"]
     assert [c["n"] for c in out["lanes"][0]["cards"]] == [10, 11]
 
 
@@ -84,7 +84,7 @@ def test_the_progress_counts_the_spec_children_on_the_whole_board_not_the_column
 def test_a_spec_card_with_no_child_in_the_column_still_draws_its_lane():
     cards = [BOARD[1]["items"][0]]
     out = lanes(cards)
-    assert [l["id"] for l in out["lanes"]] == ["10"] and out["flat"][0]["n"] == 10
+    assert [ln["id"] for ln in out["lanes"]] == ["10"] and out["flat"][0]["n"] == 10
 
 
 @pytest.mark.node_bound
@@ -105,7 +105,7 @@ def test_a_lane_whose_spec_is_done_starts_collapsed_and_its_cards_leave_the_flat
 @pytest.mark.node_bound
 def test_a_saved_collapse_wins_over_the_default_and_the_flat_list_follows_it():
     out = lanes(TODO_CARDS, lc={"10": True, "none": False})
-    by_id = {l["id"]: l for l in out["lanes"]}
+    by_id = {ln["id"]: ln for ln in out["lanes"]}
     assert by_id["10"]["collapsed"] is True and by_id["none"]["collapsed"] is False
     assert [c["n"] for c in out["flat"]] == [14, 13]
 
