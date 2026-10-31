@@ -124,7 +124,8 @@ def _phone_inner(css):
 
 def _control_classes(html):
     names = set()
-    for attrs in re.findall(r"<(?:%s)\b([^>]*)>" % "|".join(CONTROL_TAGS), html):
+    tags = "|".join(CONTROL_TAGS)
+    for attrs in re.findall(rf"<(?:{tags})\b([^>]*)>", html):
         m = re.search(r"\bclass=(?:\"([^\"]*)\"|'([^']*)'|([\w-]+))", attrs)
         if m:
             names.update(next(g for g in m.groups() if g).split())
