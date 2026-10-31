@@ -2,6 +2,8 @@
 highlights both, one model keeps its colour when the set changes, and a quota bar under its limit is neutral."""
 import re
 
+import pytest
+
 from tests.test_hub_cost_usage_panel import SRC, _run_js
 
 ROW = re.compile(
@@ -62,7 +64,16 @@ def test_donut_highlight_links_slice_and_row_on_hover_or_focus():
     assert re.search(r"\.pie \[data-k\]\.hl\{", SRC), "the highlighted slice and row need one rule"
 
 
-def test_quota_bar_under_its_limit_is_neutral_not_green():
-    rule = re.search(r"\.sub \.fl\.lv-ok\{background:([^}]*)\}", SRC)
-    assert rule, "the under-limit quota bar rule is missing"
-    assert not re.search(r"var\(--ok\)|#3ecf8e|var\(--warn\)|var\(--err\)", rule.group(1)), rule.group(1)
+def test_a_quota_bar_fill_runs_from_green_to_red_and_its_text_stays_neutral():
+    """The owner wants colour on the consumption bar only: green when empty, red when full (#922 re-anchored)."""
+    import shutil
+    import subprocess
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is required")
+    line = next(ln for ln in SRC.splitlines() if ln.startswith("const qcol="))
+    src = line + "\nconsole.log([0,50,100,140,-5].map(qcol).join('|'));"
+    out = subprocess.run([node, "-"], input=src, capture_output=True, text=True, timeout=30).stdout.strip().split("|")
+    assert out == ["hsl(120 65% 42%)", "hsl(60 65% 42%)", "hsl(0 65% 42%)", "hsl(0 65% 42%)", "hsl(120 65% 42%)"], out
+    assert 'style="width:${Math.min(pct,100)}%;background:${qcol(pct)}"' in SRC, "the bar fill does not take the scale"
+    assert not re.search(r"\.sub \.ql[^{]*\{[^}]*color:var\(--(ok|warn|err)\)", SRC), "the bar text took a colour"
