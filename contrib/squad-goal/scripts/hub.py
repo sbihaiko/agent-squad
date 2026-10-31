@@ -2175,6 +2175,7 @@ def refresh_board():
             except OSError: pass
         else: quick = False
 ORDER = [column["name"] for column in BOARD_COLUMNS]
+FLOW_BANDS = [*ORDER, _cfd.FROZEN, _cfd.NO_COLUMN]   # the chart's bands: the columns in their order, then the cards frozen and the cards in no column (#896)
 def _marker_mtime(kind, pr, sha9):
     """mtime of a loop marker in auto/ (`launched-<pr>-<sha9>`, `rereview-<pr>-<sha9>`), i.e. when the loop acted on this head."""
     try: return (STATE / "auto" / f"{kind}-{pr}-{sha9}").stat().st_mtime
@@ -2733,13 +2734,25 @@ def drop_moves(ids):
             return None
         return set(moves) - set(left)
 def _band_extents(bands):
-    """Each column's band over one day, stacked from the last column of ORDER at the foot: lower is the cards in the
-    columns after it, upper adds its own."""
+    """Each band over one day, stacked from the last band of FLOW_BANDS at the foot: lower is the cards in the bands
+    after it, upper adds its own."""
     extents, run = {}, 0
-    for name in reversed(ORDER):
+    for name in reversed(FLOW_BANDS):
         extents[name] = (run, run + bands[name])
         run += bands[name]
     return extents
+
+
+def _y_ticks(top):
+    """The numbered ticks of the y axis: from zero to the first step of 1, 2 or 5 times a power of ten that covers the
+    tallest stack in at most four steps."""
+    step = next(s for e in range(7) for s in (10 ** e, 2 * 10 ** e, 5 * 10 ** e) if -(-top // s) <= 4)
+    return [k * step for k in range(-(-top // step) + 1)]
+
+
+def _x_ticks(days):
+    """Up to five date ticks, evenly spaced over the history's calendar days."""
+    return [{"i": i, "day": days[i]} for i in sorted({round(k * (len(days) - 1) / 4) for k in range(5)})] if days else []
 
 
 def flow_charts():
@@ -2748,7 +2761,7 @@ def flow_charts():
     cfd = _cfd.cfd(_flow.samples(path), ORDER, skips=_flow.skips(path))
     extents = {p["day"]: _band_extents(p["bands"]) for p in cfd["points"]}
     days = sorted([*extents, *cfd["gaps"]])   # one entry per calendar day: a day with no sample carries no value (#894)
-    ymax = max((e[ORDER[0]][1] for e in extents.values()), default=0)
+    yticks = _y_ticks(max((e[FLOW_BANDS[0]][1] for e in extents.values()), default=0))
     def values(name, k): return [extents[d][name][k] if d in extents else None for d in days]
     rows = [{"n": i["n"], "column": _columns_module.view_column(i["st"], str(i["s"]).lower() == "closed", i.get("l"), i.get("cr"))[0],
              "reason": _leadtime.NOT_DELIVERED if _columns_module.not_planned(i.get("cr")) else None,   # the chart's own word (#921)
@@ -2756,8 +2769,8 @@ def flow_charts():
     lead = _leadtime.lead_time(rows)
     return {
         "cfd": {"start": dt.datetime.fromtimestamp(cfd["start"], dt.UTC).date().isoformat() if cfd["start"] is not None else None,
-                "days": days, "ymax": ymax,
-                "bands": [{"name": n, "lower": values(n, 0), "upper": values(n, 1)} for n in ORDER] if extents else []},
+                "days": days, "ymax": yticks[-1], "yticks": yticks, "xticks": _x_ticks(days),
+                "bands": [{"name": n, "lower": values(n, 0), "upper": values(n, 1)} for n in FLOW_BANDS] if extents else []},
         "lead": {"measure": lead["measure"], "window": lead["window"],
                  "excluded": [{"reason": r, "count": c} for r, c in lead["excluded"].items()],
                  "excluded_total": sum(lead["excluded"].values()), "series": lead["series"], "summary": lead["summary"]},
@@ -3879,6 +3892,12 @@ const flowW=800,flowH=340,flowP=36;
 const flowX=(i,n)=>n<2?flowP:flowP+i*(flowW-2*flowP)/(n-1);
 const flowY=(v,max)=>max?flowH-flowP-v*(flowH-2*flowP)/max:flowH-flowP;
 const flowAxis=(max,unit)=>`<line x1=${flowP} y1=${flowH-flowP} x2=${flowW-flowP} y2=${flowH-flowP} stroke=var(--line)></line><text x=${flowP-6} y=${flowY(max,max)+4} text-anchor=end fill=var(--mute) style="font-size:var(--fs-min)">${max} ${unit}</text>`;
+const cfdAxis=c=>{const n=c.days.length,base=flowH-flowP;   // every number and date arrives from the hub; the page places a mark and a label for each (#896)
+  const ys=c.yticks.map(v=>{const y=flowY(v,c.ymax);return `<line x1=${flowP-4} y1=${y} x2=${flowP} y2=${y} stroke=var(--mute)></line><text x=${flowP-7} y=${y+4} text-anchor=end fill=var(--mute) style="font-size:var(--fs-min)">${v}</text>`}).join("");
+  const xs=c.xticks.map(t=>{const x=flowX(t.i,n);return `<line x1=${x} y1=${base} x2=${x} y2=${base+4} stroke=var(--mute)></line><text x=${x} y=${base+17} text-anchor=middle fill=var(--mute) style="font-size:var(--fs-min)">${esc(t.day)}</text>`}).join("");
+  return `<line x1=${flowP} y1=${flowP-10} x2=${flowP} y2=${base} stroke=var(--line)></line><line x1=${flowP} y1=${base} x2=${flowW-flowP} y2=${base} stroke=var(--line)></line>${ys}${xs}`+
+    `<text x=${flowP-7} y=${flowP-16} text-anchor=end fill=var(--mute) style="font-size:var(--fs-min)">cards</text>`+
+    `<text x=${flowW-flowP} y=${base+31} text-anchor=end fill=var(--mute) style="font-size:var(--fs-min)">day (UTC)</text>`;};
 const flowCFD=c=>{if(!c.days.length)return "<p class=fnote>the flow history has no sample yet</p>";
   const n=c.days.length;
   const runs=b=>{const out=[];let cur=null;c.days.forEach((_,i)=>{if(b.upper[i]===null){cur=null;return}if(!cur){cur=[];out.push(cur)}cur.push(i)});return out};
@@ -3887,7 +3906,7 @@ const flowCFD=c=>{if(!c.days.length)return "<p class=fnote>the flow history has 
     const low=[...run].reverse().flatMap(i=>one?[[flowX(i,n)+h,b.lower[i]],[flowX(i,n)-h,b.lower[i]]]:[[flowX(i,n),b.lower[i]]]);
     return [...up,...low].map(([x,v])=>`${x},${flowY(v,c.ymax)}`).join(" ");};
   const polys=b=>runs(b).map(run=>`<polygon points="${band(b,run)}" fill="${COLORS[b.name]||"#888"}" fill-opacity=".85"><title>${esc(b.name)}</title></polygon>`).join("");
-  return `<svg viewBox="0 0 ${flowW} ${flowH}">${c.bands.map(polys).join("")}${flowAxis(c.ymax,"cards")}</svg>`+
+  return `<svg viewBox="0 0 ${flowW} ${flowH}">${c.bands.map(polys).join("")}${cfdAxis(c)}</svg>`+
     `<p class=fnote>history from ${esc(c.start)} UTC</p><p>${c.bands.map(b=>`<span class=flg><i style="background:${COLORS[b.name]||"#888"}"></i>${esc(b.name)}</span>`).join("")}</p>`;};
 const EXREASON={not_planned:"closed as not planned",abandoned:"closed as abandoned",open:"still open",no_opened:"no opened date"};   // the cards the chart leaves out, in words (#921)
 const flowLead=l=>{const S=l.summary,ex=l.excluded.map(e=>`${e.count} ${esc(EXREASON[e.reason]||e.reason)}`).join(", ");
