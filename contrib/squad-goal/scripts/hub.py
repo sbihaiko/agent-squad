@@ -3337,7 +3337,7 @@ body.tkopen #win{margin-right:420px}body.tkopen #board{width:300px}
 #tkb pre{white-space:pre-wrap;overflow-wrap:anywhere;font:var(--fs-min)/1.45 ui-monospace,Menlo,monospace;background:#12161c;border:1px solid var(--line);border-radius:6px;padding:8px 10px;margin:6px 0}
 #tkb h3{font-size:var(--fs-min);color:var(--mute);margin:14px 0 4px}#tkb .cm{border-left:3px solid var(--acc);padding-left:8px;margin:8px 0}
 #tkb .bar button{min-width:28px}#tkb .bar button:disabled{opacity:.35;cursor:default}#tkb .bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}#tkb a.gh{color:var(--acc);font-weight:700}
-#bbody .it{cursor:pointer}#bbody .it.hit{box-shadow:0 0 0 2px var(--warn)}   /* the cards the sheet's Highlight related marks (#919) */
+#bbody .it{cursor:pointer}#bbody .it.hit{box-shadow:0 0 0 2px var(--warn)}#bbody .it.hl{box-shadow:0 0 0 2px var(--acc)}#bbody .it.dim{opacity:.35}#list .r.hlr{outline:2px solid var(--acc);outline-offset:-2px}.hlrel{color:var(--acc);font-size:var(--fs-min);margin-left:6px}.hlrel[hidden]{display:none}   /* the cards the sheet's Highlight related marks (#919) */
 #tkb h2{font:600 var(--fs-md)/1.35 -apple-system,system-ui,sans-serif;margin:4px 0 8px}
 #tkb .md{font:var(--fs-body)/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;color:#d8dde6;overflow-wrap:anywhere}
 #tkb .md>:first-child{margin-top:0}#tkb .md p{margin:.6em 0}#tkb .md h2,#tkb .md h3,#tkb .md h4,#tkb .md h5{font-weight:600;margin:1.3em 0 .4em;line-height:1.3;color:#eef1f6}
@@ -3438,7 +3438,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 </div>
 <div id=main></div>
 <div id=tk role=dialog aria-label=Ticket><header><span id=tkchips></span><span class=sp></span><span id=tknav></span><button id=tkx aria-label=Close>✕</button></header><div id=tkset></div><div id=tkb></div><footer><a class=btn id=tkgh target=_blank rel=noopener>Open on GitHub ↗</a><button id=tktodo>→ Todo</button><button id=tkrel>Highlight related</button></footer></div>
-<div id=board><div id=grip title="drag to resize"></div><div id=bhead><span id=btitle><b>TASKS <span id=bt class=m></span></b> <span id=bcharts><button id=bflow title="the development flow: the cards in each column over time, from the flow history (SPEC 111)">Flow</button> <button id=blead title="the lead time of the closed cards, opened to closed (SPEC 111)">Lead time</button></span></span><span><select id=lmode title="swimlanes: one lane per spec (Spec), per wave (Wave), or no lanes, today's board (None)"><option value=spec>Spec</option><option value=wave>Wave</option><option value=none>None</option></select> <button id=lcall title="collapse every swimlane">Collapse all</button> <button id=lexp title="expand every swimlane">Expand all</button> <label title="hide the swimlanes whose every ticket is closed"><input type=checkbox id=lhd> Hide done lanes</label> <span id=lhc></span> <details id=fw class=fsel><summary>Waves</summary><div class=fpop id=fwl></div></details> <details id=fs class=fsel><summary>Specs</summary><div class=fpop id=fsl></div></details></span></div><div id=bcases></div><div id=bbody></div><div id=flowov hidden><div id=flowh><b id=flowt></b><button id=flowx title="close the diagram">&#215;</button></div><div id=flowb></div></div></div>
+<div id=board><div id=grip title="drag to resize"></div><div id=bhead><span id=btitle><b>TASKS <span id=bt class=m></span></b> <span id=hlrel class=hlrel hidden></span> <span id=bcharts><button id=bflow title="the development flow: the cards in each column over time, from the flow history (SPEC 111)">Flow</button> <button id=blead title="the lead time of the closed cards, opened to closed (SPEC 111)">Lead time</button></span></span><span><select id=lmode title="swimlanes: one lane per spec (Spec), per wave (Wave), or no lanes, today's board (None)"><option value=spec>Spec</option><option value=wave>Wave</option><option value=none>None</option></select> <button id=lcall title="collapse every swimlane">Collapse all</button> <button id=lexp title="expand every swimlane">Expand all</button> <label title="hide the swimlanes whose every ticket is closed"><input type=checkbox id=lhd> Hide done lanes</label> <span id=lhc></span> <details id=fw class=fsel><summary>Waves</summary><div class=fpop id=fwl></div></details> <details id=fs class=fsel><summary>Specs</summary><div class=fpop id=fsl></div></details></span></div><div id=bcases></div><div id=bbody></div><div id=flowov hidden><div id=flowh><b id=flowt></b><button id=flowx title="close the diagram">&#215;</button></div><div id=flowb></div></div></div>
 </div>
 <div id=foot title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"><span>load</span><b id=ldline>CPU ? · RAM ? · GPU ?</b><span id=ldfacts title="the squad's own state: health, progress, occupancy, quotas, subscriptions"></span></div>
 <script>/*SWITCHER_JS*/
@@ -3447,7 +3447,8 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 {const p=(location.pathname.match(/^\/([^/?#]+)/)||[])[1]||"";document.title=p?`Hub | ${decodeURIComponent(p)}`:"Hub";}   // the tab names the profile it shows, so two open hubs are told apart
 const LAYOUTS={1:[1,1],2:[2,1],3:[3,1],4:[2,2],6:[3,2]};
 const $=s=>document.querySelector(s),ls=JSON.parse(localStorage.hub||"{}");
-let allRuns=[],runs=[],q=ls.q||"",per=ls.per||"day",src=ls.src||"both",N=1,pins=new Set((ls.pins||[]).slice(0,1)),slots=[],frames=new Map();
+const HUB_REPO=/*HUB_REPO*/;
+let allRuns=[],runs=[],q=ls.q||"",per=ls.per||"day",src=ls.src||"both",N=1,pins=new Set((ls.pins||[]).slice(0,1)),slots=[],frames=new Map(),hl=null,boardRows=[];
 const save=()=>localStorage.hub=JSON.stringify({...ls,pins:[...pins],q,per,src});
 const usd=v=>v==null?"—":v>=100?"$"+Math.round(v):"$"+v.toFixed(2);
 const usdc=v=>v==null?"—":"$"+(+v).toFixed(2);   // plan prices carry cents, so a month's cash total keeps them: usd would round $282.23 to $282
@@ -3546,6 +3547,7 @@ function drawList(){
     if(openGroups.has(k))openGroups.delete(k);else openGroups.add(k);saveGroups();drawList()});
   document.querySelectorAll(".r[data-id]").forEach(e=>e.onclick=()=>{const id=e.dataset.id;   // the childcc row carries the id of the run it holds, never its own (#598, #689)
     if(pins.has(id))pins.delete(id);else{if(N===1)pins.clear();pins.add(id);focus=id}
+    hl=hl&&hl.run===id?null:{run:id};paintHL();
     save();refresh(true)});
 }
 let built="",focus=null;
@@ -3573,7 +3575,7 @@ function drawMain(force){
   for(const cell of main.children){const r=byId.get(cell.dataset.id);if(r)paintCell(cell,r,cell.dataset.id,live)}
 }
 function liveSync(){drawMain()}   // the run pane went out of sight or came back: the frame follows the plan
-function refresh(){plan();drawList();liveSync()}
+function refresh(){plan();drawList();liveSync();paintHL()}
 function applyFilter(){runs=allRuns.filter(r=>r.kind!=="childcc")}   // the childcc pass is drawn in the WORKERS group, never a pane (#598)
 let known=null;   // run ids already seen: a run that appears running after the first poll is selected on its own (pinned, its group opened)
 function selectNew(){const ids=allRuns.filter(r=>r.kind!=="childcc").map(r=>r.id);if(known===null){known=new Set(ids);return}
@@ -3822,8 +3824,8 @@ const ni=()=>nav.findIndex(x=>x[0]===cur&&x[1]===irepo);
 function openCard(n,r){const el=boardCards().find(x=>+x.dataset.n===+n&&(x.dataset.r||"__REPO__")===(r||"__REPO__"));if(el)showIssue(n,r,el);else{nav=[[+n,r||"__REPO__"]];showIssue(n,r)}}   // a blocker link opens the same sheet, never a new tab
 const step=k=>{const i=ni()+k;if(i>=0&&i<nav.length)showIssue(nav[i][0],nav[i][1])};
 // One close rule: the panel goes, the page widens, and the selection the run or the column drew is cleared.
-function closeSheet(){tsheet.classList.remove("on");document.body.classList.remove("tkopen");document.querySelectorAll("#bbody .it.hit").forEach(x=>x.classList.remove("hit"));nav=[];cur=0;irepo="__REPO__";$("#tkset").innerHTML="";$("#tknav").innerHTML="";escBoard()}
-async function showIssue(n,r,el){cur=+n;irepo=r||"__REPO__";
+function closeSheet(){tsheet.classList.remove("on");document.body.classList.remove("tkopen");document.querySelectorAll("#bbody .it.hit").forEach(x=>x.classList.remove("hit"));nav=[];cur=0;irepo="__REPO__";$("#tkset").innerHTML="";$("#tknav").innerHTML="";if(hl&&hl.run==null)hl=null;paintHL();escBoard()}
+async function showIssue(n,r,el){cur=+n;irepo=r||"__REPO__";hl={n:+n,r:irepo,kind:boardRows.some(x=>x.kind==="pr"&&+x.n===+n&&x.r===irepo)?"pr":"issue"};paintHL();
  // A card a run holds steps through that run's cards; any other card steps through its column (the selection the board shows).
  if(el){const c=cardOf(el),set=c.hr?boardCards().filter(x=>(x.dataset.hr||"")===c.hr):[...el.closest(".sc").querySelectorAll(".it[data-n]")];nav=set.map(x=>[+x.dataset.n,x.dataset.r||"__REPO__"])}
  if(!nav.length)nav=[[cur,irepo]];
@@ -4027,7 +4029,32 @@ $("#lmode").value=bo.lmode||"spec";$("#bbody").classList.toggle("lanes",!!model)
 $("#lhc").innerHTML=model&&model.hc.length?`<button class=hcpill id=lhcx title="columns with no card in an expanded lane: click to expand the lanes that hold their cards">+${model.hc.length} hidden: ${model.hc.map(x=>x.user?`<span class=hcu data-eye="${esc(x.name)}" title="show this column">${esc(x.name)} <b>${x.count}</b></span>`:esc(x.name)+" <b>"+x.count+"</b>").join(" · ")}</button>`:"";
 if(lanesHtml!==null){if($("#bbody").dataset.h!==lanesHtml){$("#bbody").dataset.h=lanesHtml;$("#bbody").innerHTML=lanesHtml;restore()}}
 else if($("#bbody").dataset.h!==html){$("#bbody").dataset.h=html;$("#bbody").innerHTML=html;restore()}   // same cards: leave the DOM alone, so a scroll in progress is never interrupted
+boardRows=all.flatMap(g=>g.items);paintHL();
 }catch(e){}finally{lim.busy=0}}
+// highlight:begin
+// The highlight follows the selection and is never stored: `hl` is {run: id} for a run, or {n, r, kind} for a card. Its
+// matches come from the rows the page already holds, so the rule adds no read.
+const hlKind=x=>x.kind==="pr"?"pr":"issue",hlKey=x=>x.r+"#"+hlKind(x)+"#"+x.n;
+const hlRunNames=(run,x)=>!!run&&x.r===HUB_REPO&&(hlKind(x)==="pr"?run.fix!=null&&+x.n===+run.fix:(run.issues||[]).some(i=>+i===+x.n));
+const hlCards=(run,items)=>run?items.filter(x=>hlRunNames(run,x)):[];
+const hlRuns=(card,runList)=>card?runList.filter(r=>hlRunNames(r,card)):[];
+const hlHidden=(matched,rendered)=>matched.filter(x=>!rendered.has(hlKey(x)));
+function paintHL(){
+  if(hl&&hl.run!=null&&!runs.some(r=>r.id===hl.run))hl=null;
+  const run=hl&&hl.run!=null?runs.find(r=>r.id===hl.run):null,card=hl&&hl.run==null?hl:null;
+  const matched=hlCards(run,boardRows),mk=new Set(matched.map(hlKey)),rendered=new Set();
+  document.querySelectorAll("#bbody .it[data-n]").forEach(el=>{const k=el.dataset.r+"#"+(el.hasAttribute("data-pr")?"pr":"issue")+"#"+el.dataset.n;
+    if(el.offsetParent!==null)rendered.add(k);   // a collapsed column keeps its cards in the DOM, out of sight
+    el.classList.toggle("hl",mk.has(k));el.classList.toggle("dim",!!run&&!mk.has(k))});
+  const hidden=hlHidden(matched,rendered),hb=$("#hlrel");hb.hidden=!hidden.length;hb.textContent=hidden.length+" related";
+  document.querySelectorAll("#bbody .lane[data-lane]").forEach(e=>{const l=(lanesNow&&lanesNow.lanes||[]).find(x=>x.id===e.dataset.lane),n=l&&run?hlHidden(hlCards(run,l.all),rendered).length:0;
+    let s=e.querySelector(".lhrel");if(!n){s&&s.remove();return}
+    if(!s){s=document.createElement("span");s.className="hlrel lhrel";e.querySelector(".lh").append(s)}
+    s.textContent=n+" related"});
+  const hits=new Set(hlRuns(card,runs).map(r=>r.id));
+  document.querySelectorAll("#list .r[data-id]").forEach(e=>e.classList.toggle("hlr",hits.has(e.dataset.id)));
+}
+// highlight:end
 /*BOARD_LANES*/
 $("#lmode").onchange=e=>{bo.lmode=e.target.value;saveB();pollBoard()};
 // The swimlanes' state (#891): collapse and open state live in `bo`, so the device keeps them across a reload.
@@ -4073,7 +4100,7 @@ PAGE = PAGE.replace("/*BOARD_LANES_CSS*/", (pathlib.Path(__file__).resolve().par
 # The strip paints one rule per category, keyed by the fact that sets the column: the name comes from the table.
 HID_CHIP_TOKENS = (("abandoned", "err"), ("dev_ci", "run"), ("unscheduled", "warn"), ("issue_closed", "ok"), ("pr_open", "pin"))
 PAGE = PAGE.replace("/*HID_CHIP_RULES*/", "\n".join('.hidbar .chip[data-col="%s"] b{color:var(--%s)}' % (COLUMN[fact], token) for fact, token in HID_CHIP_TOKENS))
-PAGE = PAGE.replace("/*BOARD_COLORS*/", BOARD_COLORS_JSON).replace("/*BOARD_FLOW*/", BOARD_FLOW_JSON).replace("/*BOARD_NAMES*/", BOARD_NAMES_JSON)
+PAGE = PAGE.replace("/*BOARD_COLORS*/", BOARD_COLORS_JSON).replace("/*BOARD_FLOW*/", BOARD_FLOW_JSON).replace("/*BOARD_NAMES*/", BOARD_NAMES_JSON).replace("/*HUB_REPO*/", json.dumps(REPO))
 PAGE = PAGE.replace("/*RUN_STATE_CSS*/", "".join(".b.%s{color:var(--%s);%s}" % (r["state"].replace(" ", "-"), r["color"], r["css"]) for r in RUN_STATES))
 
 
