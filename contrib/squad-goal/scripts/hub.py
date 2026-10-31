@@ -4034,8 +4034,8 @@ boardRows=all.flatMap(g=>g.items);paintHL();
 // highlight:begin
 // The highlight follows the selection and is never stored: `hl` is {run: id} for a run, or {n, r, kind} for a card. Its
 // matches come from the rows the page already holds, so the rule adds no read.
-const hlKind=x=>x.kind==="pr"?"pr":"issue",hlKey=x=>x.r+"#"+hlKind(x)+"#"+x.n;
-const hlRunNames=(run,x)=>!!run&&x.r===HUB_REPO&&(hlKind(x)==="pr"?run.fix!=null&&+x.n===+run.fix:(run.issues||[]).some(i=>+i===+x.n));
+const hlKind=x=>x.kind==="pr"?"pr":"issue",hlRepo=x=>x.r||HUB_REPO,hlKey=x=>hlRepo(x)+"#"+hlKind(x)+"#"+x.n;
+const hlRunNames=(run,x)=>!!run&&hlRepo(x)===HUB_REPO&&(hlKind(x)==="pr"?run.fix!=null&&+x.n===+run.fix:(run.issues||[]).some(i=>+i===+x.n));
 const hlCards=(run,items)=>run?items.filter(x=>hlRunNames(run,x)):[];
 const hlRuns=(card,runList)=>card?runList.filter(r=>hlRunNames(r,card)):[];
 const hlHidden=(matched,rendered)=>matched.filter(x=>!rendered.has(hlKey(x)));
@@ -4044,7 +4044,7 @@ function paintHL(){
   const run=hl&&hl.run!=null?runs.find(r=>r.id===hl.run):null,card=hl&&hl.run==null?hl:null;
   const matched=hlCards(run,boardRows),mk=new Set(matched.map(hlKey)),rendered=new Set();
   document.querySelectorAll("#bbody .it[data-n]").forEach(el=>{const k=el.dataset.r+"#"+(el.hasAttribute("data-pr")?"pr":"issue")+"#"+el.dataset.n;
-    if(el.offsetParent!==null)rendered.add(k);   // a collapsed column keeps its cards in the DOM, out of sight
+    rendered.add(k);   // a card the board draws is in #bbody; a collapsed swimlane and a filter both leave it out
     el.classList.toggle("hl",mk.has(k));el.classList.toggle("dim",!!run&&!mk.has(k))});
   const hidden=hlHidden(matched,rendered),hb=$("#hlrel");hb.hidden=!hidden.length;hb.textContent=hidden.length+" related";
   document.querySelectorAll("#bbody .lane[data-lane]").forEach(e=>{const l=(lanesNow&&lanesNow.lanes||[]).find(x=>x.id===e.dataset.lane),n=l&&run?hlHidden(hlCards(run,l.all),rendered).length:0;
