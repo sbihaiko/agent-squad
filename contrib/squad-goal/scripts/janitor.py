@@ -842,6 +842,13 @@ def reconcile_board():
             fresh = (lambda a, m: a and not m.get(str(n)))(*cards(proj))   # an answered read that holds no card for it, or a card with no Status: no column yet
             bug = bool(olabels[n] & {os.environ.get("SG_BUG_LABEL") or "bug"})
             if fresh: set_expected(n, os.environ.get("SG_TODO", "Todo") if bug else "Backlog", "open issue with no card", rank=10)
+            # A bug card left in Backlog is dispatched by no pass: autobug reads Todo only, and autofrontier skips the bug label.
+            # The floor never moves it (ADR-0143), so this is a report, never a write: one line per issue, a marker keeps it once.
+            if bug and cards(proj)[1].get(str(n)) == "Backlog":
+                mk = st / "auto" / f"janitor-bugback-{n}"
+                if not mk.exists():
+                    say(f"BUG-IN-BACKLOG #{n}: a bug card sits in Backlog; no pass dispatches it until the owner moves it to Todo")
+                    if not dry: mk.touch()
             if shipped and "wontfix" in olabels[n]: set_expected(n, "Abandoned", "issue carries wontfix", rank=95)
             # A spec is written and not scheduled, so the floor opens it in Backlog, and the owner starts it (ADR-0142). The fold
             # moves it forward only. Its rank sits above the floor and below every rule a run, a marker or a branch raises.

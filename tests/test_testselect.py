@@ -242,3 +242,61 @@ def test_the_inert_list_names_no_path_a_test_reads():
         base = entry.rsplit("/", 1)[-1]
         read = sorted(lit for lit in literals if lit == entry or entry.startswith(lit + "/") or lit == base)
         assert not read, f"{entry} is named by a test: {read}"
+
+
+def test_a_changed_shell_suite_seconds_file_selects_the_tests_that_import_its_reader(tmp_path):
+    repo = tip(
+        tmp_path,
+        {"tests/shell_suites_seconds.txt": "suite 2\n"},
+        extra={
+            "tests/shell_suites_seconds.txt": "suite 1\n",
+            "tests/shell_suites.py": "SECONDS_LIST = 'x'\n",
+            "tests/test_reader.py": "from tests import shell_suites\n",
+            "tests/test_other.py": "X = 1\n",
+        },
+    )
+    assert select(repo) == ["tests/test_reader.py"]
+
+
+def test_a_dynamic_test_with_no_import_edge_is_selected_by_its_declared_path(tmp_path):
+    """The DEPENDS list is a selection: a test that loads its modules by path is picked up from the path it declares."""
+    loader = (
+        "import importlib\n"
+        "\n"
+        "DEPENDS = ('squad/gamma.py',)\n"
+        "\n"
+        "def load(name):\n"
+        "    return importlib.import_module(name)\n"
+    )
+    repo = tip(tmp_path, {"squad/gamma.py": "VALUE = 4\n"}, extra={"tests/test_dyn.py": loader})
+    assert select(repo) == ["tests/test_dyn.py", "tests/test_gamma.py"]
+
+
+def test_a_dynamic_test_that_declares_the_changed_path_answers_its_list_not_all(tmp_path):
+    loader = (
+        "import importlib\n"
+        "from squad import beta\n"
+        "\n"
+        "DEPENDS = ('squad/alpha.py',)\n"
+        "\n"
+        "def load(name):\n"
+        "    return importlib.import_module('squad.' + name)\n"
+    )
+    repo = tip(tmp_path, {"squad/alpha.py": "VALUE = 2\n"}, extra={"tests/test_dyn.py": loader})
+    assert select(repo) == ["tests/test_alpha.py", "tests/test_beta.py", "tests/test_dyn.py"]
+
+
+def test_a_dynamic_test_that_declares_another_path_still_answers_all_on_an_undeclared_edge(tmp_path):
+    """A declaration for one path proves nothing about another: the import edge to the changed module still answers `all`."""
+    loader = (
+        "import importlib\n"
+        "from squad import beta\n"
+        "\n"
+        "DEPENDS = ('squad/gamma.py',)\n"
+        "\n"
+        "def load(name):\n"
+        "    return importlib.import_module('squad.' + name)\n"
+    )
+    repo = tip(tmp_path, {"squad/alpha.py": "VALUE = 2\n"}, extra={"tests/test_dyn.py": loader})
+    lines = select(repo)
+    assert len(lines) == 1 and lines[0].startswith("all: ") and "tests/test_dyn.py" in lines[0]

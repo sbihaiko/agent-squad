@@ -56,6 +56,18 @@ o=$(run env SG_FRONTIER_LABEL=ready-for-agent)
 ! has ' 2201$' && ok "an issue in Backlog stays where the owner put it" || ko "#2201 moved: $(bc) $o"
 ! has ' 2202$' && ok "a no-auto bug in Code Complete keeps its column" || ko "#2202 moved: $(bc)"
 ! has ' 2203$' && ok "a bug in Backlog keeps its column: the floor never moves a card" || ko "#2203 moved: $(bc)"
+# A bug card in Backlog is dispatched by no pass (autobug reads Todo only), so the janitor names it once in cycle.log and writes
+# nothing: only the owner moves it (ADR-0142, ADR-0143 rule 1). A second pass over the same state repeats no line.
+bl="janitor BUG-IN-BACKLOG #2203: a bug card sits in Backlog; no pass dispatches it until the owner moves it to Todo"
+# The passes above already named it and left the once-marker: this block starts with no note state, so its first pass is the first.
+rm -f "$T/st/cycle.log" "$T/st/auto/janitor-bugback-"*
+o=$(run env SG_FRONTIER_LABEL=ready-for-agent)
+n1=$(/usr/bin/grep -cF "$bl" "$T/st/cycle.log" 2>/dev/null); n1=${n1:-0}
+[ "$n1" = 1 ] && ok "a bug card in Backlog is named once in cycle.log" || ko "BUG-IN-BACKLOG for #2203 printed $n1 times (want 1)"
+! /usr/bin/grep -q '2203' "$T/board.calls" 2>/dev/null && ok "the BUG-IN-BACKLOG note writes no board fact for #2203" || ko "#2203 written by a note: $(bc)"
+o=$(run env SG_FRONTIER_LABEL=ready-for-agent)
+n2=$(/usr/bin/grep -cF "$bl" "$T/st/cycle.log" 2>/dev/null); n2=${n2:-0}
+[ "$n2" = 1 ] && ok "a second pass over the same state prints the BUG-IN-BACKLOG note no more" || ko "BUG-IN-BACKLOG for #2203 printed $n2 times over two passes (want 1)"
 ! has ' 2204$' && ok "an issue with the frontier label in Backlog keeps its column" || ko "#2204 moved: $(bc)"
 ! has ' 2205$' && ok "a debt issue in Backlog keeps its column" || ko "#2205 moved: $(bc)"
 has '^STATUS --remove o 4 2206$' && ! has 'STATUS o 4 [A-Za-z ]* 2206$' && ok "a run parent gets no column, and its card is removed (#500)" || ko "#2206 not removed: $(bc)"

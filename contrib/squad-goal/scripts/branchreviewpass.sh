@@ -45,6 +45,12 @@ chain_summary() { local out rc
 # review_one <sha> <branch> <issue> <key> <result file>: one review, its count, its lines. Every file it touches is named by the
 # branch key, so jobs for two branches share nothing. A review whose kept sha is not the listed tip (a failed read, or a push
 # that landed while it ran) is a failed try at the listed tip; the next pass lists the new tip, with a new count.
+# kick_landing: a branchland pass now, so an approved tip lands without waiting for the next watch cycle (#955). It runs detached under
+# its own single.sh lock, so a kick while a pass runs is a no-op; the review pass neither waits for it nor reads its output.
+kick_landing() { [ -n "${SG_LAND_PAUSED:-}" ] && return 0
+  # The kicked pass appends to a log the operator reads: its say-once WAIT, REFUSE and LANDED lines are often the only place
+  # that line ever appears, since branchland keeps a marker per head. The review pass still neither waits for it nor reads it.
+  ( bash "$here/single.sh" branchland bash "$here/branchland.sh" >> "${SG_STATE:-/tmp/sg-state}/branchland-kick.log" 2>&1 & ) >/dev/null 2>&1; }
 review_one() { local sha=$1 br=$2 i=$3 key=$4 res=$5 c s n out
   c="$A/branchreview-tries-$key-${sha:0:9}"; s="$A/branchreview-stop-$key-${sha:0:9}"; n=$(cat "$c" 2>/dev/null || echo 0)
   local holder="branchreview-$key-$$-${BASHPID:-$$}" slot_err slot_rc
@@ -52,7 +58,9 @@ review_one() { local sha=$1 br=$2 i=$3 key=$4 res=$5 c s n out
   [ -z "$slot_err" ] || echo "BRANCHREVIEW $slot_err" > "$res"
   [ $slot_rc = 0 ] || { echo "BRANCHREVIEW SKIPPED $br ${sha:0:9}: no review slot; the next pass reviews it" >> "$res"; return; }
   out=$(bash "$here/branchreview.sh" "$br" "$i" 2>&1 | tail -1); sg_caps release reviews "$holder"
-  if [ "$(cat "$SG_STATE/review-$key.sha" 2>/dev/null)" = "$sha" ]; then rm -f "$c" "$s"; echo "BRANCHREVIEW $out" >> "$res"; return; fi
+  if [ "$(cat "$SG_STATE/review-$key.sha" 2>/dev/null)" = "$sha" ]; then rm -f "$c" "$s"; echo "BRANCHREVIEW $out" >> "$res"
+    head -1 "$SG_STATE/review-$key.md" 2>/dev/null | tr -d '*' | grep -q '^VERDICT: APPROVE' && kick_landing
+    return 0; fi
   n=$((n+1)); echo "$n" > "$c"; echo "BRANCHREVIEW FAILED $br ${sha:0:9} (try $n of $tries): $out" >> "$res"
   [ "$n" -ge "$tries" ] && [ ! -e "$s" ] && { touch "$s"
     echo "BRANCHREVIEW STOP $br: the review of ${sha:0:9} failed $n times ($(why_failed "$i")); a new push, or $ttl s, starts a new count" >> "$res"

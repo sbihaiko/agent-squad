@@ -657,15 +657,18 @@ case "$r" in *"WAVE REQUEUE"*) ko "Q2: full gate slots requeued the child: '$r'"
 PYTHONPATH="$SG_SQUAD" python3 -m squad.caps release gates other; kill $hs 2>/dev/null
 rm -rf "$T/st/locks/gate"; en2 run-30 301 >/dev/null
 mkdir -p "$T/st/locks/gate"; echo "$hp" > "$T/st/locks/gate/pid"; before=$($O rev-parse dev)
-t0=$(date +%s); r=$(SERIAL_WAIT_SECONDS=8 SG_WAVE_TIP_GATES="bash '$T/s/gate.sh' true" land2 run-30 2>&1); rc=$?; t1=$(date +%s)
-[ $rc != 0 ] && [ $((t1 - t0)) -lt 6 ] && ok "Q: a landing under a held gate lock returns at once" || ko "Q: land exit $rc after $((t1 - t0)) s: '$r'"
+# Q (#955): the landing waits for a held gate lock a bounded time (SERIAL_WAIT_SECONDS), then holds: no red tip, no try spent.
+t0=$(date +%s); r=$(SERIAL_WAIT_SECONDS=2 SG_WAVE_TIP_GATES="bash '$T/s/gate.sh' true" land2 run-30 2>&1); rc=$?; t1=$(date +%s)
+[ $rc != 0 ] && [ $((t1 - t0)) -ge 2 ] && [ $((t1 - t0)) -lt 20 ] && ok "Q: a landing under a held gate lock waits its bound, then holds" || ko "Q: land exit $rc after $((t1 - t0)) s: '$r'"
 case "$r" in *"WAVE WAIT $W30"*"gate lock"*) ok "Q: the landing names the held gate lock";; *) ko "Q: no wait line: '$r'";; esac
 case "$r" in *"WAVE CHECK RED"*) ko "Q: a held gate lock read as a red tip: '$r'";; *) ok "Q: a held gate lock is no red tip";; esac
 [ -z "$(tries 301 run-30)" ] && ok "Q: a held gate lock spends no landing try" || ko "Q: a try was counted"
 [ "$($O rev-parse dev)" = "$before" ] && ok "Q: dev does not move while the lock is held" || ko "Q: dev moved"
 rm -rf "$T/st/locks/gate"; kill $hp 2>/dev/null
-r=$(SG_WAVE_TIP_GATES="bash '$T/s/gate.sh' true" land2 run-30 2>&1); rc=$?
-[ $rc = 0 ] && ok "Q: the wave lands on the next pass, once the lock is free" || ko "Q: exit $rc: '$r'"
+# Q3 (#955): a gate lock that frees inside the landing's bound does not cost the cycle its landing: the wave lands on that pass.
+sleep 2 & hq=$!; mkdir -p "$T/st/locks/gate"; echo "$hq" > "$T/st/locks/gate/pid"; before=$($O rev-parse dev)
+r=$(SERIAL_WAIT_SECONDS=30 SG_WAVE_TIP_GATES="bash '$T/s/gate.sh' true" land2 run-30 2>&1); rc=$?
+[ $rc = 0 ] && [ "$($O rev-parse dev)" != "$before" ] && ok "Q3: the wave lands on the pass that finds the lock free, inside the bound" || ko "Q3: exit $rc: '$r'"
 
 # R (#566): the wave tip's check is the loop's one base battery -- ruff, mypy and the fast pytest -- read against
 # origin/$SG_BASE, in the fast gate, with a bounded worker count instead of `auto`. wave.sh keeps no copy of it. The count

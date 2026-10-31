@@ -18,7 +18,10 @@ export SG_GH_AGGREGATE_WINDOW=0 SG_GH_COOLDOWN=0.001 SG_GH_COOLDOWN_JITTER=0.001
 EOF
 # No open PR, no revci summary, nothing to move. The open-issue list answers the file `openissues` when a case writes one (#641).
 printf '#!/bin/bash\ncase "$*" in *"issues(states: OPEN"*) [ -e "%s/openissues" ] && cat "%s/openissues";; esac\nexit 0\n' "$T" "$T" > "$B/gh"
-printf '#!/bin/bash\nexit 0\n' > "$B/sleep"       # the cycle's own naps cost nothing
+# The cycle's own naps cost nothing, but a nap waits while a landing is still in its own detached pass (#955), so the next
+# cycle reads that pass's result the way a live supervisor's closing wait gives it time to. A case that holds a landing by
+# hand writes `nosettle` first.
+printf '#!/bin/bash\n[ -e "%s/nosettle" ] && exit 0\nfor f in "%s"/auto/wland-*.busy; do [ -e "$f" ] && { /bin/sleep 0.05; exec "$0" "$@"; }; done\nexit 0\n' "$T" "$ST" > "$B/sleep"
 chmod +x "$B/gh" "$B/sleep"; export PATH="$B:$PATH"
 : > "$ST/active-runs.txt"
 # Every step the cycle runs, stubbed: the cycle costs its own wiring, not a pass of the loop.
@@ -28,20 +31,24 @@ for s in autohunt.sh heartbeat.sh wtclean.sh janitor.sh startability.sh live-gua
 printf 'import os,sys\nopen(os.environ["STEPS"],"a").write("childcc\\n")\nsys.exit(3 if os.path.exists("%s/ccinc") else 0)\n' "$T" > "$S/childcc.py"; printf 'pass\n' > "$S/reconcile.py"
 # The landing pass is what a run's completion reaches: the stub logs the call, and nothing else is read from it.
 # A `landfail` file in the fixture makes the stub land exit 1, as a rebase conflict or a refused push does.
-printf '#!/bin/bash\necho "wave $*" >> "%s"\n[ -e "%s/locks/single-childcc" ] && echo "childcc-lock-held-during-land" >> "%s"\n[ -e "%s/landfail" ] && exit 1\nexit 0\n' "$STEPS" "$ST" "$STEPS" "$T" > "$S/wave.sh"; chmod +x "$S/wave.sh"
+printf '#!/bin/bash\necho "wave $*" >> "%s"\n[ -e "%s/locks/single-childcc" ] && echo "childcc-lock-held-during-land" >> "%s"\n[ -e "%s/landfail" ] && exit 1\n[ "$1" = land ] && rm -f "%s/auto/wave-$2"\nexit 0\n' "$STEPS" "$ST" "$STEPS" "$T" "$ST" > "$S/wave.sh"; chmod +x "$S/wave.sh"
 # The cycle's last step ends the run after the cycles the case asked for.
 cat > "$S/vendor-guard.sh" <<EOF
 #!/bin/bash
+echo guard >> "$STEPS"
 c=\$(( \$(cat "$T/cyc" 2>/dev/null || echo 0) + 1 )); echo "\$c" > "$T/cyc"
 [ "\$c" -ge "\${SG_TEST_CYCLES:-1}" ] && kill -TERM "\$(/bin/ps -o ppid= -p "\$PPID" | tr -d ' ')" 2>/dev/null
 exit 0
 EOF
 chmod +x "$S/vendor-guard.sh"
+# landing_busy: a landing of some run is still in its own detached pass (#955): its busy marker is there.
+landing_busy() { local f; for f in "$ST"/auto/wland-*.busy; do [ -e "$f" ] && return 0; done; return 1; }
 run_cycle() {   # run_cycle [n]: one supervisor over the fixture, ended by the cycle's last step
   : > "$STEPS"; echo 0 > "$T/cyc"
   env SG_TEST_CYCLES="${1:-1}" bash "$S/watch.sh" > "$T/watch.out" 2>&1 & local p=$! i=0
   while kill -0 "$p" 2>/dev/null && [ $i -lt 400 ]; do /bin/sleep 0.1; i=$((i+1)); done
-  kill -TERM "$p" 2>/dev/null; wait "$p" 2>/dev/null; rm -f "$ST/fastloop.pid" 2>/dev/null; return 0
+  kill -TERM "$p" 2>/dev/null; wait "$p" 2>/dev/null; rm -f "$ST/fastloop.pid" 2>/dev/null
+  while [ ! -e "$T/nosettle" ] && landing_busy; do /bin/sleep 0.05; done; return 0
 }
 # <run> <verdict>: a run folder with the record the cycle reads, and its entry in the list of live runs.
 run() { mkdir -p "$T/$1"; printf '{"event":"verdict","verdict":"%s","reasons":[]}\n' "$2" > "$T/$1/record.jsonl"; }
@@ -121,7 +128,8 @@ run run-7 pass; printf 'wave/run-7\n' > "$ST/auto/wave-run-7"; printf '%s\n' "$T
 /usr/bin/grep -q 'wave land run-7' "$STEPS" && ko "a wave landed on an incomplete childcc pass" || ok "an incomplete childcc pass does not land the wave"
 /usr/bin/grep -q "run-7" "$ST/watch-seen.txt" 2>/dev/null && ko "an incomplete pass marked the run seen" || ok "an incomplete pass leaves the run unread"
 /usr/bin/grep -E 'WATCH: run-7 waits' "$T/watch.out" | /usr/bin/grep -q deferred && ok "the log names the landing deferred" || ko "no deferred line for run-7: '$(cat "$T/watch.out")'"
-rm -f "$T/ccinc"; run_cycle 1
+# The landing runs in its own detached pass (#955), so the run is read on the cycle after the one that starts it.
+rm -f "$T/ccinc"; run_cycle 2
 [ "$(/usr/bin/grep -cxE 'wave land run-7 /.*/run-7' "$STEPS")" = 1 ] && ok "the pass that completes lands the wave" || ko "run-7 not landed after a complete pass: '$(cat "$STEPS")'"
 /usr/bin/grep -q "run-7" "$ST/watch-seen.txt" 2>/dev/null && ok "and the run is read" || ko "run-7 not in watch-seen.txt"
 
@@ -163,5 +171,53 @@ run run-c pass; printf 'wave/run-c\n' > "$ST/auto/wave-run-c"; printf '%s\n' "$T
 [ "$(/usr/bin/grep -c 'RUN run-c verdict' "$T/watch.out")" = 1 ] && ok "the retired wave's run is read on the next cycle" \
   || ko "the retired run was not read: '$(cat "$T/watch.out")'"
 cp "$T/wave.stub" "$S/wave.sh"; rm -f "$T/conflictfail"
+
+# 10) (#955) the landing is a detached single-flight pass: a landing that takes time does not hold the cycle. The cycle reaches
+# its last step (vendor-guard) while the landing still runs, so the guard is logged before the landing ends.
+run run-10 pass; printf 'wave/run-10\n' > "$ST/auto/wave-run-10"; printf '%s\n' "$T/run-10" > "$ST/active-runs.txt"
+cat > "$S/wave.sh" <<EOS
+#!/bin/bash
+echo "wave \$*" >> "$STEPS"
+[ -e "$T/slowland" ] && { echo land-begin >> "$STEPS"; /bin/sleep 3; echo land-end >> "$STEPS"; }
+exit 0
+EOS
+: > "$T/slowland"; run_cycle 1
+g=$(/usr/bin/grep -n '^guard$' "$STEPS" | head -1 | cut -d: -f1); e=$(/usr/bin/grep -n '^land-end$' "$STEPS" | head -1 | cut -d: -f1)
+[ -n "$g" ] && [ -n "$e" ] && [ "$g" -lt "$e" ] && ok "a slow landing does not hold the cycle" \
+  || ko "the cycle waited for a slow landing: '$(cat "$STEPS")'"
+rm -f "$T/slowland"; cp "$T/wave.stub" "$S/wave.sh"
+
+# 11) (#955) a landing whose own pass is still alive is waited for, never doubled: the cycle starts no second pass and says so.
+# The busy marker names a live process that is no pass of this cycle, so the case holds the settle back with `nosettle`.
+run run-11 pass; printf 'wave/run-11\n' > "$ST/auto/wave-run-11"; printf '%s\n' "$T/run-11" > "$ST/active-runs.txt"
+: > "$T/nosettle"; /bin/sleep 60 & hl=$!; printf '%s\n' "$hl" > "$ST/auto/wland-run-11.busy"
+run_cycle 1
+[ -z "$(/usr/bin/grep -E '^wave land run-11' "$STEPS")" ] && ok "a landing in its own pass is not doubled" || ko "a second landing started beside the live pass: '$(cat "$STEPS")'"
+/usr/bin/grep -q "WATCH: run-11 waits: its landing is in its own pass (pid $hl)" "$T/watch.out" \
+  && ok "the log names the landing pass it waits for" || ko "no wait line for run-11: '$(cat "$T/watch.out")'"
+/usr/bin/grep -q "run-11" "$ST/watch-seen.txt" 2>/dev/null && ko "a landing still in its pass was read as seen" || ok "a landing still in its pass leaves the run unread"
+kill "$hl" 2>/dev/null; wait "$hl" 2>/dev/null; rm -f "$ST/auto/wland-run-11.busy" "$T/nosettle"
+
+# 12) (#955) the busy marker is written by the cycle from a real pass pid, never by the pass: a second cycle starts while the
+# first landing still sleeps, waits on the marker the first cycle wrote, and starts no second landing. /bin/bash 3.2 leaves
+# `$BASHPID` empty, so a marker the pass wrote could name no process and this wait would never fire.
+run run-12 pass; printf 'wave/run-12\n' > "$ST/auto/wave-run-12"; printf '%s\n' "$T/run-12" > "$ST/active-runs.txt"
+cat > "$S/wave.sh" <<EOS
+#!/bin/bash
+echo "wave \$*" >> "$STEPS"
+echo land-begin >> "$STEPS"; /bin/sleep 3; echo land-end >> "$STEPS"
+rm -f "$ST/auto/wave-\$2"
+exit 0
+EOS
+chmod +x "$S/wave.sh"
+: > "$T/nosettle"; run_cycle 1
+mp=$(cat "$ST/auto/wland-run-12.busy" 2>/dev/null)
+[ -n "$mp" ] && kill -0 "$mp" 2>/dev/null && ok "the cycle writes the landing pass's own pid in its busy marker" \
+  || ko "the busy marker names no live pass: '$mp'"
+run_cycle 1
+[ -z "$(/usr/bin/grep -xE '^wave land run-12 ' "$STEPS")" ] && ok "the second cycle starts no second landing" || ko "landings: '$(cat "$STEPS")'"
+/usr/bin/grep -q "WATCH: run-12 waits: its landing is in its own pass (pid $mp)" "$T/watch.out" \
+  && ok "the second cycle waits on the pass its marker names" || ko "no wait line for run-12: '$(/usr/bin/grep 'run-12' "$T/watch.out")'"
+rm -f "$T/nosettle"; cp "$T/wave.stub" "$S/wave.sh"
 
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }

@@ -20,7 +20,7 @@ br=\$3; key=\$(printf '%s' "\$br" | tr / _); echo "\$br \$4" >> "$T/review.log"
 echo "\$(ls "$T/caps/reviews" 2>/dev/null | wc -l | tr -d ' ')" >> "$T/slots.log"   # the review slots held while this review runs
 [ -n "\${SLOWREV:-}" ] && { mkdir -p "$T/run"; touch "$T/run/\$\$"; ls "$T/run" | wc -l | tr -d ' ' >> "$T/conc.log"; sleep "\$SLOWREV"; rm -f "$T/run/\$\$"; }
 [ -n "\${FAILREV:-}" ] && { echo "model failed"; exit 1; }   # a failed review keeps no verdict and no sha
-echo "VERDICT: APPROVE" > "$T/st/review-\$key.md"; $G -C "$T/origin.git" rev-parse "\$br" > "$T/st/review-\$key.sha"
+v=APPROVE; [ -n "\${CHANGEREV:-}" ] && v=CHANGES; echo "VERDICT: \$v" > "$T/st/review-\$key.md"; $G -C "$T/origin.git" rev-parse "\$br" > "$T/st/review-\$key.sha"
 echo "model=stub"
 J
 O="$G -C $T/origin.git"
@@ -146,4 +146,32 @@ o=; rc=0; for _ in 1 2 3; do o+=$(OPEN="7 8 31" FAILREV=1 bash "$T/s/branchrevie
 case "$o" in *"chainhealth: modelreg.py is missing"*) ok "the missing resolver is a named line on stderr";; *) ko "the resolver failure is not named: '$o'";; esac
 case "$o" in *"BRANCHREVIEW CHAINHEALTH gui/31-r"*) ok "the pass names the failed chain summary";; *) ko "the pass drops the chainhealth failure: '$o'";; esac
 mv "$T/modelreg.py" "$T/s/modelreg.py"
+# 13) an APPROVE starts a branchland pass at once, detached under single.sh (#955): a second kick while one runs is a no-op, the review
+# pass never waits for the kick, and a CHANGES verdict starts none. The branchland stub logs one line per start.
+cp "$d/single.sh" "$T/s/single.sh"
+cat > "$T/s/branchland.sh" <<J
+#!/bin/bash
+echo kick >> "$T/kick.log"; sleep "\${KICKSLEEP:-0}"
+J
+chmod +x "$T/s/branchland.sh"; rm -f "$T/kick.log"; push gui/41-k
+r=$(OPEN="41" SG_REVIEW_PASS_MAX=1 rp)
+for _ in $(seq 1 50); do [ -s "$T/kick.log" ] && break; sleep 0.1; done
+[ -s "$T/kick.log" ] && ok "an APPROVE starts a branchland pass" || ko "an APPROVE left no branchland kick: '$r'"
+push gui/42-k; rm -f "$T/kick.log"
+s0=$(date +%s); r=$(OPEN="42" SG_REVIEW_PASS_MAX=1 KICKSLEEP=4 rp); s1=$(date +%s)
+[ $((s1 - s0)) -lt 3 ] && ok "the review pass does not wait for the kick" || ko "the review pass waited $((s1 - s0)) s for the kick"
+for _ in $(seq 1 50); do [ -s "$T/kick.log" ] && break; sleep 0.1; done
+push gui/43-k; rm -f "$T/kick.log"
+r=$(OPEN="43" SG_REVIEW_PASS_MAX=1 CHANGEREV=1 rp); sleep 1
+[ ! -s "$T/kick.log" ] && ok "a CHANGES verdict starts no branchland pass" || ko "a CHANGES verdict started a branchland pass: '$r'"
+# A second kick while a pass runs is a no-op, because single.sh holds the lock: with the first kick asleep, the second approval
+# adds no line. The stub's own log proves it, since the pass is still in its sleep when the second one approves.
+for _ in $(seq 1 100); do [ -e "$T/st/locks/single-branchland" ] || break; sleep 0.1; done   # the earlier kick has ended: its lock is free
+push gui/44-k; rm -f "$T/kick.log"
+r=$(OPEN="44" SG_REVIEW_PASS_MAX=1 KICKSLEEP=3 rp)
+for _ in $(seq 1 50); do [ -s "$T/kick.log" ] && break; sleep 0.1; done
+push gui/45-k
+r2=$(OPEN="45" SG_REVIEW_PASS_MAX=1 KICKSLEEP=3 rp)
+[ "$(wc -l < "$T/kick.log" 2>/dev/null | tr -d ' ')" = 1 ] && ok "a second kick while a branchland pass runs is a no-op" || ko "two kicks ran: '$(cat "$T/kick.log" 2>&1)'"
+sleep 3
 exit $fail

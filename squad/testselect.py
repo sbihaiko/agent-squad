@@ -9,6 +9,8 @@ INERT = "squad/testselect_inert.txt"
 SHARED = {"pyproject.toml", "uv.lock", "squad/testselect.py", INERT}
 DYNAMIC = {"import_module", "spec_from_file_location", "__import__"}
 LITERAL = {"import_module", "__import__"}
+# A data file under tests/ is read by one module; its importers are the suites it reaches.
+DATA_READERS = {"tests/shell_suites_seconds.txt": "tests/shell_suites.py"}
 
 
 class _All(Exception):
@@ -40,11 +42,17 @@ def _with_ancestors(name):
 
 
 def _scan(rel, text):
-    """The module names a file reaches, whether it imports something dynamically, and the paths its string literals name."""
-    names, dynamic, literals = set(), False, set()
+    """The module names a file reaches, whether it imports something dynamically, the paths its string literals name, and its declared DEPENDS."""
+    names, dynamic, literals, declared = set(), False, set(), set()
     name = _module(rel)
     pkg = name if rel.endswith("/__init__.py") else name.rpartition(".")[0]
-    for node in ast.walk(ast.parse(text, filename=rel)):
+    tree = ast.parse(text, filename=rel)
+    for node in tree.body:
+        # A test that loads a module by path declares the paths it depends on, so the selector can answer from them.
+        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "DEPENDS" for t in node.targets):
+            if isinstance(node.value, (ast.Tuple, ast.List)):
+                declared |= {e.value for e in node.value.elts if isinstance(e, ast.Constant) and isinstance(e.value, str)}
+    for node in ast.walk(tree):
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             literals.add(node.value.removeprefix("./").rstrip("/"))
         elif isinstance(node, ast.Import):
@@ -69,7 +77,7 @@ def _scan(rel, text):
                     names |= _with_ancestors(arg.value)
                 else:
                     dynamic = True
-    return names, dynamic, literals
+    return names, dynamic, literals, declared
 
 
 def _scan_file(job):
@@ -101,7 +109,9 @@ def _reach(start, start_rel, importers, dynamic):
             continue
         seen.add(name)
         for rel in importers.get(name, ()):
-            if rel in dynamic:
+            # A test that declared the changed path is answered by that declaration; one that declared another path only
+            # proves nothing about this edge, so the edge still answers `all` rather than drop it.
+            if rel in dynamic and start_rel not in dynamic[rel]:
                 _all(f"{rel} imports dynamically and reaches {start_rel}")
             if _is_test(rel):
                 reached.add(rel)
@@ -128,6 +138,9 @@ def _answer(root, base):
     for rel in changed:
         if rel in SHARED or rel.startswith("config/"):
             _all(f"{rel} is shared by every test")
+        if rel in DATA_READERS:
+            live.append(DATA_READERS[rel])
+            continue
         if rel.startswith("tests/") and not _is_test(rel):
             _all(f"{rel} is a test helper, not a test file")
         if rel not in inert:
@@ -143,15 +156,15 @@ def _answer(root, base):
     )
     with ProcessPoolExecutor() as pool:
         scanned = list(pool.map(_scan_file, [(root, rel) for rel in rels], chunksize=8))
-    importers, dynamic, named = {}, set(), {}
+    importers, dynamic, named = {}, {}, {}
     for rel, scan in scanned:
         if scan is None:
             _all(f"{rel} does not parse")
-        names, dyn, literals = scan
+        names, dyn, literals, declared = scan
         for name in names:
             importers.setdefault(name, set()).add(rel)
         if dyn:
-            dynamic.add(rel)
+            dynamic[rel] = declared
         if _is_test(rel):
             for literal in literals:
                 named.setdefault(literal, set()).add(rel)
@@ -161,7 +174,7 @@ def _answer(root, base):
         hits = _named_by(named, rel)
         if _is_test(rel):
             hits.add(rel)
-        elif rel.startswith("squad/") and rel.endswith(".py"):
+        elif (rel.startswith("squad/") or rel in DATA_READERS.values()) and rel.endswith(".py"):
             hits |= _reach(_module(rel), rel, importers, dynamic)
         if not hits:
             _all(f"{rel} is reached by no test: no import, no path literal, not inert")

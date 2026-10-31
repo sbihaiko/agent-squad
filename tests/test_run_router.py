@@ -21,6 +21,8 @@ from tests.test_resume import wait_doc
 
 ROOT = Path(__file__).resolve().parent.parent
 DESIGN = ROOT / "docs" / "design" / "router.graph.json"
+# The harness loads scripts/run_router.py by path; the selector reads this list, not the dynamic import.
+DEPENDS = ("scripts/run_router.py", "squad/graph.py", "squad/launch.py", "squad/subject.py")
 
 
 def harness():
