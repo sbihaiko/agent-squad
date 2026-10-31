@@ -14,6 +14,7 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib/squad-goal/scripts"
 GESTURE_JS = SCRIPTS / "hub-mobile-gesture.js"
+HUB_PY = SCRIPTS / "hub.py"
 PAGE = SCRIPTS / "hub-mobile.html"
 NODE = shutil.which("node")
 
@@ -33,12 +34,12 @@ BOARD = [
         {"n": 13, "t": "thirteen", "l": []},
         {"n": 14, "t": "fourteen", "pa": 20, "l": []},
     ]},
-    {"name": "Closed", "items": [{"n": 15, "t": "fifteen", "pa": 10, "l": [], "c": "2026-10-01T00:00:00Z"}]},
+    {"name": "Closed", "items": [{"n": 15, "t": "fifteen", "pa": 10, "l": [], "dn": True}]},
 ]
 
 
 def lanes(cards, lc=None, groups=BOARD):
-    args = json.dumps({"groups": groups, "cards": cards, "closed": "Closed", "lc": lc or {}})
+    args = json.dumps({"groups": groups, "cards": cards, "lc": lc or {}})
     return run_js(GESTURE_JS.read_text(), f"columnLanes({args})")
 
 
@@ -95,7 +96,7 @@ def test_a_column_with_no_visible_card_has_no_lane():
 def test_a_lane_whose_spec_is_done_starts_collapsed_and_its_cards_leave_the_flat_list():
     done = [
         {"name": "Todo", "items": [{"n": 30, "t": "s", "sp": True, "l": []}]},
-        {"name": "Closed", "items": [{"n": 32, "t": "b", "pa": 30, "l": [], "c": "2026-10-01T00:00:00Z"}]},
+        {"name": "Closed", "items": [{"n": 32, "t": "b", "pa": 30, "l": [], "dn": True}]},
     ]
     out = lanes(done[0]["items"], groups=done)
     assert out["lanes"][0]["collapsed"] is True and out["flat"] == []
@@ -118,10 +119,11 @@ def test_the_flat_list_is_the_cards_of_the_open_lanes_in_lane_order():
 def test_the_page_draws_a_tappable_lane_header_with_its_collapse_kept_on_the_device():
     html = PAGE.read_text()
     assert "columnLanes(" in html
-    assert "lane-h" in html and "data-lane" in html
+    assert "lane-h" in html and "dataset.lane" in html
     assert "bo.mlc" in html and "saveB()" in html
 
 
-def test_the_page_names_the_closed_column_the_hub_serves():
-    html = PAGE.read_text()
-    assert "/*BOARD_NAMES*/" in html, "the page takes the closed column's name from the hub, not from a list of its own"
+def test_the_hub_marks_each_closed_row_and_the_page_names_no_column():
+    text = HUB_PY.read_text()
+    assert 'row["dn"] = True' in text and 'COLUMN["issue_closed"]' in text
+    assert "/*BOARD_NAMES*/" not in PAGE.read_text()
