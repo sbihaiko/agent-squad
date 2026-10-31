@@ -17,6 +17,7 @@ import itertools
 import json
 import os
 import pathlib
+import re
 import time
 from datetime import UTC, datetime
 
@@ -36,19 +37,49 @@ def history_path(board, repo):
     return pathlib.Path(board).with_name(f"hub-flow.{repo.replace('/', '_')}.jsonl")
 
 
+NONE = "none"                    # the board filter's value for a card with no spec, or no wave (the board's specKey and waveKey)
+_WAVE = re.compile(r"wave:(\d+)$")
+
+
+def wave_key(labels):
+    """The wave the board filter reads: the lowest `wave:NN` label, without leading zeros, or `none` (the board's waveKey)."""
+    nums = [int(m[1]) for label in labels or () for m in [_WAVE.match(str(label))] if m]
+    return str(min(nums)) if nums else NONE
+
+
+def spec_key(row):
+    """The spec the board filter reads: the parent spec's number, or `none` (the board's specKey)."""
+    parent = row.get("pa")
+    return NONE if parent is None else str(parent)
+
+
 def sample(rows, now=None):
+    """One sample. `cells` holds each card's kind, spec, wave, column, frozen flag and count as
+    [kind, spec, wave, column, frozen, n]: the charts filter by these (#904). A card in no shipped column has column null.
+    `counts`, `frozen` and `none` are the totals those cells add up to, so a reader of the older shape still works."""
     names = {c["name"] for c in _columns.view_columns()}
-    counts, frozen, none = {}, 0, 0
+    cells = {}
     for r in rows:
         closed = str(r.get("s", "")).lower() == "closed"
         column, freeze = _columns.view_column(r.get("st"), closed, r.get("l"), r.get("cr"))
-        if freeze: frozen += 1
-        if column not in names:
-            none += 1
-            continue
-        by_column = counts.setdefault(r.get("k") or DEFAULT_KIND, {})
-        by_column[column] = by_column.get(column, 0) + 1
-    return {"t": int(time.time() if now is None else now), "counts": counts, "frozen": frozen, "none": none}
+        key = (r.get("k") or DEFAULT_KIND, spec_key(r), wave_key(r.get("l")), column if column in names else None, 1 if freeze else 0)
+        cells[key] = cells.get(key, 0) + 1
+    listed = [[*key, n] for key, n in cells.items()]
+    counts, frozen, none = _totals_of(listed)
+    return {"t": int(time.time() if now is None else now), "counts": counts, "frozen": frozen, "none": none, "cells": listed}
+
+
+def _totals_of(cells):
+    """(counts, frozen, none) that a list of cells adds up to: counts holds the cards in a shipped column, by kind."""
+    counts, frozen, none = {}, 0, 0
+    for kind, _spec, _wave, column, fz, n in cells:
+        if column is None:
+            none += n
+        else:
+            by_column = counts.setdefault(kind, {})
+            by_column[column] = by_column.get(column, 0) + n
+        if fz: frozen += n
+    return counts, frozen, none
 
 
 def append(path, rows, now=None, incomplete=None):
@@ -100,8 +131,19 @@ def _rebucket_once(lines, rows, now):
 
 def _rebucket_sample(s, n):
     """One sample with up to n closed cards moved from Closed to Abandoned, taken from the kinds that hold Closed."""
-    counts, left = {k: dict(v) for k, v in s["counts"].items()}, n
     closed, abandoned = _columns.ROLE["issue_closed"], _columns.ROLE["abandoned"]
+    if "cells" in s:
+        moved, left = {}, n
+        for kind, spec, wave, column, fz, k in s["cells"]:
+            take = min(k, left) if column == closed else 0
+            left -= take
+            if take:
+                moved[(kind, spec, wave, abandoned, fz)] = moved.get((kind, spec, wave, abandoned, fz), 0) + take
+            moved[(kind, spec, wave, column, fz)] = moved.get((kind, spec, wave, column, fz), 0) + k - take
+        cells = [[*key, v] for key, v in moved.items()]
+        counts, frozen, none = _totals_of(cells)
+        return {**s, "counts": counts, "frozen": frozen, "none": none, "cells": cells}
+    counts, left = {k: dict(v) for k, v in s["counts"].items()}, n
     for by_column in counts.values():
         if not left: break
         take = min(by_column.get(closed, 0), left)

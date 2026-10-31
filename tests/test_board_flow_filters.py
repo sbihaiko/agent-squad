@@ -8,8 +8,8 @@ import importlib.util
 import json
 import re
 import shutil
-import sys
 import subprocess
+import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -201,6 +201,7 @@ def board(hub, tmp_path, monkeypatch):
     monkeypatch.setattr(hub, "BOARD", tmp_path / "hub-board.json")
     monkeypatch.setattr(hub, "board_cache", {"t": time.time(), "rt": None, "items": [], "prs": [], "cases": [],
                                              "errs": [], "lc": {}, "err": None})
+    monkeypatch.setattr(hub, "CHARTS", {})
     return tmp_path
 
 
@@ -218,8 +219,8 @@ def _write_history(hub_mod, items, day=20):
                     now=datetime(2026, 10, day, 12, tzinfo=UTC).timestamp())
 
 
-def _backlog_counts(flow):
-    return {b["name"]: b for b in flow["cfd"]["bands"]}
+def _backlog_counts(cfd):
+    return {b["name"]: b for b in cfd["cfd"]["bands"]}
 
 
 def test_the_flow_history_keeps_each_cards_spec_and_wave(hub, board):
@@ -229,7 +230,7 @@ def test_the_flow_history_keeps_each_cards_spec_and_wave(hub, board):
     assert ["issue", "5", "4", hub.COLUMN["unscheduled"], 0, 1] in json.loads(line)["cells"]
 
 
-def test_the_board_read_filters_the_cumulative_flow_by_the_bar_values(hub, board):
+def test_the_chart_route_filters_the_cumulative_flow_by_the_bar_values(hub, board):
     backlog = hub.COLUMN["unscheduled"]
     items = [_item(hub, 1, backlog, pa=5, labels=["wave:4"]),
              _item(hub, 2, backlog),
@@ -238,7 +239,7 @@ def test_the_board_read_filters_the_cumulative_flow_by_the_bar_values(hub, board
     _write_history(hub, items)
 
     def last(fw=(), fs=()):
-        return _backlog_counts(hub.board(fw=list(fw), fs=list(fs))["flow"])[backlog]["count"][-1]
+        return _backlog_counts(hub.flow_cfd(list(fw), list(fs)))[backlog]["count"][-1]
 
     assert last() == 3
     assert last(fs=["5"]) == 1
@@ -254,7 +255,7 @@ def test_the_control_chart_takes_the_same_spec_filter(hub, board):
     hub.board_cache["items"] = items
 
     def dots(fs):
-        return sorted(d["n"] for d in hub.board(fs=fs)["flow"]["lead"]["control"]["jira"]["all"]["dots"])
+        return sorted(d["n"] for d in hub.flow_lead(fs=fs)["lead"]["control"]["jira"]["all"]["dots"])
 
     assert dots([]) == [1, 2]
     assert dots(["5"]) == [1]
@@ -265,15 +266,27 @@ def test_the_board_query_names_the_bar_values(hub):
     assert hub.board_filters("") == ([], [])
 
 
-def test_the_page_sends_the_bar_values_with_the_board_read_and_the_zoom(hub):
-    assert "fetch(`/api/board?fw=${" in hub.PAGE
-    assert "&fs=${" in hub.PAGE
-    assert "/api/leadtime?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}&scale=${LT.log?\"log\":\"jira\"}&fw=${" in hub.PAGE
+def test_the_page_sends_the_bar_values_with_the_board_read_both_charts_and_the_zoom(hub):
+    assert "const barQuery=" in hub.PAGE, "the bar's values are written once, outside the flow block"
+    assert "fetch(`/api/board?${barQuery()}`)" in hub.PAGE
+    opener = next(line for line in hub.PAGE.splitlines() if line.startswith("const flowOpen="))
+    assert "/api/chart/${k}?" in opener and "barQuery()" in opener, "each chart route reads the bar's values"
+    zoom = next(line for line in hub.PAGE.splitlines() if line.startswith("const ltZoom="))
+    assert "${barQuery()}" in zoom
 
 
-def test_a_filter_change_drops_a_stale_zoom_of_the_control_chart(hub):
-    line = next(l for l in hub.PAGE.splitlines() if l.startswith("const pickFilter="))
-    assert "LT.zc=null" in line and "LT.zr=null" in line
+def test_a_filter_change_drops_a_stale_zoom_and_both_stale_charts(hub):
+    pick = next(line for line in hub.PAGE.splitlines() if line.startswith("const pickFilter="))
+    assert pick.count("barMoved()") == 2, "a pick and a clear both tell the charts"
+    moved = next(line for line in hub.PAGE.splitlines() if line.startswith("const barMoved="))
+    assert all(part in moved for part in ("LT.zc=null", "LT.zr=null", "FLOWD={}", "flowOpen(FLOWK)"))
+
+
+def test_both_chart_routes_read_the_bar_values_from_the_query():
+    src = HUB_PY.read_text()
+    for route, fn in (("/api/chart/cfd", "flow_cfd"), ("/api/chart/lead", "flow_lead")):
+        served = next(line for line in src.splitlines() if f'startswith("{route}")' in line)
+        assert f'{fn}(*board_filters(self.path.partition("?")[2]))' in served
 
 
 def _flow_block(hub):
@@ -287,7 +300,7 @@ def test_the_chart_says_which_days_answer_no_spec_and_no_wave(hub, board, tmp_pa
     history = hub._flow.history_path(hub.BOARD, hub.REPO)
     history.write_text(json.dumps({"t": _epoch(20), "counts": {"issue": {hub.COLUMN["unscheduled"]: 2}},
                                    "frozen": 0, "none": 0}) + "\n")
-    cfd = hub.board()["flow"]["cfd"]
+    cfd = hub.flow_cfd()["cfd"]
     block = _flow_block(hub).split("const drawFlow")[0]
     drawing = "\n".join(["const COLORS={},COLNAME={};", "const esc=s=>String(s);", block,
                          f"process.stdout.write(flowCFD({json.dumps(cfd)}));"])

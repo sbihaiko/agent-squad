@@ -2970,22 +2970,37 @@ LEAD_TIMEFRAMES = [("7", 7), ("14", 14), ("30", 30), ("90", 90), ("180", 180), (
 
 
 def lead_rows():
-    """The closed-card rows the lead-time arithmetic reads, one per board item (#900)."""
+    """The closed-card rows the lead-time arithmetic reads, one per board item (#900). Each row names its spec and wave,
+    the values the board's bar filters by (#904)."""
     return [{"n": i["n"], "column": _columns_module.view_column(i["st"], str(i["s"]).lower() == "closed", i.get("l"), i.get("cr"))[0],
              "reason": _leadtime.NOT_DELIVERED if _columns_module.not_planned(i.get("cr")) else None,   # the chart's own word (#921)
-             "c": i.get("c") if str(i["s"]).lower() == "closed" else None, "o": i.get("o"), "t": i.get("t", "")} for i in board_cache["items"]]
+             "c": i.get("c") if str(i["s"]).lower() == "closed" else None, "o": i.get("o"), "t": i.get("t", ""),
+             "spec": _flow.spec_key(i), "wave": _flow.wave_key(i.get("l"))} for i in board_cache["items"]]
+
+
+def board_filters(query):
+    """The bar's Waves and Specs values from a query string, `fw=4,none&fs=5` (#904). An absent value is an empty list: all."""
+    q = urllib.parse.parse_qs(query or "")
+    def values(key): return [v for v in (q.get(key, [""])[0]).split(",") if v]
+    return values("fw"), values("fs")
+
+
+def _in_bar(row, fw, fs):
+    """A row the bar keeps: its wave is among the waves named, and its spec among the specs named. Empty lists keep all."""
+    return (not fw or row["wave"] in fw) and (not fs or row["spec"] in fs)
 
 
 def lead_zoom(query):
     """The control chart over a dragged range (`from` and `to`, ISO datetimes) or a timeframe preset (`tf`), `scale` jira
     or log (#900), measured from the start column `a` to the end column `b` (#905). No `a` is the card's opened instant;
-    no `b`, or the closed column, is its closed instant."""
+    no `b`, or the closed column, is its closed instant. The bar's values in the query filter its rows (#904)."""
     q = urllib.parse.parse_qs(query)
     a, b = (q.get(k, [""])[0] or None for k in ("a", "b"))
     if b == COLUMN["issue_closed"]: b = None
     if any(c is not None and c not in ORDER for c in (a, b)): return {"error": "bad column: a and b name a board column"}
     log = q.get("scale", ["jira"])[0] == "log"
-    rows = _leadtime.span(lead_rows(), card_transitions(), start=a, end=b)
+    fw, fs = board_filters(query)
+    rows = _leadtime.span([r for r in lead_rows() if _in_bar(r, fw, fs)], card_transitions(), start=a, end=b)
     measure = f"{a or 'opened'} -> {b or 'closed'}"
     if "from" not in q and "to" not in q and "tf" in q:
         days = dict(LEAD_TIMEFRAMES).get(q["tf"][0], 0)
@@ -3015,15 +3030,17 @@ def history_key():
     try: st = path.stat(); return (str(path), st.st_mtime_ns, st.st_size)
     except OSError: return (str(path), None)
 
-def _cfd_payload():
-    """The cumulative flow's numbers, computed here from board_cfd; the page draws them and computes none."""
+def _cfd_payload(fw=(), fs=()):
+    """The cumulative flow's numbers, computed here from board_cfd; the page draws them and computes none.
+    `fw` and `fs` are the bar's Waves and Specs values: the chart keeps only the cards the bar keeps (#904)."""
     path = _flow.history_path(BOARD, REPO)
-    cfd = _cfd.cfd(_flow.samples(path), ORDER, skips=_flow.skips(path))
+    cfd = _cfd.cfd(_flow.samples(path), ORDER, skips=_flow.skips(path), spec=fs, wave=fw)
     extents = {p["day"]: _band_extents(p["bands"]) for p in cfd["points"]}
     days = sorted([*extents, *cfd["gaps"]])   # one entry per calendar day: a day with no sample carries no value (#894)
     yticks = _y_ticks(max((e[FLOW_BANDS[0]][1] for e in extents.values()), default=0))
     def values(name, k): return [extents[d][name][k] if d in extents else None for d in days]
     points = {p["day"]: p for p in cfd["points"]}
+    legacy = {p["day"] for p in cfd["points"] if p.get("legacy")}   # a day whose sample predates the spec and wave (#904)
     def view(width):
         """The chart over the last `width` calendar days (all of them when None): the same arrays, cut to the window (#901)."""
         window = days if width is None else days[-width:]
@@ -3033,6 +3050,7 @@ def _cfd_payload():
         def cut(arr): return [arr[days.index(d)] for d in window]
         return {"start": dt.datetime.fromtimestamp(cfd["start"], dt.UTC).date().isoformat() if cfd["start"] is not None else None,
                 "days": window, "ymax": ticks[-1], "yticks": ticks, "xticks": _x_ticks(window),
+                "legacy": sum(1 for d in window if d in legacy),
                 "wip": [points[d]["wip"] if d in points else None for d in window],
                 "throughput": [points[d]["throughput"] if d in points else None for d in window],
                 "bands": [{"name": n, "lower": cut(values(n, 0)), "upper": cut(values(n, 1)),
@@ -3041,9 +3059,10 @@ def _cfd_payload():
     return {"cfd": {**view(None), "ranges": {key: view(width) for key, width in CFD_RANGES}}}
 
 
-def _lead_payload():
-    """The lead-time numbers over the closed cards of the board read, computed here; the page draws them and computes none."""
-    rows = lead_rows()
+def _lead_payload(fw=(), fs=()):
+    """The lead-time numbers over the closed cards of the board read, computed here; the page draws them and computes none.
+    The bar's values `fw` and `fs` filter the rows (#904)."""
+    rows = [r for r in lead_rows() if _in_bar(r, fw, fs)]
     lead = _leadtime.lead_time(rows)
     now = dt.datetime.now(dt.UTC)
     control = {scale: {key: _leadtime.control_chart(rows, timeframe=days, log=scale == "log", now=now)
@@ -3054,9 +3073,12 @@ def _lead_payload():
                      "control": control, "columns": ORDER}}
 
 
-def flow_cfd(): return chart("cfd", history_key(), _cfd_payload)
+def flow_cfd(fw=(), fs=()):
+    """The cumulative flow for the bar's values; the cache key holds them, so a filter change reads anew (#904)."""
+    return chart("cfd", (history_key(), tuple(fw), tuple(fs)), lambda: _cfd_payload(fw, fs))
 
-def flow_lead(): return chart("lead", board_cache.get("t"), _lead_payload)
+def flow_lead(fw=(), fs=()):
+    return chart("lead", (board_cache.get("t"), tuple(fw), tuple(fs)), lambda: _lead_payload(fw, fs))
 
 
 def drawn_column(i, moves, read_at, window):
@@ -3089,7 +3111,7 @@ def drawn_column(i, moves, read_at, window):
             "recorded": recorded, "entry": entry}
 
 
-def board():
+def board(fw=(), fs=()):
     overlay = overlay_on()   # one setting turns the overlay off: the served board is then the list read alone (#651)
     moves = read_moves() if overlay else {}   # the record is read on every serve, so a page reload sees the same overlay (#650)
     read_at = board_cache.get("rt")   # the instant the list read began, never the completion stamp `t`: a read that began before a move cannot have carried it, however late it finished
@@ -4299,7 +4321,7 @@ const flowCFD=c=>{const sel=`<label class=fhead>Range <select id=cfdr>${CFD_R.ma
     const text=gap?`${esc(d)}: no whole read this day`:`${esc(d)}: ${parts} · WIP ${(c.wip||[])[i]} · throughput ${tp===null?"none":tp}`;
     return `<rect x=${flowX(i,n)-cw/2} y=${flowP-10} width=${cw} height=${flowH-2*flowP+10} fill=transparent><title>${text}</title></rect>`;}).join("");
   return sel+`<svg viewBox="0 0 ${flowW} ${flowH}">${c.bands.map(polys).join("")}${cfdAxis(c)}${hover}</svg>`+
-    `<p class=fnote>history from ${esc(c.start)} UTC</p><p>${c.bands.map(b=>`<span class=flg><i style="background:${COLORS[b.name]||"#888"}"></i>${esc(b.name)}</span>`).join("")}</p>`;};
+    `<p class=fnote>history from ${esc(c.start)} UTC</p>${c.legacy?`<p class=fnote>${c.legacy} ${c.legacy===1?"day comes":"days come"} from before the spec and wave history: they answer no spec and no wave</p>`:""}<p>${c.bands.map(b=>`<span class=flg><i style="background:${COLORS[b.name]||"#888"}"></i>${esc(b.name)}</span>`).join("")}</p>`;};
 const EXREASON={not_planned:"closed as not planned",abandoned:"closed as abandoned",open:"still open",no_opened:"no opened date"};   // the cards the chart leaves out, in words (#921)
 let LT={tf:"30",log:false,pick:null,zc:null,zr:null,rng:null,tok:0,noclick:false,a:"",b:"",cols:[]};   // the control chart's timeframe, its scale, the cluster listed under it, and a drag zoom: the hub's chart over zr=[from,to] (#900)
 const ltSpan=(r,a,b)=>{const t0=Date.parse(r.start),t1=Date.parse(r.end),at=f=>new Date(t0+f*(t1-t0)).toISOString();return [at(a<0?0:a),at(b>1?1:b)]};   // plot fractions to the dates they name (#900)
@@ -4337,10 +4359,10 @@ const flowLead=l=>{const S=l.summary,ex=l.excluded.map(e=>`${e.count} ${esc(EXRE
 const drawFlow=()=>{{const w=$("#flowb").clientWidth-20;flowW=w<600?600:w>1600?1600:(w|0)}const cfd=FLOWK==="cfd";
   const a=FLOWD[FLOWK];
   $("#flowb").innerHTML=!a?"<p class=fnote>loading the chart from the hub</p>":(cfd?flowCFD(a.cfd.ranges[CF.r]):flowLead(a.lead))+`<p class=fnote>data read ${new Date(a.t*1000).toLocaleTimeString()}</p>`};
-const flowOpen=async k=>{FLOWK=k;$("#flowov").hidden=false;drawFlow();try{const a=await (await fetch(`/api/chart/${k}`)).json();FLOWD[k]=a;if(FLOWK===k)drawFlow()}catch(e){}};
-const ltQ=()=>`&scale=${LT.log?"log":"jira"}&a=${encodeURIComponent(LT.a)}&b=${encodeURIComponent(LT.b)}`,ltOwn=()=>LT.a!==""||LT.b!=="";   // a span other than created to closed is the hub's chart for it (#905)
+const flowOpen=async k=>{FLOWK=k;$("#flowov").hidden=false;drawFlow();const q=barQuery();try{const a=await (await fetch(`/api/chart/${k}?${q}`)).json();if(q!==barQuery())return;FLOWD[k]=a;if(FLOWK===k)drawFlow()}catch(e){}};
+const ltQ=()=>`&scale=${LT.log?"log":"jira"}&a=${encodeURIComponent(LT.a)}&b=${encodeURIComponent(LT.b)}&${barQuery()}`,ltOwn=()=>LT.a!==""||LT.b!=="";   // a span other than created to closed is the hub's chart for it (#905); the bar's values filter it (#904)
 const ltZoom=async(f,t)=>{const tok=++LT.tok;try{const c=await (await fetch(`/api/leadtime?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}${ltQ()}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;LT.zr=[f,t];LT.pick=null;drawFlow()}catch(e){}};   // the hub recomputes the chart for the dragged range (#900)
-const ltGet=async()=>{const tok=++LT.tok;LT.zc=null;LT.pick=null;if(!ltOwn()){drawFlow();return}try{const c=await (await fetch(`/api/leadtime?tf=${LT.tf}${ltQ()}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;drawFlow()}catch(e){}};   // the timeframe's chart for the chosen span (#905)   // the hub recomputes the chart for the dragged range (#900)
+const ltGet=async()=>{const tok=++LT.tok;LT.zc=null;LT.pick=null;if(!ltOwn()){drawFlow();return}try{const c=await (await fetch(`/api/leadtime?tf=${LT.tf}${ltQ()}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;drawFlow()}catch(e){}};   // the timeframe's chart for the chosen span (#905)
 const ltPx=(e,s)=>{const r=s.getBoundingClientRect();return (e.clientX-r.left)/r.width*flowW};
 const ltClamp=x=>x<flowP?flowP:x>flowW-flowP?flowW-flowP:x,ltLo=(p,q)=>p<q?p:q,ltHi=(p,q)=>p<q?q:p;
 let LTD=null;   // the drag across a control chart's plot in progress (#900)
@@ -4359,7 +4381,8 @@ $("#flowb").onclick=e=>{if(LT.noclick){LT.noclick=false;return}
   const k=e.target.closest("circle[data-k]");if(k){LT.pick=+k.dataset.k;drawFlow();return}const r=e.target.closest("tr[data-o]");if(r)showIssue(+r.dataset.o,"__REPO__")};
 $("#bflow").onclick=()=>flowOpen("cfd");$("#blead").onclick=()=>flowOpen("lead");addEventListener("resize",()=>{if(!$("#flowov").hidden)drawFlow()});
 // flow-charts:end
-async function pollBoard(){lim.busy=1;try{const b=await (await fetch("/api/board")).json(),FLOW=/*BOARD_FLOW*/,   // development flow, left to right
+const barQuery=()=>`fw=${encodeURIComponent((bo.fw||[]).join(","))}&fs=${encodeURIComponent((bo.fs||[]).join(","))}`;   // the bar's Waves and Specs, read by the board and both diagrams (#904)
+async function pollBoard(){lim.busy=1;try{const b=await (await fetch(`/api/board?${barQuery()}`)).json(),FLOW=/*BOARD_FLOW*/,   // development flow, left to right
 all=[b.prs,...b.groups.sort((x,y)=>{const i=n=>{const k=FLOW.indexOf(n);return k<0?FLOW.length:k};return i(x.name)-i(y.name)})],f=q.trim().replace(/^#/,"");
 if(bo.open===undefined||!all.some(g=>g.name===bo.open))bo.open=(all.find(g=>g.n&&g.name!==COLNAME.issue_closed&&!isPR(g.name))||all[2]).name;
 const CN=all.map(g=>g.name);   // every column of this board: what colOf reads the user columns out of, never a colour of its own
@@ -4495,7 +4518,8 @@ document.addEventListener("click",e=>{const h=e.target.closest("#bbody .lh");if(
  const p=e.target.closest("#lhcx");if(p&&lanesNow){if(p.hasAttribute("data-hide")){bo.showClosed=false;saveB();pollBoard();return}
   const end=new Set([COLNAME.issue_closed,COLNAME.abandoned]),names=new Set(lanesNow.hc.map(x=>x.name).filter(c=>!end.has(c)));bo.lc=bo.lc||{};   // a hidden column's pill expands the lanes that hold its cards; the end columns are drawn, never a lane opened for them
   for(const l of lanesNow.lanes)if(l.collapsed&&Object.keys(l.counts).some(c=>names.has(c)))bo.lc[l.id]=false;saveB();pollBoard()}});
-const pickFilter=(id,key)=>{const box=$("#"+id);box.addEventListener("change",e=>{const v=e.target.value,h=new Set(bo[key]||[]);e.target.checked?h.add(v):h.delete(v);bo[key]=[...h];saveB();pollBoard()});box.addEventListener("click",e=>{if(!e.target.closest("[data-clear]"))return;e.preventDefault();bo[key]=[];saveB();pollBoard()})};
+const barMoved=()=>{LT.tok++;LT.zc=null;LT.zr=null;FLOWD={};if(!$("#flowov").hidden&&FLOWK)flowOpen(FLOWK)};   // a bar value changes both charts: each reads its route anew (#904)
+const pickFilter=(id,key)=>{const box=$("#"+id);box.addEventListener("change",e=>{const v=e.target.value,h=new Set(bo[key]||[]);e.target.checked?h.add(v):h.delete(v);bo[key]=[...h];barMoved();saveB();pollBoard()});box.addEventListener("click",e=>{if(!e.target.closest("[data-clear]"))return;e.preventDefault();bo[key]=[];barMoved();saveB();pollBoard()})};
 pickFilter("fwl","fw");pickFilter("fsl","fs");
 // The owner's one move (#560): the arrow a Backlog card carries delegates to the hub, and the card shows the reason a
 // refusal gives. Which cards carry the arrow is the row's own fact (`x.pm`), never the page's rule.
@@ -5495,10 +5519,10 @@ class H(BaseHTTPRequestHandler):
             m = re.search(r"[?&]n=(\d{1,6})\b", self.path); rr = re.search(r"[?&]r=([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)", self.path)
             body, ct = json.dumps(issue_detail(int(m[1]), rr[1] if rr else None) if m else {"err": "bad n"}).encode(), "application/json"
         elif self.path.startswith("/api/board"):
-            try: body, ct = json.dumps(board()).encode(), "application/json"
+            try: body, ct = json.dumps(board(*board_filters(self.path.partition("?")[2]))).encode(), "application/json"
             except ValueError as e: body, ct = json.dumps({"error": str(e)}).encode(), "application/json"
-        elif self.path.startswith("/api/chart/cfd"): body, ct = json.dumps(flow_cfd()).encode(), "application/json"
-        elif self.path.startswith("/api/chart/lead"): body, ct = json.dumps(flow_lead()).encode(), "application/json"
+        elif self.path.startswith("/api/chart/cfd"): body, ct = json.dumps(flow_cfd(*board_filters(self.path.partition("?")[2]))).encode(), "application/json"
+        elif self.path.startswith("/api/chart/lead"): body, ct = json.dumps(flow_lead(*board_filters(self.path.partition("?")[2]))).encode(), "application/json"
         elif self.path.startswith("/api/leadtime"): body, ct = json.dumps(lead_zoom(self.path.partition("?")[2])).encode(), "application/json"   # the control chart over a dragged range (#900)
         elif self.path.startswith("/api/version"): body, ct = json.dumps({"v": BOOT}).encode(), "application/json"
         elif self.path.startswith("/api/subs"): body, ct = json.dumps({**subs_month(), "presets": {k: {i: {"name": n, "usd": p} for i, (n, p) in v.items()} for k, v in PRESETS.items()}}).encode(), "application/json"
