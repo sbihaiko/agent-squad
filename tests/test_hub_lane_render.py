@@ -39,7 +39,6 @@ def test_the_lane_renderer_is_wired_into_the_board_body():
 def test_the_served_page_carries_the_renderer(tmp_path, monkeypatch):
     """What the browser receives, not what the file holds: the inlined page carries both the model and the renderer."""
     import importlib.util
-    import os
     import sys
 
     monkeypatch.setenv("SG_REPO", "x/y")

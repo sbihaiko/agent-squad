@@ -5,7 +5,17 @@ profile's own context from the seam, address.sh); `/` lists the repositories and
 (every one on loopback; on the tailnet, those whose own allow list admits the login); a path no profile owns answers 404 with
 that list; `/api/hub` names the hub and its repositories, so hubctl.sh can tell this hub from any other listener. A refused
 tailnet request answers 403 with its reason. Read-only, as hub.py is: it starts no run."""
-import html, importlib.util, io, json, os, pathlib, re, shlex, subprocess, sys, threading
+import html
+import importlib.util
+import io
+import json
+import os
+import pathlib
+import re
+import shlex
+import subprocess
+import sys
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -18,10 +28,27 @@ def _ctx(arg):
     return {k: v for k, _, v in (ln.partition("=") for ln in shlex.split(p.stdout))} if p.returncode == 0 else {}
 
 
+_SLUGS = {"k": None, "v": None}
+
+
+def _profiles_key():
+    """The profile files and their change times: the list address.sh prints changes only when this does."""
+    d = pathlib.Path(os.environ.get("SG_PROFILES_DIR") or HERE / "profiles")
+    try:
+        return tuple(sorted((f.name, f.stat().st_mtime_ns) for f in d.glob("*.sh")))
+    except OSError:
+        return None
+
+
 def profile_slugs():
-    """The profile names address.sh lists now: read on each call, so a profile added or removed while the hub runs shows (#917)."""
+    """The profile names address.sh lists now, read again only when a profile file is added, removed or changed (#917):
+    the index polls every 10 s, and one list read per request held the single lock long enough that the page's fetches
+    and the identity check timed out."""
+    key = _profiles_key()
+    if key is not None and key == _SLUGS["k"]: return _SLUGS["v"]
     out = subprocess.run(["bash", str(CTX), "--list"], capture_output=True, text=True, timeout=30).stdout
-    return [ln.split("\t")[0] for ln in out.splitlines() if ln.strip()]
+    _SLUGS.update(k=key, v=[ln.split("\t")[0] for ln in out.splitlines() if ln.strip()])
+    return _SLUGS["v"]
 
 
 def load_one(slug):
