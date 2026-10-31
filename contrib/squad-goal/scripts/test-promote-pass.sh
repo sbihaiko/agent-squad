@@ -48,6 +48,7 @@ read -r where at lock dirty < "$T/suite.log"
 [ "$lock" = held-gatefree ] && ok "the suite ran inside the proof lock, and the landing gate lock was free" || ko "the suite ran with the proof lock $lock"
 [ "$dirty" = 0 ] && ok "the suite ran in a clean tree" || ko "the suite's tree was dirty ($dirty)"
 case "$where" in "$HOME"/wt-*|*/wt-*) ko "the suite tree is a wt-* tree, which wtclean removes: $where";; *) ok "the suite tree is not a wt-* tree";; esac
+
 # #739: the proof reserves the machine it measures. The dispatchers read the marker through gh_dispatch_hold, and the pass
 # removes it on exit, so a stopped proof leaves nothing behind.
 [ "$(tail -n 1 "$T/reserve.log" 2>/dev/null)" = reserved ] && ok "the proof reserved the machine while the suite ran" || ko "no reserve stood while the suite ran: '$(cat "$T/reserve.log" 2>/dev/null)'"
@@ -153,5 +154,19 @@ rm -f "$SG_STATE/promote-reserve"
 
 # The promotion is the loop's, on the proof of the dev tip, and never a cycle step (#576, ADR-0145 rule 3): the proof held the gate lock and no wave landed meanwhile.
 /usr/bin/grep -vE '^[[:space:]]*#' "$d/watch.sh" | /usr/bin/grep -q 'promote-pass\.sh' && ko "watch.sh still runs the promotion" || ok "watch.sh runs no promotion step: the loop promotes on the proof, never from the cycle"
+# ADR-0156: a full pass carries across a covered delta. The proven tip is t1; dev moves by one covered path; the delta carries it
+# and the pass promotes without the full suite. A path outside the map runs the full suite again.
+before=$(runs)
+$W fetch -q origin; $W checkout -q -B dev origin/dev; mkdir -p "$T/w/contrib/squad-goal/scripts"
+echo "# delta" >> "$T/w/contrib/squad-goal/scripts/test-nightly.sh"; $W add -A; $W commit -q -m delta-covered; $W push -q origin dev
+t2=$(tip dev); SG_DELTA_SUITE=true pass; rc=$?
+[ $rc = 0 ] && [ "$(tip stg)" = "$t2" ] && ok "a covered delta promotes the tip that moved past the full pass" || ko "delta carry: rc $rc, stg $(tip stg), dev $t2, out '$(cat "$T/out")'"
+[ "$(runs)" = "$before" ] && ok "a covered delta runs no full suite" || ko "the full suite ran for a covered delta: $(cat "$T/suite.log")"
+$W fetch -q origin; $W checkout -q -B dev origin/dev; echo x >> "$T/w/pyproject.toml" 2>/dev/null || echo x > "$T/w/pyproject.toml"
+$W add -A; $W commit -q -m delta-uncovered; $W push -q origin dev
+t3=$(tip dev); rm -f "$SG_STATE/gate-status-delta"; pass; rc=$?
+[ $rc = 0 ] && [ "$(tip stg)" = "$t3" ] && ok "an uncovered delta falls back to the full suite, which promotes" || ko "uncovered delta: rc $rc, stg $(tip stg), dev $t3, out '$(cat "$T/out")'"
+[ "$(runs)" -gt "$before" ] && ok "the uncovered delta ran the full suite" || ko "the uncovered delta skipped the full suite: $(cat "$T/suite.log")"
+
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 rm -rf "$T"; exit $fail
