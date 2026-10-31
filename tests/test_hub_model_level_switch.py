@@ -186,3 +186,11 @@ def test_the_chain_rows_no_longer_carry_a_chain_level_switch_button(page):
 def test_the_diff_names_each_row_and_the_model_level_change(page):
     assert "always" in page and "outside hours" in page
     assert "switched off" in page or "off (model)" in page
+
+
+def test_the_hub_predicate_skips_a_model_switched_off_in_every_chain(hub, models):
+    """One predicate for the hub too: a model switched off at model level may not run in any chain it sits in."""
+    d = {**MODELS_DOC, "model_off": {"claude-sonnet-5-5": True}}
+    assert hub.may_run(d, "coding_models", "claude-sonnet-5-5") is False
+    assert hub.may_run(d, "vision_models", "claude-sonnet-5-5") is False
+    assert hub.may_run(d, "coding_models", "claude-deepseek-v4-flash") is True

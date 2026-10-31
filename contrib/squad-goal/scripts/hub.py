@@ -1151,6 +1151,7 @@ LIMIT_KEY = {"guard": ("SG_TOKEN_GUARD", "on"), "cap": ("SG_TOKEN_BURN_CAP", "15
              "factor": ("SG_TOKEN_PAUSE_FACTOR", "3"), "window": ("SG_TOKEN_BURN_WINDOW_H", "24")}
 LIMIT_LABEL = {"cap": "token cap", "factor": "pause factor"}
 LIMIT_LEDGER = "spend-limits-ledger.jsonl"
+MODELS_LEDGER = "models-switch-ledger.jsonl"   # one line per model-level switch flip (SPEC 889 #920)
 
 def profiles_dir():
     """The directory the profiles live in: SG_PROFILES_DIR when the runner exports it (env.sh does), else the seam's answer."""
@@ -3223,6 +3224,7 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #src,#per{display:inline-flex;flex-wrap:nowrap;gap:2px;margin:0}#src button{padding:1px 5px;font-size:var(--fs-min)}#per button{padding:1px 3px;font-size:var(--fs-min)}
 .kr{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-auto-rows:min-content;column-gap:8px;row-gap:2px;align-items:baseline;padding:5px 0;border-bottom:1px solid var(--line);font-size:var(--fs-min);min-width:0}.kr:last-child{border:0}.kr .l{grid-row:1/3;min-width:0;font-size:var(--fs-min);line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.kr .l small{display:inline;color:var(--mute);font-size:var(--fs-min)}.kr b{grid-column:2;justify-self:end;font-size:var(--fs-body);font-weight:600;line-height:1}.kr b small{font-size:var(--fs-min);font-weight:400;color:var(--mute)}.kr b.m{color:var(--mute)}.kr b.w{color:var(--warn)}
 .kr .d{grid-column:2;justify-self:end;font-size:var(--fs-min);padding:0;white-space:nowrap;color:var(--mute)}.kr .d .good{color:#5fd38d}.kr .d .bad{color:#ff7b7b}
+.mchs,.mch-row{display:flex;flex-wrap:wrap;gap:4px;align-items:center;margin:4px 0}.mch{min-height:32px;padding:4px 10px;border:1px solid var(--line);border-radius:14px;background:#10141a;color:var(--fg);font-size:var(--fs-min);cursor:pointer}.mch.off{text-decoration:line-through;color:var(--mute)}.mtg{min-height:32px;min-width:32px;padding:2px 10px;border:1px solid var(--line);border-radius:6px;background:#10141a;color:var(--fg);font-size:var(--fs-min);cursor:pointer}.mtg.off{text-decoration:line-through;color:var(--mute)}.mt-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:4px 0}.mt-row .mn{flex:1 1 140px;min-width:0}.mdiff{border-top:1px dashed var(--line);margin-top:8px;padding-top:6px}.mch:focus-visible{outline:2px solid #8ab4ff;outline-offset:2px}.mtg:focus-visible{outline:2px solid #8ab4ff;outline-offset:2px}@media (max-width:600px){.mch{min-height:44px;padding:10px 14px}.mtg{min-height:44px;min-width:44px}}
 #mbody{padding:0}.mc{background:#10141a;border:1px solid var(--line);border-radius:8px;padding:10px;margin:6px 0 8px}.mc .mt{font-size:var(--fs-min);font-weight:600;color:var(--fg);margin:0 0 2px}.mc .mx{font-size:var(--fs-min);color:var(--mute);margin:0 0 8px;line-height:1.35}
 .mr{display:grid;grid-template-columns:22px minmax(0,1fr);align-items:center;gap:5px 8px;padding:7px 8px;border:1px solid var(--line);border-radius:6px;background:var(--panel);margin-bottom:5px;font-size:var(--fs-min)}.mr.p{border-color:#2f5d45;background:#13211b}.mr .rk{flex:none;width:22px;height:22px;border-radius:11px;background:#222a35;color:var(--mute);font-size:var(--fs-min);font-weight:600;display:flex;align-items:center;justify-content:center}.mr.p .rk{background:var(--ok);color:#0b1a12}
 .mr .mn{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3;font-size:var(--fs-min);color:var(--fg)}.mr .ct{grid-column:1/3;display:flex;flex-wrap:wrap;gap:3px;align-items:center;min-width:0}.mr .mi{font-size:var(--fs-min);color:var(--mute);margin-left:4px}.mr .ur{color:var(--warn)}.mr .pv{flex:1 1 auto;min-width:0;font-size:var(--fs-min);color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mr .pv b{color:var(--ok);font-weight:600}.mr .el{flex:none;font-size:var(--fs-min);color:var(--mute);margin-left:2px}.mr .mn small{display:block;font-size:var(--fs-min);color:var(--mute)}.mr .ef{flex:none;width:62px;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;font-size:var(--fs-min);height:var(--ctl-h);padding:0 2px;cursor:pointer;text-overflow:ellipsis}.mr .ef.set{color:var(--warn);border-color:#6b5223}.mr .hr{flex:none;width:50px;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;font-size:var(--fs-min);height:var(--ctl-h);padding:0 2px;text-align:center}.mr .hr::placeholder{color:var(--mute)}.mr .hr:focus{outline:var(--focus-w) solid var(--focus);border-color:var(--acc)}.mr .hr.set{color:var(--warn);border-color:#6b5223}
@@ -3567,10 +3569,10 @@ function mdlSetEff(k,m,v){mdl.efforts=mdl.efforts||{};mdl.efforts[k]=mdl.efforts
 const HRP=["22-07","07-22","20-08","18-06"],HRX=/^([01]\d|2[0-3])-([01]\d|2[0-3])$/;
 function mdlHrs(k,m){return (mdl.hours&&mdl.hours[k]&&mdl.hours[k][m])||""}
 function mdlSetHrs(k,m,v){v=(v||"").trim();mdl.hours=mdl.hours||{};mdl.hours[k]=mdl.hours[k]||{};if(HRX.test(v)&&v.slice(0,2)!==v.slice(3))mdl.hours[k][m]=v;else delete mdl.hours[k][m]}
-/* The row's switch (#1819): a state, not an action. Out of the chain the model keeps its place, its rank, its effort
-   and its hrs, and every consumer of the chain skips it exactly like a model outside its window. */
+/* The chain row's old switch (#1819) is read only now: a file that holds it shows "off (chain)" (SPEC 889 #920). */
 function mdlOff(k,m){return !!(mdl.off&&mdl.off[k]&&mdl.off[k][m])}
-function mdlSetOff(k,m,v){mdl.off=mdl.off||{};mdl.off[k]=mdl.off[k]||{};if(v)mdl.off[k][m]=true;else delete mdl.off[k][m]}
+/* The model's switch, one per model for every chain (SPEC 889 #920). The table stages it until Save; a chip writes it at once. */
+function mdlSetOffM(m,v){mdl.model_off=mdl.model_off||{};mdl.model_off[m]=!!v}
 /* What a model box shows is the hub's answer, model_box() (#677, ADR-0137): the registry label and its route, or
    "unregistered". The page holds no provider rule. An id just typed into an Add box has no answer until the save. */
 const MBOX0={llm:null,route:null,registered:null,text:"resolved on save"};
@@ -3580,24 +3582,46 @@ function sugId(list,v){const s=((mdl.suggest||{})[list]||[]).find(o=>o.text===v)
 function mdlSub(x){if(!x.sub)return"";const q=x.quota||{},when=q.spent&&q.until_text?`, resets ${esc(q.until_text)}`:"";return`<span class="${q.spent?"bk":"el"}" title="${esc(x.sub.label)}${q.reason?" · "+esc(q.reason):""}">${esc(x.sub.label)}${q.spent?" · spent"+when:""}</span>`}
 function mdlName(x,m){return x.llm?esc(x.llm):esc(m)}   // the id stays in the row title; only an unregistered row shows it (#687)
 function mdlRoute(x,dflt){return x.registered===false?`<span class=ur>unregistered</span>`:esc(x.route||(x.registered?dflt:x.text))}
+/* The model switch (SPEC 889 #920): one boolean per model, written by the chips and by the table through POST /api/models.
+   The chain row's old switch is read only: a file that holds it shows "off (chain)" and the panel writes none. */
+function mdlOffM(m){return !!(mdl.model_off&&mdl.model_off[m])}
+function mdlChips(){return Object.keys(MLAB).map(k=>`<div class=mch-row><span class=el>${MLAB[k]}</span>${(mdl[k]||[]).map(m=>{const of=mdlOffM(m),x=mdlBox(k,m);return`<button class="mch${of?" off":""}" data-mo="${esc(m)}" aria-pressed="${of}" title="${esc(m)} · ${of?"off (model): skipped in every chain; press to switch it on":"on: press to switch it off in every chain"}">${mdlName(x,m)}${of?" · off (model)":""}</button>`}).join("")}</div>`).join("")}
+function mdlTable(){const rows=mdl.models||[];return `<div class=mc><div class=mt>Models table</div><div class=mx>One row per model. The switch takes a model out of every chain and keeps its place. Hours are set on the chain rows only.</div>`+rows.map(r=>{const of=mdlOffM(r.id),x=mdlBox("known",r.id);return`<div class="mt-row${of?" off":""}"><span class=mn title="${esc(r.id)} · ${esc(x.text)}">${mdlName(x,r.id)}</span>${mdlSub(r)}<span class=el>${esc(of?"off (model)":r.state)}</span><button class="mtg${of?" off":""}" data-mt="${esc(r.id)}" aria-pressed="${of}" title="${of?"off (model): press to switch it on in every chain":"on: press to switch it off in every chain"}">${of?"off":"on"}</button></div>`}).join("")+`</div>`}
+function mdlRowText(k,m){const e=mdlEff(k,m),h=mdlHrs(k,m);return [m,(e&&e!=="medium")?e:"",h||"always"].filter(Boolean).join(" · ")}
+function mdlDiff(){const s=JSON.parse(mdlSrv),out=[];
+ for(const m of (mdl.models||[]).map(r=>r.id)){const was=!!(s.model_off&&s.model_off[m]);if(was!==mdlOffM(m))out.push(`${m}: ${mdlOffM(m)?"switched off (model) in every chain":"switched on in every chain"}`)}
+ for(const k of Object.keys(MLAB)){const now=(mdl[k]||[]).map(m=>mdlRowText(k,m)).join(" → ");const old=(s[k]||[]).map(m=>{const e=(s.efforts&&s.efforts[k]&&s.efforts[k][m])||"",h=(s.hours&&s.hours[k]&&s.hours[k][m])||"";return [m,(e&&e!=="medium")?e:"",h||"always"].filter(Boolean).join(" · ")}).join(" → ");if(now!==old)out.push(`${MLAB[k]}: ${now||"empty"}`)}
+ return out}
 function mdlRender(){const b=$("#mbody");if(!mdl){b.innerHTML="<span class=m>loading…</span>";return}
  {const lc=mdl.last_coding||(mdl.coding_models||[])[0]||"",x=lc?mdlBox("coding_models",lc):MBOX0;$("#mdsr").textContent=x.llm?`${x.llm} · ${lc}`:lc}   // the model the last run coded with, not the chain's head
  const dirty=JSON.stringify(mdl)!==mdlSrv;   // the dropdowns read mdl.suggest: the label first, the saved value stays the id (#672, #687)
  const ch=mdl.chain||{},chOut=ch.out||[],chHit=(m)=>chOut.find(o=>o.until_text&&o.model.split(':').pop()===String(m).split(':').pop()),chTag=(m)=>{const o=chHit(m);return o?`<span class=bk title="${esc(o.reason)}">${esc(o.reason)}, resets ${esc(o.until_text)}</span>`:''},chBan=ch.banner?`<div class="mx err" role=alert>${esc(ch.banner)}</div>`:(ch.notice?`<div class=mx>${esc(ch.notice)}</div>`:"");
- b.innerHTML=chBan+`${Object.keys(MLAB).map(k=>`<datalist id=mk-${k}>${((mdl.suggest||{})[k]||[]).map(s=>`<option value="${esc(s.text)}" label="${esc(s.id)}">`).join("")}</datalist>`).join("")}<datalist id=hrp>${HRP.map(v=>`<option value="${v}">`).join("")}</datalist>`+Object.keys(MLAB).map(k=>`<div class=mc><div class=mt>${MLAB[k]}</div><div class=mx>${MDESC[k]} Tried top to bottom; the first healthy model wins, and a model switched off is skipped like one outside its hrs window.</div>`+mdl[k].map((m,i)=>{const ef=mdlEff(k,m),hr=mdlHrs(k,m),x=mdlBox(k,m),of=mdlOff(k,m),rk=i?"fallback "+i:"primary";return`<div class="mr${i?"":" p"}${of?" off":""}"><span class=rk title="${rk}${of?" · switched off":""}">${i+1}</span><span class=mn title="${esc(m)} · ${esc(x.text)}">${mdlName(x,m)}</span><span class=ct><span class=pv title="${rk} · ${esc(x.text)}">${mdlRoute(x,rk)}${mdlSub(x)}${of?" · out of the chain":""}</span>${k==="review_models"?chTag(m):""}<span class=el>effort</span><select class="ef${ef?" set":""}" data-ef="${k}|${esc(m)}" title="effort for this model (medium is the default)">${EFF.map(e=>`<option value="${e==="medium"?"":e}"${(ef||"medium")===e?" selected":""}>${e}</option>`).join("")}</select><span class=el>hrs</span><input class="hr${hr?" set":""}" list=hrp data-hr="${k}|${esc(m)}" value="${esc(hr)}" placeholder="always" title="local hours this model may run (HH-HH, wraps midnight; empty = always)"><span class=mb><button data-mv="${k}|${i}|-1" ${i?"":"disabled"} title="move up">↑</button><button data-mv="${k}|${i}|1" ${i<mdl[k].length-1?"":"disabled"} title="move down">↓</button><button class="sw${of?" off":""}" data-sw="${k}|${esc(m)}" aria-pressed="${of}" title="${of?"out of the chain — it never runs; its rank, effort and hrs are kept, press to put it back":"in the chain — press to take it out without removing it: it keeps its rank, its effort and its hrs"}">${of?"off":"on"}</button><button class=x data-rm="${k}|${i}" ${mdl[k].length>1?"":"disabled"} title="remove from chain">✕</button></span></span></div>`}).join("")+`<div class=madd><input list=mk-${k} data-add="${k}" placeholder="add a model id…"><button data-addb="${k}">Add</button></div></div>`).join("")
- +`<div class=mx><b>effort</b> · <b>hrs</b> local time <code>HH-HH</code>, wraps midnight, empty = always · <b>switch</b> <code>off</code> skips a model and keeps its place · <b>✕</b> deletes the row.</div>`
+ const diff=dirty?mdlDiff():[];
+ b.innerHTML=chBan+`<div class=mchs>${mdlChips()}</div>`+`${Object.keys(MLAB).map(k=>`<datalist id=mk-${k}>${((mdl.suggest||{})[k]||[]).map(s=>`<option value="${esc(s.text)}" label="${esc(s.id)}">`).join("")}</datalist>`).join("")}<datalist id=hrp>${HRP.map(v=>`<option value="${v}">`).join("")}</datalist>`+mdlTable()+Object.keys(MLAB).map(k=>`<div class=mc><div class=mt>${MLAB[k]}</div><div class=mx>${MDESC[k]} Tried top to bottom; the first healthy model wins, and a model switched off is skipped like one outside its hrs window.</div>`+mdl[k].map((m,i)=>{const ef=mdlEff(k,m),hr=mdlHrs(k,m),x=mdlBox(k,m),cof=mdlOff(k,m),o=(mdl.outside&&mdl.outside[k]||{})[m],rk=i?"fallback "+i:"primary";return`<div class="mr${i?"":" p"}${cof?" off":""}"><span class=rk title="${rk}${cof?" · off (chain)":""}">${i+1}</span><span class=mn title="${esc(m)} · ${esc(x.text)}">${mdlName(x,m)}</span><span class=ct><span class=pv title="${rk} · ${esc(x.text)}">${mdlRoute(x,rk)}${mdlSub(x)}${cof?" · off (chain)":""}</span>${k==="review_models"?chTag(m):""}${o?`<span class=bk title="this row runs only inside its hours">outside hours ${esc(o)}</span>`:""}<span class=el>effort</span><select class="ef${ef?" set":""}" data-ef="${k}|${esc(m)}" title="effort for this model (medium is the default)">${EFF.map(e=>`<option value="${e==="medium"?"":e}"${(ef||"medium")===e?" selected":""}>${e}</option>`).join("")}</select><span class=el>hrs</span><input class="hr${hr?" set":""}" list=hrp data-hr="${k}|${esc(m)}" value="${esc(hr)}" placeholder="always" title="local hours this model may run (HH-HH, wraps midnight; empty = always)"><span class=mb><button data-mv="${k}|${i}|-1" ${i?"":"disabled"} title="move up">↑</button><button data-mv="${k}|${i}|1" ${i<mdl[k].length-1?"":"disabled"} title="move down">↓</button><button class=x data-rm="${k}|${i}" ${mdl[k].length>1?"":"disabled"} title="remove from chain">✕</button></span></span></div>`}).join("")+`<div class=madd><input list=mk-${k} data-add="${k}" placeholder="add a model id…"><button data-addb="${k}">Add</button></div></div>`).join("")
+ +`<div class=mx><b>effort</b> · <b>hrs</b> local time <code>HH-HH</code>, wraps midnight, empty = always · <b>✕</b> deletes the row.</div>`
+ +(diff.length?`<div class=mdiff><div class=mt>Diff before save</div>${diff.map(l=>`<div class=mx>${esc(l)}</div>`).join("")}</div>`:"")
  +`<div class="msave${dirty?" dirty":""}"><button id=msv ${dirty?"":"disabled"}>Save</button><button id=mrv ${dirty?"":"disabled"}>Revert</button><span class="st${mdlMsg.startsWith("!")?" err":mdlMsg?" okm":""}">${mdlMsg?esc(mdlMsg.replace(/^!/,"")):(dirty?"<span class=dot></span>unsaved changes":"saved in models.json")}</span></div>`}
 async function mdlLoad(){try{mdl=await (await fetch("/api/models")).json();mdlSrv=JSON.stringify(mdl);mdlRender()}catch(e){}}
+/* One write route for both places (SPEC 889 #920): a chip flips at once; the table stages its switch until Save. */
+async function mdlPost(body){const r=await fetch("/api/models",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});return r.json()}
+async function mdlFlip(m,off){const dirty=JSON.stringify(mdl)!==mdlSrv,was=JSON.parse(JSON.stringify(mdl)),srv=JSON.parse(mdlSrv);
+ try{const d=await mdlPost({version:mdl.version,model_off:{[m]:off}});
+  if(d.err){mdlMsg="!"+d.err}
+  else if(dirty){mdl=d;for(const k of Object.keys(MLAB))mdl[k]=was[k];mdl.efforts=was.efforts;mdl.hours=was.hours;mdl.model_off={...(was.model_off||{}),[m]:off};srv.version=d.version;srv.model_off=d.model_off;mdlSrv=JSON.stringify(srv);mdlMsg=`${m} ${off?"off (model)":"on"} · saved`}
+  else{mdl=d;mdlSrv=JSON.stringify(d);mdlMsg=`${m} ${off?"off (model)":"on"} · saved`}
+ }catch(x){mdlMsg="!switch failed"}
+ mdlRender()}
 $("#mbody").addEventListener("change",e=>{const t=e.target;if(!mdl)return;mdlMsg="";if(t.dataset.ef){const[k,m]=t.dataset.ef.split("|");mdlSetEff(k,m,t.value)}
  else if(t.dataset.hr){const[k,m]=t.dataset.hr.split("|");mdlSetHrs(k,m,t.value)}
  else return;mdlRender()});
 $("#mbody").addEventListener("click",async e=>{const t=e.target.closest("button");if(!t||!mdl)return;mdlMsg="";
+ if(t.dataset.mo){await mdlFlip(t.dataset.mo,!mdlOffM(t.dataset.mo));return}
+ if(t.dataset.mt){const m=t.dataset.mt;mdlSetOffM(m,!mdlOffM(m));mdlRender();return}
  if(t.dataset.mv){const[k,i,d]=t.dataset.mv.split("|"),a=mdl[k],j=+i+ +d;[a[i],a[j]]=[a[j],a[i]]}
- else if(t.dataset.sw){const[k,m]=t.dataset.sw.split("|");mdlSetOff(k,m,!mdlOff(k,m))}
- else if(t.dataset.rm){const[k,i]=t.dataset.rm.split("|");const[m]=mdl[k].splice(+i,1);mdlSetEff(k,m,"");mdlSetOff(k,m,false)}
- else if(t.dataset.addb){const k=t.dataset.addb,v=sugId(k,t.parentElement.querySelector("input").value.trim());if(!MODELRE.test(v))mdlMsg="!invalid model id";else if(mdl[k].includes(v))mdlMsg="!already in the chain";else mdl[k].push(v)}
+ else if(t.dataset.rm){const[k,i]=t.dataset.rm.split("|");const[m]=mdl[k].splice(+i,1);mdlSetEff(k,m,"")}
+ else if(t.dataset.addb){const k=t.dataset.addb,v=sugId(k,t.parentElement.querySelector("input").value.trim());if(!MODELRE.test(v))mdlMsg="!invalid model id";else if(mdl[k].includes(v))mdlMsg="!already in the chain";else if(mdlOffM(v))mdlMsg="!switched off: switch it on first";else mdl[k].push(v)}
  else if(t.id==="mrv")mdl=JSON.parse(mdlSrv);
- else if(t.id==="msv"){try{const r=await fetch("/api/models",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(mdl)}),d=await r.json();if(d.err)mdlMsg="!"+d.err;else{mdl=d;mdlSrv=JSON.stringify(d);mdlMsg="saved · new runs use it"}}catch(x){mdlMsg="!save failed"}}
+ else if(t.id==="msv"){try{const d=await mdlPost(mdl);if(d.err)mdlMsg="!"+d.err;else{mdl=d;mdlSrv=JSON.stringify(d);mdlMsg="saved · new runs use it"}}catch(x){mdlMsg="!save failed"}}
  mdlRender()});
 /* Settings > Spend & limits (#926): the token guard's on/off switch, its daily cap and its pause factor, with the burn
    it measures and whether dispatch is paused now. The page renders and asks; the hub validates, shows the diff, writes
@@ -4282,7 +4306,7 @@ def v1_view(d):
     view["hours"] = {k: {e.raw: e.hrs for e in rows[k] if e.hrs} for k in CHAINS}
     view["efforts"] = {k: {e.raw: e.effort for e in rows[k] if e.effort} for k in CHAINS}
     return view
-READONLY = ("known", "router_known", "suggest", "version", "labels", "boxes", "last_coding", "chain")   # fields models_get() adds for the panel: posted back, never stored
+READONLY = ("known", "router_known", "suggest", "version", "labels", "boxes", "last_coding", "chain", "models", "outside")   # fields models_get() adds for the panel: posted back, never stored
 # One model-id shape, in one place (#221): a bare id, and the context suffix the gateway serves beside it
 # (`claude-deepseek-v4-flash[1m]`). The save validates with MODEL_ID and the page's Add box tests the same source,
 # substituted when the page is served, so a second spelling cannot refuse an id the save takes -- the shape without the
@@ -4470,22 +4494,28 @@ def in_hours(d, chain, mid, when=None):
     if not w: return True
     h = (when or dt.datetime.now()).hour; a, b = int(w[:2]), int(w[3:])
     return a <= h < b if a <= b else (h >= a or h < b)
+def model_off_ids(d):
+    """The models switched off at model level (SPEC 889 #920): normalized ids from models.json's top-level `model_off`.
+    The one registry reads the same key (modelreg.chain), so the hub and every consumer agree on the spelling."""
+    mo = d.get("model_off") if isinstance(d.get("model_off"), dict) else {}
+    return {modelreg.normalize(m).id for m, v in mo.items() if v is True and isinstance(m, str)}
 def model_off(d, chain, mid):
-    """True when the panel switched the model out of its chain (#1819). The row keeps its place, its rank, its effort
-    and its hrs: the switch says "do not run this one", it never edits the chain."""
+    """True when the model is switched off at model level: off in every chain it sits in (SPEC 889 #920)."""
+    return modelreg.normalize(mid).id in model_off_ids(d) and mid in d.get(chain, [])
+def chain_off(d, chain, mid):
+    """True when a chain row already in the file carries the old chain-level switch (`off`). The hub writes no new one
+    (SPEC 889 #920); a file that holds one keeps honoring it, and the panel shows it as "off (chain)"."""
     o = d.get("off") if isinstance(d.get("off"), dict) else {}
     ok = o.get(chain) if isinstance(o.get(chain), dict) else {}
     return bool(ok.get(mid)) and mid in d.get(chain, [])
 def off_of(d):
     """Per-chain {model-id: True} from models.json's optional top-level `off`; only entries whose model is in that chain."""
-    o = d.get("off") if isinstance(d.get("off"), dict) else {}
-    return {k: {m: True for m, v in (o.get(k) or {}).items() if v and model_off(d, k, m)} for k in CHAINS}
+    return {k: {m: True for m in d.get(k, []) if chain_off(d, k, m)} for k in CHAINS}
 def may_run(d, chain, mid, when=None):
     """True when the model may run at `when`: a model switched off is skipped exactly like one outside its window.
 
-    One predicate for both reasons, because the consumers do not care which one it was -- `in_hours` and `model_off`
-    are only apart in the panel, where the row shows which of the two it is."""
-    return not model_off(d, chain, mid) and in_hours(d, chain, mid, when) and not provkey.closed(mid)   # a provider key that is absent closes it too (#482)
+    One predicate for every reason, because the consumers do not care which one it was -- the panel's row shows which."""
+    return not (model_off(d, chain, mid) or chain_off(d, chain, mid)) and in_hours(d, chain, mid, when) and not provkey.closed(mid)   # a provider key that is absent closes it too (#482)
 def hours_of(d):
     """Per-chain {model-id: "HH-HH"} from models.json's optional top-level `hours`; only entries whose model is in that chain."""
     h = d.get("hours") if isinstance(d.get("hours"), dict) else {}
@@ -4513,6 +4543,24 @@ def model_status(raw, states):
     return {"sub": {"key": e.subscription, "label": states[e.subscription]["label"]},
             "quota": {"spent": bool(q["limited"]), "reason": q["reason"], "until": q["until"],
                       "until_text": time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(q["until"])) if q["until"] else None}}
+def model_rows(d, states):
+    """The models table (SPEC 889 #920): one row per model across the four chains, with its subscription and quota and
+    its state. A model switched off at model level reads "off (model)"; a chain row the file still holds off reads
+    "off (chain)"; a spent subscription reads "at limit"; otherwise "on". The table holds no hours (#913)."""
+    ids = list(dict.fromkeys(bare_id(m) for k in CHAINS for m in d.get(k, [])))
+    chain_off_ids = {bare_id(m) for k in CHAINS for m in d.get(k, []) if chain_off(d, k, m)}
+    off = model_off_ids(d)
+    rows = []
+    for b in ids:
+        st = model_status(b, states)
+        is_off = modelreg.normalize(b).id in off
+        spent = bool(st["quota"] and st["quota"]["spent"])
+        state = "off (model)" if is_off else "off (chain)" if b in chain_off_ids else "at limit" if spent else "on"
+        rows.append({"id": b, "off": is_off, "state": state, **st})
+    return rows
+def not_switched_off(suggestions, off):
+    """The add list never offers a model switched off at model level (SPEC 889 #920): it keeps its place in the chains."""
+    return [s for s in suggestions if modelreg.normalize(s["id"]).id not in off]
 def models_get():
     """The four chains as the panel reads them: bare ids, so one model is one row in every chain and in the box.
 
@@ -4520,16 +4568,21 @@ def models_get():
     wrong one of two spellings of the same model."""
     d = models_doc()
     known, rknown, states = known_models(d), router_known(), subscription_states()
+    off = model_off_ids(d)
+    rows = model_rows(d, states)
     return {**{k: [bare_id(m) for m in d.get(k, [])] for k in CHAINS},
             "efforts": {k: {bare_id(m): v for m, v in ek.items()} for k, ek in efforts_of(d).items()},
             "hours": {k: {bare_id(m): v for m, v in hk.items()} for k, hk in hours_of(d).items()},
             "off": {k: {bare_id(m): True for m in ok} for k, ok in off_of(d).items()},
+            "model_off": {r["id"]: True for r in rows if r["off"]},
+            "models": rows,
+            "outside": {k: {bare_id(m): model_hours(d, k, m) for m in d.get(k, []) if model_hours(d, k, m) and not in_hours(d, k, m)} for k in CHAINS},
             "known": known, "last_coding": last_coding_model(),
             "router_known": rknown, "version": models_version(),
             # The router's add box offers what the gateway serves, never the other CLIs' ids (#225): the router row is a
             # chain like the other three, so its own catalogue answers for it (#687).
-            "suggest": {**{k: model_suggestions(usable(known, k.removesuffix("_models"))) for k in CHAINS if k != ROUTER_CHAIN},
-                        ROUTER_CHAIN: model_suggestions(usable(rknown, "router"))},
+            "suggest": {**{k: not_switched_off(model_suggestions(usable(known, k.removesuffix("_models"))), off) for k in CHAINS if k != ROUTER_CHAIN},
+                        ROUTER_CHAIN: not_switched_off(model_suggestions(usable(rknown, "router")), off)},
             "labels": model_labels(set(known) | set(rknown) | {bare_id(m) for k in CHAINS for m in d.get(k, [])}),
             "boxes": {**{k: {bare_id(m): {**model_box(bare_id(m), k), **model_status(bare_id(m), states)} for m in d.get(k, [])} for k in CHAINS},
                       "known": {m: model_box(m) for m in set(known) | set(rknown) | ({last_coding_model()} - {None, ""})}},
@@ -4544,6 +4597,14 @@ def models_version():
         except OSError: m = None
     return hashlib.sha256(json.dumps(m, sort_keys=True).encode()).hexdigest()
 
+
+def models_record(changes):
+    """One line per model-level flip in the state directory's models switch ledger (SPEC 889 #920): the model, its new
+    state, who and when. Whole lines, appended; a Save that flips nothing writes nothing."""
+    if not changes: return
+    who, at = os.environ.get("SG_OWNER") or "owner", time.strftime("%Y-%m-%d %H:%M:%S")
+    with open(STATE / MODELS_LEDGER, "a", encoding="utf-8") as f:
+        f.write("".join(json.dumps({"at": at, "model": m, "state": st, "who": who}, ensure_ascii=False) + "\n" for m, st in changes))
 
 _SAVE = threading.Lock()   # one Save at a time, so the version check and the write see the same files
 
@@ -4578,9 +4639,10 @@ def _new_raw(k, mid, reg):
 _ABSENT = object()   # a setting section the Save body leaves out: the file's own value stays, never cleared
 
 
-def _entry(k, mid, prev, effort, window, off):
+def _entry(k, mid, prev, effort, window):
     """One v2 chain entry for a panel row, in the shape `modelreg.migrate` writes: `id`, `raw` when the spelling
-    differs, an explicit route, and the row's effort, window and switch.
+    differs, an explicit route, and the row's effort and window. The switch is per model now (SPEC 889 #920): the hub
+    writes no chain-level `on`, and an `on: false` a file already holds stays as the file has it.
 
     `raw` is not the panel's id (ADR-0147): review's Anthropic row carries `claude:`, and a gateway row carries the
     `claude-` alias of its bare model. A row already in the file keeps the spelling and the route it holds; a new row
@@ -4594,7 +4656,6 @@ def _entry(k, mid, prev, effort, window, off):
     route = modelreg._default_route(k.removesuffix("_models"), modelreg.model(mid))
     if effort is _ABSENT: effort = prev.effort if prev is not None else None
     if window is _ABSENT: window = prev.hrs if prev is not None else None
-    if off is _ABSENT: off = (not prev.on) if prev is not None else False
     if prev is not None and prev.raw == want:
         held = modelreg.normalize(prev.raw)
         if not held.effort or held.effort == (effort or "medium"):
@@ -4611,7 +4672,7 @@ def _entry(k, mid, prev, effort, window, off):
         if prev.no_tools: out["no_tools"] = True
     if effort and effort != "medium": out["effort"] = effort
     if isinstance(window, str) and HOURS.match(window) and window[:2] != window[3:]: out["hrs"] = window
-    if off: out["on"] = False
+    if prev is not None and not prev.on: out["on"] = False   # honored, never written: a row the file already holds off
     return out
 
 
@@ -4628,7 +4689,7 @@ def _setting(sec, k, raw):
     return None
 
 
-def _v2_chain(k, posted, doc, eff, hrs, off):
+def _v2_chain(k, posted, doc, eff, hrs):
     """One v2 chain for the Save, from the panel's list in rank order (or the file's own list when the body omits it).
 
     An entry the panel's view hid -- `usable()` drops a model its chain cannot run (ADR-0147) -- is not in the posted
@@ -4641,18 +4702,18 @@ def _v2_chain(k, posted, doc, eff, hrs, off):
     canon = k.removesuffix("_models")
     old = list(modelreg.chain(doc, canon).entries)
     if posted is None:   # the body names a section but no list: apply the section, keep the file's rank and rows
-        return [_entry(k, e.raw, e, _setting(eff, k, e.raw), _setting(hrs, k, e.raw), _setting(off, k, e.raw)) for e in old]
+        return [_entry(k, e.raw, e, _setting(eff, k, e.raw), _setting(hrs, k, e.raw)) for e in old]
     by_id = {modelreg.normalize(e.raw).id: e for e in old}
     out, seen = [], set()
     for m in posted:
         ref = modelreg.normalize(m)
         seen.add(ref.id)   # two spellings of one model may both be posted: the panel drew two rows, so both stay
-        out.append(_entry(k, m, by_id.get(ref.id), _setting(eff, k, m), _setting(hrs, k, m), _setting(off, k, m)))
+        out.append(_entry(k, m, by_id.get(ref.id), _setting(eff, k, m), _setting(hrs, k, m)))
     shown = {modelreg.normalize(m).id for m in v1_view(doc).get(k, [])}
     for i, e in enumerate(old):
         ref = modelreg.normalize(e.raw)
         if ref.id in shown or ref.id in seen: continue
-        out.insert(min(i, len(out)), _entry(k, e.raw, e, _ABSENT, _ABSENT, _ABSENT))
+        out.insert(min(i, len(out)), _entry(k, e.raw, e, _ABSENT, _ABSENT))
         seen.add(ref.id)
     written, unique = set(), []
     for e in out:   # one stored spelling, one row: the fold above can land two posted ids on the same `raw`
@@ -4667,9 +4728,15 @@ def _models_set(new):
     # (the add box's list) and `last_coding` (the header's line). Dropping only `known` made the other one read as a chain
     # the panel invented -- "unknown chain" on every Save (2026-10-11).
     new = {k: v for k, v in new.items() if k not in READONLY} if isinstance(new, dict) else new
-    if not isinstance(new, dict) or set(new) - set(CHAINS) - {"efforts", "hours", "off"}: return {"err": "unknown chain"}
+    if not isinstance(new, dict) or set(new) - set(CHAINS) - {"efforts", "hours", "off", "model_off"}: return {"err": "unknown chain"}
     d = json.loads(MODELS.read_text())
-    eff, hrs, off = new.pop("efforts", _ABSENT), new.pop("hours", _ABSENT), new.pop("off", _ABSENT)
+    eff, hrs = new.pop("efforts", _ABSENT), new.pop("hours", _ABSENT)
+    new.pop("off", None)   # the chain-level switch is retired (SPEC 889 #920): an old page's `off` is read past, never written
+    moff = new.pop("model_off", _ABSENT)   # the model-level switch (SPEC 889 #920): {model id: true|false}; absent keeps the file
+    if moff is not _ABSENT:
+        if not isinstance(moff, dict): return {"err": "model_off: must name models"}
+        for m, v in moff.items():
+            if not (isinstance(m, str) and MODEL_ID.match(m) and isinstance(v, bool)): return {"err": f"model_off: {m} must be true or false"}
     posted = {}
     for k, v in new.items():
         # An empty chain is a legal state: the reader tolerates it, and a file that carries one (the router's, until the
@@ -4683,8 +4750,7 @@ def _models_set(new):
     # of a model no longer in its chain goes with the row, never refuses the Save. A bad value of a kept row still refuses,
     # and the sentence names the row and the rule, so a caller learns what to send.
     for name, sec, rule, ok in (("efforts", eff, "must name one of low|medium|high|max", lambda v: v in EFFORTS),
-                                ("hours", hrs, "must be an HH-HH window (00-23)", lambda v: isinstance(v, str) and HOURS.match(v)),
-                                ("off", off, "must be true or false", lambda v: isinstance(v, bool))):
+                                ("hours", hrs, "must be an HH-HH window (00-23)", lambda v: isinstance(v, str) and HOURS.match(v))):
         if sec is _ABSENT: continue
         if not isinstance(sec, dict) or set(sec) - set(CHAINS): return {"err": f"{name}: unknown chain"}
         for k, rows in sec.items():
@@ -4693,8 +4759,20 @@ def _models_set(new):
                 if not (isinstance(m, str) and ok(v)): return {"err": f"{name}.{k}: {m} {rule}"}
     # The file is v2, and every chain writes there: the router row is a chain row like the other three (SPEC 750). The
     # graph and its record are never touched by a Save; a run reads the router chain from this file.
-    chains = {k.removesuffix("_models"): _v2_chain(k, posted.get(k), d, eff, hrs, off) for k in CHAINS}
+    changes = []
+    if moff is not _ABSENT:
+        was = model_off_ids(d)
+        mo = dict(d.get("model_off") or {}) if isinstance(d.get("model_off"), dict) else {}
+        for m, v in moff.items():
+            key = modelreg.normalize(m).id
+            if v: mo[key] = True
+            else: mo.pop(key, None)
+            if (key in was) != bool(v): changes.append((bare_id(m), "off" if v else "on"))   # one line per flip, never per read
+        if mo: d["model_off"] = mo
+        else: d.pop("model_off", None)
+    chains = {k.removesuffix("_models"): _v2_chain(k, posted.get(k), d, eff, hrs) for k in CHAINS}
     modelreg.write_chains(MODELS, chains, d)
+    models_record(changes)
     return models_get()
 
 profiles_of_cwd = sessions.profiles_of
