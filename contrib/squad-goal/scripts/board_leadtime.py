@@ -11,7 +11,12 @@ ABANDONED = "Abandoned"
 NOT_DELIVERED = "not_planned"
 
 
+NO_TRANSITION = "no_transition"
+
+
 def _exclusion(row):
+    if row.get("reason") == NO_TRANSITION:
+        return NO_TRANSITION
     if row.get("reason") == NOT_DELIVERED:
         return "not_planned"
     if row["column"] == ABANDONED:
@@ -21,6 +26,29 @@ def _exclusion(row):
     if not row["o"]:
         return "no_opened"
     return None
+
+
+def span(items, transitions, start=None, end=None):
+    """Each row measured from its first move into `start` to its last move into `end` (#905). None is the card's own
+    opened or closed instant. A row the chart would plot with no such move, or an end before its start, is marked
+    no_transition. A row already left out keeps its own reason."""
+    if start is None and end is None:
+        return items
+    moves = {}
+    for t in transitions:
+        moves.setdefault((t.get("issue"), t.get("to")), []).append(datetime.fromisoformat(t["at"]))
+    out = []
+    for row in items:
+        if _exclusion(row):
+            out.append(row)
+            continue
+        first = min(moves.get((row["n"], start), []), default=None) if start else datetime.fromisoformat(row["o"])
+        last = max(moves.get((row["n"], end), []), default=None) if end else datetime.fromisoformat(row["c"])
+        if first is None or last is None or last < first:
+            out.append({**row, "reason": NO_TRANSITION})
+        else:
+            out.append({**row, "o": first.isoformat(), "c": last.isoformat()})
+    return out
 
 
 def _hours(row):
@@ -91,7 +119,8 @@ LOG_FLOOR_HOURS = 1 / 60      # no log of a span under one minute
 PLOT_W, PLOT_H = 728, 268     # the page's plot in pixels, for clusters: its 800 x 340 frame less 36 px margins
 DOT_PX = 9                    # dots closer than this many pixels merge into a numbered cluster
 REASON_TEXT = {"not_planned": "closed as not planned", "abandoned": "closed as abandoned", "open": "still open",
-               "no_opened": "no opened date"}
+               "no_opened": "no opened date",
+               NO_TRANSITION: "no transition into the chosen columns"}
 LOG_TICKS = [(1 / 24, "1 h"), (1, "1 d"), (7, "1 w")]
 CUBE_TICKS = [(1, "1 d"), (7, "1 w"), (30, "30 d"), (60, "60 d")]
 
@@ -122,7 +151,7 @@ def _rolling(hours, log):
     return out, size
 
 
-def control_chart(items, timeframe=None, log=False, now=None, start=None, end=None):
+def control_chart(items, timeframe=None, log=False, now=None, start=None, end=None, measure=MEASURE):
     """The chart over a timeframe in days, or over an explicit zoom range `start`..`end` (#900). A zoom names its dates."""
     now = now or datetime.now(UTC)
     zoom = start is not None
@@ -203,7 +232,7 @@ def control_chart(items, timeframe=None, log=False, now=None, start=None, end=No
     else:
         scope = f"last {timeframe} days" if timeframe else "all closed cards"
     return {
-        "measure": MEASURE,
+        "measure": measure,
         "scale": "log" if log else "jira",
         "axis": axis,
         "timeframe": timeframe,

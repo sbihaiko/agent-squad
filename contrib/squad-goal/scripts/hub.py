@@ -2954,15 +2954,27 @@ def lead_rows():
 
 
 def lead_zoom(query):
-    """The control chart over a dragged range: `from` and `to` are ISO datetimes, `scale` is jira or log (#900)."""
+    """The control chart over a dragged range (`from` and `to`, ISO datetimes) or a timeframe preset (`tf`), `scale` jira
+    or log (#900), measured from the start column `a` to the end column `b` (#905). No `a` is the card's opened instant;
+    no `b`, or the closed column, is its closed instant."""
     q = urllib.parse.parse_qs(query)
+    a, b = (q.get(k, [""])[0] or None for k in ("a", "b"))
+    if b == COLUMN["issue_closed"]: b = None
+    if any(c is not None and c not in ORDER for c in (a, b)): return {"error": "bad column: a and b name a board column"}
+    log = q.get("scale", ["jira"])[0] == "log"
+    rows = _leadtime.span(lead_rows(), card_transitions(), start=a, end=b)
+    measure = f"{a or 'opened'} -> {b or 'closed'}"
+    if "from" not in q and "to" not in q and "tf" in q:
+        days = dict(LEAD_TIMEFRAMES).get(q["tf"][0], 0)
+        if days == 0: return {"error": "bad timeframe"}
+        return _leadtime.control_chart(rows, timeframe=days, log=log, now=dt.datetime.now(dt.UTC), measure=measure)
     try:
         start, end = (dt.datetime.fromisoformat(q[k][0]) for k in ("from", "to"))
     except (KeyError, IndexError, ValueError):
         return {"error": "bad range: from and to are ISO datetimes"}
     start, end = (m if m.tzinfo else m.replace(tzinfo=dt.UTC) for m in (start, end))
     if end <= start: return {"error": "bad range: to is not after from"}
-    return _leadtime.control_chart(lead_rows(), log=q.get("scale", ["jira"])[0] == "log", now=dt.datetime.now(dt.UTC), start=start, end=end)
+    return _leadtime.control_chart(rows, log=log, now=dt.datetime.now(dt.UTC), start=start, end=end, measure=measure)
 
 
 CHARTS = {}   # each chart route's last answer, with the key of the inputs it read (#971)
@@ -3016,7 +3028,7 @@ def _lead_payload():
     return {"lead": {"measure": lead["measure"], "window": lead["window"],
                      "excluded": [{"reason": r, "count": c} for r, c in lead["excluded"].items()],
                      "excluded_total": sum(lead["excluded"].values()), "series": lead["series"], "summary": lead["summary"],
-                     "control": control}}
+                     "control": control, "columns": ORDER}}
 
 
 def flow_cfd(): return chart("cfd", history_key(), _cfd_payload)
@@ -4242,7 +4254,7 @@ const flowCFD=c=>{const sel=`<label class=fhead>Range <select id=cfdr>${CFD_R.ma
   return sel+`<svg viewBox="0 0 ${flowW} ${flowH}">${c.bands.map(polys).join("")}${cfdAxis(c)}${hover}</svg>`+
     `<p class=fnote>history from ${esc(c.start)} UTC</p><p>${c.bands.map(b=>`<span class=flg><i style="background:${COLORS[b.name]||"#888"}"></i>${esc(b.name)}</span>`).join("")}</p>`;};
 const EXREASON={not_planned:"closed as not planned",abandoned:"closed as abandoned",open:"still open",no_opened:"no opened date"};   // the cards the chart leaves out, in words (#921)
-let LT={tf:"30",log:false,pick:null,zc:null,zr:null,rng:null,tok:0,noclick:false};   // the control chart's timeframe, its scale, the cluster listed under it, and a drag zoom: the hub's chart over zr=[from,to] (#900)
+let LT={tf:"30",log:false,pick:null,zc:null,zr:null,rng:null,tok:0,noclick:false,a:"",b:"",cols:[]};   // the control chart's timeframe, its scale, the cluster listed under it, and a drag zoom: the hub's chart over zr=[from,to] (#900)
 const ltSpan=(r,a,b)=>{const t0=Date.parse(r.start),t1=Date.parse(r.end),at=f=>new Date(t0+f*(t1-t0)).toISOString();return [at(a<0?0:a),at(b>1?1:b)]};   // plot fractions to the dates they name (#900)
 const LT_TF=[["7","Past week"],["14","Past 2 weeks"],["30","Past month"],["90","Past 3 months"],["180","Past 6 months"],["all","All"]];
 const ltX=x=>flowP+x*(flowW-2*flowP),ltY=y=>flowH-flowP-y*(flowH-2*flowP);
@@ -4250,7 +4262,9 @@ const ltLine=(v,col,dash,name)=>v?`<line x1=${flowP} x2=${flowW-flowP} y1=${ltY(
 const ltChart=c=>{const n=c.dots.length,base=flowH-flowP,ink="#b8c0cf",mute="var(--mute)";
   const ctl=`<p class=fhead><label>Timeframe <select id=ltr>${LT_TF.map(([k,v])=>`<option value=${k}${LT.tf===k?" selected":""}>${v}</option>`).join("")}</select></label> `+
     `<label>Scale <select id=lts><option value=jira${LT.log?"":" selected"}>Jira scale</option><option value=log${LT.log?" selected":""}>Log scale</option></select></label> `+
-    `<button id=ltz${LT.zc?"":" disabled"} title="drag across the plot to zoom to those dates">Reset zoom</button></p>`;
+    `<label>Start <select id=lta><option value="">Created</option>${LT.cols.map(k=>`<option${LT.a===k?" selected":""}>${esc(k)}</option>`).join("")}</select></label> `+
+    `<label>End <select id=ltb>${LT.cols.map(k=>{const v=k===COLNAME.issue_closed?"":k;return `<option value="${esc(v)}"${LT.b===v?" selected":""}>${esc(k)}</option>`}).join("")}</select></label> `+   // the span each dot measures, from the recorded transitions (#905)
+    `<button id=ltz${LT.zr?"":" disabled"} title="drag across the plot to zoom to those dates">Reset zoom</button></p>`;
   LT.rng=c.range;
   const note=`<p class=fnote>${esc(c.text)}</p>`;
   if(!n)return ctl+note+"<p class=fnote>no closed card in this timeframe</p>";
@@ -4271,13 +4285,15 @@ const ltChart=c=>{const n=c.dots.length,base=flowH-flowP,ink="#b8c0cf",mute="var
   return ctl+S+legend+`<svg data-lt viewBox="0 0 ${flowW} ${flowH}">${axes}${ys}${xs}${band}${roll}${lines}${dots}</svg>`+note+rows;};
 const flowLead=l=>{const S=l.summary,ex=l.excluded.map(e=>`${e.count} ${esc(EXREASON[e.reason]||e.reason)}`).join(", ");
   const head=`<p class=fhead><b>${esc(l.measure)}</b> · window ${l.window.size} ${esc(l.window.unit)} · excluded ${l.excluded_total}${ex?" ("+ex+")":""}</p>`;
-  if(!S)return head+"<p class=fnote>no closed card yet</p>";
+  LT.cols=l.columns||[];if(!S)return head+"<p class=fnote>no closed card yet</p>";
   return head+ltChart(LT.zc||l.control[LT.log?"log":"jira"][LT.tf]);};
 const drawFlow=()=>{{const w=$("#flowb").clientWidth-20;flowW=w<600?600:w>1600?1600:(w|0)}const cfd=FLOWK==="cfd";
   const a=FLOWD[FLOWK];
   $("#flowb").innerHTML=!a?"<p class=fnote>loading the chart from the hub</p>":(cfd?flowCFD(a.cfd.ranges[CF.r]):flowLead(a.lead))+`<p class=fnote>data read ${new Date(a.t*1000).toLocaleTimeString()}</p>`};
 const flowOpen=async k=>{FLOWK=k;$("#flowov").hidden=false;drawFlow();try{const a=await (await fetch(`/api/chart/${k}`)).json();FLOWD[k]=a;if(FLOWK===k)drawFlow()}catch(e){}};
-const ltZoom=async(f,t)=>{const tok=++LT.tok;try{const c=await (await fetch(`/api/leadtime?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}&scale=${LT.log?"log":"jira"}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;LT.zr=[f,t];LT.pick=null;drawFlow()}catch(e){}};   // the hub recomputes the chart for the dragged range (#900)
+const ltQ=()=>`&scale=${LT.log?"log":"jira"}&a=${encodeURIComponent(LT.a)}&b=${encodeURIComponent(LT.b)}`,ltOwn=()=>LT.a!==""||LT.b!=="";   // a span other than created to closed is the hub's chart for it (#905)
+const ltZoom=async(f,t)=>{const tok=++LT.tok;try{const c=await (await fetch(`/api/leadtime?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}${ltQ()}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;LT.zr=[f,t];LT.pick=null;drawFlow()}catch(e){}};   // the hub recomputes the chart for the dragged range (#900)
+const ltGet=async()=>{const tok=++LT.tok;LT.zc=null;LT.pick=null;if(!ltOwn()){drawFlow();return}try{const c=await (await fetch(`/api/leadtime?tf=${LT.tf}${ltQ()}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;drawFlow()}catch(e){}};   // the timeframe's chart for the chosen span (#905)   // the hub recomputes the chart for the dragged range (#900)
 const ltPx=(e,s)=>{const r=s.getBoundingClientRect();return (e.clientX-r.left)/r.width*flowW};
 const ltClamp=x=>x<flowP?flowP:x>flowW-flowP?flowW-flowP:x,ltLo=(p,q)=>p<q?p:q,ltHi=(p,q)=>p<q?q:p;
 let LTD=null;   // the drag across a control chart's plot in progress (#900)
@@ -4288,10 +4304,11 @@ document.addEventListener("pointermove",e=>{if(!LTD)return;const x1=ltClamp(ltPx
 document.addEventListener("pointerup",()=>{const d=LTD;LTD=null;if(!d||!d.moved)return;d.s.querySelector("rect.ltsel")?.remove();LT.noclick=true;
   const a=(ltLo(d.x0,d.x1)-flowP)/(flowW-2*flowP),b=(ltHi(d.x0,d.x1)-flowP)/(flowW-2*flowP);if(b-a<0.005||!LT.rng)return;const [f,t]=ltSpan(LT.rng,a,b);ltZoom(f,t)});
 $("#flowb").onchange=e=>{if(e.target.id==="cfdr"){CF.r=e.target.value;drawFlow();return}
-  if(e.target.id==="ltr"){LT.tf=e.target.value;LT.tok++;LT.zc=null;LT.zr=null;LT.pick=null;drawFlow();return}
-  if(e.target.id==="lts"){LT.log=e.target.value==="log";LT.pick=null;if(LT.zr){ltZoom(LT.zr[0],LT.zr[1]);return}drawFlow()}};
+  if(e.target.id==="ltr"){LT.tf=e.target.value;LT.zr=null;ltGet();return}
+  if(e.target.id==="lta"||e.target.id==="ltb"){LT[e.target.id==="lta"?"a":"b"]=e.target.value;LT.pick=null;if(LT.zr){ltZoom(LT.zr[0],LT.zr[1]);return}ltGet();return}
+  if(e.target.id==="lts"){LT.log=e.target.value==="log";LT.pick=null;if(LT.zr){ltZoom(LT.zr[0],LT.zr[1]);return}if(ltOwn()){ltGet();return}drawFlow()}};
 $("#flowb").onclick=e=>{if(LT.noclick){LT.noclick=false;return}
-  if(e.target.id==="ltz"){LT.tok++;LT.zc=null;LT.zr=null;LT.pick=null;drawFlow();return}
+  if(e.target.id==="ltz"){LT.zr=null;ltGet();return}
   const k=e.target.closest("circle[data-k]");if(k){LT.pick=+k.dataset.k;drawFlow();return}const r=e.target.closest("tr[data-o]");if(r)showIssue(+r.dataset.o,"__REPO__")};
 $("#bflow").onclick=()=>flowOpen("cfd");$("#blead").onclick=()=>flowOpen("lead");addEventListener("resize",()=>{if(!$("#flowov").hidden)drawFlow()});
 // flow-charts:end
