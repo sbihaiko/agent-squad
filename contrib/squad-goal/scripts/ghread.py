@@ -69,7 +69,8 @@ module every door carries (see `log_call`):
 
 A line holds no space, so it splits into exactly six fields. A failed append costs the line and never the call, and the log is
 rotated once at `LOG_MAX_BYTES` so it cannot grow without bound. This module logs at its two CLI doors (`read`/`write` as a
-process); a library caller -- the throttle -- logs its own calls, because only it knows a snapshot answered them.
+process); a library caller -- the throttle -- logs its own calls, because only it knows a snapshot answered them, and
+`graphql_read` logs its own read.
 
     python3 ghread.py --log <REST|GraphQL> <route> <hit|miss> <outcome>    # one line, for a shell door that has no Python of its own
 
@@ -625,8 +626,9 @@ def graphql_argv(query: str, variables: dict[str, Any] | None = None) -> list[st
 
 
 def graphql_read(query: str, variables: dict[str, Any] | None = None, transport: TransportFn | None = None,
-                 timeout: float | None = None) -> Read:
-    """One GraphQL read of a query no aggregate route names, through the same three-outcome contract (`read`).
+                 timeout: float | None = None, pass_name: str | None = None) -> Read:
+    """One GraphQL read of a query no aggregate route names, through the same three-outcome contract (`read`), and one
+    call-log line for it: the outcome, and the pass that spent it (`pass_name`, else `SG_GH_PASS`).
 
     The transport is injectable like every other read's, so a caller's test names the outcomes and no test touches the
     network. The default transport runs the argv `graphql_argv` builds, with `--include` for the request id.
@@ -638,7 +640,17 @@ def graphql_read(query: str, variables: dict[str, Any] | None = None, transport:
                            timeout=timeout if when is None else when)
         return Transport(rc=p.returncode, body=p.stdout, detail=(p.stderr or "").strip())
 
-    res = (transport or run)("graphql")
+    try:
+        res = (transport or run)("graphql")
+    except (OSError, subprocess.TimeoutExpired):
+        log_call(None, "graphql", MISS, FAILED, transport="GraphQL", pass_name=pass_name)
+        raise
+    out = _graphql_outcome(res)
+    log_call(None, "graphql", MISS, out.kind, transport="GraphQL", pass_name=pass_name)
+    return out
+
+
+def _graphql_outcome(res: Transport) -> Read:
     body, headers = _split_headers(res.body)
     value, parsed = _decode(body)
     # A GraphQL answer is `data`, an `errors` list or both; `errors` with no `data` is a refusal, and a field that failed

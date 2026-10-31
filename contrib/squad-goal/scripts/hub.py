@@ -3233,7 +3233,7 @@ def gh_graphql(query, timeout=30, **vars):
     Int): the one seam the rendered issue body reads through, and it goes through the door like every other read
     (ADR-0277), so a refusal is never read as an answer."""
     try:
-        r = ghread.graphql_read(query, vars, timeout=timeout)
+        r = ghread.graphql_read(query, vars, timeout=timeout, pass_name="hub")
         return r.answer if r.is_answer else None
     except (OSError, subprocess.TimeoutExpired, ValueError): return None
 
