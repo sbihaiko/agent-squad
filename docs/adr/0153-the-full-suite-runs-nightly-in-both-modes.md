@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted. Amended by [ADR-0156](0156-a-full-proof-carries-across-a-covered-delta.md). Owner decision: "a proof may be carried across a delta, for future use".
+Accepted.
 
 ## Context
 

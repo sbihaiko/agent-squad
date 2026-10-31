@@ -2,7 +2,7 @@
 # usage: delta-pass.sh   Carries the full pass in $SG_STATE/gate-status-full across the delta to the dev tip (ADR-0156, #946).
 # The carry needs P (that full pass) to be an ancestor of the dev tip T, at most 25 changed paths, no binary change, and every
 # changed path covered by a line of delta-guards.txt (glob, TAB, command id). Each other case refuses, runs nothing and writes
-# no pass record. The suite runs in a clean tree at T under the full-proof-delta lock, in try mode (a held lock skips the tick).
+# no pass record. The suite runs in a clean tree at T under the full-proof-delta lock, in try mode: a held lock exits 73 and runs nothing.
 # SG_DELTA_SUITE replaces the whole suite (ruff, mypy, the fast battery and the guards); a test names its own commands with it.
 # The record: $SG_STATE/gate-status-delta, `<epoch> TAB delta TAB <pass|fail> TAB <P> TAB <T> TAB <sha256 of the changed-file list>`.
 d=$(cd "$(dirname "$0")" && pwd)
@@ -29,6 +29,7 @@ IFS=$'\t' read -r _ kind res P _ < "$state/gate-status-full" 2>/dev/null
 g remote set-url origin "$remote"
 o=$(g fetch -q origin "+refs/heads/dev:refs/remotes/origin/dev" 2>&1) || refuse "fetch failed: $(printf '%s' "$o" | tail -1)"
 T=$(g rev-parse origin/dev) || exit 1
+g cat-file -e "$P^{commit}" 2>/dev/null || g fetch -q origin "$P" 2>/dev/null
 g merge-base --is-ancestor "$P" "$T" 2>/dev/null || refuse "the full pass $P is not an ancestor of the dev tip $T"
 changed=$(g diff --name-only "$P..$T" | LC_ALL=C sort)
 n=$(printf '%s\n' "$changed" | awk 'NF' | wc -l | tr -d ' ')
@@ -57,5 +58,5 @@ fi
 h=$(printf '%s\n' "$changed" | hash_list)
 SG_DELTA_RUN=$suite SERIAL_TRY=1 SERIAL_HOLD_SECONDS=${SG_DELTA_HOLD_SECONDS:-10800} \
   bash "$d/serial.sh" full-proof-delta bash "$0" --hold "$T" "$P" "$h" 2>"$state/delta-pass.err"; rc=$?
-[ $rc = 73 ] && { echo "delta-pass: another proof holds the lock; skipped, not queued" >&2; exit 0; }
+[ $rc = 73 ] && { echo "delta-pass: another proof holds the lock; skipped, not queued" >&2; exit 73; }
 cat "$state/delta-pass.err" >&2; exit $rc

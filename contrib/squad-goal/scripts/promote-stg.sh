@@ -10,6 +10,9 @@
 #         SG_GATE_KIND=full bash gate.sh bash -c '<the full suite>'
 #     stg moves only when the line says `full`, `pass`, and names the dev tip exactly. A missing proof, a failed proof and a
 #     proof for another sha each refuse in their own words.
+#     A delta record (ADR-0156, $SG_STATE/gate-status-delta) carries the full pass of an ancestor P across a covered change: stg
+#     moves on it when the record says pass for the dev tip, P has a full pass and the changed-file list still hashes to P..tip.
+#     Each carried P is appended to $SG_STATE/gate-carried after the merge, and a P already there refuses.
 # Exit 0: the dev tip is in stg (promoted, or already there). Exit 1: nothing promoted; the one reason goes to $SG_STATE/promote.log
 # once per tip and reason (the dedupe list keeps its last 20 lines), so a pass that repeats says nothing new, and to stderr.
 # A later green tip carries the earlier work with it. The consolidation is one pull request (#743, owner rule for every project):
@@ -60,6 +63,7 @@ prove() {  # <tip>: refuse unless the proof for this tip is green, each refusal 
     if [ "$dT" != "$1" ] && g merge-base --is-ancestor "$dT" "$1" 2>/dev/null; then refuse "$1" "not promoted: the record is stale because the tip moved from $dT to $1"; fi
     [ "$dT" = "$1" ] || refuse "$1" "not promoted: the delta proved $dT, not the dev tip $1"
     [ "$kind" = full ] && [ "$sha" = "$dP" ] && [ "$res" = pass ] || refuse "$1" "not promoted: its P $dP has no full pass"
+    g cat-file -e "$dP^{commit}" 2>/dev/null || g fetch -q origin "$dP" 2>/dev/null
     g merge-base --is-ancestor "$dP" "$1" 2>/dev/null || refuse "$1" "not promoted: P $dP is not an ancestor of the dev tip $1"
     grep -qxF "$dP" "$state/gate-carried" 2>/dev/null && refuse "$1" "not promoted: P $dP is already carried by a delta"
     list=$(g diff --name-only "$dP..$1" | LC_ALL=C sort)
