@@ -169,7 +169,7 @@ def test_a_host_profile_reads_its_tailnet_block_through_the_plugin_install(tmp_p
     live = tmp_path / ".claude" / "skills" / "squad-goal" / "scripts"
     live.mkdir(parents=True)
     for src in LIVE_SCRIPTS.iterdir():
-        if src.suffix in (".py", ".js", ".html", ".json"):
+        if src.suffix in (".py", ".js", ".html", ".json", ".css"):
             shutil.copy(src, live / src.name)
     checkout = tmp_path / "host"
     (checkout / "docs" / "squad").mkdir(parents=True)

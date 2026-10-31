@@ -4,9 +4,13 @@
 <meta charset="utf-8">
 <title>agent-squad-run-dashboard</title>
 <style>
-  :root { --bg:#0f1115; --panel:#161a21; --line:#2a303b; --fg:#d8dde6; --mute:#8a93a3; --acc:#5aa9ff; --ok:#3ecf8e; --warn:#f5b041; --wait:#e8d44d; --err:#ff6b6b; --run:#2dd4bf; --none:#b79cf6; --drop:#c678dd; --mono:ui-monospace, SFMono-Regular, Menlo, monospace; }
+:root{--bg:#0f1115;--panel:#161a21;--line:#2a303b;--input:#0f1115;--fg:#d8dde6;--mute:#8a93a3;--acc:#5aa9ff;--ok:#3ecf8e;--warn:#f5b041;--wait:#e8d44d;--err:#ff6b6b;--run:#2dd4bf;--none:#b79cf6;--drop:#c678dd;--font-ui:system-ui,-apple-system,"Segoe UI",sans-serif;--font-mono:ui-monospace,SFMono-Regular,Menlo,monospace;--fs-min:13px;--fs-body:15px;--fs-md:17px;--fs-xl:21px;--ctl-h:32px;--ctl-h-phone:44px;--focus-w:2px;--focus:var(--acc);color-scheme:dark}
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,summary:focus-visible,[role=button]:focus-visible{outline:var(--focus-w) solid var(--focus);outline-offset:2px}
+button,select,input,textarea,summary,[role=button]{min-height:var(--ctl-h)}
+select,input,textarea{background:var(--input);color:var(--fg);border:1px solid var(--line);color-scheme:dark}
+@media (max-width:600px){button,select,input,textarea,summary,[role=button]{min-height:var(--ctl-h-phone)}}
   * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg); font:13px/1.4 -apple-system, system-ui, sans-serif; display:grid; grid-template-columns:1fr; grid-template-rows:37px 1fr; height:100vh; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:var(--fs-body)/1.4 -apple-system, system-ui, sans-serif; display:grid; grid-template-columns:1fr; grid-template-rows:37px 1fr; height:100vh; }
   body.noside #left { display:none; }
   /* The side panel is a drawer docked to the right edge, under the top bar: it takes its own column of the screen, so the diagram stays whole.
      --side-w is its live width (the sheet's height under 900px), and --side-min/--side-max the travel the grip clamps to. The page measures both. */
@@ -18,7 +22,7 @@
   #left::before { content:""; position:fixed; top:37px; bottom:0; right:var(--side-w,420px); width:8px; z-index:7; cursor:col-resize; }
   #graph { grid-column:1; grid-row:2; }
   .tools { display:flex; flex-wrap:wrap; gap:6px; }
-  button, label.btn, textarea, select, input[type=text], input:not([type]) { background:#0c0e12; color:var(--fg); border:1px solid var(--line); border-radius:4px; padding:4px 8px; font:12px var(--mono); }
+  button, label.btn, textarea, select, input[type=text], input:not([type]) { background:#0c0e12; color:var(--fg); border:1px solid var(--line); border-radius:4px; padding:4px 8px; font:var(--fs-min) var(--font-mono); }
   button, label.btn { cursor:pointer; }
   .row { display:flex; gap:6px; align-items:center; margin:4px 0; }
   .row input { flex:1; min-width:0; }
@@ -28,67 +32,67 @@
   #menu { position:fixed; z-index:10; background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:4px; display:none; flex-direction:column; min-width:150px; box-shadow:0 6px 20px #0008; }
   #menu button { text-align:left; border:0; background:none; }
   #menu button:hover { background:#182a40; }
-  #menu .sep { color:var(--mute); font-size:10px; padding:4px 8px 2px; text-transform:uppercase; letter-spacing:.06em; }
+  #menu .sep { color:var(--mute); font-size:var(--fs-min); padding:4px 8px 2px; text-transform:uppercase; letter-spacing:.06em; }
   input[type=file] { display:none; }
-  #chiprow { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:0 0 8px; font-size:12px; color:var(--mute); }
-  #chip { font-family:inherit; font-size:11px; padding:1px 7px; white-space:nowrap; }
-  #stop, #offer { border:1px solid var(--line); border-left:3px solid var(--acc); border-radius:4px; background:var(--panel); padding:8px 10px; margin:8px 0 0; font-size:12px; }
+  #chiprow { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:0 0 8px; font-size:var(--fs-min); color:var(--mute); }
+  #chip { font-family:inherit; font-size:var(--fs-min); padding:1px 7px; white-space:nowrap; }
+  #stop, #offer { border:1px solid var(--line); border-left:3px solid var(--acc); border-radius:4px; background:var(--panel); padding:8px 10px; margin:8px 0 0; font-size:var(--fs-min); }
   #stop { border-left-color:#e0a030; }
   #stop[hidden], #offer[hidden] { display:none; }
   #stop .row, #offer .row { margin:6px 0 0; }
-  #status { margin:8px 0 0; color:var(--mute); min-height:1.4em; font-size:12px; }
-  #side h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--mute); margin:16px 0 6px; }
+  #status { margin:8px 0 0; color:var(--mute); min-height:1.4em; font-size:var(--fs-min); }
+  #side h2 { font-size:var(--fs-min); text-transform:uppercase; letter-spacing:.06em; color:var(--mute); margin:16px 0 6px; }
   textarea { width:100%; min-height:220px; resize:vertical; }
   #side details { border:1px solid var(--line); border-radius:4px; margin:6px 0; }
-  #side summary { cursor:pointer; padding:4px 8px; font-size:12px; color:var(--mute); }
+  #side summary { cursor:pointer; padding:4px 8px; font-size:var(--fs-min); color:var(--mute); }
   #side details[open] > summary { border-bottom:1px solid var(--line); }
   .fld { display:grid; grid-template-columns:96px 1fr; gap:4px 8px; padding:4px 8px; align-items:start; }
-  .fld label { font:11px var(--mono); color:var(--mute); padding-top:5px; word-break:break-word; }
+  .fld label { font:var(--fs-min) var(--font-mono); color:var(--mute); padding-top:5px; word-break:break-word; }
   .fld input, .fld select, .fld textarea { width:100%; box-sizing:border-box; }
-  .fld textarea { min-height:0; font:11px/1.4 var(--mono); }
+  .fld textarea { min-height:0; font:var(--fs-min)/1.4 var(--font-mono); }
   .fld .note, .fld .chips { grid-column:2; }
   .fld.unk label { color:var(--bad, #ff6b6b); }
-  .chips button { font-size:10px; padding:1px 5px; margin:0 3px 3px 0; }
+  .chips button { font-size:var(--fs-min); padding:1px 5px; margin:0 3px 3px 0; }
   #review { border:1px solid var(--line); border-radius:4px; padding:4px 10px 10px; margin:10px 0; }
-  #review h3 { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--mute); margin:12px 0 4px; }
-  #review textarea { min-height:64px; font:11px/1.5 var(--mono); }
+  #review h3 { font-size:var(--fs-min); text-transform:uppercase; letter-spacing:.06em; color:var(--mute); margin:12px 0 4px; }
+  #review textarea { min-height:64px; font:var(--fs-min)/1.5 var(--font-mono); }
   #review .opts { display:grid; grid-template-columns:auto 1fr; gap:4px 8px; align-items:center; }
   #review button.lnk { background:none; border:0; color:var(--acc); padding:0; text-align:left; cursor:pointer; font:inherit; }
-  .ro { background:#0c0e12; border:1px dashed var(--line); border-radius:4px; padding:6px 8px; font:11px/1.5 var(--mono); word-break:break-word; }
+  .ro { background:#0c0e12; border:1px dashed var(--line); border-radius:4px; padding:6px 8px; font:var(--fs-min)/1.5 var(--font-mono); word-break:break-word; }
   ul.errs { margin:0; padding-left:18px; color:var(--err); }
-  .note { color:var(--mute); font-size:11px; }
+  .note { color:var(--mute); font-size:var(--fs-min); }
   .msg-bad { color:var(--err); }
   .msg-ok { color:var(--ok); }
   #graph { display:flex; flex-direction:column; min-width:0; min-height:0; }
   #mapbox { position:relative; flex:1; min-width:0; min-height:0; }
-  #recbad { flex:none; padding:6px 14px; background:#2a2212; border-bottom:2px solid var(--warn); color:var(--warn); font-size:12px; font-weight:600; }
+  #recbad { flex:none; padding:6px 14px; background:#2a2212; border-bottom:2px solid var(--warn); color:var(--warn); font-size:var(--fs-min); font-weight:600; }
   #recbad[hidden] { display:none; }
-  #totals { display:none; flex:none; align-items:center; gap:4px 22px; flex-wrap:wrap; padding:6px 14px; background:var(--panel); border-top:1px solid var(--line); font-size:12px; color:var(--mute); }
+  #totals { display:none; flex:none; align-items:center; gap:4px 22px; flex-wrap:wrap; padding:6px 14px; background:var(--panel); border-top:1px solid var(--line); font-size:var(--fs-min); color:var(--mute); }
   #totals.on { display:flex; }
   #totals .cell { display:inline-flex; align-items:baseline; gap:6px; cursor:help; }
-  #totals .cell b { color:var(--fg); font:600 13px var(--mono); }
+  #totals .cell b { color:var(--fg); font:600 var(--fs-min) var(--font-mono); }
   #totals .cell b.unk { color:var(--mute); font-weight:400; }
   #totals .past { color:#e0a030; }
   /* #progress is the top bar, parallel to #totals under the graph: the issue set the run landed. */
-  #progress { display:none; flex:none; align-items:center; gap:4px 22px; flex-wrap:wrap; padding:6px 14px; background:var(--panel); border-bottom:1px solid var(--line); font-size:12px; color:var(--mute); }
+  #progress { display:none; flex:none; align-items:center; gap:4px 22px; flex-wrap:wrap; padding:6px 14px; background:var(--panel); border-bottom:1px solid var(--line); font-size:var(--fs-min); color:var(--mute); }
   #progress.on { display:flex; }
   #progress .cell { display:inline-flex; align-items:baseline; gap:6px; cursor:help; }
-  #progress .cell b { color:var(--fg); font:600 13px var(--mono); }
+  #progress .cell b { color:var(--fg); font:600 var(--fs-min) var(--font-mono); }
   #progress .past { color:#e0a030; }
   svg#map { position:absolute; inset:0; width:100%; height:100%; background:#0c0e12; cursor:grab; touch-action:none; user-select:none; }
   svg#map.panning { cursor:grabbing; }
   #view { position:absolute; top:12px; right:12px; display:flex; gap:6px; align-items:center; }
   body:not(.noside) #view { right:calc(var(--side-w) + 12px); }   /* the zoom buttons sit just left of the open drawer */
-  #zoom { min-width:44px; text-align:center; color:var(--mute); font:12px var(--mono); }
+  #zoom { min-width:44px; text-align:center; color:var(--mute); font:var(--fs-min) var(--font-mono); }
   /* #replay is #footer's own transport row (#1813): the panel's bottom edge carries it, flat and hairline-thin, so the
      map keeps the room a floating pill used to reserve. It sits after #hint and never shrinks the hint off the row. */
   #replay { display:none; align-items:center; gap:4px; flex:0 1 auto; min-width:0; grid-column:2; justify-self:center; padding:2px 0 0; border-top:1px solid var(--line); pointer-events:auto; }
   #replay input[type=range] { flex:0 1 150px; width:150px; min-width:24px; accent-color:var(--acc); }
-  #replay button { flex:none; height:20px; padding:0 3px; background:none; border:0; border-radius:3px; color:var(--mute); font:12px var(--mono); cursor:pointer; }
+  #replay button { flex:none; height:var(--ctl-h); padding:0 3px; background:none; border:0; border-radius:3px; color:var(--mute); font:var(--fs-min) var(--font-mono); cursor:pointer; }
   #replay button:hover:not(:disabled) { background:#2e3846; color:var(--fg); }
   #replay button:disabled { opacity:.35; cursor:default; }
   #replay button, #r-pos { white-space:nowrap; }
-  #r-pos { flex:none; color:var(--mute); font:11px var(--mono); text-align:right; }
+  #r-pos { flex:none; color:var(--mute); font:var(--fs-min) var(--font-mono); text-align:right; }
   #r-pos.past { color:var(--warn); }
   /* #footer holds #hint and #replay as one row of three columns (#1859): the hint opens it, the transport takes the middle column
      and is centred in it, and the third column is the empty mirror of the first -- so the bar lands on the middle of the row's own
@@ -98,23 +102,23 @@
   /* The row stops where the drawer begins, exactly as #view does: the transport rides the map's visible width, so an open panel
      slides the bar left instead of drawing it under the drawer. */
   body:not(.noside) #footer { right:calc(var(--side-w) + 12px); }
-  #hint { grid-column:1; justify-self:start; color:var(--mute); font-size:11px; white-space:nowrap; flex:0 0 auto; }
+  #hint { grid-column:1; justify-self:start; color:var(--mute); font-size:var(--fs-min); white-space:nowrap; flex:0 0 auto; }
   .card { cursor:move; }
   .card rect { fill:var(--panel); stroke:#3a4250; stroke-width:1.2; }
   .card:hover rect { stroke:var(--acc); }
   .card.sel rect { stroke:var(--acc); fill:#182a40; stroke-width:2; }
   .card.err rect { stroke:var(--err); }
-  .card text { pointer-events:none; font:11px var(--mono); }
-  .card .nm { fill:var(--fg); font-size:12px; font-weight:600; }
-  .card .kd { fill:var(--mute); font-size:10px; }
-  .card .bd-e { fill:var(--err); font-size:10px; }
-  .card .bd-o { fill:var(--warn); font-size:10px; }
-  .card .st { fill:var(--mute); font-size:10px; }
-  .card .bd-c { fill:#ffb8b8; font-size:12px; font-weight:600; }   /* a failure reason: 12 px, light on the dark red card */
-  .card .rw { fill:var(--ok); font-size:11px; font-weight:600; }   /* a redo that passed, or a later attempt */
+  .card text { pointer-events:none; font:var(--fs-min) var(--font-mono); }
+  .card .nm { fill:var(--fg); font-size:var(--fs-min); font-weight:600; }
+  .card .kd { fill:var(--mute); font-size:var(--fs-min); }
+  .card .bd-e { fill:var(--err); font-size:var(--fs-min); }
+  .card .bd-o { fill:var(--warn); font-size:var(--fs-min); }
+  .card .st { fill:var(--mute); font-size:var(--fs-min); }
+  .card .bd-c { fill:#ffb8b8; font-size:var(--fs-min); font-weight:600; }   /* a failure reason: 12 px, light on the dark red card */
+  .card .rw { fill:var(--ok); font-size:var(--fs-min); font-weight:600; }   /* a redo that passed, or a later attempt */
   .card.child.superseded > g { opacity:.72; }   /* a failed attempt a later one replaced: still failed, only quieter */
-  .card .gl { fill:var(--mute); font:bold 14px sans-serif; pointer-events:none; }   /* the state glyph: status is never hue alone */
-  pre.ev { margin:4px 0 8px; padding:6px; background:#07090c; border:1px solid var(--line); border-radius:4px; font:11px/1.4 var(--mono); white-space:pre-wrap; word-break:break-all; max-height:200px; overflow:auto; color:#e8b9b9; }
+  .card .gl { fill:var(--mute); font:bold var(--fs-body) sans-serif; pointer-events:none; }   /* the state glyph: status is never hue alone */
+  pre.ev { margin:4px 0 8px; padding:6px; background:#07090c; border:1px solid var(--line); border-radius:4px; font:var(--fs-min)/1.4 var(--font-mono); white-space:pre-wrap; word-break:break-all; max-height:200px; overflow:auto; color:#e8b9b9; }
   .cause { margin-top:6px; } .cause b.bad { color:var(--err); }
   #edges g.edge.child { pointer-events:none; }
   #edges g.edge.child line.ln { stroke-dasharray:4 3; }
@@ -125,7 +129,7 @@
   .card.o-not-run rect { stroke:var(--mute); stroke-dasharray:2 4; }
   .card.o-started rect { stroke:var(--acc); stroke-dasharray:4 3; }
   .card.sel rect { stroke:var(--acc); stroke-width:2; }
-  .runbox { background:#0c0e12; border:1px solid var(--line); border-radius:4px; padding:8px; font:12px/1.6 var(--mono); }
+  .runbox { background:#0c0e12; border:1px solid var(--line); border-radius:4px; padding:8px; font:var(--fs-min)/1.6 var(--font-mono); }
   .runbox b { color:var(--fg); }
   .state-completed { color:var(--ok); } .state-none { color:var(--none); } .state-running { color:var(--acc); } .state-stalled { color:var(--warn); font-weight:600; }
   .card.running rect { stroke:var(--run); stroke-width:3.5; fill:#0f262a; }   /* running: a thick teal outline and the ▶ glyph; nothing moves, so prefers-reduced-motion has nothing to switch off */
@@ -136,21 +140,21 @@
   .group-card.s-passed .gl { fill:var(--ok); } .group-card.s-failed .gl { fill:var(--err); } .group-card.s-running .gl { fill:var(--run); }
   .group-card.s-deadline .gl, .group-card.s-needs-human .gl { fill:var(--warn); }
   .group-card.sel > rect { stroke:var(--acc); stroke-width:2.5; }
-  .chip-sw { display:inline-block; border:1px solid var(--line); border-radius:999px; padding:0 8px; font-size:11px; font-weight:600; }
+  .chip-sw { display:inline-block; border:1px solid var(--line); border-radius:999px; padding:0 8px; font-size:var(--fs-min); font-weight:600; }
   .chip-sw.v-ok { border-color:var(--ok); color:var(--ok); } .chip-sw.v-bad { border-color:var(--err); color:var(--err); }
   .chip-sw.v-wait { border-color:var(--wait); color:var(--wait); } .chip-sw.v-none { border-color:var(--none); color:var(--none); }
   .chip-sw.v-live { border-color:var(--run); color:var(--run); } .chip-sw.v-human { border-color:var(--warn); color:var(--warn); }
   /* The run-state pill the legend draws: one rule per state of the hub's table (contrib/squad-goal/scripts/hub.py RUN_STATES), colour and border alike, so a
      legend row cannot drift from the sidebar pill. A test holds these rules to the hub's table. */
-  .b { display:inline-block; padding:0 6px; border-radius:9px; font-size:11px; border:1px solid; }
+  .b { display:inline-block; padding:0 6px; border-radius:9px; font-size:var(--fs-min); border:1px solid; }
   .b.completed { color:var(--ok); } .b.verified { color:var(--ok); font-style:italic; } .b.unverified { color:var(--ok); border-style:dashed; }
   .b.failed { color:var(--err); } .b.needs-human { color:var(--warn); } .b.handled { color:var(--ok); }
   .b.running { color:var(--run); } .b.starting { color:var(--run); border-style:dotted; } .b.stalled { color:var(--wait); border-style:dashed; }
   .b.no-verdict-yet { color:var(--none); }
-  .card:focus { outline:none; } .card:focus-visible > rect { stroke:#fff; stroke-width:2.5; }   /* the keyboard ring: a white outline, like a hovered square */
+  .card:focus { outline:var(--focus-w) solid var(--focus); } .card:focus-visible > rect { stroke:#fff; stroke-width:2.5; }   /* the keyboard ring: a white outline, like a hovered square */
   .group-card .sq { cursor:pointer; }
   .group-card .sq rect { fill:#1a1f27; stroke:#556; stroke-width:1.2; }
-  .group-card .sq text { font:bold 13px sans-serif; fill:#8b97a8; }
+  .group-card .sq text { font:bold var(--fs-min) sans-serif; fill:#8b97a8; }
   .group-card .sq.s-passed rect { fill:#12261d; stroke:var(--ok); } .group-card .sq.s-passed text { fill:var(--ok); }
   .group-card .sq.s-failed rect { fill:#2a1517; stroke:var(--err); } .group-card .sq.s-failed text { fill:var(--err); }
   .group-card .sq.s-deadline rect, .group-card .sq.s-needs-human rect { fill:#2a2212; stroke:var(--warn); } .group-card .sq.s-deadline text, .group-card .sq.s-needs-human text { fill:var(--warn); }
@@ -158,9 +162,9 @@
   .group-card .sq.s-started rect { stroke:var(--acc); stroke-dasharray:3 2; }
   .group-card .sq.sup rect { stroke-dasharray:3 2; }   /* a failed child a later attempt replaced */
   .group-card .sq:hover rect { stroke:#fff; }
-  .group-card .sq:focus { outline:none; } .group-card g.sq.sq rect.fr { fill:none; stroke:none; } .group-card g.sq.sq:focus-visible rect.fr { stroke:#fff; stroke-width:2; }   /* the keyboard ring: an outer white ring, so a focused selected square still differs from a selected one */
+  .group-card .sq:focus { outline:var(--focus-w) solid var(--focus); } .group-card g.sq.sq rect.fr { fill:none; stroke:none; } .group-card g.sq.sq:focus-visible rect.fr { stroke:#fff; stroke-width:2; }   /* the keyboard ring: an outer white ring, so a focused selected square still differs from a selected one */
   .group-card .sq.sel rect { stroke:#fff; stroke-width:2.5; }
-  table.roster { width:100%; border-collapse:collapse; font:11px var(--mono); }
+  table.roster { width:100%; border-collapse:collapse; font:var(--fs-min) var(--font-mono); }
   table.roster th { text-align:left; color:var(--mute); padding:2px 4px; font-weight:400; }
   table.roster td { padding:2px 4px; border-top:1px solid var(--line); white-space:nowrap; max-width:110px; overflow:hidden; text-overflow:ellipsis; }
   table.roster tr[data-child] { cursor:pointer; }
@@ -169,7 +173,7 @@
   table.roster .m { font-weight:bold; }
   table.roster tr.s-passed .m { color:var(--ok); } table.roster tr.s-failed .m { color:var(--err); }
   table.roster tr.s-deadline .m, table.roster tr.s-needs-human .m { color:var(--warn); } table.roster tr.s-running .m { color:var(--run); }
-  table.tl { width:100%; border-collapse:collapse; font:11px var(--mono); }
+  table.tl { width:100%; border-collapse:collapse; font:var(--fs-min) var(--font-mono); }
   table.tl td { padding:1px 4px; border-bottom:1px solid var(--line); color:var(--mute); }
   #edges line.ln { stroke:#4a5568; stroke-width:1.3; }
   #edges line.hit { stroke:transparent; stroke-width:12; cursor:pointer; }
@@ -181,13 +185,13 @@
   #rubber { stroke:var(--acc); stroke-width:1.6; stroke-dasharray:5 4; pointer-events:none; }
   #edges marker path { fill:#4a5568; }
   /* The legend is a strip on the map's right edge, under the zoom controls: always expanded; the graph keeps the remaining width. */
-  #legend { position:absolute; right:12px; top:52px; z-index:4; box-sizing:border-box; width:220px; max-height:calc(100% - 52px - var(--legend-bottom, 40px)); overflow:auto; overscroll-behavior:contain; pointer-events:auto; background:var(--panel); border:1px solid var(--line); border-radius:6px; color:var(--mute); font-size:11px; }
+  #legend { position:absolute; right:12px; top:52px; z-index:4; box-sizing:border-box; width:220px; max-height:calc(100% - 52px - var(--legend-bottom, 40px)); overflow:auto; overscroll-behavior:contain; pointer-events:auto; background:var(--panel); border:1px solid var(--line); border-radius:6px; color:var(--mute); font-size:var(--fs-min); }
   #legend-list { display:flex; flex-direction:column; padding:4px 6px; }
   body:not(.noside) #legend { visibility:hidden; }   /* the open drawer owns the right edge; the keyboard [ or the ? overlay brings the strip back */
   #legend .lg { display:flex; align-items:center; gap:6px; padding:2px 1px; white-space:nowrap; }
   #legend .lg svg { flex:0 0 24px; }
   #legend .lt, #legend .lh { overflow:hidden; }
-  #legend .lh { margin:4px 0 0; padding-top:3px; border-top:1px solid var(--line); text-transform:uppercase; letter-spacing:.06em; font-size:10px; }
+  #legend .lh { margin:4px 0 0; padding-top:3px; border-top:1px solid var(--line); text-transform:uppercase; letter-spacing:.06em; font-size:var(--fs-min); }
   #legend .dot { width:10px; height:10px; padding:0; margin:0 7px; background:currentColor; flex:0 0 10px; }
   /* A run-state row carries a full pill, too wide to sit beside its words: the pill takes the row and the description goes under it. */
   .lg { display:inline-flex; align-items:center; gap:5px; }
@@ -195,17 +199,17 @@
   #help { position:fixed; inset:0; z-index:20; background:#000a; display:flex; align-items:center; justify-content:center; }
   #help[hidden] { display:none; }
   #help .box { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:8px 18px 14px; max-width:720px; max-height:86vh; overflow:auto; }
-  #help h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--mute); margin:14px 0 6px; }
+  #help h2 { font-size:var(--fs-min); text-transform:uppercase; letter-spacing:.06em; color:var(--mute); margin:14px 0 6px; }
   #help table { border-collapse:collapse; width:100%; }
   #help td { padding:3px 8px 3px 0; border-bottom:1px solid var(--line); vertical-align:top; }
-  #help td:first-child { font:12px var(--mono); color:var(--fg); white-space:nowrap; }
+  #help td:first-child { font:var(--fs-min) var(--font-mono); color:var(--fg); white-space:nowrap; }
   #help #help-legend { display:flex; flex-wrap:wrap; gap:6px 16px; }
 
   /* The top bar holds identity, verdict, mode and files. The side panel is an inspector that opens on a selection. */
   #topbar { grid-column:1; height:37px; display:flex; align-items:center; gap:8px; padding:6px 12px; background:var(--panel); border-bottom:1px solid var(--line); min-width:0; }
   #topbar .grow { flex:1; }
   #ident { font-weight:600; max-width:30ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  #rechash { max-width:24ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; color:var(--mute); }
+  #rechash { max-width:24ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--fs-min); color:var(--mute); }
   #vchip { font-weight:600; border-radius:999px; padding:2px 12px; }
   #vchip[hidden] { display:none; }
   #vchip.v-ok { border-color:var(--ok); color:var(--ok); }
@@ -221,34 +225,34 @@
   #modesw button.on { background:#182a40; border-color:var(--acc); }
   body:not(.edit) .edit-only { display:none !important; }
   #fmenu { position:relative; }
-  #fmenu summary { list-style:none; cursor:pointer; background:#0c0e12; border:1px solid var(--line); border-radius:4px; padding:4px 8px; font:12px var(--mono); }
+  #fmenu summary { list-style:none; cursor:pointer; background:#0c0e12; border:1px solid var(--line); border-radius:4px; padding:4px 8px; font:var(--fs-min) var(--font-mono); }
   #fmenu summary::-webkit-details-marker { display:none; }
   #fmenu[open] summary { border-color:var(--acc); }
   #fmenu .drop { position:absolute; right:0; top:calc(100% + 4px); z-index:12; display:flex; flex-direction:column; gap:2px; min-width:230px; background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:4px; box-shadow:0 6px 20px #0008; }
   #fmenu .drop button, #fmenu .drop label.btn { text-align:left; border:0; background:none; }
   #fmenu .drop button:hover, #fmenu .drop label.btn:hover { background:#182a40; }
-  #fmenu .drop .sep { color:var(--mute); font-size:11px; padding:4px 8px 0; }
+  #fmenu .drop .sep { color:var(--mute); font-size:var(--fs-min); padding:4px 8px 0; }
   #fmenu .drop .note { padding:2px 8px; }
   #addbar { position:absolute; bottom:34px; left:12px; z-index:3; background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:6px; max-width:calc(100% - 244px); }
-  #status { position:fixed; left:12px; bottom:40px; z-index:5; max-width:min(560px, 60vw); background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:6px 10px; font-size:12px; color:var(--mute); cursor:pointer; }
+  #status { position:fixed; left:12px; bottom:40px; z-index:5; max-width:min(560px, 60vw); background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:6px 10px; font-size:var(--fs-min); color:var(--mute); cursor:pointer; }
   #status:empty { display:none; }
   @media (max-width: 900px) { #status { bottom:112px; } }   /* a narrow window: the toast sits above the replay bar, not over its buttons */
   #side details.ref { margin-top:14px; }
   /* A narrow window still shows the expanded strip on the right; the help (?) holds the same list. */
 
 #side .pnav { position:sticky; top:0; z-index:2; display:flex; align-items:center; justify-content:center; gap:10px; padding:4px 0 6px; background:var(--panel); }
-#side .pnav button { min-width:36px; font-size:16px; line-height:1; padding:3px 10px; }
+#side .pnav button { min-width:36px; font-size:var(--fs-body); line-height:1; padding:3px 10px; }
 #side .pnav button:disabled { opacity:.35; cursor:default; }
 #scriptview { position: absolute; inset: 0; overflow: auto; background: inherit; z-index: 5; }
 #scriptview[hidden] { display: none; }
-.script-diagram { font: 12px sans-serif; }
-.script-diagram .batch-name { font-weight: 600; font-size: 14px; fill: currentColor; }
+.script-diagram { font: var(--fs-min) sans-serif; }
+.script-diagram .batch-name { font-weight: 600; font-size: var(--fs-body); fill: currentColor; }
 .script-diagram .step rect { fill: #eef3fb; stroke: #4a6fa5; stroke-width: 1.5; }
 .script-diagram .step.manual rect { fill: #fff6e0; stroke: #b7791f; stroke-dasharray: 6 4; }
 .script-diagram .step.sensitive rect { stroke: #b03030; stroke-width: 2.5; }
 .script-diagram .step-id { font-weight: 600; fill: #222; }
 .script-diagram .step-text { fill: #222; }
-.script-diagram .step-tags { fill: #555; font-size: 11px; }
+.script-diagram .step-tags { fill: #555; font-size: var(--fs-min); }
 .script-diagram .flow { stroke: #777; stroke-width: 1.5; fill: none; }
 .script-diagram marker path { fill: #777; }
 
@@ -272,8 +276,8 @@ body.card-mode { display: block; margin: 0; }
 body.card-mode #topbar, body.card-mode #left, body.card-mode #graph, body.card-mode #footer,
 body.card-mode #totals, body.card-mode #progress, body.card-mode #replay, body.card-mode #status, body.card-mode #help { display: none; }
 body.card-mode #card { display: block; }
-#card { display: none; height: 100vh; overflow: auto; overscroll-behavior: contain; padding: 8px 10px; background: #0f1115; color: #d8dde6; font: 12px ui-monospace, Menlo, monospace; }
-#card h3 { margin: 8px 0 4px; font-size: 12px; color: #d8dde6; }
+#card { display: none; height: 100vh; overflow: auto; overscroll-behavior: contain; padding: 8px 10px; background: #0f1115; color: #d8dde6; font: var(--fs-min) ui-monospace, Menlo, monospace; }
+#card h3 { margin: 8px 0 4px; font-size: var(--fs-min); color: #d8dde6; }
 #card .cgroup { border: 1px solid #2a303b; border-radius: 6px; margin: 0 0 6px; padding: 4px 8px 6px; background: #161a21; }
 #card .cgroup.s-running, #card .cgroup.s-started { border-color: #2dd4bf; }
 #card .cgroup.s-failed, #card .cgroup.s-rejected { border-color: #ff6b6b; }
@@ -3509,7 +3513,7 @@ function closeMenu() { $("menu").style.display = "none"; }
 
 // --- the legend and the help overlay: rows come from the core; a swatch is a card group, so the card CSS paints it ---
 function swatches() {
-  const cards = core.LEGEND.map((r) => `<span class="lg"><svg width="24" height="14" viewBox="0 0 24 14"><g class="card ${r.cls}"><rect x="1" y="1" width="22" height="12" rx="3"/>${r.glyph ? `<text class="gl" x="12" y="11" text-anchor="middle" style="font-size:10px">${r.glyph}</text>` : ""}</g></svg>${esc(r.label)}</span>`);
+  const cards = core.LEGEND.map((r) => `<span class="lg"><svg width="24" height="14" viewBox="0 0 24 14"><g class="card ${r.cls}"><rect x="1" y="1" width="22" height="12" rx="3"/>${r.glyph ? `<text class="gl" x="12" y="11" text-anchor="middle" style="font-size:var(--fs-min)">${r.glyph}</text>` : ""}</g></svg>${esc(r.label)}</span>`);
   const chips = core.LEGEND_CHIPS.map((r) => `<span class="lg"><span class="chip-sw ${r.cls}">${esc(r.label)}</span></span>`);
   return cards.concat(chips).join("");
 }
@@ -3518,7 +3522,7 @@ function swatches() {
 // (RUN_STATES) and the surfaces that print a state draw their pill from it; the help overlay still lists the chips.
 const LEGEND_GROUPS = [["node", "Node outcomes"], ["interaction", "Interaction"]];
 function legendList() {
-  const sw = (r) => `<svg width="24" height="14" viewBox="0 0 24 14"><g class="card ${r.cls}"><rect x="1" y="1" width="22" height="12" rx="3"/>${r.glyph ? `<text class="gl" x="12" y="11" text-anchor="middle" style="font-size:10px">${r.glyph}</text>` : ""}</g></svg>`;
+  const sw = (r) => `<svg width="24" height="14" viewBox="0 0 24 14"><g class="card ${r.cls}"><rect x="1" y="1" width="22" height="12" rx="3"/>${r.glyph ? `<text class="gl" x="12" y="11" text-anchor="middle" style="font-size:var(--fs-min)">${r.glyph}</text>` : ""}</g></svg>`;
   const rows = {
     node: core.LEGEND.filter((r) => r.group === "node").map((r) => [sw(r), r.label, ""]),
     interaction: core.LEGEND.filter((r) => r.group === "interaction").map((r) => [sw(r), r.label, ""]),

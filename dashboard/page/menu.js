@@ -1,6 +1,6 @@
 // --- the legend and the help overlay: rows come from the core; a swatch is a card group, so the card CSS paints it ---
 function swatches() {
-  const cards = core.LEGEND.map((r) => `<span class="lg"><svg width="24" height="14" viewBox="0 0 24 14"><g class="card ${r.cls}"><rect x="1" y="1" width="22" height="12" rx="3"/>${r.glyph ? `<text class="gl" x="12" y="11" text-anchor="middle" style="font-size:10px">${r.glyph}</text>` : ""}</g></svg>${esc(r.label)}</span>`);
+  const cards = core.LEGEND.map((r) => `<span class="lg"><svg width="24" height="14" viewBox="0 0 24 14"><g class="card ${r.cls}"><rect x="1" y="1" width="22" height="12" rx="3"/>${r.glyph ? `<text class="gl" x="12" y="11" text-anchor="middle" style="font-size:var(--fs-min)">${r.glyph}</text>` : ""}</g></svg>${esc(r.label)}</span>`);
   const chips = core.LEGEND_CHIPS.map((r) => `<span class="lg"><span class="chip-sw ${r.cls}">${esc(r.label)}</span></span>`);
   return cards.concat(chips).join("");
 }
@@ -9,7 +9,7 @@ function swatches() {
 // (RUN_STATES) and the surfaces that print a state draw their pill from it; the help overlay still lists the chips.
 const LEGEND_GROUPS = [["node", "Node outcomes"], ["interaction", "Interaction"]];
 function legendList() {
-  const sw = (r) => `<svg width="24" height="14" viewBox="0 0 24 14"><g class="card ${r.cls}"><rect x="1" y="1" width="22" height="12" rx="3"/>${r.glyph ? `<text class="gl" x="12" y="11" text-anchor="middle" style="font-size:10px">${r.glyph}</text>` : ""}</g></svg>`;
+  const sw = (r) => `<svg width="24" height="14" viewBox="0 0 24 14"><g class="card ${r.cls}"><rect x="1" y="1" width="22" height="12" rx="3"/>${r.glyph ? `<text class="gl" x="12" y="11" text-anchor="middle" style="font-size:var(--fs-min)">${r.glyph}</text>` : ""}</g></svg>`;
   const rows = {
     node: core.LEGEND.filter((r) => r.group === "node").map((r) => [sw(r), r.label, ""]),
     interaction: core.LEGEND.filter((r) => r.group === "interaction").map((r) => [sw(r), r.label, ""]),

@@ -266,7 +266,7 @@ def test_the_replay_bar_is_thinner_and_quieter_than_the_pill_it_replaces():
 
 def test_the_replay_reading_reserves_no_dead_width():
     assert "min-width" not in _computed("#r-pos")   # the 190px the floating pill kept for the text is gone
-    assert _computed("#r-pos")["font"] == "11px var(--mono)"
+    assert _computed("#r-pos")["font"] == "var(--fs-min) var(--font-mono)"
 
 
 def test_the_slider_is_shortened_to_what_the_row_can_spare():

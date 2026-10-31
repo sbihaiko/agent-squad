@@ -52,11 +52,11 @@ def test_selecting_a_node_under_the_drawer_pans_it_clear_without_changing_the_zo
              'pd("pointerdown",300,400,map);pd("pointermove",550,400);pd("pointerup",550,400);await wait();'
              'const cards=q(".card[data-name]:not([data-group]):not(.child)").sort((a,b)=>b.getBoundingClientRect().right-a.getBoundingClientRect().right);'
              'const drawer=()=>document.getElementById("left").getBoundingClientRect();const last=cards[0].dataset.name;'
-             'const under=cards[0].getBoundingClientRect().right>drawer().left;'
+             'const under=cards[0].querySelector("rect").getBoundingClientRect().right>drawer().left;'
              'const zoom=document.getElementById("zoom").textContent,tx0=document.getElementById("vp").getAttribute("transform");'
              'press(cards[0]);await wait();'
              'const card=q(".card[data-name]").find(c=>c.dataset.name===last);'
-             'document.title="RESULT "+JSON.stringify({under,clear:card.getBoundingClientRect().right<=drawer().left+1,panel:drawer().width,'
+             'document.title="RESULT "+JSON.stringify({under,clear:card.querySelector("rect").getBoundingClientRect().right<=drawer().left+1,panel:drawer().width,'
              'zoomSame:zoom===document.getElementById("zoom").textContent,moved:tx0!==document.getElementById("vp").getAttribute("transform"),open:!document.body.classList.contains("noside")});')
     got = drive(tmp_path, steps)
     assert got["open"] and got["under"]   # the press lands on a card the drawer was covering, so the reveal has work to do

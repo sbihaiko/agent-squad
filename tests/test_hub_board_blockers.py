@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
+WEB_TOKENS = ROOT / "contrib/squad-goal/scripts/web-tokens.css"
 HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
 
 
@@ -88,7 +89,7 @@ def test_blocker_line_stays_inside_a_300px_card(hub):
 
 
 def _css(hub):
-    return hub.PAGE[hub.PAGE.index("<style>"): hub.PAGE.index("</style>")]
+    return WEB_TOKENS.read_text() + hub.PAGE[hub.PAGE.index("<style>"): hub.PAGE.index("</style>")]
 
 
 def _rule(hub, selector):
@@ -174,7 +175,7 @@ def _mute(hub):
 
 
 def _token(hub, name):
-    """The hex behind one of the page's own custom properties."""
+    """The hex behind one of the custom properties the page reads from the shared token block."""
     m = re.search(rf"\{name}:(#[0-9a-f]{{6}})", _css(hub))
     assert m, f"{name} is not declared by the page"
     return m.group(1)
@@ -277,8 +278,8 @@ def test_the_number_is_the_readable_thing_on_the_chip(hub):
     is the one thing the chip has to make readable. The colours the numbers wear are measured below."""
     chip = _rule(hub, ".hidbar .chip")
     assert "background:" + CHIP_BG in chip, "the measurement's background is not the chip's own"
-    assert _ratio(_mute(hub), CHIP_BG) < 4.5, "the caption colour is what the chip's names wear, not its numbers"
-    for name in ("--err", "--run", "--warn", "--ok", "--pin"):
+    assert _ratio(_token(hub, "--fg"), CHIP_BG) >= 4.5, "the chip's names are under AA on the chip"
+    for name in ("--err", "--run", "--warn", "--ok", "--acc"):
         assert _ratio(_token(hub, name), CHIP_BG) >= 4.5, f"a number in {name} is under AA on the chip"
 
 
@@ -364,13 +365,13 @@ def test_the_strip_width_is_pinned_in_both_directions_and_never_scrolls(hub):
 
 def test_the_name_is_the_caption_and_the_number_is_never_the_clipped_one(hub):
     lbl, num = _rule(hub, ".hidbar .chip .lbl"), _rule(hub, ".hidbar .chip b")
-    assert "font-size:10px" in lbl and "line-height:11px" in lbl, "the name is not 10px/11px"
-    assert "color:var(--mute)" in lbl, "the name is the caption, so it wears the caption's colour"
+    assert "font-size:var(--fs-min)" in lbl and "line-height:16px" in lbl, "the name is not the 13px floor with a 16px line"
+    assert "color:var(--fg)" in lbl, "the name wears the text colour, which clears AA on the chip"
     assert "text-overflow:ellipsis" in lbl and "white-space:nowrap" in lbl, \
         "a long name ellipsizes; it never wraps and never shrinks the font"
     assert "flex:0 1 auto" in lbl and "flex:none" in num, \
         "the name shrinks first and is clipped away; the number is never the element that gets cut"
-    assert "font-size:20px" in num and "line-height:20px" in num and "font-weight:700" in num, \
+    assert "font-size:var(--fs-xl)" in num and "line-height:20px" in num and "font-weight:700" in num, \
         "the number is the one big thing in the strip"
     assert "font-variant-numeric:tabular-nums" in num, "two counts in a stack must line up"
 
@@ -416,9 +417,9 @@ def test_every_number_is_painted_by_its_category_and_never_as_a_caption(hub):
     for name, want in HID_COL.items():
         assert _hid_rule(hub, name) == want, f"{name} is painted {_hid_rule(hub, name)}, not {want}"
     fallback = _rule(hub, ".hidbar .chip b")
-    assert re.search(r"color:var\(--pin\)", fallback), \
-        "a column the table does not name must fall back to --pin"
-    assert _token(hub, "--pin") == NAMED["Open PRs"], "the lane's blue and the fallback are not one colour"
+    assert re.search(r"color:var\(--acc\)", fallback), \
+        "a column the table does not name must fall back to --acc"
+    assert _token(hub, "--acc") == NAMED["Open PRs"], "the lane's blue and the fallback are not one colour"
     for name in list(HID_COL) + [""]:
         sel = f'.hidbar .chip[data-col="{name}"] b' if name else ".hidbar .chip b"
         assert "var(--mute)" not in _rule(hub, sel), f"{name or 'the fallback'} draws a number in the caption colour"
