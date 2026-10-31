@@ -10,7 +10,6 @@ const cellView=rows=>({shown:rows,more:0});
 const laneWaveOf=x=>{const w=(x.l||[]).map(l=>(String(l).match(/^wave:(\d+)$/)||[])[1]).filter(v=>v!==undefined).map(Number);return w.length?Math.min(...w):null};
 const waveKey=x=>{const w=laneWaveOf(x);return w===null?"none":String(w)};
 const specKey=x=>x.pa==null?"none":String(x.pa);
-const SPEC_COLOURS=8;
 const numCmp=(a,b)=>a==null?(b==null?0:1):b==null?-1:a-b;
 // A wave belongs to one spec: the same wave of two specs is two lanes and two Waves options (#980).
 const waveOptKey=x=>specKey(x)+"/"+waveKey(x);
@@ -38,6 +37,16 @@ function specOptions(groups,closed,abandoned){
   return keys.sort((a,b)=>a==="none"?1:b==="none"?-1:+a-+b)}
 // A saved Specs filter keeps only the options the board offers now, so a finished spec's key is dropped on load (#981).
 const keptSpecs=(saved,groups,closed,abandoned)=>{const opts=specOptions(groups,closed,abandoned);return saved.filter(k=>opts.includes(k))};
+// A spec's color (#917): the spec number picks a palette slot, number mod 8. A slot already taken goes to the next free
+// slot, so two specs differ while the palette has room. Specs are read in number order, so the board order changes nothing.
+const SPEC_GREY="var(--mute)";   // a card with no spec
+const specSlots=nums=>{const m=new Map(),used=new Set();
+  [...new Set(nums.map(Number).filter(n=>Number.isFinite(n)))].sort((a,b)=>a-b).forEach(n=>{let s=n%8;
+    if(used.size<8)while(used.has(s))s=(s+1)%8;used.add(s);m.set(n,s+1)});return m};
+const specColor=(slots,n)=>n==null||!Number.isFinite(Number(n))?SPEC_GREY:`var(--s${slots.get(Number(n))||Number(n)%8+1})`;
+const cardSpec=x=>x.sp?x.n:x.pa;   // a spec card wears its own color
+// The wave chip (#917): text that names the card's wave, never a shade; a card with no wave shows none.
+const waveChip=x=>{const w=laneWaveOf(x);return w===null?"":`<span class=lchip data-k=wave title="wave ${w}">W${w}</span>`};
 // groups: the issue columns in board order, each { name, items }. o: { mode: "spec"|"wave", fw, fs, fk, text, lc, hideDone,
 // closed, hidden }. `text` is the search predicate; progress counts every row, so a search or a filter never moves a bar.
 // Returns { cols, vc, hc, lanes }: vc are the columns drawn, hc the hidden ones with their counts, lanes the shown lanes in order.
@@ -66,9 +75,9 @@ groups.forEach(g=>g.items.forEach(x=>{if(x.sp){if(gone.has(g.name))goneSpecs.add
   const rank=l=>l.kind==="bugs"?0:(l.kind==="none"||(l.kind==="sw"&&l.num==null))?2:1;
   const order=(a,b)=>mode==="wave"?(numCmp(a.num,b.num)||numCmp(a.wave,b.wave)):((b.live-a.live)||((a.num??0)-(b.num??0)));
   const list=shown.filter(l=>!(o.hideDone&&l.done)).sort((a,b)=>rank(a)-rank(b)||order(a,b));
-  const palette=new Map();   // a spec keeps one colour across all its lanes; colours go to specs in lane order
-  list.forEach(l=>{if(l.num!=null&&!palette.has(l.num))palette.set(l.num,palette.size%SPEC_COLOURS)});
-  list.forEach(l=>{l.pi=l.num==null?null:palette.get(l.num)});
+  // A spec keeps one colour across all its lanes, and it is the colour its cards wear: the slot specSlots gives it over every spec on the board (#917, #980).
+  const slots=specSlots(groups.flatMap(g=>g.items.map(cardSpec)).filter(n=>n!=null));
+  list.forEach(l=>{l.pi=l.num==null?null:(slots.get(Number(l.num))||Number(l.num)%8+1)-1});
   const lc=o.lc||{};
   list.forEach(l=>{l.collapsed=Object.prototype.hasOwnProperty.call(lc,l.id)?!!lc[l.id]:l.done});   // a done lane starts collapsed (#891)
   const open=list.filter(l=>!l.collapsed);

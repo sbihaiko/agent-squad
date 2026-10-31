@@ -48,6 +48,7 @@ body.dockb #bbody.lanes{display:block;overflow:visible}
 #bhead .fpop{position:absolute;left:0;top:calc(100% + 4px);z-index:20;min-width:240px;max-height:320px;overflow-y:auto;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px;box-shadow:0 8px 24px #000a}
 #bhead .fpop label{display:flex;gap:8px;align-items:center;padding:4px 8px;border-radius:4px;cursor:pointer;white-space:nowrap;min-height:32px}
 #bhead .fpop label:hover{background:#1f2430}
+#bhead .fpop .sw{flex:none;width:10px;height:10px;border-radius:50%}   /* the spec's color: the filter is the legend (#917) */
 #bhead .fpopb{display:flex;justify-content:flex-end;padding:0 2px 6px;margin-bottom:4px;border-bottom:1px solid var(--line)}
 #bhead .fpopb button{font:inherit;min-height:32px}
 /* A lane waiting on the board read: a loading mark across its middle, shown only past a short delay so a fast read never flashes it. */

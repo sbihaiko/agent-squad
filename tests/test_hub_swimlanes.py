@@ -221,7 +221,7 @@ def test_a_ticket_with_no_spec_draws_in_no_spec_wave_lane(hub):
 
 
 def test_the_page_binds_the_wave_options_and_the_spec_colour_from_the_model(hub):
-    assert "waveOptions(allRows)" in hub.PAGE and "SPECC[l.pi]" in hub.PAGE
+    assert "waveOptions(allRows)" in hub.PAGE and "specColor(SLOTS,l.num)" in hub.PAGE
     assert 'class=sid' in hub.PAGE and "l.wl" in hub.PAGE
 
 
