@@ -2,7 +2,7 @@
 
 The rule is `board-lanes.js`, run in node as the page carries it: a lane that is done starts collapsed, a user's choice
 (`bo.lc`) wins over that default, hide-done drops only the lanes whose every ticket is closed, and a cell shows three
-cards and a "+N more" control until a click opens that one cell (`bo.cx`). Collapse and open state live in `bo`, which
+cards, every one of them, with no "+N more" control (`bo.cx` is kept for the saved record). Collapse and open state live in `bo`, which
 the page keeps in local storage, so they survive a reload.
 """
 import json
@@ -94,25 +94,14 @@ def test_hide_done_drops_only_the_lanes_whose_every_ticket_is_closed():
     assert "s20" in ids and "s30" in ids, "an open lane is hidden with the done ones"
 
 
-# ---- the cell cap ----
+# ---- the cell shows every card ----
 
-def test_a_cell_shows_three_cards_and_a_more_control_for_the_rest():
-    rows = [{"n": n} for n in range(1, 5)]
-    view = _node(f"console.log(JSON.stringify(cellView({json.dumps(rows)},false)));")
-    assert [r["n"] for r in view["shown"]] == [1, 2, 3]
-    assert view["more"] == 1, "the +N more count is wrong"
-
-
-def test_an_open_cell_shows_every_card_and_no_control():
-    rows = [{"n": n} for n in range(1, 5)]
-    view = _node(f"console.log(JSON.stringify(cellView({json.dumps(rows)},true)));")
-    assert len(view["shown"]) == 4 and view["more"] == 0
-
-
-def test_a_cell_of_three_or_fewer_has_no_control():
-    rows = [{"n": n} for n in range(1, 4)]
-    view = _node(f"console.log(JSON.stringify(cellView({json.dumps(rows)},false)));")
-    assert len(view["shown"]) == 3 and view["more"] == 0
+def test_a_cell_shows_every_card_and_no_more_control():
+    """The owner reads the whole lane at once: a cell has no cap, open or not (#891)."""
+    rows = [{"n": n} for n in range(1, 8)]
+    for opened in ("false", "true"):
+        view = _node(f"console.log(JSON.stringify(cellView({json.dumps(rows)},{opened})));")
+        assert [r["n"] for r in view["shown"]] == list(range(1, 8)) and view["more"] == 0
 
 
 # ---- the page's controls and their state ----
