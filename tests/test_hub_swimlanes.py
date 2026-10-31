@@ -135,14 +135,14 @@ def test_loop_bugs_lane_comes_first_and_no_spec_lane_last(hub):
     ids = [lane["id"] for lane in model["lanes"]]
     assert ids[0] == "bugs", f"Loop bugs is not first: {ids}"
     assert ids[-1] == "none", f"No spec is not last: {ids}"
-    bugs = next(l for l in model["lanes"] if l["id"] == "bugs")
+    bugs = next(ln for ln in model["lanes"] if ln["id"] == "bugs")
     assert bugs["title"] == "Loop bugs"
     assert [r["n"] for r in bugs["all"]] == [895]
 
 
 def test_spec_lane_carries_number_title_column_and_closed_progress(hub):
     model = _build(GROUPS)
-    lane = next(l for l in model["lanes"] if l["id"] == "s889")
+    lane = next(ln for ln in model["lanes"] if ln["id"] == "s889")
     assert lane["num"] == 889
     assert lane["title"] == "card 889"
     assert lane["st"] == "Doing", "the header does not name the spec card's column"
@@ -151,7 +151,7 @@ def test_spec_lane_carries_number_title_column_and_closed_progress(hub):
 
 def test_a_lane_with_a_running_card_sorts_before_one_without(hub):
     model = _build(GROUPS)
-    spec_ids = [l["id"] for l in model["lanes"] if l["kind"] == "s"]
+    spec_ids = [ln["id"] for ln in model["lanes"] if ln["kind"] == "s"]
     assert spec_ids == ["s889", "s41"], f"the running lane does not come first: {spec_ids}"
 
 
@@ -160,14 +160,14 @@ def test_wave_mode_groups_by_wave_with_no_wave_last(hub):
         _row(10, "Todo", ["wave:02"]), _row(11, "Todo", ["wave:01"]), _row(12, "Todo", []),
     ]}]
     model = _build(groups, mode="wave")
-    assert [l["id"] for l in model["lanes"]] == ["w1", "w2", "nowave"]
+    assert [ln["id"] for ln in model["lanes"]] == ["w1", "w2", "nowave"]
     assert model["lanes"][0]["title"] == "Wave 1"
     assert model["lanes"][-1]["title"] == "No wave"
 
 
 def test_spec_mode_draws_no_spec_cards_as_cards_only_in_their_lane(hub):
     model = _build(GROUPS)
-    seen = [r["n"] for l in model["lanes"] for r in l["all"]]
+    seen = [r["n"] for ln in model["lanes"] for r in ln["all"]]
     assert sorted(seen) == [42, 43, 890, 895, 899, 900], "a card appears in no lane or in two"
     assert 889 not in seen and 41 not in seen, "a spec card is drawn as a card, not as a lane header"
 

@@ -104,7 +104,7 @@ def test_the_filters_apply_to_the_swimlanes(hub):
     ]}, {"name": "Todo", "items": [{"n": 900, "t": "c", "l": ["wave:2"]}]}]
     opts = {"mode": "spec", "fw": ["2"], "fs": ["889"], "lc": {}, "hideDone": False, "closed": "Closed"}
     model = _node(f"console.log(JSON.stringify(buildBoard({json.dumps(groups)},{json.dumps(opts)})));", LANES_JS)
-    shown = [r["n"] for l in model["lanes"] for r in l["vis"]]
+    shown = [r["n"] for ln in model["lanes"] for r in ln["vis"]]
     assert shown == [890], f"the filters did not narrow the swimlanes: {shown}"
 
 

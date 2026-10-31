@@ -53,7 +53,7 @@ def _lanes(opts):
 
 
 def _lane(model, lane_id):
-    return next(l for l in model["lanes"] if l["id"] == lane_id)
+    return next(ln for ln in model["lanes"] if ln["id"] == lane_id)
 
 
 # ---- the default and the user's choice ----
@@ -89,7 +89,7 @@ def test_a_column_is_drawn_only_while_an_expanded_lane_holds_a_card_in_it():
 
 def test_hide_done_drops_only_the_lanes_whose_every_ticket_is_closed():
     model = _lanes({"hideDone": True})
-    ids = [l["id"] for l in model["lanes"]]
+    ids = [ln["id"] for ln in model["lanes"]]
     assert "s10" not in ids, "a done lane is still shown"
     assert "s20" in ids and "s30" in ids, "an open lane is hidden with the done ones"
 
