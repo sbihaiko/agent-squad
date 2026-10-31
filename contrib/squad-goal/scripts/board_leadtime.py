@@ -1,7 +1,7 @@
 """Lead-time control chart arithmetic for the board's closed cards (SPEC 111). Stdlib only: no hub, no client, no file API (ADR-0137)."""
 import math
 import statistics
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
 MEASURE = "opened -> closed"
 ABANDONED = "Abandoned"
@@ -81,4 +81,133 @@ def lead_time(items, window=20):
         "excluded": excluded,
         "series": series,
         "summary": summary,
+    }
+
+
+# SPEC 889 #900: the Jira-style control chart. The hub serves every number and position; the page draws marks only.
+JIRA_CUBE_DAYS = 30           # Jira's y scale: linear under this many days, cube root from it
+LOG_FLOOR_DAYS = 1 / 48       # the log axis starts at 30 minutes
+LOG_FLOOR_HOURS = 1 / 60      # no log of a span under one minute
+PLOT_W, PLOT_H = 728, 268     # the page's plot in pixels, for clusters: its 800 x 340 frame less 36 px margins
+DOT_PX = 9                    # dots closer than this many pixels merge into a numbered cluster
+REASON_TEXT = {"not_planned": "closed as not planned", "abandoned": "closed as abandoned", "open": "still open",
+               "no_opened": "no opened date"}
+LOG_TICKS = [(1 / 24, "1 h"), (1, "1 d"), (7, "1 w")]
+CUBE_TICKS = [(1, "1 d"), (7, "1 w"), (30, "30 d"), (60, "60 d")]
+
+
+def _window_size(count):
+    size = max(5, math.floor(0.2 * count + 0.5))
+    return size + 1 if size % 2 == 0 else size
+
+
+def _clamp(v):
+    return min(1.0, max(0.0, v))
+
+
+def _rolling(hours, log):
+    """Centered mean and one sigma per dot, in hours. Linear: mean of hours. Log: geometric mean, sigma in log space."""
+    size = _window_size(len(hours))
+    half = (size - 1) // 2
+    out = []
+    for i in range(len(hours)):
+        span = hours[max(0, i - half) : i + half + 1]
+        if log:
+            logs = [math.log(max(h, LOG_FLOOR_HOURS)) for h in span]
+            mean, sigma = statistics.fmean(logs), statistics.pstdev(logs)
+            out.append((math.exp(mean), math.exp(mean - sigma), math.exp(mean + sigma)))
+        else:
+            mean, sigma = statistics.fmean(span), statistics.pstdev(span)
+            out.append((mean, max(mean - sigma, 0.0), mean + sigma))
+    return out, size
+
+
+def control_chart(items, timeframe=None, log=False, now=None):
+    now = now or datetime.now(UTC)
+    excluded = {}
+    delivered = []
+    for row in items:
+        reason = _exclusion(row)
+        if reason:
+            excluded[reason] = excluded.get(reason, 0) + 1
+        else:
+            delivered.append(row)
+    delivered.sort(key=lambda row: (datetime.fromisoformat(row["c"]), row["n"]))
+    end = now
+    start = now - timedelta(days=timeframe) if timeframe else None
+    plotted = [row for row in delivered if (start is None or datetime.fromisoformat(row["c"]) >= start)
+               and datetime.fromisoformat(row["c"]) <= end]
+    if timeframe is None and plotted:
+        start = datetime.fromisoformat(plotted[0]["c"])
+    if start is None:
+        start = end
+    span = (end - start).total_seconds()
+
+    hours = [_hours(row) for row in plotted]
+    rolling, size = _rolling(hours, log)
+    days_max = max([*hours, *(high for _, _, high in rolling)], default=0) / 24
+    axis = "log" if log else ("cube" if days_max >= JIRA_CUBE_DAYS else "linear")
+    if axis == "log":
+        top = max(60.0, math.ceil(days_max))
+        def position(h):
+            return _clamp((math.log10(max(h / 24, LOG_FLOOR_DAYS)) - math.log10(LOG_FLOOR_DAYS))
+                          / (math.log10(top) - math.log10(LOG_FLOOR_DAYS)))
+        ticks = [(days * 24, text, position(days * 24)) for days, text in LOG_TICKS]
+    elif axis == "cube":
+        top = float(math.ceil(max(days_max, 1) ** (1 / 3) * 1.05) ** 3)
+        def position(h):
+            return _clamp(max(h / 24, 0) ** (1 / 3) / top ** (1 / 3))
+        ticks = [(days * 24, text, position(days * 24)) for days, text in CUBE_TICKS if days <= top]
+    else:
+        top = float(max(1, math.ceil(max(hours + [high for _, _, high in rolling], default=0) * 1.1)))
+        def position(h):
+            return _clamp(h / top)
+        ticks = [(top * k / 5, _duration(top * k / 5), position(top * k / 5)) for k in range(6)]
+
+    dots = []
+    for row, hrs, (mean, low, high) in zip(plotted, hours, rolling, strict=True):
+        closed = datetime.fromisoformat(row["c"])
+        x = _clamp((closed - start).total_seconds() / span) if span > 0 else 1.0
+        dots.append({"n": row["n"], "title": row.get("t", ""), "closed": closed.date().isoformat(), "hours": hrs,
+                     "text": _duration(hrs), "x": x, "y": position(hrs),
+                     "rolling": {"hours": mean, "low": low, "high": high, "text": _duration(mean),
+                                 "low_text": _duration(low), "high_text": _duration(high),
+                                 "y": position(mean), "y_low": position(low), "y_high": position(high)}})
+
+    clusters = []
+    for dot in dots:
+        for cluster in clusters:
+            if math.hypot((cluster["x"] - dot["x"]) * PLOT_W, (cluster["y"] - dot["y"]) * PLOT_H) < DOT_PX:
+                cluster["dots"].append(dot)
+                break
+        else:
+            clusters.append({"x": dot["x"], "y": dot["y"], "dots": [dot]})
+
+    def line(hrs):
+        return None if not hrs else {"hours": hrs, "text": _duration(hrs), "y": position(hrs)}
+
+    summary = {"average": line(statistics.fmean(hours)) if hours else None,
+               "median": line(statistics.median(hours)) if hours else None,
+               "p85": line(_p85(hours)) if hours else None}
+    xticks = []
+    for k in range(7):
+        moment = start + timedelta(seconds=span * k / 6)
+        xticks.append({"x": k / 6, "text": f"{moment:%b} {moment.day}"})
+    total = sum(excluded.values())
+    reasons = ", ".join(REASON_TEXT.get(reason, reason) for reason in excluded)
+    scope = f"last {timeframe} days" if timeframe else "all closed cards"
+    return {
+        "measure": MEASURE,
+        "scale": "log" if log else "jira",
+        "axis": axis,
+        "timeframe": timeframe,
+        "window": {"size": size, "unit": "issues", "centered": True},
+        "dots": dots,
+        "clusters": clusters,
+        "ticks": [{"text": text, "y": y} for _, text, y in ticks],
+        "xticks": xticks,
+        **summary,
+        "excluded": excluded,
+        "excluded_total": total,
+        "text": f"{scope}, {total} excluded because {reasons}" if total else scope,
     }

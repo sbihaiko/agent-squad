@@ -405,3 +405,123 @@ def test_every_band_drawn_has_a_legend_entry_frozen_and_no_column_included(hub, 
     bands = {b["name"]: b for b in cfd["bands"]}
     assert bands["frozen"]["upper"][0] - bands["frozen"]["lower"][0] == 2
     assert bands["No column"]["upper"][0] - bands["No column"]["lower"][0] == 1
+
+
+# SPEC 889 #900: the lead-time diagram is the Jira-style control chart, computed by the hub (board_leadtime).
+TIMEFRAME_KEYS = ["7", "14", "30", "90", "180", "all"]
+
+
+def test_the_control_chart_is_served_for_every_timeframe_and_both_scales(hub, board):
+    hub.board_cache["items"] = [_card(1, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-02T09:00:00Z")]
+
+    control = hub.board()["flow"]["lead"]["control"]
+
+    assert set(control) == {"jira", "log"}
+    for scale in control.values():
+        assert list(scale) == TIMEFRAME_KEYS
+    assert control["log"]["all"]["axis"] == "log"
+    assert control["jira"]["all"]["axis"] == "linear"
+
+
+def test_a_control_chart_dot_carries_the_issue_title_and_its_close_date(hub, board):
+    hub.board_cache["items"] = [{**_card(7, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-02T09:00:00Z"),
+                                 "t": "ship the chart"}]
+
+    dot = hub.board()["flow"]["lead"]["control"]["jira"]["all"]["dots"][0]
+
+    assert dot["n"] == 7
+    assert dot["title"] == "ship the chart"
+    assert dot["closed"] == "2026-10-02"
+
+
+def test_the_control_chart_names_its_lines_and_controls_the_jira_way(hub):
+    for name in ("Rolling average (", "centered)", "Standard deviation", "Median", "p85", "Average",
+                 "Past month", "Log scale", "Timeframe"):
+        assert name in hub.PAGE, f"the page names no {name!r}"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_control_chart_draws_one_mark_per_cluster_on_the_date_axis(hub, board, tmp_path):
+    hub.board_cache["items"] = [
+        _card(1, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-02T09:00:00Z"),
+        _card(2, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-02T09:00:00Z"),
+        _card(3, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-09T09:00:00Z"),
+    ]
+    lead = hub.board()["flow"]["lead"]
+    block = _flow_block(hub).split("const drawFlow")[0]
+    drawing = "\n".join([
+        "const COLORS={},COLNAME={issue_closed:'Closed'};", "const esc=s=>String(s);", block,
+        f"process.stdout.write(flowLead({json.dumps(lead)}));",
+    ])
+    path = tmp_path / "flow-control.js"
+    path.write_text(drawing)
+    result = subprocess.run(["node", str(path)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    circles = re.findall(r"<circle [^>]*>", result.stdout)
+    clusters = lead["control"]["jira"]["all"]["clusters"]
+    assert len(circles) == len(clusters) == 2, "cards 1 and 2 share a close: one cluster; card 3 is its own mark"
+    assert "2 issues" in result.stdout
+
+
+# SPEC 889 #901: the cumulative flow has a range selector and a hover that names each band's count for the day.
+CFD_RANGE_KEYS = ["7", "30", "90", "all"]
+
+
+def test_the_cfd_serves_a_view_for_each_range_ending_on_the_last_day(hub, board):
+    _history(board, [_sample(d, {"issue": {hub.COLUMN["unscheduled"]: 1}}) for d in range(1, 21)])
+
+    ranges = hub.board()["flow"]["cfd"]["ranges"]
+
+    assert list(ranges) == CFD_RANGE_KEYS
+    assert len(ranges["7"]["days"]) == 7
+    assert ranges["7"]["days"][-1] == "2026-10-20", "the window ends on the last day of the history"
+    assert len(ranges["30"]["days"]) == 20, "a window longer than the history is the whole history"
+    assert ranges["all"]["days"] == hub.board()["flow"]["cfd"]["days"]
+
+
+def test_each_range_serves_wip_and_throughput_per_day_from_board_cfd(hub, board):
+    cfd_mod = _load("board_cfd_range_check", SCRIPTS / "board_cfd.py")
+    samples = [_sample(1, {"issue": {hub.COLUMN["unscheduled"]: 2, hub.COLUMN["issue_closed"]: 1}}),
+               _sample(2, {"issue": {hub.COLUMN["unscheduled"]: 1, hub.COLUMN["issue_closed"]: 3}})]
+    _history(board, samples)
+
+    view = hub.board()["flow"]["cfd"]["ranges"]["all"]
+    direct = cfd_mod.cfd(samples, hub.ORDER)
+
+    assert view["wip"] == [p["wip"] for p in direct["points"]]
+    assert view["throughput"] == [p["throughput"] for p in direct["points"]], "the first day has no throughput"
+
+
+def test_each_band_serves_its_count_per_day(hub, board):
+    _history(board, [_sample(1, {"issue": {hub.COLUMN["unscheduled"]: 2, hub.COLUMN["issue_closed"]: 1}})])
+
+    bands = {b["name"]: b for b in hub.board()["flow"]["cfd"]["ranges"]["all"]["bands"]}
+
+    assert bands[hub.COLUMN["unscheduled"]]["count"] == [2]
+    assert bands[hub.COLUMN["issue_closed"]]["count"] == [1]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_cfd_names_a_range_selector_and_a_day_hover_with_counts(hub, board, tmp_path):
+    _history(board, [
+        _sample(1, {"issue": {hub.COLUMN["unscheduled"]: 2, hub.COLUMN["issue_closed"]: 1}}),
+        _sample(2, {"issue": {hub.COLUMN["unscheduled"]: 1, hub.COLUMN["issue_closed"]: 3}}),
+    ])
+    view = hub.board()["flow"]["cfd"]["ranges"]["all"]
+    block = _flow_block(hub).split("const drawFlow")[0]
+    drawing = "\n".join([
+        "const COLORS={},COLNAME={};", "const esc=s=>String(s);", block,
+        f"process.stdout.write(flowCFD({json.dumps(view)}));",
+    ])
+    path = tmp_path / "flow-cfd-range.js"
+    path.write_text(drawing)
+    result = subprocess.run(["node", str(path)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert '<select id=cfdr' in result.stdout
+    for value in ("7", "30", "90", "all"):
+        assert f'value={value}' in result.stdout
+    titles = re.findall(r"<title>([^<]*)</title>", result.stdout)
+    day_titles = [t for t in titles if t.startswith("2026-10-02")]
+    assert day_titles, f"no hover names the day: {titles}"
+    assert "WIP" in day_titles[0] and "throughput" in day_titles[0]
+    assert f"{hub.COLUMN['issue_closed']} 3" in day_titles[0], "the hover names each band's count"

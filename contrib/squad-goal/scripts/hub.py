@@ -2755,6 +2755,10 @@ def _x_ticks(days):
     return [{"i": i, "day": days[i]} for i in sorted({round(k * (len(days) - 1) / 4) for k in range(5)})] if days else []
 
 
+CFD_RANGES = [("7", 7), ("30", 30), ("90", 90), ("all", None)]   # the cumulative flow's range views, in days (#901)
+LEAD_TIMEFRAMES = [("7", 7), ("14", 14), ("30", 30), ("90", 90), ("180", 180), ("all", None)]   # the control chart presets (#900)
+
+
 def flow_charts():
     """The two diagrams' numbers, computed here from board_cfd and board_leadtime; the page draws them and computes none."""
     path = _flow.history_path(BOARD, REPO)
@@ -2763,17 +2767,34 @@ def flow_charts():
     days = sorted([*extents, *cfd["gaps"]])   # one entry per calendar day: a day with no sample carries no value (#894)
     yticks = _y_ticks(max((e[FLOW_BANDS[0]][1] for e in extents.values()), default=0))
     def values(name, k): return [extents[d][name][k] if d in extents else None for d in days]
+    points = {p["day"]: p for p in cfd["points"]}
+    def view(width):
+        """The chart over the last `width` calendar days (all of them when None): the same arrays, cut to the window (#901)."""
+        window = days if width is None else days[-width:]
+        kept = [d for d in window if d in extents]
+        top = max((extents[d][FLOW_BANDS[0]][1] for d in kept), default=0)
+        ticks = _y_ticks(top)
+        def cut(arr): return [arr[days.index(d)] for d in window]
+        return {"start": dt.datetime.fromtimestamp(cfd["start"], dt.UTC).date().isoformat() if cfd["start"] is not None else None,
+                "days": window, "ymax": ticks[-1], "yticks": ticks, "xticks": _x_ticks(window),
+                "wip": [points[d]["wip"] if d in points else None for d in window],
+                "throughput": [points[d]["throughput"] if d in points else None for d in window],
+                "bands": [{"name": n, "lower": cut(values(n, 0)), "upper": cut(values(n, 1)),
+                           "count": [extents[d][n][1] - extents[d][n][0] if d in extents else None for d in window]}
+                          for n in FLOW_BANDS] if kept else []}
     rows = [{"n": i["n"], "column": _columns_module.view_column(i["st"], str(i["s"]).lower() == "closed", i.get("l"), i.get("cr"))[0],
              "reason": _leadtime.NOT_DELIVERED if _columns_module.not_planned(i.get("cr")) else None,   # the chart's own word (#921)
-             "c": i.get("c") if str(i["s"]).lower() == "closed" else None, "o": i.get("o")} for i in board_cache["items"]]
+             "c": i.get("c") if str(i["s"]).lower() == "closed" else None, "o": i.get("o"), "t": i.get("t", "")} for i in board_cache["items"]]
     lead = _leadtime.lead_time(rows)
+    now = dt.datetime.now(dt.UTC)
+    control = {scale: {key: _leadtime.control_chart(rows, timeframe=days, log=scale == "log", now=now)
+                       for key, days in LEAD_TIMEFRAMES} for scale in ("jira", "log")}   # the Jira-style control chart (#900)
     return {
-        "cfd": {"start": dt.datetime.fromtimestamp(cfd["start"], dt.UTC).date().isoformat() if cfd["start"] is not None else None,
-                "days": days, "ymax": yticks[-1], "yticks": yticks, "xticks": _x_ticks(days),
-                "bands": [{"name": n, "lower": values(n, 0), "upper": values(n, 1)} for n in FLOW_BANDS] if extents else []},
+        "cfd": {**view(None), "ranges": {key: view(width) for key, width in CFD_RANGES}},
         "lead": {"measure": lead["measure"], "window": lead["window"],
                  "excluded": [{"reason": r, "count": c} for r, c in lead["excluded"].items()],
-                 "excluded_total": sum(lead["excluded"].values()), "series": lead["series"], "summary": lead["summary"]},
+                 "excluded_total": sum(lead["excluded"].values()), "series": lead["series"], "summary": lead["summary"],
+                 "control": control},
     }
 
 
@@ -3809,29 +3830,57 @@ const cfdAxis=c=>{const n=c.days.length,base=flowH-flowP;   // every number and 
   return `<line x1=${flowP} y1=${flowP-10} x2=${flowP} y2=${base} stroke=var(--line)></line><line x1=${flowP} y1=${base} x2=${flowW-flowP} y2=${base} stroke=var(--line)></line>${ys}${xs}`+
     `<text x=${flowP-7} y=${flowP-16} text-anchor=end fill=var(--mute) style="font-size:var(--fs-min)">cards</text>`+
     `<text x=${flowW-flowP} y=${base+31} text-anchor=end fill=var(--mute) style="font-size:var(--fs-min)">day (UTC)</text>`;};
-const flowCFD=c=>{if(!c.days.length)return "<p class=fnote>the flow history has no sample yet</p>";
-  const n=c.days.length;
+let CF={r:"30"};   // the cumulative flow's range, 30 days at first (#901)
+const CFD_R=[["7","7 days"],["30","30 days"],["90","90 days"],["all","All"]];   // the cumulative flow's range views (#901)
+const flowCFD=c=>{const sel=`<label class=fhead>Range <select id=cfdr>${CFD_R.map(([k,v])=>`<option value=${k}${CF.r===k?" selected":""}>${v}</option>`).join("")}</select></label>`;
+  if(!c.days.length)return sel+"<p class=fnote>the flow history has no sample yet</p>";
+  const n=c.days.length,cw=(flowW-2*flowP)/(n<2?1:n);
   const runs=b=>{const out=[];let cur=null;c.days.forEach((_,i)=>{if(b.upper[i]===null){cur=null;return}if(!cur){cur=[];out.push(cur)}cur.push(i)});return out};
   const band=(b,run)=>{const one=run.length===1,h=3;   // a one-point run is a mark 2h wide, never a zero-width line (#894)
     const up=run.flatMap(i=>one?[[flowX(i,n)-h,b.upper[i]],[flowX(i,n)+h,b.upper[i]]]:[[flowX(i,n),b.upper[i]]]);
     const low=[...run].reverse().flatMap(i=>one?[[flowX(i,n)+h,b.lower[i]],[flowX(i,n)-h,b.lower[i]]]:[[flowX(i,n),b.lower[i]]]);
     return [...up,...low].map(([x,v])=>`${x},${flowY(v,c.ymax)}`).join(" ");};
   const polys=b=>runs(b).map(run=>`<polygon points="${band(b,run)}" fill="${COLORS[b.name]||"#888"}" fill-opacity=".85"><title>${esc(b.name)}</title></polygon>`).join("");
-  return `<svg viewBox="0 0 ${flowW} ${flowH}">${c.bands.map(polys).join("")}${cfdAxis(c)}</svg>`+
+  const hover=c.days.map((d,i)=>{const gap=c.bands.length&&c.bands[0].upper[i]===null;   // a day's counts, WIP and throughput, on hover (#901)
+    const parts=c.bands.map(b=>`${esc(b.name)} ${(b.count||[])[i]}`).join(", "),tp=c.throughput?c.throughput[i]:null;
+    const text=gap?`${esc(d)}: no whole read this day`:`${esc(d)}: ${parts} · WIP ${(c.wip||[])[i]} · throughput ${tp===null?"none":tp}`;
+    return `<rect x=${flowX(i,n)-cw/2} y=${flowP-10} width=${cw} height=${flowH-2*flowP+10} fill=transparent><title>${text}</title></rect>`;}).join("");
+  return sel+`<svg viewBox="0 0 ${flowW} ${flowH}">${c.bands.map(polys).join("")}${cfdAxis(c)}${hover}</svg>`+
     `<p class=fnote>history from ${esc(c.start)} UTC</p><p>${c.bands.map(b=>`<span class=flg><i style="background:${COLORS[b.name]||"#888"}"></i>${esc(b.name)}</span>`).join("")}</p>`;};
 const EXREASON={not_planned:"closed as not planned",abandoned:"closed as abandoned",open:"still open",no_opened:"no opened date"};   // the cards the chart leaves out, in words (#921)
+let LT={tf:"30",log:false,pick:null};   // the control chart's timeframe, its scale, and the cluster listed under it (#900)
+const LT_TF=[["7","Past week"],["14","Past 2 weeks"],["30","Past month"],["90","Past 3 months"],["180","Past 6 months"],["all","All"]];
+const ltX=x=>flowP+x*(flowW-2*flowP),ltY=y=>flowH-flowP-y*(flowH-2*flowP);
+const ltLine=(v,col,dash,name)=>v?`<line x1=${flowP} x2=${flowW-flowP} y1=${ltY(v.y)} y2=${ltY(v.y)} stroke="${col}" stroke-width=2${dash?` stroke-dasharray="${dash}"`:""}><title>${esc(name)} ${esc(v.text)}</title></line>`:"";
+const ltChart=c=>{const n=c.dots.length,base=flowH-flowP,ink="#b8c0cf",mute="var(--mute)";
+  const ctl=`<p class=fhead><label>Timeframe <select id=ltr>${LT_TF.map(([k,v])=>`<option value=${k}${LT.tf===k?" selected":""}>${v}</option>`).join("")}</select></label> `+
+    `<label>Scale <select id=lts><option value=jira${LT.log?"":" selected"}>Jira scale</option><option value=log${LT.log?" selected":""}>Log scale</option></select></label></p>`;
+  const note=`<p class=fnote>${esc(c.text)}</p>`;
+  if(!n)return ctl+note+"<p class=fnote>no closed card in this timeframe</p>";
+  const up=c.dots.map(d=>`${ltX(d.x)},${ltY(d.rolling.y_high)}`),low=[...c.dots].reverse().map(d=>`${ltX(d.x)},${ltY(d.rolling.y_low)}`);
+  const band=`<polygon points="${[...up,...low].join(" ")}" fill="var(--s3)" fill-opacity=".16"><title>Standard deviation</title></polygon>`;
+  const roll=`<polyline fill=none stroke="var(--s3)" stroke-width=2 points="${c.dots.map(d=>`${ltX(d.x)},${ltY(d.rolling.y)}`).join(" ")}"><title>Rolling average (${c.window.size} issues, centered)</title></polyline>`;
+  const ys=c.ticks.map(t=>`<line x1=${flowP-4} y1=${ltY(t.y)} x2=${flowP} y2=${ltY(t.y)} stroke=${mute}></line><text x=${flowP-7} y=${ltY(t.y)+4} text-anchor=end fill=${ink} style="font-size:var(--fs-min)">${esc(t.text)}</text>`).join("");
+  const xs=c.xticks.map(t=>`<text x=${ltX(t.x)} y=${base+17} text-anchor=middle fill=${ink} style="font-size:var(--fs-min)">${esc(t.text)}</text>`).join("");
+  const axes=`<line x1=${flowP} y1=${flowP-10} x2=${flowP} y2=${base} stroke=var(--line)></line><line x1=${flowP} y1=${base} x2=${flowW-flowP} y2=${base} stroke=var(--line)></line>`+
+    `<text x=${flowP-7} y=${flowP-16} text-anchor=end fill=${ink} style="font-size:var(--fs-min)">elapsed time${c.axis==="log"?" (log)":c.axis==="cube"?" (cube root)":""}</text>`;
+  const lines=ltLine(c.average,"var(--s6)","","Average")+ltLine(c.median,"var(--ok)","2 3","Median")+ltLine(c.p85,"var(--s5)","5 3","p85");
+  const dots=c.clusters.map((k,i)=>{const m=k.dots.length,title=m>1?`${m} issues`:`#${k.dots[0].n} ${esc(k.dots[0].title)}`;
+    return `<circle data-k=${i} cx=${ltX(k.x)} cy=${ltY(k.y)} r=${m>1?6:4.5} fill="${m>1?"var(--bg)":"var(--s3)"}" stroke="var(--s3)" stroke-width=2 style="cursor:pointer"><title>${esc(title)} · ${esc(k.dots[0].text)} · closed ${esc(k.dots[0].closed)}</title></circle>`+(m>1?`<text x=${ltX(k.x)} y=${ltY(k.y)+4} fill="var(--s3)" style="font-size:var(--fs-min)" text-anchor=middle pointer-events=none>${m}</text>`:"")}).join("");
+  const S=c.average?`<p class=fhead>Average <b>${esc(c.average.text)}</b> · Median <b>${esc(c.median.text)}</b> · p85 <b>${esc(c.p85.text)}</b></p>`:"";
+  const legend=`<p class=flg><span><i style="background:var(--s3)"></i>Rolling average (${c.window.size} issues, centered)</span><span><i style="background:var(--s3);opacity:.3"></i>Standard deviation</span><span><i style="background:var(--s6)"></i>Average</span><span><i style="background:var(--ok)"></i>Median</span><span><i style="background:var(--s5)"></i>p85</span></p>`;
+  const pk=LT.pick!=null&&c.clusters[LT.pick]?c.clusters[LT.pick]:null;
+  const rows=pk?`<table class=rt><thead><tr><th>Issue</th><th>Title</th><th>Elapsed</th><th>Closed</th></tr></thead><tbody>${pk.dots.map(d=>`<tr data-o=${d.n} style="cursor:pointer"><td>#${d.n}</td><td>${esc(d.title)}</td><td>${esc(d.text)}</td><td>${esc(d.closed)}</td></tr>`).join("")}</tbody></table>`:"";
+  return ctl+S+legend+`<svg viewBox="0 0 ${flowW} ${flowH}">${axes}${ys}${xs}${band}${roll}${lines}${dots}</svg>`+note+rows;};
 const flowLead=l=>{const S=l.summary,ex=l.excluded.map(e=>`${e.count} ${esc(EXREASON[e.reason]||e.reason)}`).join(", ");
   const head=`<p class=fhead><b>${esc(l.measure)}</b> · window ${l.window.size} ${esc(l.window.unit)} · excluded ${l.excluded_total}${ex?" ("+ex+")":""}</p>`;
   if(!S)return head+"<p class=fnote>no closed card yet</p>";
-  const stat=(k,v)=>`${k} <b>${esc(v.text)}</b>`;
-  const pts=l.series,n=pts.length,max=S.maximum.hours,col=COLORS[COLNAME.issue_closed]||"#888";
-  const roll=`<polyline fill=none stroke=var(--mute) stroke-width=1.5 points="${pts.map((p,i)=>`${flowX(i,n)},${flowY(p.rolling_hours,max)}`).join(" ")}"></polyline>`;
-  const dots=pts.map((p,i)=>`<circle cx=${flowX(i,n)} cy=${flowY(p.hours,max)} r=3.5 fill="${col}"><title>#${p.n} closed ${esc(p.closed)}</title></circle>`).join("");
-  return head+`<p class=fhead>${stat("average",S.average)} · ${stat("median",S.median)} · ${stat("minimum",S.minimum)} · ${stat("maximum",S.maximum)}</p>`+
-    `<svg viewBox="0 0 ${flowW} ${flowH}">${flowAxis(max,"h")}${roll}${dots}</svg>`;};
+  return head+ltChart(l.control[LT.log?"log":"jira"][LT.tf]);};
 const drawFlow=()=>{const cfd=FLOWK==="cfd";$("#flowt").textContent=cfd?"Cumulative flow":"Lead time";
-  $("#flowb").innerHTML=!FLOWD?"<p class=fnote>the board has not loaded yet</p>":cfd?flowCFD(FLOWD.cfd):flowLead(FLOWD.lead)};
+  $("#flowb").innerHTML=!FLOWD?"<p class=fnote>the board has not loaded yet</p>":cfd?flowCFD(FLOWD.cfd.ranges[CF.r]):flowLead(FLOWD.lead)};
 const flowOpen=k=>{FLOWK=k;$("#flowov").hidden=false;drawFlow()};
+$("#flowb").onchange=e=>{if(e.target.id==="cfdr"){CF.r=e.target.value;drawFlow();return}if(e.target.id==="ltr")LT.tf=e.target.value;else if(e.target.id==="lts")LT.log=e.target.value==="log";else return;LT.pick=null;drawFlow()};
+$("#flowb").onclick=e=>{const k=e.target.closest("circle[data-k]");if(k){LT.pick=+k.dataset.k;drawFlow();return}const r=e.target.closest("tr[data-o]");if(r)showIssue(+r.dataset.o,"__REPO__")};
 $("#bflow").onclick=()=>flowOpen("cfd");$("#blead").onclick=()=>flowOpen("lead");$("#flowx").onclick=()=>{$("#flowov").hidden=true};
 // flow-charts:end
 async function pollBoard(){lim.busy=1;try{const b=await (await fetch("/api/board")).json(),FLOW=/*BOARD_FLOW*/,   // development flow, left to right
