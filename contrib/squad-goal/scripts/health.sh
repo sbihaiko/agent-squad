@@ -29,10 +29,10 @@ if [ -n "${SG_FORK_DIR:-}" ] && [ -d "$SG_FORK_DIR" ]; then
   cwf=$("$SG_LSOF" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p'); npk=0; pk=""
   for b in $($G -C "$SG_FORK_DIR" for-each-ref --format='%(refname:short)' "refs/heads/${SG_FORK_BRANCH//%n/}*" 2>/dev/null); do
     s=${b#${SG_FORK_BRANCH//%n/}}; case "$s" in ''|*[!0-9]*) continue;; esac
-    [ "$($G -C "$SG_FORK_DIR" rev-list --count "$SG_FORK_BASE..$b" 2>/dev/null)" -gt 0 ] || continue
+    ahead=$($G -C "$SG_FORK_DIR" rev-list --count "$SG_FORK_BASE..$b" 2>/dev/null); [ "${ahead:-0}" -gt 0 ] || continue
     w=$($G -C "$SG_FORK_DIR" worktree list --porcelain | awk -v x="refs/heads/$b" '/^worktree /{p=$2} $0=="branch "x{print p}')
     printf '%s\n' "$cwf" | grep -qF "${w:-/nonexistent}/" && continue
-    t=$($G -C "$SG_FORK_DIR" log -1 --format=%ct "$b" 2>/dev/null); [ $(( now - t )) -ge $(( ${SG_FORK_ORPHAN_MINUTES:-20} * 60 )) ] && { npk=$((npk+1)); pk="$pk #$s"; }
+    t=$($G -C "$SG_FORK_DIR" log -1 --format=%ct "$b" 2>/dev/null); [ $(( now - ${t:-0} )) -ge $(( ${SG_FORK_ORPHAN_MINUTES:-20} * 60 )) ] && { npk=$((npk+1)); pk="$pk #$s"; }
   done
   [ $npk -gt 0 ] && add fork-parked "$npk fork branch(es)$pk ahead of $SG_FORK_BASE with no process on them: forkclose re-arms the ones it can, the rest need a fix run"
 fi

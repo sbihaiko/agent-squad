@@ -149,4 +149,9 @@ nf=$(/usr/bin/pgrep -f "$T/s/watch\.sh$" | wc -l | tr -d ' ')
 [ "$nf" -gt 1 ] && ok "the fake loop is forking ($nf pgrep matches for one loop)" || ko "the fake loop does not fork: $nf match(es), the next check proves nothing"
 o=$(SG_WATCH_CMD_RE="$T/s/watch\.sh$" bash "$T/s/health.sh"); echo "$o" | /usr/bin/grep -q 'loops-duplicated' && ko "one forking loop alerted: $o" || ok "one watch.sh that forks is not a duplication"
 kill $wf 2>/dev/null; /usr/bin/pkill -P $wf 2>/dev/null; wait $wf 2>/dev/null
+# a fork base the fork repository does not hold makes `rev-list --count` print nothing: the parked count reads zero,
+# and the shell never reports an unreadable number
+$G -C "$P" rev-parse -q --verify refs/heads/gui/7 >/dev/null && ok "the unreadable-base case holds its parked branch" || ko "no gui/7 branch, so the unreadable-base case proves nothing"
+o=$(SG_FORK_DIR="$P" SG_FORK_BASE=no-such-base SG_FORK_BRANCH='gui/%n' SG_WATCH_CMD_RE="$T/s/watch\.sh$" bash "$T/s/health.sh" 2>&1)
+printf '%s' "$o" | /usr/bin/grep -q 'integer expression expected' && ko "an unreadable fork base leaks a shell error: $o" || ok "an unreadable fork base counts as zero parked"
 kill $wp $fp 2>/dev/null; rm -rf "$T" "$P"; exit $fail
