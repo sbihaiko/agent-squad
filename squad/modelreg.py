@@ -612,7 +612,7 @@ def eligible(entry, shared=None, now=None, hour=None, reg=None):
     A v1 entry keeps the marker rule it had before the registry: its `legacy_codex` flag applies Codex's marker even
     when the registry maps the spelling to another subscription, so a v1 file never changes behavior.
     """
-    if entry.model_off:
+    if getattr(entry, "model_off", False):   # a reader may hand in an entry that predates the model switch
         return Eligibility(False, "off (model)", None)   # the model switch names itself, whatever its chain row says
     if not entry.on:
         return Eligibility(False, "off", None)

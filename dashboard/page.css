@@ -118,12 +118,12 @@
   .card .gl { fill:var(--mute); font:bold var(--fs-body) sans-serif; pointer-events:none; }   /* the state glyph: status is never hue alone */
 /* The kind icon (#914): one color per kind, a glyph in the chip. The chip carries no stroke of its own, even when the card is selected. */
 .card .kc { stroke:none; fill:var(--mute); }
-.card .ki { fill:#0d1117; font:bold 11px sans-serif; pointer-events:none; }
+.card .ki { fill:#0d1117; font:bold 13px sans-serif; pointer-events:none; }
 .card.k-agent .kc { fill:#7aa2f7; } .card.k-gate .kc { fill:#bb9af7; } .card.k-action .kc { fill:#73daca; }
 .card.k-wait .kc { fill:#ff9e64; } .card.k-loop .kc { fill:#7dcfff; } .card.k-each .kc { fill:#c0caf5; }
 .card.k-dispatch .kc { fill:#e0af68; }
 /* The model line (#914): its own row, a little smaller than the other card text, so a typical name fits without a cut. */
-.card .kd.model { font-size:10px; }
+.card .kd.model { font-size:var(--fs-min,13px); }
   pre.ev { margin:4px 0 8px; padding:6px; background:#07090c; border:1px solid var(--line); border-radius:4px; font:var(--fs-min)/1.4 var(--font-mono); white-space:pre-wrap; word-break:break-all; max-height:200px; overflow:auto; color:#e8b9b9; }
   .cause { margin-top:6px; } .cause b.bad { color:var(--err); }
   #edges g.edge.child { pointer-events:none; }

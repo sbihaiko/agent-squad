@@ -85,7 +85,8 @@ def test_the_legend_draws_no_run_state_row(hub):
     The vocabulary itself is untouched: the states stay one table, shared with the hub, and the surfaces that print a state draw it from there."""
     menu = (ROOT / "dashboard" / "page" / "menu.js").read_text()
     assert "Run states" not in menu and "runPill" not in menu and "RUN_LEGEND" not in menu
-    assert "Node outcomes" in menu and "Interaction" in menu and len(re.findall(r'\["\w+", "', menu)) == 2   # the two groups left, in order
+    # Node kinds joins the two groups the owner kept (#914 names each kind by icon and colour), and the order holds.
+    assert re.findall(r'\["(\w+)", "([^"]+)"\]', menu)[:3] == [("node", "Node outcomes"), ("kind", "Node kinds"), ("interaction", "Interaction")]
     assert ".rlg" not in PAGE_SRC()
     assert {r["state"] for r in dash_states()} == {r["state"] for r in hub.RUN_STATES}
 

@@ -185,16 +185,17 @@ def server(port, apps, on_new=None):
 
         def _route(self, method):
             path = self.path.split("?", 1)[0]
-            with LOCK:   # the profile list is read on every request, so a profile added or gone shows at once (#917)
-                refresh(apps, on_new)
-                view = dict(apps)
             if path in ("/", "/api/hub"):
+                with LOCK:   # the index reads the profile list now, so a profile added or gone shows at once (#917)
+                    refresh(apps, on_new)
+                    view = dict(apps)
                 seen, reason = admitted(view, self, method)
                 if reason: return self.refuse(reason)
                 if path == "/": return self._send(200, root_page(seen, "squad hub"), "text/html; charset=utf-8")
                 return self._send(200, json.dumps(listing(seen)).encode(), "application/json")
             slug = path.split("/")[1]
-            app = view.get(slug)
+            app = apps.get(slug)   # a deep link reads the apps already loaded; only the index rereads the list (#917)
+            view = apps
             if not app or "mod" not in app:
                 seen, reason = admitted(view, self, method)
                 if reason: return self.refuse(reason)
