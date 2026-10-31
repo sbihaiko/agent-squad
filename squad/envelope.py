@@ -63,7 +63,10 @@ def normalize_request(dispatch, raw, vendor=skills.VENDOR, default_effort=None, 
         errs.append("model_supplied")
     # An omitted effort is the engine's default, never the allow list's first entry: the list is an order, and its first
     # entry is the weakest level as often as it is the strongest. A default the envelope does not allow narrows nothing.
-    eff = raw.get("effort") or (default_effort if default_effort in a["efforts"] else None) or a["efforts"][0]
+    # A named effort outside the allow narrows to the nearest allowed level at or below it: a router guessed `high` under
+    # an envelope of low and medium, and two runs died `no_dispatch` (#960). A thinking depth is never worth a run.
+    named = raw.get("effort")
+    eff = _narrow_effort(named, a["efforts"]) if named else (default_effort if default_effort in a["efforts"] else None) or a["efforts"][0]
     # An envelope of kinds takes the model from the chain of the request's kind; a legacy one from its own list. Both
     # fall back to an empty id, so the rule that names the missing model is the one the run reads.
     model = (a["kind_models"].get(kind) or [""])[0] if "kind_models" in a else raw.get("model", (a.get("models") or [""])[0])
@@ -78,6 +81,24 @@ def normalize_request(dispatch, raw, vendor=skills.VENDOR, default_effort=None, 
         "task": raw.get("task"),   # the work item this child advances, a string or None; a task key narrows nothing, so no limit rule
     }
     return req, errs
+
+
+EFFORT_LADDER = ("low", "medium", "high", "xhigh", "max")   # weakest to strongest; the engine's own words for depth
+
+
+def _narrow_effort(named, allowed):
+    """The nearest allowed thinking depth at or below the one a request names, else the highest allowed, else the first.
+    A depth is a guess about how hard to think: it never costs the run."""
+    if named in allowed:
+        return named
+    order = [e for e in EFFORT_LADDER if e in allowed]
+    if not order:
+        return allowed[0]
+    if named in EFFORT_LADDER:
+        at = EFFORT_LADDER.index(named)
+        below = [e for e in order if EFFORT_LADDER.index(e) <= at]
+        return below[-1] if below else order[0]
+    return order[-1]   # a word outside the ladder proves nothing about depth: the envelope's own highest leads
 
 
 def _default_spend(b, ceiling):
