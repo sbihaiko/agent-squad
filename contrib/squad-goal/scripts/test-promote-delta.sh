@@ -127,5 +127,20 @@ before=$(tip stg)
 out=$(bash "$d/promote-stg.sh" 2>&1); rc=$?
 [ $rc -ne 0 ] && [ "$(tip stg)" = "$before" ] && case "$out" in *"no longer hashes"*) ok "delta: a tampered hash refuses at promotion";; *) ko "tamper: rc $rc, out '$out'";; esac || ko "tamper: rc $rc, out '$out'"
 
+# (m) the map names the repository's own classes, and SELF guards a changed test by itself. A test file the delta changed is
+# proven by that file, never by another test's command, and the dashboard, the plugin manifest, the prompts and the config
+# each carry a line. The assembled suite is printed rather than run (SG_DELTA_PRINT_SUITE), so this case reads it directly.
+suite_for() { adv "pm$1"; line full pass "$(tip dev)"; rm -f "$SG_STATE/gate-status-delta"; adv_file "$2" "$3"; SG_DELTA_PRINT_SUITE=1 bash "$d/delta-pass.sh" 2>&1; }
+unset SG_DELTA_SUITE   # the real assembly is what this case reads
+o=$(suite_for 1 tests/test_web_tokens.py "a changed test")
+case "$o" in *"pytest -p no:deepeval tests/test_web_tokens.py"*) ok "delta map: a changed test file is guarded by itself (SELF)";; *) ko "SELF guard: '$o'";; esac
+o=$(suite_for 2 dashboard/page.css "a changed stylesheet")
+case "$o" in *tests/test_dashboard_layout.py*) ok "delta map: the dashboard's pages are covered by their layout test";; *) ko "dashboard guard: '$o'";; esac
+o=$(suite_for 3 commands/work.md "a changed command")
+case "$o" in *tests/test_plugin.py*) ok "delta map: a plugin command is covered by the plugin test";; *) ko "plugin guard: '$o'";; esac
+o=$(suite_for 4 prototypes/x.py "outside the map")
+case "$o" in *uncovered*) ok "delta map: a path no line covers still refuses";; *) ko "uncovered class: '$o'";; esac
+export SG_DELTA_SUITE=true
+
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 rm -rf "$T"; exit $fail
