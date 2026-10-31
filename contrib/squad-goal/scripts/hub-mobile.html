@@ -256,7 +256,7 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 #5aa9ff}
 const $ = id => document.getElementById(id);
 const base = location.pathname.replace(/mobile\/?$/, "");
 $("to-desktop").href = base;
-$("to-desktop").onclick = () => sessionStorage.setItem("squad-view","desktop");
+$("to-desktop").onclick = () => localStorage.setItem("squad-view","desktop");
 
 const tabs = [...document.querySelectorAll("nav [data-tab]")];
 function show(name) {
