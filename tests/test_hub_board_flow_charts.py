@@ -85,13 +85,13 @@ def test_tasks_header_has_flow_and_lead_time_buttons_and_keeps_its_controls(hub)
     assert 'id=bx title="collapse"' in head
 
 
-def test_cfd_bands_follow_the_hub_order_and_name_the_start_of_history(hub, board):
+def test_cfd_bands_follow_the_hub_order_and_add_frozen_and_no_column(hub, board):
     _history(board, [
         _sample(1, {"issue": {hub.COLUMN["unscheduled"]: 2, hub.COLUMN["issue_closed"]: 1}}),
         _sample(2, {"issue": {hub.COLUMN["unscheduled"]: 1, hub.COLUMN["issue_closed"]: 2}}),
     ])
     cfd = hub.board()["flow"]["cfd"]
-    assert [b["name"] for b in cfd["bands"]] == hub.ORDER
+    assert [b["name"] for b in cfd["bands"]] == [*hub.ORDER, "frozen", "No column"], "the drawn bands name every band (#896)"
     assert cfd["start"] == "2026-10-01"
     assert len(cfd["days"]) == 2
     assert "history from " in hub.PAGE
@@ -260,7 +260,8 @@ def test_a_one_point_run_is_drawn_as_a_visible_mark(hub, tmp_path):
     block = _flow_block(hub).split("const drawFlow")[0]
     drawing = "\n".join([
         "const COLORS={};", "const esc=s=>String(s);", block,
-        'process.stdout.write(flowCFD({days:["a","b","c"],ymax:4,start:"2026-10-01",'
+        'process.stdout.write(flowCFD({days:["a","b","c"],ymax:4,yticks:[0,2,4],'
+        'xticks:[{i:0,day:"a"},{i:2,day:"c"}],start:"2026-10-01",'
         'bands:[{name:"Todo",lower:[0,null,0],upper:[2,null,1]}]}));',
     ])
     path = tmp_path / "flow-one.js"
@@ -278,7 +279,8 @@ def test_the_page_splits_each_band_at_a_gap(hub, tmp_path):
     block = _flow_block(hub).split("const drawFlow")[0]
     drawing = "\n".join([
         "const COLORS={};", "const esc=s=>String(s);", block,
-        'process.stdout.write(flowCFD({days:["a","b","c","d","e"],ymax:4,start:"2026-10-01",'
+        'process.stdout.write(flowCFD({days:["a","b","c","d","e"],ymax:4,yticks:[0,2,4],'
+        'xticks:[{i:0,day:"a"},{i:4,day:"e"}],start:"2026-10-01",'
         'bands:[{name:"Todo",lower:[0,0,null,0,0],upper:[2,3,null,1,2]}]}));',
     ])
     path = tmp_path / "flow-cfd.js"
@@ -332,3 +334,76 @@ def test_page_script_parses(hub, tmp_path):
         path.write_text(text)
         result = subprocess.run(["node", "--check", str(path)], capture_output=True, text=True)
         assert result.returncode == 0, result.stderr
+
+
+def test_the_cfd_serves_numbered_y_ticks_and_dated_x_ticks(hub, board):
+    """#896 (1): the Cumulative flow chart's y axis is numbered from zero to past the tallest stack, and its x axis
+    names the dates of the history."""
+    _history(board, [
+        _sample(1, {"issue": {hub.COLUMN["unscheduled"]: 5, hub.COLUMN["issue_closed"]: 3}}, frozen=2, none=1),
+        _sample(2, {"issue": {hub.COLUMN["unscheduled"]: 4, hub.COLUMN["issue_closed"]: 4}}, frozen=2, none=1),
+        _sample(3, {"issue": {hub.COLUMN["unscheduled"]: 3, hub.COLUMN["issue_closed"]: 5}}, frozen=2, none=1),
+    ])
+    cfd = hub.board()["flow"]["cfd"]
+    ticks = cfd["yticks"]
+    assert ticks[0] == 0 and all(isinstance(v, int) for v in ticks)
+    assert ticks == sorted(set(ticks)), f"the y ticks rise: {ticks}"
+    assert len(ticks) >= 3, f"a numbered y axis carries more than its foot and top: {ticks}"
+    assert ticks[-1] == cfd["ymax"] >= 11, f"the axis reaches past the tallest stack of 11: {ticks}"
+    assert cfd["xticks"] == [{"i": 0, "day": "2026-10-01"}, {"i": 1, "day": "2026-10-02"},
+                             {"i": 2, "day": "2026-10-03"}]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_cfd_draws_labelled_axes_with_numbered_ticks_and_dated_ticks(hub, board, tmp_path):
+    """#896 (1): the page draws both axes, one labelled tick per number the hub served and one per date."""
+    _history(board, [
+        _sample(1, {"issue": {hub.COLUMN["unscheduled"]: 5, hub.COLUMN["issue_closed"]: 3}}, frozen=2, none=1),
+        _sample(2, {"issue": {hub.COLUMN["unscheduled"]: 4, hub.COLUMN["issue_closed"]: 4}}, frozen=2, none=1),
+        _sample(3, {"issue": {hub.COLUMN["unscheduled"]: 3, hub.COLUMN["issue_closed"]: 5}}, frozen=2, none=1),
+    ])
+    cfd = hub.board()["flow"]["cfd"]
+    block = _flow_block(hub).split("const drawFlow")[0]
+    drawing = "\n".join([
+        "const COLORS={},COLNAME={};", "const esc=s=>String(s);", block,
+        f"process.stdout.write(flowCFD({json.dumps(cfd)}));",
+    ])
+    path = tmp_path / "flow-cfd-axis.js"
+    path.write_text(drawing)
+    result = subprocess.run(["node", str(path)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    labels = re.findall(r"<text[^>]*>([^<]*)</text>", result.stdout)
+    for v in cfd["yticks"]:
+        assert str(v) in labels, f"the y tick {v} carries no label: {labels}"
+    for t in cfd["xticks"]:
+        assert t["day"] in labels, f"the x tick {t['day']} carries no label: {labels}"
+    assert "cards" in labels and "day (UTC)" in labels, f"an axis carries no name: {labels}"
+    ticks = re.findall(r"<line ", result.stdout)
+    assert len(ticks) == 2 + len(cfd["yticks"]) + len(cfd["xticks"]), "one mark per tick between the two axes"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_every_band_drawn_has_a_legend_entry_frozen_and_no_column_included(hub, board, tmp_path):
+    """#896 (2): the bands the chart draws and the legend's entries are one list, frozen and No column included."""
+    _history(board, [
+        _sample(1, {"issue": {hub.COLUMN["unscheduled"]: 5, hub.COLUMN["issue_closed"]: 3}}, frozen=2, none=1),
+        _sample(2, {"issue": {hub.COLUMN["unscheduled"]: 4, hub.COLUMN["issue_closed"]: 4}}, frozen=2, none=1),
+    ])
+    cfd = hub.board()["flow"]["cfd"]
+    names = [b["name"] for b in cfd["bands"]]
+    assert names == [*hub.ORDER, "frozen", "No column"]
+    block = _flow_block(hub).split("const drawFlow")[0]
+    drawing = "\n".join([
+        "const COLORS={},COLNAME={};", "const esc=s=>String(s);", block,
+        f"process.stdout.write(flowCFD({json.dumps(cfd)}));",
+    ])
+    path = tmp_path / "flow-cfd-legend.js"
+    path.write_text(drawing)
+    result = subprocess.run(["node", str(path)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    legend = re.findall(r"<span class=flg><i[^>]*></i>([^<]*)</span>", result.stdout)
+    assert legend == names, "every band drawn has exactly one legend entry, in the drawn order"
+    assert len(re.findall(r"<polygon ", result.stdout)) == len(names), "the legend counts the bands the chart draws"
+    bands = {b["name"]: b for b in cfd["bands"]}
+    assert bands["frozen"]["upper"][0] - bands["frozen"]["lower"][0] == 2
+    assert bands["No column"]["upper"][0] - bands["No column"]["lower"][0] == 1
