@@ -150,9 +150,10 @@ def test_spec_lane_carries_number_title_column_and_closed_progress(hub):
 
 
 def test_a_lane_with_a_running_card_sorts_before_one_without(hub):
+    """A closed spec draws no lane (owner, 2026-10-31: a finished spec floods the board), so one open lane is the set."""
     model = _build(GROUPS)
     spec_ids = [ln["id"] for ln in model["lanes"] if ln["kind"] == "s"]
-    assert spec_ids == ["s889", "s41"], f"the running lane does not come first: {spec_ids}"
+    assert spec_ids == ["s889"], f"the open lane is not the only one: {spec_ids}"
 
 
 def test_wave_mode_groups_by_wave_with_no_wave_last(hub):
@@ -166,10 +167,12 @@ def test_wave_mode_groups_by_wave_with_no_wave_last(hub):
 
 
 def test_spec_mode_draws_no_spec_cards_as_cards_only_in_their_lane(hub):
+    """A card of a closed spec still shows: the open one falls to No spec, the closed one is history and draws nothing."""
     model = _build(GROUPS)
     seen = [r["n"] for ln in model["lanes"] for r in ln["all"]]
-    assert sorted(seen) == [42, 43, 890, 895, 899, 900], "a card appears in no lane or in two"
+    assert sorted(seen) == [42, 890, 895, 899, 900], "a card appears in no lane or in two"
     assert 889 not in seen and 41 not in seen, "a spec card is drawn as a card, not as a lane header"
+    assert 42 in [r["n"] for ln in model["lanes"] if ln["id"] == "none" for r in ln["all"]], "an open card of a closed spec is lost"
 
 
 def test_a_card_shows_a_loop_bug_chip_or_a_bug_chip_as_text(hub):
