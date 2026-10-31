@@ -4323,10 +4323,6 @@ const model=bo.lmode==="none"?null:buildBoard(all.filter(g=>!isPR(g.name)),{mode
 const lanesHtml=model?laneHtml(model):null;lanesNow=model;$("#lhd").checked=!!bo.hideDone;
 $("#lmode").value=bo.lmode||"spec";$("#bbody").classList.toggle("lanes",!!model);
 $("#lhc").innerHTML=model&&model.hc.length?`<button class=hcpill id=lhcx title="columns with no card in an expanded lane: click to expand the lanes that hold their cards">+${model.hc.length} hidden: ${model.hc.map(x=>x.user?`<span class=hcu data-eye="${esc(x.name)}" title="show this column">${esc(x.name)} <b>${x.count}</b></span>`:esc(x.name)+" <b>"+x.count+"</b>").join(" · ")}</button>`:"";
-const model=bo.lmode==="none"?null:buildBoard(all.filter(g=>!isPR(g.name)),{mode:bo.lmode||"spec",fw:bo.fw||[],fs:bo.fs||[],closed:COLNAME.issue_closed,abandoned:COLNAME.abandoned,showClosed:!!bo.showClosed,lc:bo.lc||{},hideDone:!!bo.hideDone,search:!!f,text:x=>!f||String(x.n).includes(f)||x.t.toLowerCase().includes(f.toLowerCase())});   // the lanes read every row; the search and the filters only hide rows (#890)
-const lanesHtml=model?laneHtml(model):null;lanesNow=model;$("#lhd").checked=!!bo.hideDone;
-$("#lmode").value=bo.lmode||"spec";$("#bbody").classList.toggle("lanes",!!model);
-$("#lhc").innerHTML=model&&model.hc.length?`<button class=hcpill id=lhcx title="columns with no card in an expanded lane: click to expand the lanes that hold their cards, and to draw the Closed and Abandoned columns">+${model.hc.length} hidden: ${model.hc.map(x=>esc(x.name)+" <b>"+x.count+"</b>").join(" · ")}</button>`:model&&model.ec.length&&bo.showClosed?`<button class=hcpill id=lhcx data-hide title="draw no Closed or Abandoned column">hide ${model.ec.map(esc).join(" · ")}</button>`:"";
 if(lanesHtml!==null){if($("#bbody").dataset.h!==lanesHtml){$("#bbody").dataset.h=lanesHtml;$("#bbody").innerHTML=lanesHtml;restore()}}
 else if($("#bbody").dataset.h!==html){$("#bbody").dataset.h=html;$("#bbody").innerHTML=html;restore()}   // same cards: leave the DOM alone, so a scroll in progress is never interrupted
 boardRows=all.flatMap(g=>g.items);paintHL();
