@@ -278,7 +278,8 @@ def test_a_running_card_has_a_thick_teal_outline_and_nothing_animates_without_th
 def test_a_failure_reason_is_at_least_12_px_and_light_on_the_dark_red_card():
     css = PAGE_SRC().split("<style>")[1].split("</style>")[0]
     body = _rule(css, ".card .bd-c")
-    assert int(re.search(r"font-size:(\d+)px", body).group(1)) >= 12
+    size_var = re.search(r"font-size:var\((--[\w-]+)\)", body).group(1)
+    assert int(re.search(rf"{size_var}:(\d+)px", css).group(1)) >= 13
     fg = re.search(r"fill:#([0-9a-f]{6})", body).group(1)
     assert min(int(fg[i:i + 2], 16) for i in (0, 2, 4)) >= 0xa0   # light on every channel
 
@@ -286,7 +287,7 @@ def test_a_failure_reason_is_at_least_12_px_and_light_on_the_dark_red_card():
 def test_no_verdict_yet_never_shares_the_amber_of_a_deadline_card():
     css = PAGE_SRC().split("<style>")[1].split("</style>")[0]
     assert "--none" in _rule(css, ".state-none") and "--warn" not in _rule(css, ".state-none")
-    root = re.search(r":root \{([^}]*)\}", css).group(1)
+    root = re.search(r":root\s*\{([^}]*)\}", css).group(1)
     none, warn = (re.search(rf"--{n}:(#[0-9a-f]+)", root).group(1) for n in ("none", "warn"))
     assert none != warn
 

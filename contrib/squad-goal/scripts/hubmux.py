@@ -63,12 +63,13 @@ def listing(apps):
     return {"hub": "squad-hub", "repos": [{"slug": s, "repo": a["repo"], "path": f"/{s}", "live": live(a), **({"err": a["err"]} if "err" in a else {})} for s, a in apps.items()]}
 
 
-CSS = ("body{background:#0d1117;color:#c9d1d9;font:14px system-ui;margin:16px}"
-       "h1{font-size:18px;margin:0 0 4px}ul{list-style:none;padding:0;margin:12px 0 0;max-width:54em}"
+WEB_TOKENS = (pathlib.Path(__file__).resolve().parent / "web-tokens.css").read_text()
+CSS = ("body{background:#0d1117;color:#c9d1d9;font:var(--fs-body) system-ui;margin:16px}"
+       "h1{font-size:var(--fs-md);margin:0 0 4px}ul{list-style:none;padding:0;margin:12px 0 0;max-width:54em}"
        "li{padding:7px 0;border-bottom:1px solid #21262d}a{color:#5aa9ff;text-decoration:none}"
        "a:hover{text-decoration:underline}.repo{color:#8b9bb3}.live{color:#3ecf8e}.none{color:#8b9bb3}"
        ".broken{color:#ff6b6b}.note{color:#8b9bb3;margin:0}"
-       ".runs{color:#8b9bb3;font:11px ui-monospace,SFMono-Regular,monospace;overflow-wrap:anywhere;margin-top:3px}")
+       ".runs{color:#8b9bb3;font:var(--fs-min) ui-monospace,SFMono-Regular,monospace;overflow-wrap:anywhere;margin-top:3px}")
 
 
 def root_page(apps, title, note=None):
@@ -85,7 +86,7 @@ def root_page(apps, title, note=None):
         ids = " ".join(sorted(r["live"]))
         runs = f'<div class="runs">{html.escape(ids)}</div>' if ids else ""
         rows.append(f'<li><a href="/{slug}"><b>{slug}</b></a> <span class="repo">{repo}</span> {badge}{runs}</li>')
-    return (f'<!doctype html><meta charset=utf-8><title>squad hub</title><style>{CSS}</style><body>'
+    return (f'<!doctype html><meta charset=utf-8><title>squad hub</title><style>{WEB_TOKENS}{CSS}</style><body>'
             f'<h1>{html.escape(title)}</h1>{note or ""}<ul>{"".join(rows) or "<li>no profile known</li>"}</ul>').encode()
 
 

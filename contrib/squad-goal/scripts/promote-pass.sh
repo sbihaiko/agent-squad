@@ -4,6 +4,8 @@
 # machine-wide /tmp/sg-state, a different file from the profile's state directory (exit 2).
 # Debounce: no suite for a tip already proved or refused ($SG_STATE/promote-pass.tips, last 50), nor while the latest landing in
 # $SG_STATE/landed.tsv is younger than SG_PROMOTE_QUIET_SECONDS (default 900): a burst of landings earns one proof.
+# A full pass carries across a covered delta (ADR-0156): `delta-pass.sh` runs first, and any refusal or a held delta lock falls
+# through to the full suite, so a tip that moved by a covered path promotes in minutes and never by a weaker proof.
 # One hold of the proof's own lock, in try mode (serial.sh SERIAL_TRY, name `full-proof`): a held lock skips the tick, never
 # queues. The proof never takes the `gate` lock, which the landing gate, the wave entry and the promotion all wait on, so a proof
 # in flight holds no landing up and a landing holds no proof up (ADR-0145 rule 3, as the nightly of ADR-0153 does). Inside the
@@ -35,11 +37,43 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   ( while :; do sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}' | tr -d '{}' >> "$samples"; sleep 10; done ) & mon=$!
   trap 'kill "$mon" 2>/dev/null; rm -f "$state/promote-reserve" "$samples"' EXIT INT TERM
   [ "$(g rev-parse HEAD)" = "$tip" ] || { mark "$tip" "not promoted: the clean tree is not at the tip"; exit 1; }
+  # ADR-0156: a full pass carries across a covered delta. When one is on record and the tip moved only by covered paths, the
+  # delta proof runs instead of the full suite and the promotion reads its record. Any refusal (an uncovered path, a bound, no
+  # full pass) or a held delta lock falls through to the full suite below: the cheaper proof is an optimization, never a weaker gate.
+  if bash "$d/delta-pass.sh" > "$state/delta-pass.log" 2>&1; then
+    o=$(SG_PROMOTE_PROOF=local bash "$d/promote-stg.sh" 2>&1); rc=$?
+    [ $rc = 0 ] || { mark "$tip" "not promoted: $(printf '%s' "$o" | tail -1)"; exit 1; }
+    mark "$tip" "promoted: the delta carried the full pass ($state/delta-pass.log)"; exit 0
+  fi
   py=${SG_GATE_PY:-${SG_CHECKOUT:+$SG_CHECKOUT/.venv/bin/python}}; [ -x "$py" ] || py=python3
   suite=${SG_PROMOTE_SUITE:-"$py -m ruff check squad tests && $py -m mypy squad && $py -m pytest -p no:deepeval -n ${SG_PROMOTE_WORKERS:-$(sg_battery_workers)} && $py -m pytest -p no:deepeval -p no:xdist"}
   out=$state/promote-suite-${tip:0:12}.log
   cores2=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 1); lim2=${SG_PROMOTE_LOAD_LIMIT:-$cores2}
-  if ! (cd "$tree" && bash -c "$suite") > "$out" 2>&1; then
+  # ADR-0157: a proof is bounded. Past its reserve bound (30 minutes) the reserve lifts and the proof keeps running, so the
+  # loop dispatches beside it; past its deadline (two hours) the suite and every child it started are killed, and the tip is
+  # recorded indeterminate: not tested, no promotion, no gate status, and no refusal, so a later pass retries it.
+  rbound=${SG_PROMOTE_RESERVE_SECONDS:-1800}; dline=${SG_PROMOTE_DEADLINE_SECONDS:-7200}
+  kill_tree() { local p=$1 c; for c in $(pgrep -P "$p" 2>/dev/null); do kill_tree "$c"; done; kill "$p" 2>/dev/null; }
+  s0=$(date +%s); (cd "$tree" && bash -c "$suite") > "$out" 2>&1 & spid=$!
+  rc=0; relieved=
+  while kill -0 "$spid" 2>/dev/null; do
+    el=$(( $(date +%s) - s0 ))
+    if [ -z "$relieved" ] && [ "$el" -ge "$rbound" ]; then
+      relieved=1; rm -f "$state/promote-reserve"
+      echo "$(date -u +%FT%TZ) promote-pass: $tip passed its ${rbound}s reserve bound: the reserve lifts, the loop works beside the proof" >> "$log"
+    fi
+    [ "$el" -ge "$dline" ] && { rc=124; kill_tree "$spid"; break; }
+    sleep 5
+  done
+  if [ "$rc" = 124 ]; then wait "$spid" 2>/dev/null; else wait "$spid"; rc=$?; fi
+  if [ "$rc" = 124 ]; then
+    kill "$mon" 2>/dev/null; wait "$mon" 2>/dev/null
+    printf '%s\t%s\t%s\n' "$(date +%s)" "$tip" "$dline" > "$state/promote-indeterminate.$$" \
+      && mv "$state/promote-indeterminate.$$" "$state/promote-indeterminate"
+    echo "$(date -u +%FT%TZ) promote-pass: $tip not tested: the proof passed its ${dline}s bound and was killed" >> "$log"
+    echo "promote-pass: $tip not tested: the proof passed its ${dline}s bound and was killed"
+    exit 1; fi
+  if [ "$rc" != 0 ]; then
     kill "$mon" 2>/dev/null; wait "$mon" 2>/dev/null
     read -r peak mean < <(awk '{ if ($1 + 0 > p) p = $1 + 0; s += $1 + 0; n++ } END { printf "%d %.2f", p, (n ? s / n : 0) }' "$samples" 2>/dev/null)
     peak=${peak:-0}; mean=${mean:-0}

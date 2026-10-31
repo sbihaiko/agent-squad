@@ -58,6 +58,8 @@ An ADR holds a decision and its reason. It is not a ledger: no dates, counts, st
 | [0155](0155-a-premise-is-checked-never-assumed.md) | A premise is checked, never assumed: one round proves what reading proves, sends what only running proves to a probe, and asks the owner at most five questions, each with a recommended answer that "yes" accepts; a question that depends on an open question waits a round, the check is one comment on the spec rewritten in place, and a model with no tools never reviews. |
 | [0156](0156-a-full-proof-carries-across-a-covered-delta.md) | A full proof carries across a covered delta: a declared guard map names every path a delta may hold, the full pass stays the base, and a delta record is checked again at promotion; the promotion code is never covered |
 
+| [0157](0157-a-proof-is-bounded.md) | A proof is bounded: it reserves the machine for 30 minutes, past which the reserve lifts and the loop works beside it; past two hours it is killed and its tip recorded indeterminate, not tested, with no promotion and no refusal |
+
 ## Adding an ADR
 
 Take the next free number. Rewrite an ADR in place when a decision changes; never append an amendment. A rule with no named guard test is a draft ([ADR-0018](0018-failing-gate-is-a-defect.md)). Add one line to `CLAUDE.md` Design rules with the guard.

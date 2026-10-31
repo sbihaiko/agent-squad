@@ -109,6 +109,7 @@ def core_bundle():
 PAGE_ORDER = ("shell.js", "graph.js", "panel.js", "edit.js", "menu.js", "review.js", "run.js", "cards.js", "save.js", "chrome.js")
 PAGE_DIR = DASH / "page"
 PAGE_CSS = DASH / "page.css"
+WEB_TOKENS_CSS = ROOT / "contrib" / "squad-goal" / "scripts" / "web-tokens.css"
 PAGE_HTML = DASH / "page.html"
 
 
@@ -125,7 +126,7 @@ def page_sources():
 
 def page_template():
     """The page with its CSS and script filled in, and the four data placeholders left. What the page tests read."""
-    return PAGE_HTML.read_text().replace("/*CSS*/", PAGE_CSS.read_text()).replace("/*PAGE*/", page_bundle())
+    return PAGE_HTML.read_text().replace("/*CSS*/", WEB_TOKENS_CSS.read_text() + PAGE_CSS.read_text()).replace("/*PAGE*/", page_bundle())
 
 
 def _inline(obj):
@@ -136,7 +137,7 @@ def build(home=False):
     html = PAGE_HTML.read_text()
     example = json.loads((DESIGN / "five-phases.graph.json").read_text())
     core = core_bundle()
-    for key, value in (("/*ENGINE*/", _inline(engine_data())), ("/*EXAMPLE*/", _inline(example)), ("/*SERVED*/", _inline(served_lists(home))), ("/*CORE*/", core), ("/*CSS*/", PAGE_CSS.read_text()), ("/*PAGE*/", page_bundle())):
+    for key, value in (("/*ENGINE*/", _inline(engine_data())), ("/*EXAMPLE*/", _inline(example)), ("/*SERVED*/", _inline(served_lists(home))), ("/*CORE*/", core), ("/*CSS*/", WEB_TOKENS_CSS.read_text() + PAGE_CSS.read_text()), ("/*PAGE*/", page_bundle())):
         assert html.count(key) == 1, key
         html = html.replace(key, value)
     return html
