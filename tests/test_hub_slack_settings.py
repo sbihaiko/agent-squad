@@ -1,0 +1,192 @@
+"""GitHub issue #924: Settings > Communication sets how the agent reads and writes Slack for this profile.
+
+The settings are one gitignored file beside the profile. The hub renders the theme, validates, shows the diff, writes the
+file on confirm (ADR-0030) and holds no token. Posting is out of scope here: nothing reads this file yet.
+
+No browser runs: the seams under test are the hub's own functions, its `GET`/`POST /api/slack` route and the page text.
+Every name in this file is a placeholder; a real channel or person never appears in the repository.
+"""
+import http.client
+import importlib.util
+import json
+import pathlib
+import subprocess
+import threading
+from http.server import ThreadingHTTPServer
+
+import pytest
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+HUB_PY = ROOT / "contrib" / "squad-goal" / "scripts" / "hub.py"
+
+
+@pytest.fixture(scope="module")
+def ctx(tmp_path_factory):
+    root = tmp_path_factory.mktemp("slack-settings")
+    prof, state, co = root / "profiles", root / "state", root / "checkout"
+    for d in (prof, state, co):
+        d.mkdir()
+    (prof / "t.sh").write_text(': "${SG_REPO:=x/y}"\n')
+    mp = pytest.MonkeyPatch()
+    for k, v in (("SG_REPO", "x/y"), ("SG_OWNER", "x"), ("SG_PROJECT", "4"), ("SG_PROFILE", "t"),
+                 ("SG_PROFILES_DIR", str(prof)), ("SG_STATE", str(state)), ("SG_CHECKOUT", str(co)),
+                 ("SG_HUB_DIR", str(root / "hub")), ("HOME", str(root))):
+        mp.setenv(k, v)
+    spec = importlib.util.spec_from_file_location("hub_slack_settings", HUB_PY)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    yield {"hub": mod, "prof": prof, "state": state}
+    mp.undo()
+
+
+@pytest.fixture(autouse=True)
+def fresh(ctx):
+    for p in ctx["prof"].glob("t.slack.json"):
+        p.unlink()
+    return ctx
+
+
+def chan(name="#example-channel", **kw):
+    base = {"name": name, "lang": "en-US", "watch": True, "thread": True, "mention": False,
+            "events": {"stg": True, "prod": True, "dev": False, "bug": True, "fix": True}}
+    return {**base, **kw}
+
+
+def save(ctx, **body):
+    return ctx["hub"].slack_set(body)
+
+
+def saved_file(ctx):
+    return ctx["prof"] / "t.slack.json"
+
+
+# --- storage
+
+def test_the_settings_file_is_gitignored_beside_the_profile():
+    rel = "contrib/squad-goal/scripts/profiles/t.slack.json"
+    r = subprocess.run(["git", "check-ignore", "-q", rel], cwd=ROOT, capture_output=True, timeout=30)
+    assert r.returncode == 0, "the per-profile Slack file is not gitignored"
+
+
+def test_with_no_file_the_theme_names_no_channel_and_no_person(ctx):
+    got = ctx["hub"].slack_read(saved_file(ctx))
+    assert got["channels"] == [] and got["people"] == []
+    assert got["connection"] == "not connected"
+    assert not any("token" in k.lower() for k in got)
+
+
+def test_a_preview_names_the_diff_and_writes_nothing(ctx):
+    got = save(ctx, prefix="[bot]", confirm=False)
+    assert got["diff"] == ["Communication · Slack · prefix: [agent] -> [bot]"]
+    assert not saved_file(ctx).exists()
+
+
+def test_every_diff_line_is_prefixed_for_the_communication_theme(ctx):
+    got = save(ctx, prefix="[bot]", tick=3, channels=[chan()], people=[{"name": "Example Person", "role": "Manager"}],
+               confirm=False)
+    assert len(got["diff"]) == 4, got["diff"]
+    assert all(line.startswith("Communication · Slack · ") for line in got["diff"]), got["diff"]
+
+
+def test_a_confirmed_save_writes_the_file_and_the_theme_reads_it_back(ctx):
+    got = save(ctx, channels=[chan()], people=[{"name": "Example Person", "role": "Colleague"}], confirm=True)
+    assert "err" not in got and saved_file(ctx).exists()
+    back = ctx["hub"].slack_read(saved_file(ctx))
+    assert [c["name"] for c in back["channels"]] == ["#example-channel"]
+    assert back["people"] == [{"name": "Example Person", "role": "Colleague"}]
+    assert "Communication · Slack · channel #example-channel added" in got["diff"]
+
+
+def test_a_channel_with_watch_off_is_saved_as_off(ctx):
+    save(ctx, channels=[chan(watch=False)], confirm=True)
+    back = ctx["hub"].slack_read(saved_file(ctx))
+    assert back["channels"][0]["watch"] is False
+
+
+def test_the_file_holds_only_the_settings_and_no_token(ctx):
+    save(ctx, token="not-a-token", channels=[chan()], confirm=True)
+    assert set(json.loads(saved_file(ctx).read_text())) <= set(ctx["hub"].SLACK_DEFAULT)
+
+
+def test_a_person_role_is_manager_or_colleague(ctx):
+    got = save(ctx, people=[{"name": "Example Person", "role": "Admin"}], confirm=True)
+    assert got["err"] == "role is Manager or Colleague"
+    assert not saved_file(ctx).exists()
+
+
+@pytest.mark.parametrize("bad", [
+    {"prefix": "two\nlines"},
+    {"prefix": ""},
+    {"tick": 0},
+    {"tick": 31},
+    {"tick": 5, "max": 4},
+    {"quiet": "25-07"},
+    {"lang": "fr"},
+    {"other": "maybe"},
+    {"channels": [chan(), chan()]},
+    {"channels": [chan("bad name")]},
+])
+def test_a_value_outside_its_rule_is_refused_and_nothing_is_written(ctx, bad):
+    got = save(ctx, confirm=True, **bad)
+    assert "err" in got
+    assert not saved_file(ctx).exists()
+
+
+# --- route
+
+def test_the_route_serves_the_theme_and_takes_a_confirmed_save(ctx):
+    mod = ctx["hub"]
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), mod.H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        port = srv.server_port
+        c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        c.request("GET", "/api/slack", headers={"Host": f"127.0.0.1:{port}"})
+        r = c.getresponse()
+        got = json.loads(r.read() or b"{}")
+        assert r.status == 200 and got["prefix"] == "[agent]" and got["channels"] == [], got
+        c.close()
+        head = {"Host": f"127.0.0.1:{port}", "Origin": f"http://127.0.0.1:{port}", "Content-Type": "application/json"}
+        c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        c.request("POST", "/api/slack", body=json.dumps({"prefix": "[bot]", "confirm": False}), headers=head)
+        r = c.getresponse()
+        assert json.loads(r.read())["diff"] == ["Communication · Slack · prefix: [agent] -> [bot]"]
+        assert not saved_file(ctx).exists()
+        c.close()
+        c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        c.request("POST", "/api/slack", body=json.dumps({"prefix": "[bot]", "confirm": True}), headers=head)
+        r = c.getresponse()
+        assert r.status == 200 and json.loads(saved_file(ctx).read_text())["prefix"] == "[bot]"
+        c.close()
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+# --- the page
+
+def test_the_page_carries_the_communication_theme_and_no_token_field(ctx):
+    page = ctx["hub"].served_page()
+    assert 'id=slk class=sp' in page and "id=sbody" in page and "function slLoad(" in page
+    assert '"slk"' in page
+    assert "type=password" not in page
+    assert "Communication" in page and "Discard" in page
+
+
+def test_the_page_strikes_a_channel_with_watch_off_and_disables_its_controls(ctx):
+    page = ctx["hub"].served_page()
+    assert "do not watch" in page
+    assert "line-through" in page
+    assert 'disabled' in page
+
+
+def test_the_page_states_what_the_agent_does_for_each_role(ctx):
+    page = ctx["hub"].served_page()
+    assert "drafts the answer; posts only after the owner's OK" in page
+    assert "a bug it reports becomes an issue in Todo at once" in page
+
+
+def test_the_page_stacks_each_row_on_a_phone_and_labels_each_switch(ctx):
+    page = ctx["hub"].served_page()
+    assert "@media (max-width:600px){.slc{grid-template-columns:1fr}" in page
+    assert 'data-l="watch"' in page and 'data-l="thread only"' in page and 'data-l="mention only"' in page

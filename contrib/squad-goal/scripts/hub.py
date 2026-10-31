@@ -1331,6 +1331,152 @@ def limits_set(body):
         limits_record(diff)
     return {"diff": diff, "state": limits_read()}
 
+# --- Settings > Communication (#924). How the agent reads and writes Slack for this profile: the prefix, the cadence, the
+# channels and the people it answers. The page renders; reading, validating, diffing and writing live here (ADR-0137). The
+# file is per profile, gitignored and written through a temp file and a rename (ADR-0030). The hub holds no token: posting
+# goes through the owner's Slack account by the Claude Slack connector, and nothing reads this file until a bridge does.
+SLACK_LANGS = ("pt-br", "en-US", "es")
+SLACK_ROLES = ("Manager", "Colleague")
+SLACK_EVENTS = ("stg", "prod", "dev", "bug", "fix")
+SLACK_DEFAULT = {"connection": "not connected", "prefix": "[agent]", "lang": "en-US", "tick": 5, "max": 30, "quiet": "",
+                 "other": "ignore", "dm": False, "audio": False, "channels": [], "people": []}
+SLACK_LABEL = {"prefix": "prefix", "lang": "default language", "tick": "read every", "max": "up to",
+               "quiet": "quiet hours", "other": "anyone not listed", "dm": "owner self-DM", "audio": "audio"}
+SLACK_DIFF = "Communication · Slack · "
+_SLACK_HHMM = re.compile(r"^([01]\d|2[0-3])-([01]\d|2[0-3])$")
+_SLACK_CHANNEL = re.compile(r"^#?[^\s#]{1,80}$")
+
+def slack_file():
+    """The per-profile Slack settings beside the profile, or None when no profile is in force."""
+    slug, d = os.environ.get("SG_PROFILE", ""), profiles_dir()
+    return d / f"{slug}.slack.json" if slug and d is not None else None
+
+def slack_read(path):
+    """The saved settings over the defaults; the defaults alone when the file is absent, unreadable or not an object."""
+    cfg = json.loads(json.dumps(SLACK_DEFAULT))
+    try: saved = json.loads(path.read_text()) if path else {}
+    except (OSError, ValueError): saved = {}
+    if isinstance(saved, dict): cfg.update({k: v for k, v in saved.items() if k in SLACK_DEFAULT})
+    return cfg
+
+def _slack_int(v, lo, hi):
+    if isinstance(v, bool): return None
+    try: n = int(str(v).strip())
+    except (TypeError, ValueError): return None
+    return n if lo <= n <= hi and str(v).strip() == str(n) else None
+
+def _slack_rows(items, check):
+    """The rows of one list from the form, each checked; a name that appears twice is refused."""
+    if not isinstance(items, list): return None, "the list is not a list"
+    out = []
+    for it in items:
+        if not isinstance(it, dict): return None, "a row is not an object"
+        row, msg = check(it)
+        if msg: return None, msg
+        out.append(row)
+    if len({r["name"] for r in out}) != len(out): return None, "a name appears more than once"
+    return out, None
+
+def _slack_channel(it):
+    name = str(it.get("name", "")).strip()
+    if not _SLACK_CHANNEL.match(name): return None, "a channel is a name or id with no space"
+    if it.get("lang") not in SLACK_LANGS: return None, "a channel language is one of " + ", ".join(SLACK_LANGS)
+    flags = {k: it.get(k) for k in ("watch", "thread", "mention")}
+    if not all(isinstance(v, bool) for v in flags.values()): return None, "a channel switch is on or off"
+    ev = it.get("events") if isinstance(it.get("events"), dict) else None
+    if ev is None or set(ev) - set(SLACK_EVENTS) or not all(isinstance(v, bool) for v in ev.values()):
+        return None, "a channel announces only the release events, on or off"
+    return {"name": name, "lang": it["lang"], **flags, "events": {k: bool(ev.get(k, False)) for k in SLACK_EVENTS}}, None
+
+def _slack_person(it):
+    name = str(it.get("name", "")).strip()
+    if not name or len(name) > 80: return None, "a person has a name of 1 to 80 characters"
+    if it.get("role") not in SLACK_ROLES: return None, "role is Manager or Colleague"
+    return {"name": name, "role": it["role"]}, None
+
+def slack_clean(body, cur):
+    """The typed settings, checked: (settings, None), or (None, the message for the first value that breaks its rule)."""
+    prefix = str(body.get("prefix", cur["prefix"])).strip()
+    if not prefix or "\n" in prefix or len(prefix) > 40: return None, "prefix is one line of 1 to 40 characters"
+    lang = body.get("lang", cur["lang"])
+    if lang not in SLACK_LANGS: return None, "default language is one of " + ", ".join(SLACK_LANGS)
+    tick = _slack_int(body.get("tick", cur["tick"]), 1, 30)
+    if tick is None: return None, "read every is a whole number of minutes from 1 to 30"
+    mx = _slack_int(body.get("max", cur["max"]), 2, 120)
+    if mx is None or mx < tick: return None, "up to is a whole number of minutes from 2 to 120, not less than read every"
+    quiet = str(body.get("quiet", cur["quiet"])).strip()
+    if quiet and not _SLACK_HHMM.match(quiet): return None, "quiet hours are HH-HH local time, or empty"
+    other = body.get("other", cur["other"])
+    if other not in ("ignore", "reply"): return None, "anyone not listed is ignored or gets a fixed reply"
+    dm = body.get("dm", cur["dm"])
+    audio = body.get("audio", cur["audio"])
+    if not isinstance(dm, bool) or not isinstance(audio, bool): return None, "owner self-DM and audio are on or off"
+    channels, msg = _slack_rows(body.get("channels", cur["channels"]), _slack_channel)
+    if msg: return None, msg
+    people, msg = _slack_rows(body.get("people", cur["people"]), _slack_person)
+    if msg: return None, msg
+    return {"connection": cur["connection"], "prefix": prefix, "lang": lang, "tick": tick, "max": mx, "quiet": quiet,
+            "other": other, "dm": dm, "audio": audio and dm, "channels": channels, "people": people}, None
+
+def _slack_show(v):
+    if v is True: return "on"
+    if v is False: return "off"
+    return str(v) if str(v) else "always on"
+
+def _slack_rowdiff(kind, name, old, new):
+    """The diff lines for one channel or person kept in both lists, by name."""
+    if kind == "person":
+        return [f"{SLACK_DIFF}person {name} · role: {old['role']} -> {new['role']}"] if old["role"] != new["role"] else []
+    out = [f"{SLACK_DIFF}channel {name} · {f}: {_slack_show(old[f])} -> {_slack_show(new[f])}"
+           for f in ("lang", "watch", "thread", "mention") if old[f] != new[f]]
+    out += [f"{SLACK_DIFF}channel {name} · {ev} posts: {_slack_show(old['events'][ev])} -> {_slack_show(new['events'][ev])}"
+            for ev in SLACK_EVENTS if old["events"][ev] != new["events"][ev]]
+    return out
+
+def slack_diff(old, new):
+    """The diff a Save shows before it writes: one line per changed setting, row or switch, each prefixed for this theme."""
+    out = []
+    for key, label in SLACK_LABEL.items():
+        if new[key] != old[key]: out.append(f"{SLACK_DIFF}{label}: {_slack_show(old[key])} -> {_slack_show(new[key])}")
+    for kind, key in (("channel", "channels"), ("person", "people")):
+        before = {r["name"]: r for r in old[key]}
+        after = {r["name"]: r for r in new[key]}
+        for name in after.keys() - before.keys():
+            out.append(f"{SLACK_DIFF}{kind} {name} added")
+        for name in before.keys() - after.keys():
+            out.append(f"{SLACK_DIFF}{kind} {name} removed")
+        for name in after.keys() & before.keys():
+            out += _slack_rowdiff(kind, name, before[name], after[name])
+    return out
+
+def slack_write(path, cfg):
+    """The settings file, whole or not at all: a temp file, then a rename. Returns an error, or None."""
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n")
+        os.replace(tmp, path)
+    except OSError as e:
+        return f"the settings could not be written: {e.strerror or e}"
+    finally:
+        try: tmp.unlink()
+        except OSError: pass
+    return None
+
+def slack_set(body):
+    """POST /api/slack: validate, diff, then write. With `confirm` false it answers the diff and writes nothing."""
+    if not isinstance(body, dict): return {"err": "bad request"}
+    path = slack_file()
+    if path is None: return {"err": "no profile in force: SG_PROFILE and SG_PROFILES_DIR name none"}
+    cur = slack_read(path)
+    new, err = slack_clean(body, cur)
+    if err: return {"err": err}
+    diff = slack_diff(cur, new)
+    if body.get("confirm") is not True: return {"diff": diff}
+    if diff:
+        err = slack_write(path, new)
+        if err: return {"err": err}
+    return {"diff": diff, "state": slack_read(path)}
+
 def _tok(n):
     n = int(n)
     return f"{n/1e6:.1f}M".replace(".0M", "M") if n >= 1e6 else f"{n/1e3:.0f}k" if n >= 1e3 else str(n)
@@ -3414,6 +3560,23 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 #lbody .ldiff{margin:8px 0 0;padding:8px 10px;background:#1f1b12;border:1px solid #6b5223;border-radius:6px;font-size:var(--fs-min)}
 #lbody .ldiff b{display:block;margin-bottom:4px;color:var(--warn)}#lbody .ldiff .ln{font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
 #lbody .lact{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap}#lbody .lact button{height:var(--ctl-h);padding:0 12px}
+/* Settings > Communication (#924): a channel or a person is one row. A row is a grid on a desktop and stacks on a phone, and
+   each switch carries its own text label. */
+#sbody select,#sbody input{background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;font-size:var(--fs-min);height:var(--ctl-h);padding:0 6px;min-width:0;max-width:100%}
+#sbody input[type=number]{width:72px}
+#sbody .slt{display:grid;gap:4px;margin:4px 0 8px}
+.slc{display:grid;grid-template-columns:minmax(0,1.6fr) repeat(5,minmax(0,1fr)) auto;gap:6px;align-items:center;padding:4px 0;border-bottom:1px solid var(--line);font-size:var(--fs-min)}
+.slc.slh{font-weight:600;color:var(--mute);border-bottom:0}
+.slc.off b{text-decoration:line-through;color:var(--mute)}
+.slc .c1{min-width:0;overflow-wrap:anywhere}
+.slc small{display:block;color:var(--warn)}
+.slc .swt{display:inline-flex;gap:4px;align-items:center;min-height:32px}
+.slc .sev{display:inline-flex;gap:2px;align-items:center;margin-right:6px}
+#sbody .slad{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0}
+#sbody .sdiff{margin:8px 0 0;padding:8px 10px;background:#1f1b12;border:1px solid #6b5223;border-radius:6px;font-size:var(--fs-min)}
+#sbody .sdiff b{display:block;margin-bottom:4px;color:var(--warn)}#sbody .sdiff .ln{overflow-wrap:anywhere}
+#sbody .sact{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap}#sbody .sact button{height:var(--ctl-h);padding:0 12px}
+@media (max-width:600px){.slc{grid-template-columns:1fr}.slc.slh{display:none}.slc [data-l]:not(.swc)::before{content:attr(data-l) ": ";color:var(--mute)}.slc .swt{min-height:44px}}
 /* A phone forced into the desktop view (#926): one column, a full-width sidebar, and nothing wider than 390 px. The docked
    board lays the window out as a two-column grid of its own (`body.dockb`), so the phone states both layouts: on a 390 px
    screen the 300 px sidebar and the board column are what a reader has to scroll sideways to reach. */
@@ -3434,6 +3597,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 <details id=mdl class=sp><summary>squad models<span class=sr id=mdsr></span></summary><div class=sb id=mbody></div></details>
 <details id=stats class=sp><summary>cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><h4>Spend <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Figures at API list prices (API-equivalent)."></span></h4><div class=tot id=tot></div><div class=m id=totnote></div><div class=cash id=cash></div><h4>Spend over time <span class=row id=per></span></h4><div id=chart></div><div id=kpi></div><div id=open></div><h4>Tokens by model <small class=m id=piet>all time</small></h4><div id=pie></div></div></details>
 <details id=lim class=sp><summary>Spend &amp; limits<span class=sr id=limsr></span></summary><div class=sb id=lbody></div></details>
+<details id=slk class=sp><summary>Communication<span class=sr id=slksr></span></summary><div class=sb id=sbody></div></details>
 <div id=list></div>
 </div>
 <div id=main></div>
@@ -3689,12 +3853,79 @@ $("#lbody").addEventListener("click",e=>{const t=e.target.closest("button");if(!
  if(t.id==="limok")limPost(true);else if(t.id==="limsv")limPost(false);
  else if(t.id==="limrv"||t.id==="limno"){limDiff=null;limPend=null;limMsg="";limRender()}});
 $("#lbody").addEventListener("input",e=>{if(e.target.id==="limc"||e.target.id==="limf"){limMsg="";const st=$("#lbody .msave .st");if(st)st.textContent="unsaved changes"}});
-/* accordions: each of the four answers its own header and leaves the others alone; the open set is stored like the pins */
-const ACC=["plans","stats","mdl","lim"];
+/* Settings > Communication (#924): how the agent reads and writes Slack for this profile. The page renders and asks; the hub
+   validates, shows the diff and writes the profile's gitignored file on confirm (ADR-0137). The hub holds no token. */
+let slS=null,slDraft=null,slD=null,slMsg="";
+const SL_LANG=["pt-br","en-US","es"],SL_ROLE={Manager:"drafts the answer; posts only after the owner's OK",Colleague:"answered directly; a bug it reports becomes an issue in Todo at once, with an acknowledgment and the link"};
+const SL_EV={stg:"STG release",prod:"PROD release",dev:"dev landing",bug:"bug acknowledgment",fix:"status correction"};
+const SL_TPL={stg:"<prefix>\nDeployed to STG and the e2e run is green. PR <pr>: <title> (<issue>). Please test on stg.",prod:"<prefix>\nDeployed to PROD. PR <pr>: <title> (<issue>).",dev:"<prefix>\nLanded in dev. PR <pr>: <title> (<issue>). Next: promotion to stg.",bug:"<prefix>\nI confirmed this is a bug: <mechanism>. Filed as <issue>, in Todo. I will post here when the fix reaches stg.",fix:"<prefix>\n<real state, with dates and links>. Next step: <who>."};
+const slA=t=>esc(t).replace(/"/g,"&quot;");
+const slClone=o=>JSON.parse(JSON.stringify(o));
+const slDirty=()=>!!slDraft&&JSON.stringify(slDraft)!==JSON.stringify(slS);
+const slOpts=(list,cur)=>list.map(x=>`<option${x===cur?" selected":""}>${slA(x)}</option>`).join("");
+const slChan=(c,i)=>{const on=c.watch?"":" disabled",n=slA(c.name);
+ return `<div class="slc${c.watch?"":" off"}" role=row><span class=c1 role=cell><b>${esc(c.name)}</b>${c.watch?"":"<small>do not watch</small>"}</span>`
+ +`<span role=cell data-l="language"><select data-sl="ch:${i}:lang" aria-label="${n}: language"${on}>${slOpts(SL_LANG,c.lang)}</select></span>`
+ +`<span class=swc role=cell data-l="watch"><label class=swt><input type=checkbox data-sl="ch:${i}:watch"${c.watch?" checked":""} aria-label="${n}: watch"> watch</label></span>`
+ +`<span class=swc role=cell data-l="thread only"><label class=swt><input type=checkbox data-sl="ch:${i}:thread"${c.thread?" checked":""}${on} aria-label="${n}: thread only"> thread only</label></span>`
+ +`<span class=swc role=cell data-l="mention only"><label class=swt><input type=checkbox data-sl="ch:${i}:mention"${c.mention?" checked":""}${on} aria-label="${n}: mention only"> mention only</label></span>`
+ +`<span role=cell data-l="announce">${Object.keys(SL_EV).map(k=>`<label class=sev title="${SL_EV[k]} posted here"><input type=checkbox data-sl="ch:${i}:ev:${k}"${c.events[k]?" checked":""}${on} aria-label="${n}: ${k} posts"> ${k}</label>`).join("")}</span>`
+ +`<span class=swc role=cell><button data-slrm="ch:${i}" aria-label="remove ${n}">Remove</button></span></div>`};
+const slPerson=(p,i)=>`<div class=slc role=row><span class=c1 role=cell><b>${esc(p.name)}</b></span>`
+ +`<span role=cell data-l="role"><select data-sl="pp:${i}:role" aria-label="${slA(p.name)}: role">${slOpts(Object.keys(SL_ROLE),p.role)}</select></span>`
+ +`<span class=c1 role=cell data-l="the agent">${esc(SL_ROLE[p.role])}</span>`
+ +`<span class=swc role=cell><button data-slrm="pp:${i}" aria-label="remove ${slA(p.name)}">Remove</button></span></div>`;
+function slRender(){const b=$("#sbody");if(!b)return;if(!slS){b.innerHTML="<span class=m>loading…</span>";return}
+ const d=slDraft,sr=$("#slksr");if(sr)sr.textContent=slS.connection;
+ let h=`<div class=kr><span class=l>connection</span><b class="${slS.connection==="connected"?"ok":"w"}">${esc(slS.connection)}</b></div>`
+ +`<p class=m>Posts through your own account by the Claude Slack connector. No token is stored here.</p>`
+ +`<div class=kr><span class=l>prefix</span><input data-sl=prefix value="${slA(d.prefix)}" maxlength=40 aria-label="prefix"></div>`
+ +`<div class=kr><span class=l>default language</span><select data-sl=lang aria-label="default language">${slOpts(SL_LANG,d.lang)}</select></div>`
+ +`<div class=kr><span class=l>read every</span><span><input data-sl=tick type=number min=1 max=30 value="${slA(d.tick)}" aria-label="read every, minutes"> min</span></div>`
+ +`<div class=kr><span class=l>up to, when quiet</span><span><input data-sl=max type=number min=2 max=120 value="${slA(d.max)}" aria-label="up to, minutes"> min</span></div>`
+ +`<div class=kr><span class=l>quiet hours</span><input data-sl=quiet value="${slA(d.quiet)}" placeholder="always on" aria-label="quiet hours, HH-HH"></div>`
+ +`<div class=kr><span class=l>anyone not listed</span><select data-sl=other aria-label="anyone not listed"><option value=ignore${d.other==="ignore"?" selected":""}>is ignored</option><option value=reply${d.other==="reply"?" selected":""}>gets a fixed reply</option></select></div>`
+ +`<h4>Channels</h4><div class=slt role=table><div class="slc slh" role=row><span>Channel</span><span>Language</span><span>Watch</span><span>Thread only</span><span>Mention only</span><span>Announce</span><span></span></div>`
+ +(d.channels.map(slChan).join("")||`<p class=m>No channel: the agent reads and posts nowhere.</p>`)+`</div>`
+ +`<div class=slad><input id=slch placeholder="#channel or id" aria-label="channel to add"><button id=slcha>Add channel</button></div>`
+ +`<h4>People</h4><div class=slt role=table><div class="slc slh" role=row><span>Person</span><span>Role</span><span>What the agent does</span><span></span></div>`
+ +(d.people.map(slPerson).join("")||`<p class=m>No person: the agent answers nobody by name.</p>`)+`</div>`
+ +`<div class=slad><input id=slpn placeholder="name" aria-label="person to add"><select id=slpr aria-label="role">${slOpts(Object.keys(SL_ROLE),"Colleague")}</select><button id=slpa>Add person</button></div>`
+ +`<h4>Templates</h4>`+Object.keys(SL_EV).map(k=>`<details class=tp><summary>${SL_EV[k]} <span class=m>${d.channels.filter(c=>c.watch&&c.events[k]).map(c=>esc(c.name)).join(", ")||"no channel"}</span></summary><pre class=tpre>${esc(SL_TPL[k])}</pre></details>`).join("")
+ +`<h4>Optional</h4><div class=kr><label class=swt><input type=checkbox data-sl=dm${d.dm?" checked":""} aria-label="owner self-DM as an inbox"> Owner self-DM as an inbox</label></div>`
+ +`<div class=kr><label class=swt><input type=checkbox data-sl=audio${d.audio?" checked":""}${d.dm?"":" disabled"} aria-label="audio in and out"> Audio in and out</label></div>`;
+ if(slD)h+=`<div class=sdiff role=alert><b>Save these changes?</b>${slD.map(x=>`<div class=ln>${esc(x)}</div>`).join("")}<div class=sact><button id=slok>Confirm</button><button id=slno>Cancel</button></div></div>`;
+ h+=`<div class="msave${slDirty()?" dirty":""}"><button id=slsv>Save</button><button id=slrv>Discard</button><span class="st${slMsg.startsWith("!")?" err":slMsg?" okm":""}">${slMsg?esc(slMsg.replace(/^!/,"")):(slDirty()?"unsaved changes":"no change")}</span></div>`;
+ b.innerHTML=h}
+function slEdit(k,t){const p=k.split(":"),v=t.type==="checkbox"?t.checked:t.value;
+ if(p[0]==="ch"){const c=slDraft.channels[+p[1]];if(p[2]==="ev")c.events[p[3]]=v;else c[p[2]]=v}
+ else if(p[0]==="pp")slDraft.people[+p[1]].role=v;
+ else if(k==="tick"||k==="max")slDraft[k]=Number(v);
+ else if(k==="dm"){slDraft.dm=v;if(!v)slDraft.audio=false}
+ else slDraft[k]=v}
+async function slLoad(){try{slS=await (await fetch("/api/slack")).json();slDraft=slClone(slS);slD=null;slMsg="";slRender()}catch(e){slMsg="!load failed";slRender()}}
+async function slPost(confirm){try{const r=await fetch("/api/slack",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...slDraft,confirm})}),d=await r.json();
+ if(d.err){slD=null;slMsg="!"+d.err}
+ else if(confirm){slS=d.state;slDraft=slClone(slS);slD=null;slMsg="saved"}
+ else if((d.diff||[]).length){slD=d.diff;slMsg=""}
+ else{slD=null;slMsg="nothing changed"}}catch(x){slMsg="!save failed"}
+ slRender()}
+$("#sbody").addEventListener("change",e=>{const k=e.target.dataset.sl;if(!k||!slDraft)return;slD=null;slMsg="";slEdit(k,e.target);slRender()});
+$("#sbody").addEventListener("click",e=>{const b=e.target.closest("button");if(!b||!slDraft)return;
+ if(b.dataset.slrm){const[t,i]=b.dataset.slrm.split(":");(t==="ch"?slDraft.channels:slDraft.people).splice(+i,1);slD=null;slRender()}
+ else if(b.id==="slcha"){const v=$("#slch").value.trim();if(v&&!slDraft.channels.some(c=>c.name===v))slDraft.channels.push({name:v,lang:slDraft.lang,watch:true,thread:true,mention:false,events:{stg:true,prod:true,dev:false,bug:true,fix:true}});slD=null;slRender()}
+ else if(b.id==="slpa"){const v=$("#slpn").value.trim();if(v&&!slDraft.people.some(p=>p.name===v))slDraft.people.push({name:v,role:$("#slpr").value});slD=null;slRender()}
+ else if(b.id==="slsv")slPost(false);
+ else if(b.id==="slok")slPost(true);
+ else if(b.id==="slno"){slD=null;slRender()}
+ else if(b.id==="slrv"){slDraft=slClone(slS);slD=null;slMsg="";slRender()}});
+/* accordions: each of the five answers its own header and leaves the others alone; the open set is stored like the pins */
+const ACC=["plans","stats","mdl","lim","slk"];
 let openAcc=new Set(Array.isArray(ls.acc)?ls.acc.filter(i=>ACC.includes(i)):[]);   // the old single-id string is ignored, not trusted, and not fatal
 const saveAcc=()=>{ls.acc=[...openAcc];save()};
-ACC.forEach(i=>{const e=$("#"+i);e.open=openAcc.has(i);e.addEventListener("toggle",()=>{if(e.open)openAcc.add(i);else openAcc.delete(i);saveAcc();if(i==="mdl"&&e.open){mdlLoad()}else if(i==="lim"&&e.open){limLoad()}})});mdlLoad();
+ACC.forEach(i=>{const e=$("#"+i);e.open=openAcc.has(i);e.addEventListener("toggle",()=>{if(e.open)openAcc.add(i);else openAcc.delete(i);saveAcc();if(i==="mdl"&&e.open){mdlLoad()}else if(i==="lim"&&e.open){limLoad()}else if(i==="slk"&&e.open){slLoad()}})});mdlLoad();
 if(openAcc.has("lim"))limLoad();
+if(openAcc.has("slk"))slLoad();
 const PCOL=["#5aa9ff","#3ecf8e","#f5b041","#b79cf6","#2dd4bf","#ff6b6b","#c678dd","#e5c07b","#8a93a3"],tk=n=>n>=1e9?(n/1e9).toFixed(2)+"B":n>=1e6?(n/1e6).toFixed(1)+"M":n>=1e3?(n/1e3).toFixed(0)+"K":""+n;
 const OTHER=0.01;
 function pie(ms){
@@ -5078,6 +5309,7 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/subs"): body, ct = json.dumps({**subs_month(), "presets": {k: {i: {"name": n, "usd": p} for i, (n, p) in v.items()} for k, v in PRESETS.items()}}).encode(), "application/json"
         elif self.path.startswith("/api/models"): body, ct = json.dumps(models_get()).encode(), "application/json"
         elif self.path.startswith("/api/limits"): body, ct = json.dumps(limits_read()).encode(), "application/json"   # Settings > Spend & limits (#926)
+        elif self.path.startswith("/api/slack"): body, ct = json.dumps(slack_read(slack_file())).encode(), "application/json"   # Settings > Communication (#924)
         elif self.path.startswith("/api/speed"): body, ct = json.dumps(speed()).encode(), "application/json"
         elif self.path.startswith("/api/load"): body, ct = json.dumps(load_payload()).encode(), "application/json"
         elif self.path.startswith("/api/status"): body, ct = json.dumps(status_payload()).encode(), "application/json"
@@ -5122,7 +5354,7 @@ class H(BaseHTTPRequestHandler):
             if not (a.tailnet or own_origin(self)) or "json" not in (self.headers.get("Content-Type") or ""): return self.refuse("forbidden")
             return self.dash("POST", raw)
         if self.path.split("?", 1)[0] == "/api/sessions/send": return self.send_to_session(a)
-        ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote", "/api/limits") and (a.tailnet or own_origin(self)) and "json" in (self.headers.get("Content-Type") or "")
+        ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote", "/api/limits", "/api/slack") and (a.tailnet or own_origin(self)) and "json" in (self.headers.get("Content-Type") or "")
         try:
             raw = self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 1 << 20))   # read before any answer: a refusal that leaves the body unread resets the connection; the models panel posts back ~20 KB of read-only fields (#684)
             if not ok: out = {"err": "forbidden"}
@@ -5130,6 +5362,7 @@ class H(BaseHTTPRequestHandler):
                 body = json.loads(raw or b"{}")
                 if self.path == "/api/promote": out = promote(body.get("issue")) if isinstance(body, dict) else {"err": "bad request"}   # the owner's move (#560)
                 elif self.path == "/api/limits": out = limits_set(body)   # Settings > Spend & limits (#926)
+                elif self.path == "/api/slack": out = slack_set(body)   # Settings > Communication (#924)
                 else: out = (plans_set if self.path == "/api/plans" else models_set)(body)
         except Exception as e: out = {"err": "bad request"}
         if not a.allowed and a.tailnet: return self.refuse(a.reason)
