@@ -49,7 +49,31 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   suite=${SG_PROMOTE_SUITE:-"$py -m ruff check squad tests && $py -m mypy squad && $py -m pytest -p no:deepeval -n ${SG_PROMOTE_WORKERS:-$(sg_battery_workers)} && $py -m pytest -p no:deepeval -p no:xdist"}
   out=$state/promote-suite-${tip:0:12}.log
   cores2=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 1); lim2=${SG_PROMOTE_LOAD_LIMIT:-$cores2}
-  if ! (cd "$tree" && bash -c "$suite") > "$out" 2>&1; then
+  # ADR-0157: a proof is bounded. Past its reserve bound (30 minutes) the reserve lifts and the proof keeps running, so the
+  # loop dispatches beside it; past its deadline (two hours) the suite and every child it started are killed, and the tip is
+  # recorded indeterminate: not tested, no promotion, no gate status, and no refusal, so a later pass retries it.
+  rbound=${SG_PROMOTE_RESERVE_SECONDS:-1800}; dline=${SG_PROMOTE_DEADLINE_SECONDS:-7200}
+  kill_tree() { local p=$1 c; for c in $(pgrep -P "$p" 2>/dev/null); do kill_tree "$c"; done; kill "$p" 2>/dev/null; }
+  s0=$(date +%s); (cd "$tree" && bash -c "$suite") > "$out" 2>&1 & spid=$!
+  rc=0; relieved=
+  while kill -0 "$spid" 2>/dev/null; do
+    el=$(( $(date +%s) - s0 ))
+    if [ -z "$relieved" ] && [ "$el" -ge "$rbound" ]; then
+      relieved=1; rm -f "$state/promote-reserve"
+      echo "$(date -u +%FT%TZ) promote-pass: $tip passed its ${rbound}s reserve bound: the reserve lifts, the loop works beside the proof" >> "$log"
+    fi
+    [ "$el" -ge "$dline" ] && { rc=124; kill_tree "$spid"; break; }
+    sleep 5
+  done
+  if [ "$rc" = 124 ]; then wait "$spid" 2>/dev/null; else wait "$spid"; rc=$?; fi
+  if [ "$rc" = 124 ]; then
+    kill "$mon" 2>/dev/null; wait "$mon" 2>/dev/null
+    printf '%s\t%s\t%s\n' "$(date +%s)" "$tip" "$dline" > "$state/promote-indeterminate.$$" \
+      && mv "$state/promote-indeterminate.$$" "$state/promote-indeterminate"
+    echo "$(date -u +%FT%TZ) promote-pass: $tip not tested: the proof passed its ${dline}s bound and was killed" >> "$log"
+    echo "promote-pass: $tip not tested: the proof passed its ${dline}s bound and was killed"
+    exit 1; fi
+  if [ "$rc" != 0 ]; then
     kill "$mon" 2>/dev/null; wait "$mon" 2>/dev/null
     read -r peak mean < <(awk '{ if ($1 + 0 > p) p = $1 + 0; s += $1 + 0; n++ } END { printf "%d %.2f", p, (n ? s / n : 0) }' "$samples" 2>/dev/null)
     peak=${peak:-0}; mean=${mean:-0}
