@@ -211,6 +211,7 @@ squad/sandbox.py	tests/test_sandbox.py
 squad/scaffold.py	tests/test_scaffold.py
 squad/sdk_adapter.py	tests/test_sdk_adapter.py
 squad/session.py	tests/test_session.py
+squad/runners/dispatch.py	tests/test_dispatch.py
 squad/setup.py	tests/test_setup.py
 squad/skillpath.py	tests/test_skillpath.py
 squad/skills.py	tests/test_skills.py
