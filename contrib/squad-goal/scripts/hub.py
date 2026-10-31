@@ -2633,7 +2633,16 @@ def board():
         if sc: row["sc"] = sc
         ho = holder_text(i)                      # the run that holds the card, read from the seam (#241)
         if ho: row["ho"] = ho
+        if (i.get("h") or {}).get("run"): row["hr"] = i["h"]["run"]   # the run id the sheet selects its cards by (#919)
         by.setdefault(st, []).append(row)
+    # The reverse of `blocked by`, one map so the view holds no rule of its own (ADR-0137, #919): a card carries the cards
+    # it blocks, and the sheet renders that served fact.
+    allrows = [r for rs in by.values() for r in rs]
+    blocks = {}
+    for r in allrows:
+        for b in r.get("b") or []: blocks.setdefault(b, []).append(r["n"])
+    for r in allrows:
+        if r["n"] in blocks: r["bl"] = sorted(blocks[r["n"]])
     names = ORDER + sorted(n for n in by if n not in ORDER)   # every shipped column shows, even at 0; a user column follows
     def wave(x):   # `wave:NN` label first, then issue number; cards with no wave go last
         w = [int(m.group(1)) for l in x["l"] for m in [re.match(r"wave:(\d+)$", l)] if m]
@@ -2655,6 +2664,16 @@ def board():
     # The lane carries the pull requests only (#440): a work branch has no lane and no other view. Each row names its own
     # kind, so the page reads a pull request by the row, never by the lane's name. An empty lane is still served, `n` 0.
     open_prs = [p for p in prs if p["kind"] == _columns_module.PR_KIND]
+    # The open pull requests that close a card, on that card's row (#919): the sheet names the PR and its CI from served
+    # facts, the same reverse lookup `blocks` makes, never from a rule in the view (ADR-0137).
+    closes = {}
+    for x in open_prs:
+        for n in x.get("cl") or []:
+            closes.setdefault(n, []).append({"n": x["n"], "t": x["t"], "st": (x.get("ps") or [None, None])[1] if isinstance(x.get("ps"), list) else None,
+                                             "ci": x.get("rollup"), "r": x.get("r") or REPO})
+    for g in groups:
+        for r in g["items"]:
+            if r["n"] in closes: r["prf"] = sorted(closes[r["n"]], key=lambda p: p["n"])
     # A count of one or more is a true lower bound even when a repository failed; a zero is a claim about every repository,
     # so beside a failed read it is `?`, the word the strip uses for a fact not read, never a count (#851).
     count = "?" if not open_prs and perr else len(open_prs)

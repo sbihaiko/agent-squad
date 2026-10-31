@@ -98,3 +98,40 @@ def test_a_graphql_read_that_fails_leaves_the_plain_body_and_never_the_panel_err
     d = mod.issue_detail(7)
     assert "err" not in d, "a failed rendered read is not a failed issue read"
     assert d["html"] == "" and d["body"] == "a body, plain", d
+
+
+# --- the card data the page already holds, served on the row -------------------------------------------------------------
+
+def _item(n, title="a ticket", status="Todo", **extra):
+    return {"n": n, "t": title, "s": "open", "st": status, "l": ["wave:1"], **extra}
+
+
+def _row(data, n):
+    return next(x for g in data["groups"] for x in g["items"] if x["n"] == n)
+
+
+def test_the_board_names_the_cards_this_one_blocks(hub):
+    """`blocks` is the reverse of `blocked by`, so the sheet needs no rule of its own (ADR-0137)."""
+    mod, _ = hub
+    mod.board_cache["items"] = [_item(910), _item(911, b=[910]), _item(912, b=[910])]
+    data = mod.board()
+    assert _row(data, 910)["bl"] == [911, 912], "the card carries the cards it blocks"
+    assert not _row(data, 911).get("bl"), "a card that blocks nothing carries no row"
+
+
+def test_the_board_names_the_run_that_holds_a_card(hub):
+    mod, _ = hub
+    mod.board_cache["items"] = [_item(920, status="Doing", h={"run": "run-20261031-132937-e1eead", "started": "2026-10-31T10:00:00Z"})]
+    row = _row(mod.board(), 920)
+    assert row["hr"] == "run-20261031-132937-e1eead", row
+    assert row["ho"].startswith("held by run-20261031-132937-e1eead"), row
+
+
+def test_the_board_names_the_pull_request_that_closes_a_card(hub):
+    mod, _ = hub
+    mod.board_cache["items"] = [_item(930)]
+    mod.board_cache["prs"] = [{"n": 940, "t": "the fix", "u": "2026-10-31T10:00:00Z", "ps": ["running", "CI running"],
+                               "rollup": "pass", "cl": [930], "h": "a" * 40, "ci": ["success"], "r": "x/y", "facts": True}]
+    prf = _row(mod.board(), 930)["prf"]
+    assert [p["n"] for p in prf] == [940], prf
+    assert prf[0]["ci"] == "pass" and prf[0]["st"], prf
