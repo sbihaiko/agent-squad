@@ -2759,6 +2759,25 @@ CFD_RANGES = [("7", 7), ("30", 30), ("90", 90), ("all", None)]   # the cumulativ
 LEAD_TIMEFRAMES = [("7", 7), ("14", 14), ("30", 30), ("90", 90), ("180", 180), ("all", None)]   # the control chart presets (#900)
 
 
+def lead_rows():
+    """The closed-card rows the lead-time arithmetic reads, one per board item (#900)."""
+    return [{"n": i["n"], "column": _columns_module.view_column(i["st"], str(i["s"]).lower() == "closed", i.get("l"), i.get("cr"))[0],
+             "reason": _leadtime.NOT_DELIVERED if _columns_module.not_planned(i.get("cr")) else None,   # the chart's own word (#921)
+             "c": i.get("c") if str(i["s"]).lower() == "closed" else None, "o": i.get("o"), "t": i.get("t", "")} for i in board_cache["items"]]
+
+
+def lead_zoom(query):
+    """The control chart over a dragged range: `from` and `to` are ISO datetimes, `scale` is jira or log (#900)."""
+    q = urllib.parse.parse_qs(query)
+    try:
+        start, end = (dt.datetime.fromisoformat(q[k][0]) for k in ("from", "to"))
+    except (KeyError, IndexError, ValueError):
+        return {"error": "bad range: from and to are ISO datetimes"}
+    start, end = (m if m.tzinfo else m.replace(tzinfo=dt.UTC) for m in (start, end))
+    if end <= start: return {"error": "bad range: to is not after from"}
+    return _leadtime.control_chart(lead_rows(), log=q.get("scale", ["jira"])[0] == "log", now=dt.datetime.now(dt.UTC), start=start, end=end)
+
+
 def flow_charts():
     """The two diagrams' numbers, computed here from board_cfd and board_leadtime; the page draws them and computes none."""
     path = _flow.history_path(BOARD, REPO)
@@ -2782,9 +2801,7 @@ def flow_charts():
                 "bands": [{"name": n, "lower": cut(values(n, 0)), "upper": cut(values(n, 1)),
                            "count": [extents[d][n][1] - extents[d][n][0] if d in extents else None for d in window]}
                           for n in FLOW_BANDS] if kept else []}
-    rows = [{"n": i["n"], "column": _columns_module.view_column(i["st"], str(i["s"]).lower() == "closed", i.get("l"), i.get("cr"))[0],
-             "reason": _leadtime.NOT_DELIVERED if _columns_module.not_planned(i.get("cr")) else None,   # the chart's own word (#921)
-             "c": i.get("c") if str(i["s"]).lower() == "closed" else None, "o": i.get("o"), "t": i.get("t", "")} for i in board_cache["items"]]
+    rows = lead_rows()
     lead = _leadtime.lead_time(rows)
     now = dt.datetime.now(dt.UTC)
     control = {scale: {key: _leadtime.control_chart(rows, timeframe=days, log=scale == "log", now=now)
@@ -3254,7 +3271,7 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #bcharts{margin-left:8px}#bcharts button{font-size:var(--fs-min)}#board.off #bcharts,#board.off #flowov{display:none}
 #flowov{position:absolute;inset:0;z-index:4;background:var(--panel);display:flex;flex-direction:column;overflow:auto}#flowov[hidden]{display:none}
 #flowh{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel)}
-#flowb{padding:10px;font-size:var(--fs-min)}#flowb svg{width:100%;height:auto;display:block;margin:6px 0}#flowb .fnote,#flowb .fhead{color:var(--mute);margin:4px 0}#flowb .fhead b{color:var(--fg,inherit)}
+#flowb{padding:10px;font-size:var(--fs-min)}#flowb svg{width:100%;height:auto;display:block;margin:6px 0;user-select:none;touch-action:pan-y}#flowb .fnote,#flowb .fhead{color:var(--mute);margin:4px 0}#flowb .fhead b{color:var(--fg,inherit)}
 #flowb .flg{margin-right:10px;white-space:nowrap}#flowb .flg i{display:inline-block;width:9px;height:9px;margin-right:4px;vertical-align:middle;border-radius:2px}
 #bbody .ah{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);cursor:pointer;font-weight:600;position:sticky;top:34px;background:#1b212b;z-index:1}   /* the same gap as the docked header: `Todo0` is never a reading, in either rendering (#1809) */
 #bbody .ah .n{background:#2a303b;border-radius:9px;padding:0 8px;font-weight:400}
@@ -3855,13 +3872,16 @@ const flowCFD=c=>{const sel=`<label class=fhead>Range <select id=cfdr>${CFD_R.ma
   return sel+`<svg viewBox="0 0 ${flowW} ${flowH}">${c.bands.map(polys).join("")}${cfdAxis(c)}${hover}</svg>`+
     `<p class=fnote>history from ${esc(c.start)} UTC</p><p>${c.bands.map(b=>`<span class=flg><i style="background:${COLORS[b.name]||"#888"}"></i>${esc(b.name)}</span>`).join("")}</p>`;};
 const EXREASON={not_planned:"closed as not planned",abandoned:"closed as abandoned",open:"still open",no_opened:"no opened date"};   // the cards the chart leaves out, in words (#921)
-let LT={tf:"30",log:false,pick:null};   // the control chart's timeframe, its scale, and the cluster listed under it (#900)
+let LT={tf:"30",log:false,pick:null,zc:null,zr:null,rng:null,tok:0,noclick:false};   // the control chart's timeframe, its scale, the cluster listed under it, and a drag zoom: the hub's chart over zr=[from,to] (#900)
+const ltSpan=(r,a,b)=>{const t0=Date.parse(r.start),t1=Date.parse(r.end),at=f=>new Date(t0+f*(t1-t0)).toISOString();return [at(a<0?0:a),at(b>1?1:b)]};   // plot fractions to the dates they name (#900)
 const LT_TF=[["7","Past week"],["14","Past 2 weeks"],["30","Past month"],["90","Past 3 months"],["180","Past 6 months"],["all","All"]];
 const ltX=x=>flowP+x*(flowW-2*flowP),ltY=y=>flowH-flowP-y*(flowH-2*flowP);
 const ltLine=(v,col,dash,name)=>v?`<line x1=${flowP} x2=${flowW-flowP} y1=${ltY(v.y)} y2=${ltY(v.y)} stroke="${col}" stroke-width=2${dash?` stroke-dasharray="${dash}"`:""}><title>${esc(name)} ${esc(v.text)}</title></line>`:"";
 const ltChart=c=>{const n=c.dots.length,base=flowH-flowP,ink="#b8c0cf",mute="var(--mute)";
   const ctl=`<p class=fhead><label>Timeframe <select id=ltr>${LT_TF.map(([k,v])=>`<option value=${k}${LT.tf===k?" selected":""}>${v}</option>`).join("")}</select></label> `+
-    `<label>Scale <select id=lts><option value=jira${LT.log?"":" selected"}>Jira scale</option><option value=log${LT.log?" selected":""}>Log scale</option></select></label></p>`;
+    `<label>Scale <select id=lts><option value=jira${LT.log?"":" selected"}>Jira scale</option><option value=log${LT.log?" selected":""}>Log scale</option></select></label> `+
+    `<button id=ltz${LT.zc?"":" disabled"} title="drag across the plot to zoom to those dates">Reset zoom</button></p>`;
+  LT.rng=c.range;
   const note=`<p class=fnote>${esc(c.text)}</p>`;
   if(!n)return ctl+note+"<p class=fnote>no closed card in this timeframe</p>";
   const up=c.dots.map(d=>`${ltX(d.x)},${ltY(d.rolling.y_high)}`),low=[...c.dots].reverse().map(d=>`${ltX(d.x)},${ltY(d.rolling.y_low)}`);
@@ -3878,16 +3898,30 @@ const ltChart=c=>{const n=c.dots.length,base=flowH-flowP,ink="#b8c0cf",mute="var
   const legend=`<p class=flg><span><i style="background:var(--s3)"></i>Rolling average (${c.window.size} issues, centered)</span><span><i style="background:var(--s3);opacity:.3"></i>Standard deviation</span><span><i style="background:var(--s6)"></i>Average</span><span><i style="background:var(--ok)"></i>Median</span><span><i style="background:var(--s5)"></i>p85</span></p>`;
   const pk=LT.pick!=null&&c.clusters[LT.pick]?c.clusters[LT.pick]:null;
   const rows=pk?`<table class=rt><thead><tr><th>Issue</th><th>Title</th><th>Elapsed</th><th>Closed</th></tr></thead><tbody>${pk.dots.map(d=>`<tr data-o=${d.n} style="cursor:pointer"><td>#${d.n}</td><td>${esc(d.title)}</td><td>${esc(d.text)}</td><td>${esc(d.closed)}</td></tr>`).join("")}</tbody></table>`:"";
-  return ctl+S+legend+`<svg viewBox="0 0 ${flowW} ${flowH}">${axes}${ys}${xs}${band}${roll}${lines}${dots}</svg>`+note+rows;};
+  return ctl+S+legend+`<svg data-lt viewBox="0 0 ${flowW} ${flowH}">${axes}${ys}${xs}${band}${roll}${lines}${dots}</svg>`+note+rows;};
 const flowLead=l=>{const S=l.summary,ex=l.excluded.map(e=>`${e.count} ${esc(EXREASON[e.reason]||e.reason)}`).join(", ");
   const head=`<p class=fhead><b>${esc(l.measure)}</b> · window ${l.window.size} ${esc(l.window.unit)} · excluded ${l.excluded_total}${ex?" ("+ex+")":""}</p>`;
   if(!S)return head+"<p class=fnote>no closed card yet</p>";
-  return head+ltChart(l.control[LT.log?"log":"jira"][LT.tf]);};
+  return head+ltChart(LT.zc||l.control[LT.log?"log":"jira"][LT.tf]);};
 const drawFlow=()=>{const cfd=FLOWK==="cfd";$("#flowt").textContent=cfd?"Cumulative flow":"Lead time";
   $("#flowb").innerHTML=!FLOWD?"<p class=fnote>the board has not loaded yet</p>":cfd?flowCFD(FLOWD.cfd.ranges[CF.r]):flowLead(FLOWD.lead)};
 const flowOpen=k=>{FLOWK=k;$("#flowov").hidden=false;drawFlow()};
-$("#flowb").onchange=e=>{if(e.target.id==="cfdr"){CF.r=e.target.value;drawFlow();return}if(e.target.id==="ltr")LT.tf=e.target.value;else if(e.target.id==="lts")LT.log=e.target.value==="log";else return;LT.pick=null;drawFlow()};
-$("#flowb").onclick=e=>{const k=e.target.closest("circle[data-k]");if(k){LT.pick=+k.dataset.k;drawFlow();return}const r=e.target.closest("tr[data-o]");if(r)showIssue(+r.dataset.o,"__REPO__")};
+const ltZoom=async(f,t)=>{const tok=++LT.tok;try{const c=await (await fetch(`/api/leadtime?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}&scale=${LT.log?"log":"jira"}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;LT.zr=[f,t];LT.pick=null;drawFlow()}catch(e){}};   // the hub recomputes the chart for the dragged range (#900)
+const ltPx=(e,s)=>{const r=s.getBoundingClientRect();return (e.clientX-r.left)/r.width*flowW};
+const ltClamp=x=>x<flowP?flowP:x>flowW-flowP?flowW-flowP:x,ltLo=(p,q)=>p<q?p:q,ltHi=(p,q)=>p<q?q:p;
+let LTD=null;   // the drag across a control chart's plot in progress (#900)
+$("#flowb").onpointerdown=e=>{const s=e.target.closest("svg[data-lt]");LT.noclick=false;if(!s||e.button!==0||!LT.rng)return;const x=ltClamp(ltPx(e,s));LTD={s,x0:x,x1:x,moved:false}};
+document.addEventListener("pointermove",e=>{if(!LTD)return;const x1=ltClamp(ltPx(e,LTD.s));LTD.x1=x1;const dx=x1-LTD.x0;if(!LTD.moved&&dx*dx<36)return;LTD.moved=true;
+  let sel=LTD.s.querySelector("rect.ltsel");if(!sel){sel=document.createElementNS("http://www.w3.org/2000/svg","rect");sel.setAttribute("class","ltsel");sel.setAttribute("y",flowP-10);sel.setAttribute("height",flowH-2*flowP+10);sel.setAttribute("fill","var(--s3)");sel.setAttribute("fill-opacity",".18");sel.setAttribute("pointer-events","none");LTD.s.appendChild(sel)}
+  sel.setAttribute("x",ltLo(LTD.x0,x1));sel.setAttribute("width",dx<0?-dx:dx)});
+document.addEventListener("pointerup",()=>{const d=LTD;LTD=null;if(!d||!d.moved)return;d.s.querySelector("rect.ltsel")?.remove();LT.noclick=true;
+  const a=(ltLo(d.x0,d.x1)-flowP)/(flowW-2*flowP),b=(ltHi(d.x0,d.x1)-flowP)/(flowW-2*flowP);if(b-a<0.005||!LT.rng)return;const [f,t]=ltSpan(LT.rng,a,b);ltZoom(f,t)});
+$("#flowb").onchange=e=>{if(e.target.id==="cfdr"){CF.r=e.target.value;drawFlow();return}
+  if(e.target.id==="ltr"){LT.tf=e.target.value;LT.tok++;LT.zc=null;LT.zr=null;LT.pick=null;drawFlow();return}
+  if(e.target.id==="lts"){LT.log=e.target.value==="log";LT.pick=null;if(LT.zr){ltZoom(LT.zr[0],LT.zr[1]);return}drawFlow()}};
+$("#flowb").onclick=e=>{if(LT.noclick){LT.noclick=false;return}
+  if(e.target.id==="ltz"){LT.tok++;LT.zc=null;LT.zr=null;LT.pick=null;drawFlow();return}
+  const k=e.target.closest("circle[data-k]");if(k){LT.pick=+k.dataset.k;drawFlow();return}const r=e.target.closest("tr[data-o]");if(r)showIssue(+r.dataset.o,"__REPO__")};
 $("#bflow").onclick=()=>flowOpen("cfd");$("#blead").onclick=()=>flowOpen("lead");$("#flowx").onclick=()=>{$("#flowov").hidden=true};
 // flow-charts:end
 async function pollBoard(){lim.busy=1;try{const b=await (await fetch("/api/board")).json(),FLOW=/*BOARD_FLOW*/,   // development flow, left to right
@@ -4902,6 +4936,7 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/board"):
             try: body, ct = json.dumps(board()).encode(), "application/json"
             except ValueError as e: body, ct = json.dumps({"error": str(e)}).encode(), "application/json"
+        elif self.path.startswith("/api/leadtime"): body, ct = json.dumps(lead_zoom(self.path.partition("?")[2])).encode(), "application/json"   # the control chart over a dragged range (#900)
         elif self.path.startswith("/api/version"): body, ct = json.dumps({"v": BOOT}).encode(), "application/json"
         elif self.path.startswith("/api/subs"): body, ct = json.dumps({**subs_month(), "presets": {k: {i: {"name": n, "usd": p} for i, (n, p) in v.items()} for k, v in PRESETS.items()}}).encode(), "application/json"
         elif self.path.startswith("/api/models"): body, ct = json.dumps(models_get()).encode(), "application/json"
