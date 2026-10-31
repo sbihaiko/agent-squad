@@ -645,7 +645,7 @@ def refute(spec: int, premise: str, *, github, who: Reviewer, dry_run: bool = Fa
     before = state_of((found or {}).get("body") or "")
     if before is None:
         raise ValueError(f"no premise-check comment on spec {spec}")
-    rows = _parse_rows(found["body"])
+    rows = _parse_rows((found or {}).get("body") or "")
     if not any(r.premise == premise and r.state == "needs a probe" for r in rows):
         raise ValueError(f"{premise!r} was never recorded as needs a probe, so no probe settles it")
     asked = {q["premise"]: (n, q) for n, q in before["asked"].items()}
