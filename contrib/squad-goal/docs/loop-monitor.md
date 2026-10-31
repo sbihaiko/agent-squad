@@ -3,38 +3,50 @@
 The mandate for a session that watches the loop until the board's Todo column is empty.
 The owner starts it with `/goal /autonomy` and this document as the task; the goal hook keeps it running across turns.
 
-Monitor continuously until every Todo item is implemented and landed. Watch for stalls, slowness, CPU, kanban sync, token
-spend and wave age.
+Monitor continuously until every Todo item is implemented, landed, promoted into `stg` and published.
+Watch parallelism, delivery speed, runs against the cards in Doing, CPU, kanban sync, token spend and wave age — the
+20-minute check of `SKILL.md` §10 lists each number and where it is read.
 
 ## Priority rule: a defect in the loop is not the loop's work
 
 Classify the problem before any other action. If it sits in the loop's own machinery — `dispatch`, `autobug`,
-`autofrontier`, `childcc`, `wave.sh`, the age cap, `landing`, the review chain or `janitor` — it is never delegated to the
-loop.
+`autofrontier`, `childcc`, `wave.sh`, the age cap, `landing`, the review chain, `janitor`, the hub or the live copy — it is
+never delegated to the loop (ADR-0146).
 
-1. Stop the loop and keep dispatch off.
-2. Open an issue with the evidence, apply the label `loop-bug`, and move its card to Doing.
-3. Fix it yourself or with your own agents, test-first.
-4. Run the fast gate and push the fix to `dev`.
-5. Validate the fix, then close the issue.
+1. Open an issue with the evidence: the run, the log lines, the markers, the timestamps. Label it `loop-bug` (`loop-bug:landing` when the landing path is the defect). Card to Doing.
+2. Run the adversarial review with Fable before the first edit (Agent tool, model `fable`, stance challenger). It must name what else explains the evidence and which test separates the two. Record the ruling on the issue; a fix it refutes is not started.
+3. Stop the loop: `scripts/watchd.sh stop`, after checking for live work. Land first any finished run whose children entered its wave (`wave.sh land <run>`).
+4. Fix it yourself or with your own agents, test-first, in a worktree. Fast gate, not the full one. Land in `dev` with `Closes #n`.
+5. Promote `dev` into `stg` by one pull request, then publish the live copy from a tree on `stg` (`SKILL.md` §8 steps 4 and 5). The publish closes the issue — never close it by hand.
+6. Restart the loop, and confirm the first cycle prints no `LOOP STOP` and no `DISPATCH HOLD` for that issue.
 
-While any `loop-bug` issue is open, the loop stays stopped: no dispatch. Close the issue only after the fix is validated;
-dispatch may restart only when no `loop-bug` issue is open.
+While any `loop-bug` issue is open, the loop stays stopped: no dispatch. A plain `loop-bug` label stops intake only; it
+does not stop landings, and it does not stop the live runs.
 
-A product defect — repository code outside the loop's machinery — may go to the loop as usual.
+A product defect — repository code outside the loop's machinery — may go to the loop as usual, and the goal protection
+says to file it at once with the `bug` label and its card in Todo.
+
+## A trap is not a slow pass
+
+A trap is a line the loop prints unchanged for three cycles while no fact moves: the same `WATCH: <run> waits`,
+`BRANCHLAND WAIT`, `DISPATCH HOLD` or `LOOP STOP` naming the same subject, a `CCDEFER` or `dwait` counter that only grows,
+or a run whose `record.jsonl` mtime never moves. On a trap: file it, stop the loop, unwind what holds it — the marker in
+`auto/`, the lock in `$SG_STATE/locks`, the lease in `~/.cache/agent-squad/caps` — and requeue the issue with
+`wave.sh requeue <issue> <why>`. Name every marker you delete on the issue.
 
 ## On any problem
 
 1. Stop the loop and reproduce the defect.
 2. Open an issue with verifiable evidence: the run, the logs, the markers.
 3. Classify it, and follow the priority rule when it applies.
-4. Make sure the fix is implemented, validated and pushed to `dev`.
+4. Make sure the fix is implemented, validated and landed in `dev`.
 5. Update the loop state and the kanban, and remove every worktree you can remove safely.
 6. Review the whole state, and when no `loop-bug` issue is open, restart the loop and the monitoring.
 
 ## The same problem three times
 
 When one problem repeats three times or more, stop before another hand fix. Summarize the observed facts, never a
-hypothesis as a conclusion, and ask GPT-6-Astra or Grok 4.7 for an analysis. When neither answers, ask the owner.
+hypothesis as a conclusion, and put them to the Fable adversarial review before the next edit. When the review cannot
+settle it, ask the owner.
 
 The cycle ends only when every Todo item is implemented and landed, with no pending work that blocks the conclusion.

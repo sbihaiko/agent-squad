@@ -278,6 +278,7 @@ def test_on_this_machine_every_skill_a_door_opens_or_the_vendor_builder_copies_s
 
 
 @LIVE
+@pytest.mark.heavy
 def test_on_this_machine_every_command_the_ask_matt_router_names_is_registered_and_resolves_unless_optional():
     """The /ask-matt sequence, read from the copy a door opens: each skill it routes to is known, and found unless the manifest calls it optional."""
     hit = sp.resolve("ask-matt")
