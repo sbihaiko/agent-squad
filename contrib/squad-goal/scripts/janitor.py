@@ -326,6 +326,11 @@ def free_reaped(f, i):
             p.unlink(missing_ok=True)
         for p in leases: p.unlink(missing_ok=True)
     return marks
+def ccdefer_owner(fname):   # the run a `ccdefer-<run>-<child>` marker belongs to: the longest known run name that prefixes it. A child's
+    # own name may carry dashes, and one run's name may only start with another's, so the marker is never read as another run's (#945).
+    return next((m for m in sorted(names, key=len, reverse=True) if fname.startswith(f"ccdefer-{m}-")), None)
+
+
 for r in names:
     f = folder(r)
     if not f.exists():   # a child worktree can take its run folder with it; no missing folder owns an issue
@@ -353,6 +358,14 @@ for r in names:
         if i["idle"] > 3600:
             for q, (_, c) in procs.items():
                 if "dashboard_server" in c and str(f) in c: kill(q, f"dashboard of finished run {n}")
+        # A run with its verdict is over, so a deferral marker it left names a wait no later pass can end: childcc writes
+        # auto/ccdefer-<run>-<child> while a finished run's child still waits, and the wave reads it as a wait still owed
+        # (run-20261030-184206-f63e6b waited 2h30, #945, #931). The marker of a run that ended is dropped here, and named.
+        mks = [p for p in (st / "auto").iterdir() if ccdefer_owner(p.name) == n] if (st / "auto").is_dir() else []
+        if mks:
+            say(f"CCDEFER-DROPPED {n}: {len(mks)} deferral marker(s) of a finished run dropped ({', '.join(sorted(p.name for p in mks))}); the run is over, so no wave waits on it")
+            if not dry:
+                for p in mks: p.unlink(missing_ok=True)
         if i["landed"]: landed_n |= req_issues(f)
         keep.append(r); continue
     # A live run is one whose own session is inside its folder: the run's process, or a call it started. A helper the session
