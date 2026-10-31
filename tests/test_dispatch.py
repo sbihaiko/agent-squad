@@ -220,6 +220,32 @@ async def test_a_grandchild_gets_no_more_than_its_parents_remaining_spend(tmp_pa
 
 
 @pytest.mark.anyio
+async def test_a_child_that_names_no_spend_gets_the_projects_ceiling_never_its_envelope_max(tmp_path):
+    """#960: the project set max_budget_usd 4 and the envelope allowed 12; the router named no spend, and the child it
+    spawned took 12 while the router itself was held at 4. A grant left to the envelope is the smallest of that max and
+    the project's per-call ceiling."""
+    r = req(); r.pop("spend")    # the router names no spend, as it did in the run that died
+    def tweak(d):            # the envelope's own max, above the project ceiling the test sets
+        node(d, "route")["budget"]["spend"]["max"] = 12
+    eng = make(tmp_path, {"router": routed(r), "route.router.1": {"output": {}, "spend": 0.1}}, tweak=tweak,
+               project={"limits": {"max_budget_usd": 4}})
+    await eng.run()
+    assert [e["reservation"] for e in ev(tmp_path, "spawn_accepted")] == [4.0]
+
+
+@pytest.mark.anyio
+async def test_a_child_that_asks_above_the_projects_ceiling_is_refused_by_name(tmp_path):
+    """A request that names a spend over the project's ceiling is refused by that fact, not by the run's remainder."""
+    child1 = {"output": {"spawns": [req("diagnosing-bugs", tools=["Read"], spend=8.0, deadline=50)]}, "spend": 0.1}
+    def tweak(d):            # the envelope's own max, above the project ceiling the test sets
+        node(d, "route")["budget"]["spend"]["max"] = 12
+    eng = make(tmp_path, {"router": routed(req()), "route.router.1": child1}, tweak=tweak,
+               project={"limits": {"max_budget_usd": 4}})
+    await eng.run()
+    assert [r["reason"] for r in ev(tmp_path, "spawn_rejected")] == ["spend_over_ceiling"]
+
+
+@pytest.mark.anyio
 @pytest.mark.heavy
 async def test_max_children_per_entry_is_enforced(tmp_path):
     reqs = [req(f) for f in ("tdd", "diagnosing-bugs", "codebase-design", "tdd", "tdd")]

@@ -21,6 +21,11 @@ A budget is a stall cap and a spend cap, each with a minimum and a maximum ([ADR
 9. **A cap may also count tokens.** `run.spend_cap_tokens` caps the run, and `budget.spend.max_tokens` caps one call or one child. A token is input plus output, as the outcome records them (`tokens_in` plus `tokens_out`). The dollar cap stays valid, and both apply when both are set. Rules 2 and 5 hold in tokens: unknown tokens keep their grant reserved, and no entry or child starts when the run has no tokens left to grant. The SDK cannot stop a call on tokens, so a call may pass its token grant; the next entry then has less to fund. Gateway models burn a dollar cap unevenly, so tokens are the owner's measure for a child's work.
 10. **The validator refuses a graph whose run spend cap is below any agent node's spend minimum.** It also refuses an engine option that lowers the run cap below the first agent node's minimum.
 
+11. **A project ceiling bounds every child's grant, not only the node that names it.** A request that names no spend is
+    granted the least of the envelope's max and `max_budget_usd`; a request that names more than that ceiling is refused
+    `spend_over_ceiling`, before the remainder answers for it. A router held at the project's $4 spawned a child at the
+    envelope's $12 (#960).
+
 Rejected: a cap outcome of `needs-human`, because raising a cap is a graph edit and a changed graph cannot resume. Rejected: the floor as a `when`, because a `when` skips silently and the run could fold `completed` with no work done. Rejected: starting an entry below its minimum.
 
 ## Guard

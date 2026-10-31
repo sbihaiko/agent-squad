@@ -176,3 +176,9 @@ def test_a_childs_own_out_of_budget_claim_is_not_recorded_as_a_cap():    # #169:
     from squad import session
     res = type("R", (), {"output": {"status": "fail", "reasons": ["out_of_budget"]}})()
     assert session.agent_outcome({}, res, None) == ("fail", ["child_said_out_of_budget"], None)
+
+
+def test_a_childs_out_of_budget_sentence_is_a_claim_too():    # #960: the child wrote "out_of_budget: ..." and the run read as out_of_budget at $0.59 of $40
+    from squad import session
+    res = type("R", (), {"output": {"status": "fail", "reasons": ["out_of_budget: scope is too large for one session"]}})()
+    assert session.agent_outcome({}, res, None) == ("fail", ["child_said_out_of_budget: scope is too large for one session"], None)

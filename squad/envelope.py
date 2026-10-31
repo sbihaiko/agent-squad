@@ -39,7 +39,7 @@ def inside_workspace(w, roots):
     return False
 
 
-def normalize_request(dispatch, raw, vendor=skills.VENDOR, default_effort=None):
+def normalize_request(dispatch, raw, vendor=skills.VENDOR, default_effort=None, ceiling=None):
     """Fill the optional fields from the envelope. Return (request, errors). A key outside REQUEST_FIELDS is ignored: it narrows nothing, and one model's extra word must not cost the run its dispatch."""
     errs = [f"model_supplied_identity:{k}" for k in raw if k in IDENTITY_FIELDS]
     if not isinstance(raw.get("prompt"), str) or not raw.get("prompt"):
@@ -71,7 +71,7 @@ def normalize_request(dispatch, raw, vendor=skills.VENDOR, default_effort=None):
         "prompt": raw.get("prompt", ""), "skill": {"name": skill["name"], "version": skill.get("version", "")},
         "model": model, "effort": eff,
         "tools": list(raw.get("tools", a["tools"])), "stalls": raw.get("stalls", b["stalls"]["max"]),
-        "spend": raw.get("spend", b["spend"]["max"]), "spend_tokens": b["spend"].get("max_tokens"), "deadline": raw.get("deadline", dispatch["deadline"]),
+        "spend": raw.get("spend", _default_spend(b, ceiling)), "spend_tokens": b["spend"].get("max_tokens"), "deadline": raw.get("deadline", dispatch["deadline"]),
         "workspace": raw.get("workspace", a["workspaces"][0]), "inputs": list(raw.get("inputs", [])),
         "after": list(after),   # indexes of earlier requests in the same list; the engine turns them into child names
         **({"kind": kind} if "kind_models" in a else {}),
@@ -80,7 +80,14 @@ def normalize_request(dispatch, raw, vendor=skills.VENDOR, default_effort=None):
     return req, errs
 
 
-def limit_errors(req, disp, depth, parent_tools, parent_spend_left, parent_time_left=None, vendor=skills.VENDOR):
+def _default_spend(b, ceiling):
+    """What a request that names no spend is granted: the envelope's max, narrowed by the project's per-call ceiling.
+    A run died `out_of_budget` with the router held at the project's $4 and the child it spawned at the envelope's $12
+    (#960): a ceiling the run states bounds every child, not only the node that names it."""
+    return b["spend"]["max"] if ceiling is None else min(b["spend"]["max"], ceiling)
+
+
+def limit_errors(req, disp, depth, parent_tools, parent_spend_left, parent_time_left=None, vendor=skills.VENDOR, ceiling=None):
     """Return the rules a normalized request breaks. An empty list means it fits the envelope."""
     a, b = disp["allow"], disp["budget"]
     e = []
@@ -113,6 +120,8 @@ def limit_errors(req, disp, depth, parent_tools, parent_spend_left, parent_time_
         e.append("stalls_outside_budget")
     if not b["spend"]["min"] <= req["spend"] <= b["spend"]["max"]:
         e.append("spend_outside_budget")
+    if ceiling is not None and req["spend"] > ceiling:
+        e.append("spend_over_ceiling")   # a named spend over the project's ceiling, before the remainder answers for it
     if req["spend"] > parent_spend_left:
         e.append("spend_over_remainder")
     if req["deadline"] > disp["deadline"]:
@@ -124,8 +133,8 @@ def limit_errors(req, disp, depth, parent_tools, parent_spend_left, parent_time_
     return e
 
 
-def validate_request(disp, raw, depth, parent_tools, parent_spend_left, parent_time_left=None, vendor=skills.VENDOR, default_effort=None):
+def validate_request(disp, raw, depth, parent_tools, parent_spend_left, parent_time_left=None, vendor=skills.VENDOR, default_effort=None, ceiling=None):
     """Return (normalized request, errors). `vendor` is the engine's vendor/skills; `default_effort` is the engine's own
     default effort, what a request that names none runs at."""
-    req, errs = normalize_request(disp, raw, vendor, default_effort)
-    return req, errs + limit_errors(req, disp, depth, parent_tools, parent_spend_left, parent_time_left, vendor)
+    req, errs = normalize_request(disp, raw, vendor, default_effort, ceiling)
+    return req, errs + limit_errors(req, disp, depth, parent_tools, parent_spend_left, parent_time_left, vendor, ceiling)

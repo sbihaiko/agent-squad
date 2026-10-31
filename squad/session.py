@@ -16,7 +16,16 @@ from squad.budget import measured_tokens
 
 # A reason the model writes about itself is a claim, not an engine fact: the contract tells a child to answer `out_of_budget` when it
 # gives up, and it did so at $0.36 of a $1.50 cap. The engine's own cap reasons (CAP_REASON) stay apart from it.
+# A child writes the reason as a sentence, so the claim is the prefix: `out_of_budget: scope is too large` was read as the
+# run's own budget fact and ended a run at $0.59 of $40 (#960). The child's words after the colon are kept.
 CHILD_CLAIM = {"out_of_budget": "child_said_out_of_budget"}
+
+
+def _claim(reason):
+    """The claim map read as a prefix: `out_of_budget` and `out_of_budget: <the child's words>` are one claim."""
+    if isinstance(reason, str) and reason.split(":", 1)[0].strip() == "out_of_budget":
+        return "child_said_out_of_budget" + reason[len("out_of_budget"):]
+    return reason
 PROVISIONAL = "provisional:"     # the autonomy fragment tells an agent to prefix each decision it made alone
 CAP_REASON ={"stall_cap": "node_stall_cap", "spend_cap": "node_spend_cap", "output_cap": "node_output_cap"}
 
@@ -249,5 +258,5 @@ def agent_outcome(node, res, cap_reason):
         return "fail", ["artifact_invalid"], None
     if status == "pass":      # a pass keeps only its provisional decisions; every other reason on a pass is dropped as before
         return status, [r for r in out.get("reasons", []) if isinstance(r, str) and r.startswith(PROVISIONAL)], cap_reason
-    reasons = [CHILD_CLAIM.get(r, r) for r in out.get("reasons", [status])]
+    reasons = [_claim(r) for r in out.get("reasons", [status])]
     return status, reasons, cap_reason
