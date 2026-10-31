@@ -8,6 +8,7 @@ the read is one GraphQL call. The route is driven over HTTP through the hub; no 
 import http.client
 import importlib.util
 import json
+import re
 import sys
 import threading
 from http.server import ThreadingHTTPServer
@@ -167,3 +168,69 @@ def test_the_board_names_the_pull_request_that_closes_a_card(hub):
     prf = _row(mod.board(), 930)["prf"]
     assert [p["n"] for p in prf] == [940], prf
     assert prf[0]["ci"] == "pass" and prf[0]["st"], prf
+
+
+# --- the desktop sheet: one side panel that pushes the board --------------------------------------------------------------
+
+SHEET_IDS = ("tk", "tkchips", "tknav", "tkset", "tkb", "tkgh", "tktodo", "tkrel", "tkx")
+SHEET_FIELDS = ("Column", "Labels", "Blocked by", "Blocks", "Runs", "PR · CI", "Opened")
+
+
+def test_the_served_page_carries_the_ticket_sheet(hub):
+    _, port = hub
+    status, ct, body = get(port, "/")
+    assert status == 200 and ct.startswith("text/html")
+    for ident in SHEET_IDS:
+        assert re.search(rf'id=["\']?{ident}["\'\s>]', body), f"the served page has no #{ident}"
+
+
+def test_the_sheet_is_a_side_panel_that_pushes_the_board(hub):
+    page = hub[0].PAGE
+    assert "#tk{position:fixed;top:0;right:0;bottom:0;width:420px" in page, "the sheet is a side panel on the right"
+    assert "body.tkopen #win{margin-right:420px}" in page, "the sheet pushes the page instead of covering it"
+    assert "body.tkopen #board{width:300px}" in page, "the board narrows while the sheet is open"
+    assert "scrollIntoView" in page, "the selected card is scrolled into view"
+
+
+def test_the_sheet_shows_every_field_the_card_carries(hub):
+    page = hub[0].PAGE
+    for field in SHEET_FIELDS:
+        assert f">{field}</b>" in page, f"the sheet shows no {field!r} row"
+
+
+def test_the_sheet_renders_the_served_html_and_never_frames_github(hub):
+    page = hub[0].PAGE
+    line = next(l for l in page.splitlines() if "<div id=tk " in l)
+    assert "<iframe" not in line, "the sheet holds no frame"
+    assert "d.html" in page, "the body is the rendered HTML the route serves"
+    assert "d.last" in page, "the last comment is rendered from the same read"
+
+
+def test_the_todo_button_is_drawn_only_for_a_served_promotable_card(hub):
+    page = hub[0].PAGE
+    assert "$(\"#tktodo\").hidden" in page, "the → Todo button reads the served promotable fact"
+    assert "c.pm" in page, "the button is shown for a card the board marks promotable, never by a column rule of its own"
+
+
+def test_the_sheet_steps_a_selection_with_buttons_chips_and_the_keys(hub):
+    page = hub[0].PAGE
+    assert 'e.key==="j"' in page and 'e.key==="k"' in page, "j and k step the selection"
+    assert "ArrowRight" in page and "ArrowLeft" in page, "the arrow keys step the selection"
+    assert " of ${nav.length}" in page, "the sheet names where the card stands in its selection"
+    assert "data-o" in page and "tkset" in page, "the number chips pick a card"
+
+
+def test_escape_and_the_close_button_close_the_sheet_and_clear_the_selection(hub):
+    page = hub[0].PAGE
+    assert "function closeSheet(" in page, "one close rule"
+    assert 'e.key==="Escape"' in page and "closeSheet()" in page, "Escape closes the sheet"
+    body = page[page.index("function closeSheet("):]
+    body = body[:body.index("\n")]
+    for clear in ("tkopen", "nav=[]", "hit"):
+        assert clear in body, f"closing the sheet does not clear {clear!r}"
+
+
+def test_a_blocker_link_opens_that_ticket_in_the_same_sheet(hub):
+    page = hub[0].PAGE
+    assert 'a[data-o]' in page, "a blocker link opens the card it names"
+    assert "openCard(" in page, "the link opens the same sheet, never a new tab"
