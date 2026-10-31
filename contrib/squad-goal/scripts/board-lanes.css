@@ -29,3 +29,11 @@ body.dockb #bbody.lanes{display:block;overflow:auto}
 #bbody .more{font:inherit;font-size:var(--fs-min,13px);width:100%;min-height:28px;border:1px dashed var(--line);border-radius:6px;background:transparent;color:var(--acc,#5aa9ff);padding:2px 8px;cursor:pointer}
 #lcall,#lexp{font:inherit;font-size:var(--fs-min,13px);min-height:28px}
 #lhd{vertical-align:middle}
+#bhead details.fsel{position:relative;display:inline-block;font-size:var(--fs-min,13px)}
+#bhead details.fsel>summary{list-style:none;cursor:pointer;border:1px solid var(--line);border-radius:4px;padding:4px 10px;min-height:28px;background:#0f1115;color:var(--fg);white-space:nowrap}
+#bhead details.fsel>summary::-webkit-details-marker{display:none}
+#bhead details.fsel.set>summary{color:var(--warn,#e3b341);border-color:#6b5223}
+#bhead .fpop{position:absolute;right:0;top:calc(100% + 4px);z-index:20;min-width:200px;max-height:320px;overflow-y:auto;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:6px;box-shadow:0 6px 18px #0008}
+#bhead .fpop label{display:flex;gap:6px;align-items:center;padding:4px;border-radius:4px;cursor:pointer;white-space:nowrap;min-height:28px}
+#bhead .fpopb{display:flex;justify-content:flex-end;padding:0 2px 6px;margin-bottom:4px;border-bottom:1px solid var(--line)}
+#bhead .fpopb button{font:inherit;font-size:var(--fs-min,13px);min-height:28px}

@@ -395,7 +395,7 @@ def test_no_poll_path_writes_the_open_state():
         "the 3 s run poll": _slice(SRC, "async function poll(", "function bars("),
         "the run selector": _slice(SRC, "function selectNew(", "async function poll("),
         "the stats poll": _slice(SRC, "async function pollStats(", "pollStats();setInterval"),
-        "the 5 s board poll": _slice(SRC, "async function pollBoard(", '$("#lfl").onchange'),
+        "the 5 s board poll": _slice(SRC, "async function pollBoard(", '$("#lmode").onchange'),
         "the version poll": _slice(SRC, "let ver=null;", "</script>"),
     }
     for name, body in slices.items():

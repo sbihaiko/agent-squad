@@ -137,11 +137,10 @@ def test_the_label_rule_groups_by_prefix_and_joins_the_groups_by_and():
                        'labelOk(["a:1","a:2","b"],"any",{l:["a:2","b"]})]') == [True, True, False, False, True]
 
 
-def test_the_filter_rules_are_one_text_for_both_pages(hub):
+def test_the_mobile_page_keeps_the_shared_filter_rules_and_the_desktop_holds_no_copy(hub):
     text = FILTER_JS.read_text()
-    assert text in hub.PAGE, "the desktop board does not carry the shared filter rules"
     assert text in hub.MOBILE_PAGE, "the mobile page does not carry the shared filter rules"
-    assert hub.PAGE.count("const specMode=") == 1, "the desktop board holds its own copy of the Specs rule"
+    assert "const specMode=" not in hub.PAGE and "const labelOk=" not in hub.PAGE, "the desktop board holds a copy of the mobile rule"
 
 
 def test_the_gesture_and_filter_are_inlined_not_fetched(hub):

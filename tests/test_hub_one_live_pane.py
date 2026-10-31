@@ -101,12 +101,6 @@ def test_selecting_another_pane_moves_the_one_live_stream_to_it(hub):
     assert st["moved"]["kept"] == 1                               # the old pane's frame is dropped, not hidden
 
 
-def test_a_pane_that_is_not_shown_holds_no_frame_at_all(hub):
-    st = _drive(hub, """N=4;runs=mk(9);slots=runs.slice(0,N).map(r=>r.id);drawMain();press(1);out.moved=state();
-      bo.max=true;liveSync();out.maxed=state();bo.max=false;liveSync();out.back=state();""")
-    assert st["maxed"]["live"] == [] and st["maxed"]["framed"] == 0 and st["maxed"]["kept"] == 0   # out of sight: no frame, no stream
-    assert st["back"]["live"] == ["/dash/run-2/"]       # shown again: the focused pane follows its run again
-
 
 def test_an_unfocused_pane_shows_the_state_the_page_already_has_and_refreshes_without_a_frame(hub):
     st = _drive(hub, """N=2;runs=mk(3);slots=["run-1","run-2"];drawMain();out.a=state();
@@ -132,20 +126,17 @@ const out={};
 out.one=embedPlan(["a","b","c"],"b",false);
 out.none=embedPlan(["a","b","c"],null,false);
 out.gone=embedPlan(["a","b","c"],"z",false);
-out.max=embedPlan(["a","b","c"],"b",true);
 out.empty=embedPlan([],null,false);
 out.budget=LIVE_BUDGET;
-out.counts=[0,1,2,6,40].map(n=>{const s=Array.from({length:n},(_,i)=>"r"+i),p=embedPlan(s,null,false);return (p.pane?1:0)+(p.pip?1:0)});
-out.countsMax=[0,1,2,6,40].map(n=>{const s=Array.from({length:n},(_,i)=>"r"+i),p=embedPlan(s,null,true);return (p.pane?1:0)+(p.pip?1:0)});
+out.counts=[0,1,2,6,40].map(n=>{const s=Array.from({length:n},(_,i)=>"r"+i),p=embedPlan(s,null);return (p.pane?1:0)});
 console.log("RESULT"+JSON.stringify(out));
 """)
-    assert st["one"] == {"pane": "b", "pip": False}               # the focused pane follows its run
-    assert st["none"] == {"pane": "a", "pip": False}              # no focus yet: the first pane
-    assert st["gone"] == {"pane": "a", "pip": False}              # a focus that left the page falls back to the first
-    assert st["max"] == {"pane": None, "pip": True}               # the run pane is out of sight: the window follows the run instead
-    assert st["empty"] == {"pane": None, "pip": False}
+    assert st["one"] == {"pane": "b"}                             # the focused pane follows its run
+    assert st["none"] == {"pane": "a"}                            # no focus yet: the first pane
+    assert st["gone"] == {"pane": "a"}                            # a focus that left the page falls back to the first
+    assert st["empty"] == {"pane": None}
     assert st["budget"] == 1
-    assert max(st["counts"]) <= st["budget"] and max(st["countsMax"]) <= st["budget"]   # N runs, never more than the budget
+    assert max(st["counts"]) <= st["budget"]   # N runs, never more than the budget
 
 
 def test_a_missing_cap_file_cannot_make_the_page_expensive(hub):

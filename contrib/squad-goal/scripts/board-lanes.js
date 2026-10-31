@@ -41,3 +41,7 @@ function buildBoard(groups,o){
   list.forEach(l=>{l.cells={};cols.forEach(c=>{l.cells[c]=l.vis.filter(x=>x.col===c)})});
   return{cols,vc,hc,lanes:list};
 }
+
+// A saved state from a control the board no longer has is dropped on load (#899): the labels filter, the Specs mode,
+// maximize, collapse and the pip. The kept keys (the filters, the lanes, the view) stay as they are.
+function dropRemoved(bo){for(const k of["labels","label","specs","max","off","pip"])delete bo[k];return bo}
