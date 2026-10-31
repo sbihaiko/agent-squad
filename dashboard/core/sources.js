@@ -55,9 +55,10 @@ function sourcesModule({ STATES }) {
   // The source of a run that a loopback server serves: fetch the record and the graph by path. A missing file is null, like the other sources.
   // `fetchFn(path)` returns {ok, text()}; the page passes fetch with no-store, a test passes a map.
   // `streamFn(path, handlers)` opens a push stream and returns {close()}; a source built with it offers `stream`.
+  // `paths` names the file each read opens, so a slow or failed read can say what it read.
   function httpSource(fetchFn, name, streamFn) {
     const get = async (p) => { try { const r = await fetchFn(p); return r && r.ok ? await r.text() : null; } catch (e) { return null; } };
-    const src = { name, live: true, graph: () => get("run/graph.json"), record: () => get("run/record.jsonl") };
+    const src = { name, live: true, paths: { record: "run/record.jsonl", graph: "run/graph.json" }, graph: () => get("run/graph.json"), record: () => get("run/record.jsonl") };
     if (typeof streamFn === "function") src.stream = (handlers) => streamFn("run/events", handlers);
     return src;
   }

@@ -17,7 +17,7 @@ const TEXT = { x: 10, name: 19, kind: 34, line1: 46, line2: 57, cause: 56 }, CAR
 const DRAG_SLOP = 3, WHEEL_RATE = 0.0015, ZOOM_STEP = 1.25, MIN_FIT = 120;
 const REPLAY_GAP = 24, REVEAL_INSET = 16, FOOTER_PAD = 12;
 
-const S = { recordBad: null, warnings: [], doc: null, text: "", name: "graph", layout: {}, selected: null, link: null, events: null, cursor: null, replay: null, overlay: null, stats: null, children: [], childPos: {}, expanded: [], groupOf: {}, lastTap: null, groups: [], groupPos: {}, groupPts: {}, groupSq: {}, folder: null, issueTotal: null, issueHeld: 0, errors: [], notice: "", handle: null, stamp: null, layoutHandle: null, layoutStamp: null, baseText: "", baseLayout: "{}", baseHash: null, chip: null, offerPending: null, view: { k: 1, tx: 20, ty: 20 }, hist: core.histNew(100) };
+const S = { src: null, recordBad: null, warnings: [], doc: null, text: "", name: "graph", layout: {}, selected: null, link: null, events: null, cursor: null, replay: null, overlay: null, stats: null, children: [], childPos: {}, expanded: [], groupOf: {}, lastTap: null, groups: [], groupPos: {}, groupPts: {}, groupSq: {}, folder: null, issueTotal: null, issueHeld: 0, errors: [], notice: "", handle: null, stamp: null, layoutHandle: null, layoutStamp: null, baseText: "", baseLayout: "{}", baseHash: null, chip: null, offerPending: null, view: { k: 1, tx: 20, ty: 20 }, hist: core.histNew(100) };
 
 function setStatus(msg, bad) { const el = $("status"); el.textContent = msg; el.className = bad ? "msg-bad" : ""; toast(); }
 
@@ -70,6 +70,9 @@ $("r-range").addEventListener("input", (e) => moveReplay("to", Number(e.target.v
 // The bar takes height from the map, so a fitted graph is fitted again when the bar appears or goes.
 function renderTotals() {
   const bar = $("totals"), r = S.replay, was = bar.classList.contains("on");
+  // The run's figures wait for the record: the bar names the read until the record settles, never a blank strip.
+  const key = r ? null : readKey("record", "graph");
+  if (key) { bar.classList.add("on"); bar.innerHTML = readHtml(key, "run"); if (!was && S.fitted && S.doc) fit(); return; }
   bar.classList.toggle("on", !!r);
   if (!r) { bar.innerHTML = ""; if (was && S.fitted && S.doc) fit(); return; }
   const cells = core.totalsCells(core.runTotals(r.events, core.runCap(r.events[0], S.doc), r.at_end ? nowSec() : undefined));
@@ -81,13 +84,18 @@ setInterval(() => { if (S.replay && S.replay.at_end && S.stats && S.stats.state 
 
 // The top bar above the graph: how many issues the run landed, of the issue set in the run folder. The
 // cells are core data (core.progressCells), and the replay cursor cuts them like every other figure.
+// The bar follows the read of the issue set: it says it is loading while the set is read, and it names the
+// empty bar when the folder holds no set, rather than vanishing without a word.
 function renderProgress() {
   const bar = $("progress"), r = S.replay, was = bar.classList.contains("on");
+  const key = readKey("issues", "record");
+  if (key) { bar.classList.add("on"); bar.innerHTML = readHtml(key, "run"); if (!was && S.fitted && S.doc) fit(); return; }
   const cells = r ? core.progressCells(core.issueProgress(r.events, S.issueTotal, S.issueHeld)) : [];
-  bar.classList.toggle("on", cells.length > 0);
-  bar.innerHTML = cells.map((c) => `<span class="cell" title="${esc(c.title)}">${esc(c.label)} <b>${esc(c.text)}</b></span>`).join("")
+  const empty = r && !cells.length ? emptyHtml("This run folder holds no issue set to count.") : "";
+  bar.classList.toggle("on", cells.length > 0 || !!empty);
+  bar.innerHTML = cells.map((c) => `<span class="cell" title="${esc(c.title)}">${esc(c.label)} <b>${esc(c.text)}</b></span>`).join("") + empty
     + (cells.length && !r.at_end ? `<span class="cell past" title="The bar shows the run up to the replay cursor, not the whole run.">replay: up to event ${r.cursor} of ${r.last}</span>` : "");
-  if (!was && cells.length && S.fitted && S.doc) fit();
+  if (!was && (cells.length || empty) && S.fitted && S.doc) fit();
 }
 
 // A single-card page paints that one card and nothing else: it still reads the run (the same push stream or reread
@@ -109,7 +117,8 @@ async function loadGraph(text, name) {
   if (script) return showScript(script, name);
   hideScript();
   const r = core.parseImport(text);
-  if (r.error) { setStatus(r.error, true); return false; }
+  if (r.error) { readFail("graph", name, r.error); setStatus(r.error, true); renderSide(); return false; }
+  readSettle("graph");
   S.warnings = []; S.doc = r.doc; S.text = text; S.name = name.replace(/\.graph\.json$|\.json$/, ""); S.fileName = name; S.selected = null; S.link = null;
   S.handle = null; S.stamp = null; S.layoutHandle = null; S.layoutStamp = null; S.offerPending = null; hidePanels();
   S.layout = Array.isArray(S.doc.nodes) ? core.autoLayout(S.doc, narrowScreen()) : {};

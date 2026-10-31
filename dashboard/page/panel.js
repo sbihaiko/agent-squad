@@ -27,7 +27,7 @@ function childReviewHtml(c) {
   if (!r) return "";
   const word = r.live ? `<b class="state-running" title="The review command is still running">running now</b>` : `<b${r.verdict === "approve" || r.verdict === "no_review" ? "" : ' class="bad"'}>${esc(r.verdict === "no_review" ? "no review here" : r.verdict || "none yet")}</b>`;
   const line = `${word} \u00b7 time <b>${f.seconds(r.elapsed)}</b>${r.live ? " so far" : ""} \u00b7 round${r.rounds > 1 ? "s" : ""} <b>${r.rounds}</b>${r.exit_code === null || r.live ? "" : ` \u00b7 exit <b>${esc(r.exit_code)}</b>`}`;
-  const held = !r.live && r.findings ? `<pre class="ev">${esc(r.findings)}</pre>` : "";
+  const held = r.live ? "" : r.findings ? `<pre class="ev">${esc(r.findings)}</pre>` : emptyHtml("The review reported no findings.");
   return `<h2>Review</h2><div class="runbox">${line}${held}</div>`;
 }
 // The review gate of a dispatch, with the command and deadline it runs: read-only here, as a gate's thresholds are (ADR-0111).
@@ -54,7 +54,7 @@ function childHtml(c) {
 // The roster of one dispatch's children: one row each. A click on a row selects that child.
 function rosterHtml(dispatch) {
   const rows = core.childRoster(S.children, dispatch);
-  if (!rows.length) return "";
+  if (!rows.length) return `<h2>Children of ${esc(dispatch)}</h2>${emptyHtml("This dispatch started no child, or the record names none for it yet.")}`;
   const body = rows.map((r) => `<tr data-child="${esc(r.name)}" class="s-${esc(r.state)}${S.selected === r.name ? " sel" : ""}" title="${esc(r.name)}"><td>${r.index}</td><td>${esc(r.label)}</td><td class="m" title="${esc(r.outcome)}${r.rework ? " · " + esc(r.rework) : ""}">${r.glyph}${r.rework ? " ↻" : ""}</td><td>${esc(core.fmt.llm(r.model))}</td><td>${esc(r.time)}</td><td>${esc(r.cost)}</td><td>${esc(r.turns)}</td></tr>`).join("");
   return `<h2>Children of ${esc(dispatch)} <span class="note">(${rows.length})</span></h2><table class="roster"><thead><tr><th>#</th><th>name</th><th title="outcome">out</th><th>model</th><th>time</th><th>cost</th><th>turns</th></tr></thead><tbody>${body}</tbody></table>`;
 }
@@ -196,9 +196,15 @@ function renderRunPanel() {
 
 function renderSide() {
   const side = $("side");
+  // A read in flight, or one that failed, paints its own state: the panel says it is reading rather than showing a blank
+  // page, and a failed read says which file failed. The first read of the run holds the panel until it settles.
+  const key = readKey("record", "graph");
+  if (!S.doc && key) { paintRead(side, key, "run"); return; }
   if (!S.doc) { side.innerHTML = `<h2>Start</h2><p>Open a graph document, or load the five-phase example.</p><p class="note">The graph file stays as authored. A run record is read-only. Layout lives in a sibling file and never moves the graph hash.</p>`; return; }
   const parts = [];
-  if (inEdit() || S.errors.length) parts.push(`<h2>Graph</h2><div>${esc(S.doc.name || "(no name)")} · ${nodesOf().length} nodes · ${S.errors.length ? `<span class="msg-bad">${S.errors.length} error${S.errors.length > 1 ? "s" : ""}</span>` : `<span class="msg-ok">valid</span>`}</div>`);
+  const load = readHtml(key, "run");
+  if (load) parts.push(load);   // a failed or slow read of the run says so next to the graph it does not stop
+  if (inEdit() || S.errors.length) parts.push(`<h2>Graph</h2><div>${esc(S.doc.name || "(no name)")} · ${nodesOf().length ? `${nodesOf().length} node${nodesOf().length > 1 ? "s" : ""}` : "no node"} · ${S.errors.length ? `<span class="msg-bad">${S.errors.length} error${S.errors.length > 1 ? "s" : ""}</span>` : `<span class="msg-ok">valid</span>`}</div>`);
   const top = S.errors.filter((e) => !e.node);
   if (top.length) parts.push(`<h2>Errors on the graph</h2><ul class="errs">${top.map((e) => `<li>${esc(e.message)}</li>`).join("")}</ul>`);
   if (S.warnings.length) parts.push(`<h2>Links the last change broke</h2><ul class="errs">${S.warnings.map((w) => `<li>${esc(w.message)}</li>`).join("")}</ul>`);
@@ -247,7 +253,13 @@ function renderSide() {
     parts.push(S.overlay && !S.overlay.shown ? `<div class="msg-bad">${esc(S.overlay.reason)}</div>` : `<div class="note">The record's graph hash equals the loaded graph's: ${S.overlay && S.overlay.rows.length ? S.overlay.rows.length + " applied proposal" + (S.overlay.rows.length > 1 ? "s" : "") + " shown on the cards" : "no applied proposal in this run"}.</div>`);
   }
   if (inEdit()) parts.push(`<details class="ref"><summary>Served lists (suggestions only)</summary><div class="ro">${["tools", "skills", "models", "efforts"].map((k) => `<b>${k}</b> (${SERVED[k].length}): ${esc(SERVED[k].join(", "))}`).join("<br>")}<br><span class="note">Snapshot ${esc(SERVED.hash.slice(0, 12))} from ${esc(SERVED.sources.join(", "))}. A snapshot is stale once those sources change: rebuild with scripts/build_dashboard.py. An unknown value is never blocked. A model id reads here as the field takes it, with its <code>claude-</code> prefix; every model the page presents elsewhere hides that prefix.</span></div></details>`);
-  if (inEdit()) parts.push(`<details class="ref"><summary>Read-only registries</summary><div class="ro"><b>facts</b> (${S.doc.facts ? S.doc.facts.length : 0}): ${esc((S.doc.facts || []).map((f) => f.name).join(", "))}<br><b>gates</b> (${S.doc.gates ? S.doc.gates.length : 0}): ${esc((S.doc.gates || []).map((g) => g.id + "(" + (g.params || []).join(",") + ")").join(", "))}<br><span class="note">The dashboard picks a registered name and never adds one.</span></div></details>`);
+  if (inEdit()) {
+    // The facts and the gates the graph declares: a list the graph holds none of says so, instead of a blank line.
+    const facts = Array.isArray(S.doc.facts) ? S.doc.facts : [], gates = Array.isArray(S.doc.gates) ? S.doc.gates : [];
+    parts.push(`<details class="ref"><summary>Read-only registries</summary><div class="ro"><b>facts</b> (${facts.length}): ${facts.length ? esc(facts.map((f) => f.name).join(", ")) : "none"}<br><b>gates</b> (${gates.length}): ${gates.length ? esc(gates.map((g) => g.id + "(" + (g.params || []).join(",") + ")").join(", ")) : "none"}<br><span class="note">The dashboard picks a registered name and never adds one.</span></div></details>`);
+  }
+  // A panel with no card and no run to show names itself empty, so it never reads as a page that failed to load.
+  if (!parts.length) parts.push(emptyHtml("Nothing selected: pick a node or a child on the map."));
   side.innerHTML = parts.join("");
   const apply = $("b-apply");
   if (apply) apply.addEventListener("click", applyEdit);

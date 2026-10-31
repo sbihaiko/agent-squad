@@ -87,11 +87,21 @@ function download(name, text, type) {
 
 const readFile = (f) => new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = () => no(r.error); r.readAsText(f); });
 
-$("f-graph").addEventListener("change", async (e) => { const f = e.target.files[0]; if (f) await loadGraph(await readFile(f), f.name); e.target.value = ""; });
+// A file the owner opens is a read like any other: the panel says it is reading, and a failed read names the file.
+async function readTextOf(f) {
+  readStart("graph", f.name); renderSide();
+  try { const text = await readFile(f); readSettle("graph"); return text; } catch (e) { readFail("graph", f.name, e.message || String(e)); setStatus(`Could not read ${f.name}: ${e.message}`, true); renderSide(); return null; }
+}
+$("f-graph").addEventListener("change", async (e) => { const f = e.target.files[0]; if (f) { const text = await readTextOf(f); if (text !== null) await loadGraph(text, f.name); } e.target.value = ""; });
 $("b-example").addEventListener("click", () => loadGraph(JSON.stringify(EXAMPLE), "five-phases.graph.json"));
 $("f-record").addEventListener("change", async (e) => {
   const f = e.target.files[0]; if (!f) return;
-  const r = core.parseRecord(await readFile(f));
-  if (r.error) setStatus(r.error, true); else { stopFollow(); S.events = r.events; S.recordBad = r.bad || null; S.cursor = null; S.issueTotal = null; setStatus(`Opened record ${f.name} (read-only).`); await recompute(); }
+  readStart("record", f.name); renderSide();
+  try {
+    const r = core.parseRecord(await readFile(f));
+    if (r.error) { readFail("record", f.name, r.error); setStatus(r.error, true); }
+    else { readSettle("record"); stopFollow(); S.events = r.events; S.recordBad = r.bad || null; S.cursor = null; S.issueTotal = null; setStatus(`Opened record ${f.name} (read-only).`); await recompute(); }
+  } catch (err) { readFail("record", f.name, err.message || String(err)); setStatus(`Could not read ${f.name}: ${err.message}`, true); }
+  renderSide();
   e.target.value = "";
 });

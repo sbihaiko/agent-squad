@@ -67,6 +67,12 @@ select,input,textarea{background:var(--input);color:var(--fg);border:1px solid v
   .note { color:var(--mute); font-size:var(--fs-min); }
   .msg-bad { color:var(--err); }
   .msg-ok { color:var(--ok); }
+  /* A list or panel that is reading, that holds nothing, or that failed says so in place: one marker, one look per state (SPEC 889). */
+  .state { padding:6px 8px; border:1px dashed var(--line); border-radius:4px; font:var(--fs-min)/1.5 var(--font-mono); color:var(--mute); }
+  .state-loading { color:var(--acc); }
+  .state-empty { color:var(--mute); font-style:italic; }
+  .state-error { color:var(--err); border-color:var(--err); }
+  .state-retry { margin-left:6px; }
   #graph { display:flex; flex-direction:column; min-width:0; min-height:0; }
   #mapbox { position:relative; flex:1; min-width:0; min-height:0; }
   #recbad { flex:none; padding:6px 14px; background:#2a2212; border-bottom:2px solid var(--warn); color:var(--warn); font-size:var(--fs-min); font-weight:600; }
@@ -2385,9 +2391,10 @@ function sourcesModule({ STATES }) {
   // The source of a run that a loopback server serves: fetch the record and the graph by path. A missing file is null, like the other sources.
   // `fetchFn(path)` returns {ok, text()}; the page passes fetch with no-store, a test passes a map.
   // `streamFn(path, handlers)` opens a push stream and returns {close()}; a source built with it offers `stream`.
+  // `paths` names the file each read opens, so a slow or failed read can say what it read.
   function httpSource(fetchFn, name, streamFn) {
     const get = async (p) => { try { const r = await fetchFn(p); return r && r.ok ? await r.text() : null; } catch (e) { return null; } };
-    const src = { name, live: true, graph: () => get("run/graph.json"), record: () => get("run/record.jsonl") };
+    const src = { name, live: true, paths: { record: "run/record.jsonl", graph: "run/graph.json" }, graph: () => get("run/graph.json"), record: () => get("run/record.jsonl") };
     if (typeof streamFn === "function") src.stream = (handlers) => streamFn("run/events", handlers);
     return src;
   }
@@ -2604,7 +2611,7 @@ const TEXT = { x: 10, name: 19, kind: 34, line1: 46, line2: 57, cause: 56 }, CAR
 const DRAG_SLOP = 3, WHEEL_RATE = 0.0015, ZOOM_STEP = 1.25, MIN_FIT = 120;
 const REPLAY_GAP = 24, REVEAL_INSET = 16, FOOTER_PAD = 12;
 
-const S = { recordBad: null, warnings: [], doc: null, text: "", name: "graph", layout: {}, selected: null, link: null, events: null, cursor: null, replay: null, overlay: null, stats: null, children: [], childPos: {}, expanded: [], groupOf: {}, lastTap: null, groups: [], groupPos: {}, groupPts: {}, groupSq: {}, folder: null, issueTotal: null, issueHeld: 0, errors: [], notice: "", handle: null, stamp: null, layoutHandle: null, layoutStamp: null, baseText: "", baseLayout: "{}", baseHash: null, chip: null, offerPending: null, view: { k: 1, tx: 20, ty: 20 }, hist: core.histNew(100) };
+const S = { src: null, recordBad: null, warnings: [], doc: null, text: "", name: "graph", layout: {}, selected: null, link: null, events: null, cursor: null, replay: null, overlay: null, stats: null, children: [], childPos: {}, expanded: [], groupOf: {}, lastTap: null, groups: [], groupPos: {}, groupPts: {}, groupSq: {}, folder: null, issueTotal: null, issueHeld: 0, errors: [], notice: "", handle: null, stamp: null, layoutHandle: null, layoutStamp: null, baseText: "", baseLayout: "{}", baseHash: null, chip: null, offerPending: null, view: { k: 1, tx: 20, ty: 20 }, hist: core.histNew(100) };
 
 function setStatus(msg, bad) { const el = $("status"); el.textContent = msg; el.className = bad ? "msg-bad" : ""; toast(); }
 
@@ -2657,6 +2664,9 @@ $("r-range").addEventListener("input", (e) => moveReplay("to", Number(e.target.v
 // The bar takes height from the map, so a fitted graph is fitted again when the bar appears or goes.
 function renderTotals() {
   const bar = $("totals"), r = S.replay, was = bar.classList.contains("on");
+  // The run's figures wait for the record: the bar names the read until the record settles, never a blank strip.
+  const key = r ? null : readKey("record", "graph");
+  if (key) { bar.classList.add("on"); bar.innerHTML = readHtml(key, "run"); if (!was && S.fitted && S.doc) fit(); return; }
   bar.classList.toggle("on", !!r);
   if (!r) { bar.innerHTML = ""; if (was && S.fitted && S.doc) fit(); return; }
   const cells = core.totalsCells(core.runTotals(r.events, core.runCap(r.events[0], S.doc), r.at_end ? nowSec() : undefined));
@@ -2668,13 +2678,18 @@ setInterval(() => { if (S.replay && S.replay.at_end && S.stats && S.stats.state 
 
 // The top bar above the graph: how many issues the run landed, of the issue set in the run folder. The
 // cells are core data (core.progressCells), and the replay cursor cuts them like every other figure.
+// The bar follows the read of the issue set: it says it is loading while the set is read, and it names the
+// empty bar when the folder holds no set, rather than vanishing without a word.
 function renderProgress() {
   const bar = $("progress"), r = S.replay, was = bar.classList.contains("on");
+  const key = readKey("issues", "record");
+  if (key) { bar.classList.add("on"); bar.innerHTML = readHtml(key, "run"); if (!was && S.fitted && S.doc) fit(); return; }
   const cells = r ? core.progressCells(core.issueProgress(r.events, S.issueTotal, S.issueHeld)) : [];
-  bar.classList.toggle("on", cells.length > 0);
-  bar.innerHTML = cells.map((c) => `<span class="cell" title="${esc(c.title)}">${esc(c.label)} <b>${esc(c.text)}</b></span>`).join("")
+  const empty = r && !cells.length ? emptyHtml("This run folder holds no issue set to count.") : "";
+  bar.classList.toggle("on", cells.length > 0 || !!empty);
+  bar.innerHTML = cells.map((c) => `<span class="cell" title="${esc(c.title)}">${esc(c.label)} <b>${esc(c.text)}</b></span>`).join("") + empty
     + (cells.length && !r.at_end ? `<span class="cell past" title="The bar shows the run up to the replay cursor, not the whole run.">replay: up to event ${r.cursor} of ${r.last}</span>` : "");
-  if (!was && cells.length && S.fitted && S.doc) fit();
+  if (!was && (cells.length || empty) && S.fitted && S.doc) fit();
 }
 
 // A single-card page paints that one card and nothing else: it still reads the run (the same push stream or reread
@@ -2696,7 +2711,8 @@ async function loadGraph(text, name) {
   if (script) return showScript(script, name);
   hideScript();
   const r = core.parseImport(text);
-  if (r.error) { setStatus(r.error, true); return false; }
+  if (r.error) { readFail("graph", name, r.error); setStatus(r.error, true); renderSide(); return false; }
+  readSettle("graph");
   S.warnings = []; S.doc = r.doc; S.text = text; S.name = name.replace(/\.graph\.json$|\.json$/, ""); S.fileName = name; S.selected = null; S.link = null;
   S.handle = null; S.stamp = null; S.layoutHandle = null; S.layoutStamp = null; S.offerPending = null; hidePanels();
   S.layout = Array.isArray(S.doc.nodes) ? core.autoLayout(S.doc, narrowScreen()) : {};
@@ -2717,6 +2733,49 @@ function overlayFor(name) { return S.overlay && S.overlay.shown ? S.overlay.rows
 
 function render() { if (CARD) return renderCard(); renderReplay(); renderProgress(); renderTotals(); renderMap(); renderSide(); renderAddbar(); renderChrome(); updateChip(); scheduleDraft(); }
 
+
+// --- loading, empty and error states (SPEC 889) ---
+// One painter for every list and panel that reads. A read in flight paints "Loading …"; a list that legitimately holds
+// nothing paints its own empty note; a read that failed paints what failed and the message, with a retry where the page
+// has one. The state is the class name (state-loading, state-empty, state-error), so the markup itself says the state.
+function stateHtml(state, text, retry) {
+  const live = state === "loading" ? ' role="status" aria-live="polite" aria-busy="true"' : state === "error" ? ' role="alert"' : "";
+  const btn = retry ? ` <button type="button" class="state-retry" data-state-retry="${esc(retry)}">Try again</button>` : "";
+  return `<div class="state state-${state}"${live}>${esc(text)}${btn}</div>`;
+}
+const emptyHtml = (text) => stateHtml("empty", text);
+const loadingText = (what) => `Loading ${what} …`;
+function paintState(el, state, text, retry) {
+  const html = stateHtml(state, text, retry);
+  if (el.innerHTML !== html) el.innerHTML = html;
+  if (state === "loading") el.setAttribute("aria-busy", "true"); else el.removeAttribute("aria-busy");
+}
+
+// What each read of the page is doing: a state while it runs, null once it settled, and the file plus the message when it
+// failed. A panel that depends on a read paints that state; a read one panel does not use leaves the rest of the page alone.
+const READ = {};
+const readStart = (key, what) => { READ[key] = { state: "loading", what }; };
+const readSettle = (key) => { delete READ[key]; };
+const readFail = (key, what, message) => { READ[key] = { state: "error", what, message }; };
+const readText = (r) => (r.state === "loading" ? loadingText(r.what) : `${r.what}: ${r.message}`);
+function readHtml(key, retry) { return READ[key] ? stateHtml(READ[key].state, readText(READ[key]), READ[key].state === "error" ? retry : null) : ""; }
+// The read a panel should name: a failure first, then a read still in flight; null when every read settled.
+const readKey = (...keys) => keys.find((k) => READ[k] && READ[k].state === "error") || keys.find((k) => READ[k]) || null;
+// Paint the read of `key` into a container and say whether it painted anything.
+function paintRead(el, key, retry) {
+  if (!READ[key]) return false;
+  const r = READ[key];
+  paintState(el, r.state, readText(r), r.state === "error" ? retry : null);
+  return true;
+}
+
+// A retry starts the read again. The page registers one for each read that a person can start from the page; a state
+// with no retry shows the message alone, and the folder's own Connect button stays the way back in.
+const RETRY = {};
+document.addEventListener("click", (e) => {
+  const b = e.target && e.target.closest ? e.target.closest("[data-state-retry]") : null;
+  if (b && RETRY[b.dataset.stateRetry]) RETRY[b.dataset.stateRetry]();
+});
 
 // --- the graph area: an SVG with one group that pan and zoom move ---
 function applyView() {
@@ -3112,7 +3171,7 @@ function childReviewHtml(c) {
   if (!r) return "";
   const word = r.live ? `<b class="state-running" title="The review command is still running">running now</b>` : `<b${r.verdict === "approve" || r.verdict === "no_review" ? "" : ' class="bad"'}>${esc(r.verdict === "no_review" ? "no review here" : r.verdict || "none yet")}</b>`;
   const line = `${word} \u00b7 time <b>${f.seconds(r.elapsed)}</b>${r.live ? " so far" : ""} \u00b7 round${r.rounds > 1 ? "s" : ""} <b>${r.rounds}</b>${r.exit_code === null || r.live ? "" : ` \u00b7 exit <b>${esc(r.exit_code)}</b>`}`;
-  const held = !r.live && r.findings ? `<pre class="ev">${esc(r.findings)}</pre>` : "";
+  const held = r.live ? "" : r.findings ? `<pre class="ev">${esc(r.findings)}</pre>` : emptyHtml("The review reported no findings.");
   return `<h2>Review</h2><div class="runbox">${line}${held}</div>`;
 }
 // The review gate of a dispatch, with the command and deadline it runs: read-only here, as a gate's thresholds are (ADR-0111).
@@ -3139,7 +3198,7 @@ function childHtml(c) {
 // The roster of one dispatch's children: one row each. A click on a row selects that child.
 function rosterHtml(dispatch) {
   const rows = core.childRoster(S.children, dispatch);
-  if (!rows.length) return "";
+  if (!rows.length) return `<h2>Children of ${esc(dispatch)}</h2>${emptyHtml("This dispatch started no child, or the record names none for it yet.")}`;
   const body = rows.map((r) => `<tr data-child="${esc(r.name)}" class="s-${esc(r.state)}${S.selected === r.name ? " sel" : ""}" title="${esc(r.name)}"><td>${r.index}</td><td>${esc(r.label)}</td><td class="m" title="${esc(r.outcome)}${r.rework ? " · " + esc(r.rework) : ""}">${r.glyph}${r.rework ? " ↻" : ""}</td><td>${esc(core.fmt.llm(r.model))}</td><td>${esc(r.time)}</td><td>${esc(r.cost)}</td><td>${esc(r.turns)}</td></tr>`).join("");
   return `<h2>Children of ${esc(dispatch)} <span class="note">(${rows.length})</span></h2><table class="roster"><thead><tr><th>#</th><th>name</th><th title="outcome">out</th><th>model</th><th>time</th><th>cost</th><th>turns</th></tr></thead><tbody>${body}</tbody></table>`;
 }
@@ -3281,9 +3340,15 @@ function renderRunPanel() {
 
 function renderSide() {
   const side = $("side");
+  // A read in flight, or one that failed, paints its own state: the panel says it is reading rather than showing a blank
+  // page, and a failed read says which file failed. The first read of the run holds the panel until it settles.
+  const key = readKey("record", "graph");
+  if (!S.doc && key) { paintRead(side, key, "run"); return; }
   if (!S.doc) { side.innerHTML = `<h2>Start</h2><p>Open a graph document, or load the five-phase example.</p><p class="note">The graph file stays as authored. A run record is read-only. Layout lives in a sibling file and never moves the graph hash.</p>`; return; }
   const parts = [];
-  if (inEdit() || S.errors.length) parts.push(`<h2>Graph</h2><div>${esc(S.doc.name || "(no name)")} · ${nodesOf().length} nodes · ${S.errors.length ? `<span class="msg-bad">${S.errors.length} error${S.errors.length > 1 ? "s" : ""}</span>` : `<span class="msg-ok">valid</span>`}</div>`);
+  const load = readHtml(key, "run");
+  if (load) parts.push(load);   // a failed or slow read of the run says so next to the graph it does not stop
+  if (inEdit() || S.errors.length) parts.push(`<h2>Graph</h2><div>${esc(S.doc.name || "(no name)")} · ${nodesOf().length ? `${nodesOf().length} node${nodesOf().length > 1 ? "s" : ""}` : "no node"} · ${S.errors.length ? `<span class="msg-bad">${S.errors.length} error${S.errors.length > 1 ? "s" : ""}</span>` : `<span class="msg-ok">valid</span>`}</div>`);
   const top = S.errors.filter((e) => !e.node);
   if (top.length) parts.push(`<h2>Errors on the graph</h2><ul class="errs">${top.map((e) => `<li>${esc(e.message)}</li>`).join("")}</ul>`);
   if (S.warnings.length) parts.push(`<h2>Links the last change broke</h2><ul class="errs">${S.warnings.map((w) => `<li>${esc(w.message)}</li>`).join("")}</ul>`);
@@ -3332,7 +3397,13 @@ function renderSide() {
     parts.push(S.overlay && !S.overlay.shown ? `<div class="msg-bad">${esc(S.overlay.reason)}</div>` : `<div class="note">The record's graph hash equals the loaded graph's: ${S.overlay && S.overlay.rows.length ? S.overlay.rows.length + " applied proposal" + (S.overlay.rows.length > 1 ? "s" : "") + " shown on the cards" : "no applied proposal in this run"}.</div>`);
   }
   if (inEdit()) parts.push(`<details class="ref"><summary>Served lists (suggestions only)</summary><div class="ro">${["tools", "skills", "models", "efforts"].map((k) => `<b>${k}</b> (${SERVED[k].length}): ${esc(SERVED[k].join(", "))}`).join("<br>")}<br><span class="note">Snapshot ${esc(SERVED.hash.slice(0, 12))} from ${esc(SERVED.sources.join(", "))}. A snapshot is stale once those sources change: rebuild with scripts/build_dashboard.py. An unknown value is never blocked. A model id reads here as the field takes it, with its <code>claude-</code> prefix; every model the page presents elsewhere hides that prefix.</span></div></details>`);
-  if (inEdit()) parts.push(`<details class="ref"><summary>Read-only registries</summary><div class="ro"><b>facts</b> (${S.doc.facts ? S.doc.facts.length : 0}): ${esc((S.doc.facts || []).map((f) => f.name).join(", "))}<br><b>gates</b> (${S.doc.gates ? S.doc.gates.length : 0}): ${esc((S.doc.gates || []).map((g) => g.id + "(" + (g.params || []).join(",") + ")").join(", "))}<br><span class="note">The dashboard picks a registered name and never adds one.</span></div></details>`);
+  if (inEdit()) {
+    // The facts and the gates the graph declares: a list the graph holds none of says so, instead of a blank line.
+    const facts = Array.isArray(S.doc.facts) ? S.doc.facts : [], gates = Array.isArray(S.doc.gates) ? S.doc.gates : [];
+    parts.push(`<details class="ref"><summary>Read-only registries</summary><div class="ro"><b>facts</b> (${facts.length}): ${facts.length ? esc(facts.map((f) => f.name).join(", ")) : "none"}<br><b>gates</b> (${gates.length}): ${gates.length ? esc(gates.map((g) => g.id + "(" + (g.params || []).join(",") + ")").join(", ")) : "none"}<br><span class="note">The dashboard picks a registered name and never adds one.</span></div></details>`);
+  }
+  // A panel with no card and no run to show names itself empty, so it never reads as a page that failed to load.
+  if (!parts.length) parts.push(emptyHtml("Nothing selected: pick a node or a child on the map."));
   side.innerHTML = parts.join("");
   const apply = $("b-apply");
   if (apply) apply.addEventListener("click", applyEdit);
@@ -3400,14 +3471,18 @@ $("s-kind").innerHTML = KIND_LIST.map((k) => `<option>${k}</option>`).join("");
 function renderAddbar() {
   const gates = S.doc && Array.isArray(S.doc.gates) ? S.doc.gates : [];
   const keep = $("s-check").value;
-  $("s-check").innerHTML = gates.map((g) => `<option>${esc(g.id)}</option>`).join("");
+  // The check list of a new gate: a graph that registers no gate says so in the list, rather than showing an empty box.
+  $("s-check").innerHTML = gates.length ? gates.map((g) => `<option>${esc(g.id)}</option>`).join("") : `<option value="" disabled selected>no registered gate</option>`;
   if (gates.some((g) => g.id === keep)) $("s-check").value = keep;
   $("s-check").hidden = $("s-kind").value !== "gate";
   $("b-add").disabled = !S.doc || !Array.isArray(S.doc.nodes);
   $("b-remove").disabled = !nodesOf().some((n) => n.name === S.selected);   // a child card is run-only: nothing to remove
   $("b-unlink").disabled = !S.link;
+  // The history says what it holds: a button with nothing to walk says so in its tooltip, not only in its disabled look.
   $("b-undo").disabled = !S.hist.past.length;
   $("b-redo").disabled = !S.hist.future.length;
+  $("b-undo").title = S.hist.past.length ? "Undo the last edit (Ctrl or Cmd + Z)" : "Nothing to undo yet";
+  $("b-redo").title = S.hist.future.length ? "Redo (Ctrl or Cmd + Shift + Z)" : "Nothing to redo yet";
 }
 $("s-kind").addEventListener("change", renderAddbar);
 
@@ -3627,12 +3702,22 @@ function download(name, text, type) {
 
 const readFile = (f) => new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = () => no(r.error); r.readAsText(f); });
 
-$("f-graph").addEventListener("change", async (e) => { const f = e.target.files[0]; if (f) await loadGraph(await readFile(f), f.name); e.target.value = ""; });
+// A file the owner opens is a read like any other: the panel says it is reading, and a failed read names the file.
+async function readTextOf(f) {
+  readStart("graph", f.name); renderSide();
+  try { const text = await readFile(f); readSettle("graph"); return text; } catch (e) { readFail("graph", f.name, e.message || String(e)); setStatus(`Could not read ${f.name}: ${e.message}`, true); renderSide(); return null; }
+}
+$("f-graph").addEventListener("change", async (e) => { const f = e.target.files[0]; if (f) { const text = await readTextOf(f); if (text !== null) await loadGraph(text, f.name); } e.target.value = ""; });
 $("b-example").addEventListener("click", () => loadGraph(JSON.stringify(EXAMPLE), "five-phases.graph.json"));
 $("f-record").addEventListener("change", async (e) => {
   const f = e.target.files[0]; if (!f) return;
-  const r = core.parseRecord(await readFile(f));
-  if (r.error) setStatus(r.error, true); else { stopFollow(); S.events = r.events; S.recordBad = r.bad || null; S.cursor = null; S.issueTotal = null; setStatus(`Opened record ${f.name} (read-only).`); await recompute(); }
+  readStart("record", f.name); renderSide();
+  try {
+    const r = core.parseRecord(await readFile(f));
+    if (r.error) { readFail("record", f.name, r.error); setStatus(r.error, true); }
+    else { readSettle("record"); stopFollow(); S.events = r.events; S.recordBad = r.bad || null; S.cursor = null; S.issueTotal = null; setStatus(`Opened record ${f.name} (read-only).`); await recompute(); }
+  } catch (err) { readFail("record", f.name, err.message || String(err)); setStatus(`Could not read ${f.name}: ${err.message}`, true); }
+  renderSide();
   e.target.value = "";
 });
 
@@ -3729,22 +3814,43 @@ $("review").addEventListener("click", async (e) => {
 
 
 // --- the run folder: one read-only handle, remembered in this browser (decisions #62, #63; ticket #76) ---
-// A source is {name, graph(), record()}: each returns the file text, or null when the folder has no such file.
+// A source is {name, paths, graph(), record(), issues()}: each returns the file text, or null when the folder has no such
+// file; `paths` names the file a read opens, so a slow or failed read says what it reads.
+function sourcePath(src, key, fallback) { return (src.paths && src.paths[key]) || src.name + "/" + fallback; }
 async function loadRunSource(src) {
-  const rec = await src.record();
-  if (rec === null) { setStatus(`No record.jsonl in ${src.name} (looked at the folder and at run/).`, true); return false; }
+  S.src = src;
+  const recPath = sourcePath(src, "record", "record.jsonl");
+  readStart("record", recPath); render();   // the panel and the top bar say what they are reading, never a blank page
+  let rec = null, why = null;
+  try { rec = await src.record(); } catch (e) { why = e.message || String(e); }
+  if (why !== null) { readFail("record", recPath, why); setStatus(`Could not read ${recPath}: ${why}`, true); render(); return false; }
+  if (rec === null) { readFail("record", recPath, "there is no such file in the folder"); setStatus(`No record.jsonl in ${src.name} (looked at the folder and at run/).`, true); render(); return false; }
   const pr = core.parseLive(rec);
-  if (pr.error) { setStatus(pr.error, true); return false; }
+  if (pr.error) { readFail("record", recPath, pr.error); setStatus(pr.error, true); render(); return false; }
+  readSettle("record");
   S.events = pr.events; S.recordBad = pr.bad || null; S.cursor = null; S.expanded = [];   // a new run starts with every group collapsed
   // The issue set lives in the run folder, not the record: count target/issues for the top bar's total.
-  S.issueTotal = src.issues ? await src.issues() : null;
+  S.issueTotal = null;
+  if (src.issues) {
+    const issuePath = sourcePath(src, "issues", "target/issues");
+    readStart("issues", issuePath);
+    try { S.issueTotal = await src.issues(); readSettle("issues"); } catch (e) { readFail("issues", issuePath, e.message || String(e)); }
+  }
   if (src.live) startFollow(src, rec); else stopFollow();
-  const g = await src.graph();
-  if (g === null || !(await loadGraph(g, src.name + "/graph.json"))) { await recompute(); if (g !== null) return true; }
+  const graphPath = sourcePath(src, "graph", "graph.json");
+  readStart("graph", graphPath);
+  let g = null, gwhy = null;
+  try { g = await src.graph(); } catch (e) { gwhy = e.message || String(e); }
+  if (gwhy !== null) readFail("graph", graphPath, gwhy);
+  else if (g === null) readFail("graph", graphPath, "the folder has no such file");
+  else readSettle("graph");
+  if (g === null || !(await loadGraph(g, graphPath))) { await recompute(); if (g !== null) return true; }
   // A short toast: the folder name is already in the top bar, and a push or a reread needs no words after the load.
   setStatus((S.ended ? "This run ended. " : "") + `Opened run ${pr.events[0].run_id} (read-only).` + (src.live ? "" : " A folder list is a snapshot: connect the folder to follow a live run.") + (g === null ? " The folder has no graph.json: open the graph to see the nodes." : ""));
   return true;
 }
+// The one retry a run's read offers: read the same source again. A folder the browser denies stays reachable by Connect.
+RETRY.run = () => { if (S.src) loadRunSource(S.src); };
 // While a run lives, the page follows it one of two ways. A source with a `stream` is followed by push: each pushed event extends the
 // record and paints. A source with none (the folder handle, the folder list) is followed by the timer: it rereads the record through
 // its read-only handle. The interval is the engine's (run_start), and no control in the page sets it (tickets #80, #106).
@@ -3789,15 +3895,16 @@ function startTimer(src, firstText, keepPush) {
 function handleSource(dir) {
   const read = async (d, nm) => { try { return await (await (await d.getFileHandle(nm)).getFile()).text(); } catch (e) { return null; } };
   const countIssues = async () => { try { const t = await dir.getDirectoryHandle("target"); const i = await t.getDirectoryHandle("issues"); let n = 0; for await (const [nm, h] of i.entries()) if (h.kind === "file" && nm.endsWith(".md")) n++; return n || null; } catch (e) { return null; } };
-  return { name: dir.name, live: true, issues: countIssues, graph: () => read(dir, "graph.json"),
+  return { name: dir.name, live: true, paths: { record: `${dir.name}/record.jsonl`, graph: `${dir.name}/graph.json`, issues: `${dir.name}/target/issues` }, issues: countIssues, graph: () => read(dir, "graph.json"),
     record: async () => { const r = await read(dir, "record.jsonl"); if (r !== null) return r; try { return await read(await dir.getDirectoryHandle("run"), "record.jsonl"); } catch (e) { return null; } } };
 }
 function fileListSource(files) {
   const rel = (f) => f.webkitRelativePath.split("/").slice(1).join("/");
+  const name = files.length ? files[0].webkitRelativePath.split("/")[0] : "folder";
   const find = (p) => files.find((f) => rel(f) === p);
   const text = async (f) => f ? await readFile(f) : null;
   const countIssues = async () => { const n = files.filter((f) => /^target\/issues\/[^/]+\.md$/.test(rel(f))).length; return n || null; };
-  return { name: files.length ? files[0].webkitRelativePath.split("/")[0] : "folder", issues: countIssues, graph: () => text(find("graph.json")), record: async () => (await text(find("record.jsonl"))) ?? (await text(find("run/record.jsonl"))) };
+  return { name, paths: { record: `${name}/record.jsonl`, graph: `${name}/graph.json`, issues: `${name}/target/issues` }, issues: countIssues, graph: () => text(find("graph.json")), record: async () => (await text(find("record.jsonl"))) ?? (await text(find("run/record.jsonl"))) };
 }
 const IDB_NAME = "agent-squad-run-dashboard", IDB_KEY = "run-folder";
 const idb = (mode, fn) => new Promise((ok, no) => {
@@ -3865,13 +3972,19 @@ const CARD = (new URLSearchParams(location.search).get("card") || "").trim();
 let cardHTML = null;
 
 function renderCard() {
-  const box = $("card"), card = core.cardBody(CARD, S.children);
-  const groups = card.groups.map((g) => {
-    const rows = g.kids.map((k) => `<div class="crow s-${esc(core.childMark(k).state)}" title="${esc(k.name)}">${esc(core.childMark(k).glyph)} <b>${esc(k.title || k.label || k.name)}</b>${k.running_for ? ` <span class="cmeta">${esc(core.fmt.seconds(k.running_for))}</span>` : ""}</div>`).join("");
-    return `<section class="cgroup s-${esc(g.state)}"><h3>${esc(g.name)}</h3>${rows}</section>`;
-  }).join("");
-  const html = card.ok ? groups || `<p class="cnote">${esc(card.empty)}</p>` : `<p class="cnote">${esc(card.message)}</p>`;
-  if (html !== cardHTML) { box.innerHTML = html; cardHTML = html; }
+  const box = $("card");
+  // The card reads the same run as the page: it says it is reading, and it names the empty run, rather than a blank frame.
+  const read = !S.doc && !S.events ? readKey("record", "graph") : null;
+  if (read) { paintRead(box, read, "run"); cardHTML = null; }
+  else {
+    const card = core.cardBody(CARD, S.children);
+    const groups = card.groups.map((g) => {
+      const rows = g.kids.map((k) => `<div class="crow s-${esc(core.childMark(k).state)}" title="${esc(k.name)}">${esc(core.childMark(k).glyph)} <b>${esc(k.title || k.label || k.name)}</b>${k.running_for ? ` <span class="cmeta">${esc(core.fmt.seconds(k.running_for))}</span>` : ""}</div>`).join("");
+      return `<section class="cgroup s-${esc(g.state)}"><h3>${esc(g.name)}</h3>${rows}</section>`;
+    }).join("");
+    const html = card.ok ? groups || emptyHtml(card.empty) : `<p class="cnote">${esc(card.message)}</p>`;
+    if (html !== cardHTML) { box.innerHTML = html; cardHTML = html; }
+  }
   if (window.parent !== window) window.parent.postMessage({ squadCard: CARD }, "*");   // the window's own handshake: it knows this page answered the mode
 }
 

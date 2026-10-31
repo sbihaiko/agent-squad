@@ -55,6 +55,12 @@
   .note { color:var(--mute); font-size:var(--fs-min); }
   .msg-bad { color:var(--err); }
   .msg-ok { color:var(--ok); }
+  /* A list or panel that is reading, that holds nothing, or that failed says so in place: one marker, one look per state (SPEC 889). */
+  .state { padding:6px 8px; border:1px dashed var(--line); border-radius:4px; font:var(--fs-min)/1.5 var(--font-mono); color:var(--mute); }
+  .state-loading { color:var(--acc); }
+  .state-empty { color:var(--mute); font-style:italic; }
+  .state-error { color:var(--err); border-color:var(--err); }
+  .state-retry { margin-left:6px; }
   #graph { display:flex; flex-direction:column; min-width:0; min-height:0; }
   #mapbox { position:relative; flex:1; min-width:0; min-height:0; }
   #recbad { flex:none; padding:6px 14px; background:#2a2212; border-bottom:2px solid var(--warn); color:var(--warn); font-size:var(--fs-min); font-weight:600; }

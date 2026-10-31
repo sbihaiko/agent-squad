@@ -46,14 +46,18 @@ $("s-kind").innerHTML = KIND_LIST.map((k) => `<option>${k}</option>`).join("");
 function renderAddbar() {
   const gates = S.doc && Array.isArray(S.doc.gates) ? S.doc.gates : [];
   const keep = $("s-check").value;
-  $("s-check").innerHTML = gates.map((g) => `<option>${esc(g.id)}</option>`).join("");
+  // The check list of a new gate: a graph that registers no gate says so in the list, rather than showing an empty box.
+  $("s-check").innerHTML = gates.length ? gates.map((g) => `<option>${esc(g.id)}</option>`).join("") : `<option value="" disabled selected>no registered gate</option>`;
   if (gates.some((g) => g.id === keep)) $("s-check").value = keep;
   $("s-check").hidden = $("s-kind").value !== "gate";
   $("b-add").disabled = !S.doc || !Array.isArray(S.doc.nodes);
   $("b-remove").disabled = !nodesOf().some((n) => n.name === S.selected);   // a child card is run-only: nothing to remove
   $("b-unlink").disabled = !S.link;
+  // The history says what it holds: a button with nothing to walk says so in its tooltip, not only in its disabled look.
   $("b-undo").disabled = !S.hist.past.length;
   $("b-redo").disabled = !S.hist.future.length;
+  $("b-undo").title = S.hist.past.length ? "Undo the last edit (Ctrl or Cmd + Z)" : "Nothing to undo yet";
+  $("b-redo").title = S.hist.future.length ? "Redo (Ctrl or Cmd + Shift + Z)" : "Nothing to redo yet";
 }
 $("s-kind").addEventListener("change", renderAddbar);
 
