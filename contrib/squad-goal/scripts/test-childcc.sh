@@ -74,7 +74,7 @@ echo "$*" >> "$WAVE_CALLS"
 [ "$3" = 5600 ] && { echo "WAVE STOP #$3: requeued 3 times, so it is not dispatched again: x"; exit 1; }   # the requeue cap stopped it
 echo "WAVE gui/$3 entered (#$3)"
 W
-export WAVE_CALLS=$T/wave.calls WAVE_FAIL=$T/wave.fail WAVE_GATE_HOLD=$T/wave.gatehold WAVE_REQUEUE_FAIL=$T/wave.requeuefail; : > "$WAVE_CALLS"
+export WAVE_CALLS=$T/wave.calls WAVE_FAIL=$T/wave.fail WAVE_GATE_HOLD=$T/wave.gatehold WAVE_REQUEUE_FAIL=$T/wave.requeuefail WAVE_REQUEUE_ERR=$T/wave.requeueerr; : > "$WAVE_CALLS"
 lq() { # issue: the head the run requeued it on, from its ledger (the old auto/requeued- marker, ADR-0149)
   python3 "$T/issue_ledger.py" requeued "x/y#$1" "$2" 2>/dev/null; }
 lqset() { python3 "$T/issue_ledger.py" requeue "x/y#$1" "$2" "$3" >/dev/null 2>&1; }
@@ -416,7 +416,7 @@ cat > "$T/wave.sh" <<'W'
 [ "$1" = expired ] && { [ -e "$WAVE_CALLS.expired-$2" ]; exit; }   # the age cap: a case marks the run's wave expired
 echo "$*" >> "$WAVE_CALLS"
 [ -e "$WAVE_GATE_HOLD" ] && [ "$1" = enter ] && { echo "WAVE HOLD #$3: the gate lock is held by pid 999; the child enters on a later pass"; exit 1; }
-[ "$1" = requeue ] && { [ -e "$WAVE_REQUEUE_FAIL" ] && { echo "WAVE STOP #$2: the requeue was refused"; exit 1; }; echo "WAVE REQUEUE #$2: $3"; exit 0; }
+[ "$1" = requeue ] && { [ -e "$WAVE_REQUEUE_FAIL" ] && { echo "WAVE STOP #$2: already frozen, so it is not dispatched again: $3"; exit 0; }; [ -e "$WAVE_REQUEUE_ERR" ] && exit 1; echo "WAVE REQUEUE #$2: $3"; exit 0; }
 k=$(git symbolic-ref --quiet --short HEAD | tr / _); h=$(git rev-parse HEAD)
 [ -s "$SG_STATE/review-$k.md" ] || { echo "WAVE HOLD #$3: no review of $k yet: a child never enters a wave unreviewed"; exit 1; }
 [ "$(cat "$SG_STATE/review-$k.base" 2>/dev/null)" = "wave/$2" ] || { echo "WAVE HOLD #$3: the review of $k was read against '$(cat "$SG_STATE/review-$k.base" 2>/dev/null)', not wave/$2"; exit 1; }
@@ -548,16 +548,51 @@ o2=$(SG_HOLD_TRIES=99 SG_CHILDCC_DEFER_MAX=2 dpass dft); r2=$?
 [ "$r2" = 0 ] && /usr/bin/grep -q '^requeue 6402 .*no review of' "$WAVE_CALLS" && ok "the second unchanged pass requeues the issue with its cause, so the wave lands (#931)" || ko "pass 2: exit $r2, calls $(cat "$WAVE_CALLS"): $o2"
 [ ! -e "$T/st/auto/dwait-dft-c" ] && ok "the requeued child's deadline counter goes with it" || ko "dwait survived the requeue: $(cat "$T/st/auto/dwait-dft-c" 2>/dev/null)"
 [ "$(lq 6402 dft)" = "$(/usr/bin/git -C "$T/co/runs/dft/ws/target-c" rev-parse HEAD)" ] && ok "the ledger holds the head the child was requeued on" || ko "ledger: '$(lq 6402 dft)'"
+# The escalation is the one record a reader has of why an issue went back to the queue: one queued comment naming the run,
+# the child, the branch and the sha, and one alerts.log line, written once and only after the requeue stands (#808, #931).
+dcq=$(ls "$T"/st/cq/*#6402-ccdefer-* 2>/dev/null)
+dh=$(/usr/bin/git -C "$T/co/runs/dft/ws/target-c" rev-parse HEAD); dbr=$(/usr/bin/git -C "$T/co/runs/dft/ws/target-c" symbolic-ref --quiet --short HEAD)
+[ "$(printf '%s\n' $dcq | /usr/bin/grep -c .)" = 1 ] && ok "a deferral that requeues queues one escalation comment" || ko "escalation comments: '$dcq'"
+[ -n "$dcq" ] && /usr/bin/grep -qF 'dft, child c (issue #6402)' "$dcq" && /usr/bin/grep -qF "sha $dh" "$dcq" && /usr/bin/grep -qF "branch $dbr" "$dcq" && /usr/bin/grep -q 'no review of' "$dcq" && /usr/bin/grep -qF "at branch $dbr" "$dcq" \
+  && ok "the escalation names the run, the child, the branch, the sha and the cause" || ko "escalation text: $(cat $dcq 2>/dev/null)"
+[ "$(/usr/bin/grep -c 'CHILDCC DEFERRED dft c #6402' "$T/st/alerts.log" 2>/dev/null)" = 1 ] && ok "the escalation writes one alerts.log line" || ko "alerts.log: $(cat "$T/st/alerts.log" 2>/dev/null)"
 o3=$(SG_HOLD_TRIES=99 SG_CHILDCC_DEFER_MAX=2 dpass dft); r3=$?
-[ "$r3" = 0 ] && [ "$(/usr/bin/grep -c '^requeue 6402' "$WAVE_CALLS")" = 1 ] && ok "the requeued child costs nothing on the next pass and is never requeued twice" || ko "pass 3: exit $r3, calls $(cat "$WAVE_CALLS")"
-# A refused requeue is no delivery (#931): the pass names it, keeps the child and its counter, and queues no false comment.
-export GH_NUMS="6403:Doing"; frun dfu 6403; rm -f "$T"/st/review-*; : > "$WAVE_CALLS"; : > "$T/cr.calls"
+[ "$r3" = 0 ] && [ "$(/usr/bin/grep -c '^requeue 6402' "$WAVE_CALLS")" = 1 ] && [ "$(printf '%s\n' $(ls "$T"/st/cq/*#6402-ccdefer-* 2>/dev/null) | /usr/bin/grep -c .)" = 1 ] \
+  && ok "the requeued child costs nothing on the next pass and is never requeued or escalated twice" || ko "pass 3: exit $r3, calls $(cat "$WAVE_CALLS"), comments '$(ls "$T"/st/cq/*#6402-ccdefer-* 2>/dev/null)'"
+
+# A live fix run is its own bound (#931, refuted over-reach): the child a fix run still works has no deferral deadline, so a
+# healthy fix run older than the deadline is never requeued while it works, and the wave keeps waiting for its verdict.
+mkdir -p "$T/co/runs/fixrun-6420"
+{ echo '{"event": "spawn_accepted", "child": "c", "definition": "GitHub issue #6420"}'
+  echo '{"event": "outcome", "node": "c", "outcome": "pass", "reasons": ["ok"]}'; } > "$T/co/runs/fixrun-6420/record.jsonl"
+export GH_NUMS="6420:Doing"; frun dfw 6420; : > "$WAVE_CALLS"; rm -f "$T/st/auto/dwait-dfw-c" "$T"/st/review-*
+printf '%s\n' "$T/co/runs/fixrun-6420" > "$T/st/auto/ccfix-dfw-c"   # the marker a starting fix run leaves, with its record still open
+o1=$(SG_CHILDCC_DEFER_MAX=2 dpass dfw); r1=$?
+[ "$r1" = 3 ] && printf '%s\n' "$o1" | /usr/bin/grep -q 'CHILD FIX WAIT #6420 (dfw c)' && ok "a child with a live fix run holds its wave" || ko "fix wait: exit $r1: $o1"
+o2=$(SG_CHILDCC_DEFER_MAX=2 dpass dfw); r2=$?
+[ "$r2" = 3 ] && ! /usr/bin/grep -q '^requeue 6420' "$WAVE_CALLS" && [ ! -e "$T/st/auto/dwait-dfw-c" ] \
+  && ok "a live fix run is never counted toward the deadline, and the wave still waits for its verdict" || ko "fix wait pass 2: exit $r2, calls $(cat "$WAVE_CALLS"), dwait '$(cat "$T/st/auto/dwait-dfw-c" 2>/dev/null)'"
+echo '{"event": "verdict"}' >> "$T/co/runs/fixrun-6420/record.jsonl"; : > "$WAVE_CALLS"; : > "$T/cr.calls"
+o3=$(SG_CHILDCC_DEFER_MAX=2 dpass dfw); r3=$?
+[ "$r3" = 3 ] && [ -s "$T/cr.calls" ] && ! /usr/bin/grep -q 'CHILD FIX WAIT' <<<"$o3" && ok "the fix run's own verdict ends the wait, so the child is worked again" || ko "after the fix run: exit $r3, cr '$(cat "$T/cr.calls")', out $o3"
+
+# A terminal stop is no refusal (#931): wave.sh answers a stopped or frozen issue with "WAVE STOP" and exit 0, so the child is
+# done here and the wave lands, instead of waiting out its age cap on a pass that exits 3 for ever.
+export GH_NUMS="6403:Doing"; frun dfu 6403; rm -f "$T"/st/review-* "$T/st/auto/dwait-dfu-c"; : > "$WAVE_CALLS"; : > "$T/cr.calls"
 SG_HOLD_TRIES=99 SG_CHILDCC_DEFER_MAX=2 dpass dfu >/dev/null
 touch "$WAVE_REQUEUE_FAIL"; o4=$(SG_HOLD_TRIES=99 SG_CHILDCC_DEFER_MAX=2 dpass dfu); r4=$?
-[ "$r4" = 3 ] && printf '%s\n' "$o4" | /usr/bin/grep -q 'CHILD DEFER REQUEUE #6403 (dfu c) refused' && ok "a refused requeue is named on the pass, never reported as success" || ko "refused requeue: exit $r4: $o4"
-[ -z "$(ls "$T"/st/cq/*#6403-* 2>/dev/null)" ] && [ -e "$T/st/auto/dwait-dfu-c" ] && ok "a refused requeue queues no comment and keeps the deadline counter" || ko "refused requeue state: cq '$(ls "$T"/st/cq/*#6403-* 2>/dev/null)', dwait '$(cat "$T/st/auto/dwait-dfu-c" 2>/dev/null)'"
-rm -f "$WAVE_REQUEUE_FAIL"; o5=$(SG_HOLD_TRIES=99 SG_CHILDCC_DEFER_MAX=2 dpass dfu); r5=$?
-[ "$r5" = 0 ] && /usr/bin/grep -q '^requeue 6403' "$WAVE_CALLS" && ok "the next pass retries the requeue and the wave lands" || ko "retry: exit $r5, calls $(cat "$WAVE_CALLS")"
+[ "$r4" = 0 ] && /usr/bin/grep -q 'CHILD DEFER STOP #6403 (dfu c)' <<<"$o4" && /usr/bin/grep -q 'WAVE STOP' <<<"$o4" \
+  && ok "a wave's terminal stop lands the wave instead of holding it" || ko "terminal stop: exit $r4: $o4"
+[ -z "$(ls "$T"/st/cq/*#6403-* 2>/dev/null)" ] && [ ! -e "$T/st/auto/dwait-dfu-c" ] && ok "a terminal stop queues no comment and leaves no counter" || ko "terminal stop state: cq '$(ls "$T"/st/cq/*#6403-* 2>/dev/null)', dwait '$(cat "$T/st/auto/dwait-dfu-c" 2>/dev/null)'"
+rm -f "$WAVE_REQUEUE_FAIL"
+# A wave that answers neither and exits nonzero is still a refusal: no delivery, no comment, and the child keeps its counter.
+export GH_NUMS="6404:Doing"; frun dfv 6404; rm -f "$T"/st/review-* "$T/st/auto/dwait-dfv-c"; : > "$WAVE_CALLS"; : > "$T/cr.calls"
+SG_HOLD_TRIES=99 SG_CHILDCC_DEFER_MAX=2 dpass dfv >/dev/null
+touch "$WAVE_REQUEUE_ERR"; o5=$(SG_HOLD_TRIES=99 SG_CHILDCC_DEFER_MAX=2 dpass dfv); r5=$?
+[ "$r5" = 3 ] && /usr/bin/grep -q 'CHILD DEFER REQUEUE #6404 (dfv c) refused' <<<"$o5" && ok "a wave that answers nothing is named as a refused requeue, never reported as success" || ko "refused requeue: exit $r5: $o5"
+[ -z "$(ls "$T"/st/cq/*#6404-* 2>/dev/null)" ] && [ -e "$T/st/auto/dwait-dfv-c" ] && ok "a refused requeue queues no comment and keeps the deadline counter" || ko "refused requeue state: cq '$(ls "$T"/st/cq/*#6404-* 2>/dev/null)', dwait '$(cat "$T/st/auto/dwait-dfv-c" 2>/dev/null)'"
+rm -f "$WAVE_REQUEUE_ERR"; o6=$(SG_HOLD_TRIES=99 SG_CHILDCC_DEFER_MAX=2 dpass dfv); r6=$?
+[ "$r6" = 0 ] && /usr/bin/grep -q '^requeue 6404' "$WAVE_CALLS" && ok "the next pass retries the requeue and the wave lands" || ko "retry: exit $r6, calls $(cat "$WAVE_CALLS")"
 
 # The deadline never reaches a child the pass did not try (#931, refuted over-reach): with SG_CHILDCC_BUDGET=1 a pass works
 # one child and the rest wait their turn. A healthy sibling is never requeued because the budget, not a hold, kept it.

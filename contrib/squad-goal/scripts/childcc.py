@@ -78,6 +78,7 @@ DEFER_MAX = int(os.environ.get("SG_CHILDCC_DEFER_MAX") or 6)   # the passes one 
 HOLDS = set()   # the children this pass held out of their wave, neither entered nor requeued: the landing waits for them (#620)
 CAUSE = {}   # why this pass left each child out of its turn: the one diagnosis a deferral carries (#931)
 ATTEMPTED = set()   # the children this pass tried to enter and could not: only these have a deferral deadline, never one the budget left (#931)
+FIX_WAIT = set()   # the children a live fix run still works: its verdict is their bound, so they never count toward the deadline (#931)
 INCOMPLETE = 3   # the exit of a pass that left a child for a later pass: not a failure (1, a traceback), and not done (0)
 CURSOR, ROUND = A / "childcc-cursor", A / "childcc-round"
 NOW = A / "childcc-now.json"   # what the hub shows of this pass (#598): its pid and start, and each child it holds with its step and since when it waits
@@ -188,6 +189,9 @@ def first_finding(wt):   # the first finding of the review the entry read, for t
 def fix_live(fx):   # the fix run the marker names has no verdict yet, and a record that cannot be read is no verdict either (#667): the fix run lived inside the child's worktree, and a landing that cleaned it took the record too, so the child stays held and the wave's age cap frees it
     try: return '"event": "verdict"' not in (pathlib.Path(fx.read_text().strip()) / "record.jsonl").read_text()
     except OSError: return True
+def fix_running(fx):   # the fix run the marker names is still at work: its record is readable and holds no verdict yet, so its own end is the bound (#931). An unreadable record is no live run: the deadline still bounds it (#667)
+    try: return '"event": "verdict"' not in (pathlib.Path(fx.read_text().strip()) / "record.jsonl").read_text()
+    except OSError: return False
 def last_turn(fx):   # the child's last turn of the fix run `fx` names: why it stopped, so a reader of the requeue reason sees it (ADR-0151, #735)
     try: lines = (pathlib.Path(fx.read_text().strip()) / "record.jsonl").read_text().splitlines()
     except OSError: return ""
@@ -268,6 +272,7 @@ def enter(rd, child, n, d, approved=False, own=False):
     fx = A / f"ccfix-{rd.name}-{child}"   # the fix run this pass started for the child (#636)
     if fx.exists() and fix_live(fx):   # its fix run still works the child's worktree: held, at no cost, and its wave waits
         HOLDS.add(f"{rd.name} {child}")
+        if fix_running(fx): FIX_WAIT.add(f"{rd.name} {child}")   # a live fix run bounds its own child, so the deferral deadline never counts it (#931)
         return False, f"CHILD FIX WAIT #{n} ({rd.name} {child}): its fix run {pathlib.Path(fx.read_text().strip()).name} has no verdict yet", False
     if not approved and own: return False, f"CHILD RUN-OWNED #{n} ({rd.name} {child}): its run approved no head for it; delivery holds", False
     if not approved and not reviewed(rd, child, n, wt, A / f"rvd-{rd.name}-{child}"): return False, "", None   # no review slot: the child waits, and the landing waits for it
@@ -403,7 +408,7 @@ for key, r, child, why, n, finished, d, lwhy, ok, own, rnd in pending[k0:] + pen
         CAUSE[key] = why or "its entry held it on this head"
         if subprocess.run(["bash", wave, "expired", name], capture_output=True).returncode:
             visited.discard(key)
-            ATTEMPTED.add(key)   # only a child this pass tried and could not enter has a deadline; a budget or cursor child does not (#931)
+            if key not in FIX_WAIT: ATTEMPTED.add(key)   # only a child this pass tried and could not enter has a deadline; a budget or cursor child does not, and a live fix run is its own bound (#931)
     if entered is False: continue   # the child never entered the wave: no marker, so the next pass tries it again; no card moves, its issue went back to the queue
     mk.touch()
     if entered is None: subprocess.run([board, owner, proj, "Code Complete", str(n)], capture_output=True)   # no wave: the pass moves the card itself
@@ -454,10 +459,14 @@ if left:
         dk.write_text(json.dumps({"tip": tip, "cause": cause, "cnt": cnt, "esc": esc}))
         if cnt < DEFER_MAX: continue
         e = subprocess.run(["bash", wave, "requeue", str(n), cause], capture_output=True, text=True, env={**os.environ, "SG_REQUEUE_RUN": name})
-        if e.returncode or "WAVE REQUEUE" not in (e.stdout + e.stderr):   # a refused requeue is no delivery: name it, keep the child and its count, retry next pass (#931)
-            print(f"CHILD DEFER REQUEUE #{n} ({name} {child}) refused: {(e.stdout + e.stderr).strip()[:300] or f'exit {e.returncode}'}", flush=True)
+        answer = (e.stdout + e.stderr).strip()
+        # wave.sh answers a stop with exit 0 and "WAVE STOP": the issue is already out of the queue (frozen, or stopped by
+        # its own count), so the child is done here and the wave lands. Only a command that answered neither is a refusal (#931).
+        stopped = not e.returncode and "WAVE STOP" in answer
+        if e.returncode or not (stopped or "WAVE REQUEUE" in answer):   # a refused requeue is no delivery: name it, keep the child and its count, retry next pass (#931)
+            print(f"CHILD DEFER REQUEUE #{n} ({name} {child}) refused: {answer[:300] or f'exit {e.returncode}'}", flush=True)
             continue
-        if esc != "1":   # the escalation is reported once, and only after the requeue stands (#808)
+        if not stopped and esc != "1":   # the escalation is reported once, and only after the requeue stands (#808); a terminal stop is no requeue, so no comment claims the issue went back to the queue (#931)
             dk.write_text(json.dumps({"tip": tip, "cause": cause, "cnt": cnt, "esc": "1"}))
             (A / f"ccdefer-{name}-{child}").write_text(f"{tip} {cnt} 1\n")   # the escalation marker the janitor drops once the run is over
             br = subprocess.run(["git", "-C", str(child_worktree(rp, child, d)), "symbolic-ref", "--quiet", "--short", "HEAD"], capture_output=True, text=True).stdout.strip() or "(detached)"
@@ -467,7 +476,7 @@ if left:
         record_requeue(name, n, tip)   # the head it was requeued on, so the next pass costs nothing (ADR-0149)
         dk.unlink(missing_ok=True)
         ended.add(k)
-        print(f"CHILD DEFER REQUEUE #{n} ({name} {child}): {cause}", flush=True)
+        print(f"CHILD DEFER {'STOP' if stopped else 'REQUEUE'} #{n} ({name} {child}): {answer[:300] if stopped else cause}", flush=True)
     left = [k for k in left if k not in ended]
     if left: sys.exit(INCOMPLETE)
 ROUND.write_text("".join(k + "\n" for k in sorted(k for k in rnd if k.split(" ")[0] not in runs)))   # this pass closed the round of its runs

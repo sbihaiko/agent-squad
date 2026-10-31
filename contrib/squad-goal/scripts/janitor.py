@@ -328,7 +328,8 @@ def free_reaped(f, i):
     return marks
 def ccdefer_owner(fname):   # the run a `ccdefer-<run>-<child>` marker belongs to: the longest known run name that prefixes it. A child's
     # own name may carry dashes, and one run's name may only start with another's, so the marker is never read as another run's (#945).
-    return next((m for m in sorted(names, key=len, reverse=True) if fname.startswith(f"ccdefer-{m}-")), None)
+    # active-runs.txt holds the run's folder, which launch.py writes absolute, and the marker carries the folder's name: compare that name.
+    return next((m for m in sorted({pathlib.Path(x).name for x in names}, key=len, reverse=True) if fname.startswith(f"ccdefer-{m}-")), None)
 
 
 for r in names:

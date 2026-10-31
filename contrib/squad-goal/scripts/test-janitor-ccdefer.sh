@@ -29,7 +29,7 @@ esac
 J
 sed -i '' "s|TMPDIR|$T|" "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 # A run whose request names no issue: the pass reads no card and no GitHub fact for it, so the case is the marker alone.
-mk() { mkdir -p "$T/co/runs/$1"; printf '%s\n' "$1" >> "$T/st/active-runs.txt"; printf 'CHILD — no issue named here:\n' > "$T/co/runs/$1/request.txt"; }
+mk() { mkdir -p "$T/co/runs/$1"; printf '%s\n' "$T/co/runs/$1" >> "$T/st/active-runs.txt"; printf 'CHILD — no issue named here:\n' > "$T/co/runs/$1/request.txt"; }
 ended() { printf '%s\n' '{"event":"verdict","verdict":"failed","reasons":["no_landed_change"],"exit_code":1}' > "$T/co/runs/$1/record.jsonl"; }
 # run-ended has its verdict: both of its deferral markers go. run-live has none: its marker stays. run-ended-long is a live
 # run whose name only starts with run-ended's: its marker must survive the prefix.
@@ -68,7 +68,7 @@ cpass() { echo "$rd" > "$T/st/active-runs.txt"; (cd "$T/co" && SG_STATE="$T/st" 
 o1=$(cpass); r1=$?
 [ "$r1" = 3 ] && [ -e "$T/st/auto/dwait-run-f-c" ] && ok "childcc opens its deferral counter on the first pass" || ko "pass 1: exit $r1: $o1"
 printf 'abc 1 0\n' > "$T/st/auto/ccdefer-run-f-c"   # a stale escalation marker, as a prior pass might have left it
-echo run-f > "$T/st/active-runs.txt"   # the janitor reads active-runs by name, so its ccdefer_owner prefixes by the run's own name
+echo "$rd" > "$T/st/active-runs.txt"   # launch.py writes the run folder absolute, and the janitor reads that same form: the marker names the folder's own name
 : > "$T/st/cycle.log"; o2=$(run)
 [ ! -e "$T/st/auto/ccdefer-run-f-c" ] && ok "the janitor drops the finished run's ccdefer marker between two passes" || ko "ccdefer survived: $o2"
 [ -e "$T/st/auto/dwait-run-f-c" ] && ok "the janitor never removes the deferral counter the deadline reads" || ko "the janitor took the deadline counter: $o2"
