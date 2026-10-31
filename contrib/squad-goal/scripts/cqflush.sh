@@ -44,8 +44,9 @@ base=$(sg_state_base)
 # Seconds between two passes, empty queue or not: SG_FLUSH_INTERVAL from the environment, else the profile in force, else 120. --interval prints it and exits (tests).
 iv=${SG_FLUSH_INTERVAL:-$(sg_profile_setting "${SG_PROFILE:-}" SG_FLUSH_INTERVAL 120)}; [ "${1:-}" = --interval ] && { echo "$iv"; exit 0; }
 stop=; sp=; trap 'stop=1; kill "$sp" 2>/dev/null' TERM   # a reload (#873) ends the flusher after the post in flight, never inside it, and wakes an idle wait
-while :; do left=0; [ -n "$stop" ] && exit 0
-  for f in "$base"/*/cq/*.md; do [ -e "$f" ] || continue; [ -n "$stop" ] && exit 0
+orphaned() { [ "$(/bin/ps -o ppid= -p $$ | tr -d ' ')" = 1 ]; }   # the supervisor is gone (#959): the flusher posts nothing more
+while :; do left=0; { [ -n "$stop" ] || orphaned; } && exit 0
+  for f in "$base"/*/cq/*.md; do [ -e "$f" ] || continue; { [ -n "$stop" ] || orphaned; } && exit 0
     [ $(( $(date +%s) - $(mtime "$f") )) -lt 5 ] && { left=1; continue; }
     b=$(basename "$f"); slug=$(basename "$(dirname "$(dirname "$f")")")
     case "$b" in

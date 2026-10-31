@@ -1251,6 +1251,18 @@ def frontier_idle():   # N (#744): a frontier that keeps Todo cards and starts n
     if dry: return
     alert(f"FRONTIER-IDLE {int((now - since) // 60)} min: {line} (the frontier holds this work and starts none; NEEDS OWNER)")
     mk.write_text(f"{now}\n")
+def watchd_orphan():   # W (#959): watchd.pid names no live supervisor and a lane of this scripts dir still runs; one alert per episode
+    here = os.path.dirname(os.path.abspath(__file__)); mk = st / "watchd-orphan-alert"
+    try: sup = int((st / "watchd.pid").read_text().strip())
+    except (OSError, ValueError): sup = None
+    live = sup in procs and f"{here}/watchd.sh" in procs[sup][1].split() and "run" in procs[sup][1].split()
+    lanes = [f"{s} pid {p}" for p, (pp, cmd) in procs.items() if pp == 1 for s in ("watch.sh", "fastloop.sh", "cqflush.sh") if f"{here}/{s}" in cmd.split()]
+    if live or not lanes:
+        if not dry: mk.unlink(missing_ok=True)
+        return
+    if dry or mk.exists(): return
+    alert(f"WATCHD-ORPHAN: watchd.pid names no live supervisor (pid {sup or 'none'}), and {', '.join(lanes)} still runs (NEEDS OWNER)")
+    mk.write_text(f"{now}\n")
 def live_noise(rel):   # a path no publish makes: a Python bytecode cache, a compiled file, or an editor's .DS_Store (#661)
     parts = rel.split("/")
     return "__pycache__" in parts or rel.endswith((".pyc", ".pyo")) or parts[-1] == ".DS_Store"
@@ -1276,6 +1288,7 @@ def live_mtime():   # M (#659): a change to the live skill copy that no publish 
     if changed:
         alert(f"LIVE-MTIME {live}: {len(changed)} file(s) changed with no publish: {', '.join(changed[:5])}")
 frontier_idle()
+watchd_orphan()
 live_mtime()
 if acts and not dry:
     kinds = {}
