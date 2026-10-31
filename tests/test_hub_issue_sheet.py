@@ -200,7 +200,7 @@ def test_the_sheet_shows_every_field_the_card_carries(hub):
 
 def test_the_sheet_renders_the_served_html_and_never_frames_github(hub):
     page = hub[0].PAGE
-    line = next(l for l in page.splitlines() if "<div id=tk " in l)
+    line = next(ln for ln in page.splitlines() if "<div id=tk " in ln)
     assert "<iframe" not in line, "the sheet holds no frame"
     assert "d.html" in page, "the body is the rendered HTML the route serves"
     assert "d.last" in page, "the last comment is rendered from the same read"
@@ -226,7 +226,7 @@ def test_escape_and_the_close_button_close_the_sheet_and_clear_the_selection(hub
     assert 'e.key==="Escape"' in page and "closeSheet()" in page, "Escape closes the sheet"
     body = page[page.index("function closeSheet("):]
     body = body[:body.index("\n")]
-    for clear in ("tkopen", "nav=[]", "hit"):
+    for clear in ("tkopen", "nav=[]", "hit", '$("#tkset").innerHTML=""'):
         assert clear in body, f"closing the sheet does not clear {clear!r}"
 
 

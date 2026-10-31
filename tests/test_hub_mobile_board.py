@@ -234,6 +234,7 @@ def test_the_phone_sheet_names_the_position_and_steps_with_chips_and_keys(hub):
 def test_escape_or_a_swipe_down_closes_the_phone_sheet_and_clears_the_selection(hub):
     body = hub.MOBILE_PAGE
     assert 'e.key === "Escape"' in body, "Escape closes the phone sheet"
+    assert '$("sh-set").innerHTML = ""' in body, "a closed sheet clears the selection it drew"
     assert 'gestureAct({ owner: t.owner, dx, dy, atTop: t.atTop })' in body, "a swipe down goes through the gesture rules"
     assert run_js(GESTURE_JS.read_text(), 'gestureAct({owner:"sheet",dx:0,dy:90,atTop:true})') == {"act": "close"}
 

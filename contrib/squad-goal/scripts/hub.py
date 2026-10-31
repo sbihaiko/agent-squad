@@ -3516,7 +3516,7 @@ const ni=()=>nav.findIndex(x=>x[0]===cur&&x[1]===irepo);
 function openCard(n,r){const el=boardCards().find(x=>+x.dataset.n===+n&&(x.dataset.r||"__REPO__")===(r||"__REPO__"));if(el)showIssue(n,r,el);else{nav=[[+n,r||"__REPO__"]];showIssue(n,r)}}   // a blocker link opens the same sheet, never a new tab
 const step=k=>{const i=ni()+k;if(i>=0&&i<nav.length)showIssue(nav[i][0],nav[i][1])};
 // One close rule: the panel goes, the page widens, and the selection the run or the column drew is cleared.
-function closeSheet(){tsheet.classList.remove("on");document.body.classList.remove("tkopen");document.querySelectorAll("#bbody .it.hit").forEach(x=>x.classList.remove("hit"));nav=[];cur=0;irepo="__REPO__";escBoard()}
+function closeSheet(){tsheet.classList.remove("on");document.body.classList.remove("tkopen");document.querySelectorAll("#bbody .it.hit").forEach(x=>x.classList.remove("hit"));nav=[];cur=0;irepo="__REPO__";$("#tkset").innerHTML="";$("#tknav").innerHTML="";escBoard()}
 async function showIssue(n,r,el){cur=+n;irepo=r||"__REPO__";
  // A card a run holds steps through that run's cards; any other card steps through its column (the selection the board shows).
  if(el){const c=cardOf(el),set=c.hr?boardCards().filter(x=>(x.dataset.hr||"")===c.hr):[...el.closest(".sc").querySelectorAll(".it[data-n]")];nav=set.map(x=>[+x.dataset.n,x.dataset.r||"__REPO__"])}

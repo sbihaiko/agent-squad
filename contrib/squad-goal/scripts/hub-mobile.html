@@ -419,7 +419,7 @@ function renderSheet() {
   const x = shown[view.card];
   const open = view.sheet && !!x;
   $("sheet").hidden = !open;
-  if (!open) { issueKey = ""; return; }
+  if (!open) { issueKey = ""; $("sh-set").innerHTML = ""; $("sh-pos").textContent = ""; return; }
   const key = (x.r || "") + "#" + x.n;
   // The selection is the cards this column shows (#919): the position, the previous and next buttons and the number
   // chips all read it, and a closed sheet clears the read key, so opening it again reads the issue again.
