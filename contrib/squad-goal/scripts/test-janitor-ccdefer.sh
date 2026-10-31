@@ -23,6 +23,7 @@ case "$a" in
   *projectsV2/4/items*) :;;
   *graphql*) printf '%s\n' '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}}';;
   *repos/x/y/branches*) :;;
+  *"-q .state") printf 'open\n';;   # childcc reads one issue's state through its seam
   *repos/x/y/issues/*) printf 'open\t\tIssue title\t\n';;
 esac
 J
@@ -47,5 +48,31 @@ o=$(run)
 /usr/bin/grep -q 'CCDEFER-DROPPED run-ended' "$T/st/cycle.log" 2>/dev/null && ok "the pass names the dropped markers in cycle.log" || ko "cycle.log does not name run-ended's dropped markers: $(cat "$T/st/cycle.log" 2>/dev/null) $o"
 [ -e "$T/st/auto/ccdefer-run-live-c1" ] && ok "a live run keeps its deferral marker" || ko "a live run lost its marker: $o"
 [ -e "$T/st/auto/ccdefer-run-ended-long-c1" ] && ok "another run's marker is never dropped by a shared name prefix" || ko "run-ended's drop took run-ended-long's marker: $o"
+
+# The collision (#945, #931): the janitor drops a finished run's auto/ccdefer-* markers every 90 s, and childcc beats every
+# 120 s. A deferral counter kept in that name restarts at one before it can reach its bound, so the wait never ends. The
+# counter has its own name (auto/dwait-<run>-<child>) that the janitor never removes; this case runs BOTH scripts over one
+# state dir and proves the janitor's drop cannot kill the count.
+cp "$here/childcc.py" "$here/child_issues.py" "$here/revformat.py" "$T/s/"
+printf '#!/bin/bash\necho "$*" >> %s/ccwave.calls\n[ "$1" = expired ] && exit 1\n[ "$1" = requeue ] && { echo "WAVE REQUEUE #$2: $3"; exit 0; }\necho "WAVE HOLD #$3: the wave base is not the review base"\nexit 1\n' "$T" > "$T/s/wave.sh"; chmod +x "$T/s/wave.sh"
+rd="$T/co/runs/run-f"; mkdir -p "$rd/ws/target-c"; printf 'CHILD — no issue named here:\n' > "$rd/request.txt"
+d="$rd/ws/target-c"; /usr/bin/git -C "$d" init -q -b dev; /usr/bin/git -C "$d" -c user.email=a@b -c user.name=t commit -q --allow-empty -m one
+h=$(/usr/bin/git -C "$d" rev-parse HEAD)
+{ echo '{"event": "spawn_accepted", "child": "c", "envelope": "route", "definition": "GitHub issue #7700"}'
+  echo '{"event": "outcome", "node": "c", "outcome": "pass", "reasons": ["ok"]}'
+  echo '{"event": "review_round", "node": "c", "round": 1, "head": "'$h'", "verdict": "approve", "offered": false, "review": {"verdict": "approve", "findings": "x"}}'
+  echo '{"event": "land", "node": "c", "parent": "route", "entry": 1, "outcome": "pass", "reasons": [], "effect": {"name": "merge_land", "review": {"verdict": "approve", "findings": "x"}}}'
+  echo '{"event": "verdict"}'; } > "$rd/record.jsonl"
+echo wave/run-f > "$T/st/auto/wave-run-f"; echo wave/run-f > "$T/st/auto/waved-run-f"; : > "$T/ccwave.calls"
+cpass() { echo "$rd" > "$T/st/active-runs.txt"; (cd "$T/co" && SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_BOARD_VOCAB= SG_CHILDCC_DEFER_MAX=2 SG_CHILDCC_BUDGET=5 SG_HOLD_TRIES=99 SG_SQUAD="$(cd "$here/../../.." && pwd)" SQUAD_CAPS_DIR="$T/caps" python3 -I "$T/s/childcc.py" 2>&1); }
+o1=$(cpass); r1=$?
+[ "$r1" = 3 ] && [ -e "$T/st/auto/dwait-run-f-c" ] && ok "childcc opens its deferral counter on the first pass" || ko "pass 1: exit $r1: $o1"
+printf 'abc 1 0\n' > "$T/st/auto/ccdefer-run-f-c"   # a stale escalation marker, as a prior pass might have left it
+: > "$T/st/cycle.log"; o2=$(run)
+[ ! -e "$T/st/auto/ccdefer-run-f-c" ] && ok "the janitor drops the finished run's ccdefer marker between two passes" || ko "ccdefer survived: $o2"
+[ -e "$T/st/auto/dwait-run-f-c" ] && ok "the janitor never removes the deferral counter the deadline reads" || ko "the janitor took the deadline counter: $o2"
+o3=$(cpass); r3=$?
+[ "$r3" = 0 ] && /usr/bin/grep -q '^requeue 7700 ' "$T/ccwave.calls" && ok "after the janitor pass the count still reaches its bound: the issue is requeued, so the wave lands" || ko "the janitor reset the count: exit $r3, waves $(cat "$T/ccwave.calls" 2>/dev/null): $o3"
+[ ! -e "$T/st/auto/dwait-run-f-c" ] && ok "the requeued child's counter is gone" || ko "dwait survived the requeue"
 rm -rf "$T"
 exit $fail
