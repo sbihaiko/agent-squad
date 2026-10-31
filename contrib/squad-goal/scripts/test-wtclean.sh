@@ -179,4 +179,16 @@ out=$(bash "$T/s/wtclean.sh" 2>&1)
 [ ! -d runs/run-842-clean/ws/w ] && ok "U: local-only branch without undelivered Refs is cleanable" || ko "U: ordinary local-only work was kept: $out"
 if [ -d runs/run-842-refs/ws/w ]; then case "$out" in *"WT UNPUSHED run-842-refs"*) ok "U: undelivered non-RED Refs work is kept and reported";; *) ko "U: undelivered Refs work lacks WT UNPUSHED: $out";; esac; else ko "U: undelivered Refs work was removed: $out"; fi
 [ -d runs/run-842-empty/ws/w ] && ok "U: a run whose landed wave was empty is kept" || ko "U: empty-wave work was removed: $out"
+# Q: a finished tree under .claude/worktrees (one per workflow run, made by the agent tools) is culled once it is clean, unlocked,
+# not in use and its HEAD is in the base. A locked tree is a live agent's, and a dirty one holds work, so both stay.
+cd "$T/co"; mkdir -p .claude/worktrees
+$G worktree add -q --detach .claude/worktrees/wf-done origin/main
+$G worktree add -q --detach .claude/worktrees/wf-locked origin/main; $G worktree lock .claude/worktrees/wf-locked
+$G worktree add -q --detach .claude/worktrees/wf-dirty origin/main; echo x > .claude/worktrees/wf-dirty/f
+for d in wf-done wf-locked wf-dirty; do touch -t 202001010000 "$($G -C ".claude/worktrees/$d" rev-parse --path-format=absolute --git-path logs/HEAD)"; done
+out=$(bash "$T/s/wtclean.sh" 2>&1)
+[ ! -d .claude/worktrees/wf-done ] && ok "Q: finished .claude tree in the base is removed" || ko "Q: finished .claude tree kept: $out"
+[ -d .claude/worktrees/wf-locked ] && ok "Q: locked .claude tree is kept" || ko "Q: locked .claude tree was removed: $out"
+[ -d .claude/worktrees/wf-dirty ] && ok "Q: dirty .claude tree is kept" || ko "Q: dirty .claude tree was removed: $out"
+case "$out" in *"WT CLEAN claude wf-done"*) ok "Q: the decision line names the class and the tree";; *) ko "Q: no claude decision line: $out";; esac
 rm -rf "$T"; exit $fail
