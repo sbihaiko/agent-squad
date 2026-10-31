@@ -292,7 +292,7 @@ const models=[
 ];
 const html=pie(models);
 const legend=[...html.matchAll(/<span class=ln>([^<]+)<\\/span>/g)].map(m=>m[1]);
-const shares=[...html.matchAll(/<span class=ln>[^<]+<\\/span><b>([^<]+)<\\/b>/g)].map(m=>m[1]);
+const shares=[...html.matchAll(/<span class=ln>[^<]+<\\/span><span class=usd>[^<]*<\\/span><b>([^<]+)<\\/b>/g)].map(m=>m[1]);
 const slices=[...html.matchAll(/<path[^>]*fill="([^"]+)"/g)].map(m=>m[1]);
 const out={html, legend, shares, slices, n:legend.length, other:(legend.find(x=>x.startsWith('other'))||'')};
 """)
