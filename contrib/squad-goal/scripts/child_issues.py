@@ -37,6 +37,21 @@ def named(text):
     return found
 
 
+# The dispatcher's own cluster form: `GitHub issue #897` or `GitHub issue(s) 897, 908, 910`. Only this form names the
+# issues one child works (#954); a reference the pasted ticket text quotes is context, not the child's work.
+_CLUSTER = re.compile(r"GitHub issues?(?:\s*\(s\))?\s*#?([0-9][0-9,\s]*)")
+
+
+def cluster(text):
+    """Every issue one child works, in the order its dispatcher names it: empty when the text carries no cluster form."""
+    out = []
+    for m in _CLUSTER.finditer(plain(text)):
+        for x in re.split(r"[^0-9]+", m.group(1)):
+            if x and x not in out:
+                out.append(x)
+    return out
+
+
 if __name__ == "__main__" and sys.argv[1:2] == ["first"]:
     n = first(sys.stdin.read())
     if n: print(n)

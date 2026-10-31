@@ -38,6 +38,7 @@ run_def branch c "Create the worktree: git worktree add ~/wt-as-1492 -b gui/1492
 run_def hashfirst c "GitHub issue #1500 and GitHub issue 1487" pass
 run_def unmapped c "a child whose prompt names no issue at all" pass
 run_def refs c "Every commit message carries the line \`Refs #1493\` on its own line. GOAL (issue 1493, SPEC 9 child): fix it." pass
+run_def cluster c "CHILD — GitHub issue(s) 5201, 5202, 5203 (work in the worktree the run gives you)." pass
 printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}}' > "$T/issues-open.json"
 export SG_SQUAD=$(cd "$(dirname "$src")/../../.." && pwd) SQUAD_CAPS_DIR=$T/caps   # a review takes a review slot (caps.reviews): a throwaway budget, this repository's squad.caps
 export GH_LOG=$T/gh.log GH_ISSUES_OPEN=$T/issues-open.json; export GH_STATE_FAIL=$T/gh.statefail SG_STATE=$T/st SG_REPO=x/y SG_OWNER=x SG_PROJECT=4 PATH="$T/bin:$PATH" GH_NUMS="2:Todo 3:Testing 4:In_Progress 5101:Todo"
@@ -53,6 +54,7 @@ echo "$m" | /usr/bin/grep -q ' 1487$' && ok "GitHub issue N (no hash): moved" ||
 ls "$T/st/cq"/*#1487-cc-*.md >/dev/null 2>&1 && ok "GitHub issue N (no hash): comment queued" || ko "GitHub issue N (no hash): no comment"
 echo "$m" | /usr/bin/grep -q ' 1491$' && ok "GitHub issues N: moved" || ko "GitHub issues N not moved"
 echo "$m" | /usr/bin/grep -q ' 1492$' && ok "gui/N / wt-as-N: moved" || ko "gui/N / wt-as-N not moved"
+for c in 5201 5202 5203; do echo "$m" | /usr/bin/grep -q " $c$" && ok "a cluster child moves #$c" || ko "a cluster child did not move #$c"; done
 echo "$m" | /usr/bin/grep -q ' 1493$' && ok "Refs #N, the dispatchers' own link: moved (#555)" || ko "Refs #N not moved: the router wrote issue N with no hash"
 echo "$m" | /usr/bin/grep -q ' 1500$' && ok "hash pattern still wins first" || ko "hash pattern lost first-match"
 echo "$out" | /usr/bin/grep -q 'CHILDCC UNMAPPED unmapped c' && ok "unmapped child logged once" || ko "unmapped child not logged: $out"

@@ -301,6 +301,18 @@ def card_status(n):   # the state the card carries, "" when it carries none or t
 def issue_from(df):
     n = child_issues.first(df)   # the one reader the janitor's sibling passes share (#555)
     return int(n) if n else None
+def cluster_from(df):
+    """The first issue of the dispatcher's own cluster form (#954), which names several: `child_issues.first` reads the
+    single-issue forms only, so a cluster child would otherwise read as unmapped and move nothing."""
+    txt = (df if isinstance(df, str) else " ".join(str(df.get(k) or "") for k in ("task", "prompt"))) if df is not None else ""
+    got = child_issues.cluster(txt)
+    return int(got[0]) if got else None
+def every_issue(d, n):
+    """Every issue one child works (#954): a cluster dispatch packs several into one child, so its cards are the whole
+    cluster, not only the first number the text names. Falls back to the child's one issue."""
+    txt = (" ".join(str(d.get(k) or "") for k in ("task", "prompt")) if isinstance(d, dict) else str(d or ""))
+    got = [int(x) for x in child_issues.cluster(txt)]
+    return got or [n]
 def child_request(rd):   # the run was dispatched for a child (launch.py's _issue_child_request), so it had a wave to cut
     try: txt = (rd / "request.txt").read_text(errors="replace")
     except OSError: return False
@@ -319,7 +331,7 @@ for r in (sys.argv[1:] or (st / "active-runs.txt").read_text().split()):
         try: d = json.loads(l)
         except Exception: continue
         if d.get("event") == "spawn_accepted":
-            seen.add(d["child"]); defn[d["child"]] = d.get("definition"); n = issue_from(json.dumps(d.get("definition")))
+            seen.add(d["child"]); defn[d["child"]] = d.get("definition"); n = cluster_from(json.dumps(d.get("definition"))) or issue_from(json.dumps(d.get("definition")))
             if d.get("envelope") in gated: owned.add(d["child"])
             if n is not None: issue[d["child"]] = n
         elif d.get("event") == "outcome" and d.get("outcome") == "pass" and d.get("node") in issue:
@@ -411,9 +423,11 @@ for key, r, child, why, n, finished, d, lwhy, ok, own, rnd in pending[k0:] + pen
             if key not in FIX_WAIT: ATTEMPTED.add(key)   # only a child this pass tried and could not enter has a deadline; a budget or cursor child does not, and a live fix run is its own bound (#931)
     if entered is False: continue   # the child never entered the wave: no marker, so the next pass tries it again; no card moves, its issue went back to the queue
     mk.touch()
-    if entered is None: subprocess.run([board, owner, proj, "Code Complete", str(n)], capture_output=True)   # no wave: the pass moves the card itself
-    (st / "cq" / f"{CQ}#{n}-cc-{mk.name}.md").write_text(f"Child {child} of squad run {name} finished: pass. Card -> Code Complete (Testing starts with the merge/e2e or the fork suite). {why[:600]}\n")
-    print(f"CODE COMPLETE #{n} ({name} {child})")
+    if entered is None:   # no wave: the pass moves the cards itself, one per issue the child works (#954)
+        for sib in every_issue(d, n):
+            subprocess.run([board, owner, proj, "Code Complete", str(sib)], capture_output=True)
+            print(f"CODE COMPLETE #{sib} ({name} {child})", flush=True)
+    (st / "cq" / f"{CQ}#{n}-cc-{mk.name}.md").write_text(f"Child {child} of squad run {name} finished: pass. Cards -> Code Complete: {', '.join('#' + str(x) for x in every_issue(d, n))} (Testing starts with the merge/e2e or the fork suite). {why[:600]}\n")
 # The round holds the children worked since the last complete pass. A pass is complete when every child it left had its turn
 # in the round: a child that fails on every pass then still lets the landing go on, as one pass over every child did. A held
 # child is never in `visited` (#620): it holds the landing until its hold is requeued or its wave reaches its age cap.

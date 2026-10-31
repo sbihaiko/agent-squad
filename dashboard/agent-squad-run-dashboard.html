@@ -776,6 +776,17 @@ function childrenModule({ num, openCalls, orNull, skillName }) {
     const first = found.sort((a, b) => a.index - b.index)[0];
     return first ? Number(first[1]) : null;
   };
+  // Every issue one child works (#954): a cluster dispatch packs several into one child, and its own form is
+  // "GitHub issue(s) 897, 908, 910". Only that form counts, so a blocker the pasted ticket text quotes is not the
+  // child's work. Empty when the text carries no cluster form.
+  const issueNumbers = (prompt) => {
+    const t = typeof prompt === "string" ? prompt : "";
+    const out = [];
+    const re = /GitHub issues?(?:\s*\(s\))?\s*#?([0-9][0-9,\s]*)/g;
+    let m;
+    while ((m = re.exec(t))) for (const x of m[1].split(/[^0-9]+/)) if (x && !out.includes(Number(x))) out.push(Number(x));
+    return out;
+  };
 
   // A dispatch child's short name for display: route.router.1 -> router.1. The full name stays in the tooltip.
   const shortChildName = (name, dispatch) => (typeof name === "string" && typeof dispatch === "string" && name.startsWith(dispatch + ".") ? name.slice(dispatch.length + 1) : name);
@@ -811,14 +822,14 @@ function childrenModule({ num, openCalls, orNull, skillName }) {
       const evidence = landFailed && l.effect && l.effect.stderr ? Object.fromEntries(reasons.map((r) => [r, l.effect.stderr])) : o && o.evidence ? o.evidence : null;
       const checks = o && o.checks ? o.checks : null;
       const short = shortChildName(a.child, a.envelope);   // the display name: route.router.1 -> router.1
-      const issue = issueNumber(d.prompt), skill = skillName(d.skill);
+      const issue = issueNumber(d.prompt), issues = issueNumbers(d.prompt), skill = skillName(d.skill);
       return { name: a.child, dispatch: a.envelope, proposer: orNull(a.parent), depth: orNull(a.depth), rejected: false, outcome, reasons, evidence, checks, issue, task: orNull(d.task),
         review: childReview(events, a.child, l),
         running_for: run ? run.running_for : null, live: run ? run.live : null,   // a child in flight: how long it has run, and what it last reported
         skill: orNull(d.skill), skillLabel: skill,   // the bare skill name, for the detail line
         // The task first: every child of one dispatch usually runs the same skill, so the skill alone tells no two children
         // apart, while the issue does. A child with no task falls back to its skill, then to its own name.
-        label: issue === null ? skill || short : `issue #${issue}`,
+        label: issues.length > 1 ? `issues ${issues.map((x) => `#${x}`).join(', ')}` : issue === null ? skill || short : `issue #${issue}`,
         model: o && o.model ? o.model : orNull(d.model), effort: o && o.effort ? o.effort : orNull(d.effort), after: Array.isArray(d.after) ? d.after : [],
         workspace: orNull(d.workspace), spend: o ? orNull(o.spend) : null, turns: o ? orNull(o.turns) : null, elapsed: o ? orNull(o.elapsed) : null,
         tokens_in: o ? orNull(o.tokens_in) : null, tokens_out: o ? orNull(o.tokens_out) : null, tps: o && num(o.tokens_out) && num(o.elapsed) && o.elapsed > 0 ? o.tokens_out / o.elapsed : null,
@@ -943,7 +954,7 @@ function childrenModule({ num, openCalls, orNull, skillName }) {
     return (dn && dn.entry && layout[dn.entry]) || layout[dispatchName] || null;
   }
 
-  return { issueNumber, shortChildName, runChildren, skillLabel, CHILD_COLUMN_HEIGHT, childLayout, dispatchChecks, freeSpot, childAnchor };
+  return { issueNumber, issueNumbers, shortChildName, runChildren, skillLabel, CHILD_COLUMN_HEIGHT, childLayout, dispatchChecks, freeSpot, childAnchor };
 }
 
 // Dashboard core module: The one state a card shows, and the class it paints.. Moved from rest.js with no change.

@@ -46,3 +46,15 @@ def test_a_json_encoded_prompt_maps_every_refs_line():
     text = json.dumps({"prompt": "Deliver two issues of SPEC 481 in one slice.\n\n## Issue 715: a seam\nRefs #715\nRefs #717\n"})
     assert m.named(text) == {"715", "717"}
     assert m.first(text) == "715"
+
+
+def test_a_cluster_line_names_every_issue_the_child_works():
+    """#954: one child of a cluster dispatch works several issues, and the list form names them all. A reference the
+    text quotes elsewhere ("a blocker: issue #775") is not the child's own work, so only the cluster form counts."""
+    m = _mod()
+    text = ("CHILD — GitHub issue(s) 897, 908, 910 (work in the worktree the run gives you)\n\n"
+            "## Issue 897: one\nRefs #897\nA blocker: issue #775\n")
+    assert m.cluster(text) == ["897", "908", "910"]
+    assert m.cluster("One child for GitHub issue #1500 and a note on issue #1487") == ["1500"]
+    assert m.cluster("GitHub issues 1491 on the fork") == ["1491"]
+    assert m.cluster("a child whose prompt names no issue at all") == []
