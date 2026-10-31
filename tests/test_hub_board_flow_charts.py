@@ -407,3 +407,59 @@ def test_every_band_drawn_has_a_legend_entry_frozen_and_no_column_included(hub, 
     bands = {b["name"]: b for b in cfd["bands"]}
     assert bands["frozen"]["upper"][0] - bands["frozen"]["lower"][0] == 2
     assert bands["No column"]["upper"][0] - bands["No column"]["lower"][0] == 1
+
+
+# SPEC 889 #900: the lead-time diagram is the Jira-style control chart, computed by the hub (board_leadtime).
+TIMEFRAME_KEYS = ["7", "14", "30", "90", "180", "all"]
+
+
+def test_the_control_chart_is_served_for_every_timeframe_and_both_scales(hub, board):
+    hub.board_cache["items"] = [_card(1, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-02T09:00:00Z")]
+
+    control = hub.board()["flow"]["lead"]["control"]
+
+    assert set(control) == {"jira", "log"}
+    for scale in control.values():
+        assert list(scale) == TIMEFRAME_KEYS
+    assert control["log"]["all"]["axis"] == "log"
+    assert control["jira"]["all"]["axis"] == "linear"
+
+
+def test_a_control_chart_dot_carries_the_issue_title_and_its_close_date(hub, board):
+    hub.board_cache["items"] = [{**_card(7, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-02T09:00:00Z"),
+                                 "t": "ship the chart"}]
+
+    dot = hub.board()["flow"]["lead"]["control"]["jira"]["all"]["dots"][0]
+
+    assert dot["n"] == 7
+    assert dot["title"] == "ship the chart"
+    assert dot["closed"] == "2026-10-02"
+
+
+def test_the_control_chart_names_its_lines_and_controls_the_jira_way(hub):
+    for name in ("Rolling average (", "centered)", "Standard deviation", "Median", "p85", "Average",
+                 "Past month", "Log scale", "Timeframe"):
+        assert name in hub.PAGE, f"the page names no {name!r}"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_control_chart_draws_one_mark_per_cluster_on_the_date_axis(hub, board, tmp_path):
+    hub.board_cache["items"] = [
+        _card(1, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-02T09:00:00Z"),
+        _card(2, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-02T09:00:00Z"),
+        _card(3, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-09T09:00:00Z"),
+    ]
+    lead = hub.board()["flow"]["lead"]
+    block = _flow_block(hub).split("const drawFlow")[0]
+    drawing = "\n".join([
+        "const COLORS={},COLNAME={issue_closed:'Closed'};", "const esc=s=>String(s);", block,
+        f"process.stdout.write(flowLead({json.dumps(lead)}));",
+    ])
+    path = tmp_path / "flow-control.js"
+    path.write_text(drawing)
+    result = subprocess.run(["node", str(path)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    circles = re.findall(r"<circle [^>]*>", result.stdout)
+    clusters = lead["control"]["jira"]["all"]["clusters"]
+    assert len(circles) == len(clusters) == 2, "cards 1 and 2 share a close: one cluster; card 3 is its own mark"
+    assert "2 issues" in result.stdout
