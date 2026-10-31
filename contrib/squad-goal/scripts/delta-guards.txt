@@ -212,6 +212,9 @@ squad/scaffold.py	tests/test_scaffold.py
 squad/sdk_adapter.py	tests/test_sdk_adapter.py
 squad/session.py	tests/test_session.py
 squad/runners/dispatch.py	tests/test_dispatch.py
+contrib/squad-goal/scripts/ghread.py	tests/test_gh_read.py
+contrib/squad-goal/scripts/delta-guards.txt	tests/test_delta_guards.py
+uv.lock	tests/test_tooling.py
 squad/setup.py	tests/test_setup.py
 squad/skillpath.py	tests/test_skillpath.py
 squad/skills.py	tests/test_skills.py
