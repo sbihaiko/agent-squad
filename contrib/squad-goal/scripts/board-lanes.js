@@ -18,7 +18,8 @@ function buildBoard(groups,o){
   const mode=o.mode,cols=groups.map(g=>g.name),closed=o.closed,fw=o.fw||[],fs=o.fs||[],text=o.text||(()=>true);
   const hasFilter=!!(fw.length||fs.length||o.search);
   const specs=new Map(),rows=[];
-  groups.forEach(g=>g.items.forEach(x=>{if(x.sp){if(!specs.has(x.n))specs.set(x.n,{title:x.t,st:g.name});return}rows.push({...x,col:g.name})}));
+  const gone=new Set([closed,o.abandoned||"Abandoned"]),goneSpecs=new Set();   // a spec whose card is closed or abandoned has no work left: no lane (#890)
+groups.forEach(g=>g.items.forEach(x=>{if(x.sp){if(gone.has(g.name))goneSpecs.add(x.n);else if(!specs.has(x.n))specs.set(x.n,{title:x.t,st:g.name});return}rows.push({...x,col:g.name})}));
   const lanes=new Map(),ensure=(id,meta)=>{if(!lanes.has(id))lanes.set(id,{id,...meta,all:[],vis:[]});return lanes.get(id)};
   const laneOf=x=>{
     if(hasLabel(x,"loop-bug"))return["bugs",{kind:"bugs",title:"Loop bugs"}];
@@ -27,7 +28,8 @@ function buildBoard(groups,o){
     const sp=specs.get(x.pa)||{title:"",st:""};
     return["s"+x.pa,{kind:"s",num:x.pa,title:sp.title,st:sp.st}]};
   if(mode!=="wave")specs.forEach((sp,num)=>ensure("s"+num,{kind:"s",num,title:sp.title,st:sp.st}));   // a spec card on the board is always a lane
-  rows.forEach(x=>{const[id,meta]=laneOf(x),l=ensure(id,meta);l.all.push(x);if(boardOk(x,fw,fs)&&text(x))l.vis.push(x)});
+  rows.forEach(x=>{if(goneSpecs.has(x.pa)){if(gone.has(x.col))return;const l=ensure("none",{kind:"none",title:"No spec"});l.all.push(x);if(boardOk(x,fw,fs)&&text(x))l.vis.push(x);return}   // a closed spec keeps no lane: its open card falls to No spec, its closed card is history (#890)
+const[id,meta]=laneOf(x),l=ensure(id,meta);l.all.push(x);if(boardOk(x,fw,fs)&&text(x))l.vis.push(x)});
   const shown=[...lanes.values()].filter(l=>l.vis.length>0||(!hasFilter&&l.kind==="s"));
   shown.forEach(l=>{l.n=l.vis.length;l.total=l.all.length;l.closed=l.all.filter(x=>x.col===closed).length;
     l.done=l.total>0&&l.closed===l.total;l.live=l.vis.some(x=>!!x.ho);l.counts={};l.vis.forEach(x=>{l.counts[x.col]=(l.counts[x.col]||0)+1})});
