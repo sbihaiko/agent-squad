@@ -100,6 +100,17 @@ out=$(ng); rc=$?
 mark; out=$(ng); rc=$?
 [ $rc = 0 ] && [ "$(/usr/bin/grep -c . "$T/ran.log")" = 2 ] && ok "the next day runs both modes again" || ko "next day rc $rc: '$(cat "$T/ran.log" 2>&1)'"
 
+# 6b) two facts refuse the start without writing the day marker, so the nightly still runs once they clear: a profile that
+#     switches it off (ADR-0153), and a promotion proof measuring the tip in its own tree. Two full suites saturate the box
+#     before either shows in the load average, which is what the proof's own guard reads the other way round.
+mark; rm -f "$T/ran.log"
+SG_NIGHTLY_OFF=1 ng >/dev/null 2>&1; rc=$?
+[ $rc = 0 ] && [ ! -s "$T/ran.log" ] && [ ! -e "$ST/auto/nightly-$(date +%F)" ] && ok "a profile that switches the nightly off runs no mode and leaves no day marker" || ko "SG_NIGHTLY_OFF: rc $rc ran '$(cat "$T/ran.log" 2>&1)' marker $([ -e "$ST/auto/nightly-$(date +%F)" ] && echo written)"
+printf '%s 1\n' "$(date +%s)" > "$ST/promote-reserve"; ng >/dev/null 2>&1; rc=$?
+[ $rc = 0 ] && [ ! -s "$T/ran.log" ] && [ ! -e "$ST/auto/nightly-$(date +%F)" ] && ok "a promotion proof in flight holds the nightly, and no day marker is spent" || ko "promote-reserve: rc $rc ran '$(cat "$T/ran.log" 2>&1)'"
+rm -f "$ST/promote-reserve"; ng >/dev/null 2>&1
+[ "$(/usr/bin/grep -c . "$T/ran.log")" = 2 ] && ok "the nightly runs once the proof is over" || ko "after the proof: '$(cat "$T/ran.log" 2>&1)'"
+
 # 7) a record the loop cannot read never holds dispatch, and neither does a line that only LOOKS red: the hold reads the
 #    whole six-field record, never its second field alone (#704, ADR-0153)
 bad_rec() { printf "$1" > "$ST/nightly-result"; hold >/dev/null; [ $? = 1 ]; }
