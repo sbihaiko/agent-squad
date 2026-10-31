@@ -2,6 +2,8 @@
 import copy
 import json
 import re
+import shutil
+import subprocess
 
 import pytest
 
@@ -371,6 +373,33 @@ def test_a_node_changed_to_a_gate_picks_a_registered_check_and_a_gate_is_never_c
     banana = changed(d, "scout", "banana")
     assert all("error" in x for x in (outside, away, same, ghost, banana)), (outside, away, same, ghost, banana)
     assert "read-only" in away["error"]
+
+
+def test_the_change_kind_select_lists_every_kind_and_selects_the_nodes_own_kind():
+    from build_dashboard import core_bundle, engine_data  # tests.dashboard_helpers puts scripts on sys.path
+
+    assert shutil.which("node"), "node is not installed: the dashboard parity guard cannot run, and it never skips"
+    script = ("let s = ''; process.stdin.on('data', (c) => (s += c)); process.stdin.on('end', () => {"
+              " const { engine, core, kind } = JSON.parse(s); const make = new Function(core + '\\nreturn make;')();"
+              " process.stdout.write(JSON.stringify(make(engine).kindChoices(kind))); });")
+    p = subprocess.run(["node", "-e", script], input=json.dumps({"engine": engine_data(), "core": core_bundle(), "kind": "agent"}),
+                       capture_output=True, text=True, timeout=300)
+    assert p.returncode == 0, p.stderr
+    choices = json.loads(p.stdout)
+    assert [c["kind"] for c in choices] == KINDS
+    assert [c["kind"] for c in choices if c["selected"]] == ["agent"]
+    assert "core.kindChoices(n.kind)" in page_template()
+
+
+def test_start_carries_the_open_and_example_buttons_and_the_example_loads_on_one_click():
+    page = page_template()
+    assert 'data-start="open"' in page and 'data-start="example"' in page
+    assert 'b.dataset.start === "example"' in page and "const loadExample" in page
+
+
+def test_the_page_loads_the_workflow_its_fragment_names_on_open():
+    page = page_template()
+    assert "/^#workflow=(.+)$/" in page and "OPENED.text" in page and "OPENED.name" in page
 
 
 def test_the_side_panel_reads_the_served_lists_by_their_real_keys_so_selecting_an_agent_never_throws():

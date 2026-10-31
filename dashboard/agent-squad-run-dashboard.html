@@ -2071,7 +2071,10 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
   // The top-level fields a person may not change: the two registries.
   const READ_ONLY_TOP = ["facts", "gates"];
 
-  return { applyNodeEdit, fieldGroups, setField, addNode, removeNode, reviewGate, connect, disconnect, renameNode, layoutRename, changeKind, unseenValues, READ_ONLY_TOP };
+  // Every kind, with the node's own kind selected, so the change-kind select shows what the node is now.
+  const kindChoices = (current) => KINDS.map((kind) => ({ kind, selected: kind === current }));
+
+  return { applyNodeEdit, fieldGroups, setField, addNode, removeNode, reviewGate, connect, disconnect, renameNode, layoutRename, changeKind, kindChoices, unseenValues, READ_ONLY_TOP };
 }
 
 // Dashboard core module: layout and view: auto layout, layout for save, fit, zoom, pan. A factory: it takes what it uses from the modules below it, and returns its functions. No DOM here.
@@ -2535,7 +2538,7 @@ function scriptModule() {
 function make(ENGINE) {
   const { isObj, same, clone, pyFloat, canonText, canonFromText, graphHash, cmpCodePoints, parseImport } = canonModule(ENGINE);
   const { SCHEMA, KINDS, resolve, validate } = schemaModule({ ENGINE, isObj, canonText, same, pyFloat });
-  const { applyNodeEdit, fieldGroups, setField, addNode, removeNode, reviewGate, connect, disconnect, renameNode, layoutRename, changeKind, unseenValues, READ_ONLY_TOP } = editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve });
+  const { applyNodeEdit, fieldGroups, setField, addNode, removeNode, reviewGate, connect, disconnect, renameNode, layoutRename, changeKind, kindChoices, unseenValues, READ_ONLY_TOP } = editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve });
   const { autoLayout, graphKids, layoutForSave, viewFit, viewFitFloor, viewZoomAt, viewPanBy, viewReveal } = layoutModule();
   const { REVIEW_NOTE, diffGraphs, declaredCaps, commandTemplate, reviewSheet, saveText, hashChip, hashRelation, draftRecord, draftOffer, saveGate, saveMode } = reviewModule({ canonText, graphHash, cmpCodePoints });
   const { snapshot, histNew, histRecord, histUndo, histRedo } = historyModule({ clone });
@@ -2553,7 +2556,7 @@ function make(ENGINE) {
   const { stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus, CARD_NAMES, cardGroups, cardBody } = groupsModule({ OUTCOME_STATE, STATES, inFlight, isDone, isRunning, childAnchor, childLayout, fmt, freeSpot, num, sumOf });
   const { nodeHarness, runStats } = statsModule({ causeSummary, dispatchChecks, failureCauses, lastOf, liveState, num, openCalls, orNull, runCap, runChildren, runTimeline, runTotals, skillLabel, sumOf, tokenFigures });
 
-  return { scriptDiagram, scriptSvg, guiRun, pauseView, controlBody, LEGEND, LEGEND_CHIPS, RUN_STATES, STATE_TEXT, HELP, httpSource, followPush, snapshot, histNew, histRecord, histUndo, histRedo, REVIEW_NOTE, diffGraphs, declaredCaps, commandTemplate, reviewSheet, saveText, hashChip, hashRelation, draftRecord, draftOffer, layoutForSave, saveGate, saveMode, viewFit, viewFitFloor, viewZoomAt, viewPanBy, viewReveal, validate, canonText, canonFromText, graphHash, parseImport, parseRecord, parseLive, readDelay, liveState, replayAt, moveCursor, unresolvedChildren, overlayRows, overlayFor, runStats, runTotals, runCap, totalsCells, issueProgress, progressCells, nodeState, stateClass, childStateClass, inFlight, isRunning, graphKids, nodeLabel, issueNumber, reasonParts, causeSummary, failureCauses, runChildren, nodeHarness, nodeModel, childLayout, childAnchor, dispatchChecks, fmt, applyNodeEdit, reviewGate, fieldGroups, setField, addNode, removeNode, connect, disconnect, renameNode, layoutRename, changeKind, unseenValues, freeSpot, stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus, CARD_NAMES, cardGroups, cardBody, autoLayout, CHILD_COLUMN_HEIGHT, READ_ONLY_TOP, KINDS };
+  return { scriptDiagram, scriptSvg, guiRun, pauseView, controlBody, LEGEND, LEGEND_CHIPS, RUN_STATES, STATE_TEXT, HELP, httpSource, followPush, snapshot, histNew, histRecord, histUndo, histRedo, REVIEW_NOTE, diffGraphs, declaredCaps, commandTemplate, reviewSheet, saveText, hashChip, hashRelation, draftRecord, draftOffer, layoutForSave, saveGate, saveMode, viewFit, viewFitFloor, viewZoomAt, viewPanBy, viewReveal, validate, canonText, canonFromText, graphHash, parseImport, parseRecord, parseLive, readDelay, liveState, replayAt, moveCursor, unresolvedChildren, overlayRows, overlayFor, runStats, runTotals, runCap, totalsCells, issueProgress, progressCells, nodeState, stateClass, childStateClass, inFlight, isRunning, graphKids, nodeLabel, issueNumber, reasonParts, causeSummary, failureCauses, runChildren, nodeHarness, nodeModel, childLayout, childAnchor, dispatchChecks, fmt, applyNodeEdit, reviewGate, fieldGroups, setField, addNode, removeNode, connect, disconnect, renameNode, layoutRename, changeKind, kindChoices, unseenValues, freeSpot, stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus, CARD_NAMES, cardGroups, cardBody, autoLayout, CHILD_COLUMN_HEIGHT, READ_ONLY_TOP, KINDS };
 }
 
 </script>
@@ -3254,7 +3257,7 @@ function renderRunPanel() {
 
 function renderSide() {
   const side = $("side");
-  if (!S.doc) { side.innerHTML = `<h2>Start</h2><p>Open a graph document, or load the five-phase example.</p><p class="note">The graph file stays as authored. A run record is read-only. Layout lives in a sibling file and never moves the graph hash.</p>`; return; }
+  if (!S.doc) { side.innerHTML = `<h2>Start</h2><p>Open a graph document, or load the five-phase example.</p><div class="row"><button data-start="open" title="Choose a graph file (a JSON graph document)">Open graph</button> <button data-start="example" title="Load the five-phase example graph">Load the five-phase example</button></div><p class="note">The graph file stays as authored. A run record is read-only. Layout lives in a sibling file and never moves the graph hash.</p>`; return; }
   const parts = [];
   if (inEdit() || S.errors.length) parts.push(`<h2>Graph</h2><div>${esc(S.doc.name || "(no name)")} · ${nodesOf().length} nodes · ${S.errors.length ? `<span class="msg-bad">${S.errors.length} error${S.errors.length > 1 ? "s" : ""}</span>` : `<span class="msg-ok">valid</span>`}</div>`);
   const top = S.errors.filter((e) => !e.node);
@@ -3280,11 +3283,10 @@ function renderSide() {
       if (n.kind === "gate") parts.push(`<h2>Read-only: check and thresholds</h2><div class="ro">check: <b>${esc(n.check)}</b><br>params: ${esc(JSON.stringify(n.params))}</div>`);
       if (inEdit()) {
       const gates = Array.isArray(S.doc.gates) ? S.doc.gates : [];
-      const kinds = core.KINDS.filter((k) => k !== n.kind);
       parts.push(`<h2>Rename and kind</h2><div class="row"><input id="n-name" value="${esc(n.name)}" spellcheck="false" title="The new name replaces the old one in every reference"> <button id="b-rename">Rename</button></div>`
         + (n.kind === "gate"
           ? `<div class="note">A gate keeps its kind: its check id and thresholds are read-only. Remove it and add the node you want.</div>`
-          : `<div class="row"><select id="n-kind" title="The new kind; every field stays and the rules judge the result">${kinds.map((k) => `<option>${k}</option>`).join("")}</select> <select id="n-check" title="Registered check for the gate" hidden>${gates.map((g) => `<option>${esc(g.id)}</option>`).join("")}</select> <button id="b-kind">Change kind</button></div>`)
+          : `<div class="row"><select id="n-kind" title="The new kind; every field stays and the rules judge the result">${core.kindChoices(n.kind).map((c) => `<option${c.selected ? " selected" : ""}>${c.kind}</option>`).join("")}</select> <select id="n-check" title="Registered check for the gate" hidden>${gates.map((g) => `<option>${esc(g.id)}</option>`).join("")}</select> <button id="b-kind">Change kind</button></div>`)
         + `<div id="nk-msg"></div>`);
       parts.push(`<h2>Fields</h2>${core.fieldGroups(n).map((g) => fieldGroupHtml(n, g)).join("")}`);
       parts.push(`<details><summary>Edit the whole node as JSON</summary><textarea id="node-json" spellcheck="false">${esc(JSON.stringify(n, null, 2))}</textarea><div><button id="b-apply">Apply to node</button> <span id="apply-msg"></span></div></details>`);
@@ -3456,6 +3458,8 @@ async function renameSelected() {
 async function changeSelectedKind() {
   if (!S.doc || !S.selected) return;
   const name = S.selected, kind = $("n-kind").value;
+  const current = nodesOf().find((n) => n.name === name);
+  if (!current || current.kind === kind) return;
   const before = snap();
   const r = core.changeKind(S.doc, name, kind, kind === "gate" ? { check: $("n-check").value } : {});
   if (r.error) { nkMessage(r.error); return; }
@@ -3601,7 +3605,17 @@ function download(name, text, type) {
 const readFile = (f) => new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = () => no(r.error); r.readAsText(f); });
 
 $("f-graph").addEventListener("change", async (e) => { const f = e.target.files[0]; if (f) await loadGraph(await readFile(f), f.name); e.target.value = ""; });
-$("b-example").addEventListener("click", () => loadGraph(JSON.stringify(EXAMPLE), "five-phases.graph.json"));
+const loadExample = () => loadGraph(JSON.stringify(EXAMPLE), "five-phases.graph.json");
+$("b-example").addEventListener("click", loadExample);
+$("side").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-start]");
+  if (!b) return;
+  if (b.dataset.start === "open") $("f-graph").click();
+  else if (b.dataset.start === "example") loadExample();
+});
+// `squad editor <id>` opens this page with the named workflow in its fragment: a page opened from a file cannot read a file of its own.
+const OPENED = (() => { const m = /^#workflow=(.+)$/.exec(location.hash); if (!m) return null; try { return JSON.parse(decodeURIComponent(m[1])); } catch (e) { return null; } })();
+if (OPENED && typeof OPENED.text === "string") loadGraph(OPENED.text, String(OPENED.name));
 $("f-record").addEventListener("change", async (e) => {
   const f = e.target.files[0]; if (!f) return;
   const r = core.parseRecord(await readFile(f));

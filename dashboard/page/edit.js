@@ -129,6 +129,8 @@ async function renameSelected() {
 async function changeSelectedKind() {
   if (!S.doc || !S.selected) return;
   const name = S.selected, kind = $("n-kind").value;
+  const current = nodesOf().find((n) => n.name === name);
+  if (!current || current.kind === kind) return;
   const before = snap();
   const r = core.changeKind(S.doc, name, kind, kind === "gate" ? { check: $("n-check").value } : {});
   if (r.error) { nkMessage(r.error); return; }

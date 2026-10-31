@@ -330,5 +330,8 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
   // The top-level fields a person may not change: the two registries.
   const READ_ONLY_TOP = ["facts", "gates"];
 
-  return { applyNodeEdit, fieldGroups, setField, addNode, removeNode, reviewGate, connect, disconnect, renameNode, layoutRename, changeKind, unseenValues, READ_ONLY_TOP };
+  // Every kind, with the node's own kind selected, so the change-kind select shows what the node is now.
+  const kindChoices = (current) => KINDS.map((kind) => ({ kind, selected: kind === current }));
+
+  return { applyNodeEdit, fieldGroups, setField, addNode, removeNode, reviewGate, connect, disconnect, renameNode, layoutRename, changeKind, kindChoices, unseenValues, READ_ONLY_TOP };
 }

@@ -345,10 +345,11 @@ def _editor(a):
     except workflows.WorkflowError as e:
         return _fail(str(e))
     url = "file://" + quote(str(runs.PAGE))
-    print(f"workflow: {path}\nsave folder: {workflows.default_dir()}\nIn the page, choose Open graph and pick the workflow above; Save graph then writes it in place.\n{url}")
+    print(f"workflow: {path}\nsave folder: {workflows.default_dir()}\nSave graph writes the workflow in place.\n{url}")
     if not a.no_open:
         import webbrowser
-        webbrowser.open(url)
+        payload = json.dumps({"name": path.name, "text": path.read_text()})
+        webbrowser.open(url + "#workflow=" + quote(payload, safe=""))
     return 0
 
 

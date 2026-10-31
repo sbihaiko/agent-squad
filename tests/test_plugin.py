@@ -1,11 +1,13 @@
 """The repo is a Claude Code plugin: an editor, a dashboard and a skill-update command, and a work and a task command that start a run (workflow ids in docs/squad/workflows/)."""
 import json
 import re
+import webbrowser
 from pathlib import Path
+from urllib.parse import quote, unquote
 
 import pytest
 
-from squad import cli, workflows
+from squad import cli, runs, workflows
 from squad.graph import from_doc
 from tests.test_cli import OK, two_agents
 
@@ -86,6 +88,17 @@ def test_editor_prints_the_file_and_the_save_folder(project, capsys):
     assert str(project / "docs/squad/workflows/default.graph.json") in out and str(project / "docs/squad/workflows") in out
     assert cli.main(["editor", "fresh", "--no-open"]) == 0 and (project / "docs/squad/workflows/fresh.graph.json").is_file()
     assert cli.main(["editor", "../x", "--no-open"]) == cli.USAGE
+
+
+def test_editor_with_a_named_workflow_opens_the_page_with_that_workflow_in_its_fragment(project, monkeypatch):
+    opened = []
+    monkeypatch.setattr(webbrowser, "open", opened.append)
+    assert cli.main(["editor", "fresh"]) == 0
+    url = opened[0]
+    assert url.startswith("file://" + quote(str(runs.PAGE)) + "#workflow=")
+    payload = json.loads(unquote(url.split("#workflow=", 1)[1]))
+    path = project / "docs/squad/workflows/fresh.graph.json"
+    assert payload == {"name": "fresh.graph.json", "text": path.read_text()}
 
 
 def test_start_runs_the_named_workflow_with_the_request_in_the_run_folder(project, capsys):
