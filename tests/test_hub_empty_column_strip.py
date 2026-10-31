@@ -16,6 +16,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
+ROOT_SCRIPTS = ROOT / "contrib/squad-goal/scripts"
 LINE = ".hidbar .hidline"       # the thin line an auto-hidden column gets, at the end of the hidden: strip (#1809)
 CHIP = ".hidbar .chip"          # the chip a column the user hid gets, above it
 
@@ -192,6 +193,8 @@ def test_the_line_is_quieter_than_a_chip_and_wears_the_columns_own_colour(hub):
     assert _prop(line, "border-left") == "2px solid var(--cc,var(--mute))", \
         "the 2px tick is the column's own colour, the value the header's dot carries (#1793)"
     chip_colour, line_colour = _prop(chip, "color"), _prop(line, "color")
+    if line_colour == "var(--mute)":
+        line_colour = re.search(r"--mute:(#[0-9a-f]{6})", (ROOT_SCRIPTS / "web-tokens.css").read_text()).group(1)
     assert re.fullmatch(r"#[0-9a-f]{6}", chip_colour or "") and re.fullmatch(r"#[0-9a-f]{6}", line_colour or ""), \
         f"both kinds name a colour: chip {chip_colour!r}, line {line_colour!r}"
     assert _lum(line_colour) < _lum(chip_colour), \

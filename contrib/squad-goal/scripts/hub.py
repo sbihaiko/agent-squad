@@ -2908,7 +2908,7 @@ button.on{border-color:var(--acc);color:var(--acc)}
 .kr .d{grid-column:2;justify-self:end;font-size:var(--fs-min);padding:0;white-space:nowrap;color:var(--mute)}.kr .d .good{color:#5fd38d}.kr .d .bad{color:#ff7b7b}
 #mbody{padding:0}.mc{background:#10141a;border:1px solid var(--line);border-radius:8px;padding:10px;margin:6px 0 8px}.mc .mt{font-size:var(--fs-min);font-weight:600;color:var(--fg);margin:0 0 2px}.mc .mx{font-size:var(--fs-min);color:var(--mute);margin:0 0 8px;line-height:1.35}
 .mr{display:grid;grid-template-columns:22px minmax(0,1fr);align-items:center;gap:5px 8px;padding:7px 8px;border:1px solid var(--line);border-radius:6px;background:var(--panel);margin-bottom:5px;font-size:var(--fs-min)}.mr.p{border-color:#2f5d45;background:#13211b}.mr .rk{flex:none;width:22px;height:22px;border-radius:11px;background:#222a35;color:var(--mute);font-size:var(--fs-min);font-weight:600;display:flex;align-items:center;justify-content:center}.mr.p .rk{background:var(--ok);color:#0b1a12}
-.mr .mn{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3;font-size:var(--fs-min);color:var(--fg)}.mr .ct{grid-column:1/3;display:flex;flex-wrap:wrap;gap:3px;align-items:center;min-width:0}.mr .mi{font-size:var(--fs-min);color:var(--mute);margin-left:4px}.mr .ur{color:var(--warn)}.mr .pv{flex:1 1 auto;min-width:0;font-size:var(--fs-min);color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mr .pv b{color:var(--ok);font-weight:600}.mr .el{flex:none;font-size:var(--fs-min);color:var(--mute);margin-left:2px}.mr .mn small{display:block;font-size:var(--fs-min);color:var(--mute)}.mr .ef{flex:none;width:62px;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;font-size:var(--fs-min);height:26px;padding:0 2px;cursor:pointer;text-overflow:ellipsis}.mr .ef.set{color:var(--warn);border-color:#6b5223}.mr .hr{flex:none;width:50px;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;font-size:var(--fs-min);height:26px;padding:0 2px;text-align:center}.mr .hr::placeholder{color:var(--mute)}.mr .hr:focus{outline:var(--focus-w) solid var(--focus);border-color:var(--acc)}.mr .hr.set{color:var(--warn);border-color:#6b5223}
+.mr .mn{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3;font-size:var(--fs-min);color:var(--fg)}.mr .ct{grid-column:1/3;display:flex;flex-wrap:wrap;gap:3px;align-items:center;min-width:0}.mr .mi{font-size:var(--fs-min);color:var(--mute);margin-left:4px}.mr .ur{color:var(--warn)}.mr .pv{flex:1 1 auto;min-width:0;font-size:var(--fs-min);color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mr .pv b{color:var(--ok);font-weight:600}.mr .el{flex:none;font-size:var(--fs-min);color:var(--mute);margin-left:2px}.mr .mn small{display:block;font-size:var(--fs-min);color:var(--mute)}.mr .ef{flex:none;width:62px;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;font-size:var(--fs-min);height:var(--ctl-h);padding:0 2px;cursor:pointer;text-overflow:ellipsis}.mr .ef.set{color:var(--warn);border-color:#6b5223}.mr .hr{flex:none;width:50px;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;font-size:var(--fs-min);height:var(--ctl-h);padding:0 2px;text-align:center}.mr .hr::placeholder{color:var(--mute)}.mr .hr:focus{outline:var(--focus-w) solid var(--focus);border-color:var(--acc)}.mr .hr.set{color:var(--warn);border-color:#6b5223}
 .mr .mb{flex:none;display:flex;gap:2px;margin-left:4px}.mr .mb button{min-width:24px;height:var(--ctl-h);padding:0;font-size:var(--fs-min);line-height:1}.mr .mb button:hover:not(:disabled){background:#2e3846;border-color:#4a5566}.mr .mb button:disabled{opacity:.25;cursor:default}.mr .mb button.x:hover:not(:disabled){color:var(--err);border-color:var(--err)}
 /* The switch (#1819): a state, so it reads as a word, not a glyph. Off de-emphasises the row and marks the rank badge
    -- the order itself is untouched, which is the point of the switch. */
@@ -3049,11 +3049,11 @@ body.dockb .sec>.ch{cursor:pointer;border-top:1px solid #2dd4bf33}body.dockb .se
    names the table gives them; the open branch lane's #5aa9ff is --acc, so it is written as the token it is. */
 /*HID_CHIP_RULES*/
 .hidbar .hidsep{border-top:1px solid var(--line);margin:3px 0 1px}   /* the divider the auto-hidden columns sit under: below everything the user hid (#1809) */
-.hidbar .hidline{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:0 2px 0 6px;border-left:2px solid var(--cc,var(--mute));color:#6f7987;font-weight:400}   /* a column hidden because it is empty, not because the user asked: no chip fill and a dimmer text than the chip's #939cab, with a 2px tick in the column's own colour -- the value the header's dot carries (#1793) -- so the two kinds are never confusable at a glance (#1809) */
+.hidbar .hidline{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:0 2px 0 6px;border-left:2px solid var(--cc,var(--mute));color:var(--mute);font-weight:400}   /* a column hidden because it is empty, not because the user asked: no chip fill and a dimmer text than the chip's #939cab, with a 2px tick in the column's own colour -- the value the header's dot carries (#1793) -- so the two kinds are never confusable at a glance (#1809) */
 iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-height:0}
 #foot{flex:none;display:flex;gap:10px;align-items:center;padding:5px 10px;background:var(--panel);border-top:1px solid var(--line);font-size:var(--fs-min);color:var(--mute);font-variant-numeric:tabular-nums}
 #foot b{color:var(--fg);font-weight:600}#foot.warn{border-top-color:#6b5223}#foot.warn b{color:var(--warn)}#foot.warn b.ldred{color:var(--err)}#foot b.ldred{color:var(--err)}
-#ldfacts{margin-left:20px;white-space:nowrap}#ldfacts .bad{color:var(--warn)}#ldfacts .sep{margin:0 3px;color:#4b5563}
+#ldfacts{margin-left:20px;white-space:nowrap}#ldfacts .bad{color:var(--warn)}#ldfacts .sep{margin:0 3px;color:var(--mute)}
 #ldfacts details.nfd{display:inline-block;vertical-align:top}#ldfacts details.nfd>summary{display:inline;cursor:pointer;list-style:none}#ldfacts details.nfd>summary::-webkit-details-marker{display:none}
 #ldfacts details.nfd[open]{white-space:normal}#ldfacts details.nfd>ul{margin:4px 0 0;padding:0 0 0 16px;white-space:normal;color:var(--mute);font-variant-numeric:normal}
 .load{display:inline-block;margin-left:4px;padding:0 5px;border-radius:9px;background:#3a2a12;color:var(--warn);font-size:var(--fs-min);border:1px solid #6b5223}
@@ -3214,10 +3214,10 @@ async function poll(){try{allRuns=await (await fetch("/api/runs")).json();select
 function bars(rows,W=280,H=40){if(!rows.length)return"";const mx=Math.max(...rows.map(r=>r.spend),0.01),bw=W/rows.length,pad=12,xl=t=>String(t).replace(/^\d{4}-/,"");
   return `<svg viewBox="0 0 ${W} ${H+pad+14}">`
     +`<line x1="0" y1="${pad}" x2="${W}" y2="${pad}" stroke="#3ecf8e" stroke-dasharray="3 2" stroke-width="1"/>`
-    +`<text x="${W}" y="${pad-3}" fill="#3ecf8e" font-size="9" text-anchor="end">max ${usd(mx)}</text>`
+    +`<text x="${W}" y="${pad-3}" fill="#3ecf8e" style="font-size:var(--fs-min)" text-anchor="end">max ${usd(mx)}</text>`
     +rows.map((r,i)=>`<rect x="${i*bw+1}" y="${pad+H-r.spend/mx*H}" width="${Math.max(bw-2,1)}" height="${r.spend/mx*H}" fill="${r.spend>=mx?"#3ecf8e":"#5aa9ff"}"><title>${xl(r.t)}: ${usd(r.spend)} · ${r.runs} runs</title></rect>`).join("")
-    +`<text x="0" y="${H+pad+12}" fill="#8a93a3" font-size="9">${xl(rows[0].t)}</text>`
-    +`<text x="${W}" y="${H+pad+12}" fill="#8a93a3" font-size="9" text-anchor="end">now</text></svg>`}
+    +`<text x="0" y="${H+pad+12}" fill="#8a93a3" style="font-size:var(--fs-min)">${xl(rows[0].t)}</text>`
+    +`<text x="${W}" y="${H+pad+12}" fill="#8a93a3" style="font-size:var(--fs-min)" text-anchor="end">now</text></svg>`}
 function kr(label,sub,v,unit,base,lowerBetter=true){if(v==null)return`<div class=kr><span class=l>${label}${sub?`<small>${sub}</small>`:""}</span><b>—</b></div>`;
   const u=unit?String(unit).trim():"";
   let chip="";if(base){const d=Math.round((v-base)/base*100),good=lowerBetter?d<0:d>0;
@@ -3290,7 +3290,7 @@ function pie(ms){
  const sl=keep.map(m=>({n:m.n,v:m.v,t:`${m.n} (${m.ids.join(", ")})${m.routes.length?" via "+m.routes.join(", "):""}: ${tk(m.in)} in · ${tk(m.out)} out · ${tk(m.cache)} cache read · ${m.calls} calls · ${usd(m.spend)}`}));
  if(fold.length){const v=fold.reduce((a,m)=>a+m.v,0),t=fold.map(m=>`${m.n}: ${(m.v/tot*100).toFixed(2)}%`).join("\n");sl.push({n:`other · ${fold.length} models`,v,t})}
  let a0=-Math.PI/2;const R=52,C=60,arc=sl.map((x,i)=>{const a1=a0+x.v/tot*2*Math.PI,big=a1-a0>Math.PI?1:0,p=sl.length===1?`<circle cx=${C} cy=${C} r=${R} fill="${PCOL[i]}"><title>${esc(x.t)}</title></circle>`:`<path d="M${C} ${C}L${C+R*Math.cos(a0)} ${C+R*Math.sin(a0)}A${R} ${R} 0 ${big} 1 ${C+R*Math.cos(a1)} ${C+R*Math.sin(a1)}Z" fill="${PCOL[i]}" stroke="#161a21" stroke-width=1><title>${esc(x.t)}</title></path>`;a0=a1;return p}).join("");
- return `<div class=pie><svg viewBox="0 0 120 120" width=112 height=112>${arc}<circle cx=${C} cy=${C} r=26 fill="#161a21"/><text x=${C} y=${C-1} text-anchor=middle fill="#d8dde6" font-size=11 font-weight=600>${tk(tot)}</text><text x=${C} y=${C+12} text-anchor=middle fill="#8a93a3" font-size=8>tokens</text></svg><div class=lg>${sl.map((x,i)=>`<div title="${esc(x.t)}"><i style="background:${PCOL[i]}"></i><span class=ln>${esc(x.n)}</span><b>${Math.round(x.v/tot*100)}%</b></div>`).join("")}</div></div>`}
+ return `<div class=pie><svg viewBox="0 0 120 120" width=112 height=112>${arc}<circle cx=${C} cy=${C} r=26 fill="#161a21"/><text x=${C} y=${C-1} text-anchor=middle fill="#d8dde6" style="font-size:var(--fs-min)" font-weight=600>${tk(tot)}</text><text x=${C} y=${C+12} text-anchor=middle fill="#8a93a3" style="font-size:var(--fs-min)">tokens</text></svg><div class=lg>${sl.map((x,i)=>`<div title="${esc(x.t)}"><i style="background:${PCOL[i]}"></i><span class=ln>${esc(x.n)}</span><b>${Math.round(x.v/tot*100)}%</b></div>`).join("")}</div></div>`}
 const ago=t=>{const m=Math.round((Date.now()/1000-t)/60);return m<2?"just now":m<90?m+" min ago":Math.round(m/60)+" h ago"},rs=t=>t?new Date(t*1000).toLocaleString([],{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}):"?";
 const rel=t=>{if(!t)return"";const x=t-Date.now()/1000;if(x<=0)return"resets now";const d=Math.floor(x/86400),h=Math.floor(x%86400/3600),m=Math.floor(x%3600/60);return"resets in "+(d?`${d}d ${h}h`:h?`${h}h ${m}m`:`${m}m`)};
 const lvl=p=>p>=90?"lv-err":p>=60?"lv-warn":"lv-ok",fpct=p=>p<10&&p>0?p.toFixed(1):String(Math.round(p));
@@ -3498,7 +3498,7 @@ let FLOWK=null,FLOWD=null;
 const flowW=800,flowH=340,flowP=36;
 const flowX=(i,n)=>n<2?flowP:flowP+i*(flowW-2*flowP)/(n-1);
 const flowY=(v,max)=>max?flowH-flowP-v*(flowH-2*flowP)/max:flowH-flowP;
-const flowAxis=(max,unit)=>`<line x1=${flowP} y1=${flowH-flowP} x2=${flowW-flowP} y2=${flowH-flowP} stroke=var(--line)></line><text x=${flowP-6} y=${flowY(max,max)+4} text-anchor=end fill=var(--mute) font-size=11>${max} ${unit}</text>`;
+const flowAxis=(max,unit)=>`<line x1=${flowP} y1=${flowH-flowP} x2=${flowW-flowP} y2=${flowH-flowP} stroke=var(--line)></line><text x=${flowP-6} y=${flowY(max,max)+4} text-anchor=end fill=var(--mute) style="font-size:var(--fs-min)">${max} ${unit}</text>`;
 const flowCFD=c=>{if(!c.days.length)return "<p class=fnote>the flow history has no sample yet</p>";
   const n=c.days.length;
   const runs=b=>{const out=[];let cur=null;c.days.forEach((_,i)=>{if(b.upper[i]===null){cur=null;return}if(!cur){cur=[];out.push(cur)}cur.push(i)});return out};
@@ -4316,6 +4316,12 @@ MOBILE_ASSETS = {"/mobile": (MOBILE_PAGE.encode(), "text/html; charset=utf-8"), 
                  "/mobile/manifest.webmanifest": (MANIFEST_JSON, "application/manifest+json"), "/mobile/icon.svg": (MOBILE_ICON, "image/svg+xml"),
                  "/mobile/sw.js": (SW_JS.encode(), "text/javascript; charset=utf-8")}
 
+def test_log_page(d, lg):
+    import html as _h
+    ref = '<meta http-equiv="refresh" content="3">' if d.get("state") == "running" else ""
+    return (f'<!doctype html><meta charset=utf-8><style>{WEB_TOKENS}</style>{ref}<body style="background:#0d1117;color:#c9d1d9;font:var(--fs-body) ui-monospace,monospace;margin:12px"><div style="color:#58a6ff">test #{d.get("issue")} · {d.get("state")}{" (exit "+str(d.get("rc"))+")" if "rc" in d else ""} · {_h.escape(d.get("dir",""))}</div><div style="color:#8b949e">$ {_h.escape(d.get("cmd",""))}</div><pre style="white-space:pre-wrap">{_h.escape(lg)}</pre><script>scrollTo(0,document.body.scrollHeight)</script>').encode()
+
+
 def mobile_refusal(reason):
     return ('<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Hub</title>'
             f'<style>{WEB_TOKENS}</style><body style="font:var(--fs-body) system-ui;margin:24px"><h1>The hub refused this login</h1><p>{html.escape(reason)}</p>').encode()
@@ -4476,9 +4482,7 @@ class H(BaseHTTPRequestHandler):
             except Exception: d = {}
             try: lg = (T / (n + ".log")).read_text(errors="replace")[-60000:]
             except Exception: lg = "(no output yet)" if d.get("state") == "running" else "no such test"   # test.sh makes the log after the json
-            import html as _h
-            ref = '<meta http-equiv="refresh" content="3">' if d.get("state") == "running" else ""
-            body = f'<!doctype html><meta charset=utf-8><style>{WEB_TOKENS}</style>{ref}<body style="background:#0d1117;color:#c9d1d9;font:var(--fs-min) ui-monospace,monospace;margin:12px"><div style="color:#58a6ff">test #{d.get("issue")} · {d.get("state")}{" (exit "+str(d.get("rc"))+")" if "rc" in d else ""} · {_h.escape(d.get("dir",""))}</div><div style="color:#8b949e">$ {_h.escape(d.get("cmd",""))}</div><pre style="white-space:pre-wrap">{_h.escape(lg)}</pre><script>scrollTo(0,document.body.scrollHeight)</script>'.encode(); ct = "text/html; charset=utf-8"
+            body, ct = test_log_page(d, lg), "text/html; charset=utf-8"
         elif self.path.startswith("/api/runs"): body, ct = json.dumps(run_list()).encode(), "application/json"
         elif self.path.startswith("/api/adapter-errors"): body, ct = json.dumps(adapter_errors()).encode(), "application/json"
         elif self.path.startswith("/api/delivery"): body, ct = json.dumps(delivery()).encode(), "application/json"

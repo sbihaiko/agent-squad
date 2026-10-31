@@ -2,8 +2,10 @@
 
 Every served surface carries the one token block in contrib/squad-goal/scripts/web-tokens.css. The checks read each
 surface's served text and resolve the values in it: no font size under 13 px, body text at 15 px, the token color pairs
-at 4.5:1 or more, a 2 px focus ring, dark native controls, and control heights of 32 px on the desktop and 44 px on the
-phone. No browser runs; every value is computed from the CSS text the surface sends.
+and every hard-coded text color at 4.5:1 or more, a 2 px focus ring, dark native controls, and control heights of 32 px
+on the desktop and 44 px on the phone. No browser runs; every value is computed from the text the surface sends. The
+height check models the cascade by rule, not by element match: a phone rule restated by the token block replaces its
+desktop twin.
 """
 import importlib.util
 import re
@@ -24,7 +26,8 @@ DESKTOP_CONTROL_PX = 32
 PHONE_CONTROL_PX = 44
 TEXT_TOKENS = ["--fg", "--mute", "--acc", "--ok", "--warn", "--err", "--run", "--none", "--wait", "--drop"]
 BG_TOKENS = ["--bg", "--panel"]
-CONTROLS = ("button", "select", "input", "textarea", "summary", "[role=button]")
+CONTROLS = ("button", "select", "input", "textarea", "summary", "label", "[role=button]")
+CONTROL_TAGS = ("button", "select", "input", "textarea", "summary", "label")
 
 
 def _load(name, path):
@@ -42,6 +45,7 @@ def _surfaces():
         "hub": hub.PAGE,
         "hub-mobile": hub.MOBILE_PAGE,
         "hub-refusal": hub.mobile_refusal("reason").decode(),
+        "hub-test-log": hub.test_log_page({"issue": 908, "state": "done", "rc": 0, "dir": "d", "cmd": "c"}, "log").decode(),
         "hubmux-root": mux.root_page({}, "squad hub").decode(),
         "dashboard": DASHBOARD.read_text(),
     }
@@ -82,8 +86,17 @@ def _px(value):
     return float(m.group(1)) if m else None
 
 
+def _size(raw, tokens):
+    value = _resolve(raw.strip(), tokens)
+    if re.fullmatch(r"\d+(?:\.\d+)?", value):
+        return float(value)
+    return _px(value)
+
+
 def _hex_lum(color):
     h = color.lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
     assert re.fullmatch(r"[0-9a-fA-F]{6}", h), color
     chans = []
     for i in (0, 2, 4):
@@ -95,6 +108,47 @@ def _hex_lum(color):
 def _contrast(a, b):
     hi, lo = sorted([_hex_lum(a), _hex_lum(b)], reverse=True)
     return (hi + 0.05) / (lo + 0.05)
+
+
+def _hex_of(value, tokens):
+    if value is None:
+        return None
+    m = re.match(r"\s*(#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3})?)(?![\w-])", _resolve(value, tokens))
+    return m.group(1) if m else None
+
+
+def _phone_inner(css):
+    m = re.search(r"@media\s*\(max-width:\s*600px\)\s*\{(.*)\}", _strip_comments(css), flags=re.S)
+    return m.group(1) if m else ""
+
+
+def _control_classes(html):
+    names = set()
+    for attrs in re.findall(r"<(?:%s)\b([^>]*)>" % "|".join(CONTROL_TAGS), html):
+        m = re.search(r"\bclass=(?:\"([^\"]*)\"|'([^']*)'|([\w-]+))", attrs)
+        if m:
+            names.update(next(g for g in m.groups() if g).split())
+    return names
+
+
+def _is_control(sel, classes):
+    if any(re.search(rf"(^|[\s,>]){re.escape(c)}(?=[\s,:.#\[>+~]|$)", sel) for c in CONTROLS):
+        return True
+    last = re.split(r"[\s>+~]+", sel)[-1]
+    return any(c in re.findall(r"\.([\w-]+)", last) for c in classes)
+
+
+def _effective_px(decls, tokens):
+    sizes = [_px(_resolve(decls[k], tokens)) for k in ("height", "min-height") if k in decls]
+    sizes = [s for s in sizes if s is not None]
+    return max(sizes) if sizes else None
+
+
+def _phone_rules(css):
+    rules = _blocks(css)
+    restated = {sel for sel, _ in _blocks(_phone_inner(TOKENS_FILE.read_text()))}
+    last = {sel: i for i, (sel, _) in enumerate(rules) if sel in restated}
+    return [rule for i, rule in enumerate(rules) if rule[0] not in restated or last[rule[0]] == i]
 
 
 @pytest.fixture(scope="module")
@@ -119,10 +173,11 @@ def test_every_surface_links_the_one_tokens_block(surfaces):
 
 def test_no_served_font_size_under_the_floor(surfaces):
     for name, html in surfaces.items():
-        css = _served_css(html) + html
         vars_ = _vars(_served_css(html))
-        for raw in re.findall(r"\bfont(?:-size)?\s*:\s*([^;}\"'\n]+)", css):
-            size = _px(_resolve(raw, vars_))
+        raws = re.findall(r"\bfont(?:-size)?\s*:\s*([^;}\"'\n]+)", _served_css(html) + html)
+        raws += re.findall(r"\bfont-size\s*=\s*[\"']?(\d+(?:\.\d+)?)", html)
+        for raw in raws:
+            size = _size(raw, vars_)
             if size is not None:
                 assert size >= FLOOR_PX, f"{name}: font size {size}px under {FLOOR_PX}px in '{raw.strip()}'"
 
@@ -146,6 +201,28 @@ def test_token_color_pairs_meet_contrast(tokens):
         for bg in BG_TOKENS:
             ratio = _contrast(tokens[fg], tokens[bg])
             assert ratio >= CONTRAST_MIN, f"{fg} on {bg} is {ratio:.2f}:1"
+
+
+def test_every_served_text_color_meets_contrast(surfaces, tokens):
+    failures = []
+    for name, html in surfaces.items():
+        vars_ = _vars(_served_css(html))
+        sources = [dict(_decls(body)) for _, body in _blocks(_served_css(html))]
+        sources += [dict(_decls(style)) for style in re.findall(r"style=\"([^\"]*)\"", html)]
+        for decls in sources:
+            fg = _hex_of(decls.get("color"), vars_)
+            if fg is None:
+                continue
+            if "background" in decls or "background-color" in decls:
+                bg = _hex_of(decls.get("background", decls.get("background-color")), vars_)
+                backgrounds = [bg] if bg else []
+            else:
+                backgrounds = [tokens["--panel"], tokens["--bg"]]
+            for bg in backgrounds:
+                ratio = _contrast(fg, bg)
+                if ratio < CONTRAST_MIN:
+                    failures.append(f"{name}: {fg} on {bg} is {ratio:.2f}:1")
+    assert not failures, "\n".join(sorted(set(failures)))
 
 
 def test_focus_ring_is_two_px_and_covers_every_control(tokens):
@@ -185,25 +262,23 @@ def test_selects_and_inputs_are_dark(surfaces, tokens):
                 assert _hex_lum(color) < 0.03, f"{name}: {sel} is light ({color})"
 
 
-def test_control_heights_meet_the_desktop_and_phone_floor(surfaces, tokens):
+def test_control_heights_meet_the_desktop_and_phone_floor(surfaces):
     for name, html in surfaces.items():
         css = _served_css(html)
         vars_ = _vars(css)
+        classes = _control_classes(html)
         floor = PHONE_CONTROL_PX if name == "hub-mobile" else DESKTOP_CONTROL_PX
-        for sel, body in _blocks(css):
-            if not any(re.search(rf"(^|[\s,>]){c}(?=[\s,:.#\[>+~]|$)", sel) for c in CONTROLS):
+        rules = _phone_rules(css) if name == "hub-mobile" else _blocks(css)
+        for sel, body in rules:
+            if not _is_control(sel, classes):
                 continue
-            height = dict(_decls(body)).get("height")
-            if height is None:
-                continue
-            px = _px(_resolve(height, vars_))
+            px = _effective_px(dict(_decls(body)), vars_)
             if px is not None:
                 assert px >= floor, f"{name}: {sel} is {px}px tall, floor {floor}px"
 
 
 def test_the_phone_media_block_sets_the_phone_target(tokens):
-    css = TOKENS_FILE.read_text()
-    m = re.search(r"@media\s*\(max-width:\s*600px\)\s*\{(.*)\}", _strip_comments(css), flags=re.S)
+    m = re.search(r"@media\s*\(max-width:\s*600px\)\s*\{(.*)\}", _strip_comments(TOKENS_FILE.read_text()), flags=re.S)
     assert m, "no phone media block in the tokens"
     heights = [_px(_resolve(d.get("min-height", ""), tokens)) for _, b in _blocks(m.group(1)) for d in [dict(_decls(b))]]
     assert heights and min(h for h in heights if h is not None) >= PHONE_CONTROL_PX
