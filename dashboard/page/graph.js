@@ -43,15 +43,13 @@ function revealSelected() {
 }
 
 function edgeLines() {
-  const lines = [];
-  for (const n of nodesOf()) {
-    for (const c of core.graphKids(n)) {
-      const a = S.layout[n.name], b = S.layout[c];
-      if (!a || !b) continue;
-      const sel = S.link && S.link.from === n.name && S.link.to === c;
-      const co = `x1="${a.x + BOX.w}" y1="${a.y + BOX.h / 2}" x2="${b.x - 3}" y2="${b.y + BOX.h / 2}"`;
-      lines.push(`<g class="edge${sel ? " sel" : ""}" data-from="${esc(n.name)}" data-to="${esc(c)}"><line class="hit" ${co}/><line class="ln" ${co} marker-end="url(#arrow)"/></g>`);
-    }
+  const lines = [], pairs = [];
+  for (const n of nodesOf()) for (const c of core.graphKids(n)) pairs.push({ from: n.name, to: c });
+  // Each edge is its own route: one orthogonal line per segment, so two edges never draw over each other (core.edgeRoutes).
+  for (const r of core.edgeRoutes(S.layout, pairs, BOX)) {
+    const sel = S.link && S.link.from === r.from && S.link.to === r.to;
+    const segs = r.segs.map((q) => { const co = `x1="${q.x1}" y1="${q.y1}" x2="${q.x2}" y2="${q.y2}"`; return `<line class="hit" ${co}/><line class="ln" ${co}${q.arrow ? ' marker-end="url(#arrow)"' : ""}/>`; }).join("");
+    lines.push(`<g class="edge${sel ? " sel" : ""}" data-from="${esc(r.from)}" data-to="${esc(r.to)}">${segs}</g>`);
   }
   // One bus per dispatch: one line leaves the entry, a rail serves each column of single cards and group cards.
   for (const d of [...new Set([...S.children.map((c) => c.dispatch), ...S.groups.map((g) => g.dispatch)])]) {
@@ -254,21 +252,32 @@ function renderMap() {
     const running = !!ns && core.isRunning(ns);
     const nmark = ns ? core.stateMark(core.nodeState(ns)) : null;   // a glyph on every node the record touched: color is never the only cue
     const sc = core.stateClass(ns);   // not-run, running, passed, failed, deadline, needs-human, started
-    g.setAttribute("class", "card" + (S.selected === n.name ? " sel" : "") + (errs ? " err" : "") + (sc ? " " + sc : ""));
+    const km = core.kindMark(n.kind);   // the icon and the color of the kind: a gate and an agent differ by shape, not by text alone
+    g.setAttribute("class", "card " + km.cls + (S.selected === n.name ? " sel" : "") + (errs ? " err" : "") + (sc ? " " + sc : ""));
     g.setAttribute("transform", `translate(${p.x} ${p.y})`);
     g.dataset.name = n.name;
     const label = core.nodeLabel(n);
     focusable(g, `${label}, ${nmark ? nmark.label : n.kind}`);   // the role label on the card; the raw name stays in the tooltip
-    const name = clipText(label, CLIP.name);   // the glyph sits at the top-right corner
+    const name = clipText(label, NODE_CLIP.name);   // the glyph sits at the top-right corner; the icon sits left of the name
     const ml = core.nodeModel(n, ns);   // the LLM line (#677): the core decides it, the card only renders it
-    g.innerHTML = `<title>${esc(n.name)} | ${esc(ml.text)}${ns ? ` | ${running ? esc(runningTitle(ns)) : `${esc(oc || "no outcome")}, time ${core.fmt.seconds(ns.elapsed)}, cost ${core.fmt.usd(ns.spend)}, ${core.fmt.pct(ns.cap_pct)} of the call cap, turns ${core.fmt.count(ns.turns)}${tokenLine(ns) ? ", tokens " + tokenLine(ns) : ""}, entries ${ns.entries}${ns.cause ? ", " + esc(ns.cause) : ""}`}` : ""}</title><rect width="${BOX.w}" height="${BOX.h}" rx="6"/><g clip-path="url(#card-clip)"><text class="nm" x="${TEXT.x}" y="${TEXT.name}">${esc(name)}</text><text class="kd" x="${TEXT.x}" y="${TEXT.kind}">${esc(clipText(n.kind + " \u00b7 " + ml.text, CLIP.harness))}${ns && ns.routed && ns.routed !== "continue" ? " \u2192 " + esc(ns.routed) : ""}</text>${ns ? cardLines(ns, running) : ""}</g>${errs ? `<text class="bd-e" x="${BOX.w - 8}" y="34" text-anchor="end">${errs} error${errs > 1 ? "s" : ""}</text>` : ""}${ov ? `<text class="bd-o" x="${BOX.w - 26}" y="19" text-anchor="end">${ov} adapted</text>` : ""}${nmark ? `<text class="gl" x="${BOX.w - GLYPH.right}" y="${GLYPH.top}" text-anchor="end">${nmark.glyph}</text>` : ""}${n.name === S.doc.root ? "" : `<circle class="port in" cx="0" cy="${BOX.h / 2}" r="5"/>`}${["loop", "each", "dispatch"].includes(n.kind) ? `<circle class="port out" cx="${BOX.w}" cy="${BOX.h / 2}" r="5"><title>Drag to another node to connect</title></circle>` : ""}`;
+    const routed = ns && ns.routed && ns.routed !== "continue" ? " \u2192 " + ns.routed : "";   // the model line is never cut: the text is fitted below
+    g.innerHTML = `<title>${esc(n.name)} | ${esc(ml.text)}${ns ? ` | ${running ? esc(runningTitle(ns)) : `${esc(oc || "no outcome")}, time ${core.fmt.seconds(ns.elapsed)}, cost ${core.fmt.usd(ns.spend)}, ${core.fmt.pct(ns.cap_pct)} of the call cap, turns ${core.fmt.count(ns.turns)}${tokenLine(ns) ? ", tokens " + tokenLine(ns) : ""}, entries ${ns.entries}${ns.cause ? ", " + esc(ns.cause) : ""}`}` : ""}</title><rect width="${BOX.w}" height="${BOX.h}" rx="6"/><g clip-path="url(#card-clip)"><rect class="kc" x="${KIND_CHIP.x}" y="${KIND_CHIP.y}" width="${KIND_CHIP.w}" height="${KIND_CHIP.w}" rx="3"/><text class="ki" x="${KIND_CHIP.x + KIND_CHIP.w / 2}" y="${KIND_CHIP.y + 12}" text-anchor="middle">${km.glyph}</text><text class="nm" x="${NODE_TEXT_X}" y="${TEXT.name}">${esc(name)}</text><text class="kd model" x="${TEXT.x - 2}" y="${TEXT.kind}">${esc(ml.text + routed)}</text>${ns ? cardLines(ns, running) : ""}</g>${errs ? `<text class="bd-e" x="${BOX.w - 8}" y="34" text-anchor="end">${errs} error${errs > 1 ? "s" : ""}</text>` : ""}${ov ? `<text class="bd-o" x="${BOX.w - 26}" y="19" text-anchor="end">${ov} adapted</text>` : ""}${nmark ? `<text class="gl" x="${BOX.w - GLYPH.right}" y="${GLYPH.top}" text-anchor="end">${nmark.glyph}</text>` : ""}${n.name === S.doc.root ? "" : `<circle class="port in" cx="0" cy="${BOX.h / 2}" r="5"/>`}${["loop", "each", "dispatch"].includes(n.kind) ? `<circle class="port out" cx="${BOX.w}" cy="${BOX.h / 2}" r="5"><title>Drag to another node to connect</title></circle>` : ""}`;
     g.addEventListener("pointerdown", (ev) => { if (ev.target.classList && ev.target.classList.contains("out")) startLink(ev, n.name); else startDrag(ev, n.name, g); });
     cards.appendChild(g);
   }
   renderChildren(cards);
   renderGroups(cards);
+  fitModelLines(cards);
   $("edges").innerHTML = edgeLines();
   applyView();
+}
+
+// The model line is one line on the card, never cut. A model name wider than the card is set narrower (the text is squeezed, not
+// shortened); a name that fits keeps its size. The measure needs the cards in the document, so it runs after they are drawn.
+function fitModelLines(cards) {
+  for (const t of cards.querySelectorAll("text.kd.model")) {
+    if (t.getComputedTextLength() > MODEL_W) { t.setAttribute("textLength", MODEL_W); t.setAttribute("lengthAdjust", "spacingAndGlyphs"); }
+  }
 }
 
 // A node that can call a model shows its tokens, a dash when the record has none. Another node shows the line only if the record has tokens for it.

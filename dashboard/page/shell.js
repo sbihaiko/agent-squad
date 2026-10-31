@@ -13,6 +13,8 @@ const GLYPH = { right: 9, top: 19 }, CLIP = { name: 22, cause: 25, harness: 30 }
 const READABLE_K = 0.7;
 // Card text rows (y) and left edge (x) inside a card of BOX size; the one place the card layout is named. CARD_GAP is the space between cards in a column.
 const TEXT = { x: 10, name: 19, kind: 34, line1: 46, line2: 57, cause: 56 }, CARD_GAP = 30;
+// A node card: the kind icon sits in a chip at the left of the name, so the name starts right of it. The model line is one row, fitted to MODEL_W.
+const KIND_CHIP = { x: 7, y: 5, w: 16 }, NODE_TEXT_X = 30, NODE_CLIP = { name: 19 }, MODEL_W = BOX.w - 16;
 // Pointer feel: a press that moves under DRAG_SLOP px is a click; one wheel pixel zooms by WHEEL_RATE (exponent); a zoom button steps by ZOOM_STEP; the fit never uses a map smaller than MIN_FIT px.
 const DRAG_SLOP = 3, WHEEL_RATE = 0.0015, ZOOM_STEP = 1.25, MIN_FIT = 120;
 const REPLAY_GAP = 24, REVEAL_INSET = 16, FOOTER_PAD = 12;
