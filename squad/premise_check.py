@@ -63,7 +63,10 @@ UNKNOWN = ("i don't know", "i do not know", "i dont know", "don't know", "do not
            "no idea", "unsure", "idk")
 
 _CITE = re.compile(r"^(?P<path>[^\s:]+):(?P<start>\d+)(?:-(?P<end>\d+))?$")
-_STATE = re.compile(r"<!-- premise-check-state: round=(?P<round>\d+) body=(?P<sha>[0-9a-f]+) refuted=(?P<refuted>.*?) -->")
+_STATE = re.compile(r"<!-- premise-check-state: round=(?P<round>\d+) body=(?P<sha>[0-9a-f]+)(?: asked=(?P<asked>.*?))? refuted=(?P<refuted>.*?) -->")
+# One answer in an owner's comment: the question's number and the owner's words. A phone reply is `Q1: yes`.
+_OWNER_ANSWER = re.compile(r"^\s*\**Q(?P<n>\d+)\**\s*[:.=\-—]\s*(?P<text>.+?)\s*$", re.I)
+YES = ("yes", "y", "sim")
 _ANSWER_BLOCK = re.compile(r"\n*" + re.escape(ANSWERS_OPEN) + r"(?P<content>.*?)" + re.escape(ANSWERS_CLOSE) + r"\n*", re.S)
 _ANSWER_LINE = re.compile(r"^- \*\*(?P<premise>.+?)\*\* — (?P<text>.*?)(?: <!-- answered-by: proxy: (?P<by>[^<>]+) -->)?$")
 
@@ -350,22 +353,66 @@ def render(spec: int, round_no: int, reviewer: Reviewer, rows: list[Row], ending
         lines += ["", f"**Stopped:** {stop_reason}."]
     if body_sha:
         refuted = json.dumps(sorted(r.premise for r in rows if r.state == "refuted"))
-        lines += ["", f"<!-- premise-check-state: round={round_no} body={body_sha} refuted={refuted} -->"]
+        # The open questions, numbered, so an owner's comment can name one by its number (#886): the table is for a
+        # person, and this line is for the reader that folds the answer back into the next round.
+        asked = json.dumps([{"n": r.question, "premise": r.premise, "recommends": r.recommends}
+                            for r in rows if r.asked], separators=(",", ":"))
+        lines += ["", f"<!-- premise-check-state: round={round_no} body={body_sha} asked={asked} refuted={refuted} -->"]
     return "\n".join(lines) + "\n"
 
 
 def state_of(text: str) -> dict | None:
-    """The state a previous round recorded in its comment: the round, the spec body it read, and its refutations."""
+    """The state a previous round recorded in its comment: the round, the spec body it read, its open questions and its
+    refutations. A comment written before the questions were recorded reads as no open question."""
     m = _STATE.search(text or "")
     if not m:
         return None
-    return {"round": int(m["round"]), "sha": m["sha"], "refuted": json.loads(m["refuted"])}
+    asked = json.loads(m["asked"]) if m["asked"] else []
+    return {"round": int(m["round"]), "sha": m["sha"], "refuted": json.loads(m["refuted"] or "[]"),
+            "asked": {int(q["n"]): q for q in asked}}
 
 
 def find_comment(github, spec: int) -> dict | None:
     """The check's one comment on the spec, found by its marker, or None before the first round."""
     marker = MARKER.format(spec=spec)
     return next((c for c in github("comments", number=spec) or [] if marker in (c.get("body") or "")), None)
+
+
+def answers_from_comment(github, spec: int, owner: str) -> tuple[list[Answer], list[tuple[str, str]]]:
+    """The owner's answers as written in a comment on the spec (#886): the async mode.
+
+    Only a comment whose author is the owner is read, and only the questions that comment names are answered, so a
+    partial answer closes exactly what it answers and leaves the rest open. `Q<n>: yes` accepts the round's
+    recommendation for that question; any other words are the answer itself, and words that settle nothing ("I don't
+    know") are left to `unknown` by the round. A number that names no open question is refused by name, never dropped
+    in silence. The round's own comment is never an answer, whichever account posted it."""
+    if not owner:
+        return [], []
+    marker = MARKER.format(spec=spec)
+    comments = github("comments", number=spec) or []
+    found = next((c for c in comments if marker in (c.get("body") or "")), None)
+    asked = ((state_of((found or {}).get("body") or "") or {}).get("asked") or {})
+    answers: dict[str, Answer] = {}
+    refused: list[tuple[str, str]] = []
+    for c in comments:
+        body = c.get("body") or ""
+        if marker in body:
+            continue
+        if ((c.get("user") or {}).get("login") or "").lower() != owner.lower():
+            continue
+        for line in body.splitlines():
+            hit = _OWNER_ANSWER.match(line)
+            if not hit:
+                continue
+            n, text = int(hit["n"]), hit["text"].strip()
+            q = asked.get(n)
+            if q is None:
+                refused.append((f"Q{n}", f"Q{n} is not one of this round's open questions"))
+                continue
+            if text.lower().strip(" .") in YES and q.get("recommends"):
+                text = q["recommends"]
+            answers[q["premise"]] = Answer(premise=q["premise"], answer=text, answered_by="owner")   # a later comment wins
+    return list(answers.values()), refused
 
 
 def write_comment(github, spec: int, found: dict | None, body: str) -> str:
@@ -705,6 +752,9 @@ def parser():
     p.add_argument("spec", type=int, help="the number of the published spec the round checks")
     p.add_argument("--findings", required=True, help="the reviewer's findings, a JSON array of objects")
     p.add_argument("--answers", help="the owner's answers, a JSON array of objects; each rewrites the spec and opens the next round")
+    p.add_argument("--answers-from-comment", dest="from_comment", action="store_true",
+                   help="read the owner's answers from a comment on the spec: only the owner's words, and a partial answer "
+                        "closes only the questions it names (#886)")
     p.add_argument("--round", dest="round_no", type=int, default=None, help="the round number; the next one after the recorded round by default")
     p.add_argument("--reviewer", help="the model this round actually ran under: checked against the registry")
     p.add_argument("--proxy", help="the registry model or 'panel' that answers while the owner is away; it must differ from the reviewer")
@@ -718,11 +768,15 @@ def main(argv=None) -> int:
     a = parser().parse_args(sys.argv[1:] if argv is None else argv)
     try:
         findings = json.loads(Path(a.findings).read_text())
-        answers = json.loads(Path(a.answers).read_text()) if a.answers else []
+        answers = list(json.loads(Path(a.answers).read_text())) if a.answers else []
         who = named(a.reviewer) if a.reviewer else reviewer()
         proxy = proxy_named(a.proxy) if a.proxy else None
         root = artifact_root(a.repo, a.root)
         github = rest_runner(a.repo)     # a dry run reads the round it would write, and writes nothing
+        refused: list[tuple[str, str]] = []
+        if a.from_comment:               # the async mode (#886): the owner's own comment on the spec is the answer
+            said, refused = answers_from_comment(github, a.spec, a.repo.split("/")[0])
+            answers += said
         report = run_round(a.spec, findings, answers, github=github, root=root, round_no=a.round_no,
                            who=who, dry_run=a.dry_run, proxy=proxy)
     except (OSError, ValueError, NoReviewer, NoProxy) as e:
@@ -730,7 +784,11 @@ def main(argv=None) -> int:
         return 2
     if a.dry_run:
         print(report.body)
+        for name, why in refused:
+            print(f"premise-check: {name} not read: {why}", file=sys.stderr)
         return 0
+    for name, why in refused:
+        print(f"premise-check: {name} not read: {why}", file=sys.stderr)
     wrote = ", ".join(str(p) for p in report.glossary + report.adrs)
     print(f"{report.action}: {report.ending}" + (f", stopped — {report.stop_reason}" if report.stop_reason else "")
           + (f"; wrote {wrote}" if wrote else ""))

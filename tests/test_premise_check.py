@@ -155,11 +155,18 @@ class StubGithub:
     def __init__(self):
         self.calls = []
         self.comments = {}
+        self.authors = {}          # id -> login: a comment's author is what decides whether it is read as an answer
+
+    def say(self, body, login):
+        """One comment posted by a named account, as the API returns it."""
+        self.comments[len(self.comments) + 1] = body
+        self.authors[len(self.comments)] = login
+        return len(self.comments)
 
     def __call__(self, op, **kw):
         self.calls.append(op)
         if op == "comments":
-            return [{"id": i, "body": b} for i, b in self.comments.items()]
+            return [{"id": i, "body": b, "user": {"login": self.authors.get(i, "")}} for i, b in self.comments.items()]
         if op == "comment":
             self.comments[len(self.comments) + 1] = kw["body"]
             return {"id": len(self.comments)}
@@ -754,3 +761,82 @@ def test_the_adr_and_claude_md_admit_a_named_proxy():
     assert "proxy" in adr.partition("## Decision")[2]
     line = next(ln for ln in (ROOT / "CLAUDE.md").read_text().splitlines() if "](docs/adr/0155-" in ln)
     assert "proxy" in line
+
+
+# --- the owner answers in a comment on the spec (#886) -------------------------------------------------------
+# The async mode: the round's open questions are posted, the owner answers them in a comment on the spec (for example
+# from a phone), and the next round starts from that comment. Only the owner's own words are read, and a partial answer
+# closes only the questions it names.
+
+OWNER = "sbihaiko"
+
+
+def asked_round(tmp_path, *findings, spec=878, round_no=1):
+    """The round comment a first pass wrote, with the machine-readable state that names its open questions."""
+    rows = rows_of(tmp_path, *findings)
+    return pc.render(spec=spec, round_no=round_no, reviewer=reviewer(), rows=rows, body_sha="a1b2c3", ending="awaiting answers")
+
+
+def with_round(tmp_path, *findings, spec=878):
+    gh = StubGithub()
+    gh.say(asked_round(tmp_path, *findings, spec=spec), login="squad-loop")
+    return gh
+
+
+TWO_DECISIONS = (
+    {"premise": "the check comments on the spec", "kind": "decision", "recommends": "one comment on the spec"},
+    {"premise": "the comment carries one table", "kind": "decision", "recommends": "one table, four columns"},
+)
+
+
+def test_an_owner_comment_answers_the_rounds_questions(tmp_path):
+    gh = with_round(tmp_path, *TWO_DECISIONS)
+    gh.say("Q1: yes", login=OWNER)
+    answers, refused = pc.answers_from_comment(gh, 878, OWNER)
+    assert [(a.premise, a.text) for a in answers] == [("the check comments on the spec", "one comment on the spec")]
+    assert refused == []
+
+
+def test_a_partial_answer_closes_only_what_it_answers(tmp_path):
+    gh = with_round(tmp_path, *TWO_DECISIONS)
+    gh.say("Q1: yes\nQ2: one table, four columns", login=OWNER)
+    answers, _ = pc.answers_from_comment(gh, 878, OWNER)
+    assert [a.premise for a in answers] == ["the check comments on the spec", "the comment carries one table"]
+    gh2 = with_round(tmp_path, *TWO_DECISIONS)
+    gh2.say("Q2: one table, four columns", login=OWNER)
+    answers2, _ = pc.answers_from_comment(gh2, 878, OWNER)
+    assert [a.premise for a in answers2] == ["the comment carries one table"]   # Q1 is left open, not answered for
+
+
+def test_a_comment_from_anyone_but_the_owner_is_never_read(tmp_path):
+    gh = with_round(tmp_path, *TWO_DECISIONS)
+    gh.say("Q1: yes\nQ2: yes", login="somebody-else")
+    answers, refused = pc.answers_from_comment(gh, 878, OWNER)
+    assert answers == [] and refused == []
+
+
+def test_the_rounds_own_comment_is_never_read_as_an_answer(tmp_path):
+    gh = with_round(tmp_path, *TWO_DECISIONS)
+    answers, refused = pc.answers_from_comment(gh, 878, OWNER)
+    assert answers == [] and refused == []
+
+
+def test_an_answer_to_a_question_the_round_never_asked_is_refused_by_name(tmp_path):
+    gh = with_round(tmp_path, *TWO_DECISIONS)
+    gh.say("Q9: yes", login=OWNER)
+    answers, refused = pc.answers_from_comment(gh, 878, OWNER)
+    assert answers == []
+    assert refused == [("Q9", "Q9 is not one of this round's open questions")]
+
+
+def test_an_answer_the_owner_does_not_know_settles_nothing(tmp_path):
+    gh = with_round(tmp_path, *TWO_DECISIONS)
+    gh.say("Q1: I don't know", login=OWNER)
+    answers, _ = pc.answers_from_comment(gh, 878, OWNER)
+    rows = pc.check(pc.merge_answers([pc.Finding.of(f) for f in TWO_DECISIONS], answers))
+    assert [r.state for r in rows if r.premise == "the check comments on the spec"] != ["decided"]
+
+
+def test_the_skill_documents_answering_in_a_comment():
+    skill = (ROOT / ".claude/skills/premise-check/SKILL.md").read_text()
+    assert "--answers-from-comment" in skill

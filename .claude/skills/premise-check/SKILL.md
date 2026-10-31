@@ -31,12 +31,14 @@ goes, and asks only the questions the answers left open.
 4. If the owner answered the last round, write the answers to a file as a JSON array of objects with `premise` and
    `answer` (plus `answered_by`). An answer that defines a term also sets `"kind": "glossary"` with `term` and
    `definition`; a durable decision sets `"kind": "adr"` with `title` and `decision`. Then run the command with
-   `--answers`.
+   `--answers`. The owner may answer in a comment on the spec instead, one `Q<n>: <answer>` per line: `--answers-from-comment`
+   reads those, only from the owner, and a partial answer closes only the questions it names.
 5. Run the command, where `<spec>` is the spec's issue number:
 
    ```
    uv run squad premise-check <spec> --findings findings.json --reviewer <your model>
    uv run squad premise-check <spec> --findings findings.json --answers answers.json --reviewer <your model>
+   uv run squad premise-check <spec> --findings findings.json --answers-from-comment --reviewer <your model>
    ```
 
    While the owner is away, name a proxy with `--proxy <registry model or panel>` on the answered round. It answers
