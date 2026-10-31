@@ -460,9 +460,10 @@ if left:
         if cnt < DEFER_MAX: continue
         e = subprocess.run(["bash", wave, "requeue", str(n), cause], capture_output=True, text=True, env={**os.environ, "SG_REQUEUE_RUN": name})
         answer = (e.stdout + e.stderr).strip()
-        # wave.sh answers a stop with exit 0 and "WAVE STOP": the issue is already out of the queue (frozen, or stopped by
-        # its own count), so the child is done here and the wave lands. Only a command that answered neither is a refusal (#931).
-        stopped = not e.returncode and "WAVE STOP" in answer
+        # wave.sh answers a terminal stop with exit 0: "WAVE STOP" when the issue is frozen, and "WAVE NEEDS-HUMAN" when its
+        # loop-caused requeues ran out (wave.sh loop_stop, and the `already stopped` answer). Either way the issue is out of
+        # the queue, so the child is done here and the wave lands. Only a command that answered neither is a refusal (#931).
+        stopped = not e.returncode and ("WAVE STOP" in answer or "WAVE NEEDS-HUMAN" in answer)
         if e.returncode or not (stopped or "WAVE REQUEUE" in answer):   # a refused requeue is no delivery: name it, keep the child and its count, retry next pass (#931)
             print(f"CHILD DEFER REQUEUE #{n} ({name} {child}) refused: {answer[:300] or f'exit {e.returncode}'}", flush=True)
             continue

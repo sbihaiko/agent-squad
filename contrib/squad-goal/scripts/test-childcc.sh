@@ -74,7 +74,7 @@ echo "$*" >> "$WAVE_CALLS"
 [ "$3" = 5600 ] && { echo "WAVE STOP #$3: requeued 3 times, so it is not dispatched again: x"; exit 1; }   # the requeue cap stopped it
 echo "WAVE gui/$3 entered (#$3)"
 W
-export WAVE_CALLS=$T/wave.calls WAVE_FAIL=$T/wave.fail WAVE_GATE_HOLD=$T/wave.gatehold WAVE_REQUEUE_FAIL=$T/wave.requeuefail WAVE_REQUEUE_ERR=$T/wave.requeueerr; : > "$WAVE_CALLS"
+export WAVE_CALLS=$T/wave.calls WAVE_FAIL=$T/wave.fail WAVE_GATE_HOLD=$T/wave.gatehold WAVE_REQUEUE_FAIL=$T/wave.requeuefail WAVE_REQUEUE_ERR=$T/wave.requeueerr WAVE_NEEDS_HUMAN=$T/wave.needshuman; : > "$WAVE_CALLS"
 lq() { # issue: the head the run requeued it on, from its ledger (the old auto/requeued- marker, ADR-0149)
   python3 "$T/issue_ledger.py" requeued "x/y#$1" "$2" 2>/dev/null; }
 lqset() { python3 "$T/issue_ledger.py" requeue "x/y#$1" "$2" "$3" >/dev/null 2>&1; }
@@ -416,7 +416,7 @@ cat > "$T/wave.sh" <<'W'
 [ "$1" = expired ] && { [ -e "$WAVE_CALLS.expired-$2" ]; exit; }   # the age cap: a case marks the run's wave expired
 echo "$*" >> "$WAVE_CALLS"
 [ -e "$WAVE_GATE_HOLD" ] && [ "$1" = enter ] && { echo "WAVE HOLD #$3: the gate lock is held by pid 999; the child enters on a later pass"; exit 1; }
-[ "$1" = requeue ] && { [ -e "$WAVE_REQUEUE_FAIL" ] && { echo "WAVE STOP #$2: already frozen, so it is not dispatched again: $3"; exit 0; }; [ -e "$WAVE_REQUEUE_ERR" ] && exit 1; echo "WAVE REQUEUE #$2: $3"; exit 0; }
+[ "$1" = requeue ] && { [ -e "$WAVE_REQUEUE_FAIL" ] && { echo "WAVE STOP #$2: already frozen, so it is not dispatched again: $3"; exit 0; }; [ -e "$WAVE_NEEDS_HUMAN" ] && { echo "WAVE NEEDS-HUMAN #$2: already stopped, so it is not dispatched again: $3"; exit 0; }; [ -e "$WAVE_REQUEUE_ERR" ] && exit 1; echo "WAVE REQUEUE #$2: $3"; exit 0; }
 k=$(git symbolic-ref --quiet --short HEAD | tr / _); h=$(git rev-parse HEAD)
 [ -s "$SG_STATE/review-$k.md" ] || { echo "WAVE HOLD #$3: no review of $k yet: a child never enters a wave unreviewed"; exit 1; }
 [ "$(cat "$SG_STATE/review-$k.base" 2>/dev/null)" = "wave/$2" ] || { echo "WAVE HOLD #$3: the review of $k was read against '$(cat "$SG_STATE/review-$k.base" 2>/dev/null)', not wave/$2"; exit 1; }
@@ -585,6 +585,14 @@ touch "$WAVE_REQUEUE_FAIL"; o4=$(SG_HOLD_TRIES=99 SG_CHILDCC_DEFER_MAX=2 dpass d
   && ok "a wave's terminal stop lands the wave instead of holding it" || ko "terminal stop: exit $r4: $o4"
 [ -z "$(ls "$T"/st/cq/*#6403-* 2>/dev/null)" ] && [ ! -e "$T/st/auto/dwait-dfu-c" ] && ok "a terminal stop queues no comment and leaves no counter" || ko "terminal stop state: cq '$(ls "$T"/st/cq/*#6403-* 2>/dev/null)', dwait '$(cat "$T/st/auto/dwait-dfu-c" 2>/dev/null)'"
 rm -f "$WAVE_REQUEUE_FAIL"
+# The other terminal answer of wave.sh is no refusal either: a loop-caused requeue that ran out answers "WAVE NEEDS-HUMAN" with
+# exit 0 (wave.sh loop_stop, and the `already stopped` answer), and the child is done here too.
+export GH_NUMS="6405:Doing"; frun dfw 6405; rm -f "$T"/st/review-* "$T/st/auto/dwait-dfw-c"; : > "$WAVE_CALLS"; : > "$T/cr.calls"
+SG_HOLD_TRIES=99 SG_CHILDCC_DEFER_MAX=2 dpass dfw >/dev/null
+touch "$WAVE_NEEDS_HUMAN"; o4b=$(SG_HOLD_TRIES=99 SG_CHILDCC_DEFER_MAX=2 dpass dfw); r4b=$?
+[ "$r4b" = 0 ] && /usr/bin/grep -q 'WAVE NEEDS-HUMAN' <<<"$o4b" && ok "a needs-human stop lands the wave instead of holding it" || ko "needs-human stop: exit $r4b: $o4b"
+[ -z "$(ls "$T"/st/cq/*#6405-* 2>/dev/null)" ] && [ ! -e "$T/st/auto/dwait-dfw-c" ] && ok "a needs-human stop queues no comment and leaves no counter" || ko "needs-human state: cq '$(ls "$T"/st/cq/*#6405-* 2>/dev/null)'"
+rm -f "$WAVE_NEEDS_HUMAN"
 # A wave that answers neither and exits nonzero is still a refusal: no delivery, no comment, and the child keeps its counter.
 export GH_NUMS="6404:Doing"; frun dfv 6404; rm -f "$T"/st/review-* "$T/st/auto/dwait-dfv-c"; : > "$WAVE_CALLS"; : > "$T/cr.calls"
 SG_HOLD_TRIES=99 SG_CHILDCC_DEFER_MAX=2 dpass dfv >/dev/null
