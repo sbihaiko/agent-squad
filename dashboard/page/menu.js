@@ -1,17 +1,18 @@
 // --- the legend and the help overlay: rows come from the core; a swatch is a card group, so the card CSS paints it ---
 function swatches() {
-  const cards = core.LEGEND.map((r) => `<span class="lg"><svg width="24" height="14" viewBox="0 0 24 14"><g class="card ${r.cls}"><rect x="1" y="1" width="22" height="12" rx="3"/>${r.glyph ? `<text class="gl" x="12" y="11" text-anchor="middle" style="font-size:var(--fs-min)">${r.glyph}</text>` : ""}</g></svg>${esc(r.label)}</span>`);
+  const cards = core.LEGEND.map((r) => `<span class="lg"><svg width="24" height="14" viewBox="0 0 24 14"><g class="card ${r.cls}"><rect${r.kind ? ' class="kc"' : ""} x="1" y="1" width="22" height="12" rx="3"/>${r.glyph ? `<text class="${r.kind ? "ki" : "gl"}" x="12" y="11" text-anchor="middle" style="font-size:var(--fs-min)">${r.glyph}</text>` : ""}</g></svg>${esc(r.label)}</span>`);
   const chips = core.LEGEND_CHIPS.map((r) => `<span class="lg"><span class="chip-sw ${r.cls}">${esc(r.label)}</span></span>`);
   return cards.concat(chips).join("");
 }
 // The side strip's list: two headed groups (node outcomes, interaction). Always expanded.
 // The run-state vocabulary is not a legend row: the owner removed that group (2026-10-11). The states live in the core's one table
 // (RUN_STATES) and the surfaces that print a state draw their pill from it; the help overlay still lists the chips.
-const LEGEND_GROUPS = [["node", "Node outcomes"], ["interaction", "Interaction"]];
+const LEGEND_GROUPS = [["node", "Node outcomes"], ["kind", "Node kinds"], ["interaction", "Interaction"]];
 function legendList() {
-  const sw = (r) => `<svg width="24" height="14" viewBox="0 0 24 14"><g class="card ${r.cls}"><rect x="1" y="1" width="22" height="12" rx="3"/>${r.glyph ? `<text class="gl" x="12" y="11" text-anchor="middle" style="font-size:var(--fs-min)">${r.glyph}</text>` : ""}</g></svg>`;
+  const sw = (r) => `<svg width="24" height="14" viewBox="0 0 24 14"><g class="card ${r.cls}"><rect${r.kind ? ' class="kc"' : ""} x="1" y="1" width="22" height="12" rx="3"/>${r.glyph ? `<text class="${r.kind ? "ki" : "gl"}" x="12" y="11" text-anchor="middle" style="font-size:var(--fs-min)">${r.glyph}</text>` : ""}</g></svg>`;
   const rows = {
     node: core.LEGEND.filter((r) => r.group === "node").map((r) => [sw(r), r.label, ""]),
+    kind: core.KIND_LEGEND.map((k) => [sw({ cls: `k-${k.kind}`, glyph: k.glyph, kind: true }), k.label, ""]),
     interaction: core.LEGEND.filter((r) => r.group === "interaction").map((r) => [sw(r), r.label, ""]),
   };
   return LEGEND_GROUPS.map(([g, title]) => `<div class="lh">${title}</div>` + rows[g].map(([s, l, cls]) => `<span class="lg${cls}">${s}<span class="lt">${esc(l)}</span></span>`).join("")).join("");

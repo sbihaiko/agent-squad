@@ -90,5 +90,30 @@ function layoutModule() {
     return dx || dy ? viewPanBy(v, dx, dy) : v;
   }
 
-  return { autoLayout, graphKids, layoutForSave, viewFit, viewFitFloor, viewZoomAt, viewPanBy, viewReveal };
+  // Edge routes: one orthogonal polyline per graph edge, in the order of `pairs` ({from, to}). Each edge owns its leaving port and
+  // its entering port (rows PORT_STEP px apart, leaving in the upper half of the box and entering in the lower half) and its own vertical lane in the gap between columns, so
+  // no two edges share a port or a segment. Lanes are counted per source column: a column of sources uses LANE_SLOTS lanes, then
+  // repeats. A segment is {x1, y1, x2, y2, arrow}; only the last segment of a route carries the arrow.
+  const PORT_STEP = 8, LANE_BASE = 8, LANE_STEP = 3, LANE_SLOTS = 6, STUB = 3;
+  function edgeRoutes(layout, pairs, box) {
+    const live = (pairs || []).filter((p) => layout && layout[p.from] && layout[p.to]);
+    const outN = {}, inN = {};
+    for (const p of live) { outN[p.from] = (outN[p.from] || 0) + 1; inN[p.to] = (inN[p.to] || 0) + 1; }
+    // A leaving edge uses the upper band of its node, an entering edge the lower band, so an exit and an entry in one gap rarely share a row.
+    const portY = (i, n, mid) => Math.min(mid + PORT_STEP * 1.5, Math.max(mid - PORT_STEP * 1.5, mid + (i - (n - 1) / 2) * PORT_STEP));
+    const seen = {}, lanes = {};
+    const take = (map, key) => { const i = map[key] || 0; map[key] = i + 1; return i; };
+    return live.map((p) => {
+      const a = layout[p.from], b = layout[p.to];
+      const oi = take(seen, "out:" + p.from), ii = take(seen, "in:" + p.to);
+      const y1 = a.y + portY(oi, outN[p.from], box.h / 4), y2 = b.y + portY(ii, inN[p.to], (3 * box.h) / 4);
+      const x1 = a.x + box.w, x2 = b.x - STUB;
+      const lane = take(lanes, String(a.x)) % LANE_SLOTS, xm = x1 + LANE_BASE + lane * LANE_STEP;
+      const pts = [[x1, y1], [xm, y1], [xm, y2], [x2, y2]];
+      const segs = pts.slice(1).map((q, i) => ({ x1: pts[i][0], y1: pts[i][1], x2: q[0], y2: q[1], arrow: i === pts.length - 2 }));
+      return { from: p.from, to: p.to, segs };
+    });
+  }
+
+  return { autoLayout, graphKids, layoutForSave, viewFit, viewFitFloor, viewZoomAt, viewPanBy, viewReveal, edgeRoutes };
 }

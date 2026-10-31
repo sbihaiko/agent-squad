@@ -90,5 +90,5 @@ def test_the_model_line_is_its_own_line_and_is_fitted_not_cut():
 def test_the_page_draws_the_routes_and_the_kind_mark():
     src = PAGE_SRC()
     assert "core.edgeRoutes(" in GRAPH_JS and "core.kindMark(" in GRAPH_JS
-    assert "k-" in GRAPH_JS and 'class="kc"' in GRAPH_JS
+    assert "km.cls" in GRAPH_JS and 'class="kc"' in GRAPH_JS
     assert "core.edgeRoutes" in src

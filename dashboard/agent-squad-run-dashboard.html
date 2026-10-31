@@ -128,6 +128,14 @@ select,input,textarea{background:var(--input);color:var(--fg);border:1px solid v
   .card .rw { fill:var(--ok); font-size:var(--fs-min); font-weight:600; }   /* a redo that passed, or a later attempt */
   .card.child.superseded > g { opacity:.72; }   /* a failed attempt a later one replaced: still failed, only quieter */
   .card .gl { fill:var(--mute); font:bold var(--fs-body) sans-serif; pointer-events:none; }   /* the state glyph: status is never hue alone */
+/* The kind icon (#914): one color per kind, a glyph in the chip. The chip carries no stroke of its own, even when the card is selected. */
+.card .kc { stroke:none; fill:var(--mute); }
+.card .ki { fill:#0d1117; font:bold 11px sans-serif; pointer-events:none; }
+.card.k-agent .kc { fill:#7aa2f7; } .card.k-gate .kc { fill:#bb9af7; } .card.k-action .kc { fill:#73daca; }
+.card.k-wait .kc { fill:#ff9e64; } .card.k-loop .kc { fill:#7dcfff; } .card.k-each .kc { fill:#c0caf5; }
+.card.k-dispatch .kc { fill:#e0af68; }
+/* The model line (#914): its own row, a little smaller than the other card text, so a typical name fits without a cut. */
+.card .kd.model { font-size:10px; }
   pre.ev { margin:4px 0 8px; padding:6px; background:#07090c; border:1px solid var(--line); border-radius:4px; font:var(--fs-min)/1.4 var(--font-mono); white-space:pre-wrap; word-break:break-all; max-height:200px; overflow:auto; color:#e8b9b9; }
   .cause { margin-top:6px; } .cause b.bad { color:var(--err); }
   #edges g.edge.child { pointer-events:none; }
@@ -2248,7 +2256,32 @@ function layoutModule() {
     return dx || dy ? viewPanBy(v, dx, dy) : v;
   }
 
-  return { autoLayout, graphKids, layoutForSave, viewFit, viewFitFloor, viewZoomAt, viewPanBy, viewReveal };
+  // Edge routes: one orthogonal polyline per graph edge, in the order of `pairs` ({from, to}). Each edge owns its leaving port and
+  // its entering port (rows PORT_STEP px apart, leaving in the upper half of the box and entering in the lower half) and its own vertical lane in the gap between columns, so
+  // no two edges share a port or a segment. Lanes are counted per source column: a column of sources uses LANE_SLOTS lanes, then
+  // repeats. A segment is {x1, y1, x2, y2, arrow}; only the last segment of a route carries the arrow.
+  const PORT_STEP = 8, LANE_BASE = 8, LANE_STEP = 3, LANE_SLOTS = 6, STUB = 3;
+  function edgeRoutes(layout, pairs, box) {
+    const live = (pairs || []).filter((p) => layout && layout[p.from] && layout[p.to]);
+    const outN = {}, inN = {};
+    for (const p of live) { outN[p.from] = (outN[p.from] || 0) + 1; inN[p.to] = (inN[p.to] || 0) + 1; }
+    // A leaving edge uses the upper band of its node, an entering edge the lower band, so an exit and an entry in one gap rarely share a row.
+    const portY = (i, n, mid) => Math.min(mid + PORT_STEP * 1.5, Math.max(mid - PORT_STEP * 1.5, mid + (i - (n - 1) / 2) * PORT_STEP));
+    const seen = {}, lanes = {};
+    const take = (map, key) => { const i = map[key] || 0; map[key] = i + 1; return i; };
+    return live.map((p) => {
+      const a = layout[p.from], b = layout[p.to];
+      const oi = take(seen, "out:" + p.from), ii = take(seen, "in:" + p.to);
+      const y1 = a.y + portY(oi, outN[p.from], box.h / 4), y2 = b.y + portY(ii, inN[p.to], (3 * box.h) / 4);
+      const x1 = a.x + box.w, x2 = b.x - STUB;
+      const lane = take(lanes, String(a.x)) % LANE_SLOTS, xm = x1 + LANE_BASE + lane * LANE_STEP;
+      const pts = [[x1, y1], [xm, y1], [xm, y2], [x2, y2]];
+      const segs = pts.slice(1).map((q, i) => ({ x1: pts[i][0], y1: pts[i][1], x2: q[0], y2: q[1], arrow: i === pts.length - 2 }));
+      return { from: p.from, to: p.to, segs };
+    });
+  }
+
+  return { autoLayout, graphKids, layoutForSave, viewFit, viewFitFloor, viewZoomAt, viewPanBy, viewReveal, edgeRoutes };
 }
 
 // Dashboard core module: save gate, draft copy, hash chip, diff, declared caps, command template, review sheet. A factory: it takes what it uses from the modules below it, and returns its functions. No DOM here.
@@ -2390,6 +2423,23 @@ function sourcesModule({ STATES }) {
   // The legend and the help are data. The page draws a swatch as a card group, so the card CSS paints it, and a Python test
   // holds the legend to the colors the page paints and the help to the controls the page answers.
   // A row with a `glyph` draws it in the swatch: the same glyph the card carries, so the color is never the only cue.
+  // The icon of a node kind: one glyph and one class per kind, so a gate and an agent differ by shape as well as by color (#914).
+  // The class names the kind's chip color in page.css, and the legend lists the same seven. An unknown kind keeps a glyph and its own class; it never throws.
+  const KIND_LEGEND = [
+    { kind: "agent", glyph: "\u25c6", label: "Agent: calls a model" },
+    { kind: "gate", glyph: "\u2713", label: "Gate: a check that passes or fails" },
+    { kind: "action", glyph: "\u25b6", label: "Action: a fixed step, no model" },
+    { kind: "wait", glyph: "\u2016", label: "Wait: a person decides" },
+    { kind: "loop", glyph: "\u21bb", label: "Loop: repeats until it passes" },
+    { kind: "each", glyph: "\u2261", label: "Each: runs for every item" },
+    { kind: "dispatch", glyph: "\u21c9", label: "Dispatch: starts children" },
+  ];
+  // The seven kinds, one row each, in the legend's own "Node kinds" group: the states table stays the one list of card states.
+  const KIND_GLYPHS = Object.fromEntries(KIND_LEGEND.map((k) => [k.kind, k.glyph]));
+  function kindMark(kind) {
+    const k = typeof kind === "string" && kind ? kind : "unknown";
+    return { kind: k, glyph: KIND_GLYPHS[k] || "\u25cb", cls: `k-${k}` };
+  }
   const LEGEND = [
     ...STATES.filter((x) => x.legend).map((x) => ({ cls: x.cls, glyph: x.glyph, label: x.legend, group: "node" })),   // the card states: from the one STATES table
     { cls: "err", label: "Breaks a graph rule: fix it", group: "node" },   // an editor state (core.validate), never a record event: a run refuses a graph with one
@@ -2485,7 +2535,7 @@ function sourcesModule({ STATES }) {
     return { close: stop, handlers };
   }
 
-  return { LEGEND, LEGEND_CHIPS, RUN_STATES, STATE_TEXT, HELP, httpSource, followPush };
+  return { LEGEND, LEGEND_CHIPS, RUN_STATES, STATE_TEXT, HELP, httpSource, followPush, kindMark, KIND_LEGEND };
 }
 
 // Dashboard core module: Where a pause leaves the run.
@@ -2619,7 +2669,7 @@ function make(ENGINE) {
   const { isObj, same, clone, pyFloat, canonText, canonFromText, graphHash, cmpCodePoints, parseImport, openedWorkflow } = canonModule(ENGINE);
   const { SCHEMA, KINDS, resolve, validate } = schemaModule({ ENGINE, isObj, canonText, same, pyFloat });
   const { applyNodeEdit, fieldGroups, setField, addNode, removeNode, reviewGate, connect, disconnect, renameNode, layoutRename, changeKind, kindChoices, unseenValues, READ_ONLY_TOP } = editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve });
-  const { autoLayout, graphKids, layoutForSave, viewFit, viewFitFloor, viewZoomAt, viewPanBy, viewReveal } = layoutModule();
+  const { autoLayout, graphKids, layoutForSave, viewFit, viewFitFloor, viewZoomAt, viewPanBy, viewReveal, edgeRoutes } = layoutModule();
   const { REVIEW_NOTE, diffGraphs, declaredCaps, commandTemplate, reviewSheet, saveText, hashChip, hashRelation, draftRecord, draftOffer, saveGate, saveMode } = reviewModule({ canonText, graphHash, cmpCodePoints });
   const { snapshot, histNew, histRecord, histUndo, histRedo } = historyModule({ clone });
   const { num, sumOf, orNull, lastOf, tokenFigures, runTimeline } = figuresModule();
@@ -2628,7 +2678,7 @@ function make(ENGINE) {
   const { reasonParts, causeSummary, failureCauses, skillName, nodeLabel } = failuresModule({ orNull });
   const { issueNumber, runChildren, skillLabel, CHILD_COLUMN_HEIGHT, childLayout, dispatchChecks, freeSpot, childAnchor } = childrenModule({ num, openCalls, orNull, skillName });
   const { OUTCOME_STATE, STATES, inFlight, isDone, isRunning, nodeState, stateClass, childStateClass } = stateModule({ num });
-  const { LEGEND, LEGEND_CHIPS, RUN_STATES, STATE_TEXT, HELP, httpSource, followPush } = sourcesModule({ STATES });
+  const { LEGEND, LEGEND_CHIPS, RUN_STATES, STATE_TEXT, HELP, httpSource, followPush, kindMark, KIND_LEGEND } = sourcesModule({ STATES });
   const { pauseView, controlBody } = controlModule({ lastOf });
   const { scriptDiagram, scriptSvg, guiRun } = scriptModule();
   const { runCap, runTotals, totalsCells, issueProgress, progressCells, fmt, nodeModel } = totalsModule({ lastOf, num, sumOf, tokenFigures, models: ENGINE.models });
@@ -2636,7 +2686,7 @@ function make(ENGINE) {
   const { stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus, CARD_NAMES, cardGroups, cardBody } = groupsModule({ OUTCOME_STATE, STATES, inFlight, isDone, isRunning, childAnchor, childLayout, fmt, freeSpot, num, sumOf });
   const { nodeHarness, runStats } = statsModule({ causeSummary, dispatchChecks, failureCauses, lastOf, liveState, num, openCalls, orNull, runCap, runChildren, runTimeline, runTotals, skillLabel, sumOf, tokenFigures });
 
-  return { scriptDiagram, scriptSvg, guiRun, pauseView, controlBody, LEGEND, LEGEND_CHIPS, RUN_STATES, STATE_TEXT, HELP, httpSource, followPush, snapshot, histNew, histRecord, histUndo, histRedo, REVIEW_NOTE, diffGraphs, declaredCaps, commandTemplate, reviewSheet, saveText, hashChip, hashRelation, draftRecord, draftOffer, layoutForSave, saveGate, saveMode, viewFit, viewFitFloor, viewZoomAt, viewPanBy, viewReveal, validate, canonText, canonFromText, graphHash, parseImport, openedWorkflow, parseRecord, parseLive, readDelay, liveState, replayAt, moveCursor, unresolvedChildren, overlayRows, overlayFor, runStats, runTotals, runCap, totalsCells, issueProgress, progressCells, nodeState, stateClass, childStateClass, inFlight, isRunning, graphKids, nodeLabel, issueNumber, reasonParts, causeSummary, failureCauses, runChildren, nodeHarness, nodeModel, childLayout, childAnchor, dispatchChecks, fmt, applyNodeEdit, reviewGate, fieldGroups, setField, addNode, removeNode, connect, disconnect, renameNode, layoutRename, changeKind, kindChoices, unseenValues, freeSpot, stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus, CARD_NAMES, cardGroups, cardBody, autoLayout, CHILD_COLUMN_HEIGHT, READ_ONLY_TOP, KINDS };
+  return { scriptDiagram, scriptSvg, guiRun, pauseView, controlBody, LEGEND, LEGEND_CHIPS, RUN_STATES, STATE_TEXT, HELP, httpSource, followPush, snapshot, histNew, histRecord, histUndo, histRedo, REVIEW_NOTE, diffGraphs, declaredCaps, commandTemplate, reviewSheet, saveText, hashChip, hashRelation, draftRecord, draftOffer, layoutForSave, saveGate, saveMode, viewFit, viewFitFloor, viewZoomAt, viewPanBy, viewReveal, validate, canonText, canonFromText, graphHash, parseImport, openedWorkflow, parseRecord, parseLive, readDelay, liveState, replayAt, moveCursor, unresolvedChildren, overlayRows, overlayFor, runStats, runTotals, runCap, totalsCells, issueProgress, progressCells, nodeState, stateClass, childStateClass, inFlight, isRunning, graphKids, nodeLabel, issueNumber, reasonParts, causeSummary, failureCauses, runChildren, nodeHarness, nodeModel, kindMark, KIND_LEGEND, edgeRoutes, childLayout, childAnchor, dispatchChecks, fmt, applyNodeEdit, reviewGate, fieldGroups, setField, addNode, removeNode, connect, disconnect, renameNode, layoutRename, changeKind, kindChoices, unseenValues, freeSpot, stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus, CARD_NAMES, cardGroups, cardBody, autoLayout, CHILD_COLUMN_HEIGHT, READ_ONLY_TOP, KINDS };
 }
 
 </script>
@@ -2656,6 +2706,8 @@ const GLYPH = { right: 9, top: 19 }, CLIP = { name: 22, cause: 25, harness: 30 }
 const READABLE_K = 0.7;
 // Card text rows (y) and left edge (x) inside a card of BOX size; the one place the card layout is named. CARD_GAP is the space between cards in a column.
 const TEXT = { x: 10, name: 19, kind: 34, line1: 46, line2: 57, cause: 56 }, CARD_GAP = 30;
+// A node card: the kind icon sits in a chip at the left of the name, so the name starts right of it. The model line is one row, fitted to MODEL_W.
+const KIND_CHIP = { x: 7, y: 5, w: 16 }, NODE_TEXT_X = 30, NODE_CLIP = { name: 19 }, MODEL_W = BOX.w - 16;
 // Pointer feel: a press that moves under DRAG_SLOP px is a click; one wheel pixel zooms by WHEEL_RATE (exponent); a zoom button steps by ZOOM_STEP; the fit never uses a map smaller than MIN_FIT px.
 const DRAG_SLOP = 3, WHEEL_RATE = 0.0015, ZOOM_STEP = 1.25, MIN_FIT = 120;
 const REPLAY_GAP = 24, REVEAL_INSET = 16, FOOTER_PAD = 12;
@@ -2871,15 +2923,13 @@ function revealSelected() {
 }
 
 function edgeLines() {
-  const lines = [];
-  for (const n of nodesOf()) {
-    for (const c of core.graphKids(n)) {
-      const a = S.layout[n.name], b = S.layout[c];
-      if (!a || !b) continue;
-      const sel = S.link && S.link.from === n.name && S.link.to === c;
-      const co = `x1="${a.x + BOX.w}" y1="${a.y + BOX.h / 2}" x2="${b.x - 3}" y2="${b.y + BOX.h / 2}"`;
-      lines.push(`<g class="edge${sel ? " sel" : ""}" data-from="${esc(n.name)}" data-to="${esc(c)}"><line class="hit" ${co}/><line class="ln" ${co} marker-end="url(#arrow)"/></g>`);
-    }
+  const lines = [], pairs = [];
+  for (const n of nodesOf()) for (const c of core.graphKids(n)) pairs.push({ from: n.name, to: c });
+  // Each edge is its own route: one orthogonal line per segment, so two edges never draw over each other (core.edgeRoutes).
+  for (const r of core.edgeRoutes(S.layout, pairs, BOX)) {
+    const sel = S.link && S.link.from === r.from && S.link.to === r.to;
+    const segs = r.segs.map((q) => { const co = `x1="${q.x1}" y1="${q.y1}" x2="${q.x2}" y2="${q.y2}"`; return `<line class="hit" ${co}/><line class="ln" ${co}${q.arrow ? ' marker-end="url(#arrow)"' : ""}/>`; }).join("");
+    lines.push(`<g class="edge${sel ? " sel" : ""}" data-from="${esc(r.from)}" data-to="${esc(r.to)}">${segs}</g>`);
   }
   // One bus per dispatch: one line leaves the entry, a rail serves each column of single cards and group cards.
   for (const d of [...new Set([...S.children.map((c) => c.dispatch), ...S.groups.map((g) => g.dispatch)])]) {
@@ -3082,21 +3132,32 @@ function renderMap() {
     const running = !!ns && core.isRunning(ns);
     const nmark = ns ? core.stateMark(core.nodeState(ns)) : null;   // a glyph on every node the record touched: color is never the only cue
     const sc = core.stateClass(ns);   // not-run, running, passed, failed, deadline, needs-human, started
-    g.setAttribute("class", "card" + (S.selected === n.name ? " sel" : "") + (errs ? " err" : "") + (sc ? " " + sc : ""));
+    const km = core.kindMark(n.kind);   // the icon and the color of the kind: a gate and an agent differ by shape, not by text alone
+    g.setAttribute("class", "card " + km.cls + (S.selected === n.name ? " sel" : "") + (errs ? " err" : "") + (sc ? " " + sc : ""));
     g.setAttribute("transform", `translate(${p.x} ${p.y})`);
     g.dataset.name = n.name;
     const label = core.nodeLabel(n);
     focusable(g, `${label}, ${nmark ? nmark.label : n.kind}`);   // the role label on the card; the raw name stays in the tooltip
-    const name = clipText(label, CLIP.name);   // the glyph sits at the top-right corner
+    const name = clipText(label, NODE_CLIP.name);   // the glyph sits at the top-right corner; the icon sits left of the name
     const ml = core.nodeModel(n, ns);   // the LLM line (#677): the core decides it, the card only renders it
-    g.innerHTML = `<title>${esc(n.name)} | ${esc(ml.text)}${ns ? ` | ${running ? esc(runningTitle(ns)) : `${esc(oc || "no outcome")}, time ${core.fmt.seconds(ns.elapsed)}, cost ${core.fmt.usd(ns.spend)}, ${core.fmt.pct(ns.cap_pct)} of the call cap, turns ${core.fmt.count(ns.turns)}${tokenLine(ns) ? ", tokens " + tokenLine(ns) : ""}, entries ${ns.entries}${ns.cause ? ", " + esc(ns.cause) : ""}`}` : ""}</title><rect width="${BOX.w}" height="${BOX.h}" rx="6"/><g clip-path="url(#card-clip)"><text class="nm" x="${TEXT.x}" y="${TEXT.name}">${esc(name)}</text><text class="kd" x="${TEXT.x}" y="${TEXT.kind}">${esc(clipText(n.kind + " \u00b7 " + ml.text, CLIP.harness))}${ns && ns.routed && ns.routed !== "continue" ? " \u2192 " + esc(ns.routed) : ""}</text>${ns ? cardLines(ns, running) : ""}</g>${errs ? `<text class="bd-e" x="${BOX.w - 8}" y="34" text-anchor="end">${errs} error${errs > 1 ? "s" : ""}</text>` : ""}${ov ? `<text class="bd-o" x="${BOX.w - 26}" y="19" text-anchor="end">${ov} adapted</text>` : ""}${nmark ? `<text class="gl" x="${BOX.w - GLYPH.right}" y="${GLYPH.top}" text-anchor="end">${nmark.glyph}</text>` : ""}${n.name === S.doc.root ? "" : `<circle class="port in" cx="0" cy="${BOX.h / 2}" r="5"/>`}${["loop", "each", "dispatch"].includes(n.kind) ? `<circle class="port out" cx="${BOX.w}" cy="${BOX.h / 2}" r="5"><title>Drag to another node to connect</title></circle>` : ""}`;
+    const routed = ns && ns.routed && ns.routed !== "continue" ? " \u2192 " + ns.routed : "";   // the model line is never cut: the text is fitted below
+    g.innerHTML = `<title>${esc(n.name)} | ${esc(ml.text)}${ns ? ` | ${running ? esc(runningTitle(ns)) : `${esc(oc || "no outcome")}, time ${core.fmt.seconds(ns.elapsed)}, cost ${core.fmt.usd(ns.spend)}, ${core.fmt.pct(ns.cap_pct)} of the call cap, turns ${core.fmt.count(ns.turns)}${tokenLine(ns) ? ", tokens " + tokenLine(ns) : ""}, entries ${ns.entries}${ns.cause ? ", " + esc(ns.cause) : ""}`}` : ""}</title><rect width="${BOX.w}" height="${BOX.h}" rx="6"/><g clip-path="url(#card-clip)"><rect class="kc" x="${KIND_CHIP.x}" y="${KIND_CHIP.y}" width="${KIND_CHIP.w}" height="${KIND_CHIP.w}" rx="3"/><text class="ki" x="${KIND_CHIP.x + KIND_CHIP.w / 2}" y="${KIND_CHIP.y + 12}" text-anchor="middle">${km.glyph}</text><text class="nm" x="${NODE_TEXT_X}" y="${TEXT.name}">${esc(name)}</text><text class="kd model" x="${TEXT.x - 2}" y="${TEXT.kind}">${esc(ml.text + routed)}</text>${ns ? cardLines(ns, running) : ""}</g>${errs ? `<text class="bd-e" x="${BOX.w - 8}" y="34" text-anchor="end">${errs} error${errs > 1 ? "s" : ""}</text>` : ""}${ov ? `<text class="bd-o" x="${BOX.w - 26}" y="19" text-anchor="end">${ov} adapted</text>` : ""}${nmark ? `<text class="gl" x="${BOX.w - GLYPH.right}" y="${GLYPH.top}" text-anchor="end">${nmark.glyph}</text>` : ""}${n.name === S.doc.root ? "" : `<circle class="port in" cx="0" cy="${BOX.h / 2}" r="5"/>`}${["loop", "each", "dispatch"].includes(n.kind) ? `<circle class="port out" cx="${BOX.w}" cy="${BOX.h / 2}" r="5"><title>Drag to another node to connect</title></circle>` : ""}`;
     g.addEventListener("pointerdown", (ev) => { if (ev.target.classList && ev.target.classList.contains("out")) startLink(ev, n.name); else startDrag(ev, n.name, g); });
     cards.appendChild(g);
   }
   renderChildren(cards);
   renderGroups(cards);
+  fitModelLines(cards);
   $("edges").innerHTML = edgeLines();
   applyView();
+}
+
+// The model line is one line on the card, never cut. A model name wider than the card is set narrower (the text is squeezed, not
+// shortened); a name that fits keeps its size. The measure needs the cards in the document, so it runs after they are drawn.
+function fitModelLines(cards) {
+  for (const t of cards.querySelectorAll("text.kd.model")) {
+    if (t.getComputedTextLength() > MODEL_W) { t.setAttribute("textLength", MODEL_W); t.setAttribute("lengthAdjust", "spacingAndGlyphs"); }
+  }
 }
 
 // A node that can call a model shows its tokens, a dash when the record has none. Another node shows the line only if the record has tokens for it.
@@ -3694,18 +3755,19 @@ function closeMenu() { $("menu").style.display = "none"; }
 
 // --- the legend and the help overlay: rows come from the core; a swatch is a card group, so the card CSS paints it ---
 function swatches() {
-  const cards = core.LEGEND.map((r) => `<span class="lg"><svg width="24" height="14" viewBox="0 0 24 14"><g class="card ${r.cls}"><rect x="1" y="1" width="22" height="12" rx="3"/>${r.glyph ? `<text class="gl" x="12" y="11" text-anchor="middle" style="font-size:var(--fs-min)">${r.glyph}</text>` : ""}</g></svg>${esc(r.label)}</span>`);
+  const cards = core.LEGEND.map((r) => `<span class="lg"><svg width="24" height="14" viewBox="0 0 24 14"><g class="card ${r.cls}"><rect${r.kind ? ' class="kc"' : ""} x="1" y="1" width="22" height="12" rx="3"/>${r.glyph ? `<text class="${r.kind ? "ki" : "gl"}" x="12" y="11" text-anchor="middle" style="font-size:var(--fs-min)">${r.glyph}</text>` : ""}</g></svg>${esc(r.label)}</span>`);
   const chips = core.LEGEND_CHIPS.map((r) => `<span class="lg"><span class="chip-sw ${r.cls}">${esc(r.label)}</span></span>`);
   return cards.concat(chips).join("");
 }
 // The side strip's list: two headed groups (node outcomes, interaction). Always expanded.
 // The run-state vocabulary is not a legend row: the owner removed that group (2026-10-11). The states live in the core's one table
 // (RUN_STATES) and the surfaces that print a state draw their pill from it; the help overlay still lists the chips.
-const LEGEND_GROUPS = [["node", "Node outcomes"], ["interaction", "Interaction"]];
+const LEGEND_GROUPS = [["node", "Node outcomes"], ["kind", "Node kinds"], ["interaction", "Interaction"]];
 function legendList() {
-  const sw = (r) => `<svg width="24" height="14" viewBox="0 0 24 14"><g class="card ${r.cls}"><rect x="1" y="1" width="22" height="12" rx="3"/>${r.glyph ? `<text class="gl" x="12" y="11" text-anchor="middle" style="font-size:var(--fs-min)">${r.glyph}</text>` : ""}</g></svg>`;
+  const sw = (r) => `<svg width="24" height="14" viewBox="0 0 24 14"><g class="card ${r.cls}"><rect${r.kind ? ' class="kc"' : ""} x="1" y="1" width="22" height="12" rx="3"/>${r.glyph ? `<text class="${r.kind ? "ki" : "gl"}" x="12" y="11" text-anchor="middle" style="font-size:var(--fs-min)">${r.glyph}</text>` : ""}</g></svg>`;
   const rows = {
     node: core.LEGEND.filter((r) => r.group === "node").map((r) => [sw(r), r.label, ""]),
+    kind: core.KIND_LEGEND.map((k) => [sw({ cls: `k-${k.kind}`, glyph: k.glyph, kind: true }), k.label, ""]),
     interaction: core.LEGEND.filter((r) => r.group === "interaction").map((r) => [sw(r), r.label, ""]),
   };
   return LEGEND_GROUPS.map(([g, title]) => `<div class="lh">${title}</div>` + rows[g].map(([s, l, cls]) => `<span class="lg${cls}">${s}<span class="lt">${esc(l)}</span></span>`).join("")).join("");
