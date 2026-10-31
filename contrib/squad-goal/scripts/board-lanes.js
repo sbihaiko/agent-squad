@@ -3,6 +3,9 @@
 // (the parent the read carries, #829). Loop bugs (ADR-0146) sit in the first lane; cards with no spec sit in the last.
 // Each column the board draws is a name from the page's own column list, so no column is named here.
 const hasLabel=(x,l)=>(x.l||[]).includes(l);
+// A cell shows its first three cards and a "+N more" control for the rest; an open cell shows them all (#891).
+const LANE_CELL=3;
+const cellView=(rows,open)=>open?{shown:rows,more:0}:{shown:rows.slice(0,LANE_CELL),more:Math.max(0,rows.length-LANE_CELL)};
 const laneWaveOf=x=>{const w=(x.l||[]).map(l=>(String(l).match(/^wave:(\d+)$/)||[])[1]).filter(v=>v!==undefined).map(Number);return w.length?Math.min(...w):null};
 const waveKey=x=>{const w=laneWaveOf(x);return w===null?"none":String(w)};
 const specKey=x=>x.pa==null?"none":String(x.pa);
