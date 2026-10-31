@@ -7,9 +7,9 @@ above the work in flight. A lane belongs to work still on the board (#890), so t
 import json
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
-from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 LANES_JS = ROOT / "contrib" / "squad-goal" / "scripts" / "board-lanes.js"
