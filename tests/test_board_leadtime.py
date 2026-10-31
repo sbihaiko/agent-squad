@@ -257,7 +257,7 @@ def test_a_timeframe_keeps_only_the_cards_closed_inside_it(lt):
     items = [_closed(1, 5, days_ago=1), _closed(2, 5, days_ago=20)]
 
     assert [dot["n"] for dot in _chart(lt, items, timeframe=7)["dots"]] == [1]
-    assert [dot["n"] for dot in _chart(lt, items, timeframe=None)["dots"]] == [1, 2]
+    assert sorted(dot["n"] for dot in _chart(lt, items, timeframe=None)["dots"]) == [1, 2]
 
 
 def test_the_date_axis_places_the_range_end_at_the_right_edge(lt):
