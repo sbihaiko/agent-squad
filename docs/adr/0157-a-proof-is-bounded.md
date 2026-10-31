@@ -11,16 +11,18 @@ pending reminder; more than two hours, never again."
 The promotion proof ([ADR-0156](0156-a-full-proof-carries-across-a-covered-delta.md)) runs the full suite in both modes. On
 this machine a full run takes 40 to 50 minutes, and a proof that reserves the machine for that long stops dispatch for the
 whole time ([ADR-0145](0145-a-work-branch-lands-in-dev-by-fast-forward.md)). A slow proof then costs twice: the landing it
-was waiting for, and every run the loop did not start while it held the machine.
+was waiting for, and every run the loop did not start while it held the machine. The owner set parallelism as the priority:
+a proof that costs four run slots for an hour costs more delivery than the shield is worth.
 
 A proof also has no upper bound. A suite that hangs holds the reserve until its own hold expires, three hours later.
 
 ## Decision
 
-1. **A proof is fast, or it does not block.** Up to its reserve bound (30 minutes, `SG_PROMOTE_RESERVE_SECONDS`) the proof
-   reserves the machine, and dispatch waits for it as before.
-2. **Past the reserve bound the reserve lifts.** The proof keeps running, and the loop dispatches beside it. The pass writes
-   one line to the promote log naming the tip and the bound. The proof is never cancelled by this bound.
+1. **A proof never holds dispatch.** The reserve bound is zero, and the proof writes no reserve, so the dispatchers read no
+   hold and the loop takes its run slots beside the proof. An owner who wants the measurement shielded names a bound in
+   `SG_PROMOTE_RESERVE_SECONDS`; with a bound the proof reserves the machine for that long and dispatch waits.
+2. **Past a named reserve bound the reserve lifts.** The proof keeps running, and the loop dispatches beside it. The pass
+   writes one line to the promote log naming the tip and the bound. The proof is never cancelled by this bound.
 3. **At its deadline the proof is killed.** The deadline is two hours (`SG_PROMOTE_DEADLINE_SECONDS`). The suite and every
    child it started are killed, and the tip is recorded in `$SG_STATE/promote-indeterminate` as `<epoch> TAB <tip> TAB
    <bound>`, with one line in the promote log saying the tip is not tested.

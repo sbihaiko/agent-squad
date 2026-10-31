@@ -115,8 +115,8 @@ test-pass-deadline.sh 15.65
 test-prepush.sh 1.28
 test-profile-check.sh 1.16
 test-profile-venv-path.sh 0.07
-test-promote-delta.sh 19.00
-test-promote-pass.sh 85.00
+test-promote-delta.sh 19.0
+test-promote-pass.sh 120.0
 test-promote.sh 16.53
 test-publish-live.sh 2.50
 test-quality-reading.sh 2.06
