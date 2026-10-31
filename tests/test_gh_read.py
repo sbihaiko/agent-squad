@@ -24,6 +24,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 MODULE = ROOT / "contrib/squad-goal/scripts/ghread.py"
 
@@ -364,9 +366,41 @@ def test_a_graphql_query_is_the_argv_the_door_runs():
     assert argv[3:] == ["-F", "number=7"], f"a variable goes through `-F`: {argv}"
 
 
-def test_a_graphql_read_is_an_answer_or_a_refusal_like_every_other_read():
+def test_a_graphql_read_is_an_answer_or_a_refusal_like_every_other_read(tmp_path, monkeypatch):
+    monkeypatch.setenv("SG_STATE", str(tmp_path))
     body = '{"data":{"repository":{"issueOrPullRequest":{"bodyHTML":"<p>x</p>"}}}}'
     out = ghread.graphql_read("query{x}", transport=stub(0, body))
     assert out.kind == "answer" and out.answer["data"]["repository"]["issueOrPullRequest"]["bodyHTML"] == "<p>x</p>"
     refused = ghread.graphql_read("query{x}", transport=stub(0, '{"errors":[{"message":"API rate limit exceeded"}]}'))
     assert refused.kind == "refused" and "rate limit" in refused.message, refused
+
+
+def test_a_graphql_read_is_logged_with_its_outcome_and_its_pass(tmp_path, monkeypatch):
+    monkeypatch.setenv("SG_STATE", str(tmp_path))
+    monkeypatch.setenv("SG_GH_PASS", "board")
+    ghread.graphql_read("query{x}", transport=stub(0, '{"data":{"x":1}}'))
+    ghread.graphql_read("query{x}", transport=stub(0, '{"errors":[{"message":"API rate limit exceeded"}]}'))
+    calls = [ghread.parse_call(line) for line in (tmp_path / "api.log").read_text().splitlines()]
+    assert [(c.transport, c.route, c.cache, c.outcome, c.pass_name) for c in calls] == [
+        ("GraphQL", "graphql", "miss", "answer", "board"),
+        ("GraphQL", "graphql", "miss", "refused", "board"),
+    ], calls
+
+
+def test_a_graphql_read_names_the_pass_its_caller_gives(tmp_path, monkeypatch):
+    monkeypatch.setenv("SG_STATE", str(tmp_path))
+    monkeypatch.delenv("SG_GH_PASS", raising=False)
+    ghread.graphql_read("query{x}", transport=stub(0, '{"data":{"x":1}}'), pass_name="hub")
+    assert ghread.parse_call((tmp_path / "api.log").read_text().splitlines()[0]).pass_name == "hub"
+
+
+def test_a_graphql_read_that_never_reaches_github_is_logged_as_failed(tmp_path, monkeypatch):
+    monkeypatch.setenv("SG_STATE", str(tmp_path))
+    monkeypatch.setenv("SG_GH_PASS", "board")
+
+    def gone(route):
+        raise OSError("no gh on PATH")
+
+    with pytest.raises(OSError):
+        ghread.graphql_read("query{x}", transport=gone)
+    assert ghread.parse_call((tmp_path / "api.log").read_text().splitlines()[0]).outcome == "failed"

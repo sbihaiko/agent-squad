@@ -64,6 +64,16 @@ tail -1 "$LOG" | grep -Eq " unattributed$" && ok "a caller that names no pass is
 touch "$T/ratelimited"; SG_GH_PASS=board $RD repos/o/r/issues/9 >/dev/null
 tail -1 "$LOG" | grep -Eq " GraphQL repos/o/r/issues/9 miss refused board$" && ok "a refusal is a refused outcome" || bad "refusal: $(tail -1 "$LOG")"
 
+echo "a GraphQL read logs through the helper:"
+reset
+printf '%s' '{"data":{"repository":{"x":1}}}' > "$T/body"
+SG_GH_PASS=board python3 -c "import sys; sys.path.insert(0, '$T/s'); import ghread; print(ghread.graphql_read('query{x}').kind)" >/dev/null
+tail -1 "$LOG" 2>/dev/null | grep -Eq " GraphQL graphql miss answer board$" && ok "graphql_read logs its answer as a GraphQL read, with the pass that spent it" || bad "graphql_read: $(tail -1 "$LOG" 2>/dev/null)"
+touch "$T/ratelimited"; SG_GH_PASS=board python3 -c "import sys; sys.path.insert(0, '$T/s'); import ghread; print(ghread.graphql_read('query{x}').kind)" >/dev/null; rm -f "$T/ratelimited"
+tail -1 "$LOG" 2>/dev/null | grep -Eq " GraphQL graphql miss refused board$" && ok "a refused GraphQL read is logged as refused" || bad "graphql refusal: $(tail -1 "$LOG" 2>/dev/null)"
+(. "$T/s/ghcall.sh"; SG_GH_PASS=hub gh_get graphql -f query=x >/dev/null)
+tail -1 "$LOG" 2>/dev/null | grep -Eq " GraphQL graphql miss answer hub$" && ok "a shell door's GraphQL read is logged as GraphQL" || bad "shell graphql: $(tail -1 "$LOG" 2>/dev/null)"
+
 echo "each pass names itself:"
 for pair in startability.sh:landing autofrontier.sh:frontier autobug.sh:autobug board.sh:board; do
   s=${pair%%:*}; p=${pair##*:}

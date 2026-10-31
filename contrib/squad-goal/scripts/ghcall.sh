@@ -40,9 +40,9 @@ ghcall_here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # list with no `data` (a rate limit comes back that way, with gh exit 0 or 1). Any body that is not JSON, or is JSON without
 # either shape, is not a refusal -- `jq -e` exits non-zero for both.
 # _gh_log <outcome> <gh api args…>: one call-log line for a call this file makes itself. The route is the one argument that is
-# neither a flag nor the value of one; the transport is REST (a write, a diff and a Project v2 read are all REST).
+# neither a flag nor the value of one; the transport is REST, or GraphQL for the `graphql` route.
 _gh_log() {
-  local outcome=$1 route="" a; shift
+  local outcome=$1 route="" a transport=REST; shift
   while [ $# -gt 0 ]; do
     case "$1" in
       -H|--header|-X|--method|-f|--raw-field|-F|--field|-q|--jq|--input|--cache|-t|--template|--hostname) shift 2;;
@@ -51,7 +51,8 @@ _gh_log() {
     esac
   done
   [ -n "$route" ] || return 0
-  $SG_GHREAD --log REST "$route" miss "$outcome" >/dev/null 2>&1 || true
+  [ "$route" = graphql ] && transport=GraphQL
+  $SG_GHREAD --log "$transport" "$route" miss "$outcome" >/dev/null 2>&1 || true
 }
 
 # _gh_child_merge <gh args…>: 0 when a child session asks to merge a PR, by `pr merge` or by `PUT .../pulls/N/merge`. A child
