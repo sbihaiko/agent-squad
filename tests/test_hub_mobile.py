@@ -87,15 +87,21 @@ def test_desktop_page_links_to_mobile_and_redirects_narrow_screens(hub):
     _, _, desk = get(port, "/")
     assert 'id=mobile-link' in desk
     assert 'matchMedia("(max-width: 600px)")' in desk
-    assert 'getItem("squad-view")!=="desktop"' in desk
+    assert 'localStorage.getItem("squad-view")!=="desktop"' in desk
     assert "location.replace(" in desk
+
+
+def test_desktop_page_carries_a_viewport_tag(hub):
+    mod, port = hub
+    _, _, desk = get(port, "/")
+    assert 'name=viewport content="width=device-width,initial-scale=1"' in desk
 
 
 def test_mobile_page_links_back_to_desktop_and_remembers_the_choice(hub):
     mod, port = hub
     _, _, body = get(port, "/mobile")
     assert 'id="to-desktop"' in body
-    assert 'setItem("squad-view","desktop")' in body
+    assert 'localStorage.setItem("squad-view","desktop")' in body
 
 
 def test_status_route_serves_since_unknown_without_a_stamp(hub):
