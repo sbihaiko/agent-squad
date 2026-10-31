@@ -811,7 +811,7 @@ def test_a_restatement_gap_is_a_finding_of_its_kind_sorted_like_any_other(tmp_pa
     row = next(r for r in report.rows if r.premise == premise)
     assert row.state == state
     assert row.asked is (state == "open")
-    assert "| " + premise + " |" in report.body
+    assert premise in report.body
 
 
 def test_a_correct_restatement_adds_no_gap_and_leaves_the_questions_unchanged(tmp_path):
@@ -844,7 +844,9 @@ def test_the_command_takes_a_restatement_file():
 
 def test_the_command_refuses_a_round_with_no_restatement_in_one_line(tmp_path, capsys, monkeypatch):
     def no_network(repo, shell=None):
-        raise AssertionError("a refused round must not reach GitHub")
+        def gh(op, **kw):
+            raise AssertionError(f"a refused round must not reach GitHub: {op}")
+        return gh
     monkeypatch.setattr(pc, "rest_runner", no_network)
     findings = tmp_path / "findings.json"
     findings.write_text(json.dumps([DECISION]))

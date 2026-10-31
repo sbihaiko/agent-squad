@@ -11,7 +11,9 @@ repository, so it never reviews. This module holds the rules of a round, so the 
   recommended answer that "yes" accepts; a gap that depends on another open gap waits a round.
 
 The round writes ONE comment on the spec, found by its marker and rewritten in place, so a second round replaces
-the first instead of adding to it.
+the first instead of adding to it. Its first section is the reviewer's restatement of the spec's goal and scope, in
+at most `MAX_RESTATED` lines: a round with no restatement is refused, and a restatement that adds, drops or cannot
+form a goal is a gap sorted like any other.
 
 An owner answer rewrites the spec body in place and opens the next round. One answer that defines a term is written
 into `GLOSSARY.md`, one that records a durable decision becomes an ADR under `docs/adr/`, and "I don't know" becomes
@@ -20,10 +22,10 @@ next round, and the same refutation repeated with no change in the spec stops th
 
 The findings are the reviewer's judgment and come from a file; this module is the deterministic part:
 
-    uv run squad premise-check <spec> --findings findings.json                          one round, written to the spec
-    uv run squad premise-check <spec> --findings findings.json --answers answers.json   the next round, after answers
-    uv run squad premise-check <spec> --findings findings.json --dry-run                print the comment, write nothing
-    uv run squad premise-check <spec> --findings findings.json --answers answers.json --proxy <model>   a proxy's answers that may stand
+    uv run squad premise-check <spec> --findings findings.json --restatement restatement.json                          one round, written to the spec
+    uv run squad premise-check <spec> --findings findings.json --restatement restatement.json --answers answers.json   the next round, after answers
+    uv run squad premise-check <spec> --findings findings.json --restatement restatement.json --dry-run                print the comment, write nothing
+    uv run squad premise-check <spec> --findings findings.json --restatement restatement.json --answers answers.json --proxy <model>   a proxy's answers that may stand
 """
 import argparse
 import hashlib
@@ -43,6 +45,7 @@ REGISTRY = "config/models.registry.json"
 MODELS = "contrib/squad-goal/scripts/models.json"
 
 MAX_QUESTIONS = 5
+MAX_RESTATED = 3
 STATES = ("proven", "refuted", "needs a probe", "decided", "open")
 KINDS = ("fact", "run", "decision")
 ANSWER_KINDS = ("decision", "glossary", "adr")
@@ -167,6 +170,34 @@ class Answer:
         if "<!--" in line or "-->" in line:
             raise ValueError(f"the answer to {premise!r} carries an HTML comment, which the spec body reserves for its proxy marker")
         return answer
+
+
+@dataclass(frozen=True)
+class Restatement:
+    """The reviewer's restatement of the spec's goal and scope, and the gaps where it adds, drops or cannot form one."""
+
+    lines: tuple[str, ...] = ()
+    gaps: tuple[Finding, ...] = ()
+
+    @classmethod
+    def of(cls, raw) -> "Restatement":
+        if isinstance(raw, cls):
+            return raw
+        if not isinstance(raw, dict):
+            raise ValueError(f"a restatement is an object, not {type(raw).__name__}")
+        lines = raw.get("lines")
+        if not isinstance(lines, list):
+            raise ValueError("a restatement's lines is a list of text")
+        if len(lines) > MAX_RESTATED:
+            raise ValueError(f"a restatement has at most {MAX_RESTATED} lines, not {len(lines)}")
+        clean = tuple(" ".join(str(x).split()) for x in lines)
+        if not all(clean):
+            raise ValueError("a restatement line is empty")
+        gaps = [Finding.of(g) for key in ("added", "dropped") for g in raw.get(key) or []]
+        if not clean:
+            gaps.append(Finding(premise="the spec's goal and scope cannot be restated", kind="decision",
+                                recommends="the spec states its goal and scope in its body"))
+        return cls(lines=clean, gaps=tuple(gaps))
 
 
 @dataclass(frozen=True)
@@ -326,9 +357,9 @@ def _cell(text: str) -> str:
 
 
 def render(spec: int, round_no: int, reviewer: Reviewer, rows: list[Row], ending: str = "",
-           body_sha: str = "", stop_reason: str = "") -> str:
-    """The round's one comment: the marker, the reviewer, one table of premise, state, proof or answer, who, its end."""
-    lines = [MARKER.format(spec=spec), "",
+           body_sha: str = "", stop_reason: str = "", *, restated: tuple[str, ...]) -> str:
+    """The round's one comment: the marker, the restated goal, the reviewer, one table of premise, state, proof or answer, who, its end."""
+    lines = [MARKER.format(spec=spec), "", "Restated goal:", *(restated or ("none formed: see the open gap below",)), "",
              f"Premise check, round {round_no}. Reviewer: {reviewer.label} (`{reviewer.wire}`), route `{reviewer.route}`.",
              "",
              "| Premise | State | Proof or answer | Answered by |",
@@ -533,8 +564,14 @@ class Report:
 
 
 def run_round(spec: int, findings, answers=(), *, github, root=None, round_no: int | None = None,
-              who: Reviewer, dry_run: bool = False, proxy: Reviewer | None = None) -> Report:
+              who: Reviewer, dry_run: bool = False, proxy: Reviewer | None = None,
+              restatement=None) -> Report:
     """One round after the owner's answers: rewrite the spec body, fold the answers in, and record the round."""
+    if restatement is None:
+        raise ValueError("a round carries no restatement: restate the spec's goal and scope in at most "
+                         f"{MAX_RESTATED} lines, in the reviewer's own words, before any gap")
+    restated = Restatement.of(restatement)
+    findings = [*findings, *restated.gaps]
     root = Path(root) if root is not None else ROOT
     if proxy is not None and proxy.id == who.id:
         raise NoProxy(f"{proxy.id} is the reviewer, so it never answers its own check")
@@ -558,7 +595,8 @@ def run_round(spec: int, findings, answers=(), *, github, root=None, round_no: i
     end = "stopped" if stop_reason else ending(rows)
     if stop_reason:
         rows = [replace(r, question=None, held="not asked: the check stopped") if r.asked else r for r in rows]
-    comment = render(spec, round_no, who, rows, ending=end, body_sha=sha, stop_reason=stop_reason)
+    comment = render(spec, round_no, who, rows, ending=end, body_sha=sha, stop_reason=stop_reason,
+                     restated=restated.lines)
     if github is None or dry_run:
         return Report(body=comment, ending=end, round_no=round_no, stop_reason=stop_reason,
                       applied=applied, rows=tuple(rows), refused=tuple(refused.items()))
@@ -704,6 +742,7 @@ def parser():
     p = argparse.ArgumentParser(prog="squad premise-check", description="run one premise-check round on a spec and record it there")
     p.add_argument("spec", type=int, help="the number of the published spec the round checks")
     p.add_argument("--findings", required=True, help="the reviewer's findings, a JSON array of objects")
+    p.add_argument("--restatement", help="the reviewer's restatement of the spec's goal and scope, a JSON object with lines, added and dropped; required")
     p.add_argument("--answers", help="the owner's answers, a JSON array of objects; each rewrites the spec and opens the next round")
     p.add_argument("--round", dest="round_no", type=int, default=None, help="the round number; the next one after the recorded round by default")
     p.add_argument("--reviewer", help="the model this round actually ran under: checked against the registry")
@@ -719,12 +758,13 @@ def main(argv=None) -> int:
     try:
         findings = json.loads(Path(a.findings).read_text())
         answers = json.loads(Path(a.answers).read_text()) if a.answers else []
+        restatement = json.loads(Path(a.restatement).read_text()) if a.restatement else None
         who = named(a.reviewer) if a.reviewer else reviewer()
         proxy = proxy_named(a.proxy) if a.proxy else None
         root = artifact_root(a.repo, a.root)
         github = rest_runner(a.repo)     # a dry run reads the round it would write, and writes nothing
         report = run_round(a.spec, findings, answers, github=github, root=root, round_no=a.round_no,
-                           who=who, dry_run=a.dry_run, proxy=proxy)
+                           who=who, dry_run=a.dry_run, proxy=proxy, restatement=restatement)
     except (OSError, ValueError, NoReviewer, NoProxy) as e:
         print(f"premise-check: {e}", file=sys.stderr)
         return 2
