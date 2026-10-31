@@ -38,6 +38,11 @@ h2{font-size:var(--fs-md);margin:6px 0 10px}
 .card{display:block;width:100%;text-align:left;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:10px 12px;font:var(--fs-body) system-ui,sans-serif;min-height:44px}
 .card .cid{display:block;color:var(--mute);font-size:var(--fs-min);margin-bottom:2px}
 .empty{color:var(--mute);text-align:center;padding:24px 0}
+.lane-h{display:flex;align-items:center;gap:8px;min-height:44px;padding:0 4px;color:var(--mute);font-size:var(--fs-body);cursor:pointer;border-bottom:1px solid var(--line)}
+.lane-h .tw{width:14px;color:var(--mute)}
+.lane-h .lid{color:var(--mute);font-size:var(--fs-min)}
+.lane-h .ltt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg)}
+.lane-h .pc{color:var(--mute);font-size:var(--fs-min)}
 /* The ticket sheet takes about 60% of the screen (#919), so the card it names stays visible above it. */
 #sheet{position:fixed;left:0;right:0;bottom:0;height:60vh;max-height:60vh;overflow:auto;overscroll-behavior:contain;touch-action:pan-y;background:var(--panel);border-top:1px solid var(--line);border-radius:14px 14px 0 0;padding:10px 14px calc(68px + env(safe-area-inset-bottom));z-index:20}
 #sheet[hidden]{display:none}
@@ -338,6 +343,19 @@ function cardButton(x, i) {
   }
   return b;
 }
+// The swimlanes of one column (#893): the page reads the lanes the gesture module's rule makes, with the saved collapse.
+const laneModelOf = g => columnLanes({ groups: (board && board.groups) || [], cards: columnCards(g), lc: bo.mlc || {} });
+function laneHeader(l) {
+  const h = document.createElement("div");
+  h.className = "lane-h"; h.dataset.lane = l.id; h.dataset.coll = l.collapsed ? "1" : "0";
+  h.setAttribute("role", "button"); h.tabIndex = 0; h.setAttribute("aria-expanded", String(!l.collapsed));
+  const tw = document.createElement("span"); tw.className = "tw"; tw.textContent = l.collapsed ? "▸" : "▾";
+  const id = document.createElement("span"); id.className = "lid"; id.textContent = l.num == null ? "" : "#" + l.num;
+  const tt = document.createElement("span"); tt.className = "ltt"; tt.textContent = l.title;
+  const pc = document.createElement("span"); pc.className = "pc"; pc.textContent = l.total ? l.closed + "/" + l.total : "";
+  h.append(tw, id, tt, pc);
+  return h;
+}
 function renderBoard() {
   const groups = board && board.groups ? board.groups : [];
   // With the filter on (the default), a column with no visible card is left out and named in one list (#877).
@@ -348,18 +366,27 @@ function renderBoard() {
   view.cols = cols.length;
   view.col = Math.min(view.col, Math.max(0, cols.length - 1));
   const g = cols[view.col];
-  shown = g ? columnCards(g) : [];
+  const model = g ? laneModelOf(g) : { lanes: [], flat: [] };
+  shown = model.flat;
   view.cards = shown.length;
   view.card = Math.min(view.card, Math.max(0, shown.length - 1));
+  const visible = g ? columnCards(g).length : 0;
   $("col-name").textContent = g ? g.name : "";
-  $("col-count").textContent = g ? (shown.length === g.items.length ? String(g.n) : shown.length + " of " + g.n) : "";
+  $("col-count").textContent = g ? (visible === g.items.length ? String(g.n) : visible + " of " + g.n) : "";
   $("col-prev").disabled = view.col <= 0;
   $("col-next").disabled = view.col >= cols.length - 1;
   $("dots").replaceChildren(...cols.map((c, i) => { const d = document.createElement("i"); if (i === view.col) d.className = "on"; return d; }));
   const empty = document.createElement("p");
   empty.className = "empty";
   empty.textContent = emptyColumnNote({ groups: groups.length, shown: cols.length, filtered: (bo.labels || []).length > 0 || specMode() !== 0 });
-  $("cards").replaceChildren(...(shown.length ? shown.map(cardButton) : [empty]));
+  // Each lane heads its cards; a collapsed lane shows its header only. The card index counts the cards the column draws.
+  const nodes = [];
+  let i = 0;
+  for (const l of model.lanes) {
+    nodes.push(laneHeader(l));
+    if (!l.collapsed) for (const x of l.cards) nodes.push(cardButton(x, i++));
+  }
+  $("cards").replaceChildren(...(nodes.length ? nodes : [empty]));
 }
 // The sheet draws the card data the board read already holds (#919): the row carries the blockers, the cards it blocks,
 // the run that holds it and the pull request that closes it, so the view holds no rule of its own (ADR-0137).
@@ -416,10 +443,16 @@ function scrollCardIntoView(x) {
 function openCard(n) {
   // A blocker link opens that ticket in the same sheet (#919), never a new tab: the card is found in its own column, and
   // the board is drawn there before the sheet reads it.
-  const cols = (board && board.groups) || [];
-  for (let ci = 0; ci < cols.length; ci++) {
-    const idx = columnCards(cols[ci]).findIndex(r => r.n === n);
-    if (idx >= 0) { view = { ...view, col: ci, card: idx, sheet: true }; renderBoard(); renderSheet(); return; }
+  // A card in a collapsed lane opens its lane first: the sheet never names a card the column does not draw (#893).
+  const groups = (board && board.groups) || [];
+  const drawn = carouselColumns(groups, groups.map(g => columnCards(g).length), bo.hideEmpty !== false).shown;   // the index the carousel knows
+  for (const g of groups) {
+    const lane = laneModelOf(g).lanes.find(l => l.cards.some(r => r.n === n));
+    if (!lane) continue;
+    if (lane.collapsed) { bo.mlc = { ...(bo.mlc || {}), [lane.id]: false }; saveB(); }
+    const ci = drawn.findIndex(c => c.name === g.name);
+    const idx = laneModelOf(g).flat.findIndex(r => r.n === n);
+    if (ci >= 0 && idx >= 0) { view = { ...view, col: ci, card: idx, sheet: true }; renderBoard(); renderSheet(); return; }
   }
   $("bmsg").textContent = "#" + n + " is not on the board with these filters";
 }
@@ -579,10 +612,21 @@ function showCardReason(n, why) {
 $("undo-btn").onclick = () => cancelMove("undo");
 addEventListener("visibilitychange", () => { if (document.hidden) cancelMove("hidden"); });
 addEventListener("pagehide", () => cancelMove("hidden"));
+// A tap on a lane header opens or shuts that spec's lane on every column, and the choice is kept on the device (#893).
+const laneTap = h => {
+  bo.mlc = { ...(bo.mlc || {}), [h.dataset.lane]: h.dataset.coll !== "1" };
+  saveB(); refresh();
+};
 $("cards").onclick = e => {
+  const h = e.target.closest(".lane-h");
   const b = e.target.closest(".card");
   if (suppressClick) { suppressClick = false; return; }
+  if (h) { laneTap(h); return; }
   if (b) { view = afterOpen(view, +b.dataset.i); refresh(); }
+};
+$("cards").onkeydown = e => {
+  const h = e.target.closest && e.target.closest(".lane-h");
+  if (h && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); laneTap(h); }
 };
 const moveHint = el => {
   const h = el.querySelector(".cmv");

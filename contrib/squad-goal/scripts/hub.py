@@ -2861,6 +2861,7 @@ def board():
         if d["state"] == "pending": row["pd"] = True   # the mark the page draws; the rule lives here, never in the view (ADR-0137)
         if fz: row["fz"] = fz
         if _columns_module.SPEC_LABEL in row["l"]: row["sp"] = True   # a spec is an issue with the spec label: the Specs filter reads this
+        if st == COLUMN["issue_closed"]: row["dn"] = True   # the card is Closed: a spec lane counts it as done on the mobile page (#893)
         if isinstance(i.get("pa"), int): row["pa"] = i["pa"]   # the parent spec the read carried (#829): the swimlane groups by it, with no read of its own (#890)
         # The owner's one move (#560): a card the rule marks promotable carries the arrow that starts it, a spec included:
         # the owner's move starts the spec and its open Backlog tickets follow (ADR-0142 section 6, #838). The rule lives
