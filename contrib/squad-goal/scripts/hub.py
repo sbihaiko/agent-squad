@@ -2824,6 +2824,15 @@ def pr_badge(x):
     return None
 MOVES = STATE / "board-moves.json"   # the door's record of every move it proved (#649), keyed by the Project item id
 MOVES_LOCK = threading.Lock()        # one writer in this process: two HTTP threads never drop the same entry twice
+def card_transitions(repo=None):
+    """The column changes board.py proved for one repository, oldest first. The hub only reads this record (#897)."""
+    path = STATE / f"board-transitions.{(repo or REPO).replace('/', '_')}.jsonl"
+    if not path.exists(): return []
+    out = []
+    for line in path.read_text().splitlines():
+        try: out.append(json.loads(line))
+        except ValueError: continue
+    return out
 def read_moves():
     """The door's record of proved moves: {item id: {"column", "at"}}. A record that is missing, unreadable or not an
     object is no record: the board is drawn from the read alone, and nothing is written."""
