@@ -525,3 +525,45 @@ def test_the_cfd_names_a_range_selector_and_a_day_hover_with_counts(hub, board, 
     assert day_titles, f"no hover names the day: {titles}"
     assert "WIP" in day_titles[0] and "throughput" in day_titles[0]
     assert f"{hub.COLUMN['issue_closed']} 3" in day_titles[0], "the hover names each band's count"
+
+
+# SPEC 889 #900: the drag-to-zoom route. The hub recomputes the control chart for the dragged range.
+def test_the_leadtime_route_recomputes_the_chart_for_a_dragged_range(hub, board):
+    hub.board_cache["items"] = [
+        _card(1, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-02T09:00:00Z"),
+        _card(2, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-09T09:00:00Z"),
+    ]
+
+    chart = hub.lead_zoom("from=2026-10-05T00:00:00.000Z&to=2026-10-12T00:00:00.000Z&scale=log")
+
+    assert [dot["n"] for dot in chart["dots"]] == [2]
+    assert chart["scale"] == "log"
+    assert chart["range"]["start"].startswith("2026-10-05")
+
+
+def test_the_leadtime_route_refuses_a_missing_or_empty_range(hub, board):
+    assert "error" in hub.lead_zoom("from=2026-10-05T00:00:00Z")
+    assert "error" in hub.lead_zoom("from=2026-10-05T00:00:00Z&to=2026-10-05T00:00:00Z")
+    assert "error" in hub.lead_zoom("from=nonsense&to=2026-10-05T00:00:00Z")
+
+
+def test_the_server_answers_the_leadtime_route_and_the_page_calls_it(hub):
+    source = HUB_PY.read_text()
+    assert 'self.path.startswith("/api/leadtime")' in source
+    assert "/api/leadtime?" in hub.PAGE
+    assert "Reset zoom" in hub.PAGE
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_drag_maps_its_plot_fractions_to_the_dates_of_the_range(hub, tmp_path):
+    block = _flow_block(hub).split("const drawFlow")[0]
+    drawing = "\n".join([
+        "const COLORS={},COLNAME={};", "const esc=s=>String(s);", block,
+        "const r=ltSpan({start:'2026-10-01T00:00:00+00:00',end:'2026-10-11T00:00:00+00:00'},0.5,1);",
+        "process.stdout.write(JSON.stringify(r));",
+    ])
+    path = tmp_path / "flow-zoom.js"
+    path.write_text(drawing)
+    result = subprocess.run(["node", str(path)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == ["2026-10-06T00:00:00.000Z", "2026-10-11T00:00:00.000Z"]

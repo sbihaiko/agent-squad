@@ -122,8 +122,10 @@ def _rolling(hours, log):
     return out, size
 
 
-def control_chart(items, timeframe=None, log=False, now=None):
+def control_chart(items, timeframe=None, log=False, now=None, start=None, end=None):
+    """The chart over a timeframe in days, or over an explicit zoom range `start`..`end` (#900). A zoom names its dates."""
     now = now or datetime.now(UTC)
+    zoom = start is not None
     excluded = {}
     delivered = []
     for row in items:
@@ -133,11 +135,12 @@ def control_chart(items, timeframe=None, log=False, now=None):
         else:
             delivered.append(row)
     delivered.sort(key=lambda row: (datetime.fromisoformat(row["c"]), row["n"]))
-    end = now
-    start = now - timedelta(days=timeframe) if timeframe else None
+    end = end or now
+    if start is None and timeframe:
+        start = end - timedelta(days=timeframe)
     plotted = [row for row in delivered if (start is None or datetime.fromisoformat(row["c"]) >= start)
                and datetime.fromisoformat(row["c"]) <= end]
-    if timeframe is None and plotted:
+    if start is None and plotted:
         start = datetime.fromisoformat(plotted[0]["c"])
     if start is None:
         start = end
@@ -195,7 +198,10 @@ def control_chart(items, timeframe=None, log=False, now=None):
         xticks.append({"x": k / 6, "text": f"{moment:%b} {moment.day}"})
     total = sum(excluded.values())
     reasons = ", ".join(REASON_TEXT.get(reason, reason) for reason in excluded)
-    scope = f"last {timeframe} days" if timeframe else "all closed cards"
+    if zoom:
+        scope = f"{start:%b} {start.day} to {end:%b} {end.day}"
+    else:
+        scope = f"last {timeframe} days" if timeframe else "all closed cards"
     return {
         "measure": MEASURE,
         "scale": "log" if log else "jira",
@@ -206,6 +212,7 @@ def control_chart(items, timeframe=None, log=False, now=None):
         "clusters": clusters,
         "ticks": [{"text": text, "y": y} for _, text, y in ticks],
         "xticks": xticks,
+        "range": {"start": start.isoformat(), "end": end.isoformat()},
         **summary,
         "excluded": excluded,
         "excluded_total": total,
