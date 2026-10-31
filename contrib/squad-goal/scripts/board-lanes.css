@@ -58,3 +58,5 @@ body.dockb #bbody.lanes{display:block;overflow:visible}
 #bbody .lcolh .eye{cursor:pointer;opacity:.6}
 #bbody .lcolh .eye:hover{opacity:1}
 @media (prefers-reduced-motion: reduce){#bbody .lload{animation:none;opacity:1}#bbody .lload i{display:none}}
+#bbody .lane.alarm .lh{border-top:3px solid var(--bad);border-radius:8px 8px 0 0;background:color-mix(in srgb,var(--bad) 9%,var(--panel))}
+#bbody .lane.alarm.coll .lh{border:1px solid var(--line);border-top:3px solid var(--bad);background:color-mix(in srgb,var(--bad) 9%,var(--panel))}

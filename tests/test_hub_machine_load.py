@@ -260,11 +260,12 @@ def _css(hub, selector):
 
 
 def test_the_reading_left_the_pane_and_became_the_windows_own_bar(pg):
-    # the left pane keeps its footer for the loop's own state; the machine reading is about the whole window
+    # Re-anchored to the owner-approved mock (#889): the mock has no footer bar, and the alert strip carries what must be seen at once,
+    # so the machine reading is a section of the Settings tab, never the left pane's footer and never a bar under the window
     assert "side" not in pg.parents["foot"]
-    assert pg.parents["foot"] == pg.parents["win"]      # a sibling of the panes' container, so the bar spans the window
+    assert "tab-set" in pg.parents["foot"] and "win" in pg.parents["foot"]
     assert "win" in pg.parents["side"] and "win" in pg.parents["board"]
-    assert pg.order.index("foot") > pg.order.index("board")   # painted below both panes, not between them
+    assert pg.order.index("foot") > pg.order.index("board")   # painted after the board's own pane
 
 
 def test_the_bar_is_a_row_of_the_windows_column_so_nothing_pushes_it_off(hub, pg):

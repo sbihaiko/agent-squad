@@ -3,6 +3,8 @@
 // (the parent the read carries, #829). Loop bugs (ADR-0146) sit in the first lane; cards with no spec sit in the last.
 // Each column the board draws is a name from the page's own column list, so no column is named here.
 const hasLabel=(x,l)=>(x.l||[]).includes(l);
+// A spec ticket's title opens with its own tag, "[SPEC]" or "[SPEC 889]": the lane and the card already say it, so the title is read without it (#889).
+const plain=t=>String(t==null?"":t).replace(/^\s*\[SPEC(?:\s*#?\d+)?\]\s*/i,"");
 // A cell shows every card it holds: the owner reads the whole lane at once, so no cap and no "+N more" (#891).
 const cellView=rows=>({shown:rows,more:0});
 const laneWaveOf=x=>{const w=(x.l||[]).map(l=>(String(l).match(/^wave:(\d+)$/)||[])[1]).filter(v=>v!==undefined).map(Number);return w.length?Math.min(...w):null};
@@ -18,7 +20,7 @@ function buildBoard(groups,o){
   const hasFilter=!!(fw.length||fs.length||o.search);
   const specs=new Map(),rows=[];
   const gone=new Set([closed,o.abandoned||"Abandoned"]),goneSpecs=new Set();   // a spec whose card is closed or abandoned has no work left: no lane (#890)
-groups.forEach(g=>g.items.forEach(x=>{if(x.sp){if(gone.has(g.name))goneSpecs.add(x.n);else if(!specs.has(x.n))specs.set(x.n,{title:x.t,st:g.name,sc:x.sc});   // a spec card carries its own closed/total (#890)
+groups.forEach(g=>g.items.forEach(x=>{if(x.sp){if(gone.has(g.name))goneSpecs.add(x.n);else if(!specs.has(x.n))specs.set(x.n,{title:plain(x.t),st:g.name,sc:x.sc});   // a spec card carries its own closed/total (#890)
  return}rows.push({...x,col:g.name})}));
   const lanes=new Map(),ensure=(id,meta)=>{if(!lanes.has(id))lanes.set(id,{id,...meta,all:[],vis:[]});return lanes.get(id)};
   const laneOf=x=>{
@@ -44,8 +46,9 @@ const[id,meta]=laneOf(x),l=ensure(id,meta);l.all.push(x);if(boardOk(x,fw,fs)&&te
   const vc=cols.filter(c=>!hide.has(c)&&open.some(l=>l.counts[c]));   // a column with no card in an expanded lane is not drawn
   const hc=cols.filter(c=>!vc.includes(c)&&!hide.has(c)&&list.some(l=>l.counts[c])).map(c=>({name:c,count:list.reduce((s,l)=>s+(l.counts[c]||0),0)}))
     .concat(groups.filter(g=>hide.has(g.name)).map(g=>({name:g.name,count:g.items.length,user:true})));
+  const ec=[];   // the end columns stay hidden: no toggle draws them (#968)
   list.forEach(l=>{l.cells={};cols.forEach(c=>{l.cells[c]=l.vis.filter(x=>x.col===c)})});
-  return{cols,vc,hc,lanes:list};
+  return{cols,vc,hc,ec,lanes:list};
 }
 
 // A saved state from a control the board no longer has is dropped on load (#899): the labels filter, the Specs mode,
