@@ -29,6 +29,7 @@ test-consult.sh 0.57
 test-cqflush-address.sh 1.82
 test-cqflush-interval.sh 0.13
 test-cqflush-status.sh 1.54
+test-cqflush-term.sh 2.31
 test-cqflush-terminal.sh 1.70
 test-defect-ceiling.sh 6.19
 test-dispatch-hold-wave.sh 7.02
@@ -149,6 +150,7 @@ test-watch-land.sh 10.13
 test-watch-single-exec.sh 0.02
 test-watchd-driver-sha.sh 2.30
 test-watchd-lock.sh 4.15
+test-watchd-reload.sh 7.47
 test-watchd-token-stop.sh 6.28
 test-watchtail.sh 4.17
 test-wave-lifecycle.sh 18.50

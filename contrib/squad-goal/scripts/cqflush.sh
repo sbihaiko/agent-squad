@@ -43,8 +43,9 @@ export SG_GH_PASS=cqflush; . "$here/ghcall.sh"   # every comment read and write 
 base=$(sg_state_base)
 # Seconds between two passes, empty queue or not: SG_FLUSH_INTERVAL from the environment, else the profile in force, else 120. --interval prints it and exits (tests).
 iv=${SG_FLUSH_INTERVAL:-$(sg_profile_setting "${SG_PROFILE:-}" SG_FLUSH_INTERVAL 120)}; [ "${1:-}" = --interval ] && { echo "$iv"; exit 0; }
-while :; do left=0
-  for f in "$base"/*/cq/*.md; do [ -e "$f" ] || continue
+stop=; trap 'stop=1' TERM   # a reload (#873) ends the flusher after the post in flight, never inside it
+while :; do left=0; [ -n "$stop" ] && exit 0
+  for f in "$base"/*/cq/*.md; do [ -e "$f" ] || continue; [ -n "$stop" ] && exit 0
     [ $(( $(date +%s) - $(mtime "$f") )) -lt 5 ] && { left=1; continue; }
     b=$(basename "$f"); slug=$(basename "$(dirname "$(dirname "$f")")")
     case "$b" in
