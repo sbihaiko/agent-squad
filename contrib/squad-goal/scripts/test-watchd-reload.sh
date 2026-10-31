@@ -24,7 +24,9 @@ printf '#!/bin/bash\necho "cq $SG_SQUAD" >> "$SG_STATE/lanes.log"\nsleep 600\n' 
 chmod +x "$S"/*.sh
 count() { n=$(/usr/bin/grep -c -F -- "$1" "$2" 2>/dev/null); echo "${n:-0}"; }
 lanes() { count "$1" "$st/lanes.log"; }
-waitfor() { for _ in $(seq 1 60); do eval "$1" && return 0; sleep 0.5; done; return 1; }
+# Each wait is bounded at 10 s, and there are four of them, so the suite's own worst case stays under the harness's 60 s call
+# deadline (tests/slowcap.py): a wait that cannot end must fail this suite by its own line, never park the whole run.
+waitfor() { for _ in $(seq 1 20); do eval "$1" && return 0; sleep 0.5; done; return 1; }
 
 bash "$S/watchd.sh" reload >"$T/r0" 2>&1; rc=$?
 { [ "$rc" = 0 ] && /usr/bin/grep -q "not running" "$T/r0"; } && ok "a reload on a stopped watchd says it is not running and exits 0" || ko "a reload on a stopped watchd: rc=$rc $(cat "$T/r0")"
