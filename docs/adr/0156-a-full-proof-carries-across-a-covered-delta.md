@@ -13,7 +13,7 @@ The full proof stays the base of every promotion. A cheaper proof must never wea
 ## Decision
 
 1. **A full pass is the base.** P is the sha of the full pass in `$SG_STATE/gate-status-full`. The dev tip is T. A carry applies only when P is an ancestor of T.
-2. **The delta is declared, path by path.** The delta is `git diff --name-only P..T`. Every changed path must match a line of `contrib/squad-goal/scripts/delta-guards.txt` (a glob, a TAB, and a command id). A path with no line refuses the carry, and the answer is then the full proof.
+2. **The delta is declared, path by path.** The delta is `git diff --name-only P..T`. Every changed path must match a line of `contrib/squad-goal/scripts/delta-guards.txt` (a glob, a TAB, and a command id). A path with no line refuses the carry, and the answer is then the full proof. A command id of `SELF` runs the changed path itself, so a changed test is proven by that test and never by another command. The map names every class of the repository a change may touch, each with the guard that proves it; a class with no guard stays uncovered, and its change costs the full proof.
 3. **The promotion code is never covered.** The map has no line for `promote-*.sh`, `gate.sh`, `serial.sh` or `delta-pass.sh`. A change to any of them always needs the full proof.
 4. **The bounds refuse.** A delta over 25 changed paths refuses, and so does a delta with a binary change.
 5. **The delta proof runs on a clean tree at T.** It runs ruff, mypy, the fast battery `-m 'not heavy'`, and each distinct guard that the changed paths name. It runs under the lock `full-proof-delta`, in try mode: a held lock exits 73 and runs nothing.

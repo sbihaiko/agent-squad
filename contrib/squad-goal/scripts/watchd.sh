@@ -6,12 +6,15 @@
 # The slot is the one fact a supervisor holds (#932): watchd.pid is what a reader looks at, and watchd.lock/pid is what a
 # second `run` is refused by. alive() reads the slot, so a pid file a dying duplicate removed no longer reads as "not running".
 alive() { pid=$(cat "$SG_STATE/watchd.lock/pid" 2>/dev/null); [ -n "$pid" ] || { [ -s "$P" ] && pid=$(cat "$P"); }; [ -n "$pid" ] && /bin/ps -p "$pid" -ww -o command= 2>/dev/null | grep -qF "$me run"; }
+# orphans: the lanes of this scripts dir that pid 1 holds, so their supervisor is gone, one "<pid> <lane>" a line (#959)
+orphans() { /bin/ps -axwwo pid=,ppid=,command= 2>/dev/null | awk -v a="$(dirname "$me")" '$2 == 1 { for (i = 3; i <= NF; i++) if ($i == a "/watch.sh" || $i == a "/fastloop.sh" || $i == a "/cqflush.sh") print $1, substr($i, length(a) + 2) }'; }
 # The drivers run the skill this script sits in: its PUBLISHED sha, else its git HEAD, goes to driver.sha, so live-guard.sh
 # names a later publish to another sha as a restart only the owner makes (#700). No sha known: no stale driver.sha.
 record_sha() { k=$(dirname "$(dirname "$me")"); ds=$(cut -d' ' -f1 "$k/PUBLISHED" 2>/dev/null); [ -n "$ds" ] || ds=$(git -C "$k" rev-parse HEAD 2>/dev/null)
   if [ -n "$ds" ]; then printf '%s\n' "$ds" > "$SG_STATE/driver.sha.$$" && mv "$SG_STATE/driver.sha.$$" "$SG_STATE/driver.sha"; else rm -f "$SG_STATE/driver.sha"; fi; }
 case "${1:-status}" in
   start) alive && { echo "watchd already running pid=$pid"; exit 0; }
+    o=$(orphans); [ -n "$o" ] && { printf 'watchd start refused: orphaned lanes still run, their supervisor is gone: %s\n' "$(printf '%s\n' "$o" | awk '{ printf "%s%s pid %s", (NR > 1 ? ", " : ""), $2, $1 }')" >&2; exit 1; }
     [ -f "$L" ] && [ "$(wc -c < "$L")" -gt 5000000 ] && mv "$L" "$L.old"
     rm -f "$SG_STATE/token-guard.since" "$SG_STATE/token-over" "$SG_STATE/token-pause"   # a start is a relight: the token guard measures afresh, never an old burn (#515)
     record_sha
@@ -53,7 +56,7 @@ case "${1:-status}" in
       # watch.sh never exits by itself, so a reload ends this lane too: its TERM trap leaves after the step in flight.
       while kill -0 "$child" 2>/dev/null; do wait "$child"; [ -n "$reload" ] && kill -TERM "$child" 2>/dev/null; done
       [ -n "$reload" ] || { echo "WATCHD watch.sh exited, restarting in 5s" >> "$L"; sleep 5; }; done;;
-  reload) alive || { echo "watchd not running"; exit 0; }
+  reload) alive || { [ -s "$P" ] || { echo "watchd not running"; exit 0; }; echo "watchd supervisor $(cat "$P") is not running: relighting"; bash "$me" start; exit $?; }
     kill -HUP "$pid" || { echo "watchd reload not sent: pid=$pid" >&2; exit 1; }; echo "watchd reload sent pid=$pid";;
   stop) alive || { echo "watchd not running"; rm -f "$P"; exit 0; }
     # The stop must reach the supervisor, and a signal a process sends to its own group is not delivered to itself: the

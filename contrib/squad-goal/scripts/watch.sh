@@ -2,6 +2,7 @@
 # Monitor stream: one line per run verdict. Run from the target checkout.
 # active-runs.txt holds a run id (under ./runs) or an absolute run folder (launch.py writes absolute paths).
 . "$(dirname "$0")/env.sh"
+orphaned() { [ "$(/bin/ps -o ppid= -p $$ | tr -d ' ')" = 1 ]; }   # the supervisor is gone (#959): this lane runs no further step
 # mtime <path>: the file mtime in epoch seconds, whichever stat this machine has (GNU -c %Y, BSD -f %m).
 mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null || echo 0; else stat -f %m "$1" 2>/dev/null || echo 0; fi; }
 # One watch.sh per repository. Its lock lives in that repository's own state directory, so one supervisor never pauses another.
@@ -25,7 +26,7 @@ echo $$ > "$wlock/pid"; trap 'rm -rf "$wlock"' EXIT; trap 'rm -rf "$wlock"; exit
 W="$SG_STATE/watch-seen.txt"; boot=0; [ -e "$W" ] || { boot=1; : > "$W"; }
 seen=" $(sed -n 's/^seen //p' "$W" | tr '\n' ' ')"; stalled=" $(sed -n 's/^stall //p' "$W" | tr '\n' ' ')"
 # tm <cmd...>: runs a step and appends "HH:MM:SS <step> <secs>s" to $SG_STATE/cycle.log when it took 5 s or more (where the 90 s cycle goes)
-tm() { local s=$(date +%s); "$@"; local e=$(( $(date +%s) - s )); [ "$e" -ge 5 ] && echo "$(date +%T) ${1##*/} ${e}s" >> "$SG_STATE/cycle.log"; return 0; }
+tm() { orphaned && exit 0; local s=$(date +%s); "$@"; local e=$(( $(date +%s) - s )); [ "$e" -ge 5 ] && echo "$(date +%T) ${1##*/} ${e}s" >> "$SG_STATE/cycle.log"; return 0; }
 # verdicts: the runs of active-runs.txt whose record carries a verdict, one a line. The closing wait reads local files only (#569).
 verdicts() { local r f; for r in $(cat "$SG_STATE/active-runs.txt"); do case "$r" in /*) f=$r/record.jsonl;; *) f=runs/$r/record.jsonl;; esac
   grep -q '"event": *"verdict"' "$f" 2>/dev/null && echo "$r"; done | sort; }
@@ -95,7 +96,7 @@ land_wave() {   # <run>: 0 the wave is done (landed), 1 the pass that enters its
   return 1
 }
 while :; do
-  c0=$SECONDS
+  orphaned && exit 0; c0=$SECONDS
   # The token guard runs at the TOP of the cycle, before any step that spends tokens. It never stops the loop: a burn over
   # the cap is a report and one alert, and a sustained hourly runaway writes token-pause, which the dispatch passes read.
   # The guard keeps its own markers and alerts; its sentence, when it has one, goes to the cycle log and to stdout.
@@ -192,7 +193,7 @@ if v:
   num='^[0-9]+([.][0-9]+)?$'; ww=${SG_WATCH_WAIT:-90}; wp=${SG_WATCH_POLL:-3}
   [[ $ww =~ $num ]] || ww=90; { [[ $wp =~ $num ]] && [ "$wp" != 0 ]; } || wp=3
   read -r wn c1 c2 < <(awk -v w="$ww" -v p="$wp" 'BEGIN{n=int(w/p); if(n<1)n=1; a=int(n/3); if(a<1)a=1; b=int(2*n/3); if(b<1)b=1; print n, a, b}')
-  for ((i = 1; i <= wn; i++)); do sleep "$wp"
+  for ((i = 1; i <= wn; i++)); do sleep "$wp"; orphaned && exit 0
     [ -z "$(comm -13 <(echo "$v0") <(verdicts))" ] || { echo "$(date +%T) WAIT ended early: a run verdict"  >> "$SG_STATE/cycle.log"; break; }
     { [ "$i" -eq "$c1" ] || [ "$i" -eq "$c2" ]; } && { [ -n "$fast" ] || tm bash "$(dirname "$0")/single.sh" childcc python3 "$(dirname "$0")/childcc.py" 2>&1; }; done
   # adaptive cycle (#45): once under 20 percent of a pool's limit is left the cycle is longer, so the loop spends less of what remains

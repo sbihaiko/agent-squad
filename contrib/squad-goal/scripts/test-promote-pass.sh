@@ -49,10 +49,10 @@ read -r where at lock dirty < "$T/suite.log"
 [ "$dirty" = 0 ] && ok "the suite ran in a clean tree" || ko "the suite's tree was dirty ($dirty)"
 case "$where" in "$HOME"/wt-*|*/wt-*) ko "the suite tree is a wt-* tree, which wtclean removes: $where";; *) ok "the suite tree is not a wt-* tree";; esac
 
-# #739: the proof reserves the machine it measures. The dispatchers read the marker through gh_dispatch_hold, and the pass
-# removes it on exit, so a stopped proof leaves nothing behind.
-[ "$(tail -n 1 "$T/reserve.log" 2>/dev/null)" = reserved ] && ok "the proof reserved the machine while the suite ran" || ko "no reserve stood while the suite ran: '$(cat "$T/reserve.log" 2>/dev/null)'"
-[ ! -e "$SG_STATE/promote-reserve" ] && ok "the reserve is gone after the proof" || ko "the reserve outlived the proof"
+# #739 with ADR-0157 rule 1 rewritten: a reserve stands only when the owner names a bound. The default holds nothing, so a
+# proof never takes a run slot from the loop.
+[ "$(tail -n 1 "$T/reserve.log" 2>/dev/null)" = unreserved ] && ok "with the default bound a proof holds no dispatch" || ko "the default held the machine: '$(cat "$T/reserve.log" 2>/dev/null)'"
+[ ! -e "$SG_STATE/promote-reserve" ] && ok "no reserve stands after the proof" || ko "a reserve outlived the proof"
 IFS=$'\t' read -r _ kind res sha < "$SG_STATE/gate-status-full"
 [ "$kind $res $sha" = "full pass $t1" ] && ok "the pass wrote the full pass line for the tip" || ko "full line: '$kind $res $sha'"
 /usr/bin/grep -q -- "-X POST repos/x/emu/statuses/$t1 .*context=squad/full-proof" "$T/gh.log" && ok "the pass wrote a commit status on the proven sha, under its own context" || ko "no commit status POST: $(cat "$T/gh.log")"
@@ -192,6 +192,15 @@ IFS=$'\t' read -r _ mt mb < "$SG_STATE/promote-indeterminate" 2>/dev/null
   || ko "the indeterminate tip was marked refused"
 /usr/bin/grep -q "promote-pass: $ts not tested" "$SG_STATE/promote.log" && ok "the log says the tip is not tested" || ko "no not-tested line for $ts"
 rm -f "$T/suite-sleep"
+
+# An owner-named bound still reserves the machine while the suite runs, and the marker is gone after the proof: a standing
+# marker costs run slots, so it stands only when the owner asks for the measurement to be shielded.
+adv dev held; th=$(tip dev); : > "$T/reserve.log"; rm -f "$T/suite-rc"
+SG_PROMOTE_RESERVE_SECONDS=600 bash "$d/promote-pass.sh" > "$T/out5" 2>&1; rc=$?
+[ "$(tail -n 1 "$T/reserve.log")" = reserved ] && ok "an owner-named reserve bound holds the machine while the suite runs" \
+  || ko "named bound: '$(tail -n 1 "$T/reserve.log")'"
+[ ! -e "$SG_STATE/promote-reserve" ] && ok "the named reserve is gone after the proof" || ko "the named reserve outlived the proof"
+[ "$rc" = 0 ] && [ "$(tip stg)" = "$th" ] && ok "a named-reserve proof still promotes its tip" || ko "named reserve promote: rc $rc, stg $(tip stg)"
 
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 rm -rf "$T"; exit $fail

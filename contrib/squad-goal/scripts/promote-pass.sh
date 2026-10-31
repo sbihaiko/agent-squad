@@ -26,10 +26,12 @@ mark() {  # <tip> <reason>: one marker and one line per tip
   echo "$(date -u +%FT%TZ) promote-pass: $1 $2" >> "$log"; echo "promote-pass: $1 $2"; }
 if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line, commit status, read-back, promotion
   tip=$2; . "$d/ghcall.sh"; unset SG_GATE_STATUS SG_GATE_KIND   # the suite inherits no gate setting of this hold
-  # The proof reserves what it measures (#739): the dispatchers read this marker (gh_dispatch_hold) and start no run while it
-  # stands, so the suite is not measured against the next wave landing. Its bound is the gate lock's own (SERIAL_HOLD_SECONDS),
-  # and the trap removes it on exit, INT and TERM, so a stopped proof leaves nothing behind.
-  printf '%s %s\n' "$(date +%s)" "$$" > "$state/promote-reserve.$$" && mv "$state/promote-reserve.$$" "$state/promote-reserve"
+  # The proof holds nothing by default (#739 with ADR-0157 rule 1 rewritten, owner decision 2026-10-31): the dispatchers read
+  # the marker (gh_dispatch_hold) and start no run while it stands, so a standing marker costs run slots. The owner named
+  # parallelism as the priority, so the default bound is zero and no marker is written; an owner who wants the measurement
+  # shielded names a bound in SG_PROMOTE_RESERVE_SECONDS. The trap removes a named marker on exit, INT and TERM.
+  reserve_s=${SG_PROMOTE_RESERVE_SECONDS:-0}
+  [ "$reserve_s" -gt 0 ] && { printf '%s %s\n' "$(date +%s)" "$$" > "$state/promote-reserve.$$" && mv "$state/promote-reserve.$$" "$state/promote-reserve"; }
   # The proof samples the load while it runs, not only at the start: a red taken with the box over its bound is no proof at all,
   # so it writes no status and no marker and the same tip is retried on a quieter pass (ADR-0018 stays whole: a red taken under
   # the bound is a real defect). The sample file is named for this process and removed with the reserve.
@@ -52,13 +54,13 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   # ADR-0157: a proof is bounded. Past its reserve bound (30 minutes) the reserve lifts and the proof keeps running, so the
   # loop dispatches beside it; past its deadline (two hours) the suite and every child it started are killed, and the tip is
   # recorded indeterminate: not tested, no promotion, no gate status, and no refusal, so a later pass retries it.
-  rbound=${SG_PROMOTE_RESERVE_SECONDS:-1800}; dline=${SG_PROMOTE_DEADLINE_SECONDS:-7200}
+  rbound=$reserve_s; dline=${SG_PROMOTE_DEADLINE_SECONDS:-7200}
   kill_tree() { local p=$1 c; for c in $(pgrep -P "$p" 2>/dev/null); do kill_tree "$c"; done; kill "$p" 2>/dev/null; }
   s0=$(date +%s); (cd "$tree" && bash -c "$suite") > "$out" 2>&1 & spid=$!
   rc=0; relieved=
   while kill -0 "$spid" 2>/dev/null; do
     el=$(( $(date +%s) - s0 ))
-    if [ -z "$relieved" ] && [ "$el" -ge "$rbound" ]; then
+    if [ "$rbound" -gt 0 ] && [ -z "$relieved" ] && [ "$el" -ge "$rbound" ]; then
       relieved=1; rm -f "$state/promote-reserve"
       echo "$(date -u +%FT%TZ) promote-pass: $tip passed its ${rbound}s reserve bound: the reserve lifts, the loop works beside the proof" >> "$log"
     fi
