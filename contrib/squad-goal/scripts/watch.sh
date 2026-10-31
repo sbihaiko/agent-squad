@@ -144,7 +144,7 @@ if v:
   [ -n "${SG_LAND_PAUSED:-}" ] || ( tm bash "$(dirname "$0")/single.sh" branchreview bash "$(dirname "$0")/branchreviewpass.sh" 2>&1 & ) 2>/dev/null
   # Work-branch fix round (#401): a reviewed tip whose review says CHANGES gets one fix run on the same branch.
   [ -n "${SG_LAND_PAUSED:-}" ] || ( tm bash "$(dirname "$0")/single.sh" branchfix bash "$(dirname "$0")/branchfixpass.sh" 2>&1 & ) 2>/dev/null
-  # No promotion step (#576, ADR-0145 rule 3): the owner starts each promotion of dev to stg; its full suite held the gate lock for up to 30 min, and no wave landed meanwhile.
+  # No promotion step (#576, ADR-0145 rule 3): the loop promotes on the proof of the dev tip, but never from this cycle -- the proof's full suite held the gate lock for up to 30 min, and no wave landed meanwhile.
   fast=; [ -s "$SG_STATE/fastloop.pid" ] && kill -0 "$(cat "$SG_STATE/fastloop.pid")" 2>/dev/null && fast=1   # watchd runs fastloop.sh: childcc and both dispatch passes every SG_FAST_INTERVAL s (120 by default) outside this cycle
   # The fast lane owns childcc, autofrontier and autobug; this cycle runs them only when that lane is down, so neither lane
   # runs a step twice. The frontier and bug dispatches ride the fast beat because a dispatch that waits for this cycle's tick appears up

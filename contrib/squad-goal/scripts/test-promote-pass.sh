@@ -151,7 +151,7 @@ printf '%s 1\n' "$(( $(date +%s) - 8000 ))" > "$SG_STATE/promote-reserve"
 hold >/dev/null; [ $? = 1 ] && ok "a reserve past the lock's bound holds nothing" || ko "a dead reserve held the dispatcher"
 rm -f "$SG_STATE/promote-reserve"
 
-# The owner starts each promotion (#576, ADR-0145 rule 3): no cycle step runs promote-pass.sh.
-/usr/bin/grep -vE '^[[:space:]]*#' "$d/watch.sh" | /usr/bin/grep -q 'promote-pass\.sh' && ko "watch.sh still runs the promotion" || ok "watch.sh runs no promotion step: the owner starts it"
+# The promotion is the loop's, on the proof of the dev tip, and never a cycle step (#576, ADR-0145 rule 3): the proof held the gate lock and no wave landed meanwhile.
+/usr/bin/grep -vE '^[[:space:]]*#' "$d/watch.sh" | /usr/bin/grep -q 'promote-pass\.sh' && ko "watch.sh still runs the promotion" || ok "watch.sh runs no promotion step: the loop promotes on the proof, never from the cycle"
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 rm -rf "$T"; exit $fail

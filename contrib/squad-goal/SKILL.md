@@ -239,7 +239,7 @@ A defect in the loop's own machinery — dispatch, childcc, wave, landing, the r
 5. **Promote and publish** (§8 steps 4 and 5). The publish closes the issue; never close it by hand.
 6. **Restart** (`scripts/watchd.sh start`), and confirm that the first cycle prints no `LOOP STOP` and no `DISPATCH HOLD` for that issue.
 
-Guard: `contrib/squad-goal/scripts/test-autofrontier-one-run.sh`, `test-childcc.sh`, `test-publish-live.sh`.
+Guard: `contrib/squad-goal/scripts/test-autofrontier-one-run.sh` (intake stops on the label and on nothing else), `test-childcc.sh` (a child does not enter during a stop), `test-publish-live.sh` (a fix is live only after the publish, and the publish closes the issue), `tests/test_autonomy_fragment.py` (the owner-only list the carve-outs read). The Fable adversarial, the stop order and the trap rule are a draft: no script checks them yet.
 
 **A trap is not a slow pass.** A trap is a line the loop prints unchanged for three cycles while no fact moves: the same `WATCH: <run> waits`, `BRANCHLAND WAIT`, `DISPATCH HOLD` or `LOOP STOP` naming the same subject, a `CCDEFER` or `dwait` counter that only grows, or a run whose `record.jsonl` mtime never moves. On a trap: file it (step 1), stop the loop (step 3), unwind what holds it — the marker in `auto/`, the lock in `$SG_STATE/locks`, the lease in `~/.cache/agent-squad/caps` — and requeue the issue with `wave.sh requeue <issue> <why>`. Name every marker you delete on the issue; never delete one silently, and never delete a counter another script measures.
 
@@ -256,7 +256,9 @@ The loop runs on events; the check runs on a timer. Read these in order and act 
 7. **The board.** The Doing column matches the live runs and open work branches. While `watchd` is down no pass writes the board, so its moves are yours (see "Issue updates").
 8. **The nightly.** `nightly.sh` runs the full suite in both modes in its own tree and lock. A red record holds delivery and names the `dev` tip; a proof in flight or `SG_NIGHTLY_OFF` holds it and spends neither the day's marker. Clear a red record by fixing the tip, never by deleting the marker.
 
-Post one status comment when a number changed, and nothing when none did. Guard: none yet; a draft.
+Post one status comment when a number changed, and nothing when none did.
+
+Guard: `contrib/squad-goal/scripts/test-autofrontier-one-run.sh` (a live run's accepted children never fill the run slots; #948 is its case), `tests/test_caps.py` and `tests/test_wtclean.py` where they exist, `test-janitor-*.sh` for the drift causes. Items 2, 4 and 8 are a draft: their numbers are read by hand.
 
 ## Profiles
 
@@ -384,14 +386,14 @@ Move the board card on the same event:
 scripts/board.sh <owner> <project> "<Status>" <n…>
 ```
 
-The columns are the shipped set (`SG_BOARD_VOCAB=shipped`): Todo, Doing, Code Review, Code Complete, Pushing, Testing, Closed — plus `Blocked`, which is the owner's freeze. `Done` is not one of them.
+The columns are the shipped set (`SG_BOARD_VOCAB=shipped`): Todo, Doing, Code Review, Code Complete, Pushing, Testing, Closed. `Done` is not one of them, and `Blocked` is not a column either: a freeze is a badge over the column the work reached (ADR-0143 rule 4).
 
 - `childcc.py` moves Doing → Code Review when a child passes.
 - `janitor.py` rule R is the one producer of the derived columns, from the run's record: Todo after a failed run, Blocked after `needs-human`, Code Complete after a pass with nothing landed.
 - Code Complete means the child's work is in its run's wave branch. Pushing means the wave is landing. Closed means the work is in the base (ADR-0145 rule 12).
 - A card only moves forward (ADR-0143).
 
-While `watchd` is down nothing writes the board: you do, with the same `board.sh`, in the same vocabulary. A `loop-bug` card moves like any other — Doing when the fix starts, Code Complete when its commit is in `dev`, Closed on the publish.
+While `watchd` is down nothing writes the board: you do, with the same `board.sh`, in the same vocabulary. A `loop-bug` card moves like any other: Doing when the fix starts, Code Complete when its commit enters the wave, Closed when it is in `dev` (ADR-0145 rule 12). Its ISSUE stays open until the publish closes it (ADR-0149); the card and the issue are two clocks, not one.
 
 The comment queue is a durability mechanism, not permission to postpone creating the update. Queue the update at the moment the event happens.
 
@@ -403,7 +405,7 @@ Board moves go through `scripts/board.sh` (`$BOARD`), which flags the hub to ref
 
 A child that finishes with outcome pass moves its issue to Code Complete at once (`scripts/childcc.py`, every watch loop, once per child), with a comment carrying its first reason; the panel may still be running its siblings. A run that already has its verdict (tiny and fork-only runs pass → verdict in under 1 s, never seen live) is backfilled too, but only when the card is Todo/In Progress/Blocked, never past Code Complete. `scripts/test-childcc.sh` is the regression test (stub gh and board).
 
-Watch lanes: `watchd.sh` runs two loops. `watch.sh` is the 90 s cycle; `fastloop.sh` is the fast lane (childcc and both dispatch passes — `autobug.sh`, then `autofrontier.sh` — every `SG_FAST_INTERVAL` s, 120 by default), so a slow cycle step never delays a landing (#1239: APPROVE + clean waited ~5 min behind a 339 s forkclose) and a dispatchable issue is picked up within one beat instead of on the cycle's beat, up to ~6 min late, which is what `frontier-idle` kept reporting (#1845). `forkclose.sh` runs in the background under `single.sh <name> <cmd>` (non-blocking lock: a second call while the first is alive exits 0), and the fast lane's steps use it too, so no step overlaps its own previous run; the two dispatch passes are called bare because each takes its own `single.sh <stage>` lock inside, so a pass already running is skipped by whichever lane comes second (they go out detached: a pass ends in a `squad start` that runs for minutes and must not hold the beat). `reconcile.py`, the most expensive step of the cycle (~167 s each), is detached the same way under its own lock and files its stream in `$SG_STATE/reconcile.log`; `wtclean.sh` runs on every third cycle (the trees are almost always clean and ~17 s of every cycle is 10% of the loop — run `scripts/wtclean.sh` for an on-demand pass). Standalone `watch.sh` (no watchd) still runs childcc, autofrontier and autobug itself while `fastloop.pid` is not alive. `cycle.log` gets a `CYCLE <n>s` line per watch cycle: a long one says a step is starving the loop. Restart watchd after editing `watchd.sh`/`fastloop.sh` (the supervisor itself is not re-read). A new plugin install or publish reaches the lanes with `watchd.sh reload` (SIGHUP, #873): the lanes end their pass, re-read the install path, and start again; live runs keep running.
+Watch lanes: `watchd.sh` runs two loops. `watch.sh` is the 90 s cycle; `fastloop.sh` is the fast lane (childcc and both dispatch passes — `autobug.sh`, then `autofrontier.sh` — every `SG_FAST_INTERVAL` s, 120 by default), so a slow cycle step never delays a landing (#1239: APPROVE + clean waited ~5 min behind a 339 s forkclose) and a dispatchable issue is picked up within one beat instead of on the cycle's beat, up to ~6 min late, which is what `frontier-idle` kept reporting (#1845). A cycle step runs in the background under `single.sh <name> <cmd>` (non-blocking lock: a second call while the first is alive exits 0), and the fast lane's steps use it too, so no step overlaps its own previous run; the two dispatch passes are called bare because each takes its own `single.sh <stage>` lock inside, so a pass already running is skipped by whichever lane comes second (they go out detached: a pass ends in a `squad start` that runs for minutes and must not hold the beat). `reconcile.py`, the most expensive step of the cycle (~167 s each), is detached the same way under its own lock and files its stream in `$SG_STATE/reconcile.log`; `wtclean.sh` runs on every third cycle (the trees are almost always clean and ~17 s of every cycle is 10% of the loop — run `scripts/wtclean.sh` for an on-demand pass). Standalone `watch.sh` (no watchd) still runs childcc, autofrontier and autobug itself while `fastloop.pid` is not alive. `cycle.log` gets a `CYCLE <n>s` line per watch cycle: a long one says a step is starving the loop. Restart watchd after editing `watchd.sh`/`fastloop.sh` (the supervisor itself is not re-read). A new plugin install or publish reaches the lanes with `watchd.sh reload` (SIGHUP, #873): the lanes end their pass, re-read the install path, and start again; live runs keep running.
 
 After editing any squad script, run `bash scripts/shell-suites.sh`: every `test-*.sh` beside it, offline, every failing suite named, exit 1 on any.
 
@@ -496,7 +498,7 @@ If e2e fails:
 
 1. queue the failure evidence on the affected issue(s);
 2. determine which merged change is responsible;
-3. move affected cards back to Doing or Blocked as appropriate;
+3. keep each affected card in the column its work reached and put a badge on it: a card never moves back (ADR-0143 rule 1), and the one backward move in the vocabulary is Doing to Todo for a run that delivered nothing;
 4. dispatch a fix through agent-squad, never by hand — except a defect in the loop itself, fixed outside it (§9);
 5. keep unrelated work moving.
 
