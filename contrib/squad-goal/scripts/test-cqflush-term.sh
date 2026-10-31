@@ -26,4 +26,9 @@ kill -0 "$pid" 2>/dev/null && { ko "the flusher still runs after TERM"; kill -9 
 [ -f "$B/alpha/cq/x__alpha#3-note.md.done" ] && $G -q '| held 3$' "$GHLOG" && ok "the post in flight lands and is marked done" || ko "the post in flight was cut: $(ls "$B/alpha/cq") / $(cat "$GHLOG" 2>/dev/null)"
 [ ! -e "$B/alpha/cq/x__alpha#3-note.md.posting" ] && ok "no post is left in .posting" || ko "a post is left in .posting"
 ! $G -q 'issues/4/' "$GHLOG" && [ ! -e "$B/alpha/cq/x__alpha#4-note.md.done" ] && ok "the next file is not started" || ko "the next file was started: $(cat "$GHLOG" 2>/dev/null)"
+rm -f "$B/alpha/cq/"*; rm -f "$GHLOG"
+(cd "$T/plain" && SG_FLUSH_INTERVAL=600 exec bash "$d/cqflush.sh") > "$T/idle.out" 2>&1 & ipid=$!
+sleep 1; kill -TERM "$ipid" 2>/dev/null
+for _ in $(seq 1 30); do kill -0 "$ipid" 2>/dev/null || break; sleep 0.1; done
+kill -0 "$ipid" 2>/dev/null && { ko "an idle flusher waits out its interval after TERM"; pkill -P "$ipid" 2>/dev/null; kill -9 "$ipid" 2>/dev/null; } || ok "an idle flusher exits at once after TERM"
 rm -rf "$T"; exit $fail

@@ -50,7 +50,9 @@ case "${1:-status}" in
       # without its flusher repeats every rejection blind, so the flusher runs beside the two lanes and restarts with them
       { [ -n "$cq" ] && kill -0 "$cq" 2>/dev/null; } || { bash "$(dirname "$me")/cqflush.sh" >> "$SG_STATE/cqflush.log" 2>&1 & cq=$!; }
       bash "$(dirname "$me")/watch.sh" >> "$L" 2>&1 & child=$!
-      while kill -0 "$child" 2>/dev/null; do wait "$child"; done; echo "WATCHD watch.sh exited, restarting in 5s" >> "$L"; sleep 5; done;;
+      # watch.sh never exits by itself, so a reload ends this lane too: its TERM trap leaves after the step in flight.
+      while kill -0 "$child" 2>/dev/null; do wait "$child"; [ -n "$reload" ] && kill -TERM "$child" 2>/dev/null; done
+      [ -n "$reload" ] || { echo "WATCHD watch.sh exited, restarting in 5s" >> "$L"; sleep 5; }; done;;
   reload) alive || { echo "watchd not running"; exit 0; }
     kill -HUP "$pid" || { echo "watchd reload not sent: pid=$pid" >&2; exit 1; }; echo "watchd reload sent pid=$pid";;
   stop) alive || { echo "watchd not running"; rm -f "$P"; exit 0; }

@@ -3,6 +3,7 @@
 # fast and comment lanes at their pass boundary, re-reads env.sh so SG_SQUAD names the install the registry names now, and
 # starts them again. A live run in the supervisor's group survives, and watch.log names the old and the new install once.
 # Offline: a temp skill with a stub env.sh that resolves SG_SQUAD from a temp registry, and stub lanes that log what they see.
+# The watch stub never exits by itself, as the real watch.sh never does: only the supervisor's TERM ends it.
 d=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); fail=0
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 unset "${!SG_@}"; export HOME="$T/home"; mkdir -p "$HOME/.claude/plugins"
@@ -17,7 +18,7 @@ SG_STATE=$st; SG_PROFILE=
 if [ -z "\${SG_SQUAD:-}" ]; then SG_SQUAD=\$(python3 -I -c "import json,os;print(json.load(open(os.path.expanduser('~/.claude/plugins/installed_plugins.json')))['plugins']['agent-squad@agent-squad'][0]['installPath'])"); fi
 export SG_STATE SG_PROFILE SG_SQUAD
 EOF
-printf '#!/bin/bash\necho "watch $SG_SQUAD" >> "$SG_STATE/lanes.log"\n[ -e "$SG_STATE/live.pid" ] || { sleep 600 & echo $! > "$SG_STATE/live.pid"; }\nsleep 1\n' > "$S/watch.sh"
+printf '#!/bin/bash\ntrap "exit 0" TERM\necho "watch $SG_SQUAD" >> "$SG_STATE/lanes.log"\n[ -e "$SG_STATE/live.pid" ] || { sleep 600 & echo $! > "$SG_STATE/live.pid"; }\nwhile :; do sleep 1; done\n' > "$S/watch.sh"
 printf '#!/bin/bash\necho "fast $SG_SQUAD" >> "$SG_STATE/lanes.log"\nsleep 600\n' > "$S/fastloop.sh"
 printf '#!/bin/bash\necho "cq $SG_SQUAD" >> "$SG_STATE/lanes.log"\nsleep 600\n' > "$S/cqflush.sh"
 chmod +x "$S"/*.sh
