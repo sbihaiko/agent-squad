@@ -30,7 +30,7 @@ EOF
 chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 # The stub suite logs where it ran, the HEAD it ran at, whether the proof lock was held and the landing gate lock was free
 # around it (ADR-0145 rule 3: the proof runs in its own tree under its own lock, and no wave waits on it); $T/suite-rc is its exit.
-printf '#!/bin/bash\necho "$(pwd -P) $(git rev-parse HEAD) $([ -d "$SG_STATE/locks/full-proof" ] && echo held || echo free)-$([ -d "$SG_STATE/locks/gate" ] && echo gateheld || echo gatefree) $(git status --porcelain | wc -l | tr -d " ")" >> "%s/suite.log"\necho "$([ -e "$SG_STATE/promote-reserve" ] && echo reserved || echo unreserved)" >> "%s/reserve.log"\nexit $(cat "%s/suite-rc" 2>/dev/null || echo 0)\n' "$T" "$T" "$T" > "$T/suite"
+printf '#!/bin/bash\necho "$(pwd -P) $(git rev-parse HEAD) $([ -d "$SG_STATE/locks/full-proof" ] && echo held || echo free)-$([ -d "$SG_STATE/locks/gate" ] && echo gateheld || echo gatefree) $(git status --porcelain | wc -l | tr -d " ")" >> "%s/suite.log"\necho "$([ -e "$SG_STATE/promote-reserve" ] && echo reserved || echo unreserved)" >> "%s/reserve.log"\ns=$(cat "%s/suite-sleep" 2>/dev/null); [ -n "$s" ] && sleep "$s"\nexit $(cat "%s/suite-rc" 2>/dev/null || echo 0)\n' "$T" "$T" "$T" "$T" > "$T/suite"
 chmod +x "$T/suite"; export SG_PROMOTE_SUITE="$T/suite"
 runs() { cat "$T/suite.log" 2>/dev/null | wc -l | tr -d " "; }
 lines() { cat "$SG_STATE/promote.log" 2>/dev/null | /usr/bin/grep -c "promote-pass: $1"; }
@@ -167,6 +167,31 @@ $W add -A; $W commit -q -m delta-uncovered; $W push -q origin dev
 t3=$(tip dev); rm -f "$SG_STATE/gate-status-delta"; pass; rc=$?
 [ $rc = 0 ] && [ "$(tip stg)" = "$t3" ] && ok "an uncovered delta falls back to the full suite, which promotes" || ko "uncovered delta: rc $rc, stg $(tip stg), dev $t3, out '$(cat "$T/out")'"
 [ "$(runs)" -gt "$before" ] && ok "the uncovered delta ran the full suite" || ko "the uncovered delta skipped the full suite: $(cat "$T/suite.log")"
+
+# ADR-0157: a proof is bounded, and it never blocks the loop for long. Past its reserve bound the reserve lifts and the
+# proof keeps running, so the loop dispatches beside it. Past its deadline the proof is killed and recorded indeterminate:
+# it promotes nothing, writes no gate status, and is not marked refused, so a later pass retries the same tip.
+adv dev bound; tb=$(tip dev); echo 6 > "$T/suite-sleep"; rm -f "$T/suite-rc" "$SG_STATE/promote-reserve"
+SG_PROMOTE_RESERVE_SECONDS=1 SG_PROMOTE_DEADLINE_SECONDS=600 bash "$d/promote-pass.sh" > "$T/out2" 2>&1 & bp=$!
+for _ in $(seq 1 40); do sleep 0.25; [ -e "$SG_STATE/promote-reserve" ] && break; done
+[ -e "$SG_STATE/promote-reserve" ] && ok "the proof reserves the machine at its start" || ko "the proof never reserved the machine"
+for _ in $(seq 1 60); do sleep 0.25; [ ! -e "$SG_STATE/promote-reserve" ] && break; done
+{ [ ! -e "$SG_STATE/promote-reserve" ] && kill -0 "$bp" 2>/dev/null; } && ok "past its reserve bound the reserve lifts while the proof still runs" \
+  || ko "the reserve did not lift while the proof ran"
+wait "$bp"; rc=$?
+[ "$rc" = 0 ] && [ "$(tip stg)" = "$tb" ] && ok "a proof that lifted its reserve still promotes its tip" || ko "lifted proof: rc $rc, stg $(tip stg), dev $tb"
+rm -f "$T/suite-sleep"
+adv dev slow; ts=$(tip dev); before=$(tip stg); echo 30 > "$T/suite-sleep"; rm -f "$SG_STATE/promote-indeterminate" "$T/suite-rc"
+s0=$(date +%s); SG_PROMOTE_DEADLINE_SECONDS=1 SG_PROMOTE_RESERVE_SECONDS=600 bash "$d/promote-pass.sh" > "$T/out3" 2>&1; rc=$?; el=$(( $(date +%s) - s0 ))
+[ "$rc" != 0 ] && [ "$el" -lt 15 ] && ok "a proof past its deadline is killed, not awaited (${el}s)" || ko "deadline: rc $rc after ${el}s"
+[ "$(tip stg)" = "$before" ] && ok "a killed proof promotes nothing" || ko "a killed proof promoted stg to $(tip stg)"
+IFS=$'\t' read -r _ mt mb < "$SG_STATE/promote-indeterminate" 2>/dev/null
+[ "$mt" = "$ts" ] && [ "$mb" = 1 ] && ok "the indeterminate record names the tip and the bound it passed" \
+  || ko "indeterminate record: '$(cat "$SG_STATE/promote-indeterminate" 2>/dev/null)'"
+[ "$(/usr/bin/grep -c "^$ts " "$SG_STATE/promote-pass.tips" 2>/dev/null)" = 0 ] && ok "an indeterminate tip is not marked refused, so a later pass retries it" \
+  || ko "the indeterminate tip was marked refused"
+/usr/bin/grep -q "promote-pass: $ts not tested" "$SG_STATE/promote.log" && ok "the log says the tip is not tested" || ko "no not-tested line for $ts"
+rm -f "$T/suite-sleep"
 
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 rm -rf "$T"; exit $fail
