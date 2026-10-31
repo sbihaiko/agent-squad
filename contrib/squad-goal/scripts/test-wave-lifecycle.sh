@@ -125,7 +125,10 @@ chmod +x "$T/s/vendor-guard.sh"
 cycle() { local i=0; : > "$T/watch.out"; echo 0 > "$T/cyc"
   ( cd "$T/co" && env SG_TEST_CYCLES="${1:-1}" bash "$T/s/watch.sh" > "$T/watch.out" 2>&1 ) & local p=$!
   while kill -0 "$p" 2>/dev/null && [ $i -lt 600 ]; do /bin/sleep 0.1; i=$((i+1)); done
-  kill -TERM "$p" 2>/dev/null; wait "$p" 2>/dev/null; rm -f "$T/st/fastloop.pid"; return 0; }
+  kill -TERM "$p" 2>/dev/null; wait "$p" 2>/dev/null; rm -f "$T/st/fastloop.pid"
+  # The landing is a detached pass (#955): the supervisor returns at once and the pass writes its lines after it. Wait for
+  # the pass's own busy marker, as a live loop's next cycle does, so the landing a case reads has happened.
+  local j=0; while /bin/ls "$T"/st/auto/wland-*.busy >/dev/null 2>&1 && [ $j -lt 600 ]; do /bin/sleep 0.1; j=$((j+1)); done; return 0; }
 # The wave branch's tip at the remote, and nothing at all when the branch is gone: plain `rev-parse <ref>` echoes the ref
 # it could not resolve on stdout (a fatal on stderr, exit 128), so a case that reads a landed wave as still there is the
 # helper's doing and not the remote's -- only `--verify -q` answers empty for a branch that is not there.
