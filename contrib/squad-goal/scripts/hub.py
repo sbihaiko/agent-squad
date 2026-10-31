@@ -2956,8 +2956,23 @@ def lead_zoom(query):
     return _leadtime.control_chart(lead_rows(), log=q.get("scale", ["jira"])[0] == "log", now=dt.datetime.now(dt.UTC), start=start, end=end)
 
 
-def flow_charts():
-    """The two diagrams' numbers, computed here from board_cfd and board_leadtime; the page draws them and computes none."""
+CHARTS = {}   # each chart route's last answer, with the key of the inputs it read (#971)
+
+def chart(name, key, build):
+    hit = CHARTS.get(name)
+    if hit and hit[0] == key: return hit[1]
+    t = time.time()   # the instant the chart reads its data: a cached answer keeps it, however late it is served
+    answer = {"t": t, **build()}
+    CHARTS[name] = (key, answer)
+    return answer
+
+def history_key():
+    path = _flow.history_path(BOARD, REPO)
+    try: st = path.stat(); return (str(path), st.st_mtime_ns, st.st_size)
+    except OSError: return (str(path), None)
+
+def _cfd_payload():
+    """The cumulative flow's numbers, computed here from board_cfd; the page draws them and computes none."""
     path = _flow.history_path(BOARD, REPO)
     cfd = _cfd.cfd(_flow.samples(path), ORDER, skips=_flow.skips(path))
     extents = {p["day"]: _band_extents(p["bands"]) for p in cfd["points"]}
@@ -2979,18 +2994,25 @@ def flow_charts():
                 "bands": [{"name": n, "lower": cut(values(n, 0)), "upper": cut(values(n, 1)),
                            "count": [extents[d][n][1] - extents[d][n][0] if d in extents else None for d in window]}
                           for n in FLOW_BANDS] if kept else []}
+    return {"cfd": {**view(None), "ranges": {key: view(width) for key, width in CFD_RANGES}}}
+
+
+def _lead_payload():
+    """The lead-time numbers over the closed cards of the board read, computed here; the page draws them and computes none."""
     rows = lead_rows()
     lead = _leadtime.lead_time(rows)
     now = dt.datetime.now(dt.UTC)
     control = {scale: {key: _leadtime.control_chart(rows, timeframe=days, log=scale == "log", now=now)
                        for key, days in LEAD_TIMEFRAMES} for scale in ("jira", "log")}   # the Jira-style control chart (#900)
-    return {
-        "cfd": {**view(None), "ranges": {key: view(width) for key, width in CFD_RANGES}},
-        "lead": {"measure": lead["measure"], "window": lead["window"],
-                 "excluded": [{"reason": r, "count": c} for r, c in lead["excluded"].items()],
-                 "excluded_total": sum(lead["excluded"].values()), "series": lead["series"], "summary": lead["summary"],
-                 "control": control},
-    }
+    return {"lead": {"measure": lead["measure"], "window": lead["window"],
+                     "excluded": [{"reason": r, "count": c} for r, c in lead["excluded"].items()],
+                     "excluded_total": sum(lead["excluded"].values()), "series": lead["series"], "summary": lead["summary"],
+                     "control": control}}
+
+
+def flow_cfd(): return chart("cfd", history_key(), _cfd_payload)
+
+def flow_lead(): return chart("lead", board_cache.get("t"), _lead_payload)
 
 
 def drawn_column(i, moves, read_at, window):
@@ -3105,7 +3127,7 @@ def board():
         dropped = drop_moves(agreed | set(expired))   # agreement settles an entry; the window settles one no read ever agreed with (#651)
         for item, (n, recorded, read, context) in expired.items():
             if dropped and item in dropped: report_expired(n, item, recorded, read, window, context)   # only a drop that really happened is reported, so a retry never repeats a line
-    return {"t": board_cache["t"], "err": board_cache["err"], "prs": lane, "groups": groups, "cases": cases, "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {}), "flow": flow_charts()}
+    return {"t": board_cache["t"], "err": board_cache["err"], "prs": lane, "groups": groups, "cases": cases, "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {})}
 
 PROMOTE_TO = COLUMN["issue_todo"]   # the column the arrow moves a card into: the owner's go signal (ADR-0142)
 def promotable(item):
@@ -4182,7 +4204,7 @@ const RING=["#a3e635","#d8b4fe","#ff9ecd","#7dd3fc"];   // reserved for the colu
 const colOf=(n,names)=>{const u=(names||[]).filter(x=>!Object.hasOwn(COLORS,x)).sort(),i=u.indexOf(n);return COLORS[n]||RING[(i<0?0:i)%RING.length]};
 const caseRows=cs=>(cs||[]).map(c=>{const a=c.age<3600?Math.max(1,Math.round(c.age/60))+"m":c.age<172800?Math.round(c.age/3600)+"h":Math.round(c.age/86400)+"d";return `<div class="tcrow ${c.result==="fail"?"fail":"pass"}" data-key="test case:${c.issue}@${esc(c.commit)}"><span class=tr>${esc(c.result)}</span><span class=id>#${c.issue}</span><span class=ta>${a}</span><code class=tm>${esc(c.commit)}</code></div>`}).join("");   // one row for each test case item, in the model's order: a strip beside the axis, never a column, and the pane reads no cache of its own
 // flow-charts:
-let FLOWK=null,FLOWD=null;
+let FLOWK=null,FLOWD={};   // each chart's answer from its own route, by name: its numbers and the instant its data was read (#971)
 let flowW=800;const flowH=340,flowP=36;   // the width follows the pane, so the chart fills it and its text keeps its size (#889)
 const flowX=(i,n)=>n<2?flowP:flowP+i*(flowW-2*flowP)/(n-1);
 const flowY=(v,max)=>max?flowH-flowP-v*(flowH-2*flowP)/max:flowH-flowP;
@@ -4243,8 +4265,9 @@ const flowLead=l=>{const S=l.summary,ex=l.excluded.map(e=>`${e.count} ${esc(EXRE
   if(!S)return head+"<p class=fnote>no closed card yet</p>";
   return head+ltChart(LT.zc||l.control[LT.log?"log":"jira"][LT.tf]);};
 const drawFlow=()=>{{const w=$("#flowb").clientWidth-20;flowW=w<600?600:w>1600?1600:(w|0)}const cfd=FLOWK==="cfd";$("#flowt").textContent=cfd?"Cumulative flow":"Lead time";
-  $("#flowb").innerHTML=!FLOWD?"<p class=fnote>the board has not loaded yet</p>":cfd?flowCFD(FLOWD.cfd.ranges[CF.r]):flowLead(FLOWD.lead)};
-const flowOpen=k=>{FLOWK=k;$("#flowov").hidden=false;drawFlow()};
+  const a=FLOWD[FLOWK];
+  $("#flowb").innerHTML=!a?"<p class=fnote>loading the chart from the hub</p>":(cfd?flowCFD(a.cfd.ranges[CF.r]):flowLead(a.lead))+`<p class=fnote>data read ${new Date(a.t*1000).toLocaleTimeString()}</p>`};
+const flowOpen=async k=>{FLOWK=k;$("#flowov").hidden=false;drawFlow();try{const a=await (await fetch(`/api/chart/${k}`)).json();FLOWD[k]=a;if(FLOWK===k)drawFlow()}catch(e){}};
 const ltZoom=async(f,t)=>{const tok=++LT.tok;try{const c=await (await fetch(`/api/leadtime?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}&scale=${LT.log?"log":"jira"}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;LT.zr=[f,t];LT.pick=null;drawFlow()}catch(e){}};   // the hub recomputes the chart for the dragged range (#900)
 const ltPx=(e,s)=>{const r=s.getBoundingClientRect();return (e.clientX-r.left)/r.width*flowW};
 const ltClamp=x=>x<flowP?flowP:x>flowW-flowP?flowW-flowP:x,ltLo=(p,q)=>p<q?p:q,ltHi=(p,q)=>p<q?q:p;
@@ -4267,7 +4290,7 @@ async function pollBoard(){lim.busy=1;try{const b=await (await fetch("/api/board
 all=[b.prs,...b.groups.sort((x,y)=>{const i=n=>{const k=FLOW.indexOf(n);return k<0?FLOW.length:k};return i(x.name)-i(y.name)})],f=q.trim().replace(/^#/,"");
 if(bo.open===undefined||!all.some(g=>g.name===bo.open))bo.open=(all.find(g=>g.n&&g.name!==COLNAME.issue_closed&&!isPR(g.name))||all[2]).name;
 const CN=all.map(g=>g.name);   // every column of this board: what colOf reads the user columns out of, never a colour of its own
-lastRead=Date.now();readStale=!!b.err;FLOWD=b.flow;if(!$("#flowov").hidden)drawFlow();$("#bcases").innerHTML=caseRows(b.cases);$("#bt").textContent=b.err?"(stale)":"";
+lastRead=Date.now();readStale=!!b.err;$("#bcases").innerHTML=caseRows(b.cases);$("#bt").textContent=b.err?"(stale)":"";
 const fw=bo.fw||[],fs=bo.fs||[],allRows=all.filter(g=>!isPR(g.name)).flatMap(g=>g.items),specTitle=new Map();   // the filter bar: the waves and specs the board holds (#899)
 allRows.forEach(x=>{if(x.sp)specTitle.set(String(x.n),x.t)});
 const numKeys=(a,b)=>a==="none"?1:b==="none"?-1:+a-+b;
@@ -5410,6 +5433,8 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/board"):
             try: body, ct = json.dumps(board()).encode(), "application/json"
             except ValueError as e: body, ct = json.dumps({"error": str(e)}).encode(), "application/json"
+        elif self.path.startswith("/api/chart/cfd"): body, ct = json.dumps(flow_cfd()).encode(), "application/json"
+        elif self.path.startswith("/api/chart/lead"): body, ct = json.dumps(flow_lead()).encode(), "application/json"
         elif self.path.startswith("/api/leadtime"): body, ct = json.dumps(lead_zoom(self.path.partition("?")[2])).encode(), "application/json"   # the control chart over a dragged range (#900)
         elif self.path.startswith("/api/version"): body, ct = json.dumps({"v": BOOT}).encode(), "application/json"
         elif self.path.startswith("/api/subs"): body, ct = json.dumps({**subs_month(), "presets": {k: {i: {"name": n, "usd": p} for i, (n, p) in v.items()} for k, v in PRESETS.items()}}).encode(), "application/json"

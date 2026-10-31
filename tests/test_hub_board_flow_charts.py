@@ -74,6 +74,11 @@ def _flow_block(hub):
     return m.group(1)
 
 
+def _flow(hub):
+    """Both chart routes' answers, under the keys the tests read."""
+    return {"cfd": hub.flow_cfd()["cfd"], "lead": hub.flow_lead()["lead"]}
+
+
 def test_tasks_header_has_flow_and_lead_time_buttons_and_keeps_its_controls(hub):
     # Re-anchored to the owner-approved mock (#889): Flow and Lead time sit on the Flow charts tab, not in the board's toolbar.
     tabs = hub.PAGE[hub.PAGE.index("<div class=rkt id=flowtabs>"):hub.PAGE.index("<div id=main>")]
@@ -91,7 +96,7 @@ def test_cfd_bands_follow_the_hub_order_and_add_frozen_and_no_column(hub, board)
         _sample(1, {"issue": {hub.COLUMN["unscheduled"]: 2, hub.COLUMN["issue_closed"]: 1}}),
         _sample(2, {"issue": {hub.COLUMN["unscheduled"]: 1, hub.COLUMN["issue_closed"]: 2}}),
     ])
-    cfd = hub.board()["flow"]["cfd"]
+    cfd = _flow(hub)["cfd"]
     assert [b["name"] for b in cfd["bands"]] == [*hub.ORDER, "frozen", "No column"], "the drawn bands name every band (#896)"
     assert cfd["start"] == "2026-10-01"
     assert len(cfd["days"]) == 2
@@ -100,7 +105,7 @@ def test_cfd_bands_follow_the_hub_order_and_add_frozen_and_no_column(hub, board)
 
 def test_cfd_band_extents_are_the_board_cfd_counts(hub, board):
     _history(board, [_sample(1, {"issue": {hub.COLUMN["unscheduled"]: 2, hub.COLUMN["issue_closed"]: 1}})])
-    bands = {b["name"]: b for b in hub.board()["flow"]["cfd"]["bands"]}
+    bands = {b["name"]: b for b in _flow(hub)["cfd"]["bands"]}
     backlog = bands[hub.COLUMN["unscheduled"]]
     closed = bands[hub.COLUMN["issue_closed"]]
     assert backlog["upper"][0] - backlog["lower"][0] == 2
@@ -110,13 +115,13 @@ def test_cfd_band_extents_are_the_board_cfd_counts(hub, board):
 
 def test_another_repositorys_history_is_not_drawn(hub, board):
     _history(board, [_sample(1, {"issue": {hub.COLUMN["unscheduled"]: 5}})], repo="x_other")
-    cfd = hub.board()["flow"]["cfd"]
+    cfd = _flow(hub)["cfd"]
     assert cfd["start"] is None
     assert cfd["bands"] == []
 
 
 def test_no_history_file_says_no_sample_and_draws_no_band(hub, board):
-    cfd = hub.board()["flow"]["cfd"]
+    cfd = _flow(hub)["cfd"]
     assert cfd["start"] is None
     assert cfd["days"] == []
     assert cfd["bands"] == []
@@ -131,7 +136,7 @@ def test_lead_time_summary_measure_window_and_excluded_count(hub, board):
         _card(3, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-04T09:00:00Z"),
         _card(4, st="Todo", s="OPEN", c=None),
     ]
-    lead = hub.board()["flow"]["lead"]
+    lead = _flow(hub)["lead"]
     assert lead["measure"] == "opened -> closed"
     assert lead["window"] == {"size": 20, "unit": "issues"}
     assert lead["summary"]["average"]["text"] == "1d 10h"
@@ -152,15 +157,16 @@ def test_a_card_closed_as_not_planned_is_no_delivery_and_the_chart_names_it(hub,
         {**_card(4, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-04T09:00:00Z"), "cr": "duplicate"},
     ]
 
-    served = hub.board()
+    lead = _flow(hub)["lead"]
+    groups = hub.board()["groups"]
 
-    assert [p["n"] for p in served["flow"]["lead"]["series"]] == [1]
-    assert served["flow"]["lead"]["summary"]["median"]["text"] == "6h"
-    assert served["flow"]["lead"]["excluded"] == [{"reason": "not_planned", "count": 3}]
-    assert served["flow"]["lead"]["excluded_total"] == 3
-    abandoned = next(g for g in served["groups"] if g["name"] == "Abandoned")
+    assert [p["n"] for p in lead["series"]] == [1]
+    assert lead["summary"]["median"]["text"] == "6h"
+    assert lead["excluded"] == [{"reason": "not_planned", "count": 3}]
+    assert lead["excluded_total"] == 3
+    abandoned = next(g for g in groups if g["name"] == "Abandoned")
     assert [r["n"] for r in abandoned["items"]] == [2, 3, 4], "a card closed as not planned is drawn Abandoned, never Closed"
-    closed = next(g for g in served["groups"] if g["name"] == hub.COLUMN["issue_closed"])
+    closed = next(g for g in groups if g["name"] == hub.COLUMN["issue_closed"])
     assert [r["n"] for r in closed["items"]] == [1]
 
 
@@ -176,7 +182,7 @@ def test_the_closed_band_never_steps_down_where_the_close_reason_began(hub, boar
 
     flow.append(board / "hub-flow.x_y.jsonl", rows, now=datetime(2026, 10, 3, 12, tzinfo=UTC).timestamp())
 
-    bands = {b["name"]: b for b in hub.board()["flow"]["cfd"]["bands"]}
+    bands = {b["name"]: b for b in _flow(hub)["cfd"]["bands"]}
     values = [hi - lo for hi, lo in zip(bands[closed]["upper"], bands[closed]["lower"], strict=True)]
     assert values == sorted(values), f"the Closed band steps down at the boundary: {values}"
     abandoned = [hi - lo for hi, lo in zip(bands["Abandoned"]["upper"], bands["Abandoned"]["lower"], strict=True)]
@@ -209,7 +215,7 @@ def test_opening_the_diagrams_makes_no_gh_call(hub, board, monkeypatch):
         raise FileNotFoundError("gh is not on PATH")
 
     monkeypatch.setattr(hub.subprocess, "run", gh_fails)
-    flow = hub.board()["flow"]
+    flow = _flow(hub)
     assert calls == []
     assert flow["cfd"]["bands"] and flow["lead"]["summary"] is not None
     assert 'id=flowov hidden' in hub.PAGE
@@ -225,7 +231,7 @@ def test_a_quiet_day_with_a_whole_read_is_a_point(hub, board):
         _sample(2, {"issue": {hub.COLUMN["unscheduled"]: 2}}),
         _sample(3, {"issue": {hub.COLUMN["unscheduled"]: 1}}),
     ])
-    cfd = hub.board()["flow"]["cfd"]
+    cfd = _flow(hub)["cfd"]
     assert len(cfd["days"]) == 3, "the calendar runs over the quiet day, so points sit by date"
     for band in cfd["bands"]:
         assert band["upper"][1] is not None and band["lower"][1] is not None, "the quiet day has its own sample: a point"
@@ -237,7 +243,7 @@ def test_a_day_with_no_record_at_all_is_a_gap_and_never_a_carried_value(hub, boa
         _sample(1, {"issue": {hub.COLUMN["unscheduled"]: 2}}),
         _sample(3, {"issue": {hub.COLUMN["unscheduled"]: 1}}),
     ])
-    cfd = hub.board()["flow"]["cfd"]
+    cfd = _flow(hub)["cfd"]
     assert len(cfd["days"]) == 3
     for band in cfd["bands"]:
         assert band["upper"][1] is None and band["lower"][1] is None, "no record: the hub was down, its count is unknown"
@@ -249,7 +255,7 @@ def test_a_skipped_read_is_a_calendar_day_with_no_band_values(hub, board):
         _skip(2),
         _sample(3, {"issue": {hub.COLUMN["unscheduled"]: 1}}),
     ])
-    cfd = hub.board()["flow"]["cfd"]
+    cfd = _flow(hub)["cfd"]
     assert len(cfd["days"]) == 3
     for band in cfd["bands"]:
         assert band["upper"][1] is None and band["lower"][1] is None, "a gap carries no value to interpolate"
@@ -312,7 +318,7 @@ def test_drawn_cfd_and_lead_time_equal_what_board_cfd_and_board_leadtime_return(
              _card(2, st="Todo", s="OPEN", c=None)]
     hub.board_cache["items"] = items
 
-    flow = hub.board()["flow"]
+    flow = _flow(hub)
     direct = cfd_mod.cfd(samples, hub.ORDER)
     for band in flow["cfd"]["bands"]:
         for i, point in enumerate(direct["points"]):
@@ -345,7 +351,7 @@ def test_the_cfd_serves_numbered_y_ticks_and_dated_x_ticks(hub, board):
         _sample(2, {"issue": {hub.COLUMN["unscheduled"]: 4, hub.COLUMN["issue_closed"]: 4}}, frozen=2, none=1),
         _sample(3, {"issue": {hub.COLUMN["unscheduled"]: 3, hub.COLUMN["issue_closed"]: 5}}, frozen=2, none=1),
     ])
-    cfd = hub.board()["flow"]["cfd"]
+    cfd = _flow(hub)["cfd"]
     ticks = cfd["yticks"]
     assert ticks[0] == 0 and all(isinstance(v, int) for v in ticks)
     assert ticks == sorted(set(ticks)), f"the y ticks rise: {ticks}"
@@ -363,7 +369,7 @@ def test_the_cfd_draws_labelled_axes_with_numbered_ticks_and_dated_ticks(hub, bo
         _sample(2, {"issue": {hub.COLUMN["unscheduled"]: 4, hub.COLUMN["issue_closed"]: 4}}, frozen=2, none=1),
         _sample(3, {"issue": {hub.COLUMN["unscheduled"]: 3, hub.COLUMN["issue_closed"]: 5}}, frozen=2, none=1),
     ])
-    cfd = hub.board()["flow"]["cfd"]
+    cfd = _flow(hub)["cfd"]
     block = _flow_block(hub).split("const drawFlow")[0]
     drawing = "\n".join([
         "const COLORS={},COLNAME={};", "const esc=s=>String(s);", block,
@@ -390,7 +396,7 @@ def test_every_band_drawn_has_a_legend_entry_frozen_and_no_column_included(hub, 
         _sample(1, {"issue": {hub.COLUMN["unscheduled"]: 5, hub.COLUMN["issue_closed"]: 3}}, frozen=2, none=1),
         _sample(2, {"issue": {hub.COLUMN["unscheduled"]: 4, hub.COLUMN["issue_closed"]: 4}}, frozen=2, none=1),
     ])
-    cfd = hub.board()["flow"]["cfd"]
+    cfd = _flow(hub)["cfd"]
     names = [b["name"] for b in cfd["bands"]]
     assert names == [*hub.ORDER, "frozen", "No column"]
     block = _flow_block(hub).split("const drawFlow")[0]
@@ -417,7 +423,7 @@ TIMEFRAME_KEYS = ["7", "14", "30", "90", "180", "all"]
 def test_the_control_chart_is_served_for_every_timeframe_and_both_scales(hub, board):
     hub.board_cache["items"] = [_card(1, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-02T09:00:00Z")]
 
-    control = hub.board()["flow"]["lead"]["control"]
+    control = _flow(hub)["lead"]["control"]
 
     assert set(control) == {"jira", "log"}
     for scale in control.values():
@@ -430,7 +436,7 @@ def test_a_control_chart_dot_carries_the_issue_title_and_its_close_date(hub, boa
     hub.board_cache["items"] = [{**_card(7, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-02T09:00:00Z"),
                                  "t": "ship the chart"}]
 
-    dot = hub.board()["flow"]["lead"]["control"]["jira"]["all"]["dots"][0]
+    dot = _flow(hub)["lead"]["control"]["jira"]["all"]["dots"][0]
 
     assert dot["n"] == 7
     assert dot["title"] == "ship the chart"
@@ -450,7 +456,7 @@ def test_the_control_chart_draws_one_mark_per_cluster_on_the_date_axis(hub, boar
         _card(2, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-02T09:00:00Z"),
         _card(3, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-09T09:00:00Z"),
     ]
-    lead = hub.board()["flow"]["lead"]
+    lead = _flow(hub)["lead"]
     block = _flow_block(hub).split("const drawFlow")[0]
     drawing = "\n".join([
         "const COLORS={},COLNAME={issue_closed:'Closed'};", "const esc=s=>String(s);", block,
@@ -473,13 +479,13 @@ CFD_RANGE_KEYS = ["7", "30", "90", "all"]
 def test_the_cfd_serves_a_view_for_each_range_ending_on_the_last_day(hub, board):
     _history(board, [_sample(d, {"issue": {hub.COLUMN["unscheduled"]: 1}}) for d in range(1, 21)])
 
-    ranges = hub.board()["flow"]["cfd"]["ranges"]
+    ranges = _flow(hub)["cfd"]["ranges"]
 
     assert list(ranges) == CFD_RANGE_KEYS
     assert len(ranges["7"]["days"]) == 7
     assert ranges["7"]["days"][-1] == "2026-10-20", "the window ends on the last day of the history"
     assert len(ranges["30"]["days"]) == 20, "a window longer than the history is the whole history"
-    assert ranges["all"]["days"] == hub.board()["flow"]["cfd"]["days"]
+    assert ranges["all"]["days"] == _flow(hub)["cfd"]["days"]
 
 
 def test_each_range_serves_wip_and_throughput_per_day_from_board_cfd(hub, board):
@@ -488,7 +494,7 @@ def test_each_range_serves_wip_and_throughput_per_day_from_board_cfd(hub, board)
                _sample(2, {"issue": {hub.COLUMN["unscheduled"]: 1, hub.COLUMN["issue_closed"]: 3}})]
     _history(board, samples)
 
-    view = hub.board()["flow"]["cfd"]["ranges"]["all"]
+    view = _flow(hub)["cfd"]["ranges"]["all"]
     direct = cfd_mod.cfd(samples, hub.ORDER)
 
     assert view["wip"] == [p["wip"] for p in direct["points"]]
@@ -498,7 +504,7 @@ def test_each_range_serves_wip_and_throughput_per_day_from_board_cfd(hub, board)
 def test_each_band_serves_its_count_per_day(hub, board):
     _history(board, [_sample(1, {"issue": {hub.COLUMN["unscheduled"]: 2, hub.COLUMN["issue_closed"]: 1}})])
 
-    bands = {b["name"]: b for b in hub.board()["flow"]["cfd"]["ranges"]["all"]["bands"]}
+    bands = {b["name"]: b for b in _flow(hub)["cfd"]["ranges"]["all"]["bands"]}
 
     assert bands[hub.COLUMN["unscheduled"]]["count"] == [2]
     assert bands[hub.COLUMN["issue_closed"]]["count"] == [1]
@@ -510,7 +516,7 @@ def test_the_cfd_names_a_range_selector_and_a_day_hover_with_counts(hub, board, 
         _sample(1, {"issue": {hub.COLUMN["unscheduled"]: 2, hub.COLUMN["issue_closed"]: 1}}),
         _sample(2, {"issue": {hub.COLUMN["unscheduled"]: 1, hub.COLUMN["issue_closed"]: 3}}),
     ])
-    view = hub.board()["flow"]["cfd"]["ranges"]["all"]
+    view = _flow(hub)["cfd"]["ranges"]["all"]
     block = _flow_block(hub).split("const drawFlow")[0]
     drawing = "\n".join([
         "const COLORS={},COLNAME={};", "const esc=s=>String(s);", block,
@@ -555,6 +561,53 @@ def test_the_server_answers_the_leadtime_route_and_the_page_calls_it(hub):
     assert 'self.path.startswith("/api/leadtime")' in source
     assert "/api/leadtime?" in hub.PAGE
     assert "Reset zoom" in hub.PAGE
+
+
+def test_the_board_answer_carries_no_flow_data(hub, board):
+    served = hub.board()
+    assert "flow" not in served
+    assert "lead" not in served
+
+
+def test_each_chart_has_its_own_route_and_the_page_fetches_it_on_open(hub):
+    source = HUB_PY.read_text()
+    assert 'self.path.startswith("/api/chart/cfd")' in source
+    assert 'self.path.startswith("/api/chart/lead")' in source
+    assert "fetch(`/api/chart/${k}`)" in hub.PAGE
+    assert "b.flow" not in hub.PAGE, "the board poll still hands the chart its data"
+
+
+@pytest.mark.parametrize("chart, compute", [("cfd", "_cfd_payload"), ("lead", "_lead_payload")])
+def test_a_chart_route_answers_from_its_cache_and_keeps_its_read_instant(hub, board, monkeypatch, chart, compute):
+    _history(board, [_sample(1, {"issue": {hub.COLUMN["unscheduled"]: 1}})])
+    hub.board_cache["items"] = [_card(1, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-02T09:00:00Z")]
+    real = getattr(hub, compute)
+
+    def slow(*args, **kwargs):
+        time.sleep(0.5)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(hub, compute, slow)
+    route = getattr(hub, f"flow_{chart}")
+    before = time.time()
+    first = route()
+    started = time.monotonic()
+    second = route()
+    answered_in = time.monotonic() - started
+
+    assert answered_in < 0.1, f"the second read recomputed instead of answering from the cache: {answered_in:.2f}s"
+    assert second["t"] == first["t"], "the cached answer carries the read's instant, not the answer's"
+    assert before <= first["t"] <= time.time() - 0.4, "the data instant is when the chart read its data, before the slow part"
+    assert chart in first
+
+
+def test_the_board_poll_never_computes_chart_data(hub, board, monkeypatch):
+    def boom(*args, **kwargs):
+        raise AssertionError("the board poll computed chart data")
+
+    monkeypatch.setattr(hub, "_cfd_payload", boom)
+    monkeypatch.setattr(hub, "_lead_payload", boom)
+    assert "groups" in hub.board()
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
