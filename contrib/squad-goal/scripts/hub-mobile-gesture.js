@@ -33,3 +33,13 @@ const runsGesture = ({ x0, dx, dy, atTop }) => {
   if (atTop && dy >= PULL_MIN && ay > ax) return { act: "refresh" };
   return null;
 };
+// The carousel's column rule (#877): with the filter on, a column that holds no visible card is left out of the
+// carousel and named once, with its zero count. `counts` holds each group's visible card count, in group order.
+const carouselColumns = (groups, counts, hide) => {
+  const shown = [], hidden = [];
+  groups.forEach((g, i) => {
+    if (hide && counts[i] === 0) hidden.push({ name: g.name, count: counts[i] });
+    else shown.push(g);
+  });
+  return { shown, hidden };
+};
