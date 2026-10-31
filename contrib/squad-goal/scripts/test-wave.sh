@@ -172,6 +172,10 @@ printf 'run-1\n' > "$T/st/auto/disp-24"; child 24 g24; rev 24; rm -f "$T/gl"
 if hold; then
   r=$(cd "$T/c24" && SG_WAVE_GATES="echo gate >> $T/gl" bash "../s/wave.sh" enter run-1 24 2>&1)
   case "$r" in *"WAVE HOLD #24"*) ok "I: under a held gate lock the entry holds the child out, on one line";; *) ko "I: no hold: '$r'";; esac
+  # The hold line begins with its UTC stamp; on a machine not on UTC, a local stamp is hours off and fails.
+  stamp=$(printf '%s\n' "$r" | sed -n 's/^\([0-9-]* [0-9:]*\) WAVE HOLD #24: .*/\1/p' | head -n 1)
+  [ -n "$stamp" ] && python3 -c 'import calendar,sys,time; s=calendar.timegm(time.strptime(sys.argv[1],"%Y-%m-%d %H:%M:%S")); sys.exit(0 if abs(s-time.time())<120 else 1)' "$stamp" 2>/dev/null \
+    && ok "I2: the WAVE HOLD line begins with its UTC stamp" || ko "I2: no UTC stamp on the WAVE HOLD line: '$r'"
   /usr/bin/grep -q gate "$T/gl" 2>/dev/null && ko "I: the entry gate ran beside the holder" || ok "I: the entry gate never runs beside the holder"
   wait; rev 24; r=$(cd "$T/c24" && SG_WAVE_GATES="echo gate >> $T/gl" bash "../s/wave.sh" enter run-1 24 2>&1)
   [ "$(tr '\n' ' ' < "$T/gl")" = "holder gate " ] && ok "I: the next pass, after the holder, runs the entry gate" || ko "I: gate order '$(tr '\n' ' ' < "$T/gl")': '$r'"

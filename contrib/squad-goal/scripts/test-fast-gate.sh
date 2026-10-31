@@ -6,6 +6,7 @@
 unset SG_SERIAL_HELD   # a gate inside a gate hands the lock name down; this suite takes its own gate lock, so the hold is proved
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G="git -c user.email=a@b -c user.name=t"; export SG_STATE=$T/st SQUAD_CAPS_DIR=$T/caps; mkdir -p "$SG_STATE"   # (#801) the gate takes slots: its own budget, never the machine's
+export SG_FAST_LOG_DIR=$T/logs; mkdir -p "$SG_FAST_LOG_DIR"   # (#945) the gate's log sits outside SG_STATE, where the child that ran it may read it
 R=$T/r; S=$R/contrib/squad-goal/scripts; git init -q -b dev "$R"; mkdir -p "$S" "$R/docs"
 # A stub suite logs its name and whether the machine lock was held, and fails when its name is in $SUITE_FAIL.
 for n in foo bar baz; do
@@ -66,6 +67,8 @@ out=$(MYPY_FAIL=1 lintgate); rc=$?
 # that names no failed test is no longer read as one cause. Saturation and unknown are inconclusive: the battery runs once more,
 # and a second inconclusive result exits 4, which holds the landing. Exit 1 is a defect. No class grants landing by its name.
 last() { printf '%s\n' "$1" | /usr/bin/grep -v '^$' | tail -1; }
+# lgof <pass or red line>: the log the line names, whatever the line's shape: the pass line `(log <path>)`, a red `(<path>)`.
+lgof() { printf '%s\n' "$1" | /usr/bin/grep -o '([^()]*\.log)' | tail -1 | tr -d '()' | sed 's/^log //'; }
 out=$(RUFF_FAIL=1 lintgate); case "$(last "$out")" in "fast-gate: lint: "*) ok "a lint red names the lint class on its last line";; *) ko "lint class: '$(last "$out")'";; esac
 out=$(MYPY_FAIL=1 lintgate); case "$(last "$out")" in "fast-gate: type: "*) ok "a type red names the type class on its last line";; *) ko "type class: '$(last "$out")'";; esac
 out=$(BASE_FAIL=1 RETRY_FAIL=1 fgr); rc=$?
@@ -161,11 +164,11 @@ IFS=$'\t' read -r _ kind res _ sel < "$SG_STATE/gate-status" 2>/dev/null
 : > "$T/select.out"
 out=$(selrun); rc=$?
 [ $rc = 0 ] && ! /usr/bin/grep -q -- "-m pytest" "$T/argv.log" && /usr/bin/grep -q -- "-m ruff check squad tests" "$T/argv.log" && /usr/bin/grep -q -- "-m mypy squad" "$T/argv.log" && ok "an empty selection runs no pytest and still runs ruff and mypy" || ko "empty selection: rc $rc: '$(cat "$T/argv.log" 2>&1)'"
-/usr/bin/grep -q "selected 0 files" "$SG_STATE"/fast-gate-*.log && ok "an empty selection logs that it ran none" || ko "empty selection log: '$(cat "$SG_STATE"/fast-gate-*.log 2>&1)'"
+/usr/bin/grep -q "selected 0 files" "$SG_FAST_LOG_DIR"/fast-gate-*.log && ok "an empty selection logs that it ran none" || ko "empty selection log: '$(cat "$SG_FAST_LOG_DIR"/fast-gate-*.log 2>&1)'"
 printf 'tests/test_a.py\n' > "$T/select.out"
 out=$(selrun SG_TEST_SELECT=no); rc=$?
 [ $rc = 0 ] && /usr/bin/grep -qx -- "-m pytest $PYTEST_OPTS" "$T/argv.log" && ! /usr/bin/grep -q "squad.testselect" "$T/argv.log" && ok "SG_TEST_SELECT=no runs the whole battery without the selector" || ko "SG_TEST_SELECT=no: rc $rc: '$(cat "$T/argv.log" 2>&1)'"
-/usr/bin/grep -q "all: SG_TEST_SELECT=no" "$SG_STATE"/fast-gate-*.log && ok "SG_TEST_SELECT=no says so in the log" || ko "SG_TEST_SELECT=no log: '$(cat "$SG_STATE"/fast-gate-*.log 2>&1)'"
+/usr/bin/grep -q "all: SG_TEST_SELECT=no" "$SG_FAST_LOG_DIR"/fast-gate-*.log && ok "SG_TEST_SELECT=no says so in the log" || ko "SG_TEST_SELECT=no log: '$(cat "$SG_FAST_LOG_DIR"/fast-gate-*.log 2>&1)'"
 printf 'tests/test_a.py\ntests/test_b.py\n' > "$T/select.out"
 out=$(selrun PY_FAIL=1); rc=$?
 [ "$(cat "$T/retry.log" 2>/dev/null)" = "tests/test_a.py::test_one" ] && ok "the serial retry reruns only the failed test names" || ko "retry argv: rc $rc: '$(cat "$T/retry.log" 2>&1)' $out"
@@ -174,5 +177,56 @@ out=$(selrun PY_FAIL=1); rc=$?
 # real pytest, so every case sets one.
 /usr/bin/grep -qE 'SG_FAST_(CMD|RETRY_CMD)="\$T/' "$0" && ko "a fixture stub is executed directly, not through bash (#801)" || ok "every fixture stub runs through bash"
 /usr/bin/grep -qE '^fg\(\) \{.*SG_FAST_RETRY_CMD=' "$0" && ok "the base-fail case names its retry, and runs no real pytest" || ko "fg runs the real pytest retry (#801)"
+# (#885) The pytest tally and the code-quality reading print together in the log this run writes, the reading after the tally, and
+# the reading never changes the exit. Each case has its own state directory, so no earlier case's log can satisfy a check.
+q=$T/quality-none; mkdir -p "$q"
+out=$(cd "$R" && SG_STATE=$q SG_FAST_LOG_DIR=$q/logs SG_FAST_BASE=dev SG_FAST_CMD="echo '5 passed in 0.1s'" SG_FAST_RETRY_CMD=false bash "$d/fast-gate.sh" 2>&1); rc=$?
+lg=$(lgof "$(last "$out")")
+t=$(/usr/bin/grep -n "^fast-gate: pytest tally: 5 passed in 0.1s$" "$lg" 2>/dev/null | cut -d: -f1)
+qn=$(/usr/bin/grep -n "^quality: no changed squad module, skipped$" "$lg" 2>/dev/null | cut -d: -f1)
+[ $rc = 0 ] && [ -n "$t" ] && [ -n "$qn" ] && [ "$qn" -gt "$t" ] && ok "the tally and the quality reading land in one battery log, the reading after the tally, and the gate exits 0" || ko "tally beside reading: rc $rc, tally line '$t', reading line '$qn': $out $(cat "$lg" 2>&1)"
+
+# (#885) With a changed squad module and stub radon and mutmut first on PATH, both numbers print beside the tally in that log, and
+# each tool's argv is compared exactly. The stubs log to QARGV and answer with canned output.
+qb=$T/qbin; mkdir -p "$qb"
+cat > "$qb/radon" <<'S'
+#!/bin/bash
+echo "radon $*" >> "$QARGV"
+echo '{"squad/a.py": [{"name": "f", "complexity": 3}]}'
+S
+cat > "$qb/mutmut" <<'S'
+#!/bin/bash
+echo "mutmut $*" >> "$QARGV"
+case $1 in
+  run) mkdir -p mutants ;;
+  export-cicd-stats) mkdir -p mutants; echo '{"total": 4, "survived": 1, "killed": 3}' > mutants/mutmut-cicd-stats.json ;;
+esac
+S
+chmod +x "$qb/radon" "$qb/mutmut"
+$G -C "$R" checkout -q -b gui/quality dev; mkdir -p "$R/squad"; printf 'def f(x):\n    return x + 1\n' > "$R/squad/a.py"
+$G -C "$R" add -A; $G -C "$R" commit -q -m quality-work
+qs=$T/quality-numbers; mkdir -p "$qs"; : > "$T/qargv.log"
+out=$(cd "$R" && PATH="$qb:$PATH" QARGV="$T/qargv.log" SG_STATE=$qs SG_FAST_LOG_DIR=$qs/logs SG_FAST_BASE=dev SG_FAST_CMD="echo '5 passed in 0.1s'" SG_FAST_RETRY_CMD=false bash "$d/fast-gate.sh" 2>&1); rc=$?
+lg=$(lgof "$(last "$out")")
+ta=$(/usr/bin/grep -n "^fast-gate: pytest tally: 5 passed in 0.1s$" "$lg" 2>/dev/null | cut -d: -f1)
+ra=$(/usr/bin/grep -n "^quality: radon cc: 1 block in 1 changed module, mean CC 3.0, max CC 3 (squad/a.py::f)$" "$lg" 2>/dev/null | cut -d: -f1)
+ma=$(/usr/bin/grep -n "^quality: mutmut: 1 survived of 4 mutants in 1 changed function$" "$lg" 2>/dev/null | cut -d: -f1)
+[ "$(cat "$T/qargv.log")" = "radon cc -s -j squad/a.py
+mutmut run squad.a.x_f__mutmut_*
+mutmut export-cicd-stats" ] && argv_ok=1 || argv_ok=0
+[ $rc = 0 ] && [ $argv_ok = 1 ] && [ -n "$ta" ] && [ -n "$ra" ] && [ -n "$ma" ] && [ "$ta" -lt "$ra" ] && [ "$ra" -lt "$ma" ] && ok "stub radon and mutmut numbers print beside the tally in the battery log, in order, and the gate exits 0" || ko "numbers beside tally: rc $rc, argv ok $argv_ok, lines '$ta' '$ra' '$ma': $out $(cat "$lg" 2>&1)"
+# (#945) The gate's evidence must be readable to the child that ran it: the wall denies SG_STATE, so the gate keeps no evidence
+# there. A pass ends on one line that names the log, and a red names its log too; both logs sit outside the state directory,
+# and each run's log is its own, so two children at one short sha never write it at the same time.
+$G -C "$R" checkout -q gui/quality   # a branch whose suites pass, as the green case
+out=$(fg); rc=$?
+pg=$(lgof "$(last "$out")")
+[ $rc = 0 ] && case "$(last "$out")" in "fast-gate: pass "*) true;; *) false;; esac && ok "a pass ends on one line that says pass" || ko "pass line: rc $rc, last '$(last "$out")'"
+[ -n "$pg" ] && [ -f "$pg" ] && case "$pg" in "$SG_STATE"/*) ko "the pass names a log inside the state directory: $pg";; *) ok "the pass names its log outside the state directory";; esac
+out2=$(fg); pg2=$(lgof "$(last "$out2")")
+[ -n "$pg2" ] && [ "$pg2" != "$pg" ] && ok "each run writes its own log, so two runs at one short sha never share one" || ko "two runs share one log path: '$pg' and '$pg2'"
+out=$(BASE_FAIL=1 RETRY_FAIL=1 fg); rc=$?
+rg=$(lgof "$(last "$out")")
+[ $rc = 1 ] && [ -n "$rg" ] && [ -f "$rg" ] && case "$rg" in "$SG_STATE"/*) ko "a red names a log inside the state directory: $rg";; *) ok "a red names a log the child may read, outside the state directory";; esac
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 rm -rf "$T"; exit $fail

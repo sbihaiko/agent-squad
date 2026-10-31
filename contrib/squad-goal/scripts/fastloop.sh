@@ -15,12 +15,18 @@
 todos() { python3 "${here:-$(dirname "$0")}/issue_state.py" --hub-todos 2>/dev/null; }
 # A lane removes the pid file only when the file names it: the lane of a later start may own it by then (#527).
 mine() { [ "$(cat "$P" 2>/dev/null)" = "$$" ] && rm -f "$P"; }
+# load_sample: one line per beat in $SG_STATE/load.log, the UTC time then the 1, 5 and 15 minute load averages; nothing when unreadable.
+load_sample() {
+  local a b c l; l=$(sysctl -n vm.loadavg 2>/dev/null | tr -d '{}'); [ -n "$l" ] || l=$(cat /proc/loadavg 2>/dev/null)
+  read -r a b c _ <<<"$l"; [ -n "$a" ] && printf '%s LOAD %s %s %s\n' "$(date -u '+%F %T')" "$a" "$b" "$c" >> "$SG_STATE/load.log"
+}
 [ -n "${SG_FASTLOOP_ONCE:-}" ] || { echo $$ > "$P"; trap 'mine; exit 0' TERM INT; }; cc=
 while :; do
   t0=$(todos)   # the cards in Todo at the start of the beat: a card that arrives while the passes run still ends the wait at once
   # A lane whose supervisor died exits: else it runs beside the lane of the next watchd start, two of each pass a beat (#527).
   [ -n "${SG_FASTLOOP_ONCE:-}" ] || { [ "$PPID" != 1 ] && [ "$(ps -o ppid= -p $$ | tr -d ' ')" = "$PPID" ]; } || { mine; exit 0; }
   [ -n "${SG_FASTLOOP_ONCE:-}" ] || echo $$ > "$P"   # every beat: watch.sh reads this file to know the lane is up, and a missing one sent the cycle to run childcc inline (#513)
+  load_sample
   # $cc is the pass this lane started: a later beat starts none while it lives, and the childcc lock still bars every other pass.
   { [ -n "$cc" ] && kill -0 "$cc" 2>/dev/null; } || { bash "$here/single.sh" childcc python3 "$here/childcc.py" 2>&1 & cc=$!; }
   # Both go out detached: a pass ends in a squad start that runs for minutes, and it must not hold the beat. They are called bare, as watch.sh calls them,

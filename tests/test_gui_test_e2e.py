@@ -2333,6 +2333,8 @@ class _ScenarioGitHub:
 
     def __call__(self, op, **kw):
         self.calls.append((op, kw))
+        if op == "item_status":
+            return "Backlog"           # the parent is boarded in Backlog (#895)
         if op == "create_issue":
             self._next += 1
             return {"number": self._next, "id": 900 + self._next}
@@ -2370,12 +2372,12 @@ def test_1223_publishing_the_pilot_twice_updates_and_never_duplicates_a_case():
     d = _pilot_1223()
     plan = tts.build_plan(d, granularity="per-batch")
     gh = _ScenarioGitHub()
-    first = tts.publish(plan, gh)
+    first = tts.publish(plan, gh, board=True)
     nodes = len(plan["areas"]) + sum(len(a["containers"]) for a in plan["areas"])
     assert len(gh.of("create_issue")) == len(plan["issues"]) + nodes + 1
     assert len(gh.of("add_sub_issue")) == len(plan["issues"]) + nodes
     again = _ScenarioGitHub()
-    second = tts.publish(plan, again, saved=first["map"])
+    second = tts.publish(plan, again, saved=first["map"], board=True)
     assert again.of("create_issue") == [] and second["issues"] == first["issues"] and second["removed"] == []
 # --- to_test_scenario write-back (#1226): the committed run's results land on the pilot's issues ---------------
 # --- to_test_scenario (#1224): the pilot's case ids are covered by its own scenario ---------------
@@ -3202,6 +3204,8 @@ class _PublishGitHub:
 
     def __call__(self, op, **kw):
         self.calls.append((op, kw))
+        if op == "item_status":
+            return "Backlog"           # the parent is boarded in Backlog (#895)
         if op == "create_issue":
             self.creates += 1
             if self.fail_on_create and self.creates == self.fail_on_create:
@@ -3244,7 +3248,7 @@ def test_1225_the_committed_pilot_publishes_its_parent_and_links_every_case_nati
     script_path, plan = _pilot_1225()
     map_path = tmp_path / tts.issues_path(script_path).name
     gh = _PublishGitHub()
-    out = tts.publish(plan, gh, map_path=map_path)
+    out = tts.publish(plan, gh, map_path=map_path, board=True)
 
     assert len(plan["issues"]) >= 67
     labels = {kw["name"] for kw in gh.of("ensure_label")}
@@ -3268,12 +3272,12 @@ def test_1225_an_interrupted_pilot_publish_resumes_from_the_map_and_a_second_pub
     script_path, plan = _pilot_1225()
     map_path = tmp_path / tts.issues_path(script_path).name
     with pytest.raises(RuntimeError):
-        tts.publish(plan, _PublishGitHub(fail_on_create=5), map_path=map_path)
+        tts.publish(plan, _PublishGitHub(fail_on_create=5), map_path=map_path, board=True)
     saved = tts.read_issues(map_path)
     assert saved["parent"] and len(saved["cases"]) == 1      # the parent, an area, its container and one case made it
 
     resumed = _PublishGitHub(start=5000)
-    out = tts.publish(plan, resumed, map_path=map_path)
+    out = tts.publish(plan, resumed, map_path=map_path, board=True)
     assert len(resumed.of("create_issue")) == len(plan["issues"]) + _nodes(plan) + 1 - 4
     assert len(out["cases"]) == len(plan["issues"]) and out["removed"] == []
     assert len({case["number"] for case in out["cases"].values()}) == len(plan["issues"])
@@ -3285,7 +3289,7 @@ def test_1225_an_interrupted_pilot_publish_resumes_from_the_map_and_a_second_pub
         for container in area["containers"]:
             container["cases"] = [i for i in container["cases"] if i["id"] != last]
     again = _PublishGitHub(start=9000)
-    dropped = tts.publish(smaller, again, map_path=map_path)
+    dropped = tts.publish(smaller, again, map_path=map_path, board=True)
     assert again.of("create_issue") == []                     # the stub lists no sub-issues, so links are not asserted
     assert dropped["removed"] == [plan["issues"][-1]["id"]]
     assert "close" not in again.ops()                         # a removed case is reported, never closed

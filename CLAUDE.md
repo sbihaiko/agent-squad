@@ -40,7 +40,8 @@ ADRs and this file are never ledgers (see Design rules): no dates, counts, statu
   The CLI and both harness scripts call it and never build an `Engine`. A run keeps its record in its run folder. Guard: `tests/test_launch.py`.
 - **A child session writes only inside its worktree and never touches the live skill copy or the loop state** (`squad/sandbox.py`).
   `bypassPermissions` skips `can_use_tool`, so a PreToolUse hook on every adapter session denies the call with a reason and records `sandbox_deny`.
-  The janitor alerts when the live copy changes with no publish. Guard: `tests/test_sandbox.py`, `contrib/squad-goal/scripts/test-janitor-live-mtime.sh`.
+  The janitor alerts when the live copy changes with no publish. A child that runs the fast gate reads its result from one printed verdict line and a log outside the state directory, which the wall leaves readable.
+  Guard: `tests/test_sandbox.py`, `contrib/squad-goal/scripts/test-janitor-live-mtime.sh`, `contrib/squad-goal/scripts/test-fast-gate.sh`.
 - **A project settings file overlays the plugin defaults** (`docs/squad/defaults.yaml`, `squad/project_settings.py`).
   Order: plugin defaults, project file, roles, graph run block, node; only the project file may raise a default.
   `run_start` records its path and hash, and a resume refuses when it changed. Guard: `tests/test_project_settings.py`.
@@ -62,6 +63,7 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 - **A defect an agent finds is its own, whoever caused it and whenever it began** ([ADR-0133](docs/adr/0133-a-defect-an-agent-finds-is-its-own.md)). Guard: none yet; a draft.
 - **`/implement` works in its own worktree and lands in `dev` by a fast-forward push, with no pull request; commit and push are automatic** ([ADR-0116](docs/adr/0116-implement-in-a-worktree.md)). Guard: `tests/test_repo_hygiene.py`.
 - **Three branches: `dev` takes landings, `dev` reaches `stg` by one pull request, the owner promotes `stg` to `main`** ([ADR-0145](docs/adr/0145-a-work-branch-lands-in-dev-by-fast-forward.md)). Guard: `tests/test_no_pr_path.py`, `contrib/squad-goal/scripts/test-promote.sh`; the rest is a draft.
+- **A premise is checked, never assumed: a round proves what reading proves, probes what runs settle, asks the owner at most five; a named proxy answers when the owner is away; the owner wins** ([ADR-0155](docs/adr/0155-a-premise-is-checked-never-assumed.md)). Guard: `tests/test_premise_check.py`.
 
 ### Run engine
 
@@ -69,10 +71,11 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 - **`loop-bug` halts dispatch, never an approved wave's landing** ([ADR-0146](docs/adr/0146-a-loop-defect-is-fixed-outside-the-loop.md)). Guard: `test-autobug.sh`, `test-autofrontier-one-run.sh`, `test-childcc.sh`, `test-watch-land.sh`, `test-branchland.sh` in `contrib/squad-goal/scripts/`.
 - **Needs-human is not success and has its own exit code; its card keeps its column, marked frozen:owner** ([ADR-0029](docs/adr/0029-needs-human-exit-code.md)). Guard: `tests/test_verdict.py`, `tests/test_resume.py`, `tests/test_cli.py`, `contrib/squad-goal/scripts/test-janitor-disp-expiry.sh`.
 - **An interruptible write is atomic** ([ADR-0030](docs/adr/0030-atomic-writes.md)). Guard: `tests/test_record.py`.
-- **The full suite runs nightly in both modes, heavy included, in its own tree and lock, never the landing lock; a red record holds delivery while it names the dev tip** ([ADR-0153](docs/adr/0153-the-full-suite-runs-nightly-in-both-modes.md)). Guard: `contrib/squad-goal/scripts/test-nightly.sh`.
+- **Nightly, both modes, heavy included, in its own tree and lock; a red record holds delivery, naming the dev tip; a proof in flight or `SG_NIGHTLY_OFF` holds it** ([ADR-0153](docs/adr/0153-the-full-suite-runs-nightly-in-both-modes.md)). Guard: `contrib/squad-goal/scripts/test-nightly.sh`.
 - **A call has a deadline; a stuck agent is found without a caller** ([ADR-0051](docs/adr/0051-call-deadline-and-stuck-agent.md)). Guard: `tests/test_deadlines.py`, `tests/test_monitor.py`.
 - **A wedged run is killed, not merely logged** ([ADR-0051](docs/adr/0051-call-deadline-and-stuck-agent.md)). Guard: `tests/test_heartbeat.py`.
 - **A call or a loop stops on failed attempts that do not change, never on total turns or entries** ([ADR-0134](docs/adr/0134-stall-cap-counts-failures-without-evolution.md)). Guard: `tests/test_stall.py`, `tests/test_engine_skeleton.py`, `tests/test_sdk_adapter.py`.
+- **A deferral deadline requeues a child on one (tip, cause); machine holds, budget and unapproved run-owned children never count** ([ADR-0151](docs/adr/0151-a-review-streak-escalates.md)). Guard: `contrib/squad-goal/scripts/test-childcc.sh`, `contrib/squad-goal/scripts/test-janitor-ccdefer.sh`.
 - **Seven node kinds; a gate is never skipped; control is order-based** ([ADR-0100](docs/adr/0100-node-kinds-gate-control.md)). Guard: `tests/test_graph.py`, `tests/test_engine_skeleton.py`, `tests/test_each.py`.
 - **A node is one fresh session with a deadline and a declared workspace** ([ADR-0102](docs/adr/0102-node-is-one-fresh-session.md)). Guard: `tests/test_graph.py`, `tests/test_record.py`, `tests/test_engine_skeleton.py`.
 - **A node that passed commits its workspace, declared or the run-owned target, so a branch tip is the run's final state; the owner's checkout is never touched** ([ADR-0106](docs/adr/0106-run-option-graph-or-engine.md)). Guard: `tests/test_node_commit.py`.
@@ -86,7 +89,8 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 - **One model registry names every model; one resolver maps a raw spelling to a route; a chain is a list of registry ids** ([ADR-0147](docs/adr/0147-one-model-registry.md)). Guard: `tests/test_model_resolver_seam.py`, `tests/test_modelreg.py`.
 - **One writer per loop fact: the issue ledger is the one source, one transition function, a missing or corrupt ledger holds, a rearm is a floor** ([ADR-0149](docs/adr/0149-one-writer-per-loop-fact.md)). Guard: `tests/test_issue_ledger.py`, `test-issue-ledger.sh`; rest a draft.
 - **A run never holds conflicting siblings: no two children of one spec, no two issues that name the same file; checked before dispatch** ([ADR-0150](docs/adr/0150-a-run-never-holds-conflicting-siblings.md)). Guard: `contrib/squad-goal/scripts/test-autofrontier-one-run.sh`.
-- **A review streak escalates: three CHANGES go to needs-human, identical findings twice change the coder, an approval binds to its commit** ([ADR-0151](docs/adr/0151-a-review-streak-escalates.md)). Guard: `tests/test_review_streak.py`, `test-childcc.sh`, `tests/test_issue_ledger.py`; rest a draft.
+- **A review streak escalates: three CHANGES go to needs-human, identical findings twice change the coder, a repeat's fix round attacks the last fix's premise, an approval binds to its commit**
+  ([ADR-0151](docs/adr/0151-a-review-streak-escalates.md)). Guard: `tests/test_review_streak.py`, `test-childcc.sh`, `tests/test_issue_ledger.py`; rest a draft.
 
 ### Dashboard, editor and repository
 
@@ -153,6 +157,8 @@ An agent that needs `/to-tickets` runs `agent-to-tickets`. A door finds the glob
 A plugin update, a move or a removal then cannot break it silently, and `python3 -m squad.skillpath --check` reports drift.
 The door follows the skill it finds; where it would interview the Owner and the Owner is away, the panel answers (`/autonomy`).
 A door does not lift an owner-only action. Guard: `tests/test_agent_doors.py` (each door is symlinked, named here, and finds its global skill by name) and `tests/test_skillpath.py` (ADR-0018).
+`agent-premise-check` is the door to this repository's own `/premise-check` skill (ADR-0155): it names `.claude/skills/premise-check/SKILL.md` in the checkout, because there is no borrowed skill to find by name.
+Guard: `tests/test_premise_check.py`.
 
 ### Skill updates
 

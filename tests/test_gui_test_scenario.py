@@ -69,6 +69,8 @@ class FakeGitHub:
 
     def __call__(self, op, **kw):
         self.calls.append((op, kw))
+        if op == "item_status":
+            return "Backlog"           # the parent is boarded in Backlog (#895)
         if op == "issue_state":
             return self.states.get(kw["number"], {"state": "open", "verdict": None})
         if op == "create_issue":
@@ -180,7 +182,7 @@ def test_the_plan_lists_manual_cases_and_goal_cases_separately():
 def test_publish_creates_the_parent_and_one_sub_issue_per_case_and_links_them():
     plan = tts.build_plan(covered_script(), markdown=MARKDOWN)
     gh = FakeGitHub()
-    out = tts.publish(plan, gh)
+    out = tts.publish(plan, gh, board=True)
     created = gh.of("create_issue")
     assert [c["title"] for c in created][0] == "Test scenario: tiny"
     assert [c["title"] for c in created if "Test case" in c["title"]] == [
@@ -195,7 +197,7 @@ def test_publish_creates_the_parent_and_one_sub_issue_per_case_and_links_them():
 def test_publish_ensures_the_labels_it_applies_before_the_first_issue():
     plan = tts.build_plan(covered_script(), markdown=MARKDOWN)
     gh = FakeGitHub()
-    tts.publish(plan, gh)
+    tts.publish(plan, gh, board=True)
     ensured = [kw["name"] for kw in gh.of("ensure_label")]
     assert "Test-Case" in ensured and "ready-for-agent" in ensured and "wave:01" in ensured
     assert gh.ops().index("ensure_label") < gh.ops().index("create_issue")
@@ -213,7 +215,7 @@ def _run(results, **over):
 def _published():
     plan = tts.build_plan(covered_script(), markdown=MARKDOWN)
     gh = FakeGitHub()
-    return plan, tts.publish(plan, gh)
+    return plan, tts.publish(plan, gh, board=True)
 
 
 def test_a_passed_case_is_commented_and_closed():
@@ -254,7 +256,7 @@ def test_needs_review_pending_and_a_manual_cases_pending_are_never_a_bug():
     s["batches"][0]["steps"][0]["mode"] = "manual"        # the runner puts a manual step to a person: it ends `pending`
     plan = tts.build_plan(s, markdown=MARKDOWN)
     gh = FakeGitHub()
-    pub = tts.publish(plan, gh)
+    pub = tts.publish(plan, gh, board=True)
     again = FakeGitHub()
     out = tts.write_results(plan, _run([("HOME-01", "pending"), ("HOME-02", "needs review")]),
                             again, published=pub)
@@ -314,7 +316,7 @@ def test_a_case_with_no_result_in_the_run_is_reported_not_passed():
 def test_a_per_batch_plan_aggregates_its_steps_onto_the_batch_issue():
     plan = tts.build_plan(covered_script(), markdown=MARKDOWN, granularity="per-batch")
     gh = FakeGitHub()
-    pub = tts.publish(plan, gh)
+    pub = tts.publish(plan, gh, board=True)
     again = FakeGitHub()
     out = tts.write_results(plan, _run([("HOME-01", "passed"), ("HOME-02", "failed (x)"), ("LIB-01", "passed")]),
                             again, published=pub)
@@ -326,7 +328,7 @@ def test_a_per_batch_plan_aggregates_its_steps_onto_the_batch_issue():
 
 def test_the_scenario_stops_after_publishing_when_the_run_command_does_not_exist():
     gh = FakeGitHub()
-    out = tts.run_scenario(MARKDOWN, covered_script(), gh, run_command=None)
+    out = tts.run_scenario(MARKDOWN, covered_script(), gh, run_command=None, board=True)
     assert out["run"] is None and out["reason"] == "run command unavailable"
     assert out["published"]["parent"] == 101          # the parent is the first issue created
     assert gh.ops().count("create_issue") == 1 + 3 * 3          # the scenario, then an area, a container, a case each
@@ -337,16 +339,37 @@ def test_the_scenario_publishes_then_runs_and_writes_every_verdict_back():
     report = _run([("HOME-01", "passed"), ("HOME-02", "passed"), ("LIB-01", "failed (x)")],
                   bug={"filed": True, "url": "https://example.test/bug/9"})
     gh, cmd = FakeGitHub(), _cmd(report)
-    out = tts.run_scenario(MARKDOWN, covered_script(), gh, run_command=cmd)
+    out = tts.run_scenario(MARKDOWN, covered_script(), gh, run_command=cmd, board=True)
     assert out["counts"]["failed"] == 1 and out["bug"] == "https://example.test/bug/9"
     assert "file_bug" not in gh.ops()
     assert [c["script"] for c in cmd.calls] == ["tiny"]
 
 
+def test_a_run_scenario_on_a_board_less_runner_never_asks_for_a_status():
+    """The run's publish takes `board=False` from its caller: a runner with no board never answers item_status."""
+    class BoardlessGitHub(FakeGitHub):
+        def __call__(self, op, **kw):
+            if op == "item_status":
+                raise AssertionError("a board-less publish must not read a card's Status")
+            return super().__call__(op, **kw)
+
+    gh = BoardlessGitHub()
+    out = tts.run_scenario(MARKDOWN, covered_script(), gh, run_command=None, board=False)
+    assert out["run"] is None and out["published"]["parent"] == 101
+    assert "item_status" not in gh.ops()
+
+
+def test_run_scenario_refuses_to_guess_the_board_when_the_caller_does_not_name_one():
+    gh = FakeGitHub()
+    with pytest.raises(TypeError, match="board"):
+        tts.run_scenario(MARKDOWN, covered_script(), gh, run_command=None)
+    assert gh.calls == []
+
+
 def test_the_scenario_reports_a_gap_and_publishes_nothing():
     gh = FakeGitHub()
     out = tts.run_scenario(MARKDOWN, script(batches=[{"id": "b", "setup": [], "teardown": [],
-                                                      "steps": [_step("NOPE-01")]}]), gh, run_command=None)
+                                                      "steps": [_step("NOPE-01")]}]), gh, run_command=None, board=True)
     assert out["gaps"]["missing_in_script"] == ["HOME-01", "HOME-02", "LIB-01"]
     assert gh.calls == []
 

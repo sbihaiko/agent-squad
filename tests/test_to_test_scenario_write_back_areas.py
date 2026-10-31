@@ -49,7 +49,7 @@ def block(issue):
 def tree(tmp_path):
     plan = tts.build_plan(script(batches=[batch("aa-x", 3), batch("bb-x", 2)]))
     gh, path = RunGitHub(), tmp_path / "m.gui-test.issues.json"
-    out = tts.publish(plan, gh, map_path=path)
+    out = tts.publish(plan, gh, map_path=path, board=True)
     return gh, path, out["map"]["areas"]
 
 

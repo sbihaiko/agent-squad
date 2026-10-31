@@ -207,6 +207,8 @@ printf '{"review_models":["claude:s[1m]"],"review_timeout_seconds_by_model":{"cl
 rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"*
 CLAUDE_SLEEP=4 GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 >/dev/null 2>&1
 /usr/bin/grep -q 'after 2s' "$T/st/cq/"*mtimeout* 2>/dev/null && ok "review_timeout_seconds_by_model: a [1m] chain id takes its timeout without the suffix (#643)" || ko "per-model timeout missed claude:s[1m]: $(cat "$T/st/cq/"* 2>/dev/null | head -3)"
+# #925: a timed-out try is a MODEL_TIMEOUT only; a MODEL_FAIL beside it quoted the CLI's stderr notice as the cause.
+/bin/ls "$T/st/cq" | /usr/bin/grep -q mfail && ko "#925 a timeout also queued a MODEL_FAIL: $(cat "$T/st/cq/"*mfail* 2>/dev/null)" || ok "#925 a timeout queues no MODEL_FAIL"
 printf '{"review_models":["claude:nt"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
 printf '{"type":"message","stop_reason":"max_tokens","content":[{"type":"text","text":"VERDICT: APPROVE"}],"usage":{"input_tokens":900,"output_tokens":8000}}' > "$CURL_REPLY"; rm -f "$T/st/review-fix_1-x".*
 GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 >/dev/null 2>&1; rc=$?

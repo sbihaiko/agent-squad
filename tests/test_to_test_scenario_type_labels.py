@@ -47,7 +47,7 @@ class LabelGitHub(TreeGitHub):
 def published(tmp_path):
     plan = tts.build_plan(script(batches=[batch("aa-x", 2), batch("bb-x", 1)]))
     gh, path = LabelGitHub(), tmp_path / "m.gui-test.issues.json"
-    tts.publish(plan, gh, map_path=path)
+    tts.publish(plan, gh, map_path=path, board=True)
     return plan, gh, path
 
 
@@ -77,14 +77,14 @@ def test_republish_replaces_old_labels_keeps_others_and_the_second_pass_is_a_no_
                            for name in issue["labels"] if name != "Test-Group"] + (["custom"] if "Test-Area" in issue["labels"] else [])
         if issue["title"].startswith("📋"):
             issue["labels"] = ["gui-test-run", "custom"]
-    tts.publish(plan, gh, map_path=path)
+    tts.publish(plan, gh, map_path=path, board=True)
     by = gh.by_title()
     assert all(not (OLD & set(labels)) for labels in by.values())
     assert all(len(kind(labels)) == 1 for labels in by.values())
     assert all("custom" in labels for title, labels in by.items() if title.startswith("⚪ Area") or title.startswith("📋"))
     before = json.dumps(gh.by_title(), sort_keys=True)
     gh.calls.clear()
-    tts.publish(plan, gh, map_path=path)
+    tts.publish(plan, gh, map_path=path, board=True)
     assert gh.of("set_labels") == []
     assert json.dumps(gh.by_title(), sort_keys=True) == before
 

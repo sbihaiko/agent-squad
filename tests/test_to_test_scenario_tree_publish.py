@@ -25,6 +25,8 @@ class TreeGitHub:
 
     def __call__(self, op, **kw):
         self.calls.append((op, kw))
+        if op == "item_status":
+            return "Backlog"           # the parent is boarded in Backlog (#895)
         if op == "create_issue":
             self.creates += 1
             if self.fail_on_create and self.creates == self.fail_on_create:
@@ -79,7 +81,7 @@ def case_numbers(gh, plan):
 @pytest.mark.heavy
 def test_a_281_case_plan_publishes_16_areas_and_their_containers_top_down(tmp_path):
     plan, gh = pad_plan(), TreeGitHub()
-    out = tts.publish(plan, gh, map_path=tmp_path / "m.json")
+    out = tts.publish(plan, gh, map_path=tmp_path / "m.json", board=True)
     assert len(plan["issues"]) == 281 and len(plan["areas"]) == 16
     assert gh.creates == 1 + 16 + 16 + 281
     scenario = out["parent"]
@@ -92,13 +94,13 @@ def test_a_281_case_plan_publishes_16_areas_and_their_containers_top_down(tmp_pa
         assert gh.kids[container] == [cases[i["cases"][0]] for c in area["containers"] for i in c["cases"]]
     assert not set(cases.values()) & set(gh.kids[scenario])     # a record is never linked to the scenario
     assert sum(len(v) for v in gh.kids.values()) == 16 + 16 + 281
-    assert len(gh.of("board")) == 1 and gh.of("board") == [{"number": scenario}]
+    assert len(gh.of("board")) == 1 and gh.of("board") == [{"number": scenario, "status": "Backlog"}]
 
 
 @pytest.mark.heavy
 def test_the_map_gains_layout_areas_and_each_cases_area_and_container(tmp_path):
     plan, gh, path = pad_plan(), TreeGitHub(), tmp_path / "m.json"
-    out = tts.publish(plan, gh, map_path=path)
+    out = tts.publish(plan, gh, map_path=path, board=True)
     saved = json.loads(path.read_text(encoding="utf-8"))
     assert saved["layout"] == "areas" and set(saved["areas"]) == {a["key"] for a in plan["areas"]}
     first = saved["areas"]["k01"]
@@ -128,9 +130,9 @@ def test_an_interrupted_publish_resumes_with_no_duplicate_issue_or_link(tmp_path
     plan, path = pad_plan(), tmp_path / "m.json"
     gh = TreeGitHub(**flaky)
     with pytest.raises(RuntimeError):
-        tts.publish(plan, gh, map_path=path)
+        tts.publish(plan, gh, map_path=path, board=True)
     gh.fail_on_create = gh.fail_on_link = None
-    tts.publish(plan, gh, map_path=path)                         # the same GitHub: its issues and links survive
+    tts.publish(plan, gh, map_path=path, board=True)                         # the same GitHub: its issues and links survive
     assert len(gh.issues) == 1 + 16 + 16 + 281                   # the failed create made nothing
     titles = [i["title"] for i in gh.issues.values()]
     assert len(titles) == len(set(titles)) + 15                  # the 16 containers share one title, nothing else
@@ -140,7 +142,7 @@ def test_an_interrupted_publish_resumes_with_no_duplicate_issue_or_link(tmp_path
 @pytest.mark.heavy
 def test_a_republish_keeps_emoji_dashboards_and_record_state(tmp_path):
     plan, gh, path = pad_plan(), TreeGitHub(), tmp_path / "m.json"
-    out = tts.publish(plan, gh, map_path=path)
+    out = tts.publish(plan, gh, map_path=path, board=True)
     area = out["map"]["areas"]["k02"]["number"]
     case = out["map"]["cases"]["K02X-001"]["number"]
     gh.issues[area]["title"] = "❌ " + tts.title_base(gh.issues[area]["title"])
@@ -148,7 +150,7 @@ def test_a_republish_keeps_emoji_dashboards_and_record_state(tmp_path):
     gh.issues[out["parent"]]["body"] += "\n" + DASHBOARD
     gh.issues[case].update(title="✅ " + tts.title_base(gh.issues[case]["title"]), state="closed")
     before = len(gh.calls)
-    again = tts.publish(plan, gh, map_path=path)
+    again = tts.publish(plan, gh, map_path=path, board=True)
     assert [op for op, _ in gh.calls[before:] if op in ("create_issue", "add_sub_issue")] == []
     assert gh.issues[area]["title"].startswith("❌ Area: k02") and DASHBOARD in gh.issues[area]["body"]
     assert DASHBOARD in gh.issues[out["parent"]]["body"] and gh.issues[out["parent"]]["body"].count("dashboard:start") == 1
@@ -161,9 +163,9 @@ def test_a_moved_case_is_reparented_and_its_map_entry_rewritten(tmp_path):
         return tts.build_plan(script(batches=[batch("k01-x", 2), batch("k02-y", 2, area=area)]))
 
     gh, path = TreeGitHub(), tmp_path / "m.json"
-    first = tts.publish(plan_with("k02"), gh, map_path=path)
+    first = tts.publish(plan_with("k02"), gh, map_path=path, board=True)
     moved = first["map"]["cases"]["K02Y-001"]
-    out = tts.publish(plan_with("k01"), gh, map_path=path)
+    out = tts.publish(plan_with("k01"), gh, map_path=path, board=True)
     target = out["map"]["areas"]["k01"]["containers"][0]["number"]
     assert out["map"]["cases"]["K02Y-001"]["area"] == "k01" and out["map"]["cases"]["K02Y-001"]["container"] == target
     assert out["map"]["cases"]["K02Y-001"]["number"] == moved["number"]
@@ -174,8 +176,8 @@ def test_a_moved_case_is_reparented_and_its_map_entry_rewritten(tmp_path):
 
 def test_an_area_dropped_from_the_plan_is_reported_and_left_open(tmp_path):
     gh, path = TreeGitHub(), tmp_path / "m.json"
-    tts.publish(tts.build_plan(script(batches=[batch("k01-x", 1), batch("k02-y", 1)])), gh, map_path=path)
-    out = tts.publish(tts.build_plan(script(batches=[batch("k01-x", 1)])), gh, map_path=path)
+    tts.publish(tts.build_plan(script(batches=[batch("k01-x", 1), batch("k02-y", 1)])), gh, map_path=path, board=True)
+    out = tts.publish(tts.build_plan(script(batches=[batch("k01-x", 1)])), gh, map_path=path, board=True)
     assert out["removed_areas"] == ["k02"]
     assert not [kw for kw in gh.calls if kw[0] in ("close", "remove_sub_issue")]
     assert "k02" in out["map"]["areas"] and out["removed"] == ["K02Y-001"]
@@ -184,11 +186,11 @@ def test_an_area_dropped_from_the_plan_is_reported_and_left_open(tmp_path):
 @pytest.mark.heavy
 def test_a_lost_map_adopts_the_existing_containers_and_cases_instead_of_creating_them(tmp_path):
     plan, gh, path = pad_plan(), TreeGitHub(), tmp_path / "m.json"
-    first = tts.publish(plan, gh, map_path=path)
+    first = tts.publish(plan, gh, map_path=path, board=True)
     lost = {"parent": first["parent"], "boarded": True,
             "areas": {k: {"number": v["number"]} for k, v in first["map"]["areas"].items()}}
     path.write_text(json.dumps(lost), encoding="utf-8")
-    again = tts.publish(plan, gh, map_path=path)
+    again = tts.publish(plan, gh, map_path=path, board=True)
     assert gh.creates == 1 + 16 + 16 + 281
     assert again["map"]["areas"]["k03"]["containers"] == first["map"]["areas"]["k03"]["containers"]
     assert again["map"]["cases"] == first["map"]["cases"]
@@ -196,7 +198,7 @@ def test_a_lost_map_adopts_the_existing_containers_and_cases_instead_of_creating
 
 def test_a_dry_run_counts_what_it_would_do_and_writes_nothing(tmp_path):
     plan, gh, path = pad_plan(), TreeGitHub(), tmp_path / "m.json"
-    out = tts.publish(plan, gh, map_path=path, dry_run=True)
+    out = tts.publish(plan, gh, map_path=path, dry_run=True, board=True)
     assert gh.calls == [] and not path.exists()
     assert out["counts"] == {"create": 1 + 16 + 16 + 281, "link": 16 + 16 + 281, "move": 0, "update": 0}
 

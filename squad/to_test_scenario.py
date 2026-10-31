@@ -13,7 +13,8 @@ Two outside dependencies are injected, and they are the only ones this module ha
 - **the GitHub runner** — a callable `runner(op, **kwargs)`; the ops are `ensure_label`, `create_issue`,
   `update_issue`, `add_sub_issue`, `remove_sub_issue`, `list_sub_issues`, `set_title`, `issue_body`,
   `search_open_bug`, `comment`, `close`, `reopen`, `issue_state`, `board` and `file_bug`. `rest_runner`
-  builds the real one on `gh api` (REST, never GraphQL: a scenario publishes dozens of sub-issues). This module reads
+  builds the real one on `gh api` (REST, except `item_status`, which reads GraphQL: a scenario publishes dozens of
+  sub-issues). This module reads
   `issue_state` to know whether a verdict changed and whether a case is closed, and to read a record's numeric `id`
   when the map holds none (#1565), and it **never** calls `file_bug`: the
   run command owns the one bug a red run files, and the write-back only links it.
@@ -26,14 +27,14 @@ records that hash on the step it produced. A case whose id is there but whose te
 to conversion for that case only, so an edited case is never silently ignored.
 
 Publishing (#1225) is idempotent, resumable and paced. It takes one injected **GitHub runner** — a callable
-`github(op, **kwargs)` whose ops are `ensure_label`, `create_issue`, `update_issue`, `add_sub_issue` and `board` —
-and it writes a map beside the script (`<script>.gui-test.issues.json`: the parent's number, and per case id the
+`github(op, **kwargs)` whose ops are `ensure_label`, `create_issue`, `update_issue`, `add_sub_issue`, `board` and
+`item_status` — and it writes a map beside the script (`<script>.gui-test.issues.json`: the parent's number, and per case id the
 issue number and the case's content hash) after every issue it creates. An interrupted publish, or a second machine,
 resumes from that map and creates nothing twice; publishing again updates what the map knows, and a case the script
 no longer covers is reported in `removed` and left open, because only a person closes a case. A secondary rate limit
 is not a failure: the runner raises `RateLimited` and the publish waits it out (the API's own `retry_after` when it
 gives one, an exponential back-off otherwise) and retries the same call. `rest_runner` builds the real runner on
-`gh api` (REST, never GraphQL: a scenario publishes hundreds of sub-issues).
+`gh api` (REST, except `item_status`, which reads GraphQL: a scenario publishes hundreds of sub-issues).
 
 `build_plan` serves both halves: with the script alone (plus `markdown=`, `script_path=`, `purpose=`) it is the #1223
 plan from the script; with a parsed scenario and its script it is the #1224 plan, gated on the content hash coverage.
@@ -61,6 +62,7 @@ from squad.gui_test_report import EVIDENCE_FAMILIES, WITHHELD
 CASE_ID = re.compile(r"[A-Z][A-Z0-9]*-\d+$")
 CASE_LABEL = "Test-Case"
 TRIAGE_LABEL = "ready-for-agent"
+PARENT_STATUS = "Backlog"     # the parent's card, set before its triage label is added (#895)
 INITIAL_STATUS = "To triage"
 SETUP_ROLES = {"setup", "recovery"}
 AUTO_MODES = {"automated"}
@@ -107,6 +109,14 @@ class RateLimited(Exception):
     def __init__(self, retry_after=None):
         self.retry_after = retry_after
         super().__init__("secondary rate limit" + (f", retry after {retry_after}s" if retry_after else ""))
+
+
+class StatusUnread(ScenarioError):
+    """The board never read a card back with the Status it was written with: no triage label is added (#895)."""
+
+    def __init__(self, number, status):
+        self.number, self.status = number, status
+        super().__init__([f"the Status of issue #{number} never read back as {status!r}; ready-for-agent was not added"])
 
 
 def case_hash(precondition, steps, expected):
@@ -740,7 +750,7 @@ def _dry_counts(plan, state):
 
 
 def publish(plan, github, *, script_path=None, map_path=None, saved=None, sleep=None, attempts=4, backoff=1.0,
-            dry_run=False):
+            dry_run=False, status_reads=4, board):
     """Publish the plan as a tree: the scenario, its areas, each area's containers, each container's case records.
 
     Idempotent and resumable through the map beside the script, flushed after every issue created and every link
@@ -758,6 +768,9 @@ def publish(plan, github, *, script_path=None, map_path=None, saved=None, sleep=
 
     `dry_run` returns the counts to create, link, move and update, asks GitHub nothing and writes nothing. A plan with
     no `areas` is published flat, every case a sub-issue of the scenario.
+
+    `board` says whether a project board is set. With one, the parent's Status is read back before its triage label;
+    with none there is no card to read, so the label is added right after the create (#895).
     """
     if script_path is None and map_path is None and saved:
         path = None
@@ -839,17 +852,37 @@ def publish(plan, github, *, script_path=None, map_path=None, saved=None, sleep=
     updated, created, issues = [], [], {}
     areas_done = {"created": [], "updated": []}
     containers_created = []
+    # #895: a new card is Todo the moment it joins the board, and Todo plus ready-for-agent is the dispatch signal. So the
+    # parent is created and boarded in Backlog without the triage label, and the label is added only after that write.
+    # A known parent keeps the labels it has and is not read back: its owner may have moved the card since (#895).
+    gated = [x for x in plan["parent"]["labels"] if x != TRIAGE_LABEL]
     if state["parent"]:
         body = _with_dashboard(plan["parent"]["body"], call("issue_body", number=state["parent"]))
-        refresh(state["parent"], plan["parent"]["title"], body, plan["parent"]["labels"], None)
+        refresh(state["parent"], plan["parent"]["title"], body, gated, None)
         updated.append("parent")
     else:
-        made = create(plan["parent"]["title"], plan["parent"]["body"], plan["parent"]["labels"])
+        made = create(plan["parent"]["title"], plan["parent"]["body"], gated)
         state["parent"] = made["number"]
         flush()                     # known from here on, so an interrupt below never buys a second parent
     if not state["boarded"]:
-        call("board", number=state["parent"])
+        call("board", number=state["parent"], status=PARENT_STATUS)
         state["boarded"] = True
+        state["triage_pending"] = TRIAGE_LABEL in plan["parent"]["labels"]   # kept until the label is written: a resume adds it
+        flush()
+    if state.get("triage_pending"):
+        if board:
+            # #895 follow-up: the board is eventually consistent, so the card's Status is read back, bounded, before the
+            # triage label that makes it dispatchable. A Status that never reads back adds no label and is named.
+            delay, read = backoff, 0
+            while call("item_status", number=state["parent"]) != PARENT_STATUS:
+                read += 1
+                if read >= status_reads:
+                    raise StatusUnread(state["parent"], PARENT_STATUS)
+                wait(delay)
+                delay *= 2
+        refresh(state["parent"], plan["parent"]["title"], call("issue_body", number=state["parent"]) or "",
+                plan["parent"]["labels"], None)
+        state["triage_pending"] = False
         flush()
     scenario = state["parent"]
 
@@ -1604,7 +1637,7 @@ def _publish_command(args, github):
     runner = github if github is not None else rest_runner(args.repo, project=args.board)
     try:
         plan = build_plan(scenario, script, granularity=args.granularity)
-        out = publish(plan, runner, script_path=args.script, dry_run=args.dry_run)
+        out = publish(plan, runner, script_path=args.script, dry_run=args.dry_run, board=bool(args.board))
     except ScenarioError as err:
         print(json.dumps({"ok": False, "published": False, "problems": err.problems}, indent=2))
         return 1
@@ -1706,7 +1739,7 @@ def start_run(script_path, *, command=None, out_dir=None, adapter="mesen-gui", b
 
 
 def run_scenario(markdown, script, github, run_command=None, granularity="per-case", script_path=None,
-                 purpose=None, title=None, saved=None, parent=None, map_path=None):
+                 purpose=None, title=None, saved=None, parent=None, map_path=None, *, board):
     """Publish the scenario and, when a run command exists, run it and write every verdict back.
 
     Without a run command the scenario stops after publishing and says so: a result is never simulated (#1222 is the
@@ -1719,7 +1752,7 @@ def run_scenario(markdown, script, github, run_command=None, granularity="per-ca
     plan = _plan_from_script(script, markdown, granularity, script_path, purpose, title, parent)
     if saved is None and parent:
         saved = {"parent": parent}
-    published = publish(plan, github, script_path=script_path, map_path=map_path, saved=saved)
+    published = publish(plan, github, script_path=script_path, map_path=map_path, saved=saved, board=board)
     if run_command is None:
         return {"gaps": gaps, "plan": plan, "published": published, "run": None,
                 "reason": "run command unavailable"}
@@ -1751,6 +1784,9 @@ def _rate_limit(exc):
 
 def rest_runner(repo, shell=_sh, project=None, bug_helper=None, initial_status=INITIAL_STATUS):
     """The real GitHub runner: REST through `gh api` (number, not GraphQL), plus the repo's label and board helpers.
+
+    `item_status` is the one op that reads GraphQL: a card's Status is on the issue's own project items, which REST
+    does not list by board.
 
     `project` is the board to add every issue to, e.g. `users/sbihaiko/projects/1`; without it the board op is a no-op.
     `bug_helper` is the path of the repo's own bug helper (`scripts/report-bug.sh` in the checkout), the one route a
@@ -1838,9 +1874,36 @@ def rest_runner(repo, shell=_sh, project=None, bug_helper=None, initial_status=I
             item = json.loads(call(["gh", "project", "item-add", number, "--owner", owner, "--url", url,
                                     "--format", "json"]))
             if kw.get("status") is not None:     # a caller that names a status wants it set on the new item
-                call(["gh", "project", "item-edit", "--id", item["id"], "--field", "Status",
-                      "--text", kw["status"], "--project-id", project])
+                # A Status is a single-select field: the write names its field id and its option id, never `--text`.
+                pid = json.loads(call(["gh", "project", "view", number, "--owner", owner, "--format", "json"]))["id"]
+                fields = json.loads(call(["gh", "project", "field-list", number, "--owner", owner, "--format", "json",
+                                          "--limit", "100"]))["fields"]
+                field = next((f for f in fields if f.get("name") == "Status"), None)
+                if field is None:
+                    raise ValueError(f"no Status field on {project}")
+                option = next((o for o in field.get("options") or [] if o.get("name") == kw["status"]), None)
+                if option is None:
+                    raise ValueError(f"no Status option {kw['status']!r} on {project}")
+                call(["gh", "project", "item-edit", "--id", item["id"], "--project-id", pid,
+                      "--field-id", field["id"], "--single-select-option-id", option["id"]])
             return item
+        if op == "item_status":
+            # The Status the issue's own card reads back now, on the named board: an issue's project items, not a list
+            # of the board's items (a board over 1000 items would miss the card). None while the board does not list it.
+            if not project:
+                raise ValueError("item_status needs a project board: pass --board")
+            owner, name = repo.split("/", 1)
+            query = ("query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){issue(number:$number)"
+                     "{projectItems(first:50){nodes{project{url} fieldValueByName(name:\"Status\")"
+                     "{... on ProjectV2ItemFieldSingleSelectValue{name}}}}}}}")
+            # owner and name are strings (-f); only the issue number is typed (-F).
+            found = json.loads(call(["gh", "api", "graphql", "-f", f"query={query}", "-f", f"owner={owner}",
+                                     "-f", f"name={name}", "-F", f"number={kw['number']}"]))
+            nodes = (((found.get("data") or {}).get("repository") or {}).get("issue") or {}).get("projectItems") or {}
+            want = "/" + str(project).strip("/")
+            hit = next((n for n in nodes.get("nodes") or [] if str((n.get("project") or {}).get("url") or "").endswith(want)),
+                       None)
+            return None if hit is None else (hit.get("fieldValueByName") or {}).get("name")
         if op == "file_bug":
             if not bug_helper:
                 raise ValueError("file_bug needs bug_helper (the repo's scripts/report-bug.sh path)")

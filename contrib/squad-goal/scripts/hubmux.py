@@ -104,10 +104,10 @@ VERBATIM = ("/api/sessions",)   # a transcript's text quotes paths: the routing 
 
 
 def rewrite(body, slug):
-    """A repository's page calls its own API: every absolute /api/, /test/, /dash/ and /mobile/ reference gains the /<slug> prefix, in the page,
+    """A repository's page calls its own API: every absolute /api/, /test/, /dash/, /held/, /ended/ and /mobile/ reference gains the /<slug> prefix, in the page,
     the JSON it fetches, the web app manifest and the service worker (a test card's link is `/test/<id>` there; without the slug the path read `test` as a repository)."""
     for q in (b'"', b"'", b"`"):
-        for p in (b"/api/", b"/test/", b"/dash/", b"/held/", b"/mobile/"):
+        for p in (b"/api/", b"/test/", b"/dash/", b"/held/", b"/ended/", b"/mobile/"):
             body = body.replace(q + p, q + b"/" + slug.encode() + p)
     return body
 

@@ -3,7 +3,9 @@
 # Keeps watch.sh (the 90 s cycle), fastloop.sh (childcc every SG_FAST_INTERVAL s) and cqflush.sh (the comment queue) alive without a Monitor task: a supervisor in its own session restarts them if they die.
 # Events go to $SG_STATE/watch.log (read them with watchtail.sh); pid in $SG_STATE/watchd.pid.
 . "$(dirname "$0")/env.sh"; P="$SG_STATE/watchd.pid"; L="$SG_STATE/watch.log"; me="$(cd "$(dirname "$0")" && pwd)/watchd.sh"
-alive() { [ -s "$P" ] && pid=$(cat "$P") && /bin/ps -p "$pid" -ww -o command= 2>/dev/null | grep -qF "$me run"; }
+# The slot is the one fact a supervisor holds (#932): watchd.pid is what a reader looks at, and watchd.lock/pid is what a
+# second `run` is refused by. alive() reads the slot, so a pid file a dying duplicate removed no longer reads as "not running".
+alive() { pid=$(cat "$SG_STATE/watchd.lock/pid" 2>/dev/null); [ -n "$pid" ] || { [ -s "$P" ] && pid=$(cat "$P"); }; [ -n "$pid" ] && /bin/ps -p "$pid" -ww -o command= 2>/dev/null | grep -qF "$me run"; }
 case "${1:-status}" in
   start) alive && { echo "watchd already running pid=$pid"; exit 0; }
     [ -f "$L" ] && [ "$(wc -c < "$L")" -gt 5000000 ] && mv "$L" "$L.old"
@@ -15,12 +17,24 @@ case "${1:-status}" in
     python3 -I -c 'import subprocess,sys;subprocess.Popen(["bash",sys.argv[1],"run"],start_new_session=True,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)' "$me"
     for _ in 1 2 3 4 5 6 7 8 9 10; do alive && { echo "watchd started pid=$pid"; exit 0; }; sleep 1; done
     echo "watchd failed to start" >&2; exit 1;;
-  run) echo $$ > "$P"; child=
-    trap '[ -n "$child" ] && kill "$child" 2>/dev/null; rm -f "$P"; exit 0' TERM INT
+  run) LK="$SG_STATE/watchd.lock"; child=
+    # One supervisor per state directory (#932). `mkdir` is the claim: two runs that both passed `start`'s `alive` check
+    # before either wrote the pid cannot both hold it, and the pid inside says who does. A slot whose pid is not a live
+    # `watchd.sh run` is stale -- the owner killed a supervisor with -9, or its trap never ran -- so the next run takes it
+    # over instead of staying down. Only the holder writes watchd.pid, and only the holder removes the slot.
+    if ! mkdir "$LK" 2>/dev/null; then
+      h=$(cat "$LK/pid" 2>/dev/null)
+      if [ -n "$h" ] && /bin/ps -p "$h" -ww -o command= 2>/dev/null | grep -qF "$me run"; then
+        printf 'WATCHD run %s refused: supervisor %s holds the loop\n' "$$" "$h" >> "$L"; exit 0
+      fi
+      rm -rf "$LK"; mkdir "$LK" 2>/dev/null || { printf 'WATCHD run %s refused: the slot was claimed again\n' "$$" >> "$L"; exit 0; }
+    fi
+    printf '%s\n' "$$" > "$LK/pid"; printf '%s\n' "$$" > "$P"
+    trap '[ -n "$child" ] && kill "$child" 2>/dev/null; rm -f "$P"; [ "$(cat "$LK/pid" 2>/dev/null)" = "$$" ] && rm -rf "$LK"; exit 0' TERM INT
     # The stop reaches every pass of both lanes, not the two lanes alone: a stop from inside the group signals this
     # supervisor only (#489), and a lane's foreground pass (childcc and its reviews) would run on and spend (#529). The
     # supervisor ignores the signal itself and sends it to its whole group.
-    fast=; cq=; trap 'trap "" TERM INT; kill -TERM -- "-$$" 2>/dev/null; rm -f "$P" "$SG_STATE/fastloop.pid"; exit 0' TERM INT
+    fast=; cq=; trap 'trap "" TERM INT; kill -TERM -- "-$$" 2>/dev/null; rm -f "$P" "$SG_STATE/fastloop.pid"; [ "$(cat "$LK/pid" 2>/dev/null)" = "$$" ] && rm -rf "$LK"; exit 0' TERM INT
     while :; do
       # the fast lane (childcc every SG_FAST_INTERVAL s) lives beside watch.sh, so a slow cycle step never delays a dispatch
       { [ -n "$fast" ] && kill -0 "$fast" 2>/dev/null; } || { bash "$(dirname "$me")/fastloop.sh" >> "$L" 2>&1 & fast=$!; }

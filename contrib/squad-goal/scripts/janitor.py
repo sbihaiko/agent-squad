@@ -326,6 +326,12 @@ def free_reaped(f, i):
             p.unlink(missing_ok=True)
         for p in leases: p.unlink(missing_ok=True)
     return marks
+def ccdefer_owner(fname):   # the run a `ccdefer-<run>-<child>` marker belongs to: the longest known run name that prefixes it. A child's
+    # own name may carry dashes, and one run's name may only start with another's, so the marker is never read as another run's (#945).
+    # active-runs.txt holds the run's folder, which launch.py writes absolute, and the marker carries the folder's name: compare that name.
+    return next((m for m in sorted({pathlib.Path(x).name for x in names}, key=len, reverse=True) if fname.startswith(f"ccdefer-{m}-")), None)
+
+
 for r in names:
     f = folder(r)
     if not f.exists():   # a child worktree can take its run folder with it; no missing folder owns an issue
@@ -353,6 +359,14 @@ for r in names:
         if i["idle"] > 3600:
             for q, (_, c) in procs.items():
                 if "dashboard_server" in c and str(f) in c: kill(q, f"dashboard of finished run {n}")
+        # A run with its verdict is over, so a deferral marker it left names a wait no later pass can end: childcc writes
+        # auto/ccdefer-<run>-<child> while a finished run's child still waits, and the wave reads it as a wait still owed
+        # (run-20261030-184206-f63e6b waited 2h30, #945, #931). The marker of a run that ended is dropped here, and named.
+        mks = [p for p in (st / "auto").iterdir() if ccdefer_owner(p.name) == n] if (st / "auto").is_dir() else []
+        if mks:
+            say(f"CCDEFER-DROPPED {n}: {len(mks)} deferral marker(s) of a finished run dropped ({', '.join(sorted(p.name for p in mks))}); the run is over, so no wave waits on it")
+            if not dry:
+                for p in mks: p.unlink(missing_ok=True)
         if i["landed"]: landed_n |= req_issues(f)
         keep.append(r); continue
     # A live run is one whose own session is inside its folder: the run's process, or a call it started. A helper the session
@@ -428,6 +442,10 @@ def ledger():   # the issue ledger module beside this script (ADR-0149); -I keep
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
     import issue_ledger
     return issue_ledger
+def not_planned(reason):   # the close-reason vocabulary board_columns owns (#921): one copy, so the passes never drift
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+    from board_columns import not_planned as verdict
+    return verdict(reason)
 _entered = None
 def entered():   # {(run, issue)} of each child of repo0 that entered a wave, read from the ledgers once a pass
     global _entered
@@ -495,7 +513,7 @@ for n, i in live.items():
     if mk.exists() or not i["acc"] or i["idle"] > 3600: continue
     infos = {x: issue_info(x) for x in sorted(i["acc"])}
     if any(v[0] != "closed" for v in infos.values()): continue
-    dup = all(v[1] == "not_planned" or v[2].startswith("[duplicate") for v in infos.values())
+    dup = all(not_planned(v[1]) or v[2].startswith("[duplicate") for v in infos.values())
     nums = ", ".join("#" + x for x in infos)
     if dup:
         say(f"RUN-ON-CLOSED-ISSUES {n}: every issue ({nums}) is closed as a duplicate / not planned; stopping the run")
@@ -657,9 +675,9 @@ def terminal_facts(n, col):   # the facts a terminal comment states (#245), or N
     if "wontfix" in issue_labels(n):
         ok, who = door_read(f"repos/{repo0}/issues/{n}/events?per_page=100", '[.[] | select(.event == "labeled" and .label.name == "wontfix") | .actor.login] | last // ""')
         return {"who": who, "why": "labelled wontfix"} if ok else None
-    if state == "closed" and reason in ("not_planned", "duplicate"):
+    if state == "closed" and not_planned(reason):
         ok, who = door_read(f"repos/{repo0}/issues/{n}/events?per_page=100", CLOSER)
-        return {"who": who, "why": "closed as a duplicate (superseded by another issue)" if reason == "duplicate" else "closed as not planned"} if ok else None
+        return {"who": who, "why": "closed as a duplicate (superseded by another issue)" if str(reason).strip().lower() == "duplicate" else "closed as not planned"} if ok else None
     return None
 def run_summary(n):   # the run that worked issue n as a child, as text for its terminal comment (#559): the run id, the other children, the verdict and the dashboard command; "" when no run held it
     best = None
@@ -827,14 +845,17 @@ def reconcile_board():
             if shipped and "wontfix" in olabels[n]: set_expected(n, "Abandoned", "issue carries wontfix", rank=95)
             # A spec is written and not scheduled, so the floor opens it in Backlog, and the owner starts it (ADR-0142). The fold
             # moves it forward only. Its rank sits above the floor and below every rule a run, a marker or a branch raises.
-            if "spec" in olabels[n]:
-                # A spec's column is a fold over its sub-issues' cards (spec_fold.py): the relation came with the one read above and
-                # the cards are read once per pass, so the fold adds no call. The close rule below closes the spec issue itself.
+            is_spec = "spec" in olabels[n]
+            if is_spec or (_kids.get(n) and RUN_PARENT not in olabels[n]):
+                # A parent's column is a fold over its sub-issues' cards (spec_fold.py): the relation came with the one read above and
+                # the cards are read once per pass, so the fold adds no call. A parent that is not a spec takes the Doing lift only
+                # (#942): the spec vocabulary's Closed and Abandoned are never written to it.
                 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the fold sits beside this script; -I keeps the script's directory off sys.path
                 import spec_fold
                 have_cards = cards(proj)[1]
                 col, reverted = spec_fold.fold([have_cards.get(k, "") for k in _kids.get(n, [])], have_cards.get(n, ""))
-                if col: set_expected(n, col, "spec folds over its sub-issues" + (": a child reopened, the card keeps its column" if reverted else ""), rank=15)   # forward only: below Doing the fold writes nothing, and the spec keeps the owner's column (#550)
+                if col and (is_spec or col == spec_fold.DOING): set_expected(n, col, ("spec" if is_spec else "parent") + " folds over its sub-issues" + (": a child reopened, the card keeps its column" if reverted else ""), rank=15)   # forward only: below Doing the fold writes nothing, and the spec keeps the owner's column (#550)
+            if is_spec:
                 # The owner starts a spec by moving its card to Todo, and its children follow it there (#589): a child in Backlog,
                 # or with no column yet, goes to Todo. Forward only: a child past Backlog keeps its column (ADR-0143). The fold
                 # writes nothing below Doing, so the two rules never fight; every rule a run, a label or a closure raises outranks it.
@@ -864,7 +885,7 @@ def reconcile_board():
     for n in sorted(set(expected) | (set(olabels) if oans else set()), key=int):   # every open issue, as when the floor named each one: a rule below can still move a card forward
         state, reason, _ = issue_info(n)
         if state == "closed": set_expected(n, "Done", "issue is closed", "", "", 90)
-        if shipped and state == "closed" and reason in ("not_planned", "duplicate"): set_expected(n, "Abandoned", f"issue is closed as {reason}", "", "", 95)   # not delivered, by decision (spec #132)
+        if shipped and state == "closed" and not_planned(reason): set_expected(n, "Abandoned", f"issue is closed as {reason}", "", "", 95)   # not delivered, by decision (spec #132)
         labels = issue_labels(n)
         if labels & {"needs-owner", "needs-ratification"}: set_expected(n, "Blocked", "issue is blocked by owner label", "", "", 100)
         if n not in specs and str(n) in named_in_land(): set_expected(n, "Code Complete", "a commit in the landing branch names the issue", "", "", 50)   # a hand fix in dev: the floor never moves it back (ADR-0143, #519). Never a spec: a commit that names one is its child's (#665)
@@ -935,7 +956,7 @@ def reconcile_board():
         note = terminal_comment(have, facts)
         if note is None:
             reason = (facts or {}).get("reason")   # the read's own answer: a close by decision belongs to Abandoned, and a terminal card is not moved (ADR-0143, #517)
-            if reason in ("not_planned", "duplicate"):
+            if not_planned(reason):
                 say(f"TERMINAL-NO-CONDITION #{n}: settled in {have}, but the issue is closed as {reason}; its condition is Abandoned, and a terminal card is not moved")
             else:
                 say(f"TERMINAL-NO-CONDITION #{n}: settled in {have} with no comment, and its condition could not be read")

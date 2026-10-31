@@ -4,7 +4,9 @@ Children run with bypassPermissions, so the wall is a PreToolUse hook on every s
 session drives the real hook through the adapter's own options: no stub of the hook itself, no SDK, no spend.
 """
 import os
+import subprocess
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import pytest
 
@@ -189,3 +191,31 @@ def test_a_migrate_with_no_path_names_the_live_file_as_its_reason(tmp_path):
     ws.mkdir()
     reason = _migrate_reason(ws, "python3 -m squad.modelreg migrate --dry-run", {"HOME": str(home)}, home)
     assert reason and str((home / ".claude" / "skills").resolve()) in reason, reason
+
+
+def test_a_child_can_read_the_fast_gate_result_without_naming_the_state_dir(tmp_path):
+    """#945: the gate kept its only evidence in SG_STATE, and the wall denies that name to the child that ran the gate, so
+    the child could not verify its own gate. With no SG_FAST_LOG_DIR set, the gate now prints its verdict and names a log in
+    the default directory outside the state dir, and the child may read exactly that log; the wall still denies the state."""
+    scripts = Path(__file__).resolve().parent.parent / "contrib" / "squad-goal" / "scripts"
+    home, state, repo, tmp = tmp_path / "h", tmp_path / "state", tmp_path / "wt", tmp_path / "tmp"
+    repo.mkdir()
+    tmp.mkdir()
+    git = ["git", "-c", "user.email=a@b", "-c", "user.name=t"]
+    subprocess.run([*git, "init", "-q", "-b", "dev"], cwd=repo, check=True)
+    (repo / "a.txt").write_text("base\n")
+    subprocess.run([*git, "add", "-A"], cwd=repo, check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "base"], cwd=repo, check=True)
+    env = {**os.environ, "HOME": str(home), "SG_STATE": str(state), "SQUAD_CAPS_DIR": str(tmp_path / "caps"),
+           "TMPDIR": str(tmp), "SG_FAST_BASE": "dev", "SG_FAST_CMD": "true", "SG_FAST_RETRY_CMD": "false",
+           "SG_SERIAL_HELD": ""}
+    env.pop("SG_FAST_LOG_DIR", None)                                 # the production default, not a test override
+    wall = sandbox.deny_reason("Bash", {"command": "cat $SG_STATE/gate-status"}, str(repo), env=env, home=str(home))
+    assert wall and "$SG_STATE" in wall, wall                        # the wall stands: the state dir is not the child's
+    out = subprocess.run(["bash", str(scripts / "fast-gate.sh")], cwd=repo, env=env, capture_output=True, text=True)
+    assert out.returncode == 0, out.stdout + out.stderr
+    last = [line for line in out.stdout.splitlines() if line.strip()][-1]
+    assert last.startswith("fast-gate: pass "), out.stdout          # the verdict is a line the child reads, not a file it may not open
+    log = Path(last.rsplit("(log ", 1)[1].removesuffix(")"))
+    assert log.is_file() and not log.resolve().is_relative_to(state.resolve()), last
+    assert sandbox.deny_reason("Bash", {"command": f"cat {log}"}, str(repo), env=env, home=str(home)) is None

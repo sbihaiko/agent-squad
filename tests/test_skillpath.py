@@ -231,6 +231,15 @@ def test_every_door_target_and_every_vendored_skill_counts_as_borrowed():
     assert vendored and vendored <= b
 
 
+def test_a_door_to_a_skill_of_this_repository_is_not_a_borrowed_name():
+    """`agent-premise-check` opens `.claude/skills/premise-check/SKILL.md` in the checkout, so no `~/.claude/skills` copy is
+    owed for it: demanding one made `check` call a file the repository ships a missing install, and every gate went red."""
+    targets = sp.door_targets(ROOT)
+    assert "premise-check" not in targets, "a repository's own skill is not borrowed"
+    assert "premise-check" in sp.shipped(ROOT), "the skill it opens is still shipped by the repository"
+    assert "to-tickets" in targets, "a door to a skill outside the repository is still borrowed"
+
+
 def test_every_command_the_workflow_map_names_is_registered():
     text = (ROOT / "docs" / "skill-workflow-map.md").read_text()
     named = set(re.findall(r"(?<![\w/.\-])/([a-z][a-z0-9-]*)(?![\w/.\-]*[/.]\w)", text))
@@ -286,6 +295,7 @@ def test_on_this_machine_every_command_the_ask_matt_router_names_is_registered_a
 
 
 @LIVE
+@pytest.mark.heavy   # it hashes eight skill trees on disk: 0.8 s idle, 2.3 s on a loaded box, over the serial line
 def test_on_this_machine_the_vendored_copy_matches_the_skills_it_was_built_from():
     if any(sp.resolve(n) is None for n in sp.vendored(ROOT)):
         pytest.skip("a vendored skill does not resolve here; the test above says which")

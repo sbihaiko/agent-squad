@@ -68,7 +68,7 @@ def test_a_100_record_flat_map_migrates_100_reparented_the_rest_created_and_layo
     scenario = flat_scenario(gh, plan, path)
     flat_numbers = set(gh.kids[scenario])
     before = gh.creates
-    out = tts.publish(plan, gh, map_path=path)
+    out = tts.publish(plan, gh, map_path=path, board=True)
     moves = [kw for kw in gh.of("add_sub_issue") if kw.get("replace_parent")]
     assert len(moves) == KNOWN and {gh.issues[n]["id"] for n in flat_numbers} == {kw["sub"] for kw in moves}
     assert gh.creates - before == 16 + 16 + (281 - KNOWN)
@@ -87,7 +87,7 @@ def test_the_layout_is_written_last_so_an_interrupted_migration_is_still_flat(tm
     flat_scenario(gh, plan, path)
     gh.fail_on_create = gh.creates + 40                 # dies while it creates the cap's leftovers
     with pytest.raises(RuntimeError):
-        tts.publish(plan, gh, map_path=path)
+        tts.publish(plan, gh, map_path=path, board=True)
     assert "layout" not in json.loads(path.read_text(encoding="utf-8"))
 
 
@@ -101,9 +101,9 @@ def test_an_interrupted_migration_resumes_with_no_duplicate_issue_or_link(tmp_pa
     else:
         gh.fail_on_link = gh.links + 140
     with pytest.raises(RuntimeError):
-        tts.publish(plan, gh, map_path=path)
+        tts.publish(plan, gh, map_path=path, board=True)
     gh.fail_on_create = gh.fail_on_link = None
-    out = tts.publish(plan, gh, map_path=path)
+    out = tts.publish(plan, gh, map_path=path, board=True)
     assert len(gh.issues) == 1 + KNOWN + 16 + 16 + (281 - KNOWN)
     assert sum(len(v) for v in gh.kids.values()) == 16 + 16 + 281
     assert len(gh.kids[out["parent"]]) == 16
@@ -116,7 +116,7 @@ def test_the_records_move_before_the_leftovers_are_created(tmp_path):
     plan, gh, path = pad_plan(), TreeGitHub(), tmp_path / "m.json"
     flat_scenario(gh, plan, path)
     mark = len(gh.calls)
-    tts.publish(plan, gh, map_path=path)
+    tts.publish(plan, gh, map_path=path, board=True)
     ops = [(op, kw) for op, kw in gh.calls[mark:] if op in ("create_issue", "add_sub_issue")]
     last_move = max(n for n, (op, kw) in enumerate(ops) if kw.get("replace_parent"))
     titles = {f"⚪ {i['title']}" for i in plan["issues"]}
@@ -128,7 +128,7 @@ def test_a_dry_run_of_a_flat_map_counts_the_move_and_the_create_and_writes_nothi
     plan, gh, path = pad_plan(), TreeGitHub(), tmp_path / "m.json"
     flat_scenario(gh, plan, path)
     mark, text = len(gh.calls), path.read_text(encoding="utf-8")
-    out = tts.publish(plan, gh, map_path=path, dry_run=True)
+    out = tts.publish(plan, gh, map_path=path, dry_run=True, board=True)
     assert len(gh.calls) == mark and path.read_text(encoding="utf-8") == text
     assert out["counts"]["move"] == KNOWN and out["counts"]["create"] == 16 + 16 + (281 - KNOWN)
 
@@ -140,7 +140,7 @@ def test_a_full_parent_migrates_because_the_areas_are_linked_after_the_records_m
     scenario = flat_scenario(gh, plan, path)
     flat_numbers = set(gh.kids[scenario])
     mark = len(gh.calls)
-    out = tts.publish(plan, gh, map_path=path)
+    out = tts.publish(plan, gh, map_path=path, board=True)
     saved = json.loads(path.read_text(encoding="utf-8"))
     assert saved["layout"] == "areas" and len(saved["cases"]) == 281
     assert len(gh.kids[scenario]) == 16 and not flat_numbers & set(gh.kids[scenario])
@@ -157,11 +157,11 @@ def test_an_interrupted_full_parent_migration_resumes_and_links_the_areas_last(t
     scenario = flat_scenario(gh, plan, path)
     gh.fail_on_create = gh.creates + 40                 # dies among the cap's leftovers
     with pytest.raises(RuntimeError):
-        tts.publish(plan, gh, map_path=path)
+        tts.publish(plan, gh, map_path=path, board=True)
     assert "layout" not in json.loads(path.read_text(encoding="utf-8"))
     gh.fail_on_create = None
     mark = len(gh.calls)
-    tts.publish(plan, gh, map_path=path)
+    tts.publish(plan, gh, map_path=path, board=True)
     saved = json.loads(path.read_text(encoding="utf-8"))
     links = [kw for op, kw in gh.calls[mark:] if op == "add_sub_issue"]
     assert [kw["parent"] for kw in links[-16:]] == [scenario] * 16
@@ -179,13 +179,13 @@ def test_a_resumed_migration_places_every_record_when_the_map_holds_no_id_and_th
     scenario = flat_scenario(gh, plan, path, ids=False)
     flat = [case["number"] for case in json.loads(path.read_text(encoding="utf-8"))["cases"].values()]
     with pytest.raises(RuntimeError):
-        tts.publish(plan, gh, map_path=path)
+        tts.publish(plan, gh, map_path=path, board=True)
     held = json.loads(path.read_text(encoding="utf-8"))
     away = {kid for parent, kids in gh.kids.items() if parent != scenario for kid in kids if kid in flat}
     assert "layout" not in held and len(away) == 1 and len(gh.kids[scenario]) == KNOWN - 1
     assert not any(case.get("id") or case.get("container") for case in held["cases"].values())
     gh.die_after_moves = None
-    tts.publish(plan, gh, map_path=path)
+    tts.publish(plan, gh, map_path=path, board=True)
     saved = json.loads(path.read_text(encoding="utf-8"))
     assert saved["layout"] == "areas" and len(saved["cases"]) == 281
     assert all(case["container"] for case in saved["cases"].values())
@@ -202,7 +202,7 @@ def test_a_resume_asks_the_issue_itself_when_no_parent_in_hand_still_holds_the_r
     stray = gh("create_issue", title="a parent the plan does not know", body="", labels=[])
     gh("add_sub_issue", parent=stray["number"], sub=gh.issues[loose]["id"], replace_parent=True)
     assert loose not in gh.kids[scenario] and loose in gh.kids[stray["number"]]
-    tts.publish(plan, gh, map_path=path)
+    tts.publish(plan, gh, map_path=path, board=True)
     saved = json.loads(path.read_text(encoding="utf-8"))
     assert saved["layout"] == "areas" and len(saved["cases"]) == 281
     assert sum(len(v) for v in gh.kids.values()) == 16 + 16 + 281 and not gh.kids[stray["number"]]

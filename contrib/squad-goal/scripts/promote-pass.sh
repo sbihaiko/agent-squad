@@ -28,13 +28,26 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   # stands, so the suite is not measured against the next wave landing. Its bound is the gate lock's own (SERIAL_HOLD_SECONDS),
   # and the trap removes it on exit, INT and TERM, so a stopped proof leaves nothing behind.
   printf '%s %s\n' "$(date +%s)" "$$" > "$state/promote-reserve.$$" && mv "$state/promote-reserve.$$" "$state/promote-reserve"
-  trap 'rm -f "$state/promote-reserve"' EXIT INT TERM
+  # The proof samples the load while it runs, not only at the start: a red taken with the box over its bound is no proof at all,
+  # so it writes no status and no marker and the same tip is retried on a quieter pass (ADR-0018 stays whole: a red taken under
+  # the bound is a real defect). The sample file is named for this process and removed with the reserve.
+  samples=$state/promote-load.$$
+  ( while :; do sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}' | tr -d '{}' >> "$samples"; sleep 10; done ) & mon=$!
+  trap 'kill "$mon" 2>/dev/null; rm -f "$state/promote-reserve" "$samples"' EXIT INT TERM
   [ "$(g rev-parse HEAD)" = "$tip" ] || { mark "$tip" "not promoted: the clean tree is not at the tip"; exit 1; }
   py=${SG_GATE_PY:-${SG_CHECKOUT:+$SG_CHECKOUT/.venv/bin/python}}; [ -x "$py" ] || py=python3
   suite=${SG_PROMOTE_SUITE:-"$py -m ruff check squad tests && $py -m mypy squad && $py -m pytest -p no:deepeval -n ${SG_PROMOTE_WORKERS:-$(sg_battery_workers)} && $py -m pytest -p no:deepeval -p no:xdist"}
   out=$state/promote-suite-${tip:0:12}.log
+  cores2=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 1); lim2=${SG_PROMOTE_LOAD_LIMIT:-$cores2}
   if ! (cd "$tree" && bash -c "$suite") > "$out" 2>&1; then
-    bash "$d/gate.sh" --status full fail "$tip"; mark "$tip" "not promoted: the full suite failed ($out)"; exit 1; fi
+    kill "$mon" 2>/dev/null; wait "$mon" 2>/dev/null
+    read -r peak mean < <(awk '{ if ($1 + 0 > p) p = $1 + 0; s += $1 + 0; n++ } END { printf "%d %.2f", p, (n ? s / n : 0) }' "$samples" 2>/dev/null)
+    peak=${peak:-0}; mean=${mean:-0}
+    # The sample is a fact about the run, never a verdict: the suite is itself the load, so a threshold on this number cannot
+    # tell a loaded box from a working one. A red stays a red (ADR-0018): the peak is written beside it so the reader can see
+    # whether the box was fighting the suite, and the guard at the start is what keeps the proof off a busy machine.
+    bash "$d/gate.sh" --status full fail "$tip"; mark "$tip" "not promoted: the full suite failed ($out), peak load $peak on $cores2 cores, mean $mean"; exit 1; fi
+  kill "$mon" 2>/dev/null; wait "$mon" 2>/dev/null
   bash "$d/gate.sh" --status full pass "$tip"
   o=$(gh_send -X POST "repos/$SG_REPO/statuses/$tip" -f state=success -f "context=$ctx" -f "description=full suite, both modes, local") \
     || { mark "$tip" "not promoted: the commit status write failed: $(printf '%s' "$o" | tail -1)"; exit 1; }
@@ -57,8 +70,28 @@ cores=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 1)
 limit=${SG_PROMOTE_LOAD_LIMIT:-$cores}
 load1=$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}' | tr -d '{}')
 load1=${load1:-$(cut -d' ' -f1 /proc/loadavg 2>/dev/null)}; load1=${load1:-0}
-if /usr/bin/grep -q . "$live" 2>/dev/null || awk -v l="$load1" -v m="$limit" 'BEGIN { exit !(l + 0 >= m + 0) }'; then
-  l="promote-pass: $tip not proven: machine loaded (load $load1 on $cores cores, limit $limit, $(/usr/bin/grep -c . "$live" 2>/dev/null || echo 0) live runs)"
+# A listed run is live while its own record moves, or while it has no verdict yet (#944): the ledger keeps a run with a verdict
+# until its issue closes, and a failed run leaves its issue open, so reading the file's line count held every proof on a busy
+# loop and stg fell further behind dev each hour. A line the pass cannot resolve is still read as live, the safe way.
+mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
+now=$(date +%s); idle=${SG_PROMOTE_LIVE_IDLE:-1200}; nlive=0
+while IFS= read -r r; do
+  [ -n "$r" ] || continue
+  [ -d "$r" ] || { nlive=$((nlive + 1)); continue; }
+  f=$r/record.jsonl
+  [ -f "$f" ] || { nlive=$((nlive + 1)); continue; }
+  /usr/bin/grep -q '"verdict"' "$f" 2>/dev/null || { nlive=$((nlive + 1)); continue; }
+  [ $((now - $(mtime "$f"))) -lt "$idle" ] && nlive=$((nlive + 1))
+done < "$live" 2>/dev/null
+# A live run is not a reason to wait: the line count was a proxy for load, and the load is measured below, directly, and again
+# while the suite runs. A proxy that never opens held every proof on a busy loop and froze stg while dev took landings all day
+# (#944). Two facts do still refuse the tick: the memory left on the box, and a nightly that already owns the machine -- two full
+# suites at once saturate memory before either shows in the load average.
+memfree=$(vm_stat 2>/dev/null | awk '/Pages free/ { gsub(/\./, "", $3); f = $3 } /Pages inactive/ { gsub(/\./, "", $3); i = $3 } END { print int((f + i) * 16384 / 1048576) }')
+memfree=${memfree:-99999}; memmin=${SG_PROMOTE_MEM_MIN_MB:-512}
+nightly=$state/locks/nightly
+if awk -v l="$load1" -v m="$limit" 'BEGIN { exit !(l + 0 >= m + 0) }' || [ "$memfree" -lt "$memmin" ] || [ -d "$nightly" ]; then
+  l="promote-pass: $tip not proven: machine loaded (load $load1 on $cores cores, limit $limit, $memfree MB free, nightly $([ -d "$nightly" ] && echo held || echo free), $nlive runs alive)"
   echo "$(date -u +%FT%TZ) $l" >> "$log"; echo "$l"; exit 0
 fi
 [ -d "$tree/.git" ] || { mkdir -p "$tree" && g init -q . && g remote add origin "$remote"; } || exit 1

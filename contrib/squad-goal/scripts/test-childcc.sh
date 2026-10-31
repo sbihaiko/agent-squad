@@ -74,7 +74,7 @@ echo "$*" >> "$WAVE_CALLS"
 [ "$3" = 5600 ] && { echo "WAVE STOP #$3: requeued 3 times, so it is not dispatched again: x"; exit 1; }   # the requeue cap stopped it
 echo "WAVE gui/$3 entered (#$3)"
 W
-export WAVE_CALLS=$T/wave.calls WAVE_FAIL=$T/wave.fail; : > "$WAVE_CALLS"
+export WAVE_CALLS=$T/wave.calls WAVE_FAIL=$T/wave.fail WAVE_GATE_HOLD=$T/wave.gatehold WAVE_REQUEUE_FAIL=$T/wave.requeuefail WAVE_REQUEUE_ERR=$T/wave.requeueerr WAVE_NEEDS_HUMAN=$T/wave.needshuman; : > "$WAVE_CALLS"
 lq() { # issue: the head the run requeued it on, from its ledger (the old auto/requeued- marker, ADR-0149)
   python3 "$T/issue_ledger.py" requeued "x/y#$1" "$2" 2>/dev/null; }
 lqset() { python3 "$T/issue_ledger.py" requeue "x/y#$1" "$2" "$3" >/dev/null 2>&1; }
@@ -413,12 +413,13 @@ echo "$* $(git rev-parse HEAD)" >> "$FIX_DIR/cr.calls"
 CR
 cat > "$T/wave.sh" <<'W'
 #!/bin/bash
-[ "$1" = expired ] && exit 1    # the wave's age cap: not reached here, and a read that writes nothing
+[ "$1" = expired ] && { [ -e "$WAVE_CALLS.expired-$2" ]; exit; }   # the age cap: a case marks the run's wave expired
 echo "$*" >> "$WAVE_CALLS"
-[ "$1" = requeue ] && { echo "WAVE REQUEUE #$2: $3"; exit 0; }
+[ -e "$WAVE_GATE_HOLD" ] && [ "$1" = enter ] && { echo "WAVE HOLD #$3: the gate lock is held by pid 999; the child enters on a later pass"; exit 1; }
+[ "$1" = requeue ] && { [ -e "$WAVE_REQUEUE_FAIL" ] && { echo "WAVE STOP #$2: already frozen, so it is not dispatched again: $3"; exit 0; }; [ -e "$WAVE_NEEDS_HUMAN" ] && { echo "WAVE NEEDS-HUMAN #$2: already stopped, so it is not dispatched again: $3"; exit 0; }; [ -e "$WAVE_REQUEUE_ERR" ] && exit 1; echo "WAVE REQUEUE #$2: $3"; exit 0; }
 k=$(git symbolic-ref --quiet --short HEAD | tr / _); h=$(git rev-parse HEAD)
 [ -s "$SG_STATE/review-$k.md" ] || { echo "WAVE HOLD #$3: no review of $k yet: a child never enters a wave unreviewed"; exit 1; }
-[ "$(cat "$SG_STATE/review-$k.base" 2>/dev/null)" = "wave/$1" ] || { echo "WAVE HOLD #$3: the review of $k was read against '$(cat "$SG_STATE/review-$k.base" 2>/dev/null)', not wave/$1"; exit 1; }
+[ "$(cat "$SG_STATE/review-$k.base" 2>/dev/null)" = "wave/$2" ] || { echo "WAVE HOLD #$3: the review of $k was read against '$(cat "$SG_STATE/review-$k.base" 2>/dev/null)', not wave/$2"; exit 1; }
 [ "$(cat "$SG_STATE/review-$k.sha" 2>/dev/null)" = "$h" ] || { echo "WAVE HOLD #$3: the review of $k read $(cut -c1-9 "$SG_STATE/review-$k.sha" 2>/dev/null), not HEAD ${h:0:9}"; exit 1; }
 head -1 "$SG_STATE/review-$k.md" | /usr/bin/grep -q 'VERDICT: APPROVE' || { echo "WAVE HOLD #$3: the review of $k did not approve it: $(head -1 "$SG_STATE/review-$k.md")"; exit 1; }
 echo "WAVE x entered (#$3)"
@@ -503,19 +504,118 @@ out=$(lpass pick); rc=$?
 [ ! -s "$T/cr.calls" ] && [ ! -s "$T/fix.calls" ] && ok "neither run-owned child is reviewed or fixed by childcc" || ko "reviews '$(cat "$T/cr.calls")', fix '$(cat "$T/fix.calls")'"
 [ "$rc" = 3 ] && ok "the child its run did not approve holds the pass, so the wave waits for it" || ko "pick: exit $rc: $out"
 
-# A finished run's child whose run approved no head and whose tip did not move is held by its run for ever (#808): the
-# deferral carries a deadline. On the sixth pass on one unchanged (run, child, tip) it escalates once: one queued comment
-# naming the run, child, branch and sha, and one alerts.log line. Each deferral line is logged once per change, not per pass.
-export GH_NUMS="6400:Doing"; orun dfr 6400 hold >/dev/null; h=$(/usr/bin/git -C "$T/co/runs/dfr/ws/target-c" rev-parse HEAD)
-br=$(/usr/bin/git -C "$T/co/runs/dfr/ws/target-c" symbolic-ref --quiet --short HEAD); rm -f "$T/st/alerts.log" "$T"/st/cq/*ccdefer*; : > "$T/dfr.out"; : > "$WAVE_CALLS"
-for i in 1 2 3 4 5; do lpass dfr >> "$T/dfr.out"; done
-[ -z "$(ls "$T"/st/cq/*#6400-ccdefer-* 2>/dev/null)" ] && ok "a deferral does not escalate before its sixth pass" || ko "escalated before its deadline"
-lpass dfr >> "$T/dfr.out"; lpass dfr >> "$T/dfr.out"
-cq=$(ls "$T"/st/cq/*#6400-ccdefer-* 2>/dev/null)
-[ "$(printf '%s\n' $cq | /usr/bin/grep -c .)" = 1 ] && ok "a deferral escalates once, on its sixth pass" || ko "escalations: '$cq'"
-[ -n "$cq" ] && /usr/bin/grep -q "dfr" "$cq" && /usr/bin/grep -qF "$br" "$cq" && /usr/bin/grep -q "$h" "$cq" && ok "the escalation names the run, the child, the branch and the sha" || ko "escalation text: $(cat $cq 2>/dev/null)"
-[ "$(/usr/bin/grep -c 'CHILDCC DEFERRED.* dfr c' "$T/st/alerts.log" 2>/dev/null)" = 1 ] && ok "the escalation writes one alerts.log line" || ko "alerts.log: $(cat "$T/st/alerts.log" 2>/dev/null)"
-[ "$(/usr/bin/grep -c 'RUN-OWNED #6400' "$T/dfr.out")" = 1 ] && ok "the run-owned hold is logged once for an unchanged tip" || ko "RUN-OWNED logged $(/usr/bin/grep -c 'RUN-OWNED #6400' "$T/dfr.out") times"
-[ "$(/usr/bin/grep -c 'CHILDCC DEFERRED' "$T/dfr.out")" = 1 ] && ok "the deferral line is logged once for an unchanged tip" || ko "DEFERRED logged $(/usr/bin/grep -c 'CHILDCC DEFERRED' "$T/dfr.out") times"
+# A deferral is diagnosable: every pass names each child it leaves and the cause, one line per child (#931). A child a
+# finished run never approved is held by missing review evidence, and ADR-0151 rule 5 says that hold is not a requeue: the
+# wave's age cap owns it. So the pass names it every time and never requeues it, and the cap is what frees the wave.
+dpass() { echo "$T/co/runs/$1" > "$T/st/active-runs.txt"; (cd "$T/co" && SG_BOARD_VOCAB=shipped python3 "$T/childcc.py.run" 2>&1); }
+frun() { # name issue: a finished run whose one child passed and whose record holds no review (not run-owned)
+  local n=$1 i=$2 rd="$T/co/runs/$1"; wtree "$n"
+  { echo '{"event": "spawn_accepted", "child": "c", "envelope": "route", "definition": "GitHub issue #'$i'"}'
+    echo '{"event": "outcome", "node": "c", "outcome": "pass", "reasons": ["ok"]}'
+    echo '{"event": "verdict"}'; } > "$rd/record.jsonl"
+  echo "wave/$n" > "$T/st/auto/wave-$n"; echo "wave/$n" > "$T/st/auto/waved-$n"; }
+export GH_NUMS="6400:Doing"; orun dfr 6400 hold >/dev/null
+rm -f "$T/st/alerts.log" "$T"/st/cq/*ccdefer* "$T"/st/auto/dwait-*; : > "$T/dfr.out"; : > "$WAVE_CALLS"
+rc=0; for i in 1 2 3 4 5 6; do lpass dfr >> "$T/dfr.out" || rc=$?; done
+[ "$rc" = 3 ] && ok "a run-owned child its run never approved holds the wave, pass after pass" || ko "dfr: exit $rc"
+[ "$(/usr/bin/grep -c 'CHILDCC DEFERRED dfr c #6400: its run approved no head for it' "$T/dfr.out")" = 6 ] && ok "every pass names the run-owned child and its cause (#931)" || ko "named $(/usr/bin/grep -c 'CHILDCC DEFERRED dfr c' "$T/dfr.out") times: $(cat "$T/dfr.out")"
+! /usr/bin/grep -q '^requeue 6400' "$WAVE_CALLS" && ok "a run-owned child its run never approved is never requeued: the age cap owns it (ADR-0151 rule 5)" || ko "requeued a run-owned, unapproved child: $(cat "$WAVE_CALLS")"
+[ ! -e "$T/st/auto/dwait-dfr-c" ] && ok "a run-owned child its run never approved gets no deferral deadline" || ko "dwait written: $(cat "$T/st/auto/dwait-dfr-c" 2>/dev/null)"
+: > "$WAVE_CALLS.expired-dfr"; rc=0; out=$(lpass dfr) || rc=$?; rm -f "$WAVE_CALLS.expired-dfr"
+[ "$rc" = 0 ] && ! /usr/bin/grep -q '^requeue 6400' "$WAVE_CALLS" && ok "the wave's age cap frees the run-owned child it held" || ko "expired wave: exit $rc, calls $(cat "$WAVE_CALLS")"
+
+# A machine-wide gate hold clears by itself, so it is never counted toward a deadline and never requeues good work (#931): an
+# approved child retries the entry on every pass and enters the one after the lock frees.
+export GH_NUMS="6401:Doing"; h=$(orun gate 6401 approve land); rfile gate "$h" APPROVE
+: > "$WAVE_CALLS"; rm -f "$T/st/auto/dwait-gate-c" "$T/st/auto/cc-gate-c"; touch "$WAVE_GATE_HOLD"; : > "$T/gate.out"
+for i in 1 2 3 4 5 6; do lpass gate >> "$T/gate.out"; done
+[ "$(/usr/bin/grep -c '^enter gate 6401' "$WAVE_CALLS")" = 6 ] && ok "a machine gate hold retries the entry on every pass" || ko "entries: $(cat "$WAVE_CALLS")"
+! /usr/bin/grep -q '^requeue 6401' "$WAVE_CALLS" && ok "a machine gate hold is never counted toward a deadline: no requeue" || ko "requeued a gate-held child: $(cat "$WAVE_CALLS")"
+[ ! -e "$T/st/auto/dwait-gate-c" ] && ok "a machine gate hold writes no deferral counter" || ko "dwait written for a gate hold: $(cat "$T/st/auto/dwait-gate-c" 2>/dev/null)"
+/usr/bin/grep -q 'CHILDCC DEFERRED gate c #6401: WAVE HOLD #6401: the gate lock is held' "$T/gate.out" && ok "the deferral names the gate lock that held the child" || ko "no gate-lock cause: $(cat "$T/gate.out")"
+rm -f "$WAVE_GATE_HOLD"; out=$(lpass gate); rc=$?
+/usr/bin/grep -q 'WAVE x entered (#6401)' <<<"$out" && [ -e "$T/st/auto/cc-gate-c" ] && [ "$rc" = 0 ] && ok "the approved child enters its wave on the pass after the lock frees" || ko "after the lock: exit $rc, out $out"
+
+# A deferral of a cause that does not clear carries a deadline whose counter the janitor never removes (#931, ADR-0134):
+# after SG_CHILDCC_DEFER_MAX passes on one unchanged (tip, cause) the issue goes back to the queue with that cause, its head
+# is recorded, and the wave lands. The counter is auto/dwait-*, not auto/ccdefer-*, because the janitor drops a finished
+# run's ccdefer-* markers every cycle (see test-janitor-ccdefer.sh, which runs both scripts over one state dir).
+export GH_NUMS="6402:Doing"; frun dft 6402; rm -f "$T"/st/review-*; : > "$WAVE_CALLS"; : > "$T/cr.calls"
+o1=$(SG_HOLD_TRIES=99 SG_CHILDCC_DEFER_MAX=2 dpass dft); r1=$?
+[ "$r1" = 3 ] && [ -e "$T/st/auto/dwait-dft-c" ] && ok "the first pass opens the deadline counter and does not requeue" || ko "pass 1: exit $r1: $o1"
+printf '%s\n' "$o1" | /usr/bin/grep -q 'CHILDCC DEFERRED dft c #6402: WAVE HOLD #6402: no review of' && ok "the deferral names the review hold that kept the child out" || ko "no cause: $o1"
+o2=$(SG_HOLD_TRIES=99 SG_CHILDCC_DEFER_MAX=2 dpass dft); r2=$?
+[ "$r2" = 0 ] && /usr/bin/grep -q '^requeue 6402 .*no review of' "$WAVE_CALLS" && ok "the second unchanged pass requeues the issue with its cause, so the wave lands (#931)" || ko "pass 2: exit $r2, calls $(cat "$WAVE_CALLS"): $o2"
+[ ! -e "$T/st/auto/dwait-dft-c" ] && ok "the requeued child's deadline counter goes with it" || ko "dwait survived the requeue: $(cat "$T/st/auto/dwait-dft-c" 2>/dev/null)"
+[ "$(lq 6402 dft)" = "$(/usr/bin/git -C "$T/co/runs/dft/ws/target-c" rev-parse HEAD)" ] && ok "the ledger holds the head the child was requeued on" || ko "ledger: '$(lq 6402 dft)'"
+# The escalation is the one record a reader has of why an issue went back to the queue: one queued comment naming the run,
+# the child, the branch and the sha, and one alerts.log line, written once and only after the requeue stands (#808, #931).
+dcq=$(ls "$T"/st/cq/*#6402-ccdefer-* 2>/dev/null)
+dh=$(/usr/bin/git -C "$T/co/runs/dft/ws/target-c" rev-parse HEAD); dbr=$(/usr/bin/git -C "$T/co/runs/dft/ws/target-c" symbolic-ref --quiet --short HEAD)
+[ "$(printf '%s\n' $dcq | /usr/bin/grep -c .)" = 1 ] && ok "a deferral that requeues queues one escalation comment" || ko "escalation comments: '$dcq'"
+[ -n "$dcq" ] && /usr/bin/grep -qF 'dft, child c (issue #6402)' "$dcq" && /usr/bin/grep -qF "sha $dh" "$dcq" && /usr/bin/grep -qF "branch $dbr" "$dcq" && /usr/bin/grep -q 'no review of' "$dcq" && /usr/bin/grep -qF "at branch $dbr" "$dcq" \
+  && ok "the escalation names the run, the child, the branch, the sha and the cause" || ko "escalation text: $(cat $dcq 2>/dev/null)"
+[ "$(/usr/bin/grep -c 'CHILDCC DEFERRED dft c #6402' "$T/st/alerts.log" 2>/dev/null)" = 1 ] && ok "the escalation writes one alerts.log line" || ko "alerts.log: $(cat "$T/st/alerts.log" 2>/dev/null)"
+o3=$(SG_HOLD_TRIES=99 SG_CHILDCC_DEFER_MAX=2 dpass dft); r3=$?
+[ "$r3" = 0 ] && [ "$(/usr/bin/grep -c '^requeue 6402' "$WAVE_CALLS")" = 1 ] && [ "$(printf '%s\n' $(ls "$T"/st/cq/*#6402-ccdefer-* 2>/dev/null) | /usr/bin/grep -c .)" = 1 ] \
+  && ok "the requeued child costs nothing on the next pass and is never requeued or escalated twice" || ko "pass 3: exit $r3, calls $(cat "$WAVE_CALLS"), comments '$(ls "$T"/st/cq/*#6402-ccdefer-* 2>/dev/null)'"
+
+# A live fix run is its own bound (#931, refuted over-reach): the child a fix run still works has no deferral deadline, so a
+# healthy fix run older than the deadline is never requeued while it works, and the wave keeps waiting for its verdict.
+mkdir -p "$T/co/runs/fixrun-6420"
+{ echo '{"event": "spawn_accepted", "child": "c", "definition": "GitHub issue #6420"}'
+  echo '{"event": "outcome", "node": "c", "outcome": "pass", "reasons": ["ok"]}'; } > "$T/co/runs/fixrun-6420/record.jsonl"
+export GH_NUMS="6420:Doing"; frun dfw 6420; : > "$WAVE_CALLS"; rm -f "$T/st/auto/dwait-dfw-c" "$T"/st/review-*
+printf '%s\n' "$T/co/runs/fixrun-6420" > "$T/st/auto/ccfix-dfw-c"   # the marker a starting fix run leaves, with its record still open
+o1=$(SG_CHILDCC_DEFER_MAX=2 dpass dfw); r1=$?
+[ "$r1" = 3 ] && printf '%s\n' "$o1" | /usr/bin/grep -q 'CHILD FIX WAIT #6420 (dfw c)' && ok "a child with a live fix run holds its wave" || ko "fix wait: exit $r1: $o1"
+o2=$(SG_CHILDCC_DEFER_MAX=2 dpass dfw); r2=$?
+[ "$r2" = 3 ] && ! /usr/bin/grep -q '^requeue 6420' "$WAVE_CALLS" && [ ! -e "$T/st/auto/dwait-dfw-c" ] \
+  && ok "a live fix run is never counted toward the deadline, and the wave still waits for its verdict" || ko "fix wait pass 2: exit $r2, calls $(cat "$WAVE_CALLS"), dwait '$(cat "$T/st/auto/dwait-dfw-c" 2>/dev/null)'"
+echo '{"event": "verdict"}' >> "$T/co/runs/fixrun-6420/record.jsonl"; : > "$WAVE_CALLS"; : > "$T/cr.calls"
+o3=$(SG_CHILDCC_DEFER_MAX=2 dpass dfw); r3=$?
+[ "$r3" = 3 ] && [ -s "$T/cr.calls" ] && ! /usr/bin/grep -q 'CHILD FIX WAIT' <<<"$o3" && ok "the fix run's own verdict ends the wait, so the child is worked again" || ko "after the fix run: exit $r3, cr '$(cat "$T/cr.calls")', out $o3"
+
+# A terminal stop is no refusal (#931): wave.sh answers a stopped or frozen issue with "WAVE STOP" and exit 0, so the child is
+# done here and the wave lands, instead of waiting out its age cap on a pass that exits 3 for ever.
+export GH_NUMS="6403:Doing"; frun dfu 6403; rm -f "$T"/st/review-* "$T/st/auto/dwait-dfu-c"; : > "$WAVE_CALLS"; : > "$T/cr.calls"
+SG_HOLD_TRIES=99 SG_CHILDCC_DEFER_MAX=2 dpass dfu >/dev/null
+touch "$WAVE_REQUEUE_FAIL"; o4=$(SG_HOLD_TRIES=99 SG_CHILDCC_DEFER_MAX=2 dpass dfu); r4=$?
+[ "$r4" = 0 ] && /usr/bin/grep -q 'CHILD DEFER STOP #6403 (dfu c)' <<<"$o4" && /usr/bin/grep -q 'WAVE STOP' <<<"$o4" \
+  && ok "a wave's terminal stop lands the wave instead of holding it" || ko "terminal stop: exit $r4: $o4"
+[ -z "$(ls "$T"/st/cq/*#6403-* 2>/dev/null)" ] && [ ! -e "$T/st/auto/dwait-dfu-c" ] && ok "a terminal stop queues no comment and leaves no counter" || ko "terminal stop state: cq '$(ls "$T"/st/cq/*#6403-* 2>/dev/null)', dwait '$(cat "$T/st/auto/dwait-dfu-c" 2>/dev/null)'"
+rm -f "$WAVE_REQUEUE_FAIL"
+# The other terminal answer of wave.sh is no refusal either: a loop-caused requeue that ran out answers "WAVE NEEDS-HUMAN" with
+# exit 0 (wave.sh loop_stop, and the `already stopped` answer), and the child is done here too.
+export GH_NUMS="6405:Doing"; frun dfw 6405; rm -f "$T"/st/review-* "$T/st/auto/dwait-dfw-c"; : > "$WAVE_CALLS"; : > "$T/cr.calls"
+SG_HOLD_TRIES=99 SG_CHILDCC_DEFER_MAX=2 dpass dfw >/dev/null
+touch "$WAVE_NEEDS_HUMAN"; o4b=$(SG_HOLD_TRIES=99 SG_CHILDCC_DEFER_MAX=2 dpass dfw); r4b=$?
+[ "$r4b" = 0 ] && /usr/bin/grep -q 'WAVE NEEDS-HUMAN' <<<"$o4b" && ok "a needs-human stop lands the wave instead of holding it" || ko "needs-human stop: exit $r4b: $o4b"
+[ -z "$(ls "$T"/st/cq/*#6405-* 2>/dev/null)" ] && [ ! -e "$T/st/auto/dwait-dfw-c" ] && ok "a needs-human stop queues no comment and leaves no counter" || ko "needs-human state: cq '$(ls "$T"/st/cq/*#6405-* 2>/dev/null)'"
+rm -f "$WAVE_NEEDS_HUMAN"
+# A wave that answers neither and exits nonzero is still a refusal: no delivery, no comment, and the child keeps its counter.
+export GH_NUMS="6404:Doing"; frun dfv 6404; rm -f "$T"/st/review-* "$T/st/auto/dwait-dfv-c"; : > "$WAVE_CALLS"; : > "$T/cr.calls"
+SG_HOLD_TRIES=99 SG_CHILDCC_DEFER_MAX=2 dpass dfv >/dev/null
+touch "$WAVE_REQUEUE_ERR"; o5=$(SG_HOLD_TRIES=99 SG_CHILDCC_DEFER_MAX=2 dpass dfv); r5=$?
+[ "$r5" = 3 ] && /usr/bin/grep -q 'CHILD DEFER REQUEUE #6404 (dfv c) refused' <<<"$o5" && ok "a wave that answers nothing is named as a refused requeue, never reported as success" || ko "refused requeue: exit $r5: $o5"
+[ -z "$(ls "$T"/st/cq/*#6404-* 2>/dev/null)" ] && [ -e "$T/st/auto/dwait-dfv-c" ] && ok "a refused requeue queues no comment and keeps the deadline counter" || ko "refused requeue state: cq '$(ls "$T"/st/cq/*#6404-* 2>/dev/null)', dwait '$(cat "$T/st/auto/dwait-dfv-c" 2>/dev/null)'"
+rm -f "$WAVE_REQUEUE_ERR"; o6=$(SG_HOLD_TRIES=99 SG_CHILDCC_DEFER_MAX=2 dpass dfv); r6=$?
+[ "$r6" = 0 ] && /usr/bin/grep -q '^requeue 6404' "$WAVE_CALLS" && ok "the next pass retries the requeue and the wave lands" || ko "retry: exit $r6, calls $(cat "$WAVE_CALLS")"
+
+# The deadline never reaches a child the pass did not try (#931, refuted over-reach): with SG_CHILDCC_BUDGET=1 a pass works
+# one child and the rest wait their turn. A healthy sibling is never requeued because the budget, not a hold, kept it.
+mkdir -p "$T/co/runs/dsb"
+{ for c in a:6410 b:6411 c:6412; do echo '{"event": "spawn_accepted", "child": "'${c%%:*}'", "envelope": "route", "definition": "GitHub issue #'${c#*:}'"}'; done
+  for c in a b c; do echo '{"event": "outcome", "node": "'$c'", "outcome": "pass", "reasons": ["ok"]}'; done; } > "$T/co/runs/dsb/record.jsonl"
+rm -f "$T"/st/review-*
+for c in a b c; do wtree dsb "$c"; /usr/bin/git -C "$T/co/runs/dsb/ws/target-$c" checkout -q -b "dsb-$c"; hh=$(/usr/bin/git -C "$T/co/runs/dsb/ws/target-$c" rev-parse HEAD)
+  echo '{"event": "review_round", "node": "'$c'", "round": 1, "head": "'$hh'", "verdict": "approve", "offered": false, "review": {"verdict": "approve", "findings": "x"}}' >> "$T/co/runs/dsb/record.jsonl"
+  echo '{"event": "land", "node": "'$c'", "parent": "route", "entry": 1, "outcome": "pass", "reasons": [], "effect": {"name": "review", "review": {"verdict": "approve", "findings": "x"}}}' >> "$T/co/runs/dsb/record.jsonl"
+  printf '**VERDICT: APPROVE**\n' > "$T/st/review-dsb-$c.md"; echo wave/dsb > "$T/st/review-dsb-$c.base"; echo "$hh" > "$T/st/review-dsb-$c.sha"; done
+echo '{"event": "verdict"}' >> "$T/co/runs/dsb/record.jsonl"; echo wave/dsb > "$T/st/auto/wave-dsb"; echo wave/dsb > "$T/st/auto/waved-dsb"
+export GH_NUMS="6410:Doing 6411:Doing 6412:Doing"; : > "$WAVE_CALLS"; rm -f "$T/st/auto/dwait-dsb"* "$T/st/auto/cc-dsb"*
+for i in 1 2 3; do SG_CHILDCC_BUDGET=1 SG_CHILDCC_DEFER_MAX=2 dpass dsb >/dev/null; done
+[ "$(/usr/bin/grep -c '^enter dsb ' "$WAVE_CALLS")" = 3 ] && ok "one pass per child enters all three healthy siblings" || ko "entries: $(cat "$WAVE_CALLS")"
+! /usr/bin/grep -q '^requeue ' "$WAVE_CALLS" && ok "a child the pass budget never reached is never requeued: over-reach is fixed" || ko "requeued a budget-skipped child: $(cat "$WAVE_CALLS")"
 
 rm -rf "$T"; exit $fail

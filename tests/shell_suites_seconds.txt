@@ -39,6 +39,7 @@ test-envelope-spend.sh 0.13
 test-fast-gate.sh 8.46
 test-fastloop-childcc.sh 0.97
 test-fastloop-interval.sh 8.33
+test-fastloop-load.sh 0.11
 test-fastloop-orphan.sh 0.73
 test-fastloop-pid.sh 0.05
 test-gate-lock.sh 14.58
@@ -68,6 +69,7 @@ test-janitor-board-facts.sh 1.24
 test-janitor-board-reconcile.sh 4.71
 test-janitor-board-vocab.sh 1.58
 test-janitor-branch-state.sh 1.14
+test-janitor-ccdefer.sh 0.95
 test-janitor-cleanup.sh 13.68
 test-janitor-comment-quota.sh 1.36
 test-janitor-dashboard-ceiling.sh 2.34
@@ -109,9 +111,10 @@ test-pass-deadline.sh 15.65
 test-prepush.sh 1.28
 test-profile-check.sh 1.16
 test-profile-venv-path.sh 0.07
-test-promote-pass.sh 11.04
+test-promote-pass.sh 16.02
 test-promote.sh 16.53
 test-publish-live.sh 2.50
+test-quality-reading.sh 2.06
 test-quota-floor.sh 0.62
 test-reconcile.sh 1.60
 test-refusal-comment.sh 1.87
@@ -144,6 +147,7 @@ test-watch-cycle.sh 61.41
 test-watch-land.sh 10.13
 test-watch-single-exec.sh 0.02
 test-watchd-driver-sha.sh 2.30
+test-watchd-lock.sh 4.15
 test-watchd-token-stop.sh 6.28
 test-watchtail.sh 4.17
 test-wave-lifecycle.sh 18.50

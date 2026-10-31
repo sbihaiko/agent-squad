@@ -9,6 +9,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from tests import shell_suites, slowcap
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -77,12 +79,14 @@ def collect(*args):
                           cwd=ROOT, capture_output=True, text=True, timeout=120).stdout
 
 
+@pytest.mark.heavy
 def test_the_real_runner_makes_one_test_per_suite():
     out = collect("tests/test_shell_suites.py")
     ids = [line for line in out.splitlines() if "::" in line]
     assert len(ids) == len(list(SCRIPTS.glob("test-*.sh")))
 
 
+@pytest.mark.heavy
 def test_a_suite_on_the_heavy_list_is_deselected_by_the_fast_battery():
     heavy = shell_suites.heavy_names()
     assert heavy, "the duration list names at least one suite"
@@ -111,6 +115,7 @@ def test_a_suite_over_the_slow_line_is_slow_and_a_quick_one_is_not(tmp_path):
     assert not shell_suites.is_slow(write_suite(tmp_path, "test-fast.sh", "true\n"))
 
 
+@pytest.mark.heavy
 def test_a_slow_suite_carries_a_slow_reason_so_the_cap_does_not_fail_it():
     out = collect("tests/test_shell_suites.py", "-m", "slow")
     slow = [name for name, seconds in shell_suites.measured().items() if seconds > shell_suites.SLOW_SECONDS]

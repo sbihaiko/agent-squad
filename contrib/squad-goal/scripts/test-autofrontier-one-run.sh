@@ -355,7 +355,7 @@ issues '[{"number":95,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
 echo 4 > "$d/st/childcc-waiting"
 r=$(SG_DISPATCH_MAX_WAITING=3 run)
 [ "$(lines "$LAUNCHLOG")" = 0 ] && [ "$(marked 95)" = 0 ] && ok "Z: over the cap the frontier pass dispatches nothing" || ko "Z: the pass dispatched over the cap: '$r'"
-$G -qxF "DISPATCH HOLD: 4 children wait for review (cap 3); no new run this pass" <<<"$r" && ok "Z: the hold names the count and the cap" || ko "Z: no hold line: '$r'"
+$G -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} DISPATCH HOLD: 4 children wait for review \(cap 3\); no new run this pass$' <<<"$r" && ok "Z: the hold names the count and the cap, stamped in UTC" || ko "Z: no hold line: '$r'"
 echo 3 > "$d/st/childcc-waiting"
 r=$(SG_DISPATCH_MAX_WAITING=3 run)
 [ "$(marked 95)" = 1 ] && ok "Z: at the cap the frontier pass dispatches" || ko "Z: no dispatch at the cap: '$r'"

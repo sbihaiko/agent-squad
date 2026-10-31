@@ -5,9 +5,15 @@ from datetime import datetime
 
 MEASURE = "opened -> closed"
 ABANDONED = "Abandoned"
+# The chart's own reason for a card the hub names as closed without delivery (#921). It is a label, not the carrier's
+# vocabulary: board_columns reads the carrier's `state_reason` and hands this row its word, so the chart holds no copy
+# of the reasons GitHub answers.
+NOT_DELIVERED = "not_planned"
 
 
 def _exclusion(row):
+    if row.get("reason") == NOT_DELIVERED:
+        return "not_planned"
     if row["column"] == ABANDONED:
         return "abandoned"
     if row["c"] is None:

@@ -63,8 +63,8 @@ def _sample(day, counts, frozen=0, none=0):
     return {"t": int(datetime(2026, 10, day, 12, tzinfo=UTC).timestamp()), "counts": counts, "frozen": frozen, "none": none}
 
 
-def _history(directory, samples):
-    (directory / "hub-flow.jsonl").write_text("".join(json.dumps(s) + "\n" for s in samples))
+def _history(directory, samples, repo="x_y"):
+    (directory / f"hub-flow.{repo}.jsonl").write_text("".join(json.dumps(s) + "\n" for s in samples))
 
 
 def _flow_block(hub):
@@ -107,6 +107,13 @@ def test_cfd_band_extents_are_the_board_cfd_counts(hub, board):
     assert closed["lower"][0] == 0
 
 
+def test_another_repositorys_history_is_not_drawn(hub, board):
+    _history(board, [_sample(1, {"issue": {hub.COLUMN["unscheduled"]: 5}})], repo="x_other")
+    cfd = hub.board()["flow"]["cfd"]
+    assert cfd["start"] is None
+    assert cfd["bands"] == []
+
+
 def test_no_history_file_says_no_sample_and_draws_no_band(hub, board):
     cfd = hub.board()["flow"]["cfd"]
     assert cfd["start"] is None
@@ -134,6 +141,62 @@ def test_lead_time_summary_measure_window_and_excluded_count(hub, board):
     assert lead["excluded_total"] == 1
 
 
+def test_a_card_closed_as_not_planned_is_no_delivery_and_the_chart_names_it(hub, board):
+    """#921: a card closed as NOT_PLANNED, or as a duplicate, with Status Closed draws Abandoned, is no lead-time dot, and
+    its count is named beside the chart's excluded total."""
+    hub.board_cache["items"] = [
+        _card(1, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-01T15:00:00Z"),
+        {**_card(2, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-02T09:00:00Z"), "cr": "not_planned"},
+        {**_card(3, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-03T09:00:00Z"), "cr": "not_planned"},
+        {**_card(4, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-04T09:00:00Z"), "cr": "duplicate"},
+    ]
+
+    served = hub.board()
+
+    assert [p["n"] for p in served["flow"]["lead"]["series"]] == [1]
+    assert served["flow"]["lead"]["summary"]["median"]["text"] == "6h"
+    assert served["flow"]["lead"]["excluded"] == [{"reason": "not_planned", "count": 3}]
+    assert served["flow"]["lead"]["excluded_total"] == 3
+    abandoned = next(g for g in served["groups"] if g["name"] == "Abandoned")
+    assert [r["n"] for r in abandoned["items"]] == [2, 3, 4], "a card closed as not planned is drawn Abandoned, never Closed"
+    closed = next(g for g in served["groups"] if g["name"] == hub.COLUMN["issue_closed"])
+    assert [r["n"] for r in closed["items"]] == [1]
+
+
+def test_the_closed_band_never_steps_down_where_the_close_reason_began(hub, board):
+    """#921 (DEBT 1): the samples written before the close reason counted put a not-planned card in the Closed band.
+    The one re-bucket moves that card across in the past samples, so the Closed band never takes a step down at the
+    boundary, and a reader never takes the step for a data error."""
+    flow = _load("board_flow_history_rebucket", SCRIPTS / "board_flow_history.py")
+    closed = hub.COLUMN["issue_closed"]
+    _history(board, [_sample(1, {"issue": {closed: 5}}), _sample(2, {"issue": {closed: 5}})])
+    rows = [{**_card(n, st=closed, s="CLOSED"), "cr": "completed"} for n in range(1, 5)]
+    rows.append({**_card(9, st=closed, s="CLOSED"), "cr": "not_planned"})
+
+    flow.append(board / "hub-flow.x_y.jsonl", rows, now=datetime(2026, 10, 3, 12, tzinfo=UTC).timestamp())
+
+    bands = {b["name"]: b for b in hub.board()["flow"]["cfd"]["bands"]}
+    values = [hi - lo for hi, lo in zip(bands[closed]["upper"], bands[closed]["lower"], strict=True)]
+    assert values == sorted(values), f"the Closed band steps down at the boundary: {values}"
+    abandoned = [hi - lo for hi, lo in zip(bands["Abandoned"]["upper"], bands["Abandoned"]["lower"], strict=True)]
+    assert abandoned == [1, 1, 1], "the past samples and the new one count the card in Abandoned"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_lead_time_chart_names_the_cards_closed_as_not_planned(hub, tmp_path):
+    block = _flow_block(hub).split("const drawFlow")[0]
+    drawing = "\n".join([
+        "const COLORS={},COLNAME={};", "const esc=s=>String(s);", block,
+        'process.stdout.write(flowLead({measure:"opened -> closed",window:{size:20,unit:"issues"},'
+        'excluded:[{reason:"not_planned",count:3}],excluded_total:3,series:[],summary:null}));',
+    ])
+    path = tmp_path / "flow-lead-not-planned.js"
+    path.write_text(drawing)
+    result = subprocess.run(["node", str(path)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert "3 closed as not planned" in result.stdout
+
+
 def test_opening_the_diagrams_makes_no_gh_call(hub, board, monkeypatch):
     board_cache = hub.board_cache
     board_cache["items"] = [_card(1, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-02T09:00:00Z")]
@@ -149,6 +212,83 @@ def test_opening_the_diagrams_makes_no_gh_call(hub, board, monkeypatch):
     assert calls == []
     assert flow["cfd"]["bands"] and flow["lead"]["summary"] is not None
     assert 'id=flowov hidden' in hub.PAGE
+
+
+def _skip(day):
+    return {"flow_skip": 2, "t": int(datetime(2026, 10, day, 12, tzinfo=UTC).timestamp()), "reason": "items read incomplete"}
+
+
+def test_a_quiet_day_with_a_whole_read_is_a_point(hub, board):
+    _history(board, [
+        _sample(1, {"issue": {hub.COLUMN["unscheduled"]: 2}}),
+        _sample(2, {"issue": {hub.COLUMN["unscheduled"]: 2}}),
+        _sample(3, {"issue": {hub.COLUMN["unscheduled"]: 1}}),
+    ])
+    cfd = hub.board()["flow"]["cfd"]
+    assert len(cfd["days"]) == 3, "the calendar runs over the quiet day, so points sit by date"
+    for band in cfd["bands"]:
+        assert band["upper"][1] is not None and band["lower"][1] is not None, "the quiet day has its own sample: a point"
+    assert [b["upper"][1] for b in cfd["bands"] if b["name"] == hub.COLUMN["unscheduled"]] == [2]
+
+
+def test_a_day_with_no_record_at_all_is_a_gap_and_never_a_carried_value(hub, board):
+    _history(board, [
+        _sample(1, {"issue": {hub.COLUMN["unscheduled"]: 2}}),
+        _sample(3, {"issue": {hub.COLUMN["unscheduled"]: 1}}),
+    ])
+    cfd = hub.board()["flow"]["cfd"]
+    assert len(cfd["days"]) == 3
+    for band in cfd["bands"]:
+        assert band["upper"][1] is None and band["lower"][1] is None, "no record: the hub was down, its count is unknown"
+
+
+def test_a_skipped_read_is_a_calendar_day_with_no_band_values(hub, board):
+    _history(board, [
+        _sample(1, {"issue": {hub.COLUMN["unscheduled"]: 2}}),
+        _skip(2),
+        _sample(3, {"issue": {hub.COLUMN["unscheduled"]: 1}}),
+    ])
+    cfd = hub.board()["flow"]["cfd"]
+    assert len(cfd["days"]) == 3
+    for band in cfd["bands"]:
+        assert band["upper"][1] is None and band["lower"][1] is None, "a gap carries no value to interpolate"
+        assert band["upper"][0] is not None and band["upper"][2] is not None
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_one_point_run_is_drawn_as_a_visible_mark(hub, tmp_path):
+    block = _flow_block(hub).split("const drawFlow")[0]
+    drawing = "\n".join([
+        "const COLORS={};", "const esc=s=>String(s);", block,
+        'process.stdout.write(flowCFD({days:["a","b","c"],ymax:4,start:"2026-10-01",'
+        'bands:[{name:"Todo",lower:[0,null,0],upper:[2,null,1]}]}));',
+    ])
+    path = tmp_path / "flow-one.js"
+    path.write_text(drawing)
+    result = subprocess.run(["node", str(path)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    polygons = [[float(p.split(",")[0]) for p in m.split()] for m in re.findall(r'points="([^"]*)"', result.stdout)]
+    assert len(polygons) == 2
+    for xs in polygons:
+        assert max(xs) - min(xs) > 0, "a one-point run has width: it is a mark, not a zero-width line"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_page_splits_each_band_at_a_gap(hub, tmp_path):
+    block = _flow_block(hub).split("const drawFlow")[0]
+    drawing = "\n".join([
+        "const COLORS={};", "const esc=s=>String(s);", block,
+        'process.stdout.write(flowCFD({days:["a","b","c","d","e"],ymax:4,start:"2026-10-01",'
+        'bands:[{name:"Todo",lower:[0,0,null,0,0],upper:[2,3,null,1,2]}]}));',
+    ])
+    path = tmp_path / "flow-cfd.js"
+    path.write_text(drawing)
+    result = subprocess.run(["node", str(path)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    polygons = [[float(p.split(",")[0]) for p in m.split()] for m in re.findall(r'points="([^"]*)"', result.stdout)]
+    assert len(polygons) == 2, "one polygon per run of sampled days, never one across the gap"
+    x = {i: 36 + i * (800 - 2 * 36) / 4 for i in range(5)}
+    assert all(v in (x[0], x[1]) for v in polygons[0]) and all(v in (x[3], x[4]) for v in polygons[1])
 
 
 def test_page_draws_the_hub_numbers_and_does_no_arithmetic(hub, board):

@@ -19,6 +19,8 @@
 here="$(cd "$(dirname "$0")" && pwd)"; st=${SG_STATE:-/tmp/sg-state}
 mkdir -p "$st/auto" "$st/locks"
 day=$st/auto/nightly-$(date +%F)
+[ -n "${SG_NIGHTLY_OFF:-}" ] && exit 0   # a profile that sets it keeps no nightly: a project may carry its own suite instead (ADR-0153)
+[ -e "$st/promote-reserve" ] && exit 0   # a proof is measuring in its own tree: two full suites saturate the box before either shows in the load average, and no day marker is written, so the nightly runs once the proof is over
 [ -e "$day" ] && exit 0   # it already ran today: no second suite, whatever started this one
 if [ "${1:-}" != --run ]; then   # the lock is taken once, around the suite, and never around the day check
   SERIAL_TRY=1 SERIAL_HOLD_SECONDS=${SERIAL_HOLD_SECONDS:-10800} \

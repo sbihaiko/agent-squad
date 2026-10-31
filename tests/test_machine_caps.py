@@ -412,8 +412,10 @@ def test_a_review_in_childcc_never_waits_for_a_slot_while_it_holds_the_childcc_l
     r = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, env=env, cwd=co, timeout=60)
     assert time.monotonic() - t0 < 20, "childcc waited for a review slot"
     assert not (tmp_path / "reviews").exists()                                      # the review did not run this pass
-    skips = [ln for ln in r.stdout.splitlines() if "caps.reviews" in ln]
-    assert len(skips) == 1 and "skipped" in skips[0] and "other-0" in skips[0]
+    # The skip line is the one that names the ceiling and its holder. The per-child cause of #931 also names caps.reviews
+    # ("no review slot this pass: caps.reviews is full"), and it is a different statement, so the count reads the skip only.
+    skips = [ln for ln in r.stdout.splitlines() if "caps.reviews" in ln and "skipped" in ln]
+    assert len(skips) == 1 and "other-0" in skips[0]
     assert r.returncode == 3                                                        # the child is left for a later pass, never landed without
     assert not (tmp_path / "st" / "auto" / "rvd-r1-c").exists()                     # no claim: the next pass reviews it
 

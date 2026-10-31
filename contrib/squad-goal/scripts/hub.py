@@ -1012,6 +1012,13 @@ def _cycle_state(now):
     end = time.mktime(time.strptime(day + rows[-1][0], "%Y-%m-%d %H:%M:%S"))
     if end > now: end -= 86400   # the line is from before midnight
     return {"end": end, "secs": [int(r[1]) for r in rows[-5:]]}
+def loop_log_stamp(line):
+    """The UTC time a loop-log line starts with, as epoch seconds. None for a line written with no stamp: its age is unknown, never zero."""
+    m = re.match(r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) ", line)
+    if not m: return None
+    try: return dt.datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S").replace(tzinfo=dt.timezone.utc).timestamp()
+    except ValueError: return None
+
 def _span(s):
     s = int(abs(s)); h, m = divmod(s // 60, 60)
     return f"{h}h{m:02d}m" if h else f"{m}m{s % 60:02d}s"
@@ -1746,8 +1753,15 @@ def delivery():
     return out
 
 BOARD = pathlib.Path(os.environ.get("SG_BOARD_CACHE") or HUBDIR / "hub-board.json"); BOARD.parent.mkdir(parents=True, exist_ok=True)
+BOARD_READ = 1   # the version of the items read that wrote the cached rows: a cache that names another is read again (#921)
 try: board_cache = json.loads(BOARD.read_text())
 except Exception: board_cache = {"t": 0, "items": [], "prs": [], "err": None}
+if board_cache.get("rv") != BOARD_READ:
+    # A cache written before the rows carried the close reason (#921) answers no `cr`, so a card closed as not planned
+    # would draw Closed and count as delivered until the next whole items read. Its rows are dropped, and the pass reads
+    # them again; the rows of a read this version wrote stay. A board with no row is safer than one that miscounts.
+    board_cache.update(items=[], cases=[], t=0, rt=None)
+    board_cache["rv"] = BOARD_READ
 # A cache written before the board read more than one repository (#1820) has rows with no repository on them: they are
 # the profile repository's, which is the only one that pass read.
 for _k in ("prs", "landed"):
@@ -1816,8 +1830,11 @@ def task_count(i):
     return f"{c}/{t}" if t > 0 else None
 def board_items_jq(repo):
     """The board read's jq. A project may hold cards of several repositories and an issue number repeats between them, so an
-    Issue item counts only when its repository is `repo`; a draft item has no repository."""
-    return ('''.[]|select((.content_type=="Issue" and ((.content.repository_url//"")|endswith("/" + $repo))) or .content_type=="DraftIssue")|{n:.content.number,i:.id,t:.content.title,s:.content.state,c:.content.closed_at,st:((.fields[]|select(.name=="Status")|.value.name.raw)//null),k:(((.fields[]?|select(.name=="Kind")|.value.name|if type=="object" then .raw else . end)//"")|ascii_downcase|if .=="" then null else . end),l:[.content.labels[]?.name],si:{total:.content.sub_issues_summary.total,completed:.content.sub_issues_summary.completed},o:.content.created_at}''').replace("$repo", json.dumps(repo))
+    Issue item counts only when its repository is `repo`; a draft item has no repository. The issue's own close reason
+    rides the same read as `cr` (#921): the key is its own, never `r`, which the hub reads as the row's repository. After
+    each page's items it emits one {"_page": n} line, n the page's own item count, so the read says whether its last page
+    was short (#894)."""
+    return ('''length as $n|(.[]|select((.content_type=="Issue" and ((.content.repository_url//"")|endswith("/" + $repo))) or .content_type=="DraftIssue")|{n:.content.number,i:.id,t:.content.title,s:.content.state,cr:((.content.state_reason//null)|if type=="string" then ascii_downcase else . end),c:.content.closed_at,st:((.fields[]|select(.name=="Status")|.value.name.raw)//null),k:(((.fields[]?|select(.name=="Kind")|.value.name|if type=="object" then .raw else . end)//"")|ascii_downcase|if .=="" then null else . end),l:[.content.labels[]?.name],si:{total:.content.sub_issues_summary.total,completed:.content.sub_issues_summary.completed},o:.content.created_at}),{_page:$n}''').replace("$repo", json.dumps(repo))
 
 GH_FLOOR = int(os.environ.get("SG_GH_FLOOR") or 300)   # below this many core requests left, a read pass skips its reads (#855)
 LABELS_EVERY = 3600   # seconds between two reads of the repository's labels, and of its closed pull requests (#855)
@@ -1896,12 +1913,18 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
     repository's own error on the lane), so a failed pass never writes a fresh empty board (#1772, #1820)."""
     if _under_floor("board pass"): return board_cache
     items = lc = cases = None
+    gaps = []   # why the flow sample is skipped when the reads answered but are not whole (#894); none when they are whole
     read_started = time.time()   # when the list read begins: the only stamp the overlay may compare a proved move against
     try:
             out = board_seam().rows(
                 board_items_jq(REPO),
                 kind=True, timeout=120)
-            items = [json.loads(l) for l in out.splitlines() if l.strip()]
+            lines = [json.loads(l) for l in out.splitlines() if l.strip()]
+            # The jq answer always ends each page with its count (board_items_jq), even for no card: a read with none answered nothing (#894).
+            # A full last page is no sign of a missing page: a project of exactly 100 items answers the same way.
+            if not any("_page" in x for x in lines):
+                gaps.append("items read unparseable: no page count came back")
+            items = [x for x in lines if "_page" not in x]
             cases = [i["t"] for i in items if i.get("n") is None and i.get("k") == "test case"]   # a test case is a draft item: it has no number, so it is a row and never a card (#306)
             items = [i for i in items if i.get("n") is not None]
             have = {i["n"] for i in items}   # open issues that never reached the board have no state either
@@ -1911,6 +1934,7 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
                     items.append({"n": i["number"], "t": i["title"], "s": i["state"], "c": None, "st": None, "l": [x["name"] for x in i["labels"]],
                                   "si": {"total": s.get("total"), "completed": s.get("completed")}, "o": i["created_at"]})
             nodes, complete = open_relations()   # every page of open issues; never one REST call per card
+            if not complete: gaps.append("relations read incomplete: a page with no cursor, or past the page cap")
             try: apply_open_blockers(items, nodes)
             except Exception: pass
             # The spec a ticket belongs to: a ticket never moves alone (#829). A read that is not complete keeps what the
@@ -1932,7 +1956,11 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
             if len(errs) < len(rs): board_cache["t"] = time.time()
     except Exception as e: board_cache["err"] = str(e)[:80]
     save_board()
-    if items: _flow.append(BOARD.with_name("hub-flow.jsonl"), items)
+    # Every pass writes its flow read, whole or not (#894): a failed read is a flow_skip that counts the last whole read's cards.
+    rows = items if items is not None else (board_cache.get("items") or [])
+    if items is None:
+        gaps.insert(0, f"items read failed: {board_cache.get('err')}")
+    _flow.append(_flow.history_path(BOARD, REPO), rows, incomplete="; ".join(gaps) or None)
     return board_cache
 _WRITE_SEQ = itertools.count(1)   # one temp name per write, never one per writer: a thread id is reused once its thread ends (#512)
 def _temp_name(path):
@@ -2526,16 +2554,20 @@ def _band_extents(bands):
 
 def flow_charts():
     """The two diagrams' numbers, computed here from board_cfd and board_leadtime; the page draws them and computes none."""
-    cfd = _cfd.cfd(_flow.samples(BOARD.with_name("hub-flow.jsonl")), ORDER)
-    extents = [_band_extents(p["bands"]) for p in cfd["points"]]
-    ymax = max((e[ORDER[0]][1] for e in extents), default=0)
-    rows = [{"n": i["n"], "column": _columns_module.view_column(i["st"], str(i["s"]).lower() == "closed", i.get("l"))[0],
+    path = _flow.history_path(BOARD, REPO)
+    cfd = _cfd.cfd(_flow.samples(path), ORDER, skips=_flow.skips(path))
+    extents = {p["day"]: _band_extents(p["bands"]) for p in cfd["points"]}
+    days = sorted([*extents, *cfd["gaps"]])   # one entry per calendar day: a day with no sample carries no value (#894)
+    ymax = max((e[ORDER[0]][1] for e in extents.values()), default=0)
+    def values(name, k): return [extents[d][name][k] if d in extents else None for d in days]
+    rows = [{"n": i["n"], "column": _columns_module.view_column(i["st"], str(i["s"]).lower() == "closed", i.get("l"), i.get("cr"))[0],
+             "reason": _leadtime.NOT_DELIVERED if _columns_module.not_planned(i.get("cr")) else None,   # the chart's own word (#921)
              "c": i.get("c") if str(i["s"]).lower() == "closed" else None, "o": i.get("o")} for i in board_cache["items"]]
     lead = _leadtime.lead_time(rows)
     return {
         "cfd": {"start": dt.datetime.fromtimestamp(cfd["start"], dt.UTC).date().isoformat() if cfd["start"] is not None else None,
-                "days": [p["day"] for p in cfd["points"]], "ymax": ymax,
-                "bands": [{"name": n, "lower": [e[n][0] for e in extents], "upper": [e[n][1] for e in extents]} for n in ORDER] if extents else []},
+                "days": days, "ymax": ymax,
+                "bands": [{"name": n, "lower": values(n, 0), "upper": values(n, 1)} for n in ORDER] if extents else []},
         "lead": {"measure": lead["measure"], "window": lead["window"],
                  "excluded": [{"reason": r, "count": c} for r, c in lead["excluded"].items()],
                  "excluded_total": sum(lead["excluded"].values()), "series": lead["series"], "summary": lead["summary"]},
@@ -2549,7 +2581,7 @@ def drawn_column(i, moves, read_at, window):
     once and wears the mark). The board and the promote route ask this one function, so a card is promotable by the
     column both of them draw, never by two different columns (#829, ADR-0144)."""
     closed = str(i["s"]).lower() == "closed"   # the row's own closedness: the freeze below is the card's, not the read's
-    st, fz = _columns_module.view_column(i["st"], closed, i.get("l"))   # the column the table names, and the freeze over it
+    st, fz = _columns_module.view_column(i["st"], closed, i.get("l"), i.get("cr"))   # the column the table names, and the freeze over it
     entry = moves.get(str(i["i"])) if i.get("i") else None   # the door keys an entry by the Project item id
     if not (isinstance(entry, dict) and entry.get("column")):
         return {"st": st, "fz": fz, "state": "read", "recorded": None, "entry": None}
@@ -2568,7 +2600,7 @@ def drawn_column(i, moves, read_at, window):
         return {"st": st, "fz": fz, "state": "read", "recorded": recorded, "entry": entry}   # a move with no dispatch context stands aside for a read that began after it
     # Draw the move at once and keep the mark until a read that began after it agrees (#650). A move with a dispatch
     # context keeps the mark through a contradicting read too, for the whole window. A column that matches by coincidence is no proof.
-    return {"st": recorded, "fz": _columns_module.view_column(recorded, closed, i.get("l"))[1], "state": "pending",
+    return {"st": recorded, "fz": _columns_module.view_column(recorded, closed, i.get("l"), i.get("cr"))[1], "state": "pending",
             "recorded": recorded, "entry": entry}
 
 
@@ -3466,11 +3498,17 @@ const flowX=(i,n)=>n<2?flowP:flowP+i*(flowW-2*flowP)/(n-1);
 const flowY=(v,max)=>max?flowH-flowP-v*(flowH-2*flowP)/max:flowH-flowP;
 const flowAxis=(max,unit)=>`<line x1=${flowP} y1=${flowH-flowP} x2=${flowW-flowP} y2=${flowH-flowP} stroke=var(--line)></line><text x=${flowP-6} y=${flowY(max,max)+4} text-anchor=end fill=var(--mute) font-size=11>${max} ${unit}</text>`;
 const flowCFD=c=>{if(!c.days.length)return "<p class=fnote>the flow history has no sample yet</p>";
-  const idx=[...c.days.keys()],rev=[...idx].reverse(),n=idx.length;
-  const band=b=>[...idx.map(i=>`${flowX(i,n)},${flowY(b.upper[i],c.ymax)}`),...rev.map(i=>`${flowX(i,n)},${flowY(b.lower[i],c.ymax)}`)].join(" ");
-  return `<svg viewBox="0 0 ${flowW} ${flowH}">${c.bands.map(b=>`<polygon points="${band(b)}" fill="${COLORS[b.name]||"#888"}" fill-opacity=".85"><title>${esc(b.name)}</title></polygon>`).join("")}${flowAxis(c.ymax,"cards")}</svg>`+
+  const n=c.days.length;
+  const runs=b=>{const out=[];let cur=null;c.days.forEach((_,i)=>{if(b.upper[i]===null){cur=null;return}if(!cur){cur=[];out.push(cur)}cur.push(i)});return out};
+  const band=(b,run)=>{const one=run.length===1,h=3;   // a one-point run is a mark 2h wide, never a zero-width line (#894)
+    const up=run.flatMap(i=>one?[[flowX(i,n)-h,b.upper[i]],[flowX(i,n)+h,b.upper[i]]]:[[flowX(i,n),b.upper[i]]]);
+    const low=[...run].reverse().flatMap(i=>one?[[flowX(i,n)+h,b.lower[i]],[flowX(i,n)-h,b.lower[i]]]:[[flowX(i,n),b.lower[i]]]);
+    return [...up,...low].map(([x,v])=>`${x},${flowY(v,c.ymax)}`).join(" ");};
+  const polys=b=>runs(b).map(run=>`<polygon points="${band(b,run)}" fill="${COLORS[b.name]||"#888"}" fill-opacity=".85"><title>${esc(b.name)}</title></polygon>`).join("");
+  return `<svg viewBox="0 0 ${flowW} ${flowH}">${c.bands.map(polys).join("")}${flowAxis(c.ymax,"cards")}</svg>`+
     `<p class=fnote>history from ${esc(c.start)} UTC</p><p>${c.bands.map(b=>`<span class=flg><i style="background:${COLORS[b.name]||"#888"}"></i>${esc(b.name)}</span>`).join("")}</p>`;};
-const flowLead=l=>{const S=l.summary,ex=l.excluded.map(e=>`${esc(e.reason)} ${e.count}`).join(", ");
+const EXREASON={not_planned:"closed as not planned",abandoned:"closed as abandoned",open:"still open",no_opened:"no opened date"};   // the cards the chart leaves out, in words (#921)
+const flowLead=l=>{const S=l.summary,ex=l.excluded.map(e=>`${e.count} ${esc(EXREASON[e.reason]||e.reason)}`).join(", ");
   const head=`<p class=fhead><b>${esc(l.measure)}</b> · window ${l.window.size} ${esc(l.window.unit)} · excluded ${l.excluded_total}${ex?" ("+ex+")":""}</p>`;
   if(!S)return head+"<p class=fnote>no closed card yet</p>";
   const stat=(k,v)=>`${k} <b>${esc(v.text)}</b>`;

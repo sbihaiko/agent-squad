@@ -8,7 +8,8 @@ and the wave lands in dev (ADR-0145 rule 9). The RED output goes to the issue st
 import re
 from pathlib import Path
 
-SCRIPTS = Path(__file__).resolve().parent.parent / "contrib" / "squad-goal" / "scripts"
+ROOT = Path(__file__).resolve().parent.parent
+SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"
 DISPATCH_TEXT = ["autofrontier.sh", "autobug.sh", "req-checklist.txt", "profiles/example.sh"]
 ASKS_FOR_A_PR = re.compile(
     r"open(ing)? (the|a|your) PR|open the pull request|PR body|pull request body|\bone PR\b|\bPR each\b|one pull request"
@@ -74,3 +75,36 @@ def test_the_checklist_names_no_live_script_a_child_cannot_run():
         if "serial.sh gui-suite" in line:
             assert "~/.claude" not in line and "$SG_LIVE_DIR" not in line, line
             assert "bash contrib/squad-goal/scripts/serial.sh gui-suite" in line, line
+
+
+A_SCRIPTS_PATH = re.compile(r"(?<![\w/.~-])scripts/[A-Za-z0-9_./-]+\.(?:py|sh)")
+A_SCRIPTS_DIR = re.compile(r"(?<![\w/.~-])(scripts/(?:[A-Za-z0-9_.-]+/)+)")
+A_CHECK_NAME = re.compile(r"(?<![\w/.~-])verify_[A-Za-z0-9_]+\.(?:py|sh)")
+CHECKLIST_ITEM = re.compile(r"\((\d+)\)(.*?)(?=\(\d+\)|$)", re.S)
+CARRIES_IT = re.compile(r"\b(?:if|when|where) the repository carries\b", re.I)
+NOTHING_TO_RUN = re.compile(r"nothing to run", re.I)
+
+
+def _named_scripts_paths(item):
+    """The paths an item names: a full scripts/... path, plus a bare check name that inherits the item's scripts directory."""
+    named = A_SCRIPTS_PATH.findall(item)
+    directories = A_SCRIPTS_DIR.findall(item)
+    if directories:
+        named += [directories[0] + n for n in A_CHECK_NAME.findall(item)]
+    return list(dict.fromkeys(named))
+
+
+def test_a_checklist_item_names_a_scripts_path_only_where_the_repository_carries_it():
+    """#943: item (6) told every child that touches docs/adr to run scripts/checks/verify_adr_refs.py and its siblings, and
+    this repository has no scripts/checks/, so the item was unsatisfiable and a child that amended an ADR ended its run
+    failed (run-20261030-193032-a512c3). A path the repository lacks is named only under a condition, and the item says
+    plainly what to do when it is absent."""
+    text = read("req-checklist.txt")
+    offenders = []
+    for number, item in CHECKLIST_ITEM.findall(text):
+        missing = [p for p in _named_scripts_paths(item) if not (ROOT / p).exists()]
+        if missing and not (CARRIES_IT.search(item) and NOTHING_TO_RUN.search(item)):
+            offenders.append((number, missing))
+    assert offenders == [], (
+        "the checklist names a scripts path this repository lacks, with no condition and no fallback: "
+        f"{offenders}")

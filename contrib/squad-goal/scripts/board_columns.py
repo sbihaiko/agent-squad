@@ -103,16 +103,31 @@ def past(have, want):
     return have in order and want in order and order.index(have) > order.index(want)
 
 
-def view_column(status, closed, labels=()):
+# The close reason GitHub's issue carrier answers for an issue it closed without delivering it (#921): `state_reason`
+# answers `completed`, `not_planned`, `duplicate` or `reopened`. `not_planned` and `duplicate` both say the issue was
+# never delivered, so both name Abandoned (#517). The read parses no delivery out of `reopened`: a reopened issue is
+# open, so no closed card carries that reason.
+NOT_PLANNED = ("not_planned", "duplicate")
+
+
+def not_planned(reason):
+    """True when the carrier's close reason says the issue was not delivered (#921). The carrier answers lowercase and
+    the GraphQL enum spells it uppercase, so the comparison folds the case either way."""
+    return str(reason or "").strip().lower() in NOT_PLANNED
+
+
+def view_column(status, closed, labels=(), reason=None):
     """(column, freeze label or None) the hub draws one card in, from its Status (old or shipped name), state and labels.
 
     Blocked is no column: it is the owner freeze over the column the work reached, Backlog when the Status names none.
-    A card with no Status is not scheduled, so it is Backlog. A closed card is Closed, unless its Status says Abandoned."""
+    A card with no Status is not scheduled, so it is Backlog. A closed card is Closed, unless its Status says Abandoned
+    or its close reason is not planned, or duplicate: that card was not delivered, so it is Abandoned too (#921)."""
     labels = set(labels or ())
     owner = status == "Blocked" or FREEZE_LABEL["owner"] in labels
     freeze = FREEZE_LABEL["owner"] if owner else FREEZE_LABEL["gated"] if FREEZE_LABEL["gated"] in labels else None
     name = SHIPPED_NAME.get(status, status) if status else None
-    if closed: return (name if name == ROLE["abandoned"] else ROLE["issue_closed"]), None
+    if closed:
+        return (ROLE["abandoned"] if name == ROLE["abandoned"] or not_planned(reason) else ROLE["issue_closed"]), None
     return (name or ROLE["unscheduled"]), freeze
 
 
@@ -220,7 +235,7 @@ def terminal_comment(column, facts):
         sha = str(facts.get("sha") or "")[:7]
         test = facts.get("test") or (f"no check ran on merge commit {sha}" if sha else "no merge commit to test")
         body = f"Closed: pull request #{facts['pr']} merged into {facts.get('base') or 'the base'} carries this issue (merge commit {sha or 'unknown'}). Test on the merge: {test}."
-    elif column == "Closed" and facts.get("reason") in ("not_planned", "duplicate"):
+    elif column == "Closed" and not_planned(facts.get("reason")):
         return None   # it was not delivered: "completed" would be false, and the card belongs in Abandoned (#517)
     elif column == "Closed" and facts.get("closed_by"):
         body = f"Closed: @{facts['closed_by']} closed it as completed; no merged pull request into {facts.get('base') or 'the base'} names it."

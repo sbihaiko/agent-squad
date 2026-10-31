@@ -187,20 +187,21 @@ class Children:
         finally:
             got["event"].set()
 
-    async def fix(self, node, name, entry, review, dl_at, coder=None):
+    async def fix(self, node, name, entry, review, dl_at, coder=None, repeated=False):
         """One fix round of a child its review asked to fix (#570): entry `entry` of the same child, in its own worktree, with
         the child's caps and the full review as input. `coder` is the model this round answers on first, when the review
-        streak moved it (ADR-0151); the child's own model when it is None. Its commits stay on the child's branch.
+        streak moved it (ADR-0151); the child's own model when it is None. `repeated` is the review's reading of the same
+        finding twice, which adds one sentence to the prompt (#882). Its commits stay on the child's branch.
         Return its outcome event."""
         ctx = SimpleNamespace(node=node, dl_at=dl_at)
-        return await self.admitted(ctx, name, entry, review, coder)
+        return await self.admitted(ctx, name, entry, review, coder, repeated)
 
-    async def admitted(self, ctx, name, entry=1, review=None, coder=None):
+    async def admitted(self, ctx, name, entry=1, review=None, coder=None, repeated=False):
         """One child inside one slot of the machine-wide child ceiling, keyed on its `spawn_accepted` name. A full ceiling waits,
         bounded by the child's call deadline; a wait that expires fails the child by name. The slot returns when the child ends."""
         e = self.e
         if not e.ceiling:
-            return await self.session(ctx, name, entry, review, coder)
+            return await self.session(ctx, name, entry, review, coder, repeated)
         d = e.dispatch.children[name]["definition"]
         bound = anyio.current_time() + max(0.0, min(d["deadline"] * e.scale, ctx.dl_at - e.clock()))
         try:
@@ -209,7 +210,7 @@ class Children:
         except CeilingWaitExpired as x:
             return self.outcome(name, "fail", [f"ceiling_wait_expired:{x.ceiling}", f"cap:{x.cap}"], None, {}, entry)
         try:
-            return await self.session(ctx, name, entry, review, coder)
+            return await self.session(ctx, name, entry, review, coder, repeated)
         finally:
             e.ceiling.release(lease)
 
@@ -228,10 +229,11 @@ class Children:
                 bad.append(dep)
         return bad
 
-    async def session(self, ctx, name, entry=1, review=None, coder=None):
+    async def session(self, ctx, name, entry=1, review=None, coder=None, repeated=False):
         """One child entry: its worktree, the metered call in `squad/session.py`, then its checks and its spawn lift.
         Entry 1 cuts the worktree; a fix entry (2, 3, ...) works in it again with the review that asked for it, led by
-        `coder` when the review streak moved it (ADR-0151)."""
+        `coder` when the review streak moved it (ADR-0151), and told to test the premise of the last fix when the
+        finding repeated (#882)."""
         e, d, slot = self.e, self.e.dispatch.children[name]["definition"], {}
         dl, ws = min(d["deadline"] * e.scale, ctx.dl_at - e.clock()), str(self.workspace(name, d))
         # A child answers on the envelope's `allow.models`, led by the model its request names. A provider that refuses
@@ -246,7 +248,7 @@ class Children:
         chain = session.model_chain(models, first, spent, hours, hour, km or e.options.get("model_order") or [])
         for m, why in session.hours_skipped(models, first, spent, hours, hour):    # an entry left out of its window is on the record
             e.record.append("model_skipped", node=name, entry=entry, model=m, reason=why)
-        out, tried, model = await session.run_chain(chain, lambda m, first: self.attempt(name, d, ws, dl, m, slot, first and entry == 1, entry, review))
+        out, tried, model = await session.run_chain(chain, lambda m, first: self.attempt(name, d, ws, dl, m, slot, first and entry == 1, entry, review, repeated))
         for m, err in tried:    # every refusal is on the record, exhausted chain or not (#494)
             e.record.append("model_refused", node=name, entry=entry, model=m, error=err[:session.CHAIN_LINE])
             limits.write(m, err)    # a refusal that names its reset closes that account until then (#572)
@@ -254,7 +256,7 @@ class Children:
             return slot["ev"]
         return self.close(ctx, name, d, ws, out, model, session.chain_message(tried) if session.exhausted(chain, tried) else None, entry)
 
-    async def attempt(self, name, d, ws, dl, model, slot, first, entry=1, review=None):
+    async def attempt(self, name, d, ws, dl, model, slot, first, entry=1, review=None, repeated=False):
         """One model's call for one child: the worktree is cut for the first attempt, and a later entry reuses it."""
         e = self.e
 
@@ -266,7 +268,7 @@ class Children:
 
         out = await session.run_call(
             lambda: e.dispatch.held.pop(name, None) or e.budget.hold(d["spend"], d.get("spend_tokens")),   # a resume checks the funding again
-            dl, lambda res: self.request(name, d, res, ws, dl, model, entry, review), adapter=e.adapter, record=e.record, budget=e.budget, clock=e.clock,
+            dl, lambda res: self.request(name, d, res, ws, dl, model, entry, review, repeated), adapter=e.adapter, record=e.record, budget=e.budget, clock=e.clock,
             wall=e.wall, prepare=(lambda res: self.prepare(name, d, dl)) if first else None,
             on_deadline=hit_deadline, on_cancel=cancelled)
         return out, model
@@ -277,8 +279,8 @@ class Children:
             if not made.ok:
                 return ["child_workspace_failed", *made.reasons]
 
-    def request(self, name, d, res, ws, dl, model=None, entry=1, review=None):
-        prompt = f"/{d['skill']['name']} {d['prompt']}" + (fix_input(review) if review else "")
+    def request(self, name, d, res, ws, dl, model=None, entry=1, review=None, repeated=False):
+        prompt = f"/{d['skill']['name']} {d['prompt']}" + (fix_input(review, repeated) if review else "")
         return CallRequest(name, entry, None, prompt, model or d["model"], d["effort"], d["tools"], min(d["stalls"], self.e.limits.get("max_stalls", d["stalls"])),
                            res.amount, ws, dl, new_session_id(self.e.run_id), d["skill"]["name"], None,
                            self.e.limits.get("max_output_tokens"), self.e.limits.get("context_tokens"))
@@ -333,7 +335,11 @@ class Children:
         return outcome, reasons
 
 
-def fix_input(review):
-    """What a fix entry reads after the child's own task: the full review of its last head (#570), never its first line only."""
+def fix_input(review, repeated=False):
+    """What a fix entry reads after the child's own task: the full review of its last head (#570), never its first line only.
+    A finding that repeats the one before it adds one sentence: the coder names the premise its last fix rested on and tests
+    that premise before it attempts a third fix (#882, ADR-0151)."""
     return ("\n\nThe review of your work in this worktree asked for changes. Fix every blocking finding here; your commits stay on"
-            f" this branch, and the new head is reviewed again. The full review:\n\n{review.get('findings') or ''}")
+            f" this branch, and the new head is reviewed again. The full review:\n\n{review.get('findings') or ''}"
+            + ("\n\nName the premise the last fix rested on, and test that premise before you attempt a third fix."
+               if repeated else ""))

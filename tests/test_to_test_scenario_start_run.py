@@ -78,7 +78,7 @@ def test_publish_command_stops_on_a_script_without_hashes_and_stamps_them_only_w
     assert tts.main(["publish", str(md), str(path), "--stamp"], github=gh) == 0
     assert "content_hash" in path.read_text() and len(gh.of("create_issue")) == 6   # parent, area, container, three cases
     assert tts.read_issues(tts.issues_path(path))["parent"] is not None
-    again = FakeGitHub()
+    again = gh.again()                                   # the same GitHub: the card and its Status are still there
     assert tts.main(["publish", str(md), str(path)], github=again) == 0
     assert again.of("create_issue") == []
 

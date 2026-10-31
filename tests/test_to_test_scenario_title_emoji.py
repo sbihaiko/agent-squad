@@ -119,7 +119,7 @@ def test_a_new_publish_starts_with_the_not_run_emoji():
     plan = {"parent": {"title": "Scenario", "body": "b", "labels": []},
             "issues": [{"kind": "case", "id": "A-01", "cases": ["A-01"], "title": "Test case A-01", "body": "b",
                         "labels": [tts.CASE_LABEL], "hash": "h"}]}
-    out = tts.publish(plan, gh)
+    out = tts.publish(plan, gh, board=True)
     assert stub.title(out["issues"]["A-01"]) == "⚪ Test case A-01"
 
 
@@ -130,7 +130,7 @@ def test_republish_backfills_an_unprefixed_title_once_and_keeps_a_verdict_prefix
             "issues": [{"kind": "case", "id": i, "cases": [i], "title": f"Test case {i}", "body": "b",
                         "labels": [tts.CASE_LABEL], "hash": "h"} for i in ("A-01", "A-02")]}
     saved = {"parent": 1, "boarded": True, "cases": {"A-01": {"number": 11}, "A-02": {"number": 12}}}
-    tts.publish(plan, gh, saved=saved)
+    tts.publish(plan, gh, saved=saved, board=True)
     assert (stub.title(11), stub.title(12)) == ("⚪ Test case A-01", "✅ Test case A-02")
 
 

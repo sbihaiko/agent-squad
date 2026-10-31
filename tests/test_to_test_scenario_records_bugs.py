@@ -51,7 +51,7 @@ class BugGitHub(RunGitHub):
 def tree(tmp_path):
     plan = tts.build_plan(script(batches=[batch("aa-x", 3), batch("bb-x", 2)]))
     gh, path = BugGitHub(), tmp_path / "m.gui-test.issues.json"
-    out = tts.publish(plan, gh, map_path=path)
+    out = tts.publish(plan, gh, map_path=path, board=True)
     return gh, path, out["map"]["cases"]
 
 
@@ -130,7 +130,7 @@ def test_the_open_bug_is_found_by_title_when_the_record_names_none(tmp_path, tre
     held = record(gh, cases, "AAX-001")
     held["body"] = "\n".join(line for line in held["body"].splitlines() if not line.startswith("Bug: #"))
     path.unlink()                                                   # nothing but GitHub remembers the bug
-    tts.publish(tts.build_plan(script(batches=[batch("aa-x", 3), batch("bb-x", 2)])), gh, map_path=path)
+    tts.publish(tts.build_plan(script(batches=[batch("aa-x", 3), batch("bb-x", 2)])), gh, map_path=path, board=True)
     run(tmp_path, gh, path, "r2", {"AAX-001": "failed"})
     assert len(gh.bugs()) == 1 and len(gh.comments[bug]) == 1
 

@@ -43,7 +43,12 @@ classify() {
 # on; a defect there fails as that defect; inconclusive again exits 4, and the landing holds. The battery output stays in a
 # log that the failure line names. Exit 1 is a defect, 4 is inconclusive; neither grants a landing.
 retrycmd=${SG_FAST_RETRY_CMD:-"$py -m pytest -p no:deepeval -p no:xdist -o heavy_cap_seconds=20"}
-log=${SG_STATE:-${TMPDIR:-/tmp}}/fast-gate-$(git rev-parse --short HEAD 2>/dev/null || echo x).log
+logdir=${SG_FAST_LOG_DIR:-${TMPDIR:-/tmp}}   # never SG_STATE (#945): the child that ran the gate may not open a file there
+mkdir -p "$logdir" 2>/dev/null
+gcd=$(git rev-parse --git-common-dir 2>/dev/null); [ -n "$gcd" ] && gcd=$(cd "$top" && cd "$gcd" 2>/dev/null && pwd -P)   # the real repository, never the worktree
+# The name is the real repository, the tip and a pid: every child runs in ws/target-<child>, so a worktree basename collides
+# across runs, and two runs at one short sha would write this log at the same time (#945).
+log=$logdir/fast-gate-$(printf '%s' "${gcd:-$top}" | cksum | cut -d' ' -f1)-$(git rev-parse --short HEAD 2>/dev/null || echo x)-$$.log
 for try in 1 2; do
   lg=$log; [ $try = 1 ] || lg=${log%.log}-retry.log
   bash -c "$fastcmd" > "$lg" 2>&1 && break
@@ -61,6 +66,9 @@ for try in 1 2; do
     *) echo "fast-gate: $cls: $detail ($lg)"; exit 1;;
   esac
 done
+# (#885) The pytest tally and the code-quality reading print together; the pipe's status is tee's, so the reading never changes the exit.
+tally=$(/usr/bin/grep -E '[0-9]+ (passed|failed|errors?)' "$lg" | tail -n 1)
+{ echo "fast-gate: pytest tally: ${tally:-none: no pytest count in the battery log}"; "$py" "$here/quality-reading.py" "$base"; } 2>&1 | tee -a "$lg"
 suites=$(git diff --name-only --diff-filter=d "$mb" HEAD | sed -n -e 's|^contrib/squad-goal/scripts/\(.*\)\.sh$|\1|p' -e 's|^contrib/squad-goal/scripts/\(.*\)\.py$|\1|p' | grep -v / \
   | sed 's|^test-||' | sort -u)
 failed=""
@@ -69,3 +77,7 @@ for n in $suites; do s=$top/contrib/squad-goal/scripts/test-$n.sh; [ -f "$s" ] |
   hm=$(mktemp -d); if (cd "$top" && env $(compgen -e | grep '^SG_' | sed 's/^/-u /') HOME="$hm" bash "$s"); then echo "--- ok: test-$n.sh"
   else echo "--- FAILED: test-$n.sh"; failed="$failed test-$n.sh"; fi; rm -rf "$hm"; done
 [ -z "$failed" ] || { echo "fast-gate: FAILED:$failed"; exit 1; }
+# The verdict the child reads: an exit 0 is a pass, but the one line names it and the log the child may open, so a session that
+# saw a lock wait on stderr still knows the gate passed (#945).
+sha=$(git rev-parse HEAD 2>/dev/null)
+echo "fast-gate: pass ${sha:0:9} (log $lg)"

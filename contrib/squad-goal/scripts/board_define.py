@@ -93,10 +93,11 @@ def expand(binding, project_id, rows):
 
 def cards(binding, status):
     """Every card in one paginated items read: n (repo#number, the key on a board two repositories share), repo, number,
-    iid, st (the Status option name), s (open/closed) and l (labels)."""
+    iid, st (the Status option name), s (open/closed), l (labels) and cr (the issue's close reason, #921)."""
     out = binding.api("--paginate", f"{binding.base}/items?per_page=100&fields[]={status['id']}", "--jq",
                       '.[]|select(.content.number)|{iid:.id,number:.content.number,repo:((.content.repository_url//"")|sub(".*/repos/";"")),'
                       's:(.content.state//""),l:[.content.labels[]?.name],'
+                      'cr:((.content.state_reason//"")|if type=="string" then ascii_downcase else . end),'
                       'st:(((.fields[]?|select(.name=="Status")|.value.name|if type=="object" then .raw else . end))//"")}|@json')
     rows = [json.loads(l) for l in out.splitlines() if l.strip()]
     for r in rows: r["n"] = f"{r['repo']}#{r['number']}"

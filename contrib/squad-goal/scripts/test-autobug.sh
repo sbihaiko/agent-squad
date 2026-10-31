@@ -800,8 +800,9 @@ hold() { # <count or -> <cap or -> [age in minutes]: one dry pass on fresh state
 r=$(hold 3 2); rc=$?
 [ "$rc" = 0 ] && ok "19 a hold exits 0" || ko "19 the held pass exited $rc: '$r'"
 $G -q "AUTOBUG would dispatch" <<<"$r" && ko "19 over the cap the pass dispatched: '$r'" || ok "19 over the cap the pass dispatches nothing"
-$G -qxF "DISPATCH HOLD: 3 children wait for review (cap 2); no new run this pass" <<<"$r" && ok "19 the hold names the count and the cap" || ko "19 no hold line: '$r'"
-$G -qxF "DISPATCH HOLD: 3 children wait for review (cap 2); no new run this pass" "$T/st/cycle.log" && ok "19 the hold is published to the loop log" || ko "19 cycle.log: $(cat "$T/st/cycle.log")"
+HOLD19='^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} DISPATCH HOLD: 3 children wait for review \(cap 2\); no new run this pass$'
+$G -qE "$HOLD19" <<<"$r" && ok "19 the hold names the count and the cap, stamped in UTC" || ko "19 no hold line: '$r'"
+$G -qE "$HOLD19" "$T/st/cycle.log" && ok "19 the hold is published to the loop log, stamped" || ko "19 cycle.log: $(cat "$T/st/cycle.log")"
 r=$(hold 2 2); case "$r" in *"AUTOBUG would dispatch"*"[1228]"*) ok "19 at the cap the pass dispatches";; *) ko "19 at the cap: '$r'";; esac
 r=$(hold 0 2); case "$r" in *"AUTOBUG would dispatch"*"[1228]"*) ok "19 under the cap the pass dispatches";; *) ko "19 under the cap: '$r'";; esac
 r=$(hold 9 -); case "$r" in *"AUTOBUG would dispatch"*"[1228]"*) ok "19 no cap is no limit";; *) ko "19 no cap: '$r'";; esac

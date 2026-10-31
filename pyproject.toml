@@ -9,7 +9,8 @@ dependencies = ["anyio>=4", "jsonschema>=4", "pyyaml>=6"]
 
 [project.optional-dependencies]
 sdk = ["claude-agent-sdk==0.2.161"]
-dev = ["ruff", "pytest>=8", "pytest-json-report", "pytest-xdist", "mypy", "types-PyYAML", "types-jsonschema"]
+dev = ["ruff", "pytest>=8", "pytest-json-report", "pytest-xdist", "mypy", "types-PyYAML", "types-jsonschema",
+       "radon", "coverage", "pylint", "mutmut==3.8.1"]
 
 [project.scripts]
 squad = "squad.cli:main"
@@ -59,3 +60,10 @@ select = ["E", "F", "I", "B", "BLE", "UP"]
 "scripts/**" = ["E701", "E702", "B905", "BLE001", "E501", "B007", "E741"]
 "docs/design/**" = ["E701", "E702", "B905", "E741"]
 "bench/subject/make_issues.py" = ["E702", "E731"]
+
+[tool.mutmut]
+# The one-off quality reading of #881 (radon, coverage, pylint, mutmut are the `dev` extra, never a runtime dep).
+# `squad` is the code under mutation; the runner needs these two trees present and these pytest flags.
+source_paths = ["squad"]
+also_copy = ["docs", "config", "prompts", "contrib", "dashboard", "commands", "scripts", "bench", "vendor", ".github", "CLAUDE.md", "pyproject.toml"]
+pytest_add_cli_args = ["-x", "-q", "-p", "no:deepeval", "-p", "no:cacheprovider"]
