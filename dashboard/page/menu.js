@@ -93,12 +93,13 @@ $("b-example").addEventListener("click", loadExample);
 $("side").addEventListener("click", (e) => {
   const b = e.target.closest("[data-start]");
   if (!b) return;
-  if (b.dataset.start === "open") $("f-graph").click();
+  if (b.dataset.start === "open") $("l-open").click();
   else if (b.dataset.start === "example") loadExample();
 });
 // `squad editor <id>` opens this page with the named workflow in its fragment: a page opened from a file cannot read a file of its own.
-const OPENED = (() => { const m = /^#workflow=(.+)$/.exec(location.hash); if (!m) return null; try { return JSON.parse(decodeURIComponent(m[1])); } catch (e) { return null; } })();
-if (OPENED && typeof OPENED.text === "string") loadGraph(OPENED.text, String(OPENED.name));
+const OPENED = core.openedWorkflow(location.hash);
+if (OPENED && OPENED.error) setStatus(OPENED.error, true);
+else if (OPENED) loadGraph(OPENED.text, OPENED.name);
 $("f-record").addEventListener("change", async (e) => {
   const f = e.target.files[0]; if (!f) return;
   const r = core.parseRecord(await readFile(f));

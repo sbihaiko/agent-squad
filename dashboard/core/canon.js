@@ -135,8 +135,22 @@ function canonModule(ENGINE) {
     return { doc };
   }
 
+  // The workflow a `squad editor` link names in its fragment: { name, text }; null when there is none; { error } when it cannot be read.
+  function openedWorkflow(hash) {
+    const m = /^#workflow=(.+)$/.exec(hash);
+    if (!m) return null;
+    let got = null;
+    try {
+      const b64 = m[1].replace(/-/g, "+").replace(/_/g, "/");
+      const bytes = Uint8Array.from(atob(b64.padEnd(Math.ceil(b64.length / 4) * 4, "=")), (c) => c.charCodeAt(0));
+      got = JSON.parse(new TextDecoder().decode(bytes));
+    } catch (e) { got = null; }
+    if (!isObj(got) || typeof got.name !== "string" || typeof got.text !== "string") return { error: "The workflow in this link could not be read; use Open graph." };
+    return { name: got.name, text: got.text };
+  }
+
   const same = (a, b) => canonText(a) === canonText(b);
   const clone = (v) => JSON.parse(JSON.stringify(v));
 
-  return { isObj, same, clone, pyFloat, pyInt, pyString, cmpCodePoints, canonText, canonFromText, sha256Hex, graphHash, parseImport };
+  return { isObj, same, clone, pyFloat, pyInt, pyString, cmpCodePoints, canonText, canonFromText, sha256Hex, graphHash, parseImport, openedWorkflow };
 }

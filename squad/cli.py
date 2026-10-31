@@ -5,6 +5,7 @@ The exit code is the verdict's exit code. A usage or graph error exits 2.
 """
 import argparse
 import asyncio
+import base64
 import importlib.util
 import json
 import re
@@ -338,6 +339,9 @@ def _dashboard(a):
     return 0
 
 
+EDITOR_LINK_MAX = 20_000   # a longer link is cut or refused by a browser
+
+
 def _editor(a):
     from squad import runs, workflows
     try:
@@ -345,11 +349,17 @@ def _editor(a):
     except workflows.WorkflowError as e:
         return _fail(str(e))
     url = "file://" + quote(str(runs.PAGE))
-    print(f"workflow: {path}\nsave folder: {workflows.default_dir()}\nSave graph writes the workflow in place.\n{url}")
+    payload = base64.urlsafe_b64encode(json.dumps({"name": path.name, "text": path.read_text()}).encode("utf-8")).decode("ascii").rstrip("=")
+    lines = [f"workflow: {path}", f"save folder: {workflows.default_dir()}",
+             "Save graph downloads a copy; choose Open graph and pick the workflow above to write it in place."]
+    if len(payload) <= EDITOR_LINK_MAX:
+        url += "#workflow=" + payload
+    else:
+        lines.append("The workflow is too large for a link, so the page opens empty: choose Open graph and pick it above.")
+    print("\n".join([*lines, url]))
     if not a.no_open:
         import webbrowser
-        payload = json.dumps({"name": path.name, "text": path.read_text()})
-        webbrowser.open(url + "#workflow=" + quote(payload, safe=""))
+        webbrowser.open(url)
     return 0
 
 
