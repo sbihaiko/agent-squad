@@ -41,12 +41,30 @@ ci_state() {  # sha -> green | red | running, from the check runs of the commit
   [ "$c" = none ] && c=running   # zero check runs is not yet green: promotion waits for them
   printf '%s\n' "$c"
 }
+hash_list() { if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi | cut -d' ' -f1; }
 prove() {  # <tip>: refuse unless the proof for this tip is green, each refusal in its own words
   if [ "$proof" = local ]; then
     IFS=$'\t' read -r _ kind res sha < "$state/gate-status-full" 2>/dev/null
-    [ "$kind" = full ] || refuse "$1" "not promoted: no local proof: $state/gate-status-full holds no full-gate result (run the promotion gate: SG_GATE_KIND=full bash gate.sh bash -c '<the full suite>')"
-    [ "$sha" = "$1" ] || refuse "$1" "not promoted: the local proof is for $sha, not the dev tip $1"
-    [ "$res" = pass ] || refuse "$1" "not promoted: the local proof is a fail, not a pass"
+    if [ "$kind" = full ] && [ "$sha" = "$1" ]; then
+      [ "$res" = pass ] || refuse "$1" "not promoted: the local proof is a fail, not a pass"
+      return
+    fi
+    if [ ! -s "$state/gate-status-delta" ]; then
+      [ "$kind" = full ] || refuse "$1" "not promoted: no local proof: no delta record and no full proof; $state/gate-status-full holds no full-gate result (run the promotion gate: SG_GATE_KIND=full bash gate.sh bash -c '<the full suite>')"
+      refuse "$1" "not promoted: the local proof is for $sha, not the dev tip $1"
+    fi
+    # A delta (ADR-0156) carries a full pass across a covered change; every check is repeated here, on the tree this pass reads.
+    IFS=$'\t' read -r _ dk dres dP dT dh < "$state/gate-status-delta" 2>/dev/null
+    [ "$dk" = delta ] || refuse "$1" "not promoted: $state/gate-status-delta is not a delta record"
+    [ "$dres" = pass ] || refuse "$1" "not promoted: the delta is a fail, not a pass"
+    if [ "$dT" != "$1" ] && g merge-base --is-ancestor "$dT" "$1" 2>/dev/null; then refuse "$1" "not promoted: the record is stale because the tip moved from $dT to $1"; fi
+    [ "$dT" = "$1" ] || refuse "$1" "not promoted: the delta proved $dT, not the dev tip $1"
+    [ "$kind" = full ] && [ "$sha" = "$dP" ] && [ "$res" = pass ] || refuse "$1" "not promoted: its P $dP has no full pass"
+    g merge-base --is-ancestor "$dP" "$1" 2>/dev/null || refuse "$1" "not promoted: P $dP is not an ancestor of the dev tip $1"
+    grep -qxF "$dP" "$state/gate-carried" 2>/dev/null && refuse "$1" "not promoted: P $dP is already carried by a delta"
+    list=$(g diff --name-only "$dP..$1" | LC_ALL=C sort)
+    [ "$(printf '%s\n' "$list" | hash_list)" = "$dh" ] || refuse "$1" "not promoted: the proved changed-file list no longer hashes to P..T"
+    carried=$dP
   else
     st=$(ci_state "$1" 2>/dev/null)
     [ "$st" = green ] || refuse "$1" "not promoted: CI is ${st:-unknown} (green needed)"
@@ -76,4 +94,5 @@ o=$(gh_send -X PUT "repos/$SG_REPO/pulls/$pr/merge" -f merge_method=merge 2>&1) 
   || refuse "$tip" "not promoted: pull request #$pr could not be merged: $(printf '%s' "$o" | tail -1)"
 printf '%s' "$o" | jq -e '.merged == true' >/dev/null 2>&1 \
   || refuse "$tip" "not promoted: pull request #$pr did not merge: $(printf '%s' "$o" | jq -r '.message // "no reason"' 2>/dev/null)"
+[ -n "${carried:-}" ] && echo "$carried" >> "$state/gate-carried"
 echo "PROMOTED stg $tip via pull request #$pr"

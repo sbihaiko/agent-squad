@@ -1,0 +1,6 @@
+contrib/squad-goal/scripts/nightly.sh	contrib/squad-goal/scripts/test-nightly.sh
+contrib/squad-goal/scripts/test-nightly.sh	contrib/squad-goal/scripts/test-nightly.sh
+contrib/squad-goal/scripts/fast-gate.sh	contrib/squad-goal/scripts/test-fast-gate.sh
+contrib/squad-goal/scripts/test-fast-gate.sh	contrib/squad-goal/scripts/test-fast-gate.sh
+CLAUDE.md	tests/test_setup.py
+docs/*	tests/test_setup.py
