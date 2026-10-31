@@ -1141,6 +1141,195 @@ def burn_cached(now=None):
     if now - _BURN["t"] >= BURN_TTL: _BURN.update(t=now, v=burn_read())
     return _BURN["v"]
 
+
+# --- Spend & limits (#926). The token guard reads its on/off switch, its daily cap and its pause factor from the profile,
+# and env.sh sources that profile on every pass, so a value this section writes is read on the guard's next pass with no
+# restart. The page renders; reading, validating, diffing, writing and recording live here (ADR-0137). The profile and the
+# ledger are each written to a temp file and renamed, so a reader never sees half a file (ADR-0030).
+SCRIPTS = pathlib.Path(__file__).resolve().parent
+LIMIT_KEY = {"guard": ("SG_TOKEN_GUARD", "on"), "cap": ("SG_TOKEN_BURN_CAP", "1500000"),
+             "factor": ("SG_TOKEN_PAUSE_FACTOR", "3"), "window": ("SG_TOKEN_BURN_WINDOW_H", "24")}
+LIMIT_LABEL = {"cap": "token cap", "factor": "pause factor"}
+LIMIT_LEDGER = "spend-limits-ledger.jsonl"
+
+def profiles_dir():
+    """The directory the profiles live in: SG_PROFILES_DIR when the runner exports it (env.sh does), else the seam's answer."""
+    d = os.environ.get("SG_PROFILES_DIR")
+    if d: return pathlib.Path(d)
+    try:
+        r = subprocess.run(["bash", "-c", '. "$1/address.sh" >/dev/null 2>&1; sg_profiles_dir', "_", str(SCRIPTS)],
+                           capture_output=True, text=True, timeout=20)
+    except Exception: return None
+    return pathlib.Path(r.stdout.strip()) if r.stdout.strip() else None
+
+def profile_file():
+    """The profile in force: the one file the token guard sources on every pass. None when no profile is in force, and a
+    theme that cannot name the file reads nothing and writes nothing."""
+    slug, d = os.environ.get("SG_PROFILE", ""), profiles_dir()
+    return d / f"{slug}.sh" if slug and d is not None else None
+
+def profile_limits(path=None):
+    """The four settings of that profile, as the guard reads them with the environment silent: address.sh's
+    `sg_profile_setting <slug> <KEY> <default>` sources the file exactly as env.sh does. One bash call for all four."""
+    path = path or profile_file()
+    raw = {k: d for k, (_, d) in LIMIT_KEY.items()}
+    if path is None: return raw
+    script = '. "$1/address.sh" >/dev/null 2>&1; ' + "; ".join(
+        f'printf "%s\\n" "$(sg_profile_setting "$2" {key} {d})"' for key, d in LIMIT_KEY.values())
+    try:
+        r = subprocess.run(["bash", "-c", script, "_", str(SCRIPTS), path.stem], capture_output=True, text=True, timeout=20,
+                           env={**os.environ, "SG_PROFILES_DIR": str(path.parent)})
+        got = r.stdout.splitlines() if r.returncode == 0 else []
+    except Exception: got = []
+    for (k, _), v in zip(LIMIT_KEY.items(), got):
+        if v.strip(): raw[k] = v.strip()
+    return raw
+
+def _positive_int(v):
+    """A daily cap: a positive whole number. A bool is not a number here, and neither is "1.5", "1_000" or "12 34"."""
+    if isinstance(v, bool): return None
+    try: n = int(str(v).strip())
+    except (TypeError, ValueError): return None
+    return n if n > 0 and str(v).strip() == str(n) else None
+
+def _positive_num(v):
+    """A pause factor: a positive number, whole or fractional. A bool is not one."""
+    if isinstance(v, bool): return None
+    try: n = float(str(v).strip())
+    except (TypeError, ValueError): return None
+    return n if n > 0 and n == n and n != float("inf") else None
+
+def _guard_value(v):
+    return v if v in ("on", "off") else None
+
+def _num(n):
+    return f"{n:g}"
+
+def limits_settings(path=None):
+    """The guard's settings as the theme shows and edits them: the profile's value where it is one, else the guard's default."""
+    raw = profile_limits(path)
+    raw["cap"] = _positive_int(raw["cap"]) or int(LIMIT_KEY["cap"][1])
+    raw["factor"] = _positive_num(raw["factor"]) or float(LIMIT_KEY["factor"][1])
+    raw["window"] = _positive_int(raw["window"]) or int(LIMIT_KEY["window"][1])
+    raw["guard"] = "off" if str(raw["guard"]).strip().lower() in ("off", "0", "no", "false") else "on"
+    return raw
+
+def limit_line(cap, factor, window_h):
+    """The hourly burn that pauses dispatch: SG_TOKEN_PAUSE_FACTOR times the cap's hourly share, as token-guard.sh computes it."""
+    share = cap * 3600 // (window_h * 3600)
+    return int(share * factor)
+
+def limits_last():
+    """The last change the ledger records, or None: {"at": local time, "text": the diff line}."""
+    try: lines = [ln for ln in (STATE / LIMIT_LEDGER).read_text().splitlines() if ln.strip()]
+    except OSError: return None
+    for ln in reversed(lines):
+        try: rec = json.loads(ln)
+        except ValueError: continue
+        if isinstance(rec, dict) and rec.get("text"): return rec
+    return None
+
+def limits_read():
+    """The Spend & limits theme's data: the settings the guard will read on its next pass, the burn it measures, the pause
+    marker it writes and the last change recorded. Every value is a fact of one file or one marker; the page renders it."""
+    path = profile_file()
+    s = limits_settings(path)
+    hour = burn_read(hours=1)
+    window = burn_read(hours=s["window"])
+    return {"profile": str(path) if path else None, "guard": s["guard"], "cap": s["cap"], "factor": s["factor"],
+            "window_h": s["window"], "pause_line": limit_line(s["cap"], s["factor"], s["window"]),
+            "hour_burn": (hour or {}).get("total"), "window_burn": (window or {}).get("total"),
+            "paused": (STATE / "token-pause").exists(), "last_change": limits_last()}
+
+def limits_diff(old, new):
+    """The diff a Save shows before it writes: one line per changed setting, in the order the theme reads them."""
+    out = []
+    if new["cap"] != old["cap"]: out.append(f"Spend & limits · token cap: {old['cap']} -> {new['cap']}")
+    if new["factor"] != old["factor"]: out.append(f"Spend & limits · pause factor: {_num(old['factor'])} -> {_num(new['factor'])}")
+    if new["guard"] != old["guard"]: out.append(f"token guard: {new['guard']}")
+    return out
+
+def profile_set_line(text, key, value):
+    """One profile's line rewritten in place, every other line kept as it is. A profile writes a setting as
+    `: "${KEY:=value}"`, as `KEY=value` or as `export KEY=value`; the last line that names the key is the one bash ends on,
+    so it is the one replaced, and a profile that names none gets the line appended in the file's own `:=` form."""
+    pats = [re.compile(r"(\$\{" + key + r":=)([^}]*)(\})"),
+            re.compile(r"((?:^|\n)[ \t]*(?:export[ \t]+)?" + key + r"=)(\"[^\"]*\"|'[^']*'|[^\s#]*)")]
+    hits = [(m.start(), m.end(), m, i) for i, p in enumerate(pats) for m in p.finditer(text)]
+    if hits:
+        _, _, m, i = max(hits, key=lambda h: h[0])
+        return text[:m.start(2)] + value + text[m.end(2):]
+    return text + ("" if not text or text.endswith("\n") else "\n") + f': "${{{key}:={value}}}"' + "\n"
+
+def limits_write(path, changes):
+    """Write the profile atomically, and only a file bash parses: a profile the guard sources is never half a file, and a
+    save that would break the file is refused before it replaces the good one. Returns an error, or None."""
+    try: text = path.read_text()
+    except OSError: text = ""
+    for key, value in changes:
+        text = profile_set_line(text, key, value)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text(text)
+        r = subprocess.run(["bash", "-n", str(tmp)], capture_output=True, text=True, timeout=20)
+        if r.returncode:
+            msg = next((ln for ln in r.stderr.splitlines() if ln.strip()), "bash -n failed")
+            return f"the profile would not parse: {msg}"
+        os.replace(tmp, path)
+    except OSError as e:
+        return f"the profile could not be written: {e.strerror or e}"
+    finally:
+        try: tmp.unlink()
+        except OSError: pass
+    return None
+
+def limits_record(diff):
+    """Every change with its local time, one line per change, in the state directory's own ledger. The file is rewritten
+    through a temp file and a rename, so a reader sees whole lines only."""
+    path = STATE / LIMIT_LEDGER
+    recs = []
+    try:
+        for ln in path.read_text().splitlines():
+            try: recs.append(json.loads(ln))
+            except ValueError: continue
+    except OSError: recs = []
+    at = time.strftime("%Y-%m-%d %H:%M:%S")
+    recs += [{"at": at, "text": t} for t in diff]
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in recs))
+        os.replace(tmp, path)
+    except OSError: pass
+    finally:
+        try: tmp.unlink()
+        except OSError: pass
+
+def limits_set(body):
+    """POST /api/limits: validate, diff, then write. With `confirm` false it answers the diff and writes nothing, which is
+    what the theme shows before it asks. A cap that is not a positive whole number is refused with a message and no write."""
+    if not isinstance(body, dict): return {"err": "bad request"}
+    path = profile_file()
+    if path is None: return {"err": "no profile in force: SG_PROFILE and SG_PROFILES_DIR name none"}
+    cur = limits_settings(path)
+    cap = _positive_int(body.get("cap", cur["cap"]))
+    if cap is None: return {"err": "token cap must be a positive whole number"}
+    factor = _positive_num(body.get("factor", cur["factor"]))
+    if factor is None: return {"err": "pause factor must be a positive number"}
+    guard = _guard_value(body.get("guard", cur["guard"]))
+    if guard is None: return {"err": "token guard is on or off"}
+    new = {"cap": cap, "factor": factor, "guard": guard}
+    diff = limits_diff(cur, new)
+    if body.get("confirm") is not True: return {"diff": diff}
+    if diff:
+        changes = []
+        if new["cap"] != cur["cap"]: changes.append((LIMIT_KEY["cap"][0], str(new["cap"])))
+        if new["factor"] != cur["factor"]: changes.append((LIMIT_KEY["factor"][0], _num(new["factor"])))
+        if new["guard"] != cur["guard"]: changes.append((LIMIT_KEY["guard"][0], new["guard"]))
+        err = limits_write(path, changes)
+        if err: return {"err": err}
+        limits_record(diff)
+    return {"diff": diff, "state": limits_read()}
+
 def _tok(n):
     n = int(n)
     return f"{n/1e6:.1f}M".replace(".0M", "M") if n >= 1e6 else f"{n/1e3:.0f}k" if n >= 1e3 else str(n)
@@ -2965,7 +3154,7 @@ RUN_STATES = [
 ]
 
 WEB_TOKENS = (pathlib.Path(__file__).resolve().parent / "web-tokens.css").read_text()
-PAGE = r"""<!doctype html><meta charset=utf-8><title>Hub</title>
+PAGE = r"""<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Hub</title>
 <script>if(matchMedia("(max-width: 600px)").matches&&sessionStorage.getItem("squad-view")!=="desktop")location.replace(location.pathname.replace(/\/?$/,"/")+"mobile")</script>
 <style>
 /*WEB_TOKENS*/
@@ -3169,6 +3358,17 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 #ldfacts details.nfd[open]{white-space:normal}#ldfacts details.nfd>ul{margin:4px 0 0;padding:0 0 0 16px;white-space:normal;color:var(--mute);font-variant-numeric:normal}
 .load{display:inline-block;margin-left:4px;padding:0 5px;border-radius:9px;background:#3a2a12;color:var(--warn);font-size:var(--fs-min);border:1px solid #6b5223}
 #who{padding:3px 12px;color:var(--mute);border-bottom:1px solid var(--line)}#who:empty{display:none}
+/* Settings > Spend & limits (#926): the guard's switch, cap and factor, the burn it measures, and the diff before a write. */
+#lbody select,#lbody input{background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;font-size:var(--fs-min);height:var(--ctl-h);padding:0 6px;min-width:0;max-width:100%}
+#lbody input{width:104px;text-align:right;font-variant-numeric:tabular-nums}
+#lbody .lv{grid-column:2;justify-self:end;min-width:0;max-width:100%;text-align:right;overflow-wrap:anywhere;color:var(--mute);font-size:var(--fs-min)}
+#lbody .ldiff{margin:8px 0 0;padding:8px 10px;background:#1f1b12;border:1px solid #6b5223;border-radius:6px;font-size:var(--fs-min)}
+#lbody .ldiff b{display:block;margin-bottom:4px;color:var(--warn)}#lbody .ldiff .ln{font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+#lbody .lact{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap}#lbody .lact button{height:var(--ctl-h);padding:0 12px}
+/* A phone forced into the desktop view (#926): one column, a full-width sidebar, and nothing wider than 390 px. The docked
+   board lays the window out as a two-column grid of its own (`body.dockb`), so the phone states both layouts: on a 390 px
+   screen the 300 px sidebar and the board column are what a reader has to scroll sideways to reach. */
+@media (max-width:600px){body{height:auto}body.tkopen #win{margin-right:0}body.tkopen #board{width:auto}#win{display:block;overflow:visible}body.dockb #win{display:block;grid-template-columns:none;grid-template-rows:none}#side{width:auto;border-right:0;border-bottom:1px solid var(--line)}body.dockb #side{grid-row:auto;grid-column:auto}#main{min-height:50vh}body.dockb #main{grid-column:auto;grid-row:auto}#board{width:auto}body.dockb #board{grid-column:auto;grid-row:auto;height:60vh}#foot{flex-wrap:wrap}#ldfacts{margin-left:0;white-space:normal}#lbody input{width:92px}}
 </style>
 <div id=who>__WHO__</div>
 <a id=mobile-link href="#" style="margin:0 12px;color:#8a93a3;font-size:var(--fs-min)">mobile view</a><script>document.getElementById("mobile-link").href=location.pathname.replace(/\/?$/,"/")+"mobile"</script>
@@ -3177,6 +3377,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 <details id=plans class=sp><summary>subscriptions<span class=sr id=plsr></span></summary><div class=sb><div id=subs></div></div></details>
 <details id=mdl class=sp><summary>squad models<span class=sr id=mdsr></span></summary><div class=sb id=mbody></div></details>
 <details id=stats class=sp><summary>cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><h4>Spend <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Figures at API list prices (API-equivalent)."></span></h4><div class=tot id=tot></div><div class=m id=totnote></div><div class=cash id=cash></div><h4>Spend over time <span class=row id=per></span></h4><div id=chart></div><div id=kpi></div><div id=open></div><h4>Tokens by model <small class=m id=piet>all time</small></h4><div id=pie></div></div></details>
+<details id=lim class=sp><summary>Spend &amp; limits<span class=sr id=limsr></span></summary><div class=sb id=lbody></div></details>
 <div id=list></div>
 </div>
 <div id=main></div>
@@ -3376,11 +3577,42 @@ $("#mbody").addEventListener("click",async e=>{const t=e.target.closest("button"
  else if(t.id==="mrv")mdl=JSON.parse(mdlSrv);
  else if(t.id==="msv"){try{const r=await fetch("/api/models",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(mdl)}),d=await r.json();if(d.err)mdlMsg="!"+d.err;else{mdl=d;mdlSrv=JSON.stringify(d);mdlMsg="saved · new runs use it"}}catch(x){mdlMsg="!save failed"}}
  mdlRender()});
-/* accordions: each of the three answers its own header and leaves the others alone; the open set is stored like the pins */
-const ACC=["plans","stats","mdl"];
+/* Settings > Spend & limits (#926): the token guard's on/off switch, its daily cap and its pause factor, with the burn
+   it measures and whether dispatch is paused now. The page renders and asks; the hub validates, shows the diff, writes
+   the profile and records the change (ADR-0137), and the guard reads it on its next pass with no restart. */
+let limS=null,limMsg="",limDiff=null,limPend=null;   // limPend holds the typed settings while the diff asks for a confirm
+const limN=v=>v==null?"—":tk(v);
+const limVals=()=>limPend||{guard:($("#limg")||{}).value||"",cap:($("#limc")||{}).value||"",factor:($("#limf")||{}).value||""};
+function limRender(){const b=$("#lbody");if(!b)return;if(!limS){b.innerHTML="<span class=m>loading…</span>";return}
+ const s=limS,v=limPend||s;const sr=$("#limsr");if(sr)sr.textContent=s.guard==="off"?"off":s.paused?"paused":"on";
+ let h=`<div class=kr><span class=l>token guard</span><select id=limg aria-label="token guard"><option value=on${v.guard==="on"?" selected":""}>on</option><option value=off${v.guard==="off"?" selected":""}>off</option></select></div>`
+ +`<div class=kr><span class=l>daily token cap</span><input id=limc type=number min=1 step=1 inputmode=numeric value="${v.cap}" aria-label="daily token cap"></div>`
+ +`<div class=kr><span class=l title="the hourly burn that pauses dispatch, as a multiple of the cap's hourly share">pause factor</span><input id=limf type=number min=0.1 step=0.5 inputmode=decimal value="${v.factor}" aria-label="pause factor"></div>`
+ +`<div class=kr><span class=l>dispatch pauses over</span><b>${limN(s.pause_line)}<small>tokens/h</small></b></div>`
+ +`<div class=kr><span class=l>last hour</span><b${s.hour_burn==null?" class=m":""}>${limN(s.hour_burn)}<small>tokens</small></b></div>`
+ +`<div class=kr><span class=l>window <small>${s.window_h} h</small></span><b${s.window_burn==null?" class=m":""}>${limN(s.window_burn)}<small>tokens</small></b></div>`
+ +`<div class=kr><span class=l>dispatch now</span><b class="${s.paused?"w":"ok"}">${s.paused?"paused":"running"}</b></div>`
+ +`<div class=kr><span class=l>last change</span><span class=lv title="${esc(s.profile||"")}">${s.last_change?esc(s.last_change.at+" · "+s.last_change.text):"none recorded"}</span></div>`;
+ if(limDiff)h+=`<div class=ldiff role=alert><b>Save these changes?</b>${limDiff.map(x=>`<div class=ln>${esc(x)}</div>`).join("")}<div class=lact><button id=limok>Confirm</button><button id=limno>Cancel</button></div></div>`;
+ h+=`<div class="msave${limDiff?" dirty":""}"><button id=limsv>Save</button><button id=limrv>Revert</button><span class="st${limMsg.startsWith("!")?" err":limMsg?" okm":""}">${limMsg?esc(limMsg.replace(/^!/,"")):(limDiff?"":"the guard reads a save on its next pass")}</span></div>`;
+ b.innerHTML=h}
+async function limLoad(){try{limS=await (await fetch("/api/limits")).json();limDiff=null;limMsg="";limRender()}catch(e){limMsg="!load failed";limRender()}}
+async function limPost(confirm){const vals=limVals();if(!confirm)limPend={guard:vals.guard,cap:vals.cap,factor:vals.factor};   // the diff is asked about what was typed, not about what is saved
+ try{const r=await fetch("/api/limits",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...vals,confirm})}),d=await r.json();
+ if(d.err){limDiff=null;limMsg="!"+d.err}
+ else if(confirm){limS=d.state||limS;limDiff=null;limPend=null;limMsg=(d.diff||[]).length?"saved · the guard reads it on its next pass":"nothing changed"}
+ else if((d.diff||[]).length)limDiff=d.diff;else{limMsg="nothing changed";limPend=null}}catch(x){limMsg="!save failed"}
+ limRender()}
+$("#lbody").addEventListener("click",e=>{const t=e.target.closest("button");if(!t)return;
+ if(t.id==="limok")limPost(true);else if(t.id==="limsv")limPost(false);
+ else if(t.id==="limrv"||t.id==="limno"){limDiff=null;limPend=null;limMsg="";limRender()}});
+$("#lbody").addEventListener("input",e=>{if(e.target.id==="limc"||e.target.id==="limf"){limMsg="";const st=$("#lbody .msave .st");if(st)st.textContent="unsaved changes"}});
+/* accordions: each of the four answers its own header and leaves the others alone; the open set is stored like the pins */
+const ACC=["plans","stats","mdl","lim"];
 let openAcc=new Set(Array.isArray(ls.acc)?ls.acc.filter(i=>ACC.includes(i)):[]);   // the old single-id string is ignored, not trusted, and not fatal
 const saveAcc=()=>{ls.acc=[...openAcc];save()};
-ACC.forEach(i=>{const e=$("#"+i);e.open=openAcc.has(i);e.addEventListener("toggle",()=>{if(e.open)openAcc.add(i);else openAcc.delete(i);saveAcc();if(i==="mdl"&&e.open)mdlLoad()})});mdlLoad();
+ACC.forEach(i=>{const e=$("#"+i);e.open=openAcc.has(i);e.addEventListener("toggle",()=>{if(e.open)openAcc.add(i);else openAcc.delete(i);saveAcc();if(i==="mdl"&&e.open){mdlLoad()}else if(i==="lim"&&e.open){limLoad()}})});mdlLoad();
+if(openAcc.has("lim"))limLoad();
 const PCOL=["#5aa9ff","#3ecf8e","#f5b041","#b79cf6","#2dd4bf","#ff6b6b","#c678dd","#e5c07b","#8a93a3"],tk=n=>n>=1e9?(n/1e9).toFixed(2)+"B":n>=1e6?(n/1e6).toFixed(1)+"M":n>=1e3?(n/1e3).toFixed(0)+"K":""+n;
 const OTHER=0.01;
 function pie(ms){
@@ -4645,6 +4877,7 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/version"): body, ct = json.dumps({"v": BOOT}).encode(), "application/json"
         elif self.path.startswith("/api/subs"): body, ct = json.dumps({**subs_month(), "presets": {k: {i: {"name": n, "usd": p} for i, (n, p) in v.items()} for k, v in PRESETS.items()}}).encode(), "application/json"
         elif self.path.startswith("/api/models"): body, ct = json.dumps(models_get()).encode(), "application/json"
+        elif self.path.startswith("/api/limits"): body, ct = json.dumps(limits_read()).encode(), "application/json"   # Settings > Spend & limits (#926)
         elif self.path.startswith("/api/speed"): body, ct = json.dumps(speed()).encode(), "application/json"
         elif self.path.startswith("/api/load"): body, ct = json.dumps(load_payload()).encode(), "application/json"
         elif self.path.startswith("/api/status"): body, ct = json.dumps(status_payload()).encode(), "application/json"
@@ -4689,13 +4922,14 @@ class H(BaseHTTPRequestHandler):
             if not (a.tailnet or own_origin(self)) or "json" not in (self.headers.get("Content-Type") or ""): return self.refuse("forbidden")
             return self.dash("POST", raw)
         if self.path.split("?", 1)[0] == "/api/sessions/send": return self.send_to_session(a)
-        ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote") and (a.tailnet or own_origin(self)) and "json" in (self.headers.get("Content-Type") or "")
+        ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote", "/api/limits") and (a.tailnet or own_origin(self)) and "json" in (self.headers.get("Content-Type") or "")
         try:
             raw = self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 1 << 20))   # read before any answer: a refusal that leaves the body unread resets the connection; the models panel posts back ~20 KB of read-only fields (#684)
             if not ok: out = {"err": "forbidden"}
             else:
                 body = json.loads(raw or b"{}")
                 if self.path == "/api/promote": out = promote(body.get("issue")) if isinstance(body, dict) else {"err": "bad request"}   # the owner's move (#560)
+                elif self.path == "/api/limits": out = limits_set(body)   # Settings > Spend & limits (#926)
                 else: out = (plans_set if self.path == "/api/plans" else models_set)(body)
         except Exception as e: out = {"err": "bad request"}
         if not a.allowed and a.tailnet: return self.refuse(a.reason)

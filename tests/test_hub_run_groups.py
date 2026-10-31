@@ -174,8 +174,9 @@ function boot(){
       : [],
   };
   const localStorage = STORE;   // the whole process shares it, so a second boot() is a reload
-  const CALLS = { mdlLoad: 0 };
+  const CALLS = { mdlLoad: 0, limLoad: 0 };
   function mdlLoad(){ CALLS.mdlLoad++; }
+  function limLoad(){ CALLS.limLoad++; }   // Settings > Spend & limits (#926) answers its own header, like squad models
   const ls = JSON.parse(localStorage.hub || "{}");
   let allRuns = [], runs = [], N = 1, pins = new Set(), slots = [], known = null;
   let q = ls.q || "", per = ls.per || "day", src = ls.src || "both";
@@ -378,6 +379,15 @@ def test_opening_squad_models_still_loads_the_models():
       return { before, after };
     """)
     assert out["after"] == out["before"] + 1, "opening squad models still calls mdlLoad()"
+
+
+def test_opening_spend_limits_still_loads_the_guard_settings():
+    out = _run("""
+      const a = boot(); const before = a.calls().limLoad;
+      a.clickAcc("lim"); const after = a.calls().limLoad;
+      return { before, after };
+    """)
+    assert out["after"] == out["before"] + 1, "opening Spend & limits still calls limLoad()"
 
 
 def test_no_poll_path_writes_the_open_state():

@@ -7,6 +7,9 @@
 # absent, so a relight starts a fresh measurement and old lines never count.
 #
 # Caps (the environment wins, else the profile, else the default):
+#   SG_TOKEN_GUARD             on or off, default on. The owner sets it in the hub's Spend & limits theme (#926), which
+#                              writes the profile below. Off: this pass writes no report, no alert and no pause, and a pause
+#                              that stands is cleared, so dispatch resumes. With it on, nothing else changes.
 #   SG_TOKEN_BURN_CAP          tokens per window, default 1500000
 #   SG_TOKEN_BURN_WINDOW_H     the window in hours, default 24 (the lookback is bounded by it)
 #   SG_TOKEN_BURN_MIN_SECONDS  the rate report waits this many seconds, default 300
@@ -33,10 +36,19 @@
 : "${SG_TOKEN_BURN_RATE_FLOOR_S:=$(( SG_TOKEN_BURN_WINDOW_H * 900 ))}"
 : "${SG_TOKEN_PAUSE_FACTOR:=3}"
 : "${SG_TOKEN_NOTIFY:=/usr/bin/osascript}"
+: "${SG_TOKEN_GUARD:=on}"
 
 here="$(cd "$(dirname "$0")" && pwd)"
 state="${SG_STATE:-}"
 [ -n "$state" ] && [ -d "$state" ] || exit 0
+
+# The off switch (#926): the owner turns the guard off in the hub, which writes the profile read just above; env.sh sources
+# that profile on every pass, so the next pass reads it. Off is a silence, not a stop: the guard writes no report, no alert
+# and no pause, and it clears a pause that stands, so dispatch resumes. Exit 0, as a guard that measures nothing. Any other
+# value, and an empty one, keeps the guard on.
+case "$SG_TOKEN_GUARD" in
+  off|0|no|false) rm -f "$state/token-over" "$state/token-pause" 2>/dev/null; exit 0;;
+esac
 
 now=$(date +%s)
 marker_file="$state/token-guard.since"
