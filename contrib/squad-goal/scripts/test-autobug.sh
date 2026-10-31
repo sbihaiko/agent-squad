@@ -707,8 +707,8 @@ rm -f "$T/cards.tsv"
 r=$(PATH="$F/bin:$PATH" AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
 case "$r" in *"[72]"*) ko "16 a bug went out with no board read: '$r'";; *"board"*) ok "16 a board that does not answer dispatches nothing, and the pass says so";; *) ko "16 the pass is silent about the board: '$r'";; esac
 
-# 17) (#596, ADR-0146) an open issue carrying `loop-bug` is a defect in the loop's own machinery: the loop cannot dispatch
-# its own fix, so the pass dispatches nothing, names the issue and exits 0. The stop is read from the open issues the pass
+# 17) (#596, ADR-0146) an open issue carrying `loop-bug:dispatch` is a defect in the loop's dispatch path: the loop cannot
+# dispatch its own fix, so the pass dispatches nothing, names the issue and exits 0. The stop is read from the open issues the pass
 # already reads for its blocker gate, published to the loop log and to the issue's line on the board, and it has no marker:
 # closing the issue is the only action that resumes dispatch.
 rm -rf "$T/st/auto" "$T/st/req" "$T/st/cq"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"
@@ -720,7 +720,7 @@ todo 1228 596
 cat > "$T/issues.json" <<'JSON'
 [
   {"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]},
-  {"number":596,"title":"The loop cannot land its own fix","body":"step loop.py","created_at":"2026-10-18T08:00:00Z","labels":["bug","ready-for-agent","loop-bug"]}
+  {"number":596,"title":"The loop cannot land its own fix","body":"step loop.py","created_at":"2026-10-18T08:00:00Z","labels":["bug","ready-for-agent","loop-bug:dispatch"]}
 ]
 JSON
 cat > "$T/bin/gh" <<J
@@ -730,7 +730,7 @@ case "\$*" in
   *"issue(number:"*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issue\(number: [0-9]+' | /usr/bin/grep -oE '[0-9]+' | head -1); jq -c --arg k "i\$n" --argjson n "\$n" '{data:{repository:{(\$k): (.[]|select(.number==\$n)|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}})}}}' "$T/issues.json" | { if /usr/bin/grep -qx "\$n" "$T/closed" 2>/dev/null; then sed 's/"state":"OPEN"/"state":"CLOSED"/'; else cat; fi } ;;
   *pulls?state=open*) echo "[]" ;;
   *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$T/issues.json" ;;
-  *"issues?state=open"*labels=bug*) echo '[{"number":1228,"title":"Core: null deref","body":"step a.py","state":"open","labels":[{"name":"bug"},{"name":"ready-for-agent"}]},{"number":596,"title":"Core: null deref","body":"step a.py","state":"open","labels":[{"name":"bug"},{"name":"ready-for-agent"},{"name":"loop-bug"}]}]' ;;
+  *"issues?state=open"*labels=bug*) echo '[{"number":1228,"title":"Core: null deref","body":"step a.py","state":"open","labels":[{"name":"bug"},{"name":"ready-for-agent"}]},{"number":596,"title":"Core: null deref","body":"step a.py","state":"open","labels":[{"name":"bug"},{"name":"ready-for-agent"},{"name":"loop-bug:dispatch"}]}]' ;;
   *"issues?state=open"*) echo "[]" ;;
   *issues/*) printf '{"number":1228,"title":"Core: null deref","body":"step a.py"}\n' ;;
   *) echo "" ;;
@@ -739,7 +739,7 @@ J
 chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 : > "$T/st/cycle.log"; rm -f "$T/launched"
 r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1); rc=$?
-[ "$rc" = 0 ] && ok "17 a loop defect stops the bug pass with exit 0" || ko "17 the stopped pass exited $rc: '$r'"
+[ "$rc" = 0 ] && ok "17 a dispatch-path loop defect stops the bug pass with exit 0" || ko "17 the stopped pass exited $rc: '$r'"
 case "$r" in *"LOOP STOP: #596 is a loop defect; the fix lands outside the loop"*) ok "17 the stop names the issue and where the fix lands";; *) ko "17 the stop is not named: '$r'";; esac
 $G -q "AUTOBUG would dispatch" <<<"$r" && ko "17 the stopped pass dispatched: '$r'" || ok "17 the stopped pass dispatches nothing"
 m=($(find "$T/st/auto" -name 'bug-*' 2>/dev/null)); [ ${#m[@]} -eq 0 ] && ok "17 the stopped pass writes no dispatch marker" || ko "17 markers: ${m[*]##*/}"

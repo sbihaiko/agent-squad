@@ -196,13 +196,13 @@ run wst 5600 n; wtree wst; echo wave/wst > "$T/st/auto/wave-wst"; echo wave/wst 
 pass wst >/dev/null; pass wst >/dev/null
 [ "$(lq 5600 wst)" = "$(/usr/bin/git -C "$T/co/runs/wst/ws/target-c" rev-parse HEAD)" ] && [ "$(ent wst 5600)" = 1 ] \
   && ok "a stopped child gets the requeue fact and is not entered again on the same head" || ko "WAVE STOP: fact '$(lq 5600 wst)', entries $(cat "$WAVE_CALLS")"
-# A loop defect halts delivery too (#596, ADR-0146): a defect in the loop's own machinery is fixed outside the loop, so no
-# child enters a wave and no card moves while one carries `loop-bug`. The pass reads the open issues once, names the issue in
+# A loop defect in the dispatch path halts delivery too (#596, ADR-0146): that defect is fixed outside the loop, so no
+# child enters a wave and no card moves while one carries `loop-bug:dispatch`. A bare `loop-bug` halts nothing (B1). The pass reads the open issues once, names the issue in
 # the same line the dispatch passes print, and writes nothing else. Closing the issue resumes the entry with no marker.
 run lb 5600 n; wtree lb; echo wave/lb > "$T/st/auto/wave-lb"; echo wave/lb > "$T/st/auto/waved-lb"
 : > "$WAVE_CALLS"; rm -f "$T/moves" "$T/st/auto/cc-lb-c" "$T/st/cycle.log"
 cat > "$T/issues-open.json" <<'JSON'
-{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":596,"title":"The loop cannot land its own fix","body":"","state":"OPEN","labels":{"nodes":[{"name":"loop-bug"}]},"blockedBy":{"nodes":[]},"comments":{"nodes":[]}}]}}}}
+{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":596,"title":"The loop cannot land its own fix","body":"","state":"OPEN","labels":{"nodes":[{"name":"loop-bug:dispatch"}]},"blockedBy":{"nodes":[]},"comments":{"nodes":[]}}]}}}}
 JSON
 out=$(pass lb)
 [ "$(ent lb 5600)" = 0 ] && ok "a loop defect enters no child" || ko "a child entered while a loop defect is open: $(cat "$WAVE_CALLS")"
@@ -217,11 +217,11 @@ rc=0; out=$(pass lb) || rc=$?
 # exits 0 and the landing goes on. A wave past its age cap lands too: the capped landing requeues the child that never entered.
 run lbin 5601 n; wtree lbin; echo wave/lbin > "$T/st/auto/wave-lbin"; echo wave/lbin > "$T/st/auto/waved-lbin"; : > "$T/st/auto/cc-lbin-c"
 rc=0; out=$(pass lbin) || rc=$?
-[ "$rc" = 0 ] && ok "a wave whose children all entered lands under a loop-bug (exit 0)" || ko "the stop held an approved wave: exit $rc: $out"
+[ "$rc" = 0 ] && ok "a wave whose children all entered lands under a loop-bug:dispatch (exit 0)" || ko "the stop held an approved wave: exit $rc: $out"
 : > "$WAVE_CALLS.expired-lb"; rc=0; out=$(pass lb) || rc=$?; rm -f "$WAVE_CALLS.expired-lb"
-[ "$rc" = 0 ] && [ "$(ent lb 5600)" = 0 ] && ok "a wave past its age cap lands under a loop-bug, with no entry" || ko "expired wave under the stop: exit $rc, entries $(ent lb 5600)"
-# `loop-bug:landing` names the landing path; it is a loop-bug too, so it stops the entry as well.
-sed 's/"name":"loop-bug"/"name":"loop-bug:landing"/' "$T/issues-open.json" > "$T/issues-open.json.l" && mv "$T/issues-open.json.l" "$T/issues-open.json"
+[ "$rc" = 0 ] && [ "$(ent lb 5600)" = 0 ] && ok "a wave past its age cap lands under a loop-bug:dispatch, with no entry" || ko "expired wave under the stop: exit $rc, entries $(ent lb 5600)"
+# `loop-bug:landing` names the landing path, so it stops the entry as well.
+sed 's/"name":"loop-bug:dispatch"/"name":"loop-bug:landing"/' "$T/issues-open.json" > "$T/issues-open.json.l" && mv "$T/issues-open.json.l" "$T/issues-open.json"
 rc=0; out=$(pass lb) || rc=$?
 [ "$(ent lb 5600)" = 0 ] && echo "$out" | /usr/bin/grep -q "LOOP STOP: #596" && ok "a loop-bug:landing issue stops the entry too" || ko "loop-bug:landing did not stop the entry: $(cat "$WAVE_CALLS")"
 printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}}' > "$T/issues-open.json"

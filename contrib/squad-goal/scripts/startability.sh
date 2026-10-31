@@ -149,12 +149,23 @@ sg_ledger_held() {
 # cannot feed itself the same input again. health.sh writes it; autobug.sh and autofrontier.sh read it, once per candidate that got
 # past their cheap filters. Absent the marker, a comments read costs one request and changes nothing.
 sg_not_startable() {
-  local out rc
+  local out rc cur
   out=$(gh_api "repos/$SG_REPO/issues/$1/comments?per_page=100" -q '.[].body'); rc=$?
   # A refused read is not "no marker": it is no answer at all, and the caller's own guards still apply (#1855). Reading the
   # refusal as a negative here would be the same defect the wrapper in autobug.sh exists to stop.
   [ "$rc" -eq 0 ] || return 1
-  printf '%s\n' "$out" | /usr/bin/grep -q '^SQUAD-NOT-STARTABLE:'
+  cur=$(sg_loop_build 2>/dev/null) || cur=""
+  # A marker names the build that wrote it (owner answer B2): the same build keeps the stop, another build re-arms it,
+  # and a marker that names none, or a build that cannot be read, keeps the stop because neither proves anything.
+  printf '%s\n' "$out" | awk -v cur="$cur" '
+    /^SQUAD-NOT-STARTABLE:/ {
+      if (match($0, /build=[0-9a-f]+/)) {
+        b = substr($0, RSTART + 6, RLENGTH - 6)
+        if (cur != "" && b != cur) next      # written by another build: re-armed
+      }
+      found = 1; exit
+    }
+    END { exit(found ? 0 : 1) }'
 }
 # A ticket whose acceptance commands name a repository path the repository does not hold is not dispatched (#729): the run
 # would spend its budget and end failed on a command that cannot pass (run-20261021-043520-76754d named three scripts that did

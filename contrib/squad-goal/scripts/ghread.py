@@ -436,16 +436,45 @@ def _tdd_red(comments: Any) -> bool | None:
     return any("TDD RED" in str(c.get("body") or "") for c in _connection(comments).get("nodes") or [] if isinstance(c, dict))
 
 
+_MARKER_BUILD = re.compile(r"\bbuild=([0-9a-f]+)\b")
+_LOOP_BUILD: str | None = None
+
+
+def loop_build() -> str:
+    """The loop's build, as `sg_loop_build` in ghcall.sh reads it: the sha of the checkout it publishes from. Empty when
+    the checkout cannot be read; a marker then keeps its stop, because an unknown build proves nothing."""
+    global _LOOP_BUILD
+    if _LOOP_BUILD is None:
+        _LOOP_BUILD = ""
+        try:
+            r = subprocess.run(["/usr/bin/git", "-C", os.environ.get("SG_CHECKOUT") or ".", "rev-parse", "--short=12", "HEAD"],
+                               capture_output=True, text=True, timeout=5)
+            if r.returncode == 0:
+                _LOOP_BUILD = r.stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            _LOOP_BUILD = ""
+    return _LOOP_BUILD
+
+
 def _not_startable(comments: Any) -> bool | None:
-    """Does a comment line start with the loop's `SQUAD-NOT-STARTABLE:` marker (health.sh writes it)? `None` when the
-    answer carried no comments to look in, so a reader never takes a missing read for "startable"."""
+    """Does a comment line start with the loop's `SQUAD-NOT-STARTABLE:` marker (health.sh and wave.sh write it)? `None`
+    when the answer carried no comments to look in, so a reader never takes a missing read for "startable". A marker names
+    the build that wrote it: another build re-arms it (owner answer B2, ADR-0134), and a marker that names none, or a build
+    that cannot be read, keeps its stop because neither proves anything."""
     if not isinstance(comments, dict):
         return None
-    return any(
-        line.startswith("SQUAD-NOT-STARTABLE:")
-        for c in _connection(comments).get("nodes") or [] if isinstance(c, dict)
-        for line in str(c.get("body") or "").splitlines()
-    )
+    cur = loop_build()
+    for c in _connection(comments).get("nodes") or []:
+        if not isinstance(c, dict):
+            continue
+        for line in str(c.get("body") or "").splitlines():
+            if not line.startswith("SQUAD-NOT-STARTABLE:"):
+                continue
+            m = _MARKER_BUILD.search(line)
+            if m and cur and m.group(1) != cur:
+                continue     # written by another build: re-armed
+            return True
+    return False
 
 
 @dataclass(frozen=True)

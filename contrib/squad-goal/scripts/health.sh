@@ -157,8 +157,8 @@ if [ -n "$rr" ]; then
   # write it where the next dispatch will read it (once per reason and issue: the marker is the memory)
   [ -n "${HEALTH_DRY:-}" ] || for n in ${riss//,/ }; do
     cm="$A/notstartable-$n-$rkey"; [ -e "$cm" ] && continue
-    printf 'SQUAD-NOT-STARTABLE: %s run(s) ended failed with the same reason `%s` in the last %s min.\n\n%s\n\nA dispatch on this issue reads this line before it starts and starts nothing while it is here. Remove this comment (or fix the cause) to re-arm it.\n' \
-      "$nrr" "$rkey" "${SG_HEALTH_REPEAT_MINUTES:-120}" "$rwhy" > "$A/.cm$$"
+    printf 'SQUAD-NOT-STARTABLE: build=%s %s run(s) ended failed with the same reason `%s` in the last %s min.\n\n%s\n\nA dispatch on this issue reads this line before it starts and starts nothing while it is here. A later build re-arms it; remove this comment (or fix the cause) to re-arm it sooner.\n' \
+      "$(sg_loop_build)" "$nrr" "$rkey" "${SG_HEALTH_REPEAT_MINUTES:-120}" "$rwhy" > "$A/.cm$$"
     gh api --method POST "repos/$SG_REPO/issues/$n/comments" -F body=@"$A/.cm$$" >/dev/null 2>&1 && touch "$cm"
     rm -f "$A/.cm$$"; done
 fi

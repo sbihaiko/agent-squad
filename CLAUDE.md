@@ -69,7 +69,7 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 ### Run engine
 
 - **Run truth lives in one module; the exit code is a function of one verdict** ([ADR-0019](docs/adr/0019-run-truth-in-one-module.md)). Guard: none yet.
-- **`loop-bug` halts dispatch, never an approved wave's landing** ([ADR-0146](docs/adr/0146-a-loop-defect-is-fixed-outside-the-loop.md)). Guard: `test-autobug.sh`, `test-autofrontier-one-run.sh`, `test-childcc.sh`, `test-watch-land.sh`, `test-branchland.sh` in `contrib/squad-goal/scripts/`.
+- **Only `loop-bug:dispatch` and `loop-bug:landing` halt dispatch; a bare `loop-bug` halts nothing** ([ADR-0146](docs/adr/0146-a-loop-defect-is-fixed-outside-the-loop.md)). Guard: `test-autobug.sh`, `test-autofrontier-one-run.sh`, `test-childcc.sh`, `test-watch-land.sh`.
 - **Needs-human is not success and has its own exit code; its card keeps its column, marked frozen:owner** ([ADR-0029](docs/adr/0029-needs-human-exit-code.md)). Guard: `tests/test_verdict.py`, `tests/test_resume.py`, `tests/test_cli.py`, `contrib/squad-goal/scripts/test-janitor-disp-expiry.sh`.
 - **An interruptible write is atomic** ([ADR-0030](docs/adr/0030-atomic-writes.md)). Guard: `tests/test_record.py`.
 - **Nightly, both modes, heavy included, in its own tree and lock; a red record holds delivery, naming the dev tip; a proof in flight or `SG_NIGHTLY_OFF` holds it** ([ADR-0153](docs/adr/0153-the-full-suite-runs-nightly-in-both-modes.md)). Guard: `contrib/squad-goal/scripts/test-nightly.sh`.
@@ -78,6 +78,7 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 - **A call has a deadline; a stuck agent is found without a caller** ([ADR-0051](docs/adr/0051-call-deadline-and-stuck-agent.md)). Guard: `tests/test_deadlines.py`, `tests/test_monitor.py`.
 - **A wedged run is killed, not merely logged** ([ADR-0051](docs/adr/0051-call-deadline-and-stuck-agent.md)). Guard: `tests/test_heartbeat.py`.
 - **A call or a loop stops on failed attempts that do not change, never on total turns or entries** ([ADR-0134](docs/adr/0134-stall-cap-counts-failures-without-evolution.md)). Guard: `tests/test_stall.py`, `tests/test_engine_skeleton.py`, `tests/test_sdk_adapter.py`.
+- **A not-startable marker names the build that wrote it; another build re-arms it** ([ADR-0159](docs/adr/0159-a-not-startable-marker-names-its-build.md)). Guard: `tests/test_not_startable_build.py`.
 - **A deferral deadline requeues a child on one (tip, cause); machine holds, budget and unapproved run-owned children never count** ([ADR-0151](docs/adr/0151-a-review-streak-escalates.md)). Guard: `contrib/squad-goal/scripts/test-childcc.sh`, `contrib/squad-goal/scripts/test-janitor-ccdefer.sh`.
 - **Seven node kinds; a gate is never skipped; control is order-based** ([ADR-0100](docs/adr/0100-node-kinds-gate-control.md)). Guard: `tests/test_graph.py`, `tests/test_engine_skeleton.py`, `tests/test_each.py`.
 - **A node is one fresh session with a deadline and a declared workspace** ([ADR-0102](docs/adr/0102-node-is-one-fresh-session.md)). Guard: `tests/test_graph.py`, `tests/test_record.py`, `tests/test_engine_skeleton.py`.

@@ -277,7 +277,7 @@ stop() {
   freeze_owner "$n"
   runs=$(ledger stop "$n" "$why" own 2>&1)
   f=$(sg_cq_file "$n-wavestop$$.md" 2>/dev/null) && {
-    printf 'SQUAD-NOT-STARTABLE: %s failed dispatches with no change in the work the base holds for it; the loop stops building it (ADR-0134).\n\nRuns:\n' "$c"
+    printf 'SQUAD-NOT-STARTABLE: build=%s %s failed dispatches with no change in the work the base holds for it; the loop stops building it (ADR-0134).\n\nRuns:\n' "$(sg_loop_build)" "$c"
     printf '%s\n' "$runs"; } > "$f"
   echo "WAVE STOP #$n: $c failed dispatches with no change, so it is not dispatched again: $why"
 }

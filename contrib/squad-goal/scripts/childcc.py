@@ -110,7 +110,7 @@ def loop_defect():
     if not r.is_answer or not isinstance(r.answer, list): return None
     for i in r.answer:
         names = [l.get("name") if isinstance(l, dict) else l for l in (i.get("labels") or [])]
-        if "loop-bug" in names or "loop-bug:landing" in names:   # a defect in the landing path is a loop-bug too (#641)
+        if "loop-bug:dispatch" in names or "loop-bug:landing" in names:   # only a defect in the dispatch or landing path stops (#641, B1)
             try: return int(i["number"])
             except (KeyError, TypeError, ValueError): return None
     return None
