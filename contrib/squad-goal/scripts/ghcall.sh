@@ -95,7 +95,10 @@ _gh_refusal_line() {   # the one line a caller logs when GitHub refused: GitHub'
 gh_loop_stop() {
   local j=${1:?gh_loop_stop: an issues file is required} n line f
   n=$(jq -r '[.[]|select(any(.labels[]?; ((.name? // .) | . == "loop-bug" or . == "loop-bug:landing")))][0].number // empty' "$j" 2>/dev/null) || return 1
-  [ -n "$n" ] || return 1
+  # The stop is also one marker the hub reads without a query (#956): the page shows Loop:OFF while dispatch is held, and the
+  # marker goes with the label, so closing the issue reads ON again at the same pass.
+  [ -n "$n" ] || { rm -f "${SG_STATE:?gh_loop_stop: no state directory}"/auto/loop-stop-* 2>/dev/null; return 1; }
+  mkdir -p "$SG_STATE/auto" 2>/dev/null; : > "$SG_STATE/auto/loop-stop-$n"
   line="LOOP STOP: #$n is a loop defect; the fix lands outside the loop"
   printf '%s\n' "$line"
   printf '%s\n' "$line" >> "${SG_STATE:?gh_loop_stop: no state directory}/cycle.log"   # the loop log

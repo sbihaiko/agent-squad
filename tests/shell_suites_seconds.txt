@@ -20,6 +20,7 @@ test-branchfix-pass.sh 11.09
 test-branchland.sh 86.83
 test-branchreview-pass.sh 27.40
 test-branchreview.sh 14.14
+test-cap-edit.sh 4.95
 test-check-gh-interface.sh 0.22
 test-check-tdd-red.sh 5.05
 test-childcc.sh 17.10
@@ -29,6 +30,7 @@ test-consult.sh 0.57
 test-cqflush-address.sh 1.82
 test-cqflush-interval.sh 0.13
 test-cqflush-status.sh 1.54
+test-cqflush-term.sh 3.28
 test-cqflush-terminal.sh 1.70
 test-defect-ceiling.sh 6.19
 test-dispatch-hold-wave.sh 7.02
@@ -111,6 +113,7 @@ test-pass-deadline.sh 15.65
 test-prepush.sh 1.28
 test-profile-check.sh 1.16
 test-profile-venv-path.sh 0.07
+test-promote-delta.sh 10.73
 test-promote-pass.sh 16.02
 test-promote.sh 16.53
 test-publish-live.sh 2.50
@@ -141,6 +144,7 @@ test-throughput.sh 1.04
 test-todo-unread.sh 0.53
 test-token-guard.sh 2.43
 test-token-ledger.sh 12.98
+test-tune-report.sh 0.81
 test-vendor-guard.sh 1.38
 test-view-domain-firewall.sh 0.37
 test-watch-cycle.sh 61.41
@@ -148,6 +152,7 @@ test-watch-land.sh 10.13
 test-watch-single-exec.sh 0.02
 test-watchd-driver-sha.sh 2.30
 test-watchd-lock.sh 4.15
+test-watchd-reload.sh 3.37
 test-watchd-token-stop.sh 6.28
 test-watchtail.sh 4.17
 test-wave-lifecycle.sh 18.50

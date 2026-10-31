@@ -33,18 +33,29 @@ verdicts() { local r f; for r in $(cat "$SG_STATE/active-runs.txt"); do case "$r
 # (#375, ADR-0145 rules 9, 10 and 12). The order is the point: a child enters the wave in childcc's pass, which this cycle
 # reaches after this loop, so a landing attempted first finds a wave without the child in it, refuses it, and -- the run
 # being read once -- the child that enters afterwards stays on wave/<run> and never reaches $SG_BASE (#375 review). The
-# pass and the landing run inside ONE single-flight lock, the one fastloop.sh takes for childcc: a pass already running is
-# never doubled, and the entry it is making may still be in flight, so the landing waits for it instead. `wland-<run>` is
-# the marker the locked command leaves once the pass got through AND the landing succeeded; the caller leaves the run unread
-# when it is not there, and the next cycle lands the wave its children are in by then. So a run is read only when its
-# children had their pass and the wave is in $SG_BASE: a pass still running elsewhere, a pass that failed (its traceback is
-# in this log) and a landing that failed (a rebase conflict, a push refused twice) each leave the run unread, never a marker.
+# childcc pass runs inline under the childcc lock, the one fastloop.sh takes, and waits there a bounded time (SG_LAND_WAIT).
+# The landing then runs in its OWN detached pass (#955): the cycle never waits for a gate, so a landing that queues behind
+# another gate costs the cycle nothing. That pass is single-flight per run (its busy marker names it while it lives), and a
+# pass still alive is waited for, never doubled. `wland-<run>` is the marker the pass leaves once the landing succeeded; the
+# cycle reads it on the next cycle and only then reads the run. So a run is read only when its children had their pass and
+# the wave is in $SG_BASE: a pass still running (the run stays unread), a pass that failed (its traceback is in this log), a
+# childcc pass that left children for later (#590) and a landing that failed each leave the run unread, never a marker.
 land_wave() {   # <run>: 0 the wave is done (landed), 1 the pass that enters its children, or the landing, did not get through, so the run stays unread
-  local run=$1 ran pass L h wout c; ran="$SG_STATE/auto/wland-${run##*/}"; pass="$ran.pass"; L="$SG_STATE/locks/single-childcc"
-  mkdir -p "$SG_STATE/auto"; rm -f "$ran" "$pass" "$pass.left"
+  local run=$1 ran pass L h c lk
+  ran="$SG_STATE/auto/wland-${run##*/}"; pass="$ran.pass"; L="$SG_STATE/locks/single-childcc"; lk="$ran.busy"
+  mkdir -p "$SG_STATE/auto"
   # A plain `loop-bug` stops intake, never this landing; a `loop-bug:landing` issue names the landing path, so the wave waits
   # and the run stays unread until it closes (#641, ADR-0146 decision 3).
   gh_land_stop && return 1
+  # The landing pass of this run is still alive: this cycle waits for it and starts no second one.
+  h=$(cat "$lk" 2>/dev/null)
+  if [ -n "$h" ] && kill -0 "$h" 2>/dev/null; then
+    echo "WATCH: ${run##*/} waits: its landing is in its own pass (pid $h), so its wave is read on a later cycle"; return 1
+  fi
+  rm -f "$lk"
+  # The detached pass landed its wave: `wland-<run>` is its success marker, read here once and then cleared.
+  if [ -e "$ran" ]; then rm -f "$ran" "$pass" "$pass.left"; return 0; fi
+  rm -f "$pass" "$pass.left"
   # The pass waits a bounded time (SG_LAND_WAIT one-second polls) for the childcc lock the fast lane may hold. The landing runs
   # under its own lock, never the childcc one: its gate wait can last hours, and the fast lane's pass must not queue behind it (#471).
   # A pass works one child and exits 3 when it left one for a later pass (#590): that is no pass, `$pass.left` says so, and the
@@ -54,16 +65,26 @@ land_wave() {   # <run>: 0 the wave is done (landed), 1 the pass that enters its
   [ -e "$pass.left" ] && { rm -f "$pass.left"
     echo "WATCH: ${run##*/} waits: its landing is deferred, the childcc pass left children of the run for a later pass, so its wave lands on a later cycle"; return 1; }
   if [ -e "$pass" ]; then
-    wout=$(tm bash "${wme%/*}/single.sh" wland sh -c 'bash "$1" land "$2" "$3" && : > "$4"' landwave "${wme%/*}/wave.sh" "${run##*/}" "$run" "$ran" 2>&1)
-    [ -n "$wout" ] && printf '%s\n' "$wout"
-    [ -e "$ran" ] && { rm -f "$ran" "$pass"; return 0; }
-    # A rebase conflict is terminal for the wave (#844): wave.sh retired it and requeued its issues, so the wait names the conflict
-    # and the run is not retried through the landing lock.
-    c=$(printf '%s\n' "$wout" | /usr/bin/grep '^WAVE CONFLICT ' | tail -1)
-    [ -n "$c" ] && { echo "WATCH: ${run##*/} waits: its wave did not land, a rebase conflict (${c#WAVE CONFLICT }); the wave is retired, not retried"; rm -f "$pass"; return 1; }
-    h=$(cat "$SG_STATE/locks/single-wland/pid" 2>/dev/null)
-    echo "WATCH: ${run##*/} waits: its wave did not land (the landing lock is held by pid ${h:-none}, or the landing failed), so it lands on a later cycle"
-    rm -f "$pass"; return 1
+    # The landing runs detached (#955): the cycle returns at once, and the pass writes its own lines to this log. It leaves
+    # `wland-<run>` when the wave is in $SG_BASE; a rebase conflict is terminal (#844): the wave is retired and the run is read.
+    # The busy marker is the pass's pid, written by this shell from `$!` right after the fork: /bin/bash 3.2 leaves `$BASHPID`
+    # empty, so a marker the pass wrote could name no process and the single flight would never fire. The pass removes it when
+    # it ends; a cycle that finds it names a dead pid removes it and reads the wave.
+    (
+      wout=$(tm bash "${wme%/*}/single.sh" wland sh -c 'bash "$1" land "$2" "$3" && : > "$4"' landwave "${wme%/*}/wave.sh" "${run##*/}" "$run" "$ran" 2>&1)
+      [ -n "$wout" ] && printf '%s\n' "$wout"
+      rm -f "$pass"
+      if [ ! -e "$ran" ]; then
+        c=$(printf '%s\n' "$wout" | /usr/bin/grep '^WAVE CONFLICT ' | tail -1)
+        if [ -n "$c" ]; then echo "WATCH: ${run##*/} waits: its wave did not land, a rebase conflict (${c#WAVE CONFLICT }); the wave is retired, not retried"
+        else
+          h=$(cat "$SG_STATE/locks/single-wland/pid" 2>/dev/null)
+          echo "WATCH: ${run##*/} waits: its wave did not land (the landing lock is held by pid ${h:-none}, or the landing failed), so it lands on a later cycle"
+        fi
+      fi
+      rm -f "$lk" ) &
+    printf '%s\n' "$!" > "$lk"
+    return 1
   fi
   h=$(cat "$L/pid" 2>/dev/null)
   if [ -n "$h" ] && kill -0 "$h" 2>/dev/null; then
@@ -144,7 +165,7 @@ if v:
   [ -n "${SG_LAND_PAUSED:-}" ] || ( tm bash "$(dirname "$0")/single.sh" branchreview bash "$(dirname "$0")/branchreviewpass.sh" 2>&1 & ) 2>/dev/null
   # Work-branch fix round (#401): a reviewed tip whose review says CHANGES gets one fix run on the same branch.
   [ -n "${SG_LAND_PAUSED:-}" ] || ( tm bash "$(dirname "$0")/single.sh" branchfix bash "$(dirname "$0")/branchfixpass.sh" 2>&1 & ) 2>/dev/null
-  # No promotion step (#576, ADR-0145 rule 3): the owner starts each promotion of dev to stg; its full suite held the gate lock for up to 30 min, and no wave landed meanwhile.
+  # No promotion step (#576, ADR-0145 rule 3): the loop promotes on the proof of the dev tip, but never from this cycle -- the proof's full suite held the gate lock for up to 30 min, and no wave landed meanwhile.
   fast=; [ -s "$SG_STATE/fastloop.pid" ] && kill -0 "$(cat "$SG_STATE/fastloop.pid")" 2>/dev/null && fast=1   # watchd runs fastloop.sh: childcc and both dispatch passes every SG_FAST_INTERVAL s (120 by default) outside this cycle
   # The fast lane owns childcc, autofrontier and autobug; this cycle runs them only when that lane is down, so neither lane
   # runs a step twice. The frontier and bug dispatches ride the fast beat because a dispatch that waits for this cycle's tick appears up

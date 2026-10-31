@@ -56,6 +56,7 @@ An ADR holds a decision and its reason. It is not a ledger: no dates, counts, st
 | [0153](0153-the-full-suite-runs-nightly-in-both-modes.md) | The full suite runs nightly in both modes, heavy included, in its own tree and its own lock, never the landing lock; one atomic result record carries the failing tests to the hub, a red result alerts, and a red result holds delivery until one green run |
 | [0154](0154-the-phone-sends-to-a-session-by-the-wire-protocol.md) | The hub writes the session wire protocol itself to send one phone message; the send is off until the profile sets `tailnet.terminals_send`, for every allowed login; the reservation is durable and exclusive, and the target is the recorded pid. |
 | [0155](0155-a-premise-is-checked-never-assumed.md) | A premise is checked, never assumed: one round proves what reading proves, sends what only running proves to a probe, and asks the owner at most five questions, each with a recommended answer that "yes" accepts; a question that depends on an open question waits a round, the check is one comment on the spec rewritten in place, and a model with no tools never reviews. |
+| [0156](0156-a-full-proof-carries-across-a-covered-delta.md) | A full proof carries across a covered delta: a declared guard map names every path a delta may hold, the full pass stays the base, and a delta record is checked again at promotion; the promotion code is never covered |
 
 ## Adding an ADR
 

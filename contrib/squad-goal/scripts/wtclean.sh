@@ -191,6 +191,22 @@ for w in "$SG_CHECKOUT"/worktrees/run/*; do
     case $b in squad/run/*) $G branch -D "$b" >/dev/null 2>&1;; esac
   elif [ $rc = 2 ]; then grep -qx "sub $w" "$seen" || { echo "WT KEPT submodule run ${w##*/} ${sha:-} ${w}: a checked out submodule git refuses to remove, even with --force; kept"; echo "sub $w" >> "$seen"; }; fi
 done
+# Q: a finished tree under .claude/worktrees, the one each workflow run's agent tools make. It goes once it is clean, unlocked,
+# not in use, holds no tree inside it, its HEAD is in the base, and nothing moved that HEAD for SG_WT_FRESH_MINUTES (a tree made a
+# moment ago reads as landed, #676). A locked tree is a live agent's and stays. Only the checkout is freed; its branch stays.
+locked_tree() { $G -C "$SG_CHECKOUT" worktree list --porcelain | awk -v p="$1" '/^worktree /{cur=substr($0, 10)} /^locked/{if (cur == p) f=1} END {exit !f}'; }
+for w in "$SG_CHECKOUT"/.claude/worktrees/*; do
+  [ -e "$w/.git" ] || continue
+  locked_tree "$w" && continue
+  in_use "$w" && continue
+  inner "$w" && continue
+  [ -z "$(dirt "$w")" ] || continue
+  in_base "$w" || continue
+  hl=$($G -C "$w" rev-parse --path-format=absolute --git-path logs/HEAD 2>/dev/null); [ -e "$hl" ] || hl=$w
+  [ $(( now - $(mtime "$hl") )) -ge $(( ${SG_WT_FRESH_MINUTES:-30} * 60 )) ] || continue
+  sha=$($G -C "$w" rev-parse --short=9 HEAD 2>/dev/null)
+  wt_remove "$SG_CHECKOUT" "$w" && echo "WT CLEAN claude ${w##*/} ${sha:-}${wt_forced:+ (submodule tree: removed with --force)}"
+done
 # acceptance-command trees (acpr.sh) left by a killed gate: drop any older than 2 h
 $G worktree list --porcelain | sed -n 's#^worktree \(.*/acpr\.[^/]*\)$#\1#p' | while read -r w; do
   [ -n "$(find "$w" -maxdepth 0 -mmin +120 2>/dev/null)" ] && $G worktree remove --force "$w" && echo "WT CLEAN acpr ${w##*/}"; done

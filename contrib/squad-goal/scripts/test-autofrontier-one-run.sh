@@ -442,7 +442,8 @@ case "$r" in *"FRONTIER idle: 3 todo, 0 startable (1 no go label, 1 held, 0 sibl
 [ "$($G -c '^FRONTIER idle:' <<<"$r")" = 1 ] && ok "I1: one idle line a pass" || ko "I1: $($G -c '^FRONTIER idle:' <<<"$r") idle line(s): '$r'"
 $G -q '^FRONTIER why #301: no go label' <<<"$r" && $G -q '^FRONTIER why #302: held' <<<"$r" && $G -q '^FRONTIER why #303: blocked' <<<"$r" \
   && ok "I1: the first idle pass names every card, with its own reason" || ko "I1: detail: '$($G '^FRONTIER why #' <<<"$r")'"
-$G -qxF "$($G -m1 '^FRONTIER idle:' <<<"$r")" "$d/st/cycle.log" && ok "I1: the line is published to the loop log" || ko "I1: cycle.log: $(cat "$d/st/cycle.log" 2>/dev/null)"
+stamped=$($G -m1 '^[0-9-]* [0-9:]* FRONTIER idle:' "$d/st/cycle.log")
+[ "${stamped:20}" = "$($G -m1 '^FRONTIER idle:' <<<"$r")" ] && $G -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} FRONTIER idle:' <<<"$stamped" && ok "I1: the line is published to the loop log, timed" || ko "I1: cycle.log: $(cat "$d/st/cycle.log" 2>/dev/null)"
 r=$(run)
 [ "$($G -c '^FRONTIER idle:' <<<"$r")" = 1 ] && [ "$($G -c '^FRONTIER why #' <<<"$r")" = 0 ] \
   && ok "I1: the same reasons write the line again and the detail once" || ko "I1: the second pass: '$r'"

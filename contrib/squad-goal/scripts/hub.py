@@ -1303,6 +1303,7 @@ def _loop_on(pid_file=None):
     `auto/off` pauses dispatch, so it reads off even while that pid is live (#788)."""
     pf = pathlib.Path(pid_file) if pid_file else STATE / "watchd.pid"
     if (pf.parent / "auto" / "off").exists(): return False
+    if next((pf.parent / "auto").glob("loop-stop-*"), None) is not None: return False   # #956: an open loop-bug holds dispatch
     try: pid = int(_read(pf).split()[0])
     except (ValueError, IndexError): return False
     try: os.kill(pid, 0)

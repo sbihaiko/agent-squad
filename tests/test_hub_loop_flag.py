@@ -59,3 +59,16 @@ def test_an_auto_off_flag_reads_loop_off_even_with_a_live_supervisor(hub, tmp_pa
     (tmp_path / "auto" / "off").touch()
     assert hub._loop_on(tmp_path / "watchd.pid") is False   # the flag pauses the loop
     assert hub.foot_items({"quota": {"codex": None, "agy": None}, "loop": hub._loop_on(tmp_path / "watchd.pid")}, NOW)[-1]["text"] == "Loop:OFF"
+
+
+def test_a_loop_stop_marker_reads_loop_off_even_with_a_live_supervisor(hub, tmp_path, monkeypatch):
+    """#956: an open `loop-bug` holds dispatch, so the footer reads Loop:OFF instead of a green Loop:ON beside a stopped frontier."""
+    monkeypatch.setattr(hub, "STATE", tmp_path)
+    (tmp_path / "watchd.pid").write_text(f"{os.getpid()}\n")
+    (tmp_path / "auto").mkdir()
+    assert hub._loop_on(tmp_path / "watchd.pid") is True
+    (tmp_path / "auto" / "loop-stop-956").touch()
+    assert hub._loop_on(tmp_path / "watchd.pid") is False
+    assert hub.foot_items({"quota": {"codex": None, "agy": None}, "loop": hub._loop_on(tmp_path / "watchd.pid")}, NOW)[-1]["text"] == "Loop:OFF"
+    (tmp_path / "auto" / "loop-stop-956").unlink()
+    assert hub._loop_on(tmp_path / "watchd.pid") is True

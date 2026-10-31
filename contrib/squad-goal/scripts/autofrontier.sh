@@ -42,7 +42,7 @@ idle() {   # <reasons file> [reason for a card the file does not name]: the summ
     c=$(awk -F'\t' -v r="$r" '$2==r{c++} END{print c+0}' "$cards"); parts="$parts, $c $r"
   done
   line="FRONTIER idle: $total todo, ${#pick[@]} startable (${parts#, })"
-  printf '%s\n' "$line"; printf '%s\n' "$line" >> "${SG_STATE:?idle: no state directory}/cycle.log"
+  printf '%s\n' "$line"; printf '%s %s\n' "$(date -u '+%F %T')" "$line" >> "${SG_STATE:?idle: no state directory}/cycle.log"
   # #744: the streak a pass with nothing startable is in, so the janitor can say it once past a bound. The start epoch is kept
   # across passes; a pass that dispatches drops the file below, so the next idle starts the clock again. The line is the
   # frontier's own, so the janitor reads this fact and never the frontier again.

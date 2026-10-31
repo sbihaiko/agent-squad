@@ -81,9 +81,20 @@ def test_the_budget_file_names_no_pull_request_caller() -> None:
 
 
 def test_skill_md_describes_the_branch_landing_only() -> None:
-    """The word "pull request" appears nowhere as a description of the loop's work; one line may say the path was removed."""
+    """No line describes the loop's work by a pull request. One line says that path was removed; the one pull request the loop opens is the promotion of `dev` into `stg` (ADR-0145 rule 3), and the skill must name it."""
     word = re.compile(r"\b(?:pull\s*request|pull-request|PR)\b", re.IGNORECASE)
     seen = [(i + 1, line) for i, line in enumerate(SKILL.read_text().splitlines()) if word.search(line)]
     assert seen, "SKILL.md should name the removal of the pull-request path once"
-    stray = [(i, line.strip()) for i, line in seen if not re.search(r"remov|no longer|no pull request", line, re.IGNORECASE)]
+
+    def is_the_promotion(line: str) -> bool:
+        return bool(re.search(r"promot", line, re.IGNORECASE)) and bool(re.search(r"\bstg\b", line))
+
+    stray = [
+        (i, line.strip())
+        for i, line in seen
+        if not re.search(r"remov|no longer|no pull request", line, re.IGNORECASE) and not is_the_promotion(line)
+    ]
     assert stray == [], f"SKILL.md still describes the loop's work by a pull request: {stray}"
+    assert any(is_the_promotion(line) for _, line in seen), (
+        "SKILL.md must name the one pull request the loop opens: the promotion of `dev` into `stg`"
+    )

@@ -430,6 +430,7 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
   # enters, and the wave CI is not what finds it: that one runs once, when the whole wave lands in `dev`.
   # They run under the machine-wide gate lock (#392), in try mode (#575): the entry runs inline in the fast lane, and a wait
   # there stops every dispatch, so a lock held by another gate holds the child out until a later pass, with no requeue.
+  # The landing waits a bounded time instead (#955): a bounded wait in a detached pass never stops dispatch, because dispatch rides fastloop.
   gates() {
     out=$(SERIAL_TRY=1 SG_GATE_KIND=fast bash "$here/gate.sh" bash -c "$SG_WAVE_GATES" 2>&1); grc=$?
     if [ $grc = 73 ] && h=$(held_by "$out"); then
@@ -472,6 +473,9 @@ child_of() { $G -C "$1" log -1 --format=%B "$2" 2>/dev/null | /usr/bin/grep -oE 
 # held_by <output>: the pid named by serial.sh's try-mode skip line, and exit 0, when the output carries one (#575); a try-mode skip of
 # the gate slots (gate.sh, caps.gates) is a hold as well and prints `slots:` and the holders it names (#567).
 held_by() { printf '%s\n' "$1" | sed -n -e 's/^serial: lock gate held by pid \([0-9?]*\): skipped, not queued.*/\1/p' -e 's/^caps: caps\.gates is full ([0-9]* slots), held by \(.*\): .* skipped, not queued (try)$/slots:\1/p' | head -1 | /usr/bin/grep .; }
+# waited_out <output>: the bounded wait for the gate lock or the gate slots ran out (serial.sh and caps.py both exit 75 then, and
+# name it). A 75 without that line is the check's own hold deadline, which is a failed check, not a hold (#955).
+waited_out() { printf '%s\n' "$1" | /usr/bin/grep -qE '^serial: waited [0-9]+s for lock gate |^caps: .* waited [0-9.]+s for caps\.gates'; }
 
 # child_gate <clone> <from> <to> <issue>: one child's own suite against the wave tip, run in the clone. `SG_WAVE_CHILD_GATES`
 # replaces it (with SG_WAVE_CHILD the issue, SG_WAVE_CHILD_FROM/_TO the child's commit range); the default is the shell suite
@@ -489,16 +493,20 @@ child_gate() {
 # wave_check <clone> <w>: the wave tip's check, and, when it is red, the child that broke it. Each child's own suite runs
 # again against the tip, the last entrant first; the first child whose suite fails leaves the wave -- its commits are dropped
 # from the tip and its issue goes back to the queue -- and the check runs again, so the wave without it can land. Exit 0:
-# the tip's check is green (after any child left); 1: it stayed red, so the landing fails as before; 3: the gate lock
-# is held; 4: the check was inconclusive (#699), so no child is blamed.
+# the tip's check is green (after any child left); 1: it stayed red, so the landing fails as before; 3: the gate lock stayed
+# held past its bounded wait; 4: the check was inconclusive (#699), so no child is blamed.
 wave_check() {
   local S=$1 w=$2 rc found cx clog
   [ -n "$tipgate" ] || return 0
   while :; do
     clog="$SG_STATE/wave-check-$(printf '%s' "$w" | tr / _).log"   # the check's own output, kept: a red that names no cause has to name its log (#447)
-    (cd "$S" && export SERIAL_TRY=1 && eval "$tipgate") >"$clog" 2>&1; rc=$?   # try mode (#575): the landing runs inline in the watch cycle
+    # The check waits for the gate lock a bounded time (SERIAL_WAIT_SECONDS, 900 s): a try that gave up on its first look lost the
+    # cycle, and the wave waited a whole cycle for each retry (#946 lost three cycles). The landing runs in its own detached pass
+    # (watch.sh), so this wait holds no watch cycle, and dispatch rides fastloop, which never runs a landing (#955).
+    (cd "$S" && export SERIAL_WAIT_SECONDS=${SERIAL_WAIT_SECONDS:-900} && eval "$tipgate") >"$clog" 2>&1; rc=$?
     [ $rc = 0 ] && { rm -f "$clog"; return 0; }
     [ $rc = 73 ] && held_by "$(cat "$clog")" >/dev/null && { rm -f "$clog"; return 3; }   # 3: the gate lock is held, so the check did not run
+    [ $rc = 75 ] && waited_out "$(cat "$clog")" && { rm -f "$clog"; return 3; }   # the bounded wait ran out: the check did not run either
     [ $rc = 4 ] && return 4   # 4: the check was inconclusive (#699): no child is blamed, and the wave does not land
     found=""; while read -r sha; do
       [ -n "$sha" ] || continue

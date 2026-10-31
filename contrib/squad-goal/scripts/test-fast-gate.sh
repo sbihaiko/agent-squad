@@ -7,6 +7,7 @@ unset SG_SERIAL_HELD   # a gate inside a gate hands the lock name down; this sui
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G="git -c user.email=a@b -c user.name=t"; export SG_STATE=$T/st SQUAD_CAPS_DIR=$T/caps; mkdir -p "$SG_STATE"   # (#801) the gate takes slots: its own budget, never the machine's
 export SG_FAST_LOG_DIR=$T/logs; mkdir -p "$SG_FAST_LOG_DIR"   # (#945) the gate's log sits outside SG_STATE, where the child that ran it may read it
+export SG_FAST_MEMO=0   # the pass memo is proved in its own block at the end; every other case here runs a fresh battery
 R=$T/r; S=$R/contrib/squad-goal/scripts; git init -q -b dev "$R"; mkdir -p "$S" "$R/docs"
 # A stub suite logs its name and whether the machine lock was held, and fails when its name is in $SUITE_FAIL.
 for n in foo bar baz; do
@@ -228,5 +229,59 @@ out2=$(fg); pg2=$(lgof "$(last "$out2")")
 out=$(BASE_FAIL=1 RETRY_FAIL=1 fg); rc=$?
 rg=$(lgof "$(last "$out")")
 [ $rc = 1 ] && [ -n "$rg" ] && [ -f "$rg" ] && case "$rg" in "$SG_STATE"/*) ko "a red names a log inside the state directory: $rg";; *) ok "a red names a log the child may read, outside the state directory";; esac
+# (memo) A pass is kept for its (sha, base ref, base sha, battery): a second gate at that key prints one memo line and runs no battery.
+# A red gate leaves no memo, and a different base ref or battery is a different key. Each case has its own state directory.
+mg() {  # <state dir> <base> [battery command]: a gate on gui/quality, the memo on unless `memo=0` is set; the stub battery logs to ran.log
+  local st=$1 base=$2 cmd=${3:-"bash $T/base.sh"}; rm -f "$T/ran.log"
+  (cd "$R" && SG_STATE=$st SG_FAST_MEMO=${memo:-1} SG_FAST_BASE=$base SG_FAST_CMD="$cmd" SG_FAST_RETRY_CMD=false bash "$d/fast-gate.sh" 2>&1)
+}
+battery_runs() { /usr/bin/grep -c '^base-cmd' "$T/ran.log" 2>/dev/null || echo 0; }
+ms=$T/memo-pass; mkdir -p "$ms"
+out1=$(mg "$ms" dev); rc1=$?
+[ $rc1 = 0 ] && [ "$(battery_runs)" = 1 ] && ok "the first gate runs the battery and passes" || ko "first memo gate: rc $rc1 runs $(battery_runs): $out1"
+out2=$(mg "$ms" dev); rc2=$?
+[ $rc2 = 0 ] && [ "$(printf '%s\n' "$out2" | wc -l | tr -d ' ')" = 1 ] && case "$out2" in "fast-gate: pass "*"memo"*) true;; *) false;; esac \
+  && ok "a second gate at the same key prints one memo line and passes" || ko "memo line: rc $rc2: '$out2'"
+[ ! -e "$T/ran.log" ] && ok "a memo hit runs no battery" || ko "memo hit ran the battery: '$(cat "$T/ran.log")'"
+[ "$(lgof "$out2")" = "$(lgof "$out1")" ] && ok "the memo names the log of the pass it reuses" || ko "memo log: '$(lgof "$out2")' vs '$(lgof "$out1")'"
+IFS=$'\t' read -r _ kind res at < "$ms/gate-status" 2>/dev/null
+[ "$kind $res $at" = "fast pass $(git -C "$R" rev-parse HEAD)" ] && ok "a memo hit leaves the hub's pass line for the same sha" || ko "memo status: '$(cat "$ms/gate-status" 2>&1)'"
+out=$(memo=0 mg "$ms" dev); rc=$?
+[ $rc = 0 ] && [ "$(battery_runs)" = 1 ] && ok "SG_FAST_MEMO=0 forces a fresh battery" || ko "memo off: rc $rc runs $(battery_runs): $out"
+
+mf=$T/memo-fail; mkdir -p "$mf"
+out=$(BASE_FAIL=1 mg "$mf" dev); rc=$?
+[ $rc -ne 0 ] && [ -z "$(ls -A "$mf/gate-memo" 2>/dev/null)" ] && ok "a failed gate leaves no memo" || ko "failed gate memo: rc $rc: '$(ls -A "$mf/gate-memo" 2>&1)'"
+out=$(mg "$mf" dev); rc=$?
+[ $rc = 0 ] && [ "$(battery_runs)" = 1 ] && ok "the gate after a red one runs the battery, because a red is never a memo" || ko "after red: rc $rc runs $(battery_runs): $out"
+
+$G -C "$R" branch -f wave-memo dev   # another ref at the same commit: the key still differs
+out=$(mg "$ms" wave-memo); rc=$?
+[ $rc = 0 ] && [ "$(battery_runs)" = 1 ] && ok "the base ref is part of the key: the same sha on another base runs the battery" || ko "other base: rc $rc runs $(battery_runs): $out"
+out=$(mg "$ms" dev "bash $T/base.sh # battery two"); rc=$?
+[ $rc = 0 ] && [ "$(battery_runs)" = 1 ] && ok "a different battery is a different key" || ko "other battery: rc $rc runs $(battery_runs): $out"
+
+md=$T/memo-dirty; mkdir -p "$md"
+out=$(mg "$md" dev); rc=$?
+[ $rc = 0 ] && [ "$(battery_runs)" = 1 ] && ok "a clean tree passes and keeps its memo" || ko "clean memo: rc $rc runs $(battery_runs): $out"
+echo dirt >> "$R/docs/x.md"
+out=$(mg "$md" dev); rc=$?
+[ $rc = 0 ] && [ "$(battery_runs)" = 1 ] && ok "an uncommitted change is a different key: the battery runs over the tree, never for the memo of the commit" || ko "dirty tree reused a clean pass: rc $rc runs $(battery_runs): $out"
+$G -C "$R" checkout -q -- docs/x.md
+
+cur=$($G -C "$R" rev-parse --abbrev-ref HEAD)
+$G -C "$R" checkout -q dev && $G -C "$R" commit -q --allow-empty -m moved && $G -C "$R" checkout -q "$cur"
+out=$(mg "$md" dev); rc=$?
+[ $rc = 0 ] && [ "$(battery_runs)" = 1 ] && ok "the base's commit is part of the key: a base ref moved to a new commit runs the battery" || ko "moved base: rc $rc runs $(battery_runs): $out"
+
+mq=$T/memo-queued; mkdir -p "$mq"; rm -f "$T/ran.log"
+slow="bash $T/base.sh; sleep 2"
+(cd "$R" && SG_STATE=$mq SG_FAST_MEMO=1 SG_FAST_BASE=dev SG_FAST_CMD="$slow" SG_FAST_RETRY_CMD=false bash "$d/fast-gate.sh" > "$T/q1.out" 2>&1) &
+qp=$!; sleep 1
+(cd "$R" && SG_STATE=$mq SG_FAST_MEMO=1 SG_FAST_BASE=dev SG_FAST_CMD="$slow" SG_FAST_RETRY_CMD=false bash "$d/fast-gate.sh" > "$T/q2.out" 2>&1); qrc2=$?
+wait "$qp"; qrc1=$?
+[ $qrc1 = 0 ] && [ $qrc2 = 0 ] && [ "$(battery_runs)" = 1 ] && ok "two gates queued at one key share one battery, because the memo is read again inside the lock" || ko "queued gates: rc $qrc1/$qrc2 runs $(battery_runs): '$(cat "$T/q2.out")'"
+case "$(cat "$T/q2.out")" in *memo:*) ok "the gate that waited reads the pass the first one kept";; *) ko "the gate that waited ran a battery: '$(cat "$T/q2.out")'";; esac
+
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 rm -rf "$T"; exit $fail
