@@ -1141,6 +1141,196 @@ def burn_cached(now=None):
     if now - _BURN["t"] >= BURN_TTL: _BURN.update(t=now, v=burn_read())
     return _BURN["v"]
 
+
+# --- Spend & limits (#926). The token guard reads its on/off switch, its daily cap and its pause factor from the profile,
+# and env.sh sources that profile on every pass, so a value this section writes is read on the guard's next pass with no
+# restart. The page renders; reading, validating, diffing, writing and recording live here (ADR-0137). The profile and the
+# ledger are each written to a temp file and renamed, so a reader never sees half a file (ADR-0030).
+SCRIPTS = pathlib.Path(__file__).resolve().parent
+LIMIT_KEY = {"guard": ("SG_TOKEN_GUARD", "on"), "cap": ("SG_TOKEN_BURN_CAP", "1500000"),
+             "factor": ("SG_TOKEN_PAUSE_FACTOR", "3"), "window": ("SG_TOKEN_BURN_WINDOW_H", "24")}
+LIMIT_LABEL = {"cap": "token cap", "factor": "pause factor"}
+LIMIT_LEDGER = "spend-limits-ledger.jsonl"
+MODELS_LEDGER = "models-switch-ledger.jsonl"   # one line per model-level switch flip (SPEC 889 #920)
+
+def profiles_dir():
+    """The directory the profiles live in: SG_PROFILES_DIR when the runner exports it (env.sh does), else the seam's answer."""
+    d = os.environ.get("SG_PROFILES_DIR")
+    if d: return pathlib.Path(d)
+    try:
+        r = subprocess.run(["bash", "-c", '. "$1/address.sh" >/dev/null 2>&1; sg_profiles_dir', "_", str(SCRIPTS)],
+                           capture_output=True, text=True, timeout=20)
+    except Exception: return None
+    return pathlib.Path(r.stdout.strip()) if r.stdout.strip() else None
+
+def profile_file():
+    """The profile in force: the one file the token guard sources on every pass. None when no profile is in force, and a
+    theme that cannot name the file reads nothing and writes nothing."""
+    slug, d = os.environ.get("SG_PROFILE", ""), profiles_dir()
+    return d / f"{slug}.sh" if slug and d is not None else None
+
+def profile_limits(path=None):
+    """The four settings of that profile, as the guard reads them with the environment silent: address.sh's
+    `sg_profile_setting <slug> <KEY> <default>` sources the file exactly as env.sh does. One bash call for all four."""
+    path = path or profile_file()
+    raw = {k: d for k, (_, d) in LIMIT_KEY.items()}
+    if path is None: return raw
+    script = '. "$1/address.sh" >/dev/null 2>&1; ' + "; ".join(
+        f'printf "%s\\n" "$(sg_profile_setting "$2" {key} {d})"' for key, d in LIMIT_KEY.values())
+    try:
+        r = subprocess.run(["bash", "-c", script, "_", str(SCRIPTS), path.stem], capture_output=True, text=True, timeout=20,
+                           env={**os.environ, "SG_PROFILES_DIR": str(path.parent)})
+        got = r.stdout.splitlines() if r.returncode == 0 else []
+    except Exception: got = []
+    for (k, _), v in zip(LIMIT_KEY.items(), got):
+        if v.strip(): raw[k] = v.strip()
+    return raw
+
+def _positive_int(v):
+    """A daily cap: a positive whole number. A bool is not a number here, and neither is "1.5", "1_000" or "12 34"."""
+    if isinstance(v, bool): return None
+    try: n = int(str(v).strip())
+    except (TypeError, ValueError): return None
+    return n if n > 0 and str(v).strip() == str(n) else None
+
+def _positive_num(v):
+    """A pause factor: a positive number, whole or fractional. A bool is not one."""
+    if isinstance(v, bool): return None
+    try: n = float(str(v).strip())
+    except (TypeError, ValueError): return None
+    return n if n > 0 and n == n and n != float("inf") else None
+
+def _guard_value(v):
+    return v if v in ("on", "off") else None
+
+def _num(n):
+    return f"{n:g}"
+
+def limits_settings(path=None):
+    """The guard's settings as the theme shows and edits them: the profile's value where it is one, else the guard's default."""
+    raw = profile_limits(path)
+    raw["cap"] = _positive_int(raw["cap"]) or int(LIMIT_KEY["cap"][1])
+    raw["factor"] = _positive_num(raw["factor"]) or float(LIMIT_KEY["factor"][1])
+    raw["window"] = _positive_int(raw["window"]) or int(LIMIT_KEY["window"][1])
+    raw["guard"] = "off" if str(raw["guard"]).strip().lower() in ("off", "0", "no", "false") else "on"
+    return raw
+
+def limit_line(cap, factor, window_h):
+    """The hourly burn that pauses dispatch: SG_TOKEN_PAUSE_FACTOR times the cap's hourly share, as token-guard.sh computes it."""
+    share = cap * 3600 // (window_h * 3600)
+    return int(share * factor)
+
+def limits_last():
+    """The last change the ledger records, or None: {"at": local time, "text": the diff line}."""
+    try: lines = [ln for ln in (STATE / LIMIT_LEDGER).read_text().splitlines() if ln.strip()]
+    except OSError: return None
+    for ln in reversed(lines):
+        try: rec = json.loads(ln)
+        except ValueError: continue
+        if isinstance(rec, dict) and rec.get("text"): return rec
+    return None
+
+def limits_read():
+    """The Spend & limits theme's data: the settings the guard will read on its next pass, the burn it measures, the pause
+    marker it writes and the last change recorded. Every value is a fact of one file or one marker; the page renders it."""
+    path = profile_file()
+    s = limits_settings(path)
+    hour = burn_read(hours=1)
+    window = burn_read(hours=s["window"])
+    return {"profile": str(path) if path else None, "guard": s["guard"], "cap": s["cap"], "factor": s["factor"],
+            "window_h": s["window"], "pause_line": limit_line(s["cap"], s["factor"], s["window"]),
+            "hour_burn": (hour or {}).get("total"), "window_burn": (window or {}).get("total"),
+            "paused": (STATE / "token-pause").exists(), "last_change": limits_last()}
+
+def limits_diff(old, new):
+    """The diff a Save shows before it writes: one line per changed setting, in the order the theme reads them."""
+    out = []
+    if new["cap"] != old["cap"]: out.append(f"Spend & limits · token cap: {old['cap']} -> {new['cap']}")
+    if new["factor"] != old["factor"]: out.append(f"Spend & limits · pause factor: {_num(old['factor'])} -> {_num(new['factor'])}")
+    if new["guard"] != old["guard"]: out.append(f"token guard: {new['guard']}")
+    return out
+
+def profile_set_line(text, key, value):
+    """One profile's line rewritten in place, every other line kept as it is. A profile writes a setting as
+    `: "${KEY:=value}"`, as `KEY=value` or as `export KEY=value`; the last line that names the key is the one bash ends on,
+    so it is the one replaced, and a profile that names none gets the line appended in the file's own `:=` form."""
+    pats = [re.compile(r"(\$\{" + key + r":=)([^}]*)(\})"),
+            re.compile(r"((?:^|\n)[ \t]*(?:export[ \t]+)?" + key + r"=)(\"[^\"]*\"|'[^']*'|[^\s#]*)")]
+    hits = [(m.start(), m.end(), m, i) for i, p in enumerate(pats) for m in p.finditer(text)]
+    if hits:
+        _, _, m, i = max(hits, key=lambda h: h[0])
+        return text[:m.start(2)] + value + text[m.end(2):]
+    return text + ("" if not text or text.endswith("\n") else "\n") + f': "${{{key}:={value}}}"' + "\n"
+
+def limits_write(path, changes):
+    """Write the profile atomically, and only a file bash parses: a profile the guard sources is never half a file, and a
+    save that would break the file is refused before it replaces the good one. Returns an error, or None."""
+    try: text = path.read_text()
+    except OSError: text = ""
+    for key, value in changes:
+        text = profile_set_line(text, key, value)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text(text)
+        r = subprocess.run(["bash", "-n", str(tmp)], capture_output=True, text=True, timeout=20)
+        if r.returncode:
+            msg = next((ln for ln in r.stderr.splitlines() if ln.strip()), "bash -n failed")
+            return f"the profile would not parse: {msg}"
+        os.replace(tmp, path)
+    except OSError as e:
+        return f"the profile could not be written: {e.strerror or e}"
+    finally:
+        try: tmp.unlink()
+        except OSError: pass
+    return None
+
+def limits_record(diff):
+    """Every change with its local time, one line per change, in the state directory's own ledger. The file is rewritten
+    through a temp file and a rename, so a reader sees whole lines only."""
+    path = STATE / LIMIT_LEDGER
+    recs = []
+    try:
+        for ln in path.read_text().splitlines():
+            try: recs.append(json.loads(ln))
+            except ValueError: continue
+    except OSError: recs = []
+    at = time.strftime("%Y-%m-%d %H:%M:%S")
+    recs += [{"at": at, "text": t} for t in diff]
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in recs))
+        os.replace(tmp, path)
+    except OSError: pass
+    finally:
+        try: tmp.unlink()
+        except OSError: pass
+
+def limits_set(body):
+    """POST /api/limits: validate, diff, then write. With `confirm` false it answers the diff and writes nothing, which is
+    what the theme shows before it asks. A cap that is not a positive whole number is refused with a message and no write."""
+    if not isinstance(body, dict): return {"err": "bad request"}
+    path = profile_file()
+    if path is None: return {"err": "no profile in force: SG_PROFILE and SG_PROFILES_DIR name none"}
+    cur = limits_settings(path)
+    cap = _positive_int(body.get("cap", cur["cap"]))
+    if cap is None: return {"err": "token cap must be a positive whole number"}
+    factor = _positive_num(body.get("factor", cur["factor"]))
+    if factor is None: return {"err": "pause factor must be a positive number"}
+    guard = _guard_value(body.get("guard", cur["guard"]))
+    if guard is None: return {"err": "token guard is on or off"}
+    new = {"cap": cap, "factor": factor, "guard": guard}
+    diff = limits_diff(cur, new)
+    if body.get("confirm") is not True: return {"diff": diff}
+    if diff:
+        changes = []
+        if new["cap"] != cur["cap"]: changes.append((LIMIT_KEY["cap"][0], str(new["cap"])))
+        if new["factor"] != cur["factor"]: changes.append((LIMIT_KEY["factor"][0], _num(new["factor"])))
+        if new["guard"] != cur["guard"]: changes.append((LIMIT_KEY["guard"][0], new["guard"]))
+        err = limits_write(path, changes)
+        if err: return {"err": err}
+        limits_record(diff)
+    return {"diff": diff, "state": limits_read()}
+
 def _tok(n):
     n = int(n)
     return f"{n/1e6:.1f}M".replace(".0M", "M") if n >= 1e6 else f"{n/1e3:.0f}k" if n >= 1e3 else str(n)
@@ -1376,6 +1566,10 @@ def status_payload():
             "open_bugs": sum(1 for i in items if str(i.get("s")).upper() == "OPEN" and "bug" in (i.get("l") or [])),
             "warnings": [{"text": f["text"], "tip": f.get("tip")} for f in (LOAD_STATE.get("facts") or []) if f.get("bad")],
             "load": load_payload()}
+
+def worst_alert():
+    """This project's worst alert as text: the first bad foot fact, in the order the line reads them; "" when none (#876)."""
+    return next((f["text"] for f in (LOAD_STATE.get("facts") or []) if f.get("bad")), "")
 
 def load_sampler():
     """The one sampler thread: a failed pass leaves the last reading in place rather than breaking the page."""
@@ -1986,6 +2180,7 @@ def refresh_board():
             except OSError: pass
         else: quick = False
 ORDER = [column["name"] for column in BOARD_COLUMNS]
+FLOW_BANDS = [*ORDER, _cfd.FROZEN, _cfd.NO_COLUMN]   # the chart's bands: the columns in their order, then the cards frozen and the cards in no column (#896)
 def _marker_mtime(kind, pr, sha9):
     """mtime of a loop marker in auto/ (`launched-<pr>-<sha9>`, `rereview-<pr>-<sha9>`), i.e. when the loop acted on this head."""
     try: return (STATE / "auto" / f"{kind}-{pr}-{sha9}").stat().st_mtime
@@ -2544,13 +2739,48 @@ def drop_moves(ids):
             return None
         return set(moves) - set(left)
 def _band_extents(bands):
-    """Each column's band over one day, stacked from the last column of ORDER at the foot: lower is the cards in the
-    columns after it, upper adds its own."""
+    """Each band over one day, stacked from the last band of FLOW_BANDS at the foot: lower is the cards in the bands
+    after it, upper adds its own."""
     extents, run = {}, 0
-    for name in reversed(ORDER):
+    for name in reversed(FLOW_BANDS):
         extents[name] = (run, run + bands[name])
         run += bands[name]
     return extents
+
+
+def _y_ticks(top):
+    """The numbered ticks of the y axis: from zero to the first step of 1, 2 or 5 times a power of ten that covers the
+    tallest stack in at most four steps."""
+    step = next(s for e in range(7) for s in (10 ** e, 2 * 10 ** e, 5 * 10 ** e) if -(-top // s) <= 4)
+    return [k * step for k in range(-(-top // step) + 1)]
+
+
+def _x_ticks(days):
+    """Up to five date ticks, evenly spaced over the history's calendar days."""
+    return [{"i": i, "day": days[i]} for i in sorted({round(k * (len(days) - 1) / 4) for k in range(5)})] if days else []
+
+
+CFD_RANGES = [("7", 7), ("30", 30), ("90", 90), ("all", None)]   # the cumulative flow's range views, in days (#901)
+LEAD_TIMEFRAMES = [("7", 7), ("14", 14), ("30", 30), ("90", 90), ("180", 180), ("all", None)]   # the control chart presets (#900)
+
+
+def lead_rows():
+    """The closed-card rows the lead-time arithmetic reads, one per board item (#900)."""
+    return [{"n": i["n"], "column": _columns_module.view_column(i["st"], str(i["s"]).lower() == "closed", i.get("l"), i.get("cr"))[0],
+             "reason": _leadtime.NOT_DELIVERED if _columns_module.not_planned(i.get("cr")) else None,   # the chart's own word (#921)
+             "c": i.get("c") if str(i["s"]).lower() == "closed" else None, "o": i.get("o"), "t": i.get("t", "")} for i in board_cache["items"]]
+
+
+def lead_zoom(query):
+    """The control chart over a dragged range: `from` and `to` are ISO datetimes, `scale` is jira or log (#900)."""
+    q = urllib.parse.parse_qs(query)
+    try:
+        start, end = (dt.datetime.fromisoformat(q[k][0]) for k in ("from", "to"))
+    except (KeyError, IndexError, ValueError):
+        return {"error": "bad range: from and to are ISO datetimes"}
+    start, end = (m if m.tzinfo else m.replace(tzinfo=dt.UTC) for m in (start, end))
+    if end <= start: return {"error": "bad range: to is not after from"}
+    return _leadtime.control_chart(lead_rows(), log=q.get("scale", ["jira"])[0] == "log", now=dt.datetime.now(dt.UTC), start=start, end=end)
 
 
 def flow_charts():
@@ -2559,19 +2789,34 @@ def flow_charts():
     cfd = _cfd.cfd(_flow.samples(path), ORDER, skips=_flow.skips(path))
     extents = {p["day"]: _band_extents(p["bands"]) for p in cfd["points"]}
     days = sorted([*extents, *cfd["gaps"]])   # one entry per calendar day: a day with no sample carries no value (#894)
-    ymax = max((e[ORDER[0]][1] for e in extents.values()), default=0)
+    yticks = _y_ticks(max((e[FLOW_BANDS[0]][1] for e in extents.values()), default=0))
     def values(name, k): return [extents[d][name][k] if d in extents else None for d in days]
-    rows = [{"n": i["n"], "column": _columns_module.view_column(i["st"], str(i["s"]).lower() == "closed", i.get("l"), i.get("cr"))[0],
-             "reason": _leadtime.NOT_DELIVERED if _columns_module.not_planned(i.get("cr")) else None,   # the chart's own word (#921)
-             "c": i.get("c") if str(i["s"]).lower() == "closed" else None, "o": i.get("o")} for i in board_cache["items"]]
+    points = {p["day"]: p for p in cfd["points"]}
+    def view(width):
+        """The chart over the last `width` calendar days (all of them when None): the same arrays, cut to the window (#901)."""
+        window = days if width is None else days[-width:]
+        kept = [d for d in window if d in extents]
+        top = max((extents[d][FLOW_BANDS[0]][1] for d in kept), default=0)
+        ticks = _y_ticks(top)
+        def cut(arr): return [arr[days.index(d)] for d in window]
+        return {"start": dt.datetime.fromtimestamp(cfd["start"], dt.UTC).date().isoformat() if cfd["start"] is not None else None,
+                "days": window, "ymax": ticks[-1], "yticks": ticks, "xticks": _x_ticks(window),
+                "wip": [points[d]["wip"] if d in points else None for d in window],
+                "throughput": [points[d]["throughput"] if d in points else None for d in window],
+                "bands": [{"name": n, "lower": cut(values(n, 0)), "upper": cut(values(n, 1)),
+                           "count": [extents[d][n][1] - extents[d][n][0] if d in extents else None for d in window]}
+                          for n in FLOW_BANDS] if kept else []}
+    rows = lead_rows()
     lead = _leadtime.lead_time(rows)
+    now = dt.datetime.now(dt.UTC)
+    control = {scale: {key: _leadtime.control_chart(rows, timeframe=days, log=scale == "log", now=now)
+                       for key, days in LEAD_TIMEFRAMES} for scale in ("jira", "log")}   # the Jira-style control chart (#900)
     return {
-        "cfd": {"start": dt.datetime.fromtimestamp(cfd["start"], dt.UTC).date().isoformat() if cfd["start"] is not None else None,
-                "days": days, "ymax": ymax,
-                "bands": [{"name": n, "lower": values(n, 0), "upper": values(n, 1)} for n in ORDER] if extents else []},
+        "cfd": {**view(None), "ranges": {key: view(width) for key, width in CFD_RANGES}},
         "lead": {"measure": lead["measure"], "window": lead["window"],
                  "excluded": [{"reason": r, "count": c} for r, c in lead["excluded"].items()],
-                 "excluded_total": sum(lead["excluded"].values()), "series": lead["series"], "summary": lead["summary"]},
+                 "excluded_total": sum(lead["excluded"].values()), "series": lead["series"], "summary": lead["summary"],
+                 "control": control},
     }
 
 
@@ -2621,6 +2866,8 @@ def board():
         if d["state"] == "pending": row["pd"] = True   # the mark the page draws; the rule lives here, never in the view (ADR-0137)
         if fz: row["fz"] = fz
         if _columns_module.SPEC_LABEL in row["l"]: row["sp"] = True   # a spec is an issue with the spec label: the Specs filter reads this
+        if st == COLUMN["issue_closed"]: row["dn"] = True   # the card is Closed: a spec lane counts it as done on the mobile page (#893)
+        if isinstance(i.get("pa"), int): row["pa"] = i["pa"]   # the parent spec the read carried (#829): the swimlane groups by it, with no read of its own (#890)
         # The owner's one move (#560): a card the rule marks promotable carries the arrow that starts it, a spec included:
         # the owner's move starts the spec and its open Backlog tickets follow (ADR-0142 section 6, #838). The rule lives
         # here, not in the page: the card renders the fact its row carries (ADR-0137). `pmt` names the column the move
@@ -2965,8 +3212,8 @@ RUN_STATES = [
 ]
 
 WEB_TOKENS = (pathlib.Path(__file__).resolve().parent / "web-tokens.css").read_text()
-PAGE = r"""<!doctype html><meta charset=utf-8><title>Hub</title>
-<script>if(matchMedia("(max-width: 600px)").matches&&sessionStorage.getItem("squad-view")!=="desktop")location.replace(location.pathname.replace(/\/?$/,"/")+"mobile")</script>
+PAGE = r"""<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Hub</title>
+<script>if(matchMedia("(max-width: 600px)").matches&&localStorage.getItem("squad-view")!=="desktop")location.replace(location.pathname.replace(/\/?$/,"/")+"mobile")</script>
 <style>
 /*WEB_TOKENS*/
 :root{--col-w:185px}   /* the docked strip's column geometry: the one place its width is set (#1791); a column holding no cards is not drawn at all, so it reserves none (#1809) */
@@ -2999,6 +3246,7 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #src,#per{display:inline-flex;flex-wrap:nowrap;gap:2px;margin:0}#src button{padding:1px 5px;font-size:var(--fs-min)}#per button{padding:1px 3px;font-size:var(--fs-min)}
 .kr{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-auto-rows:min-content;column-gap:8px;row-gap:2px;align-items:baseline;padding:5px 0;border-bottom:1px solid var(--line);font-size:var(--fs-min);min-width:0}.kr:last-child{border:0}.kr .l{grid-row:1/3;min-width:0;font-size:var(--fs-min);line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.kr .l small{display:inline;color:var(--mute);font-size:var(--fs-min)}.kr b{grid-column:2;justify-self:end;font-size:var(--fs-body);font-weight:600;line-height:1}.kr b small{font-size:var(--fs-min);font-weight:400;color:var(--mute)}.kr b.m{color:var(--mute)}.kr b.w{color:var(--warn)}
 .kr .d{grid-column:2;justify-self:end;font-size:var(--fs-min);padding:0;white-space:nowrap;color:var(--mute)}.kr .d .good{color:#5fd38d}.kr .d .bad{color:#ff7b7b}
+.mchs,.mch-row{display:flex;flex-wrap:wrap;gap:4px;align-items:center;margin:4px 0}.mch{min-height:32px;padding:4px 10px;border:1px solid var(--line);border-radius:14px;background:#10141a;color:var(--fg);font-size:var(--fs-min);cursor:pointer}.mch.off{text-decoration:line-through;color:var(--mute)}.mtg{min-height:32px;min-width:32px;padding:2px 10px;border:1px solid var(--line);border-radius:6px;background:#10141a;color:var(--fg);font-size:var(--fs-min);cursor:pointer}.mtg.off{text-decoration:line-through;color:var(--mute)}.mt-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:4px 0}.mt-row .mn{flex:1 1 140px;min-width:0}.mdiff{border-top:1px dashed var(--line);margin-top:8px;padding-top:6px}.mch:focus-visible{outline:2px solid #8ab4ff;outline-offset:2px}.mtg:focus-visible{outline:2px solid #8ab4ff;outline-offset:2px}@media (max-width:600px){.mch{min-height:44px;padding:10px 14px}.mtg{min-height:44px;min-width:44px}}
 #mbody{padding:0}.mc{background:#10141a;border:1px solid var(--line);border-radius:8px;padding:10px;margin:6px 0 8px}.mc .mt{font-size:var(--fs-min);font-weight:600;color:var(--fg);margin:0 0 2px}.mc .mx{font-size:var(--fs-min);color:var(--mute);margin:0 0 8px;line-height:1.35}
 .mr{display:grid;grid-template-columns:22px minmax(0,1fr);align-items:center;gap:5px 8px;padding:7px 8px;border:1px solid var(--line);border-radius:6px;background:var(--panel);margin-bottom:5px;font-size:var(--fs-min)}.mr.p{border-color:#2f5d45;background:#13211b}.mr .rk{flex:none;width:22px;height:22px;border-radius:11px;background:#222a35;color:var(--mute);font-size:var(--fs-min);font-weight:600;display:flex;align-items:center;justify-content:center}.mr.p .rk{background:var(--ok);color:#0b1a12}
 .mr .mn{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3;font-size:var(--fs-min);color:var(--fg)}.mr .ct{grid-column:1/3;display:flex;flex-wrap:wrap;gap:3px;align-items:center;min-width:0}.mr .mi{font-size:var(--fs-min);color:var(--mute);margin-left:4px}.mr .ur{color:var(--warn)}.mr .pv{flex:1 1 auto;min-width:0;font-size:var(--fs-min);color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mr .pv b{color:var(--ok);font-weight:600}.mr .el{flex:none;font-size:var(--fs-min);color:var(--mute);margin-left:2px}.mr .mn small{display:block;font-size:var(--fs-min);color:var(--mute)}.mr .ef{flex:none;width:62px;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;font-size:var(--fs-min);height:var(--ctl-h);padding:0 2px;cursor:pointer;text-overflow:ellipsis}.mr .ef.set{color:var(--warn);border-color:#6b5223}.mr .hr{flex:none;width:50px;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;font-size:var(--fs-min);height:var(--ctl-h);padding:0 2px;text-align:center}.mr .hr::placeholder{color:var(--mute)}.mr .hr:focus{outline:var(--focus-w) solid var(--focus);border-color:var(--acc)}.mr .hr.set{color:var(--warn);border-color:#6b5223}
@@ -3013,14 +3261,14 @@ button.on{border-color:var(--acc);color:var(--acc)}
 .sub .hd{display:flex;align-items:center;gap:6px;margin-bottom:2px}.sub .nm{font-weight:600;font-size:var(--fs-min);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sub .sv{font-weight:600;font-size:var(--fs-body)}.sub .sv.good{color:#5fd38d}.sub .sv.bad{color:#ff7b7b}.sub .sv.none{color:var(--mute);font-size:var(--fs-min);font-weight:400}
 .sub .qw{display:flex;flex-direction:column;gap:3px}.sub .ql{display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-size:var(--fs-min);color:var(--mute)}.sub .ql b{color:var(--fg);font-weight:600;font-size:var(--fs-min)}.sub .ql .rst{white-space:nowrap;font-size:var(--fs-min)}
 .sub .qw.sm .ql{font-size:var(--fs-min)}.sub .qw.sm .ql b{font-size:var(--fs-min);color:#b9c0cc}.sub .qw .tr{position:relative;height:8px;border-radius:4px;background:#1c222b}.sub .qw.sm .tr{height:4px;border-radius:2px}.sub .qw .fl{height:100%;border-radius:inherit;transition:width .3s}
-.sub .fl.lv-ok{background:var(--ok)}.sub .fl.lv-warn{background:var(--warn)}.sub .fl.lv-err{background:var(--err)}.sub .fl.lv-est{background:#5aa9ff}.sub .qw .tk{position:absolute;top:-3px;bottom:-3px;width:2px;background:#d8dde6;border-radius:1px}
+.sub .fl.lv-ok{background:#5a6474}.sub .fl.lv-warn{background:var(--warn)}.sub .fl.lv-err{background:var(--err)}.sub .fl.lv-est{background:#5aa9ff}.sub .qw .tk{position:absolute;top:-3px;bottom:-3px;width:2px;background:#d8dde6;border-radius:1px}
 .sub .fr{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:-1px}.sub .fs{color:var(--mute);font-size:var(--fs-min);margin-left:auto}.sub .chip{display:inline-block;padding:0 7px;border-radius:9px;font-size:var(--fs-min);font-weight:600;line-height:16px}.sub .chip.err{background:#3a1a1a;color:#ff7b7b;border:1px solid #ff6b6b55}
 .sub .xx{padding:1px 7px;border-radius:9px;background:#14301f;color:#5fd38d;font-size:var(--fs-min);margin-left:5px}.sub .xx.bad{background:#3a1a1a;color:#ff7b7b}
 .sub .pr{display:flex;gap:6px;align-items:center;color:var(--mute);font-size:var(--fs-min)}.sub select{flex:1;min-width:0;max-width:100%}.sub input{padding:3px 6px;font-size:var(--fs-min);min-width:0}.sub input[data-f=amount]{flex:1}.sub input[data-f=cur]{width:56px;text-transform:uppercase}
 .sub .dt{color:var(--mute);font-size:var(--fs-min);line-height:1.4}.sub .dt b{color:var(--fg);font-weight:600}.sub .warn{color:var(--warn);font-size:var(--fs-min)}
 .mb{margin-top:2px}.mb .lab{display:flex;justify-content:space-between;font-size:var(--fs-min);color:var(--mute);margin-bottom:3px}.mb .lab b{color:var(--fg);font-weight:600}.mb .tr{position:relative;height:9px;border-radius:5px;background:#1c222b;overflow:visible}.mb .fl{height:100%;border-radius:5px;background:#e0a23a}.mb .fl.good{background:#3ecf8e}.mb .fl.bad{background:#d9534f}.mb .fl.warnq{background:#5aa9ff}.mb .tk{position:absolute;top:-3px;bottom:-3px;width:2px;background:#d8dde6;border-radius:1px}.mb .sc2{display:flex;justify-content:space-between;font-size:var(--fs-min);color:var(--mute);margin-top:2px}
 .subx{color:var(--mute);font-size:var(--fs-min);line-height:1.45;margin:8px 0 4px}
-.pie{display:flex;flex-direction:column;gap:6px;align-items:stretch}.pie svg{flex:none;width:112px;height:112px;margin:0 auto}.pie .lg{flex:1;min-width:0;font-size:var(--fs-min)}.pie .lg div{display:flex;align-items:center;gap:6px;padding:2px 0}.pie .lg i{width:9px;height:9px;border-radius:2px;flex:none}.pie .ln{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pie .lg b{font-weight:600}.warnl{margin-top:4px;font-size:var(--fs-min);color:var(--warn)}
+.pie{display:flex;flex-direction:column;gap:6px;align-items:stretch}.pie svg{flex:none;width:112px;height:112px;margin:0 auto}.pie .lg{flex:1;min-width:0;font-size:var(--fs-min)}.pie .lg div{display:flex;align-items:center;gap:6px;padding:2px 0}.pie .lg i{width:9px;height:9px;border-radius:2px;flex:none}.pie .ln{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pie .lg b{font-weight:600}.pie .lg .usd{color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap}.pie .lg div:focus-visible{outline:var(--focus-w) solid var(--focus);outline-offset:1px}.pie .lg div.hl{background:#1c222b}.pie [data-k].hl{stroke:#d8dde6;stroke-width:2}.pie.dim [data-k]:not(.hl){opacity:.35}.warnl{margin-top:4px;font-size:var(--fs-min);color:var(--warn)}
 .up{color:var(--err)}.dn{color:var(--ok)}svg{display:block;width:100%}
 #main{flex:1;min-width:0;display:grid;gap:4px;padding:4px}
 .cell{display:flex;flex-direction:column;min-height:0;min-width:0}.cell small{color:var(--mute);padding:2px 4px;display:flex;justify-content:space-between}.cell .snap{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:12px;overflow:hidden;color:var(--mute);border:1px solid var(--line);background:#0f1115}.cell[tabindex]{cursor:pointer}.cell[tabindex]:hover .snap,.cell[tabindex]:focus-visible .snap{border-color:var(--acc);color:var(--fg,inherit)}
@@ -3030,7 +3278,7 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #bcharts{margin-left:8px}#bcharts button{font-size:var(--fs-min)}#board.off #bcharts,#board.off #flowov{display:none}
 #flowov{position:absolute;inset:0;z-index:4;background:var(--panel);display:flex;flex-direction:column;overflow:auto}#flowov[hidden]{display:none}
 #flowh{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel)}
-#flowb{padding:10px;font-size:var(--fs-min)}#flowb svg{width:100%;height:auto;display:block;margin:6px 0}#flowb .fnote,#flowb .fhead{color:var(--mute);margin:4px 0}#flowb .fhead b{color:var(--fg,inherit)}
+#flowb{padding:10px;font-size:var(--fs-min)}#flowb svg{width:100%;height:auto;display:block;margin:6px 0;user-select:none;touch-action:pan-y}#flowb .fnote,#flowb .fhead{color:var(--mute);margin:4px 0}#flowb .fhead b{color:var(--fg,inherit)}
 #flowb .flg{margin-right:10px;white-space:nowrap}#flowb .flg i{display:inline-block;width:9px;height:9px;margin-right:4px;vertical-align:middle;border-radius:2px}
 #bbody .ah{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);cursor:pointer;font-weight:600;position:sticky;top:34px;background:#1b212b;z-index:1}   /* the same gap as the docked header: `Todo0` is never a reading, in either rendering (#1809) */
 #bbody .ah .n{background:#2a303b;border-radius:9px;padding:0 8px;font-weight:400}
@@ -3040,7 +3288,7 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #bbody .pbg{display:inline-block;margin-left:6px;padding:0 7px;border-radius:9px;font-size:var(--fs-min);font-weight:700;border:1px solid}#bbody .pbg.conflict,#bbody .pbg.checks-red{color:#f85149;border-color:#6e2a27}#bbody .pbg.green{color:#3fb950;border-color:#2e6b3a}#bbody .pbg.approved{color:#3fb950;border-color:#3fb950;background:#12261a}   /* the lane badge (#247) */
 #bbody .fz{display:inline-block;margin-left:6px;padding:0 6px;border-radius:9px;font-size:var(--fs-min);color:var(--warn);border:1px dashed var(--warn)}   /* the freeze marker: the card keeps its column */
 #bbody .it .pnd{display:inline-block;margin-left:6px;padding:0 6px;border-radius:9px;font-size:var(--fs-min);font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#0b1a12;background:var(--warn);border:1px solid var(--warn)}   /* the proved move the board read has not carried yet (#650) */
-#bsp[data-m=only],#bsp[data-m=hidden]{color:var(--warn);border-color:#6b5223}   /* the two modes that leave the specs out of the way, or ask for them: the one that draws every card is the resting colour (#456) */
+   /* the two modes that leave the specs out of the way, or ask for them: the one that draws every card is the resting colour (#456) */
 #bbody .pst{display:inline-block;margin-left:6px;padding:0 7px;border-radius:9px;font-size:var(--fs-min);font-weight:600;vertical-align:1px;border:1px solid;max-width:100%;overflow-wrap:anywhere}
 #bbody .pst.ready{color:#3fb950;border-color:#2e6b3a;background:#12261a}#bbody .pst.running{color:#5aa9ff;border-color:#24496e;background:#0f1d2c}
 #bbody .pst.changes{color:#e3b341;border-color:#6b5223;background:#261e0f}#bbody .pst.broke,#bbody .pst.conflict{color:#f85149;border-color:#6e2a27;background:#2a1212}
@@ -3053,8 +3301,8 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #bbody .gc.debt b{color:#5aa9ff}#bbody .gc.unk{border-color:#6b5223}#bbody .gc.unk b{color:#e3b341}
 #bbody .it:hover{background:var(--bgh,#232b37);border-color:#3a4352}
 #bbody .it .id{display:inline-block;background:#12161c;border:1px solid var(--line);border-radius:4px;padding:0 6px;margin-bottom:4px;font-size:var(--fs-min);color:var(--acc);text-decoration:none;font-weight:700}
-#lf{display:inline-block;position:relative;font-size:var(--fs-min);font-weight:400}#lf summary{list-style:none;cursor:pointer;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:2px 8px;max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}#lf summary::-webkit-details-marker{display:none}#lf.set summary{color:var(--warn);border-color:#6b5223}
-#lfl{position:absolute;right:0;top:calc(100% + 4px);z-index:20;min-width:200px;max-height:320px;overflow-y:auto;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:6px;box-shadow:0 6px 18px #0008}#lfl label{display:flex;gap:6px;align-items:center;padding:2px 4px;border-radius:4px;cursor:pointer;white-space:nowrap}#lfl label:hover{background:#1c222b}#lfl .lft{display:flex;gap:4px;justify-content:space-between;align-items:center;padding:0 2px 6px;margin-bottom:4px;border-bottom:1px solid var(--line)}#lfl .lft button{font:inherit;font-size:var(--fs-min)}#lfl .lft button.on{color:var(--warn);border-color:#6b5223}#bbody .it .lbs{display:block;margin-top:4px}#bbody .it .lbs span{display:inline-block;background:var(--lb,#2a303b);border:1px solid transparent;border-radius:9px;padding:0 6px;margin:0 3px 2px 0;font-size:var(--fs-min);color:#c9d1d9}#bbody .it .lbs span.on{border-color:var(--warn);color:var(--fg)}
+
+#bbody .it .lbs{display:block;margin-top:4px}#bbody .it .lbs span{display:inline-block;background:var(--lb,#2a303b);border:1px solid transparent;border-radius:9px;padding:0 6px;margin:0 3px 2px 0;font-size:var(--fs-min);color:#c9d1d9}#bbody .it .lbs span.on{border-color:var(--warn);color:var(--fg)}
 #bbody .it .id:hover{border-color:var(--acc)}#bbody .it .tt{display:block}
 #bbody .it .pmp{display:inline-block;margin-top:4px;font:inherit;font-size:var(--fs-min);padding:0 7px;border-radius:9px;cursor:pointer;color:var(--acc);background:#12161c;border:1px solid var(--line)}#bbody .it .pmp:hover{border-color:var(--acc)}#bbody .it .pmp:disabled{opacity:.5;cursor:default}   /* the owner's move, on a Backlog card only (#560) */
 #bbody .it .prr{display:block;margin-top:2px;font-size:var(--fs-min);color:var(--mute);max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -3118,21 +3366,7 @@ body.dockb #board.off{height:34px;width:auto}body.dockb #board.off #bhead b{disp
 body.dockb #bbody{flex:none;height:calc(100% - 41px);min-height:0;display:flex;overflow-x:auto;overflow-y:hidden}
 
 body.dockb #bhead{position:static}
-/* The board's maximize: the kanban takes the run pane's cell as well as its own, so it is read at full height. Only the two cells of the right column move — the left bar keeps its column and its rows. The run pane is a live, cross-origin dashboard: its frame is detached while the pane is out of sight (liveSync in the script), so it holds no stream, and `visibility` only hides the empty cells. The board is no longer a fixed-height row, so the grip has nothing to resize. */
-body.dockb.max #win{grid-template-rows:minmax(0,1fr) 0}
-body.dockb.max #board{grid-row:1/-1;height:auto;border-top:0;overflow:hidden}
-body.dockb.max #main{visibility:hidden}
 #grip{display:none}body.dockb #grip{display:block;height:7px;margin-bottom:-3px;cursor:ns-resize;flex:none;position:relative;z-index:3}body.dockb #grip:hover,body.dockb #grip.drag{background:var(--acc);opacity:.6}body.dragging{user-select:none;cursor:ns-resize}body.dragging iframe{pointer-events:none}body.dockb.max #grip{display:none}
-/* The pip over the maximized board (#1782): a small card of the run's own dashboard, floating on the board. It is the board's own child, so `absolute` is measured against the board and never the viewport; z-index 10 keeps it above the board header (2) and the column headers and below the filter popover (20), so an open popover is never trapped behind it. In the split the window is hidden with `visibility` and holds no dashboard (its source is blank), so it opens no stream; maximizing sources it and detaches the run pane's frame. `overscroll-behavior:contain` and a non-passive wheel listener on the chrome keep a wheel over the window off the board behind it. */
-#pip{position:absolute;z-index:10;display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--panel);border:1px solid var(--line);border-radius:6px;box-shadow:0 8px 22px #0009;overflow:hidden;overscroll-behavior:contain}
-body:not(.dockb.max) #pip{visibility:hidden}
-#piph{display:flex;align-items:center;gap:6px;padding:5px 6px 5px 9px;background:#1b212b;border-bottom:1px solid var(--line);cursor:move;touch-action:none;flex:none;font-size:var(--fs-min)}
-#piph:hover,#piph.drag{background:#232b37}#piph b{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
-#piph button{font:inherit;font-size:var(--fs-min);line-height:1;padding:2px 6px;cursor:pointer}
-#pipb{flex:1;min-height:0;display:flex}#pipf{border:0;border-radius:0 0 5px 5px}
-#pip.off #pipb{height:0;visibility:hidden}
-#pipm{display:none;flex:1;padding:10px;font-size:var(--fs-min);line-height:1.45;color:var(--mute)}
-#pip.noframe #pipb{visibility:hidden;height:0}#pip.noframe #pipm{display:block}
 body.dockb #bbody>.col{flex:1 1 0;min-width:var(--col-w);display:flex;flex-direction:column;height:100%;border-right:1px solid var(--line);min-height:0}
 body.dockb .ch{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);font-weight:600;background:#1b212b;flex:none}   /* the gap is stated: without it a header that is asked to pack its spans reads `Todo0` (#1809) */
 body.dockb .col>.sc{flex:1 1 0;min-height:0;max-height:none;overflow-y:auto;overscroll-behavior:contain}
@@ -3169,7 +3403,24 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 #ldfacts details.nfd[open]{white-space:normal}#ldfacts details.nfd>ul{margin:4px 0 0;padding:0 0 0 16px;white-space:normal;color:var(--mute);font-variant-numeric:normal}
 .load{display:inline-block;margin-left:4px;padding:0 5px;border-radius:9px;background:#3a2a12;color:var(--warn);font-size:var(--fs-min);border:1px solid #6b5223}
 #who{padding:3px 12px;color:var(--mute);border-bottom:1px solid var(--line)}#who:empty{display:none}
+/* The project switcher (#876): one link per project, its live count and worst alert as text; one click switches. */
+#psw{display:flex;flex-wrap:wrap;gap:4px 14px;padding:4px 12px;border-bottom:1px solid var(--line);font-size:var(--fs-min)}
+#psw a{color:var(--acc);text-decoration:none;white-space:nowrap}#psw a:hover{text-decoration:underline}
+#psw a[aria-current=page]{color:var(--fg);font-weight:600}#psw .repo,#psw .psw-m{color:var(--mute)}#psw .psw-all{color:var(--ok)}
+/* Settings > Spend & limits (#926): the guard's switch, cap and factor, the burn it measures, and the diff before a write. */
+#lbody select,#lbody input{background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;font-size:var(--fs-min);height:var(--ctl-h);padding:0 6px;min-width:0;max-width:100%}
+#lbody input{width:104px;text-align:right;font-variant-numeric:tabular-nums}
+#lbody .lv{grid-column:2;justify-self:end;min-width:0;max-width:100%;text-align:right;overflow-wrap:anywhere;color:var(--mute);font-size:var(--fs-min)}
+#lbody .ldiff{margin:8px 0 0;padding:8px 10px;background:#1f1b12;border:1px solid #6b5223;border-radius:6px;font-size:var(--fs-min)}
+#lbody .ldiff b{display:block;margin-bottom:4px;color:var(--warn)}#lbody .ldiff .ln{font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+#lbody .lact{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap}#lbody .lact button{height:var(--ctl-h);padding:0 12px}
+/* A phone forced into the desktop view (#926): one column, a full-width sidebar, and nothing wider than 390 px. The docked
+   board lays the window out as a two-column grid of its own (`body.dockb`), so the phone states both layouts: on a 390 px
+   screen the 300 px sidebar and the board column are what a reader has to scroll sideways to reach. */
+@media (max-width:600px){body{height:auto}body.tkopen #win{margin-right:0}body.tkopen #board{width:auto}#win{display:block;overflow:visible}body.dockb #win{display:block;grid-template-columns:none;grid-template-rows:none}#side{width:auto;border-right:0;border-bottom:1px solid var(--line)}body.dockb #side{grid-row:auto;grid-column:auto}#main{min-height:50vh}body.dockb #main{grid-column:auto;grid-row:auto}#board{width:auto}body.dockb #board{grid-column:auto;grid-row:auto;height:60vh}#foot{flex-wrap:wrap}#ldfacts{margin-left:0;white-space:normal}#lbody input{width:92px}}
+/*BOARD_LANES_CSS*/
 </style>
+<div id=psw aria-label="Projects"></div>
 <div id=who>__WHO__</div>
 <a id=mobile-link href="#" style="margin:0 12px;color:#8a93a3;font-size:var(--fs-min)">mobile view</a><script>document.getElementById("mobile-link").href=location.pathname.replace(/\/?$/,"/")+"mobile"</script>
 <div id=win>
@@ -3177,13 +3428,16 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 <details id=plans class=sp><summary>subscriptions<span class=sr id=plsr></span></summary><div class=sb><div id=subs></div></div></details>
 <details id=mdl class=sp><summary>squad models<span class=sr id=mdsr></span></summary><div class=sb id=mbody></div></details>
 <details id=stats class=sp><summary>cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><h4>Spend <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Figures at API list prices (API-equivalent)."></span></h4><div class=tot id=tot></div><div class=m id=totnote></div><div class=cash id=cash></div><h4>Spend over time <span class=row id=per></span></h4><div id=chart></div><div id=kpi></div><div id=open></div><h4>Tokens by model <small class=m id=piet>all time</small></h4><div id=pie></div></div></details>
+<details id=lim class=sp><summary>Spend &amp; limits<span class=sr id=limsr></span></summary><div class=sb id=lbody></div></details>
 <div id=list></div>
 </div>
 <div id=main></div>
 <div id=tk role=dialog aria-label=Ticket><header><span id=tkchips></span><span class=sp></span><span id=tknav></span><button id=tkx aria-label=Close>✕</button></header><div id=tkset></div><div id=tkb></div><footer><a class=btn id=tkgh target=_blank rel=noopener>Open on GitHub ↗</a><button id=tktodo>→ Todo</button><button id=tkrel>Highlight related</button></footer></div>
-<div id=board><div id=grip title="drag to resize"></div><div id=bhead><span id=btitle><b>TASKS <span id=bt class=m></span></b> <span id=bcharts><button id=bflow title="the development flow: the cards in each column over time, from the flow history (SPEC 111)">Flow</button> <button id=blead title="the lead time of the closed cards, opened to closed (SPEC 111)">Lead time</button></span></span><span><details id=lf><summary title="filter cards by label">labels</summary><div id=lfl></div></details> <button id=bsp data-m=all title="the Specs filter holds a mode: every card, only the spec-labelled cards, or every card but those. A press cycles the three, and the label states the one it holds.">Specs: all</button> <button id=bz title="maximize the board over the run pane" aria-pressed=false></button> <button id=bx title="collapse" aria-pressed=false>&raquo;</button></span></div><div id="pip"><div id="piph" tabindex="0" title="drag to move the window; arrow keys move it 16px (64 with shift); Esc collapses it"><b id="pipt"></b><button id=pipx title="collapse the window to its header">&#8211;</button><button id=pipo title="close the window and restore the split">&#215;</button></div><div id="pipb"><iframe id="pipf" title="one card of the run panel"></iframe></div><div id="pipm"></div></div><div id=bcases></div><div id=bbody></div><div id=flowov hidden><div id=flowh><b id=flowt></b><button id=flowx title="close the diagram">&#215;</button></div><div id=flowb></div></div></div>
+<div id=board><div id=grip title="drag to resize"></div><div id=bhead><span id=btitle><b>TASKS <span id=bt class=m></span></b> <span id=bcharts><button id=bflow title="the development flow: the cards in each column over time, from the flow history (SPEC 111)">Flow</button> <button id=blead title="the lead time of the closed cards, opened to closed (SPEC 111)">Lead time</button></span></span><span><select id=lmode title="swimlanes: one lane per spec (Spec), per wave (Wave), or no lanes, today's board (None)"><option value=spec>Spec</option><option value=wave>Wave</option><option value=none>None</option></select> <button id=lcall title="collapse every swimlane">Collapse all</button> <button id=lexp title="expand every swimlane">Expand all</button> <label title="hide the swimlanes whose every ticket is closed"><input type=checkbox id=lhd> Hide done lanes</label> <span id=lhc></span> <details id=fw class=fsel><summary>Waves</summary><div class=fpop id=fwl></div></details> <details id=fs class=fsel><summary>Specs</summary><div class=fpop id=fsl></div></details></span></div><div id=bcases></div><div id=bbody></div><div id=flowov hidden><div id=flowh><b id=flowt></b><button id=flowx title="close the diagram">&#215;</button></div><div id=flowb></div></div></div>
 </div>
 <div id=foot title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"><span>load</span><b id=ldline>CPU ? · RAM ? · GPU ?</b><span id=ldfacts title="the squad's own state: health, progress, occupancy, quotas, subscriptions"></span></div>
+<script>/*SWITCHER_JS*/
+{const swMe=(location.pathname.match(/^\/([^/?#]+)/)||[])[1]||"";switcherPoll(d=>switcherPaint(document.getElementById("psw"),d,swMe,"/"));}</script>
 <script>
 {const p=(location.pathname.match(/^\/([^/?#]+)/)||[])[1]||"";document.title=p?`Hub | ${decodeURIComponent(p)}`:"Hub";}   // the tab names the profile it shows, so two open hubs are told apart
 const LAYOUTS={1:[1,1],2:[2,1],3:[3,1],4:[2,2],6:[3,2]};
@@ -3297,7 +3551,7 @@ const snapText=r=>r.state+" · "+usd(r.spend)+" · "+age(r.age)+" ago · :"+r.po
 const paintCell=(cell,r,id,live)=>{cell.head.innerHTML=`<span>${name(r)} · ${r.state}</span><span>${pins.has(id)?"pinned":"auto"}${id===live?" · live":""}</span>`;
   if(cell.snap)cell.snap.textContent=snapText(r)};
 function drawMain(force){
-  const [c,rw]=LAYOUTS[N],live=embedPlan(slots,focus,!!bo.max).pane,key=N+":"+slots.join(",")+"|"+live;
+  const [c,rw]=LAYOUTS[N],live=embedPlan(slots,focus).pane,key=N+":"+slots.join(",")+"|"+live;
   const main=$("#main");main.style.gridTemplateColumns=`repeat(${c},1fr)`;main.style.gridTemplateRows=`repeat(${rw},1fr)`;
   const byId=new Map(runs.map(r=>[r.id,r]));
   if(key!==built){built=key;
@@ -3313,7 +3567,7 @@ function drawMain(force){
       main.appendChild(cell)})}
   for(const cell of main.children){const r=byId.get(cell.dataset.id);if(r)paintCell(cell,r,cell.dataset.id,live)}
 }
-function liveSync(){drawMain();pipDraw()}   // the run pane went out of sight or came back: the frame follows the plan
+function liveSync(){drawMain()}   // the run pane went out of sight or came back: the frame follows the plan
 function refresh(){plan();drawList();liveSync()}
 function applyFilter(){runs=allRuns.filter(r=>r.kind!=="childcc")}   // the childcc pass is drawn in the WORKERS group, never a pane (#598)
 let known=null;   // run ids already seen: a run that appears running after the first poll is selected on its own (pinned, its group opened)
@@ -3344,10 +3598,10 @@ function mdlSetEff(k,m,v){mdl.efforts=mdl.efforts||{};mdl.efforts[k]=mdl.efforts
 const HRP=["22-07","07-22","20-08","18-06"],HRX=/^([01]\d|2[0-3])-([01]\d|2[0-3])$/;
 function mdlHrs(k,m){return (mdl.hours&&mdl.hours[k]&&mdl.hours[k][m])||""}
 function mdlSetHrs(k,m,v){v=(v||"").trim();mdl.hours=mdl.hours||{};mdl.hours[k]=mdl.hours[k]||{};if(HRX.test(v)&&v.slice(0,2)!==v.slice(3))mdl.hours[k][m]=v;else delete mdl.hours[k][m]}
-/* The row's switch (#1819): a state, not an action. Out of the chain the model keeps its place, its rank, its effort
-   and its hrs, and every consumer of the chain skips it exactly like a model outside its window. */
+/* The chain row's old switch (#1819) is read only now: a file that holds it shows "off (chain)" (SPEC 889 #920). */
 function mdlOff(k,m){return !!(mdl.off&&mdl.off[k]&&mdl.off[k][m])}
-function mdlSetOff(k,m,v){mdl.off=mdl.off||{};mdl.off[k]=mdl.off[k]||{};if(v)mdl.off[k][m]=true;else delete mdl.off[k][m]}
+/* The model's switch, one per model for every chain (SPEC 889 #920). The table stages it until Save; a chip writes it at once. */
+function mdlSetOffM(m,v){mdl.model_off=mdl.model_off||{};mdl.model_off[m]=!!v}
 /* What a model box shows is the hub's answer, model_box() (#677, ADR-0137): the registry label and its route, or
    "unregistered". The page holds no provider rule. An id just typed into an Add box has no answer until the save. */
 const MBOX0={llm:null,route:null,registered:null,text:"resolved on save"};
@@ -3357,30 +3611,83 @@ function sugId(list,v){const s=((mdl.suggest||{})[list]||[]).find(o=>o.text===v)
 function mdlSub(x){if(!x.sub)return"";const q=x.quota||{},when=q.spent&&q.until_text?`, resets ${esc(q.until_text)}`:"";return`<span class="${q.spent?"bk":"el"}" title="${esc(x.sub.label)}${q.reason?" · "+esc(q.reason):""}">${esc(x.sub.label)}${q.spent?" · spent"+when:""}</span>`}
 function mdlName(x,m){return x.llm?esc(x.llm):esc(m)}   // the id stays in the row title; only an unregistered row shows it (#687)
 function mdlRoute(x,dflt){return x.registered===false?`<span class=ur>unregistered</span>`:esc(x.route||(x.registered?dflt:x.text))}
+/* The model switch (SPEC 889 #920): one boolean per model, written by the chips and by the table through POST /api/models.
+   The chain row's old switch is read only: a file that holds it shows "off (chain)" and the panel writes none. */
+function mdlOffM(m){return !!(mdl.model_off&&mdl.model_off[m])}
+function mdlChips(){return Object.keys(MLAB).map(k=>`<div class=mch-row><span class=el>${MLAB[k]}</span>${(mdl[k]||[]).map(m=>{const of=mdlOffM(m),x=mdlBox(k,m);return`<button class="mch${of?" off":""}" data-mo="${esc(m)}" aria-pressed="${of}" title="${esc(m)} · ${of?"off (model): skipped in every chain; press to switch it on":"on: press to switch it off in every chain"}">${mdlName(x,m)}${of?" · off (model)":""}</button>`}).join("")}</div>`).join("")}
+function mdlTable(){const rows=mdl.models||[];return `<div class=mc><div class=mt>Models table</div><div class=mx>One row per model. The switch takes a model out of every chain and keeps its place. Hours are set on the chain rows only.</div>`+rows.map(r=>{const of=mdlOffM(r.id),x=mdlBox("known",r.id);return`<div class="mt-row${of?" off":""}"><span class=mn title="${esc(r.id)} · ${esc(x.text)}">${mdlName(x,r.id)}</span>${mdlSub(r)}<span class=el>${esc(of?"off (model)":r.state)}</span><button class="mtg${of?" off":""}" data-mt="${esc(r.id)}" aria-pressed="${of}" title="${of?"off (model): press to switch it on in every chain":"on: press to switch it off in every chain"}">${of?"off":"on"}</button></div>`}).join("")+`</div>`}
+function mdlRowText(k,m){const e=mdlEff(k,m),h=mdlHrs(k,m);return [m,(e&&e!=="medium")?e:"",h||"always"].filter(Boolean).join(" · ")}
+function mdlDiff(){const s=JSON.parse(mdlSrv),out=[];
+ for(const m of (mdl.models||[]).map(r=>r.id)){const was=!!(s.model_off&&s.model_off[m]);if(was!==mdlOffM(m))out.push(`${m}: ${mdlOffM(m)?"switched off (model) in every chain":"switched on in every chain"}`)}
+ for(const k of Object.keys(MLAB)){const now=(mdl[k]||[]).map(m=>mdlRowText(k,m)).join(" → ");const old=(s[k]||[]).map(m=>{const e=(s.efforts&&s.efforts[k]&&s.efforts[k][m])||"",h=(s.hours&&s.hours[k]&&s.hours[k][m])||"";return [m,(e&&e!=="medium")?e:"",h||"always"].filter(Boolean).join(" · ")}).join(" → ");if(now!==old)out.push(`${MLAB[k]}: ${now||"empty"}`)}
+ return out}
 function mdlRender(){const b=$("#mbody");if(!mdl){b.innerHTML="<span class=m>loading…</span>";return}
  {const lc=mdl.last_coding||(mdl.coding_models||[])[0]||"",x=lc?mdlBox("coding_models",lc):MBOX0;$("#mdsr").textContent=x.llm?`${x.llm} · ${lc}`:lc}   // the model the last run coded with, not the chain's head
  const dirty=JSON.stringify(mdl)!==mdlSrv;   // the dropdowns read mdl.suggest: the label first, the saved value stays the id (#672, #687)
- const ch=mdl.chain||{},chOut=ch.out||[],chBan=ch.banner?`<div class="mx err" role=alert>${esc(ch.banner)}</div>`:(ch.notice?`<div class=mx>${esc(ch.notice)}</div>`:"");
- b.innerHTML=chBan+`${Object.keys(MLAB).map(k=>`<datalist id=mk-${k}>${((mdl.suggest||{})[k]||[]).map(s=>`<option value="${esc(s.text)}" label="${esc(s.id)}">`).join("")}</datalist>`).join("")}<datalist id=hrp>${HRP.map(v=>`<option value="${v}">`).join("")}</datalist>`+Object.keys(MLAB).map(k=>`<div class=mc><div class=mt>${MLAB[k]}</div><div class=mx>${MDESC[k]} Tried top to bottom; the first healthy model wins, and a model switched off is skipped like one outside its hrs window.</div>`+mdl[k].map((m,i)=>{const ef=mdlEff(k,m),hr=mdlHrs(k,m),x=mdlBox(k,m),of=mdlOff(k,m),rk=i?"fallback "+i:"primary";return`<div class="mr${i?"":" p"}${of?" off":""}"><span class=rk title="${rk}${of?" · switched off":""}">${i+1}</span><span class=mn title="${esc(m)} · ${esc(x.text)}">${mdlName(x,m)}</span><span class=ct><span class=pv title="${rk} · ${esc(x.text)}">${mdlRoute(x,rk)}${mdlSub(x)}${of?" · out of the chain":""}</span>${k==="review_models"&&chOut.find(o=>o.model===m&&o.until_text)?`<span class=bk title="${esc(chOut.find(o=>o.model===m).reason)}">${esc(chOut.find(o=>o.model===m).reason)}, resets ${esc(chOut.find(o=>o.model===m).until_text)}</span>`:""}<span class=el>effort</span><select class="ef${ef?" set":""}" data-ef="${k}|${esc(m)}" title="effort for this model (medium is the default)">${EFF.map(e=>`<option value="${e==="medium"?"":e}"${(ef||"medium")===e?" selected":""}>${e}</option>`).join("")}</select><span class=el>hrs</span><input class="hr${hr?" set":""}" list=hrp data-hr="${k}|${esc(m)}" value="${esc(hr)}" placeholder="always" title="local hours this model may run (HH-HH, wraps midnight; empty = always)"><span class=mb><button data-mv="${k}|${i}|-1" ${i?"":"disabled"} title="move up">↑</button><button data-mv="${k}|${i}|1" ${i<mdl[k].length-1?"":"disabled"} title="move down">↓</button><button class="sw${of?" off":""}" data-sw="${k}|${esc(m)}" aria-pressed="${of}" title="${of?"out of the chain — it never runs; its rank, effort and hrs are kept, press to put it back":"in the chain — press to take it out without removing it: it keeps its rank, its effort and its hrs"}">${of?"off":"on"}</button><button class=x data-rm="${k}|${i}" ${mdl[k].length>1?"":"disabled"} title="remove from chain">✕</button></span></span></div>`}).join("")+`<div class=madd><input list=mk-${k} data-add="${k}" placeholder="add a model id…"><button data-addb="${k}">Add</button></div></div>`).join("")
- +`<div class=mx><b>effort</b> · <b>hrs</b> local time <code>HH-HH</code>, wraps midnight, empty = always · <b>switch</b> <code>off</code> skips a model and keeps its place · <b>✕</b> deletes the row.</div>`
+ const ch=mdl.chain||{},chOut=ch.out||[],chHit=(m)=>chOut.find(o=>o.until_text&&o.model.split(':').pop()===String(m).split(':').pop()),chTag=(m)=>{const o=chHit(m);return o?`<span class=bk title="${esc(o.reason)}">${esc(o.reason)}, resets ${esc(o.until_text)}</span>`:''},chBan=ch.banner?`<div class="mx err" role=alert>${esc(ch.banner)}</div>`:(ch.notice?`<div class=mx>${esc(ch.notice)}</div>`:"");
+ const diff=dirty?mdlDiff():[];
+ b.innerHTML=chBan+`<div class=mchs>${mdlChips()}</div>`+`${Object.keys(MLAB).map(k=>`<datalist id=mk-${k}>${((mdl.suggest||{})[k]||[]).map(s=>`<option value="${esc(s.text)}" label="${esc(s.id)}">`).join("")}</datalist>`).join("")}<datalist id=hrp>${HRP.map(v=>`<option value="${v}">`).join("")}</datalist>`+mdlTable()+Object.keys(MLAB).map(k=>`<div class=mc><div class=mt>${MLAB[k]}</div><div class=mx>${MDESC[k]} Tried top to bottom; the first healthy model wins, and a model switched off is skipped like one outside its hrs window.</div>`+mdl[k].map((m,i)=>{const ef=mdlEff(k,m),hr=mdlHrs(k,m),x=mdlBox(k,m),cof=mdlOff(k,m),o=(mdl.outside&&mdl.outside[k]||{})[m],rk=i?"fallback "+i:"primary";return`<div class="mr${i?"":" p"}${cof?" off":""}"><span class=rk title="${rk}${cof?" · off (chain)":""}">${i+1}</span><span class=mn title="${esc(m)} · ${esc(x.text)}">${mdlName(x,m)}</span><span class=ct><span class=pv title="${rk} · ${esc(x.text)}">${mdlRoute(x,rk)}${mdlSub(x)}${cof?" · off (chain)":""}</span>${k==="review_models"?chTag(m):""}${o?`<span class=bk title="this row runs only inside its hours">outside hours ${esc(o)}</span>`:""}<span class=el>effort</span><select class="ef${ef?" set":""}" data-ef="${k}|${esc(m)}" title="effort for this model (medium is the default)">${EFF.map(e=>`<option value="${e==="medium"?"":e}"${(ef||"medium")===e?" selected":""}>${e}</option>`).join("")}</select><span class=el>hrs</span><input class="hr${hr?" set":""}" list=hrp data-hr="${k}|${esc(m)}" value="${esc(hr)}" placeholder="always" title="local hours this model may run (HH-HH, wraps midnight; empty = always)"><span class=mb><button data-mv="${k}|${i}|-1" ${i?"":"disabled"} title="move up">↑</button><button data-mv="${k}|${i}|1" ${i<mdl[k].length-1?"":"disabled"} title="move down">↓</button><button class=x data-rm="${k}|${i}" ${mdl[k].length>1?"":"disabled"} title="remove from chain">✕</button></span></span></div>`}).join("")+`<div class=madd><input list=mk-${k} data-add="${k}" placeholder="add a model id…"><button data-addb="${k}">Add</button></div></div>`).join("")
+ +`<div class=mx><b>effort</b> · <b>hrs</b> local time <code>HH-HH</code>, wraps midnight, empty = always · <b>✕</b> deletes the row.</div>`
+ +(diff.length?`<div class=mdiff><div class=mt>Diff before save</div>${diff.map(l=>`<div class=mx>${esc(l)}</div>`).join("")}</div>`:"")
  +`<div class="msave${dirty?" dirty":""}"><button id=msv ${dirty?"":"disabled"}>Save</button><button id=mrv ${dirty?"":"disabled"}>Revert</button><span class="st${mdlMsg.startsWith("!")?" err":mdlMsg?" okm":""}">${mdlMsg?esc(mdlMsg.replace(/^!/,"")):(dirty?"<span class=dot></span>unsaved changes":"saved in models.json")}</span></div>`}
 async function mdlLoad(){try{mdl=await (await fetch("/api/models")).json();mdlSrv=JSON.stringify(mdl);mdlRender()}catch(e){}}
+/* One write route for both places (SPEC 889 #920): a chip flips at once; the table stages its switch until Save. */
+async function mdlPost(body){const r=await fetch("/api/models",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});return r.json()}
+async function mdlFlip(m,off){const dirty=JSON.stringify(mdl)!==mdlSrv,was=JSON.parse(JSON.stringify(mdl)),srv=JSON.parse(mdlSrv);
+ try{const d=await mdlPost({version:mdl.version,model_off:{[m]:off}});
+  if(d.err){mdlMsg="!"+d.err}
+  else if(dirty){mdl=d;for(const k of Object.keys(MLAB))mdl[k]=was[k];mdl.efforts=was.efforts;mdl.hours=was.hours;mdl.model_off={...(was.model_off||{}),[m]:off};srv.version=d.version;srv.model_off=d.model_off;mdlSrv=JSON.stringify(srv);mdlMsg=`${m} ${off?"off (model)":"on"} · saved`}
+  else{mdl=d;mdlSrv=JSON.stringify(d);mdlMsg=`${m} ${off?"off (model)":"on"} · saved`}
+ }catch(x){mdlMsg="!switch failed"}
+ mdlRender()}
 $("#mbody").addEventListener("change",e=>{const t=e.target;if(!mdl)return;mdlMsg="";if(t.dataset.ef){const[k,m]=t.dataset.ef.split("|");mdlSetEff(k,m,t.value)}
  else if(t.dataset.hr){const[k,m]=t.dataset.hr.split("|");mdlSetHrs(k,m,t.value)}
  else return;mdlRender()});
 $("#mbody").addEventListener("click",async e=>{const t=e.target.closest("button");if(!t||!mdl)return;mdlMsg="";
+ if(t.dataset.mo){await mdlFlip(t.dataset.mo,!mdlOffM(t.dataset.mo));return}
+ if(t.dataset.mt){const m=t.dataset.mt;mdlSetOffM(m,!mdlOffM(m));mdlRender();return}
  if(t.dataset.mv){const[k,i,d]=t.dataset.mv.split("|"),a=mdl[k],j=+i+ +d;[a[i],a[j]]=[a[j],a[i]]}
- else if(t.dataset.sw){const[k,m]=t.dataset.sw.split("|");mdlSetOff(k,m,!mdlOff(k,m))}
- else if(t.dataset.rm){const[k,i]=t.dataset.rm.split("|");const[m]=mdl[k].splice(+i,1);mdlSetEff(k,m,"");mdlSetOff(k,m,false)}
- else if(t.dataset.addb){const k=t.dataset.addb,v=sugId(k,t.parentElement.querySelector("input").value.trim());if(!MODELRE.test(v))mdlMsg="!invalid model id";else if(mdl[k].includes(v))mdlMsg="!already in the chain";else mdl[k].push(v)}
+ else if(t.dataset.rm){const[k,i]=t.dataset.rm.split("|");const[m]=mdl[k].splice(+i,1);mdlSetEff(k,m,"")}
+ else if(t.dataset.addb){const k=t.dataset.addb,v=sugId(k,t.parentElement.querySelector("input").value.trim());if(!MODELRE.test(v))mdlMsg="!invalid model id";else if(mdl[k].includes(v))mdlMsg="!already in the chain";else if(mdlOffM(v))mdlMsg="!switched off: switch it on first";else mdl[k].push(v)}
  else if(t.id==="mrv")mdl=JSON.parse(mdlSrv);
- else if(t.id==="msv"){try{const r=await fetch("/api/models",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(mdl)}),d=await r.json();if(d.err)mdlMsg="!"+d.err;else{mdl=d;mdlSrv=JSON.stringify(d);mdlMsg="saved · new runs use it"}}catch(x){mdlMsg="!save failed"}}
+ else if(t.id==="msv"){try{const d=await mdlPost(mdl);if(d.err)mdlMsg="!"+d.err;else{mdl=d;mdlSrv=JSON.stringify(d);mdlMsg="saved · new runs use it"}}catch(x){mdlMsg="!save failed"}}
  mdlRender()});
-/* accordions: each of the three answers its own header and leaves the others alone; the open set is stored like the pins */
-const ACC=["plans","stats","mdl"];
+/* Settings > Spend & limits (#926): the token guard's on/off switch, its daily cap and its pause factor, with the burn
+   it measures and whether dispatch is paused now. The page renders and asks; the hub validates, shows the diff, writes
+   the profile and records the change (ADR-0137), and the guard reads it on its next pass with no restart. */
+let limS=null,limMsg="",limDiff=null,limPend=null;   // limPend holds the typed settings while the diff asks for a confirm
+const limN=v=>v==null?"—":tk(v);
+const limVals=()=>limPend||{guard:($("#limg")||{}).value||"",cap:($("#limc")||{}).value||"",factor:($("#limf")||{}).value||""};
+function limRender(){const b=$("#lbody");if(!b)return;if(!limS){b.innerHTML="<span class=m>loading…</span>";return}
+ const s=limS,v=limPend||s;const sr=$("#limsr");if(sr)sr.textContent=s.guard==="off"?"off":s.paused?"paused":"on";
+ let h=`<div class=kr><span class=l>token guard</span><select id=limg aria-label="token guard"><option value=on${v.guard==="on"?" selected":""}>on</option><option value=off${v.guard==="off"?" selected":""}>off</option></select></div>`
+ +`<div class=kr><span class=l>daily token cap</span><input id=limc type=number min=1 step=1 inputmode=numeric value="${v.cap}" aria-label="daily token cap"></div>`
+ +`<div class=kr><span class=l title="the hourly burn that pauses dispatch, as a multiple of the cap's hourly share">pause factor</span><input id=limf type=number min=0.1 step=0.5 inputmode=decimal value="${v.factor}" aria-label="pause factor"></div>`
+ +`<div class=kr><span class=l>dispatch pauses over</span><b>${limN(s.pause_line)}<small>tokens/h</small></b></div>`
+ +`<div class=kr><span class=l>last hour</span><b${s.hour_burn==null?" class=m":""}>${limN(s.hour_burn)}<small>tokens</small></b></div>`
+ +`<div class=kr><span class=l>window <small>${s.window_h} h</small></span><b${s.window_burn==null?" class=m":""}>${limN(s.window_burn)}<small>tokens</small></b></div>`
+ +`<div class=kr><span class=l>dispatch now</span><b class="${s.paused?"w":"ok"}">${s.paused?"paused":"running"}</b></div>`
+ +`<div class=kr><span class=l>last change</span><span class=lv title="${esc(s.profile||"")}">${s.last_change?esc(s.last_change.at+" · "+s.last_change.text):"none recorded"}</span></div>`;
+ if(limDiff)h+=`<div class=ldiff role=alert><b>Save these changes?</b>${limDiff.map(x=>`<div class=ln>${esc(x)}</div>`).join("")}<div class=lact><button id=limok>Confirm</button><button id=limno>Cancel</button></div></div>`;
+ h+=`<div class="msave${limDiff?" dirty":""}"><button id=limsv>Save</button><button id=limrv>Revert</button><span class="st${limMsg.startsWith("!")?" err":limMsg?" okm":""}">${limMsg?esc(limMsg.replace(/^!/,"")):(limDiff?"":"the guard reads a save on its next pass")}</span></div>`;
+ b.innerHTML=h}
+async function limLoad(){try{limS=await (await fetch("/api/limits")).json();limDiff=null;limMsg="";limRender()}catch(e){limMsg="!load failed";limRender()}}
+async function limPost(confirm){const vals=limVals();if(!confirm)limPend={guard:vals.guard,cap:vals.cap,factor:vals.factor};   // the diff is asked about what was typed, not about what is saved
+ try{const r=await fetch("/api/limits",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...vals,confirm})}),d=await r.json();
+ if(d.err){limDiff=null;limMsg="!"+d.err}
+ else if(confirm){limS=d.state||limS;limDiff=null;limPend=null;limMsg=(d.diff||[]).length?"saved · the guard reads it on its next pass":"nothing changed"}
+ else if((d.diff||[]).length)limDiff=d.diff;else{limMsg="nothing changed";limPend=null}}catch(x){limMsg="!save failed"}
+ limRender()}
+$("#lbody").addEventListener("click",e=>{const t=e.target.closest("button");if(!t)return;
+ if(t.id==="limok")limPost(true);else if(t.id==="limsv")limPost(false);
+ else if(t.id==="limrv"||t.id==="limno"){limDiff=null;limPend=null;limMsg="";limRender()}});
+$("#lbody").addEventListener("input",e=>{if(e.target.id==="limc"||e.target.id==="limf"){limMsg="";const st=$("#lbody .msave .st");if(st)st.textContent="unsaved changes"}});
+/* accordions: each of the four answers its own header and leaves the others alone; the open set is stored like the pins */
+const ACC=["plans","stats","mdl","lim"];
 let openAcc=new Set(Array.isArray(ls.acc)?ls.acc.filter(i=>ACC.includes(i)):[]);   // the old single-id string is ignored, not trusted, and not fatal
 const saveAcc=()=>{ls.acc=[...openAcc];save()};
-ACC.forEach(i=>{const e=$("#"+i);e.open=openAcc.has(i);e.addEventListener("toggle",()=>{if(e.open)openAcc.add(i);else openAcc.delete(i);saveAcc();if(i==="mdl"&&e.open)mdlLoad()})});mdlLoad();
+ACC.forEach(i=>{const e=$("#"+i);e.open=openAcc.has(i);e.addEventListener("toggle",()=>{if(e.open)openAcc.add(i);else openAcc.delete(i);saveAcc();if(i==="mdl"&&e.open){mdlLoad()}else if(i==="lim"&&e.open){limLoad()}})});mdlLoad();
+if(openAcc.has("lim"))limLoad();
 const PCOL=["#5aa9ff","#3ecf8e","#f5b041","#b79cf6","#2dd4bf","#ff6b6b","#c678dd","#e5c07b","#8a93a3"],tk=n=>n>=1e9?(n/1e9).toFixed(2)+"B":n>=1e6?(n/1e6).toFixed(1)+"M":n>=1e3?(n/1e3).toFixed(0)+"K":""+n;
 const OTHER=0.01;
 function pie(ms){
@@ -3398,10 +3705,17 @@ function pie(ms){
  const tot=rows.reduce((a,m)=>a+m.v,0);const keep=[],fold=[];
  for(const m of rows) (m.v/tot<OTHER?fold:keep).push(m);
  while(keep.length+(fold.length?1:0)>6) fold.unshift(keep.pop());
- const sl=keep.map(m=>({n:m.n,v:m.v,t:`${m.n} (${m.ids.join(", ")})${m.routes.length?" via "+m.routes.join(", "):""}: ${tk(m.in)} in · ${tk(m.out)} out · ${tk(m.cache)} cache read · ${m.calls} calls · ${usd(m.spend)}`}));
- if(fold.length){const v=fold.reduce((a,m)=>a+m.v,0),t=fold.map(m=>`${m.n}: ${(m.v/tot*100).toFixed(2)}%`).join("\n");sl.push({n:`other · ${fold.length} models`,v,t})}
- let a0=-Math.PI/2;const R=52,C=60,arc=sl.map((x,i)=>{const a1=a0+x.v/tot*2*Math.PI,big=a1-a0>Math.PI?1:0,p=sl.length===1?`<circle cx=${C} cy=${C} r=${R} fill="${PCOL[i]}"><title>${esc(x.t)}</title></circle>`:`<path d="M${C} ${C}L${C+R*Math.cos(a0)} ${C+R*Math.sin(a0)}A${R} ${R} 0 ${big} 1 ${C+R*Math.cos(a1)} ${C+R*Math.sin(a1)}Z" fill="${PCOL[i]}" stroke="#161a21" stroke-width=1><title>${esc(x.t)}</title></path>`;a0=a1;return p}).join("");
- return `<div class=pie><svg viewBox="0 0 120 120" width=112 height=112>${arc}<circle cx=${C} cy=${C} r=26 fill="#161a21"/><text x=${C} y=${C-1} text-anchor=middle fill="#d8dde6" style="font-size:var(--fs-min)" font-weight=600>${tk(tot)}</text><text x=${C} y=${C+12} text-anchor=middle fill="#8a93a3" style="font-size:var(--fs-min)">tokens</text></svg><div class=lg>${sl.map((x,i)=>`<div title="${esc(x.t)}"><i style="background:${PCOL[i]}"></i><span class=ln>${esc(x.n)}</span><b>${Math.round(x.v/tot*100)}%</b></div>`).join("")}</div></div>`}
+ const sl=keep.map(m=>({k:m.n,n:m.n,v:m.v,s:m.spend,t:`${m.n} (${m.ids.join(", ")})${m.routes.length?" via "+m.routes.join(", "):""}: ${tk(m.in)} in · ${tk(m.out)} out · ${tk(m.cache)} cache read · ${m.calls} calls · ${usd(m.spend)}`}));
+ if(fold.length){const v=fold.reduce((a,m)=>a+m.v,0),t=fold.map(m=>`${m.n}: ${(m.v/tot*100).toFixed(2)}%`).join("\n");sl.push({k:"other",n:`other · ${fold.length} models`,v,s:fold.reduce((a,m)=>a+m.spend,0),t})}
+ const col=k=>k==="other"?"#8a93a3":PCOL[[...String(k)].reduce((h,c)=>(h*31+c.charCodeAt(0))>>>0,0)%PCOL.length];   // a model keeps its colour across renders: the colour follows its name, not its place in the list
+ const legendRows=sl.map(x=>`<div tabindex=0 data-k="${esc(x.k)}" title="${esc(x.t)}"><i style="background:${col(x.k)}"></i><span class=ln>${esc(x.n)}</span><span class=usd>${usd(x.s)}</span><b>${Math.round(x.v/tot*100)}%</b></div>`).join("");   // the rows are built outside the page template: a nested backtick there breaks the pie matcher in tests
+ let a0=-Math.PI/2;const R=52,C=60,arc=sl.map((x,i)=>{const a1=a0+x.v/tot*2*Math.PI,big=a1-a0>Math.PI?1:0,p=sl.length===1?`<circle cx=${C} cy=${C} r=${R} data-k="${esc(x.k)}" fill="${col(x.k)}"><title>${esc(x.t)}</title></circle>`:`<path d="M${C} ${C}L${C+R*Math.cos(a0)} ${C+R*Math.sin(a0)}A${R} ${R} 0 ${big} 1 ${C+R*Math.cos(a1)} ${C+R*Math.sin(a1)}Z" data-k="${esc(x.k)}" fill="${col(x.k)}" stroke="#161a21" stroke-width=1><title>${esc(x.t)}</title></path>`;a0=a1;return p}).join("");
+ return `<div class=pie><svg viewBox="0 0 120 120" width=112 height=112>${arc}<circle cx=${C} cy=${C} r=26 fill="#161a21"/><text x=${C} y=${C-1} text-anchor=middle fill="#d8dde6" style="font-size:var(--fs-min)" font-weight=600>${tk(tot)}</text><text x=${C} y=${C+12} text-anchor=middle fill="#8a93a3" style="font-size:var(--fs-min)">tokens</text></svg><div class=lg>${legendRows}</div></div>`}
+function hlPie(k){document.querySelectorAll("#pie [data-k]").forEach(el=>el.classList.toggle("hl",!!k&&el.dataset.k===k));document.querySelector("#pie .pie")?.classList.toggle("dim",!!k)}
+$("#pie").addEventListener("mouseover",e=>{const el=e.target.closest("[data-k]");hlPie(el?el.dataset.k:"")});
+$("#pie").addEventListener("mouseout",e=>{if(!$("#pie").contains(e.relatedTarget))hlPie("")});
+$("#pie").addEventListener("focusin",e=>{const el=e.target.closest("[data-k]");hlPie(el?el.dataset.k:"")});
+$("#pie").addEventListener("focusout",()=>hlPie(""));
 const ago=t=>{const m=Math.round((Date.now()/1000-t)/60);return m<2?"just now":m<90?m+" min ago":Math.round(m/60)+" h ago"},rs=t=>t?new Date(t*1000).toLocaleString([],{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}):"?";
 const rel=t=>{if(!t)return"";const x=t-Date.now()/1000;if(x<=0)return"resets now";const d=Math.floor(x/86400),h=Math.floor(x%86400/3600),m=Math.floor(x%3600/60);return"resets in "+(d?`${d}d ${h}h`:h?`${h}h ${m}m`:`${m}m`)};
 const lvl=p=>p>=90?"lv-err":p>=60?"lv-warn":"lv-ok",fpct=p=>p<10&&p>0?p.toFixed(1):String(Math.round(p));
@@ -3454,25 +3768,11 @@ poll();setInterval(poll,3000);
 loadPoll();setInterval(loadPoll,LOAD_MS);   // the window owns the reading: one timer and one /api/load per tick, whatever else the page renders
 const bo=ls.bo||{},saveB=()=>{ls.bo=bo;localStorage.hub=JSON.stringify({...ls,pins:[...pins],q,per,bo})};
 bo.dock="bottom";   // the board always docks at the bottom
-if(bo.max)bo.off=false;else if(bo.off)bo.max=false;   // both controls live in one saved record, so a reload can never bring back a board that is maximized and collapsed at once
-const sizeBoard=()=>{$("#board").style.height=document.body.classList.contains("dockb")&&!bo.off&&!bo.max?(bo.h||320)+"px":""};
-// The board's maximize takes the run pane's cell as well as its own, so the kanban is read at full height. The run pane
-// is a live, cross-origin dashboard: while it is out of sight its frame is detached (liveSync), so it holds no stream and no
-// timer on its run's server, and it is built again when the split comes back.
-const MAXI='<svg viewBox="0 0 24 24" width=13 height=13 fill=none stroke=currentColor stroke-width=2 stroke-linecap=round stroke-linejoin=round><path d="M4 9V4h5M20 15v5h-5M4 4l6 6M20 20l-6-6"/></svg>',
-MINI='<svg viewBox="0 0 24 24" width=13 height=13 fill=none stroke=currentColor stroke-width=2 stroke-linecap=round stroke-linejoin=round><path d="M9 4v5H4M15 20v-5h5M9 9L4 4M15 15l5 5"/></svg>';
-const paintBoard=()=>{document.body.classList.toggle("dockb",bo.dock==="bottom");document.body.classList.toggle("max",!!bo.max);
-  $("#board").classList.toggle("off",!!bo.off);sizeBoard();
-  $("#bx").innerHTML=bo.dock==="bottom"?(bo.off?"&uarr;":"&darr;"):"&raquo;";$("#bx").setAttribute("aria-pressed",String(!!bo.off));
-  $("#bz").innerHTML=bo.max?MINI:MAXI;$("#bz").setAttribute("aria-pressed",String(!!bo.max));
-  $("#bz").title=bo.max?"restore the split: run pane and board":"maximize the board over the run pane"};
+dropRemoved(bo);   // a saved state from a control the board no longer has is dropped (#899)
+const sizeBoard=()=>{$("#board").style.height=document.body.classList.contains("dockb")?(bo.h||320)+"px":""};
+const paintBoard=()=>{document.body.classList.toggle("dockb",bo.dock==="bottom");sizeBoard()};
 const applyDock=paintBoard;
-const setOff=v=>{bo.off=v;if(v)bo.max=false;paintBoard();saveB();liveSync()};   // a collapsed board is never a maximized one
-const setMax=v=>{bo.max=v;if(v)bo.off=false;paintBoard();saveB();liveSync()};  // maximizing a collapsed board restores it first
-const escBoard=()=>{if(bo.max)setMax(false)};
 paintBoard();
-$("#bx").onclick=()=>setOff(!bo.off);
-$("#bz").onclick=()=>setMax(!bo.max);
 const isPR=n=>n===COLNAME.pr_open;   // the one lane beside the axis: open work branches, for tracking only (#384)
 const esc=t=>String(t).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
 const OKTAG=new Set("details summary hr br b i strong em code kbd sub sup p div span ul ol li table thead tbody tr th td h1 h2 h3 h4 h5 h6 blockquote pre a img del s u".split(" ")),VOID=new Set(["br","hr","img"]);
@@ -3550,7 +3850,7 @@ $("#tkb").addEventListener("click",e=>{const a=e.target.closest("a[data-o]");if(
 $("#tkx").onclick=closeSheet;
 $("#tkrel").onclick=()=>{const on=!nav.every(([m,rr])=>boardCards().some(x=>+x.dataset.n===m&&(x.dataset.r||"__REPO__")===rr&&x.classList.contains("hit")));nav.forEach(([m,rr])=>boardCards().forEach(x=>{if(+x.dataset.n===m&&(x.dataset.r||"__REPO__")===rr)x.classList.toggle("hit",on)}))};
 $("#tktodo").onclick=()=>{const b=boardCards().find(x=>+x.dataset.n===cur&&(x.dataset.r||"__REPO__")===irepo),p=b&&b.querySelector(".pmp");if(p)p.click()};   // the one write the sheet makes is the card's own move
-addEventListener("keydown",e=>{if(e.key==="Escape"){if(tsheet.classList.contains("on"))closeSheet();else escBoard();return}
+addEventListener("keydown",e=>{if(e.key==="Escape"){if(tsheet.classList.contains("on"))closeSheet();return}
  if(!tsheet.classList.contains("on")||/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName))return;
  if(e.key==="ArrowRight"||e.key==="j")step(1);if(e.key==="ArrowLeft"||e.key==="k")step(-1)});
 document.addEventListener("click",e=>{const c=e.target.closest("#bbody .it");if(!c||e.target.closest("a")||e.target.closest("button")||c.classList.contains("m"))return;showIssue(c.dataset.n,c.dataset.r,c)});   // a card opens the sheet in place: the hub is never left
@@ -3559,69 +3859,6 @@ document.addEventListener("click",e=>{const h=e.target.closest("#bbody .ah");if(
 $("#grip").onpointerdown=e=>{e.preventDefault();document.body.classList.remove("dragging");const g=e.currentTarget;g.setPointerCapture(e.pointerId);g.classList.add("drag");document.body.classList.add("dragging");
 const mv=ev=>{if(!ev.buttons){up();return}bo.h=Math.round(Math.min(innerHeight-160,Math.max(90,innerHeight-ev.clientY)));sizeBoard()},up=()=>{g.classList.remove("drag");document.body.classList.remove("dragging");g.removeEventListener("pointermove",mv);g.removeEventListener("pointerup",up);g.removeEventListener("pointercancel",up);g.removeEventListener("lostpointercapture",up);saveB()};
 g.addEventListener("pointermove",mv);g.addEventListener("pointerup",up);g.addEventListener("pointercancel",up);g.addEventListener("lostpointercapture",up)};
-// ---- the pip over the maximized board (#1782)
-// Maximized, the run pane is out of sight, and with it the one thing worth glancing at while the board is read. This
-// window floats on the board and shows ONE card of the run's own dashboard — the card is the dashboard's single-card
-// mode, `?card=<name>`, documented in docs/design/README.md. The two pages are served on different ports, so there is no
-// DOM to reach into: the URL is the whole interface, and the hub never renders a second copy of the card, which would
-// drift from the panel's. The window belongs to the maximize mode — CSS hides it in the split and never detaches it — so
-// nobody closes it twice. The frame is sourced once per run switch while maximized: collapsing the window, dragging and resizing never
-// touch it, so the second view is one connection per run switch and one replay of that run's record, paid when the left
-// bar moves to another run and never per paint. Outside the maximize mode the window is hidden and its frame holds no
-// source, so the page keeps one live embedded dashboard in all (panes.js). A dashboard too old to answer the mode says so inside the window
-// instead of leaving an empty frame.
-const PIP_NORUNS="No open runs. Click a finished run in the list to look at it; the next run that starts shows up here on its own.";
-const PIP={card:"groups",w:360,h:300,minW:240,minH:160,cw:240,ch:34,inset:12,step:16,run:64,wait:2500};
-const PIP_CARDS={groups:"Groups"};
-const PIP_OLD="This run's dashboard has no single-card mode, so the window has nothing to show. It is a dashboard built before `?card=` (docs/design/README.md); the run pane below is unaffected.";
-const pip=()=>bo.pip||(bo.pip={});
-const pipCard=p=>(p&&p.card)||PIP.card;
-const pipClamp=(v,lo,hi)=>hi<lo?lo:Math.max(lo,Math.min(hi,v));
-const pipURL=(r,card)=>r?((r.url||"/dash/"+encodeURIComponent(r.id)+"/")+"?card="+encodeURIComponent(card)):"";
-const pipBox=()=>{const b=$("#board").getBoundingClientRect(),h=$("#bhead").getBoundingClientRect();return{w:b.width,h:b.height,head:h.height}};
-// The size it takes on this board: the minimum first, so a place remembered on a wider board shrinks onto a narrow one and still fits.
-const pipSize=(box,off)=>off?{w:PIP.cw,h:PIP.ch}:{w:box.w<PIP.w?PIP.minW:PIP.w,h:box.h-box.head<PIP.h?PIP.minH:PIP.h};
-// A place is kept against the board's top-left and clamped: never left of the board, never above its header (measured, not assumed), never past its far edge.
-const pipPlace=(box,s,x,y)=>({x:pipClamp(Math.round(x),0,box.w-s.w),y:pipClamp(Math.round(y),box.head,box.h-s.h)});
-let pipSrc="",pipSeen="",pipDead="",pipTimer=0;
-const pipRun=()=>{const id=paneFocus(slots,focus);return id?runs.find(r=>r.id===id)||null:null};   // the run the panel follows is the run the window shows
-const pipHead=r=>{const c=PIP_CARDS[pipCard(pip())]||pipCard(pip());return r?name(r)+" · "+r.state+" · "+c:c};
-const pipSet=o=>{Object.assign(pip(),o);saveB();pipDraw()};
-function pipDraw(){
-  const el=$("#pip"),p=pip(),off=!!p.off,box=pipBox(),s=pipSize(box,off);
-  const at=pipPlace(box,s,p.x===undefined?box.w-s.w-PIP.inset:p.x,p.y===undefined?box.h-s.h-PIP.inset:p.y);
-  el.style.left=at.x+"px";el.style.top=at.y+"px";el.style.width=s.w+"px";el.style.height=s.h+"px";
-  el.classList.toggle("off",off);$("#pipx").innerHTML=off?"&#43;":"&#8211;";
-  if(at.x!==p.x||at.y!==p.y){p.x=at.x;p.y=at.y;saveB()}   // a place remembered on a wider board is pulled back onto this one
-  const r=pipRun(),card=pipCard(p),url=embedPlan(slots,focus,!!bo.max).pip?pipURL(r,card):"",f=$("#pipf");   // out of the maximize mode the window follows nothing: its frame holds no source (#34)
-  if(!url&&pipSrc){pipSrc="";f.src="about:blank";pipSeen="";pipDead="";clearTimeout(pipTimer)}
-  if(url)if(url!==pipSrc){pipSrc=url;f.src=url;pipSeen="";pipDead="";clearTimeout(pipTimer);
-    pipTimer=setTimeout(()=>{if(pipSrc&&pipSeen!==pipSrc){pipDead=pipSrc;pipDraw()}},PIP.wait)}   // an older dashboard never answers: say so, never an empty frame
-  const miss=!!url&&pipSrc===pipDead&&pipSeen!==pipSrc;
-  el.classList.toggle("noframe",!r||miss);
-  $("#pipm").textContent=!r?PIP_NORUNS:miss?PIP_OLD:"";
-  $("#pipt").textContent=pipHead(r);
-}
-pipDraw();
-$("#pipx").onclick=()=>pipSet({off:!pip().off});
-$("#pipo").onclick=()=>setMax(false);   // closing the window is leaving the maximize mode: the board is never maximized without it
-$("#piph").onpointerdown=e=>{e.preventDefault();const g=e.currentTarget;g.setPointerCapture(e.pointerId);g.classList.add("drag");document.body.classList.add("dragging");
-const el=$("#pip"),ox=e.clientX-(parseFloat(el.style.left)||0),oy=e.clientY-(parseFloat(el.style.top)||0);
-const mv=ev=>{if(!ev.buttons){up();return}const box=pipBox(),s=pipSize(box,!!pip().off),at=pipPlace(box,s,ev.clientX-ox,ev.clientY-oy);el.style.left=at.x+"px";el.style.top=at.y+"px"},
-up=()=>{g.classList.remove("drag");document.body.classList.remove("dragging");g.removeEventListener("pointermove",mv);g.removeEventListener("pointerup",up);g.removeEventListener("pointercancel",up);g.removeEventListener("lostpointercapture",up);
-const p=pip();p.x=parseFloat(el.style.left)||0;p.y=parseFloat(el.style.top)||0;saveB()};
-g.addEventListener("pointermove",mv);g.addEventListener("pointerup",up);g.addEventListener("pointercancel",up);g.addEventListener("lostpointercapture",up)};
-$("#piph").addEventListener("keydown",e=>{
-  if(e.key==="Escape"){e.preventDefault();e.stopPropagation();if(pip().off)$("#bz").focus();else pipSet({off:true});return}   // never restores the split from inside
-  const d={ArrowLeft:[-1,0],ArrowRight:[1,0],ArrowUp:[0,-1],ArrowDown:[0,1]}[e.key];if(!d)return;
-  e.preventDefault();e.stopPropagation();
-  const p=pip(),step=e.shiftKey?PIP.run:PIP.step,box=pipBox(),s=pipSize(box,!!p.off),at=pipPlace(box,s,(p.x||0)+d[0]*step,(p.y||0)+d[1]*step);
-  pipSet({x:at.x,y:at.y})});
-addEventListener("message",e=>{const d=e.data;if(!d||d.squadCard===undefined)return;pipSeen=pipSrc;pipDead="";pipDraw()});   // the dashboard answered the mode
-$("#pip").addEventListener("wheel",e=>e.preventDefault(),{passive:false});   // a wheel over the chrome does not reach the board behind it
-$("#piph").addEventListener("wheel",e=>e.preventDefault(),{passive:false});
-addEventListener("resize",()=>pipDraw());
-// ---- the pip ends here
 document.addEventListener("click",e=>{const t=e.target.closest("[data-eye]");if(!t)return;e.preventDefault();e.stopPropagation();const g=t.dataset.eye;
  if(t.closest(".hidline")){const k=new Set(bo.kept||[]);k.add(g);bo.kept=[...k]}   // the hidden: strip's line: show the column again and keep it shown, even while it holds nothing (#1809)
  else{const h=new Set(bo.hidden||[]),k=new Set(bo.kept||[]);if(h.has(g))h.delete(g);else{h.add(g);k.delete(g)}bo.hidden=[...h];bo.kept=[...k]}   // the header's eye: the user's own hidden set, and the keep it ends
@@ -3647,43 +3884,97 @@ const flowW=800,flowH=340,flowP=36;
 const flowX=(i,n)=>n<2?flowP:flowP+i*(flowW-2*flowP)/(n-1);
 const flowY=(v,max)=>max?flowH-flowP-v*(flowH-2*flowP)/max:flowH-flowP;
 const flowAxis=(max,unit)=>`<line x1=${flowP} y1=${flowH-flowP} x2=${flowW-flowP} y2=${flowH-flowP} stroke=var(--line)></line><text x=${flowP-6} y=${flowY(max,max)+4} text-anchor=end fill=var(--mute) style="font-size:var(--fs-min)">${max} ${unit}</text>`;
-const flowCFD=c=>{if(!c.days.length)return "<p class=fnote>the flow history has no sample yet</p>";
-  const n=c.days.length;
+const cfdAxis=c=>{const n=c.days.length,base=flowH-flowP;   // every number and date arrives from the hub; the page places a mark and a label for each (#896)
+  const ys=c.yticks.map(v=>{const y=flowY(v,c.ymax);return `<line x1=${flowP-4} y1=${y} x2=${flowP} y2=${y} stroke=var(--mute)></line><text x=${flowP-7} y=${y+4} text-anchor=end fill=var(--mute) style="font-size:var(--fs-min)">${v}</text>`}).join("");
+  const xs=c.xticks.map(t=>{const x=flowX(t.i,n);return `<line x1=${x} y1=${base} x2=${x} y2=${base+4} stroke=var(--mute)></line><text x=${x} y=${base+17} text-anchor=middle fill=var(--mute) style="font-size:var(--fs-min)">${esc(t.day)}</text>`}).join("");
+  return `<line x1=${flowP} y1=${flowP-10} x2=${flowP} y2=${base} stroke=var(--line)></line><line x1=${flowP} y1=${base} x2=${flowW-flowP} y2=${base} stroke=var(--line)></line>${ys}${xs}`+
+    `<text x=${flowP-7} y=${flowP-16} text-anchor=end fill=var(--mute) style="font-size:var(--fs-min)">cards</text>`+
+    `<text x=${flowW-flowP} y=${base+31} text-anchor=end fill=var(--mute) style="font-size:var(--fs-min)">day (UTC)</text>`;};
+let CF={r:"30"};   // the cumulative flow's range, 30 days at first (#901)
+const CFD_R=[["7","7 days"],["30","30 days"],["90","90 days"],["all","All"]];   // the cumulative flow's range views (#901)
+const flowCFD=c=>{const sel=`<label class=fhead>Range <select id=cfdr>${CFD_R.map(([k,v])=>`<option value=${k}${CF.r===k?" selected":""}>${v}</option>`).join("")}</select></label>`;
+  if(!c.days.length)return sel+"<p class=fnote>the flow history has no sample yet</p>";
+  const n=c.days.length,cw=(flowW-2*flowP)/(n<2?1:n);
   const runs=b=>{const out=[];let cur=null;c.days.forEach((_,i)=>{if(b.upper[i]===null){cur=null;return}if(!cur){cur=[];out.push(cur)}cur.push(i)});return out};
   const band=(b,run)=>{const one=run.length===1,h=3;   // a one-point run is a mark 2h wide, never a zero-width line (#894)
     const up=run.flatMap(i=>one?[[flowX(i,n)-h,b.upper[i]],[flowX(i,n)+h,b.upper[i]]]:[[flowX(i,n),b.upper[i]]]);
     const low=[...run].reverse().flatMap(i=>one?[[flowX(i,n)+h,b.lower[i]],[flowX(i,n)-h,b.lower[i]]]:[[flowX(i,n),b.lower[i]]]);
     return [...up,...low].map(([x,v])=>`${x},${flowY(v,c.ymax)}`).join(" ");};
   const polys=b=>runs(b).map(run=>`<polygon points="${band(b,run)}" fill="${COLORS[b.name]||"#888"}" fill-opacity=".85"><title>${esc(b.name)}</title></polygon>`).join("");
-  return `<svg viewBox="0 0 ${flowW} ${flowH}">${c.bands.map(polys).join("")}${flowAxis(c.ymax,"cards")}</svg>`+
+  const hover=c.days.map((d,i)=>{const gap=c.bands.length&&c.bands[0].upper[i]===null;   // a day's counts, WIP and throughput, on hover (#901)
+    const parts=c.bands.map(b=>`${esc(b.name)} ${(b.count||[])[i]}`).join(", "),tp=c.throughput?c.throughput[i]:null;
+    const text=gap?`${esc(d)}: no whole read this day`:`${esc(d)}: ${parts} · WIP ${(c.wip||[])[i]} · throughput ${tp===null?"none":tp}`;
+    return `<rect x=${flowX(i,n)-cw/2} y=${flowP-10} width=${cw} height=${flowH-2*flowP+10} fill=transparent><title>${text}</title></rect>`;}).join("");
+  return sel+`<svg viewBox="0 0 ${flowW} ${flowH}">${c.bands.map(polys).join("")}${cfdAxis(c)}${hover}</svg>`+
     `<p class=fnote>history from ${esc(c.start)} UTC</p><p>${c.bands.map(b=>`<span class=flg><i style="background:${COLORS[b.name]||"#888"}"></i>${esc(b.name)}</span>`).join("")}</p>`;};
 const EXREASON={not_planned:"closed as not planned",abandoned:"closed as abandoned",open:"still open",no_opened:"no opened date"};   // the cards the chart leaves out, in words (#921)
+let LT={tf:"30",log:false,pick:null,zc:null,zr:null,rng:null,tok:0,noclick:false};   // the control chart's timeframe, its scale, the cluster listed under it, and a drag zoom: the hub's chart over zr=[from,to] (#900)
+const ltSpan=(r,a,b)=>{const t0=Date.parse(r.start),t1=Date.parse(r.end),at=f=>new Date(t0+f*(t1-t0)).toISOString();return [at(a<0?0:a),at(b>1?1:b)]};   // plot fractions to the dates they name (#900)
+const LT_TF=[["7","Past week"],["14","Past 2 weeks"],["30","Past month"],["90","Past 3 months"],["180","Past 6 months"],["all","All"]];
+const ltX=x=>flowP+x*(flowW-2*flowP),ltY=y=>flowH-flowP-y*(flowH-2*flowP);
+const ltLine=(v,col,dash,name)=>v?`<line x1=${flowP} x2=${flowW-flowP} y1=${ltY(v.y)} y2=${ltY(v.y)} stroke="${col}" stroke-width=2${dash?` stroke-dasharray="${dash}"`:""}><title>${esc(name)} ${esc(v.text)}</title></line>`:"";
+const ltChart=c=>{const n=c.dots.length,base=flowH-flowP,ink="#b8c0cf",mute="var(--mute)";
+  const ctl=`<p class=fhead><label>Timeframe <select id=ltr>${LT_TF.map(([k,v])=>`<option value=${k}${LT.tf===k?" selected":""}>${v}</option>`).join("")}</select></label> `+
+    `<label>Scale <select id=lts><option value=jira${LT.log?"":" selected"}>Jira scale</option><option value=log${LT.log?" selected":""}>Log scale</option></select></label> `+
+    `<button id=ltz${LT.zc?"":" disabled"} title="drag across the plot to zoom to those dates">Reset zoom</button></p>`;
+  LT.rng=c.range;
+  const note=`<p class=fnote>${esc(c.text)}</p>`;
+  if(!n)return ctl+note+"<p class=fnote>no closed card in this timeframe</p>";
+  const up=c.dots.map(d=>`${ltX(d.x)},${ltY(d.rolling.y_high)}`),low=[...c.dots].reverse().map(d=>`${ltX(d.x)},${ltY(d.rolling.y_low)}`);
+  const band=`<polygon points="${[...up,...low].join(" ")}" fill="var(--s3)" fill-opacity=".16"><title>Standard deviation</title></polygon>`;
+  const roll=`<polyline fill=none stroke="var(--s3)" stroke-width=2 points="${c.dots.map(d=>`${ltX(d.x)},${ltY(d.rolling.y)}`).join(" ")}"><title>Rolling average (${c.window.size} issues, centered)</title></polyline>`;
+  const ys=c.ticks.map(t=>`<line x1=${flowP-4} y1=${ltY(t.y)} x2=${flowP} y2=${ltY(t.y)} stroke=${mute}></line><text x=${flowP-7} y=${ltY(t.y)+4} text-anchor=end fill=${ink} style="font-size:var(--fs-min)">${esc(t.text)}</text>`).join("");
+  const xs=c.xticks.map(t=>`<text x=${ltX(t.x)} y=${base+17} text-anchor=middle fill=${ink} style="font-size:var(--fs-min)">${esc(t.text)}</text>`).join("");
+  const axes=`<line x1=${flowP} y1=${flowP-10} x2=${flowP} y2=${base} stroke=var(--line)></line><line x1=${flowP} y1=${base} x2=${flowW-flowP} y2=${base} stroke=var(--line)></line>`+
+    `<text x=${flowP-7} y=${flowP-16} text-anchor=end fill=${ink} style="font-size:var(--fs-min)">elapsed time${c.axis==="log"?" (log)":c.axis==="cube"?" (cube root)":""}</text>`;
+  const lines=ltLine(c.average,"var(--s6)","","Average")+ltLine(c.median,"var(--ok)","2 3","Median")+ltLine(c.p85,"var(--s5)","5 3","p85");
+  const dots=c.clusters.map((k,i)=>{const m=k.dots.length,title=m>1?`${m} issues`:`#${k.dots[0].n} ${esc(k.dots[0].title)}`;
+    return `<circle data-k=${i} cx=${ltX(k.x)} cy=${ltY(k.y)} r=${m>1?6:4.5} fill="${m>1?"var(--bg)":"var(--s3)"}" stroke="var(--s3)" stroke-width=2 style="cursor:pointer"><title>${esc(title)} · ${esc(k.dots[0].text)} · closed ${esc(k.dots[0].closed)}</title></circle>`+(m>1?`<text x=${ltX(k.x)} y=${ltY(k.y)+4} fill="var(--s3)" style="font-size:var(--fs-min)" text-anchor=middle pointer-events=none>${m}</text>`:"")}).join("");
+  const S=c.average?`<p class=fhead>Average <b>${esc(c.average.text)}</b> · Median <b>${esc(c.median.text)}</b> · p85 <b>${esc(c.p85.text)}</b></p>`:"";
+  const legend=`<p class=flg><span><i style="background:var(--s3)"></i>Rolling average (${c.window.size} issues, centered)</span><span><i style="background:var(--s3);opacity:.3"></i>Standard deviation</span><span><i style="background:var(--s6)"></i>Average</span><span><i style="background:var(--ok)"></i>Median</span><span><i style="background:var(--s5)"></i>p85</span></p>`;
+  const pk=LT.pick!=null&&c.clusters[LT.pick]?c.clusters[LT.pick]:null;
+  const rows=pk?`<table class=rt><thead><tr><th>Issue</th><th>Title</th><th>Elapsed</th><th>Closed</th></tr></thead><tbody>${pk.dots.map(d=>`<tr data-o=${d.n} style="cursor:pointer"><td>#${d.n}</td><td>${esc(d.title)}</td><td>${esc(d.text)}</td><td>${esc(d.closed)}</td></tr>`).join("")}</tbody></table>`:"";
+  return ctl+S+legend+`<svg data-lt viewBox="0 0 ${flowW} ${flowH}">${axes}${ys}${xs}${band}${roll}${lines}${dots}</svg>`+note+rows;};
 const flowLead=l=>{const S=l.summary,ex=l.excluded.map(e=>`${e.count} ${esc(EXREASON[e.reason]||e.reason)}`).join(", ");
   const head=`<p class=fhead><b>${esc(l.measure)}</b> · window ${l.window.size} ${esc(l.window.unit)} · excluded ${l.excluded_total}${ex?" ("+ex+")":""}</p>`;
   if(!S)return head+"<p class=fnote>no closed card yet</p>";
-  const stat=(k,v)=>`${k} <b>${esc(v.text)}</b>`;
-  const pts=l.series,n=pts.length,max=S.maximum.hours,col=COLORS[COLNAME.issue_closed]||"#888";
-  const roll=`<polyline fill=none stroke=var(--mute) stroke-width=1.5 points="${pts.map((p,i)=>`${flowX(i,n)},${flowY(p.rolling_hours,max)}`).join(" ")}"></polyline>`;
-  const dots=pts.map((p,i)=>`<circle cx=${flowX(i,n)} cy=${flowY(p.hours,max)} r=3.5 fill="${col}"><title>#${p.n} closed ${esc(p.closed)}</title></circle>`).join("");
-  return head+`<p class=fhead>${stat("average",S.average)} · ${stat("median",S.median)} · ${stat("minimum",S.minimum)} · ${stat("maximum",S.maximum)}</p>`+
-    `<svg viewBox="0 0 ${flowW} ${flowH}">${flowAxis(max,"h")}${roll}${dots}</svg>`;};
+  return head+ltChart(LT.zc||l.control[LT.log?"log":"jira"][LT.tf]);};
 const drawFlow=()=>{const cfd=FLOWK==="cfd";$("#flowt").textContent=cfd?"Cumulative flow":"Lead time";
-  $("#flowb").innerHTML=!FLOWD?"<p class=fnote>the board has not loaded yet</p>":cfd?flowCFD(FLOWD.cfd):flowLead(FLOWD.lead)};
+  $("#flowb").innerHTML=!FLOWD?"<p class=fnote>the board has not loaded yet</p>":cfd?flowCFD(FLOWD.cfd.ranges[CF.r]):flowLead(FLOWD.lead)};
 const flowOpen=k=>{FLOWK=k;$("#flowov").hidden=false;drawFlow()};
+const ltZoom=async(f,t)=>{const tok=++LT.tok;try{const c=await (await fetch(`/api/leadtime?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}&scale=${LT.log?"log":"jira"}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;LT.zr=[f,t];LT.pick=null;drawFlow()}catch(e){}};   // the hub recomputes the chart for the dragged range (#900)
+const ltPx=(e,s)=>{const r=s.getBoundingClientRect();return (e.clientX-r.left)/r.width*flowW};
+const ltClamp=x=>x<flowP?flowP:x>flowW-flowP?flowW-flowP:x,ltLo=(p,q)=>p<q?p:q,ltHi=(p,q)=>p<q?q:p;
+let LTD=null;   // the drag across a control chart's plot in progress (#900)
+$("#flowb").onpointerdown=e=>{const s=e.target.closest("svg[data-lt]");LT.noclick=false;if(!s||e.button!==0||!LT.rng)return;const x=ltClamp(ltPx(e,s));LTD={s,x0:x,x1:x,moved:false}};
+document.addEventListener("pointermove",e=>{if(!LTD)return;const x1=ltClamp(ltPx(e,LTD.s));LTD.x1=x1;const dx=x1-LTD.x0;if(!LTD.moved&&dx*dx<36)return;LTD.moved=true;
+  let sel=LTD.s.querySelector("rect.ltsel");if(!sel){sel=document.createElementNS("http://www.w3.org/2000/svg","rect");sel.setAttribute("class","ltsel");sel.setAttribute("y",flowP-10);sel.setAttribute("height",flowH-2*flowP+10);sel.setAttribute("fill","var(--s3)");sel.setAttribute("fill-opacity",".18");sel.setAttribute("pointer-events","none");LTD.s.appendChild(sel)}
+  sel.setAttribute("x",ltLo(LTD.x0,x1));sel.setAttribute("width",dx<0?-dx:dx)});
+document.addEventListener("pointerup",()=>{const d=LTD;LTD=null;if(!d||!d.moved)return;d.s.querySelector("rect.ltsel")?.remove();LT.noclick=true;
+  const a=(ltLo(d.x0,d.x1)-flowP)/(flowW-2*flowP),b=(ltHi(d.x0,d.x1)-flowP)/(flowW-2*flowP);if(b-a<0.005||!LT.rng)return;const [f,t]=ltSpan(LT.rng,a,b);ltZoom(f,t)});
+$("#flowb").onchange=e=>{if(e.target.id==="cfdr"){CF.r=e.target.value;drawFlow();return}
+  if(e.target.id==="ltr"){LT.tf=e.target.value;LT.tok++;LT.zc=null;LT.zr=null;LT.pick=null;drawFlow();return}
+  if(e.target.id==="lts"){LT.log=e.target.value==="log";LT.pick=null;if(LT.zr){ltZoom(LT.zr[0],LT.zr[1]);return}drawFlow()}};
+$("#flowb").onclick=e=>{if(LT.noclick){LT.noclick=false;return}
+  if(e.target.id==="ltz"){LT.tok++;LT.zc=null;LT.zr=null;LT.pick=null;drawFlow();return}
+  const k=e.target.closest("circle[data-k]");if(k){LT.pick=+k.dataset.k;drawFlow();return}const r=e.target.closest("tr[data-o]");if(r)showIssue(+r.dataset.o,"__REPO__")};
 $("#bflow").onclick=()=>flowOpen("cfd");$("#blead").onclick=()=>flowOpen("lead");$("#flowx").onclick=()=>{$("#flowov").hidden=true};
 // flow-charts:end
 async function pollBoard(){lim.busy=1;try{const b=await (await fetch("/api/board")).json(),FLOW=/*BOARD_FLOW*/,   // development flow, left to right
 all=[b.prs,...b.groups.sort((x,y)=>{const i=n=>{const k=FLOW.indexOf(n);return k<0?FLOW.length:k};return i(x.name)-i(y.name)})],f=q.trim().replace(/^#/,"");
 if(bo.open===undefined||!all.some(g=>g.name===bo.open))bo.open=(all.find(g=>g.n&&g.name!==COLNAME.issue_closed&&!isPR(g.name))||all[2]).name;
 const CN=all.map(g=>g.name);   // every column of this board: what colOf reads the user columns out of, never a colour of its own
-FLOWD=b.flow;if(!$("#flowov").hidden)drawFlow();$("#bcases").innerHTML=caseRows(b.cases);$("#bt").textContent=b.err?"(stale)":"";$("#bsp").setAttribute("aria-pressed",String(!!bo.specs));
-const fam=ls=>ls.reduce((o,l)=>{const k=l.includes(":")?l.split(":")[0]:"";(o[k]=o[k]||[]).push(l);return o},{});   // label group = prefix before ":"
-if(bo.label!==undefined){bo.labels=bo.label?[bo.label]:[];delete bo.label;saveB()}   // the single-label filter of the previous version
-const sel=bo.labels=bo.labels||[],LB=[...new Set([...(b.labels||[]),...sel])].sort(),lf=$("#lf"),lfl=$("#lfl");
-if(lfl.dataset.k!==LB.join("\n")){lfl.dataset.k=LB.join("\n");lfl.innerHTML=`<div class=lft><span><button data-lm=any title="OR inside a group (same prefix, like wave:*; labels without a prefix form one group), AND across groups">by group</button> <button data-lm=all title="a card with every selected label">all</button></span><button data-lc=1>clear</button></div>`+LB.map(l=>`<label><input type=checkbox value="${esc(l)}">${esc(l)}</label>`).join("")}
-lfl.querySelectorAll("input").forEach(c=>c.checked=sel.includes(c.value));lfl.querySelectorAll("[data-lm]").forEach(x=>x.classList.toggle("on",(bo.lmode||"any")===x.dataset.lm));
-lf.classList.toggle("set",sel.length>0);lf.querySelector("summary").textContent=sel.length?(bo.lmode==="all"&&sel.length>1?"all of: ":"")+(bo.lmode==="all"?sel.join(", "):Object.values(fam(sel)).map(g=>g.length>1?"("+g.join(" | ")+")":g[0]).join(" & ")):"labels";
-const lok=x=>labelOk(sel,bo.lmode,x);
+FLOWD=b.flow;if(!$("#flowov").hidden)drawFlow();$("#bcases").innerHTML=caseRows(b.cases);$("#bt").textContent=b.err?"(stale)":"";
+const fw=bo.fw||[],fs=bo.fs||[],allRows=all.filter(g=>!isPR(g.name)).flatMap(g=>g.items),specTitle=new Map();   // the filter bar: the waves and specs the board holds (#899)
+allRows.forEach(x=>{if(x.sp)specTitle.set(String(x.n),x.t)});
+const numKeys=(a,b)=>a==="none"?1:b==="none"?-1:+a-+b;
+const wOpts=[...new Set(allRows.filter(x=>!x.sp).map(waveKey))].sort(numKeys),sOpts=[...new Set(allRows.map(x=>x.sp?String(x.n):specKey(x)))].sort(numKeys);
+const fillBar=(id,opts,label,sel,name)=>{const box=$("#"+id),k=opts.join("|");
+ if(box.dataset.k!==k){box.dataset.k=k;box.innerHTML=`<div class=fpopb><button type=button data-clear>clear</button></div>`+opts.map(v=>`<label><input type=checkbox value="${esc(v)}"> ${esc(label(v))}</label>`).join("")}
+ box.querySelectorAll("input").forEach(c=>c.checked=sel.includes(c.value));
+ box.parentElement.querySelector("summary").textContent=sel.length?`${name} (${sel.length})`:name;box.parentElement.classList.toggle("set",sel.length>0)};
+fillBar("fwl",wOpts,w=>w==="none"?"No wave":"Wave "+w,fw,"Waves");
+fillBar("fsl",sOpts,s=>s==="none"?"No spec":"#"+s+(specTitle.get(s)?" "+specTitle.get(s):""),fs,"Specs");
 const hid=new Set(bo.hidden||[]),bottom=bo.dock==="bottom",eye=(g,off=hid.has(g.name))=>`<span class=eye data-eye="${esc(g.name)}" title="${off?"show":"hide"} this column"><svg viewBox="0 0 24 24" width=14 height=14 fill=none stroke=currentColor stroke-width=2 stroke-linecap=round stroke-linejoin=round><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx=12 cy=12 r=3 />${off?'<path d="M3 3l18 18"/>':""}</svg></span>`;
 const LC=b.lc||{},rgb=h=>[0,2,4].map(i=>parseInt(h.slice(i,i+2),16)),mix=(a,t)=>a.map((v,i)=>Math.round(v*t+[28,34,44][i]*(1-t))),   // label color blended into the card's #1c222c
 tint=x=>{const cs=(x.l||[]).map(l=>LC[l]).filter(c=>/^[0-9a-f]{6}$/.test(c||"")).map(rgb);if(!cs.length)return"";const avg=[0,1,2].map(i=>cs.reduce((s,c)=>s+c[i],0)/cs.length);return`;--bg:rgb(${mix(avg,.10)});--bgh:rgb(${mix(avg,.16)})`},
@@ -3693,17 +3984,28 @@ const ageC=o=>{const h=(Date.now()-Date.parse(o))/3600000;return h>=24?"old":h>=
 setInterval(()=>document.querySelectorAll("#bbody .age").forEach(e=>{e.textContent=age(e.dataset.o);e.className="age "+ageC(e.dataset.o)}),30000);
 const gcls=c=>c.v==="?"?"unk":c.v==="debt"?"debt":c.v.startsWith("OK")?"ok":(c.v.startsWith("CHG")||c.v.startsWith("BLK"))?"bad":"";
 const gstrip=s=>`<div class="gstrip${s.old?" old":""}" title="${esc(s.old?`these facts are ${s.age} s old: the strip greys out past 180 s, so nothing here is being claimed as fresh`:"R review · C CI · T threads · B base · H labels and holds")}">`+s.cells.map(c=>`<span class="gc ${gcls(c)}" title="${esc(c.tip||"")}">${c.k}<b>${esc(c.v)}</b></span>`).join("")+`</div>`;
-const cards=(g,it,shown)=>shown.map(x=>{const pr=x.kind==="pr";return `<div class=it data-n="${x.n}" data-r="${esc(x.r||"__REPO__")}"${pr?" data-pr":""} data-col="${encodeURIComponent(g.name==null?"":String(g.name))}" data-pm="${x.pm&&!pr?1:""}" data-b="${encodeURIComponent(JSON.stringify(x.b||[]))}" data-bl="${encodeURIComponent(JSON.stringify(x.bl||[]))}" data-ho="${encodeURIComponent(x.ho==null?"":String(x.ho))}" data-hr="${encodeURIComponent(x.hr==null?"":String(x.hr))}" data-prf="${encodeURIComponent(JSON.stringify(x.prf||[]))}" style="--cc:${colOf(g.name,CN)}${tint(x)}"><a class=id target=_blank href="https://github.com/${esc(x.r||"__REPO__")}/${pr?"pull":"issues"}/${x.n}">${pr?"PR ":""}#${x.n}</a>${x.rt?`<span class=rpo title="the repository this card belongs to: ${esc(x.r)}">${esc(x.rt)}</span>`:""}${x.pb?`<span class="pbg ${x.pb.replace(" ","-")}">${esc(x.pb)}</span>`:""}${x.rollup?`<span class="cir ${esc(x.rollup)}" title="CI states on the head${(x.ci||[]).length?": "+esc((x.ci||[]).join(", ")):""}">CI ${esc(x.rollup)}</span>`:""}${x.fz?`<span class=fz title="a freeze is a marker, never a move: the card keeps its column">${esc(x.fz)}</span>`:""}${x.pd?`<span class=pnd title="pending: the board door proved this move and the board read has not carried it yet">pending</span>`:""}${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(x.t)}</span>${x.pm&&!pr?`<button class=pmp data-n="${x.n}" title="move this card to ${esc(x.pmt)}: the owner's go signal (ADR-0142)">→ ${esc(x.pmt)}</button>`:""}${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.ho?`<div class=hld>${esc(x.ho)}</div>`:""}${(x.cl||[]).length?`<div class=clos title="the issues this pull request closes">closes ${x.cl.map(n=>`<a target=_blank rel=noopener href="https://github.com/${esc(x.r||"__REPO__")}/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${(x.o||x.sc||x.by)?`<div class=ft>${x.sc?`<span class=tsk title="sub-issues closed / total: ${esc(x.sc)}">${esc(x.sc)}</span>`:""}${x.o?`<span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span>`:""}${x.by?`<span class=au title="opened by ${esc(x.by)}">${esc(x.by)}</span>`:""}</div>`:""}</div>`}).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"");
+const cards=(g,it,shown)=>shown.map(x=>{const pr=x.kind==="pr";return `<div class=it data-n="${x.n}" data-r="${esc(x.r||"__REPO__")}"${pr?" data-pr":""} data-col="${encodeURIComponent(g.name==null?"":String(g.name))}" data-pm="${x.pm&&!pr?1:""}" data-b="${encodeURIComponent(JSON.stringify(x.b||[]))}" data-bl="${encodeURIComponent(JSON.stringify(x.bl||[]))}" data-ho="${encodeURIComponent(x.ho==null?"":String(x.ho))}" data-hr="${encodeURIComponent(x.hr==null?"":String(x.hr))}" data-prf="${encodeURIComponent(JSON.stringify(x.prf||[]))}" style="--cc:${colOf(g.name,CN)}${tint(x)}"><a class=id target=_blank href="https://github.com/${esc(x.r||"__REPO__")}/${pr?"pull":"issues"}/${x.n}">${pr?"PR ":""}#${x.n}</a>${(x.l||[]).includes("loop-bug")?'<span class="bugc loop">loop-bug</span>':(x.l||[]).includes("bug")?'<span class="bugc">bug</span>':""}${x.rt?`<span class=rpo title="the repository this card belongs to: ${esc(x.r)}">${esc(x.rt)}</span>`:""}${x.pb?`<span class="pbg ${x.pb.replace(" ","-")}">${esc(x.pb)}</span>`:""}${x.rollup?`<span class="cir ${esc(x.rollup)}" title="CI states on the head${(x.ci||[]).length?": "+esc((x.ci||[]).join(", ")):""}">CI ${esc(x.rollup)}</span>`:""}${x.fz?`<span class=fz title="a freeze is a marker, never a move: the card keeps its column">${esc(x.fz)}</span>`:""}${x.pd?`<span class=pnd title="pending: the board door proved this move and the board read has not carried it yet">pending</span>`:""}${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(x.t)}</span>${x.pm&&!pr?`<button class=pmp data-n="${x.n}" title="move this card to ${esc(x.pmt)}: the owner's go signal (ADR-0142)">→ ${esc(x.pmt)}</button>`:""}${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.ho?`<div class=hld>${esc(x.ho)}</div>`:""}${(x.cl||[]).length?`<div class=clos title="the issues this pull request closes">closes ${x.cl.map(n=>`<a target=_blank rel=noopener href="https://github.com/${esc(x.r||"__REPO__")}/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${(x.o||x.sc||x.by)?`<div class=ft>${x.sc?`<span class=tsk title="sub-issues closed / total: ${esc(x.sc)}">${esc(x.sc)}</span>`:""}${x.o?`<span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span>`:""}${x.by?`<span class=au title="opened by ${esc(x.by)}">${esc(x.by)}</span>`:""}</div>`:""}</div>`}).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"");
 // A visible column holding no cards is not drawn at all: the columns that do have cards take the width, and the
 // collapsed one is accounted for by a line at the foot of the hidden: strip. Which columns those are is derived on
 // every render -- from the filtered count, the user's hidden set and the set the line's eye added -- and never
 // stored, so a card appearing brings the column back on its own and the last one leaving collapses it again (#1809).
+const laneHtml=m=>{const ccount=c=>m.lanes.reduce((s,l)=>s+(l.counts[c]||0),0),pct=l=>l.total?Math.round(l.closed/l.total*100):0;
+ if(!m.lanes.length)return `<div class=lempty>${f?"No card matches this search.":"No card on the board."}</div>`;
+ let h=`<div class=lgrid style="--vc:${Math.max(1,m.vc.length)}">`+m.vc.map(c=>`<div class=lcolh style="--cc:${colOf(c,CN)}"><span>${esc(c)}</span><b>${ccount(c)}</b></div>`).join("");
+ for(const l of m.lanes){const cl=l.collapsed,lc=l.kind==="bugs"?"var(--err,#f85149)":colOf(l.st||"",CN);
+  h+=`<section class="lane${cl?" coll":""}${l.kind==="bugs"?" alarm":""}${l.done?" done":""}" data-lane="${esc(l.id)}" style="--lc:${lc}"><header class=lh role=button tabindex=0 aria-expanded="${!cl}" data-lane="${esc(l.id)}"><span class=tw>${cl?"&#9656;":"&#9662;"}</span>`
+    +(l.kind==="s"?`<span class=lid>#${l.num}</span>`:"")+`<span class=ltt>${esc(l.title)}</span>`
+    +(l.kind==="s"?`<span class=bar title="${l.closed} of ${l.total} closed"><i style="width:${pct(l)}%"></i></span><span class=pc>${l.closed}/${l.total}</span>`+(l.st?`<span class=lst>${esc(l.st)}</span>`:""):"")
+    +`<span class=sum>${cl?m.cols.filter(c=>l.counts[c]).map(c=>`<span>${esc(c)} <b>${l.counts[c]}</b></span>`).join(""):""}</span></header>`;
+  if(!cl)for(const c of m.vc){const key=l.id+"|"+c,v=cellView(l.cells[c],!!(bo.cx||{})[key]);h+=`<div class=cell data-lane="${esc(l.id)}" data-col="${esc(c)}">${cards({name:c},v.shown,v.shown).join("")}${v.more?`<button class=more data-cell="${esc(key)}" title="show every card of this cell">+${v.more} more</button>`:""}</div>`}
+  h+="</section>"}
+ return h+"</div>"};
 const perr=g=>g.err?`<div class=perr title="a repository the hub was told to read and could not: the rows this column still shows for it are its last good ones">&#9888; ${esc(g.err)}</div>`:"";   // a repository the hub cannot read is an error on the column, never an empty column (#1820)
-const fits={};all.forEach(g=>fits[g.name]=g.items.filter(x=>(!f||String(x.n).includes(f)||x.t.toLowerCase().includes(f.toLowerCase()))&&lok(x)&&(isPR(g.name)||spOk(x))));   // the Specs filter shows, only shows, or hides the spec-labelled items, never a column of its own (#247, #456)
+const fits={};all.forEach(g=>fits[g.name]=g.items.filter(x=>(!f||String(x.n).includes(f)||x.t.toLowerCase().includes(f.toLowerCase()))&&(isPR(g.name)||boardOk(x,fw,fs))));   // the Specs filter shows, only shows, or hides the spec-labelled items, never a column of its own (#247, #456)
 const kept=new Set(bo.kept||[]),
  autoHidden=g=>!hid.has(g.name)&&!kept.has(g.name)&&!fits[g.name].length&&!g.tracking,   // the columns the strip's lines stand for, and the only ones: a column the user hid is a chip, one the user kept is drawn, and the lane is always drawn -- empty, it says 0 (#440)
  vis=all.filter(g=>!bottom||(!hid.has(g.name)&&!autoHidden(g))),autos=bottom?all.filter(autoHidden):[];
-const badge=g=>`<span class=n>${f||sel.length?fits[g.name].length+"/":""}${g.n}</span>`;   // the number the header shows, and the number the strip's line repeats
+const badge=g=>`<span class=n>${f||fw.length||fs.length?fits[g.name].length+"/":""}${g.n}</span>`;   // the number the header shows, and the number the strip's line repeats
 const one=g=>{const it=fits[g.name],shown=it.slice(0,lim[g.name]||25),dot=`<i style="background:${colOf(g.name,CN)}"></i>`,cnt=badge(g),isOpen=g.name===COLNAME.pr_open?bo.prOpen!==false:bo.open===g.name;
 if(bottom)return `<div class="col${isPR(g.name)?" prs lane":""}" style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><div class=ch><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}</span></div><div class=sc data-g="${esc(g.name)}">${perr(g)}${cards(g,it,shown)}</div></div>`;
 return `<div class="acc${isPR(g.name)?" prs lane":""} ${hid.has(g.name)?"hidcol":""} ${isOpen?"open":""}" style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><div class=ah><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}</span></div><div class=sc data-g="${esc(g.name)}">${perr(g)}${cards(g,it,shown)}</div><div class=pad></div></div>`};
@@ -3713,34 +4015,43 @@ const fmtN=n=>n>=1000?n.toLocaleString("en-US"):""+n;   // "688" is one token; o
 // exception is a column #1793's map does not name, which takes the ring colour and can only come from colOf here.
 const hidchip=g=>{const c=colOf(g.name,CN),ring=!Object.hasOwn(COLORS,g.name);return `<span class=chip data-eye="${esc(g.name)}" data-col="${esc(g.name)}" title="${esc(g.name+" — "+fmtN(g.n))}"><span class=lbl>${esc(g.name)}</span><b${ring?` style="color:${c}"`:""}>${fmtN(g.n)}</b></span>`};
 const html=vis.map(one).join("")+(bottom&&hid.size?`<div class=hidbar>${all.filter(g=>hid.has(g.name)).map(hidchip).join("")}`:"")+(bottom&&(hid.size||autos.length)?`${hid.size?"":`<div class=hidbar>`}${autos.length?(hid.size?'<div class=hidsep></div>':"")+autos.map(g=>`<span class=hidline style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><span>${esc(g.name)}</span><b>${badge(g)}</b>${eye(g,true)}</span>`).join(""):""}</div>`:"");   // one quiet line per column hidden only because it is empty, behind a divider (#1809)
-if($("#bbody").dataset.h!==html){$("#bbody").dataset.h=html;$("#bbody").innerHTML=html;restore()}   // same cards: leave the DOM alone, so a scroll in progress is never interrupted
+const model=bo.lmode==="none"?null:buildBoard(all.filter(g=>!isPR(g.name)),{mode:bo.lmode||"spec",fw:bo.fw||[],fs:bo.fs||[],closed:COLNAME.issue_closed,lc:bo.lc||{},hideDone:!!bo.hideDone,search:!!f,text:x=>!f||String(x.n).includes(f)||x.t.toLowerCase().includes(f.toLowerCase())});   // the lanes read every row; the search and the filters only hide rows (#890)
+const lanesHtml=model?laneHtml(model):null;lanesNow=model;$("#lhd").checked=!!bo.hideDone;
+$("#lmode").value=bo.lmode||"spec";$("#bbody").classList.toggle("lanes",!!model);
+$("#lhc").innerHTML=model&&model.hc.length?`<button class=hcpill id=lhcx title="columns with no card in an expanded lane: click to expand the lanes that hold their cards">+${model.hc.length} hidden: ${model.hc.map(x=>esc(x.name)+" <b>"+x.count+"</b>").join(" · ")}</button>`:"";
+if(lanesHtml!==null){if($("#bbody").dataset.h!==lanesHtml){$("#bbody").dataset.h=lanesHtml;$("#bbody").innerHTML=lanesHtml;restore()}}
+else if($("#bbody").dataset.h!==html){$("#bbody").dataset.h=html;$("#bbody").innerHTML=html;restore()}   // same cards: leave the DOM alone, so a scroll in progress is never interrupted
 }catch(e){}finally{lim.busy=0}}
-// The Specs control holds three modes (#456): every card the other filters leave, only the cards that carry the spec
-// label, or every card but those. It is one control because it is one question -- are the specs in the way, or am I
-// looking for them? -- and its own label states the mode it holds, so the mode is read without a hover. The stored value
-// is the mode; the boolean an older page stored is read as the two modes it named (true = only, false = all), so a board
-// opens where it was left. `spOk` is the whole rule, and the columns ask it once per card: the modes are the page's, the
-// spec label is the hub's (`x.sp`, from the table's own SPEC_LABEL), and no column is named here.
-/*BOARD_FILTER*/
-const spPaint=()=>{const m=specMode(),b=$("#bsp");b.dataset.m=SP[m][0];b.textContent="Specs: "+SP[m][0];b.title=`the Specs filter holds ${SP[m][0]}: a press moves it to ${SP[(m+1)%3][0]}, and this mode draws ${SP[m][1]}.`};
-$("#bsp").onclick=()=>{bo.specs=(specMode()+1)%3;saveB();spPaint();pollBoard()};
-spPaint();
-$("#lfl").onchange=e=>{const v=e.target.value,h=new Set(bo.labels||[]);e.target.checked?h.add(v):h.delete(v);bo.labels=[...h];saveB();pollBoard()};
-$("#lfl").onclick=e=>{const t=e.target.closest("button");if(!t)return;e.preventDefault();if(t.dataset.lc)bo.labels=[];else bo.lmode=t.dataset.lm;saveB();pollBoard()};
+/*BOARD_LANES*/
+$("#lmode").onchange=e=>{bo.lmode=e.target.value;saveB();pollBoard()};
+// The swimlanes' state (#891): collapse and open state live in `bo`, so the device keeps them across a reload.
+let lanesNow=null;   // the model the board last drew: the controls act on its lanes and its hidden columns
+$("#lhd").onchange=e=>{bo.hideDone=e.target.checked;saveB();pollBoard()};
+const laneSet=v=>{bo.lc=bo.lc||{};for(const l of(lanesNow?lanesNow.lanes:[]))bo.lc[l.id]=v;saveB();pollBoard()};
+$("#lcall").onclick=()=>laneSet(true);$("#lexp").onclick=()=>laneSet(false);
+document.addEventListener("click",e=>{const h=e.target.closest("#bbody .lh");if(h){const coll=h.closest(".lane").classList.contains("coll");bo.lc=bo.lc||{};bo.lc[h.dataset.lane]=!coll;saveB();pollBoard();return}
+ const m=e.target.closest("#bbody .more");if(m){bo.cx=bo.cx||{};bo.cx[m.dataset.cell]=true;saveB();pollBoard();return}   // a more click opens its own cell only
+ const p=e.target.closest("#lhcx");if(p&&lanesNow){const names=new Set(lanesNow.hc.map(x=>x.name));bo.lc=bo.lc||{};   // a hidden column's pill expands the lanes that hold its cards
+  for(const l of lanesNow.lanes)if(l.collapsed&&Object.keys(l.counts).some(c=>names.has(c)))bo.lc[l.id]=false;saveB();pollBoard()}});
+const pickFilter=(id,key)=>{const box=$("#"+id);box.addEventListener("change",e=>{const v=e.target.value,h=new Set(bo[key]||[]);e.target.checked?h.add(v):h.delete(v);bo[key]=[...h];saveB();pollBoard()});box.addEventListener("click",e=>{if(!e.target.closest("[data-clear]"))return;e.preventDefault();bo[key]=[];saveB();pollBoard()})};
+pickFilter("fwl","fw");pickFilter("fsl","fs");
 // The owner's one move (#560): the arrow a Backlog card carries delegates to the hub, and the card shows the reason a
 // refusal gives. Which cards carry the arrow is the row's own fact (`x.pm`), never the page's rule.
 document.addEventListener("click",async e=>{const b=e.target.closest("#bbody .pmp");if(!b)return;e.preventDefault();e.stopPropagation();const n=+b.dataset.n,card=b.closest(".it");b.disabled=true;
 try{const r=await fetch("/api/promote",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({issue:n})}),d=await r.json();
  if(d.err){card.insertAdjacentHTML("beforeend",`<div class=perr>${esc(d.err)}</div>`);b.disabled=false}
  else{b.textContent="moved to Todo ✓";pollBoard()}}catch(x){card.insertAdjacentHTML("beforeend","<div class=perr>the hub did not answer</div>");b.disabled=false}});
-document.addEventListener("click",e=>{if(!e.target.closest("#lf"))$("#lf").open=false});
+document.addEventListener("click",e=>{for(const d of["#fw","#fs"])if($(d)&&!e.target.closest(d))$(d).open=false});
 pollBoard();setInterval(pollBoard,5000);
 let ver=null;setInterval(async()=>{try{const v=(await (await fetch("/api/version")).json()).v;if(ver===null)ver=v;else if(v!==ver)location.reload()}catch(e){}},3000);
 </script>"""
 PAGE = PAGE.replace("/*WEB_TOKENS*/", WEB_TOKENS)
 PAGE = PAGE.replace("/*PANES_JS*/", (pathlib.Path(__file__).resolve().parent / "panes.js").read_text())
+SWITCHER_JS = (pathlib.Path(__file__).resolve().parent / "hub-switcher.js").read_text()   # the project switcher, both pages (#876)
+PAGE = PAGE.replace("/*SWITCHER_JS*/", SWITCHER_JS)
 BOARD_FILTER_JS = (pathlib.Path(__file__).resolve().parent / "board-filter.js").read_text()
-PAGE = PAGE.replace("/*BOARD_FILTER*/", BOARD_FILTER_JS)
+PAGE = PAGE.replace("/*BOARD_LANES*/", (pathlib.Path(__file__).resolve().parent / "board-lanes.js").read_text())   # the swimlane rule (#890)
+PAGE = PAGE.replace("/*BOARD_LANES_CSS*/", (pathlib.Path(__file__).resolve().parent / "board-lanes.css").read_text())   # its look (#890, #891)
 # The strip paints one rule per category, keyed by the fact that sets the column: the name comes from the table.
 HID_CHIP_TOKENS = (("abandoned", "err"), ("dev_ci", "run"), ("unscheduled", "warn"), ("issue_closed", "ok"), ("pr_open", "pin"))
 PAGE = PAGE.replace("/*HID_CHIP_RULES*/", "\n".join('.hidbar .chip[data-col="%s"] b{color:var(--%s)}' % (COLUMN[fact], token) for fact, token in HID_CHIP_TOKENS))
@@ -3911,9 +4222,30 @@ def q_grok():
         return {"windows": [], "unavailable": True, "err": grok_no_source(first), "plan": grok_plan()}
     return {"windows": [{"label": "weekly", "pct": k["pct"], "resets": k.get("end")}], "plan": grok_plan(),
             "asof": k.get("asof"), "until": k.get("end")}
+NOBROWSE = None
+def no_browser_dir():
+    """A PATH entry whose `open` does nothing. A quota probe must never raise a login page: agy falls back to an
+    interactive OAuth flow when the HOME it runs under carries no credential, and that flow opens a Google account
+    page in the operator's browser. The probe runs with this entry first, so the page cannot open, whatever the CLI
+    decides about its own auth."""
+    global NOBROWSE
+    if NOBROWSE is None:
+        d = pathlib.Path(tempfile.mkdtemp(prefix="hub-nobrowse-"))
+        for name in ("open", "xdg-open"):
+            f = d / name
+            f.write_text("#!/bin/sh\nexit 0\n")
+            f.chmod(0o755)
+        NOBROWSE = d
+    return NOBROWSE
 def q_agy():
-    """`agy -p /quota` prints one line per model group (no model call): name, `Weekly Limit Remaining`, N%, reset ISO. The Gemini group is the Google plan's."""
-    r = subprocess.run(["agy", "-p", "/quota"], capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+    """`agy -p /quota` prints one line per model group (no model call): name, `Weekly Limit Remaining`, N%, reset ISO. The Gemini group is the Google plan's.
+
+    A probe is not a login: it never opens a browser (see `no_browser_dir`), and a CLI that answers `not
+    authenticated` reads as no quota at all."""
+    env = {**os.environ, "PATH": f"{no_browser_dir()}:{os.environ.get('PATH', '')}", "BROWSER": "/usr/bin/true"}
+    r = subprocess.run(["agy", "-p", "/quota"], capture_output=True, text=True, timeout=20, stdin=subprocess.DEVNULL, env=env)
+    if "not authenticated" in (r.stdout + r.stderr).lower():
+        return None
     w = agyquota.gemini_window(r.stdout)   # review.sh reads the agy-limited reset through the same module
     return {"windows": [{"label": "weekly", "pct": w[0], "resets": w[1]}]} if w else None
 WEEKS = HUBDIR / "hub-weeks.json"
@@ -4022,7 +4354,7 @@ def v1_view(d):
     view["hours"] = {k: {e.raw: e.hrs for e in rows[k] if e.hrs} for k in CHAINS}
     view["efforts"] = {k: {e.raw: e.effort for e in rows[k] if e.effort} for k in CHAINS}
     return view
-READONLY = ("known", "router_known", "suggest", "version", "labels", "boxes", "last_coding", "chain")   # fields models_get() adds for the panel: posted back, never stored
+READONLY = ("known", "router_known", "suggest", "version", "labels", "boxes", "last_coding", "chain", "models", "outside")   # fields models_get() adds for the panel: posted back, never stored
 # One model-id shape, in one place (#221): a bare id, and the context suffix the gateway serves beside it
 # (`claude-deepseek-v4-flash[1m]`). The save validates with MODEL_ID and the page's Add box tests the same source,
 # substituted when the page is served, so a second spelling cannot refuse an id the save takes -- the shape without the
@@ -4210,22 +4542,28 @@ def in_hours(d, chain, mid, when=None):
     if not w: return True
     h = (when or dt.datetime.now()).hour; a, b = int(w[:2]), int(w[3:])
     return a <= h < b if a <= b else (h >= a or h < b)
+def model_off_ids(d):
+    """The models switched off at model level (SPEC 889 #920): normalized ids from models.json's top-level `model_off`.
+    The one registry reads the same key (modelreg.chain), so the hub and every consumer agree on the spelling."""
+    mo = d.get("model_off") if isinstance(d.get("model_off"), dict) else {}
+    return {modelreg.normalize(m).id for m, v in mo.items() if v is True and isinstance(m, str)}
 def model_off(d, chain, mid):
-    """True when the panel switched the model out of its chain (#1819). The row keeps its place, its rank, its effort
-    and its hrs: the switch says "do not run this one", it never edits the chain."""
+    """True when the model is switched off at model level: off in every chain it sits in (SPEC 889 #920)."""
+    return modelreg.normalize(mid).id in model_off_ids(d) and mid in d.get(chain, [])
+def chain_off(d, chain, mid):
+    """True when a chain row already in the file carries the old chain-level switch (`off`). The hub writes no new one
+    (SPEC 889 #920); a file that holds one keeps honoring it, and the panel shows it as "off (chain)"."""
     o = d.get("off") if isinstance(d.get("off"), dict) else {}
     ok = o.get(chain) if isinstance(o.get(chain), dict) else {}
     return bool(ok.get(mid)) and mid in d.get(chain, [])
 def off_of(d):
     """Per-chain {model-id: True} from models.json's optional top-level `off`; only entries whose model is in that chain."""
-    o = d.get("off") if isinstance(d.get("off"), dict) else {}
-    return {k: {m: True for m, v in (o.get(k) or {}).items() if v and model_off(d, k, m)} for k in CHAINS}
+    return {k: {m: True for m in d.get(k, []) if chain_off(d, k, m)} for k in CHAINS}
 def may_run(d, chain, mid, when=None):
     """True when the model may run at `when`: a model switched off is skipped exactly like one outside its window.
 
-    One predicate for both reasons, because the consumers do not care which one it was -- `in_hours` and `model_off`
-    are only apart in the panel, where the row shows which of the two it is."""
-    return not model_off(d, chain, mid) and in_hours(d, chain, mid, when) and not provkey.closed(mid)   # a provider key that is absent closes it too (#482)
+    One predicate for every reason, because the consumers do not care which one it was -- the panel's row shows which."""
+    return not (model_off(d, chain, mid) or chain_off(d, chain, mid)) and in_hours(d, chain, mid, when) and not provkey.closed(mid)   # a provider key that is absent closes it too (#482)
 def hours_of(d):
     """Per-chain {model-id: "HH-HH"} from models.json's optional top-level `hours`; only entries whose model is in that chain."""
     h = d.get("hours") if isinstance(d.get("hours"), dict) else {}
@@ -4253,6 +4591,24 @@ def model_status(raw, states):
     return {"sub": {"key": e.subscription, "label": states[e.subscription]["label"]},
             "quota": {"spent": bool(q["limited"]), "reason": q["reason"], "until": q["until"],
                       "until_text": time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(q["until"])) if q["until"] else None}}
+def model_rows(d, states):
+    """The models table (SPEC 889 #920): one row per model across the four chains, with its subscription and quota and
+    its state. A model switched off at model level reads "off (model)"; a chain row the file still holds off reads
+    "off (chain)"; a spent subscription reads "at limit"; otherwise "on". The table holds no hours (#913)."""
+    ids = list(dict.fromkeys(bare_id(m) for k in CHAINS for m in d.get(k, [])))
+    chain_off_ids = {bare_id(m) for k in CHAINS for m in d.get(k, []) if chain_off(d, k, m)}
+    off = model_off_ids(d)
+    rows = []
+    for b in ids:
+        st = model_status(b, states)
+        is_off = modelreg.normalize(b).id in off
+        spent = bool(st["quota"] and st["quota"]["spent"])
+        state = "off (model)" if is_off else "off (chain)" if b in chain_off_ids else "at limit" if spent else "on"
+        rows.append({"id": b, "off": is_off, "state": state, **st})
+    return rows
+def not_switched_off(suggestions, off):
+    """The add list never offers a model switched off at model level (SPEC 889 #920): it keeps its place in the chains."""
+    return [s for s in suggestions if modelreg.normalize(s["id"]).id not in off]
 def models_get():
     """The four chains as the panel reads them: bare ids, so one model is one row in every chain and in the box.
 
@@ -4260,16 +4616,21 @@ def models_get():
     wrong one of two spellings of the same model."""
     d = models_doc()
     known, rknown, states = known_models(d), router_known(), subscription_states()
+    off = model_off_ids(d)
+    rows = model_rows(d, states)
     return {**{k: [bare_id(m) for m in d.get(k, [])] for k in CHAINS},
             "efforts": {k: {bare_id(m): v for m, v in ek.items()} for k, ek in efforts_of(d).items()},
             "hours": {k: {bare_id(m): v for m, v in hk.items()} for k, hk in hours_of(d).items()},
             "off": {k: {bare_id(m): True for m in ok} for k, ok in off_of(d).items()},
+            "model_off": {r["id"]: True for r in rows if r["off"]},
+            "models": rows,
+            "outside": {k: {bare_id(m): model_hours(d, k, m) for m in d.get(k, []) if model_hours(d, k, m) and not in_hours(d, k, m)} for k in CHAINS},
             "known": known, "last_coding": last_coding_model(),
             "router_known": rknown, "version": models_version(),
             # The router's add box offers what the gateway serves, never the other CLIs' ids (#225): the router row is a
             # chain like the other three, so its own catalogue answers for it (#687).
-            "suggest": {**{k: model_suggestions(usable(known, k.removesuffix("_models"))) for k in CHAINS if k != ROUTER_CHAIN},
-                        ROUTER_CHAIN: model_suggestions(usable(rknown, "router"))},
+            "suggest": {**{k: not_switched_off(model_suggestions(usable(known, k.removesuffix("_models"))), off) for k in CHAINS if k != ROUTER_CHAIN},
+                        ROUTER_CHAIN: not_switched_off(model_suggestions(usable(rknown, "router")), off)},
             "labels": model_labels(set(known) | set(rknown) | {bare_id(m) for k in CHAINS for m in d.get(k, [])}),
             "boxes": {**{k: {bare_id(m): {**model_box(bare_id(m), k), **model_status(bare_id(m), states)} for m in d.get(k, [])} for k in CHAINS},
                       "known": {m: model_box(m) for m in set(known) | set(rknown) | ({last_coding_model()} - {None, ""})}},
@@ -4284,6 +4645,14 @@ def models_version():
         except OSError: m = None
     return hashlib.sha256(json.dumps(m, sort_keys=True).encode()).hexdigest()
 
+
+def models_record(changes):
+    """One line per model-level flip in the state directory's models switch ledger (SPEC 889 #920): the model, its new
+    state, who and when. Whole lines, appended; a Save that flips nothing writes nothing."""
+    if not changes: return
+    who, at = os.environ.get("SG_OWNER") or "owner", time.strftime("%Y-%m-%d %H:%M:%S")
+    with open(STATE / MODELS_LEDGER, "a", encoding="utf-8") as f:
+        f.write("".join(json.dumps({"at": at, "model": m, "state": st, "who": who}, ensure_ascii=False) + "\n" for m, st in changes))
 
 _SAVE = threading.Lock()   # one Save at a time, so the version check and the write see the same files
 
@@ -4318,9 +4687,10 @@ def _new_raw(k, mid, reg):
 _ABSENT = object()   # a setting section the Save body leaves out: the file's own value stays, never cleared
 
 
-def _entry(k, mid, prev, effort, window, off):
+def _entry(k, mid, prev, effort, window):
     """One v2 chain entry for a panel row, in the shape `modelreg.migrate` writes: `id`, `raw` when the spelling
-    differs, an explicit route, and the row's effort, window and switch.
+    differs, an explicit route, and the row's effort and window. The switch is per model now (SPEC 889 #920): the hub
+    writes no chain-level `on`, and an `on: false` a file already holds stays as the file has it.
 
     `raw` is not the panel's id (ADR-0147): review's Anthropic row carries `claude:`, and a gateway row carries the
     `claude-` alias of its bare model. A row already in the file keeps the spelling and the route it holds; a new row
@@ -4334,7 +4704,6 @@ def _entry(k, mid, prev, effort, window, off):
     route = modelreg._default_route(k.removesuffix("_models"), modelreg.model(mid))
     if effort is _ABSENT: effort = prev.effort if prev is not None else None
     if window is _ABSENT: window = prev.hrs if prev is not None else None
-    if off is _ABSENT: off = (not prev.on) if prev is not None else False
     if prev is not None and prev.raw == want:
         held = modelreg.normalize(prev.raw)
         if not held.effort or held.effort == (effort or "medium"):
@@ -4351,7 +4720,7 @@ def _entry(k, mid, prev, effort, window, off):
         if prev.no_tools: out["no_tools"] = True
     if effort and effort != "medium": out["effort"] = effort
     if isinstance(window, str) and HOURS.match(window) and window[:2] != window[3:]: out["hrs"] = window
-    if off: out["on"] = False
+    if prev is not None and not prev.on: out["on"] = False   # honored, never written: a row the file already holds off
     return out
 
 
@@ -4368,7 +4737,7 @@ def _setting(sec, k, raw):
     return None
 
 
-def _v2_chain(k, posted, doc, eff, hrs, off):
+def _v2_chain(k, posted, doc, eff, hrs):
     """One v2 chain for the Save, from the panel's list in rank order (or the file's own list when the body omits it).
 
     An entry the panel's view hid -- `usable()` drops a model its chain cannot run (ADR-0147) -- is not in the posted
@@ -4381,18 +4750,18 @@ def _v2_chain(k, posted, doc, eff, hrs, off):
     canon = k.removesuffix("_models")
     old = list(modelreg.chain(doc, canon).entries)
     if posted is None:   # the body names a section but no list: apply the section, keep the file's rank and rows
-        return [_entry(k, e.raw, e, _setting(eff, k, e.raw), _setting(hrs, k, e.raw), _setting(off, k, e.raw)) for e in old]
+        return [_entry(k, e.raw, e, _setting(eff, k, e.raw), _setting(hrs, k, e.raw)) for e in old]
     by_id = {modelreg.normalize(e.raw).id: e for e in old}
     out, seen = [], set()
     for m in posted:
         ref = modelreg.normalize(m)
         seen.add(ref.id)   # two spellings of one model may both be posted: the panel drew two rows, so both stay
-        out.append(_entry(k, m, by_id.get(ref.id), _setting(eff, k, m), _setting(hrs, k, m), _setting(off, k, m)))
+        out.append(_entry(k, m, by_id.get(ref.id), _setting(eff, k, m), _setting(hrs, k, m)))
     shown = {modelreg.normalize(m).id for m in v1_view(doc).get(k, [])}
     for i, e in enumerate(old):
         ref = modelreg.normalize(e.raw)
         if ref.id in shown or ref.id in seen: continue
-        out.insert(min(i, len(out)), _entry(k, e.raw, e, _ABSENT, _ABSENT, _ABSENT))
+        out.insert(min(i, len(out)), _entry(k, e.raw, e, _ABSENT, _ABSENT))
         seen.add(ref.id)
     written, unique = set(), []
     for e in out:   # one stored spelling, one row: the fold above can land two posted ids on the same `raw`
@@ -4407,9 +4776,15 @@ def _models_set(new):
     # (the add box's list) and `last_coding` (the header's line). Dropping only `known` made the other one read as a chain
     # the panel invented -- "unknown chain" on every Save (2026-10-11).
     new = {k: v for k, v in new.items() if k not in READONLY} if isinstance(new, dict) else new
-    if not isinstance(new, dict) or set(new) - set(CHAINS) - {"efforts", "hours", "off"}: return {"err": "unknown chain"}
+    if not isinstance(new, dict) or set(new) - set(CHAINS) - {"efforts", "hours", "off", "model_off"}: return {"err": "unknown chain"}
     d = json.loads(MODELS.read_text())
-    eff, hrs, off = new.pop("efforts", _ABSENT), new.pop("hours", _ABSENT), new.pop("off", _ABSENT)
+    eff, hrs = new.pop("efforts", _ABSENT), new.pop("hours", _ABSENT)
+    new.pop("off", None)   # the chain-level switch is retired (SPEC 889 #920): an old page's `off` is read past, never written
+    moff = new.pop("model_off", _ABSENT)   # the model-level switch (SPEC 889 #920): {model id: true|false}; absent keeps the file
+    if moff is not _ABSENT:
+        if not isinstance(moff, dict): return {"err": "model_off: must name models"}
+        for m, v in moff.items():
+            if not (isinstance(m, str) and MODEL_ID.match(m) and isinstance(v, bool)): return {"err": f"model_off: {m} must be true or false"}
     posted = {}
     for k, v in new.items():
         # An empty chain is a legal state: the reader tolerates it, and a file that carries one (the router's, until the
@@ -4423,8 +4798,7 @@ def _models_set(new):
     # of a model no longer in its chain goes with the row, never refuses the Save. A bad value of a kept row still refuses,
     # and the sentence names the row and the rule, so a caller learns what to send.
     for name, sec, rule, ok in (("efforts", eff, "must name one of low|medium|high|max", lambda v: v in EFFORTS),
-                                ("hours", hrs, "must be an HH-HH window (00-23)", lambda v: isinstance(v, str) and HOURS.match(v)),
-                                ("off", off, "must be true or false", lambda v: isinstance(v, bool))):
+                                ("hours", hrs, "must be an HH-HH window (00-23)", lambda v: isinstance(v, str) and HOURS.match(v))):
         if sec is _ABSENT: continue
         if not isinstance(sec, dict) or set(sec) - set(CHAINS): return {"err": f"{name}: unknown chain"}
         for k, rows in sec.items():
@@ -4433,8 +4807,20 @@ def _models_set(new):
                 if not (isinstance(m, str) and ok(v)): return {"err": f"{name}.{k}: {m} {rule}"}
     # The file is v2, and every chain writes there: the router row is a chain row like the other three (SPEC 750). The
     # graph and its record are never touched by a Save; a run reads the router chain from this file.
-    chains = {k.removesuffix("_models"): _v2_chain(k, posted.get(k), d, eff, hrs, off) for k in CHAINS}
+    changes = []
+    if moff is not _ABSENT:
+        was = model_off_ids(d)
+        mo = dict(d.get("model_off") or {}) if isinstance(d.get("model_off"), dict) else {}
+        for m, v in moff.items():
+            key = modelreg.normalize(m).id
+            if v: mo[key] = True
+            else: mo.pop(key, None)
+            if (key in was) != bool(v): changes.append((bare_id(m), "off" if v else "on"))   # one line per flip, never per read
+        if mo: d["model_off"] = mo
+        else: d.pop("model_off", None)
+    chains = {k.removesuffix("_models"): _v2_chain(k, posted.get(k), d, eff, hrs) for k in CHAINS}
     modelreg.write_chains(MODELS, chains, d)
+    models_record(changes)
     return models_get()
 
 profiles_of_cwd = sessions.profiles_of
@@ -4455,7 +4841,7 @@ MOBILE_CSP = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src '
 GESTURE_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-gesture.js").read_text()
 MOVE_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-move.js").read_text()
 RUN_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-run.js").read_text()
-MOBILE_PAGE = (pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text().replace("/*GESTURE*/", GESTURE_JS).replace("/*MOVE*/", MOVE_JS).replace("/*RUN*/", RUN_JS).replace("/*BOARD_FILTER*/", BOARD_FILTER_JS).replace("/*WEB_TOKENS*/", WEB_TOKENS)
+MOBILE_PAGE = (pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text().replace("/*SWITCHER_JS*/", SWITCHER_JS).replace("/*GESTURE*/", GESTURE_JS).replace("/*MOVE*/", MOVE_JS).replace("/*RUN*/", RUN_JS).replace("/*BOARD_FILTER*/", BOARD_FILTER_JS).replace("/*WEB_TOKENS*/", WEB_TOKENS)
 MOBILE_SHELL = ["/mobile/", "/mobile/manifest.webmanifest", "/mobile/icon.svg"]
 SW_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-sw.js").read_text().replace("/*SHELL*/[]", json.dumps(MOBILE_SHELL))
 MANIFEST_JSON = json.dumps({"id": "/mobile/", "name": f"Squad hub {REPO}", "short_name": "Hub", "start_url": "/mobile/", "scope": "/mobile/", "display": "standalone", "background_color": "#0f1115", "theme_color": "#0f1115", "icons": [{"src": "/mobile/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}]}).encode()
@@ -4642,9 +5028,11 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/board"):
             try: body, ct = json.dumps(board()).encode(), "application/json"
             except ValueError as e: body, ct = json.dumps({"error": str(e)}).encode(), "application/json"
+        elif self.path.startswith("/api/leadtime"): body, ct = json.dumps(lead_zoom(self.path.partition("?")[2])).encode(), "application/json"   # the control chart over a dragged range (#900)
         elif self.path.startswith("/api/version"): body, ct = json.dumps({"v": BOOT}).encode(), "application/json"
         elif self.path.startswith("/api/subs"): body, ct = json.dumps({**subs_month(), "presets": {k: {i: {"name": n, "usd": p} for i, (n, p) in v.items()} for k, v in PRESETS.items()}}).encode(), "application/json"
         elif self.path.startswith("/api/models"): body, ct = json.dumps(models_get()).encode(), "application/json"
+        elif self.path.startswith("/api/limits"): body, ct = json.dumps(limits_read()).encode(), "application/json"   # Settings > Spend & limits (#926)
         elif self.path.startswith("/api/speed"): body, ct = json.dumps(speed()).encode(), "application/json"
         elif self.path.startswith("/api/load"): body, ct = json.dumps(load_payload()).encode(), "application/json"
         elif self.path.startswith("/api/status"): body, ct = json.dumps(status_payload()).encode(), "application/json"
@@ -4689,13 +5077,14 @@ class H(BaseHTTPRequestHandler):
             if not (a.tailnet or own_origin(self)) or "json" not in (self.headers.get("Content-Type") or ""): return self.refuse("forbidden")
             return self.dash("POST", raw)
         if self.path.split("?", 1)[0] == "/api/sessions/send": return self.send_to_session(a)
-        ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote") and (a.tailnet or own_origin(self)) and "json" in (self.headers.get("Content-Type") or "")
+        ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote", "/api/limits") and (a.tailnet or own_origin(self)) and "json" in (self.headers.get("Content-Type") or "")
         try:
             raw = self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 1 << 20))   # read before any answer: a refusal that leaves the body unread resets the connection; the models panel posts back ~20 KB of read-only fields (#684)
             if not ok: out = {"err": "forbidden"}
             else:
                 body = json.loads(raw or b"{}")
                 if self.path == "/api/promote": out = promote(body.get("issue")) if isinstance(body, dict) else {"err": "bad request"}   # the owner's move (#560)
+                elif self.path == "/api/limits": out = limits_set(body)   # Settings > Spend & limits (#926)
                 else: out = (plans_set if self.path == "/api/plans" else models_set)(body)
         except Exception as e: out = {"err": "bad request"}
         if not a.allowed and a.tailnet: return self.refuse(a.reason)

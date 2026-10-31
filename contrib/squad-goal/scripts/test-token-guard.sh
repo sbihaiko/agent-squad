@@ -1,6 +1,8 @@
 #!/bin/bash
 # The token guard (token-guard.sh): a burn over the cap is a report line and one alert, never a stop. Dispatch pauses only
 # while the burn over the last hour stays over 3x the cap's hourly share, and it resumes by itself once that burn falls under the cap.
+# The off switch (#926): the profile the guard reads names SG_TOKEN_GUARD=off, and the pass writes nothing and pauses
+# nothing. The profile is sourced on every pass, so a changed cap, factor or switch is read on the guard's next pass.
 # Offline: no network, a stub env.sh, a temp state dir and a ledger written by hand. usage: bash test-token-guard.sh [token-guard.sh]
 d=$(cd "$(dirname "$0")" && pwd); src=${1:-$d/token-guard.sh}; T=$(mktemp -d); trap 'rm -rf "$T"' EXIT; fail=0
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
@@ -133,6 +135,40 @@ o=$(SG_STATE="$T/empty" bash "$G" 2>&1); rc=$?
 # a missing state dir: exit 0
 o=$(SG_STATE="$T/nosuch" bash "$G" 2>&1); rc=$?
 [ $rc = 0 ] && [ -z "$o" ] && ok "a missing state dir: exit 0" || ko "no dir: rc=$rc out=$o"
+
+# The off switch (#926): the owner turns the guard off in the hub, which writes the profile the guard reads on its next
+# pass. Off: no report, no alert, no pause, and a pause that stands clears on this pass, so dispatch resumes.
+printf 'SG_TOKEN_GUARD=off\n' > "$T/s/env.sh"
+rm -f "$L" "$AL" "$O" "$P"; marker 3700; line "$(now)" review:OFF claude:opus 2000000 500000 0; printf 'paused\n' > "$P"
+o=$(guard); rc=$?
+[ $rc = 0 ] && [ -z "$o" ] && ok "the guard off: exit 0 and no report" || ko "off: rc=$rc out=$o"
+[ ! -e "$P" ] && ok "the guard off clears a standing pause on its next pass" || ko "off left the pause marker"
+[ ! -e "$O" ] && ok "the guard off writes no over-cap marker" || ko "off wrote token-over"
+[ ! -e "$AL" ] && ok "the guard off writes no alert" || ko "off wrote an alert: $(cat "$AL" 2>/dev/null)"
+# the same burn with the guard on again is a pause: off was the only cause
+printf 'SG_TOKEN_GUARD=on\n' > "$T/s/env.sh"
+o=$(guard); rc=$?
+[ $rc = 1 ] && [ -e "$P" ] && ok "the guard on again pauses the same burn" || ko "on again: rc=$rc out=$o"
+
+# A changed cap takes effect on the guard's next pass, with no restart: same ledger, same marker, another profile.
+printf 'SG_TOKEN_BURN_CAP=1000\n' > "$T/s/env.sh"
+rm -f "$L" "$AL" "$O" "$P"; marker 10; line "$(now)" review:PCAP claude:opus 400 200 0
+o=$(guard); rc=$?
+[ $rc = 0 ] && [ -z "$o" ] && ok "the cap the profile names holds a burn under it" || ko "profile cap: rc=$rc out=$o"
+printf 'SG_TOKEN_BURN_CAP=500\n' > "$T/s/env.sh"
+o=$(guard); rc=$?
+[ $rc = 2 ] && ok "a changed cap takes effect on the next pass" || ko "changed cap: rc=$rc out=$o"
+case "$o" in *500*) ok "the report names the changed cap";; *) ko "changed cap not named: $o";; esac
+
+# A changed pause factor takes effect on the guard's next pass too, read from the profile.
+printf 'SG_TOKEN_BURN_CAP=6000000\nSG_TOKEN_PAUSE_FACTOR=5\n' > "$T/s/env.sh"   # share 250000/h, so 5x is 1250000
+rm -f "$L" "$AL" "$O" "$P"; marker 3700; line "$(now)" review:PFACT claude:opus 300000 0 0
+o=$(guard); rc=$?
+[ $rc = 0 ] && [ ! -e "$P" ] && ok "the profile's pause factor holds an hour under it" || ko "profile factor: rc=$rc out=$o"
+printf 'SG_TOKEN_BURN_CAP=6000000\nSG_TOKEN_PAUSE_FACTOR=1\n' > "$T/s/env.sh"   # 1x is 250000, and the hour is 300000
+o=$(guard); rc=$?
+[ $rc = 1 ] && [ -e "$P" ] && ok "a changed pause factor takes effect on the next pass" || ko "changed factor: rc=$rc out=$o"
+: > "$T/s/env.sh"
 
 # the cap may come from the profile (env.sh) but the environment still wins
 printf ': "${SG_TOKEN_BURN_CAP:=500}"\n' > "$T/s/env.sh"

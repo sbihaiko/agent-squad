@@ -1,20 +1,41 @@
 // --- the run folder: one read-only handle, remembered in this browser (decisions #62, #63; ticket #76) ---
-// A source is {name, graph(), record()}: each returns the file text, or null when the folder has no such file.
+// A source is {name, paths, graph(), record(), issues()}: each returns the file text, or null when the folder has no such
+// file; `paths` names the file a read opens, so a slow or failed read says what it reads.
+function sourcePath(src, key, fallback) { return (src.paths && src.paths[key]) || src.name + "/" + fallback; }
 async function loadRunSource(src) {
-  const rec = await src.record();
-  if (rec === null) { setStatus(`No record.jsonl in ${src.name} (looked at the folder and at run/).`, true); return false; }
+  S.src = src;
+  const recPath = sourcePath(src, "record", "record.jsonl");
+  readStart("record", recPath); render();   // the panel and the top bar say what they are reading, never a blank page
+  let rec = null, why = null;
+  try { rec = await src.record(); } catch (e) { why = e.message || String(e); }
+  if (why !== null) { readFail("record", recPath, why); setStatus(`Could not read ${recPath}: ${why}`, true); render(); return false; }
+  if (rec === null) { readFail("record", recPath, "there is no such file in the folder"); setStatus(`No record.jsonl in ${src.name} (looked at the folder and at run/).`, true); render(); return false; }
   const pr = core.parseLive(rec);
-  if (pr.error) { setStatus(pr.error, true); return false; }
+  if (pr.error) { readFail("record", recPath, pr.error); setStatus(pr.error, true); render(); return false; }
+  readSettle("record");
   S.events = pr.events; S.recordBad = pr.bad || null; S.cursor = null; S.expanded = [];   // a new run starts with every group collapsed
   // The issue set lives in the run folder, not the record: count target/issues for the top bar's total.
-  S.issueTotal = src.issues ? await src.issues() : null;
+  S.issueTotal = null;
+  if (src.issues) {
+    const issuePath = sourcePath(src, "issues", "target/issues");
+    readStart("issues", issuePath);
+    try { S.issueTotal = await src.issues(); readSettle("issues"); } catch (e) { readFail("issues", issuePath, e.message || String(e)); }
+  }
   if (src.live) startFollow(src, rec); else stopFollow();
-  const g = await src.graph();
-  if (g === null || !(await loadGraph(g, src.name + "/graph.json"))) { await recompute(); if (g !== null) return true; }
+  const graphPath = sourcePath(src, "graph", "graph.json");
+  readStart("graph", graphPath);
+  let g = null, gwhy = null;
+  try { g = await src.graph(); } catch (e) { gwhy = e.message || String(e); }
+  if (gwhy !== null) readFail("graph", graphPath, gwhy);
+  else if (g === null) readFail("graph", graphPath, "the folder has no such file");
+  else readSettle("graph");
+  if (g === null || !(await loadGraph(g, graphPath))) { await recompute(); if (g !== null) return true; }
   // A short toast: the folder name is already in the top bar, and a push or a reread needs no words after the load.
   setStatus((S.ended ? "This run ended. " : "") + `Opened run ${pr.events[0].run_id} (read-only).` + (src.live ? "" : " A folder list is a snapshot: connect the folder to follow a live run.") + (g === null ? " The folder has no graph.json: open the graph to see the nodes." : ""));
   return true;
 }
+// The one retry a run's read offers: read the same source again. A folder the browser denies stays reachable by Connect.
+RETRY.run = () => { if (S.src) loadRunSource(S.src); };
 // While a run lives, the page follows it one of two ways. A source with a `stream` is followed by push: each pushed event extends the
 // record and paints. A source with none (the folder handle, the folder list) is followed by the timer: it rereads the record through
 // its read-only handle. The interval is the engine's (run_start), and no control in the page sets it (tickets #80, #106).
@@ -59,15 +80,16 @@ function startTimer(src, firstText, keepPush) {
 function handleSource(dir) {
   const read = async (d, nm) => { try { return await (await (await d.getFileHandle(nm)).getFile()).text(); } catch (e) { return null; } };
   const countIssues = async () => { try { const t = await dir.getDirectoryHandle("target"); const i = await t.getDirectoryHandle("issues"); let n = 0; for await (const [nm, h] of i.entries()) if (h.kind === "file" && nm.endsWith(".md")) n++; return n || null; } catch (e) { return null; } };
-  return { name: dir.name, live: true, issues: countIssues, graph: () => read(dir, "graph.json"),
+  return { name: dir.name, live: true, paths: { record: `${dir.name}/record.jsonl`, graph: `${dir.name}/graph.json`, issues: `${dir.name}/target/issues` }, issues: countIssues, graph: () => read(dir, "graph.json"),
     record: async () => { const r = await read(dir, "record.jsonl"); if (r !== null) return r; try { return await read(await dir.getDirectoryHandle("run"), "record.jsonl"); } catch (e) { return null; } } };
 }
 function fileListSource(files) {
   const rel = (f) => f.webkitRelativePath.split("/").slice(1).join("/");
+  const name = files.length ? files[0].webkitRelativePath.split("/")[0] : "folder";
   const find = (p) => files.find((f) => rel(f) === p);
   const text = async (f) => f ? await readFile(f) : null;
   const countIssues = async () => { const n = files.filter((f) => /^target\/issues\/[^/]+\.md$/.test(rel(f))).length; return n || null; };
-  return { name: files.length ? files[0].webkitRelativePath.split("/")[0] : "folder", issues: countIssues, graph: () => text(find("graph.json")), record: async () => (await text(find("record.jsonl"))) ?? (await text(find("run/record.jsonl"))) };
+  return { name, paths: { record: `${name}/record.jsonl`, graph: `${name}/graph.json`, issues: `${name}/target/issues` }, issues: countIssues, graph: () => text(find("graph.json")), record: async () => (await text(find("record.jsonl"))) ?? (await text(find("run/record.jsonl"))) };
 }
 const IDB_NAME = "agent-squad-run-dashboard", IDB_KEY = "run-folder";
 const idb = (mode, fn) => new Promise((ok, no) => {

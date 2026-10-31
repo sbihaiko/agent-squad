@@ -13,6 +13,9 @@
   .tools { display:flex; flex-wrap:wrap; gap:6px; }
   button, label.btn, textarea, select, input[type=text], input:not([type]) { background:#0c0e12; color:var(--fg); border:1px solid var(--line); border-radius:4px; padding:4px 8px; font:var(--fs-min) var(--font-mono); }
   button, label.btn { cursor:pointer; }
+  /* A file label wraps a hidden input; it takes the same tap height as a button only as a flex box, since min-height has no
+     effect on an inline one. */
+  label.btn { display:inline-flex; align-items:center; justify-content:center; min-height:var(--ctl-h); }
   .row { display:flex; gap:6px; align-items:center; margin:4px 0; }
   .row input { flex:1; min-width:0; }
   button:hover, label.btn:hover { border-color:var(--acc); }
@@ -52,6 +55,12 @@
   .note { color:var(--mute); font-size:var(--fs-min); }
   .msg-bad { color:var(--err); }
   .msg-ok { color:var(--ok); }
+  /* A list or panel that is reading, that holds nothing, or that failed says so in place: one marker, one look per state (SPEC 889). */
+  .state { padding:6px 8px; border:1px dashed var(--line); border-radius:4px; font:var(--fs-min)/1.5 var(--font-mono); color:var(--mute); }
+  .state-loading { color:var(--acc); }
+  .state-empty { color:var(--mute); font-style:italic; }
+  .state-error { color:var(--err); border-color:var(--err); }
+  .state-retry { margin-left:6px; }
   #graph { display:flex; flex-direction:column; min-width:0; min-height:0; }
   #mapbox { position:relative; flex:1; min-width:0; min-height:0; }
   #recbad { flex:none; padding:6px 14px; background:#2a2212; border-bottom:2px solid var(--warn); color:var(--warn); font-size:var(--fs-min); font-weight:600; }
@@ -107,6 +116,14 @@
   .card .rw { fill:var(--ok); font-size:var(--fs-min); font-weight:600; }   /* a redo that passed, or a later attempt */
   .card.child.superseded > g { opacity:.72; }   /* a failed attempt a later one replaced: still failed, only quieter */
   .card .gl { fill:var(--mute); font:bold var(--fs-body) sans-serif; pointer-events:none; }   /* the state glyph: status is never hue alone */
+/* The kind icon (#914): one color per kind, a glyph in the chip. The chip carries no stroke of its own, even when the card is selected. */
+.card .kc { stroke:none; fill:var(--mute); }
+.card .ki { fill:#0d1117; font:bold 13px sans-serif; pointer-events:none; }
+.card.k-agent .kc { fill:#7aa2f7; } .card.k-gate .kc { fill:#bb9af7; } .card.k-action .kc { fill:#73daca; }
+.card.k-wait .kc { fill:#ff9e64; } .card.k-loop .kc { fill:#7dcfff; } .card.k-each .kc { fill:#c0caf5; }
+.card.k-dispatch .kc { fill:#e0af68; }
+/* The model line (#914): its own row, a little smaller than the other card text, so a typical name fits without a cut. */
+.card .kd.model { font-size:var(--fs-min,13px); }
   pre.ev { margin:4px 0 8px; padding:6px; background:#07090c; border:1px solid var(--line); border-radius:4px; font:var(--fs-min)/1.4 var(--font-mono); white-space:pre-wrap; word-break:break-all; max-height:200px; overflow:auto; color:#e8b9b9; }
   .cause { margin-top:6px; } .cause b.bad { color:var(--err); }
   #edges g.edge.child { pointer-events:none; }
@@ -250,13 +267,25 @@
 /* Under 900px the drawer becomes a bottom sheet: full width, 52vh tall, and the grip turns sideways between 30vh and 75vh.
    The map reserves the sheet's height, and the footer row — the hint and the replay bar together — rises clear of it. */
 @media (max-width: 900px) {
-  body { --side-w:52vh; --side-min:30vh; --side-max:75vh; }
+  body { --side-w:52vh; --side-min:30vh; --side-max:75vh; grid-template-rows:auto 1fr; }
+  /* The top bar wraps to as many rows as its controls need (#916). The map's row is the rest of the screen, so the page
+     never runs sideways at a tablet or phone width; #left docks below this breakpoint, so its top edge follows no fixed bar height. */
+  #topbar { height:auto; min-height:37px; flex-wrap:wrap; row-gap:6px; }
   #left { top:auto; left:0; right:0; width:auto; height:var(--side-w,52vh); border-top:1px solid var(--line); border-left:0; }
   #side-grip { top:auto; bottom:calc(var(--side-w,52vh) - 8px); left:0; right:0; width:auto; height:8px; cursor:row-resize; }
   #left::before { top:auto; bottom:var(--side-w,52vh); left:0; right:0; width:auto; height:8px; cursor:row-resize; }
   body:not(.noside) #mapbox { padding-bottom:52vh; }
   body:not(.noside) #view { right:12px; }
   body:not(.noside) #footer { bottom:calc(var(--side-w,52vh) + 10px); right:12px; }   /* the whole row clears the sheet: the bar rides in it, and the sheet takes no width off the row */
+}
+
+/* A phone (#916): the footer row keeps only the transport, which may wrap inside its middle column, and the hint goes;
+   a file-menu label takes the phone's own tap height. The top bar already wraps under the 900px side-panel breakpoint,
+   so nothing here adds width. */
+@media (max-width: 600px) {
+  #hint { display:none; }
+  #replay { flex-wrap:wrap; }
+  label.btn { min-height:var(--ctl-h-phone); }
 }
 
 /* The single-card mode (#1782): `?card=<name>` paints ONE card of the panel and nothing else, for the second view the

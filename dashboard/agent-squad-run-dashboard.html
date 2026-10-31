@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>agent-squad-run-dashboard</title>
 <style>
 :root{--bg:#0f1115;--panel:#161a21;--line:#2a303b;--input:#0f1115;--fg:#d8dde6;--mute:#8a93a3;--acc:#5aa9ff;--ok:#3ecf8e;--warn:#f5b041;--wait:#e8d44d;--err:#ff6b6b;--run:#2dd4bf;--none:#b79cf6;--drop:#c678dd;--font-ui:system-ui,-apple-system,"Segoe UI",sans-serif;--font-mono:ui-monospace,SFMono-Regular,Menlo,monospace;--fs-min:13px;--fs-body:15px;--fs-md:17px;--fs-xl:21px;--ctl-h:32px;--ctl-h-phone:44px;--focus-w:2px;--focus:var(--acc);color-scheme:dark}
@@ -24,6 +25,9 @@ select,input,textarea{background:var(--input);color:var(--fg);border:1px solid v
   .tools { display:flex; flex-wrap:wrap; gap:6px; }
   button, label.btn, textarea, select, input[type=text], input:not([type]) { background:#0c0e12; color:var(--fg); border:1px solid var(--line); border-radius:4px; padding:4px 8px; font:var(--fs-min) var(--font-mono); }
   button, label.btn { cursor:pointer; }
+  /* A file label wraps a hidden input; it takes the same tap height as a button only as a flex box, since min-height has no
+     effect on an inline one. */
+  label.btn { display:inline-flex; align-items:center; justify-content:center; min-height:var(--ctl-h); }
   .row { display:flex; gap:6px; align-items:center; margin:4px 0; }
   .row input { flex:1; min-width:0; }
   button:hover, label.btn:hover { border-color:var(--acc); }
@@ -63,6 +67,12 @@ select,input,textarea{background:var(--input);color:var(--fg);border:1px solid v
   .note { color:var(--mute); font-size:var(--fs-min); }
   .msg-bad { color:var(--err); }
   .msg-ok { color:var(--ok); }
+  /* A list or panel that is reading, that holds nothing, or that failed says so in place: one marker, one look per state (SPEC 889). */
+  .state { padding:6px 8px; border:1px dashed var(--line); border-radius:4px; font:var(--fs-min)/1.5 var(--font-mono); color:var(--mute); }
+  .state-loading { color:var(--acc); }
+  .state-empty { color:var(--mute); font-style:italic; }
+  .state-error { color:var(--err); border-color:var(--err); }
+  .state-retry { margin-left:6px; }
   #graph { display:flex; flex-direction:column; min-width:0; min-height:0; }
   #mapbox { position:relative; flex:1; min-width:0; min-height:0; }
   #recbad { flex:none; padding:6px 14px; background:#2a2212; border-bottom:2px solid var(--warn); color:var(--warn); font-size:var(--fs-min); font-weight:600; }
@@ -118,6 +128,14 @@ select,input,textarea{background:var(--input);color:var(--fg);border:1px solid v
   .card .rw { fill:var(--ok); font-size:var(--fs-min); font-weight:600; }   /* a redo that passed, or a later attempt */
   .card.child.superseded > g { opacity:.72; }   /* a failed attempt a later one replaced: still failed, only quieter */
   .card .gl { fill:var(--mute); font:bold var(--fs-body) sans-serif; pointer-events:none; }   /* the state glyph: status is never hue alone */
+/* The kind icon (#914): one color per kind, a glyph in the chip. The chip carries no stroke of its own, even when the card is selected. */
+.card .kc { stroke:none; fill:var(--mute); }
+.card .ki { fill:#0d1117; font:bold 13px sans-serif; pointer-events:none; }
+.card.k-agent .kc { fill:#7aa2f7; } .card.k-gate .kc { fill:#bb9af7; } .card.k-action .kc { fill:#73daca; }
+.card.k-wait .kc { fill:#ff9e64; } .card.k-loop .kc { fill:#7dcfff; } .card.k-each .kc { fill:#c0caf5; }
+.card.k-dispatch .kc { fill:#e0af68; }
+/* The model line (#914): its own row, a little smaller than the other card text, so a typical name fits without a cut. */
+.card .kd.model { font-size:var(--fs-min,13px); }
   pre.ev { margin:4px 0 8px; padding:6px; background:#07090c; border:1px solid var(--line); border-radius:4px; font:var(--fs-min)/1.4 var(--font-mono); white-space:pre-wrap; word-break:break-all; max-height:200px; overflow:auto; color:#e8b9b9; }
   .cause { margin-top:6px; } .cause b.bad { color:var(--err); }
   #edges g.edge.child { pointer-events:none; }
@@ -261,13 +279,25 @@ select,input,textarea{background:var(--input);color:var(--fg);border:1px solid v
 /* Under 900px the drawer becomes a bottom sheet: full width, 52vh tall, and the grip turns sideways between 30vh and 75vh.
    The map reserves the sheet's height, and the footer row — the hint and the replay bar together — rises clear of it. */
 @media (max-width: 900px) {
-  body { --side-w:52vh; --side-min:30vh; --side-max:75vh; }
+  body { --side-w:52vh; --side-min:30vh; --side-max:75vh; grid-template-rows:auto 1fr; }
+  /* The top bar wraps to as many rows as its controls need (#916). The map's row is the rest of the screen, so the page
+     never runs sideways at a tablet or phone width; #left docks below this breakpoint, so its top edge follows no fixed bar height. */
+  #topbar { height:auto; min-height:37px; flex-wrap:wrap; row-gap:6px; }
   #left { top:auto; left:0; right:0; width:auto; height:var(--side-w,52vh); border-top:1px solid var(--line); border-left:0; }
   #side-grip { top:auto; bottom:calc(var(--side-w,52vh) - 8px); left:0; right:0; width:auto; height:8px; cursor:row-resize; }
   #left::before { top:auto; bottom:var(--side-w,52vh); left:0; right:0; width:auto; height:8px; cursor:row-resize; }
   body:not(.noside) #mapbox { padding-bottom:52vh; }
   body:not(.noside) #view { right:12px; }
   body:not(.noside) #footer { bottom:calc(var(--side-w,52vh) + 10px); right:12px; }   /* the whole row clears the sheet: the bar rides in it, and the sheet takes no width off the row */
+}
+
+/* A phone (#916): the footer row keeps only the transport, which may wrap inside its middle column, and the hint goes;
+   a file-menu label takes the phone's own tap height. The top bar already wraps under the 900px side-panel breakpoint,
+   so nothing here adds width. */
+@media (max-width: 600px) {
+  #hint { display:none; }
+  #replay { flex-wrap:wrap; }
+  label.btn { min-height:var(--ctl-h-phone); }
 }
 
 /* The single-card mode (#1782): `?card=<name>` paints ONE card of the panel and nothing else, for the second view the
@@ -490,10 +520,24 @@ function canonModule(ENGINE) {
     return { doc };
   }
 
+  // The workflow a `squad editor` link names in its fragment: { name, text }; null when there is none; { error } when it cannot be read.
+  function openedWorkflow(hash) {
+    const m = /^#workflow=(.+)$/.exec(hash);
+    if (!m) return null;
+    let got = null;
+    try {
+      const b64 = m[1].replace(/-/g, "+").replace(/_/g, "/");
+      const bytes = Uint8Array.from(atob(b64.padEnd(Math.ceil(b64.length / 4) * 4, "=")), (c) => c.charCodeAt(0));
+      got = JSON.parse(new TextDecoder().decode(bytes));
+    } catch (e) { got = null; }
+    if (!isObj(got) || typeof got.name !== "string" || typeof got.text !== "string") return { error: "The workflow in this link could not be read; use Open graph." };
+    return { name: got.name, text: got.text };
+  }
+
   const same = (a, b) => canonText(a) === canonText(b);
   const clone = (v) => JSON.parse(JSON.stringify(v));
 
-  return { isObj, same, clone, pyFloat, pyInt, pyString, cmpCodePoints, canonText, canonFromText, sha256Hex, graphHash, parseImport };
+  return { isObj, same, clone, pyFloat, pyInt, pyString, cmpCodePoints, canonText, canonFromText, sha256Hex, graphHash, parseImport, openedWorkflow };
 }
 
 // Dashboard core module: The numbers every read module sums, and the token and timeline figures of a record.. Moved from rest.js with no change.
@@ -760,6 +804,17 @@ function childrenModule({ num, openCalls, orNull, skillName }) {
     const first = found.sort((a, b) => a.index - b.index)[0];
     return first ? Number(first[1]) : null;
   };
+  // Every issue one child works (#954): a cluster dispatch packs several into one child, and its own form is
+  // "GitHub issue(s) 897, 908, 910". Only that form counts, so a blocker the pasted ticket text quotes is not the
+  // child's work. Empty when the text carries no cluster form.
+  const issueNumbers = (prompt) => {
+    const t = typeof prompt === "string" ? prompt : "";
+    const out = [];
+    const re = /GitHub issues?(?:\s*\(s\))?\s*#?([0-9][0-9,\s]*)/g;
+    let m;
+    while ((m = re.exec(t))) for (const x of m[1].split(/[^0-9]+/)) if (x && !out.includes(Number(x))) out.push(Number(x));
+    return out;
+  };
 
   // A dispatch child's short name for display: route.router.1 -> router.1. The full name stays in the tooltip.
   const shortChildName = (name, dispatch) => (typeof name === "string" && typeof dispatch === "string" && name.startsWith(dispatch + ".") ? name.slice(dispatch.length + 1) : name);
@@ -795,14 +850,14 @@ function childrenModule({ num, openCalls, orNull, skillName }) {
       const evidence = landFailed && l.effect && l.effect.stderr ? Object.fromEntries(reasons.map((r) => [r, l.effect.stderr])) : o && o.evidence ? o.evidence : null;
       const checks = o && o.checks ? o.checks : null;
       const short = shortChildName(a.child, a.envelope);   // the display name: route.router.1 -> router.1
-      const issue = issueNumber(d.prompt), skill = skillName(d.skill);
+      const issue = issueNumber(d.prompt), issues = issueNumbers(d.prompt), skill = skillName(d.skill);
       return { name: a.child, dispatch: a.envelope, proposer: orNull(a.parent), depth: orNull(a.depth), rejected: false, outcome, reasons, evidence, checks, issue, task: orNull(d.task),
         review: childReview(events, a.child, l),
         running_for: run ? run.running_for : null, live: run ? run.live : null,   // a child in flight: how long it has run, and what it last reported
         skill: orNull(d.skill), skillLabel: skill,   // the bare skill name, for the detail line
         // The task first: every child of one dispatch usually runs the same skill, so the skill alone tells no two children
         // apart, while the issue does. A child with no task falls back to its skill, then to its own name.
-        label: issue === null ? skill || short : `issue #${issue}`,
+        label: issues.length > 1 ? `issues ${issues.map((x) => `#${x}`).join(', ')}` : issue === null ? skill || short : `issue #${issue}`,
         model: o && o.model ? o.model : orNull(d.model), effort: o && o.effort ? o.effort : orNull(d.effort), after: Array.isArray(d.after) ? d.after : [],
         workspace: orNull(d.workspace), spend: o ? orNull(o.spend) : null, turns: o ? orNull(o.turns) : null, elapsed: o ? orNull(o.elapsed) : null,
         tokens_in: o ? orNull(o.tokens_in) : null, tokens_out: o ? orNull(o.tokens_out) : null, tps: o && num(o.tokens_out) && num(o.elapsed) && o.elapsed > 0 ? o.tokens_out / o.elapsed : null,
@@ -927,7 +982,7 @@ function childrenModule({ num, openCalls, orNull, skillName }) {
     return (dn && dn.entry && layout[dn.entry]) || layout[dispatchName] || null;
   }
 
-  return { issueNumber, shortChildName, runChildren, skillLabel, CHILD_COLUMN_HEIGHT, childLayout, dispatchChecks, freeSpot, childAnchor };
+  return { issueNumber, issueNumbers, shortChildName, runChildren, skillLabel, CHILD_COLUMN_HEIGHT, childLayout, dispatchChecks, freeSpot, childAnchor };
 }
 
 // Dashboard core module: The one state a card shows, and the class it paints.. Moved from rest.js with no change.
@@ -1771,6 +1826,7 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
     { id: "gate", title: "Gate (read-only)", open: true, keys: ["check", "params"] },
   ];
   const GROUPED = new Set(GROUPS.flatMap((g) => g.keys));
+  const STRUCTURED = new Set(["budget", "next", "adapt", "when"]);
   const SUGGEST = { model: "models", effort: "efforts", tools: "tools", skill: "skills" };
 
   function propsOf(kind) {
@@ -1782,6 +1838,7 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
   function fieldType(key, prop0) {
     if (key === "instructions") return "area";
     if (key === "name" || key === "kind") return "text";
+    if (STRUCTURED.has(key)) return "structured";
     const prop = prop0 && prop0.$ref ? resolve(prop0.$ref, SCHEMA.$defs) : prop0;
     if (!prop) return "json";
     if (prop.enum) return "enum";
@@ -1800,6 +1857,35 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
     return JSON.stringify(v, null, 2);
   }
 
+  // The parts of a nested field, read from the schema: each part is one input at a path in the field's object.
+  function partsOf(key, prop0) {
+    const prop = prop0.$ref ? resolve(prop0.$ref, SCHEMA.$defs) : prop0;
+    const sub = (q) => (q.$ref ? resolve(q.$ref, SCHEMA.$defs) : q);
+    const parts = [];
+    if (key === "budget") {
+      for (const cap of Object.keys(prop.properties))
+        for (const [k, q0] of Object.entries(sub(prop.properties[cap]).properties)) {
+          const q = sub(q0);
+          parts.push({ path: `${cap}.${k}`, label: `${cap} ${k}`, input: q.type === "integer" ? "int" : "num" });
+        }
+    } else if (key === "next") {
+      for (const o of Object.keys(prop.properties)) parts.push({ path: o, label: o, input: "select", choices: sub(prop.properties[o]).enum });
+    } else if (key === "adapt") {
+      for (const [k, q0] of Object.entries(prop.properties)) {
+        const q = sub(q0);
+        if (q.type === "array" && q.items.enum) parts.push({ path: k, label: k, input: "check", choices: q.items.enum });
+        else if (q.type === "array") parts.push({ path: k, label: k, input: "list" });
+      }
+    } else if (key === "when") {
+      for (const [k, q0] of Object.entries(prop.properties)) {
+        const q = sub(q0);
+        if (q.enum) parts.push({ path: k, label: k, input: "select", choices: q.enum });
+        else parts.push({ path: k, label: k, input: k === "value" ? "any" : "text" });
+      }
+    }
+    return parts;
+  }
+
   function fieldGroups(n) {
     const props = propsOf(n.kind);
     const out = [];
@@ -1810,6 +1896,7 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
         const type = fieldType(k, props[k]);
         const f = { key: k, type, present: k in n, value: shown(type, n[k]) };
         if (type === "enum") f.enum = (props[k].$ref ? resolve(props[k].$ref, SCHEMA.$defs) : props[k]).enum;
+        if (type === "structured") f.parts = partsOf(k, props[k]);
         if (SUGGEST[k]) f.suggest = SUGGEST[k];
         if (k === "name" || k === "kind" || (n.kind === "gate" && (k === "check" || k === "params"))) f.readonly = true;
         return f;
@@ -2071,7 +2158,10 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
   // The top-level fields a person may not change: the two registries.
   const READ_ONLY_TOP = ["facts", "gates"];
 
-  return { applyNodeEdit, fieldGroups, setField, addNode, removeNode, reviewGate, connect, disconnect, renameNode, layoutRename, changeKind, unseenValues, READ_ONLY_TOP };
+  // Every kind, with the node's own kind selected, so the change-kind select shows what the node is now.
+  const kindChoices = (current) => KINDS.map((kind) => ({ kind, selected: kind === current }));
+
+  return { applyNodeEdit, fieldGroups, setField, addNode, removeNode, reviewGate, connect, disconnect, renameNode, layoutRename, changeKind, kindChoices, unseenValues, READ_ONLY_TOP };
 }
 
 // Dashboard core module: layout and view: auto layout, layout for save, fit, zoom, pan. A factory: it takes what it uses from the modules below it, and returns its functions. No DOM here.
@@ -2166,7 +2256,32 @@ function layoutModule() {
     return dx || dy ? viewPanBy(v, dx, dy) : v;
   }
 
-  return { autoLayout, graphKids, layoutForSave, viewFit, viewFitFloor, viewZoomAt, viewPanBy, viewReveal };
+  // Edge routes: one orthogonal polyline per graph edge, in the order of `pairs` ({from, to}). Each edge owns its leaving port and
+  // its entering port (rows PORT_STEP px apart, leaving in the upper half of the box and entering in the lower half) and its own vertical lane in the gap between columns, so
+  // no two edges share a port or a segment. Lanes are counted per source column: a column of sources uses LANE_SLOTS lanes, then
+  // repeats. A segment is {x1, y1, x2, y2, arrow}; only the last segment of a route carries the arrow.
+  const PORT_STEP = 8, LANE_BASE = 8, LANE_STEP = 3, LANE_SLOTS = 6, STUB = 3;
+  function edgeRoutes(layout, pairs, box) {
+    const live = (pairs || []).filter((p) => layout && layout[p.from] && layout[p.to]);
+    const outN = {}, inN = {};
+    for (const p of live) { outN[p.from] = (outN[p.from] || 0) + 1; inN[p.to] = (inN[p.to] || 0) + 1; }
+    // A leaving edge uses the upper band of its node, an entering edge the lower band, so an exit and an entry in one gap rarely share a row.
+    const portY = (i, n, mid) => Math.min(mid + PORT_STEP * 1.5, Math.max(mid - PORT_STEP * 1.5, mid + (i - (n - 1) / 2) * PORT_STEP));
+    const seen = {}, lanes = {};
+    const take = (map, key) => { const i = map[key] || 0; map[key] = i + 1; return i; };
+    return live.map((p) => {
+      const a = layout[p.from], b = layout[p.to];
+      const oi = take(seen, "out:" + p.from), ii = take(seen, "in:" + p.to);
+      const y1 = a.y + portY(oi, outN[p.from], box.h / 4), y2 = b.y + portY(ii, inN[p.to], (3 * box.h) / 4);
+      const x1 = a.x + box.w, x2 = b.x - STUB;
+      const lane = take(lanes, String(a.x)) % LANE_SLOTS, xm = x1 + LANE_BASE + lane * LANE_STEP;
+      const pts = [[x1, y1], [xm, y1], [xm, y2], [x2, y2]];
+      const segs = pts.slice(1).map((q, i) => ({ x1: pts[i][0], y1: pts[i][1], x2: q[0], y2: q[1], arrow: i === pts.length - 2 }));
+      return { from: p.from, to: p.to, segs };
+    });
+  }
+
+  return { autoLayout, graphKids, layoutForSave, viewFit, viewFitFloor, viewZoomAt, viewPanBy, viewReveal, edgeRoutes };
 }
 
 // Dashboard core module: save gate, draft copy, hash chip, diff, declared caps, command template, review sheet. A factory: it takes what it uses from the modules below it, and returns its functions. No DOM here.
@@ -2308,6 +2423,23 @@ function sourcesModule({ STATES }) {
   // The legend and the help are data. The page draws a swatch as a card group, so the card CSS paints it, and a Python test
   // holds the legend to the colors the page paints and the help to the controls the page answers.
   // A row with a `glyph` draws it in the swatch: the same glyph the card carries, so the color is never the only cue.
+  // The icon of a node kind: one glyph and one class per kind, so a gate and an agent differ by shape as well as by color (#914).
+  // The class names the kind's chip color in page.css, and the legend lists the same seven. An unknown kind keeps a glyph and its own class; it never throws.
+  const KIND_LEGEND = [
+    { kind: "agent", glyph: "\u25c6", label: "Agent: calls a model" },
+    { kind: "gate", glyph: "\u2713", label: "Gate: a check that passes or fails" },
+    { kind: "action", glyph: "\u25b6", label: "Action: a fixed step, no model" },
+    { kind: "wait", glyph: "\u2016", label: "Wait: a person decides" },
+    { kind: "loop", glyph: "\u21bb", label: "Loop: repeats until it passes" },
+    { kind: "each", glyph: "\u2261", label: "Each: runs for every item" },
+    { kind: "dispatch", glyph: "\u21c9", label: "Dispatch: starts children" },
+  ];
+  // The seven kinds, one row each, in the legend's own "Node kinds" group: the states table stays the one list of card states.
+  const KIND_GLYPHS = Object.fromEntries(KIND_LEGEND.map((k) => [k.kind, k.glyph]));
+  function kindMark(kind) {
+    const k = typeof kind === "string" && kind ? kind : "unknown";
+    return { kind: k, glyph: KIND_GLYPHS[k] || "\u25cb", cls: `k-${k}` };
+  }
   const LEGEND = [
     ...STATES.filter((x) => x.legend).map((x) => ({ cls: x.cls, glyph: x.glyph, label: x.legend, group: "node" })),   // the card states: from the one STATES table
     { cls: "err", label: "Breaks a graph rule: fix it", group: "node" },   // an editor state (core.validate), never a record event: a run refuses a graph with one
@@ -2358,9 +2490,10 @@ function sourcesModule({ STATES }) {
   // The source of a run that a loopback server serves: fetch the record and the graph by path. A missing file is null, like the other sources.
   // `fetchFn(path)` returns {ok, text()}; the page passes fetch with no-store, a test passes a map.
   // `streamFn(path, handlers)` opens a push stream and returns {close()}; a source built with it offers `stream`.
+  // `paths` names the file each read opens, so a slow or failed read can say what it read.
   function httpSource(fetchFn, name, streamFn) {
     const get = async (p) => { try { const r = await fetchFn(p); return r && r.ok ? await r.text() : null; } catch (e) { return null; } };
-    const src = { name, live: true, graph: () => get("run/graph.json"), record: () => get("run/record.jsonl") };
+    const src = { name, live: true, paths: { record: "run/record.jsonl", graph: "run/graph.json" }, graph: () => get("run/graph.json"), record: () => get("run/record.jsonl") };
     if (typeof streamFn === "function") src.stream = (handlers) => streamFn("run/events", handlers);
     return src;
   }
@@ -2402,7 +2535,7 @@ function sourcesModule({ STATES }) {
     return { close: stop, handlers };
   }
 
-  return { LEGEND, LEGEND_CHIPS, RUN_STATES, STATE_TEXT, HELP, httpSource, followPush };
+  return { LEGEND, LEGEND_CHIPS, RUN_STATES, STATE_TEXT, HELP, httpSource, followPush, kindMark, KIND_LEGEND };
 }
 
 // Dashboard core module: Where a pause leaves the run.
@@ -2533,10 +2666,10 @@ function scriptModule() {
 // No DOM here. A test runs the bundle under node and compares it with the engine (tests/test_dashboard.py).
 // ENGINE comes from scripts/build_dashboard.py: the schema and the registries, read from the engine's own modules.
 function make(ENGINE) {
-  const { isObj, same, clone, pyFloat, canonText, canonFromText, graphHash, cmpCodePoints, parseImport } = canonModule(ENGINE);
+  const { isObj, same, clone, pyFloat, canonText, canonFromText, graphHash, cmpCodePoints, parseImport, openedWorkflow } = canonModule(ENGINE);
   const { SCHEMA, KINDS, resolve, validate } = schemaModule({ ENGINE, isObj, canonText, same, pyFloat });
-  const { applyNodeEdit, fieldGroups, setField, addNode, removeNode, reviewGate, connect, disconnect, renameNode, layoutRename, changeKind, unseenValues, READ_ONLY_TOP } = editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve });
-  const { autoLayout, graphKids, layoutForSave, viewFit, viewFitFloor, viewZoomAt, viewPanBy, viewReveal } = layoutModule();
+  const { applyNodeEdit, fieldGroups, setField, addNode, removeNode, reviewGate, connect, disconnect, renameNode, layoutRename, changeKind, kindChoices, unseenValues, READ_ONLY_TOP } = editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve });
+  const { autoLayout, graphKids, layoutForSave, viewFit, viewFitFloor, viewZoomAt, viewPanBy, viewReveal, edgeRoutes } = layoutModule();
   const { REVIEW_NOTE, diffGraphs, declaredCaps, commandTemplate, reviewSheet, saveText, hashChip, hashRelation, draftRecord, draftOffer, saveGate, saveMode } = reviewModule({ canonText, graphHash, cmpCodePoints });
   const { snapshot, histNew, histRecord, histUndo, histRedo } = historyModule({ clone });
   const { num, sumOf, orNull, lastOf, tokenFigures, runTimeline } = figuresModule();
@@ -2545,7 +2678,7 @@ function make(ENGINE) {
   const { reasonParts, causeSummary, failureCauses, skillName, nodeLabel } = failuresModule({ orNull });
   const { issueNumber, runChildren, skillLabel, CHILD_COLUMN_HEIGHT, childLayout, dispatchChecks, freeSpot, childAnchor } = childrenModule({ num, openCalls, orNull, skillName });
   const { OUTCOME_STATE, STATES, inFlight, isDone, isRunning, nodeState, stateClass, childStateClass } = stateModule({ num });
-  const { LEGEND, LEGEND_CHIPS, RUN_STATES, STATE_TEXT, HELP, httpSource, followPush } = sourcesModule({ STATES });
+  const { LEGEND, LEGEND_CHIPS, RUN_STATES, STATE_TEXT, HELP, httpSource, followPush, kindMark, KIND_LEGEND } = sourcesModule({ STATES });
   const { pauseView, controlBody } = controlModule({ lastOf });
   const { scriptDiagram, scriptSvg, guiRun } = scriptModule();
   const { runCap, runTotals, totalsCells, issueProgress, progressCells, fmt, nodeModel } = totalsModule({ lastOf, num, sumOf, tokenFigures, models: ENGINE.models });
@@ -2553,7 +2686,7 @@ function make(ENGINE) {
   const { stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus, CARD_NAMES, cardGroups, cardBody } = groupsModule({ OUTCOME_STATE, STATES, inFlight, isDone, isRunning, childAnchor, childLayout, fmt, freeSpot, num, sumOf });
   const { nodeHarness, runStats } = statsModule({ causeSummary, dispatchChecks, failureCauses, lastOf, liveState, num, openCalls, orNull, runCap, runChildren, runTimeline, runTotals, skillLabel, sumOf, tokenFigures });
 
-  return { scriptDiagram, scriptSvg, guiRun, pauseView, controlBody, LEGEND, LEGEND_CHIPS, RUN_STATES, STATE_TEXT, HELP, httpSource, followPush, snapshot, histNew, histRecord, histUndo, histRedo, REVIEW_NOTE, diffGraphs, declaredCaps, commandTemplate, reviewSheet, saveText, hashChip, hashRelation, draftRecord, draftOffer, layoutForSave, saveGate, saveMode, viewFit, viewFitFloor, viewZoomAt, viewPanBy, viewReveal, validate, canonText, canonFromText, graphHash, parseImport, parseRecord, parseLive, readDelay, liveState, replayAt, moveCursor, unresolvedChildren, overlayRows, overlayFor, runStats, runTotals, runCap, totalsCells, issueProgress, progressCells, nodeState, stateClass, childStateClass, inFlight, isRunning, graphKids, nodeLabel, issueNumber, reasonParts, causeSummary, failureCauses, runChildren, nodeHarness, nodeModel, childLayout, childAnchor, dispatchChecks, fmt, applyNodeEdit, reviewGate, fieldGroups, setField, addNode, removeNode, connect, disconnect, renameNode, layoutRename, changeKind, unseenValues, freeSpot, stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus, CARD_NAMES, cardGroups, cardBody, autoLayout, CHILD_COLUMN_HEIGHT, READ_ONLY_TOP, KINDS };
+  return { scriptDiagram, scriptSvg, guiRun, pauseView, controlBody, LEGEND, LEGEND_CHIPS, RUN_STATES, STATE_TEXT, HELP, httpSource, followPush, snapshot, histNew, histRecord, histUndo, histRedo, REVIEW_NOTE, diffGraphs, declaredCaps, commandTemplate, reviewSheet, saveText, hashChip, hashRelation, draftRecord, draftOffer, layoutForSave, saveGate, saveMode, viewFit, viewFitFloor, viewZoomAt, viewPanBy, viewReveal, validate, canonText, canonFromText, graphHash, parseImport, openedWorkflow, parseRecord, parseLive, readDelay, liveState, replayAt, moveCursor, unresolvedChildren, overlayRows, overlayFor, runStats, runTotals, runCap, totalsCells, issueProgress, progressCells, nodeState, stateClass, childStateClass, inFlight, isRunning, graphKids, nodeLabel, issueNumber, reasonParts, causeSummary, failureCauses, runChildren, nodeHarness, nodeModel, kindMark, KIND_LEGEND, edgeRoutes, childLayout, childAnchor, dispatchChecks, fmt, applyNodeEdit, reviewGate, fieldGroups, setField, addNode, removeNode, connect, disconnect, renameNode, layoutRename, changeKind, kindChoices, unseenValues, freeSpot, stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus, CARD_NAMES, cardGroups, cardBody, autoLayout, CHILD_COLUMN_HEIGHT, READ_ONLY_TOP, KINDS };
 }
 
 </script>
@@ -2573,11 +2706,13 @@ const GLYPH = { right: 9, top: 19 }, CLIP = { name: 22, cause: 25, harness: 30 }
 const READABLE_K = 0.7;
 // Card text rows (y) and left edge (x) inside a card of BOX size; the one place the card layout is named. CARD_GAP is the space between cards in a column.
 const TEXT = { x: 10, name: 19, kind: 34, line1: 46, line2: 57, cause: 56 }, CARD_GAP = 30;
+// A node card: the kind icon sits in a chip at the left of the name, so the name starts right of it. The model line is one row, fitted to MODEL_W.
+const KIND_CHIP = { x: 7, y: 5, w: 16 }, NODE_TEXT_X = 30, NODE_CLIP = { name: 19 }, MODEL_W = BOX.w - 16;
 // Pointer feel: a press that moves under DRAG_SLOP px is a click; one wheel pixel zooms by WHEEL_RATE (exponent); a zoom button steps by ZOOM_STEP; the fit never uses a map smaller than MIN_FIT px.
 const DRAG_SLOP = 3, WHEEL_RATE = 0.0015, ZOOM_STEP = 1.25, MIN_FIT = 120;
 const REPLAY_GAP = 24, REVEAL_INSET = 16, FOOTER_PAD = 12;
 
-const S = { recordBad: null, warnings: [], doc: null, text: "", name: "graph", layout: {}, selected: null, link: null, events: null, cursor: null, replay: null, overlay: null, stats: null, children: [], childPos: {}, expanded: [], groupOf: {}, lastTap: null, groups: [], groupPos: {}, groupPts: {}, groupSq: {}, folder: null, issueTotal: null, issueHeld: 0, errors: [], notice: "", handle: null, stamp: null, layoutHandle: null, layoutStamp: null, baseText: "", baseLayout: "{}", baseHash: null, chip: null, offerPending: null, view: { k: 1, tx: 20, ty: 20 }, hist: core.histNew(100) };
+const S = { src: null, recordBad: null, warnings: [], doc: null, text: "", name: "graph", layout: {}, selected: null, link: null, events: null, cursor: null, replay: null, overlay: null, stats: null, children: [], childPos: {}, expanded: [], groupOf: {}, lastTap: null, groups: [], groupPos: {}, groupPts: {}, groupSq: {}, folder: null, issueTotal: null, issueHeld: 0, errors: [], notice: "", handle: null, stamp: null, layoutHandle: null, layoutStamp: null, baseText: "", baseLayout: "{}", baseHash: null, chip: null, offerPending: null, view: { k: 1, tx: 20, ty: 20 }, hist: core.histNew(100) };
 
 function setStatus(msg, bad) { const el = $("status"); el.textContent = msg; el.className = bad ? "msg-bad" : ""; toast(); }
 
@@ -2630,6 +2765,9 @@ $("r-range").addEventListener("input", (e) => moveReplay("to", Number(e.target.v
 // The bar takes height from the map, so a fitted graph is fitted again when the bar appears or goes.
 function renderTotals() {
   const bar = $("totals"), r = S.replay, was = bar.classList.contains("on");
+  // The run's figures wait for the record: the bar names the read until the record settles, never a blank strip.
+  const key = r ? null : readKey("record", "graph");
+  if (key) { bar.classList.add("on"); bar.innerHTML = readHtml(key, "run"); if (!was && S.fitted && S.doc) fit(); return; }
   bar.classList.toggle("on", !!r);
   if (!r) { bar.innerHTML = ""; if (was && S.fitted && S.doc) fit(); return; }
   const cells = core.totalsCells(core.runTotals(r.events, core.runCap(r.events[0], S.doc), r.at_end ? nowSec() : undefined));
@@ -2641,13 +2779,18 @@ setInterval(() => { if (S.replay && S.replay.at_end && S.stats && S.stats.state 
 
 // The top bar above the graph: how many issues the run landed, of the issue set in the run folder. The
 // cells are core data (core.progressCells), and the replay cursor cuts them like every other figure.
+// The bar follows the read of the issue set: it says it is loading while the set is read, and it names the
+// empty bar when the folder holds no set, rather than vanishing without a word.
 function renderProgress() {
   const bar = $("progress"), r = S.replay, was = bar.classList.contains("on");
+  const key = readKey("issues", "record");
+  if (key) { bar.classList.add("on"); bar.innerHTML = readHtml(key, "run"); if (!was && S.fitted && S.doc) fit(); return; }
   const cells = r ? core.progressCells(core.issueProgress(r.events, S.issueTotal, S.issueHeld)) : [];
-  bar.classList.toggle("on", cells.length > 0);
-  bar.innerHTML = cells.map((c) => `<span class="cell" title="${esc(c.title)}">${esc(c.label)} <b>${esc(c.text)}</b></span>`).join("")
+  const empty = r && !cells.length ? emptyHtml("This run folder holds no issue set to count.") : "";
+  bar.classList.toggle("on", cells.length > 0 || !!empty);
+  bar.innerHTML = cells.map((c) => `<span class="cell" title="${esc(c.title)}">${esc(c.label)} <b>${esc(c.text)}</b></span>`).join("") + empty
     + (cells.length && !r.at_end ? `<span class="cell past" title="The bar shows the run up to the replay cursor, not the whole run.">replay: up to event ${r.cursor} of ${r.last}</span>` : "");
-  if (!was && cells.length && S.fitted && S.doc) fit();
+  if (!was && (cells.length || empty) && S.fitted && S.doc) fit();
 }
 
 // A single-card page paints that one card and nothing else: it still reads the run (the same push stream or reread
@@ -2669,7 +2812,8 @@ async function loadGraph(text, name) {
   if (script) return showScript(script, name);
   hideScript();
   const r = core.parseImport(text);
-  if (r.error) { setStatus(r.error, true); return false; }
+  if (r.error) { readFail("graph", name, r.error); setStatus(r.error, true); renderSide(); return false; }
+  readSettle("graph");
   S.warnings = []; S.doc = r.doc; S.text = text; S.name = name.replace(/\.graph\.json$|\.json$/, ""); S.fileName = name; S.selected = null; S.link = null;
   S.handle = null; S.stamp = null; S.layoutHandle = null; S.layoutStamp = null; S.offerPending = null; hidePanels();
   S.layout = Array.isArray(S.doc.nodes) ? core.autoLayout(S.doc, narrowScreen()) : {};
@@ -2690,6 +2834,49 @@ function overlayFor(name) { return S.overlay && S.overlay.shown ? S.overlay.rows
 
 function render() { if (CARD) return renderCard(); renderReplay(); renderProgress(); renderTotals(); renderMap(); renderSide(); renderAddbar(); renderChrome(); updateChip(); scheduleDraft(); }
 
+
+// --- loading, empty and error states (SPEC 889) ---
+// One painter for every list and panel that reads. A read in flight paints "Loading …"; a list that legitimately holds
+// nothing paints its own empty note; a read that failed paints what failed and the message, with a retry where the page
+// has one. The state is the class name (state-loading, state-empty, state-error), so the markup itself says the state.
+function stateHtml(state, text, retry) {
+  const live = state === "loading" ? ' role="status" aria-live="polite" aria-busy="true"' : state === "error" ? ' role="alert"' : "";
+  const btn = retry ? ` <button type="button" class="state-retry" data-state-retry="${esc(retry)}">Try again</button>` : "";
+  return `<div class="state state-${state}"${live}>${esc(text)}${btn}</div>`;
+}
+const emptyHtml = (text) => stateHtml("empty", text);
+const loadingText = (what) => `Loading ${what} …`;
+function paintState(el, state, text, retry) {
+  const html = stateHtml(state, text, retry);
+  if (el.innerHTML !== html) el.innerHTML = html;
+  if (state === "loading") el.setAttribute("aria-busy", "true"); else el.removeAttribute("aria-busy");
+}
+
+// What each read of the page is doing: a state while it runs, null once it settled, and the file plus the message when it
+// failed. A panel that depends on a read paints that state; a read one panel does not use leaves the rest of the page alone.
+const READ = {};
+const readStart = (key, what) => { READ[key] = { state: "loading", what }; };
+const readSettle = (key) => { delete READ[key]; };
+const readFail = (key, what, message) => { READ[key] = { state: "error", what, message }; };
+const readText = (r) => (r.state === "loading" ? loadingText(r.what) : `${r.what}: ${r.message}`);
+function readHtml(key, retry) { return READ[key] ? stateHtml(READ[key].state, readText(READ[key]), READ[key].state === "error" ? retry : null) : ""; }
+// The read a panel should name: a failure first, then a read still in flight; null when every read settled.
+const readKey = (...keys) => keys.find((k) => READ[k] && READ[k].state === "error") || keys.find((k) => READ[k]) || null;
+// Paint the read of `key` into a container and say whether it painted anything.
+function paintRead(el, key, retry) {
+  if (!READ[key]) return false;
+  const r = READ[key];
+  paintState(el, r.state, readText(r), r.state === "error" ? retry : null);
+  return true;
+}
+
+// A retry starts the read again. The page registers one for each read that a person can start from the page; a state
+// with no retry shows the message alone, and the folder's own Connect button stays the way back in.
+const RETRY = {};
+document.addEventListener("click", (e) => {
+  const b = e.target && e.target.closest ? e.target.closest("[data-state-retry]") : null;
+  if (b && RETRY[b.dataset.stateRetry]) RETRY[b.dataset.stateRetry]();
+});
 
 // --- the graph area: an SVG with one group that pan and zoom move ---
 function applyView() {
@@ -2736,15 +2923,13 @@ function revealSelected() {
 }
 
 function edgeLines() {
-  const lines = [];
-  for (const n of nodesOf()) {
-    for (const c of core.graphKids(n)) {
-      const a = S.layout[n.name], b = S.layout[c];
-      if (!a || !b) continue;
-      const sel = S.link && S.link.from === n.name && S.link.to === c;
-      const co = `x1="${a.x + BOX.w}" y1="${a.y + BOX.h / 2}" x2="${b.x - 3}" y2="${b.y + BOX.h / 2}"`;
-      lines.push(`<g class="edge${sel ? " sel" : ""}" data-from="${esc(n.name)}" data-to="${esc(c)}"><line class="hit" ${co}/><line class="ln" ${co} marker-end="url(#arrow)"/></g>`);
-    }
+  const lines = [], pairs = [];
+  for (const n of nodesOf()) for (const c of core.graphKids(n)) pairs.push({ from: n.name, to: c });
+  // Each edge is its own route: one orthogonal line per segment, so two edges never draw over each other (core.edgeRoutes).
+  for (const r of core.edgeRoutes(S.layout, pairs, BOX)) {
+    const sel = S.link && S.link.from === r.from && S.link.to === r.to;
+    const segs = r.segs.map((q) => { const co = `x1="${q.x1}" y1="${q.y1}" x2="${q.x2}" y2="${q.y2}"`; return `<line class="hit" ${co}/><line class="ln" ${co}${q.arrow ? ' marker-end="url(#arrow)"' : ""}/>`; }).join("");
+    lines.push(`<g class="edge${sel ? " sel" : ""}" data-from="${esc(r.from)}" data-to="${esc(r.to)}">${segs}</g>`);
   }
   // One bus per dispatch: one line leaves the entry, a rail serves each column of single cards and group cards.
   for (const d of [...new Set([...S.children.map((c) => c.dispatch), ...S.groups.map((g) => g.dispatch)])]) {
@@ -2947,21 +3132,32 @@ function renderMap() {
     const running = !!ns && core.isRunning(ns);
     const nmark = ns ? core.stateMark(core.nodeState(ns)) : null;   // a glyph on every node the record touched: color is never the only cue
     const sc = core.stateClass(ns);   // not-run, running, passed, failed, deadline, needs-human, started
-    g.setAttribute("class", "card" + (S.selected === n.name ? " sel" : "") + (errs ? " err" : "") + (sc ? " " + sc : ""));
+    const km = core.kindMark(n.kind);   // the icon and the color of the kind: a gate and an agent differ by shape, not by text alone
+    g.setAttribute("class", "card " + km.cls + (S.selected === n.name ? " sel" : "") + (errs ? " err" : "") + (sc ? " " + sc : ""));
     g.setAttribute("transform", `translate(${p.x} ${p.y})`);
     g.dataset.name = n.name;
     const label = core.nodeLabel(n);
     focusable(g, `${label}, ${nmark ? nmark.label : n.kind}`);   // the role label on the card; the raw name stays in the tooltip
-    const name = clipText(label, CLIP.name);   // the glyph sits at the top-right corner
+    const name = clipText(label, NODE_CLIP.name);   // the glyph sits at the top-right corner; the icon sits left of the name
     const ml = core.nodeModel(n, ns);   // the LLM line (#677): the core decides it, the card only renders it
-    g.innerHTML = `<title>${esc(n.name)} | ${esc(ml.text)}${ns ? ` | ${running ? esc(runningTitle(ns)) : `${esc(oc || "no outcome")}, time ${core.fmt.seconds(ns.elapsed)}, cost ${core.fmt.usd(ns.spend)}, ${core.fmt.pct(ns.cap_pct)} of the call cap, turns ${core.fmt.count(ns.turns)}${tokenLine(ns) ? ", tokens " + tokenLine(ns) : ""}, entries ${ns.entries}${ns.cause ? ", " + esc(ns.cause) : ""}`}` : ""}</title><rect width="${BOX.w}" height="${BOX.h}" rx="6"/><g clip-path="url(#card-clip)"><text class="nm" x="${TEXT.x}" y="${TEXT.name}">${esc(name)}</text><text class="kd" x="${TEXT.x}" y="${TEXT.kind}">${esc(clipText(n.kind + " \u00b7 " + ml.text, CLIP.harness))}${ns && ns.routed && ns.routed !== "continue" ? " \u2192 " + esc(ns.routed) : ""}</text>${ns ? cardLines(ns, running) : ""}</g>${errs ? `<text class="bd-e" x="${BOX.w - 8}" y="34" text-anchor="end">${errs} error${errs > 1 ? "s" : ""}</text>` : ""}${ov ? `<text class="bd-o" x="${BOX.w - 26}" y="19" text-anchor="end">${ov} adapted</text>` : ""}${nmark ? `<text class="gl" x="${BOX.w - GLYPH.right}" y="${GLYPH.top}" text-anchor="end">${nmark.glyph}</text>` : ""}${n.name === S.doc.root ? "" : `<circle class="port in" cx="0" cy="${BOX.h / 2}" r="5"/>`}${["loop", "each", "dispatch"].includes(n.kind) ? `<circle class="port out" cx="${BOX.w}" cy="${BOX.h / 2}" r="5"><title>Drag to another node to connect</title></circle>` : ""}`;
+    const routed = ns && ns.routed && ns.routed !== "continue" ? " \u2192 " + ns.routed : "";   // the model line is never cut: the text is fitted below
+    g.innerHTML = `<title>${esc(n.name)} | ${esc(ml.text)}${ns ? ` | ${running ? esc(runningTitle(ns)) : `${esc(oc || "no outcome")}, time ${core.fmt.seconds(ns.elapsed)}, cost ${core.fmt.usd(ns.spend)}, ${core.fmt.pct(ns.cap_pct)} of the call cap, turns ${core.fmt.count(ns.turns)}${tokenLine(ns) ? ", tokens " + tokenLine(ns) : ""}, entries ${ns.entries}${ns.cause ? ", " + esc(ns.cause) : ""}`}` : ""}</title><rect width="${BOX.w}" height="${BOX.h}" rx="6"/><g clip-path="url(#card-clip)"><rect class="kc" x="${KIND_CHIP.x}" y="${KIND_CHIP.y}" width="${KIND_CHIP.w}" height="${KIND_CHIP.w}" rx="3"/><text class="ki" x="${KIND_CHIP.x + KIND_CHIP.w / 2}" y="${KIND_CHIP.y + 12}" text-anchor="middle">${km.glyph}</text><text class="nm" x="${NODE_TEXT_X}" y="${TEXT.name}">${esc(name)}</text><text class="kd model" x="${TEXT.x - 2}" y="${TEXT.kind}">${esc(ml.text + routed)}</text>${ns ? cardLines(ns, running) : ""}</g>${errs ? `<text class="bd-e" x="${BOX.w - 8}" y="34" text-anchor="end">${errs} error${errs > 1 ? "s" : ""}</text>` : ""}${ov ? `<text class="bd-o" x="${BOX.w - 26}" y="19" text-anchor="end">${ov} adapted</text>` : ""}${nmark ? `<text class="gl" x="${BOX.w - GLYPH.right}" y="${GLYPH.top}" text-anchor="end">${nmark.glyph}</text>` : ""}${n.name === S.doc.root ? "" : `<circle class="port in" cx="0" cy="${BOX.h / 2}" r="5"/>`}${["loop", "each", "dispatch"].includes(n.kind) ? `<circle class="port out" cx="${BOX.w}" cy="${BOX.h / 2}" r="5"><title>Drag to another node to connect</title></circle>` : ""}`;
     g.addEventListener("pointerdown", (ev) => { if (ev.target.classList && ev.target.classList.contains("out")) startLink(ev, n.name); else startDrag(ev, n.name, g); });
     cards.appendChild(g);
   }
   renderChildren(cards);
   renderGroups(cards);
+  fitModelLines(cards);
   $("edges").innerHTML = edgeLines();
   applyView();
+}
+
+// The model line is one line on the card, never cut. A model name wider than the card is set narrower (the text is squeezed, not
+// shortened); a name that fits keeps its size. The measure needs the cards in the document, so it runs after they are drawn.
+function fitModelLines(cards) {
+  for (const t of cards.querySelectorAll("text.kd.model")) {
+    if (t.getComputedTextLength() > MODEL_W) { t.setAttribute("textLength", MODEL_W); t.setAttribute("lengthAdjust", "spacingAndGlyphs"); }
+  }
 }
 
 // A node that can call a model shows its tokens, a dash when the record has none. Another node shows the line only if the record has tokens for it.
@@ -3085,7 +3281,7 @@ function childReviewHtml(c) {
   if (!r) return "";
   const word = r.live ? `<b class="state-running" title="The review command is still running">running now</b>` : `<b${r.verdict === "approve" || r.verdict === "no_review" ? "" : ' class="bad"'}>${esc(r.verdict === "no_review" ? "no review here" : r.verdict || "none yet")}</b>`;
   const line = `${word} \u00b7 time <b>${f.seconds(r.elapsed)}</b>${r.live ? " so far" : ""} \u00b7 round${r.rounds > 1 ? "s" : ""} <b>${r.rounds}</b>${r.exit_code === null || r.live ? "" : ` \u00b7 exit <b>${esc(r.exit_code)}</b>`}`;
-  const held = !r.live && r.findings ? `<pre class="ev">${esc(r.findings)}</pre>` : "";
+  const held = r.live ? "" : r.findings ? `<pre class="ev">${esc(r.findings)}</pre>` : emptyHtml("The review reported no findings.");
   return `<h2>Review</h2><div class="runbox">${line}${held}</div>`;
 }
 // The review gate of a dispatch, with the command and deadline it runs: read-only here, as a gate's thresholds are (ADR-0111).
@@ -3112,7 +3308,7 @@ function childHtml(c) {
 // The roster of one dispatch's children: one row each. A click on a row selects that child.
 function rosterHtml(dispatch) {
   const rows = core.childRoster(S.children, dispatch);
-  if (!rows.length) return "";
+  if (!rows.length) return `<h2>Children of ${esc(dispatch)}</h2>${emptyHtml("This dispatch started no child, or the record names none for it yet.")}`;
   const body = rows.map((r) => `<tr data-child="${esc(r.name)}" class="s-${esc(r.state)}${S.selected === r.name ? " sel" : ""}" title="${esc(r.name)}"><td>${r.index}</td><td>${esc(r.label)}</td><td class="m" title="${esc(r.outcome)}${r.rework ? " · " + esc(r.rework) : ""}">${r.glyph}${r.rework ? " ↻" : ""}</td><td>${esc(core.fmt.llm(r.model))}</td><td>${esc(r.time)}</td><td>${esc(r.cost)}</td><td>${esc(r.turns)}</td></tr>`).join("");
   return `<h2>Children of ${esc(dispatch)} <span class="note">(${rows.length})</span></h2><table class="roster"><thead><tr><th>#</th><th>name</th><th title="outcome">out</th><th>model</th><th>time</th><th>cost</th><th>turns</th></tr></thead><tbody>${body}</tbody></table>`;
 }
@@ -3254,9 +3450,15 @@ function renderRunPanel() {
 
 function renderSide() {
   const side = $("side");
-  if (!S.doc) { side.innerHTML = `<h2>Start</h2><p>Open a graph document, or load the five-phase example.</p><p class="note">The graph file stays as authored. A run record is read-only. Layout lives in a sibling file and never moves the graph hash.</p>`; return; }
+  // A read in flight, or one that failed, paints its own state: the panel says it is reading rather than showing a blank
+  // page, and a failed read says which file failed. The first read of the run holds the panel until it settles.
+  const key = readKey("record", "graph");
+  if (!S.doc && key) { paintRead(side, key, "run"); return; }
+  if (!S.doc) { side.innerHTML = `<h2>Start</h2><p>Open a graph document, or load the five-phase example.</p><div class="row"><button data-start="open" title="Choose a graph file (a JSON graph document)">Open graph</button> <button data-start="example" title="Load the five-phase example graph">Load the five-phase example</button></div><p class="note">The graph file stays as authored. A run record is read-only. Layout lives in a sibling file and never moves the graph hash.</p>`; return; }
   const parts = [];
-  if (inEdit() || S.errors.length) parts.push(`<h2>Graph</h2><div>${esc(S.doc.name || "(no name)")} · ${nodesOf().length} nodes · ${S.errors.length ? `<span class="msg-bad">${S.errors.length} error${S.errors.length > 1 ? "s" : ""}</span>` : `<span class="msg-ok">valid</span>`}</div>`);
+  const load = readHtml(key, "run");
+  if (load) parts.push(load);   // a failed or slow read of the run says so next to the graph it does not stop
+  if (inEdit() || S.errors.length) parts.push(`<h2>Graph</h2><div>${esc(S.doc.name || "(no name)")} · ${nodesOf().length ? `${nodesOf().length} node${nodesOf().length > 1 ? "s" : ""}` : "no node"} · ${S.errors.length ? `<span class="msg-bad">${S.errors.length} error${S.errors.length > 1 ? "s" : ""}</span>` : `<span class="msg-ok">valid</span>`}</div>`);
   const top = S.errors.filter((e) => !e.node);
   if (top.length) parts.push(`<h2>Errors on the graph</h2><ul class="errs">${top.map((e) => `<li>${esc(e.message)}</li>`).join("")}</ul>`);
   if (S.warnings.length) parts.push(`<h2>Links the last change broke</h2><ul class="errs">${S.warnings.map((w) => `<li>${esc(w.message)}</li>`).join("")}</ul>`);
@@ -3280,11 +3482,10 @@ function renderSide() {
       if (n.kind === "gate") parts.push(`<h2>Read-only: check and thresholds</h2><div class="ro">check: <b>${esc(n.check)}</b><br>params: ${esc(JSON.stringify(n.params))}</div>`);
       if (inEdit()) {
       const gates = Array.isArray(S.doc.gates) ? S.doc.gates : [];
-      const kinds = core.KINDS.filter((k) => k !== n.kind);
       parts.push(`<h2>Rename and kind</h2><div class="row"><input id="n-name" value="${esc(n.name)}" spellcheck="false" title="The new name replaces the old one in every reference"> <button id="b-rename">Rename</button></div>`
         + (n.kind === "gate"
           ? `<div class="note">A gate keeps its kind: its check id and thresholds are read-only. Remove it and add the node you want.</div>`
-          : `<div class="row"><select id="n-kind" title="The new kind; every field stays and the rules judge the result">${kinds.map((k) => `<option>${k}</option>`).join("")}</select> <select id="n-check" title="Registered check for the gate" hidden>${gates.map((g) => `<option>${esc(g.id)}</option>`).join("")}</select> <button id="b-kind">Change kind</button></div>`)
+          : `<div class="row"><select id="n-kind" title="The new kind; every field stays and the rules judge the result">${core.kindChoices(n.kind).map((c) => `<option${c.selected ? " selected" : ""}>${c.kind}</option>`).join("")}</select> <select id="n-check" title="Registered check for the gate" hidden>${gates.map((g) => `<option>${esc(g.id)}</option>`).join("")}</select> <button id="b-kind">Change kind</button></div>`)
         + `<div id="nk-msg"></div>`);
       parts.push(`<h2>Fields</h2>${core.fieldGroups(n).map((g) => fieldGroupHtml(n, g)).join("")}`);
       parts.push(`<details><summary>Edit the whole node as JSON</summary><textarea id="node-json" spellcheck="false">${esc(JSON.stringify(n, null, 2))}</textarea><div><button id="b-apply">Apply to node</button> <span id="apply-msg"></span></div></details>`);
@@ -3305,7 +3506,13 @@ function renderSide() {
     parts.push(S.overlay && !S.overlay.shown ? `<div class="msg-bad">${esc(S.overlay.reason)}</div>` : `<div class="note">The record's graph hash equals the loaded graph's: ${S.overlay && S.overlay.rows.length ? S.overlay.rows.length + " applied proposal" + (S.overlay.rows.length > 1 ? "s" : "") + " shown on the cards" : "no applied proposal in this run"}.</div>`);
   }
   if (inEdit()) parts.push(`<details class="ref"><summary>Served lists (suggestions only)</summary><div class="ro">${["tools", "skills", "models", "efforts"].map((k) => `<b>${k}</b> (${SERVED[k].length}): ${esc(SERVED[k].join(", "))}`).join("<br>")}<br><span class="note">Snapshot ${esc(SERVED.hash.slice(0, 12))} from ${esc(SERVED.sources.join(", "))}. A snapshot is stale once those sources change: rebuild with scripts/build_dashboard.py. An unknown value is never blocked. A model id reads here as the field takes it, with its <code>claude-</code> prefix; every model the page presents elsewhere hides that prefix.</span></div></details>`);
-  if (inEdit()) parts.push(`<details class="ref"><summary>Read-only registries</summary><div class="ro"><b>facts</b> (${S.doc.facts ? S.doc.facts.length : 0}): ${esc((S.doc.facts || []).map((f) => f.name).join(", "))}<br><b>gates</b> (${S.doc.gates ? S.doc.gates.length : 0}): ${esc((S.doc.gates || []).map((g) => g.id + "(" + (g.params || []).join(",") + ")").join(", "))}<br><span class="note">The dashboard picks a registered name and never adds one.</span></div></details>`);
+  if (inEdit()) {
+    // The facts and the gates the graph declares: a list the graph holds none of says so, instead of a blank line.
+    const facts = Array.isArray(S.doc.facts) ? S.doc.facts : [], gates = Array.isArray(S.doc.gates) ? S.doc.gates : [];
+    parts.push(`<details class="ref"><summary>Read-only registries</summary><div class="ro"><b>facts</b> (${facts.length}): ${facts.length ? esc(facts.map((f) => f.name).join(", ")) : "none"}<br><b>gates</b> (${gates.length}): ${gates.length ? esc(gates.map((g) => g.id + "(" + (g.params || []).join(",") + ")").join(", ")) : "none"}<br><span class="note">The dashboard picks a registered name and never adds one.</span></div></details>`);
+  }
+  // A panel with no card and no run to show names itself empty, so it never reads as a page that failed to load.
+  if (!parts.length) parts.push(emptyHtml("Nothing selected: pick a node or a child on the map."));
   side.innerHTML = parts.join("");
   const apply = $("b-apply");
   if (apply) apply.addEventListener("click", applyEdit);
@@ -3328,7 +3535,37 @@ function renderSide() {
 // --- the inspector form: fields grouped by purpose; the core builds the groups and applies each edit ---
 const groupOpen = {};
 for (const k of ["models", "efforts", "skills"]) $("dl-" + k).innerHTML = SERVED[k].map((v) => `<option value="${esc(v)}">`).join("");
+// A nested field (budget, next, adapt, when) is one row per part from the core; each part sits at a path in the field's object.
+function partHtml(p, cur) {
+  const v = p.path.split(".").reduce((o, k) => (o && typeof o === "object" ? o[k] : undefined), cur);
+  const a = `data-part="${esc(p.path)}" data-input="${p.input}"`;
+  let input;
+  if (p.input === "select") input = `<select ${a}>${["", ...p.choices].map((c) => `<option value="${esc(c)}"${c === v ? " selected" : ""}>${esc(c) || "(not set)"}</option>`).join("")}</select>`;
+  else if (p.input === "check") input = p.choices.map((c) => `<label><input type="checkbox" data-part="${esc(p.path)}" data-input="check" data-val="${esc(c)}"${Array.isArray(v) && v.includes(c) ? " checked" : ""}> ${esc(c)}</label>`).join(" ");
+  else input = `<input ${a} type="${p.input === "num" || p.input === "int" ? "number" : "text"}"${p.input === "num" ? ` step="any"` : ""} value="${esc(p.input === "list" && Array.isArray(v) ? v.join(", ") : v === undefined ? "" : String(v))}" spellcheck="false">`;
+  return `<div class="fld"><label>${esc(p.label)}</label><div>${input}</div></div>`;
+}
+function structuredHtml(f) {
+  const cur = f.value ? JSON.parse(f.value) : {};
+  return `<div class="fld"><label>${esc(f.key)}${f.present ? "" : " · unset"}</label><div class="struct" data-struct="${esc(f.key)}">${f.parts.map((p) => partHtml(p, cur)).join("")}</div></div>`;
+}
+// The field's JSON from its parts; blank parts are left out, and no part set gives "" (the field is removed).
+function structuredText(box) {
+  const out = {}, checks = {};
+  const set = (path, val) => { const ks = path.split("."), last = ks.pop(); let o = out; for (const k of ks) o = o[k] = o[k] || {}; o[last] = val; };
+  const anyValue = (t) => (t === "true" ? true : t === "false" ? false : Number.isFinite(Number(t)) ? Number(t) : t);
+  for (const el of box.querySelectorAll("[data-part]")) {
+    const path = el.dataset.part, kind = el.dataset.input;
+    if (kind === "check") { if (el.checked) (checks[path] = checks[path] || []).push(el.dataset.val); continue; }
+    const t = el.value.trim();
+    if (t === "") continue;
+    set(path, kind === "num" || kind === "int" ? Number(t) : kind === "list" ? t.split(",").map((x) => x.trim()).filter(Boolean) : kind === "any" ? anyValue(t) : t);
+  }
+  for (const [path, vals] of Object.entries(checks)) set(path, vals);
+  return Object.keys(out).length ? JSON.stringify(out) : "";
+}
 function fieldHtml(f) {
+  if (f.type === "structured") return structuredHtml(f);
   const id = "f-" + f.key, dis = f.readonly ? " disabled" : "", a = `id="${id}" data-key="${esc(f.key)}"${dis}`;
   let input;
   if (f.type === "area") input = `<textarea ${a} rows="6" spellcheck="false">${esc(f.value)}</textarea><div class="note"><span id="ic">${[...f.value].length}</span> characters</div>`;
@@ -3358,6 +3595,7 @@ function wireFields() {
   const side = $("side"), name = S.selected;
   for (const d of side.querySelectorAll("details[data-group]")) d.addEventListener("toggle", () => { groupOpen[d.dataset.group] = d.open; });
   for (const el of side.querySelectorAll("[data-key]")) el.addEventListener("change", () => setFieldFrom(name, el.dataset.key, el.value));
+  for (const box of side.querySelectorAll("[data-struct]")) box.addEventListener("change", () => setFieldFrom(name, box.dataset.struct, structuredText(box)));
   const ins = $("f-instructions");
   if (ins) ins.addEventListener("input", () => { $("ic").textContent = [...ins.value].length; });
   for (const b of side.querySelectorAll("[data-chip]")) b.addEventListener("click", () => {
@@ -3373,14 +3611,18 @@ $("s-kind").innerHTML = KIND_LIST.map((k) => `<option>${k}</option>`).join("");
 function renderAddbar() {
   const gates = S.doc && Array.isArray(S.doc.gates) ? S.doc.gates : [];
   const keep = $("s-check").value;
-  $("s-check").innerHTML = gates.map((g) => `<option>${esc(g.id)}</option>`).join("");
+  // The check list of a new gate: a graph that registers no gate says so in the list, rather than showing an empty box.
+  $("s-check").innerHTML = gates.length ? gates.map((g) => `<option>${esc(g.id)}</option>`).join("") : `<option value="" disabled selected>no registered gate</option>`;
   if (gates.some((g) => g.id === keep)) $("s-check").value = keep;
   $("s-check").hidden = $("s-kind").value !== "gate";
   $("b-add").disabled = !S.doc || !Array.isArray(S.doc.nodes);
   $("b-remove").disabled = !nodesOf().some((n) => n.name === S.selected);   // a child card is run-only: nothing to remove
   $("b-unlink").disabled = !S.link;
+  // The history says what it holds: a button with nothing to walk says so in its tooltip, not only in its disabled look.
   $("b-undo").disabled = !S.hist.past.length;
   $("b-redo").disabled = !S.hist.future.length;
+  $("b-undo").title = S.hist.past.length ? "Undo the last edit (Ctrl or Cmd + Z)" : "Nothing to undo yet";
+  $("b-redo").title = S.hist.future.length ? "Redo (Ctrl or Cmd + Shift + Z)" : "Nothing to redo yet";
 }
 $("s-kind").addEventListener("change", renderAddbar);
 
@@ -3513,18 +3755,19 @@ function closeMenu() { $("menu").style.display = "none"; }
 
 // --- the legend and the help overlay: rows come from the core; a swatch is a card group, so the card CSS paints it ---
 function swatches() {
-  const cards = core.LEGEND.map((r) => `<span class="lg"><svg width="24" height="14" viewBox="0 0 24 14"><g class="card ${r.cls}"><rect x="1" y="1" width="22" height="12" rx="3"/>${r.glyph ? `<text class="gl" x="12" y="11" text-anchor="middle" style="font-size:var(--fs-min)">${r.glyph}</text>` : ""}</g></svg>${esc(r.label)}</span>`);
+  const cards = core.LEGEND.map((r) => `<span class="lg"><svg width="24" height="14" viewBox="0 0 24 14"><g class="card ${r.cls}"><rect${r.kind ? ' class="kc"' : ""} x="1" y="1" width="22" height="12" rx="3"/>${r.glyph ? `<text class="${r.kind ? "ki" : "gl"}" x="12" y="11" text-anchor="middle" style="font-size:var(--fs-min)">${r.glyph}</text>` : ""}</g></svg>${esc(r.label)}</span>`);
   const chips = core.LEGEND_CHIPS.map((r) => `<span class="lg"><span class="chip-sw ${r.cls}">${esc(r.label)}</span></span>`);
   return cards.concat(chips).join("");
 }
 // The side strip's list: two headed groups (node outcomes, interaction). Always expanded.
 // The run-state vocabulary is not a legend row: the owner removed that group (2026-10-11). The states live in the core's one table
 // (RUN_STATES) and the surfaces that print a state draw their pill from it; the help overlay still lists the chips.
-const LEGEND_GROUPS = [["node", "Node outcomes"], ["interaction", "Interaction"]];
+const LEGEND_GROUPS = [["node", "Node outcomes"], ["kind", "Node kinds"], ["interaction", "Interaction"]];
 function legendList() {
-  const sw = (r) => `<svg width="24" height="14" viewBox="0 0 24 14"><g class="card ${r.cls}"><rect x="1" y="1" width="22" height="12" rx="3"/>${r.glyph ? `<text class="gl" x="12" y="11" text-anchor="middle" style="font-size:var(--fs-min)">${r.glyph}</text>` : ""}</g></svg>`;
+  const sw = (r) => `<svg width="24" height="14" viewBox="0 0 24 14"><g class="card ${r.cls}"><rect${r.kind ? ' class="kc"' : ""} x="1" y="1" width="22" height="12" rx="3"/>${r.glyph ? `<text class="${r.kind ? "ki" : "gl"}" x="12" y="11" text-anchor="middle" style="font-size:var(--fs-min)">${r.glyph}</text>` : ""}</g></svg>`;
   const rows = {
     node: core.LEGEND.filter((r) => r.group === "node").map((r) => [sw(r), r.label, ""]),
+    kind: core.KIND_LEGEND.map((k) => [sw({ cls: `k-${k.kind}`, glyph: k.glyph, kind: true }), k.label, ""]),
     interaction: core.LEGEND.filter((r) => r.group === "interaction").map((r) => [sw(r), r.label, ""]),
   };
   return LEGEND_GROUPS.map(([g, title]) => `<div class="lh">${title}</div>` + rows[g].map(([s, l, cls]) => `<span class="lg${cls}">${s}<span class="lt">${esc(l)}</span></span>`).join("")).join("");
@@ -3600,12 +3843,33 @@ function download(name, text, type) {
 
 const readFile = (f) => new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = () => no(r.error); r.readAsText(f); });
 
-$("f-graph").addEventListener("change", async (e) => { const f = e.target.files[0]; if (f) await loadGraph(await readFile(f), f.name); e.target.value = ""; });
-$("b-example").addEventListener("click", () => loadGraph(JSON.stringify(EXAMPLE), "five-phases.graph.json"));
+// A file the owner opens is a read like any other: the panel says it is reading, and a failed read names the file.
+async function readTextOf(f) {
+  readStart("graph", f.name); renderSide();
+  try { const text = await readFile(f); readSettle("graph"); return text; } catch (e) { readFail("graph", f.name, e.message || String(e)); setStatus(`Could not read ${f.name}: ${e.message}`, true); renderSide(); return null; }
+}
+$("f-graph").addEventListener("change", async (e) => { const f = e.target.files[0]; if (f) { const text = await readTextOf(f); if (text !== null) await loadGraph(text, f.name); } e.target.value = ""; });
+const loadExample = () => loadGraph(JSON.stringify(EXAMPLE), "five-phases.graph.json");
+$("b-example").addEventListener("click", loadExample);
+$("side").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-start]");
+  if (!b) return;
+  if (b.dataset.start === "open") $("l-open").click();
+  else if (b.dataset.start === "example") loadExample();
+});
+// `squad editor <id>` opens this page with the named workflow in its fragment: a page opened from a file cannot read a file of its own.
+const OPENED = core.openedWorkflow(location.hash);
+if (OPENED && OPENED.error) setStatus(OPENED.error, true);
+else if (OPENED) loadGraph(OPENED.text, OPENED.name);
 $("f-record").addEventListener("change", async (e) => {
   const f = e.target.files[0]; if (!f) return;
-  const r = core.parseRecord(await readFile(f));
-  if (r.error) setStatus(r.error, true); else { stopFollow(); S.events = r.events; S.recordBad = r.bad || null; S.cursor = null; S.issueTotal = null; setStatus(`Opened record ${f.name} (read-only).`); await recompute(); }
+  readStart("record", f.name); renderSide();
+  try {
+    const r = core.parseRecord(await readFile(f));
+    if (r.error) { readFail("record", f.name, r.error); setStatus(r.error, true); }
+    else { readSettle("record"); stopFollow(); S.events = r.events; S.recordBad = r.bad || null; S.cursor = null; S.issueTotal = null; setStatus(`Opened record ${f.name} (read-only).`); await recompute(); }
+  } catch (err) { readFail("record", f.name, err.message || String(err)); setStatus(`Could not read ${f.name}: ${err.message}`, true); }
+  renderSide();
   e.target.value = "";
 });
 
@@ -3702,22 +3966,43 @@ $("review").addEventListener("click", async (e) => {
 
 
 // --- the run folder: one read-only handle, remembered in this browser (decisions #62, #63; ticket #76) ---
-// A source is {name, graph(), record()}: each returns the file text, or null when the folder has no such file.
+// A source is {name, paths, graph(), record(), issues()}: each returns the file text, or null when the folder has no such
+// file; `paths` names the file a read opens, so a slow or failed read says what it reads.
+function sourcePath(src, key, fallback) { return (src.paths && src.paths[key]) || src.name + "/" + fallback; }
 async function loadRunSource(src) {
-  const rec = await src.record();
-  if (rec === null) { setStatus(`No record.jsonl in ${src.name} (looked at the folder and at run/).`, true); return false; }
+  S.src = src;
+  const recPath = sourcePath(src, "record", "record.jsonl");
+  readStart("record", recPath); render();   // the panel and the top bar say what they are reading, never a blank page
+  let rec = null, why = null;
+  try { rec = await src.record(); } catch (e) { why = e.message || String(e); }
+  if (why !== null) { readFail("record", recPath, why); setStatus(`Could not read ${recPath}: ${why}`, true); render(); return false; }
+  if (rec === null) { readFail("record", recPath, "there is no such file in the folder"); setStatus(`No record.jsonl in ${src.name} (looked at the folder and at run/).`, true); render(); return false; }
   const pr = core.parseLive(rec);
-  if (pr.error) { setStatus(pr.error, true); return false; }
+  if (pr.error) { readFail("record", recPath, pr.error); setStatus(pr.error, true); render(); return false; }
+  readSettle("record");
   S.events = pr.events; S.recordBad = pr.bad || null; S.cursor = null; S.expanded = [];   // a new run starts with every group collapsed
   // The issue set lives in the run folder, not the record: count target/issues for the top bar's total.
-  S.issueTotal = src.issues ? await src.issues() : null;
+  S.issueTotal = null;
+  if (src.issues) {
+    const issuePath = sourcePath(src, "issues", "target/issues");
+    readStart("issues", issuePath);
+    try { S.issueTotal = await src.issues(); readSettle("issues"); } catch (e) { readFail("issues", issuePath, e.message || String(e)); }
+  }
   if (src.live) startFollow(src, rec); else stopFollow();
-  const g = await src.graph();
-  if (g === null || !(await loadGraph(g, src.name + "/graph.json"))) { await recompute(); if (g !== null) return true; }
+  const graphPath = sourcePath(src, "graph", "graph.json");
+  readStart("graph", graphPath);
+  let g = null, gwhy = null;
+  try { g = await src.graph(); } catch (e) { gwhy = e.message || String(e); }
+  if (gwhy !== null) readFail("graph", graphPath, gwhy);
+  else if (g === null) readFail("graph", graphPath, "the folder has no such file");
+  else readSettle("graph");
+  if (g === null || !(await loadGraph(g, graphPath))) { await recompute(); if (g !== null) return true; }
   // A short toast: the folder name is already in the top bar, and a push or a reread needs no words after the load.
   setStatus((S.ended ? "This run ended. " : "") + `Opened run ${pr.events[0].run_id} (read-only).` + (src.live ? "" : " A folder list is a snapshot: connect the folder to follow a live run.") + (g === null ? " The folder has no graph.json: open the graph to see the nodes." : ""));
   return true;
 }
+// The one retry a run's read offers: read the same source again. A folder the browser denies stays reachable by Connect.
+RETRY.run = () => { if (S.src) loadRunSource(S.src); };
 // While a run lives, the page follows it one of two ways. A source with a `stream` is followed by push: each pushed event extends the
 // record and paints. A source with none (the folder handle, the folder list) is followed by the timer: it rereads the record through
 // its read-only handle. The interval is the engine's (run_start), and no control in the page sets it (tickets #80, #106).
@@ -3762,15 +4047,16 @@ function startTimer(src, firstText, keepPush) {
 function handleSource(dir) {
   const read = async (d, nm) => { try { return await (await (await d.getFileHandle(nm)).getFile()).text(); } catch (e) { return null; } };
   const countIssues = async () => { try { const t = await dir.getDirectoryHandle("target"); const i = await t.getDirectoryHandle("issues"); let n = 0; for await (const [nm, h] of i.entries()) if (h.kind === "file" && nm.endsWith(".md")) n++; return n || null; } catch (e) { return null; } };
-  return { name: dir.name, live: true, issues: countIssues, graph: () => read(dir, "graph.json"),
+  return { name: dir.name, live: true, paths: { record: `${dir.name}/record.jsonl`, graph: `${dir.name}/graph.json`, issues: `${dir.name}/target/issues` }, issues: countIssues, graph: () => read(dir, "graph.json"),
     record: async () => { const r = await read(dir, "record.jsonl"); if (r !== null) return r; try { return await read(await dir.getDirectoryHandle("run"), "record.jsonl"); } catch (e) { return null; } } };
 }
 function fileListSource(files) {
   const rel = (f) => f.webkitRelativePath.split("/").slice(1).join("/");
+  const name = files.length ? files[0].webkitRelativePath.split("/")[0] : "folder";
   const find = (p) => files.find((f) => rel(f) === p);
   const text = async (f) => f ? await readFile(f) : null;
   const countIssues = async () => { const n = files.filter((f) => /^target\/issues\/[^/]+\.md$/.test(rel(f))).length; return n || null; };
-  return { name: files.length ? files[0].webkitRelativePath.split("/")[0] : "folder", issues: countIssues, graph: () => text(find("graph.json")), record: async () => (await text(find("record.jsonl"))) ?? (await text(find("run/record.jsonl"))) };
+  return { name, paths: { record: `${name}/record.jsonl`, graph: `${name}/graph.json`, issues: `${name}/target/issues` }, issues: countIssues, graph: () => text(find("graph.json")), record: async () => (await text(find("record.jsonl"))) ?? (await text(find("run/record.jsonl"))) };
 }
 const IDB_NAME = "agent-squad-run-dashboard", IDB_KEY = "run-folder";
 const idb = (mode, fn) => new Promise((ok, no) => {
@@ -3838,13 +4124,19 @@ const CARD = (new URLSearchParams(location.search).get("card") || "").trim();
 let cardHTML = null;
 
 function renderCard() {
-  const box = $("card"), card = core.cardBody(CARD, S.children);
-  const groups = card.groups.map((g) => {
-    const rows = g.kids.map((k) => `<div class="crow s-${esc(core.childMark(k).state)}" title="${esc(k.name)}">${esc(core.childMark(k).glyph)} <b>${esc(k.title || k.label || k.name)}</b>${k.running_for ? ` <span class="cmeta">${esc(core.fmt.seconds(k.running_for))}</span>` : ""}</div>`).join("");
-    return `<section class="cgroup s-${esc(g.state)}"><h3>${esc(g.name)}</h3>${rows}</section>`;
-  }).join("");
-  const html = card.ok ? groups || `<p class="cnote">${esc(card.empty)}</p>` : `<p class="cnote">${esc(card.message)}</p>`;
-  if (html !== cardHTML) { box.innerHTML = html; cardHTML = html; }
+  const box = $("card");
+  // The card reads the same run as the page: it says it is reading, and it names the empty run, rather than a blank frame.
+  const read = !S.doc && !S.events ? readKey("record", "graph") : null;
+  if (read) { paintRead(box, read, "run"); cardHTML = null; }
+  else {
+    const card = core.cardBody(CARD, S.children);
+    const groups = card.groups.map((g) => {
+      const rows = g.kids.map((k) => `<div class="crow s-${esc(core.childMark(k).state)}" title="${esc(k.name)}">${esc(core.childMark(k).glyph)} <b>${esc(k.title || k.label || k.name)}</b>${k.running_for ? ` <span class="cmeta">${esc(core.fmt.seconds(k.running_for))}</span>` : ""}</div>`).join("");
+      return `<section class="cgroup s-${esc(g.state)}"><h3>${esc(g.name)}</h3>${rows}</section>`;
+    }).join("");
+    const html = card.ok ? groups || emptyHtml(card.empty) : `<p class="cnote">${esc(card.message)}</p>`;
+    if (html !== cardHTML) { box.innerHTML = html; cardHTML = html; }
+  }
   if (window.parent !== window) window.parent.postMessage({ squadCard: CARD }, "*");   // the window's own handshake: it knows this page answered the mode
 }
 

@@ -26,6 +26,7 @@ o=$(PATH="$T/bin:$PATH" bash "$T/s/wave.sh" requeue 7 "the review asked for chan
 ! /usr/bin/grep -q 'o 3 Blocked 7' "$T/board.log" && ok "the third requeue does not move the card to Blocked" || ko "board: '$(tr '\n' ' ' < "$T/board.log")'"
 /usr/bin/grep -Fqx -- 'api -X POST repos/x/y/issues/7/labels -f labels[]=frozen:owner' "$T/gh.log" && ok "the third requeue freezes the card for the owner" || ko "freeze: '$(tr '\n' ' ' < "$T/gh.log" 2>/dev/null)'"
 [ "$(nsc)" = 1 ] && ok "the third requeue queues a SQUAD-NOT-STARTABLE comment" || ko "no stop comment queued"
+/usr/bin/grep -qE '^SQUAD-NOT-STARTABLE: build=' "$T"/st/cq/* 2>/dev/null && ok "the marker names the build that wrote it (ADR-0159)" || ko "the marker names no build"
 case "$o" in *"WAVE STOP #7"*) ok "the stop is logged on one line";; *) ko "no stop line: '$o'";; esac
 echo req > "$T/st/auto/disp-8"; o8=$(PATH="$T/bin:$PATH" BOARD_REFUSE=1 bash "$T/s/wave.sh" requeue 8 "y" 2>&1)
 [ ! -e "$T/st/auto/disp-8" ] && ok "another issue keeps its own count" || ko "issue 8 was stopped by issue 7's count: $o8"

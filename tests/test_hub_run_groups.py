@@ -174,8 +174,9 @@ function boot(){
       : [],
   };
   const localStorage = STORE;   // the whole process shares it, so a second boot() is a reload
-  const CALLS = { mdlLoad: 0 };
+  const CALLS = { mdlLoad: 0, limLoad: 0 };
   function mdlLoad(){ CALLS.mdlLoad++; }
+  function limLoad(){ CALLS.limLoad++; }   // Settings > Spend & limits (#926) answers its own header, like squad models
   const ls = JSON.parse(localStorage.hub || "{}");
   let allRuns = [], runs = [], N = 1, pins = new Set(), slots = [], known = null;
   let q = ls.q || "", per = ls.per || "day", src = ls.src || "both";
@@ -380,12 +381,21 @@ def test_opening_squad_models_still_loads_the_models():
     assert out["after"] == out["before"] + 1, "opening squad models still calls mdlLoad()"
 
 
+def test_opening_spend_limits_still_loads_the_guard_settings():
+    out = _run("""
+      const a = boot(); const before = a.calls().limLoad;
+      a.clickAcc("lim"); const after = a.calls().limLoad;
+      return { before, after };
+    """)
+    assert out["after"] == out["before"] + 1, "opening Spend & limits still calls limLoad()"
+
+
 def test_no_poll_path_writes_the_open_state():
     slices = {
         "the 3 s run poll": _slice(SRC, "async function poll(", "function bars("),
         "the run selector": _slice(SRC, "function selectNew(", "async function poll("),
         "the stats poll": _slice(SRC, "async function pollStats(", "pollStats();setInterval"),
-        "the 5 s board poll": _slice(SRC, "async function pollBoard(", '$("#lfl").onchange'),
+        "the 5 s board poll": _slice(SRC, "async function pollBoard(", '$("#lmode").onchange'),
         "the version poll": _slice(SRC, "let ver=null;", "</script>"),
     }
     for name, body in slices.items():

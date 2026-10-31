@@ -1,17 +1,18 @@
 // --- the legend and the help overlay: rows come from the core; a swatch is a card group, so the card CSS paints it ---
 function swatches() {
-  const cards = core.LEGEND.map((r) => `<span class="lg"><svg width="24" height="14" viewBox="0 0 24 14"><g class="card ${r.cls}"><rect x="1" y="1" width="22" height="12" rx="3"/>${r.glyph ? `<text class="gl" x="12" y="11" text-anchor="middle" style="font-size:var(--fs-min)">${r.glyph}</text>` : ""}</g></svg>${esc(r.label)}</span>`);
+  const cards = core.LEGEND.map((r) => `<span class="lg"><svg width="24" height="14" viewBox="0 0 24 14"><g class="card ${r.cls}"><rect${r.kind ? ' class="kc"' : ""} x="1" y="1" width="22" height="12" rx="3"/>${r.glyph ? `<text class="${r.kind ? "ki" : "gl"}" x="12" y="11" text-anchor="middle" style="font-size:var(--fs-min)">${r.glyph}</text>` : ""}</g></svg>${esc(r.label)}</span>`);
   const chips = core.LEGEND_CHIPS.map((r) => `<span class="lg"><span class="chip-sw ${r.cls}">${esc(r.label)}</span></span>`);
   return cards.concat(chips).join("");
 }
 // The side strip's list: two headed groups (node outcomes, interaction). Always expanded.
 // The run-state vocabulary is not a legend row: the owner removed that group (2026-10-11). The states live in the core's one table
 // (RUN_STATES) and the surfaces that print a state draw their pill from it; the help overlay still lists the chips.
-const LEGEND_GROUPS = [["node", "Node outcomes"], ["interaction", "Interaction"]];
+const LEGEND_GROUPS = [["node", "Node outcomes"], ["kind", "Node kinds"], ["interaction", "Interaction"]];
 function legendList() {
-  const sw = (r) => `<svg width="24" height="14" viewBox="0 0 24 14"><g class="card ${r.cls}"><rect x="1" y="1" width="22" height="12" rx="3"/>${r.glyph ? `<text class="gl" x="12" y="11" text-anchor="middle" style="font-size:var(--fs-min)">${r.glyph}</text>` : ""}</g></svg>`;
+  const sw = (r) => `<svg width="24" height="14" viewBox="0 0 24 14"><g class="card ${r.cls}"><rect${r.kind ? ' class="kc"' : ""} x="1" y="1" width="22" height="12" rx="3"/>${r.glyph ? `<text class="${r.kind ? "ki" : "gl"}" x="12" y="11" text-anchor="middle" style="font-size:var(--fs-min)">${r.glyph}</text>` : ""}</g></svg>`;
   const rows = {
     node: core.LEGEND.filter((r) => r.group === "node").map((r) => [sw(r), r.label, ""]),
+    kind: core.KIND_LEGEND.map((k) => [sw({ cls: `k-${k.kind}`, glyph: k.glyph, kind: true }), k.label, ""]),
     interaction: core.LEGEND.filter((r) => r.group === "interaction").map((r) => [sw(r), r.label, ""]),
   };
   return LEGEND_GROUPS.map(([g, title]) => `<div class="lh">${title}</div>` + rows[g].map(([s, l, cls]) => `<span class="lg${cls}">${s}<span class="lt">${esc(l)}</span></span>`).join("")).join("");
@@ -87,11 +88,32 @@ function download(name, text, type) {
 
 const readFile = (f) => new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = () => no(r.error); r.readAsText(f); });
 
-$("f-graph").addEventListener("change", async (e) => { const f = e.target.files[0]; if (f) await loadGraph(await readFile(f), f.name); e.target.value = ""; });
-$("b-example").addEventListener("click", () => loadGraph(JSON.stringify(EXAMPLE), "five-phases.graph.json"));
+// A file the owner opens is a read like any other: the panel says it is reading, and a failed read names the file.
+async function readTextOf(f) {
+  readStart("graph", f.name); renderSide();
+  try { const text = await readFile(f); readSettle("graph"); return text; } catch (e) { readFail("graph", f.name, e.message || String(e)); setStatus(`Could not read ${f.name}: ${e.message}`, true); renderSide(); return null; }
+}
+$("f-graph").addEventListener("change", async (e) => { const f = e.target.files[0]; if (f) { const text = await readTextOf(f); if (text !== null) await loadGraph(text, f.name); } e.target.value = ""; });
+const loadExample = () => loadGraph(JSON.stringify(EXAMPLE), "five-phases.graph.json");
+$("b-example").addEventListener("click", loadExample);
+$("side").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-start]");
+  if (!b) return;
+  if (b.dataset.start === "open") $("l-open").click();
+  else if (b.dataset.start === "example") loadExample();
+});
+// `squad editor <id>` opens this page with the named workflow in its fragment: a page opened from a file cannot read a file of its own.
+const OPENED = core.openedWorkflow(location.hash);
+if (OPENED && OPENED.error) setStatus(OPENED.error, true);
+else if (OPENED) loadGraph(OPENED.text, OPENED.name);
 $("f-record").addEventListener("change", async (e) => {
   const f = e.target.files[0]; if (!f) return;
-  const r = core.parseRecord(await readFile(f));
-  if (r.error) setStatus(r.error, true); else { stopFollow(); S.events = r.events; S.recordBad = r.bad || null; S.cursor = null; S.issueTotal = null; setStatus(`Opened record ${f.name} (read-only).`); await recompute(); }
+  readStart("record", f.name); renderSide();
+  try {
+    const r = core.parseRecord(await readFile(f));
+    if (r.error) { readFail("record", f.name, r.error); setStatus(r.error, true); }
+    else { readSettle("record"); stopFollow(); S.events = r.events; S.recordBad = r.bad || null; S.cursor = null; S.issueTotal = null; setStatus(`Opened record ${f.name} (read-only).`); await recompute(); }
+  } catch (err) { readFail("record", f.name, err.message || String(err)); setStatus(`Could not read ${f.name}: ${err.message}`, true); }
+  renderSide();
   e.target.value = "";
 });

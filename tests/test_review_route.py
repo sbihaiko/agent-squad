@@ -43,8 +43,8 @@ def _no_tools_registry(path):
     ("gemini-3.8-flash-medium", "cli", "agy", "gemini-3.8-flash-medium"),
     ("grok-4.6", "cli", "grok", "grok-4.6"),
     ("gpt-5.6-luna", "cli", "codex", "gpt-5.6-luna"),
-    ("claude:claude-deepseek-flash", "cli", "claude", "claude-deepseek-flash"),   # #683: it uses tools
-    ("claude:claude-deepseek-flash[1m]", "cli", "claude", "claude-deepseek-flash[1m]"),
+    ("claude:claude-deepseek-flash", "direct", "", "claude-deepseek-flash"),   # review_tools: false
+    ("claude:claude-deepseek-flash[1m]", "direct", "", "claude-deepseek-flash[1m]"),
 ])
 def test_a_reviewer_route_comes_from_its_registry_entry(reg, raw, route, runner, wire):
     got = modelreg.review_route(raw, reg)
@@ -75,6 +75,17 @@ def test_a_spelling_the_registry_does_not_know_keeps_its_old_runner(reg):
     assert modelreg.review_route("claude:x", reg).runner == "claude"
     assert modelreg.review_route("claude:x", reg).wire == "x"
     assert modelreg.review_route("some-model", reg).runner == "codex"
+
+
+def test_a_coding_capability_never_decides_the_review_lane(reg):
+    """#683 gave DeepSeek tools so a coding chain keeps it. The review pass read that same capability and sent every
+    review through `claude -p`: 17 s a review on the direct call, 335 s through the CLI, most killed at the deadline.
+    A reviewer's lane comes from its review capability, and the coding chain keeps its tools."""
+    assert (modelreg.review_route("claude:claude-deepseek-flash", reg).route,
+            modelreg.review_route("claude:claude-deepseek-flash", reg).tools) == ("direct", False)
+    assert (modelreg.review_route("claude:claude-opus-5-5", reg).route,
+            modelreg.review_route("claude:claude-opus-5-5", reg).tools) == ("cli", True)
+    assert modelreg.compatible("claude-deepseek-flash", "coding", reg) == (True, None)
 
 
 def test_the_cli_prints_the_route_as_one_tab_row():

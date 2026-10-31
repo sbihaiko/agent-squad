@@ -58,6 +58,26 @@ def _in_window(w, h):
 
 def _clock(t): return time.strftime("%H:%M", time.localtime(t))
 
+
+def _timeout_why(shared, raw, now):
+    """The timeout streak that took this reviewer out of the chains, read from the file its writer owns (ADR-0161).
+
+    The panel and the loop share one source of state: an omission is a state of the entry, so it shows on the entry
+    and never removes it, and a streak whose window has ended is no reason at all."""
+    try:
+        d = json.loads((pathlib.Path(shared) / "review-timeouts.json").read_text())
+    except (OSError, ValueError):
+        return None, None
+    e = d.get(raw)
+    if e is None:   # the panel may carry the chain spelling and the writer the bare id: one model, one state
+        bare = raw.split(":", 1)[-1]
+        e = next((v for k, v in d.items() if k.split(":", 1)[-1] == bare), None)
+    e = e or {}
+    until = e.get("until")
+    if until is None or now >= float(until):
+        return None, None
+    return f"{e.get('streak', 0)} consecutive timeouts", float(until)
+
 def _v1_why(cfg, key, m, shared, now, hour):
     """The v1 rules, in the order main read them. Return (reason, until), or (None, None) when the model may run."""
     codex, agy = _marker(shared, "codex-limited", now), _marker(shared, "agy-limited", now)
@@ -70,6 +90,8 @@ def _v1_why(cfg, key, m, shared, now, hour):
     if ((cfg.get("off") or {}).get(key) or {}).get(m): return "switched off", None
     w = ((cfg.get("hours") or {}).get(key) or {}).get(m)
     if w and not _in_window(w, hour): return f"outside its window {w}", None
+    tw, tu = _timeout_why(shared, m, now)
+    if tw: return tw, tu
     return None, None
 
 
@@ -115,6 +137,8 @@ def _registry_state(doc, name, shared, now, hour):
             why = provkey.reason(e.raw)
         elif guard and e.raw in anthropic: why = "weekly quota guard"
         elif not ev.ok: why, until = ev.reason, ev.until
+        if not why:
+            why, until = _timeout_why(shared, e.raw, now)
         if why: out.append({"model": _display(e), "reason": why, "until": int(until) if until else None,
                             "until_text": _clock(until) if until else None})
     left = [_display(e) for e in entries if _display(e) not in {o["model"] for o in out}]

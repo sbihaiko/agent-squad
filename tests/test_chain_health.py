@@ -212,3 +212,21 @@ def time_in_future():
 def test_the_page_draws_the_reader_field_and_computes_no_rule(hub):
     page = (SCRIPTS / "hub.py").read_text().split("function mdlRender")[1].split("async function mdlLoad")[0]
     assert "mdl.chain" in page and "ch.banner" in page and "ch.out" in page
+
+
+def test_a_timeout_omission_shows_on_its_entry_and_the_configuration_is_untouched(ch, tmp_path):
+    """ADR-0161: the panel and the loop read one source of state. A streak that took a model out of the review chains
+    lived only in review-timeouts.json, which this reader never opened, so the entry sat in its rank with no tag."""
+    (tmp_path / "review-timeouts.json").write_text(json.dumps(
+        {"claude:claude-opus-5-5": {"streak": 3, "until": int(_reset(22, 24))}}))
+    before = list(CFG["review_models"])
+    s = ch.chain_state(CFG, "review_models", tmp_path, now=NOON)
+    assert {"model": "claude-opus-5-5", "reason": "3 consecutive timeouts",
+            "until": int(_reset(22, 24)), "until_text": "22:24"} in s["out"]
+    assert s["eligible"] == 2 and CFG["review_models"] == before
+
+
+def test_a_timeout_streak_that_has_ended_is_not_a_reason(ch, tmp_path):
+    (tmp_path / "review-timeouts.json").write_text(json.dumps(
+        {"claude:claude-opus-5-5": {"streak": 3, "until": int(NOON) - 60}}))
+    assert ch.chain_state(CFG, "review_models", tmp_path, now=NOON)["out"] == []

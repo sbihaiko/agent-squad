@@ -33,6 +33,24 @@ def test_the_first_allowed_entry_leads_when_the_default_is_not_allowed():
     assert errs == [] and req["effort"] == "low"
 
 
+def test_an_effort_above_the_allow_narrows_to_the_highest_allowed():
+    """#960: the router named `high` under an envelope that allows low and medium, and the whole run died `no_dispatch`
+    (two runs on 2026-10-31). A thinking depth a model guesses narrows to the envelope's highest allowed level; it never
+    costs the run."""
+    req, errs = validate_request(disp(), {"prompt": "go", "skill": "tdd", "effort": "high"}, 1, None, 10.0)
+    assert errs == [] and req["effort"] == "medium"
+
+
+def test_a_named_level_the_ladder_does_not_know_narrows_to_the_highest_allowed():
+    req, errs = validate_request(disp(), {"prompt": "go", "skill": "tdd", "effort": "maximum"}, 1, None, 10.0)
+    assert errs == [] and req["effort"] == "medium"
+
+
+def test_an_effort_inside_the_allow_stays_as_named():
+    req, errs = validate_request(disp(), {"prompt": "go", "skill": "tdd", "effort": "low"}, 1, None, 10.0)
+    assert errs == [] and req["effort"] == "low"
+
+
 def test_a_task_key_carries_no_limit_rule_of_its_own():
     # a task key narrows nothing, so a request is never rejected for the field itself, whatever its value
     for task in ("14", "issues/14-slug.md", "a" * 200):

@@ -45,8 +45,8 @@ land_wave() {   # <run>: 0 the wave is done (landed), 1 the pass that enters its
   local run=$1 ran pass L h c lk
   ran="$SG_STATE/auto/wland-${run##*/}"; pass="$ran.pass"; L="$SG_STATE/locks/single-childcc"; lk="$ran.busy"
   mkdir -p "$SG_STATE/auto"
-  # A plain `loop-bug` stops intake, never this landing; a `loop-bug:landing` issue names the landing path, so the wave waits
-  # and the run stays unread until it closes (#641, ADR-0146 decision 3).
+  # Only a defect in the landing path stops this landing: a `loop-bug:landing` issue names it, so the wave waits and the
+  # run stays unread until it closes (#641, ADR-0146 decision 3). A defect in the dispatch path stops intake only.
   gh_land_stop && return 1
   # The landing pass of this run is still alive: this cycle waits for it and starts no second one.
   h=$(cat "$lk" 2>/dev/null)

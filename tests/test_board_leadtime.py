@@ -2,6 +2,7 @@
 import ast
 import importlib.util
 import json
+import math
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -182,3 +183,165 @@ def test_module_imports_no_hub_github_client_or_file_api(lt):
 
     assert imported <= ALLOWED_IMPORTS
     assert opens == []
+
+
+# SPEC 889 #900: the Jira-style control chart. Every number is computed here; the page places marks and draws none.
+NOW = BASE + timedelta(days=60)
+
+
+def _closed(n, hours, days_ago=0):
+    closed = NOW - timedelta(days=days_ago)
+    opened = closed - timedelta(hours=hours)
+    return {"n": n, "t": f"card {n}", "o": _iso(opened), "c": _iso(closed), "column": "Done"}
+
+
+def _chart(lt, items, **kw):
+    return lt.control_chart(items, now=NOW, **kw)
+
+
+def test_the_rolling_window_is_twenty_percent_odd_and_at_least_five(lt):
+    assert _chart(lt, [_closed(n, n) for n in range(1, 11)])["window"]["size"] == 5, "10 issues: 20% is 2, raised to 5"
+    assert _chart(lt, [_closed(n, n) for n in range(1, 31)])["window"]["size"] == 7, "30 issues: 20% is 6, odd is 7"
+    assert _chart(lt, [_closed(n, n) for n in range(1, 51)])["window"]["size"] == 11, "50 issues: 20% is 10, odd is 11"
+
+
+def test_the_rolling_mean_is_centered_on_each_dot_and_shrinks_at_the_ends(lt):
+    result = _chart(lt, [_closed(n, n) for n in range(1, 10)])   # hours 1..9, window 5
+
+    means = [dot["rolling"]["hours"] for dot in result["dots"]]
+    assert means[0] == 2.0, "the first dot averages the dots it has: 1, 2, 3"
+    assert means[4] == 5.0, "the middle dot averages 3 to 7"
+    assert means[8] == 8.0, "the last dot averages 7, 8, 9"
+
+
+def test_the_linear_band_is_one_sigma_and_its_lower_edge_stays_at_zero(lt):
+    result = _chart(lt, [_closed(n, h) for n, h in enumerate([2, 4, 6, 8, 10], start=1)])
+
+    centre = result["dots"][2]["rolling"]
+    assert centre["hours"] == 6.0
+    assert centre["low"] == pytest.approx(6 - 8 ** 0.5, abs=1e-9)
+    assert centre["high"] == pytest.approx(6 + 8 ** 0.5, abs=1e-9)
+
+    low_edge = _chart(lt, [_closed(n, 1) for n in range(1, 7)] + [_closed(7, 100)])["dots"][5]["rolling"]
+    assert low_edge["low"] == 0.0, "a band never falls below zero hours"
+
+
+def test_the_log_band_is_one_sigma_in_log_space_around_the_geometric_mean(lt):
+    result = _chart(lt, [_closed(n, h) for n, h in enumerate([2, 4, 6, 8, 10], start=1)], log=True)
+
+    centre = result["dots"][2]["rolling"]
+    logs = [math.log(h) for h in [2, 4, 6, 8, 10]]
+    mean = sum(logs) / 5
+    sigma = (sum((v - mean) ** 2 for v in logs) / 5) ** 0.5
+    assert centre["hours"] == pytest.approx(math.exp(mean), rel=1e-9)
+    assert centre["low"] == pytest.approx(math.exp(mean - sigma), rel=1e-9)
+    assert centre["high"] == pytest.approx(math.exp(mean + sigma), rel=1e-9)
+
+
+def test_the_scale_is_linear_under_thirty_days_and_cube_root_from_thirty(lt):
+    under = _chart(lt, [_closed(1, 29 * 24), _closed(2, 5)])
+    at = _chart(lt, [_closed(1, 30 * 24), _closed(2, 5)])
+
+    assert under["axis"] == "linear"
+    assert at["axis"] == "cube"
+
+
+def test_the_log_scale_ticks_name_an_hour_a_day_and_a_week(lt):
+    result = _chart(lt, [_closed(1, 3), _closed(2, 30 * 24)], log=True)
+
+    assert result["axis"] == "log"
+    assert [tick["text"] for tick in result["ticks"]] == ["1 h", "1 d", "1 w"]
+
+
+def test_a_timeframe_keeps_only_the_cards_closed_inside_it(lt):
+    items = [_closed(1, 5, days_ago=1), _closed(2, 5, days_ago=20)]
+
+    assert [dot["n"] for dot in _chart(lt, items, timeframe=7)["dots"]] == [1]
+    assert sorted(dot["n"] for dot in _chart(lt, items, timeframe=None)["dots"]) == [1, 2]
+
+
+def test_the_date_axis_places_the_range_end_at_the_right_edge(lt):
+    result = _chart(lt, [_closed(1, 5, days_ago=0), _closed(2, 5, days_ago=5)], timeframe=10)
+
+    xs = {dot["n"]: dot["x"] for dot in result["dots"]}
+    assert xs[1] == 1.0, "a card closed now sits on the right edge"
+    assert xs[2] == pytest.approx(0.5), "a card closed 5 of 10 days ago sits in the middle"
+
+
+def test_dots_closer_than_one_dot_merge_into_a_numbered_cluster(lt):
+    items = [_closed(1, 5, days_ago=2), _closed(2, 5, days_ago=2), _closed(3, 90, days_ago=2)]
+
+    clusters = _chart(lt, items)["clusters"]
+
+    assert sorted(len(c["dots"]) for c in clusters) == [1, 2]
+    merged = next(c for c in clusters if len(c["dots"]) == 2)
+    assert [d["n"] for d in merged["dots"]] == [1, 2]
+
+
+def test_the_window_text_names_the_days_and_the_excluded_reasons(lt):
+    items = [_closed(1, 5, days_ago=1), _open(2), _no_opened(3, 4)]
+
+    result = _chart(lt, items, timeframe=30)
+
+    assert result["text"] == "last 30 days, 2 excluded because still open, no opened date"
+
+
+def test_the_average_median_and_p85_carry_values_and_positions(lt):
+    items = [_closed(n, h) for n, h in enumerate(range(1, 11), start=1)]
+
+    result = _chart(lt, items)
+
+    assert result["average"]["hours"] == 5.5
+    assert result["median"]["hours"] == 5.5
+    assert result["p85"]["hours"] == 9.0
+    assert 0.0 <= result["p85"]["y"] <= 1.0
+    assert result["p85"]["text"] == "9h"
+
+
+def test_no_closed_card_gives_no_dots_and_no_lines(lt):
+    result = _chart(lt, [_open(1)])
+
+    assert result["dots"] == []
+    assert result["average"] is None
+    assert result["text"] == "all closed cards, 1 excluded because still open"
+
+
+# SPEC 889 #900: a drag across the plot zooms to a date range. The hub recomputes the chart for that range.
+def test_a_zoom_range_keeps_only_the_cards_closed_inside_it(lt):
+    items = [_closed(1, 5, days_ago=1), _closed(2, 5, days_ago=5), _closed(3, 5, days_ago=20)]
+    start, end = NOW - timedelta(days=6), NOW - timedelta(days=2)
+
+    result = _chart(lt, items, start=start, end=end)
+
+    assert sorted(dot["n"] for dot in result["dots"]) == [2]
+
+
+def test_a_zoom_range_places_its_start_on_the_left_edge_and_its_end_on_the_right(lt):
+    start, end = NOW - timedelta(days=10), NOW
+    result = _chart(lt, [_closed(1, 5, days_ago=0), _closed(2, 5, days_ago=5)], start=start, end=end)
+
+    xs = {dot["n"]: dot["x"] for dot in result["dots"]}
+    assert xs[1] == 1.0, "a card closed at the zoom end sits on the right edge"
+    assert xs[2] == pytest.approx(0.5), "a card closed 5 of 10 days ago sits in the middle"
+
+
+def test_the_chart_reports_the_range_it_plots(lt):
+    start, end = NOW - timedelta(days=10), NOW
+    result = _chart(lt, [_closed(1, 5, days_ago=1)], start=start, end=end)
+
+    assert result["range"] == {"start": _iso(start), "end": _iso(end)}
+
+
+def test_a_zoom_range_names_its_dates_in_the_window_text(lt):
+    start, end = datetime(2026, 9, 30, tzinfo=UTC), datetime(2026, 10, 8, tzinfo=UTC)
+    result = _chart(lt, [_closed(1, 5, days_ago=20)], start=start, end=end)
+
+    assert result["text"] == "Sep 30 to Oct 8"
+
+
+def test_a_zoom_range_with_no_card_keeps_its_range_and_no_dots(lt):
+    start, end = NOW - timedelta(days=3), NOW - timedelta(days=2)
+    result = _chart(lt, [_closed(1, 5, days_ago=20)], start=start, end=end)
+
+    assert result["dots"] == []
+    assert result["range"] == {"start": _iso(start), "end": _iso(end)}

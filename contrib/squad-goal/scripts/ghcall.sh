@@ -86,15 +86,26 @@ _gh_refusal_line() {   # the one line a caller logs when GitHub refused: GitHub'
   printf 'refused: GitHub refused: %s\n' "$(printf '%s' "$1" | jq -r '.message // .errors[0].message // "no message"' 2>/dev/null)"
 }
 
+# sg_loop_build   The loop's build: the sha of the checkout it publishes from. A SQUAD-NOT-STARTABLE marker names the
+# build that wrote it, and a marker written by another build no longer stops a dispatch (owner answer B2, ADR-0134): a
+# landing may be the fix, and a count from before it is not evidence about the code that runs now. Empty when the
+# checkout cannot be read; a marker then keeps its stop, because an unknown build proves nothing.
+sg_loop_build() {
+  local sha
+  sha=$(/usr/bin/git -C "${SG_CHECKOUT:-.}" rev-parse --short=12 HEAD 2>/dev/null) || true
+  [ -n "$sha" ] && printf '%s\n' "$sha"
+}
+
 # gh_loop_stop <issues.json>   A defect in the loop's own machinery is fixed outside the loop (#596, ADR-0146): while an
-# open issue carries `loop-bug`, a dispatch pass dispatches nothing, because the loop cannot deliver its own fix. The stop
-# is read from the open-issue list the pass already reads, never from a marker, so closing the issue resumes dispatch at
-# the next pass with no other action. Returns 0 and prints the one line when an open `loop-bug` issue is present, 1 when
-# there is none. The line is published to the loop log and to the issue's line on the board, not only to stdout.
-# `loop-bug:landing` is a loop-bug too: it stops dispatch here, and the landing as well (gh_land_stop, #641).
+# open issue carries a defect in the dispatch path or the landing path, a dispatch pass dispatches nothing, because the
+# loop cannot deliver its own fix. Those are `loop-bug:dispatch` and `loop-bug:landing`; a bare `loop-bug` names a defect
+# the loop works beside, and it never stops dispatch (owner answer B1, #960). The stop is read from the open-issue list the
+# pass already reads, never from a marker, so closing the issue resumes dispatch at the next pass with no other action.
+# Returns 0 and prints the one line when such an issue is present, 1 when there is none. The line is published to the loop
+# log and to the issue's line on the board, not only to stdout. `loop-bug:landing` stops the landing as well (gh_land_stop, #641).
 gh_loop_stop() {
   local j=${1:?gh_loop_stop: an issues file is required} n line f
-  n=$(jq -r '[.[]|select(any(.labels[]?; ((.name? // .) | . == "loop-bug" or . == "loop-bug:landing")))][0].number // empty' "$j" 2>/dev/null) || return 1
+  n=$(jq -r '[.[]|select(any(.labels[]?; ((.name? // .) | . == "loop-bug:dispatch" or . == "loop-bug:landing")))][0].number // empty' "$j" 2>/dev/null) || return 1
   # The stop is also one marker the hub reads without a query (#956): the page shows Loop:OFF while dispatch is held, and the
   # marker goes with the label, so closing the issue reads ON again at the same pass.
   [ -n "$n" ] || { rm -f "${SG_STATE:?gh_loop_stop: no state directory}"/auto/loop-stop-* 2>/dev/null; return 1; }

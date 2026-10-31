@@ -1365,6 +1365,7 @@
       },
       "capabilities": {
         "tools": true,
+        "review_tools": false,
         "thinking_off": true,
         "vision": false,
         "context": 131072

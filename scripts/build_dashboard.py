@@ -106,7 +106,7 @@ def core_bundle():
 
 
 # The page script: one file per concern in dashboard/page/, in source order (a later file may use an earlier one at load time).
-PAGE_ORDER = ("shell.js", "graph.js", "panel.js", "edit.js", "menu.js", "review.js", "run.js", "cards.js", "save.js", "chrome.js")
+PAGE_ORDER = ("shell.js", "states.js", "graph.js", "panel.js", "edit.js", "menu.js", "review.js", "run.js", "cards.js", "save.js", "chrome.js")
 PAGE_DIR = DASH / "page"
 PAGE_CSS = DASH / "page.css"
 WEB_TOKENS_CSS = ROOT / "contrib" / "squad-goal" / "scripts" / "web-tokens.css"

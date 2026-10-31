@@ -5,6 +5,23 @@ function sourcesModule({ STATES }) {
   // The legend and the help are data. The page draws a swatch as a card group, so the card CSS paints it, and a Python test
   // holds the legend to the colors the page paints and the help to the controls the page answers.
   // A row with a `glyph` draws it in the swatch: the same glyph the card carries, so the color is never the only cue.
+  // The icon of a node kind: one glyph and one class per kind, so a gate and an agent differ by shape as well as by color (#914).
+  // The class names the kind's chip color in page.css, and the legend lists the same seven. An unknown kind keeps a glyph and its own class; it never throws.
+  const KIND_LEGEND = [
+    { kind: "agent", glyph: "\u25c6", label: "Agent: calls a model" },
+    { kind: "gate", glyph: "\u2713", label: "Gate: a check that passes or fails" },
+    { kind: "action", glyph: "\u25b6", label: "Action: a fixed step, no model" },
+    { kind: "wait", glyph: "\u2016", label: "Wait: a person decides" },
+    { kind: "loop", glyph: "\u21bb", label: "Loop: repeats until it passes" },
+    { kind: "each", glyph: "\u2261", label: "Each: runs for every item" },
+    { kind: "dispatch", glyph: "\u21c9", label: "Dispatch: starts children" },
+  ];
+  // The seven kinds, one row each, in the legend's own "Node kinds" group: the states table stays the one list of card states.
+  const KIND_GLYPHS = Object.fromEntries(KIND_LEGEND.map((k) => [k.kind, k.glyph]));
+  function kindMark(kind) {
+    const k = typeof kind === "string" && kind ? kind : "unknown";
+    return { kind: k, glyph: KIND_GLYPHS[k] || "\u25cb", cls: `k-${k}` };
+  }
   const LEGEND = [
     ...STATES.filter((x) => x.legend).map((x) => ({ cls: x.cls, glyph: x.glyph, label: x.legend, group: "node" })),   // the card states: from the one STATES table
     { cls: "err", label: "Breaks a graph rule: fix it", group: "node" },   // an editor state (core.validate), never a record event: a run refuses a graph with one
@@ -55,9 +72,10 @@ function sourcesModule({ STATES }) {
   // The source of a run that a loopback server serves: fetch the record and the graph by path. A missing file is null, like the other sources.
   // `fetchFn(path)` returns {ok, text()}; the page passes fetch with no-store, a test passes a map.
   // `streamFn(path, handlers)` opens a push stream and returns {close()}; a source built with it offers `stream`.
+  // `paths` names the file each read opens, so a slow or failed read can say what it read.
   function httpSource(fetchFn, name, streamFn) {
     const get = async (p) => { try { const r = await fetchFn(p); return r && r.ok ? await r.text() : null; } catch (e) { return null; } };
-    const src = { name, live: true, graph: () => get("run/graph.json"), record: () => get("run/record.jsonl") };
+    const src = { name, live: true, paths: { record: "run/record.jsonl", graph: "run/graph.json" }, graph: () => get("run/graph.json"), record: () => get("run/record.jsonl") };
     if (typeof streamFn === "function") src.stream = (handlers) => streamFn("run/events", handlers);
     return src;
   }
@@ -99,5 +117,5 @@ function sourcesModule({ STATES }) {
     return { close: stop, handlers };
   }
 
-  return { LEGEND, LEGEND_CHIPS, RUN_STATES, STATE_TEXT, HELP, httpSource, followPush };
+  return { LEGEND, LEGEND_CHIPS, RUN_STATES, STATE_TEXT, HELP, httpSource, followPush, kindMark, KIND_LEGEND };
 }

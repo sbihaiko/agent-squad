@@ -312,14 +312,14 @@ r=$(CARDS_DOWN=1 run)
 [ "$(marked 85)" = 0 ] && [ "$(lines "$LAUNCHLOG")" = 0 ] && ok "X: a board that does not answer dispatches nothing" || ko "X: #85 went out with no board read: '$r'"
 case "$r" in *"board"*) ok "X: the pass says the board did not answer";; *) ko "X: the pass is silent about the board: '$r'";; esac
 
-# Y (#596, ADR-0146): an open issue carrying `loop-bug` is a defect in the loop's own machinery. The loop cannot dispatch
+# Y (#596, ADR-0146): an open issue carrying `loop-bug:dispatch` is a defect in the loop's dispatch path. The loop cannot dispatch
 # its own fix, so the frontier pass dispatches nothing, names the issue exactly once per pass, and exits 0. The stop is read
 # from the open issues the pass already reads, so it costs no second read, and it has no marker: closing the issue resumes
 # dispatch at the next pass with no other action.
 scene loopbug
-issues '[{"number":91,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":596,"title":"The loop cannot land its own fix","body":"b","labels":[{"name":"wave:01"},{"name":"loop-bug"}]}]'
+issues '[{"number":91,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":596,"title":"The loop cannot land its own fix","body":"b","labels":[{"name":"wave:01"},{"name":"loop-bug:dispatch"}]}]'
 r=$(run)
-[ "$(lines "$LAUNCHLOG")" = 0 ] && ok "Y: a loop defect halts the frontier pass" || ko "Y: the pass launched with a loop defect open: '$r'"
+[ "$(lines "$LAUNCHLOG")" = 0 ] && ok "Y: a dispatch-path loop defect halts the frontier pass" || ko "Y: the pass launched with a loop defect open: '$r'"
 [ "$(marked 91 596)" = 0 ] && ok "Y: no startable issue is dispatched while the defect is open" || ko "Y: markers: $(marked 91 596)"
 case "$r" in *"LOOP STOP: #596 is a loop defect; the fix lands outside the loop"*) ok "Y: the stop names the issue and where the fix lands";; *) ko "Y: the stop is not named: '$r'";; esac
 $G -qxF "LOOP STOP: #596 is a loop defect; the fix lands outside the loop" "$d/st/cycle.log" 2>/dev/null && ok "Y: the stop is published to the loop log" || ko "Y: cycle.log: $(cat "$d/st/cycle.log" 2>/dev/null)"
@@ -327,6 +327,12 @@ $G -qxF "LOOP STOP: #596 is a loop defect; the fix lands outside the loop" "$d/s
 issues '[{"number":91,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
 r=$(run)
 [ "$(marked 91)" = 1 ] && ok "Y: closing the issue resumes dispatch with no other action" || ko "Y: dispatch did not resume: '$r'"
+
+# Y0 (owner answer B1): a bare `loop-bug` names a defect the loop works beside: it halts nothing, and the pass dispatches.
+scene loopbugbare
+issues '[{"number":91,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":596,"title":"The loop cannot land its own fix","body":"b","labels":[{"name":"wave:01"},{"name":"loop-bug"}]}]'
+r=$(run)
+[ "$(marked 91)" = 1 ] && ok "Y0: a bare loop-bug halts nothing" || ko "Y0: a bare loop-bug held the pass: '$r'"
 
 # Y1 (#641): `loop-bug:landing` names a loop defect in the landing path. It is a loop-bug too, so it halts dispatch as well.
 scene loopbugland

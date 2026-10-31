@@ -134,9 +134,10 @@ r=$(OPEN="18" fp)
 r=$(OPEN="20" LABELED="20=loop-bug" fp); r="$r"$'\n'"$(OPEN="20" LABELED="20=loop-bug" fp)"
 [ "$(n gui/20-lb)" = 0 ] && ok "a loop-bug branch gets no fix run" || ko "a loop-bug branch was dispatched: '$r'"
 [ "$(printf '%s' "$r" | /usr/bin/grep -c '^BRANCHFIX SKIP gui/20-lb: loop-bug, fixed outside the loop$')" = 1 ] && ok "the skip is said once per tip" || ko "skip lines: '$r'"
-# 16) (#841) while LOOP STOP holds, no fix run starts, even for a plain bug; the skip says LOOP STOP
+# 16) (#841, B1) while a defect in the dispatch path holds LOOP STOP, no fix run starts, even for a plain bug; the skip
+# says LOOP STOP. A bare `loop-bug` halts nothing, so it holds no fix run either.
 : > "$T/launch.log"; push gui/21-ls; rev gui/21-ls CHANGES "m.sh:1 fix"
-r=$(OPEN="21 90" LABELED="90=loop-bug" fp)
+r=$(OPEN="21 90" LABELED="90=loop-bug:dispatch" fp)
 [ "$(n gui/21-ls)" = 0 ] && ok "LOOP STOP holds the fix pass for a plain bug" || ko "a fix run started under LOOP STOP: '$r'"
 case "$r" in *"BRANCHFIX SKIP gui/21-ls: LOOP STOP holds, fixed outside the loop"*) ok "the skip names LOOP STOP";; *) ko "no LOOP STOP skip line: '$r'";; esac
 # 17) (#841) a loop-bug:* label on one branch skips that branch only; a plain bug on another branch still gets its one launch

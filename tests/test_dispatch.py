@@ -118,7 +118,7 @@ async def test_code_assigns_the_request_key_and_child_name_and_a_model_id_is_ref
 
 
 BAD = [
-    (dict(model="gpt"), "model_supplied"), (dict(effort="max"), "effort_outside_allow"),
+    (dict(model="gpt"), "model_supplied"),
     (dict(tools=["Read", "WebFetch"]), "tool_outside_allow:WebFetch"), (dict(skill="evil"), "skill_outside_allow"),
     (dict(stalls=999), "stalls_outside_budget"), (dict(stalls=1), "stalls_outside_budget"), (dict(spend=50.0), "spend_outside_budget"),
     (dict(deadline=99999), "deadline_over_dispatch"), (dict(workspace="elsewhere"), "workspace_outside_allow:requested 'elsewhere', allowed ['worktrees/child']"),
@@ -133,6 +133,16 @@ async def test_a_request_over_any_limit_is_rejected_whole_with_one_event(tmp_pat
     assert [e["reason"] for e in ev(tmp_path, "spawn_rejected")] == [reason]
     assert not ev(tmp_path, "spawn_accepted") and v.verdict == "failed"
     assert [e["node"] for e in ev(tmp_path, "outcome") if e["node"] == "router"] == ["router"]   # a rejection changes no node outcome
+
+
+@pytest.mark.anyio
+async def test_a_request_naming_an_effort_over_the_allow_is_accepted_at_the_allowed_level(tmp_path):
+    """#960: the router named `max` under an envelope of low and medium and two runs died `no_dispatch`. The request is
+    accepted, and the child runs at the envelope's highest allowed depth."""
+    eng = make(tmp_path, {"router": routed(req(effort="max")), "route.router.1": CHILD})
+    await eng.run()
+    acc = ev(tmp_path, "spawn_accepted")
+    assert [e["definition"]["effort"] for e in acc] == ["medium"] and not ev(tmp_path, "spawn_rejected")
 
 
 @pytest.mark.anyio

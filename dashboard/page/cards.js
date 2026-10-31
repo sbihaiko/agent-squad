@@ -11,13 +11,19 @@ const CARD = (new URLSearchParams(location.search).get("card") || "").trim();
 let cardHTML = null;
 
 function renderCard() {
-  const box = $("card"), card = core.cardBody(CARD, S.children);
-  const groups = card.groups.map((g) => {
-    const rows = g.kids.map((k) => `<div class="crow s-${esc(core.childMark(k).state)}" title="${esc(k.name)}">${esc(core.childMark(k).glyph)} <b>${esc(k.title || k.label || k.name)}</b>${k.running_for ? ` <span class="cmeta">${esc(core.fmt.seconds(k.running_for))}</span>` : ""}</div>`).join("");
-    return `<section class="cgroup s-${esc(g.state)}"><h3>${esc(g.name)}</h3>${rows}</section>`;
-  }).join("");
-  const html = card.ok ? groups || `<p class="cnote">${esc(card.empty)}</p>` : `<p class="cnote">${esc(card.message)}</p>`;
-  if (html !== cardHTML) { box.innerHTML = html; cardHTML = html; }
+  const box = $("card");
+  // The card reads the same run as the page: it says it is reading, and it names the empty run, rather than a blank frame.
+  const read = !S.doc && !S.events ? readKey("record", "graph") : null;
+  if (read) { paintRead(box, read, "run"); cardHTML = null; }
+  else {
+    const card = core.cardBody(CARD, S.children);
+    const groups = card.groups.map((g) => {
+      const rows = g.kids.map((k) => `<div class="crow s-${esc(core.childMark(k).state)}" title="${esc(k.name)}">${esc(core.childMark(k).glyph)} <b>${esc(k.title || k.label || k.name)}</b>${k.running_for ? ` <span class="cmeta">${esc(core.fmt.seconds(k.running_for))}</span>` : ""}</div>`).join("");
+      return `<section class="cgroup s-${esc(g.state)}"><h3>${esc(g.name)}</h3>${rows}</section>`;
+    }).join("");
+    const html = card.ok ? groups || emptyHtml(card.empty) : `<p class="cnote">${esc(card.message)}</p>`;
+    if (html !== cardHTML) { box.innerHTML = html; cardHTML = html; }
+  }
   if (window.parent !== window) window.parent.postMessage({ squadCard: CARD }, "*");   // the window's own handshake: it knows this page answered the mode
 }
 

@@ -61,6 +61,9 @@ An ADR holds a decision and its reason. It is not a ledger: no dates, counts, st
 | [0157](0157-a-proof-is-bounded.md) | A proof is bounded: it reserves the machine for 30 minutes, past which the reserve lifts and the loop works beside it; past two hours it is killed and its tip recorded indeterminate, not tested, with no promotion and no refusal |
 
 | [0158](0158-a-file-batch-is-capped.md) | A file batch is capped at two tickets by default: the cap splits a cluster in ascending number order and drops no ticket, so one large file never becomes one run that dies out_of_budget |
+| [0159](0159-a-not-startable-marker-names-its-build.md) | A not-startable marker names the build that wrote it: the same build keeps the stop, another build re-arms it, and a marker that names none keeps the stop |
+| [0160](0160-a-model-omitted-is-investigated-and-recovered.md) | A model omitted from a chain is investigated and recovered: the omission names its cause, the lane is probed before the window ends, and only a real answer clears the streak |
+| [0161](0161-a-chain-entry-shows-its-state-as-a-tag.md) | A chain entry shows its live state as a tag: one read joins the configuration and the state, so an omitted model keeps its place and names its cause |
 
 ## Adding an ADR
 
