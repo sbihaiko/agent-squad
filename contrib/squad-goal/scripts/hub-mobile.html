@@ -30,7 +30,7 @@ h2{font-size:var(--fs-md);margin:6px 0 10px}
 #dots i{width:7px;height:7px;border-radius:50%;background:var(--line)}
 #dots i.on{background:var(--fg)}
 #bfilter{display:flex;gap:8px;align-items:flex-start;margin-bottom:10px;flex-wrap:wrap}
-#bfilter button,#bfilter summary{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:0 10px;font-size:var(--fs-body)}
+#bfilter button,#bfilter summary,#hide-empty,#lf summary{min-height:44px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:0 10px;font-size:var(--fs-body)}
 #lf{position:relative}
 #lfl{position:absolute;z-index:5;top:44px;left:0;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:8px;display:grid;gap:4px;min-width:200px;max-height:60vh;overflow:auto}
 #lfl label{font-size:var(--fs-body);display:flex;align-items:center;gap:6px;min-height:44px}
@@ -68,7 +68,7 @@ h2{font-size:var(--fs-md);margin:6px 0 10px}
 #sh-body code{background:var(--bg);border-radius:4px;padding:0 4px}
 #sh-body pre code{padding:0}
 #sh-body a{color:#5aa9ff}
-#sh-body table{display:block;overflow:auto}
+#sh-body table,#sh-body tbody{display:block}#sh-body tr{display:block;padding:6px 0;border-bottom:1px solid var(--line)}#sh-body td,#sh-body th{display:block;padding:2px 0}
 #sh-body blockquote{margin:8px 0;padding-left:10px;border-left:3px solid var(--line);color:var(--mute)}
 #sh-body input[type=checkbox]{transform:scale(1.1);transform-origin:left center;vertical-align:-3px;margin:0 6px 0 0;accent-color:#4caf50;pointer-events:none}
 #sh-last{margin:10px 0}
@@ -77,7 +77,7 @@ h2{font-size:var(--fs-md);margin:6px 0 10px}
 #sh-todo{width:100%;min-height:44px;margin-top:8px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;font-size:var(--fs-body)}
 #sh-todo[hidden]{display:none}
 nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:var(--panel);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom)}
-nav button{flex:1;min-height:56px;background:none;border:0;color:var(--mute);font:var(--fs-min) system-ui;padding:6px 0}
+nav button{flex:1;min-height:56px;white-space:nowrap;background:none;border:0;color:var(--mute);font:var(--fs-min) system-ui;padding:6px 0}
 nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 #5aa9ff}
 #reconnect{position:fixed;inset:0;z-index:5;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px;text-align:center}
 #reconnect[hidden]{display:none}
@@ -358,7 +358,7 @@ function renderBoard() {
   $("dots").replaceChildren(...cols.map((c, i) => { const d = document.createElement("i"); if (i === view.col) d.className = "on"; return d; }));
   const empty = document.createElement("p");
   empty.className = "empty";
-  empty.textContent = g ? "No card in this column with these filters." : groups.length ? "No column holds a card." : "Loading the board.";
+  empty.textContent = emptyColumnNote({ groups: groups.length, shown: cols.length, filtered: (bo.labels || []).length > 0 || specMode() !== 0 });
   $("cards").replaceChildren(...(shown.length ? shown.map(cardButton) : [empty]));
 }
 // The sheet draws the card data the board read already holds (#919): the row carries the blockers, the cards it blocks,

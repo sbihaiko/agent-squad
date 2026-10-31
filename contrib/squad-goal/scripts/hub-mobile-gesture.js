@@ -43,3 +43,6 @@ const carouselColumns = (groups, counts, hide) => {
   });
   return { shown, hidden };
 };
+// The empty-column note (#915): a column with no card names the filters only when a filter is set.
+const emptyColumnNote = ({ groups, shown, filtered }) =>
+  !groups ? "Loading the board." : !shown ? "No column holds a card." : filtered ? "No card in this column with these filters." : "No card in this column.";
