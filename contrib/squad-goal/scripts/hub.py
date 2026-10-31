@@ -2833,11 +2833,47 @@ def issue_html(n, repo=None):
     cm = node.get("comments") or {}
     nodes = [x for x in (cm.get("nodes") or []) if isinstance(x, dict)]
     last = nodes[-1] if nodes else None
-    d = {"body": node.get("bodyHTML") or "", "total": cm.get("totalCount") or 0, "last": None}
+    d = {"body": render_html(node.get("bodyHTML") or ""), "total": cm.get("totalCount") or 0, "last": None}
     if last:
         d["last"] = {"by": (last.get("author") or {}).get("login") or "", "at": last.get("createdAt") or "",
-                     "html": last.get("bodyHTML") or "", "url": last.get("url") or ""}
+                     "html": render_html(last.get("bodyHTML") or ""), "url": last.get("url") or ""}
     return d
+
+# The rendered body is GitHub's own HTML, so the hub keeps its structure in its own type and colors and allows only what
+# cannot run: one allow-list, on this side of the wire, so neither page holds a sanitizer of its own (ADR-0137, #919).
+HTML_TAGS = frozenset("details summary hr br b i strong em code kbd sub sup p div span ul ol li table thead tbody tr th td "
+                      "h1 h2 h3 h4 h5 h6 blockquote pre a img del s u input".split())
+HTML_ATTR = {"a": ("href",), "img": ("src", "alt", "width", "height"), "td": ("colspan", "rowspan", "align"),
+             "th": ("colspan", "rowspan", "align"), "details": ("open",), "input": ("type", "checked", "disabled")}
+HTML_VOID = frozenset(("br", "hr", "img", "input"))
+HTML_SCAFFOLD = re.compile(r"(?is)<(script|style|svg|iframe|object|embed|video|audio)\b[^>]*>.*?</\1\s*>")
+HTML_COMMENT = re.compile(r"(?s)<!--.*?-->")
+HTML_TAG = re.compile(r"(?s)<(/?)([a-zA-Z][a-zA-Z0-9]*)((?:\s[^<>]*?)?)\s*/?>")
+HTML_PAIR = re.compile(r"""([a-zA-Z-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')""")
+HTML_BARE = re.compile(r"(?<![=\w-])(checked|disabled|open)(?=[\s/>]|$)")
+def render_html(src):
+    """GitHub's rendered body passed through the allow-list: the tags it renders keep their structure, a class or style
+    never rides, a relative or `javascript:` link is dropped, and a task-list checkbox keeps its look. Anything else is
+    its text alone, so a body never reaches the page with a script, a frame or a handler."""
+    t = HTML_COMMENT.sub("", HTML_SCAFFOLD.sub("", src or ""))
+    def one(m):
+        close, name, attrs = bool(m.group(1)), (m.group(2) or "").lower(), m.group(3) or ""
+        if name not in HTML_TAGS: return ""
+        if close: return "" if name in HTML_VOID else f"</{name}>"
+        kept = []
+        for am in HTML_PAIR.finditer(attrs):
+            k, v = am.group(1).lower(), am.group(2) if am.group(2) is not None else am.group(3)
+            if k not in HTML_ATTR.get(name, ()): continue
+            if k in ("href", "src") and not re.match(r"(?i)^https?://", v): continue
+            if k == "type" and v.lower() != "checkbox": continue
+            kept.append(f' {k}="{html.escape(v, quote=True)}"')
+        for bare in HTML_BARE.finditer(attrs):
+            if bare.group(1) in HTML_ATTR.get(name, ()): kept.append(" " + bare.group(1))
+        kept = list(dict.fromkeys(kept))
+        if name == "a" and any(k.startswith(" href=") for k in kept): kept += [' target="_blank" rel="noopener"']
+        if name == "img": kept += [' referrerpolicy="no-referrer" loading="lazy"']
+        return f"<{name}{''.join(kept)}>"
+    return HTML_TAG.sub(one, t)
 def issue_detail(n, repo=None):
     """Issue (or PR) body + the last 5 comments, fetched on click and cached 60 s. n is an int, never interpolated raw.
     `repo` is the repository the card belongs to (#1820): a number is only a number, and PR #1821 of the tooling

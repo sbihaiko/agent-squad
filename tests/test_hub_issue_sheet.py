@@ -100,6 +100,38 @@ def test_a_graphql_read_that_fails_leaves_the_plain_body_and_never_the_panel_err
     assert d["html"] == "" and d["body"] == "a body, plain", d
 
 
+# --- GitHub's rendered HTML, allowed through one allow-list ---------------------------------------------------------------
+
+def test_the_rendered_html_keeps_githubs_structure_and_drops_what_can_run(hub):
+    """The body is GitHub's own HTML (body_html); the hub keeps its structure in its own type and colors and drops every
+    tag or attribute that could run, so an issue body never reaches the page's origin with a script."""
+    mod, _ = hub
+    out = mod.render_html(
+        '<div class="markdown-body"><h2>Build</h2><p>a <code>x</code></p>'
+        '<ul class="contains-task-list"><li><input type="checkbox" checked disabled> done</li></ul>'
+        '<script>alert(1)</script><style>p{color:red}</style><svg><path d="M0"/></svg>'
+        '<a href="javascript:alert(1)">bad</a><a href="https://github.com/x/y/issues/2">good</a>'
+        '<iframe src="https://x"></iframe><img src="https://x/a.png" onerror="go()"></div>')
+    for gone in ("<script", "<style", "<svg", "<iframe", "javascript:", "onerror", "class=", "style="):
+        assert gone not in out, f"the rendered body still carries {gone!r}: {out}"
+    assert "<h2>Build</h2>" in out and "<code>x</code>" in out, out
+    assert '<a href="https://github.com/x/y/issues/2" target="_blank" rel="noopener">good</a>' in out, out
+    assert '<img src="https://x/a.png"' in out, out
+
+
+def test_a_task_list_checkbox_keeps_its_look(hub):
+    mod, _ = hub
+    out = mod.render_html('<ul><li><input type="checkbox" disabled> open</li><li><input type="checkbox" checked disabled> done</li></ul>')
+    assert out.count('<input type="checkbox"') == 2, out
+    assert "checked" in out.split("</li>")[1], "a checked task keeps its check"
+
+
+def test_a_relative_link_is_dropped_instead_of_pointing_at_the_hub(hub):
+    mod, _ = hub
+    out = mod.render_html('<a href="/x/y/issues/3">mention</a>')
+    assert "href" not in out and "mention" in out, out
+
+
 # --- the card data the page already holds, served on the row -------------------------------------------------------------
 
 def _item(n, title="a ticket", status="Todo", **extra):
