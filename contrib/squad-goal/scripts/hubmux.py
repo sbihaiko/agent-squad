@@ -80,8 +80,16 @@ def live(app):
     except Exception: return []
 
 
+def alert(app):
+    """The worst alert of one repository as text, or "" when none or when its hub cannot say (#876)."""
+    mod = app.get("mod")
+    if mod is None: return ""
+    try: return mod.worst_alert()
+    except Exception: return ""
+
+
 def listing(apps):
-    return {"hub": "squad-hub", "repos": [{"slug": s, "repo": a["repo"], "path": f"/{s}", "live": live(a), **({"err": a["err"]} if "err" in a else {})} for s, a in apps.items()]}
+    return {"hub": "squad-hub", "repos": [{"slug": s, "repo": a["repo"], "path": f"/{s}", "live": live(a), "alert": alert(a), **({"err": a["err"]} if "err" in a else {})} for s, a in apps.items()]}
 
 
 WEB_TOKENS = (pathlib.Path(__file__).resolve().parent / "web-tokens.css").read_text()
