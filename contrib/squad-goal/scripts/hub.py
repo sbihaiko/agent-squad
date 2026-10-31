@@ -1718,6 +1718,90 @@ def loop_status():
     on = _loop_on(); prev = _json(LOOP_STAMP) or {}
     return {"on": on, "since": prev.get("since") if bool(prev.get("on")) == on else None}
 
+LOOP_AUDIT = STATE / "loop-audit.jsonl"   # one line per loop switch change: who, when, from where, and what a stop-now killed (#923)
+LOOP_READ_ONLY = "read-only from the tailnet: SQUAD_TAILNET_LOOP_WRITE is not on (tailnet.loop_write)"
+LOOP_ACTIONS = ("start", "drain", "stop-now")
+WATCHD = pathlib.Path(__file__).resolve().parent / "watchd.sh"
+
+def loop_watchd(*args):
+    return subprocess.run(["bash", str(WATCHD), *args], capture_output=True, text=True, timeout=60).returncode
+
+def _pid_alive(pid):
+    try: os.kill(pid, 0)
+    except PermissionError: return True
+    except OSError: return False
+    return True
+
+def loop_alive():
+    try: pid = int(_read(STATE / "watchd.pid").split()[0])
+    except (ValueError, IndexError): return False
+    return _pid_alive(pid)
+
+def loop_live():
+    """The live runs (an active-runs line with no verdict) and the held gate (locks/gate/pid naming a live pid): what a stop kills."""
+    runs = []
+    for line in _read(STATE / "active-runs.txt").splitlines():
+        r = line.strip()
+        if not r: continue
+        f = pathlib.Path(r) / "record.jsonl" if r.startswith("/") else pathlib.Path(CHECKOUT) / "runs" / r / "record.jsonl"
+        if not re.search(r'"event":\s*"verdict"', _read(f)): runs.append(r)
+    gate = _read(STATE / "locks" / "gate" / "pid").strip()
+    gates = [f"gate pid {gate}"] if gate.isdigit() and _pid_alive(int(gate)) else []
+    return {"runs": runs, "gates": gates}
+
+def loop_audit_add(who, frm, action, killed=None):
+    line = {"at": dt.datetime.now().astimezone().isoformat(timespec="seconds"), "who": who, "from": frm, "action": action}
+    if killed is not None: line["killed"] = killed
+    with LOOP_AUDIT.open("a") as f: f.write(json.dumps(line) + "\n")
+
+def loop_audit_last(n):
+    out = []
+    for raw in _read(LOOP_AUDIT).splitlines()[-n:]:
+        try: out.append(json.loads(raw))
+        except ValueError: pass
+    return out
+
+def loop_state(last, now=None):
+    if loop_alive(): return "draining" if (STATE / "auto" / "drain").exists() else "on"
+    now = time.time() if now is None else now
+    if last.get("action") == "start" and last.get("at"):
+        if now - dt.datetime.fromisoformat(last["at"]).timestamp() < 60: return "starting"
+    return "off"
+
+def loop_view(a):
+    last = (loop_audit_last(1) or [{}])[-1]
+    write = a.allowed and (not a.tailnet or tailnet_block().get("loop_write") is True)
+    return {"state": loop_state(last), "who": last.get("who", ""), "when": last.get("at", ""), "live": loop_live(),
+            "log": loop_audit_last(20)[::-1], "write": write, "reason": "" if write else LOOP_READ_ONLY}
+
+def loop_refusal(a, origin_ok, tn):
+    """The reason a loop write is refused, or '' when it may run: the access rule, then the tailnet grant, then the origin and body."""
+    if not a.allowed: return a.reason
+    if a.tailnet and tn.get("loop_write") is not True: return LOOP_READ_ONLY
+    return "" if origin_ok else "forbidden"
+
+def loop_switch(a, body, origin_ok):
+    why = loop_refusal(a, origin_ok, tailnet_block())
+    if why: return 403, {"err": "forbidden", "reason": why}
+    action = body.get("action") if isinstance(body, dict) else None
+    if action not in LOOP_ACTIONS: return 400, {"err": "bad request"}
+    who, frm = a.login or "owner", "tailnet" if a.tailnet else "loopback"
+    if action == "start":
+        for f in ("off", "drain"): (STATE / "auto" / f).unlink(missing_ok=True)
+        if loop_watchd("start"): return 500, {"err": "watchd did not start"}
+        loop_audit_add(who, frm, action)
+        return 200, {"ok": True, "action": action}
+    if action == "drain":
+        if not loop_alive(): return 409, {"err": "the loop is not running"}
+        if loop_watchd("drain"): return 500, {"err": "watchd did not drain"}
+        loop_audit_add(who, frm, action)
+        return 200, {"ok": True, "action": action}
+    if body.get("confirm") is not True: return 400, {"err": "confirm the stop: it kills the live runs and gates listed"}
+    killed = loop_live()
+    if loop_watchd("stop"): return 500, {"err": "watchd did not stop"}
+    loop_audit_add(who, frm, action, killed)
+    return 200, {"ok": True, "action": action, "killed": killed}
+
 def foot_sources(now=None):
     """One reading of every source the line draws on. A source that is not there reads as `None` for its own fact only,
     so one unreadable file costs one `?` and never the rest of the line."""
@@ -5540,6 +5624,7 @@ class H(BaseHTTPRequestHandler):
             q = urllib.parse.parse_qs(self.path.partition("?")[2])
             out = session_send.status(os.environ.get("SG_PROFILE", ""), (q.get("sid") or [""])[0], (q.get("client_id") or [""])[0], profiles_of=profiles_of_cwd, root=STATE)
             body, ct = json.dumps(out).encode(), "application/json"
+        elif self.path.split("?", 1)[0] == "/api/loop": body, ct = json.dumps(loop_view(a)).encode(), "application/json"
         elif self.path.startswith("/api/sessions/conversation"):
             page = conversation_payload(self.path.partition("?")[2])
             if page is None: return self.not_found()
@@ -5550,6 +5635,17 @@ class H(BaseHTTPRequestHandler):
         self.send_response(200); self.send_header("Content-Type", ct); self.send_header("Cache-Control", "no-store")
         if self.path.split("?", 1)[0] in ("/mobile", "/mobile/"): self.send_header("Content-Security-Policy", MOBILE_CSP)
         self.end_headers(); self.wfile.write(body)
+
+    def loop_post(self, a):
+        """The loop switch's write (#923): the access rule, the tailnet grant, the own or tailnet origin and a JSON body, then the switch."""
+        length = self.headers.get("Content-Length") or "0"
+        raw = self.rfile.read(min(int(length), 1 << 20)) if length.isdigit() else b""
+        tn = tailnet_block()
+        origin_ok = "json" in (self.headers.get("Content-Type") or "") and ((self.headers.get("Origin") or "") == f"https://{tn.get('host')}" if a.tailnet else own_origin(self))
+        try: body = json.loads(raw or b"{}")
+        except ValueError: body = None
+        code, out = loop_switch(a, body, origin_ok)
+        data = json.dumps(out).encode(); self.send_response(code); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
 
     def send_to_session(self, a):
         """The phone's message to a live session (#834): a tailnet login the profile allows, the tailnet Origin, a JSON body, and the grant."""
@@ -5577,6 +5673,7 @@ class H(BaseHTTPRequestHandler):
             if not (a.tailnet or own_origin(self)) or "json" not in (self.headers.get("Content-Type") or ""): return self.refuse("forbidden")
             return self.dash("POST", raw)
         if self.path.split("?", 1)[0] == "/api/sessions/send": return self.send_to_session(a)
+        if self.path.split("?", 1)[0] == "/api/loop": return self.loop_post(a)
         ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote", "/api/limits", "/api/slack") and (a.tailnet or own_origin(self)) and "json" in (self.headers.get("Content-Type") or "")
         try:
             raw = self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 1 << 20))   # read before any answer: a refusal that leaves the body unread resets the connection; the models panel posts back ~20 KB of read-only fields (#684)

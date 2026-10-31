@@ -1,5 +1,5 @@
 #!/bin/bash
-# usage: watchd.sh start|stop|reload|status   (run `start` from the target checkout; `reload` takes a new plugin install without a stop, #873)
+# usage: watchd.sh start|stop|drain|reload|status   (run `start` from the target checkout; `reload` takes a new plugin install without a stop, #873)
 # Keeps watch.sh (the 90 s cycle), fastloop.sh (childcc every SG_FAST_INTERVAL s) and cqflush.sh (the comment queue) alive without a Monitor task: a supervisor in its own session restarts them if they die.
 # Events go to $SG_STATE/watch.log (read them with watchtail.sh); pid in $SG_STATE/watchd.pid.
 . "$(dirname "$0")/env.sh"; P="$SG_STATE/watchd.pid"; L="$SG_STATE/watch.log"; me="$(cd "$(dirname "$0")" && pwd)/watchd.sh"
@@ -12,11 +12,24 @@ orphans() { /bin/ps -axwwo pid=,ppid=,command= 2>/dev/null | awk -v a="$(dirname
 # names a later publish to another sha as a restart only the owner makes (#700). No sha known: no stale driver.sha.
 record_sha() { k=$(dirname "$(dirname "$me")"); ds=$(cut -d' ' -f1 "$k/PUBLISHED" 2>/dev/null); [ -n "$ds" ] || ds=$(git -C "$k" rev-parse HEAD 2>/dev/null)
   if [ -n "$ds" ]; then printf '%s\n' "$ds" > "$SG_STATE/driver.sha.$$" && mv "$SG_STATE/driver.sha.$$" "$SG_STATE/driver.sha"; else rm -f "$SG_STATE/driver.sha"; fi; }
+# The live work a drain waits for: a run with no verdict in active-runs.txt, or a gate whose lock pid is alive (#923).
+drain_busy() {
+  local r f g
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    case "$r" in /*) f="$r/record.jsonl";; *) f="$SG_CHECKOUT/runs/$r/record.jsonl";; esac
+    grep -Eq '"event": ?"verdict"' "$f" 2>/dev/null || return 0
+  done < "$SG_STATE/active-runs.txt" 2>/dev/null
+  g=$(cat "$SG_STATE/locks/gate/pid" 2>/dev/null)
+  [ -n "$g" ] && kill -0 "$g" 2>/dev/null && return 0
+  return 1
+}
 case "${1:-status}" in
   start) alive && { echo "watchd already running pid=$pid"; exit 0; }
     o=$(orphans); [ -n "$o" ] && { printf 'watchd start refused: orphaned lanes still run, their supervisor is gone: %s\n' "$(printf '%s\n' "$o" | awk '{ printf "%s%s pid %s", (NR > 1 ? ", " : ""), $2, $1 }')" >&2; exit 1; }
     [ -f "$L" ] && [ "$(wc -c < "$L")" -gt 5000000 ] && mv "$L" "$L.old"
     rm -f "$SG_STATE/token-guard.since" "$SG_STATE/token-over" "$SG_STATE/token-pause"   # a start is a relight: the token guard measures afresh, never an old burn (#515)
+    rm -f "$SG_STATE/auto/drain"
     record_sha
     python3 -I -c 'import subprocess,sys;subprocess.Popen(["bash",sys.argv[1],"run"],start_new_session=True,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)' "$me"
     for _ in 1 2 3 4 5 6 7 8 9 10; do alive && { echo "watchd started pid=$pid"; exit 0; }; sleep 1; done
@@ -68,7 +81,14 @@ case "${1:-status}" in
     else
       kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid"
     fi
-    for _ in 1 2 3 4 5 6 7 8 9 10; do alive || { rm -f "$P"; echo "watchd stopped"; exit 0; }; sleep 1; done
+    for _ in 1 2 3 4 5 6 7 8 9 10; do alive || { rm -f "$P" "$SG_STATE/auto/drain"; echo "watchd stopped"; exit 0; }; sleep 1; done
     echo "watchd did not stop" >&2; exit 1;;
+  drain) alive || { echo "watchd not running"; exit 0; }
+    # A drain pauses dispatch and leaves the lanes running; a detached waiter stops the loop once no run or gate is live (#923).
+    mkdir -p "$SG_STATE/auto"; : > "$SG_STATE/auto/off"; : > "$SG_STATE/auto/drain"
+    python3 -I -c 'import subprocess,sys;subprocess.Popen(["bash",sys.argv[1],"drain-wait"],start_new_session=True,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)' "$me"
+    echo "watchd draining pid=$pid";;
+  drain-wait) while alive && drain_busy; do sleep "${SG_DRAIN_POLL:-5}"; done
+    alive && bash "$me" stop >/dev/null; rm -f "$SG_STATE/auto/drain";;
   status) alive && echo "watchd running pid=$pid" || echo "watchd not running";;
 esac

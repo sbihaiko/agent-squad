@@ -54,3 +54,15 @@ def test_a_bad_env_value_is_refused_by_name(repo):
     (repo / ".env").write_text("SQUAD_TAILNET_ALLOW=not-an-email\n")
     with pytest.raises(OptionError, match="tailnet.allow"):
         ps.load(repo)
+
+
+def test_loop_write_reads_from_the_env_file_as_a_bool_only(repo):
+    (repo / ".env").write_text("SQUAD_TAILNET_LOOP_WRITE=true\n")
+    data, _ = ps.load(repo)
+    assert data["tailnet"]["loop_write"] is True
+    assert ps.env_tailnet(repo) == {"loop_write": True}
+
+
+def test_loop_write_set_key_writes_the_env_name(repo):
+    ps.set_key(repo, "tailnet.loop_write", "true")
+    assert "SQUAD_TAILNET_LOOP_WRITE=true" in (repo / ".env").read_text()

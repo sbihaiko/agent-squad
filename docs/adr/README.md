@@ -64,6 +64,7 @@ An ADR holds a decision and its reason. It is not a ledger: no dates, counts, st
 | [0159](0159-a-not-startable-marker-names-its-build.md) | A not-startable marker names the build that wrote it: the same build keeps the stop, another build re-arms it, and a marker that names none keeps the stop |
 | [0160](0160-a-model-omitted-is-investigated-and-recovered.md) | A model omitted from a chain is investigated and recovered: the omission names its cause, the lane is probed before the window ends, and only a real answer clears the streak |
 | [0161](0161-a-chain-entry-shows-its-state-as-a-tag.md) | A chain entry shows its live state as a tag: one read joins the configuration and the state, so an omitted model keeps its place and names its cause |
+| [0162](0162-the-hub-writes-the-loop-switch-and-drains-by-default.md) | The hub writes the loop switch through one route: drain is the default and waits for live runs and gates, stop-now confirms what it kills, every change is audited, and a tailnet write needs `tailnet.loop_write` |
 
 ## Adding an ADR
 
