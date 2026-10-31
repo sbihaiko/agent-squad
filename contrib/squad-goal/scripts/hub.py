@@ -1339,7 +1339,14 @@ SLACK_LANGS = ("pt-br", "en-US", "es")
 SLACK_ROLES = ("Manager", "Colleague")
 SLACK_EVENTS = ("stg", "prod", "dev", "bug", "fix")
 SLACK_DEFAULT = {"connection": "not connected", "prefix": "[agent]", "lang": "en-US", "tick": 5, "max": 30, "quiet": "",
-                 "other": "ignore", "dm": False, "audio": False, "channels": [], "people": []}
+                 "other": "ignore", "dm": False, "audio": False, "channels": [], "people": [],
+                 "templates": {"stg": "<prefix>\nDeployed to STG and the e2e run is green. PR <pr>: <title> (<issue>). Please test on stg.",
+                               "prod": "<prefix>\nDeployed to PROD. PR <pr>: <title> (<issue>).",
+                               "dev": "<prefix>\nLanded in dev. PR <pr>: <title> (<issue>). Next: promotion to stg.",
+                               "bug": "<prefix>\nI confirmed this is a bug: <mechanism>. Filed as <issue>, in Todo. I will post here when the fix reaches stg.",
+                               "fix": "<prefix>\n<real state, with dates and links>. Next step: <who>."}}
+SLACK_NEW_CHANNEL = {"watch": True, "thread": True, "mention": False,
+                     "events": {"stg": True, "prod": True, "dev": False, "bug": True, "fix": True}}
 SLACK_LABEL = {"prefix": "prefix", "lang": "default language", "tick": "read every", "max": "up to",
                "quiet": "quiet hours", "other": "anyone not listed", "dm": "owner self-DM", "audio": "audio"}
 SLACK_DIFF = "Communication · Slack · "
@@ -1358,6 +1365,10 @@ def slack_read(path):
     except (OSError, ValueError): saved = {}
     if isinstance(saved, dict): cfg.update({k: v for k, v in saved.items() if k in SLACK_DEFAULT})
     return cfg
+
+def slack_view(path):
+    """What the page draws: the saved settings, and the defaults a new channel starts from."""
+    return {**slack_read(path), "new_channel": SLACK_NEW_CHANNEL}
 
 def _slack_int(v, lo, hi):
     if isinstance(v, bool): return None
@@ -1394,6 +1405,16 @@ def _slack_person(it):
     if it.get("role") not in SLACK_ROLES: return None, "role is Manager or Colleague"
     return {"name": name, "role": it["role"]}, None
 
+def _slack_templates(items):
+    if not isinstance(items, dict) or set(items) != set(SLACK_EVENTS): return None, "a template is kept for each release event"
+    if not all(isinstance(t, str) and 1 <= len(t) <= 600 for t in items.values()): return None, "a template is text of 1 to 600 characters"
+    return {k: items[k] for k in SLACK_EVENTS}, None
+
+def _slack_untracked(path):
+    """True when the folder is in a git work tree and git would not ignore the file there."""
+    r = subprocess.run(["git", "-C", str(path.parent), "check-ignore", "-q", str(path)], capture_output=True, timeout=20)
+    return r.returncode == 1
+
 def slack_clean(body, cur):
     """The typed settings, checked: (settings, None), or (None, the message for the first value that breaks its rule)."""
     prefix = str(body.get("prefix", cur["prefix"])).strip()
@@ -1415,8 +1436,11 @@ def slack_clean(body, cur):
     if msg: return None, msg
     people, msg = _slack_rows(body.get("people", cur["people"]), _slack_person)
     if msg: return None, msg
+    templates, msg = _slack_templates(body.get("templates", cur["templates"]))
+    if msg: return None, msg
     return {"connection": cur["connection"], "prefix": prefix, "lang": lang, "tick": tick, "max": mx, "quiet": quiet,
-            "other": other, "dm": dm, "audio": audio and dm, "channels": channels, "people": people}, None
+            "other": other, "dm": dm, "audio": audio and dm, "channels": channels, "people": people,
+            "templates": templates}, None
 
 def _slack_show(v):
     if v is True: return "on"
@@ -1447,6 +1471,7 @@ def slack_diff(old, new):
             out.append(f"{SLACK_DIFF}{kind} {name} removed")
         for name in after.keys() & before.keys():
             out += _slack_rowdiff(kind, name, before[name], after[name])
+    out += [f"{SLACK_DIFF}template {ev}: changed" for ev in SLACK_EVENTS if new["templates"][ev] != old["templates"][ev]]
     return out
 
 def slack_write(path, cfg):
@@ -1473,9 +1498,11 @@ def slack_set(body):
     diff = slack_diff(cur, new)
     if body.get("confirm") is not True: return {"diff": diff}
     if diff:
+        if _slack_untracked(path):
+            return {"err": "the settings file would be tracked: its folder is in a git work tree and git does not ignore it"}
         err = slack_write(path, new)
         if err: return {"err": err}
-    return {"diff": diff, "state": slack_read(path)}
+    return {"diff": diff, "state": slack_view(path)}
 
 def _tok(n):
     n = int(n)
@@ -3858,7 +3885,6 @@ $("#lbody").addEventListener("input",e=>{if(e.target.id==="limc"||e.target.id===
 let slS=null,slDraft=null,slD=null,slMsg="";
 const SL_LANG=["pt-br","en-US","es"],SL_ROLE={Manager:"drafts the answer; posts only after the owner's OK",Colleague:"answered directly; a bug it reports becomes an issue in Todo at once, with an acknowledgment and the link"};
 const SL_EV={stg:"STG release",prod:"PROD release",dev:"dev landing",bug:"bug acknowledgment",fix:"status correction"};
-const SL_TPL={stg:"<prefix>\nDeployed to STG and the e2e run is green. PR <pr>: <title> (<issue>). Please test on stg.",prod:"<prefix>\nDeployed to PROD. PR <pr>: <title> (<issue>).",dev:"<prefix>\nLanded in dev. PR <pr>: <title> (<issue>). Next: promotion to stg.",bug:"<prefix>\nI confirmed this is a bug: <mechanism>. Filed as <issue>, in Todo. I will post here when the fix reaches stg.",fix:"<prefix>\n<real state, with dates and links>. Next step: <who>."};
 const slA=t=>esc(t).replace(/"/g,"&quot;");
 const slClone=o=>JSON.parse(JSON.stringify(o));
 const slDirty=()=>!!slDraft&&JSON.stringify(slDraft)!==JSON.stringify(slS);
@@ -3891,7 +3917,7 @@ function slRender(){const b=$("#sbody");if(!b)return;if(!slS){b.innerHTML="<span
  +`<h4>People</h4><div class=slt role=table><div class="slc slh" role=row><span>Person</span><span>Role</span><span>What the agent does</span><span></span></div>`
  +(d.people.map(slPerson).join("")||`<p class=m>No person: the agent answers nobody by name.</p>`)+`</div>`
  +`<div class=slad><input id=slpn placeholder="name" aria-label="person to add"><select id=slpr aria-label="role">${slOpts(Object.keys(SL_ROLE),"Colleague")}</select><button id=slpa>Add person</button></div>`
- +`<h4>Templates</h4>`+Object.keys(SL_EV).map(k=>`<details class=tp><summary>${SL_EV[k]} <span class=m>${d.channels.filter(c=>c.watch&&c.events[k]).map(c=>esc(c.name)).join(", ")||"no channel"}</span></summary><pre class=tpre>${esc(SL_TPL[k])}</pre></details>`).join("")
+ +`<h4>Templates</h4>`+Object.keys(SL_EV).map(k=>`<details class=tp><summary>${SL_EV[k]} <span class=m>${d.channels.filter(c=>c.watch&&c.events[k]).map(c=>esc(c.name)).join(", ")||"no channel"}</span></summary><textarea data-sl="tpl:${k}" rows=3 maxlength=600 aria-label="${SL_EV[k]} template">${esc(d.templates[k])}</textarea></details>`).join("")
  +`<h4>Optional</h4><div class=kr><label class=swt><input type=checkbox data-sl=dm${d.dm?" checked":""} aria-label="owner self-DM as an inbox"> Owner self-DM as an inbox</label></div>`
  +`<div class=kr><label class=swt><input type=checkbox data-sl=audio${d.audio?" checked":""}${d.dm?"":" disabled"} aria-label="audio in and out"> Audio in and out</label></div>`;
  if(slD)h+=`<div class=sdiff role=alert><b>Save these changes?</b>${slD.map(x=>`<div class=ln>${esc(x)}</div>`).join("")}<div class=sact><button id=slok>Confirm</button><button id=slno>Cancel</button></div></div>`;
@@ -3900,8 +3926,8 @@ function slRender(){const b=$("#sbody");if(!b)return;if(!slS){b.innerHTML="<span
 function slEdit(k,t){const p=k.split(":"),v=t.type==="checkbox"?t.checked:t.value;
  if(p[0]==="ch"){const c=slDraft.channels[+p[1]];if(p[2]==="ev")c.events[p[3]]=v;else c[p[2]]=v}
  else if(p[0]==="pp")slDraft.people[+p[1]].role=v;
+ else if(p[0]==="tpl")slDraft.templates[p[1]]=v;
  else if(k==="tick"||k==="max")slDraft[k]=Number(v);
- else if(k==="dm"){slDraft.dm=v;if(!v)slDraft.audio=false}
  else slDraft[k]=v}
 async function slLoad(){try{slS=await (await fetch("/api/slack")).json();slDraft=slClone(slS);slD=null;slMsg="";slRender()}catch(e){slMsg="!load failed";slRender()}}
 async function slPost(confirm){try{const r=await fetch("/api/slack",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...slDraft,confirm})}),d=await r.json();
@@ -3913,7 +3939,7 @@ async function slPost(confirm){try{const r=await fetch("/api/slack",{method:"POS
 $("#sbody").addEventListener("change",e=>{const k=e.target.dataset.sl;if(!k||!slDraft)return;slD=null;slMsg="";slEdit(k,e.target);slRender()});
 $("#sbody").addEventListener("click",e=>{const b=e.target.closest("button");if(!b||!slDraft)return;
  if(b.dataset.slrm){const[t,i]=b.dataset.slrm.split(":");(t==="ch"?slDraft.channels:slDraft.people).splice(+i,1);slD=null;slRender()}
- else if(b.id==="slcha"){const v=$("#slch").value.trim();if(v&&!slDraft.channels.some(c=>c.name===v))slDraft.channels.push({name:v,lang:slDraft.lang,watch:true,thread:true,mention:false,events:{stg:true,prod:true,dev:false,bug:true,fix:true}});slD=null;slRender()}
+ else if(b.id==="slcha"){const v=$("#slch").value.trim();if(v)slDraft.channels.push({name:v,lang:slDraft.lang,...slS.new_channel,events:{...slS.new_channel.events}});slD=null;slRender()}
  else if(b.id==="slpa"){const v=$("#slpn").value.trim();if(v&&!slDraft.people.some(p=>p.name===v))slDraft.people.push({name:v,role:$("#slpr").value});slD=null;slRender()}
  else if(b.id==="slsv")slPost(false);
  else if(b.id==="slok")slPost(true);
@@ -5309,7 +5335,7 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/subs"): body, ct = json.dumps({**subs_month(), "presets": {k: {i: {"name": n, "usd": p} for i, (n, p) in v.items()} for k, v in PRESETS.items()}}).encode(), "application/json"
         elif self.path.startswith("/api/models"): body, ct = json.dumps(models_get()).encode(), "application/json"
         elif self.path.startswith("/api/limits"): body, ct = json.dumps(limits_read()).encode(), "application/json"   # Settings > Spend & limits (#926)
-        elif self.path.startswith("/api/slack"): body, ct = json.dumps(slack_read(slack_file())).encode(), "application/json"   # Settings > Communication (#924)
+        elif self.path.startswith("/api/slack"): body, ct = json.dumps(slack_view(slack_file())).encode(), "application/json"   # Settings > Communication (#924)
         elif self.path.startswith("/api/speed"): body, ct = json.dumps(speed()).encode(), "application/json"
         elif self.path.startswith("/api/load"): body, ct = json.dumps(load_payload()).encode(), "application/json"
         elif self.path.startswith("/api/status"): body, ct = json.dumps(status_payload()).encode(), "application/json"

@@ -10,8 +10,10 @@ import http.client
 import importlib.util
 import json
 import pathlib
+import shutil
 import subprocess
 import threading
+from html.parser import HTMLParser
 from http.server import ThreadingHTTPServer
 
 import pytest
@@ -173,11 +175,57 @@ def test_the_page_carries_the_communication_theme_and_no_token_field(ctx):
     assert "Communication" in page and "Discard" in page
 
 
-def test_the_page_strikes_a_channel_with_watch_off_and_disables_its_controls(ctx):
+def _channel_row(ctx, channel):
+    """One channel row as the page's own `slChan` draws it, run in node; parsed into its controls."""
+    if shutil.which("node") is None:
+        pytest.skip("node is required")
     page = ctx["hub"].served_page()
-    assert "do not watch" in page
-    assert "line-through" in page
-    assert 'disabled' in page
+    rules = page[page.index("const SL_LANG="):page.index("function slRender(")]
+    esc = 'const esc=t=>String(t).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));'
+    script = esc + "\n" + rules + "\nconst c=" + json.dumps(channel) + ";console.log(JSON.stringify(slChan(c,0)));"
+    r = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    return json.loads(r.stdout)
+
+
+class _Controls(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.controls = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("input", "select", "button"):
+            self.controls.append(dict(attrs))
+
+
+def _controls(html_text):
+    p = _Controls()
+    p.feed(html_text)
+    return {a["aria-label"]: "disabled" in a for a in p.controls}
+
+
+def test_a_channel_with_watch_off_is_struck_marked_and_its_controls_disabled(ctx):
+    off = {"name": "#example-channel", "lang": "en-US", "watch": False, "thread": True, "mention": False,
+           "events": {"stg": True, "prod": True, "dev": False, "bug": True, "fix": True}}
+    html_text = _channel_row(ctx, off)
+    assert 'class="slc off"' in html_text and "do not watch" in html_text
+    assert ".slc.off b{text-decoration:line-through" in ctx["hub"].served_page()
+    state = _controls(html_text)
+    assert state["#example-channel: watch"] is False
+    assert state["#example-channel: language"] is True
+    assert state["#example-channel: thread only"] is True
+    assert state["#example-channel: mention only"] is True
+    for k in ("stg", "prod", "dev", "bug", "fix"):
+        assert state[f"#example-channel: {k} posts"] is True
+    assert state["remove #example-channel"] is False
+
+
+def test_a_channel_with_watch_on_has_every_control_enabled(ctx):
+    on = {"name": "#example-channel", "lang": "en-US", "watch": True, "thread": True, "mention": False,
+          "events": {"stg": True, "prod": True, "dev": False, "bug": True, "fix": True}}
+    html_text = _channel_row(ctx, on)
+    assert "do not watch" not in html_text
+    assert not any(_controls(html_text).values())
 
 
 def test_the_page_states_what_the_agent_does_for_each_role(ctx):
@@ -190,3 +238,69 @@ def test_the_page_stacks_each_row_on_a_phone_and_labels_each_switch(ctx):
     page = ctx["hub"].served_page()
     assert "@media (max-width:600px){.slc{grid-template-columns:1fr}" in page
     assert 'data-l="watch"' in page and 'data-l="thread only"' in page and 'data-l="mention only"' in page
+
+
+# --- templates, the new-channel defaults and the profile folder
+
+def test_each_release_event_has_one_template_from_the_hub(ctx):
+    templates = ctx["hub"].slack_read(saved_file(ctx))["templates"]
+    assert set(templates) == set(ctx["hub"].SLACK_EVENTS)
+    assert all(text.startswith("<prefix>") for text in templates.values())
+
+
+def test_an_edited_template_is_diffed_then_saved_on_confirm(ctx):
+    templates = dict(ctx["hub"].slack_read(saved_file(ctx))["templates"], stg="<prefix>\nSTG is green. PR <pr>.")
+    got = save(ctx, templates=templates, confirm=False)
+    assert got["diff"] == ["Communication · Slack · template stg: changed"]
+    assert not saved_file(ctx).exists()
+    save(ctx, templates=templates, confirm=True)
+    assert ctx["hub"].slack_read(saved_file(ctx))["templates"]["stg"] == "<prefix>\nSTG is green. PR <pr>."
+
+
+@pytest.mark.parametrize("bad", [
+    {"stg": ""},
+    {"stg": "x" * 601},
+    {"stg": 5},
+    {"unknown": "text"},
+])
+def test_a_template_is_text_of_one_to_600_characters_for_a_release_event(ctx, bad):
+    templates = {**ctx["hub"].slack_read(saved_file(ctx))["templates"], **bad}
+    got = save(ctx, templates=templates, confirm=True)
+    assert "err" in got
+    assert not saved_file(ctx).exists()
+
+
+def test_the_page_edits_each_template_and_holds_no_template_text(ctx):
+    page = ctx["hub"].served_page()
+    assert "const SL_TPL" not in page
+    assert "Deployed to STG" not in page
+    assert "tpl:" in page
+
+
+def test_the_hub_serves_the_defaults_for_a_new_channel(ctx):
+    view = ctx["hub"].slack_view(saved_file(ctx))
+    assert view["new_channel"] == {"watch": True, "thread": True, "mention": False,
+                                   "events": {"stg": True, "prod": True, "dev": False, "bug": True, "fix": True}}
+
+
+def test_the_page_adds_a_channel_from_the_defaults_the_hub_serves(ctx):
+    page = ctx["hub"].served_page()
+    assert "...slS.new_channel" in page
+    assert "events:{stg:true,prod:true,dev:false" not in page
+
+
+def test_audio_is_off_whenever_the_owner_self_dm_is_off(ctx):
+    save(ctx, dm=True, audio=True, confirm=True)
+    save(ctx, dm=False, audio=True, confirm=True)
+    back = ctx["hub"].slack_read(saved_file(ctx))
+    assert back["dm"] is False and back["audio"] is False
+
+
+def test_a_profile_folder_git_would_track_is_refused_and_nothing_is_written(ctx, tmp_path, monkeypatch):
+    repo = tmp_path / "tracked"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True, timeout=30)
+    monkeypatch.setenv("SG_PROFILES_DIR", str(repo))
+    got = save(ctx, channels=[chan()], confirm=True)
+    assert "would be tracked" in got.get("err", ""), got
+    assert not (repo / "t.slack.json").exists()
