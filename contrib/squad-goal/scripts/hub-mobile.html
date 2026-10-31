@@ -3,7 +3,16 @@
 /*WEB_TOKENS*/
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:var(--fs-body) system-ui,sans-serif;min-height:100vh}
 header{display:flex;gap:8px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--line)}
-header select{flex:1;background:var(--panel);color:var(--fg);border:1px solid var(--line);padding:8px;font-size:var(--fs-body);border-radius:6px}
+/* The project switcher (#876): the header names the project; a tap opens the list in a sheet, rows 44 px tall. */
+#profile{flex:1;min-width:0;min-height:44px;display:flex;align-items:center;gap:8px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:0 10px;font-size:var(--fs-body);text-align:left}
+#pswm{color:var(--mute);font-size:var(--fs-min);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+#psheet{position:fixed;left:0;right:0;bottom:0;max-height:70vh;overflow:auto;background:var(--panel);border-top:1px solid var(--line);border-radius:14px 14px 0 0;padding:10px 14px calc(14px + env(safe-area-inset-bottom));z-index:25}
+#psheet[hidden]{display:none}
+#pswl a{display:flex;flex-direction:column;justify-content:center;min-height:44px;padding:6px 0;border-bottom:1px solid var(--line);color:var(--fg);text-decoration:none;font-size:var(--fs-body)}
+#pswl a[aria-current=page]{color:var(--acc)}
+#pswl .repo,#pswl .psw-m{color:var(--mute);font-size:var(--fs-min)}
+#pswl .psw-all{color:var(--ok)}
+#pswx{display:block;width:100%;min-height:44px;margin-top:8px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;font-size:var(--fs-body)}
 header a{color:#5aa9ff;font-size:var(--fs-min);white-space:nowrap}
 main{padding:12px 12px 84px}
 section[hidden]{display:none}
@@ -133,9 +142,14 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 #5aa9ff}
 #undo button[hidden]{display:none}
 </style>
 <header>
-<select id="profile" aria-label="Profile" hidden></select>
+<button id="profile" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="psheet"><b id="pswn">projects</b> <span id="pswm"></span></button>
 <a id="to-desktop" href="#">Desktop page</a>
 </header>
+<div id="psheet" role="dialog" aria-label="Projects" hidden>
+<div class="grab"></div>
+<div id="pswl"></div>
+<button id="pswx" type="button">Close</button>
+</div>
 <div id="reconnect" hidden><p>The hub does not answer. Check Tailscale and that the machine is awake.</p><button id="retry" type="button">Try again</button></div>
 <main>
 <section data-panel="status">
@@ -713,15 +727,22 @@ document.querySelector('[data-panel="more"]').onclick = e => {
 };
 setInterval(loadMore, 10000);
 
-(async () => {
+/*SWITCHER_JS*/
+(() => {
+  // The project switcher (#876): the header names this project; the sheet lists every project /api/hub names, repainted
+  // every 10 s, so a project added after the hub started shows with no reload.
   const me = location.pathname.split("/")[1];
-  try {
-    const d = await (await fetch("/" + "api/hub", { cache: "no-store" })).json();
-    const sel = $("profile");
-    for (const r of d.repos) sel.add(new Option(r.slug, r.slug, false, r.slug === me));
-    sel.onchange = () => { cancelMove("profile"); location.href = "/" + sel.value + "/mobile"; };
-    sel.hidden = false;
-  } catch (e) {}
+  const btn = $("profile"), sheet = $("psheet");
+  const close = () => { sheet.hidden = true; btn.setAttribute("aria-expanded", "false"); };
+  btn.onclick = () => { sheet.hidden = false; btn.setAttribute("aria-expanded", "true"); };
+  $("pswx").onclick = close;
+  $("pswl").onclick = e => { if (e.target.closest("a")) { cancelMove("profile"); close(); } };
+  switcherPoll(d => {
+    switcherPaint($("pswl"), d, me, "/mobile");
+    const cur = d.repos.find(r => r.slug === me);
+    $("pswn").textContent = cur ? cur.slug : "projects";
+    $("pswm").textContent = cur ? switcherMeta(cur) : "";
+  });
 })();
 
 const runsShown = () => !document.querySelector('[data-panel="runs"]').hidden;

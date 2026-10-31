@@ -1566,6 +1566,10 @@ def status_payload():
             "warnings": [{"text": f["text"], "tip": f.get("tip")} for f in (LOAD_STATE.get("facts") or []) if f.get("bad")],
             "load": load_payload()}
 
+def worst_alert():
+    """This project's worst alert as text: the first bad foot fact, in the order the line reads them; "" when none (#876)."""
+    return next((f["text"] for f in (LOAD_STATE.get("facts") or []) if f.get("bad")), "")
+
 def load_sampler():
     """The one sampler thread: a failed pass leaves the last reading in place rather than breaking the page."""
     while True:
@@ -3379,6 +3383,10 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 #ldfacts details.nfd[open]{white-space:normal}#ldfacts details.nfd>ul{margin:4px 0 0;padding:0 0 0 16px;white-space:normal;color:var(--mute);font-variant-numeric:normal}
 .load{display:inline-block;margin-left:4px;padding:0 5px;border-radius:9px;background:#3a2a12;color:var(--warn);font-size:var(--fs-min);border:1px solid #6b5223}
 #who{padding:3px 12px;color:var(--mute);border-bottom:1px solid var(--line)}#who:empty{display:none}
+/* The project switcher (#876): one link per project, its live count and worst alert as text; one click switches. */
+#psw{display:flex;flex-wrap:wrap;gap:4px 14px;padding:4px 12px;border-bottom:1px solid var(--line);font-size:var(--fs-min)}
+#psw a{color:var(--acc);text-decoration:none;white-space:nowrap}#psw a:hover{text-decoration:underline}
+#psw a[aria-current=page]{color:var(--fg);font-weight:600}#psw .repo,#psw .psw-m{color:var(--mute)}#psw .psw-all{color:var(--ok)}
 /* Settings > Spend & limits (#926): the guard's switch, cap and factor, the burn it measures, and the diff before a write. */
 #lbody select,#lbody input{background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;font-size:var(--fs-min);height:var(--ctl-h);padding:0 6px;min-width:0;max-width:100%}
 #lbody input{width:104px;text-align:right;font-variant-numeric:tabular-nums}
@@ -3392,6 +3400,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 @media (max-width:600px){body{height:auto}body.tkopen #win{margin-right:0}body.tkopen #board{width:auto}#win{display:block;overflow:visible}body.dockb #win{display:block;grid-template-columns:none;grid-template-rows:none}#side{width:auto;border-right:0;border-bottom:1px solid var(--line)}body.dockb #side{grid-row:auto;grid-column:auto}#main{min-height:50vh}body.dockb #main{grid-column:auto;grid-row:auto}#board{width:auto}body.dockb #board{grid-column:auto;grid-row:auto;height:60vh}#foot{flex-wrap:wrap}#ldfacts{margin-left:0;white-space:normal}#lbody input{width:92px}}
 /*BOARD_LANES_CSS*/
 </style>
+<div id=psw aria-label="Projects"></div>
 <div id=who>__WHO__</div>
 <a id=mobile-link href="#" style="margin:0 12px;color:#8a93a3;font-size:var(--fs-min)">mobile view</a><script>document.getElementById("mobile-link").href=location.pathname.replace(/\/?$/,"/")+"mobile"</script>
 <div id=win>
@@ -3407,6 +3416,8 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 <div id=board><div id=grip title="drag to resize"></div><div id=bhead><span id=btitle><b>TASKS <span id=bt class=m></span></b> <span id=bcharts><button id=bflow title="the development flow: the cards in each column over time, from the flow history (SPEC 111)">Flow</button> <button id=blead title="the lead time of the closed cards, opened to closed (SPEC 111)">Lead time</button></span></span><span><select id=lmode title="swimlanes: one lane per spec (Spec), per wave (Wave), or no lanes, today's board (None)"><option value=spec>Spec</option><option value=wave>Wave</option><option value=none>None</option></select> <button id=lcall title="collapse every swimlane">Collapse all</button> <button id=lexp title="expand every swimlane">Expand all</button> <label title="hide the swimlanes whose every ticket is closed"><input type=checkbox id=lhd> Hide done lanes</label> <span id=lhc></span> <details id=fw class=fsel><summary>Waves</summary><div class=fpop id=fwl></div></details> <details id=fs class=fsel><summary>Specs</summary><div class=fpop id=fsl></div></details></span></div><div id=bcases></div><div id=bbody></div><div id=flowov hidden><div id=flowh><b id=flowt></b><button id=flowx title="close the diagram">&#215;</button></div><div id=flowb></div></div></div>
 </div>
 <div id=foot title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"><span>load</span><b id=ldline>CPU ? · RAM ? · GPU ?</b><span id=ldfacts title="the squad's own state: health, progress, occupancy, quotas, subscriptions"></span></div>
+<script>/*SWITCHER_JS*/
+{const swMe=(location.pathname.match(/^\/([^/?#]+)/)||[])[1]||"";switcherPoll(d=>switcherPaint(document.getElementById("psw"),d,swMe,"/"));}</script>
 <script>
 {const p=(location.pathname.match(/^\/([^/?#]+)/)||[])[1]||"";document.title=p?`Hub | ${decodeURIComponent(p)}`:"Hub";}   // the tab names the profile it shows, so two open hubs are told apart
 const LAYOUTS={1:[1,1],2:[2,1],3:[3,1],4:[2,2],6:[3,2]};
@@ -3977,6 +3988,8 @@ let ver=null;setInterval(async()=>{try{const v=(await (await fetch("/api/version
 </script>"""
 PAGE = PAGE.replace("/*WEB_TOKENS*/", WEB_TOKENS)
 PAGE = PAGE.replace("/*PANES_JS*/", (pathlib.Path(__file__).resolve().parent / "panes.js").read_text())
+SWITCHER_JS = (pathlib.Path(__file__).resolve().parent / "hub-switcher.js").read_text()   # the project switcher, both pages (#876)
+PAGE = PAGE.replace("/*SWITCHER_JS*/", SWITCHER_JS)
 BOARD_FILTER_JS = (pathlib.Path(__file__).resolve().parent / "board-filter.js").read_text()
 PAGE = PAGE.replace("/*BOARD_LANES*/", (pathlib.Path(__file__).resolve().parent / "board-lanes.js").read_text())   # the swimlane rule (#890)
 PAGE = PAGE.replace("/*BOARD_LANES_CSS*/", (pathlib.Path(__file__).resolve().parent / "board-lanes.css").read_text())   # its look (#890, #891)
@@ -4715,7 +4728,7 @@ MOBILE_CSP = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src '
 GESTURE_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-gesture.js").read_text()
 MOVE_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-move.js").read_text()
 RUN_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-run.js").read_text()
-MOBILE_PAGE = (pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text().replace("/*GESTURE*/", GESTURE_JS).replace("/*MOVE*/", MOVE_JS).replace("/*RUN*/", RUN_JS).replace("/*BOARD_FILTER*/", BOARD_FILTER_JS).replace("/*WEB_TOKENS*/", WEB_TOKENS)
+MOBILE_PAGE = (pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text().replace("/*SWITCHER_JS*/", SWITCHER_JS).replace("/*GESTURE*/", GESTURE_JS).replace("/*MOVE*/", MOVE_JS).replace("/*RUN*/", RUN_JS).replace("/*BOARD_FILTER*/", BOARD_FILTER_JS).replace("/*WEB_TOKENS*/", WEB_TOKENS)
 MOBILE_SHELL = ["/mobile/", "/mobile/manifest.webmanifest", "/mobile/icon.svg"]
 SW_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-sw.js").read_text().replace("/*SHELL*/[]", json.dumps(MOBILE_SHELL))
 MANIFEST_JSON = json.dumps({"id": "/mobile/", "name": f"Squad hub {REPO}", "short_name": "Hub", "start_url": "/mobile/", "scope": "/mobile/", "display": "standalone", "background_color": "#0f1115", "theme_color": "#0f1115", "icons": [{"src": "/mobile/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}]}).encode()
