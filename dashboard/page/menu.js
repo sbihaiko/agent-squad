@@ -88,7 +88,18 @@ function download(name, text, type) {
 const readFile = (f) => new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = () => no(r.error); r.readAsText(f); });
 
 $("f-graph").addEventListener("change", async (e) => { const f = e.target.files[0]; if (f) await loadGraph(await readFile(f), f.name); e.target.value = ""; });
-$("b-example").addEventListener("click", () => loadGraph(JSON.stringify(EXAMPLE), "five-phases.graph.json"));
+const loadExample = () => loadGraph(JSON.stringify(EXAMPLE), "five-phases.graph.json");
+$("b-example").addEventListener("click", loadExample);
+$("side").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-start]");
+  if (!b) return;
+  if (b.dataset.start === "open") $("l-open").click();
+  else if (b.dataset.start === "example") loadExample();
+});
+// `squad editor <id>` opens this page with the named workflow in its fragment: a page opened from a file cannot read a file of its own.
+const OPENED = core.openedWorkflow(location.hash);
+if (OPENED && OPENED.error) setStatus(OPENED.error, true);
+else if (OPENED) loadGraph(OPENED.text, OPENED.name);
 $("f-record").addEventListener("change", async (e) => {
   const f = e.target.files[0]; if (!f) return;
   const r = core.parseRecord(await readFile(f));
