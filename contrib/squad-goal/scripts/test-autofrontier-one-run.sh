@@ -207,7 +207,7 @@ five; r=$(run)
 [ "$(marked 11)" = 0 ] && ok "an issue a live run holds with no hash is not dispatched a second time" || ko "an issue a live run holds with no hash was dispatched again: $(marked 11) marker(s)"
 [ "$(marked 12 13 14 15)" -gt 0 ] && ok "the issues no live run holds still go out" || ko "no other startable issue went out"
 
-# 4c) (#949) A live run's accepted children never count against the run slots. The leases of every repository and the
+# 4c) (#948) A live run's accepted children never count against the run slots. The leases of every repository and the
 #     children the live runs of this one hold are two different counts, and the pass read the first as both: three runs
 #     with one child each looked like six holders against a ceiling of six, so every Todo card waited on a slot that
 #     was free and the pass said "no slot" for all of them.

@@ -75,7 +75,9 @@ try:
     ceil = C.ceiling(".")
 except Exception as e:
     print(f"squad.caps: {e}", file=sys.stderr); sys.exit(2)
-cap, held = ceil.caps["runs"], ceil.occupancy()["runs"]
+cap, leased = ceil.caps["runs"], ceil.occupancy()["runs"]   # the runs held machine-wide: the live leases of every repository
+held = 0   # the children the live runs of this repository already hold: the child ceilings below subtract these, and the run
+           # slots never do -- seeding this with the leases counted every run twice and filled the ceiling on its own (#948)
 def find(o):
     if isinstance(o, dict):
         if isinstance(o.get("max_parallel"), int): return o["max_parallel"]
@@ -133,7 +135,7 @@ run = doc.get("run") if isinstance(doc, dict) else None
 gmc = run.get("max_children") if isinstance(run, dict) else None
 limits = [x for x in ((gmc - held) if isinstance(gmc, int) else None, max(ceil.caps["children"] - held, 0)) if x is not None]
 dash = lambda x: x if x is not None else "-"
-print(max(cap - max(live, held), 0), dash(env), min(limits) if limits else "-", dash(spend))
+print(max(cap - max(live, leased), 0), dash(env), min(limits) if limits else "-", dash(spend))
 PY
 )
 busy=$(sg_live_issues "$SG_STATE/active-runs.txt")
