@@ -52,8 +52,16 @@ def reviewer():
     return pc.Reviewer(id="claude-opus-5-5", label="Claude Opus 5.5", wire="claude-opus-5-5", route="cli")
 
 
+RESTATED = ("The check runs one premise-check round per invocation.",)
+CORRECT = {"lines": list(RESTATED), "added": [], "dropped": []}
+
+
+def restatement_of(lines=RESTATED, added=(), dropped=()):
+    return {"lines": list(lines), "added": list(added), "dropped": list(dropped)}
+
+
 def body_of(rows, spec=878, round_no=1):
-    return pc.render(spec=spec, round_no=round_no, reviewer=reviewer(), rows=rows)
+    return pc.render(spec=spec, round_no=round_no, reviewer=reviewer(), rows=rows, restated=RESTATED)
 
 
 # --- what reading proves is never a question ---------------------------------------------------------------
@@ -325,9 +333,9 @@ class StubRepo:
         raise AssertionError(op)
 
 
-def round_of(tmp_path, gh, *findings, answers=(), round_no=1):
+def round_of(tmp_path, gh, *findings, answers=(), round_no=1, restatement=CORRECT):
     return pc.run_round(878, [pc.Finding.of(f) for f in findings], answers,
-                        github=gh, root=tmp_path, round_no=round_no, who=reviewer())
+                        github=gh, root=tmp_path, round_no=round_no, who=reviewer(), restatement=restatement)
 
 
 def test_an_answer_rewrites_the_spec_body_and_the_comment(tmp_path):
@@ -516,7 +524,7 @@ def test_the_check_ends_when_no_question_is_open(tmp_path):
     assert pc.ending(settled) == "settled"
     assert pc.ending(rows_of(tmp_path, {"premise": "the format", "kind": "decision", "recommends": "a table"})) == "awaiting answers"
     assert pc.ending(rows_of(tmp_path, {"premise": "the wave lands", "kind": "run", "proof": "run it once"})) == "awaiting probes"
-    body = pc.render(spec=878, round_no=1, reviewer=reviewer(), rows=settled, ending=pc.ending(settled))
+    body = pc.render(spec=878, round_no=1, reviewer=reviewer(), rows=settled, ending=pc.ending(settled), restated=RESTATED)
     assert "End state:** settled" in body
 
 
@@ -526,7 +534,7 @@ def test_a_recorded_open_risk_is_named_and_never_called_settled(tmp_path):
                               "answer": "I don't know"})
     assert rows[0].risk is True
     assert pc.ending(rows) == "open risks"
-    body = pc.render(spec=878, round_no=1, reviewer=reviewer(), rows=rows, ending=pc.ending(rows))
+    body = pc.render(spec=878, round_no=1, reviewer=reviewer(), rows=rows, ending=pc.ending(rows), restated=RESTATED)
     assert "**End state:** open risks." in body
     assert "settled" not in body
     assert "| open |" in body
@@ -544,7 +552,7 @@ def test_a_dry_run_prints_the_comment_the_live_round_would_post(tmp_path):
     gh = StubRepo("# Spec\n")
     finding = {"premise": "one comment per spec", "kind": "decision", "recommends": "one"}
     report = pc.run_round(878, [pc.Finding.of(finding)], [], github=gh, root=tmp_path, round_no=1,
-                          who=reviewer(), dry_run=True)
+                          who=reviewer(), dry_run=True, restatement=CORRECT)
     assert "comment" not in gh.calls and "update_comment" not in gh.calls and "update_issue" not in gh.calls
     sha = hashlib.sha256(b"# Spec\n").hexdigest()
     assert f"<!-- premise-check-state: round=1 body={sha} " in report.body
@@ -594,9 +602,9 @@ def proxy_answer(premise, answer="one table", **kw):
     return base
 
 
-def proxied_round(tmp_path, gh, *findings, answers=(), proxy=None, round_no=1):
+def proxied_round(tmp_path, gh, *findings, answers=(), proxy=None, round_no=1, restatement=CORRECT):
     return pc.run_round(878, [pc.Finding.of(f) for f in findings], answers, github=gh, root=tmp_path,
-                        round_no=round_no, who=reviewer(), proxy=proxy)
+                        round_no=round_no, who=reviewer(), proxy=proxy, restatement=restatement)
 
 
 def test_a_proxy_equal_to_the_reviewer_is_refused(tmp_path):
@@ -754,3 +762,92 @@ def test_the_adr_and_claude_md_admit_a_named_proxy():
     assert "proxy" in adr.partition("## Decision")[2]
     line = next(ln for ln in (ROOT / "CLAUDE.md").read_text().splitlines() if "](docs/adr/0155-" in ln)
     assert "proxy" in line
+
+
+# --- a round restates the spec's goal and scope before it lists a gap --------------------------------------
+
+def _restated_section(body):
+    lines = body.splitlines()
+    start = lines.index("Restated goal:")
+    return lines[start + 1:lines.index("", start)]
+
+
+def test_a_round_with_no_restatement_is_refused_before_any_github_call_or_write(tmp_path):
+    gh = StubRepo("# Spec\n")
+    adr = {"premise": "the format", "kind": "adr", "title": "A table", "decision": "One table."}
+    with pytest.raises(ValueError, match="restatement"):
+        pc.run_round(878, [pc.Finding.of(DECISION)], [adr], github=gh, root=tmp_path, round_no=1, who=reviewer())
+    assert gh.calls == []
+    assert not (tmp_path / "docs/adr").exists()
+
+
+def test_a_restatement_over_three_lines_is_refused_before_any_github_call(tmp_path):
+    gh = StubRepo("# Spec\n")
+    with pytest.raises(ValueError, match="at most 3"):
+        round_of(tmp_path, gh, DECISION, restatement=restatement_of(lines=["one", "two", "three", "four"]))
+    assert gh.calls == []
+
+
+def test_the_comment_opens_with_the_restated_goal_before_the_premise_table(tmp_path):
+    report = round_of(tmp_path, StubRepo("# Spec\n"), DECISION)
+    lines = report.body.splitlines()
+    assert lines[0] == pc.MARKER.format(spec=878)
+    assert lines[2] == "Restated goal:"
+    assert _restated_section(report.body) == list(RESTATED) and len(RESTATED) <= 3
+    assert report.body.index("Restated goal:") < report.body.index("| Premise |")
+    assert report.body.count("Restated goal:") == 1
+
+
+@pytest.mark.parametrize("side", ["added", "dropped"])
+@pytest.mark.parametrize("gap, state", [
+    ({"kind": "fact", "proof": "squad/premise_check.py:1"}, "proven"),
+    ({"kind": "run", "proof": "run the round once"}, "needs a probe"),
+    ({"kind": "decision", "recommends": "keep the goal"}, "open"),
+])
+def test_a_restatement_gap_is_a_finding_of_its_kind_sorted_like_any_other(tmp_path, side, gap, state):
+    premise = f"the restatement {side} a goal"
+    report = round_of(tmp_path, StubRepo("# Spec\n"), DECISION,
+                      restatement=restatement_of(**{side: [dict(gap, premise=premise)]}))
+    row = next(r for r in report.rows if r.premise == premise)
+    assert row.state == state
+    assert row.asked is (state == "open")
+    assert "| " + premise + " |" in report.body
+
+
+def test_a_correct_restatement_adds_no_gap_and_leaves_the_questions_unchanged(tmp_path):
+    findings = [DECISION, {"premise": "one comment per spec", "kind": "decision", "recommends": "one comment"},
+                {"premise": "the wave lands", "kind": "run", "proof": "run it once"}]
+    report = round_of(tmp_path, StubRepo("# Spec\n"), *findings, restatement=CORRECT)
+    plain = pc.check([pc.Finding.of(f) for f in findings], read=repo_read(tmp_path))
+    assert [(r.premise, r.state, r.question) for r in report.rows] == [(r.premise, r.state, r.question) for r in plain]
+    assert len(report.rows) == len(findings)
+
+
+def test_a_restatement_that_cannot_be_formed_is_a_gap_asked_like_any_other(tmp_path):
+    report = round_of(tmp_path, StubRepo("# Spec\n"), DECISION, restatement=restatement_of(lines=[]))
+    unformed = [r for r in report.rows if "cannot be restated" in r.premise]
+    assert len(unformed) == 1 and unformed[0].state == "open" and unformed[0].asked
+    assert len(_restated_section(report.body)) == 1 and "none formed" in _restated_section(report.body)[0]
+
+
+def test_the_skills_tell_a_reviewer_with_no_history_to_restate_the_goal_first():
+    for path in (ROOT / ".claude/skills/premise-check/SKILL.md", ROOT / ".agents/skills/agent-premise-check/SKILL.md"):
+        text = path.read_text()
+        assert "Restated goal:" in text and "--restatement" in text, path
+        assert "no conversation history" in text, path
+
+
+def test_the_command_takes_a_restatement_file():
+    assert pc.parser().parse_args(["878", "--findings", "f.json", "--restatement", "r.json"]).restatement == "r.json"
+    assert pc.parser().parse_args(["878", "--findings", "f.json"]).restatement is None
+
+
+def test_the_command_refuses_a_round_with_no_restatement_in_one_line(tmp_path, capsys, monkeypatch):
+    def no_network(repo, shell=None):
+        raise AssertionError("a refused round must not reach GitHub")
+    monkeypatch.setattr(pc, "rest_runner", no_network)
+    findings = tmp_path / "findings.json"
+    findings.write_text(json.dumps([DECISION]))
+    code = pc.main(["878", "--findings", str(findings), "--reviewer", "sonnet", "--root", str(tmp_path)])
+    err = capsys.readouterr().err
+    assert code == 2 and "restatement" in err and err.count("\n") == 1
