@@ -19,7 +19,7 @@ import re
 import subprocess
 import sys
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 ROUTES = ("cli", "gateway", "direct")
@@ -96,6 +96,7 @@ class ChainEntry:
     subscription: str | None
     known: bool
     legacy_codex: bool = False   # a v1 spelling the old chain reader ran through Codex: its marker still applies
+    model_off: bool = False      # switched off at model level (`model_off`, SPEC 889 #920): off in every chain
 
 
 @dataclass(frozen=True)
@@ -502,6 +503,8 @@ def chain(models_json, name, reg=None):
                 no_tools=raw in no_tools, provider=entry.provider if entry else None,
                 subscription=entry.subscription if entry else None, known=ref.known,
                 legacy_codex=v1_codex(raw)))
+    moff = doc.get("model_off") if isinstance(doc.get("model_off"), dict) else {}
+    entries = [replace(e, model_off=bool(moff.get(e.id))) for e in entries]
     return Chain(name=canon, entries=entries, mixed=mixed, stray=stray)
 
 
@@ -609,6 +612,8 @@ def eligible(entry, shared=None, now=None, hour=None, reg=None):
     A v1 entry keeps the marker rule it had before the registry: its `legacy_codex` flag applies Codex's marker even
     when the registry maps the spelling to another subscription, so a v1 file never changes behavior.
     """
+    if entry.model_off:
+        return Eligibility(False, "off (model)", None)   # the model switch names itself, whatever its chain row says
     if not entry.on:
         return Eligibility(False, "off", None)
     now = time.time() if now is None else now
