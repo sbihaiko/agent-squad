@@ -43,11 +43,10 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
     kill "$mon" 2>/dev/null; wait "$mon" 2>/dev/null
     read -r peak mean < <(awk '{ if ($1 + 0 > p) p = $1 + 0; s += $1 + 0; n++ } END { printf "%d %.2f", p, (n ? s / n : 0) }' "$samples" 2>/dev/null)
     peak=${peak:-0}; mean=${mean:-0}
-    if awk -v p="$peak" -v m="$lim2" 'BEGIN { exit !(p + 0 >= m + 0) }'; then
-      l="promote-pass: $tip no proof: the load peaked at $peak on $cores2 cores during the suite (mean $mean, limit $lim2), so this red says nothing about the tip ($out)"
-      echo "$(date -u +%FT%TZ) $l" >> "$log"; echo "$l"; exit 0
-    fi
-    bash "$d/gate.sh" --status full fail "$tip"; mark "$tip" "not promoted: the full suite failed ($out), peak load $peak under the $lim2 bound"; exit 1; fi
+    # The sample is a fact about the run, never a verdict: the suite is itself the load, so a threshold on this number cannot
+    # tell a loaded box from a working one. A red stays a red (ADR-0018): the peak is written beside it so the reader can see
+    # whether the box was fighting the suite, and the guard at the start is what keeps the proof off a busy machine.
+    bash "$d/gate.sh" --status full fail "$tip"; mark "$tip" "not promoted: the full suite failed ($out), peak load $peak on $cores2 cores, mean $mean"; exit 1; fi
   kill "$mon" 2>/dev/null; wait "$mon" 2>/dev/null
   bash "$d/gate.sh" --status full pass "$tip"
   o=$(gh_send -X POST "repos/$SG_REPO/statuses/$tip" -f state=success -f "context=$ctx" -f "description=full suite, both modes, local") \

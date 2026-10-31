@@ -152,8 +152,19 @@ def load_manifest(root: Path = ROOT) -> dict:
 
 
 def door_targets(root: Path = ROOT) -> set[str]:
-    """The skill each `agent-*` door opens: its name without the prefix."""
-    return {n.removeprefix("agent-") for n in project_skills(root) if n.startswith("agent-") and n != "agent-squad-dashboard"}
+    """The skill each `agent-*` door opens, when that skill is one the repository reads from outside itself.
+
+    A door to a skill the repository ships (`agent-premise-check` -> `.claude/skills/premise-check/SKILL.md`) opens a file in
+    the checkout, so no `~/.claude/skills` copy is owed for it and it is never counted as borrowed (ADR-0129).
+    """
+    own = project_skills(root)
+    return {n.removeprefix("agent-") for n in own if n.startswith("agent-") and n != "agent-squad-dashboard"} - shipped(root)
+
+
+def shipped(root: Path = ROOT) -> set[str]:
+    """The skills the repository ships in its own `.claude/skills`, each a folder with a SKILL.md."""
+    d = root / ".claude" / "skills"
+    return {p.name for p in d.iterdir() if (p / "SKILL.md").exists()} if d.is_dir() else set()
 
 
 def vendored(root: Path = ROOT) -> set[str]:
