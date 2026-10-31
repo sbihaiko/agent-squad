@@ -3190,7 +3190,7 @@ RUN_STATES = [
 
 WEB_TOKENS = (pathlib.Path(__file__).resolve().parent / "web-tokens.css").read_text()
 PAGE = r"""<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Hub</title>
-<script>if(matchMedia("(max-width: 600px)").matches&&sessionStorage.getItem("squad-view")!=="desktop")location.replace(location.pathname.replace(/\/?$/,"/")+"mobile")</script>
+<script>if(matchMedia("(max-width: 600px)").matches&&localStorage.getItem("squad-view")!=="desktop")location.replace(location.pathname.replace(/\/?$/,"/")+"mobile")</script>
 <style>
 /*WEB_TOKENS*/
 :root{--col-w:185px}   /* the docked strip's column geometry: the one place its width is set (#1791); a column holding no cards is not drawn at all, so it reserves none (#1809) */

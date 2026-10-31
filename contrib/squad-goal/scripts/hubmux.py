@@ -18,37 +18,58 @@ def _ctx(arg):
     return {k: v for k, _, v in (ln.partition("=") for ln in shlex.split(p.stdout))} if p.returncode == 0 else {}
 
 
-def load_apps():
-    """{slug: {"repo", "state", "mod" or "err"}}: one hub.py instance per profile, each imported with its own context. A
-    broken profile is a named entry with its error, never a machine-wide stop."""
+def profile_slugs():
+    """The profile names address.sh lists now: read on each call, so a profile added or removed while the hub runs shows (#917)."""
     out = subprocess.run(["bash", str(CTX), "--list"], capture_output=True, text=True, timeout=30).stdout
-    apps = {}
-    for slug in [ln.split("\t")[0] for ln in out.splitlines() if ln.strip()]:
-        c = _ctx(slug)
-        app = {"repo": c.get("SG_REPO", ""), "state": c.get("SG_STATE", "")}
-        if not c:
-            apps[slug] = {**app, "err": "address.sh refuses this profile"}
-            continue
-        pinned = {"SG_REPO": c.get("SG_REPO", ""), "SG_OWNER": c.get("SG_OWNER", ""), "SG_PROJECT": c.get("SG_PROJECT", ""),
-                  "SG_CHECKOUT": c.get("SG_CHECKOUT", ""), "SG_STATE": c.get("SG_STATE", ""), "SG_PROFILE": slug, "SG_HUB_DIR": "",
-                  "SG_PROJECTS": c.get("SG_PROJECTS", ""), "SG_FORK_DIR": c.get("SG_FORK_DIR", ""),   # the profile's own run roots, never the shell's (#859)
-                  "SG_BOARD_CACHE": c.get("SG_BOARD_CACHE", ""),   # the profile's own board cache, never the shell's (#512)
-                  "SG_SHARED": c.get("SG_SHARED", "")}   # the one shared directory the loop reads, never the profile's state (#678)
-        before = {k: os.environ.get(k) for k in pinned}
-        try:
-            os.environ.update(pinned)
-            spec = importlib.util.spec_from_file_location(f"hub_{slug}", HERE / "hub.py")
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-            app["mod"] = mod
-        except (Exception, SystemExit) as e:
-            app["err"] = str(e) or type(e).__name__
-        finally:
-            for k, v in before.items():
-                if v is None: os.environ.pop(k, None)
-                else: os.environ[k] = v
-        apps[slug] = app
-    return apps
+    return [ln.split("\t")[0] for ln in out.splitlines() if ln.strip()]
+
+
+def load_one(slug):
+    """One profile's app: its hub.py instance, imported with its own context, or its error. A broken profile is a named
+    entry with its error, never a machine-wide stop."""
+    c = _ctx(slug)
+    app = {"repo": c.get("SG_REPO", ""), "state": c.get("SG_STATE", "")}
+    if not c:
+        return {**app, "err": "address.sh refuses this profile"}
+    pinned = {"SG_REPO": c.get("SG_REPO", ""), "SG_OWNER": c.get("SG_OWNER", ""), "SG_PROJECT": c.get("SG_PROJECT", ""),
+              "SG_CHECKOUT": c.get("SG_CHECKOUT", ""), "SG_STATE": c.get("SG_STATE", ""), "SG_PROFILE": slug, "SG_HUB_DIR": "",
+              "SG_PROJECTS": c.get("SG_PROJECTS", ""), "SG_FORK_DIR": c.get("SG_FORK_DIR", ""),   # the profile's own run roots, never the shell's (#859)
+              "SG_BOARD_CACHE": c.get("SG_BOARD_CACHE", ""),   # the profile's own board cache, never the shell's (#512)
+              "SG_SHARED": c.get("SG_SHARED", "")}   # the one shared directory the loop reads, never the profile's state (#678)
+    before = {k: os.environ.get(k) for k in pinned}
+    try:
+        os.environ.update(pinned)
+        spec = importlib.util.spec_from_file_location(f"hub_{slug}", HERE / "hub.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        app["mod"] = mod
+    except (Exception, SystemExit) as e:
+        app["err"] = str(e) or type(e).__name__
+    finally:
+        for k, v in before.items():
+            if v is None: os.environ.pop(k, None)
+            else: os.environ[k] = v
+    return app
+
+
+def load_apps():
+    """{slug: {"repo", "state", "mod" or "err"}}: one hub.py instance per profile, each imported with its own context."""
+    return {slug: load_one(slug) for slug in profile_slugs()}
+
+
+LOCK = threading.Lock()
+
+
+def refresh(apps, on_new=None):
+    """Bring `apps` to the profile list as it is now: a new profile loads (and goes to `on_new`), a gone one drops, a kept
+    one stays as it is. A failed list read keeps the apps as they were, so a read that fails for a moment drops nothing (#917)."""
+    try: now = profile_slugs()
+    except Exception: return
+    for slug in [s for s in apps if s not in now]: apps.pop(slug)
+    for slug in now:
+        if slug not in apps:
+            apps[slug] = load_one(slug)
+            if on_new: on_new(apps[slug])
 
 
 def live(app):
@@ -87,7 +108,25 @@ def root_page(apps, title, note=None):
         runs = f'<div class="runs">{html.escape(ids)}</div>' if ids else ""
         rows.append(f'<li><a href="/{slug}"><b>{slug}</b></a> <span class="repo">{repo}</span> {badge}{runs}</li>')
     return (f'<!doctype html><meta charset=utf-8><title>squad hub</title><style>{WEB_TOKENS}{CSS}</style><body>'
-            f'<h1>{html.escape(title)}</h1>{note or ""}<ul>{"".join(rows) or "<li>no profile known</li>"}</ul>').encode()
+            f'<h1>{html.escape(title)}</h1>{note or ""}<ul id="repos">{"".join(rows) or "<li>no profile known</li>"}</ul>'
+            f'<script>{INDEX_JS}</script>').encode()
+
+
+# The index repaints its list from /api/hub every 10 s, so a profile added or gone and the live counts show with no reload
+# (#917). The rows take the same markup as root_page's first paint.
+INDEX_JS = """
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+function paint(h){
+  const rows=h.repos.map(r=>{
+    const badge=r.err?`<span class="broken">broken profile: ${esc(r.err)}</span>`:(r.live.length?`<span class="live">${r.live.length} live</span>`:'<span class="none">none live</span>');
+    const ids=[...r.live].sort().join(" ");
+    return `<li><a href="/${esc(r.slug)}"><b>${esc(r.slug)}</b></a> <span class="repo">${esc(r.repo)}</span> ${badge}${ids?`<div class="runs">${esc(ids)}</div>`:""}</li>`;
+  });
+  document.getElementById("repos").innerHTML=rows.join("")||"<li>no profile known</li>";
+}
+async function poll(){try{const r=await fetch("/api/hub",{cache:"no-store"});if(r.ok)paint(await r.json());}catch(e){}}
+setInterval(poll,10000);
+"""
 
 
 def test_note(slug, apps):
@@ -129,7 +168,7 @@ def admitted(apps, h, method):
     return {}, next((r for r in reasons if r != "forbidden host"), "forbidden host")
 
 
-def server(port, apps):
+def server(port, apps, on_new=None):
     class Mux(BaseHTTPRequestHandler):
         profile = None   # the hub.py handler class of the repository this request addresses; set per request
 
@@ -146,15 +185,18 @@ def server(port, apps):
 
         def _route(self, method):
             path = self.path.split("?", 1)[0]
+            with LOCK:   # the profile list is read on every request, so a profile added or gone shows at once (#917)
+                refresh(apps, on_new)
+                view = dict(apps)
             if path in ("/", "/api/hub"):
-                seen, reason = admitted(apps, self, method)
+                seen, reason = admitted(view, self, method)
                 if reason: return self.refuse(reason)
                 if path == "/": return self._send(200, root_page(seen, "squad hub"), "text/html; charset=utf-8")
                 return self._send(200, json.dumps(listing(seen)).encode(), "application/json")
             slug = path.split("/")[1]
-            app = apps.get(slug)
+            app = view.get(slug)
             if not app or "mod" not in app:
-                seen, reason = admitted(apps, self, method)
+                seen, reason = admitted(view, self, method)
                 if reason: return self.refuse(reason)
                 return self._send(404, root_page(seen, f"no repository at /{slug}", test_note(slug, seen)), "text/html; charset=utf-8")
             self.profile = app["mod"].H
@@ -181,9 +223,10 @@ if __name__ == "__main__":
     apps = load_apps()
     for k in ("SG_REPO", "SG_OWNER", "SG_PROJECT", "SG_CHECKOUT", "SG_STATE", "SG_PROJECTS", "SG_FORK_DIR"):   # each page reads its own profile, never the shell's
         os.environ.pop(k, None)
-    for a in apps.values():
+    def start(a):   # each profile's own background reads: a profile added later starts its own too (#917)
         m = a.get("mod")
-        if m is None: continue
+        if m is None: return
         for f in ("refresh_prs", "refresh_quota", "refresh_board", "load_sampler"):
             threading.Thread(target=getattr(m, f), daemon=True).start()
-    server(int(sys.argv[1]) if len(sys.argv) > 1 else 7700, apps).serve_forever()
+    for a in apps.values(): start(a)
+    server(int(sys.argv[1]) if len(sys.argv) > 1 else 7700, apps, on_new=start).serve_forever()
