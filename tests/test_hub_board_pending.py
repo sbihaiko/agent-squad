@@ -174,7 +174,7 @@ def render_cards(mod, rows):
     stubs = ("const esc=s=>String(s==null?'':s).replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]));"
              "const colOf=()=>'';const CN={};const tint=()=>'';const gstrip=()=>'';const age=()=>'1d';"
              "const ageC=()=>'';const lbc=()=>'';const bo={labels:[]};")
-    script = (f"{stubs}\n{_decl(mod.PAGE, 'cards')}\n"
+    script = (pathlib.Path(__file__).resolve().parent.parent.joinpath("contrib", "squad-goal", "scripts", "board-lanes.js").read_text() + "const SLOTS=specSlots([]);\n" + f"{stubs}\n{_decl(mod.PAGE, 'cards')}\n"
               f"console.log(JSON.stringify(cards({{name:'Doing'}}, {json.dumps(rows)}, {json.dumps(rows)})))")
     p = subprocess.run([NODE, "-"], input=script, capture_output=True, text=True, timeout=30)
     assert p.returncode == 0, p.stderr

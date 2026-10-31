@@ -84,7 +84,8 @@ def test_a_failed_holder_read_keeps_the_last_holder(hub, monkeypatch):
 
 def test_the_card_paints_the_holder_the_row_carries(hub):
     line = re.search(r"^const cards=.*$", hub.PAGE, re.M).group(0)
-    script = ('const esc=s=>String(s);const isPR=n=>false;const colOf=()=>"#000000";const tint=()=>"";'
+    script = (Path(__file__).resolve().parent.parent.joinpath("contrib", "squad-goal", "scripts", "board-lanes.js").read_text() + "const SLOTS=specSlots([]);\n" +   # the lane rules the page inlines (#917)
+              'const esc=s=>String(s);const isPR=n=>false;const colOf=()=>"#000000";const tint=()=>"";'
               'const lbc=()=>"";const gstrip=()=>"";const age=()=>"";const ageC=()=>"";const bo={labels:[]};const CN=["Todo"];\n'
               + line + '\nconst I=[{n:241,t:"held",l:[],ho:"held by run-x since then"}];console.log(cards({name:"Todo"},I,I));\n')
     out = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=60)

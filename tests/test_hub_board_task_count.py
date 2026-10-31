@@ -26,7 +26,7 @@ HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
 # the card data the ticket sheet reads (#919): an empty one is the empty string, never a missing key.
 NO_COUNT_CARD = (
     '<div class=it data-n="1" data-r="__REPO__" data-col="Todo" data-pm="" data-b="%5B%5D" '
-    'data-bl="%5B%5D" data-ho="" data-hr="" data-prf="%5B%5D" style="--cc:#000000">'
+    'data-bl="%5B%5D" data-ho="" data-hr="" data-prf="%5B%5D" style="--cc:#000000;--lc:var(--mute)">'   # no spec: grey (#917)
     '<a class=id target=_blank href="https://github.com/__REPO__/issues/1">#1</a>'
     '<span class=tt>a spec</span><span class=lbs><span class="">gui</span></span></div>'
 )
@@ -181,7 +181,8 @@ def _render(hub, rows):
     """The page's own cards() run by node over `rows`, with the page's surroundings stubbed."""
     line = re.search(r"^const cards=.*$", hub.PAGE, re.M)
     assert line, "the card renderer is gone"
-    script = ('const esc=s=>String(s);const isPR=n=>false;const colOf=()=>"#000000";const tint=()=>"";'
+    script = (Path(__file__).resolve().parent.parent.joinpath("contrib", "squad-goal", "scripts", "board-lanes.js").read_text() + "const SLOTS=specSlots([]);\n" +   # the lane rules the page inlines: spec color, wave chip (#917)
+              'const esc=s=>String(s);const isPR=n=>false;const colOf=()=>"#000000";const tint=()=>"";'
               'const lbc=()=>"";const gstrip=()=>"";const age=()=>"";const ageC=()=>"";'
               'const bo={labels:[]};const CN=["Todo"];\n' + line.group(0) +
               f"\nconst ITEMS={json.dumps(rows)};\nconsole.log(cards({{name:'Todo'}},ITEMS,ITEMS));\n")
