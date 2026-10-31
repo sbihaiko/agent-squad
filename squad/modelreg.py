@@ -404,13 +404,16 @@ def review_route(raw, reg=None):
 
     A registry entry decides: a `tools: false` capability picks the direct (or gateway) call, and any other entry
     takes its CLI route, whose first argv word is the runner; a gpt entry with tools and no CLI route keeps Codex, and any other keeps the legacy runner of its raw spelling. A spelling the registry does not know keeps the
-    runner the old review script gave it: `claude:`, `gemini-` and `grok-` by prefix, Codex for the rest."""
+    runner the old review script gave it: `claude:`, `gemini-` and `grok-` by prefix, Codex for the rest.
+
+    The review lane reads `review_tools` first: a coding capability says nothing about how a reviewer answers, and a
+    model that needs its coding tools can still review through the direct call, thinking off."""
     reg = reg or default_registry()
     ref = normalize(raw, reg)
     entry = reg.entries.get(ref.id) if ref.known else None
     if entry is None:
         return _legacy_route(raw)
-    tools = entry.capabilities.get("tools", True) is not False
+    tools = entry.capabilities.get("review_tools", entry.capabilities.get("tools", True)) is not False
     if tools and "cli" not in entry.routes:
         # a reviewer with tools reads the repository, so it never takes the no-tools call
         if entry.subscription == "gpt":
