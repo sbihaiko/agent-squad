@@ -30,6 +30,7 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
     { id: "gate", title: "Gate (read-only)", open: true, keys: ["check", "params"] },
   ];
   const GROUPED = new Set(GROUPS.flatMap((g) => g.keys));
+  const STRUCTURED = new Set(["budget", "next", "adapt", "when"]);
   const SUGGEST = { model: "models", effort: "efforts", tools: "tools", skill: "skills" };
 
   function propsOf(kind) {
@@ -41,6 +42,7 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
   function fieldType(key, prop0) {
     if (key === "instructions") return "area";
     if (key === "name" || key === "kind") return "text";
+    if (STRUCTURED.has(key)) return "structured";
     const prop = prop0 && prop0.$ref ? resolve(prop0.$ref, SCHEMA.$defs) : prop0;
     if (!prop) return "json";
     if (prop.enum) return "enum";
@@ -59,6 +61,35 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
     return JSON.stringify(v, null, 2);
   }
 
+  // The parts of a nested field, read from the schema: each part is one input at a path in the field's object.
+  function partsOf(key, prop0) {
+    const prop = prop0.$ref ? resolve(prop0.$ref, SCHEMA.$defs) : prop0;
+    const sub = (q) => (q.$ref ? resolve(q.$ref, SCHEMA.$defs) : q);
+    const parts = [];
+    if (key === "budget") {
+      for (const cap of Object.keys(prop.properties))
+        for (const [k, q0] of Object.entries(sub(prop.properties[cap]).properties)) {
+          const q = sub(q0);
+          parts.push({ path: `${cap}.${k}`, label: `${cap} ${k}`, input: q.type === "integer" ? "int" : "num" });
+        }
+    } else if (key === "next") {
+      for (const o of Object.keys(prop.properties)) parts.push({ path: o, label: o, input: "select", choices: sub(prop.properties[o]).enum });
+    } else if (key === "adapt") {
+      for (const [k, q0] of Object.entries(prop.properties)) {
+        const q = sub(q0);
+        if (q.type === "array" && q.items.enum) parts.push({ path: k, label: k, input: "check", choices: q.items.enum });
+        else if (q.type === "array") parts.push({ path: k, label: k, input: "list" });
+      }
+    } else if (key === "when") {
+      for (const [k, q0] of Object.entries(prop.properties)) {
+        const q = sub(q0);
+        if (q.enum) parts.push({ path: k, label: k, input: "select", choices: q.enum });
+        else parts.push({ path: k, label: k, input: k === "value" ? "any" : "text" });
+      }
+    }
+    return parts;
+  }
+
   function fieldGroups(n) {
     const props = propsOf(n.kind);
     const out = [];
@@ -69,6 +100,7 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
         const type = fieldType(k, props[k]);
         const f = { key: k, type, present: k in n, value: shown(type, n[k]) };
         if (type === "enum") f.enum = (props[k].$ref ? resolve(props[k].$ref, SCHEMA.$defs) : props[k]).enum;
+        if (type === "structured") f.parts = partsOf(k, props[k]);
         if (SUGGEST[k]) f.suggest = SUGGEST[k];
         if (k === "name" || k === "kind" || (n.kind === "gate" && (k === "check" || k === "params"))) f.readonly = true;
         return f;
@@ -330,5 +362,8 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
   // The top-level fields a person may not change: the two registries.
   const READ_ONLY_TOP = ["facts", "gates"];
 
-  return { applyNodeEdit, fieldGroups, setField, addNode, removeNode, reviewGate, connect, disconnect, renameNode, layoutRename, changeKind, unseenValues, READ_ONLY_TOP };
+  // Every kind, with the node's own kind selected, so the change-kind select shows what the node is now.
+  const kindChoices = (current) => KINDS.map((kind) => ({ kind, selected: kind === current }));
+
+  return { applyNodeEdit, fieldGroups, setField, addNode, removeNode, reviewGate, connect, disconnect, renameNode, layoutRename, changeKind, kindChoices, unseenValues, READ_ONLY_TOP };
 }

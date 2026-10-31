@@ -1,7 +1,10 @@
 """Edit operations: add, remove, connect, rename, change kind, fields by purpose, and undo."""
+import base64
 import copy
 import json
 import re
+import shutil
+import subprocess
 
 import pytest
 
@@ -371,6 +374,87 @@ def test_a_node_changed_to_a_gate_picks_a_registered_check_and_a_gate_is_never_c
     banana = changed(d, "scout", "banana")
     assert all("error" in x for x in (outside, away, same, ghost, banana)), (outside, away, same, ghost, banana)
     assert "read-only" in away["error"]
+
+
+def test_the_change_kind_select_lists_every_kind_and_selects_the_nodes_own_kind():
+    from build_dashboard import core_bundle, engine_data  # tests.dashboard_helpers puts scripts on sys.path
+
+    assert shutil.which("node"), "node is not installed: the dashboard parity guard cannot run, and it never skips"
+    script = ("let s = ''; process.stdin.on('data', (c) => (s += c)); process.stdin.on('end', () => {"
+              " const { engine, core, kind } = JSON.parse(s); const make = new Function(core + '\\nreturn make;')();"
+              " process.stdout.write(JSON.stringify(make(engine).kindChoices(kind))); });")
+    p = subprocess.run(["node", "-e", script], input=json.dumps({"engine": engine_data(), "core": core_bundle(), "kind": "agent"}),
+                       capture_output=True, text=True, timeout=300)
+    assert p.returncode == 0, p.stderr
+    choices = json.loads(p.stdout)
+    assert [c["kind"] for c in choices] == KINDS
+    assert [c["kind"] for c in choices if c["selected"]] == ["agent"]
+    assert "core.kindChoices(n.kind)" in page_template()
+
+
+def call_core(calls):
+    """Call the core's functions in node: each call is [name, args]; the results are the functions' JSON values, in order."""
+    from build_dashboard import core_bundle, engine_data  # tests.dashboard_helpers, imported above, puts scripts on sys.path
+    assert shutil.which("node"), "node is not installed: the dashboard parity guard cannot run, and it never skips"
+    script = ("let s = ''; process.stdin.on('data', (c) => (s += c)); process.stdin.on('end', () => {"
+              " const { engine, core, calls } = JSON.parse(s); const make = new Function(core + '\\nreturn make;')();"
+              " const api = make(engine); process.stdout.write(JSON.stringify(calls.map(([fn, args]) => api[fn](...args)))); });")
+    p = subprocess.run(["node", "-e", script], input=json.dumps({"engine": engine_data(), "core": core_bundle(), "calls": calls}),
+                       capture_output=True, text=True, timeout=300)
+    assert p.returncode == 0, p.stderr
+    return json.loads(p.stdout)
+
+
+def test_start_carries_the_open_and_example_buttons_and_the_example_loads_on_one_click():
+    page = page_template()
+    assert 'data-start="open"' in page and 'data-start="example"' in page
+    assert 'b.dataset.start === "example"' in page and "const loadExample" in page
+
+
+def test_start_open_takes_the_same_picker_path_as_the_top_bar():
+    assert 'b.dataset.start === "open") $("l-open").click()' in page_template()
+
+
+def workflow_fragment(obj):
+    return "#workflow=" + base64.urlsafe_b64encode(json.dumps(obj).encode("utf-8")).decode("ascii").rstrip("=")
+
+
+def test_a_fragment_names_the_workflow_the_page_loads_with_its_exact_name_and_text():
+    text = '{"name": "café", "nodes": []}\n'
+    [opened] = call_core([["openedWorkflow", [workflow_fragment({"name": "fresh.graph.json", "text": text})]]])
+    assert opened == {"name": "fresh.graph.json", "text": text}
+
+
+def test_an_unreadable_fragment_says_so_and_loads_nothing():
+    bad = ["#workflow=%", "#workflow=%E0%A4%A", "#workflow=notjson", workflow_fragment({"name": "x"})]
+    results = call_core([["openedWorkflow", [h]] for h in bad + ["#other=1"]])
+    assert all("error" in r for r in results[:4]) and results[4] is None
+
+
+def test_the_page_loads_the_workflow_its_fragment_names_on_open():
+    page = page_template()
+    assert "core.openedWorkflow(location.hash)" in page and "loadGraph(OPENED.text, OPENED.name)" in page
+
+
+def test_budget_next_adapt_and_when_are_structured_fields_not_raw_json():
+    seen = {}
+    for n in five()["nodes"]:
+        [groups] = call_core([["fieldGroups", [n]]])
+        for g in groups:
+            for f in g["fields"]:
+                if f["key"] in ("budget", "next", "adapt", "when"):
+                    seen.setdefault(f["key"], []).append(f)
+    assert set(seen) == {"budget", "next", "adapt", "when"}
+    assert all(f["type"] == "structured" and f["parts"] for fs in seen.values() for f in fs)
+    assert {p["path"] for p in seen["budget"][0]["parts"]} == {"stalls.min", "stalls.max", "spend.min", "spend.max", "spend.max_tokens"}
+    assert {p["path"] for p in seen["when"][0]["parts"]} == {"fact", "op", "value"}
+
+
+def test_change_kind_to_the_current_kind_names_the_kind_instead_of_doing_nothing():
+    kind = node(five(), "scout")["kind"]
+    [r] = call_core([["changeKind", [five(), "scout", kind]]])
+    assert r == {"error": f"scout is already a {kind}."}
+    assert "current.kind === kind" not in page_template()
 
 
 def test_the_side_panel_reads_the_served_lists_by_their_real_keys_so_selecting_an_agent_never_throws():

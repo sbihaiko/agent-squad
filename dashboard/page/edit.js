@@ -1,7 +1,37 @@
 // --- the inspector form: fields grouped by purpose; the core builds the groups and applies each edit ---
 const groupOpen = {};
 for (const k of ["models", "efforts", "skills"]) $("dl-" + k).innerHTML = SERVED[k].map((v) => `<option value="${esc(v)}">`).join("");
+// A nested field (budget, next, adapt, when) is one row per part from the core; each part sits at a path in the field's object.
+function partHtml(p, cur) {
+  const v = p.path.split(".").reduce((o, k) => (o && typeof o === "object" ? o[k] : undefined), cur);
+  const a = `data-part="${esc(p.path)}" data-input="${p.input}"`;
+  let input;
+  if (p.input === "select") input = `<select ${a}>${["", ...p.choices].map((c) => `<option value="${esc(c)}"${c === v ? " selected" : ""}>${esc(c) || "(not set)"}</option>`).join("")}</select>`;
+  else if (p.input === "check") input = p.choices.map((c) => `<label><input type="checkbox" data-part="${esc(p.path)}" data-input="check" data-val="${esc(c)}"${Array.isArray(v) && v.includes(c) ? " checked" : ""}> ${esc(c)}</label>`).join(" ");
+  else input = `<input ${a} type="${p.input === "num" || p.input === "int" ? "number" : "text"}"${p.input === "num" ? ` step="any"` : ""} value="${esc(p.input === "list" && Array.isArray(v) ? v.join(", ") : v === undefined ? "" : String(v))}" spellcheck="false">`;
+  return `<div class="fld"><label>${esc(p.label)}</label><div>${input}</div></div>`;
+}
+function structuredHtml(f) {
+  const cur = f.value ? JSON.parse(f.value) : {};
+  return `<div class="fld"><label>${esc(f.key)}${f.present ? "" : " · unset"}</label><div class="struct" data-struct="${esc(f.key)}">${f.parts.map((p) => partHtml(p, cur)).join("")}</div></div>`;
+}
+// The field's JSON from its parts; blank parts are left out, and no part set gives "" (the field is removed).
+function structuredText(box) {
+  const out = {}, checks = {};
+  const set = (path, val) => { const ks = path.split("."), last = ks.pop(); let o = out; for (const k of ks) o = o[k] = o[k] || {}; o[last] = val; };
+  const anyValue = (t) => (t === "true" ? true : t === "false" ? false : Number.isFinite(Number(t)) ? Number(t) : t);
+  for (const el of box.querySelectorAll("[data-part]")) {
+    const path = el.dataset.part, kind = el.dataset.input;
+    if (kind === "check") { if (el.checked) (checks[path] = checks[path] || []).push(el.dataset.val); continue; }
+    const t = el.value.trim();
+    if (t === "") continue;
+    set(path, kind === "num" || kind === "int" ? Number(t) : kind === "list" ? t.split(",").map((x) => x.trim()).filter(Boolean) : kind === "any" ? anyValue(t) : t);
+  }
+  for (const [path, vals] of Object.entries(checks)) set(path, vals);
+  return Object.keys(out).length ? JSON.stringify(out) : "";
+}
 function fieldHtml(f) {
+  if (f.type === "structured") return structuredHtml(f);
   const id = "f-" + f.key, dis = f.readonly ? " disabled" : "", a = `id="${id}" data-key="${esc(f.key)}"${dis}`;
   let input;
   if (f.type === "area") input = `<textarea ${a} rows="6" spellcheck="false">${esc(f.value)}</textarea><div class="note"><span id="ic">${[...f.value].length}</span> characters</div>`;
@@ -31,6 +61,7 @@ function wireFields() {
   const side = $("side"), name = S.selected;
   for (const d of side.querySelectorAll("details[data-group]")) d.addEventListener("toggle", () => { groupOpen[d.dataset.group] = d.open; });
   for (const el of side.querySelectorAll("[data-key]")) el.addEventListener("change", () => setFieldFrom(name, el.dataset.key, el.value));
+  for (const box of side.querySelectorAll("[data-struct]")) box.addEventListener("change", () => setFieldFrom(name, box.dataset.struct, structuredText(box)));
   const ins = $("f-instructions");
   if (ins) ins.addEventListener("input", () => { $("ic").textContent = [...ins.value].length; });
   for (const b of side.querySelectorAll("[data-chip]")) b.addEventListener("click", () => {

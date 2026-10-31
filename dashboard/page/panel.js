@@ -200,7 +200,7 @@ function renderSide() {
   // page, and a failed read says which file failed. The first read of the run holds the panel until it settles.
   const key = readKey("record", "graph");
   if (!S.doc && key) { paintRead(side, key, "run"); return; }
-  if (!S.doc) { side.innerHTML = `<h2>Start</h2><p>Open a graph document, or load the five-phase example.</p><p class="note">The graph file stays as authored. A run record is read-only. Layout lives in a sibling file and never moves the graph hash.</p>`; return; }
+  if (!S.doc) { side.innerHTML = `<h2>Start</h2><p>Open a graph document, or load the five-phase example.</p><div class="row"><button data-start="open" title="Choose a graph file (a JSON graph document)">Open graph</button> <button data-start="example" title="Load the five-phase example graph">Load the five-phase example</button></div><p class="note">The graph file stays as authored. A run record is read-only. Layout lives in a sibling file and never moves the graph hash.</p>`; return; }
   const parts = [];
   const load = readHtml(key, "run");
   if (load) parts.push(load);   // a failed or slow read of the run says so next to the graph it does not stop
@@ -228,11 +228,10 @@ function renderSide() {
       if (n.kind === "gate") parts.push(`<h2>Read-only: check and thresholds</h2><div class="ro">check: <b>${esc(n.check)}</b><br>params: ${esc(JSON.stringify(n.params))}</div>`);
       if (inEdit()) {
       const gates = Array.isArray(S.doc.gates) ? S.doc.gates : [];
-      const kinds = core.KINDS.filter((k) => k !== n.kind);
       parts.push(`<h2>Rename and kind</h2><div class="row"><input id="n-name" value="${esc(n.name)}" spellcheck="false" title="The new name replaces the old one in every reference"> <button id="b-rename">Rename</button></div>`
         + (n.kind === "gate"
           ? `<div class="note">A gate keeps its kind: its check id and thresholds are read-only. Remove it and add the node you want.</div>`
-          : `<div class="row"><select id="n-kind" title="The new kind; every field stays and the rules judge the result">${kinds.map((k) => `<option>${k}</option>`).join("")}</select> <select id="n-check" title="Registered check for the gate" hidden>${gates.map((g) => `<option>${esc(g.id)}</option>`).join("")}</select> <button id="b-kind">Change kind</button></div>`)
+          : `<div class="row"><select id="n-kind" title="The new kind; every field stays and the rules judge the result">${core.kindChoices(n.kind).map((c) => `<option${c.selected ? " selected" : ""}>${c.kind}</option>`).join("")}</select> <select id="n-check" title="Registered check for the gate" hidden>${gates.map((g) => `<option>${esc(g.id)}</option>`).join("")}</select> <button id="b-kind">Change kind</button></div>`)
         + `<div id="nk-msg"></div>`);
       parts.push(`<h2>Fields</h2>${core.fieldGroups(n).map((g) => fieldGroupHtml(n, g)).join("")}`);
       parts.push(`<details><summary>Edit the whole node as JSON</summary><textarea id="node-json" spellcheck="false">${esc(JSON.stringify(n, null, 2))}</textarea><div><button id="b-apply">Apply to node</button> <span id="apply-msg"></span></div></details>`);
