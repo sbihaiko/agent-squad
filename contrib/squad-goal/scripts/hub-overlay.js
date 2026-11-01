@@ -102,6 +102,7 @@ html.sq-docked body{margin-right:var(--sq-dock)}
 .sq-ul{margin:3px 0;padding-left:16px}.sq-ul li{margin:0 0 2px}
 .sq-code{margin:4px 0}.sq-code summary{font-size:11px;color:#7aa2ff;cursor:pointer;list-style:none}
 .sq-code pre{margin:3px 0 0;padding:5px 8px;background:#0d1117;border:1px solid #232a36;border-radius:6px;overflow:auto;font:12px/1.4 ui-monospace,SFMono-Regular,monospace;color:#b8c0cf;white-space:pre}
+.sq-img{display:block;margin:4px 0}.sq-img img{max-width:100%;max-height:180px;border:1px solid #232a36;border-radius:6px;display:block}
 .sq-more{margin:1px 0 4px;padding:1px 0;border:0;background:none;color:#7aa2ff;font-size:11px;cursor:pointer}
 .sq-earlier{margin:0 0 6px}.sq-earlier summary{font-size:11px;color:#707988;cursor:pointer}
 .sq-tool{border-left-color:#f5b041}.sq-tool .sq-who{color:#f5b041}
@@ -255,6 +256,18 @@ async function loadSessions() {
   else empty("Pick a session above.");
 }
 // Only the structure that carries meaning in a 400 px panel: headings, bullets, a fence. Everything else stays text.
+// A transcript names a screenshot by the path it was written to: the hub serves that file and the panel draws a thumbnail
+// (owner, 2026-11-01). "[Image #7]" alone names no file, so it stays text.
+const IMG_RE = /^\s*\[Image: source: ([^\]]+)\]\s*$/;
+function imageNode(path) {
+  const t = cur, a = document.createElement("a"), i = document.createElement("img");
+  a.className = "sq-img"; a.href = t.src.api + "/image?sid=" + encodeURIComponent(t.sid) + "&p=" + encodeURIComponent(path);
+  a.target = "_blank"; a.rel = "noopener";
+  i.loading = "lazy"; i.alt = "screenshot"; i.src = a.href;
+  i.onerror = () => { a.replaceWith(document.createTextNode("[Image: " + path + "]")); };
+  a.append(i);
+  return a;
+}
 function richText(text) {
   const box = document.createElement("div");
   box.className = "sq-txt";
@@ -274,6 +287,8 @@ function richText(text) {
     const li = /^\s*[-*]\s+(.*)$/.exec(raw);
     if (li) { para(); if (!ul) { ul = document.createElement("ul"); ul.className = "sq-ul"; } const it = document.createElement("li"); it.textContent = li[1]; ul.append(it); continue; }
     if (!raw.trim()) { para(); list(); continue; }
+    const img = IMG_RE.exec(raw);
+    if (img && cur && cur.src) { para(); list(); box.append(imageNode(img[1])); continue; }
     list(); buf.push(raw);
   }
   if (fence) code();

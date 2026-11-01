@@ -6132,6 +6132,25 @@ def send_rule(a):
     if tailnet_block().get("terminals_send") is True: return True, ""
     return False, f"Sending from the tailnet is off. The owner sets {SEND_SETTING} (tailnet.terminals_send) to send."
 
+IMAGE_SUFFIX = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp"}
+IMAGE_MAX = 12 * 1024 * 1024
+
+def image_payload(query):
+    """One screenshot a transcript names, as (bytes, content type), or None. A transcript line names its image by the path
+    the session wrote it under, so the route serves exactly that file and nothing a caller names freely: the path must sit in
+    an `images` directory, end in an image suffix, be a regular file, and stay inside the session's own project directory.
+    A thumbnail of the owner's screenshots reads better than the path, and the path is what the transcript keeps (#1073)."""
+    q = urllib.parse.parse_qs(query or ""); sid = (q.get("sid") or [""])[0]; raw = (q.get("p") or [""])[0]
+    if sessions.SID.fullmatch(sid) is None or not raw: return None
+    path = os.path.realpath(raw)
+    ct = IMAGE_SUFFIX.get(pathlib.Path(path).suffix.lower())
+    if not ct or "images" not in pathlib.Path(path).parts: return None
+    if sid not in path: return None
+    try:
+        if not os.path.isfile(path) or os.path.getsize(path) > IMAGE_MAX: return None
+        return pathlib.Path(path).read_bytes(), ct
+    except OSError: return None
+
 def project_payload(a):
     """What /api/sessions/project serves (#898): the sessions in this profile's checkout and the send rule for this request."""
     ok, why = send_rule(a)
@@ -6392,6 +6411,11 @@ class H(BaseHTTPRequestHandler):
             page = conversation_payload(self.path.partition("?")[2])
             if page is None: return self.not_found()
             body, ct = json.dumps(page).encode(), "application/json"
+        elif self.path.startswith("/api/sessions/image"):
+            got = image_payload(self.path.partition("?")[2])
+            if got is None: return self.not_found()
+            self.send_response(200); self.send_header("Content-Type", got[1]); self.send_header("Cache-Control", "max-age=3600")
+            self.send_header("Content-Length", str(len(got[0]))); self.end_headers(); self.wfile.write(got[0]); return
         elif self.path.startswith("/api/sessions"): body, ct = json.dumps(sessions_payload()).encode(), "application/json"
         elif (asset := MOBILE_ASSETS.get(self.path.split("?", 1)[0])): body, ct = asset
         else: body, ct = served_page(a.login).encode(), "text/html; charset=utf-8"
