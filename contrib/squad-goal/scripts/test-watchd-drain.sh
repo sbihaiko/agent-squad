@@ -49,6 +49,16 @@ for _ in $(seq 1 20); do ! alive_sup && break; sleep 1; done
 bash "$T/watchd.sh" start >/dev/null; sup=$(cat "$SG_STATE/watchd.pid" 2>/dev/null)
 [ -e "$SG_STATE/auto/off" ] && ok "a pause the owner set before the drain survives the next start" || ko "a start removed the owner's own pause"
 bash "$T/watchd.sh" stop >/dev/null
+# (#1057) A gate lock whose holder died as a zombie holds no drain: the parent has not reaped it, so kill -0 still answers.
+sh -c 'sleep 0 & echo $! > "$1"; exec sleep 300' sh "$T/zombie" >/dev/null 2>&1 & zpar=$!
+for i in $(seq 1 50); do [ -s "$T/zombie" ] && [ "$(/bin/ps -o stat= -p "$(cat "$T/zombie")" 2>/dev/null | cut -c1)" = Z ] && break; sleep 0.1; done
+rm -f "$SG_STATE/auto/off" "$SG_STATE/auto/drain"; : > "$SG_STATE/active-runs.txt"; echo "$(cat "$T/zombie")" > "$SG_STATE/locks/gate/pid"
+bash "$T/watchd.sh" start >/dev/null; sup=$(cat "$SG_STATE/watchd.pid" 2>/dev/null)
+SG_DRAIN_POLL=1 bash "$T/watchd.sh" drain >/dev/null 2>&1
+for _ in $(seq 1 20); do ! alive_sup && break; sleep 1; done
+if alive_sup; then ko "a zombie gate lock held the drain"; else ok "a zombie gate lock does not hold the drain"; fi
+kill -9 "$zpar" 2>/dev/null; wait "$zpar" 2>/dev/null; rm -f "$SG_STATE/locks/gate/pid"
+bash "$T/watchd.sh" stop >/dev/null
 # The hub's switch over the real watchd (#923 review 2): stop-now with two live runs, a start with a third, then a drain. The
 # runs stop-now killed get their verdict at once, so the drain waits on the third run only; a run that then dies with no
 # verdict does not hold the drain either. A start that failed in the hub is not shown after a later start from the terminal.

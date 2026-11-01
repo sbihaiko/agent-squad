@@ -35,4 +35,11 @@ miss=; for s in childcc autofrontier autobug; do /usr/bin/grep -qx "$s" "$T/fast
 # 6. (#361) the fast lane carries no merge pass: the review, the fix pass and the branch lander are the cycle's, and autopilot.sh is gone
 /usr/bin/grep -q 'autopilot' "$d/fastloop.sh" && ko "the fast lane still names autopilot" || ok "the fast lane carries no merge pass"
 [ -e "$d/autopilot.sh" ] && ko "autopilot.sh is back" || ok "autopilot.sh is gone (the branch lander is the landing path)"
+# 7. (#1057) a single lock whose holder died as a zombie is taken over: its parent has not reaped it, so kill -0 still answers
+sh -c 'sleep 0 & echo $! > "$1"; exec sleep 300' sh "$T/zombie" >/dev/null 2>&1 & zpar=$!
+for i in $(seq 1 50); do [ -s "$T/zombie" ] && [ "$(/bin/ps -o stat= -p "$(cat "$T/zombie")" 2>/dev/null | cut -c1)" = Z ] && break; sleep 0.1; done
+mkdir -p "$SG_STATE/locks/single-zombie"; echo "$(cat "$T/zombie")" > "$SG_STATE/locks/single-zombie/pid"
+bash "$d/single.sh" zombie sh -c "echo z >> $T/zlog" 2>"$T/zerr"
+[ "$(cat "$T/zlog" 2>/dev/null)" = z ] && ok "a single lock held by a zombie is taken over" || ko "a zombie holder blocked single: $(cat "$T/zerr")"
+kill -9 "$zpar" 2>/dev/null; wait "$zpar" 2>/dev/null
 sleep 5; rm -rf "$T"; exit $fail

@@ -26,7 +26,7 @@ drain_busy() {
     else [ -n "$(find "$f" -mmin -"${HB_DEAD_IDLE_MIN:-1}" 2>/dev/null)" ] && return 0; fi
   done < "$SG_STATE/active-runs.txt" 2>/dev/null
   g=$(cat "$SG_STATE/locks/gate/pid" 2>/dev/null)
-  [ -n "$g" ] && kill -0 "$g" 2>/dev/null && return 0
+  [ -n "$g" ] && kill -0 "$g" 2>/dev/null && [ "$(/bin/ps -o stat= -p "$g" 2>/dev/null | cut -c1)" != Z ] && return 0
   return 1
 }
 case "${1:-status}" in
