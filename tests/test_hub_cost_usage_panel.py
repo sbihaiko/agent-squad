@@ -53,6 +53,7 @@ def _prelude():
     usd = re.search(r"const usd=v=>[^;]+;", SRC).group(0)
     usdc = re.search(r"const usdc=v=>[^;]+;", SRC)
     pcol = re.search(r"const PCOL=[^;]+;", SRC).group(0)
+    top = re.search(r"const TOP=[^;]+;", SRC)
     other = re.search(r"const OTHER=[^;]+;", SRC)
     if "tk=" not in pcol:
         tk = re.search(r"(?:const )?tk=n=>[^;]+;", SRC).group(0)
@@ -61,7 +62,7 @@ def _prelude():
         pcol = pcol + "\n" + tk
     esc = "const esc=t=>String(t).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));"
     return "\n".join([
-        usd, usdc.group(0) if usdc else "", pcol, other.group(0) if other else "", esc,
+        usd, usdc.group(0) if usdc else "", pcol, other.group(0) if other else "", top.group(0) if top else "", esc,
         _fn(SRC, "bars"), _fn(SRC, "pie"), _fn(SRC, "kr"), _fn(SRC, "openRows"),
     ])
 
@@ -123,7 +124,7 @@ def test_no_tot3_tile_grid():
 def test_section_order_is_spend_chart_speed_open_tokens():
     html = _stats()
     pos = [html.find("Spend"), html.find("Spend over time"), html.find("id=chart"),
-           html.find("id=kpi"), html.find("id=open"), html.find("Tokens by model"), html.find("id=pie")]
+           html.find("id=kpi"), html.find("id=open"), html.find("Model cost · this month"), html.find("id=pie")]
     assert all(p >= 0 for p in pos), pos
     assert pos == sorted(pos), pos
 
@@ -269,86 +270,83 @@ def test_open_with_none_reads_none_open():
     assert "Open now" not in SRC
 
 
-def test_tokens_by_model_is_always_expanded():
+def test_cost_donut_sits_under_its_title_and_subtitle():
     html = _stats()
-    pie_wrap = html[html.index("id=pie") - 120 : html.index("id=pie") + 40]
+    assert "Tokens by model" not in html
+    assert "<h4>Model cost · this month</h4>" in html
+    assert html.index("<h4>Model cost · this month</h4>") < html.index('<div class=m id=piet>API-equivalent</div>') < html.index("id=pie")
+    pie_wrap = html[html.index("Model cost") - 40 : html.index("id=pie") + 40]
     assert "<details" not in pie_wrap and "<summary" not in pie_wrap
-    assert "Tokens by model" in html
-    assert re.search(r"<h4>Tokens by model <small class=m id=piet>all time</small></h4>", html)
 
 
-def test_tokens_legend_folds_under_one_percent_and_caps_six_rows():
+def test_cost_donut_names_three_models_then_other_largest_first():
     out = _run_js("""
 const models=[
-  {model:'big',in:9000,out:0,cache:0,spend:1,calls:1},
-  {model:'mid',in:500,out:0,cache:0,spend:1,calls:1},
-  {model:'a',in:20,out:0,cache:0,spend:1,calls:1},
-  {model:'b',in:20,out:0,cache:0,spend:1,calls:1},
-  {model:'c',in:20,out:0,cache:0,spend:1,calls:1},
-  {model:'d',in:20,out:0,cache:0,spend:1,calls:1},
-  {model:'e',in:20,out:0,cache:0,spend:1,calls:1},
-  {model:'f',in:20,out:0,cache:0,spend:1,calls:1},
-  {model:'g',in:20,out:0,cache:0,spend:1,calls:1},
+  {model:'a',month_cost:9,in:1,out:0,cache:0,spend:9,calls:1},
+  {model:'b',month_cost:7,in:1,out:0,cache:0,spend:7,calls:1},
+  {model:'c',month_cost:5,in:1,out:0,cache:0,spend:5,calls:1},
+  {model:'d',month_cost:3,in:1,out:0,cache:0,spend:3,calls:1},
+  {model:'e',month_cost:1,in:1,out:0,cache:0,spend:1,calls:1},
+  {model:'f',month_cost:0.5,in:1,out:0,cache:0,spend:0.5,calls:1},
 ];
 const html=pie(models);
-const legend=[...html.matchAll(/<span class=ln>([^<]+)<\\/span>/g)].map(m=>m[1]);
-const shares=[...html.matchAll(/<span class=ln>[^<]+<\\/span><span class=usd>[^<]*<\\/span><b>([^<]+)<\\/b>/g)].map(m=>m[1]);
-const slices=[...html.matchAll(/<path[^>]*fill="([^"]+)"/g)].map(m=>m[1]);
-const out={html, legend, shares, slices, n:legend.length, other:(legend.find(x=>x.startsWith('other'))||'')};
+const out={html, slices:[...html.matchAll(/<(?:path|circle)[^>]*data-k="([^"]+)"/g)].map(m=>m[1])};
 """)
-    assert out["n"] == 3, out["legend"]  # big, mid, other
-    assert out["other"] == "other · 7 models", out["legend"]
-    assert len(out["slices"]) == out["n"], out["slices"]  # one slice per legend row
-    assert out["shares"] == ["93%", "5%", "1%"], out["shares"]
-    for row in out["legend"]:
-        if row.startswith("other"):
-            continue
-        assert row not in list("abcdefg"), row  # no named row under 1 %
-    assert out["n"] <= 6
+    html = out["html"]
+    assert out["slices"] == ["a", "b", "c", "other"], out["slices"]
+    legend = re.findall(r'<span class=ln>([^<]+)</span><span class=usd>([^<]+)</span>', html)
+    assert legend == [("a", "$9.00"), ("b", "$7.00"), ("c", "$5.00"), ("other · 3 models", "$4.50"),
+                      ("d", "$3.00"), ("e", "$1.00"), ("f", "$0.50")], legend
+    assert re.search(r'<details[^>]*data-k="other"', html), html
+    assert html.index("<details") < html.index("<span class=ln>d</span>") < html.index("</details>"), html
+    assert "%" not in html and "tokens" not in html, html
 
 
-def test_tokens_other_slice_tooltip_lists_each_folded_model():
+def test_cost_donut_other_sums_the_unrounded_costs():
     out = _run_js("""
 const models=[
-  {model:'big',in:9900,out:0,cache:0,spend:1,calls:1},
-  {model:'small-a',in:60,out:0,cache:0,spend:1,calls:1},
-  {model:'small-b',in:40,out:0,cache:0,spend:1,calls:1},
+  {model:'a',month_cost:10,in:1,out:0,cache:0,spend:10,calls:1},
+  {model:'b',month_cost:9,in:1,out:0,cache:0,spend:9,calls:1},
+  {model:'c',month_cost:8,in:1,out:0,cache:0,spend:8,calls:1},
+  {model:'d',month_cost:0.333,in:1,out:0,cache:0,spend:0.33,calls:1},
+  {model:'e',month_cost:0.333,in:1,out:0,cache:0,spend:0.33,calls:1},
+  {model:'f',month_cost:0.334,in:1,out:0,cache:0,spend:0.33,calls:1},
 ];
-const html=pie(models);
-const titles=[...html.matchAll(/<title>([^<]*)<\\/title>/g)].map(m=>m[1]);
-const out={legend:[...html.matchAll(/<span class=ln>([^<]+)<\\/span>/g)].map(m=>m[1]).find(x=>x.startsWith('other'))||'', tip:titles.find(t=>t.includes('small-a'))||''};
+const out={html:pie(models)};
 """)
-    assert out["legend"] == "other · 2 models", out
-    assert "small-a: 0.60%" in out["tip"] and "small-b: 0.40%" in out["tip"], out["tip"]
+    assert re.search(r'<span class=ln>other · 3 models</span><span class=usd>\$1\.00</span>', out["html"]), out["html"]
 
 
-def test_tokens_donut_centre_reads_the_total_and_tokens():
-    out = _run_js("const out={html:pie([{model:'m',in:1690000000,out:0,cache:0,spend:1,calls:1}])};")
-    assert re.search(r">1\.69B</text>", out["html"]), out["html"]
-    assert re.search(r">tokens</text>", out["html"])
+def test_the_month_window_draws_only_cost_this_month():
+    out = _run_js("""
+const models=[
+  {model:'paid',month_cost:2,in:100,out:0,cache:0,spend:2,calls:1},
+  {model:'free',month_cost:0,in:90000,out:0,cache:0,spend:0,calls:1},
+  {model:'old',month_cost:0,in:5000,out:0,cache:0,spend:40,calls:1},
+];
+const out={html:pie(models)};
+""")
+    html = out["html"]
+    assert re.findall(r'<span class=ln>([^<]+)</span>', html) == ["paid"], html
+    assert "free" not in html and "old" not in html, html
+    assert ">$2.00</text>" in html, html
 
 
-def test_tokens_header_small_text_reads_the_total():
-    html = _render("const st={models:[{in:1200000000,out:490000000,cache:0,spend:1,calls:1}]};",
-                   _stmt('$("#piet").textContent='))
-    assert re.fullmatch(r"[\d.]+[KMB] all time", html.strip()), html
+def test_cost_donut_centre_reads_the_month_total_and_this_month():
+    out = _run_js("const out={html:pie([{model:'m',month_cost:1234.5,in:1,out:0,cache:0,spend:1234.5,calls:1}])};")
+    html = out["html"]
+    assert re.search(r">\$1235</text>", html), html
+    assert re.search(r">this month</text>", html), html
+    assert not re.search(r">tokens</text>", html), html
 
 
-def test_closed_summary_reads_todays_spend():
-    """Re-anchored to the owner-approved mock (#889): the closed card's right-hand summary reads `$41 today`; the month cash stays in the body (#cash)."""
-    txt = _render("const st={totals:{today:41.2}};", _stmt('$("#stsr").textContent=')).strip()
-    assert txt == "$41.20 today", txt
-    assert "month" not in txt
+def test_named_constant_keeps_the_top_three_models():
+    assert re.search(r"const TOP=3;", SRC)
 
 
-def test_closed_summary_reads_no_spend_today_as_zero():
-    txt = _render("const st={totals:{today:0}};", _stmt('$("#stsr").textContent=')).strip()
-    assert txt == "$0.00 today", txt
-
-
-@pytest.mark.skipif(shutil.which("node") is None, reason="node is required")
-def test_named_constant_folds_models_under_one_percent():
-    assert re.search(r"const OTHER=0\.01", SRC)
+def test_the_subtitle_is_static_and_pollstats_leaves_it_alone():
+    assert '<div class=m id=piet>API-equivalent</div>' in _stats()
+    assert '$("#piet")' not in POLL
 
 
 # ---- the subscriptions panel renders with a quota probe that has no windows (#1512) ----
