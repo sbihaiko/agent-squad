@@ -287,3 +287,21 @@ def test_a_system_turn_folds_to_one_collapsible_line():
     assert 't.role === "system" || t.role === "tool"' in body
     assert 'createElement("details")' in body and 'createElement("summary")' in body
     assert ".sq-fold" in js and ".sq-fold summary" in js
+
+def test_a_read_that_fails_keeps_the_session_and_the_talk():
+    """Owner, 2026-11-01: the terminal sometimes zeroed to "No session runs in this project's checkout" after a reload. A
+    reload lands while the hub is restarting, so its reads fail; a read that did not answer may not drop the session, blank
+    the talk, or say a session is gone. Only a list read that answered may."""
+    js = OVERLAY.read_text()
+    body = js[js.index("async function loadSessions() {"):js.index("// Only the structure that carries meaning")]
+    assert "answered++" in body and "if (!answered) {" in body
+    assert "retrySoon();" in body and "return;" in body
+    # the early return sits before every write of the session state
+    guard = body.index("if (!answered) {")
+    for later in ("sessions = found", "cur = ", "empty(\"No session runs"):
+        assert guard < body.index(later), later
+    # a 404 on the conversation asks the list again; it never drops the session by itself
+    conv = js[js.index("async function loadConversation() {"):js.index("const uuid =")]
+    assert "cur = null" not in conv
+    assert "loadSessions()" in conv
+    assert "Date.now() - missT > 5000" in conv

@@ -239,19 +239,36 @@ function paintHead() {
   title.textContent = "Terminal - Claude CLI";   // the title names the panel, not the session (owner, 2026-11-01)
   syncSend();
 }
+// A read that fails says nothing about the sessions (owner, 2026-11-01): it used to blank the panel and drop the reader's
+// session, so a reload that landed during a hub restart read as "no session runs here". The panel keeps what it shows and
+// asks again, and only a read that answered may say a session is gone.
+let retryT = 0, retryN = 0, missT = 0;
+function retrySoon() {
+  if (retryT || retryN >= 20) return;
+  retryT = setTimeout(() => { retryT = 0; retryN++; loadSessions(); }, 1500);
+}
 async function loadSessions() {
   let srcs = [];
   try { srcs = await window.SQUAD_OV_SOURCES(); } catch (e) { srcs = []; }
-  const found = []; rule = null;
+  const found = []; let rl = null, answered = 0;
   for (const src of srcs || []) {
     try {
       const r = await fetch(src.api + "/project", { cache: "no-store" });
       if (!r.ok) continue;
       const d = await r.json();
-      rule = rule || { send: d.send, why: d.why };
+      answered++;
+      rl = rl || { send: d.send, why: d.why };
       for (const s of d.sessions || []) found.push({ ...s, src, send: d.send, why: d.why });
     } catch (e) { /* that repository's hub did not answer: its sessions are left out */ }
   }
+  if (!answered) {
+    say("Reading the sessions…");
+    retrySoon();
+    if (!cur) empty("Reading the sessions…");
+    return;   // nothing is dropped on a read that did not answer
+  }
+  retryN = 0;
+  rule = rl;
   sessions = found;
   let kept = "";
   try { kept = sessionStorage.getItem(STORE + "-sid") || ""; } catch (e) { kept = ""; }
@@ -400,7 +417,9 @@ async function loadConversation() {
   try {
     const r = await fetch(s.src.api + "/conversation?sid=" + encodeURIComponent(s.sid), { cache: "no-store" });
     if (cur !== s) return;
-    if (!r.ok) { if (r.status === 404) { cur = null; loadSessions(); } return; }
+    // A 404 is a question for the session list, never a verdict of its own: only the list read may drop the session, and
+    // one miss is asked about at most every five seconds (#1102, owner, 2026-11-01).
+    if (!r.ok) { if (r.status === 404 && Date.now() - missT > 5000) { missT = Date.now(); loadSessions(); } return; }
     const turns = (await r.json()).turns || [], last = turns[turns.length - 1];
     const sig = turns.length + ":" + (last ? last.id + ":" + last.text.length : "");
     if (sig === lastSig) return;
