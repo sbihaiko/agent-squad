@@ -24,6 +24,17 @@ function waveOptions(rows){
   return[...seen.values()].sort((a,b)=>numCmp(a.spec,b.spec)||numCmp(a.wave,b.wave)).map(o=>({key:o.key,label:waveLabel(o.spec,o.wave)}))}
 // The filters (#899): an empty list means all; the two lists combine with AND. Keys are the values the bar offers.
 const boardOk=(x,fw,fs)=>(!fw.length||fw.includes(waveOptKey(x)))&&(!fs.length||fs.includes(specKey(x)));
+// The Specs options (#981): a spec is one only while it is unfinished, its card open and an open ticket under it.
+const finishedCard=(name,closed,abandoned)=>name===closed||name===(abandoned||"Abandoned");
+function specOptions(groups,closed,abandoned){
+  const parents=new Set(),finished=new Set();let none=false;
+  groups.forEach(g=>g.items.forEach(x=>{if(x.sp){if(finishedCard(g.name,closed,abandoned))finished.add(String(x.n));return}
+    if(x.pa==null){none=true;return}
+    if(!finishedCard(g.name,closed,abandoned))parents.add(String(x.pa))}));
+  const keys=[...parents].filter(k=>!finished.has(k));if(none)keys.push("none");
+  return keys.sort((a,b)=>a==="none"?1:b==="none"?-1:+a-+b)}
+// A saved Specs filter keeps only the options the board offers now, so a finished spec's key is dropped on load (#981).
+const keptSpecs=(saved,groups,closed,abandoned)=>{const opts=specOptions(groups,closed,abandoned);return saved.filter(k=>opts.includes(k))};
 // groups: the issue columns in board order, each { name, items }. o: { mode: "spec"|"wave", fw, fs, text, lc, hideDone,
 // closed, hidden }. `text` is the search predicate; progress counts every row, so a search or a filter never moves a bar.
 // Returns { cols, vc, hc, lanes }: vc are the columns drawn, hc the hidden ones with their counts, lanes the shown lanes in order.

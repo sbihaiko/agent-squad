@@ -4364,10 +4364,11 @@ all=[b.prs,...b.groups.sort((x,y)=>{const i=n=>{const k=FLOW.indexOf(n);return k
 if(bo.open===undefined||!all.some(g=>g.name===bo.open))bo.open=(all.find(g=>g.n&&g.name!==COLNAME.issue_closed&&!isPR(g.name))||all[2]).name;
 const CN=all.map(g=>g.name);   // every column of this board: what colOf reads the user columns out of, never a colour of its own
 lastRead=Date.now();readStale=!!b.err;$("#bcases").innerHTML=caseRows(b.cases);$("#bt").textContent=b.err?"(stale)":"";
-const fw=bo.fw||[],fs=bo.fs||[],allRows=all.filter(g=>!isPR(g.name)).flatMap(g=>g.items),specTitle=new Map();   // the filter bar: the waves and specs the board holds (#899)
+const fw=bo.fw||[],boardGroups=all.filter(g=>!isPR(g.name)),allRows=boardGroups.flatMap(g=>g.items),specTitle=new Map();   // the filter bar: the waves and specs the board holds (#899)
 allRows.forEach(x=>{if(x.sp)specTitle.set(String(x.n),x.t)});
-const numKeys=(a,b)=>a==="none"?1:b==="none"?-1:+a-+b;
-const wOpts=waveOptions(allRows),sOpts=[...new Set(allRows.map(x=>x.sp?String(x.n):specKey(x)))].sort(numKeys);
+const wOpts=waveOptions(allRows),sOpts=specOptions(boardGroups,COLNAME.issue_closed,COLNAME.abandoned);   // a finished spec is no option (#981)
+const fs=keptSpecs(bo.fs||[],boardGroups,COLNAME.issue_closed,COLNAME.abandoned);
+if(!b.err&&fs.length!==(bo.fs||[]).length){bo.fs=fs;saveB()}   // a saved key whose spec finished is dropped (#981)
 const fillBar=(id,opts,label,sel,name)=>{const box=$("#"+id),k=opts.join("|");
  if(box.dataset.k!==k){box.dataset.k=k;box.innerHTML=`<div class=fpopb><button type=button data-clear>clear</button></div>`+opts.map(v=>`<label><input type=checkbox value="${esc(v)}"> ${esc(label(v))}</label>`).join("")}
  box.querySelectorAll("input").forEach(c=>c.checked=sel.includes(c.value));
