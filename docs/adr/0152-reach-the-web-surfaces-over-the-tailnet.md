@@ -18,6 +18,7 @@ The run dashboard and the hub listen on loopback. The owner reaches them from ot
 6. **The `tailnet` block is outside the resume hash.** A change only to that block keeps the hash that `run_start` records. A change to any other key changes it. Guard: `tests/test_tailnet_settings.py`.
 7. **No credential is stored.** The project file refuses a credential-shaped `tailnet` key or value. Guard: `tests/test_tailnet_settings.py`.
 8. **The editor stays a local `file://` page.** It is not served on the tailnet. Guard: none yet; a draft. `tests/test_quickstart_tailnet.py` checks only the quickstart sentence.
+9. **A write that acts on the machine needs its own grant, off by default.** A tailnet write to a live session (`tailnet.terminals_send`, [ADR-0154](0154-the-phone-sends-to-a-session-by-the-wire-protocol.md)) or to the loop switch (`tailnet.loop_write`, [ADR-0162](0162-the-hub-writes-the-loop-switch-and-drains-by-default.md)) is refused, with its reason, until the owner sets its `bool` to true. Rules 4 and 5 still apply. The same write from loopback needs no grant. Guard: `tests/test_session_send.py`, `tests/test_hub_loop_switch_page.py`, `tests/test_tailnet_settings.py`.
 
 ### Header assumption
 
@@ -25,8 +26,8 @@ This assumption is unverified. The access seam (`squad/tailnet_access.py`) assum
 
 ## Consequences
 
-A listed login reaches what a loopback caller reaches on the hub, limited to the profiles that list that login. The owner's list is the only source of tailnet access, and the owner must keep it current.
+A listed login reaches what a loopback caller reaches on the hub, limited to the profiles that list that login, except the writes rule 9 holds until the owner grants them. The owner's list is the only source of tailnet access, and the owner must keep it current.
 
 A run dashboard server also answers a tailnet Host when its project file names `tailnet.host`. Rule 2 keeps it off the tailnet, because the owner's `tailscale serve` publishes only the hub port.
 
-The `tailnet` block is personal: a machine name and logins. `squad config set tailnet.*` writes it to the project's gitignored `.env` (`SQUAD_TAILNET_HOST`, `SQUAD_TAILNET_ALLOW`, `SQUAD_TAILNET_TERMINALS_SEND`) and refuses when git would track that file. A value there wins over one in the project file. Guard: `tests/test_tailnet_env.py`.
+The `tailnet` block is personal: a machine name and logins. `squad config set tailnet.*` writes it to the project's gitignored `.env` (`SQUAD_TAILNET_HOST`, `SQUAD_TAILNET_ALLOW`, `SQUAD_TAILNET_TERMINALS_SEND`, `SQUAD_TAILNET_LOOP_WRITE`) and refuses when git would track that file. A value there wins over one in the project file. Guard: `tests/test_tailnet_env.py`.

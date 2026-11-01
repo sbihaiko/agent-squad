@@ -1724,7 +1724,9 @@ LOOP_ACTIONS = ("start", "drain", "stop-now")
 WATCHD = pathlib.Path(__file__).resolve().parent / "watchd.sh"
 
 def loop_watchd(*args):
-    return subprocess.run(["bash", str(WATCHD), *args], capture_output=True, text=True, timeout=60).returncode
+    # the mux pins a profile's env only while it imports this file: watchd gets this profile, its state and its checkout, never the hub's cwd
+    env = {**_PROFILE_ENV, "SG_STATE": str(STATE), "SG_CHECKOUT": CHECKOUT}
+    return subprocess.run(["bash", str(WATCHD), *args], capture_output=True, text=True, timeout=60, env=env, cwd=CHECKOUT).returncode
 
 def _pid_alive(pid):
     try: os.kill(pid, 0)
@@ -1770,9 +1772,11 @@ def loop_state(last, now=None):
 
 def loop_view(a):
     last = (loop_audit_last(1) or [{}])[-1]
-    write = a.allowed and (not a.tailnet or tailnet_block().get("loop_write") is True)
+    tn = tailnet_block()
+    write = a.allowed and (not a.tailnet or tn.get("loop_write") is True)
     return {"state": loop_state(last), "who": last.get("who", ""), "when": last.get("at", ""), "live": loop_live(),
-            "log": loop_audit_last(20)[::-1], "write": write, "reason": "" if write else LOOP_READ_ONLY}
+            "log": loop_audit_last(20)[::-1], "write": write, "reason": "" if write else LOOP_READ_ONLY,
+            "tailnet": a.tailnet, "access": {"loop_write": tn.get("loop_write") is True, "terminals_send": tn.get("terminals_send") is True}}   # Settings > Access reads the tailnet rule here
 
 def loop_refusal(a, origin_ok, tn):
     """The reason a loop write is refused, or '' when it may run: the access rule, then the tailnet grant, then the origin and body."""
@@ -3774,6 +3778,12 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
    screen the 300 px sidebar and the board column are what a reader has to scroll sideways to reach. */
 @media (max-width:600px){body{height:auto}body.tkopen #win{margin-right:0}body.tkopen #board{width:auto}#win{display:block;overflow:visible}body.dockb #win{display:block;grid-template-columns:none;grid-template-rows:none}#side{width:auto;border-right:0;border-bottom:1px solid var(--line)}body.dockb #side{grid-row:auto;grid-column:auto}#main{min-height:50vh}body.dockb #main{grid-column:auto;grid-row:auto}#board{width:auto}body.dockb #board{grid-column:auto;grid-row:auto;height:60vh}#lbody input{width:92px}}
 /* The page frame of the mock (#889): the header with its tabs, and the sidebar cards. */
+/* The loop switch (#923): the strip's draining and starting states, Settings > Loop and Access, and the stop confirm. */
+#lopb .ls.draining,#lopb .ls.starting{color:var(--warn)}#iloop .ls,#lopb .ls{font-weight:600}#iloop .ls.on{color:var(--ok)}#iloop .ls.off{color:var(--warn)}#iloop .ls.draining,#iloop .ls.starting{color:var(--warn)}#iloop small{color:var(--mute)}#loopbtn{padding:2px 10px;font-size:var(--fs-min)}#loopbtn:disabled{opacity:.6;cursor:default}#lopb .ls.on{color:var(--ok)}#lopb .ls.off{color:var(--warn)}
+#lopb .lnow{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#10141a;margin:6px 0}#lopb .lnow small{display:block;color:var(--mute)}#lopb .lnow button{margin-left:auto}
+#lopb .lwhy{color:var(--warn);margin:4px 0}#lopb .lerr{color:var(--err);margin:4px 0}#lopb ul.laud{list-style:none;margin:4px 0 0;padding:0}#lopb ul.laud li{padding:4px 0;border-bottom:1px solid var(--line)}#lopb ul.laud li:last-child{border:0}
+#accb .kr b{font-weight:500;font-size:var(--fs-min);line-height:1.3;text-align:right}#accb .ok{color:var(--ok)}#accb .no{color:var(--warn)}#accb p{color:var(--mute);margin:8px 0 0}
+#ldg{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:10px;padding:16px;width:min(520px,92vw)}#ldg::backdrop{background:#000a}#ldg .lrad{display:flex;gap:8px;align-items:flex-start;padding:8px 0;cursor:pointer}#ldg .lrad small{display:block;color:var(--mute)}#ldg ul{margin:4px 0 0;padding-left:18px}#ldg .lact{display:flex;gap:6px;margin-top:10px}
 header.top{position:relative;display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--line);flex:none}
 header.top h1{font-size:var(--fs-xl);margin:0}header.top .spx{flex:1}
 header.top .pill{font-size:var(--fs-min);color:var(--mute)}
@@ -3827,7 +3837,7 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 <details id=plans class=sp><summary>Subscriptions<span class=sr id=plsr></span></summary><div class=sb><div id=subs></div></div></details>
 <details id=stats class=sp><summary>Cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><h4>Spend <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Figures at API list prices (API-equivalent)."></span></h4><div class=tot id=tot></div><div class=m id=totnote></div><div class=cash id=cash></div><h4>Spend over time <span class=row id=per></span></h4><div id=chart></div><div id=kpi></div><div id=open></div><h4>Tokens by model <small class=m id=piet>all time</small></h4><div id=pie></div></div></details>
 <details id=sqd class=sp open><summary>Squad models<span class=sr id=sqsr></span></summary><div class=sb id=sqm></div></details>
-<details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div class=ian id=ian></div><div class=irw><span>Next cycle</span><b id=icyc aria-live=off>?</b></div><div id=iuse></div></div></details>
+<details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div class=ian id=ian></div><div id=iloop></div><div class=irw><span>Next cycle</span><b id=icyc aria-live=off>?</b></div><div id=iuse></div></div></details>
 </aside>
 <main id=content>
 <section id=tab-board class="pane on" aria-label=Board>
@@ -3838,11 +3848,14 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 <div id=main></div>
 <div id=flowov hidden><div id=flowb></div></div>
 </section>
+<dialog id=ldg aria-label="Stop the loop"><form method=dialog id=ldgb></form></dialog>
 <section id=tab-hist class=pane aria-label=History><h2>Run history</h2><div id=list></div></section>
 <section id=tab-set class=pane aria-label=Settings><h2>Settings</h2>
 <details id=lim class=sp open><summary>Spend &amp; limits<span class=sr id=limsr></span></summary><div class=sb id=lbody></div></details>
 <details id=mdl class=sp open><summary>Models &amp; chains<span class=sr id=mdsr></span></summary><div class=sb id=mbody></div></details>
 <details id=slk class=sp><summary>Communication<span class=sr id=slksr></span></summary><div class=sb id=sbody></div></details>
+<details id=lop class=sp open><summary>Loop<span class=sr id=lopsr>start, stop, change log</span></summary><div class=sb id=lopb></div></details>
+<details id=acc class=sp><summary>Access<span class=sr>tailnet and phone</span></summary><div class=sb id=accb></div></details>
 <details id=dev class=sp open><summary>This device<span class=sr>desktop or phone view</span></summary><div class=sb><a id=mobile-link href="#">mobile view</a><script>document.getElementById("mobile-link").href=location.pathname.replace(/\/?$/,"/")+"mobile"</script></div></details>
 </section>
 </main>
@@ -4582,6 +4595,48 @@ new MutationObserver(flowTabs).observe($("#flowov"),{attributes:true});
  document.addEventListener("click",e=>{if(!e.target.closest("#psw")&&psw.classList.contains("on")){psw.classList.remove("on");pj.setAttribute("aria-expanded","false")}})}
 // "board read N s ago": the stamp of the last board answer
 setInterval(()=>{const b=$("#bread");if(!b)return;b.textContent=lastRead?`board read ${Math.max(0,Math.round((Date.now()-lastRead)/1000))} s ago${readStale?" (stale)":""}`:""},1000);
+// loop-switch:start
+// The loop switch (#923, ADR-0162): /api/loop is the one read and the one write. The strip and Settings > Loop draw one view;
+// a start posts at once, a stop opens the confirm, which drains by default and lists every live run and gate a stop-now kills.
+// The renderers are pure: tests/test_hub_loop_switch_page.py runs them in node.
+let loopV=null,loopErr="";
+const loopWhen=s=>{const m=String(s||"").match(/^(\d{4}-\d\d-\d\d)T(\d\d:\d\d)/);return m?m[1]+" "+m[2]:String(s||"")};
+const loopBy=v=>v.who?`${v.who} · ${loopWhen(v.when)}`:"";
+const loopBtn=v=>({on:"Stop…",draining:"Stop now…",starting:"Starting…"})[v.state]||"Start loop";
+const loopTip=v=>!v.write?v.reason:v.state==="on"?"stop after the live runs and gates finish, or now":v.state==="draining"?"stop now: kills what is still live":v.state==="starting"?"the loop is starting":"start the loop (watchd)";
+const loopB=v=>`<button data-loop${v.write&&v.state!=="starting"?"":" disabled"} title="${esc(loopTip(v))}">${loopBtn(v)}</button>`;
+const loopAct=e=>e.action==="drain"?"stop after the live runs and gates finish":e.action==="stop-now"?`stop now${e.killed?` (killed ${(e.killed.runs||[]).length} runs, ${(e.killed.gates||[]).length} gates)`:""}`:String(e.action||"");
+const loopRun=r=>String(r).split("/").filter(Boolean).pop()||String(r);
+const loopCardHtml=v=>`<div class=irw id=loopst title="${esc(v.state+(v.who?` · changed by ${v.who} at ${loopWhen(v.when)}`:""))}"><span>Loop: <span class="ls ${esc(v.state)}">${esc(v.state)}</span>${loopBy(v)?` <small>${esc(loopBy(v))}</small>`:""}</span>${loopB(v).replace("<button ","<button id=loopbtn ")}</div>`;
+const loopSetHtml=v=>`<div class=lnow><span><span class="ls ${esc(v.state)}">Loop: ${esc(v.state)}</span><small>${v.who?`changed by ${esc(v.who)} at ${esc(loopWhen(v.when))}`:"no change from the hub yet"}${v.state==="draining"?` · ${v.live.runs.length+v.live.gates.length} live to finish`:""}</small></span>${loopB(v)}</div>`
+ +(v.write?"":`<div class=lwhy>${esc(v.reason)}. The rule is in Access.</div>`)+(loopErr?`<div class=lerr role=alert>${esc(loopErr)}</div>`:"")
+ +`<p class=m>A stop drains by default: no new dispatch, the live runs and gates finish, then the loop stops. Each change writes one line to the change log.</p>`
+ +`<h4>Changes</h4><ul class=laud>${v.log.length?v.log.map(e=>`<li><b>${esc(loopWhen(e.at))}</b> · ${esc(e.who)} (${esc(e.from)}) · ${esc(loopAct(e))}</li>`).join(""):"<li class=m>no change yet</li>"}</ul>`;
+const loopConfirmHtml=v=>{const r=v.live.runs,g=v.live.gates,drain=v.state==="on";
+ return `<b>Stop the loop?</b><p class=m>Live now: ${r.length} run${r.length===1?"":"s"}, ${g.length} gate${g.length===1?"":"s"}.</p>`
+ +(drain?`<label class=lrad><input type=radio name=lm value=drain checked><span><b>Stop after the live runs and gates finish</b><small>No new dispatch. The live work runs to its end, then the loop stops. The safe default.</small></span></label>`:"")
+ +`<label class=lrad><input type=radio name=lm value=stop-now${drain?"":" checked"}><span><b>Stop now</b><small>Kills these at once; their work in progress is lost:</small><ul>${r.map(x=>`<li>run ${esc(loopRun(x))}</li>`).join("")}${g.map(x=>`<li>${esc(x)}</li>`).join("")}${r.length||g.length?"":"<li>no live run or gate</li>"}</ul></span></label>`
+ +`<div class=lact><button value=ok id=lok>Confirm</button><button value=no id=lno>Back</button></div>`};
+const accHtml=v=>{const a=v.access||{},yn=x=>x?"<span class=ok>allowed</span>":"<span class=no>refused</span>";
+ return `<div class=kr><span class=l>This page is reached</span><b>${v.tailnet?"over the tailnet, through the hub":"from this machine (loopback)"}</b></div>`
+ +`<div class=kr><span class=l>Loop start and stop from the tailnet</span><b>${yn(a.loop_write)} <small>SQUAD_TAILNET_LOOP_WRITE (tailnet.loop_write)</small></b></div>`
+ +`<div class=kr><span class=l>Terminal send from the tailnet</span><b>${yn(a.terminals_send)} <small>SQUAD_TAILNET_TERMINALS_SEND (tailnet.terminals_send)</small></b></div>`
+ +`<div class=kr><span class=l>Run dashboards over the tailnet</span><b>read only, through the hub</b></div>`
+ +`<p>Read here; the owner sets them in the project file or <code>.env</code> on the machine (ADR-0152, ADR-0162). A write the tailnet refuses still works from this machine.</p>`};
+// loop-switch:end
+function instLoopDraw(){const e=$("#iloop");if(!e||!loopV)return;const h=loopCardHtml(loopV);if(e.dataset.h!==h){e.dataset.h=h;e.innerHTML=h}}
+function loopDraw(){if(!loopV)return;const b=$("#lopb"),h=loopSetHtml(loopV);if(b.dataset.h!==h){b.dataset.h=h;b.innerHTML=h}
+ const c=$("#accb"),ah=accHtml(loopV);if(c.dataset.h!==ah){c.dataset.h=ah;c.innerHTML=ah}
+ $("#lopsr").textContent=`${loopV.state}${loopV.who?` · ${loopV.who} · ${loopWhen(loopV.when)}`:""}`;instLoopDraw()}
+async function loopPoll(){try{loopV=await (await fetch("/api/loop")).json();loopDraw()}catch(e){}}
+async function loopPost(body){loopErr="";try{const r=await fetch("/api/loop",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}),d=await r.json();if(!r.ok)loopErr=d.reason||d.err||"refused"}catch(e){loopErr="the hub did not answer"}
+ await loopPoll();loopDraw()}
+document.addEventListener("click",e=>{const b=e.target.closest("button[data-loop]");if(!b||b.disabled||!loopV)return;e.preventDefault();
+ if(loopV.state==="off"){loopPost({action:"start"});return}
+ const d=$("#ldg");$("#ldgb").innerHTML=loopConfirmHtml(loopV);d.showModal()});
+$("#ldg").addEventListener("close",()=>{const d=$("#ldg");if(d.returnValue!=="ok")return;const m=(d.querySelector('input[name="lm"]:checked')||{}).value;
+ if(m==="drain")loopPost({action:"drain"});else if(m==="stop-now")loopPost({action:"stop-now",confirm:true})});
+setInterval(loopPoll,5000);loopPoll();
 /*BOARD_LANES*/
 $("#lmode").onchange=e=>{bo.lmode=e.target.value;saveB();pollBoard()};
 // The swimlanes' state (#891): collapse and open state live in `bo`, so the device keeps them across a reload.

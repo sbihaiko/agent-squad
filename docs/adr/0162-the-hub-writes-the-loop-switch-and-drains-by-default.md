@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed. Owner ratification pending. This decision does not amend [ADR-0152](0152-reach-the-web-surfaces-over-the-tailnet.md); that amendment, if any, is the owner's.
+Accepted, on one condition: tailnet writes stay off by default, and only the owner turns them on. [ADR-0152](0152-reach-the-web-surfaces-over-the-tailnet.md), rule 9, holds the tailnet side of this decision.
 
 ## Context
 
@@ -15,7 +15,7 @@ The owner starts and stops the loop from the hub. The hub has read the loop stat
 3. **Drain is the default.** A drain pauses dispatch and marks itself. A detached waiter stops the loop only when no run lacks a verdict and no gate lock holds a live pid. A drain never sends a stop while live work remains, and a supervisor that dies during a drain ends the waiter.
 4. **Stop-now is the second choice.** It needs `"confirm": true`. Its confirm lists the live runs and gates it kills, and its response and audit line name what it killed.
 5. **Audit.** Every change the route runs appends one line to the loop audit file in the state directory: who, when, from where (loopback or tailnet), the action and, for a stop-now, what it killed. A refused request writes nothing.
-6. **Tailnet.** A tailnet request may read the route. A write from the tailnet is refused, with its reason, unless the profile sets `tailnet.loop_write` (`SQUAD_TAILNET_LOOP_WRITE`) to true. The grant holds for every allowed login of the profile, as `tailnet.terminals_send` does.
-7. **The write is the phone's, not the desktop's.** The phone's Status panel holds the switch. The reason a tailnet request is read-only is shown beside it.
+6. **Tailnet.** A tailnet request may read the route. A write from the tailnet is refused, with its reason, unless the profile sets `tailnet.loop_write` (`SQUAD_TAILNET_LOOP_WRITE`) to true. The shipped default is false, and only the owner sets it. The grant holds for every allowed login of the profile, as `tailnet.terminals_send` does.
+7. **Three places show one view.** The alert strip, Settings > Loop and the phone's Status panel read the same route. Each shows the state, who changed it and when; Settings > Loop and the phone also show the change log. The switch has no Save: a change is one request. The reason a tailnet request is read-only is shown beside the switch, and Settings > Access shows the tailnet rule itself.
 
-Guard: `contrib/squad-goal/scripts/test-hub-loop-switch.sh`, `contrib/squad-goal/scripts/test-watchd-drain.sh`, `contrib/squad-goal/scripts/test-hub-mobile-loop.sh`, `tests/test_tailnet_env.py`, `tests/test_tailnet_settings.py`.
+Guard: `tests/test_hub_loop_switch_page.py`, `contrib/squad-goal/scripts/test-hub-loop-switch.sh`, `contrib/squad-goal/scripts/test-watchd-drain.sh`, `contrib/squad-goal/scripts/test-hub-mobile-loop.sh`, `tests/test_tailnet_env.py`, `tests/test_tailnet_settings.py`.
