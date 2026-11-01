@@ -99,6 +99,8 @@ html.sq-docked body{margin-right:var(--sq-dock)}
 .sq-owner{margin:0 0 10px;border:1px solid #3a4250;border-radius:7px;padding:7px 10px}
 .sq-owner .sq-who{color:#8b949e;font-size:11px}.sq-owner .sq-txt{color:#e6edf3}
 .sq-system .sq-who{color:#565d69;font-size:11px}.sq-system .sq-txt{color:#8b949e;font-style:italic}
+.sq-fold{border-left:0;margin:0 0 8px}.sq-fold summary{font-size:11px;color:#6b7280;cursor:pointer;list-style:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sq-fold summary::-webkit-details-marker{display:none}.sq-fold[open] summary{color:#8b949e}
 .sq-answer{padding-left:14px;position:relative}.sq-answer .sq-who{color:#8b949e;font-size:11px}
 .sq-answer::before{content:"\u25CF";position:absolute;left:0;top:0;color:#3ecf8e;font-size:10px}
 .sq-h{font-family:var(--sq-mono);font-weight:600;font-size:calc(var(--sq-fs) + 0px);color:#eef1f5;margin:6px 0 3px}
@@ -357,10 +359,19 @@ function clamp(body, px) {
   body.after(b);
 }
 function turnNode(t) {
+  // A system turn folds to one line (owner, 2026-11-01): a reminder or a hook's note is worth one sentence, not a wall.
+  if (t.role === "system" || t.role === "tool") {
+    const d = document.createElement("details"), sum = document.createElement("summary");
+    d.className = "sq-turn sq-" + t.role + " sq-fold";
+    const one = String(t.text || "").replace(/\s+/g, " ").trim();
+    sum.textContent = (t.role === "system" ? "system" : "tool") + " \u00b7 " + (one.length > 72 ? one.slice(0, 72) + "\u2026" : one);
+    d.append(sum, richText(t.text));
+    return d;
+  }
   const d = document.createElement("div"), who = document.createElement("span");
   d.className = "sq-turn sq-" + t.role;
   who.className = "sq-who";
-  who.textContent = t.role === "owner" ? "\u203A you" : t.role === "system" ? "system" : t.role === "tool" ? "tool" : "";
+  who.textContent = t.role === "owner" ? "\u203A you" : "";
   const body = richText(t.text);
   d.append(who, body);
   clamp(body, CLAMP[t.role] || 116);

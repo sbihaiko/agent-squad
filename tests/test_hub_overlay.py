@@ -278,3 +278,12 @@ def test_the_panel_comes_back_open_after_a_reload():
     assert "localStorage.setItem(OPEN_KEY, on ? \"1\" : \"0\")" in js
     assert "if (wasOpen()) openOverlay();" in js
     assert "wantOpen(true)" in js and "wantOpen(false)" in js
+
+def test_a_system_turn_folds_to_one_collapsible_line():
+    """Owner, 2026-11-01: reminders and hook notes took the whole feed. A system turn is a closed details whose summary is one
+    line, and opening it shows the text."""
+    js = (pathlib.Path(__file__).resolve().parents[1] / "contrib/squad-goal/scripts/hub-overlay.js").read_text()
+    body = js[js.index("function turnNode(t) {"):js.index("function feed(") if "function feed(" in js else len(js)]
+    assert 't.role === "system" || t.role === "tool"' in body
+    assert 'createElement("details")' in body and 'createElement("summary")' in body
+    assert ".sq-fold" in js and ".sq-fold summary" in js
