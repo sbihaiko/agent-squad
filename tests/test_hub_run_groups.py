@@ -193,7 +193,7 @@ function boot(){
     groupRows: () => { const o = {}; GHS.forEach((g) => (o[g.k] = g.rows)); return o; },
     listHtml: () => $("#list").innerHTML,
     clickAcc: (id) => { const e = $("#" + id); e.open = !e.open; drain(); },
-    accOpen: () => ["plans", "stats", "mdl"].filter((i) => $("#" + i).open),
+    accOpen: () => ["stats", "mdl", "lim", "slk"].filter((i) => $("#" + i).open),
     calls: () => CALLS,
     store: () => JSON.parse(STORE.hub || "{}"),
   };
@@ -327,24 +327,24 @@ def test_the_open_groups_survive_a_reload():
 def test_opening_one_side_section_leaves_its_siblings_alone():
     out = _run("""
       const a = boot();
-      a.clickAcc("plans"); const one = a.accOpen();
+      a.clickAcc("stats"); const one = a.accOpen();
       a.clickAcc("mdl"); const two = a.accOpen();
       return { one, two };
     """)
-    assert out["one"] == ["plans"]
-    assert set(out["two"]) == {"plans", "mdl"}, "opening one section never closes another"
+    assert out["one"] == ["stats"]
+    assert set(out["two"]) == {"stats", "mdl"}, "opening one section never closes another"
 
 
 def test_each_side_section_keeps_its_own_state_across_a_reload():
     out = _run("""
       const a = boot();
-      a.clickAcc("plans"); a.clickAcc("stats"); a.clickAcc("mdl"); a.clickAcc("mdl");
+      a.clickAcc("stats"); a.clickAcc("lim"); a.clickAcc("mdl"); a.clickAcc("mdl");
       const stored = a.store();
       const b = boot();
       return { stored, restored: b.accOpen() };
     """)
-    assert sorted(out["stored"].get("acc") or []) == ["plans", "stats"]
-    assert out["restored"] == ["plans", "stats"], "each section comes back the way it was left"
+    assert sorted(out["stored"].get("acc") or []) == ["lim", "stats"]
+    assert out["restored"] == ["stats", "lim"], "each section comes back the way it was left"
 
 
 def test_an_accordion_answers_only_itself_and_comes_back_the_way_it_was_left():

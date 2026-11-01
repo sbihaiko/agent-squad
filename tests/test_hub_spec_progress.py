@@ -91,10 +91,10 @@ def test_a_pending_move_to_abandoned_is_not_counted(hub, monkeypatch):
     spec = dict(_item(1, "Todo", si=(2, 5)), i="PVTI_1")
     other = _item(2, "Todo", si=(1, 4))
     moves = {"PVTI_1": {"column": "Abandoned", "at": "2099-01-01T00:00:00Z", "by": "owner"}}
-    p = hub.spec_progress([spec, other], moves=moves, read_at=0, window=120.0)
+    p = hub.spec_progress([spec, other], moves=moves, window=120.0)
     assert (p["open"], p["done"], p["total"]) == (1, 1, 4)
     monkeypatch.setattr(hub, "read_moves", lambda: moves)
-    monkeypatch.setattr(hub, "board_cache", {"items": [spec, other], "rt": 0})
+    monkeypatch.setattr(hub, "board_cache", {"items": [spec, other]})
     assert hub.spec_progress([spec, other])["open"] == 1
 
 

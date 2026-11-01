@@ -547,7 +547,7 @@ def test_the_page_serves_the_facts_from_its_cache_and_reads_no_source_itself(hub
                            "facts": hub.foot_items(_src(), NOW)})
     p = hub.load_payload()
     assert p["line"] == "CPU 12% · RAM 71% · GPU ?"                           # the three load cells stay first, unchanged
-    assert p["facts"][0]["text"] == "landed PR #73 2h ago" and len(p["facts"]) == 2
+    assert p["facts"][0]["text"] == "landed PR #73 2h ago" and len(p["facts"]) == 3
 
 
 def test_the_triage_rule_and_what_was_rejected_are_stated_beside_the_code(hub):

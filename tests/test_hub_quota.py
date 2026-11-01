@@ -28,7 +28,7 @@ class _Stop(BaseException):
 
 class _Seam:
     def rows(self, *a, **k):
-        return ""
+        return json.dumps({"_page": 0}) + "\n"   # an empty project: its one page count, no card
 
 
 def _payload(route):
@@ -50,7 +50,7 @@ def _jq_lines(route):
         return [{"n": "bug", "c": "D73A4A"}]
     if "pulls?state=closed" in route:
         return [{"n": 1200, "c": MERGED["created_at"], "m": MERGED["merged_at"]}]
-    return []
+    return [{"_page": 0}]   # the board's items read: the page count line board_items_jq always ends with
 
 
 class Gh:
@@ -193,7 +193,7 @@ def test_a_stalled_rest_page_keeps_the_rows_held_and_sets_the_error(hub, pass_en
 
     class _Rows:
         def rows(self, *a, **k):
-            return json.dumps(seam_row) + "\n"
+            return json.dumps(seam_row) + "\n" + json.dumps({"_page": 1}) + "\n"
 
     monkeypatch.setattr(hub, "board_seam", lambda: _Rows())
     hub.board_pass()

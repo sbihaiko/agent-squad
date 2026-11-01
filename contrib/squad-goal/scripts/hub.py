@@ -13,10 +13,14 @@ _columns_spec = importlib.util.spec_from_file_location("board_columns", pathlib.
 _columns_module = importlib.util.module_from_spec(_columns_spec); _columns_spec.loader.exec_module(_columns_module)
 _flow_spec = importlib.util.spec_from_file_location("board_flow_history", pathlib.Path(__file__).resolve().parent / "board_flow_history.py")
 _flow = importlib.util.module_from_spec(_flow_spec); _flow_spec.loader.exec_module(_flow)
+_hist_spec = importlib.util.spec_from_file_location("board_history", pathlib.Path(__file__).resolve().parent / "board_history.py")
+_hist = importlib.util.module_from_spec(_hist_spec); _hist_spec.loader.exec_module(_hist)
 _cfd_spec = importlib.util.spec_from_file_location("board_cfd", pathlib.Path(__file__).resolve().parent / "board_cfd.py")
 _cfd = importlib.util.module_from_spec(_cfd_spec); _cfd_spec.loader.exec_module(_cfd)
 _leadtime_spec = importlib.util.spec_from_file_location("board_leadtime", pathlib.Path(__file__).resolve().parent / "board_leadtime.py")
 _leadtime = importlib.util.module_from_spec(_leadtime_spec); _leadtime_spec.loader.exec_module(_leadtime)
+_fast_spec = importlib.util.spec_from_file_location("board_fast", pathlib.Path(__file__).resolve().parent / "board_fast.py")
+board_fast = importlib.util.module_from_spec(_fast_spec); _fast_spec.loader.exec_module(board_fast)
 # The board draws the shipped definition (#247): its statuses, in its order, with their colours. Open PRs are a lane beside
 # the axis, never a column, and it is for tracking only (#384); a work branch has no lane of its own -- its kind reaches the
 # kinds view -- and a landed branch is read from its issue card. Every name comes from the table; COLUMN reads a column or a
@@ -1943,18 +1947,17 @@ def foot_refresh(now=None):
 SPEC_TIP_LINES = 8   # the spec tile's tooltip names at most this many specs, then "+k more"
 NOSPEC_HOURS = 24    # the No spec group counts the closed cards opened in this many hours (owner)
 
-def nospec_count(items, moves=None, read_at=None, window=None, now=None):
+def nospec_count(items, moves=None, window=None, now=None):
     """The No spec group (bugs and single tickets): `total` is its open cards plus its closed cards opened in the last
     NOSPEC_HOURS hours by the read's own opened-at (`o`); `closed` is those closed ones. A card is in the group as the board's No spec
     lane holds it: no spec label, no loop-bug label, and no parent spec, or a parent spec the board draws closed (an open
     card only: a closed card of a closed spec is history). An abandoned card, or a closed card with no opened-at, never
     counts. The column is `drawn_column`, with the door's overlay, so the lane, the summary and the tile agree (ADR-0137)."""
     if moves is None: moves = read_moves() if overlay_on() else {}
-    if read_at is None: read_at = board_cache.get("rt")
     if window is None: window = pending_window()
     since = (time.time() if now is None else now) - NOSPEC_HOURS * 3600
     ends, closed_col = (COLUMN["issue_closed"], COLUMN["abandoned"]), COLUMN["issue_closed"]
-    cols = [(i, drawn_column(i, moves, read_at, window)["st"]) for i in items or []]
+    cols = [(i, drawn_column(i, moves, window)["st"]) for i in items or []]
     gone = {i.get("n") for i, st in cols if _columns_module.SPEC_LABEL in (i.get("l") or []) and st in ends}
     done = total = 0
     for i, st in cols:
@@ -1968,21 +1971,20 @@ def nospec_count(items, moves=None, read_at=None, window=None, now=None):
         if at is not None and at >= since: done, total = done + 1, total + 1
     return {"closed": done, "total": total}
 
-def spec_progress(items, moves=None, read_at=None, window=None, now=None):
+def spec_progress(items, moves=None, window=None, now=None):
     """The Monitor card's spec tile: closed over total sub-issues, summed over every open spec on the board cache. An open
     spec is a card with the spec label that the board draws in neither Closed nor Abandoned: its column comes from
     `drawn_column`, with the door's overlay, as the board draws it (#829). The count is the one `task_count` reads, so
     no new GitHub read. The percent rounds down, so 100% means every sub-issue is closed; `frac` is the exact fraction
     for the bar width. The page only draws these values (ADR-0137)."""
     if moves is None: moves = read_moves() if overlay_on() else {}
-    if read_at is None: read_at = board_cache.get("rt")
     if window is None: window = pending_window()
     gone = (COLUMN["issue_closed"], COLUMN["abandoned"])
     done = total = 0
     rows = []   # (fraction, number, tip line) per open spec
     for i in items or []:
         if _columns_module.SPEC_LABEL not in (i.get("l") or []): continue
-        if drawn_column(i, moves, read_at, window)["st"] in gone: continue
+        if drawn_column(i, moves, window)["st"] in gone: continue
         sc = task_count(i)
         if sc:
             c, t = (int(x) for x in sc.split("/"))
@@ -1992,7 +1994,7 @@ def spec_progress(items, moves=None, read_at=None, window=None, now=None):
             rows.append((0.0, i.get("n") or 0, f"#{i.get('n')} {i.get('t') or ''} — no sub-issue"))
     rows.sort(key=lambda r: (r[0], r[1]))
     tips = [r[2] for r in rows[:SPEC_TIP_LINES]] + ([f"+{len(rows) - SPEC_TIP_LINES} more"] if len(rows) > SPEC_TIP_LINES else [])
-    none = nospec_count(items, moves, read_at, window, now)   # the No spec lane's own count: one more group in the total (owner)
+    none = nospec_count(items, moves, window, now)   # the No spec lane's own count: one more group in the total (owner)
     if none["total"]:
         done, total = done + none["closed"], total + none["total"]
         tips.append(f"No spec — {none['closed']}/{none['total']}")
@@ -2015,7 +2017,7 @@ def load_payload():
             "cpu": cpu,
             "ram": LOAD_STATE.get("ram"), "gpu": LOAD_STATE.get("gpu"),
             "warn": sustained(hist), "runs": dict(LOAD_STATE.get("runs") or {}),
-            "facts": list(LOAD_STATE.get("facts") or []),
+            "facts": list(LOAD_STATE.get("facts") or []) + [_hist.budget_fact(_hist.history_path(BOARD, REPO), time.time())],
             "specs": spec_progress(board_cache.get("items") or []),   # the open specs' total, off the board cache: no GitHub read
             "secs": LOAD_SAMPLE_SECS, "asof": LOAD_STATE.get("asof", 0.0)}
 
@@ -2413,25 +2415,26 @@ def delivery():
     return out
 
 BOARD = pathlib.Path(os.environ.get("SG_BOARD_CACHE") or HUBDIR / "hub-board.json"); BOARD.parent.mkdir(parents=True, exist_ok=True)
-BOARD_READ = 1   # the version of the items read that wrote the cached rows: a cache that names another is read again (#921)
+BOARD_READ = 2   # the version of the items read that wrote the cached rows: a cache that names another is read again (#921); version 2 carries each row's database id, the fast read's join key
 try: board_cache = json.loads(BOARD.read_text())
 except Exception: board_cache = {"t": 0, "items": [], "prs": [], "err": None}
 if board_cache.get("rv") != BOARD_READ:
     # A cache written before the rows carried the close reason (#921) answers no `cr`, so a card closed as not planned
     # would draw Closed and count as delivered until the next whole items read. Its rows are dropped, and the pass reads
     # them again; the rows of a read this version wrote stay. A board with no row is safer than one that miscounts.
-    board_cache.update(items=[], cases=[], t=0, rt=None)
+    board_cache.update(items=[], cases=[], t=0)
     board_cache["rv"] = BOARD_READ
 if board_cache.get("repo") not in (None, REPO):
     # The cache file is one per owner and project (address.sh), so two repositories on one project share it, and the
     # file holds the rows of the hub that wrote last (#1015). Another repository's rows are never this board: they are
     # dropped, and this hub's first pass reads its own. A board with no row is safer than another repository's.
-    board_cache.update(items=[], cases=[], prs=[], landed=[], errs=[], lc={}, lt=0, t=0, rt=None, repo=REPO)
+    board_cache.update(items=[], cases=[], prs=[], landed=[], errs=[], lc={}, lt=0, t=0, repo=REPO)
 # A cache written before the board read more than one repository (#1820) has rows with no repository on them: they are
 # the profile repository's, which is the only one that pass read.
 for _k in ("prs", "landed"):
     for _x in board_cache.get(_k) or []: _x.setdefault("r", REPO)
 board_cache.setdefault("errs", [])
+board_cache.setdefault("parts", {})
 def apply_open_blockers(items, nodes):
     """Attach open native blockers (`Issue.blockedBy`) onto each item as `b`. A closed blocker drops off by itself."""
     by = {n.get("number"): n for n in nodes or []}
@@ -2499,7 +2502,7 @@ def board_items_jq(repo):
     rides the same read as `cr` (#921): the key is its own, never `r`, which the hub reads as the row's repository. After
     each page's items it emits one {"_page": n} line, n the page's own item count, so the read says whether its last page
     was short (#894)."""
-    return ('''length as $n|(.[]|select((.content_type=="Issue" and ((.content.repository_url//"")|endswith("/" + $repo))) or .content_type=="DraftIssue")|{n:.content.number,i:.id,t:.content.title,s:.content.state,cr:((.content.state_reason//null)|if type=="string" then ascii_downcase else . end),c:.content.closed_at,st:((.fields[]|select(.name=="Status")|.value.name.raw)//null),k:(((.fields[]?|select(.name=="Kind")|.value.name|if type=="object" then .raw else . end)//"")|ascii_downcase|if .=="" then null else . end),l:[.content.labels[]?.name],si:{total:.content.sub_issues_summary.total,completed:.content.sub_issues_summary.completed},o:.content.created_at}),{_page:$n}''').replace("$repo", json.dumps(repo))
+    return ('''length as $n|(.[]|select((.content_type=="Issue" and ((.content.repository_url//"")|endswith("/" + $repo))) or .content_type=="DraftIssue")|{n:.content.number,fd:.content.id,i:.id,t:.content.title,s:.content.state,cr:((.content.state_reason//null)|if type=="string" then ascii_downcase else . end),c:.content.closed_at,st:((.fields[]|select(.name=="Status")|.value.name.raw)//null),k:(((.fields[]?|select(.name=="Kind")|.value.name|if type=="object" then .raw else . end)//"")|ascii_downcase|if .=="" then null else . end),l:[.content.labels[]?.name],si:{total:.content.sub_issues_summary.total,completed:.content.sub_issues_summary.completed},o:.content.created_at}),{_page:$n}''').replace("$repo", json.dumps(repo))
 
 GH_FLOOR = int(os.environ.get("SG_GH_FLOOR") or 300)   # below this many core requests left, a read pass skips its reads (#855)
 LABELS_EVERY = 3600   # seconds between two reads of the repository's labels, and of its closed pull requests (#855)
@@ -2533,10 +2536,20 @@ def _rest_page(route):
     answer = out.answer or []
     if seen["etag"]: _etags[route] = (seen["etag"], answer)
     return answer
-def gh_list(path, query=""):
+def _check_deadline(until):
+    """Raises when the full read's overall deadline has passed; a None deadline is no bound."""
+    if until is not None and time.time() >= until: raise TimeoutError("full read passed its deadline")
+def _bounded(fetch, until):
+    """A branch-lane fetcher that never starts a repository's read once the full read's deadline has passed."""
+    def bounded(*args):
+        _check_deadline(until)
+        return fetch(*args)
+    return bounded
+def gh_list(path, query="", until=None):
     """Every page of a REST list, 100 to a page (ADR-0277): a page shorter than 100 is the last one."""
     rows, page = [], 1
     while True:
+        _check_deadline(until)
         answer = _rest_page(f"{path}?{query + '&' if query else ''}per_page=100&page={page}")
         rows += answer
         if len(answer) < 100: return rows
@@ -2549,13 +2562,14 @@ OPEN_RELATIONS_QUERY = ('query($cursor:String){repository(owner:"%s",name:"%s"){
                         'parent{number labels(first:20){nodes{name}}}}}}}')
 RELATIONS_PAGE = 100       # the page size the relations read asks for
 RELATIONS_MAX_PAGES = 20   # a read that would need more pages than this is incomplete, never a silent stop
-def open_relations():
+def open_relations(until=None):
     """Every open issue's blockers and parent, page by page through `gh api graphql` (#829). It returns `(nodes, complete)`:
     a read that fails, asks for another page without a cursor, or runs past the page cap is incomplete, so a caller never
     reads the cards it did not reach as issues with no parent."""
     own, name = REPO.split("/", 1)
     nodes, after = [], None
     for _ in range(RELATIONS_MAX_PAGES):
+        _check_deadline(until)
         argv = ["gh", "api", "graphql", "-f", "query=" + OPEN_RELATIONS_QUERY % (own, name, RELATIONS_PAGE)]
         if after: argv += ["-f", "cursor=" + after]
         out = subprocess.run(argv, capture_output=True, text=True, timeout=60).stdout   # a call that fails raises, and the pass keeps the rows it had
@@ -2571,7 +2585,7 @@ def open_relations():
     return nodes, False
 def board_pass(fetch_open=None, fetch_landed=None, repos=None):
     """One board re-read: Board 4 statuses (REST) + every GraphQL page of Issue.blockedBy and Issue.parent + the open work branches and the
-    landing ledger of every repository the hub is told to read (#1820). The 60 s loop runs exactly this.
+    landing ledger of every repository the hub is told to read (#1820). The full-read loop runs exactly this.
 
     The two reads are independent: the issues are the profile repository's board, the branch lane spans every configured
     repository. A read that fails keeps the last good rows it already had and says so (the pass's error, or the
@@ -2579,7 +2593,8 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
     if _under_floor("board pass"): return board_cache
     items = lc = cases = None
     gaps = []   # why the flow sample is skipped when the reads answered but are not whole (#894); none when they are whole
-    read_started = time.time()   # when the list read begins: the only stamp the overlay may compare a proved move against
+    read_started = time.time()   # when the list read begins: each row keeps it as its observation instant (#974)
+    until = read_started + FULL_DEADLINE
     try:
             out = board_seam().rows(
                 board_items_jq(REPO),
@@ -2588,17 +2603,17 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
             # The jq answer always ends each page with its count (board_items_jq), even for no card: a read with none answered nothing (#894).
             # A full last page is no sign of a missing page: a project of exactly 100 items answers the same way.
             if not any("_page" in x for x in lines):
-                gaps.append("items read unparseable: no page count came back")
+                raise ValueError("items read unparseable: no page count came back")
             items = [x for x in lines if "_page" not in x]
             cases = [i["t"] for i in items if i.get("n") is None and i.get("k") == "test case"]   # a test case is a draft item: it has no number, so it is a row and never a card (#306)
             items = [i for i in items if i.get("n") is not None]
             have = {i["n"] for i in items}   # open issues that never reached the board have no state either
-            for i in gh_list(f"repos/{REPO}/issues", "state=open"):
+            for i in gh_list(f"repos/{REPO}/issues", "state=open", until):
                 if i.get("pull_request") is None and i["number"] not in have:
                     s = i.get("sub_issues_summary") or {}
                     items.append({"n": i["number"], "t": i["title"], "s": i["state"], "c": None, "st": None, "l": [x["name"] for x in i["labels"]],
                                   "si": {"total": s.get("total"), "completed": s.get("completed")}, "o": i["created_at"]})
-            nodes, complete = open_relations()   # every page of open issues; never one REST call per card
+            nodes, complete = open_relations(until)   # every page of open issues; never one REST call per card
             if not complete: gaps.append("relations read incomplete: a page with no cursor, or past the page cap")
             try: apply_open_blockers(items, nodes)
             except Exception: pass
@@ -2607,26 +2622,61 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
             try: apply_parent_specs(items, nodes, complete, board_cache.get("items") or [])
             except Exception: pass
             if time.time() - board_cache.get("lt", 0) >= LABELS_EVERY:
-                lc = {x["name"]: x["color"].lower() for x in gh_list(f"repos/{REPO}/labels")}
+                lc = {x["name"]: x["color"].lower() for x in gh_list(f"repos/{REPO}/labels", until=until)}
                 board_cache["lt"] = time.time()
-    except Exception as e: board_cache["err"], items = str(e)[:80], None   # a failed pass keeps the last good rows on the board (#1810)
+    except Exception as e:
+        with _board_lock:
+            board_cache["err"], items = str(e)[:80], None   # a failed pass keeps the last good rows on the board (#1810)
+            for part in ("status", "structure"): set_part(part, err=board_cache["err"])
     if items: apply_holders(items)
-    if items: board_cache.update(t=time.time(), rt=int(read_started), repo=REPO, items=items, cases=cases or [], lc=lc or board_cache.get("lc", {}), err=None)
+    if items is not None:
+        with _board_lock:
+            board_cache.update(t=time.time(), repo=REPO, items=merge_items(board_cache.get("items"), items, int(read_started)),
+                               cases=cases or [], lc=lc or board_cache.get("lc", {}), err=None)
+            for part in ("status", "structure"): set_part(part, err=None)
     rs = REPOS if repos is None else repos
     try:
-            prs, landed, errs = prs_pass(fetch_open, fetch_landed, rs)
-            board_cache.update(prs=prs, landed=landed, errs=errs)
-            # a pass no repository answered is not a refresh: `t` keeps saying when the board last really moved, which
-            # is the age the header shows (#1810), instead of claiming a fresh board nothing came back for.
-            if len(errs) < len(rs): board_cache["t"] = time.time()
-    except Exception as e: board_cache["err"] = str(e)[:80]
-    save_board()
+            prs, landed, errs = prs_pass(_bounded(fetch_open or open_rows_of, until), _bounded(fetch_landed or landed_branches_of, until), rs)
+            with _board_lock:
+                board_cache.update(prs=prs, landed=landed, errs=errs)
+                set_part("prs", err="; ".join(errs) or None)
+                # a pass no repository answered is not a refresh: `t` keeps saying when the board last really moved, which
+                # is the age the header shows (#1810), instead of claiming a fresh board nothing came back for.
+                if len(errs) < len(rs): board_cache["t"] = time.time()
+    except Exception as e:
+        with _board_lock:
+            board_cache["err"] = str(e)[:80]
+            set_part("prs", err=board_cache["err"])
+    with _board_lock: save_board()
     # Every pass writes its flow read, whole or not (#894): a failed read is a flow_skip that counts the last whole read's cards.
     rows = items if items is not None else (board_cache.get("items") or [])
     if items is None:
         gaps.insert(0, f"items read failed: {board_cache.get('err')}")
     _flow.append(_flow.history_path(BOARD, REPO), rows, incomplete="; ".join(gaps) or None)
     return board_cache
+MERGED_INPUTS = ("st", "s", "l", "cr", "su", "iu")   # the column inputs of a row: Status and its instant, item instant, issue state, labels and close reason (#974)
+def merge_items(held, fresh, observed):
+    """The rows of one read merged into the rows the cache holds (ADR-0149). Every row takes the read's structure; its column
+    inputs are written only when the read's observation (`observed`, whole epoch seconds) is newer than the one the cache
+    holds for that row. A row carries the newest observation of what it holds, so the overlay compares a move with it."""
+    kept = {i.get("n"): i for i in held or []}
+    out = []
+    for row in fresh:
+        old = kept.get(row.get("n"))
+        merged = {**row, "ot": observed}
+        if old is not None and (old.get("ot") or 0) >= observed:
+            for k in MERGED_INPUTS:
+                if k in old: merged[k] = old[k]
+                else: merged.pop(k, None)
+            merged["ot"] = old["ot"]
+        out.append(merged)
+    return out
+def set_part(name, err):
+    """Stamp one part of the cache (status, structure, prs) with its read's instant and error: a failed read keeps the
+    part's last good timestamp and names its error (#974)."""
+    parts = board_cache.setdefault("parts", {})
+    prev = parts.get(name) or {}
+    parts[name] = {"t": time.time() if err is None else prev.get("t", 0), "err": err}
 _WRITE_SEQ = itertools.count(1)   # one temp name per write, never one per writer: a thread id is reused once its thread ends (#512)
 def _temp_name(path):
     """The temp name one write owns: the pid, so two processes never meet, and a counter, because a thread id is reused
@@ -2636,14 +2686,50 @@ def save_board():
     """The cache file writes the rows the hub holds. The temp name is the write's own (#512): hubmux runs one hub per
     profile in one process, so the pid alone is shared."""
     _tmp = _temp_name(BOARD); _tmp.write_text(json.dumps(board_cache)); os.replace(_tmp, BOARD)
+FULL_EVERY = 600   # seconds between full board reads; a board-dirty flag reads at once
+FAST_EVERY = 15    # seconds between fast reads of the open cards
+FULL_DEADLINE = 300   # the full read's overall deadline (ADR-0051): its page loops and branch fetches stop past it
+FAST_DEADLINE = 60   # the fast read's overall deadline (ADR-0051)
+FAST_POINTS_PER_HOUR = 2400   # five pages of 100 cards at two points each, every 15 s (GitHub's documented cost, not measured live); spent, it stops for the hour
+FAST_BUDGET = board_fast.Budget(FAST_POINTS_PER_HOUR)
+_board_lock = threading.Lock()   # the fast read and the full read write one cache; the lock covers the write, never a read
+def _fast_root():
+    """The GraphQL root of the project's owner: `organization` for an organization, else `user`."""
+    return "organization" if board_seam().binding.kind == "orgs" else "user"
+def _graphql(query, variables, timeout):
+    """One fast-read page through the GitHub door: a refusal, a failure or a partial answer raises, so no page moves a card."""
+    out = ghread.graphql_read(query, variables, timeout=timeout, pass_name="fast-board")
+    if not out.is_answer: raise RuntimeError(out.line())
+    if out.partial: raise RuntimeError("partial answer: " + ", ".join(out.partial))
+    return out.answer
+def fast_board_pass():
+    """One fast read: the column inputs of the cards the cache holds, written where the snapshot is newer. A failed read moves nothing."""
+    observed = time.time()
+    try: nodes = board_fast.read_snapshot(_graphql, _fast_root(), OWNER, PROJECT_NO, _columns_module.TERMINAL, FAST_BUDGET, observed + FAST_DEADLINE)
+    except board_fast.SnapshotError as e:
+        with _board_lock:
+            set_part("status", err=str(e)[:80])
+        return
+    with _board_lock:
+        board_cache["items"] = board_fast.apply(board_cache.get("items") or [], board_fast.rows_of(nodes, REPO), int(observed))
+        set_part("status", err=None)
+        save_board()
+def refresh_fast():
+    """fast_board_pass() every FAST_EVERY seconds, on its own thread, so a full read never holds it."""
+    while True:
+        time.sleep(FAST_EVERY)
+        try: fast_board_pass()
+        except Exception as e:
+            with _board_lock: set_part("status", err=str(e)[:80])   # one failed fast pass never ends the loop
 def refresh_board():
-    """board_pass() every 60 s, or within 2 s of a board move made through scripts/board.sh (board-dirty flag).
+    """board_pass() every FULL_EVERY seconds, or within 2 s of a board move made through scripts/board.sh (board-dirty flag).
     The items route lags a write by seconds, so a pass a move asked for is read again 16 s later: the card never waits a minute in its old column."""
     quick = False
     while True:
         try: board_pass()
-        except Exception as e: board_cache["err"] = str(e)[:80]   # one failed pass never ends the loop (#512): the next one still runs
-        for _ in range(8 if quick else 30):
+        except Exception as e:
+            with _board_lock: board_cache["err"] = str(e)[:80]   # one failed pass never ends the loop (#512): the next one still runs
+        for _ in range(8 if quick else FULL_EVERY // 2):
             time.sleep(2)
             try:
                 if (STATE / "board-dirty").stat().st_mtime > board_cache.get("t", 0): quick = True; break
@@ -3361,12 +3447,13 @@ def flow_lead(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
     return chart("lead", (board_cache.get("t"), tuple(fw), tuple(fs), tuple(fk), ty), lambda: _lead_payload(fw, fs, fk, ty))
 
 
-def drawn_column(i, moves, read_at, window):
+def drawn_column(i, moves, window):
     """The column the served board draws for one row, the freeze that column carries, and what the serve acts on:
     `read` (no entry names a column this board ships, or the read's column stands), `agree` (the read began after the
     move and carries its column), `expired` (the window passed with no read agreeing) or `pending` (the move is drawn at
     once and wears the mark). The board and the promote route ask this one function, so a card is promotable by the
     column both of them draw, never by two different columns (#829, ADR-0144)."""
+    read_at = i.get("ot")   # the instant the read that observed this card began: the only stamp the overlay compares a move against
     closed = str(i["s"]).lower() == "closed"   # the row's own closedness: the freeze below is the card's, not the read's
     st, fz = _columns_module.view_column(i["st"], closed, i.get("l"), i.get("cr"))   # the column the table names, and the freeze over it
     entry = moves.get(str(i["i"])) if i.get("i") else None   # the door keys an entry by the Project item id
@@ -3394,13 +3481,12 @@ def drawn_column(i, moves, read_at, window):
 def board(moves=None):
     overlay = overlay_on()   # one setting turns the overlay off: the served board is then the list read alone (#651)
     if moves is None: moves = read_moves() if overlay else {}   # the serve passes the record it already read, so one serve reads it once (#973); the record is read on every serve, so a page reload sees the same overlay (#650)
-    read_at = board_cache.get("rt")   # the instant the list read began, never the completion stamp `t`: a read that began before a move cannot have carried it, however late it finished
     window = pending_window()   # an entry older than the window expires even with no read agreeing (#651)
     agreed, expired = set(), {}   # expired: item id -> (card number, the recorded column, the column the read holds, the move's dispatch context)
     by, tally, drawn = {}, {}, []
     ends = {COLUMN["issue_closed"], COLUMN["abandoned"]}   # history by role: a closed status is never a column on any page (#969)
     for i in board_cache["items"]:
-        d = drawn_column(i, moves, read_at, window)   # the one overlay rule the promote route asks too (#829)
+        d = drawn_column(i, moves, window)   # the one overlay rule the promote route asks too (#829)
         st, fz = d["st"], d["fz"]
         if d["state"] == "agree": agreed.add(str(i["i"]))
         elif d["state"] == "expired": expired[str(i["i"])] = (i["n"], d["recorded"], st, has_context(d["entry"]))
@@ -3476,7 +3562,7 @@ def board(moves=None):
         dropped = drop_moves(agreed | set(expired))   # agreement settles an entry; the window settles one no read ever agreed with (#651)
         for item, (n, recorded, read, context) in expired.items():
             if dropped and item in dropped: report_expired(n, item, recorded, read, window, context)   # only a drop that really happened is reported, so a retry never repeats a line
-    return {"t": board_cache["t"], "err": board_cache["err"], "prs": lane, "groups": groups, "cases": cases, "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {}), "sum": dict(board_summary(drawn), none=nospec_count(board_cache["items"], moves, read_at, window))}   # the No spec lane's bar (owner)
+    return {"t": board_cache["t"], "err": board_cache["err"], "parts": board_cache.get("parts", {}), "prs": lane, "groups": groups, "cases": cases, "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {}), "sum": dict(board_summary(drawn), none=nospec_count(board_cache["items"], moves, window))}   # the No spec lane's bar (owner)
 
 def strip_instant(strip, t):
     """The strip with its time-dependent `age` and `old` replaced by `at`, the poll's own instant: an unchanged board keeps its
@@ -3608,7 +3694,7 @@ def promote(issue):
     if str(item.get("s") or "").lower() == "closed": return {"err": "the issue is closed: a closed card keeps its column"}
     # The column the board draws, a proved move's overlay included: the same function the board route asks, so the rule
     # reads one column in both routes and a card drawn as moved is never written again (#829).
-    st = drawn_column(item, read_moves() if overlay_on() else {}, board_cache.get("rt"), pending_window())["st"]
+    st = drawn_column(item, read_moves() if overlay_on() else {}, pending_window())["st"]
     col, _ = _columns_module.view_column(st, False, item.get("l"))
     if col != COLUMN["unscheduled"]: return {"err": f"the card is in {col}, not {COLUMN['unscheduled']}: only a Backlog card moves"}
     if not promotable({**item, "st": st}): return {"err": "the card is a ticket of a spec: it moves with its spec, never alone (ADR-0142)"}
@@ -4174,12 +4260,12 @@ function instTiles(facts){const lp=instFact(facts,"loop"),ld=instFact(facts,"lan
  land=ld?instTile("Landed",ld,/^landed\s*/):{k:"Landed",text:"no reading",tone:"neutral"},m=/PR #(\d+)/.exec(land.text);
  if(m){land.tone="info";land.href=`https://github.com/__REPO__/pull/${m[1]}`}
  return[instTile("Gate",instFact(facts,"gate"),/^gate\s*/),
-  {k:"Loop",text:on===null?"?":on?"ON":"OFF",tone:on===null?"neutral":on?"ok":"err"},land]}
+  {k:"Loop",text:on===null?"?":on?"ON":"OFF",tone:on===null?"neutral":on?"ok":"err"},land,instTile("GraphQL",instFact(facts,"graphql"),/^graphql\s*/)]}
 const iq=t=>esc(t).replace(/"/g,"&quot;");
 function tileHtml(t){const v=t.href?esc(t.text).replace(/PR #\d+/,x=>`<a target=_blank rel=noopener href="${iq(t.href)}">${x}</a>`):esc(t.text),
  d=(t.detail||[]).length?`<details><summary>${t.detail.length} failed</summary><ul>${t.detail.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></details>`:"";
  return `<div class="at ${t.tone}"${t.tip?` title="${iq(t.tip)}"`:""}><span class=ah><span class=dot aria-hidden="true"></span>${esc(t.k)}</span><span class=av>${v}</span>${t.times?`<span class=atm>${esc(t.times)}</span>`:""}${d}</div>`}
-function instSum(facts){const t=instTiles(facts);return t.find(x=>x.k==="Loop").text+" · "+t.filter(x=>x.k!=="Loop"&&x.tone==="err").length+" fail"}
+function instSum(facts){const t=instTiles(facts);return t.find(x=>x.k==="Loop").text+" · "+t.filter(x=>x.k!=="Loop"&&x.k!=="GraphQL"&&x.tone==="err").length+" fail"}
 function cycleLeft(text){const m=/^cycle (?:in |\+)(?:(\d+)h(\d\d)m|(\d+)m(\d\d)s)( late)?$/.exec(String(text||""));if(!m)return null;
  const s=m[1]!==undefined?(+m[1])*3600+(+m[2])*60:(+m[3])*60+(+m[4]);return m[5]?-s:s}
 function cycleFmt(left){const s=Math.abs(Math.round(left)),h=Math.floor(s/3600),mi=Math.floor(s/60)%60,p=n=>String(n).padStart(2,"0"),
@@ -4440,10 +4526,10 @@ $("#sdok").onclick=async()=>{const d=sPend||[];sPend=null;$("#sdlg").close();
  setBar()};
 $("#sdisc").onclick=()=>{if(mdl){mdl=JSON.parse(mdlSrv);mdlRmk={};mdlMsg="";mdlRender()}if(limS){limPend=null;limMsg="";limRender()}if(slS){slDraft=slClone(slS);slMsg="";slRender()}setBar()};
 /* accordions: each of the five answers its own header and leaves the others alone; the open set is stored like the pins */
-const ACC=["plans","stats","mdl","lim","slk"];
+const ACC=["stats","mdl","lim","slk"];   // only the cards the page carries: a name with no element used to kill the whole script (#1032)
 let openAcc=new Set(Array.isArray(ls.acc)?ls.acc.filter(i=>ACC.includes(i)):[]);   // the old single-id string is ignored, not trusted, and not fatal
 const saveAcc=()=>{ls.acc=[...openAcc];save()};
-ACC.forEach(i=>{const e=$("#"+i);e.open=openAcc.has(i);e.addEventListener("toggle",()=>{if(e.open)openAcc.add(i);else openAcc.delete(i);saveAcc();if(i==="mdl"&&e.open){mdlLoad()}else if(i==="lim"&&e.open){limLoad()}else if(i==="slk"&&e.open){slLoad()}})});mdlLoad();
+ACC.forEach(i=>{const e=$("#"+i);if(!e)return;e.open=openAcc.has(i);e.addEventListener("toggle",()=>{if(e.open)openAcc.add(i);else openAcc.delete(i);saveAcc();if(i==="mdl"&&e.open){mdlLoad()}else if(i==="lim"&&e.open){limLoad()}else if(i==="slk"&&e.open){slLoad()}})});mdlLoad();
 if(openAcc.has("lim"))limLoad();
 if(openAcc.has("slk"))slLoad();
 const PCOL=["#5aa9ff","#3ecf8e","#f5b041","#b79cf6","#2dd4bf","#ff6b6b","#c678dd","#e5c07b","#8a93a3"],tk=n=>n>=1e9?(n/1e9).toFixed(2)+"B":n>=1e6?(n/1e6).toFixed(1)+"M":n>=1e3?(n/1e3).toFixed(0)+"K":""+n;
@@ -4773,7 +4859,7 @@ async function pollBoard(){lim.busy=1;try{const r=await fetch("/api/board",board
 all=[b.prs,...b.groups.sort((x,y)=>{const i=n=>{const k=FLOW.indexOf(n);return k<0?FLOW.length:k};return i(x.name)-i(y.name)})],f=q.trim().replace(/^#/,"");
 if(bo.open===undefined||!all.some(g=>g.name===bo.open))bo.open=(all.find(g=>g.n&&!g.end&&!isPR(g.name))||all[2]).name;
 const CN=all.map(g=>g.name);   // every column of this board: what colOf reads the user columns out of, never a colour of its own
-lastRead=Date.now();readStale=!!b.err;$("#bcases").innerHTML=caseRows(b.cases);$("#bt").textContent=b.err?"(stale)":"";
+lastRead=Date.now();readStale=!!b.err;$("#bcases").innerHTML=caseRows(b.cases);$("#bt").textContent=(b.err?"(stale) ":"")+["status","structure","prs"].map(k=>{const p=(b.parts||{})[k];return k+" "+(p&&p.t?Math.round(Date.now()/1000-p.t)+"s":"never")+(p&&p.err?" !":"")}).join(" · ");
 const fw=bo.fw||[],fk=bo.fk||[],boardGroups=all.filter(g=>!isPR(g.name)),allRows=boardGroups.filter(g=>!g.end).flatMap(g=>g.items),specTitle=new Map();   // the filter bar: the waves, specs and kinds the open cards hold (#899, #904, #969)
 allRows.forEach(x=>{if(x.sp)specTitle.set(String(x.n),x.t)});
 const wOpts=waveOptions(allRows),sOpts=specOptions(boardGroups,b.sum),SLOTS=specSlots(sOpts.filter(s=>s!=="none"));   // a finished spec is no option (#981); one color per spec option on the board (#917)
@@ -6097,5 +6183,5 @@ def watch_self():
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 7700
     refresh_runs()
-    threading.Thread(target=refresh_prs, daemon=True).start(); threading.Thread(target=refresh_quota, daemon=True).start(); threading.Thread(target=watch_self, daemon=True).start(); threading.Thread(target=refresh_board, daemon=True).start(); threading.Thread(target=load_sampler, daemon=True).start(); threading.Thread(target=watch_runs, daemon=True).start()
+    threading.Thread(target=refresh_prs, daemon=True).start(); threading.Thread(target=refresh_quota, daemon=True).start(); threading.Thread(target=watch_self, daemon=True).start(); threading.Thread(target=refresh_board, daemon=True).start(); threading.Thread(target=refresh_fast, daemon=True).start();threading.Thread(target=load_sampler, daemon=True).start(); threading.Thread(target=watch_runs, daemon=True).start()
     ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()

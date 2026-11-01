@@ -215,18 +215,6 @@ def test_access_names_the_phone_check_command(hub):
     assert "/agent-squad:start-mobile" in out.stdout
 
 
-def test_the_mobile_subscription_row_says_when_it_resets():
-    if shutil.which("node") is None:
-        pytest.skip("node is required")
-    fn = re.search(r"^function resetText\(.*?^\}$", MOBILE.read_text(), re.M | re.S)
-    assert fn, "the phone page has no resetText"
-    out = subprocess.run(["node", "-"], input=fn.group(0) + "\nconsole.log(JSON.stringify([resetText(1000+6*3600,1000),"
-                         "resetText(null,1000)]))", capture_output=True, text=True, timeout=60)
-    assert out.returncode == 0, out.stderr
-    a, b = json.loads(out.stdout)
-    assert a.startswith("resets in 6 h · ") and b == "reset unknown"
-
-
 # ---------------------------------------------------------------- review of #913: the phone header, a clean bar, a marked row
 
 def test_the_header_wraps_on_the_phone_so_the_page_never_scrolls_sideways(hub):

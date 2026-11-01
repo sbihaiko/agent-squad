@@ -66,3 +66,13 @@ def test_the_last_ended_history_link_opens_the_settings_loop_theme(hub):
 def test_the_models_renderer_writes_no_sidebar_card(hub):
     assert '$("#sqm")' not in hub.PAGE, "the models renderer still writes the removed sidebar card"
     assert '$("#sqsr")' not in hub.PAGE, "the models renderer still writes the removed sidebar count"
+
+
+def test_every_accordion_the_page_names_exists(hub):
+    """A name with no element behind it kills the whole page script (#1032): every name is answered by a card."""
+    import json
+    import re
+    ids = json.loads(re.search(r"const ACC=(\[[^\]]*\]);", hub.PAGE).group(1))
+    assert ids, "the page names no accordion"
+    for i in ids:
+        assert f"<details id={i}" in hub.PAGE, f"the page names the accordion {i} and carries no element for it"

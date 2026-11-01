@@ -1,4 +1,4 @@
-"""The mobile More tab: three read-only screens, each on its own, reading only the hub's existing GET routes (#832).
+"""The mobile More tab: its read-only screens, each on its own, reading only the hub's existing GET routes (#832).
 
 The page is read from its files and composed the way the hub composes it. No server runs. The More tab is read-only: the
 page's one write is the owner's move on the Board tab (#829).
@@ -12,7 +12,7 @@ HUB_PY = SCRIPTS / "hub.py"
 PAGE = SCRIPTS / "hub-mobile.html"
 GESTURE_JS = SCRIPTS / "hub-mobile-gesture.js"
 BOARD_FILTER_JS = SCRIPTS / "board-filter.js"
-SCREEN_ROUTES = {"subs": "/api/subs", "models": "/api/models", "cost": "/api/stats"}
+SCREEN_ROUTES = {"cost": "/api/stats"}   # #1028: the plans and the models left the More tab for Settings
 PERIODS = ["hour", "day", "month"]
 HUB_GET_ROUTES = {
     "/api/adapter-errors", "/api/board", "/api/chart/cfd", "/api/chart/lead", "/api/delivery", "/api/ended", "/api/issue", "/api/leadtime", "/api/limits", "/api/load", "/api/models",
@@ -38,7 +38,7 @@ def open_tag(html, screen):
     return m.group(0)
 
 
-def test_more_tab_opens_three_screens_each_on_its_own():
+def test_more_tab_opens_its_screens_each_on_its_own():
     html = page()
     more = block(html, "section", "data-panel", "more")
     for name in SCREEN_ROUTES:

@@ -401,7 +401,7 @@ Autonomous frontier: `scripts/autofrontier.sh` (fast lane, after `autobug.sh`) f
 
 GitHub access is REST only in the loop (`board.py` for cards, REST diff in review, REST in reconcile): the GraphQL quota is shared with every `gh` subcommand and ran out.
 
-Board moves go through `scripts/board.sh` (`$BOARD`), which flags the hub to refresh the board within 2 s instead of its 60 s cycle; `childcc.py` runs every beat of the fast lane.
+Board moves go through `scripts/board.sh` (`$BOARD`), which flags the hub to refresh the board within 2 s instead of its full-read cycle (10 min; the open cards refresh every 15 s); `childcc.py` runs every beat of the fast lane.
 
 A child that finishes with outcome pass moves its issue to Code Complete at once (`scripts/childcc.py`, every watch loop, once per child), with a comment carrying its first reason; the panel may still be running its siblings. A run that already has its verdict (tiny and fork-only runs pass → verdict in under 1 s, never seen live) is backfilled too, but only when the card is Todo/In Progress/Blocked, never past Code Complete. `scripts/test-childcc.sh` is the regression test (stub gh and board).
 
