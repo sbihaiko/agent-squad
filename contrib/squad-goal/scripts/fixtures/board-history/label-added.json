@@ -1,0 +1,57 @@
+{
+  "data": {
+    "node": {
+      "number": 435,
+      "updatedAt": "2026-10-15T23:59:13Z",
+      "state": "CLOSED",
+      "closed": true,
+      "timelineItems": {
+        "totalCount": 5,
+        "nodes": [
+          {
+            "__typename": "LabeledEvent",
+            "createdAt": "2026-10-15T23:02:18Z",
+            "label": {
+              "name": "bug"
+            }
+          },
+          {
+            "__typename": "AddedToProjectV2Event",
+            "createdAt": "2026-10-15T23:23:10Z"
+          },
+          {
+            "__typename": "ProjectV2ItemStatusChangedEvent",
+            "createdAt": "2026-10-15T23:23:11Z",
+            "status": "Todo",
+            "previousStatus": ""
+          },
+          {
+            "__typename": "ClosedEvent",
+            "createdAt": "2026-10-15T23:59:14Z"
+          },
+          {
+            "__typename": "ProjectV2ItemStatusChangedEvent",
+            "createdAt": "2026-10-16T00:30:24Z",
+            "status": "Closed",
+            "previousStatus": "Todo"
+          }
+        ]
+      },
+      "projectItems": {
+        "nodes": [
+          {
+            "id": "PVTI_lAHOB1MsbM4Bm5t8zhBHVXg",
+            "updatedAt": "2026-10-22T00:42:39Z",
+            "project": {
+              "number": 5
+            },
+            "fieldValueByName": {
+              "name": "Closed",
+              "updatedAt": "2026-10-16T00:30:23Z"
+            }
+          }
+        ]
+      }
+    }
+  }
+}

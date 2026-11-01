@@ -48,7 +48,7 @@ def test_a_failed_pass_is_a_row_with_its_result_its_age_and_its_merge_commit(hub
     rows = hub.board()["cases"]
     failed = next(r for r in rows if r["issue"] == 306)
     assert failed["result"] == "fail" and failed["commit"] == "abc1234"
-    assert failed["age"] == 7200 and failed["ended"] == ENDED
+    assert "age" not in failed and failed["ended"] == ENDED   # an absolute instant: the page counts the age (#973)
     assert [r["result"] for r in rows] == ["fail", "pass"]
 
 
@@ -83,8 +83,8 @@ def test_the_pass_reads_a_test_case_in_the_one_items_read_it_already_makes(hub, 
 
 def test_the_pane_draws_the_row_beside_the_axis_with_result_age_and_commit(hub):
     line = re.search(r"^const caseRows=.*$", hub.PAGE, re.M).group(0)
-    rows = [{"issue": 306, "result": "fail", "commit": "abc1234", "ended": ENDED, "age": 7200}]
-    script = 'const esc=s=>String(s);\n' + line + f'\nconsole.log(caseRows({json.dumps(rows)}));\n'
+    rows = [{"issue": 306, "result": "fail", "commit": "abc1234", "ended": ENDED}]
+    script = f'const esc=s=>String(s);Date.now=()=>{int(NOW * 1000)};\n' + line + f'\nconsole.log(caseRows({json.dumps(rows)}));\n'
     out = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
     assert "fail" in out.stdout and "abc1234" in out.stdout and "2h" in out.stdout and "#306" in out.stdout

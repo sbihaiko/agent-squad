@@ -1,0 +1,174 @@
+{
+  "data": {
+    "node": {
+      "number": 234,
+      "updatedAt": "2026-10-14T05:54:37Z",
+      "state": "CLOSED",
+      "closed": true,
+      "timelineItems": {
+        "totalCount": 23,
+        "nodes": [
+          {
+            "__typename": "LabeledEvent",
+            "createdAt": "2026-10-14T02:21:19Z",
+            "label": {
+              "name": "enhancement"
+            }
+          },
+          {
+            "__typename": "LabeledEvent",
+            "createdAt": "2026-10-14T02:21:20Z",
+            "label": {
+              "name": "ready-for-agent"
+            }
+          },
+          {
+            "__typename": "LabeledEvent",
+            "createdAt": "2026-10-14T02:21:20Z",
+            "label": {
+              "name": "needs-owner"
+            }
+          },
+          {
+            "__typename": "LabeledEvent",
+            "createdAt": "2026-10-14T02:21:20Z",
+            "label": {
+              "name": "wave:01"
+            }
+          },
+          {
+            "__typename": "ParentIssueAddedEvent",
+            "createdAt": "2026-10-14T02:21:21Z"
+          },
+          {
+            "__typename": "AddedToProjectV2Event",
+            "createdAt": "2026-10-14T02:21:22Z"
+          },
+          {
+            "__typename": "UnlabeledEvent",
+            "createdAt": "2026-10-14T02:24:33Z",
+            "label": {
+              "name": "needs-owner"
+            }
+          },
+          {
+            "__typename": "ProjectV2ItemStatusChangedEvent",
+            "createdAt": "2026-10-14T02:25:04Z",
+            "status": "Blocked",
+            "previousStatus": ""
+          },
+          {
+            "__typename": "ProjectV2ItemStatusChangedEvent",
+            "createdAt": "2026-10-14T02:25:22Z",
+            "status": "In Progress",
+            "previousStatus": "Blocked"
+          },
+          {
+            "__typename": "LabeledEvent",
+            "createdAt": "2026-10-14T03:08:26Z",
+            "label": {
+              "name": "needs-ratification"
+            }
+          },
+          {
+            "__typename": "ProjectV2ItemStatusChangedEvent",
+            "createdAt": "2026-10-14T03:12:14Z",
+            "status": "Blocked",
+            "previousStatus": "In Progress"
+          },
+          {
+            "__typename": "UnlabeledEvent",
+            "createdAt": "2026-10-14T04:07:29Z",
+            "label": {
+              "name": "needs-ratification"
+            }
+          },
+          {
+            "__typename": "ProjectV2ItemStatusChangedEvent",
+            "createdAt": "2026-10-14T04:08:23Z",
+            "status": "In Progress",
+            "previousStatus": "Blocked"
+          },
+          {
+            "__typename": "ProjectV2ItemStatusChangedEvent",
+            "createdAt": "2026-10-14T04:09:46Z",
+            "status": "Code Complete",
+            "previousStatus": "In Progress"
+          },
+          {
+            "__typename": "ProjectV2ItemStatusChangedEvent",
+            "createdAt": "2026-10-14T05:31:18Z",
+            "status": "Todo",
+            "previousStatus": "Code Complete"
+          },
+          {
+            "__typename": "RemovedFromProjectV2Event",
+            "createdAt": "2026-10-14T05:42:58Z"
+          },
+          {
+            "__typename": "AddedToProjectV2Event",
+            "createdAt": "2026-10-14T05:42:59Z"
+          },
+          {
+            "__typename": "ProjectV2ItemStatusChangedEvent",
+            "createdAt": "2026-10-14T05:43:00Z",
+            "status": "Todo",
+            "previousStatus": ""
+          },
+          {
+            "__typename": "ProjectV2ItemStatusChangedEvent",
+            "createdAt": "2026-10-14T05:49:18Z",
+            "status": "Todo",
+            "previousStatus": ""
+          },
+          {
+            "__typename": "AddedToProjectV2Event",
+            "createdAt": "2026-10-14T05:49:19Z"
+          },
+          {
+            "__typename": "ClosedEvent",
+            "createdAt": "2026-10-14T05:54:37Z"
+          },
+          {
+            "__typename": "ProjectV2ItemStatusChangedEvent",
+            "createdAt": "2026-10-14T18:40:20Z",
+            "status": "Closed",
+            "previousStatus": "Todo"
+          },
+          {
+            "__typename": "ProjectV2ItemStatusChangedEvent",
+            "createdAt": "2026-10-16T14:16:56Z",
+            "status": "Closed",
+            "previousStatus": "Todo"
+          }
+        ]
+      },
+      "projectItems": {
+        "nodes": [
+          {
+            "id": "PVTI_lAHOB1MsbM4Bl-_LzhAnpI0",
+            "updatedAt": "2026-10-14T18:40:19Z",
+            "project": {
+              "number": 4
+            },
+            "fieldValueByName": {
+              "name": "Closed",
+              "updatedAt": "2026-10-14T18:40:18Z"
+            }
+          },
+          {
+            "id": "PVTI_lAHOB1MsbM4Bm5t8zhAnlNs",
+            "updatedAt": "2026-10-22T00:42:37Z",
+            "project": {
+              "number": 5
+            },
+            "fieldValueByName": {
+              "name": "Closed",
+              "updatedAt": "2026-10-16T14:16:55Z"
+            }
+          }
+        ]
+      }
+    }
+  }
+}
