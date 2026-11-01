@@ -914,11 +914,13 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
   # A wave that reached its age cap landed as it is (#378, ADR-0145 rule 13): the children the run dispatched that never
   # entered it go back to the queue, so the loop builds them into a later wave. They are read from the run's own record
   # (run_issues); an issue the wave carried just closed above, and is never requeued.
+  local rq=""   # the issues the capped block below sends back to the queue: the no-Refs fallback never closes one (#1003)
   if [ "$capped" = 1 ]; then
     # (#869) A child that entered the wave is not missing from it, even when its commit is not ahead of the base any more (the
     # rebase dropped it), and an issue a multi-issue commit named was requeued above with its own reason.
     for n in $(run_issues "$rd"); do case " $issues $amb $ent " in *" $n "*) ;; *)
       wave_fact "$run" "$n" refused "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed without this child" keep
+      rq="$rq $n"
       requeue "$n" "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed without this child: it is back in the queue" cap;; esac; done
   fi
   # The wave is in $base: each issue it carries closes through the API, and its one delivery comment is queued, never posted
@@ -936,17 +938,27 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
       printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$run" "$n2" "$w" >> "$SG_STATE/wave-outside.tsv";; esac; done
     issues=$kept
   fi
-  # (#1003) A wave whose commits name no issue at all (no `Refs #N` in any commit, a RED one included) closes the issues its run was dispatched
-  # for, read from the run's own request (run_issues, one source), and clears their dispatch markers: the run ended and its
-  # work is in $base, so nothing else would free them. A wave with any Refs keeps the per-commit rule above. A run whose
-  # issues cannot be read closes nothing, and one line names the run.
-  local fb=""
+  # (#1003) A wave whose commits name no issue at all (no `Refs #N` in any commit, a RED one included) closes the issues its run
+  # was dispatched for, read from the run's own request (run_issues, one source), and clears their dispatch markers: the run
+  # ended and its work is in $base, so nothing else would free them. Only an issue whose child entered the wave closes (`ent`,
+  # the ledger's entered fact): a child that failed its gates has no work in $base. A one-issue run with no entered fact
+  # closes its one issue. An issue the capped block requeued above never closes. A wave with any Refs keeps the per-commit
+  # rule above. A run whose issues cannot be read, or a multi-issue run with no entered child, closes nothing, and one line names the run.
+  local fb="" cand="" n3
   if [ -z "$issues" ] && [ "${anyref:-0}" = 0 ]; then
-    if [ -n "${dset// /}" ]; then
-      issues=$(printf '%s' "$dset" | xargs); fb=1
-      echo "WAVE-NOTE $w: no commit names an issue (no Refs), so the landing closes the issues run $run was dispatched for: #${issues// /, #}"
-    else
+    for n3 in $dset; do case " $rq " in *" $n3 "*) ;; *) cand="${cand:+$cand }$n3";; esac; done
+    if [ -z "${dset// /}" ]; then
       echo "WAVE-NOTE $w: no commit names an issue (no Refs), and the issues of run $run cannot be read ($rd/request.txt, $rd/record.jsonl), so the landing closes nothing"
+    elif [ -n "${ent// /}" ]; then
+      for n3 in $cand; do case " $ent " in *" $n3 "*) issues="${issues:+$issues }$n3";; esac; done
+    elif [ "$(printf '%s' "$dset" | wc -w | tr -d ' ')" = 1 ]; then
+      issues=$cand
+    fi
+    if [ -n "$issues" ]; then
+      fb=1
+      echo "WAVE-NOTE $w: no commit names an issue (no Refs), so the landing closes the issues run $run was dispatched for whose child entered: #${issues// /, #}"
+    elif [ -n "${dset// /}" ]; then
+      echo "WAVE-NOTE $w: no commit names an issue (no Refs), and no issue of run $run has an entered child it did not requeue, so the landing closes nothing"
     fi
   fi
   deliver "$run" "$w" "$sha" "$issues" || return 1
