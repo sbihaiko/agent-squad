@@ -1941,8 +1941,34 @@ def foot_refresh(now=None):
     return LOAD_STATE["facts"]
 
 SPEC_TIP_LINES = 8   # the spec tile's tooltip names at most this many specs, then "+k more"
+NOSPEC_DAYS = 7      # the No spec group counts the cards closed in this many days (owner)
 
-def spec_progress(items, moves=None, read_at=None, window=None):
+def nospec_count(items, moves=None, read_at=None, window=None, now=None):
+    """The No spec group (bugs and single tickets): `total` is its open cards plus its cards closed in the last NOSPEC_DAYS
+    days by the read's own closed-at (`c`); `closed` is the closed ones. A card is in the group as the board's No spec
+    lane holds it: no spec label, no loop-bug label, and no parent spec, or a parent spec the board draws closed (an open
+    card only: a closed card of a closed spec is history). An abandoned card, or a closed card with no closed-at, never
+    counts. The column is `drawn_column`, with the door's overlay, so the lane, the summary and the tile agree (ADR-0137)."""
+    if moves is None: moves = read_moves() if overlay_on() else {}
+    if read_at is None: read_at = board_cache.get("rt")
+    if window is None: window = pending_window()
+    since = (time.time() if now is None else now) - NOSPEC_DAYS * 86400
+    ends, closed_col = (COLUMN["issue_closed"], COLUMN["abandoned"]), COLUMN["issue_closed"]
+    cols = [(i, drawn_column(i, moves, read_at, window)["st"]) for i in items or []]
+    gone = {i.get("n") for i, st in cols if _columns_module.SPEC_LABEL in (i.get("l") or []) and st in ends}
+    done = total = 0
+    for i, st in cols:
+        labels = i.get("l") or []
+        if _columns_module.SPEC_LABEL in labels or "loop-bug" in labels or st == COLUMN["abandoned"]: continue
+        pa = i.get("pa") if isinstance(i.get("pa"), int) else None
+        if pa is not None and (pa not in gone or st == closed_col): continue
+        if st != closed_col: total += 1; continue
+        try: at = _utc(i["c"]).timestamp() if i.get("c") else None
+        except Exception: at = None
+        if at is not None and at >= since: done, total = done + 1, total + 1
+    return {"closed": done, "total": total}
+
+def spec_progress(items, moves=None, read_at=None, window=None, now=None):
     """The Monitor card's spec tile: closed over total sub-issues, summed over every open spec on the board cache. An open
     spec is a card with the spec label that the board draws in neither Closed nor Abandoned: its column comes from
     `drawn_column`, with the door's overlay, as the board draws it (#829). The count is the one `task_count` reads, so
@@ -1966,9 +1992,14 @@ def spec_progress(items, moves=None, read_at=None, window=None):
             rows.append((0.0, i.get("n") or 0, f"#{i.get('n')} {i.get('t') or ''} — no sub-issue"))
     rows.sort(key=lambda r: (r[0], r[1]))
     tips = [r[2] for r in rows[:SPEC_TIP_LINES]] + ([f"+{len(rows) - SPEC_TIP_LINES} more"] if len(rows) > SPEC_TIP_LINES else [])
+    none = nospec_count(items, moves, read_at, window, now)   # the No spec lane's own count: one more group in the total (owner)
+    if none["total"]:
+        done, total = done + none["closed"], total + none["total"]
+        tips.append(f"No spec — {none['closed']}/{none['total']}")
     n = len(rows)
-    out = {"open": n, "so": f"{n} open" if n else "", "done": done, "total": total, "tip": "\n".join(tips)}
-    if not n: return dict(out, pct=0, frac=0, value="no open spec", state="none", bar=False)
+    so = " + ".join(x for x in (f"{n} open" if n else "", "no spec" if none["total"] else "") if x)
+    out = {"open": n, "so": so, "done": done, "total": total, "tip": "\n".join(tips), "none": none}
+    if not n and not none["total"]: return dict(out, pct=0, frac=0, value="no open spec", state="none", bar=False)
     if not total: return dict(out, pct=0, frac=0, value=f"{n} open · no sub-issue yet", state="info", bar=True)
     pct = done * 100 // total
     return dict(out, pct=pct, frac=done / total, value=f"{done}/{total} · {pct}%", state="ok" if done == total else "info", bar=True)
@@ -3439,7 +3470,7 @@ def board():
         dropped = drop_moves(agreed | set(expired))   # agreement settles an entry; the window settles one no read ever agreed with (#651)
         for item, (n, recorded, read, context) in expired.items():
             if dropped and item in dropped: report_expired(n, item, recorded, read, window, context)   # only a drop that really happened is reported, so a retry never repeats a line
-    return {"t": board_cache["t"], "err": board_cache["err"], "prs": lane, "groups": groups, "cases": cases, "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {}), "sum": board_summary(drawn)}
+    return {"t": board_cache["t"], "err": board_cache["err"], "prs": lane, "groups": groups, "cases": cases, "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {}), "sum": dict(board_summary(drawn), none=nospec_count(board_cache["items"], moves, read_at, window))}   # the No spec lane's bar (owner)
 
 def label_wave(labels):   # the `wave:NN` label's number, or None
     w = [int(m.group(1)) for l in labels for m in [re.match(r"wave:(\d+)$", l)] if m]
@@ -4754,7 +4785,7 @@ const laneHtml=m=>{const ccount=c=>m.lanes.reduce((s,l)=>s+(l.counts[c]||0),0),p
    lid=l.kind==="s"?"SPEC "+l.num:bugs?"Loop bugs":l.title,ltt=l.kind==="s"?l.title:bugs?"defects of the loop itself: they halt dispatch, never a landing (ADR-0146)":l.kind==="none"?"bugs and single tickets":"";   // the lane reads as the mock: a coloured id, then its title or its subtitle (#889)
   h+=`<section class="lane${cl?" coll":""}${l.kind==="bugs"?" alarm":""}${l.done?" done":""}" data-lane="${esc(l.id)}" style="--lc:${lc}"><header class=lh role=button tabindex=0 aria-expanded="${!cl}" data-lane="${esc(l.id)}"><span class=tw>${cl?"&#9656;":"&#9662;"}</span>`
     +`<span class="lid${l.kind==="sw"?" sw":""}">${l.kind==="sw"?`<span class=sid>${esc(l.sid)}</span> · ${esc(l.wl)}`:esc(lid)}</span>`+(ltt?`<span class="ltt${l.kind==="s"?"":" subt"}">${esc(ltt)}</span>`:"")
-    +(l.kind==="s"?`<span class=bar title="${l.closed} of ${l.total} closed"><i style="width:${pct(l)}%"></i></span><span class=pc>${l.closed}/${l.total}</span>`+(l.st?`<span class=lst>${esc(l.st)}</span>`:""):"")
+    +(l.kind==="s"||l.kind==="none"?`<span class=bar title="${l.closed} of ${l.total} closed"><i style="width:${pct(l)}%"></i></span><span class=pc>${l.closed}/${l.total}</span>`+(l.st?`<span class=lst>${esc(l.st)}</span>`:""):"")
     +`<span class=sum>${cl?m.cols.filter(c=>l.counts[c]).map(c=>`<span>${esc(c)} <b>${l.counts[c]}</b></span>`).join(""):""}</span></header>`;
   if(!cl)for(const c of m.vc){const key=l.id+"|"+c,v=cellView(l.cells[c],!!(bo.cx||{})[key]);h+=`<div class=cell data-lane="${esc(l.id)}" data-col="${esc(c)}">${cards({name:c},v.shown,v.shown)}${v.more?`<button class=more data-cell="${esc(key)}" title="show every card of this cell">+${v.more} more</button>`:""}</div>`}
   h+="</section>"}

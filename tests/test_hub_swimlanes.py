@@ -310,3 +310,29 @@ def test_a_ticket_of_a_closed_spec_counts_in_the_no_spec_summary(hub, tmp_path, 
         _card(44, st="Todo", pa=41),
     ])
     assert _entry(hub.board()["sum"]["waves"], spec=None, wave=None) == {"spec": None, "wave": None, "closed": 0, "total": 1}
+
+
+# ---- the No spec lane's bar (owner): open no-spec cards plus the last seven days closed ----
+
+def test_the_no_spec_lane_takes_its_count_from_the_summary(hub):
+    model = _build(GROUPS, sum=dict(SUM, none={"closed": 3, "total": 4}))
+    none = next(ln for ln in model["lanes"] if ln["id"] == "none")
+    assert (none["closed"], none["total"]) == (3, 4)
+
+
+def _lane_header(hub, lane):
+    import re
+    page = hub.PAGE
+    body = re.search(r"const laneHtml=m=>\{.*?\n return h\+\"</div>\"\};", page, re.S).group(0)
+    stubs = ('const esc=s=>String(s),colOf=()=>"",CN={},eye=()=>"",SLOTS=new Map(),cards=()=>"",bo={},f="";')
+    model = {"lanes": [dict(lane, collapsed=True, counts={}, cells={})], "vc": [], "cols": []}
+    return _node(stubs + body + f"console.log(JSON.stringify(laneHtml({json.dumps(model)})));")
+
+
+def test_the_no_spec_lane_draws_the_spec_bar(hub):
+    html = _lane_header(hub, {"id": "none", "kind": "none", "title": "No spec", "closed": 3, "total": 4})
+    assert '<span class=bar title="3 of 4 closed"><i style="width:75%"></i></span><span class=pc>3/4</span>' in html
+    spec = _lane_header(hub, {"id": "s9", "kind": "s", "num": 9, "title": "t", "closed": 1, "total": 2})
+    assert "<span class=pc>1/2</span>" in spec
+    bugs = _lane_header(hub, {"id": "bugs", "kind": "bugs", "title": "Loop bugs", "closed": 0, "total": 1})
+    assert "class=bar" not in bugs

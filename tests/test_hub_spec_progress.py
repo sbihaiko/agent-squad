@@ -30,8 +30,10 @@ def hub():
     return mod
 
 
-def _item(n, st, s="OPEN", labels=("spec",), si=None, cr=None):
-    i = {"n": n, "t": f"Spec {n}", "s": s, "st": st, "l": list(labels)}
+def _item(n, st, s="OPEN", labels=("spec",), si=None, cr=None, pa=None, c=None):
+    i = {"n": n, "t": f"Spec {n}", "s": s, "st": st, "l": list(labels), "c": c}
+    if pa is not None:
+        i["pa"] = pa
     if si is not None:
         i["si"] = {"completed": si[0], "total": si[1]}
     if cr:
@@ -45,7 +47,7 @@ BOARD = [
     _item(3, "Closed", s="CLOSED", si=(4, 4)),                     # closed spec: ignored
     _item(4, "Todo", s="CLOSED", si=(0, 9), cr="not_planned"),     # abandoned spec: ignored
     _item(5, "Abandoned", si=(1, 7)),                              # Abandoned column: ignored
-    _item(6, "Todo", labels=("bug",), si=(1, 3)),                  # not a spec: ignored
+    _item(6, "Todo", labels=("bug",), si=(1, 3), pa=1),            # a ticket of spec 1, not a spec: ignored
     _item(7, "Backlog"),                                           # spec with no count: ignored
 ]
 
@@ -130,3 +132,59 @@ def test_the_fill_has_a_reduced_motion_rule(hub):
 def test_the_bar_sits_below_the_tiles_and_above_the_loop_row(hub):
     page = hub.PAGE
     assert page.index("id=ian") < page.index("id=ispec") < page.index("id=iloop")
+
+
+# ---- the No spec group: bugs and single tickets (owner) ----
+
+NOW = 1_800_000_000   # 2027-01-15T08:00:00Z
+DAY = 86400
+
+
+def _iso(t):
+    import time
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+
+
+NOSPEC = [
+    _item(20, "Todo", labels=("bug",)),                                          # open, no spec: counts, open
+    _item(21, "Doing", labels=()),                                               # open single ticket: counts, open
+    _item(22, "Closed", s="CLOSED", labels=("bug",), c=_iso(NOW - 2 * DAY)),     # closed 2 days ago: counts, done
+    _item(23, "Closed", s="CLOSED", labels=(), c=_iso(NOW - 10 * DAY)),          # closed 10 days ago: out of the window
+    _item(24, "Todo", s="CLOSED", labels=(), cr="not_planned", c=_iso(NOW - DAY)),   # abandoned: never counted
+    _item(25, "Todo", labels=("bug", "loop-bug")),                               # a loop bug has its own lane
+    _item(26, "Todo", labels=(), pa=1),                                          # a spec ticket
+    _item(27, "Closed", s="CLOSED", labels=()),                                  # closed with no closed-at: no instant to place it
+]
+
+
+def test_no_spec_counts_open_cards_and_the_last_seven_days_closed(hub):
+    assert hub.nospec_count(NOSPEC, moves={}, now=NOW) == {"closed": 1, "total": 3}
+
+
+def test_the_open_card_of_a_closed_spec_counts_as_no_spec(hub):
+    items = [_item(30, "Closed", s="CLOSED", si=(1, 2), c=_iso(NOW - DAY)),
+             _item(31, "Todo", labels=(), pa=30), _item(32, "Closed", s="CLOSED", labels=(), pa=30, c=_iso(NOW - DAY))]
+    assert hub.nospec_count(items, moves={}, now=NOW) == {"closed": 0, "total": 1}
+
+
+def test_the_monitor_tile_adds_the_no_spec_group(hub):
+    p = hub.spec_progress(BOARD + NOSPEC, moves={}, now=NOW)
+    assert (p["done"], p["total"], p["open"]) == (6, 12, 3)
+    assert p["so"] == "3 open + no spec" and p["value"] == "6/12 · 50%"
+    assert p["none"] == {"closed": 1, "total": 3}
+    assert p["tip"].split("\n")[-1] == "No spec — 1/3"
+
+
+def test_the_tile_draws_no_spec_alone(hub):
+    p = hub.spec_progress(NOSPEC, moves={}, now=NOW)
+    assert (p["open"], p["so"], p["value"], p["state"], p["bar"]) == (0, "no spec", "1/3 · 33%", "info", True)
+    assert p["tip"] == "No spec — 1/3"
+
+
+def test_the_board_summary_serves_the_no_spec_count(hub, monkeypatch):
+    monkeypatch.setattr(hub, "read_moves", lambda: {})
+    monkeypatch.setattr(hub, "save_board", lambda: None)
+    monkeypatch.setattr(hub.time, "time", lambda: NOW)
+    monkeypatch.setattr(hub, "board_cache", {"t": 1.0, "rt": 1.0, "err": None, "lc": {}, "prs": [], "errs": [], "cases": [],
+                                             "items": [dict(i, i=f"PVT_{i['n']}") for i in NOSPEC]})
+    assert hub.board()["sum"]["none"] == {"closed": 1, "total": 3}

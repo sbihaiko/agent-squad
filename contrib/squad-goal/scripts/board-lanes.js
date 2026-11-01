@@ -78,7 +78,7 @@ groups.forEach(g=>g.items.forEach(x=>{if(x.sp){if(!ends.has(g.name)&&!specs.has(
   const[id,meta]=goneSpecs.has(x.pa)?(mode==="wave"?waveLane(null,laneWaveOf(x)):["none",{kind:"none",title:"No spec"}]):laneOf(x),l=ensure(id,meta);l.all.push(x);if(!ends.has(x.col)&&boardOk(x,fw,fs,fk)&&text(x))l.vis.push(x)});   // a closed status is history: its cards count for progress, never for a card, a count or the search (#969)
   const shown=[...lanes.values()].filter(l=>l.vis.length>0||(!hasFilter&&l.kind==="s"));
   shown.forEach(l=>{l.n=l.vis.length;l.total=l.all.length;l.closed=l.all.filter(x=>x.col===closed).length;
-    const s=l.kind==="s"?sumSpec.get(l.num):l.kind==="sw"?sumWave.get(sumKey(l.num,l.wave)):null;   // a closed row is never served: the summary counts it (#972)
+    const s=l.kind==="s"?sumSpec.get(l.num):l.kind==="sw"?sumWave.get(sumKey(l.num,l.wave)):l.kind==="none"?o.sum?.none:null;   // No spec: open cards plus the last seven days closed, counted by the hub (owner)   // a closed row is never served: the summary counts it (#972)
     if(s){l.closed=s.closed;l.total=s.total}
     const m=/^(\d+)\/(\d+)$/.exec(String(l.sc||""));   // a closed ticket never reaches the board with its parent, so the count comes from the spec card
     if(l.kind==="s"&&m){l.closed=+m[1];l.total=+m[2]}
