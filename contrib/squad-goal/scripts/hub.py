@@ -4360,7 +4360,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 @media (max-width:600px){body{height:auto}body.tkopen #win{margin-right:0}body.tkopen #board{width:auto}#win{display:block;overflow:visible}body.dockb #win{display:block;grid-template-columns:none;grid-template-rows:none}#side{width:auto;border-right:0;border-bottom:1px solid var(--line)}body.dockb #side{grid-row:auto;grid-column:auto}#main{min-height:50vh}body.dockb #main{grid-column:auto;grid-row:auto}#board{width:auto}body.dockb #board{grid-column:auto;grid-row:auto;height:60vh}#lbody input{width:92px}}
 /* The page frame of the mock (#889): the header with its tabs, and the sidebar cards. */
 /* The loop switch (#923): the strip's draining and starting states, Settings > Loop and Access, and the stop confirm. */
-#lopb .ls.draining,#lopb .ls.starting{color:var(--warn)}#iloop .ls,#lopb .ls{font-weight:600}#iloop .ls.on{color:var(--ok)}#iloop .ls.off{color:var(--warn)}#iloop .ls.draining,#iloop .ls.starting{color:var(--warn)}#iloop small{color:var(--mute)}#loopbtn{padding:2px 10px;font-size:var(--fs-min)}#loopbtn:disabled{opacity:.6;cursor:default}#lopb .ls.on{color:var(--ok)}#lopb .ls.off{color:var(--warn)}
+#lopb .ls.draining,#lopb .ls.starting{color:var(--warn)}#lopb .ls{font-weight:600}#loopbtn{padding:2px 10px;font-size:var(--fs-min)}#loopbtn:disabled{opacity:.6;cursor:default}#lopb .ls.on{color:var(--ok)}#lopb .ls.off{color:var(--warn)}
 #lopb .lnow{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#10141a;margin:6px 0}#lopb .lnow small{display:block;color:var(--mute)}#lopb .lnow button{margin-left:auto}
 #lopb .lwhy{color:var(--warn);margin:4px 0}#lopb .lerr{color:var(--err);margin:4px 0}#lopb ul.laud{list-style:none;margin:4px 0 0;padding:0}#lopb ul.laud li{padding:4px 0;border-bottom:1px solid var(--line)}#lopb ul.laud li:last-child{border:0}
 #accb .kr b{font-weight:500;font-size:var(--fs-min);line-height:1.3;text-align:right}#accb .ok{color:var(--ok)}#accb .no{color:var(--warn)}#accb p{color:var(--mute);margin:8px 0 0}
@@ -4427,7 +4427,7 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 <div id=win>
 <aside id=side>
 <details id=stats class=sp><summary>Cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><div class="igs isub" id=isub title="subscriptions: the used share of the weekly window and the days to its reset"></div><h4>Spend <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Figures at API list prices (API-equivalent)."></span></h4><div class=tot id=tot></div><div class=irw id=burn><span>Tokens · 24 h</span><b></b></div><div class=cash id=cash></div><h4>Spend over time <span class=row id=per></span></h4><div id=chart></div><div id=kpi></div><div id=open></div><h4>Model tokens · this month</h4><div class=m id=piet>in + out</div><div id=pie></div></div></details>
-<details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div class=ian id=ian></div><div id=ispec></div><div id=iloop></div><div id=ispeed></div><div id=ilate></div></div></details>
+<details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div class=ian id=ian></div><div id=ispec></div><div id=ispeed></div><div id=ilate></div></div></details>
 <details id=lrd class=sp open><summary>Live runs<span class=sr id=lrs></span></summary><div class=sb id=lrun></div></details>
 </aside>
 <main id=content>
@@ -5310,7 +5310,6 @@ const loopTip=v=>!v.write?v.reason:v.state==="on"?"stop after the live runs and 
 const loopB=v=>`<button data-loop${v.write&&v.state!=="starting"?"":" disabled"} title="${esc(loopTip(v))}">${loopBtn(v)}</button>`;
 const loopAct=e=>e.failed?`${String(e.action||"")} failed: ${e.failed}`:e.action==="drain"?"stop after the live runs and gates finish":e.action==="stop-now"?`stop now${e.killed?` (killed ${(e.killed.runs||[]).length} runs, ${(e.killed.gates||[]).length} gates${e.survived?`; ${(e.survived.runs||[]).length+(e.survived.gates||[]).length} not ended`:""})`:""}`:String(e.action||"");
 const loopRun=r=>String(r).split("/").filter(Boolean).pop()||String(r);
-const loopCardHtml=v=>`<div class=irw id=loopst title="${esc(v.state+(v.who?` · changed by ${v.who} at ${loopWhen(v.when)}`:""))}"><span>Loop: <span class="ls ${esc(v.state)}">${esc(v.state)}</span>${loopBy(v)?` <small>${esc(loopBy(v))}</small>`:""}</span>${loopB(v).replace("<button ","<button id=loopbtn ")}</div>`;
 const loopSetHtml=v=>`<div class=lnow><span><span class="ls ${esc(v.state)}">Loop: ${esc(v.state)}</span><small>${v.who?`changed by ${esc(v.who)} at ${esc(loopWhen(v.when))}`:"no change from the hub yet"}${v.state==="draining"?` · ${v.live.runs.length+v.live.gates.length} live to finish`:""}</small></span>${loopB(v)}</div>`
  +(v.write?"":`<div class=lwhy>${esc(v.reason)}. The rule is in Access.</div>`)+(v.failed?`<div class=lerr role=alert>The last start failed: ${esc(v.failed)}</div>`:"")+(loopErr?`<div class=lerr role=alert>${esc(loopErr)}</div>`:"")
  +`<p class=m>A stop drains by default: no new dispatch, the live runs and gates finish, then the loop stops. Each change writes one line to the change log.</p>`
@@ -5328,10 +5327,9 @@ const accHtml=v=>{const a=v.access||{},yn=x=>x?"<span class=ok>allowed</span>":"
  +`<div class=kr><span class=l>Phone check</span><b><code>/agent-squad:start-mobile</code></b></div>`
  +`<p>Read here; the owner sets them in the project file or <code>.env</code> on the machine (ADR-0152, ADR-0162). A write the tailnet refuses still works from this machine.</p>`};
 // loop-switch:end
-function instLoopDraw(){const e=$("#iloop");if(!e||!loopV)return;const h=loopCardHtml(loopV);if(e.dataset.h!==h){e.dataset.h=h;e.innerHTML=h}}
 function loopDraw(){if(!loopV)return;const b=$("#lopb"),h=loopSetHtml(loopV);if(b.dataset.h!==h){b.dataset.h=h;b.innerHTML=h}
  const c=$("#accb"),ah=accHtml(loopV);if(c.dataset.h!==ah){c.dataset.h=ah;c.innerHTML=ah}
- $("#lopsr").textContent=`${loopV.state}${loopV.who?` · ${loopV.who} · ${loopWhen(loopV.when)}`:""}`;instLoopDraw()}
+ $("#lopsr").textContent=`${loopV.state}${loopV.who?` · ${loopV.who} · ${loopWhen(loopV.when)}`:""}`}
 async function loopPoll(){try{loopV=await (await fetch("/api/loop")).json();loopDraw()}catch(e){}}
 async function loopPost(body){loopErr="";try{const r=await fetch("/api/loop",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}),d=await r.json();if(!r.ok)loopErr=d.reason||d.err||"refused"}catch(e){loopErr="the hub did not answer"}
  await loopPoll();loopDraw()}
