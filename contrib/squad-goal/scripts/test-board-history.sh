@@ -31,7 +31,9 @@ grep -q "^fact GraphQL 5/" "$T/out.txt" && ok "the Monitor fact reports the coun
 grep -q '^other 0$' "$T/out.txt" && ok "the second repository's file holds nothing from the first" || ko "mixed: $(cat "$T/out.txt")"
 
 grep -q "board_history" "$here/hub.py" && ok "the hub loads the module" || ko "hub.py does not load board_history"
-grep -q 'instTile("GraphQL"' "$here/hub.py" \
-  && ko "the Monitor still draws a GraphQL points tile" || ok "the Monitor draws no GraphQL tile; the points stay in the store"
+grep -q 'budget_fact(_hist.history_path' "$here/hub.py" \
+  && ok "the Monitor facts carry the GraphQL points" || ko "the Monitor facts do not carry the GraphQL points"
+! grep -q 'instTile("GraphQL"' "$here/hub.py" \
+  && ok "the card draws no GraphQL tile (removed by the owner)" || ko "the card draws a GraphQL tile the owner removed"
 
 rm -rf "$T"; exit $fail

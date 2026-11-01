@@ -3489,6 +3489,13 @@ def flow_cfd(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
 def flow_lead(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
     return chart("lead", (board_cache.get("t"), tuple(fw), tuple(fs), tuple(fk), ty), lambda: _lead_payload(fw, fs, fk, ty))
 
+def flow_burnup(spec):
+    """One spec's burn-up for its swimlane (#1025); the cache holds it until the repository's history store changes."""
+    path = _hist.history_path(BOARD, REPO)
+    try: stamp = path.stat().st_mtime_ns
+    except OSError: stamp = None
+    return chart(f"burnup-{spec}", (str(path), stamp), lambda: _hist.burnup(_hist.load_store(path), spec))
+
 
 def drawn_column(i, moves, window):
     """The column the served board draws for one row, the freeze that column carries, and what the serve acts on:
@@ -4055,7 +4062,7 @@ body.tkopen #win{margin-right:420px}
 #tkb pre{white-space:pre-wrap;overflow-wrap:anywhere;font:var(--fs-min)/1.45 ui-monospace,Menlo,monospace;background:#12161c;border:1px solid var(--line);border-radius:6px;padding:8px 10px;margin:6px 0}
 #tkb h3{font-size:var(--fs-min);color:var(--mute);margin:14px 0 4px}#tkb .cm{border-left:3px solid var(--acc);padding-left:8px;margin:8px 0}
 #tkb .bar button{min-width:28px}#tkb .bar button:disabled{opacity:.35;cursor:default}#tkb .bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}#tkb a.gh{color:var(--acc);font-weight:700}
-#bbody .it{cursor:pointer}#bbody .it.hit{box-shadow:0 0 0 2px var(--warn)}#bbody .it.hl{box-shadow:0 0 0 2px var(--acc)}#bbody .it.dim{opacity:.35}#list .r.hlr{outline:2px solid var(--acc);outline-offset:-2px}.hlrel{color:var(--acc);font-size:var(--fs-min);margin-left:6px}.hlrel[hidden]{display:none}.ghl{color:var(--mute);margin-left:6px;display:inline-flex;align-items:center;opacity:.65;text-decoration:none}.ghl:hover,.ghl:focus-visible{opacity:1;color:var(--fg)}   /* the cards the sheet's Highlight related marks (#919) */
+#bbody .it{cursor:pointer}#bbody .bu{font:inherit;font-size:11px;margin-left:6px;padding:0 6px;border:1px solid currentColor;border-radius:4px;background:none;color:inherit;cursor:pointer}#bbody .bupanel{padding:6px 10px}#bbody .bupanel svg{width:100%;height:auto}#bbody .bunote{font-size:12px;opacity:.75}#bbody .bumarks{font-size:11px;opacity:.8;max-height:7em;overflow:auto;margin:4px 0 0;padding-left:16px}#bbody .it.hit{box-shadow:0 0 0 2px var(--warn)}#bbody .it.hl{box-shadow:0 0 0 2px var(--acc)}#bbody .it.dim{opacity:.35}#list .r.hlr{outline:2px solid var(--acc);outline-offset:-2px}.hlrel{color:var(--acc);font-size:var(--fs-min);margin-left:6px}.hlrel[hidden]{display:none}.ghl{color:var(--mute);margin-left:6px;display:inline-flex;align-items:center;opacity:.65;text-decoration:none}.ghl:hover,.ghl:focus-visible{opacity:1;color:var(--fg)}   /* the cards the sheet's Highlight related marks (#919) */
 #tkb h2{font:600 var(--fs-md)/1.35 -apple-system,system-ui,sans-serif;margin:4px 0 8px}
 #tkb .md{font:var(--fs-body)/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;color:#d8dde6;overflow-wrap:anywhere}
 #tkb .md>:first-child{margin-top:0}#tkb .md p{margin:.6em 0}#tkb .md h2,#tkb .md h3,#tkb .md h4,#tkb .md h5{font-weight:600;margin:1.3em 0 .4em;line-height:1.3;color:#eef1f6}
@@ -4948,6 +4955,21 @@ const cards=(g,it,shown)=>{const GHI='<svg viewBox="0 0 16 16" width="13" height
 // collapsed one is accounted for by a line at the foot of the hidden: strip. Which columns those are is derived on
 // every render -- from the filtered count, the user's hidden set and the set the line's eye added -- and never
 // stored, so a card appearing brings the column back on its own and the last one leaving collapses it again (#1809).
+// A spec's burn-up (#1025): its panel opens from the spec lane's header. The hub answers the lines; the page draws them and counts nothing.
+const BU={open:{},data:{},raw:{}};
+const buDay=t=>String(t||"").slice(0,10);
+function buChart(d){const pts=d.points||[];if(!pts.length)return `<div class=bunote>no change in this spec's scope is recorded yet</div>`;
+ const W=600,H=170,P=22,top=Math.max(1,...pts.map(p=>p.scope)),t0=Date.parse(pts[0].t),span=(Date.parse(pts[pts.length-1].t)-t0)||1;
+ const X=t=>(P+(W-2*P)*(Date.parse(t)-t0)/span).toFixed(1),Y=v=>(H-P-(H-2*P)*v/top).toFixed(1);
+ const line=k=>pts.flatMap((p,i)=>i?[[X(p.t),Y(pts[i-1][k])],[X(p.t),Y(p[k])]]:[[X(p.t),Y(p[k])]]).map(q=>q.join(",")).join(" ");
+ const marks=pts.filter(p=>p.marks.length).map(p=>`<circle cx="${X(p.t)}" cy="${Y(p.scope)}" r="3" fill="currentColor"><title>${esc(p.marks.map(m=>m.k+" #"+m.n).join(", "))}</title></circle>`).join("");
+ const log=pts.flatMap(p=>p.marks.map(m=>`<li>${esc(buDay(p.t))} ${esc(m.k)} #${m.n}</li>`)).slice(-30).join("");
+ const last=pts[pts.length-1];
+ return `<svg viewBox="0 0 ${W} ${H}" role=img aria-label="burn-up of SPEC ${d.spec}"><polyline fill=none stroke=#79b8ff stroke-width=2 points="${line("scope")}"/><polyline fill=none stroke=#5fd38d stroke-width=2 points="${line("done")}"/><polyline fill=none stroke=#f5b041 stroke-width=1.5 stroke-dasharray="4 3" points="${line("held")}"/>${marks}</svg>`
+  +`<div class=bunote>scope ${last.scope} · done ${last.done} · held ${last.held} (blue scope, green done, dashed amber held)</div><ul class=bumarks>${log}</ul>`}
+const buPanel=n=>{const d=BU.data[n];return `<div class=bupanel data-bu-panel="${n}">${!d?`<div class=bunote>loading…</div>`:d.err?`<div class=bunote>${esc(d.err)}</div>`:buChart(d)}</div>`};
+async function buFetch(n){try{const d=await (await fetch("/api/chart/burnup?spec="+n)).json(),s=JSON.stringify(d);if(BU.raw[n]!==s){BU.raw[n]=s;BU.data[n]=d;pollBoard()}}catch(e){}}
+function buToggle(n){BU.open[n]=!BU.open[n];if(BU.open[n]){delete BU.raw[n];buFetch(n)}else delete BU.data[n];pollBoard()}
 const laneHtml=m=>{const ccount=c=>m.lanes.reduce((s,l)=>s+(l.counts[c]||0),0),pct=l=>l.total?Math.round(l.closed/l.total*100):0;
  if(!m.lanes.length)return `<div class=lempty>${f?"No card matches this search.":"No card on the board."}</div>`;
  let h=`<div class=lgrid style="--vc:${Math.max(1,m.vc.length)}">`+m.vc.map(c=>`<div class=lcolh style="--cc:${colOf(c,CN)}"><span>${esc(c)}</span><b>${ccount(c)}</b>${eye({name:c})}</div>`).join("");
@@ -4955,8 +4977,9 @@ const laneHtml=m=>{const ccount=c=>m.lanes.reduce((s,l)=>s+(l.counts[c]||0),0),p
    lid=l.kind==="s"?"SPEC "+l.num:bugs?"Loop bugs":l.title,ltt=l.kind==="s"?l.title:bugs?"defects of the loop itself: they halt dispatch, never a landing (ADR-0146)":l.kind==="none"?"bugs and single tickets":"";   // the lane reads as the mock: a coloured id, then its title or its subtitle (#889)
   h+=`<section class="lane${cl?" coll":""}${l.kind==="bugs"?" alarm":""}${l.done?" done":""}" data-lane="${esc(l.id)}" style="--lc:${lc}"><header class=lh role=button tabindex=0 aria-expanded="${!cl}" data-lane="${esc(l.id)}"><span class=tw>${cl?"&#9656;":"&#9662;"}</span>`
     +`<span class="lid${l.kind==="sw"?" sw":""}">${l.kind==="sw"?`<span class=sid>${esc(l.sid)}</span> · ${esc(l.wl)}`:esc(lid)}</span>`+(ltt?`<span class="ltt${l.kind==="s"?"":" subt"}">${esc(ltt)}</span>`:"")
-    +(l.kind==="s"||l.kind==="none"?`<span class=bar title="${l.closed} of ${l.total} closed"><i style="width:${pct(l)}%"></i></span><span class=pc>${l.closed}/${l.total}</span>`+(l.st?`<span class=lst>${esc(l.st)}</span>`:"")+(l.kind==="s"?`<a class=ghl target=_blank rel=noopener title="open SPEC ${l.num} on GitHub" aria-label="open SPEC ${l.num} on GitHub" href="https://github.com/${esc(l.r||"__REPO__")}/issues/${l.num}"><svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg></a>`:""):"")
+    +(l.kind==="s"||l.kind==="none"?`<span class=bar title="${l.closed} of ${l.total} closed"><i style="width:${pct(l)}%"></i></span><span class=pc>${l.closed}/${l.total}</span>`+(l.st?`<span class=lst>${esc(l.st)}</span>`:"")+(l.kind==="s"?`<button class=bu data-bu="${l.num}" aria-expanded="${!!BU.open[l.num]}" title="burn-up of SPEC ${l.num}">burn-up</button><a class=ghl target=_blank rel=noopener title="open SPEC ${l.num} on GitHub" aria-label="open SPEC ${l.num} on GitHub" href="https://github.com/${esc(l.r||"__REPO__")}/issues/${l.num}"><svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg></a>`:""):"")
     +`<span class=sum>${cl?m.cols.filter(c=>l.counts[c]).map(c=>`<span>${esc(c)} <b>${l.counts[c]}</b></span>`).join(""):""}</span></header>`;
+  if(!cl&&l.kind==="s"&&BU.open[l.num])h+=buPanel(l.num);
   if(!cl)for(const c of m.vc){const key=l.id+"|"+c,v=cellView(l.cells[c],!!(bo.cx||{})[key]);h+=`<div class=cell data-lane="${esc(l.id)}" data-col="${esc(c)}">${cards({name:c},v.shown,v.shown)}${v.more?`<button class=more data-cell="${esc(key)}" title="show every card of this cell">+${v.more} more</button>`:""}</div>`}
   h+="</section>"}
  return h+"</div>"};
@@ -4982,7 +5005,7 @@ $("#lmode").value=bo.lmode||"spec";$("#bbody").classList.toggle("lanes",!!model)
 $("#lhc").innerHTML=model&&model.hc.length?`<button class=hcpill id=lhcx title="columns with no card in an expanded lane: click to expand the lanes that hold their cards">+${model.hc.length} hidden: ${model.hc.map(x=>x.user?`<span class=hcu data-eye="${esc(x.name)}" title="show this column">${esc(x.name)} <b>${x.count}</b></span>`:esc(x.name)+" <b>"+x.count+"</b>").join(" · ")}</button>`:"";
 if(lanesHtml!==null){if($("#bbody").dataset.h!==lanesHtml){$("#bbody").dataset.h=lanesHtml;$("#bbody").innerHTML=lanesHtml;restore()}}
 else if($("#bbody").dataset.h!==html){$("#bbody").dataset.h=html;$("#bbody").innerHTML=html;restore()}   // same cards: leave the DOM alone, so a scroll in progress is never interrupted
-boardRows=all.flatMap(g=>g.items);paintHL();
+boardRows=all.flatMap(g=>g.items);paintHL();Object.keys(BU.open).forEach(n=>BU.open[n]&&buFetch(n));
 }catch(e){}finally{lim.busy=0}}
 // highlight:begin
 // The highlight follows the selection and is never stored: `hl` is {run: id} for a run, or {n, r, kind} for a card. Its
@@ -5091,7 +5114,7 @@ let lanesNow=null;   // the model the board last drew: the controls act on its l
 $("#lhd").onchange=e=>{bo.hideDone=e.target.checked;saveB();pollBoard()};
 const laneSet=v=>{bo.lc=bo.lc||{};for(const l of(lanesNow?lanesNow.lanes:[]))bo.lc[l.id]=v;saveB();pollBoard()};
 $("#lcall").onclick=()=>laneSet(true);$("#lexp").onclick=()=>laneSet(false);
-document.addEventListener("click",e=>{if(e.target.closest(".ghl"))return;const h=e.target.closest("#bbody .lh");if(h){const id=h.dataset.lane,coll=h.closest(".lane").classList.contains("coll");bo.lc=bo.lc||{};laneToggle(id,coll);return}
+document.addEventListener("click",e=>{if(e.target.closest(".ghl"))return;const bu=e.target.closest("#bbody .bu");if(bu){buToggle(bu.dataset.bu);return}const h=e.target.closest("#bbody .lh");if(h){const id=h.dataset.lane,coll=h.closest(".lane").classList.contains("coll");bo.lc=bo.lc||{};laneToggle(id,coll);return}
  const m=e.target.closest("#bbody .more");if(m){bo.cx=bo.cx||{};bo.cx[m.dataset.cell]=true;saveB();pollBoard();return}   // a more click opens its own cell only
  const p=e.target.closest("#lhcx");if(p&&lanesNow){const names=new Set(lanesNow.hc.map(x=>x.name));bo.lc=bo.lc||{};   // a hidden column's pill expands the lanes that hold its cards
   for(const l of lanesNow.lanes)if(l.collapsed&&Object.keys(l.counts).some(c=>names.has(c)))bo.lc[l.id]=false;saveB();pollBoard()}});
@@ -6147,6 +6170,9 @@ class H(BaseHTTPRequestHandler):
             self.board_etag = etag
         elif self.path.startswith("/api/chart/cfd"): body, ct = json.dumps(flow_cfd(*board_filters(self.path.partition("?")[2]))).encode(), "application/json"
         elif self.path.startswith("/api/chart/lead"): body, ct = json.dumps(flow_lead(*board_filters(self.path.partition("?")[2]))).encode(), "application/json"
+        elif self.path.startswith("/api/chart/burnup"):
+            m = re.search(r"[?&]spec=(\d{1,6})\b", self.path)
+            body, ct = json.dumps(flow_burnup(int(m[1])) if m else {"err": "bad spec"}).encode(), "application/json"   # the spec lane's burn-up (#1025)
         elif self.path.startswith("/api/leadtime"): body, ct = json.dumps(lead_zoom(self.path.partition("?")[2])).encode(), "application/json"   # the control chart over a dragged range (#900)
         elif self.path.startswith("/api/version"): body, ct = json.dumps({"v": BOOT}).encode(), "application/json"
         elif self.path.startswith("/api/subs"): body, ct = json.dumps({**subs_month(), "presets": {k: {i: {"name": n, "usd": p} for i, (n, p) in v.items()} for k, v in PRESETS.items()}}).encode(), "application/json"
