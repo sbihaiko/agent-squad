@@ -175,12 +175,12 @@ const GROUPS=[["running","WORKERS"]],groupOf=r=>"running",groupHeader=()=>({text
 let openGroups=new Set(["running"]);const saveGroups=()=>{},save=()=>{};
 let N=1,focus=null,slots=[],pins=new Set(),allRuns=__RUNS__,runs=allRuns.filter(r=>r.kind!=="childcc");
 const refresh=()=>{};
-let hl=null;const paintHL=()=>{};
+let hl=null,opened=null;const paintHL=()=>{},openRun=id=>{opened=id};
 __DRAW__
 drawList();
 const ids=[...HTML.list.matchAll(/data-id="([^"]+)"/g)].map(m=>m[1]);
 const clicked="__CLICK__";if(clicked&&CLICK[clicked])CLICK[clicked]();
-console.log(JSON.stringify({ids,pins:[...pins],cc:/class="r cc[^>]*>/.exec(HTML.list)[0]}));
+console.log(JSON.stringify({ids,pins:[...pins],opened,cc:/class="r cc[^>]*>/.exec(HTML.list)[0]}));
 """.replace("__RUNS__", json.dumps(all_runs)).replace("__DRAW__", _draw_list(hub)).replace("__CLICK__", click or "")
     assert NODE, "node is not installed: the hub page's own drawList is run here"
     p = subprocess.run([NODE, "-"], input=js, capture_output=True, text=True, timeout=30)
@@ -199,7 +199,7 @@ def _cc(held):
 def test_a_click_on_the_childcc_row_selects_the_run_it_holds(hub):
     out = _page(hub, [_cc(HELD["id"]), HELD], click=HELD["id"])
     assert f'data-id="{HELD["id"]}"' in out["cc"], "the childcc row carries no id of the run it holds"
-    assert out["pins"] == [HELD["id"]], "a click on the childcc row selects nothing"
+    assert out["opened"] == HELD["id"], "a click on the childcc row opens no run sheet (#984)"
 
 
 def test_the_childcc_row_is_never_a_pane(hub):
