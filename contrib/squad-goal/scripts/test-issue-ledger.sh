@@ -141,8 +141,10 @@ BI() { L read "$1" board | python3 -c 'import json,sys; print(json.load(sys.stdi
 I1=$(BI 'x/y#21')
 [ "$(L board 'x/y#21' run-a Doing /req/a)" = duplicate ] && [ "$(BI 'x/y#21')" = "$I1" ] \
   && ok "a retried board event is a duplicate and keeps its first instant" || ko "board duplicate: '$(L read 'x/y#21' board)'"
-[ "$(L boardw 'x/y#21' run-a Doing)" = written ] && [ "$(B 'x/y#21')" = "run-a Doing written" ] && [ -z "$(L pending 'x/y#21')" ] \
+[ "$(L boardw 'x/y#21' run-a Doing "autobug dispatch")" = written ] && [ "$(B 'x/y#21')" = "run-a Doing written" ] && [ -z "$(L pending 'x/y#21')" ] \
   && ok "a landed card write marks its event written" || ko "boardw: '$(L read 'x/y#21' board)'"
+[ "$(L read 'x/y#21' board | python3 -c 'import json,sys; b=json.load(sys.stdin); print(b["by"], isinstance(b["landed"], float))')" = "autobug dispatch True" ] \
+  && ok "a landed card write names its actor and its landing instant" || ko "landed by: '$(L read 'x/y#21' board)'"
 [ "$(L boardw 'x/y#21' run-a Doing)" = duplicate ] && ok "a repeated write confirmation is a duplicate" || ko "boardw duplicate"
 L board 'x/y#22' run-b Doing /req/b 200 >/dev/null
 [ "$(L board 'x/y#22' run-a Todo /req/a 100)" = stale ] && [ "$(B 'x/y#22')" = "run-b Doing pending" ] \

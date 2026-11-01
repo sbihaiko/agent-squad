@@ -3,7 +3,7 @@
 usage: hub.py [port]   default 7700, loopback only. Read-only: it discovers servers via ps/lsof and reads record.jsonl."""
 import datetime as dt, glob, hashlib, html, importlib.util, itertools, json, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, pathlib, urllib.parse, urllib.request
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
-import agyquota, chainhealth, ghread, ghthrottle, modelreg, provkey, session_send, sessions   # the chains and the one registry resolve a model (ADR-0147); ghread is the one GitHub door (ADR-0277)
+import agyquota, board_lag, chainhealth, ghread, ghthrottle, modelreg, provkey, session_send, sessions   # the chains and the one registry resolve a model (ADR-0147); ghread is the one GitHub door (ADR-0277)
 from issue_state import board_state, KINDS, TEST_CASE_TITLE, _utc
 import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -2041,6 +2041,15 @@ def subs_gauges(now=None):
         out.append(row)
     return out
 
+_LATE = {"at": 0.0, "v": None}
+LATE_SECS = 30   # the late-writes row reads the ledger at most this often: /api/load is polled on every open tab
+
+def late_payload():
+    """The Monitor's late-writes row: each board write that landed after its event, by the actor that landed it (#1022)."""
+    now = time.time()
+    if _LATE["v"] is None or now - _LATE["at"] > LATE_SECS: _LATE.update(at=now, v=board_lag.payload(REPO))
+    return _LATE["v"]
+
 def load_payload():
     """What /api/load serves: the cached reading, never a fresh one, so three open tabs cost three JSON bodies and no
     sample. `cpu` is the newest reading, `warn` is the two-sample rule over the history, `runs` the shares the cards use,
@@ -2056,6 +2065,7 @@ def load_payload():
             "specs": spec_progress(board_cache.get("items") or []),   # the open specs' total, off the board cache: no GitHub read
             "subs": subs_gauges(),   # the Monitor's subscription instruments: each weekly window and its reset, off the quota cache
             "speed": throughput_fact(),   # the Monitor's throughput row: today against the finished days
+            "late": late_payload(),   # the Monitor's late-writes row: the rows and their lag by actor, off the ledger (#1022)
             "secs": LOAD_SAMPLE_SECS, "asof": LOAD_STATE.get("asof", 0.0)}
 
 def status_payload():
@@ -4253,7 +4263,7 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 <div id=win>
 <aside id=side>
 <details id=stats class=sp><summary>Cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><div class="igs isub" id=isub title="subscriptions: the used share of the weekly window and the days to its reset"></div><h4>Spend <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Figures at API list prices (API-equivalent)."></span></h4><div class=tot id=tot></div><div class=m id=totnote></div><div class=irw id=burn><span>Tokens · 24 h</span><b></b></div><div class=cash id=cash></div><h4>Spend over time <span class=row id=per></span></h4><div id=chart></div><div id=kpi></div><div id=open></div><h4>Model tokens · this month</h4><div class=m id=piet>in + out</div><div id=pie></div></div></details>
-<details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div class=ian id=ian></div><div id=ispec></div><div id=iloop></div><div id=ispeed></div></div></details>
+<details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div class=ian id=ian></div><div id=ispec></div><div id=iloop></div><div id=ispeed></div><div id=ilate></div></div></details>
 <details id=lrd class=sp open><summary>Live runs<span class=sr id=lrs></span></summary><div class=sb id=lrun></div></details>
 </aside>
 <main id=content>
@@ -4373,12 +4383,13 @@ function specBar(p){p=p||{};const st=p.state==="ok"||p.state==="info"?" "+p.stat
  return `<div class="at${st}"${p.tip?` title="${iq(p.tip)}"`:""}><span class=ah><span class=dot aria-hidden="true"></span>Specs${p.so?`<span class=so>${esc(p.so)}</span>`:""}</span><span class=av>${esc(p.value||"no open spec")}</span>${bar}</div>`}
 let instLast={};
 function instSet(id,h){const e=$("#"+id);if(e&&instLast[id]!==h){instLast[id]=h;e.innerHTML=h}}
+function lateRows(l){const rs=(l||{}).rows||[];if(!rs.length)return `<div class="spd none"><b>Late writes</b><span class=spn>none</span></div>`;return `<div class=spd><b>Late writes</b><span class=spn>corrections: ${esc((l||{}).store||"?")}</span>${rs.map(r=>`<div class=spn><b>${esc(r.actor)}</b> ${esc(r.text)}</div>`).join("")}</div>`}
 function instDraw(d){const c=$("#inst");if(!c)return;const facts=(d||{}).facts||[];c.classList.toggle("warn",!!(d||{}).warn);
  const gs=$("#igs");if(gs&&!gs.children.length)gs.innerHTML=instGauges(d);
  else if(gs)ldCells(d).forEach((x,i)=>{const n=gs.children[i],g=gaugeGeom((d||{})[x.k.toLowerCase()]);if(!n)return;n.classList.toggle("ldred",x.red);
   const ln=n.querySelector(".gn"),f=n.querySelector(".gf"),v=n.querySelector(".gv");
   if(ln){ln.style.transform=`rotate(${g.deg}deg)`;ln.setAttribute("visibility",g.known?"visible":"hidden")}if(f){f.setAttribute("d",`M4 32 A26 26 0 0 1 ${g.x} ${g.y}`);f.setAttribute("stroke",g.col)}if(v)v.innerHTML=`<b>${x.k}</b> ${esc(x.t)}`});
- instSet("ian",instTiles(facts).map(tileHtml).join(""));instSet("isub",subsGauges(d||{}));instSet("ispec",specBar((d||{}).specs));instSet("ispeed",speedRow((d||{}).speed));
+ instSet("ian",instTiles(facts).map(tileHtml).join(""));instSet("isub",subsGauges(d||{}));instSet("ispec",specBar((d||{}).specs));instSet("ispeed",speedRow((d||{}).speed));instSet("ilate",lateRows((d||{}).late));
  const u=instUsage(facts);instSet("burn",u?`<span>Tokens · 24 h</span><b class=bad>${esc(u.tok)}</b>`:"<span>Tokens · 24 h</span><b>no reading</b>");
  const s=$("#instsr");if(s)s.textContent=instSum(facts);
 }
