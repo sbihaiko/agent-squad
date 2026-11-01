@@ -79,7 +79,7 @@ def test_a_missing_reading_draws_no_needle_and_a_high_one_is_clamped(hub):
 def test_a_gauge_fill_runs_from_green_to_red_with_its_reading(hub):
     """The owner: the gauge arc takes the quota bars' scale, green when idle and red at the top."""
     g = _run(hub, "[0,50,100,null].map(gaugeGeom).map(x=>x.col)")
-    assert g == ["hsl(120 65% 42%)", "hsl(60 65% 42%)", "hsl(0 65% 42%)", "var(--line)"]
+    assert g == ["hsl(120 65% 42%)", "hsl(60 65% 42%)", "hsl(0 65% 42%)", "none"]
     html = _run(hub, 'instGauges({cpu:0,ram:100,gpu:null})')
     assert 'stroke="hsl(120 65% 42%)"' in html and 'stroke="hsl(0 65% 42%)"' in html
 
