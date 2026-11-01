@@ -22,6 +22,7 @@ usage: issue_ledger.py read  <key> [state|count|last_fail|held|wave]  the record
        issue_ledger.py coder <key>                           the places down the coder chain the next attempt starts
        issue_ledger.py board <key> <run> <column> <req> [instant]  one board write of a dispatch: prints recorded|duplicate|stale|floor
        issue_ledger.py boardw <key> <run> <column>           that write landed: prints written|duplicate|superseded
+       issue_ledger.py boardx <key> <run> <column>           the pending write is dropped unwritten: prints dropped|superseded
        issue_ledger.py pending <key|owner/repo>              "<n>\t<run>\t<column>\t<instant>\t<req>" for each board write not yet landed
 
 This module is the only writer of $SG_STATE/state/<owner>__<repo>__<n>.json. The key is <owner>/<repo>#<n>, the address
@@ -55,7 +56,7 @@ that requeued it is not tried again on the same head (the old auto/requeued-<run
 
 A `board` fact is one card write of a dispatch (ADR-0164): `{run, column, instant, state, req}`. Its identity is the run and the
 column, and its instant is the event's own time, set once when the event is first recorded. `board` records the event `pending`
-before the card write; `boardw` marks it `written` when the write lands. A retry of the same event is a duplicate and keeps its
+before the card write; `boardw` marks it `written` when the write lands, and `boardx` drops it unwritten when the gates no longer back it. A retry of the same event is a duplicate and keeps its
 first instant and its state; an event older than the fact is `stale`, so a late delivery never overwrites a newer one; a write
 for an event the fact no longer holds is `superseded`. `pending` lists what has not landed, so a dispatch that crashed between
 the event and its write finds the event and resumes it with the stored request.
@@ -350,8 +351,15 @@ def _boardw(rec, ev):   # -> (written|duplicate|superseded, changed): the card w
     return "written", True
 
 
+def _boardx(rec, ev):   # -> (dropped|superseded, changed): a pending event the gates no longer back is dropped, never written
+    old = rec.get("board") or {}
+    if (old.get("run"), old.get("column")) != (ev["run"], ev["column"]) or old.get("state") != "pending": return "superseded", False
+    rec["board"] = {**old, "state": "dropped"}
+    return "dropped", True
+
+
 RULES = {"fail": _fail, "stop": _stop, "wave": _wave, "landed": _landed, "requeue": _requeue, "review": _review,
-         "rearm": _rearm, "migrate": _migrate, "board": _board, "boardw": _boardw}
+         "rearm": _rearm, "migrate": _migrate, "board": _board, "boardw": _boardw, "boardx": _boardx}
 
 
 def transition(key, ev):   # the one transition function (ADR-0149): every event of every writer, under the issue's lock
@@ -425,6 +433,10 @@ def board(key, run, column, req="", instant=None):   # -> recorded|duplicate|sta
 
 def boardw(key, run, column):   # -> written|duplicate|superseded: the card write of the event landed
     return transition(key, {"op": "boardw", "run": run, "column": column})
+
+
+def boardx(key, run, column):   # -> dropped|superseded: a pending card write the gates no longer back, dropped unwritten
+    return transition(key, {"op": "boardx", "run": run, "column": column})
 
 
 def pending(target):   # -> [(n, run, column, instant, req)]: the board writes not yet landed, of one issue or of a repository
@@ -539,6 +551,7 @@ def main(argv):
             print(f"REPLAY {key}: ok")
         elif op == "board" and len(rest) >= 3: print(board(key, rest[0], rest[1], rest[2], *(rest[3:4] or [])))
         elif op == "boardw" and len(rest) >= 2: print(boardw(key, rest[0], rest[1]))
+        elif op == "boardx" and len(rest) >= 2: print(boardx(key, rest[0], rest[1]))
         elif op == "coder": print(coder(key))
         elif op == "wave" and len(rest) >= 3: print(wave(key, rest[0], rest[1], rest[2], rest[3:4] == ["keep"]))
         elif op == "migrate": migrate(key); print(f"MIGRATE {key}: the old counters are in its ledger file; they are read no more")

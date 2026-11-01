@@ -157,5 +157,15 @@ L board 'x/y#24' run-e Doing /req/e >/dev/null 2>&1; [ $? = 3 ] && [ "$(cat "$T/
 L rearm 'x/y#21' >/dev/null
 [ -z "$(L pending 'x/y#21')" ] && [ "$(L board 'x/y#21' run-a Doing /req/a)" = floor ] \
   && ok "a rearm clears a pending board write, and its run counts toward nothing" || ko "rearm floor: '$(L board 'x/y#21' run-a Doing /req/a)'"
+# ADR-0164 (#1021, review): a pending event the gates no longer back is dropped, never written. A drop leaves the
+# pending list, keeps the event's instant, and changes nothing once the event is not the fact any more.
+L board 'x/y#25' run-f Doing /req/f >/dev/null
+[ "$(L boardx 'x/y#25' run-f Doing)" = dropped ] && [ "$(B 'x/y#25')" = "run-f Doing dropped" ] && [ -z "$(L pending 'x/y#25')" ] \
+  && ok "a pending board event is dropped, and it leaves the pending list" || ko "boardx: '$(L read 'x/y#25' board)'"
+[ "$(L boardx 'x/y#25' run-f Doing)" = superseded ] && [ "$(B 'x/y#25')" = "run-f Doing dropped" ] \
+  && ok "a drop of an event that is no longer pending changes nothing" || ko "boardx again: '$(L read 'x/y#25' board)'"
+L board 'x/y#26' run-g Doing /req/g >/dev/null
+[ "$(L boardx 'x/y#26' run-h Doing)" = superseded ] && [ "$(B 'x/y#26')" = "run-g Doing pending" ] \
+  && ok "a drop names the run and column of the event it drops" || ko "boardx other run: '$(L read 'x/y#26' board)'"
 
 rm -rf "$T"; exit $fail

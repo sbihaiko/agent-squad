@@ -102,8 +102,15 @@ ab_column() {   # <ledger column>: the board's name of that column
   case "$1" in Doing) echo "$doing";; Todo) echo "${SG_TODO:-Todo}";; esac
 }
 ab_board_event() {   # <run> <ledger column> <request> <issue>...: records each issue's event pending, before its write
-  local run=$1 col=$2 req=$3 n; shift 3
-  for n in "$@"; do python3 "$here/issue_ledger.py" board "$SG_REPO#$n" "$run" "$col" "$req" >/dev/null || return 1; done
+  local run=$1 col=$2 req=$3 n; local -a done_ids=(); shift 3
+  for n in "$@"; do
+    python3 "$here/issue_ledger.py" board "$SG_REPO#$n" "$run" "$col" "$req" >/dev/null || { ab_board_drop "$run" "$col" "${done_ids[@]}"; return 1; }
+    done_ids+=("$n")
+  done
+}
+ab_board_drop() {   # <run> <ledger column> <issue>...: a pick whose events did not all record drops the ones that did
+  local run=$1 col=$2 n; shift 2
+  for n in "$@"; do python3 "$here/issue_ledger.py" boardx "$SG_REPO#$n" "$run" "$col" >/dev/null; done
 }
 ab_board_write() {   # <run> <ledger column> <issue>...: the card write of those events, then each event is marked written
   local run=$1 col=$2 bc ids n; shift 2
@@ -130,12 +137,33 @@ ab_free_refused() {   # <run> <request> <issue>...: a refused launch frees its c
   printf '%s AUTOBUG refused: %s launch refused by launch.py (request %s): %s; claim freed, card back to Todo\n' "$(date '+%F %T')" "${cards% }" "$run" "$why" >> "$SG_STATE/alerts.log"
   echo "AUTOBUG $run refused by launch.py: $why; freed its claim, card back to Todo, next pass retries" >&2
 }
-ab_resume() {   # the pending events of earlier passes: each run's cards are written, then its stored request launches once
-  local groups run col req ids n
+ab_resume_startable() {   # <issue> <board read>: 0 when the issue still passes the gates a candidate passes (#868, #550, #1858, ADR-0149)
+  local n=$1 board=$2 labels col k s=0
+  ab_check_open "$n"; [ "${#live[@]}" -eq 1 ] || return 1
+  labels=$(jq -r --argjson n "$n" '[.[]|select(.number==$n)][0].labels[]? | (if type=="object" then .name else . end)' "$F/issues.json" 2>/dev/null | paste -sd, -)
+  for k in ${skip//,/ }; do case ",$labels," in *",$k,"*) s=1;; esac; done; [ "$s" = 0 ] || return 1
+  case ",$labels," in *",$go,"*) ;; *) return 1;; esac
+  col=$(printf '%s\n' "$board" | awk -F '\t' -v n="$n" '$1 == n { print $2; exit }')
+  case "$col" in "${SG_TODO:-Todo}"|"$doing") ;; *) return 1;; esac
+  sg_not_startable "$n" && return 1
+  sg_ledger_held "$n" >/dev/null && return 1
+  return 0
+}
+ab_drop() {   # <run> <ledger column> <issue>...: a pending event its gates no longer back is dropped, and its card is not written
+  local run=$1 col=$2 n; shift 2
+  for n in "$@"; do rm -f "$A/bug-$n"; python3 "$here/issue_ledger.py" boardx "$SG_REPO#$n" "$run" "$col" >/dev/null; done
+  echo "AUTOBUG $run: its pending $col write is dropped; the gates no longer back its issue(s), nothing launched" >&2
+}
+ab_resume() {   # the pending events of earlier passes: a Doing event launches its stored request once, and only while its issues still pass the gates
+  local groups run col req ids n board
   groups=$(python3 "$here/issue_ledger.py" pending "$SG_REPO" 2>/dev/null | awk -F'\t' 'NF>=5 { k=$2 "\t" $3 "\t" $5; ids[k]=ids[k] " " $1 } END { for (k in ids) print k "\t" substr(ids[k], 2) }')
   while IFS=$'\t' read -r run col req ids <&3; do
     [ -n "$run" ] || continue
-    sg_self_filed=""; for n in $ids; do gh_api "repos/$SG_REPO/issues/$n" 2>/dev/null | /usr/bin/grep -qE '\[SQUAD\] refused|Filed by autobug' && sg_self_filed+="$n "; done
+    if [ "$col" = Doing ]; then
+      board=$(python3 "$here/issue_state.py" 2>/dev/null) || { echo "AUTOBUG $run: the board did not answer; its pending card write waits" >&2; continue; }
+      for n in $ids; do ab_resume_startable "$n" "$board" || { ab_drop "$run" Doing $ids; continue 2; }; done
+    fi
+    sg_self_filed=""; for n in $ids; do jq -e --argjson n "$n" '[.[]|select(.number==$n)][0]|select(((.title//"")|startswith("[SQUAD] refused")) or ((.body//"")|contains("Filed by autobug")))' "$F/issues.json" >/dev/null 2>&1 && sg_self_filed+="$n "; done
     if [ "$col" = Todo ]; then ab_board_write "$run" Todo $ids; continue; fi
     if [ ! -f "$req" ]; then ab_board_event "$run" Todo "$req" $ids && ab_board_write "$run" Todo $ids; continue; fi
     [ "$free" -gt 0 ] || continue
@@ -229,9 +257,6 @@ gh_loop_stop "$F/issues.json" && exit 0
 # Too many finished children wait for review (#562): a new run only adds more, so the pass holds until childcc catches up.
 gh_dispatch_hold && exit 0
 gh_disk_stop && exit 0
-[ -n "${AB_DRY:-}" ] || ab_resume
-[ "$free" -gt 0 ] || exit 0
-pendset=" $(python3 "$here/issue_ledger.py" pending "$SG_REPO" 2>/dev/null | cut -f1 | tr '\n' ' ') "
 # The column Todo is the owner's go signal, and the go label says an agent may take the issue (#550): a candidate needs both.
 go=${SG_FRONTIER_LABEL:-ready-for-agent}
 todo=$(sg_todo_cards) || { echo "AUTOBUG: the board did not answer; nothing dispatched this pass" >&2; exit 0; }
@@ -257,6 +282,9 @@ ab_check_open() {
     printf '%s' "$j" > "$F/body-$n.json"; live+=("$n")
   done
 }
+[ -n "${AB_DRY:-}" ] || ab_resume
+[ "$free" -gt 0 ] || exit 0
+pendset=" $(python3 "$here/issue_ledger.py" pending "$SG_REPO" 2>/dev/null | cut -f1 | tr '\n' ' ') "
 # candidates first, then clusters (cluster.py: same area + time window, or a shared file path) -> one child per cluster
 cand=(); cj="["; nb=0
 for sel in "$lab" debt; do

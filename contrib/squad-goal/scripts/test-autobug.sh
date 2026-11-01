@@ -996,4 +996,53 @@ r=$(bash "$T/s/autobug.sh" 2>&1); rc=$?
 [ ! -e "$T/launches" ] && ok "29 a refused recovery write launches nothing" || ko "29 launched: '$(cat "$T/launches")'"
 [ "$(L1 pending 'x/y#1228' | cut -f2)" = autobug-refused ] && ok "29 the event stays pending for the next pass" || ko "29 pending: '$(L1 pending 'x/y#1228')'"
 
+# 30) (#1021, review) a pending Doing event is written and launched only while its issue still passes the candidate gates.
+# A closed issue, a frozen:owner issue and a card the owner moved out of Todo drop the event: nothing is written to Doing,
+# nothing launches, and the card stays where it is. A card that already reads Doing (its write landed before the ledger
+# was marked) still launches its stored request once.
+pending_doing() {   # <run>: one pending Doing event for #1228, with its stored request
+  L1 board 'x/y#1228' "$1" Doing "$T/st/req/$1.json" >/dev/null; printf '{}' > "$T/st/req/$1.json"
+}
+ab_fresh; pending_doing autobug-closed; echo 1228 > "$T/closed"
+r=$(bash "$T/s/autobug.sh" 2>&1)
+[ ! -e "$T/launches" ] && ok "30 a pending Doing event on a closed issue does not launch" || ko "30 a closed issue launched: '$(cat "$T/launches")'"
+$G -q 'In Progress' "$T/board.calls" && ko "30 a closed issue's card was written to Doing" || ok "30 a closed issue's card is not written to Doing"
+[ -z "$(L1 pending 'x/y#1228')" ] && ok "30 the closed issue's pending event is dropped" || ko "30 still pending: '$(L1 pending 'x/y#1228')'"
+[ ! -e "$T/st/auto/bug-1228" ] && ok "30 the closed issue frees its claim" || ko "30 the claim stays for a closed issue"
+ab_fresh; pending_doing autobug-frozen
+jq '.[0].labels += ["frozen:owner"]' "$T/issues.json" > "$T/issues.tmp" && mv "$T/issues.tmp" "$T/issues.json"
+r=$(bash "$T/s/autobug.sh" 2>&1)
+[ ! -e "$T/launches" ] && ! $G -q 'In Progress' "$T/board.calls" && ok "30 a pending Doing event on a frozen:owner issue does not launch" \
+  || ko "30 a frozen:owner issue launched or wrote Doing: '$(cat "$T/launches" 2>/dev/null)' / $(cat "$T/board.calls")"
+[ -z "$(L1 pending 'x/y#1228')" ] && ok "30 the frozen issue's pending event is dropped" || ko "30 frozen still pending: '$(L1 pending 'x/y#1228')'"
+ab_fresh; pending_doing autobug-moved; printf '1228\tBlocked\n' > "$T/cards.tsv"
+r=$(bash "$T/s/autobug.sh" 2>&1)
+[ ! -e "$T/launches" ] && ! $G -q 'In Progress\|Todo' "$T/board.calls" && ok "30 a card the owner moved out of Todo is not written and does not launch" \
+  || ko "30 moved card: launches '$(cat "$T/launches" 2>/dev/null)', writes '$(cat "$T/board.calls")'"
+[ -z "$(L1 pending 'x/y#1228')" ] && ok "30 the moved card's pending event is dropped" || ko "30 moved still pending: '$(L1 pending 'x/y#1228')'"
+ab_fresh; pending_doing autobug-landed; printf '1228\tIn Progress\n' > "$T/cards.tsv"
+r=$(bash "$T/s/autobug.sh" 2>&1)
+[ "$(cat "$T/launches" 2>/dev/null)" = "$T/st/req/autobug-landed.json" ] && ok "30 a card already in Doing still launches its stored request, once" \
+  || ko "30 a landed write did not launch: '$(cat "$T/launches" 2>/dev/null)' / $r"
+[ -z "$(L1 pending 'x/y#1228')" ] && ok "30 the landed event is marked written" || ko "30 landed still pending: '$(L1 pending 'x/y#1228')'"
+
+# 31) (#1021, review) a pick whose ledger records fail partway records nothing: the events already recorded are dropped, so
+# no later resume launches part of the pick. The ledger refuses the second issue's event only (a flag file arms it).
+ab_fresh; cp "$T/s/issue_ledger.py" "$T/s/issue_ledger-real.py"
+printf '[{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]},{"number":1229,"title":"Core: second null deref","body":"step b.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]}]\n' > "$T/issues.json"
+printf '1228\tTodo\n1229\tTodo\n' > "$T/cards.tsv"; printf 'caps:\n  runs: 2\n' > "$T/co/docs/squad/defaults.yaml"
+cat > "$T/s/issue_ledger.py" <<PY
+import os, subprocess, sys
+if sys.argv[1:3] == ["board", "x/y#1229"] and os.path.exists("$T/fail-1229"): sys.exit(3)
+sys.exit(subprocess.call([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "issue_ledger-real.py")] + sys.argv[1:]))
+PY
+touch "$T/fail-1229"
+r=$(bash "$T/s/autobug.sh" 2>&1)
+[ ! -e "$T/launches" ] && ok "31 a pick whose ledger records fail partway launches nothing" || ko "31 launched a partial pick: '$(cat "$T/launches")'"
+$G -q 'In Progress' "$T/board.calls" && ko "31 a partial pick wrote Doing" || ok "31 a partial pick writes no card to Doing"
+[ "$(L1 read 'x/y#1228' board | python3 -c 'import json,sys; b=json.load(sys.stdin); print(b.get("column",""), b.get("state",""))')" = "Doing dropped" ] \
+  && ok "31 the event recorded before the failure is dropped" || ko "31 recorded event: '$(L1 read 'x/y#1228' board)'"
+[ -z "$(L1 pending 'x/y#1228')" ] && [ ! -e "$T/st/auto/bug-1228" ] && ok "31 no pending event and no claim are left behind" || ko "31 left pending or claimed"
+rm -f "$T/fail-1229"; mv "$T/s/issue_ledger-real.py" "$T/s/issue_ledger.py"
+
 rm -rf "$T"; exit $fail
