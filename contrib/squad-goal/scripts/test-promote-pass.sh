@@ -169,10 +169,10 @@ t3=$(tip dev); rm -f "$SG_STATE/gate-status-delta"; pass; rc=$?
 [ "$(runs)" -gt "$before" ] && ok "the uncovered delta ran the full suite" || ko "the uncovered delta skipped the full suite: $(cat "$T/suite.log")"
 
 # ADR-0157: a proof is bounded, and it never blocks the loop for long. Past its reserve bound the reserve lifts and the
-# proof keeps running, so the loop dispatches beside it. Past its deadline the proof is killed and recorded indeterminate:
+# proof keeps running, so the loop dispatches beside it. Past its bound the proof is killed and recorded indeterminate:
 # it promotes nothing, writes no gate status, and is not marked refused, so a later pass retries the same tip.
 adv dev bound; tb=$(tip dev); echo 6 > "$T/suite-sleep"; rm -f "$T/suite-rc" "$SG_STATE/promote-reserve"
-SG_PROMOTE_RESERVE_SECONDS=1 SG_PROMOTE_DEADLINE_SECONDS=600 bash "$d/promote-pass.sh" > "$T/out2" 2>&1 & bp=$!
+SG_PROMOTE_RESERVE_SECONDS=1 SG_PROMOTE_FALLBACK_SECONDS=0 SG_PROMOTE_BOUND_SECONDS=600 bash "$d/promote-pass.sh" > "$T/out2" 2>&1 & bp=$!
 for _ in $(seq 1 40); do sleep 0.25; [ -e "$SG_STATE/promote-reserve" ] && break; done
 [ -e "$SG_STATE/promote-reserve" ] && ok "the proof reserves the machine at its start" || ko "the proof never reserved the machine"
 for _ in $(seq 1 60); do sleep 0.25; [ ! -e "$SG_STATE/promote-reserve" ] && break; done
@@ -182,7 +182,7 @@ wait "$bp"; rc=$?
 [ "$rc" = 0 ] && [ "$(tip stg)" = "$tb" ] && ok "a proof that lifted its reserve still promotes its tip" || ko "lifted proof: rc $rc, stg $(tip stg), dev $tb"
 rm -f "$T/suite-sleep"
 adv dev slow; ts=$(tip dev); before=$(tip stg); echo 30 > "$T/suite-sleep"; rm -f "$SG_STATE/promote-indeterminate" "$T/suite-rc"
-s0=$(date +%s); SG_PROMOTE_DEADLINE_SECONDS=1 SG_PROMOTE_RESERVE_SECONDS=600 bash "$d/promote-pass.sh" > "$T/out3" 2>&1; rc=$?; el=$(( $(date +%s) - s0 ))
+s0=$(date +%s); SG_PROMOTE_BOUND_SECONDS=1 SG_PROMOTE_FALLBACK_SECONDS=0 SG_PROMOTE_RESERVE_SECONDS=600 bash "$d/promote-pass.sh" > "$T/out3" 2>&1; rc=$?; el=$(( $(date +%s) - s0 ))
 [ "$rc" != 0 ] && [ "$el" -lt 15 ] && ok "a proof past its deadline is killed, not awaited (${el}s)" || ko "deadline: rc $rc after ${el}s"
 [ "$(tip stg)" = "$before" ] && ok "a killed proof promotes nothing" || ko "a killed proof promoted stg to $(tip stg)"
 IFS=$'\t' read -r _ mt mb < "$SG_STATE/promote-indeterminate" 2>/dev/null
