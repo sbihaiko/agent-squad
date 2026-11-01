@@ -57,7 +57,7 @@ def test_a_card_gone_from_the_board_closes_the_sheet():
 
 
 def test_load_board_reanchors_before_it_draws():
-    body = re.search(r"async function loadBoard\(\) \{(.*?)\n\}\n", PAGE, re.S).group(1)
+    body = re.search(r"async function loadBoard\(\w*\) \{(.*?)\n\}\n", PAGE, re.S).group(1)
     assert "anchorView(" in body and body.index("anchorView(") < body.index("refresh()")
 
 
