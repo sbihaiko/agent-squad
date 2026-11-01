@@ -1,8 +1,9 @@
-"""The flow history keeps each card's spec and wave, and the cumulative flow and the control chart filter by the bar's values (SPEC 889, #904).
+"""The flow history keeps each card's kind, spec and wave, and the cumulative flow and the control chart filter by the bar's values (SPEC 889, #904).
 
-The sample names a card's kind, spec and wave in `cells`. A sample written before that carries no `cells`: it answers no
+The sample names a card's kind (issue or bug), spec and wave in `cells`. A sample written before that carries no `cells`: it answers no
 spec and no wave, and the chart says so. The bar's values are the keys the board filter reads: a spec's number or `none`,
-a wave's number or `none`, an empty list for all.
+a Waves key `spec/wave` (#980), a kind `issue`, `bug` or `pr`, an empty list for all. The board reads every card and
+the page filters it; the two chart routes take the bar's values in their query.
 """
 import importlib.util
 import json
@@ -76,8 +77,18 @@ def cfd():
 # -- the sample format -------------------------------------------------------------------------------------------------
 
 def test_a_sample_names_each_cards_kind_spec_and_wave(flow):
-    s = flow.sample([_row(1, pa=5, labels=["wave:04", "bug"])], now=_epoch(20))
-    assert ["issue", "5", "4", "Todo", 0, 1] in s["cells"]
+    s = flow.sample([_row(1, pa=5, labels=["wave:04", "bug"]), _row(2, labels=["loop-bug"]), _row(3)], now=_epoch(20))
+    assert ["bug", "5", "4", "Todo", 0, 1] in s["cells"], "a bug-labelled card is the bar's kind bug"
+    assert ["bug", "none", "none", "Todo", 0, 1] in s["cells"], "a loop bug is a bug too"
+    assert ["issue", "none", "none", "Todo", 0, 1] in s["cells"]
+
+
+def test_a_card_that_changes_spec_on_the_same_day_writes_a_new_sample(flow, tmp_path):
+    path = tmp_path / "hub-flow.x_y.jsonl"
+    flow.append(path, [_row(1, pa=5)], now=_epoch(20))
+    flow.append(path, [_row(1, pa=6)], now=_epoch(20) + 60)
+    last = flow.samples(path)[-1]
+    assert ["issue", "6", "none", "Todo", 0, 1] in last["cells"], "equal counts with other cells is a new sample"
 
 
 def test_a_card_with_no_spec_and_no_wave_is_none(flow):
@@ -108,6 +119,8 @@ def test_the_spec_and_wave_keys_are_the_values_the_board_filter_offers(flow):
     assert flow.spec_key({"pa": 5}) == "5"
     assert flow.wave_key(["bug"]) == "none"
     assert flow.wave_key(["wave:04"]) == "4"
+    assert flow.kind_key({"l": ["bug"]}) == "bug"
+    assert flow.kind_key({"l": []}) == "issue"
 
 
 # -- the cumulative flow's filter --------------------------------------------------------------------------------------
@@ -118,8 +131,18 @@ def test_a_spec_filter_keeps_only_that_specs_cards(cfd):
 
 
 def test_a_wave_filter_keeps_only_that_waves_cards(cfd):
-    samples = [_sample(20, [["issue", "none", "4", "Todo", 0, 2], ["issue", "none", "5", "Todo", 0, 3]])]
-    assert cfd(samples, COLUMNS, wave=["4"])["points"][0]["bands"]["Todo"] == 2
+    samples = [_sample(20, [["issue", "none", "4", "Todo", 0, 2], ["issue", "none", "5", "Todo", 0, 3],
+                            ["issue", "7", "4", "Todo", 0, 8]])]
+    assert cfd(samples, COLUMNS, wave=["none/4"])["points"][0]["bands"]["Todo"] == 2, "a Waves key is spec/wave (#980)"
+    assert cfd(samples, COLUMNS, wave=["7/4"])["points"][0]["bands"]["Todo"] == 8
+
+
+def test_a_kind_filter_takes_a_list_of_the_bars_kinds(cfd):
+    samples = [_sample(20, [["issue", "none", "none", "Todo", 0, 2], ["bug", "none", "none", "Todo", 0, 3],
+                            ["pr", "none", "none", "Todo", 0, 5]])]
+    assert cfd(samples, COLUMNS, kind=["bug"])["points"][0]["bands"]["Todo"] == 3
+    assert cfd(samples, COLUMNS, kind=["issue", "bug"])["points"][0]["bands"]["Todo"] == 5
+    assert cfd(samples, COLUMNS, kind=[])["points"][0]["bands"]["Todo"] == 10
 
 
 def test_spec_and_wave_filters_combine_with_and(cfd):
@@ -127,9 +150,11 @@ def test_spec_and_wave_filters_combine_with_and(cfd):
         ["issue", "5", "4", "Todo", 0, 1],
         ["issue", "5", "none", "Todo", 0, 2],
         ["issue", "6", "4", "Todo", 0, 4],
+        ["bug", "5", "4", "Todo", 0, 8],
     ])]
-    assert cfd(samples, COLUMNS, spec=["5"], wave=["4"])["points"][0]["bands"]["Todo"] == 1
-    assert cfd(samples, COLUMNS, spec=["5", "6"], wave=["4"])["points"][0]["bands"]["Todo"] == 5
+    assert cfd(samples, COLUMNS, spec=["5"], wave=["5/4"])["points"][0]["bands"]["Todo"] == 9
+    assert cfd(samples, COLUMNS, spec=["5", "6"], wave=["5/4", "6/4"])["points"][0]["bands"]["Todo"] == 13
+    assert cfd(samples, COLUMNS, spec=["5"], wave=["5/4"], kind=["bug"])["points"][0]["bands"]["Todo"] == 8
 
 
 def test_an_empty_filter_list_keeps_every_card(cfd):
@@ -157,7 +182,8 @@ def test_the_kind_filter_still_holds_with_cells(cfd):
 def test_a_sample_without_cells_answers_no_spec_and_no_wave(cfd):
     legacy = [_legacy(20, {"card": {"Todo": 4}})]
     assert cfd(legacy, COLUMNS, spec=["5"])["points"][0]["bands"]["Todo"] == 0
-    assert cfd(legacy, COLUMNS, wave=["none"])["points"][0]["bands"]["Todo"] == 4
+    assert cfd(legacy, COLUMNS, wave=["none/none"])["points"][0]["bands"]["Todo"] == 4
+    assert cfd(legacy, COLUMNS, wave=["5/none"])["points"][0]["bands"]["Todo"] == 0
     assert cfd(legacy, COLUMNS)["points"][0]["bands"]["Todo"] == 4
 
 
@@ -233,60 +259,172 @@ def test_the_flow_history_keeps_each_cards_spec_and_wave(hub, board):
 def test_the_chart_route_filters_the_cumulative_flow_by_the_bar_values(hub, board):
     backlog = hub.COLUMN["unscheduled"]
     items = [_item(hub, 1, backlog, pa=5, labels=["wave:4"]),
-             _item(hub, 2, backlog),
-             _item(hub, 3, backlog, pa=6, labels=["wave:4"])]
+             _item(hub, 2, backlog, labels=["bug"]),
+             _item(hub, 3, backlog, pa=6, labels=["wave:4", "bug"])]
     hub.board_cache["items"] = items
     _write_history(hub, items)
 
-    def last(fw=(), fs=()):
-        return _backlog_counts(hub.flow_cfd(list(fw), list(fs)))[backlog]["count"][-1]
+    def last(query):
+        return _backlog_counts(hub.flow_cfd(*hub.board_filters(query)))[backlog]["count"][-1]
 
-    assert last() == 3
-    assert last(fs=["5"]) == 1
-    assert last(fw=["4"]) == 2
-    assert last(fw=["4"], fs=["5"]) == 1
-    assert last(fw=["none"]) == 1
+    assert last("") == 3
+    assert last("fs=5") == 1
+    assert last("fw=5/4,6/4") == 2, "a Waves key is spec/wave, as the bar sends it (#980)"
+    assert last("fw=5/4&fs=5") == 1
+    assert last("fw=none/none") == 1
+    assert last("fk=bug") == 2
+    assert last("fk=bug&fs=6") == 1
+    assert last("fk=issue") == 1
 
 
-def test_the_control_chart_takes_the_same_spec_filter(hub, board):
+def test_the_control_chart_takes_the_same_filters(hub, board):
     closed = hub.COLUMN["issue_closed"]
-    items = [_item(hub, 1, closed, pa=5, closed_at="2026-10-02T15:00:00Z"),
-             _item(hub, 2, closed, pa=6, closed_at="2026-10-03T15:00:00Z")]
+    items = [_item(hub, 1, closed, pa=5, labels=["wave:2"], closed_at="2026-10-02T15:00:00Z"),
+             _item(hub, 2, closed, pa=6, labels=["bug"], closed_at="2026-10-03T15:00:00Z")]
     hub.board_cache["items"] = items
 
-    def dots(fs):
-        return sorted(d["n"] for d in hub.flow_lead(fs=fs)["lead"]["control"]["jira"]["all"]["dots"])
+    def dots(query):
+        return sorted(d["n"] for d in hub.flow_lead(*hub.board_filters(query))["lead"]["control"]["jira"]["all"]["dots"])
 
-    assert dots([]) == [1, 2]
-    assert dots(["5"]) == [1]
-
-
-def test_the_board_query_names_the_bar_values(hub):
-    assert hub.board_filters("fw=4,none&fs=5") == (["4", "none"], ["5"])
-    assert hub.board_filters("") == ([], [])
+    assert dots("") == [1, 2]
+    assert dots("fs=5") == [1]
+    assert dots("fw=5/2") == [1]
+    assert dots("fk=bug") == [2]
+    assert dots("fk=pr") == [], "the charts count issues: a PR is no row of the flow history or the lead time"
 
 
-def test_the_page_sends_the_bar_values_with_the_board_read_both_charts_and_the_zoom(hub):
-    assert "const barQuery=" in hub.PAGE, "the bar's values are written once, outside the flow block"
-    assert "fetch(`/api/board?${barQuery()}`)" in hub.PAGE
-    opener = next(line for line in hub.PAGE.splitlines() if line.startswith("const flowOpen="))
-    assert "/api/chart/${k}?" in opener and "barQuery()" in opener, "each chart route reads the bar's values"
-    zoom = next(line for line in hub.PAGE.splitlines() if line.startswith("const ltZoom="))
-    assert "${barQuery()}" in zoom
+def test_the_drag_zoom_takes_the_same_filters(hub, board):
+    closed = hub.COLUMN["issue_closed"]
+    hub.board_cache["items"] = [_item(hub, 1, closed, pa=5, closed_at="2026-10-02T15:00:00Z"),
+                                _item(hub, 2, closed, labels=["bug"], closed_at="2026-10-03T15:00:00Z")]
+    span = "from=2026-09-01T00:00:00&to=2026-11-01T00:00:00"
+    assert sorted(d["n"] for d in hub.lead_zoom(span)["dots"]) == [1, 2]
+    assert [d["n"] for d in hub.lead_zoom(span + "&fk=bug")["dots"]] == [2]
+    assert [d["n"] for d in hub.lead_zoom(span + "&fs=5")["dots"]] == [1]
 
 
-def test_a_filter_change_drops_a_stale_zoom_and_both_stale_charts(hub):
-    pick = next(line for line in hub.PAGE.splitlines() if line.startswith("const pickFilter="))
-    assert pick.count("barMoved()") == 2, "a pick and a clear both tell the charts"
-    moved = next(line for line in hub.PAGE.splitlines() if line.startswith("const barMoved="))
-    assert all(part in moved for part in ("LT.zc=null", "LT.zr=null", "FLOWD={}", "flowOpen(FLOWK)"))
+def test_the_bar_query_names_waves_specs_and_kinds(hub):
+    assert hub.board_filters("fw=5/4,none/none&fs=5&fk=bug,pr") == (["5/4", "none/none"], ["5"], ["bug", "pr"])
+    assert hub.board_filters("") == ([], [], [])
 
 
-def test_both_chart_routes_read_the_bar_values_from_the_query():
-    src = HUB_PY.read_text()
-    for route, fn in (("/api/chart/cfd", "flow_cfd"), ("/api/chart/lead", "flow_lead")):
-        served = next(line for line in src.splitlines() if f'startswith("{route}")' in line)
-        assert f'{fn}(*board_filters(self.path.partition("?")[2]))' in served
+def test_the_board_route_takes_no_filter_it_does_not_apply(hub):
+    """The board filters on the page (boardOk, buildBoard): the served board is every card, and its route reads no bar value."""
+    import inspect
+    assert not inspect.signature(hub.board).parameters
+    served = next(line for line in HUB_PY.read_text().splitlines() if 'startswith("/api/board")' in line)
+    nxt = HUB_PY.read_text().splitlines()[HUB_PY.read_text().splitlines().index(served) + 1]
+    assert "board_filters" not in nxt
+
+
+# -- the page: a filter change redraws both charts with the route's filtered answer ----------------------------------
+
+def _page_line(hub, prefix):
+    return next(line for line in hub.PAGE.splitlines() if line.startswith(prefix))
+
+
+def _page_harness(hub, answers, drive):
+    """The page's own bar and chart lines, run in node over stub elements. `fetch` answers from `answers`, keyed by URL,
+    with the hub's own route payloads; the script `drive` acts on the page and prints JSON."""
+    lines = [_page_line(hub, p) for p in ("const barQuery=", "const flowOpen=", "const ltQ=", "const ltZoom=", "const ltGet=",
+                                          "const barMoved=", "const pickFilter=")]
+    stubs = f"""
+const ANSWERS={json.dumps(answers)},FETCHED=[],DRAWN=[],SAVED=[],POLLED=[];
+const el=()=>({{hidden:true,handlers:{{}},addEventListener(t,f){{this.handlers[t]=f}}}});
+const EL={{"#flowov":el(),"#fwl":el(),"#fsl":el(),"#fkl":el()}};
+const $=s=>EL[s];
+const fetch=async url=>{{FETCHED.push(url);if(!(url in ANSWERS))throw new Error("no answer for "+url);return {{json:async()=>ANSWERS[url]}}}};
+let bo={{}},FLOWK=null,FLOWD={{}},LT={{tf:"30",log:false,pick:null,zc:null,zr:null,tok:0,a:"",b:""}};
+const drawFlow=()=>DRAWN.push(JSON.parse(JSON.stringify(FLOWD[FLOWK]||null)));
+const saveB=()=>SAVED.push(JSON.stringify(bo)),pollBoard=()=>POLLED.push(1);
+const settle=()=>new Promise(r=>setTimeout(r,0));
+"""
+    script = stubs + "\n".join(lines) + "\n(async()=>{" + drive + "})().catch(e=>{console.error(e.stack);process.exit(1)});"
+    if shutil.which("node") is None:
+        pytest.skip("node is not installed")
+    result = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def _bar(fw="", fs="", fk=""):
+    return f"fw={fw}&fs={fs}&fk={fk}"
+
+
+def test_a_kind_pick_redraws_the_open_cumulative_flow_with_the_filtered_route(hub, board):
+    backlog = hub.COLUMN["unscheduled"]
+    items = [_item(hub, 1, backlog), _item(hub, 2, backlog, labels=["bug"]), _item(hub, 3, backlog, labels=["bug"])]
+    hub.board_cache["items"] = items
+    _write_history(hub, items)
+    answers = {f"/api/chart/cfd?{q}": hub.flow_cfd(*hub.board_filters(q)) for q in (_bar(), _bar(fk="bug"))}
+    out = _page_harness(hub, answers, """
+pickFilter("fkl","fk");
+await flowOpen("cfd");await settle();
+EL["#fkl"].handlers.change({target:{value:"bug",checked:true}});await settle();await settle();
+console.log(JSON.stringify({fetched:FETCHED,bo,last:DRAWN[DRAWN.length-1],saved:SAVED.length,polled:POLLED.length}));""")
+    assert out["fetched"] == [f"/api/chart/cfd?{_bar()}", f"/api/chart/cfd?{_bar(fk='bug')}"]
+    assert out["bo"]["fk"] == ["bug"] and out["saved"] == 1 and out["polled"] == 1, "the pick is stored as the board's own"
+    count = {b["name"]: b for b in out["last"]["cfd"]["bands"]}[backlog]["count"][-1]
+    assert count == 2, "the open chart is redrawn from the filtered route"
+
+
+def test_a_spec_clear_redraws_the_open_control_chart_and_its_chosen_span(hub, board):
+    closed = hub.COLUMN["issue_closed"]
+    hub.board_cache["items"] = [_item(hub, 1, closed, pa=5, closed_at="2026-10-02T15:00:00Z"),
+                                _item(hub, 2, closed, closed_at="2026-10-03T15:00:00Z")]
+    q5, qall = _bar(fs="5"), _bar()
+    span = "&scale=jira&a=Todo&b="
+    answers = {f"/api/chart/lead?{q5}": hub.flow_lead(*hub.board_filters(q5)),
+               f"/api/chart/lead?{qall}": hub.flow_lead(*hub.board_filters(qall)),
+               f"/api/leadtime?tf=30{span}&{qall}": {"dots": [{"n": 1}, {"n": 2}]}}
+    out = _page_harness(hub, answers, """
+bo.fs=["5"];pickFilter("fsl","fs");LT.a="Todo";
+await flowOpen("lead");await settle();
+EL["#fsl"].handlers.click({target:{closest:s=>s==="[data-clear]"},preventDefault(){}});await settle();await settle();
+console.log(JSON.stringify({fetched:FETCHED,fs:bo.fs,zc:LT.zc,lead:FLOWD.lead}));""")
+    assert out["fs"] == []
+    assert f"/api/chart/lead?{qall}" in out["fetched"], "the clear reads the control chart anew"
+    assert f"/api/leadtime?tf=30{span}&{qall}" in out["fetched"], "a chosen span is read anew with the bar's values"
+    assert sorted(d["n"] for d in out["lead"]["lead"]["control"]["jira"]["all"]["dots"]) == [1, 2]
+    assert out["zc"] == {"dots": [{"n": 1}, {"n": 2}]}
+
+
+def test_an_answer_for_an_old_bar_value_is_never_drawn(hub, board):
+    backlog = hub.COLUMN["unscheduled"]
+    items = [_item(hub, 1, backlog), _item(hub, 2, backlog, labels=["bug"])]
+    hub.board_cache["items"] = items
+    _write_history(hub, items)
+    answers = {f"/api/chart/cfd?{q}": hub.flow_cfd(*hub.board_filters(q)) for q in (_bar(), _bar(fk="bug"))}
+    out = _page_harness(hub, answers, """
+pickFilter("fkl","fk");
+const first=flowOpen("cfd");
+EL["#fkl"].handlers.change({target:{value:"bug",checked:true}});
+await first;await settle();await settle();
+console.log(JSON.stringify({last:DRAWN[DRAWN.length-1]}));""")
+    count = {b["name"]: b for b in out["last"]["cfd"]["bands"]}[backlog]["count"][-1]
+    assert count == 1, "the answer read for all kinds landed after the pick and was drawn"
+
+
+def test_the_bar_has_a_kinds_control_beside_waves_and_specs(hub):
+    assert "<details id=fk class=fsel><summary>Kinds: all</summary><div class=fpop id=fkl></div></details>" in hub.PAGE
+    assert 'pickFilter("fkl","fk")' in hub.PAGE
+    assert 'fetch("/api/board")' in hub.PAGE, "the board read carries no bar value: the page filters the board"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_board_keeps_a_card_by_its_kind(hub):
+    lanes = (SCRIPTS / "board-lanes.js").read_text()
+    script = lanes + """
+const rows=[{n:1,l:[]},{n:2,l:["bug"]},{n:3,l:["loop-bug"]},{n:4,kind:"pr",l:[]}];
+const groups=[{name:"Todo",items:rows.slice(0,3)}];
+console.log(JSON.stringify({kinds:rows.map(kindKey),bug:rows.filter(x=>boardOk(x,[],[],["bug"])).map(x=>x.n),
+ lanes:buildBoard(groups,{mode:"spec",fw:[],fs:[],fk:["issue"],closed:"Closed"}).lanes.flatMap(l=>l.vis.map(x=>x.n))}));"""
+    result = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    out = json.loads(result.stdout)
+    assert out["kinds"] == ["issue", "bug", "bug", "pr"]
+    assert out["bug"] == [2, 3]
+    assert out["lanes"] == [1]
 
 
 def _flow_block(hub):
