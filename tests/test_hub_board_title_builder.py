@@ -128,3 +128,9 @@ def test_the_column_names_are_unchanged(hub):
 
 def test_the_footer_is_unchanged(hub):
     assert "<span>load</span><b id=ldline>CPU ? · RAM ? · GPU ?</b>" in hub.PAGE
+
+
+def test_the_header_names_only_the_project_dropdown(hub):
+    """The owner: no "Squad hub" title; the header holds only the project dropdown."""
+    h1 = hub.PAGE[hub.PAGE.index("<header class=top><h1>"):hub.PAGE.index("</h1>", hub.PAGE.index("<header class=top><h1>"))]
+    assert "Squad hub" not in h1 and "<button id=pj" in h1

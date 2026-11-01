@@ -3659,7 +3659,7 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 (()=>{const f=window.fetch.bind(window),live=new Map();window.fetch=(u,o)=>{if(o&&o.method&&o.method!=="GET"||o&&o.signal)return f(u,o);
  const k=String(u);if(!live.has(k))live.set(k,f(u,o).finally(()=>live.delete(k)));return live.get(k).then(r=>r.clone())}})();</script>
 <div id=alert role=alert></div>
-<header class=top><h1><span class=hb>Squad hub &middot; </span><button id=pj aria-haspopup=menu aria-expanded=false><span id=pjn></span> &#9662;</button></h1><div id=psw aria-label="Projects"></div><div class=tabs role=tablist><button data-t=board role=tab>Kanban</button><button data-t=flow role=tab>Charts</button><button data-t=hist role=tab>History</button><button data-t=set role=tab>Settings</button></div><span class=spx></span>
+<header class=top><h1><button id=pj aria-haspopup=menu aria-expanded=false><span id=pjn></span> &#9662;</button></h1><div id=psw aria-label="Projects"></div><div class=tabs role=tablist><button data-t=board role=tab>Kanban</button><button data-t=flow role=tab>Charts</button><button data-t=hist role=tab>History</button><button data-t=set role=tab>Settings</button></div><span class=spx></span>
 <span class=pill id=bread></span></header>
 <div id=win>
 <div id=side>
