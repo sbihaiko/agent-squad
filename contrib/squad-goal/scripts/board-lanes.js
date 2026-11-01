@@ -27,16 +27,18 @@ const KIND_OPTIONS=[["issue","Issue"],["bug","Bug"],["pr","PR"]];
 // The filters (#899, #904): an empty list means all; the lists combine with AND. Keys are the values the bar offers.
 const boardOk=(x,fw,fs,fk=[])=>(!fw.length||fw.includes(waveOptKey(x)))&&(!fs.length||fs.includes(specKey(x)))&&(!fk.length||fk.includes(kindKey(x)));
 // The Specs options (#981): a spec is one only while it is unfinished, its card open and an open ticket under it.
-const finishedCard=(name,closed,abandoned)=>name===closed||name===(abandoned||"Abandoned");
-function specOptions(groups,closed,abandoned){
+// A group with `end` is a closed status (Closed or Abandoned, by role): history, so it never offers an option (#969).
+function specOptions(groups){
   const parents=new Set(),finished=new Set();let none=false;
-  groups.forEach(g=>g.items.forEach(x=>{if(x.sp){if(finishedCard(g.name,closed,abandoned))finished.add(String(x.n));return}
+  groups.forEach(g=>g.items.forEach(x=>{if(x.sp){if(g.end)finished.add(String(x.n));return}
     if(x.pa==null){none=true;return}
-    if(!finishedCard(g.name,closed,abandoned))parents.add(String(x.pa))}));
+    if(!g.end)parents.add(String(x.pa))}));
   const keys=[...parents].filter(k=>!finished.has(k));if(none)keys.push("none");
   return keys.sort((a,b)=>a==="none"?1:b==="none"?-1:+a-+b)}
 // A saved Specs filter keeps only the options the board offers now, so a finished spec's key is dropped on load (#981).
-const keptSpecs=(saved,groups,closed,abandoned)=>{const opts=specOptions(groups,closed,abandoned);return saved.filter(k=>opts.includes(k))};
+const keptSpecs=(saved,groups)=>{const opts=specOptions(groups);return saved.filter(k=>opts.includes(k))};
+// A saved hidden set drops every closed status on load: history is never a hidden column (#969).
+const keptHidden=(saved,groups)=>{const ends=new Set(groups.filter(g=>g.end).map(g=>g.name));return saved.filter(n=>!ends.has(n))};
 // <card-rules>: the spec color and wave chip rules; the mobile page inlines this block alone (#917). It reads
 // laneWaveOf, which each page declares once: the board above, the mobile page in its gesture module (#980).
 // A spec's color (#917): the spec number picks a palette slot, number mod 8. A slot already taken goes to the next free
@@ -54,11 +56,11 @@ const waveChip=x=>{const w=laneWaveOf(x);return w===null?"":`<span class=lchip d
 // closed, hidden }. `text` is the search predicate; progress counts every row, so a search or a filter never moves a bar.
 // Returns { cols, vc, hc, lanes }: vc are the columns drawn, hc the hidden ones with their counts, lanes the shown lanes in order.
 function buildBoard(groups,o){
-  const mode=o.mode,cols=groups.map(g=>g.name),closed=o.closed,fw=o.fw||[],fs=o.fs||[],fk=o.fk||[],text=o.text||(()=>true);
+  const mode=o.mode,ends=new Set(groups.filter(g=>g.end).map(g=>g.name)),cols=groups.filter(g=>!g.end).map(g=>g.name),closed=o.closed,fw=o.fw||[],fs=o.fs||[],fk=o.fk||[],text=o.text||(()=>true);
   const hasFilter=!!(fw.length||fs.length||fk.length||o.search);
   const specs=new Map(),rows=[];
-  const gone=new Set([closed,o.abandoned||"Abandoned"]),goneSpecs=new Set();   // a spec whose card is closed or abandoned has no work left: no lane (#890)
-groups.forEach(g=>g.items.forEach(x=>{if(x.sp){if(gone.has(g.name))goneSpecs.add(x.n);else if(!specs.has(x.n))specs.set(x.n,{title:plain(x.t),st:g.name,sc:x.sc});   // a spec card carries its own closed/total (#890)
+  const goneSpecs=new Set();   // a spec whose card is closed or abandoned has no work left: no lane (#890)
+groups.forEach(g=>g.items.forEach(x=>{if(x.sp){if(ends.has(g.name))goneSpecs.add(x.n);else if(!specs.has(x.n))specs.set(x.n,{title:plain(x.t),st:g.name,sc:x.sc});   // a spec card carries its own closed/total (#890)
  return}rows.push({...x,col:g.name})}));
   const lanes=new Map(),ensure=(id,meta)=>{if(!lanes.has(id))lanes.set(id,{id,...meta,all:[],vis:[]});return lanes.get(id)};
   const laneOf=x=>{
@@ -68,8 +70,8 @@ groups.forEach(g=>g.items.forEach(x=>{if(x.sp){if(gone.has(g.name))goneSpecs.add
     const sp=specs.get(x.pa)||{title:"",st:""};
     return["s"+x.pa,{kind:"s",num:x.pa,title:sp.title,st:sp.st,sc:sp.sc}]};
   if(mode!=="wave")specs.forEach((sp,num)=>ensure("s"+num,{kind:"s",num,title:sp.title,st:sp.st,sc:sp.sc}));   // a spec card on the board is always a lane
-  rows.forEach(x=>{if(goneSpecs.has(x.pa)&&gone.has(x.col))return;   // a closed spec keeps no lane: its open card falls to No spec, its closed card is history (#890)
-  const[id,meta]=goneSpecs.has(x.pa)?(mode==="wave"?waveLane(null,laneWaveOf(x)):["none",{kind:"none",title:"No spec"}]):laneOf(x),l=ensure(id,meta);l.all.push(x);if(boardOk(x,fw,fs,fk)&&text(x))l.vis.push(x)});
+  rows.forEach(x=>{if(goneSpecs.has(x.pa)&&ends.has(x.col))return;   // a closed spec keeps no lane: its open card falls to No spec, its closed card is history (#890)
+  const[id,meta]=goneSpecs.has(x.pa)?(mode==="wave"?waveLane(null,laneWaveOf(x)):["none",{kind:"none",title:"No spec"}]):laneOf(x),l=ensure(id,meta);l.all.push(x);if(!ends.has(x.col)&&boardOk(x,fw,fs,fk)&&text(x))l.vis.push(x)});   // a closed status is history: its cards count for progress, never for a card, a count or the search (#969)
   const shown=[...lanes.values()].filter(l=>l.vis.length>0||(!hasFilter&&l.kind==="s"));
   shown.forEach(l=>{l.n=l.vis.length;l.total=l.all.length;l.closed=l.all.filter(x=>x.col===closed).length;
     const m=/^(\d+)\/(\d+)$/.exec(String(l.sc||""));   // a closed ticket never reaches the board with its parent, so the count comes from the spec card
@@ -84,10 +86,9 @@ groups.forEach(g=>g.items.forEach(x=>{if(x.sp){if(gone.has(g.name))goneSpecs.add
   const hide=new Set(o.hidden||[]);   // the user's hidden columns: never drawn, named in the pill with their whole total
   const vc=cols.filter(c=>!hide.has(c)&&open.some(l=>l.counts[c]));   // a column with no card in an expanded lane is not drawn
   const hc=cols.filter(c=>!vc.includes(c)&&!hide.has(c)&&list.some(l=>l.counts[c])).map(c=>({name:c,count:list.reduce((s,l)=>s+(l.counts[c]||0),0)}))
-    .concat(groups.filter(g=>hide.has(g.name)).map(g=>({name:g.name,count:g.items.length,user:true})));
-  const ec=[];   // the end columns stay hidden: no toggle draws them (#968)
+    .concat(groups.filter(g=>!g.end&&hide.has(g.name)).map(g=>({name:g.name,count:g.items.length,user:true})));
   list.forEach(l=>{l.cells={};cols.forEach(c=>{l.cells[c]=l.vis.filter(x=>x.col===c)})});
-  return{cols,vc,hc,ec,lanes:list};
+  return{cols,vc,hc,lanes:list};
 }
 
 // A saved state from a control the board no longer has is dropped on load (#899): the labels filter, the Specs mode,

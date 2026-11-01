@@ -14,7 +14,7 @@ printf '#!/bin/bash\nwhile :; do sleep 0.5; done\n' > "$S/fastloop.sh"
 printf '#!/bin/bash\nwhile :; do sleep 0.5; done\n' > "$S/cqflush.sh"
 chmod +x "$S"/*.sh
 lp=
-trap 'bash "$S/watchd.sh" stop >/dev/null 2>&1; [ -n "$lp" ] && kill -9 "$lp" 2>/dev/null; rm -rf "$T"' EXIT
+. "$d/driver-tree.sh"; trap 'bash "$S/watchd.sh" stop >/dev/null 2>&1; [ -n "$lp" ] && kill -9 "$lp" 2>/dev/null; driver_tree_kill "$T"; rm -rf "$T"' EXIT
 waitfor() { for _ in $(seq 1 40); do eval "$1" && return 0; sleep 0.25; done; return 1; }
 orphan() { bash -c 'bash "$1" >/dev/null 2>&1 & echo $!; sleep 0.3' _ "$1"; }
 ppid_of() { ps -o ppid= -p "$1" 2>/dev/null | tr -d ' '; }

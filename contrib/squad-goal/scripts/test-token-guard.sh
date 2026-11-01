@@ -4,7 +4,7 @@
 # The off switch (#926): the profile the guard reads names SG_TOKEN_GUARD=off, and the pass writes nothing and pauses
 # nothing. The profile is sourced on every pass, so a changed cap, factor or switch is read on the guard's next pass.
 # Offline: no network, a stub env.sh, a temp state dir and a ledger written by hand. usage: bash test-token-guard.sh [token-guard.sh]
-d=$(cd "$(dirname "$0")" && pwd); src=${1:-$d/token-guard.sh}; T=$(mktemp -d); trap 'rm -rf "$T"' EXIT; fail=0
+d=$(cd "$(dirname "$0")" && pwd); src=${1:-$d/token-guard.sh}; T=$(mktemp -d); . "$d/driver-tree.sh"; trap 'driver_tree_kill "$T"; rm -rf "$T"' EXIT; fail=0
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 unset "${!SG_@}"; export HOME="$T/home" SG_TOKEN_NOTIFY=true; mkdir -p "$HOME" "$T/s" "$T/st"
 cp "$src" "$T/s/token-guard.sh" 2>/dev/null || { echo "FAIL the guard is not there: $src"; exit 1; }

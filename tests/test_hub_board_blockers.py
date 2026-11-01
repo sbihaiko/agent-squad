@@ -128,7 +128,7 @@ def test_an_auto_hidden_column_reads_the_count_left_by_the_label_filter(hub):
 
 
 def test_a_column_hidden_by_the_eye_keeps_its_chip_and_never_gets_a_line(hub):
-    assert re.search(r"vis=all\.filter\(g=>!bottom\|\|\(!hid\.has\(g\.name\)&&!autoHidden\(g\)\)\)", hub.PAGE)
+    assert re.search(r"vis=all\.filter\(g=>!g\.end&&\(!bottom\|\|\(!hid\.has\(g\.name\)&&!autoHidden\(g\)\)\)\)", hub.PAGE)
     assert "vis.map(one)" in hub.PAGE        # only the columns that are drawn are laid out
     assert re.search(r"autoHidden=g=>!hid\.has\(g\.name\)", hub.PAGE), \
         "a column the user hid is a chip, never one of the strip's lines (#1809)"
@@ -342,7 +342,7 @@ def test_the_rows_divide_the_strip_equally_and_fill_the_board_s_height(hub):
 
 
 def test_the_strip_is_still_the_last_child_of_the_docked_board_row(hub):
-    assert re.search(r'const html=vis\.map\(one\)\.join\(""\)\+\(bottom&&hid\.size\?`<div class=hidbar>', hub.PAGE), \
+    assert re.search(r'const html=vis\.map\(one\)\.join\(""\)\+\(bottom&&\(hid\.size\|\|autos\.length\|\|endLines\)\?`<div class=hidbar>', hub.PAGE), \
         "the hidden: strip is appended after every visible column, as the row's last child"
     bar = _rule(hub, ".hidbar")
     assert "order:" not in bar and "float" not in bar and "position:absolute" not in bar, \
@@ -452,5 +452,5 @@ def test_the_named_columns_still_read_the_one_map(hub):
         "the strip's number must ask colOf for the colour of a column the map does not name"
     assert "colOf(g.name,CN)" in re.search(r"^const hidchip=.*$", board, re.M).group(0), \
         "the strip resolves its colour somewhere other than the one map"
-    assert re.search(r"const html=vis\.map\(one\)\.join\(\"\"\)\+\(bottom&&hid\.size\?`<div class=hidbar>\$\{all\.filter\(g=>hid\.has\(g\.name\)\)\.map\(hidchip\)", board), \
+    assert re.search(r"const html=vis\.map\(one\)\.join\(\"\"\)\+\(bottom&&\(hid\.size\|\|autos\.length\|\|endLines\)\?`<div class=hidbar>\$\{all\.filter\(g=>!g\.end&&hid\.has\(g\.name\)\)\.map\(hidchip\)", board), \
         "the strip is not built from the one chip builder"

@@ -25,6 +25,8 @@ _spec = importlib.util.spec_from_file_location("board_columns", pathlib.Path(__f
 _columns = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(_columns)
 
 DEFAULT_KIND = "issue"
+TYPES = ("spec", "task", "bug")   # the lead-time and flow charts' Type (#985)
+DEFAULT_TYPE = "task"
 RAW_DAYS = 30
 DAY = 86400
 SHARED_NAME = "hub-flow.jsonl"   # the one history every repository on a board wrote before #894
@@ -62,18 +64,26 @@ def spec_key(row):
     return NONE if parent is None else str(parent)
 
 
+def type_key(row):
+    """The Type the lead-time and flow charts filter by (#985): `spec` for a card labelled spec, else `bug` for one labelled
+    bug or loop-bug, else `task`. A card labelled both spec and bug is a spec."""
+    labels = row.get("l") or ()
+    return "spec" if "spec" in labels else "bug" if "bug" in labels or "loop-bug" in labels else "task"
+
+
 def sample(rows, now=None):
-    """One sample. `cells` holds each card's kind (kind_key), spec, wave, column, frozen flag and count as
-    [kind, spec, wave, column, frozen, n]: the charts filter by these (#904). A card in no shipped column has column null.
+    """One sample. `cells` holds each card's kind (kind_key), spec, wave, column, frozen flag, count and type (type_key) as
+    [kind, spec, wave, column, frozen, n, type]: the charts filter by these (#904, #985). A card in no shipped column has column null.
     `counts`, `frozen` and `none` are the totals those cells add up to, so a reader of the older shape still works."""
     names = {c["name"] for c in _columns.view_columns()}
     cells = {}
     for r in rows:
         closed = str(r.get("s", "")).lower() == "closed"
         column, freeze = _columns.view_column(r.get("st"), closed, r.get("l"), r.get("cr"))
-        key = (kind_key(r), spec_key(r), wave_key(r.get("l")), column if column in names else None, 1 if freeze else 0)
+        key = (kind_key(r), spec_key(r), wave_key(r.get("l")), column if column in names else None, 1 if freeze else 0, type_key(r))
         cells[key] = cells.get(key, 0) + 1
-    listed = sorted(([*key, n] for key, n in cells.items()), key=json.dumps)   # one order, so equal cards are equal cells
+    listed = sorted(([kind, spec, wave, col, fz, n, typ] for (kind, spec, wave, col, fz, typ), n in cells.items()),
+                    key=json.dumps)   # one order, so equal cards are equal cells
     counts, frozen, none = _totals_of(listed)
     return {"t": int(time.time() if now is None else now), "counts": counts, "frozen": frozen, "none": none, "cells": listed}
 
@@ -81,7 +91,7 @@ def sample(rows, now=None):
 def _totals_of(cells):
     """(counts, frozen, none) that a list of cells adds up to: counts holds the cards in a shipped column, by kind."""
     counts, frozen, none = {}, 0, 0
-    for kind, _spec, _wave, column, fz, n in cells:
+    for kind, _spec, _wave, column, fz, n, *_ in cells:
         if column is None:
             none += n
         else:
@@ -144,13 +154,13 @@ def _rebucket_sample(s, n):
     closed, abandoned = _columns.ROLE["issue_closed"], _columns.ROLE["abandoned"]
     if "cells" in s:
         moved, left = {}, n
-        for kind, spec, wave, column, fz, k in s["cells"]:
+        for kind, spec, wave, column, fz, k, *typ in s["cells"]:
             take = min(k, left) if column == closed else 0
             left -= take
             if take:
-                moved[(kind, spec, wave, abandoned, fz)] = moved.get((kind, spec, wave, abandoned, fz), 0) + take
-            moved[(kind, spec, wave, column, fz)] = moved.get((kind, spec, wave, column, fz), 0) + k - take
-        cells = [[*key, v] for key, v in moved.items()]
+                moved[(kind, spec, wave, abandoned, fz, *typ)] = moved.get((kind, spec, wave, abandoned, fz, *typ), 0) + take
+            moved[(kind, spec, wave, column, fz, *typ)] = moved.get((kind, spec, wave, column, fz, *typ), 0) + k - take
+        cells = [[*key[:5], v, *key[5:]] for key, v in moved.items()]
         counts, frozen, none = _totals_of(cells)
         return {**s, "counts": counts, "frozen": frozen, "none": none, "cells": cells}
     counts, left = {k: dict(v) for k, v in s["counts"].items()}, n

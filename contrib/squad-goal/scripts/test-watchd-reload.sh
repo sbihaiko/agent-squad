@@ -11,7 +11,7 @@ st=$T/st; mkdir -p "$st"; K=$T/skill; S=$K/scripts; mkdir -p "$S"
 old=$T/install-old; new=$T/install-new; mkdir -p "$old" "$new"
 registry() { printf '{"plugins":{"agent-squad@agent-squad":[{"installPath":"%s"}]}}\n' "$1" > "$HOME/.claude/plugins/installed_plugins.json"; }
 registry "$old"
-trap 'bash "$S/watchd.sh" stop >/dev/null 2>&1; kill "$(cat "$st/live.pid" 2>/dev/null)" 2>/dev/null; rm -rf "$T"' EXIT
+. "$d/driver-tree.sh"; trap 'bash "$S/watchd.sh" stop >/dev/null 2>&1; kill "$(cat "$st/live.pid" 2>/dev/null)" 2>/dev/null; driver_tree_kill "$T"; rm -rf "$T"' EXIT
 cp "$d/watchd.sh" "$S/watchd.sh"
 cat > "$S/env.sh" <<EOF
 SG_STATE=$st; SG_PROFILE=

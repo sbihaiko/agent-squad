@@ -4,7 +4,7 @@
 # file on its way out let a later `start` add a third beside the two still running. Three cycles, three fast lanes, three
 # janitors and three comment flushers then worked one state directory; that happened for hours.
 # Offline: a temp state dir, a stub env.sh, a stub watch.sh that marks each cycle.
-d=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); trap 'for p in $supA $supB $supC; do kill -9 $p 2>/dev/null; done; rm -rf "$T"' EXIT; fail=0
+d=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); . "$d/driver-tree.sh"; trap 'for p in $supA $supB $supC; do kill -9 $p 2>/dev/null; done; driver_tree_kill "$T"; rm -rf "$T"' EXIT; fail=0
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 unset "${!SG_@}"; export SG_STATE="$T/st" SG_PROFILE= HOME="$T/home"; mkdir -p "$SG_STATE" "$HOME"
 cp "$d/watchd.sh" "$T/watchd.sh"

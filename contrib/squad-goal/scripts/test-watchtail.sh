@@ -5,7 +5,7 @@
 # one line and still tails the log. Stubbed watchd: no loop starts.
 # usage: bash test-watchtail.sh [path/to/watchtail.sh]
 src=${1:-$(dirname "$0")/watchtail.sh}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-G=/usr/bin/grep; trap 'rm -rf "$T"' EXIT
+G=/usr/bin/grep; . "$(dirname "$0")/driver-tree.sh"; trap 'driver_tree_kill "$T"; rm -rf "$T"' EXIT
 mkdir -p "$T/s" "$T/st"; cp "$src" "$T/s/watchtail.sh"
 printf 'SG_STATE=%s\n' "$T/st" > "$T/s/env.sh"
 printf '#!/bin/bash\necho "$*" >> "%s/calls"\n' "$T" > "$T/s/watchd.sh"; chmod +x "$T/s/watchd.sh"

@@ -40,20 +40,49 @@ def _row(n, col, labels=(), pa=None, sp=False, ho=None):
 
 # Spec 10 is done (every ticket closed); spec 20 is open with two cards in two columns; spec 30 has none.
 GROUPS = [
-    {"name": "Todo", "items": [_row(11, "Todo", pa=20), _row(12, "Todo", pa=20)]},
-    {"name": "Doing", "items": [_row(10, "Doing", sp=True), _row(20, "Doing", sp=True), _row(30, "Doing", sp=True),
+    {"name": "Todo", "end": False, "items": [_row(11, "Todo", pa=20), _row(12, "Todo", pa=20)]},
+    {"name": "Doing", "end": False, "items": [_row(10, "Doing", sp=True), _row(20, "Doing", sp=True), _row(30, "Doing", sp=True),
                                 _row(21, "Doing", pa=20)]},
-    {"name": "Closed", "items": [_row(13, "Closed", pa=10), _row(14, "Closed", pa=10)]},
+    {"name": "Closed", "end": True, "items": [_row(13, "Closed", pa=10), _row(14, "Closed", pa=10)]},
 ]
 
 
-def _lanes(opts):
+def _lanes(opts, groups=GROUPS):
     base = {"mode": "spec", "fw": [], "fs": [], "lc": {}, "hideDone": False, "closed": "Closed"}
-    return _node(f"console.log(JSON.stringify(buildBoard({json.dumps(GROUPS)},{json.dumps({**base, **opts})})));")
+    return _node(f"console.log(JSON.stringify(buildBoard({json.dumps(groups)},{json.dumps({**base, **opts})})));")
 
 
 def _lane(model, lane_id):
     return next(ln for ln in model["lanes"] if ln["id"] == lane_id)
+
+
+# ---- a closed status is history, never a column, in the summary or the search (#969) ----
+
+def test_a_collapsed_lane_summary_counts_open_statuses_only():
+    mixed = [
+        {"name": "Todo", "end": False, "items": [_row(15, "Todo", pa=10)]},
+        {"name": "Doing", "end": False, "items": [_row(10, "Doing", sp=True), _row(16, "Doing", pa=10)]},
+        {"name": "Closed", "end": True, "items": [_row(13, "Closed", pa=10), _row(14, "Closed", pa=10)]},
+    ]
+    lane = _lane(_lanes({"lc": {"s10": True}}, groups=mixed), "s10")
+    assert lane["collapsed"] is True
+    assert "Closed" not in lane["counts"], lane["counts"]
+    assert lane["counts"] == {"Todo": 1, "Doing": 1}, lane["counts"]
+
+
+def test_the_search_matches_open_cards_only():
+    model = _node(
+        f"console.log(JSON.stringify(buildBoard({json.dumps(GROUPS)},{{mode:'spec',fw:[],fs:[],lc:{{}},hideDone:false,"
+        "closed:'Closed',search:true,text:x=>String(x.t).includes('card 13')})));")
+    shown = [r["n"] for ln in model["lanes"] for r in ln["vis"]]
+    assert shown == [], f"a closed card matched the search: {shown}"
+
+
+def test_a_closed_card_never_enters_a_lane_the_board_draws():
+    model = _lanes({})
+    drawn = [r["n"] for ln in model["lanes"] for r in ln["vis"]]
+    assert 13 not in drawn and 14 not in drawn, drawn
+    assert "Closed" not in model["vc"]
 
 
 # ---- the default and the user's choice ----
@@ -81,7 +110,7 @@ def test_a_column_is_drawn_only_while_an_expanded_lane_holds_a_card_in_it():
     model = _lanes({"lc": {"s20": True}})
     assert model["vc"] == [], "a column held only by a collapsed lane is still drawn"
     hidden = {c["name"]: c["count"] for c in model["hc"]}
-    assert hidden == {"Todo": 2, "Doing": 1, "Closed": 2}, "the hidden columns are not named with their counts"
+    assert hidden == {"Todo": 2, "Doing": 1}, "the hidden columns are not named with their counts, or a closed status is named"
     assert len(_lanes({"lc": {"s20": False}})["vc"]) >= 2, "an expanded lane does not draw its columns"
 
 

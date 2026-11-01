@@ -28,8 +28,8 @@ def _row(n, col, pa=None, sp=False):
 GROUPS = [
     {"name": "Todo", "items": [_row(899, "Todo", pa=889)]},
     {"name": "Doing", "items": [_row(889, "Doing", sp=True), _row(890, "Doing", pa=889)]},
-    {"name": "Closed", "items": [_row(41, "Closed", sp=True), _row(43, "Closed", pa=41)]},
-    {"name": "Abandoned", "items": [_row(492, "Abandoned", sp=True), _row(494, "Abandoned", pa=492)]},
+    {"name": "Closed", "end": True, "items": [_row(41, "Closed", sp=True), _row(43, "Closed", pa=41)]},
+    {"name": "Abandoned", "end": True, "items": [_row(492, "Abandoned", sp=True), _row(494, "Abandoned", pa=492)]},
 ]
 
 

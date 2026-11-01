@@ -133,6 +133,13 @@ def test_a_relative_link_is_dropped_instead_of_pointing_at_the_hub(hub):
     assert "href" not in out and "mention" in out, out
 
 
+def test_an_unterminated_tag_is_escaped_not_passed_through(hub):
+    mod, _ = hub
+    out = mod.render_html("<img src=x onerror=alert(1)<p>text</p>")
+    assert not re.search(r"<[^<>]*\bonerror", out), f"a live handler survives: {out}"
+    assert re.sub(r"</?[a-zA-Z][^<>]*>", "", out).count("<") == 0, f"a '<' is left outside a tag: {out}"
+
+
 # --- the card data the page already holds, served on the row -------------------------------------------------------------
 
 def _item(n, title="a ticket", status="Todo", **extra):

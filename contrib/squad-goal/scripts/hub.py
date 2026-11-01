@@ -977,11 +977,11 @@ def _gate_parts(g, now):
     part = {"text": text, "tone": "ok" if g["result"] == "pass" else "err", "tip": f"ran at {str(g['sha'])[:7]}"}
     took, avg = g.get("took"), g.get("avg")
     if isinstance(took, int) and isinstance(avg, int) and not isinstance(took, bool):
-        part["times"] = f"took {_span(took)} · avg {_span(avg)}"   # the card's gate tile shows it; the footer line does not
+        part["times"] = f"took {_gate_span(took)} · avg {_gate_span(avg)}"   # the card's gate tile shows it; the footer line does not
     return [part]
 
-def _span(s):
-    """A gate's run time: `45s`, `2m07s`."""
+def _gate_span(s):
+    """A gate's run time: `45s`, `2m07s`. Its own name: the cycle countdown's `_span` reads `0m45s`."""
     return f"{s}s" if s < 60 else f"{s // 60}m{s % 60:02d}s"
 
 def _nightly_parts(n, now):
@@ -1012,13 +1012,18 @@ def _nightly_parts(n, now):
 def _cycle_state(now):
     """The watch cycle's own beat, read off the `HH:MM:SS CYCLE <n>s` lines watch.sh writes to cycle.log: when the last cycle
     ended and how long the last five took. None when the log has no such line."""
-    try: lines = (STATE / "cycle.log").read_text(errors="ignore").splitlines()[-4000:]
+    try:
+        log = STATE / "cycle.log"
+        lines, wrote = log.read_text(errors="ignore").splitlines()[-4000:], log.stat().st_mtime
     except OSError: return None
     rows = [m.groups() for m in (re.match(r"(\d\d:\d\d:\d\d) CYCLE (\d+)s", l) for l in lines) if m]
     if not rows: return None
-    day = time.strftime("%Y-%m-%d ", time.localtime(now))
+    # The line carries no date: it is dated by the log's own last write, never by today, so a loop that stopped yesterday
+    # does not read as a few hours late.
+    anchor = min(wrote, now)
+    day = time.strftime("%Y-%m-%d ", time.localtime(anchor))
     end = time.mktime(time.strptime(day + rows[-1][0], "%Y-%m-%d %H:%M:%S"))
-    if end > now: end -= 86400   # the line is from before midnight
+    if end > anchor + 1: end -= 86400   # the line is from before midnight
     return {"end": end, "secs": [int(r[1]) for r in rows[-5:]]}
 def loop_log_stamp(line):
     """The UTC time a loop-log line starts with, as epoch seconds. None for a line written with no stamp: its age is unknown, never zero."""
@@ -1588,7 +1593,7 @@ def foot_items(src, now=None):
                    parts=nightly or None, tip=(nightly[0].get("tip") if nightly else None),
                    detail=(nightly[0].get("detail") if nightly else None)),
              _fact("quota", _quota_fact(src.get("quota"), now)),
-             _fact("cycle", _cycle_fact(src.get("cycle"), now)),
+             _fact("cycle", "cycle off" if src.get("loop") is False and src.get("cycle") else _cycle_fact(src.get("cycle"), now)),   # a stopped loop has no next cycle
              _fact("subs", _subs_fact(src.get("subs"), now), parts=_subs_parts(src.get("subs"), now))]
     if "loop" in src:   # the loop state ends the line (the owner's ask, #554): one word read across the room, so it survives a narrow window
         on = bool(src["loop"])
@@ -3208,22 +3213,25 @@ def lead_rows():
     return [{"n": i["n"], "column": _columns_module.view_column(i["st"], str(i["s"]).lower() == "closed", i.get("l"), i.get("cr"))[0],
              "reason": _leadtime.NOT_DELIVERED if _columns_module.not_planned(i.get("cr")) else None,   # the chart's own word (#921)
              "c": i.get("c") if str(i["s"]).lower() == "closed" else None, "o": i.get("o"), "t": i.get("t", ""),
-             "spec": _flow.spec_key(i), "wave": f'{_flow.spec_key(i)}/{_flow.wave_key(i.get("l"))}', "kind": _flow.kind_key(i)}
+             "spec": _flow.spec_key(i), "wave": f'{_flow.spec_key(i)}/{_flow.wave_key(i.get("l"))}', "kind": _flow.kind_key(i),
+             "type": _flow.type_key(i)}
             for i in board_cache["items"]]
 
 
 def board_filters(query):
-    """The bar's Waves, Specs and Kinds values from a query string, `fw=5/4,none/none&fs=5&fk=bug` (#904): (fw, fs, fk).
-    An absent value is an empty list: all."""
+    """The bar's Waves, Specs and Kinds values and the chart's Type from a query string, `fw=5/4,none/none&fs=5&fk=bug&ty=bug`
+    (#904, #985): (fw, fs, fk, ty). An absent value is an empty list: all. An absent or unknown type is the default, tasks."""
     q = urllib.parse.parse_qs(query or "")
     def values(key): return [v for v in (q.get(key, [""])[0]).split(",") if v]
-    return values("fw"), values("fs"), values("fk")
+    ty = q.get("ty", [""])[0]
+    return values("fw"), values("fs"), values("fk"), ty if ty in _flow.TYPES else _flow.DEFAULT_TYPE
 
 
-def _in_bar(row, fw, fs, fk=()):
-    """A row the bar keeps: its Waves key is among the waves named, its spec among the specs named, and its kind among the
-    kinds named. Empty lists keep all."""
-    return (not fw or row["wave"] in fw) and (not fs or row["spec"] in fs) and (not fk or row["kind"] in fk)
+def _in_bar(row, fw, fs, fk=(), ty=None):
+    """A row the bar keeps: its Waves key is among the waves named, its spec among the specs named, its kind among the kinds
+    named, and its type is the chart's Type (#985). Empty lists keep all; no type keeps all."""
+    return ((not fw or row["wave"] in fw) and (not fs or row["spec"] in fs) and (not fk or row["kind"] in fk)
+            and (ty is None or row["type"] == ty))
 
 
 def lead_zoom(query):
@@ -3235,8 +3243,8 @@ def lead_zoom(query):
     if b == COLUMN["issue_closed"]: b = None
     if any(c is not None and c not in ORDER for c in (a, b)): return {"error": "bad column: a and b name a board column"}
     log = q.get("scale", ["jira"])[0] == "log"
-    fw, fs, fk = board_filters(query)
-    rows = _leadtime.span([r for r in lead_rows() if _in_bar(r, fw, fs, fk)], card_transitions(), start=a, end=b)
+    fw, fs, fk, ty = board_filters(query)
+    rows = _leadtime.span([r for r in lead_rows() if _in_bar(r, fw, fs, fk, ty)], card_transitions(), start=a, end=b)
     measure = f"{a or 'opened'} -> {b or 'closed'}"
     if "from" not in q and "to" not in q and "tf" in q:
         days = dict(LEAD_TIMEFRAMES).get(q["tf"][0], 0)
@@ -3266,11 +3274,11 @@ def history_key():
     try: st = path.stat(); return (str(path), st.st_mtime_ns, st.st_size)
     except OSError: return (str(path), None)
 
-def _cfd_payload(fw=(), fs=(), fk=()):
+def _cfd_payload(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
     """The cumulative flow's numbers, computed here from board_cfd; the page draws them and computes none.
     `fw`, `fs` and `fk` are the bar's Waves, Specs and Kinds values: the chart keeps only the cards the bar keeps (#904)."""
     path = _flow.history_path(BOARD, REPO)
-    cfd = _cfd.cfd(_flow.samples(path), ORDER, skips=_flow.skips(path), spec=fs, wave=fw, kind=fk)
+    cfd = _cfd.cfd(_flow.samples(path), ORDER, skips=_flow.skips(path), spec=fs, wave=fw, kind=fk, ty=[ty] if ty else [])
     extents = {p["day"]: _band_extents(p["bands"]) for p in cfd["points"]}
     days = sorted([*extents, *cfd["gaps"]])   # one entry per calendar day: a day with no sample carries no value (#894)
     yticks = _y_ticks(max((e[FLOW_BANDS[0]][1] for e in extents.values()), default=0))
@@ -3295,26 +3303,26 @@ def _cfd_payload(fw=(), fs=(), fk=()):
     return {"cfd": {**view(None), "ranges": {key: view(width) for key, width in CFD_RANGES}}}
 
 
-def _lead_payload(fw=(), fs=(), fk=()):
+def _lead_payload(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
     """The lead-time numbers over the closed cards of the board read, computed here; the page draws them and computes none.
     The bar's values `fw`, `fs` and `fk` filter the rows (#904)."""
-    rows = [r for r in lead_rows() if _in_bar(r, fw, fs, fk)]
+    rows = [r for r in lead_rows() if _in_bar(r, fw, fs, fk, ty)]
     lead = _leadtime.lead_time(rows)
     now = dt.datetime.now(dt.UTC)
     control = {scale: {key: _leadtime.control_chart(rows, timeframe=days, log=scale == "log", now=now)
                        for key, days in LEAD_TIMEFRAMES} for scale in ("jira", "log")}   # the Jira-style control chart (#900)
-    return {"lead": {"measure": lead["measure"], "window": lead["window"],
+    return {"lead": {"measure": lead["measure"], "type": ty, "window": lead["window"],
                      "excluded": [{"reason": r, "count": c} for r, c in lead["excluded"].items()],
                      "excluded_total": sum(lead["excluded"].values()), "series": lead["series"], "summary": lead["summary"],
                      "control": control, "columns": ORDER}}
 
 
-def flow_cfd(fw=(), fs=(), fk=()):
-    """The cumulative flow for the bar's values; the cache key holds them, so a filter change reads anew (#904)."""
-    return chart("cfd", (history_key(), tuple(fw), tuple(fs), tuple(fk)), lambda: _cfd_payload(fw, fs, fk))
+def flow_cfd(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
+    """The cumulative flow for the bar's values and the Type; the cache key holds them, so a change reads anew (#904, #985)."""
+    return chart("cfd", (history_key(), tuple(fw), tuple(fs), tuple(fk), ty), lambda: _cfd_payload(fw, fs, fk, ty))
 
-def flow_lead(fw=(), fs=(), fk=()):
-    return chart("lead", (board_cache.get("t"), tuple(fw), tuple(fs), tuple(fk)), lambda: _lead_payload(fw, fs, fk))
+def flow_lead(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
+    return chart("lead", (board_cache.get("t"), tuple(fw), tuple(fs), tuple(fk), ty), lambda: _lead_payload(fw, fs, fk, ty))
 
 
 def drawn_column(i, moves, read_at, window):
@@ -3391,7 +3399,8 @@ def board():
     def wave(x):   # `wave:NN` label first, then issue number; cards with no wave go last
         w = [int(m.group(1)) for l in x["l"] for m in [re.match(r"wave:(\d+)$", l)] if m]
         return (min(w) if w else 10**9, x["n"])
-    groups = [{"name": n, "n": len(by.get(n, [])), "items": sorted(by.get(n, []), key=lambda x: (x["c"] or "", x["n"]), reverse=True) if n == COLUMN["issue_closed"] else sorted(by.get(n, []), key=wave)} for n in names]
+    ends = {COLUMN["issue_closed"], COLUMN["abandoned"]}   # history by role: a closed status is never a column on any page (#969)
+    groups = [{"name": n, "end": n in ends, "n": len(by.get(n, [])), "items": sorted(by.get(n, []), key=lambda x: (x["c"] or "", x["n"]), reverse=True) if n == COLUMN["issue_closed"] else sorted(by.get(n, []), key=wave)} for n in names]
     prs = sorted(board_cache["prs"], key=lambda p: p["u"], reverse=True)
     for x in prs:
         if x.get("br"): x.setdefault("gs", None); x.setdefault("pb", None); x["kind"] = _columns_module.BRANCH_KIND; continue   # a work branch has no review strip and no badge: its chip is its standing against dev
@@ -3599,7 +3608,8 @@ HTML_BARE = re.compile(r"(?<![=\w-])(checked|disabled|open)(?=[\s/>]|$)")
 def render_html(src):
     """GitHub's rendered body passed through the allow-list: the tags it renders keep their structure, a class or style
     never rides, a relative or `javascript:` link is dropped, and a task-list checkbox keeps its look. Anything else is
-    its text alone, so a body never reaches the page with a script, a frame or a handler."""
+    its text alone, and a `<` that opens no whole tag is escaped, so a body never reaches the page with a script, a frame or
+    a handler."""
     t = HTML_COMMENT.sub("", HTML_SCAFFOLD.sub("", src or ""))
     def one(m):
         close, name, attrs = bool(m.group(1)), (m.group(2) or "").lower(), m.group(3) or ""
@@ -3618,7 +3628,13 @@ def render_html(src):
         if name == "a" and any(k.startswith(" href=") for k in kept): kept += [' target="_blank" rel="noopener"']
         if name == "img": kept += [' referrerpolicy="no-referrer" loading="lazy"']
         return f"<{name}{''.join(kept)}>"
-    return HTML_TAG.sub(one, t)
+    out, last = [], 0
+    for m in HTML_TAG.finditer(t):
+        out.append(t[last:m.start()].replace("<", "&lt;"))
+        out.append(one(m))
+        last = m.end()
+    out.append(t[last:].replace("<", "&lt;"))
+    return "".join(out)
 def issue_detail(n, repo=None):
     """Issue (or PR) body + the last 5 comments, fetched on click and cached 60 s. n is an int, never interpolated raw.
     `repo` is the repository the card belongs to (#1820): a number is only a number, and PR #1821 of the tooling
@@ -4100,7 +4116,8 @@ function specBar(p){p=p||{};const st=p.state==="ok"||p.state==="info"?" "+p.stat
  return `<div class="at${st}"${p.tip?` title="${iq(p.tip)}"`:""}><span class=ah><span class=dot aria-hidden="true"></span>Specs${p.so?`<span class=so>${esc(p.so)}</span>`:""}</span><span class=av>${esc(p.value||"no open spec")}</span>${bar}</div>`}
 let instCyc=null,instLast={};
 function instSet(id,h){const e=$("#"+id);if(e&&instLast[id]!==h){instLast[id]=h;e.innerHTML=h}}
-function instTick(){const e=$("#icyc");if(e)e.textContent=instCyc===null?"?":cycleFmt(instCyc-Date.now()/1000)}
+let instCycOff=false;   // the hub says "cycle off" when the loop is stopped: no countdown, no "late"
+function instTick(){const e=$("#icyc");if(e)e.textContent=instCycOff?"loop off":instCyc===null?"?":cycleFmt(instCyc-Date.now()/1000)}
 function instDraw(d){const c=$("#inst");if(!c)return;const facts=(d||{}).facts||[];c.classList.toggle("warn",!!(d||{}).warn);
  const gs=$("#igs");if(gs&&!gs.children.length)gs.innerHTML=instGauges(d);
  else if(gs)ldCells(d).forEach((x,i)=>{const n=gs.children[i],g=gaugeGeom((d||{})[x.k.toLowerCase()]);if(!n)return;n.classList.toggle("ldred",x.red);
@@ -4109,7 +4126,7 @@ function instDraw(d){const c=$("#inst");if(!c)return;const facts=(d||{}).facts||
  instSet("ian",instTiles(facts).map(tileHtml).join(""));instSet("ispec",specBar((d||{}).specs));
  const u=instUsage(facts);instSet("iuse",u?`<div class=irw><span>Tokens</span><b class=bad>${esc(u.tok)}</b></div><div class=irw><span>Calls over cap</span><b class=bad>${esc(u.calls)}</b></div>`:"<div class=irw><span>Tokens</span><b>no call over the cap</b></div>");
  const s=$("#instsr");if(s)s.textContent=instSum(facts);
- const cy=instFact(facts,"cycle"),l=cy?cycleLeft(cy.text):null;instCyc=l===null?null:Date.now()/1000+l;instTick()}
+ const cy=instFact(facts,"cycle"),l=cy?cycleLeft(cy.text):null;instCycOff=!!cy&&cy.text==="cycle off";instCyc=l===null?null:Date.now()/1000+l;instTick()}
 // }INST
 async function loadPoll(){try{const d=await (await fetch("/api/load")).json();instDraw(d)}catch(e){}}
 function groupHeader(k,rows){const n=rows.filter(r=>r.kind!=="childcc").length,spend=rows.reduce((a,r)=>a+r.spend,0),agents=rows.reduce((a,r)=>a+(r.agents||0),0);let title=usd(spend);let text=n+" · "+title;if(k==="running"&&CAPS&&CAPS.per_run&&CAPS.per_run.label)title+=" · "+CAPS.per_run.label;if(k==="running")text=(CAPS&&CAPS.runs&&CAPS.children)?`RUNS ${n}/${CAPS.runs} · AGENTS ${agents}/${CAPS.children}`+((CAPS.waiting||[]).length?" · waiting: "+CAPS.waiting.map(w=>`${w.holder} (${w.ceiling})`).join(", "):""):`${n} · ${agents}`;return {text,title}}
@@ -4580,7 +4597,7 @@ function restore(){document.querySelectorAll("#bbody .sc").forEach(e=>{e.scrollT
 // the only one — which is what lets the ring cycle.
 const COLORS=/*BOARD_COLORS*/;
 const COLNAME=/*BOARD_NAMES*/;   // the columns' names by the fact that sets them: the board's script holds no column name of its own
-const hidCols=()=>bo.hidden??[COLNAME.issue_closed,COLNAME.abandoned].filter(Boolean);   // Closed and Abandoned are history: hidden until the user shows them
+const hidCols=()=>bo.hidden??[];
 const RING=["#a3e635","#d8b4fe","#ff9ecd","#7dd3fc"];   // reserved for the columns the user creates, and never one of the named columns
 const colOf=(n,names)=>{const u=(names||[]).filter(x=>!Object.hasOwn(COLORS,x)).sort(),i=u.indexOf(n);return COLORS[n]||RING[(i<0?0:i)%RING.length]};
 const caseRows=cs=>(cs||[]).map(c=>{const a=c.age<3600?Math.max(1,Math.round(c.age/60))+"m":c.age<172800?Math.round(c.age/3600)+"h":Math.round(c.age/86400)+"d";return `<div class="tcrow ${c.result==="fail"?"fail":"pass"}" data-key="test case:${c.issue}@${esc(c.commit)}"><span class=tr>${esc(c.result)}</span><span class=id>#${c.issue}</span><span class=ta>${a}</span><code class=tm>${esc(c.commit)}</code></div>`}).join("");   // one row for each test case item, in the model's order: a strip beside the axis, never a column, and the pane reads no cache of its own
@@ -4612,9 +4629,11 @@ const flowCFD=c=>{const sel=`<label class=fhead>Range <select id=cfdr>${CFD_R.ma
     const text=gap?`${esc(d)}: no whole read this day`:`${esc(d)}: ${parts} · WIP ${(c.wip||[])[i]} · throughput ${tp===null?"none":tp}`;
     return `<rect x=${flowX(i,n)-cw/2} y=${flowP-10} width=${cw} height=${flowH-2*flowP+10} fill=transparent><title>${text}</title></rect>`;}).join("");
   return sel+`<svg viewBox="0 0 ${flowW} ${flowH}">${c.bands.map(polys).join("")}${cfdAxis(c)}${hover}</svg>`+
-    `<p class=fnote>history from ${esc(c.start)} UTC</p>${c.legacy?`<p class=fnote>${c.legacy} ${c.legacy===1?"day comes":"days come"} from before the kind, spec and wave history: they answer no kind, no spec and no wave</p>`:""}<p>${c.bands.map(b=>`<span class=flg><i style="background:${COLORS[b.name]||"#888"}"></i>${esc(b.name)}</span>`).join("")}</p>`;};
+    `<p class=fnote>history from ${esc(c.start)} UTC</p>${c.legacy?`<p class=fnote>${c.legacy} ${c.legacy===1?"day comes":"days come"} from before the kind, spec, wave and type history: they answer none of these</p>`:""}<p>${c.bands.map(b=>`<span class=flg><i style="background:${COLORS[b.name]||"#888"}"></i>${esc(b.name)}</span>`).join("")}</p>`;};
 const EXREASON={not_planned:"closed as not planned",abandoned:"closed as abandoned",open:"still open",no_opened:"no opened date"};   // the cards the chart leaves out, in words (#921)
-let LT={tf:"30",log:false,pick:null,zc:null,zr:null,rng:null,tok:0,noclick:false,a:"",b:"",cols:[]};   // the control chart's timeframe, its scale, the cluster listed under it, and a drag zoom: the hub's chart over zr=[from,to] (#900)
+const LTS=ls.lt||{},LT_TYPES=[["spec","Specs"],["task","Tasks"],["bug","Bugs"]];   // the chart's own settings, restored from the page's storage (#985)
+let LT={tf:["7","14","30","90","180","all"].includes(LTS.tf)?LTS.tf:"30",log:LTS.log===true,ty:LT_TYPES.some(([k])=>k===LTS.ty)?LTS.ty:"task",pick:null,zc:null,zr:null,rng:null,tok:0,noclick:false,a:"",b:"",cols:[]};   // the control chart's timeframe, its scale, its type, the cluster listed under it, and a drag zoom: the hub's chart over zr=[from,to] (#900, #985)
+const saveLT=()=>{ls.lt={tf:LT.tf,log:LT.log,ty:LT.ty};save()};
 const ltSpan=(r,a,b)=>{const t0=Date.parse(r.start),t1=Date.parse(r.end),at=f=>new Date(t0+f*(t1-t0)).toISOString();return [at(a<0?0:a),at(b>1?1:b)]};   // plot fractions to the dates they name (#900)
 const LT_TF=[["7","Past week"],["14","Past 2 weeks"],["30","Past month"],["90","Past 3 months"],["180","Past 6 months"],["all","All"]];
 const ltX=x=>flowP+x*(flowW-2*flowP),ltY=y=>flowH-flowP-y*(flowH-2*flowP);
@@ -4622,6 +4641,7 @@ const ltLine=(v,col,dash,name)=>v?`<line x1=${flowP} x2=${flowW-flowP} y1=${ltY(
 const ltChart=c=>{const n=c.dots.length,base=flowH-flowP,ink="#b8c0cf",mute="var(--mute)";
   const ctl=`<p class=fhead><label>Timeframe <select id=ltr>${LT_TF.map(([k,v])=>`<option value=${k}${LT.tf===k?" selected":""}>${v}</option>`).join("")}</select></label> `+
     `<label>Scale <select id=lts><option value=jira${LT.log?"":" selected"}>Jira scale</option><option value=log${LT.log?" selected":""}>Log scale</option></select></label> `+
+    `<label>Type <select id=lty>${LT_TYPES.map(([k,v])=>`<option value=${k}${LT.ty===k?" selected":""}>${v}</option>`).join("")}</select></label> `+
     `<label>Start <select id=lta><option value="">Created</option>${LT.cols.map(k=>`<option${LT.a===k?" selected":""}>${esc(k)}</option>`).join("")}</select></label> `+
     `<label>End <select id=ltb>${LT.cols.map(k=>{const v=k===COLNAME.issue_closed?"":k;return `<option value="${esc(v)}"${LT.b===v?" selected":""}>${esc(k)}</option>`}).join("")}</select></label> `+   // the span each dot measures, from the recorded transitions (#905)
     `<button id=ltz${LT.zr?"":" disabled"} title="drag across the plot to zoom to those dates">Reset zoom</button></p>`;
@@ -4644,7 +4664,7 @@ const ltChart=c=>{const n=c.dots.length,base=flowH-flowP,ink="#b8c0cf",mute="var
   const rows=pk?`<table class=rt><thead><tr><th>Issue</th><th>Title</th><th>Elapsed</th><th>Closed</th></tr></thead><tbody>${pk.dots.map(d=>`<tr data-o=${d.n} style="cursor:pointer"><td>#${d.n}</td><td>${esc(d.title)}</td><td>${esc(d.text)}</td><td>${esc(d.closed)}</td></tr>`).join("")}</tbody></table>`:"";
   return ctl+S+legend+`<svg data-lt viewBox="0 0 ${flowW} ${flowH}">${axes}${ys}${xs}${band}${roll}${lines}${dots}</svg>`+note+rows;};
 const flowLead=l=>{const S=l.summary,ex=l.excluded.map(e=>`${e.count} ${esc(EXREASON[e.reason]||e.reason)}`).join(", ");
-  const head=`<p class=fhead><b>${esc(l.measure)}</b> · window ${l.window.size} ${esc(l.window.unit)} · excluded ${l.excluded_total}${ex?" ("+ex+")":""}</p>`;
+  const head=`<p class=fhead>${esc(LT_TYPES.find(([k])=>k===l.type)[1].toLowerCase())} · <b>${esc(l.measure)}</b> · window ${l.window.size} ${esc(l.window.unit)} · excluded ${l.excluded_total}${ex?" ("+ex+")":""}</p>`;
   LT.cols=l.columns||[];if(!S)return head+"<p class=fnote>no closed card yet</p>";
   return head+ltChart(LT.zc||l.control[LT.log?"log":"jira"][LT.tf]);};
 const drawFlow=()=>{{const w=$("#flowb").clientWidth-20;flowW=w<600?600:w>1600?1600:(w|0)}const cfd=FLOWK==="cfd";
@@ -4664,25 +4684,28 @@ document.addEventListener("pointermove",e=>{if(!LTD)return;const x1=ltClamp(ltPx
 document.addEventListener("pointerup",()=>{const d=LTD;LTD=null;if(!d||!d.moved)return;d.s.querySelector("rect.ltsel")?.remove();LT.noclick=true;
   const a=(ltLo(d.x0,d.x1)-flowP)/(flowW-2*flowP),b=(ltHi(d.x0,d.x1)-flowP)/(flowW-2*flowP);if(b-a<0.005||!LT.rng)return;const [f,t]=ltSpan(LT.rng,a,b);ltZoom(f,t)});
 $("#flowb").onchange=e=>{if(e.target.id==="cfdr"){CF.r=e.target.value;drawFlow();return}
-  if(e.target.id==="ltr"){LT.tf=e.target.value;LT.zr=null;ltGet();return}
+  if(e.target.id==="ltr"){LT.tf=e.target.value;saveLT();LT.zr=null;ltGet();return}
+  if(e.target.id==="lty"){LT.ty=e.target.value;saveLT();barMoved();return}
   if(e.target.id==="lta"||e.target.id==="ltb"){LT[e.target.id==="lta"?"a":"b"]=e.target.value;LT.pick=null;if(LT.zr){ltZoom(LT.zr[0],LT.zr[1]);return}ltGet();return}
-  if(e.target.id==="lts"){LT.log=e.target.value==="log";LT.pick=null;if(LT.zr){ltZoom(LT.zr[0],LT.zr[1]);return}if(ltOwn()){ltGet();return}drawFlow()}};
+  if(e.target.id==="lts"){LT.log=e.target.value==="log";saveLT();LT.pick=null;if(LT.zr){ltZoom(LT.zr[0],LT.zr[1]);return}if(ltOwn()){ltGet();return}drawFlow()}};
 $("#flowb").onclick=e=>{if(LT.noclick){LT.noclick=false;return}
   if(e.target.id==="ltz"){LT.zr=null;ltGet();return}
   const k=e.target.closest("circle[data-k]");if(k){LT.pick=+k.dataset.k;drawFlow();return}const r=e.target.closest("tr[data-o]");if(r)showIssue(+r.dataset.o,"__REPO__")};
 $("#bflow").onclick=()=>flowOpen("cfd");$("#blead").onclick=()=>flowOpen("lead");addEventListener("resize",()=>{if(!$("#flowov").hidden)drawFlow()});
 // flow-charts:end
-const barQuery=()=>["fw","fs","fk"].map(k=>`${k}=${encodeURIComponent((bo[k]||[]).join(","))}`).join("&");   // the bar's Waves, Specs and Kinds, read by both diagrams; the board filters on the page (#904)
+const barQuery=()=>["fw","fs","fk"].map(k=>`${k}=${encodeURIComponent((bo[k]||[]).join(","))}`).join("&")+`&ty=${LT.ty}`;   // the bar's Waves, Specs and Kinds and the chart's Type, read by both diagrams; the board filters on the page (#904, #985)
 async function pollBoard(){lim.busy=1;try{const b=await (await fetch("/api/board")).json(),FLOW=/*BOARD_FLOW*/,   // development flow, left to right
 all=[b.prs,...b.groups.sort((x,y)=>{const i=n=>{const k=FLOW.indexOf(n);return k<0?FLOW.length:k};return i(x.name)-i(y.name)})],f=q.trim().replace(/^#/,"");
-if(bo.open===undefined||!all.some(g=>g.name===bo.open))bo.open=(all.find(g=>g.n&&g.name!==COLNAME.issue_closed&&!isPR(g.name))||all[2]).name;
+if(bo.open===undefined||!all.some(g=>g.name===bo.open))bo.open=(all.find(g=>g.n&&!g.end&&!isPR(g.name))||all[2]).name;
 const CN=all.map(g=>g.name);   // every column of this board: what colOf reads the user columns out of, never a colour of its own
 lastRead=Date.now();readStale=!!b.err;$("#bcases").innerHTML=caseRows(b.cases);$("#bt").textContent=b.err?"(stale)":"";
-const fw=bo.fw||[],fk=bo.fk||[],boardGroups=all.filter(g=>!isPR(g.name)),allRows=boardGroups.flatMap(g=>g.items),specTitle=new Map();   // the filter bar: the waves, specs and kinds the board holds (#899, #904)
+const fw=bo.fw||[],fk=bo.fk||[],boardGroups=all.filter(g=>!isPR(g.name)),allRows=boardGroups.filter(g=>!g.end).flatMap(g=>g.items),specTitle=new Map();   // the filter bar: the waves, specs and kinds the open cards hold (#899, #904, #969)
 allRows.forEach(x=>{if(x.sp)specTitle.set(String(x.n),x.t)});
-const wOpts=waveOptions(allRows),sOpts=specOptions(boardGroups,COLNAME.issue_closed,COLNAME.abandoned),SLOTS=specSlots(sOpts.filter(s=>s!=="none"));   // a finished spec is no option (#981); one color per spec option on the board (#917)
-const fs=keptSpecs(bo.fs||[],boardGroups,COLNAME.issue_closed,COLNAME.abandoned);
+const wOpts=waveOptions(allRows),sOpts=specOptions(boardGroups),SLOTS=specSlots(sOpts.filter(s=>s!=="none"));   // a finished spec is no option (#981); one color per spec option on the board (#917)
+const fs=keptSpecs(bo.fs||[],boardGroups);
 if(!b.err&&fs.length!==(bo.fs||[]).length){bo.fs=fs;saveB()}   // a saved key whose spec finished is dropped (#981)
+const hidKept=keptHidden(bo.hidden||[],all);
+if(!b.err&&hidKept.length!==(bo.hidden||[]).length){bo.hidden=hidKept;saveB()}   // a saved hidden set drops a closed status on load (#969)
 const fillBar=(id,opts,label,sel,name,col)=>{const box=$("#"+id),k=opts.join("|");
  if(box.dataset.k!==k){box.dataset.k=k;box.innerHTML=`<div class=fpopb><button type=button data-clear>clear</button></div>`+opts.map(v=>`<label><input type=checkbox value="${esc(v)}"> ${col?`<i class=sw style="background:${col(v)}"></i>`:""}${esc(label(v))}</label>`).join("")}
  box.querySelectorAll("input").forEach(c=>c.checked=sel.includes(c.value));
@@ -4720,7 +4743,7 @@ const perr=g=>g.err?`<div class=perr title="a repository the hub was told to rea
 const fits={};all.forEach(g=>fits[g.name]=g.items.filter(x=>(!f||String(x.n).includes(f)||x.t.toLowerCase().includes(f.toLowerCase()))&&(isPR(g.name)?boardOk({...x,kind:"pr"},[],[],fk):boardOk(x,fw,fs,fk))));   // the Specs filter shows, only shows, or hides the spec-labelled items, never a column of its own (#247, #456)
 const kept=new Set(bo.kept||[]),
  autoHidden=g=>!hid.has(g.name)&&!kept.has(g.name)&&!fits[g.name].length&&!g.tracking,   // the columns the strip's lines stand for, and the only ones: a column the user hid is a chip, one the user kept is drawn, and the lane is always drawn -- empty, it says 0 (#440)
- vis=all.filter(g=>!bottom||(!hid.has(g.name)&&!autoHidden(g))),autos=bottom?all.filter(autoHidden):[];
+ vis=all.filter(g=>!g.end&&(!bottom||(!hid.has(g.name)&&!autoHidden(g)))),autos=bottom?all.filter(g=>!g.end&&autoHidden(g)):[];   // a closed status is never a column, so it has no eye and no line to show it (#969)
 const badge=g=>`<span class=n>${f||fw.length||fs.length||fk.length?fits[g.name].length+"/":""}${g.n}</span>`;   // the number the header shows, and the number the strip's line repeats
 const one=g=>{const it=fits[g.name],shown=it.slice(0,lim[g.name]||25),dot=`<i style="background:${colOf(g.name,CN)}"></i>`,cnt=badge(g),isOpen=g.name===COLNAME.pr_open?bo.prOpen!==false:bo.open===g.name;
 if(bottom)return `<div class="col${isPR(g.name)?" prs lane":""}" style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><div class=ch><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}</span></div><div class=sc data-g="${esc(g.name)}">${perr(g)}${cards(g,it,shown)}</div></div>`;
@@ -4730,8 +4753,9 @@ const fmtN=n=>n>=1000?n.toLocaleString("en-US"):""+n;   // "688" is one token; o
 // means. data-col names the column, so the colour is a CSS rule per category rather than an inline value; the one
 // exception is a column #1793's map does not name, which takes the ring colour and can only come from colOf here.
 const hidchip=g=>{const c=colOf(g.name,CN),ring=!Object.hasOwn(COLORS,g.name);return `<span class=chip data-eye="${esc(g.name)}" data-col="${esc(g.name)}" title="${esc(g.name+" — "+fmtN(g.n))}"><span class=lbl>${esc(g.name)}</span><b${ring?` style="color:${c}"`:""}>${fmtN(g.n)}</b></span>`};
-const html=vis.map(one).join("")+(bottom&&hid.size?`<div class=hidbar>${all.filter(g=>hid.has(g.name)).map(hidchip).join("")}`:"")+(bottom&&(hid.size||autos.length)?`${hid.size?"":`<div class=hidbar>`}${autos.length?(hid.size?'<div class=hidsep></div>':"")+autos.map(g=>`<span class=hidline style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><span>${esc(g.name)}</span><b>${badge(g)}</b>${eye(g,true)}</span>`).join(""):""}</div>`:"");   // one quiet line per column hidden only because it is empty, behind a divider (#1809)
-const model=bo.lmode==="none"?null:buildBoard(all.filter(g=>!isPR(g.name)),{mode:bo.lmode||"spec",fw:bo.fw||[],fs:bo.fs||[],fk:bo.fk||[],closed:COLNAME.issue_closed,abandoned:COLNAME.abandoned,hidden:hidCols(),lc:bo.lc||{},hideDone:!!bo.hideDone,search:!!f,text:x=>!f||String(x.n).includes(f)||x.t.toLowerCase().includes(f.toLowerCase())});   // the lanes read every row; the search and the filters only hide rows (#890)
+const endLines=all.filter(g=>g.end).map(g=>`<span class=hidline><span>${esc(g.name)}</span><b>${fmtN(g.n)}</b></span>`).join("");   // a closed status is a text total: no eye, no show action (#969)
+const html=vis.map(one).join("")+(bottom&&(hid.size||autos.length||endLines)?`<div class=hidbar>${all.filter(g=>!g.end&&hid.has(g.name)).map(hidchip).join("")}${hid.size&&autos.length?'<div class=hidsep></div>':""}${autos.map(g=>`<span class=hidline style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><span>${esc(g.name)}</span><b>${badge(g)}</b>${eye(g,true)}</span>`).join("")}${endLines}</div>`:"");   // one quiet line per column hidden only because it is empty, behind a divider (#1809)
+const model=bo.lmode==="none"?null:buildBoard(all.filter(g=>!isPR(g.name)),{mode:bo.lmode||"spec",fw:bo.fw||[],fs:bo.fs||[],fk:bo.fk||[],closed:COLNAME.issue_closed,hidden:hidCols(),lc:bo.lc||{},hideDone:!!bo.hideDone,search:!!f,text:x=>!f||String(x.n).includes(f)||x.t.toLowerCase().includes(f.toLowerCase())});   // the lanes read every row; the search and the filters only hide rows (#890)
 const lanesHtml=model?laneHtml(model):null;lanesNow=model;$("#lhd").checked=!!bo.hideDone;
 $("#lmode").value=bo.lmode||"spec";$("#bbody").classList.toggle("lanes",!!model);
 $("#lhc").innerHTML=model&&model.hc.length?`<button class=hcpill id=lhcx title="columns with no card in an expanded lane: click to expand the lanes that hold their cards">+${model.hc.length} hidden: ${model.hc.map(x=>x.user?`<span class=hcu data-eye="${esc(x.name)}" title="show this column">${esc(x.name)} <b>${x.count}</b></span>`:esc(x.name)+" <b>"+x.count+"</b>").join(" · ")}</button>`:"";
@@ -4849,8 +4873,7 @@ const laneSet=v=>{bo.lc=bo.lc||{};for(const l of(lanesNow?lanesNow.lanes:[]))bo.
 $("#lcall").onclick=()=>laneSet(true);$("#lexp").onclick=()=>laneSet(false);
 document.addEventListener("click",e=>{const h=e.target.closest("#bbody .lh");if(h){const id=h.dataset.lane,coll=h.closest(".lane").classList.contains("coll");bo.lc=bo.lc||{};laneToggle(id,coll);return}
  const m=e.target.closest("#bbody .more");if(m){bo.cx=bo.cx||{};bo.cx[m.dataset.cell]=true;saveB();pollBoard();return}   // a more click opens its own cell only
- const p=e.target.closest("#lhcx");if(p&&lanesNow){if(p.hasAttribute("data-hide")){bo.showClosed=false;saveB();pollBoard();return}
-  const end=new Set([COLNAME.issue_closed,COLNAME.abandoned]),names=new Set(lanesNow.hc.map(x=>x.name).filter(c=>!end.has(c)));bo.lc=bo.lc||{};   // a hidden column's pill expands the lanes that hold its cards; the end columns are drawn, never a lane opened for them
+ const p=e.target.closest("#lhcx");if(p&&lanesNow){const names=new Set(lanesNow.hc.map(x=>x.name));bo.lc=bo.lc||{};   // a hidden column's pill expands the lanes that hold its cards
   for(const l of lanesNow.lanes)if(l.collapsed&&Object.keys(l.counts).some(c=>names.has(c)))bo.lc[l.id]=false;saveB();pollBoard()}});
 const barMoved=()=>{LT.tok++;LT.zc=null;LT.zr=null;FLOWD={};if(!$("#flowov").hidden&&FLOWK){flowOpen(FLOWK);if(FLOWK==="lead"&&ltOwn())ltGet()}};   // a bar value changes both charts: each reads its route anew, and a chosen span its own chart (#904, #905)
 const pickFilter=(id,key)=>{const box=$("#"+id);box.addEventListener("change",e=>{const v=e.target.value,h=new Set(bo[key]||[]);e.target.checked?h.add(v):h.delete(v);bo[key]=[...h];barMoved();saveB();pollBoard()});box.addEventListener("click",e=>{if(!e.target.closest("[data-clear]"))return;e.preventDefault();bo[key]=[];barMoved();saveB();pollBoard()})};

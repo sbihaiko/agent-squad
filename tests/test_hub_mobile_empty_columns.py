@@ -33,6 +33,21 @@ GROUPS = json.dumps([
 
 
 @pytest.mark.node_bound
+@pytest.mark.parametrize("hide", ["true", "false"])
+def test_a_closed_status_is_never_a_carousel_column_and_is_named_as_a_total(hide):
+    groups = [
+        {"name": "Todo", "n": 1, "end": False, "items": [{"n": 1}]},
+        {"name": "Closed", "n": 2, "end": True, "items": [{"n": 2}, {"n": 3}]},
+        {"name": "Abandoned", "n": 1, "end": True, "items": [{"n": 4}]},
+    ]
+    out = run_js(GESTURE_JS.read_text(),
+                 f"(() => {{ const r = carouselColumns({json.dumps(groups)}, [1, 2, 1], {hide}); "
+                 "return { shown: r.shown.map(g => g.name), closed: r.closed }; })()")
+    assert out["shown"] == ["Todo"], out
+    assert out["closed"] == [{"name": "Closed", "count": 2}, {"name": "Abandoned", "count": 1}], out
+
+
+@pytest.mark.node_bound
 def test_the_filter_on_keeps_only_the_columns_that_hold_a_card():
     out = run_js(GESTURE_JS.read_text(), f"carouselColumns({GROUPS}, [0, 2, 0, 1], true)")
     assert [g["name"] for g in out["shown"]] == ["Todo", "Done"]

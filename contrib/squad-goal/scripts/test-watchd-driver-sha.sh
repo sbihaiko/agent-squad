@@ -6,7 +6,7 @@ d=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); fail=0
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 unset "${!SG_@}"; export HOME="$T/home"; mkdir -p "$HOME"
 K=$T/skill; S=$K/scripts; st=$T/st; mkdir -p "$S" "$st"
-trap 'bash "$S/watchd.sh" stop >/dev/null 2>&1; rm -rf "$T"' EXIT
+. "$d/driver-tree.sh"; trap 'bash "$S/watchd.sh" stop >/dev/null 2>&1; driver_tree_kill "$T"; rm -rf "$T"' EXIT
 cp "$d/watchd.sh" "$S/watchd.sh"; printf 'SG_STATE=%s; SG_PROFILE=\n' "$st" > "$S/env.sh"
 for f in watch fastloop cqflush; do printf '#!/bin/bash\nsleep 30\n' > "$S/$f.sh"; done
 sha=0123456789abcdef0123456789abcdef01234567
