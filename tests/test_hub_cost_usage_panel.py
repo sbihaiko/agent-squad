@@ -133,7 +133,7 @@ def test_section_order_is_gauges_in_usage_and_tiles_chart_tokens_in_spend():
     use, spend = _usage(), _stats()
     assert use.find("id=isub") >= 0
     assert use.find("id=pie") < 0 and use.find("id=piet") < 0
-    pos = [spend.find("id=tot"), spend.find("Spend over time"), spend.find("id=chart"), spend.find("Model tokens · this month"), spend.find("id=pie")]
+    pos = [spend.find("id=tot"), spend.find("Tokens over time"), spend.find("id=chart"), spend.find("Model tokens · this month"), spend.find("id=pie")]
     assert all(p >= 0 for p in pos), pos
     assert pos == sorted(pos), pos
     for gone in ("id=kpi", "id=open", "id=cash", "id=totnote"):
@@ -160,39 +160,40 @@ def test_per_toggle_reads_per_hour_day_month():
     assert re.search(r'data-p=day class="on"', html)
 
 
-def test_tot_tiles_read_today_this_month_all_time():
-    html = _render("const st={totals:{today:20.67,month:612,all:1234}};\nconst same=st.totals.all===st.totals.month;\n",
+def test_tot_tiles_read_today_this_month_all_time_in_tokens():
+    """Owner, 2026-11-01: everything on the spend panel counts tokens, never dollars."""
+    html = _render("const st={totals:{tok_today:20670,tok_month:612000,tok_all:1234000}};\nconst same=st.totals.tok_all===st.totals.tok_month;\n",
                    _stmt('$("#tot").innerHTML='))
     assert re.findall(r"<div>([^<]+)<b", html) == ["today", "this month", "all time"]
-    assert usd_texts(html) == ["$20.67", "$612", "$1234"]
+    assert re.findall(r"<b[^>]*>([^<]+)</b>", html) == ["21K", "612K", "1.2M"]
 
 
 def test_tot_all_time_equal_to_month_reads_this_month():
-    html = _render("const st={totals:{today:1.5,month:612,all:612}};\nconst same=st.totals.all===st.totals.month;\n",
+    html = _render("const st={totals:{tok_today:1500,tok_month:612000,tok_all:612000}};\nconst same=st.totals.tok_all===st.totals.tok_month;\n",
                    _stmt('$("#tot").innerHTML='))
     tiles = re.findall(r"<div>[^<]+<b([^>]*)>([^<]+)</b></div>", html)
     assert tiles[-1] == (" class=m", "= this month"), tiles
-    assert tiles[1] == ("", "$612")
+    assert tiles[1] == ("", "612K")
     rule = re.search(r"\.tot b\.m\{([^}]*)\}", SRC)
     assert rule and "color:var(--mute)" in rule.group(1), rule
     assert "font-size:15px" not in rule.group(1)  # "= this month" is text, not a value: it must fit the tile
 
 
-def test_dollars_drop_cents_at_and_above_one_hundred():
-    html = _render("const st={totals:{today:99.99,month:100,all:1234.4}};\nconst same=st.totals.all===st.totals.month;\n",
+def test_tokens_read_plain_then_k_then_m_and_b():
+    html = _render("const st={totals:{tok_today:999,tok_month:1000,tok_all:2500000000}};\nconst same=false;\n",
                    _stmt('$("#tot").innerHTML='))
-    assert usd_texts(html) == ["$99.99", "$100", "$1234"]
+    assert re.findall(r"<b[^>]*>([^<]+)</b>", html) == ["999", "1K", "2.50B"]
 
 
 def test_chart_has_max_rule_ok_bar_now_and_no_year():
     out = _run_js("""
-const rows=[{t:'2026-10-09',spend:2,runs:1},{t:'2026-10-10',spend:14.28,runs:2},{t:'2026-10-11',spend:5,runs:1}];
+const rows=[{t:'2026-10-09',tokens:2000,runs:1},{t:'2026-10-10',tokens:14280000,runs:2},{t:'2026-10-11',tokens:5000,runs:1}];
 const html=bars(rows);
 const texts=[...html.matchAll(/<text[^>]*>([^<]*)<\\/text>/g)].map(m=>m[1]);
 const out={html, texts};
 """)
     html = out["html"]
-    assert "max $14.28" in html
+    assert "max 14.3M" in html
     assert re.search(r'stroke-dasharray', html)
     assert re.search(r'fill="(?:var\(--ok\)|#3ecf8e)"', html)
     assert out["texts"] and out["texts"][-1].endswith("now")

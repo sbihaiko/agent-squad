@@ -2382,25 +2382,26 @@ def stats(period, src="both"):
     b = {}; amt = (lambda r: r["spend"]) if src == "both" else (lambda r: r["sub"] if src == "sub" else r["api"])
     allr = [dict(r, spend=amt(r)) for r in all_runs()]
     calls = ledger_calls()   # review calls: they carry spend and tokens, never a run
+    def _tok(r):   # a run's tokens: in + out over every model it called, the count the token ring draws (#1073)
+        return sum(v["in"] + v["out"] for v in r["mod"].values())
     for r in allr:
-        k = time.strftime(fmt, time.localtime(r["t0"])); x = b.setdefault(k, {"t": k, "spend": 0.0, "runs": 0, "durs": []})
-        x["spend"] += r["spend"]; x["runs"] += 1
+        k = time.strftime(fmt, time.localtime(r["t0"])); x = b.setdefault(k, {"t": k, "spend": 0.0, "tokens": 0, "runs": 0, "durs": []})
+        x["spend"] += r["spend"]; x["tokens"] += _tok(r); x["runs"] += 1
         if r["done"]: x["durs"].append(r["dur"])
     for c in calls:
-        k = time.strftime(fmt, time.localtime(c["t0"])); x = b.setdefault(k, {"t": k, "spend": 0.0, "runs": 0, "durs": []})
-        x["spend"] += _billed(src, c["model"], c["spend"])
+        k = time.strftime(fmt, time.localtime(c["t0"])); x = b.setdefault(k, {"t": k, "spend": 0.0, "tokens": 0, "runs": 0, "durs": []})
+        x["spend"] += _billed(src, c["model"], c["spend"]); x["tokens"] += c["in"] + c["out"]
     ks = sorted(b)[-48:]
-    rows = [{"t": k, "spend": round(b[k]["spend"], 2), "runs": b[k]["runs"], "median_dur": round(st.median(b[k]["durs"]), 1) if b[k]["durs"] else None} for k in ks]
+    rows = [{"t": k, "spend": round(b[k]["spend"], 2), "tokens": int(b[k]["tokens"]), "runs": b[k]["runs"], "median_dur": round(st.median(b[k]["durs"]), 1) if b[k]["durs"] else None} for k in ks]
     now = time.localtime(); tot = {"today": 0.0, "month": 0.0, "all": 0.0, "unpriced": sum(1 for c in calls if c["unpriced"]),
-           "uncounted": sum(1 for c in calls if c["uncounted"])}
-    for r in allr:
-        lt = time.localtime(r["t0"]); tot["all"] += r["spend"]
-        if lt[:2] == now[:2]: tot["month"] += r["spend"]
-        if lt[:3] == now[:3]: tot["today"] += r["spend"]
-    for c in calls:
-        lt = time.localtime(c["t0"]); sp = _billed(src, c["model"], c["spend"]); tot["all"] += sp
-        if lt[:2] == now[:2]: tot["month"] += sp
-        if lt[:3] == now[:3]: tot["today"] += sp
+           "uncounted": sum(1 for c in calls if c["uncounted"]),
+           "tok_today": 0, "tok_month": 0, "tok_all": 0}
+    def _add(lt, spend, tokens):
+        tot["all"] += spend; tot["tok_all"] += tokens
+        if lt[:2] == now[:2]: tot["month"] += spend; tot["tok_month"] += tokens
+        if lt[:3] == now[:3]: tot["today"] += spend; tot["tok_today"] += tokens
+    for r in allr: _add(time.localtime(r["t0"]), r["spend"], _tok(r))
+    for c in calls: _add(time.localtime(c["t0"]), _billed(src, c["model"], c["spend"]), c["in"] + c["out"])
     mt = {}
     for r in allr:
         in_month = time.localtime(r["t0"])[:2] == now[:2]
@@ -2425,7 +2426,7 @@ def stats(period, src="both"):
         return box
     models = sorted(({**{k: v for k, v in x.items() if k not in ("src", "srcs")}, "spend": round(x["spend"], 2), "box": _box(x)} for x in mt.values()),
                     key=lambda x: -(x["in"] + x["out"]))
-    return {"buckets": rows, "totals": {k: round(v, 2) for k, v in tot.items()}, "models": models}
+    return {"buckets": rows, "totals": {**{k: round(v, 2) for k, v in tot.items() if not k.startswith("tok_")}, **{k: tot[k] for k in ("tok_today", "tok_month", "tok_all")}}, "models": models}
 
 def adapter_errors():
     """Every `adapter_error` run verdict of the run folders still on disk, counted by (model, backend, cause) (#698).
@@ -4388,7 +4389,7 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 <div id=win>
 <aside id=side>
 <details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div class=ian id=ian></div><div id=ispec></div><div id=iloop></div><div id=ispeed></div><div id=ilate></div></div></details>
-<details id=usage class=sp><summary>Usage</summary><div class=sb><div class="igs isub" id=isub title="subscriptions: the used share of the weekly window and the days to its reset"></div></div></details><details id=stats class=sp><summary>Spend<span class=sr id=stsr></span></summary><div class=sb><h4>Spend <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Figures at API list prices (API-equivalent)."></span></h4><div class=tot id=tot></div><h4>Spend over time <span class=row id=per></span></h4><div id=chart></div><h4>Model tokens · this month</h4><div class=m id=piet>in + out</div><div id=pie></div></div></details>
+<details id=usage class=sp><summary>Usage</summary><div class=sb><div class="igs isub" id=isub title="subscriptions: the used share of the weekly window and the days to its reset"></div></div></details><details id=stats class=sp><summary>Spend<span class=sr id=stsr></span></summary><div class=sb><h4>Tokens <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Counted in tokens: in + out, the same count the ring draws."></span></h4><div class=tot id=tot></div><h4>Tokens over time <span class=row id=per></span></h4><div id=chart></div><h4>Model tokens · this month</h4><div class=m id=piet>in + out</div><div id=pie></div></div></details>
 <details id=lrd class=sp open><summary>Live runs<span class=sr id=lrs></span></summary><div class=sb id=lrun></div></details>
 </aside>
 <main id=content>
@@ -4557,11 +4558,12 @@ function selectNew(){const ids=allRuns.filter(r=>r.kind!=="childcc").map(r=>r.id
   if(!fresh.length)return;const id=fresh.sort((x,y)=>x.age-y.age)[0].id;
   if(N===1)pins.clear();else if(pins.size>=N)pins.delete([...pins][0]);pins.add(id);save()}   // a run starting moves the pins, never the accordions
 async function poll(){try{allRuns=await (await fetch("/api/runs")).json();selectNew();applyFilter();refresh()}catch(e){}}
-function bars(rows,W=280,H=40){if(!rows.length)return"";const mx=Math.max(...rows.map(r=>r.spend),0.01),bw=W/rows.length,pad=12,xl=t=>String(t).replace(/^\d{4}-/,"");
+// The spend chart counts tokens, never dollars (owner, 2026-11-01): tokens are the work, a price is a list price.
+function bars(rows,W=280,H=40){if(!rows.length)return"";const mx=Math.max(...rows.map(r=>r.tokens),1),bw=W/rows.length,pad=12,xl=t=>String(t).replace(/^\d{4}-/,"");
   return `<svg viewBox="0 0 ${W} ${H+pad+14}">`
     +`<line x1="0" y1="${pad}" x2="${W}" y2="${pad}" stroke="#3ecf8e" stroke-dasharray="3 2" stroke-width="1"/>`
-    +`<text x="${W}" y="${pad-3}" fill="#3ecf8e" style="font-size:var(--fs-min)" text-anchor="end">max ${usd(mx)}</text>`
-    +rows.map((r,i)=>`<rect x="${i*bw+1}" y="${pad+H-r.spend/mx*H}" width="${Math.max(bw-2,1)}" height="${r.spend/mx*H}" fill="${r.spend>=mx?"#3ecf8e":"#5aa9ff"}"><title>${xl(r.t)}: ${usd(r.spend)} · ${r.runs} runs</title></rect>`).join("")
+    +`<text x="${W}" y="${pad-3}" fill="#3ecf8e" style="font-size:var(--fs-min)" text-anchor="end">max ${tk(mx)}</text>`
+    +rows.map((r,i)=>`<rect x="${i*bw+1}" y="${pad+H-r.tokens/mx*H}" width="${Math.max(bw-2,1)}" height="${r.tokens/mx*H}" fill="${r.tokens>=mx?"#3ecf8e":"#5aa9ff"}"><title>${xl(r.t)}: ${tk(r.tokens)} tokens · ${r.runs} runs</title></rect>`).join("")
     +`<text x="0" y="${H+pad+12}" fill="#8a93a3" style="font-size:var(--fs-min)">${xl(rows[0].t)}</text>`
     +`<text x="${W}" y="${H+pad+12}" fill="#8a93a3" style="font-size:var(--fs-min)" text-anchor="end">now</text></svg>`}
 function kr(label,sub,v,unit,base,lowerBetter=true){if(v==null)return`<div class=kr><span class=l>${label}${sub?`<small>${sub}</small>`:""}</span><b>—</b></div>`;
@@ -4831,10 +4833,10 @@ async function pollStats(){try{pollSubs();
   $("#src").innerHTML=[["both","all"],["sub","plans"],["api","API"]].map(([v,l])=>`<button data-s=${v} class="${v===src?"on":""}">${l}</button>`).join("");
   document.querySelectorAll("#src button").forEach(b=>b.onclick=()=>{src=b.dataset.s;save();pollStats()});
   document.querySelectorAll("#per button").forEach(b=>b.onclick=()=>{per=b.dataset.p;save();pollStats()});
-  $("#stsr").textContent=usd(st.totals.today)+" today";
+  $("#stsr").textContent=tk(st.totals.tok_today)+" tokens today";
   $("#chart").innerHTML=bars(st.buckets);$("#pie").innerHTML=pie(st.models||[]);
-  const same=st.totals.all===st.totals.month;
-  $("#tot").innerHTML=`<div>today<b>${usd(st.totals.today)}</b></div><div>this month<b>${usd(st.totals.month)}</b></div><div>all time<b${same?" class=m":""}>${same?"= this month":usd(st.totals.all)}</b></div>`;
+  const same=st.totals.tok_all===st.totals.tok_month;
+  $("#tot").innerHTML=`<div>today<b>${tk(st.totals.tok_today)}</b></div><div>this month<b>${tk(st.totals.tok_month)}</b></div><div>all time<b${same?" class=m":""}>${same?"= this month":tk(st.totals.tok_all)}</b></div>`;
   const tn=$("#totnote"); if(tn)tn.innerHTML=(st.totals.unpriced||st.totals.uncounted)?`floor: ${st.totals.unpriced?st.totals.unpriced+" review call"+(st.totals.unpriced===1?" is":"s are")+" unpriced and count 0.0":""}${st.totals.unpriced&&st.totals.uncounted?"; ":""}${st.totals.uncounted?st.totals.uncounted+" with no usage count":""}. The total is a floor.`:"";
   // The Speed block and the open-branches list left the panel (owner, 2026-11-01): the panel leads with the throughput, the
   // subscription gauges, the spend chart and the token ring. The PR speed figures stay on the hub's own reading, not here.
