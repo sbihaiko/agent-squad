@@ -250,14 +250,25 @@ def ac_commands(out):
     return cmds, ok
 
 
+def missing_artifact_reason(res, cap_reason):
+    """Why a session that wrote no artifact stopped: the cap that stopped it, its own error, or its own clean end."""
+    if cap_reason:
+        return cap_reason
+    if not res.ended:
+        return "session_end_unknown"
+    if res.ended.get("is_error") or res.ended.get("subtype") != "success":
+        return f"session_error:{res.ended.get('subtype') or 'unknown'}"
+    return "child_ended_early"
+
+
 def agent_outcome(node, res, cap_reason):
     """Derive the outcome from the declared artifact. An agent node and a dispatch child share it."""
     out = res.output
     if not isinstance(out, dict):
-        return "fail", [cap_reason or "artifact_missing"], None
+        return "fail", [missing_artifact_reason(res, cap_reason)], None
     key = node.get("output_key")
     if key and key not in out and out.get("status") not in ("needs-human", "fail"):    # an explicit stop answer needs no `output_key`
-        return "fail", [cap_reason or "artifact_missing"], None
+        return "fail", [missing_artifact_reason(res, cap_reason)], None
     if "ac_commands" in out and not ac_commands(out)[1]:
         return "fail", ["ac_commands_invalid"], None      # the child's contract is malformed: it fails, so the router repairs it
     status = out.get("status", "pass")

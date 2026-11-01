@@ -108,7 +108,8 @@ class ScriptedAdapter:
         if step.get("effect"):
             step["effect"](req)
         return CallResult(step.get("output"), step.get("spend"), step.get("turns"), step.get("stop_reason"),
-                          step.get("subagents", 0), req.session_id, step.get("usage"), spend_source=step.get("spend_source"))
+                          step.get("subagents", 0), req.session_id, step.get("usage"), ended=step.get("ended"),
+                          spend_source=step.get("spend_source"))
 
 
 _session = itertools.count(1)
