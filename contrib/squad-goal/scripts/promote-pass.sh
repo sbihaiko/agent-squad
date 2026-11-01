@@ -45,11 +45,14 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   ( while :; do sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}' | tr -d '{}' >> "$samples"; sleep 10; done ) & mon=$!
   trap 'kill "$mon" 2>/dev/null; rm -f "$state/promote-reserve" "$samples"' EXIT INT TERM
   [ "$(g rev-parse HEAD)" = "$tip" ] || { mark "$tip" "not promoted: the clean tree is not at the tip"; exit 1; }
-  # ADR-0164 (#1051): the check job and the four full-proof shards of ci.yml on the tip are the full pass when all are green.
-  # The shards run the full suite in both modes; the check job runs ruff and mypy. Green writes the full line and the
-  # squad/full-proof status, then promotes with no suite; a red job holds the tip and names it; a job that is missing,
-  # running or timed out holds nothing, and the proof below answers as before.
-  shard_list=$(/usr/bin/grep -o 'shard: \[[0-9, ]*\]' "$d/../../../.github/workflows/ci.yml" 2>/dev/null | tr -dc '0-9 ')
+  # ADR-0164 (#1051, #1062): the check job of ci.yml on the tip, plus every full-proof shard that file names, is the full
+  # pass when all are green. The shard job is withdrawn while #1062 is open, so the names come from the file and a restored
+  # matrix is read with no second change. Green writes the full line and the squad/full-proof status, then promotes with no
+  # suite; a red job holds the tip and names it; a job that is missing, running or timed out holds nothing, and the proof
+  # below answers as before.
+  # SG_CI_WORKFLOW names the workflow file the shard names are read from: the repository's own by default, a fixture in a test.
+  ci_file=${SG_CI_WORKFLOW:-$d/../../../.github/workflows/ci.yml}
+  shard_list=$(/usr/bin/grep -o 'shard: \[[0-9, ]*\]' "$ci_file" 2>/dev/null | tr -dc '0-9 ')
   full_status() {  # <tip> <description>: the squad/full-proof status on the sha, read back; the reason is printed when it does not stand
     local o st
     o=$(gh_send -X POST "repos/$SG_REPO/statuses/$1" -f state=success -f "context=$ctx" -f "description=$2") \
@@ -59,8 +62,7 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   }
   ci_verdict() {  # <tip>: pass, "fail <job>" for a red job, or pending
     local cr n st c v=pass sh names=("check")
-    [ -n "$shard_list" ] || { echo pending; return; }
-    for sh in $shard_list; do names+=("full-proof shard $sh"); done
+    for sh in $shard_list; do names+=("full-proof shard $sh"); done   # none while the shard job is withdrawn (#1062)
     cr=$(gh_api "repos/$SG_REPO/commits/$1/check-runs?per_page=100&filter=latest") || { echo pending; return; }
     printf '%s' "$cr" | jq -e '.check_runs | type == "array"' >/dev/null 2>&1 || { echo pending; return; }
     for n in "${names[@]}"; do
@@ -74,7 +76,7 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   case "$v" in
     pass)
       bash "$d/gate.sh" --status full pass "$tip"
-      why=$(full_status "$tip" "full suite, both modes, four CI shards and the check job") || { mark "$tip" "not promoted: $why"; exit 1; }
+      why=$(full_status "$tip" "$([ -n "$shard_list" ] && echo "full suite, both modes, four CI shards and the check job" || echo "CI check job, both Pythons, the fast battery (#1062: the shards are withdrawn)")") || { mark "$tip" "not promoted: $why"; exit 1; }
       o=$(SG_PROMOTE_PROOF=local bash "$d/promote-stg.sh" 2>&1); rc=$?
       [ $rc = 0 ] || { mark "$tip" "not promoted: $(printf '%s' "$o" | tail -1)"; exit 1; }
       mark "$tip" "promoted: the CI shards carried the full pass"; exit 0;;

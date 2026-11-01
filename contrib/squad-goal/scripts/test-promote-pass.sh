@@ -206,6 +206,10 @@ SG_PROMOTE_RESERVE_SECONDS=600 bash "$d/promote-pass.sh" > "$T/out5" 2>&1; rc=$?
 # CI shards (ADR-0164, #1051): the four full-proof shards of the tip are the full pass. Four green shards write the full line
 # through gate.sh --status and promote with no suite; a red shard holds the tip and names it; an unfinished shard holds nothing.
 export CHECKS_DIR=$T
+# The shard names come from a workflow file; this fixture names four, so the shard cases keep proving the matrix the
+# repository's own ci.yml no longer carries while #1062 holds it withdrawn (a case below proves the withdrawn shape).
+printf 'jobs:\n  full-proof:\n    strategy:\n      matrix:\n        shard: [0, 1, 2, 3]\n' > "$T/ci-shards.yml"
+export SG_CI_WORKFLOW="$T/ci-shards.yml"
 cat > "$T/bin/ghread" <<'EOF'
 #!/bin/bash
 case "$1" in
@@ -253,6 +257,17 @@ shards "$tu" success success running timed_out; SG_GHREAD="$T/bin/ghread" pass; 
   || ko "unfinished shards: rc $rc, stg $(tip stg), runs $(runs) was $n"
 /usr/bin/grep -q "promote-pass: $tu promoted: the local full suite answered" "$SG_STATE/promote.log" && ok "the record names the local full suite as the proof" \
   || ko "local record: $(/usr/bin/grep "$tu" "$SG_STATE/promote.log")"
+
+# #1062: the shard job is withdrawn, so a workflow file that names no shard is the check job alone, and a green check
+# promotes the tip. The record says which proof carried it, so a reader never guesses.
+printf 'jobs:\n  check:\n    runs-on: ubuntu-latest\n' > "$T/ci-no-shards.yml"
+adv dev check-alone; ta=$(tip dev); n=$(runs)
+shards "$ta" none none none none; SG_CI_WORKFLOW="$T/ci-no-shards.yml" SG_GHREAD="$T/bin/ghread" pass; rc=$?
+[ $rc = 0 ] && [ "$(tip stg)" = "$ta" ] && ok "with no shard named, a green check job promotes the tip (#1062)" \
+  || ko "check alone: rc $rc, stg $(tip stg), out '$(cat "$T/out")'"
+/usr/bin/grep -q "promote-pass: $ta promoted: the CI shards carried the full pass" "$SG_STATE/promote.log" && ok "the check-alone promotion records its proof" \
+  || ko "check-alone record: $(/usr/bin/grep "$ta" "$SG_STATE/promote.log")"
+export SG_CI_WORKFLOW="$T/ci-shards.yml"
 
 # The check job of the same commit (ruff, mypy, the fast battery) is part of the CI proof: a red one holds the tip, and no
 # suite runs for it (ADR-0164: a red the proof measured holds delivery).
