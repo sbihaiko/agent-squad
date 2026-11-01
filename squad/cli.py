@@ -72,7 +72,8 @@ def parser():
     ed.add_argument("--no-open", action="store_true", help="print the file and the page, open nothing")
     pchk = sub.add_parser("premise-check", help="run one premise-check round on a published spec and record it as one comment there")
     pchk.add_argument("spec", type=int, help="the number of the published spec the round checks")
-    pchk.add_argument("--findings", required=True, help="the reviewer's findings, a JSON array of objects")
+    pchk.add_argument("--findings", help="the reviewer's findings, a JSON array of objects (required unless --refute)")
+    pchk.add_argument("--refute", metavar="PREMISE", help="a probe refuted this premise: it must be one the check records as needs a probe")
     pchk.add_argument("--answers", help="the owner's answers, a JSON array of objects; each rewrites the spec and opens the next round")
     pchk.add_argument("--round", dest="round_no", type=int, default=None, help="the round number (default: the next one after the recorded round)")
     pchk.add_argument("--reviewer", help="the model this round ran under: checked against the registry; a no-tools model is refused")
@@ -178,7 +179,9 @@ def main(argv=None):
             return _setup(a)
         if a.cmd == "premise-check":
             from squad import premise_check
-            return premise_check.main([str(a.spec), "--findings", a.findings, "--repo", a.repo]
+            return premise_check.main([str(a.spec), "--repo", a.repo]
+                                      + (["--findings", a.findings] if a.findings else [])
+                                      + (["--refute", a.refute] if a.refute else [])
                                       + (["--answers", a.answers] if a.answers else [])
                                       + (["--round", str(a.round_no)] if a.round_no is not None else [])
                                       + (["--reviewer", a.reviewer] if a.reviewer else [])

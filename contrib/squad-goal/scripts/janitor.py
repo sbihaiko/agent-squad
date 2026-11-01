@@ -1033,7 +1033,8 @@ def count_failed(n, f, i):   # O (#609): a run that ended with nothing delivered
     if dry: say(f"FAILED-DISPATCH #{n}: run {f.name} would count ({why}{', ' + kind if kind else ''})"); return False
     out = _run(["bash", str(pathlib.Path(__file__).parent / "wave.sh"), "fail", n, f.name, why, *([kind] if kind else [])])[1].strip()
     if out: say(f"FAILED-DISPATCH #{n}: {out}")
-    return True
+    # A probe's refutation that gh or I/O failed (#888): the run stays uncounted, so the next pass calls `fail` and sends it again.
+    return "WAVE PROBE-RETRY" not in out
 if not dry:   # a run that left active-runs.txt is read no more, so its read-once marker goes (#693)
     _ck = {f"counted-{folder(r).name}" for r in names}
     for m in (st / "auto").glob("counted-*"):
@@ -1086,6 +1087,19 @@ if owner and proj and repo0:
                 (st / "cq" / f"{CQ}#{n}-dispatchfail-{os.getpid()}.md").write_text(
                     f"Run {f.name} ended without a landed change (verdict {i['name']}: {why}). {where[:1].upper() + where[1:]} its {mks} marker dropped, so the next cycle dispatches the issue again." + (f" The child left commits on no remote branch, kept for salvage: {', '.join(kept)}. The loop flags them and never pushes them (#361); the next dispatch of this issue names them, so the new run can reuse them." if kept else "") + "\n")
         if not again and not dry: mk.touch()
+    # O (#888): a probe's refutation that failed for a transient cause leaves auto/probe-retry-<n>. Rule O above never reads a
+    # child that entered its wave, so this sweep sends it again: once a pass, for an open probe frozen for the owner, read from
+    # the pass's one open-issue list (no read per issue). A marker this pass wrote waits for the next. A closed probe, or one
+    # the owner unfroze, drops its marker; a list that did not answer decides nothing.
+    _pr = [m for m in (st / "auto").glob("probe-retry-*") if re.fullmatch(r"probe-retry-\d+", m.name) and (marker_mtime(m) or now) < now]
+    if _pr and not dry:
+        oans, olabels = open_issues()
+        for m in sorted(_pr, key=lambda p: int(p.name.rsplit("-", 1)[1])) if oans else []:
+            n = m.name.rsplit("-", 1)[1]
+            if not {"probe", "frozen:owner"} <= olabels.get(n, set()):
+                say(f"PROBE-RETRY #{n}: no longer an open probe frozen for the owner; its retry marker dropped"); m.unlink(missing_ok=True); continue
+            out = _run(["bash", str(pathlib.Path(__file__).parent / "wave.sh"), "probe-retry", n])[1].strip()
+            if out: say(f"PROBE-RETRY #{n}: {out}")
     # O: a missing child-worktree run has no record to read, but its marker still identifies the issue it claimed.
     for r, f in missing:
         marks = {}

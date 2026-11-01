@@ -2278,19 +2278,22 @@ def stats(period, src="both"):
         if lt[:3] == now[:3]: tot["today"] += sp
     mt = {}
     for r in allr:
+        in_month = time.localtime(r["t0"])[:2] == now[:2]
         for raw, v in r["mod"].items():   # keyed on the canonical id, as the review calls are, so one model is one slice (#789)
             m = canon_model(raw)
             if src == "sub" and not SUBSCRIPTION.match(m) or src == "api" and SUBSCRIPTION.match(m): continue
-            x = mt.setdefault(m, {"model": m, "in": 0, "out": 0, "cache": 0, "spend": 0.0, "calls": 0, "src": raw, "srcs": []})   # the first spelling names the box; every spelling's route is kept (#791)
+            x = mt.setdefault(m, {"model": m, "in": 0, "out": 0, "cache": 0, "spend": 0.0, "month_cost": 0.0, "calls": 0, "src": raw, "srcs": []})   # the first spelling names the box; every spelling's route is kept (#791)
             if raw not in x["srcs"]: x["srcs"].append(raw)
             for k in ("in", "out", "cache", "calls"): x[k] += v[k]
             x["spend"] += v["spend"]
+            if in_month: x["month_cost"] += v["spend"]
     for c in calls:
         m = c["model"]
         if src == "sub" and not SUBSCRIPTION.match(m) or src == "api" and SUBSCRIPTION.match(m): continue
-        x = mt.setdefault(m, {"model": m, "in": 0, "out": 0, "cache": 0, "spend": 0.0, "calls": 0, "src": m, "srcs": []})
+        x = mt.setdefault(m, {"model": m, "in": 0, "out": 0, "cache": 0, "spend": 0.0, "month_cost": 0.0, "calls": 0, "src": m, "srcs": []})
         if m not in x["srcs"]: x["srcs"].append(m)
         x["in"] += c["in"]; x["out"] += c["out"]; x["cache"] += c["cache"]; x["calls"] += 1; x["spend"] += c["spend"]
+        if time.localtime(c["t0"])[:2] == now[:2]: x["month_cost"] += c["spend"]
     def _box(x):
         box = model_box(x["src"])
         box["routes"] = sorted({model_box(s)["route"] for s in x["srcs"]} - {None})   # every route the model was called by (#791)
@@ -3708,7 +3711,7 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #src,#per{display:inline-flex;flex-wrap:nowrap;gap:2px;margin:0}#src button{padding:1px 5px;font-size:var(--fs-min)}#per button{padding:1px 3px;font-size:var(--fs-min)}
 .kr{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-auto-rows:min-content;column-gap:8px;row-gap:2px;align-items:baseline;padding:5px 0;border-bottom:1px solid var(--line);font-size:var(--fs-min);min-width:0}.kr:last-child{border:0}.kr .l{grid-row:1/3;min-width:0;font-size:var(--fs-min);line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.kr .l small{display:inline;color:var(--mute);font-size:var(--fs-min)}.kr b{grid-column:2;justify-self:end;font-size:var(--fs-body);font-weight:600;line-height:1}.kr b small{font-size:var(--fs-min);font-weight:400;color:var(--mute)}.kr b.m{color:var(--mute)}.kr b.w{color:var(--warn)}
 .kr .d{grid-column:2;justify-self:end;font-size:var(--fs-min);padding:0;white-space:nowrap;color:var(--mute)}.kr .d .good{color:#5fd38d}.kr .d .bad{color:#ff7b7b}
-.mchs,.mch-row{display:flex;flex-wrap:wrap;gap:4px;align-items:center;margin:4px 0}.mch{min-height:32px;padding:4px 10px;border:1px solid var(--line);border-radius:14px;background:#10141a;color:var(--fg);font-size:var(--fs-min);cursor:pointer}.mch.off{text-decoration:line-through;color:var(--mute)}.mtg{min-height:32px;min-width:32px;padding:2px 10px;border:1px solid var(--line);border-radius:6px;background:#10141a;color:var(--fg);font-size:var(--fs-min);cursor:pointer}.mtg.off{text-decoration:line-through;color:var(--mute)}.mt-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:4px 0}.mt-row .mn{flex:1 1 140px;min-width:0}.mdiff{border-top:1px dashed var(--line);margin-top:8px;padding-top:6px}.mch:focus-visible{outline:2px solid #8ab4ff;outline-offset:2px}.mtg:focus-visible{outline:2px solid #8ab4ff;outline-offset:2px}@media (max-width:600px){.mch{min-height:44px;padding:10px 14px}.mtg{min-height:44px;min-width:44px}}
+.mtg{min-height:32px;min-width:32px;padding:2px 10px;border:1px solid var(--line);border-radius:6px;background:#10141a;color:var(--fg);font-size:var(--fs-min);cursor:pointer}.mtg.off{text-decoration:line-through;color:var(--mute)}.mt-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:4px 0}.mt-row .mn{flex:1 1 140px;min-width:0}.mdiff{border-top:1px dashed var(--line);margin-top:8px;padding-top:6px}.mtg:focus-visible{outline:2px solid #8ab4ff;outline-offset:2px}@media (max-width:600px){.mtg{min-height:44px;min-width:44px}}
 #mbody{padding:0}.mc{background:#10141a;border:1px solid var(--line);border-radius:8px;padding:10px;margin:6px 0 8px}.mc .mt{font-size:var(--fs-min);font-weight:600;color:var(--fg);margin:0 0 2px}.mc .mx{font-size:var(--fs-min);color:var(--mute);margin:0 0 8px;line-height:1.35}
 .mr{display:grid;grid-template-columns:22px minmax(0,1fr);align-items:center;gap:5px 8px;padding:7px 8px;border:1px solid var(--line);border-radius:6px;background:var(--panel);margin-bottom:5px;font-size:var(--fs-min)}.mr.p{border-color:#2f5d45;background:#13211b}.mr .rk{flex:none;width:22px;height:22px;border-radius:11px;background:#222a35;color:var(--mute);font-size:var(--fs-min);font-weight:600;display:flex;align-items:center;justify-content:center}.mr.p .rk{background:var(--ok);color:#0b1a12}
 .mr .mn{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3;font-size:var(--fs-min);color:var(--fg)}.mr .ct{grid-column:1/3;display:flex;flex-wrap:wrap;gap:3px;align-items:center;min-width:0}.mr .mi{font-size:var(--fs-min);color:var(--mute);margin-left:4px}.mr .ur{color:var(--warn)}.mr .pv{flex:1 1 auto;min-width:0;font-size:var(--fs-min);color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mr .pv b{color:var(--ok);font-weight:600}.mr .el{flex:none;font-size:var(--fs-min);color:var(--mute);margin-left:2px}.mr .mn small{display:block;font-size:var(--fs-min);color:var(--mute)}.mr .ef{flex:none;width:62px;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;font-size:var(--fs-min);height:var(--ctl-h);padding:0 2px;cursor:pointer;text-overflow:ellipsis}.mr .ef.set{color:var(--warn);border-color:#6b5223}.mr .hr{flex:none;width:50px;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;font-size:var(--fs-min);height:var(--ctl-h);padding:0 2px;text-align:center}.mr .hr::placeholder{color:var(--mute)}.mr .hr:focus{outline:var(--focus-w) solid var(--focus);border-color:var(--acc)}.mr .hr.set{color:var(--warn);border-color:#6b5223}
@@ -3730,7 +3733,7 @@ button.on{border-color:var(--acc);color:var(--acc)}
 .sub .dt{color:var(--mute);font-size:var(--fs-min);line-height:1.4}.sub .dt b{color:var(--fg);font-weight:600}.sub .warn{color:var(--warn);font-size:var(--fs-min)}
 .mb{margin-top:2px}.mb .lab{display:flex;justify-content:space-between;font-size:var(--fs-min);color:var(--mute);margin-bottom:3px}.mb .lab b{color:var(--fg);font-weight:600}.mb .tr{position:relative;height:9px;border-radius:5px;background:#1c222b;overflow:visible}.mb .fl{height:100%;border-radius:5px;background:#e0a23a}.mb .fl.good{background:#3ecf8e}.mb .fl.bad{background:#d9534f}.mb .fl.warnq{background:#5aa9ff}.mb .tk{position:absolute;top:-3px;bottom:-3px;width:2px;background:#d8dde6;border-radius:1px}.mb .sc2{display:flex;justify-content:space-between;font-size:var(--fs-min);color:var(--mute);margin-top:2px}
 .subx{color:var(--mute);font-size:var(--fs-min);line-height:1.45;margin:8px 0 4px}
-.pie{display:flex;flex-direction:column;gap:6px;align-items:stretch}.pie svg{flex:none;width:112px;height:112px;margin:0 auto}.pie .lg{flex:1;min-width:0;font-size:var(--fs-min)}.pie .lg div{display:flex;align-items:center;gap:6px;padding:2px 0}.pie .lg i{width:9px;height:9px;border-radius:2px;flex:none}.pie .ln{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pie .lg b{font-weight:600}.pie .lg .usd{color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap}.pie .lg div:focus-visible{outline:var(--focus-w) solid var(--focus);outline-offset:1px}.pie .lg div.hl{background:#1c222b}.pie [data-k].hl{stroke:#d8dde6;stroke-width:2}.pie.dim [data-k]:not(.hl){opacity:.35}.warnl{margin-top:4px;font-size:var(--fs-min);color:var(--warn)}
+.pie{display:flex;flex-direction:column;gap:6px;align-items:stretch}.pie svg{flex:none;width:112px;height:112px;margin:0 auto}.pie .lg{flex:1;min-width:0;font-size:var(--fs-min)}.pie .lg div{display:flex;align-items:center;gap:6px;padding:2px 0}.pie .lg i{width:9px;height:9px;border-radius:2px;flex:none}.pie .ln{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pie .lg b{font-weight:600}.pie .lg .usd{color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap}.pie .lg div:focus-visible{outline:var(--focus-w) solid var(--focus);outline-offset:1px}.pie .lg div.hl{background:#1c222b}.pie .lg .lgx{display:block;padding:0 0 0 15px}.pie .lg summary{display:flex;align-items:center;gap:6px;padding:2px 0;cursor:pointer;list-style:none}.pie .lg summary::-webkit-details-marker{display:none}.sp #piet{font-size:var(--fs-min);margin:-4px 0 6px}.pie [data-k].hl{stroke:#d8dde6;stroke-width:2}.pie.dim [data-k]:not(.hl){opacity:.35}.warnl{margin-top:4px;font-size:var(--fs-min);color:var(--warn)}
 .up{color:var(--err)}.dn{color:var(--ok)}svg{display:block;width:100%}
 #main{flex:1;min-width:0;display:grid;gap:4px;padding:4px}
 .cell{display:flex;flex-direction:column;min-height:0;min-width:0}.cell small{color:var(--mute);padding:2px 4px;display:flex;justify-content:space-between}.cell .snap{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:12px;overflow:hidden;color:var(--mute);border:1px solid var(--line);background:#0f1115}.cell[tabindex]{cursor:pointer}.cell[tabindex]:hover .snap,.cell[tabindex]:focus-visible .snap{border-color:var(--acc);color:var(--fg,inherit)}
@@ -3911,7 +3914,19 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 #bhead select{min-height:32px;padding:4px 12px;font-size:var(--fs-body);border-radius:6px}#bhead label.hck input{width:18px;aspect-ratio:1;padding:0}
 #bbody .it>.hld{order:1;flex:0 0 auto;margin:0;font-size:var(--fs-min);font-weight:600;color:var(--s5);white-space:nowrap}#bbody .it>.hld::before{content:"\25CF";margin-right:4px;color:var(--s5)}
 #plans .sb,#stats .sb{max-height:340px;overflow:auto}
-#tab-set .sp .sb{padding:0 12px 12px}#mbody .mchs,#mbody .mch-row{padding:6px 0 8px}
+#tab-set .sp .sb{padding:0 12px 12px}
+/* Settings (#913): a left theme list, one theme at a time, one Save bar; on the phone a select replaces the list and rows stack. */
+#tab-set .swrap{display:grid;grid-template-columns:200px minmax(0,1fr);gap:16px;max-width:1120px}#tab-set .spanels{min-width:0}
+#tab-set .snav{display:flex;flex-direction:column;gap:4px}#tab-set .snav button{text-align:left;padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--fg);min-height:44px}
+#tab-set .snav button small{display:block;color:var(--mute);font-size:var(--fs-min)}#tab-set .snav button.on{border-color:var(--acc);background:#16202c}
+#tab-set .ssel{display:none}#tab-set details.sp:not(.on){display:none}
+#sbar{position:sticky;bottom:0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 12px;margin-top:12px;max-width:1120px;background:var(--panel);border-top:1px solid var(--line);z-index:2}#sbar[hidden]{display:none}
+#sbar.dirty{background:#1f1b12;border-top-color:#6b5223}#sbar button{height:var(--ctl-h);padding:0 12px}#sbar.dirty #ssave{background:var(--warn);color:#1a1300}#schg{color:var(--mute);font-size:var(--fs-min)}
+#sdlg{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:8px;max-width:min(720px,94vw)}#sdpre{white-space:pre-wrap;font-size:var(--fs-min);max-height:50vh;overflow:auto}#sdlg .sact{display:flex;gap:8px}
+.mtab{width:100%;border-collapse:collapse;font-size:var(--fs-min);margin-bottom:8px}.mtab th{text-align:left;color:var(--mute);font-weight:500;padding:4px 6px;border-bottom:1px solid var(--line)}.mtab td{padding:4px 6px;border-bottom:1px solid var(--line)}.mtab tr.off .mn{text-decoration:line-through;color:var(--mute)}
+.stc{display:inline-block;font-size:var(--fs-min);border:1px solid var(--line);border-radius:4px;padding:0 5px;color:var(--mute)}.stc.off{color:var(--warn);border-color:#6b5223}.stc.lim{color:var(--err);border-color:var(--err)}.mr.off .mn{text-decoration:line-through}.mr.rmk .mn,.mr.rmk .pv{text-decoration:line-through;opacity:.55}
+.madd select{flex:1;min-width:0;height:var(--ctl-h);background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;font-size:var(--fs-min)}#mbody .lead{margin:4px 0 8px}#mbody details.hlp{margin-top:10px}#mbody details.hlp summary{cursor:pointer;color:var(--acc)}
+@media (max-width:600px){#tab-set .swrap{display:block}#tab-set .snav{display:none}#tab-set .ssel{display:flex;gap:8px;align-items:center;margin-bottom:8px}header.top{flex-wrap:wrap}.tabs{order:3;flex:1 0 100%;overflow-x:auto}#tab-set .ssel select{min-height:44px;flex:1}.mr .ct{flex-direction:column;align-items:flex-start}.mr .mb button,.mtg,.madd select,.mr .ef,.mr .hr,#sbar button{min-height:44px;min-width:44px}.mtab th:nth-child(2),.mtab td:nth-child(2){display:none}}
 #mobile-link{color:var(--acc)}
 /* Monitor (#983): calm flight instruments in the sidebar. Three gauges, three annunciator tiles, two rows. No motion
    but the needle's own short move, and none at all under reduced motion. */
@@ -3943,7 +3958,7 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 <details id=lrd class=sp open><summary>Live runs<span class=sr id=lrs></span></summary><div class=sb id=lrun></div></details>
 <details id=led class=sp><summary>Last ended<span class=sr><span id=les></span> <a href="#" id=enall data-t=hist>History</a></span></summary><div class=sb id=ended></div></details>
 <details id=plans class=sp><summary>Subscriptions<span class=sr id=plsr></span></summary><div class=sb><div id=subs></div></div></details>
-<details id=stats class=sp><summary>Cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><h4>Spend <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Figures at API list prices (API-equivalent)."></span></h4><div class=tot id=tot></div><div class=m id=totnote></div><div class=cash id=cash></div><h4>Spend over time <span class=row id=per></span></h4><div id=chart></div><div id=kpi></div><div id=open></div><h4>Tokens by model <small class=m id=piet>all time</small></h4><div id=pie></div></div></details>
+<details id=stats class=sp><summary>Cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><h4>Spend <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Figures at API list prices (API-equivalent)."></span></h4><div class=tot id=tot></div><div class=m id=totnote></div><div class=cash id=cash></div><h4>Spend over time <span class=row id=per></span></h4><div id=chart></div><div id=kpi></div><div id=open></div><h4>Model cost · this month</h4><div class=m id=piet>API-equivalent</div><div id=pie></div></div></details>
 <details id=sqd class=sp open><summary>Squad models<span class=sr id=sqsr></span></summary><div class=sb id=sqm></div></details>
 <details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div class=ian id=ian></div><div id=iloop></div><div class=irw><span>Next cycle</span><b id=icyc aria-live=off>?</b></div><div id=iuse></div></div></details>
 </aside>
@@ -3959,12 +3974,16 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 <dialog id=ldg aria-label="Stop the loop"><form method=dialog id=ldgb></form></dialog>
 <section id=tab-hist class=pane aria-label=History><h2>Run history</h2><div id=list></div></section>
 <section id=tab-set class=pane aria-label=Settings><h2>Settings</h2>
-<details id=lim class=sp open><summary>Spend &amp; limits<span class=sr id=limsr></span></summary><div class=sb id=lbody></div></details>
-<details id=mdl class=sp open><summary>Models &amp; chains<span class=sr id=mdsr></span></summary><div class=sb id=mbody></div></details>
-<details id=slk class=sp><summary>Communication<span class=sr id=slksr></span></summary><div class=sb id=sbody></div></details>
-<details id=lop class=sp open><summary>Loop<span class=sr id=lopsr>start, stop, change log</span></summary><div class=sb id=lopb></div></details>
-<details id=acc class=sp><summary>Access<span class=sr>tailnet and phone</span></summary><div class=sb id=accb></div></details>
-<details id=dev class=sp open><summary>This device<span class=sr>desktop or phone view</span></summary><div class=sb><a id=mobile-link href="#">mobile view</a><script>document.getElementById("mobile-link").href=location.pathname.replace(/\/?$/,"/")+"mobile"</script></div></details>
+<div class=swrap><nav class=snav aria-label="Settings themes"><button data-sp=lim>Spend &amp; limits<small>token guard and cap</small></button><button data-sp=mdl>Models &amp; chains<small>who does the work, when</small></button><button data-sp=slk>Communication<small>Slack, for this profile</small></button><button data-sp=lop>Loop<small>start, stop, history</small></button><button data-sp=acc>Access<small>tailnet and phone</small></button></nav>
+<div class=spanels><label class=ssel>Theme <select id=ssel aria-label="Settings theme"><option value=lim>Spend &amp; limits</option><option value=mdl>Models &amp; chains</option><option value=slk>Communication</option><option value=lop>Loop</option><option value=acc>Access</option></select></label>
+<details id=lim class=sp data-sp=lim open><summary>Spend &amp; limits<span class=sr id=limsr></span></summary><div class=sb id=lbody></div></details>
+<details id=mdl class=sp data-sp=mdl open><summary>Models &amp; chains<span class=sr id=mdsr></span></summary><div class=sb id=mbody></div></details>
+<details id=slk class=sp data-sp=slk><summary>Communication<span class=sr id=slksr></span></summary><div class=sb id=sbody></div></details>
+<details id=lop class=sp data-sp=lop open><summary>Loop<span class=sr id=lopsr>start, stop, change log</span></summary><div class=sb id=lopb></div></details>
+<details id=acc class=sp data-sp=acc open><summary>Access<span class=sr>tailnet and phone</span></summary><div class=sb><div id=accb></div><div class=kr><span class=l>This device</span><a id=mobile-link href="#">mobile view</a></div><script>document.getElementById("mobile-link").href=location.pathname.replace(/\/?$/,"/")+"mobile"</script></div></details>
+</div></div>
+<div class=sbar id=sbar><button id=ssave>Save…</button><button id=sdisc>Discard changes</button><span id=schg>No change</span></div>
+<dialog id=sdlg aria-label="Confirm the settings change"><b>Save these settings?</b><pre id=sdpre></pre><p class=m>Written to the project files. Runs already started keep the chains they recorded.</p><div class=sact><button id=sdok>Confirm and save</button><button id=sdno>Back</button></div></dialog>
 </section>
 </main>
 </div>
@@ -4013,8 +4032,6 @@ function loadMark(r){return r.cpu?`<span class=load title="this run owns ${r.cpu
 // ceiling is red, and that is `LOAD_ERR`, substituted when the page is served. A source the hub cannot see stays `?`:
 // a missing reading is not a high one. Red sits above the older, machine-wide amber of `#inst.warn`, and never replaces it.
 const LOAD_ERR=Number("__LOADERR__");
-const MODELID_SRC="__MODELID__";   // the one model-id shape, substituted when the page is served (#221): the Add boxes test it, never a copy of it
-const MODELRE=new RegExp("^"+MODELID_SRC+"$");   // an unsubstituted page still evaluates: the placeholder is a string, never a bare name
 function ldNum(v){if(v===null||v===undefined||v===""||typeof v==="boolean")return null;const f=Number(v);return(f!==f||f<0)?null:Math.min(f,100)}
 function ldRound(f){const fl=Math.floor(f),fr=f-fl;return fr>.5?fl+1:fr<.5?fl:fl+(fl%2)}   // half to even, exactly as `:.0f` rounds
 function ldCell(v){const f=ldNum(v);return{t:f===null?"?":ldRound(f)+"%",red:f!==null&&f>=LOAD_ERR}}
@@ -4110,7 +4127,26 @@ function kr(label,sub,v,unit,base,lowerBetter=true){if(v==null)return`<div class
 function openRows(o){return `<h4>Open branches <small>oldest first</small></h4>`
   +(o&&o.length?o.map((x,i)=>`<div class=kr><span class=l>#${x.n} · <b${x.min>=30?" class=w":""}>${x.min}</b> min${i===0?" (warns at 30)":""}</span></div>`).join("")
    :`<div class=kr><span class=l>none open</span></div>`)}
-let mdl=null,mdlSrv="",mdlMsg="";const MLAB={coding_models:"Coding",review_models:"Review",vision_models:"Vision",router_models:"Router"},MDESC={coding_models:"Writes the code in squad runs.",review_models:"Reviews each PR independently.",vision_models:"Looks at screenshots and images.",router_models:"The models the router runs on, in order; the first is the one it uses, the rest are fallbacks."},EFF=["low","medium","high","max"];
+// SETV{ the settings view's pure rules (#913): the reset text, the add list, the diff before save. Run in node by tests.
+function rstText(t,now){if(!t)return"reset unknown";const x=t-now;if(x<=0)return"resets now";if(x>=86400)return`resets in ${(x/86400).toFixed(1)} d`;if(x>=3600)return`resets in ${Math.round(x/3600)} h`;return`resets in ${Math.max(1,Math.round(x/60))} min`}
+function addOpts(sug,chain,isOff){return (sug||[]).filter(s=>!(chain||[]).includes(s.id)&&!isOff(s.id))}
+function chainDesc(d,k){return (d[k]||[]).map(m=>{const e=((d.efforts||{})[k]||{})[m]||"",h=((d.hours||{})[k]||{})[m]||"";return [m,e&&e!=="medium"?e:"",h||"always"].filter(Boolean).join(" · ")}).join(" → ")}
+function mdlDiffLines(old,cur,lab){const T="Models & chains · ",out=[],ids=[...new Set([...(old.models||[]),...(cur.models||[])].map(r=>r.id))];
+ for(const m of ids){const a=!!(old.model_off||{})[m],b=!!(cur.model_off||{})[m];if(a!==b)out.push(`- ${T}model ${m}: ${a?"off":"on"}`,`+ ${T}model ${m}: ${b?"off":"on"}`)}
+ for(const k of Object.keys(lab)){const a=chainDesc(old,k),b=chainDesc(cur,k);if(a!==b)out.push(`- ${T}${lab[k]}: ${a||"(empty)"}`,`+ ${T}${lab[k]}: ${b||"(empty)"}`)}
+ return out}
+function themeLine(theme,l){return l.startsWith(theme+" · ")?l:theme+" · "+l}
+// }SETV
+let mdl=null,mdlSrv="",mdlMsg="",mdlRmk={};const MLAB={coding_models:"Coding",review_models:"Review",vision_models:"Vision",router_models:"Router"},MDESC={coding_models:"Writes the code in squad runs.",review_models:"Reviews each PR independently.",vision_models:"Looks at screenshots and images.",router_models:"The models the router runs on, tried in order."},EFF=["low","medium","high","max"];
+/* ✕ marks a row; the row stays, struck, until Save takes it out of the chain with its effort and hours (#913). */
+function mdlRmToggle(k,m){const id=k+"|"+m;if(mdlRmk[id])delete mdlRmk[id];else mdlRmk[id]=true}
+const mdlRmd=(k,m)=>!!mdlRmk[k+"|"+m];
+/* What Save writes: the panel without its marked rows and without empty keys. Dirty means a diff line, never a byte. */
+function mdlPrune(o){for(const g of ["efforts","hours"]){o[g]=o[g]||{};for(const k of Object.keys(o[g]))if(!Object.keys(o[g][k]||{}).length)delete o[g][k]}
+ o.model_off=o.model_off||{};for(const m of Object.keys(o.model_off))if(!o.model_off[m])delete o.model_off[m];return o}
+function mdlOut(){const o=JSON.parse(JSON.stringify(mdl));for(const k of Object.keys(MLAB)){const keep=[];for(const m of o[k]||[]){if(!mdlRmd(k,m)){keep.push(m);continue}
+ for(const g of ["efforts","hours"])if(o[g]&&o[g][k])delete o[g][k][m]}o[k]=keep}return mdlPrune(o)}
+function mdlChanged(){return !!mdl&&mdlDiffLines(JSON.parse(mdlSrv),mdlOut(),MLAB).length>0}
 function mdlEff(k,m){return (mdl.efforts&&mdl.efforts[k]&&mdl.efforts[k][m])||""}
 function mdlSetEff(k,m,v){mdl.efforts=mdl.efforts||{};mdl.efforts[k]=mdl.efforts[k]||{};if(EFF.includes(v)&&v!=="medium")mdl.efforts[k][m]=v;else delete mdl.efforts[k][m]}
 const HRP=["22-07","07-22","20-08","18-06"],HRX=/^([01]\d|2[0-3])-([01]\d|2[0-3])$/;
@@ -4119,57 +4155,44 @@ function mdlSetHrs(k,m,v){v=(v||"").trim();mdl.hours=mdl.hours||{};mdl.hours[k]=
 /* The chain row's old switch (#1819) is read only now: a file that holds it shows "off (chain)" (SPEC 889 #920). */
 function mdlOff(k,m){return !!(mdl.off&&mdl.off[k]&&mdl.off[k][m])}
 /* The model's switch, one per model for every chain (SPEC 889 #920). The table stages it until Save; a chip writes it at once. */
-function mdlSetOffM(m,v){mdl.model_off=mdl.model_off||{};mdl.model_off[m]=!!v}
+function mdlSetOffM(m,v){mdl.model_off=mdl.model_off||{};if(v)mdl.model_off[m]=true;else delete mdl.model_off[m]}
 /* What a model box shows is the hub's answer, model_box() (#677, ADR-0137): the registry label and its route, or
    "unregistered". The page holds no provider rule. An id just typed into an Add box has no answer until the save. */
 const MBOX0={llm:null,route:null,registered:null,text:"resolved on save"};
 function mdlBox(k,m){const b=mdl.boxes||{};return (b[k]||{})[m]||(b.known||{})[m]||MBOX0}
-// a dropdown pick fills the box with its label text; the Add button saves the id that text stands for (#687)
-function sugId(list,v){const s=((mdl.suggest||{})[list]||[]).find(o=>o.text===v);return s?s.id:v}
 function mdlSub(x){if(!x.sub)return"";const q=x.quota||{},when=q.spent&&q.until_text?`, resets ${esc(q.until_text)}`:"";return`<span class="${q.spent?"bk":"el"}" title="${esc(x.sub.label)}${q.reason?" · "+esc(q.reason):""}">${esc(x.sub.label)}${q.spent?" · spent"+when:""}</span>`}
 function mdlName(x,m){return x.llm?esc(x.llm):esc(m)}   // the id stays in the row title; only an unregistered row shows it (#687)
 function mdlRoute(x,dflt){return x.registered===false?`<span class=ur>unregistered</span>`:esc(x.route||(x.registered?dflt:x.text))}
 /* The model switch (SPEC 889 #920): one boolean per model, written by the chips and by the table through POST /api/models.
    The chain row's old switch is read only: a file that holds it shows "off (chain)" and the panel writes none. */
 function mdlOffM(m){return !!(mdl.model_off&&mdl.model_off[m])}
-function mdlChips(){return Object.keys(MLAB).map(k=>`<div class=mch-row><span class=el>${MLAB[k]}</span>${(mdl[k]||[]).map(m=>{const of=mdlOffM(m),x=mdlBox(k,m);return`<button class="mch${of?" off":""}" data-mo="${esc(m)}" aria-pressed="${of}" title="${esc(m)} · ${of?"off (model): skipped in every chain; press to switch it on":"on: press to switch it off in every chain"}">${mdlName(x,m)}${of?" · off (model)":""}</button>`}).join("")}</div>`).join("")}
-function mdlTable(){const rows=mdl.models||[];return `<div class=mc><div class=mt>Models table</div><div class=mx>One row per model. The switch takes a model out of every chain and keeps its place. Hours are set on the chain rows only.</div>`+rows.map(r=>{const of=mdlOffM(r.id),x=mdlBox("known",r.id);return`<div class="mt-row${of?" off":""}"><span class=mn title="${esc(r.id)} · ${esc(x.text)}">${mdlName(x,r.id)}</span>${mdlSub(r)}<span class=el>${esc(of?"off (model)":r.state)}</span><button class="mtg${of?" off":""}" data-mt="${esc(r.id)}" aria-pressed="${of}" title="${of?"off (model): press to switch it on in every chain":"on: press to switch it off in every chain"}">${of?"off":"on"}</button></div>`}).join("")+`</div>`}
-function mdlRowText(k,m){const e=mdlEff(k,m),h=mdlHrs(k,m);return [m,(e&&e!=="medium")?e:"",h||"always"].filter(Boolean).join(" · ")}
-function mdlDiff(){const s=JSON.parse(mdlSrv),out=[];
- for(const m of (mdl.models||[]).map(r=>r.id)){const was=!!(s.model_off&&s.model_off[m]);if(was!==mdlOffM(m))out.push(`${m}: ${mdlOffM(m)?"switched off (model) in every chain":"switched on in every chain"}`)}
- for(const k of Object.keys(MLAB)){const now=(mdl[k]||[]).map(m=>mdlRowText(k,m)).join(" → ");const old=(s[k]||[]).map(m=>{const e=(s.efforts&&s.efforts[k]&&s.efforts[k][m])||"",h=(s.hours&&s.hours[k]&&s.hours[k][m])||"";return [m,(e&&e!=="medium")?e:"",h||"always"].filter(Boolean).join(" · ")}).join(" → ");if(now!==old)out.push(`${MLAB[k]}: ${now||"empty"}`)}
- return out}
+function mdlChip(st){return st==="on"?"":`<span class="stc${String(st).startsWith("off")?" off":" lim"}">${esc(String(st).startsWith("off")?"off":st)}</span>`}   // a state chip shows only at limit or off (#913)
+function mdlTable(){const rows=mdl.models||[];return `<h3>Models</h3><p class=m>On or off, for every chain. An off model leaves the add lists; a chain that still lists it keeps the row, struck through, and skips it.</p><table class=mtab><thead><tr><th>Model</th><th>Subscription</th><th>State</th><th>On</th></tr></thead><tbody>`+rows.map(r=>{const of=mdlOffM(r.id),x=mdlBox("known",r.id);return`<tr class="${of?"off":""}"><td class=mn title="${esc(r.id)} · ${esc(x.text)}">${mdlName(x,r.id)}</td><td>${mdlSub(r)}</td><td>${mdlChip(of?"off (model)":r.state)}</td><td><button class="mtg${of?" off":""}" data-mt="${esc(r.id)}" aria-pressed="${!of}" aria-label="${esc(r.id)} on" title="${of?"off (model): press to switch it on in every chain":"on: press to switch it off in every chain"}">${of?"off":"on"}</button></td></tr>`}).join("")+`</tbody></table>`}
+const MHELP=`<details class=hlp><summary>How it works</summary><ul><li><b>Order</b>: ↑ ↓ move a model; ✕ marks it for removal: the row stays, struck through, until Save, and ↺ keeps it; "+ add a model…" puts one back.</li><li><b>Off</b> is set once per model and applies in every chain. An off model is skipped where a chain still lists it (the row stays, struck through, and ✕ still removes it) and is not offered in "+ add a model…". Switching it on restores every row.</li><li><b>Hours</b> are set per chain row: <code>HH-HH</code> local, may wrap midnight (<code>22-07</code>); empty means always. Outside its hours the row is skipped like off, and the next row runs.</li><li><b>Effort</b> is low to max, per chain row; medium is the default.</li><li><b>Save</b>, at the foot of Settings, shows the change (- before, + after) and writes only when you confirm.</li></ul></details>`;
 function mdlRender(){const b=$("#mbody");if(!mdl){b.innerHTML="<span class=m>loading…</span>";return}
  {const lc=mdl.last_coding||(mdl.coding_models||[])[0]||"",x=lc?mdlBox("coding_models",lc):MBOX0;$("#mdsr").textContent=x.llm?`${x.llm} · ${lc}`:lc}   // the model the last run coded with, not the chain's head
  {const roles=Object.keys(MLAB);$("#sqm").innerHTML=roles.map(k=>`<div class=chr><b>${MLAB[k]}</b><span>${(mdl[k]||[]).map(m=>`<span class="cm${mdlOffM(m)?" off":""}" title="${esc(m)}">${mdlName(mdlBox(k,m),m)}</span>`).join("")}</span></div>`).join("");$("#sqsr").textContent=roles.length+" roles"}   // the sidebar card: the chains by role, read only; the editor is on the Settings tab
- const dirty=JSON.stringify(mdl)!==mdlSrv;   // the dropdowns read mdl.suggest: the label first, the saved value stays the id (#672, #687)
  const ch=mdl.chain||{},chOut=ch.out||[],chHit=(m)=>chOut.find(o=>o.until_text&&o.model.split(':').pop()===String(m).split(':').pop()),chTag=(m)=>{const o=chHit(m);return o?`<span class=bk title="${esc(o.reason)}">${esc(o.reason)}, resets ${esc(o.until_text)}</span>`:''},chBan=ch.banner?`<div class="mx err" role=alert>${esc(ch.banner)}</div>`:(ch.notice?`<div class=mx>${esc(ch.notice)}</div>`:"");
- const diff=dirty?mdlDiff():[];
- b.innerHTML=chBan+`<div class=mchs>${mdlChips()}</div>`+`${Object.keys(MLAB).map(k=>`<datalist id=mk-${k}>${((mdl.suggest||{})[k]||[]).map(s=>`<option value="${esc(s.text)}" label="${esc(s.id)}">`).join("")}</datalist>`).join("")}<datalist id=hrp>${HRP.map(v=>`<option value="${v}">`).join("")}</datalist>`+mdlTable()+Object.keys(MLAB).map(k=>`<div class=mc><div class=mt>${MLAB[k]}</div><div class=mx>${MDESC[k]} Tried top to bottom; the first healthy model wins, and a model switched off is skipped like one outside its hrs window.</div>`+mdl[k].map((m,i)=>{const ef=mdlEff(k,m),hr=mdlHrs(k,m),x=mdlBox(k,m),cof=mdlOff(k,m),o=(mdl.outside&&mdl.outside[k]||{})[m],rk=i?"fallback "+i:"primary";return`<div class="mr${i?"":" p"}${cof?" off":""}"><span class=rk title="${rk}${cof?" · off (chain)":""}">${i+1}</span><span class=mn title="${esc(m)} · ${esc(x.text)}">${mdlName(x,m)}</span><span class=ct><span class=pv title="${rk} · ${esc(x.text)}">${mdlRoute(x,rk)}${mdlSub(x)}${cof?" · off (chain)":""}</span>${k==="review_models"?chTag(m):""}${o?`<span class=bk title="this row runs only inside its hours">outside hours ${esc(o)}</span>`:""}<span class=el>effort</span><select class="ef${ef?" set":""}" data-ef="${k}|${esc(m)}" aria-label="${esc(m)}: effort" title="effort for this model (medium is the default)">${EFF.map(e=>`<option value="${e==="medium"?"":e}"${(ef||"medium")===e?" selected":""}>${e}</option>`).join("")}</select><span class=el>hrs</span><input class="hr${hr?" set":""}" list=hrp data-hr="${k}|${esc(m)}" value="${esc(hr)}" placeholder="always" aria-label="${esc(m)}: hours"title="local hours this model may run (HH-HH, wraps midnight; empty = always)"><span class=mb><button data-mv="${k}|${i}|-1" ${i?"":"disabled"} title="move up">↑</button><button data-mv="${k}|${i}|1" ${i<mdl[k].length-1?"":"disabled"} title="move down">↓</button><button class=x data-rm="${k}|${i}" ${mdl[k].length>1?"":"disabled"} title="remove from chain">✕</button></span></span></div>`}).join("")+`<div class=madd><input list=mk-${k} data-add="${k}" placeholder="add a model id…" aria-label="${MLAB[k]}: add a model id"><button data-addb="${k}">Add</button></div></div>`).join("")
- +`<div class=mx><b>effort</b> · <b>hrs</b> local time <code>HH-HH</code>, wraps midnight, empty = always · <b>✕</b> deletes the row.</div>`
- +(diff.length?`<div class=mdiff><div class=mt>Diff before save</div>${diff.map(l=>`<div class=mx>${esc(l)}</div>`).join("")}</div>`:"")
- +`<div class="msave${dirty?" dirty":""}"><button id=msv ${dirty?"":"disabled"}>Save</button><button id=mrv ${dirty?"":"disabled"}>Revert</button><span class="st${mdlMsg.startsWith("!")?" err":mdlMsg?" okm":""}">${mdlMsg?esc(mdlMsg.replace(/^!/,"")):(dirty?"<span class=dot></span>unsaved changes":"saved in models.json")}</span></div>`}
-async function mdlLoad(){try{mdl=await (await fetch("/api/models")).json();mdlSrv=JSON.stringify(mdl);mdlRender()}catch(e){}}
+ b.innerHTML=chBan+`<p class="note lead">Which models work, in what order, in which hours: a chain is tried top to bottom, and the first model that is on, inside its hours and under its limit does the work.</p>`
+ +`<datalist id=hrp>${HRP.map(v=>`<option value="${v}">`).join("")}</datalist>`+mdlTable()+`<h3>Chains</h3>`
+ +Object.keys(MLAB).map(k=>`<div class=mc><div class=mt>${MLAB[k]}</div><div class=mx>${MDESC[k]}</div>`+mdl[k].map((m,i)=>{const ef=mdlEff(k,m),hr=mdlHrs(k,m),x=mdlBox(k,m),cof=mdlOff(k,m),mof=mdlOffM(m),o=(mdl.outside&&mdl.outside[k]||{})[m],st=((mdl.models||[]).find(z=>z.id===m)||{}).state;
+  const rmk=mdlRmd(k,m),live=mdl[k].filter(z=>!mdlRmd(k,z)).length;
+  return`<div class="mr${cof||mof?" off":""}${rmk?" rmk":""}" data-row="${k}|${esc(m)}"><span class=rk>${i+1}</span><span class=mn title="${esc(m)} · ${esc(x.text)}">${mdlName(x,m)}</span><span class=ct><span class=pv title="${esc(x.text)}">${mdlRoute(x,"")}${mdlSub(x)}</span>${mof?`<span class="stc off">off (model)</span>`:cof?`<span class="stc off">off (chain)</span>`:""}${st==="at limit"?`<span class="stc lim">at limit</span>`:""}${k==="review_models"?chTag(m):""}${o?`<span class=bk title="this row runs only inside its hours">outside hours ${esc(o)}</span>`:""}<label class=el>effort <select class="ef${ef?" set":""}" data-ef="${k}|${esc(m)}" aria-label="${esc(m)}: effort" title="effort for this model (medium is the default)">${EFF.map(e=>`<option value="${e==="medium"?"":e}"${(ef||"medium")===e?" selected":""}>${e}</option>`).join("")}</select></label><label class=el>hours <input class="hr${hr?" set":""}" list=hrp data-hr="${k}|${esc(m)}" value="${esc(hr)}" placeholder="always" aria-label="${esc(m)}: hours" title="local hours this model may run (HH-HH, wraps midnight; empty = always)"></label><span class=mb><button data-mv="${k}|${i}|-1" ${i?"":"disabled"} aria-label="move up" title="move up">↑</button><button data-mv="${k}|${i}|1" ${i<mdl[k].length-1?"":"disabled"} aria-label="move down" title="move down">↓</button><button class=x data-rm="${k}|${i}" ${rmk||live>1?"":"disabled"} aria-label="${rmk?"undo remove":"remove"} ${esc(m)}" title="${rmk?"keep this model in the chain":"remove from chain on Save"}">${rmk?"↺":"✕"}</button></span></span></div>`}).join("")
+  +`<div class=madd><select data-add="${k}" aria-label="${MLAB[k]}: add a model"><option value="">+ add a model…</option>${addOpts((mdl.suggest||{})[k],mdl[k],mdlOffM).map(s=>`<option value="${esc(s.id)}">${esc(s.text)}</option>`).join("")}</select></div></div>`).join("")
+  +MHELP+(mdlMsg?`<div class="mx${mdlMsg.startsWith("!")?" err":""}" role=status>${esc(mdlMsg.replace(/^!/,""))}</div>`:"");
+ if(typeof setBar==="function")setBar()}
+async function mdlLoad(){try{mdl=await (await fetch("/api/models")).json();mdlSrv=JSON.stringify(mdl);mdlRmk={};mdlRender()}catch(e){}}
 /* One write route for both places (SPEC 889 #920): a chip flips at once; the table stages its switch until Save. */
 async function mdlPost(body){const r=await fetch("/api/models",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});return r.json()}
-async function mdlFlip(m,off){const dirty=JSON.stringify(mdl)!==mdlSrv,was=JSON.parse(JSON.stringify(mdl)),srv=JSON.parse(mdlSrv);
- try{const d=await mdlPost({version:mdl.version,model_off:{[m]:off}});
-  if(d.err){mdlMsg="!"+d.err}
-  else if(dirty){mdl=d;for(const k of Object.keys(MLAB))mdl[k]=was[k];mdl.efforts=was.efforts;mdl.hours=was.hours;mdl.model_off={...(was.model_off||{}),[m]:off};srv.version=d.version;srv.model_off=d.model_off;mdlSrv=JSON.stringify(srv);mdlMsg=`${m} ${off?"off (model)":"on"} · saved`}
-  else{mdl=d;mdlSrv=JSON.stringify(d);mdlMsg=`${m} ${off?"off (model)":"on"} · saved`}
- }catch(x){mdlMsg="!switch failed"}
- mdlRender()}
 $("#mbody").addEventListener("change",e=>{const t=e.target;if(!mdl)return;mdlMsg="";if(t.dataset.ef){const[k,m]=t.dataset.ef.split("|");mdlSetEff(k,m,t.value)}
- else if(t.dataset.hr){const[k,m]=t.dataset.hr.split("|");mdlSetHrs(k,m,t.value)}
+ else if(t.dataset.hr){const[k,m]=t.dataset.hr.split("|"),v=t.value.trim();if(v&&!HRX.test(v))mdlMsg="!hours are HH-HH, for example 22-07";mdlSetHrs(k,m,v)}
+ else if(t.dataset.add){const k=t.dataset.add,v=t.value;if(v&&!mdl[k].includes(v)&&!mdlOffM(v))mdl[k].push(v)}
  else return;mdlRender()});
-$("#mbody").addEventListener("click",async e=>{const t=e.target.closest("button");if(!t||!mdl)return;mdlMsg="";
- if(t.dataset.mo){await mdlFlip(t.dataset.mo,!mdlOffM(t.dataset.mo));return}
- if(t.dataset.mt){const m=t.dataset.mt;mdlSetOffM(m,!mdlOffM(m));mdlRender();return}
- if(t.dataset.mv){const[k,i,d]=t.dataset.mv.split("|"),a=mdl[k],j=+i+ +d;[a[i],a[j]]=[a[j],a[i]]}
- else if(t.dataset.rm){const[k,i]=t.dataset.rm.split("|");const[m]=mdl[k].splice(+i,1);mdlSetEff(k,m,"")}
- else if(t.dataset.addb){const k=t.dataset.addb,v=sugId(k,t.parentElement.querySelector("input").value.trim());if(!MODELRE.test(v))mdlMsg="!invalid model id";else if(mdl[k].includes(v))mdlMsg="!already in the chain";else if(mdlOffM(v))mdlMsg="!switched off: switch it on first";else mdl[k].push(v)}
- else if(t.id==="mrv")mdl=JSON.parse(mdlSrv);
- else if(t.id==="msv"){try{const d=await mdlPost(mdl);if(d.err)mdlMsg="!"+d.err;else{mdl=d;mdlSrv=JSON.stringify(d);mdlMsg="saved · new runs use it"}}catch(x){mdlMsg="!save failed"}}
+$("#mbody").addEventListener("click",e=>{const t=e.target.closest("button");if(!t||!mdl)return;mdlMsg="";
+ if(t.dataset.mt){const m=t.dataset.mt;mdlSetOffM(m,!mdlOffM(m))}
+ else if(t.dataset.mv){const[k,i,d]=t.dataset.mv.split("|"),a=mdl[k],j=+i+ +d;[a[i],a[j]]=[a[j],a[i]]}
+ else if(t.dataset.rm){const[k,i]=t.dataset.rm.split("|");mdlRmToggle(k,mdl[k][+i])}
+ else return;
  mdlRender()});
 /* Settings > Spend & limits (#926): the token guard's on/off switch, its daily cap and its pause factor, with the burn
    it measures and whether dispatch is paused now. The page renders and asks; the hub validates, shows the diff, writes
@@ -4187,9 +4210,8 @@ function limRender(){const b=$("#lbody");if(!b)return;if(!limS){b.innerHTML="<sp
  +`<div class=kr><span class=l>window <small>${s.window_h} h</small></span><b${s.window_burn==null?" class=m":""}>${limN(s.window_burn)}<small>tokens</small></b></div>`
  +`<div class=kr><span class=l>dispatch now</span><b class="${s.paused?"w":"ok"}">${s.paused?"paused":"running"}</b></div>`
  +`<div class=kr><span class=l>last change</span><span class=lv title="${esc(s.profile||"")}">${s.last_change?esc(s.last_change.at+" · "+s.last_change.text):"none recorded"}</span></div>`;
- if(limDiff)h+=`<div class=ldiff role=alert><b>Save these changes?</b>${limDiff.map(x=>`<div class=ln>${esc(x)}</div>`).join("")}<div class=lact><button id=limok>Confirm</button><button id=limno>Cancel</button></div></div>`;
- h+=`<div class="msave${limDiff?" dirty":""}"><button id=limsv>Save</button><button id=limrv>Revert</button><span class="st${limMsg.startsWith("!")?" err":limMsg?" okm":""}">${limMsg?esc(limMsg.replace(/^!/,"")):(limDiff?"":"the guard reads a save on its next pass")}</span></div>`;
- b.innerHTML=h}
+ if(limMsg)h+=`<div class="mx${limMsg.startsWith("!")?" err":""}" role=status>${esc(limMsg.replace(/^!/,""))}</div>`;
+ b.innerHTML=h;if(typeof setBar==="function")setBar()}
 async function limLoad(){try{limS=await (await fetch("/api/limits")).json();limDiff=null;limMsg="";limRender()}catch(e){limMsg="!load failed";limRender()}}
 async function limPost(confirm){const vals=limVals();if(!confirm)limPend={guard:vals.guard,cap:vals.cap,factor:vals.factor};   // the diff is asked about what was typed, not about what is saved
  try{const r=await fetch("/api/limits",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...vals,confirm})}),d=await r.json();
@@ -4197,10 +4219,7 @@ async function limPost(confirm){const vals=limVals();if(!confirm)limPend={guard:
  else if(confirm){limS=d.state||limS;limDiff=null;limPend=null;limMsg=(d.diff||[]).length?"saved · the guard reads it on its next pass":"nothing changed"}
  else if((d.diff||[]).length)limDiff=d.diff;else{limMsg="nothing changed";limPend=null}}catch(x){limMsg="!save failed"}
  limRender()}
-$("#lbody").addEventListener("click",e=>{const t=e.target.closest("button");if(!t)return;
- if(t.id==="limok")limPost(true);else if(t.id==="limsv")limPost(false);
- else if(t.id==="limrv"||t.id==="limno"){limDiff=null;limPend=null;limMsg="";limRender()}});
-$("#lbody").addEventListener("input",e=>{if(e.target.id==="limc"||e.target.id==="limf"){limMsg="";const st=$("#lbody .msave .st");if(st)st.textContent="unsaved changes"}});
+$("#lbody").addEventListener("input",()=>{limMsg="";setBar()});
 /* Settings > Communication (#924): how the agent reads and writes Slack for this profile. The page renders and asks; the hub
    validates, shows the diff and writes the profile's gitignored file on confirm (ADR-0137). The hub holds no token. */
 let slS=null,slDraft=null,slD=null,slMsg="";
@@ -4241,9 +4260,8 @@ function slRender(){const b=$("#sbody");if(!b)return;if(!slS){b.innerHTML="<span
  +`<h4>Templates</h4>`+Object.keys(SL_EV).map(k=>`<details class=tp><summary>${SL_EV[k]} <span class=m>${d.channels.filter(c=>c.watch&&c.events[k]).map(c=>esc(c.name)).join(", ")||"no channel"}</span></summary><textarea data-sl="tpl:${k}" rows=3 maxlength=600 aria-label="${SL_EV[k]} template">${esc(d.templates[k])}</textarea></details>`).join("")
  +`<h4>Optional</h4><div class=kr><label class=swt><input type=checkbox data-sl=dm${d.dm?" checked":""} aria-label="owner self-DM as an inbox"> Owner self-DM as an inbox</label></div>`
  +`<div class=kr><label class=swt><input type=checkbox data-sl=audio${d.audio?" checked":""}${d.dm?"":" disabled"} aria-label="audio in and out"> Audio in and out</label></div>`;
- if(slD)h+=`<div class=sdiff role=alert><b>Save these changes?</b>${slD.map(x=>`<div class=ln>${esc(x)}</div>`).join("")}<div class=sact><button id=slok>Confirm</button><button id=slno>Cancel</button></div></div>`;
- h+=`<div class="msave${slDirty()?" dirty":""}"><button id=slsv>Save</button><button id=slrv>Discard</button><span class="st${slMsg.startsWith("!")?" err":slMsg?" okm":""}">${slMsg?esc(slMsg.replace(/^!/,"")):(slDirty()?"unsaved changes":"no change")}</span></div>`;
- b.innerHTML=h}
+ if(slMsg)h+=`<div class="mx${slMsg.startsWith("!")?" err":""}" role=status>${esc(slMsg.replace(/^!/,""))}</div>`;
+ b.innerHTML=h;if(typeof setBar==="function")setBar()}
 function slEdit(k,t){const p=k.split(":"),v=t.type==="checkbox"?t.checked:t.value;
  if(p[0]==="ch"){const c=slDraft.channels[+p[1]];if(p[2]==="ev")c.events[p[3]]=v;else c[p[2]]=v}
  else if(p[0]==="pp")slDraft.people[+p[1]].role=v;
@@ -4262,10 +4280,36 @@ $("#sbody").addEventListener("click",e=>{const b=e.target.closest("button");if(!
  if(b.dataset.slrm){const[t,i]=b.dataset.slrm.split(":");(t==="ch"?slDraft.channels:slDraft.people).splice(+i,1);slD=null;slRender()}
  else if(b.id==="slcha"){const v=$("#slch").value.trim();if(v)slDraft.channels.push({name:v,lang:slDraft.lang,...slS.new_channel,events:{...slS.new_channel.events}});slD=null;slRender()}
  else if(b.id==="slpa"){const v=$("#slpn").value.trim();if(v&&!slDraft.people.some(p=>p.name===v))slDraft.people.push({name:v,role:$("#slpr").value});slD=null;slRender()}
- else if(b.id==="slsv")slPost(false);
- else if(b.id==="slok")slPost(true);
- else if(b.id==="slno"){slD=null;slRender()}
- else if(b.id==="slrv"){slDraft=slClone(slS);slD=null;slMsg="";slRender()}});
+ });
+/* Settings (#913): a left theme list (a select on the phone) shows one theme at a time, and one page-level Save shows
+   the diff of every theme with a change, each line naming its theme, and writes only after the confirm. Loop and
+   Access have no Save: the bar hides there. */
+const STH={lim:"Spend & limits",mdl:"Models & chains",slk:"Communication",lop:"Loop",acc:"Access"};
+let sTheme=STH[ls.sth]?ls.sth:"mdl",sPend=null;
+const limDirty=()=>{if(!limS||!$("#limc"))return false;const v=limVals();return String(v.guard)!==String(limS.guard)||String(v.cap)!==String(limS.cap)||String(v.factor)!==String(limS.factor)};
+const mdlDirty=()=>mdlChanged();
+const setDirty=()=>[["lim",limDirty()],["mdl",mdlDirty()],["slk",slDirty()]].filter(x=>x[1]).map(x=>x[0]);
+function setBar(){const bar=$("#sbar");if(!bar)return;const d=setDirty();bar.hidden=sTheme==="lop"||sTheme==="acc";bar.classList.toggle("dirty",d.length>0);
+ $("#ssave").disabled=!d.length;$("#sdisc").disabled=!d.length;$("#schg").textContent=d.length?"Unsaved: "+d.map(k=>STH[k]).join(", "):`${STH[sTheme]}: no change`}
+function setTheme(sp){if(!STH[sp])sp="mdl";sTheme=sp;ls.sth=sp;save();
+ document.querySelectorAll("#tab-set details.sp").forEach(e=>{const on=e.dataset.sp===sp;e.classList.toggle("on",on);if(on&&!e.open)e.open=true});
+ document.querySelectorAll(".snav button").forEach(b=>b.classList.toggle("on",b.dataset.sp===sp));$("#ssel").value=sp;setBar()}
+$(".snav").addEventListener("click",e=>{const b=e.target.closest("button[data-sp]");if(b)setTheme(b.dataset.sp)});
+$("#ssel").addEventListener("change",e=>setTheme(e.target.value));
+const setAskOne=async(url,body,theme)=>{try{const r=await (await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...body,confirm:false})})).json();
+ return r.err?["! "+themeLine(theme,r.err)]:(r.diff||[]).map(l=>"  "+themeLine(theme,l))}catch(x){return["! "+theme+" · the diff could not be read"]}};
+$("#ssave").onclick=async()=>{const d=setDirty(),lines=[];sPend=d;
+ if(d.includes("mdl"))lines.push(...mdlDiffLines(JSON.parse(mdlSrv),mdlOut(),MLAB));
+ if(d.includes("lim")){const v=limVals();limPend={guard:v.guard,cap:v.cap,factor:v.factor};lines.push(...await setAskOne("/api/limits",limPend,"Spend & limits"))}
+ if(d.includes("slk"))lines.push(...await setAskOne("/api/slack",slDraft,"Communication"));
+ $("#sdpre").textContent=lines.join("\n")||"No change to save.";$("#sdok").disabled=!lines.length||lines.some(l=>l.startsWith("!"));$("#sdlg").showModal()};
+$("#sdno").onclick=()=>{sPend=null;limPend=null;$("#sdlg").close()};
+$("#sdok").onclick=async()=>{const d=sPend||[];sPend=null;$("#sdlg").close();
+ if(d.includes("mdl")){try{const r=await mdlPost(mdlOut());if(r.err)mdlMsg="!"+r.err;else{mdl=r;mdlSrv=JSON.stringify(r);mdlRmk={};mdlMsg="saved · new runs use it"}}catch(x){mdlMsg="!save failed"}mdlRender()}
+ if(d.includes("lim"))await limPost(true);
+ if(d.includes("slk"))await slPost(true);
+ setBar()};
+$("#sdisc").onclick=()=>{if(mdl){mdl=JSON.parse(mdlSrv);mdlRmk={};mdlMsg="";mdlRender()}if(limS){limPend=null;limMsg="";limRender()}if(slS){slDraft=slClone(slS);slMsg="";slRender()}setBar()};
 /* accordions: each of the five answers its own header and leaves the others alone; the open set is stored like the pins */
 const ACC=["plans","stats","mdl","lim","slk"];
 let openAcc=new Set(Array.isArray(ls.acc)?ls.acc.filter(i=>ACC.includes(i)):[]);   // the old single-id string is ignored, not trusted, and not fatal
@@ -4274,28 +4318,30 @@ ACC.forEach(i=>{const e=$("#"+i);e.open=openAcc.has(i);e.addEventListener("toggl
 if(openAcc.has("lim"))limLoad();
 if(openAcc.has("slk"))slLoad();
 const PCOL=["#5aa9ff","#3ecf8e","#f5b041","#b79cf6","#2dd4bf","#ff6b6b","#c678dd","#e5c07b","#8a93a3"],tk=n=>n>=1e9?(n/1e9).toFixed(2)+"B":n>=1e6?(n/1e6).toFixed(1)+"M":n>=1e3?(n/1e3).toFixed(0)+"K":""+n;
-const OTHER=0.01;
+const TOP=3;
 function pie(ms){
  // One slice per model NAME, never per spelling: one model answers under several (deepseek-flash, deepseek-flash[1m],
  // claude-deepseek-flash), and keying the rows on the raw id drew the same label three times (#1750).
  const byName=new Map();
- for(const m of ms){const v=m.in+m.out;if(!(v>0))continue;
+ for(const m of ms){const v=m.month_cost;if(!(v>0))continue;
   const k=m.box&&m.box.registered===false?m.model+" · unregistered":(m.box&&m.box.llm)||m.model;
-  const r=byName.get(k)||{n:k,v:0,in:0,out:0,cache:0,spend:0,calls:0,ids:[],routes:[]};
-  r.v+=v;r.in+=m.in;r.out+=m.out;r.cache+=m.cache||0;r.spend+=m.spend||0;r.calls+=m.calls||0;
+  const r=byName.get(k)||{n:k,v:0,ids:[],routes:[]};
+  r.v+=v;
   if(!r.ids.includes(m.model))r.ids.push(m.model);
   for(const rt of (m.box&&m.box.routes)||[])if(!r.routes.includes(rt))r.routes.push(rt);
   byName.set(k,r)}
- const rows=[...byName.values()];if(!rows.length)return"<span class=m>no token data</span>";
- const tot=rows.reduce((a,m)=>a+m.v,0);const keep=[],fold=[];
- for(const m of rows) (m.v/tot<OTHER?fold:keep).push(m);
- while(keep.length+(fold.length?1:0)>6) fold.unshift(keep.pop());
- const sl=keep.map(m=>({k:m.n,n:m.n,v:m.v,s:m.spend,t:`${m.n} (${m.ids.join(", ")})${m.routes.length?" via "+m.routes.join(", "):""}: ${tk(m.in)} in · ${tk(m.out)} out · ${tk(m.cache)} cache read · ${m.calls} calls · ${usd(m.spend)}`}));
- if(fold.length){const v=fold.reduce((a,m)=>a+m.v,0),t=fold.map(m=>`${m.n}: ${(m.v/tot*100).toFixed(2)}%`).join("\n");sl.push({k:"other",n:`other · ${fold.length} models`,v,s:fold.reduce((a,m)=>a+m.spend,0),t})}
+ const rows=[...byName.values()].sort((a,b)=>b.v-a.v);if(!rows.length)return"<span class=m>no cost this month</span>";
+ const tot=rows.reduce((a,m)=>a+m.v,0),keep=rows.slice(0,TOP),fold=rows.slice(TOP);
+ const sl=keep.map(m=>({k:m.n,n:m.n,v:m.v,t:`${m.n} (${m.ids.join(", ")})${m.routes.length?" via "+m.routes.join(", "):""}: ${usd(m.v)}`}));
+ if(fold.length){const v=fold.reduce((a,m)=>a+m.v,0);sl.push({k:"other",n:`other · ${fold.length} models`,v,t:fold.map(m=>`${m.n}: ${usd(m.v)}`).join("\n")})}
  const col=k=>k==="other"?"#8a93a3":PCOL[[...String(k)].reduce((h,c)=>(h*31+c.charCodeAt(0))>>>0,0)%PCOL.length];   // a model keeps its colour across renders: the colour follows its name, not its place in the list
- const legendRows=sl.map(x=>`<div tabindex=0 data-k="${esc(x.k)}" title="${esc(x.t)}"><i style="background:${col(x.k)}"></i><span class=ln>${esc(x.n)}</span><span class=usd>${usd(x.s)}</span><b>${Math.round(x.v/tot*100)}%</b></div>`).join("");   // the rows are built outside the page template: a nested backtick there breaks the pie matcher in tests
+ const dot=(k,n,v)=>`<i style="background:${col(k)}"></i><span class=ln>${esc(n)}</span><span class=usd>${usd(v)}</span>`;   // the rows are built outside the page template: a nested backtick there breaks the pie matcher in tests
+ const subRows=fold.map(m=>`<div>${dot(m.n,m.n,m.v)}</div>`).join("");   // built outside the legend template: a nested backtick there breaks the pie matcher in tests
+ const legendRows=sl.map(x=>x.k==="other"
+   ?`<details class=lgo data-k="other"><summary tabindex=0 title="${esc(x.t)}">${dot(x.k,x.n,x.v)}</summary><div class=lgx>${subRows}</div></details>`
+   :`<div tabindex=0 data-k="${esc(x.k)}" title="${esc(x.t)}">${dot(x.k,x.n,x.v)}</div>`).join("");
  let a0=-Math.PI/2;const R=52,C=60,arc=sl.map((x,i)=>{const a1=a0+x.v/tot*2*Math.PI,big=a1-a0>Math.PI?1:0,p=sl.length===1?`<circle cx=${C} cy=${C} r=${R} data-k="${esc(x.k)}" fill="${col(x.k)}"><title>${esc(x.t)}</title></circle>`:`<path d="M${C} ${C}L${C+R*Math.cos(a0)} ${C+R*Math.sin(a0)}A${R} ${R} 0 ${big} 1 ${C+R*Math.cos(a1)} ${C+R*Math.sin(a1)}Z" data-k="${esc(x.k)}" fill="${col(x.k)}" stroke="#161a21" stroke-width=1><title>${esc(x.t)}</title></path>`;a0=a1;return p}).join("");
- return `<div class=pie><svg viewBox="0 0 120 120" width=112 height=112>${arc}<circle cx=${C} cy=${C} r=26 fill="#161a21"/><text x=${C} y=${C-1} text-anchor=middle fill="#d8dde6" style="font-size:var(--fs-min)" font-weight=600>${tk(tot)}</text><text x=${C} y=${C+12} text-anchor=middle fill="#8a93a3" style="font-size:var(--fs-min)">tokens</text></svg><div class=lg>${legendRows}</div></div>`}
+ return `<div class=pie><svg viewBox="0 0 120 120" width=112 height=112>${arc}<circle cx=${C} cy=${C} r=26 fill="#161a21"/><text x=${C} y=${C-1} text-anchor=middle fill="#d8dde6" style="font-size:var(--fs-min)" font-weight=600>${usd(tot)}</text><text x=${C} y=${C+12} text-anchor=middle fill="#8a93a3" style="font-size:var(--fs-min)">this month</text></svg><div class=lg>${legendRows}</div></div>`}
 function hlPie(k){document.querySelectorAll("#pie [data-k]").forEach(el=>el.classList.toggle("hl",!!k&&el.dataset.k===k));document.querySelector("#pie .pie")?.classList.toggle("dim",!!k)}
 $("#pie").addEventListener("mouseover",e=>{const el=e.target.closest("[data-k]");hlPie(el?el.dataset.k:"")});
 $("#pie").addEventListener("mouseout",e=>{if(!$("#pie").contains(e.relatedTarget))hlPie("")});
@@ -4305,7 +4351,7 @@ const ago=t=>{const m=Math.round((Date.now()/1000-t)/60);return m<2?"just now":m
 const rel=t=>{if(!t)return"";const x=t-Date.now()/1000;if(x<=0)return"resets now";const d=Math.floor(x/86400),h=Math.floor(x%86400/3600),m=Math.floor(x%3600/60);return"resets in "+(d?`${d}d ${h}h`:h?`${h}h ${m}m`:`${m}m`)};
 const qcol=p=>`hsl(${Math.round(120*(1-Math.min(Math.max(+p||0,0),100)/100))} 65% 42%)`;   // a quota bar fills green when empty and red when full; only the fill takes colour (owner)
 const lvl=p=>p>=90?"lv-err":p>=60?"lv-warn":"lv-ok",fpct=p=>p<10&&p>0?p.toFixed(1):String(Math.round(p));
-const qbar=(label,pct,resets,sm,tip)=>`<div class="qw${sm?" sm":""}"><div class=ql><span>${esc(label)} <b>${fpct(pct)}%</b></span>${resets?`<span class=rst title="${esc(rs(resets))}">${rel(resets)}</span>`:""}</div><div class=tr title="${esc(tip)}"><div class="fl ${lvl(pct)}" style="width:${Math.min(pct,100)}%;background:${qcol(pct)}"></div></div></div>`;
+const qbar=(label,pct,resets,sm,tip)=>`<div class="qw${sm?" sm":""}"><div class=ql><span>${esc(label)} <b>${fpct(pct)}%</b></span><span class=rst>${esc(rstText(resets,Date.now()/1000))}${resets?" · "+esc(rs(resets)):""}</span></div><div class=tr title="${esc(tip)}"><div class="fl ${lvl(pct)}" style="width:${Math.min(pct,100)}%;background:${qcol(pct)}"></div></div></div>`;
 const autoq=a=>{const QT="Quota used, read from the provider's own CLI. 100% = quota exhausted.";if(a.unavailable)return `<div class=fr><span class="chip err">unavailable</span><span class=fs title="${esc(a.err)}">${esc(a.err)}</span>${a.asof?`<span class=fs>· last probed ${ago(a.asof)}</span>`:""}</div>`;return a.windows.map((w,i)=>qbar(w.label,w.pct,w.resets,i>0,QT)).join("")+`<div class=fr>${a.reached?`<span class="chip err">limit reached</span>`:""}<span class=fs>CLI · ${ago(a.asof)}</span></div>`};
 const CUR={"R$":"BRL","U$":"USD","US$":"USD","$":"USD","€":"EUR","£":"GBP","¥":"JPY"},curOf=v=>{v=v.trim().toUpperCase();return CUR[v]||v};
 const money=(a,c)=>{try{return new Intl.NumberFormat(undefined,{style:"currency",currency:c}).format(a)}catch(e){return a+" "+c}};
@@ -4336,7 +4382,6 @@ async function pollStats(){try{pollSubs();
   document.querySelectorAll("#per button").forEach(b=>b.onclick=()=>{per=b.dataset.p;save();pollStats()});
   $("#stsr").textContent=usd(st.totals.today)+" today";
   $("#chart").innerHTML=bars(st.buckets);$("#pie").innerHTML=pie(st.models||[]);
-  $("#piet").textContent=tk((st.models||[]).reduce((a,m)=>a+m.in+m.out,0))+" all time";
   const same=st.totals.all===st.totals.month;
   $("#tot").innerHTML=`<div>today<b>${usd(st.totals.today)}</b></div><div>this month<b>${usd(st.totals.month)}</b></div><div>all time<b${same?" class=m":""}>${same?"= this month":usd(st.totals.all)}</b></div>`;
   $("#totnote").innerHTML=(st.totals.unpriced||st.totals.uncounted)?`floor: ${st.totals.unpriced?st.totals.unpriced+" review call"+(st.totals.unpriced===1?" is":"s are")+" unpriced and count 0.0":""}${st.totals.unpriced&&st.totals.uncounted?"; ":""}${st.totals.uncounted?st.totals.uncounted+" with no usage count":""}. The total is a floor.`:"";
@@ -4687,7 +4732,7 @@ const TABS={board:"#tab-board",flow:"#tab-flow",hist:"#tab-hist",set:"#tab-set"}
 function setTab(t,o){if(!TABS[t])t="board";TAB=t;ls.tab=t;save();
  for(const k in TABS)$(TABS[k]).classList.toggle("on",k===t);
  document.querySelectorAll(".tabs button").forEach(b=>b.classList.toggle("on",b.dataset.t===t));
- if(t==="set")for(const id of["lim","mdl"]){const e=$("#"+id);if(!e.open)e.open=true}   // the two sections are the tab: entering it opens them (#889)
+ if(t==="set")setTheme(sTheme);   // entering the tab shows one theme, the last one picked (#913)
  if(t==="flow"){if(o&&o.runs)$("#flowov").hidden=true;else if(!o||!o.keep){if($("#flowov").hidden)flowOpen("cfd")}}
  drawMain()}
 document.querySelector(".tabs").addEventListener("click",e=>{const b=e.target.closest("button[data-t]");if(b)setTab(b.dataset.t)});
@@ -4729,6 +4774,7 @@ const accHtml=v=>{const a=v.access||{},yn=x=>x?"<span class=ok>allowed</span>":"
  +`<div class=kr><span class=l>Loop start and stop from the tailnet</span><b>${yn(a.loop_write)} <small>SQUAD_TAILNET_LOOP_WRITE (tailnet.loop_write)</small></b></div>`
  +`<div class=kr><span class=l>Terminal send from the tailnet</span><b>${yn(a.terminals_send)} <small>SQUAD_TAILNET_TERMINALS_SEND (tailnet.terminals_send)</small></b></div>`
  +`<div class=kr><span class=l>Run dashboards over the tailnet</span><b>read only, through the hub</b></div>`
+ +`<div class=kr><span class=l>Phone check</span><b><code>/agent-squad:start-mobile</code></b></div>`
  +`<p>Read here; the owner sets them in the project file or <code>.env</code> on the machine (ADR-0152, ADR-0162). A write the tailnet refuses still works from this machine.</p>`};
 // loop-switch:end
 function instLoopDraw(){const e=$("#iloop");if(!e||!loopV)return;const h=loopCardHtml(loopV);if(e.dataset.h!==h){e.dataset.h=h;e.innerHTML=h}}
@@ -4784,7 +4830,7 @@ async function endedPoll(){try{const rows=await (await fetch("/api/ended")).json
 $("#ended").addEventListener("click",e=>{const r=e.target.closest(".r[data-rid]");if(r)openRun(r.dataset.rid)});   // an ended run opens in the same sheet (#984)
 $("#ended").addEventListener("keydown",e=>{const r=e.target.closest(".r[data-rid]");if(r&&(e.key==="Enter"||e.key===" ")){e.preventDefault();openRun(r.dataset.rid)}});
 endedPoll();setInterval(endedPoll,30000);
-setTab(TABS[ls.tab]?ls.tab:"board");
+setTab(location.hash==="#set"?"set":TABS[ls.tab]?ls.tab:"board");   // the phone menu links here with #set (#913)
 let ver=null;setInterval(async()=>{try{const v=(await (await fetch("/api/version")).json()).v;if(ver===null)ver=v;else if(v!==ver)location.reload()}catch(e){}},3000);
 </script>"""
 PAGE = PAGE.replace("/*WEB_TOKENS*/", WEB_TOKENS)
@@ -5610,7 +5656,7 @@ def served_page(login=""):
     """The page as the hub serves it, every placeholder substituted. The model-id shape replaces its quoted placeholder:
     json.dumps brings its own quotes, and a second pair is a syntax error that empties the page."""
     who = f"signed in as {html.escape(login)}" if login else ""
-    return PAGE.replace("__WHO__", who).replace("__REPO__", REPO).replace('"__MODELID__"', json.dumps(MODEL_ID_SRC)).replace("__CAPS__", json.dumps(loop_caps())).replace("__LOADMS__", str(int(LOAD_SAMPLE_SECS * 1000))).replace("__LOADERR__", str(LOAD_ERR_PCT))
+    return PAGE.replace("__WHO__", who).replace("__REPO__", REPO).replace("__CAPS__", json.dumps(loop_caps())).replace("__LOADMS__", str(int(LOAD_SAMPLE_SECS * 1000))).replace("__LOADERR__", str(LOAD_ERR_PCT))
 
 
 def own_host(h):

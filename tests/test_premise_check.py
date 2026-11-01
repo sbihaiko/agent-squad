@@ -840,3 +840,150 @@ def test_an_answer_the_owner_does_not_know_settles_nothing(tmp_path):
 def test_the_skill_documents_answering_in_a_comment():
     skill = (ROOT / ".claude/skills/premise-check/SKILL.md").read_text()
     assert "--answers-from-comment" in skill
+
+
+# --- a refuted probe sends its spec back to the check (#888) -------------------------------------------------
+
+PROBE_PREMISE = "the loop never reads the probe ticket"
+PROBE = {"premise": PROBE_PREMISE, "kind": "run", "proof": "pytest tests/test_x.py"}
+
+
+def probe_comment(tmp_path, *findings, round_no=1):
+    rows = rows_of(tmp_path, *findings)
+    return pc.render(spec=878, round_no=round_no, reviewer=reviewer(), rows=rows, ending=pc.ending(rows), body_sha="a1b2c3")
+
+
+def test_a_refuted_probe_records_its_premise_as_refuted_and_opens_a_round(tmp_path):
+    gh = StubGithub()
+    gh.say(probe_comment(tmp_path, PROBE), login="squad-loop")
+    report = pc.refute(878, PROBE_PREMISE, github=gh, who=reviewer())
+    body = gh.comments[1]
+    assert f"| {PROBE_PREMISE} | refuted |" in body
+    state = pc.state_of(body)
+    assert state["refuted"] == [PROBE_PREMISE]
+    assert state["round"] == 2
+    assert report.ending == "refuted"
+
+
+def test_a_refuted_check_is_never_settled(tmp_path):
+    rows = rows_of(tmp_path, one_fact(holds=False))
+    assert pc.ending(rows) == "refuted"
+    assert "refuted" in pc.ENDINGS
+
+
+def test_refuting_a_premise_the_check_never_recorded_as_a_probe_is_refused_by_name(tmp_path):
+    gh = StubGithub()
+    gh.say(probe_comment(tmp_path, PROBE), login="squad-loop")
+    with pytest.raises(ValueError, match="never recorded"):
+        pc.refute(878, "a premise the check never named", github=gh, who=reviewer())
+    assert "update_comment" not in gh.calls
+
+
+def test_refuting_a_settled_premise_is_refused_by_name(tmp_path):
+    decided = {"premise": "the check comments on the spec", "kind": "decision", "answer": "one comment", "answered_by": "owner"}
+    gh = StubGithub()
+    gh.say(probe_comment(tmp_path, PROBE, decided), login="squad-loop")
+    with pytest.raises(ValueError, match="the check comments on the spec"):
+        pc.refute(878, "the check comments on the spec", github=gh, who=reviewer())
+
+
+def test_a_refutation_keeps_an_open_question_asked_by_its_number(tmp_path):
+    question = {"premise": "the owner names the probe", "kind": "decision", "recommends": "yes"}
+    gh = StubGithub()
+    gh.say(probe_comment(tmp_path, PROBE, question), login="squad-loop")
+    pc.refute(878, PROBE_PREMISE, github=gh, who=reviewer())
+    state = pc.state_of(gh.comments[1])
+    assert state["asked"][1]["premise"] == "the owner names the probe"
+    assert "**Q1** the owner names the probe" in gh.comments[1]
+
+
+def test_the_refute_flag_needs_no_findings_and_reaches_the_round():
+    a = pc.parser().parse_args(["878", "--refute", PROBE_PREMISE])
+    assert a.refute == PROBE_PREMISE and a.findings is None
+
+
+def test_the_squad_command_forwards_a_refutation_to_the_round():
+    from squad import cli
+    a = cli.parser().parse_args(["premise-check", "878", "--refute", PROBE_PREMISE])
+    assert a.refute == PROBE_PREMISE and a.findings is None
+
+
+def test_a_second_refutation_of_a_refuted_premise_succeeds_and_writes_nothing(tmp_path):
+    gh = StubGithub()
+    gh.say(probe_comment(tmp_path, PROBE), login="squad-loop")
+    pc.refute(878, PROBE_PREMISE, github=gh, who=reviewer())
+    written = dict(gh.comments)
+    report = pc.refute(878, PROBE_PREMISE, github=gh, who=reviewer())
+    assert report.action == "unchanged" and report.ending == "refuted"
+    assert gh.comments == written and gh.calls.count("update_comment") == 1
+
+
+def test_a_refutation_needs_no_review_model(monkeypatch, tmp_path, capsys):
+    gh = StubGithub()
+    gh.say(probe_comment(tmp_path, PROBE), login="squad-loop")
+
+    def no_model(*a, **kw):
+        raise pc.NoReviewer("no model in the review chain can review now")
+
+    monkeypatch.setattr(pc, "reviewer", no_model)
+    monkeypatch.setattr(pc, "rest_runner", lambda repo: gh)
+    assert pc.main(["878", "--refute", PROBE_PREMISE, "--repo", "x/y"]) == 0
+    assert pc.state_of(gh.comments[1])["refuted"] == [PROBE_PREMISE]
+    assert pc.LOOP.label in gh.comments[1]
+
+
+def test_a_refutation_that_gh_fails_exits_transient_so_the_loop_retries_it(monkeypatch, capsys):
+    def gh_down(args, **kw):
+        raise subprocess.CalledProcessError(1, args, stderr="HTTP 502")
+
+    monkeypatch.setattr(pc, "_sh", gh_down)   # the real REST runner, its gh call refused
+    assert pc.main(["878", "--refute", PROBE_PREMISE, "--repo", "x/y"]) == pc.EX_TEMPFAIL
+    assert "transient" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("stderr", ["HTTP 502", "gh: Bad Gateway (HTTP 503)", "dial tcp: connect: connection refused",
+                                    "net/http: TLS handshake timeout", "API rate limit exceeded for user"])
+def test_a_transient_gh_error_on_a_refutation_exits_75(monkeypatch, capsys, stderr):
+    def gh_down(args, **kw):
+        raise subprocess.CalledProcessError(1, args, stderr=stderr)
+
+    monkeypatch.setattr(pc, "_sh", gh_down)
+    assert pc.main(["878", "--refute", PROBE_PREMISE, "--repo", "x/y"]) == pc.EX_TEMPFAIL
+
+
+def test_a_gh_timeout_on_a_refutation_exits_75(monkeypatch, capsys):
+    def gh_slow(args, **kw):
+        raise subprocess.TimeoutExpired(args, 30)
+
+    monkeypatch.setattr(pc, "_sh", gh_slow)
+    assert pc.main(["878", "--refute", PROBE_PREMISE, "--repo", "x/y"]) == pc.EX_TEMPFAIL
+
+
+@pytest.mark.parametrize("stderr", ["gh: Not Found (HTTP 404)", "gh: Resource not accessible by integration (HTTP 403)",
+                                    "gh: Validation Failed (HTTP 422)"])
+def test_a_gh_4xx_on_a_refutation_exits_2_so_the_loop_never_retries_it(monkeypatch, capsys, stderr):
+    """A 4xx never changes on a retry, so it takes the PROBE-REFUSED path, never a retry forever (ADR-0134)."""
+    def gh_refuses(args, **kw):
+        raise subprocess.CalledProcessError(1, args, stderr=stderr)
+
+    monkeypatch.setattr(pc, "_sh", gh_refuses)
+    assert pc.main(["878", "--refute", PROBE_PREMISE, "--repo", "x/y"]) == 2
+    err = capsys.readouterr().err
+    assert "transient" not in err and stderr in err
+
+
+def test_a_refutation_the_check_refuses_exits_2_so_the_loop_never_retries_it(monkeypatch, tmp_path, capsys):
+    gh = StubGithub()
+    gh.say(probe_comment(tmp_path, PROBE), login="squad-loop")
+    monkeypatch.setattr(pc, "rest_runner", lambda repo: gh)
+    assert pc.main(["878", "--refute", "a premise the check never named", "--repo", "x/y"]) == 2
+    assert "never recorded" in capsys.readouterr().err
+
+
+def test_a_refuted_premise_beside_a_pending_probe_ends_refuted(tmp_path):
+    rows = rows_of(tmp_path, one_fact(holds=False), PROBE)
+    assert pc.ending(rows) == "refuted"
+
+
+def test_the_close_path_lives_in_the_loop_only():
+    assert not hasattr(pc, "probe_closed")

@@ -167,16 +167,16 @@ def test_the_page_draws_the_models_table_with_a_switch_that_states_its_value(pag
         "the table switch is a button with aria-pressed, drawn per model"
 
 
-def test_the_page_draws_one_sidebar_chip_per_model_per_role_as_a_button(page):
-    assert re.search(r'<button class="mch[^"]*"[^>]*data-mo="[^"]*"[^>]*aria-pressed="\$\{', page), \
-        "the sidebar chip is a button with data-mo and aria-pressed"
+def test_the_page_draws_no_chip_that_writes_at_once(page):
+    """Re-anchored (#913): a switch writes only through the page Save, after its diff; no chip writes at once."""
+    assert "data-mo=" not in page
 
 
-def test_the_chip_is_a_44_px_target_on_the_phone_with_a_focus_ring(page):
-    phone = re.search(r"@media \(max-width:600px\)\{(.*?)\n", page, re.S)
-    assert phone is not None
-    assert re.search(r"\.mch\{[^}]*min-height:44px", page), "the chip has no 44 px target on the phone"
-    assert re.search(r"\.mch:focus-visible\{[^}]*outline", page), "the chip has no visible focus ring"
+def test_the_switch_is_a_44_px_target_on_the_phone_with_a_focus_ring(page):
+    """Re-anchored (#913 review): the chip is gone; the models table switch (.mtg) is the one control left."""
+    assert ".mch" not in page, "dead chip CSS is back"
+    assert re.search(r"@media \(max-width:600px\)\{\.mtg\{[^}]*min-height:44px", page), "the switch has no 44 px target on the phone"
+    assert re.search(r"\.mtg:focus-visible\{[^}]*outline", page), "the switch has no visible focus ring"
 
 
 def test_the_chain_rows_no_longer_carry_a_chain_level_switch_button(page):

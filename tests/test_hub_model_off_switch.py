@@ -186,8 +186,9 @@ def test_the_models_table_switch_is_drawn_before_the_chain_rows(hub):
 def test_the_switch_reads_as_the_state_it_is_and_the_row_shows_the_model_is_out(hub):
     src = HUB_PY.read_text()
     row = src[src.index("function mdlRender()"):src.index("async function mdlLoad()")]
-    assert 'class="mr${i?"":" p"}${cof?" off":""}"' in row   # a chain row the file holds off is de-emphasised, the order untouched
-    assert "· off (chain)" in row                            # and says so
+    # re-anchored (#913): a row is de-emphasised when the file holds it off or its model is off, the order untouched
+    assert 'class="mr${cof||mof?" off":""}' in row   # re-anchored (#913 review): a marked row adds " rmk" after it
+    assert "off (chain)</span>" in row and "off (model)</span>" in row   # and says which
     css = src[src.index("<style>"):src.index("</style>")]
     assert ".mr.off .rk" in css
 
@@ -195,7 +196,8 @@ def test_the_switch_reads_as_the_state_it_is_and_the_row_shows_the_model_is_out(
 
 def test_the_switch_toggles_the_panel_state(hub):
     src = HUB_PY.read_text()
-    assert "function mdlSetOffM(m,v)" in src and "t.dataset.mo" in src and "t.dataset.mt" in src
+    # re-anchored (#913): the sidebar chip that wrote at once is gone; the table's switch stages until the page Save
+    assert "function mdlSetOffM(m,v)" in src and "t.dataset.mt" in src and "t.dataset.mo" not in src
 
 
 # --- the four consumers of a chain ---------------------------------------------------------------------------------

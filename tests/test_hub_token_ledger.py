@@ -6,7 +6,7 @@ not show the coding model at 100%. """
 import importlib.util
 import os
 import tempfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -122,3 +122,18 @@ def test_a_no_usage_ledger_line_is_counted_as_uncounted(hub, state):
     totals = hub.stats("day")["totals"]
     assert totals["uncounted"] == 1
     assert totals["all"] == 0.0
+
+
+def test_month_cost_takes_only_this_months_runs_at_full_precision(hub, state, monkeypatch):
+    """The donut slices a model's unrounded cost of this calendar month; the rounded all-time spend is unchanged."""
+    now = datetime.now()
+    last = now.replace(day=1) - timedelta(days=1)
+
+    def run(t0, spend):
+        return {"spend": spend, "sub": 0.0, "api": spend, "t0": t0, "done": True, "dur": 1,
+                "mod": {"claude-opus-5-5": {"in": 9, "out": 1, "cache": 0, "calls": 1, "spend": spend}}}
+
+    monkeypatch.setattr(hub, "all_runs", lambda: [run(last.timestamp(), 5.0), run(now.timestamp(), 0.123456)])
+    model = _models(hub)["claude-opus-5-5"]
+    assert model["month_cost"] == pytest.approx(0.123456, abs=1e-9), model
+    assert model["spend"] == 5.12, model
