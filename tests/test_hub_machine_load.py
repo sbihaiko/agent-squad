@@ -862,3 +862,41 @@ def test_the_monitor_draws_a_gauge_and_a_day_count_per_subscription(hub):
     fn = page[i:page.index("function instGauges(d)", i)]
     assert "gaugeSvg(p)" in fn and ".toFixed(1)" in fn, "the row draws no instrument or no one-decimal day count"
     assert ".subs" in fn
+
+
+# ---------------------------------------------------------------- the throughput row (owner, 2026-11-01)
+
+def _samples(hub, closed_per_day, start=1_000_000_000):
+    day = 86400
+    out = []
+    for i, n in enumerate(closed_per_day):
+        t = start + i * day + 3600
+        out.append({"t": t, "counts": {"issue": {hub.COLUMN["issue_closed"]: n}},
+                    "cells": [["issue", None, None, hub.COLUMN["issue_closed"], 0, n, "task"]], "frozen": 0, "none": 0})
+    return out
+
+
+def test_the_speed_row_compares_today_with_the_finished_days(hub, monkeypatch):
+    """Today is partial, so it is never part of the median it is judged against."""
+    days = [0, 2, 6, 10, 14, 16]
+    monkeypatch.setattr(hub._flow, "samples", lambda path: _samples(hub, days))
+    monkeypatch.setattr(hub._flow, "history_path", lambda board, repo: tempfile.mkdtemp() + "/none")
+    got = hub.throughput_fact()
+    done = [days[i + 1] - days[i] for i in range(len(days) - 1)]
+    assert got["today"] == done[-1], "the newest day is partial and is the one judged"
+    assert got["median"] == 4 and got["min"] == 2 and got["max"] == 4, (got, done)
+
+
+def test_a_speeding_board_reads_up_and_a_slowing_one_reads_down(hub, monkeypatch):
+    monkeypatch.setattr(hub._flow, "history_path", lambda board, repo: tempfile.mkdtemp() + "/none")
+    fast = [0, 1, 2, 3, 4, 5, 8, 12, 16]
+    monkeypatch.setattr(hub._flow, "samples", lambda path: _samples(hub, fast))
+    assert hub.throughput_fact()["trend"] == "up"
+    slow = [0, 9, 18, 27, 36, 45, 46, 47, 48]
+    monkeypatch.setattr(hub._flow, "samples", lambda path: _samples(hub, slow))
+    assert hub.throughput_fact()["trend"] == "down"
+
+
+def test_no_history_reads_no_speed_and_the_page_draws_no_fake_zero(hub):
+    assert hub.throughput_fact() is None
+    assert "no history yet" in hub.PAGE

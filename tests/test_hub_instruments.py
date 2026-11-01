@@ -93,16 +93,15 @@ def test_the_gauge_svg_is_hidden_from_a_screen_reader_and_the_value_is_text(hub)
 
 # ---------------------------------------------------------------- the annunciators
 
-def test_the_tiles_read_gate_loop_landed_and_graphql_in_that_order(hub):
-    """The owner removed the Nightly tile from the card; the footer still carries the nightly fact."""
+def test_the_tiles_read_gate_and_loop_and_nothing_the_owner_removed(hub):
+    """The owner removed Nightly, then Landed and GraphQL: the card keeps the two facts it acts on."""
     facts = _facts(hub, gate=GATE_FAIL, nightly=NIGHTLY_PASS, loop=True)
     tiles = _run(hub, f"instTiles({json.dumps(facts)})")
-    assert [t["k"] for t in tiles] == ["Gate", "Loop", "Landed", "GraphQL"]
-    gate, loop, landed, _ = tiles
+    assert [t["k"] for t in tiles] == ["Gate", "Loop"]
+    gate, loop = tiles
     assert (gate["tone"], gate["text"]) == ("err", "fast fail 5m ago")
     assert gate["tip"] == "ran at 0123456"
     assert (loop["tone"], loop["text"]) == ("ok", "ON")
-    assert landed["text"] == "PR #73 2h ago" and landed["href"].endswith("/pull/73")
 
 
 def test_the_gate_tile_shows_the_last_run_time_and_the_mean(hub):
@@ -138,15 +137,16 @@ def test_the_collapsed_summary_names_the_loop_state_and_the_failed_tiles(hub):
     assert _run(hub, f"instSum({json.dumps(_facts(hub))})") == "? · 0 fail"
 
 
-def test_the_cycle_countdown_parses_and_reformats_the_hubs_own_span(hub):
-    assert _run(hub, '["cycle in 3m40s","cycle in 1h02m","cycle +1m05s late","x"].map(cycleLeft)') == [220, 3720, -65, None]
-    assert _run(hub, "[220,3720,-65,0].map(cycleFmt)") == ["in 3m40s", "in 1h02m", "+1m05s late", "in 0m00s"]
+def test_the_card_carries_no_cycle_countdown(hub):
+    """Owner, 2026-11-01: Next cycle left the card, and the countdown went with it."""
+    assert "cycleLeft" not in hub.PAGE and "cycleFmt" not in hub.PAGE and "#icyc" not in hub.PAGE
 
 
-def test_the_usage_row_states_tokens_then_calls_and_invents_no_budget(hub):
+def test_the_usage_reading_states_tokens_and_no_call_count(hub):
+    """Owner, 2026-11-01: the Tokens row moved to Cost & usage and the over-cap call count is gone."""
     burn = {"over": True, "threshold": 5000000, "window_hours": 24,
             "burners": [{"consumer": "a", "tokens": 6000000}, {"consumer": "b", "tokens": 7000000}]}
-    assert _run(hub, f"instUsage({json.dumps(_facts(hub, burn=burn))})") == {"tok": "13M/24h", "calls": "2 over 5M"}
+    assert _run(hub, f"instUsage({json.dumps(_facts(hub, burn=burn))})")["tok"] == "13M/24h"
     assert _run(hub, f"instUsage({json.dumps(_facts(hub))})") is None
 
 
