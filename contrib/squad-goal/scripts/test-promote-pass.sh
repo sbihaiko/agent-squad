@@ -202,5 +202,52 @@ SG_PROMOTE_RESERVE_SECONDS=600 bash "$d/promote-pass.sh" > "$T/out5" 2>&1; rc=$?
 [ ! -e "$SG_STATE/promote-reserve" ] && ok "the named reserve is gone after the proof" || ko "the named reserve outlived the proof"
 [ "$rc" = 0 ] && [ "$(tip stg)" = "$th" ] && ok "a named-reserve proof still promotes its tip" || ko "named reserve promote: rc $rc, stg $(tip stg)"
 
+# CI shards (ADR-0164, #1051): the four full-proof shards of the tip are the full pass. Four green shards write the full line
+# through gate.sh --status and promote with no suite; a red shard holds the tip and names it; an unfinished shard holds nothing.
+export CHECKS_DIR=$T
+cat > "$T/bin/ghread" <<'EOF'
+#!/bin/bash
+case "$1" in
+  *check-runs*) s=${1#*commits/}; s=${s%%/*}; cat "$CHECKS_DIR/checks-$s" 2>/dev/null || echo '{"check_runs":[]}';;
+  *) echo '{}';;
+esac
+EOF
+chmod +x "$T/bin/ghread"
+shards() {  # <sha> <state of shard 0> ... <state of shard 3>: a conclusion, "running" (unfinished) or "none" (missing)
+  local s=$1 k=0 out="" c; shift
+  for c in "$@"; do
+    case "$c" in
+      none) ;;
+      running) out="$out{\"name\":\"full-proof shard $k\",\"status\":\"in_progress\",\"conclusion\":null},";;
+      *) out="$out{\"name\":\"full-proof shard $k\",\"status\":\"completed\",\"conclusion\":\"$c\"},";;
+    esac
+    k=$((k + 1))
+  done
+  echo "{\"check_runs\":[${out%,}]}" > "$T/checks-$s"
+}
+adv dev shards-green; tg=$(tip dev); rm -f "$T/suite-rc"; n=$(runs)
+shards "$tg" success success success success; SG_GHREAD="$T/bin/ghread" pass; rc=$?
+[ $rc = 0 ] && [ "$(tip stg)" = "$tg" ] && ok "four green shards promote the tip" || ko "green shards: rc $rc, stg $(tip stg), out '$(cat "$T/out")'"
+[ "$(runs)" = "$n" ] && ok "four green shards run no suite" || ko "green shards ran the suite ($(runs) runs, was $n)"
+IFS=$'\t' read -r _ kind res sha < "$SG_STATE/gate-status-full"
+[ "$kind $res $sha" = "full pass $tg" ] && ok "four green shards write the full pass line for the tip" || ko "shard full line: '$kind $res $sha'"
+/usr/bin/grep -q "promote-pass: $tg promoted: the CI shards carried the full pass" "$SG_STATE/promote.log" && ok "the promotion record names the CI shards as the proof" \
+  || ko "shard record: $(/usr/bin/grep "$tg" "$SG_STATE/promote.log")"
+
+adv dev shard-red; tr=$(tip dev); before=$(tip stg); n=$(runs)
+shards "$tr" success success failure success; SG_GHREAD="$T/bin/ghread" pass; rc=$?
+[ $rc != 0 ] && [ "$(tip stg)" = "$before" ] && [ "$(runs)" = "$n" ] && ok "a red shard holds the tip and runs no suite" \
+  || ko "red shard: rc $rc, stg $(tip stg), runs $(runs) was $n"
+/usr/bin/grep "promote-pass: $tr" "$SG_STATE/promote.log" | /usr/bin/grep -q "full-proof shard 2" && ok "the refusal names the red shard" \
+  || ko "red shard line: $(/usr/bin/grep "$tr" "$SG_STATE/promote.log")"
+
+adv dev shard-unfinished; tu=$(tip dev); echo 0 > "$T/suite-rc"; before=$(tip stg); n=$(runs)
+shards "$tu" success success running timed_out; SG_GHREAD="$T/bin/ghread" pass; rc=$?
+[ $rc = 0 ] && [ "$(tip stg)" = "$tu" ] && [ "$(runs)" = "$((n + 1))" ] && ok "unfinished and timed-out shards hold nothing: the local suite answers" \
+  || ko "unfinished shards: rc $rc, stg $(tip stg), runs $(runs) was $n"
+/usr/bin/grep -q "promote-pass: $tu promoted: the local full suite answered" "$SG_STATE/promote.log" && ok "the record names the local full suite as the proof" \
+  || ko "local record: $(/usr/bin/grep "$tu" "$SG_STATE/promote.log")"
+rm -f "$T/suite-rc" "$T"/checks-*
+
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 rm -rf "$T"; exit $fail

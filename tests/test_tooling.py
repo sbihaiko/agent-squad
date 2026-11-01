@@ -165,9 +165,9 @@ def test_one_commit_starts_one_job_and_a_landing_waits_in_no_queue():
 
     text = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
     wf = yaml.safe_load(text)
-    assert len(wf["jobs"]) == 1, "one commit starts one job"
-    job = next(iter(wf["jobs"].values()))
-    assert "matrix" not in (job.get("strategy") or {}), "a matrix splits one commit into two jobs waiting for two runners"
+    assert set(wf["jobs"]) == {"check", "full-proof"}, "one commit starts the check job and the full-proof shards, and no other"
+    job = wf["jobs"]["check"]
+    assert "matrix" not in (job.get("strategy") or {}), "a matrix splits the check job into jobs waiting for runners"
     con = wf["concurrency"]
     group = con["group"]
     assert "github.sha" in group, (
@@ -184,6 +184,32 @@ def test_one_commit_starts_one_job_and_a_landing_waits_in_no_queue():
         line.lstrip("#").strip() for line in text.split("concurrency:", 1)[0].splitlines() if line.startswith("#")
     )
     assert LANDING_GROUP_RULE in stated, f"the workflow states the rule its group carries: {LANDING_GROUP_RULE}"
+
+
+FULL_SHARDS = 4
+
+
+def test_the_full_proof_runs_in_shards_on_the_pull_request_and_the_promotion_reads_the_same_names():
+    """Guard for ADR-0164 (#1051): the full suite runs on a runner in four shards on the dev-to-stg pull request, each
+    inside the fifteen-minute bound. The promotion reads the four check names of the same shards, so the two cannot
+    disagree on how many shards make the full pass.
+    """
+    import yaml
+
+    wf = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
+    job = wf["jobs"]["full-proof"]
+    assert job.get("if") == "github.head_ref == 'dev'", "the shards run on the dev-to-stg pull request only"
+    assert job["timeout-minutes"] == 15, "each shard keeps the fifteen-minute bound"
+    assert job["strategy"]["matrix"]["shard"] == list(range(FULL_SHARDS)), "one matrix entry per shard"
+    assert job["name"] == "full-proof shard ${{ matrix.shard }}", "the check name the promotion reads"
+    run = "\n".join(s.get("run", "") for s in job["steps"])
+    assert "-m pytest" in run and "heavy" not in run, "a shard runs the full suite, heavy tests included"
+    assert f"NR % {FULL_SHARDS} ==" in run, "the shards partition the test files by one modulus"
+    promote = (ROOT / "contrib" / "squad-goal" / "scripts" / "promote-pass.sh").read_text()
+    names = re.search(r"for k in ([0-9 ]+); do", promote)
+    assert names and [int(k) for k in names.group(1).split()] == list(range(FULL_SHARDS)), (
+        "promote-pass.sh reads the same shard numbers the workflow runs"
+    )
 
 
 E2E = ROOT / "tests" / "test_gui_test_e2e.py"

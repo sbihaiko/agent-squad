@@ -14,8 +14,10 @@ on:
 # past the queue's cap, which is one pending run by default and 100 with `queue: max` (GitHub Actions workflow syntax,
 # `concurrency.queue`). A burst of pushes to one pull request cancels its run there. A group that names the commit holds
 # one run and nothing pending, so no cap applies and a pull request keeps its run.
-# No job outlives the twenty minutes it gives itself (#128). The gate is the fast battery, `-m "not heavy"`; the full
-# suite runs before a merge.
+# No job outlives the twenty minutes it gives itself (#128). The gate is the fast battery, `-m "not heavy"`.
+# The one exception to one job per commit is the full-proof shards (#1051): four matrix entries that run the full suite
+# in shards, each under its own fifteen-minute bound. The promotion reads their four check names (promote-pass.sh) and
+# writes the full pass through gate.sh --status when all four are green on the sha.
 concurrency:
   group: ci-${{ github.head_ref }}-${{ github.sha }}
   cancel-in-progress: false
@@ -52,3 +54,26 @@ jobs:
         # No MesenAI checkout is on the runner: the host-bound tests are deselected (ADR-0139) and their removal is
         # reported by name. The host-free tests in the file still run. The gate steps above keep their own commands.
         run: python3 -m pytest tests/test_gui_test_e2e.py -q
+
+  full-proof:
+    if: github.head_ref == 'dev'
+    name: full-proof shard ${{ matrix.shard }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python3 -m pip install -e '.[dev]'
+      - name: Full suite, this shard
+        # The test files split by one modulus: shard k runs every file whose 1-based line number leaves remainder k.
+        run: |
+          files=$(ls tests/test_*.py | awk -v k=${{ matrix.shard }} 'NR % 4 == k')
+          python3 -m pytest -n auto $files

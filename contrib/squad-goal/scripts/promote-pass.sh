@@ -45,6 +45,29 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   ( while :; do sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}' | tr -d '{}' >> "$samples"; sleep 10; done ) & mon=$!
   trap 'kill "$mon" 2>/dev/null; rm -f "$state/promote-reserve" "$samples"' EXIT INT TERM
   [ "$(g rev-parse HEAD)" = "$tip" ] || { mark "$tip" "not promoted: the clean tree is not at the tip"; exit 1; }
+  # ADR-0164 (#1051): the four full-proof shards of ci.yml on the tip are the full pass when all four are green. Four green
+  # shards write the full line through the status seam and promote with no suite; a red shard holds the tip and names it;
+  # a shard that is missing, running or timed out holds nothing, and the proof below answers as before.
+  ci_verdict() {  # <tip>: pass, "fail <shard>" for a red shard, or pending
+    local cr k st c v=pass
+    cr=$(gh_api "repos/$SG_REPO/commits/$1/check-runs?per_page=100&filter=latest") || { echo pending; return; }
+    printf '%s' "$cr" | jq -e '.check_runs | type == "array"' >/dev/null 2>&1 || { echo pending; return; }
+    for k in 0 1 2 3; do
+      read -r st c < <(printf '%s' "$cr" | jq -r --arg n "full-proof shard $k" '[.check_runs[] | select(.name == $n)] | last | "\(.status) \(.conclusion)"')
+      [ "$st" = completed ] && [ "$c" = failure ] && { echo "fail full-proof shard $k"; return; }
+      { [ "$st" = completed ] && [ "$c" = success ]; } || v=pending
+    done
+    echo "$v"
+  }
+  v=$(ci_verdict "$tip")
+  case "$v" in
+    pass)
+      bash "$d/gate.sh" --status full pass "$tip"
+      o=$(SG_PROMOTE_PROOF=local bash "$d/promote-stg.sh" 2>&1); rc=$?
+      [ $rc = 0 ] || { mark "$tip" "not promoted: $(printf '%s' "$o" | tail -1)"; exit 1; }
+      mark "$tip" "promoted: the CI shards carried the full pass"; exit 0;;
+    fail*) mark "$tip" "not promoted: CI ${v#fail } is red"; exit 1;;
+  esac
   # ADR-0156: a full pass carries across a covered delta. When one is on record and the tip moved only by covered paths, the
   # delta proof runs instead of the full suite and the promotion reads its record. Any refusal (an uncovered path, a bound, no
   # full pass) or a held delta lock falls through to the full suite below: the cheaper proof is an optimization, never a weaker gate.
@@ -115,7 +138,7 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   [ "$st" = success ] || { mark "$tip" "not promoted: the commit status $ctx did not read back as success (${st:-missing})"; exit 1; }
   o=$(SG_PROMOTE_PROOF=local bash "$d/promote-stg.sh" 2>&1); rc=$?
   [ $rc = 0 ] || { mark "$tip" "not promoted: $(printf '%s' "$o" | tail -1)"; exit 1; }
-  mark "$tip" "promoted: stg is at the proven tip"; exit 0
+  mark "$tip" "promoted: the local full suite answered for the tip"; exit 0
 fi
 tip=$(/usr/bin/git ls-remote "$remote" refs/heads/dev | cut -f1); [ -n "$tip" ] || { echo "promote-pass: dev does not resolve on $remote" >&2; exit 1; }
 /usr/bin/grep -q "^$tip " "$marks" 2>/dev/null && exit 0   # already proved or refused
