@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import time
+import types
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -450,7 +451,11 @@ def test_the_control_chart_names_its_lines_and_controls_the_jira_way(hub):
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-def test_the_control_chart_draws_one_mark_per_cluster_on_the_date_axis(hub, board, tmp_path):
+def test_the_control_chart_draws_one_mark_per_cluster_on_the_date_axis(hub, board, tmp_path, monkeypatch):
+    class Frozen(datetime):   # the page draws the 30-day timeframe: pin "now" so the cards stay inside it
+        @classmethod
+        def now(cls, tz=None): return cls(2026, 10, 10, tzinfo=tz)
+    monkeypatch.setattr(hub, "dt", types.SimpleNamespace(**{**vars(hub.dt), "datetime": Frozen}))
     hub.board_cache["items"] = [
         _card(1, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-02T09:00:00Z"),
         _card(2, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-02T09:00:00Z"),
