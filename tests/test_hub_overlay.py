@@ -238,3 +238,10 @@ def test_the_reader_can_step_the_text_size_and_the_choice_outlives_the_page():
     assert "font-size:var(--sq-fs)" in js
     assert "localStorage.setItem(FS_KEY" in js and "localStorage.getItem(FS_KEY)" in js
     assert "FS_MIN" in js and "FS_MAX" in js
+
+def test_the_talk_wears_the_terminal_font():
+    """Owner, 2026-11-01: the chat read in a UI face while the terminal beside it read in monospace. One stack serves both."""
+    js = (pathlib.Path(__file__).resolve().parents[1] / "contrib/squad-goal/scripts/hub-overlay.js").read_text()
+    assert "--sq-mono:ui-monospace" in js
+    body = js[js.index(".sq-txt{"):js.index(".sq-txt{") + 200]
+    assert "font-family:var(--sq-mono)" in body, body
