@@ -1751,9 +1751,10 @@ def loop_live():
     gates = [f"gate pid {gate}"] if gate.isdigit() and _pid_alive(int(gate)) else []
     return {"runs": runs, "gates": gates}
 
-def loop_audit_add(who, frm, action, killed=None):
+def loop_audit_add(who, frm, action, killed=None, **extra):
     line = {"at": dt.datetime.now().astimezone().isoformat(timespec="seconds"), "who": who, "from": frm, "action": action}
     if killed is not None: line["killed"] = killed
+    line.update(extra)   # a failed start's reason, or a stop-now's survivors
     with LOOP_AUDIT.open("a") as f: f.write(json.dumps(line) + "\n")
 
 def loop_audit_last(n):
@@ -1763,11 +1764,17 @@ def loop_audit_last(n):
         except ValueError: pass
     return out
 
+LOOP_STARTING = STATE / "auto" / "starting"   # the hub's pending mark: written before watchd start runs, removed when it returns
+LOOP_START_WINDOW = 90   # a mark older than this outlived its hub (the call times out at 60 s): it reads off
+
 def loop_state(last, now=None):
+    """on or draining while the supervisor is alive; starting only while a hub start is in progress; off otherwise. A start
+    that failed reads off, and the view carries the failure, so no disabled button hides it."""
     if loop_alive(): return "draining" if (STATE / "auto" / "drain").exists() else "on"
     now = time.time() if now is None else now
-    if last.get("action") == "start" and last.get("at"):
-        if now - dt.datetime.fromisoformat(last["at"]).timestamp() < 60: return "starting"
+    try:
+        if now - LOOP_STARTING.stat().st_mtime < LOOP_START_WINDOW: return "starting"
+    except OSError: pass
     return "off"
 
 LOOP_STATE_ACTIONS = {"off": ["start"], "on": ["drain", "stop-now"], "draining": ["stop-now"], "starting": []}   # the hub's rule, so no page holds one
@@ -1778,6 +1785,7 @@ def loop_view(a):
     write = a.allowed and (not a.tailnet or tn.get("loop_write") is True)
     state = loop_state(last)
     return {"state": state, "actions": list(LOOP_STATE_ACTIONS.get(state, [])) if write else [], "who": last.get("who", ""), "when": last.get("at", ""), "live": loop_live(),
+            "failed": last.get("failed", "") if state == "off" else "",
             "log": loop_audit_last(20)[::-1], "write": write, "reason": "" if write else LOOP_READ_ONLY,
             "tailnet": a.tailnet, "access": {"loop_write": tn.get("loop_write") is True, "terminals_send": tn.get("terminals_send") is True}}   # Settings > Access reads the tailnet rule here
 
@@ -1787,27 +1795,88 @@ def loop_refusal(a, origin_ok, tn):
     if a.tailnet and tn.get("loop_write") is not True: return LOOP_READ_ONLY
     return "" if origin_ok else "forbidden"
 
+def _ps_rows():
+    """Every process as (pid, ppid, command), from one `ps`."""
+    try: out = subprocess.run(["/bin/ps", "-axwwo", "pid=,ppid=,command="], capture_output=True, text=True, timeout=30).stdout
+    except (OSError, subprocess.SubprocessError): return []
+    rows = []
+    for line in out.splitlines():
+        f = line.split(None, 2)
+        if len(f) >= 2 and f[0].isdigit() and f[1].isdigit(): rows.append((int(f[0]), int(f[1]), f[2] if len(f) > 2 else ""))
+    return rows
+
+def loop_kill(root):
+    """End `root` and every process under it: TERM, then KILL what is left. True when `root` is gone after it."""
+    rows = _ps_rows(); kids = {}
+    for pid, ppid, _ in rows: kids.setdefault(ppid, []).append(pid)
+    tree, stack = [], [root]
+    while stack:
+        pid = stack.pop(); tree.append(pid); stack.extend(kids.get(pid, ()))
+    for sig in (15, 9):
+        for pid in tree:
+            try: os.kill(pid, sig)
+            except OSError: pass
+        for _ in range(30):
+            if not any(_pid_alive(p) for p in tree): return True
+            time.sleep(0.1)
+    return not _pid_alive(root)
+
+def loop_run_pid(run):
+    """The pid of a live run's own process: its record's last call_start, while that pid is a live python process. A run is
+    started in its own session (start_new_session), so the supervisor's group stop never reaches it."""
+    f = pathlib.Path(run) / "record.jsonl" if run.startswith("/") else pathlib.Path(CHECKOUT) / "runs" / run / "record.jsonl"
+    for raw in reversed(_read(f).splitlines()):
+        try: e = json.loads(raw)
+        except ValueError: continue
+        if e.get("event") == "call_start" and isinstance(e.get("pid"), int) and e["pid"] > 1:
+            cmd = next((c for p, _, c in _ps_rows() if p == e["pid"]), "")
+            return e["pid"] if "python" in cmd.lower() else None
+    return None
+
+def loop_stop_now(live):
+    """End each listed run and gate; answer what died and what survived."""
+    killed, survived = {"runs": [], "gates": []}, {"runs": [], "gates": []}
+    for r in live["runs"]:
+        pid = loop_run_pid(r)
+        (killed if pid and loop_kill(pid) else survived)["runs"].append(r)
+    for g in live["gates"]:
+        pid = int(g.rsplit(" ", 1)[-1])
+        (killed if pid != os.getpid() and loop_kill(pid) else survived)["gates"].append(g)
+    return killed, survived
+
 def loop_switch(a, body, origin_ok):
     why = loop_refusal(a, origin_ok, tailnet_block())
     if why: return 403, {"err": "forbidden", "reason": why}
     action = body.get("action") if isinstance(body, dict) else None
     if action not in LOOP_ACTIONS: return 400, {"err": "bad request"}
+    state = loop_state((loop_audit_last(1) or [{}])[-1])
+    if action not in LOOP_STATE_ACTIONS.get(state, []):   # the route applies the rule the view publishes
+        return 409, {"err": "the loop is not running" if state == "off" else f"the loop is {state}: {action} does not apply"}
     who, frm = a.login or "owner", "tailnet" if a.tailnet else "loopback"
     if action == "start":
-        for f in ("off", "drain"): (STATE / "auto" / f).unlink(missing_ok=True)
-        if loop_watchd("start"): return 500, {"err": "watchd did not start"}
+        for f in ("off", "drain", "drain-pause"): (STATE / "auto" / f).unlink(missing_ok=True)
+        LOOP_STARTING.parent.mkdir(parents=True, exist_ok=True); LOOP_STARTING.write_text(f"{time.time()}\n")
+        try:
+            try: rc = loop_watchd("start")
+            except subprocess.TimeoutExpired: rc = -1
+            failed = "watchd did not start" if rc else "" if loop_alive() else "the supervisor was not running after its start"
+        finally: LOOP_STARTING.unlink(missing_ok=True)
+        if failed:
+            loop_audit_add(who, frm, action, failed=failed)
+            return 500, {"err": failed}
         loop_audit_add(who, frm, action)
         return 200, {"ok": True, "action": action}
     if action == "drain":
-        if not loop_alive(): return 409, {"err": "the loop is not running"}
         if loop_watchd("drain"): return 500, {"err": "watchd did not drain"}
         loop_audit_add(who, frm, action)
         return 200, {"ok": True, "action": action}
     if body.get("confirm") is not True: return 400, {"err": "confirm the stop: it kills the live runs and gates listed"}
-    killed = loop_live()
+    live = loop_live()
     if loop_watchd("stop"): return 500, {"err": "watchd did not stop"}
-    loop_audit_add(who, frm, action, killed)
-    return 200, {"ok": True, "action": action, "killed": killed}
+    killed, survived = loop_stop_now(live)
+    extra = {"survived": survived} if survived["runs"] or survived["gates"] else {}
+    loop_audit_add(who, frm, action, killed, **extra)
+    return 200, {"ok": True, "action": action, "killed": killed, **extra}
 
 def foot_sources(now=None):
     """One reading of every source the line draws on. A source that is not there reads as `None` for its own fact only,
@@ -4608,11 +4677,11 @@ const loopBy=v=>v.who?`${v.who} · ${loopWhen(v.when)}`:"";
 const loopBtn=v=>({on:"Stop…",draining:"Stop now…",starting:"Starting…"})[v.state]||"Start loop";
 const loopTip=v=>!v.write?v.reason:v.state==="on"?"stop after the live runs and gates finish, or now":v.state==="draining"?"stop now: kills what is still live":v.state==="starting"?"the loop is starting":"start the loop (watchd)";
 const loopB=v=>`<button data-loop${v.write&&v.state!=="starting"?"":" disabled"} title="${esc(loopTip(v))}">${loopBtn(v)}</button>`;
-const loopAct=e=>e.action==="drain"?"stop after the live runs and gates finish":e.action==="stop-now"?`stop now${e.killed?` (killed ${(e.killed.runs||[]).length} runs, ${(e.killed.gates||[]).length} gates)`:""}`:String(e.action||"");
+const loopAct=e=>e.failed?`${String(e.action||"")} failed: ${e.failed}`:e.action==="drain"?"stop after the live runs and gates finish":e.action==="stop-now"?`stop now${e.killed?` (killed ${(e.killed.runs||[]).length} runs, ${(e.killed.gates||[]).length} gates${e.survived?`; ${(e.survived.runs||[]).length+(e.survived.gates||[]).length} not ended`:""})`:""}`:String(e.action||"");
 const loopRun=r=>String(r).split("/").filter(Boolean).pop()||String(r);
 const loopCardHtml=v=>`<div class=irw id=loopst title="${esc(v.state+(v.who?` · changed by ${v.who} at ${loopWhen(v.when)}`:""))}"><span>Loop: <span class="ls ${esc(v.state)}">${esc(v.state)}</span>${loopBy(v)?` <small>${esc(loopBy(v))}</small>`:""}</span>${loopB(v).replace("<button ","<button id=loopbtn ")}</div>`;
 const loopSetHtml=v=>`<div class=lnow><span><span class="ls ${esc(v.state)}">Loop: ${esc(v.state)}</span><small>${v.who?`changed by ${esc(v.who)} at ${esc(loopWhen(v.when))}`:"no change from the hub yet"}${v.state==="draining"?` · ${v.live.runs.length+v.live.gates.length} live to finish`:""}</small></span>${loopB(v)}</div>`
- +(v.write?"":`<div class=lwhy>${esc(v.reason)}. The rule is in Access.</div>`)+(loopErr?`<div class=lerr role=alert>${esc(loopErr)}</div>`:"")
+ +(v.write?"":`<div class=lwhy>${esc(v.reason)}. The rule is in Access.</div>`)+(v.failed?`<div class=lerr role=alert>The last start failed: ${esc(v.failed)}</div>`:"")+(loopErr?`<div class=lerr role=alert>${esc(loopErr)}</div>`:"")
  +`<p class=m>A stop drains by default: no new dispatch, the live runs and gates finish, then the loop stops. Each change writes one line to the change log.</p>`
  +`<h4>Changes</h4><ul class=laud>${v.log.length?v.log.map(e=>`<li><b>${esc(loopWhen(e.at))}</b> · ${esc(e.who)} (${esc(e.from)}) · ${esc(loopAct(e))}</li>`).join(""):"<li class=m>no change yet</li>"}</ul>`;
 const loopConfirmHtml=v=>{const r=v.live.runs,g=v.live.gates,drain=v.state==="on";

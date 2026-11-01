@@ -48,12 +48,39 @@ check("the view reads the switch and may write from loopback", view["write"] is 
 check("the view names the live run the stop would kill", view["live"]["runs"] == [str(live_run)], view["live"])
 
 reset(dead_pid())
+seen = []
+def starts(rc, up):   # a watchd start that reads the state while it runs, then brings the supervisor up (or not) and answers rc
+    def run(*args):
+        calls.append(list(args)); seen.append(hub.loop_view(LOOP["loopback"])["state"])
+        if up: supervisor(os.getpid())
+        return rc
+    return run
+hub.loop_watchd = starts(0, True)
 code, got = hub.loop_switch(LOOP["loopback"], {"action": "start"}, origin_ok=True)
 check("start from loopback runs the watchd start", code == 200 and calls == [["start"]], (code, calls))
 check("start clears the drain and pause markers", not (STATE / "auto" / "off").exists() and not (STATE / "auto" / "drain").exists())
 check("a start writes exactly one audit line naming who, when and from where",
       [(a["action"], a["who"], a["from"]) for a in audit()] == [("start", "owner", "loopback")] and audit()[0].get("at"), audit())
-check("a start that just began reads starting", hub.loop_view(LOOP["loopback"])["state"] == "starting", hub.loop_view(LOOP["loopback"]))
+check("a start in progress reads starting", seen == ["starting"], seen)
+check("a start that brought the supervisor up reads on", hub.loop_view(LOOP["loopback"])["state"] == "on", hub.loop_view(LOOP["loopback"]))
+
+reset(dead_pid()); seen.clear(); hub.loop_watchd = starts(1, False)
+code, got = hub.loop_switch(LOOP["loopback"], {"action": "start"}, origin_ok=True)
+v = hub.loop_view(LOOP["loopback"])
+check("a start watchd refuses answers 500", code == 500, (code, got))
+check("a failed start reads off, never starting", v["state"] == "off", v)
+check("a failed start is shown in the view and the audit line", v.get("failed") and audit() and audit()[-1].get("failed"), (v, audit()))
+
+reset(dead_pid()); seen.clear(); hub.loop_watchd = starts(0, False)
+code, got = hub.loop_switch(LOOP["loopback"], {"action": "start"}, origin_ok=True)
+v = hub.loop_view(LOOP["loopback"])
+check("a start whose supervisor is not alive after it is a failure", code == 500 and v["state"] == "off" and v.get("failed"), (code, v))
+
+reset(dead_pid())
+(STATE / "auto" / "starting").write_text("0\n"); os.utime(STATE / "auto" / "starting", (0, 0))
+check("a stale start mark (the hub died during a start) reads off", hub.loop_view(LOOP["loopback"])["state"] == "off", hub.loop_view(LOOP["loopback"]))
+(STATE / "auto" / "starting").unlink()
+hub.loop_watchd = watchd
 
 reset()
 code, got = hub.loop_switch(LOOP["loopback"], {"action": "drain"}, origin_ok=True)
@@ -68,9 +95,10 @@ check("stop-now without its confirm is refused and kills nothing", code == 400 a
 reset()
 code, got = hub.loop_switch(LOOP["loopback"], {"action": "stop-now", "confirm": True}, origin_ok=True)
 check("stop-now runs the watchd stop", code == 200 and calls == [["stop"]], (code, calls))
-check("stop-now answers the live runs and gates it killed", got.get("killed", {}).get("runs") == [str(live_run)] and "gates" in got.get("killed", {}), got)
-check("stop-now writes one audit line that names what it killed",
-      len(audit()) == 1 and audit()[0]["action"] == "stop-now" and audit()[0]["killed"]["runs"] == [str(live_run)], audit())
+check("stop-now answers what it killed and names a live run it found no process for as survived",
+      got.get("killed") == {"runs": [], "gates": []} and got.get("survived", {}).get("runs") == [str(live_run)], got)
+check("stop-now writes one audit line, and it claims no kill that did not happen",
+      len(audit()) == 1 and audit()[0]["action"] == "stop-now" and audit()[0]["killed"]["runs"] == [], audit())
 
 reset(dead_pid())
 code, got = hub.loop_switch(LOOP["loopback"], {"action": "drain"}, origin_ok=True)
@@ -82,6 +110,56 @@ check("a live loop with no drain marker reads on", hub.loop_view(LOOP["loopback"
 reset_state = hub.loop_view(LOOP["loopback"])["state"]
 check("a live loop with the drain marker reads draining", reset_state == "draining", reset_state)
 (STATE / "auto" / "drain").unlink()
+
+# the route applies the state rule it publishes: an action the state does not list is refused and writes nothing
+reset(dead_pid())
+code, got = hub.loop_switch(LOOP["loopback"], {"action": "stop-now", "confirm": True}, origin_ok=True)
+check("stop-now on a stopped loop is refused with 409 and writes nothing", code == 409 and calls == [] and audit() == [], (code, calls, got))
+reset(); (STATE / "auto" / "drain").write_text("")
+code, got = hub.loop_switch(LOOP["loopback"], {"action": "drain"}, origin_ok=True)
+check("a second drain while draining is refused with 409 and starts no second waiter", code == 409 and calls == [] and audit() == [], (code, calls, got))
+reset()
+code, got = hub.loop_switch(LOOP["loopback"], {"action": "start"}, origin_ok=True)
+check("a start on a running loop is refused with 409", code == 409 and calls == [] and audit() == [], (code, calls, got))
+reset(dead_pid()); (STATE / "auto" / "starting").write_text("x\n")
+code, got = hub.loop_switch(LOOP["loopback"], {"action": "start"}, origin_ok=True)
+check("a start while starting is refused with 409", code == 409 and calls == [] and audit() == [], (code, calls, got))
+(STATE / "auto" / "starting").unlink()
+
+# stop-now ends each listed run and the held gate itself: a run is detached from the supervisor's group (start_new_session),
+# so watchd's group TERM never reaches it. The audit names only what died.
+import time
+def detached(code):   # a process its launcher leaves behind, as autofrontier leaves a run: own session, parent gone
+    out = subprocess.run(["python3", "-c", "import subprocess,sys;p=subprocess.Popen(['python3','-c',sys.argv[1]],start_new_session=True,"
+                          "stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL);print(p.pid)", code], capture_output=True, text=True)
+    return int(out.stdout)
+def gone(pid):
+    for _ in range(50):
+        try: os.kill(pid, 0)
+        except OSError: return True
+        time.sleep(0.1)
+    return False
+kid = STATE / "kid.pid"
+run_pid = detached(f"import subprocess,time;c=subprocess.Popen(['sleep','300']);open({str(kid)!r},'w').write(str(c.pid));time.sleep(300)")
+gate_pid = detached("import time;time.sleep(300)")
+for _ in range(50):
+    if kid.is_file() and kid.read_text(): break
+    time.sleep(0.1)
+kid_pid = int(kid.read_text())
+(live_run / "record.jsonl").write_text('{"event": "start"}\n' + json.dumps({"event": "call_start", "node": "n", "pid": run_pid}) + "\n")
+orphan = STATE.parent / "runs" / "r2"; orphan.mkdir(parents=True, exist_ok=True); (orphan / "record.jsonl").write_text('{"event": "start"}\n')
+(STATE / "active-runs.txt").write_text(f"{live_run}\n{orphan}\n")
+(STATE / "locks" / "gate" / "pid").write_text(f"{gate_pid}\n")
+reset()
+code, got = hub.loop_switch(LOOP["loopback"], {"action": "stop-now", "confirm": True}, origin_ok=True)
+check("stop-now kills a detached run, its child and the held gate", gone(run_pid) and gone(kid_pid) and gone(gate_pid), (run_pid, kid_pid, gate_pid))
+a = audit()[-1] if audit() else {}
+check("the audit names the run and the gate that died", a.get("killed", {}).get("runs") == [str(live_run)] and a.get("killed", {}).get("gates") == [f"gate pid {gate_pid}"], a)
+check("a run with no process to end is named as survived, not killed", a.get("survived", {}).get("runs") == [str(orphan)] and got.get("survived") == a.get("survived"), (a, got))
+for p in (run_pid, kid_pid, gate_pid):
+    try: os.kill(p, 9)
+    except OSError: pass
+(live_run / "record.jsonl").write_text('{"event": "start"}\n'); (STATE / "active-runs.txt").write_text(f"{live_run}\n"); (STATE / "locks" / "gate" / "pid").unlink()
 
 view = hub.loop_view(LOOP["tail"])
 check("the tailnet view is read-only and gives the reason", view["write"] is False and "SQUAD_TAILNET_LOOP_WRITE" in view["reason"], view)

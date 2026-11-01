@@ -339,21 +339,22 @@ status();
 setInterval(status, 5000);
 
 let loopNow = { runs: [], gates: [] };
+const loopWhen = s => { const m = String(s || "").match(/^(\d{4}-\d\d-\d\d)T(\d\d:\d\d)/); return m ? m[1] + " " + m[2] : String(s || ""); };
 const loopLive = l => (l.runs || []).map(r => "run " + r.split("/").pop()).concat(l.gates || []);
 async function loopView() {
   try {
     const v = await call("/api/loop");
     $("loop").className = v.state;
-    $("loop-text").textContent = v.state + (v.who ? " - changed by " + v.who + " at " + v.when : "");
+    $("loop-text").textContent = v.state + (v.who ? " - changed by " + v.who + " at " + loopWhen(v.when) : "");
     const can = v.actions || [];   // the hub names the allowed actions; this page holds no state rule
     $("loop-start").disabled = !can.includes("start");
     $("loop-drain").disabled = !can.includes("drain");
     $("loop-now").disabled = !can.includes("stop-now");
-    $("loop-reason").textContent = v.reason;
+    $("loop-reason").textContent = v.reason || (v.failed ? "The last start failed: " + v.failed : "");
     loopNow = v.live;
     $("loop-log").replaceChildren(...v.log.map(e => {
       const li = document.createElement("li");
-      li.textContent = e.at + " " + e.who + " (" + e.from + "): " + e.action + (e.killed ? ", killed " + (loopLive(e.killed).join(", ") || "nothing") : "");
+      li.textContent = loopWhen(e.at) + " " + e.who + " (" + e.from + "): " + e.action + (e.failed ? " failed: " + e.failed : "") + (e.killed ? ", killed " + (loopLive(e.killed).join(", ") || "nothing") : "") + (e.survived ? ", not ended " + loopLive(e.survived).join(", ") : "");
       return li;
     }));
   } catch (e) { $("loop-reason").textContent = e.message; }
@@ -364,7 +365,7 @@ async function loopAct(action, extra) {
     const r = await fetch("/api/loop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, ...extra }), cache: "no-store" });
     const out = await r.json();
     if (!r.ok) throw new Error(out.reason || out.err || "The hub answered " + r.status + ".");
-    if (action === "stop-now") $("loop-reason").textContent = "Stopped. Killed: " + (loopLive(out.killed).join(", ") || "nothing") + ".";
+    if (action === "stop-now") $("loop-reason").textContent = "Stopped. Killed: " + (loopLive(out.killed).join(", ") || "nothing") + "." + (out.survived ? " Not ended: " + loopLive(out.survived).join(", ") + "." : "");
   } catch (e) { $("loop-reason").textContent = e.message; }
   $("loop-confirm").hidden = true;
   loopView();

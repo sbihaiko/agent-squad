@@ -37,5 +37,17 @@ for _ in $(seq 1 20); do ! alive_sup && [ ! -e "$SG_STATE/auto/drain" ] && break
 if alive_sup; then ko "drain did not stop the loop once the run and the gate were done"; else ok "drain stops the loop once the run and the gate are done"; fi
 [ ! -e "$SG_STATE/auto/drain" ] && ok "the drain marker is gone after the stop" || ko "the drain marker outlived the stop"
 [ "$(bash "$T/watchd.sh" drain 2>&1)" = "watchd not running" ] && ok "drain on a stopped loop says so" || ko "drain on a stopped loop did not say not running"
+# A drain's pause is the drain's own: a start from the terminal after a hub drain dispatches again, so the strip never reads
+# "on" while nothing dispatches. A pause the owner set before the drain is the owner's, and a start keeps it.
+bash "$T/watchd.sh" start >/dev/null; sup=$(cat "$SG_STATE/watchd.pid" 2>/dev/null)
+alive_sup && [ ! -e "$SG_STATE/auto/off" ] && ok "a terminal start after a drain lifts the drain's pause" || ko "a terminal start after a drain left auto/off: the loop reads on and dispatches nothing"
+SG_DRAIN_POLL=1 bash "$T/watchd.sh" stop >/dev/null
+: > "$SG_STATE/auto/off"
+bash "$T/watchd.sh" start >/dev/null; sup=$(cat "$SG_STATE/watchd.pid" 2>/dev/null)
+SG_DRAIN_POLL=1 bash "$T/watchd.sh" drain >/dev/null
+for _ in $(seq 1 20); do ! alive_sup && break; sleep 1; done
+bash "$T/watchd.sh" start >/dev/null; sup=$(cat "$SG_STATE/watchd.pid" 2>/dev/null)
+[ -e "$SG_STATE/auto/off" ] && ok "a pause the owner set before the drain survives the next start" || ko "a start removed the owner's own pause"
+bash "$T/watchd.sh" stop >/dev/null
 [ "$fail" = 0 ] && echo "watchd drain: all ok" || echo "watchd drain: FAILED"
 exit "$fail"

@@ -22,7 +22,15 @@ check("the switch writes to the hub's loop route with POST and a JSON body", re.
 check("start, drain and stop-now post their own action", all(s in t for s in ('loopAct("start")', 'loopAct("drain")', 'loopAct("stop-now", { confirm: true })')))
 check("stop-now opens a confirm before any write", re.search(r'\$\("loop-now"\)\.onclick = \(\) => \{[^}]*loop-confirm"\)\.hidden = false', t, re.S) is not None)
 check("the confirm names the live runs and gates it kills", 'Stop now kills: ' in t and 'loopLive(loopNow)' in t)
-check("the state line names who changed it and when", 'changed by " + v.who + " at " + v.when' in t)
+check("the state line names who changed it and when, in the desktop's time format", 'changed by " + v.who + " at " + loopWhen(v.when)' in t)
+check("the change log shows the time in the desktop's format, never the raw ISO stamp", 'li.textContent = loopWhen(e.at) + " "' in t and "e.at + \" \"" not in t)
+check("a failed start is shown", "v.failed" in t and "e.failed" in t)
+import shutil, subprocess
+m = re.search(r"^const loopWhen = .*;$", t, re.M)
+check("the phone has the desktop's loopWhen", m is not None)
+if m and shutil.which("node"):
+    r = subprocess.run(["node", "-e", m.group(0) + '\nprocess.stdout.write(loopWhen("2026-10-31T16:02:09-03:00")+"|"+loopWhen(""))'], capture_output=True, text=True, timeout=10)
+    check("loopWhen reads 2026-10-31 16:02 from an ISO stamp", r.stdout == "2026-10-31 16:02|")
 check("the reason a tailnet request is read-only is shown", '$("loop-reason").textContent = v.reason' in t)
 check("the change log lists the hub's audit lines", '$("loop-log").replaceChildren(...v.log.map' in t and 'e.from + "): " + e.action' in t)
 check("the draining and starting states have their own colour", "#loop.draining #loop-text" in t and "#loop.starting #loop-text" in t)

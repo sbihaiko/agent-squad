@@ -29,7 +29,9 @@ case "${1:-status}" in
     o=$(orphans); [ -n "$o" ] && { printf 'watchd start refused: orphaned lanes still run, their supervisor is gone: %s\n' "$(printf '%s\n' "$o" | awk '{ printf "%s%s pid %s", (NR > 1 ? ", " : ""), $2, $1 }')" >&2; exit 1; }
     [ -f "$L" ] && [ "$(wc -c < "$L")" -gt 5000000 ] && mv "$L" "$L.old"
     rm -f "$SG_STATE/token-guard.since" "$SG_STATE/token-over" "$SG_STATE/token-pause"   # a start is a relight: the token guard measures afresh, never an old burn (#515)
-    rm -f "$SG_STATE/auto/drain"
+    # A drain's pause is the drain's own (#923): a start lifts it, from the hub or the terminal, so the loop never reads on
+    # while it dispatches nothing. A pause the owner set before the drain has no drain-pause mark, and stays.
+    rm -f "$SG_STATE/auto/drain"; [ -e "$SG_STATE/auto/drain-pause" ] && rm -f "$SG_STATE/auto/off" "$SG_STATE/auto/drain-pause"
     record_sha
     python3 -I -c 'import subprocess,sys;subprocess.Popen(["bash",sys.argv[1],"run"],start_new_session=True,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)' "$me"
     for _ in 1 2 3 4 5 6 7 8 9 10; do alive && { echo "watchd started pid=$pid"; exit 0; }; sleep 1; done
@@ -85,7 +87,7 @@ case "${1:-status}" in
     echo "watchd did not stop" >&2; exit 1;;
   drain) alive || { echo "watchd not running"; exit 0; }
     # A drain pauses dispatch and leaves the lanes running; a detached waiter stops the loop once no run or gate is live (#923).
-    mkdir -p "$SG_STATE/auto"; : > "$SG_STATE/auto/off"; : > "$SG_STATE/auto/drain"
+    mkdir -p "$SG_STATE/auto"; [ -e "$SG_STATE/auto/off" ] || { : > "$SG_STATE/auto/drain-pause"; : > "$SG_STATE/auto/off"; }; : > "$SG_STATE/auto/drain"
     python3 -I -c 'import subprocess,sys;subprocess.Popen(["bash",sys.argv[1],"drain-wait"],start_new_session=True,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)' "$me"
     echo "watchd draining pid=$pid";;
   drain-wait) while alive && drain_busy; do sleep "${SG_DRAIN_POLL:-5}"; done

@@ -8,6 +8,7 @@ the Access theme holds the tailnet rule. The Loop theme has no Save.
 import http.client
 import importlib.util
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -41,7 +42,13 @@ def hub(monkeypatch, tmp_path):
     spec.loader.exec_module(mod)
     (state / "auto").mkdir(parents=True, exist_ok=True)
     calls = []
-    mod.loop_watchd = lambda *a: calls.append(list(a)) or 0
+
+    def watchd(*a):   # a start brings the supervisor up: this process stands for it
+        calls.append(list(a))
+        if a == ("start",):
+            (state / "watchd.pid").write_text(f"{os.getpid()}\n")
+        return 0
+    mod.loop_watchd = watchd
     tn = {"host": TN_HOST, "allow": ["alice@example.com"]}
     mod.tailnet_block = lambda: dict(tn)
     srv = ThreadingHTTPServer(("127.0.0.1", 0), mod.H)
@@ -102,7 +109,7 @@ def test_a_loopback_start_runs_and_writes_one_audit_line(hub):
     assert calls == [["start"]]
     assert [(a["action"], a["who"], a["from"]) for a in audit(state)] == [("start", "owner", "loopback")]
     _, v = ask(port, "GET")
-    assert v["state"] == "starting" and v["who"] == "owner" and v["when"]
+    assert v["state"] == "on" and v["who"] == "owner" and v["when"]
 
 
 def test_a_cross_site_write_is_refused_and_writes_nothing(hub):
@@ -211,6 +218,14 @@ def test_the_loop_theme_shows_state_who_when_and_the_change_log():
 def test_the_loop_theme_shows_the_read_only_reason():
     out = run_js(f"loopSetHtml({js_view(write=False, reason='read-only from the tailnet: SQUAD_TAILNET_LOOP_WRITE is not on')})")
     assert "SQUAD_TAILNET_LOOP_WRITE" in out and "disabled" in out
+
+
+def test_a_failed_start_is_shown_in_the_loop_theme_and_the_log():
+    """A start that did not hold reads off with its failure shown, never a disabled Starting... that hides it (#923 review)."""
+    log = [{"at": "2026-10-31T16:02:00-03:00", "who": "owner", "from": "loopback", "action": "start", "failed": "watchd did not start"}]
+    out = run_js(f"loopSetHtml({js_view(state='off', failed='watchd did not start', log=log)})")
+    assert out.count("watchd did not start") >= 2
+    assert "Start loop" in out and "disabled" not in out
 
 
 def test_the_stop_confirm_lists_every_live_run_and_gate_and_drains_by_default():
