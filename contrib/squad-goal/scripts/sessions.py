@@ -8,7 +8,7 @@ SOCKET_DIRS = ("/tmp/cc-socks",)   # where Claude Code binds a session socket (d
 STATUSES = ("busy", "idle", "waiting")
 SID = re.compile(r"[A-Za-z0-9-]{1,64}")
 TAIL_BYTES = 256 * 1024
-MAX_TAIL_BYTES = 4 * 1024 * 1024   # a session's own lines can be megabytes: the window grows until it holds a page (#1073)
+MAX_TAIL_BYTES = 16 * 1024 * 1024   # a session's own lines can be megabytes: the window grows until it holds a page (#1073)
 PAGE_TURNS = 30                     # the text turns a page aims for; a tool line rides along and never fills the page
 TURN_LIMIT = 200
 PREVIEW_CHARS = 200
@@ -148,12 +148,15 @@ def _turns_of(obj):
         elif kind == "assistant" and p.get("type") == "tool_use": out.append(("tool", uid, f"tool: {p.get('name', '')}"))
     return out
 
+BIG_LINE = 512 * 1024   # a line this long is a thinking block or a tool result: it carries no turn of its own (#1073)
+
 def _page_kept(raw, start):
     """The newest whole lines of one byte window, oldest first, within TURN_LIMIT turns."""
     lines, at = [], start
     for i, piece in enumerate(raw.split(b"\n")):
         offset, at = at, at + len(piece) + 1
         if (i == 0 and start) or not piece: continue
+        if len(piece) > BIG_LINE and b'"type":"text"' not in piece and b'"type": "text"' not in piece: continue
         try: obj = json.loads(piece)
         except ValueError: continue
         if isinstance(obj, dict): lines.append((offset, _turns_of(obj)))
@@ -182,6 +185,7 @@ def read_conversation(cwd, sid, secrets=(), before=None):
     out = [{"id": uid, "role": role, "text": redact(text, secrets)} for _, found in kept for role, uid, text in found]
     cursor = kept[0][0] if kept else start
     return {"turns": out, "next": cursor or None}
+
 
 def conversation(profile, sid, before=None, profiles_of=profiles_of):
     """One page of a live session's conversation when the session is this profile's; None for any other session."""
