@@ -233,7 +233,7 @@ function paintPick() {
   pick.replaceChildren(p, ...items);
 }
 function paintHead() {
-  title.textContent = cur ? `Terminal - Claude CLI · ${cur.name || cur.sid.slice(0, 8)}` : "Terminal - Claude CLI";
+  title.textContent = "Terminal - Claude CLI";   // the title names the panel, not the session (owner, 2026-11-01)
   syncSend();
 }
 async function loadSessions() {
