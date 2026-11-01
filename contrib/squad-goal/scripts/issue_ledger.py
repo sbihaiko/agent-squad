@@ -114,8 +114,17 @@ def parse(key):   # <owner>/<repo>#<n> -> (owner, repo, n); anything else is ref
     return m.group(1), m.group(2), m.group(3)
 
 
+# The profile the module was imported under. The hub's mux pins the profile env around the hub's import and restores the
+# shell's after it, so a read of SG_STATE at request time finds nothing an import found (#1073). No default enters here: with
+# neither value the caller is refused by name, never handed the machine-wide path.
+_STATE_AT_IMPORT = os.environ.get("SG_STATE", "")
+
+
 def state_dir():
-    return pathlib.Path(os.environ["SG_STATE"])
+    d = os.environ.get("SG_STATE") or _STATE_AT_IMPORT
+    if not d:
+        raise RuntimeError("issue_ledger: no SG_STATE; the profile in force names no state directory")
+    return pathlib.Path(d)
 
 
 def path(key):
