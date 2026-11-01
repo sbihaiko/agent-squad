@@ -368,7 +368,7 @@ out=$(fixpass cfx 6100); rc=$?
 printf '**VERDICT: CHANGES**\n- [Blocking] b.py:7 the cap is never read\n' > "$T/verdict-6101"
 rrun cst 6101 pass '' none; : > "$WAVE_CALLS"
 fixpass cst 6101 >/dev/null; printf '**VERDICT: CHANGES**\n- [Blocking] b.py:9 the cap is never read\n' > "$T/verdict-6101"; fixed cst 6101
-echo '{"event": "outcome", "node": "c", "entry": 2, "outcome": "fail", "reasons": ["artifact_missing"], "diagnostic": {"ended": {"last": "I stopped after the guard edit"}}}' >> "$T/co/runs/fix-6101/record.jsonl"
+echo '{"event": "outcome", "node": "c", "entry": 2, "outcome": "fail", "reasons": ["child_ended_early"], "diagnostic": {"ended": {"last": "I stopped after the guard edit"}}}' >> "$T/co/runs/fix-6101/record.jsonl"
 out=$(fixpass cst 6101); fixpass cst 6101 >/dev/null
 [ "$(/usr/bin/grep -c '^cst 6101 ' "$T/fix.calls")" = 1 ] && ok "findings that do not change start no second fix run" || ko "fix runs: '$(cat "$T/fix.calls")'"
 [ "$(/usr/bin/grep -c '^requeue 6101 ' "$WAVE_CALLS")" = 1 ] && /usr/bin/grep -q '^requeue 6101 .*the cap is never read' "$WAVE_CALLS" \
