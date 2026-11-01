@@ -6,6 +6,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam mo
 import agyquota, board_lag, chainhealth, ghread, ghthrottle, modelreg, provkey, session_send, sessions   # the chains and the one registry resolve a model (ADR-0147); ghread is the one GitHub door (ADR-0277)
 from issue_state import board_state, KINDS, TEST_CASE_TITLE, _utc
 import http.client
+import zoneinfo
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import NamedTuple
 
@@ -2012,12 +2013,11 @@ def spec_progress(items, moves=None, window=None, now=None):
 DAYS_SPEED = 14   # the finished days the throughput row compares today with (two weeks)
 
 def throughput_fact(now=None):
-    """How fast the board is closing cards: the closed count per UTC day from the flow history, the newest day partial.
+    """How fast the board is closing cards: the closed count per local day from the history store, the newest day partial.
     `done` holds the finished days' figures, so today is compared with them and never with itself."""
-    path = _flow.history_path(BOARD, REPO)
-    try: cfd = _cfd.cfd(_flow.samples(path), ORDER)
-    except Exception: return None
-    pts = [p for p in cfd.get("points") or [] if p.get("throughput") is not None]
+    store = _hist.load_store(_hist.history_path(BOARD, REPO))
+    cfd = _cfd.cfd([_hist.intervals(rec.get("events") or []) for rec in store.values()], ORDER, zone=day_zone(), now=now)
+    pts = [p for p in cfd["points"] if p["throughput"] is not None]
     if not pts: return None
     today = pts[-1]["throughput"]; done = [p["throughput"] for p in pts[:-1]][-DAYS_SPEED:]
     if not done: return {"today": today, "median": None, "min": None, "max": None, "trend": "flat", "days": []}
@@ -3373,7 +3373,6 @@ def _x_ticks(days):
 
 
 CFD_RANGES = [("7", 7), ("30", 30), ("90", 90), ("all", None)]   # the cumulative flow's range views, in days (#901)
-CFD_ZONE = "UTC"   # the zone a day ends in: the zone the chart states; no project setting names another yet (#1024)
 LEAD_TIMEFRAMES = [("1", 1), ("2", 2), ("3", 3), ("7", 7), ("14", 14), ("30", 30), ("all", None)]   # the control chart presets (#900); the three short ones count hours on the page (owner, 2026-11-01)
 
 
@@ -3461,17 +3460,25 @@ def _file_key(path):
 def history_key():
     return _file_key(_hist.history_path(BOARD, REPO))
 
+def _coverage_payload(store):
+    """How much of the board the history store has read: the cards read of the board's total, the complete timelines, and the last refresh."""
+    c = _hist.coverage(store)
+    return {"read": c["read"], "complete": c["complete"], "total": len(board_cache["items"]),
+            "last": _hist._iso(c["last"]) if c["last"] is not None else None}
+
+
 def _cfd_payload(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
     """The cumulative flow's numbers, counted per day by board_cfd from the history store's column intervals; the page draws
     them and computes none. `fw`, `fs`, `fk` and `ty` are the bar's values: the chart keeps only the cards the bar keeps (#904, #1024)."""
     store = _hist.load_store(_hist.history_path(BOARD, REPO))
     cards = [_hist.intervals(store[i["n"]]["events"]) for i in board_cache["items"]
              if i["n"] in store and _in_bar(bar_keys(i), fw, fs, fk, ty)]
-    cfd = _cfd.cfd(cards, ORDER, zone=CFD_ZONE, now=dt.datetime.now(dt.UTC))
+    zone = day_zone()
+    cfd = _cfd.cfd(cards, ORDER, zone=zone, now=dt.datetime.now(dt.UTC))
     extents = {p["day"]: _band_extents(p["bands"]) for p in cfd["points"]}
     days = [p["day"] for p in cfd["points"]]
     points = {p["day"]: p for p in cfd["points"]}
-    coverage = {**_hist.coverage(store), "total": len(board_cache["items"])}
+    coverage = _coverage_payload(store)
     def values(name, k): return [extents[d][name][k] for d in days]
     def view(width):
         """The chart over the last `width` calendar days (all of them when None): the same arrays, cut to the window (#901)."""
@@ -3480,14 +3487,14 @@ def _cfd_payload(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
         ticks = _y_ticks(top)
         def cut(arr): return [arr[days.index(d)] for d in window]
         return {"start": dt.datetime.fromtimestamp(cfd["start"], dt.UTC).date().isoformat() if cfd["start"] is not None else None,
-                "days": window, "ymax": ticks[-1], "yticks": ticks, "xticks": _x_ticks(window), "coverage": coverage,
+                "days": window, "ymax": ticks[-1], "yticks": ticks, "xticks": _x_ticks(window), "coverage": coverage, "zone": zone,
                 "wip": [points[d]["wip"] for d in window],
                 "throughput": [points[d]["throughput"] for d in window],
                 "bands": [{"name": n, "lower": cut(values(n, 0)), "upper": cut(values(n, 1)),
                            "count": [extents[d][n][1] - extents[d][n][0] for d in window],
                            "held": [points[d]["held"][n] for d in window]}
                           for n in FLOW_BANDS]}
-    return {"cfd": {**view(None), "ranges": {key: view(width) for key, width in CFD_RANGES}}}
+    return {"cfd": {**view(None), "zone": zone, "ranges": {key: view(width) for key, width in CFD_RANGES}}}
 
 
 def _lead_payload(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
@@ -3498,7 +3505,7 @@ def _lead_payload(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
     now = dt.datetime.now(dt.UTC)
     control = {scale: {key: _leadtime.control_chart(rows, timeframe=days, log=scale == "log", now=now)
                        for key, days in LEAD_TIMEFRAMES} for scale in ("jira", "log")}   # the Jira-style control chart (#900)
-    coverage = {**_hist.coverage(_hist.load_store(_hist.history_path(BOARD, REPO))), "total": len(board_cache["items"])}
+    coverage = _coverage_payload(_hist.load_store(_hist.history_path(BOARD, REPO)))
     return {"lead": {"measure": lead["measure"], "type": ty, "window": lead["window"],
                      "excluded": [{"reason": r, "count": c} for r, c in lead["excluded"].items()],
                      "excluded_total": sum(lead["excluded"].values()), "series": lead["series"], "summary": lead["summary"],
@@ -3518,6 +3525,84 @@ def flow_burnup(spec):
     try: stamp = path.stat().st_mtime_ns
     except OSError: stamp = None
     return chart(f"burnup-{spec}", (str(path), stamp), lambda: _hist.burnup(_hist.load_store(path), spec))
+
+
+HISTORY_EVERY = 60   # seconds between history passes; a pass reads only the timelines that are due (#1024)
+HISTORY_TIMELINE = ("query($owner:String!,$name:String!,$number:Int!,$after:String){rateLimit{cost}"
+                    "repository(owner:$owner,name:$name){issue(number:$number){number updatedAt "
+                    "projectItems(first:20){nodes{project{number} fieldValueByName(name:\"Status\"){... on ProjectV2ItemFieldSingleSelectValue{updatedAt}}}} "
+                    "timelineItems(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{__typename "
+                    "... on ProjectV2ItemStatusChangedEvent{createdAt status} "
+                    "... on LabeledEvent{createdAt label{name}} ... on UnlabeledEvent{createdAt label{name}} "
+                    "... on ClosedEvent{createdAt} ... on ReopenedEvent{createdAt} "
+                    "... on AddedToProjectV2Event{createdAt} ... on RemovedFromProjectV2Event{createdAt} "
+                    "... on ParentIssueAddedEvent{createdAt parent{... on Issue{number}}} ... on ParentIssueRemovedEvent{createdAt}}}}}}")
+HISTORY_SEARCH = ("query($q:String!,$after:String){search(query:$q,type:ISSUE,first:100,after:$after){"
+                  "pageInfo{hasNextPage endCursor} nodes{... on Issue{number}}}}")
+
+
+def day_zone():
+    """The zone a chart day ends in: the TZ the hub runs under, else the machine's zone, else UTC (#1024)."""
+    name = os.environ.get("TZ") or os.path.realpath("/etc/localtime").partition("zoneinfo/")[2] or "UTC"
+    try: return zoneinfo.ZoneInfo(name).key
+    except (zoneinfo.ZoneInfoNotFoundError, ValueError): return "UTC"
+
+
+def _history_timeline(n, cursor):
+    owner, _, name = REPO.partition("/")
+    return gh_graphql(HISTORY_TIMELINE, owner=owner, name=name, number=int(n), **({"after": cursor} if cursor else {}))
+
+
+def _history_search():
+    """Every issue number the repository holds, page by page; None when a page answered nothing, so no absence is read (#1024)."""
+    found, after = [], None
+    while True:
+        search = (((gh_graphql(HISTORY_SEARCH, q=f"repo:{REPO} is:issue", **({"after": after} if after else {})) or {})
+                   .get("data") or {}).get("search"))
+        if search is None: return None
+        found += [node["number"] for node in search["nodes"] if node.get("number")]
+        if not search["pageInfo"]["hasNextPage"]: return found
+        after = search["pageInfo"]["endCursor"]
+
+
+def _history_due(store, now):
+    """The cards a pass reads: no complete timeline yet, or a complete one an hour old."""
+    return [i["n"] for i in board_cache.get("items") or []
+            if (rec := store.get(i["n"])) is None or not rec.get("complete") or now - rec["t"] >= _hist.WINDOW]
+
+
+def history_pass(read_issue=None, read_search=None, now=None):
+    """Read the timelines due and the hourly search into the history store. A read that answers nothing ends the pass; the
+    next pass resumes a partial timeline from its cursor (#1024)."""
+    read_issue, read_search = read_issue or _history_timeline, read_search or _history_search
+    path = _hist.history_path(BOARD, REPO)
+    now = time.time() if now is None else now
+    store = _hist.load_store(path)
+    for n in _history_due(store, now):
+        if not _hist.may_read(path, now, 1)[0]: return
+        rec = store.get(n)
+        payload = read_issue(n, _hist.timeline_after(rec))
+        if payload is None: return
+        data = payload.get("data") or {}
+        _hist.record_points(path, (data.get("rateLimit") or {}).get("cost", 1), now)
+        issue = (data.get("repository") or {}).get("issue")
+        if issue is None: continue
+        if rec and rec.get("complete"): store.pop(n)
+        facts = _hist.item_facts(issue, PROJECT_NO)
+        _hist.record_page(store, n, issue["timelineItems"], facts["issue_updated"], facts["status_updated"])
+        kept = store[n]
+        _hist.record_issue(path, n, facts["issue_updated"], facts["status_updated"], kept["events"], kept["complete"], now, kept["cursor"])
+    if _hist.search_due(_hist.read_records(path), now):
+        found = read_search()
+        if found is not None: _hist.record_search(path, found, now)
+
+
+def refresh_history():
+    """history_pass() every HISTORY_EVERY seconds; one failed pass never ends the loop (#1024)."""
+    while True:
+        try: history_pass()
+        except Exception as e: print(f"history pass failed: {e}", file=sys.stderr)
+        time.sleep(HISTORY_EVERY)
 
 
 def _burndown_payload(spec=None, today=None):
@@ -4892,7 +4977,8 @@ const cfdAxis=c=>{const n=c.days.length,base=flowH-flowP;   // every number and 
   const xs=c.xticks.map(t=>{const x=flowX(t.i,n);return `<line x1=${x} y1=${base} x2=${x} y2=${base+4} stroke=var(--mute)></line><text x=${x} y=${base+17} text-anchor=middle fill=var(--mute) style="font-size:var(--fs-min)">${esc(t.day)}</text>`}).join("");
   return `<line x1=${flowP} y1=${flowP-10} x2=${flowP} y2=${base} stroke=var(--line)></line><line x1=${flowP} y1=${base} x2=${flowW-flowP} y2=${base} stroke=var(--line)></line>${ys}${xs}`+
     `<text x=4 y=${flowP-16} text-anchor=start fill=var(--mute) style="font-size:var(--fs-min)">cards</text>`+
-    `<text x=${flowW-flowP} y=${base+31} text-anchor=end fill=var(--mute) style="font-size:var(--fs-min)">day (UTC)</text>`;};
+    `<text x=${flowW-flowP} y=${base+31} text-anchor=end fill=var(--mute) style="font-size:var(--fs-min)">day (${esc(c.zone)})</text>`;};
+const coverNote=v=>!v?"":`<p class=fnote>cards read ${v.read} of ${v.total}, ${v.complete} complete, last refresh ${v.last?esc(v.last):"never"}</p>`;
 let CF={r:"30"};   // the cumulative flow's range, 30 days at first (#901)
 const CFD_R=[["7","7 days"],["30","30 days"],["90","90 days"],["all","All"]];   // the cumulative flow's range views (#901)
 const flowViews=k=>`<label class=fhead>View <select id=flowv><option value=cfd${k==="cfd"?" selected":""}>Cumulative flow</option><option value=burndown${k==="burndown"?" selected":""}>Burndown</option></select></label>`;   // one Throughput tab, two charts (#1048)
@@ -4905,12 +4991,14 @@ const flowCFD=c=>{const sel=`<label class=fhead>Range <select id=cfdr>${CFD_R.ma
     const low=[...run].reverse().flatMap(i=>one?[[flowX(i,n)+h,b.lower[i]],[flowX(i,n)-h,b.lower[i]]]:[[flowX(i,n),b.lower[i]]]);
     return [...up,...low].map(([x,v])=>`${x},${flowY(v,c.ymax)}`).join(" ");};
   const polys=b=>runs(b).map(run=>`<polygon points="${band(b,run)}" fill="${COLORS[b.name]||"#888"}" fill-opacity=".85"><title>${esc(b.name)}</title></polygon>`).join("");
+  const heldBand=b=>({name:b.name,lower:b.lower,upper:b.lower.map((v,i)=>v===null?null:v+(b.held?b.held[i]:0))});
+  const heldPolys=b=>b.held&&b.held.some(v=>v>0)?runs(heldBand(b)).map(run=>`<polygon points="${band(heldBand(b),run)}" fill="#000" fill-opacity=".45"><title>${esc(b.name)} held</title></polygon>`).join(""):"";
   const hover=c.days.map((d,i)=>{const gap=c.bands.length&&c.bands[0].upper[i]===null;   // a day's counts, WIP and throughput, on hover (#901)
     const parts=c.bands.map(b=>`${esc(b.name)} ${(b.count||[])[i]}`).join(", "),tp=c.throughput?c.throughput[i]:null;
     const text=gap?`${esc(d)}: no whole read this day`:`${esc(d)}: ${parts} · WIP ${(c.wip||[])[i]} · throughput ${tp===null?"none":tp}`;
     return `<rect x=${flowX(i,n)-cw/2} y=${flowP-10} width=${cw} height=${flowH-2*flowP+10} fill=transparent><title>${text}</title></rect>`;}).join("");
-  return sel+`<svg viewBox="0 0 ${flowW} ${flowH}">${c.bands.map(polys).join("")}${cfdAxis(c)}${hover}</svg>`+
-    `<p class=fnote>history from ${esc(c.start)} UTC</p>${c.legacy?`<p class=fnote>${c.legacy} ${c.legacy===1?"day comes":"days come"} from before the kind, spec, wave and type history: they answer none of these</p>`:""}<p>${c.bands.map(b=>`<span class=flg><i style="background:${COLORS[b.name]||"#888"}"></i>${esc(b.name)}</span>`).join("")}</p>`;};
+  return sel+`<svg viewBox="0 0 ${flowW} ${flowH}">${c.bands.map(polys).join("")}${c.bands.map(heldPolys).join("")}${cfdAxis(c)}${hover}</svg>`+
+    `<p class=fnote>history from ${esc(c.start)} ${esc(c.zone)}</p>${coverNote(c.coverage)}${c.legacy?`<p class=fnote>${c.legacy} ${c.legacy===1?"day comes":"days come"} from before the kind, spec, wave and type history: they answer none of these</p>`:""}<p>${c.bands.map(b=>`<span class=flg><i style="background:${COLORS[b.name]||"#888"}"></i>${esc(b.name)}</span>`).join("")}</p><p class=fnote>A darker stripe at a band's base is that band's held cards.</p>`;};
 const EXREASON={not_planned:"closed as not planned",abandoned:"closed as abandoned",open:"still open",no_opened:"no opened date"};   // the cards the chart leaves out, in words (#921)
 const LTS=ls.lt||{},LT_TYPES=[["spec","Specs"],["task","Tasks"],["bug","Bugs"]];   // the chart's own settings, restored from the page's storage (#985)
 let LT={tf:["1","2","3","7","14","30","all"].includes(LTS.tf)?LTS.tf:"30",log:LTS.log===true,ty:LT_TYPES.some(([k])=>k===LTS.ty)?LTS.ty:"task",pick:null,zc:null,zr:null,rng:null,tok:0,noclick:false,a:"",b:"",cols:[]};   // the control chart's timeframe, its scale, its type, the cluster listed under it, and a drag zoom: the hub's chart over zr=[from,to] (#900, #985)
@@ -4939,7 +5027,7 @@ const ltChart=c=>{const n=c.dots.length,base=flowH-flowP,ink="#b8c0cf",mute="var
     `<text x=${ltP-7} y=${ltP-16} text-anchor=end fill=${ink} style="font-size:var(--fs-min)">elapsed time${c.axis==="log"?" (log)":c.axis==="cube"?" (cube root)":""}</text>`;
   const lines=ltLine(c.average,"var(--s6)","","Average")+ltLine(c.median,"var(--ok)","2 3","Median")+ltLine(c.p85,"var(--s5)","5 3","p85");
   const dots=c.clusters.map((k,i)=>{const m=k.dots.length,title=m>1?`${m} issues`:`#${k.dots[0].n} ${esc(k.dots[0].title)}`;
-    return `<circle data-k=${i} cx=${ltX(k.x)} cy=${ltY(k.y)} r=${m>1?6:4.5} fill="${m>1?"var(--bg)":"var(--s3)"}" stroke="var(--s3)" stroke-width=2 style="cursor:pointer"><title>${esc(title)} · ${esc(k.dots[0].text)} · closed ${esc(k.dots[0].closed)}</title></circle>`+(m>1?`<text x=${ltX(k.x)} y=${ltY(k.y)+4} fill="var(--s3)" style="font-size:var(--fs-min)" text-anchor=middle pointer-events=none>${m}</text>`:"")}).join("");
+    return `<circle data-k=${i} cx=${ltX(k.x)} cy=${ltY(k.y)} r=${m>1?6:4.5} fill="${m>1?"var(--bg)":"var(--s3)"}" stroke="var(--s3)" stroke-width=2${k.dots.some(d=>d.approx||d.unknown_first)?' stroke-dasharray="3 2"':""} style="cursor:pointer"><title>${esc(title)} · ${esc(k.dots[0].text)} · flowing ${esc(k.dots[0].flowing_text)} · held ${esc(k.dots[0].held_text)} · closed ${esc(k.dots[0].closed)}${k.dots.some(d=>d.approx)?" · start approximate":""}${k.dots.some(d=>d.unknown_first)?" · first interval unknown":""}</title></circle>`+(m>1?`<text x=${ltX(k.x)} y=${ltY(k.y)+4} fill="var(--s3)" style="font-size:var(--fs-min)" text-anchor=middle pointer-events=none>${m}</text>`:"")}).join("");
   const ltV=v=>v?esc(v.text):"?",S="";   // the numbers live in the legend, each beside what it answers: one line, never two copies of the same fact
   const legend=`<p class="flg ltlg"><span><i style="background:var(--s3)"></i>Rolling average (${c.window.size} issues, centered)</span><span><i style="background:var(--s3);opacity:.3"></i>Standard deviation <em>the usual spread</em></span><span><i style="background:var(--s6)"></i>Average <b>${ltV(c.average)}</b> <em>one slow card lifts it</em></span><span><i style="background:var(--ok)"></i>Median <b>${ltV(c.median)}</b> <em>half the cards closed faster</em></span><span><i style="background:var(--s5)"></i>p85 <b>${ltV(c.p85)}</b> <em>85% of closed cards finished within this time</em></span></p>`;
   const pk=LT.pick!=null&&c.clusters[LT.pick]?c.clusters[LT.pick]:null;
@@ -4948,7 +5036,7 @@ const ltChart=c=>{const n=c.dots.length,base=flowH-flowP,ink="#b8c0cf",mute="var
 const flowLead=l=>{const S=l.summary,ex=l.excluded.map(e=>`${e.count} ${esc(EXREASON[e.reason]||e.reason)}`).join(", ");
   const head=`<p class=fhead>${esc(LT_TYPES.find(([k])=>k===l.type)[1].toLowerCase())} · <b>${esc(l.measure)}</b> · window ${l.window.size} ${esc(l.window.unit)} · excluded ${l.excluded_total}${ex?" ("+ex+")":""}</p>`;
   LT.cols=l.columns||[];if(!S)return head+"<p class=fnote>no closed card yet</p>";
-  return head+ltChart(LT.zc||l.control[LT.log?"log":"jira"][LT.tf]);};
+  return head+coverNote(l.coverage)+ltChart(LT.zc||l.control[LT.log?"log":"jira"][LT.tf]);};
 let BURN={s:null};   // the spec the burndown draws; null lets the hub name the first open spec (#1048)
 const flowBurn=a=>{const b=a.burn,opts=a.specs.map(s=>`<option value=${s.n}${s.n===a.spec?" selected":""}>#${s.n} ${esc(s.t)}</option>`).join("");
   const sel=`<label class=fhead>Spec <select id=burns>${opts}</select></label> ${flowViews("burndown")}`;
@@ -6376,5 +6464,5 @@ def watch_self():
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 7700
     refresh_runs()
-    threading.Thread(target=refresh_prs, daemon=True).start(); threading.Thread(target=refresh_quota, daemon=True).start(); threading.Thread(target=watch_self, daemon=True).start(); threading.Thread(target=refresh_board, daemon=True).start(); threading.Thread(target=refresh_fast, daemon=True).start();threading.Thread(target=load_sampler, daemon=True).start(); threading.Thread(target=watch_runs, daemon=True).start()
+    threading.Thread(target=refresh_prs, daemon=True).start(); threading.Thread(target=refresh_quota, daemon=True).start(); threading.Thread(target=watch_self, daemon=True).start(); threading.Thread(target=refresh_board, daemon=True).start(); threading.Thread(target=refresh_history, daemon=True).start(); threading.Thread(target=refresh_fast, daemon=True).start();threading.Thread(target=load_sampler, daemon=True).start(); threading.Thread(target=watch_runs, daemon=True).start()
     ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()

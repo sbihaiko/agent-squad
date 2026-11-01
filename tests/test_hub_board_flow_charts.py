@@ -343,7 +343,7 @@ def test_the_cfd_draws_labelled_axes_with_numbered_ticks_and_dated_ticks(hub, bo
         assert str(v) in labels, f"the y tick {v} carries no label: {labels}"
     for t in cfd["xticks"]:
         assert t["day"] in labels, f"the x tick {t['day']} carries no label: {labels}"
-    assert "cards" in labels and "day (UTC)" in labels, f"an axis carries no name: {labels}"
+    assert "cards" in labels and f"day ({cfd['zone']})" in labels, f"an axis carries no name: {labels}"
     ticks = re.findall(r"<line ", result.stdout)
     assert len(ticks) == 2 + len(cfd["yticks"]) + len(cfd["xticks"]), "one mark per tick between the two axes"
 
@@ -592,3 +592,43 @@ def test_a_chart_is_a_sibling_tab_with_no_close_and_no_title_of_its_own(hub):
 def test_a_live_run_click_never_leaves_the_tab_the_user_is_on(hub):
     """The owner: a second click on a live run moved the page from the board to the charts tab; the user changes tabs."""
     assert 'setTab("flow",{runs:true})' not in hub.PAGE
+
+
+def _render(hub, tmp_path, name, expression, block=None):
+    drawing = "\n".join(["const COLORS={},COLNAME={};", "const esc=s=>String(s);", "const ls={lt:{tf:\"all\"}};",
+                         block or _flow_block(hub).split("const drawFlow")[0], f"process.stdout.write({expression});"])
+    path = tmp_path / name
+    path.write_text(drawing)
+    result = subprocess.run(["node", str(path)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
+def test_the_cfd_draws_each_bands_held_share_names_its_zone_and_states_its_coverage(hub, board, tmp_path):
+    """#1024 (2, 3): a band's held cards sit at its base as a darker stripe, the day labels name the zone the day ends in,
+    and the history's coverage is stated under the chart."""
+    _stack(hub)
+    cfd = _flow(hub)["cfd"]
+    for band in cfd["bands"]:
+        band["held"] = [1 if band["name"] == "Todo" else 0 for _ in cfd["days"]]
+    out = _render(hub, tmp_path, "flow-cfd-held.js", f"flowCFD({json.dumps(cfd)})")
+    labels = re.findall(r"<text[^>]*>([^<]*)</text>", out)
+    assert "<title>Todo held</title>" in out, "the held share of the Todo band is drawn"
+    assert f"day ({cfd['zone']})" in labels, f"the day axis names its zone: {labels}"
+    assert "cards read" in out, "the chart states its coverage"
+
+
+def test_the_lead_chart_states_its_coverage_and_marks_approximate_and_unknown_starts(hub, board, tmp_path):
+    """#1024 (3): an approximate or unknown-first card is drawn dashed, and the chart states its coverage."""
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
+    lead = hub.flow_lead(ty="task")["lead"]
+    dot = lead["control"]["jira"]["all"]["clusters"][0]["dots"][0]
+    assert {"flowing", "held", "approx", "unknown_first"} <= set(dot), dot
+    assert abs(dot["flowing"] + dot["held"] - dot["hours"]) < 1e-9, "flowing and held make the card's whole time"
+    out = _render(hub, tmp_path, "flow-lead-coverage.js", f"flowLead({json.dumps(lead)})")
+    assert "cards read" in out, "the lead chart states its coverage"
+    assert not re.search(r"<circle[^>]*stroke-dasharray", out), "a card with a verified start is drawn solid"
+    dot["approx"] = True
+    out = _render(hub, tmp_path, "flow-lead-approx.js", f"flowLead({json.dumps(lead)})")
+    assert re.search(r'<circle[^>]*stroke-dasharray="3 2"', out), "an approximate start is dashed"
+    assert "start approximate" in out

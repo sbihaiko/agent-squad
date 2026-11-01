@@ -177,8 +177,12 @@ def control_chart(items, timeframe=None, log=False, now=None, start=None, end=No
     for row, hrs, (mean, low, high) in zip(plotted, hours, rolling, strict=True):
         closed = datetime.fromisoformat(row["c"])
         x = _clamp((closed - start).total_seconds() / span) if span > 0 else 1.0
+        flowing, held = row.get("flowing", hrs), row.get("held", 0.0)
         dots.append({"n": row["n"], "title": row.get("t", ""), "closed": closed.date().isoformat(), "hours": hrs,
-                     "text": _duration(hrs), "x": x, "y": position(hrs),
+                     "text": _duration(hrs), "flowing": flowing, "held": held,
+                     "flowing_text": _duration(flowing), "held_text": _duration(held),
+                     "approx": row.get("approx", False), "unknown_first": row.get("unknown_first", False),
+                     "x": x, "y": position(hrs),
                      "rolling": {"hours": mean, "low": low, "high": high, "text": _duration(mean),
                                  "low_text": _duration(low), "high_text": _duration(high),
                                  "y": position(mean), "y_low": position(low), "y_high": position(high)}})
