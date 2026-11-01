@@ -2703,15 +2703,23 @@ def _graphql(query, variables, timeout):
     if out.partial: raise RuntimeError("partial answer: " + ", ".join(out.partial))
     return out.answer
 def fast_board_pass():
-    """One fast read: the column inputs of the cards the cache holds, written where the snapshot is newer. A failed read moves nothing."""
+    """One fast read: the column inputs of the cards the cache holds, written where the snapshot is newer. A card the last
+    whole snapshot held and this one lacks is checked in one batched read (#976). A failed read moves nothing."""
     observed = time.time()
-    try: nodes = board_fast.read_snapshot(_graphql, _fast_root(), OWNER, PROJECT_NO, _columns_module.TERMINAL, FAST_BUDGET, observed + FAST_DEADLINE)
+    deadline = observed + FAST_DEADLINE
+    try: nodes = board_fast.read_snapshot(_graphql, _fast_root(), OWNER, PROJECT_NO, _columns_module.TERMINAL, FAST_BUDGET, deadline)
     except board_fast.SnapshotError as e:
         with _board_lock:
             set_part("status", err=str(e)[:80])
         return
+    rows = board_fast.rows_of(nodes, REPO)
     with _board_lock:
-        board_cache["items"] = board_fast.apply(board_cache.get("items") or [], board_fast.rows_of(nodes, REPO), int(observed))
+        lost = board_fast.missing(board_cache.get("fast_seen") or {}, rows, board_cache.get("items") or [])
+    verdicts = board_fast.check(_graphql, OWNER, PROJECT_NO, lost, FAST_BUDGET, deadline)
+    with _board_lock:
+        items = board_fast.apply(board_cache.get("items") or [], rows, int(observed))
+        board_cache["items"] = board_fast.settle(items, verdicts, int(observed))
+        board_cache["fast_seen"] = board_fast.seen_of(rows, verdicts)
         set_part("status", err=None)
         save_board()
 def refresh_fast():
