@@ -26,8 +26,10 @@ A proof also has no upper bound. A suite that hangs holds the reserve until its 
 3. **At its deadline the proof is killed.** The deadline is two hours (`SG_PROMOTE_DEADLINE_SECONDS`). The suite and every
    child it started are killed, and the tip is recorded in `$SG_STATE/promote-indeterminate` as `<epoch> TAB <tip> TAB
    <bound>`, with one line in the promote log saying the tip is not tested.
-4. **An indeterminate tip is not a pass and not a fail.** It writes no gate status and no commit status, promotes nothing, and
-   is not marked in `promote-pass.tips`: a later pass retries the same tip.
+4. **An indeterminate tip is not a pass and not a fail.** It writes no gate status and no commit status. Delivery still
+   outranks the proof: the tip is promoted with a marker that names what no test reached, and a later pass proves it
+   ([ADR-0164](0164-delivery-outranks-the-proof.md)). It is not marked in `promote-pass.tips`, so a later pass retries the
+   same tip.
 5. **An indeterminate tip needs an assessment and a pending reminder.** The record names the tip and the bound. An agent
    assesses what the killed proof leaves unproven, opens one issue labelled `bug` that says the tip is not tested, and that
    issue is the reminder.
