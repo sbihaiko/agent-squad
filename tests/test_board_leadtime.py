@@ -365,7 +365,7 @@ def test_the_ticks_run_in_duration_order_for_a_one_hour_and_a_one_month_window(l
     for result in (hour, month):
         hours = [tick["hours"] for tick in result["ticks"]]
         assert len(hours) >= 2
-        assert all(a < b for a, b in zip(hours, hours[1:])), f"ticks out of order: {hours}"
+        assert all(a < b for a, b in zip(hours, hours[1:], strict=False)), f"ticks out of order: {hours}"
 
 
 def test_every_tick_text_uses_the_one_duration_format_on_every_scale(lt):
@@ -378,7 +378,7 @@ def test_the_ticks_keep_their_order_on_every_scale(lt):
     for name, result in _scales(lt).items():
         hours = [tick["hours"] for tick in result["ticks"]]
         assert len(hours) >= 2
-        assert all(a < b for a, b in zip(hours, hours[1:])), f"{name} ticks out of order: {hours}"
+        assert all(a < b for a, b in zip(hours, hours[1:], strict=False)), f"{name} ticks out of order: {hours}"
 
 
 def test_the_scale_field_names_the_scale_drawn(lt):
