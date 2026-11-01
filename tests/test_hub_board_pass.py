@@ -1,4 +1,4 @@
-"""Hub board: one pass re-reads the board every 60 s on its own; the TASKS header has no refresh button.
+"""Hub board: one pass re-reads the board every FULL_EVERY seconds on its own; the TASKS header has no refresh button.
 
 A failed pass keeps the last good rows. No route runs a pass on request, so a click never adds GitHub reads.
 """
@@ -120,7 +120,7 @@ def test_a_board_cache_written_before_the_close_reason_is_read_again(tmp_path, m
 
 
 def test_the_tasks_header_has_no_refresh_button(hub):
-    """The board re-reads itself every 60 s and within 2 s of a board move; a hand refresh only adds GitHub reads."""
+    """The board re-reads itself on its full-read period and within 2 s of a board move; a hand refresh only adds GitHub reads."""
     head = re.search(r"<div id=bhead>.*?</div>\n", hub.PAGE, re.S).group(0)
     assert "id=br" not in head, f"the TASKS header carries no refresh button: {head!r}"
     assert '$("#br")' not in hub.PAGE, "no click handler is left for a button that is gone"
@@ -145,13 +145,14 @@ def test_a_failed_pass_keeps_the_last_good_board_and_surfaces_the_error(hub, mon
         "the served board returns the last good data with the error beside it, which the page already renders"
 
 
-def test_the_board_passes_on_its_own_every_sixty_seconds(hub, monkeypatch):
-    """The automatic pass runs on its own, one every 60 s."""
+def test_the_board_passes_on_its_own_every_full_read_period(hub, monkeypatch):
+    """The automatic full read runs on its own, one every FULL_EVERY seconds (SPEC 968)."""
     passes, sleeps = [], []
+    waits = hub.FULL_EVERY // 2
 
     def fake_sleep(s):
         sleeps.append(s)
-        if len(sleeps) == 32:
+        if len(sleeps) == waits + 2:
             raise StopIteration            # one full wait plus two more: enough to see the second pass and its schedule
 
     monkeypatch.setattr(hub, "board_pass", lambda: passes.append(1))
@@ -160,7 +161,7 @@ def test_the_board_passes_on_its_own_every_sixty_seconds(hub, monkeypatch):
     with pytest.raises(StopIteration):
         hub.refresh_board()
     assert len(passes) == 2, "the loop keeps passing on its own"
-    assert sleeps[:30] == [2] * 30, "one pass every 60 s: 30 waits of 2 s between passes"
+    assert sleeps[:waits] == [2] * waits, "one full read every FULL_EVERY seconds: waits of 2 s between passes"
 
 
 def test_a_pass_that_raises_does_not_end_the_refresh_loop(hub, monkeypatch):
@@ -174,7 +175,7 @@ def test_a_pass_that_raises_does_not_end_the_refresh_loop(hub, monkeypatch):
 
     def fake_sleep(s):
         sleeps.append(s)
-        if len(sleeps) == 31:
+        if len(sleeps) == hub.FULL_EVERY // 2 + 1:
             raise StopIteration
 
     monkeypatch.setattr(hub, "board_pass", bad_pass)

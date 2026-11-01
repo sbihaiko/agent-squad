@@ -19,6 +19,8 @@ _cfd_spec = importlib.util.spec_from_file_location("board_cfd", pathlib.Path(__f
 _cfd = importlib.util.module_from_spec(_cfd_spec); _cfd_spec.loader.exec_module(_cfd)
 _leadtime_spec = importlib.util.spec_from_file_location("board_leadtime", pathlib.Path(__file__).resolve().parent / "board_leadtime.py")
 _leadtime = importlib.util.module_from_spec(_leadtime_spec); _leadtime_spec.loader.exec_module(_leadtime)
+_fast_spec = importlib.util.spec_from_file_location("board_fast", pathlib.Path(__file__).resolve().parent / "board_fast.py")
+board_fast = importlib.util.module_from_spec(_fast_spec); _fast_spec.loader.exec_module(board_fast)
 # The board draws the shipped definition (#247): its statuses, in its order, with their colours. Open PRs are a lane beside
 # the axis, never a column, and it is for tracking only (#384); a work branch has no lane of its own -- its kind reaches the
 # kinds view -- and a landed branch is read from its issue card. Every name comes from the table; COLUMN reads a column or a
@@ -2413,7 +2415,7 @@ def delivery():
     return out
 
 BOARD = pathlib.Path(os.environ.get("SG_BOARD_CACHE") or HUBDIR / "hub-board.json"); BOARD.parent.mkdir(parents=True, exist_ok=True)
-BOARD_READ = 1   # the version of the items read that wrote the cached rows: a cache that names another is read again (#921)
+BOARD_READ = 2   # the version of the items read that wrote the cached rows: a cache that names another is read again (#921); version 2 carries each row's database id, the fast read's join key
 try: board_cache = json.loads(BOARD.read_text())
 except Exception: board_cache = {"t": 0, "items": [], "prs": [], "err": None}
 if board_cache.get("rv") != BOARD_READ:
@@ -2500,7 +2502,7 @@ def board_items_jq(repo):
     rides the same read as `cr` (#921): the key is its own, never `r`, which the hub reads as the row's repository. After
     each page's items it emits one {"_page": n} line, n the page's own item count, so the read says whether its last page
     was short (#894)."""
-    return ('''length as $n|(.[]|select((.content_type=="Issue" and ((.content.repository_url//"")|endswith("/" + $repo))) or .content_type=="DraftIssue")|{n:.content.number,i:.id,t:.content.title,s:.content.state,cr:((.content.state_reason//null)|if type=="string" then ascii_downcase else . end),c:.content.closed_at,st:((.fields[]|select(.name=="Status")|.value.name.raw)//null),k:(((.fields[]?|select(.name=="Kind")|.value.name|if type=="object" then .raw else . end)//"")|ascii_downcase|if .=="" then null else . end),l:[.content.labels[]?.name],si:{total:.content.sub_issues_summary.total,completed:.content.sub_issues_summary.completed},o:.content.created_at}),{_page:$n}''').replace("$repo", json.dumps(repo))
+    return ('''length as $n|(.[]|select((.content_type=="Issue" and ((.content.repository_url//"")|endswith("/" + $repo))) or .content_type=="DraftIssue")|{n:.content.number,fd:.content.fullDatabaseId,i:.id,t:.content.title,s:.content.state,cr:((.content.state_reason//null)|if type=="string" then ascii_downcase else . end),c:.content.closed_at,st:((.fields[]|select(.name=="Status")|.value.name.raw)//null),k:(((.fields[]?|select(.name=="Kind")|.value.name|if type=="object" then .raw else . end)//"")|ascii_downcase|if .=="" then null else . end),l:[.content.labels[]?.name],si:{total:.content.sub_issues_summary.total,completed:.content.sub_issues_summary.completed},o:.content.created_at}),{_page:$n}''').replace("$repo", json.dumps(repo))
 
 GH_FLOOR = int(os.environ.get("SG_GH_FLOOR") or 300)   # below this many core requests left, a read pass skips its reads (#855)
 LABELS_EVERY = 3600   # seconds between two reads of the repository's labels, and of its closed pull requests (#855)
@@ -2572,7 +2574,7 @@ def open_relations():
     return nodes, False
 def board_pass(fetch_open=None, fetch_landed=None, repos=None):
     """One board re-read: Board 4 statuses (REST) + every GraphQL page of Issue.blockedBy and Issue.parent + the open work branches and the
-    landing ledger of every repository the hub is told to read (#1820). The 60 s loop runs exactly this.
+    landing ledger of every repository the hub is told to read (#1820). The full-read loop runs exactly this.
 
     The two reads are independent: the issues are the profile repository's board, the branch lane spans every configured
     repository. A read that fails keeps the last good rows it already had and says so (the pass's error, or the
@@ -2615,8 +2617,9 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
         for part in ("status", "structure"): set_part(part, err=board_cache["err"])
     if items: apply_holders(items)
     if items is not None:
-        board_cache.update(t=time.time(), repo=REPO, items=merge_items(board_cache.get("items"), items, int(read_started)),
-                           cases=cases or [], lc=lc or board_cache.get("lc", {}), err=None)
+        with _board_lock:
+            board_cache.update(t=time.time(), repo=REPO, items=merge_items(board_cache.get("items"), items, int(read_started)),
+                               cases=cases or [], lc=lc or board_cache.get("lc", {}), err=None)
         for part in ("status", "structure"): set_part(part, err=None)
     rs = REPOS if repos is None else repos
     try:
@@ -2636,7 +2639,7 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
         gaps.insert(0, f"items read failed: {board_cache.get('err')}")
     _flow.append(_flow.history_path(BOARD, REPO), rows, incomplete="; ".join(gaps) or None)
     return board_cache
-MERGED_INPUTS = ("st", "s", "l", "cr")   # the column inputs of a row: Status, issue state, labels and close reason (#974)
+MERGED_INPUTS = ("st", "s", "l", "cr", "su", "iu")   # the column inputs of a row: Status and its instant, item instant, issue state, labels and close reason (#974)
 def merge_items(held, fresh, observed):
     """The rows of one read merged into the rows the cache holds (ADR-0149). Every row takes the read's structure; its column
     inputs are written only when the read's observation (`observed`, whole epoch seconds) is newer than the one the cache
@@ -2668,14 +2671,46 @@ def save_board():
     """The cache file writes the rows the hub holds. The temp name is the write's own (#512): hubmux runs one hub per
     profile in one process, so the pid alone is shared."""
     _tmp = _temp_name(BOARD); _tmp.write_text(json.dumps(board_cache)); os.replace(_tmp, BOARD)
+FULL_EVERY = 600   # seconds between full board reads; a board-dirty flag reads at once
+FAST_EVERY = 15    # seconds between fast reads of the open cards
+FAST_DEADLINE = 60   # the fast read's overall deadline (ADR-0051)
+FAST_POINTS_PER_HOUR = 1000   # the fast read's GraphQL budget per hour, failed calls included; it stops for the hour when spent
+FAST_BUDGET = board_fast.Budget(FAST_POINTS_PER_HOUR)
+_board_lock = threading.Lock()   # the fast read and the full read write one cache; the lock covers the write, never a read
+def _fast_root():
+    """The GraphQL root of the project's owner: `organization` for an organization, else `user`."""
+    return "organization" if board_seam().binding.kind == "orgs" else "user"
+def _graphql(query, variables, timeout):
+    """One fast-read page through the GitHub door: a refusal, a failure or a partial answer raises, so no page moves a card."""
+    out = ghread.graphql_read(query, variables, timeout=timeout, pass_name="fast-board")
+    if not out.is_answer: raise RuntimeError(out.line())
+    if out.partial: raise RuntimeError("partial answer: " + ", ".join(out.partial))
+    return out.answer
+def fast_board_pass():
+    """One fast read: the column inputs of the cards the cache holds, written where the snapshot is newer. A failed read moves nothing."""
+    observed = time.time()
+    try: nodes = board_fast.read_snapshot(_graphql, _fast_root(), OWNER, PROJECT_NO, _columns_module.TERMINAL, FAST_BUDGET, observed + FAST_DEADLINE)
+    except board_fast.SnapshotError as e:
+        set_part("status", err=str(e)[:80])
+        return
+    with _board_lock:
+        board_cache["items"] = board_fast.apply(board_cache.get("items") or [], board_fast.rows_of(nodes, REPO), int(observed))
+        set_part("status", err=None)
+        save_board()
+def refresh_fast():
+    """fast_board_pass() every FAST_EVERY seconds, on its own thread, so a full read never holds it."""
+    while True:
+        time.sleep(FAST_EVERY)
+        try: fast_board_pass()
+        except Exception as e: set_part("status", err=str(e)[:80])   # one failed fast pass never ends the loop
 def refresh_board():
-    """board_pass() every 60 s, or within 2 s of a board move made through scripts/board.sh (board-dirty flag).
+    """board_pass() every FULL_EVERY seconds, or within 2 s of a board move made through scripts/board.sh (board-dirty flag).
     The items route lags a write by seconds, so a pass a move asked for is read again 16 s later: the card never waits a minute in its old column."""
     quick = False
     while True:
         try: board_pass()
         except Exception as e: board_cache["err"] = str(e)[:80]   # one failed pass never ends the loop (#512): the next one still runs
-        for _ in range(8 if quick else 30):
+        for _ in range(8 if quick else FULL_EVERY // 2):
             time.sleep(2)
             try:
                 if (STATE / "board-dirty").stat().st_mtime > board_cache.get("t", 0): quick = True; break
@@ -6129,5 +6164,5 @@ def watch_self():
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 7700
     refresh_runs()
-    threading.Thread(target=refresh_prs, daemon=True).start(); threading.Thread(target=refresh_quota, daemon=True).start(); threading.Thread(target=watch_self, daemon=True).start(); threading.Thread(target=refresh_board, daemon=True).start(); threading.Thread(target=load_sampler, daemon=True).start(); threading.Thread(target=watch_runs, daemon=True).start()
+    threading.Thread(target=refresh_prs, daemon=True).start(); threading.Thread(target=refresh_quota, daemon=True).start(); threading.Thread(target=watch_self, daemon=True).start(); threading.Thread(target=refresh_board, daemon=True).start(); threading.Thread(target=refresh_fast, daemon=True).start();threading.Thread(target=load_sampler, daemon=True).start(); threading.Thread(target=watch_runs, daemon=True).start()
     ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
