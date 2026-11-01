@@ -144,14 +144,14 @@ def kind_label(kind):
     return kind.title() + "s"
 
 
-def kind_groups(kinds, rows):
+def kind_groups(kinds, rows, default_repo=""):
     """One open and one closed group for each kind, in that order, named by the table.
 
     The lane kinds carry one open group and no closed one: the pull request lane is open PRs for tracking, and a work
     branch has no lane at all, so the kinds view is where a branch is reached (#384, #440). Every other kind takes the open
-    and closed words. A row is `{"kd": kind, "closed": bool, ...}`, and its key is (kind, number), so a pull request and an
-    issue with one number are two items. A row of a kind not named here is not grouped: the pane draws what the kinds and
-    the table name."""
+    and closed words. A row is `{"kd": kind, "closed": bool, "r": repository, ...}`, and its key is kind, repository and
+    number, so two repositories sharing a number are two items. A row with no repository takes `default_repo`. A row of a
+    kind not named here is not grouped: the pane draws what the kinds and the table name."""
     words = {"open": "Open", "closed": "Closed"}
     open_only = (PR_KIND, BRANCH_KIND)
     names = {PR_KIND: {"open": LANES[0]["name"]}, BRANCH_KIND: {"open": kind_label(BRANCH_KIND)}}
@@ -159,7 +159,8 @@ def kind_groups(kinds, rows):
     for kind in (PR_KIND, BRANCH_KIND, *kinds):
         for state in ("open", "closed"):
             if kind in open_only and state == "closed": continue
-            items = [{**{k: v for k, v in r.items() if k not in ("kd", "closed")}, "k": kind, "key": f"{kind}:{r['n']}"}
+            items = [{**{k: v for k, v in r.items() if k not in ("kd", "closed")}, "k": kind,
+                      "key": f"{kind}:{r.get('r') or default_repo}#{r['n']}"}
                      for r in rows if r.get("kd") == kind and bool(r.get("closed")) == (state == "closed")]
             name = names.get(kind, {}).get(state) or f"{words[state]} {kind_label(kind)}"
             out.append({"kind": kind, "state": state, "name": name, "n": len(items), "items": items})
