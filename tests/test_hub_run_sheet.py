@@ -189,8 +189,9 @@ def test_live_and_ended_rows_open_the_sheet(hub):
     assert "openRun(" in draw, "a live run row does not open the sheet"
     ended = page[page.index("async function endedPoll("):]
     ended = ended[:ended.index("\n")]
-    assert "data-rid=" in ended and "target=_blank" not in ended, "a Last ended row still opens a new tab"
-    assert re.search(r'\$\("#ended"\)\.addEventListener\("click"', page)
+    # the ended rows feed the KPI and the sheet, not a panel: the Last ended card left the sidebar (owner, 2026-11-01)
+    assert "ENDED=rows" in ended and "drawMain()" in ended, "the ended rows no longer reach the board's figures"
+    assert '$("#ended")' not in page, "a script still writes the removed Last ended panel"
 
 
 def test_the_sheet_reads_the_record_and_pauses_through_the_existing_routes(hub):
