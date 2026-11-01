@@ -1,9 +1,9 @@
 # The project settings for this repository (squad/project_settings.py): only the keys the owner changed.
-# The owner lifted the one-wave soak: parallel waves come back. A run holds one slot and its fix run a second, so six slots let
-# three waves live at once on this 16 GB machine; the gate lock still runs one gate at a time.
+# The owner lifted the one-wave soak: parallel waves come back. A run holds one slot and its fix run a second, so eight slots let
+# four waves live at once on this 16 GB machine; the gate lock still runs one gate at a time.
 # The ceiling bounds every child's grant, and the owner granted a child cap up to 30 USD: a lower ceiling refuses the
 # dispatch node's own grant with spend_over_ceiling.
 caps:
-  runs: 6
+  runs: 8
 limits:
   max_budget_usd: 30
