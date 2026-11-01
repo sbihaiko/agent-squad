@@ -195,18 +195,22 @@ _RETIRED = set()   # the shared files this process has already renamed: an old h
 
 def _retire_legacy(path):
     """At first use of a repository's history in this process, the shared hub-flow.jsonl is renamed to hub-flow.jsonl.legacy:
-    its bytes stay, and nothing is deleted. A legacy name already taken is never overwritten. A file another process renamed
-    first is no error. A hub that still runs the old code writes the shared file again; this process renames it once only,
-    so a restart is the only thing that can add a legacy file."""
+    its bytes stay, and nothing is lost. A legacy file already there takes the shared bytes after its own, and the shared file
+    goes, so the folder never holds a numbered file. A file another process renamed first is no error. A hub that still runs
+    the old code writes the shared file again; this process retires it once only, so a restart is the only thing that can
+    add legacy bytes."""
     shared = path.with_name(SHARED_NAME)
     if str(shared) in _RETIRED or not shared.exists():
         return
     _RETIRED.add(str(shared))
     target = shared.with_name(f"{SHARED_NAME}.legacy")
-    if target.exists():
-        target = shared.with_name(f"{SHARED_NAME}.legacy.{os.getpid()}.{time.time_ns()}")
     try:
-        os.replace(shared, target)
+        if target.exists():
+            with target.open("ab") as legacy:
+                legacy.write(shared.read_bytes())
+            shared.unlink()
+        else:
+            os.replace(shared, target)
     except FileNotFoundError:
         pass
 

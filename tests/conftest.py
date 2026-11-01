@@ -27,11 +27,17 @@ def _hub_seam_defaults(tmp_path_factory):
     old = os.environ.get("SG_CHECKOUT")
     if not old:
         os.environ["SG_CHECKOUT"] = str(tmp_path_factory.mktemp("checkout"))
+    old_base = os.environ.get("SG_STATE_BASE")
+    os.environ["SG_STATE_BASE"] = str(tmp_path_factory.mktemp("state_base"))   # a loaded profile's board cache is never the machine's (#1000)
     yield
     if old is None:
         os.environ.pop("SG_CHECKOUT", None)
     else:
         os.environ["SG_CHECKOUT"] = old
+    if old_base is None:
+        os.environ.pop("SG_STATE_BASE", None)
+    else:
+        os.environ["SG_STATE_BASE"] = old_base
 
 
 DESIGN = Path(__file__).resolve().parent.parent / "docs" / "design"
