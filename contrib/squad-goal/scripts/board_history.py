@@ -77,6 +77,23 @@ def events_of(issue):
     return [e for e in map(_event, issue["timelineItems"]["nodes"]) if e]
 
 
+NOT_DELIVERED = ("not_planned", "duplicate")   # the close reasons the card view draws as Abandoned (#921)
+
+
+def child_events(child, spec, stored):
+    """The events a sub-issue of a spec adds to its stored timeline: it joins the spec and the board at its created instant,
+    and a closed one closes at its closed instant. A closed child whose timeline holds no Status takes Done, or Abandoned
+    when its close reason is not delivered (#1072)."""
+    created = child["created_at"]
+    events = [{"t": created, "type": "added"}, {"t": created, "type": "spec", "spec": spec}]
+    if child.get("closed_at"):
+        closed = child["closed_at"]
+        events.append({"t": closed, "type": "closed"})
+        if not any(e["type"] == "status" for e in stored):
+            events.append({"t": closed, "type": "status", "status": "Abandoned" if child.get("state_reason") in NOT_DELIVERED else "Done"})
+    return events
+
+
 def record_page(store, number, page, issue_updated, status_updated):
     """Merge one timeline page into the in-memory store: its events follow the stored ones, and its end cursor resumes the next read."""
     prev = store.get(number, {})
