@@ -32,6 +32,6 @@ grep -q '^other 0$' "$T/out.txt" && ok "the second repository's file holds nothi
 
 grep -q "board_history" "$here/hub.py" && ok "the hub loads the module" || ko "hub.py does not load board_history"
 grep -q 'instTile("GraphQL"' "$here/hub.py" \
-  && ok "the Monitor draws a GraphQL points tile" || ko "no GraphQL points tile in instTiles"
+  && ko "the Monitor still draws a GraphQL points tile" || ok "the Monitor draws no GraphQL tile; the points stay in the store"
 
 rm -rf "$T"; exit $fail
