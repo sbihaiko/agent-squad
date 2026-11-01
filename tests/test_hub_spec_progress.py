@@ -30,8 +30,10 @@ def hub():
     return mod
 
 
-def _item(n, st, s="OPEN", labels=("spec",), si=None, cr=None, pa=None, c=None):
+def _item(n, st, s="OPEN", labels=("spec",), si=None, cr=None, pa=None, c=None, o=None):
     i = {"n": n, "t": f"Spec {n}", "s": s, "st": st, "l": list(labels), "c": c}
+    if o is not None:
+        i["o"] = o
     if pa is not None:
         i["pa"] = pa
     if si is not None:
@@ -146,24 +148,24 @@ def _iso(t):
 
 
 NOSPEC = [
-    _item(20, "Todo", labels=("bug",)),                                          # open, no spec: counts, open
-    _item(21, "Doing", labels=()),                                               # open single ticket: counts, open
-    _item(22, "Closed", s="CLOSED", labels=("bug",), c=_iso(NOW - 2 * DAY)),     # closed 2 days ago: counts, done
-    _item(23, "Closed", s="CLOSED", labels=(), c=_iso(NOW - 10 * DAY)),          # closed 10 days ago: out of the window
-    _item(24, "Todo", s="CLOSED", labels=(), cr="not_planned", c=_iso(NOW - DAY)),   # abandoned: never counted
-    _item(25, "Todo", labels=("bug", "loop-bug")),                               # a loop bug has its own lane
-    _item(26, "Todo", labels=(), pa=1),                                          # a spec ticket
-    _item(27, "Closed", s="CLOSED", labels=()),                                  # closed with no closed-at: no instant to place it
+    _item(20, "Todo", labels=("bug",), o=_iso(NOW - 30 * DAY)),                   # open, opened long ago: counts, open
+    _item(21, "Doing", labels=(), o=_iso(NOW - 3 * DAY)),                         # open single ticket: counts, open
+    _item(22, "Closed", s="CLOSED", labels=("bug",), o=_iso(NOW - 3600), c=_iso(NOW - 600)),   # opened 1 h ago, closed: counts, done
+    _item(23, "Closed", s="CLOSED", labels=(), o=_iso(NOW - 2 * DAY), c=_iso(NOW - 3600)),     # opened 2 days ago, closed now: out
+    _item(24, "Todo", s="CLOSED", labels=(), cr="not_planned", o=_iso(NOW - 3600), c=_iso(NOW - 600)),   # abandoned: never counted
+    _item(25, "Todo", labels=("bug", "loop-bug"), o=_iso(NOW - 3600)),           # a loop bug has its own lane
+    _item(26, "Todo", labels=(), pa=1, o=_iso(NOW - 3600)),                      # a spec ticket
+    _item(27, "Closed", s="CLOSED", labels=()),                                  # closed with no opened-at: no instant to place it
 ]
 
 
-def test_no_spec_counts_open_cards_and_the_last_seven_days_closed(hub):
+def test_no_spec_counts_open_cards_and_the_closed_ones_opened_in_the_last_day(hub):
     assert hub.nospec_count(NOSPEC, moves={}, now=NOW) == {"closed": 1, "total": 3}
 
 
 def test_the_open_card_of_a_closed_spec_counts_as_no_spec(hub):
     items = [_item(30, "Closed", s="CLOSED", si=(1, 2), c=_iso(NOW - DAY)),
-             _item(31, "Todo", labels=(), pa=30), _item(32, "Closed", s="CLOSED", labels=(), pa=30, c=_iso(NOW - DAY))]
+             _item(31, "Todo", labels=(), pa=30), _item(32, "Closed", s="CLOSED", labels=(), pa=30, o=_iso(NOW - 3600), c=_iso(NOW - 60))]
     assert hub.nospec_count(items, moves={}, now=NOW) == {"closed": 0, "total": 1}
 
 
