@@ -8,6 +8,7 @@
 # coordinator deletes auto/bug-<n> to retry. It IS freed when mkreq.sh refuses the request (#1529), and when launch.py refuses the
 # start (#852): a dispatch that never happened must not mark the issue done, and its card goes back to Todo. The janitor frees it for a run that never starts (no record.jsonl, rule J, at
 # most twice) or that ends with a failed verdict and nothing landed (janitor rule O, which also puts the cards back). SG_AUTO_BUGFIX=no turns it off.
+# The card write comes before the launch: a dispatch is a pending ledger event until its write lands (#1021, ADR-0164).
 . "$(dirname "$0")/env.sh"; . "$(dirname "$0")/startability.sh"; . "$(dirname "$0")/refusal-names.sh"; . "$(dirname "$0")/workbranches.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
 export SG_GH_PASS=autobug   # the pass that spends the GitHub calls below, named in the call log (ADR-0277)
 export SG_FILE_PASS="autobug-$$-$(date +%s)"   # the filings of THIS pass share one ceiling (#140): a fresh pass is never held by the ledger of one that ended
@@ -93,6 +94,60 @@ sg_issue_body() {
   printf '%s' "$j" | grep -q "\"number\":[[:space:]]*$1\b" || return 2
   printf '%s' "$j"
 }
+# ---- The card write before the launch (#1021, ADR-0164) ----------------------------------------------------------
+# A dispatch is an event the ledger holds pending before its card write, and its launch comes only after that write.
+# A write that did not land stays pending, and the next pass writes it again (ab_resume) before anything launches.
+doing="In Progress"; [ "${SG_BOARD_VOCAB:-}" = shipped ] && doing=Doing   # "In Progress" is no column on the shipped vocabulary (#249)
+ab_column() {   # <ledger column>: the board's name of that column
+  case "$1" in Doing) echo "$doing";; Todo) echo "${SG_TODO:-Todo}";; esac
+}
+ab_board_event() {   # <run> <ledger column> <request> <issue>...: records each issue's event pending, before its write
+  local run=$1 col=$2 req=$3 n; shift 3
+  for n in "$@"; do python3 "$here/issue_ledger.py" board "$SG_REPO#$n" "$run" "$col" "$req" >/dev/null || return 1; done
+}
+ab_board_write() {   # <run> <ledger column> <issue>...: the card write of those events, then each event is marked written
+  local run=$1 col=$2 bc ids n; shift 2
+  bc=$(ab_column "$col"); ids=$(printf '#%s ' "$@"); ids=${ids% }
+  sg_write BOARD-WRITE-FAILED "$SG_OWNER/$SG_PROJECT $ids -> $bc" \
+    "the cards $ids of the run this pass requested ($run)" \
+    "contrib/squad-goal/scripts/test-autobug.sh (a refused write opens one bug)" \
+    -- $BOARD --add $SG_OWNER $SG_PROJECT "$bc" "$@" || return 1
+  for n in "$@"; do python3 "$here/issue_ledger.py" boardw "$SG_REPO#$n" "$run" "$col" >/dev/null || return 1; done
+}
+ab_launch() {   # <request> <run>: 0 when launch.py takes the request past its refusal window; a refusal names itself in the run's log
+  (cd "$SG_CHECKOUT" && python3 -c 'import subprocess,sys
+p=subprocess.Popen(["python3",sys.argv[1],sys.argv[2]],stdout=open(sys.argv[3],"w"),stderr=subprocess.STDOUT,start_new_session=True)
+try: rc=p.wait(timeout=30)
+except subprocess.TimeoutExpired: rc=0
+sys.exit(rc)' "$here/launch.py" "$1" "$SG_STATE/$2.log")
+}
+ab_free_refused() {   # <run> <request> <issue>...: a refused launch frees its claim and puts its cards back to Todo
+  local run=$1 req=$2 why cards n; shift 2
+  for n in "$@"; do rm -f "$A/bug-$n" "$A/disp-$n"; done
+  why=$(/usr/bin/grep -m1 -E '^refused' "$SG_STATE/$run.log" 2>/dev/null || tail -1 "$SG_STATE/$run.log" 2>/dev/null)
+  ab_board_event "$run" Todo "$req" "$@" && ab_board_write "$run" Todo "$@"
+  cards=$(printf '#%s ' "$@")
+  printf '%s AUTOBUG refused: %s launch refused by launch.py (request %s): %s; claim freed, card back to Todo\n' "$(date '+%F %T')" "${cards% }" "$run" "$why" >> "$SG_STATE/alerts.log"
+  echo "AUTOBUG $run refused by launch.py: $why; freed its claim, card back to Todo, next pass retries" >&2
+}
+ab_resume() {   # the pending events of earlier passes: each run's cards are written, then its stored request launches once
+  local groups run col req ids n
+  groups=$(python3 "$here/issue_ledger.py" pending "$SG_REPO" 2>/dev/null | awk -F'\t' 'NF>=5 { k=$2 "\t" $3 "\t" $5; ids[k]=ids[k] " " $1 } END { for (k in ids) print k "\t" substr(ids[k], 2) }')
+  while IFS=$'\t' read -r run col req ids <&3; do
+    [ -n "$run" ] || continue
+    sg_self_filed=""; for n in $ids; do gh_api "repos/$SG_REPO/issues/$n" 2>/dev/null | /usr/bin/grep -qE '\[SQUAD\] refused|Filed by autobug' && sg_self_filed+="$n "; done
+    if [ "$col" = Todo ]; then ab_board_write "$run" Todo $ids; continue; fi
+    if [ ! -f "$req" ]; then ab_board_event "$run" Todo "$req" $ids && ab_board_write "$run" Todo $ids; continue; fi
+    [ "$free" -gt 0 ] || continue
+    ab_board_write "$run" Doing $ids || continue
+    for n in $ids; do echo "$run" > "$A/bug-$n"; done
+    if ab_launch "$req" "$run"; then
+      free=$((free - 1)); echo "AUTOBUG $run: its pending card write landed; its stored request is launched" >&2
+    else
+      ab_free_refused "$run" "$req" $ids
+    fi
+  done 3<<<"$groups"
+}
 [ "${SG_AUTO_BUGFIX:-yes}" = yes ] || exit 0; [ -e "$A/off" ] && exit 0
 [ -e "$SG_STATE/token-pause" ] && exit 0   # the token guard paused dispatch: the hourly burn stays over 3x the cap (token-guard.sh)
 # One pass at a time (#1514): a pass starting inside another one's pick sees every issue unmarked and dispatches the
@@ -174,6 +229,9 @@ gh_loop_stop "$F/issues.json" && exit 0
 # Too many finished children wait for review (#562): a new run only adds more, so the pass holds until childcc catches up.
 gh_dispatch_hold && exit 0
 gh_disk_stop && exit 0
+[ -n "${AB_DRY:-}" ] || ab_resume
+[ "$free" -gt 0 ] || exit 0
+pendset=" $(python3 "$here/issue_ledger.py" pending "$SG_REPO" 2>/dev/null | cut -f1 | tr '\n' ' ') "
 # The column Todo is the owner's go signal, and the go label says an agent may take the issue (#550): a candidate needs both.
 go=${SG_FRONTIER_LABEL:-ready-for-agent}
 todo=$(sg_todo_cards) || { echo "AUTOBUG: the board did not answer; nothing dispatched this pass" >&2; exit 0; }
@@ -207,6 +265,7 @@ for sel in "$lab" debt; do
   while IFS=$'\x1f' read -r n labels; do
     [ -n "$n" ] || continue; case "$n" in *[!0-9]*) echo "AUTOBUG: dropping candidate '$n': not a decimal issue number" >&2; exit 0;; esac   # before any gate, so a word is named, never dropped in silence (#1855)
     sg_dispatch_claimed "$n" && continue; case "$refs" in *" $n "*) continue;; esac; case ",$busy," in *",$n,"*) continue;; esac
+    case "$pendset" in *" $n "*) echo "AUTOBUG skip #$n: its card write is pending (ADR-0164)"; continue;; esac
     s=0; for k in ${skip//,/ }; do case ",$labels," in *",$k,"*) s=1;; esac; done; [ $s = 1 ] && continue
     case ",$labels," in *",$go,"*) ;; *) continue;; esac; case "$todo" in *" $n "*) ;; *) continue;; esac   # no go label, or the card is not in Todo: not started
     # ... and an issue the loop itself marked not startable is not a candidate either: a repeated identical failure is a
@@ -296,22 +355,17 @@ log="$SG_STATE/$name.log"
 # the issue forever, and its card stayed in Doing with no run behind it. The launch stays detached; only its refusal window is
 # waited on (30 s: a start still waiting for its run folder is no refusal). A refusal frees exactly what this pass claimed, puts
 # the cards back to Todo through the board door, and names the refusal in alerts.log.
-if ! (cd "$SG_CHECKOUT" && python3 -c 'import subprocess,sys
-p=subprocess.Popen(["python3",sys.argv[1],sys.argv[2]],stdout=open(sys.argv[3],"w"),stderr=subprocess.STDOUT,start_new_session=True)
-try: rc=p.wait(timeout=30)
-except subprocess.TimeoutExpired: rc=0
-sys.exit(rc)' "$here/launch.py" "$req" "$log"); then
-  why=$(/usr/bin/grep -m1 -E '^refused' "$log" 2>/dev/null || tail -1 "$log" 2>/dev/null)
-  for n in "${pick[@]}"; do rm -f "$A/bug-$n" "$A/disp-$n"; done
-  refused_cards="$(printf '#%s ' "${pick[@]}")"
-  sg_write BOARD-WRITE-FAILED "$SG_OWNER/$SG_PROJECT ${refused_cards% } -> ${SG_TODO:-Todo}" \
-    "the cards ${refused_cards% } of the refused run this pass requested ($name)" \
-    "contrib/squad-goal/scripts/test-autobug.sh (a refused write opens one bug)" \
-    -- $BOARD --add $SG_OWNER $SG_PROJECT "${SG_TODO:-Todo}" "${pick[@]}"
-  printf '%s AUTOBUG refused: %s launch refused by launch.py (request %s): %s; claim freed, card back to Todo\n' "$(date '+%F %T')" "${refused_cards% }" "$name" "$why" >> "$SG_STATE/alerts.log"
-  echo "AUTOBUG $name refused by launch.py: $why; freed its claim, card back to Todo, next pass retries" >&2
-  exit 0
-fi
+# The picked issues autobug filed itself (#403): a "[SQUAD] refused" title or a "Filed by autobug" body line. A refused
+# card write on one of them is logged by sg_refused, never filed (no recursion).
+sg_self_filed=$(printf '%s' "$cj" | python3 -c 'import json, sys
+pick = set(sys.argv[1:])
+try: items = json.load(sys.stdin)
+except Exception: items = []
+print(" ".join(str(i.get("number")) for i in items if isinstance(i, dict) and str(i.get("number")) in pick
+      and ((i.get("title") or "").startswith("[SQUAD] refused") or "Filed by autobug" in (i.get("body") or ""))))' "${pick[@]}" 2>/dev/null)
+ab_board_event "$name" Doing "$req" "${pick[@]}" || { for n in "${pick[@]}"; do rm -f "$A/bug-$n"; done; echo "AUTOBUG $name held: the ledger did not record its card write; nothing launched" >&2; exit 0; }
+ab_board_write "$name" Doing "${pick[@]}" || { for n in "${pick[@]}"; do rm -f "$A/bug-$n"; done; echo "AUTOBUG $name held: its card write is pending; nothing launched, the next pass writes it" >&2; exit 0; }
+ab_launch "$req" "$name" || { ab_free_refused "$name" "$req" "${pick[@]}"; exit 0; }
 hunt_fix=0; now=$(date +%s)
 for c in "${clusters[@]}"; do set -- $c; p=$1
   for n in "$@"; do echo "$name" > "$A/bug-$n"
@@ -325,26 +379,7 @@ for c in "${clusters[@]}"; do set -- $c; p=$1
     fi
     if [ "$n" = "$p" ]; then printf "Bug fix dispatched automatically (autobug loop, request %s; TDD with the RED output in the issue status comment)%s. The run id is in %s once it starts.\n" "$name" "$([ $# -gt 1 ] && echo "; clustered with ${c#* } as one root cause, one branch")" "${log##*/}"
     else printf "Clustered with #%s as one probable root cause (same area within the window, or a shared file): fixed on that one branch, not a separate one (autobug request %s).\n" "$p" "$name"; fi > "$(sg_cq_file "$n-autobug$$.md")"; done; done
-# The cards move through the one write door (#145): a refusal is named, logged and filed, never swallowed by a `2>&1`.
-# The move carries --add (#188): the issues of this dispatch include the ones the loop filed itself, and a card the board
-# does not carry yet made the plain move a refusal ("#N not on the board") that the door then filed as one more bug, whose
-# own dispatch was refused the same way -- the pass fed itself the same defect. --add is the idempotent add-then-move every
-# other board writer uses (board.py, janitor rule R, reconcile.py, the frontier dispatch): a card the board does not carry
-# is added with its status, and a card it already carries is answered "already exists" and moved.
 cards="$(printf '#%s ' "${pick[@]}")"
-doing="In Progress"; [ "${SG_BOARD_VOCAB:-}" = shipped ] && doing=Doing   # "In Progress" is no column on the shipped vocabulary (#249)
-# The picked issues autobug filed itself (#403): a "[SQUAD] refused" title or a "Filed by autobug" body line. A refused
-# card write on one of them is logged by sg_refused, never filed (no recursion).
-sg_self_filed=$(printf '%s' "$cj" | python3 -c 'import json, sys
-pick = set(sys.argv[1:])
-try: items = json.load(sys.stdin)
-except Exception: items = []
-print(" ".join(str(i.get("number")) for i in items if isinstance(i, dict) and str(i.get("number")) in pick
-      and ((i.get("title") or "").startswith("[SQUAD] refused") or "Filed by autobug" in (i.get("body") or ""))))' "${pick[@]}" 2>/dev/null)
-sg_write BOARD-WRITE-FAILED "$SG_OWNER/$SG_PROJECT ${cards% } -> $doing" \
-  "the cards ${cards% } of the run this pass requested ($name)" \
-  "contrib/squad-goal/scripts/test-autobug.sh (a refused write opens one bug)" \
-  -- $BOARD --add $SG_OWNER $SG_PROJECT "$doing" "${pick[@]}"
 [ -n "${SG_BUG_PROJECT:-}" ] && sg_write BOARD-WRITE-FAILED "$SG_OWNER/$SG_BUG_PROJECT ${cards% } -> ${SG_BUG_DOING:-$doing}" \
   "the cards ${cards% } of the run this pass requested ($name)" \
   "contrib/squad-goal/scripts/test-autobug.sh (a refused write opens one bug)" \
