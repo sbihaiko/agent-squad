@@ -6,8 +6,8 @@ header{display:flex;gap:8px;align-items:center;padding:8px 12px;border-bottom:1p
 /* The project switcher (#876): the header names the project; a tap opens the list in a sheet, rows 44 px tall. */
 #profile{flex:1;min-width:0;min-height:44px;display:flex;align-items:center;gap:8px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:0 10px;font-size:var(--fs-body);text-align:left}
 #pswm{color:var(--mute);font-size:var(--fs-min);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
-#psheet{position:fixed;left:0;right:0;bottom:0;max-height:70vh;overflow:auto;background:var(--panel);border-top:1px solid var(--line);border-radius:14px 14px 0 0;padding:10px 14px calc(14px + env(safe-area-inset-bottom));z-index:25}
-#psheet[hidden]{display:none}
+#psheet{position:fixed;left:0;right:0;bottom:0;max-height:70vh;overflow:auto;background:var(--panel);border-top:1px solid var(--line);border-radius:14px 14px 0 0;padding:10px 14px calc(14px + env(safe-area-inset-bottom));z-index:25;translate:0 0;transition:translate .22s ease-out}
+#psheet[hidden]{display:none;translate:0 100%;pointer-events:none;transition:translate .16s ease-in,display .16s ease-in allow-discrete}
 #pswl a{display:flex;flex-direction:column;justify-content:center;min-height:44px;padding:6px 0;border-bottom:1px solid var(--line);color:var(--fg);text-decoration:none;font-size:var(--fs-body)}
 #pswl a[aria-current=page]{color:var(--acc)}
 #pswl .repo,#pswl .psw-m{color:var(--mute);font-size:var(--fs-min)}
@@ -61,8 +61,8 @@ h2{font-size:var(--fs-md);margin:6px 0 10px}
 .lane-h .ltt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg)}
 .lane-h .pc{color:var(--mute);font-size:var(--fs-min)}
 /* The ticket sheet takes about 60% of the screen (#919), so the card it names stays visible above it. */
-#sheet{position:fixed;left:0;right:0;bottom:0;height:60vh;max-height:60vh;overflow:auto;overscroll-behavior:contain;touch-action:pan-y;background:var(--panel);border-top:1px solid var(--line);border-radius:14px 14px 0 0;padding:10px 14px calc(68px + env(safe-area-inset-bottom));z-index:20}
-#sheet[hidden]{display:none}
+#sheet{position:fixed;left:0;right:0;bottom:0;height:60vh;max-height:60vh;overflow:auto;overscroll-behavior:contain;touch-action:pan-y;background:var(--panel);border-top:1px solid var(--line);border-radius:14px 14px 0 0;padding:10px 14px calc(68px + env(safe-area-inset-bottom));z-index:20;translate:0 0;transition:translate .22s ease-out}
+#sheet[hidden]{display:none;translate:0 100%;pointer-events:none;transition:translate .16s ease-in,display .16s ease-in allow-discrete}
 .grab{width:40px;height:4px;border-radius:2px;background:var(--line);margin:0 auto 10px}
 #sh-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px}
 #sh-head button,#sh-next{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:0 12px;font-size:var(--fs-body)}
@@ -154,6 +154,16 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 #5aa9ff}
 #undo-text{flex:1;font-size:var(--fs-body)}
 #undo button{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:0 12px;font-size:var(--fs-body)}
 #undo button[hidden]{display:none}
+/* Motion in the language of the desktop lane fade (owner, 2026-11-01): what comes in eases out, what goes eases in, and
+   nothing waits on it. A sheet slides up from the bottom edge and back down. A card the last render did not draw fades in;
+   a lane that shuts folds its cards away; reduced motion turns all of it off. */
+@starting-style{#sheet:not([hidden]),#psheet:not([hidden]){translate:0 100%}}
+.card.cin{animation:cin .2s ease-out}
+@keyframes cin{from{opacity:0;translate:0 6px}}
+.lout{display:grid;grid-template-rows:0fr;opacity:0;margin-top:-8px;pointer-events:none;animation:lout .16s ease-in}
+.lout>div{min-height:0;overflow:hidden;display:flex;flex-direction:column;gap:8px}
+@keyframes lout{from{grid-template-rows:1fr;opacity:1;margin-top:0}}
+@media (prefers-reduced-motion: reduce){.card.cin,.lout,#sheet,#sheet[hidden],#psheet,#psheet[hidden]{animation:none;transition:none}}
 </style>
 <header>
 <button id="profile" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="psheet"><b id="pswn">projects</b> <span id="pswm"></span></button>
@@ -405,7 +415,9 @@ $("loop-confirm-no").onclick = () => { $("loop-confirm").hidden = true; };
 loopView();
 setInterval(loopView, 5000);
 
-let board = null, shown = [], issueKey = "", touch = null;
+let board = null, shown = [], issueKey = "", touch = null, seenCards = null;
+const cardKey = x => (x.r || "") + "#" + x.n;
+const motionOk = () => typeof matchMedia === "function" && !matchMedia("(prefers-reduced-motion: reduce)").matches;
 const reasons = {};   // issue number -> {why, col}: a refusal the card reads on every render, until its card moves again
 const rowColumn = n => { for (const g of (board && board.groups) || []) if (g.items.some(i => i.n === n)) return g.name; return ""; };
 let view = { col: 0, cols: 0, card: 0, cards: 0, sheet: false };
@@ -481,11 +493,18 @@ function renderBoard() {
   empty.className = "empty";
   empty.textContent = emptyColumnNote({ groups: groups.length, shown: cols.length, filtered: (bo.labels || []).length > 0 || specMode() !== 0 });
   // Each lane heads its cards; a collapsed lane shows its header only. The card index counts the cards the column draws.
+  // Only a card the last render did not draw fades in (freshCards), so the poll never plays the fade again.
+  const keys = shown.map(cardKey), fresh = new Set(board ? freshCards(seenCards, keys) : []);
+  seenCards = board ? keys : null;
   const nodes = [];
   let i = 0;
   for (const l of model.lanes) {
     nodes.push(laneHeader(l));
-    if (!l.collapsed) for (const x of l.cards) nodes.push(cardButton(x, i++));
+    if (!l.collapsed) for (const x of l.cards) {
+      const b = cardButton(x, i++);
+      if (fresh.has(cardKey(x))) b.classList.add("cin");
+      nodes.push(b);
+    }
   }
   $("cards").replaceChildren(...(nodes.length ? nodes : [empty]));
 }
@@ -718,10 +737,30 @@ $("undo-btn").onclick = () => cancelMove("undo");
 addEventListener("visibilitychange", () => { if (document.hidden) cancelMove("hidden"); });
 addEventListener("pagehide", () => cancelMove("hidden"));
 // A tap on a lane header opens or shuts that spec's lane on every column, and the choice is kept on the device (#893).
+// A lane that shuts folds its cards away (owner, 2026-11-01): the board is drawn at once, and the old cards, with no role
+// and no number, fold under the header and are removed, so nothing waits on the motion.
 const laneTap = h => {
+  const leaving = h.dataset.coll !== "1" && motionOk() ? laneCards(h) : [];
   bo.mlc = { ...(bo.mlc || {}), [h.dataset.lane]: h.dataset.coll !== "1" };
   saveB(); refresh();
+  if (leaving.length) laneOut(h.dataset.lane, leaving);
 };
+const laneCards = h => {
+  const out = [];
+  for (let e = h.nextElementSibling; e && !e.classList.contains("lane-h"); e = e.nextElementSibling) if (e.classList.contains("card")) out.push(e);
+  return out;
+};
+function laneOut(id, cards) {
+  const h = [...$("cards").querySelectorAll(".lane-h")].find(e => e.dataset.lane === id);
+  if (!h) return;
+  const g = document.createElement("div"), inner = document.createElement("div");
+  g.className = "lout"; g.setAttribute("aria-hidden", "true"); g.inert = true;
+  for (const c of cards) { delete c.dataset.role; delete c.dataset.n; delete c.dataset.i; c.classList.remove("cin"); inner.append(c); }
+  g.append(inner); h.after(g);
+  const drop = () => g.remove();
+  g.addEventListener("animationend", drop);
+  setTimeout(drop, 400);
+}
 $("cards").onclick = e => {
   const h = e.target.closest(".lane-h");
   const b = e.target.closest(".card");
