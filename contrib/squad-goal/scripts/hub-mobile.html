@@ -17,9 +17,14 @@ header a{color:#5aa9ff;font-size:var(--fs-min);white-space:nowrap}
 main{padding:12px 12px 84px}
 section[hidden]{display:none}
 h2{font-size:var(--fs-md);margin:6px 0 10px}
+/*INST_CSS*/
+/* The Monitor tab: the desktop's card at phone width. The card is always open here; its loop control is 44 px tall. */
+#inst{display:block}#inst>summary{list-style:none;display:flex;align-items:baseline;gap:8px;font-size:var(--fs-md);font-weight:600;margin:6px 0 10px;min-height:44px;align-items:center}
+#inst>summary::-webkit-details-marker{display:none}#instsr{color:var(--mute);font-size:var(--fs-min);font-weight:400}
+#inst .ig svg{width:100%;max-width:90px;height:auto}
 #loop{padding:12px;border-radius:8px;background:var(--panel);border:1px solid var(--line)}
 #loop.on #loop-text{color:var(--ok)}#loop.off #loop-text{color:var(--err)}#loop.draining #loop-text,#loop.starting #loop-text{color:var(--warn,#d4a017)}
-#loop-ctl{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}#loop-ctl button:disabled{opacity:.45}#loop-reason:not(:empty){color:var(--muted,#8a8f98)}
+#loop-ctl{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}#loop-ctl button,#loop-confirm button{min-height:44px;padding:0 14px}#loop-ctl button:disabled{opacity:.45}#loop-reason:not(:empty){color:var(--muted,#8a8f98)}
 #loop-confirm{border:1px solid var(--err);border-radius:8px;padding:10px;margin:8px 0}
 .tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:12px 0}
 .tile{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 6px;text-align:center}
@@ -28,7 +33,6 @@ h2{font-size:var(--fs-md);margin:6px 0 10px}
 #warnings{list-style:none;padding:0;margin:0}
 #warnings li{padding:12px 4px;border-bottom:1px solid var(--line);color:var(--warn);min-height:44px}
 #warn-detail{margin-top:10px;padding:12px;background:var(--panel);border-radius:8px;color:var(--mute);white-space:pre-wrap}
-#load{color:var(--mute);margin-top:12px;font-variant-numeric:tabular-nums}
 #msg,#bmsg{color:var(--err)}
 #bhead{display:flex;align-items:center;gap:8px;touch-action:pan-y}
 #bhead button{min-width:44px;min-height:44px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:6px;font-size:var(--fs-xl)}
@@ -162,8 +166,9 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 #5aa9ff}
 </div>
 <div id="reconnect" hidden><p>The hub does not answer. Check Tailscale and that the machine is awake.</p><button id="retry" type="button">Try again</button></div>
 <main>
-<section data-panel="status">
-<h2>Status</h2>
+<section data-panel="monitor">
+<!--INST_CARD-->
+<div id=loop-box>
 <div id=loop><span id=loop-text>loading</span></div>
 <div id=loop-ctl>
 <button id=loop-start type=button>Start</button>
@@ -173,6 +178,7 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 #5aa9ff}
 <p id=loop-reason></p>
 <div id=loop-confirm hidden><p id=loop-confirm-text></p><button id=loop-confirm-go type=button>Stop now</button><button id=loop-confirm-no type=button>Cancel</button></div>
 <details id=loop-log-box><summary>Change log</summary><ol id=loop-log></ol></details>
+</div>
 <div class=tiles>
 <div class=tile><b id=t-live>-</b><span>live runs</span></div>
 <div class=tile><b id=t-spend>-</b><span>spend today</span></div>
@@ -181,7 +187,6 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 #5aa9ff}
 <h2>Warnings</h2>
 <ul id=warnings></ul>
 <div id=warn-detail hidden></div>
-<div id=load></div>
 <p id=msg></p>
 </section>
 <section data-panel="board" hidden>
@@ -278,7 +283,7 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 #5aa9ff}
 <div id="runbody"><iframe id="runframe" title="Run dashboard"></iframe><div id="edge" data-role="edge"></div></div>
 </section>
 <nav>
-<button data-tab="status">Status</button>
+<button data-tab="monitor">Monitor</button>
 <button data-tab="board">Board</button>
 <button data-tab="runs">Runs</button>
 <button data-tab="terminals">Terminals</button>
@@ -335,10 +340,21 @@ async function status() {
       li.onclick = () => detail(w);
       return li;
     }));
-    $("load").textContent = s.load.line;
   } catch (e) { $("msg").textContent = e.message; $("reconnect").hidden = !e.down; }
 }
 $("retry").onclick = status;
+// The Monitor (#983) draws with the desktop's own code, substituted here when the hub serves the page. It reads `$` as a
+// selector and `esc`, so it gets both in its own scope; the hub decides every tone and text (ADR-0137).
+const inst = (() => {
+const $ = s => document.querySelector(s), esc = s => escHTML(s);
+/*INST_JS*/
+return { instDraw, instTick };
+})();
+$("iloop").append($("loop-box"));   // the loop row of the card is this page's own control, which obeys the hub's actions
+async function loadPoll() { try { inst.instDraw(await call("/api/load")); } catch (e) {} }
+loadPoll();
+setInterval(loadPoll, 5000);
+setInterval(inst.instTick, 1000);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/mobile/sw.js", { scope: "/mobile/" }).catch(() => {});
 status();
 setInterval(status, 5000);
@@ -1033,6 +1049,8 @@ $("termview-send").onclick = async () => {
 };
 setInterval(() => { if (!termOpen() && !document.querySelector('[data-panel="terminals"]').hidden) loadSessions(); }, 10000);
 // terminals:end
+// The first tab was "Status" before it became the Monitor: a stored "status" opens the Monitor.
+function tabOf(s) { const t = s === "status" ? "monitor" : s; return tabs.some(b => b.dataset.tab === t) ? t : tabs[0].dataset.tab; }
 const last = localStorage.getItem("squad-mobile-tab");
-show(tabs.some(b => b.dataset.tab === last) ? last : tabs[0].dataset.tab);
+show(tabOf(last));
 </script>

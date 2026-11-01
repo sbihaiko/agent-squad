@@ -1989,7 +1989,7 @@ def load_payload():
             "secs": LOAD_SAMPLE_SECS, "asof": LOAD_STATE.get("asof", 0.0)}
 
 def status_payload():
-    """What the mobile Status tab reads: the facts the hub computes, never a figure the page works out."""
+    """What the mobile Monitor tab reads below its card: the facts the hub computes, never a figure the page works out."""
     items = board_cache.get("items") or []
     return {"loop": loop_status(),
             "live": sum(1 for r in run_list() if r.get("live")),
@@ -3978,6 +3978,7 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 .madd select{flex:1;min-width:0;height:var(--ctl-h);background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;font-size:var(--fs-min)}#mbody .lead{margin:4px 0 8px}#mbody details.hlp{margin-top:10px}#mbody details.hlp summary{cursor:pointer;color:var(--acc)}
 @media (max-width:600px){#tab-set .swrap{display:block}#tab-set .snav{display:none}#tab-set .ssel{display:flex;gap:8px;align-items:center;margin-bottom:8px}header.top{flex-wrap:wrap}.tabs{order:3;flex:1 0 100%;overflow-x:auto}#tab-set .ssel select{min-height:44px;flex:1}.mr .ct{flex-direction:column;align-items:flex-start}.mr .mb button,.mtg,.madd select,.mr .ef,.mr .hr,#sbar button{min-height:44px;min-width:44px}.mtab th:nth-child(2),.mtab td:nth-child(2){display:none}}
 #mobile-link{color:var(--acc)}
+/* INST-CSS{ */
 /* Monitor (#983): calm flight instruments in the sidebar. Three gauges, three annunciator tiles, two rows. No motion
    but the needle's own short move, and none at all under reduced motion. */
 #inst .igs{display:flex;justify-content:space-between;gap:4px;margin:2px 0 8px}#inst .ig{display:flex;flex-direction:column;align-items:center;flex:1;min-width:0}
@@ -3995,6 +3996,7 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 #inst .irw{display:flex;justify-content:space-between;align-items:baseline;gap:8px;padding:3px 0;border-top:1px solid var(--line);font-size:var(--fs-min);color:var(--mute)}
 #inst .irw b{color:var(--fg);font-weight:600;font-variant-numeric:tabular-nums;text-align:right;min-width:0;overflow-wrap:anywhere}#inst .irw b.bad{color:var(--warn)}
 @media (prefers-reduced-motion: reduce){#inst .ig .gn{transition:none}}
+/* }INST-CSS */
 </style>
 <div id=who>__WHO__</div>
 <script>// One read per URL at a time (#917): a timer fires on a fixed beat whether or not its last read came back, and a slow route
@@ -5694,7 +5696,14 @@ RUN_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-run.js").read_te
 # The card rules of the desktop board (#917): spec color and wave, one block of board-lanes.js, so the mobile page holds no
 # rule of its own and never the board's column names (ADR-0137).
 CARD_RULES_JS = re.search(r"// <card-rules>.*?// </card-rules>", (pathlib.Path(__file__).resolve().parent / "board-lanes.js").read_text(), re.S).group(0)
-MOBILE_PAGE = (pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text().replace("/*SWITCHER_JS*/", SWITCHER_JS).replace("/*GESTURE*/", GESTURE_JS).replace("/*MOVE*/", MOVE_JS).replace("/*RUN*/", RUN_JS).replace("/*BOARD_FILTER*/", BOARD_FILTER_JS).replace("/*WEB_TOKENS*/", WEB_TOKENS).replace("/*CARD_RULES*/", CARD_RULES_JS)
+# The Monitor card (#983) on the phone's first tab: its markup, style and script are cut from the desktop page, never
+# copied, so one change draws both. The cell helpers and the ceiling ride along; the repository and the ceiling are this hub's.
+INST_CARD = re.search(r"<details id=inst\b.*?</details>", PAGE, re.S).group(0)
+INST_CSS = re.search(r"^/\* INST-CSS\{ \*/$.*?^/\* \}INST-CSS \*/$", PAGE, re.M | re.S).group(0)
+INST_JS = "\n".join([re.search(r"^const LOAD_ERR=.*$", PAGE, re.M).group(0),
+                     *re.findall(r"^function ld(?:Num|Round|Cell|Cells)\(.*$", PAGE, re.M),
+                     re.search(r"^// INST\{.*?^// \}INST$", PAGE, re.M | re.S).group(0)]).replace("__LOADERR__", str(LOAD_ERR_PCT)).replace("__REPO__", REPO)
+MOBILE_PAGE = (pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text().replace("<!--INST_CARD-->", INST_CARD).replace("/*INST_CSS*/", INST_CSS).replace("/*INST_JS*/", INST_JS).replace("/*SWITCHER_JS*/", SWITCHER_JS).replace("/*GESTURE*/", GESTURE_JS).replace("/*MOVE*/", MOVE_JS).replace("/*RUN*/", RUN_JS).replace("/*BOARD_FILTER*/", BOARD_FILTER_JS).replace("/*WEB_TOKENS*/", WEB_TOKENS).replace("/*CARD_RULES*/", CARD_RULES_JS)
 MOBILE_SHELL = ["/mobile/", "/mobile/manifest.webmanifest", "/mobile/icon.svg"]
 SW_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-sw.js").read_text().replace("/*SHELL*/[]", json.dumps(MOBILE_SHELL))
 MANIFEST_JSON = json.dumps({"id": "/mobile/", "name": f"Squad hub {REPO}", "short_name": "Hub", "start_url": "/mobile/", "scope": "/mobile/", "display": "standalone", "background_color": "#0f1115", "theme_color": "#0f1115", "icons": [{"src": "/mobile/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}]}).encode()
