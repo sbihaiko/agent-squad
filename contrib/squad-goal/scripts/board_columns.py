@@ -104,11 +104,16 @@ def past(have, want):
 
 
 UNCLAIM = ("Doing", "Todo")   # the one backward move: the loop's dispatch undoes its own claim (ADR-0143)
+NO_LANDING = "no-landing"     # the reason a run that landed nothing gives: the column the loop set goes back to Todo (#1059)
 
 
-def refused_for_automated(have, want):
-    """True when an automated writer may not move a card from `have` to `want`; a card with no column takes its first one."""
-    return bool(have) and (have, want) != UNCLAIM and past(have, want)
+def refused_for_automated(have, want, reason=None):
+    """True when an automated writer may not move a card from `have` to `want`; a card with no column takes its first one.
+    A run that lands nothing undoes the column the loop itself set: that unclaim reaches Todo and no other column (#1059)."""
+    if not have: return False
+    if (have, want) == UNCLAIM: return False
+    if reason == NO_LANDING and want == "Todo": return False
+    return past(have, want)
 
 
 # The close reason GitHub's issue carrier answers for an issue it closed without delivering it (#921): `state_reason`

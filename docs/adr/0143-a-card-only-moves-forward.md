@@ -22,8 +22,11 @@ column its work never reached.
    loop's ([ADR-0142](0142-a-spec-is-never-work.md)). An open issue with no card
    gets a column once, when the loop first sees it: Todo for a bug, Backlog for anything else. A card
    that has a column keeps it until work moves it forward.
-   **The one backward move:** a run that ends with nothing delivered returns its card from Doing to
-   Todo. The dispatch moved the card out of Todo, so the loop undoes its own claim.
+   **The one backward move:** a run that ends with nothing delivered returns its card to Todo,
+   whatever column it left it in. The dispatch moved the card out of Todo and the run moved it on, so
+   the loop undoes its own work; the move names that reason, `SG_MOVE_REASON=no-landing`, and the
+   exception reaches Todo and no other column. A card the loop set itself is a correction of its own
+   write, which is why it never weakens the rule for any other writer.
    A spec card is derived, not delivered: the fold over its sub-issues is its only writer, and no
    work rule names it. A spec card the fold finds in a work column is not work, so the fold returns
    it to the column the owner gave it, Doing included: that corrects a derivation, never a work move,

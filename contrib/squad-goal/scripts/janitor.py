@@ -634,10 +634,11 @@ def refuse_comment(n, refusal, err, why):   # a refused write queues one comment
     rc, _ = _run(["bash", str(pathlib.Path(__file__).parent / "refusal.sh"), str(n), refusal, err, why])
     if rc: say(f"REFUSAL-COMMENT-FAILED #{n}: {refusal} was not queued for this issue (exit {rc})")
     return rc == 0
-def board_write(args, n, why):   # the one writer of a card: a status write that succeeds updates the card cache, so every later read in this pass sees the column the pass set (#91)
+def board_write(args, n, why, reason=None):   # the one writer of a card: a status write that succeeds updates the card cache, so every later read in this pass sees the column the pass set (#91)
     gone = st / "auto" / f"janitor-gone-{n}"
     if gone.exists(): return False
-    r = subprocess.run(["bash", str(pathlib.Path(__file__).parent / "board.sh"), *args], capture_output=True, text=True)
+    env = {**os.environ, "SG_MOVE_REASON": reason} if reason else None   # names why a card returns to Todo (#1059)
+    r = subprocess.run(["bash", str(pathlib.Path(__file__).parent / "board.sh"), *args], capture_output=True, text=True, env=env)
     if r.returncode:
         msg = (r.stderr or r.stdout or f"exit {r.returncode}").strip().splitlines()
         named = next((l for l in msg if l.startswith("#")), None)   # board.py prints a read note beside the refusal (#96): the refusal is the line that names the card
@@ -708,6 +709,7 @@ def queue_terminal(n, col, note):   # one comment per terminal entry, through th
     (st / "cq" / f"{CQ}#{n}-{tag}-{os.getpid()}.md").write_text(note)
     mk.write_text(col + "\n")
 expected = {}   # issue -> (rank, status, why, run_id, run_ts): the column R derived for every card it owns; rule O reads it, never the board
+no_landing = set()   # the issues whose card returns to Todo because a run landed nothing: their move names that reason (#1059)
 def door(fn, *a):   # one call through ghcall.sh: (exit code, output). A read is gh_api, a write gh_send (ADR-0277), so this module's own call sites stay as they were
     return _run(["bash", "-c", '. "$0"; "$@"', str(pathlib.Path(__file__).parent / "ghcall.sh"), fn, *a])
 RUN_PARENT = "run-parent"   # the label of a run's roll-up issue: never work, so no dispatcher takes it (startable) and the board holds no card for it (#500)
@@ -744,6 +746,7 @@ def reconcile_board():
         old = expected.get(n)
         if old and old[0] >= rank: return
         expected[n] = (rank, status, why, run_id, run_ts)
+        if status == "Todo" and "nothing landed" in why: no_landing.add(n)
     def wave_column(n, f, i):   # the facts producer (ADR-0145): Pushing and Testing come from the run's wave branch, its approval and the CI of the dev tip, and the table names the column
         if not shipped: return
         col, _ = column_for(wave_facts(n, {f.name, i["run_id"]}))
@@ -928,7 +931,7 @@ def reconcile_board():
             if board_write(["--add", owner, str(proj), want, str(n)], n, why): say(f"BOARD-RECONCILE #{n}: card added -> {want} ({why})")
             else: continue
             if note: queue_terminal(n, want, note)
-        elif have != want and board_write([owner, str(proj), want, str(n)], n, why):
+        elif have != want and board_write([owner, str(proj), want, str(n)], n, why, "no-landing" if n in no_landing else None):
             say(f"BOARD-RECONCILE #{n}: card -> {want} ({why})")
             if note: queue_terminal(n, want, note)
         if want == doing:
