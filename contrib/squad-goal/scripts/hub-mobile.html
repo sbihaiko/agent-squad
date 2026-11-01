@@ -415,7 +415,7 @@ $("loop-confirm-no").onclick = () => { $("loop-confirm").hidden = true; };
 loopView();
 setInterval(loopView, 5000);
 
-let board = null, shown = [], issueKey = "", touch = null, seenCards = null;
+let board = null, shown = [], issueKey = "", touch = null, seenCards = null, freshNow = new Set();
 const cardKey = x => (x.r || "") + "#" + x.n;
 const motionOk = () => typeof matchMedia === "function" && !matchMedia("(prefers-reduced-motion: reduce)").matches;
 const reasons = {};   // issue number -> {why, col}: a refusal the card reads on every render, until its card moves again
@@ -493,9 +493,9 @@ function renderBoard() {
   empty.className = "empty";
   empty.textContent = emptyColumnNote({ groups: groups.length, shown: cols.length, filtered: (bo.labels || []).length > 0 || specMode() !== 0 });
   // Each lane heads its cards; a collapsed lane shows its header only. The card index counts the cards the column draws.
-  // Only a card the last render did not draw fades in (freshCards), so the poll never plays the fade again.
-  const keys = shown.map(cardKey), fresh = new Set(board ? freshCards(seenCards, keys) : []);
-  seenCards = board ? keys : null;
+  // Only a card new to the board on this board read fades in (loadBoard names it), so a column switch, a filter change
+  // and the poll never play the fade again.
+  const fresh = freshNow;
   const nodes = [];
   let i = 0;
   for (const l of model.lanes) {
@@ -633,10 +633,15 @@ async function loadBoard() {
     const b = await call("/api/board");
     if (!b.groups) throw new Error(b.error || "The board is not ready.");
     board = b;
+    // The seen set holds every card key a board read gave in this page session, so only a card new to the board fades.
+    const keys = b.groups.flatMap(g => g.items.map(cardKey));
+    freshNow = new Set(freshCards(seenCards, keys));
+    seenCards = new Set([...(seenCards || []), ...keys]);
     // A refusal stays on its card while the card keeps the column it was refused in; a read the move reached clears it.
     for (const n of Object.keys(reasons)) if (rowColumn(+n) !== reasons[n].col) delete reasons[n];
     $("bmsg").textContent = b.err ? "(stale)" : "";
     refresh();
+    freshNow = new Set();
   } catch (e) { $("bmsg").textContent = e.message; }
 }
 setInterval(() => { if (!document.querySelector('[data-panel="board"]').hidden) loadBoard(); }, 10000);

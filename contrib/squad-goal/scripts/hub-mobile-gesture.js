@@ -99,6 +99,6 @@ const columnLanes = ({ groups, cards, lc }) => {
   const flat = lanes.flatMap(l => l.collapsed ? [] : l.cards);
   return { lanes, flat };
 };
-// The cards a render draws that the last render did not (owner, 2026-11-01): only these take the entry fade, so the poll
-// that redraws the column never plays it again on a card already shown. The first render marks no card new.
-const freshCards = (seen, keys) => seen == null ? [] : keys.filter(k => !seen.includes(k));
+// The cards a board read gives that no earlier read gave (owner, 2026-11-01): only these take the entry fade, so the poll,
+// a column switch and a filter change never play it again on a card already seen. The first read marks no card new.
+const freshCards = (seen, keys) => { if (seen == null) return []; const s = new Set(seen); return keys.filter(k => !s.has(k)); };

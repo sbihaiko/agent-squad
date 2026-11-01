@@ -1,7 +1,7 @@
 """The phone board eases in and out (owner, 2026-11-01), in the motion language of the desktop lane fade.
 
-A card the last render did not draw fades in with ease-out; a card the last render drew gets no entry class, so the 10 s
-poll never replays the fade. A lane that shuts eases out with ease-in. The ticket sheet and the project sheet slide in with
+A card new to the board on a board read fades in with ease-out; the seen set holds every card a read gave, so the 10 s
+poll, a column switch and a filter change never replay the fade. A lane that shuts eases out with ease-in. The ticket sheet and the project sheet slide in with
 ease-out and out with ease-in. Under `prefers-reduced-motion: reduce` every animation is off.
 
 The rule that names the new cards runs under node with no DOM; the page runs over the stub DOM of the move tests; the CSS
@@ -35,7 +35,7 @@ def test_the_first_render_marks_no_card_new():
 
 
 @pytest.mark.node_bound
-def test_only_a_card_the_last_render_did_not_draw_is_new():
+def test_only_a_card_no_earlier_read_gave_is_new():
     assert fresh(["#7"], ["#7", "#8"]) == ["#8"]
     assert fresh(["#7", "#8"], ["#8", "#7"]) == []
 
