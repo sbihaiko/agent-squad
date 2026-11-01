@@ -197,6 +197,21 @@ def _page_kept(raw, start):
     kept.reverse()
     return kept
 
+def permission_mode(cwd, sid):
+    """The permission mode the session last recorded in its transcript, or "". A sender that asserts the receiver's own mode
+    is not held for approval: a hub that asserts none, into a session that bypasses, is (`docs/design/session-wire-protocol.md`;
+    owner, 2026-11-01)."""
+    if SID.fullmatch(sid or "") is None: return ""
+    try: raw, _ = _read_under_home(["projects", re.sub(r"[^A-Za-z0-9]", "-", str(cwd)), f"{sid}.jsonl"], limit=TAIL_BYTES)
+    except OSError: return ""
+    for piece in reversed(raw.split(b"\n")):
+        if b'"permissionMode"' not in piece: continue
+        try: obj = json.loads(piece)
+        except ValueError: continue
+        mode = obj.get("permissionMode")
+        if isinstance(mode, str) and mode: return mode
+    return ""
+
 def read_conversation(cwd, sid, secrets=(), before=None):
     """One page of the session's conversation, oldest first: the newest whole lines before the byte offset `before` (the end of
     the transcript when None), within TURN_LIMIT turns. The window starts at TAIL_BYTES and doubles until the page holds

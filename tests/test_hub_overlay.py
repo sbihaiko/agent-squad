@@ -245,3 +245,16 @@ def test_the_talk_wears_the_terminal_font():
     assert "--sq-mono:ui-monospace" in js
     body = js[js.index(".sq-txt{"):js.index(".sq-txt{") + 200]
     assert "font-family:var(--sq-mono)" in body, body
+
+def test_the_talk_is_markdown_built_as_nodes_never_as_html():
+    """Owner, 2026-11-01: the talk must read as markdown. Bold, italic, inline code and a link are built from text nodes, so a
+    message that carries markup can never run as HTML."""
+    js = (pathlib.Path(__file__).resolve().parents[1] / "contrib/squad-goal/scripts/hub-overlay.js").read_text()
+    assert "function inline(el, text)" in js
+    assert "document.createTextNode" in js
+    for tag in ('"b"', '"i"', '"code"', '"a"'):
+        assert "document.createElement(" + tag + ")" in js, tag
+    assert "innerHTML" not in js[js.index("function inline(el, text)"):js.index("function richText(text)")]
+    body = js[js.index("function richText(text) {"):js.index("const CLAMP")]
+    assert body.count("inline(") >= 4, "a heading, a bullet, a numbered line and a paragraph all read markdown"
+    assert "document.createTextNode" in js

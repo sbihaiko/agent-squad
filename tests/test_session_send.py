@@ -135,6 +135,17 @@ def test_one_message_on_the_wire_follows_the_protocol_fields(home, tmp_path):
     assert msg["from_name"] == "squad-hub" and msg["msg_id"] == CID and msg["priority"] == "next"
 
 
+def test_the_wire_asserts_the_mode_the_session_last_recorded(home, tmp_path):
+    """A send into a session that bypasses permissions is held for approval unless its sender asserts a mode
+    (`docs/design/session-wire-protocol.md`): the hub reads the mode the session wrote in its own transcript (owner, 2026-11-01)."""
+    send = load_send()
+    path = add_session(home, "s1", tmp_path / "app")
+    path.write_text(path.read_text() + json.dumps({"type": "user", "permissionMode": "bypassPermissions",
+                                                   "message": {"role": "user", "content": "hi"}}) + "\n")
+    send.send("p1", "s1", "hello there", CID, profiles_of=profile_p1, root=home.state)
+    assert inbox_of(home).frames[1]["from_mode"] == "bypassPermissions"
+
+
 def test_two_concurrent_sends_with_one_id_send_once(home, tmp_path):
     send = load_send()
     add_session(home, "s1", tmp_path / "app")

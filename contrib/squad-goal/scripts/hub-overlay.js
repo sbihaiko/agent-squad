@@ -92,22 +92,24 @@ html.sq-docked body{margin-right:var(--sq-dock)}
 .sq-ov-fsb{font:600 13px/1 system-ui;min-width:34px;height:34px;padding:0 6px}
 #sq-ov-log{flex:1;min-height:0;overflow:auto;padding:13px 14px}
 #sq-ov-log .sq-empty{color:#b8c0cf}
-.sq-turn{margin:0 0 4px;padding-left:8px;border-left:2px solid transparent;line-height:1.45}
+.sq-turn{margin:0 0 10px;padding:0;border-left:0;line-height:1.5}
 .sq-who{display:block;font-family:var(--sq-mono);font-size:10px;line-height:1.2;color:#707988;margin-bottom:2px;letter-spacing:.02em}
-.sq-txt{white-space:pre-wrap;overflow-wrap:anywhere;font-family:var(--sq-mono);font-size:var(--sq-fs);color:#d8dee9}
+.sq-txt{white-space:pre-wrap;overflow-wrap:anywhere;font-family:var(--sq-mono);font-size:var(--sq-fs);color:#c9d1d9}
 .sq-p{margin:0 0 5px}.sq-p:last-child{margin-bottom:0}
-.sq-owner{border-left:0;background:rgba(122,162,255,.08);border-radius:6px;padding:5px 9px}
-.sq-owner .sq-who{color:#7aa2ff}
-.sq-system{border-left-color:#3f4756}.sq-system .sq-who{color:#707988}.sq-system .sq-txt{color:#9aa3b2}
-.sq-answer{border-left-color:#3ecf8e}.sq-answer .sq-who{color:#3ecf8e}
+.sq-owner{padding:0}
+.sq-owner .sq-who{color:#c8d1dc}.sq-owner .sq-txt{color:#e6edf3}
+.sq-system .sq-who{color:#6b7280}.sq-system .sq-txt{color:#8b949e;font-style:italic}
+.sq-answer .sq-who{color:#8b949e}
 .sq-h{font-family:var(--sq-mono);font-weight:600;font-size:calc(var(--sq-fs) + 0px);color:#eef1f5;margin:6px 0 3px}
-.sq-ul{margin:3px 0;padding-left:16px}.sq-ul li{margin:0 0 2px}
+.sq-ul{margin:3px 0;padding-left:16px}.sq-ul li{margin:0 0 2px}.sq-ol{list-style:decimal}
+.sq-ic{font-family:var(--sq-mono);background:#1b212b;border:1px solid #2b3340;border-radius:4px;padding:0 4px;font-size:calc(var(--sq-fs) - 1px)}
+.sq-txt b{color:#eef1f5}.sq-txt a{color:#7aa2ff;text-decoration:underline}
 .sq-code{margin:4px 0}.sq-code summary{font-size:11px;color:#7aa2ff;cursor:pointer;list-style:none}
 .sq-code pre{margin:3px 0 0;padding:5px 8px;background:#0d1117;border:1px solid #232a36;border-radius:6px;overflow:auto;font-family:ui-monospace,SFMono-Regular,monospace;font-size:calc(var(--sq-fs) - 1px);line-height:1.4;color:#b8c0cf;white-space:pre}
 .sq-img{display:block;margin:4px 0}.sq-img img{max-width:100%;max-height:180px;border:1px solid #232a36;border-radius:6px;display:block}
 .sq-more{margin:1px 0 4px;padding:1px 0;border:0;background:none;color:#7aa2ff;font-size:11px;cursor:pointer}
 .sq-earlier{margin:0 0 6px}.sq-earlier summary{font-size:11px;color:#707988;cursor:pointer}
-.sq-tool{border-left-color:#f5b041}.sq-tool .sq-who{color:#f5b041}
+.sq-tool{}.sq-tool .sq-who{color:#f5b041}
 .sq-tool .sq-txt{color:#9aa3b2;font-family:ui-monospace,SFMono-Regular,monospace;font-size:calc(var(--sq-fs) - .5px);line-height:1.35}
 #sq-ov-form{position:relative;display:flex;align-items:flex-end;gap:6px;padding:8px;border-top:1px solid #353d4b}
 #sq-ov-plus{flex:none;width:44px;height:44px;border:1px solid #353d4b;border-radius:50%;background:#1c212b;color:#e6e8ee;font:22px/1 system-ui;cursor:pointer}
@@ -266,13 +268,34 @@ function imageNode(path) {
   a.append(i);
   return a;
 }
+// The talk is markdown (owner, 2026-11-01): bold, italic, inline code and a link, built as DOM nodes so the text is never
+// parsed as HTML. A fence, a heading and a list keep their block rules in richText.
+const INLINE_RE = /(\*\*[^*\n]+\*\*|`[^`\n]+`|\*[^*\n]+\*|\[[^\]\n]+\]\([^)\s]+\))/g;
+function inline(el, text) {
+  let last = 0, m;
+  INLINE_RE.lastIndex = 0;
+  while ((m = INLINE_RE.exec(text))) {
+    if (m.index > last) el.append(document.createTextNode(text.slice(last, m.index)));
+    const tok = m[0];
+    if (tok.startsWith("**")) { const b = document.createElement("b"); b.textContent = tok.slice(2, -2); el.append(b); }
+    else if (tok.startsWith("`")) { const c = document.createElement("code"); c.className = "sq-ic"; c.textContent = tok.slice(1, -1); el.append(c); }
+    else if (tok.startsWith("[")) {
+      const k = tok.indexOf("]("), a = document.createElement("a");
+      a.textContent = tok.slice(1, k); a.href = tok.slice(k + 2, -1); a.target = "_blank"; a.rel = "noopener"; el.append(a);
+    } else { const it = document.createElement("i"); it.textContent = tok.slice(1, -1); el.append(it); }
+    last = m.index + tok.length;
+  }
+  if (last < text.length) el.append(document.createTextNode(text.slice(last)));
+  return el;
+}
 function richText(text) {
   const box = document.createElement("div");
   box.className = "sq-txt";
   const lines = String(text || "").split("\n");
-  let buf = [], ul = null, fence = null;
-  const para = () => { if (!buf.length) return; const p = document.createElement("div"); p.className = "sq-p"; p.textContent = buf.join("\n"); box.append(p); buf = []; };
-  const list = () => { if (ul) { box.append(ul); ul = null; } };
+  let buf = [], ul = null, ol_ = null, fence = null;
+  const para = () => { if (!buf.length) return; const p = document.createElement("div"); p.className = "sq-p";
+    buf.forEach((ln, i) => { if (i) p.append(document.createElement("br")); inline(p, ln); }); box.append(p); buf = []; };
+  const list = () => { if (ul) { box.append(ul); ul = null; } if (ol_) { box.append(ol_); ol_ = null; } };
   const code = () => { if (!fence) return; const d = document.createElement("details"); d.className = "sq-code";
     const s = document.createElement("summary"); s.textContent = "Code · " + fence.length + " line" + (fence.length === 1 ? "" : "s");
     const pre = document.createElement("pre"); pre.textContent = fence.join("\n");
@@ -281,9 +304,11 @@ function richText(text) {
     if (raw.trim().startsWith("```")) { if (fence) code(); else { para(); list(); fence = []; } continue; }
     if (fence) { fence.push(raw); continue; }
     const h = /^#{1,6}\s+(.*)$/.exec(raw);
-    if (h) { para(); list(); const d = document.createElement("div"); d.className = "sq-h"; d.textContent = h[1]; box.append(d); continue; }
+    if (h) { para(); list(); const d = document.createElement("div"); d.className = "sq-h"; inline(d, h[1]); box.append(d); continue; }
     const li = /^\s*[-*]\s+(.*)$/.exec(raw);
-    if (li) { para(); if (!ul) { ul = document.createElement("ul"); ul.className = "sq-ul"; } const it = document.createElement("li"); it.textContent = li[1]; ul.append(it); continue; }
+    if (li) { para(); if (!ul) { ul = document.createElement("ul"); ul.className = "sq-ul"; } const it = document.createElement("li"); inline(it, li[1]); ul.append(it); continue; }
+    const ol = /^\s*(\d+)[.)]\s+(.*)$/.exec(raw);
+    if (ol) { para(); if (!ol_) { ol_ = document.createElement("ol"); ol_.className = "sq-ul sq-ol"; } const it = document.createElement("li"); inline(it, ol[2]); ol_.append(it); continue; }
     if (!raw.trim()) { para(); list(); continue; }
     const img = IMG_RE.exec(raw);
     if (img && cur && cur.src) { para(); list(); box.append(imageNode(img[1])); continue; }
@@ -321,6 +346,12 @@ function feed(turns) {
   nodes.push(...shown.map(turnNode));
   return nodes;
 }
+// The feed stays at its newest line (owner, 2026-11-01): a scroll away from the end stops that, and the bottom is re-pinned
+// after the frame in which images and open blocks settle their height.
+let stick = true;
+function pinBottom() { log.scrollTop = log.scrollHeight; requestAnimationFrame(() => { log.scrollTop = log.scrollHeight; }); }
+log.addEventListener("scroll", () => { stick = log.scrollHeight - log.scrollTop - log.clientHeight < 48; });
+log.addEventListener("load", () => { if (stick) pinBottom(); }, true);   // an image lands after the paint
 async function loadConversation() {
   const s = cur;
   if (!s || ov.hidden) return;
@@ -331,11 +362,11 @@ async function loadConversation() {
     const turns = (await r.json()).turns || [], last = turns[turns.length - 1];
     const sig = turns.length + ":" + (last ? last.id + ":" + last.text.length : "");
     if (sig === lastSig) return;
-    const atEnd = !lastSig || log.scrollHeight - log.scrollTop - log.clientHeight < 48;
+    const atEnd = !lastSig || stick;
     lastSig = sig;
     if (!turns.length) { empty("No turns yet."); lastSig = sig; return; }
     log.replaceChildren(...feed(turns));
-    if (atEnd) log.scrollTop = log.scrollHeight;
+    if (atEnd) pinBottom();   // the talk opens at its newest line, until the reader scrolls up (owner, 2026-11-01)
   } catch (e) { /* the next poll tries again */ }
 }
 const uuid = () => (crypto.randomUUID ? crypto.randomUUID()
