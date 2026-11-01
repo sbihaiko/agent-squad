@@ -4137,6 +4137,10 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #src,#per{display:inline-flex;flex-wrap:nowrap;gap:2px;margin:0}#src button{padding:1px 5px;font-size:var(--fs-min)}#per button{padding:1px 3px;font-size:var(--fs-min)}
 .kr{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-auto-rows:min-content;column-gap:8px;row-gap:2px;align-items:baseline;padding:5px 0;border-bottom:1px solid var(--line);font-size:var(--fs-min);min-width:0}.kr:last-child{border:0}.kr .l{grid-row:1/3;min-width:0;font-size:var(--fs-min);line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.kr .l small{display:inline;color:var(--mute);font-size:var(--fs-min)}.kr b{grid-column:2;justify-self:end;font-size:var(--fs-body);font-weight:600;line-height:1}.kr b small{font-size:var(--fs-min);font-weight:400;color:var(--mute)}.kr b.m{color:var(--mute)}.kr b.w{color:var(--warn)}
 .kr .d{grid-column:2;justify-self:end;font-size:var(--fs-min);padding:0;white-space:nowrap;color:var(--mute)}.kr .d .good{color:#5fd38d}.kr .d .bad{color:#ff7b7b}
+#kpi h4{flex-wrap:wrap;white-space:normal}
+#kpi h4 .warnl{margin:0 0 0 auto;text-align:right;white-space:normal}
+#kpi .kr .l{grid-row:1;white-space:normal;overflow:visible;text-overflow:clip}
+#kpi .kr .d{grid-column:1/-1;grid-row:2;justify-self:start}
 .mtg{min-height:32px;min-width:32px;padding:2px 10px;border:1px solid var(--line);border-radius:6px;background:#10141a;color:var(--fg);font-size:var(--fs-min);cursor:pointer}.mtg.off{text-decoration:line-through;color:var(--mute)}.mt-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:4px 0}.mt-row .mn{flex:1 1 140px;min-width:0}.mdiff{border-top:1px dashed var(--line);margin-top:8px;padding-top:6px}.mtg:focus-visible{outline:2px solid #8ab4ff;outline-offset:2px}@media (max-width:600px){.mtg{min-height:44px;min-width:44px}}
 #mbody{padding:0}.mc{background:#10141a;border:1px solid var(--line);border-radius:8px;padding:10px;margin:6px 0 8px}.mc .mt{font-size:var(--fs-min);font-weight:600;color:var(--fg);margin:0 0 2px}.mc .mx{font-size:var(--fs-min);color:var(--mute);margin:0 0 8px;line-height:1.35}
 .mr{display:grid;grid-template-columns:22px minmax(0,1fr);align-items:center;gap:5px 8px;padding:7px 8px;border:1px solid var(--line);border-radius:6px;background:var(--panel);margin-bottom:5px;font-size:var(--fs-min)}.mr.p{border-color:#2f5d45;background:#13211b}.mr .rk{flex:none;width:22px;height:22px;border-radius:11px;background:#222a35;color:var(--mute);font-size:var(--fs-min);font-weight:600;display:flex;align-items:center;justify-content:center}.mr.p .rk{background:var(--ok);color:#0b1a12}
@@ -4159,7 +4163,8 @@ button.on{border-color:var(--acc);color:var(--acc)}
 .sub .dt{color:var(--mute);font-size:var(--fs-min);line-height:1.4}.sub .dt b{color:var(--fg);font-weight:600}.sub .warn{color:var(--warn);font-size:var(--fs-min)}
 .mb{margin-top:2px}.mb .lab{display:flex;justify-content:space-between;font-size:var(--fs-min);color:var(--mute);margin-bottom:3px}.mb .lab b{color:var(--fg);font-weight:600}.mb .tr{position:relative;height:9px;border-radius:5px;background:#1c222b;overflow:visible}.mb .fl{height:100%;border-radius:5px;background:#e0a23a}.mb .fl.good{background:#3ecf8e}.mb .fl.bad{background:#d9534f}.mb .fl.warnq{background:#5aa9ff}.mb .tk{position:absolute;top:-3px;bottom:-3px;width:2px;background:#d8dde6;border-radius:1px}.mb .sc2{display:flex;justify-content:space-between;font-size:var(--fs-min);color:var(--mute);margin-top:2px}
 .subx{color:var(--mute);font-size:var(--fs-min);line-height:1.45;margin:8px 0 4px}
-.pie{display:flex;flex-direction:column;gap:6px;align-items:stretch}.pie svg{flex:none;width:112px;height:112px;margin:0 auto}.pie .lg{flex:1;min-width:0;font-size:var(--fs-min)}.pie .lg div{display:flex;align-items:center;gap:6px;padding:2px 0}.pie .lg i{width:9px;height:9px;border-radius:2px;flex:none}.pie .ln{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pie .lg b{font-weight:600}.pie .lg .usd{color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap}.pie .lg div:focus-visible{outline:var(--focus-w) solid var(--focus);outline-offset:1px}.pie .lg div.hl{background:#1c222b}.pie .lg .lgx{display:block;padding:0 0 0 15px}.pie .lg summary{display:flex;align-items:center;gap:6px;padding:2px 0;cursor:pointer;list-style:none}.pie .lg summary::-webkit-details-marker{display:none}.sp #piet{font-size:var(--fs-min);margin:-4px 0 6px}.pie [data-k].hl{stroke:#d8dde6;stroke-width:2}.pie.dim [data-k]:not(.hl){opacity:.35}.warnl{margin-top:4px;font-size:var(--fs-min);color:var(--warn)}
+.pie{display:flex;flex-direction:column;gap:6px;align-items:stretch}.pie svg{flex:none;width:112px;height:112px;margin:0 auto}.pie .lg{flex:1;min-width:0;font-size:var(--fs-min)}.pie .lg div{display:flex;align-items:center;gap:6px;padding:2px 0}.pie .lg i{width:9px;height:9px;border-radius:2px;flex:none}.pie .ln{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pie .lg b{font-weight:600}.pie .lg .usd{color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap}
+.pie .lg .sh{color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap;text-align:right;min-width:3ch}.pie .lg div:focus-visible{outline:var(--focus-w) solid var(--focus);outline-offset:1px}.pie .lg div.hl{background:#1c222b}.pie .lg .lgx{display:block;padding:0 0 0 15px}.pie .lg summary{display:flex;align-items:center;gap:6px;padding:2px 0;cursor:pointer;list-style:none}.pie .lg summary::-webkit-details-marker{display:none}.sp #piet{font-size:var(--fs-min);margin:-4px 0 6px}.pie [data-k].hl{stroke:#d8dde6;stroke-width:2}.pie.dim [data-k]:not(.hl){opacity:.35}.warnl{margin-top:4px;font-size:var(--fs-min);color:var(--warn)}
 .up{color:var(--err)}.dn{color:var(--ok)}svg{display:block;width:100%}
 #main{flex:1;min-width:0;display:grid;gap:4px;padding:4px}
 .cell{display:flex;flex-direction:column;min-height:0;min-width:0}.cell small{color:var(--mute);padding:2px 4px;display:flex;justify-content:space-between}.cell .snap{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:12px;overflow:hidden;color:var(--mute);border:1px solid var(--line);background:#0f1115}.cell[tabindex]{cursor:pointer}.cell[tabindex]:hover .snap,.cell[tabindex]:focus-visible .snap{border-color:var(--acc);color:var(--fg,inherit)}
@@ -4559,11 +4564,12 @@ function bars(rows,W=280,H=40){if(!rows.length)return"";const mx=Math.max(...row
     +rows.map((r,i)=>`<rect x="${i*bw+1}" y="${pad+H-r.spend/mx*H}" width="${Math.max(bw-2,1)}" height="${r.spend/mx*H}" fill="${r.spend>=mx?"#3ecf8e":"#5aa9ff"}"><title>${xl(r.t)}: ${usd(r.spend)} · ${r.runs} runs</title></rect>`).join("")
     +`<text x="0" y="${H+pad+12}" fill="#8a93a3" style="font-size:var(--fs-min)">${xl(rows[0].t)}</text>`
     +`<text x="${W}" y="${H+pad+12}" fill="#8a93a3" style="font-size:var(--fs-min)" text-anchor="end">now</text></svg>`}
+function cmp(v,base,unit,lowerBetter=true){const d=Math.round((v-base)/base*100),good=lowerBetter?d<0:d>0,dir=d===0?"":lowerBetter?(d<0?"faster":"slower"):(d>0?"more":"fewer"),head=`was ${base}${unit?" "+unit:""}`,pct=d===0?"":`${Math.abs(d)}% ${dir}`;
+  return {text:pct?`${head} · ${pct}`:head,head,pct,dir,good}}
 function kr(label,sub,v,unit,base,lowerBetter=true){if(v==null)return`<div class=kr><span class=l>${label}${sub?`<small>${sub}</small>`:""}</span><b>—</b></div>`;
   const u=unit?String(unit).trim():"";
-  let chip="";if(base){const d=Math.round((v-base)/base*100),good=lowerBetter?d<0:d>0;
-    const pct=`<span class="${good?"good":"bad"}">${Math.abs(d)}% ${lowerBetter?(d<0?"faster":"slower"):(d>0?"more":"fewer")}</span>`;
-    chip=d===0?`<span class=d>was ${base}${u?" "+u:""}</span>`:`<span class=d>was ${base}${u?" "+u:""} · ${pct}</span>`}
+  let chip="";if(base){const c=cmp(v,base,u,lowerBetter);
+    chip=`<span class=d>${c.head}${c.pct?` · <span class="${c.good?"good":"bad"}">${c.pct}</span>`:""}</span>`}
   return `<div class=kr><span class=l>${label}${sub?`<small>${sub}</small>`:""}</span><b${v===0?" class=m":""}>${v}${u?`<small>${u}</small>`:""}</b>${chip}</div>`}
 function openRows(o){return `<h4>Open branches <small>oldest first</small></h4>`
   +(o&&o.length?o.map((x,i)=>`<div class=kr><span class=l>#${x.n} · <b${x.min>=30?" class=w":""}>${x.min}</b> min${i===0?" (warns at 30)":""}</span></div>`).join("")
@@ -4781,7 +4787,7 @@ function pie(ms){
  const sl=keep.map(m=>({k:m.n,n:m.n,v:m.v,t:`${m.n} (${m.ids.join(", ")})${m.routes.length?" via "+m.routes.join(", "):""}: ${tk(m.v)} tokens`}));
  if(fold.length){const v=fold.reduce((a,m)=>a+m.v,0);sl.push({k:"other",n:`other · ${fold.length} models`,v,t:fold.map(m=>`${m.n}: ${tk(m.v)} tokens`).join("\n")})}
  const col=k=>k==="other"?"#8a93a3":PCOL[[...String(k)].reduce((h,c)=>(h*31+c.charCodeAt(0))>>>0,0)%PCOL.length];   // a model keeps its colour across renders: the colour follows its name, not its place in the list
- const dot=(k,n,v)=>`<i style="background:${col(k)}"></i><span class=ln>${esc(n)}</span><span class=usd>${tk(v)}</span>`;   // the rows are built outside the page template: a nested backtick there breaks the pie matcher in tests
+ const dot=(k,n,v)=>`<i style="background:${col(k)}"></i><span class=ln>${esc(n)}</span><span class=usd>${tk(v)}</span><span class=sh>${Math.round(v/tot*100)}%</span>`;   // the rows are built outside the page template: a nested backtick there breaks the pie matcher in tests
  const subRows=fold.map(m=>`<div>${dot(m.n,m.n,m.v)}</div>`).join("");   // built outside the legend template: a nested backtick there breaks the pie matcher in tests
  const legendRows=sl.map(x=>x.k==="other"
    ?`<details class=lgo data-k="other"><summary tabindex=0 title="${esc(x.t)}">${dot(x.k,x.n,x.v)}</summary><div class=lgx>${subRows}</div></details>`
@@ -4832,13 +4838,12 @@ async function pollStats(){try{pollSubs();
   $("#tot").innerHTML=`<div>today<b>${usd(st.totals.today)}</b></div><div>this month<b>${usd(st.totals.month)}</b></div><div>all time<b${same?" class=m":""}>${same?"= this month":usd(st.totals.all)}</b></div>`;
   $("#totnote").innerHTML=(st.totals.unpriced||st.totals.uncounted)?`floor: ${st.totals.unpriced?st.totals.unpriced+" review call"+(st.totals.unpriced===1?" is":"s are")+" unpriced and count 0.0":""}${st.totals.unpriced&&st.totals.uncounted?"; ":""}${st.totals.uncounted?st.totals.uncounted+" with no usage count":""}. The total is a floor.`:"";
   const b=sp.baseline,n=sp.pr.after.n,cut=b.cutoff.slice(5,16).replace("T"," ");
-  $("#kpi").innerHTML=`<h4>Speed <small>since ${cut} UTC · ${n} PR${n===1?"":"s"}</small></h4>`
+  $("#kpi").innerHTML=`<h4>Speed <small>since ${cut} UTC · ${n} PR${n===1?"":"s"}</small>${[n<10?`<span class=warnl>Provisional: only ${n} PR${n===1?"":"s"} so far; the comparison firms up at ~10.</span>`:"",sp.pr.stale?"<span class=warnl>PR data stale</span>":""].join("")}</h4>`
    +kr("Merge time",", median",sp.pr.after.median,"min",b.pr.median)
    +kr("Merge time",", average",sp.pr.after.mean,"min",b.pr.mean)
    +kr("Run time",", median today",sp.runs.today_median,"min",b.run_median)
    +kr("Review rounds",", average",sp.rounds.mean,"",null)
-   +kr("Hung runs killed","",sp.kills.count,"",null)
-  +(n<10?`<div class=warnl>Provisional: only ${n} PR${n===1?"":"s"} so far; the comparison firms up at ~10.</div>`:"")+(sp.pr.stale?"<div class=warnl>PR data stale</div>":"");
+   +kr("Hung runs killed","",sp.kills.count,"",null);
   $("#open").innerHTML=openRows(sp.pr.open);
 }catch(e){}}
 pollStats();setInterval(pollStats,30000);

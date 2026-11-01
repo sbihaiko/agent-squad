@@ -8,11 +8,11 @@ from tests.test_hub_cost_usage_panel import SRC, _run_js
 
 ROW = re.compile(
     r'<div[^>]*data-k="([^"]+)"[^>]*><i style="background:[^"]+"></i>'
-    r'<span class=ln>([^<]+)</span><span class=usd>([^<]+)</span></div>'
+    r'<span class=ln>([^<]+)</span><span class=usd>([^<]+)</span><span class=sh>([^<]+)</span></div>'
 )
 
 
-def test_donut_legend_row_reads_swatch_name_and_tokens_only():
+def test_donut_legend_row_reads_swatch_name_tokens_and_share():
     out = _run_js("""
 const out={html:pie([
   {model:'big',in:9000,out:0,cache:0,month_tokens:9000,spend:12.5,calls:1},
@@ -20,8 +20,50 @@ const out={html:pie([
 ])};
 """)
     rows = ROW.findall(out["html"])
-    assert rows == [("big", "big", "9K"), ("mid", "mid", "1K")], out["html"]
-    assert "%" not in out["html"], out["html"]
+    assert rows == [("big", "big", "9K", "90%"), ("mid", "mid", "1K", "10%")], out["html"]
+
+
+def test_donut_legend_shares_sum_to_the_whole_within_rounding():
+    out = _run_js("""
+const models=[
+  {model:'a',month_tokens:9000,in:1,out:0,cache:0,spend:9,calls:1},
+  {model:'b',month_tokens:7000,in:1,out:0,cache:0,spend:7,calls:1},
+  {model:'c',month_tokens:5000,in:1,out:0,cache:0,spend:5,calls:1},
+  {model:'d',month_tokens:3000,in:1,out:0,cache:0,spend:3,calls:1},
+  {model:'e',month_tokens:1000,in:1,out:0,cache:0,spend:1,calls:1},
+  {model:'f',month_tokens:500,in:1,out:0,cache:0,spend:0.5,calls:1},
+];
+const out={html:pie(models)};
+""")
+    top = re.sub(r"<div class=lgx>.*?</details>", "</details>", out["html"], flags=re.S)
+    shares = [int(s) for s in re.findall(r'<span class=sh>(\d+)%</span>', top)]
+    assert shares == [35, 27, 20, 18], shares   # 9000, 7000, 5000 and the tail 4500 over 25500
+    assert abs(sum(shares) - 100) <= len(shares) / 2, shares
+
+
+def test_donut_sectors_match_the_top_legend_rows_with_other():
+    out = _run_js("""
+const models=[
+  {model:'a',month_tokens:9000,in:1,out:0,cache:0,spend:9,calls:1},
+  {model:'b',month_tokens:7000,in:1,out:0,cache:0,spend:7,calls:1},
+  {model:'c',month_tokens:5000,in:1,out:0,cache:0,spend:5,calls:1},
+  {model:'d',month_tokens:3000,in:1,out:0,cache:0,spend:3,calls:1},
+  {model:'e',month_tokens:1000,in:1,out:0,cache:0,spend:1,calls:1},
+];
+const out={html:pie(models)};
+""")
+    html = out["html"]
+    sectors = re.findall(r'<(?:path|circle)[^>]*data-k="([^"]+)"', html)
+    top = re.sub(r"<div class=lgx>.*?</details>", "</details>", html, flags=re.S)
+    legend = re.findall(r'data-k="([^"]+)"', top[top.index("<div class=lg>"):])
+    assert sectors == legend == ["a", "b", "c", "other"], (sectors, legend)
+
+
+def test_donut_centre_states_one_value():
+    out = _run_js("const out={html:pie([{model:'m',in:1,out:0,cache:0,month_tokens:1234567,spend:1,calls:1}])};")
+    centre = re.findall(r'<text [^>]*>([^<]*)</text>', out["html"])
+    values = [t for t in centre if re.fullmatch(r"[\d.]+[BMK]?", t)]
+    assert values == ["1.2M"], centre
 
 
 def test_donut_slices_share_the_key_of_their_legend_row():
