@@ -1,0 +1,146 @@
+{
+  "data": {
+    "node": {
+      "number": 859,
+      "updatedAt": "2026-10-29T06:47:18Z",
+      "state": "CLOSED",
+      "closed": true,
+      "timelineItems": {
+        "totalCount": 20,
+        "nodes": [
+          {
+            "__typename": "LabeledEvent",
+            "createdAt": "2026-10-29T02:40:01Z",
+            "label": {
+              "name": "bug"
+            }
+          },
+          {
+            "__typename": "LabeledEvent",
+            "createdAt": "2026-10-29T02:40:01Z",
+            "label": {
+              "name": "loop-bug"
+            }
+          },
+          {
+            "__typename": "LabeledEvent",
+            "createdAt": "2026-10-29T02:40:01Z",
+            "label": {
+              "name": "needs-triage"
+            }
+          },
+          {
+            "__typename": "LabeledEvent",
+            "createdAt": "2026-10-29T02:41:59Z",
+            "label": {
+              "name": "no-auto"
+            }
+          },
+          {
+            "__typename": "AddedToProjectV2Event",
+            "createdAt": "2026-10-29T02:42:16Z"
+          },
+          {
+            "__typename": "ProjectV2ItemStatusChangedEvent",
+            "createdAt": "2026-10-29T02:42:17Z",
+            "status": "Doing",
+            "previousStatus": ""
+          },
+          {
+            "__typename": "ProjectV2ItemStatusChangedEvent",
+            "createdAt": "2026-10-29T02:53:26Z",
+            "status": "Code Review",
+            "previousStatus": "Doing"
+          },
+          {
+            "__typename": "ProjectV2ItemStatusChangedEvent",
+            "createdAt": "2026-10-29T02:53:31Z",
+            "status": "Code Complete",
+            "previousStatus": "Code Review"
+          },
+          {
+            "__typename": "ProjectV2ItemStatusChangedEvent",
+            "createdAt": "2026-10-29T02:53:35Z",
+            "status": "Code Review",
+            "previousStatus": "Code Complete"
+          },
+          {
+            "__typename": "ProjectV2ItemStatusChangedEvent",
+            "createdAt": "2026-10-29T02:53:39Z",
+            "status": "Code Complete",
+            "previousStatus": "Code Review"
+          },
+          {
+            "__typename": "ProjectV2ItemStatusChangedEvent",
+            "createdAt": "2026-10-29T02:53:44Z",
+            "status": "Code Review",
+            "previousStatus": "Code Complete"
+          },
+          {
+            "__typename": "ProjectV2ItemStatusChangedEvent",
+            "createdAt": "2026-10-29T02:57:30Z",
+            "status": "Code Complete",
+            "previousStatus": "Code Review"
+          },
+          {
+            "__typename": "ClosedEvent",
+            "createdAt": "2026-10-29T02:59:55Z"
+          },
+          {
+            "__typename": "ProjectV2ItemStatusChangedEvent",
+            "createdAt": "2026-10-29T03:00:04Z",
+            "status": "Closed",
+            "previousStatus": "Code Complete"
+          },
+          {
+            "__typename": "ProjectV2ItemStatusChangedEvent",
+            "createdAt": "2026-10-29T03:01:32Z",
+            "status": "Code Complete",
+            "previousStatus": "Closed"
+          },
+          {
+            "__typename": "ProjectV2ItemStatusChangedEvent",
+            "createdAt": "2026-10-29T03:08:35Z",
+            "status": "Closed",
+            "previousStatus": "Code Complete"
+          },
+          {
+            "__typename": "ReopenedEvent",
+            "createdAt": "2026-10-29T06:23:16Z"
+          },
+          {
+            "__typename": "ProjectV2ItemStatusChangedEvent",
+            "createdAt": "2026-10-29T06:25:49Z",
+            "status": "Code Complete",
+            "previousStatus": "Closed"
+          },
+          {
+            "__typename": "ClosedEvent",
+            "createdAt": "2026-10-29T06:47:18Z"
+          },
+          {
+            "__typename": "ProjectV2ItemStatusChangedEvent",
+            "createdAt": "2026-10-29T07:05:05Z",
+            "status": "Closed",
+            "previousStatus": "Code Complete"
+          }
+        ]
+      },
+      "projectItems": {
+        "nodes": [
+          {
+            "id": "PVTI_lAHOB1MsbM4Bm5t8zhEXdec",
+            "updatedAt": "2026-10-29T07:05:04Z",
+            "project": {
+              "number": 5
+            },
+            "fieldValueByName": {
+              "name": "Closed",
+              "updatedAt": "2026-10-29T07:05:04Z"
+            }
+          }
+        ]
+      }
+    }
+  }
+}
