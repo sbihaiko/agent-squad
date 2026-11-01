@@ -473,3 +473,13 @@ const out={html:subsGauges({subs:[{label:'a',pct:10,resets:now},{label:'b',pct:8
     assert re.findall(r'<div class="(srow[^"]*)"', html) == ["srow", "srow warn", "srow red"], html
     for state, fill in fills.items():
         assert fill != track, f"the {state} fill reads as its own track"
+
+def test_the_chart_draws_from_the_stats_read_alone():
+    """A failing companion read emptied the whole panel, chart and ring included, and the catch hid it (owner, 2026-11-01). The
+    panel reads one route, and a failure names itself."""
+    i = SRC.index("async function pollStats")
+    body = SRC[i:SRC.index("pollStats();setInterval", i)]
+    assert "/api/stats?period=" in body
+    assert "/api/speed" not in body, "the chart never waits on a second route"
+    assert 'console.warn("stats panel:",e)' in body
+    assert "$(\"#chart\").innerHTML=bars(" in body
