@@ -1,9 +1,10 @@
 # The project settings for this repository (squad/project_settings.py): only the keys the owner changed.
-# The owner lifted the one-wave soak: parallel waves come back. A run holds one slot and its fix run a second, so eight slots let
-# four waves live at once on this 16 GB machine; the gate lock still runs one gate at a time.
+# The owner keeps the run-slot cap at six: the ceiling was never the bottleneck. A finished run stays in the live list until its
+# issue closes, so the slots that starved dispatch were held by runs that had already ended. Three waves live at once on this
+# 16 GB machine, and the gate lock still runs one gate at a time.
 # The ceiling bounds every child's grant, and the owner granted a child cap up to 30 USD: a lower ceiling refuses the
 # dispatch node's own grant with spend_over_ceiling.
 caps:
-  runs: 8
+  runs: 6
 limits:
   max_budget_usd: 30
