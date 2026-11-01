@@ -1740,7 +1740,7 @@ def loop_alive():
     return _pid_alive(pid)
 
 def loop_live():
-    """The live runs (an active-runs line with no verdict) and the held gate (locks/gate/pid naming a live pid): what a stop kills."""
+    """The live runs (an active-runs line with no verdict) and the held gate (the gate lock's pid file naming a live pid): what a stop kills."""
     runs = []
     for line in _read(STATE / "active-runs.txt").splitlines():
         r = line.strip()
@@ -1770,11 +1770,14 @@ def loop_state(last, now=None):
         if now - dt.datetime.fromisoformat(last["at"]).timestamp() < 60: return "starting"
     return "off"
 
+LOOP_STATE_ACTIONS = {"off": ["start"], "on": ["drain", "stop-now"], "draining": ["stop-now"], "starting": []}   # the hub's rule, so no page holds one
+
 def loop_view(a):
     last = (loop_audit_last(1) or [{}])[-1]
     tn = tailnet_block()
     write = a.allowed and (not a.tailnet or tn.get("loop_write") is True)
-    return {"state": loop_state(last), "who": last.get("who", ""), "when": last.get("at", ""), "live": loop_live(),
+    state = loop_state(last)
+    return {"state": state, "actions": list(LOOP_STATE_ACTIONS.get(state, [])) if write else [], "who": last.get("who", ""), "when": last.get("at", ""), "live": loop_live(),
             "log": loop_audit_last(20)[::-1], "write": write, "reason": "" if write else LOOP_READ_ONLY,
             "tailnet": a.tailnet, "access": {"loop_write": tn.get("loop_write") is True, "terminals_send": tn.get("terminals_send") is True}}   # Settings > Access reads the tailnet rule here
 

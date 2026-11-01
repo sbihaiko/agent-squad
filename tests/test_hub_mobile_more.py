@@ -56,7 +56,7 @@ def test_each_screen_declares_its_existing_get_route():
 def test_every_api_path_the_page_names_is_an_existing_get_route():
     literals = {re.sub(r"\?.*", "", p) for p in re.findall(r'"(/api/[^"]*)"', page())}
     assert literals
-    assert literals <= HUB_GET_ROUTES | {"/api/promote"}, literals - HUB_GET_ROUTES
+    assert literals <= HUB_GET_ROUTES | {"/api/promote", "/api/loop"}, literals - HUB_GET_ROUTES   # /api/loop: read and write, matched whole (ADR-0162)
     assert '"/api/promote"' in HUB_PY.read_text(), "the owner's move route the page names is not served"   # #829
 
 

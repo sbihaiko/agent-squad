@@ -345,9 +345,10 @@ async function loopView() {
     const v = await call("/api/loop");
     $("loop").className = v.state;
     $("loop-text").textContent = v.state + (v.who ? " - changed by " + v.who + " at " + v.when : "");
-    $("loop-start").disabled = !v.write || v.state !== "off";
-    $("loop-drain").disabled = !v.write || v.state !== "on";
-    $("loop-now").disabled = !v.write || (v.state !== "on" && v.state !== "draining");
+    const can = v.actions || [];   // the hub names the allowed actions; this page holds no state rule
+    $("loop-start").disabled = !can.includes("start");
+    $("loop-drain").disabled = !can.includes("drain");
+    $("loop-now").disabled = !can.includes("stop-now");
     $("loop-reason").textContent = v.reason;
     loopNow = v.live;
     $("loop-log").replaceChildren(...v.log.map(e => {

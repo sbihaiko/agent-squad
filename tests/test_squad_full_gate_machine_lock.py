@@ -25,7 +25,7 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parent.parent / "contrib" / "squad-goal" / "scripts"
 ROOT = SCRIPTS.parent.parent.parent
 WAIT_LINE = re.compile(r"^serial: waiting for lock gate held by pid [0-9]+$", re.M)
-GATE_LOCK = re.compile(r"serial\.sh\"?\s+gate\b|locks/gate\b|(?<![\w-])gate\.sh\"?\s")
+GATE_LOCK = re.compile(r"serial\.sh\"?\s+gate\b|locks/gate\b(?!/pid)|(?<![\w-])gate\.sh\"?\s")
 RETIRED = ("fork-gate.sh", "forkclose.sh", "forkonly.sh", "sync-to-fork.sh", "refresh-from-fork.sh")
 
 
@@ -79,6 +79,13 @@ def test_only_the_gate_runners_take_the_machine_wide_gate_lock():
     takers = sorted(p.name for p in _scripts()
                     if GATE_LOCK.search("\n".join(line.split("#", 1)[0] for line in p.read_text().splitlines())))
     assert takers == ["branchland.sh", "fast-gate.sh", "gate.sh", "promote-pass.sh", "promote-stg.sh", "wave.sh"], takers
+
+
+def test_a_read_of_the_gate_holder_pid_is_not_a_take():
+    """The loop switch reads the holder's pid to list what a stop kills; a read never takes the lock (#923)."""
+    assert not GATE_LOCK.search('g=$(cat "$SG_STATE/locks/gate/pid" 2>/dev/null)')
+    assert not GATE_LOCK.search("the held gate (locks/gate/pid naming a live pid)")
+    assert GATE_LOCK.search('mkdir "$SG_STATE/locks/gate"') and GATE_LOCK.search('bash "$d/serial.sh" gate cmd')
 
 
 def test_the_local_gate_and_the_land_path_that_ran_it_are_retired():

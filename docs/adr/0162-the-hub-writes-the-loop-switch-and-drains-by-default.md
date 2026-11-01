@@ -10,7 +10,7 @@ The owner starts and stops the loop from the hub. The hub has read the loop stat
 
 ## Decision
 
-1. **One route.** The hub serves `GET /api/loop`, which returns the state, who changed it and when, the live runs and gates, the change log, and whether this request may write, with the reason when it may not. `POST /api/loop` takes a JSON body with one action: `start`, `drain` or `stop-now`. The route runs the supervisor script and nothing else.
+1. **One route.** The hub serves `GET /api/loop`, which returns the state, who changed it and when, the live runs and gates, the change log, whether this request may write, with the reason when it may not, and the actions the state allows. The hub holds that rule, so no page does. `POST /api/loop` takes a JSON body with one action: `start`, `drain` or `stop-now`. The route runs the supervisor script and nothing else.
 2. **Four states.** `on` and `draining` are read from the live supervisor and its drain mark. `starting` is a start that has just been asked and has no supervisor yet. `off` is every other case. Only the route and the supervisor write them.
 3. **Drain is the default.** A drain pauses dispatch and marks itself. A detached waiter stops the loop only when no run lacks a verdict and no gate lock holds a live pid. A drain never sends a stop while live work remains, and a supervisor that dies during a drain ends the waiter.
 4. **Stop-now is the second choice.** It needs `"confirm": true`. Its confirm lists the live runs and gates it kills, and its response and audit line name what it killed.

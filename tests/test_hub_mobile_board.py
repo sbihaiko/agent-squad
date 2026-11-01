@@ -22,7 +22,7 @@ GESTURE_JS = SCRIPTS / "hub-mobile-gesture.js"
 FILTER_JS = SCRIPTS / "board-filter.js"
 NODE = shutil.which("node")
 ROUTES = {"/api/status", "/api/hub", "/api/board", "/api/issue", "/api/subs", "/api/models", "/api/stats", "/api/runs", "/api/ended",
-          "/api/sessions", "/api/sessions/conversation", "/api/sessions/send", "/api/promote"}   # the owner's move is a write (#829)
+          "/api/sessions", "/api/sessions/conversation", "/api/sessions/send", "/api/promote", "/api/loop"}   # the owner's move is a write (#829)
 
 
 def run_js(src, expr, prelude=""):
@@ -162,13 +162,13 @@ def test_the_mobile_page_reads_only_the_existing_routes(hub):
     found = set(re.findall(r'"(/api/[^"?]*)', hub.MOBILE_PAGE))
     assert found <= ROUTES, f"the mobile page reads routes the hub does not serve: {sorted(found - ROUTES)}"
     writes = set(re.findall(r'fetch\("(/api/[^"?]*)"[^)]*method:', hub.MOBILE_PAGE))
-    assert writes == {"/api/promote", "/api/sessions/send"}, f"the mobile page writes other routes: {sorted(writes)}"
-    # Three writes: the owner's move, the run screen's pause or resume, which posts the run's own control route through
-    # the hub's forward route (#831), and the session composer's send (#834). Each carries the word once: a route reached
+    assert writes == {"/api/loop", "/api/promote", "/api/sessions/send"}, f"the mobile page writes other routes: {sorted(writes)}"
+    # Four writes: the owner's move, the run screen's pause or resume, which posts the run's own control route through
+    # the hub's forward route (#831), the session composer's send (#834), and the loop switch (#923, ADR-0162). Each carries the word once: a route reached
     # through a variable path, or a method set after the call's own `)`, carries it once too often, whatever the shape of
     # the call (#829).
     assert 'fetch(runURLs(id).control, { method: "POST"' in hub.MOBILE_PAGE, "the run screen's write is not the run's control route"
-    assert hub.MOBILE_PAGE.count("method:") == 3, "the mobile page holds a fourth write, or a method outside the three fetches"
+    assert hub.MOBILE_PAGE.count("method:") == 4, "the mobile page holds a fifth write, or a method outside the four fetches"
 
 
 def test_the_sheet_links_to_the_issue_on_github(hub):

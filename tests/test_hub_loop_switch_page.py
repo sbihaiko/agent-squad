@@ -78,6 +78,21 @@ def test_a_loopback_get_reads_the_view_with_the_access_rules(hub):
     assert {"state", "who", "when", "live", "log", "write", "reason"} <= set(v)
     assert v["write"] is True and v["tailnet"] is False
     assert v["access"] == {"loop_write": False, "terminals_send": False}
+    assert v["actions"] == ["start"]
+
+
+@pytest.mark.parametrize("state,actions", [("off", ["start"]), ("on", ["drain", "stop-now"]), ("draining", ["stop-now"]), ("starting", [])])
+def test_the_view_names_the_actions_each_state_allows(hub, monkeypatch, state, actions):
+    """The rule that picks the live buttons is the hub's, so the phone page holds no state rule (ADR-0137)."""
+    mod, port, _, _, _ = hub
+    monkeypatch.setattr(mod, "loop_state", lambda last, now=None: state)
+    assert ask(port, "GET")[1]["actions"] == actions
+
+
+def test_a_read_only_view_allows_no_action(hub, monkeypatch):
+    mod, port, _, _, _ = hub
+    as_tailnet(mod, monkeypatch)
+    assert ask(port, "GET", origin=f"https://{TN_HOST}", host=TN_HOST)[1]["actions"] == []
 
 
 def test_a_loopback_start_runs_and_writes_one_audit_line(hub):
