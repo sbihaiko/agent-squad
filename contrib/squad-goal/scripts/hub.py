@@ -3996,7 +3996,7 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #bhead{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}#bhead>label{display:inline-flex;align-items:center;gap:8px}#bhead label.hck{border:1px solid var(--line);border-radius:6px;padding:0 12px 0 10px;min-height:32px;background:var(--panel);cursor:pointer}#bhead label.hck input{margin:0;accent-color:var(--acc)}#bt:empty{display:none}
 #flowov{background:var(--panel);border:1px solid var(--line);border-radius:8px;display:flex;flex-direction:column}#flowov[hidden]{display:none}
 #flowb{padding:10px;font-size:var(--fs-min)}#flowb svg{width:100%;height:auto;display:block;margin:6px 0;user-select:none;touch-action:pan-y}#flowb .fnote,#flowb .fhead{color:var(--mute);margin:4px 0}#flowb .fhead b{color:var(--fg,inherit)}
-#flowb .flg{margin-right:10px;white-space:nowrap}#flowb .flg i{display:inline-block;width:9px;height:9px;margin-right:4px;vertical-align:middle;border-radius:2px}
+#flowb .flg{margin-right:10px;white-space:nowrap}.ltlg{display:flex;flex-wrap:wrap;gap:4px 18px;white-space:normal}.ltlg span{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}.ltlg i{display:inline-block;width:18px;height:6px;border-radius:3px}#flowb .flg i{display:inline-block;width:9px;height:9px;margin-right:4px;vertical-align:middle;border-radius:2px}
 #bbody .ah{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);cursor:pointer;font-weight:600;position:sticky;top:34px;background:#1b212b;z-index:1}   /* the same gap as the docked header: `Todo0` is never a reading, in either rendering (#1809) */
 #bbody .ah .n{background:#2a303b;border-radius:9px;padding:0 8px;font-weight:400}
 #bbody .ah i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;background:var(--mute)}
@@ -4842,8 +4842,9 @@ let LT={tf:["7","14","30","90","180","all"].includes(LTS.tf)?LTS.tf:"30",log:LTS
 const saveLT=()=>{ls.lt={tf:LT.tf,log:LT.log,ty:LT.ty};save()};
 const ltSpan=(r,a,b)=>{const t0=Date.parse(r.start),t1=Date.parse(r.end),at=f=>new Date(t0+f*(t1-t0)).toISOString();return [at(a<0?0:a),at(b>1?1:b)]};   // plot fractions to the dates they name (#900)
 const LT_TF=[["7","Past week"],["14","Past 2 weeks"],["30","Past month"],["90","Past 3 months"],["180","Past 6 months"],["all","All"]];
-const ltX=x=>flowP+x*(flowW-2*flowP),ltY=y=>flowH-flowP-y*(flowH-2*flowP);
-const ltLine=(v,col,dash,name)=>v?`<line x1=${flowP} x2=${flowW-flowP} y1=${ltY(v.y)} y2=${ltY(v.y)} stroke="${col}" stroke-width=2${dash?` stroke-dasharray="${dash}"`:""}><title>${esc(name)} ${esc(v.text)}</title></line>`:"";
+const ltP=64;   // a duration label ("17h 36m") is wider than a count, and the old margin cut every tick to its tail (#Astra review)
+const ltX=x=>ltP+x*(flowW-2*ltP),ltY=y=>flowH-ltP-y*(flowH-2*ltP);
+const ltLine=(v,col,dash,name)=>v?`<line x1=${ltP} x2=${flowW-ltP} y1=${ltY(v.y)} y2=${ltY(v.y)} stroke="${col}" stroke-width=2${dash?` stroke-dasharray="${dash}"`:""}><title>${esc(name)} ${esc(v.text)}</title></line>`+`<text x=${flowW-ltP-2} y=${ltY(v.y)-4} text-anchor=end fill="${col}" style="font-size:var(--fs-min);font-weight:600">${esc(name)} ${esc(v.text)}</text>`:"";
 const ltChart=c=>{const n=c.dots.length,base=flowH-flowP,ink="#b8c0cf",mute="var(--mute)";
   const ctl=`<p class=fhead><label>Timeframe <select id=ltr>${LT_TF.map(([k,v])=>`<option value=${k}${LT.tf===k?" selected":""}>${v}</option>`).join("")}</select></label> `+
     `<label>Scale <select id=lts><option value=jira${LT.log?"":" selected"}>Jira scale</option><option value=log${LT.log?" selected":""}>Log scale</option></select></label> `+
@@ -4857,15 +4858,15 @@ const ltChart=c=>{const n=c.dots.length,base=flowH-flowP,ink="#b8c0cf",mute="var
   const up=c.dots.map(d=>`${ltX(d.x)},${ltY(d.rolling.y_high)}`),low=[...c.dots].reverse().map(d=>`${ltX(d.x)},${ltY(d.rolling.y_low)}`);
   const band=`<polygon points="${[...up,...low].join(" ")}" fill="var(--s3)" fill-opacity=".16"><title>Standard deviation</title></polygon>`;
   const roll=`<polyline fill=none stroke="var(--s3)" stroke-width=2 points="${c.dots.map(d=>`${ltX(d.x)},${ltY(d.rolling.y)}`).join(" ")}"><title>Rolling average (${c.window.size} issues, centered)</title></polyline>`;
-  const ys=c.ticks.map(t=>`<line x1=${flowP-4} y1=${ltY(t.y)} x2=${flowP} y2=${ltY(t.y)} stroke=${mute}></line><text x=${flowP-7} y=${ltY(t.y)+4} text-anchor=end fill=${ink} style="font-size:var(--fs-min)">${esc(t.text)}</text>`).join("");
+  const ys=c.ticks.map(t=>`<line x1=${ltP-4} y1=${ltY(t.y)} x2=${ltP} y2=${ltY(t.y)} stroke=${mute}></line><text x=${ltP-7} y=${ltY(t.y)+4} text-anchor=end fill=${ink} style="font-size:var(--fs-min)">${esc(t.text)}</text>`).join("");
   const xs=c.xticks.map(t=>`<text x=${ltX(t.x)} y=${base+17} text-anchor=middle fill=${ink} style="font-size:var(--fs-min)">${esc(t.text)}</text>`).join("");
-  const axes=`<line x1=${flowP} y1=${flowP-10} x2=${flowP} y2=${base} stroke=var(--line)></line><line x1=${flowP} y1=${base} x2=${flowW-flowP} y2=${base} stroke=var(--line)></line>`+
-    `<text x=${flowP-7} y=${flowP-16} text-anchor=end fill=${ink} style="font-size:var(--fs-min)">elapsed time${c.axis==="log"?" (log)":c.axis==="cube"?" (cube root)":""}</text>`;
+  const axes=`<line x1=${ltP} y1=${ltP-10} x2=${ltP} y2=${base} stroke=var(--line)></line><line x1=${ltP} y1=${base} x2=${flowW-ltP} y2=${base} stroke=var(--line)></line>`+
+    `<text x=${ltP-7} y=${ltP-16} text-anchor=end fill=${ink} style="font-size:var(--fs-min)">elapsed time${c.axis==="log"?" (log)":c.axis==="cube"?" (cube root)":""}</text>`;
   const lines=ltLine(c.average,"var(--s6)","","Average")+ltLine(c.median,"var(--ok)","2 3","Median")+ltLine(c.p85,"var(--s5)","5 3","p85");
   const dots=c.clusters.map((k,i)=>{const m=k.dots.length,title=m>1?`${m} issues`:`#${k.dots[0].n} ${esc(k.dots[0].title)}`;
     return `<circle data-k=${i} cx=${ltX(k.x)} cy=${ltY(k.y)} r=${m>1?6:4.5} fill="${m>1?"var(--bg)":"var(--s3)"}" stroke="var(--s3)" stroke-width=2 style="cursor:pointer"><title>${esc(title)} · ${esc(k.dots[0].text)} · closed ${esc(k.dots[0].closed)}</title></circle>`+(m>1?`<text x=${ltX(k.x)} y=${ltY(k.y)+4} fill="var(--s3)" style="font-size:var(--fs-min)" text-anchor=middle pointer-events=none>${m}</text>`:"")}).join("");
   const S=c.average?`<p class=fhead>Average <b>${esc(c.average.text)}</b> · Median <b>${esc(c.median.text)}</b> · p85 <b>${esc(c.p85.text)}</b></p>`:"";
-  const legend=`<p class=flg><span><i style="background:var(--s3)"></i>Rolling average (${c.window.size} issues, centered)</span><span><i style="background:var(--s3);opacity:.3"></i>Standard deviation</span><span><i style="background:var(--s6)"></i>Average</span><span><i style="background:var(--ok)"></i>Median</span><span><i style="background:var(--s5)"></i>p85</span></p>`;
+  const legend=`<p class="flg ltlg"><span><i style="background:var(--s3)"></i>Rolling average (${c.window.size} issues, centered)</span><span><i style="background:var(--s3);opacity:.3"></i>Standard deviation</span><span><i style="background:var(--s6)"></i>Average</span><span><i style="background:var(--ok)"></i>Median</span><span><i style="background:var(--s5)"></i>p85</span></p>`;
   const pk=LT.pick!=null&&c.clusters[LT.pick]?c.clusters[LT.pick]:null;
   const rows=pk?`<table class=rt><thead><tr><th>Issue</th><th>Title</th><th>Elapsed</th><th>Closed</th></tr></thead><tbody>${pk.dots.map(d=>`<tr data-o=${d.n} style="cursor:pointer"><td>#${d.n}</td><td>${esc(d.title)}</td><td>${esc(d.text)}</td><td>${esc(d.closed)}</td></tr>`).join("")}</tbody></table>`:"";
   return ctl+S+legend+`<svg data-lt viewBox="0 0 ${flowW} ${flowH}">${axes}${ys}${xs}${band}${roll}${lines}${dots}</svg>`+note+rows;};
