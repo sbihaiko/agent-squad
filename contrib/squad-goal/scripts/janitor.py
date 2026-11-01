@@ -1033,7 +1033,8 @@ def count_failed(n, f, i):   # O (#609): a run that ended with nothing delivered
     if dry: say(f"FAILED-DISPATCH #{n}: run {f.name} would count ({why}{', ' + kind if kind else ''})"); return False
     out = _run(["bash", str(pathlib.Path(__file__).parent / "wave.sh"), "fail", n, f.name, why, *([kind] if kind else [])])[1].strip()
     if out: say(f"FAILED-DISPATCH #{n}: {out}")
-    return True
+    # A probe's refutation that gh or I/O failed (#888): the run stays uncounted, so the next pass calls `fail` and sends it again.
+    return "WAVE PROBE-RETRY" not in out
 if not dry:   # a run that left active-runs.txt is read no more, so its read-once marker goes (#693)
     _ck = {f"counted-{folder(r).name}" for r in names}
     for m in (st / "auto").glob("counted-*"):

@@ -199,6 +199,7 @@ class Reviewer:
     route: str
 
 
+EX_TEMPFAIL = 75   # a refutation that gh or I/O failed: the loop sends it again; any other refusal is final (#888, ADR-0134)
 LOOP = Reviewer(id="squad-loop", label="the squad loop", wire="squad-loop", route="loop")   # who records a probe's refutation
 
 
@@ -842,7 +843,16 @@ def main(argv=None) -> int:
                 answers += said
             report = run_round(a.spec, findings, answers, github=github, root=root, round_no=a.round_no,
                                who=who, dry_run=a.dry_run, proxy=proxy)
-    except (OSError, ValueError, NoReviewer, NoProxy) as e:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:   # gh failed: a later call may pass
+        print(f"premise-check: transient: {e}" + (f": {e.stderr.strip()}" if isinstance(e.stderr, str) and e.stderr.strip() else ""), file=sys.stderr)
+        return EX_TEMPFAIL
+    except (OSError, json.JSONDecodeError) as e:   # a refutation reads no file, so its I/O and JSON errors are gh's answer
+        if a.refute is None and isinstance(e, json.JSONDecodeError):
+            print(f"premise-check: {e}", file=sys.stderr)
+            return 2
+        print(f"premise-check: {'transient: ' if a.refute is not None else ''}{e}", file=sys.stderr)
+        return EX_TEMPFAIL if a.refute is not None else 2
+    except (ValueError, NoReviewer, NoProxy) as e:
         print(f"premise-check: {e}", file=sys.stderr)
         return 2
     if a.dry_run:

@@ -68,18 +68,21 @@ o=$(w fail 54 run-red "ended failed: ac-verify:ac_failed")
 [ "$(pcs)" = 0 ] && froze 54 && case "$o" in *"WAVE PROBE #54"*"no Premise"*) true;; *) false;; esac \
   && ok "E: a probe with no premise line is frozen and named" || ko "E: pc $(pcs): '$o'"
 
-# F: a refutation premise-check refuses still freezes the probe, and the refusal is named.
+# F: a refutation premise-check refuses (exit 2: the premise was never recorded as needs a probe) still freezes the probe; the
+# refusal is named to the owner on the issue, and the line carries no retry token, so the janitor counts the run and never
+# sends the same refusal again (ADR-0134).
 : > "$T/pc.log"; issue 55 probe "$PROBE"
 o=$(PC_RC=2 w fail 55 run-red "ended failed: ac-verify:ac_failed")
-[ "$(pcs)" = 1 ] && froze 55 && case "$o" in *"WAVE PROBE #55"*"refused"*) true;; *) false;; esac \
-  && ok "F: a refused refutation still freezes the probe" || ko "F: pc $(pcs): '$o'"
+[ "$(pcs)" = 1 ] && froze 55 && case "$o" in *"WAVE PROBE-REFUSED #55"*) true;; *) false;; esac && case "$o" in *PROBE-RETRY*) false;; *) true;; esac \
+  && ls "$T/st/cq/" | /usr/bin/grep -q '#55-' \
+  && ok "F: a refused refutation freezes the probe, is named to the owner, and asks no retry" || ko "F: pc $(pcs), cq '$(ls "$T/st/cq")': '$o'"
 
-# G: a refutation premise-check refused once is retried on the next pass, once the probe is frozen, and then succeeds.
-: > "$T/pc.log"; issue 55 probe,frozen:owner "$PROBE"
-o=$(w fail 55 run-red "ended failed: ac-verify:ac_failed")
-[ "$(cat "$T/pc.log")" = "878|--refute|the check comments on the spec|--repo|x/y" ] \
-  && case "$o" in *"WAVE PROBE #55"*"refuted '"*) true;; *) false;; esac \
-  && ok "G: a refused refutation is retried on the next pass" || ko "G: pc '$(cat "$T/pc.log")': '$o'"
+# G: a refutation that fails for a transient cause (exit 75: gh or I/O) freezes the probe and prints the retry token the
+# janitor reads to leave the run uncounted, so its next pass sends the refutation again (test-janitor-probe-retry.sh).
+: > "$T/pc.log"; issue 57 probe "$PROBE"
+o=$(PC_RC=75 w fail 57 run-red "ended failed: ac-verify:ac_failed")
+[ "$(pcs)" = 1 ] && froze 57 && case "$o" in *"WAVE PROBE-RETRY #57"*) true;; *) false;; esac \
+  && ok "G: a transient failure asks the next pass to retry the refutation" || ko "G: pc $(pcs): '$o'"
 
 # H: premise-check runs on the plugin's interpreter (SG_SQUAD's venv), never the host's gate interpreter (SG_GATE_PY).
 mkdir -p "$T/sq/.venv/bin" "$T/host"

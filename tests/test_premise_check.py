@@ -932,6 +932,23 @@ def test_a_refutation_needs_no_review_model(monkeypatch, tmp_path, capsys):
     assert pc.LOOP.label in gh.comments[1]
 
 
+def test_a_refutation_that_gh_fails_exits_transient_so_the_loop_retries_it(monkeypatch, capsys):
+    def gh_down(args, **kw):
+        raise subprocess.CalledProcessError(1, args, stderr="HTTP 502")
+
+    monkeypatch.setattr(pc, "_sh", gh_down)   # the real REST runner, its gh call refused
+    assert pc.main(["878", "--refute", PROBE_PREMISE, "--repo", "x/y"]) == pc.EX_TEMPFAIL
+    assert "transient" in capsys.readouterr().err
+
+
+def test_a_refutation_the_check_refuses_exits_2_so_the_loop_never_retries_it(monkeypatch, tmp_path, capsys):
+    gh = StubGithub()
+    gh.say(probe_comment(tmp_path, PROBE), login="squad-loop")
+    monkeypatch.setattr(pc, "rest_runner", lambda repo: gh)
+    assert pc.main(["878", "--refute", "a premise the check never named", "--repo", "x/y"]) == 2
+    assert "never recorded" in capsys.readouterr().err
+
+
 def test_a_refuted_premise_beside_a_pending_probe_ends_refuted(tmp_path):
     rows = rows_of(tmp_path, one_fact(holds=False), PROBE)
     assert pc.ending(rows) == "refuted"
