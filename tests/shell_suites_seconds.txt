@@ -65,6 +65,7 @@ test-hub-metrics.sh 1.52
 test-hub-mobile-loop.sh 0.09
 test-hub-mobile-move.sh 0.04
 test-hub-mobile-run.sh 0.05
+test-hub-mobile-sheet.sh 0.09
 test-hub-promote.sh 0.28
 test-hub-run-issue.sh 0.33
 test-hub-state-default.sh 0.20

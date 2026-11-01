@@ -134,6 +134,25 @@ def test_the_open_lanes_are_tracking_only(table):
                 f"{name} reads or writes the tracking lane; the lane moves no card and gates nothing"
 
 
+def test_two_repositories_sharing_a_pull_request_number_keep_both_rows(table):
+    rows = [{"kd": "pr", "n": 5, "r": "sbihaiko/agent-squad", "t": "one"},
+            {"kd": "pr", "n": 5, "r": "sbihaiko/squad-board", "t": "two"}]
+    open_prs = next(g for g in table.kind_groups(("bug",), rows) if g["kind"] == table.PR_KIND and g["state"] == "open")
+
+    assert [x["t"] for x in open_prs["items"]] == ["one", "two"], "a pull request of one repository hides the other's"
+    assert [x["key"] for x in open_prs["items"]] == ["pr:sbihaiko/agent-squad#5", "pr:sbihaiko/squad-board#5"], \
+        "the key is not the kind, the repository and the number"
+
+
+def test_a_row_without_a_repository_keys_on_the_profile_default(table):
+    rows = [{"kd": "pr", "n": 5, "t": "older"}]
+    open_prs = next(g for g in table.kind_groups(("bug",), rows, "sbihaiko/agent-squad")
+                    if g["kind"] == table.PR_KIND and g["state"] == "open")
+
+    assert [x["key"] for x in open_prs["items"]] == ["pr:sbihaiko/agent-squad#5"], \
+        "a row with no repository does not take the profile default in its key"
+
+
 def test_the_hub_renders_no_closed_branch_lane(table, hub, monkeypatch):
     monkeypatch.setattr(hub, "board_cache", {"t": 1.0, "items": [], "prs": [], "err": None, "errs": []})
     board = hub.board()

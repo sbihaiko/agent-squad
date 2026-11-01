@@ -401,7 +401,7 @@ const mSlots = () => specSlots(((board && board.groups) || []).flatMap(g => g.it
 const columnCards = g => g.items.filter(x => labelOk(bo.labels || [], bo.lmode, x) && spOk(x));
 function cardButton(x, i) {
   const b = document.createElement("button");
-  b.className = "card"; b.dataset.role = "card"; b.dataset.i = i; b.dataset.n = x.n;
+  b.className = "card"; b.dataset.role = "card"; b.dataset.i = i; b.dataset.n = x.n; b.dataset.hr = x.hr || "";
   const id = document.createElement("span"); id.className = "cid"; id.textContent = "#" + x.n;
   // The card wears its spec's color and its wave as a text chip (#917); the rules are the desktop board's (board-lanes.js).
   b.setAttribute("style", "--lc:" + specColor(mSlots(), cardSpec(x)));
@@ -544,13 +544,17 @@ function renderSheet() {
   $("sheet").hidden = !open;
   if (!open) { issueKey = ""; $("sh-set").innerHTML = ""; $("sh-pos").textContent = ""; return; }
   const key = (x.r || "") + "#" + x.n;
-  // The selection is the cards this column shows (#919): the position, the previous and next buttons and the number
-  // chips all read it, and a closed sheet clears the read key, so opening it again reads the issue again.
-  $("sh-pos").textContent = (view.card + 1) + " of " + shown.length;
-  $("sh-prev").disabled = view.card <= 0;
-  $("sh-next").disabled = view.card >= shown.length - 1;
-  $("sh-set").innerHTML = shown.map((c, i) =>
-    `<button type="button" data-i="${i}" class="${i === view.card ? "on" : ""}" title="card ${i + 1} of ${shown.length}">#${escHTML(c.n)}</button>`).join("");
+  // The selection is the cards this column shows (#919), narrowed to the opened card's run when it holds one (#997): the
+  // position, the previous and next buttons and the number chips all read it, and a closed sheet clears the read key, so
+  // opening it again reads the issue again.
+  const set = sheetCards(shown, x), at = set.indexOf(x);
+  $("sh-pos").textContent = (at + 1) + " of " + set.length;
+  $("sh-prev").disabled = at <= 0;
+  $("sh-next").disabled = at >= set.length - 1;
+  $("sh-set").innerHTML = set.map((c, k) => {
+    const i = shown.indexOf(c);
+    return `<button type="button" data-i="${i}" class="${i === view.card ? "on" : ""}" title="card ${k + 1} of ${set.length}">#${escHTML(c.n)}</button>`;
+  }).join("");
   // The button names the column the hub serves on the row (`x.pmt`), so this page holds no column name of its own.
   $("sh-todo").hidden = !x.pm;
   if (x.pmt) $("sh-todo").textContent = "→ " + x.pmt;
@@ -585,7 +589,7 @@ function renderFilters() {
   $("lf").querySelector("summary").textContent = sel.length ? sel.join(", ") : "labels";
 }
 const refresh = () => { renderBoard(); renderSheet(); renderFilters(); };
-const step = g => { view = afterGesture(view, g); refresh(); };
+const step = g => { view = sheetStep(view, shown, g); refresh(); };
 async function loadBoard() {
   try {
     const b = await call("/api/board");

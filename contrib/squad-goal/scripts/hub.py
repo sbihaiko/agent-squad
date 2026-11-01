@@ -1935,6 +1935,39 @@ def foot_refresh(now=None):
     LOAD_STATE["facts"] = foot_items(src, now)
     return LOAD_STATE["facts"]
 
+SPEC_TIP_LINES = 8   # the spec tile's tooltip names at most this many specs, then "+k more"
+
+def spec_progress(items, moves=None, read_at=None, window=None):
+    """The Monitor card's spec tile: closed over total sub-issues, summed over every open spec on the board cache. An open
+    spec is a card with the spec label that the board draws in neither Closed nor Abandoned: its column comes from
+    `drawn_column`, with the door's overlay, as the board draws it (#829). The count is the one `task_count` reads, so
+    no new GitHub read. The percent rounds down, so 100% means every sub-issue is closed; `frac` is the exact fraction
+    for the bar width. The page only draws these values (ADR-0137)."""
+    if moves is None: moves = read_moves() if overlay_on() else {}
+    if read_at is None: read_at = board_cache.get("rt")
+    if window is None: window = pending_window()
+    gone = (COLUMN["issue_closed"], COLUMN["abandoned"])
+    done = total = 0
+    rows = []   # (fraction, number, tip line) per open spec
+    for i in items or []:
+        if _columns_module.SPEC_LABEL not in (i.get("l") or []): continue
+        if drawn_column(i, moves, read_at, window)["st"] in gone: continue
+        sc = task_count(i)
+        if sc:
+            c, t = (int(x) for x in sc.split("/"))
+            done, total = done + c, total + t
+            rows.append((c / t, i.get("n") or 0, f"#{i.get('n')} {i.get('t') or ''} — {sc}"))
+        else:
+            rows.append((0.0, i.get("n") or 0, f"#{i.get('n')} {i.get('t') or ''} — no sub-issue"))
+    rows.sort(key=lambda r: (r[0], r[1]))
+    tips = [r[2] for r in rows[:SPEC_TIP_LINES]] + ([f"+{len(rows) - SPEC_TIP_LINES} more"] if len(rows) > SPEC_TIP_LINES else [])
+    n = len(rows)
+    out = {"open": n, "so": f"{n} open" if n else "", "done": done, "total": total, "tip": "\n".join(tips)}
+    if not n: return dict(out, pct=0, frac=0, value="no open spec", state="none", bar=False)
+    if not total: return dict(out, pct=0, frac=0, value=f"{n} open · no sub-issue yet", state="info", bar=True)
+    pct = done * 100 // total
+    return dict(out, pct=pct, frac=done / total, value=f"{done}/{total} · {pct}%", state="ok" if done == total else "info", bar=True)
+
 def load_payload():
     """What /api/load serves: the cached reading, never a fresh one, so three open tabs cost three JSON bodies and no
     sample. `cpu` is the newest reading, `warn` is the two-sample rule over the history, `runs` the shares the cards use,
@@ -1947,6 +1980,7 @@ def load_payload():
             "ram": LOAD_STATE.get("ram"), "gpu": LOAD_STATE.get("gpu"),
             "warn": sustained(hist), "runs": dict(LOAD_STATE.get("runs") or {}),
             "facts": list(LOAD_STATE.get("facts") or []),
+            "specs": spec_progress(board_cache.get("items") or []),   # the open specs' total, off the board cache: no GitHub read
             "secs": LOAD_SAMPLE_SECS, "asof": LOAD_STATE.get("asof", 0.0)}
 
 def status_payload():
@@ -3941,6 +3975,7 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 #inst .at.ok .dot{background:var(--ok)}#inst .at.err .dot{background:var(--err)}#inst .at.info .dot{background:var(--acc)}
 #inst .at .av{display:block;color:var(--fg);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}#inst .at.err .av{color:var(--err)}#inst .at a{color:var(--acc);text-decoration:none}#inst .at a:hover{text-decoration:underline}
 #inst .at details>summary{cursor:pointer;color:var(--mute)}#inst .at details>ul{margin:4px 0 0;padding:0 0 0 14px;color:var(--mute);overflow-wrap:anywhere}
+#ispec{margin-bottom:8px}#inst .at .so{margin-left:auto;font-weight:400;color:var(--mute);font-variant-numeric:tabular-nums}#inst .pb{display:block;height:6px;margin:5px 0 2px;border-radius:3px;background:var(--line);overflow:hidden}#inst .pf{display:block;height:100%;border-radius:3px;background:var(--acc);transition:width .4s ease-out}#inst .at.ok .pf{background:var(--ok)}@media (prefers-reduced-motion: reduce){#inst .pf{transition:none}}
 #inst .irw{display:flex;justify-content:space-between;align-items:baseline;gap:8px;padding:3px 0;border-top:1px solid var(--line);font-size:var(--fs-min);color:var(--mute)}
 #inst .irw b{color:var(--fg);font-weight:600;font-variant-numeric:tabular-nums;text-align:right;min-width:0;overflow-wrap:anywhere}#inst .irw b.bad{color:var(--warn)}
 @media (prefers-reduced-motion: reduce){#inst .ig .gn{transition:none}}
@@ -3960,7 +3995,7 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 <details id=plans class=sp><summary>Subscriptions<span class=sr id=plsr></span></summary><div class=sb><div id=subs></div></div></details>
 <details id=stats class=sp><summary>Cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><h4>Spend <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Figures at API list prices (API-equivalent)."></span></h4><div class=tot id=tot></div><div class=m id=totnote></div><div class=cash id=cash></div><h4>Spend over time <span class=row id=per></span></h4><div id=chart></div><div id=kpi></div><div id=open></div><h4>Model cost · this month</h4><div class=m id=piet>API-equivalent</div><div id=pie></div></div></details>
 <details id=sqd class=sp open><summary>Squad models<span class=sr id=sqsr></span></summary><div class=sb id=sqm></div></details>
-<details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div class=ian id=ian></div><div id=iloop></div><div class=irw><span>Next cycle</span><b id=icyc aria-live=off>?</b></div><div id=iuse></div></div></details>
+<details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div class=ian id=ian></div><div id=ispec></div><div id=iloop></div><div class=irw><span>Next cycle</span><b id=icyc aria-live=off>?</b></div><div id=iuse></div></div></details>
 </aside>
 <main id=content>
 <section id=tab-board class="pane on" aria-label=Board>
@@ -4060,6 +4095,9 @@ function cycleLeft(text){const m=/^cycle (?:in |\+)(?:(\d+)h(\d\d)m|(\d+)m(\d\d)
 function cycleFmt(left){const s=Math.abs(Math.round(left)),h=Math.floor(s/3600),mi=Math.floor(s/60)%60,p=n=>String(n).padStart(2,"0"),
  t=h?`${h}h${p(mi)}m`:`${Math.floor(s/60)}m${p(s%60)}s`;return left<0?`+${t} late`:`in ${t}`}
 function instUsage(facts){const f=instFact(facts,"burn");if(!f||!f.text)return null;const p=String(f.text).split(" · ");return{tok:p[0].replace(/^tokens\s*/,""),calls:p.slice(1).join(" · ")}}
+function specBar(p){p=p||{};const st=p.state==="ok"||p.state==="info"?" "+p.state:"";   // the hub decides the count, the text and the state; the page only draws them
+ const w=100*Math.max(0,Math.min(1,Number(p.frac)||0)),bar=p.bar?`<span class=pb role=progressbar aria-label="Open spec progress" aria-valuemin=0 aria-valuemax=${Number(p.total)||0} aria-valuenow=${Number(p.done)||0}><span class=pf style="width:${w}%"></span></span>`:"";
+ return `<div class="at${st}"${p.tip?` title="${iq(p.tip)}"`:""}><span class=ah><span class=dot aria-hidden="true"></span>Specs${p.so?`<span class=so>${esc(p.so)}</span>`:""}</span><span class=av>${esc(p.value||"no open spec")}</span>${bar}</div>`}
 let instCyc=null,instLast={};
 function instSet(id,h){const e=$("#"+id);if(e&&instLast[id]!==h){instLast[id]=h;e.innerHTML=h}}
 function instTick(){const e=$("#icyc");if(e)e.textContent=instCyc===null?"?":cycleFmt(instCyc-Date.now()/1000)}
@@ -4068,7 +4106,7 @@ function instDraw(d){const c=$("#inst");if(!c)return;const facts=(d||{}).facts||
  else if(gs)ldCells(d).forEach((x,i)=>{const n=gs.children[i],g=gaugeGeom((d||{})[x.k.toLowerCase()]);if(!n)return;n.classList.toggle("ldred",x.red);
   const ln=n.querySelector(".gn"),f=n.querySelector(".gf"),v=n.querySelector(".gv");
   if(ln){ln.style.transform=`rotate(${g.deg}deg)`;ln.setAttribute("visibility",g.known?"visible":"hidden")}if(f){f.setAttribute("d",`M4 32 A26 26 0 0 1 ${g.x} ${g.y}`);f.setAttribute("stroke",g.col)}if(v)v.innerHTML=`<b>${x.k}</b> ${esc(x.t)}`});
- instSet("ian",instTiles(facts).map(tileHtml).join(""));
+ instSet("ian",instTiles(facts).map(tileHtml).join(""));instSet("ispec",specBar((d||{}).specs));
  const u=instUsage(facts);instSet("iuse",u?`<div class=irw><span>Tokens</span><b class=bad>${esc(u.tok)}</b></div><div class=irw><span>Calls over cap</span><b class=bad>${esc(u.calls)}</b></div>`:"<div class=irw><span>Tokens</span><b>no call over the cap</b></div>");
  const s=$("#instsr");if(s)s.textContent=instSum(facts);
  const cy=instFact(facts,"cycle"),l=cy?cycleLeft(cy.text):null;instCyc=l===null?null:Date.now()/1000+l;instTick()}

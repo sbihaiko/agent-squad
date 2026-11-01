@@ -63,6 +63,7 @@ class El {
     else this.attrs[name] = String(v);
   }
   removeAttribute(name) { delete this.attrs[name]; }
+  scrollIntoView() {}
   getAttribute(name) { return name in this.attrs ? this.attrs[name] : null; }
   addEventListener(t, fn) { (this.listeners[t] = this.listeners[t] || []).push(fn); }
   descendants() { const out = []; const walk = e => { for (const c of e.children) { out.push(c); walk(c); } }; walk(this); return out; }

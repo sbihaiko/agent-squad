@@ -129,6 +129,8 @@ contrib/squad-goal/scripts/hub.py	contrib/squad-goal/scripts/test-hub-killed.sh
 contrib/squad-goal/scripts/hub.py	contrib/squad-goal/scripts/test-hub-metrics.sh
 contrib/squad-goal/scripts/hub.py	contrib/squad-goal/scripts/test-hub-mobile-move.sh
 contrib/squad-goal/scripts/hub.py	contrib/squad-goal/scripts/test-hub-mobile-run.sh
+contrib/squad-goal/scripts/hub-mobile.html	contrib/squad-goal/scripts/test-hub-mobile-sheet.sh
+contrib/squad-goal/scripts/hub-mobile-gesture.js	contrib/squad-goal/scripts/test-hub-mobile-sheet.sh
 contrib/squad-goal/scripts/hub.py	contrib/squad-goal/scripts/test-hub-promote.sh
 contrib/squad-goal/scripts/hub.py	contrib/squad-goal/scripts/test-hub-run-issue.sh
 contrib/squad-goal/scripts/hub.py	contrib/squad-goal/scripts/test-hub-state-default.sh
