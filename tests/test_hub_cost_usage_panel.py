@@ -61,7 +61,7 @@ def _prelude():
     esc = "const esc=t=>String(t).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));"
     return "\n".join([
         usd, usdc.group(0) if usdc else "", pcol, other.group(0) if other else "", top.group(0) if top else "", esc,
-        _fn(SRC, "bars"), _fn(SRC, "pie"), _fn(SRC, "kr"), _fn(SRC, "openRows"),
+        _fn(SRC, "bars"), _fn(SRC, "pie"), _fn(SRC, "cmp"), _fn(SRC, "kr"), _fn(SRC, "openRows"),
     ])
 
 
@@ -322,6 +322,34 @@ def test_speed_keeps_the_provisional_note():
     assert "Provisional: only 4 PRs so far" in html and "firms up at ~10" in html
 
 
+def test_speed_provisional_note_sits_beside_the_heading():
+    html = _render(SPEED.replace("after:{n:n,", "after:{n:4,").replace("const n=42,", "const n=4,"), _stmt('$("#kpi").innerHTML='))
+    heading = re.search(r"<h4>.*?</h4>", html, re.S).group(0)
+    assert "Provisional: only 4 PRs so far" in heading, html
+    assert "<div class=warnl>" not in html, html
+
+
+def test_speed_stale_note_sits_beside_the_heading():
+    html = _render(SPEED.replace("stale:false", "stale:true"), _stmt('$("#kpi").innerHTML='))
+    heading = re.search(r"<h4>.*?</h4>", html, re.S).group(0)
+    assert "PR data stale" in heading, html
+    assert "<div class=warnl>" not in html, html
+
+
+def test_a_comparison_returns_its_text_and_its_direction_in_one_object():
+    js = _fn(SRC, "cmp") + "\nconst out={faster:cmp(18,38,'min'),slower:cmp(50,38,'min')};"
+    out = json.loads(_node(js + "\nconsole.log(JSON.stringify(out));"))
+    assert {k: out["faster"][k] for k in ("text", "dir")} == {"text": "was 38 min · 53% faster", "dir": "faster"}, out
+    assert {k: out["slower"][k] for k in ("text", "dir")} == {"text": "was 38 min · 32% slower", "dir": "slower"}, out
+
+
+def test_speed_labels_wrap_and_each_comparison_takes_its_own_line():
+    label = " ".join(re.findall(r"#kpi \.kr \.l\{([^}]*)\}", SRC))
+    assert "white-space:normal" in label and "text-overflow:ellipsis" not in label and "overflow:hidden" not in label, label
+    delta = re.search(r"#kpi \.kr \.d\{([^}]*)\}", SRC)
+    assert delta and "grid-column:1/-1" in delta.group(1), delta
+
+
 def test_open_rows_read_number_and_minutes():
     out = _run_js("const o=[{n:1491,min:28},{n:1502,min:31}];const out={html:openRows(o)};")
     html = out["html"]
@@ -365,7 +393,7 @@ const out={html, slices:[...html.matchAll(/<(?:path|circle)[^>]*data-k="([^"]+)"
                       ("d", "3K"), ("e", "1K"), ("f", "500")], legend
     assert re.search(r'<details[^>]*data-k="other"', html), html
     assert html.index("<details") < html.index("<span class=ln>d</span>") < html.index("</details>"), html
-    assert "%" not in html and "$" not in html, html   # no share of a price list: tokens, and no dollars (#1035)
+    assert "$" not in html, html   # tokens and shares of tokens, never dollars (#1035)
 
 
 def test_cost_donut_other_sums_the_unrounded_costs():
