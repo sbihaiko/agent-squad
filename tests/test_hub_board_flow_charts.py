@@ -76,7 +76,7 @@ def _flow_block(hub):
 
 def _flow(hub):
     """Both chart routes' answers, under the keys the tests read."""
-    return {"cfd": hub.flow_cfd()["cfd"], "lead": hub.flow_lead()["lead"]}
+    return {"cfd": hub.flow_cfd(ty=None)["cfd"], "lead": hub.flow_lead(ty=None)["lead"]}
 
 
 def test_tasks_header_has_flow_and_lead_time_buttons_and_keeps_its_controls(hub):
@@ -193,8 +193,8 @@ def test_the_closed_band_never_steps_down_where_the_close_reason_began(hub, boar
 def test_the_lead_time_chart_names_the_cards_closed_as_not_planned(hub, tmp_path):
     block = _flow_block(hub).split("const drawFlow")[0]
     drawing = "\n".join([
-        "const COLORS={},COLNAME={};", "const esc=s=>String(s);", block,
-        'process.stdout.write(flowLead({measure:"opened -> closed",window:{size:20,unit:"issues"},'
+        "const COLORS={},COLNAME={};", "const esc=s=>String(s);", "const ls={};", block,
+        'process.stdout.write(flowLead({type:"task",measure:"opened -> closed",window:{size:20,unit:"issues"},'
         'excluded:[{reason:"not_planned",count:3}],excluded_total:3,series:[],summary:null}));',
     ])
     path = tmp_path / "flow-lead-not-planned.js"
@@ -266,7 +266,7 @@ def test_a_skipped_read_is_a_calendar_day_with_no_band_values(hub, board):
 def test_a_one_point_run_is_drawn_as_a_visible_mark(hub, tmp_path):
     block = _flow_block(hub).split("const drawFlow")[0]
     drawing = "\n".join([
-        "const COLORS={};", "const esc=s=>String(s);", block,
+        "const COLORS={};", "const esc=s=>String(s);", "const ls={};", block,
         'process.stdout.write(flowCFD({days:["a","b","c"],ymax:4,yticks:[0,2,4],'
         'xticks:[{i:0,day:"a"},{i:2,day:"c"}],start:"2026-10-01",'
         'bands:[{name:"Todo",lower:[0,null,0],upper:[2,null,1]}]}));',
@@ -285,7 +285,7 @@ def test_a_one_point_run_is_drawn_as_a_visible_mark(hub, tmp_path):
 def test_the_page_splits_each_band_at_a_gap(hub, tmp_path):
     block = _flow_block(hub).split("const drawFlow")[0]
     drawing = "\n".join([
-        "const COLORS={};", "const esc=s=>String(s);", block,
+        "const COLORS={};", "const esc=s=>String(s);", "const ls={};", block,
         'process.stdout.write(flowCFD({days:["a","b","c","d","e"],ymax:4,yticks:[0,2,4],'
         'xticks:[{i:0,day:"a"},{i:4,day:"e"}],start:"2026-10-01",'
         'bands:[{name:"Todo",lower:[0,0,null,0,0],upper:[2,3,null,1,2]}]}));',
@@ -372,7 +372,7 @@ def test_the_cfd_draws_labelled_axes_with_numbered_ticks_and_dated_ticks(hub, bo
     cfd = _flow(hub)["cfd"]
     block = _flow_block(hub).split("const drawFlow")[0]
     drawing = "\n".join([
-        "const COLORS={},COLNAME={};", "const esc=s=>String(s);", block,
+        "const COLORS={},COLNAME={};", "const esc=s=>String(s);", "const ls={};", block,
         f"process.stdout.write(flowCFD({json.dumps(cfd)}));",
     ])
     path = tmp_path / "flow-cfd-axis.js"
@@ -401,7 +401,7 @@ def test_every_band_drawn_has_a_legend_entry_frozen_and_no_column_included(hub, 
     assert names == [*hub.ORDER, "frozen", "No column"]
     block = _flow_block(hub).split("const drawFlow")[0]
     drawing = "\n".join([
-        "const COLORS={},COLNAME={};", "const esc=s=>String(s);", block,
+        "const COLORS={},COLNAME={};", "const esc=s=>String(s);", "const ls={};", block,
         f"process.stdout.write(flowCFD({json.dumps(cfd)}));",
     ])
     path = tmp_path / "flow-cfd-legend.js"
@@ -456,10 +456,10 @@ def test_the_control_chart_draws_one_mark_per_cluster_on_the_date_axis(hub, boar
         _card(2, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-02T09:00:00Z"),
         _card(3, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-09T09:00:00Z"),
     ]
-    lead = _flow(hub)["lead"]
+    lead = hub.flow_lead()["lead"]
     block = _flow_block(hub).split("const drawFlow")[0]
     drawing = "\n".join([
-        "const COLORS={},COLNAME={issue_closed:'Closed'};", "const esc=s=>String(s);", block,
+        "const COLORS={},COLNAME={issue_closed:'Closed'};", "const esc=s=>String(s);", "const ls={};", block,
         f"process.stdout.write(flowLead({json.dumps(lead)}));",
     ])
     path = tmp_path / "flow-control.js"
@@ -519,7 +519,7 @@ def test_the_cfd_names_a_range_selector_and_a_day_hover_with_counts(hub, board, 
     view = _flow(hub)["cfd"]["ranges"]["all"]
     block = _flow_block(hub).split("const drawFlow")[0]
     drawing = "\n".join([
-        "const COLORS={},COLNAME={};", "const esc=s=>String(s);", block,
+        "const COLORS={},COLNAME={};", "const esc=s=>String(s);", "const ls={};", block,
         f"process.stdout.write(flowCFD({json.dumps(view)}));",
     ])
     path = tmp_path / "flow-cfd-range.js"
@@ -614,7 +614,7 @@ def test_the_board_poll_never_computes_chart_data(hub, board, monkeypatch):
 def test_a_drag_maps_its_plot_fractions_to_the_dates_of_the_range(hub, tmp_path):
     block = _flow_block(hub).split("const drawFlow")[0]
     drawing = "\n".join([
-        "const COLORS={},COLNAME={};", "const esc=s=>String(s);", block,
+        "const COLORS={},COLNAME={};", "const esc=s=>String(s);", "const ls={};", block,
         "const r=ltSpan({start:'2026-10-01T00:00:00+00:00',end:'2026-10-11T00:00:00+00:00'},0.5,1);",
         "process.stdout.write(JSON.stringify(r));",
     ])

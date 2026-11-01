@@ -49,7 +49,7 @@ def _row(n, st="Todo", pa=None, labels=()):
 def _sample(day, cells):
     """A sample as board_flow_history writes it: the cells, and the counts, frozen and none they add up to."""
     counts, frozen, none = {}, 0, 0
-    for kind, _spec, _wave, column, fz, n in cells:
+    for kind, _spec, _wave, column, fz, n, *_ in cells:
         if column is None:
             none += n
         else:
@@ -78,9 +78,9 @@ def cfd():
 
 def test_a_sample_names_each_cards_kind_spec_and_wave(flow):
     s = flow.sample([_row(1, pa=5, labels=["wave:04", "bug"]), _row(2, labels=["loop-bug"]), _row(3)], now=_epoch(20))
-    assert ["bug", "5", "4", "Todo", 0, 1] in s["cells"], "a bug-labelled card is the bar's kind bug"
-    assert ["bug", "none", "none", "Todo", 0, 1] in s["cells"], "a loop bug is a bug too"
-    assert ["issue", "none", "none", "Todo", 0, 1] in s["cells"]
+    assert ["bug", "5", "4", "Todo", 0, 1, "bug"] in s["cells"], "a bug-labelled card is the bar's kind bug"
+    assert ["bug", "none", "none", "Todo", 0, 1, "bug"] in s["cells"], "a loop bug is a bug too"
+    assert ["issue", "none", "none", "Todo", 0, 1, "task"] in s["cells"]
 
 
 def test_a_card_that_changes_spec_on_the_same_day_writes_a_new_sample(flow, tmp_path):
@@ -88,22 +88,22 @@ def test_a_card_that_changes_spec_on_the_same_day_writes_a_new_sample(flow, tmp_
     flow.append(path, [_row(1, pa=5)], now=_epoch(20))
     flow.append(path, [_row(1, pa=6)], now=_epoch(20) + 60)
     last = flow.samples(path)[-1]
-    assert ["issue", "6", "none", "Todo", 0, 1] in last["cells"], "equal counts with other cells is a new sample"
+    assert ["issue", "6", "none", "Todo", 0, 1, "task"] in last["cells"], "equal counts with other cells is a new sample"
 
 
 def test_a_card_with_no_spec_and_no_wave_is_none(flow):
     s = flow.sample([_row(1)], now=_epoch(20))
-    assert ["issue", "none", "none", "Todo", 0, 1] in s["cells"]
+    assert ["issue", "none", "none", "Todo", 0, 1, "task"] in s["cells"]
 
 
 def test_the_lowest_wave_label_names_the_wave_without_leading_zeros(flow):
     s = flow.sample([_row(1, labels=["wave:10", "wave:02"])], now=_epoch(20))
-    assert ["issue", "none", "2", "Todo", 0, 1] in s["cells"]
+    assert ["issue", "none", "2", "Todo", 0, 1, "task"] in s["cells"]
 
 
 def test_a_card_in_no_column_has_no_column_name_in_its_cell(flow):
     s = flow.sample([_row(1, st="Nowhere")], now=_epoch(20))
-    assert ["issue", "none", "none", None, 0, 1] in s["cells"]
+    assert ["issue", "none", "none", None, 0, 1, "task"] in s["cells"]
 
 
 def test_the_cells_add_up_to_the_counts_the_flow_already_keeps(flow):
@@ -198,7 +198,7 @@ def test_a_sample_without_cells_answers_no_kind(cfd):
 
 
 def test_a_day_read_from_a_sample_without_cells_is_flagged(cfd):
-    samples = [_legacy(20, {"card": {"Todo": 4}}), _sample(21, [["issue", "5", "none", "Todo", 0, 1]])]
+    samples = [_legacy(20, {"card": {"Todo": 4}}), _sample(21, [["issue", "5", "none", "Todo", 0, 1, "task"]])]
     points = cfd(samples, COLUMNS)["points"]
     assert points[0].get("legacy") is True
     assert not points[1].get("legacy")
@@ -263,7 +263,7 @@ def test_the_flow_history_keeps_each_cards_spec_and_wave(hub, board):
     items = [_item(hub, 1, hub.COLUMN["unscheduled"], pa=5, labels=["wave:4"])]
     _write_history(hub, items)
     line = hub._flow.history_path(hub.BOARD, hub.REPO).read_text().splitlines()[-1]
-    assert ["issue", "5", "4", hub.COLUMN["unscheduled"], 0, 1] in json.loads(line)["cells"]
+    assert ["issue", "5", "4", hub.COLUMN["unscheduled"], 0, 1, "task"] in json.loads(line)["cells"]
 
 
 def test_the_chart_route_filters_the_cumulative_flow_by_the_bar_values(hub, board):
@@ -277,14 +277,16 @@ def test_the_chart_route_filters_the_cumulative_flow_by_the_bar_values(hub, boar
     def last(query):
         return _backlog_counts(hub.flow_cfd(*hub.board_filters(query)))[backlog]["count"][-1]
 
-    assert last("") == 3
-    assert last("fs=5") == 1
-    assert last("fw=5/4,6/4") == 2, "a Waves key is spec/wave, as the bar sends it (#980)"
-    assert last("fw=5/4&fs=5") == 1
-    assert last("fw=none/none") == 1
-    assert last("fk=bug") == 2
-    assert last("fk=bug&fs=6") == 1
-    assert last("fk=issue") == 1
+    assert last("ty=task") == 1, "the default type is tasks: only the first card"
+    assert last("ty=bug") == 2
+    assert last("ty=task&fs=5") == 1
+    assert last("ty=bug&fs=6") == 1
+    assert last("ty=bug&fw=6/4") == 1, "a Waves key is spec/wave, as the bar sends it (#980)"
+    assert last("ty=task&fw=5/4&fs=5") == 1
+    assert last("ty=bug&fw=none/none") == 1
+    assert last("ty=bug&fk=bug") == 2
+    assert last("ty=bug&fk=issue") == 0
+    assert last("ty=task&fk=issue") == 1
 
 
 def _kind_items(hub):
@@ -304,10 +306,11 @@ def test_the_kind_field_never_names_the_charts_kind(hub, board):
     def last(query):
         return _backlog_counts(hub.flow_cfd(*hub.board_filters(query)))[backlog]["count"][-1]
 
-    assert last("") == 5
-    assert last("fk=issue") == 3, "a Task or Spec card with no bug label is an issue, as on the board"
-    assert last("fk=bug") == 2, "a card labelled bug or loop-bug is a bug, whatever its Kind field"
-    assert last("fk=issue,bug") == 5
+    assert last("ty=task") == 3
+    assert last("ty=task&fk=issue") == 3, "a Task or Spec card with no bug label is an issue, as on the board"
+    assert last("ty=bug&fk=bug") == 2, "a card labelled bug or loop-bug is a bug, whatever its Kind field"
+    assert last("ty=task&fk=issue,bug") == 3
+    assert last("ty=bug&fk=issue,bug") == 2
     assert sorted(r["n"] for r in hub.lead_rows() if r["kind"] == "issue") == [1, 2, 5]
     assert sorted(r["n"] for r in hub.lead_rows() if r["kind"] == "bug") == [3, 4]
 
@@ -333,10 +336,12 @@ def test_the_control_chart_takes_the_same_filters(hub, board):
     def dots(query):
         return sorted(d["n"] for d in hub.flow_lead(*hub.board_filters(query))["lead"]["control"]["jira"]["all"]["dots"])
 
-    assert dots("") == [1, 2]
+    assert dots("") == [1], "the default type is tasks"
     assert dots("fs=5") == [1]
     assert dots("fw=5/2") == [1]
-    assert dots("fk=bug") == [2]
+    assert dots("ty=bug") == [2]
+    assert dots("ty=bug&fk=bug") == [2]
+    assert dots("ty=bug&fs=5") == []
     assert dots("fk=pr") == [], "the charts count issues: a PR is no row of the flow history or the lead time"
 
 
@@ -345,14 +350,14 @@ def test_the_drag_zoom_takes_the_same_filters(hub, board):
     hub.board_cache["items"] = [_item(hub, 1, closed, pa=5, closed_at="2026-10-02T15:00:00Z"),
                                 _item(hub, 2, closed, labels=["bug"], closed_at="2026-10-03T15:00:00Z")]
     span = "from=2026-09-01T00:00:00&to=2026-11-01T00:00:00"
-    assert sorted(d["n"] for d in hub.lead_zoom(span)["dots"]) == [1, 2]
-    assert [d["n"] for d in hub.lead_zoom(span + "&fk=bug")["dots"]] == [2]
+    assert [d["n"] for d in hub.lead_zoom(span)["dots"]] == [1]
+    assert [d["n"] for d in hub.lead_zoom(span + "&ty=bug&fk=bug")["dots"]] == [2]
     assert [d["n"] for d in hub.lead_zoom(span + "&fs=5")["dots"]] == [1]
 
 
 def test_the_bar_query_names_waves_specs_and_kinds(hub):
-    assert hub.board_filters("fw=5/4,none/none&fs=5&fk=bug,pr") == (["5/4", "none/none"], ["5"], ["bug", "pr"])
-    assert hub.board_filters("") == ([], [], [])
+    assert hub.board_filters("fw=5/4,none/none&fs=5&fk=bug,pr") == (["5/4", "none/none"], ["5"], ["bug", "pr"], "task")
+    assert hub.board_filters("") == ([], [], [], "task")
 
 
 def test_the_board_route_takes_no_filter_it_does_not_apply(hub):
@@ -370,23 +375,25 @@ def _page_line(hub, prefix):
     return next(line for line in hub.PAGE.splitlines() if line.startswith(prefix))
 
 
-def _page_harness(hub, answers, drive):
+def _page_harness(hub, answers, drive, onchange=""):
     """The page's own bar and chart lines, run in node over stub elements. `fetch` answers from `answers`, keyed by URL,
     with the hub's own route payloads; the script `drive` acts on the page and prints JSON."""
     lines = [_page_line(hub, p) for p in ("const barQuery=", "const flowOpen=", "const ltQ=", "const ltZoom=", "const ltGet=",
-                                          "const barMoved=", "const pickFilter=")]
+                                          "const barMoved=", "const pickFilter=", "const saveLT=")]
     stubs = f"""
 const ANSWERS={json.dumps(answers)},FETCHED=[],DRAWN=[],SAVED=[],POLLED=[];
 const el=()=>({{hidden:true,handlers:{{}},addEventListener(t,f){{this.handlers[t]=f}}}});
 const EL={{"#flowov":el(),"#fwl":el(),"#fsl":el(),"#fkl":el()}};
 const $=s=>EL[s];
 const fetch=async url=>{{FETCHED.push(url);if(!(url in ANSWERS))throw new Error("no answer for "+url);return {{json:async()=>ANSWERS[url]}}}};
-let bo={{}},FLOWK=null,FLOWD={{}},LT={{tf:"30",log:false,pick:null,zc:null,zr:null,tok:0,a:"",b:""}};
+let bo={{}},FLOWK=null,FLOWD={{}},LT={{tf:"30",log:false,ty:"task",pick:null,zc:null,zr:null,tok:0,a:"",b:""}};
+const ls={{}},save=()=>SAVED.push(JSON.stringify(ls.lt));
+EL["#flowb"]=el();
 const drawFlow=()=>DRAWN.push(JSON.parse(JSON.stringify(FLOWD[FLOWK]||null)));
 const saveB=()=>SAVED.push(JSON.stringify(bo)),pollBoard=()=>POLLED.push(1);
 const settle=()=>new Promise(r=>setTimeout(r,0));
 """
-    script = stubs + "\n".join(lines) + "\n(async()=>{" + drive + "})().catch(e=>{console.error(e.stack);process.exit(1)});"
+    script = stubs + "\n".join(lines) + "\n" + onchange + "\n(async()=>{" + drive + "})().catch(e=>{console.error(e.stack);process.exit(1)});"
     if shutil.which("node") is None:
         pytest.skip("node is not installed")
     result = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=30)
@@ -394,8 +401,8 @@ const settle=()=>new Promise(r=>setTimeout(r,0));
     return json.loads(result.stdout)
 
 
-def _bar(fw="", fs="", fk=""):
-    return f"fw={fw}&fs={fs}&fk={fk}"
+def _bar(fw="", fs="", fk="", ty="task"):
+    return f"fw={fw}&fs={fs}&fk={fk}&ty={ty}"
 
 
 def test_a_kind_pick_redraws_the_open_cumulative_flow_with_the_filtered_route(hub, board):
@@ -412,7 +419,7 @@ console.log(JSON.stringify({fetched:FETCHED,bo,last:DRAWN[DRAWN.length-1],saved:
     assert out["fetched"] == [f"/api/chart/cfd?{_bar()}", f"/api/chart/cfd?{_bar(fk='bug')}"]
     assert out["bo"]["fk"] == ["bug"] and out["saved"] == 1 and out["polled"] == 1, "the pick is stored as the board's own"
     count = {b["name"]: b for b in out["last"]["cfd"]["bands"]}[backlog]["count"][-1]
-    assert count == 2, "the open chart is redrawn from the filtered route"
+    assert count == 0, "the open chart is redrawn from the filtered route: no task is a bug"
 
 
 def test_a_spec_clear_redraws_the_open_control_chart_and_its_chosen_span(hub, board):
@@ -449,7 +456,7 @@ EL["#fkl"].handlers.change({target:{value:"bug",checked:true}});
 await first;await settle();await settle();
 console.log(JSON.stringify({last:DRAWN[DRAWN.length-1]}));""")
     count = {b["name"]: b for b in out["last"]["cfd"]["bands"]}[backlog]["count"][-1]
-    assert count == 1, "the answer read for all kinds landed after the pick and was drawn"
+    assert count == 0, "the answer for the picked kind is drawn, not the one read before the pick"
 
 
 def test_the_bar_has_a_kinds_control_beside_waves_and_specs(hub):
@@ -487,10 +494,161 @@ def test_the_chart_says_which_days_answer_no_spec_and_no_wave(hub, board, tmp_pa
                                    "frozen": 0, "none": 0}) + "\n")
     cfd = hub.flow_cfd()["cfd"]
     block = _flow_block(hub).split("const drawFlow")[0]
-    drawing = "\n".join(["const COLORS={},COLNAME={};", "const esc=s=>String(s);", block,
+    drawing = "\n".join(["const COLORS={},COLNAME={};", "const esc=s=>String(s);", "const ls={};", block,
                          f"process.stdout.write(flowCFD({json.dumps(cfd)}));"])
     path = tmp_path / "flow-cfd-legacy.js"
     path.write_text(drawing)
     result = subprocess.run(["node", str(path)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
-    assert "answer no kind, no spec and no wave" in result.stdout
+    assert "answer none of these" in result.stdout
+
+
+# -- the Type filter: specs, tasks or bugs (#985) ------------------------------------------------------------------------
+
+def test_a_card_is_a_spec_a_bug_or_a_task_by_its_labels(flow):
+    assert flow.type_key({"l": ["spec"]}) == "spec"
+    assert flow.type_key({"l": ["bug"]}) == "bug"
+    assert flow.type_key({"l": ["loop-bug"]}) == "bug"
+    assert flow.type_key({"l": []}) == "task"
+    assert flow.type_key({"l": ["spec", "bug"]}) == "spec", "a spec labelled bug is a spec"
+
+
+def test_a_sample_names_each_cards_type_in_its_cell(flow):
+    s = flow.sample([_row(1, labels=["spec"]), _row(2, labels=["bug"]), _row(3)], now=_epoch(20))
+    assert ["issue", "none", "none", "Todo", 0, 1, "spec"] in s["cells"]
+    assert ["bug", "none", "none", "Todo", 0, 1, "bug"] in s["cells"]
+    assert ["issue", "none", "none", "Todo", 0, 1, "task"] in s["cells"]
+
+
+def test_a_type_filter_keeps_only_that_types_cards(cfd):
+    s = _sample(20, [("issue", "none", "none", "Todo", 0, 2, "task"),
+                     ("issue", "none", "none", "Todo", 0, 3, "bug"),
+                     ("issue", "5", "none", "Doing", 0, 4, "spec")])
+    assert cfd([s], COLUMNS, ty=["task"])["points"][0]["bands"]["Todo"] == 2
+    assert cfd([s], COLUMNS, ty=["bug"])["points"][0]["bands"]["Todo"] == 3
+    assert cfd([s], COLUMNS, ty=["spec"])["points"][0]["bands"]["Doing"] == 4
+
+
+def test_a_sample_whose_cells_predate_the_type_answers_no_type(cfd):
+    old = {"t": _epoch(20), "counts": {"issue": {"Todo": 2}}, "frozen": 0, "none": 0,
+           "cells": [["issue", "none", "none", "Todo", 0, 2]]}
+    assert cfd([old], COLUMNS, ty=["task"])["points"][0]["bands"]["Todo"] == 0
+    assert cfd([old], COLUMNS)["points"][0]["bands"]["Todo"] == 2
+    assert cfd([old], COLUMNS, ty=["task"])["points"][0]["legacy"] is True
+
+
+def test_the_bar_names_a_type_and_the_default_is_tasks(hub):
+    assert hub.board_filters("fw=5/4&ty=bug") == (["5/4"], [], [], "bug")
+    assert hub.board_filters("") == ([], [], [], "task")
+    assert hub.board_filters("ty=spec&fs=5") == ([], ["5"], [], "spec")
+    assert hub.board_filters("ty=pr")[3] == "task", "a value that is no type falls back to the default"
+
+
+def _typed_items(hub):
+    """Two tasks closed in 24 h and 48 h, one task closed in 72 h, one open task; two bugs in 1 h and 2 h; one spec in 240 h."""
+    closed = hub.COLUMN["issue_closed"]
+    return [_item(hub, 1, closed, closed_at="2026-10-02T09:00:00Z"),
+            _item(hub, 2, closed, closed_at="2026-10-03T09:00:00Z"),
+            _item(hub, 3, closed, closed_at="2026-10-04T09:00:00Z"),
+            _item(hub, 4, hub.COLUMN["unscheduled"]),
+            _item(hub, 5, closed, labels=["bug"], closed_at="2026-10-01T10:00:00Z"),
+            _item(hub, 6, closed, labels=["bug"], closed_at="2026-10-01T11:00:00Z"),
+            _item(hub, 7, closed, labels=["spec"], closed_at="2026-10-11T09:00:00Z")]
+
+
+def _dots(chart):
+    return [d["n"] for d in chart["dots"]]
+
+
+def test_each_type_selects_only_its_issues_in_the_control_chart(hub, board):
+    hub.board_cache["items"] = _typed_items(hub)
+    for ty, expected in (("task", [1, 2, 3]), ("bug", [5, 6]), ("spec", [7])):
+        assert _dots(hub.flow_lead(ty=ty)["lead"]["control"]["jira"]["all"]) == expected, ty
+
+
+def test_each_statistic_is_computed_over_the_selected_type_only(hub, board):
+    hub.board_cache["items"] = _typed_items(hub)
+    tasks = hub.flow_lead(ty="task")["lead"]
+    assert tasks["summary"]["average"]["text"] == "2d" and tasks["summary"]["median"]["text"] == "2d"
+    assert tasks["summary"]["p85"]["text"] == "3d"
+    assert tasks["excluded_total"] == 1 and tasks["excluded"] == [{"reason": "open", "count": 1}]
+    control = hub.flow_lead(ty="task")["lead"]["control"]["jira"]["all"]
+    assert control["average"]["text"] == "2d" and control["p85"]["text"] == "3d"
+    assert control["dots"][0]["rolling"]["hours"] == 48, "the rolling mean is over the three tasks, not the bugs"
+    assert control["dots"][0]["rolling"]["low"] == pytest.approx(48 - 384 ** 0.5), "the sigma band is over the three tasks"
+    assert control["dots"][0]["rolling"]["high"] == pytest.approx(48 + 384 ** 0.5)
+    bugs = hub.flow_lead(ty="bug")["lead"]
+    assert bugs["summary"]["average"]["text"] == "1h 30m" and bugs["summary"]["median"]["text"] == "1h 30m"
+    assert bugs["summary"]["p85"]["text"] == "2h" and bugs["excluded_total"] == 0
+    specs = hub.flow_lead(ty="spec")["lead"]
+    assert specs["summary"]["average"]["text"] == "10d" and specs["summary"]["p85"]["text"] == "10d"
+
+
+def test_the_cumulative_flow_takes_the_type(hub, board):
+    backlog = hub.COLUMN["unscheduled"]
+    items = [_item(hub, 1, backlog), _item(hub, 2, backlog), _item(hub, 3, backlog, labels=["bug"]),
+             _item(hub, 4, backlog, labels=["spec"])]
+    hub.board_cache["items"] = items
+    _write_history(hub, items)
+
+    def last(ty):
+        return _backlog_counts(hub.flow_cfd(ty=ty))[backlog]["count"][-1]
+
+    assert [last("task"), last("bug"), last("spec")] == [2, 1, 1]
+
+
+def test_the_drag_zoom_takes_the_type(hub, board):
+    hub.board_cache["items"] = _typed_items(hub)
+    span = "from=2026-09-01T00:00:00&to=2026-11-01T00:00:00"
+    assert _dots(hub.lead_zoom(span)) == [1, 2, 3]
+    assert _dots(hub.lead_zoom(span + "&ty=bug")) == [5, 6]
+    assert _dots(hub.lead_zoom(span + "&ty=spec")) == [7]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_header_names_the_type_the_chart_holds(hub, board):
+    hub.board_cache["items"] = _typed_items(hub)
+    lead = hub.flow_lead(ty="task")["lead"]
+    block = _flow_block(hub).split("const drawFlow")[0]
+    script = "\n".join(["const COLORS={},COLNAME={};", "const esc=s=>String(s);", "const ls={};", block,
+                        f"process.stdout.write(flowLead({json.dumps(lead)}));"])
+    result = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert "tasks · <b>opened -> closed</b> · window 20 issues" in result.stdout
+
+
+def test_the_type_control_sits_beside_timeframe_and_scale(hub):
+    page = hub.PAGE
+    assert page.index("<select id=ltr>") < page.index("<select id=lts>") < page.index("<select id=lty>")
+    assert '[["spec","Specs"],["task","Tasks"],["bug","Bugs"]]' in page
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_type_and_the_chart_settings_are_restored_on_load(hub):
+    block = _flow_block(hub).split("const drawFlow")[0]
+
+    def restored(stored):
+        script = "\n".join([f"const ls={json.dumps(stored)};", "const esc=s=>String(s);", block,
+                            "process.stdout.write(JSON.stringify({ty:LT.ty,tf:LT.tf,log:LT.log}));"])
+        result = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=30)
+        assert result.returncode == 0, result.stderr
+        return json.loads(result.stdout)
+
+    assert restored({"lt": {"ty": "bug", "tf": "90", "log": True}}) == {"ty": "bug", "tf": "90", "log": True}
+    assert restored({}) == {"ty": "task", "tf": "30", "log": False}
+    assert restored({"lt": {"ty": "pr"}})["ty"] == "task"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_type_pick_saves_the_choice_and_redraws_the_open_lead_chart(hub, board):
+    hub.board_cache["items"] = _typed_items(hub)
+    answers = {f"/api/chart/lead?{_bar(ty=ty)}": hub.flow_lead(ty=ty) for ty in ("task", "bug")}
+    onchange = re.search(r'\$\("#flowb"\)\.onchange=.*?(?=\$\("#flowb"\)\.onclick=)', hub.PAGE, re.S).group(0)
+    out = _page_harness(hub, answers, """
+await flowOpen("lead");await settle();
+EL["#flowb"].onchange({target:{id:"lty",value:"bug"}});await settle();await settle();
+console.log(JSON.stringify({fetched:FETCHED,ty:LT.ty,saved:SAVED,drawn:DRAWN[DRAWN.length-1]}));""", onchange=onchange)
+    assert out["fetched"] == [f"/api/chart/lead?{_bar()}", f"/api/chart/lead?{_bar(ty='bug')}"]
+    assert out["ty"] == "bug"
+    assert json.loads(out["saved"][-1])["ty"] == "bug", "the choice is saved with the other chart settings"
+    assert out["drawn"]["lead"]["type"] == "bug"

@@ -3208,22 +3208,25 @@ def lead_rows():
     return [{"n": i["n"], "column": _columns_module.view_column(i["st"], str(i["s"]).lower() == "closed", i.get("l"), i.get("cr"))[0],
              "reason": _leadtime.NOT_DELIVERED if _columns_module.not_planned(i.get("cr")) else None,   # the chart's own word (#921)
              "c": i.get("c") if str(i["s"]).lower() == "closed" else None, "o": i.get("o"), "t": i.get("t", ""),
-             "spec": _flow.spec_key(i), "wave": f'{_flow.spec_key(i)}/{_flow.wave_key(i.get("l"))}', "kind": _flow.kind_key(i)}
+             "spec": _flow.spec_key(i), "wave": f'{_flow.spec_key(i)}/{_flow.wave_key(i.get("l"))}', "kind": _flow.kind_key(i),
+             "type": _flow.type_key(i)}
             for i in board_cache["items"]]
 
 
 def board_filters(query):
-    """The bar's Waves, Specs and Kinds values from a query string, `fw=5/4,none/none&fs=5&fk=bug` (#904): (fw, fs, fk).
-    An absent value is an empty list: all."""
+    """The bar's Waves, Specs and Kinds values and the chart's Type from a query string, `fw=5/4,none/none&fs=5&fk=bug&ty=bug`
+    (#904, #985): (fw, fs, fk, ty). An absent value is an empty list: all. An absent or unknown type is the default, tasks."""
     q = urllib.parse.parse_qs(query or "")
     def values(key): return [v for v in (q.get(key, [""])[0]).split(",") if v]
-    return values("fw"), values("fs"), values("fk")
+    ty = q.get("ty", [""])[0]
+    return values("fw"), values("fs"), values("fk"), ty if ty in _flow.TYPES else _flow.DEFAULT_TYPE
 
 
-def _in_bar(row, fw, fs, fk=()):
-    """A row the bar keeps: its Waves key is among the waves named, its spec among the specs named, and its kind among the
-    kinds named. Empty lists keep all."""
-    return (not fw or row["wave"] in fw) and (not fs or row["spec"] in fs) and (not fk or row["kind"] in fk)
+def _in_bar(row, fw, fs, fk=(), ty=None):
+    """A row the bar keeps: its Waves key is among the waves named, its spec among the specs named, its kind among the kinds
+    named, and its type is the chart's Type (#985). Empty lists keep all; no type keeps all."""
+    return ((not fw or row["wave"] in fw) and (not fs or row["spec"] in fs) and (not fk or row["kind"] in fk)
+            and (ty is None or row["type"] == ty))
 
 
 def lead_zoom(query):
@@ -3235,8 +3238,8 @@ def lead_zoom(query):
     if b == COLUMN["issue_closed"]: b = None
     if any(c is not None and c not in ORDER for c in (a, b)): return {"error": "bad column: a and b name a board column"}
     log = q.get("scale", ["jira"])[0] == "log"
-    fw, fs, fk = board_filters(query)
-    rows = _leadtime.span([r for r in lead_rows() if _in_bar(r, fw, fs, fk)], card_transitions(), start=a, end=b)
+    fw, fs, fk, ty = board_filters(query)
+    rows = _leadtime.span([r for r in lead_rows() if _in_bar(r, fw, fs, fk, ty)], card_transitions(), start=a, end=b)
     measure = f"{a or 'opened'} -> {b or 'closed'}"
     if "from" not in q and "to" not in q and "tf" in q:
         days = dict(LEAD_TIMEFRAMES).get(q["tf"][0], 0)
@@ -3266,11 +3269,11 @@ def history_key():
     try: st = path.stat(); return (str(path), st.st_mtime_ns, st.st_size)
     except OSError: return (str(path), None)
 
-def _cfd_payload(fw=(), fs=(), fk=()):
+def _cfd_payload(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
     """The cumulative flow's numbers, computed here from board_cfd; the page draws them and computes none.
     `fw`, `fs` and `fk` are the bar's Waves, Specs and Kinds values: the chart keeps only the cards the bar keeps (#904)."""
     path = _flow.history_path(BOARD, REPO)
-    cfd = _cfd.cfd(_flow.samples(path), ORDER, skips=_flow.skips(path), spec=fs, wave=fw, kind=fk)
+    cfd = _cfd.cfd(_flow.samples(path), ORDER, skips=_flow.skips(path), spec=fs, wave=fw, kind=fk, ty=[ty] if ty else [])
     extents = {p["day"]: _band_extents(p["bands"]) for p in cfd["points"]}
     days = sorted([*extents, *cfd["gaps"]])   # one entry per calendar day: a day with no sample carries no value (#894)
     yticks = _y_ticks(max((e[FLOW_BANDS[0]][1] for e in extents.values()), default=0))
@@ -3295,26 +3298,26 @@ def _cfd_payload(fw=(), fs=(), fk=()):
     return {"cfd": {**view(None), "ranges": {key: view(width) for key, width in CFD_RANGES}}}
 
 
-def _lead_payload(fw=(), fs=(), fk=()):
+def _lead_payload(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
     """The lead-time numbers over the closed cards of the board read, computed here; the page draws them and computes none.
     The bar's values `fw`, `fs` and `fk` filter the rows (#904)."""
-    rows = [r for r in lead_rows() if _in_bar(r, fw, fs, fk)]
+    rows = [r for r in lead_rows() if _in_bar(r, fw, fs, fk, ty)]
     lead = _leadtime.lead_time(rows)
     now = dt.datetime.now(dt.UTC)
     control = {scale: {key: _leadtime.control_chart(rows, timeframe=days, log=scale == "log", now=now)
                        for key, days in LEAD_TIMEFRAMES} for scale in ("jira", "log")}   # the Jira-style control chart (#900)
-    return {"lead": {"measure": lead["measure"], "window": lead["window"],
+    return {"lead": {"measure": lead["measure"], "type": ty, "window": lead["window"],
                      "excluded": [{"reason": r, "count": c} for r, c in lead["excluded"].items()],
                      "excluded_total": sum(lead["excluded"].values()), "series": lead["series"], "summary": lead["summary"],
                      "control": control, "columns": ORDER}}
 
 
-def flow_cfd(fw=(), fs=(), fk=()):
-    """The cumulative flow for the bar's values; the cache key holds them, so a filter change reads anew (#904)."""
-    return chart("cfd", (history_key(), tuple(fw), tuple(fs), tuple(fk)), lambda: _cfd_payload(fw, fs, fk))
+def flow_cfd(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
+    """The cumulative flow for the bar's values and the Type; the cache key holds them, so a change reads anew (#904, #985)."""
+    return chart("cfd", (history_key(), tuple(fw), tuple(fs), tuple(fk), ty), lambda: _cfd_payload(fw, fs, fk, ty))
 
-def flow_lead(fw=(), fs=(), fk=()):
-    return chart("lead", (board_cache.get("t"), tuple(fw), tuple(fs), tuple(fk)), lambda: _lead_payload(fw, fs, fk))
+def flow_lead(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
+    return chart("lead", (board_cache.get("t"), tuple(fw), tuple(fs), tuple(fk), ty), lambda: _lead_payload(fw, fs, fk, ty))
 
 
 def drawn_column(i, moves, read_at, window):
@@ -4620,9 +4623,11 @@ const flowCFD=c=>{const sel=`<label class=fhead>Range <select id=cfdr>${CFD_R.ma
     const text=gap?`${esc(d)}: no whole read this day`:`${esc(d)}: ${parts} · WIP ${(c.wip||[])[i]} · throughput ${tp===null?"none":tp}`;
     return `<rect x=${flowX(i,n)-cw/2} y=${flowP-10} width=${cw} height=${flowH-2*flowP+10} fill=transparent><title>${text}</title></rect>`;}).join("");
   return sel+`<svg viewBox="0 0 ${flowW} ${flowH}">${c.bands.map(polys).join("")}${cfdAxis(c)}${hover}</svg>`+
-    `<p class=fnote>history from ${esc(c.start)} UTC</p>${c.legacy?`<p class=fnote>${c.legacy} ${c.legacy===1?"day comes":"days come"} from before the kind, spec and wave history: they answer no kind, no spec and no wave</p>`:""}<p>${c.bands.map(b=>`<span class=flg><i style="background:${COLORS[b.name]||"#888"}"></i>${esc(b.name)}</span>`).join("")}</p>`;};
+    `<p class=fnote>history from ${esc(c.start)} UTC</p>${c.legacy?`<p class=fnote>${c.legacy} ${c.legacy===1?"day comes":"days come"} from before the kind, spec, wave and type history: they answer none of these</p>`:""}<p>${c.bands.map(b=>`<span class=flg><i style="background:${COLORS[b.name]||"#888"}"></i>${esc(b.name)}</span>`).join("")}</p>`;};
 const EXREASON={not_planned:"closed as not planned",abandoned:"closed as abandoned",open:"still open",no_opened:"no opened date"};   // the cards the chart leaves out, in words (#921)
-let LT={tf:"30",log:false,pick:null,zc:null,zr:null,rng:null,tok:0,noclick:false,a:"",b:"",cols:[]};   // the control chart's timeframe, its scale, the cluster listed under it, and a drag zoom: the hub's chart over zr=[from,to] (#900)
+const LTS=ls.lt||{},LT_TYPES=[["spec","Specs"],["task","Tasks"],["bug","Bugs"]];   // the chart's own settings, restored from the page's storage (#985)
+let LT={tf:["7","14","30","90","180","all"].includes(LTS.tf)?LTS.tf:"30",log:LTS.log===true,ty:LT_TYPES.some(([k])=>k===LTS.ty)?LTS.ty:"task",pick:null,zc:null,zr:null,rng:null,tok:0,noclick:false,a:"",b:"",cols:[]};   // the control chart's timeframe, its scale, its type, the cluster listed under it, and a drag zoom: the hub's chart over zr=[from,to] (#900, #985)
+const saveLT=()=>{ls.lt={tf:LT.tf,log:LT.log,ty:LT.ty};save()};
 const ltSpan=(r,a,b)=>{const t0=Date.parse(r.start),t1=Date.parse(r.end),at=f=>new Date(t0+f*(t1-t0)).toISOString();return [at(a<0?0:a),at(b>1?1:b)]};   // plot fractions to the dates they name (#900)
 const LT_TF=[["7","Past week"],["14","Past 2 weeks"],["30","Past month"],["90","Past 3 months"],["180","Past 6 months"],["all","All"]];
 const ltX=x=>flowP+x*(flowW-2*flowP),ltY=y=>flowH-flowP-y*(flowH-2*flowP);
@@ -4630,6 +4635,7 @@ const ltLine=(v,col,dash,name)=>v?`<line x1=${flowP} x2=${flowW-flowP} y1=${ltY(
 const ltChart=c=>{const n=c.dots.length,base=flowH-flowP,ink="#b8c0cf",mute="var(--mute)";
   const ctl=`<p class=fhead><label>Timeframe <select id=ltr>${LT_TF.map(([k,v])=>`<option value=${k}${LT.tf===k?" selected":""}>${v}</option>`).join("")}</select></label> `+
     `<label>Scale <select id=lts><option value=jira${LT.log?"":" selected"}>Jira scale</option><option value=log${LT.log?" selected":""}>Log scale</option></select></label> `+
+    `<label>Type <select id=lty>${LT_TYPES.map(([k,v])=>`<option value=${k}${LT.ty===k?" selected":""}>${v}</option>`).join("")}</select></label> `+
     `<label>Start <select id=lta><option value="">Created</option>${LT.cols.map(k=>`<option${LT.a===k?" selected":""}>${esc(k)}</option>`).join("")}</select></label> `+
     `<label>End <select id=ltb>${LT.cols.map(k=>{const v=k===COLNAME.issue_closed?"":k;return `<option value="${esc(v)}"${LT.b===v?" selected":""}>${esc(k)}</option>`}).join("")}</select></label> `+   // the span each dot measures, from the recorded transitions (#905)
     `<button id=ltz${LT.zr?"":" disabled"} title="drag across the plot to zoom to those dates">Reset zoom</button></p>`;
@@ -4652,7 +4658,7 @@ const ltChart=c=>{const n=c.dots.length,base=flowH-flowP,ink="#b8c0cf",mute="var
   const rows=pk?`<table class=rt><thead><tr><th>Issue</th><th>Title</th><th>Elapsed</th><th>Closed</th></tr></thead><tbody>${pk.dots.map(d=>`<tr data-o=${d.n} style="cursor:pointer"><td>#${d.n}</td><td>${esc(d.title)}</td><td>${esc(d.text)}</td><td>${esc(d.closed)}</td></tr>`).join("")}</tbody></table>`:"";
   return ctl+S+legend+`<svg data-lt viewBox="0 0 ${flowW} ${flowH}">${axes}${ys}${xs}${band}${roll}${lines}${dots}</svg>`+note+rows;};
 const flowLead=l=>{const S=l.summary,ex=l.excluded.map(e=>`${e.count} ${esc(EXREASON[e.reason]||e.reason)}`).join(", ");
-  const head=`<p class=fhead><b>${esc(l.measure)}</b> · window ${l.window.size} ${esc(l.window.unit)} · excluded ${l.excluded_total}${ex?" ("+ex+")":""}</p>`;
+  const head=`<p class=fhead>${esc(LT_TYPES.find(([k])=>k===l.type)[1].toLowerCase())} · <b>${esc(l.measure)}</b> · window ${l.window.size} ${esc(l.window.unit)} · excluded ${l.excluded_total}${ex?" ("+ex+")":""}</p>`;
   LT.cols=l.columns||[];if(!S)return head+"<p class=fnote>no closed card yet</p>";
   return head+ltChart(LT.zc||l.control[LT.log?"log":"jira"][LT.tf]);};
 const drawFlow=()=>{{const w=$("#flowb").clientWidth-20;flowW=w<600?600:w>1600?1600:(w|0)}const cfd=FLOWK==="cfd";
@@ -4672,15 +4678,16 @@ document.addEventListener("pointermove",e=>{if(!LTD)return;const x1=ltClamp(ltPx
 document.addEventListener("pointerup",()=>{const d=LTD;LTD=null;if(!d||!d.moved)return;d.s.querySelector("rect.ltsel")?.remove();LT.noclick=true;
   const a=(ltLo(d.x0,d.x1)-flowP)/(flowW-2*flowP),b=(ltHi(d.x0,d.x1)-flowP)/(flowW-2*flowP);if(b-a<0.005||!LT.rng)return;const [f,t]=ltSpan(LT.rng,a,b);ltZoom(f,t)});
 $("#flowb").onchange=e=>{if(e.target.id==="cfdr"){CF.r=e.target.value;drawFlow();return}
-  if(e.target.id==="ltr"){LT.tf=e.target.value;LT.zr=null;ltGet();return}
+  if(e.target.id==="ltr"){LT.tf=e.target.value;saveLT();LT.zr=null;ltGet();return}
+  if(e.target.id==="lty"){LT.ty=e.target.value;saveLT();barMoved();return}
   if(e.target.id==="lta"||e.target.id==="ltb"){LT[e.target.id==="lta"?"a":"b"]=e.target.value;LT.pick=null;if(LT.zr){ltZoom(LT.zr[0],LT.zr[1]);return}ltGet();return}
-  if(e.target.id==="lts"){LT.log=e.target.value==="log";LT.pick=null;if(LT.zr){ltZoom(LT.zr[0],LT.zr[1]);return}if(ltOwn()){ltGet();return}drawFlow()}};
+  if(e.target.id==="lts"){LT.log=e.target.value==="log";saveLT();LT.pick=null;if(LT.zr){ltZoom(LT.zr[0],LT.zr[1]);return}if(ltOwn()){ltGet();return}drawFlow()}};
 $("#flowb").onclick=e=>{if(LT.noclick){LT.noclick=false;return}
   if(e.target.id==="ltz"){LT.zr=null;ltGet();return}
   const k=e.target.closest("circle[data-k]");if(k){LT.pick=+k.dataset.k;drawFlow();return}const r=e.target.closest("tr[data-o]");if(r)showIssue(+r.dataset.o,"__REPO__")};
 $("#bflow").onclick=()=>flowOpen("cfd");$("#blead").onclick=()=>flowOpen("lead");addEventListener("resize",()=>{if(!$("#flowov").hidden)drawFlow()});
 // flow-charts:end
-const barQuery=()=>["fw","fs","fk"].map(k=>`${k}=${encodeURIComponent((bo[k]||[]).join(","))}`).join("&");   // the bar's Waves, Specs and Kinds, read by both diagrams; the board filters on the page (#904)
+const barQuery=()=>["fw","fs","fk"].map(k=>`${k}=${encodeURIComponent((bo[k]||[]).join(","))}`).join("&")+`&ty=${LT.ty}`;   // the bar's Waves, Specs and Kinds and the chart's Type, read by both diagrams; the board filters on the page (#904, #985)
 async function pollBoard(){lim.busy=1;try{const b=await (await fetch("/api/board")).json(),FLOW=/*BOARD_FLOW*/,   // development flow, left to right
 all=[b.prs,...b.groups.sort((x,y)=>{const i=n=>{const k=FLOW.indexOf(n);return k<0?FLOW.length:k};return i(x.name)-i(y.name)})],f=q.trim().replace(/^#/,"");
 if(bo.open===undefined||!all.some(g=>g.name===bo.open))bo.open=(all.find(g=>g.n&&!g.end&&!isPR(g.name))||all[2]).name;
