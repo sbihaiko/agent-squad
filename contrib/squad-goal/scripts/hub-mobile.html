@@ -1076,6 +1076,11 @@ every("runs", () => { if (runId && !$("runview").hidden) loadRunControl(); }, 10
 // terminals:begin
 const termOpen = () => !$("termview").hidden;
 let termSid = null, termCursor = null, termLast = null, termBusy = false;
+// One composer per session (#1006): its draft, its send feedback, its pending request, and the request id a retry reuses.
+const termDrafts = new Map();
+const termDraft = sid => { if (!termDrafts.has(sid)) termDrafts.set(sid, { text: "", sent: "", pending: false, cid: null, cidText: null }); return termDrafts.get(sid); };
+function keepDraft() { if (termSid) { const d = termDraft(termSid); d.text = $("termview-text").value; d.sent = $("termview-sent").textContent; } }
+function showDraft() { const d = termDraft(termSid); $("termview-text").value = d.text; $("termview-sent").textContent = d.sent; $("termview-send").disabled = d.pending; }
 function sessionRow(project, s) {
   const b = document.createElement("button"), name = document.createElement("b"), meta = document.createElement("div");
   b.type = "button"; b.className = "runrow"; b.dataset.sid = s.sid; b.dataset.name = s.name;
@@ -1134,33 +1139,42 @@ async function loadOlder() {
   finally { termBusy = false; }
 }
 function openConversation(sid, name) {
+  keepDraft();
   termSid = sid; termCursor = null; termLast = null;
   $("termview-turns").replaceChildren();
   $("termview-name").textContent = name;
   $("termview-older").hidden = true;
   $("termview-msg").textContent = "";
+  showDraft();
   $("termview").hidden = false;
   loadConversation();
 }
-function closeConversation() { $("termview").hidden = true; termSid = null; $("termview-turns").replaceChildren(); }
+function closeConversation() { keepDraft(); $("termview").hidden = true; termSid = null; $("termview-turns").replaceChildren(); }
 $("sessions").onclick = e => { const b = e.target.closest(".runrow"); if (b) openConversation(b.dataset.sid, b.dataset.name); };
 $("termview-back").onclick = closeConversation;
 $("termview-older").onclick = loadOlder;
 $("termview-turns").onscroll = () => { if ($("termview-turns").scrollTop < 40) loadOlder(); };
 every("terminals", loadConversation, 3000);
 $("termview-send").onclick = async () => {
-  const text = $("termview-text").value.trim(), sid = termSid, out = $("termview-sent");
+  const text = $("termview-text").value.trim(), sid = termSid;
   if (!text || !sid) return;
-  out.textContent = "Sending";
+  const d = termDraft(sid);
+  if (d.pending) return;
+  // A retry of the same text reuses its request id, so the hub answers it once; a new text is a new request.
+  if (d.cidText !== text) { d.cid = crypto.randomUUID(); d.cidText = text; }
+  const say = msg => { d.sent = msg; if (sid === termSid) $("termview-sent").textContent = msg; };
+  d.pending = true; $("termview-send").disabled = true;
+  say("Sending");
   try {
-    const r = await fetch("/api/sessions/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sid, text, client_id: crypto.randomUUID() }) });
+    const r = await fetch("/api/sessions/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sid, text, client_id: d.cid }) });
     if (!r.ok) throw new Error("Not sent: the hub refused the request.");
-    const d = await r.json();
-    if (sid !== termSid) return;
-    const word = { sent: "Sent: the session's inbox accepted the message", uncertain: "Uncertain: the send was interrupted", refused: "Refused: the send failed" }[d.status] || "Uncertain: the send was interrupted";
-    out.textContent = word + (d.reason ? " (" + d.reason + ")" : "");
-    if (d.status === "sent") $("termview-text").value = "";
-  } catch (err) { if (sid === termSid) out.textContent = err.message; }
+    const res = await r.json();
+    const word = { sent: "Sent: the session's inbox accepted the message", uncertain: "Uncertain: the send was interrupted", refused: "Refused: the send failed" }[res.status] || "Uncertain: the send was interrupted";
+    say(word + (res.reason ? " (" + res.reason + ")" : ""));
+    if (res.status === "sent" || res.status === "refused") { d.cid = null; d.cidText = null; }
+    if (res.status === "sent") { d.text = ""; if (sid === termSid) $("termview-text").value = ""; }
+  } catch (err) { say(err.message); }
+  finally { d.pending = false; if (sid === termSid) $("termview-send").disabled = false; }
 };
 every("terminals", () => { if (!termOpen()) loadSessions(); }, 10000);
 // terminals:end
