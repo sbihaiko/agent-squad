@@ -81,13 +81,32 @@ def test_an_empty_selection_shows_every_card(hub):
     assert out == [True, True]
 
 
+def test_each_waves_option_names_its_spec_and_the_same_wave_of_two_specs_is_two_options(hub):
+    rows = [
+        {"n": 10, "l": ["wave:01"], "pa": 889}, {"n": 11, "l": ["wave:01"], "pa": 900},
+        {"n": 12, "l": ["wave:02"]}, {"n": 13, "l": ["wave:01"], "pa": 889}, {"n": 14, "sp": True, "l": ["spec"]},
+    ]
+    opts = _node(f"console.log(JSON.stringify(waveOptions({json.dumps(rows)})));", LANES_JS)
+    assert [o["label"] for o in opts] == ["SPEC 889 · Wave 1", "SPEC 900 · Wave 1", "No spec · Wave 2"]
+    assert len({o["key"] for o in opts}) == 3
+    picked = _node(
+        f"console.log(JSON.stringify([boardOk({json.dumps(rows[0])},[{json.dumps(opts[1]['key'])}],[]),"
+        f"boardOk({json.dumps(rows[1])},[{json.dumps(opts[1]['key'])}],[])]));", LANES_JS)
+    assert picked == [False, True], "an option keeps only its own spec's wave"
+
+
+def test_a_saved_waves_selection_from_before_the_spec_option_is_dropped(hub):
+    out = _node("console.log(JSON.stringify(dropRemoved({fw:['2','none','889/2'],fs:['889']})));", LANES_JS)
+    assert out["fw"] == ["889/2"] and out["fs"] == ["889"]
+
+
 def test_waves_and_specs_combine_with_and(hub):
     cases = {
-        "wave 2 and spec 889": ({"n": 1, "l": ["wave:2"], "pa": 889}, ["2"], ["889"], True),
-        "wave 2 and spec 7": ({"n": 2, "l": ["wave:2"], "pa": 7}, ["2"], ["889"], False),
-        "wave 3 and spec 889": ({"n": 3, "l": ["wave:3"], "pa": 889}, ["2"], ["889"], False),
-        "no wave and no spec": ({"n": 4, "l": []}, ["none"], ["none"], True),
-        "wave 2, spec pending": ({"n": 5, "l": ["wave:2"]}, ["2"], ["none"], True),
+        "wave 2 and spec 889": ({"n": 1, "l": ["wave:2"], "pa": 889}, ["889/2"], ["889"], True),
+        "wave 2 and spec 7": ({"n": 2, "l": ["wave:2"], "pa": 7}, ["889/2"], ["889"], False),
+        "wave 3 and spec 889": ({"n": 3, "l": ["wave:3"], "pa": 889}, ["889/2"], ["889"], False),
+        "no wave and no spec": ({"n": 4, "l": []}, ["none/none"], ["none"], True),
+        "wave 2, spec pending": ({"n": 5, "l": ["wave:2"]}, ["none/2"], ["none"], True),
     }
     script = "console.log(JSON.stringify({" + ",".join(
         f"{json.dumps(k)}:boardOk({json.dumps(x)},{json.dumps(fw)},{json.dumps(fs)})" for k, (x, fw, fs, _) in cases.items()
@@ -103,7 +122,7 @@ def test_the_filters_apply_to_the_swimlanes(hub):
         {"n": 890, "t": "a", "l": ["wave:2"], "pa": 889},
         {"n": 891, "t": "b", "l": ["wave:3"], "pa": 889},
     ]}, {"name": "Todo", "items": [{"n": 900, "t": "c", "l": ["wave:2"]}]}]
-    opts = {"mode": "spec", "fw": ["2"], "fs": ["889"], "lc": {}, "hideDone": False, "closed": "Closed"}
+    opts = {"mode": "spec", "fw": ["889/2"], "fs": ["889"], "lc": {}, "hideDone": False, "closed": "Closed"}
     model = _node(f"console.log(JSON.stringify(buildBoard({json.dumps(groups)},{json.dumps(opts)})));", LANES_JS)
     shown = [r["n"] for ln in model["lanes"] for r in ln["vis"]]
     assert shown == [890], f"the filters did not narrow the swimlanes: {shown}"
@@ -113,11 +132,11 @@ def test_the_filters_apply_to_the_swimlanes(hub):
 
 def test_drop_removed_clears_the_old_keys_and_keeps_the_kept_ones(hub):
     bo = {"labels": ["x"], "label": "y", "lmode": "all", "specs": 2, "max": True, "off": False, "pip": {"x": 1},
-          "fw": ["2"], "fs": [], "lc": {"s1": True}, "lmode_kept": 1}
+          "fw": ["889/2"], "fs": [], "lc": {"s1": True}, "lmode_kept": 1}
     out = _node(f"let bo={json.dumps(bo)};dropRemoved(bo);console.log(JSON.stringify(bo));", LANES_JS)
     for gone in ("labels", "label", "specs", "max", "off", "pip"):
         assert gone not in out, f"{gone} survived"
-    assert out["fw"] == ["2"] and out["lc"] == {"s1": True}, "a kept filter or collapse state was dropped"
+    assert out["fw"] == ["889/2"] and out["lc"] == {"s1": True}, "a kept filter or collapse state was dropped"
 
 
 # ---- the run pane has no maximized mode ----

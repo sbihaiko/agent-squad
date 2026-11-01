@@ -13,6 +13,8 @@ body.dockb #bbody.lanes{display:block;overflow:visible}
 #bbody .lh .tw{color:var(--mute);width:14px;font-size:var(--fs-min)}
 #bbody .lane.coll .lh .tw{color:var(--fg)}
 #bbody .lh .lid{white-space:nowrap;font-weight:700;font-size:var(--fs-md);font-variant-numeric:tabular-nums;color:var(--lc,var(--fg));letter-spacing:-.01em}
+#bbody .lh .lid.sw{color:var(--fg)}
+#bbody .lh .sid{color:var(--lc,var(--fg))}
 #bbody .lh .ltt{font-size:var(--fs-body);font-weight:400;min-width:0;flex:0 1 auto;line-height:1.3;white-space:normal;overflow-wrap:anywhere}   /* a spec's title is read whole: it wraps instead of losing its tail (owner, 2026-10-31) */
 #bbody .lh .ltt.subt{color:var(--mute)}
 #bbody .lh .bar,#bbody .lh .pc,#bbody .lh .lst{flex:0 0 auto}

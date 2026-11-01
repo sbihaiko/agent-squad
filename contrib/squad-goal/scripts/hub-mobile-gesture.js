@@ -51,28 +51,44 @@ const emptyColumnNote = ({ groups, shown, filtered }) =>
 // here. Progress counts the spec's children on the whole board, never the column alone. "No spec" is the last lane.
 // `lc` holds the saved collapse by lane id; a lane whose spec is done starts collapsed. `flat` is the cards the column
 // draws, in order, with the collapsed lanes left out: the card indexes of the page read it.
-const laneKey = x => x.pa == null ? "none" : String(x.pa);
+const laneWaveOf = x => {
+  const w = (x.l || []).map(l => (String(l).match(/^wave:(\d+)$/) || [])[1]).filter(v => v !== undefined).map(Number);
+  return w.length ? Math.min(...w) : null;
+};
+const laneIdOf = (spec, wave) => (spec == null ? "none" : String(spec)) + "|" + (wave == null ? "none" : String(wave));
+const cmpNum = (a, b) => a == null ? (b == null ? 0 : 1) : b == null ? -1 : a - b;
 const columnLanes = ({ groups, cards, lc }) => {
-  const titles = new Map(), total = new Map(), done = new Map();
+  const specs = new Set(), total = new Map(), done = new Map();
   (groups || []).forEach(g => g.items.forEach(x => {
-    if (x.sp) { titles.set(String(x.n), x.t); return; }
-    const k = laneKey(x);
+    if (x.sp) { specs.add(x.n); return; }
+    if (x.pa != null) specs.add(x.pa);
+    const k = laneIdOf(x.pa, laneWaveOf(x));
     total.set(k, (total.get(k) || 0) + 1);
     if (x.dn) done.set(k, (done.get(k) || 0) + 1);   // `dn`: the row is done, a fact the hub serves (#893)
   }));
+  const palette = [...specs].sort((a, b) => a - b);
   const by = new Map();
-  const ensure = k => { if (!by.has(k)) by.set(k, { id: k, cards: [], spec: null }); return by.get(k); };
+  const ensure = (spec, wave) => {
+    const id = laneIdOf(spec, wave);
+    if (!by.has(id)) by.set(id, { id, spec: spec ?? null, wave: wave ?? null, cards: [] });
+    return by.get(id);
+  };
+  cards.forEach(x => { if (!x.sp) ensure(x.pa, laneWaveOf(x)).cards.push(x); });
   cards.forEach(x => {
-    const l = ensure(x.sp ? String(x.n) : laneKey(x));
-    if (x.sp) { l.spec = x; l.cards.unshift(x); } else l.cards.push(x);
+    if (!x.sp) return;   // a spec card heads its spec's first wave lane in this column (#980)
+    const first = [...by.values()].filter(l => l.spec === x.n)
+      .sort((a, b) => cmpNum(a.wave, b.wave))[0] || ensure(x.n, null);
+    first.cards.unshift(x);
   });
   const lanes = [...by.values()].map(l => {
     const t = total.get(l.id) || 0, d = done.get(l.id) || 0;
     const isDone = t > 0 && d === t;
     const collapsed = Object.prototype.hasOwnProperty.call(lc || {}, l.id) ? !!lc[l.id] : isDone;
-    return { id: l.id, num: l.id === "none" ? null : +l.id, title: l.id === "none" ? "No spec" : (titles.get(l.id) || ""),
+    const sid = l.spec == null ? "No spec" : "SPEC " + l.spec, wl = l.wave == null ? "No wave" : "Wave " + l.wave;
+    return { id: l.id, num: l.spec, wave: l.wave, sid, wl, title: sid + " · " + wl,
+             pi: l.spec == null ? null : palette.indexOf(l.spec) % 8,
              total: t, closed: d, collapsed, cards: l.cards };
-  }).sort((a, b) => a.id === "none" ? 1 : b.id === "none" ? -1 : a.num - b.num);
+  }).sort((a, b) => cmpNum(a.num, b.num) || cmpNum(a.wave, b.wave));
   const flat = lanes.flatMap(l => l.collapsed ? [] : l.cards);
   return { lanes, flat };
 };

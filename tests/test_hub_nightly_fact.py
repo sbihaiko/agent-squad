@@ -38,15 +38,15 @@ def _nightly(hub, **over):
 
 
 def _paint(hub, items):
-    """The line the page really paints for these facts, run through the page's own footer functions in node."""
+    """The Nightly tile the page really paints for these facts, run through the instruments card's own functions in node (#983)."""
     if shutil.which("node") is None:
         pytest.skip("node is required")
-    consts = [re.search(rf"^const {n}=.*$", hub.PAGE, re.M) for n in ("esc", "FTONE")]
-    assert all(consts), "the page carries no esc/FTONE constant"
-    fns = re.findall(r"^function foot(?:Parts|Item)\(.*$", hub.PAGE, re.M)
-    assert len(fns) == 2, fns                      # footParts, footItem
-    script = "\n".join([c.group(0) for c in consts] + fns) \
-        + f"\nconsole.log({json.dumps(items)}.map(footItem).join(' · '))"
+    block = re.search(r"^// INST\{.*?^// \}INST$", hub.PAGE, re.M | re.S)
+    assert block, "the page carries no instruments block"
+    esc = re.search(r"^const esc=.*$", hub.PAGE, re.M)
+    cells = re.findall(r"^function ld(?:Num|Round|Cell|Cells)\(.*$", hub.PAGE, re.M)
+    script = "\n".join(["const LOAD_ERR=95;", esc.group(0), *cells, block.group(0)]) \
+        + f"\nconsole.log(tileHtml(instTiles({json.dumps(items)})[1]))"
     out = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
     return out.stdout.rstrip("\n")
@@ -84,7 +84,7 @@ def test_the_page_lists_every_failing_test_in_an_expandable_detail(hub):
     html = _paint(hub, [fact])
     assert "<details" in html and "<summary>" in html
     assert all(f"<li>{i}</li>" in html for i in ids)
-    assert "nightly fail 4m ago" in html
+    assert "fail 4m ago" in html and "Nightly" in html
 
 
 def test_a_green_nightly_carries_no_detail_list(hub):

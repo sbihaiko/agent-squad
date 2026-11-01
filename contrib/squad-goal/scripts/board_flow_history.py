@@ -13,10 +13,10 @@ samples from that read on count it in Abandoned. The first append after the upgr
 samples once, and writes a flow_rebucket line that records the boundary, so the Closed band takes no step down that a
 reader could take for a data error."""
 import importlib.util
+import itertools
 import json
 import os
 import pathlib
-import threading
 import time
 from datetime import UTC, datetime
 
@@ -196,7 +196,10 @@ def _day(t):
     return datetime.fromtimestamp(t, UTC).date()
 
 
+_WRITE_SEQ = itertools.count()   # a thread id is reused once its thread ends, so two passes could share a temp name
+
+
 def _write(path, lines):
-    tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{next(_WRITE_SEQ)}.tmp")
     tmp.write_text("".join(text + "\n" for text, _ in lines))
     os.replace(tmp, path)

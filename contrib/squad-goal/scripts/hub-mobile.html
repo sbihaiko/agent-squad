@@ -364,8 +364,9 @@ function laneHeader(l) {
   h.className = "lane-h"; h.dataset.lane = l.id; h.dataset.coll = l.collapsed ? "1" : "0";
   h.setAttribute("role", "button"); h.tabIndex = 0; h.setAttribute("aria-expanded", String(!l.collapsed));
   const tw = document.createElement("span"); tw.className = "tw"; tw.textContent = l.collapsed ? "▸" : "▾";
-  const id = document.createElement("span"); id.className = "lid"; id.textContent = l.num == null ? "" : "#" + l.num;
-  const tt = document.createElement("span"); tt.className = "ltt"; tt.textContent = l.title;
+  const id = document.createElement("span"); id.className = "lid"; id.textContent = l.sid;
+  id.style.color = l.pi == null ? "var(--s8)" : `var(--s${l.pi + 1})`;
+  const tt = document.createElement("span"); tt.className = "ltt"; tt.textContent = l.wl;
   const pc = document.createElement("span"); pc.className = "pc"; pc.textContent = l.total ? l.closed + "/" + l.total : "";
   h.append(tw, id, tt, pc);
   return h;

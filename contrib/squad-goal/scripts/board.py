@@ -32,7 +32,8 @@ A move to the Status the card already carries is skipped: one read of the board,
 Touches $SG_STATE/board-dirty so the hub refreshes within 2 s. Each move it proved is recorded in
 $SG_STATE/board-moves.json by that same step: one entry per item, the column it set, the instant and the dispatch context `SG_MOVE_BY` names (`owner` or `loop`, when set), replaced by a
 later move of the same item. The file is formed in a temp file beside it and renamed, so a reader sees the old record
-or the new one, never a part-written one (ADR-0030). A skipped or unproven move records nothing, and a holder or
+or the new one, never a part-written one (ADR-0030). Each proved move also appends one transition (card, from, to, instant, repository)
+to `$SG_STATE/board-transitions.<owner>_<name>.jsonl`, the record of its repository (#897). A skipped or unproven move records nothing, and a holder or
 test-case write records nothing."""
 import json, os, pathlib, sys, time
 from issue_state import KindGap, NotCarried, ReadFailure, board_state
@@ -70,7 +71,7 @@ if status not in F["opt"]: (st / f"rest-fields-{owner}-{num}.json").unlink(missi
 if status not in F["opt"]: sys.exit(f"no Status option {status!r}")
 try: carried, tries = state.read_all(), max(1, state.binding.attempts - 1)   # one read of the board for the whole move: a card that already carries the Status is not written (#327). It is one of the reads SG_BOARD_READ_ATTEMPTS bounds, so a write has one attempt fewer
 except (RuntimeError, ValueError): carried, tries = {}, state.binding.attempts   # a board that does not answer the read is written on, never blocked by it
-rc = 0; proved = []
+rc = 0; proved = []; transitions = []
 for n in nums:
     if carried.get(str(n)) == status: print(f"#{n} -> {status} (already carried, not written)"); continue   # no PATCH and no proving read: the read above is the proof
     try: iid = state.binding.item_id(n, add)
@@ -101,7 +102,7 @@ for n in nums:
         written = bool(state.binding.settle(probe, tries, cap))
     if written:
         if refused: print(f"#{n}: {refused}; the card carries {status} and the read proves the write", file=sys.stderr)   # the note, never the verdict
-        print(f"#{n} -> {status}"); proved.append((iid, status))
+        print(f"#{n} -> {status}"); proved.append((iid, status)); transitions.append({"issue": n, "item": iid, "from": carried.get(str(n)) or None, "to": status})
     else:
         state.binding.items_map.pop(str(n), None); state.binding._save_items()   # a card whose write is unproven is never cached as written
         print(f"#{n}: the board carries no {status!r} on it after {reads} reads" + (f" ({refused})" if refused else "") + "; a read failure, not a written card", file=sys.stderr); rc = 1
@@ -115,4 +116,11 @@ if proved:   # the record and the refresh flag are one step: one move, one write
     for iid, col in proved: moves[str(iid)] = {"column": col, "at": at, **({"by": by} if by else {})}   # a later move of the same item replaces its entry; the key is text, as the record reads back (#652)
     tmp = p.with_name(f"{p.name}.{os.getpid()}.tmp")   # formed whole beside the record, then one atomic rename (ADR-0030)
     tmp.write_text(json.dumps(moves, sort_keys=True) + "\n"); os.replace(tmp, p)
+    repo = state.binding.repo or "board"
+    t = st / f"board-transitions.{repo.replace('/', '_')}.jsonl"   # one record per repository: two repositories on one board never share it (#897)
+    try: lines = t.read_text().splitlines()
+    except OSError: lines = []
+    lines += [json.dumps({**m, "at": at, "repo": state.binding.repo}, sort_keys=True) for m in transitions]
+    tmp = t.with_name(f"{t.name}.{os.getpid()}.tmp")   # the whole record is rewritten beside itself and renamed: a reader never sees a part-written line (ADR-0030)
+    tmp.write_text("\n".join(lines) + "\n"); os.replace(tmp, t)
 (st / "board-dirty").touch(); sys.exit(rc)

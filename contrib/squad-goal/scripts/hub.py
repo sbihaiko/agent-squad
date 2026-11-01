@@ -2824,6 +2824,15 @@ def pr_badge(x):
     return None
 MOVES = STATE / "board-moves.json"   # the door's record of every move it proved (#649), keyed by the Project item id
 MOVES_LOCK = threading.Lock()        # one writer in this process: two HTTP threads never drop the same entry twice
+def card_transitions(repo=None):
+    """The column changes board.py proved for one repository, oldest first. The hub only reads this record (#897)."""
+    path = STATE / f"board-transitions.{(repo or REPO).replace('/', '_')}.jsonl"
+    if not path.exists(): return []
+    out = []
+    for line in path.read_text().splitlines():
+        try: out.append(json.loads(line))
+        except ValueError: continue
+    return out
 def read_moves():
     """The door's record of proved moves: {item id: {"column", "at"}}. A record that is missing, unreadable or not an
     object is no record: the board is drawn from the read alone, and nothing is written."""
@@ -2945,15 +2954,27 @@ def lead_rows():
 
 
 def lead_zoom(query):
-    """The control chart over a dragged range: `from` and `to` are ISO datetimes, `scale` is jira or log (#900)."""
+    """The control chart over a dragged range (`from` and `to`, ISO datetimes) or a timeframe preset (`tf`), `scale` jira
+    or log (#900), measured from the start column `a` to the end column `b` (#905). No `a` is the card's opened instant;
+    no `b`, or the closed column, is its closed instant."""
     q = urllib.parse.parse_qs(query)
+    a, b = (q.get(k, [""])[0] or None for k in ("a", "b"))
+    if b == COLUMN["issue_closed"]: b = None
+    if any(c is not None and c not in ORDER for c in (a, b)): return {"error": "bad column: a and b name a board column"}
+    log = q.get("scale", ["jira"])[0] == "log"
+    rows = _leadtime.span(lead_rows(), card_transitions(), start=a, end=b)
+    measure = f"{a or 'opened'} -> {b or 'closed'}"
+    if "from" not in q and "to" not in q and "tf" in q:
+        days = dict(LEAD_TIMEFRAMES).get(q["tf"][0], 0)
+        if days == 0: return {"error": "bad timeframe"}
+        return _leadtime.control_chart(rows, timeframe=days, log=log, now=dt.datetime.now(dt.UTC), measure=measure)
     try:
         start, end = (dt.datetime.fromisoformat(q[k][0]) for k in ("from", "to"))
     except (KeyError, IndexError, ValueError):
         return {"error": "bad range: from and to are ISO datetimes"}
     start, end = (m if m.tzinfo else m.replace(tzinfo=dt.UTC) for m in (start, end))
     if end <= start: return {"error": "bad range: to is not after from"}
-    return _leadtime.control_chart(lead_rows(), log=q.get("scale", ["jira"])[0] == "log", now=dt.datetime.now(dt.UTC), start=start, end=end)
+    return _leadtime.control_chart(rows, log=log, now=dt.datetime.now(dt.UTC), start=start, end=end, measure=measure)
 
 
 CHARTS = {}   # each chart route's last answer, with the key of the inputs it read (#971)
@@ -3007,7 +3028,7 @@ def _lead_payload():
     return {"lead": {"measure": lead["measure"], "window": lead["window"],
                      "excluded": [{"reason": r, "count": c} for r, c in lead["excluded"].items()],
                      "excluded_total": sum(lead["excluded"].values()), "series": lead["series"], "summary": lead["summary"],
-                     "control": control}}
+                     "control": control, "columns": ORDER}}
 
 
 def flow_cfd(): return chart("cfd", history_key(), _cfd_payload)
@@ -3472,7 +3493,6 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #board{position:relative;width:auto}
 #bhead{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}#bhead>label{display:inline-flex;align-items:center;gap:8px}#bhead label.hck{border:1px solid var(--line);border-radius:6px;padding:0 12px 0 10px;min-height:32px;background:var(--panel);cursor:pointer}#bhead label.hck input{margin:0;accent-color:var(--acc)}#bt:empty{display:none}
 #flowov{background:var(--panel);border:1px solid var(--line);border-radius:8px;display:flex;flex-direction:column}#flowov[hidden]{display:none}
-#flowh{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel)}
 #flowb{padding:10px;font-size:var(--fs-min)}#flowb svg{width:100%;height:auto;display:block;margin:6px 0;user-select:none;touch-action:pan-y}#flowb .fnote,#flowb .fhead{color:var(--mute);margin:4px 0}#flowb .fhead b{color:var(--fg,inherit)}
 #flowb .flg{margin-right:10px;white-space:nowrap}#flowb .flg i{display:inline-block;width:9px;height:9px;margin-right:4px;vertical-align:middle;border-radius:2px}
 #bbody .ah{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);cursor:pointer;font-weight:600;position:sticky;top:34px;background:#1b212b;z-index:1}   /* the same gap as the docked header: `Todo0` is never a reading, in either rendering (#1809) */
@@ -3587,11 +3607,6 @@ body.dockb .sec>.ch{cursor:pointer;border-top:1px solid #2dd4bf33}body.dockb .se
 .hidbar .hidsep{border-top:1px solid var(--line);margin:3px 0 1px}   /* the divider the auto-hidden columns sit under: below everything the user hid (#1809) */
 .hidbar .hidline{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:0 2px 0 6px;border-left:2px solid var(--cc,var(--mute));color:var(--mute);font-weight:400}   /* a column hidden because it is empty, not because the user asked: no chip fill and a dimmer text than the chip's #939cab, with a 2px tick in the column's own colour -- the value the header's dot carries (#1793) -- so the two kinds are never confusable at a glance (#1809) */
 iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-height:0}
-#foot{flex:none;display:flex;gap:10px;align-items:center;padding:5px 10px;background:var(--panel);border-top:1px solid var(--line);font-size:var(--fs-min);color:var(--mute);font-variant-numeric:tabular-nums}
-#foot b{color:var(--fg);font-weight:600}#foot.warn{border-top-color:#6b5223}#foot.warn b{color:var(--warn)}#foot.warn b.ldred{color:var(--err)}#foot b.ldred{color:var(--err)}
-#ldfacts{margin-left:20px;white-space:nowrap}#ldfacts .bad{color:var(--warn)}#ldfacts .sep{margin:0 3px;color:var(--mute)}
-#ldfacts details.nfd{display:inline-block;vertical-align:top}#ldfacts details.nfd>summary{display:inline;cursor:pointer;list-style:none}#ldfacts details.nfd>summary::-webkit-details-marker{display:none}
-#ldfacts details.nfd[open]{white-space:normal}#ldfacts details.nfd>ul{margin:4px 0 0;padding:0 0 0 16px;white-space:normal;color:var(--mute);font-variant-numeric:normal}
 .load{display:inline-block;margin-left:4px;padding:0 5px;border-radius:9px;background:#3a2a12;color:var(--warn);font-size:var(--fs-min);border:1px solid #6b5223}
 #who{padding:3px 12px;color:var(--mute);border-bottom:1px solid var(--line)}#who:empty{display:none}
 /* The project switcher (#876): one link per project, its live count and worst alert as text; one click switches. */
@@ -3625,10 +3640,10 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 /* A phone forced into the desktop view (#926): one column, a full-width sidebar, and nothing wider than 390 px. The docked
    board lays the window out as a two-column grid of its own (`body.dockb`), so the phone states both layouts: on a 390 px
    screen the 300 px sidebar and the board column are what a reader has to scroll sideways to reach. */
-@media (max-width:600px){body{height:auto}body.tkopen #win{margin-right:0}body.tkopen #board{width:auto}#win{display:block;overflow:visible}body.dockb #win{display:block;grid-template-columns:none;grid-template-rows:none}#side{width:auto;border-right:0;border-bottom:1px solid var(--line)}body.dockb #side{grid-row:auto;grid-column:auto}#main{min-height:50vh}body.dockb #main{grid-column:auto;grid-row:auto}#board{width:auto}body.dockb #board{grid-column:auto;grid-row:auto;height:60vh}#foot{flex-wrap:wrap}#ldfacts{margin-left:0;white-space:normal}#lbody input{width:92px}}
+@media (max-width:600px){body{height:auto}body.tkopen #win{margin-right:0}body.tkopen #board{width:auto}#win{display:block;overflow:visible}body.dockb #win{display:block;grid-template-columns:none;grid-template-rows:none}#side{width:auto;border-right:0;border-bottom:1px solid var(--line)}body.dockb #side{grid-row:auto;grid-column:auto}#main{min-height:50vh}body.dockb #main{grid-column:auto;grid-row:auto}#board{width:auto}body.dockb #board{grid-column:auto;grid-row:auto;height:60vh}#lbody input{width:92px}}
 /* The page frame of the mock (#889): the alert strip, the header with its tabs, and the sidebar cards. */
-#alert{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:6px 16px;background:#3a1d24;border-bottom:1px solid #5a2a33;font-size:var(--fs-body);flex:none}
-#alert:empty{display:none}#alert.calm{background:var(--panel);border-bottom-color:var(--line)}
+#alert{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:6px 16px;background:#3a1d24;border-top:1px solid #5a2a33;font-size:var(--fs-body);flex:none}
+#alert:empty{display:none}#alert.calm{background:var(--panel);border-top-color:var(--line)}
 #alert b{color:var(--bad)}#alert .ai+.ai::before,#alert button+.ai::before{content:"\00b7";color:var(--mute);margin-right:10px}#alert .w{color:var(--warn)}
 #alert .ls{font-weight:600}#alert .ls.on{color:var(--ok)}#alert .ls.off{color:var(--warn)}#alert .ls small{color:var(--mute);font-weight:400;margin-left:4px}
 #loopbtn{padding:2px 10px;font-size:var(--fs-min)}#loopbtn:disabled{opacity:.6;cursor:default}
@@ -3650,8 +3665,23 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 #bbody .it>.hld{order:1;flex:0 0 auto;margin:0;font-size:var(--fs-min);font-weight:600;color:var(--s5);white-space:nowrap}#bbody .it>.hld::before{content:"\25CF";margin-right:4px;color:var(--s5)}
 #plans .sb,#stats .sb{max-height:340px;overflow:auto}
 #tab-set .sp .sb{padding:0 12px 12px}#mbody .mchs,#mbody .mch-row{padding:6px 0 8px}
-#tab-set #foot{border:1px solid var(--line);border-radius:8px;flex-wrap:wrap;padding:8px 12px}#tab-set #ldfacts{margin-left:0;white-space:normal}
 #mobile-link{color:var(--acc)}
+/* Machine & loop (#983): calm flight instruments in the sidebar. Three gauges, four annunciator tiles, two rows. No motion
+   but the needle's own short move, and none at all under reduced motion. */
+#inst .igs{display:flex;justify-content:space-between;gap:4px;margin:2px 0 8px}#inst .ig{display:flex;flex-direction:column;align-items:center;flex:1;min-width:0}
+#inst .ig svg{display:block}#inst .ig .gt{fill:none;stroke:var(--line);stroke-width:3;stroke-linecap:round}#inst .ig .gf{fill:none;stroke:var(--acc);stroke-width:3;stroke-linecap:round}
+#inst .ig .gn{stroke:var(--fg);stroke-width:1.5;stroke-linecap:round;transform-origin:30px 32px;transition:transform .4s ease-out}#inst .ig .gh0{fill:var(--fg)}
+#inst .ig.ldred .gf,#inst .ig.ldred .gn{stroke:var(--err)}#inst.warn .ig .gf{stroke:var(--warn)}
+#inst .gv{font-size:var(--fs-min);color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap}#inst .gv b{color:var(--fg);font-weight:600}#inst.warn .gv b{color:var(--warn)}#inst .ig.ldred .gv b{color:var(--err)}
+#inst .ian{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px}
+#inst .at{background:#10141a;border:1px solid var(--line);border-radius:6px;padding:5px 7px;min-width:0;font-size:var(--fs-min)}
+#inst .at .ah{display:flex;align-items:center;gap:6px;color:var(--mute);font-weight:600}#inst .at .dot{width:7px;height:7px;border-radius:50%;flex:none;background:var(--mute)}
+#inst .at.ok .dot{background:var(--ok)}#inst .at.err .dot{background:var(--err)}#inst .at.info .dot{background:var(--acc)}
+#inst .at .av{display:block;color:var(--fg);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}#inst .at.err .av{color:var(--err)}#inst .at a{color:var(--acc);text-decoration:none}#inst .at a:hover{text-decoration:underline}
+#inst .at details>summary{cursor:pointer;color:var(--mute)}#inst .at details>ul{margin:4px 0 0;padding:0 0 0 14px;color:var(--mute);overflow-wrap:anywhere}
+#inst .irw{display:flex;justify-content:space-between;align-items:baseline;gap:8px;padding:3px 0;border-top:1px solid var(--line);font-size:var(--fs-min);color:var(--mute)}
+#inst .irw b{color:var(--fg);font-weight:600;font-variant-numeric:tabular-nums;text-align:right;min-width:0;overflow-wrap:anywhere}#inst .irw b.bad{color:var(--warn)}
+@media (prefers-reduced-motion: reduce){#inst .ig .gn{transition:none}}
 </style>
 <div id=who>__WHO__</div>
 <script>// One read per URL at a time (#917): a timer fires on a fixed beat whether or not its last read came back, and a slow route
@@ -3659,8 +3689,7 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 // A read already in flight is shared: the caller gets a clone of the same answer.
 (()=>{const f=window.fetch.bind(window),live=new Map();window.fetch=(u,o)=>{if(o&&o.method&&o.method!=="GET"||o&&o.signal)return f(u,o);
  const k=String(u);if(!live.has(k))live.set(k,f(u,o).finally(()=>live.delete(k)));return live.get(k).then(r=>r.clone())}})();</script>
-<div id=alert role=alert></div>
-<header class=top><h1><span class=hb>Squad hub &middot; </span><button id=pj aria-haspopup=menu aria-expanded=false><span id=pjn></span> &#9662;</button></h1><div id=psw aria-label="Projects"></div><div class=tabs role=tablist><button data-t=board role=tab>Board</button><button data-t=flow role=tab>Flow charts</button><button data-t=hist role=tab>History</button><button data-t=set role=tab>Settings</button></div><span class=spx></span>
+<header class=top><h1><button id=pj aria-haspopup=menu aria-expanded=false><span id=pjn></span> &#9662;</button></h1><div id=psw aria-label="Projects"></div><div class=tabs role=tablist><button data-t=board role=tab>Kanban</button><button data-t=flow role=tab>Charts</button><button data-t=hist role=tab>History</button><button data-t=set role=tab>Settings</button></div><span class=spx></span>
 <span class=pill id=bread></span></header>
 <div id=win>
 <div id=side>
@@ -3669,26 +3698,27 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 <details id=plans class=sp><summary>Subscriptions<span class=sr id=plsr></span></summary><div class=sb><div id=subs></div></div></details>
 <details id=stats class=sp><summary>Cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><h4>Spend <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Figures at API list prices (API-equivalent)."></span></h4><div class=tot id=tot></div><div class=m id=totnote></div><div class=cash id=cash></div><h4>Spend over time <span class=row id=per></span></h4><div id=chart></div><div id=kpi></div><div id=open></div><h4>Tokens by model <small class=m id=piet>all time</small></h4><div id=pie></div></div></details>
 <details id=sqd class=sp open><summary>Squad models<span class=sr id=sqsr></span></summary><div class=sb id=sqm></div></details>
+<details id=inst class=sp open><summary>Machine &amp; loop<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div class=ian id=ian></div><div class=irw><span>Next cycle</span><b id=icyc aria-live=off>?</b></div><div id=iuse></div></div></details>
 </div>
 <div id=content>
 <section id=tab-board class="pane on" aria-label=Board>
 <div id=board><div id=bhead><label>Swimlanes <select id=lmode title="swimlanes: one lane per spec (Spec), per wave (Wave), or no lanes, today's board (None)"><option value=spec>Spec</option><option value=wave>Wave</option><option value=none>None</option></select></label> <details id=fw class=fsel><summary>Waves: all</summary><div class=fpop id=fwl></div></details> <details id=fs class=fsel><summary>Specs: all</summary><div class=fpop id=fsl></div></details> <button id=lcall title="collapse every swimlane">Collapse all</button> <button id=lexp title="expand every swimlane">Expand all</button> <label class=hck title="hide the swimlanes whose every ticket is closed"><input type=checkbox id=lhd> Hide done lanes</label> <span id=lhc></span><span id=bt class=m></span> <span id=hlrel class=hlrel hidden></span></div><div id=bcases></div><div id=bbody></div></div>
 </section>
 <section id=tab-flow class=pane aria-label="Flow charts">
-<div class=rkt id=flowtabs><button id=bruns title="the live run dashboards">Run panes</button><button id=bflow title="the development flow: the cards in each column over time, from the flow history (SPEC 111)">Flow</button><button id=blead title="the lead time of the closed cards, opened to closed (SPEC 111)">Lead time</button></div>
+<div class=rkt id=flowtabs><button id=bruns title="the live run dashboards">Runs</button><button id=bflow title="the development flow: the cards in each column over time, from the flow history (SPEC 111)">Cumulative Flow Diagram</button><button id=blead title="the lead time of the closed cards, opened to closed (SPEC 111)">Lead Time</button></div>
 <div id=main></div>
-<div id=flowov hidden><div id=flowh><b id=flowt></b><button id=flowx title="close the diagram">&#215;</button></div><div id=flowb></div></div>
+<div id=flowov hidden><div id=flowb></div></div>
 </section>
 <section id=tab-hist class=pane aria-label=History><h2>Run history</h2><div id=list></div></section>
 <section id=tab-set class=pane aria-label=Settings><h2>Settings</h2>
 <details id=lim class=sp open><summary>Spend &amp; limits<span class=sr id=limsr></span></summary><div class=sb id=lbody></div></details>
 <details id=mdl class=sp open><summary>Models &amp; chains<span class=sr id=mdsr></span></summary><div class=sb id=mbody></div></details>
 <details id=slk class=sp><summary>Communication<span class=sr id=slksr></span></summary><div class=sb id=sbody></div></details>
-<details id=sts class=sp open><summary>Machine &amp; loop status<span class=sr>load, tokens, gate, nightly, cycle, quotas</span></summary><div class=sb><div id=foot title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"><span>load</span><b id=ldline>CPU ? · RAM ? · GPU ?</b><span id=ldfacts title="the squad's own state: health, progress, occupancy, quotas, subscriptions"></span></div></div></details>
 <details id=dev class=sp open><summary>This device<span class=sr>desktop or phone view</span></summary><div class=sb><a id=mobile-link href="#">mobile view</a><script>document.getElementById("mobile-link").href=location.pathname.replace(/\/?$/,"/")+"mobile"</script></div></details>
 </section>
 </div>
 </div>
+<div id=alert role=alert></div>
 <div id=tk role=dialog aria-label=Ticket><header><span id=tkchips></span><span class=sp></span><span id=tknav></span><button id=tkx aria-label=Close>✕</button></header><div id=tkset></div><div id=tkb></div><footer><a class=btn id=tkgh target=_blank rel=noopener>Open on GitHub ↗</a><button id=tktodo>→ Todo</button><button id=tkrel>Highlight related</button></footer></div>
 <script>/*SWITCHER_JS*/
 {const swMe=(location.pathname.match(/^\/([^/?#]+)/)||[])[1]||"";switcherPoll(d=>switcherPaint(document.getElementById("psw"),d,swMe,"/"));}</script>
@@ -3732,7 +3762,7 @@ function loadMark(r){return r.cpu?`<span class=load title="this run owns ${r.cpu
 // from the numbers `/api/load` already serves and paints each on its own. These mirror the server's `pct_cell` — the same
 // order, the same ` · `, the same rounding — so the reading still reads exactly as it read; only a cell at the machine's
 // ceiling is red, and that is `LOAD_ERR`, substituted when the page is served. A source the hub cannot see stays `?`:
-// a missing reading is not a high one. Red sits above the older, machine-wide amber of `#foot.warn`, and never replaces it.
+// a missing reading is not a high one. Red sits above the older, machine-wide amber of `#inst.warn`, and never replaces it.
 const LOAD_ERR=Number("__LOADERR__");
 const MODELID_SRC="__MODELID__";   // the one model-id shape, substituted when the page is served (#221): the Add boxes test it, never a copy of it
 const MODELRE=new RegExp("^"+MODELID_SRC+"$");   // an unsubstituted page still evaluates: the placeholder is a string, never a bare name
@@ -3740,40 +3770,44 @@ function ldNum(v){if(v===null||v===undefined||v===""||typeof v==="boolean")retur
 function ldRound(f){const fl=Math.floor(f),fr=f-fl;return fr>.5?fl+1:fr<.5?fl:fl+(fl%2)}   // half to even, exactly as `:.0f` rounds
 function ldCell(v){const f=ldNum(v);return{t:f===null?"?":ldRound(f)+"%",red:f!==null&&f>=LOAD_ERR}}
 function ldCells(d){return[["CPU","cpu"],["RAM","ram"],["GPU","gpu"]].map(p=>{const c=ldCell((d||{})[p[1]]);return{k:p[0],t:c.t,red:c.red}})}
-function ldPaint(l,d){l.textContent="";ldCells(d).forEach((c,i)=>{if(i)l.appendChild(document.createTextNode(" · "));const b=document.createElement("b");if(c.red)b.className="ldred";b.textContent=c.k+" "+c.t;l.appendChild(b)})}
-// The facts after the cells, served by the same tick. On a window too narrow for the whole row the trailing facts drop
-// (6 -> 5 -> 4) exactly as they are — the line never wraps and no number is cut into a different one. The last block is
-// never dropped: a window too narrow even for it cuts it at the budget instead, because a bar with a fact to carry never
-// draws the machine alone, and the first block is the one that matters most (#446). The budget is in characters of the
-// font the cells beside them are drawn in, measured off the cells themselves.
-function footFit(items,cols){const k=(items||[]).slice();while(k.length>1&&k.map(i=>i.text).join(" · ").length>cols)k.pop();if(k.length&&k[0].text.length>cols)k[0]={...k[0],text:k[0].text.slice(0,Math.max(0,cols-1)).trimEnd()+"…",parts:null};return k}
-function footText(items,cols){return footFit(items,cols).map(i=>i.text).join(" · ")}
-// The colour of each fact (#1843). A block wears its own palette colour, so the six blocks are told apart without one
-// character more; a token whose own reading earned one of the three tones the load strip already paints (#1816) keeps
-// it ON that colour, so a block colour never says the value is fine, and `neutral` is the bar's own plain colour for a
-// value the hub could not verify. The parts of a block keep the line's own separator between them, the text the hub
-// serves already carries it. The tone is decided where the number is — the hub serves it — never here:
-const FTONE={ok:"var(--ok)",warn:"var(--warn)",err:"var(--err)",neutral:"var(--mute)"};
-function footParts(i){return (i.parts||[{text:i.text}]).map(p=>{const t=FTONE[p.tone]?`<span style="color:${FTONE[p.tone]}">${esc(p.text)}</span>`:esc(p.text);return p.tip?`<span title="${esc(p.tip)}">${t}</span>`:t}).join(" · ")}
-function footItem(i){const t=footParts(i),s=i.bad?`<span class=bad>${t}</span>`:`<span style="color:var(--${i.color})">${t}</span>`,b=i.tip?`<span title="${esc(i.tip)}">${s}</span>`:s,d=i.detail||[];return d.length?`<details class=nfd><summary>${b}</summary><ul>${d.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></details>`:b}
-// The facts' own width budget: what the bar has left after the `load` label, the three cells, their gaps and the facts'
-// own margin. The line drops whole blocks when it is too narrow, so a budget that promises more room than the bar has
-// would let one block run past the window instead of dropping.
-function footCols(){const f=$("#foot"),l=$("#ldline"),x=$("#ldfacts");if(!f||!l||!f.clientWidth)return 1e9;
- const cs=getComputedStyle(f),xcs=x?getComputedStyle(x):null,gap=parseFloat(cs.columnGap||cs.gap||"0")||0;
- let used=0;for(const c of f.children)if(c!==x)used+=c.getBoundingClientRect().width;
- const avail=f.clientWidth-parseFloat(cs.paddingLeft)-parseFloat(cs.paddingRight)-used-gap*Math.max(f.children.length-1,0)
-   -(xcs?parseFloat(xcs.marginLeft)||0:0)-8;
- const w=l.getBoundingClientRect().width,n=Math.max((l.textContent||"").length,1);
- return Math.max(0,Math.floor(avail*n/w))}
-// The row: the blocks the bar has room for, joined by a separator the page DRAWS — a dimmed span with its own margin,
-// never the ` · ` a block carries between its own parts. The two were the same glyph, so blocks ran together; the drawn
-// one is a different thing to the eye, and it is narrower than the ` · ` the fit counts, so the row never overflows.
-const FOOT_SEP_HTML='<span class=sep>&middot;</span>';
-function footDraw(d){const l=$("#ldline"),f=$("#ldfacts");if(l)ldPaint(l,d);
- if(f)f.innerHTML=footFit(d.facts,footCols()).map(footItem).join(FOOT_SEP_HTML)}
-async function loadPoll(){try{const d=await (await fetch("/api/load")).json(),fo=$("#foot");
- footDraw(d);if(fo)fo.classList.toggle("warn",!!d.warn)}catch(e){}}
+// Machine & loop (#983): the card the Settings strip became, drawn as calm flight instruments from what `/api/load` already
+// serves: the three load numbers and the facts the sampler last read. Each figure is HTML text; the SVGs only draw and are
+// hidden from a screen reader. A tile's state is read off its fact, so the hub keeps deciding the tone and the text.
+// INST{
+function gaugeGeom(v){const f=ldNum(v),k=f!==null,p=k?f:0,a=Math.PI*p/100;return{known:k,deg:Math.round(-90+1.8*p),x:Math.round((30-26*Math.cos(a))*10)/10,y:Math.round((32-26*Math.sin(a))*10)/10}}
+function gaugeSvg(v){const g=gaugeGeom(v);return `<svg width=60 height=36 viewBox="0 0 60 36" aria-hidden="true" focusable="false"><path class=gt d="M4 32 A26 26 0 0 1 56 32"/><path class=gf d="M4 32 A26 26 0 0 1 ${g.x} ${g.y}"/><line class=gn x1=30 y1=32 x2=30 y2=10 style="transform:rotate(${g.deg}deg)"${g.known?"":" visibility=hidden"}/><circle class=gh0 cx=30 cy=32 r=2 /></svg>`}
+function instGauges(d){return ldCells(d).map(c=>`<div class="ig${c.red?" ldred":""}">${gaugeSvg((d||{})[c.k.toLowerCase()])}<span class=gv><b>${c.k}</b> ${esc(c.t)}</span></div>`).join("")}
+const instFact=(facts,k)=>(facts||[]).find(f=>f&&f.key===k);
+function instTile(k,f,lead){if(!f)return{k,text:"no reading",tone:"neutral"};const p=(f.parts||[])[0]||{},t=String(f.text||"").replace(lead,"").trim()||"?";return{k,text:t,tone:p.tone==="ok"||p.tone==="err"?p.tone:"neutral",tip:f.tip||null,detail:f.detail||null}}
+function instTiles(facts){const lp=instFact(facts,"loop"),ld=instFact(facts,"landing"),on=lp?/:ON$/.test(lp.text):null,
+ land=ld?instTile("Landed",ld,/^landed\s*/):{k:"Landed",text:"no reading",tone:"neutral"},m=/PR #(\d+)/.exec(land.text);
+ if(m){land.tone="info";land.href=`https://github.com/__REPO__/pull/${m[1]}`}
+ return[instTile("Gate",instFact(facts,"gate"),/^gate\s*/),instTile("Nightly",instFact(facts,"nightly"),/^nightly\s*/),
+  {k:"Loop",text:on===null?"?":on?"ON":"OFF",tone:on===null?"neutral":on?"ok":"err"},land]}
+const iq=t=>esc(t).replace(/"/g,"&quot;");
+function tileHtml(t){const v=t.href?esc(t.text).replace(/PR #\d+/,x=>`<a target=_blank rel=noopener href="${iq(t.href)}">${x}</a>`):esc(t.text),
+ d=(t.detail||[]).length?`<details><summary>${t.detail.length} failed</summary><ul>${t.detail.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></details>`:"";
+ return `<div class="at ${t.tone}"${t.tip?` title="${iq(t.tip)}"`:""}><span class=ah><span class=dot aria-hidden="true"></span>${esc(t.k)}</span><span class=av>${v}</span>${d}</div>`}
+function instSum(facts){const t=instTiles(facts);return t[2].text+" · "+t.filter(x=>x.k!=="Loop"&&x.tone==="err").length+" fail"}
+function cycleLeft(text){const m=/^cycle (?:in |\+)(?:(\d+)h(\d\d)m|(\d+)m(\d\d)s)( late)?$/.exec(String(text||""));if(!m)return null;
+ const s=m[1]!==undefined?(+m[1])*3600+(+m[2])*60:(+m[3])*60+(+m[4]);return m[5]?-s:s}
+function cycleFmt(left){const s=Math.abs(Math.round(left)),h=Math.floor(s/3600),mi=Math.floor(s/60)%60,p=n=>String(n).padStart(2,"0"),
+ t=h?`${h}h${p(mi)}m`:`${Math.floor(s/60)}m${p(s%60)}s`;return left<0?`+${t} late`:`in ${t}`}
+function instUsage(facts){const f=instFact(facts,"burn");if(!f||!f.text)return null;const p=String(f.text).split(" · ");return{tok:p[0].replace(/^tokens\s*/,""),calls:p.slice(1).join(" · ")}}
+let instCyc=null,instLast={};
+function instSet(id,h){const e=$("#"+id);if(e&&instLast[id]!==h){instLast[id]=h;e.innerHTML=h}}
+function instTick(){const e=$("#icyc");if(e)e.textContent=instCyc===null?"?":cycleFmt(instCyc-Date.now()/1000)}
+function instDraw(d){const c=$("#inst");if(!c)return;const facts=(d||{}).facts||[];c.classList.toggle("warn",!!(d||{}).warn);
+ const gs=$("#igs");if(gs&&!gs.children.length)gs.innerHTML=instGauges(d);
+ else if(gs)ldCells(d).forEach((x,i)=>{const n=gs.children[i],g=gaugeGeom((d||{})[x.k.toLowerCase()]);if(!n)return;n.classList.toggle("ldred",x.red);
+  const ln=n.querySelector(".gn"),f=n.querySelector(".gf"),v=n.querySelector(".gv");
+  if(ln){ln.style.transform=`rotate(${g.deg}deg)`;ln.setAttribute("visibility",g.known?"visible":"hidden")}if(f)f.setAttribute("d",`M4 32 A26 26 0 0 1 ${g.x} ${g.y}`);if(v)v.innerHTML=`<b>${x.k}</b> ${esc(x.t)}`});
+ instSet("ian",instTiles(facts).map(tileHtml).join(""));
+ const u=instUsage(facts);instSet("iuse",u?`<div class=irw><span>Tokens</span><b class=bad>${esc(u.tok)}</b></div><div class=irw><span>Calls over cap</span><b class=bad>${esc(u.calls)}</b></div>`:"<div class=irw><span>Tokens</span><b>no call over the cap</b></div>");
+ const s=$("#instsr");if(s)s.textContent=instSum(facts);
+ const cy=instFact(facts,"cycle"),l=cy?cycleLeft(cy.text):null;instCyc=l===null?null:Date.now()/1000+l;instTick()}
+// }INST
+async function loadPoll(){try{const d=await (await fetch("/api/load")).json();instDraw(d)}catch(e){}}
 function groupHeader(k,rows){const n=rows.filter(r=>r.kind!=="childcc").length,spend=rows.reduce((a,r)=>a+r.spend,0),agents=rows.reduce((a,r)=>a+(r.agents||0),0);let title=usd(spend);let text=n+" · "+title;if(k==="running"&&CAPS&&CAPS.per_run&&CAPS.per_run.label)title+=" · "+CAPS.per_run.label;if(k==="running")text=(CAPS&&CAPS.runs&&CAPS.children)?`RUNS ${n}/${CAPS.runs} · AGENTS ${agents}/${CAPS.children}`+((CAPS.waiting||[]).length?" · waiting: "+CAPS.waiting.map(w=>`${w.holder} (${w.ceiling})`).join(", "):""):`${n} · ${agents}`;return {text,title}}
 // The open groups belong to the user: a click on a header toggles that one group, any number stay open, and the set is stored
 // beside the pins. `null` means nothing is stored yet — the first draw opens the first filled group once, and only then, so a
@@ -4092,7 +4126,7 @@ async function pollStats(){try{pollSubs();
 }catch(e){}}
 pollStats();setInterval(pollStats,30000);
 poll();setInterval(poll,3000);
-loadPoll();setInterval(loadPoll,LOAD_MS);   // the window owns the reading: one timer and one /api/load per tick, whatever else the page renders
+loadPoll();setInterval(loadPoll,LOAD_MS);setInterval(instTick,1000);   // the window owns the reading: one timer and one /api/load per tick; the countdown ticks in place between readings, and its node is aria-live=off, so no tick is announced
 const bo=ls.bo||{},saveB=()=>{ls.bo=bo;localStorage.hub=JSON.stringify({...ls,pins:[...pins],q,per,bo})};
 if(!["spec","wave","none"].includes(bo.lmode))bo.lmode="spec";   // an older page saved a mode no option names, and the select drew blank (#978)
 bo.dock="bottom";   // the board always docks at the bottom
@@ -4234,7 +4268,7 @@ const flowCFD=c=>{const sel=`<label class=fhead>Range <select id=cfdr>${CFD_R.ma
   return sel+`<svg viewBox="0 0 ${flowW} ${flowH}">${c.bands.map(polys).join("")}${cfdAxis(c)}${hover}</svg>`+
     `<p class=fnote>history from ${esc(c.start)} UTC</p><p>${c.bands.map(b=>`<span class=flg><i style="background:${COLORS[b.name]||"#888"}"></i>${esc(b.name)}</span>`).join("")}</p>`;};
 const EXREASON={not_planned:"closed as not planned",abandoned:"closed as abandoned",open:"still open",no_opened:"no opened date"};   // the cards the chart leaves out, in words (#921)
-let LT={tf:"30",log:false,pick:null,zc:null,zr:null,rng:null,tok:0,noclick:false};   // the control chart's timeframe, its scale, the cluster listed under it, and a drag zoom: the hub's chart over zr=[from,to] (#900)
+let LT={tf:"30",log:false,pick:null,zc:null,zr:null,rng:null,tok:0,noclick:false,a:"",b:"",cols:[]};   // the control chart's timeframe, its scale, the cluster listed under it, and a drag zoom: the hub's chart over zr=[from,to] (#900)
 const ltSpan=(r,a,b)=>{const t0=Date.parse(r.start),t1=Date.parse(r.end),at=f=>new Date(t0+f*(t1-t0)).toISOString();return [at(a<0?0:a),at(b>1?1:b)]};   // plot fractions to the dates they name (#900)
 const LT_TF=[["7","Past week"],["14","Past 2 weeks"],["30","Past month"],["90","Past 3 months"],["180","Past 6 months"],["all","All"]];
 const ltX=x=>flowP+x*(flowW-2*flowP),ltY=y=>flowH-flowP-y*(flowH-2*flowP);
@@ -4242,7 +4276,9 @@ const ltLine=(v,col,dash,name)=>v?`<line x1=${flowP} x2=${flowW-flowP} y1=${ltY(
 const ltChart=c=>{const n=c.dots.length,base=flowH-flowP,ink="#b8c0cf",mute="var(--mute)";
   const ctl=`<p class=fhead><label>Timeframe <select id=ltr>${LT_TF.map(([k,v])=>`<option value=${k}${LT.tf===k?" selected":""}>${v}</option>`).join("")}</select></label> `+
     `<label>Scale <select id=lts><option value=jira${LT.log?"":" selected"}>Jira scale</option><option value=log${LT.log?" selected":""}>Log scale</option></select></label> `+
-    `<button id=ltz${LT.zc?"":" disabled"} title="drag across the plot to zoom to those dates">Reset zoom</button></p>`;
+    `<label>Start <select id=lta><option value="">Created</option>${LT.cols.map(k=>`<option${LT.a===k?" selected":""}>${esc(k)}</option>`).join("")}</select></label> `+
+    `<label>End <select id=ltb>${LT.cols.map(k=>{const v=k===COLNAME.issue_closed?"":k;return `<option value="${esc(v)}"${LT.b===v?" selected":""}>${esc(k)}</option>`}).join("")}</select></label> `+   // the span each dot measures, from the recorded transitions (#905)
+    `<button id=ltz${LT.zr?"":" disabled"} title="drag across the plot to zoom to those dates">Reset zoom</button></p>`;
   LT.rng=c.range;
   const note=`<p class=fnote>${esc(c.text)}</p>`;
   if(!n)return ctl+note+"<p class=fnote>no closed card in this timeframe</p>";
@@ -4263,13 +4299,15 @@ const ltChart=c=>{const n=c.dots.length,base=flowH-flowP,ink="#b8c0cf",mute="var
   return ctl+S+legend+`<svg data-lt viewBox="0 0 ${flowW} ${flowH}">${axes}${ys}${xs}${band}${roll}${lines}${dots}</svg>`+note+rows;};
 const flowLead=l=>{const S=l.summary,ex=l.excluded.map(e=>`${e.count} ${esc(EXREASON[e.reason]||e.reason)}`).join(", ");
   const head=`<p class=fhead><b>${esc(l.measure)}</b> · window ${l.window.size} ${esc(l.window.unit)} · excluded ${l.excluded_total}${ex?" ("+ex+")":""}</p>`;
-  if(!S)return head+"<p class=fnote>no closed card yet</p>";
+  LT.cols=l.columns||[];if(!S)return head+"<p class=fnote>no closed card yet</p>";
   return head+ltChart(LT.zc||l.control[LT.log?"log":"jira"][LT.tf]);};
-const drawFlow=()=>{{const w=$("#flowb").clientWidth-20;flowW=w<600?600:w>1600?1600:(w|0)}const cfd=FLOWK==="cfd";$("#flowt").textContent=cfd?"Cumulative flow":"Lead time";
+const drawFlow=()=>{{const w=$("#flowb").clientWidth-20;flowW=w<600?600:w>1600?1600:(w|0)}const cfd=FLOWK==="cfd";
   const a=FLOWD[FLOWK];
   $("#flowb").innerHTML=!a?"<p class=fnote>loading the chart from the hub</p>":(cfd?flowCFD(a.cfd.ranges[CF.r]):flowLead(a.lead))+`<p class=fnote>data read ${new Date(a.t*1000).toLocaleTimeString()}</p>`};
 const flowOpen=async k=>{FLOWK=k;$("#flowov").hidden=false;drawFlow();try{const a=await (await fetch(`/api/chart/${k}`)).json();FLOWD[k]=a;if(FLOWK===k)drawFlow()}catch(e){}};
-const ltZoom=async(f,t)=>{const tok=++LT.tok;try{const c=await (await fetch(`/api/leadtime?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}&scale=${LT.log?"log":"jira"}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;LT.zr=[f,t];LT.pick=null;drawFlow()}catch(e){}};   // the hub recomputes the chart for the dragged range (#900)
+const ltQ=()=>`&scale=${LT.log?"log":"jira"}&a=${encodeURIComponent(LT.a)}&b=${encodeURIComponent(LT.b)}`,ltOwn=()=>LT.a!==""||LT.b!=="";   // a span other than created to closed is the hub's chart for it (#905)
+const ltZoom=async(f,t)=>{const tok=++LT.tok;try{const c=await (await fetch(`/api/leadtime?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}${ltQ()}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;LT.zr=[f,t];LT.pick=null;drawFlow()}catch(e){}};   // the hub recomputes the chart for the dragged range (#900)
+const ltGet=async()=>{const tok=++LT.tok;LT.zc=null;LT.pick=null;if(!ltOwn()){drawFlow();return}try{const c=await (await fetch(`/api/leadtime?tf=${LT.tf}${ltQ()}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;drawFlow()}catch(e){}};   // the timeframe's chart for the chosen span (#905)   // the hub recomputes the chart for the dragged range (#900)
 const ltPx=(e,s)=>{const r=s.getBoundingClientRect();return (e.clientX-r.left)/r.width*flowW};
 const ltClamp=x=>x<flowP?flowP:x>flowW-flowP?flowW-flowP:x,ltLo=(p,q)=>p<q?p:q,ltHi=(p,q)=>p<q?q:p;
 let LTD=null;   // the drag across a control chart's plot in progress (#900)
@@ -4280,12 +4318,13 @@ document.addEventListener("pointermove",e=>{if(!LTD)return;const x1=ltClamp(ltPx
 document.addEventListener("pointerup",()=>{const d=LTD;LTD=null;if(!d||!d.moved)return;d.s.querySelector("rect.ltsel")?.remove();LT.noclick=true;
   const a=(ltLo(d.x0,d.x1)-flowP)/(flowW-2*flowP),b=(ltHi(d.x0,d.x1)-flowP)/(flowW-2*flowP);if(b-a<0.005||!LT.rng)return;const [f,t]=ltSpan(LT.rng,a,b);ltZoom(f,t)});
 $("#flowb").onchange=e=>{if(e.target.id==="cfdr"){CF.r=e.target.value;drawFlow();return}
-  if(e.target.id==="ltr"){LT.tf=e.target.value;LT.tok++;LT.zc=null;LT.zr=null;LT.pick=null;drawFlow();return}
-  if(e.target.id==="lts"){LT.log=e.target.value==="log";LT.pick=null;if(LT.zr){ltZoom(LT.zr[0],LT.zr[1]);return}drawFlow()}};
+  if(e.target.id==="ltr"){LT.tf=e.target.value;LT.zr=null;ltGet();return}
+  if(e.target.id==="lta"||e.target.id==="ltb"){LT[e.target.id==="lta"?"a":"b"]=e.target.value;LT.pick=null;if(LT.zr){ltZoom(LT.zr[0],LT.zr[1]);return}ltGet();return}
+  if(e.target.id==="lts"){LT.log=e.target.value==="log";LT.pick=null;if(LT.zr){ltZoom(LT.zr[0],LT.zr[1]);return}if(ltOwn()){ltGet();return}drawFlow()}};
 $("#flowb").onclick=e=>{if(LT.noclick){LT.noclick=false;return}
-  if(e.target.id==="ltz"){LT.tok++;LT.zc=null;LT.zr=null;LT.pick=null;drawFlow();return}
+  if(e.target.id==="ltz"){LT.zr=null;ltGet();return}
   const k=e.target.closest("circle[data-k]");if(k){LT.pick=+k.dataset.k;drawFlow();return}const r=e.target.closest("tr[data-o]");if(r)showIssue(+r.dataset.o,"__REPO__")};
-$("#bflow").onclick=()=>flowOpen("cfd");$("#blead").onclick=()=>flowOpen("lead");$("#flowx").onclick=()=>{$("#flowov").hidden=true};addEventListener("resize",()=>{if(!$("#flowov").hidden)drawFlow()});
+$("#bflow").onclick=()=>flowOpen("cfd");$("#blead").onclick=()=>flowOpen("lead");addEventListener("resize",()=>{if(!$("#flowov").hidden)drawFlow()});
 // flow-charts:end
 async function pollBoard(){lim.busy=1;try{const b=await (await fetch("/api/board")).json(),FLOW=/*BOARD_FLOW*/,   // development flow, left to right
 all=[b.prs,...b.groups.sort((x,y)=>{const i=n=>{const k=FLOW.indexOf(n);return k<0?FLOW.length:k};return i(x.name)-i(y.name)})],f=q.trim().replace(/^#/,"");
@@ -4295,12 +4334,12 @@ lastRead=Date.now();readStale=!!b.err;$("#bcases").innerHTML=caseRows(b.cases);$
 const fw=bo.fw||[],fs=bo.fs||[],allRows=all.filter(g=>!isPR(g.name)).flatMap(g=>g.items),specTitle=new Map();   // the filter bar: the waves and specs the board holds (#899)
 allRows.forEach(x=>{if(x.sp)specTitle.set(String(x.n),x.t)});
 const numKeys=(a,b)=>a==="none"?1:b==="none"?-1:+a-+b;
-const wOpts=[...new Set(allRows.filter(x=>!x.sp).map(waveKey))].sort(numKeys),sOpts=[...new Set(allRows.map(x=>x.sp?String(x.n):specKey(x)))].sort(numKeys);
+const wOpts=waveOptions(allRows),sOpts=[...new Set(allRows.map(x=>x.sp?String(x.n):specKey(x)))].sort(numKeys);
 const fillBar=(id,opts,label,sel,name)=>{const box=$("#"+id),k=opts.join("|");
  if(box.dataset.k!==k){box.dataset.k=k;box.innerHTML=`<div class=fpopb><button type=button data-clear>clear</button></div>`+opts.map(v=>`<label><input type=checkbox value="${esc(v)}"> ${esc(label(v))}</label>`).join("")}
  box.querySelectorAll("input").forEach(c=>c.checked=sel.includes(c.value));
  box.parentElement.querySelector("summary").textContent=sel.length?`${name} (${sel.length})`:`${name}: all`;box.parentElement.classList.toggle("set",sel.length>0)};
-fillBar("fwl",wOpts,w=>w==="none"?"No wave":"Wave "+w,fw,"Waves");
+fillBar("fwl",wOpts.map(o=>o.key),k=>wOpts.find(o=>o.key===k).label,fw,"Waves");
 fillBar("fsl",sOpts,s=>s==="none"?"No spec":"#"+s+(specTitle.get(s)?" "+specTitle.get(s):""),fs,"Specs");
 const hid=new Set(hidCols()),bottom=true,eye=(g,off=hid.has(g.name))=>`<span class=eye data-eye="${esc(g.name)}" title="${off?"show":"hide"} this column"><svg viewBox="0 0 24 24" width=14 height=14 fill=none stroke=currentColor stroke-width=2 stroke-linecap=round stroke-linejoin=round><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx=12 cy=12 r=3 />${off?'<path d="M3 3l18 18"/>':""}</svg></span>`;
 const LC=b.lc||{},rgb=h=>[0,2,4].map(i=>parseInt(h.slice(i,i+2),16)),mix=(a,t)=>a.map((v,i)=>Math.round(v*t+[28,34,44][i]*(1-t))),   // label color blended into the card's #1c222c
@@ -4319,11 +4358,11 @@ const cards=(g,it,shown)=>shown.map(x=>{const pr=x.kind==="pr";return `<div clas
 const laneHtml=m=>{const ccount=c=>m.lanes.reduce((s,l)=>s+(l.counts[c]||0),0),pct=l=>l.total?Math.round(l.closed/l.total*100):0;
  if(!m.lanes.length)return `<div class=lempty>${f?"No card matches this search.":"No card on the board."}</div>`;
  let h=`<div class=lgrid style="--vc:${Math.max(1,m.vc.length)}">`+m.vc.map(c=>`<div class=lcolh style="--cc:${colOf(c,CN)}"><span>${esc(c)}</span><b>${ccount(c)}</b>${eye({name:c})}</div>`).join("");
- let si=0;const SPECC=["var(--s1)","var(--s2)","var(--s3)","var(--s4)","var(--s5)","var(--s6)","var(--s7)","var(--s8)"];
- for(const l of m.lanes){const cl=l.collapsed,bugs=l.kind==="bugs",lc=bugs?"var(--bad)":l.kind==="s"?SPECC[si++%SPECC.length]:"var(--s8)",
+ const SPECC=["var(--s1)","var(--s2)","var(--s3)","var(--s4)","var(--s5)","var(--s6)","var(--s7)","var(--s8)"];
+ for(const l of m.lanes){const cl=l.collapsed,bugs=l.kind==="bugs",lc=bugs?"var(--bad)":l.pi!=null?SPECC[l.pi]:"var(--s8)",
    lid=l.kind==="s"?"SPEC "+l.num:bugs?"Loop bugs":l.title,ltt=l.kind==="s"?l.title:bugs?"defects of the loop itself: they halt dispatch, never a landing (ADR-0146)":l.kind==="none"?"bugs and single tickets":"";   // the lane reads as the mock: a coloured id, then its title or its subtitle (#889)
   h+=`<section class="lane${cl?" coll":""}${l.kind==="bugs"?" alarm":""}${l.done?" done":""}" data-lane="${esc(l.id)}" style="--lc:${lc}"><header class=lh role=button tabindex=0 aria-expanded="${!cl}" data-lane="${esc(l.id)}"><span class=tw>${cl?"&#9656;":"&#9662;"}</span>`
-    +`<span class=lid>${esc(lid)}</span>`+(ltt?`<span class="ltt${l.kind==="s"?"":" subt"}">${esc(ltt)}</span>`:"")
+    +`<span class="lid${l.kind==="sw"?" sw":""}">${l.kind==="sw"?`<span class=sid>${esc(l.sid)}</span> · ${esc(l.wl)}`:esc(lid)}</span>`+(ltt?`<span class="ltt${l.kind==="s"?"":" subt"}">${esc(ltt)}</span>`:"")
     +(l.kind==="s"?`<span class=bar title="${l.closed} of ${l.total} closed"><i style="width:${pct(l)}%"></i></span><span class=pc>${l.closed}/${l.total}</span>`+(l.st?`<span class=lst>${esc(l.st)}</span>`:""):"")
     +`<span class=sum>${cl?m.cols.filter(c=>l.counts[c]).map(c=>`<span>${esc(c)} <b>${l.counts[c]}</b></span>`).join(""):""}</span></header>`;
   if(!cl)for(const c of m.vc){const key=l.id+"|"+c,v=cellView(l.cells[c],!!(bo.cx||{})[key]);h+=`<div class=cell data-lane="${esc(l.id)}" data-col="${esc(c)}">${cards({name:c},v.shown,v.shown)}${v.more?`<button class=more data-cell="${esc(key)}" title="show every card of this cell">+${v.more} more</button>`:""}</div>`}
@@ -4388,7 +4427,6 @@ function setTab(t,o){if(!TABS[t])t="board";TAB=t;ls.tab=t;save();
  drawMain()}
 document.querySelector(".tabs").addEventListener("click",e=>{const b=e.target.closest("button[data-t]");if(b)setTab(b.dataset.t)});
 $("#enall").addEventListener("click",e=>{e.preventDefault();e.stopPropagation();setTab("hist")});
-$("#lrun").addEventListener("click",e=>{const r=e.target.closest(".r[data-id]");if(r&&pins.has(r.dataset.id))setTab("flow",{runs:true})});   // a live run picked in the sidebar shows its pane on the Flow charts tab
 $("#bruns").onclick=()=>{$("#flowov").hidden=true;flowTabs()};
 function flowTabs(){const h=$("#flowov").hidden,k=typeof FLOWK==="string"?FLOWK:"cfd";$("#bruns").classList.toggle("on",h);$("#bflow").classList.toggle("on",!h&&k==="cfd");$("#blead").classList.toggle("on",!h&&k!=="cfd")}
 new MutationObserver(flowTabs).observe($("#flowov"),{attributes:true});

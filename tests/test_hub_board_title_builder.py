@@ -52,11 +52,11 @@ def _groups(hub):
 
 
 def test_board_header_reads_no_title_and_the_tab_names_the_pane(hub):
-    """Re-anchored to the owner-approved mock (#889): the board's toolbar carries no `TASKS` title; the `Board` tab names the pane."""
+    """Re-anchored to the owner-approved mock (#889): the board's toolbar carries no `TASKS` title; the `Kanban` tab names the pane (the owner renamed Board to Kanban and Flow charts to Charts)."""
     head = _bhead(hub)
     assert "<b>" not in head, "the board toolbar carries a bold title again"
     tabs = hub.PAGE[hub.PAGE.index("<div class=tabs"):hub.PAGE.index("</div>", hub.PAGE.index("<div class=tabs"))]
-    assert [re.sub(r"<[^>]*>", "", t) for t in re.findall(r"<button[^>]*>.*?</button>", tabs)] == ["Board", "Flow charts", "History", "Settings"]
+    assert [re.sub(r"<[^>]*>", "", t) for t in re.findall(r"<button[^>]*>.*?</button>", tabs)] == ["Kanban", "Charts", "History", "Settings"]
 
 
 def test_board_has_no_collapsed_state(hub):
@@ -126,5 +126,12 @@ def test_the_column_names_are_unchanged(hub):
     }
 
 
-def test_the_footer_is_unchanged(hub):
-    assert "<span>load</span><b id=ldline>CPU ? · RAM ? · GPU ?</b>" in hub.PAGE
+def test_the_machine_card_is_unchanged(hub):
+    # re-anchored to #983: the Settings strip became the sidebar's Machine & loop card
+    assert "<details id=inst class=sp open><summary>Machine &amp; loop<span class=sr id=instsr></span></summary>" in hub.PAGE
+
+
+def test_the_header_names_only_the_project_dropdown(hub):
+    """The owner: no "Squad hub" title; the header holds only the project dropdown."""
+    h1 = hub.PAGE[hub.PAGE.index("<header class=top><h1>"):hub.PAGE.index("</h1>", hub.PAGE.index("<header class=top><h1>"))]
+    assert "Squad hub" not in h1 and "<button id=pj" in h1

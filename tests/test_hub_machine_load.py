@@ -207,7 +207,7 @@ def test_an_empty_history_reads_as_unavailable(hub):
 def test_the_page_carries_a_footer_strip_and_polls_the_reading():
     src = HUB_PY.read_text()
     assert 'elif self.path.startswith("/api/load")' in src            # served, not sampled, per view
-    assert '<div id=foot' in src and "id=ldline" in src              # the strip and its line
+    assert "<div class=igs id=igs" in src and "instDraw(d)" in src    # the instruments card and its one paint (#983)
     assert 'const LOAD_MS=Number("__LOADMS__")||5000;' in src
     assert '.replace("__LOADMS__", str(int(LOAD_SAMPLE_SECS * 1000)))' in src
     assert "setInterval(loadPoll,LOAD_MS)" in src
@@ -259,22 +259,19 @@ def _css(hub, selector):
     return m.group(1)
 
 
-def test_the_reading_left_the_pane_and_became_the_windows_own_bar(pg):
-    # Re-anchored to the owner-approved mock (#889): the mock has no footer bar, and the alert strip carries what must be seen at once,
-    # so the machine reading is a section of the Settings tab, never the left pane's footer and never a bar under the window
-    assert "side" not in pg.parents["foot"]
-    assert "tab-set" in pg.parents["foot"] and "win" in pg.parents["foot"]
+def test_the_reading_is_a_sidebar_card_never_a_bar_under_the_window(pg):
+    # Re-anchored to #983: the owner moved the machine reading from the Settings tab into a left-sidebar card drawn as
+    # flight instruments; the alert strip still carries what must be seen at once
+    assert "side" in pg.parents["igs"] and "inst" in pg.parents["igs"]
+    assert "tab-set" not in pg.parents["igs"]
     assert "win" in pg.parents["side"] and "win" in pg.parents["board"]
-    assert pg.order.index("foot") > pg.order.index("board")   # painted after the board's own pane
 
 
 def test_the_bar_is_a_row_of_the_windows_column_so_nothing_pushes_it_off(hub, pg):
     body = _css(hub, "body")
     assert "flex-direction:column" in body              # window = panes, then the bar
     win = _css(hub, "#win")
-    assert "flex:1" in win and "min-height:0" in win    # the panes take the room left over: they scroll, the bar does not
-    foot = _css(hub, "#foot")
-    assert "flex:none" in foot and "position:sticky" not in foot   # a fixed height of its own, not sticky inside a scroller
+    assert "flex:1" in win and "min-height:0" in win    # the panes take the room left over: they scroll
 
 
 def test_the_docked_board_stays_inside_the_panes_so_the_bar_keeps_the_full_width(hub, pg):
@@ -284,7 +281,7 @@ def test_the_docked_board_stays_inside_the_panes_so_the_bar_keeps_the_full_width
 
 
 def test_one_element_carries_the_reading_however_often_it_is_repainted(hub, pg):
-    assert pg.order.count("ldline") == 1                              # one reading on the page, never two that can disagree
+    assert pg.order.count("igs") == 1                                 # one reading on the page, never two that can disagree
     assert hub.PAGE.count("setInterval(loadPoll") == 1                # one timer for the whole window
     assert hub.PAGE.count('fetch("/api/load")') == 1                  # one request per tick, whatever renders the value
 
@@ -561,49 +558,6 @@ def test_the_triage_rule_and_what_was_rejected_are_stated_beside_the_code(hub):
         assert gone in sect
 
 
-def test_the_footer_paints_the_facts_beside_the_load_cells_and_the_amber_value(hub):
-    assert "id=ldfacts" in hub.PAGE
-    assert "footFit(d.facts,footCols())" in hub.PAGE                          # the drop is decided where the width is known
-    assert "if(l)ldPaint(l,d);" in hub.PAGE                                   # the cells are painted here since #1816, cell by cell
-    assert "<b id=ldline>CPU ? · RAM ? · GPU ?</b>" in hub.PAGE                # and read as before until the first tick lands
-    assert ".bad{color:var(--warn)" in hub.PAGE                               # the one value that turns amber does
-    assert "nowrap" in _css(hub, "#ldfacts")                                  # the row drops facts, it never wraps
-
-
-def _foot_text(hub, items, cols):
-    """The line the page really builds, run by node over a list of facts and a character budget."""
-    js = re.search(r"^function footFit\(.*\n^function footText\(.*$", hub.PAGE, re.M).group(0)
-    out = subprocess.run(["node", "-"], input=f"{js}\nconsole.log(footText({json.dumps(items)}, {cols}))",
-                         capture_output=True, text=True, timeout=60)
-    assert out.returncode == 0, out.stderr
-    return out.stdout.rstrip("\n")
-
-
-def test_the_line_drops_trailing_facts_and_never_empties_itself(hub):
-    if shutil.which("node") is None:
-        pytest.skip("node is required")
-    items = hub.foot_items(_src(quota={"codex": None, "agy": None}), NOW)
-    texts = [i["text"] for i in items]
-    full = " · ".join(texts)
-    assert _foot_text(hub, items, len(full)) == full                           # a wide window keeps all three, in order
-    two = " · ".join(texts[:2])
-    assert _foot_text(hub, items, len(two)) == two                             # 3 -> 2: the last block drops whole
-    assert _foot_text(hub, items, len(two) - 1) == texts[0]                    # 2 -> 1, still a whole block
-    # The last block is never dropped, it is cut (#446): a bar that has one fact to carry draws it, cut, and never the
-    # machine reading alone. The live footer did the opposite on 2026-10-16 and drew no fact at all.
-    cut = _foot_text(hub, items, 12)
-    assert cut.endswith("…") and len(cut) == 12 and texts[0].startswith(cut[:-1].rstrip())
-    assert _foot_text(hub, items, 0) == "…"                                    # no room at all: the bar says it is cut
-
-
-def test_a_block_wider_than_the_budget_is_cut_and_still_carried(hub):
-    if shutil.which("node") is None:
-        pytest.skip("node is required")
-    wide = {"key": "burn", "text": "tokens high (limit 5M/24h): " + "x" * 260, "bad": True}
-    assert _foot_text(hub, [wide], 40) == wide["text"][:39] + "…"               # the block the line cannot fit is the one it keeps
-    assert _foot_text(hub, [wide, {"key": "gate", "text": "gate fast fail ebb70f8 5m ago"}], 40).endswith("…")
-
-
 LIVE_BURN = {"over": True, "threshold": 5000000, "window_hours": 24, "burners": [
     {"consumer": "run:run-20261015-191451-9f6b30:route.router.1", "tokens": 16910258},
     {"consumer": "run:run-20261015-184237-60acae:route.router.1", "tokens": 7159543},
@@ -629,10 +583,8 @@ def test_the_burn_block_states_the_spend_and_the_count_never_a_name(hub):
 
 def test_the_gate_and_the_landing_stay_on_the_line_beside_the_burn(hub):
     """#446: the bar drew the three cells and no fact at all, one 287-character block having emptied the line."""
-    if shutil.which("node") is None:
-        pytest.skip("node is required")
     src = _src(burn=LIVE_BURN, gate={"kind": "fast", "result": "fail", "sha": "ebb70f83f95560f99ad017c990aad406b0c7a6c4", "ts": NOW - 300})
-    line = _foot_text(hub, hub.foot_items(src, NOW), 160)
+    line = hub.foot_line(hub.foot_items(src, NOW))
     assert line.startswith(hub._burn_fact(LIVE_BURN)), line
     assert "landed PR #73 2h ago" in line and "gate fast fail 5m ago" in line, line
     # the sha the gate ran at is MOVED off the row and never lost: it is the block's tooltip (#455)
@@ -688,25 +640,6 @@ def _subs_parts(hub, src):
     return [i for i in hub.foot_items(src, NOW) if i["key"] == "subs"][0]["parts"]
 
 
-def _foot_js(hub):
-    """The footer's per-item paint exactly as the page carries it: the two constants it reads and the two functions."""
-    consts = [re.search(rf"^const {n}=.*$", hub.PAGE, re.M) for n in ("esc", "FTONE")]
-    assert all(consts), "the page carries no esc/FTONE constant"
-    fns = re.findall(r"^function foot(?:Parts|Item)\(.*$", hub.PAGE, re.M)
-    assert len(fns) == 2, fns                      # footParts, footItem
-    return "\n".join([c.group(0) for c in consts] + fns)
-
-
-def _foot_paint(hub, items):
-    """The line the page really paints for these facts: each block in its own colour, each token in its own tone."""
-    if shutil.which("node") is None:
-        pytest.skip("node is required")
-    script = f"{_foot_js(hub)}\nconsole.log({json.dumps(items)}.map(footItem).join(' · '))"
-    out = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=60)
-    assert out.returncode == 0, out.stderr
-    return out.stdout.rstrip("\n")
-
-
 def test_the_consumption_thresholds_are_named_beside_the_load_strips_own(hub):
     assert 0 < hub.FOOT_WARN_PCT < hub.FOOT_ERR_PCT <= 100
     src = HUB_PY.read_text()
@@ -751,12 +684,6 @@ def test_subscription_question_reset_and_quota_reset_are_never_hidden(hub):
     assert hub._quota_fact({"codex": reset, "agy": None}, NOW, subs=()) == "codex reset 14:20 · agy ok"
 
 
-def test_the_page_renders_the_subscription_token_tooltip_from_its_fact(hub):
-    part = _subs_parts(hub, _subs_src(hub, hub.FOOT_WARN_PCT - 0.1, resets=NOW + 3 * 3600 + 20 * 60))[0]
-    out = _foot_paint(hub, [{"key": "subs", "text": part["text"], "bad": False, "color": "run", "parts": [part]}])
-    assert 'title="resets in 3h 20m"' in out
-
-
 def test_a_band_is_read_at_its_own_threshold_and_the_one_under_it(hub):
     w, e = hub.FOOT_WARN_PCT, hub.FOOT_ERR_PCT
     for pct, tone in ((0.0, "ok"), (w - 0.1, "ok"), (w, "warn"), (e - 0.1, "warn"), (e, "err"), (100.0, "err")):
@@ -769,13 +696,6 @@ def test_an_unverifiable_subscription_reads_a_question_mark_and_stays_neutral(hu
     assert parts[0]["text"] == "CL ?"                                          # never painted as if it carried a number
     assert parts[0]["tone"] == hub.FOOT_NEUTRAL
     assert hub.FOOT_NEUTRAL not in hub.FOOT_TONES and hub.FOOT_NEUTRAL not in ("ok", "warn", "err")
-    out = _foot_paint(hub, [{"key": "subs", "text": "CL ?", "bad": False, "color": "run", "parts": parts}])
-    assert "var(--ok)" not in out and "var(--warn)" not in out and "var(--err)" not in out, out
-    # the same paint at the ceiling does carry the red, so the line above is a statement about the tone and not about a
-    # paint that never carried a colour at all
-    red = _foot_paint(hub, [{"key": "subs", "text": "CL 96% ?", "bad": False, "color": "run",
-                             "parts": [{"text": "CL 96% ?", "tone": "err"}]}])
-    assert "var(--err)" in red, red
 
 
 def test_every_fact_block_carries_its_own_colour_from_the_hub_palette(hub):
@@ -794,36 +714,12 @@ def test_a_bad_value_still_reads_as_bad_over_its_blocks_own_colour(hub):
     """No fact of the line turns amber since health and progress left it (#1843's rule still stands for the day one returns)."""
     items = hub.foot_items(_src(), NOW)
     assert not [i for i in items if i["bad"]]
-    bad = {"key": "landing", "color": "wait", "bad": True, "text": "last landing ?", "parts": [{"text": "last landing ?", "tone": ""}]}
-    assert _foot_paint(hub, [bad]) == "<span class=bad>last landing ?</span>", _foot_paint(hub, [bad])
-    subs = [i for i in items if i["key"] == "subs"][0]
-    out = _foot_paint(hub, [subs])
-    assert f"var(--{subs['color']})" in out                                    # the block wears its own colour...
-    assert "var(--err)" not in out                                             # ...and no token of it is red for being one
-    red = _foot_paint(hub, [{"key": "subs", "color": subs["color"], "bad": False, "text": "CL 96% ?",
-                             "parts": [{"text": "CL 96% ?", "tone": "err"}]}])
-    assert "var(--err)" in red and f"var(--{subs['color']})" in red, red        # the bad reading sits ON that colour
 
 
 def test_the_line_still_reads_the_same_tokens_in_the_same_order(hub):
     items = hub.foot_items(_src(quota={"codex": None, "agy": None}), NOW)
     assert hub.foot_line(items) == "landed PR #73 2h ago · CL ? · GK ? · GPT ? · GEM ?"
     assert all(" · ".join(p["text"] for p in i["parts"]) == i["text"] for i in items)   # a block's parts ARE its text
-    painted = re.sub(r"<[^>]+>", "", _foot_paint(hub, items))
-    assert painted == hub.foot_line(items)                                     # one row, the same tokens, in the same order
-
-
-def test_the_blocks_are_joined_by_a_separator_the_page_draws_and_never_a_blocks_own(hub):
-    """#455: a block's inner ` · ` was the same glyph as the separator between blocks, so the blocks ran together as twelve
-    tokens. The page draws the join now — a dimmed span with its own margin — and the span is narrower than the ` · ` the
-    width budget counts, so a row fitted to the budget never overflows the bar."""
-    assert "FOOT_SEP_HTML" in hub.PAGE and "class=sep" in hub.PAGE
-    assert ".sep{margin:" in hub.PAGE and re.search(r"#ldfacts \.sep\{[^}]*color:", hub.PAGE)
-    assert "join(FOOT_SEP_HTML)" in hub.PAGE                                   # the drawn join is what the row is built with
-    assert 'join(" · ")' in hub.PAGE                                           # the plain join stays the width the budget counts
-    sep = re.search(r"^const FOOT_SEP_HTML=(.*)$", hub.PAGE, re.M).group(1)
-    assert "&middot;" in sep and " · " not in sep                              # the drawn join is never the row's own ` · ` text
-    assert "gap:10px" in hub.PAGE and "#ldfacts{margin-left:20px" in hub.PAGE  # the breathing room of the same change
 
 
 # ---------------------------------------------------------------- the ceiling, per attribute (#1816)
@@ -836,7 +732,7 @@ def _ld_block(hub):
     const = re.search(r"^const LOAD_ERR=.*$", hub.PAGE, re.M)
     assert const, "the page carries no LOAD_ERR constant"
     fns = re.findall(r"^function ld[A-Z]\w*\(.*$", hub.PAGE, re.M)
-    assert len(fns) == 5, fns                      # ldNum, ldRound, ldCell, ldCells, ldPaint
+    assert len(fns) == 4, fns                      # ldNum, ldRound, ldCell, ldCells: the cells the gauges read (#983)
     return const.group(0) + "\n" + "\n".join(fns)
 
 
@@ -845,20 +741,16 @@ def _ld_script(hub):
     return _ld_block(hub).replace("__LOADERR__", str(hub.LOAD_ERR_PCT))
 
 
-# Enough of a DOM for ldPaint to build a line in, and a printer that shows the tags, so the test reads the elements the
-# browser would get — not a re-derivation of them.
-DOM = """const el=t=>({t:t,kids:[],appendChild(n){this.kids.push(n)},
- set textContent(v){this.kids=v===""?[]:[{textContent:v}]},get textContent(){return this.kids.map(k=>k.textContent).join("")}});
-globalThis.document={createElement:t=>el(t),createTextNode:s=>({textContent:s})};
-const show=n=>n.kids?`<${n.t}${n.className?` class="${n.className}"`:""}>${n.kids.map(show).join("")}</${n.t}>`:n.textContent;
-"""
+# The printer reads the cells the page computes, in the shape the old strip drew them: the text, the order and the red
+# class are the page's own; only the join is the test's. The instruments card draws one gauge per cell (#983).
+PRINT = """const show=c=>`<b${c.red?' class="ldred"':""}>${c.k} ${c.t}</b>`;"""
 
 
 def _ld_paint(hub, d):
-    """The strip's line as the page really paints it: three cells, their own classes, and the separators between them."""
+    """The three cells as the page computes them: their text, their order and which one is red."""
     if shutil.which("node") is None:
         pytest.skip("node is required")
-    script = f"{_ld_script(hub)}\n{DOM}const l=el('b');ldPaint(l,{json.dumps(d)});console.log(l.kids.map(show).join(''))"
+    script = f"{_ld_script(hub)}\n{PRINT}console.log(ldCells({json.dumps(d)}).map(show).join(' · '))"
     out = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
     return out.stdout.rstrip("\n")
@@ -881,7 +773,7 @@ def test_the_strip_still_reads_exactly_as_the_server_builds_it(hub):
 def test_the_cells_keep_their_order_and_their_own_separators(hub):
     out = _ld_paint(hub, {"cpu": 7, "ram": 63, "gpu": 42})
     assert out == '<b>CPU 7%</b> · <b>RAM 63%</b> · <b>GPU 42%</b>', out
-    assert _css(hub, "#foot").count("font-variant-numeric:tabular-nums") == 1   # the digits stay one width: nothing shifts
+    assert "font-variant-numeric:tabular-nums" in _css(hub, "#inst .gv")      # the digits stay one width: nothing shifts
 
 
 def test_one_attribute_at_the_ceiling_paints_its_own_cell_and_not_the_line(hub):
@@ -907,9 +799,10 @@ def test_a_source_the_hub_cannot_read_is_a_question_mark_and_never_red(hub):
 
 
 def test_red_wins_over_the_amber_of_a_sustained_warning(hub):
-    amber, red = _css(hub, "#foot.warn b"), _css(hub, "#foot.warn b.ldred")
-    assert "var(--warn)" in amber and "var(--err)" in red      # the whole line stays amber...
-    assert "var(--err)" in _css(hub, "#foot b.ldred")          # ...and the cell at the ceiling is red with or without it
+    amber, red = _css(hub, "#inst.warn .gv b"), _css(hub, "#inst .ig.ldred .gv b")
+    assert "var(--warn)" in amber and "var(--err)" in red      # the whole card stays amber...
+    page = hub.PAGE                                            # ...and the cell at the ceiling is red with or without it: its rule comes later
+    assert page.index("#inst.warn .gv b{") < page.index("#inst .ig.ldred .gv b{")
     out = _ld_paint(hub, {"cpu": 96, "ram": 88, "gpu": 90})    # a warned strip, one attribute at its ceiling
     assert '<b class="ldred">CPU 96%</b> · <b>RAM 88%</b> · <b>GPU 90%</b>' == out, out
 

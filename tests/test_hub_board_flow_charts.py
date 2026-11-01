@@ -82,8 +82,8 @@ def _flow(hub):
 def test_tasks_header_has_flow_and_lead_time_buttons_and_keeps_its_controls(hub):
     # Re-anchored to the owner-approved mock (#889): Flow and Lead time sit on the Flow charts tab, not in the board's toolbar.
     tabs = hub.PAGE[hub.PAGE.index("<div class=rkt id=flowtabs>"):hub.PAGE.index("<div id=main>")]
-    assert re.search(r"<button id=bflow[^>]*>Flow</button>", tabs)
-    assert re.search(r"<button id=blead[^>]*>Lead time</button>", tabs)
+    # Re-anchored by the owner: three sibling tabs, Runs, Cumulative Flow Diagram and Lead Time.
+    assert [re.sub(r"<[^>]*>", "", x) for x in re.findall(r"<button[^>]*>.*?</button>", tabs)] == ["Runs", "Cumulative Flow Diagram", "Lead Time"]
     head = hub.PAGE[hub.PAGE.index("<div id=bhead>"):hub.PAGE.index("<div id=bcases>", hub.PAGE.index("<div id=bhead>"))]
     assert "<span id=bt class=m></span>" in head
     assert "id=bflow" not in head and "id=blead" not in head
@@ -623,3 +623,14 @@ def test_a_drag_maps_its_plot_fractions_to_the_dates_of_the_range(hub, tmp_path)
     result = subprocess.run(["node", str(path)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == ["2026-10-06T00:00:00.000Z", "2026-10-11T00:00:00.000Z"]
+
+
+def test_a_chart_is_a_sibling_tab_with_no_close_and_no_title_of_its_own(hub):
+    """The owner: Runs, Cumulative Flow Diagram and Lead Time are sibling tabs, so a chart draws no title bar and no close button."""
+    assert "<button id=flowx" not in hub.PAGE, "a chart tab still carries a close button"
+    assert "<b id=flowt>" not in hub.PAGE, "a chart tab still carries its own title"
+
+
+def test_a_live_run_click_never_leaves_the_tab_the_user_is_on(hub):
+    """The owner: a second click on a live run moved the page from the board to the charts tab; the user changes tabs."""
+    assert 'setTab("flow",{runs:true})' not in hub.PAGE
