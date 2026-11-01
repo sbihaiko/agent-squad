@@ -67,7 +67,7 @@ def test_percent_rounds_down_and_reads_100_only_when_all_done(hub):
 
 
 def test_no_open_spec_reads_no_open_spec(hub):
-    for items in ([], [BOARD[2], BOARD[5], BOARD[6]]):
+    for items in ([], [BOARD[2], BOARD[3], BOARD[4], BOARD[5]]):
         p = hub.spec_progress(items, moves={})
         assert (p["open"], p["value"], p["state"], p["bar"], p["tip"]) == (0, "no open spec", "none", False, "")
 
