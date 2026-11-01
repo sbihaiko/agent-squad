@@ -3664,12 +3664,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
    board lays the window out as a two-column grid of its own (`body.dockb`), so the phone states both layouts: on a 390 px
    screen the 300 px sidebar and the board column are what a reader has to scroll sideways to reach. */
 @media (max-width:600px){body{height:auto}body.tkopen #win{margin-right:0}body.tkopen #board{width:auto}#win{display:block;overflow:visible}body.dockb #win{display:block;grid-template-columns:none;grid-template-rows:none}#side{width:auto;border-right:0;border-bottom:1px solid var(--line)}body.dockb #side{grid-row:auto;grid-column:auto}#main{min-height:50vh}body.dockb #main{grid-column:auto;grid-row:auto}#board{width:auto}body.dockb #board{grid-column:auto;grid-row:auto;height:60vh}#lbody input{width:92px}}
-/* The page frame of the mock (#889): the alert strip, the header with its tabs, and the sidebar cards. */
-#alert{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:6px 16px;background:#3a1d24;border-top:1px solid #5a2a33;font-size:var(--fs-body);flex:none}
-#alert:empty{display:none}#alert.calm{background:var(--panel);border-top-color:var(--line)}
-#alert b{color:var(--bad)}#alert .ai+.ai::before,#alert button+.ai::before{content:"\00b7";color:var(--mute);margin-right:10px}#alert .w{color:var(--warn)}
-#alert .ls{font-weight:600}#alert .ls.on{color:var(--ok)}#alert .ls.off{color:var(--warn)}#alert .ls small{color:var(--mute);font-weight:400;margin-left:4px}
-#loopbtn{padding:2px 10px;font-size:var(--fs-min)}#loopbtn:disabled{opacity:.6;cursor:default}
+/* The page frame of the mock (#889): the header with its tabs, and the sidebar cards. */
 header.top{position:relative;display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--line);flex:none}
 header.top h1{font-size:var(--fs-xl);margin:0}header.top .spx{flex:1}
 header.top .pill{font-size:var(--fs-min);color:var(--mute)}
@@ -3741,7 +3736,6 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 </section>
 </main>
 </div>
-<div id=alert role=alert></div>
 <div id=tk role=dialog aria-label=Ticket><header><span id=tkchips></span><span class=sp></span><span id=tknav></span><button id=tkx aria-label=Close>✕</button></header><div id=tkset></div><div id=tkb></div><footer><a class=btn id=tkgh target=_blank rel=noopener>Open on GitHub ↗</a><button id=tktodo>→ Todo</button><button id=tkrel>Highlight related</button></footer></div>
 <script>/*SWITCHER_JS*/
 {const swMe=(location.pathname.match(/^\/([^/?#]+)/)||[])[1]||"";switcherPoll(d=>switcherPaint(document.getElementById("psw"),d,swMe,"/"));}</script>
@@ -4107,7 +4101,7 @@ const autoq=a=>{const QT="Quota used, read from the provider's own CLI. 100% = q
 const CUR={"R$":"BRL","U$":"USD","US$":"USD","$":"USD","€":"EUR","£":"GBP","¥":"JPY"},curOf=v=>{v=v.trim().toUpperCase();return CUR[v]||v};
 const money=(a,c)=>{try{return new Intl.NumberFormat(undefined,{style:"currency",currency:c}).format(a)}catch(e){return a+" "+c}};
 async function pollSubs(){try{const d=await (await fetch("/api/subs")).json(),ae=document.activeElement;if(ae&&ae.closest&&ae.closest("#subs")&&ae.tagName==="INPUT")return;
- const tot=Object.values(d.subs).reduce((a,v)=>a+(v.saved||0),0),any=Object.values(d.subs).some(v=>v.saved!=null);{const lims=Object.values(d.subs).filter(v=>{const aq=v.quota,aw=aq&&aq.windows&&aq.windows[0],pl=v.plan,q=aw?aw.pct:(pl&&pl.quota!=null?pl.quota:null);return q!=null&&q>=100});subWarn=lims.map(v=>v.name);
+ const tot=Object.values(d.subs).reduce((a,v)=>a+(v.saved||0),0),any=Object.values(d.subs).some(v=>v.saved!=null);{const lims=Object.values(d.subs).filter(v=>{const aq=v.quota,aw=aq&&aq.windows&&aq.windows[0],pl=v.plan,q=aw?aw.pct:(pl&&pl.quota!=null?pl.quota:null);return q!=null&&q>=100});
  $("#plsr").textContent=lims.length?`${lims.length} at limit`:(any||d.api?"none at limit":"set plan prices")}   // the card says what needs a look; the prices stay in the cost card
  $("#cash").textContent="at API list prices (API-equivalent) · cash this month: "+(any||d.api?`plans ${usd(d.plans)} + API ${usd(d.api)} = ${usd(d.total)}`:"set plan prices");
  $("#subs").innerHTML=`<div class=subx>Per subscription: quota used, as each provider's CLI reports it. With no reading, the bar is the API-equivalent usage vs the plan price.</div><datalist id=curs>${["USD","BRL","EUR","GBP","ARS","MXN","CAD","JPY"].map(c=>`<option value=${c}>`).join("")}</datalist>`+Object.entries(d.subs).map(([k,v])=>{const ok=v.saved!=null,pl=v.plan,pr=d.presets[k],custom=pl&&pl.plan==="custom";
@@ -4458,20 +4452,6 @@ new MutationObserver(flowTabs).observe($("#flowov"),{attributes:true});
  document.addEventListener("click",e=>{if(!e.target.closest("#psw")&&psw.classList.contains("on")){psw.classList.remove("on");pj.setAttribute("aria-expanded","false")}})}
 // "board read N s ago": the stamp of the last board answer
 setInterval(()=>{const b=$("#bread");if(!b)return;b.textContent=lastRead?`board read ${Math.max(0,Math.round((Date.now()-lastRead)/1000))} s ago${readStale?" (stale)":""}`:""},1000);
-// The alert strip: what the page already fetches. /api/status carries the loop and the warnings (the nightly among them); the
-// subscriptions poll adds a limit warning. An item with no data is left out, and a strip with no item is not drawn.
-let alertLoop=null,alertWarn=[],subWarn=[];
-function alertDraw(){const items=[],nw=alertWarn.filter(w=>/nightly/i.test(w.text)),ow=alertWarn.filter(w=>!/nightly/i.test(w.text));
- nw.forEach(w=>{const bad=/fail/i.test(w.text),sha=(String(w.tip||"").match(/ran at ([0-9a-f]{7,40})/)||[])[1];   // the mock's wording: "Nightly suite failed on dev <sha>"; the age stays in the tip
-  items.push(`<span class=ai title="${esc((w.text+" "+(w.tip||"")).trim())}">${bad?"<b>&#9679; Nightly suite failed</b>":"Nightly suite passed"}${sha?` on dev ${esc(sha.slice(0,8))}`:""}</span>`)});
- if(alertLoop){const on=!!alertLoop.on,since=alertLoop.since?` <small>since ${esc(String(alertLoop.since).slice(0,16).replace("T"," ").replace(new Date().toLocaleDateString("sv")+" ",""))}</small>`:"";
-  items.push(`<span class=ai id=loopst>Loop: <span class="ls ${on?"on":"off"}">${on?"on":"off"}${since}</span></span>`);
-  if(!on)items.push(`<button id=loopbtn disabled title="The hub has no route that starts the loop: start it from the terminal.">Start loop</button>`)}
- ow.forEach(w=>items.push(`<span class="ai w" title="${esc(w.tip||"")}">${esc(w.text)}</span>`));
- subWarn.filter(n=>!alertWarn.some(w=>w.text.toLowerCase().includes(n.toLowerCase()))).forEach(n=>items.push(`<span class="ai w">${esc(n)} at 100% of its limit</span>`));
- const a=$("#alert"),h=items.join("");if(a.dataset.h!==h){a.dataset.h=h;a.innerHTML=h}a.classList.toggle("calm",!nw.length&&!ow.length&&!subWarn.length&&(!alertLoop||alertLoop.on))}
-async function alertPoll(){try{const d=await (await fetch("/api/status")).json();alertLoop=d.loop||null;alertWarn=(d.warnings||[]).filter(w=>w&&w.text);alertDraw()}catch(e){}}
-alertPoll();setInterval(alertPoll,5000);
 /*BOARD_LANES*/
 $("#lmode").onchange=e=>{bo.lmode=e.target.value;saveB();pollBoard()};
 // The swimlanes' state (#891): collapse and open state live in `bo`, so the device keeps them across a reload.

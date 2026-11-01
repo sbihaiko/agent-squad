@@ -158,7 +158,6 @@ def test_the_card_sits_in_the_sidebar_and_the_settings_strip_is_gone(hub):
     assert "<details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary>" in side
     for gone in ("sts", "foot", "ldline", "ldfacts"):
         assert not re.search(rf"id={gone}\b", page), gone
-    assert "<div id=alert role=alert></div>" in page       # the alert strip is unchanged
 
 
 def test_the_card_reads_the_one_load_route_and_stays_calm(hub):
