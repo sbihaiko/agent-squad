@@ -141,7 +141,15 @@ def record_issue(path, number, issue_updated, status_updated, events, complete, 
 
 
 def coverage(store):
-    return {"read": len(store), "complete": sum(1 for r in store.values() if r.get("complete"))}
+    return {"read": len(store), "complete": sum(1 for r in store.values() if r.get("complete")),
+            "last": max((r["t"] for r in store.values()), default=None)}
+
+
+def coverage_fact(store, total):
+    """The Monitor's history line: cards read of the board's total, how many timelines are complete, and the last refresh."""
+    c = coverage(store)
+    last = _iso(c["last"]) if c["last"] is not None else "never"
+    return {"key": "history", "text": f"History {c['read']}/{total} read, {c['complete']} complete, last refresh {last}"}
 
 
 def search_due(records, now):
