@@ -3480,7 +3480,9 @@ def board(moves=None):
 
 def strip_instant(strip, t):
     """The strip with its time-dependent `age` and `old` replaced by `at`, the poll's own instant: an unchanged board keeps its
-    ETag while time passes, and the page counts the age (#973)."""
+    ETag while time passes, and the page counts the age (#973). A card the batched query left without facts carries no
+    strip at all, and that absence is kept as it is."""
+    if not strip: return strip
     return {**{k: v for k, v in strip.items() if k not in ("age", "old")}, "at": t or 0, "max": STRIP_MAX_AGE}
 
 _served_board = {}

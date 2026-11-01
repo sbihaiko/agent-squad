@@ -120,6 +120,8 @@ def test_a_lane_row_carries_the_chip_strip_badge_rollup_author_and_closing_issue
     monkeypatch.setattr(hub, "gate_strip", lambda x, t=None: {"cells": []})
     monkeypatch.setattr(hub, "pr_badge", lambda x: "green")
     item = hub.board()["prs"]["items"][0]
-    assert item["ps"] == ["ready", "ready to merge"] and item["gs"] == {"cells": []} and item["pb"] == "green"
+    assert item["ps"] == ["ready", "ready to merge"] and item["pb"] == "green"
+    # re-anchored (#973): the strip carries the poll's own instant and its age cap, so an unchanged board keeps its ETag
+    assert {k: v for k, v in item["gs"].items() if k not in ("at", "max")} == {"cells": []}
     assert item["rollup"] == "pass" and item["ci"] == ["success"] and item["by"] == "sbihaiko" and item["cl"] == [440, 441]
     assert item["kind"] == "pr"

@@ -361,9 +361,12 @@ def test_the_bar_query_names_waves_specs_and_kinds(hub):
 
 
 def test_the_board_route_takes_no_filter_it_does_not_apply(hub):
-    """The board filters on the page (boardOk, buildBoard): the served board is every card, and its route reads no bar value."""
+    """The board filters on the page (boardOk, buildBoard): the served board is every card, and its route reads no bar value.
+
+    Re-anchored (#973): `moves` is the pending-move record the serve already read, so one serve reads it once. It is not a
+    filter, and a second parameter is still a defect."""
     import inspect
-    assert not inspect.signature(hub.board).parameters
+    assert list(inspect.signature(hub.board).parameters) in ([], ["moves"])
     served = next(line for line in HUB_PY.read_text().splitlines() if 'startswith("/api/board")' in line)
     nxt = HUB_PY.read_text().splitlines()[HUB_PY.read_text().splitlines().index(served) + 1]
     assert "board_filters" not in nxt
@@ -462,7 +465,8 @@ console.log(JSON.stringify({last:DRAWN[DRAWN.length-1]}));""")
 def test_the_bar_has_a_kinds_control_beside_waves_and_specs(hub):
     assert "<details id=fk class=fsel><summary>Kinds: all</summary><div class=fpop id=fkl></div></details>" in hub.PAGE
     assert 'pickFilter("fkl","fk")' in hub.PAGE
-    assert 'fetch("/api/board")' in hub.PAGE, "the board read carries no bar value: the page filters the board"
+    # re-anchored (#973): the read may carry the ETag header and nothing else, so no bar value reaches the route
+    assert re.search(r'fetch\("/api/board"\s*,\s*boardTag\?\{headers:\{"If-None-Match":boardTag\}\}:\{\}\)', hub.PAGE), "the board read carries no bar value: the page filters the board"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
