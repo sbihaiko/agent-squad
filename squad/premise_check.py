@@ -821,6 +821,10 @@ def parser():
     return p
 
 
+# gh stderr that a later call may not repeat: a 5xx, a network failure, a timeout, a rate limit (#888).
+_TRANSIENT_GH = re.compile(r"HTTP 5\d\d|connect|time(d ?)?out|rate limit", re.I)
+
+
 def main(argv=None) -> int:
     p = parser()
     a = p.parse_args(sys.argv[1:] if argv is None else argv)
@@ -843,9 +847,14 @@ def main(argv=None) -> int:
                 answers += said
             report = run_round(a.spec, findings, answers, github=github, root=root, round_no=a.round_no,
                                who=who, dry_run=a.dry_run, proxy=proxy)
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:   # gh failed: a later call may pass
-        print(f"premise-check: transient: {e}" + (f": {e.stderr.strip()}" if isinstance(e.stderr, str) and e.stderr.strip() else ""), file=sys.stderr)
-        return EX_TEMPFAIL
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        err = e.stderr.strip() if isinstance(e.stderr, str) else ""
+        if isinstance(e, subprocess.TimeoutExpired) or _TRANSIENT_GH.search(err):   # gh failed: a later call may pass
+            print(f"premise-check: transient: {e}" + (f": {err}" if err else ""), file=sys.stderr)
+            return EX_TEMPFAIL
+        # a 4xx (or any other gh refusal) never changes on a retry: exit 2, the refusal path, never a retry forever (ADR-0134)
+        print(f"premise-check: gh refused: {e}" + (f": {err}" if err else ""), file=sys.stderr)
+        return 2
     except (OSError, json.JSONDecodeError) as e:   # a refutation reads no file, so its I/O and JSON errors are gh's answer
         if a.refute is None and isinstance(e, json.JSONDecodeError):
             print(f"premise-check: {e}", file=sys.stderr)

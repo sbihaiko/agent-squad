@@ -106,6 +106,27 @@ rs=[r for r in (v or {}).get("reasons") or [] if isinstance(r,str)]
 sys.exit(0 if v and v.get("verdict")=="failed" and any(r.startswith("ac-verify:") and r!="ac-verify:no_ac_commands" for r in rs) else 1)' "$(run_dir "$1")/record.jsonl" 2>/dev/null
 }
 
+# ac_unmet <run>: 0 when the run's verdict failed on ac-verify and every ac-verify finding is `ac_failed` (#888): a command ran
+# and its result was red. squad/gates.py also writes `malformed:<cmd>` (prose in a command: a bad check) and
+# `child_tree_missing:<cmd>` (the gate found no child tree: the false red of #862). Neither is an answer from a probe, so a run
+# with one of them, alone or beside ac_failed, is no refutation: it takes the normal fail or requeue path.
+ac_unmet() {
+  gate_failed "$1" || return 1
+  python3 -c 'import json,sys
+v=None
+try:
+    for l in open(sys.argv[1]):
+        try: d=json.loads(l)
+        except Exception: continue
+        e=d.get("event") if isinstance(d,dict) else None
+        if e in ("run_start","resume"): v=None
+        elif e=="verdict": v=d
+except OSError: pass
+fs=[r[len("ac-verify:"):] for r in (v or {}).get("reasons") or [] if isinstance(r,str) and r.startswith("ac-verify:")]
+fs=[f for f in fs if f!="no_ac_commands"]
+sys.exit(0 if fs and all(f=="ac_failed" or f.startswith("ac_failed:") for f in fs) else 1)' "$(run_dir "$1")/record.jsonl" 2>/dev/null
+}
+
 # run_verdict <run>: the run's last verdict name (completed, failed, needs-human, stopped, conflict), read as gate_failed reads it:
 # the last verdict after the last run_start or resume. It prints nothing for a run with no verdict yet, or no record (#845).
 run_verdict() {
@@ -351,11 +372,11 @@ premise_check() {
   PYTHONPATH="${SG_SQUAD:-.}${PYTHONPATH:+:$PYTHONPATH}" "$py" -m squad.cli premise-check "$@"
 }
 
-# probe_refuted <issue> <run>: 0 when the issue is a probe ticket whose run left its acceptance command unmet (#888). Its
+# probe_refuted <issue> <run>: 0 when the issue is a probe ticket whose run left its acceptance command unmet (#888, ac_unmet). Its
 # premise is refuted on its spec (`squad premise-check <spec> --refute <premise>`: the spec is the ticket's `## Parent`, the
 # premise its `Premise:` line), and the probe stays open, frozen to the owner, so the blocker guard holds its dependents. It
 # is not requeued and not counted: a refutation is the probe's answer, not a failed dispatch. premise-check exits 75 when gh
-# or I/O failed: the line then carries `WAVE PROBE-RETRY`, which the janitor reads to leave the run uncounted, so its next
+# or I/O failed for a cause a later call may not repeat (a 5xx, a network failure, a timeout, a rate limit; a 4xx exits 2): the line then carries `WAVE PROBE-RETRY`, which the janitor reads to leave the run uncounted, so its next
 # pass calls `fail` again and the refutation is sent again (premise-check answers a premise it already records refuted as a
 # no-op). The failure also leaves auto/probe-retry-<issue> (spec, premise, run): rule O never reads a child that entered its
 # wave, so a `requeue` failure is sent again by the janitor's probe sweep (`probe-retry`) instead. Any other refusal (the premise was never recorded as needs a probe) cannot change, so it is named to the owner on
@@ -363,7 +384,7 @@ premise_check() {
 # that met its gate, or an issue read that does not answer returns 1.
 probe_refuted() {
   local n=$1 run=$2 j t state spec premise
-  { [ -n "$run" ] && gate_failed "$run"; } || return 1
+  { [ -n "$run" ] && ac_unmet "$run"; } || return 1
   j=$(gh_api "repos/$SG_REPO/issues/$n") || return 1
   t=$(printf '%s' "$j" | python3 -c 'import json,re,sys
 d=json.load(sys.stdin); d=d[0] if isinstance(d,list) and d else d
