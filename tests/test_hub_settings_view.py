@@ -254,7 +254,7 @@ def test_a_switch_off_and_on_again_leaves_nothing_to_save(hub):
 
 
 def test_a_row_removed_and_put_back_leaves_nothing_to_save(hub):
-    got = _dirty_after(hub, 'mdlRmToggle("review_models","a");mdlRmToggle("review_models","a")')
+    got = _dirty_after(hub, 'mdlRmToggle("coding_models","a");mdlRmToggle("coding_models","a")')
     assert got == {"c": False, "d": []}
     got = _dirty_after(hub, 'mdlSetEff("vision_models","z","");mdlSetHrs("vision_models","z","")')
     assert got == {"c": False, "d": []}
