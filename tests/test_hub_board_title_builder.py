@@ -127,8 +127,8 @@ def test_the_column_names_are_unchanged(hub):
 
 
 def test_the_machine_card_is_unchanged(hub):
-    # re-anchored to #983: the Settings strip became the sidebar's Machine & loop card
-    assert "<details id=inst class=sp open><summary>Machine &amp; loop<span class=sr id=instsr></span></summary>" in hub.PAGE
+    # re-anchored to #983: the Settings strip became the sidebar's Monitor card (owner renamed it)
+    assert "<details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary>" in hub.PAGE
 
 
 def test_the_header_names_only_the_project_dropdown(hub):
