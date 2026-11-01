@@ -302,13 +302,31 @@ def test_a_conversation_page_is_the_last_200_turns(home):
     assert page["next"] is not None
 
 
-def test_a_conversation_page_is_at_most_256_kb(home):
+def test_a_conversation_page_grows_its_window_until_it_holds_the_conversation(home):
+    """A turn is not a byte count: the window doubles until the page holds the recent text turns (#1073)."""
     mod = load_sessions()
     cwd = home.path / "p1" / "app"
     write_transcript(home, cwd, "s1", [user(f"u{i}", "x" * 40000) for i in range(10)])
     page = mod.read_conversation(str(cwd), "s1")
-    assert [t["id"] for t in page["turns"]] == [f"u{i}" for i in range(4, 10)]
-    assert sum(len(t["text"]) for t in page["turns"]) <= 256 * 1024
+    assert [t["id"] for t in page["turns"]] == [f"u{i}" for i in range(10)]
+    assert page["next"] is None
+
+
+def test_huge_tool_lines_never_fill_the_page_instead_of_the_conversation(home):
+    """The live hub answered a chat with three `tool: Bash` lines and nothing else: the tail window fell inside one line
+    of a transcript whose tool results run to megabytes. The page carries the turns the owner reads (#1073)."""
+    mod = load_sessions()
+    cwd = home.path / "p1" / "app"
+    entries = []
+    for i in range(5):
+        entries.append(user(f"u{i}", f"turn {i}"))
+        entries.append({"type": "user", "uuid": f"r{i}", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": "x" * 300000}]}})
+        entries.append({"type": "assistant", "uuid": f"a{i}", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}}]}})
+    write_transcript(home, cwd, "s1", entries)
+    page = mod.read_conversation(str(cwd), "s1")
+    assert [t["text"] for t in page["turns"] if t["role"] == "owner"] == [f"turn {i}" for i in range(5)]
 
 
 def test_older_pages_come_on_request_without_a_gap_or_a_repeat(home):

@@ -8,6 +8,20 @@ const SQ = {};
 SQ.MIN_W = 360; SQ.MIN_BOARD = 480; SQ.MAX_FRAC = 0.7; SQ.STEP = 24; SQ.DEFAULT_W = 440; SQ.SHEET_W = 420; SQ.PHONE_W = 600;
 SQ.IDLE_MS = 3000; SQ.LENS_R = 5; SQ.REACH = 240; SQ.POLL_MS=3000; SQ.TEXT_MAX = 4000;
 SQ.SEND_SETTING = "SQUAD_TAILNET_TERMINALS_SEND";
+// A run of tool calls is one line: the chat reads the conversation, and a working session answers with hundreds of calls in
+// a row (#1073). One call keeps its own line; two or more fold into "tool: Bash · 7 calls".
+SQ.collapseTools = turns => {
+  const out = [];
+  let run = null;
+  const flush = () => { if (run) out.push(run.n === 1 ? run : { ...run, text: run.label + " · " + run.n + " calls" }); run = null; };
+  for (const t of turns) {
+    if (t.role !== "tool") { flush(); out.push(t); continue; }
+    if (!run) { run = { ...t, label: t.text, n: 1 }; continue; }
+    run.n += 1;
+  }
+  flush();
+  return out;
+};
 
 // The docked width: at least 360 px, at most 70% of the viewport, and the board keeps 480 px.
 SQ.clampWidth = (w, vw) => {
@@ -260,7 +274,7 @@ async function loadConversation() {
     const atEnd = !lastSig || log.scrollHeight - log.scrollTop - log.clientHeight < 48;
     lastSig = sig;
     if (!turns.length) { empty("No turns yet."); lastSig = sig; return; }
-    log.replaceChildren(...turns.map(turnNode));
+    log.replaceChildren(...SQ.collapseTools(turns).map(turnNode));
     if (atEnd) log.scrollTop = log.scrollHeight;
   } catch (e) { /* the next poll tries again */ }
 }

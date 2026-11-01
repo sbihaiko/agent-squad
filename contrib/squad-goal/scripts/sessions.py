@@ -8,6 +8,8 @@ SOCKET_DIRS = ("/tmp/cc-socks",)   # where Claude Code binds a session socket (d
 STATUSES = ("busy", "idle", "waiting")
 SID = re.compile(r"[A-Za-z0-9-]{1,64}")
 TAIL_BYTES = 256 * 1024
+MAX_TAIL_BYTES = 4 * 1024 * 1024   # a session's own lines can be megabytes: the window grows until it holds a page (#1073)
+PAGE_TURNS = 30                     # the text turns a page aims for; a tool line rides along and never fills the page
 TURN_LIMIT = 200
 PREVIEW_CHARS = 200
 UID = os.getuid()
@@ -146,12 +148,8 @@ def _turns_of(obj):
         elif kind == "assistant" and p.get("type") == "tool_use": out.append(("tool", uid, f"tool: {p.get('name', '')}"))
     return out
 
-def read_conversation(cwd, sid, secrets=(), before=None):
-    """One page of the session's conversation, oldest first: the newest whole lines before the byte offset `before` (the end of
-    the transcript when None), within TURN_LIMIT turns and one TAIL_BYTES window. `next` is the offset of the older page."""
-    if SID.fullmatch(sid) is None: return None
-    try: raw, start = _read_under_home(["projects", re.sub(r"[^A-Za-z0-9]", "-", cwd), f"{sid}.jsonl"], limit=TAIL_BYTES, end=before)
-    except OSError as e: _log(f"hub: transcript of session {sid} unreadable: {type(e).__name__}", secrets); return None
+def _page_kept(raw, start):
+    """The newest whole lines of one byte window, oldest first, within TURN_LIMIT turns."""
     lines, at = [], start
     for i, piece in enumerate(raw.split(b"\n")):
         offset, at = at, at + len(piece) + 1
@@ -164,6 +162,23 @@ def read_conversation(cwd, sid, secrets=(), before=None):
         if kept and turns + len(found) > TURN_LIMIT: break
         kept.append((offset, found)); turns += len(found)
     kept.reverse()
+    return kept
+
+def read_conversation(cwd, sid, secrets=(), before=None):
+    """One page of the session's conversation, oldest first: the newest whole lines before the byte offset `before` (the end of
+    the transcript when None), within TURN_LIMIT turns. The window starts at TAIL_BYTES and doubles until the page holds
+    PAGE_TURNS owner or answer turns (or MAX_TAIL_BYTES, or the start of the file): one transcript line can be megabytes, so
+    a fixed window answered a handful of tool lines and no conversation at all (#1073). `next` is the older page's offset."""
+    if SID.fullmatch(sid) is None: return None
+    path = ["projects", re.sub(r"[^A-Za-z0-9]", "-", cwd), f"{sid}.jsonl"]
+    window = TAIL_BYTES
+    while True:
+        try: raw, start = _read_under_home(path, limit=window, end=before)
+        except OSError as e: _log(f"hub: transcript of session {sid} unreadable: {type(e).__name__}", secrets); return None
+        kept = _page_kept(raw, start)
+        said = sum(1 for _, found in kept for role, _, _ in found if role != "tool")
+        if said >= PAGE_TURNS or not start or window >= MAX_TAIL_BYTES: break
+        window *= 2
     out = [{"id": uid, "role": role, "text": redact(text, secrets)} for _, found in kept for role, uid, text in found]
     cursor = kept[0][0] if kept else start
     return {"turns": out, "next": cursor or None}
