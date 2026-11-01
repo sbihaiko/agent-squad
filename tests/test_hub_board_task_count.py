@@ -27,9 +27,10 @@ HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
 NO_COUNT_CARD = (
     '<div class=it data-n="1" data-r="__REPO__" data-col="Todo" data-pm="" data-b="%5B%5D" '
     'data-bl="%5B%5D" data-ho="" data-hr="" data-prf="%5B%5D" style="--cc:#000000;--lc:var(--mute)">'   # no spec: grey (#917)
-    '<a class=id target=_blank href="https://github.com/__REPO__/issues/1">#1</a>'
+    '<a class="id ghl" target=_blank rel=noopener title="open issue #1 on GitHub" '
+    'aria-label="open issue #1 on GitHub" href="https://github.com/__REPO__/issues/1">{ghm}</a>'   # the owner reads the card by the GitHub mark, not by `#1` (2026-11-01)
     '<span class=tt>a spec</span><span class=lbs><span class="">gui</span></span></div>'
-)
+).replace("{ghm}", re.search(r"const GHI='(.*?)';", HUB_PY.read_text()).group(1))
 
 
 @pytest.fixture(scope="module")

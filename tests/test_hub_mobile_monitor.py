@@ -69,8 +69,9 @@ def test_the_monitor_draws_gauges_tiles_and_the_spec_bar(hub):
     """, routes=_routes(hub))
     assert out["shown"], "the Monitor is the default for a new visitor"
     assert out["igs"].count("<svg") == 3 and 'stroke="hsl(' in out["igs"] and "ldred" in out["igs"]
-    for k in ("Gate", "Loop", "Landed", "took 2m07s · avg 2m49s", f"https://github.com/{hub.REPO}/pull/73"):
+    for k in ("Gate", "Loop", "fast fail", "took 2m07s · avg 2m49s"):
         assert k in out["ian"], k
+    assert "Landed" not in out["ian"], "the owner removed the Landed tile (2026-11-01)"
     assert "Specs" in out["ispec"] and "role=progressbar" in out["ispec"]
     assert out["sum"] == "ON · 1 fail"
 
@@ -129,13 +130,11 @@ def _stale(hub, fail):
       const real = fetch;
       """ + fail + """
       await loadPoll();
-      b("icyc").textContent = "frozen"; monitorTick();
       const bad = { cls: b("inst").classList.contains("stale"), note: b("inst-stale") && !b("inst-stale").hidden,
-                    text: b("inst-stale") ? b("inst-stale").textContent : "", inCard: !!(b("inst-stale") && b("inst-stale").closest("#inst")),
-                    cyc: b("icyc").textContent };
+                    text: b("inst-stale") ? b("inst-stale").textContent : "", inCard: !!(b("inst-stale") && b("inst-stale").closest("#inst")) };
       fetch = real; __state.routes["/api/load"] = [""" + json.dumps(good) + """];
-      await loadPoll(); monitorTick();
-      return { bad, cls: b("inst").classList.contains("stale"), hidden: b("inst-stale").hidden, cyc: b("icyc").textContent };
+      await loadPoll();
+      return { bad, cls: b("inst").classList.contains("stale"), hidden: b("inst-stale").hidden };
     """, routes=routes)
 
 
@@ -143,13 +142,13 @@ def _stale(hub, fail):
     '__state.routes["/api/load"] = [{ body: "{}", status: 500 }];',
     'fetch = () => Promise.reject(new Error("offline"));',
 ], ids=["non-ok", "network"])
-def test_a_failed_load_read_marks_the_card_stale_and_freezes_the_countdown(hub, fail):
+def test_a_failed_load_read_marks_the_card_stale_and_the_next_good_one_clears_it(hub, fail):
+    """The card has no countdown to freeze since the owner removed the next-cycle counter (2026-11-01): an old reading
+    dims and says why, and one good read puts it right."""
     out = _stale(hub, fail)
     assert out["bad"]["cls"] and out["bad"]["note"] and out["bad"]["inCard"], out
     assert out["bad"]["text"], "the card says why it is not current"
-    assert out["bad"]["cyc"] == "frozen", "no countdown runs over an old reading"
     assert not out["cls"] and out["hidden"], "the next good read clears it"
-    assert out["cyc"] != "frozen", "the countdown runs again"
 
 
 def test_an_imported_pr_link_is_a_44px_target_on_the_phone(hub):

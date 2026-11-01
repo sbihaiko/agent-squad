@@ -418,7 +418,7 @@ def test_every_band_drawn_has_a_legend_entry_frozen_and_no_column_included(hub, 
 
 
 # SPEC 889 #900: the lead-time diagram is the Jira-style control chart, computed by the hub (board_leadtime).
-TIMEFRAME_KEYS = ["7", "14", "30", "90", "180", "all"]
+TIMEFRAME_KEYS = ["1", "2", "3", "7", "14", "30", "all"]   # the owner replaced the 3- and 6-month presets with 24, 48 and 72 hours (2026-11-01)
 
 
 def test_the_control_chart_is_served_for_every_timeframe_and_both_scales(hub, board):
@@ -448,6 +448,14 @@ def test_the_control_chart_names_its_lines_and_controls_the_jira_way(hub):
     for name in ("Rolling average (", "centered)", "Standard deviation", "Median", "p85", "Average",
                  "Past month", "Log scale", "Timeframe"):
         assert name in hub.PAGE, f"the page names no {name!r}"
+
+
+def test_the_legend_says_what_each_line_answers(hub):
+    """Owner, 2026-11-01: a reader asks what p85 means; the legend answers it in place, never by a second line of numbers."""
+    for reading in ("85% of closed cards finished within this time", "one slow card lifts it",
+                    "half the cards closed faster", "the usual spread"):
+        assert reading in hub.PAGE, f"the legend does not say {reading!r}"
+    assert "ltV(c.p85)" in hub.PAGE and "ltV(c.median)" in hub.PAGE, "the legend carries no value beside its line"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")

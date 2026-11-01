@@ -122,30 +122,65 @@ def listing(apps):
 
 
 WEB_TOKENS = (pathlib.Path(__file__).resolve().parent / "web-tokens.css").read_text()
-CSS = ("body{background:#0d1117;color:#c9d1d9;font:var(--fs-body) system-ui;margin:16px}"
-       "h1{font-size:var(--fs-md);margin:0 0 4px}ul{list-style:none;padding:0;margin:12px 0 0;max-width:54em}"
-       "li{padding:7px 0;border-bottom:1px solid #21262d}a{color:#5aa9ff;text-decoration:none}"
-       "a:hover{text-decoration:underline}.repo{color:#8b9bb3}.live{color:#3ecf8e}.none{color:#8b9bb3}"
-       ".broken{color:#ff6b6b}.note{color:#8b9bb3;margin:0}"
-       ".runs{color:#8b9bb3;font:var(--fs-min) ui-monospace,SFMono-Regular,monospace;overflow-wrap:anywhere;margin-top:3px}")
+# The index wears the same tokens as every profile page: one card per repository, a status dot, a live pill and the
+# alert line, so a reader who opens the hub root reads the same page as one who opens a profile (owner, 2026-11-01).
+CSS = ("*{box-sizing:border-box}"
+       "body{background:var(--bg);color:var(--fg);font:var(--fs-body)/1.5 var(--font-ui);margin:0;padding:26px 20px 40px}"
+       "main{max-width:none}"
+       "header{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:0 0 2px;padding-bottom:12px;"
+       "border-bottom:1px solid var(--line)}"
+       "h1{font-size:var(--fs-xl);font-weight:650;margin:0;letter-spacing:-.01em}"
+       ".sub{color:var(--mute);font-size:var(--fs-min)}"
+       ".where{color:var(--warn);font:var(--fs-min) var(--font-mono);margin:12px 0 0}"
+       ".note{color:var(--mute);font-size:var(--fs-min);margin:6px 0 0}"
+       "ul{list-style:none;padding:0;margin:14px 0 0;display:grid;gap:8px}"
+       "li{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:11px 14px;"
+       "display:flex;align-items:center;gap:10px;flex-wrap:wrap;transition:border-color .12s}"
+       "li:hover{border-color:#3b4454}li:focus-within{border-color:var(--acc)}"
+       ".dot{width:8px;height:8px;border-radius:50%;background:var(--mute);flex:none}"
+       ".dot.on{background:var(--ok);box-shadow:0 0 0 3px rgb(62 207 142 / .16)}"
+       ".dot.bad{background:var(--err);box-shadow:0 0 0 3px rgb(255 107 107 / .16)}"
+       "a{color:var(--acc);text-decoration:none;font-weight:600}a:hover{text-decoration:underline}"
+       ".repo{color:var(--mute);font:var(--fs-min) var(--font-mono)}"
+       ".badge{margin-left:auto;font-size:var(--fs-min);color:var(--mute);border:1px solid var(--line);border-radius:999px;"
+       "padding:1px 9px;white-space:nowrap}.badge.on{color:var(--ok);border-color:rgb(62 207 142 / .38)}"
+       ".badge.bad{color:var(--err);border-color:rgb(255 107 107 / .38)}"
+       ".runs,.alert{flex-basis:100%;font-size:var(--fs-min);overflow-wrap:anywhere}"
+       ".runs{color:var(--mute);font-family:var(--font-mono)}.alert{color:var(--warn)}"
+       ".empty{color:var(--mute);background:var(--panel);border:1px dashed var(--line);border-radius:10px;padding:18px;text-align:center}"
+       "@media (max-width:600px){body{padding:18px 14px 32px}.badge{margin-left:0}}")
+
+
+def _row(r):
+    """One repository as a card: its state dot, its name and owner, its live pill, then its alert and its run ids."""
+    slug, repo = html.escape(r["slug"]), html.escape(r["repo"])
+    if "err" in r:
+        dot, badge = " bad", f'<span class="badge bad">profile broken</span>'
+        alert = f'<div class="alert">{html.escape(r["err"])}</div>'
+    else:
+        n = len(r["live"])
+        dot = " on" if r["live"] else ""
+        badge = f'<span class="badge on">{n} live</span>' if n else '<span class="badge">idle</span>'
+        alert = f'<div class="alert">{html.escape(r["alert"])}</div>' if r.get("alert") else ""
+    ids = " ".join(sorted(r["live"]))
+    runs = f'<div class="runs">{html.escape(ids)}</div>' if ids else ""
+    return f'<li><i class="dot{dot}"></i><a href="/{slug}">{slug}</a><span class="repo">{repo}</span>{badge}{alert}{runs}</li>'
 
 
 def root_page(apps, title, note=None):
-    """The index: ONE line per repository -- its link, its owner/name and its live count, with the live run ids in a
-    muted block of their own. A repository holding twenty runs must not bury the list under its own ids, which is what
-    the old single-line row did when an operator opened `/test` and got every repository's runs in one paragraph."""
-    rows = []
-    for r in listing(apps)["repos"]:
-        slug, repo = html.escape(r["slug"]), html.escape(r["repo"])
-        if "err" in r:
-            badge = f'<span class="broken">broken profile: {html.escape(r["err"])}</span>'
-        else:
-            badge = f'<span class="live">{len(r["live"])} live</span>' if r["live"] else '<span class="none">none live</span>'
-        ids = " ".join(sorted(r["live"]))
-        runs = f'<div class="runs">{html.escape(ids)}</div>' if ids else ""
-        rows.append(f'<li><a href="/{slug}"><b>{slug}</b></a> <span class="repo">{repo}</span> {badge}{runs}</li>')
-    return (f'<!doctype html><meta charset=utf-8><title>squad hub</title><style>{WEB_TOKENS}{CSS}</style><body>'
-            f'<h1>{html.escape(title)}</h1>{note or ""}<ul id="repos">{"".join(rows) or "<li>no profile known</li>"}</ul>'
+    """The index: ONE card per repository -- its link, its owner/name, its live count and its worst alert, with the live
+    run ids in a muted block of their own. A repository holding twenty runs must not bury the list under its own ids,
+    which is what the old single-line row did when an operator opened `/test` and got every repository's runs in one
+    paragraph."""
+    repos = listing(apps)["repos"]
+    nlive = sum(1 for r in repos if r["live"])
+    rows = "".join(_row(r) for r in repos) or '<li class="empty">no profile known: no repository answers on this hub</li>'
+    return (f'<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">'
+            f'<title>squad hub</title><style>{WEB_TOKENS}{CSS}</style><body><main>'
+            f'<header><h1>squad hub</h1><span id=hcount class=sub>{len(repos)} '
+            f'{"repository" if len(repos) == 1 else "repositories"} · {nlive} live</span></header>'
+            f'{"" if not title or title == "squad hub" else "<p class=where>" + html.escape(title) + "</p>"}{note or ""}'
+            f'<ul id="repos">{rows}</ul></main>'
             f'<script>{INDEX_JS}</script>{OVERLAY}').encode()
 
 
@@ -153,13 +188,18 @@ def root_page(apps, title, note=None):
 # (#917). The rows take the same markup as root_page's first paint.
 INDEX_JS = """
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+function row(r){
+  const dot=r.err?" bad":(r.live.length?" on":""), badge=r.err?'<span class="badge bad">profile broken</span>'
+    :(r.live.length?`<span class="badge on">${r.live.length} live</span>`:'<span class="badge">idle</span>');
+  const alert=r.err?`<div class="alert">${esc(r.err)}</div>`:(r.alert?`<div class="alert">${esc(r.alert)}</div>`:"");
+  const ids=[...r.live].sort().join(" ");
+  return `<li><i class="dot${dot}"></i><a href="/${esc(r.slug)}">${esc(r.slug)}</a><span class="repo">${esc(r.repo)}</span>${badge}${alert}${ids?`<div class="runs">${esc(ids)}</div>`:""}</li>`;
+}
 function paint(h){
-  const rows=h.repos.map(r=>{
-    const badge=r.err?`<span class="broken">broken profile: ${esc(r.err)}</span>`:(r.live.length?`<span class="live">${r.live.length} live</span>`:'<span class="none">none live</span>');
-    const ids=[...r.live].sort().join(" ");
-    return `<li><a href="/${esc(r.slug)}"><b>${esc(r.slug)}</b></a> <span class="repo">${esc(r.repo)}</span> ${badge}${ids?`<div class="runs">${esc(ids)}</div>`:""}</li>`;
-  });
-  document.getElementById("repos").innerHTML=rows.join("")||"<li>no profile known</li>";
+  const nlive=h.repos.filter(r=>r.live.length).length;
+  document.getElementById("repos").innerHTML=h.repos.map(row).join("")||'<li class="empty">no profile known: no repository answers on this hub</li>';
+  const s=document.getElementById("hcount");
+  if(s)s.textContent=`${h.repos.length} ${h.repos.length===1?"repository":"repositories"} · ${nlive} live`;
 }
 async function poll(){try{const r=await fetch("/api/hub",{cache:"no-store"});if(r.ok)paint(await r.json());}catch(e){}}
 setInterval(poll,10000);

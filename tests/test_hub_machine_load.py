@@ -854,13 +854,19 @@ def test_the_load_payload_carries_the_subscriptions_row(hub):
     assert "subs" in hub.load_payload(), "/api/load leaves the Monitor's subscription instruments out"
 
 
-def test_the_monitor_draws_a_gauge_and_a_day_count_per_subscription(hub):
+def test_the_monitor_draws_a_labelled_bar_and_a_reset_per_subscription(hub):
+    """Owner, 2026-11-01: the dials painted as black circles, because the gauge styles are scoped to #inst and the row lives
+    under #isub. A named bar answers "how much of the weekly window is spent, and when does it reset" without a caption."""
     page = hub.PAGE
     assert 'id=isub' in page, "no panel carries the subscription row"
     assert page.index("id=isub") > page.index("id=stats"), "the subscription row belongs at the top of Cost & usage"
     i = page.index("function subsGauges(d)")
     fn = page[i:page.index("function instGauges(d)", i)]
-    assert "gaugeSvg(p)" in fn and ".toFixed(1)" in fn, "the row draws no instrument or no one-decimal day count"
+    assert "gaugeSvg(p)" not in fn, "the dial is back under #isub, where #inst never styles it and it paints black"
+    assert "class=sn" in fn and "class=sp2" in fn and "class=sb2" in fn and "class=sr2" in fn, \
+        "the row does not draw its plan name, its share, its bar and its reset"
+    assert 'style="width:${' in fn, "the bar carries no spent share"
+    assert "resets in" in fn, "the reset does not say what the time is"
     assert ".subs" in fn
 
 

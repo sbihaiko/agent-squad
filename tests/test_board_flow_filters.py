@@ -638,7 +638,8 @@ def test_the_type_and_the_chart_settings_are_restored_on_load(hub):
         assert result.returncode == 0, result.stderr
         return json.loads(result.stdout)
 
-    assert restored({"lt": {"ty": "bug", "tf": "90", "log": True}}) == {"ty": "bug", "tf": "90", "log": True}
+    assert restored({"lt": {"ty": "bug", "tf": "3", "log": True}}) == {"ty": "bug", "tf": "3", "log": True}
+    assert restored({"lt": {"tf": "90"}})["tf"] == "30", "a retired preset falls back to the month, never to a missing chart"
     assert restored({}) == {"ty": "task", "tf": "30", "log": False}
     assert restored({"lt": {"ty": "pr"}})["ty"] == "task"
 

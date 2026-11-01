@@ -5,6 +5,8 @@
 # no pass record. The suite runs in a clean tree at T under the full-proof-delta lock, in try mode: a held lock exits 73 and runs nothing.
 # SG_DELTA_SUITE replaces the whole suite (ruff, mypy, the fast battery and the guards); a test names its own commands with it.
 # The record: $SG_STATE/gate-status-delta, `<epoch> TAB delta TAB <pass|fail> TAB <P> TAB <T> TAB <sha256 of the changed-file list>`.
+# The delta is the proof delivery keeps when the full suite cannot finish inside its bound (ADR-0163, ADR-0164): delivery
+# outranks the proof, so the delta answers for the tip instead of holding the promotion, and it never answers for a red.
 d=$(cd "$(dirname "$0")" && pwd)
 [ -n "${SG_STATE:-}" ] || { echo "delta-pass: SG_STATE is not set" >&2; exit 2; }
 state=$SG_STATE; mkdir -p "$state"
