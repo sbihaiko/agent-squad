@@ -3,6 +3,7 @@ import ast
 import importlib.util
 import json
 import math
+import re
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -254,7 +255,7 @@ def test_the_log_scale_ticks_name_an_hour_a_day_and_a_week(lt):
     result = _chart(lt, [_closed(1, 3), _closed(2, 30 * 24)], log=True)
 
     assert result["axis"] == "log"
-    assert [tick["text"] for tick in result["ticks"]] == ["1 h", "1 d", "1 w"]
+    assert [tick["text"] for tick in result["ticks"]] == ["1h", "1d", "7d"]
 
 
 def test_a_timeframe_keeps_only_the_cards_closed_inside_it(lt):
