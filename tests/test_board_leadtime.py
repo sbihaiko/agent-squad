@@ -3,6 +3,7 @@ import ast
 import importlib.util
 import json
 import math
+import re
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -345,3 +346,63 @@ def test_a_zoom_range_with_no_card_keeps_its_range_and_no_dots(lt):
 
     assert result["dots"] == []
     assert result["range"] == {"start": _iso(start), "end": _iso(end)}
+
+
+DURATION_TEXT = re.compile(r"\d+d( \d+h)?|\d+h( \d+m)?|\d+m")
+
+
+def _scales(lt):
+    linear = _chart(lt, [_closed(1, 5), _closed(2, 20 * 24)])
+    cube = _chart(lt, [_closed(1, 5), _closed(2, 40 * 24)])
+    log = _chart(lt, [_closed(1, 5), _closed(2, 20 * 24)], log=True)
+    return {"linear": linear, "cube": cube, "log": log}
+
+
+def test_the_ticks_run_in_duration_order_for_a_one_hour_and_a_one_month_window(lt):
+    hour = _chart(lt, [_closed(1, 0.2), _closed(2, 0.5)], timeframe=1 / 24)
+    month = _chart(lt, [_closed(1, 5, days_ago=1), _closed(2, 800, days_ago=2)], timeframe=30)
+
+    for result in (hour, month):
+        hours = [tick["hours"] for tick in result["ticks"]]
+        assert len(hours) >= 2
+        assert all(a < b for a, b in zip(hours, hours[1:])), f"ticks out of order: {hours}"
+
+
+def test_every_tick_text_uses_the_one_duration_format_on_every_scale(lt):
+    for name, result in _scales(lt).items():
+        for tick in result["ticks"]:
+            assert DURATION_TEXT.fullmatch(tick["text"]), f"{name} tick {tick['text']!r} is not the one format"
+
+
+def test_the_ticks_keep_their_order_on_every_scale(lt):
+    for name, result in _scales(lt).items():
+        hours = [tick["hours"] for tick in result["ticks"]]
+        assert len(hours) >= 2
+        assert all(a < b for a, b in zip(hours, hours[1:])), f"{name} ticks out of order: {hours}"
+
+
+def test_the_scale_field_names_the_scale_drawn(lt):
+    assert _chart(lt, [_closed(1, 29 * 24), _closed(2, 5)])["scale"] == "linear"
+    assert _chart(lt, [_closed(1, 30 * 24), _closed(2, 5)])["scale"] == "cube"
+    assert _chart(lt, [_closed(1, 5), _closed(2, 5)], log=True)["scale"] == "log"
+
+
+def test_each_reference_line_serves_its_own_label_and_position(lt):
+    result = _chart(lt, [_closed(n, h) for n, h in enumerate(range(1, 11), start=1)])
+
+    assert [result[key]["label"] for key in ("average", "median", "p85")] == ["Average", "Median", "p85"]
+    assert all(0.0 <= result[key]["y"] <= 1.0 for key in ("average", "median", "p85"))
+
+
+def test_the_band_bounds_are_the_numbers_around_the_centered_mean(lt):
+    items = [_closed(n, h) for n, h in enumerate([2, 4, 6, 8, 10], start=1)]
+
+    linear = _chart(lt, items)["dots"][2]["rolling"]
+    assert linear["hours"] == pytest.approx(6.0, abs=1e-6)
+    assert linear["low"] == pytest.approx(3.171573, abs=1e-6)
+    assert linear["high"] == pytest.approx(8.828427, abs=1e-6)
+
+    log = _chart(lt, items, log=True)["dots"][2]["rolling"]
+    assert log["hours"] == pytest.approx(5.210342, abs=1e-6)
+    assert log["low"] == pytest.approx(2.951249, abs=1e-6)
+    assert log["high"] == pytest.approx(9.198703, abs=1e-6)

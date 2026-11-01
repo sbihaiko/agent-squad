@@ -647,3 +647,82 @@ def test_a_chart_is_a_sibling_tab_with_no_close_and_no_title_of_its_own(hub):
 def test_a_live_run_click_never_leaves_the_tab_the_user_is_on(hub):
     """The owner: a second click on a live run moved the page from the board to the charts tab; the user changes tabs."""
     assert 'setTab("flow",{runs:true})' not in hub.PAGE
+
+
+def _render_lead_chart(hub, tmp_path, chart):
+    """The page's lead-time chart for one served control payload, drawn by node."""
+    block = _flow_block(hub).split("const drawFlow")[0]
+    drawing = "\n".join([
+        "const COLORS={},COLNAME={issue_closed:'Closed'};", "const esc=s=>String(s);", "const ls={};", block,
+        f"process.stdout.write(ltChart({json.dumps(chart)}));",
+    ])
+    path = tmp_path / "flow-lead-chart.js"
+    path.write_text(drawing)
+    result = subprocess.run(["node", str(path)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
+def _two_closed_cards(hub):
+    hub.board_cache["items"] = [
+        _card(1, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-02T09:00:00Z"),
+        _card(2, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-09T09:00:00Z"),
+    ]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_page_prints_the_label_each_line_is_served_and_composes_none(hub, board, tmp_path):
+    _two_closed_cards(hub)
+    chart = _flow(hub)["lead"]["control"]["jira"]["all"]
+    for key, label in (("average", "Mean line"), ("median", "Middle card"), ("p85", "Slow tail")):
+        chart[key]["label"] = label
+
+    out = _render_lead_chart(hub, tmp_path, chart)
+
+    for label in ("Mean line", "Middle card", "Slow tail"):
+        assert label in out, f"the served label {label!r} is not printed"
+    for composed in ("Average", "Median", "p85"):
+        assert composed not in out, f"the page composes its own {composed!r} label"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_page_names_the_scale_it_draws(hub, board, tmp_path):
+    _two_closed_cards(hub)
+    control = _flow(hub)["lead"]["control"]
+
+    assert "elapsed time (linear)" in _render_lead_chart(hub, tmp_path, control["jira"]["all"])
+    assert "elapsed time (log)" in _render_lead_chart(hub, tmp_path, control["log"]["all"])
+
+
+FONT_PX = 11       # the page sets its tick labels at var(--fs-min), which hub.py does not define: the test assumes 11 px
+GLYPH_EM = 0.6     # an advance per glyph wider than the digits and letters of the page's sans face
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_y_tick_labels_and_the_right_edge_badge_never_overlap(hub, board, tmp_path):
+    hub.board_cache["items"] = [
+        _card(1, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-02T09:00:00Z"),
+        _card(2, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-09T09:00:00Z"),
+        _card(3, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-09T09:00:00Z"),
+    ]
+    out = _render_lead_chart(hub, tmp_path, _flow(hub)["lead"]["control"]["jira"]["all"])
+
+    badges = [(float(cx), float(cy), float(r))
+              for cx, cy, r in re.findall(r"<circle data-k=\d+ cx=([\d.]+) cy=([\d.]+) r=([\d.]+)", out)]
+    ticks = [(float(x), float(y), text) for x, y, text in
+             re.findall(r"<text x=([\d.]+) y=([\d.-]+) text-anchor=end[^>]*>([^<]*)</text>", out)]
+    ticks = [tick for tick in ticks if tick[0] == 57]   # ltP - 7: the y-axis labels, not the reference lines
+    assert any(r == 6 for _, _, r in badges), "the two-card cluster at the newest close draws no numbered badge"
+    assert ticks, "the chart draws no y-axis label"
+
+    def label_box(x, y, text):
+        width = len(text) * GLYPH_EM * FONT_PX
+        return (x - width, y - FONT_PX, x, y + FONT_PX * 0.25)
+
+    def overlaps(a, b):
+        return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+    for x, y, text in ticks:
+        for cx, cy, r in badges:
+            assert not overlaps(label_box(x, y, text), (cx - r, cy - r, cx + r, cy + r)), \
+                f"y label {text!r} collides with the badge at ({cx}, {cy})"
