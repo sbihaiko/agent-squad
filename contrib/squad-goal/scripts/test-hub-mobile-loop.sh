@@ -17,7 +17,7 @@ ids = ("loop-text", "loop-start", "loop-drain", "loop-now", "loop-reason", "loop
 check("the switch has its state, its three controls, its reason, its confirm and its change log", all(f'id={i}' in t or f'id="{i}"' in t for i in ids))
 check("the state pill takes its class from the loop view", '$("loop").className = v.state' in t)
 check("status() no longer draws the state from the read-only status line", "s.loop.on" not in t)
-check("the switch reads the hub's loop route", 'call("/api/loop")' in t)
+check("the switch reads the hub's loop route", re.search(r'call\("/api/loop"(, *fresh)?\)', t) is not None)   # the read carries one flag: drop an older answer still in flight
 check("the switch writes to the hub's loop route with POST and a JSON body", re.search(r'fetch\("/api/loop", \{ method: "POST"', t) is not None and 'Content-Type": "application/json"' in t)
 check("start, drain and stop-now post their own action", all(s in t for s in ('loopAct("start")', 'loopAct("drain")', 'loopAct("stop-now", { confirm: true })')))
 check("stop-now opens a confirm before any write", re.search(r'\$\("loop-now"\)\.onclick = \(\) => \{[^}]*loop-confirm"\)\.hidden = false', t, re.S) is not None)

@@ -600,10 +600,11 @@ def test_the_gate_and_the_landing_stay_on_the_line_beside_the_burn(hub):
 # pass its press asked for by hand runs on every third cycle by itself), so the count, the press, the reading behind them
 # and the route the press called left together. `wtclean.sh` is untouched: it holds the rules and the loop still runs it.
 
-def test_the_left_pane_carries_three_accordions_and_no_worktree_one(hub):
-    """The removal is the rule: a fourth accordion named here is a defect, and one that came back would be read by name."""
-    left = [i for i in re.findall(r"<details id=(\w+)", hub.PAGE) if i in ("plans", "mdl", "stats", "wts")]
-    assert left == ["plans", "stats", "mdl"]   # re-anchored (#889): the models editor moved to the Settings tab, after the sidebar's two cards
+def test_the_left_pane_carries_only_what_a_reader_watches(hub):
+    """The removal is the rule: an accordion named here is a defect, and one that came back would be read by name.
+    Re-anchored (#1028): the two configuration cards left the sidebar for the Settings tab."""
+    side = hub.PAGE[hub.PAGE.index("<aside id=side>"):hub.PAGE.index("</aside>")]
+    assert re.findall(r"<details id=(\w+)", side) == ["lrd", "led", "stats", "inst"]
     for gone in ("id=wts", "id=wtsr", "id=wtb", "id=wtcl", "id=wtmsg", "wtDraw", "wtClean", "wtSay", "wtBusy"):
         assert gone not in hub.PAGE, gone
 

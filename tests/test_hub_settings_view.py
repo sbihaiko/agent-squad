@@ -124,7 +124,7 @@ def _node(hub, body):
 
 def _render(hub):
     return _node(hub, f"mdl={json.dumps(FIXTURE)};mdlSrv=JSON.stringify(mdl);mdlRender();"
-                      'console.log(JSON.stringify({b:$("#mbody").innerHTML,s:$("#sqm").innerHTML}))')
+                      'console.log(JSON.stringify({b:$("#mbody").innerHTML}))')
 
 
 def test_each_chain_row_removes_takes_hours_sets_effort_and_moves(hub):
@@ -174,11 +174,6 @@ def test_one_intro_line_and_a_how_it_works_disclosure(hub):
     assert b.count('class="note lead"') == 1
     assert re.search(r"<details class=hlp><summary>How it works</summary>", b)
     assert "id=msv" not in b, "the panel keeps its own Save: the Save is page-level"
-
-
-def test_the_sidebar_card_is_read_only(hub):
-    s = _render(hub)["s"]
-    assert s and "<button" not in s and "<a" not in s and "<input" not in s and "<select" not in s
 
 
 def test_the_diff_shows_before_and_after_per_chain_and_a_model_switch(hub):

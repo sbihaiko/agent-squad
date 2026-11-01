@@ -100,7 +100,7 @@ def test_subscription_card_has_no_info_lines():
 
 
 def test_totals_tiles_live_in_cost_panel_not_subscriptions():
-    assert "tot3" not in _panel("plans")
+    assert "tot3" not in _panel("sub")   # re-anchored: the plans panel moved to Settings > Subscriptions (#1028)
     assert "id=tot3" not in _panel("stats")
     poll = SRC[SRC.index("async function pollSubs"):]
     poll = poll[: poll.index("const SUBL") if "const SUBL" in poll else len(poll)]

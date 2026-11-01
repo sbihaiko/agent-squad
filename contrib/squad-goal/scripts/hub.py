@@ -4009,9 +4009,7 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 #side .sp .sb{padding:0 10px 10px}#side .sp>summary::before{content:"\25B8";color:var(--mute);width:10px}#side .sp[open]>summary::before{content:"\25BE"}
 #side .sp>summary .sr{font-size:var(--fs-min)}#enall{color:var(--acc);text-decoration:none;white-space:nowrap;font-weight:500}#enall:hover{text-decoration:underline}
 #lrun .r,#ended .r{border:1px solid var(--line);border-radius:8px;margin-bottom:8px;background:var(--card);min-width:0;overflow:hidden}#lrun .r>div,#ended .r>div{min-width:0;flex:1}#lrun .r .st,#lrun .r .m{white-space:normal;overflow-wrap:anywhere;max-width:none}#lrun .r:last-child,#ended .r:last-child{margin-bottom:0}
-#sqm .chr{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin-top:6px}#sqm .chr>b{min-width:64px;font-weight:600}#sqm .chr>span{display:flex;gap:6px;flex-wrap:wrap}
-#sqm .cm{display:inline-flex;padding:2px 8px;border:1px solid var(--line);border-radius:8px;background:var(--card);font-size:var(--fs-min);font-weight:600}#sqm .cm.off{opacity:.6;text-decoration:line-through}
-#flowb svg{max-width:none}#tab-set details.sp{max-width:1120px}#tab-hist #list{max-width:900px}
+#flowb svg{max-width:none}#tab-set details.sp{max-width:1120px}#list{max-width:900px}
 /*BOARD_LANES_CSS*/
 /*RUN_SHEET_CSS*/
 #main .r{display:flex;gap:8px;align-items:baseline;padding:8px 10px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;background:var(--card);cursor:pointer}#main .r:hover,#main .r:focus-visible{border-color:var(--acc)}#main h3{font-size:var(--fs-min);text-transform:uppercase;letter-spacing:.06em;color:var(--mute);margin:12px 0 6px}
@@ -4058,15 +4056,13 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 // A read already in flight is shared: the caller gets a clone of the same answer.
 (()=>{const f=window.fetch.bind(window),live=new Map();window.fetch=(u,o)=>{if(o&&o.method&&o.method!=="GET"||o&&o.signal)return f(u,o);
  const k=String(u);if(!live.has(k))live.set(k,f(u,o).finally(()=>live.delete(k)));return live.get(k).then(r=>r.clone())}})();</script>
-<header class=top><h1><button id=pj aria-haspopup=menu aria-expanded=false><span id=pjn></span> &#9662;</button></h1><div id=psw aria-label="Projects"></div><div class=tabs role=tablist><button data-t=board role=tab>Kanban</button><button data-t=flow role=tab>Charts</button><button data-t=hist role=tab>History</button><button data-t=set role=tab>Settings</button></div><span class=spx></span>
+<header class=top><h1><button id=pj aria-haspopup=menu aria-expanded=false><span id=pjn></span> &#9662;</button></h1><div id=psw aria-label="Projects"></div><div class=tabs role=tablist><button data-t=board role=tab>Kanban</button><button data-t=flow role=tab>Charts</button><button data-t=set role=tab>Settings</button></div><span class=spx></span>
 <span class=pill id=bread></span></header>
 <div id=win>
 <aside id=side>
 <details id=lrd class=sp open><summary>Live runs<span class=sr id=lrs></span></summary><div class=sb id=lrun></div></details>
-<details id=led class=sp><summary>Last ended<span class=sr><span id=les></span> <a href="#" id=enall data-t=hist>History</a></span></summary><div class=sb id=ended></div></details>
-<details id=plans class=sp><summary>Subscriptions<span class=sr id=plsr></span></summary><div class=sb><div id=subs></div></div></details>
+<details id=led class=sp><summary>Last ended<span class=sr><span id=les></span> <a href="#" id=enall>History</a></span></summary><div class=sb id=ended></div></details>
 <details id=stats class=sp><summary>Cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><h4>Spend <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Figures at API list prices (API-equivalent)."></span></h4><div class=tot id=tot></div><div class=m id=totnote></div><div class=cash id=cash></div><h4>Spend over time <span class=row id=per></span></h4><div id=chart></div><div id=kpi></div><div id=open></div><h4>Model cost · this month</h4><div class=m id=piet>API-equivalent</div><div id=pie></div></div></details>
-<details id=sqd class=sp open><summary>Squad models<span class=sr id=sqsr></span></summary><div class=sb id=sqm></div></details>
 <details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div class=ian id=ian></div><div id=ispec></div><div id=iloop></div><div class=irw><span>Next cycle</span><b id=icyc aria-live=off>?</b></div><div id=iuse></div></div></details>
 </aside>
 <main id=content>
@@ -4079,14 +4075,14 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 <div id=flowov hidden><div id=flowb></div></div>
 </section>
 <dialog id=ldg aria-label="Stop the loop"><form method=dialog id=ldgb></form></dialog>
-<section id=tab-hist class=pane aria-label=History><h2>Run history</h2><div id=list></div></section>
 <section id=tab-set class=pane aria-label=Settings><h2>Settings</h2>
-<div class=swrap><nav class=snav aria-label="Settings themes"><button data-sp=lim>Spend &amp; limits<small>token guard and cap</small></button><button data-sp=mdl>Models &amp; chains<small>who does the work, when</small></button><button data-sp=slk>Communication<small>Slack, for this profile</small></button><button data-sp=lop>Loop<small>start, stop, history</small></button><button data-sp=acc>Access<small>tailnet and phone</small></button></nav>
-<div class=spanels><label class=ssel>Theme <select id=ssel aria-label="Settings theme"><option value=lim>Spend &amp; limits</option><option value=mdl>Models &amp; chains</option><option value=slk>Communication</option><option value=lop>Loop</option><option value=acc>Access</option></select></label>
+<div class=swrap><nav class=snav aria-label="Settings themes"><button data-sp=lim>Spend &amp; limits<small>token guard and cap</small></button><button data-sp=sub>Subscriptions<small>plan prices and quota</small></button><button data-sp=mdl>Models &amp; chains<small>who does the work, when</small></button><button data-sp=slk>Communication<small>Slack, for this profile</small></button><button data-sp=lop>Loop<small>start, stop, history</small></button><button data-sp=acc>Access<small>tailnet and phone</small></button></nav>
+<div class=spanels><label class=ssel>Theme <select id=ssel aria-label="Settings theme"><option value=lim>Spend &amp; limits</option><option value=sub>Subscriptions</option><option value=mdl>Models &amp; chains</option><option value=slk>Communication</option><option value=lop>Loop</option><option value=acc>Access</option></select></label>
 <details id=lim class=sp data-sp=lim open><summary>Spend &amp; limits<span class=sr id=limsr></span></summary><div class=sb id=lbody></div></details>
+<details id=sub class=sp data-sp=sub><summary>Subscriptions<span class=sr id=subsr></span></summary><div class=sb><div id=subs></div></div></details>
 <details id=mdl class=sp data-sp=mdl open><summary>Models &amp; chains<span class=sr id=mdsr></span></summary><div class=sb id=mbody></div></details>
 <details id=slk class=sp data-sp=slk><summary>Communication<span class=sr id=slksr></span></summary><div class=sb id=sbody></div></details>
-<details id=lop class=sp data-sp=lop open><summary>Loop<span class=sr id=lopsr>start, stop, change log</span></summary><div class=sb id=lopb></div></details>
+<details id=lop class=sp data-sp=lop open><summary>Loop<span class=sr id=lopsr>start, stop, history</span></summary><div class=sb id=lopb></div><div class=sb id=histb><h4>Run history</h4><div id=list></div></div></details>
 <details id=acc class=sp data-sp=acc open><summary>Access<span class=sr>tailnet and phone</span></summary><div class=sb><div id=accb></div><div class=kr><span class=l>This device</span><a id=mobile-link href="#">mobile view</a></div><script>document.getElementById("mobile-link").href=location.pathname.replace(/\/?$/,"/")+"mobile"</script></div></details>
 </div></div>
 <div class=sbar id=sbar><button id=ssave>Save…</button><button id=sdisc>Discard changes</button><span id=schg>No change</span></div>
@@ -4282,7 +4278,7 @@ function mdlTable(){const rows=mdl.models||[];return `<h3>Models</h3><p class=m>
 const MHELP=`<details class=hlp><summary>How it works</summary><ul><li><b>Order</b>: ↑ ↓ move a model; ✕ marks it for removal: the row stays, struck through, until Save, and ↺ keeps it; "+ add a model…" puts one back.</li><li><b>Off</b> is set once per model and applies in every chain. An off model is skipped where a chain still lists it (the row stays, struck through, and ✕ still removes it) and is not offered in "+ add a model…". Switching it on restores every row.</li><li><b>Hours</b> are set per chain row: <code>HH-HH</code> local, may wrap midnight (<code>22-07</code>); empty means always. Outside its hours the row is skipped like off, and the next row runs.</li><li><b>Effort</b> is low to max, per chain row; medium is the default.</li><li><b>Save</b>, at the foot of Settings, shows the change (- before, + after) and writes only when you confirm.</li></ul></details>`;
 function mdlRender(){const b=$("#mbody");if(!mdl){b.innerHTML="<span class=m>loading…</span>";return}
  {const lc=mdl.last_coding||(mdl.coding_models||[])[0]||"",x=lc?mdlBox("coding_models",lc):MBOX0;$("#mdsr").textContent=x.llm?`${x.llm} · ${lc}`:lc}   // the model the last run coded with, not the chain's head
- {const roles=Object.keys(MLAB);$("#sqm").innerHTML=roles.map(k=>`<div class=chr><b>${MLAB[k]}</b><span>${(mdl[k]||[]).map(m=>`<span class="cm${mdlOffM(m)?" off":""}" title="${esc(m)}">${mdlName(mdlBox(k,m),m)}</span>`).join("")}</span></div>`).join("");$("#sqsr").textContent=roles.length+" roles"}   // the sidebar card: the chains by role, read only; the editor is on the Settings tab
+
  const ch=mdl.chain||{},chOut=ch.out||[],chHit=(m)=>chOut.find(o=>o.until_text&&o.model.split(':').pop()===String(m).split(':').pop()),chTag=(m)=>{const o=chHit(m);return o?`<span class=bk title="${esc(o.reason)}">${esc(o.reason)}, resets ${esc(o.until_text)}</span>`:''},chBan=ch.banner?`<div class="mx err" role=alert>${esc(ch.banner)}</div>`:(ch.notice?`<div class=mx>${esc(ch.notice)}</div>`:"");
  b.innerHTML=chBan+`<p class="note lead">Which models work, in what order, in which hours: a chain is tried top to bottom, and the first model that is on, inside its hours and under its limit does the work.</p>`
  +`<datalist id=hrp>${HRP.map(v=>`<option value="${v}">`).join("")}</datalist>`+mdlTable()+`<h3>Chains</h3>`
@@ -4395,12 +4391,12 @@ $("#sbody").addEventListener("click",e=>{const b=e.target.closest("button");if(!
 /* Settings (#913): a left theme list (a select on the phone) shows one theme at a time, and one page-level Save shows
    the diff of every theme with a change, each line naming its theme, and writes only after the confirm. Loop and
    Access have no Save: the bar hides there. */
-const STH={lim:"Spend & limits",mdl:"Models & chains",slk:"Communication",lop:"Loop",acc:"Access"};
+const STH={lim:"Spend & limits",sub:"Subscriptions",mdl:"Models & chains",slk:"Communication",lop:"Loop",acc:"Access"};
 let sTheme=STH[ls.sth]?ls.sth:"mdl",sPend=null;
 const limDirty=()=>{if(!limS||!$("#limc"))return false;const v=limVals();return String(v.guard)!==String(limS.guard)||String(v.cap)!==String(limS.cap)||String(v.factor)!==String(limS.factor)};
 const mdlDirty=()=>mdlChanged();
 const setDirty=()=>[["lim",limDirty()],["mdl",mdlDirty()],["slk",slDirty()]].filter(x=>x[1]).map(x=>x[0]);
-function setBar(){const bar=$("#sbar");if(!bar)return;const d=setDirty();bar.hidden=sTheme==="lop"||sTheme==="acc";bar.classList.toggle("dirty",d.length>0);
+function setBar(){const bar=$("#sbar");if(!bar)return;const d=setDirty();bar.hidden=sTheme==="lop"||sTheme==="acc"||sTheme==="sub";bar.classList.toggle("dirty",d.length>0);
  $("#ssave").disabled=!d.length;$("#sdisc").disabled=!d.length;$("#schg").textContent=d.length?"Unsaved: "+d.map(k=>STH[k]).join(", "):`${STH[sTheme]}: no change`}
 function setTheme(sp){if(!STH[sp])sp="mdl";sTheme=sp;ls.sth=sp;save();
  document.querySelectorAll("#tab-set details.sp").forEach(e=>{const on=e.dataset.sp===sp;e.classList.toggle("on",on);if(on&&!e.open)e.open=true});
@@ -4468,7 +4464,7 @@ const CUR={"R$":"BRL","U$":"USD","US$":"USD","$":"USD","€":"EUR","£":"GBP","�
 const money=(a,c)=>{try{return new Intl.NumberFormat(undefined,{style:"currency",currency:c}).format(a)}catch(e){return a+" "+c}};
 async function pollSubs(){try{const d=await (await fetch("/api/subs")).json(),ae=document.activeElement;if(ae&&ae.closest&&ae.closest("#subs")&&ae.tagName==="INPUT")return;
  const tot=Object.values(d.subs).reduce((a,v)=>a+(v.saved||0),0),any=Object.values(d.subs).some(v=>v.saved!=null);{const lims=Object.values(d.subs).filter(v=>{const aq=v.quota,aw=aq&&aq.windows&&aq.windows[0],pl=v.plan,q=aw?aw.pct:(pl&&pl.quota!=null?pl.quota:null);return q!=null&&q>=100});
- $("#plsr").textContent=lims.length?`${lims.length} at limit`:(any||d.api?"none at limit":"set plan prices")}   // the card says what needs a look; the prices stay in the cost card
+ $("#subsr").textContent=lims.length?`${lims.length} at limit`:(any||d.api?"none at limit":"set plan prices")}   // the card says what needs a look; the prices stay in the cost card
  $("#cash").textContent="at API list prices (API-equivalent) · cash this month: "+(any||d.api?`plans ${usd(d.plans)} + API ${usd(d.api)} = ${usd(d.total)}`:"set plan prices");
  $("#subs").innerHTML=`<div class=subx>Per subscription: quota used, as each provider's CLI reports it. With no reading, the bar is the API-equivalent usage vs the plan price.</div><datalist id=curs>${["USD","BRL","EUR","GBP","ARS","MXN","CAD","JPY"].map(c=>`<option value=${c}>`).join("")}</datalist>`+Object.entries(d.subs).map(([k,v])=>{const ok=v.saved!=null,pl=v.plan,pr=d.presets[k],custom=pl&&pl.plan==="custom";
   const sel=`<select data-plan=${k} data-f=plan aria-label="${k} plan"><option value="" ${pl?"":"selected"}>choose a plan…</option>${Object.entries(pr).map(([i,p])=>`<option value=${i} ${pl&&pl.plan===i?"selected":""}>${esc(p.name)} · US$${p.usd}</option>`).join("")}<option value=custom ${custom?"selected":""}>Custom amount…</option></select>`;
@@ -4846,7 +4842,7 @@ function paintHL(){
 
 // The frame of the mock (#889): four tabs over one page. A tab only shows one pane; every pane keeps its own poll.
 let TAB="board",lastRead=0,readStale=false;
-const TABS={board:"#tab-board",flow:"#tab-flow",hist:"#tab-hist",set:"#tab-set"};
+const TABS={board:"#tab-board",flow:"#tab-flow",set:"#tab-set"};
 function setTab(t,o){if(!TABS[t])t="board";TAB=t;ls.tab=t;save();
  for(const k in TABS)$(TABS[k]).classList.toggle("on",k===t);
  document.querySelectorAll(".tabs button").forEach(b=>b.classList.toggle("on",b.dataset.t===t));
@@ -4854,7 +4850,7 @@ function setTab(t,o){if(!TABS[t])t="board";TAB=t;ls.tab=t;save();
  if(t==="flow"){if(o&&o.runs)$("#flowov").hidden=true;else if(!o||!o.keep){if($("#flowov").hidden)flowOpen("cfd")}}
  drawMain()}
 document.querySelector(".tabs").addEventListener("click",e=>{const b=e.target.closest("button[data-t]");if(b)setTab(b.dataset.t)});
-$("#enall").addEventListener("click",e=>{e.preventDefault();e.stopPropagation();setTab("hist")});
+$("#enall").addEventListener("click",e=>{e.preventDefault();e.stopPropagation();setTab("set");setTheme("lop")});   // the run history lives in the Loop theme of Settings
 $("#bruns").onclick=()=>{$("#flowov").hidden=true;flowTabs()};
 function flowTabs(){const h=$("#flowov").hidden,k=typeof FLOWK==="string"?FLOWK:"cfd";$("#bruns").classList.toggle("on",h);$("#bflow").classList.toggle("on",!h&&k==="cfd");$("#blead").classList.toggle("on",!h&&k!=="cfd")}
 $("#main").addEventListener("click",e=>{const r=e.target.closest(".r[data-rid]");if(r)openRun(r.dataset.rid)});   // a run row on the Runs tab opens the sheet (#984)
