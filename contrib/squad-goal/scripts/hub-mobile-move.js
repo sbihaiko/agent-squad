@@ -13,8 +13,8 @@ const moveDrag = ({ promotable, dx, dy }) => {
 const moveStage = (n, to, at) => ({ n, to, until: at + UNDO_MS, live: true, why: "" });
 // The one transition of a staged move. The Undo, the app going hidden, a profile change and a second move staged over
 // this one all cancel it, and a cancelled move is never written, however late the write is asked for. The write happens
-// only at or after its delay.
-const MOVE_CANCEL = ["undo", "hidden", "profile", "superseded"];
+// only at or after its delay. A tab change cancels it too (#1007): the Undo lives on the Board tab.
+const MOVE_CANCEL = ["undo", "hidden", "profile", "superseded", "tab"];
 const moveAct = (p, act, at) => {
   if (!p || !p.live) return p;
   if (MOVE_CANCEL.includes(act)) return { ...p, live: false, why: act };

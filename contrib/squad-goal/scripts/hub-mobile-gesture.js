@@ -2,12 +2,13 @@
 const GESTURE_OWNERS = ["sheet", "card", "header", "gap"];
 const SWIPE_MIN = 40;
 const gestureOwner = roles => roles.find(r => GESTURE_OWNERS.includes(r)) || "none";
-const gestureAct = ({ owner, dx, dy, atTop }) => {
+// A swipe that starts in a nested scroller or a control of the sheet (`nested`) is that element's, never a card step (#1007).
+const gestureAct = ({ owner, dx, dy, atTop, nested }) => {
   const ax = Math.abs(dx), ay = Math.abs(dy);
   if (Math.max(ax, ay) < SWIPE_MIN) return null;
   if (ax > ay) {
     if (owner === "header" || owner === "gap") return { act: "column", step: dx < 0 ? 1 : -1 };
-    if (owner === "sheet" && dx < 0) return { act: "card", step: 1 };
+    if (owner === "sheet" && dx < 0 && !nested) return { act: "card", step: 1 };
     return null;
   }
   return owner === "sheet" && dy > 0 && atTop ? { act: "close" } : null;
@@ -33,6 +34,17 @@ const sheetStep = (v, cards, g) => {
   const set = sheetCards(cards, cards[v.card]);
   const at = afterGesture({ ...v, card: set.indexOf(cards[v.card]), cards: set.length }, g).card;
   return { ...v, card: cards.indexOf(set[at]) };
+};
+// A board read keeps the open sheet on its issue (#1005): the view holds indexes, so the read finds the card again by its
+// repository and number, in its column by name, and follows it if it moved. `cols` is the drawn columns, each with its
+// name and its flat card list; `id` is {name, key} taken before the read. A card the board dropped closes the sheet.
+const anchorView = (v, cols, id) => {
+  if (!v.sheet || !id) return v;
+  const at = (c) => c.flat.findIndex(r => (r.r || "") + "#" + r.n === id.key);
+  const home = cols.findIndex(c => c.name === id.name);
+  if (home >= 0 && at(cols[home]) >= 0) return { ...v, col: home, card: at(cols[home]) };
+  const far = cols.findIndex(c => at(c) >= 0);
+  return far >= 0 ? { ...v, col: far, card: at(cols[far]) } : { ...v, sheet: false };
 };
 const EDGE_PX = 24, PULL_MIN = 60;
 const runsGesture = ({ x0, dx, dy, atTop }) => {

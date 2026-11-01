@@ -177,6 +177,8 @@ const box = {
   console, JSON, Math, Date: FakeDate, Object, Array, String, Number, Promise, Set, Map, Error, RegExp, parseInt, parseFloat,
   isNaN, encodeURIComponent, decodeURIComponent, Boolean, Symbol, TypeError,
   fetch: boot.fetch,
+  scrollY: 0,
+  scrollTo: (_x, y) => { box.scrollY = y; },
   __skip: ms => { boot.__skew += ms; return boot.__skew; },
   __state: boot.__state,
   Option: class { constructor(text, value) { this.text = text; this.value = value; } },
