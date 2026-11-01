@@ -268,3 +268,13 @@ def test_a_markdown_table_is_drawn_as_a_table():
     body = js[js.index("function richText(text) {"):js.index("const CLAMP")]
     assert "TBL_ROW.test(raw) && TBL_SEP.test" in body
     assert ".sq-tbl" in js
+
+def test_the_panel_comes_back_open_after_a_reload():
+    """Owner, 2026-11-01: the page reloads when the hub build changes and the terminal closed with it. The open state is kept
+    beside the session and the text size, and a reload reopens what was open."""
+    js = (pathlib.Path(__file__).resolve().parents[1] / "contrib/squad-goal/scripts/hub-overlay.js").read_text()
+    assert 'const OPEN_KEY = "sq-ov-open"' in js
+    assert "function wantOpen(on)" in js and "function wasOpen()" in js
+    assert "localStorage.setItem(OPEN_KEY, on ? \"1\" : \"0\")" in js
+    assert "if (wasOpen()) openOverlay();" in js
+    assert "wantOpen(true)" in js and "wantOpen(false)" in js

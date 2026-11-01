@@ -512,8 +512,11 @@ function fsInit() {
   if (down) down.onclick = () => fsSet(fsNow - FS_STEP);
   if (up) up.onclick = () => fsSet(fsNow + FS_STEP);
 }
+const OPEN_KEY = "sq-ov-open";
+function wantOpen(on) { try { localStorage.setItem(OPEN_KEY, on ? "1" : "0"); } catch (e) {} }
+function wasOpen() { try { return localStorage.getItem(OPEN_KEY) === "1"; } catch (e) { return false; } }
 function openOverlay(){
-  ov.hidden = false; btn.setAttribute("aria-expanded", "true");
+  ov.hidden = false; btn.setAttribute("aria-expanded", "true"); wantOpen(true);
   applyLayout();
   // The field opens empty (owner, 2026-11-01): the page context is one click away in the + menu, never typed for you.
   fsInit();
@@ -524,6 +527,7 @@ function openOverlay(){
 function closeOverlay() {
   ov.hidden = true; btn.setAttribute("aria-expanded", "false"); setMenu(false);
   clearInterval(timer); timer = 0;
+  wantOpen(false);
   applyLayout(); btn.focus();
 }
 btn.addEventListener("click", () => (ov.hidden ? openOverlay() : closeOverlay()));
@@ -568,4 +572,7 @@ addEventListener("pointermove", e => { ptr = { x: e.clientX, y: e.clientY }; las
 document.addEventListener("visibilitychange", () => { lastT = 0; kick(); });
 if (reduced.addEventListener) reduced.addEventListener("change", kick);
 applyLayout(); syncSend();
+// A reload puts the panel back as it was left (owner, 2026-11-01): the page reloads when the hub build changes, and the
+// terminal closing on that reload loses the reader's place.
+if (wasOpen()) openOverlay();
 })();
