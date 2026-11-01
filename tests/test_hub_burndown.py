@@ -244,3 +244,35 @@ def test_the_page_draws_the_gap_the_guide_and_the_numbers(hub, board):
     assert "remaining 1 as of 2026-10-21" in out
     assert "closed this week 1" in out and "added this week 2" in out
     assert "guide to 2026-10-28" in out
+
+
+def test_a_child_on_both_the_store_and_the_relation_is_counted_once(hub, board, monkeypatch):
+    path = hub._hist.history_path(hub.BOARD, hub.REPO)
+    hub._hist.record_issue(path, 1064, OPENED, OPENED, [{"t": _at(19), "type": "spec", "spec": 1063}], True, _epoch(19))
+    monkeypatch.setattr(hub, "sub_issues", lambda issue, repo: ([_sub(1064, _at(19), _at(21)), _sub(1065, _at(20), _at(22))], None))
+    _write_reads(hub, [], (19, 20, 21, 22))
+    burn = hub.flow_burn(1063)["burn"]
+    assert [(p["day"], p["remaining"], p["added"], p["closed"]) for p in burn["points"]] == [
+        ("2026-10-19", 1, 1, 0), ("2026-10-20", 2, 1, 0), ("2026-10-21", 1, 0, 1), ("2026-10-22", 0, 0, 1)]
+
+
+def test_both_chart_routes_read_a_specs_children_once_per_board_read(hub, board, monkeypatch):
+    reads = []
+
+    def children(issue, repo):
+        reads.append(issue)
+        return [_sub(1064, _at(19), _at(21))], None
+
+    monkeypatch.setattr(hub, "sub_issues", children)
+    _write_reads(hub, [], (19, 20, 21))
+    hub.flow_burnup(1063)
+    hub.flow_burn(1063)
+    assert reads == [1063]
+
+
+def test_a_failed_sub_issue_read_is_not_kept_for_the_next_request(hub, board, monkeypatch):
+    monkeypatch.setattr(hub, "sub_issues", lambda issue, repo: (None, "sub-issues: refused"))
+    assert hub.flow_burnup(1063)["err"] == "sub-issues: refused"
+    monkeypatch.setattr(hub, "sub_issues", lambda issue, repo: ([_sub(1064, _at(19), _at(21))], None))
+    _write_reads(hub, [], (19, 20, 21))
+    assert hub.flow_burnup(1063)["points"] != []
