@@ -461,3 +461,46 @@ def test_adr_0152_states_the_loopback_send_rule():
     assert "loopback" in rule and "own Origin" in rule and "always sends" in rule
     assert "SQUAD_TAILNET_TERMINALS_SEND" in rule
     assert "tests/test_session_send.py" in rule
+
+
+def mux_over(h):
+    spec = importlib.util.spec_from_file_location("hubmux_send", SCRIPTS / "hubmux.py")
+    mux = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mux)
+    srv = mux.server(0, {"p1": {"repo": "x/y", "state": "", "mod": h.mod}})
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
+
+
+def test_a_loopback_send_through_the_mux_reaches_the_session(home, tmp_path, hub):
+    """The index and every profile page post /<profile>/api/sessions/send: the mux runs the profile's own send (#898)."""
+    add_session(home, "s1", home.path / "p1" / "app")
+    srv = mux_over(hub())
+    try:
+        port = srv.server_address[1]
+        conn = HTTPConnection("127.0.0.1", port, timeout=10)
+        conn.request("POST", "/p1/api/sessions/send", body=json.dumps(msg()),
+                     headers={"Host": f"127.0.0.1:{port}", "Origin": f"http://127.0.0.1:{port}", "Content-Type": "application/json"})
+        r = conn.getresponse()
+        assert r.status == 200 and json.loads(r.read())["status"] == "sent"
+        conn.close()
+        assert inbox_of(home).conns == 1
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_a_loop_switch_write_through_the_mux_gets_an_answer(home, tmp_path, hub):
+    srv = mux_over(hub())
+    try:
+        port = srv.server_address[1]
+        conn = HTTPConnection("127.0.0.1", port, timeout=10)
+        conn.request("POST", "/p1/api/loop", body="{}",
+                     headers={"Host": f"127.0.0.1:{port}", "Origin": f"http://127.0.0.1:{port}", "Content-Type": "application/json"})
+        r = conn.getresponse()
+        assert r.getheader("Content-Type") == "application/json"
+        json.loads(r.read())
+        conn.close()
+    finally:
+        srv.shutdown()
+        srv.server_close()
