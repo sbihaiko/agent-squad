@@ -23,6 +23,16 @@
 # selects the proof (ci, the default).
 d=$(cd "$(dirname "$0")" && pwd); remote=${SG_PROMOTE_REMOTE:-https://github.com/$SG_REPO.git}
 export GIT_TERMINAL_PROMPT=0
+# SG_PROMOTE_OPEN_ONLY opens or reuses the dev -> stg pull request and nothing else: no lock, no proof, no merge (ADR-0164,
+# #1051). promote-pass.sh calls it so the four CI shards start on the tip while the quiet window passes.
+if [ -n "${SG_PROMOTE_OPEN_ONLY:-}" ]; then
+  . "$d/ghcall.sh"
+  pr=$(gh_api "repos/$SG_REPO/pulls?state=open" -q '[.[] | select(.head.ref == "dev" and .base.ref == "stg")][0].number // empty' 2>/dev/null) || exit 0
+  [ -n "$pr" ] && exit 0
+  gh_send -X POST "repos/$SG_REPO/pulls" -f head=dev -f base=stg -f "title=Promote dev into stg" \
+    -f "body=The dev tip is under CI. Merge this to move stg." >/dev/null 2>&1
+  exit 0
+fi
 # The promotion reads the machine-wide gate lock (#392), so the proof cannot change under it and two promotions never overlap;
 # a pass already inside the lock just runs.
 case ":${SG_SERIAL_HELD:-}:" in *":gate:"*) ;; *) SG_GATE_STATUS=self exec bash "$d/gate.sh" bash "$0" "$@";; esac

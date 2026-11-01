@@ -1,8 +1,9 @@
 #!/bin/bash
 # A card moves forward only (ADR-0143). An automated writer (any Status write whose SG_MOVE_BY is not `owner`) that would
 # move a card to an earlier column is rejected: the card keeps its column, the issue gets the `rework` label, and the
-# rejection is logged to $SG_STATE/board-rejections.jsonl. The one backward move is Doing back to Todo, the loop undoing its
-# own claim. Backlog is the owner's column: an automated writer reaches it only as the first column of a card with none.
+# rejection is logged to $SG_STATE/board-rejections.jsonl. The one backward move is back to Todo: the loop undoing its own
+# claim (Doing), or its own column a run that landed nothing left behind (SG_MOVE_REASON=no-landing, #1059). Backlog is the
+# owner's column: an automated writer reaches it only as the first column of a card with none.
 # Stubbed gh; a temp state dir, so the live board and the loop's cache are never read or written.
 # usage: bash test-board-forward.sh [board.py]
 src=${1:-$(dirname "$0")/board.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
@@ -55,6 +56,14 @@ seed; o=$(SG_MOVE_BY=owner run o 4 "Backlog" 2001 2>&1); rc=$?
 seed; o=$(SG_MOVE_BY=loop run o 4 "Todo" 2002 2>&1); rc=$?
 [ "$rc" -eq 0 ] && [ "$(col 2002)" = "Todo" ] && ok "the one backward move, Doing back to Todo, is allowed for a loop writer" || ko "unclaim: exit $rc, column $(col 2002): $o"
 
+seed; o=$(SG_MOVE_BY=loop SG_MOVE_REASON=no-landing run o 4 "Todo" 2004 2>&1); rc=$?
+[ "$rc" -eq 0 ] && [ "$(col 2004)" = "Todo" ] && ok "a run that landed nothing unclaims its card from Code Complete (#1059)" || ko "no-landing unclaim: exit $rc, column $(col 2004): $o"
+
+seed; o=$(SG_MOVE_BY=loop SG_MOVE_REASON=no-landing run o 4 "Backlog" 2004 2>&1); rc=$?
+[ "$rc" -eq 3 ] && [ "$(col 2004)" = "Code Complete" ] && ok "the no-landing exception reaches Todo only, never Backlog" || ko "no-landing to Backlog: exit $rc, column $(col 2004): $o"
+
+seed; o=$(SG_MOVE_BY=owner SG_MOVE_REASON=no-landing run o 4 "Todo" 2004 2>&1); rc=$?
+[ "$rc" -eq 0 ] && [ "$(col 2004)" = "Todo" ] && ok "the owner's door moves a card back with or without the reason" || ko "owner unclaim: exit $rc, column $(col 2004): $o"
 seed; o=$(SG_MOVE_BY=loop run o 4 "Doing" 2001 2>&1); rc=$?
 [ "$rc" -eq 0 ] && [ "$(col 2001)" = "Doing" ] && ok "a forward move by a loop writer is written" || ko "forward: exit $rc, column $(col 2001): $o"
 

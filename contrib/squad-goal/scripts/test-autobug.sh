@@ -1025,6 +1025,8 @@ r=$(bash "$T/s/autobug.sh" 2>&1)
 [ "$(cat "$T/launches" 2>/dev/null)" = "$T/st/req/autobug-landed.json" ] && ok "30 a card already in Doing still launches its stored request, once" \
   || ko "30 a landed write did not launch: '$(cat "$T/launches" 2>/dev/null)' / $r"
 [ -z "$(L1 pending 'x/y#1228')" ] && ok "30 the landed event is marked written" || ko "30 landed still pending: '$(L1 pending 'x/y#1228')'"
+[ "$(L1 read 'x/y#1228' board | python3 -c 'import json,sys; print(json.load(sys.stdin).get("by",""))')" = "autobug resume" ] \
+  && ok "30 the resume pass names itself as the actor of the landed write" || ko "30 landed write actor: '$(L1 read 'x/y#1228' board)'"
 
 # 31) (#1021, review) a pick whose ledger records fail partway records nothing: the events already recorded are dropped, so
 # no later resume launches part of the pick. The ledger refuses the second issue's event only (a flag file arms it).

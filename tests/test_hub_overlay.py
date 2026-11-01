@@ -153,7 +153,7 @@ def test_enter_sends_shift_enter_breaks_a_line_and_send_is_off_while_empty():
 
 def test_the_composer_has_a_plus_menu_an_auto_growing_field_and_an_icon_only_send():
     src = OVERLAY.read_text()
-    assert 'id="sq-ov-plus"' in src and ">Screenshot<" in src and ">Page context<" in src
+    assert 'id="sq-ov-plus"' in src and ">Attach screenshot<" in src and ">Page context<" in src
     assert 'id="sq-ov-text"' in src and "scrollHeight" in src
     send = re.search(r'<button id="sq-ov-send".*?</button>', src, re.S).group(0)
     assert 'aria-label="Send"' in send and re.sub(r"<[^>]*>", "", send).strip() == ""

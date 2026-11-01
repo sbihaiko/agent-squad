@@ -102,6 +102,14 @@ scene fc
 mkdir -p "$SG_STATE/locks/single-branchland"; echo $$ > "$SG_STATE/locks/single-branchland/pid"
 r=$(run); skipped "$r" && ok "does not start while the landing pass is running" || ko "started with branchland lock: '$r'"
 
+# 5b. (#1057) a landing lock whose holder died as a zombie is dead: the hunt does not wait for it
+scene fc
+sh -c 'sleep 0 & echo $! > "$1"; exec sleep 300' sh "$T/zombie" >/dev/null 2>&1 & zpar=$!
+for i in $(seq 1 50); do [ -s "$T/zombie" ] && [ "$(/bin/ps -o stat= -p "$(cat "$T/zombie")" 2>/dev/null | cut -c1)" = Z ] && break; sleep 0.1; done
+rm -rf "$SG_STATE/locks/single-branchland"; mkdir -p "$SG_STATE/locks/single-branchland"; echo "$(cat "$T/zombie")" > "$SG_STATE/locks/single-branchland/pid"
+r=$(run); skipped "$r" && ko "a zombie landing lock held the hunt: '$r'" || ok "a zombie landing lock does not hold the hunt"
+kill -9 "$zpar" 2>/dev/null; wait "$zpar" 2>/dev/null
+
 # 6) startable autobug / autofrontier
 scene bug; touch "$SG_STATE/auto/startable-bug"
 r=$(run); skipped "$r" && ok "does not start while a startable bug exists" || ko "started with startable bug: '$r'"

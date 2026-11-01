@@ -25,7 +25,7 @@ FILTER_JS = SCRIPTS / "board-filter.js"
 NODE = shutil.which("node")
 ROUTES = {"/api/status", "/api/hub", "/api/board", "/api/issue", "/api/subs", "/api/models", "/api/stats", "/api/runs", "/api/ended",
           "/api/sessions", "/api/sessions/conversation", "/api/sessions/send", "/api/promote", "/api/loop",
-          "/api/load"}   # the owner's move is a write (#829); the Monitor reads the desktop card's route (#983)
+          "/api/load", "/api/chart/burndown"}   # the owner's move is a write (#829); the Monitor reads the desktop card's route (#983); the Throughput screen reads the burndown (#1049)
 
 
 def run_js(src, expr, prelude=""):
@@ -171,9 +171,9 @@ def test_the_mobile_page_reads_only_the_existing_routes(hub):
     # through a variable path, or a method set after the call's own `)`, carries it once too often, whatever the shape of
     # the call (#829).
     assert 'fetch(runURLs(id).control, { method: "POST"' in hub.MOBILE_PAGE, "the run screen's write is not the run's control route"
-    # The session overlay (#898) rides on the page and posts the same send route, through the source the page names.
+    # The session overlay (#898) rides on the page and posts its send route, and its screenshot route (#903), through the source the page names.
     overlay = hub.OVERLAY_JS.count("method:")
-    assert overlay == 1 and 'fetch(s.src.api + "/send", { method: "POST"' in hub.OVERLAY_JS
+    assert overlay == 2 and 'fetch(s.src.api + "/send", { method: "POST"' in hub.OVERLAY_JS and 'fetch(s.src.api + "/screenshot?sid="' in hub.OVERLAY_JS
     assert hub.MOBILE_PAGE.count("method:") == 4 + overlay, "the mobile page holds a fifth write, or a method outside the four fetches"
 
 

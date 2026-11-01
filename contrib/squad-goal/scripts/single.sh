@@ -11,10 +11,12 @@ st=$SG_STATE; n=$1; shift; L="$st/locks/single-$n"; mkdir -p "$st/locks"
 # SG_SINGLE_WAIT=<polls>: a caller that must not skip its step in silence waits up to that many one-second polls for the holder
 # (#471), and still exits 0 when the lock stays held; the caller reads the holder from $L/pid to say why.
 w=${SG_SINGLE_WAIT:-0}
-while [ "$w" -gt 0 ] && [ -d "$L" ] && h=$(cat "$L/pid" 2>/dev/null) && [ -n "$h" ] && kill -0 "$h" 2>/dev/null; do sleep 1; w=$((w-1)); done
+# A zombie holder is dead: its parent has not reaped it, and kill -0 still answers (#1057).
+alive() { kill -0 "$1" 2>/dev/null && [ "$(/bin/ps -o stat= -p "$1" 2>/dev/null | cut -c1)" != Z ]; }
+while [ "$w" -gt 0 ] && [ -d "$L" ] && h=$(cat "$L/pid" 2>/dev/null) && [ -n "$h" ] && alive "$h"; do sleep 1; w=$((w-1)); done
 if ! mkdir "$L" 2>/dev/null; then
   h=$(cat "$L/pid" 2>/dev/null)
-  if [ -n "$h" ] && ! kill -0 "$h" 2>/dev/null; then rm -rf "$L"; mkdir "$L" 2>/dev/null || exit 0   # stale: take over
+  if [ -n "$h" ] && ! alive "$h"; then echo "single: reaping stale lock $n: holder pid $h is dead, lock age $(( $(date +%s) - $(mtime "$L/pid") ))s" >&2; rm -rf "$L"; mkdir "$L" 2>/dev/null || exit 0   # stale: take over
   elif [ -z "$h" ] && [ $(( $(date +%s) - $(mtime "$L") )) -gt 10 ]; then rm -rf "$L"; mkdir "$L" 2>/dev/null || exit 0   # no pid after 10 s: owner died between mkdir and write
   else exit 0; fi
 fi

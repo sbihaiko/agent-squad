@@ -1,6 +1,7 @@
 """Hub machine load (#1776): the left pane's footer strip reads CPU, RAM and GPU, and the card of the run that owns
 the load says so. These pin the parts that carry a rule — the cell formatting, the `?` fallback when a source cannot
 answer, the two-sample warn rule, the attribution by worktree path and the marker that clears with the load."""
+import datetime as dt
 import importlib.util
 import json
 import os
@@ -872,35 +873,41 @@ def test_the_monitor_draws_a_labelled_bar_and_a_reset_per_subscription(hub):
 
 # ---------------------------------------------------------------- the throughput row (owner, 2026-11-01)
 
-def _samples(hub, closed_per_day, start=1_000_000_000):
-    day = 86400
-    out = []
-    for i, n in enumerate(closed_per_day):
-        t = start + i * day + 3600
-        out.append({"t": t, "counts": {"issue": {hub.COLUMN["issue_closed"]: n}},
-                    "cells": [["issue", None, None, hub.COLUMN["issue_closed"], 0, n, "task"]], "frozen": 0, "none": 0})
-    return out
+THROUGHPUT_NOW = dt.datetime(2026, 10, 20, 23, 0, tzinfo=dt.UTC)
 
 
-def test_the_speed_row_compares_today_with_the_finished_days(hub, monkeypatch):
+def _closing_store(hub, tmp_path, monkeypatch, closed_per_day):
+    """A history store whose cards close so each day ends with the given closed total, the last day being today (#1024)."""
+    monkeypatch.setenv("TZ", "UTC")
+    monkeypatch.setattr(hub, "BOARD", tmp_path / "board.json")
+    monkeypatch.setattr(hub, "REPO", "x/y")
+    path = hub._hist.history_path(hub.BOARD, hub.REPO)
+    first = THROUGHPUT_NOW.date() - dt.timedelta(days=len(closed_per_day) - 1)
+    def stamp(day, hour):
+        return dt.datetime.combine(day, dt.time(hour), tzinfo=dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    for n in range(closed_per_day[-1]):
+        day = next(i for i, total in enumerate(closed_per_day) if total > n)
+        events = [{"t": stamp(first, 0), "type": "added"}, {"t": stamp(first, 0), "type": "status", "status": "Todo"},
+                  {"t": stamp(first + dt.timedelta(days=day), 12), "type": "closed"}]
+        hub._hist.record_issue(path, n + 1, stamp(first, 0), stamp(first, 0), events, True, 0)
+    return path
+
+
+def test_the_speed_row_compares_today_with_the_finished_days(hub, tmp_path, monkeypatch):
     """Today is partial, so it is never part of the median it is judged against."""
     days = [0, 2, 6, 10, 14, 16]
-    monkeypatch.setattr(hub._flow, "samples", lambda path: _samples(hub, days))
-    monkeypatch.setattr(hub._flow, "history_path", lambda board, repo: tempfile.mkdtemp() + "/none")
-    got = hub.throughput_fact()
+    _closing_store(hub, tmp_path, monkeypatch, days)
+    got = hub.throughput_fact(now=THROUGHPUT_NOW)
     done = [days[i + 1] - days[i] for i in range(len(days) - 1)]
     assert got["today"] == done[-1], "the newest day is partial and is the one judged"
     assert got["median"] == 4 and got["min"] == 2 and got["max"] == 4, (got, done)
 
 
-def test_a_speeding_board_reads_up_and_a_slowing_one_reads_down(hub, monkeypatch):
-    monkeypatch.setattr(hub._flow, "history_path", lambda board, repo: tempfile.mkdtemp() + "/none")
-    fast = [0, 1, 2, 3, 4, 5, 8, 12, 16]
-    monkeypatch.setattr(hub._flow, "samples", lambda path: _samples(hub, fast))
-    assert hub.throughput_fact()["trend"] == "up"
-    slow = [0, 9, 18, 27, 36, 45, 46, 47, 48]
-    monkeypatch.setattr(hub._flow, "samples", lambda path: _samples(hub, slow))
-    assert hub.throughput_fact()["trend"] == "down"
+def test_a_speeding_board_reads_up_and_a_slowing_one_reads_down(hub, tmp_path, monkeypatch):
+    _closing_store(hub, tmp_path, monkeypatch, [0, 1, 2, 3, 4, 5, 8, 12, 16])
+    assert hub.throughput_fact(now=THROUGHPUT_NOW)["trend"] == "up"
+    _closing_store(hub, tmp_path, monkeypatch, [0, 9, 18, 27, 36, 45, 46, 47, 48])
+    assert hub.throughput_fact(now=THROUGHPUT_NOW)["trend"] == "down"
 
 
 def test_no_history_reads_no_speed_and_the_page_draws_no_fake_zero(hub):

@@ -13,6 +13,8 @@ from pathlib import Path
 
 from squad import modelreg, profiler
 
+NO_PROFILE = "no profile"
+
 
 def path(root, issue):
     """The ticket's file under `root`: a digest of the ticket, never its number."""
@@ -25,6 +27,37 @@ def read(root, issue):
     if not p.exists():
         return []
     return [json.loads(line) for line in p.read_bytes().splitlines()]
+
+
+def card(root, issue):
+    """The ticket's three card numbers: total tokens, attempts, winning model. `NO_PROFILE` when it has no rows."""
+    rows = read(root, issue)
+    if not rows:
+        return NO_PROFILE
+    return {"total_tokens": _total(rows), "attempts": len(rows), "winning_model": _winner(rows)}
+
+
+def _total(rows):
+    """The tokens in, out and cache of every row that ran a session; None when a row that ran one has no count."""
+    total = 0
+    for r in rows:
+        if r["tokens_src"] == "missing":
+            if r["outcome"] in ("refused", "skipped") or r["model_id"] == profiler.NO_MODEL:
+                continue
+            return None
+        if r["tokens_in"] is None or r["tokens_out"] is None:
+            return None
+        total += r["tokens_in"] + r["tokens_out"] + (r["tokens_cache"] or 0)
+    return total
+
+
+def _winner(rows):
+    """The model of the last accepted row that ran a model, in write order; None when no row won."""
+    win = None
+    for r in rows:
+        if r["outcome"] == "accepted" and r["model_id"] != profiler.NO_MODEL:
+            win = r["model_id"]
+    return win
 
 
 def append_row(root, row):

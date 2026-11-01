@@ -30,8 +30,10 @@ only reads, so a card another writer moved meanwhile is never moved back. A card
 read for at most SG_BOARD_OLD_SETTLE_SECONDS (default 10) of that bound: a write it never carries is likelier lost than late (#438).
 A move to the Status the card already carries is skipped: one read of the board, no PATCH, no proving read (#327).
 A writer that is not the owner's door (`SG_MOVE_BY` is not `owner`) never moves a card back along the axis, except the loop's own
-Doing-to-Todo unclaim: that move is refused, the card keeps its column and its issue gets the `rework` label, the refusal is logged
-to $SG_STATE/board-rejections.jsonl, and the exit is 3 (ADR-0143).
+Doing-to-Todo unclaim, and the same return to Todo when the move names `SG_MOVE_REASON=no-landing`: a run that landed nothing
+undoes the column the loop itself set, and that unclaim reaches no other column (#1059). Every other backward move is refused:
+the card keeps its column and its issue gets the `rework` label, the refusal is logged to $SG_STATE/board-rejections.jsonl, and
+the exit is 3 (ADR-0143).
 Touches $SG_STATE/board-dirty so the hub refreshes within 2 s. Each move it proved is recorded in
 $SG_STATE/board-moves.json by that same step: one entry per item, the column it set, the instant and the dispatch context `SG_MOVE_BY` names (`owner` or `loop`, when set), replaced by a
 later move of the same item. The file is formed in a temp file beside it and renamed, so a reader sees the old record
@@ -80,7 +82,7 @@ automated = os.environ.get("SG_MOVE_BY") != "owner"   # any writer that is not t
 for n in nums:
     if carried.get(str(n)) == status: print(f"#{n} -> {status} (already carried, not written)"); continue   # no PATCH and no proving read: the read above is the proof
     have = carried.get(str(n)) or None
-    if automated and refused_for_automated(have, status):   # a move back along the axis: the card keeps its column and carries rework (ADR-0143)
+    if automated and refused_for_automated(have, status, os.environ.get("SG_MOVE_REASON")):   # a move back along the axis: the card keeps its column and carries rework (ADR-0143)
         refusals.append({"issue": n, "from": have, "to": status, "by": os.environ.get("SG_MOVE_BY") or None, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
         print(f"#{n}: refused, an automated writer moves {have!r} back to {status!r}; the card keeps {have!r} and carries rework", file=sys.stderr)
         if state.binding.repo:

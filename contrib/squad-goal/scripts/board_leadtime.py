@@ -3,7 +3,7 @@ import math
 import statistics
 from datetime import UTC, datetime, timedelta
 
-MEASURE = "opened -> closed"
+MEASURE = "on board -> closed"
 ABANDONED = "Abandoned"
 # The chart's own reason for a card the hub names as closed without delivery (#921). It is a label, not the carrier's
 # vocabulary: board_columns reads the carrier's `state_reason` and hands this row its word, so the chart holds no copy
@@ -12,11 +12,12 @@ NOT_DELIVERED = "not_planned"
 
 
 NO_TRANSITION = "no_transition"
+NOT_READ = "not_read"
 
 
 def _exclusion(row):
-    if row.get("reason") == NO_TRANSITION:
-        return NO_TRANSITION
+    if row.get("reason") in (NO_TRANSITION, NOT_READ):
+        return row["reason"]
     if row.get("reason") == NOT_DELIVERED:
         return "not_planned"
     if row["column"] == ABANDONED:
@@ -28,52 +29,8 @@ def _exclusion(row):
     return None
 
 
-def entries(transitions, born):
-    """Every instant a card entered a column, keyed (issue, column) (#1012). The record holds only moves, so a card created
-    in a column has no move into it: when a card's earliest recorded move leaves column X, it entered X at `born[issue]`,
-    its board add time or else its creation (ISO). A birth after that first move is no instant. A recorded move into X is
-    kept as written, so an explicit move wins for any later entry."""
-    moves, first = {}, {}
-    for t in transitions:
-        at = datetime.fromisoformat(t["at"])
-        moves.setdefault((t.get("issue"), t.get("to")), []).append(at)
-        if t.get("issue") not in first or at < first[t.get("issue")][0]:
-            first[t.get("issue")] = (at, t.get("from"))
-    for issue, (at, column) in first.items():
-        stamp = born.get(issue)
-        if not column or not stamp:
-            continue
-        birth = datetime.fromisoformat(stamp)
-        if birth <= at:
-            moves.setdefault((issue, column), []).append(birth)
-    return moves
-
-
-def span(items, transitions, start=None, end=None):
-    """Each row measured from its first move into `start` to its last move into `end` (#905). None is the card's own
-    opened or closed instant. A row the chart would plot with no such move, or an end before its start, is marked
-    no_transition. A row already left out keeps its own reason."""
-    if start is None and end is None:
-        return items
-    moves = entries(transitions, {row["n"]: row.get("o") for row in items})
-    out = []
-    for row in items:
-        if _exclusion(row):
-            out.append(row)
-            continue
-        first = min(moves.get((row["n"], start), []), default=None) if start else datetime.fromisoformat(row["o"])
-        last = max(moves.get((row["n"], end), []), default=None) if end else datetime.fromisoformat(row["c"])
-        if first is None or last is None or last < first:
-            out.append({**row, "reason": NO_TRANSITION})
-        else:
-            out.append({**row, "o": first.isoformat(), "c": last.isoformat()})
-    return out
-
-
 def _hours(row):
-    opened = datetime.fromisoformat(row["o"])
-    closed = datetime.fromisoformat(row["c"])
-    return (closed - opened).total_seconds() / 3600
+    return row["hours"]
 
 
 def _duration(hours):
@@ -111,7 +68,9 @@ def lead_time(items, window=20):
     series = []
     for i, row in enumerate(delivered):
         span = hours[max(0, i - window + 1) : i + 1]
-        series.append({"n": row["n"], "closed": row["c"], "hours": hours[i], "rolling_hours": statistics.fmean(span)})
+        series.append({"n": row["n"], "closed": row["c"], "hours": hours[i], "rolling_hours": statistics.fmean(span),
+                       "flowing_hours": row["flowing"], "held_hours": row["held"],
+                       "approx": row["approx"], "unknown_first": row["unknown_first"]})
     summary = None
     if hours:
         summary = {
@@ -139,7 +98,8 @@ PLOT_W, PLOT_H = 728, 268     # the page's plot in pixels, for clusters: its 800
 DOT_PX = 9                    # dots closer than this many pixels merge into a numbered cluster
 REASON_TEXT = {"not_planned": "closed as not planned", "abandoned": "closed as abandoned", "open": "still open",
                "no_opened": "no opened date",
-               NO_TRANSITION: "no transition into the chosen columns"}
+               NO_TRANSITION: "no transition into the chosen columns",
+               NOT_READ: "not yet read by the history pass"}
 LOG_TICKS = [(1 / 24, "1 h"), (1, "1 d"), (7, "1 w")]
 CUBE_TICKS = [(1, "1 d"), (7, "1 w"), (30, "30 d"), (60, "60 d")]
 
@@ -219,8 +179,12 @@ def control_chart(items, timeframe=None, log=False, now=None, start=None, end=No
     for row, hrs, (mean, low, high) in zip(plotted, hours, rolling, strict=True):
         closed = datetime.fromisoformat(row["c"])
         x = _clamp((closed - start).total_seconds() / span) if span > 0 else 1.0
+        flowing, held = row.get("flowing", hrs), row.get("held", 0.0)
         dots.append({"n": row["n"], "title": row.get("t", ""), "closed": closed.date().isoformat(), "hours": hrs,
-                     "text": _duration(hrs), "x": x, "y": position(hrs),
+                     "text": _duration(hrs), "flowing": flowing, "held": held,
+                     "flowing_text": _duration(flowing), "held_text": _duration(held),
+                     "approx": row.get("approx", False), "unknown_first": row.get("unknown_first", False),
+                     "x": x, "y": position(hrs),
                      "rolling": {"hours": mean, "low": low, "high": high, "text": _duration(mean),
                                  "low_text": _duration(low), "high_text": _duration(high),
                                  "y": position(mean), "y_low": position(low), "y_high": position(high)}})

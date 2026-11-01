@@ -119,7 +119,7 @@ ab_board_write() {   # <run> <ledger column> <issue>...: the card write of those
     "the cards $ids of the run this pass requested ($run)" \
     "contrib/squad-goal/scripts/test-autobug.sh (a refused write opens one bug)" \
     -- $BOARD --add $SG_OWNER $SG_PROJECT "$bc" "$@" || return 1
-  for n in "$@"; do python3 "$here/issue_ledger.py" boardw "$SG_REPO#$n" "$run" "$col" >/dev/null || return 1; done
+  for n in "$@"; do python3 "$here/issue_ledger.py" boardw "$SG_REPO#$n" "$run" "$col" "${AB_ACTOR:-autobug dispatch}" >/dev/null || return 1; done
 }
 ab_launch() {   # <request> <run>: 0 when launch.py takes the request past its refusal window; a refusal names itself in the run's log
   (cd "$SG_CHECKOUT" && python3 -c 'import subprocess,sys
@@ -155,7 +155,7 @@ ab_drop() {   # <run> <ledger column> <issue>...: a pending event its gates no l
   echo "AUTOBUG $run: its pending $col write is dropped; the gates no longer back its issue(s), nothing launched" >&2
 }
 ab_resume() {   # the pending events of earlier passes: a Doing event launches its stored request once, and only while its issues still pass the gates
-  local groups run col req ids n board
+  local groups run col req ids n board AB_ACTOR="autobug resume"
   groups=$(python3 "$here/issue_ledger.py" pending "$SG_REPO" 2>/dev/null | awk -F'\t' 'NF>=5 { k=$2 "\t" $3 "\t" $5; ids[k]=ids[k] " " $1 } END { for (k in ids) print k "\t" substr(ids[k], 2) }')
   while IFS=$'\t' read -r run col req ids <&3; do
     [ -n "$run" ] || continue

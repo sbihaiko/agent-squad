@@ -148,12 +148,13 @@ def test_ci_workflow_triggers_one_job_that_covers_both_pythons_and_keeps_the_tok
 LANDING_GROUP_RULE = "The group names the commit, so no queue holds a pull request behind another and GitHub cancels none."
 
 
-def test_one_commit_starts_one_job_and_a_landing_waits_in_no_queue():
-    """Guard for the CI rule: no matrix (one commit, one job), a landing gets a concurrency group of its own, and a
-    landing on dev, stg or main is never cancelled (#149, #398).
+def test_one_commit_starts_the_check_job_and_a_landing_waits_in_no_queue():
+    """Guard for the CI rule: one commit starts one check job, it has no matrix, and a landing on dev, stg or main is
+    never cancelled (#149, #398; the full-proof shards of #1051 are withdrawn under #1062 and their own guard below keeps
+    the promise that they are read back from the file when they return).
 
-    A matrix made one commit start two jobs that queued behind each other for two runners, and a check no runner picks
-    up answers nothing.
+    A matrix on the check job made one commit start two jobs that queued behind each other for two runners, and a check
+    no runner picks up answers nothing.
 
     A group shared by one branch's pushes cannot keep that promise: GitHub queues the group's pending runs and cancels
     the runs past the queue's cap (`queue: single` holds one pending run, `queue: max` holds 100), so a burst of
@@ -165,9 +166,9 @@ def test_one_commit_starts_one_job_and_a_landing_waits_in_no_queue():
 
     text = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
     wf = yaml.safe_load(text)
-    assert len(wf["jobs"]) == 1, "one commit starts one job"
-    job = next(iter(wf["jobs"].values()))
-    assert "matrix" not in (job.get("strategy") or {}), "a matrix splits one commit into two jobs waiting for two runners"
+    assert set(wf["jobs"]) == {"check"}, "one commit starts the check job and no other (#1062: the shards are withdrawn)"
+    job = wf["jobs"]["check"]
+    assert "matrix" not in (job.get("strategy") or {}), "a matrix splits the check job into jobs waiting for runners"
     con = wf["concurrency"]
     group = con["group"]
     assert "github.sha" in group, (
@@ -184,6 +185,27 @@ def test_one_commit_starts_one_job_and_a_landing_waits_in_no_queue():
         line.lstrip("#").strip() for line in text.split("concurrency:", 1)[0].splitlines() if line.startswith("#")
     )
     assert LANDING_GROUP_RULE in stated, f"the workflow states the rule its group carries: {LANDING_GROUP_RULE}"
+
+
+def test_the_shard_job_stays_withdrawn_until_its_heavy_tests_can_pass_on_a_runner():
+    """Guard for #1062: the four full-proof shards landed and were never green on a runner, so they held every promotion.
+    Withdrawing them is a decision with a way back, not a deletion: ci.yml names the issue that brings them back, and
+    promote-pass.sh derives the shard names from that file, so a restored matrix is read with no second change.
+    """
+    text = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+    promote = (ROOT / "contrib" / "squad-goal" / "scripts" / "promote-pass.sh").read_text()
+    assert "full-proof:" not in text, "the shard job is withdrawn while #1062 is open"
+    assert "#1062" in text, "the workflow names the issue that brings the shards back"
+    assert "ci.yml" in promote and "for k in" not in promote, "promote-pass.sh derives the shard numbers from ci.yml, not a literal"
+    assert '[ -n "$shard_list" ] || { echo pending' not in promote, "an empty shard list is the check job alone, never a stuck promotion"
+
+
+def test_the_check_job_of_the_commit_is_part_of_the_ci_proof():
+    """Guard for ADR-0164 (#1051): the promotion reads the check job of the same commit as the four shards, so ruff and
+    mypy, which only the check job runs, are part of the full pass.
+    """
+    promote = (ROOT / "contrib" / "squad-goal" / "scripts" / "promote-pass.sh").read_text()
+    assert '"check"' in promote, "promote-pass.sh reads the check job before it writes the full pass"
 
 
 E2E = ROOT / "tests" / "test_gui_test_e2e.py"

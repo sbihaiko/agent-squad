@@ -24,10 +24,10 @@ case "$1" in
   --clear-run) echo "CLEAR $2 $3 $4" >> "TMPDIR/board.calls";;
   --add) echo "ADD $2 $3 $4 $5" >> "TMPDIR/board.calls";;
   --remove) echo "REMOVE $2 $3 $4" >> "TMPDIR/board.calls";;
-  *) echo "STATUS $1 $2 $3 $4" >> "TMPDIR/board.calls";;
+  *) echo "STATUS $1 $2 $3 $4" >> "TMPDIR/board.calls"; if [ -n "$SG_MOVE_REASON" ]; then echo "REASON $4 $SG_MOVE_REASON" >> "TMPDIR/board.calls"; fi;;
 esac
 J
-sed -i '' "s|TMPDIR|$T|" "$T/s/board.sh"; chmod +x "$T/s/board.sh"
+sed -i '' "s|TMPDIR|$T|g" "$T/s/board.sh"; chmod +x "$T/s/board.sh"
 cat > "$T/bin/gh" <<'J'
 #!/bin/bash
 a="$*"; echo "$a" >> "TMPDIR/gh.calls"
@@ -205,6 +205,9 @@ bc() { cat "$T/board.calls" 2>/dev/null; }
 ! /usr/bin/grep -q 'Done 2018' "$T/board.calls" 2>/dev/null && ok "a merge the base never carried is not Done" || ko "#2018 read Done over work main does not carry: $(bc)"
 /usr/bin/grep -q '^STATUS o 4 Todo 2005$' "$T/board.calls" 2>/dev/null && ok "completed unlanded run: card goes back to the queue, never Code Complete" || ko "#2005 not Todo: $(bc)"
 /usr/bin/grep -q '^STATUS o 4 Todo 2006$' "$T/board.calls" 2>/dev/null && ok "failed unlanded run: card moves to Todo" || ko "#2006 not Todo: $(bc)"
+# A card a run left behind moves back to Todo with the reason named, so board.py's one backward move (#1059) admits it.
+/usr/bin/grep -q '^REASON 2005 no-landing$' "$T/board.calls" 2>/dev/null && ok "the move back to Todo names the reason a run that landed nothing gives (#1059)" || ko "#2005 moved without the reason: $(bc)"
+[ "$(/usr/bin/grep -c '^REASON ' "$T/board.calls" 2>/dev/null)" = "$(/usr/bin/grep -c 'nothing landed' "$T/st/cycle.log" 2>/dev/null)" ] && ok "only a move back to Todo carries the reason" || ko "reasons: $(/usr/bin/grep '^REASON ' "$T/board.calls") vs landed-nothing moves in cycle.log"
 ! /usr/bin/grep -q 'Code Complete 2006' "$T/board.calls" 2>/dev/null && ok "an older run's column never overrides the newest run's (#619)" || ko "#2006 took an older run's Code Complete: $(bc)"
 /usr/bin/grep -q '^STATUS o 4 Blocked 2007$' "$T/board.calls" 2>/dev/null && ok "owner label: card moves to Blocked" || ko "#2007 not Blocked: $(bc)"
 /usr/bin/grep -q '^STATUS o 4 Blocked 2012$' "$T/board.calls" 2>/dev/null && ok "ratification label: card moves to Blocked" || ko "#2012 not Blocked: $(bc)"

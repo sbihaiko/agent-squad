@@ -112,7 +112,7 @@ except Exception:
   [ -n "$num" ] && echo "HUNT filed #$num" || echo "HUNT filed"
 }
 busy() { echo "$now" > "$A/hunt-activity"; exit 0; }
-lock_held() { local h; h=$(cat "$SG_STATE/locks/$1/pid" 2>/dev/null); [ -n "$h" ] && kill -0 "$h" 2>/dev/null; }
+lock_held() { local h; h=$(cat "$SG_STATE/locks/$1/pid" 2>/dev/null); [ -n "$h" ] && kill -0 "$h" 2>/dev/null && [ "$(/bin/ps -o stat= -p "$h" 2>/dev/null | cut -c1)" != Z ]; }
 # A work branch whose tip has not been reviewed yet (#357): the review pass will spend a slot on it, so a hunt waits. It is a
 # git read of the remote heads, never a GitHub call.
 review_waiting() {

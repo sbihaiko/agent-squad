@@ -36,12 +36,14 @@ ppid_of() { $ps_ -o ppid= -p "$1" 2>/dev/null | tr -d ' '; }
 runs_as() { $ps_ -ww -o command= -p "$1" 2>/dev/null | grep -qF -- "$2"; }
 # A pid that is alive and not a zombie: a watchdog that exited but is not yet reaped by its parent is gone (#805).
 alive() { kill -0 "$1" 2>/dev/null && [ "$($ps_ -o stat= -p "$1" 2>/dev/null | cut -c1)" != Z ]; }
+# A stale lock is reaped with one line naming the lock, its dead holder and the lock's age (#1057): a reap is never silent.
+reap() { echo "serial: reaping stale lock $n: holder pid $1 is dead, lock age $(( $(date +%s) - $(mtime "$L/pid") ))s" >&2; rm -rf "$L"; }
 # The incarnation of a pid: its start time, which GNU ps and BSD ps both print. The token is only ever read back against the pid
 # it was written for, so one stable form of it is enough: the fields are squeezed to one space apiece.
 inc_of() { $ps_ -o lstart= -p "$1" 2>/dev/null | awk '{$1=$1};1'; }
 until mkdir "$L" 2>/dev/null; do
   h=$(cat "$L/pid" 2>/dev/null); hi=$(cat "$L/inc" 2>/dev/null | awk '{$1=$1};1')
-  if [ -n "$h" ] && ! kill -0 "$h" 2>/dev/null; then rm -rf "$L"; continue; fi
+  if [ -n "$h" ] && ! alive "$h"; then reap "$h"; continue; fi
   # The pid lives, but the process wearing it may have started after the lock was written: the token settles that. A lock in the
   # old form, a pid with no token, is left to the reading above, where a live pid is trusted.
   # A token that cannot be read back (ps failed: another user's pid, another pid namespace) names nothing, so it is no proof of

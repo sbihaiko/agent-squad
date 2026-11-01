@@ -3,9 +3,10 @@
 usage: hub.py [port]   default 7700, loopback only. Read-only: it discovers servers via ps/lsof and reads record.jsonl."""
 import datetime as dt, glob, hashlib, html, importlib.util, itertools, json, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, pathlib, urllib.parse, urllib.request
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
-import agyquota, chainhealth, ghread, ghthrottle, modelreg, provkey, session_send, sessions   # the chains and the one registry resolve a model (ADR-0147); ghread is the one GitHub door (ADR-0277)
+import agyquota, board_lag, chainhealth, ghread, ghthrottle, modelreg, provkey, session_send, sessions   # the chains and the one registry resolve a model (ADR-0147); ghread is the one GitHub door (ADR-0277)
 from issue_state import board_state, KINDS, TEST_CASE_TITLE, _utc
 import http.client
+import zoneinfo
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import NamedTuple
 
@@ -95,6 +96,7 @@ def state_dir():
     if not st: sys.exit("hub: no state directory (export SG_STATE, or repair the seam, address.sh)")
     return st
 STATE = pathlib.Path(state_dir())
+os.environ.setdefault("SG_STATE", str(STATE))   # the issue ledger reads SG_STATE from the environment (#1022)
 # hub state lives in the target repo's runs area (already gitignored there), never versioned; SG_HUB_DIR overrides
 HUBDIR = pathlib.Path(os.environ.get("SG_HUB_DIR") or pathlib.Path(CHECKOUT) / "runs" / ".hub"); HUBDIR.mkdir(parents=True, exist_ok=True)
 def shared_dir():
@@ -2011,12 +2013,11 @@ def spec_progress(items, moves=None, window=None, now=None):
 DAYS_SPEED = 14   # the finished days the throughput row compares today with (two weeks)
 
 def throughput_fact(now=None):
-    """How fast the board is closing cards: the closed count per UTC day from the flow history, the newest day partial.
+    """How fast the board is closing cards: the closed count per local day from the history store, the newest day partial.
     `done` holds the finished days' figures, so today is compared with them and never with itself."""
-    path = _flow.history_path(BOARD, REPO)
-    try: cfd = _cfd.cfd(_flow.samples(path), ORDER)
-    except Exception: return None
-    pts = [p for p in cfd.get("points") or [] if p.get("throughput") is not None]
+    store = _hist.load_store(_hist.history_path(BOARD, REPO))
+    cfd = _cfd.cfd([_hist.intervals(rec.get("events") or []) for rec in store.values()], ORDER, zone=day_zone(), now=now)
+    pts = [p for p in cfd["points"] if p["throughput"] is not None]
     if not pts: return None
     today = pts[-1]["throughput"]; done = [p["throughput"] for p in pts[:-1]][-DAYS_SPEED:]
     if not done: return {"today": today, "median": None, "min": None, "max": None, "trend": "flat", "days": []}
@@ -2041,6 +2042,15 @@ def subs_gauges(now=None):
         out.append(row)
     return out
 
+_LATE = {"at": 0.0, "v": None}
+LATE_SECS = 30   # the late-writes row reads the ledger at most this often: /api/load is polled on every open tab
+
+def late_payload():
+    """The Monitor's late-writes row: each board write that landed after its event, by the actor that landed it (#1022)."""
+    now = time.time()
+    if _LATE["v"] is None or now - _LATE["at"] > LATE_SECS: _LATE.update(at=now, v=board_lag.payload(REPO))
+    return _LATE["v"]
+
 def load_payload():
     """What /api/load serves: the cached reading, never a fresh one, so three open tabs cost three JSON bodies and no
     sample. `cpu` is the newest reading, `warn` is the two-sample rule over the history, `runs` the shares the cards use,
@@ -2056,6 +2066,7 @@ def load_payload():
             "specs": spec_progress(board_cache.get("items") or []),   # the open specs' total, off the board cache: no GitHub read
             "subs": subs_gauges(),   # the Monitor's subscription instruments: each weekly window and its reset, off the quota cache
             "speed": throughput_fact(),   # the Monitor's throughput row: today against the finished days
+            "late": late_payload(),   # the Monitor's late-writes row: the rows and their lag by actor, off the ledger (#1022)
             "secs": LOAD_SAMPLE_SECS, "asof": LOAD_STATE.get("asof", 0.0)}
 
 def status_payload():
@@ -2781,7 +2792,7 @@ def refresh_board():
             except OSError: pass
         else: quick = False
 ORDER = [column["name"] for column in BOARD_COLUMNS]
-FLOW_BANDS = [*ORDER, _cfd.FROZEN, _cfd.NO_COLUMN]   # the chart's bands: the columns in their order, then the cards frozen and the cards in no column (#896)
+FLOW_BANDS = [*ORDER]   # the chart's bands: the columns in their order; each band's held cards travel with it (#1024)
 def _marker_mtime(kind, pr, sha9):
     """mtime of a loop marker in auto/ (`launched-<pr>-<sha9>`, `rereview-<pr>-<sha9>`), i.e. when the loop acted on this head."""
     try: return (STATE / "auto" / f"{kind}-{pr}-{sha9}").stat().st_mtime
@@ -3252,15 +3263,6 @@ def pr_badge(x):
     return None
 MOVES = STATE / "board-moves.json"   # the door's record of every move it proved (#649), keyed by the Project item id
 MOVES_LOCK = threading.Lock()        # one writer in this process: two HTTP threads never drop the same entry twice
-def card_transitions(repo=None):
-    """The column changes board.py proved for one repository, oldest first. The hub only reads this record (#897)."""
-    path = STATE / f"board-transitions.{(repo or REPO).replace('/', '_')}.jsonl"
-    if not path.exists(): return []
-    out = []
-    for line in path.read_text().splitlines():
-        try: out.append(json.loads(line))
-        except ValueError: continue
-    return out
 def read_moves():
     """The door's record of proved moves: {item id: {"column", "at"}}. A record that is missing, unreadable or not an
     object is no record: the board is drawn from the read alone, and nothing is written."""
@@ -3374,15 +3376,34 @@ CFD_RANGES = [("7", 7), ("30", 30), ("90", 90), ("all", None)]   # the cumulativ
 LEAD_TIMEFRAMES = [("1", 1), ("2", 2), ("3", 3), ("7", 7), ("14", 14), ("30", 30), ("all", None)]   # the control chart presets (#900); the three short ones count hours on the page (owner, 2026-11-01)
 
 
-def lead_rows():
-    """The closed-card rows the lead-time arithmetic reads, one per board item (#900). Each row names its spec, its Waves
-    key `spec/wave` (#980) and its kind: the values the board's bar filters by (#904)."""
-    return [{"n": i["n"], "column": _columns_module.view_column(i["st"], str(i["s"]).lower() == "closed", i.get("l"), i.get("cr"))[0],
-             "reason": _leadtime.NOT_DELIVERED if _columns_module.not_planned(i.get("cr")) else None,   # the chart's own word (#921)
-             "c": i.get("c") if str(i["s"]).lower() == "closed" else None, "o": i.get("o"), "t": i.get("t", ""),
-             "spec": _flow.spec_key(i), "wave": f'{_flow.spec_key(i)}/{_flow.wave_key(i.get("l"))}', "kind": _flow.kind_key(i),
-             "type": _flow.type_key(i)}
-            for i in board_cache["items"]]
+def bar_keys(i):
+    """The values the board's bar filters one item by: its spec, its Waves key `spec/wave` (#980), its kind and its type (#904, #985)."""
+    return {"spec": _flow.spec_key(i), "wave": f'{_flow.spec_key(i)}/{_flow.wave_key(i.get("l"))}', "kind": _flow.kind_key(i),
+            "type": _flow.type_key(i)}
+
+
+def lead_rows(a=None, b=None):
+    """The closed-card rows the lead-time arithmetic reads, one per board item (#900). A row's hours are the flowing and held
+    time of its column intervals in the history store, from its first entry into `a` to its last entry into `b` (#1024). A
+    closed card the store has not read is not_read, and one with no such span is no_transition; the row's bar keys filter it (#904)."""
+    store = _hist.load_store(_hist.history_path(BOARD, REPO))
+    rows = []
+    for i in board_cache["items"]:
+        closed = str(i["s"]).lower() == "closed"
+        read = store.get(i["n"])
+        span = _hist.lead_span(_hist.intervals(read["events"]), start=a, end=b, complete=read["complete"]) if closed and read else None
+        if _columns_module.not_planned(i.get("cr")): reason = _leadtime.NOT_DELIVERED
+        elif closed and read is None: reason = _leadtime.NOT_READ
+        elif closed and span is None: reason = _leadtime.NO_TRANSITION
+        else: reason = None
+        row = {"n": i["n"], "column": _columns_module.view_column(i["st"], closed, i.get("l"), i.get("cr"))[0], "reason": reason,
+               "c": i.get("c") if closed else None, "o": i.get("o"), "t": i.get("t", ""), **bar_keys(i),
+               "hours": 0.0, "flowing": 0.0, "held": 0.0, "approx": False, "unknown_first": False}
+        if span:
+            row.update(c=span["end"], o=span["start"], hours=span["flowing"] + span["held"], flowing=span["flowing"],
+                       held=span["held"], approx=span["approx"], unknown_first=span["unknown_first"])
+        rows.append(row)
+    return rows
 
 
 def board_filters(query):
@@ -3411,7 +3432,7 @@ def lead_zoom(query):
     if any(c is not None and c not in ORDER for c in (a, b)): return {"error": "bad column: a and b name a board column"}
     log = q.get("scale", ["jira"])[0] == "log"
     fw, fs, fk, ty = board_filters(query)
-    rows = _leadtime.span([r for r in lead_rows() if _in_bar(r, fw, fs, fk, ty)], card_transitions(), start=a, end=b)
+    rows = [r for r in lead_rows(a, b) if _in_bar(r, fw, fs, fk, ty)]
     measure = f"{a or 'opened'} -> {b or 'closed'}"
     if "from" not in q and "to" not in q and "tf" in q:
         days = dict(LEAD_TIMEFRAMES).get(q["tf"][0], 0)
@@ -3441,35 +3462,46 @@ def _file_key(path):
     except OSError: return (str(path), None)
 
 def history_key():
-    return _file_key(_flow.history_path(BOARD, REPO))
+    return _file_key(_hist.history_path(BOARD, REPO))
+
+def _coverage_payload(store):
+    """How much of the board the history store has read: the board's cards it holds, their complete timelines, and the last refresh."""
+    numbers = {i["n"] for i in board_cache["items"]}
+    c = _hist.coverage({n: r for n, r in store.items() if n in numbers})
+    return {"read": c["read"], "complete": c["complete"], "total": len(board_cache["items"]),
+            "last": _hist._iso(c["last"]) if c["last"] is not None else None}
+
 
 def _cfd_payload(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
-    """The cumulative flow's numbers, computed here from board_cfd; the page draws them and computes none.
-    `fw`, `fs` and `fk` are the bar's Waves, Specs and Kinds values: the chart keeps only the cards the bar keeps (#904)."""
-    path = _flow.history_path(BOARD, REPO)
-    cfd = _cfd.cfd(_flow.samples(path), ORDER, skips=_flow.skips(path), spec=fs, wave=fw, kind=fk, ty=[ty] if ty else [])
+    """The cumulative flow's numbers, counted per day by board_cfd from the history store's column intervals; the page draws
+    them and computes none. `fw`, `fs`, `fk` and `ty` are the bar's values: the chart keeps only the cards the bar keeps (#904, #1024)."""
+    store = _hist.load_store(_hist.history_path(BOARD, REPO))
+    cards = [_hist.intervals(rec.get("events") or []) for rec in store.values()
+             if rec.get("keys") is None or _in_bar(rec["keys"], fw, fs, fk, ty)]
+    zone = day_zone()
+    cfd = _cfd.cfd(cards, ORDER, zone=zone, now=dt.datetime.now(dt.UTC))
     extents = {p["day"]: _band_extents(p["bands"]) for p in cfd["points"]}
-    days = sorted([*extents, *cfd["gaps"]])   # one entry per calendar day: a day with no sample carries no value (#894)
-    yticks = _y_ticks(max((e[FLOW_BANDS[0]][1] for e in extents.values()), default=0))
-    def values(name, k): return [extents[d][name][k] if d in extents else None for d in days]
+    days = [p["day"] for p in cfd["points"]]
     points = {p["day"]: p for p in cfd["points"]}
-    legacy = {p["day"] for p in cfd["points"] if p.get("legacy")}   # a day whose sample predates the kind, spec and wave (#904)
+    coverage = _coverage_payload(store)
+    def values(name, k): return [extents[d][name][k] for d in days]
     def view(width):
         """The chart over the last `width` calendar days (all of them when None): the same arrays, cut to the window (#901)."""
         window = days if width is None else days[-width:]
-        kept = [d for d in window if d in extents]
-        top = max((extents[d][FLOW_BANDS[0]][1] for d in kept), default=0)
+        top = max((extents[d][FLOW_BANDS[0]][1] for d in window), default=0)
         ticks = _y_ticks(top)
         def cut(arr): return [arr[days.index(d)] for d in window]
+        def band(name):
+            lower, held = cut(values(name, 0)), [points[d]["held"][name] for d in window]
+            return {"name": name, "lower": lower, "upper": cut(values(name, 1)),
+                    "count": [extents[d][name][1] - extents[d][name][0] for d in window], "held": held,
+                    "held_upper": [lo + h for lo, h in zip(lower, held, strict=True)]}
         return {"start": dt.datetime.fromtimestamp(cfd["start"], dt.UTC).date().isoformat() if cfd["start"] is not None else None,
-                "days": window, "ymax": ticks[-1], "yticks": ticks, "xticks": _x_ticks(window),
-                "legacy": sum(1 for d in window if d in legacy),
-                "wip": [points[d]["wip"] if d in points else None for d in window],
-                "throughput": [points[d]["throughput"] if d in points else None for d in window],
-                "bands": [{"name": n, "lower": cut(values(n, 0)), "upper": cut(values(n, 1)),
-                           "count": [extents[d][n][1] - extents[d][n][0] if d in extents else None for d in window]}
-                          for n in FLOW_BANDS] if kept else []}
-    return {"cfd": {**view(None), "ranges": {key: view(width) for key, width in CFD_RANGES}}}
+                "days": window, "ymax": ticks[-1], "yticks": ticks, "xticks": _x_ticks(window), "coverage": coverage, "zone": zone,
+                "wip": [points[d]["wip"] for d in window],
+                "throughput": [points[d]["throughput"] for d in window],
+                "bands": [band(n) for n in FLOW_BANDS]}
+    return {"cfd": {**view(None), "zone": zone, "ranges": {key: view(width) for key, width in CFD_RANGES}}}
 
 
 def _lead_payload(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
@@ -3480,10 +3512,11 @@ def _lead_payload(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
     now = dt.datetime.now(dt.UTC)
     control = {scale: {key: _leadtime.control_chart(rows, timeframe=days, log=scale == "log", now=now)
                        for key, days in LEAD_TIMEFRAMES} for scale in ("jira", "log")}   # the Jira-style control chart (#900)
+    coverage = _coverage_payload(_hist.load_store(_hist.history_path(BOARD, REPO)))
     return {"lead": {"measure": lead["measure"], "type": ty, "window": lead["window"],
                      "excluded": [{"reason": r, "count": c} for r, c in lead["excluded"].items()],
                      "excluded_total": sum(lead["excluded"].values()), "series": lead["series"], "summary": lead["summary"],
-                     "control": control, "columns": ORDER}}
+                     "control": control, "columns": ORDER, "coverage": coverage}}
 
 
 def flow_cfd(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
@@ -3491,7 +3524,7 @@ def flow_cfd(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
     return chart("cfd", (history_key(), tuple(fw), tuple(fs), tuple(fk), ty), lambda: _cfd_payload(fw, fs, fk, ty))
 
 def flow_lead(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
-    return chart("lead", (board_cache.get("t"), tuple(fw), tuple(fs), tuple(fk), ty), lambda: _lead_payload(fw, fs, fk, ty))
+    return chart("lead", (board_cache.get("t"), history_key(), tuple(fw), tuple(fs), tuple(fk), ty), lambda: _lead_payload(fw, fs, fk, ty))
 
 def flow_burnup(spec):
     """One spec's burn-up for its swimlane (#1025); the cache holds it until the repository's history store changes."""
@@ -3499,6 +3532,103 @@ def flow_burnup(spec):
     try: stamp = path.stat().st_mtime_ns
     except OSError: stamp = None
     return chart(f"burnup-{spec}", (str(path), stamp), lambda: _hist.burnup(_hist.load_store(path), spec))
+
+
+HISTORY_EVERY = 60   # seconds between history passes; a pass reads only the timelines that are due (#1024)
+HISTORY_TIMELINE = ("query($owner:String!,$name:String!,$number:Int!,$after:String){rateLimit{cost}"
+                    "repository(owner:$owner,name:$name){issue(number:$number){number updatedAt "
+                    "projectItems(first:20){nodes{project{number} fieldValueByName(name:\"Status\"){... on ProjectV2ItemFieldSingleSelectValue{updatedAt}}}} "
+                    "timelineItems(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{__typename "
+                    "... on ProjectV2ItemStatusChangedEvent{createdAt status} "
+                    "... on LabeledEvent{createdAt label{name}} ... on UnlabeledEvent{createdAt label{name}} "
+                    "... on ClosedEvent{createdAt} ... on ReopenedEvent{createdAt} "
+                    "... on AddedToProjectV2Event{createdAt} ... on RemovedFromProjectV2Event{createdAt} "
+                    "... on ParentIssueAddedEvent{createdAt parent{... on Issue{number}}} ... on ParentIssueRemovedEvent{createdAt}}}}}}")
+HISTORY_SEARCH = ("query($q:String!,$after:String){search(query:$q,type:ISSUE,first:100,after:$after){issueCount "
+                  "pageInfo{hasNextPage endCursor} nodes{... on Issue{number}}}}")
+
+
+def day_zone():
+    """The zone a chart day ends in: the TZ the hub runs under, else the machine's zone, else UTC (#1024)."""
+    name = os.environ.get("TZ") or os.path.realpath("/etc/localtime").partition("zoneinfo/")[2] or "UTC"
+    try: return zoneinfo.ZoneInfo(name).key
+    except (zoneinfo.ZoneInfoNotFoundError, ValueError): return "UTC"
+
+
+def _history_timeline(n, cursor):
+    owner, _, name = REPO.partition("/")
+    return gh_graphql(HISTORY_TIMELINE, owner=owner, name=name, number=int(n), **({"after": cursor} if cursor else {}))
+
+
+def _history_search():
+    """Every issue number the repository holds, page by page. None when a page answered nothing, or when the pages fall short
+    of the repository's count: GitHub caps a search at 1000 results, and a capped search reads no absence (#1024)."""
+    found, after = [], None
+    while True:
+        search = (((gh_graphql(HISTORY_SEARCH, q=f"repo:{REPO} is:issue", **({"after": after} if after else {})) or {})
+                   .get("data") or {}).get("search"))
+        if search is None: return None
+        found += [node["number"] for node in search["nodes"] if node.get("number")]
+        if not search["pageInfo"]["hasNextPage"]:
+            return found if len(found) == search["issueCount"] else None
+        after = search["pageInfo"]["endCursor"]
+
+
+def _history_due(store, items):
+    """The cards a pass reads: no timeline yet, a partial one, or one whose Status moved past its record (#1024)."""
+    return _hist.due_reads([{"n": i["n"], "status_updated": i.get("su") or ""} for i in items], store)
+
+
+def _read_timeline(n, prior, keys, read_issue, path, recs, now):
+    """Read one card's timeline into the store. A partial timeline resumes from its cursor; a complete one is read from the
+    start and replaces its record only once read whole, so a cut-short read never truncates it. False when the budget ran
+    out or a read failed, which ends the pass."""
+    work = {n: prior} if prior and not prior.get("complete") else {}
+    ok = True
+    while not (n in work and work[n]["complete"]):
+        if not _hist.allow(recs, now, 1)[0]:
+            ok = False
+            break
+        payload = read_issue(n, work[n]["cursor"] if n in work else None)
+        if payload is None:
+            ok = False
+            break
+        data = payload.get("data") or {}
+        recs.append(_hist.record_points(path, (data.get("rateLimit") or {}).get("cost", 1), now))
+        issue = (data.get("repository") or {}).get("issue")
+        if issue is None: return True
+        facts = _hist.item_facts(issue, int(PROJECT_NO))
+        _hist.record_page(work, n, issue["timelineItems"], facts["issue_updated"], facts["status_updated"])
+    rec = work.get(n)
+    if rec and (prior is None or not prior.get("complete") or rec["complete"]):
+        recs.append(_hist.record_issue(path, n, rec["issue_updated"], rec["status_updated"], rec["events"], rec["complete"], now,
+                                       rec["cursor"], keys))
+    return ok
+
+
+def history_pass(read_issue=None, read_search=None, now=None):
+    """Read the timelines due and the hourly search into the history store. A read the budget refuses ends the pass; the next
+    pass resumes a partial timeline from its cursor (#1024)."""
+    read_issue, read_search = read_issue or _history_timeline, read_search or _history_search
+    path = _hist.history_path(BOARD, REPO)
+    now = time.time() if now is None else now
+    store, recs, items = _hist.load_store(path), _hist.read_records(path), board_cache.get("items") or []
+    keys = {i["n"]: bar_keys(i) for i in items}
+    try:
+        for n in _history_due(store, items):
+            if not _read_timeline(n, store.get(n), keys[n], read_issue, path, recs, now): return
+        if _hist.search_due(recs, now):
+            _hist.record_search(path, read_search(), now)
+    finally:
+        _hist.compact(path, now)
+
+
+def refresh_history():
+    """history_pass() every HISTORY_EVERY seconds; one failed pass never ends the loop (#1024)."""
+    while True:
+        try: history_pass()
+        except Exception as e: print(f"history pass failed: {e}", file=sys.stderr)
+        time.sleep(HISTORY_EVERY)
 
 
 def _burndown_payload(spec=None, today=None):
@@ -4253,7 +4383,7 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 <div id=win>
 <aside id=side>
 <details id=stats class=sp><summary>Cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><div class="igs isub" id=isub title="subscriptions: the used share of the weekly window and the days to its reset"></div><h4>Spend <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Figures at API list prices (API-equivalent)."></span></h4><div class=tot id=tot></div><div class=m id=totnote></div><div class=irw id=burn><span>Tokens · 24 h</span><b></b></div><div class=cash id=cash></div><h4>Spend over time <span class=row id=per></span></h4><div id=chart></div><div id=kpi></div><div id=open></div><h4>Model tokens · this month</h4><div class=m id=piet>in + out</div><div id=pie></div></div></details>
-<details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div class=ian id=ian></div><div id=ispec></div><div id=iloop></div><div id=ispeed></div></div></details>
+<details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div class=ian id=ian></div><div id=ispec></div><div id=iloop></div><div id=ispeed></div><div id=ilate></div></div></details>
 <details id=lrd class=sp open><summary>Live runs<span class=sr id=lrs></span></summary><div class=sb id=lrun></div></details>
 </aside>
 <main id=content>
@@ -4373,12 +4503,13 @@ function specBar(p){p=p||{};const st=p.state==="ok"||p.state==="info"?" "+p.stat
  return `<div class="at${st}"${p.tip?` title="${iq(p.tip)}"`:""}><span class=ah><span class=dot aria-hidden="true"></span>Specs${p.so?`<span class=so>${esc(p.so)}</span>`:""}</span><span class=av>${esc(p.value||"no open spec")}</span>${bar}</div>`}
 let instLast={};
 function instSet(id,h){const e=$("#"+id);if(e&&instLast[id]!==h){instLast[id]=h;e.innerHTML=h}}
+function lateRows(l){const rs=(l||{}).rows||[];if(!rs.length)return `<div class="spd none"><b>Late writes</b><span class=spn>none</span></div>`;return `<div class=spd><b>Late writes</b><span class=spn>corrections: ${esc((l||{}).store||"?")}</span>${rs.map(r=>`<div class=spn><b>${esc(r.actor)}</b> ${esc(r.text)}</div>`).join("")}</div>`}
 function instDraw(d){const c=$("#inst");if(!c)return;const facts=(d||{}).facts||[];c.classList.toggle("warn",!!(d||{}).warn);
  const gs=$("#igs");if(gs&&!gs.children.length)gs.innerHTML=instGauges(d);
  else if(gs)ldCells(d).forEach((x,i)=>{const n=gs.children[i],g=gaugeGeom((d||{})[x.k.toLowerCase()]);if(!n)return;n.classList.toggle("ldred",x.red);
   const ln=n.querySelector(".gn"),f=n.querySelector(".gf"),v=n.querySelector(".gv");
   if(ln){ln.style.transform=`rotate(${g.deg}deg)`;ln.setAttribute("visibility",g.known?"visible":"hidden")}if(f){f.setAttribute("d",`M4 32 A26 26 0 0 1 ${g.x} ${g.y}`);f.setAttribute("stroke",g.col)}if(v)v.innerHTML=`<b>${x.k}</b> ${esc(x.t)}`});
- instSet("ian",instTiles(facts).map(tileHtml).join(""));instSet("isub",subsGauges(d||{}));instSet("ispec",specBar((d||{}).specs));instSet("ispeed",speedRow((d||{}).speed));
+ instSet("ian",instTiles(facts).map(tileHtml).join(""));instSet("isub",subsGauges(d||{}));instSet("ispec",specBar((d||{}).specs));instSet("ispeed",speedRow((d||{}).speed));instSet("ilate",lateRows((d||{}).late));
  const u=instUsage(facts);instSet("burn",u?`<span>Tokens · 24 h</span><b class=bad>${esc(u.tok)}</b>`:"<span>Tokens · 24 h</span><b>no reading</b>");
  const s=$("#instsr");if(s)s.textContent=instSum(facts);
 }
@@ -4872,7 +5003,8 @@ const cfdAxis=c=>{const n=c.days.length,base=flowH-flowP;   // every number and 
   const xs=c.xticks.map(t=>{const x=flowX(t.i,n);return `<line x1=${x} y1=${base} x2=${x} y2=${base+4} stroke=var(--mute)></line><text x=${x} y=${base+17} text-anchor=middle fill=var(--mute) style="font-size:var(--fs-min)">${esc(t.day)}</text>`}).join("");
   return `<line x1=${flowP} y1=${flowP-10} x2=${flowP} y2=${base} stroke=var(--line)></line><line x1=${flowP} y1=${base} x2=${flowW-flowP} y2=${base} stroke=var(--line)></line>${ys}${xs}`+
     `<text x=4 y=${flowP-16} text-anchor=start fill=var(--mute) style="font-size:var(--fs-min)">cards</text>`+
-    `<text x=${flowW-flowP} y=${base+31} text-anchor=end fill=var(--mute) style="font-size:var(--fs-min)">day (UTC)</text>`;};
+    `<text x=${flowW-flowP} y=${base+31} text-anchor=end fill=var(--mute) style="font-size:var(--fs-min)">day (${esc(c.zone)})</text>`;};
+const coverNote=v=>!v?"":`<p class=fnote>cards read ${v.read} of ${v.total}, ${v.complete} complete, last refresh ${v.last?esc(v.last):"never"}</p>`;
 let CF={r:"30"};   // the cumulative flow's range, 30 days at first (#901)
 const CFD_R=[["7","7 days"],["30","30 days"],["90","90 days"],["all","All"]];   // the cumulative flow's range views (#901)
 const flowViews=k=>`<label class=fhead>View <select id=flowv><option value=cfd${k==="cfd"?" selected":""}>Cumulative flow</option><option value=burndown${k==="burndown"?" selected":""}>Burndown</option></select></label>`;   // one Throughput tab, two charts (#1048)
@@ -4885,12 +5017,14 @@ const flowCFD=c=>{const sel=`<label class=fhead>Range <select id=cfdr>${CFD_R.ma
     const low=[...run].reverse().flatMap(i=>one?[[flowX(i,n)+h,b.lower[i]],[flowX(i,n)-h,b.lower[i]]]:[[flowX(i,n),b.lower[i]]]);
     return [...up,...low].map(([x,v])=>`${x},${flowY(v,c.ymax)}`).join(" ");};
   const polys=b=>runs(b).map(run=>`<polygon points="${band(b,run)}" fill="${COLORS[b.name]||"#888"}" fill-opacity=".85"><title>${esc(b.name)}</title></polygon>`).join("");
+  const heldBand=b=>({name:b.name,lower:b.lower,upper:b.held_upper});
+  const heldPolys=b=>b.held&&b.held.some(v=>v>0)?runs(heldBand(b)).map(run=>`<polygon points="${band(heldBand(b),run)}" fill="#000" fill-opacity=".45"><title>${esc(b.name)} held</title></polygon>`).join(""):"";
   const hover=c.days.map((d,i)=>{const gap=c.bands.length&&c.bands[0].upper[i]===null;   // a day's counts, WIP and throughput, on hover (#901)
     const parts=c.bands.map(b=>`${esc(b.name)} ${(b.count||[])[i]}`).join(", "),tp=c.throughput?c.throughput[i]:null;
     const text=gap?`${esc(d)}: no whole read this day`:`${esc(d)}: ${parts} · WIP ${(c.wip||[])[i]} · throughput ${tp===null?"none":tp}`;
     return `<rect x=${flowX(i,n)-cw/2} y=${flowP-10} width=${cw} height=${flowH-2*flowP+10} fill=transparent><title>${text}</title></rect>`;}).join("");
-  return sel+`<svg viewBox="0 0 ${flowW} ${flowH}">${c.bands.map(polys).join("")}${cfdAxis(c)}${hover}</svg>`+
-    `<p class=fnote>history from ${esc(c.start)} UTC</p>${c.legacy?`<p class=fnote>${c.legacy} ${c.legacy===1?"day comes":"days come"} from before the kind, spec, wave and type history: they answer none of these</p>`:""}<p>${c.bands.map(b=>`<span class=flg><i style="background:${COLORS[b.name]||"#888"}"></i>${esc(b.name)}</span>`).join("")}</p>`;};
+  return sel+`<svg viewBox="0 0 ${flowW} ${flowH}">${c.bands.map(polys).join("")}${c.bands.map(heldPolys).join("")}${cfdAxis(c)}${hover}</svg>`+
+    `<p class=fnote>history from ${esc(c.start)} ${esc(c.zone)}</p>${coverNote(c.coverage)}${c.legacy?`<p class=fnote>${c.legacy} ${c.legacy===1?"day comes":"days come"} from before the kind, spec, wave and type history: they answer none of these</p>`:""}<p>${c.bands.map(b=>`<span class=flg><i style="background:${COLORS[b.name]||"#888"}"></i>${esc(b.name)}</span>`).join("")}</p><p class=fnote>A darker stripe at a band's base is that band's held cards.</p>`;};
 const EXREASON={not_planned:"closed as not planned",abandoned:"closed as abandoned",open:"still open",no_opened:"no opened date"};   // the cards the chart leaves out, in words (#921)
 const LTS=ls.lt||{},LT_TYPES=[["spec","Specs"],["task","Tasks"],["bug","Bugs"]];   // the chart's own settings, restored from the page's storage (#985)
 let LT={tf:["1","2","3","7","14","30","all"].includes(LTS.tf)?LTS.tf:"30",log:LTS.log===true,ty:LT_TYPES.some(([k])=>k===LTS.ty)?LTS.ty:"task",pick:null,zc:null,zr:null,rng:null,tok:0,noclick:false,a:"",b:"",cols:[]};   // the control chart's timeframe, its scale, its type, the cluster listed under it, and a drag zoom: the hub's chart over zr=[from,to] (#900, #985)
@@ -4919,7 +5053,7 @@ const ltChart=c=>{const n=c.dots.length,base=flowH-flowP,ink="#b8c0cf",mute="var
     `<text x=${ltP-7} y=${ltP-16} text-anchor=end fill=${ink} style="font-size:var(--fs-min)">elapsed time${c.axis==="log"?" (log)":c.axis==="cube"?" (cube root)":""}</text>`;
   const lines=ltLine(c.average,"var(--s6)","","Average")+ltLine(c.median,"var(--ok)","2 3","Median")+ltLine(c.p85,"var(--s5)","5 3","p85");
   const dots=c.clusters.map((k,i)=>{const m=k.dots.length,title=m>1?`${m} issues`:`#${k.dots[0].n} ${esc(k.dots[0].title)}`;
-    return `<circle data-k=${i} cx=${ltX(k.x)} cy=${ltY(k.y)} r=${m>1?6:4.5} fill="${m>1?"var(--bg)":"var(--s3)"}" stroke="var(--s3)" stroke-width=2 style="cursor:pointer"><title>${esc(title)} · ${esc(k.dots[0].text)} · closed ${esc(k.dots[0].closed)}</title></circle>`+(m>1?`<text x=${ltX(k.x)} y=${ltY(k.y)+4} fill="var(--s3)" style="font-size:var(--fs-min)" text-anchor=middle pointer-events=none>${m}</text>`:"")}).join("");
+    return `<circle data-k=${i} cx=${ltX(k.x)} cy=${ltY(k.y)} r=${m>1?6:4.5} fill="${m>1?"var(--bg)":"var(--s3)"}" stroke="var(--s3)" stroke-width=2${k.dots.some(d=>d.approx||d.unknown_first)?' stroke-dasharray="3 2"':""} style="cursor:pointer"><title>${esc(title)} · ${esc(k.dots[0].text)} · flowing ${esc(k.dots[0].flowing_text)} · held ${esc(k.dots[0].held_text)} · closed ${esc(k.dots[0].closed)}${k.dots.some(d=>d.approx)?" · start approximate":""}${k.dots.some(d=>d.unknown_first)?" · first interval unknown":""}</title></circle>`+(m>1?`<text x=${ltX(k.x)} y=${ltY(k.y)+4} fill="var(--s3)" style="font-size:var(--fs-min)" text-anchor=middle pointer-events=none>${m}</text>`:"")}).join("");
   const ltV=v=>v?esc(v.text):"?",S="";   // the numbers live in the legend, each beside what it answers: one line, never two copies of the same fact
   const legend=`<p class="flg ltlg"><span><i style="background:var(--s3)"></i>Rolling average (${c.window.size} issues, centered)</span><span><i style="background:var(--s3);opacity:.3"></i>Standard deviation <em>the usual spread</em></span><span><i style="background:var(--s6)"></i>Average <b>${ltV(c.average)}</b> <em>one slow card lifts it</em></span><span><i style="background:var(--ok)"></i>Median <b>${ltV(c.median)}</b> <em>half the cards closed faster</em></span><span><i style="background:var(--s5)"></i>p85 <b>${ltV(c.p85)}</b> <em>85% of closed cards finished within this time</em></span></p>`;
   const pk=LT.pick!=null&&c.clusters[LT.pick]?c.clusters[LT.pick]:null;
@@ -4928,7 +5062,7 @@ const ltChart=c=>{const n=c.dots.length,base=flowH-flowP,ink="#b8c0cf",mute="var
 const flowLead=l=>{const S=l.summary,ex=l.excluded.map(e=>`${e.count} ${esc(EXREASON[e.reason]||e.reason)}`).join(", ");
   const head=`<p class=fhead>${esc(LT_TYPES.find(([k])=>k===l.type)[1].toLowerCase())} · <b>${esc(l.measure)}</b> · window ${l.window.size} ${esc(l.window.unit)} · excluded ${l.excluded_total}${ex?" ("+ex+")":""}</p>`;
   LT.cols=l.columns||[];if(!S)return head+"<p class=fnote>no closed card yet</p>";
-  return head+ltChart(LT.zc||l.control[LT.log?"log":"jira"][LT.tf]);};
+  return head+coverNote(l.coverage)+ltChart(LT.zc||l.control[LT.log?"log":"jira"][LT.tf]);};
 let BURN={s:null};   // the spec the burndown draws; null lets the hub name the first open spec (#1048)
 const flowBurn=a=>{const b=a.burn,opts=a.specs.map(s=>`<option value=${s.n}${s.n===a.spec?" selected":""}>#${s.n} ${esc(s.t)}</option>`).join("");
   const sel=`<label class=fhead>Spec <select id=burns>${opts}</select></label> ${flowViews("burndown")}`;
@@ -5985,6 +6119,8 @@ def conversation_payload(query):
     return sessions.conversation(os.environ.get("SG_PROFILE", ""), (q.get("sid") or [""])[0], int(before) if before.isdigit() else None,
                                  profiles_of=profiles_of_cwd)
 
+SCREENSHOT_MAX = 5 * 1024 * 1024   # the owner's grant (ADR-0024): a PNG of at most 5 MB
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 SEND_SETTING = "SQUAD_TAILNET_TERMINALS_SEND"
 def send_rule(a):
     """(may this request send to a session, why not): loopback always sends; the tailnet sends only with its grant (ADR-0152 rule 9)."""
@@ -6001,10 +6137,11 @@ def project_payload(a):
 # routes are: the hub and mobile pages a quoted path the mux gives the profile prefix, a run dashboard its own path up to
 # /dash/, which the mux never rewrites.
 OVERLAY_JS = (pathlib.Path(__file__).resolve().parent / "hub-overlay.js").read_text()
+CAPTURE_JS = (pathlib.Path(__file__).resolve().parent / "vendor-html2canvas-1.4.1.min.js").read_text()   # the overlay's screenshot library (#903)
 OVERLAY_HUB = 'async()=>[{label:"",api:"/api/sessions"}]'
 OVERLAY_DASH = 'async()=>[{label:"",api:location.pathname.split("/dash/")[0]+"/api"+"/sessions"}]'
 def overlay_tag(sources):
-    return f"<script>window.SQUAD_OV_SOURCES={sources};\n{OVERLAY_JS}</script>"
+    return f"<script>window.SQUAD_OV_SOURCES={sources};\n{CAPTURE_JS}\n{OVERLAY_JS}</script>"
 
 def with_overlay(body, dash=False):
     """A page with the overlay before its closing body tag, or at its end when it has none."""
@@ -6287,6 +6424,33 @@ class H(BaseHTTPRequestHandler):
             out, code = session_send.send(os.environ.get("SG_PROFILE", ""), body["sid"], body["text"], body["client_id"], profiles_of=profiles_of_cwd, root=STATE), 200
         data = json.dumps(out).encode(); self.send_response(code); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
 
+    def send_screenshot(self, a):
+        """The overlay's screenshot (#903): a PNG of the page beneath it, written under the hub state folder, then the session
+        is told its path. The send's rule admits it, and the wire carries no image: the message is the path."""
+        length = self.headers.get("Content-Length") or "0"
+        n = int(length) if length.isdigit() else 0
+        raw = self.rfile.read(min(n, SCREENSHOT_MAX + 1))
+        if not a.allowed: return self.refuse(a.reason)
+        tn = tailnet_block()
+        origin_ok = (self.headers.get("Origin") or "") == f"https://{tn.get('host')}" if a.tailnet else own_origin(self)
+        if not (send_rule(a)[0] and origin_ok): return self.refuse("forbidden")
+        if n > SCREENSHOT_MAX:
+            left = n - len(raw)
+            while left > 0 and (chunk := self.rfile.read(min(left, 1 << 16))): left -= len(chunk)
+            return self.answer(413, {"err": "the screenshot is over 5 MB"})
+        if (self.headers.get("Content-Type") or "").split(";")[0].strip() != "image/png" or not raw.startswith(PNG_MAGIC):
+            return self.answer(415, {"err": "the screenshot is not a PNG"})
+        q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+        sid, cid = (q.get("sid") or [""])[0], (q.get("client_id") or [""])[0]
+        if not sessions.SID.fullmatch(sid) or not session_send.CLIENT_ID.fullmatch(cid): return self.answer(400, {"err": "bad request"})
+        folder = STATE / "screenshots"; folder.mkdir(parents=True, exist_ok=True)
+        path = folder / f"{cid}.png"; part = folder / f"{cid}.png.part"
+        part.write_bytes(raw); os.replace(part, path)
+        self.answer(200, session_send.send(os.environ.get("SG_PROFILE", ""), sid, f"Screenshot: {path}", cid, profiles_of=profiles_of_cwd, root=STATE))
+
+    def answer(self, code, out):
+        data = json.dumps(out).encode(); self.send_response(code); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
+
     def do_POST(self):
         # a cross-site page must not be able to write: a loopback write needs our own origin, a tailnet write the tailnet origin (the seam), and a JSON body
         a = access(self, "POST")
@@ -6297,6 +6461,7 @@ class H(BaseHTTPRequestHandler):
             if not (a.tailnet or own_origin(self)) or "json" not in (self.headers.get("Content-Type") or ""): return self.refuse("forbidden")
             return self.dash("POST", raw)
         if self.path.split("?", 1)[0] == "/api/sessions/send": return self.send_to_session(a)
+        if self.path.split("?", 1)[0] == "/api/sessions/screenshot": return self.send_screenshot(a)
         if self.path.split("?", 1)[0] == "/api/loop": return self.loop_post(a)
         ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote", "/api/limits", "/api/slack") and (a.tailnet or own_origin(self)) and "json" in (self.headers.get("Content-Type") or "")
         try:
@@ -6325,5 +6490,5 @@ def watch_self():
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 7700
     refresh_runs()
-    threading.Thread(target=refresh_prs, daemon=True).start(); threading.Thread(target=refresh_quota, daemon=True).start(); threading.Thread(target=watch_self, daemon=True).start(); threading.Thread(target=refresh_board, daemon=True).start(); threading.Thread(target=refresh_fast, daemon=True).start();threading.Thread(target=load_sampler, daemon=True).start(); threading.Thread(target=watch_runs, daemon=True).start()
+    threading.Thread(target=refresh_prs, daemon=True).start(); threading.Thread(target=refresh_quota, daemon=True).start(); threading.Thread(target=watch_self, daemon=True).start(); threading.Thread(target=refresh_board, daemon=True).start(); threading.Thread(target=refresh_history, daemon=True).start(); threading.Thread(target=refresh_fast, daemon=True).start();threading.Thread(target=load_sampler, daemon=True).start(); threading.Thread(target=watch_runs, daemon=True).start()
     ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()

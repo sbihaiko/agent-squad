@@ -21,7 +21,7 @@ usage: issue_ledger.py read  <key> [state|count|last_fail|held|wave]  the record
        issue_ledger.py review <key> <run> <verdict> <findings> [round]  one review of the issue's work: prints recorded|reset|duplicate|frozen|floor
        issue_ledger.py coder <key>                           the places down the coder chain the next attempt starts
        issue_ledger.py board <key> <run> <column> <req> [instant]  one board write of a dispatch: prints recorded|duplicate|stale|floor
-       issue_ledger.py boardw <key> <run> <column>           that write landed: prints written|duplicate|superseded
+       issue_ledger.py boardw <key> <run> <column> [actor]   that write landed, at this instant, by this actor: prints written|duplicate|superseded
        issue_ledger.py boardx <key> <run> <column>           the pending write is dropped unwritten: prints dropped|superseded
        issue_ledger.py pending <key|owner/repo>              "<n>\t<run>\t<column>\t<instant>\t<req>" for each board write not yet landed
 
@@ -102,6 +102,7 @@ import time
 LEDGERS = ("own", "loop")
 OLD = {"own": "requeues", "loop": "loopqueues"}   # the old marker names wave.sh wrote in auto/ before #673
 WAVE = ("entered", "held", "refused", "stuck", "owed", "delivered")   # the wave events wave.sh sends (ADR-0149)
+BOARD_FIELD = "Status"   # the project field a card's column is written to (ADR-0164)
 STREAK = 3   # consecutive CHANGES verdicts that end the issue needs-human (ADR-0151 rule 1)
 VERDICTS = ("changes", "approve")   # the review verdicts the streak counts (ADR-0151)
 KEY = re.compile(r"([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)#([0-9]+)")
@@ -339,15 +340,16 @@ def _board(rec, ev):   # -> (recorded|duplicate|stale|floor, changed): one card 
     old = rec.get("board") or {}
     if old and ev["instant"] < old["instant"]: return "stale", False   # a late delivery never overwrites a newer event
     if old and (old["run"], old["column"]) == (run, col): return "duplicate", False   # the same event: the first instant stands
-    rec["board"] = {"run": run, "column": col, "instant": ev["instant"], "state": "pending", "req": ev["req"]}
+    rec["board"] = {"run": run, "column": col, "instant": ev["instant"], "state": "pending", "req": ev["req"],
+                    "project": ev["project"], "field": ev["field"]}
     return "recorded", True
 
 
-def _boardw(rec, ev):   # -> (written|duplicate|superseded, changed): the card write of an event landed
+def _boardw(rec, ev):   # -> (written|duplicate|superseded, changed): the card write of an event landed, and when, and by whom
     old = rec.get("board") or {}
     if (old.get("run"), old.get("column")) != (ev["run"], ev["column"]): return "superseded", False
     if old["state"] == "written": return "duplicate", False
-    rec["board"] = {**old, "state": "written"}
+    rec["board"] = {**old, "state": "written", "landed": ev["ts"], "by": ev["actor"]}
     return "written", True
 
 
@@ -427,12 +429,23 @@ def review(key, run, verdict, findings="", rnd=0):   # -> recorded|reset|duplica
 
 
 def board(key, run, column, req="", instant=None):   # -> recorded|duplicate|stale|floor: a card write is an event, pending before it
-    return transition(key, {"op": "board", "run": run, "column": column, "req": req,
-                            "instant": time.time() if instant is None else float(instant)})
+    return transition(key, {"op": "board", "run": run, "column": column, "req": req, "project": os.environ.get("SG_PROJECT", ""),
+                            "field": BOARD_FIELD, "instant": time.time() if instant is None else float(instant)})
 
 
-def boardw(key, run, column):   # -> written|duplicate|superseded: the card write of the event landed
-    return transition(key, {"op": "boardw", "run": run, "column": column})
+def boardw(key, run, column, actor=""):   # -> written|duplicate|superseded: the card write of the event landed, at this instant, by this actor
+    return transition(key, {"op": "boardw", "run": run, "column": column, "actor": actor, "ts": time.time()})
+
+
+def board_writes(repo):   # -> [{repo, issue, project, field, transition, actor, instant, landed}]: each board event that has a landing instant
+    out = []
+    for n, rec in repo_files(repo):
+        b = rec.get("board") or {}
+        if b.get("state") != "written" or "landed" not in b: continue
+        out.append({"repo": repo, "issue": n, "project": b.get("project", ""), "field": b.get("field", ""),
+                    "transition": f"{b['run']}/{b['column']}", "actor": b.get("by") or "unknown",
+                    "instant": b["instant"], "landed": b["landed"]})
+    return out
 
 
 def boardx(key, run, column):   # -> dropped|superseded: a pending card write the gates no longer back, dropped unwritten
@@ -550,7 +563,7 @@ def main(argv):
                 print(f"issue_ledger.py: replay of {key} differs: " + "; ".join(diffs), file=sys.stderr); return 1
             print(f"REPLAY {key}: ok")
         elif op == "board" and len(rest) >= 3: print(board(key, rest[0], rest[1], rest[2], *(rest[3:4] or [])))
-        elif op == "boardw" and len(rest) >= 2: print(boardw(key, rest[0], rest[1]))
+        elif op == "boardw" and len(rest) >= 2: print(boardw(key, rest[0], rest[1], *(rest[2:3] or [""])))
         elif op == "boardx" and len(rest) >= 2: print(boardx(key, rest[0], rest[1]))
         elif op == "coder": print(coder(key))
         elif op == "wave" and len(rest) >= 3: print(wave(key, rest[0], rest[1], rest[2], rest[3:4] == ["keep"]))

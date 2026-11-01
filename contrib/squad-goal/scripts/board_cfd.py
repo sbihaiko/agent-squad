@@ -1,106 +1,62 @@
-"""The cumulative flow bands, one point per day, computed from the board's samples without the hub or any client.
+"""The cumulative flow bands, one point per calendar day, from the history store's column intervals (#1024).
 
-A sample is {"t": epoch seconds UTC, "counts": {kind: {column: n}}, "frozen": n, "none": n, "cells": [...]}. A cell is
-[kind, spec, wave, column, frozen, n, type] (#904, #985). A sample written before the cells carries none: it answers no kind,
-no spec and no wave (its counts are keyed by the project's Kind field, which the bar never offers). A cell written before the
-type carries none: it answers no type. Either way its days are flagged `legacy` on the point, so the chart can say so.
+Each card is its list of runs (board_history.intervals): a run names the card's column, its hold tag and whether it is on the
+board. A day's point samples every card at the day's end in the named zone, or at `now` for today. A card parked in Backlog
+with no hold counts in no band. Stdlib and board_columns only: no hub, no GitHub client, no file API (ADR-0137).
 """
 from collections import Counter
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
-from board_columns import TERMINAL
+from board_columns import ROLE, TERMINAL
 
 CLOSED = "Closed"
-FROZEN = "frozen"
-NO_COLUMN = "No column"
-NONE = "none"
+PARKED = ROLE["unscheduled"]
 
 
-def cfd(samples, columns, zone="UTC", kind=None, skips=(), spec=None, wave=None, ty=None):
-    """One point per calendar day from the first sample on, in the named zone (#894).
+def cfd(cards, columns, zone="UTC", now=None):
+    """Each calendar day from the first run's day to today, with the count of cards in each column and the held count of each.
 
-    A day with a sample takes its last sample. A day with no sample is a gap: either a flow_skip record (`skips`) says a read
-    of that day was not whole, or no read of it was made at all (the hub was down). Either way its count is unknown, so
-    nothing is carried forward. board_flow_history writes one sample per UTC day for each whole read, so a quiet day with a
-    whole read is a point (#894).
-
-    `kind`, `spec`, `wave` and `ty` filter the cards, as the board's bar does (#904): a list of values, where an empty list or
-    None keeps every card. A kind is `issue`, `bug` or `pr`; one kind as a string still reads as that kind alone. A spec is a
-    number or `none`. A wave is the bar's Waves key `spec/wave` (#980), each side a number or `none`. A type is `spec`, `task`
-    or `bug` (#985). The lists combine with AND.
+    `cards` is one list of runs per card. A card that is not on the board, or has no column, counts nowhere. The throughput of a
+    day is the increase of the Closed count over the day before, and absent on the first day.
     """
-    if not samples:
-        return {"start": None, "points": [], "gaps": [], "average_throughput": None}
+    now = now or datetime.now(UTC)
     tz = ZoneInfo(zone)
-    ordered = sorted(samples, key=lambda s: s["t"])
-    last_of_day = {}
-    for s in ordered:
-        last_of_day[_day(s["t"], tz)] = s
-    skipped = {_day(x["t"], tz) for x in skips}
-    first = _day(ordered[0]["t"], tz)
-    last = max([*last_of_day, *(d for d in skipped if d >= first)])
-    kinds, specs, waves, types = _wanted([kind] if isinstance(kind, str) else kind), _wanted(spec), _wanted(wave), _wanted(ty)
-    points, gaps = [], []
-    previous = None   # the closed count of the day before, when that day is a point; None after a gap and at the start
-    for k in range((last - first).days + 1):
-        day = first + timedelta(days=k)
-        if day not in last_of_day:
-            gaps.append(day.isoformat())
-            previous = None
-            continue
-        carried = last_of_day[day]
-        totals, frozen, none = _carried(carried, kinds, specs, waves, types)
+    starts = [_instant(run["from"]) for runs in cards for run in runs]
+    if not starts:
+        return {"start": None, "points": [], "average_throughput": None}
+    first_day, last_day = min(starts).astimezone(tz).date(), now.astimezone(tz).date()
+    points, previous = [], None
+    for k in range((last_day - first_day).days + 1):
+        day = first_day + timedelta(days=k)
+        moment = min(datetime.combine(day + timedelta(days=1), time(), tzinfo=tz), now)
+        totals, held = Counter(), Counter()
+        for runs in cards:
+            run = _at(runs, moment)
+            if run is None: continue
+            totals[run["column"]] += 1
+            if run["hold"]: held[run["column"]] += 1
         bands = {c: totals.get(c, 0) for c in columns}
-        bands[FROZEN] = frozen
-        bands[NO_COLUMN] = none + sum(n for c, n in totals.items() if c not in columns)
-        wip = sum(n for c, n in bands.items() if c in columns and c not in TERMINAL)
         closed = totals.get(CLOSED, 0)
-        throughput = None if previous is None else closed - previous
-        point = {"day": day.isoformat(), "t": carried["t"], "bands": bands, "wip": wip, "throughput": throughput}
-        if _predates_type(carried) or "cells" not in carried: point["legacy"] = True
-        points.append(point)
+        points.append({"day": day.isoformat(), "t": moment.timestamp(), "bands": bands,
+                       "held": {c: held.get(c, 0) for c in columns},
+                       "wip": sum(n for c, n in bands.items() if c not in TERMINAL),
+                       "throughput": None if previous is None else closed - previous})
         previous = closed
     daily = [p["throughput"] for p in points if p["throughput"] is not None]
-    return {"start": ordered[0]["t"], "points": points, "gaps": gaps,
+    return {"start": min(starts).timestamp(), "points": points,
             "average_throughput": sum(daily) / len(daily) if daily else None}
 
 
-def _day(t, tz):
-    return datetime.fromtimestamp(t, tz).date()
+def _at(runs, moment):
+    """The run a card is in at `moment`, or None when it is on no column or parked in Backlog without a hold."""
+    for run in runs:
+        if not run["on_board"]: continue
+        if _instant(run["from"]) <= moment and (run["to"] is None or moment < _instant(run["to"])):
+            if run["column"] is None or (run["column"] == PARKED and not run["hold"]): return None
+            return run
+    return None
 
 
-def _wanted(values):
-    """The filter's values as strings, or None when the filter keeps every card (an empty list, as the bar's)."""
-    return {str(v) for v in values} if values else None
-
-
-def _predates_type(sample):
-    return any(len(cell) < 7 for cell in sample.get("cells", ()))
-
-
-def _carried(sample, kinds, specs, waves, types):
-    """(totals by column, frozen, none) of one sample under the filters. A sample with no cells answers no kind, no spec,
-    no wave and no type: any kind or type filter keeps none of its cards, and a spec or wave filter keeps them only when it
-    names `none`. A cell with no type answers no type."""
-    if "cells" not in sample:
-        if kinds or types or (specs and NONE not in specs) or (waves and f"{NONE}/{NONE}" not in waves):
-            return Counter(), 0, 0
-        return _totals(sample), sample["frozen"], sample["none"]
-    totals, frozen, none = Counter(), 0, 0
-    for k_kind, k_spec, k_wave, column, fz, n, *k_type in sample["cells"]:
-        if kinds and k_kind not in kinds: continue
-        if specs and k_spec not in specs: continue
-        if waves and f"{k_spec}/{k_wave}" not in waves: continue
-        if types and (not k_type or k_type[0] not in types): continue
-        if column is None: none += n
-        else: totals[column] += n
-        if fz: frozen += n
-    return totals, frozen, none
-
-
-def _totals(sample):
-    totals = Counter()
-    for per_column in sample["counts"].values():
-        totals.update(per_column)
-    return totals
+def _instant(text):
+    return datetime.fromisoformat(text)

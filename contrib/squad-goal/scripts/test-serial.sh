@@ -12,6 +12,25 @@ mkdir -p "$SG_STATE/locks/gui"; echo 99999999 > "$SG_STATE/locks/gui/pid"
 bash "$src" gui true && ok "stale lock (dead pid) is taken over" || ko "stale lock blocked the job"
 bash "$src" gui sh -c 'exit 7'; [ $? = 7 ] && ok "exit code passes through" || ko "exit code lost"
 [ -d "$SG_STATE/locks/gui" ] && ko "lock left behind" || ok "lock released after the command"
+
+# (#1057) A holder that died as a zombie is dead: its parent has not reaped it, so kill -0 still answers, and the lock must not
+# survive it. The reap writes one line naming the lock, the dead pid and the lock's age. A live holder is left alone, no reap line.
+agefile() { python3 -c 'import os,sys,time; t=time.time()-float(sys.argv[2]); os.utime(sys.argv[1],(t,t))' "$1" "$2"; }
+sh -c 'sleep 0 & echo $! > "$1"; exec sleep 300' sh "$T/zombie" >/dev/null 2>&1 & zpar=$!
+for i in $(seq 1 50); do [ -s "$T/zombie" ] && [ "$(/bin/ps -o stat= -p "$(cat "$T/zombie")" 2>/dev/null | cut -c1)" = Z ] && break; sleep 0.1; done
+zp=$(cat "$T/zombie"); [ "$(/bin/ps -o stat= -p "$zp" 2>/dev/null | cut -c1)" = Z ] && ok "the fixture holder is a zombie" || ko "no zombie fixture (pid ${zp:-none})"
+mkdir -p "$SG_STATE/locks/gui"; echo "$zp" > "$SG_STATE/locks/gui/pid"; agefile "$SG_STATE/locks/gui/pid" 120
+out=$(SERIAL_WAIT_SECONDS=4 bash "$src" gui sh -c 'echo ran' 2>"$T/zombie.err"); rc=$?
+[ "$rc" = 0 ] && [ "$out" = ran ] && ok "a lock held by a zombie is reaped and the command runs" || ko "a zombie holder blocked the command (rc=$rc out=$out)"
+[ "$(/usr/bin/grep -c "^serial: reaping stale lock gui: holder pid $zp .* age [0-9]*s\$" "$T/zombie.err")" = 1 ] && ok "the reap writes one line naming the lock, the dead pid and the age" || ko "reap line: $(cat "$T/zombie.err")"
+age=$(sed -nE 's/.*age ([0-9]+)s$/\1/p' "$T/zombie.err"); [ "${age:-0}" -ge 100 ] && ok "the reap line reports the lock's age" || ko "reap age: ${age:-none}"
+[ "$(/usr/bin/grep -c 'waiting' "$T/zombie.err")" = 0 ] && ok "the command ran with no wait after the reap" || ko "a wait line after the reap"
+kill -9 "$zpar" 2>/dev/null; wait "$zpar" 2>/dev/null
+mkdir -p "$SG_STATE/locks/gui"; echo $$ > "$SG_STATE/locks/gui/pid"
+out=$(SERIAL_TRY=1 SERIAL_WAIT_SECONDS=4 bash "$src" gui true 2>"$T/live.err"); rc=$?
+[ "$rc" = 73 ] && [ "$(cat "$SG_STATE/locks/gui/pid")" = "$$" ] && ok "a live holder is left alone and the try skips it" || ko "a live holder was touched or not skipped (rc=$rc)"
+/usr/bin/grep -q "reaping" "$T/live.err" && ko "a reap line for a live holder" || ok "a live holder writes no reap line"
+rm -rf "$SG_STATE/locks/gui"
 mkdir -p "$SG_STATE/locks/gui"; echo $$ > "$SG_STATE/locks/gui/pid"
 # (#81) The hold is visible and the give-up names the holder: an operator reading a stuck gate learns who it waits for, and the
 # command already inside the lock (SG_SERIAL_HELD) runs at once -- a gate inside a gate holder waits for nobody.

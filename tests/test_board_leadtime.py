@@ -28,8 +28,12 @@ def _iso(moment):
     return moment.isoformat()
 
 
+def _flags(hours):
+    return {"hours": hours, "flowing": hours, "held": 0.0, "approx": False, "unknown_first": False}
+
+
 def _card(n, hours, column="Done"):
-    return {"n": n, "o": _iso(BASE), "c": _iso(BASE + timedelta(hours=hours)), "column": column}
+    return {"n": n, "o": _iso(BASE), "c": _iso(BASE + timedelta(hours=hours)), "column": column, **_flags(hours)}
 
 
 def _open(n):
@@ -37,11 +41,11 @@ def _open(n):
 
 
 def _no_opened(n, hours):
-    return {"n": n, "o": None, "c": _iso(BASE + timedelta(hours=hours)), "column": "Done"}
+    return {"n": n, "o": None, "c": _iso(BASE + timedelta(hours=hours)), "column": "Done", **_flags(hours)}
 
 
-def test_a_dot_is_closed_minus_opened_in_hours(lt):
-    row = {"n": 7, "o": "2026-10-01T00:00:00+00:00", "c": "2026-10-02T04:00:00+00:00", "column": "Done"}
+def test_a_dot_is_the_flowing_and_held_hours_of_its_span(lt):
+    row = {"n": 7, "o": "2026-10-01T00:00:00+00:00", "c": "2026-10-02T04:00:00+00:00", "column": "Done", **_flags(28.0)}
 
     result = lt.lead_time([row])
 
@@ -143,7 +147,7 @@ def test_a_day_and_hours_render_as_days_then_hours(lt):
 def test_result_names_the_window_in_issues_and_the_measure(lt):
     result = lt.lead_time([_card(1, 5)])
 
-    assert result["measure"] == "opened -> closed"
+    assert result["measure"] == "on board -> closed"
     assert result["window"] == {"size": 20, "unit": "issues"}
     assert lt.lead_time([_card(1, 5)], window=3)["window"] == {"size": 3, "unit": "issues"}
 
@@ -192,7 +196,7 @@ NOW = BASE + timedelta(days=60)
 def _closed(n, hours, days_ago=0):
     closed = NOW - timedelta(days=days_ago)
     opened = closed - timedelta(hours=hours)
-    return {"n": n, "t": f"card {n}", "o": _iso(opened), "c": _iso(closed), "column": "Done"}
+    return {"n": n, "t": f"card {n}", "o": _iso(opened), "c": _iso(closed), "column": "Done", **_flags(hours)}
 
 
 def _chart(lt, items, **kw):
@@ -345,3 +349,20 @@ def test_a_zoom_range_with_no_card_keeps_its_range_and_no_dots(lt):
 
     assert result["dots"] == []
     assert result["range"] == {"start": _iso(start), "end": _iso(end)}
+
+
+def test_a_dot_is_the_flowing_and_held_hours_so_the_parked_time_is_out(lt):
+    row = {"n": 1, "o": _iso(BASE), "c": _iso(BASE + timedelta(hours=10)), "column": "Closed", "reason": None,
+           "hours": 6.0, "flowing": 4.0, "held": 2.0, "approx": False, "unknown_first": False}
+    series = lt.lead_time([row])["series"][0]
+    assert series["hours"] == 6.0
+    assert series["flowing_hours"] == 4.0
+    assert series["held_hours"] == 2.0
+
+
+def test_a_dot_marks_an_approximate_or_unknown_first_interval(lt):
+    row = {"n": 1, "o": _iso(BASE), "c": _iso(BASE + timedelta(hours=2)), "column": "Closed", "reason": None,
+           "hours": 2.0, "flowing": 2.0, "held": 0.0, "approx": True, "unknown_first": True}
+    series = lt.lead_time([row])["series"][0]
+    assert series["approx"] is True
+    assert series["unknown_first"] is True

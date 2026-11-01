@@ -21,6 +21,27 @@ bash "$T/s/gate.sh" sh -c 'exit 7'; [ $? = 7 ] && ok "the gate's exit code passe
 [ -d "$SG_STATE/locks/gate" ] && ko "the lock is left behind" || ok "the lock is released after the gate"
 bash "$T/s/gate.sh" >/dev/null 2>&1; [ $? = 2 ] && ok "no command: usage error, exit 2" || ko "no command did not exit 2"
 
+# (#1057) The land pass's try-mode gate reaps a gate lock whose holder is dead before it defers on it. A zombie holder is dead:
+# the gate runs, one reap line names the lock, the dead pid and the age, and no skip line is printed. A live holder is skipped
+# in its own words and its lock is left alone.
+agefile() { python3 -c 'import os,sys,time; t=time.time()-float(sys.argv[2]); os.utime(sys.argv[1],(t,t))' "$1" "$2"; }
+sh -c 'sleep 0 & echo $! > "$1"; exec sleep 300' sh "$T/zombie" >/dev/null 2>&1 & zpar=$!
+for i in $(seq 1 50); do [ -s "$T/zombie" ] && [ "$(/bin/ps -o stat= -p "$(cat "$T/zombie")" 2>/dev/null | cut -c1)" = Z ] && break; sleep 0.1; done
+zp=$(cat "$T/zombie")
+mkdir -p "$SG_STATE/locks/gate"; echo "$zp" > "$SG_STATE/locks/gate/pid"; agefile "$SG_STATE/locks/gate/pid" 120
+out=$(SERIAL_TRY=1 bash "$T/s/gate.sh" sh -c 'echo ran' 2>"$T/zg.err"); rc=$?
+[ "$rc" = 0 ] && [ "$out" = ran ] && ok "a gate lock held by a dead zombie is reaped and the try gate runs" || ko "the try gate deferred on a zombie: rc=$rc out=$out err=$(cat "$T/zg.err")"
+[ "$(/usr/bin/grep -c "^serial: reaping stale lock gate: holder pid $zp .* age [0-9]*s\$" "$T/zg.err")" = 1 ] && ok "the reap names the gate lock, the dead pid and the age on one line" || ko "reap line: $(cat "$T/zg.err")"
+/usr/bin/grep -q "skipped, not queued" "$T/zg.err" && ko "a dead holder was reported as skipped" || ok "a dead holder is not reported as held"
+kill -9 "$zpar" 2>/dev/null; wait "$zpar" 2>/dev/null
+sleep 60 >/dev/null 2>&1 & lv=$!
+mkdir -p "$SG_STATE/locks/gate"; echo "$lv" > "$SG_STATE/locks/gate/pid"
+out=$(SERIAL_TRY=1 bash "$T/s/gate.sh" true 2>"$T/lg.err"); rc=$?
+[ "$rc" = 73 ] && [ "$(cat "$SG_STATE/locks/gate/pid")" = "$lv" ] && ok "a gate lock held by a live process is left alone and the try gate skips it" || ko "live gate lock: rc=$rc pid=$(cat "$SG_STATE/locks/gate/pid" 2>/dev/null)"
+/usr/bin/grep -q "^serial: lock gate held by pid $lv: skipped, not queued (SERIAL_TRY)" "$T/lg.err" && ok "the skip names the live holder in its own words" || ko "skip line: $(cat "$T/lg.err")"
+/usr/bin/grep -q "reaping" "$T/lg.err" && ko "a reap line for a live holder" || ok "a live holder writes no reap line"
+kill "$lv" 2>/dev/null; rm -rf "$SG_STATE/locks/gate"
+
 # --- the slots ---------------------------------------------------------------------------------------------------------------
 sleep 120 >/dev/null 2>&1 & live=$!; trap 'kill $live 2>/dev/null' EXIT   # a holder that lives, for the leases this suite writes
 rm -rf "$T/caps"; mkdir -p "$T/caps"
