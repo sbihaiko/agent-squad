@@ -333,7 +333,8 @@ tabs.forEach(b => b.onclick = () => show(b.dataset.tab));
 
 // One read per endpoint in flight, with a deadline (#1004). A poll joins the read of its path already in flight; `fresh`
 // (the read after a write) or another query on the endpoint aborts it. An answer older than the endpoint's last request
-// is dropped: its promise never settles, so it never draws over newer state.
+// is dropped: its promise never settles, so it never draws over newer state. A caller must not clear a busy flag only in
+// `finally` or after the await: a dropped read never reaches it, and the flag stays set.
 const CALL_MS = 8000, inFlight = {}, callSeq = {};
 function call(path, fresh) {
   const ep = String(path).split("?")[0], cur = inFlight[ep];
@@ -421,7 +422,8 @@ every("monitor", loadPoll, 5000);
 setInterval(monitorTick, 1000);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/mobile/sw.js", { scope: "/mobile/" }).catch(() => {});
 status();
-every("monitor", status, 5000);
+// The status read drives #reconnect, which covers every tab, so it polls on every tab while the app is in view.
+setInterval(() => { if (!document.hidden) status(); }, 5000);
 
 let loopNow = { runs: [], gates: [] };
 const loopWhen = s => { const m = String(s || "").match(/^(\d{4}-\d\d-\d\d)T(\d\d:\d\d)/); return m ? m[1] + " " + m[2] : String(s || ""); };
