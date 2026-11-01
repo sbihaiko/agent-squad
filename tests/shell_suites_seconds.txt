@@ -168,6 +168,7 @@ test-watchd-supervisor.sh 2.68
 test-watchd-token-stop.sh 6.28
 test-watchtail.sh 4.17
 test-wave-lifecycle.sh 18.50
+test-wave-norefs.sh 7.83
 test-wave-probe.sh 2.64
 test-wave-requeue-cap.sh 3.35
 test-wave.sh 106.19
