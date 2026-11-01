@@ -174,3 +174,18 @@ def test_a_mobile_lane_id_wears_the_color_its_cards_wear(mobile_hub):
     for lane, r in out.items():
         assert r["cards"] and all(c == r["id"] for c in r["cards"]), f"lane {lane}: id {r['id']} vs cards {r['cards']}"
     assert {r["id"] for r in out.values()} == {"var(--s3)", "var(--s6)"}, out
+
+
+def test_no_lane_model_carries_a_color_slot_of_its_own():
+    """One source: both pages color a lane by specColor over the spec number, so neither lane model writes a slot index
+    (`pi`) that no page reads and that could drift from the cards (#917)."""
+    groups = [{"name": "Todo", "items": [{"n": 918, "t": "a", "pa": 917, "l": []}, {"n": 891, "t": "b", "pa": 890, "l": []}]}]
+    opts = {"mode": "spec", "fw": [], "fs": [], "lc": {}, "hideDone": False, "closed": "Closed"}
+    desk = _node(f"console.log(JSON.stringify(buildBoard({json.dumps(groups)},{json.dumps(opts)}).lanes))")
+    gesture = (SCRIPTS / "hub-mobile-gesture.js").read_text()
+    p = subprocess.run([NODE, "-"], capture_output=True, text=True, timeout=30, input=gesture + "\nconsole.log(JSON.stringify("
+                       f"columnLanes({json.dumps({'groups': groups, 'cards': groups[0]['items'], 'lc': {}})}).lanes))")
+    assert p.returncode == 0, p.stderr
+    mobile = json.loads(p.stdout)
+    assert desk and mobile
+    assert not [ln for ln in desk + mobile if "pi" in ln], "a lane model still writes its own color slot"
