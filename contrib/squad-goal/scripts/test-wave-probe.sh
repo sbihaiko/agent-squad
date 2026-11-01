@@ -9,7 +9,7 @@ d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok 
 exec 3>&2 2>>"$T.err"
 mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin" "$T/co/runs"
 cp "$d/wave.sh" "$d/issue_ledger.py" "$d/ghread.py" "$d/address.sh" "$d/ghcall.sh" "$d/base-battery.sh" "$d/basecheck.sh" "$T/s/"
-printf 'export SG_STATE=%s SG_REPO=x/y SG_OWNER=o SG_PROJECT=3 SG_CHECKOUT=%s BOARD=%s/board.sh SG_PREMISE_CHECK=%s/pc\n. %s/address.sh\n' \
+printf 'export SG_STATE=%s SG_REPO=x/y SG_OWNER=o SG_PROJECT=3 SG_CHECKOUT=%s BOARD=%s/board.sh SG_PREMISE_CHECK=${SG_PREMISE_CHECK-%s/pc}\n. %s/address.sh\n' \
   "$T/st" "$T/co" "$T" "$T/bin" "$T/s" > "$T/s/env.sh"
 printf '#!/bin/bash\necho "$*" >> "%s/board.log"\n' "$T" > "$T/board.sh"; chmod +x "$T/board.sh"
 # The premise-check stub writes one line per call, its argv joined by '|', and exits PC_RC.
@@ -40,10 +40,12 @@ froze 50 && ok "A: the refuting probe is frozen to the owner" || ko "A: no freez
 [ "$(cnt 50)" = 0 ] && ok "A: a refutation is no failed dispatch" || ko "A: counted '$(cnt 50)'"
 case "$o" in *"WAVE PROBE #50"*"refuted"*"#878"*) ok "A: the refutation is logged on one line";; *) ko "A: no probe line: '$o'";; esac
 
-# B: the same probe a second time (a later pass) refutes nothing again: it is frozen already.
-issue 50 probe,wave:01,frozen:owner "$PROBE"
+# B: the same probe a second time (a later pass) retries the refutation, which premise-check answers once and then as a
+# no-op, so a refutation that failed once is never lost; the probe is not frozen twice.
+issue 50 probe,wave:01,frozen:owner "$PROBE"; : > "$T/gh.log"
 o=$(w fail 50 run-red "ended failed: ac-verify:ac_failed")
-[ "$(pcs)" = 1 ] && ok "B: a frozen probe is not refuted twice" || ko "B: premise-check ran $(pcs) times: '$o'"
+[ "$(pcs)" = 2 ] && ! froze 50 && case "$o" in *"WAVE PROBE #50"*"refuted"*) true;; *) false;; esac \
+  && ok "B: a frozen probe retries its refutation and is not frozen again" || ko "B: premise-check ran $(pcs) times: '$o'"
 
 # C: a probe whose run failed for another reason, or a ticket with no probe label, takes the close path as before.
 : > "$T/pc.log"; issue 51 probe "$PROBE"; issue 52 "" "$PROBE"
@@ -71,6 +73,22 @@ o=$(w fail 54 run-red "ended failed: ac-verify:ac_failed")
 o=$(PC_RC=2 w fail 55 run-red "ended failed: ac-verify:ac_failed")
 [ "$(pcs)" = 1 ] && froze 55 && case "$o" in *"WAVE PROBE #55"*"refused"*) true;; *) false;; esac \
   && ok "F: a refused refutation still freezes the probe" || ko "F: pc $(pcs): '$o'"
+
+# G: a refutation premise-check refused once is retried on the next pass, once the probe is frozen, and then succeeds.
+: > "$T/pc.log"; issue 55 probe,frozen:owner "$PROBE"
+o=$(w fail 55 run-red "ended failed: ac-verify:ac_failed")
+[ "$(cat "$T/pc.log")" = "878|--refute|the check comments on the spec|--repo|x/y" ] \
+  && case "$o" in *"WAVE PROBE #55"*"refuted '"*) true;; *) false;; esac \
+  && ok "G: a refused refutation is retried on the next pass" || ko "G: pc '$(cat "$T/pc.log")': '$o'"
+
+# H: premise-check runs on the plugin's interpreter (SG_SQUAD's venv), never the host's gate interpreter (SG_GATE_PY).
+mkdir -p "$T/sq/.venv/bin" "$T/host"
+printf '#!/bin/bash\necho "squad $*" >> "%s/py.log"\n' "$T" > "$T/sq/.venv/bin/python"; chmod +x "$T/sq/.venv/bin/python"
+printf '#!/bin/bash\necho "host $*" >> "%s/py.log"\n' "$T" > "$T/host/python"; chmod +x "$T/host/python"
+issue 56 probe "$PROBE"
+o=$(SG_PREMISE_CHECK= SG_SQUAD="$T/sq" SG_GATE_PY="$T/host/python" w fail 56 run-red "ended failed: ac-verify:ac_failed")
+[ "$(cat "$T/py.log" 2>/dev/null)" = "squad -m squad.cli premise-check 878 --refute the check comments on the spec --repo x/y" ] \
+  && ok "H: premise-check runs on the plugin's interpreter" || ko "H: interpreter calls '$(cat "$T/py.log" 2>/dev/null)': '$o'"
 
 exec 2>&3; if /usr/bin/grep -q "command not found" "$T.err"; then ko "stderr: $(cat "$T.err")"; fi; rm -f "$T.err"
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }

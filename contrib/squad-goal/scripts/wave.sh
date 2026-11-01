@@ -341,18 +341,21 @@ held_out() {
   return 1
 }
 
-# premise_check <args>: `squad premise-check <args>` from the plugin's checkout (SG_SQUAD); SG_PREMISE_CHECK names a stand-in.
+# premise_check <args>: `squad premise-check <args>` from the plugin's checkout (SG_SQUAD), on the plugin's interpreter, never
+# the host's gate interpreter (SG_GATE_PY): a host venv may be an older Python without squad's dependencies (#888).
+# SG_PREMISE_CHECK names a stand-in.
 premise_check() {
   if [ -n "${SG_PREMISE_CHECK:-}" ]; then "$SG_PREMISE_CHECK" "$@"; return; fi
-  local py=${SG_GATE_PY:-$SG_CHECKOUT/.venv/bin/python}; [ -x "$py" ] || py=python3
+  local py=${SG_SQUAD:+$SG_SQUAD/.venv/bin/python}; [ -n "$py" ] && [ -x "$py" ] || py=python3
   PYTHONPATH="${SG_SQUAD:-.}${PYTHONPATH:+:$PYTHONPATH}" "$py" -m squad.cli premise-check "$@"
 }
 
 # probe_refuted <issue> <run>: 0 when the issue is a probe ticket whose run left its acceptance command unmet (#888). Its
 # premise is refuted on its spec (`squad premise-check <spec> --refute <premise>`: the spec is the ticket's `## Parent`, the
 # premise its `Premise:` line), and the probe stays open, frozen to the owner, so the blocker guard holds its dependents. It
-# is not requeued and not counted: a refutation is the probe's answer, not a failed dispatch. A probe already frozen is not
-# refuted twice. Any other ticket, a run that met its gate, or an issue read that does not answer returns 1.
+# is not requeued and not counted: a refutation is the probe's answer, not a failed dispatch. A probe already frozen retries
+# its refutation, which premise-check answers as a no-op once the check records the premise refuted, so a refutation that
+# failed once (a gh error) is never lost; it is not frozen twice. Any other ticket, a run that met its gate, or an issue read that does not answer returns 1.
 probe_refuted() {
   local n=$1 run=$2 j t state spec premise out
   { [ -n "$run" ] && gate_failed "$run"; } || return 1
@@ -365,16 +368,15 @@ body=d.get("body") or ""
 p=re.search(r"^## Parent\s*\n+\s*#(\d+)", body, re.M); q=re.search(r"^Premise:[ \t]*(\S.*?)\s*$", body, re.M)
 print("frozen" if "frozen:owner" in names else "open"); print(p.group(1) if p else ""); print(q.group(1) if q else "")' 2>/dev/null) || return 1
   { read -r state; read -r spec; read -r premise; } <<< "$t"
-  [ "$state" = frozen ] && { echo "WAVE PROBE #$n: already frozen for the owner, so its premise is not refuted again (run $run)"; return 0; }
   if [ -z "$spec" ] || [ -z "$premise" ]; then
-    freeze_owner "$n"; echo "WAVE PROBE #$n: its acceptance command is unmet, but it names no Premise line or no Parent spec: frozen for the owner (run $run)"; return 0
+    [ "$state" = frozen ] || freeze_owner "$n"; echo "WAVE PROBE #$n: its acceptance command is unmet, but it names no Premise line or no Parent spec: frozen for the owner (run $run)"; return 0
   fi
   if out=$(premise_check "$spec" --refute "$premise" --repo "$SG_REPO" 2>&1); then
     echo "WAVE PROBE #$n: refuted '$premise' on spec #$spec, which goes back to the check; the probe stays open, frozen for the owner (run $run)"
   else
-    echo "WAVE PROBE #$n: premise-check refused the refutation of '$premise' on spec #$spec: $(printf '%s' "$out" | tail -1); frozen for the owner (run $run)"
+    echo "WAVE PROBE #$n: premise-check refused the refutation of '$premise' on spec #$spec: $(printf '%s' "$out" | tail -1); frozen for the owner, and the next pass retries it (run $run)"
   fi
-  freeze_owner "$n"; return 0
+  [ "$state" = frozen ] || freeze_owner "$n"; return 0
 }
 
 requeue() {   # <issue> <why> [cap]: the child never entered, so its issue goes back to the queue and the loop can build it again.

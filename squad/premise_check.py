@@ -199,6 +199,9 @@ class Reviewer:
     route: str
 
 
+LOOP = Reviewer(id="squad-loop", label="the squad loop", wire="squad-loop", route="loop")   # who records a probe's refutation
+
+
 def _repo_read(path: str) -> str:
     """The repository as the round reads it: one file's text, from the checkout the command runs in."""
     return (ROOT / path).read_text()
@@ -310,10 +313,10 @@ def ending(rows: list[Row]) -> str:
         return "awaiting answers"
     if open_rows:
         return "blocked"
+    if any(r.state == "refuted" for r in rows):    # a refutation outranks a pending probe: the spec is back at the check
+        return "refuted"
     if any(r.state == "needs a probe" for r in rows):
         return "awaiting probes"
-    if any(r.state == "refuted" for r in rows):
-        return "refuted"
     if any(r.risk for r in rows):
         return "open risks"
     return "settled"
@@ -646,6 +649,9 @@ def refute(spec: int, premise: str, *, github, who: Reviewer, dry_run: bool = Fa
     if before is None:
         raise ValueError(f"no premise-check comment on spec {spec}")
     rows = _parse_rows((found or {}).get("body") or "")
+    if premise in before["refuted"]:   # a retry of a refutation the check already records: a no-op, so the loop may retry
+        end = ending(rows)
+        return Report(body=(found or {}).get("body") or "", ending=end, round_no=before["round"], action="unchanged", rows=tuple(rows))
     if not any(r.premise == premise and r.state == "needs a probe" for r in rows):
         raise ValueError(f"{premise!r} was never recorded as needs a probe, so no probe settles it")
     asked = {q["premise"]: (n, q) for n, q in before["asked"].items()}
@@ -664,13 +670,6 @@ def refute(spec: int, premise: str, *, github, who: Reviewer, dry_run: bool = Fa
         return Report(body=comment, ending=end, round_no=round_no, rows=tuple(out))
     action = write_comment(github, spec, found, comment)
     return Report(body=comment, ending=end, round_no=round_no, action=action, rows=tuple(out))
-
-
-def probe_closed(spec: int, premise: str, *, labels, passed: bool, github, who: Reviewer, dry_run: bool = False) -> Report | None:
-    """The loop's close path for one ticket: a probe whose acceptance command is unmet refutes its premise; any other ticket refutes nothing."""
-    if "probe" not in labels or passed:
-        return None
-    return refute(spec, premise, github=github, who=who, dry_run=dry_run)
 
 
 def named(raw: str, reg=None) -> Reviewer:
@@ -827,7 +826,8 @@ def main(argv=None) -> int:
     if a.refute is None and a.findings is None:
         p.error("--findings is required unless --refute names a premise")
     try:
-        who = named(a.reviewer) if a.reviewer else reviewer()
+        # A refutation is a gate result, so it names the loop and needs no review-chain model (#888).
+        who = named(a.reviewer) if a.reviewer else (LOOP if a.refute is not None else reviewer())
         github = rest_runner(a.repo)     # a dry run reads the round it would write, and writes nothing
         refused: list[tuple[str, str]] = []
         if a.refute is not None:

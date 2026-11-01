@@ -908,17 +908,34 @@ def test_the_squad_command_forwards_a_refutation_to_the_round():
     assert a.refute == PROBE_PREMISE and a.findings is None
 
 
-def test_a_confirming_probe_or_a_non_probe_ticket_refutes_nothing(tmp_path):
+def test_a_second_refutation_of_a_refuted_premise_succeeds_and_writes_nothing(tmp_path):
     gh = StubGithub()
     gh.say(probe_comment(tmp_path, PROBE), login="squad-loop")
-    assert pc.probe_closed(878, PROBE_PREMISE, labels=["probe"], passed=True, github=gh, who=reviewer()) is None
-    assert pc.probe_closed(878, PROBE_PREMISE, labels=["bug"], passed=False, github=gh, who=reviewer()) is None
-    assert "update_comment" not in gh.calls
+    pc.refute(878, PROBE_PREMISE, github=gh, who=reviewer())
+    written = dict(gh.comments)
+    report = pc.refute(878, PROBE_PREMISE, github=gh, who=reviewer())
+    assert report.action == "unchanged" and report.ending == "refuted"
+    assert gh.comments == written and gh.calls.count("update_comment") == 1
 
 
-def test_an_unmet_probe_ticket_refutes_its_premise(tmp_path):
+def test_a_refutation_needs_no_review_model(monkeypatch, tmp_path, capsys):
     gh = StubGithub()
     gh.say(probe_comment(tmp_path, PROBE), login="squad-loop")
-    report = pc.probe_closed(878, PROBE_PREMISE, labels=["probe", "wave:01"], passed=False, github=gh, who=reviewer())
-    assert report.ending == "refuted"
+
+    def no_model(*a, **kw):
+        raise pc.NoReviewer("no model in the review chain can review now")
+
+    monkeypatch.setattr(pc, "reviewer", no_model)
+    monkeypatch.setattr(pc, "rest_runner", lambda repo: gh)
+    assert pc.main(["878", "--refute", PROBE_PREMISE, "--repo", "x/y"]) == 0
     assert pc.state_of(gh.comments[1])["refuted"] == [PROBE_PREMISE]
+    assert pc.LOOP.label in gh.comments[1]
+
+
+def test_a_refuted_premise_beside_a_pending_probe_ends_refuted(tmp_path):
+    rows = rows_of(tmp_path, one_fact(holds=False), PROBE)
+    assert pc.ending(rows) == "refuted"
+
+
+def test_the_close_path_lives_in_the_loop_only():
+    assert not hasattr(pc, "probe_closed")
