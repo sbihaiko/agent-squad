@@ -3436,10 +3436,12 @@ def chart(name, key, build):
     CHARTS[name] = (key, answer)
     return answer
 
-def history_key():
-    path = _flow.history_path(BOARD, REPO)
+def _file_key(path):
     try: st = path.stat(); return (str(path), st.st_mtime_ns, st.st_size)
     except OSError: return (str(path), None)
+
+def history_key():
+    return _file_key(_flow.history_path(BOARD, REPO))
 
 def _cfd_payload(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
     """The cumulative flow's numbers, computed here from board_cfd; the page draws them and computes none.
@@ -3524,7 +3526,9 @@ def burn_spec(query):
 
 
 def flow_burn(spec=None):
-    return chart("burn", (board_cache.get("t"), spec), lambda: _burndown_payload(spec))
+    today = dt.datetime.now(dt.UTC).date()
+    return chart("burndown", (board_cache.get("t"), spec, _file_key(_hist.history_path(BOARD, REPO)), history_key(), today),
+                 lambda: _burndown_payload(spec, today))
 
 
 def drawn_column(i, moves, window):
@@ -4871,7 +4875,7 @@ const cfdAxis=c=>{const n=c.days.length,base=flowH-flowP;   // every number and 
     `<text x=${flowW-flowP} y=${base+31} text-anchor=end fill=var(--mute) style="font-size:var(--fs-min)">day (UTC)</text>`;};
 let CF={r:"30"};   // the cumulative flow's range, 30 days at first (#901)
 const CFD_R=[["7","7 days"],["30","30 days"],["90","90 days"],["all","All"]];   // the cumulative flow's range views (#901)
-const flowViews=k=>`<label class=fhead>View <select id=flowv><option value=cfd${k==="cfd"?" selected":""}>Cumulative flow</option><option value=burn${k==="burn"?" selected":""}>Burndown</option></select></label>`;   // one Throughput tab, two charts (#1048)
+const flowViews=k=>`<label class=fhead>View <select id=flowv><option value=cfd${k==="cfd"?" selected":""}>Cumulative flow</option><option value=burndown${k==="burndown"?" selected":""}>Burndown</option></select></label>`;   // one Throughput tab, two charts (#1048)
 const flowCFD=c=>{const sel=`<label class=fhead>Range <select id=cfdr>${CFD_R.map(([k,v])=>`<option value=${k}${CF.r===k?" selected":""}>${v}</option>`).join("")}</select></label> ${flowViews("cfd")}`;
   if(!c.days.length)return sel+"<p class=fnote>the flow history has no sample yet</p>";
   const n=c.days.length,cw=(flowW-2*flowP)/(n<2?1:n);
@@ -4927,7 +4931,7 @@ const flowLead=l=>{const S=l.summary,ex=l.excluded.map(e=>`${e.count} ${esc(EXRE
   return head+ltChart(LT.zc||l.control[LT.log?"log":"jira"][LT.tf]);};
 let BURN={s:null};   // the spec the burndown draws; null lets the hub name the first open spec (#1048)
 const flowBurn=a=>{const b=a.burn,opts=a.specs.map(s=>`<option value=${s.n}${s.n===a.spec?" selected":""}>#${s.n} ${esc(s.t)}</option>`).join("");
-  const sel=`<label class=fhead>Spec <select id=burns>${opts}</select></label> ${flowViews("burn")}`;
+  const sel=`<label class=fhead>Spec <select id=burns>${opts}</select></label> ${flowViews("burndown")}`;
   if(!a.specs.length)return sel+"<p class=fnote>no open spec on the board</p>";
   if(!b)return sel;
   if(b.reason)return sel+`<p class=fnote>this spec reads as empty: ${esc(b.reason)}</p>`;
@@ -4948,8 +4952,8 @@ const flowBurn=a=>{const b=a.burn,opts=a.specs.map(s=>`<option value=${s.n}${s.n
     `<p class=fnote>one point per whole read, from ${esc(b.start)} UTC; a gap is a day with no whole read</p>`;};
 const drawFlow=()=>{{const w=$("#flowb").clientWidth-20;flowW=w<600?600:w>1600?1600:(w|0)}const cfd=FLOWK==="cfd";
   const a=FLOWD[FLOWK];
-  $("#flowb").innerHTML=!a?"<p class=fnote>loading the chart from the hub</p>":(FLOWK==="burn"?flowBurn(a):cfd?flowCFD(a.cfd.ranges[CF.r]):flowLead(a.lead))+`<p class=fnote>data read ${new Date(a.t*1000).toLocaleTimeString()}</p>`};
-const flowOpen=async k=>{FLOWK=k;$("#flowov").hidden=false;drawFlow();const want=()=>k==="burn"?`spec=${BURN.s||""}`:barQuery(),q=want();try{const a=await (await fetch(`/api/chart/${k}?${q}`)).json();if(q!==want())return;FLOWD[k]=a;if(FLOWK===k)drawFlow()}catch(e){}};
+  $("#flowb").innerHTML=!a?"<p class=fnote>loading the chart from the hub</p>":(FLOWK==="burndown"?flowBurn(a):cfd?flowCFD(a.cfd.ranges[CF.r]):flowLead(a.lead))+`<p class=fnote>data read ${new Date(a.t*1000).toLocaleTimeString()}</p>`};
+const flowOpen=async k=>{FLOWK=k;$("#flowov").hidden=false;drawFlow();const want=()=>k==="burndown"?`spec=${BURN.s||""}`:barQuery(),q=want();try{const a=await (await fetch(`/api/chart/${k}?${q}`)).json();if(q!==want())return;FLOWD[k]=a;if(FLOWK===k)drawFlow()}catch(e){}};
 const ltQ=()=>`&scale=${LT.log?"log":"jira"}&a=${encodeURIComponent(LT.a)}&b=${encodeURIComponent(LT.b)}&${barQuery()}`,ltOwn=()=>LT.a!==""||LT.b!=="";   // a span other than created to closed is the hub's chart for it (#905); the bar's values filter it (#904)
 const ltZoom=async(f,t)=>{const tok=++LT.tok;try{const c=await (await fetch(`/api/leadtime?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}${ltQ()}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;LT.zr=[f,t];LT.pick=null;drawFlow()}catch(e){}};   // the hub recomputes the chart for the dragged range (#900)
 const ltGet=async()=>{const tok=++LT.tok;LT.zc=null;LT.pick=null;if(!ltOwn()){drawFlow();return}try{const c=await (await fetch(`/api/leadtime?tf=${LT.tf}${ltQ()}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;drawFlow()}catch(e){}};   // the timeframe's chart for the chosen span (#905)
@@ -4963,7 +4967,7 @@ document.addEventListener("pointermove",e=>{if(!LTD)return;const x1=ltClamp(ltPx
 document.addEventListener("pointerup",()=>{const d=LTD;LTD=null;if(!d||!d.moved)return;d.s.querySelector("rect.ltsel")?.remove();LT.noclick=true;
   const a=(ltLo(d.x0,d.x1)-flowP)/(flowW-2*flowP),b=(ltHi(d.x0,d.x1)-flowP)/(flowW-2*flowP);if(b-a<0.005||!LT.rng)return;const [f,t]=ltSpan(LT.rng,a,b);ltZoom(f,t)});
 $("#flowb").onchange=e=>{if(e.target.id==="cfdr"){CF.r=e.target.value;drawFlow();return}
-  if(e.target.id==="burns"){BURN.s=+e.target.value;delete FLOWD.burn;flowOpen("burn");return}
+  if(e.target.id==="burns"){BURN.s=+e.target.value;delete FLOWD.burndown;flowOpen("burndown");return}
   if(e.target.id==="flowv"){flowOpen(e.target.value);return}
   if(e.target.id==="ltr"){LT.tf=e.target.value;saveLT();LT.zr=null;ltGet();return}
   if(e.target.id==="lty"){LT.ty=e.target.value;saveLT();barMoved();return}
@@ -5097,7 +5101,7 @@ function setTab(t,o){if(!TABS[t])t="board";TAB=t;ls.tab=t;save();
  drawMain()}
 document.querySelector(".tabs").addEventListener("click",e=>{const b=e.target.closest("button[data-t]");if(b)setTab(b.dataset.t)});
 $("#bruns").onclick=()=>{$("#flowov").hidden=true;flowTabs()};
-function flowTabs(){const h=$("#flowov").hidden,k=typeof FLOWK==="string"?FLOWK:"cfd";$("#bruns").classList.toggle("on",h);$("#bflow").classList.toggle("on",!h&&(k==="cfd"||k==="burn"));$("#blead").classList.toggle("on",!h&&k==="lead")}
+function flowTabs(){const h=$("#flowov").hidden,k=typeof FLOWK==="string"?FLOWK:"cfd";$("#bruns").classList.toggle("on",h);$("#bflow").classList.toggle("on",!h&&(k==="cfd"||k==="burndown"));$("#blead").classList.toggle("on",!h&&k==="lead")}
 $("#main").addEventListener("click",e=>{const r=e.target.closest(".r[data-rid]");if(r)openRun(r.dataset.rid)});   // a run row on the Runs tab opens the sheet (#984)
 $("#main").addEventListener("keydown",e=>{const r=e.target.closest(".r[data-rid]");if(r&&(e.key==="Enter"||e.key===" ")){e.preventDefault();openRun(r.dataset.rid)}});
 new MutationObserver(flowTabs).observe($("#flowov"),{attributes:true});

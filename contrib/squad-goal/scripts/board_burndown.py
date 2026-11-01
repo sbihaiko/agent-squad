@@ -33,8 +33,10 @@ def burndown(store, reads, spec, zone="UTC"):
     if last_read is None or last_read < start:
         return {"spec": spec, "start": start.isoformat(), "points": [], "gaps": [], "reason": NO_READ}
     points, gaps, pending_added, pending_closed = [], [], [], []
+    daily = {}
     day = start
     while day <= last_read:
+        daily[day.isoformat()] = {"added": sorted(added.get(day, ())), "closed": sorted(closed.get(day, ()))}
         pending_added.extend(added.get(day, ()))
         pending_closed.extend(closed.get(day, ()))
         if day in read_days:
@@ -46,7 +48,7 @@ def burndown(store, reads, spec, zone="UTC"):
         else:
             gaps.append(day.isoformat())
         day += timedelta(days=1)
-    return {"spec": spec, "start": start.isoformat(), "points": points, "gaps": gaps, "reason": None}
+    return {"spec": spec, "start": start.isoformat(), "points": points, "gaps": gaps, "daily": daily, "reason": None}
 
 
 def summary(series, today, forecast=None):
@@ -59,8 +61,8 @@ def summary(series, today, forecast=None):
                 "guide_reason": None, "reason": series["reason"]}
     last = points[-1]
     first_of_week = (today - timedelta(days=TRAILING_DAYS - 1)).isoformat()
-    week = [p for p in points if first_of_week <= p["day"] <= today.isoformat()]
-    closed_week, added_week = sum(p["closed"] for p in week), sum(p["added"] for p in week)
+    week = [d for day, d in series["daily"].items() if first_of_week <= day <= today.isoformat()]
+    closed_week, added_week = sum(len(d["closed"]) for d in week), sum(len(d["added"]) for d in week)
     remaining, rate = last["remaining"], closed_week / TRAILING_DAYS
     guide, why = None, None
     if remaining == 0:

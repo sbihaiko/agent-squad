@@ -1,11 +1,15 @@
 """The Throughput tab's burndown: the hub answers one open spec's series, and the page draws it with its gaps and guide (#1048)."""
 import importlib.util
 import json
+import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
+import urllib.request
 from datetime import UTC, date, datetime
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -132,11 +136,60 @@ def test_a_spec_with_no_child_answers_its_reason(hub, board):
     assert burn["reason"] == "no child ticket"
 
 
-def test_the_server_answers_the_burndown_route_and_the_page_calls_it():
-    source = HUB_PY.read_text()
-    assert 'self.path.startswith("/api/chart/burndown")' in source
-    assert "const flowBurn=" in source
-    assert "id=flowv" in source, "the burndown is a view of the Throughput tab, never a fourth tab"
+def test_the_cache_reads_anew_when_the_history_changes_on_the_same_board_read(hub, board):
+    _burn(hub, _items(hub), 1045)
+    hub.CHARTS.clear()
+    first = hub.flow_burn(1045)["burn"]
+    assert first["remaining"] == 1
+    hub._hist.record_issue(hub._hist.history_path(hub.BOARD, hub.REPO), 3, OPENED, OPENED,
+                           [{"t": _at(20), "type": "spec", "spec": 1045}, {"t": _at(22), "type": "closed"}], True, _epoch(22))
+    _write_reads(hub, hub.board_cache["items"], (22,))
+    again = hub.flow_burn(1045)["burn"]
+    assert (again["remaining"], again["as_of"]) == (0, "2026-10-22"), "a stale answer names the old count and day"
+
+
+NODE = shutil.which("node")
+
+
+def _page_url(hub):
+    """The URL the page's Burndown view fetches, built by the page's own flowOpen."""
+    assert NODE is not None, "node is a test dependency of the burndown page"
+    lines = "\n".join(_page_block(hub, p) for p in ("let FLOWK=", "let flowW=", "const flowX=", "const flowY=",
+                                                    "const flowViews=", "const flowBurn=", "const drawFlow=", "const flowOpen="))
+    script = (f"const calls=[];globalThis.fetch=async u=>{{calls.push(u);return {{json:async()=>({{}})}}}};"
+              "const el={hidden:true,clientWidth:800,innerHTML:''};const $=()=>el;const esc=t=>String(t);"
+              "const barQuery=()=>'';let BURN={s:null};\n"
+              f"{lines}\nflowOpen(VIEW).then(()=>console.log(calls[0]));")
+    return subprocess.run([NODE, "-e", script.replace("VIEW", json.dumps(_view_key(hub)))], capture_output=True, text=True,
+                          timeout=30).stdout.strip()
+
+
+def _view_key(hub):
+    return re.search(r'value=(\w+)\$\{k==="\1"\?" selected":""\}>Burndown<', hub.PAGE)[1]
+
+
+def _get(port, path):
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=10) as r:
+        return r.headers.get("Content-Type"), r.read().decode()
+
+
+def test_the_page_fetches_the_route_the_server_answers(hub, board):
+    _burn(hub, _items(hub), 1045)
+    url = _page_url(hub)
+    assert url.startswith("/api/chart/burndown?"), f"the page fetched {url!r}"
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), hub.H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        ctype, body = _get(srv.server_port, url)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    assert ctype == "application/json", "the page's fetch reached the page, not the chart"
+    assert json.loads(body)["spec"] == 1045
+
+
+def test_the_burndown_is_a_view_of_the_throughput_tab(hub):
+    assert "id=flowv" in hub.PAGE, "the burndown is a view of the Throughput tab, never a fourth tab"
 
 
 def _page_block(hub, prefix):
@@ -151,8 +204,7 @@ def _page_block(hub, prefix):
 
 
 def _draw(hub, payload):
-    if shutil.which("node") is None:
-        pytest.skip("node is not installed")
+    assert NODE is not None, "node is a test dependency of the burndown page"
     lines = "\n".join(_page_block(hub, p) for p in ("let flowW=", "const flowX=", "const flowY=", "const flowViews=",
                                                     "const flowBurn="))
     script = f"const esc=t=>String(t);\n{lines}\nconsole.log(flowBurn({json.dumps(payload)}));"
