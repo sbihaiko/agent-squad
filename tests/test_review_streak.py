@@ -46,8 +46,10 @@ def test_two_different_findings_need_two_identical_ones_to_change_the_coder():
 
 
 def test_a_fix_round_that_wrote_no_artifact_repeats_the_finding():
-    assert R.unanswered("fail", ["review_fix_failed", "artifact_missing"])
+    assert R.unanswered("fail", ["review_fix_failed", "child_ended_early"])
+    assert R.unanswered("fail", ["session_error:error_during_execution"])
     assert not R.unanswered("fail", ["review_fix_failed", "deadline"])
+    assert not R.unanswered("fail", ["node_stall_cap"])
     assert not R.unanswered("pass", [])
     assert R.with_unanswered([fp("a.txt — no test — it fails — add one")], [True]) == [fp("a.txt — no test — it fails — add one")] * 2
 
@@ -176,14 +178,14 @@ async def test_a_fix_round_with_no_artifact_changes_the_coder_on_the_first_repet
     assert PREMISE not in prompts[1] and PREMISE in prompts[2]     # #882: only the fix round that answers the repeat is told
     assert [e["entry"] for e in outcomes(tmp_path)] == [1, 2, 3]
     last = outcomes(tmp_path)[1]
-    assert last["outcome"] == "fail" and last["reasons"] == ["artifact_missing"]
+    assert last["outcome"] == "fail" and last["reasons"] == ["child_ended_early"]
     assert last["diagnostic"]["ended"]["last"] == "I read the finding, then ran out of context before I wrote the file"
     rounds = ev(tmp_path, "review_round")
     assert [(r["round"], r.get("repeated", False)) for r in rounds] == [(1, False), (2, True)]   # the unchanged head is not read again
     assert rounds[1]["review"]["findings"] == rounds[0]["review"]["findings"] and rounds[1]["review"]["elapsed"] == 0.0
     assert len((tmp_path / "review.log").read_text().splitlines()) == 1
     [land] = ev(tmp_path, "land")
-    assert land["outcome"] == "fail" and land["reasons"] == ["review_fix_failed", "artifact_missing"]
+    assert land["outcome"] == "fail" and land["reasons"] == ["review_fix_failed", "child_ended_early"]
 
 
 @pytest.mark.anyio
