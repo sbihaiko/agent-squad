@@ -1,6 +1,9 @@
 """The fast read of the open cards (SPEC 968), driven over recorded GraphQL answers through the board route."""
 import importlib.util
+import json
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -32,7 +35,7 @@ def hub():
 def node(n, status="Todo", state="OPEN", reason=None, repo=REPO, archived=False, labels=(), fd=None):
     return {"updatedAt": "2026-11-01T10:00:00Z", "isArchived": archived,
             "fieldValueByName": {"name": status, "updatedAt": "2026-11-01T10:00:00Z"} if status else None,
-            "content": {"number": n, "fullDatabaseId": fd if fd is not None else 900000 + n, "state": state,
+            "content": {"number": n, "fullDatabaseId": str(fd if fd is not None else 900000 + n), "state": state,
                         "stateReason": reason, "updatedAt": "2026-11-01T10:00:00Z",
                         "repository": {"nameWithOwner": repo},
                         "labels": {"totalCount": len(labels), "nodes": [{"name": x} for x in labels]}}}
@@ -145,6 +148,34 @@ def test_the_join_is_by_full_database_id_never_by_number_alone(board, monkeypatc
     monkeypatch.setattr(board, "_graphql", recorded(page([node(11, status="Doing", fd=555)])))
     board.fast_board_pass()
     assert board.board_cache["items"][0]["st"] == "Todo", "a number that names another database id is another card"
+
+
+def test_a_card_read_from_the_rest_items_route_joins_its_fast_row(board, monkeypatch, tmp_path):
+    """The cache row comes from the REST items program, the fast row from GraphQL: they join on the one database id."""
+    jq = shutil.which("jq")
+    assert jq, "jq runs the items program the hub reads with"
+    rest = [{"content_type": "Issue", "id": "PVTI_11", "fields": [{"name": "Status", "value": {"name": {"raw": "Todo"}}}],
+             "content": {"id": 911, "number": 11, "repository_url": f"https://api.github.com/repos/{REPO}", "title": "card 11",
+                         "state": "OPEN", "state_reason": None, "closed_at": None, "labels": [], "sub_issues_summary": {},
+                         "created_at": "2026-11-01T09:00:00Z"}}]
+    src = tmp_path / "items.json"
+    src.write_text(json.dumps(rest))
+    out = subprocess.run([jq, "-c", board.board_items_jq(REPO), str(src)], capture_output=True, text=True, check=True).stdout
+    rows = [json.loads(line) for line in out.splitlines() if "_page" not in line]
+    assert rows[0]["fd"] == 911, "the items program keys a card by its REST content id, which is the database id"
+    board.board_cache["items"] = [{**card(11, st="Todo"), "fd": rows[0]["fd"]}]
+    monkeypatch.setattr(board, "_graphql", recorded(page([node(11, status="Doing", fd="911")])))
+    board.fast_board_pass()
+    assert board.board_cache["items"][0]["st"] == "Doing"
+
+
+def test_the_first_page_sends_no_after_cursor_on_the_wire(board, monkeypatch):
+    import ghread
+    gql = recorded(page([node(11, status="Doing")]))
+    monkeypatch.setattr(board, "_graphql", gql)
+    board.fast_board_pass()
+    argv = ghread.graphql_argv(board_fast.query("user"), gql.calls[0])
+    assert not any(a.startswith("after=") for a in argv), "a None cursor reaches GitHub as the string None"
 
 
 def test_other_repositories_and_archived_items_are_not_joined(board, monkeypatch):

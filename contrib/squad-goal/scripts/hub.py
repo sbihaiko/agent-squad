@@ -2502,7 +2502,7 @@ def board_items_jq(repo):
     rides the same read as `cr` (#921): the key is its own, never `r`, which the hub reads as the row's repository. After
     each page's items it emits one {"_page": n} line, n the page's own item count, so the read says whether its last page
     was short (#894)."""
-    return ('''length as $n|(.[]|select((.content_type=="Issue" and ((.content.repository_url//"")|endswith("/" + $repo))) or .content_type=="DraftIssue")|{n:.content.number,fd:.content.fullDatabaseId,i:.id,t:.content.title,s:.content.state,cr:((.content.state_reason//null)|if type=="string" then ascii_downcase else . end),c:.content.closed_at,st:((.fields[]|select(.name=="Status")|.value.name.raw)//null),k:(((.fields[]?|select(.name=="Kind")|.value.name|if type=="object" then .raw else . end)//"")|ascii_downcase|if .=="" then null else . end),l:[.content.labels[]?.name],si:{total:.content.sub_issues_summary.total,completed:.content.sub_issues_summary.completed},o:.content.created_at}),{_page:$n}''').replace("$repo", json.dumps(repo))
+    return ('''length as $n|(.[]|select((.content_type=="Issue" and ((.content.repository_url//"")|endswith("/" + $repo))) or .content_type=="DraftIssue")|{n:.content.number,fd:.content.id,i:.id,t:.content.title,s:.content.state,cr:((.content.state_reason//null)|if type=="string" then ascii_downcase else . end),c:.content.closed_at,st:((.fields[]|select(.name=="Status")|.value.name.raw)//null),k:(((.fields[]?|select(.name=="Kind")|.value.name|if type=="object" then .raw else . end)//"")|ascii_downcase|if .=="" then null else . end),l:[.content.labels[]?.name],si:{total:.content.sub_issues_summary.total,completed:.content.sub_issues_summary.completed},o:.content.created_at}),{_page:$n}''').replace("$repo", json.dumps(repo))
 
 GH_FLOOR = int(os.environ.get("SG_GH_FLOOR") or 300)   # below this many core requests left, a read pass skips its reads (#855)
 LABELS_EVERY = 3600   # seconds between two reads of the repository's labels, and of its closed pull requests (#855)
@@ -2536,10 +2536,20 @@ def _rest_page(route):
     answer = out.answer or []
     if seen["etag"]: _etags[route] = (seen["etag"], answer)
     return answer
-def gh_list(path, query=""):
+def _check_deadline(until):
+    """Raises when the full read's overall deadline has passed; a None deadline is no bound."""
+    if until is not None and time.time() >= until: raise TimeoutError("full read passed its deadline")
+def _bounded(fetch, until):
+    """A branch-lane fetcher that never starts a repository's read once the full read's deadline has passed."""
+    def bounded(*args):
+        _check_deadline(until)
+        return fetch(*args)
+    return bounded
+def gh_list(path, query="", until=None):
     """Every page of a REST list, 100 to a page (ADR-0277): a page shorter than 100 is the last one."""
     rows, page = [], 1
     while True:
+        _check_deadline(until)
         answer = _rest_page(f"{path}?{query + '&' if query else ''}per_page=100&page={page}")
         rows += answer
         if len(answer) < 100: return rows
@@ -2552,13 +2562,14 @@ OPEN_RELATIONS_QUERY = ('query($cursor:String){repository(owner:"%s",name:"%s"){
                         'parent{number labels(first:20){nodes{name}}}}}}}')
 RELATIONS_PAGE = 100       # the page size the relations read asks for
 RELATIONS_MAX_PAGES = 20   # a read that would need more pages than this is incomplete, never a silent stop
-def open_relations():
+def open_relations(until=None):
     """Every open issue's blockers and parent, page by page through `gh api graphql` (#829). It returns `(nodes, complete)`:
     a read that fails, asks for another page without a cursor, or runs past the page cap is incomplete, so a caller never
     reads the cards it did not reach as issues with no parent."""
     own, name = REPO.split("/", 1)
     nodes, after = [], None
     for _ in range(RELATIONS_MAX_PAGES):
+        _check_deadline(until)
         argv = ["gh", "api", "graphql", "-f", "query=" + OPEN_RELATIONS_QUERY % (own, name, RELATIONS_PAGE)]
         if after: argv += ["-f", "cursor=" + after]
         out = subprocess.run(argv, capture_output=True, text=True, timeout=60).stdout   # a call that fails raises, and the pass keeps the rows it had
@@ -2583,6 +2594,7 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
     items = lc = cases = None
     gaps = []   # why the flow sample is skipped when the reads answered but are not whole (#894); none when they are whole
     read_started = time.time()   # when the list read begins: each row keeps it as its observation instant (#974)
+    until = read_started + FULL_DEADLINE
     try:
             out = board_seam().rows(
                 board_items_jq(REPO),
@@ -2596,12 +2608,12 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
             cases = [i["t"] for i in items if i.get("n") is None and i.get("k") == "test case"]   # a test case is a draft item: it has no number, so it is a row and never a card (#306)
             items = [i for i in items if i.get("n") is not None]
             have = {i["n"] for i in items}   # open issues that never reached the board have no state either
-            for i in gh_list(f"repos/{REPO}/issues", "state=open"):
+            for i in gh_list(f"repos/{REPO}/issues", "state=open", until):
                 if i.get("pull_request") is None and i["number"] not in have:
                     s = i.get("sub_issues_summary") or {}
                     items.append({"n": i["number"], "t": i["title"], "s": i["state"], "c": None, "st": None, "l": [x["name"] for x in i["labels"]],
                                   "si": {"total": s.get("total"), "completed": s.get("completed")}, "o": i["created_at"]})
-            nodes, complete = open_relations()   # every page of open issues; never one REST call per card
+            nodes, complete = open_relations(until)   # every page of open issues; never one REST call per card
             if not complete: gaps.append("relations read incomplete: a page with no cursor, or past the page cap")
             try: apply_open_blockers(items, nodes)
             except Exception: pass
@@ -2610,29 +2622,32 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
             try: apply_parent_specs(items, nodes, complete, board_cache.get("items") or [])
             except Exception: pass
             if time.time() - board_cache.get("lt", 0) >= LABELS_EVERY:
-                lc = {x["name"]: x["color"].lower() for x in gh_list(f"repos/{REPO}/labels")}
+                lc = {x["name"]: x["color"].lower() for x in gh_list(f"repos/{REPO}/labels", until=until)}
                 board_cache["lt"] = time.time()
     except Exception as e:
-        board_cache["err"], items = str(e)[:80], None   # a failed pass keeps the last good rows on the board (#1810)
-        for part in ("status", "structure"): set_part(part, err=board_cache["err"])
+        with _board_lock:
+            board_cache["err"], items = str(e)[:80], None   # a failed pass keeps the last good rows on the board (#1810)
+            for part in ("status", "structure"): set_part(part, err=board_cache["err"])
     if items: apply_holders(items)
     if items is not None:
         with _board_lock:
             board_cache.update(t=time.time(), repo=REPO, items=merge_items(board_cache.get("items"), items, int(read_started)),
                                cases=cases or [], lc=lc or board_cache.get("lc", {}), err=None)
-        for part in ("status", "structure"): set_part(part, err=None)
+            for part in ("status", "structure"): set_part(part, err=None)
     rs = REPOS if repos is None else repos
     try:
-            prs, landed, errs = prs_pass(fetch_open, fetch_landed, rs)
-            board_cache.update(prs=prs, landed=landed, errs=errs)
-            set_part("prs", err="; ".join(errs) or None)
-            # a pass no repository answered is not a refresh: `t` keeps saying when the board last really moved, which
-            # is the age the header shows (#1810), instead of claiming a fresh board nothing came back for.
-            if len(errs) < len(rs): board_cache["t"] = time.time()
+            prs, landed, errs = prs_pass(_bounded(fetch_open or open_rows_of, until), _bounded(fetch_landed or landed_branches_of, until), rs)
+            with _board_lock:
+                board_cache.update(prs=prs, landed=landed, errs=errs)
+                set_part("prs", err="; ".join(errs) or None)
+                # a pass no repository answered is not a refresh: `t` keeps saying when the board last really moved, which
+                # is the age the header shows (#1810), instead of claiming a fresh board nothing came back for.
+                if len(errs) < len(rs): board_cache["t"] = time.time()
     except Exception as e:
-        board_cache["err"] = str(e)[:80]
-        set_part("prs", err=board_cache["err"])
-    save_board()
+        with _board_lock:
+            board_cache["err"] = str(e)[:80]
+            set_part("prs", err=board_cache["err"])
+    with _board_lock: save_board()
     # Every pass writes its flow read, whole or not (#894): a failed read is a flow_skip that counts the last whole read's cards.
     rows = items if items is not None else (board_cache.get("items") or [])
     if items is None:
@@ -2673,8 +2688,9 @@ def save_board():
     _tmp = _temp_name(BOARD); _tmp.write_text(json.dumps(board_cache)); os.replace(_tmp, BOARD)
 FULL_EVERY = 600   # seconds between full board reads; a board-dirty flag reads at once
 FAST_EVERY = 15    # seconds between fast reads of the open cards
+FULL_DEADLINE = 300   # the full read's overall deadline (ADR-0051): its page loops and branch fetches stop past it
 FAST_DEADLINE = 60   # the fast read's overall deadline (ADR-0051)
-FAST_POINTS_PER_HOUR = 1000   # the fast read's GraphQL budget per hour, failed calls included; it stops for the hour when spent
+FAST_POINTS_PER_HOUR = 2400   # five pages of 100 cards at two points each, every 15 s (GitHub's documented cost, not measured live); spent, it stops for the hour
 FAST_BUDGET = board_fast.Budget(FAST_POINTS_PER_HOUR)
 _board_lock = threading.Lock()   # the fast read and the full read write one cache; the lock covers the write, never a read
 def _fast_root():
@@ -2691,7 +2707,8 @@ def fast_board_pass():
     observed = time.time()
     try: nodes = board_fast.read_snapshot(_graphql, _fast_root(), OWNER, PROJECT_NO, _columns_module.TERMINAL, FAST_BUDGET, observed + FAST_DEADLINE)
     except board_fast.SnapshotError as e:
-        set_part("status", err=str(e)[:80])
+        with _board_lock:
+            set_part("status", err=str(e)[:80])
         return
     with _board_lock:
         board_cache["items"] = board_fast.apply(board_cache.get("items") or [], board_fast.rows_of(nodes, REPO), int(observed))
@@ -2702,14 +2719,16 @@ def refresh_fast():
     while True:
         time.sleep(FAST_EVERY)
         try: fast_board_pass()
-        except Exception as e: set_part("status", err=str(e)[:80])   # one failed fast pass never ends the loop
+        except Exception as e:
+            with _board_lock: set_part("status", err=str(e)[:80])   # one failed fast pass never ends the loop
 def refresh_board():
     """board_pass() every FULL_EVERY seconds, or within 2 s of a board move made through scripts/board.sh (board-dirty flag).
     The items route lags a write by seconds, so a pass a move asked for is read again 16 s later: the card never waits a minute in its old column."""
     quick = False
     while True:
         try: board_pass()
-        except Exception as e: board_cache["err"] = str(e)[:80]   # one failed pass never ends the loop (#512): the next one still runs
+        except Exception as e:
+            with _board_lock: board_cache["err"] = str(e)[:80]   # one failed pass never ends the loop (#512): the next one still runs
         for _ in range(8 if quick else FULL_EVERY // 2):
             time.sleep(2)
             try:

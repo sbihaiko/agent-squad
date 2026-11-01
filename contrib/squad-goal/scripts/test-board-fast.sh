@@ -20,7 +20,7 @@ import board_fast as bf
 def node(n, status, fd, state="OPEN", reason=None, repo="x/y"):
     return {"updatedAt": "u", "isArchived": False,
             "fieldValueByName": {"name": status, "updatedAt": "su"} if status else None,
-            "content": {"number": n, "fullDatabaseId": fd, "state": state, "stateReason": reason,
+            "content": {"number": n, "fullDatabaseId": str(fd), "state": state, "stateReason": reason,
                         "repository": {"nameWithOwner": repo}, "labels": {"totalCount": 0, "nodes": []}}}
 
 def page(nodes, more=None, cost=2):

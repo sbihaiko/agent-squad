@@ -65,7 +65,8 @@ def read_snapshot(gql, root, owner, number, closed, budget, deadline, clock=time
         if not budget.open(): raise SnapshotError("fast read budget spent for this hour")
         left = deadline - clock()
         if left <= 0: raise SnapshotError("fast read passed its deadline")
-        try: answer = gql(text, {"owner": owner, "number": number, "after": after, "q": flt}, left)
+        variables = {"owner": owner, "number": number, "after": after, "q": flt}
+        try: answer = gql(text, {k: v for k, v in variables.items() if v is not None}, left)
         except Exception as e:
             budget.charge(1)
             raise SnapshotError(f"page failed: {str(e)[:80]}") from e
@@ -85,6 +86,11 @@ def read_snapshot(gql, root, owner, number, closed, budget, deadline, clock=time
         if not after: raise SnapshotError("a page asks for another and names no cursor")
 
 
+def _key(database_id):
+    """A card's database id as an int: GraphQL sends `fullDatabaseId` as a string, the items route sends `id` as a number."""
+    return None if database_id is None else int(database_id)
+
+
 def rows_of(nodes, repo):
     """The issues of `repo` in the snapshot, keyed by their database id; a draft item and an archived item are not cards."""
     out = []
@@ -92,7 +98,7 @@ def rows_of(nodes, repo):
         c = n.get("content") or {}
         if c.get("number") is None or (c.get("repository") or {}).get("nameWithOwner") != repo or n.get("isArchived"): continue
         status = n.get("fieldValueByName") or {}
-        out.append({"fd": c.get("fullDatabaseId"), "st": status.get("name"), "su": status.get("updatedAt"), "iu": n.get("updatedAt"),
+        out.append({"fd": _key(c.get("fullDatabaseId")), "st": status.get("name"), "su": status.get("updatedAt"), "iu": n.get("updatedAt"),
                     "s": str(c.get("state") or "").lower(), "cr": (str(c["stateReason"]).lower() if c.get("stateReason") else None),
                     "l": [x["name"] for x in (c.get("labels") or {}).get("nodes") or []]})
     return out
@@ -101,10 +107,10 @@ def rows_of(nodes, repo):
 def apply(held, rows, observed):
     """The held rows with the snapshot's column inputs written where the snapshot is newer. A held row the snapshot does
     not carry keeps its row; a joined row takes the snapshot's inputs and the instant the snapshot was read."""
-    by = {r["fd"]: r for r in rows if r.get("fd") is not None}
+    by = {_key(r["fd"]): r for r in rows if r.get("fd") is not None}
     out = []
     for i in held:
-        r = by.get(i.get("fd"))
+        r = by.get(_key(i.get("fd")))
         if r is None or (i.get("ot") or 0) >= observed:
             out.append(i)
             continue

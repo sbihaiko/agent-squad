@@ -188,6 +188,26 @@ def test_a_pass_that_raises_does_not_end_the_refresh_loop(hub, monkeypatch):
     assert "temp file is gone" in (hub.board_cache["err"] or ""), "the error of the failed pass is recorded"
 
 
+def test_a_full_read_past_its_deadline_ends_the_pass_and_keeps_the_rows(hub, monkeypatch):
+    fetched = []
+    old = [{"n": 5, "st": "Todo", "s": "open", "ot": 1}]
+    monkeypatch.setattr(hub, "FULL_DEADLINE", 0)
+    monkeypatch.setattr(hub.subprocess, "run", _fake_gh([]))
+    monkeypatch.setattr(hub, "board_cache", {"t": 1.0, "items": old, "prs": [], "lc": {}, "err": None})
+    hub.board_pass(fetch_open=lambda repo: fetched.append(repo) or [], repos=["x/y"])
+    assert fetched == [], "a fetch the deadline has passed is never sent"
+    assert hub.board_cache["items"] == old and "deadline" in (hub.board_cache.get("err") or "")
+
+
+def test_the_full_read_saves_the_cache_under_the_board_lock(hub, monkeypatch):
+    held = []
+    monkeypatch.setattr(hub.subprocess, "run", _fake_gh([]))
+    monkeypatch.setattr(hub, "save_board", lambda: held.append(hub._board_lock.locked()))
+    monkeypatch.setattr(hub, "board_cache", {"t": 1.0, "items": [], "prs": [], "lc": {}, "err": None})
+    hub.board_pass(fetch_open=lambda repo: [], repos=["x/y"])
+    assert held and all(held), "the cache is written only while the lock holds it, so a fast read never sees a half-written cache"
+
+
 def test_two_writers_in_one_process_never_share_a_temp_file(hub, monkeypatch):
     """#512: hubmux runs one hub per profile in one process; a temp name keyed by the pid alone was shared, and one
     writer's os.replace took the file away from the other."""
