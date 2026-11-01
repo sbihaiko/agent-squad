@@ -25,7 +25,7 @@ def test_history_path_is_one_file_per_repository():
     assert a != b
 
 
-def test_status_move_on_a_closed_item_is_read_and_item_alone_is_not():
+def test_status_move_on_a_closed_item_is_read_and_no_other_move_is_not():
     items = [
         {"n": 1, "issue_updated": "2026-10-01T00:00:00Z", "status_updated": "2026-10-01T00:00:00Z",
          "item_updated": "2026-10-09T00:00:00Z"},
@@ -39,12 +39,26 @@ def test_status_move_on_a_closed_item_is_read_and_item_alone_is_not():
         2: {"issue_updated": "2026-10-01T00:00:00Z", "status_updated": "2026-10-01T00:00:00Z"},
         3: {"issue_updated": "2026-10-01T00:00:00Z", "status_updated": "2026-10-01T00:00:00Z"},
     }
-    assert bh.due_reads(items, stored) == [2, 3]
+    assert bh.due_reads(items, stored) == [2]
 
 
 def test_a_card_with_no_stored_record_is_read_once():
     items = [{"n": 9, "issue_updated": "2026-10-01T00:00:00Z", "status_updated": "2026-10-01T00:00:00Z"}]
     assert bh.due_reads(items, {}) == [9]
+
+
+def test_a_short_timeline_is_due_again_until_it_is_complete():
+    items = [{"n": 4, "issue_updated": "2026-10-01T00:00:00Z", "status_updated": "2026-10-01T00:00:00Z"}]
+    stored = {4: {"issue_updated": "2026-10-01T00:00:00Z", "status_updated": "2026-10-01T00:00:00Z",
+                  "complete": False, "cursor": "C1"}}
+    assert bh.due_reads(items, stored) == [4]
+
+
+def test_a_resumed_backfill_picks_up_a_short_timeline_before_the_next_issue():
+    stored = {1: {"complete": True}, 2: {"complete": False, "cursor": "C1"}}
+    assert bh.backfill_batch([1, 2, 3], stored) == [2]
+    stored[2]["complete"] = True
+    assert bh.backfill_batch([1, 2, 3], stored) == [3]
 
 
 def test_one_issue_per_timeline_query_is_the_measured_batch():
