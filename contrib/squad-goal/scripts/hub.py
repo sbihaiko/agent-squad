@@ -2354,18 +2354,18 @@ def stats(period, src="both"):
         for raw, v in r["mod"].items():   # keyed on the canonical id, as the review calls are, so one model is one slice (#789)
             m = canon_model(raw)
             if src == "sub" and not SUBSCRIPTION.match(m) or src == "api" and SUBSCRIPTION.match(m): continue
-            x = mt.setdefault(m, {"model": m, "in": 0, "out": 0, "cache": 0, "spend": 0.0, "month_cost": 0.0, "calls": 0, "src": raw, "srcs": []})   # the first spelling names the box; every spelling's route is kept (#791)
+            x = mt.setdefault(m, {"model": m, "in": 0, "out": 0, "cache": 0, "spend": 0.0, "month_cost": 0.0, "month_tokens": 0, "calls": 0, "src": raw, "srcs": []})   # the first spelling names the box; every spelling's route is kept (#791)
             if raw not in x["srcs"]: x["srcs"].append(raw)
             for k in ("in", "out", "cache", "calls"): x[k] += v[k]
             x["spend"] += v["spend"]
-            if in_month: x["month_cost"] += v["spend"]
+            if in_month: x["month_cost"] += v["spend"]; x["month_tokens"] += v["in"] + v["out"]   # the pie counts tokens: dollars are a price list, tokens are the work (#1035)
     for c in calls:
         m = c["model"]
         if src == "sub" and not SUBSCRIPTION.match(m) or src == "api" and SUBSCRIPTION.match(m): continue
-        x = mt.setdefault(m, {"model": m, "in": 0, "out": 0, "cache": 0, "spend": 0.0, "month_cost": 0.0, "calls": 0, "src": m, "srcs": []})
+        x = mt.setdefault(m, {"model": m, "in": 0, "out": 0, "cache": 0, "spend": 0.0, "month_cost": 0.0, "month_tokens": 0, "calls": 0, "src": m, "srcs": []})
         if m not in x["srcs"]: x["srcs"].append(m)
         x["in"] += c["in"]; x["out"] += c["out"]; x["cache"] += c["cache"]; x["calls"] += 1; x["spend"] += c["spend"]
-        if time.localtime(c["t0"])[:2] == now[:2]: x["month_cost"] += c["spend"]
+        if time.localtime(c["t0"])[:2] == now[:2]: x["month_cost"] += c["spend"]; x["month_tokens"] += c["in"] + c["out"]
     def _box(x):
         box = model_box(x["src"])
         box["routes"] = sorted({model_box(s)["route"] for s in x["srcs"]} - {None})   # every route the model was called by (#791)
@@ -4020,7 +4020,7 @@ body.tkopen #win{margin-right:420px}
 #tkb pre{white-space:pre-wrap;overflow-wrap:anywhere;font:var(--fs-min)/1.45 ui-monospace,Menlo,monospace;background:#12161c;border:1px solid var(--line);border-radius:6px;padding:8px 10px;margin:6px 0}
 #tkb h3{font-size:var(--fs-min);color:var(--mute);margin:14px 0 4px}#tkb .cm{border-left:3px solid var(--acc);padding-left:8px;margin:8px 0}
 #tkb .bar button{min-width:28px}#tkb .bar button:disabled{opacity:.35;cursor:default}#tkb .bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}#tkb a.gh{color:var(--acc);font-weight:700}
-#bbody .it{cursor:pointer}#bbody .it.hit{box-shadow:0 0 0 2px var(--warn)}#bbody .it.hl{box-shadow:0 0 0 2px var(--acc)}#bbody .it.dim{opacity:.35}#list .r.hlr{outline:2px solid var(--acc);outline-offset:-2px}.hlrel{color:var(--acc);font-size:var(--fs-min);margin-left:6px}.hlrel[hidden]{display:none}   /* the cards the sheet's Highlight related marks (#919) */
+#bbody .it{cursor:pointer}#bbody .it.hit{box-shadow:0 0 0 2px var(--warn)}#bbody .it.hl{box-shadow:0 0 0 2px var(--acc)}#bbody .it.dim{opacity:.35}#list .r.hlr{outline:2px solid var(--acc);outline-offset:-2px}.hlrel{color:var(--acc);font-size:var(--fs-min);margin-left:6px}.hlrel[hidden]{display:none}.ghl{color:var(--mute);margin-left:6px;display:inline-flex;align-items:center;opacity:.65;text-decoration:none}.ghl:hover,.ghl:focus-visible{opacity:1;color:var(--fg)}   /* the cards the sheet's Highlight related marks (#919) */
 #tkb h2{font:600 var(--fs-md)/1.35 -apple-system,system-ui,sans-serif;margin:4px 0 8px}
 #tkb .md{font:var(--fs-body)/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;color:#d8dde6;overflow-wrap:anywhere}
 #tkb .md>:first-child{margin-top:0}#tkb .md p{margin:.6em 0}#tkb .md h2,#tkb .md h3,#tkb .md h4,#tkb .md h5{font-weight:600;margin:1.3em 0 .4em;line-height:1.3;color:#eef1f6}
@@ -4131,7 +4131,7 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 #main .r{display:flex;gap:8px;align-items:baseline;padding:8px 10px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;background:var(--card);cursor:pointer}#main .r:hover,#main .r:focus-visible{border-color:var(--acc)}#main h3{font-size:var(--fs-min);text-transform:uppercase;letter-spacing:.06em;color:var(--mute);margin:12px 0 6px}
 #bhead select{min-height:32px;padding:4px 12px;font-size:var(--fs-body);border-radius:6px}#bhead label.hck input{width:18px;aspect-ratio:1;padding:0}
 #bbody .it>.hld{order:1;flex:0 0 auto;margin:0;font-size:var(--fs-min);font-weight:600;color:var(--s5);white-space:nowrap}#bbody .it>.hld::before{content:"\25CF";margin-right:4px;color:var(--s5)}
-#plans .sb,#stats .sb{max-height:340px;overflow:auto}
+#stats .sb,#sub .sb{max-height:680px;overflow:auto}
 #tab-set .sp .sb{padding:0 12px 12px}
 /* Settings (#913): a left theme list, one theme at a time, one Save bar; on the phone a select replaces the list and rows stack. */
 #tab-set .swrap{display:grid;grid-template-columns:200px minmax(0,1fr);gap:16px;max-width:1120px}#tab-set .spanels{min-width:0}
@@ -4178,7 +4178,7 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 <aside id=side>
 <details id=lrd class=sp open><summary>Live runs<span class=sr id=lrs></span></summary><div class=sb id=lrun></div></details>
 <details id=led class=sp><summary>Last ended<span class=sr><span id=les></span> <a href="#" id=enall>History</a></span></summary><div class=sb id=ended></div></details>
-<details id=stats class=sp><summary>Cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><h4>Spend <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Figures at API list prices (API-equivalent)."></span></h4><div class=tot id=tot></div><div class=m id=totnote></div><div class=cash id=cash></div><h4>Spend over time <span class=row id=per></span></h4><div id=chart></div><div id=kpi></div><div id=open></div><h4>Model cost · this month</h4><div class=m id=piet>API-equivalent</div><div id=pie></div></div></details>
+<details id=stats class=sp><summary>Cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><h4>Spend <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Figures at API list prices (API-equivalent)."></span></h4><div class=tot id=tot></div><div class=m id=totnote></div><div class=cash id=cash></div><h4>Spend over time <span class=row id=per></span></h4><div id=chart></div><div id=kpi></div><div id=open></div><h4>Model tokens · this month</h4><div class=m id=piet>in + out</div><div id=pie></div></div></details>
 <details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div class=ian id=ian></div><div id=ispec></div><div id=iloop></div><div class=irw><span>Next cycle</span><b id=icyc aria-live=off>?</b></div><div id=iuse></div></div></details>
 </aside>
 <main id=content>
@@ -4546,25 +4546,25 @@ function pie(ms){
  // One slice per model NAME, never per spelling: one model answers under several (deepseek-flash, deepseek-flash[1m],
  // claude-deepseek-flash), and keying the rows on the raw id drew the same label three times (#1750).
  const byName=new Map();
- for(const m of ms){const v=m.month_cost;if(!(v>0))continue;
+ for(const m of ms){const v=m.month_tokens;if(!(v>0))continue;
   const k=m.box&&m.box.registered===false?m.model+" · unregistered":(m.box&&m.box.llm)||m.model;
   const r=byName.get(k)||{n:k,v:0,ids:[],routes:[]};
   r.v+=v;
   if(!r.ids.includes(m.model))r.ids.push(m.model);
   for(const rt of (m.box&&m.box.routes)||[])if(!r.routes.includes(rt))r.routes.push(rt);
   byName.set(k,r)}
- const rows=[...byName.values()].sort((a,b)=>b.v-a.v);if(!rows.length)return"<span class=m>no cost this month</span>";
+ const rows=[...byName.values()].sort((a,b)=>b.v-a.v);if(!rows.length)return"<span class=m>no tokens this month</span>";
  const tot=rows.reduce((a,m)=>a+m.v,0),keep=rows.slice(0,TOP),fold=rows.slice(TOP);
- const sl=keep.map(m=>({k:m.n,n:m.n,v:m.v,t:`${m.n} (${m.ids.join(", ")})${m.routes.length?" via "+m.routes.join(", "):""}: ${usd(m.v)}`}));
- if(fold.length){const v=fold.reduce((a,m)=>a+m.v,0);sl.push({k:"other",n:`other · ${fold.length} models`,v,t:fold.map(m=>`${m.n}: ${usd(m.v)}`).join("\n")})}
+ const sl=keep.map(m=>({k:m.n,n:m.n,v:m.v,t:`${m.n} (${m.ids.join(", ")})${m.routes.length?" via "+m.routes.join(", "):""}: ${tk(m.v)} tokens`}));
+ if(fold.length){const v=fold.reduce((a,m)=>a+m.v,0);sl.push({k:"other",n:`other · ${fold.length} models`,v,t:fold.map(m=>`${m.n}: ${tk(m.v)} tokens`).join("\n")})}
  const col=k=>k==="other"?"#8a93a3":PCOL[[...String(k)].reduce((h,c)=>(h*31+c.charCodeAt(0))>>>0,0)%PCOL.length];   // a model keeps its colour across renders: the colour follows its name, not its place in the list
- const dot=(k,n,v)=>`<i style="background:${col(k)}"></i><span class=ln>${esc(n)}</span><span class=usd>${usd(v)}</span>`;   // the rows are built outside the page template: a nested backtick there breaks the pie matcher in tests
+ const dot=(k,n,v)=>`<i style="background:${col(k)}"></i><span class=ln>${esc(n)}</span><span class=usd>${tk(v)}</span>`;   // the rows are built outside the page template: a nested backtick there breaks the pie matcher in tests
  const subRows=fold.map(m=>`<div>${dot(m.n,m.n,m.v)}</div>`).join("");   // built outside the legend template: a nested backtick there breaks the pie matcher in tests
  const legendRows=sl.map(x=>x.k==="other"
    ?`<details class=lgo data-k="other"><summary tabindex=0 title="${esc(x.t)}">${dot(x.k,x.n,x.v)}</summary><div class=lgx>${subRows}</div></details>`
    :`<div tabindex=0 data-k="${esc(x.k)}" title="${esc(x.t)}">${dot(x.k,x.n,x.v)}</div>`).join("");
  let a0=-Math.PI/2;const R=52,C=60,arc=sl.map((x,i)=>{const a1=a0+x.v/tot*2*Math.PI,big=a1-a0>Math.PI?1:0,p=sl.length===1?`<circle cx=${C} cy=${C} r=${R} data-k="${esc(x.k)}" fill="${col(x.k)}"><title>${esc(x.t)}</title></circle>`:`<path d="M${C} ${C}L${C+R*Math.cos(a0)} ${C+R*Math.sin(a0)}A${R} ${R} 0 ${big} 1 ${C+R*Math.cos(a1)} ${C+R*Math.sin(a1)}Z" data-k="${esc(x.k)}" fill="${col(x.k)}" stroke="#161a21" stroke-width=1><title>${esc(x.t)}</title></path>`;a0=a1;return p}).join("");
- return `<div class=pie><svg viewBox="0 0 120 120" width=112 height=112>${arc}<circle cx=${C} cy=${C} r=26 fill="#161a21"/><text x=${C} y=${C-1} text-anchor=middle fill="#d8dde6" style="font-size:var(--fs-min)" font-weight=600>${usd(tot)}</text><text x=${C} y=${C+12} text-anchor=middle fill="#8a93a3" style="font-size:var(--fs-min)">this month</text></svg><div class=lg>${legendRows}</div></div>`}
+ return `<div class=pie><svg viewBox="0 0 120 120" width=112 height=112>${arc}<circle cx=${C} cy=${C} r=26 fill="#161a21"/><text x=${C} y=${C-1} text-anchor=middle fill="#d8dde6" style="font-size:var(--fs-min)" font-weight=600>${tk(tot)}</text><text x=${C} y=${C+12} text-anchor=middle fill="#8a93a3" style="font-size:var(--fs-min)">tokens · month</text></svg><div class=lg>${legendRows}</div></div>`}
 function hlPie(k){document.querySelectorAll("#pie [data-k]").forEach(el=>el.classList.toggle("hl",!!k&&el.dataset.k===k));document.querySelector("#pie .pie")?.classList.toggle("dim",!!k)}
 $("#pie").addEventListener("mouseover",e=>{const el=e.target.closest("[data-k]");hlPie(el?el.dataset.k:"")});
 $("#pie").addEventListener("mouseout",e=>{if(!$("#pie").contains(e.relatedTarget))hlPie("")});
@@ -4903,7 +4903,7 @@ const laneHtml=m=>{const ccount=c=>m.lanes.reduce((s,l)=>s+(l.counts[c]||0),0),p
    lid=l.kind==="s"?"SPEC "+l.num:bugs?"Loop bugs":l.title,ltt=l.kind==="s"?l.title:bugs?"defects of the loop itself: they halt dispatch, never a landing (ADR-0146)":l.kind==="none"?"bugs and single tickets":"";   // the lane reads as the mock: a coloured id, then its title or its subtitle (#889)
   h+=`<section class="lane${cl?" coll":""}${l.kind==="bugs"?" alarm":""}${l.done?" done":""}" data-lane="${esc(l.id)}" style="--lc:${lc}"><header class=lh role=button tabindex=0 aria-expanded="${!cl}" data-lane="${esc(l.id)}"><span class=tw>${cl?"&#9656;":"&#9662;"}</span>`
     +`<span class="lid${l.kind==="sw"?" sw":""}">${l.kind==="sw"?`<span class=sid>${esc(l.sid)}</span> · ${esc(l.wl)}`:esc(lid)}</span>`+(ltt?`<span class="ltt${l.kind==="s"?"":" subt"}">${esc(ltt)}</span>`:"")
-    +(l.kind==="s"||l.kind==="none"?`<span class=bar title="${l.closed} of ${l.total} closed"><i style="width:${pct(l)}%"></i></span><span class=pc>${l.closed}/${l.total}</span>`+(l.st?`<span class=lst>${esc(l.st)}</span>`:""):"")
+    +(l.kind==="s"||l.kind==="none"?`<span class=bar title="${l.closed} of ${l.total} closed"><i style="width:${pct(l)}%"></i></span><span class=pc>${l.closed}/${l.total}</span>`+(l.st?`<span class=lst>${esc(l.st)}</span>`:"")+(l.kind==="s"?`<a class=ghl target=_blank rel=noopener title="open SPEC ${l.num} on GitHub" aria-label="open SPEC ${l.num} on GitHub" href="https://github.com/${esc(l.r||"__REPO__")}/issues/${l.num}"><svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg></a>`:""):"")
     +`<span class=sum>${cl?m.cols.filter(c=>l.counts[c]).map(c=>`<span>${esc(c)} <b>${l.counts[c]}</b></span>`).join(""):""}</span></header>`;
   if(!cl)for(const c of m.vc){const key=l.id+"|"+c,v=cellView(l.cells[c],!!(bo.cx||{})[key]);h+=`<div class=cell data-lane="${esc(l.id)}" data-col="${esc(c)}">${cards({name:c},v.shown,v.shown)}${v.more?`<button class=more data-cell="${esc(key)}" title="show every card of this cell">+${v.more} more</button>`:""}</div>`}
   h+="</section>"}
@@ -5040,7 +5040,7 @@ let lanesNow=null;   // the model the board last drew: the controls act on its l
 $("#lhd").onchange=e=>{bo.hideDone=e.target.checked;saveB();pollBoard()};
 const laneSet=v=>{bo.lc=bo.lc||{};for(const l of(lanesNow?lanesNow.lanes:[]))bo.lc[l.id]=v;saveB();pollBoard()};
 $("#lcall").onclick=()=>laneSet(true);$("#lexp").onclick=()=>laneSet(false);
-document.addEventListener("click",e=>{const h=e.target.closest("#bbody .lh");if(h){const id=h.dataset.lane,coll=h.closest(".lane").classList.contains("coll");bo.lc=bo.lc||{};laneToggle(id,coll);return}
+document.addEventListener("click",e=>{if(e.target.closest(".ghl"))return;const h=e.target.closest("#bbody .lh");if(h){const id=h.dataset.lane,coll=h.closest(".lane").classList.contains("coll");bo.lc=bo.lc||{};laneToggle(id,coll);return}
  const m=e.target.closest("#bbody .more");if(m){bo.cx=bo.cx||{};bo.cx[m.dataset.cell]=true;saveB();pollBoard();return}   // a more click opens its own cell only
  const p=e.target.closest("#lhcx");if(p&&lanesNow){const names=new Set(lanesNow.hc.map(x=>x.name));bo.lc=bo.lc||{};   // a hidden column's pill expands the lanes that hold its cards
   for(const l of lanesNow.lanes)if(l.collapsed&&Object.keys(l.counts).some(c=>names.has(c)))bo.lc[l.id]=false;saveB();pollBoard()}});
