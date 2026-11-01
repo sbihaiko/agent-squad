@@ -4144,8 +4144,8 @@ const mdlRmd=(k,m)=>!!mdlRmk[k+"|"+m];
 /* What Save writes: the panel without its marked rows and without empty keys. Dirty means a diff line, never a byte. */
 function mdlPrune(o){for(const g of ["efforts","hours"]){o[g]=o[g]||{};for(const k of Object.keys(o[g]))if(!Object.keys(o[g][k]||{}).length)delete o[g][k]}
  o.model_off=o.model_off||{};for(const m of Object.keys(o.model_off))if(!o.model_off[m])delete o.model_off[m];return o}
-function mdlOut(){const o=JSON.parse(JSON.stringify(mdl));for(const k of Object.keys(MLAB)){const kept=[];for(const m of o[k]||[]){if(!mdlRmd(k,m)){kept.push(m);continue}
- for(const g of ["efforts","hours"])if(o[g]&&o[g][k])delete o[g][k][m]}o[k]=kept}return mdlPrune(o)}
+function mdlOut(){const o=JSON.parse(JSON.stringify(mdl));for(const k of Object.keys(MLAB)){const keep=[];for(const m of o[k]||[]){if(!mdlRmd(k,m)){keep.push(m);continue}
+ for(const g of ["efforts","hours"])if(o[g]&&o[g][k])delete o[g][k][m]}o[k]=keep}return mdlPrune(o)}
 function mdlChanged(){return !!mdl&&mdlDiffLines(JSON.parse(mdlSrv),mdlOut(),MLAB).length>0}
 function mdlEff(k,m){return (mdl.efforts&&mdl.efforts[k]&&mdl.efforts[k][m])||""}
 function mdlSetEff(k,m,v){mdl.efforts=mdl.efforts||{};mdl.efforts[k]=mdl.efforts[k]||{};if(EFF.includes(v)&&v!=="medium")mdl.efforts[k][m]=v;else delete mdl.efforts[k][m]}

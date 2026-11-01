@@ -162,8 +162,8 @@ def test_the_router_add_box_offers_gateway_ids_and_the_role_box_keeps_the_others
     assert "claude-opus-5-5" in router_suggest
     assert "gpt-6.1-sol" not in router_suggest, "the router box offers a codex-only id"
     src = HUB_PY.read_text()
-    assert "list=mk-${k}" in src, "the Router card has no add box of its own"
-    assert "router_known" in src, "the router's box does not read the gateway's catalogue"
+    # The page's add control offers each chain its own suggest list; the server fills the router's from router_known (#913).
+    assert 'data-add="${k}"' in src and "(mdl.suggest||{})[k]" in src, "the Router card has no add box of its own"
 
 
 def test_the_router_add_box_offers_the_registry_live_anthropic_ids(hub, checkout, monkeypatch):
