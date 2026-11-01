@@ -226,6 +226,8 @@ def server(port, apps, on_new=None):
             self._send(403, reason.encode(), "text/plain; charset=utf-8")
         def not_found(self): return self.profile.not_found(self)
         def dash(self, method, body=b""): return self.profile.dash(self, method, body)
+        def send_to_session(self, a): return self.profile.send_to_session(self, a)   # the overlay's and the phone's send (#898)
+        def loop_post(self, a): return self.profile.loop_post(self, a)   # the loop switch's write (#923)
 
         def _route(self, method):
             path = self.path.split("?", 1)[0]
