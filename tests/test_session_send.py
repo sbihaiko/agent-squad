@@ -385,3 +385,77 @@ def test_the_status_route_reads_sent_for_a_sent_message(home, tmp_path, hub):
     r = conn.getresponse()
     assert r.status == 200 and json.loads(r.read())["status"] == "sent"
     conn.close()
+
+
+# ---------------------------------------------------------------- the session overlay (#898): the loopback send rule (ADR-0152 rule 9)
+
+def loopback_post(port, body, origin=None):
+    own = f"http://127.0.0.1:{port}"
+    return post(port, body, host=f"127.0.0.1:{port}", login=None, origin=own if origin is None else origin)
+
+
+def get_json(port, path, host=None, login=None):
+    conn = HTTPConnection("127.0.0.1", port, timeout=10)
+    headers = {"Host": host or f"127.0.0.1:{port}"}
+    if login:
+        headers["Tailscale-User-Login"] = login
+    conn.request("GET", path, headers=headers)
+    r = conn.getresponse()
+    data = r.read()
+    conn.close()
+    return r.status, json.loads(data) if r.status == 200 else data
+
+
+def test_a_loopback_send_with_the_hubs_own_origin_reaches_the_session_with_no_grant(home, tmp_path, hub):
+    add_session(home, "s1", home.path / "p1" / "app")
+    h = hub()
+    status, body = loopback_post(h.port, msg())
+    assert status == 200 and json.loads(body)["status"] == "sent"
+    assert inbox_of(home).conns == 1
+
+
+@pytest.mark.parametrize("origin", ["https://evil.example", "", f"https://{TAILNET}", "http://127.0.0.1:1"])
+def test_a_loopback_send_needs_the_hubs_own_origin(home, tmp_path, hub, origin):
+    add_session(home, "s1", home.path / "p1" / "app")
+    h = hub()
+    assert loopback_post(h.port, msg(), origin=origin)[0] == 403
+    assert inbox_of(home).conns == 0
+
+
+def test_the_project_route_lists_only_the_sessions_in_the_profiles_checkout(home, tmp_path, hub):
+    h = hub()
+    checkout = pathlib.Path(h.mod.CHECKOUT)
+    h.mod.profiles_of_cwd = lambda cwd: ["p1"]
+    add_session(home, "s1", checkout, name="main")
+    add_session(home, "s2", checkout / "sub", pid=os.getppid(), name="elsewhere")
+    status, out = get_json(h.port, "/api/sessions/project")
+    assert status == 200
+    assert [s["sid"] for s in out["sessions"]] == ["s1"]
+    assert out["send"] is True and out["why"] == ""
+
+
+def test_the_project_route_lists_two_sessions_in_the_checkout_so_the_owner_picks(home, tmp_path, hub):
+    h = hub()
+    checkout = pathlib.Path(h.mod.CHECKOUT)
+    h.mod.profiles_of_cwd = lambda cwd: ["p1"]
+    add_session(home, "s1", checkout, name="one")
+    add_session(home, "s2", checkout, pid=os.getppid(), name="two")
+    _, out = get_json(h.port, "/api/sessions/project")
+    assert sorted(s["sid"] for s in out["sessions"]) == ["s1", "s2"]
+    assert all(set(s) == {"sid", "name", "status"} for s in out["sessions"])
+
+
+def test_over_the_tailnet_with_send_off_the_project_route_names_the_setting(home, tmp_path, hub):
+    h = hub()
+    _, out = get_json(h.port, "/api/sessions/project", host=TAILNET, login=ANA)
+    assert out["send"] is False and "SQUAD_TAILNET_TERMINALS_SEND" in out["why"]
+    _, on = get_json(hub(terminals_send=True).port, "/api/sessions/project", host=TAILNET, login=ANA)
+    assert on["send"] is True and on["why"] == ""
+
+
+def test_adr_0152_states_the_loopback_send_rule():
+    adr = next((ROOT / "docs" / "adr").glob("0152-*.md")).read_text()
+    rule = next(line for line in adr.splitlines() if line.startswith("9. "))
+    assert "loopback" in rule and "own Origin" in rule and "always sends" in rule
+    assert "SQUAD_TAILNET_TERMINALS_SEND" in rule
+    assert "tests/test_session_send.py" in rule
