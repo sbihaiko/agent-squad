@@ -18,6 +18,7 @@ BATCH_SIZE = 1          # one issue per timeline query: the only size the API ch
 POINTS_CEILING = 4000   # GraphQL points the hub may spend an hour; GitHub allows 5000, the rest is headroom
 WINDOW = 3600           # seconds in the points hour and between hourly searches
 SEARCH_EVERY = 3600
+PARKED = _columns.ROLE["unscheduled"]
 
 
 def history_path(board, repo):
@@ -111,7 +112,7 @@ def intervals(events):
         if out and {k: out[-1][k] for k in snap} == snap:
             continue
         if out: out[-1]["to"] = e["t"]
-        out.append({"from": e["t"], "to": None, **snap})
+        out.append({"from": e["t"], "to": None, **snap, "approx": e["type"] == "gone"})
     return out
 
 
@@ -161,6 +162,38 @@ def burnup(store, spec):
             points.append({"t": t, "scope": counts[0], "done": counts[1], "held": counts[2], "marks": marks})
             last = counts
     return {"spec": spec, "points": points}
+
+
+def lead_span(runs, start=None, end=None):
+    """The flowing and held hours from a card's first entry into `start` to its last entry into `end`, or None when it has
+    no entry into `start` or no entry into `end`. None `start` is the card's first time on the board; None `end` is Closed.
+    Backlog with no hold is the parked time: it counts in neither. `unknown_first` marks a card whose first run is off the
+    board while it later holds a column: its start is not in the store. `approx` marks a boundary inside the window that a
+    search set (the card's absence was found, not read)."""
+    end = end or _columns.ROLE["issue_closed"]
+    entered = next((r for r in runs if (r["on_board"] if start is None else r["column"] == start)), None)
+    closed = next((r for r in reversed(runs) if r["column"] == end), None)
+    if entered is None or closed is None:
+        return None
+    lo, hi = _instant(entered["from"]), _instant(closed["from"])
+    if hi < lo:
+        return None
+    flowing = held = 0.0
+    for r in runs:
+        if not r["on_board"] or (r["column"] in (None, PARKED) and r["hold"] is None):
+            continue
+        a, b = max(_instant(r["from"]), lo), min(_instant(r["to"]) if r["to"] else hi, hi)
+        if b <= a:
+            continue
+        if r["hold"]: held += (b - a).total_seconds() / 3600
+        else: flowing += (b - a).total_seconds() / 3600
+    return {"start": entered["from"], "end": closed["from"], "flowing": flowing, "held": held,
+            "approx": any(r["approx"] and lo < _instant(r["from"]) <= hi for r in runs),
+            "unknown_first": not runs[0]["on_board"] and any(r["column"] for r in runs)}
+
+
+def _instant(text):
+    return datetime.fromisoformat(text)
 
 
 def _iso(epoch):

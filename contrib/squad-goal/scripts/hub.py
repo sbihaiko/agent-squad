@@ -2792,7 +2792,7 @@ def refresh_board():
             except OSError: pass
         else: quick = False
 ORDER = [column["name"] for column in BOARD_COLUMNS]
-FLOW_BANDS = [*ORDER, _cfd.FROZEN, _cfd.NO_COLUMN]   # the chart's bands: the columns in their order, then the cards frozen and the cards in no column (#896)
+FLOW_BANDS = [*ORDER]   # the chart's bands: the columns in their order; each band's held cards travel with it (#1024)
 def _marker_mtime(kind, pr, sha9):
     """mtime of a loop marker in auto/ (`launched-<pr>-<sha9>`, `rereview-<pr>-<sha9>`), i.e. when the loop acted on this head."""
     try: return (STATE / "auto" / f"{kind}-{pr}-{sha9}").stat().st_mtime
@@ -3263,15 +3263,6 @@ def pr_badge(x):
     return None
 MOVES = STATE / "board-moves.json"   # the door's record of every move it proved (#649), keyed by the Project item id
 MOVES_LOCK = threading.Lock()        # one writer in this process: two HTTP threads never drop the same entry twice
-def card_transitions(repo=None):
-    """The column changes board.py proved for one repository, oldest first. The hub only reads this record (#897)."""
-    path = STATE / f"board-transitions.{(repo or REPO).replace('/', '_')}.jsonl"
-    if not path.exists(): return []
-    out = []
-    for line in path.read_text().splitlines():
-        try: out.append(json.loads(line))
-        except ValueError: continue
-    return out
 def read_moves():
     """The door's record of proved moves: {item id: {"column", "at"}}. A record that is missing, unreadable or not an
     object is no record: the board is drawn from the read alone, and nothing is written."""
@@ -3382,18 +3373,34 @@ def _x_ticks(days):
 
 
 CFD_RANGES = [("7", 7), ("30", 30), ("90", 90), ("all", None)]   # the cumulative flow's range views, in days (#901)
+CFD_ZONE = "UTC"   # the zone a day ends in: the zone the chart states; no project setting names another yet (#1024)
 LEAD_TIMEFRAMES = [("1", 1), ("2", 2), ("3", 3), ("7", 7), ("14", 14), ("30", 30), ("all", None)]   # the control chart presets (#900); the three short ones count hours on the page (owner, 2026-11-01)
 
 
-def lead_rows():
-    """The closed-card rows the lead-time arithmetic reads, one per board item (#900). Each row names its spec, its Waves
-    key `spec/wave` (#980) and its kind: the values the board's bar filters by (#904)."""
-    return [{"n": i["n"], "column": _columns_module.view_column(i["st"], str(i["s"]).lower() == "closed", i.get("l"), i.get("cr"))[0],
-             "reason": _leadtime.NOT_DELIVERED if _columns_module.not_planned(i.get("cr")) else None,   # the chart's own word (#921)
-             "c": i.get("c") if str(i["s"]).lower() == "closed" else None, "o": i.get("o"), "t": i.get("t", ""),
-             "spec": _flow.spec_key(i), "wave": f'{_flow.spec_key(i)}/{_flow.wave_key(i.get("l"))}', "kind": _flow.kind_key(i),
-             "type": _flow.type_key(i)}
-            for i in board_cache["items"]]
+def bar_keys(i):
+    """The values the board's bar filters one item by: its spec, its Waves key `spec/wave` (#980), its kind and its type (#904, #985)."""
+    return {"spec": _flow.spec_key(i), "wave": f'{_flow.spec_key(i)}/{_flow.wave_key(i.get("l"))}', "kind": _flow.kind_key(i),
+            "type": _flow.type_key(i)}
+
+
+def lead_rows(a=None, b=None):
+    """The closed-card rows the lead-time arithmetic reads, one per board item (#900). A row's hours are the flowing and held
+    time of its column intervals in the history store, from its first entry into `a` to its last entry into `b` (#1024). A
+    closed card with no such span is no_transition; the row's bar keys filter it (#904)."""
+    store = _hist.load_store(_hist.history_path(BOARD, REPO))
+    rows = []
+    for i in board_cache["items"]:
+        closed = str(i["s"]).lower() == "closed"
+        span = _hist.lead_span(_hist.intervals(store[i["n"]]["events"]), start=a, end=b) if closed and i["n"] in store else None
+        reason = _leadtime.NOT_DELIVERED if _columns_module.not_planned(i.get("cr")) else (_leadtime.NO_TRANSITION if closed and span is None else None)
+        row = {"n": i["n"], "column": _columns_module.view_column(i["st"], closed, i.get("l"), i.get("cr"))[0], "reason": reason,
+               "c": i.get("c") if closed else None, "o": i.get("o"), "t": i.get("t", ""), **bar_keys(i),
+               "hours": 0.0, "flowing": 0.0, "held": 0.0, "approx": False, "unknown_first": False}
+        if span:
+            row.update(c=span["end"], o=span["start"], hours=span["flowing"] + span["held"], flowing=span["flowing"],
+                       held=span["held"], approx=span["approx"], unknown_first=span["unknown_first"])
+        rows.append(row)
+    return rows
 
 
 def board_filters(query):
@@ -3422,7 +3429,7 @@ def lead_zoom(query):
     if any(c is not None and c not in ORDER for c in (a, b)): return {"error": "bad column: a and b name a board column"}
     log = q.get("scale", ["jira"])[0] == "log"
     fw, fs, fk, ty = board_filters(query)
-    rows = _leadtime.span([r for r in lead_rows() if _in_bar(r, fw, fs, fk, ty)], card_transitions(), start=a, end=b)
+    rows = [r for r in lead_rows(a, b) if _in_bar(r, fw, fs, fk, ty)]
     measure = f"{a or 'opened'} -> {b or 'closed'}"
     if "from" not in q and "to" not in q and "tf" in q:
         days = dict(LEAD_TIMEFRAMES).get(q["tf"][0], 0)
@@ -3452,34 +3459,34 @@ def _file_key(path):
     except OSError: return (str(path), None)
 
 def history_key():
-    return _file_key(_flow.history_path(BOARD, REPO))
+    return _file_key(_hist.history_path(BOARD, REPO))
 
 def _cfd_payload(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
-    """The cumulative flow's numbers, computed here from board_cfd; the page draws them and computes none.
-    `fw`, `fs` and `fk` are the bar's Waves, Specs and Kinds values: the chart keeps only the cards the bar keeps (#904)."""
-    path = _flow.history_path(BOARD, REPO)
-    cfd = _cfd.cfd(_flow.samples(path), ORDER, skips=_flow.skips(path), spec=fs, wave=fw, kind=fk, ty=[ty] if ty else [])
+    """The cumulative flow's numbers, counted per day by board_cfd from the history store's column intervals; the page draws
+    them and computes none. `fw`, `fs`, `fk` and `ty` are the bar's values: the chart keeps only the cards the bar keeps (#904, #1024)."""
+    store = _hist.load_store(_hist.history_path(BOARD, REPO))
+    cards = [_hist.intervals(store[i["n"]]["events"]) for i in board_cache["items"]
+             if i["n"] in store and _in_bar(bar_keys(i), fw, fs, fk, ty)]
+    cfd = _cfd.cfd(cards, ORDER, zone=CFD_ZONE, now=dt.datetime.now(dt.UTC))
     extents = {p["day"]: _band_extents(p["bands"]) for p in cfd["points"]}
-    days = sorted([*extents, *cfd["gaps"]])   # one entry per calendar day: a day with no sample carries no value (#894)
-    yticks = _y_ticks(max((e[FLOW_BANDS[0]][1] for e in extents.values()), default=0))
-    def values(name, k): return [extents[d][name][k] if d in extents else None for d in days]
+    days = [p["day"] for p in cfd["points"]]
     points = {p["day"]: p for p in cfd["points"]}
-    legacy = {p["day"] for p in cfd["points"] if p.get("legacy")}   # a day whose sample predates the kind, spec and wave (#904)
+    coverage = {**_hist.coverage(store), "total": len(board_cache["items"])}
+    def values(name, k): return [extents[d][name][k] for d in days]
     def view(width):
         """The chart over the last `width` calendar days (all of them when None): the same arrays, cut to the window (#901)."""
         window = days if width is None else days[-width:]
-        kept = [d for d in window if d in extents]
-        top = max((extents[d][FLOW_BANDS[0]][1] for d in kept), default=0)
+        top = max((extents[d][FLOW_BANDS[0]][1] for d in window), default=0)
         ticks = _y_ticks(top)
         def cut(arr): return [arr[days.index(d)] for d in window]
         return {"start": dt.datetime.fromtimestamp(cfd["start"], dt.UTC).date().isoformat() if cfd["start"] is not None else None,
-                "days": window, "ymax": ticks[-1], "yticks": ticks, "xticks": _x_ticks(window),
-                "legacy": sum(1 for d in window if d in legacy),
-                "wip": [points[d]["wip"] if d in points else None for d in window],
-                "throughput": [points[d]["throughput"] if d in points else None for d in window],
+                "days": window, "ymax": ticks[-1], "yticks": ticks, "xticks": _x_ticks(window), "coverage": coverage,
+                "wip": [points[d]["wip"] for d in window],
+                "throughput": [points[d]["throughput"] for d in window],
                 "bands": [{"name": n, "lower": cut(values(n, 0)), "upper": cut(values(n, 1)),
-                           "count": [extents[d][n][1] - extents[d][n][0] if d in extents else None for d in window]}
-                          for n in FLOW_BANDS] if kept else []}
+                           "count": [extents[d][n][1] - extents[d][n][0] for d in window],
+                           "held": [points[d]["held"][n] for d in window]}
+                          for n in FLOW_BANDS]}
     return {"cfd": {**view(None), "ranges": {key: view(width) for key, width in CFD_RANGES}}}
 
 
@@ -3491,10 +3498,11 @@ def _lead_payload(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
     now = dt.datetime.now(dt.UTC)
     control = {scale: {key: _leadtime.control_chart(rows, timeframe=days, log=scale == "log", now=now)
                        for key, days in LEAD_TIMEFRAMES} for scale in ("jira", "log")}   # the Jira-style control chart (#900)
+    coverage = {**_hist.coverage(_hist.load_store(_hist.history_path(BOARD, REPO))), "total": len(board_cache["items"])}
     return {"lead": {"measure": lead["measure"], "type": ty, "window": lead["window"],
                      "excluded": [{"reason": r, "count": c} for r, c in lead["excluded"].items()],
                      "excluded_total": sum(lead["excluded"].values()), "series": lead["series"], "summary": lead["summary"],
-                     "control": control, "columns": ORDER}}
+                     "control": control, "columns": ORDER, "coverage": coverage}}
 
 
 def flow_cfd(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
@@ -3502,7 +3510,7 @@ def flow_cfd(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
     return chart("cfd", (history_key(), tuple(fw), tuple(fs), tuple(fk), ty), lambda: _cfd_payload(fw, fs, fk, ty))
 
 def flow_lead(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
-    return chart("lead", (board_cache.get("t"), tuple(fw), tuple(fs), tuple(fk), ty), lambda: _lead_payload(fw, fs, fk, ty))
+    return chart("lead", (board_cache.get("t"), history_key(), tuple(fw), tuple(fs), tuple(fk), ty), lambda: _lead_payload(fw, fs, fk, ty))
 
 def flow_burnup(spec):
     """One spec's burn-up for its swimlane (#1025); the cache holds it until the repository's history store changes."""
