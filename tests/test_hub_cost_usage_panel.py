@@ -5,8 +5,6 @@ import re
 import shutil
 import subprocess
 
-import pytest
-
 HUB = pathlib.Path(__file__).resolve().parents[1] / "contrib/squad-goal/scripts/hub.py"
 SRC = HUB.read_text()
 PAGE = SRC[SRC.index("PAGE = r\"\"\""): SRC.index("PAGE = PAGE.replace")]

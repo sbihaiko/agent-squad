@@ -93,10 +93,10 @@ def test_the_pie_tooltip_names_every_route(page):
 def _render_pie(page, models):
     """#795: run the page's own pie() under node, with the page's palette and the helpers it calls, and return its markup."""
     palette = re.search(r"^const PCOL=.*;$", page, re.M).group(0)
-    other = re.search(r"^const OTHER=.*;$", page, re.M).group(0)
+    top = re.search(r"^const TOP=.*;$", page, re.M).group(0)
     esc = re.search(r"^const esc=.*;$", page, re.M).group(0)
     usd = re.search(r"^const usd=.*;$", page, re.M).group(0)
-    js = esc + usd + palette + other + _pie_source(page) + "\nprocess.stdout.write(pie(JSON.parse(require('fs').readFileSync(0,'utf8'))));"
+    js = esc + usd + palette + top + _pie_source(page) + "\nprocess.stdout.write(pie(JSON.parse(require('fs').readFileSync(0,'utf8'))));"
     p = subprocess.run(["node", "-e", js], input=json.dumps(models), capture_output=True, text=True, timeout=20)
     assert p.returncode == 0, p.stderr
     return p.stdout
@@ -105,7 +105,7 @@ def _render_pie(page, models):
 @pytest.mark.node_bound
 def test_the_rendered_pie_tooltip_names_every_route(page):
     """#795: a model called through cli and gateway is labelled 'via cli, gateway' in the rendered pie."""
-    row = {"model": "deepseek-flash", "in": 10, "out": 10, "cache": 0, "spend": 0.1, "calls": 1, "box": {"llm": "deepseek-flash", "routes": ["cli", "gateway"]}}
+    row = {"model": "deepseek-flash", "in": 10, "out": 10, "cache": 0, "spend": 0.1, "month_cost": 0.1, "calls": 1, "box": {"llm": "deepseek-flash", "routes": ["cli", "gateway"]}}
     html = _render_pie(page, [row])
     assert "via cli, gateway" in html, html
 
@@ -131,6 +131,6 @@ def test_the_pie_matcher_skips_braces_in_regex_literals():
 @pytest.mark.node_bound
 def test_the_rendered_pie_escapes_a_model_name_with_the_page_esc(page):
     """#798: the pie runs the page's own esc, not a stub: a model name with markup renders as text."""
-    row = {"model": "<i>luna</i>", "in": 10, "out": 10, "cache": 0, "spend": 0.1, "calls": 1, "box": {"llm": "<i>luna</i>", "routes": ["cli"]}}
+    row = {"model": "<i>luna</i>", "in": 10, "out": 10, "cache": 0, "spend": 0.1, "month_cost": 0.1, "calls": 1, "box": {"llm": "<i>luna</i>", "routes": ["cli"]}}
     html = _render_pie(page, [row])
     assert "&lt;i&gt;luna&lt;/i&gt;" in html and "<i>luna" not in html, html
