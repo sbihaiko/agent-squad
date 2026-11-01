@@ -307,3 +307,11 @@ def test_a_plan_node_with_no_event_is_still_a_trace_filter_option():
            {"event": "call_start", "node": "router", "entry": 0, "ts": T0 + 1}]
     h = _node(f"const m=rkModel({json.dumps(ROW_LIVE)},{json.dumps(rec)});console.log(JSON.stringify(rkHtml(m,'tr',{{n:'main'}})));")
     assert '<option value="main" selected>' in h, "a node picked in the Overview is missing from the node filter"
+
+
+def test_the_header_chips_shrink_so_the_close_button_stays_on_their_row():
+    css = (SCRIPTS / "run-sheet.css").read_text()
+    chips = re.search(r"#rkchips\{([^}]*)\}", css)
+    assert chips, "the run sheet has no #rkchips rule"
+    assert "flex-wrap:wrap" not in chips.group(1), "the chips wrap, so the close button drops to a second row"
+    assert "min-width:0" in chips.group(1), "the chips row cannot shrink below its content"

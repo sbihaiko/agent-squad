@@ -1,4 +1,5 @@
 """Tickets #33 and #35: the wait node and resume."""
+import hashlib
 import json
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from squad.record import read
 from squad.sdk_adapter import SdkAdapter
 from tests.flows import agent, doc
 from tests.gitrepo import make_repo, sh
+from tests.helpers import node, router
 from tests.test_sdk_adapter import Options, ResultMessage, stub
 
 
@@ -130,6 +132,51 @@ async def test_a_resume_accepts_the_fingerprint_an_earlier_record_wrote_for_know
     eng2, ad2 = make(asks(wait_doc()), run, registry=str(reg))
     v = await eng2.resume(answer="pass")
     assert v.verdict == "completed" and [c.node for c in ad2.calls] == ["b"]
+
+
+# SPEC 1035 #1037: the chain is recorded at the call, and a resume keeps the configuration the run started with. A
+# dispatch envelope that names models (not kinds) reads its order from `model_order`, the launcher's copy of the coding
+# order, which run_start records.
+CHAIN_MODELS = ["sonnet", "opus", "haiku"]
+CALLED_ORDER = ["sonnet", "opus", "haiku"]
+CHANGED_ORDER = ["sonnet", "haiku", "opus"]
+CHILD_REQUEST = {"prompt": "Read the file.", "skill": "tdd", "effort": "medium", "tools": ["Read"],
+                 "stalls": 4, "spend": 0.5, "deadline": 30}
+
+
+def chain_doc():
+    """A run that stops at a wait before its dispatch, so a resume makes the router's call and its child's."""
+    route = node(router(), "route")
+    route["allow"] = {"models": list(CHAIN_MODELS), "efforts": ["medium"], "tools": ["Read"],
+                      "skills": [{"name": "tdd"}], "workspaces": ["ws"]}
+    route["budget"] = {"stalls": {"min": 1, "max": 5}, "spend": {"min": 0.01, "max": 1.0}}
+    route["deadline"] = 60
+    route["checks"] = ["scope_gate"]
+    route.pop("review", None)
+    entry = agent("router", model="sonnet", tools=["Read"], may_spawn=True, output_key="spawns", deadline=60)
+    entry.pop("next", None)
+    return doc([{"name": "ask", "kind": "wait", "owner": "rafael", "deadline": 100, "default": "pass"},
+                route, node(router(), "scope_gate"), entry], ["ask", "route"])
+
+
+@pytest.mark.anyio
+async def test_a_resume_keeps_the_chain_order_the_run_started_with(tmp_path):
+    """SPEC 1035 #1037: a call states its chain at the call, and a resume keeps the order the run started with."""
+    d = chain_doc()
+    script = {"router": {"output": {"spawns": [CHILD_REQUEST]}, "spend": 0.1},
+              "route.router.1": {"output": {"ac_commands": ["true"]}, "spend": 0.2}}
+    eng, _ = make(d, tmp_path, script, options={"model_order": CALLED_ORDER})
+    await eng.run()
+    assert events(tmp_path, "call_start") == []      # the run stopped at the wait, before any call
+    eng2, ad2 = make(d, tmp_path, script, options={"model_order": CHANGED_ORDER})
+    v = await eng2.resume(answer="pass")
+    assert v.verdict == "completed" and [c.node for c in ad2.calls] == ["router", "route.router.1"]
+    starts = events(tmp_path, "call_start")
+    assert [e["node"] for e in starts] == ["router", "route.router.1"]
+    ids = ["claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-4-5-20251001"]
+    assert [e["chain"] for e in starts] == [ids, ids]     # the changed order never reaches a call
+    assert {e["chain_id"] for e in starts} == {hashlib.sha256("\n".join(ids).encode()).hexdigest()}
+    assert events(tmp_path, "resume")[0]["engine_options"]["model_order"] == CALLED_ORDER
 
 
 @pytest.mark.anyio

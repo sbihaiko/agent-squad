@@ -199,6 +199,32 @@ def test_entries_sha256_changes_when_an_unknown_spelling_becomes_known(tmp_path)
     assert after != before
 
 
+# --- the chain id: the ordered registry ids, and one hash of that order (SPEC 1035) ----------------------
+
+def test_chain_ids_names_each_entry_by_its_registry_id_in_its_own_order():
+    reg = mr.load(REGISTRY)
+    assert mr.chain_ids(["opus", "sonnet", "claude-haiku-4-5-20251001"], reg) == [
+        "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5-20251001"]
+
+
+def test_chain_ids_keeps_a_spelling_the_registry_does_not_know():
+    """An unknown spelling is data, as `normalize` treats it: it stands in the chain as written, never dropped."""
+    reg = mr.load(REGISTRY)
+    assert mr.chain_ids(["sonnet", "no-such-model"], reg) == ["claude-sonnet-5-5", "no-such-model"]
+
+
+def test_the_chain_hash_is_stable_for_one_order_and_differs_for_another():
+    ids = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5-20251001"]
+    assert mr.chain_sha256(ids) == mr.chain_sha256(list(ids))
+    assert mr.chain_sha256(ids) != mr.chain_sha256(["claude-opus-5-5", "claude-haiku-4-5-20251001", "claude-sonnet-5-5"])
+
+
+def test_the_chain_hash_is_the_sha256_of_the_ids_joined_in_order():
+    """The recipe is stated for a reader who must recompute it: sha256 over the ids joined by a newline."""
+    import hashlib
+    assert mr.chain_sha256(["a", "b"]) == hashlib.sha256(b"a\nb").hexdigest()
+
+
 # --- invocation: today's wire string, spelled once -------------------------------------------------------
 
 WIRE = [

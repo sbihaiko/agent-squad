@@ -11,6 +11,8 @@ import uuid
 from pathlib import Path
 
 # `outcome.cap` is the spend granted to the call, in US dollars (`res.amount`); it is not a turn cap.
+# A `call_start` also states `chain` (the ordered registry ids the call may answer on) and `chain_id` (their hash). Neither
+# is required: a record written before the field stays readable, and `chain_of` reads it as `unknown` (SPEC 1035).
 REQUIRED = {
     "run_start": ["run_id", "graph_name", "graph_hash", "engine_options", "root", "plan"],
     "call_start": ["node", "entry", "session", "pid", "limit", "started_at"],
@@ -42,6 +44,17 @@ REQUIRED = {
     "verdict": ["verdict", "exit_code", "reasons", "remains", "folded"],
 }
 OUTCOMES = {"pass", "fail", "deadline", "needs-human"}
+CHAIN_UNKNOWN = "unknown"    # the chain reading of a record written before a call stated its chain (SPEC 1035)
+
+
+def chain_of(ev):
+    """The chain one `call_start` states: {"ids": [registry ids in order], "sha256": hash of that order}. A record written
+    before the field reads {"ids": "unknown", "sha256": "unknown"}: it is never rebuilt from the configuration in force now.
+    The hash is `squad.modelreg.chain_sha256`: sha256 over the ids joined by a newline."""
+    ids, sha = ev.get("chain"), ev.get("chain_id")
+    if not isinstance(ids, list) or not isinstance(sha, str):
+        return {"ids": CHAIN_UNKNOWN, "sha256": CHAIN_UNKNOWN}
+    return {"ids": list(ids), "sha256": sha}
 
 
 def new_run_id():

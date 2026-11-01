@@ -37,7 +37,7 @@ def scan(path, now=None, alive=_alive):
         kind = "abandoned" if not alive(c["pid"]) else "stuck" if over > 0 else None
         if kind:
             out.append({"finding": kind, "record": str(path), "node": c["node"], "entry": c["entry"], "item": c.get("item"),
-                        "session": c["session"], "over_limit_s": round(max(over, 0), 1), "at": now,
+                        "session": c["session"], "chain": record.chain_of(c), "over_limit_s": round(max(over, 0), 1), "at": now,
                         "note": "the deadline did not fire: investigate, do not retune the limit" if kind == "stuck" else "process is gone and the last turn was never recorded"})
     return out
 

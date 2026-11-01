@@ -43,7 +43,30 @@ def test_a_progress_event_carries_where_its_call_is_and_refuses_without_it(tmp_p
         r.append("progress", **{k: v for k, v in ev.items() if k != "messages"})
 
 
-def test_the_reader_rejects_an_event_that_lacks_a_required_field(tmp_path):
+def test_the_reader_of_a_call_chain_answers_the_ids_and_hash_the_call_recorded():
+    """SPEC 1035: a call_start states the chain as it was at the call, and a reader takes that value as written."""
+    ev = {"event": "call_start", "chain": ["claude-opus-5-5", "claude-sonnet-5-5"], "chain_id": "5a1b"}
+    assert record.chain_of(ev) == {"ids": ["claude-opus-5-5", "claude-sonnet-5-5"], "sha256": "5a1b"}
+
+
+def test_the_reader_of_an_old_call_chain_answers_unknown_and_never_rebuilds_it():
+    """A record written before the field stays readable: the chain reads `unknown`, never the configuration in force now."""
+    ev = {"event": "call_start", "node": "a", "entry": 1, "item": None, "session": "s1", "pid": 1, "limit": 10.0, "started_at": 1000.0}
+    assert record.chain_of(ev) == {"ids": "unknown", "sha256": "unknown"}
+
+
+def test_an_old_record_with_no_chain_field_stays_readable(tmp_path):
+    """The fixture is a run record written before the field existed: it reads whole, and each call reads `unknown`."""
+    fresh = tmp_path / "r.jsonl"
+    r = record.Record(fresh)
+    r.append("run_start", **START)
+    r.append("call_start", node="a", entry=1, item=None, session="s1", pid=1, limit=10.0, started_at=1000.0)
+    events = record.read(fresh)
+    assert [e["event"] for e in events] == ["run_start", "call_start"]
+    assert record.chain_of(events[1]) == {"ids": "unknown", "sha256": "unknown"}
+    audit = DESIGN.parent.parent / "tests" / "fixtures" / "run-router-waves" / "run" / "record.jsonl"
+    calls = [e for e in record.read(audit) if e["event"] == "call_start"]
+    assert calls and all(record.chain_of(e)["ids"] == "unknown" for e in calls)
     p = tmp_path / "r.jsonl"
     bad = {k: v for k, v in OUTCOME.items() if k != "reasons"}
     p.write_text(json.dumps({"event": "outcome", "pos": 1, **bad}) + "\n")

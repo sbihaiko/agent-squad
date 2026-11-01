@@ -38,6 +38,12 @@ from squad.runners.dispatch import Dispatch
 from squad.runners.types import Res as Res
 from squad.runners.types import Scope as Scope
 
+# The engine option that orders a chain. A resume takes it from `run_start`, never from the invocation that resumes, so a
+# launcher that reads a different coding order since then cannot rebuild a different chain (SPEC 1035, ADR-0107). The
+# spent ids and the hours windows stay the resuming invocation's: they are facts of the moment, and the record states the
+# chain each call had.
+CHAIN_ORDER = "model_order"
+
 
 class Engine:
     def __init__(self, graph, adapter, run_dir, *, options=None, target=None, time_scale=1.0, clock=time.monotonic,
@@ -300,6 +306,16 @@ class Engine:
                            **({"caps": self.ceiling.caps} if self.ceiling else {}),
                            skills=skills.snapshot(self.g.doc, self.vendor), skills_commit=skills.commit(self.vendor))
 
+    def _keep_chain_config(self):
+        """A resume keeps the order the run built its chains with: `model_order` comes from `run_start`, so a launcher that
+        reads a different coding order since then cannot rebuild a different chain (SPEC 1035). A record that never held the
+        key keeps no order, as the run started."""
+        start = self.record.events[0].get("engine_options") or {}
+        if CHAIN_ORDER in start:
+            self.options[CHAIN_ORDER] = start[CHAIN_ORDER]
+        else:
+            self.options.pop(CHAIN_ORDER, None)
+
     def _target_branch(self):
         """The branch the target stands on at run start, or None (no git, a detached HEAD): a resume refuses a target on another branch."""
         if not self.has_git:
@@ -338,6 +354,7 @@ class Engine:
         `release`: the person who runs the command releases every hold the control file still holds."""
         self.run_id, self.answer, self.from_node = self.replay.refuse(from_node), answer, from_node
         self._set_resolve((self.record.events[0].get("models") or {}).get("resolve"))   # a record without the key stays opaque
+        self._keep_chain_config()
         if release and self.control.requests():
             self.control.append("resume", source="cli")
         self.facts.run_id = self.run_id

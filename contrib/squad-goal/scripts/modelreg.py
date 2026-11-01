@@ -336,6 +336,19 @@ def model(raw, reg=None):
     return reg.entries.get(ref.id) if ref.known else None
 
 
+def chain_ids(spellings, reg=None):
+    """The registry ids a chain names, in the chain's own order (ADR-0147: a chain is a list of registry ids). An unknown
+    spelling stands as written, as `normalize` returns it; no entry is dropped."""
+    reg = reg or default_registry()
+    return [normalize(raw, reg).id for raw in spellings]
+
+
+def chain_sha256(ids):
+    """The id of one ordered chain: sha256 of its registry ids joined in order by a newline, so the same order hashes the
+    same and a different order of the same ids hashes differently (SPEC 1035)."""
+    return hashlib.sha256("\n".join(ids).encode()).hexdigest()
+
+
 def entries_sha256(raws, reg=None):
     """Hash of the entries a list of raw spellings names, and of each spelling the registry cannot resolve.
 
