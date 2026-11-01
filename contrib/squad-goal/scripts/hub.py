@@ -4526,10 +4526,10 @@ $("#sdok").onclick=async()=>{const d=sPend||[];sPend=null;$("#sdlg").close();
  setBar()};
 $("#sdisc").onclick=()=>{if(mdl){mdl=JSON.parse(mdlSrv);mdlRmk={};mdlMsg="";mdlRender()}if(limS){limPend=null;limMsg="";limRender()}if(slS){slDraft=slClone(slS);slMsg="";slRender()}setBar()};
 /* accordions: each of the five answers its own header and leaves the others alone; the open set is stored like the pins */
-const ACC=["plans","stats","mdl","lim","slk"];
+const ACC=["stats","mdl","lim","slk"];   // only the cards the page carries: a name with no element used to kill the whole script (#1032)
 let openAcc=new Set(Array.isArray(ls.acc)?ls.acc.filter(i=>ACC.includes(i)):[]);   // the old single-id string is ignored, not trusted, and not fatal
 const saveAcc=()=>{ls.acc=[...openAcc];save()};
-ACC.forEach(i=>{const e=$("#"+i);e.open=openAcc.has(i);e.addEventListener("toggle",()=>{if(e.open)openAcc.add(i);else openAcc.delete(i);saveAcc();if(i==="mdl"&&e.open){mdlLoad()}else if(i==="lim"&&e.open){limLoad()}else if(i==="slk"&&e.open){slLoad()}})});mdlLoad();
+ACC.forEach(i=>{const e=$("#"+i);if(!e)return;e.open=openAcc.has(i);e.addEventListener("toggle",()=>{if(e.open)openAcc.add(i);else openAcc.delete(i);saveAcc();if(i==="mdl"&&e.open){mdlLoad()}else if(i==="lim"&&e.open){limLoad()}else if(i==="slk"&&e.open){slLoad()}})});mdlLoad();
 if(openAcc.has("lim"))limLoad();
 if(openAcc.has("slk"))slLoad();
 const PCOL=["#5aa9ff","#3ecf8e","#f5b041","#b79cf6","#2dd4bf","#ff6b6b","#c678dd","#e5c07b","#8a93a3"],tk=n=>n>=1e9?(n/1e9).toFixed(2)+"B":n>=1e6?(n/1e6).toFixed(1)+"M":n>=1e3?(n/1e3).toFixed(0)+"K":""+n;

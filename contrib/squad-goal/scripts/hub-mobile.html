@@ -237,23 +237,9 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 #5aa9ff}
 <section data-panel="more" hidden>
 <h2>More</h2>
 <div id="more-menu">
-<button data-more="subs" type="button">Subscriptions</button>
-<button data-more="models" type="button">Squad models</button>
 <button data-more="cost" type="button">Cost and usage</button>
 <a class="more-link" href="./#set">Settings</a>
 </div>
-<article data-screen="subs" data-src="/api/subs" hidden>
-<button data-back type="button">Back</button>
-<h2>Subscriptions</h2>
-<div class="list"></div>
-<p class="msg"></p>
-</article>
-<article data-screen="models" data-src="/api/models" hidden>
-<button data-back type="button">Back</button>
-<h2>Squad models</h2>
-<div class="list"></div>
-<p class="msg"></p>
-</article>
 <article data-screen="cost" data-src="/api/stats" hidden>
 <button data-back type="button">Back</button>
 <h2>Cost and usage</h2>
@@ -929,7 +915,6 @@ document.addEventListener("touchend", e => {
 document.addEventListener("touchcancel", endGesture, { passive: true });
 
 let moreScreen = null, period = "day", moreSeq = 0;
-const MORE_CHAINS = [["coding_models", "Coding"], ["review_models", "Review"], ["vision_models", "Vision"], ["router_models", "Router"]];
 const CH_W = 280, CH_H = 90;
 function rowEl(title, lines) {
   const row = document.createElement("div");
@@ -963,33 +948,7 @@ function chartEl(buckets) {
   });
   return svg;
 }
-// A quota window's reset: the time left and the local reset time, or "reset unknown" (#913).
-function resetText(t, now) {
-  if (!t) return "reset unknown";
-  const x = t - now, at = new Date(t * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-  const left = x <= 0 ? "resets now" : x >= 86400 ? `resets in ${(x / 86400).toFixed(1)} d` : x >= 3600 ? `resets in ${Math.round(x / 3600)} h` : `resets in ${Math.max(1, Math.round(x / 60))} min`;
-  return `${left} · ${at}`;
-}
 const MORE = {
-  subs(el, d) {
-    const rows = Object.values(d.subs).map(v => {
-      const w = v.quota && v.quota.windows && v.quota.windows[0];
-      return rowEl(v.name, [
-        v.usd == null ? "no plan price set" : `plan ${money(v.usd)} a month`,
-        `API-equivalent used this month ${money(v.eq)}`,
-        w ? `${w.label}: ${Math.round(w.pct)}% used · ${resetText(w.resets, Date.now() / 1000)}` : v.quota && v.quota.unavailable ? `quota unavailable: ${v.quota.err}` : ""
-      ].filter(Boolean));
-    });
-    rows.push(rowEl("This month", [`cash: plans ${money(d.plans)} + API ${money(d.api)} = ${money(d.total)}`]));
-    el.querySelector(".list").replaceChildren(...rows);
-  },
-  models(el, d) {
-    const rows = [rowEl("Last run coded with", [d.last_coding || ""])];
-    for (const [k, label] of MORE_CHAINS) {
-      rows.push(rowEl(label, (d[k] || []).map((m, i) => `${i + 1}. ${m}${d.off && d.off[k] && d.off[k][m] ? " · off" : ""}`)));
-    }
-    el.querySelector(".list").replaceChildren(...rows);
-  },
   cost(el, d) {
     el.querySelector("#cchart").replaceChildren(...(d.buckets.length ? [chartEl(d.buckets)] : []));
     const t = d.totals;
