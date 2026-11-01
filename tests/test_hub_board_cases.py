@@ -69,7 +69,7 @@ def test_the_pass_reads_a_test_case_in_the_one_items_read_it_already_makes(hub, 
         calls.append(" ".join(cmd))
         out = "PVTSSF_status\n" if "/fields?" in " ".join(cmd) else ""
         if "projectsV2" in " ".join(cmd) and "/items" in " ".join(cmd):
-            out = draft + "\n" + card + "\n"
+            out = draft + "\n" + card + "\n" + json.dumps({"_page": 2}) + "\n"
         return subprocess.CompletedProcess(cmd, 0, out, "")
 
     monkeypatch.setattr(hub.subprocess, "run", run)

@@ -38,7 +38,7 @@ def _fake_gh(items):
     def run(cmd, **kw):
         s = " ".join(cmd)
         if "projectsV2" in s and "/items" in s:
-            out = "".join(json.dumps(i) + "\n" for i in items)
+            out = "".join(json.dumps(i) + "\n" for i in items) + json.dumps({"_page": len(items)}) + "\n"
         elif "blockedBy" in s:
             out = json.dumps({"data": {"repository": {"issues": {"nodes": []}}}})
         elif "pullRequests(first:100" in s:

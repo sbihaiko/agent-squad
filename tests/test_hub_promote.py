@@ -590,7 +590,8 @@ def test_a_proved_move_is_the_same_column_in_both_routes(hub, monkeypatch, tmp_p
     moves.write_text(json.dumps({"101": {"column": mod.PROMOTE_TO, "at": "2026-10-29T12:00:00Z", "by": "owner"}}))
     monkeypatch.setattr(mod, "MOVES", moves)
     monkeypatch.setenv("SG_PENDING_OVERLAY", "on")
-    mod.board_cache["rt"] = int(mod._utc("2026-10-29T09:00:00Z").timestamp())   # the list read began before the move
+    observed = int(mod._utc("2026-10-29T09:00:00Z").timestamp())   # the list read began before the move
+    mod.board_cache["items"] = [dict(i, ot=observed) for i in mod.board_cache["items"]]
     rows = {g["name"]: {i["n"]: i for i in g["items"]} for g in mod.board()["groups"]}
     assert 7 in rows[mod.PROMOTE_TO], rows          # the board draws the proved move
     assert not rows[mod.PROMOTE_TO][7].get("pm"), "the board marks a pending-move card promotable"

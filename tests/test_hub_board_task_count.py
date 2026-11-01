@@ -106,7 +106,7 @@ def _fake_gh(calls, items, fallback=()):
         calls.append(cmd)
         s = " ".join(cmd)
         if "projectsV2" in s and "/items" in s:
-            out = "".join(json.dumps(i) + "\n" for i in items)
+            out = "".join(json.dumps(i) + "\n" for i in items) + json.dumps({"_page": len(items)}) + "\n"
         elif "issues?state=open" in s:
             out = json.dumps([_rest_issue(i) for i in fallback])
         elif "/fields?" in s:

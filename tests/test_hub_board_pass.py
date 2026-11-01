@@ -45,7 +45,7 @@ def _fake_gh(calls, fail=False):
         if "/fields?" in s:
             out = "PVTSSF_status\n"                                # status_field()
         elif "projectsV2" in s and "/items" in s:
-            out = json.dumps({"n": 11, "t": "a card", "s": "OPEN", "c": None, "st": "Todo", "l": []}) + "\n"
+            out = json.dumps({"n": 11, "t": "a card", "s": "OPEN", "c": None, "st": "Todo", "l": []}) + "\n" + json.dumps({"_page": 1}) + "\n"
         elif "pulls?state=closed" in s:
             out = ""
         elif "search/issues" in s:

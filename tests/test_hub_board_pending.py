@@ -90,10 +90,10 @@ def card(n, status="Todo", **extra):
 
 
 def lagging(mod, items, read_at, completed=None):
-    """The rows the last pass read: a list read that has not carried the door's proved move yet. `rt` is the instant
-    the fetch began, the only stamp the overlay may compare a move against; `t` is when the pass finished."""
-    mod.board_cache = {"t": completed if completed is not None else read_at, "rt": int(read_at),
-                       "err": None, "errs": [], "items": items, "prs": [], "lc": {}, "cases": []}
+    """The rows the last pass read: a list read that has not carried the door's proved move yet. Each row's `ot` is the
+    instant its fetch began, the only stamp the overlay may compare a move against; `t` is when the pass finished."""
+    mod.board_cache = {"t": completed if completed is not None else read_at,
+                       "err": None, "errs": [], "items": [dict(i, ot=int(read_at)) for i in items], "prs": [], "lc": {}, "cases": []}
 
 
 def lagging_fetch(mod, monkeypatch, items, on_read=None):
@@ -103,7 +103,7 @@ def lagging_fetch(mod, monkeypatch, items, on_read=None):
         def rows(self, *a, **kw):
             if on_read:
                 on_read()
-            return "".join(json.dumps(i) + "\n" for i in items)
+            return "".join(json.dumps(i) + "\n" for i in items) + json.dumps({"_page": len(items)}) + "\n"
 
         def holders(self):
             return {}
@@ -523,7 +523,7 @@ def test_the_board_pass_reads_the_item_id_the_record_is_keyed_by(hub, monkeypatc
             out = "PVTSSF_status\n"
         elif "projectsV2" in s and "/items" in s:
             out = json.dumps({"n": 11, "i": "ITEM11", "t": "a card", "s": "OPEN", "st": "Todo", "l": [],
-                              "si": {"total": 0, "completed": 0}}) + "\n"
+                              "si": {"total": 0, "completed": 0}}) + "\n" + json.dumps({"_page": 1}) + "\n"
         elif "blockedBy" in s:
             out = json.dumps({"data": {"repository": {"issues": {"nodes": []}}}})
         elif "pullRequests(first:100" in s:
