@@ -71,6 +71,7 @@ test-hub-promote.sh 0.28
 test-hub-run-issue.sh 0.33
 test-hub-state-default.sh 0.20
 test-hub-test-panel.sh 0.09
+test-hubmux-check-board.sh 0.41
 test-hubmux-live.sh 0.12
 test-issue-ledger.sh 2.21
 test-janitor-board-facts.sh 1.24
