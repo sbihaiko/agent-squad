@@ -150,6 +150,7 @@ def _harness_only(text):
     background task's notification, or the summary a compact hands the next context. The owner typed none of it, so it is no
     turn of the talk (owner, 2026-11-01)."""
     if text.lstrip().startswith(HARNESS_OPENER): return True
+    if re.fullmatch(r"\s*/[A-Za-z][\w:-]*\s*", text): return True   # a bare slash command is the harness echoing the call
     if "<system-reminder>" in text or "<tools-used-before-summary>" in text: return True
     rest = text
     while True:
@@ -169,7 +170,7 @@ def _turns_of(obj):
         if not isinstance(p, dict): continue
         text = p.get("text")
         if kind == "user" and p.get("type") == "text" and isinstance(text, str) and text:
-            if owner_role == "owner" and _harness_only(text): continue   # the harness's own record, never a turn of the talk
+            if _harness_only(text): continue   # the harness's own record, never a turn of the talk
             out.append((owner_role, uid, text))
         elif kind == "assistant" and p.get("type") == "text" and isinstance(text, str) and text: out.append(("answer", uid, text))
         # A tool call is not a turn of the conversation: a working session answers with hundreds of them, and they filled
