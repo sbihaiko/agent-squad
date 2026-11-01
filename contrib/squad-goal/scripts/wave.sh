@@ -801,7 +801,7 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
   # entered, so a base that moved under the wave is rebased onto now, before the one push. A push the remote refuses -- the
   # base moved once more between this rebase and the push -- repeats from the fetch: the moved base is fetched, the wave is
   # rebased on it, and the push goes again (ADR-0145 rule 2). One repeat, as the entry does.
-  local out sha try=1 issues n
+  local out sha try=1 issues n anyref=0
   while :; do
     out=$(sc rebase "origin/$base" 2>&1) || { sc rebase --abort >/dev/null 2>&1
       wave_conflict "$run" "$w" "$rd" "$S" "$out"; rm -rf "$S"; return 1; }
@@ -884,6 +884,7 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
     # (#869) A commit that names exactly one issue delivers it (commit_refs). A commit that names several delivers none of them:
     # the cluster child did not say which it fixed, so those issues are named and requeued below, never closed.
     rows=$(commit_refs "$S" "origin/$base..HEAD")
+    anyref=$(sc log --format=%B "origin/$base..HEAD" 2>/dev/null | /usr/bin/grep -cE 'Refs #[0-9]+')   # a RED commit's Refs counts here (#1003)
     issues=$(printf '%s\n' "$rows" | awk '$1 == "D" { print $3 }' | sort -un | tr '\n' ' ')
     amb=$(printf '%s\n' "$rows" | awk '$1 == "A" { for (i = 3; i <= NF; i++) print $i }' | sort -un | tr '\n' ' ')
     # ONE push of the wave's tip to the base: one ref update, one CI run, and a push git refuses unless it is a fast-forward,
@@ -935,7 +936,21 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
       printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$run" "$n2" "$w" >> "$SG_STATE/wave-outside.tsv";; esac; done
     issues=$kept
   fi
+  # (#1003) A wave whose commits name no issue at all (no `Refs #N` in any commit, a RED one included) closes the issues its run was dispatched
+  # for, read from the run's own request (run_issues, one source), and clears their dispatch markers: the run ended and its
+  # work is in $base, so nothing else would free them. A wave with any Refs keeps the per-commit rule above. A run whose
+  # issues cannot be read closes nothing, and one line names the run.
+  local fb=""
+  if [ -z "$issues" ] && [ "${anyref:-0}" = 0 ]; then
+    if [ -n "${dset// /}" ]; then
+      issues=$(printf '%s' "$dset" | xargs); fb=1
+      echo "WAVE-NOTE $w: no commit names an issue (no Refs), so the landing closes the issues run $run was dispatched for: #${issues// /, #}"
+    else
+      echo "WAVE-NOTE $w: no commit names an issue (no Refs), and the issues of run $run cannot be read ($rd/request.txt, $rd/record.jsonl), so the landing closes nothing"
+    fi
+  fi
   deliver "$run" "$w" "$sha" "$issues" || return 1
+  [ -n "$fb" ] && for n in $issues; do rm -f "$SG_STATE/auto/disp-$n"; done
   local named=""; for n in $issues; do named="${named:+$named, }#$n"; done
   echo "WAVE $w $sha landed in $base (${named:-no issue named: the wave carries no Refs})"
   return 0
