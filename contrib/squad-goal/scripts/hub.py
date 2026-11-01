@@ -3472,7 +3472,6 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #board{position:relative;width:auto}
 #bhead{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}#bhead>label{display:inline-flex;align-items:center;gap:8px}#bhead label.hck{border:1px solid var(--line);border-radius:6px;padding:0 12px 0 10px;min-height:32px;background:var(--panel);cursor:pointer}#bhead label.hck input{margin:0;accent-color:var(--acc)}#bt:empty{display:none}
 #flowov{background:var(--panel);border:1px solid var(--line);border-radius:8px;display:flex;flex-direction:column}#flowov[hidden]{display:none}
-#flowh{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel)}
 #flowb{padding:10px;font-size:var(--fs-min)}#flowb svg{width:100%;height:auto;display:block;margin:6px 0;user-select:none;touch-action:pan-y}#flowb .fnote,#flowb .fhead{color:var(--mute);margin:4px 0}#flowb .fhead b{color:var(--fg,inherit)}
 #flowb .flg{margin-right:10px;white-space:nowrap}#flowb .flg i{display:inline-block;width:9px;height:9px;margin-right:4px;vertical-align:middle;border-radius:2px}
 #bbody .ah{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);cursor:pointer;font-weight:600;position:sticky;top:34px;background:#1b212b;z-index:1}   /* the same gap as the docked header: `Todo0` is never a reading, in either rendering (#1809) */
@@ -3660,7 +3659,7 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 (()=>{const f=window.fetch.bind(window),live=new Map();window.fetch=(u,o)=>{if(o&&o.method&&o.method!=="GET"||o&&o.signal)return f(u,o);
  const k=String(u);if(!live.has(k))live.set(k,f(u,o).finally(()=>live.delete(k)));return live.get(k).then(r=>r.clone())}})();</script>
 <div id=alert role=alert></div>
-<header class=top><h1><span class=hb>Squad hub &middot; </span><button id=pj aria-haspopup=menu aria-expanded=false><span id=pjn></span> &#9662;</button></h1><div id=psw aria-label="Projects"></div><div class=tabs role=tablist><button data-t=board role=tab>Board</button><button data-t=flow role=tab>Flow charts</button><button data-t=hist role=tab>History</button><button data-t=set role=tab>Settings</button></div><span class=spx></span>
+<header class=top><h1><span class=hb>Squad hub &middot; </span><button id=pj aria-haspopup=menu aria-expanded=false><span id=pjn></span> &#9662;</button></h1><div id=psw aria-label="Projects"></div><div class=tabs role=tablist><button data-t=board role=tab>Kanban</button><button data-t=flow role=tab>Charts</button><button data-t=hist role=tab>History</button><button data-t=set role=tab>Settings</button></div><span class=spx></span>
 <span class=pill id=bread></span></header>
 <div id=win>
 <div id=side>
@@ -3675,9 +3674,9 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 <div id=board><div id=bhead><label>Swimlanes <select id=lmode title="swimlanes: one lane per spec (Spec), per wave (Wave), or no lanes, today's board (None)"><option value=spec>Spec</option><option value=wave>Wave</option><option value=none>None</option></select></label> <details id=fw class=fsel><summary>Waves: all</summary><div class=fpop id=fwl></div></details> <details id=fs class=fsel><summary>Specs: all</summary><div class=fpop id=fsl></div></details> <button id=lcall title="collapse every swimlane">Collapse all</button> <button id=lexp title="expand every swimlane">Expand all</button> <label class=hck title="hide the swimlanes whose every ticket is closed"><input type=checkbox id=lhd> Hide done lanes</label> <span id=lhc></span><span id=bt class=m></span> <span id=hlrel class=hlrel hidden></span></div><div id=bcases></div><div id=bbody></div></div>
 </section>
 <section id=tab-flow class=pane aria-label="Flow charts">
-<div class=rkt id=flowtabs><button id=bruns title="the live run dashboards">Run panes</button><button id=bflow title="the development flow: the cards in each column over time, from the flow history (SPEC 111)">Flow</button><button id=blead title="the lead time of the closed cards, opened to closed (SPEC 111)">Lead time</button></div>
+<div class=rkt id=flowtabs><button id=bruns title="the live run dashboards">Runs</button><button id=bflow title="the development flow: the cards in each column over time, from the flow history (SPEC 111)">Cumulative Flow Diagram</button><button id=blead title="the lead time of the closed cards, opened to closed (SPEC 111)">Lead Time</button></div>
 <div id=main></div>
-<div id=flowov hidden><div id=flowh><b id=flowt></b><button id=flowx title="close the diagram">&#215;</button></div><div id=flowb></div></div>
+<div id=flowov hidden><div id=flowb></div></div>
 </section>
 <section id=tab-hist class=pane aria-label=History><h2>Run history</h2><div id=list></div></section>
 <section id=tab-set class=pane aria-label=Settings><h2>Settings</h2>
@@ -4265,7 +4264,7 @@ const flowLead=l=>{const S=l.summary,ex=l.excluded.map(e=>`${e.count} ${esc(EXRE
   const head=`<p class=fhead><b>${esc(l.measure)}</b> · window ${l.window.size} ${esc(l.window.unit)} · excluded ${l.excluded_total}${ex?" ("+ex+")":""}</p>`;
   if(!S)return head+"<p class=fnote>no closed card yet</p>";
   return head+ltChart(LT.zc||l.control[LT.log?"log":"jira"][LT.tf]);};
-const drawFlow=()=>{{const w=$("#flowb").clientWidth-20;flowW=w<600?600:w>1600?1600:(w|0)}const cfd=FLOWK==="cfd";$("#flowt").textContent=cfd?"Cumulative flow":"Lead time";
+const drawFlow=()=>{{const w=$("#flowb").clientWidth-20;flowW=w<600?600:w>1600?1600:(w|0)}const cfd=FLOWK==="cfd";
   const a=FLOWD[FLOWK];
   $("#flowb").innerHTML=!a?"<p class=fnote>loading the chart from the hub</p>":(cfd?flowCFD(a.cfd.ranges[CF.r]):flowLead(a.lead))+`<p class=fnote>data read ${new Date(a.t*1000).toLocaleTimeString()}</p>`};
 const flowOpen=async k=>{FLOWK=k;$("#flowov").hidden=false;drawFlow();try{const a=await (await fetch(`/api/chart/${k}`)).json();FLOWD[k]=a;if(FLOWK===k)drawFlow()}catch(e){}};
@@ -4285,7 +4284,7 @@ $("#flowb").onchange=e=>{if(e.target.id==="cfdr"){CF.r=e.target.value;drawFlow()
 $("#flowb").onclick=e=>{if(LT.noclick){LT.noclick=false;return}
   if(e.target.id==="ltz"){LT.tok++;LT.zc=null;LT.zr=null;LT.pick=null;drawFlow();return}
   const k=e.target.closest("circle[data-k]");if(k){LT.pick=+k.dataset.k;drawFlow();return}const r=e.target.closest("tr[data-o]");if(r)showIssue(+r.dataset.o,"__REPO__")};
-$("#bflow").onclick=()=>flowOpen("cfd");$("#blead").onclick=()=>flowOpen("lead");$("#flowx").onclick=()=>{$("#flowov").hidden=true};addEventListener("resize",()=>{if(!$("#flowov").hidden)drawFlow()});
+$("#bflow").onclick=()=>flowOpen("cfd");$("#blead").onclick=()=>flowOpen("lead");addEventListener("resize",()=>{if(!$("#flowov").hidden)drawFlow()});
 // flow-charts:end
 async function pollBoard(){lim.busy=1;try{const b=await (await fetch("/api/board")).json(),FLOW=/*BOARD_FLOW*/,   // development flow, left to right
 all=[b.prs,...b.groups.sort((x,y)=>{const i=n=>{const k=FLOW.indexOf(n);return k<0?FLOW.length:k};return i(x.name)-i(y.name)})],f=q.trim().replace(/^#/,"");
@@ -4388,7 +4387,6 @@ function setTab(t,o){if(!TABS[t])t="board";TAB=t;ls.tab=t;save();
  drawMain()}
 document.querySelector(".tabs").addEventListener("click",e=>{const b=e.target.closest("button[data-t]");if(b)setTab(b.dataset.t)});
 $("#enall").addEventListener("click",e=>{e.preventDefault();e.stopPropagation();setTab("hist")});
-$("#lrun").addEventListener("click",e=>{const r=e.target.closest(".r[data-id]");if(r&&pins.has(r.dataset.id))setTab("flow",{runs:true})});   // a live run picked in the sidebar shows its pane on the Flow charts tab
 $("#bruns").onclick=()=>{$("#flowov").hidden=true;flowTabs()};
 function flowTabs(){const h=$("#flowov").hidden,k=typeof FLOWK==="string"?FLOWK:"cfd";$("#bruns").classList.toggle("on",h);$("#bflow").classList.toggle("on",!h&&k==="cfd");$("#blead").classList.toggle("on",!h&&k!=="cfd")}
 new MutationObserver(flowTabs).observe($("#flowov"),{attributes:true});

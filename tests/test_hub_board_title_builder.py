@@ -52,11 +52,11 @@ def _groups(hub):
 
 
 def test_board_header_reads_no_title_and_the_tab_names_the_pane(hub):
-    """Re-anchored to the owner-approved mock (#889): the board's toolbar carries no `TASKS` title; the `Board` tab names the pane."""
+    """Re-anchored to the owner-approved mock (#889): the board's toolbar carries no `TASKS` title; the `Kanban` tab names the pane (the owner renamed Board to Kanban and Flow charts to Charts)."""
     head = _bhead(hub)
     assert "<b>" not in head, "the board toolbar carries a bold title again"
     tabs = hub.PAGE[hub.PAGE.index("<div class=tabs"):hub.PAGE.index("</div>", hub.PAGE.index("<div class=tabs"))]
-    assert [re.sub(r"<[^>]*>", "", t) for t in re.findall(r"<button[^>]*>.*?</button>", tabs)] == ["Board", "Flow charts", "History", "Settings"]
+    assert [re.sub(r"<[^>]*>", "", t) for t in re.findall(r"<button[^>]*>.*?</button>", tabs)] == ["Kanban", "Charts", "History", "Settings"]
 
 
 def test_board_has_no_collapsed_state(hub):
