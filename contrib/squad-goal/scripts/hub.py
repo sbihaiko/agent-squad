@@ -5834,12 +5834,18 @@ class Access(NamedTuple):
     login: str      # the login the page header shows; empty off the tailnet
     tailnet: bool   # the request is addressed to the tailnet name
 
+LOGIN_HEADER = "Tailscale-User-Login"   # the seam's name, for a hub with no seam: a request that carries it is never loopback
 def access(h, method):
-    """The one rule for every route: the loopback Host as own_host has always answered it, a tailnet request through the seam."""
-    if own_host(h): return Access(True, "", "", False)
+    """The one rule for every route: the loopback Host as own_host has always answered it, a tailnet request through the seam.
+    A request that carries the tailnet login header is a tailnet request whatever its Host: on a loopback Host it reads, and
+    it never writes, so a `tailscale serve` that hands the hub a loopback Host never earns a loopback write (ADR-0152 rule 9)."""
     seam = tailnet_seam()
-    if seam is None: return Access(False, "no tailnet access seam", "", False)
-    login = h.headers.get(seam.LOGIN_HEADER) or ""
+    login = h.headers.get(seam.LOGIN_HEADER if seam else LOGIN_HEADER) or ""
+    if own_host(h) and not login: return Access(True, "", "", False)
+    if seam is None: return Access(False, "no tailnet access seam", "", bool(login))
+    if own_host(h):   # a read passes as a loopback read always has; a write needs the tailnet Host (rules 3 and 5)
+        read = method.upper() in seam.READ_METHODS
+        return Access(read, "" if read else "forbidden host", "", True)
     host = h.headers.get("Host") or ""
     tn = tailnet_block()
     v = seam.decide(host=host, origin=h.headers.get("Origin") or "", method=method, login=login,
