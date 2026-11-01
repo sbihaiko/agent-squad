@@ -100,12 +100,22 @@ def _alive_since(pid, started):
     start = _proc_start(pid)
     return start is not None and 0 <= started // 1000 - start <= 30   # startedAt (ms) is written a few seconds after the process starts
 
+def profiles_dir():
+    """The profiles the address seam reads: SG_PROFILES_DIR when the runner exports it, else the global skill's own, so a
+    hub started without that variable still resolves a session instead of listing none."""
+    d = os.environ.get("SG_PROFILES_DIR")
+    if d: return d
+    home = pathlib.Path.home() / ".claude" / "skills" / "squad-goal" / "scripts" / "profiles"
+    return str(home) if home.is_dir() else ""
+
 def profiles_of(cwd):
     """The profiles whose repository the checkout at `cwd` is, resolved by the address seam (ADR-0138)."""
+    env = dict(os.environ)
+    if profiles_dir(): env.setdefault("SG_PROFILES_DIR", profiles_dir())
     repo = subprocess.run(["bash", "-c", '. "$1" >/dev/null 2>&1; sg_resolve_repo "$2"', "_", str(ADDRESS), cwd],
-                          capture_output=True, text=True).stdout.strip()
+                          capture_output=True, text=True, env=env).stdout.strip()
     if not repo: return []
-    rows = subprocess.run(["bash", str(ADDRESS), "--list"], capture_output=True, text=True).stdout.splitlines()
+    rows = subprocess.run(["bash", str(ADDRESS), "--list"], capture_output=True, text=True, env=env).stdout.splitlines()
     return [slug for slug, r in (row.split("\t", 1) for row in rows if "\t" in row) if r.lower() == repo.lower()]
 
 def read_last_message(cwd, sid, secrets=()):

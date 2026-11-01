@@ -441,3 +441,19 @@ def test_a_record_written_seconds_after_the_process_started_is_listed(home, tmp_
     (home.sessions / f"{os.getpid()}.json").write_text(json.dumps({**body, "startedAt": body["startedAt"] + 2000}))
     out = load_sessions().list_sessions("p1", profiles_of=lambda c: ["p1"])
     assert [s["sid"] for g in out["groups"] for s in g["sessions"]] == ["s1"]
+
+
+def test_without_the_variable_the_seam_still_reads_the_global_profiles(home, tmp_path, monkeypatch):
+    """The hub starts without SG_PROFILES_DIR: the seam answers the skill's own profiles directory, never an empty list,
+    so a live session in the checkout is found instead of the overlay reporting that none runs (#1034 follow-up)."""
+    monkeypatch.delenv("SG_PROFILES_DIR", raising=False)
+    profiles = tmp_path / ".claude" / "skills" / "squad-goal" / "scripts" / "profiles"
+    profiles.mkdir(parents=True)
+    (profiles / "p1.sh").write_text(': "${SG_REPO:=owner/app}"\n: "${SG_CHECKOUT:=$HOME/src/app}"\n')
+    mod = load_sessions()
+    mod.pathlib.Path.home = classmethod(lambda cls: tmp_path)
+    assert mod.profiles_dir() == str(profiles)
+    repo = tmp_path / "checkout"; repo.mkdir()
+    subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
+    subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", "git@github.com:owner/app.git"], check=True)
+    assert mod.profiles_of(str(repo)) == ["p1"], "the seam answered nothing and the session would be hidden"
