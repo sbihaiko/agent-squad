@@ -133,16 +133,18 @@ def _with_ends(groups):
     return [{**g, "end": g["name"] in ("Closed", "Abandoned")} for g in groups]
 
 
-def _spec_options(groups):
-    return _node(f"console.log(JSON.stringify(specOptions({json.dumps(_with_ends(groups))})));", LANES_JS)
+def _spec_options(groups, sum_=None):
+    return _node(f"console.log(JSON.stringify(specOptions({json.dumps(_with_ends(groups))},"
+                 f"{json.dumps(sum_ or {'specs': [], 'waves': []})})));", LANES_JS)
 
 
 def test_a_closed_spec_is_not_an_option(hub):
     groups = [
         {"name": "Todo", "items": [{"n": 42, "t": "open ticket", "l": [], "pa": 41}]},
-        {"name": "Closed", "items": [{"n": 41, "t": "SPEC 41", "l": ["spec"], "sp": True}]},
+        {"name": "Closed", "items": []},
     ]
-    assert "41" not in _spec_options(groups)
+    summary = {"specs": [{"n": 41, "st": "Closed", "closed": 1, "total": 2}], "waves": []}
+    assert "41" not in _spec_options(groups, summary)
 
 
 def test_an_open_spec_whose_tickets_are_all_closed_is_not_an_option(hub):
@@ -165,9 +167,10 @@ def test_an_open_spec_with_an_open_ticket_is_an_option(hub):
 def test_an_abandoned_spec_is_not_an_option(hub):
     groups = [
         {"name": "Todo", "items": [{"n": 494, "t": "open ticket", "l": [], "pa": 492}]},
-        {"name": "Abandoned", "items": [{"n": 492, "t": "SPEC 492", "l": ["spec"], "sp": True}]},
+        {"name": "Abandoned", "items": []},
     ]
-    assert "492" not in _spec_options(groups)
+    summary = {"specs": [{"n": 492, "st": "Abandoned", "closed": 0, "total": 1}], "waves": []}
+    assert "492" not in _spec_options(groups, summary)
 
 
 def test_a_saved_spec_filter_naming_a_finished_spec_is_dropped_on_load(hub):

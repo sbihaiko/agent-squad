@@ -65,7 +65,7 @@ def _node(script):
 
 
 def _build(groups, mode="spec", **o):
-    opts = {"mode": mode, "fw": [], "fs": [], "lc": {}, "hideDone": False, "closed": "Closed", **o}
+    opts = {"mode": mode, "fw": [], "fs": [], "lc": {}, "hideDone": False, "closed": "Closed", "sum": SUM, **o}
     return _node(f"console.log(JSON.stringify(buildBoard({json.dumps(groups)},{json.dumps(opts)})));")
 
 
@@ -123,11 +123,12 @@ GROUPS = [
         _row(890, "Doing", [], pa=889, ho="run-a"),
         _row(42, "Doing", [], pa=41),
     ]},
-    {"name": "Closed", "end": True, "items": [
-        _row(41, "Closed", ["spec"], sp=True),
-        _row(43, "Closed", [], pa=41),
-    ]},
+    {"name": "Closed", "end": True, "n": 2, "items": []},
 ]
+SUM = {
+    "specs": [{"n": 889, "st": "Doing", "closed": 0, "total": 2}, {"n": 41, "st": "Closed", "closed": 1, "total": 2}],
+    "waves": [],
+}
 
 
 def test_loop_bugs_lane_comes_first_and_no_spec_lane_last(hub):
@@ -248,3 +249,47 @@ def test_a_card_shows_a_loop_bug_chip_or_a_bug_chip_as_text(hub):
     page = hub.PAGE
     assert '<span class="bugc loop">loop-bug</span>' in page, "a loop-bug card shows no loop-bug chip"
     assert '<span class="bugc">bug</span>' in page, "a bug card shows no bug chip"
+
+
+# ---- the board answer carries the open rows and the summaries, never a closed row (#972) ----
+
+def _serve(hub, tmp_path, monkeypatch, items):
+    monkeypatch.setattr(hub, "BOARD", tmp_path / "hub-board.json")
+    monkeypatch.setattr(hub, "board_cache", {
+        "t": 1.0, "rt": 1.0, "err": None, "lc": {}, "prs": [], "errs": [], "cases": [], "items": items,
+    })
+
+
+def _entry(rows, **key):
+    return next(r for r in rows if all(r[k] == v for k, v in key.items()))
+
+
+def _ends_fixture():
+    return [
+        _card(889, st="Doing", labels=["spec"], sp=True),
+        _card(890, st="Closed", pa=889, labels=["wave:01"]),
+        _card(891, st="Abandoned", pa=889),
+        _card(892, st="Todo", pa=889, labels=["wave:01"]),
+        _card(41, st="Closed", labels=["spec"], sp=True),
+        _card(43, st="Closed", pa=41),
+        _card(44, st="Todo", pa=41),
+    ]
+
+
+def test_the_board_answer_holds_no_closed_or_abandoned_row(hub, tmp_path, monkeypatch):
+    _serve(hub, tmp_path, monkeypatch, _ends_fixture())
+    out = hub.board()
+    served = sorted(r["n"] for g in out["groups"] for r in g["items"])
+    assert served == [44, 889, 892], f"a closed or abandoned card reached the board answer: {served}"
+    ends = {g["name"]: g for g in out["groups"] if g.get("end")}
+    assert (ends["Closed"]["items"], ends["Closed"]["n"]) == ([], 3), "the Closed count or its rows are wrong"
+    assert (ends["Abandoned"]["items"], ends["Abandoned"]["n"]) == ([], 1), "the Abandoned count or its rows are wrong"
+
+
+def test_the_board_answer_carries_one_summary_per_spec_and_per_wave(hub, tmp_path, monkeypatch):
+    _serve(hub, tmp_path, monkeypatch, _ends_fixture())
+    sums = hub.board()["sum"]
+    assert _entry(sums["specs"], n=889) == {"n": 889, "st": "Doing", "closed": 1, "total": 3}
+    assert _entry(sums["specs"], n=41) == {"n": 41, "st": "Closed", "closed": 1, "total": 2}
+    assert _entry(sums["waves"], spec=889, wave=1) == {"spec": 889, "wave": 1, "closed": 1, "total": 2}
+    assert _entry(sums["waves"], spec=889, wave=None) == {"spec": 889, "wave": None, "closed": 0, "total": 1}

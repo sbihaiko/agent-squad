@@ -437,7 +437,7 @@ $("loop-confirm-no").onclick = () => { $("loop-confirm").hidden = true; };
 loopView();
 setInterval(loopView, 5000);
 
-let board = null, shown = [], issueKey = "", touch = null, seenCards = null, freshNow = new Set();
+let board = null, shown = [], issueKey = "", touch = null, seenCards = null, freshNow = new Set(), offBoard = null;   // offBoard: a card the board does not hold, a closed one, read by its issue alone (#972)
 const cardKey = x => (x.r || "") + "#" + x.n;
 const motionOk = () => typeof matchMedia === "function" && !matchMedia("(prefers-reduced-motion: reduce)").matches;
 const reasons = {};   // issue number -> {why, col}: a refusal the card reads on every render, until its card moves again
@@ -475,7 +475,7 @@ function cardButton(x, i) {
   return b;
 }
 // The swimlanes of one column (#893): the page reads the lanes the gesture module's rule makes, with the saved collapse.
-const laneModelOf = g => columnLanes({ groups: (board && board.groups) || [], cards: columnCards(g), lc: bo.mlc || {} });
+const laneModelOf = g => columnLanes({ groups: (board && board.groups) || [], cards: columnCards(g), lc: bo.mlc || {}, sum: board && board.sum });
 function laneHeader(l) {
   const h = document.createElement("div");
   h.className = "lane-h"; h.dataset.lane = l.id; h.dataset.coll = l.collapsed ? "1" : "0";
@@ -594,23 +594,25 @@ function openCard(n) {
     if (lane.collapsed) { bo.mlc = { ...(bo.mlc || {}), [lane.id]: false }; saveB(); }
     const ci = drawn.findIndex(c => c.name === g.name);
     const idx = laneModelOf(g).flat.findIndex(r => r.n === n);
-    if (ci >= 0 && idx >= 0) { view = { ...view, col: ci, card: idx, sheet: true }; renderBoard(); renderSheet(); return; }
+    if (ci >= 0 && idx >= 0) { offBoard = null; view = { ...view, col: ci, card: idx, sheet: true }; renderBoard(); renderSheet(); return; }
   }
-  $("bmsg").textContent = "#" + n + " is not on the board with these filters";
+  offBoard = { n, t: "", l: [], r: "" };
+  view = { ...view, sheet: true };
+  renderSheet();
 }
 function renderSheet() {
-  const x = shown[view.card];
+  const x = offBoard || shown[view.card];
   const open = view.sheet && !!x;
   $("sheet").hidden = !open;
-  if (!open) { issueKey = ""; $("sh-set").innerHTML = ""; $("sh-pos").textContent = ""; return; }
+  if (!open) { offBoard = null; issueKey = ""; $("sh-set").innerHTML = ""; $("sh-pos").textContent = ""; return; }
   const key = (x.r || "") + "#" + x.n;
   // The selection is the cards this column shows (#919), narrowed to the opened card's run when it holds one (#997): the
   // position, the previous and next buttons and the number chips all read it, and a closed sheet clears the read key, so
   // opening it again reads the issue again.
-  const set = sheetCards(shown, x), at = set.indexOf(x);
-  $("sh-pos").textContent = (at + 1) + " of " + set.length;
-  $("sh-prev").disabled = at <= 0;
-  $("sh-next").disabled = at >= set.length - 1;
+  const set = offBoard ? [] : sheetCards(shown, x), at = set.indexOf(x);
+  $("sh-pos").textContent = offBoard ? "" : (at + 1) + " of " + set.length;
+  $("sh-prev").disabled = offBoard || at <= 0;
+  $("sh-next").disabled = offBoard || at >= set.length - 1;
   $("sh-set").innerHTML = set.map((c, k) => {
     const i = shown.indexOf(c);
     return `<button type="button" data-i="${i}" class="${i === view.card ? "on" : ""}" title="card ${k + 1} of ${set.length}">#${escHTML(c.n)}</button>`;
@@ -649,7 +651,7 @@ function renderFilters() {
   $("lf").querySelector("summary").textContent = sel.length ? sel.join(", ") : "labels";
 }
 const refresh = () => { renderBoard(); renderSheet(); renderFilters(); };
-const step = g => { view = sheetStep(view, shown, g); refresh(); };
+const step = g => { offBoard = null; view = sheetStep(view, shown, g); refresh(); };
 async function loadBoard() {
   try {
     const b = await call("/api/board");
@@ -683,7 +685,7 @@ $("sh-prev").onclick = () => step({ act: "card", step: -1 });
 $("sh-close").onclick = () => step({ act: "close" });
 $("sh-set").onclick = e => {
   const b = e.target.closest("button[data-i]");
-  if (b) { view = { ...view, card: +b.dataset.i, sheet: true }; renderSheet(); }
+  if (b) { offBoard = null; view = { ...view, card: +b.dataset.i, sheet: true }; renderSheet(); }
 };
 // A blocker or the pull request that closes the card opens the ticket in the same sheet (#919); "Open on GitHub" is the
 // only link that leaves the hub.
@@ -694,7 +696,7 @@ $("sh-meta").onclick = e => {
 // The move button starts the card's own move, the one write the page already makes (#829); it is drawn only for a card
 // the hub marks promotable, and its column comes from the row (#919, ADR-0142).
 $("sh-todo").onclick = () => {
-  const x = shown[view.card];
+  const x = offBoard ? null : shown[view.card];
   const el = x && $("cards").querySelector('[data-role="card"][data-n="' + x.n + '"]');
   if (x && x.pm && el) stageMove(x, el);
 };

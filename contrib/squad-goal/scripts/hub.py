@@ -3361,7 +3361,8 @@ def board():
     read_at = board_cache.get("rt")   # the instant the list read began, never the completion stamp `t`: a read that began before a move cannot have carried it, however late it finished
     window = pending_window()   # an entry older than the window expires even with no read agreeing (#651)
     agreed, expired = set(), {}   # expired: item id -> (card number, the recorded column, the column the read holds, the move's dispatch context)
-    by = {}
+    by, tally, drawn = {}, {}, []
+    ends = {COLUMN["issue_closed"], COLUMN["abandoned"]}   # history by role: a closed status is never a column on any page (#969)
     for i in board_cache["items"]:
         d = drawn_column(i, moves, read_at, window)   # the one overlay rule the promote route asks too (#829)
         st, fz = d["st"], d["fz"]
@@ -3371,7 +3372,6 @@ def board():
         if d["state"] == "pending": row["pd"] = True   # the mark the page draws; the rule lives here, never in the view (ADR-0137)
         if fz: row["fz"] = fz
         if _columns_module.SPEC_LABEL in row["l"]: row["sp"] = True   # a spec is an issue with the spec label: the Specs filter reads this
-        if st == COLUMN["issue_closed"]: row["dn"] = True   # the card is Closed: a spec lane counts it as done on the mobile page (#893)
         if isinstance(i.get("pa"), int): row["pa"] = i["pa"]   # the parent spec the read carried (#829): the swimlane groups by it, with no read of its own (#890)
         # The owner's one move (#560): a card the rule marks promotable carries the arrow that starts it, a spec included:
         # the owner's move starts the spec and its open Backlog tickets follow (ADR-0142 section 6, #838). The rule lives
@@ -3386,7 +3386,9 @@ def board():
         ho = holder_text(i)                      # the run that holds the card, read from the seam (#241)
         if ho: row["ho"] = ho
         if (i.get("h") or {}).get("run"): row["hr"] = i["h"]["run"]   # the run id the sheet selects its cards by (#919)
-        by.setdefault(st, []).append(row)
+        drawn.append((i["n"], st, row.get("pa"), label_wave(i.get("l") or []), _columns_module.SPEC_LABEL in row["l"]))
+        if st in ends: tally[st] = tally.get(st, 0) + 1   # a closed row is never served: its count and the summaries carry it (#972)
+        else: by.setdefault(st, []).append(row)
     # The reverse of `blocked by`, one map so the view holds no rule of its own (ADR-0137, #919): a card carries the cards
     # it blocks, and the sheet renders that served fact.
     allrows = [r for rs in by.values() for r in rs]
@@ -3397,10 +3399,9 @@ def board():
         if r["n"] in blocks: r["bl"] = sorted(blocks[r["n"]])
     names = ORDER + sorted(n for n in by if n not in ORDER)   # every shipped column shows, even at 0; a user column follows
     def wave(x):   # `wave:NN` label first, then issue number; cards with no wave go last
-        w = [int(m.group(1)) for l in x["l"] for m in [re.match(r"wave:(\d+)$", l)] if m]
-        return (min(w) if w else 10**9, x["n"])
-    ends = {COLUMN["issue_closed"], COLUMN["abandoned"]}   # history by role: a closed status is never a column on any page (#969)
-    groups = [{"name": n, "end": n in ends, "n": len(by.get(n, [])), "items": sorted(by.get(n, []), key=lambda x: (x["c"] or "", x["n"]), reverse=True) if n == COLUMN["issue_closed"] else sorted(by.get(n, []), key=wave)} for n in names]
+        w = label_wave(x["l"])
+        return (10**9 if w is None else w, x["n"])
+    groups = [{"name": n, "end": n in ends, "n": tally.get(n, 0) if n in ends else len(by.get(n, [])), "items": sorted(by.get(n, []), key=wave)} for n in names]
     prs = sorted(board_cache["prs"], key=lambda p: p["u"], reverse=True)
     for x in prs:
         if x.get("br"): x.setdefault("gs", None); x.setdefault("pb", None); x["kind"] = _columns_module.BRANCH_KIND; continue   # a work branch has no review strip and no badge: its chip is its standing against dev
@@ -3438,7 +3439,21 @@ def board():
         dropped = drop_moves(agreed | set(expired))   # agreement settles an entry; the window settles one no read ever agreed with (#651)
         for item, (n, recorded, read, context) in expired.items():
             if dropped and item in dropped: report_expired(n, item, recorded, read, window, context)   # only a drop that really happened is reported, so a retry never repeats a line
-    return {"t": board_cache["t"], "err": board_cache["err"], "prs": lane, "groups": groups, "cases": cases, "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {})}
+    return {"t": board_cache["t"], "err": board_cache["err"], "prs": lane, "groups": groups, "cases": cases, "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {}), "sum": board_summary(drawn)}
+
+def label_wave(labels):   # the `wave:NN` label's number, or None
+    w = [int(m.group(1)) for l in labels for m in [re.match(r"wave:(\d+)$", l)] if m]
+    return min(w) if w else None
+
+def board_summary(drawn):   # drawn: (number, column, parent spec, wave, is a spec) for every item the list read holds
+    kids, waves = {}, {}
+    for _, st, pa, wv, _ in drawn:
+        for store, key in ((kids, pa), (waves, (pa, wv))):
+            c = store.setdefault(key, [0, 0])
+            c[1] += 1
+            if st == COLUMN["issue_closed"]: c[0] += 1
+    specs = [{"n": n, "st": st, "closed": kids.get(n, [0, 0])[0], "total": kids.get(n, [0, 0])[1]} for n, st, _, _, sp in drawn if sp]
+    return {"specs": specs, "waves": [{"spec": pa, "wave": wv, "closed": c, "total": t} for (pa, wv), (c, t) in waves.items()]}
 
 PROMOTE_TO = COLUMN["issue_todo"]   # the column the arrow moves a card into: the owner's go signal (ADR-0142)
 def promotable(item):
@@ -4703,8 +4718,8 @@ const CN=all.map(g=>g.name);   // every column of this board: what colOf reads t
 lastRead=Date.now();readStale=!!b.err;$("#bcases").innerHTML=caseRows(b.cases);$("#bt").textContent=b.err?"(stale)":"";
 const fw=bo.fw||[],fk=bo.fk||[],boardGroups=all.filter(g=>!isPR(g.name)),allRows=boardGroups.filter(g=>!g.end).flatMap(g=>g.items),specTitle=new Map();   // the filter bar: the waves, specs and kinds the open cards hold (#899, #904, #969)
 allRows.forEach(x=>{if(x.sp)specTitle.set(String(x.n),x.t)});
-const wOpts=waveOptions(allRows),sOpts=specOptions(boardGroups),SLOTS=specSlots(sOpts.filter(s=>s!=="none"));   // a finished spec is no option (#981); one color per spec option on the board (#917)
-const fs=keptSpecs(bo.fs||[],boardGroups);
+const wOpts=waveOptions(allRows),sOpts=specOptions(boardGroups,b.sum),SLOTS=specSlots(sOpts.filter(s=>s!=="none"));   // a finished spec is no option (#981); one color per spec option on the board (#917)
+const fs=keptSpecs(bo.fs||[],boardGroups,b.sum);
 if(!b.err&&fs.length!==(bo.fs||[]).length){bo.fs=fs;saveB()}   // a saved key whose spec finished is dropped (#981)
 const hidKept=keptHidden(bo.hidden||[],all);
 if(!b.err&&hidKept.length!==(bo.hidden||[]).length){bo.hidden=hidKept;saveB()}   // a saved hidden set drops a closed status on load (#969)
@@ -4757,7 +4772,7 @@ const fmtN=n=>n>=1000?n.toLocaleString("en-US"):""+n;   // "688" is one token; o
 const hidchip=g=>{const c=colOf(g.name,CN),ring=!Object.hasOwn(COLORS,g.name);return `<span class=chip data-eye="${esc(g.name)}" data-col="${esc(g.name)}" title="${esc(g.name+" — "+fmtN(g.n))}"><span class=lbl>${esc(g.name)}</span><b${ring?` style="color:${c}"`:""}>${fmtN(g.n)}</b></span>`};
 const endLines=all.filter(g=>g.end).map(g=>`<span class=hidline><span>${esc(g.name)}</span><b>${fmtN(g.n)}</b></span>`).join("");   // a closed status is a text total: no eye, no show action (#969)
 const html=vis.map(one).join("")+(bottom&&(hid.size||autos.length||endLines)?`<div class=hidbar>${all.filter(g=>!g.end&&hid.has(g.name)).map(hidchip).join("")}${hid.size&&autos.length?'<div class=hidsep></div>':""}${autos.map(g=>`<span class=hidline style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><span>${esc(g.name)}</span><b>${badge(g)}</b>${eye(g,true)}</span>`).join("")}${endLines}</div>`:"");   // one quiet line per column hidden only because it is empty, behind a divider (#1809)
-const model=bo.lmode==="none"?null:buildBoard(all.filter(g=>!isPR(g.name)),{mode:bo.lmode||"spec",fw:bo.fw||[],fs:bo.fs||[],fk:bo.fk||[],closed:COLNAME.issue_closed,hidden:hidCols(),lc:bo.lc||{},hideDone:!!bo.hideDone,search:!!f,text:x=>!f||String(x.n).includes(f)||x.t.toLowerCase().includes(f.toLowerCase())});   // the lanes read every row; the search and the filters only hide rows (#890)
+const model=bo.lmode==="none"?null:buildBoard(all.filter(g=>!isPR(g.name)),{mode:bo.lmode||"spec",fw:bo.fw||[],fs:bo.fs||[],fk:bo.fk||[],closed:COLNAME.issue_closed,sum:b.sum,hidden:hidCols(),lc:bo.lc||{},hideDone:!!bo.hideDone,search:!!f,text:x=>!f||String(x.n).includes(f)||x.t.toLowerCase().includes(f.toLowerCase())});   // the lanes read every row; the search and the filters only hide rows (#890)
 const lanesHtml=model?laneHtml(model):null;lanesNow=model;$("#lhd").checked=!!bo.hideDone;
 $("#lmode").value=bo.lmode||"spec";$("#bbody").classList.toggle("lanes",!!model);
 $("#lhc").innerHTML=model&&model.hc.length?`<button class=hcpill id=lhcx title="columns with no card in an expanded lane: click to expand the lanes that hold their cards">+${model.hc.length} hidden: ${model.hc.map(x=>x.user?`<span class=hcu data-eye="${esc(x.name)}" title="show this column">${esc(x.name)} <b>${x.count}</b></span>`:esc(x.name)+" <b>"+x.count+"</b>").join(" · ")}</button>`:"";

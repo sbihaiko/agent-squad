@@ -47,7 +47,7 @@ const runsGesture = ({ x0, dx, dy, atTop }) => {
 const carouselColumns = (groups, counts, hide) => {
   const shown = [], hidden = [], closed = [];
   groups.forEach((g, i) => {
-    if (g.end) closed.push({ name: g.name, count: g.items.length });
+    if (g.end) closed.push({ name: g.name, count: g.n });
     else if (hide && counts[i] === 0) hidden.push({ name: g.name, count: counts[i] });
     else shown.push(g);
   });
@@ -67,29 +67,28 @@ const laneWaveOf = x => {
 };
 const laneIdOf = (spec, wave) => (spec == null ? "none" : String(spec)) + "|" + (wave == null ? "none" : String(wave));
 const cmpNum = (a, b) => a == null ? (b == null ? 0 : 1) : b == null ? -1 : a - b;
-const columnLanes = ({ groups, cards, lc }) => {
-  const total = new Map(), done = new Map();
-  (groups || []).forEach(g => g.items.forEach(x => {
-    if (x.sp) return;
-    const k = laneIdOf(x.pa, laneWaveOf(x));
-    total.set(k, (total.get(k) || 0) + 1);
-    if (x.dn) done.set(k, (done.get(k) || 0) + 1);   // `dn`: the row is done, a fact the hub serves (#893)
-  }));
+const columnLanes = ({ groups, cards, lc, sum }) => {
+  const ends = new Set((groups || []).filter(g => g.end).map(g => g.name));
+  const specs = (sum && sum.specs) || [], waves = (sum && sum.waves) || [];
+  const gone = new Set(specs.filter(s => ends.has(s.st)).map(s => s.n));   // a closed spec keeps no lane (#972)
+  const specSum = new Map(specs.map(s => [s.n, s])), waveSum = new Map(waves.map(w => [laneIdOf(w.spec, w.wave), w]));
   const by = new Map();
   const ensure = (spec, wave) => {
     const id = laneIdOf(spec, wave);
-    if (!by.has(id)) by.set(id, { id, spec: spec ?? null, wave: wave ?? null, cards: [] });
+    if (!by.has(id)) by.set(id, { id, spec: spec ?? null, wave: wave ?? null, cards: [], headed: false });
     return by.get(id);
   };
-  cards.forEach(x => { if (!x.sp) ensure(x.pa, laneWaveOf(x)).cards.push(x); });
+  cards.forEach(x => { if (!x.sp) ensure(gone.has(x.pa) ? null : x.pa, laneWaveOf(x)).cards.push(x); });
   cards.forEach(x => {
     if (!x.sp) return;   // a spec card heads its spec's first wave lane in this column (#980)
     const first = [...by.values()].filter(l => l.spec === x.n)
       .sort((a, b) => cmpNum(a.wave, b.wave))[0] || ensure(x.n, null);
     first.cards.unshift(x);
+    first.headed = true;
   });
   const lanes = [...by.values()].map(l => {
-    const t = total.get(l.id) || 0, d = done.get(l.id) || 0;
+    const s = l.headed ? specSum.get(l.spec) : waveSum.get(l.id);   // progress is the summary's: a closed ticket is served by no row (#972)
+    const t = s ? s.total : 0, d = s ? s.closed : 0;
     const isDone = t > 0 && d === t;
     const collapsed = Object.prototype.hasOwnProperty.call(lc || {}, l.id) ? !!lc[l.id] : isDone;
     const sid = l.spec == null ? "No spec" : "SPEC " + l.spec, wl = l.wave == null ? "No wave" : "Wave " + l.wave;

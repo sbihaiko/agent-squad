@@ -13,6 +13,7 @@ const specKey=x=>x.pa==null?"none":String(x.pa);
 const numCmp=(a,b)=>a==null?(b==null?0:1):b==null?-1:a-b;
 // A wave belongs to one spec: the same wave of two specs is two lanes and two Waves options (#980).
 const waveOptKey=x=>specKey(x)+"/"+waveKey(x);
+const sumKey=(spec,wave)=>(spec==null?"none":spec)+"/"+(wave==null?"none":wave);
 const waveLabel=(spec,wave)=>(spec==null?"No spec":"SPEC "+spec)+" · "+(wave==null?"No wave":"Wave "+wave);
 const waveLane=(spec,wave)=>{const num=spec==null?null:+spec;return[(num==null?"none":String(num))+"/"+(wave==null?"none":String(wave)),
   {kind:"sw",num,wave,title:waveLabel(num,wave),sid:num==null?"No spec":"SPEC "+num,wl:wave==null?"No wave":"Wave "+wave}]};
@@ -26,17 +27,19 @@ const kindKey=x=>x.kind==="pr"?"pr":(hasLabel(x,"bug")||hasLabel(x,"loop-bug"))?
 const KIND_OPTIONS=[["issue","Issue"],["bug","Bug"],["pr","PR"]];
 // The filters (#899, #904): an empty list means all; the lists combine with AND. Keys are the values the bar offers.
 const boardOk=(x,fw,fs,fk=[])=>(!fw.length||fw.includes(waveOptKey(x)))&&(!fs.length||fs.includes(specKey(x)))&&(!fk.length||fk.includes(kindKey(x)));
-// The Specs options (#981): a spec is one only while it is unfinished, its card open and an open ticket under it.
-// A group with `end` is a closed status (Closed or Abandoned, by role): history, so it never offers an option (#969).
-function specOptions(groups){
-  const parents=new Set(),finished=new Set();let none=false;
-  groups.forEach(g=>g.items.forEach(x=>{if(x.sp){if(g.end)finished.add(String(x.n));return}
+// A spec the summary names closed or abandoned: finished, so it has no lane and no option (#972).
+const goneSpecsOf=(groups,sum={})=>{const ends=new Set(groups.filter(g=>g.end).map(g=>g.name));return new Set((sum.specs||[]).filter(s=>ends.has(s.st)).map(s=>s.n))};
+// The Specs options (#981): a spec is one only while it is unfinished and an open ticket sits under it. A group with `end`
+// is a closed status (Closed or Abandoned, by role): history, so it holds no option (#969).
+function specOptions(groups,sum={}){
+  const gone=goneSpecsOf(groups,sum),parents=new Set();let none=false;
+  groups.forEach(g=>{if(g.end)return;g.items.forEach(x=>{if(x.sp)return;
     if(x.pa==null){none=true;return}
-    if(!g.end)parents.add(String(x.pa))}));
-  const keys=[...parents].filter(k=>!finished.has(k));if(none)keys.push("none");
+    if(!gone.has(x.pa))parents.add(String(x.pa))})});
+  const keys=[...parents];if(none)keys.push("none");
   return keys.sort((a,b)=>a==="none"?1:b==="none"?-1:+a-+b)}
 // A saved Specs filter keeps only the options the board offers now, so a finished spec's key is dropped on load (#981).
-const keptSpecs=(saved,groups)=>{const opts=specOptions(groups);return saved.filter(k=>opts.includes(k))};
+const keptSpecs=(saved,groups,sum)=>{const opts=specOptions(groups,sum);return saved.filter(k=>opts.includes(k))};
 // A saved hidden set drops every closed status on load: history is never a hidden column (#969).
 const keptHidden=(saved,groups)=>{const ends=new Set(groups.filter(g=>g.end).map(g=>g.name));return saved.filter(n=>!ends.has(n))};
 // <card-rules>: the spec color and wave chip rules; the mobile page inlines this block alone (#917). It reads
@@ -59,8 +62,9 @@ function buildBoard(groups,o){
   const mode=o.mode,ends=new Set(groups.filter(g=>g.end).map(g=>g.name)),cols=groups.filter(g=>!g.end).map(g=>g.name),closed=o.closed,fw=o.fw||[],fs=o.fs||[],fk=o.fk||[],text=o.text||(()=>true);
   const hasFilter=!!(fw.length||fs.length||fk.length||o.search);
   const specs=new Map(),rows=[];
-  const goneSpecs=new Set();   // a spec whose card is closed or abandoned has no work left: no lane (#890)
-groups.forEach(g=>g.items.forEach(x=>{if(x.sp){if(ends.has(g.name))goneSpecs.add(x.n);else if(!specs.has(x.n))specs.set(x.n,{title:plain(x.t),st:g.name,sc:x.sc});   // a spec card carries its own closed/total (#890)
+  const goneSpecs=goneSpecsOf(groups,o.sum);   // a spec whose card is closed or abandoned has no work left: no lane (#890, #972)
+  const sumSpec=new Map((o.sum?.specs||[]).map(s=>[s.n,s])),sumWave=new Map((o.sum?.waves||[]).map(w=>[sumKey(w.spec,w.wave),w]));
+groups.forEach(g=>g.items.forEach(x=>{if(x.sp){if(!ends.has(g.name)&&!specs.has(x.n))specs.set(x.n,{title:plain(x.t),st:g.name,sc:x.sc});   // a spec card carries its own closed/total (#890)
  return}rows.push({...x,col:g.name})}));
   const lanes=new Map(),ensure=(id,meta)=>{if(!lanes.has(id))lanes.set(id,{id,...meta,all:[],vis:[]});return lanes.get(id)};
   const laneOf=x=>{
@@ -74,6 +78,8 @@ groups.forEach(g=>g.items.forEach(x=>{if(x.sp){if(ends.has(g.name))goneSpecs.add
   const[id,meta]=goneSpecs.has(x.pa)?(mode==="wave"?waveLane(null,laneWaveOf(x)):["none",{kind:"none",title:"No spec"}]):laneOf(x),l=ensure(id,meta);l.all.push(x);if(!ends.has(x.col)&&boardOk(x,fw,fs,fk)&&text(x))l.vis.push(x)});   // a closed status is history: its cards count for progress, never for a card, a count or the search (#969)
   const shown=[...lanes.values()].filter(l=>l.vis.length>0||(!hasFilter&&l.kind==="s"));
   shown.forEach(l=>{l.n=l.vis.length;l.total=l.all.length;l.closed=l.all.filter(x=>x.col===closed).length;
+    const s=l.kind==="s"?sumSpec.get(l.num):l.kind==="sw"?sumWave.get(sumKey(l.num,l.wave)):null;   // a closed row is never served: the summary counts it (#972)
+    if(s){l.closed=s.closed;l.total=s.total}
     const m=/^(\d+)\/(\d+)$/.exec(String(l.sc||""));   // a closed ticket never reaches the board with its parent, so the count comes from the spec card
     if(l.kind==="s"&&m){l.closed=+m[1];l.total=+m[2]}
     l.done=l.total>0&&l.closed===l.total;l.live=l.vis.some(x=>!!x.ho);l.counts={};l.vis.forEach(x=>{l.counts[x.col]=(l.counts[x.col]||0)+1})});
