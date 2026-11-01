@@ -22,8 +22,9 @@
 #  (P) #798, #799: a fresh seen record removed at rule Q's first stat reads as none, and rule Q releases its card;
 # Stubbed gh/board; a temp state dir, so the live watch.log, markers and board are never read or written.
 # usage: bash test-janitor-stale-card.sh [janitor.py]
+for v in $(env | /usr/bin/grep -o '^SG_[A-Za-z0-9_]*'); do unset "$v"; done
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/s/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"; cp "$(dirname "$src")/board_columns.py" "$(dirname "$src")/board-definition.json" "$T/s/"
+mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/s/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"; cp "$(dirname "$src")/board_columns.py" "$(dirname "$src")/board-definition.json" "$(dirname "$src")/board_facts.py" "$T/s/"
 printf '#!/bin/bash\necho "$*" >> %s/board.calls\n' "$T" > "$T/s/board.sh"
 printf '#!/bin/bash\necho "$*" >> %s/notify.calls\n' "$T" > "$T/notify"; chmod +x "$T/notify"
 cat > "$T/bin/gh" <<'J'
@@ -38,7 +39,7 @@ case "$a" in
   *repos/x/y/compare/*) echo ahead;;
   *projectsV2/4/fields*) echo FID4;;
   *projectsV2/1/fields*) echo FID1;;
-  *projectsV2/4/items*) for n in 1007; do printf '%s\tCode Complete\n' "$n"; done; printf '1012\tTodo\n'; for n in 1001 1002 1003 1004 1005 1006 1008 1009 1010 1011 1013; do printf '%s\tIn Progress\n' "$n"; done;;   # one read, every card
+  *projectsV2/4/items*) { for n in 1007; do printf '%s\tCode Complete\n' "$n"; done; printf '1012\tTodo\n'; for n in 1001 1002 1003 1004 1005 1006 1008 1009 1010 1011 1013; do printf '%s\tIn Progress\n' "$n"; done; awk '/^o 4 /{v=substr($0,5); n=v; sub(/.* /,"",n); s=v; sub(/ [0-9]+$/,"",s); print n "\t" s}' "TMPDIR/board.calls" 2>/dev/null; } | awk -F'\t' '{m[$1]=$2} END{for (k in m) printf "%s\t%s\n", k, m[k]}';;   # one read, every card; the janitor's own status writes are read back
   *projectsV2/1/items*) for n in 1003; do printf '%s\tDoing\n' "$n"; done;;
   *issues/1010*) if [ -e "TMPDIR/refuse" ]; then echo "API rate limit exceeded for user"; else echo open; fi;;
   *issues/10*) echo open;;
@@ -92,7 +93,7 @@ o=$(pass); bc() { cat "$T/board.calls" 2>/dev/null; }
 [ ! -L "$T/st/auto/disp-1013" ] && /usr/bin/grep -q '^o 4 Todo 1013$' "$T/board.calls" 2>/dev/null && ! grep -q Traceback <<< "$o" && ok "L: a dangling marker is dropped, its card released, the pass reaches the card pass (#794)" || ko "L #1013: $(bc) $o"
 rm -f "$T/refuse"; o=$(pass)
 /usr/bin/grep -q '^o 4 Todo 1010$' "$T/board.calls" 2>/dev/null && [ ! -e "$T/st/auto/disp-1010" ] && ok "J: the next pass, API back, releases it (a refusal leaves no once-only marker behind)" || ko "J #1010 not released after the refusal: $(bc) $o"
-n=$(/usr/bin/grep -c ' 1001$' "$T/board.calls"); [ "$n" = 1 ] && ok "the card of #1001 is moved once" || ko "#1001 moved $n times"
+n=$(/usr/bin/grep -c '^o 4 .* 1001$' "$T/board.calls"); [ "$n" = 1 ] && ok "the card of #1001 is moved once" || ko "#1001 moved $n times"
 # M: a marker removed mid-pass (#794), in a second state dir so the cases above stay as they were. #798: the race fires in
 # rule K's age read (the first stat of disp-1021), not in rule Q, so these lines pin rule K.
 # The regression is the race on disp-1021: the disp-/bug- glob lists it, then it is removed before its first stat (rule K), so the

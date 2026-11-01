@@ -14,7 +14,7 @@ export SG_TAKEOVER_SECONDS=1000000000000   # these runs test other rules; their 
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/s/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"; cp "$(dirname "$src")/board_columns.py" "$(dirname "$src")/board-definition.json" "$T/s/"
 here="$(cd "$(dirname "$src")" && pwd)"; cp "$here/ghcall.sh" "$here/ghread.py" "$here/ghthrottle.py" "$T/s/"   # the janitor reaches the open-issue list through the door beside it (ghcall.sh)
-cp "$here/board_columns.py" "$here/board_facts.py" "$here/board-definition.json" "$here/refusal.sh" "$here/address.sh" "$here/refusal-names.sh" "$here/spec_fold.py" "$T/s/"   # a refused card write queues its comment through the helper beside it (#141), and names it from the closed set (#142)
+cp "$here/board_columns.py" "$here/board_facts.py" "$here/issue_ledger.py" "$here/board-definition.json" "$here/refusal.sh" "$here/address.sh" "$here/refusal-names.sh" "$here/spec_fold.py" "$T/s/"   # a refused card write queues its comment through the helper beside it (#141), and names it from the closed set (#142)
 cat > "$T/s/board.sh" <<'J'
 #!/bin/bash
 case "$*" in
@@ -253,17 +253,17 @@ cq="$T/st/cq/x__y#2009-refusal-board-write-failed.md"
 # missing (#86): Todo is the owner's go signal, so only the owner moves it there (#550). The child's `## Blocked by` line
 # holds no column: the gate that holds a wave-2 ticket back until its blocker lands is the dispatch's own reading of those
 # edges, never the column (#142).
-/usr/bin/grep -q '^ADD o 4 Doing 2017$' "$T/board.calls" 2>/dev/null && ok "a spec with no card is created in Doing, a child of it is in flight" || ko "#2017 not added Open Specs: $(bc) $o"
+/usr/bin/grep -q '^ADD o 4 Backlog 2017$' "$T/board.calls" 2>/dev/null && ok "a spec with no card is created in Backlog, a child of it is in flight (ADR-0142)" || ko "#2017 not added Open Specs: $(bc) $o"
 ! /usr/bin/grep -q 'Todo 2017' "$T/board.calls" 2>/dev/null && ok "a spec is never created in the queue column" || ko "#2017 read as work: $(bc)"
-/usr/bin/grep -q 'BOARD-RECONCILE #2017: card added -> Doing (spec folds over its sub-issues)' "$T/st/cycle.log" 2>/dev/null && ok "the spec column is named in cycle.log" || ko "#2017 add not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
+/usr/bin/grep -q 'BOARD-RECONCILE #2017: card added -> Backlog (open issue with no card)' "$T/st/cycle.log" 2>/dev/null && ok "the spec column is named in cycle.log" || ko "#2017 add not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
 /usr/bin/grep -q '^ADD o 4 Backlog 2019$' "$T/board.calls" 2>/dev/null && ok "a spec child with no card is created in Backlog" || ko "#2019 not added Backlog: $(bc) $o"
 ! /usr/bin/grep -q 'Code Complete 2019' "$T/board.calls" 2>/dev/null && ok "an upstream commit before the fork point names no issue of this repository" || ko "#2019 read Code Complete over an upstream subject: $(bc)"
 ! /usr/bin/grep -q 'Blocked 2019' "$T/board.calls" 2>/dev/null && ok "a child whose blocker is still open is not held out of Todo" || ko "#2019 read Blocked: $(bc)"
 # A spec's column is a fold over its sub-issues, read off the relation the one open-issue read already carries and the
-# cards the pass already holds: no write with none (or none past the queue), so the floor opens a new spec in Backlog; Doing once a child reached Doing or a child was
-# delivered while another is open (#2028), Closed when every child is terminal and one is Closed, Abandoned when every
-# child is terminal and none is Closed. The pass also closes the spec issue when every child is closed.
-for w in "ADD o 4 Closed 2020" "ADD o 4 Backlog 2021" "ADD o 4 Abandoned 2027" "ADD o 4 Doing 2028"; do
+# cards the pass already holds: the floor opens a new spec in Backlog, and a spec never takes Doing from its children (ADR-0142,
+# #1034), Closed when every child is terminal and one is Closed, Abandoned when every child is terminal and none is Closed.
+# The pass also closes the spec issue when every child is closed.
+for w in "ADD o 4 Closed 2020" "ADD o 4 Backlog 2021" "ADD o 4 Abandoned 2027" "ADD o 4 Backlog 2028"; do
   /usr/bin/grep -q "^$w\$" "$T/board.calls" 2>/dev/null && ok "spec fold: $w" || ko "spec fold: no '$w': $(/usr/bin/grep -E ' 20(20|21|27|28)$' "$T/board.calls")"
 done
 ! /usr/bin/grep -q 'Open Specs' "$T/board.calls" 2>/dev/null && ok "no spec is written to the old Open Specs column" || ko "Open Specs written: $(/usr/bin/grep 'Open Specs' "$T/board.calls")"
@@ -291,8 +291,8 @@ done
 ! /usr/bin/grep -q ' 2047$' "$T/board.calls" 2>/dev/null && ok "a child of a spec in Backlog stays in Backlog" || ko "#2047 moved: $(/usr/bin/grep ' 2047$' "$T/board.calls")"
 # A spec is never work (#665): a commit subject that names it is its children's, so no work rule writes its card, and the
 # fold alone sets it -- including the correction of a card a work rule moved forward while its children were in flight.
-/usr/bin/grep -q '^STATUS o 4 Doing 2050$' "$T/board.calls" 2>/dev/null && ok "a spec card a work rule moved forward is folded back to Doing (#665)" || ko "#2050 not corrected: $(bc) $o"
-/usr/bin/grep -q 'BOARD-RECONCILE #2050: card -> Doing (spec folds over its sub-issues)' "$T/st/cycle.log" 2>/dev/null && ok "the correction is named in cycle.log" || ko "#2050 correction not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
+! /usr/bin/grep -q '^STATUS o 4 [A-Za-z ]* 2050$' "$T/board.calls" 2>/dev/null && ok "a spec card a work rule moved forward is not written back: moving it below Doing is the owner's (ADR-0143, #1034)" || ko "#2050 written: $(bc) $o"
+! /usr/bin/grep -q 'BOARD-RECONCILE #2050' "$T/st/cycle.log" 2>/dev/null && ok "no correction of #2050 is named in cycle.log" || ko "#2050 correction named: $(cat "$T/st/cycle.log" 2>/dev/null)"
 ! /usr/bin/grep -q ' 2053$' "$T/board.calls" 2>/dev/null && ok "a commit that names a spec never moves its card forward" || ko "#2053 moved: $(/usr/bin/grep ' 2053$' "$T/board.calls")"
 ! /usr/bin/grep -q ' 2054$' "$T/board.calls" 2>/dev/null && ok "the correction leaves its queued child's card alone" || ko "#2054 moved: $(/usr/bin/grep ' 2054$' "$T/board.calls")"
 # The fold adds no GitHub call: the children come with the open-issue read, never from a sub-issues route.

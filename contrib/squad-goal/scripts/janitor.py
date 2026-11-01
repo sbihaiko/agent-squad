@@ -406,7 +406,9 @@ for r in names:
         continue
     if not alive and i["idle"] > 1200 and not (i["pid"] and same_process(i["pid"], i["started_at"])):
         say(f"zombie run {n} (no verdict, idle {int(i['idle'] // 60)} min, no process) dropped from active-runs")
-        if not dry: mark_killed(f)
+        if not dry:
+            mark_killed(f)
+            for x in req_issues(f) | i["acc"]: (st / "auto" / f"reoffer-{x}").write_text(n + "\n")   # the card's way back, read by the board pass (#1034)
         pending += free_reaped(f, i)
         for q in hips:   # the helpers the dead session left behind are reaped with it, never kept by the next pass
             if own_pass(q) or SESSION.search(procs.get(q, (0, ""))[1]): continue
@@ -860,6 +862,22 @@ def reconcile_board():
                 set_expected(n, "Blocked", f"run {i['run_id']} needs a human with nothing landed ({why})", i["run_id"], i["run_ts"], 40)
             else:   # a run that ended with nothing delivered delivered nothing: the card goes back to the queue, never to Code Complete (ADR-0145 rule 12, #464)
                 set_expected(n, os.environ.get("SG_TODO", "Todo"), f"run {i['run_id']} completed with nothing landed", i["run_id"], i["run_ts"], 20)
+    # A run that ended without a verdict has no card to rank: the reoffer marker a run-end path wrote names it, and the card
+    # goes back to the queue unless a live run holds the issue, the owner froze it, or its work landed. The marker goes once
+    # the card has left Doing; an unreadable card keeps it for the next pass (ADR-0143, #1034).
+    for m in sorted((st / "auto").glob("reoffer-*")):
+        x = m.name[len("reoffer-"):]; run = marker_text(m)
+        if not x.isdigit() or run is None: continue
+        run = run.strip(); cs = card_status(proj, x)
+        if cs and cs != doing:
+            if not dry: m.unlink(missing_ok=True)
+            continue
+        if not cs or x in expected or holding(x) or base_landed(x, {run}) or run_landed(x, {run}): continue
+        say(f"STALE-CARD #{x}: card In Progress behind run {run}, which ended without a verdict and landed nothing; card -> {os.environ.get('SG_TODO', 'Todo')}, so the next cycle dispatches the issue again")
+        if not dry:
+            (st / "cq" / f"{CQ}#{x}-stalecard-{os.getpid()}.md").write_text(
+                f"Its card was In Progress behind run {run}, which ended without a verdict and landed nothing. The card is back in {os.environ.get('SG_TODO', 'Todo')}, so the next cycle dispatches the issue again.\n")
+        set_expected(x, os.environ.get("SG_TODO", "Todo"), f"run {run} ended without a verdict (no process, or its folder is gone) with nothing landed", run, "", 20)
     for m in sorted((st / "auto").glob("disp-*")):
         holder = marker_text(m)
         if holder is None: continue   # #794: a marker gone since the glob (a dangling link) holds nothing
@@ -877,7 +895,7 @@ def reconcile_board():
         import spec_fold
         have_cards = cards(proj)[1]   # every card's Status, read once per pass: the fold, rule 12 and the Doing note share it
         for n in sorted(olabels, key=int):
-            if holding(n) and n not in expected: continue   # a run still delivers it and no rule named its column: the floor never sends it back to Todo (#540)
+            if holding(n) and n not in expected and n not in specs: continue   # a run still delivers it and no rule named its column: the floor never sends it back to Todo (#540); a spec's children never hold its card
             fresh = (lambda a, m: a and not m.get(str(n)))(*cards(proj))   # an answered read that holds no card for it, or a card with no Status: no column yet
             bug = bool(olabels[n] & {os.environ.get("SG_BUG_LABEL") or "bug"})
             if fresh: set_expected(n, os.environ.get("SG_TODO", "Todo") if bug else "Backlog", "open issue with no card", rank=10)
@@ -896,8 +914,10 @@ def reconcile_board():
                 # A parent's column is a fold over its sub-issues' cards (spec_fold.py): the relation came with the one read above and
                 # the cards are read once per pass, so the fold adds no call. A parent that is not a spec takes the Doing lift only
                 # (#942): the spec vocabulary's Closed and Abandoned are never written to it.
-                col, reverted = spec_fold.fold([have_cards.get(k, "") for k in _kids.get(n, [])], have_cards.get(n, ""), os.environ.get("SG_TODO", "Todo"))
-                if col and (is_spec or col == spec_fold.DOING): set_expected(n, col, ("spec" if is_spec else "parent") + " folds over its sub-issues" + (": a child reopened, the card keeps its column" if reverted else ""), rank=15)   # a card the fold lifted to Doing returns to the owner's column once no child reaches Doing (#1034)
+                spec_owner = "Backlog"   # ADR-0142: the floor column a spec is created in; the fold never names Todo for one
+                col, reverted = spec_fold.fold([have_cards.get(k, "") for k in _kids.get(n, [])], have_cards.get(n, ""), spec_owner if is_spec else os.environ.get("SG_TODO", "Todo"))
+                if is_spec and col == spec_fold.DOING: col = spec_owner if have_cards.get(n, "") == spec_fold.DOING else None   # a spec never enters Doing (ADR-0142 rule 5)
+                if col and (is_spec or col == spec_fold.DOING): set_expected(n, col, ("spec" if is_spec else "parent") + " folds over its sub-issues" + (": a child reopened, the card keeps its column" if reverted else ""), rank=15)   # forward only: below Doing the fold writes nothing, and the spec keeps the owner's column (#550)
             if is_spec:
                 # The owner starts a spec by moving its card to Todo, and its children follow it there (#589): a child in Backlog,
                 # or with no column yet, goes to Todo. Forward only: a child past Backlog keeps its column (ADR-0143). The fold
@@ -1155,6 +1175,7 @@ if owner and proj and repo0:
             say(f"DISPATCH-MISSING #{n}: run {f.name} folder missing; {mks} marker dropped so it dispatches again")
             if not dry:
                 for _, p in marks[n]: p.unlink(missing_ok=True)
+                (st / "auto" / f"reoffer-{n}").write_text(f.name + "\n")   # the card goes back to Todo, not left in Doing with no marker (#1034)
     # Q: a marker and an In Progress card with no run behind them. Only a definite answer counts: a refused read (not "open", not a digit, no status)
     # touches nothing and leaves no once-only marker, so the next pass decides. A definite "no" is remembered for 10 min, so a landed issue's old marker is not re-read every pass.
     qm = {}
