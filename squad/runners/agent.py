@@ -123,11 +123,11 @@ class AgentRunner:
 
     def settle(self, ctx, node, entry, sc, out, eff, who):
         r, res = out.result, out.res
-        outcome, reasons, diag_cap = session.agent_outcome(node, r, session.cap_reason(r.stop_reason, res.amount, eff["spend_max"]))
+        outcome, reasons, diag_cap = session.agent_outcome(node, r, session.cap_reason(r.stop_reason, res.amount, eff["spend_max"]), res.amount)
         rel = ctx.artifacts.put(node["name"], sc.item, entry, r.output, node.get("output_key")) if isinstance(r.output, dict) else None
         extra = {**who, **(r.usage or {}), **({"spend_source": r.spend_source} if r.spend_source else {})}
         diagnostic = {k: v for k, v in (("cap", diag_cap), ("subagents", r.subagents or None), ("session", r.session_id)) if v}
-        if not isinstance(r.output, dict) and r.ended:      # an artifact_missing outcome says how the session ended
+        if not isinstance(r.output, dict) and r.ended:      # an outcome with no artifact says how the session ended
             diagnostic["ended"] = r.ended
         if diagnostic:
             extra["diagnostic"] = diagnostic
