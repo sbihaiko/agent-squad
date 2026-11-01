@@ -141,8 +141,8 @@ DAY = 86400
 
 
 def _iso(t):
-    import datetime as dt
-    return dt.datetime.fromtimestamp(t, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    import time
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
 
 
 NOSPEC = [
