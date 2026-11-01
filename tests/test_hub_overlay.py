@@ -258,3 +258,13 @@ def test_the_talk_is_markdown_built_as_nodes_never_as_html():
     body = js[js.index("function richText(text) {"):js.index("const CLAMP")]
     assert body.count("inline(") >= 4, "a heading, a bullet, a numbered line and a paragraph all read markdown"
     assert "document.createTextNode" in js
+
+def test_a_markdown_table_is_drawn_as_a_table():
+    """Owner, 2026-11-01: a table arrived as its own pipes and dashes. A header row, a dash row and the body become one table whose
+    cells are text nodes."""
+    js = (pathlib.Path(__file__).resolve().parents[1] / "contrib/squad-goal/scripts/hub-overlay.js").read_text()
+    assert "const TBL_ROW = " in js and "TBL_SEP = " in js
+    assert 'createElement("table")' in js and 'createElement("th")' in js and 'createElement("td")' in js
+    body = js[js.index("function richText(text) {"):js.index("const CLAMP")]
+    assert "TBL_ROW.test(raw) && TBL_SEP.test" in body
+    assert ".sq-tbl" in js

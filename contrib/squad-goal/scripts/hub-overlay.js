@@ -102,6 +102,9 @@ html.sq-docked body{margin-right:var(--sq-dock)}
 .sq-answer{padding-left:14px;position:relative}.sq-answer .sq-who{color:#8b949e;font-size:11px}
 .sq-answer::before{content:"\u25CF";position:absolute;left:0;top:0;color:#3ecf8e;font-size:10px}
 .sq-h{font-family:var(--sq-mono);font-weight:600;font-size:calc(var(--sq-fs) + 0px);color:#eef1f5;margin:6px 0 3px}
+.sq-tbl{width:100%;border-collapse:collapse;margin:6px 0;font-size:calc(var(--sq-fs) - 1px)}
+.sq-tbl th,.sq-tbl td{border:1px solid #2b3340;padding:3px 7px;text-align:left;vertical-align:top}
+.sq-tbl th{background:#1b212b;color:#eef1f5;font-weight:600}
 .sq-ul{margin:3px 0;padding-left:16px}.sq-ul li{margin:0 0 2px}.sq-ol{list-style:decimal}
 .sq-ic{font-family:var(--sq-mono);background:#1b212b;border:1px solid #2b3340;border-radius:4px;padding:0 4px;font-size:calc(var(--sq-fs) - 1px)}
 .sq-txt b{color:#eef1f5}.sq-txt a{color:#7aa2ff;text-decoration:underline}
@@ -289,6 +292,22 @@ function inline(el, text) {
   if (last < text.length) el.append(document.createTextNode(text.slice(last)));
   return el;
 }
+// A markdown table (owner, 2026-11-01): a header row of pipes, a row of dashes, then the body. Built as a table element, so
+// every cell is text and a cell never carries markup of its own.
+const TBL_ROW = /^\s*\|(.+)\|\s*$/, TBL_SEP = /^\s*\|?\s*:?-{2,}[\s:|-]*$/;
+const tblCells = row => row.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map(c => c.trim());
+function tableNode(head, rows) {
+  const t = document.createElement("table"); t.className = "sq-tbl";
+  const hr = document.createElement("tr");
+  head.forEach(c => { const th = document.createElement("th"); inline(th, c); hr.append(th); });
+  const thead = document.createElement("thead"); thead.append(hr); t.append(thead);
+  const tb = document.createElement("tbody");
+  rows.forEach(r => { const tr = document.createElement("tr");
+    head.forEach((_, i) => { const td = document.createElement("td"); inline(td, r[i] == null ? "" : r[i]); tr.append(td); });
+    tb.append(tr); });
+  t.append(tb);
+  return t;
+}
 function richText(text) {
   const box = document.createElement("div");
   box.className = "sq-txt";
@@ -301,7 +320,15 @@ function richText(text) {
     const s = document.createElement("summary"); s.textContent = "Code · " + fence.length + " line" + (fence.length === 1 ? "" : "s");
     const pre = document.createElement("pre"); pre.textContent = fence.join("\n");
     d.append(s, pre); if (fence.length <= 8) d.open = true; box.append(d); fence = null; };
-  for (const raw of lines) {
+  for (let li_ = 0; li_ < lines.length; li_++) {
+    const raw = lines[li_];
+    if (TBL_ROW.test(raw) && TBL_SEP.test(lines[li_ + 1] || "")) {
+      para(); list();
+      const head = tblCells(raw), rows = [];
+      let k = li_ + 2;
+      while (k < lines.length && TBL_ROW.test(lines[k])) { rows.push(tblCells(lines[k])); k++; }
+      box.append(tableNode(head, rows)); li_ = k - 1; continue;
+    }
     if (raw.trim().startsWith("```")) { if (fence) code(); else { para(); list(); fence = []; } continue; }
     if (fence) { fence.push(raw); continue; }
     const h = /^#{1,6}\s+(.*)$/.exec(raw);
