@@ -3599,7 +3599,8 @@ HTML_BARE = re.compile(r"(?<![=\w-])(checked|disabled|open)(?=[\s/>]|$)")
 def render_html(src):
     """GitHub's rendered body passed through the allow-list: the tags it renders keep their structure, a class or style
     never rides, a relative or `javascript:` link is dropped, and a task-list checkbox keeps its look. Anything else is
-    its text alone, so a body never reaches the page with a script, a frame or a handler."""
+    its text alone, and a `<` that opens no whole tag is escaped, so a body never reaches the page with a script, a frame or
+    a handler."""
     t = HTML_COMMENT.sub("", HTML_SCAFFOLD.sub("", src or ""))
     def one(m):
         close, name, attrs = bool(m.group(1)), (m.group(2) or "").lower(), m.group(3) or ""
@@ -3618,7 +3619,13 @@ def render_html(src):
         if name == "a" and any(k.startswith(" href=") for k in kept): kept += [' target="_blank" rel="noopener"']
         if name == "img": kept += [' referrerpolicy="no-referrer" loading="lazy"']
         return f"<{name}{''.join(kept)}>"
-    return HTML_TAG.sub(one, t)
+    out, last = [], 0
+    for m in HTML_TAG.finditer(t):
+        out.append(t[last:m.start()].replace("<", "&lt;"))
+        out.append(one(m))
+        last = m.end()
+    out.append(t[last:].replace("<", "&lt;"))
+    return "".join(out)
 def issue_detail(n, repo=None):
     """Issue (or PR) body + the last 5 comments, fetched on click and cached 60 s. n is an int, never interpolated raw.
     `repo` is the repository the card belongs to (#1820): a number is only a number, and PR #1821 of the tooling
