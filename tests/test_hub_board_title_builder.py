@@ -56,7 +56,7 @@ def test_board_header_reads_no_title_and_the_tab_names_the_pane(hub):
     head = _bhead(hub)
     assert "<b>" not in head, "the board toolbar carries a bold title again"
     tabs = hub.PAGE[hub.PAGE.index("<div class=tabs"):hub.PAGE.index("</div>", hub.PAGE.index("<div class=tabs"))]
-    assert [re.sub(r"<[^>]*>", "", t) for t in re.findall(r"<button[^>]*>.*?</button>", tabs)] == ["Kanban", "Charts", "History", "Settings"]
+    assert [re.sub(r"<[^>]*>", "", t) for t in re.findall(r"<button[^>]*>.*?</button>", tabs)] == ["Kanban", "Charts", "Settings"]   # re-anchored (#1028): the run history moved into Settings > Loop
 
 
 def test_board_has_no_collapsed_state(hub):
