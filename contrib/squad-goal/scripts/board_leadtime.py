@@ -215,15 +215,19 @@ def control_chart(items, timeframe=None, log=False, now=None, start=None, end=No
             return _clamp(h / top)
         ticks = [(top * k / 5, position(top * k / 5)) for k in range(6)]
 
+    banded = len(hours) > 1
     dots = []
     for row, hrs, (mean, low, high) in zip(plotted, hours, rolling, strict=True):
         closed = datetime.fromisoformat(row["c"])
         x = _clamp((closed - start).total_seconds() / span) if span > 0 else 1.0
+        if banded:
+            band = {"low": low, "high": high, "low_text": _duration(low), "high_text": _duration(high),
+                    "y_low": position(low), "y_high": position(high)}
+        else:
+            band = dict.fromkeys(("low", "high", "low_text", "high_text", "y_low", "y_high"))
         dots.append({"n": row["n"], "title": row.get("t", ""), "closed": closed.date().isoformat(), "hours": hrs,
                      "text": _duration(hrs), "x": x, "y": position(hrs),
-                     "rolling": {"hours": mean, "low": low, "high": high, "text": _duration(mean),
-                                 "low_text": _duration(low), "high_text": _duration(high),
-                                 "y": position(mean), "y_low": position(low), "y_high": position(high)}})
+                     "rolling": {"hours": mean, "text": _duration(mean), "y": position(mean), **band}})
 
     clusters = []
     for dot in dots:
@@ -235,7 +239,7 @@ def control_chart(items, timeframe=None, log=False, now=None, start=None, end=No
             clusters.append({"x": dot["x"], "y": dot["y"], "dots": [dot]})
 
     def line(hrs, label):
-        return None if not hrs else {"hours": hrs, "text": _duration(hrs), "y": position(hrs), "label": label}
+        return None if hrs is None else {"hours": hrs, "text": _duration(hrs), "y": position(hrs), "label": label}
 
     summary = {"average": line(statistics.fmean(hours), "Average") if hours else None,
                "median": line(statistics.median(hours), "Median") if hours else None,
