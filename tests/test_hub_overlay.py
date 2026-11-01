@@ -339,3 +339,14 @@ def test_an_image_the_owner_sent_joins_the_message_it_came_with():
     body = js[js.index("function stitch(turns) {"):js.index("function feed(turns) {")]
     assert 'prev.role === "owner"' in body and "IMG_ONLY.test(String(prev.text" in body
     assert 'out[out.length - 1] = { ...prev, text:' in body
+
+def test_an_empty_session_list_blanks_the_panel_only_after_it_repeats():
+    """Owner, 2026-11-01: the terminal stopped and went back to "No session runs" with the panel still open. One answered
+    read that named no session was enough to wipe the talk; it must repeat first."""
+    js = OVERLAY.read_text()
+    body = js[js.index("async function loadSessions() {"):js.index("// Only the structure that carries meaning")]
+    assert "const EMPTY_N = 3;" in js
+    guard = body.index("if (cur && !found.length && ++emptyN < EMPTY_N) {")
+    assert "retrySoon();" in body[guard:guard + 200]
+    for later in ("sessions = found", "cur = ", 'empty("No session runs'):
+        assert guard < body.index(later), later

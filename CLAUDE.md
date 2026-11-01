@@ -121,7 +121,8 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 - **A spec is a document, never work; only its tickets are, and the owner starts it** ([ADR-0142](docs/adr/0142-a-spec-is-never-work.md)). Guard: `contrib/squad-goal/scripts/test-autofrontier-one-run.sh`, `tests/test_vendor_skills.py`, `contrib/squad-goal/scripts/test-janitor-board-reconcile.sh`.
 - **A card only moves forward, and an old option is removed only after its cards moved** ([ADR-0143](docs/adr/0143-a-card-only-moves-forward.md)). Guard: `contrib/squad-goal/scripts/test-board-migrate.sh`, `tests/test_board_migrate.py`, `contrib/squad-goal/scripts/test-board-forward.sh`.
 - **This repository's card state stays on the Project Status field; a writer sends a board write only when the value changes** ([ADR-0144](docs/adr/0144-the-carrier-is-the-project-field.md)). Guard: none yet; a draft.
-- **Bug first: a bug is filed at once in Todo, and the loop dispatches bugs before features** ([ADR-0148](docs/adr/0148-bug-first.md)). Guard: `contrib/squad-goal/scripts/test-autobug.sh`, `contrib/squad-goal/scripts/test-autofrontier-one-run.sh`.
+- **Bug first: a bug is filed at once in Todo, always, and the loop dispatches bugs before features** ([ADR-0148](docs/adr/0148-bug-first.md)).
+  A bug's card is created in Todo even when a person fixes it by hand. Guard: `contrib/squad-goal/scripts/test-autobug.sh`, `contrib/squad-goal/scripts/test-autofrontier-one-run.sh`.
 - **A burn over the token cap is a report and an alert, never a stop; dispatch pauses only while the last hour burns over 3x the cap, and resumes by itself under it** ([ADR-0145](docs/adr/0145-a-work-branch-lands-in-dev-by-fast-forward.md)). Guard: `contrib/squad-goal/scripts/test-token-guard.sh`.
 
 ## Where decisions go

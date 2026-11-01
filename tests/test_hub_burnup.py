@@ -91,6 +91,8 @@ def test_the_spec_lane_offers_the_burnup_and_the_page_fetches_it(hub):
     assert re.search(r'class=bu data-bu="\$\{l\.num\}"', hub.PAGE)
     assert 'fetch("/api/chart/burnup?spec="+n)' in hub.PAGE
     assert "buToggle(bu.dataset.bu)" in hub.PAGE
+    # data-bu is a string and the lane asks for BU.open[l.num], a number: the toggle coerces, or the panel never opens (#1075)
+    assert "function buToggle(n){n=+n;" in hub.PAGE
 
 
 def test_a_spec_with_sub_issues_draws_both_lines_from_the_children_instants(hub, store, monkeypatch):

@@ -132,8 +132,12 @@ def test_the_fill_has_a_reduced_motion_rule(hub):
 
 
 def test_the_bar_sits_below_the_tiles_and_above_the_loop_row(hub):
+    """The Monitor keeps one read-only Loop row and never its switch (owner, 2026-11-01): the card carries no #iloop
+    container, so the bar closes the panel under the tiles and above that row."""
     page = hub.PAGE
-    assert page.index("id=ian") < page.index("id=ispec") < page.index("id=iloop")
+    assert page.index("id=ian") < page.index("id=ispec")
+    assert "id=iloop" not in page
+    assert page.index("id=ispec") < page.index('{k:"Loop",text:')
 
 
 # ---- the No spec group: bugs and single tickets (owner) ----

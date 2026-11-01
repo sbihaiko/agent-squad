@@ -89,36 +89,36 @@ html.sq-docked body{margin-right:var(--sq-dock)}
 #sq-ov-pick p{margin:0 0 2px;width:100%;color:#b8c0cf;font-size:13px}
 #sq-ov-pick button{min-height:44px;padding:4px 10px;border:1px solid #353d4b;border-radius:8px;background:#1c212b;color:#e6e8ee;cursor:pointer;font:inherit;font-size:13px}
 #sq-ov-pick button[aria-pressed=true]{border-color:#7aa2ff}
-.sq-ov-fsb{font:600 13px/1 system-ui;min-width:34px;height:34px;padding:0 6px}
+.sq-ov-fsb{font:600 13px/1 system-ui;min-width:44px;height:44px;padding:0 8px}   /* one control size for the desktop and the phone floor (owner, 2026-11-01) */
 #sq-ov-log{flex:1;min-height:0;overflow:auto;padding:13px 14px}
 #sq-ov-log .sq-empty{color:#b8c0cf}
 .sq-turn{margin:0 0 12px;padding:0;border-left:0;line-height:1.55;text-indent:0}
-.sq-who{display:block;font-family:var(--sq-mono);font-size:10px;line-height:1.2;color:#707988;margin-bottom:2px;letter-spacing:.02em}
+.sq-who{display:block;font-family:var(--sq-mono);font-size:13px;line-height:1.2;color:#8b949e;margin-bottom:2px;letter-spacing:.02em}
 .sq-txt{white-space:pre-wrap;overflow-wrap:anywhere;font-family:var(--sq-mono);font-size:var(--sq-fs);color:#c9d1d9}
 .sq-p{margin:0 0 8px}.sq-p:last-child{margin-bottom:0}
 .sq-owner{margin:0 0 10px auto;width:fit-content;max-width:86%;border:1px solid #2e6b4f;border-radius:14px 14px 4px 14px;padding:8px 12px;background:#12302a}
-.sq-owner .sq-who{color:#8b949e;font-size:11px}.sq-owner .sq-txt{color:#e6edf3}
-.sq-system .sq-who{color:#565d69;font-size:11px}.sq-system .sq-txt{color:#8b949e;font-style:italic}
-.sq-fold{border-left:0;margin:0 0 8px}.sq-fold summary{font-size:11px;color:#6b7280;cursor:pointer;list-style:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sq-owner .sq-who{color:#8b949e;font-size:13px}.sq-owner .sq-txt{color:#e6edf3}
+.sq-system .sq-who{color:#8b949e;font-size:13px}.sq-system .sq-txt{color:#8b949e;font-style:italic}
+.sq-fold{border-left:0;margin:0 0 8px}.sq-fold summary{font-size:13px;color:#8b949e;cursor:pointer;list-style:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sq-fold summary::-webkit-details-marker{display:none}.sq-fold[open] summary{color:#8b949e}
 .sq-answer{margin:0 auto 10px 0;width:fit-content;max-width:92%;border:1px solid #26303c;border-radius:14px 14px 14px 4px;padding:8px 12px;background:#161c24}
-.sq-answer .sq-who{color:#8b949e;font-size:11px}
-.sq-h{font-family:var(--sq-mono);font-weight:600;font-size:calc(var(--sq-fs) + 0px);color:#eef1f5;margin:6px 0 3px}
-.sq-tbl{width:100%;border-collapse:collapse;margin:6px 0;font-size:calc(var(--sq-fs) - 1px)}
+.sq-answer .sq-who{color:#8b949e;font-size:13px}
+.sq-h{font-family:var(--sq-mono);font-weight:600;font-size:var(--sq-fs);color:#eef1f5;margin:6px 0 3px}
+.sq-tbl{width:100%;border-collapse:collapse;margin:6px 0;font-size:var(--sq-fs)}
 .sq-tbl th,.sq-tbl td{border:1px solid #2e6b4f;padding:4px 8px;text-align:left;vertical-align:top}
 .sq-tbl th{background:#101a16;color:#3ecf8e;font-weight:600}
 .sq-ul{margin:3px 0;padding-left:16px}.sq-ul li{margin:0 0 2px}.sq-ol{list-style:decimal}
-.sq-ic{font-family:var(--sq-mono);background:#1b212b;border:1px solid #2b3340;border-radius:4px;padding:0 4px;font-size:calc(var(--sq-fs) - 1px)}
+.sq-ic{font-family:var(--sq-mono);background:#1b212b;border:1px solid #2b3340;border-radius:4px;padding:0 4px;font-size:var(--sq-fs)}
 .sq-txt b{color:#ffffff;font-weight:650}.sq-txt i{color:#b6c0cc}
 .sq-txt a{color:#7aa2ff;text-decoration:underline}.sq-txt code{color:#e6c07b}
-.sq-code{margin:4px 0}.sq-code summary{font-size:11px;color:#7aa2ff;cursor:pointer;list-style:none}
-.sq-code pre{margin:3px 0 0;padding:5px 8px;background:#0d1117;border:1px solid #232a36;border-radius:6px;overflow:auto;font-family:ui-monospace,SFMono-Regular,monospace;font-size:calc(var(--sq-fs) - 1px);line-height:1.4;color:#b8c0cf;white-space:pre}
+.sq-code{margin:4px 0}.sq-code summary{font-size:13px;color:#7aa2ff;cursor:pointer;list-style:none}
+.sq-code pre{margin:3px 0 0;padding:5px 8px;background:#0d1117;border:1px solid #232a36;border-radius:6px;overflow:auto;font-family:ui-monospace,SFMono-Regular,monospace;font-size:var(--sq-fs);line-height:1.4;color:#b8c0cf;white-space:pre}
 .sq-img{display:block;margin:4px 0}.sq-img img{max-width:100%;max-height:180px;border:1px solid #232a36;border-radius:6px;display:block}
 .sq-onlyimg{max-width:min(86%,280px)}.sq-onlyimg .sq-img img{width:100%;max-height:220px;object-fit:contain}
-.sq-more{margin:1px 0 4px;padding:1px 0;border:0;background:none;color:#7aa2ff;font-size:11px;cursor:pointer}
-.sq-earlier{margin:0 0 6px}.sq-earlier summary{font-size:11px;color:#707988;cursor:pointer}
+.sq-more{margin:1px 0 4px;padding:1px 0;border:0;background:none;color:#7aa2ff;font-size:13px;cursor:pointer}
+.sq-earlier{margin:0 0 6px}.sq-earlier summary{font-size:13px;color:#8b949e;cursor:pointer}
 .sq-tool{}.sq-tool .sq-who{color:#f5b041}
-.sq-tool .sq-txt{color:#9aa3b2;font-family:ui-monospace,SFMono-Regular,monospace;font-size:calc(var(--sq-fs) - .5px);line-height:1.35}
+.sq-tool .sq-txt{color:#9aa3b2;font-family:ui-monospace,SFMono-Regular,monospace;font-size:var(--sq-fs);line-height:1.35}
 #sq-ov-form{position:relative;display:flex;align-items:flex-end;gap:6px;padding:8px;border-top:1px solid #353d4b}
 #sq-ov-plus{flex:none;width:44px;height:44px;border:1px solid #353d4b;border-radius:50%;background:#1c212b;color:#e6e8ee;font:22px/1 system-ui;cursor:pointer}
 #sq-ov-menu{position:absolute;left:8px;bottom:60px;z-index:2;display:flex;flex-direction:column;min-width:170px;padding:4px;background:#1c212b;border:1px solid #353d4b;border-radius:10px;box-shadow:0 10px 30px #000a}
@@ -243,7 +243,8 @@ function paintHead() {
 // A read that fails says nothing about the sessions (owner, 2026-11-01): it used to blank the panel and drop the reader's
 // session, so a reload that landed during a hub restart read as "no session runs here". The panel keeps what it shows and
 // asks again, and only a read that answered may say a session is gone.
-let retryT = 0, retryN = 0, missT = 0;
+let retryT = 0, retryN = 0, missT = 0, emptyN = 0;
+const EMPTY_N = 3;   // an empty session list blanks the panel only after this many answers in a row
 function retrySoon() {
   if (retryT || retryN >= 20) return;
   retryT = setTimeout(() => { retryT = 0; retryN++; loadSessions(); }, 1500);
@@ -269,6 +270,14 @@ async function loadSessions() {
     return;   // nothing is dropped on a read that did not answer
   }
   retryN = 0;
+  // An empty answer is not a verdict on the first sight either (owner, 2026-11-01): the registry scan can pass through a
+  // moment with no session, and one such answer used to wipe the talk the reader was reading (#1077). It must repeat.
+  if (cur && !found.length && ++emptyN < EMPTY_N) {
+    say("the session list came back empty · asking again");
+    retrySoon();
+    return;
+  }
+  emptyN = 0;
   rule = rl;
   sessions = found;
   let kept = "";
