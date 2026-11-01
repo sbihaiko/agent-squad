@@ -5985,6 +5985,8 @@ def conversation_payload(query):
     return sessions.conversation(os.environ.get("SG_PROFILE", ""), (q.get("sid") or [""])[0], int(before) if before.isdigit() else None,
                                  profiles_of=profiles_of_cwd)
 
+SCREENSHOT_MAX = 5 * 1024 * 1024   # the owner's grant (ADR-0024): a PNG of at most 5 MB
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 SEND_SETTING = "SQUAD_TAILNET_TERMINALS_SEND"
 def send_rule(a):
     """(may this request send to a session, why not): loopback always sends; the tailnet sends only with its grant (ADR-0152 rule 9)."""
@@ -6001,10 +6003,11 @@ def project_payload(a):
 # routes are: the hub and mobile pages a quoted path the mux gives the profile prefix, a run dashboard its own path up to
 # /dash/, which the mux never rewrites.
 OVERLAY_JS = (pathlib.Path(__file__).resolve().parent / "hub-overlay.js").read_text()
+CAPTURE_JS = (pathlib.Path(__file__).resolve().parent / "vendor-html2canvas-1.4.1.min.js").read_text()   # the overlay's screenshot library (#903)
 OVERLAY_HUB = 'async()=>[{label:"",api:"/api/sessions"}]'
 OVERLAY_DASH = 'async()=>[{label:"",api:location.pathname.split("/dash/")[0]+"/api"+"/sessions"}]'
 def overlay_tag(sources):
-    return f"<script>window.SQUAD_OV_SOURCES={sources};\n{OVERLAY_JS}</script>"
+    return f"<script>window.SQUAD_OV_SOURCES={sources};\n{CAPTURE_JS}\n{OVERLAY_JS}</script>"
 
 def with_overlay(body, dash=False):
     """A page with the overlay before its closing body tag, or at its end when it has none."""
@@ -6287,6 +6290,33 @@ class H(BaseHTTPRequestHandler):
             out, code = session_send.send(os.environ.get("SG_PROFILE", ""), body["sid"], body["text"], body["client_id"], profiles_of=profiles_of_cwd, root=STATE), 200
         data = json.dumps(out).encode(); self.send_response(code); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
 
+    def send_screenshot(self, a):
+        """The overlay's screenshot (#903): a PNG of the page beneath it, written under the hub state folder, then the session
+        is told its path. The send's rule admits it, and the wire carries no image: the message is the path."""
+        length = self.headers.get("Content-Length") or "0"
+        n = int(length) if length.isdigit() else 0
+        raw = self.rfile.read(min(n, SCREENSHOT_MAX + 1))
+        if not a.allowed: return self.refuse(a.reason)
+        tn = tailnet_block()
+        origin_ok = (self.headers.get("Origin") or "") == f"https://{tn.get('host')}" if a.tailnet else own_origin(self)
+        if not (send_rule(a)[0] and origin_ok): return self.refuse("forbidden")
+        if n > SCREENSHOT_MAX:
+            left = n - len(raw)
+            while left > 0 and (chunk := self.rfile.read(min(left, 1 << 16))): left -= len(chunk)
+            return self.answer(413, {"err": "the screenshot is over 5 MB"})
+        if (self.headers.get("Content-Type") or "").split(";")[0].strip() != "image/png" or not raw.startswith(PNG_MAGIC):
+            return self.answer(415, {"err": "the screenshot is not a PNG"})
+        q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+        sid, cid = (q.get("sid") or [""])[0], (q.get("client_id") or [""])[0]
+        if not sessions.SID.fullmatch(sid) or not session_send.CLIENT_ID.fullmatch(cid): return self.answer(400, {"err": "bad request"})
+        folder = STATE / "screenshots"; folder.mkdir(parents=True, exist_ok=True)
+        path = folder / f"{cid}.png"; part = folder / f"{cid}.png.part"
+        part.write_bytes(raw); os.replace(part, path)
+        self.answer(200, session_send.send(os.environ.get("SG_PROFILE", ""), sid, f"Screenshot: {path}", cid, profiles_of=profiles_of_cwd, root=STATE))
+
+    def answer(self, code, out):
+        data = json.dumps(out).encode(); self.send_response(code); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
+
     def do_POST(self):
         # a cross-site page must not be able to write: a loopback write needs our own origin, a tailnet write the tailnet origin (the seam), and a JSON body
         a = access(self, "POST")
@@ -6297,6 +6327,7 @@ class H(BaseHTTPRequestHandler):
             if not (a.tailnet or own_origin(self)) or "json" not in (self.headers.get("Content-Type") or ""): return self.refuse("forbidden")
             return self.dash("POST", raw)
         if self.path.split("?", 1)[0] == "/api/sessions/send": return self.send_to_session(a)
+        if self.path.split("?", 1)[0] == "/api/sessions/screenshot": return self.send_screenshot(a)
         if self.path.split("?", 1)[0] == "/api/loop": return self.loop_post(a)
         ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote", "/api/limits", "/api/slack") and (a.tailnet or own_origin(self)) and "json" in (self.headers.get("Content-Type") or "")
         try:

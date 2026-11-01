@@ -132,7 +132,7 @@ html.sq-over .sq-ov-back{display:inline-flex;align-items:center;min-height:44px;
 <div id="sq-ov-log" role="log" aria-live="polite" aria-label="Session conversation"></div>
 <div id="sq-ov-form">
 <button type="button" id="sq-ov-plus" aria-label="Add to the message" aria-haspopup="menu" aria-expanded="false" aria-controls="sq-ov-menu">+</button>
-<div id="sq-ov-menu" role="menu" hidden><button type="button" role="menuitem" data-act="shot">Screenshot</button><button type="button" role="menuitem" data-act="ctx">Page context</button></div>
+<div id="sq-ov-menu" role="menu" hidden><button type="button" role="menuitem" data-act="shot">Attach screenshot</button><button type="button" role="menuitem" data-act="ctx">Page context</button></div>
 <textarea id="sq-ov-text" rows="1" maxlength="4000" aria-label="Message to the session" placeholder="Message the session"></textarea>
 <button id="sq-ov-send" type="button" aria-label="Send" title="Send" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
 </div>
@@ -296,26 +296,32 @@ menu.addEventListener("click", e => {
   if (act.dataset.act === "ctx") { let c; try { c = window.squadPageContext(); } catch (x) { c = defaultContext(); } addLine(SQ.draft(c || defaultContext()).trim()); }
   else screenshot();
 });
+// The page beneath the overlay: the overlay steps aside, the vendored library captures the viewport, the overlay comes back,
+// and the PNG goes to the session's route. The hub admits it by the send's rule and refuses a PNG over 5 MB.
+const SHOT_MAX = 5 * 1024 * 1024;
 async function screenshot() {
-  const md = navigator.mediaDevices;
-  if (!md || !md.getDisplayMedia) { say("This browser cannot take a screenshot here."); return; }
-  let stream;
-  try { stream = await md.getDisplayMedia({ video: true, audio: false, preferCurrentTab: true }); }
-  catch (e) { say("No screenshot: the browser did not share the screen."); return; }
+  const s = cur;
+  if (!s) { say("Choose a session first."); return; }
+  if (!s.send) { say((rule && rule.why) || "Sending is off here."); return; }
+  const shown = [btn.hidden, ov.hidden];
+  let blob = null;
+  btn.hidden = true; ov.hidden = true; applyLayout();
   try {
-    const v = document.createElement("video");
-    v.muted = true; v.srcObject = stream; await v.play();
-    await new Promise(r => requestAnimationFrame(r));
-    const c = document.createElement("canvas");
-    c.width = v.videoWidth; c.height = v.videoHeight; c.getContext("2d").drawImage(v, 0, 0);
-    const blob = await new Promise(r => c.toBlob(r, "image/png"));
-    const name = "squad-screen-" + new Date().toISOString().replace(/[:.]/g, "-") + ".png";
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
-    addLine(`Screenshot: ${name} (saved to the Downloads folder)`);
-  } catch (e) { say("No screenshot: the capture failed."); }
-  finally { stream.getTracks().forEach(t => t.stop()); }
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const c = await html2canvas(de, { x: scrollX, y: scrollY, width: innerWidth, height: innerHeight, windowWidth: innerWidth, windowHeight: innerHeight, scale: 1, logging: false, useCORS: true });
+    blob = await new Promise(r => c.toBlob(r, "image/png"));
+  } catch (e) { blob = null; }
+  finally { btn.hidden = shown[0]; ov.hidden = shown[1]; applyLayout(); }
+  if (!blob) { say("No screenshot: the capture failed."); return; }
+  if (blob.size > SHOT_MAX) { say("No screenshot: the image is over 5 MB."); return; }
+  say("Attaching the screenshot");
+  try {
+    const r = await fetch(s.src.api + "/screenshot?sid=" + encodeURIComponent(s.sid) + "&client_id=" + uuid(), { method: "POST", headers: { "Content-Type": "image/png" }, body: blob });
+    const d = await r.json().catch(() => ({}));
+    const st = r.ok ? d.status : "refused";
+    say(st === "sent" ? "Attached: the session's inbox accepted the screenshot." : st === "refused" ? "Refused" + (d.reason || d.err ? ": " + (d.reason || d.err) : ": the hub did not attach it.") : "Uncertain: the attach was interrupted.");
+  } catch (e) { say("Uncertain: no answer from the hub."); }
+  loadConversation();
 }
 
 // ---- open, close, dock

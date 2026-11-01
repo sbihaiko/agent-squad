@@ -210,7 +210,7 @@ setInterval(poll,10000);
 # the request may see. Each repository's sessions sit under its own path; with more than one session the owner picks.
 OVERLAY_SOURCES = ('async()=>{const r=await fetch("/api/hub",{cache:"no-store"});const h=await r.json();'
                    'return h.repos.filter(x=>!x.err).map(x=>({label:x.slug,api:"/"+encodeURIComponent(x.slug)+"/api"+"/sessions"}));}')
-OVERLAY = f'<script>window.SQUAD_OV_SOURCES={OVERLAY_SOURCES};\n{(HERE / "hub-overlay.js").read_text()}</script>'
+OVERLAY = f'<script>window.SQUAD_OV_SOURCES={OVERLAY_SOURCES};\n{(HERE / "vendor-html2canvas-1.4.1.min.js").read_text()}\n{(HERE / "hub-overlay.js").read_text()}</script>'
 
 
 def test_note(slug, apps):
@@ -267,6 +267,8 @@ def server(port, apps, on_new=None):
         def not_found(self): return self.profile.not_found(self)
         def dash(self, method, body=b""): return self.profile.dash(self, method, body)
         def send_to_session(self, a): return self.profile.send_to_session(self, a)   # the overlay's and the phone's send (#898)
+        def send_screenshot(self, a): return self.profile.send_screenshot(self, a)   # the overlay's screenshot (#903)
+        def answer(self, code, out): return self.profile.answer(self, code, out)
         def loop_post(self, a): return self.profile.loop_post(self, a)   # the loop switch's write (#923)
 
         def _route(self, method):
