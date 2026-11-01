@@ -129,8 +129,12 @@ def test_the_filters_apply_to_the_swimlanes(hub):
 
 # ---- the Specs options: an unfinished spec only (#981) ----
 
+def _with_ends(groups):
+    return [{**g, "end": g["name"] in ("Closed", "Abandoned")} for g in groups]
+
+
 def _spec_options(groups):
-    return _node(f"console.log(JSON.stringify(specOptions({json.dumps(groups)},'Closed','Abandoned')));", LANES_JS)
+    return _node(f"console.log(JSON.stringify(specOptions({json.dumps(_with_ends(groups))})));", LANES_JS)
 
 
 def test_a_closed_spec_is_not_an_option(hub):
@@ -173,18 +177,32 @@ def test_a_saved_spec_filter_naming_a_finished_spec_is_dropped_on_load(hub):
         {"name": "Closed", "items": [{"n": 41, "t": "SPEC 41", "l": ["spec"], "sp": True}]},
     ]
     kept = _node(f"console.log(JSON.stringify(keptSpecs({json.dumps(['41', '889', 'none'])},"
-                 f"{json.dumps(groups)},'Closed','Abandoned')));", LANES_JS)
+                 f"{json.dumps(_with_ends(groups))})));", LANES_JS)
     assert kept == ["889", "none"], "a finished spec's key survived the load"
 
 
 def test_a_saved_spec_filter_of_only_finished_specs_is_empty(hub):
     groups = [{"name": "Closed", "items": [{"n": 41, "t": "SPEC 41", "l": ["spec"], "sp": True}]}]
-    kept = _node(f"console.log(JSON.stringify(keptSpecs(['41'],{json.dumps(groups)},'Closed','Abandoned')));", LANES_JS)
+    kept = _node(f"console.log(JSON.stringify(keptSpecs(['41'],{json.dumps(_with_ends(groups))})));", LANES_JS)
     assert kept == [], "the board would filter to nothing"
 
 
 def test_the_page_builds_the_specs_options_from_the_unfinished_rule(hub):
     assert "specOptions(" in hub.PAGE and "keptSpecs(" in hub.PAGE
+
+
+def test_a_wave_held_only_by_closed_cards_is_not_an_option(hub):
+    groups = _with_ends([
+        {"name": "Todo", "items": [{"n": 1, "t": "open", "l": ["wave:1"], "pa": 889}]},
+        {"name": "Closed", "items": [{"n": 2, "t": "done", "l": ["wave:2"], "pa": 889}]},
+    ])
+    open_rows = [x for g in groups if not g["end"] for x in g["items"]]
+    opts = _node(f"console.log(JSON.stringify(waveOptions({json.dumps(open_rows)})));", LANES_JS)
+    assert [o["label"] for o in opts] == ["SPEC 889 · Wave 1"], opts
+
+
+def test_the_page_offers_the_specs_and_waves_of_open_cards_only(hub):
+    assert "allRows=boardGroups.filter(g=>!g.end).flatMap(g=>g.items)" in hub.PAGE, "a closed card feeds the Waves options"
 
 
 # ---- the saved state from removed controls ----

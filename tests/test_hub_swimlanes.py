@@ -123,7 +123,7 @@ GROUPS = [
         _row(890, "Doing", [], pa=889, ho="run-a"),
         _row(42, "Doing", [], pa=41),
     ]},
-    {"name": "Closed", "items": [
+    {"name": "Closed", "end": True, "items": [
         _row(41, "Closed", ["spec"], sp=True),
         _row(43, "Closed", [], pa=41),
     ]},

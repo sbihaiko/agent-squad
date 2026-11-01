@@ -441,10 +441,13 @@ function laneHeader(l) {
 function renderBoard() {
   const groups = board && board.groups ? board.groups : [];
   // With the filter on (the default), a column with no visible card is left out and named in one list (#877).
-  const { shown: cols, hidden } = carouselColumns(groups, groups.map(g => columnCards(g).length), bo.hideEmpty !== false);
+  const { shown: cols, hidden, closed } = carouselColumns(groups, groups.map(g => columnCards(g).length), bo.hideEmpty !== false);
   $("hide-empty").textContent = bo.hideEmpty !== false ? "Empty columns: hidden" : "Empty columns: shown";
-  $("empty-cols").hidden = !hidden.length;
-  $("empty-cols").textContent = hidden.length ? "Empty: " + hidden.map(h => h.name + " " + h.count).join(" · ") : "";
+  const notes = [];
+  if (hidden.length) notes.push("Empty: " + hidden.map(h => h.name + " " + h.count).join(" · "));
+  if (closed.length) notes.push(closed.map(c => c.name + " " + c.count).join(" · "));
+  $("empty-cols").hidden = !notes.length;
+  $("empty-cols").textContent = notes.join(" · ");
   view.cols = cols.length;
   view.col = Math.min(view.col, Math.max(0, cols.length - 1));
   const g = cols[view.col];

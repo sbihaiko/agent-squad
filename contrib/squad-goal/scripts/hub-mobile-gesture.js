@@ -43,13 +43,15 @@ const runsGesture = ({ x0, dx, dy, atTop }) => {
 };
 // The carousel's column rule (#877): with the filter on, a column that holds no visible card is left out of the
 // carousel and named once, with its zero count. `counts` holds each group's visible card count, in group order.
+// A closed status (`end`, set by the board's role) is never a carousel column: it is named once as a total (#969).
 const carouselColumns = (groups, counts, hide) => {
-  const shown = [], hidden = [];
+  const shown = [], hidden = [], closed = [];
   groups.forEach((g, i) => {
-    if (hide && counts[i] === 0) hidden.push({ name: g.name, count: counts[i] });
+    if (g.end) closed.push({ name: g.name, count: g.items.length });
+    else if (hide && counts[i] === 0) hidden.push({ name: g.name, count: counts[i] });
     else shown.push(g);
   });
-  return { shown, hidden };
+  return { shown, hidden, closed };
 };
 // The empty-column note (#915): a column with no card names the filters only when a filter is set.
 const emptyColumnNote = ({ groups, shown, filtered }) =>
