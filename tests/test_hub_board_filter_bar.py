@@ -4,7 +4,7 @@ Waves and specs filter the cards and the swimlanes, combined with AND; an empty 
 kept on the device. The labels filter, the three-state Specs button, the maximize and collapse controls, and the floating
 run window (pip) are gone. A saved state from any of those controls is dropped on load.
 
-The rules are `board-lanes.js` and `panes.js`, run in node as the page carries them.
+The rules are `board-lanes.js`, run in node as the page carries them.
 """
 import importlib.util
 import json
@@ -20,7 +20,6 @@ ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"
 HUB_PY = SCRIPTS / "hub.py"
 LANES_JS = SCRIPTS / "board-lanes.js"
-PANES_JS = SCRIPTS / "panes.js"
 NODE = shutil.which("node")
 
 
@@ -137,12 +136,3 @@ def test_drop_removed_clears_the_old_keys_and_keeps_the_kept_ones(hub):
     for gone in ("labels", "label", "specs", "max", "off", "pip"):
         assert gone not in out, f"{gone} survived"
     assert out["fw"] == ["889/2"] and out["lc"] == {"s1": True}, "a kept filter or collapse state was dropped"
-
-
-# ---- the run pane has no maximized mode ----
-
-def test_the_run_pane_follows_its_focus_with_no_maximized_mode(hub):
-    src = PANES_JS.read_text()
-    assert "maximized" not in src and "pip" not in src, "the pane plan still carries a maximized mode or the pip"
-    out = _node('console.log(JSON.stringify(embedPlan(["a","b"],"b")));', PANES_JS)
-    assert out == {"pane": "b"}

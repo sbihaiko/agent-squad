@@ -340,7 +340,7 @@ def test_hubctl_refuses_a_port_held_by_something_else(fleet, tmp_path):
 
 
 def test_a_restarted_hub_makes_an_open_page_reload(fleet):
-    """The page reloads itself when /api/version changes. A restart that served an unchanged hub.py (only hubmux.py, panes.js or
+    """The page reloads itself when /api/version changes. A restart that served an unchanged hub.py (only hubmux.py, run-sheet.js or
     address.sh changed) must still change it, or the page keeps the panel built from the old code."""
     before = json.loads(_get(fleet["url"] + "/alpha/api/version")[1])["v"]
     time.sleep(0.01)
