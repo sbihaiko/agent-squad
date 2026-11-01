@@ -58,7 +58,8 @@ def _launch(tmp_path, coding, envelope, shared=None, hours=None):
         {"name": "route", "kind": "dispatch", "entry": "router", "allow": {"models": envelope, "efforts": ["low"]}},
         {"name": "router", "kind": "agent", "model": envelope[0], "tools": ["Read"]}]}
     (co / "docs/squad/workflows/default.graph.json").write_text(json.dumps(doc))
-    (bin_ / "caffeinate").write_text(f"#!/bin/bash\nmkdir -p runs/run-20261013-000000-aaaaaa\necho \"$@\" > {tmp_path / 'argv'}\nexit 0\n")
+    # launch.py also starts the hub through caffeinate, after the run, when port 7700 is free (a runner): only the squad's start is recorded.
+    (bin_ / "caffeinate").write_text(f"#!/bin/bash\ncase \"$*\" in *\" squad start \"*) echo \"$@\" > {tmp_path / 'argv'}; mkdir -p runs/run-20261013-000000-aaaaaa;; esac\nexit 0\n")
     (bin_ / "uv").write_text("#!/bin/bash\necho uv-not-used\n")
     for p in (bin_ / "caffeinate", bin_ / "uv"):
         p.chmod(0o755)

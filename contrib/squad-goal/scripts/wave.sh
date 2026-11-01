@@ -516,8 +516,9 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
   rebase_on_tip() {
     $G fetch -q origin "+refs/heads/$w:refs/remotes/origin/$w" 2>/dev/null || {
       echo "WAVE-ERROR $w is not on $remote (the run cuts it from $base at its start): #$iss enters no wave"; return 2; }
-    if ! $G rebase "origin/$w" >/dev/null 2>&1; then
+    if ! out=$($G rebase "origin/$w" 2>&1); then
       files=$($G diff --name-only --diff-filter=U | tr '\n' ' '); $G rebase --abort >/dev/null 2>&1
+      [ -n "$files" ] || files="git said: $(printf '%s\n' "$out" | /usr/bin/grep -v '^[[:space:]]*$' | tail -1)"
       refuse "the rebase on $w conflicts: ${files% }"; return 1
     fi
   }

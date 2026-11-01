@@ -130,6 +130,7 @@ class Wave:
         self.env = {k: v for k, v in os.environ.items() if not k.startswith("SG_")}
         self.env["PATH"] = f"{self.bin}:{os.environ['PATH']}"
         self.env["SG_WAVE_GATES"] = "true"
+        self.env.update(GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="a@b", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="a@b")   # the wave's rebase replays commits (#1062)
         self.env["SG_SQUAD"] = str(SCRIPTS.parent.parent.parent)   # a gate takes gate slots through this repository's squad.caps (#567)
 
     def git(self, *args, cwd=None, check=True):

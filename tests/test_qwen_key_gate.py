@@ -141,8 +141,9 @@ def _launch(tmp_path, cfg, coding_model):
         {"name": "route", "kind": "dispatch", "entry": "router", "allow": {"models": ["test-model", QWEN], "efforts": ["low"]}},
         {"name": "router", "kind": "agent", "model": "test-model", "tools": ["Read"]}]}
     (co / "docs/squad/workflows/default.graph.json").write_text(json.dumps(doc))
-    # the stub squad: record its argv, so the case reads the --spent-models the launcher hands the run
-    (bin_ / "caffeinate").write_text(f"#!/bin/bash\necho \"$@\" > {tmp_path}/argv\nmkdir -p runs/run-20261013-000000-aaaaaa\nexit 0\n")
+    # the stub squad: record its argv, so the case reads the --spent-models the launcher hands the run; the hub start that
+    # launch.py makes after the run, on a free port 7700, is not the squad and is not recorded
+    (bin_ / "caffeinate").write_text(f"#!/bin/bash\ncase \"$*\" in *\" squad start \"*) echo \"$@\" > {tmp_path}/argv; mkdir -p runs/run-20261013-000000-aaaaaa;; esac\nexit 0\n")
     (bin_ / "uv").write_text("#!/bin/bash\necho uv-not-used\n")
     for p in (bin_ / "caffeinate", bin_ / "uv"):
         p.chmod(0o755)
