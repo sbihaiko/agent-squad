@@ -127,7 +127,7 @@ def _sample(t, counts):
 
 
 def test_a_pass_appends_one_sample_that_counts_every_card(hub, board, monkeypatch):
-    cards = [_card(1, st="Todo"), _card(2, st="In Progress", k="bug"), _card(3, st=None), _card(4, st="Retired Status")]
+    cards = [_card(1, st="Todo"), _card(2, st="In Progress", k="bug", labels=["bug"]), _card(3, st=None), _card(4, st="Retired Status")]
     _pass(hub, monkeypatch, cards)
     samples = _samples(board)
     assert len(samples) == 1
@@ -163,13 +163,14 @@ def test_an_unparseable_items_read_is_a_flow_skip_and_no_sample(hub, board, monk
     assert "items" in records[0]["reason"]
 
 
-def test_counts_key_by_kind_and_column_and_a_frozen_card_stays_in_its_column(hub, board, monkeypatch):
-    cards = [_card(1, st="In Progress", k="bug"),
-             _card(2, st="Doing", k=None, labels=["frozen:owner"]),
+def test_counts_key_by_the_bars_kind_and_column_and_a_frozen_card_stays_in_its_column(hub, board, monkeypatch):
+    """The kind is the board bar's (#904): `bug` by the bug or loop-bug label, never by the project's Kind field."""
+    cards = [_card(1, st="In Progress", k="task", labels=["bug"]),
+             _card(2, st="Doing", k="bug", labels=["frozen:owner"]),
              _card(3, st="Todo", k="task", labels=["frozen:dependency"])]
     _pass(hub, monkeypatch, cards)
     s = _samples(board)[-1]
-    assert s["counts"] == {"bug": {"Doing": 1}, "issue": {"Doing": 1}, "task": {"Todo": 1}}
+    assert s["counts"] == {"bug": {"Doing": 1}, "issue": {"Doing": 1, "Todo": 1}}
     assert s["frozen"] == 2
     assert s["none"] == 0
 

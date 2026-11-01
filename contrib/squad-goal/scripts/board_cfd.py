@@ -1,8 +1,9 @@
 """The cumulative flow bands, one point per day, computed from the board's samples without the hub or any client.
 
 A sample is {"t": epoch seconds UTC, "counts": {kind: {column: n}}, "frozen": n, "none": n, "cells": [...]}. A cell is
-[kind, spec, wave, column, frozen, n] (#904). A sample written before the cells carries none: it answers no spec and no
-wave, and its days are flagged `legacy` on the point, so the chart can say so.
+[kind, spec, wave, column, frozen, n] (#904). A sample written before the cells carries none: it answers no kind, no spec
+and no wave (its counts are keyed by the project's Kind field, which the bar never offers), and its days are flagged
+`legacy` on the point, so the chart can say so.
 """
 from collections import Counter
 from datetime import datetime, timedelta
@@ -75,12 +76,12 @@ def _wanted(values):
 
 
 def _carried(sample, kinds, specs, waves):
-    """(totals by column, frozen, none) of one sample under the filters. A sample with no cells answers no spec and no
-    wave: it keeps a card only when the filter names `none` for that dimension. Its kinds are its counts' keys."""
+    """(totals by column, frozen, none) of one sample under the filters. A sample with no cells answers no kind, no spec
+    and no wave: any kind filter keeps none of its cards, and a spec or wave filter keeps them only when it names `none`."""
     if "cells" not in sample:
-        if (specs and NONE not in specs) or (waves and f"{NONE}/{NONE}" not in waves):
+        if kinds or (specs and NONE not in specs) or (waves and f"{NONE}/{NONE}" not in waves):
             return Counter(), 0, 0
-        return _totals(sample, kinds), sample["frozen"], sample["none"]
+        return _totals(sample), sample["frozen"], sample["none"]
     totals, frozen, none = Counter(), 0, 0
     for k_kind, k_spec, k_wave, column, fz, n in sample["cells"]:
         if kinds and k_kind not in kinds: continue
@@ -92,9 +93,8 @@ def _carried(sample, kinds, specs, waves):
     return totals, frozen, none
 
 
-def _totals(sample, kinds):
-    per_kind = [by for k, by in sample["counts"].items() if not kinds or k in kinds]
+def _totals(sample):
     totals = Counter()
-    for per_column in per_kind:
+    for per_column in sample["counts"].values():
         totals.update(per_column)
     return totals

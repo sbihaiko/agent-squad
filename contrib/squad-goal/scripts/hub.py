@@ -3043,7 +3043,7 @@ def _cfd_payload(fw=(), fs=(), fk=()):
     yticks = _y_ticks(max((e[FLOW_BANDS[0]][1] for e in extents.values()), default=0))
     def values(name, k): return [extents[d][name][k] if d in extents else None for d in days]
     points = {p["day"]: p for p in cfd["points"]}
-    legacy = {p["day"] for p in cfd["points"] if p.get("legacy")}   # a day whose sample predates the spec and wave (#904)
+    legacy = {p["day"] for p in cfd["points"] if p.get("legacy")}   # a day whose sample predates the kind, spec and wave (#904)
     def view(width):
         """The chart over the last `width` calendar days (all of them when None): the same arrays, cut to the window (#901)."""
         window = days if width is None else days[-width:]
@@ -4324,7 +4324,7 @@ const flowCFD=c=>{const sel=`<label class=fhead>Range <select id=cfdr>${CFD_R.ma
     const text=gap?`${esc(d)}: no whole read this day`:`${esc(d)}: ${parts} · WIP ${(c.wip||[])[i]} · throughput ${tp===null?"none":tp}`;
     return `<rect x=${flowX(i,n)-cw/2} y=${flowP-10} width=${cw} height=${flowH-2*flowP+10} fill=transparent><title>${text}</title></rect>`;}).join("");
   return sel+`<svg viewBox="0 0 ${flowW} ${flowH}">${c.bands.map(polys).join("")}${cfdAxis(c)}${hover}</svg>`+
-    `<p class=fnote>history from ${esc(c.start)} UTC</p>${c.legacy?`<p class=fnote>${c.legacy} ${c.legacy===1?"day comes":"days come"} from before the spec and wave history: they answer no spec and no wave</p>`:""}<p>${c.bands.map(b=>`<span class=flg><i style="background:${COLORS[b.name]||"#888"}"></i>${esc(b.name)}</span>`).join("")}</p>`;};
+    `<p class=fnote>history from ${esc(c.start)} UTC</p>${c.legacy?`<p class=fnote>${c.legacy} ${c.legacy===1?"day comes":"days come"} from before the kind, spec and wave history: they answer no kind, no spec and no wave</p>`:""}<p>${c.bands.map(b=>`<span class=flg><i style="background:${COLORS[b.name]||"#888"}"></i>${esc(b.name)}</span>`).join("")}</p>`;};
 const EXREASON={not_planned:"closed as not planned",abandoned:"closed as abandoned",open:"still open",no_opened:"no opened date"};   // the cards the chart leaves out, in words (#921)
 let LT={tf:"30",log:false,pick:null,zc:null,zr:null,rng:null,tok:0,noclick:false,a:"",b:"",cols:[]};   // the control chart's timeframe, its scale, the cluster listed under it, and a drag zoom: the hub's chart over zr=[from,to] (#900)
 const ltSpan=(r,a,b)=>{const t0=Date.parse(r.start),t1=Date.parse(r.end),at=f=>new Date(t0+f*(t1-t0)).toISOString();return [at(a<0?0:a),at(b>1?1:b)]};   // plot fractions to the dates they name (#900)

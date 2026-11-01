@@ -48,9 +48,10 @@ def wave_key(labels):
 
 
 def kind_key(row):
-    """The kind the board's Kinds filter reads: the row's own kind when it names one, `bug` for a card labelled bug or
-    loop-bug, else `issue` (the board's kindKey)."""
-    if row.get("k"): return row["k"]
+    """The kind the board's Kinds filter reads (the board's kindKey): `pr` for a pull request row, `bug` for a card
+    labelled bug or loop-bug, else `issue`. The project's Kind field (`k`: Task, Spec, Bug ...) is never read: the bar
+    offers none of its values, and the board keeps a card by its labels (#904)."""
+    if row.get("kind") == "pr": return "pr"
     labels = row.get("l") or ()
     return "bug" if "bug" in labels or "loop-bug" in labels else DEFAULT_KIND
 

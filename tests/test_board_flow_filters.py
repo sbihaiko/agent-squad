@@ -187,6 +187,16 @@ def test_a_sample_without_cells_answers_no_spec_and_no_wave(cfd):
     assert cfd(legacy, COLUMNS)["points"][0]["bands"]["Todo"] == 4
 
 
+def test_a_sample_without_cells_answers_no_kind(cfd):
+    """Its counts are keyed by the project's Kind field (task, spec, bug), never by the bar's kinds (#904)."""
+    legacy = [_legacy(20, {"task": {"Todo": 4}, "bug": {"Todo": 1}})]
+    for kind in (["issue"], ["bug"], ["pr"], ["issue", "bug", "pr"]):
+        point = cfd(legacy, COLUMNS, kind=kind)["points"][0]
+        assert point["bands"]["Todo"] == 0, kind
+        assert point["legacy"] is True
+    assert cfd(legacy, COLUMNS, kind=[])["points"][0]["bands"]["Todo"] == 5
+
+
 def test_a_day_read_from_a_sample_without_cells_is_flagged(cfd):
     samples = [_legacy(20, {"card": {"Todo": 4}}), _sample(21, [["issue", "5", "none", "Todo", 0, 1]])]
     points = cfd(samples, COLUMNS)["points"]
@@ -231,9 +241,9 @@ def board(hub, tmp_path, monkeypatch):
     return tmp_path
 
 
-def _item(hub_mod, n, st, pa=None, labels=(), closed_at=None):
+def _item(hub_mod, n, st, pa=None, labels=(), closed_at=None, k=None):
     row = {"n": n, "i": f"PVT_{n}", "t": f"card {n}", "s": "CLOSED" if closed_at else "OPEN", "c": closed_at,
-           "st": st, "k": None, "l": list(labels), "si": {"total": None, "completed": None}, "o": OPENED}
+           "st": st, "k": k, "l": list(labels), "si": {"total": None, "completed": None}, "o": OPENED}
     if pa is not None:
         row["pa"] = pa
     return row
@@ -275,6 +285,43 @@ def test_the_chart_route_filters_the_cumulative_flow_by_the_bar_values(hub, boar
     assert last("fk=bug") == 2
     assert last("fk=bug&fs=6") == 1
     assert last("fk=issue") == 1
+
+
+def _kind_items(hub):
+    """Cards whose project Kind field is set, as the live board holds them: Task and Spec, labelled bug and not."""
+    backlog = hub.COLUMN["unscheduled"]
+    return [_item(hub, 1, backlog, k="task"), _item(hub, 2, backlog, k="spec"),
+            _item(hub, 3, backlog, k="task", labels=["bug"]), _item(hub, 4, backlog, k="spec", labels=["loop-bug"]),
+            _item(hub, 5, backlog, k="bug")]
+
+
+def test_the_kind_field_never_names_the_charts_kind(hub, board):
+    backlog = hub.COLUMN["unscheduled"]
+    items = _kind_items(hub)
+    hub.board_cache["items"] = items
+    _write_history(hub, items)
+
+    def last(query):
+        return _backlog_counts(hub.flow_cfd(*hub.board_filters(query)))[backlog]["count"][-1]
+
+    assert last("") == 5
+    assert last("fk=issue") == 3, "a Task or Spec card with no bug label is an issue, as on the board"
+    assert last("fk=bug") == 2, "a card labelled bug or loop-bug is a bug, whatever its Kind field"
+    assert last("fk=issue,bug") == 5
+    assert sorted(r["n"] for r in hub.lead_rows() if r["kind"] == "issue") == [1, 2, 5]
+    assert sorted(r["n"] for r in hub.lead_rows() if r["kind"] == "bug") == [3, 4]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_server_and_the_page_give_each_card_the_same_kind(hub, board):
+    items = _kind_items(hub)
+    hub.board_cache["items"] = items
+    lanes = (SCRIPTS / "board-lanes.js").read_text()
+    script = lanes + f"\nconsole.log(JSON.stringify({json.dumps(items)}.map(kindKey)));"
+    result = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == [r["kind"] for r in hub.lead_rows()]
+    assert json.loads(result.stdout) == [hub._flow.kind_key(i) for i in items]
 
 
 def test_the_control_chart_takes_the_same_filters(hub, board):
@@ -446,4 +493,4 @@ def test_the_chart_says_which_days_answer_no_spec_and_no_wave(hub, board, tmp_pa
     path.write_text(drawing)
     result = subprocess.run(["node", str(path)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
-    assert "answer no spec and no wave" in result.stdout
+    assert "answer no kind, no spec and no wave" in result.stdout
