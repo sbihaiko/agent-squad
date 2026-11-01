@@ -157,30 +157,35 @@ class State:
     def unread(self, go, label=""):
         """The go-labelled issues `go` names that the board read does not carry (#800). One board read; a missing card is
         asked by its known node id, and a node that answers a Status rescues it. Returns (carried, rescued, missing):
-        carried is the read {issue: state}, rescued {issue: state} the node reads, missing the issues nothing reads.
+        carried is the read {issue: state} with the issues the issue itself denies dropped, rescued {issue: state} the
+        node reads, missing the issues nothing reads.
 
-        A missing issue is asked for itself before it is named go-labelled (#1031): the list that named it was read at
-        another time, and the rows it is checked against come from a cache shared by the owner and the project, so the
-        issue is the one source that settles whether it still is one."""
+        Every issue `go` names is asked for itself before either its carried row or its node is accepted (#1031): the
+        list that named it was read at another time, and the rows it is checked against come from a cache shared by the
+        owner and the project, so the issue is the one source that settles whether it still is go-labelled."""
         return self.unread_rows(self.read_all(), go, label)
 
     def unread_rows(self, carried, go, label=""):
         """`go` against rows the caller already holds (the hub board cache, #800): the naming rule of `unread`, and no
-        board read. An issue the rows do not carry is asked for itself, and named go-labelled only when it still is one;
-        one it answers closed, or without `label`, is said once as a NOTE and never named unread. A read that does not
-        answer keeps it in `missing`, so a card the board really cannot read still alerts."""
+        board read. Each issue is asked for itself before its carried row or its node is accepted: one the issue says is
+        closed, or no longer carries `label`, is said once as a NOTE and dropped from the effective go candidates, so
+        closing an issue takes it out of the go set on the next cycle. A read that does not answer keeps the row or the
+        node's answer, and an issue neither one carries stays in `missing`, so a card the board really cannot read still
+        alerts."""
         rescued, missing = {}, []
+        effective = dict(carried)
         for n in sorted({str(x) for x in go}, key=int):
-            if n in carried: continue
-            ask = getattr(self.binding, "node_status", None)
-            st = ask(n) if ask else None
-            if st: rescued[n] = st; continue
             why = self.not_go(n, label)
             if why:
                 print(f"NOTE\t{n}\t{why}")
+                effective.pop(n, None)   # the rows are an earlier read: the issue itself is what drops it
                 continue
+            if n in effective: continue
+            ask = getattr(self.binding, "node_status", None)
+            st = ask(n) if ask else None
+            if st: rescued[n] = st; continue
             missing.append(n)
-        return carried, rescued, missing
+        return effective, rescued, missing
 
     def not_go(self, issue, label=""):
         """Why the issue itself says it is not go-labelled: `closed`, or `no <label> label`. Empty when it is go-labelled,

@@ -24,6 +24,7 @@ case "$all" in
   *graphql*) case "$all" in *PVTI_800*) echo '{"data":{"node":{"isArchived":false,"content":{"number":800},"fieldValueByName":{"name":"Todo"}}}}';; *) echo '{"data":{"node":null}}';; esac; exit 0;;
   *"/fields"*) echo '[{"id":"F1","name":"Status","options":[{"id":"o1","name":"Todo"},{"id":"o2","name":"Testing"}]}]'; exit 0;;
   *"/issues/"*) case "$all" in
+      *"/issues/801"*) echo '{"number":801,"state":"open","labels":[{"name":"bug"},{"name":"go"}]}'; exit 0;;
       *"/issues/803"*) echo '{"number":803,"state":"closed","labels":[{"name":"go"}]}'; exit 0;;
       *"/issues/804"*) echo '{"number":804,"state":"open","labels":[{"name":"bug"}]}'; exit 0;;
       *"/issues/805"*) echo '{"number":805,"state":"open","labels":[{"name":"bug"},{"name":"go"}]}'; exit 0;;
@@ -57,5 +58,13 @@ before=$(alerts); out=$(sg_todo_cards "803,804,805" 2>"$T/err2"); rc=$?; after=$
 echo "$out" | /usr/bin/grep -qx 803 && ko "a closed issue is not listed as Todo" || ok "a closed issue is not listed as Todo"
 /usr/bin/grep -q "#803 is closed" "$T/err2" && ok "the closed issue is said once on stderr" || ko "the closed issue is said once on stderr"
 /usr/bin/grep -q "#804 is no go label" "$T/err2" && ok "the issue with no go label is said once on stderr" || ko "the issue with no go label is said once on stderr"
+# #1031: closing an issue drops it from the go set on the next cycle. The rows are the hub cache, read before the close,
+# and still carry #803's Todo card; the issue itself answers closed, so it leaves the rows the pass reads, while #801,
+# which answers open and go-labelled, stays.
+printf '{"t": %s, "repo": "o/r", "items": [{"n":801,"st":"Todo"},{"n":803,"st":"Todo"}]}' "$(date +%s)" > "$T/hub.json"
+cached=$(SG_BOARD_CACHE="$T/hub.json" sg_todo_cards "801,803" 2>"$T/err3")
+echo "$cached" | /usr/bin/grep -qx 801 && ok "an open go-labelled issue the cache rows carry stays in the go set" || ko "an open go-labelled issue the cache rows carry stays in the go set (rows: $(echo $cached))"
+echo "$cached" | /usr/bin/grep -qx 803 && ko "a closed issue the cache rows still carry drops out of the go set" || ok "a closed issue the cache rows still carry drops out of the go set"
+/usr/bin/grep -q "#803 is closed" "$T/err3" && ok "the dropped issue is said once on stderr from the cache path" || ko "the dropped issue is said once on stderr from the cache path (stderr: $(tr '\n' ' ' < "$T/err3"))"
 rm -rf "$T"
 [ "$fail" = 0 ] && echo "PASS test-todo-unread" || { echo "FAIL test-todo-unread"; exit 1; }

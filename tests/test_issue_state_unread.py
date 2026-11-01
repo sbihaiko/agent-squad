@@ -205,6 +205,33 @@ def test_a_read_that_does_not_answer_still_alerts():
     assert missing == ["800"]
 
 
+def test_a_closed_issue_the_stale_rows_still_carry_drops_out_of_the_next_cycle():
+    """Closing an issue drops it from the go set on the next cycle (AC2), even when the rows are an earlier read
+    that still carries its Todo card: the rows are a cache, and the issue is the one source that settles it (#1031)."""
+    opened = issue_state.State(FakeBinding({"801": "Todo"}, facts={"801": ("open", ["bug", "go"])}))
+    carried, _, missing = opened.unread_rows({"801": "Todo"}, ["801"], "go")
+    assert carried == {"801": "Todo"} and missing == [], "an open go-labelled issue the rows carry is in the go set"
+
+    closed = issue_state.State(FakeBinding({"801": "Todo"}, facts={"801": ("closed", ["bug", "go"])}))
+    carried, _, missing = closed.unread_rows({"801": "Todo"}, ["801"], "go")
+    assert carried == {}, "a closed issue the stale rows still carry is not in the go set"
+    assert missing == []
+
+
+def test_a_closed_issue_the_node_would_answer_is_not_rescued_on_the_next_cycle():
+    """The node path is not a way back in: an issue that closed between two cycles is dropped before its node is
+    asked, so a closed card is never rescued into the go set (#1031, AC2)."""
+    opened = issue_state.State(FakeBinding({}, nodes={"800": "Todo"}, facts={"800": ("open", ["bug", "go"])}))
+    _, rescued, missing = opened.unread_rows({}, ["800"], "go")
+    assert rescued == {"800": "Todo"} and missing == []
+
+    binding = FakeBinding({}, nodes={"800": "Todo"}, facts={"800": ("closed", ["bug", "go"])})
+    _, rescued, missing = issue_state.State(binding).unread_rows({}, ["800"], "go")
+    assert rescued == {}, "a closed issue is never rescued into the go set"
+    assert binding.asked == [], "a closed issue's node is never asked"
+    assert missing == []
+
+
 def _binding(tmp_path, answer):
     def run(args, **kw):
         return SimpleNamespace(returncode=answer[0], stdout=answer[1], stderr=answer[2])
@@ -233,6 +260,7 @@ def test_the_fresh_cache_path_applies_the_same_naming_rule(tmp_path, monkeypatch
     cache.write_text(json.dumps({"t": issue_state.time.time(), "repo": "owner/ariel",
                                  "items": [{"n": 801, "st": "Todo"}]}))
     monkeypatch.setenv("SG_BOARD_CACHE", str(cache))
+    monkeypatch.setenv("SG_REPO", "owner/ariel")   # the cache names this repository, so the cache path answers it
     monkeypatch.setenv("SG_STATE", str(tmp_path))
     binding = FakeBinding({"801": "Todo"}, facts={"800": ("closed", ["bug", "go"]), "802": ("open", ["bug"])})
     monkeypatch.setattr(issue_state, "board_state", lambda repo="": issue_state.State(binding))
@@ -243,3 +271,4 @@ def test_the_fresh_cache_path_applies_the_same_naming_rule(tmp_path, monkeypatch
     assert "801\tTodo" in out
     assert not any(line.startswith("UNREAD") for line in out), f"nothing the issue itself denies is named unread: {out}"
     assert not (tmp_path / "alerts.log").exists(), "an issue with no go label and a closed one never alert"
+    assert binding.reads == 0, "the fresh cache answers the rows: the naming rule ran on the cache path, not a board read"
