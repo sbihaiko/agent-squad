@@ -3647,8 +3647,8 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
    screen the 300 px sidebar and the board column are what a reader has to scroll sideways to reach. */
 @media (max-width:600px){body{height:auto}body.tkopen #win{margin-right:0}body.tkopen #board{width:auto}#win{display:block;overflow:visible}body.dockb #win{display:block;grid-template-columns:none;grid-template-rows:none}#side{width:auto;border-right:0;border-bottom:1px solid var(--line)}body.dockb #side{grid-row:auto;grid-column:auto}#main{min-height:50vh}body.dockb #main{grid-column:auto;grid-row:auto}#board{width:auto}body.dockb #board{grid-column:auto;grid-row:auto;height:60vh}#foot{flex-wrap:wrap}#ldfacts{margin-left:0;white-space:normal}#lbody input{width:92px}}
 /* The page frame of the mock (#889): the alert strip, the header with its tabs, and the sidebar cards. */
-#alert{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:6px 16px;background:#3a1d24;border-bottom:1px solid #5a2a33;font-size:var(--fs-body);flex:none}
-#alert:empty{display:none}#alert.calm{background:var(--panel);border-bottom-color:var(--line)}
+#alert{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:6px 16px;background:#3a1d24;border-top:1px solid #5a2a33;font-size:var(--fs-body);flex:none}
+#alert:empty{display:none}#alert.calm{background:var(--panel);border-top-color:var(--line)}
 #alert b{color:var(--bad)}#alert .ai+.ai::before,#alert button+.ai::before{content:"\00b7";color:var(--mute);margin-right:10px}#alert .w{color:var(--warn)}
 #alert .ls{font-weight:600}#alert .ls.on{color:var(--ok)}#alert .ls.off{color:var(--warn)}#alert .ls small{color:var(--mute);font-weight:400;margin-left:4px}
 #loopbtn{padding:2px 10px;font-size:var(--fs-min)}#loopbtn:disabled{opacity:.6;cursor:default}
@@ -3679,7 +3679,6 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 // A read already in flight is shared: the caller gets a clone of the same answer.
 (()=>{const f=window.fetch.bind(window),live=new Map();window.fetch=(u,o)=>{if(o&&o.method&&o.method!=="GET"||o&&o.signal)return f(u,o);
  const k=String(u);if(!live.has(k))live.set(k,f(u,o).finally(()=>live.delete(k)));return live.get(k).then(r=>r.clone())}})();</script>
-<div id=alert role=alert></div>
 <header class=top><h1><button id=pj aria-haspopup=menu aria-expanded=false><span id=pjn></span> &#9662;</button></h1><div id=psw aria-label="Projects"></div><div class=tabs role=tablist><button data-t=board role=tab>Kanban</button><button data-t=flow role=tab>Charts</button><button data-t=hist role=tab>History</button><button data-t=set role=tab>Settings</button></div><span class=spx></span>
 <span class=pill id=bread></span></header>
 <div id=win>
@@ -3709,6 +3708,7 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 </section>
 </div>
 </div>
+<div id=alert role=alert></div>
 <div id=tk role=dialog aria-label=Ticket><header><span id=tkchips></span><span class=sp></span><span id=tknav></span><button id=tkx aria-label=Close>✕</button></header><div id=tkset></div><div id=tkb></div><footer><a class=btn id=tkgh target=_blank rel=noopener>Open on GitHub ↗</a><button id=tktodo>→ Todo</button><button id=tkrel>Highlight related</button></footer></div>
 <script>/*SWITCHER_JS*/
 {const swMe=(location.pathname.match(/^\/([^/?#]+)/)||[])[1]||"";switcherPoll(d=>switcherPaint(document.getElementById("psw"),d,swMe,"/"));}</script>
