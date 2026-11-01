@@ -32,17 +32,17 @@ def item_facts(issue, project):
 
 
 def due_reads(items, stored):
-    """The numbers to read: a card with no record, or whose Status or issue moved past its record. The item's own updatedAt is
-    never a reason: it moves on writes that touch no Status."""
+    """The numbers to read: a card with no complete record, or whose Status moved past its record. Neither the item's nor the
+    issue's own updatedAt is a reason: the first moves on writes that touch no Status, the second on any edit."""
     return [i["n"] for i in items
             if (rec := stored.get(i["n"])) is None
-            or i["status_updated"] > rec["status_updated"]
-            or i["issue_updated"] > rec["issue_updated"]]
+            or not rec.get("complete")
+            or i["status_updated"] > rec["status_updated"]]
 
 
 def backfill_batch(numbers, store):
-    """The next unread numbers, one timeline query's worth; a resumed backfill picks up where the store stops."""
-    return [n for n in numbers if n not in store][:BATCH_SIZE]
+    """The next numbers still short of a complete timeline, one query's worth; a resumed backfill picks up where it stopped."""
+    return [n for n in numbers if not (store.get(n) or {}).get("complete")][:BATCH_SIZE]
 
 
 def timeline_complete(page):

@@ -35,9 +35,9 @@ def test_status_move_on_a_closed_item_is_read_and_no_other_move_is_not():
          "item_updated": "2026-10-01T00:00:00Z"},
     ]
     stored = {
-        1: {"issue_updated": "2026-10-01T00:00:00Z", "status_updated": "2026-10-01T00:00:00Z"},
-        2: {"issue_updated": "2026-10-01T00:00:00Z", "status_updated": "2026-10-01T00:00:00Z"},
-        3: {"issue_updated": "2026-10-01T00:00:00Z", "status_updated": "2026-10-01T00:00:00Z"},
+        1: {"issue_updated": "2026-10-01T00:00:00Z", "status_updated": "2026-10-01T00:00:00Z", "complete": True},
+        2: {"issue_updated": "2026-10-01T00:00:00Z", "status_updated": "2026-10-01T00:00:00Z", "complete": True},
+        3: {"issue_updated": "2026-10-01T00:00:00Z", "status_updated": "2026-10-01T00:00:00Z", "complete": True},
     }
     assert bh.due_reads(items, stored) == [2]
 
@@ -56,6 +56,7 @@ def test_a_short_timeline_is_due_again_until_it_is_complete():
 
 def test_a_resumed_backfill_picks_up_a_short_timeline_before_the_next_issue():
     stored = {1: {"complete": True}, 2: {"complete": False, "cursor": "C1"}}
+    assert bh.backfill_batch([1, 2, 3], {}) == [1]
     assert bh.backfill_batch([1, 2, 3], stored) == [2]
     stored[2]["complete"] = True
     assert bh.backfill_batch([1, 2, 3], stored) == [3]
