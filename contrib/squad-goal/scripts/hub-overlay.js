@@ -96,13 +96,13 @@ html.sq-docked body{margin-right:var(--sq-dock)}
 .sq-who{display:block;font-family:var(--sq-mono);font-size:10px;line-height:1.2;color:#707988;margin-bottom:2px;letter-spacing:.02em}
 .sq-txt{white-space:pre-wrap;overflow-wrap:anywhere;font-family:var(--sq-mono);font-size:var(--sq-fs);color:#c9d1d9}
 .sq-p{margin:0 0 8px}.sq-p:last-child{margin-bottom:0}
-.sq-owner{margin:0 0 10px;border:1px solid #3a4250;border-radius:7px;padding:7px 10px}
+.sq-owner{margin:0 0 10px auto;width:fit-content;max-width:86%;border:1px solid #2e6b4f;border-radius:14px 14px 4px 14px;padding:8px 12px;background:#12302a}
 .sq-owner .sq-who{color:#8b949e;font-size:11px}.sq-owner .sq-txt{color:#e6edf3}
 .sq-system .sq-who{color:#565d69;font-size:11px}.sq-system .sq-txt{color:#8b949e;font-style:italic}
 .sq-fold{border-left:0;margin:0 0 8px}.sq-fold summary{font-size:11px;color:#6b7280;cursor:pointer;list-style:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sq-fold summary::-webkit-details-marker{display:none}.sq-fold[open] summary{color:#8b949e}
-.sq-answer{padding-left:14px;position:relative}.sq-answer .sq-who{color:#8b949e;font-size:11px}
-.sq-answer::before{content:"\u25CF";position:absolute;left:0;top:0;color:#3ecf8e;font-size:10px}
+.sq-answer{margin:0 auto 10px 0;width:fit-content;max-width:92%;border:1px solid #26303c;border-radius:14px 14px 14px 4px;padding:8px 12px;background:#161c24}
+.sq-answer .sq-who{color:#8b949e;font-size:11px}
 .sq-h{font-family:var(--sq-mono);font-weight:600;font-size:calc(var(--sq-fs) + 0px);color:#eef1f5;margin:6px 0 3px}
 .sq-tbl{width:100%;border-collapse:collapse;margin:6px 0;font-size:calc(var(--sq-fs) - 1px)}
 .sq-tbl th,.sq-tbl td{border:1px solid #2e6b4f;padding:4px 8px;text-align:left;vertical-align:top}
@@ -114,6 +114,7 @@ html.sq-docked body{margin-right:var(--sq-dock)}
 .sq-code{margin:4px 0}.sq-code summary{font-size:11px;color:#7aa2ff;cursor:pointer;list-style:none}
 .sq-code pre{margin:3px 0 0;padding:5px 8px;background:#0d1117;border:1px solid #232a36;border-radius:6px;overflow:auto;font-family:ui-monospace,SFMono-Regular,monospace;font-size:calc(var(--sq-fs) - 1px);line-height:1.4;color:#b8c0cf;white-space:pre}
 .sq-img{display:block;margin:4px 0}.sq-img img{max-width:100%;max-height:180px;border:1px solid #232a36;border-radius:6px;display:block}
+.sq-onlyimg{max-width:min(86%,280px)}.sq-onlyimg .sq-img img{width:100%;max-height:220px;object-fit:contain}
 .sq-more{margin:1px 0 4px;padding:1px 0;border:0;background:none;color:#7aa2ff;font-size:11px;cursor:pointer}
 .sq-earlier{margin:0 0 6px}.sq-earlier summary{font-size:11px;color:#707988;cursor:pointer}
 .sq-tool{}.sq-tool .sq-who{color:#f5b041}
@@ -387,7 +388,7 @@ function turnNode(t) {
     return d;
   }
   const d = document.createElement("div"), who = document.createElement("span");
-  d.className = "sq-turn sq-" + t.role;
+  d.className = "sq-turn sq-" + t.role + (onlyImage ? " sq-onlyimg" : "");   // a screenshot is its own bubble (owner, 2026-11-01)
   who.className = "sq-who";
   who.textContent = t.role === "owner" ? "\u203A you" : "";
   const body = richText(t.text);

@@ -305,3 +305,27 @@ def test_a_read_that_fails_keeps_the_session_and_the_talk():
     assert "cur = null" not in conv
     assert "loadSessions()" in conv
     assert "Date.now() - missT > 5000" in conv
+
+def test_the_owner_turn_is_a_bubble_on_the_right_and_the_answer_one_on_the_left():
+    """Owner, 2026-11-01: the talk reads faster with WhatsApp-style bubbles, and the fonts stay as they are."""
+    js = OVERLAY.read_text()
+    def rule(sel):
+        m = re.search(re.escape(sel) + r"\{([^}]*)\}", js)
+        assert m, sel
+        return m.group(1)
+    own, ans = rule(".sq-owner"), rule(".sq-answer")
+    assert "margin:0 0 10px auto" in own and "width:fit-content" in own and "max-width:86%" in own
+    assert "border-radius:14px 14px 4px 14px" in own and "background:#12302a" in own
+    assert "margin:0 auto 10px 0" in ans and "width:fit-content" in ans and "max-width:92%" in ans
+    assert "border-radius:14px 14px 14px 4px" in ans and "background:#161c24" in ans
+    # a bubble carries no type of its own: the size, the family and the spacing stay the text's
+    for body in (own, ans):
+        assert "font-size" not in body and "font-family" not in body and "line-height" not in body
+    assert ".sq-answer::before" not in js   # the marker was the old way to tell the two apart
+
+def test_a_screenshot_turn_sits_in_its_own_bubble():
+    """Owner, 2026-11-01: an image the owner sends is in the bubble like the text is."""
+    js = OVERLAY.read_text()
+    assert 'onlyImage ? " sq-onlyimg" : ""' in js
+    assert ".sq-onlyimg{max-width:min(86%,280px)}" in js
+    assert ".sq-onlyimg .sq-img img{width:100%" in js
