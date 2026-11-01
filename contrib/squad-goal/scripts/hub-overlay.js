@@ -360,7 +360,8 @@ function clamp(body, px) {
 }
 function turnNode(t) {
   // A system turn folds to one line (owner, 2026-11-01): a reminder or a hook's note is worth one sentence, not a wall.
-  if (t.role === "system" || t.role === "tool") {
+  const onlyImage = /^\s*\[Image: source: [^\]]+\]\s*$/.test(String(t.text || ""));
+  if ((t.role === "system" || t.role === "tool") && !onlyImage) {
     const d = document.createElement("details"), sum = document.createElement("summary");
     d.className = "sq-turn sq-" + t.role + " sq-fold";
     const one = String(t.text || "").replace(/\s+/g, " ").trim();
