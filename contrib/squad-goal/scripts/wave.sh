@@ -5,6 +5,7 @@
 #        wave.sh expired <run>        exit 0 when the run's wave reached its age cap (SG_WAVE_MAX_AGE_SECONDS)
 #        wave.sh requeue <issue> <why> [cap]  the child never enters: its issue goes back to the queue and the loop builds it again
 #        wave.sh fail <issue> <run> <why>     the run ended with nothing delivered for the issue: one failed dispatch (#609)
+#        (a `probe` ticket whose run left its acceptance command unmet refutes its premise instead, in fail and requeue: #888)
 #
 # One branch per wave (ADR-0145). A wave is the set of children that land in $SG_BASE (`dev`) together, and its branch is the
 # only branch that lands there for them, in one fast-forward push with one CI run. A run cuts the branch from `dev` when it
@@ -340,8 +341,45 @@ held_out() {
   return 1
 }
 
+# premise_check <args>: `squad premise-check <args>` from the plugin's checkout (SG_SQUAD); SG_PREMISE_CHECK names a stand-in.
+premise_check() {
+  if [ -n "${SG_PREMISE_CHECK:-}" ]; then "$SG_PREMISE_CHECK" "$@"; return; fi
+  local py=${SG_GATE_PY:-$SG_CHECKOUT/.venv/bin/python}; [ -x "$py" ] || py=python3
+  PYTHONPATH="${SG_SQUAD:-.}${PYTHONPATH:+:$PYTHONPATH}" "$py" -m squad.cli premise-check "$@"
+}
+
+# probe_refuted <issue> <run>: 0 when the issue is a probe ticket whose run left its acceptance command unmet (#888). Its
+# premise is refuted on its spec (`squad premise-check <spec> --refute <premise>`: the spec is the ticket's `## Parent`, the
+# premise its `Premise:` line), and the probe stays open, frozen to the owner, so the blocker guard holds its dependents. It
+# is not requeued and not counted: a refutation is the probe's answer, not a failed dispatch. A probe already frozen is not
+# refuted twice. Any other ticket, a run that met its gate, or an issue read that does not answer returns 1.
+probe_refuted() {
+  local n=$1 run=$2 j t state spec premise out
+  { [ -n "$run" ] && gate_failed "$run"; } || return 1
+  j=$(gh_api "repos/$SG_REPO/issues/$n") || return 1
+  t=$(printf '%s' "$j" | python3 -c 'import json,re,sys
+d=json.load(sys.stdin); d=d[0] if isinstance(d,list) and d else d
+names=[l.get("name") if isinstance(l,dict) else l for l in (d.get("labels") or [])]
+if "probe" not in names: sys.exit(1)
+body=d.get("body") or ""
+p=re.search(r"^## Parent\s*\n+\s*#(\d+)", body, re.M); q=re.search(r"^Premise:[ \t]*(\S.*?)\s*$", body, re.M)
+print("frozen" if "frozen:owner" in names else "open"); print(p.group(1) if p else ""); print(q.group(1) if q else "")' 2>/dev/null) || return 1
+  { read -r state; read -r spec; read -r premise; } <<< "$t"
+  [ "$state" = frozen ] && { echo "WAVE PROBE #$n: already frozen for the owner, so its premise is not refuted again (run $run)"; return 0; }
+  if [ -z "$spec" ] || [ -z "$premise" ]; then
+    freeze_owner "$n"; echo "WAVE PROBE #$n: its acceptance command is unmet, but it names no Premise line or no Parent spec: frozen for the owner (run $run)"; return 0
+  fi
+  if out=$(premise_check "$spec" --refute "$premise" --repo "$SG_REPO" 2>&1); then
+    echo "WAVE PROBE #$n: refuted '$premise' on spec #$spec, which goes back to the check; the probe stays open, frozen for the owner (run $run)"
+  else
+    echo "WAVE PROBE #$n: premise-check refused the refutation of '$premise' on spec #$spec: $(printf '%s' "$out" | tail -1); frozen for the owner (run $run)"
+  fi
+  freeze_owner "$n"; return 0
+}
+
 requeue() {   # <issue> <why> [cap]: the child never entered, so its issue goes back to the queue and the loop can build it again.
   local n=$1 why=$2 f h
+  [ "${3:-}" != cap ] && probe_refuted "$n" "${SG_REQUEUE_RUN:-}" && return 0   # a refuting probe is held, never requeued (#888)
   # The run is SG_REQUEUE_RUN (enter and land set it; childcc and runreview pass it). A requeue the wave's age cap made
   # (`cap`, #594) is the loop's delay, not a failure of the child: it neither counts nor stops the issue. The run behind it
   # is counted once at its end, by the janitor's `fail`, when it delivered nothing. A loop-caused one (#621) counts only
@@ -368,6 +406,7 @@ requeue() {   # <issue> <why> [cap]: the child never entered, so its issue goes 
 fail() {   # <issue> <run> <why> [own|loop]: the run ended with nothing delivered for the issue (janitor rule O, #609): one failed dispatch.
   local n=$1 run=$2 why=$3
   { [ -n "$n" ] && [ -n "$run" ]; } || { echo "WAVE-ERROR wave.sh fail <issue> <run> <why>"; return 2; }
+  probe_refuted "$n" "$run" && return 0   # a probe whose acceptance command is unmet refutes its premise (#888)
   if loop_caused "$why" "${4:-}"; then   # the loop's failure, not the issue's (#621): its own ledger and bound
     count "$n" "$run" "$why" loop
     [ "$fresh" = 1 ] || { echo "WAVE FAILED #$n: run $run is already counted"; return 0; }

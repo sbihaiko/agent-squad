@@ -103,6 +103,7 @@ contrib/squad-goal/scripts/watchtail.sh	contrib/squad-goal/scripts/test-watchtai
 contrib/squad-goal/scripts/wave.sh	contrib/squad-goal/scripts/test-wave.sh
 contrib/squad-goal/scripts/wave.sh	contrib/squad-goal/scripts/test-wave-lifecycle.sh
 contrib/squad-goal/scripts/wave.sh	contrib/squad-goal/scripts/test-wave-requeue-cap.sh
+contrib/squad-goal/scripts/wave.sh	contrib/squad-goal/scripts/test-wave-probe.sh
 contrib/squad-goal/scripts/wtclean.sh	contrib/squad-goal/scripts/test-wtclean.sh
 contrib/squad-goal/scripts/wtclean.sh	contrib/squad-goal/scripts/test-wtclean-run-tree.sh
 contrib/squad-goal/scripts/acpaths.py	contrib/squad-goal/scripts/test-acpaths.sh

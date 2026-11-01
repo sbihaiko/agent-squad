@@ -111,3 +111,10 @@ def test_the_agent_to_tickets_door_refuses_a_refuted_premise():
     text = (SKILLS / "agent-to-tickets" / "SKILL.md").read_text()
     for m in ("A row whose state is `refuted`", "name each refuted premise", "held until the premise is settled"):
         assert m in text, f"agent-to-tickets does not state: {m}"
+
+
+def test_the_agent_to_tickets_door_writes_the_premise_line_the_close_path_reads():
+    """#888: a probe ticket names its spec and its premise, so the loop's close path can refute that premise."""
+    text = (SKILLS / "agent-to-tickets" / "SKILL.md").read_text()
+    for m in ("labels `probe` and `wave:01`", "`## Parent`", "`Premise: <premise>`", "squad premise-check <spec> --refute <premise>"):
+        assert m in text, f"agent-to-tickets does not state: {m}"
