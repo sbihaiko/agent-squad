@@ -4382,7 +4382,7 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 <span class=pill id=bread></span></header>
 <div id=win>
 <aside id=side>
-<details id=stats class=sp><summary>Cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><div class="igs isub" id=isub title="subscriptions: the used share of the weekly window and the days to its reset"></div><h4>Spend <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Figures at API list prices (API-equivalent)."></span></h4><div class=tot id=tot></div><div class=m id=totnote></div><div class=irw id=burn><span>Tokens · 24 h</span><b></b></div><div class=cash id=cash></div><h4>Spend over time <span class=row id=per></span></h4><div id=chart></div><div id=kpi></div><div id=open></div><h4>Model tokens · this month</h4><div class=m id=piet>in + out</div><div id=pie></div></div></details>
+<details id=stats class=sp><summary>Cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><div class="igs isub" id=isub title="subscriptions: the used share of the weekly window and the days to its reset"></div><h4>Spend <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Figures at API list prices (API-equivalent)."></span></h4><div class=tot id=tot></div><div class=irw id=burn><span>Tokens · 24 h</span><b></b></div><div class=cash id=cash></div><h4>Spend over time <span class=row id=per></span></h4><div id=chart></div><div id=kpi></div><div id=open></div><h4>Model tokens · this month</h4><div class=m id=piet>in + out</div><div id=pie></div></div></details>
 <details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div class=ian id=ian></div><div id=ispec></div><div id=iloop></div><div id=ispeed></div><div id=ilate></div></div></details>
 <details id=lrd class=sp open><summary>Live runs<span class=sr id=lrs></span></summary><div class=sb id=lrun></div></details>
 </aside>
@@ -4464,7 +4464,7 @@ function ldCells(d){return[["CPU","cpu"],["RAM","ram"],["GPU","gpu"]].map(p=>{co
 // serves: the three load numbers and the facts the sampler last read. Each figure is HTML text; the SVGs only draw and are
 // hidden from a screen reader. A tile's state is read off its fact, so the hub keeps deciding the tone and the text.
 // INST{
-function gaugeGeom(v){const f=ldNum(v),k=f!==null,p=k?f:0,a=Math.PI*p/100;return{known:k,col:k?`hsl(${Math.round(120*(1-p/100))} 65% 42%)`:"var(--line)",deg:Math.round(-90+1.8*p),x:Math.round((30-26*Math.cos(a))*10)/10,y:Math.round((32-26*Math.sin(a))*10)/10}}
+function gaugeGeom(v){const f=ldNum(v),k=f!==null,p=k?f:0,a=Math.PI*p/100;return{known:k,col:k?`hsl(${Math.round(120*(1-p/100))} 65% 42%)`:"none",deg:Math.round(-90+1.8*p),x:Math.round((30-26*Math.cos(a))*10)/10,y:Math.round((32-26*Math.sin(a))*10)/10}}
 function gaugeSvg(v){const g=gaugeGeom(v);return `<svg width=60 height=36 viewBox="0 0 60 36" aria-hidden="true" focusable="false"><path class=gt d="M4 32 A26 26 0 0 1 56 32"/><path class=gf stroke="${g.col}" d="M4 32 A26 26 0 0 1 ${g.x} ${g.y}"/><line class=gn x1=30 y1=32 x2=30 y2=10 style="transform:rotate(${g.deg}deg)"${g.known?"":" visibility=hidden"}/><circle class=gh0 cx=30 cy=32 r=2 /></svg>`}
 function subsGauges(d){const xs=(d||{}).subs||[];if(!xs.length)return"";
  // One bar per plan: how much of the weekly window is spent, and how long until it resets. The needle and the half-circle
@@ -4552,22 +4552,32 @@ function selectNew(){const ids=allRuns.filter(r=>r.kind!=="childcc").map(r=>r.id
   if(!fresh.length)return;const id=fresh.sort((x,y)=>x.age-y.age)[0].id;
   if(N===1)pins.clear();else if(pins.size>=N)pins.delete([...pins][0]);pins.add(id);save()}   // a run starting moves the pins, never the accordions
 async function poll(){try{allRuns=await (await fetch("/api/runs")).json();selectNew();applyFilter();refresh()}catch(e){}}
-function bars(rows,W=280,H=40){if(!rows.length)return"";const mx=Math.max(...rows.map(r=>r.spend),0.01),bw=W/rows.length,pad=12,xl=t=>String(t).replace(/^\d{4}-/,"");
-  return `<svg viewBox="0 0 ${W} ${H+pad+14}">`
-    +`<line x1="0" y1="${pad}" x2="${W}" y2="${pad}" stroke="#3ecf8e" stroke-dasharray="3 2" stroke-width="1"/>`
-    +`<text x="${W}" y="${pad-3}" fill="#3ecf8e" style="font-size:var(--fs-min)" text-anchor="end">max ${usd(mx)}</text>`
-    +rows.map((r,i)=>`<rect x="${i*bw+1}" y="${pad+H-r.spend/mx*H}" width="${Math.max(bw-2,1)}" height="${r.spend/mx*H}" fill="${r.spend>=mx?"#3ecf8e":"#5aa9ff"}"><title>${xl(r.t)}: ${usd(r.spend)} · ${r.runs} runs</title></rect>`).join("")
-    +`<text x="0" y="${H+pad+12}" fill="#8a93a3" style="font-size:var(--fs-min)">${xl(rows[0].t)}</text>`
-    +`<text x="${W}" y="${H+pad+12}" fill="#8a93a3" style="font-size:var(--fs-min)" text-anchor="end">now</text></svg>`}
+function barChart(rows,W=280,H=64,L=44){const n=rows.length,vals=rows.map(r=>r.spend).filter(v=>v!=null),mx=Math.max(...vals,0.01),bw=W/Math.max(n,1),base=12+H,xl=t=>String(t).replace(/^\d{4}-/,"");
+  const y=v=>base-v/mx*H,wd=Math.max(bw-2,1);
+  const bars=rows.map((r,i)=>{const x=L+i*bw+1,cx=x+wd/2,title=`${xl(r.t)}: ${r.spend==null?"no read":usd(r.spend)} · ${r.runs} runs`;
+    if(r.spend==null)return{kind:"missing",i,x,w:wd,cx,y:base,h:0,title};
+    if(r.spend===0)return{kind:"zero",i,x,w:wd,cx,y:base-2,h:2,title};
+    return{kind:"bar",i,x,w:wd,cx,y:y(r.spend),h:r.spend/mx*H,top:r.spend>=mx,title}});
+  const im=vals.length?rows.findIndex(r=>r.spend===mx):-1,named=im>=0?bars[im]:null;
+  return{W,H,L,base,bars,ticks:[0,mx/2,mx].map(v=>({v,y:y(v),label:usd(v)})),
+    max:named?{bar:im,x:named.cx,y:named.y-4,anchor:named.cx>L+W*.75?"end":named.cx<L+W*.25?"start":"middle",text:"max "+usd(mx)}:null,
+    first:n?xl(rows[0].t):"",now:"now"}}
+function bars(rows){if(!rows.length)return"";const c=barChart(rows),{W,H,L,base}=c;
+  return `<svg viewBox="0 0 ${L+W} ${base+14}" role=img aria-label="spend per interval">`
+    +c.ticks.map(t=>`<line x1="${L}" y1="${t.y}" x2="${L+W}" y2="${t.y}" stroke="#2a303b"/><text x="${L-4}" y="${t.y+4}" fill="#8a93a3" style="font-size:var(--fs-min)" text-anchor="end">${t.label}</text>`).join("")
+    +c.bars.map(b=>b.kind==="missing"?`<line class=miss x1="${b.x}" y1="${base}" x2="${b.x+b.w}" y2="${base}" stroke="#8a93a3" stroke-dasharray="2 2"><title>${esc(b.title)}</title></line>`
+      :b.kind==="zero"?`<rect class=zero x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" style="fill:var(--mute)"><title>${esc(b.title)}</title></rect>`
+      :`<rect class=bar x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" fill="${b.top?"#3ecf8e":"#5aa9ff"}"><title>${esc(b.title)}</title></rect>`).join("")
+    +(c.max?`<text x="${c.max.x}" y="${c.max.y}" fill="#3ecf8e" style="font-size:var(--fs-min)" text-anchor="${c.max.anchor}">${c.max.text}</text>`:"")
+    +`<text x="${L}" y="${base+12}" fill="#8a93a3" style="font-size:var(--fs-min)">${c.first}</text><text x="${L+W}" y="${base+12}" fill="#8a93a3" style="font-size:var(--fs-min)" text-anchor="end">${c.now}</text></svg>`}
 function kr(label,sub,v,unit,base,lowerBetter=true){if(v==null)return`<div class=kr><span class=l>${label}${sub?`<small>${sub}</small>`:""}</span><b>—</b></div>`;
   const u=unit?String(unit).trim():"";
   let chip="";if(base){const d=Math.round((v-base)/base*100),good=lowerBetter?d<0:d>0;
     const pct=`<span class="${good?"good":"bad"}">${Math.abs(d)}% ${lowerBetter?(d<0?"faster":"slower"):(d>0?"more":"fewer")}</span>`;
     chip=d===0?`<span class=d>was ${base}${u?" "+u:""}</span>`:`<span class=d>was ${base}${u?" "+u:""} · ${pct}</span>`}
   return `<div class=kr><span class=l>${label}${sub?`<small>${sub}</small>`:""}</span><b${v===0?" class=m":""}>${v}${u?`<small>${u}</small>`:""}</b>${chip}</div>`}
-function openRows(o){return `<h4>Open branches <small>oldest first</small></h4>`
-  +(o&&o.length?o.map((x,i)=>`<div class=kr><span class=l>#${x.n} · <b${x.min>=30?" class=w":""}>${x.min}</b> min${i===0?" (warns at 30)":""}</span></div>`).join("")
-   :`<div class=kr><span class=l>none open</span></div>`)}
+function openRows(o){if(!(o&&o.length))return"";return `<h4>Open branches <small>oldest first</small></h4>`
+  +o.map((x,i)=>`<div class=kr><span class=l>#${x.n} · <b${x.min>=30?" class=w":""}>${x.min}</b> min${i===0?" (warns at 30)":""}</span></div>`).join("")}
 // SETV{ the settings view's pure rules (#913): the reset text, the add list, the diff before save. Run in node by tests.
 function rstText(t,now){if(!t)return"reset unknown";const x=t-now;if(x<=0)return"resets now";if(x>=86400)return`resets in ${(x/86400).toFixed(1)} d`;if(x>=3600)return`resets in ${Math.round(x/3600)} h`;return`resets in ${Math.max(1,Math.round(x/60))} min`}
 function addOpts(sug,chain,isOff){return (sug||[]).filter(s=>!(chain||[]).includes(s.id)&&!isOff(s.id))}
@@ -4830,7 +4840,6 @@ async function pollStats(){try{pollSubs();
   $("#chart").innerHTML=bars(st.buckets);$("#pie").innerHTML=pie(st.models||[]);
   const same=st.totals.all===st.totals.month;
   $("#tot").innerHTML=`<div>today<b>${usd(st.totals.today)}</b></div><div>this month<b>${usd(st.totals.month)}</b></div><div>all time<b${same?" class=m":""}>${same?"= this month":usd(st.totals.all)}</b></div>`;
-  $("#totnote").innerHTML=(st.totals.unpriced||st.totals.uncounted)?`floor: ${st.totals.unpriced?st.totals.unpriced+" review call"+(st.totals.unpriced===1?" is":"s are")+" unpriced and count 0.0":""}${st.totals.unpriced&&st.totals.uncounted?"; ":""}${st.totals.uncounted?st.totals.uncounted+" with no usage count":""}. The total is a floor.`:"";
   const b=sp.baseline,n=sp.pr.after.n,cut=b.cutoff.slice(5,16).replace("T"," ");
   $("#kpi").innerHTML=`<h4>Speed <small>since ${cut} UTC · ${n} PR${n===1?"":"s"}</small></h4>`
    +kr("Merge time",", median",sp.pr.after.median,"min",b.pr.median)
