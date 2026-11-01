@@ -24,8 +24,10 @@ column its work never reached.
    that has a column keeps it until work moves it forward.
    **The one backward move:** a run that ends with nothing delivered returns its card from Doing to
    Todo. The dispatch moved the card out of Todo, so the loop undoes its own claim.
-   A spec card is derived, not delivered: the fold over its sub-issues is its only writer, no work
-   rule names it, and the fold corrects it between Doing and Code Complete. Below Doing it keeps the
+   A spec card is derived, not delivered: the fold over its sub-issues is its only writer, and no
+   work rule names it. A spec card the fold finds in a work column is not work, so the fold returns
+   it to the column the owner gave it, Doing included: that corrects a derivation, never a work move,
+   and it is what keeps a spec out of the count of work a live run holds. Below Doing it keeps the
    column the owner gave it.
 2. **Two columns are terminal: Closed and Abandoned.** A card that reaches one stays. A closed card
    that still carries an old option lands in Closed, whatever its option said.
