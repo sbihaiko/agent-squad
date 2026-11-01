@@ -130,4 +130,32 @@ d=json.load(open(sys.argv[1])); d["review"]["stopped"]="3 reviews"; json.dump(d,
 PY
 out=$(L replay 'x/y#63' 2>&1); rc=$?
 [ $rc = 1 ] && case "$out" in *'x/y#63'*review.stopped*) ok "a replay names a stored review stop its events do not support";; *) ko "replay stop out: '$out'";; esac || ko "replay stop rc $rc '$out'"
+# ADR-0164: a board write is an event with a stable identity (its run and its column) and its own instant. The event is
+# recorded pending before its card write; a retry is a duplicate; a write that lands for an event the fact no longer holds
+# is superseded; an event older than the fact is stale, so a late delivery keeps the true order (criterion 3 of #1021).
+B() { L read "$1" board | python3 -c 'import json,sys; b=json.load(sys.stdin); print(b.get("run",""), b.get("column",""), b.get("state",""))'; }
+BI() { L read "$1" board | python3 -c 'import json,sys; print(json.load(sys.stdin)["instant"])'; }
+[ "$(L board 'x/y#21' run-a Doing /req/a)" = recorded ] && [ "$(B 'x/y#21')" = "run-a Doing pending" ] \
+  && ok "a board event is recorded pending, with its run and column" || ko "board event: '$(L read 'x/y#21' board)'"
+[ "$(L pending 'x/y#21' | cut -f1-3)" = "21	run-a	Doing" ] && ok "pending lists the issue's unwritten board event" || ko "pending: '$(L pending 'x/y#21')'"
+I1=$(BI 'x/y#21')
+[ "$(L board 'x/y#21' run-a Doing /req/a)" = duplicate ] && [ "$(BI 'x/y#21')" = "$I1" ] \
+  && ok "a retried board event is a duplicate and keeps its first instant" || ko "board duplicate: '$(L read 'x/y#21' board)'"
+[ "$(L boardw 'x/y#21' run-a Doing)" = written ] && [ "$(B 'x/y#21')" = "run-a Doing written" ] && [ -z "$(L pending 'x/y#21')" ] \
+  && ok "a landed card write marks its event written" || ko "boardw: '$(L read 'x/y#21' board)'"
+[ "$(L boardw 'x/y#21' run-a Doing)" = duplicate ] && ok "a repeated write confirmation is a duplicate" || ko "boardw duplicate"
+L board 'x/y#22' run-b Doing /req/b 200 >/dev/null
+[ "$(L board 'x/y#22' run-a Todo /req/a 100)" = stale ] && [ "$(B 'x/y#22')" = "run-b Doing pending" ] \
+  && ok "an event older than the fact is stale: the true order holds" || ko "stale: '$(L read 'x/y#22' board)'"
+[ "$(L boardw 'x/y#22' run-a Todo)" = superseded ] && [ "$(B 'x/y#22')" = "run-b Doing pending" ] \
+  && ok "a write for an event the fact no longer holds changes nothing" || ko "superseded: '$(L read 'x/y#22' board)'"
+[ "$(L board 'x/y#22' run-c Todo /req/c 300)" = recorded ] && [ "$(B 'x/y#22')" = "run-c Todo pending" ] \
+  && ok "a newer board event takes the fact" || ko "newer: '$(L read 'x/y#22' board)'"
+printf 'not json' > "$T/st/state/x__y__24.json"
+L board 'x/y#24' run-e Doing /req/e >/dev/null 2>&1; [ $? = 3 ] && [ "$(cat "$T/st/state/x__y__24.json")" = 'not json' ] \
+  && ok "a corrupt ledger holds a board event and is left as it is" || ko "corrupt board: '$(cat "$T/st/state/x__y__24.json")'"
+L rearm 'x/y#21' >/dev/null
+[ -z "$(L pending 'x/y#21')" ] && [ "$(L board 'x/y#21' run-a Doing /req/a)" = floor ] \
+  && ok "a rearm clears a pending board write, and its run counts toward nothing" || ko "rearm floor: '$(L board 'x/y#21' run-a Doing /req/a)'"
+
 rm -rf "$T"; exit $fail

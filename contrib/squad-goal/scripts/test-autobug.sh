@@ -39,6 +39,7 @@ PY
 cp "$T/s/issue_state.py" "$T/issue_state-stub.py"
 todo() { local n; : > "$T/cards.tsv"; for n in "$@"; do printf '%s\tTodo\n' "$n" >> "$T/cards.tsv"; done; }   # <issue>...: their cards sit in Todo
 todo 1228 1229 1400 1401 60 61 62 70 71 72 73   # the graph names no funding bound unless a case says so
+printf '#!/bin/bash\nexit 0\n' > "$T/s/board.sh"; chmod +x "$T/s/board.sh"; export BOARD="$T/s/board.sh"   # the card door lands unless a case refuses it
 cat > "$T/bin/gh" <<J
 #!/bin/bash
 case "\$*" in
@@ -302,7 +303,15 @@ export BOARD="$T/s/board.sh"
 r=$(bash "$T/s/autobug.sh" 2>&1); rc=$?
 [ "$rc" = 0 ] && ok "8 the pass that hit the refusal finishes" || ko "8 the pass exited $rc: '$r'"
 $G -q '^--add o 4 In Progress 1228$' "$T/board.calls" && ok "8 the dispatch adds a missing card before moving it" || ko "8 board call does not add the card: $(cat "$T/board.calls" 2>/dev/null)"
-case "$r" in *"AUTOBUG dispatched"*) ok "8 the dispatch still happens" ;; *) ko "8 no dispatch: '$r'";; esac
+# Re-anchored (#1021, criterion 2: "Dispatch does not start a run while its board write is pending or failed"): the refused
+# card write starts no run, frees its claim, and leaves its event pending for the next pass. The old anchor, "the dispatch
+# still happens", is superseded.
+case "$r" in *"AUTOBUG dispatched"*) ko "8 a refused card write still dispatched: '$r'" ;; *) ok "8 a refused card write starts no run" ;; esac
+[ ! -e "$T/launched" ] && ok "8 no launch while the card write is refused" || ko "8 a run launched past a refused card write"
+[ ! -e "$T/st/auto/bug-1228" ] && ok "8 the refused dispatch frees its claim" || ko "8 the claim stays after a refused card write"
+pend=$(SG_STATE=$T/st SG_REPO=x/y python3 "$T/s/issue_ledger.py" pending "x/y#1228" 2>/dev/null | cut -f1-3)
+case "$pend" in "1228	autobug-"*"	Doing") ok "8 the refused write stays pending in the ledger";; *) ko "8 no pending Doing event: '$pend'";; esac
+rm -rf "$T/st/state"   # case 8's pending event is its own: the cases after it start with no ledger
 filed=$($G -c '^title=' "$T/filed")
 [ "$filed" = 1 ] && ok "8 a refused write opens exactly one bug" || ko "8 a refused write opened $filed issue(s): $(cat "$T/filed")"
 TITLE=$($G '^title=' "$T/filed" | head -1)
@@ -364,6 +373,7 @@ J
   [ "$($G -c '^title=' "$T/filed")" = 0 ] && ok "8c ($mark) a refused write on an autobug issue files no bug" || ko "8c ($mark) filed: $(cat "$T/filed")"
   [ "$($G -c 'REFUSED' "$T/st/cycle.log")" = 1 ] && $G -q 'autobug-filed' "$T/st/cycle.log" \
     && ok "8c ($mark) one cycle-log line names it instead" || ko "8c ($mark) cycle.log: $(cat "$T/st/cycle.log")"
+  rm -rf "$T/st/state"   # a refused card write leaves its event pending; the next iteration and case start with no ledger
 done
 
 # 9) (#188) the dispatch moves the cards of the issues it just requested, and an issue the loop filed itself carries no
@@ -431,27 +441,27 @@ cat > "$T/issues.json" <<'JSON'
 [{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]}]
 JSON
 : > "$T/board.calls"
-printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %s/board.calls\necho "#1228: GitHub refused the card write (HTTP 403)" >&2\nexit 1\n' "$T" > "$T/s/board.sh"
+printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %s/board.calls\ncase " $* " in *" 5 "*) echo "#1228: GitHub refused the card write (HTTP 403)" >&2; exit 1;; esac\nexit 0\n' "$T" > "$T/s/board.sh"
 printf '#!/bin/bash\necho %s/req.json\n' "$T" > "$T/s/mkreq.sh"
 printf 'import os\nopen(os.path.join("%s", "launched"), "w").close()\n' "$T" > "$T/s/launch.py"
 chmod +x "$T/s/board.sh" "$T/s/mkreq.sh" "$T/s/launch.py"
 : > "$T/filed"; : > "$T/st/cycle.log"
-# The loop board and the bug board are two boards (#140): a distinct bug board makes the two card moves two causes, so
-# each is filed once. Were they one board, the same cause twice would be one issue, and this case wants two writers.
+# The loop board's card write comes before the launch and gates it (#1021), so a refusal there stops the pass before the
+# bug board is written. This case refuses only the bug board (5): its write is after the launch, and its refusal is one filing.
 export BOARD="$T/s/board.sh" SG_BUG_PROJECT=5 SG_BUG_DOING="In Progress"
 bash "$T/s/autobug.sh" >/dev/null 2>&1
 set=$(bash "$d/refusal-names.sh" 2>/dev/null)
 [ -n "$set" ] && ok "10 the helper prints the closed set in one place" || ko "10 nothing prints the set"
 filed=$($G -c '^title=' "$T/filed")
-[ "$filed" = 2 ] && ok "10 both writers of the pass name a refusal through the door" || ko "10 $filed bug(s), not the two cards: $(cat "$T/filed")"
+[ "$filed" = 1 ] && ok "10 the bug board's refusal is named through the door" || ko "10 $filed bug(s), not one card: $(cat "$T/filed")"
 named=0; stray=""
 while read -r t; do
   n=$($G -oE '[A-Z][A-Z0-9-]*-FAILED' <<< "$t" | head -1)
   if [ -n "$n" ] && $G -qxF "$n" <<< "$set"; then named=$((named+1)); else stray="$stray $n"; fi
 done < <($G '^title=' "$T/filed")
-[ "$named" = 2 ] && ok "10 the name every writer gives is a member of the set" || ko "10 names outside the set:$stray / $(cat "$T/filed")"
+[ "$named" = 1 ] && ok "10 the name the bug board's writer gives is a member of the set" || ko "10 names outside the set:$stray / $(cat "$T/filed")"
 $G -qE '^[0-9]{2}:[0-9]{2}:[0-9]{2} autobug REFUSED refused BOARD-WRITE-FAILED ' "$T/st/cycle.log" \
-  && [ "$($G -c 'REFUSED' "$T/st/cycle.log")" = 2 ] && ok "10 the cycle log repeats the same two names, in one shape" \
+  && [ "$($G -c 'REFUSED' "$T/st/cycle.log")" = 1 ] && ok "10 the cycle log repeats the name, in one shape" \
   || ko "10 cycle.log: $(cat "$T/st/cycle.log")"
 [ "$($G -c '^--add o 4 In Progress 1228$' "$T/board.calls")" = 1 ] && [ "$($G -c '^--add o 5 In Progress 1228$' "$T/board.calls")" = 1 ] \
   && ok "10 both refusals came from the pass's own card moves, one per board" || ko "10 board calls: $(cat "$T/board.calls")"
@@ -566,6 +576,7 @@ filed=$($G -c '^title=' "$T/filed")
 [ "$filed" = 0 ] && ok "12b a read failure files no bug" || ko "12b a read failure filed $filed bug(s): $(cat "$T/filed")"
 $G -q 'BOARD-READ-FAILED' "$T/st/cycle.log" && ok "12b the read failure is named in the cycle log" || ko "12b cycle.log: $(cat "$T/st/cycle.log")"
 rm -f "$T/bnowrite"; unset SG_BOARD_READ_BACKOFF SG_BOARD_SETTLE_SECONDS
+rm -rf "$T/st/state"   # a board read failure is no proof of the write: its event stays pending, and the next case starts with no ledger
 cp "$T/issue_state-stub.py" "$T/s/issue_state.py"   # the dry cases below read the cards from cards.tsv again
 
 # 13) (#243) the bug pass takes items by the kind the seam answers, never by the platform's issue type. 1500 carries kind
@@ -927,5 +938,62 @@ r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
 [ "$(cat "$T/st/bugs-waiting" 2>/dev/null)" = 0 ] && ok "25 a closed bug leaves no bug waiting" || ko "25 bugs-waiting '$(cat "$T/st/bugs-waiting" 2>/dev/null)': '$r'"
 case "$r" in *"would dispatch"*"[1400]"*) ok "25 debt is considered when the only bug is closed";; *) ko "25 debt not dispatched: '$r'";; esac
 rm -f "$T/closed"
+
+# 26-29) (#1021) the card write is an event the ledger holds pending before the write, and dispatch waits for it. The
+# event's write lands before the launch (26); a launch refusal after that write puts the card back to Todo through the
+# same door (27); a crash between the event and its write is recovered by the next pass, which writes the card and
+# launches the stored request, never a second run (28); a recovery write that is refused launches nothing and stays
+# pending (29). The stubs log the order of the board writes and the launches.
+ab_fresh() {   # the pass's state and stubs, one issue (#1228) in Todo, one run slot
+  rm -rf "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks" "$T/st/state" "$T/launches" "$T/order" "$T/board.fail" "$T/launch.fail"
+  mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"; : > "$T/board.calls"; : > "$T/st/cycle.log"; : > "$T/st/active-runs.txt"
+  printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"
+  printf '[{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]}]\n' > "$T/issues.json"
+  rm -f "$T/closed"; todo 1228
+}
+cat > "$T/s/board.sh" <<J
+#!/bin/bash
+echo "board \$*" >> "$T/order"; echo "\$*" >> "$T/board.calls"
+if [ -e "$T/board.fail" ]; then echo "#1228: GitHub refused the card write (HTTP 403)" >&2; exit 1; fi
+case " \$* " in *" --add "*) echo "#1228 -> \$5" ;; *) echo "#1228 not on the board" >&2; exit 1 ;; esac
+J
+cat > "$T/s/mkreq.sh" <<J
+#!/bin/bash
+printf '{}' > "$T/st/req/\$1.json"; echo "$T/st/req/\$1.json"
+J
+cat > "$T/s/launch.py" <<J
+import os, sys
+open("$T/order", "a").write("launch " + sys.argv[1] + "\n")
+open("$T/launches", "a").write(sys.argv[1] + "\n")
+if os.path.exists("$T/launch.fail"): print("refused: test launch refusal"); sys.exit(1)
+J
+chmod +x "$T/s/board.sh" "$T/s/mkreq.sh" "$T/s/launch.py"
+export BOARD="$T/s/board.sh"
+L1() { SG_STATE=$T/st SG_REPO=x/y python3 "$T/s/issue_ledger.py" "$@"; }
+ab_fresh
+r=$(bash "$T/s/autobug.sh" 2>&1)
+[ "$(sed -n 1p "$T/order" 2>/dev/null | cut -d' ' -f2)" = "--add" ] && [ "$(sed -n 2p "$T/order" 2>/dev/null | cut -d' ' -f1)" = launch ] \
+  && ok "26 the card write lands before the launch" || ko "26 order: '$(cat "$T/order" 2>/dev/null)'"
+[ "$(L1 read 'x/y#1228' board | python3 -c 'import json,sys; b=json.load(sys.stdin); print(b.get("column",""), b.get("state",""))')" = "Doing written" ] \
+  && ok "26 the ledger holds the Doing event written after its write" || ko "26 board fact: '$(L1 read 'x/y#1228' board)'"
+ab_fresh; touch "$T/launch.fail"
+r=$(bash "$T/s/autobug.sh" 2>&1)
+grep -qx -- "--add o 4 Todo 1228" "$T/board.calls" && ok "27 a launch refusal after the Doing write puts the card back to Todo" \
+  || ko "27 no Todo write: '$(cat "$T/board.calls")'"
+[ ! -e "$T/st/auto/bug-1228" ] && ok "27 the refused launch frees its claim" || ko "27 the claim stays after a refused launch"
+[ -z "$(L1 pending 'x/y#1228')" ] && ok "27 no pending event is left after the card is back in Todo" || ko "27 pending left: '$(L1 pending 'x/y#1228')'"
+ab_fresh
+L1 board 'x/y#1228' autobug-crash Doing "$T/st/req/autobug-crash.json" >/dev/null; printf '{}' > "$T/st/req/autobug-crash.json"
+r=$(bash "$T/s/autobug.sh" 2>&1)
+grep -qx -- "--add o 4 In Progress 1228" "$T/board.calls" && ok "28 the crash recovery writes the pending card" || ko "28 no recovery write: '$(cat "$T/board.calls")'"
+[ "$(cat "$T/launches" 2>/dev/null)" = "$T/st/req/autobug-crash.json" ] && ok "28 the crash recovery launches the stored request, once" \
+  || ko "28 launches: '$(cat "$T/launches" 2>/dev/null)'"
+[ -z "$(L1 pending 'x/y#1228')" ] && ok "28 the recovered event is written" || ko "28 still pending: '$(L1 pending 'x/y#1228')'"
+ab_fresh
+L1 board 'x/y#1228' autobug-refused Doing "$T/st/req/autobug-refused.json" >/dev/null; printf '{}' > "$T/st/req/autobug-refused.json"; touch "$T/board.fail"
+r=$(bash "$T/s/autobug.sh" 2>&1); rc=$?
+[ "$rc" = 0 ] && ok "29 a refused recovery write exits 0" || ko "29 exit $rc: '$r'"
+[ ! -e "$T/launches" ] && ok "29 a refused recovery write launches nothing" || ko "29 launched: '$(cat "$T/launches")'"
+[ "$(L1 pending 'x/y#1228' | cut -f2)" = autobug-refused ] && ok "29 the event stays pending for the next pass" || ko "29 pending: '$(L1 pending 'x/y#1228')'"
 
 rm -rf "$T"; exit $fail
