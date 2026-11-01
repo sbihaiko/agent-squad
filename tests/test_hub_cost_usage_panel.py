@@ -179,8 +179,19 @@ def test_dollars_drop_cents_at_and_above_one_hundred():
     assert usd_texts(html) == ["$99.99", "$100", "$1234"]
 
 
-def test_chart_has_max_rule_ok_bar_now_and_no_year():
-    out = _run_js("""
+def _chart(body):
+    return json.loads(_node(_prelude() + "\n" + _fn(SRC, "barChart") + "\n" + body + "\nconsole.log(JSON.stringify(out));"))
+
+
+def _gauge_js(body):
+    fpct = re.search(r"fpct=p=>[^;]+;", SRC).group(0)
+    iq = re.search(r"const iq=[^\n]+;", SRC).group(0)
+    return json.loads(_node(_prelude() + "\n" + fpct + "\n" + iq + "\n" + _fn(SRC, "subsGauges") + "\n" + body
+                            + "\nconsole.log(JSON.stringify(out));"))
+
+
+def test_chart_has_max_label_ok_bar_now_and_no_year():
+    out = _chart("""
 const rows=[{t:'2026-10-09',spend:2,runs:1},{t:'2026-10-10',spend:14.28,runs:2},{t:'2026-10-11',spend:5,runs:1}];
 const html=bars(rows);
 const texts=[...html.matchAll(/<text[^>]*>([^<]*)<\\/text>/g)].map(m=>m[1]);
@@ -188,11 +199,69 @@ const out={html, texts};
 """)
     html = out["html"]
     assert "max $14.28" in html
-    assert re.search(r'stroke-dasharray', html)
     assert re.search(r'fill="(?:var\(--ok\)|#3ecf8e)"', html)
     assert out["texts"] and out["texts"][-1].endswith("now")
     for t in out["texts"]:
         assert not re.search(r"\b\d{4}\b", t), t
+
+
+def test_the_spend_chart_labels_its_y_axis_with_ordered_ticks():
+    out = _chart("""
+const rows=[{t:'2026-10-09',spend:2,runs:1},{t:'2026-10-10',spend:14.28,runs:2},{t:'2026-10-11',spend:5,runs:1}];
+const c=barChart(rows);
+const out={labels:c.ticks.map(t=>t.label),values:c.ticks.map(t=>t.v),ys:c.ticks.map(t=>t.y)};
+""")
+    assert out["labels"] == ["$0.00", "$7.14", "$14.28"], out
+    assert out["values"] == sorted(out["values"]) and len(set(out["values"])) == 3, out
+    assert out["ys"] == sorted(out["ys"], reverse=True), "a higher tick must sit higher on the plot"
+
+
+def test_a_zero_day_draws_a_minimum_muted_mark_apart_from_a_missing_day():
+    out = _chart("""
+const rows=[{t:'2026-10-09',spend:0,runs:0},{t:'2026-10-10',spend:null,runs:0},{t:'2026-10-11',spend:4,runs:1}];
+const c=barChart(rows);
+const out={zero:c.bars[0],missing:c.bars[1],top:c.bars[2],html:bars(rows)};
+""")
+    zero, missing, top, html = out["zero"], out["missing"], out["top"], out["html"]
+    assert zero["kind"] == "zero" and missing["kind"] == "missing", out
+    assert zero["kind"] != missing["kind"]
+    assert 2 <= zero["h"] < top["h"], "a zero day needs a visible minimum-height mark"
+    assert missing["h"] == 0
+    assert re.search(r'<rect class=zero [^>]*style="fill:var\(--mute\)"', html), html
+    assert re.search(r'<line class=miss ', html), html
+
+
+def test_the_max_annotation_sits_on_the_bar_it_names():
+    out = _chart("""
+const rows=[{t:'2026-10-09',spend:2,runs:1},{t:'2026-10-10',spend:14.28,runs:2},{t:'2026-10-11',spend:5,runs:1}];
+const c=barChart(rows);
+const out={max:c.max,bar:c.bars[1],html:bars(rows)};
+""")
+    assert out["max"]["text"] == "max $14.28", out
+    assert out["max"]["bar"] == 1
+    assert out["max"]["x"] == out["bar"]["cx"], "the label must centre on the bar it names"
+    assert out["max"]["y"] < out["bar"]["y"], "the label sits above its bar"
+    assert re.search(rf'<text x="{out["max"]["x"]}"[^>]*>max \$14\.28</text>', out["html"]), out["html"]
+
+
+def test_the_spend_chart_keeps_one_bar_per_interval_and_is_never_a_sparkline():
+    out = _chart("""
+const rows=Array.from({length:30},(_,i)=>({t:'2026-10-'+String(i+1).padStart(2,'0'),spend:(i%5)+1,runs:1}));
+const c=barChart(rows);
+const out={n:c.bars.length,kinds:[...new Set(c.bars.map(b=>b.kind))],ws:c.bars.map(b=>b.w),
+  inside:c.bars.every(b=>b.x>=c.L && b.x+b.w<=c.L+c.W),H:c.H,L:c.L,W:c.W,html:bars(rows)};
+""")
+    assert out["n"] == 30 and out["kinds"] == ["bar"], out
+    assert min(out["ws"]) >= 1 and out["inside"], out
+    assert out["H"] >= 48, "the bars are the chart, so the plot keeps its height"
+    assert "polyline" not in out["html"]
+    assert re.search(rf'viewBox="0 0 {out["L"] + out["W"]} ', out["html"]), out["html"][:120]
+    assert out["html"].count("<rect class=bar ") == 30
+
+
+def test_the_cost_panel_draws_no_implementation_small_print():
+    assert "id=totnote" not in _stats()
+    assert '$("#totnote")' not in SRC
 
 
 SPEED = """const b={cutoff:"2026-10-09T19:04",pr:{median:38,mean:41},run_median:64};
@@ -260,11 +329,9 @@ def test_open_rows_read_number_and_minutes():
     assert re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html)).strip() == "Open branches oldest first #1491 · 28 min (warns at 30) #1502 · 31 min"
 
 
-def test_open_with_none_reads_none_open():
+def test_open_branches_render_nothing_while_none_is_open():
     out = _run_js("const out={empty:openRows([]),missing:openRows(null)};")
-    for html in (out["empty"], out["missing"]):
-        assert re.search(r"<h4>Open branches\b", html) and "none open" in html
-        assert "#" not in html
+    assert out["empty"] == "" and out["missing"] == "", out
     assert "Open now" not in SRC
 
 
@@ -410,11 +477,28 @@ def test_the_pie_merges_the_spellings_of_one_model_name():
     assert "ids.join" in body and "ids.includes(m.model)" in body, body
 
 
-def test_a_floor_note_names_unpriced_and_uncounted_review_calls():
-    """The totals are a floor: the note beside the tiles says how many calls priced at 0.0 or had no usage count (#789)."""
-    html = _render("const st={totals:{today:1,month:2,all:2,unpriced:2,uncounted:1}};\n",
-                   _stmt('$("#totnote").innerHTML='))
-    assert "2" in html and "unpriced" in html and "1" in html and "no usage" in html and "floor" in html, html
-    clean = _render("const st={totals:{today:1,month:2,all:2,unpriced:0,uncounted:0}};\n",
-                    _stmt('$("#totnote").innerHTML='))
-    assert clean.strip() in ("", "''", '""'), clean
+def test_a_subscription_gauge_states_name_percentage_and_reset_as_three_fields():
+    out = _gauge_js("""
+const d={subs:[{label:'Claude weekly',pct:72.4,window:'weekly',resets:Date.now()/1000+1.7*86400}]};
+const out={html:subsGauges(d)};
+""")
+    html = out["html"]
+    assert re.search(r"<span class=sn>Claude weekly</span>", html), html
+    assert re.search(r"<b class=sp2>72%</b>", html), html
+    assert re.search(r"<small class=sr2>resets in 1\.7 d</small>", html), html
+
+
+def test_a_gauge_fill_token_is_not_its_track_token_on_any_returned_state():
+    track = re.search(r"#isub \.sb2\{[^}]*?background:(var\(--[\w-]+\))", SRC).group(1)
+    fills = {
+        "ok": re.search(r"#isub \.sb2 i\{[^}]*?background:(var\(--[\w-]+\))", SRC).group(1),
+        "warn": re.search(r"#isub \.srow\.warn \.sb2 i\{[^}]*?background:(var\(--[\w-]+\))", SRC).group(1),
+        "red": re.search(r"#isub \.srow\.red \.sb2 i\{[^}]*?background:(var\(--[\w-]+\))", SRC).group(1),
+    }
+    html = _gauge_js("""
+const now=Date.now()/1000+86400;
+const out={html:subsGauges({subs:[{label:'a',pct:10,resets:now},{label:'b',pct:80,resets:now},{label:'c',pct:95,resets:now}]})};
+""")["html"]
+    assert re.findall(r'<div class="(srow[^"]*)"', html) == ["srow", "srow warn", "srow red"], html
+    for state, fill in fills.items():
+        assert fill != track, f"the {state} fill reads as its own track"
