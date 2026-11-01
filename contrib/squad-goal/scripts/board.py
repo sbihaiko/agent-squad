@@ -29,6 +29,9 @@ read still shows on its old Status after an accepted write is the same lag, and 
 only reads, so a card another writer moved meanwhile is never moved back. A card that carried another Status before the write is
 read for at most SG_BOARD_OLD_SETTLE_SECONDS (default 10) of that bound: a write it never carries is likelier lost than late (#438).
 A move to the Status the card already carries is skipped: one read of the board, no PATCH, no proving read (#327).
+A writer that is not the owner's door (`SG_MOVE_BY` is not `owner`) never moves a card back along the axis, except the loop's own
+Doing-to-Todo unclaim: that move is refused, the card keeps its column and its issue gets the `rework` label, the refusal is logged
+to $SG_STATE/board-rejections.jsonl, and the exit is 3 (ADR-0143).
 Touches $SG_STATE/board-dirty so the hub refreshes within 2 s. Each move it proved is recorded in
 $SG_STATE/board-moves.json by that same step: one entry per item, the column it set, the instant and the dispatch context `SG_MOVE_BY` names (`owner` or `loop`, when set), replaced by a
 later move of the same item. The file is formed in a temp file beside it and renamed, so a reader sees the old record
@@ -36,6 +39,7 @@ or the new one, never a part-written one (ADR-0030). Each proved move also appen
 to `$SG_STATE/board-transitions.<owner>_<name>.jsonl`, the record of its repository (#897). A skipped or unproven move records nothing, and a holder or
 test-case write records nothing."""
 import json, os, pathlib, sys, time
+from board_columns import refused_for_automated
 from issue_state import KindGap, NotCarried, ReadFailure, board_state
 args = sys.argv[1:]; add = args[:1] == ["--add"]; run_fields = args[:1] == ["--run-fields"]; clear_run = args[:1] == ["--clear-run"]; test_case = args[:1] == ["--test-case"]; remove = args[:1] == ["--remove"]
 args = args[1:] if add or run_fields or clear_run or test_case or remove else args
@@ -71,9 +75,18 @@ if status not in F["opt"]: (st / f"rest-fields-{owner}-{num}.json").unlink(missi
 if status not in F["opt"]: sys.exit(f"no Status option {status!r}")
 try: carried, tries = state.read_all(), max(1, state.binding.attempts - 1)   # one read of the board for the whole move: a card that already carries the Status is not written (#327). It is one of the reads SG_BOARD_READ_ATTEMPTS bounds, so a write has one attempt fewer
 except (RuntimeError, ValueError): carried, tries = {}, state.binding.attempts   # a board that does not answer the read is written on, never blocked by it
-rc = 0; proved = []; transitions = []
+rc = 0; proved = []; transitions = []; refusals = []
+automated = os.environ.get("SG_MOVE_BY") != "owner"   # any writer that is not the owner's door is automated (ADR-0143)
 for n in nums:
     if carried.get(str(n)) == status: print(f"#{n} -> {status} (already carried, not written)"); continue   # no PATCH and no proving read: the read above is the proof
+    have = carried.get(str(n)) or None
+    if automated and refused_for_automated(have, status):   # a move back along the axis: the card keeps its column and carries rework (ADR-0143)
+        refusals.append({"issue": n, "from": have, "to": status, "by": os.environ.get("SG_MOVE_BY") or None, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+        print(f"#{n}: refused, an automated writer moves {have!r} back to {status!r}; the card keeps {have!r} and carries rework", file=sys.stderr)
+        if state.binding.repo:
+            try: state.binding.api("-X", "POST", f"repos/{state.binding.repo}/issues/{n}/labels", "-f", "labels[]=rework")
+            except RuntimeError as e: print(f"#{n}: the rework label write failed: {e}", file=sys.stderr)
+        continue
     try: iid = state.binding.item_id(n, add)
     except ReadFailure as e: print(f"#{n}: {e}", file=sys.stderr); rc = 1; continue   # the card is on the board and the read has not caught up: named, never "not on the board"
     except RuntimeError as e: print(f"#{n}: {e}", file=sys.stderr); rc = 1; continue   # the add GitHub refused twice, named: the caller logs it
@@ -123,4 +136,11 @@ if proved:   # the record and the refresh flag are one step: one move, one write
     lines += [json.dumps({**m, "at": at, "repo": state.binding.repo}, sort_keys=True) for m in transitions]
     tmp = t.with_name(f"{t.name}.{os.getpid()}.tmp")   # the whole record is rewritten beside itself and renamed: a reader never sees a part-written line (ADR-0030)
     tmp.write_text("\n".join(lines) + "\n"); os.replace(tmp, t)
-(st / "board-dirty").touch(); sys.exit(rc)
+if refusals:   # the refused moves, appended whole beside the record and renamed (ADR-0030); the exit 3 names them to the caller
+    r = st / "board-rejections.jsonl"
+    try: lines = r.read_text().splitlines()
+    except OSError: lines = []
+    lines += [json.dumps(x, sort_keys=True) for x in refusals]
+    tmp = r.with_name(f"{r.name}.{os.getpid()}.tmp")
+    tmp.write_text("\n".join(lines) + "\n"); os.replace(tmp, r)
+(st / "board-dirty").touch(); sys.exit(1 if rc else 3 if refusals else 0)

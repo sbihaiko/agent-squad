@@ -641,6 +641,9 @@ def board_write(args, n, why):   # the one writer of a card: a status write that
     if r.returncode:
         msg = (r.stderr or r.stdout or f"exit {r.returncode}").strip().splitlines()
         named = next((l for l in msg if l.startswith("#")), None)   # board.py prints a read note beside the refusal (#96): the refusal is the line that names the card
+        if r.returncode == 3:   # the seam refused a move back along the axis (ADR-0143): logged there, the card keeps its column, no comment
+            say(f"BOARD-REJECTED #{n}: {why}: {named or msg[0]}")
+            return False
         err = named or (msg[0] if msg else "no output")
         if gone_msg(err):
             say(f"GONE-ISSUE #{n}: board write refused because the issue is gone: {err}")

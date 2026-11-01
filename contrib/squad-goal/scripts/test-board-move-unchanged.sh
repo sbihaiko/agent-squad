@@ -10,7 +10,7 @@
 # Stubbed gh; a temp state dir, so the live board and the loop's cache are never read or written.
 # usage: bash test-board-move-unchanged.sh [board.py]
 src=${1:-$(dirname "$0")/board.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/bin" "$T/st"; cp "$src" "$T/s-board.py"; cp "$(dirname "$src")/issue_state.py" "$T/issue_state.py"
+mkdir -p "$T/bin" "$T/st"; cp "$src" "$T/s-board.py"; cp "$(dirname "$src")/issue_state.py" "$T/issue_state.py"; cp "$(dirname "$src")/board_columns.py" "$(dirname "$src")/board-definition.json" "$T/"
 printf '2001\tTodo\n2002\tDoing\n2003\tTodo\n' > "$T/cards.tsv"
 cat > "$T/bin/gh" <<'J'
 #!/bin/bash

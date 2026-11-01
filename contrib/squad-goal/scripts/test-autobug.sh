@@ -500,7 +500,7 @@ $G -qE 'jq: error' "$T/err218" && ko "11 the pass logged a jq parse error: $(cat
 # the door filed "refused BOARD-WRITE-FAILED ... gh: HTTP 500" as a bug. The real board.sh and board.py run here, and
 # the stub answers the board's first issue read with HTTP 500: the card is still written, and nothing is filed.
 rm -rf "$T/st/auto"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"; rm -f "$T"/st/owner-kind-* "$T"/st/rest-*
-cp "$d/autobug.sh" "$d/autohunt.sh" "$d/board.sh" "$d/board.py" "$d/issue_state.py" "$T/s/"   # board.py imports the seam
+cp "$d/autobug.sh" "$d/autohunt.sh" "$d/board.sh" "$d/board.py" "$d/issue_state.py" "$d/board_columns.py" "$d/board-definition.json" "$T/s/"   # board.py imports the seam
 printf '#!/bin/bash\necho %s/req.json\n' "$T" > "$T/s/mkreq.sh"
 printf 'import os\nopen(os.path.join("%s", "launched"), "w").close()\n' "$T" > "$T/s/launch.py"
 chmod +x "$T/s/mkreq.sh" "$T/s/launch.py"
@@ -640,7 +640,7 @@ case "$r" in *"[62]"*) ko "14 the bug pass picked an old-title run parent: '$r'"
 case "$r" in *"[61]"*) ok "14 an issue whose title only starts alike is still a candidate";; *) ko "14 a look-alike title was skipped: '$r'";; esac
 
 # 15) A frozen issue waits on its owner or on a dependency outside the repo: the bug pass skips it, as autofrontier does (#530).
-F=$T/frozen; mkdir -p "$F/bin"
+F=$T/frozen; mkdir -p "$F/bin"; todo 70 71 72 73
 cat > "$F/issues.json" <<'JSON'
 [
   {"number":70,"title":"Gateway drops a task","body":"x.py","created_at":"2026-10-10T15:00:00Z","labels":[{"name":"bug"},{"name":"ready-for-agent"},{"name":"frozen:dependency"}]},
@@ -654,6 +654,17 @@ r=$(PATH="$F/bin:$PATH" AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
 case "$r" in *"[70]"*) ko "15 the bug pass picked a frozen:dependency issue: '$r'";; *) ok "15 a frozen:dependency issue is not a bug candidate";; esac
 case "$r" in *"[71]"*) ko "15 the bug pass picked a frozen:owner issue: '$r'";; *) ok "15 a frozen:owner issue is not a bug candidate";; esac
 case "$r" in *"[72]"*) ok "15 a plain bug beside them is still a candidate";; *) ko "15 the plain bug was skipped: '$r'";; esac
+NS=$T/notstartable; mkdir -p "$NS/bin"; todo 69 72
+cat > "$NS/issues.json" <<'JSON'
+[
+  {"number":69,"title":"Bug the loop marked not startable","body":"v.py","created_at":"2026-10-10T14:59:00Z","labels":[{"name":"bug"},{"name":"ready-for-agent"},{"name":"frozen:not-startable"}]},
+  {"number":72,"title":"Plain bug","body":"z.py","created_at":"2026-10-10T15:02:00Z","labels":[{"name":"bug"},{"name":"ready-for-agent"}]}
+]
+JSON
+sed "s#$R/issues.json#$NS/issues.json#g" "$R/bin/gh" > "$NS/bin/gh"; chmod +x "$NS/bin/gh"
+r=$(PATH="$NS/bin:$PATH" AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+case "$r" in *"[69]"*) ko "15 the bug pass picked a frozen:not-startable issue: '$r'";; *) ok "15 a frozen:not-startable issue is not a bug candidate";; esac
+case "$r" in *"[72]"*) ok "15 the plain bug beside a frozen:not-startable one is dispatched";; *) ko "15 the plain bug was not dispatched beside a frozen:not-startable one: '$r'";; esac
 # 15b) (#537) a profile sets its own SG_BUG_SKIP_LABELS, and env.sh exports it: the frozen labels are a floor, never a default
 # a profile list replaces. The live profile named the four old labels, so the pass dispatched a frozen:dependency issue.
 r=$(PATH="$F/bin:$PATH" SG_BUG_SKIP_LABELS=needs-owner,no-auto,wontfix,question AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)

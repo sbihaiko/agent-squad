@@ -102,7 +102,7 @@ sg_issue_body() {
 lab=${SG_BUG_LABEL:-bug}; skip=${SG_BUG_SKIP_LABELS:-needs-owner,no-auto,wontfix,question}
 # The frozen labels autofrontier.sh skips too (#530) are a floor, never a default (#537): a profile sets its own
 # SG_BUG_SKIP_LABELS and env.sh exports it, so a default here never applied and a frozen:dependency issue was dispatched.
-skip="$skip,frozen:owner,frozen:dependency,needs-info"   # needs-info: a ticket waits on an answer (#729)
+skip="$skip,frozen:owner,frozen:dependency,frozen:not-startable,needs-info"   # needs-info: a ticket waits on an answer (#729)
 read -r free < <(cd "$SG_CHECKOUT" && python3 - "$SG_STATE/active-runs.txt" <<'PY'
 import os, re, sys, pathlib
 # The free slots come from the machine-wide ceiling caps.runs in squad/caps.py, the one resolution the engine enforces, lowered

@@ -280,6 +280,13 @@ r=$(run)
 [ "$(marked 52)" = 1 ] && ok "an entry without the marker goes out" || ko "#52 did not go out: '$r'"
 $G -qx 'b' "$MKLOG.body" && ok "the request pastes the body from the list" || ko "the request has no body from the list: '$(cat "$MKLOG.body")'"
 
+# Y: the frozen:not-startable label is the visible marker: an issue that carries it is skipped as the comment is, with no comment on it.
+scene frozennotstartable
+issues '[{"number":53,"title":"a","body":"b","labels":[{"name":"wave:01"},{"name":"frozen:not-startable"}],"comments":["a note"]},{"number":54,"title":"a","body":"b","labels":[{"name":"wave:01"}],"comments":["a note"]}]'
+r=$(run)
+[ "$(marked 53)" = 0 ] && ok "Y: an issue carrying frozen:not-startable is skipped" || ko "Y: the labelled #53 went out: '$r'"
+[ "$(marked 54)" = 1 ] && ok "Y: an issue without the hold label goes out" || ko "Y: #54 did not go out: '$r'"
+
 # V (#468): on the shipped vocabulary the dispatch writes Doing. "In Progress" is no column there, and the board refused it in
 # silence, so a dispatched card stayed on Todo until the janitor's next pass.
 scene vocab
