@@ -230,3 +230,42 @@ def test_the_mobile_subscription_row_says_when_it_resets():
     assert out.returncode == 0, out.stderr
     a, b = json.loads(out.stdout)
     assert a.startswith("resets in 6 h · ") and b == "reset unknown"
+
+
+# ---------------------------------------------------------------- review of #913: the phone header, a clean bar, a marked row
+
+def test_the_header_wraps_on_the_phone_so_the_page_never_scrolls_sideways(hub):
+    """At 390 px the header row held the four tabs and the pill on one line, 462 px wide (criterion 12)."""
+    _, port = hub
+    _, page = _get(port, "/")
+    phone = "".join(re.findall(r"@media \(max-width:600px\)\{(.*?)\}\s*(?:\n|$)", page, re.M))
+    assert re.search(r"header\.top\{[^}]*flex-wrap:wrap", phone), "the header does not wrap on the phone"
+    assert re.search(r"\.tabs\{[^}]*overflow-x:auto", phone), "the tabs can push the page wide on the phone"
+
+
+def _dirty_after(hub, steps):
+    return _node(hub, f"mdl={json.dumps(FIXTURE)};mdlSrv=JSON.stringify(mdl);{steps};"
+                      "console.log(JSON.stringify({c:mdlChanged(),d:mdlDiffLines(JSON.parse(mdlSrv),mdlOut(),MLAB)}))")
+
+
+def test_a_switch_off_and_on_again_leaves_nothing_to_save(hub):
+    got = _dirty_after(hub, 'mdlSetOffM("a",true);mdlSetOffM("a",false)')
+    assert got == {"c": False, "d": []}
+
+
+def test_a_row_removed_and_put_back_leaves_nothing_to_save(hub):
+    got = _dirty_after(hub, 'mdlRmToggle("review_models","a");mdlRmToggle("review_models","a")')
+    assert got == {"c": False, "d": []}
+    got = _dirty_after(hub, 'mdlSetEff("vision_models","z","");mdlSetHrs("vision_models","z","")')
+    assert got == {"c": False, "d": []}
+
+
+def test_a_removed_row_stays_marked_until_save_and_the_diff_drops_it(hub):
+    got = _node(hub, f"mdl={json.dumps(FIXTURE)};mdlSrv=JSON.stringify(mdl);mdlRmToggle(\"coding_models\",\"b\");mdlRender();"
+                     "const o=mdlOut();console.log(JSON.stringify({b:$(\"#mbody\").innerHTML,chain:mdl.coding_models,"
+                     "out:o.coding_models,hrs:(o.hours.coding_models||{}).b||null,c:mdlChanged()}))")
+    assert got["chain"] == ["a", "b"], "the row left the chain before Save"
+    assert got["out"] == ["a"] and got["hrs"] is None and got["c"] is True
+    row = re.search(r'<div class="mr[^"]*"[^>]*data-row="coding_models\|b"', got["b"])
+    assert row and " rmk" in row.group(0), "the removed row is not marked"
+    assert 'aria-label="undo remove b"' in got["b"]
