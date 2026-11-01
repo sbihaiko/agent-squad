@@ -12,14 +12,18 @@ from squad import profile_dataset, profiler
 
 ISSUE = "sbihaiko/agent-squad#7"
 OTHER_ISSUE = "sbihaiko/agent-squad#8"
+EMPTY_ISSUE = "sbihaiko/agent-squad#9"
+SUBSCRIPTION_MODEL = "claude:claude-opus-5-5"
+API_KEY_MODEL = "deepseek-flash"
 
 
 def make_row(run_id="run-1", phase="code", review_round=0, entry_index=1, attempt=1, issue=ISSUE,
-             outcome="accepted", tokens_in=10):
+             outcome="accepted", tokens_in=10, tokens_out=5, tokens_cache=None, tokens_src="record",
+             chain_id="chain-a", model_id="model-a"):
     row = dict(schema=profiler.SCHEMA, issue=issue, run_id=run_id, phase=phase, review_round=review_round,
-               chain_id="chain-a", entry_index=entry_index, model_id="model-a", provider="provider-a",
-               attempt=attempt, outcome=outcome, tokens_in=tokens_in, tokens_out=5, tokens_cache=None,
-               tokens_src="record", turns=2)
+               chain_id=chain_id, entry_index=entry_index, model_id=model_id, provider="provider-a",
+               attempt=attempt, outcome=outcome, tokens_in=tokens_in, tokens_out=tokens_out,
+               tokens_cache=tokens_cache, tokens_src=tokens_src, turns=2)
     row["key"] = profiler.key(row)
     return row
 
@@ -112,3 +116,66 @@ def test_a_row_the_contract_refuses_is_not_written(tmp_path):
 
     assert not profile_dataset.path(tmp_path, ISSUE).exists()
     assert not os.listdir(tmp_path)
+
+
+def test_the_chain_summary_groups_by_chain_and_phase_and_keeps_billing_apart(tmp_path):
+    for row in [
+        make_row(entry_index=1, model_id=SUBSCRIPTION_MODEL),
+        make_row(entry_index=2, model_id=API_KEY_MODEL),
+        make_row(entry_index=3, model_id="no-such-model"),
+        make_row(entry_index=4, phase="gate", model_id="none"),
+        make_row(entry_index=5, phase="review", model_id=SUBSCRIPTION_MODEL),
+        make_row(entry_index=6, chain_id="chain-b", model_id=SUBSCRIPTION_MODEL),
+    ]:
+        profile_dataset.append_row(tmp_path, row)
+
+    summary = profile_dataset.chain_summary(tmp_path, [ISSUE])
+
+    assert [(g["chain_id"], g["phase"], g["billing"], g["attempts"]) for g in summary] == [
+        ("chain-a", "code", "api_key", 1),
+        ("chain-a", "code", "subscription", 1),
+        ("chain-a", "code", "unknown", 1),
+        ("chain-a", "gate", "none", 1),
+        ("chain-a", "review", "subscription", 1),
+        ("chain-b", "code", "subscription", 1),
+    ]
+
+
+def test_a_chain_that_always_needs_a_second_attempt_reads_worse_on_first_try_whatever_its_tokens(tmp_path):
+    for entry in (1, 2):
+        for row in [
+            make_row(run_id="run-slow", entry_index=entry, attempt=1, outcome="refused", tokens_in=None,
+                     tokens_out=None, tokens_src="missing", chain_id="chain-slow", model_id=SUBSCRIPTION_MODEL),
+            make_row(run_id="run-slow", entry_index=entry, attempt=2, tokens_in=1, tokens_out=1,
+                     chain_id="chain-slow", model_id=SUBSCRIPTION_MODEL),
+            make_row(run_id="run-fast", entry_index=entry, tokens_in=100000, tokens_out=100000,
+                     chain_id="chain-fast", model_id=SUBSCRIPTION_MODEL),
+        ]:
+            profile_dataset.append_row(tmp_path, row)
+
+    groups = {g["chain_id"]: g for g in profile_dataset.chain_summary(tmp_path, [ISSUE])}
+
+    assert (groups["chain-slow"]["attempts"], groups["chain-slow"]["phase_runs"]) == (4, 2)
+    assert groups["chain-slow"]["first_try_rate"] == 0.0
+    assert groups["chain-fast"]["first_try_rate"] == 1.0
+    assert groups["chain-slow"]["tokens_in"] < groups["chain-fast"]["tokens_in"]
+
+
+def test_a_ticket_with_no_rows_contributes_nothing_and_is_not_counted_as_a_zero(tmp_path):
+    profile_dataset.append_row(tmp_path, make_row(model_id=SUBSCRIPTION_MODEL, tokens_in=10))
+    alone = profile_dataset.chain_summary(tmp_path, [ISSUE])
+
+    assert profile_dataset.chain_summary(tmp_path, [EMPTY_ISSUE]) == []
+    assert profile_dataset.chain_summary(tmp_path, [ISSUE, EMPTY_ISSUE]) == alone
+
+
+def test_a_row_with_no_token_count_adds_no_zero_to_the_sums(tmp_path):
+    profile_dataset.append_row(tmp_path, make_row(entry_index=1, model_id=SUBSCRIPTION_MODEL, tokens_in=None,
+                                                  tokens_out=None, tokens_src="missing"))
+    (only,) = profile_dataset.chain_summary(tmp_path, [ISSUE])
+    assert (only["tokens_in"], only["tokens_out"], only["tokens_cache"], only["tokens_missing"]) == (None, None, None, 1)
+
+    profile_dataset.append_row(tmp_path, make_row(entry_index=2, model_id=SUBSCRIPTION_MODEL, tokens_in=7,
+                                                  tokens_out=3, tokens_src="record"))
+    (both,) = profile_dataset.chain_summary(tmp_path, [ISSUE])
+    assert (both["attempts"], both["tokens_in"], both["tokens_out"], both["tokens_missing"]) == (2, 7, 3, 1)
