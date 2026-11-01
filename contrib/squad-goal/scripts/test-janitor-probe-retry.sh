@@ -34,8 +34,8 @@ cat > "$T/bin/gh" <<J
 a="\$*"; echo "\$a" >> "$T/gh.log"
 n=\$(printf '%s' "\$a" | sed -n 's/.*issue(number: \([0-9]*\)).*/\1/p')
 if [ -n "\$n" ] && [ -f "$T/issue-\$n.json" ]; then cat "$T/issue-\$n.json"; exit 0; fi
+case "\$a" in *"issues(states: OPEN"*) cat "$T/open.json"; exit 0;; esac
 case "\$a" in
-  *"issues?state=open"*) printf '[{"number":%s,"labels":[{"name":"probe"},{"name":"frozen:owner"}]}' 60 61 62 63 | sed 's/}{/},{/g; s/^/[/; s/^\[\[/[/'; echo ']';;
   *search/issues*) echo 0;;
   *projectsV2/4/fields*) echo FID4;;
   *projectsV2/4/items*) for n in 60 61; do printf '%s\tIn Progress\n' "\$n"; done;;
@@ -44,6 +44,8 @@ case "\$a" in
   *) printf '{}';;
 esac
 J
+# The open-issue list (the janitor's one read a pass): every probe is open, labelled probe and frozen for the owner.
+python3 -c 'import json; print(json.dumps({"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":False},"nodes":[{"number":n,"title":"t","body":"","state":"OPEN","labels":{"nodes":[{"name":"probe"},{"name":"frozen:owner"}]}} for n in (60,61,62,63)]}}}}))' > "$T/open.json"
 chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 mk() {   # <run> <issue> <spec>: a probe run whose acceptance command was unmet, ended long ago
   mkdir -p "$T/co/runs/$1"; echo "$1" >> "$T/st/active-runs.txt"; printf 'CHILD — GitHub issue(s) %s (one PR):\n' "$2" > "$T/co/runs/$1/request.txt"

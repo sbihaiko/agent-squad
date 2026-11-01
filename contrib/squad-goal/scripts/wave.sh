@@ -5,6 +5,7 @@
 #        wave.sh expired <run>        exit 0 when the run's wave reached its age cap (SG_WAVE_MAX_AGE_SECONDS)
 #        wave.sh requeue <issue> <why> [cap]  the child never enters: its issue goes back to the queue and the loop builds it again
 #        wave.sh fail <issue> <run> <why>     the run ended with nothing delivered for the issue: one failed dispatch (#609)
+#        wave.sh probe-retry <issue>  the janitor sends again a probe's refutation that failed for a transient cause (#888)
 #        (a `probe` ticket whose run left its acceptance command unmet refutes its premise instead, in fail and requeue: #888)
 #
 # One branch per wave (ADR-0145). A wave is the set of children that land in $SG_BASE (`dev`) together, and its branch is the
@@ -356,11 +357,12 @@ premise_check() {
 # is not requeued and not counted: a refutation is the probe's answer, not a failed dispatch. premise-check exits 75 when gh
 # or I/O failed: the line then carries `WAVE PROBE-RETRY`, which the janitor reads to leave the run uncounted, so its next
 # pass calls `fail` again and the refutation is sent again (premise-check answers a premise it already records refuted as a
-# no-op). Any other refusal (the premise was never recorded as needs a probe) cannot change, so it is named to the owner on
+# no-op). The failure also leaves auto/probe-retry-<issue> (spec, premise, run): rule O never reads a child that entered its
+# wave, so a `requeue` failure is sent again by the janitor's probe sweep (`probe-retry`) instead. Any other refusal (the premise was never recorded as needs a probe) cannot change, so it is named to the owner on
 # the probe, as `WAVE PROBE-REFUSED`, and never retried (ADR-0134). The probe is not frozen twice. Any other ticket, a run
 # that met its gate, or an issue read that does not answer returns 1.
 probe_refuted() {
-  local n=$1 run=$2 j t state spec premise out rc why f
+  local n=$1 run=$2 j t state spec premise
   { [ -n "$run" ] && gate_failed "$run"; } || return 1
   j=$(gh_api "repos/$SG_REPO/issues/$n") || return 1
   t=$(printf '%s' "$j" | python3 -c 'import json,re,sys
@@ -374,18 +376,40 @@ print("frozen" if "frozen:owner" in names else "open"); print(p.group(1) if p el
   if [ -z "$spec" ] || [ -z "$premise" ]; then
     [ "$state" = frozen ] || freeze_owner "$n"; echo "WAVE PROBE #$n: its acceptance command is unmet, but it names no Premise line or no Parent spec: frozen for the owner (run $run)"; return 0
   fi
+  refute "$n" "$spec" "$premise" "$run"
+  [ "$state" = frozen ] || freeze_owner "$n"; return 0
+}
+
+# refute <issue> <spec> <premise> <run>: one `premise-check <spec> --refute <premise>` and its one line. Exit 75 (gh or I/O)
+# leaves auto/probe-retry-<issue>, which the janitor's probe sweep sends again; a refutation recorded, or refused for good,
+# drops it. A refusal is named to the owner on the probe once.
+refute() {
+  local n=$1 spec=$2 premise=$3 run=$4 out rc why f m="$SG_STATE/auto/probe-retry-$1"
   out=$(premise_check "$spec" --refute "$premise" --repo "$SG_REPO" 2>&1); rc=$?
   why=$(printf '%s' "$out" | tail -1)
+  if [ "$rc" -eq 75 ]; then
+    mkdir -p "$SG_STATE/auto" && printf '%s\n%s\n%s\n' "$spec" "$premise" "$run" > "$m.tmp" && mv "$m.tmp" "$m"
+    echo "WAVE PROBE-RETRY #$n: the refutation of '$premise' on spec #$spec failed for a transient cause: $why; frozen for the owner, and the next janitor pass sends it again (run $run)"
+    return 0
+  fi
+  rm -f "$m"
   if [ "$rc" -eq 0 ]; then
     echo "WAVE PROBE #$n: refuted '$premise' on spec #$spec, which goes back to the check; the probe stays open, frozen for the owner (run $run)"
-  elif [ "$rc" -eq 75 ]; then
-    echo "WAVE PROBE-RETRY #$n: the refutation of '$premise' on spec #$spec failed for a transient cause: $why; frozen for the owner, and the next janitor pass sends it again (run $run)"
   else
     echo "WAVE PROBE-REFUSED #$n: premise-check refused the refutation of '$premise' on spec #$spec: $why; frozen for the owner, never retried (run $run)"
     f=$(sg_cq_file "$n-probe$$.md" 2>/dev/null) && printf 'This probe ended with its acceptance command unmet (run %s), but `squad premise-check %s --refute` refused its premise "%s": %s\n\nThe same refusal cannot change, so the loop does not retry it. The probe stays open, frozen for the owner, who settles the premise on spec #%s.\n' \
       "$run" "$spec" "$premise" "$why" "$spec" > "$f"
   fi
-  [ "$state" = frozen ] || freeze_owner "$n"; return 0
+}
+
+# probe_retry <issue>: the janitor's probe sweep sends a refutation auto/probe-retry-<issue> names again (#888). The janitor
+# calls it only for an open probe frozen for the owner; a marker with no spec or premise is dropped.
+probe_retry() {
+  local n=${1:?probe-retry: an issue is required} spec premise run m
+  m="$SG_STATE/auto/probe-retry-$n"; [ -f "$m" ] || return 0
+  { read -r spec; read -r premise; read -r run; } < "$m"
+  { [ -n "$spec" ] && [ -n "$premise" ]; } || { rm -f "$m"; return 0; }
+  refute "$n" "$spec" "$premise" "$run"
 }
 
 requeue() {   # <issue> <why> [cap]: the child never entered, so its issue goes back to the queue and the loop can build it again.
@@ -903,5 +927,6 @@ case "${1:-}" in
   expired) shift; expired "$@";;
   requeue) shift; requeue "$@";;
   fail) shift; fail "$@";;
-  *) echo "usage: wave.sh start <run> | wave.sh enter <run> <issue> | wave.sh land <run> | wave.sh expired <run> | wave.sh requeue <issue> <why> [cap] | wave.sh fail <issue> <run> <why>" >&2; exit 2;;
+  probe-retry) shift; probe_retry "$@";;
+  *) echo "usage: wave.sh start <run> | wave.sh enter <run> <issue> | wave.sh land <run> | wave.sh expired <run> | wave.sh requeue <issue> <why> [cap] | wave.sh fail <issue> <run> <why> | wave.sh probe-retry <issue>" >&2; exit 2;;
 esac
