@@ -9,7 +9,7 @@ the load's and not the code's; it delays every card behind the tip; and when it 
 is exactly the state the rule was written to avoid. The owner named the fifteen-minute bound, and named the trade: be
 optimistic about the part no test reached, and find it in production.
 
-Only a tip the delta cannot carry at all stays indeterminate, and a later pass retries it.
+Only a tip the delta cannot carry at all stays indeterminate: it is promoted with a marker naming what no test reached, and a later pass proves it ([ADR-0164](0164-delivery-outranks-the-proof.md)).
 
 The bound covers the whole attempt, never one step of it. The delta proof, the fallback and the promotion all spend from
 the same fifteen minutes: the suite is bounded at what the attempt has left once the fallback keeps its share, and the
