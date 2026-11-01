@@ -65,7 +65,7 @@ ${last?`<div class=row><b>Last events</b><span>${last} <a href="#" data-rkt="tr"
 <div class=sec>Nodes</div><div class=rkn>${nodes||"<span class=m>no node yet</span>"}</div>
 <div class=sec>Models</div><div class=mt2>${rows||"<span class=m>no model call yet</span>"}${rows?`<div class="mrow tot"><b>Total</b><span class="r">${rkUsd(m.total.usd)}</span><small>${m.total.calls} calls</small></div>`:""}</div>
 <p class=m>A node or a model row filters the trace.</p>`}
-function rkTrace(m,f){const nodes=[...new Set(m.ev.map(e=>e.n))],mods=[...new Set(m.ev.map(e=>e.m).filter(Boolean))],rows=rkFilter(m.ev,f);
+function rkTrace(m,f){const nodes=[...new Set([...m.nodes.map(x=>x.n),...m.ev.map(e=>e.n)])],mods=[...new Set(m.ev.map(e=>e.m).filter(Boolean))],rows=rkFilter(m.ev,f);
   const sel=(k,lab,opts)=>`<label>${lab} <select data-rkf="${k}" aria-label="filter by ${lab}"><option value="">all</option>${opts.map(([v,t])=>`<option value="${rkEsc(v)}"${f[k]===v?" selected":""}>${rkEsc(t)}</option>`).join("")}</select></label>`;
   return `<div class=trf>${sel("n","node",nodes.map(n=>[n,n]))}${sel("m","model",mods.map(x=>[x,x]))}${sel("l","level",[["gate","gate"],["warn","warn + error"],["error","error"]])}${f.n||f.m||f.l?`<button data-rkf="clear">clear</button>`:""}<span class=m>${rows.length} of ${m.ev.length} · newest first</span></div>
 <div class=trl role=list>${rows.map(e=>`<div class="te ${e.l}" role=listitem><span class=tt>${rkEsc(e.t)}</span><span class=tn>${rkEsc(e.n)}</span><span class=tm>${rkEsc(e.m)}</span><span class=tv>${[e.tk,e.usd].filter(Boolean).join(" · ")}</span><span class=tx><span class="lv ${e.l}">${e.l}</span>${rkEsc(e.x)}</span></div>`).join("")||"<p class=m>No event matches these filters.</p>"}</div>`}

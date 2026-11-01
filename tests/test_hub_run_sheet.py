@@ -218,3 +218,10 @@ def test_the_runs_tab_lists_runs_that_open_the_sheet(hub):
     draw = draw[:draw.index("\n}\n")]
     assert "data-rid=" in draw and "iframe" not in draw
     assert re.search(r'\$\("#main"\)\.addEventListener\("click"[^\n]*openRun\(', page)
+
+
+def test_a_plan_node_with_no_event_is_still_a_trace_filter_option():
+    rec = [{"event": "run_start", "plan": ["main", "router"], "graph_name": "g", "ts": T0},
+           {"event": "call_start", "node": "router", "entry": 0, "ts": T0 + 1}]
+    h = _node("const m=rkModel(%s,%s);console.log(JSON.stringify(rkHtml(m,'tr',{n:'main'})));" % (json.dumps(ROW_LIVE), json.dumps(rec)))
+    assert '<option value="main" selected>' in h, "a node picked in the Overview is missing from the node filter"
