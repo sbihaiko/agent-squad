@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 
 import anyio
 
+from squad import modelreg
 from squad.adapter import AdapterError, MessageOverCeiling
 from squad.budget import measured_tokens
 
@@ -164,10 +165,14 @@ class CallOutcome:
     reasons: list = field(default_factory=list)
 
 
-async def run_call(source, deadline, make_request, *, adapter, record, budget, clock, wall,
-                   prepare=None, on_deadline=None, on_cancel=None):
+async def run_call(source, deadline, make_request, *, chain, adapter, record, budget, clock, wall,
+                   registry=None, prepare=None, on_deadline=None, on_cancel=None):
     """Reserve from `source()`, run the call, settle once. `make_request(res)` builds the CallRequest.
 
+    `chain` is the ordered models this call may answer on, already led by its pick and with the spent and hours-closed
+    entries left out: the record states it beside the call, as registry ids (`modelreg.chain_ids`) and one hash of that
+    order (`modelreg.chain_sha256`), so a reader never rebuilds it from a later configuration (SPEC 1035). `registry` is
+    the registry those ids resolve through; None is the committed one.
     `prepare(res)` may refuse with a list of reasons before the call starts; the grant is released.
     `on_deadline(res, elapsed)` and `on_cancel(res, elapsed)` write the caller's event after the settle.
     """
@@ -185,8 +190,10 @@ async def run_call(source, deadline, make_request, *, adapter, record, budget, c
     req = make_request(res)
     t0, box, hit = clock(), {}, []
     done = anyio.Event()
+    ids = modelreg.chain_ids(chain, registry)
     record.append("call_start", node=req.node, entry=req.entry, item=req.item, session=req.session_id,
-                  pid=os.getpid(), limit=None if deadline == math.inf else deadline, started_at=wall())
+                  pid=os.getpid(), limit=None if deadline == math.inf else deadline, started_at=wall(),
+                  chain=ids, chain_id=modelreg.chain_sha256(ids))
 
     async def runner():
         try:

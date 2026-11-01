@@ -248,7 +248,7 @@ class Children:
         chain = session.model_chain(models, first, spent, hours, hour, km or e.options.get("model_order") or [])
         for m, why in session.hours_skipped(models, first, spent, hours, hour):    # an entry left out of its window is on the record
             e.record.append("model_skipped", node=name, entry=entry, model=m, reason=why)
-        out, tried, model = await session.run_chain(chain, lambda m, first: self.attempt(name, d, ws, dl, m, slot, first and entry == 1, entry, review, repeated))
+        out, tried, model = await session.run_chain(chain, lambda m, first: self.attempt(name, d, ws, dl, m, slot, first and entry == 1, entry, review, repeated, chain=chain))
         for m, err in tried:    # every refusal is on the record, exhausted chain or not (#494)
             e.record.append("model_refused", node=name, entry=entry, model=m, error=err[:session.CHAIN_LINE])
             limits.write(m, err)    # a refusal that names its reset closes that account until then (#572)
@@ -256,7 +256,7 @@ class Children:
             return slot["ev"]
         return self.close(ctx, name, d, ws, out, model, session.chain_message(tried) if session.exhausted(chain, tried) else None, entry)
 
-    async def attempt(self, name, d, ws, dl, model, slot, first, entry=1, review=None, repeated=False):
+    async def attempt(self, name, d, ws, dl, model, slot, first, entry=1, review=None, repeated=False, chain=()):
         """One model's call for one child: the worktree is cut for the first attempt, and a later entry reuses it."""
         e = self.e
 
@@ -268,7 +268,8 @@ class Children:
 
         out = await session.run_call(
             lambda: e.dispatch.held.pop(name, None) or e.budget.hold(d["spend"], d.get("spend_tokens")),   # a resume checks the funding again
-            dl, lambda res: self.request(name, d, res, ws, dl, model, entry, review, repeated), adapter=e.adapter, record=e.record, budget=e.budget, clock=e.clock,
+            dl, lambda res: self.request(name, d, res, ws, dl, model, entry, review, repeated), adapter=e.adapter, chain=chain, registry=e._registry(),
+            record=e.record, budget=e.budget, clock=e.clock,
             wall=e.wall, prepare=(lambda res: self.prepare(name, d, dl)) if first else None,
             on_deadline=hit_deadline, on_cancel=cancelled)
         return out, model

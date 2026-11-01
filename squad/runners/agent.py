@@ -64,7 +64,7 @@ class AgentRunner:
         eff, deadline, slot = ctx.eff.agent(node), ctx.call_deadline(node, sc), {}
         fin = lambda *a, **kw: ctx.finish(node, entry, sc, *a, **kw)    # noqa: E731
         eff, chain = self.chain(ctx, node, entry, eff)
-        out, tried, who = await session.run_chain(chain, lambda m, first: self.attempt(ctx, node, entry, sc, eff, deadline, m, slot, fin))
+        out, tried, who = await session.run_chain(chain, lambda m, first: self.attempt(ctx, node, entry, sc, eff, deadline, m, slot, fin, chain=chain))
         for m, err in tried:    # every refusal is on the record, exhausted chain or not (#494)
             ctx.record.append("model_refused", node=node["name"], entry=entry, model=m, error=err[:session.CHAIN_LINE])
             limits.write(m, err)    # a refusal that names its reset closes that account until then (#572)
@@ -99,7 +99,7 @@ class AgentRunner:
             ctx.record.append("model_skipped", node=node["name"], entry=entry, model=m, reason=why)
         return eff, chain
 
-    async def attempt(self, ctx, node, entry, sc, eff, deadline, model, slot, fin):
+    async def attempt(self, ctx, node, entry, sc, eff, deadline, model, slot, fin, chain=()):
         """One model's call for this node entry. The next entry of the chain answers after one that refused to serve."""
         who = {"model": model, "effort": eff["effort"]}      # the attempt's own model: it names the outcome and any stop
 
@@ -117,6 +117,7 @@ class AgentRunner:
 
         out = await session.run_call(
             lambda: ctx.budget.reserve(eff["spend_max"], node["budget"]["spend"]["min"], node["budget"]["spend"].get("max_tokens")), deadline, make, adapter=ctx.adapter,
+            chain=chain, registry=ctx.model_registry,
             record=ctx.record, budget=ctx.budget, clock=ctx.clock, wall=ctx.wall, on_deadline=hit_deadline, on_cancel=cancelled)
         return out, who
 

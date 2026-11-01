@@ -55,6 +55,11 @@ class RunCtx:
     def model_order(self):
         return self._e.options.get("model_order") or []
 
+    @property
+    def model_registry(self):
+        """The registry this run resolves model spellings through: a call states its chain in these ids (SPEC 1035)."""
+        return self._e._registry()
+
     def local_hour(self):
         return time.localtime(self._e.wall()).tm_hour
 
