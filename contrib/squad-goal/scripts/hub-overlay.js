@@ -92,10 +92,10 @@ html.sq-docked body{margin-right:var(--sq-dock)}
 .sq-ov-fsb{font:600 13px/1 system-ui;min-width:34px;height:34px;padding:0 6px}
 #sq-ov-log{flex:1;min-height:0;overflow:auto;padding:13px 14px}
 #sq-ov-log .sq-empty{color:#b8c0cf}
-.sq-turn{margin:0 0 12px;padding:0;border-left:0;line-height:1.4;text-indent:0}
+.sq-turn{margin:0 0 12px;padding:0;border-left:0;line-height:1.55;text-indent:0}
 .sq-who{display:block;font-family:var(--sq-mono);font-size:10px;line-height:1.2;color:#707988;margin-bottom:2px;letter-spacing:.02em}
 .sq-txt{white-space:pre-wrap;overflow-wrap:anywhere;font-family:var(--sq-mono);font-size:var(--sq-fs);color:#c9d1d9}
-.sq-p{margin:0 0 6px}.sq-p:last-child{margin-bottom:0}
+.sq-p{margin:0 0 8px}.sq-p:last-child{margin-bottom:0}
 .sq-owner{margin:0 0 10px;border:1px solid #3a4250;border-radius:7px;padding:7px 10px}
 .sq-owner .sq-who{color:#8b949e;font-size:11px}.sq-owner .sq-txt{color:#e6edf3}
 .sq-system .sq-who{color:#565d69;font-size:11px}.sq-system .sq-txt{color:#8b949e;font-style:italic}
