@@ -8,7 +8,9 @@
 #rk a.btn{display:inline-flex;align-items:center;padding:3px 12px;border:1px solid var(--line);border-radius:6px;color:var(--fg);text-decoration:none}
 #rk .chip{border-radius:9px;padding:0 7px;font-size:var(--fs-min);font-weight:600;border:1px solid var(--line);color:var(--mute)}
 #rk .chip.live{border-color:var(--run);color:var(--run)}
-#rkchips{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+#rkchips{display:flex;gap:6px;flex:1 1 auto;min-width:0;align-items:center}
+#rkchips .chip{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+#rkchips .chip[title]{max-width:150px}
 #rkb{flex:1;min-height:0;overflow:auto;padding:12px 16px}
 #rkb h2{font:600 var(--fs-md)/1.35 -apple-system,system-ui,sans-serif;margin:4px 0 8px}
 #rkb a{color:var(--acc)}
