@@ -128,3 +128,49 @@ def test_a_mobile_card_wears_its_spec_color_and_wave_chip():
     assert "specColor(mSlots(), l.num)" in head, "the mobile lane header does not take the spec color"
     lid = re.findall(r"\.lane-h \.lid\{([^}]*)\}", page)
     assert lid and "color:var(--lc" in lid[-1], "the last lane id rule does not draw the spec color"
+
+
+SPEC_BOARD = {"t": 1, "err": None, "labels": [], "lc": {}, "cases": [], "flow": None,
+              "groups": [{"name": "Todo", "n": 2, "items": [
+                  {"n": 918, "t": "a ticket of 917", "pa": 917, "l": ["wave:1"]},
+                  {"n": 891, "t": "a ticket of 890", "pa": 890, "l": ["wave:1"]}]}]}
+
+
+@pytest.fixture(scope="module")
+def mobile_hub():
+    import os
+    import tempfile
+    from tests.test_hub_mobile_move import _module
+    os.environ.setdefault("SG_REPO", "x/y")
+    os.environ.setdefault("SG_OWNER", "x")
+    os.environ.setdefault("SG_PROJECT", "4")
+    os.environ.setdefault("SG_CHECKOUT", tempfile.mkdtemp())
+    os.environ["SG_HUB_DIR"] = tempfile.mkdtemp()
+    return _module("hub_spec_colors_mobile", HUB_PY)
+
+
+@pytest.mark.node_bound
+def test_a_mobile_lane_id_wears_the_color_its_cards_wear(mobile_hub):
+    """The served page draws a board whose specs are not in slot order (890 and 917 take --s3 and --s6, not --s1 and
+    --s2). Each lane id resolves to the same slot as the cards of its lane: an inline color on the id beats --lc."""
+    from tests.test_hub_mobile_move import run_page
+    out = run_page(mobile_hub.MOBILE_PAGE, """
+      await loadBoard();
+      const res = {};
+      let lane = null;
+      for (const el of $("cards").children) {
+        if (el.classList.contains("lane-h")) {
+          const lid = el.querySelector(".lid");
+          const lc = ((el.getAttribute("style") || "").match(/--lc:([^;]*)/) || [])[1] || null;
+          lane = el.dataset.lane;
+          res[lane] = { id: lid.style.color || lc, cards: [] };
+        } else if (el.dataset.role === "card") {
+          res[lane].cards.push(((el.getAttribute("style") || "").match(/--lc:([^;]*)/) || [])[1] || null);
+        }
+      }
+      return res;
+    """, board=[SPEC_BOARD])
+    assert len(out) == 2, out
+    for lane, r in out.items():
+        assert r["cards"] and all(c == r["id"] for c in r["cards"]), f"lane {lane}: id {r['id']} vs cards {r['cards']}"
+    assert {r["id"] for r in out.values()} == {"var(--s3)", "var(--s6)"}, out
