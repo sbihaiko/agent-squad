@@ -179,7 +179,7 @@ def _answer(root, base):
         if not hits:
             _all(f"{rel} is reached by no test: no import, no path literal, not inert")
         selected |= hits
-    return sorted(selected)
+    return sorted(rel for rel in selected if (root / rel).exists())   # pytest cannot run a path the tip deleted
 
 
 def main(argv=None):

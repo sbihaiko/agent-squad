@@ -71,9 +71,10 @@ def test_a_changed_test_file_selects_itself(tmp_path):
     assert select(repo) == ["tests/test_gamma.py"]
 
 
-def test_a_deleted_test_file_is_selected_as_changed(tmp_path):
+def test_a_deleted_test_file_selects_nothing_because_pytest_cannot_run_a_missing_path(tmp_path):
+    """A path absent at the tip made the gate's pytest collect nothing (exit 5), so the gate was inconclusive and held."""
     repo = tip(tmp_path, {"tests/test_gamma.py": None})
-    assert select(repo) == ["tests/test_gamma.py"]
+    assert select(repo) == []
 
 
 def test_a_deleted_squad_module_selects_the_tests_that_still_import_it(tmp_path):
@@ -81,9 +82,9 @@ def test_a_deleted_squad_module_selects_the_tests_that_still_import_it(tmp_path)
     assert select(repo) == ["tests/test_alpha.py", "tests/test_beta.py"]
 
 
-def test_a_renamed_test_file_selects_the_old_and_the_new_path(tmp_path):
+def test_a_renamed_test_file_selects_only_the_new_path(tmp_path):
     repo = tip(tmp_path, {"tests/test_gamma.py": None, "tests/test_delta.py": "from squad.gamma import VALUE\n"})
-    assert select(repo) == ["tests/test_delta.py", "tests/test_gamma.py"]
+    assert select(repo) == ["tests/test_delta.py"]
 
 
 @pytest.mark.parametrize("path", [
