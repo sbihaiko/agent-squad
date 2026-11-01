@@ -327,12 +327,38 @@ function show(name) {
   else moreScreen = null;
   if (name === "runs") loadRuns();
   if (name === "terminals") loadSessions();
+  if (name === "monitor") { status(); loopView(); loadPoll(); }
 }
 tabs.forEach(b => b.onclick = () => show(b.dataset.tab));
 
-async function call(path) {
+// One read per endpoint in flight, with a deadline (#1004). A poll joins the read of its path already in flight; `fresh`
+// (the read after a write) or another query on the endpoint aborts it. An answer older than the endpoint's last request
+// is dropped: its promise never settles, so it never draws over newer state.
+const CALL_MS = 8000, inFlight = {}, callSeq = {};
+function call(path, fresh) {
+  const ep = String(path).split("?")[0], cur = inFlight[ep];
+  if (cur && cur.path === path && !fresh) return cur.p;
+  if (cur && cur.ctl) cur.ctl.abort();
+  const seq = callSeq[ep] = (callSeq[ep] || 0) + 1;
+  const ctl = typeof AbortController === "function" ? new AbortController() : null;
+  let timer;
+  const late = new Promise((_, no) => {
+    timer = setTimeout(() => {
+      if (ctl) ctl.abort();
+      const e = new Error("The hub did not answer in " + CALL_MS / 1000 + " s. Check Tailscale and that the machine is awake.");
+      e.down = true; no(e);
+    }, CALL_MS);
+  });
+  const drop = () => new Promise(() => {});
+  const p = Promise.race([readHub(path, ctl), late])
+    .finally(() => { clearTimeout(timer); if (inFlight[ep] && inFlight[ep].seq === seq) delete inFlight[ep]; })
+    .then(v => seq === callSeq[ep] ? v : drop(), e => { if (seq !== callSeq[ep]) return drop(); throw e; });
+  inFlight[ep] = { path, seq, ctl, p };
+  return p;
+}
+async function readHub(path, ctl) {
   let r;
-  try { r = await fetch(path, { cache: "no-store" }); }
+  try { r = await fetch(path, ctl ? { cache: "no-store", signal: ctl.signal } : { cache: "no-store" }); }
   catch (e) { const down = new Error("The hub does not answer. Check Tailscale and that the machine is awake."); down.down = true; throw down; }
   if (r.status === 403) throw new Error("The hub refused this login: " + (await r.text()).trim());
   if (!r.ok) throw new Error("The hub answered " + r.status + ".");
@@ -387,21 +413,24 @@ async function loadPoll() {
   catch (e) { markStale(e.message || "the load read failed."); }
 }
 function monitorTick() { if (!loadStale) inst.instTick(); }
+// A poll runs only while the app is in view and its panel is shown (#1004); a panel that opens reads at once (show).
+const pollOk = name => !document.hidden && !document.querySelector('[data-panel="' + name + '"]').hidden;
+const every = (name, fn, ms) => setInterval(() => { if (pollOk(name)) fn(); }, ms);
 loadPoll();
-setInterval(loadPoll, 5000);
+every("monitor", loadPoll, 5000);
 setInterval(monitorTick, 1000);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/mobile/sw.js", { scope: "/mobile/" }).catch(() => {});
 status();
-setInterval(status, 5000);
+every("monitor", status, 5000);
 
 let loopNow = { runs: [], gates: [] };
 const loopWhen = s => { const m = String(s || "").match(/^(\d{4}-\d\d-\d\d)T(\d\d:\d\d)/); return m ? m[1] + " " + m[2] : String(s || ""); };
 // a read-only view and a failed start: both reasons show (#923)
 const loopReason = v => [v.reason, v.failed ? "The last start failed: " + v.failed : ""].filter(Boolean).join(". ");
 const loopLive = l => (l.runs || []).map(r => "run " + r.split("/").pop()).concat(l.gates || []);
-async function loopView() {
+async function loopView(fresh) {
   try {
-    const v = await call("/api/loop");
+    const v = await call("/api/loop", fresh);
     $("loop").className = v.state;
     $("loop-text").textContent = v.state + (v.who ? " - changed by " + v.who + " at " + loopWhen(v.when) : "");
     const can = v.actions || [];   // the hub names the allowed actions; this page holds no state rule
@@ -426,7 +455,7 @@ async function loopAct(action, extra) {
     if (action === "stop-now") $("loop-reason").textContent = "Stopped. Killed: " + (loopLive(out.killed).join(", ") || "nothing") + "." + (out.survived ? " Not ended: " + loopLive(out.survived).join(", ") + "." : "");
   } catch (e) { $("loop-reason").textContent = e.message; }
   $("loop-confirm").hidden = true;
-  loopView();
+  loopView(true);
 }
 $("loop-start").onclick = () => loopAct("start");
 $("loop-drain").onclick = () => loopAct("drain");
@@ -438,7 +467,7 @@ $("loop-now").onclick = () => {
 $("loop-confirm-go").onclick = () => loopAct("stop-now", { confirm: true });
 $("loop-confirm-no").onclick = () => { $("loop-confirm").hidden = true; };
 loopView();
-setInterval(loopView, 5000);
+every("monitor", loopView, 5000);
 
 let board = null, shown = [], issueKey = "", touch = null, seenCards = null, freshNow = new Set(), offBoard = null;   // offBoard: a card the board does not hold, a closed one, read by its issue alone (#972)
 const cardKey = x => (x.r || "") + "#" + x.n;
@@ -450,7 +479,12 @@ let bo = JSON.parse(localStorage.getItem("squad-mobile-board") || "{}");
 const saveB = () => localStorage.setItem("squad-mobile-board", JSON.stringify(bo));
 const rolesOf = el => { const out = []; for (let e = el; e; e = e.parentElement) if (e.dataset && e.dataset.role) out.push(e.dataset.role); return out; };
 // One palette slot per spec on the whole board (#917), so a spec keeps its color on every column.
-const mSlots = () => specSlots(((board && board.groups) || []).flatMap(g => g.items.map(cardSpec)).filter(n => n != null));
+// It is derived once per board read (#1004), never once per card.
+let slotsOf = null, slots = null;
+const mSlots = () => {
+  if (slotsOf !== board || !slots) { slotsOf = board; slots = specSlots(((board && board.groups) || []).flatMap(g => g.items.map(cardSpec)).filter(n => n != null)); }
+  return slots;
+};
 const columnCards = g => g.items.filter(x => labelOk(bo.labels || [], bo.lmode, x) && spOk(x));
 function cardButton(x, i) {
   const b = document.createElement("button");
@@ -491,6 +525,7 @@ function laneHeader(l) {
   h.append(tw, id, tt, pc);
   return h;
 }
+let cardNodes = new Map();   // card key -> {sig, el}: the nodes the last render drew
 function renderBoard() {
   const groups = board && board.groups ? board.groups : [];
   // With the filter on (the default), a column with no visible card is left out and named in one list (#877).
@@ -520,17 +555,24 @@ function renderBoard() {
   // Each lane heads its cards; a collapsed lane shows its header only. The card index counts the cards the column draws.
   // Only a card new to the board on this board read fades in (loadBoard names it), so a column switch, a filter change
   // and the poll never play the fade again.
-  const fresh = freshNow;
+  const fresh = freshNow, next = new Map();
   const nodes = [];
   let i = 0;
   for (const l of model.lanes) {
     nodes.push(laneHeader(l));
     if (!l.collapsed) for (const x of l.cards) {
-      const b = cardButton(x, i++);
-      if (fresh.has(cardKey(x))) b.classList.add("cin");
+      // A card whose data, place, reason and color did not change keeps its node (#1004); only a changed card is rebuilt.
+      const k = cardKey(x), isNew = fresh.has(k);
+      const sig = JSON.stringify([x, i, reasons[x.n] || null, specColor(mSlots(), cardSpec(x)), isNew]);
+      const old = cardNodes.get(k);
+      const b = old && old.sig === sig && !isNew ? old.el : cardButton(x, i);
+      i++;
+      if (isNew) b.classList.add("cin");
       nodes.push(b);
+      next.set(k, { sig, el: b });
     }
   }
+  cardNodes = next;
   $("cards").replaceChildren(...(nodes.length ? nodes : [empty]));
 }
 // The sheet draws the card data the board read already holds (#919): the row carries the blockers, the cards it blocks,
@@ -655,9 +697,9 @@ function renderFilters() {
 }
 const refresh = () => { renderBoard(); renderSheet(); renderFilters(); };
 const step = g => { offBoard = null; view = sheetStep(view, shown, g); refresh(); };
-async function loadBoard() {
+async function loadBoard(fresh) {
   try {
-    const b = await call("/api/board");
+    const b = await call("/api/board", fresh);
     if (!b.groups) throw new Error(b.error || "The board is not ready.");
     board = b;
     // The seen set holds every card key a board read gave in this page session, so only a card new to the board fades.
@@ -671,7 +713,7 @@ async function loadBoard() {
     freshNow = new Set();
   } catch (e) { $("bmsg").textContent = e.message; }
 }
-setInterval(() => { if (!document.querySelector('[data-panel="board"]').hidden) loadBoard(); }, 10000);
+every("board", loadBoard, 10000);
 
 $("bsp").onclick = () => { bo.specs = (specMode() + 1) % 3; saveB(); refresh(); };
 $("hide-empty").onclick = () => { bo.hideEmpty = bo.hideEmpty === false; saveB(); refresh(); };
@@ -751,12 +793,12 @@ async function writePending() {
     // failed request (#829).
     if (((r.headers.get("Content-Type") || "").indexOf("json")) < 0) {
       const text = (await r.text()).trim();
-      if (!r.ok) { showCardReason(p.n, text || "the hub answered " + r.status); loadBoard(); return; }
+      if (!r.ok) { showCardReason(p.n, text || "the hub answered " + r.status); loadBoard(true); return; }
     } else d = await r.json();
   } catch (e) { d = { err: "the hub answered " + r.status + " with a body this page cannot read" }; }
   if (!r.ok && !d.err) d.err = "the hub answered " + r.status;
   if (d.err) showCardReason(p.n, d.err); else delete reasons[p.n];
-  loadBoard();
+  loadBoard(true);
 }
 function showCardReason(n, why) {
   // The refusal is page state keyed by issue number, and the card draws it on every render (#829): the read that follows
@@ -938,7 +980,7 @@ document.querySelector('[data-panel="more"]').onclick = e => {
   else return;
   showMore();
 };
-setInterval(loadMore, 10000);
+every("more", loadMore, 10000);
 
 /*SWITCHER_JS*/
 (() => {
@@ -1027,8 +1069,8 @@ document.addEventListener("touchend", e => {
   if (g && g.act === "back" && !$("runview").hidden) closeRun();
   if (g && g.act === "refresh" && runsShown() && $("runview").hidden) loadRuns();
 }, { passive: true });
-setInterval(() => { if (runsShown() && $("runview").hidden) loadRuns(); }, 10000);
-setInterval(() => { if (runId && !$("runview").hidden) loadRunControl(); }, 10000);   // the run may pause, resume or end while the screen is open
+every("runs", () => { if ($("runview").hidden) loadRuns(); }, 10000);
+every("runs", () => { if (runId && !$("runview").hidden) loadRunControl(); }, 10000);   // the run may pause, resume or end while the screen is open
 // terminals:begin
 const termOpen = () => !$("termview").hidden;
 let termSid = null, termCursor = null, termLast = null, termBusy = false;
@@ -1103,7 +1145,7 @@ $("sessions").onclick = e => { const b = e.target.closest(".runrow"); if (b) ope
 $("termview-back").onclick = closeConversation;
 $("termview-older").onclick = loadOlder;
 $("termview-turns").onscroll = () => { if ($("termview-turns").scrollTop < 40) loadOlder(); };
-setInterval(loadConversation, 3000);
+every("terminals", loadConversation, 3000);
 $("termview-send").onclick = async () => {
   const text = $("termview-text").value.trim(), sid = termSid, out = $("termview-sent");
   if (!text || !sid) return;
@@ -1118,7 +1160,7 @@ $("termview-send").onclick = async () => {
     if (d.status === "sent") $("termview-text").value = "";
   } catch (err) { if (sid === termSid) out.textContent = err.message; }
 };
-setInterval(() => { if (!termOpen() && !document.querySelector('[data-panel="terminals"]').hidden) loadSessions(); }, 10000);
+every("terminals", () => { if (!termOpen()) loadSessions(); }, 10000);
 // terminals:end
 // The first tab was "Status" before it became the Monitor: a stored "status" opens the Monitor.
 function tabOf(s) { const t = s === "status" ? "monitor" : s; return tabs.some(b => b.dataset.tab === t) ? t : tabs[0].dataset.tab; }

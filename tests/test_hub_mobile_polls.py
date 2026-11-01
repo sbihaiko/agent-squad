@@ -78,13 +78,15 @@ def test_a_read_past_its_deadline_fails_and_frees_its_endpoint(hub):  # noqa: F8
 @pytest.mark.node_bound
 def test_a_poll_for_a_hidden_app_or_a_hidden_panel_does_not_run(hub, monkeypatch):  # noqa: F811
     monkeypatch.setattr(move, "DOM_HARNESS", INTERVALS)
-    out = move.run_page(hub.MOBILE_PAGE, HOLD + """
+    out = move.run_page(hub.MOBILE_PAGE, HOLD + f"const BOARD = {json.dumps(BOARD_ONE)};" + """
       const tick = () => { for (const k of Object.keys(gets)) delete gets[k]; for (const i of __intervals) i.fn(); return __tick(10).then(() => ({ ...gets })); };
       document.hidden = true;
       const away = await tick();
       document.hidden = false;
       const monitor = await tick();
       show("board"); await __tick(10);
+      held.splice(0).forEach(r => r(answer(BOARD)));   // the read the panel made at once is answered, so the poll is free
+      await __tick(10);
       const onBoard = await tick();
       return { away, monitor, onBoard };
     """)

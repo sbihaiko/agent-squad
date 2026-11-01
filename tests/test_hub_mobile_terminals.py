@@ -39,7 +39,7 @@ def test_a_tap_on_a_session_opens_its_conversation_read_route():
 
 def test_the_open_conversation_polls_its_read_route():
     js = terminals_js()
-    assert "setInterval" in js and "loadConversation" in js
+    assert 'every("terminals", loadConversation' in js, "the conversation polls while its panel is shown (#1004)"
 
 
 def test_older_turns_come_on_request_with_a_cursor():
