@@ -3,7 +3,8 @@
 # gate lock it runs the suite in a clean tree at the exact tip, writes the full line, writes a commit status on the sha, reads it
 # back, and fast-forwards stg through promote-stg.sh. A held gate lock skips the tick; a tip already proved or refused, or a
 # landing inside the quiet window, runs no suite. Offline: a bare local remote, a stub gh, a stub suite. usage: bash test-promote-pass.sh
-unset SG_SERIAL_HELD SERIAL_TRY
+# SG_CHILD_SESSION is unset: the child guard refuses a PR merge, and the stub gh below merges into a local bare remote only.
+unset SG_SERIAL_HELD SERIAL_TRY SG_CHILD_SESSION
 d=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G="git -c user.email=a@b -c user.name=t"; R=$T/remote.git
 export SG_STATE=$T/st SG_PROMOTE_REMOTE=$R SG_REPO=x/emu GIT_TERMINAL_PROMPT=0 SG_GHREAD=true SG_PROMOTE_QUIET_SECONDS=0 SERIAL_POLL_SECONDS=0.2
@@ -214,7 +215,8 @@ esac
 EOF
 chmod +x "$T/bin/ghread"
 shards() {  # <sha> <state of shard 0> ... <state of shard 3>: a conclusion, "running" (unfinished) or "none" (missing)
-  local s=$1 k=0 out="" c; shift
+  # CHECK_CONCLUSION names the conclusion of the check job of the same commit (default success; none: the job is missing).
+  local s=$1 k=0 out="" c ck=${CHECK_CONCLUSION:-success}; shift
   for c in "$@"; do
     case "$c" in
       none) ;;
@@ -223,6 +225,7 @@ shards() {  # <sha> <state of shard 0> ... <state of shard 3>: a conclusion, "ru
     esac
     k=$((k + 1))
   done
+  [ "$ck" = none ] || out="{\"name\":\"check\",\"status\":\"completed\",\"conclusion\":\"$ck\"},$out"
   echo "{\"check_runs\":[${out%,}]}" > "$T/checks-$s"
 }
 adv dev shards-green; tg=$(tip dev); rm -f "$T/suite-rc"; n=$(runs)
@@ -233,6 +236,9 @@ IFS=$'\t' read -r _ kind res sha < "$SG_STATE/gate-status-full"
 [ "$kind $res $sha" = "full pass $tg" ] && ok "four green shards write the full pass line for the tip" || ko "shard full line: '$kind $res $sha'"
 /usr/bin/grep -q "promote-pass: $tg promoted: the CI shards carried the full pass" "$SG_STATE/promote.log" && ok "the promotion record names the CI shards as the proof" \
   || ko "shard record: $(/usr/bin/grep "$tg" "$SG_STATE/promote.log")"
+/usr/bin/grep -q -- "-X POST repos/x/emu/statuses/$tg .*context=squad/full-proof .*CI shards" "$T/gh.log" && ok "the CI route writes the squad/full-proof status, naming the CI shards" \
+  || ko "CI route wrote no full-proof status: $(/usr/bin/grep "statuses/$tg" "$T/gh.log")"
+/usr/bin/grep -q "repos/x/emu/commits/$tg/statuses" "$T/gh.log" && ok "the CI route reads the commit status back" || ko "the CI route did not read the status back"
 
 adv dev shard-red; tr=$(tip dev); before=$(tip stg); n=$(runs)
 shards "$tr" success success failure success; SG_GHREAD="$T/bin/ghread" pass; rc=$?
@@ -247,6 +253,29 @@ shards "$tu" success success running timed_out; SG_GHREAD="$T/bin/ghread" pass; 
   || ko "unfinished shards: rc $rc, stg $(tip stg), runs $(runs) was $n"
 /usr/bin/grep -q "promote-pass: $tu promoted: the local full suite answered" "$SG_STATE/promote.log" && ok "the record names the local full suite as the proof" \
   || ko "local record: $(/usr/bin/grep "$tu" "$SG_STATE/promote.log")"
+
+# The check job of the same commit (ruff, mypy, the fast battery) is part of the CI proof: a red one holds the tip, and no
+# suite runs for it (ADR-0164: a red the proof measured holds delivery).
+adv dev check-red; tc=$(tip dev); before=$(tip stg); n=$(runs)
+CHECK_CONCLUSION=failure shards "$tc" success success success success; SG_GHREAD="$T/bin/ghread" pass; rc=$?
+[ $rc != 0 ] && [ "$(tip stg)" = "$before" ] && [ "$(runs)" = "$n" ] && ok "a red check job holds the tip and runs no suite" \
+  || ko "red check: rc $rc, stg $(tip stg), runs $(runs) was $n"
+/usr/bin/grep "promote-pass: $tc" "$SG_STATE/promote.log" | /usr/bin/grep -q "CI check is red" && ok "the refusal names the red check job" \
+  || ko "red check line: $(/usr/bin/grep "$tc" "$SG_STATE/promote.log")"
+
+# A tip inside the quiet window opens the dev-to-stg pull request, so its four shards start before the proof reads them.
+adv dev shard-open; to=$(tip dev); n=$(runs); : > "$T/gh.log"
+printf '%s\t%s\n' "$(date +%s)" "$to" > "$SG_STATE/landed.tsv"
+SG_PROMOTE_QUIET_SECONDS=900 SG_GHREAD="$T/bin/ghread" pass; rc=$?
+[ $rc = 0 ] && [ "$(runs)" = "$n" ] && [ "$(tip stg)" != "$to" ] && ok "a tip inside the quiet window runs no suite and promotes nothing" \
+  || ko "quiet window: rc $rc, runs $(runs) was $n"
+/usr/bin/grep -q -- "-X POST repos/x/emu/pulls" "$T/gh.log" && ok "a tip inside the quiet window opens the dev-to-stg pull request" \
+  || ko "no pull request opened in the quiet window: $(cat "$T/gh.log")"
+rm -f "$SG_STATE/landed.tsv"
+shards "$to" success success success success; SG_GHREAD="$T/bin/ghread" pass; rc=$?
+[ $rc = 0 ] && [ "$(tip stg)" = "$to" ] && ok "the next pass reads the shards that ran on the opened pull request, and promotes by CI" \
+  || ko "next pass after the pull request: rc $rc, stg $(tip stg), dev $to"
+
 rm -f "$T/suite-rc" "$T"/checks-*
 
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'

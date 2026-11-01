@@ -148,12 +148,12 @@ def test_ci_workflow_triggers_one_job_that_covers_both_pythons_and_keeps_the_tok
 LANDING_GROUP_RULE = "The group names the commit, so no queue holds a pull request behind another and GitHub cancels none."
 
 
-def test_one_commit_starts_one_job_and_a_landing_waits_in_no_queue():
-    """Guard for the CI rule: no matrix (one commit, one job), a landing gets a concurrency group of its own, and a
-    landing on dev, stg or main is never cancelled (#149, #398).
+def test_one_commit_starts_the_check_job_and_the_full_proof_shards_and_a_landing_waits_in_no_queue():
+    """Guard for the CI rule: one commit starts one check job plus the full-proof shard matrix, the check job has no
+    matrix, and a landing on dev, stg or main is never cancelled (#149, #398, #1051).
 
-    A matrix made one commit start two jobs that queued behind each other for two runners, and a check no runner picks
-    up answers nothing.
+    A matrix on the check job made one commit start two jobs that queued behind each other for two runners, and a check
+    no runner picks up answers nothing.
 
     A group shared by one branch's pushes cannot keep that promise: GitHub queues the group's pending runs and cancels
     the runs past the queue's cap (`queue: single` holds one pending run, `queue: max` holds 100), so a burst of
@@ -203,13 +203,19 @@ def test_the_full_proof_runs_in_shards_on_the_pull_request_and_the_promotion_rea
     assert job["strategy"]["matrix"]["shard"] == list(range(FULL_SHARDS)), "one matrix entry per shard"
     assert job["name"] == "full-proof shard ${{ matrix.shard }}", "the check name the promotion reads"
     run = "\n".join(s.get("run", "") for s in job["steps"])
-    assert "-m pytest" in run and "heavy" not in run, "a shard runs the full suite, heavy tests included"
+    assert "-n auto $files" in run and "-p no:xdist $files" in run, "a shard runs the full suite in both modes, as the full proof does"
+    assert "heavy" not in run, "a shard runs the heavy tests too"
     assert f"NR % {FULL_SHARDS} ==" in run, "the shards partition the test files by one modulus"
     promote = (ROOT / "contrib" / "squad-goal" / "scripts" / "promote-pass.sh").read_text()
-    names = re.search(r"for k in ([0-9 ]+); do", promote)
-    assert names and [int(k) for k in names.group(1).split()] == list(range(FULL_SHARDS)), (
-        "promote-pass.sh reads the same shard numbers the workflow runs"
-    )
+    assert "ci.yml" in promote and "for k in" not in promote, "promote-pass.sh derives the shard numbers from ci.yml, not a literal"
+
+
+def test_the_check_job_of_the_commit_is_part_of_the_ci_proof():
+    """Guard for ADR-0164 (#1051): the promotion reads the check job of the same commit as the four shards, so ruff and
+    mypy, which only the check job runs, are part of the full pass.
+    """
+    promote = (ROOT / "contrib" / "squad-goal" / "scripts" / "promote-pass.sh").read_text()
+    assert '"check"' in promote, "promote-pass.sh reads the check job before it writes the full pass"
 
 
 E2E = ROOT / "tests" / "test_gui_test_e2e.py"

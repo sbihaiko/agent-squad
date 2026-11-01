@@ -45,16 +45,27 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   ( while :; do sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}' | tr -d '{}' >> "$samples"; sleep 10; done ) & mon=$!
   trap 'kill "$mon" 2>/dev/null; rm -f "$state/promote-reserve" "$samples"' EXIT INT TERM
   [ "$(g rev-parse HEAD)" = "$tip" ] || { mark "$tip" "not promoted: the clean tree is not at the tip"; exit 1; }
-  # ADR-0164 (#1051): the four full-proof shards of ci.yml on the tip are the full pass when all four are green. Four green
-  # shards write the full line through the status seam and promote with no suite; a red shard holds the tip and names it;
-  # a shard that is missing, running or timed out holds nothing, and the proof below answers as before.
-  ci_verdict() {  # <tip>: pass, "fail <shard>" for a red shard, or pending
-    local cr k st c v=pass
+  # ADR-0164 (#1051): the check job and the four full-proof shards of ci.yml on the tip are the full pass when all are green.
+  # The shards run the full suite in both modes; the check job runs ruff and mypy. Green writes the full line and the
+  # squad/full-proof status, then promotes with no suite; a red job holds the tip and names it; a job that is missing,
+  # running or timed out holds nothing, and the proof below answers as before.
+  shard_list=$(/usr/bin/grep -o 'shard: \[[0-9, ]*\]' "$d/../../../.github/workflows/ci.yml" 2>/dev/null | tr -dc '0-9 ')
+  full_status() {  # <tip> <description>: the squad/full-proof status on the sha, read back; the reason is printed when it does not stand
+    local o st
+    o=$(gh_send -X POST "repos/$SG_REPO/statuses/$1" -f state=success -f "context=$ctx" -f "description=$2") \
+      || { echo "the commit status write failed: $(printf '%s' "$o" | tail -1)"; return 1; }
+    st=$(gh_get "repos/$SG_REPO/commits/$1/statuses" | jq -r --arg c "$ctx" '[.[] | select(.context == $c)][0].state // empty' 2>/dev/null)
+    [ "$st" = success ] || { echo "the commit status $ctx did not read back as success (${st:-missing})"; return 1; }
+  }
+  ci_verdict() {  # <tip>: pass, "fail <job>" for a red job, or pending
+    local cr n st c v=pass sh names=("check")
+    [ -n "$shard_list" ] || { echo pending; return; }
+    for sh in $shard_list; do names+=("full-proof shard $sh"); done
     cr=$(gh_api "repos/$SG_REPO/commits/$1/check-runs?per_page=100&filter=latest") || { echo pending; return; }
     printf '%s' "$cr" | jq -e '.check_runs | type == "array"' >/dev/null 2>&1 || { echo pending; return; }
-    for k in 0 1 2 3; do
-      read -r st c < <(printf '%s' "$cr" | jq -r --arg n "full-proof shard $k" '[.check_runs[] | select(.name == $n)] | last | "\(.status) \(.conclusion)"')
-      [ "$st" = completed ] && [ "$c" = failure ] && { echo "fail full-proof shard $k"; return; }
+    for n in "${names[@]}"; do
+      read -r st c < <(printf '%s' "$cr" | jq -r --arg n "$n" '[.check_runs[] | select(.name == $n)] | last | "\(.status) \(.conclusion)"')
+      [ "$st" = completed ] && [ "$c" = failure ] && { echo "fail $n"; return; }
       { [ "$st" = completed ] && [ "$c" = success ]; } || v=pending
     done
     echo "$v"
@@ -63,6 +74,7 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   case "$v" in
     pass)
       bash "$d/gate.sh" --status full pass "$tip"
+      why=$(full_status "$tip" "full suite, both modes, four CI shards and the check job") || { mark "$tip" "not promoted: $why"; exit 1; }
       o=$(SG_PROMOTE_PROOF=local bash "$d/promote-stg.sh" 2>&1); rc=$?
       [ $rc = 0 ] || { mark "$tip" "not promoted: $(printf '%s' "$o" | tail -1)"; exit 1; }
       mark "$tip" "promoted: the CI shards carried the full pass"; exit 0;;
@@ -132,16 +144,21 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
     bash "$d/gate.sh" --status full fail "$tip"; mark "$tip" "not promoted: the full suite failed ($out), peak load $peak on $cores2 cores, mean $mean"; exit 1; fi
   kill "$mon" 2>/dev/null; wait "$mon" 2>/dev/null
   bash "$d/gate.sh" --status full pass "$tip"
-  o=$(gh_send -X POST "repos/$SG_REPO/statuses/$tip" -f state=success -f "context=$ctx" -f "description=full suite, both modes, local") \
-    || { mark "$tip" "not promoted: the commit status write failed: $(printf '%s' "$o" | tail -1)"; exit 1; }
-  st=$(gh_get "repos/$SG_REPO/commits/$tip/statuses" | jq -r --arg c "$ctx" '[.[] | select(.context == $c)][0].state // empty' 2>/dev/null)
-  [ "$st" = success ] || { mark "$tip" "not promoted: the commit status $ctx did not read back as success (${st:-missing})"; exit 1; }
+  why=$(full_status "$tip" "full suite, both modes, local") || { mark "$tip" "not promoted: $why"; exit 1; }
   o=$(SG_PROMOTE_PROOF=local bash "$d/promote-stg.sh" 2>&1); rc=$?
   [ $rc = 0 ] || { mark "$tip" "not promoted: $(printf '%s' "$o" | tail -1)"; exit 1; }
   mark "$tip" "promoted: the local full suite answered for the tip"; exit 0
 fi
 tip=$(/usr/bin/git ls-remote "$remote" refs/heads/dev | cut -f1); [ -n "$tip" ] || { echo "promote-pass: dev does not resolve on $remote" >&2; exit 1; }
 /usr/bin/grep -q "^$tip " "$marks" 2>/dev/null && exit 0   # already proved or refused
+[ -d "$tree/.git" ] || { mkdir -p "$tree" && g init -q . && g remote add origin "$remote"; } || exit 1
+g remote set-url origin "$remote"
+o=$(g fetch -q origin "+refs/heads/dev:refs/remotes/origin/dev" "+refs/heads/stg:refs/remotes/origin/stg" 2>&1) || { echo "promote-pass: fetch failed: $(printf '%s' "$o" | tail -1)" >&2; exit 1; }
+[ "$(g rev-parse origin/dev)" = "$tip" ] || exit 0   # dev moved under the read: a later pass takes the new tip
+g merge-base --is-ancestor "$tip" origin/stg && exit 0   # the dev tip is already in stg
+# ADR-0164 (#1051): the dev-to-stg pull request starts the four shards on the tip, so promote-stg.sh opens it before the quiet
+# window passes and the shards run while it does. Best effort: a failure there leaves the proof below to answer.
+SG_PROMOTE_OPEN_ONLY=1 bash "$d/promote-stg.sh" >/dev/null 2>&1
 last=$(awk -F'\t' '$1 > m {m = $1} END {print m + 0}' "$state/landed.tsv" 2>/dev/null); last=${last:-0}
 [ $(( $(date +%s) - last )) -ge "${SG_PROMOTE_QUIET_SECONDS:-900}" ] || exit 0   # a landing is still recent: wait for the burst to end
 # The proof is a measurement (#738): the suite's assertions are the wall time of real scripts, so it never measures under the
@@ -177,11 +194,6 @@ if awk -v l="$load1" -v m="$limit" 'BEGIN { exit !(l + 0 >= m + 0) }' || [ "$mem
   l="promote-pass: $tip not proven: machine loaded (load $load1 on $cores cores, limit $limit, $memfree MB free, nightly $([ -d "$nightly" ] && echo held || echo free), $nlive runs alive)"
   echo "$(date -u +%FT%TZ) $l" >> "$log"; echo "$l"; exit 0
 fi
-[ -d "$tree/.git" ] || { mkdir -p "$tree" && g init -q . && g remote add origin "$remote"; } || exit 1
-g remote set-url origin "$remote"
-o=$(g fetch -q origin "+refs/heads/dev:refs/remotes/origin/dev" "+refs/heads/stg:refs/remotes/origin/stg" 2>&1) || { echo "promote-pass: fetch failed: $(printf '%s' "$o" | tail -1)" >&2; exit 1; }
-[ "$(g rev-parse origin/dev)" = "$tip" ] || exit 0   # dev moved under the read: a later pass takes the new tip
-g merge-base --is-ancestor "$tip" origin/stg && exit 0   # the dev tip is already in stg
 # A promotion leaves a merge commit in stg (#743), so stg is never an ancestor of the next dev tip: only the work stg holds and
 # dev lacks decides. Any plain commit there is the owner's to resolve, and no suite is spent on it.
 o=$(g rev-list --no-merges "$tip..origin/stg" 2>/dev/null) || o=
