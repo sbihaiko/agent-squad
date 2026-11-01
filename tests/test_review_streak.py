@@ -1,7 +1,7 @@
 """#735 (ADR-0151): a fix round that writes no artifact is the same finding unanswered, not a new one.
 
-A review that asks for changes opens a finding; the fix round answers it, or it does not. A fix round that ends
-`artifact_missing` wrote nothing, so the finding stands as it was: it is the finding's first repetition, and it changes
+A review that asks for changes opens a finding; the fix round answers it, or it does not. A fix round that ends with no
+artifact wrote nothing, so the finding stands as it was: it is the finding's first repetition, and it changes
 the coder on the next round. Two CHANGES verdicts whose findings differ are two findings, so the coder stays.
 The record keeps the child's last turn of that round, so a reader sees why it stopped. The ledger holds the streak of the
 issue across runs, and the dispatch reads it, so a requeue or a new run starts where the earlier one stopped (#702).
@@ -48,6 +48,7 @@ def test_two_different_findings_need_two_identical_ones_to_change_the_coder():
 def test_a_fix_round_that_wrote_no_artifact_repeats_the_finding():
     assert R.unanswered("fail", ["review_fix_failed", "child_ended_early"])
     assert R.unanswered("fail", ["session_error:error_during_execution"])
+    assert R.unanswered("fail", ["artifact_missing"])
     assert not R.unanswered("fail", ["review_fix_failed", "deadline"])
     assert not R.unanswered("fail", ["node_stall_cap"])
     assert not R.unanswered("pass", [])

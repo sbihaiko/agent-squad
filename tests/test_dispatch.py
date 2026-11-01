@@ -120,6 +120,14 @@ async def test_a_child_that_ends_early_names_its_end_on_the_record(tmp_path):   
 
 
 @pytest.mark.anyio
+async def test_a_child_that_spends_its_whole_grant_and_ends_clean_is_artifact_missing(tmp_path):    # #1066
+    eng = make(tmp_path, {"router": routed(req()), "route.router.1": {"output": None, "spend": 1.0, "turns": 120, "ended": CLEAN_END}})
+    v = await eng.run()
+    assert child_outs(tmp_path)["route.router.1"]["reasons"] == ["artifact_missing"]
+    assert "artifact_missing" in v.reasons
+
+
+@pytest.mark.anyio
 async def test_a_child_that_errors_out_names_the_error_on_the_record(tmp_path):    # #1066
     failed = {"subtype": "error_during_execution", "is_error": True, "last": "the tool call crashed"}
     eng = make(tmp_path, {"router": routed(req()), "route.router.1": {"output": None, "spend": 0.2, "ended": failed}})
