@@ -179,3 +179,39 @@ def test_a_row_with_no_token_count_adds_no_zero_to_the_sums(tmp_path):
                                                   tokens_out=3, tokens_src="record"))
     (both,) = profile_dataset.chain_summary(tmp_path, [ISSUE])
     assert (both["attempts"], both["tokens_in"], both["tokens_out"], both["tokens_missing"]) == (2, 7, 3, 1)
+def test_a_ticket_with_no_rows_answers_no_profile_never_zeros(tmp_path):
+    profile_dataset.append_row(tmp_path, make_row(issue=OTHER_ISSUE))
+
+    assert profile_dataset.card(tmp_path, ISSUE) == profile_dataset.NO_PROFILE
+    assert profile_dataset.card(tmp_path / "empty", ISSUE) == profile_dataset.NO_PROFILE
+
+
+def test_the_card_numbers_come_from_the_dataset_rows_alone(tmp_path):
+    rows = [
+        make_row(entry_index=1, attempt=1, model_id="model-s", outcome="refused",
+                 tokens_in=None, tokens_out=None, tokens_src="missing"),
+        make_row(entry_index=2, attempt=2, model_id="model-o", tokens_in=100, tokens_out=20, tokens_cache=50),
+        make_row(phase="gate", entry_index=3, model_id="none", tokens_in=None, tokens_out=None,
+                 tokens_src="missing"),
+        make_row(phase="review", entry_index=1, model_id="model-h", tokens_in=30, tokens_out=5,
+                 tokens_src="transcript"),
+    ]
+    for row in rows:
+        profile_dataset.append_row(tmp_path, row)
+
+    assert profile_dataset.card(tmp_path, ISSUE) == {"total_tokens": 205, "attempts": 4, "winning_model": "model-h"}
+
+
+def test_a_model_row_with_no_counts_makes_the_total_unknown_not_a_short_sum(tmp_path):
+    profile_dataset.append_row(tmp_path, make_row(entry_index=1, tokens_in=100, tokens_out=20))
+    profile_dataset.append_row(tmp_path, make_row(phase="review", entry_index=1, model_id="model-h",
+                                                  tokens_in=None, tokens_out=None, tokens_src="missing"))
+
+    assert profile_dataset.card(tmp_path, ISSUE) == {"total_tokens": None, "attempts": 2, "winning_model": "model-h"}
+
+
+def test_a_ticket_with_only_refused_rows_has_a_zero_total_and_no_winner(tmp_path):
+    profile_dataset.append_row(tmp_path, make_row(outcome="refused", model_id="model-s",
+                                                  tokens_in=None, tokens_out=None, tokens_src="missing"))
+
+    assert profile_dataset.card(tmp_path, ISSUE) == {"total_tokens": 0, "attempts": 1, "winning_model": None}
