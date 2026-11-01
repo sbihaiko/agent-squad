@@ -492,6 +492,23 @@ def test_a_hook_injected_message_reads_system_and_never_as_the_owner(home):
     assert [(t["id"], t["role"]) for t in page["turns"]] == [("u1", "owner"), ("m1", "system")]
 
 
+def test_a_command_record_and_a_task_notice_read_system_and_never_as_the_owner(home):
+    """`/compact` and a background task write their own user turns with no `isMeta`: the owner read a command's markup and a
+    task's notification as words they typed (owner, 2026-11-01)."""
+    mod = load_sessions()
+    cwd = home.path / "p1" / "app"
+    entries = [user("u1", "real words"),
+               user("c1", "<command-name>/compact</command-name>\n            <command-message>compact</command-message>"),
+               user("c2", "<local-command-stdout>[2mCompacted (ctrl+o to see full summary)[22m</local-command-stdout>"),
+               user("t1", "<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n</task-notification>"),
+               user("u2", "a question after the compact")]
+    folder = mod.claude_home() / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(cwd))
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "s2.jsonl").write_text("".join(json.dumps(e) + "\n" for e in entries))
+    page = mod.read_conversation(str(cwd), "s2")
+    assert [t["role"] for t in page["turns"]] == ["owner", "system", "system", "system", "owner"]
+
+
 def test_a_poll_that_meets_no_new_byte_reads_no_file_again(home):
     """The chat polls every few seconds and this transcript runs to hundreds of megabytes: an unchanged file answers from
     the page already built (owner, 2026-11-01)."""
