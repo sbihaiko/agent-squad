@@ -14,7 +14,7 @@ rows = [row("run-a", "running"), row("run-b", "stalled"), row("run-c", "starting
 apps["alpha"]["mod"].runs = lambda: rows
 got = mux.live(apps["alpha"]); ok = got == ["run-a", "run-b", "run-c"]
 print(("ok   " if ok else "FAIL ") + f"live ids: {got}")
-page = mux.root_page(apps, "t").decode(); ok = 'class="live">3 live</span>' in page and '<div class="runs">run-a run-b run-c</div>' in page and "run-done" not in page
+page = mux.root_page(apps, "t").decode(); ok = 'class="badge on">3 live</span>' in page and '<div class="runs">run-a run-b run-c</div>' in page and "run-done" not in page
 print(("ok   " if ok else "FAIL ") + "index line: " + page.split("</a>", 1)[1].split("</li>")[0])
 PY
 )

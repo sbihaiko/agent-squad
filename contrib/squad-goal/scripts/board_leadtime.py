@@ -249,7 +249,7 @@ def control_chart(items, timeframe=None, log=False, now=None, start=None, end=No
     if zoom:
         scope = f"{start:%b} {start.day} to {end:%b} {end.day}"
     else:
-        scope = f"last {timeframe} days" if timeframe else "all closed cards"
+        scope = f"last {timeframe * 24} hours" if timeframe and timeframe < 7 else f"last {timeframe} days" if timeframe else "all closed cards"
     return {
         "measure": measure,
         "scale": "log" if log else "jira",

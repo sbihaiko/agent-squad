@@ -68,6 +68,8 @@ An ADR holds a decision and its reason. It is not a ledger: no dates, counts, st
 
 | [0163](0163-a-proof-is-bounded-at-fifteen-minutes.md) | A proof is bounded at fifteen minutes: past it the full suite is killed and the delta proof answers, and what the delta does not cover is proven hot |
 
+| [0164](0164-delivery-outranks-the-proof.md) | Delivery outranks the proof: an unfinished proof never holds a landing or a promotion, a failed one always does, and the record names which of the three a promotion was |
+
 ## Adding an ADR
 
 Take the next free number. Rewrite an ADR in place when a decision changes; never append an amendment. A rule with no named guard test is a draft ([ADR-0018](0018-failing-gate-is-a-defect.md)). Add one line to `CLAUDE.md` Design rules with the guard.

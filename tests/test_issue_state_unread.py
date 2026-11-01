@@ -13,9 +13,10 @@ SPEC.loader.exec_module(issue_state)
 class FakeBinding:
     name = "fake"
 
-    def __init__(self, carried, nodes=None):
+    def __init__(self, carried, nodes=None, facts=None):
         self.carried = carried
         self.nodes = nodes or {}
+        self.facts = facts
         self.asked = []
         self.reads = 0
 
@@ -26,6 +27,10 @@ class FakeBinding:
     def node_status(self, issue):
         self.asked.append(str(issue))
         return self.nodes.get(str(issue))
+
+    def issue_facts(self, issue):
+        """The issue's own (state, labels), or None when the fixture does not answer for it."""
+        return (self.facts or {}).get(str(issue))
 
 
 def test_unread_names_a_go_issue_the_board_read_does_not_carry():
@@ -157,3 +162,113 @@ def test_go_check_prints_the_unread_line_and_alerts(tmp_path, monkeypatch, capsy
     assert "801\tTodo" in out
     assert "UNREAD\t800" in out
     assert "800" in (tmp_path / "alerts.log").read_text()
+
+
+# #1031: the go list was read at another time, and the rows come from a cache the owner and the project share. An issue
+# the list names is named go-labelled only when the issue itself agrees; one that answers closed, or without the label,
+# is said once and never alerts, and a card the board really cannot read still alerts.
+
+
+def test_a_closed_issue_named_by_the_list_is_never_named_go_labelled(capsys):
+    binding = FakeBinding({"801": "Todo"}, facts={"800": ("closed", ["bug", "go"])})
+
+    _, rescued, missing = issue_state.State(binding).unread([800, 801], "go")
+
+    assert rescued == {} and missing == []
+    out = capsys.readouterr().out
+    assert "NOTE\t800\tclosed" in out
+
+
+def test_an_open_issue_the_issue_itself_says_has_no_go_label_is_never_named_go_labelled(capsys):
+    binding = FakeBinding({"801": "Todo"}, facts={"800": ("open", ["bug"])})
+
+    _, _, missing = issue_state.State(binding).unread([800, 801], "go")
+
+    assert missing == []
+    assert "NOTE\t800\tno go label" in capsys.readouterr().out
+
+
+def test_a_card_the_board_really_cannot_read_still_alerts():
+    binding = FakeBinding({"801": "Todo"}, facts={"800": ("open", ["bug", "go"])})
+
+    _, _, missing = issue_state.State(binding).unread([800, 801], "go")
+
+    assert missing == ["800"]
+
+
+def test_a_read_that_does_not_answer_still_alerts():
+    """A premise a failed read never settles one way or the other (ADR-0155): the issue stays missing."""
+    binding = FakeBinding({"801": "Todo"}, facts={"800": None})
+
+    _, _, missing = issue_state.State(binding).unread([800, 801], "go")
+
+    assert missing == ["800"]
+
+
+def test_a_closed_issue_the_stale_rows_still_carry_drops_out_of_the_next_cycle():
+    """Closing an issue drops it from the go set on the next cycle (AC2), even when the rows are an earlier read
+    that still carries its Todo card: the rows are a cache, and the issue is the one source that settles it (#1031)."""
+    opened = issue_state.State(FakeBinding({"801": "Todo"}, facts={"801": ("open", ["bug", "go"])}))
+    carried, _, missing = opened.unread_rows({"801": "Todo"}, ["801"], "go")
+    assert carried == {"801": "Todo"} and missing == [], "an open go-labelled issue the rows carry is in the go set"
+
+    closed = issue_state.State(FakeBinding({"801": "Todo"}, facts={"801": ("closed", ["bug", "go"])}))
+    carried, _, missing = closed.unread_rows({"801": "Todo"}, ["801"], "go")
+    assert carried == {}, "a closed issue the stale rows still carry is not in the go set"
+    assert missing == []
+
+
+def test_a_closed_issue_the_node_would_answer_is_not_rescued_on_the_next_cycle():
+    """The node path is not a way back in: an issue that closed between two cycles is dropped before its node is
+    asked, so a closed card is never rescued into the go set (#1031, AC2)."""
+    opened = issue_state.State(FakeBinding({}, nodes={"800": "Todo"}, facts={"800": ("open", ["bug", "go"])}))
+    _, rescued, missing = opened.unread_rows({}, ["800"], "go")
+    assert rescued == {"800": "Todo"} and missing == []
+
+    binding = FakeBinding({}, nodes={"800": "Todo"}, facts={"800": ("closed", ["bug", "go"])})
+    _, rescued, missing = issue_state.State(binding).unread_rows({}, ["800"], "go")
+    assert rescued == {}, "a closed issue is never rescued into the go set"
+    assert binding.asked == [], "a closed issue's node is never asked"
+    assert missing == []
+
+
+def _binding(tmp_path, answer):
+    def run(args, **kw):
+        return SimpleNamespace(returncode=answer[0], stdout=answer[1], stderr=answer[2])
+    return issue_state.BoardBinding("owner", 7, "owner/ariel", run=run, env={"SG_STATE": str(tmp_path)}, state_dir=str(tmp_path))
+
+
+def test_issue_facts_reads_the_state_and_labels_of_the_issue_itself(tmp_path):
+    body = json.dumps({"number": 801, "state": "CLOSED", "labels": [{"name": "bug"}]})
+    assert _binding(tmp_path, (0, body, "")).issue_facts(801) == ("closed", ["bug"])
+
+
+def test_issue_facts_is_none_when_the_read_does_not_answer(tmp_path):
+    refused = _binding(tmp_path / "a", (1, "", "HTTP 403: API rate limit exceeded"))
+    hung = _binding(tmp_path / "b", (0, "", ""))
+    assert refused.issue_facts(801) is None, "a refused read settles nothing (ADR-0155)"
+    assert hung.issue_facts(801) is None
+
+
+def test_issue_facts_is_none_for_an_answer_about_another_issue(tmp_path):
+    body = json.dumps({"number": 999, "state": "open", "labels": [{"name": "go"}]})
+    assert _binding(tmp_path, (0, body, "")).issue_facts(801) is None
+
+
+def test_the_fresh_cache_path_applies_the_same_naming_rule(tmp_path, monkeypatch, capsys):
+    cache = tmp_path / "hub-board.json"
+    cache.write_text(json.dumps({"t": issue_state.time.time(), "repo": "owner/ariel",
+                                 "items": [{"n": 801, "st": "Todo"}]}))
+    monkeypatch.setenv("SG_BOARD_CACHE", str(cache))
+    monkeypatch.setenv("SG_REPO", "owner/ariel")   # the cache names this repository, so the cache path answers it
+    monkeypatch.setenv("SG_STATE", str(tmp_path))
+    binding = FakeBinding({"801": "Todo"}, facts={"800": ("closed", ["bug", "go"]), "802": ("open", ["bug"])})
+    monkeypatch.setattr(issue_state, "board_state", lambda repo="": issue_state.State(binding))
+
+    assert issue_state.main(["issue_state.py", "--go", "800,801,802", "--label", "go"]) == 0
+
+    out = capsys.readouterr().out.splitlines()
+    assert "801\tTodo" in out
+    assert not any(line.startswith("UNREAD") for line in out), f"nothing the issue itself denies is named unread: {out}"
+    assert not (tmp_path / "alerts.log").exists(), "an issue with no go label and a closed one never alert"
+    assert binding.reads == 0, "the fresh cache answers the rows: the naming rule ran on the cache path, not a board read"

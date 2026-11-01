@@ -1,5 +1,5 @@
-"""Hub sidebar (#922): the model donut carries a swatch and dollars per row, a hover or focus on a slice or a row
-highlights both, one model keeps its colour when the set changes, and a quota bar under its limit is neutral."""
+"""Hub sidebar (#922): the model donut carries a swatch and its token count per row (the owner moved the pie off dollars,
+2026-11-01), a hover or focus on a slice or a row highlights both, and one model keeps its colour when the set changes."""
 import re
 
 import pytest
@@ -12,23 +12,23 @@ ROW = re.compile(
 )
 
 
-def test_donut_legend_row_reads_swatch_name_and_dollars_only():
+def test_donut_legend_row_reads_swatch_name_and_tokens_only():
     out = _run_js("""
 const out={html:pie([
-  {model:'big',in:9000,out:0,cache:0,spend:12.5,month_cost:12.5,calls:1},
-  {model:'mid',in:1000,out:0,cache:0,spend:2.25,month_cost:2.25,calls:1},
+  {model:'big',in:9000,out:0,cache:0,month_tokens:9000,spend:12.5,calls:1},
+  {model:'mid',in:1000,out:0,cache:0,month_tokens:1000,spend:2.25,calls:1},
 ])};
 """)
     rows = ROW.findall(out["html"])
-    assert rows == [("big", "big", "$12.50"), ("mid", "mid", "$2.25")], out["html"]
+    assert rows == [("big", "big", "9K"), ("mid", "mid", "1K")], out["html"]
     assert "%" not in out["html"], out["html"]
 
 
 def test_donut_slices_share_the_key_of_their_legend_row():
     out = _run_js("""
 const out={html:pie([
-  {model:'big',in:9000,out:0,cache:0,spend:1,month_cost:1,calls:1},
-  {model:'mid',in:1000,out:0,cache:0,spend:1,month_cost:1,calls:1},
+  {model:'big',in:9000,out:0,cache:0,month_tokens:9000,spend:1,calls:1},
+  {model:'mid',in:1000,out:0,cache:0,month_tokens:1000,spend:1,calls:1},
 ])};
 """)
     rows = [k for k, *_ in ROW.findall(out["html"])]
@@ -37,18 +37,18 @@ const out={html:pie([
 
 
 def test_donut_legend_row_is_focusable():
-    out = _run_js("const out={html:pie([{model:'m',in:10,out:0,cache:0,spend:1,month_cost:1,calls:1}])};")
+    out = _run_js("const out={html:pie([{model:'m',in:10,out:0,cache:0,month_tokens:10,spend:1,calls:1}])};")
     assert re.search(r'<div[^>]*tabindex=0[^>]*data-k=|<div[^>]*data-k="[^"]+"[^>]*tabindex=0', out["html"]), out["html"]
 
 
 def test_donut_model_keeps_its_colour_when_the_set_changes():
     both = _run_js("""
 const out={html:pie([
-  {model:'alpha',in:9000,out:0,cache:0,spend:1,month_cost:1,calls:1},
-  {model:'beta',in:1000,out:0,cache:0,spend:1,month_cost:1,calls:1},
+  {model:'alpha',in:9000,out:0,cache:0,month_tokens:9000,spend:1,calls:1},
+  {model:'beta',in:1000,out:0,cache:0,month_tokens:1000,spend:1,calls:1},
 ])};
 """)
-    alone = _run_js("const out={html:pie([{model:'beta',in:1000,out:0,cache:0,spend:1,month_cost:1,calls:1}])};")
+    alone = _run_js("const out={html:pie([{model:'beta',in:1000,out:0,cache:0,month_tokens:1000,spend:1,calls:1}])};")
 
     def colour(html, key):
         m = re.search(rf'data-k="{key}"[^>]*><i style="background:([^"]+)"', html)

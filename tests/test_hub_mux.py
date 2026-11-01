@@ -291,7 +291,7 @@ def test_the_index_counts_only_the_runs_that_work(tmp_path, monkeypatch):
     assert mux.live(apps["alpha"]) == ["run-a", "run-b", "run-c"]
     page = mux.root_page(apps, "squad hub").decode()
     head, block, runs = page.partition('<div class="runs">')
-    assert '<span class="live">3 live</span>' in head, page       # the row states the count, and the finished run is out of it
+    assert '<span class="badge on">3 live</span>' in head, page   # the row states the count, and the finished run is out of it
     assert runs.split("</div>")[0].split() == ["run-a", "run-b", "run-c"], page
     assert "run-done" not in page
 
@@ -315,7 +315,7 @@ def test_the_index_row_states_its_count_and_keeps_the_run_ids_out_of_the_line(fl
     assert '<div class="runs">' in body
     assert "1 live" in head and "run-alpha-7" not in head, head
     assert "run-alpha-7" in runs.split("</div>")[0]
-    assert "none live" in body                                   # the repository with no run says so in words, not with a blank
+    assert '<span class="badge">idle</span>' in body              # the repository with no run says so in words, not with a blank
     assert "x/alpha" in head and "y/beta" in body
 
 

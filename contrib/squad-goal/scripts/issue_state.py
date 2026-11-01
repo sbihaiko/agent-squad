@@ -36,6 +36,9 @@ binding's `name` at run start and a resume that finds a different name refuses (
 Shell callers reach the same seam through this module's door:
 
     issue_state.py [--repo R]              print one `<issue>\t<state>` a line, the state the carrier answers
+    issue_state.py --go <n,n,…> [--label L]  the rows a dispatch pass reads, and the issues it names go-labelled whose
+                                          card the board does not carry: `UNREAD<TAB>n,n` and one `NOTE<TAB>n<TAB>why` a
+                                          line for one the issue itself says is closed or no longer carries L (#800, #1031)
     issue_state.py --state <issue>         print the state one issue carries
     issue_state.py --kinds                 print one `<issue>\t<kind>` a line, the kind the carrier answers
     issue_state.py --kind-gaps             print one kind a line, each the binding cannot carry
@@ -151,19 +154,49 @@ class State:
         and labels beside the state, and asks for them here rather than at the carrier."""
         return self.binding.rows(jq, **kw)
 
-    def unread(self, go):
+    def unread(self, go, label=""):
         """The go-labelled issues `go` names that the board read does not carry (#800). One board read; a missing card is
         asked by its known node id, and a node that answers a Status rescues it. Returns (carried, rescued, missing):
-        carried is the read {issue: state}, rescued {issue: state} the node reads, missing the issues nothing reads."""
-        carried = self.read_all()
+        carried is the read {issue: state} with the issues the issue itself denies dropped, rescued {issue: state} the
+        node reads, missing the issues nothing reads.
+
+        Every issue `go` names is asked for itself before either its carried row or its node is accepted (#1031): the
+        list that named it was read at another time, and the rows it is checked against come from a cache shared by the
+        owner and the project, so the issue is the one source that settles whether it still is go-labelled."""
+        return self.unread_rows(self.read_all(), go, label)
+
+    def unread_rows(self, carried, go, label=""):
+        """`go` against rows the caller already holds (the hub board cache, #800): the naming rule of `unread`, and no
+        board read. Each issue is asked for itself before its carried row or its node is accepted: one the issue says is
+        closed, or no longer carries `label`, is said once as a NOTE and dropped from the effective go candidates, so
+        closing an issue takes it out of the go set on the next cycle. A read that does not answer keeps the row or the
+        node's answer, and an issue neither one carries stays in `missing`, so a card the board really cannot read still
+        alerts."""
         rescued, missing = {}, []
+        effective = dict(carried)
         for n in sorted({str(x) for x in go}, key=int):
-            if n in carried: continue
+            why = self.not_go(n, label)
+            if why:
+                print(f"NOTE\t{n}\t{why}")
+                effective.pop(n, None)   # the rows are an earlier read: the issue itself is what drops it
+                continue
+            if n in effective: continue
             ask = getattr(self.binding, "node_status", None)
             st = ask(n) if ask else None
-            if st: rescued[n] = st
-            else: missing.append(n)
-        return carried, rescued, missing
+            if st: rescued[n] = st; continue
+            missing.append(n)
+        return effective, rescued, missing
+
+    def not_go(self, issue, label=""):
+        """Why the issue itself says it is not go-labelled: `closed`, or `no <label> label`. Empty when it is go-labelled,
+        or when the read does not answer -- a premise a failed read never settles one way or the other (#1031, ADR-0155)."""
+        facts = getattr(self.binding, "issue_facts", None)
+        f = facts(issue) if facts else None
+        if f is None: return ""
+        state, labels = f
+        if state and state != "open": return "closed"
+        if label and label not in labels: return f"no {label} label"
+        return ""
 
     def write(self, issue, wanted):
         """Write `wanted` on `issue`, then read it back. The read is the proof, and neither the answer nor
@@ -593,6 +626,17 @@ class BoardBinding:
         d = json.loads(self.api(f"repos/{self.repo}/issues/{issue}"))
         return ((d.get("milestone") or {}).get("title") or ""), [l["name"] for l in d.get("labels", []) if isinstance(l, dict)]
 
+    def issue_facts(self, issue):
+        """(state, label names) of one issue, read from the issue itself, or None when the read did not answer. Never
+        cached: this is the read a naming decision keeps its premise on, so a list read at another time, or another
+        repository's card on a shared board, cannot answer for the issue (#1031)."""
+        try:
+            d = json.loads(self.api(f"repos/{self.repo}/issues/{issue}"))
+        except (RuntimeError, OSError, subprocess.SubprocessError, ValueError, TypeError):   # a refused call, a hung one, a body that is not JSON
+            return None
+        if not isinstance(d, dict) or str(d.get("number", "")) != str(issue): return None
+        return str(d.get("state") or "").lower(), [l["name"] for l in d.get("labels") or [] if isinstance(l, dict)]
+
     def milestone(self, title, due=None):
         """The number of the one milestone titled `title`: found when it exists (open or closed), created when it does not.
         A create sends no due date unless the owner gave one."""
@@ -681,8 +725,10 @@ def _fresh_hub_items(require_fresh=True, repo=None):
 def main(argv):
     """The door for a shell caller: it asks the seam the same way a Python caller does."""
     args = argv[1:]
-    repo = ""
+    repo, label = "", ""
     if args[:1] == ["--repo"]: repo = args[1]; args = args[2:]
+    if "--label" in args:
+        k = args.index("--label"); label = args[k + 1] if k + 1 < len(args) else ""; del args[k:k + 2]
     if args[:1] == ["--hub-todos"]:
         cached = _fresh_hub_items(require_fresh=False, repo=repo or None)
         if cached is not None:
@@ -692,36 +738,22 @@ def main(argv):
                     print(item["n"])
         return 0
     if args[:1] == ["--go"]:   # the rows a dispatch pass reads, with the go-labelled issues the board does not carry named (#800)
+        state = board_state(repo=repo or None)
+        requested = [n for n in (args[1].split(",") if len(args) > 1 and args[1] else []) if n]
         cached = _fresh_hub_items(repo=repo or None)
-        if cached is not None:
-            rows = {str(i["n"]): i.get("st") or "" for i in cached if i.get("n") is not None}
-            requested = [n for n in (args[1].split(",") if len(args) > 1 and args[1] else []) if n]
-            state = board_state(repo=repo or None)
-            rescued, missing = {}, []
-            for n in requested:
-                if n in rows: continue
-                status = state.binding.node_status(n)
-                if status: rescued[n] = status
-                else: missing.append(n)
-            rows.update(rescued)
-            for n, s in sorted(rows.items(), key=lambda kv: int(kv[0])): print(f"{n}\t{s}")
-            if missing:
-                print("UNREAD\t" + ",".join(missing))
-                alerts = os.environ.get("SG_STATE")
-                if alerts:
-                    with open(os.path.join(alerts, "alerts.log"), "a") as f:
-                        f.write(f"{_now()} FRONTIER unread: go-labelled {', '.join('#' + m for m in missing)} has no readable card on the board\n")
-            return 0
-        carried, rescued, missing = board_state(repo=repo or None).unread(args[1].split(",") if len(args) > 1 and args[1] else [])
+        if cached is not None:   # the rows the hub holds, and the same naming rule: an issue they lack is asked for itself (#1031)
+            held = {str(i["n"]): i.get("st") or "" for i in cached if i.get("n") is not None}
+            carried, rescued, missing = state.unread_rows(held, requested, label)
+        else:
+            carried, rescued, missing = state.unread(requested, label)
         rows = {**carried, **rescued}
         for n, s in sorted(rows.items(), key=lambda kv: int(kv[0])): print(f"{n}\t{s}")
         if missing:
             print("UNREAD\t" + ",".join(missing))
             alerts = os.environ.get("SG_STATE")
             if alerts:
-                stamp = _now()
                 with open(os.path.join(alerts, "alerts.log"), "a") as f:
-                    f.write(f"{stamp} FRONTIER unread: go-labelled {', '.join('#' + m for m in missing)} has no readable card on the board\n")
+                    f.write(f"{_now()} FRONTIER unread: go-labelled {', '.join('#' + m for m in missing)} has no readable card on the board\n")
         return 0
     if args[:1] == ["--kinds"]:
         cached = _fresh_hub_items(repo=repo or None)

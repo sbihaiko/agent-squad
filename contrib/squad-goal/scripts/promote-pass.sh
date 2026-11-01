@@ -33,6 +33,8 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   # ADR-0163: one bound covers the whole attempt, never one step of it (Astra review, 2026-11-01). The delta proof, the
   # fallback and the promotion all spend from the same fifteen minutes; a bound on the suite alone would let an attempt run
   # the suite to its bound and only then start the fallback.
+  # ADR-0164: delivery outranks the proof. An unfinished proof never holds a landing; only a bound the delta cannot carry
+  # reaches the indeterminate branch below, and that branch never promotes a tip a test named red.
   t0=$(date +%s); bound=${SG_PROMOTE_BOUND_SECONDS:-900}; keep=${SG_PROMOTE_FALLBACK_SECONDS:-240}
   reserve_s=${SG_PROMOTE_RESERVE_SECONDS:-0}
   [ "$reserve_s" -gt 0 ] && { printf '%s %s\n' "$(date +%s)" "$$" > "$state/promote-reserve.$$" && mv "$state/promote-reserve.$$" "$state/promote-reserve"; }
