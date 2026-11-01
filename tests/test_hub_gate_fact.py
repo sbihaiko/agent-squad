@@ -81,3 +81,22 @@ def test_the_status_line_gate_sh_writes_is_the_one_the_footer_reads(hub, tmp_pat
     assert hub.foot_sources(NOW)["gate"] is None
     (st / "gate-status").unlink()
     assert hub.foot_sources(NOW)["gate"] is None
+
+
+def test_the_gate_times_come_from_the_history_of_gates_that_ran(hub, tmp_path, monkeypatch):
+    """The owner: how long the last gate took and the mean of the recent ones. A line whose start equals its finish
+    reused a verdict and ran nothing, so it is neither the last run nor in the mean; another kind is not in the mean."""
+    rows = [(1000, "fast", 100), (5000, "full", 3000), (3000, "fast", 200), (4000, "fast", 0)]
+    (tmp_path / "gate-history").write_text("".join(f"{f}\t{k}\tpass\t{SHA}\t{f - d}\n" for f, k, d in rows))
+    monkeypatch.setattr(hub, "STATE", tmp_path)
+    assert hub._gate_times("fast") == (200, 150)
+    assert hub._gate_times("full") == (3000, 3000)
+    assert hub._gate_times("none") == (None, None)
+
+
+def test_the_gate_fact_carries_its_times_off_the_footer_text(hub):
+    (fact,) = _gate(hub, took=127, avg=169)
+    assert fact["text"] == "gate fast pass 4m ago"
+    assert fact["parts"][0]["times"] == "took 2m07s · avg 2m49s"
+    (plain,) = _gate(hub)
+    assert "times" not in plain["parts"][0]

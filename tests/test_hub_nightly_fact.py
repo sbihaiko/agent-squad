@@ -38,7 +38,7 @@ def _nightly(hub, **over):
 
 
 def _paint(hub, items):
-    """The Nightly tile the page really paints for these facts, run through the instruments card's own functions in node (#983)."""
+    """The tiles the page really paints for these facts, run through the instruments card's own functions in node (#983)."""
     if shutil.which("node") is None:
         pytest.skip("node is required")
     block = re.search(r"^// INST\{.*?^// \}INST$", hub.PAGE, re.M | re.S)
@@ -46,7 +46,7 @@ def _paint(hub, items):
     esc = re.search(r"^const esc=.*$", hub.PAGE, re.M)
     cells = re.findall(r"^function ld(?:Num|Round|Cell|Cells)\(.*$", hub.PAGE, re.M)
     script = "\n".join(["const LOAD_ERR=95;", esc.group(0), *cells, block.group(0)]) \
-        + f"\nconsole.log(tileHtml(instTiles({json.dumps(items)})[1]))"
+        + f"\nconsole.log(instTiles({json.dumps(items)}).map(tileHtml).join(''))"
     out = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
     return out.stdout.rstrip("\n")
@@ -77,14 +77,12 @@ def test_the_fact_carries_every_failing_test_while_the_line_stays_compact(hub):
     assert all(i in fact["tip"] for i in ids)
 
 
-def test_the_page_lists_every_failing_test_in_an_expandable_detail(hub):
-    """The hover is not the only door: a keyboard or a screen reader gets a real list, and every id is in it."""
+def test_the_fact_lists_every_failing_test_and_the_page_draws_no_nightly_tile(hub):
+    """The owner removed the Nightly tile and the alert strip; the fact keeps every failing id for /api/status."""
     ids = [f"tests/test_{n}.py::test_a" for n in "abcdefg"]
     (fact,) = _nightly(hub, result="fail", serial="fail", ids=ids)
-    html = _paint(hub, [fact])
-    assert "<details" in html and "<summary>" in html
-    assert all(f"<li>{i}</li>" in html for i in ids)
-    assert "fail 4m ago" in html and "Nightly" in html
+    assert fact["detail"] == ids
+    assert "Nightly" not in _paint(hub, [fact])
 
 
 def test_a_green_nightly_carries_no_detail_list(hub):

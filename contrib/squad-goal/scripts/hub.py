@@ -974,7 +974,15 @@ def _gate_parts(g, now):
         and isinstance(g.get("ts"), (int, float)) and not isinstance(g.get("ts"), bool)
     if not ok: return [{"text": "gate ?", "tone": FOOT_NEUTRAL}]
     text = f"gate {g['kind']} {g['result']} {_age(max(now - g['ts'], 0.0))} ago"
-    return [{"text": text, "tone": "ok" if g["result"] == "pass" else "err", "tip": f"ran at {str(g['sha'])[:7]}"}]
+    part = {"text": text, "tone": "ok" if g["result"] == "pass" else "err", "tip": f"ran at {str(g['sha'])[:7]}"}
+    took, avg = g.get("took"), g.get("avg")
+    if isinstance(took, int) and isinstance(avg, int) and not isinstance(took, bool):
+        part["times"] = f"took {_span(took)} · avg {_span(avg)}"   # the card's gate tile shows it; the footer line does not
+    return [part]
+
+def _span(s):
+    """A gate's run time: `45s`, `2m07s`."""
+    return f"{s}s" if s < 60 else f"{s // 60}m{s % 60:02d}s"
 
 def _nightly_parts(n, now):
     """`nightly pass 6h ago`: the last full suite in both modes (nightly.sh, #704), its result and its age. A pass reads in
@@ -1627,7 +1635,22 @@ def _gate_status():
     if len(f) not in (4, 5) or not f[0].isdigit() or not all(f[1:4]) or (len(f) == 5 and not f[4]): return None
     line = {"kind": f[1], "result": f[2], "sha": f[3], "ts": float(f[0])}
     if len(f) == 5: line["selection"] = f[4]
+    took, avg = _gate_times(f[1])
+    if took is not None: line["took"], line["avg"] = took, avg
     return line
+
+def _gate_times(kind, n=20):
+    """How long the last gate of this kind took and the mean of the last `n`, in seconds, from $SG_STATE/gate-history
+    (`<finish> TAB <kind> TAB <result> TAB <sha> TAB <start>`). A line whose start equals its finish reused a verdict and
+    ran nothing, so it counts in neither. (None, None) when no gate of the kind ran."""
+    runs = []
+    for ln in _read(STATE / "gate-history").splitlines():
+        f = ln.split("\t")
+        if len(f) >= 5 and f[1] == kind and f[0].isdigit() and f[4].isdigit() and int(f[0]) > int(f[4]):
+            runs.append(int(f[0]) - int(f[4]))
+    if not runs: return None, None
+    last = runs[-n:]
+    return runs[-1], round(sum(last) / len(last))
 
 def _nightly_status():
     """The one result line the nightly full suite leaves in $SG_STATE/nightly-result, `<epoch> TAB <pass|fail> TAB <sha>
@@ -3641,12 +3664,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
    board lays the window out as a two-column grid of its own (`body.dockb`), so the phone states both layouts: on a 390 px
    screen the 300 px sidebar and the board column are what a reader has to scroll sideways to reach. */
 @media (max-width:600px){body{height:auto}body.tkopen #win{margin-right:0}body.tkopen #board{width:auto}#win{display:block;overflow:visible}body.dockb #win{display:block;grid-template-columns:none;grid-template-rows:none}#side{width:auto;border-right:0;border-bottom:1px solid var(--line)}body.dockb #side{grid-row:auto;grid-column:auto}#main{min-height:50vh}body.dockb #main{grid-column:auto;grid-row:auto}#board{width:auto}body.dockb #board{grid-column:auto;grid-row:auto;height:60vh}#lbody input{width:92px}}
-/* The page frame of the mock (#889): the alert strip, the header with its tabs, and the sidebar cards. */
-#alert{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:6px 16px;background:#3a1d24;border-top:1px solid #5a2a33;font-size:var(--fs-body);flex:none}
-#alert:empty{display:none}#alert.calm{background:var(--panel);border-top-color:var(--line)}
-#alert b{color:var(--bad)}#alert .ai+.ai::before,#alert button+.ai::before{content:"\00b7";color:var(--mute);margin-right:10px}#alert .w{color:var(--warn)}
-#alert .ls{font-weight:600}#alert .ls.on{color:var(--ok)}#alert .ls.off{color:var(--warn)}#alert .ls small{color:var(--mute);font-weight:400;margin-left:4px}
-#loopbtn{padding:2px 10px;font-size:var(--fs-min)}#loopbtn:disabled{opacity:.6;cursor:default}
+/* The page frame of the mock (#889): the header with its tabs, and the sidebar cards. */
 header.top{position:relative;display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--line);flex:none}
 header.top h1{font-size:var(--fs-xl);margin:0}header.top .spx{flex:1}
 header.top .pill{font-size:var(--fs-min);color:var(--mute)}
@@ -3666,14 +3684,14 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 #plans .sb,#stats .sb{max-height:340px;overflow:auto}
 #tab-set .sp .sb{padding:0 12px 12px}#mbody .mchs,#mbody .mch-row{padding:6px 0 8px}
 #mobile-link{color:var(--acc)}
-/* Machine & loop (#983): calm flight instruments in the sidebar. Three gauges, four annunciator tiles, two rows. No motion
+/* Monitor (#983): calm flight instruments in the sidebar. Three gauges, three annunciator tiles, two rows. No motion
    but the needle's own short move, and none at all under reduced motion. */
 #inst .igs{display:flex;justify-content:space-between;gap:4px;margin:2px 0 8px}#inst .ig{display:flex;flex-direction:column;align-items:center;flex:1;min-width:0}
 #inst .ig svg{display:block}#inst .ig .gt{fill:none;stroke:var(--line);stroke-width:3;stroke-linecap:round}#inst .ig .gf{fill:none;stroke-width:3;stroke-linecap:round}
 #inst .ig .gn{stroke:var(--fg);stroke-width:1.5;stroke-linecap:round;transform-origin:30px 32px;transition:transform .4s ease-out}#inst .ig .gh0{fill:var(--fg)}
 #inst #inst .ig.ldred .gn{stroke:var(--err)}#inst.warn 
 #inst .gv{font-size:var(--fs-min);color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap}#inst .gv b{color:var(--fg);font-weight:600}#inst.warn .gv b{color:var(--warn)}#inst .ig.ldred .gv b{color:var(--err)}
-#inst .ian{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px}
+#inst .ian{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px}#inst .ian .at:first-child{grid-column:1/-1}#inst .atm{display:block;color:var(--mute);font-variant-numeric:tabular-nums}
 #inst .at{background:#10141a;border:1px solid var(--line);border-radius:6px;padding:5px 7px;min-width:0;font-size:var(--fs-min)}
 #inst .at .ah{display:flex;align-items:center;gap:6px;color:var(--mute);font-weight:600}#inst .at .dot{width:7px;height:7px;border-radius:50%;flex:none;background:var(--mute)}
 #inst .at.ok .dot{background:var(--ok)}#inst .at.err .dot{background:var(--err)}#inst .at.info .dot{background:var(--acc)}
@@ -3698,7 +3716,7 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 <details id=plans class=sp><summary>Subscriptions<span class=sr id=plsr></span></summary><div class=sb><div id=subs></div></div></details>
 <details id=stats class=sp><summary>Cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><h4>Spend <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Figures at API list prices (API-equivalent)."></span></h4><div class=tot id=tot></div><div class=m id=totnote></div><div class=cash id=cash></div><h4>Spend over time <span class=row id=per></span></h4><div id=chart></div><div id=kpi></div><div id=open></div><h4>Tokens by model <small class=m id=piet>all time</small></h4><div id=pie></div></div></details>
 <details id=sqd class=sp open><summary>Squad models<span class=sr id=sqsr></span></summary><div class=sb id=sqm></div></details>
-<details id=inst class=sp open><summary>Machine &amp; loop<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div class=ian id=ian></div><div class=irw><span>Next cycle</span><b id=icyc aria-live=off>?</b></div><div id=iuse></div></div></details>
+<details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div class=ian id=ian></div><div class=irw><span>Next cycle</span><b id=icyc aria-live=off>?</b></div><div id=iuse></div></div></details>
 </aside>
 <main id=content>
 <section id=tab-board class="pane on" aria-label=Board>
@@ -3718,7 +3736,6 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 </section>
 </main>
 </div>
-<div id=alert role=alert></div>
 <div id=tk role=dialog aria-label=Ticket><header><span id=tkchips></span><span class=sp></span><span id=tknav></span><button id=tkx aria-label=Close>✕</button></header><div id=tkset></div><div id=tkb></div><footer><a class=btn id=tkgh target=_blank rel=noopener>Open on GitHub ↗</a><button id=tktodo>→ Todo</button><button id=tkrel>Highlight related</button></footer></div>
 <script>/*SWITCHER_JS*/
 {const swMe=(location.pathname.match(/^\/([^/?#]+)/)||[])[1]||"";switcherPoll(d=>switcherPaint(document.getElementById("psw"),d,swMe,"/"));}</script>
@@ -3770,7 +3787,7 @@ function ldNum(v){if(v===null||v===undefined||v===""||typeof v==="boolean")retur
 function ldRound(f){const fl=Math.floor(f),fr=f-fl;return fr>.5?fl+1:fr<.5?fl:fl+(fl%2)}   // half to even, exactly as `:.0f` rounds
 function ldCell(v){const f=ldNum(v);return{t:f===null?"?":ldRound(f)+"%",red:f!==null&&f>=LOAD_ERR}}
 function ldCells(d){return[["CPU","cpu"],["RAM","ram"],["GPU","gpu"]].map(p=>{const c=ldCell((d||{})[p[1]]);return{k:p[0],t:c.t,red:c.red}})}
-// Machine & loop (#983): the card the Settings strip became, drawn as calm flight instruments from what `/api/load` already
+// Monitor (#983): the card the Settings strip became, drawn as calm flight instruments from what `/api/load` already
 // serves: the three load numbers and the facts the sampler last read. Each figure is HTML text; the SVGs only draw and are
 // hidden from a screen reader. A tile's state is read off its fact, so the hub keeps deciding the tone and the text.
 // INST{
@@ -3778,17 +3795,17 @@ function gaugeGeom(v){const f=ldNum(v),k=f!==null,p=k?f:0,a=Math.PI*p/100;return
 function gaugeSvg(v){const g=gaugeGeom(v);return `<svg width=60 height=36 viewBox="0 0 60 36" aria-hidden="true" focusable="false"><path class=gt d="M4 32 A26 26 0 0 1 56 32"/><path class=gf stroke="${g.col}" d="M4 32 A26 26 0 0 1 ${g.x} ${g.y}"/><line class=gn x1=30 y1=32 x2=30 y2=10 style="transform:rotate(${g.deg}deg)"${g.known?"":" visibility=hidden"}/><circle class=gh0 cx=30 cy=32 r=2 /></svg>`}
 function instGauges(d){return ldCells(d).map(c=>`<div class="ig${c.red?" ldred":""}">${gaugeSvg((d||{})[c.k.toLowerCase()])}<span class=gv><b>${c.k}</b> ${esc(c.t)}</span></div>`).join("")}
 const instFact=(facts,k)=>(facts||[]).find(f=>f&&f.key===k);
-function instTile(k,f,lead){if(!f)return{k,text:"no reading",tone:"neutral"};const p=(f.parts||[])[0]||{},t=String(f.text||"").replace(lead,"").trim()||"?";return{k,text:t,tone:p.tone==="ok"||p.tone==="err"?p.tone:"neutral",tip:f.tip||null,detail:f.detail||null}}
+function instTile(k,f,lead){if(!f)return{k,text:"no reading",tone:"neutral"};const p=(f.parts||[])[0]||{},t=String(f.text||"").replace(lead,"").trim()||"?";return{k,text:t,tone:p.tone==="ok"||p.tone==="err"?p.tone:"neutral",tip:f.tip||null,detail:f.detail||null,times:p.times||null}}
 function instTiles(facts){const lp=instFact(facts,"loop"),ld=instFact(facts,"landing"),on=lp?/:ON$/.test(lp.text):null,
  land=ld?instTile("Landed",ld,/^landed\s*/):{k:"Landed",text:"no reading",tone:"neutral"},m=/PR #(\d+)/.exec(land.text);
  if(m){land.tone="info";land.href=`https://github.com/__REPO__/pull/${m[1]}`}
- return[instTile("Gate",instFact(facts,"gate"),/^gate\s*/),instTile("Nightly",instFact(facts,"nightly"),/^nightly\s*/),
+ return[instTile("Gate",instFact(facts,"gate"),/^gate\s*/),
   {k:"Loop",text:on===null?"?":on?"ON":"OFF",tone:on===null?"neutral":on?"ok":"err"},land]}
 const iq=t=>esc(t).replace(/"/g,"&quot;");
 function tileHtml(t){const v=t.href?esc(t.text).replace(/PR #\d+/,x=>`<a target=_blank rel=noopener href="${iq(t.href)}">${x}</a>`):esc(t.text),
  d=(t.detail||[]).length?`<details><summary>${t.detail.length} failed</summary><ul>${t.detail.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></details>`:"";
- return `<div class="at ${t.tone}"${t.tip?` title="${iq(t.tip)}"`:""}><span class=ah><span class=dot aria-hidden="true"></span>${esc(t.k)}</span><span class=av>${v}</span>${d}</div>`}
-function instSum(facts){const t=instTiles(facts);return t[2].text+" · "+t.filter(x=>x.k!=="Loop"&&x.tone==="err").length+" fail"}
+ return `<div class="at ${t.tone}"${t.tip?` title="${iq(t.tip)}"`:""}><span class=ah><span class=dot aria-hidden="true"></span>${esc(t.k)}</span><span class=av>${v}</span>${t.times?`<span class=atm>${esc(t.times)}</span>`:""}${d}</div>`}
+function instSum(facts){const t=instTiles(facts);return t.find(x=>x.k==="Loop").text+" · "+t.filter(x=>x.k!=="Loop"&&x.tone==="err").length+" fail"}
 function cycleLeft(text){const m=/^cycle (?:in |\+)(?:(\d+)h(\d\d)m|(\d+)m(\d\d)s)( late)?$/.exec(String(text||""));if(!m)return null;
  const s=m[1]!==undefined?(+m[1])*3600+(+m[2])*60:(+m[3])*60+(+m[4]);return m[5]?-s:s}
 function cycleFmt(left){const s=Math.abs(Math.round(left)),h=Math.floor(s/3600),mi=Math.floor(s/60)%60,p=n=>String(n).padStart(2,"0"),
@@ -4084,7 +4101,7 @@ const autoq=a=>{const QT="Quota used, read from the provider's own CLI. 100% = q
 const CUR={"R$":"BRL","U$":"USD","US$":"USD","$":"USD","€":"EUR","£":"GBP","¥":"JPY"},curOf=v=>{v=v.trim().toUpperCase();return CUR[v]||v};
 const money=(a,c)=>{try{return new Intl.NumberFormat(undefined,{style:"currency",currency:c}).format(a)}catch(e){return a+" "+c}};
 async function pollSubs(){try{const d=await (await fetch("/api/subs")).json(),ae=document.activeElement;if(ae&&ae.closest&&ae.closest("#subs")&&ae.tagName==="INPUT")return;
- const tot=Object.values(d.subs).reduce((a,v)=>a+(v.saved||0),0),any=Object.values(d.subs).some(v=>v.saved!=null);{const lims=Object.values(d.subs).filter(v=>{const aq=v.quota,aw=aq&&aq.windows&&aq.windows[0],pl=v.plan,q=aw?aw.pct:(pl&&pl.quota!=null?pl.quota:null);return q!=null&&q>=100});subWarn=lims.map(v=>v.name);
+ const tot=Object.values(d.subs).reduce((a,v)=>a+(v.saved||0),0),any=Object.values(d.subs).some(v=>v.saved!=null);{const lims=Object.values(d.subs).filter(v=>{const aq=v.quota,aw=aq&&aq.windows&&aq.windows[0],pl=v.plan,q=aw?aw.pct:(pl&&pl.quota!=null?pl.quota:null);return q!=null&&q>=100});
  $("#plsr").textContent=lims.length?`${lims.length} at limit`:(any||d.api?"none at limit":"set plan prices")}   // the card says what needs a look; the prices stay in the cost card
  $("#cash").textContent="at API list prices (API-equivalent) · cash this month: "+(any||d.api?`plans ${usd(d.plans)} + API ${usd(d.api)} = ${usd(d.total)}`:"set plan prices");
  $("#subs").innerHTML=`<div class=subx>Per subscription: quota used, as each provider's CLI reports it. With no reading, the bar is the API-equivalent usage vs the plan price.</div><datalist id=curs>${["USD","BRL","EUR","GBP","ARS","MXN","CAD","JPY"].map(c=>`<option value=${c}>`).join("")}</datalist>`+Object.entries(d.subs).map(([k,v])=>{const ok=v.saved!=null,pl=v.plan,pr=d.presets[k],custom=pl&&pl.plan==="custom";
@@ -4435,20 +4452,6 @@ new MutationObserver(flowTabs).observe($("#flowov"),{attributes:true});
  document.addEventListener("click",e=>{if(!e.target.closest("#psw")&&psw.classList.contains("on")){psw.classList.remove("on");pj.setAttribute("aria-expanded","false")}})}
 // "board read N s ago": the stamp of the last board answer
 setInterval(()=>{const b=$("#bread");if(!b)return;b.textContent=lastRead?`board read ${Math.max(0,Math.round((Date.now()-lastRead)/1000))} s ago${readStale?" (stale)":""}`:""},1000);
-// The alert strip: what the page already fetches. /api/status carries the loop and the warnings (the nightly among them); the
-// subscriptions poll adds a limit warning. An item with no data is left out, and a strip with no item is not drawn.
-let alertLoop=null,alertWarn=[],subWarn=[];
-function alertDraw(){const items=[],nw=alertWarn.filter(w=>/nightly/i.test(w.text)),ow=alertWarn.filter(w=>!/nightly/i.test(w.text));
- nw.forEach(w=>{const bad=/fail/i.test(w.text),sha=(String(w.tip||"").match(/ran at ([0-9a-f]{7,40})/)||[])[1];   // the mock's wording: "Nightly suite failed on dev <sha>"; the age stays in the tip
-  items.push(`<span class=ai title="${esc((w.text+" "+(w.tip||"")).trim())}">${bad?"<b>&#9679; Nightly suite failed</b>":"Nightly suite passed"}${sha?` on dev ${esc(sha.slice(0,8))}`:""}</span>`)});
- if(alertLoop){const on=!!alertLoop.on,since=alertLoop.since?` <small>since ${esc(String(alertLoop.since).slice(0,16).replace("T"," ").replace(new Date().toLocaleDateString("sv")+" ",""))}</small>`:"";
-  items.push(`<span class=ai id=loopst>Loop: <span class="ls ${on?"on":"off"}">${on?"on":"off"}${since}</span></span>`);
-  if(!on)items.push(`<button id=loopbtn disabled title="The hub has no route that starts the loop: start it from the terminal.">Start loop</button>`)}
- ow.forEach(w=>items.push(`<span class="ai w" title="${esc(w.tip||"")}">${esc(w.text)}</span>`));
- subWarn.filter(n=>!alertWarn.some(w=>w.text.toLowerCase().includes(n.toLowerCase()))).forEach(n=>items.push(`<span class="ai w">${esc(n)} at 100% of its limit</span>`));
- const a=$("#alert"),h=items.join("");if(a.dataset.h!==h){a.dataset.h=h;a.innerHTML=h}a.classList.toggle("calm",!nw.length&&!ow.length&&!subWarn.length&&(!alertLoop||alertLoop.on))}
-async function alertPoll(){try{const d=await (await fetch("/api/status")).json();alertLoop=d.loop||null;alertWarn=(d.warnings||[]).filter(w=>w&&w.text);alertDraw()}catch(e){}}
-alertPoll();setInterval(alertPoll,5000);
 /*BOARD_LANES*/
 $("#lmode").onchange=e=>{bo.lmode=e.target.value;saveB();pollBoard()};
 // The swimlanes' state (#891): collapse and open state live in `bo`, so the device keeps them across a reload.

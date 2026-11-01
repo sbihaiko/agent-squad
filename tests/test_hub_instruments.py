@@ -93,37 +93,39 @@ def test_the_gauge_svg_is_hidden_from_a_screen_reader_and_the_value_is_text(hub)
 
 # ---------------------------------------------------------------- the annunciators
 
-def test_the_four_tiles_read_gate_nightly_loop_and_landed_in_that_order(hub):
+def test_the_three_tiles_read_gate_loop_and_landed_in_that_order(hub):
+    """The owner removed the Nightly tile from the card; the footer still carries the nightly fact."""
     facts = _facts(hub, gate=GATE_FAIL, nightly=NIGHTLY_PASS, loop=True)
     tiles = _run(hub, f"instTiles({json.dumps(facts)})")
-    assert [t["k"] for t in tiles] == ["Gate", "Nightly", "Loop", "Landed"]
-    gate, nightly, loop, landed = tiles
+    assert [t["k"] for t in tiles] == ["Gate", "Loop", "Landed"]
+    gate, loop, landed = tiles
     assert (gate["tone"], gate["text"]) == ("err", "fast fail 5m ago")
     assert gate["tip"] == "ran at 0123456"
-    assert (nightly["tone"], nightly["text"]) == ("ok", "pass 6h ago")
     assert (loop["tone"], loop["text"]) == ("ok", "ON")
     assert landed["text"] == "PR #73 2h ago" and landed["href"].endswith("/pull/73")
 
 
+def test_the_gate_tile_shows_the_last_run_time_and_the_mean(hub):
+    """The owner: the gate tile shows how long the last gate took and the mean of the recent ones."""
+    facts = _facts(hub, gate={**GATE_FAIL, "took": 127, "avg": 169}, loop=True)
+    gate = _run(hub, f"instTiles({json.dumps(facts)})[0]")
+    assert gate["times"] == "took 2m07s · avg 2m49s"
+    html = _run(hub, f"instTiles({json.dumps(facts)}).map(tileHtml).join('')")
+    assert "took 2m07s · avg 2m49s" in html
+    plain = _run(hub, f"instTiles({json.dumps(_facts(hub, gate=GATE_FAIL))})[0]")
+    assert not plain.get("times")
+
+
 def test_a_source_with_no_reading_says_so_and_never_draws_a_pass(hub):
     tiles = _run(hub, f"instTiles({json.dumps(_facts(hub))})")
-    gate, nightly, loop, _ = tiles
+    gate, loop, _ = tiles
     assert gate["tone"] == "neutral" and "pass" not in gate["text"]
-    assert nightly["tone"] == "neutral" and "pass" not in nightly["text"]
     assert loop["text"] == "?" and loop["tone"] == "neutral"
 
 
 def test_a_loop_that_is_off_reads_off_in_the_error_tone(hub):
-    loop = _run(hub, f"instTiles({json.dumps(_facts(hub, loop=False))})[2]")
+    loop = _run(hub, f"instTiles({json.dumps(_facts(hub, loop=False))})[1]")
     assert (loop["text"], loop["tone"]) == ("OFF", "err")
-
-
-def test_a_red_nightly_tile_lists_every_failing_test(hub):
-    ids = [f"tests/test_{n}.py::test_a" for n in "abc"]
-    facts = _facts(hub, nightly={**NIGHTLY_PASS, "result": "fail", "serial": "fail", "ids": ids})
-    html = _run(hub, f"instTiles({json.dumps(facts)}).map(tileHtml).join('')")
-    assert "<details" in html and all(f"<li>{i}</li>" in html for i in ids)
-    assert "fail 6h ago" in html
 
 
 # ---------------------------------------------------------------- the summary and the rows
@@ -132,7 +134,7 @@ def test_the_collapsed_summary_names_the_loop_state_and_the_failed_tiles(hub):
     one = _facts(hub, gate=GATE_FAIL, nightly=NIGHTLY_PASS, loop=True)
     two = _facts(hub, gate=GATE_FAIL, nightly={**NIGHTLY_PASS, "result": "fail", "serial": "fail"}, loop=False)
     assert _run(hub, f"instSum({json.dumps(one)})") == "ON · 1 fail"
-    assert _run(hub, f"instSum({json.dumps(two)})") == "OFF · 2 fail"      # the loop's own OFF is not counted twice
+    assert _run(hub, f"instSum({json.dumps(two)})") == "OFF · 1 fail"      # no nightly tile; the loop's OFF is not counted twice
     assert _run(hub, f"instSum({json.dumps(_facts(hub))})") == "? · 0 fail"
 
 
@@ -153,10 +155,9 @@ def test_the_usage_row_states_tokens_then_calls_and_invents_no_budget(hub):
 def test_the_card_sits_in_the_sidebar_and_the_settings_strip_is_gone(hub):
     page = hub.PAGE
     side = page[page.index("<aside id=side>"):page.index("<main id=content")]
-    assert "<details id=inst class=sp open><summary>Machine &amp; loop<span class=sr id=instsr></span></summary>" in side
+    assert "<details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary>" in side
     for gone in ("sts", "foot", "ldline", "ldfacts"):
         assert not re.search(rf"id={gone}\b", page), gone
-    assert "<div id=alert role=alert></div>" in page       # the alert strip is unchanged
 
 
 def test_the_card_reads_the_one_load_route_and_stays_calm(hub):
