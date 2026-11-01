@@ -140,8 +140,8 @@ DOT_PX = 9                    # dots closer than this many pixels merge into a n
 REASON_TEXT = {"not_planned": "closed as not planned", "abandoned": "closed as abandoned", "open": "still open",
                "no_opened": "no opened date",
                NO_TRANSITION: "no transition into the chosen columns"}
-LOG_TICKS = [(1 / 24, "1 h"), (1, "1 d"), (7, "1 w")]
-CUBE_TICKS = [(1, "1 d"), (7, "1 w"), (30, "30 d"), (60, "60 d")]
+LOG_TICKS = [1 / 24, 1, 7]           # days
+CUBE_TICKS = [1, 7, 30, 60]          # days
 
 
 def _window_size(count):
@@ -203,27 +203,31 @@ def control_chart(items, timeframe=None, log=False, now=None, start=None, end=No
         def position(h):
             return _clamp((math.log10(max(h / 24, LOG_FLOOR_DAYS)) - math.log10(LOG_FLOOR_DAYS))
                           / (math.log10(top) - math.log10(LOG_FLOOR_DAYS)))
-        ticks = [(days * 24, text, position(days * 24)) for days, text in LOG_TICKS]
+        ticks = [(days * 24, position(days * 24)) for days in LOG_TICKS]
     elif axis == "cube":
         top = float(math.ceil(max(days_max, 1) ** (1 / 3) * 1.05) ** 3)
         def position(h):
             return _clamp(max(h / 24, 0) ** (1 / 3) / top ** (1 / 3))
-        ticks = [(days * 24, text, position(days * 24)) for days, text in CUBE_TICKS if days <= top]
+        ticks = [(days * 24, position(days * 24)) for days in CUBE_TICKS if days <= top]
     else:
         top = float(max(1, math.ceil(max(hours + [high for _, _, high in rolling], default=0) * 1.1)))
         def position(h):
             return _clamp(h / top)
-        ticks = [(top * k / 5, _duration(top * k / 5), position(top * k / 5)) for k in range(6)]
+        ticks = [(top * k / 5, position(top * k / 5)) for k in range(6)]
 
+    banded = len(hours) > 1
     dots = []
     for row, hrs, (mean, low, high) in zip(plotted, hours, rolling, strict=True):
         closed = datetime.fromisoformat(row["c"])
         x = _clamp((closed - start).total_seconds() / span) if span > 0 else 1.0
+        if banded:
+            band = {"low": low, "high": high, "low_text": _duration(low), "high_text": _duration(high),
+                    "y_low": position(low), "y_high": position(high)}
+        else:
+            band = dict.fromkeys(("low", "high", "low_text", "high_text", "y_low", "y_high"))
         dots.append({"n": row["n"], "title": row.get("t", ""), "closed": closed.date().isoformat(), "hours": hrs,
                      "text": _duration(hrs), "x": x, "y": position(hrs),
-                     "rolling": {"hours": mean, "low": low, "high": high, "text": _duration(mean),
-                                 "low_text": _duration(low), "high_text": _duration(high),
-                                 "y": position(mean), "y_low": position(low), "y_high": position(high)}})
+                     "rolling": {"hours": mean, "text": _duration(mean), "y": position(mean), **band}})
 
     clusters = []
     for dot in dots:
@@ -234,12 +238,12 @@ def control_chart(items, timeframe=None, log=False, now=None, start=None, end=No
         else:
             clusters.append({"x": dot["x"], "y": dot["y"], "dots": [dot]})
 
-    def line(hrs):
-        return None if not hrs else {"hours": hrs, "text": _duration(hrs), "y": position(hrs)}
+    def line(hrs, label):
+        return None if hrs is None else {"hours": hrs, "text": _duration(hrs), "y": position(hrs), "label": label}
 
-    summary = {"average": line(statistics.fmean(hours)) if hours else None,
-               "median": line(statistics.median(hours)) if hours else None,
-               "p85": line(_p85(hours)) if hours else None}
+    summary = {"average": line(statistics.fmean(hours), "Average") if hours else None,
+               "median": line(statistics.median(hours), "Median") if hours else None,
+               "p85": line(_p85(hours), "p85") if hours else None}
     xticks = []
     for k in range(7):
         moment = start + timedelta(seconds=span * k / 6)
@@ -252,13 +256,13 @@ def control_chart(items, timeframe=None, log=False, now=None, start=None, end=No
         scope = f"last {timeframe * 24} hours" if timeframe and timeframe < 7 else f"last {timeframe} days" if timeframe else "all closed cards"
     return {
         "measure": measure,
-        "scale": "log" if log else "jira",
+        "scale": axis,
         "axis": axis,
         "timeframe": timeframe,
         "window": {"size": size, "unit": "issues", "centered": True},
         "dots": dots,
         "clusters": clusters,
-        "ticks": [{"text": text, "y": y} for _, text, y in ticks],
+        "ticks": [{"hours": hrs, "text": _duration(hrs), "y": y} for hrs, y in ticks],
         "xticks": xticks,
         "range": {"start": start.isoformat(), "end": end.isoformat()},
         **summary,
