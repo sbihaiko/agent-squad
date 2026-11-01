@@ -149,6 +149,7 @@ test-shell-suites-gate.sh 4.22
 test-shell-suites-hermetic.sh 0.05
 test-single-owner.sh 0.70
 test-single.sh 16.06
+test-spec-forecast.sh 0.53
 test-spend-routed.sh 0.54
 test-stack.sh 1.17
 test-state-isolation.sh 1.45
