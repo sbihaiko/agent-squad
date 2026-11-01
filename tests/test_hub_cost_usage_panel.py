@@ -21,6 +21,11 @@ def _stats():
     return _panel("stats")
 
 
+def _usage():
+    """The Usage panel: the subscription gauges and the token ring, split out of Cost & usage (owner, 2026-11-01)."""
+    return _panel("usage")
+
+
 def _fn(src, name):
     i = src.index(f"function {name}(")
     j = src.index("{", i)
@@ -108,9 +113,12 @@ def test_totals_tiles_live_in_cost_panel_not_subscriptions():
     assert "$(\"#tot3\")" not in SRC
 
 
-def test_cost_panel_is_named_cost_and_usage():
-    assert "<summary>Cost &amp; usage<" in _panel("stats")   # re-anchored to the mock (#889): the card title is sentence case
-    assert "cost &amp; speed" not in SRC and "cost & speed" not in SRC
+def test_cost_and_usage_is_two_panels_usage_and_spend():
+    """Owner, 2026-11-01: Cost & usage splits in two. Usage holds the subscription gauges and the token ring; Spend holds the
+    tiles and the spend chart."""
+    assert "<summary>Usage<" in _usage(), _usage()[:200]
+    assert "<summary>Spend<" in _stats(), _stats()[:200]
+    assert "Cost &amp; usage" not in SRC and "cost &amp; speed" not in SRC and "cost & speed" not in SRC
 
 
 def test_no_tot3_tile_grid():
@@ -119,16 +127,18 @@ def test_no_tot3_tile_grid():
     assert re.search(r"<div class=tot id=tot>", html)
 
 
-def test_section_order_is_gauges_tokens_spend_chart():
+def test_section_order_is_gauges_tokens_in_usage_and_tiles_chart_in_spend():
     """Owner, 2026-11-01: the token ring rises to sit under the subscription gauges, and the speed block and the cash line
     leave the panel. The panel reads: subscriptions, the token ring, the spend tiles, then the spend chart."""
-    html = _stats()
-    pos = [html.find("id=isub"), html.find("Model tokens · this month"), html.find("id=pie"),
-           html.find("Spend "), html.find("Spend over time"), html.find("id=chart")]
+    use, spend = _usage(), _stats()
+    pos = [use.find("id=isub"), use.find("Model tokens · this month"), use.find("id=pie")]
+    assert all(p >= 0 for p in pos), pos
+    assert pos == sorted(pos), pos
+    pos = [spend.find("id=tot"), spend.find("Spend over time"), spend.find("id=chart")]
     assert all(p >= 0 for p in pos), pos
     assert pos == sorted(pos), pos
     for gone in ("id=kpi", "id=open", "id=cash", "id=totnote"):
-        assert gone not in html, gone
+        assert gone not in SRC, gone
 
 
 
@@ -229,7 +239,7 @@ def test_open_with_none_reads_none_open():
 
 
 def test_cost_donut_sits_under_its_title_and_subtitle():
-    html = _stats()
+    html = _usage()
     assert "Tokens by model" not in html
     assert "<h4>Model tokens · this month</h4>" in html
     assert html.index("<h4>Model tokens · this month</h4>") < html.index('<div class=m id=piet>in + out</div>') < html.index("id=pie")
@@ -305,7 +315,7 @@ def test_named_constant_keeps_the_top_three_models():
 
 
 def test_the_subtitle_is_static_and_pollstats_leaves_it_alone():
-    assert '<div class=m id=piet>in + out</div>' in _stats()
+    assert '<div class=m id=piet>in + out</div>' in _usage()
     assert '$("#piet")' not in POLL
 
 
