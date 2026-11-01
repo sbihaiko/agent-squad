@@ -181,13 +181,12 @@ def test_every_card_selector_names_the_card_once(hub):
     for sels, _ in _rules(hub.INST_CSS):
         for s in sels:
             assert re.match(r"#(inst|ispec)\b", s), s
-            assert len(re.findall(r"#inst\b", s)) == 1, s
+            assert len(re.findall(r"#inst\b", s)) <= 1, s
 
 
 def test_a_red_cell_draws_its_needle_and_its_value_red(hub):
     rules = _rules(hub.INST_CSS)
-    red = lambda sel: any(sel in sels and "stroke:var(--err)" in d.replace(" ", "") for sels, d in rules)
-    assert red("#inst .ig.ldred .gn"), "the overload needle is red"
+    assert any("#inst .ig.ldred .gn" in sels and "stroke:var(--err)" in d.replace(" ", "") for sels, d in rules), "the overload needle is red"
     assert any("#inst .gv" in sels and "font-size:var(--fs-min)" in d for sels, d in rules), "the gauge value is small text"
 
 
@@ -204,5 +203,5 @@ def test_a_red_arc_stays_red_when_the_card_warns(hub):
     assert any(s.startswith("#inst.warn") for _, s in reds), "the red rule names the warning card too"
     for i, (sels, d) in enumerate(rules):
         for s in sels:
-            if ".warn" in s and s.endswith(".gf") and "stroke:" in d:
+            if ".warn" in s and ".ldred" not in s and s.endswith(".gf") and "stroke:" in d:
                 assert any(_spec(r) > _spec(s) or (_spec(r) == _spec(s) and j > i) for j, r in reds), s

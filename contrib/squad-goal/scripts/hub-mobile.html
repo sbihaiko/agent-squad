@@ -20,8 +20,11 @@ h2{font-size:var(--fs-md);margin:6px 0 10px}
 /*INST_CSS*/
 /* The Monitor tab: the desktop's card at phone width. The card is always open here; its loop control is 44 px tall. */
 #inst{display:block}#inst>summary{list-style:none;display:flex;align-items:baseline;gap:8px;font-size:var(--fs-md);font-weight:600;margin:6px 0 10px;min-height:44px;align-items:center}
-#inst>summary::-webkit-details-marker{display:none}#instsr{color:var(--mute);font-size:var(--fs-min);font-weight:400}
+#inst>summary::-webkit-details-marker{display:none}#inst>summary{cursor:default}#instsr{color:var(--mute);font-size:var(--fs-min);font-weight:400}
 #inst .ig svg{width:100%;max-width:90px;height:auto}
+/* An imported PR link is a 44 px target. A failed load read marks the card stale: a note says why, the readings dim. */
+#inst .at a{display:inline-flex;align-items:center;min-height:44px;min-width:44px}
+#inst-stale{margin:0 0 8px;color:var(--warn);font-size:var(--fs-min)}#inst.stale .igs,#inst.stale .ian,#inst.stale #ispec{opacity:.5}
 #loop{padding:12px;border-radius:8px;background:var(--panel);border:1px solid var(--line)}
 #loop.on #loop-text{color:var(--ok)}#loop.off #loop-text{color:var(--err)}#loop.draining #loop-text,#loop.starting #loop-text{color:var(--warn,#d4a017)}
 #loop-ctl{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}#loop-ctl button,#loop-confirm button{min-height:44px;padding:0 14px}#loop-ctl button:disabled{opacity:.45}#loop-reason:not(:empty){color:var(--muted,#8a8f98)}
@@ -361,10 +364,29 @@ const $ = s => document.querySelector(s), esc = s => escHTML(s);
 return { instDraw, instTick };
 })();
 $("iloop").append($("loop-box"));   // the loop row of the card is this page's own control, which obeys the hub's actions
-async function loadPoll() { try { inst.instDraw(await call("/api/load")); } catch (e) {} }
+// The card is the whole tab here: a tap on its title never folds it (the desktop's card still folds).
+const instHead = $("inst").querySelector("summary");
+instHead.addEventListener("click", e => e.preventDefault());
+instHead.tabIndex = -1;
+// A failed read is shown, never dropped: the card says it is not current, and the countdown stops on the old reading.
+const instStale = document.createElement("p");
+instStale.id = "inst-stale"; instStale.setAttribute("role", "status"); instStale.hidden = true;
+$("ibody").prepend(instStale);
+let loadStale = false;
+function markStale(why) {
+  loadStale = !!why;
+  $("inst").classList.toggle("stale", loadStale);
+  instStale.hidden = !loadStale;
+  instStale.textContent = loadStale ? "Not current: " + why : "";
+}
+async function loadPoll() {
+  try { inst.instDraw(await call("/api/load")); markStale(null); }
+  catch (e) { markStale(e.message || "the load read failed."); }
+}
+function monitorTick() { if (!loadStale) inst.instTick(); }
 loadPoll();
 setInterval(loadPoll, 5000);
-setInterval(inst.instTick, 1000);
+setInterval(monitorTick, 1000);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/mobile/sw.js", { scope: "/mobile/" }).catch(() => {});
 status();
 setInterval(status, 5000);
