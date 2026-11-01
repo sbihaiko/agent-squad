@@ -100,3 +100,9 @@ def test_the_gate_fact_carries_its_times_off_the_footer_text(hub):
     assert fact["parts"][0]["times"] == "took 2m07s · avg 2m49s"
     (plain,) = _gate(hub)
     assert "times" not in plain["parts"][0]
+
+
+def test_a_gate_time_under_a_minute_reads_in_seconds(hub):
+    """`avg 47s`, never `avg 0m47s`: the gate tile's times keep their own format whatever else formats a span."""
+    part = hub._gate_parts({"kind": "fast", "result": "pass", "sha": "a" * 40, "ts": 1000.0, "took": 124, "avg": 47}, 1010.0)[0]
+    assert part["times"] == "took 2m04s · avg 47s"
