@@ -165,9 +165,9 @@ def test_a_card_closed_as_not_planned_is_no_delivery_and_the_chart_names_it(hub,
     assert lead["excluded"] == [{"reason": "not_planned", "count": 3}]
     assert lead["excluded_total"] == 3
     abandoned = next(g for g in groups if g["name"] == "Abandoned")
-    assert [r["n"] for r in abandoned["items"]] == [2, 3, 4], "a card closed as not planned is drawn Abandoned, never Closed"
+    assert abandoned["items"] == [] and abandoned["n"] == 3, "a card closed as not planned is counted Abandoned, never Closed"
     closed = next(g for g in groups if g["name"] == hub.COLUMN["issue_closed"])
-    assert [r["n"] for r in closed["items"]] == [1]
+    assert closed["items"] == [] and closed["n"] == 1
 
 
 def test_the_closed_band_never_steps_down_where_the_close_reason_began(hub, board):

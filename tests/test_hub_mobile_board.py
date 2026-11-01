@@ -267,6 +267,16 @@ HR_BOARD = {"t": 1, "err": None, "labels": [], "lc": {}, "cases": [], "flow": No
 
 
 @pytest.mark.node_bound
+def test_a_blocker_to_a_closed_card_the_board_does_not_hold_opens_its_sheet(hub):
+    out = run_page(hub.MOBILE_PAGE, """
+        await loadBoard();
+        openCard(99);
+        return { open: !$("sheet").hidden, n: offBoard && offBoard.n };
+    """, board=[HR_BOARD])
+    assert out == {"open": True, "n": 99}, out
+
+
+@pytest.mark.node_bound
 def test_the_phone_sheet_steps_the_cards_of_the_run_the_opened_card_holds(hub):
     out = run_page(hub.MOBILE_PAGE, """
         await loadBoard();

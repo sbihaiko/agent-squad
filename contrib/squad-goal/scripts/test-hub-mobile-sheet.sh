@@ -35,7 +35,7 @@ JS
 node "$T/run.js" "$js"; [ $? -eq 0 ] || fail=1
 rm -rf "$T"
 page=$(cat "$html")
-for wire in 'b.dataset.hr = x.hr' 'const set = sheetCards(shown, x), at = set.indexOf(x);' 'sheetStep(view, shown, g)' '(at + 1) + " of " + set.length'; do
+for wire in 'b.dataset.hr = x.hr' 'const set = offBoard ? [] : sheetCards(shown, x), at = set.indexOf(x);' 'sheetStep(view, shown, g)' '(at + 1) + " of " + set.length'; do
   case "$page" in *"$wire"*) echo "ok   the page wires: $wire" ;;
   *) echo "FAIL the page does not wire: $wire"; fail=1 ;;
   esac

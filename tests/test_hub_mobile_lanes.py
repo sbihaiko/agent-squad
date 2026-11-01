@@ -163,11 +163,6 @@ def test_a_closed_column_names_the_count_the_answer_carries():
     assert out["closed"] == [{"name": "Closed", "count": 5}]
 
 
-def test_a_blocker_to_a_card_the_board_does_not_hold_opens_its_sheet():
-    html = PAGE.read_text()
-    assert "offBoard" in html and "const x = offBoard || shown[view.card]" in html
-
-
 @pytest.mark.node_bound
 def test_a_saved_collapse_wins_over_the_default_and_the_flat_list_follows_it():
     out = lanes(TODO_CARDS, lc={"10|none": True, "none|none": False})

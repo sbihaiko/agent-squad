@@ -449,6 +449,11 @@ def test_every_column_of_the_shipped_vocabulary_takes_the_same_path(served, colu
     lagging(mod, [card(7, read)], read_at)
     record(state, {"ITEM7": {"column": column, "at": at(read_at + 5)}})
     board = get_board(port)
+    ends = {g["name"]: g["n"] for g in board["groups"] if g.get("end")}
+    if column in ends:
+        assert where(board, 7) == [], f"a closed card is served as a row in {column!r}"
+        assert ends[column] == 1, f"the {column!r} count does not name the card: {ends}"
+        return
     placed = where(board, 7)
     assert [p[0] for p in placed] == [column], f"the recorded column {column!r} is not the one drawn: {placed}"
     assert placed[0][1].get("pd") is True, f"the card moved to {column!r} wears no pending mark"
