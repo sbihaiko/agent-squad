@@ -38,15 +38,17 @@ def _board(title):
 def test_an_older_answer_never_overwrites_a_newer_board(hub):  # noqa: F811
     out = move.run_page(hub.MOBILE_PAGE, HOLD + f"""
       show("board"); await __tick(5);
-      held.length = 0;
+      held.splice(0).forEach(r => r(answer({json.dumps(_board("first"))})));   // the read the panel made at once
+      await __tick(10);
       const poll = loadBoard(), write = loadBoard(true);   // the read after a write supersedes the poll in flight
       const sent = held.length;
-      held[held.length - 1](answer({json.dumps(_board("new"))}));
+      held[1](answer({json.dumps(_board("new"))}));
       await write; await __tick(5);
-      if (held.length > 1) held[0](answer({json.dumps(_board("old"))}));
+      held[0](answer({json.dumps(_board("old"))}));
       await __tick(10);
       return {{ sent, title: board.groups[0].items[0].t }};
     """)
+    assert out["sent"] == 2, out
     assert out["title"] == "new", out
 
 
@@ -94,7 +96,26 @@ def test_a_poll_for_a_hidden_app_or_a_hidden_panel_does_not_run(hub, monkeypatch
     assert not [p for p in polled if p in out["away"]], out["away"]
     assert {"/api/status", "/api/loop", "/api/load"} <= set(out["monitor"]), out["monitor"]
     assert "/api/board" not in out["monitor"], out["monitor"]
-    assert "/api/board" in out["onBoard"] and not {"/api/status", "/api/loop", "/api/load"} & set(out["onBoard"]), out
+    assert "/api/board" in out["onBoard"] and not {"/api/loop", "/api/load"} & set(out["onBoard"]), out
+
+
+@pytest.mark.node_bound
+def test_the_reconnect_screen_clears_with_no_tap_on_another_tab(hub, monkeypatch):  # noqa: F811
+    """`#reconnect` covers the whole page, so the status poll that hides it runs on every tab while the app is in view."""
+    monkeypatch.setattr(move, "DOM_HARNESS", INTERVALS)
+    out = move.run_page(hub.MOBILE_PAGE, """
+      const real = fetch; let down = true;
+      globalThis.fetch = (p, o) => down && String(p).startsWith("/api/status") ? Promise.reject(new Error("offline")) : real(p, o);
+      show("board"); await __tick(5);
+      await status(); await __tick(5);
+      const shown = !$("reconnect").hidden;
+      down = false;
+      for (const i of __intervals) i.fn();
+      await __tick(10);
+      return { shown, after: !$("reconnect").hidden };
+    """)
+    assert out["shown"], "the hub is down: the reconnect screen shows"
+    assert not out["after"], "the hub answers again: a poll on the Board tab clears the screen with no tap"
 
 
 @pytest.mark.node_bound
