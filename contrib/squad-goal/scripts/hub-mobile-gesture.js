@@ -26,6 +26,14 @@ const afterGesture = (v, g) => {
   return v;
 };
 const afterOpen = (v, card) => ({ ...v, card, sheet: true });
+// The sheet steps through the cards the opened card's run holds in this column (#997); a card with no run steps the column.
+const sheetCards = (cards, x) => x && x.hr ? cards.filter(r => r.hr === x.hr) : cards;
+const sheetStep = (v, cards, g) => {
+  if (g.act !== "card") return afterGesture(v, g);
+  const set = sheetCards(cards, cards[v.card]);
+  const at = afterGesture({ ...v, card: set.indexOf(cards[v.card]), cards: set.length }, g).card;
+  return { ...v, card: cards.indexOf(set[at]) };
+};
 const EDGE_PX = 24, PULL_MIN = 60;
 const runsGesture = ({ x0, dx, dy, atTop }) => {
   const ax = Math.abs(dx), ay = Math.abs(dy);

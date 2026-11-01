@@ -15,6 +15,8 @@ import tempfile
 
 import pytest
 
+from tests.test_hub_mobile_move import run_page
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib/squad-goal/scripts"
 HUB_PY = SCRIPTS / "hub.py"
@@ -223,7 +225,7 @@ def test_the_phone_todo_button_shows_only_for_a_promotable_card(hub):
 
 def test_the_phone_sheet_names_the_position_and_steps_with_chips_and_keys(hub):
     body = hub.MOBILE_PAGE
-    assert '(view.card + 1) + " of " + shown.length' in body, "the sheet names where the card stands in its selection"
+    assert '(at + 1) + " of " + set.length' in body, "the sheet names where the card stands in its selection"
     assert 'data-i="${i}"' in body, "the number chips pick a card"
     assert '$("sh-prev").onclick' in body and '$("sh-next").onclick' in body, "the previous and next buttons step"
     assert 'e.key === "ArrowLeft"' in body and 'e.key === "ArrowRight"' in body, "the arrow keys step"
@@ -252,6 +254,38 @@ def test_a_blocker_in_the_phone_sheet_opens_that_ticket_in_the_same_sheet(hub):
     body = hub.MOBILE_PAGE
     assert 'class="shb" data-n=' in body, "a blocker link carries the number it opens"
     assert "openCard(n)" in body, "a blocker link opens that ticket in the same sheet, never a new tab"
+
+
+HR_BOARD = {"t": 1, "err": None, "labels": [], "lc": {}, "cases": [], "flow": None,
+            "groups": [{"name": "Doing", "n": 4, "items": [
+                {"n": 1, "t": "one", "l": [], "hr": "run-a"},
+                {"n": 2, "t": "two", "l": []},
+                {"n": 3, "t": "three", "l": [], "hr": "run-a"},
+                {"n": 4, "t": "four", "l": [], "hr": "run-b"}]},
+                {"name": "Todo", "n": 0, "items": []}]}
+
+
+@pytest.mark.node_bound
+def test_the_phone_sheet_steps_the_cards_of_the_run_the_opened_card_holds(hub):
+    out = run_page(hub.MOBILE_PAGE, """
+        await loadBoard();
+        openCard(3);
+        const out = { dataHr: $("cards").querySelector('[data-role="card"][data-n="3"]').dataset.hr || null,
+                      first: [$("sh-pos").textContent, shown[view.card].n] };
+        step({ act: "card", step: 1 });
+        out.atEnd = shown[view.card].n;
+        step({ act: "card", step: -1 });
+        out.back = [shown[view.card].n, $("sh-pos").textContent];
+        step({ act: "close" });
+        openCard(2);
+        out.noRun = $("sh-pos").textContent;
+        return out;
+    """, board=[HR_BOARD])
+    assert out["dataHr"] == "run-a", "the card the phone draws carries no run id"
+    assert out["first"] == ["2 of 2", 3], "the sheet steps the run's cards, not the whole column"
+    assert out["atEnd"] == 3, "next stops at the last card the run holds"
+    assert out["back"] == [1, "1 of 2"], "previous steps to the run's first card"
+    assert out["noRun"] == "2 of 4", "a card with no run keeps the whole column as its selection"
 
 
 def test_the_selected_phone_card_scrolls_above_the_sheet(hub):
