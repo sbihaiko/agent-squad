@@ -883,7 +883,8 @@ def _closing_store(hub, tmp_path, monkeypatch, closed_per_day):
     monkeypatch.setattr(hub, "REPO", "x/y")
     path = hub._hist.history_path(hub.BOARD, hub.REPO)
     first = THROUGHPUT_NOW.date() - dt.timedelta(days=len(closed_per_day) - 1)
-    stamp = lambda day, hour: dt.datetime.combine(day, dt.time(hour), tzinfo=dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    def stamp(day, hour):
+        return dt.datetime.combine(day, dt.time(hour), tzinfo=dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     for n in range(closed_per_day[-1]):
         day = next(i for i, total in enumerate(closed_per_day) if total > n)
         events = [{"t": stamp(first, 0), "type": "added"}, {"t": stamp(first, 0), "type": "status", "status": "Todo"},
