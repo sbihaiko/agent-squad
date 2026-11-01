@@ -143,9 +143,14 @@ HARNESS_TAGS = ("local-command-caveat", "command-name", "command-message", "comm
                 "task-notification")
 _ONE_ENVELOPE = re.compile(r"\s*<(%s)\b.*?</\1>" % "|".join(HARNESS_TAGS), re.S | re.I)
 
+HARNESS_OPENER = "This session is being continued from a previous conversation"
+
 def _harness_only(text):
-    """True when the whole message is what the harness wrote into the transcript itself: a command's record, its output,
-    or a background task's notification. The owner typed none of it, so it is no turn of the talk (owner, 2026-11-01)."""
+    """True when the whole message is what the harness wrote into the transcript itself: a command's record, its output, a
+    background task's notification, or the summary a compact hands the next context. The owner typed none of it, so it is no
+    turn of the talk (owner, 2026-11-01)."""
+    if text.lstrip().startswith(HARNESS_OPENER): return True
+    if "<system-reminder>" in text or "<tools-used-before-summary>" in text: return True
     rest = text
     while True:
         m = _ONE_ENVELOPE.match(rest)

@@ -509,6 +509,22 @@ def test_a_command_record_and_a_task_notice_are_no_turn_of_the_talk(home):
     assert [t["role"] for t in page["turns"]] == ["owner", "owner"]   # the harness's own records are no turns
 
 
+def test_the_summary_a_compact_hands_the_next_context_is_no_turn(home):
+    """`/compact` writes its summary back as a user turn with no `isMeta`: the feed read the whole earlier conversation as if
+    the owner had typed it again (owner, 2026-11-01)."""
+    mod = load_sessions()
+    cwd = home.path / "p1" / "app"
+    entries = [user("u1", "real words"),
+               user("k1", "This session is being continued from a previous conversation that ran out of context.\n\n"
+                           "<system-reminder>\n<tools-used-before-summary>Bash</tools-used-before-summary>\n</system-reminder>"),
+               user("u2", "and then I asked this")]
+    folder = mod.claude_home() / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(cwd))
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "s3.jsonl").write_text("".join(json.dumps(e) + "\n" for e in entries))
+    page = mod.read_conversation(str(cwd), "s3")
+    assert [(t["id"], t["role"]) for t in page["turns"]] == [("u1", "owner"), ("u2", "owner")]
+
+
 def test_a_poll_that_meets_no_new_byte_reads_no_file_again(home):
     """The chat polls every few seconds and this transcript runs to hundreds of megabytes: an unchanged file answers from
     the page already built (owner, 2026-11-01)."""
