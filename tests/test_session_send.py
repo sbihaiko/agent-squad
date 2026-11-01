@@ -414,6 +414,15 @@ def test_a_loopback_send_with_the_hubs_own_origin_reaches_the_session_with_no_gr
     assert inbox_of(home).conns == 1
 
 
+def test_a_loopback_host_with_a_tailnet_login_is_a_tailnet_send_and_needs_the_grant(home, tmp_path, hub):
+    add_session(home, "s1", home.path / "p1" / "app")
+    h = hub()
+    status, _ = post(h.port, msg(), host=f"127.0.0.1:{h.port}", login=ANA, origin=f"http://127.0.0.1:{h.port}")
+    assert status == 403
+    assert inbox_of(home).conns == 0
+    assert get_json(h.port, "/api/sessions/project", login=ANA)[1]["send"] is False
+
+
 @pytest.mark.parametrize("origin", ["https://evil.example", "", f"https://{TAILNET}", "http://127.0.0.1:1"])
 def test_a_loopback_send_needs_the_hubs_own_origin(home, tmp_path, hub, origin):
     add_session(home, "s1", home.path / "p1" / "app")
