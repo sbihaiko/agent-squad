@@ -363,15 +363,14 @@ def test_the_shared_legacy_history_is_renamed_never_deleted_at_first_use(tmp_pat
     assert (tmp_path / "hub-flow.jsonl.legacy").read_text() == old, "a second use changes nothing and raises nothing"
 
 
-def test_a_legacy_name_already_taken_is_never_overwritten(tmp_path):
+def test_a_legacy_name_already_taken_takes_the_later_bytes_and_no_numbered_file(tmp_path):
     flow = _load_flow()
     board = tmp_path / "hub-board.json"
     (tmp_path / "hub-flow.jsonl.legacy").write_text("earlier\n")
     (tmp_path / "hub-flow.jsonl").write_text("later\n")
     flow.append(flow.history_path(board, "x/y"), _rows(2), now=time.time())
-    assert (tmp_path / "hub-flow.jsonl.legacy").read_text() == "earlier\n"
-    kept = [p for p in tmp_path.glob("hub-flow.jsonl.legacy*") if p.read_text() == "later\n"]
-    assert len(kept) == 1, "the later file keeps its bytes under a name of its own"
+    assert (tmp_path / "hub-flow.jsonl.legacy").read_text() == "earlier\nlater\n", "the later bytes follow the earlier ones"
+    assert [p.name for p in tmp_path.glob("hub-flow.jsonl*")] == ["hub-flow.jsonl.legacy"], "no numbered temp file is left"
 
 
 def test_a_legacy_file_another_process_renamed_first_is_no_error(tmp_path, monkeypatch):
