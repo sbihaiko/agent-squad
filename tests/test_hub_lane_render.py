@@ -54,3 +54,12 @@ def test_the_served_page_carries_the_renderer(tmp_path, monkeypatch):
     assert "function buildBoard(" in mod.PAGE, "the served page carries no lane model"
     assert "const laneHtml=m=>{" in mod.PAGE, "the served page carries no lane renderer"
     assert "/*BOARD_LANES*/" not in mod.PAGE, "the lane text was never inlined"
+
+
+def test_a_spec_lane_carries_a_link_to_its_issue_on_github():
+    """A spec lane names its number; the reader opens it in one click, and the link is not the lane's collapse toggle."""
+    src = page()
+    line = next(x for x in src.splitlines() if 'class=ghl' in x)
+    assert 'href="https://github.com/${esc(l.r||"__REPO__")}/issues/${l.num}"' in line, line[:200]
+    assert re.search(r'target=_blank rel=noopener', line), "the link opens in a new tab"
+    assert 'e.target.closest(".ghl"))return' in src, "a click on the link collapses the lane instead of opening the issue"

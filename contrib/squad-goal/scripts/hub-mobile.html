@@ -394,14 +394,14 @@ $("retry").onclick = status;
 const inst = (() => {
 const $ = s => document.querySelector(s), esc = s => escHTML(s);
 /*INST_JS*/
-return { instDraw, instTick };
+return { instDraw };
 })();
 $("iloop").append($("loop-box"));   // the loop row of the card is this page's own control, which obeys the hub's actions
 // The card is the whole tab here: a tap on its title never folds it (the desktop's card still folds).
 const instHead = $("inst").querySelector("summary");
 instHead.addEventListener("click", e => e.preventDefault());
 instHead.tabIndex = -1;
-// A failed read is shown, never dropped: the card says it is not current, and the countdown stops on the old reading.
+// A failed read is shown, never dropped: the card says it is not current.
 const instStale = document.createElement("p");
 instStale.id = "inst-stale"; instStale.setAttribute("role", "status"); instStale.hidden = true;
 $("ibody").prepend(instStale);
@@ -416,13 +416,11 @@ async function loadPoll() {
   try { inst.instDraw(await call("/api/load")); markStale(null); }
   catch (e) { markStale(e.message || "the load read failed."); }
 }
-function monitorTick() { if (!loadStale) inst.instTick(); }
 // A poll runs only while the app is in view and its panel is shown (#1004); a panel that opens reads at once (show).
 const pollOk = name => !document.hidden && !document.querySelector('[data-panel="' + name + '"]').hidden;
 const every = (name, fn, ms) => setInterval(() => { if (pollOk(name)) fn(); }, ms);
 loadPoll();
 every("monitor", loadPoll, 5000);
-setInterval(monitorTick, 1000);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/mobile/sw.js", { scope: "/mobile/" }).catch(() => {});
 status();
 // The status read drives #reconnect, which covers every tab, so it polls on every tab while the app is in view.

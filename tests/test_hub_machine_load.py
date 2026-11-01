@@ -602,9 +602,10 @@ def test_the_gate_and_the_landing_stay_on_the_line_beside_the_burn(hub):
 
 def test_the_left_pane_carries_only_what_a_reader_watches(hub):
     """The removal is the rule: an accordion named here is a defect, and one that came back would be read by name.
-    Re-anchored (#1028): the two configuration cards left the sidebar for the Settings tab."""
+    Re-anchored (#1028): the two configuration cards left the sidebar for the Settings tab. Re-anchored again (owner,
+    2026-11-01): Last ended is gone and Live runs sits under the Monitor, so the pane reads cost, machine, live work."""
     side = hub.PAGE[hub.PAGE.index("<aside id=side>"):hub.PAGE.index("</aside>")]
-    assert re.findall(r"<details id=(\w+)", side) == ["lrd", "led", "stats", "inst"]
+    assert re.findall(r"<details id=(\w+)", side) == ["stats", "inst", "lrd"]
     for gone in ("id=wts", "id=wtsr", "id=wtb", "id=wtcl", "id=wtmsg", "wtDraw", "wtClean", "wtSay", "wtBusy"):
         assert gone not in hub.PAGE, gone
 
@@ -823,3 +824,79 @@ def test_the_served_payload_carries_the_reading_the_cell_is_judged_on(hub):
     assert p["line"] == "CPU 95% · RAM 71% · GPU ?"                          # the text rounds, the colour does not
     assert _ld_paint(hub, p).count('class="ldred"') == 0
     assert _ld_paint(hub, {**p, "cpu": 95.0}).count('class="ldred"') == 1
+
+
+# ---------------------------------------------------------------- the subscriptions row (owner, 2026-11-01)
+
+def test_each_subscription_answers_its_weekly_share_and_days_to_reset(hub, monkeypatch):
+    """The Monitor reads the weekly window, not the 5 h one; the days to reset come unrounded, for the page to format."""
+    now = 1_000_000.0
+    monkeypatch.setattr(hub, "quota", {
+        "claude": {"asof": now - 60, "plan": "Max", "windows": [
+            {"label": "5 h", "pct": 12.0, "resets": now + 3 * 3600},
+            {"label": "weekly", "pct": 77.0, "resets": now + 3.44 * 86400}]},
+        "grok": {"asof": now - 60, "plan": None, "windows": [{"label": "weekly", "pct": 40.0, "resets": now + 86400}]},
+    })
+    rows = {r["key"]: r for r in hub.subs_gauges(now)}
+    assert rows["claude"]["pct"] == 77.0 and rows["claude"]["window"] == "weekly"
+    assert round((rows["claude"]["resets"] - now) / 86400, 2) == 3.44, "the reset is a timestamp, not a rounded day count"
+    assert rows["grok"]["pct"] == 40.0
+
+
+def test_a_subscription_with_no_reading_says_why_and_carries_no_share(hub, monkeypatch):
+    monkeypatch.setattr(hub, "quota", {"claude": {"asof": 0, "err": "login expired"}})
+    rows = {r["key"]: r for r in hub.subs_gauges(1_000_000.0)}
+    assert rows["claude"]["pct"] is None and rows["claude"]["why"], "a missing reading is named, never drawn as zero"
+    assert all(r["pct"] is None for r in rows.values())
+
+
+def test_the_load_payload_carries_the_subscriptions_row(hub):
+    assert "subs" in hub.load_payload(), "/api/load leaves the Monitor's subscription instruments out"
+
+
+def test_the_monitor_draws_a_gauge_and_a_day_count_per_subscription(hub):
+    page = hub.PAGE
+    assert 'id=isub' in page, "no panel carries the subscription row"
+    assert page.index("id=isub") > page.index("id=stats"), "the subscription row belongs at the top of Cost & usage"
+    i = page.index("function subsGauges(d)")
+    fn = page[i:page.index("function instGauges(d)", i)]
+    assert "gaugeSvg(p)" in fn and ".toFixed(1)" in fn, "the row draws no instrument or no one-decimal day count"
+    assert ".subs" in fn
+
+
+# ---------------------------------------------------------------- the throughput row (owner, 2026-11-01)
+
+def _samples(hub, closed_per_day, start=1_000_000_000):
+    day = 86400
+    out = []
+    for i, n in enumerate(closed_per_day):
+        t = start + i * day + 3600
+        out.append({"t": t, "counts": {"issue": {hub.COLUMN["issue_closed"]: n}},
+                    "cells": [["issue", None, None, hub.COLUMN["issue_closed"], 0, n, "task"]], "frozen": 0, "none": 0})
+    return out
+
+
+def test_the_speed_row_compares_today_with_the_finished_days(hub, monkeypatch):
+    """Today is partial, so it is never part of the median it is judged against."""
+    days = [0, 2, 6, 10, 14, 16]
+    monkeypatch.setattr(hub._flow, "samples", lambda path: _samples(hub, days))
+    monkeypatch.setattr(hub._flow, "history_path", lambda board, repo: tempfile.mkdtemp() + "/none")
+    got = hub.throughput_fact()
+    done = [days[i + 1] - days[i] for i in range(len(days) - 1)]
+    assert got["today"] == done[-1], "the newest day is partial and is the one judged"
+    assert got["median"] == 4 and got["min"] == 2 and got["max"] == 4, (got, done)
+
+
+def test_a_speeding_board_reads_up_and_a_slowing_one_reads_down(hub, monkeypatch):
+    monkeypatch.setattr(hub._flow, "history_path", lambda board, repo: tempfile.mkdtemp() + "/none")
+    fast = [0, 1, 2, 3, 4, 5, 8, 12, 16]
+    monkeypatch.setattr(hub._flow, "samples", lambda path: _samples(hub, fast))
+    assert hub.throughput_fact()["trend"] == "up"
+    slow = [0, 9, 18, 27, 36, 45, 46, 47, 48]
+    monkeypatch.setattr(hub._flow, "samples", lambda path: _samples(hub, slow))
+    assert hub.throughput_fact()["trend"] == "down"
+
+
+def test_no_history_reads_no_speed_and_the_page_draws_no_fake_zero(hub):
+    assert hub.throughput_fact() is None
+    assert "no history yet" in hub.PAGE

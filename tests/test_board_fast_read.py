@@ -35,7 +35,7 @@ def hub():
 def node(n, status="Todo", state="OPEN", reason=None, repo=REPO, archived=False, labels=(), fd=None):
     return {"updatedAt": "2026-11-01T10:00:00Z", "isArchived": archived,
             "fieldValueByName": {"name": status, "updatedAt": "2026-11-01T10:00:00Z"} if status else None,
-            "content": {"number": n, "fullDatabaseId": str(fd if fd is not None else 900000 + n), "state": state,
+            "content": {"id": f"I_{n}", "number": n, "fullDatabaseId": str(fd if fd is not None else 900000 + n), "state": state,
                         "stateReason": reason, "updatedAt": "2026-11-01T10:00:00Z",
                         "repository": {"nameWithOwner": repo},
                         "labels": {"totalCount": len(labels), "nodes": [{"name": x} for x in labels]}}}
@@ -46,17 +46,36 @@ def page(nodes, more=None, cost=1):
                      "user": {"projectV2": {"items": {"pageInfo": {"hasNextPage": bool(more), "endCursor": more}, "nodes": nodes}}}}}
 
 
+def project_item(hub, status="Closed", archived=False):
+    return {"updatedAt": "2026-11-01T10:05:00Z", "isArchived": archived,
+            "project": {"number": hub.PROJECT_NO, "owner": {"login": hub.OWNER}},
+            "fieldValueByName": {"name": status, "updatedAt": "2026-11-01T10:05:00Z"} if status else None}
+
+
+def issue(n, state="CLOSED", reason="COMPLETED", items=(), labels=()):
+    return {"__typename": "Issue", "id": f"I_{n}", "number": n, "state": state, "stateReason": reason,
+            "updatedAt": "2026-11-01T10:00:00Z", "repository": {"nameWithOwner": REPO},
+            "labels": {"totalCount": len(labels), "nodes": [{"name": x} for x in labels]},
+            "projectItems": {"totalCount": len(items), "nodes": list(items)}}
+
+
+def batch(*issues):
+    return {"data": {"rateLimit": {"cost": 1}, "nodes": list(issues)}}
+
+
 def recorded(*answers):
-    calls = []
+    calls, queries = [], []
     queue = list(answers)
 
     def gql(query, variables, timeout=None):
         calls.append(variables)
+        queries.append(query)
         answer = queue.pop(0)
         if isinstance(answer, Exception):
             raise answer
         return answer
     gql.calls = calls
+    gql.queries = queries
     return gql
 
 
@@ -98,13 +117,17 @@ def test_a_close_with_no_status_change_moves_the_state_and_no_column(board, monk
     assert _column(board, 11) is None, "a closed card leaves the open columns: closed is history, never a column (#969)"
 
 
-def test_an_abandon_keeps_its_row_until_the_full_read(board, monkeypatch):
-    """The read filters out the closed statuses, so a card moved to Abandoned is not in the snapshot: the full read moves it."""
-    gql = recorded(page([]))
+def test_an_abandon_leaves_the_open_columns_on_the_fast_read(board, monkeypatch):
+    """The read filters out the closed statuses, so a card moved to Abandoned leaves the snapshot: the batched check
+    names it abandoned and its row leaves the open columns (#976 supersedes the old expectation that the full read moves it)."""
+    gql = recorded(page([node(11, status="Todo")]), page([]), batch(issue(11, "CLOSED", "NOT_PLANNED", [project_item(board, "Abandoned")])))
     monkeypatch.setattr(board, "_graphql", gql)
     board.fast_board_pass()
-    assert "-status:Closed -status:Abandoned" in gql.calls[0]["q"]
-    assert board.board_cache["items"][0]["st"] == "Todo"
+    board.fast_board_pass()
+    assert "-status:Closed -status:Abandoned" in gql.calls[1]["q"]
+    row = board.board_cache["items"][0]
+    assert (row["st"], row["s"], row["cr"]) == ("Abandoned", "closed", "not_planned")
+    assert _column(board, 11) is None
 
 
 def test_a_reopen_clears_the_close_reason_and_sets_the_state_open(board, monkeypatch):
@@ -252,6 +275,78 @@ def test_a_fast_pass_that_raises_does_not_end_the_fast_loop(hub, monkeypatch):
     with pytest.raises(StopIteration):
         hub.refresh_fast()
     assert len(passes) == 2, "the next fast pass still runs after one raised"
+
+
+def test_a_closed_card_leaves_the_open_columns_on_the_fast_read(board, monkeypatch):
+    monkeypatch.setattr(board, "_graphql", recorded(page([node(11, status="Doing")]), page([]),
+                                                    batch(issue(11, "CLOSED", "COMPLETED", [project_item(board, "Closed")]))))
+    board.fast_board_pass()
+    board.fast_board_pass()
+    row = board.board_cache["items"][0]
+    assert (row["st"], row["s"], row["cr"]) == ("Closed", "closed", "completed")
+    assert _column(board, 11) is None, "a closed card leaves the open columns on the fast read, not only on the full read"
+
+
+def test_an_archived_card_leaves_the_board(board, monkeypatch):
+    monkeypatch.setattr(board, "_graphql", recorded(page([node(11, status="Doing")]), page([]),
+                                                    batch(issue(11, "OPEN", None, [project_item(board, "Doing", archived=True)]))))
+    board.fast_board_pass()
+    board.fast_board_pass()
+    assert board.board_cache["items"] == []
+
+
+def test_a_card_removed_from_the_project_leaves_the_board(board, monkeypatch):
+    monkeypatch.setattr(board, "_graphql", recorded(page([node(11, status="Doing")]), page([]), batch(issue(11, "OPEN", None, []))))
+    board.fast_board_pass()
+    board.fast_board_pass()
+    assert board.board_cache["items"] == []
+
+
+def test_a_held_card_missing_from_the_snapshot_is_checked_in_one_batched_read(board, monkeypatch):
+    board.board_cache["items"] = [card(11), card(12), card(13)]
+    gql = recorded(page([node(11, status="Doing"), node(12, status="Doing"), node(13, status="Doing")]), page([]),
+                   batch(issue(11, "CLOSED", "COMPLETED", [project_item(board, "Closed")]),
+                         issue(12, "CLOSED", "NOT_PLANNED", [project_item(board, "Abandoned")]),
+                         issue(13, "OPEN", None, [project_item(board, "Doing", archived=True)])))
+    monkeypatch.setattr(board, "_graphql", gql)
+    board.fast_board_pass()
+    board.fast_board_pass()
+    assert len(gql.calls) == 3, "one snapshot, one batched check for the three cards: no call per card"
+    assert all(f"I_{n}" in gql.queries[2] for n in (11, 12, 13))
+    assert [i["n"] for i in board.board_cache["items"]] == [11, 12]
+
+
+def test_an_unreadable_card_keeps_its_row_and_is_retried_in_the_pass(board, monkeypatch):
+    gql = recorded(page([node(11, status="Doing")]), page([]), RuntimeError("HTTP 502"),
+                   batch(issue(11, "CLOSED", "COMPLETED", [project_item(board, "Closed")])))
+    monkeypatch.setattr(board, "_graphql", gql)
+    board.fast_board_pass()
+    board.fast_board_pass()
+    assert len(gql.calls) == 4, "a failed batched answer is retried once within the pass"
+    assert board.board_cache["items"][0]["s"] == "closed"
+
+
+def test_an_unreadable_card_whose_retry_is_unfunded_waits_for_the_next_pass(board, monkeypatch):
+    board.FAST_BUDGET = board_fast.Budget(2, clock=lambda: 0)
+    gql = recorded(page([node(11, status="Doing")]), page([]), page([]),
+                   batch(issue(11, "CLOSED", "COMPLETED", [project_item(board, "Closed")])))
+    monkeypatch.setattr(board, "_graphql", gql)
+    board.fast_board_pass()
+    board.fast_board_pass()
+    assert len(gql.calls) == 2, "the batched check is not sent once the hour's budget is spent"
+    assert board.board_cache["items"][0]["s"] == "open", "an unreadable card keeps its row"
+    board.FAST_BUDGET = board_fast.Budget(600, clock=lambda: 0)
+    board.fast_board_pass()
+    assert len(gql.calls) == 4 and board.board_cache["items"][0]["s"] == "closed"
+
+
+def test_an_open_issue_not_on_the_project_is_never_read_or_added(board, monkeypatch):
+    gql = recorded(page([node(11, status="Doing")]), page([]), batch(issue(11, "CLOSED", "COMPLETED", [project_item(board, "Closed")])))
+    monkeypatch.setattr(board, "_graphql", gql)
+    board.fast_board_pass()
+    board.fast_board_pass()
+    assert "I_13" not in gql.queries[2], "a repository issue the cache never held is not checked"
+    assert [i["n"] for i in board.board_cache["items"]] == [11]
 
 
 def test_the_full_read_runs_every_ten_to_fifteen_minutes(board):

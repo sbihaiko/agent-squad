@@ -122,7 +122,7 @@ def test_no_tot3_tile_grid():
 def test_section_order_is_spend_chart_speed_open_tokens():
     html = _stats()
     pos = [html.find("Spend"), html.find("Spend over time"), html.find("id=chart"),
-           html.find("id=kpi"), html.find("id=open"), html.find("Model cost · this month"), html.find("id=pie")]
+           html.find("id=kpi"), html.find("id=open"), html.find("Model tokens · this month"), html.find("id=pie")]
     assert all(p >= 0 for p in pos), pos
     assert pos == sorted(pos), pos
 
@@ -271,21 +271,21 @@ def test_open_with_none_reads_none_open():
 def test_cost_donut_sits_under_its_title_and_subtitle():
     html = _stats()
     assert "Tokens by model" not in html
-    assert "<h4>Model cost · this month</h4>" in html
-    assert html.index("<h4>Model cost · this month</h4>") < html.index('<div class=m id=piet>API-equivalent</div>') < html.index("id=pie")
-    pie_wrap = html[html.index("Model cost") - 40 : html.index("id=pie") + 40]
+    assert "<h4>Model tokens · this month</h4>" in html
+    assert html.index("<h4>Model tokens · this month</h4>") < html.index('<div class=m id=piet>in + out</div>') < html.index("id=pie")
+    pie_wrap = html[html.index("Model tokens") - 40 : html.index("id=pie") + 40]
     assert "<details" not in pie_wrap and "<summary" not in pie_wrap
 
 
 def test_cost_donut_names_three_models_then_other_largest_first():
     out = _run_js("""
 const models=[
-  {model:'a',month_cost:9,in:1,out:0,cache:0,spend:9,calls:1},
-  {model:'b',month_cost:7,in:1,out:0,cache:0,spend:7,calls:1},
-  {model:'c',month_cost:5,in:1,out:0,cache:0,spend:5,calls:1},
-  {model:'d',month_cost:3,in:1,out:0,cache:0,spend:3,calls:1},
-  {model:'e',month_cost:1,in:1,out:0,cache:0,spend:1,calls:1},
-  {model:'f',month_cost:0.5,in:1,out:0,cache:0,spend:0.5,calls:1},
+  {model:'a',month_tokens:9000,in:1,out:0,cache:0,spend:9,calls:1},
+  {model:'b',month_tokens:7000,in:1,out:0,cache:0,spend:7,calls:1},
+  {model:'c',month_tokens:5000,in:1,out:0,cache:0,spend:5,calls:1},
+  {model:'d',month_tokens:3000,in:1,out:0,cache:0,spend:3,calls:1},
+  {model:'e',month_tokens:1000,in:1,out:0,cache:0,spend:1,calls:1},
+  {model:'f',month_tokens:500,in:1,out:0,cache:0,spend:0.5,calls:1},
 ];
 const html=pie(models);
 const out={html, slices:[...html.matchAll(/<(?:path|circle)[^>]*data-k="([^"]+)"/g)].map(m=>m[1])};
@@ -293,49 +293,51 @@ const out={html, slices:[...html.matchAll(/<(?:path|circle)[^>]*data-k="([^"]+)"
     html = out["html"]
     assert out["slices"] == ["a", "b", "c", "other"], out["slices"]
     legend = re.findall(r'<span class=ln>([^<]+)</span><span class=usd>([^<]+)</span>', html)
-    assert legend == [("a", "$9.00"), ("b", "$7.00"), ("c", "$5.00"), ("other · 3 models", "$4.50"),
-                      ("d", "$3.00"), ("e", "$1.00"), ("f", "$0.50")], legend
+    # re-anchored (#1035): the legend counts tokens, and the tail sums them
+    assert legend == [("a", "9K"), ("b", "7K"), ("c", "5K"), ("other · 3 models", "5K"),
+                      ("d", "3K"), ("e", "1K"), ("f", "500")], legend
     assert re.search(r'<details[^>]*data-k="other"', html), html
     assert html.index("<details") < html.index("<span class=ln>d</span>") < html.index("</details>"), html
-    assert "%" not in html and "tokens" not in html, html
+    assert "%" not in html and "$" not in html, html   # no share of a price list: tokens, and no dollars (#1035)
 
 
 def test_cost_donut_other_sums_the_unrounded_costs():
     out = _run_js("""
 const models=[
-  {model:'a',month_cost:10,in:1,out:0,cache:0,spend:10,calls:1},
-  {model:'b',month_cost:9,in:1,out:0,cache:0,spend:9,calls:1},
-  {model:'c',month_cost:8,in:1,out:0,cache:0,spend:8,calls:1},
-  {model:'d',month_cost:0.333,in:1,out:0,cache:0,spend:0.33,calls:1},
-  {model:'e',month_cost:0.333,in:1,out:0,cache:0,spend:0.33,calls:1},
-  {model:'f',month_cost:0.334,in:1,out:0,cache:0,spend:0.33,calls:1},
+  {model:'a',month_tokens:10,in:1,out:0,cache:0,spend:10,calls:1},
+  {model:'b',month_tokens:9,in:1,out:0,cache:0,spend:9,calls:1},
+  {model:'c',month_tokens:8,in:1,out:0,cache:0,spend:8,calls:1},
+  {model:'d',month_tokens:1,in:1,out:0,cache:0,spend:0.33,calls:1},
+  {model:'e',month_tokens:1,in:1,out:0,cache:0,spend:0.33,calls:1},
+  {model:'f',month_tokens:1,in:1,out:0,cache:0,spend:0.33,calls:1},
 ];
 const out={html:pie(models)};
 """)
-    assert re.search(r'<span class=ln>other · 3 models</span><span class=usd>\$1\.00</span>', out["html"]), out["html"]
+    # re-anchored (#1035): the pie counts tokens, so the tail sums tokens exactly
+    assert re.search(r'<span class=ln>other · 3 models</span><span class=usd>3</span>', out["html"]), out["html"]
 
 
 def test_the_month_window_draws_only_cost_this_month():
     out = _run_js("""
 const models=[
-  {model:'paid',month_cost:2,in:100,out:0,cache:0,spend:2,calls:1},
-  {model:'free',month_cost:0,in:90000,out:0,cache:0,spend:0,calls:1},
-  {model:'old',month_cost:0,in:5000,out:0,cache:0,spend:40,calls:1},
+  {model:'paid',month_tokens:100,in:100,out:0,cache:0,spend:2,calls:1},
+  {model:'free',month_tokens:0,in:90000,out:0,cache:0,spend:0,calls:1},
+  {model:'old',month_tokens:0,in:5000,out:0,cache:0,spend:40,calls:1},
 ];
 const out={html:pie(models)};
 """)
     html = out["html"]
     assert re.findall(r'<span class=ln>([^<]+)</span>', html) == ["paid"], html
     assert "free" not in html and "old" not in html, html
-    assert ">$2.00</text>" in html, html
+    assert ">100</text>" in html, html
 
 
 def test_cost_donut_centre_reads_the_month_total_and_this_month():
-    out = _run_js("const out={html:pie([{model:'m',month_cost:1234.5,in:1,out:0,cache:0,spend:1234.5,calls:1}])};")
+    out = _run_js("const out={html:pie([{model:'m',month_tokens:1234567,in:1,out:0,cache:0,spend:1234.5,calls:1}])};")
     html = out["html"]
-    assert re.search(r">\$1235</text>", html), html
-    assert re.search(r">this month</text>", html), html
-    assert not re.search(r">tokens</text>", html), html
+    assert re.search(r">1\.2M</text>", html), html
+    assert re.search(r">tokens · month</text>", html), html
+    assert not re.search(r">\$", html), html   # dollars left the donut (#1035)
 
 
 def test_named_constant_keeps_the_top_three_models():
@@ -343,7 +345,7 @@ def test_named_constant_keeps_the_top_three_models():
 
 
 def test_the_subtitle_is_static_and_pollstats_leaves_it_alone():
-    assert '<div class=m id=piet>API-equivalent</div>' in _stats()
+    assert '<div class=m id=piet>in + out</div>' in _stats()
     assert '$("#piet")' not in POLL
 
 

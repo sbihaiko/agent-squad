@@ -66,6 +66,8 @@ An ADR holds a decision and its reason. It is not a ledger: no dates, counts, st
 | [0161](0161-a-chain-entry-shows-its-state-as-a-tag.md) | A chain entry shows its live state as a tag: one read joins the configuration and the state, so an omitted model keeps its place and names its cause |
 | [0162](0162-the-hub-writes-the-loop-switch-and-drains-by-default.md) | The hub writes the loop switch through one route: drain is the default and waits for live runs and gates, stop-now confirms what it kills, every change is audited, and a tailnet write needs `tailnet.loop_write` |
 
+| [0163](0163-a-proof-is-bounded-at-fifteen-minutes.md) | A proof is bounded at fifteen minutes: past it the full suite is killed and the delta proof answers, and what the delta does not cover is proven hot |
+
 ## Adding an ADR
 
 Take the next free number. Rewrite an ADR in place when a decision changes; never append an amendment. A rule with no named guard test is a draft ([ADR-0018](0018-failing-gate-is-a-defect.md)). Add one line to `CLAUDE.md` Design rules with the guard.

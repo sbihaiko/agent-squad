@@ -30,6 +30,10 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   # the marker (gh_dispatch_hold) and start no run while it stands, so a standing marker costs run slots. The owner named
   # parallelism as the priority, so the default bound is zero and no marker is written; an owner who wants the measurement
   # shielded names a bound in SG_PROMOTE_RESERVE_SECONDS. The trap removes a named marker on exit, INT and TERM.
+  # ADR-0163: one bound covers the whole attempt, never one step of it (Astra review, 2026-11-01). The delta proof, the
+  # fallback and the promotion all spend from the same fifteen minutes; a bound on the suite alone would let an attempt run
+  # the suite to its bound and only then start the fallback.
+  t0=$(date +%s); bound=${SG_PROMOTE_BOUND_SECONDS:-900}; keep=${SG_PROMOTE_FALLBACK_SECONDS:-240}
   reserve_s=${SG_PROMOTE_RESERVE_SECONDS:-0}
   [ "$reserve_s" -gt 0 ] && { printf '%s %s\n' "$(date +%s)" "$$" > "$state/promote-reserve.$$" && mv "$state/promote-reserve.$$" "$state/promote-reserve"; }
   # The proof samples the load while it runs, not only at the start: a red taken with the box over its bound is no proof at all,
@@ -51,11 +55,19 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   suite=${SG_PROMOTE_SUITE:-"$py -m ruff check squad tests && $py -m mypy squad && $py -m pytest -p no:deepeval -n ${SG_PROMOTE_WORKERS:-$(sg_battery_workers)} && $py -m pytest -p no:deepeval -p no:xdist"}
   out=$state/promote-suite-${tip:0:12}.log
   cores2=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 1); lim2=${SG_PROMOTE_LOAD_LIMIT:-$cores2}
-  # ADR-0157: a proof is bounded. Past its reserve bound (30 minutes) the reserve lifts and the proof keeps running, so the
-  # loop dispatches beside it; past its deadline (two hours) the suite and every child it started are killed, and the tip is
-  # recorded indeterminate: not tested, no promotion, no gate status, and no refusal, so a later pass retries it.
-  rbound=$reserve_s; dline=${SG_PROMOTE_DEADLINE_SECONDS:-7200}
+  # ADR-0163 (owner, 2026-11-01): no proof runs past fifteen minutes. Past its reserve bound the reserve lifts and the loop
+  # dispatches beside it; past its deadline the suite and every child it started are killed, and the delta proof answers for
+  # the tip instead. What the delta does not cover is proven hot: by the nightly and by the running system.
   kill_tree() { local p=$1 c; for c in $(pgrep -P "$p" 2>/dev/null); do kill_tree "$c"; done; kill "$p" 2>/dev/null; }
+  # bounded <seconds> <cmd...>: runs the command and kills its tree past the bound; answers 124 when it was killed.
+  bounded() { local b=$1 p s; shift; s=$(date +%s); "$@" & p=$!
+    while kill -0 "$p" 2>/dev/null; do
+      [ $(( $(date +%s) - s )) -ge "$b" ] && { kill_tree "$p"; wait "$p" 2>/dev/null; return 124; }
+      sleep 2
+    done
+    wait "$p"; }
+  # The suite is bounded at what the attempt has left once the fallback keeps its share, and the fallback at what is left then.
+  rbound=$reserve_s; dline=$(( bound - keep - ( $(date +%s) - t0 ) )); [ "$dline" -lt 5 ] && dline=5
   s0=$(date +%s); (cd "$tree" && bash -c "$suite") > "$out" 2>&1 & spid=$!
   rc=0; relieved=
   while kill -0 "$spid" 2>/dev/null; do
@@ -70,10 +82,20 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   if [ "$rc" = 124 ]; then wait "$spid" 2>/dev/null; else wait "$spid"; rc=$?; fi
   if [ "$rc" = 124 ]; then
     kill "$mon" 2>/dev/null; wait "$mon" 2>/dev/null
-    printf '%s\t%s\t%s\n' "$(date +%s)" "$tip" "$dline" > "$state/promote-indeterminate.$$" \
+    # ADR-0163: the bound is not a verdict. The full suite is killed and the delta proof, which names the important part,
+    # answers for the tip; the part it does not cover is proven hot, by the nightly and by the running system. Only a tip
+    # the delta cannot carry stays indeterminate, and a later pass retries it.
+    echo "$(date -u +%FT%TZ) promote-pass: $tip passed its ${dline}s bound: the full suite is killed and the delta proof answers" >> "$log"
+    left=$(( bound - ( $(date +%s) - t0 ) )); [ "$left" -lt 60 ] && left=60
+    if bounded "$left" bash "$d/delta-pass.sh" > "$state/delta-pass-over-bound.log" 2>&1; then
+      o=$(SG_PROMOTE_PROOF=local bash "$d/promote-stg.sh" 2>&1); rcd=$?
+      [ $rcd = 0 ] || { mark "$tip" "not promoted: $(printf '%s' "$o" | tail -1)"; exit 1; }
+      mark "$tip" "promoted: the full suite was killed by the ${bound}s bound, the delta carried the tip ($state/delta-pass-over-bound.log)"; exit 0
+    fi
+    printf '%s\t%s\t%s\n' "$(date +%s)" "$tip" "$bound" > "$state/promote-indeterminate.$$" \
       && mv "$state/promote-indeterminate.$$" "$state/promote-indeterminate"
-    echo "$(date -u +%FT%TZ) promote-pass: $tip not tested: the proof passed its ${dline}s bound and was killed" >> "$log"
-    echo "promote-pass: $tip not tested: the proof passed its ${dline}s bound and was killed"
+    echo "$(date -u +%FT%TZ) promote-pass: $tip not tested: the proof passed its ${bound}s bound and the delta could not carry it" >> "$log"
+    echo "promote-pass: $tip not tested: the proof passed its ${bound}s bound and the delta could not carry it"
     exit 1; fi
   if [ "$rc" != 0 ]; then
     kill "$mon" 2>/dev/null; wait "$mon" 2>/dev/null

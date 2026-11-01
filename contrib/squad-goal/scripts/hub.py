@@ -2006,6 +2006,39 @@ def spec_progress(items, moves=None, window=None, now=None):
     pct = done * 100 // total
     return dict(out, pct=pct, frac=done / total, value=f"{done}/{total} · {pct}%", state="ok" if done == total else "info", bar=True)
 
+DAYS_SPEED = 14   # the finished days the throughput row compares today with (two weeks)
+
+def throughput_fact(now=None):
+    """How fast the board is closing cards: the closed count per UTC day from the flow history, the newest day partial.
+    `done` holds the finished days' figures, so today is compared with them and never with itself."""
+    path = _flow.history_path(BOARD, REPO)
+    try: cfd = _cfd.cfd(_flow.samples(path), ORDER)
+    except Exception: return None
+    pts = [p for p in cfd.get("points") or [] if p.get("throughput") is not None]
+    if not pts: return None
+    today = pts[-1]["throughput"]; done = [p["throughput"] for p in pts[:-1]][-DAYS_SPEED:]
+    if not done: return {"today": today, "median": None, "min": None, "max": None, "trend": "flat", "days": []}
+    med = st.median(done); recent = done[-3:]; avg = sum(recent) / len(recent)
+    trend = "up" if med and avg > med * 1.2 else "down" if med and avg < med * 0.8 else "flat"
+    return {"today": today, "median": med, "min": min(done), "max": max(done), "trend": trend, "days": done}
+
+def subs_gauges(now=None):
+    """Each subscription's weekly window for the Monitor: its used share and when it resets, or why there is no reading.
+    The weekly window is the one the reset matters for; a provider that reports only a short window shows that one."""
+    now = time.time() if now is None else now
+    plans = plans_get(); out = []
+    for k in SUBS:
+        q = quota_row(k, now)
+        row = {"key": k, "label": sub_name(k, plans.get(k) or None, (quota.get(k) or {}).get("plan"))}
+        ws = (q or {}).get("windows") or []
+        if not ws:
+            row.update({"pct": None, "resets": None, "why": (q or {}).get("err") or "no reading"})
+        else:
+            w = next((x for x in ws if str(x.get("label", "")).lower().startswith("weekly")), max(ws, key=lambda x: x.get("resets") or 0))
+            row.update({"pct": w.get("pct"), "resets": w.get("resets"), "window": w.get("label")})
+        out.append(row)
+    return out
+
 def load_payload():
     """What /api/load serves: the cached reading, never a fresh one, so three open tabs cost three JSON bodies and no
     sample. `cpu` is the newest reading, `warn` is the two-sample rule over the history, `runs` the shares the cards use,
@@ -2019,6 +2052,8 @@ def load_payload():
             "warn": sustained(hist), "runs": dict(LOAD_STATE.get("runs") or {}),
             "facts": list(LOAD_STATE.get("facts") or []) + [_hist.budget_fact(_hist.history_path(BOARD, REPO), time.time())],
             "specs": spec_progress(board_cache.get("items") or []),   # the open specs' total, off the board cache: no GitHub read
+            "subs": subs_gauges(),   # the Monitor's subscription instruments: each weekly window and its reset, off the quota cache
+            "speed": throughput_fact(),   # the Monitor's throughput row: today against the finished days
             "secs": LOAD_SAMPLE_SECS, "asof": LOAD_STATE.get("asof", 0.0)}
 
 def status_payload():
@@ -2354,18 +2389,18 @@ def stats(period, src="both"):
         for raw, v in r["mod"].items():   # keyed on the canonical id, as the review calls are, so one model is one slice (#789)
             m = canon_model(raw)
             if src == "sub" and not SUBSCRIPTION.match(m) or src == "api" and SUBSCRIPTION.match(m): continue
-            x = mt.setdefault(m, {"model": m, "in": 0, "out": 0, "cache": 0, "spend": 0.0, "month_cost": 0.0, "calls": 0, "src": raw, "srcs": []})   # the first spelling names the box; every spelling's route is kept (#791)
+            x = mt.setdefault(m, {"model": m, "in": 0, "out": 0, "cache": 0, "spend": 0.0, "month_cost": 0.0, "month_tokens": 0, "calls": 0, "src": raw, "srcs": []})   # the first spelling names the box; every spelling's route is kept (#791)
             if raw not in x["srcs"]: x["srcs"].append(raw)
             for k in ("in", "out", "cache", "calls"): x[k] += v[k]
             x["spend"] += v["spend"]
-            if in_month: x["month_cost"] += v["spend"]
+            if in_month: x["month_cost"] += v["spend"]; x["month_tokens"] += v["in"] + v["out"]   # the pie counts tokens: dollars are a price list, tokens are the work (#1035)
     for c in calls:
         m = c["model"]
         if src == "sub" and not SUBSCRIPTION.match(m) or src == "api" and SUBSCRIPTION.match(m): continue
-        x = mt.setdefault(m, {"model": m, "in": 0, "out": 0, "cache": 0, "spend": 0.0, "month_cost": 0.0, "calls": 0, "src": m, "srcs": []})
+        x = mt.setdefault(m, {"model": m, "in": 0, "out": 0, "cache": 0, "spend": 0.0, "month_cost": 0.0, "month_tokens": 0, "calls": 0, "src": m, "srcs": []})
         if m not in x["srcs"]: x["srcs"].append(m)
         x["in"] += c["in"]; x["out"] += c["out"]; x["cache"] += c["cache"]; x["calls"] += 1; x["spend"] += c["spend"]
-        if time.localtime(c["t0"])[:2] == now[:2]: x["month_cost"] += c["spend"]
+        if time.localtime(c["t0"])[:2] == now[:2]: x["month_cost"] += c["spend"]; x["month_tokens"] += c["in"] + c["out"]
     def _box(x):
         box = model_box(x["src"])
         box["routes"] = sorted({model_box(s)["route"] for s in x["srcs"]} - {None})   # every route the model was called by (#791)
@@ -2703,15 +2738,23 @@ def _graphql(query, variables, timeout):
     if out.partial: raise RuntimeError("partial answer: " + ", ".join(out.partial))
     return out.answer
 def fast_board_pass():
-    """One fast read: the column inputs of the cards the cache holds, written where the snapshot is newer. A failed read moves nothing."""
+    """One fast read: the column inputs of the cards the cache holds, written where the snapshot is newer. A card the last
+    whole snapshot held and this one lacks is checked in one batched read (#976). A failed read moves nothing."""
     observed = time.time()
-    try: nodes = board_fast.read_snapshot(_graphql, _fast_root(), OWNER, PROJECT_NO, _columns_module.TERMINAL, FAST_BUDGET, observed + FAST_DEADLINE)
+    deadline = observed + FAST_DEADLINE
+    try: nodes = board_fast.read_snapshot(_graphql, _fast_root(), OWNER, PROJECT_NO, _columns_module.TERMINAL, FAST_BUDGET, deadline)
     except board_fast.SnapshotError as e:
         with _board_lock:
             set_part("status", err=str(e)[:80])
         return
+    rows = board_fast.rows_of(nodes, REPO)
     with _board_lock:
-        board_cache["items"] = board_fast.apply(board_cache.get("items") or [], board_fast.rows_of(nodes, REPO), int(observed))
+        lost = board_fast.missing(board_cache.get("fast_seen") or {}, rows, board_cache.get("items") or [])
+    verdicts = board_fast.check(_graphql, OWNER, PROJECT_NO, lost, FAST_BUDGET, deadline)
+    with _board_lock:
+        items = board_fast.apply(board_cache.get("items") or [], rows, int(observed))
+        board_cache["items"] = board_fast.settle(items, verdicts, int(observed))
+        board_cache["fast_seen"] = board_fast.seen_of(rows, verdicts)
         set_part("status", err=None)
         save_board()
 def refresh_fast():
@@ -4012,7 +4055,7 @@ body.tkopen #win{margin-right:420px}
 #tkb pre{white-space:pre-wrap;overflow-wrap:anywhere;font:var(--fs-min)/1.45 ui-monospace,Menlo,monospace;background:#12161c;border:1px solid var(--line);border-radius:6px;padding:8px 10px;margin:6px 0}
 #tkb h3{font-size:var(--fs-min);color:var(--mute);margin:14px 0 4px}#tkb .cm{border-left:3px solid var(--acc);padding-left:8px;margin:8px 0}
 #tkb .bar button{min-width:28px}#tkb .bar button:disabled{opacity:.35;cursor:default}#tkb .bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}#tkb a.gh{color:var(--acc);font-weight:700}
-#bbody .it{cursor:pointer}#bbody .it.hit{box-shadow:0 0 0 2px var(--warn)}#bbody .it.hl{box-shadow:0 0 0 2px var(--acc)}#bbody .it.dim{opacity:.35}#list .r.hlr{outline:2px solid var(--acc);outline-offset:-2px}.hlrel{color:var(--acc);font-size:var(--fs-min);margin-left:6px}.hlrel[hidden]{display:none}   /* the cards the sheet's Highlight related marks (#919) */
+#bbody .it{cursor:pointer}#bbody .it.hit{box-shadow:0 0 0 2px var(--warn)}#bbody .it.hl{box-shadow:0 0 0 2px var(--acc)}#bbody .it.dim{opacity:.35}#list .r.hlr{outline:2px solid var(--acc);outline-offset:-2px}.hlrel{color:var(--acc);font-size:var(--fs-min);margin-left:6px}.hlrel[hidden]{display:none}.ghl{color:var(--mute);margin-left:6px;display:inline-flex;align-items:center;opacity:.65;text-decoration:none}.ghl:hover,.ghl:focus-visible{opacity:1;color:var(--fg)}   /* the cards the sheet's Highlight related marks (#919) */
 #tkb h2{font:600 var(--fs-md)/1.35 -apple-system,system-ui,sans-serif;margin:4px 0 8px}
 #tkb .md{font:var(--fs-body)/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;color:#d8dde6;overflow-wrap:anywhere}
 #tkb .md>:first-child{margin-top:0}#tkb .md p{margin:.6em 0}#tkb .md h2,#tkb .md h3,#tkb .md h4,#tkb .md h5{font-weight:600;margin:1.3em 0 .4em;line-height:1.3;color:#eef1f6}
@@ -4115,15 +4158,15 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 .rkt{display:flex;gap:4px;border-bottom:1px solid var(--line);margin:0 0 12px}.rkt button{background:none;border:0;border-bottom:2px solid transparent;border-radius:0;padding:6px 10px;min-height:36px;color:var(--mute);font-weight:600}.rkt button.on{color:var(--fg);border-bottom-color:var(--acc)}.rkt button:hover{color:var(--fg)}
 #tab-flow:has(#flowov:not([hidden])) #main{display:none}#tab-flow #main{min-height:60vh}
 #side .sp .sb{padding:0 10px 10px}#side .sp>summary::before{content:"\25B8";color:var(--mute);width:10px}#side .sp[open]>summary::before{content:"\25BE"}
-#side .sp>summary .sr{font-size:var(--fs-min)}#enall{color:var(--acc);text-decoration:none;white-space:nowrap;font-weight:500}#enall:hover{text-decoration:underline}
-#lrun .r,#ended .r{border:1px solid var(--line);border-radius:8px;margin-bottom:8px;background:var(--card);min-width:0;overflow:hidden}#lrun .r>div,#ended .r>div{min-width:0;flex:1}#lrun .r .st,#lrun .r .m{white-space:normal;overflow-wrap:anywhere;max-width:none}#lrun .r:last-child,#ended .r:last-child{margin-bottom:0}
+#side .sp>summary .sr{font-size:var(--fs-min)}
+#lrun .r{border:1px solid var(--line);border-radius:8px;margin-bottom:8px;background:var(--card);min-width:0;overflow:hidden}#lrun .r>div{min-width:0;flex:1}#lrun .r .st,#lrun .r .m{white-space:normal;overflow-wrap:anywhere;max-width:none}#lrun .r:last-child
 #flowb svg{max-width:none}#tab-set details.sp{max-width:1120px}#list{max-width:900px}
 /*BOARD_LANES_CSS*/
 /*RUN_SHEET_CSS*/
 #main .r{display:flex;gap:8px;align-items:baseline;padding:8px 10px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;background:var(--card);cursor:pointer}#main .r:hover,#main .r:focus-visible{border-color:var(--acc)}#main h3{font-size:var(--fs-min);text-transform:uppercase;letter-spacing:.06em;color:var(--mute);margin:12px 0 6px}
 #bhead select{min-height:32px;padding:4px 12px;font-size:var(--fs-body);border-radius:6px}#bhead label.hck input{width:18px;aspect-ratio:1;padding:0}
 #bbody .it>.hld{order:1;flex:0 0 auto;margin:0;font-size:var(--fs-min);font-weight:600;color:var(--s5);white-space:nowrap}#bbody .it>.hld::before{content:"\25CF";margin-right:4px;color:var(--s5)}
-#plans .sb,#stats .sb{max-height:340px;overflow:auto}
+#ispeed .spd{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:8px;background:var(--card)}#ispeed .spdh{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}#ispeed .spdt{font-size:var(--fs-min);font-weight:600}#ispeed .spdt.up{color:#3ecf8e}#ispeed .spdt.down{color:var(--err)}#ispeed .spdt.flat{color:var(--mute)}#ispeed .spr{position:relative;height:16px;border-radius:8px;background:linear-gradient(90deg,#2a3140,#3a4457)}#ispeed .spr i{position:absolute;top:0;bottom:0;width:2px;background:var(--mute)}#ispeed .spr .spmed{width:3px;background:#e0a23a}#ispeed .spr .spt{width:10px;height:10px;top:3px;border-radius:50%;background:#5aa9ff;margin-left:-5px;box-shadow:0 0 0 2px #0d1117}#ispeed .spr .spt.up{background:#3ecf8e}#ispeed .spr .spt.down{background:#d9534f}#ispeed .spl{display:flex;justify-content:space-between;font-size:var(--fs-min);color:var(--mute);margin-top:3px}#ispeed .spn{font-size:var(--fs-min);color:var(--mute);margin-top:4px}#ispeed .spn b{color:var(--fg);font-size:var(--fs-body)}#isub{display:flex;flex-wrap:wrap;justify-content:space-between;gap:6px 10px;margin:0 0 8px}#isub .ig{display:flex;flex-direction:column;align-items:center;flex:1 0 44%;min-width:0}#isub .gv{font-size:var(--fs-min);color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap}#isub .grst{display:block;color:var(--mute);font-size:var(--fs-min)}
 #tab-set .sp .sb{padding:0 12px 12px}
 /* Settings (#913): a left theme list, one theme at a time, one Save bar; on the phone a select replaces the list and rows stack. */
 #tab-set .swrap{display:grid;grid-template-columns:200px minmax(0,1fr);gap:16px;max-width:1120px}#tab-set .spanels{min-width:0}
@@ -4164,14 +4207,13 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 // A read already in flight is shared: the caller gets a clone of the same answer.
 (()=>{const f=window.fetch.bind(window),live=new Map();window.fetch=(u,o)=>{if(o&&o.method&&o.method!=="GET"||o&&o.signal)return f(u,o);
  const k=String(u);if(!live.has(k))live.set(k,f(u,o).finally(()=>live.delete(k)));return live.get(k).then(r=>r.clone())}})();</script>
-<header class=top><h1><button id=pj aria-haspopup=menu aria-expanded=false><span id=pjn></span> &#9662;</button></h1><div id=psw aria-label="Projects"></div><div class=tabs role=tablist><button data-t=board role=tab>Kanban</button><button data-t=flow role=tab>Charts</button><button data-t=set role=tab>Settings</button></div><span class=spx></span>
+<header class=top><h1><button id=pj aria-haspopup=menu aria-expanded=false><span id=pjn></span> &#9662;</button></h1><div id=psw aria-label="Projects"></div><div class=tabs role=tablist><button data-t=board role=tab>Kanban</button><button data-t=flow role=tab>Throughput</button><button data-t=set role=tab>Settings</button></div><span class=spx></span>
 <span class=pill id=bread></span></header>
 <div id=win>
 <aside id=side>
+<details id=stats class=sp><summary>Cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><div class="igs isub" id=isub title="subscriptions: the used share of the weekly window and the days to its reset"></div><h4>Spend <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Figures at API list prices (API-equivalent)."></span></h4><div class=tot id=tot></div><div class=m id=totnote></div><div class=irw id=burn><span>Tokens · 24 h</span><b></b></div><div class=cash id=cash></div><h4>Spend over time <span class=row id=per></span></h4><div id=chart></div><div id=kpi></div><div id=open></div><h4>Model tokens · this month</h4><div class=m id=piet>in + out</div><div id=pie></div></div></details>
+<details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div class=ian id=ian></div><div id=ispec></div><div id=iloop></div><div id=ispeed></div></div></details>
 <details id=lrd class=sp open><summary>Live runs<span class=sr id=lrs></span></summary><div class=sb id=lrun></div></details>
-<details id=led class=sp><summary>Last ended<span class=sr><span id=les></span> <a href="#" id=enall>History</a></span></summary><div class=sb id=ended></div></details>
-<details id=stats class=sp><summary>Cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><h4>Spend <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Figures at API list prices (API-equivalent)."></span></h4><div class=tot id=tot></div><div class=m id=totnote></div><div class=cash id=cash></div><h4>Spend over time <span class=row id=per></span></h4><div id=chart></div><div id=kpi></div><div id=open></div><h4>Model cost · this month</h4><div class=m id=piet>API-equivalent</div><div id=pie></div></div></details>
-<details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div class=ian id=ian></div><div id=ispec></div><div id=iloop></div><div class=irw><span>Next cycle</span><b id=icyc aria-live=off>?</b></div><div id=iuse></div></div></details>
 </aside>
 <main id=content>
 <section id=tab-board class="pane on" aria-label=Board>
@@ -4253,40 +4295,44 @@ function ldCells(d){return[["CPU","cpu"],["RAM","ram"],["GPU","gpu"]].map(p=>{co
 // INST{
 function gaugeGeom(v){const f=ldNum(v),k=f!==null,p=k?f:0,a=Math.PI*p/100;return{known:k,col:k?`hsl(${Math.round(120*(1-p/100))} 65% 42%)`:"var(--line)",deg:Math.round(-90+1.8*p),x:Math.round((30-26*Math.cos(a))*10)/10,y:Math.round((32-26*Math.sin(a))*10)/10}}
 function gaugeSvg(v){const g=gaugeGeom(v);return `<svg width=60 height=36 viewBox="0 0 60 36" aria-hidden="true" focusable="false"><path class=gt d="M4 32 A26 26 0 0 1 56 32"/><path class=gf stroke="${g.col}" d="M4 32 A26 26 0 0 1 ${g.x} ${g.y}"/><line class=gn x1=30 y1=32 x2=30 y2=10 style="transform:rotate(${g.deg}deg)"${g.known?"":" visibility=hidden"}/><circle class=gh0 cx=30 cy=32 r=2 /></svg>`}
+function subsGauges(d){const xs=(d||{}).subs||[];if(!xs.length)return"";
+ return xs.map(s=>{const p=typeof s.pct==="number"?s.pct:null,left=p===null?"?":s.resets?Math.max(0,(s.resets-Date.now()/1000)/86400).toFixed(1)+" d":"?";
+  return `<div class="ig${p!==null&&p>=90?" ldred":""}"${s.why||s.window?` title="${iq(s.why||("the "+s.window+" window"))}"`:""}>${gaugeSvg(p)}<span class=gv><b>${esc(s.label)}</b> ${p===null?"?":fpct(p)+"%"}<small class=grst>${esc(left)}</small></span></div>`}).join("")}
 function instGauges(d){return ldCells(d).map(c=>`<div class="ig${c.red?" ldred":""}">${gaugeSvg((d||{})[c.k.toLowerCase()])}<span class=gv><b>${c.k}</b> ${esc(c.t)}</span></div>`).join("")}
 const instFact=(facts,k)=>(facts||[]).find(f=>f&&f.key===k);
 function instTile(k,f,lead){if(!f)return{k,text:"no reading",tone:"neutral"};const p=(f.parts||[])[0]||{},t=String(f.text||"").replace(lead,"").trim()||"?";return{k,text:t,tone:p.tone==="ok"||p.tone==="err"?p.tone:"neutral",tip:f.tip||null,detail:f.detail||null,times:p.times||null}}
-function instTiles(facts){const lp=instFact(facts,"loop"),ld=instFact(facts,"landing"),on=lp?/:ON$/.test(lp.text):null,
- land=ld?instTile("Landed",ld,/^landed\s*/):{k:"Landed",text:"no reading",tone:"neutral"},m=/PR #(\d+)/.exec(land.text);
- if(m){land.tone="info";land.href=`https://github.com/__REPO__/pull/${m[1]}`}
+function instTiles(facts){const lp=instFact(facts,"loop"),on=lp?/:ON$/.test(lp.text):null;
  return[instTile("Gate",instFact(facts,"gate"),/^gate\s*/),
-  {k:"Loop",text:on===null?"?":on?"ON":"OFF",tone:on===null?"neutral":on?"ok":"err"},land,instTile("GraphQL",instFact(facts,"graphql"),/^graphql\s*/)]}
+  {k:"Loop",text:on===null?"?":on?"ON":"OFF",tone:on===null?"neutral":on?"ok":"err"}]}
 const iq=t=>esc(t).replace(/"/g,"&quot;");
 function tileHtml(t){const v=t.href?esc(t.text).replace(/PR #\d+/,x=>`<a target=_blank rel=noopener href="${iq(t.href)}">${x}</a>`):esc(t.text),
  d=(t.detail||[]).length?`<details><summary>${t.detail.length} failed</summary><ul>${t.detail.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></details>`:"";
  return `<div class="at ${t.tone}"${t.tip?` title="${iq(t.tip)}"`:""}><span class=ah><span class=dot aria-hidden="true"></span>${esc(t.k)}</span><span class=av>${v}</span>${t.times?`<span class=atm>${esc(t.times)}</span>`:""}${d}</div>`}
-function instSum(facts){const t=instTiles(facts);return t.find(x=>x.k==="Loop").text+" · "+t.filter(x=>x.k!=="Loop"&&x.k!=="GraphQL"&&x.tone==="err").length+" fail"}
-function cycleLeft(text){const m=/^cycle (?:in |\+)(?:(\d+)h(\d\d)m|(\d+)m(\d\d)s)( late)?$/.exec(String(text||""));if(!m)return null;
- const s=m[1]!==undefined?(+m[1])*3600+(+m[2])*60:(+m[3])*60+(+m[4]);return m[5]?-s:s}
-function cycleFmt(left){const s=Math.abs(Math.round(left)),h=Math.floor(s/3600),mi=Math.floor(s/60)%60,p=n=>String(n).padStart(2,"0"),
- t=h?`${h}h${p(mi)}m`:`${Math.floor(s/60)}m${p(s%60)}s`;return left<0?`+${t} late`:`in ${t}`}
+function instSum(facts){const t=instTiles(facts);return t.find(x=>x.k==="Loop").text+" · "+t.filter(x=>x.k!=="Loop"&&x.tone==="err").length+" fail"}
+function speedRow(sp){if(!sp)return `<div class="spd none"><b>Throughput</b><span class=spn>no history yet</span></div>`;
+ const {today,median,min,max,trend}=sp,hi=Math.max(max||0,today||0,1),at=v=>Math.max(0,Math.min(100,100*(v||0)/hi));
+ const tag=trend==="up"?["\u25B2","accelerating","up"]:trend==="down"?["\u25BC","slowing","down"]:["\u25AC","steady","flat"];
+ const mark=(v,cls,lbl)=>v==null?"":`<i class="${cls}" style="left:${at(v)}%" title="${lbl} ${v}"></i>`;
+ return `<div class=spd><div class=spdh><b>Throughput</b><span class="spdt ${tag[2]}">${tag[0]} ${tag[1]}</span></div>`
+  +`<div class=spr role=img aria-label="cards closed per day: today ${today}, median ${median==null?"unknown":median}, minimum ${min==null?"unknown":min}, maximum ${max==null?"unknown":max}">`
+  +mark(min,"spmin","minimum")+mark(median,"spmed","median")+mark(max,"spmax","maximum")+`<i class="spt ${tag[2]}" style="left:${at(today)}%" title="today ${today}"></i></div>`
+  +`<div class=spl><span>min ${min==null?"?":min}</span><span>med ${median==null?"?":median}</span><span>max ${max==null?"?":max}</span></div>`
+  +`<div class=spn><b>${today==null?"?":today}</b> closed today \u00b7 cards per day</div></div>`}
 function instUsage(facts){const f=instFact(facts,"burn");if(!f||!f.text)return null;const p=String(f.text).split(" · ");return{tok:p[0].replace(/^tokens\s*/,""),calls:p.slice(1).join(" · ")}}
 function specBar(p){p=p||{};const st=p.state==="ok"||p.state==="info"?" "+p.state:"";   // the hub decides the count, the text and the state; the page only draws them
  const w=100*Math.max(0,Math.min(1,Number(p.frac)||0)),bar=p.bar?`<span class=pb role=progressbar aria-label="Open spec progress" aria-valuemin=0 aria-valuemax=${Number(p.total)||0} aria-valuenow=${Number(p.done)||0}><span class=pf style="width:${w}%"></span></span>`:"";
  return `<div class="at${st}"${p.tip?` title="${iq(p.tip)}"`:""}><span class=ah><span class=dot aria-hidden="true"></span>Specs${p.so?`<span class=so>${esc(p.so)}</span>`:""}</span><span class=av>${esc(p.value||"no open spec")}</span>${bar}</div>`}
-let instCyc=null,instLast={};
+let instLast={};
 function instSet(id,h){const e=$("#"+id);if(e&&instLast[id]!==h){instLast[id]=h;e.innerHTML=h}}
-let instCycOff=false;   // the hub says "cycle off" when the loop is stopped: no countdown, no "late"
-function instTick(){const e=$("#icyc");if(e)e.textContent=instCycOff?"loop off":instCyc===null?"?":cycleFmt(instCyc-Date.now()/1000)}
 function instDraw(d){const c=$("#inst");if(!c)return;const facts=(d||{}).facts||[];c.classList.toggle("warn",!!(d||{}).warn);
  const gs=$("#igs");if(gs&&!gs.children.length)gs.innerHTML=instGauges(d);
  else if(gs)ldCells(d).forEach((x,i)=>{const n=gs.children[i],g=gaugeGeom((d||{})[x.k.toLowerCase()]);if(!n)return;n.classList.toggle("ldred",x.red);
   const ln=n.querySelector(".gn"),f=n.querySelector(".gf"),v=n.querySelector(".gv");
   if(ln){ln.style.transform=`rotate(${g.deg}deg)`;ln.setAttribute("visibility",g.known?"visible":"hidden")}if(f){f.setAttribute("d",`M4 32 A26 26 0 0 1 ${g.x} ${g.y}`);f.setAttribute("stroke",g.col)}if(v)v.innerHTML=`<b>${x.k}</b> ${esc(x.t)}`});
- instSet("ian",instTiles(facts).map(tileHtml).join(""));instSet("ispec",specBar((d||{}).specs));
- const u=instUsage(facts);instSet("iuse",u?`<div class=irw><span>Tokens</span><b class=bad>${esc(u.tok)}</b></div><div class=irw><span>Calls over cap</span><b class=bad>${esc(u.calls)}</b></div>`:"<div class=irw><span>Tokens</span><b>no call over the cap</b></div>");
+ instSet("ian",instTiles(facts).map(tileHtml).join(""));instSet("isub",subsGauges(d||{}));instSet("ispec",specBar((d||{}).specs));instSet("ispeed",speedRow((d||{}).speed));
+ const u=instUsage(facts);instSet("burn",u?`<span>Tokens · 24 h</span><b class=bad>${esc(u.tok)}</b>`:"<span>Tokens · 24 h</span><b>no reading</b>");
  const s=$("#instsr");if(s)s.textContent=instSum(facts);
- const cy=instFact(facts,"cycle"),l=cy?cycleLeft(cy.text):null;instCycOff=!!cy&&cy.text==="cycle off";instCyc=l===null?null:Date.now()/1000+l;instTick()}
+}
 // }INST
 async function loadPoll(){try{const d=await (await fetch("/api/load")).json();instDraw(d)}catch(e){}}
 function groupHeader(k,rows){const n=rows.filter(r=>r.kind!=="childcc").length,spend=rows.reduce((a,r)=>a+r.spend,0),agents=rows.reduce((a,r)=>a+(r.agents||0),0);let title=usd(spend);let text=n+" · "+title;if(k==="running"&&CAPS&&CAPS.per_run&&CAPS.per_run.label)title+=" · "+CAPS.per_run.label;if(k==="running")text=(CAPS&&CAPS.runs&&CAPS.children)?`RUNS ${n}/${CAPS.runs} · AGENTS ${agents}/${CAPS.children}`+((CAPS.waiting||[]).length?" · waiting: "+CAPS.waiting.map(w=>`${w.holder} (${w.ceiling})`).join(", "):""):`${n} · ${agents}`;return {text,title}}
@@ -4538,25 +4584,25 @@ function pie(ms){
  // One slice per model NAME, never per spelling: one model answers under several (deepseek-flash, deepseek-flash[1m],
  // claude-deepseek-flash), and keying the rows on the raw id drew the same label three times (#1750).
  const byName=new Map();
- for(const m of ms){const v=m.month_cost;if(!(v>0))continue;
+ for(const m of ms){const v=m.month_tokens;if(!(v>0))continue;
   const k=m.box&&m.box.registered===false?m.model+" · unregistered":(m.box&&m.box.llm)||m.model;
   const r=byName.get(k)||{n:k,v:0,ids:[],routes:[]};
   r.v+=v;
   if(!r.ids.includes(m.model))r.ids.push(m.model);
   for(const rt of (m.box&&m.box.routes)||[])if(!r.routes.includes(rt))r.routes.push(rt);
   byName.set(k,r)}
- const rows=[...byName.values()].sort((a,b)=>b.v-a.v);if(!rows.length)return"<span class=m>no cost this month</span>";
+ const rows=[...byName.values()].sort((a,b)=>b.v-a.v);if(!rows.length)return"<span class=m>no tokens this month</span>";
  const tot=rows.reduce((a,m)=>a+m.v,0),keep=rows.slice(0,TOP),fold=rows.slice(TOP);
- const sl=keep.map(m=>({k:m.n,n:m.n,v:m.v,t:`${m.n} (${m.ids.join(", ")})${m.routes.length?" via "+m.routes.join(", "):""}: ${usd(m.v)}`}));
- if(fold.length){const v=fold.reduce((a,m)=>a+m.v,0);sl.push({k:"other",n:`other · ${fold.length} models`,v,t:fold.map(m=>`${m.n}: ${usd(m.v)}`).join("\n")})}
+ const sl=keep.map(m=>({k:m.n,n:m.n,v:m.v,t:`${m.n} (${m.ids.join(", ")})${m.routes.length?" via "+m.routes.join(", "):""}: ${tk(m.v)} tokens`}));
+ if(fold.length){const v=fold.reduce((a,m)=>a+m.v,0);sl.push({k:"other",n:`other · ${fold.length} models`,v,t:fold.map(m=>`${m.n}: ${tk(m.v)} tokens`).join("\n")})}
  const col=k=>k==="other"?"#8a93a3":PCOL[[...String(k)].reduce((h,c)=>(h*31+c.charCodeAt(0))>>>0,0)%PCOL.length];   // a model keeps its colour across renders: the colour follows its name, not its place in the list
- const dot=(k,n,v)=>`<i style="background:${col(k)}"></i><span class=ln>${esc(n)}</span><span class=usd>${usd(v)}</span>`;   // the rows are built outside the page template: a nested backtick there breaks the pie matcher in tests
+ const dot=(k,n,v)=>`<i style="background:${col(k)}"></i><span class=ln>${esc(n)}</span><span class=usd>${tk(v)}</span>`;   // the rows are built outside the page template: a nested backtick there breaks the pie matcher in tests
  const subRows=fold.map(m=>`<div>${dot(m.n,m.n,m.v)}</div>`).join("");   // built outside the legend template: a nested backtick there breaks the pie matcher in tests
  const legendRows=sl.map(x=>x.k==="other"
    ?`<details class=lgo data-k="other"><summary tabindex=0 title="${esc(x.t)}">${dot(x.k,x.n,x.v)}</summary><div class=lgx>${subRows}</div></details>`
    :`<div tabindex=0 data-k="${esc(x.k)}" title="${esc(x.t)}">${dot(x.k,x.n,x.v)}</div>`).join("");
  let a0=-Math.PI/2;const R=52,C=60,arc=sl.map((x,i)=>{const a1=a0+x.v/tot*2*Math.PI,big=a1-a0>Math.PI?1:0,p=sl.length===1?`<circle cx=${C} cy=${C} r=${R} data-k="${esc(x.k)}" fill="${col(x.k)}"><title>${esc(x.t)}</title></circle>`:`<path d="M${C} ${C}L${C+R*Math.cos(a0)} ${C+R*Math.sin(a0)}A${R} ${R} 0 ${big} 1 ${C+R*Math.cos(a1)} ${C+R*Math.sin(a1)}Z" data-k="${esc(x.k)}" fill="${col(x.k)}" stroke="#161a21" stroke-width=1><title>${esc(x.t)}</title></path>`;a0=a1;return p}).join("");
- return `<div class=pie><svg viewBox="0 0 120 120" width=112 height=112>${arc}<circle cx=${C} cy=${C} r=26 fill="#161a21"/><text x=${C} y=${C-1} text-anchor=middle fill="#d8dde6" style="font-size:var(--fs-min)" font-weight=600>${usd(tot)}</text><text x=${C} y=${C+12} text-anchor=middle fill="#8a93a3" style="font-size:var(--fs-min)">this month</text></svg><div class=lg>${legendRows}</div></div>`}
+ return `<div class=pie><svg viewBox="0 0 120 120" width=112 height=112>${arc}<circle cx=${C} cy=${C} r=26 fill="#161a21"/><text x=${C} y=${C-1} text-anchor=middle fill="#d8dde6" style="font-size:var(--fs-min)" font-weight=600>${tk(tot)}</text><text x=${C} y=${C+12} text-anchor=middle fill="#8a93a3" style="font-size:var(--fs-min)">tokens · month</text></svg><div class=lg>${legendRows}</div></div>`}
 function hlPie(k){document.querySelectorAll("#pie [data-k]").forEach(el=>el.classList.toggle("hl",!!k&&el.dataset.k===k));document.querySelector("#pie .pie")?.classList.toggle("dim",!!k)}
 $("#pie").addEventListener("mouseover",e=>{const el=e.target.closest("[data-k]");hlPie(el?el.dataset.k:"")});
 $("#pie").addEventListener("mouseout",e=>{if(!$("#pie").contains(e.relatedTarget))hlPie("")});
@@ -4612,7 +4658,7 @@ async function pollStats(){try{pollSubs();
 }catch(e){}}
 pollStats();setInterval(pollStats,30000);
 poll();setInterval(poll,3000);
-loadPoll();setInterval(loadPoll,LOAD_MS);setInterval(instTick,1000);   // the window owns the reading: one timer and one /api/load per tick; the countdown ticks in place between readings, and its node is aria-live=off, so no tick is announced
+loadPoll();setInterval(loadPoll,LOAD_MS);   // the window owns the reading: one timer and one /api/load per tick; the countdown ticks in place between readings, and its node is aria-live=off, so no tick is announced
 const bo=ls.bo||{},saveB=()=>{ls.bo=bo;localStorage.hub=JSON.stringify({...ls,pins:[...pins],q,per,bo})};
 if(!["spec","wave","none"].includes(bo.lmode))bo.lmode="spec";   // an older page saved a mode no option names, and the select drew blank (#978)
 bo.dock="bottom";   // the board always docks at the bottom
@@ -4895,7 +4941,7 @@ const laneHtml=m=>{const ccount=c=>m.lanes.reduce((s,l)=>s+(l.counts[c]||0),0),p
    lid=l.kind==="s"?"SPEC "+l.num:bugs?"Loop bugs":l.title,ltt=l.kind==="s"?l.title:bugs?"defects of the loop itself: they halt dispatch, never a landing (ADR-0146)":l.kind==="none"?"bugs and single tickets":"";   // the lane reads as the mock: a coloured id, then its title or its subtitle (#889)
   h+=`<section class="lane${cl?" coll":""}${l.kind==="bugs"?" alarm":""}${l.done?" done":""}" data-lane="${esc(l.id)}" style="--lc:${lc}"><header class=lh role=button tabindex=0 aria-expanded="${!cl}" data-lane="${esc(l.id)}"><span class=tw>${cl?"&#9656;":"&#9662;"}</span>`
     +`<span class="lid${l.kind==="sw"?" sw":""}">${l.kind==="sw"?`<span class=sid>${esc(l.sid)}</span> · ${esc(l.wl)}`:esc(lid)}</span>`+(ltt?`<span class="ltt${l.kind==="s"?"":" subt"}">${esc(ltt)}</span>`:"")
-    +(l.kind==="s"||l.kind==="none"?`<span class=bar title="${l.closed} of ${l.total} closed"><i style="width:${pct(l)}%"></i></span><span class=pc>${l.closed}/${l.total}</span>`+(l.st?`<span class=lst>${esc(l.st)}</span>`:""):"")
+    +(l.kind==="s"||l.kind==="none"?`<span class=bar title="${l.closed} of ${l.total} closed"><i style="width:${pct(l)}%"></i></span><span class=pc>${l.closed}/${l.total}</span>`+(l.st?`<span class=lst>${esc(l.st)}</span>`:"")+(l.kind==="s"?`<a class=ghl target=_blank rel=noopener title="open SPEC ${l.num} on GitHub" aria-label="open SPEC ${l.num} on GitHub" href="https://github.com/${esc(l.r||"__REPO__")}/issues/${l.num}"><svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg></a>`:""):"")
     +`<span class=sum>${cl?m.cols.filter(c=>l.counts[c]).map(c=>`<span>${esc(c)} <b>${l.counts[c]}</b></span>`).join(""):""}</span></header>`;
   if(!cl)for(const c of m.vc){const key=l.id+"|"+c,v=cellView(l.cells[c],!!(bo.cx||{})[key]);h+=`<div class=cell data-lane="${esc(l.id)}" data-col="${esc(c)}">${cards({name:c},v.shown,v.shown)}${v.more?`<button class=more data-cell="${esc(key)}" title="show every card of this cell">+${v.more} more</button>`:""}</div>`}
   h+="</section>"}
@@ -4959,7 +5005,6 @@ function setTab(t,o){if(!TABS[t])t="board";TAB=t;ls.tab=t;save();
  if(t==="flow"){if(o&&o.runs)$("#flowov").hidden=true;else if(!o||!o.keep){if($("#flowov").hidden)flowOpen("cfd")}}
  drawMain()}
 document.querySelector(".tabs").addEventListener("click",e=>{const b=e.target.closest("button[data-t]");if(b)setTab(b.dataset.t)});
-$("#enall").addEventListener("click",e=>{e.preventDefault();e.stopPropagation();setTab("set");setTheme("lop")});   // the run history lives in the Loop theme of Settings
 $("#bruns").onclick=()=>{$("#flowov").hidden=true;flowTabs()};
 function flowTabs(){const h=$("#flowov").hidden,k=typeof FLOWK==="string"?FLOWK:"cfd";$("#bruns").classList.toggle("on",h);$("#bflow").classList.toggle("on",!h&&k==="cfd");$("#blead").classList.toggle("on",!h&&k!=="cfd")}
 $("#main").addEventListener("click",e=>{const r=e.target.closest(".r[data-rid]");if(r)openRun(r.dataset.rid)});   // a run row on the Runs tab opens the sheet (#984)
@@ -5032,7 +5077,7 @@ let lanesNow=null;   // the model the board last drew: the controls act on its l
 $("#lhd").onchange=e=>{bo.hideDone=e.target.checked;saveB();pollBoard()};
 const laneSet=v=>{bo.lc=bo.lc||{};for(const l of(lanesNow?lanesNow.lanes:[]))bo.lc[l.id]=v;saveB();pollBoard()};
 $("#lcall").onclick=()=>laneSet(true);$("#lexp").onclick=()=>laneSet(false);
-document.addEventListener("click",e=>{const h=e.target.closest("#bbody .lh");if(h){const id=h.dataset.lane,coll=h.closest(".lane").classList.contains("coll");bo.lc=bo.lc||{};laneToggle(id,coll);return}
+document.addEventListener("click",e=>{if(e.target.closest(".ghl"))return;const h=e.target.closest("#bbody .lh");if(h){const id=h.dataset.lane,coll=h.closest(".lane").classList.contains("coll");bo.lc=bo.lc||{};laneToggle(id,coll);return}
  const m=e.target.closest("#bbody .more");if(m){bo.cx=bo.cx||{};bo.cx[m.dataset.cell]=true;saveB();pollBoard();return}   // a more click opens its own cell only
  const p=e.target.closest("#lhcx");if(p&&lanesNow){const names=new Set(lanesNow.hc.map(x=>x.name));bo.lc=bo.lc||{};   // a hidden column's pill expands the lanes that hold its cards
   for(const l of lanesNow.lanes)if(l.collapsed&&Object.keys(l.counts).some(c=>names.has(c)))bo.lc[l.id]=false;saveB();pollBoard()}});
@@ -5048,9 +5093,7 @@ try{const r=await fetch("/api/promote",{method:"POST",headers:{"Content-Type":"a
 document.addEventListener("click",e=>{for(const d of["#fw","#fs"])if($(d)&&!e.target.closest(d))$(d).open=false});
 pollBoard();setInterval(pollBoard,5000);
 // Last ended: the runs that ended today, read from the hub (#889)
-async function endedPoll(){try{const rows=await (await fetch("/api/ended")).json();ENDED=rows;drawMain();$("#les").textContent=rows.length+" today";$("#ended").innerHTML=rows.slice(0,5).map(r=>`<div class=r data-rid="${esc(r.id)}" tabindex=0 role=button><div><span class="b ${r.state}">${esc(r.badge||r.state)}</span> <b>${esc(name(r))}</b><div class=m>${usd(r.spend)} \u00b7 ${age(r.age)} ago</div></div></div>`).join("")||"<div class=m>no run ended today</div>"}catch(e){}}
-$("#ended").addEventListener("click",e=>{const r=e.target.closest(".r[data-rid]");if(r)openRun(r.dataset.rid)});   // an ended run opens in the same sheet (#984)
-$("#ended").addEventListener("keydown",e=>{const r=e.target.closest(".r[data-rid]");if(r&&(e.key==="Enter"||e.key===" ")){e.preventDefault();openRun(r.dataset.rid)}});
+async function endedPoll(){try{const rows=await (await fetch("/api/ended")).json();ENDED=rows;drawMain();rows.slice(0,5).map(r=>`<div class=r data-rid="${esc(r.id)}" tabindex=0 role=button><div><span class="b ${r.state}">${esc(r.badge||r.state)}</span> <b>${esc(name(r))}</b><div class=m>${usd(r.spend)} \u00b7 ${age(r.age)} ago</div></div></div>`).join("")||"<div class=m>no run ended today</div>"}catch(e){}}
 endedPoll();setInterval(endedPoll,30000);
 setTab(location.hash==="#set"?"set":TABS[ls.tab]?ls.tab:"board");   // the phone menu links here with #set (#913)
 let ver=null;setInterval(async()=>{try{const v=(await (await fetch("/api/version")).json()).v;if(ver===null)ver=v;else if(v!==ver)location.reload()}catch(e){}},3000);
