@@ -249,7 +249,7 @@ skipped "$r" && ok "next hunt waits 60 minutes after a hunt-fix dispatch" || ko 
 scene filed
 f=$T/filed
 # board.py imports issue_state.py, the one seam for an issue's state (#236): the copy needs it beside board.py (#393)
-cp "$(dirname "$src")/board.sh" "$(dirname "$src")/board.py" "$(dirname "$src")/issue_state.py" "$S/"
+cp "$(dirname "$src")/board.sh" "$(dirname "$src")/board.py" "$(dirname "$src")/issue_state.py" "$(dirname "$src")/board_columns.py" "$(dirname "$src")/board-definition.json" "$S/"
 printf 'export SG_REPO SG_OWNER SG_PROJECT SG_STATE SG_CHECKOUT\nexport SG_BOARD_READ_BACKOFF=0\nexport BOARD="%s/board.sh"\n' "$S" >> "$S/env.sh"
 export SGH_TMP=$f
 cat > "$T/bin/gh" <<'J'

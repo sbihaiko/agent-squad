@@ -159,7 +159,7 @@ if [ -n "$rr" ]; then
     cm="$A/notstartable-$n-$rkey"; [ -e "$cm" ] && continue
     printf 'SQUAD-NOT-STARTABLE: build=%s %s run(s) ended failed with the same reason `%s` in the last %s min.\n\n%s\n\nA dispatch on this issue reads this line before it starts and starts nothing while it is here. A later build re-arms it; remove this comment (or fix the cause) to re-arm it sooner.\n' \
       "$(sg_loop_build)" "$nrr" "$rkey" "${SG_HEALTH_REPEAT_MINUTES:-120}" "$rwhy" > "$A/.cm$$"
-    gh api --method POST "repos/$SG_REPO/issues/$n/comments" -F body=@"$A/.cm$$" >/dev/null 2>&1 && touch "$cm"
+    gh api --method POST "repos/$SG_REPO/issues/$n/comments" -F body=@"$A/.cm$$" >/dev/null 2>&1 && { touch "$cm"; gh api --method POST "repos/$SG_REPO/issues/$n/labels" -f "labels[]=frozen:not-startable" >/dev/null 2>&1; }
     rm -f "$A/.cm$$"; done
 fi
 # Two loops are not twice the loop (#1858): a second watch.sh doubles every GitHub read the loop makes -- which is what the API's

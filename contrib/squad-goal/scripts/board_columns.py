@@ -103,6 +103,14 @@ def past(have, want):
     return have in order and want in order and order.index(have) > order.index(want)
 
 
+UNCLAIM = ("Doing", "Todo")   # the one backward move: the loop's dispatch undoes its own claim (ADR-0143)
+
+
+def refused_for_automated(have, want):
+    """True when an automated writer may not move a card from `have` to `want`; a card with no column takes its first one."""
+    return bool(have) and (have, want) != UNCLAIM and past(have, want)
+
+
 # The close reason GitHub's issue carrier answers for an issue it closed without delivering it (#921): `state_reason`
 # answers `completed`, `not_planned`, `duplicate` or `reopened`. `not_planned` and `duplicate` both say the issue was
 # never delivered, so both name Abandoned (#517). The read parses no delivery out of `reopened`: a reopened issue is

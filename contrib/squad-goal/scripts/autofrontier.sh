@@ -209,7 +209,7 @@ while [ $i -lt ${#cands[@]} ]; do
   # commit a decision he has not made. The same holds for an issue that waits on the owner, one closed as not-work, and
   # one waiting on an answer. The bug label is skipped here too: autobug.sh owns those.
   # A run parent rolls a run's children up and is never work (#340).
-  skip=; bad=; for s in "${SG_BUG_LABEL:-bug}" debt run-parent frozen:owner frozen:dependency ${SG_FRONTIER_SKIP_LABELS//,/ }; do case ",$labels," in *",$s,"*) skip=1; bad=$s;; esac; done
+  skip=; bad=; for s in "${SG_BUG_LABEL:-bug}" debt run-parent frozen:owner frozen:dependency frozen:not-startable ${SG_FRONTIER_SKIP_LABELS//,/ }; do case ",$labels," in *",$s,"*) skip=1; bad=$s;; esac; done
   [ -n "$skip" ] && { [ -z "$card" ] || why_card "$n" "skip label" "$bad"; continue; }
   case ",$labels," in *",$SG_FRONTIER_LABEL,"*) ;; *) [ -z "$card" ] || why_card "$n" "no go label"; continue;; esac   # no go label, no dispatch (#485)
   case "$todo" in *" $n "*) ;; *) continue;; esac   # the card is not in Todo: the owner has not started it (#550)

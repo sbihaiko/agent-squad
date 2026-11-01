@@ -116,6 +116,7 @@ contrib/squad-goal/scripts/board.py	contrib/squad-goal/scripts/test-board-add.sh
 contrib/squad-goal/scripts/board.py	contrib/squad-goal/scripts/test-board-clear-run.sh
 contrib/squad-goal/scripts/board.py	contrib/squad-goal/scripts/test-board-define.sh
 contrib/squad-goal/scripts/board.py	contrib/squad-goal/scripts/test-board-migrate.sh
+contrib/squad-goal/scripts/board.py	contrib/squad-goal/scripts/test-board-forward.sh
 contrib/squad-goal/scripts/board.py	contrib/squad-goal/scripts/test-board-move-unchanged.sh
 contrib/squad-goal/scripts/board.py	contrib/squad-goal/scripts/test-board-run-fields.sh
 contrib/squad-goal/scripts/board.py	contrib/squad-goal/scripts/test-board-test-case.sh
