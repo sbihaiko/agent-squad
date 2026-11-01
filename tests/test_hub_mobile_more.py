@@ -15,7 +15,7 @@ BOARD_FILTER_JS = SCRIPTS / "board-filter.js"
 SCREEN_ROUTES = {"cost": "/api/stats"}   # #1028: the plans and the models left the More tab for Settings
 PERIODS = ["hour", "day", "month"]
 HUB_GET_ROUTES = {
-    "/api/adapter-errors", "/api/board", "/api/chart/burnup", "/api/chart/cfd", "/api/chart/lead", "/api/delivery", "/api/ended", "/api/issue", "/api/leadtime", "/api/limits", "/api/load", "/api/models",
+    "/api/adapter-errors", "/api/board", "/api/chart/burnup", "/api/chart/burndown", "/api/chart/cfd", "/api/chart/lead", "/api/delivery", "/api/ended", "/api/issue", "/api/leadtime", "/api/limits", "/api/load", "/api/models",
     "/api/runs", "/api/sessions", "/api/sessions/conversation", "/api/sessions/send", "/api/slack", "/api/speed", "/api/stats", "/api/status",
     "/api/subs", "/api/version",
 }

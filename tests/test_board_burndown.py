@@ -2,7 +2,7 @@
 import ast
 import importlib.util
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
@@ -14,12 +14,17 @@ SPEC = 1045
 
 
 @pytest.fixture(scope="module")
-def burndown():
+def mod():
     sys.path.insert(0, str(SCRIPTS))
     spec = importlib.util.spec_from_file_location("board_burndown_under_test", BURNDOWN_PY)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.burndown
+    return module
+
+
+@pytest.fixture(scope="module")
+def burndown(mod):
+    return mod.burndown
 
 
 def _iso(day, hour=12, minute=0):
@@ -119,6 +124,15 @@ def test_the_zone_moves_the_day_boundary(burndown):
     result = burndown(store, [_read(20), _read(21)], SPEC, zone="America/Sao_Paulo")
     assert [p["day"] for p in result["points"]] == ["2026-10-20", "2026-10-21"]
     assert [p["added"] for p in result["points"]] == [1, 0]
+
+
+def test_the_week_counts_only_the_days_of_its_window_even_after_a_gap(mod):
+    store = {1: _issue(_join(20), _close(21)), 2: _issue(_join(20))}
+    series = mod.burndown(store, [_read(20), _read(30)], SPEC)
+    summary = mod.summary(series, date(2026, 10, 30))
+    assert summary["remaining"] == 1
+    assert summary["closed_week"] == 0, "a ticket closed before the window is not this week's close"
+    assert summary["guide"] is None and summary["guide_reason"]
 
 
 def test_module_imports_no_hub_github_client_or_file_api():

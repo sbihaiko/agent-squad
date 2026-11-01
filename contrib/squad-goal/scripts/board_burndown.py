@@ -5,25 +5,26 @@ Stdlib only: no hub and no GitHub client (ADR-0137). A ticket is a child of the 
 a zero. The flow of a gap day is not dropped: the next point counts the closes and joins since the previous point.
 """
 import bisect
-from collections import Counter
+from collections import defaultdict
 from datetime import UTC, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 NO_CHILD = "no child ticket"
 NO_READ = "no whole board read after the first ticket"
+TRAILING_DAYS = 7   # the window of the week's numbers and of the trailing close rate the guide falls back to
 
 
 def burndown(store, reads, spec, zone="UTC"):
     """The series for one spec. `store` maps each issue number to its record (board_history's events), and `reads` holds the
     epoch seconds of the whole board reads. A day is named in the zone."""
     tz = ZoneInfo(zone)
-    timelines = [_states(rec.get("events", [])) for rec in store.values()]
-    added, closed = Counter(), Counter()
-    for states in timelines:
+    timelines = [(n, _states(rec.get("events", []))) for n, rec in store.items()]
+    added, closed = defaultdict(list), defaultdict(list)
+    for n, states in timelines:
         for (_, prev_spec, prev_closed), (t, spec_now, closed_now) in zip(states, states[1:]):
             day = _day(t, tz)
-            if spec_now == spec and prev_spec != spec: added[day] += 1
-            if spec_now == spec and closed_now and not prev_closed: closed[day] += 1
+            if spec_now == spec and prev_spec != spec: added[day].append(n)
+            if spec_now == spec and closed_now and not prev_closed: closed[day].append(n)
     if not added:
         return {"spec": spec, "start": None, "points": [], "gaps": [], "reason": NO_CHILD}
     start = min(added)
@@ -31,20 +32,53 @@ def burndown(store, reads, spec, zone="UTC"):
     last_read = max(read_days, default=None)
     if last_read is None or last_read < start:
         return {"spec": spec, "start": start.isoformat(), "points": [], "gaps": [], "reason": NO_READ}
-    points, gaps, pending_added, pending_closed = [], [], 0, 0
+    points, gaps, pending_added, pending_closed = [], [], [], []
+    daily = {}
     day = start
     while day <= last_read:
-        pending_added += added[day]
-        pending_closed += closed[day]
+        daily[day.isoformat()] = {"added": sorted(added.get(day, ())), "closed": sorted(closed.get(day, ()))}
+        pending_added.extend(added.get(day, ()))
+        pending_closed.extend(closed.get(day, ()))
         if day in read_days:
             end = _start(day + timedelta(days=1), tz)
-            remaining = sum(1 for states in timelines if _open_child(states, end, spec))
-            points.append({"day": day.isoformat(), "remaining": remaining, "closed": pending_closed, "added": pending_added})
-            pending_added = pending_closed = 0
+            remaining = sum(1 for _, states in timelines if _open_child(states, end, spec))
+            points.append({"day": day.isoformat(), "remaining": remaining, "closed": len(pending_closed), "added": len(pending_added),
+                           "closed_tickets": sorted(pending_closed), "added_tickets": sorted(pending_added)})
+            pending_added, pending_closed = [], []
         else:
             gaps.append(day.isoformat())
         day += timedelta(days=1)
-    return {"spec": spec, "start": start.isoformat(), "points": points, "gaps": gaps, "reason": None}
+    return {"spec": spec, "start": start.isoformat(), "points": points, "gaps": gaps, "daily": daily, "reason": None}
+
+
+def summary(series, today, forecast=None):
+    """The numbers under the chart and the guide line. `today` is a date; `forecast` is the spec's forecast close date, or None
+    when the spec has none. The guide runs from today, at the last whole read's remaining count, to zero: on the forecast date
+    when there is one, else at the trailing close rate. A spec with neither gets no guide, and the reason is named."""
+    points = series["points"]
+    if not points:
+        return {"remaining": None, "as_of": None, "closed_week": 0, "added_week": 0, "rate": 0.0, "guide": None,
+                "guide_reason": None, "reason": series["reason"]}
+    last = points[-1]
+    first_of_week = (today - timedelta(days=TRAILING_DAYS - 1)).isoformat()
+    week = [d for day, d in series["daily"].items() if first_of_week <= day <= today.isoformat()]
+    closed_week, added_week = sum(len(d["closed"]) for d in week), sum(len(d["added"]) for d in week)
+    remaining, rate = last["remaining"], closed_week / TRAILING_DAYS
+    guide, why = None, None
+    if remaining == 0:
+        target, source = today, "done"
+    elif forecast is not None:
+        target, source = forecast, "forecast"
+    elif closed_week:
+        target, source = today + timedelta(days=-(-remaining * TRAILING_DAYS // closed_week)), "trailing"
+    else:
+        target, source = None, None
+        why = f"no forecast and no ticket closed in the last {TRAILING_DAYS} days"
+    if target is not None:
+        guide = {"source": source, "from": {"day": today.isoformat(), "remaining": remaining},
+                 "to": {"day": target.isoformat(), "remaining": 0}}
+    return {"remaining": remaining, "as_of": last["day"], "closed_week": closed_week, "added_week": added_week, "rate": rate,
+            "guide": guide, "guide_reason": why, "reason": None}
 
 
 def _states(events):

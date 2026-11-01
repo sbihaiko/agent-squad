@@ -19,6 +19,8 @@ _cfd_spec = importlib.util.spec_from_file_location("board_cfd", pathlib.Path(__f
 _cfd = importlib.util.module_from_spec(_cfd_spec); _cfd_spec.loader.exec_module(_cfd)
 _leadtime_spec = importlib.util.spec_from_file_location("board_leadtime", pathlib.Path(__file__).resolve().parent / "board_leadtime.py")
 _leadtime = importlib.util.module_from_spec(_leadtime_spec); _leadtime_spec.loader.exec_module(_leadtime)
+_burndown_spec = importlib.util.spec_from_file_location("board_burndown", pathlib.Path(__file__).resolve().parent / "board_burndown.py")
+_burndown = importlib.util.module_from_spec(_burndown_spec); _burndown_spec.loader.exec_module(_burndown)
 _fast_spec = importlib.util.spec_from_file_location("board_fast", pathlib.Path(__file__).resolve().parent / "board_fast.py")
 board_fast = importlib.util.module_from_spec(_fast_spec); _fast_spec.loader.exec_module(board_fast)
 # The board draws the shipped definition (#247): its statuses, in its order, with their colours. Open PRs are a lane beside
@@ -3434,10 +3436,12 @@ def chart(name, key, build):
     CHARTS[name] = (key, answer)
     return answer
 
-def history_key():
-    path = _flow.history_path(BOARD, REPO)
+def _file_key(path):
     try: st = path.stat(); return (str(path), st.st_mtime_ns, st.st_size)
     except OSError: return (str(path), None)
+
+def history_key():
+    return _file_key(_flow.history_path(BOARD, REPO))
 
 def _cfd_payload(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
     """The cumulative flow's numbers, computed here from board_cfd; the page draws them and computes none.
@@ -3495,6 +3499,36 @@ def flow_burnup(spec):
     try: stamp = path.stat().st_mtime_ns
     except OSError: stamp = None
     return chart(f"burnup-{spec}", (str(path), stamp), lambda: _hist.burnup(_hist.load_store(path), spec))
+
+
+def _burndown_payload(spec=None, today=None):
+    """The burndown of one spec and the open specs the selector names, computed here; the page draws it and computes none (#1048).
+    No spec names the first open one. The forecast is None: the spec forecast ticket owns that date, so every guide is the trailing rate."""
+    today = today or dt.datetime.now(dt.UTC).date()
+    specs = [{"n": i["n"], "t": i["t"]} for i in board_cache["items"]
+             if _flow.type_key(i) == "spec" and str(i["s"]).lower() != "closed"]
+    spec = spec if spec is not None else (specs[0]["n"] if specs else None)
+    if spec is None: return {"specs": specs, "spec": None, "burn": None}
+    store = _hist.load_store(_hist.history_path(BOARD, REPO))
+    reads = [s["t"] for s in _flow.samples(_flow.history_path(BOARD, REPO))]
+    series = _burndown.burndown(store, reads, spec)
+    burn = {**series, **_burndown.summary(series, today, forecast=None)}
+    burn["ymax"] = max([1, *(p["remaining"] for p in series["points"]), *([burn["guide"]["from"]["remaining"]] if burn["guide"] else [])])
+    end = max([today, *([dt.date.fromisoformat(burn["guide"]["to"]["day"])] if burn["guide"] else [])])
+    first = dt.date.fromisoformat(series["start"]) if series["start"] else end
+    burn["days"] = [(first + dt.timedelta(days=k)).isoformat() for k in range((end - first).days + 1)] if series["start"] else []
+    return {"specs": specs, "spec": spec, "burn": burn}
+
+
+def burn_spec(query):
+    v = urllib.parse.parse_qs(query or "").get("spec", [""])[0]
+    return int(v) if v.isdigit() else None
+
+
+def flow_burn(spec=None):
+    today = dt.datetime.now(dt.UTC).date()
+    return chart("burndown", (board_cache.get("t"), spec, _file_key(_hist.history_path(BOARD, REPO)), history_key(), today),
+                 lambda: _burndown_payload(spec, today))
 
 
 def drawn_column(i, moves, window):
@@ -4841,7 +4875,8 @@ const cfdAxis=c=>{const n=c.days.length,base=flowH-flowP;   // every number and 
     `<text x=${flowW-flowP} y=${base+31} text-anchor=end fill=var(--mute) style="font-size:var(--fs-min)">day (UTC)</text>`;};
 let CF={r:"30"};   // the cumulative flow's range, 30 days at first (#901)
 const CFD_R=[["7","7 days"],["30","30 days"],["90","90 days"],["all","All"]];   // the cumulative flow's range views (#901)
-const flowCFD=c=>{const sel=`<label class=fhead>Range <select id=cfdr>${CFD_R.map(([k,v])=>`<option value=${k}${CF.r===k?" selected":""}>${v}</option>`).join("")}</select></label>`;
+const flowViews=k=>`<label class=fhead>View <select id=flowv><option value=cfd${k==="cfd"?" selected":""}>Cumulative flow</option><option value=burndown${k==="burndown"?" selected":""}>Burndown</option></select></label>`;   // one Throughput tab, two charts (#1048)
+const flowCFD=c=>{const sel=`<label class=fhead>Range <select id=cfdr>${CFD_R.map(([k,v])=>`<option value=${k}${CF.r===k?" selected":""}>${v}</option>`).join("")}</select></label> ${flowViews("cfd")}`;
   if(!c.days.length)return sel+"<p class=fnote>the flow history has no sample yet</p>";
   const n=c.days.length,cw=(flowW-2*flowP)/(n<2?1:n);
   const runs=b=>{const out=[];let cur=null;c.days.forEach((_,i)=>{if(b.upper[i]===null){cur=null;return}if(!cur){cur=[];out.push(cur)}cur.push(i)});return out};
@@ -4894,10 +4929,31 @@ const flowLead=l=>{const S=l.summary,ex=l.excluded.map(e=>`${e.count} ${esc(EXRE
   const head=`<p class=fhead>${esc(LT_TYPES.find(([k])=>k===l.type)[1].toLowerCase())} · <b>${esc(l.measure)}</b> · window ${l.window.size} ${esc(l.window.unit)} · excluded ${l.excluded_total}${ex?" ("+ex+")":""}</p>`;
   LT.cols=l.columns||[];if(!S)return head+"<p class=fnote>no closed card yet</p>";
   return head+ltChart(LT.zc||l.control[LT.log?"log":"jira"][LT.tf]);};
+let BURN={s:null};   // the spec the burndown draws; null lets the hub name the first open spec (#1048)
+const flowBurn=a=>{const b=a.burn,opts=a.specs.map(s=>`<option value=${s.n}${s.n===a.spec?" selected":""}>#${s.n} ${esc(s.t)}</option>`).join("");
+  const sel=`<label class=fhead>Spec <select id=burns>${opts}</select></label> ${flowViews("burndown")}`;
+  if(!a.specs.length)return sel+"<p class=fnote>no open spec on the board</p>";
+  if(!b)return sel;
+  if(b.reason)return sel+`<p class=fnote>this spec reads as empty: ${esc(b.reason)}</p>`;
+  const n=b.days.length,at=new Map(b.days.map((d,i)=>[d,i])),cw=(flowW-2*flowP)/(n<2?1:n),ymax=b.ymax;
+  const x=d=>flowX(at.get(d),n),y=v=>flowY(v,ymax);
+  const gaps=b.gaps.map(d=>`<rect x=${x(d)-cw/2} y=${flowP-10} width=${cw} height=${flowH-2*flowP+10} fill=var(--line) fill-opacity=.45><title>${esc(d)}: no whole read this day, so no point</title></rect>`).join("");
+  const pts=[...b.points].sort((p,q)=>p.day<q.day?-1:1),runs=[];
+  pts.forEach((p,k)=>{if(k&&at.get(p.day)===at.get(pts[k-1].day)+1)runs[runs.length-1].push(p);else runs.push([p])});
+  const lines=runs.map(r=>`<polyline fill=none stroke=#b8c0cf stroke-width=2 points="${r.map(p=>`${x(p.day)},${y(p.remaining)}`).join(" ")}"></polyline>`).join("");
+  const list=v=>v.length?v.map(k=>"#"+k).join(" "):"none";
+  const dots=pts.map(p=>`<circle cx=${x(p.day)} cy=${y(p.remaining)} r=3.5 fill=#b8c0cf><title>${esc(p.day)}: ${p.remaining} remaining · closed that day ${list(p.closed_tickets)} · joined that day ${list(p.added_tickets)}</title></circle>`).join("");
+  const guide=b.guide?`<line x1=${x(b.guide.from.day)} y1=${y(b.guide.from.remaining)} x2=${x(b.guide.to.day)} y2=${y(0)} stroke=#7aa2f7 stroke-width=2 stroke-dasharray="6 4"><title>guide to ${esc(b.guide.to.day)} (${esc(b.guide.source)})</title></line>`:"";
+  const axis=`<line x1=${flowP} y1=${flowH-flowP} x2=${flowW-flowP} y2=${flowH-flowP} stroke=var(--line)></line><text x=${flowP-6} y=${y(ymax)+4} text-anchor=end fill=var(--mute) style="font-size:var(--fs-min)">${ymax}</text>`+
+    `<text x=${flowP} y=${flowH-flowP+17} fill=var(--mute) style="font-size:var(--fs-min)">${esc(b.days[0])}</text><text x=${flowW-flowP} y=${flowH-flowP+17} text-anchor=end fill=var(--mute) style="font-size:var(--fs-min)">${esc(b.days[n-1])}</text>`;
+  const how=!b.guide?`no guide: ${esc(b.guide_reason)}`:b.guide.source==="done"?"every child is closed":b.guide.source==="forecast"?`guide to ${esc(b.guide.to.day)} (forecast)`:`guide to ${esc(b.guide.to.day)} at ${b.rate.toFixed(2)} closed a day`;
+  return sel+`<svg viewBox="0 0 ${flowW} ${flowH}">${axis}${gaps}${lines}${guide}${dots}</svg>`+
+    `<p class=fhead><b>remaining ${b.remaining} as of ${esc(b.as_of)}</b> · closed this week ${b.closed_week} · added this week ${b.added_week} · ${how}</p>`+
+    `<p class=fnote>one point per whole read, from ${esc(b.start)} UTC; a gap is a day with no whole read</p>`;};
 const drawFlow=()=>{{const w=$("#flowb").clientWidth-20;flowW=w<600?600:w>1600?1600:(w|0)}const cfd=FLOWK==="cfd";
   const a=FLOWD[FLOWK];
-  $("#flowb").innerHTML=!a?"<p class=fnote>loading the chart from the hub</p>":(cfd?flowCFD(a.cfd.ranges[CF.r]):flowLead(a.lead))+`<p class=fnote>data read ${new Date(a.t*1000).toLocaleTimeString()}</p>`};
-const flowOpen=async k=>{FLOWK=k;$("#flowov").hidden=false;drawFlow();const q=barQuery();try{const a=await (await fetch(`/api/chart/${k}?${q}`)).json();if(q!==barQuery())return;FLOWD[k]=a;if(FLOWK===k)drawFlow()}catch(e){}};
+  $("#flowb").innerHTML=!a?"<p class=fnote>loading the chart from the hub</p>":(FLOWK==="burndown"?flowBurn(a):cfd?flowCFD(a.cfd.ranges[CF.r]):flowLead(a.lead))+`<p class=fnote>data read ${new Date(a.t*1000).toLocaleTimeString()}</p>`};
+const flowOpen=async k=>{FLOWK=k;$("#flowov").hidden=false;drawFlow();const want=()=>k==="burndown"?`spec=${BURN.s||""}`:barQuery(),q=want();try{const a=await (await fetch(`/api/chart/${k}?${q}`)).json();if(q!==want())return;FLOWD[k]=a;if(FLOWK===k)drawFlow()}catch(e){}};
 const ltQ=()=>`&scale=${LT.log?"log":"jira"}&a=${encodeURIComponent(LT.a)}&b=${encodeURIComponent(LT.b)}&${barQuery()}`,ltOwn=()=>LT.a!==""||LT.b!=="";   // a span other than created to closed is the hub's chart for it (#905); the bar's values filter it (#904)
 const ltZoom=async(f,t)=>{const tok=++LT.tok;try{const c=await (await fetch(`/api/leadtime?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}${ltQ()}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;LT.zr=[f,t];LT.pick=null;drawFlow()}catch(e){}};   // the hub recomputes the chart for the dragged range (#900)
 const ltGet=async()=>{const tok=++LT.tok;LT.zc=null;LT.pick=null;if(!ltOwn()){drawFlow();return}try{const c=await (await fetch(`/api/leadtime?tf=${LT.tf}${ltQ()}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;drawFlow()}catch(e){}};   // the timeframe's chart for the chosen span (#905)
@@ -4911,6 +4967,8 @@ document.addEventListener("pointermove",e=>{if(!LTD)return;const x1=ltClamp(ltPx
 document.addEventListener("pointerup",()=>{const d=LTD;LTD=null;if(!d||!d.moved)return;d.s.querySelector("rect.ltsel")?.remove();LT.noclick=true;
   const a=(ltLo(d.x0,d.x1)-flowP)/(flowW-2*flowP),b=(ltHi(d.x0,d.x1)-flowP)/(flowW-2*flowP);if(b-a<0.005||!LT.rng)return;const [f,t]=ltSpan(LT.rng,a,b);ltZoom(f,t)});
 $("#flowb").onchange=e=>{if(e.target.id==="cfdr"){CF.r=e.target.value;drawFlow();return}
+  if(e.target.id==="burns"){BURN.s=+e.target.value;delete FLOWD.burndown;flowOpen("burndown");return}
+  if(e.target.id==="flowv"){flowOpen(e.target.value);return}
   if(e.target.id==="ltr"){LT.tf=e.target.value;saveLT();LT.zr=null;ltGet();return}
   if(e.target.id==="lty"){LT.ty=e.target.value;saveLT();barMoved();return}
   if(e.target.id==="lta"||e.target.id==="ltb"){LT[e.target.id==="lta"?"a":"b"]=e.target.value;LT.pick=null;if(LT.zr){ltZoom(LT.zr[0],LT.zr[1]);return}ltGet();return}
@@ -5043,7 +5101,7 @@ function setTab(t,o){if(!TABS[t])t="board";TAB=t;ls.tab=t;save();
  drawMain()}
 document.querySelector(".tabs").addEventListener("click",e=>{const b=e.target.closest("button[data-t]");if(b)setTab(b.dataset.t)});
 $("#bruns").onclick=()=>{$("#flowov").hidden=true;flowTabs()};
-function flowTabs(){const h=$("#flowov").hidden,k=typeof FLOWK==="string"?FLOWK:"cfd";$("#bruns").classList.toggle("on",h);$("#bflow").classList.toggle("on",!h&&k==="cfd");$("#blead").classList.toggle("on",!h&&k!=="cfd")}
+function flowTabs(){const h=$("#flowov").hidden,k=typeof FLOWK==="string"?FLOWK:"cfd";$("#bruns").classList.toggle("on",h);$("#bflow").classList.toggle("on",!h&&(k==="cfd"||k==="burndown"));$("#blead").classList.toggle("on",!h&&k==="lead")}
 $("#main").addEventListener("click",e=>{const r=e.target.closest(".r[data-rid]");if(r)openRun(r.dataset.rid)});   // a run row on the Runs tab opens the sheet (#984)
 $("#main").addEventListener("keydown",e=>{const r=e.target.closest(".r[data-rid]");if(r&&(e.key==="Enter"||e.key===" ")){e.preventDefault();openRun(r.dataset.rid)}});
 new MutationObserver(flowTabs).observe($("#flowov"),{attributes:true});
@@ -6173,6 +6231,7 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/chart/burnup"):
             m = re.search(r"[?&]spec=(\d{1,6})\b", self.path)
             body, ct = json.dumps(flow_burnup(int(m[1])) if m else {"err": "bad spec"}).encode(), "application/json"   # the spec lane's burn-up (#1025)
+        elif self.path.startswith("/api/chart/burndown"): body, ct = json.dumps(flow_burn(burn_spec(self.path.partition("?")[2]))).encode(), "application/json"
         elif self.path.startswith("/api/leadtime"): body, ct = json.dumps(lead_zoom(self.path.partition("?")[2])).encode(), "application/json"   # the control chart over a dragged range (#900)
         elif self.path.startswith("/api/version"): body, ct = json.dumps({"v": BOOT}).encode(), "application/json"
         elif self.path.startswith("/api/subs"): body, ct = json.dumps({**subs_month(), "presets": {k: {i: {"name": n, "usd": p} for i, (n, p) in v.items()} for k, v in PRESETS.items()}}).encode(), "application/json"
