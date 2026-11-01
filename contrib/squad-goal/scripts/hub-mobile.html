@@ -365,13 +365,22 @@ function call(path, fresh) {
   inFlight[ep] = { path, seq, ctl, p };
   return p;
 }
+// A path whose answer carried an ETag keeps its body: the next read sends If-None-Match, and a 304 returns the body the page
+// already holds (#973). The ETag rides through call(), so the one-read-in-flight rule is unchanged.
+const heldBody = {};
 async function readHub(path, ctl) {
   let r;
-  try { r = await fetch(path, ctl ? { cache: "no-store", signal: ctl.signal } : { cache: "no-store" }); }
+  const held = heldBody[path], init = { cache: "no-store" };
+  if (ctl) init.signal = ctl.signal;
+  if (held) init.headers = { "If-None-Match": held.tag };
+  try { r = await fetch(path, init); }
   catch (e) { const down = new Error("The hub does not answer. Check Tailscale and that the machine is awake."); down.down = true; throw down; }
+  if (r.status === 304 && held) return held.body;
   if (r.status === 403) throw new Error("The hub refused this login: " + (await r.text()).trim());
   if (!r.ok) throw new Error("The hub answered " + r.status + ".");
-  return r.json();
+  const body = await r.json(), tag = r.headers && r.headers.get && r.headers.get("ETag");
+  if (tag) heldBody[path] = { tag, body }; else delete heldBody[path];
+  return body;
 }
 
 const money = v => "$" + Number(v || 0).toFixed(2);

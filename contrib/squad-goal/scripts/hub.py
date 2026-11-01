@@ -3441,7 +3441,7 @@ def board():
     prs = sorted(board_cache["prs"], key=lambda p: p["u"], reverse=True)
     for x in prs:
         if x.get("br"): x.setdefault("gs", None); x.setdefault("pb", None); x["kind"] = _columns_module.BRANCH_KIND; continue   # a work branch has no review strip and no badge: its chip is its standing against dev
-        x["ps"] = pr_state(x); x["gs"] = gate_strip(x, t=board_cache.get("t")); x["pb"] = pr_badge(x); x["kind"] = _columns_module.PR_KIND   # the chip, the R C T B H strip under it (#1772), the lane's badge (#247)
+        x["ps"] = pr_state(x); x["gs"] = strip_instant(gate_strip(x, t=board_cache.get("t")), board_cache.get("t")); x["pb"] = pr_badge(x); x["kind"] = _columns_module.PR_KIND   # the chip, the R C T B H strip under it (#1772), the lane's badge (#247)
     # Every card names its repository (#1820): `r` is the full owner/name (what a link and the popup read), `rt` the tag
     # the card wears (MesenAI / agent-squad, or owner/repo when the short name names more than one repository).
     # Every row carries its own kind (#440): a pull request is `pr`, a work branch is `branch`. A work branch is served by
@@ -3449,7 +3449,7 @@ def board():
     cases = []   # the rows beside the axis, from the draft items the pass already read: the age is the pass's own clock against the pass's end
     for title in board_cache.get("cases") or []:
         m = TEST_CASE_TITLE.match(title)
-        if m: cases.append({"issue": int(m[1]), "result": m[2], "commit": m[3], "ended": m[4], "age": max(0, int(time.time() - _utc(m[4]).timestamp()))})
+        if m: cases.append({"issue": int(m[1]), "result": m[2], "commit": m[3], "ended": m[4]})   # an absolute instant: the page counts the age, so time passing never changes the body (#973)
     perr = "; ".join(board_cache.get("errs") or [])   # the repositories this pass could not read, named on the column
     # The lane carries the pull requests only (#440): a work branch has no lane and no other view. Each row names its own
     # kind, so the page reads a pull request by the row, never by the lane's name. An empty lane is still served, `n` 0.
@@ -3476,6 +3476,24 @@ def board():
         for item, (n, recorded, read, context) in expired.items():
             if dropped and item in dropped: report_expired(n, item, recorded, read, window, context)   # only a drop that really happened is reported, so a retry never repeats a line
     return {"t": board_cache["t"], "err": board_cache["err"], "prs": lane, "groups": groups, "cases": cases, "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {}), "sum": dict(board_summary(drawn), none=nospec_count(board_cache["items"], moves, read_at, window))}   # the No spec lane's bar (owner)
+
+def strip_instant(strip, t):
+    """The strip with its time-dependent `age` and `old` replaced by `at`, the poll's own instant: an unchanged board keeps its
+    ETag while time passes, and the page counts the age (#973)."""
+    return {**{k: v for k, v in strip.items() if k not in ("age", "old")}, "at": t or 0, "max": STRIP_MAX_AGE}
+
+_served_board = {}
+def board_served():
+    """The served board body and its ETag, built once per change (#973). The key is the cache, the pending-move record and the
+    overlay settings after which the board is a pure function; an error answer is never kept. Returns (body, etag or None)."""
+    moves = read_moves() if overlay_on() else {}
+    key = hashlib.sha256(json.dumps([board_cache, moves, overlay_on(), pending_window()], sort_keys=True, default=str).encode()).hexdigest()
+    if _served_board.get("key") == key: return _served_board["body"], _served_board["etag"]
+    try: body = json.dumps(board()).encode()   # every card: the page filters the board by the bar (#899)
+    except ValueError as e: return json.dumps({"error": str(e)}).encode(), None
+    etag = '"' + hashlib.sha256(body).hexdigest()[:32] + '"'
+    _served_board.update(key=key, body=body, etag=etag)
+    return body, etag
 
 def label_wave(labels):   # the `wave:NN` label's number, or None
     w = [int(m.group(1)) for l in labels for m in [re.match(r"wave:(\d+)$", l)] if m]
@@ -4652,7 +4670,7 @@ const COLNAME=/*BOARD_NAMES*/;   // the columns' names by the fact that sets the
 const hidCols=()=>bo.hidden??[];
 const RING=["#a3e635","#d8b4fe","#ff9ecd","#7dd3fc"];   // reserved for the columns the user creates, and never one of the named columns
 const colOf=(n,names)=>{const u=(names||[]).filter(x=>!Object.hasOwn(COLORS,x)).sort(),i=u.indexOf(n);return COLORS[n]||RING[(i<0?0:i)%RING.length]};
-const caseRows=cs=>(cs||[]).map(c=>{const a=c.age<3600?Math.max(1,Math.round(c.age/60))+"m":c.age<172800?Math.round(c.age/3600)+"h":Math.round(c.age/86400)+"d";return `<div class="tcrow ${c.result==="fail"?"fail":"pass"}" data-key="test case:${c.issue}@${esc(c.commit)}"><span class=tr>${esc(c.result)}</span><span class=id>#${c.issue}</span><span class=ta>${a}</span><code class=tm>${esc(c.commit)}</code></div>`}).join("");   // one row for each test case item, in the model's order: a strip beside the axis, never a column, and the pane reads no cache of its own
+const caseRows=cs=>(cs||[]).map(c=>{const ag=Math.max(0,Math.round((Date.now()-Date.parse(c.ended))/1000)),a=ag<3600?Math.max(1,Math.round(ag/60))+"m":ag<172800?Math.round(ag/3600)+"h":Math.round(ag/86400)+"d";return `<div class="tcrow ${c.result==="fail"?"fail":"pass"}" data-key="test case:${c.issue}@${esc(c.commit)}"><span class=tr>${esc(c.result)}</span><span class=id>#${c.issue}</span><span class=ta>${a}</span><code class=tm>${esc(c.commit)}</code></div>`}).join("");   // one row for each test case item, in the model's order: a strip beside the axis, never a column, and the pane reads no cache of its own
 // flow-charts:
 let FLOWK=null,FLOWD={};   // each chart's answer from its own route, by name: its numbers and the instant its data was read (#971)
 let flowW=800;const flowH=340,flowP=36;   // the width follows the pane, so the chart fills it and its text keeps its size (#889)
@@ -4746,7 +4764,8 @@ $("#flowb").onclick=e=>{if(LT.noclick){LT.noclick=false;return}
 $("#bflow").onclick=()=>flowOpen("cfd");$("#blead").onclick=()=>flowOpen("lead");addEventListener("resize",()=>{if(!$("#flowov").hidden)drawFlow()});
 // flow-charts:end
 const barQuery=()=>["fw","fs","fk"].map(k=>`${k}=${encodeURIComponent((bo[k]||[]).join(","))}`).join("&")+`&ty=${LT.ty}`;   // the bar's Waves, Specs and Kinds and the chart's Type, read by both diagrams; the board filters on the page (#904, #985)
-async function pollBoard(){lim.busy=1;try{const b=await (await fetch("/api/board")).json(),FLOW=/*BOARD_FLOW*/,   // development flow, left to right
+let boardTag=null,boardBody=null;   // the board the page holds and its ETag: a 304 keeps it (#973)
+async function pollBoard(){lim.busy=1;try{const r=await fetch("/api/board",boardTag?{headers:{"If-None-Match":boardTag}}:{});let b;if(r.status===304&&boardBody)b=boardBody;else{b=await r.json();if(b.groups){boardTag=r.headers.get("ETag");boardBody=b}}const FLOW=/*BOARD_FLOW*/,   // development flow, left to right
 all=[b.prs,...b.groups.sort((x,y)=>{const i=n=>{const k=FLOW.indexOf(n);return k<0?FLOW.length:k};return i(x.name)-i(y.name)})],f=q.trim().replace(/^#/,"");
 if(bo.open===undefined||!all.some(g=>g.name===bo.open))bo.open=(all.find(g=>g.n&&!g.end&&!isPR(g.name))||all[2]).name;
 const CN=all.map(g=>g.name);   // every column of this board: what colOf reads the user columns out of, never a colour of its own
@@ -4773,7 +4792,7 @@ const age=o=>{let m=Math.max(0,Math.floor((Date.now()-Date.parse(o))/60000));con
 const ageC=o=>{const h=(Date.now()-Date.parse(o))/3600000;return h>=24?"old":h>=4?"warm":""};
 setInterval(()=>document.querySelectorAll("#bbody .age").forEach(e=>{e.textContent=age(e.dataset.o);e.className="age "+ageC(e.dataset.o)}),30000);
 const gcls=c=>c.v==="?"?"unk":c.v==="debt"?"debt":c.v.startsWith("OK")?"ok":(c.v.startsWith("CHG")||c.v.startsWith("BLK"))?"bad":"";
-const gstrip=s=>`<div class="gstrip${s.old?" old":""}" title="${esc(s.old?`these facts are ${s.age} s old: the strip greys out past 180 s, so nothing here is being claimed as fresh`:"R review · C CI · T threads · B base · H labels and holds")}">`+s.cells.map(c=>`<span class="gc ${gcls(c)}" title="${esc(c.tip||"")}">${c.k}<b>${esc(c.v)}</b></span>`).join("")+`</div>`;
+const gstrip=s=>{const age=Math.round(Date.now()/1000-s.at),old=age>s.max;return `<div class="gstrip${old?" old":""}" title="${esc(old?`these facts are ${age} s old: the strip greys out past 180 s, so nothing here is being claimed as fresh`:"R review · C CI · T threads · B base · H labels and holds")}">`+s.cells.map(c=>`<span class="gc ${gcls(c)}" title="${esc(c.tip||"")}">${c.k}<b>${esc(c.v)}</b></span>`).join("")+`</div>`};
 const cards=(g,it,shown)=>shown.map(x=>{const pr=x.kind==="pr";return `<div class=it data-n="${x.n}" data-r="${esc(x.r||"__REPO__")}"${pr?" data-pr":""} data-col="${encodeURIComponent(g.name==null?"":String(g.name))}" data-pm="${x.pm&&!pr?1:""}" data-b="${encodeURIComponent(JSON.stringify(x.b||[]))}" data-bl="${encodeURIComponent(JSON.stringify(x.bl||[]))}" data-ho="${encodeURIComponent(x.ho==null?"":String(x.ho))}" data-hr="${encodeURIComponent(x.hr==null?"":String(x.hr))}" data-prf="${encodeURIComponent(JSON.stringify(x.prf||[]))}" style="--cc:${colOf(g.name,CN)};--lc:${specColor(SLOTS,cardSpec(x))}${tint(x)}"><a class=id target=_blank href="https://github.com/${esc(x.r||"__REPO__")}/${pr?"pull":"issues"}/${x.n}">${pr?"PR ":""}#${x.n}</a>${x.kind!=="pr"&&x.pa!=null&&!x.sp?`<span class=lchip data-k=spec title="spec #${x.pa}">${x.pa}</span>`:""}${waveChip(x)}${(x.l||[]).includes("loop-bug")?'<span class="bugc loop">loop-bug</span>':(x.l||[]).includes("bug")?'<span class="bugc">bug</span>':""}${x.rt?`<span class=rpo title="the repository this card belongs to: ${esc(x.r)}">${esc(x.rt)}</span>`:""}${x.pb?`<span class="pbg ${x.pb.replace(" ","-")}">${esc(x.pb)}</span>`:""}${x.rollup?`<span class="cir ${esc(x.rollup)}" title="CI states on the head${(x.ci||[]).length?": "+esc((x.ci||[]).join(", ")):""}">CI ${esc(x.rollup)}</span>`:""}${x.fz?`<span class=fz title="a freeze is a marker, never a move: the card keeps its column">${esc(x.fz)}</span>`:""}${x.pd?`<span class=pnd title="pending: the board door proved this move and the board read has not carried it yet">pending</span>`:""}${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(String(x.t).replace(/^\s*\[SPEC(?:\s*#?\d+)?\]\s*/i,""))}</span>${x.pm&&!pr?`<button class=pmp data-n="${x.n}" title="move this card to ${esc(x.pmt)}: the owner's go signal (ADR-0142)">→ ${esc(x.pmt)}</button>`:""}${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.ho?`<span class=hld title="${esc(x.ho)}">running</span>`:""}${(x.cl||[]).length?`<div class=clos title="the issues this pull request closes">closes ${x.cl.map(n=>`<a target=_blank rel=noopener href="https://github.com/${esc(x.r||"__REPO__")}/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${(x.o||x.sc||x.by)?`<div class=ft>${x.sc?`<span class=tsk title="sub-issues closed / total: ${esc(x.sc)}">${esc(x.sc)}</span>`:""}${x.o?`<span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span>`:""}${x.by?`<span class=au title="opened by ${esc(x.by)}">${esc(x.by)}</span>`:""}</div>`:""}</div>`}).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"");
 // A visible column holding no cards is not drawn at all: the columns that do have cards take the width, and the
 // collapsed one is accounted for by a line at the foot of the hidden: strip. Which columns those are is derived on
@@ -5975,8 +5994,10 @@ class H(BaseHTTPRequestHandler):
             m = re.search(r"[?&]n=(\d{1,6})\b", self.path); rr = re.search(r"[?&]r=([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)", self.path)
             body, ct = json.dumps(issue_detail(int(m[1]), rr[1] if rr else None) if m else {"err": "bad n"}).encode(), "application/json"
         elif self.path.startswith("/api/board"):
-            try: body, ct = json.dumps(board()).encode(), "application/json"   # every card: the page filters the board by the bar (#899)
-            except ValueError as e: body, ct = json.dumps({"error": str(e)}).encode(), "application/json"
+            body, etag = board_served(); ct = "application/json"
+            if etag and etag in [t.strip().removeprefix("W/") for t in (self.headers.get("If-None-Match") or "").split(",")]:   # the page holds this board (#973)
+                self.send_response(304); self.send_header("ETag", etag); self.send_header("Cache-Control", "no-store"); self.end_headers(); return
+            self.board_etag = etag
         elif self.path.startswith("/api/chart/cfd"): body, ct = json.dumps(flow_cfd(*board_filters(self.path.partition("?")[2]))).encode(), "application/json"
         elif self.path.startswith("/api/chart/lead"): body, ct = json.dumps(flow_lead(*board_filters(self.path.partition("?")[2]))).encode(), "application/json"
         elif self.path.startswith("/api/leadtime"): body, ct = json.dumps(lead_zoom(self.path.partition("?")[2])).encode(), "application/json"   # the control chart over a dragged range (#900)
@@ -6002,6 +6023,7 @@ class H(BaseHTTPRequestHandler):
         elif (asset := MOBILE_ASSETS.get(self.path.split("?", 1)[0])): body, ct = asset
         else: body, ct = served_page(a.login).encode(), "text/html; charset=utf-8"
         self.send_response(200); self.send_header("Content-Type", ct); self.send_header("Cache-Control", "no-store")
+        if self.path.startswith("/api/board") and getattr(self, "board_etag", None): self.send_header("ETag", self.board_etag)
         if self.path.split("?", 1)[0] in ("/mobile", "/mobile/"): self.send_header("Content-Security-Policy", MOBILE_CSP)
         self.end_headers(); self.wfile.write(body)
 
