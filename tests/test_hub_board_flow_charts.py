@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import time
 import types
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -699,20 +699,26 @@ GLYPH_EM = 0.6     # an advance per glyph wider than the digits and letters of t
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_the_y_tick_labels_and_the_right_edge_badge_never_overlap(hub, board, tmp_path):
+    # The plot ends at now, so only a card closed just now reaches the right edge where its badge sits.
+    now = datetime.now(UTC)
+    closed_now = (now - timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    opened_192h_ago = (now - timedelta(hours=192)).strftime("%Y-%m-%dT%H:%M:%SZ")
     hub.board_cache["items"] = [
         _card(1, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-02T09:00:00Z"),
-        _card(2, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-09T09:00:00Z"),
-        _card(3, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-09T09:00:00Z"),
+        _card(2, st=hub.COLUMN["issue_closed"], s="CLOSED", c=closed_now, o=opened_192h_ago),
+        _card(3, st=hub.COLUMN["issue_closed"], s="CLOSED", c=closed_now, o=opened_192h_ago),
     ]
     out = _render_lead_chart(hub, tmp_path, _flow(hub)["lead"]["control"]["jira"]["all"])
 
     badges = [(float(cx), float(cy), float(r))
               for cx, cy, r in re.findall(r"<circle data-k=\d+ cx=([\d.]+) cy=([\d.]+) r=([\d.]+)", out)]
-    ticks = [(float(x), float(y), text) for x, y, text in
-             re.findall(r"<text x=([\d.]+) y=([\d.-]+) text-anchor=end[^>]*>([^<]*)</text>", out)]
-    ticks = [tick for tick in ticks if tick[0] == 57]   # ltP - 7: the y-axis labels, not the reference lines
+    labels = [(float(x), float(y), text) for x, y, text in
+              re.findall(r"<text x=([\d.]+) y=([\d.-]+) text-anchor=end[^>]*>([^<]*)</text>", out)]
+    ticks = [label for label in labels if label[0] == 57]   # ltP - 7: the y-axis labels
+    references = [label for label in labels if label[2].startswith(("Average", "Median", "p85"))]
     assert any(r == 6 for _, _, r in badges), "the two-card cluster at the newest close draws no numbered badge"
     assert ticks, "the chart draws no y-axis label"
+    assert len(references) == 3, "the chart draws no reference-line label for each line"
 
     def label_box(x, y, text):
         width = len(text) * GLYPH_EM * FONT_PX
@@ -721,7 +727,41 @@ def test_the_y_tick_labels_and_the_right_edge_badge_never_overlap(hub, board, tm
     def overlaps(a, b):
         return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
 
-    for x, y, text in ticks:
+    for x, y, text in ticks + references:
         for cx, cy, r in badges:
             assert not overlaps(label_box(x, y, text), (cx - r, cy - r, cx + r, cy + r)), \
-                f"y label {text!r} collides with the badge at ({cx}, {cy})"
+                f"label {text!r} collides with the badge at ({cx}, {cy})"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_chart_whose_median_is_zero_hours_still_renders(hub, board, tmp_path):
+    hub.board_cache["items"] = [
+        _card(1, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-02T09:00:00Z", o="2026-10-02T09:00:00Z"),
+        _card(2, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-02T09:00:00Z", o="2026-10-02T09:00:00Z"),
+        _card(3, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-09T09:00:00Z"),
+    ]
+
+    out = _render_lead_chart(hub, tmp_path, _flow(hub)["lead"]["control"]["jira"]["all"])
+
+    assert "<svg data-lt" in out, "a zero-hour median stops the lead-time chart from rendering"
+    assert "Median <b>0m</b>" in out
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_chart_with_one_dot_draws_no_standard_deviation_band(hub, board, tmp_path):
+    hub.board_cache["items"] = [_card(1, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-02T09:00:00Z")]
+
+    out = _render_lead_chart(hub, tmp_path, _flow(hub)["lead"]["control"]["jira"]["all"])
+
+    assert "<polygon" not in out, "a one-dot chart draws an empty standard-deviation band"
+    assert "Standard deviation" not in out, "the legend names a spread the chart does not draw"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_chart_with_two_dots_draws_its_standard_deviation_band(hub, board, tmp_path):
+    _two_closed_cards(hub)
+
+    out = _render_lead_chart(hub, tmp_path, _flow(hub)["lead"]["control"]["jira"]["all"])
+
+    assert "<polygon" in out
+    assert "Standard deviation" in out

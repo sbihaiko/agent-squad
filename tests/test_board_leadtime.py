@@ -363,6 +363,7 @@ def test_the_ticks_run_in_duration_order_for_a_one_hour_and_a_one_month_window(l
     month = _chart(lt, [_closed(1, 5, days_ago=1), _closed(2, 800, days_ago=2)], timeframe=30)
 
     for result in (hour, month):
+        assert len(result["dots"]) >= 1, "the window holds no card, so its ticks come from no data"
         hours = [tick["hours"] for tick in result["ticks"]]
         assert len(hours) >= 2
         assert all(a < b for a, b in zip(hours, hours[1:], strict=False)), f"ticks out of order: {hours}"
@@ -406,3 +407,18 @@ def test_the_band_bounds_are_the_numbers_around_the_centered_mean(lt):
     assert log["hours"] == pytest.approx(5.210342, abs=1e-6)
     assert log["low"] == pytest.approx(2.951249, abs=1e-6)
     assert log["high"] == pytest.approx(9.198703, abs=1e-6)
+
+
+def test_a_single_dot_serves_no_band_bounds(lt):
+    rolling = _chart(lt, [_closed(1, 5)])["dots"][0]["rolling"]
+
+    assert rolling["hours"] == pytest.approx(5.0)
+    assert all(rolling[key] is None for key in ("low", "high", "y_low", "y_high", "low_text", "high_text"))
+
+
+def test_a_zero_hour_reference_line_is_served_with_its_label(lt):
+    result = _chart(lt, [_closed(1, 0), _closed(2, 0), _closed(3, 5)])
+
+    assert result["median"]["hours"] == 0
+    assert result["median"]["label"] == "Median"
+    assert result["average"]["label"] == "Average"
