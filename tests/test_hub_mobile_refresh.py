@@ -63,5 +63,5 @@ def test_load_board_reanchors_before_it_draws():
 
 def test_unchanged_key_still_redraws_board_metadata():
     body = re.search(r"function renderSheet\(\) \{(.*?)\n\}\n", PAGE, re.S).group(1)
-    head = body[:body.index("if (key === issueKey)")]
+    head = body[:body.index("issueKey = key;")]
     assert "sheetMeta(" in head and "sheetChips(" in head

@@ -479,7 +479,7 @@ $("loop-confirm-no").onclick = () => { $("loop-confirm").hidden = true; };
 loopView();
 every("monitor", loopView, 5000);
 
-let board = null, shown = [], issueKey = "", touch = null, seenCards = null, freshNow = new Set(), offBoard = null;   // offBoard: a card the board does not hold, a closed one, read by its issue alone (#972)
+let board = null, shown = [], issueKey = "", touch = null, seenCards = null, freshNow = new Set(), offBoard = null, issueD = null;   // offBoard: a card the board does not hold, a closed one, read by its issue alone (#972)
 const cardKey = x => (x.r || "") + "#" + x.n;
 const motionOk = () => typeof matchMedia === "function" && !matchMedia("(prefers-reduced-motion: reduce)").matches;
 const reasons = {};   // issue number -> {why, col}: a refusal the card reads on every render, until its card moves again
@@ -618,6 +618,7 @@ async function loadIssue(x, key) {
   try {
     const d = await call("/api/issue?n=" + x.n + (x.r ? "&r=" + encodeURIComponent(x.r) : ""));
     if (key !== issueKey) return;
+    issueD = d.err ? null : d;
     if (d.err) { $("sh-meta").innerHTML = sheetMeta(x, null); $("sh-body").textContent = d.err; return; }
     setLink(d.url);
     $("sh-title").textContent = "#" + d.n + " " + d.title;
@@ -675,8 +676,9 @@ function renderSheet() {
   // The button names the column the hub serves on the row (`x.pmt`), so this page holds no column name of its own.
   $("sh-todo").hidden = !x.pm;
   if (x.pmt) $("sh-todo").textContent = "→ " + x.pmt;
-  if (key === issueKey) return;
-  issueKey = key;
+  // Board-derived metadata is redrawn on every pass, with the issue detail the last read gave (#1005).
+  if (key === issueKey) { $("sh-chips").innerHTML = sheetChips(x); $("sh-meta").innerHTML = sheetMeta(x, issueD); return; }
+  issueKey = key; issueD = null;
   $("sheet").scrollTop = 0;
   $("sh-title").textContent = "#" + x.n + " " + x.t;
   $("sh-chips").innerHTML = sheetChips(x);
@@ -712,7 +714,14 @@ async function loadBoard(fresh) {
   try {
     const b = await call("/api/board", fresh);
     if (!b.groups) throw new Error(b.error || "The board is not ready.");
+    // The open sheet keeps its issue and column by identity, never by index (#1005).
+    const open = view.sheet && !offBoard && shown[view.card];
+    const id = open ? { name: (carouselColumns(((board && board.groups) || []), ((board && board.groups) || []).map(g => columnCards(g).length), bo.hideEmpty !== false).shown[view.col] || {}).name, key: cardKey(open) } : null;
     board = b;
+    if (id) {
+      const gs = b.groups, sh = carouselColumns(gs, gs.map(g => columnCards(g).length), bo.hideEmpty !== false).shown;
+      view = anchorView(view, sh.map(g => ({ name: g.name, flat: laneModelOf(g).flat })), id);
+    }
     // The seen set holds every card key a board read gave in this page session, so only a card new to the board fades.
     const keys = b.groups.flatMap(g => g.items.map(cardKey));
     freshNow = new Set(freshCards(seenCards, keys));
