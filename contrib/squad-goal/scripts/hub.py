@@ -2422,6 +2422,11 @@ if board_cache.get("rv") != BOARD_READ:
     # them again; the rows of a read this version wrote stay. A board with no row is safer than one that miscounts.
     board_cache.update(items=[], cases=[], t=0, rt=None)
     board_cache["rv"] = BOARD_READ
+if board_cache.get("repo") not in (None, REPO):
+    # The cache file is one per owner and project (address.sh), so two repositories on one project share it, and the
+    # file holds the rows of the hub that wrote last (#1015). Another repository's rows are never this board: they are
+    # dropped, and this hub's first pass reads its own. A board with no row is safer than another repository's.
+    board_cache.update(items=[], cases=[], prs=[], landed=[], errs=[], lc={}, lt=0, t=0, rt=None, repo=REPO)
 # A cache written before the board read more than one repository (#1820) has rows with no repository on them: they are
 # the profile repository's, which is the only one that pass read.
 for _k in ("prs", "landed"):
