@@ -8,6 +8,11 @@ const SQ = {};
 SQ.MIN_W = 360; SQ.MIN_BOARD = 480; SQ.MAX_FRAC = 0.7; SQ.STEP = 24; SQ.DEFAULT_W = 440; SQ.SHEET_W = 420; SQ.PHONE_W = 600;
 SQ.IDLE_MS = 3000; SQ.LENS_R = 5; SQ.REACH = 240; SQ.POLL_MS=3000; SQ.TEXT_MAX = 4000;
 SQ.SEND_SETTING = "SQUAD_TAILNET_TERMINALS_SEND";
+// The feed reads like a terminal: the latest turns stand, older ones fold into one line, and a long answer is clamped with
+// "Show more" (owner, 2026-11-01; the terminal reads clearer because it summarizes age and length, not because it says less).
+SQ.KEEP = 12;
+SQ.splitEarlier = (turns, keep = SQ.KEEP) => turns.length <= keep ? { earlier: [], shown: turns }
+  : { earlier: turns.slice(0, turns.length - keep), shown: turns.slice(turns.length - keep) };
 
 // The docked width: at least 360 px, at most 70% of the viewport, and the board keeps 480 px.
 SQ.clampWidth = (w, vw) => {
@@ -86,12 +91,19 @@ html.sq-docked body{margin-right:var(--sq-dock)}
 #sq-ov-pick button[aria-pressed=true]{border-color:#7aa2ff}
 #sq-ov-log{flex:1;min-height:0;overflow:auto;padding:13px 14px}
 #sq-ov-log .sq-empty{color:#b8c0cf}
-.sq-turn{margin:0 0 6px;padding-left:9px;border-left:2px solid #2a3140;line-height:1.35}
-.sq-who{display:block;font-size:11.5px;color:#8a93a3;margin-bottom:1px}
-.sq-txt{white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px}
-.sq-owner{border-left-color:#7aa2ff}.sq-owner .sq-who{color:#7aa2ff}
-.sq-owner .sq-txt{background:#18202e;border-radius:6px;padding:5px 9px}
+.sq-turn{margin:0 0 4px;padding-left:8px;border-left:2px solid transparent;line-height:1.45}
+.sq-who{display:block;font-size:10px;line-height:1.2;color:#707988;margin-bottom:2px;letter-spacing:.02em}
+.sq-txt{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;color:#d8dee9}
+.sq-p{margin:0 0 5px}.sq-p:last-child{margin-bottom:0}
+.sq-owner{border-left:0;background:rgba(122,162,255,.08);border-radius:6px;padding:5px 9px}
+.sq-owner .sq-who{color:#7aa2ff}
 .sq-answer{border-left-color:#3ecf8e}.sq-answer .sq-who{color:#3ecf8e}
+.sq-h{font-weight:600;font-size:13px;color:#eef1f5;margin:6px 0 3px}
+.sq-ul{margin:3px 0;padding-left:16px}.sq-ul li{margin:0 0 2px}
+.sq-code{margin:4px 0}.sq-code summary{font-size:11px;color:#7aa2ff;cursor:pointer;list-style:none}
+.sq-code pre{margin:3px 0 0;padding:5px 8px;background:#0d1117;border:1px solid #232a36;border-radius:6px;overflow:auto;font:12px/1.4 ui-monospace,SFMono-Regular,monospace;color:#b8c0cf;white-space:pre}
+.sq-more{margin:1px 0 4px;padding:1px 0;border:0;background:none;color:#7aa2ff;font-size:11px;cursor:pointer}
+.sq-earlier{margin:0 0 6px}.sq-earlier summary{font-size:11px;color:#707988;cursor:pointer}
 .sq-tool{border-left-color:#f5b041}.sq-tool .sq-who{color:#f5b041}
 .sq-tool .sq-txt{color:#9aa3b2;font:12.5px/1.35 ui-monospace,SFMono-Regular,monospace}
 #sq-ov-form{position:relative;display:flex;align-items:flex-end;gap:6px;padding:8px;border-top:1px solid #353d4b}
@@ -242,13 +254,59 @@ async function loadSessions() {
   else if (!found.length) empty("No session runs in this project's checkout. Start Claude Code there, then open this again.");
   else empty("Pick a session above.");
 }
+// Only the structure that carries meaning in a 400 px panel: headings, bullets, a fence. Everything else stays text.
+function richText(text) {
+  const box = document.createElement("div");
+  box.className = "sq-txt";
+  const lines = String(text || "").split("\n");
+  let buf = [], ul = null, fence = null;
+  const para = () => { if (!buf.length) return; const p = document.createElement("div"); p.className = "sq-p"; p.textContent = buf.join("\n"); box.append(p); buf = []; };
+  const list = () => { if (ul) { box.append(ul); ul = null; } };
+  const code = () => { if (!fence) return; const d = document.createElement("details"); d.className = "sq-code";
+    const s = document.createElement("summary"); s.textContent = "Code · " + fence.length + " line" + (fence.length === 1 ? "" : "s");
+    const pre = document.createElement("pre"); pre.textContent = fence.join("\n");
+    d.append(s, pre); if (fence.length <= 8) d.open = true; box.append(d); fence = null; };
+  for (const raw of lines) {
+    if (raw.trim().startsWith("```")) { if (fence) code(); else { para(); list(); fence = []; } continue; }
+    if (fence) { fence.push(raw); continue; }
+    const h = /^#{1,6}\s+(.*)$/.exec(raw);
+    if (h) { para(); list(); const d = document.createElement("div"); d.className = "sq-h"; d.textContent = h[1]; box.append(d); continue; }
+    const li = /^\s*[-*]\s+(.*)$/.exec(raw);
+    if (li) { para(); if (!ul) { ul = document.createElement("ul"); ul.className = "sq-ul"; } const it = document.createElement("li"); it.textContent = li[1]; ul.append(it); continue; }
+    if (!raw.trim()) { para(); list(); continue; }
+    list(); buf.push(raw);
+  }
+  if (fence) code();
+  para(); list();
+  return box;
+}
+const CLAMP = { owner: 60, answer: 116, tool: 60 };
+function clamp(body, px) {
+  if (body.scrollHeight <= px + 6) return;
+  body.style.maxHeight = px + "px"; body.style.overflow = "hidden";
+  const b = document.createElement("button"); b.type = "button"; b.className = "sq-more"; b.textContent = "Show more";
+  b.onclick = () => { const on = body.style.maxHeight !== ""; body.style.maxHeight = on ? "" : px + "px";
+                      body.style.overflow = on ? "" : "hidden"; b.textContent = on ? "Show less" : "Show more"; };
+  body.after(b);
+}
 function turnNode(t) {
-  const d = document.createElement("div"), who = document.createElement("span"), body = document.createElement("div");
+  const d = document.createElement("div"), who = document.createElement("span");
   d.className = "sq-turn sq-" + t.role;
   who.className = "sq-who"; who.textContent = t.role === "owner" ? "You" : t.role === "tool" ? "Tool" : "AI";
-  body.className = "sq-txt"; body.textContent = t.text;
+  const body = richText(t.text);
   d.append(who, body);
+  clamp(body, CLAMP[t.role] || 116);
   return d;
+}
+function feed(turns) {
+  const { earlier, shown } = SQ.splitEarlier(turns), nodes = [];
+  if (earlier.length) {
+    const d = document.createElement("details"); d.className = "sq-earlier";
+    const s = document.createElement("summary"); s.textContent = "Earlier activity · " + earlier.length + " turns";
+    d.append(s, ...earlier.map(turnNode)); nodes.push(d);
+  }
+  nodes.push(...shown.map(turnNode));
+  return nodes;
 }
 async function loadConversation() {
   const s = cur;
@@ -263,7 +321,7 @@ async function loadConversation() {
     const atEnd = !lastSig || log.scrollHeight - log.scrollTop - log.clientHeight < 48;
     lastSig = sig;
     if (!turns.length) { empty("No turns yet."); lastSig = sig; return; }
-    log.replaceChildren(...turns.map(turnNode));
+    log.replaceChildren(...feed(turns));
     if (atEnd) log.scrollTop = log.scrollHeight;
   } catch (e) { /* the next poll tries again */ }
 }

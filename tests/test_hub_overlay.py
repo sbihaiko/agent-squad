@@ -214,3 +214,14 @@ def test_the_header_keeps_the_title_on_one_line_and_its_buttons_from_shrinking()
     assert re.search(r"#sq-ov header button\{[^}]*flex:none", src)
     for label in ("Dock right", "Undock", "Close"):
         assert f'aria-label="{label}"' in src
+
+
+def test_the_feed_keeps_the_latest_turns_and_folds_the_older_ones():
+    """The panel reads like the terminal: the last twelve turns stand, the older ones fold behind one line (owner, 2026-11-01)."""
+    out = run_js("""(() => {
+      const turns = Array.from({length: 20}, (_, i) => ({id: 't'+i, role: i % 2 ? 'answer' : 'owner', text: 'x'+i}));
+      const a = SQ.splitEarlier(turns), b = SQ.splitEarlier(turns.slice(0, 12)), c = SQ.splitEarlier(turns, 3);
+      return {earlier: a.earlier.length, shown: a.shown.map(t => t.id)[0], short: b.earlier.length,
+              keep3: [c.earlier.length, c.shown.length]};
+    })()""")
+    assert out == {"earlier": 8, "shown": "t8", "short": 0, "keep3": [17, 3]}, out
