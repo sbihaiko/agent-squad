@@ -64,7 +64,7 @@ def test_the_page_ignores_a_sheet_swipe_that_starts_in_a_nested_scroller_or_cont
     out = run_page(hub.MOBILE_PAGE, """
       await loadBoard();
       view = afterOpen(view, 0); refresh();
-      const where = %s;
+      const where = __ARG__;
       let target;
       if (where === "set") { target = document.createElement("span"); $("sh-set").append(target); }
       else {
@@ -79,7 +79,7 @@ def test_the_page_ignores_a_sheet_swipe_that_starts_in_a_nested_scroller_or_cont
       __dispatch("touchstart", { target: plain, touches: [{ clientX: 200, clientY: 10 }] });
       __dispatch("touchend", { changedTouches: [{ clientX: 50, clientY: 12 }] });
       return { before, nested, plain: view.card };
-    """ % json.dumps(where), board=[_board(7, 8)])
+    """.replace("__ARG__", json.dumps(where)), board=[_board(7, 8)])
     assert out["nested"] == out["before"], f"a swipe in a nested {where} stepped the card: {out}"
     assert out["plain"] != out["before"], f"a plain sheet swipe no longer steps the card: {out}"
 
@@ -93,11 +93,11 @@ def test_an_interrupted_drag_leaves_the_card_in_place_and_unarmed(hub, event):  
       __dispatch("touchstart", { target: card, touches: [{ clientX: 0, clientY: 0 }] });
       __dispatch("touchmove", { touches: [{ clientX: 100, clientY: 1 }] });
       const mid = { t: card.style.transform, armed: card.classList.contains("armed") };
-      __dispatch(%s, { touches: [], changedTouches: [{ clientX: 100, clientY: 1 }] });
+      __dispatch(__ARG__, { touches: [], changedTouches: [{ clientX: 100, clientY: 1 }] });
       const after = { t: card.style.transform || "", armed: card.classList.contains("armed"), touch: touch === null ? null : "held" };
       __dispatch("touchend", { changedTouches: [{ clientX: 100, clientY: 1 }] });
       return { mid, after, pending: pending && pending.n };
-    """ % json.dumps(event))
+    """.replace("__ARG__", json.dumps(event)))
     assert out["mid"]["armed"] and out["mid"]["t"], f"the drag never armed the card: {out}"
     assert out["after"] == {"t": "", "armed": False, "touch": None}, f"{event} left the card displaced or armed: {out}"
     assert out["pending"] is None, f"a release after {event} staged a move: {out}"

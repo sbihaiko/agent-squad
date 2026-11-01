@@ -2,12 +2,13 @@
 const GESTURE_OWNERS = ["sheet", "card", "header", "gap"];
 const SWIPE_MIN = 40;
 const gestureOwner = roles => roles.find(r => GESTURE_OWNERS.includes(r)) || "none";
-const gestureAct = ({ owner, dx, dy, atTop }) => {
+// A swipe that starts in a nested scroller or a control of the sheet (`nested`) is that element's, never a card step (#1007).
+const gestureAct = ({ owner, dx, dy, atTop, nested }) => {
   const ax = Math.abs(dx), ay = Math.abs(dy);
   if (Math.max(ax, ay) < SWIPE_MIN) return null;
   if (ax > ay) {
     if (owner === "header" || owner === "gap") return { act: "column", step: dx < 0 ? 1 : -1 };
-    if (owner === "sheet" && dx < 0) return { act: "card", step: 1 };
+    if (owner === "sheet" && dx < 0 && !nested) return { act: "card", step: 1 };
     return null;
   }
   return owner === "sheet" && dy > 0 && atTop ? { act: "close" } : null;

@@ -321,6 +321,7 @@ function show(name) {
   for (const p of document.querySelectorAll("[data-panel]")) p.hidden = p.dataset.panel !== name;
   for (const b of tabs) b.dataset.tab === name ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current");
   localStorage.setItem("squad-mobile-tab", name);
+  if (name !== "board") cancelMove("tab");   // the Undo is on the Board tab: no move runs on unseen (#1007)
   if (name === "board") loadBoard();
   else { view = afterGesture(view, { act: "close" }); renderSheet(); }
   if (name === "more") showMore();
@@ -811,7 +812,7 @@ function showCardReason(n, why) {
 }
 $("undo-btn").onclick = () => cancelMove("undo");
 addEventListener("visibilitychange", () => { if (document.hidden) cancelMove("hidden"); });
-addEventListener("pagehide", () => cancelMove("hidden"));
+addEventListener("pagehide", () => { cancelMove("hidden"); endGesture(); });
 // A tap on a lane header opens or shuts that spec's lane on every column, and the choice is kept on the device (#893).
 // A lane that shuts folds its cards away (owner, 2026-11-01): the board is drawn at once, and the old cards, with no role
 // and no number, fold under the header and are removed, so nothing waits on the motion.
@@ -853,11 +854,26 @@ const moveHint = el => {
   if (!h) return;
   h.textContent = el.classList.contains("armed") ? "release to move to " + el.dataset.pmt : "drag right, then release past the line, to move to " + el.dataset.pmt;
 };
+// A nested scroller or a control inside the sheet owns its own swipe (#1007): the issue strip, a wide code block, a link.
+const NESTED_TAGS = ["PRE", "TABLE", "BUTTON", "A", "INPUT", "TEXTAREA", "SELECT", "SUMMARY"];
+const nestedIn = (el, stop) => {
+  for (let e = el; e && e !== stop; e = e.parentElement) {
+    if (NESTED_TAGS.includes(e.tagName) || e.id === "sh-set") return true;
+  }
+  return false;
+};
+// The one cleanup of a gesture (#1007): its end, touchcancel and pagehide put the dragged card back and unarm it.
+function endGesture() {
+  const t = touch;
+  touch = null;
+  if (t && t.card) { t.card.style.transform = ""; t.card.classList.remove("armed"); moveHint(t.card); }
+  return t;
+}
 document.addEventListener("touchstart", e => {
   const owner = gestureOwner(rolesOf(e.target));
   if (owner === "none") { touch = null; return; }
   const p = e.touches[0], card = e.target.closest ? e.target.closest(".card") : null;
-  touch = { owner, x: p.clientX, y: p.clientY, atTop: $("sheet").scrollTop === 0,
+  touch = { owner, x: p.clientX, y: p.clientY, atTop: $("sheet").scrollTop === 0, nested: owner === "sheet" && nestedIn(e.target, $("sheet")),
             card: card && card.closest("#cards") ? card : null, pm: !!(card && card.dataset.pm === "1" && card.closest("#cards")) };
   suppressClick = false;
 }, { passive: true });
@@ -871,10 +887,9 @@ document.addEventListener("touchmove", e => {
 }, { passive: true });
 document.addEventListener("touchend", e => {
   if (!touch) return;
-  const p = e.changedTouches[0], t = touch, dx = p.clientX - t.x, dy = p.clientY - t.y;
-  touch = null;
-  if (t.card) { t.card.style.transform = ""; if (Math.abs(dx) > 10) suppressClick = true; }
-  const g = gestureAct({ owner: t.owner, dx, dy, atTop: t.atTop });
+  const p = e.changedTouches[0], t = endGesture(), dx = p.clientX - t.x, dy = p.clientY - t.y;
+  if (t.card && Math.abs(dx) > 10) suppressClick = true;
+  const g = gestureAct({ owner: t.owner, dx, dy, atTop: t.atTop, nested: t.nested });
   if (g) { step(g); return; }
   const mv = moveDrag({ promotable: t.pm, dx, dy });
   // The released card is resolved by its number against the board as it now stands: a 10 s read can reorder the column
@@ -885,6 +900,7 @@ document.addEventListener("touchend", e => {
   if (x && x.pm) stageMove(x, el);
   else if (el) { el.classList.remove("armed"); moveHint(el); }
 }, { passive: true });
+document.addEventListener("touchcancel", endGesture, { passive: true });
 
 let moreScreen = null, period = "day", moreSeq = 0;
 const MORE_CHAINS = [["coding_models", "Coding"], ["review_models", "Review"], ["vision_models", "Vision"], ["router_models", "Router"]];
