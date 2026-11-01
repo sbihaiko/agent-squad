@@ -60,7 +60,7 @@ SQ.MARKUP = `<style>
 #sq-ov-btn{position:fixed;right:16px;bottom:var(--sq-ov-bottom,16px);z-index:999;width:52px;height:52px;padding:0;border:0;border-radius:50%;background:none;cursor:pointer;filter:drop-shadow(0 4px 10px #000b)}
 #sq-ov-btn svg{display:block;width:100%;height:100%}
 #sq-ov-btn:focus-visible{outline:2px solid #7aa2ff;outline-offset:3px}
-html.sq-docked #sq-ov-btn{right:calc(var(--sq-dock) + 16px)}
+html.sq-docked #sq-ov-btn{display:none}
 html.sq-docked body{margin-right:var(--sq-dock)}
 #sq-ov-lens{will-change:transform}
 #sq-ov{position:fixed;z-index:1000;right:16px;bottom:calc(var(--sq-ov-bottom,16px) + 64px);width:min(440px,calc(100vw - 32px));height:min(640px,calc(100vh - 120px));display:flex;flex-direction:column;box-sizing:border-box;background:#11151c;color:#e6e8ee;border:1px solid #353d4b;border-radius:13px;box-shadow:0 18px 50px #000c;font:14px/1.45 system-ui,-apple-system,sans-serif;text-align:left}
