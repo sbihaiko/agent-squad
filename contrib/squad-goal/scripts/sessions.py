@@ -16,7 +16,11 @@ UID = os.getuid()
 CREDENTIAL = re.compile(r"sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{16,}|Bearer\s+[A-Za-z0-9._~+/=-]+")
 _LOGGED = set()
 
-def claude_home(): return pathlib.Path.home() / ".claude"
+def claude_home():
+    """The Claude folder this process reads: HOME when the environment names one, else the user's. Python 3.12 caches
+    the `~` expansion, so a process that changes HOME still read the first one it saw (#1073)."""
+    h = os.environ.get("HOME")
+    return (pathlib.Path(h) if h else pathlib.Path.home()) / ".claude"
 
 def redact(text, secrets=()):
     for s in secrets:
@@ -137,18 +141,22 @@ def read_last_message(cwd, sid, secrets=()):
 
 def _turns_of(obj):
     kind, uid = obj.get("type"), str(obj.get("uuid") or "")
+    # A message the harness injects (a hook's feedback, a reminder) is stored as a user turn. It is not the owner typing:
+    # the panel says System, so a bubble never puts words in the owner's mouth (owner, 2026-11-01).
+    owner_role = "system" if obj.get("isMeta") is True else "owner"
     content = (obj.get("message") or {}).get("content")
     if isinstance(content, str): content = [{"type": "text", "text": content}]
     out = []
     for p in content if isinstance(content, list) else []:
         if not isinstance(p, dict): continue
         text = p.get("text")
-        if kind == "user" and p.get("type") == "text" and isinstance(text, str) and text: out.append(("owner", uid, text))
+        if kind == "user" and p.get("type") == "text" and isinstance(text, str) and text: out.append((owner_role, uid, text))
         elif kind == "assistant" and p.get("type") == "text" and isinstance(text, str) and text: out.append(("answer", uid, text))
         # A tool call is not a turn of the conversation: a working session answers with hundreds of them, and they filled
         # the page while the owner's and the AI's words never arrived (#1073). The terminal stays their record.
     return out
 
+_PAGES = {}   # the last few pages, keyed by transcript size and mtime: the chat polls every few seconds
 BIG_LINE = 512 * 1024   # a line this long is a thinking block or a tool result: it carries no turn of its own (#1073)
 
 def _page_kept(raw, start):
@@ -175,6 +183,11 @@ def read_conversation(cwd, sid, secrets=(), before=None):
     a fixed window answered a handful of tool lines and no conversation at all (#1073). `next` is the older page's offset."""
     if SID.fullmatch(sid) is None: return None
     path = ["projects", re.sub(r"[^A-Za-z0-9]", "-", cwd), f"{sid}.jsonl"]
+    full = claude_home().joinpath(*path)
+    try: st = full.stat()
+    except OSError: st = None
+    key = (str(full), st.st_size if st else -1, st.st_mtime_ns if st else -1, before)
+    if st and key in _PAGES: return _PAGES[key]   # the panel polls; a poll that meets no new byte re-reads nothing
     window = TAIL_BYTES
     while True:
         try: raw, start = _read_under_home(path, limit=window, end=before)
@@ -185,7 +198,11 @@ def read_conversation(cwd, sid, secrets=(), before=None):
         window *= 2
     out = [{"id": uid, "role": role, "text": redact(text, secrets)} for _, found in kept for role, uid, text in found]
     cursor = kept[0][0] if kept else start
-    return {"turns": out, "next": cursor or None}
+    page = {"turns": out, "next": cursor or None}
+    if st:
+        _PAGES[key] = page
+        while len(_PAGES) > 8: _PAGES.pop(next(iter(_PAGES)))
+    return page
 
 
 def conversation(profile, sid, before=None, profiles_of=profiles_of):

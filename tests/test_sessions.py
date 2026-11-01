@@ -475,3 +475,37 @@ def test_without_the_variable_the_seam_still_reads_the_global_profiles(home, tmp
     subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
     subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", "git@github.com:owner/app.git"], check=True)
     assert mod.profiles_of(str(repo)) == ["p1"], "the seam answered nothing and the session would be hidden"
+
+
+def test_a_hook_injected_message_reads_system_and_never_as_the_owner(home):
+    """`isMeta` marks what the harness wrote: a hook's feedback stands in the transcript as a user turn, and the panel must
+    not put those words in the owner's mouth (owner, 2026-11-01)."""
+    mod = load_sessions()
+    cwd = home.path / "p1" / "app"
+    entries = [user("u1", "real words"),
+               {"type": "user", "uuid": "m1", "isMeta": True, "message": {"role": "user", "content": [
+                   {"type": "text", "text": "Stop hook feedback: the goal is not met"}]}}]
+    folder = mod.claude_home() / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(cwd))   # the module's own home, as it reads it
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "s1.jsonl").write_text("".join(json.dumps(e) + "\n" for e in entries))
+    page = mod.read_conversation(str(cwd), "s1")
+    assert [(t["id"], t["role"]) for t in page["turns"]] == [("u1", "owner"), ("m1", "system")]
+
+
+def test_a_poll_that_meets_no_new_byte_reads_no_file_again(home):
+    """The chat polls every few seconds and this transcript runs to hundreds of megabytes: an unchanged file answers from
+    the page already built (owner, 2026-11-01)."""
+    mod = load_sessions()
+    cwd = home.path / "p1" / "app"
+    write_transcript(home, cwd, "s1", [user(f"u{i}", f"turn {i}") for i in range(30)])
+    calls = []
+    real = mod._read_under_home
+    mod._read_under_home = lambda parts, **kw: (calls.append(parts), real(parts, **kw))[1]
+    first = mod.read_conversation(str(cwd), "s1")
+    n = len(calls)
+    second = mod.read_conversation(str(cwd), "s1")
+    assert n > 0 and len(calls) == n and second == first
+    with open(home.projects / re.sub(r"[^A-Za-z0-9]", "-", str(cwd)) / "s1.jsonl", "a") as f:
+        f.write(json.dumps(user("u99", "a new turn")) + "\n")
+    third = mod.read_conversation(str(cwd), "s1")
+    assert len(calls) > n and third["turns"][-1]["text"] == "a new turn"
