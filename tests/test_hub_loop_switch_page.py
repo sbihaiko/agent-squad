@@ -199,24 +199,17 @@ def js_view(**over):
     return json.dumps({**VIEW, **over})
 
 
-def test_the_monitor_card_holds_the_switch():
-    """The owner removed the alert strip: the Monitor card carries the loop, so the switch is drawn there."""
+def test_the_monitor_card_shows_the_loop_state_and_leaves_the_switch_to_its_panel():
+    """Owner, 2026-11-01: the loop switch read twice on one page. The Monitor keeps one read-only state line; the
+    switch, with its one button and its change log, lives in the Loop panel (ADR-0162)."""
     src = page()
     card = src.split("<details id=inst", 1)[1].split("</details>", 1)[0]
     assert "id=iloop" in card
-    assert re.search(r'function instLoopDraw\(\)\{const e=\$\("#iloop"\).*?loopCardHtml\(loopV\)', src)
+    inst = re.search(r"function instLoopDraw\(\)\{.*?\n\}", src, re.S).group(0)
+    assert "loopCardHtml" not in inst and "loopB(" not in inst, inst
+    assert "loopV.state" in inst and "loopBy(" in inst, inst
+    assert "loopCardHtml" not in src, "the card the Monitor drew is gone: one switch, one place"
     assert re.search(r"function loopDraw\(\)\{.*?instLoopDraw\(\)\}", src, re.S)
-
-
-def test_the_monitor_card_shows_the_state_who_and_when():
-    out = run_js(f"loopCardHtml({js_view()})")
-    assert "on" in out and "owner" in out and "16:02" in out
-    assert "Stop" in out and "disabled" not in out
-
-
-def test_the_monitor_card_button_is_read_only_with_its_reason_from_the_tailnet():
-    out = run_js(f"loopCardHtml({js_view(write=False, reason='read-only from the tailnet: SQUAD_TAILNET_LOOP_WRITE is not on')})")
-    assert "disabled" in out and "SQUAD_TAILNET_LOOP_WRITE" in out
 
 
 def test_the_loop_theme_shows_state_who_when_and_the_change_log():
