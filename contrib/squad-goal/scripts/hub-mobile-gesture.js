@@ -58,15 +58,13 @@ const laneWaveOf = x => {
 const laneIdOf = (spec, wave) => (spec == null ? "none" : String(spec)) + "|" + (wave == null ? "none" : String(wave));
 const cmpNum = (a, b) => a == null ? (b == null ? 0 : 1) : b == null ? -1 : a - b;
 const columnLanes = ({ groups, cards, lc }) => {
-  const specs = new Set(), total = new Map(), done = new Map();
+  const total = new Map(), done = new Map();
   (groups || []).forEach(g => g.items.forEach(x => {
-    if (x.sp) { specs.add(x.n); return; }
-    if (x.pa != null) specs.add(x.pa);
+    if (x.sp) return;
     const k = laneIdOf(x.pa, laneWaveOf(x));
     total.set(k, (total.get(k) || 0) + 1);
     if (x.dn) done.set(k, (done.get(k) || 0) + 1);   // `dn`: the row is done, a fact the hub serves (#893)
   }));
-  const palette = [...specs].sort((a, b) => a - b);
   const by = new Map();
   const ensure = (spec, wave) => {
     const id = laneIdOf(spec, wave);
@@ -86,7 +84,6 @@ const columnLanes = ({ groups, cards, lc }) => {
     const collapsed = Object.prototype.hasOwnProperty.call(lc || {}, l.id) ? !!lc[l.id] : isDone;
     const sid = l.spec == null ? "No spec" : "SPEC " + l.spec, wl = l.wave == null ? "No wave" : "Wave " + l.wave;
     return { id: l.id, num: l.spec, wave: l.wave, sid, wl, title: sid + " · " + wl,
-             pi: l.spec == null ? null : palette.indexOf(l.spec) % 8,
              total: t, closed: d, collapsed, cards: l.cards };
   }).sort((a, b) => cmpNum(a.num, b.num) || cmpNum(a.wave, b.wave));
   const flat = lanes.flatMap(l => l.collapsed ? [] : l.cards);

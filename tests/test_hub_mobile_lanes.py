@@ -6,6 +6,7 @@ the header that taps a lane shut, the saved collapse on the device, and the clos
 """
 import json
 import pathlib
+import re
 import shutil
 import subprocess
 
@@ -14,6 +15,7 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib/squad-goal/scripts"
 GESTURE_JS = SCRIPTS / "hub-mobile-gesture.js"
+LANES_JS = SCRIPTS / "board-lanes.js"
 HUB_PY = SCRIPTS / "hub.py"
 PAGE = SCRIPTS / "hub-mobile.html"
 NODE = shutil.which("node")
@@ -96,11 +98,16 @@ def test_two_specs_with_the_same_wave_draw_two_lanes_named_by_spec_and_wave():
 
 
 @pytest.mark.node_bound
-def test_a_spec_keeps_one_colour_index_across_its_waves_and_two_specs_differ():
-    by_title = {ln["title"]: ln for ln in lanes(WAVE_CARDS, groups=WAVE_BOARD)["lanes"]}
-    assert by_title["SPEC 40 · Wave 1"]["pi"] == by_title["SPEC 40 · Wave 2"]["pi"]
-    assert by_title["SPEC 40 · Wave 1"]["pi"] != by_title["SPEC 50 · Wave 1"]["pi"]
-    assert by_title["No spec · Wave 2"]["pi"] is None
+def test_a_spec_keeps_one_colour_across_its_waves_and_two_specs_differ():
+    """The page colors a lane as it colors a card: specColor over the board's spec slots, by the lane's spec number."""
+    args = json.dumps({"groups": WAVE_BOARD, "cards": WAVE_CARDS, "lc": {}})
+    rules = re.search(r"// <card-rules>.*?// </card-rules>", LANES_JS.read_text(), re.S).group(0)
+    colour = run_js(GESTURE_JS.read_text() + "\n" + rules,
+                    f"(() => {{ const m = columnLanes({args}), s = specSlots(m.lanes.map(l => l.num).filter(n => n != null));"
+                    " return Object.fromEntries(m.lanes.map(l => [l.title, l.num == null ? null : specColor(s, l.num)])); })()")
+    assert colour["SPEC 40 · Wave 1"] == colour["SPEC 40 · Wave 2"]
+    assert colour["SPEC 40 · Wave 1"] != colour["SPEC 50 · Wave 1"]
+    assert colour["No spec · Wave 2"] is None
 
 
 @pytest.mark.node_bound
@@ -147,7 +154,7 @@ def test_the_flat_list_is_the_cards_of_the_open_lanes_in_lane_order():
 
 def test_the_mobile_header_names_the_spec_in_its_colour_and_the_wave_after_it():
     html = PAGE.read_text()
-    assert "l.sid" in html and "l.wl" in html and "l.pi" in html
+    assert "l.sid" in html and "l.wl" in html and "specColor(mSlots(), l.num)" in html
 
 
 def test_the_page_draws_a_tappable_lane_header_with_its_collapse_kept_on_the_device():

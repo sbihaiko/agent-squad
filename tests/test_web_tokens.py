@@ -24,7 +24,8 @@ BODY_PX = 15
 CONTRAST_MIN = 4.5
 DESKTOP_CONTROL_PX = 32
 PHONE_CONTROL_PX = 44
-TEXT_TOKENS = ["--fg", "--mute", "--acc", "--ok", "--warn", "--err", "--run", "--none", "--wait", "--drop"]
+TEXT_TOKENS = ["--fg", "--mute", "--acc", "--ok", "--warn", "--err", "--run", "--none", "--wait", "--drop",
+               "--s1", "--s2", "--s3", "--s4", "--s5", "--s6", "--s7", "--s8"]   # the spec palette (#917)
 BG_TOKENS = ["--bg", "--panel"]
 CONTROLS = ("button", "select", "input", "textarea", "summary", "label", "[role=button]")
 CONTROL_TAGS = ("button", "select", "input", "textarea", "summary", "label")

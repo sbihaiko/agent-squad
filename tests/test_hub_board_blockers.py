@@ -215,8 +215,8 @@ def test_the_pr_columns_wear_their_own_colour_not_the_run_token(hub):
     pr = css[css.index(".prs{"): css.index("body.dockb .sec{")]
     assert "var(--run)" not in pr, "the PR columns still borrow the run state's teal: the archive looks like the live queue"
     assert "2dd4bf" not in pr, "a second literal for a column colour, next to the map that decides it"
-    assert "border-left:4px solid var(--cc)" in _rule(hub, "#bbody .prs .it"), \
-        "a PR card's left border is the column's colour like every other card's"
+    assert "var(--cc)" not in _rule(hub, "#bbody .prs .it").split("background")[0], \
+        "no card carries the column's colour as a border: its lines are its spec's or grey (#917)"
     for rule in ("#bbody .acc.prs", "#bbody .prs>.ah,#bbody .prs>.ch", "body.dockb #bbody>.col.prs",
                  "body.dockb #bbody>.col.prcol"):
         assert "var(--cc)" in _rule(hub, rule), f"{rule} does not read the column's colour"
