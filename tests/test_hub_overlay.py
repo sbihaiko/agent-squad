@@ -214,15 +214,3 @@ def test_the_header_keeps_the_title_on_one_line_and_its_buttons_from_shrinking()
     assert re.search(r"#sq-ov header button\{[^}]*flex:none", src)
     for label in ("Dock right", "Undock", "Close"):
         assert f'aria-label="{label}"' in src
-
-
-def test_a_run_of_tool_calls_is_one_line_so_the_conversation_reads():
-    """The live chat showed a wall of `Tool tool: Bash` and nothing else (#1073). Consecutive tool turns fold into one
-    line; an owner or answer turn between them keeps its own place."""
-    out = run_js("""SQ.collapseTools([
-      {id:'u1',role:'owner',text:'do it'},
-      {id:'t1',role:'tool',text:'tool: Bash'},{id:'t2',role:'tool',text:'tool: Bash'},{id:'t3',role:'tool',text:'tool: Read'},
-      {id:'a1',role:'answer',text:'done'},
-      {id:'t4',role:'tool',text:'tool: Bash'}])""")
-    assert [(t["role"], t["text"]) for t in out] == [
-        ("owner", "do it"), ("tool", "tool: Bash · 3 calls"), ("answer", "done"), ("tool", "tool: Bash")], out

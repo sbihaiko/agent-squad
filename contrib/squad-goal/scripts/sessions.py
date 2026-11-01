@@ -145,7 +145,8 @@ def _turns_of(obj):
         text = p.get("text")
         if kind == "user" and p.get("type") == "text" and isinstance(text, str) and text: out.append(("owner", uid, text))
         elif kind == "assistant" and p.get("type") == "text" and isinstance(text, str) and text: out.append(("answer", uid, text))
-        elif kind == "assistant" and p.get("type") == "tool_use": out.append(("tool", uid, f"tool: {p.get('name', '')}"))
+        # A tool call is not a turn of the conversation: a working session answers with hundreds of them, and they filled
+        # the page while the owner's and the AI's words never arrived (#1073). The terminal stays their record.
     return out
 
 BIG_LINE = 512 * 1024   # a line this long is a thinking block or a tool result: it carries no turn of its own (#1073)

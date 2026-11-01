@@ -340,7 +340,7 @@ def test_older_pages_come_on_request_without_a_gap_or_a_repeat(home):
     assert third["next"] is None
 
 
-def test_turns_carry_the_message_id_and_role_and_a_tool_call_is_one_line(home):
+def test_turns_carry_the_message_id_and_role_and_a_tool_call_is_no_turn(home):
     mod = load_sessions()
     cwd = home.path / "p1" / "app"
     write_transcript(home, cwd, "s1", [
@@ -351,7 +351,7 @@ def test_turns_carry_the_message_id_and_role_and_a_tool_call_is_one_line(home):
     ])
     page = mod.read_conversation(str(cwd), "s1")
     assert [(t["id"], t["role"], t["text"]) for t in page["turns"]] == [
-        ("u1", "owner", "list the files"), ("a1", "answer", "Running it."), ("a1", "tool", "tool: Bash")]
+        ("u1", "owner", "list the files"), ("a1", "answer", "Running it.")]
 
 
 def test_the_token_and_credential_shapes_are_in_no_turn_and_no_log(home, capfd):
