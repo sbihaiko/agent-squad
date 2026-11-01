@@ -93,12 +93,12 @@ def test_the_gauge_svg_is_hidden_from_a_screen_reader_and_the_value_is_text(hub)
 
 # ---------------------------------------------------------------- the annunciators
 
-def test_the_three_tiles_read_gate_loop_and_landed_in_that_order(hub):
+def test_the_tiles_read_gate_loop_landed_and_graphql_in_that_order(hub):
     """The owner removed the Nightly tile from the card; the footer still carries the nightly fact."""
     facts = _facts(hub, gate=GATE_FAIL, nightly=NIGHTLY_PASS, loop=True)
     tiles = _run(hub, f"instTiles({json.dumps(facts)})")
-    assert [t["k"] for t in tiles] == ["Gate", "Loop", "Landed"]
-    gate, loop, landed = tiles
+    assert [t["k"] for t in tiles] == ["Gate", "Loop", "Landed", "GraphQL"]
+    gate, loop, landed, _ = tiles
     assert (gate["tone"], gate["text"]) == ("err", "fast fail 5m ago")
     assert gate["tip"] == "ran at 0123456"
     assert (loop["tone"], loop["text"]) == ("ok", "ON")
@@ -118,7 +118,7 @@ def test_the_gate_tile_shows_the_last_run_time_and_the_mean(hub):
 
 def test_a_source_with_no_reading_says_so_and_never_draws_a_pass(hub):
     tiles = _run(hub, f"instTiles({json.dumps(_facts(hub))})")
-    gate, loop, _ = tiles
+    gate, loop, *_ = tiles
     assert gate["tone"] == "neutral" and "pass" not in gate["text"]
     assert loop["text"] == "?" and loop["tone"] == "neutral"
 

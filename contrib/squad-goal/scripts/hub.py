@@ -13,6 +13,8 @@ _columns_spec = importlib.util.spec_from_file_location("board_columns", pathlib.
 _columns_module = importlib.util.module_from_spec(_columns_spec); _columns_spec.loader.exec_module(_columns_module)
 _flow_spec = importlib.util.spec_from_file_location("board_flow_history", pathlib.Path(__file__).resolve().parent / "board_flow_history.py")
 _flow = importlib.util.module_from_spec(_flow_spec); _flow_spec.loader.exec_module(_flow)
+_hist_spec = importlib.util.spec_from_file_location("board_history", pathlib.Path(__file__).resolve().parent / "board_history.py")
+_hist = importlib.util.module_from_spec(_hist_spec); _hist_spec.loader.exec_module(_hist)
 _cfd_spec = importlib.util.spec_from_file_location("board_cfd", pathlib.Path(__file__).resolve().parent / "board_cfd.py")
 _cfd = importlib.util.module_from_spec(_cfd_spec); _cfd_spec.loader.exec_module(_cfd)
 _leadtime_spec = importlib.util.spec_from_file_location("board_leadtime", pathlib.Path(__file__).resolve().parent / "board_leadtime.py")
@@ -2013,7 +2015,7 @@ def load_payload():
             "cpu": cpu,
             "ram": LOAD_STATE.get("ram"), "gpu": LOAD_STATE.get("gpu"),
             "warn": sustained(hist), "runs": dict(LOAD_STATE.get("runs") or {}),
-            "facts": list(LOAD_STATE.get("facts") or []),
+            "facts": list(LOAD_STATE.get("facts") or []) + [_hist.budget_fact(_hist.history_path(BOARD, REPO), time.time())],
             "specs": spec_progress(board_cache.get("items") or []),   # the open specs' total, off the board cache: no GitHub read
             "secs": LOAD_SAMPLE_SECS, "asof": LOAD_STATE.get("asof", 0.0)}
 
@@ -4204,12 +4206,12 @@ function instTiles(facts){const lp=instFact(facts,"loop"),ld=instFact(facts,"lan
  land=ld?instTile("Landed",ld,/^landed\s*/):{k:"Landed",text:"no reading",tone:"neutral"},m=/PR #(\d+)/.exec(land.text);
  if(m){land.tone="info";land.href=`https://github.com/__REPO__/pull/${m[1]}`}
  return[instTile("Gate",instFact(facts,"gate"),/^gate\s*/),
-  {k:"Loop",text:on===null?"?":on?"ON":"OFF",tone:on===null?"neutral":on?"ok":"err"},land]}
+  {k:"Loop",text:on===null?"?":on?"ON":"OFF",tone:on===null?"neutral":on?"ok":"err"},land,instTile("GraphQL",instFact(facts,"graphql"),/^graphql\s*/)]}
 const iq=t=>esc(t).replace(/"/g,"&quot;");
 function tileHtml(t){const v=t.href?esc(t.text).replace(/PR #\d+/,x=>`<a target=_blank rel=noopener href="${iq(t.href)}">${x}</a>`):esc(t.text),
  d=(t.detail||[]).length?`<details><summary>${t.detail.length} failed</summary><ul>${t.detail.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></details>`:"";
  return `<div class="at ${t.tone}"${t.tip?` title="${iq(t.tip)}"`:""}><span class=ah><span class=dot aria-hidden="true"></span>${esc(t.k)}</span><span class=av>${v}</span>${t.times?`<span class=atm>${esc(t.times)}</span>`:""}${d}</div>`}
-function instSum(facts){const t=instTiles(facts);return t.find(x=>x.k==="Loop").text+" · "+t.filter(x=>x.k!=="Loop"&&x.tone==="err").length+" fail"}
+function instSum(facts){const t=instTiles(facts);return t.find(x=>x.k==="Loop").text+" · "+t.filter(x=>x.k!=="Loop"&&x.k!=="GraphQL"&&x.tone==="err").length+" fail"}
 function cycleLeft(text){const m=/^cycle (?:in |\+)(?:(\d+)h(\d\d)m|(\d+)m(\d\d)s)( late)?$/.exec(String(text||""));if(!m)return null;
  const s=m[1]!==undefined?(+m[1])*3600+(+m[2])*60:(+m[3])*60+(+m[4]);return m[5]?-s:s}
 function cycleFmt(left){const s=Math.abs(Math.round(left)),h=Math.floor(s/3600),mi=Math.floor(s/60)%60,p=n=>String(n).padStart(2,"0"),

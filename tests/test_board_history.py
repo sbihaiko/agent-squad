@@ -3,8 +3,6 @@ import importlib.util
 import json
 import pathlib
 
-import pytest
-
 SCRIPTS = pathlib.Path(__file__).resolve().parents[1] / "contrib" / "squad-goal" / "scripts"
 FIXTURES = SCRIPTS / "fixtures" / "board-history"
 _spec = importlib.util.spec_from_file_location("board_history", SCRIPTS / "board_history.py")
@@ -142,12 +140,12 @@ def test_two_repositories_on_one_project_never_mix(tmp_path):
 
 def test_rebuilt_intervals_equal_the_first_build(tmp_path):
     path = tmp_path / "hub-board.jsonl"
-    events = bh.events_of(fixture("removed-readded.json"), PROJECT)
+    events = bh.events_of(fixture("removed-readded.json"))
     bh.record_issue(path, 234, "2026-10-14T05:54:37Z", "2026-10-14T05:31:18Z", events, complete=True, now=T0)
     first = bh.intervals(bh.load_store(path)[234]["events"])
     path.unlink()
     bh.record_issue(path, 234, "2026-10-14T05:54:37Z", "2026-10-14T05:31:18Z",
-                    bh.events_of(fixture("removed-readded.json"), PROJECT), complete=True, now=T0)
+                    bh.events_of(fixture("removed-readded.json")), complete=True, now=T0)
     assert bh.intervals(bh.load_store(path)[234]["events"]) == first
 
 
