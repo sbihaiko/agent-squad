@@ -144,6 +144,24 @@ def test_a_resumed_backfill_reads_only_the_unread_issues(tmp_path):
     assert bh.coverage(bh.load_store(path))["read"] == 2
 
 
+def test_a_short_timeline_keeps_its_cursor_in_the_file_across_a_reload(tmp_path):
+    path = tmp_path / "hub-board.jsonl"
+    bh.record_issue(path, 7, "2026-10-01T00:00:00Z", "2026-10-01T00:00:00Z",
+                    [{"t": "2026-10-01T00:00:01Z", "type": "added"}], complete=False, now=T0, cursor="C1")
+    rec = bh.load_store(path)[7]
+    assert bh.timeline_after(rec) == "C1"
+    assert bh.backfill_batch([7], bh.load_store(path)) == [7]
+
+
+def test_the_coverage_fact_shows_cards_read_complete_and_the_last_refresh(tmp_path):
+    path = tmp_path / "hub-board.jsonl"
+    bh.record_issue(path, 1, "2026-10-01T00:00:00Z", "2026-10-01T00:00:00Z", [], complete=True, now=T0)
+    bh.record_issue(path, 2, "2026-10-01T00:00:00Z", "2026-10-01T00:00:00Z", [], complete=False, now=T0 + 60, cursor="C1")
+    store = bh.load_store(path)
+    assert bh.coverage(store) == {"read": 2, "complete": 1, "last": T0 + 60}
+    assert bh.coverage_fact(store, 589)["text"] == "History 2/589 read, 1 complete, last refresh 2027-01-15T08:01:00Z"
+
+
 def test_two_repositories_on_one_project_never_mix(tmp_path):
     board = tmp_path / "hub-board.json"
     a = bh.history_path(board, "sbihaiko/agent-squad")
