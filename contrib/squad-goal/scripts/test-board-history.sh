@@ -2,7 +2,7 @@
 # The board history store: host-free (no hub, no GitHub client), one file per repository, a points fact the Monitor draws, and the hub wires it.
 # Fixtures and a temp file only: never the network, never the live hub state.
 # usage: bash test-board-history.sh [board_history.py]
-here="$(cd "$(dirname "$0")" && pwd)"; src=${1:-$here/board_history.py}; T=$(mktemp -d); fail=0
+here="$(cd "$(dirname "$0")" && pwd)"; py=python3; [ -n "${SG_CHECKOUT:-}" ] && [ -x "$SG_CHECKOUT/.venv/bin/python" ] && py="$SG_CHECKOUT/.venv/bin/python"; src=${1:-$here/board_history.py}; T=$(mktemp -d); fail=0
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/s"; cp "$src" "$T/s/board_history.py" 2>/dev/null || { ko "board_history.py is missing"; rm -rf "$T"; exit 1; }
 cp "$here/board_columns.py" "$here/board-definition.json" "$T/s/"
@@ -10,10 +10,10 @@ cp "$here/board_columns.py" "$here/board-definition.json" "$T/s/"
 grep -Eq 'import hub|from hub|gh api|subprocess|urllib|requests' "$T/s/board_history.py" \
   && ko "the module imports the hub or a GitHub client" || ok "the module imports no hub and no GitHub client"
 
-python3 -c "import sys; sys.path.insert(0, '$T/s'); import board_history; assert 'hub' not in sys.modules" 2>/dev/null \
+"$py" -c "import sys; sys.path.insert(0, '$T/s'); import board_history; assert 'hub' not in sys.modules" 2>/dev/null \
   && ok "the module loads with no hub" || ko "the module failed to load alone"
 
-python3 - "$T/s" "$T/hub-board.json" <<'PY' >"$T/out.txt" 2>&1
+"$py" - "$T/s" "$T/hub-board.json" <<'PY' >"$T/out.txt" 2>&1
 import sys
 sys.path.insert(0, sys.argv[1])
 import board_history as bh
