@@ -78,9 +78,6 @@ groups.forEach(g=>g.items.forEach(x=>{if(x.sp){if(gone.has(g.name))goneSpecs.add
   const rank=l=>l.kind==="bugs"?0:(l.kind==="none"||(l.kind==="sw"&&l.num==null))?2:1;
   const order=(a,b)=>mode==="wave"?(numCmp(a.num,b.num)||numCmp(a.wave,b.wave)):((b.live-a.live)||((a.num??0)-(b.num??0)));
   const list=shown.filter(l=>!(o.hideDone&&l.done)).sort((a,b)=>rank(a)-rank(b)||order(a,b));
-  // A spec keeps one colour across all its lanes, and it is the colour its cards wear: the slot specSlots gives it over every spec on the board (#917, #980).
-  const slots=specSlots(groups.flatMap(g=>g.items.map(cardSpec)).filter(n=>n!=null));
-  list.forEach(l=>{l.pi=l.num==null?null:(slots.get(Number(l.num))||Number(l.num)%8+1)-1});
   const lc=o.lc||{};
   list.forEach(l=>{l.collapsed=Object.prototype.hasOwnProperty.call(lc,l.id)?!!lc[l.id]:l.done});   // a done lane starts collapsed (#891)
   const open=list.filter(l=>!l.collapsed);

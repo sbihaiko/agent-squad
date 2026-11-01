@@ -202,7 +202,10 @@ def test_a_wave_lane_header_names_its_spec_and_wave_in_the_spec_colour(hub):
     lanes = _wave_lanes()
     head = _lane(lanes, "SPEC 889 · Wave 1")
     assert head["sid"] == "SPEC 889" and head["wl"] == "Wave 1"
-    colour = {ln["title"]: ln["pi"] for ln in lanes}
+    nums = sorted({ln["num"] for ln in lanes if ln["num"] is not None})
+    slots = _node(f"const s=specSlots({json.dumps(nums)});console.log(JSON.stringify({json.dumps(nums)}.map(n=>specColor(s,n))))")
+    by_num = dict(zip(nums, slots, strict=True))
+    colour = {ln["title"]: by_num.get(ln["num"]) for ln in lanes}   # the header's own call: specColor(SLOTS,l.num)
     assert colour["SPEC 889 · Wave 1"] == colour["SPEC 889 · Wave 2"], "a spec changes colour between its waves"
     assert colour["SPEC 889 · Wave 1"] != colour["SPEC 900 · Wave 1"], "two specs share a colour"
 

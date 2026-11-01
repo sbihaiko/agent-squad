@@ -6,12 +6,16 @@ wave is a text chip, never a shade. No card carries its column's left border. Th
 The rules are `board-lanes.js`, run in node as the page carries them; the page text is checked for their use.
 """
 import json
+import os
 import re
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
+
+from tests.test_hub_mobile_move import _module, run_page
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"
@@ -138,9 +142,6 @@ SPEC_BOARD = {"t": 1, "err": None, "labels": [], "lc": {}, "cases": [], "flow": 
 
 @pytest.fixture(scope="module")
 def mobile_hub():
-    import os
-    import tempfile
-    from tests.test_hub_mobile_move import _module
     os.environ.setdefault("SG_REPO", "x/y")
     os.environ.setdefault("SG_OWNER", "x")
     os.environ.setdefault("SG_PROJECT", "4")
@@ -153,7 +154,6 @@ def mobile_hub():
 def test_a_mobile_lane_id_wears_the_color_its_cards_wear(mobile_hub):
     """The served page draws a board whose specs are not in slot order (890 and 917 take --s3 and --s6, not --s1 and
     --s2). Each lane id resolves to the same slot as the cards of its lane: an inline color on the id beats --lc."""
-    from tests.test_hub_mobile_move import run_page
     out = run_page(mobile_hub.MOBILE_PAGE, """
       await loadBoard();
       const res = {};

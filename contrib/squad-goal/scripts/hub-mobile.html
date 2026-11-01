@@ -431,7 +431,6 @@ function laneHeader(l) {
   if (l.num != null) h.setAttribute("style", "--lc:" + specColor(mSlots(), l.num));   // the lane header takes its spec color (#917)
   const tw = document.createElement("span"); tw.className = "tw"; tw.textContent = l.collapsed ? "▸" : "▾";
   const id = document.createElement("span"); id.className = "lid"; id.textContent = l.sid;
-  id.style.color = l.pi == null ? "var(--mute)" : `var(--s${l.pi + 1})`;   // the same slot specSlots gives the cards; no spec is grey (#917)
   const tt = document.createElement("span"); tt.className = "ltt"; tt.textContent = l.wl;
   const pc = document.createElement("span"); pc.className = "pc"; pc.textContent = l.total ? l.closed + "/" + l.total : "";
   h.append(tw, id, tt, pc);
