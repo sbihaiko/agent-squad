@@ -202,11 +202,93 @@ def test_the_sheet_reads_the_record_and_pauses_through_the_existing_routes(hub):
     assert 'self.path in ("/api/models", "/api/plans", "/api/promote", "/api/limits", "/api/slack")' in src, "the write routes changed"
 
 
-def test_keyboard_filters_on_enter_or_space_and_escape_closes(hub):
+def test_keyboard_and_clicks_go_through_the_sheet_controls(hub):
+    """The page wires the controls the node tests below exercise: a key, a click, Escape and every paint."""
     page = hub.PAGE
-    assert re.search(r'\$\("#rkb"\)\.addEventListener\("keydown".*?e\.key==="Enter"\|\|e\.key===" "', page)
-    esc = page[page.index('addEventListener("keydown",e=>{if(e.key==="Escape")'):]
-    assert "closeRun()" in esc[:400]
+    assert re.search(r'\$\("#rkb"\)\.addEventListener\("keydown",e=>\{const a=rkKey\(', page), "a key on the sheet skips rkKey"
+    assert re.search(r'\$\("#rkb"\)\.addEventListener\("click",e=>\{[^\n]*rkAct\(', page), "a click on the sheet skips rkAct"
+    esc = page[page.index('addEventListener("keydown",e=>{const w=rkEscape('):]
+    assert "closeRun()" in esc[:300]
+    paint = page[page.index("function rkPaint("):page.index("async function rkLoad(")]
+    assert "rkRender(" in paint and ".innerHTML=" not in paint.split("rkRender(")[1].split(";")[0], "a paint writes the body around rkRender"
+    follow = page[page.index("function rkFollow("):]
+    assert "rkPaint(true)" not in follow[:follow.index("\n")], "a poll forces a repaint"
+
+
+# ---- the controls: behavior, on a small stub of the page ----
+
+STUB = r"""
+function mk(tag,attrs,doc){const e={tagName:tag.toUpperCase(),attrs,dataset:{},cls:(attrs.class||"").split(/\s+/).filter(Boolean),
+  getAttribute(a){return a in this.attrs?this.attrs[a]:null},
+  matches(sel){return sel.split(",").some(s=>{const m=s.trim().match(/^([a-z]*)((?:\.[\w-]+)*)((?:\[[\w-]+(?:=[^\]]+)?\])*)$/);if(!m)throw Error("selector "+s);
+    if(m[1]&&m[1].toUpperCase()!==this.tagName)return false;
+    for(const c of m[2].split(".").filter(Boolean))if(!this.cls.includes(c))return false;
+    for(const [,a,v] of m[3].matchAll(/\[([\w-]+)(?:=([^\]]+))?\]/g)){const x=this.getAttribute(a);if(x==null)return false;if(v!=null&&x!==v.replace(/^"|"$/g,""))return false}
+    return true})},
+  closest(sel){return this.matches(sel)?this:null},
+  focus(){doc.activeElement=this}};
+  for(const [k,v] of Object.entries(attrs))if(k.startsWith("data-"))e.dataset[k.slice(5)]=v;return e}
+function stubBody(doc){let html="",kids=[];const b={writes:0,scrollTop:0,
+  get innerHTML(){return html},
+  set innerHTML(h){html=h;b.writes++;kids=[...h.matchAll(/<(\w+)([^>]*)>/g)].map(([,t,a])=>mk(t,Object.fromEntries([...a.matchAll(/([\w-]+)="([^"]*)"/g)].map(x=>[x[1],x[2]])),doc))},
+  contains(el){return kids.includes(el)},querySelector(sel){return kids.find(k=>k.matches(sel))||null}};return b}
+const doc={activeElement:null},b=stubBody(doc);
+const html=(row,rec,tab,f)=>rkHtml(rkModel(row,rec),tab,f||{});
+"""
+
+
+def _stub(script):
+    return _node(STUB + script)
+
+
+def test_a_poll_never_repaints_an_unchanged_sheet_so_the_focus_stays():
+    """Review finding 1: every 3 s poll replaced the body, so a focused node lost its focus and Enter acted on nothing."""
+    out = _stub(f"""const row={json.dumps(ROW_ENDED)},rec={json.dumps(RECORD)};
+rkRender(b,html(row,rec,'ov'),doc);const g=b.querySelector('span[data-n="router"]');g.focus();
+const again=rkRender(b,html(row,rec,'ov'),doc);rkRender(b,html(row,rec,'ov'),doc);
+console.log(JSON.stringify({{again,writes:b.writes,same:doc.activeElement===g}}));""")
+    assert out == {"again": False, "writes": 1, "same": True}, "an unchanged ended run is repainted by the poll"
+
+
+def test_a_changed_body_puts_the_focus_back_on_the_same_node():
+    out = _stub(f"""const row={json.dumps(ROW_LIVE)},rec={json.dumps(RECORD[:8])};
+rkRender(b,html(row,rec,'ov'),doc);const g=b.querySelector('span[data-n="scope_gate"]');g.focus();
+rkRender(b,html(row,{json.dumps(RECORD)},'ov'),doc);
+const a=doc.activeElement;console.log(JSON.stringify({{writes:b.writes,moved:a!==g,n:a&&a.dataset.n,inside:b.contains(a)}}));""")
+    assert out == {"writes": 2, "moved": True, "n": "scope_gate", "inside": True}, "a live repaint drops the focused node"
+
+
+def test_a_poll_never_closes_a_filter_being_chosen_but_the_choice_paints():
+    out = _stub(f"""const row={json.dumps(ROW_LIVE)};
+rkRender(b,html(row,{json.dumps(RECORD[:8])},'tr'),doc);const s=b.querySelector('select[data-rkf="m"]');s.focus();
+const poll=rkRender(b,html(row,{json.dumps(RECORD)},'tr'),doc);const w=b.writes;
+const pick=rkRender(b,html(row,{json.dumps(RECORD)},'tr',{{m:'haiku'}}),doc,true);const a=doc.activeElement;
+console.log(JSON.stringify({{poll,w,pick,writes:b.writes,f:a&&a.dataset.rkf,inside:b.contains(a)}}));""")
+    assert out == {"poll": False, "w": 1, "pick": True, "writes": 2, "f": "m", "inside": True}
+
+
+def test_enter_or_space_on_a_node_or_a_model_row_filters_the_trace():
+    out = _stub(f"""rkRender(b,html({json.dumps(ROW_ENDED)},{json.dumps(RECORD)},'ov'),doc);const st={{tab:'ov',f:{{}}}};
+const g=b.querySelector('span[data-n="review_gate"]'),m=b.querySelector('div[data-m="haiku"]'),i=b.querySelector('a[data-o="981"]');
+console.log(JSON.stringify({{enter:rkKey(st,g,'Enter'),space:rkKey(st,m,' '),other:rkKey(st,g,'x'),link:rkKey(st,i,'Enter'),click:rkAct(st,i),
+  tab:rkAct(st,b.querySelector('button[data-rkt="tr"]'))}}));""")
+    assert out["enter"] == {"st": {"tab": "tr", "f": {"n": "review_gate"}}}
+    assert out["space"] == {"st": {"tab": "tr", "f": {"m": "haiku"}}}
+    assert out["other"] is None and out["link"] is None, "a key other than Enter or Space, or on a link, filters"
+    assert out["click"] == {"o": 981} and out["tab"] == {"st": {"tab": "tr", "f": {}}}
+
+
+def test_escape_closes_the_run_sheet_before_the_ticket_sheet():
+    out = _node("console.log(JSON.stringify([rkEscape('Escape',true,true),rkEscape('Escape',false,true),rkEscape('Escape',false,false),rkEscape('Enter',true,true)]));")
+    assert out == ["run", "ticket", None, None]
+
+
+def test_a_pin_from_before_the_sheet_is_neither_restored_nor_drawn(hub):
+    """Review finding 3: a click no longer pins, so a pin restored from localStorage marked its row for good."""
+    page = hub.PAGE
+    assert "pins=new Set((ls.pins" not in page, "the old pins are restored from localStorage"
+    draw = page[page.index("function drawList("):page.index("function refresh(")]
+    assert '"pinned"' not in draw, "a run row is still drawn pinned"
 
 
 def test_the_runs_tab_lists_runs_that_open_the_sheet(hub):

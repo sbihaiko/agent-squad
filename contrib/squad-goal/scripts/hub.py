@@ -3746,7 +3746,7 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 {const p=(location.pathname.match(/^\/([^/?#]+)/)||[])[1]||"";document.title=p?`Hub | ${decodeURIComponent(p)}`:"Hub";}   // the tab names the profile it shows, so two open hubs are told apart
 const $=s=>document.querySelector(s),ls=JSON.parse(localStorage.hub||"{}");
 const HUB_REPO=/*HUB_REPO*/;
-let allRuns=[],runs=[],q=ls.q||"",per=ls.per||"day",src=ls.src||"both",N=1,pins=new Set((ls.pins||[]).slice(0,1)),slots=[],hl=null,boardRows=[],ENDED=[];   // ENDED: the rows of /api/ended (#984)
+let allRuns=[],runs=[],q=ls.q||"",per=ls.per||"day",src=ls.src||"both",N=1,pins=new Set(),slots=[],hl=null,boardRows=[],ENDED=[];   // ENDED: the rows of /api/ended (#984)
 const save=()=>localStorage.hub=JSON.stringify({...ls,pins:[...pins],q,per,src});
 const usd=v=>v==null?"—":v>=100?"$"+Math.round(v):"$"+v.toFixed(2);
 const usdc=v=>v==null?"—":"$"+(+v).toFixed(2);   // plan prices carry cents, so a month's cash total keeps them: usd would round $282.23 to $282
@@ -3843,7 +3843,7 @@ function drawList(){
   if(openGroups===null){const first=GROUPS.find(g=>by[g[0]]);openGroups=new Set(first?[first[0]]:[]);saveGroups()}   // nothing stored yet: the first filled group opens once
   const filled=GROUPS;   // the whole age ladder stays visible, so a band that holds no run still draws its header, and an open group that emptied keeps its header and shows no rows
   const ccRow=r=>{const h=r.held&&runs.some(x=>x.id===r.held)?r.held:null;return `<div class="r cc ${h&&shown.has(h)?"show":""}"${h?` data-id="${esc(h)}" title="open ${esc(h)}"`:""}><div><span class="b ${r.state}"${r.tip?` title="${esc(r.tip)}"`:""}>${esc(r.badge)}</span> <b>${esc(r.label)}</b>${r.sub?`<div class=st title="${esc(r.sub)}">${esc(r.sub)}</div>`:""}${(r.lines||[]).map(l=>`<div class=st>${esc(l)}</div>`).join("")}${r.live?`<div class=m>age ${age(r.age)}</div>`:""}</div></div>`};
-  const row=r=>r.kind==="childcc"?ccRow(r):`<div class="r ${shown.has(r.id)?"show":""} ${pins.has(r.id)?"pinned":""}" data-id="${r.id}"><div>${r.kind==="test"?`<span class=kd title="GUI test run">🧪</span>`:""}<span class="b ${r.state}"${r.tip?` title="${esc(r.tip)}"`:""}>${esc(r.badge||r.state)}</span> <b title="${esc(labelTip(r))}">${esc(name(r))}</b>${loadMark(r)}${!(r.issues||[]).length&&r.issue_why&&!r.fix&&!r.url?`<div class=st>${esc(labelTip(r))}</div>`:""}${sub(r)?`<div class=st title="${esc(sub(r))}">${esc(sub(r))}</div>`:""}<div class=m>${r.share?`<span class="sh${r.share.pct===100?" done":""}" title="the newest gate that counted ran ${r.share.total} tests, ${r.share.passed} passed">${r.share.passed}/${r.share.total} · ${r.share.pct}%</span> · `:""}${usd(r.spend)} · ${Math.round(r.dur)}m · ${age(r.age)} ago · ${r.id.slice(-6)} · :${r.port}</div></div><span class=pn title="shown in the panel">${pins.has(r.id)?"●":"○"}</span></div>`;
+  const row=r=>r.kind==="childcc"?ccRow(r):`<div class="r ${shown.has(r.id)?"show":""}" data-id="${r.id}"><div>${r.kind==="test"?`<span class=kd title="GUI test run">🧪</span>`:""}<span class="b ${r.state}"${r.tip?` title="${esc(r.tip)}"`:""}>${esc(r.badge||r.state)}</span> <b title="${esc(labelTip(r))}">${esc(name(r))}</b>${loadMark(r)}${!(r.issues||[]).length&&r.issue_why&&!r.fix&&!r.url?`<div class=st>${esc(labelTip(r))}</div>`:""}${sub(r)?`<div class=st title="${esc(sub(r))}">${esc(sub(r))}</div>`:""}<div class=m>${r.share?`<span class="sh${r.share.pct===100?" done":""}" title="the newest gate that counted ran ${r.share.total} tests, ${r.share.passed} passed">${r.share.passed}/${r.share.total} · ${r.share.pct}%</span> · `:""}${usd(r.spend)} · ${Math.round(r.dur)}m · ${age(r.age)} ago · ${r.id.slice(-6)} · :${r.port}</div></div><span class=pn title="shown in the panel">${pins.has(r.id)?"●":"○"}</span></div>`;
   {const live=runs.filter(r=>r.rank===0);$("#lrun").innerHTML=live.map(row).join("")||"<div class=m>no live runs</div>";$("#lrs").textContent=live.length?`${live.length} \u00b7 ${live.filter(r=>r.state==="running").length} running`:"none"}   // the sidebar card: the runs that are live now, the same rows as the history
   $("#list").innerHTML=filled.map(([k,t])=>{const rows=by[k]||[],h=groupHeader(k,rows);return `<div class="gh ${openGroups.has(k)?"op":""}" data-g="${k}" tabindex=0>${t}<span class=sr title="${esc(h.title)}">${h.text}</span></div>${openGroups.has(k)?rows.map(row).join(""):""}`}).join("")||"<div class=m style=padding:10px>no live dashboards</div>";
   document.querySelectorAll(".gh").forEach(e=>e.onclick=()=>{const k=e.dataset.g;   // the header is the only writer: a click toggles this group and nothing else
@@ -4215,10 +4215,9 @@ $("#tktodo").onclick=()=>{const b=boardCards().find(x=>+x.dataset.n===cur&&(x.da
 const rsheet=$("#rk");let RK=null;   // RK: {id, row, rec, tab, f, paused}
 const rkRow=id=>allRuns.find(r=>r.id===id)||ENDED.find(r=>r.id===id)||null;
 const rkLive=r=>!!r&&(r.rank===0||!!r.running);
-function rkPaint(){if(!RK||!RK.row)return;const m=rkModel(RK.row,RK.rec||[]),c=m.chips;
- $("#rkchips").innerHTML=`<span class="chip ${c.state==="live"?"live":""}">${c.state==="live"?"&#9679; live":"ended"}</span><span class=chip title="${esc(c.id)}">${esc(c.id)}</span><span class=chip>${esc(c.cost)} · ${esc(c.el)}</span>`;
- const b=$("#rkb"),top=b.scrollTop;
- b.innerHTML=RK.rec?rkHtml(m,RK.tab,RK.f):`<h2>${esc(m.label||m.id)}</h2><p class=m>${RK.err?esc(RK.err):"loading the record…"}</p>`;b.scrollTop=top;
+function rkPaint(force){if(!RK||!RK.row)return;const m=rkModel(RK.row,RK.rec||[]),c=m.chips;   // force: the person acted; a poll paints only what changed
+ const ch=$("#rkchips"),chips=`<span class="chip ${c.state==="live"?"live":""}">${c.state==="live"?"&#9679; live":"ended"}</span><span class=chip title="${esc(c.id)}">${esc(c.id)}</span><span class=chip>${esc(c.cost)} · ${esc(c.el)}</span>`;if(ch.innerHTML!==chips)ch.innerHTML=chips;
+ rkRender($("#rkb"),RK.rec?rkHtml(m,RK.tab,RK.f):`<h2>${esc(m.label||m.id)}</h2><p class=m>${RK.err?esc(RK.err):"loading the record…"}</p>`,document,force);
  $("#rkgh").href=rkLive(RK.row)&&RK.row.port?"/dash/"+encodeURIComponent(RK.id)+"/":"/ended/"+encodeURIComponent(RK.id);
  const p=$("#rkpause");p.textContent=rkLive(RK.row)?(RK.paused?"Resume run":"Pause run"):"Open its record";
  p.title=RK.note||(rkLive(RK.row)?(RK.paused?"a pause is requested: the run holds at its next node boundary (ADR-0128)":"request a pause: the run holds at its next node boundary (ADR-0128)"):"the full run dashboard, with the record and its replay")}
@@ -4230,25 +4229,23 @@ async function rkLoad(){if(!RK)return;const id=RK.id;
  }catch(e){if(RK&&RK.id===id&&!RK.rec)RK.err="the record did not load"}
  if(RK&&RK.id===id)rkPaint()}
 function openRun(id){const row=rkRow(id);if(!row)return;if(tsheet.classList.contains("on"))closeSheet();
- RK={id,row,rec:null,tab:"ov",f:{},paused:false,at:Date.now()};rsheet.classList.add("on");document.body.classList.add("tkopen");hl={run:id};paintHL();$("#rkb").scrollTop=0;rkPaint();rkLoad()}
+ RK={id,row,rec:null,tab:"ov",f:{},paused:false,at:Date.now()};rsheet.classList.add("on");document.body.classList.add("tkopen");hl={run:id};paintHL();const b=$("#rkb");b.rkHtml=null;b.scrollTop=0;rkPaint(true);rkLoad()}
 function closeRun(){rsheet.classList.remove("on");RK=null;if(!tsheet.classList.contains("on"))document.body.classList.remove("tkopen");if(hl&&hl.run!=null)hl=null;paintHL()}
 // The poll keeps the row fresh; a live run's record is reread every few seconds while the sheet is open.
 function rkFollow(){if(!RK)return;const r=rkRow(RK.id);if(r)RK.row=r;if(rkLive(RK.row)&&Date.now()-RK.at>4000){RK.at=Date.now();rkLoad()}else rkPaint()}
 $("#rkx").onclick=closeRun;
-$("#rkb").addEventListener("click",e=>{if(!RK)return;const a=e.target.closest("a[data-o]");if(a){e.preventDefault();const n=+a.dataset.o;closeRun();openCard(n);return}
- const t=e.target.closest("[data-rkt]");if(t){e.preventDefault();RK.tab=t.dataset.rkt;rkPaint();return}
- const g=e.target.closest(".gn[data-n]");if(g){RK.tab="tr";RK.f={n:g.dataset.n};rkPaint();return}
- const m=e.target.closest(".mrow[data-m]");if(m){RK.tab="tr";RK.f={m:m.dataset.m};rkPaint();return}
- if(e.target.closest("button[data-rkf=clear]")){RK.f={};rkPaint()}});
-$("#rkb").addEventListener("change",e=>{const s=e.target.closest("select[data-rkf]");if(s&&RK){RK.f={...RK.f,[s.dataset.rkf]:s.value};rkPaint()}});
-$("#rkb").addEventListener("keydown",e=>{if((e.key==="Enter"||e.key===" ")&&e.target.matches(".gn[data-n],.mrow[data-m]")){e.preventDefault();e.target.click()}});   // a node or a model row filters from the keyboard too
+// A control's action (rkAct, rkKey in run-sheet.js): a link opens its ticket, the rest sets the tab and the filters.
+function rkApply(a){if(a.o){closeRun();openCard(a.o);return}RK.tab=a.st.tab;RK.f=a.st.f;rkPaint(true)}
+$("#rkb").addEventListener("click",e=>{if(!RK)return;const a=rkAct(RK,e.target);if(a){if(a.o||e.target.closest("[data-rkt]"))e.preventDefault();rkApply(a)}});
+$("#rkb").addEventListener("change",e=>{const s=e.target.closest("select[data-rkf]");if(s&&RK){RK.f={...RK.f,[s.dataset.rkf]:s.value};rkPaint(true)}});
+$("#rkb").addEventListener("keydown",e=>{const a=rkKey(RK||{},e.target,e.key);if(a&&RK){e.preventDefault();rkApply(a)}});   // a node or a model row filters from the keyboard too
 $("#rkpause").onclick=async()=>{if(!RK)return;if(!rkLive(RK.row)){window.open($("#rkgh").href,"_blank","noopener");return}
  const id=RK.id,action=RK.paused?"resume":"pause",p=$("#rkpause");p.disabled=true;
  try{const r=await fetch("/dash/"+encodeURIComponent(id)+"/run/control",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action})});
   if(RK&&RK.id===id){RK.note="";if(r.ok)RK.paused=action==="pause";else RK.note=r.status===409?"the run has ended: there is nothing to pause":"the run refused the request ("+r.status+")"}}
  catch(e){if(RK)RK.note="the run did not answer"}
- p.disabled=false;rkPaint()};
-addEventListener("keydown",e=>{if(e.key==="Escape"){if(rsheet.classList.contains("on"))closeRun();else if(tsheet.classList.contains("on"))closeSheet();return}
+ p.disabled=false;rkPaint(true)};
+addEventListener("keydown",e=>{const w=rkEscape(e.key,rsheet.classList.contains("on"),tsheet.classList.contains("on"));if(w==="run")closeRun();else if(w==="ticket")closeSheet();if(e.key==="Escape")return;
  if(!tsheet.classList.contains("on")||/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName))return;
  if(e.key==="ArrowRight"||e.key==="j")step(1);if(e.key==="ArrowLeft"||e.key==="k")step(-1)});
 document.addEventListener("click",e=>{const c=e.target.closest("#bbody .it");if(!c||e.target.closest("a")||e.target.closest("button")||c.classList.contains("m"))return;showIssue(c.dataset.n,c.dataset.r,c)});   // a card opens the sheet in place: the hub is never left

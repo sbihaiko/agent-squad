@@ -74,3 +74,28 @@ function rkHtml(m,tab,f){f=f||{};
   return `<h2>${rkEsc(m.label||m.id)}</h2>
 <div class=rkt role=tablist>${[["ov","Overview"],["tr","Trace"]].map(([k,l])=>`<button role="tab" data-rkt="${k}" aria-selected="${tab===k}" class="${tab===k?"on":""}">${l}</button>`).join("")}</div>
 <div role=tabpanel>${tab==="tr"?rkTrace(m,f):rkOverview(m)}</div>`}
+// The sheet's controls (#984). st: {tab, f}; t: the event target. A link opens its ticket ({o}); a tab, a node, a model
+// row or clear answers the new state ({st}); anything else answers null.
+function rkAct(st,t){const a=t.closest("a[data-o]");if(a)return{o:+a.dataset.o};
+  const k=t.closest("[data-rkt]");if(k)return{st:{tab:k.dataset.rkt,f:st.f||{}}};
+  const g=t.closest(".gn[data-n]");if(g)return{st:{tab:"tr",f:{n:g.dataset.n}}};
+  const m=t.closest(".mrow[data-m]");if(m)return{st:{tab:"tr",f:{m:m.dataset.m}}};
+  if(t.closest("button[data-rkf=clear]"))return{st:{tab:st.tab,f:{}}};
+  return null}
+// Enter or Space on a focused node or model row acts as its click; any other key does nothing.
+const rkKey=(st,t,key)=>(key==="Enter"||key===" ")&&t.matches(".gn[data-n],.mrow[data-m]")?rkAct(st,t):null;
+// Escape closes the run sheet first, then the ticket sheet.
+const rkEscape=(key,runOpen,ticketOpen)=>key!=="Escape"?null:runOpen?"run":ticketOpen?"ticket":null;
+// The control that holds the focus, as a selector that finds it again in a new body.
+function rkFocusKey(el){for(const a of["data-n","data-m","data-rkt","data-rkf","data-o"]){const v=el.getAttribute&&el.getAttribute(a);
+  if(v!=null)return`${el.tagName.toLowerCase()}[${a}="${String(v).replace(/["\\]/g,"\\$&")}"]`}return null}
+// Paint the sheet body b with html (review finding 1 on #984). The 3 s poll paints only when the text changed, so an ended
+// run is never repainted; a repaint puts the focus back on the same control; a poll never repaints under an open filter.
+// force: the person acted (a tab, a filter, a choice), so the body paints even while a filter has the focus.
+function rkRender(b,html,doc,force){if(b.rkHtml===html)return false;
+  const ae=doc.activeElement,inside=!!ae&&b.contains(ae);
+  if(inside&&!force&&ae.tagName==="SELECT")return false;   // a filter being chosen: the next poll paints
+  const key=inside?rkFocusKey(ae):null,top=b.scrollTop;
+  b.innerHTML=html;b.rkHtml=html;b.scrollTop=top;
+  if(key){const el=b.querySelector(key);if(el&&el.focus)el.focus()}
+  return true}
