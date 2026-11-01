@@ -47,6 +47,7 @@ def test_the_cycle_reads_cycle_log(hub, monkeypatch):
     (d / "cycle.log").write_text("10:00:00 janitor x\n10:05:00 CYCLE 300s\n10:06:00 janitor y\n10:10:30 CYCLE 330s\n")
     monkeypatch.setattr(hub, "STATE", d)
     now = __import__("time").mktime(__import__("time").strptime(__import__("time").strftime("%Y-%m-%d ") + "10:12:00", "%Y-%m-%d %H:%M:%S"))
+    os.utime(d / "cycle.log", (now, now))   # the log was last written at `now`: the date of its lines comes from that
     c = hub._cycle_state(now)
     assert c["secs"] == [300, 330] and c["end"] == now - 90
 

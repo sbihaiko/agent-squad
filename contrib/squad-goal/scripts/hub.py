@@ -977,11 +977,11 @@ def _gate_parts(g, now):
     part = {"text": text, "tone": "ok" if g["result"] == "pass" else "err", "tip": f"ran at {str(g['sha'])[:7]}"}
     took, avg = g.get("took"), g.get("avg")
     if isinstance(took, int) and isinstance(avg, int) and not isinstance(took, bool):
-        part["times"] = f"took {_span(took)} · avg {_span(avg)}"   # the card's gate tile shows it; the footer line does not
+        part["times"] = f"took {_gate_span(took)} · avg {_gate_span(avg)}"   # the card's gate tile shows it; the footer line does not
     return [part]
 
-def _span(s):
-    """A gate's run time: `45s`, `2m07s`."""
+def _gate_span(s):
+    """A gate's run time: `45s`, `2m07s`. Its own name: the cycle countdown's `_span` reads `0m45s`."""
     return f"{s}s" if s < 60 else f"{s // 60}m{s % 60:02d}s"
 
 def _nightly_parts(n, now):
@@ -1012,13 +1012,18 @@ def _nightly_parts(n, now):
 def _cycle_state(now):
     """The watch cycle's own beat, read off the `HH:MM:SS CYCLE <n>s` lines watch.sh writes to cycle.log: when the last cycle
     ended and how long the last five took. None when the log has no such line."""
-    try: lines = (STATE / "cycle.log").read_text(errors="ignore").splitlines()[-4000:]
+    try:
+        log = STATE / "cycle.log"
+        lines, wrote = log.read_text(errors="ignore").splitlines()[-4000:], log.stat().st_mtime
     except OSError: return None
     rows = [m.groups() for m in (re.match(r"(\d\d:\d\d:\d\d) CYCLE (\d+)s", l) for l in lines) if m]
     if not rows: return None
-    day = time.strftime("%Y-%m-%d ", time.localtime(now))
+    # The line carries no date: it is dated by the log's own last write, never by today, so a loop that stopped yesterday
+    # does not read as a few hours late.
+    anchor = min(wrote, now)
+    day = time.strftime("%Y-%m-%d ", time.localtime(anchor))
     end = time.mktime(time.strptime(day + rows[-1][0], "%Y-%m-%d %H:%M:%S"))
-    if end > now: end -= 86400   # the line is from before midnight
+    if end > anchor + 1: end -= 86400   # the line is from before midnight
     return {"end": end, "secs": [int(r[1]) for r in rows[-5:]]}
 def loop_log_stamp(line):
     """The UTC time a loop-log line starts with, as epoch seconds. None for a line written with no stamp: its age is unknown, never zero."""
@@ -1588,7 +1593,7 @@ def foot_items(src, now=None):
                    parts=nightly or None, tip=(nightly[0].get("tip") if nightly else None),
                    detail=(nightly[0].get("detail") if nightly else None)),
              _fact("quota", _quota_fact(src.get("quota"), now)),
-             _fact("cycle", _cycle_fact(src.get("cycle"), now)),
+             _fact("cycle", "cycle off" if src.get("loop") is False else _cycle_fact(src.get("cycle"), now)),   # a stopped loop has no next cycle
              _fact("subs", _subs_fact(src.get("subs"), now), parts=_subs_parts(src.get("subs"), now))]
     if "loop" in src:   # the loop state ends the line (the owner's ask, #554): one word read across the room, so it survives a narrow window
         on = bool(src["loop"])
@@ -4111,7 +4116,8 @@ function specBar(p){p=p||{};const st=p.state==="ok"||p.state==="info"?" "+p.stat
  return `<div class="at${st}"${p.tip?` title="${iq(p.tip)}"`:""}><span class=ah><span class=dot aria-hidden="true"></span>Specs${p.so?`<span class=so>${esc(p.so)}</span>`:""}</span><span class=av>${esc(p.value||"no open spec")}</span>${bar}</div>`}
 let instCyc=null,instLast={};
 function instSet(id,h){const e=$("#"+id);if(e&&instLast[id]!==h){instLast[id]=h;e.innerHTML=h}}
-function instTick(){const e=$("#icyc");if(e)e.textContent=instCyc===null?"?":cycleFmt(instCyc-Date.now()/1000)}
+let instCycOff=false;   // the hub says "cycle off" when the loop is stopped: no countdown, no "late"
+function instTick(){const e=$("#icyc");if(e)e.textContent=instCycOff?"loop off":instCyc===null?"?":cycleFmt(instCyc-Date.now()/1000)}
 function instDraw(d){const c=$("#inst");if(!c)return;const facts=(d||{}).facts||[];c.classList.toggle("warn",!!(d||{}).warn);
  const gs=$("#igs");if(gs&&!gs.children.length)gs.innerHTML=instGauges(d);
  else if(gs)ldCells(d).forEach((x,i)=>{const n=gs.children[i],g=gaugeGeom((d||{})[x.k.toLowerCase()]);if(!n)return;n.classList.toggle("ldred",x.red);
@@ -4120,7 +4126,7 @@ function instDraw(d){const c=$("#inst");if(!c)return;const facts=(d||{}).facts||
  instSet("ian",instTiles(facts).map(tileHtml).join(""));instSet("ispec",specBar((d||{}).specs));
  const u=instUsage(facts);instSet("iuse",u?`<div class=irw><span>Tokens</span><b class=bad>${esc(u.tok)}</b></div><div class=irw><span>Calls over cap</span><b class=bad>${esc(u.calls)}</b></div>`:"<div class=irw><span>Tokens</span><b>no call over the cap</b></div>");
  const s=$("#instsr");if(s)s.textContent=instSum(facts);
- const cy=instFact(facts,"cycle"),l=cy?cycleLeft(cy.text):null;instCyc=l===null?null:Date.now()/1000+l;instTick()}
+ const cy=instFact(facts,"cycle"),l=cy?cycleLeft(cy.text):null;instCycOff=!!cy&&cy.text==="cycle off";instCyc=l===null?null:Date.now()/1000+l;instTick()}
 // }INST
 async function loadPoll(){try{const d=await (await fetch("/api/load")).json();instDraw(d)}catch(e){}}
 function groupHeader(k,rows){const n=rows.filter(r=>r.kind!=="childcc").length,spend=rows.reduce((a,r)=>a+r.spend,0),agents=rows.reduce((a,r)=>a+(r.agents||0),0);let title=usd(spend);let text=n+" · "+title;if(k==="running"&&CAPS&&CAPS.per_run&&CAPS.per_run.label)title+=" · "+CAPS.per_run.label;if(k==="running")text=(CAPS&&CAPS.runs&&CAPS.children)?`RUNS ${n}/${CAPS.runs} · AGENTS ${agents}/${CAPS.children}`+((CAPS.waiting||[]).length?" · waiting: "+CAPS.waiting.map(w=>`${w.holder} (${w.ceiling})`).join(", "):""):`${n} · ${agents}`;return {text,title}}
