@@ -1,4 +1,6 @@
 """One test per exit of the metered call module. A fake adapter drives it; each exit settles the reservation once."""
+import hashlib
+
 import anyio
 import pytest
 
@@ -31,13 +33,13 @@ def req(res):
     return CallRequest("n", 1, None, "p", "m", None, [], 1, res.amount, None, 1.0, "s1")
 
 
-async def go(adapter, deadline=5.0, budget=None, **kw):
+async def go(adapter, deadline=5.0, budget=None, chain=("sonnet",), **kw):
     budget = budget or Budget(10.0)
     settled = []
     real = budget.settle
     budget.settle = lambda r, m, t=None: (settled.append(m), real(r, m, t))[1]
     rec = Rec()
-    out = await session.run_call(lambda: budget.reserve(2.0, 0.1), deadline, req, adapter=adapter, record=rec,
+    out = await session.run_call(lambda: budget.reserve(2.0, 0.1), deadline, req, chain=list(chain), adapter=adapter, record=rec,
                                  budget=budget, clock=lambda: 0.0, wall=lambda: 0.0, **kw)
     return out, budget, settled, rec
 
@@ -47,6 +49,26 @@ async def test_a_result_settles_with_the_measured_spend():
     out, b, settled, rec = await go(Fake(CallResult({}, 0.5)))
     assert out.kind == "result" and settled == [0.5] and b.measured == 0.5 and b.reserved == 0
     assert rec.events[0][0] == "call_start"
+
+
+@pytest.mark.anyio
+async def test_the_call_start_carries_the_ordered_chain_ids_and_their_hash():
+    """SPEC 1035: the chain the call was configured with, in registry ids and one hash of that order. The expected hash is
+    computed here from the stated recipe (sha256 over the ids joined by a newline), never by the code under test."""
+    _, _, _, rec = await go(Fake(CallResult({}, 0.5)), chain=["opus", "sonnet"])
+    kind, f = rec.events[0]
+    assert kind == "call_start"
+    assert f["chain"] == ["claude-opus-5-5", "claude-sonnet-5-5"]
+    assert f["chain_id"] == hashlib.sha256(b"claude-opus-5-5\nclaude-sonnet-5-5").hexdigest()
+
+
+@pytest.mark.anyio
+async def test_a_different_order_of_the_same_ids_is_a_different_chain():
+    _, _, _, first = await go(Fake(CallResult({}, 0.5)), chain=["opus", "sonnet"])
+    _, _, _, second = await go(Fake(CallResult({}, 0.5)), chain=["sonnet", "opus"])
+    a, b = first.events[0][1], second.events[0][1]
+    assert sorted(a["chain"]) == sorted(b["chain"])
+    assert a["chain_id"] != b["chain_id"]
 
 
 @pytest.mark.anyio
@@ -65,7 +87,7 @@ async def test_a_cancel_settles_unmeasured_and_reraises():
     b, seen = Budget(10.0), []
 
     async def run():
-        await session.run_call(lambda: b.reserve(2.0, 0.1), 5.0, req, adapter=Fake(hang=True), record=Rec(), budget=b,
+        await session.run_call(lambda: b.reserve(2.0, 0.1), 5.0, req, chain=["sonnet"], adapter=Fake(hang=True), record=Rec(), budget=b,
                                clock=lambda: 0.0, wall=lambda: 0.0, on_cancel=lambda res, el: seen.append(res.amount))
 
     async with anyio.create_task_group() as tg:

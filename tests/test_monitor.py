@@ -22,6 +22,15 @@ def test_a_live_call_past_its_limit_is_one_stuck_finding(tmp_path):
     assert [(x["finding"], x["node"], x["over_limit_s"]) for x in f] == [("stuck", "a", 15.0)]
 
 
+def test_a_finding_names_the_chain_the_call_started_with(tmp_path):
+    """SPEC 1035: the alert repeats the chain the record states at the call; an old call reads `unknown`."""
+    started = ("call_start", dict(START[1], chain=["claude-opus-5-5", "claude-sonnet-5-5"], chain_id="h1"))
+    fresh = monitor.scan(rec(tmp_path / "fresh", started), now=1025.0)
+    assert fresh[0]["chain"] == {"ids": ["claude-opus-5-5", "claude-sonnet-5-5"], "sha256": "h1"}
+    old = monitor.scan(rec(tmp_path / "old", START), now=1025.0)
+    assert old[0]["chain"] == {"ids": "unknown", "sha256": "unknown"}
+
+
 def test_a_dead_process_with_no_outcome_is_abandoned(tmp_path):
     p = rec(tmp_path, START)
     f = monitor.scan(p, now=1001.0, alive=lambda pid: False)
