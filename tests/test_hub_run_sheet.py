@@ -134,17 +134,16 @@ def test_events_are_newest_first_with_a_level_and_the_model_of_their_call():
 
 
 def test_the_trace_filters_by_node_model_and_level():
-    out = _node("const m=rkModel(%s,%s);console.log(JSON.stringify({n:rkFilter(m.ev,{n:'router'}).length,"
+    out = _node(f"const m=rkModel({json.dumps(ROW_ENDED)},{json.dumps(RECORD)});console.log(JSON.stringify({{n:rkFilter(m.ev,{{n:'router'}}).length,"
                 "m:rkFilter(m.ev,{m:'haiku'}).length,e:rkFilter(m.ev,{l:'error'}).length,w:rkFilter(m.ev,{l:'warn'}).length,"
-                "g:rkFilter(m.ev,{l:'gate'}).length,all:rkFilter(m.ev,{}).length}));" % (json.dumps(ROW_ENDED), json.dumps(RECORD)))
+                "g:rkFilter(m.ev,{l:'gate'}).length,all:rkFilter(m.ev,{}).length}));")
     assert out == {"n": 3, "m": 3, "e": 1, "w": 2, "g": 4, "all": len(RECORD)}
 
 
 # ---- the sheet body: tabs and the controls that filter ----
 
 def _html(tab, f=None):
-    return _node("const m=rkModel(%s,%s);console.log(JSON.stringify(rkHtml(m,%s,%s)));"
-                 % (json.dumps(ROW_ENDED), json.dumps(RECORD), json.dumps(tab), json.dumps(f or {})))
+    return _node(f"const m=rkModel({json.dumps(ROW_ENDED)},{json.dumps(RECORD)});console.log(JSON.stringify(rkHtml(m,{json.dumps(tab)},{json.dumps(f or {})})));")
 
 
 def test_overview_has_two_tabs_issue_links_focusable_nodes_and_model_rows():
@@ -167,7 +166,7 @@ def test_trace_draws_the_filters_and_only_the_matching_events():
 
 def test_the_body_escapes_what_the_record_says():
     rec = RECORD[:1] + [{"event": "outcome", "node": "<b>x</b>", "outcome": "fail", "reasons": ["<img src=x>"], "ts": T0}]
-    h = _node("const m=rkModel(%s,%s);console.log(JSON.stringify(rkHtml(m,'tr',{})));" % (json.dumps(ROW_ENDED), json.dumps(rec)))
+    h = _node(f"const m=rkModel({json.dumps(ROW_ENDED)},{json.dumps(rec)});console.log(JSON.stringify(rkHtml(m,'tr',{{}})));")
     assert "<img" not in h and "<b>x</b>" not in h
 
 
@@ -223,5 +222,5 @@ def test_the_runs_tab_lists_runs_that_open_the_sheet(hub):
 def test_a_plan_node_with_no_event_is_still_a_trace_filter_option():
     rec = [{"event": "run_start", "plan": ["main", "router"], "graph_name": "g", "ts": T0},
            {"event": "call_start", "node": "router", "entry": 0, "ts": T0 + 1}]
-    h = _node("const m=rkModel(%s,%s);console.log(JSON.stringify(rkHtml(m,'tr',{n:'main'})));" % (json.dumps(ROW_LIVE), json.dumps(rec)))
+    h = _node(f"const m=rkModel({json.dumps(ROW_LIVE)},{json.dumps(rec)});console.log(JSON.stringify(rkHtml(m,'tr',{{n:'main'}})));")
     assert '<option value="main" selected>' in h, "a node picked in the Overview is missing from the node filter"
