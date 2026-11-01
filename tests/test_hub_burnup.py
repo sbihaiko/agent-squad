@@ -93,6 +93,9 @@ def test_the_spec_lane_offers_the_burnup_and_the_page_fetches_it(hub):
     assert "buToggle(bu.dataset.bu)" in hub.PAGE
     # data-bu is a string and the lane asks for BU.open[l.num], a number: the toggle coerces, or the panel never opens (#1075)
     assert "function buToggle(n){n=+n;" in hub.PAGE
+    # the handler that presses it sits in another scope of the served page, so the toggle is reached by name (#1075)
+    assert "window.buToggle=buToggle;" in hub.PAGE
+    assert "window.buToggle(bu.dataset.bu)" in hub.PAGE
 
 
 def test_a_spec_with_sub_issues_draws_both_lines_from_the_children_instants(hub, store, monkeypatch):

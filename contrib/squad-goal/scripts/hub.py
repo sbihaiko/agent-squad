@@ -5218,6 +5218,7 @@ function buChart(d){const pts=d.points||[];if(!pts.length)return `<div class=bun
 const buPanel=n=>{const d=BU.data[n];return `<div class=bupanel data-bu-panel="${n}">${!d?`<div class=bunote>loading…</div>`:d.err?`<div class=bunote>${esc(d.err)}</div>`:buChart(d)}</div>`};
 async function buFetch(n){try{const d=await (await fetch("/api/chart/burnup?spec="+n)).json(),s=JSON.stringify(d);if(BU.raw[n]!==s){BU.raw[n]=s;BU.data[n]=d;pollBoard()}}catch(e){}}
 function buToggle(n){n=+n;BU.open[n]=!BU.open[n];if(BU.open[n]){delete BU.raw[n];buFetch(n)}else delete BU.data[n];pollBoard()}
+window.buToggle=buToggle;   // the board's click handler sits in another scope of the served page: it reaches the toggle here (#1075)
 const laneHtml=m=>{const ccount=c=>m.lanes.reduce((s,l)=>s+(l.counts[c]||0),0),pct=l=>l.total?Math.round(l.closed/l.total*100):0;
  if(!m.lanes.length)return `<div class=lempty>${f?"No card matches this search.":"No card on the board."}</div>`;
  let h=`<div class=lgrid style="--vc:${Math.max(1,m.vc.length)}">`+m.vc.map(c=>`<div class=lcolh style="--cc:${colOf(c,CN)}"><span>${esc(c)}</span><b>${ccount(c)}</b>${eye({name:c})}</div>`).join("");
@@ -5362,7 +5363,7 @@ let lanesNow=null;   // the model the board last drew: the controls act on its l
 $("#lhd").onchange=e=>{bo.hideDone=e.target.checked;saveB();pollBoard()};
 const laneSet=v=>{bo.lc=bo.lc||{};for(const l of(lanesNow?lanesNow.lanes:[]))bo.lc[l.id]=v;saveB();pollBoard()};
 $("#lcall").onclick=()=>laneSet(true);$("#lexp").onclick=()=>laneSet(false);
-document.addEventListener("click",e=>{if(e.target.closest(".ghl"))return;const bu=e.target.closest("#bbody .bu");if(bu){buToggle(bu.dataset.bu);return}const h=e.target.closest("#bbody .lh");if(h){const id=h.dataset.lane,coll=h.closest(".lane").classList.contains("coll");bo.lc=bo.lc||{};laneToggle(id,coll);return}
+document.addEventListener("click",e=>{if(e.target.closest(".ghl"))return;const bu=e.target.closest("#bbody .bu");if(bu){window.buToggle(bu.dataset.bu);return}const h=e.target.closest("#bbody .lh");if(h){const id=h.dataset.lane,coll=h.closest(".lane").classList.contains("coll");bo.lc=bo.lc||{};laneToggle(id,coll);return}
  const m=e.target.closest("#bbody .more");if(m){bo.cx=bo.cx||{};bo.cx[m.dataset.cell]=true;saveB();pollBoard();return}   // a more click opens its own cell only
  const p=e.target.closest("#lhcx");if(p&&lanesNow){const names=new Set(lanesNow.hc.map(x=>x.name));bo.lc=bo.lc||{};   // a hidden column's pill expands the lanes that hold its cards
   for(const l of lanesNow.lanes)if(l.collapsed&&Object.keys(l.counts).some(c=>names.has(c)))bo.lc[l.id]=false;saveB();pollBoard()}});
