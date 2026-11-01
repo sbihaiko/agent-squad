@@ -388,12 +388,16 @@ function turnNode(t) {
     return d;
   }
   const d = document.createElement("div"), who = document.createElement("span");
-  d.className = "sq-turn sq-" + t.role + (onlyImage ? " sq-onlyimg" : "");   // a screenshot is its own bubble (owner, 2026-11-01)
+  // A screenshot is the owner's, whatever the harness calls the turn: it is a bubble of its own on the owner's side
+  // (owner, 2026-11-01).
+  const role = onlyImage ? "owner" : t.role;
+  d.className = "sq-turn sq-" + role + (onlyImage ? " sq-onlyimg" : "");
   who.className = "sq-who";
-  who.textContent = t.role === "owner" ? "\u203A you" : "";
+  who.textContent = !onlyImage && t.role === "owner" ? "\u203A you" : "";
   const body = richText(t.text);
-  d.append(who, body);
-  clamp(body, CLAMP[t.role] || 116);
+  if (who.textContent) d.append(who);
+  d.append(body);
+  clamp(body, CLAMP[role] || 116);
   return d;
 }
 function feed(turns) {

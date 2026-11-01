@@ -326,6 +326,6 @@ def test_the_owner_turn_is_a_bubble_on_the_right_and_the_answer_one_on_the_left(
 def test_a_screenshot_turn_sits_in_its_own_bubble():
     """Owner, 2026-11-01: an image the owner sends is in the bubble like the text is."""
     js = OVERLAY.read_text()
-    assert 'onlyImage ? " sq-onlyimg" : ""' in js
+    assert "const role = onlyImage ? \"owner\" : t.role;" in js and "sq-onlyimg" in js
     assert ".sq-onlyimg{max-width:min(86%,280px)}" in js
     assert ".sq-onlyimg .sq-img img{width:100%" in js
