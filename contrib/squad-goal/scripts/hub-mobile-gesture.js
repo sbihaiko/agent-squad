@@ -89,7 +89,7 @@ const columnLanes = ({ groups, cards, lc, sum }) => {
   const lanes = [...by.values()].map(l => {
     const s = l.headed ? specSum.get(l.spec) : waveSum.get(l.id);   // progress is the summary's: a closed ticket is served by no row (#972)
     const t = s ? s.total : 0, d = s ? s.closed : 0;
-    const isDone = t > 0 && d === t;
+    const isDone = t > 0 && d === t && !l.cards.some(x => !x.sp);
     const collapsed = Object.prototype.hasOwnProperty.call(lc || {}, l.id) ? !!lc[l.id] : isDone;
     const sid = l.spec == null ? "No spec" : "SPEC " + l.spec, wl = l.wave == null ? "No wave" : "Wave " + l.wave;
     return { id: l.id, num: l.spec, wave: l.wave, sid, wl, title: sid + " · " + wl,

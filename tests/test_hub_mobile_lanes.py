@@ -192,3 +192,11 @@ def test_the_page_draws_a_tappable_lane_header_with_its_collapse_kept_on_the_dev
 def test_the_board_answer_marks_no_row_done_because_it_serves_no_closed_row():
     assert 'row["dn"]' not in HUB_PY.read_text()
     assert "/*BOARD_NAMES*/" not in PAGE.read_text()
+
+
+@pytest.mark.node_bound
+def test_a_lane_holding_an_open_ticket_is_never_done():
+    summary = {"specs": [{"n": 41, "st": "Closed", "closed": 2, "total": 2}],
+               "waves": [{"spec": None, "wave": None, "closed": 3, "total": 3}]}
+    lane = lanes([{"n": 16, "t": "sixteen", "pa": 41, "l": []}], summary=summary)["lanes"][0]
+    assert lane["id"] == "none|none" and lane["collapsed"] is False, lane

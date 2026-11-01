@@ -3447,8 +3447,11 @@ def label_wave(labels):   # the `wave:NN` label's number, or None
 
 def board_summary(drawn):   # drawn: (number, column, parent spec, wave, is a spec) for every item the list read holds
     kids, waves = {}, {}
-    for _, st, pa, wv, _ in drawn:
-        for store, key in ((kids, pa), (waves, (pa, wv))):
+    ends = {COLUMN["issue_closed"], COLUMN["abandoned"]}
+    gone = {n for n, st, _, _, sp in drawn if sp and st in ends}   # a ticket of a closed spec reads as No spec in the lanes (#972)
+    for _, st, pa, wv, sp in drawn:
+        if sp: continue
+        for store, key in ((kids, pa), (waves, (None if pa in gone else pa, wv))):
             c = store.setdefault(key, [0, 0])
             c[1] += 1
             if st == COLUMN["issue_closed"]: c[0] += 1

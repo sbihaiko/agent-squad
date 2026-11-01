@@ -293,3 +293,20 @@ def test_the_board_answer_carries_one_summary_per_spec_and_per_wave(hub, tmp_pat
     assert _entry(sums["specs"], n=41) == {"n": 41, "st": "Closed", "closed": 1, "total": 2}
     assert _entry(sums["waves"], spec=889, wave=1) == {"spec": 889, "wave": 1, "closed": 1, "total": 2}
     assert _entry(sums["waves"], spec=889, wave=None) == {"spec": 889, "wave": None, "closed": 0, "total": 1}
+
+
+def test_the_no_spec_summary_counts_no_spec_tickets_and_no_spec_card(hub, tmp_path, monkeypatch):
+    _serve(hub, tmp_path, monkeypatch, [
+        _card(889, st="Doing", labels=["spec"], sp=True),
+        _card(41, st="Closed", labels=["spec"], sp=True),
+        _card(46, st="Todo"),
+    ])
+    assert _entry(hub.board()["sum"]["waves"], spec=None, wave=None) == {"spec": None, "wave": None, "closed": 0, "total": 1}
+
+
+def test_a_ticket_of_a_closed_spec_counts_in_the_no_spec_summary(hub, tmp_path, monkeypatch):
+    _serve(hub, tmp_path, monkeypatch, [
+        _card(41, st="Closed", labels=["spec"], sp=True),
+        _card(44, st="Todo", pa=41),
+    ])
+    assert _entry(hub.board()["sum"]["waves"], spec=None, wave=None) == {"spec": None, "wave": None, "closed": 0, "total": 1}

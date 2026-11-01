@@ -82,7 +82,7 @@ groups.forEach(g=>g.items.forEach(x=>{if(x.sp){if(!ends.has(g.name)&&!specs.has(
     if(s){l.closed=s.closed;l.total=s.total}
     const m=/^(\d+)\/(\d+)$/.exec(String(l.sc||""));   // a closed ticket never reaches the board with its parent, so the count comes from the spec card
     if(l.kind==="s"&&m){l.closed=+m[1];l.total=+m[2]}
-    l.done=l.total>0&&l.closed===l.total;l.live=l.vis.some(x=>!!x.ho);l.counts={};l.vis.forEach(x=>{l.counts[x.col]=(l.counts[x.col]||0)+1})});
+    l.done=l.total>0&&l.closed===l.total&&!l.all.some(x=>!ends.has(x.col));l.live=l.vis.some(x=>!!x.ho);l.counts={};l.vis.forEach(x=>{l.counts[x.col]=(l.counts[x.col]||0)+1})});
   const rank=l=>l.kind==="bugs"?0:(l.kind==="none"||(l.kind==="sw"&&l.num==null))?2:1;
   const order=(a,b)=>mode==="wave"?(numCmp(a.num,b.num)||numCmp(a.wave,b.wave)):((b.live-a.live)||((a.num??0)-(b.num??0)));
   const list=shown.filter(l=>!(o.hideDone&&l.done)).sort((a,b)=>rank(a)-rank(b)||order(a,b));

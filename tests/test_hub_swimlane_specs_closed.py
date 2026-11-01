@@ -117,3 +117,10 @@ def test_a_wave_lane_counts_its_closed_tickets_from_the_summary():
 def test_spec_options_leave_out_a_finished_spec():
     opts = _run(f"console.log(JSON.stringify(specOptions({json.dumps(GROUPS)},{json.dumps(SUM)})));")
     assert opts == ["889"], opts
+
+
+@pytest.mark.parametrize("mode, lane_id", [("spec", "none"), ("wave", "none/none")])
+def test_a_lane_holding_an_open_ticket_is_never_done(mode, lane_id):
+    summary = {**SUM, "waves": [{"spec": None, "wave": None, "closed": 3, "total": 3}]}
+    lane = next(ln for ln in _build(summary=summary, mode=mode)["lanes"] if ln["id"] == lane_id)
+    assert lane["n"] == 2 and lane["done"] is False, lane
