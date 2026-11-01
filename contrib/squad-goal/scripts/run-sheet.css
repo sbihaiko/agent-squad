@@ -30,6 +30,6 @@
 #rk .te .tt,#rk .te .tn,#rk .te .tm,#rk .te .tv{color:var(--mute);font-size:var(--fs-min);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #rk .te .tx{grid-column:1/-1;min-width:0;overflow-wrap:anywhere}
 #rk .te.error{background:#2a161b}
-#rk .lv{display:inline-block;white-space:nowrap;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:0 6px;line-height:18px;border-radius:9px;margin-right:6px;border:1px solid var(--line);color:var(--mute)}
+#rk .lv{display:inline-block;white-space:nowrap;font-size:var(--fs-min);font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:0 6px;line-height:18px;border-radius:9px;margin-right:6px;border:1px solid var(--line);color:var(--mute)}
 #rk .lv.gate,#rk .lv.warn{color:var(--warn);border-color:#6b5223}#rk .lv.error{color:var(--err);border-color:#5a2a33}
 @media (max-width:600px){#rk{left:0;width:auto}}
