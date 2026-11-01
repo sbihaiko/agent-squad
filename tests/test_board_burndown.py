@@ -116,7 +116,7 @@ def test_no_whole_read_after_the_first_child_answers_an_empty_series_with_a_reas
 def test_the_zone_moves_the_day_boundary(burndown):
     # 02:30 UTC on 2026-10-21 is 23:30 on 2026-10-20 in Sao Paulo (UTC-3).
     store = {1: _issue({"t": "2026-10-21T02:30:00Z", "type": "spec", "spec": SPEC})}
-    result = burndown(store, [_read(21, hour=12)], SPEC, zone="America/Sao_Paulo")
+    result = burndown(store, [_read(20), _read(21)], SPEC, zone="America/Sao_Paulo")
     assert [p["day"] for p in result["points"]] == ["2026-10-20", "2026-10-21"]
     assert [p["added"] for p in result["points"]] == [1, 0]
 
