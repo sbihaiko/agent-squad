@@ -25,7 +25,9 @@ def cfd(samples, columns, zone="UTC", kind=None, skips=(), spec=None, wave=None)
     whole read is a point (#894).
 
     `kind`, `spec` and `wave` filter the cards, as the board's bar does (#904): a list of values, where an empty list or None
-    keeps every card. A spec or a wave is a number or `none`. The lists combine with AND.
+    keeps every card. A kind is `issue`, `bug` or `pr`; one kind as a string still reads as that kind alone. A spec is a
+    number or `none`. A wave is the bar's Waves key `spec/wave` (#980), each side a number or `none`. The lists combine
+    with AND.
     """
     if not samples:
         return {"start": None, "points": [], "gaps": [], "average_throughput": None}
@@ -37,7 +39,7 @@ def cfd(samples, columns, zone="UTC", kind=None, skips=(), spec=None, wave=None)
     skipped = {_day(x["t"], tz) for x in skips}
     first = _day(ordered[0]["t"], tz)
     last = max([*last_of_day, *(d for d in skipped if d >= first)])
-    specs, waves = _wanted(spec), _wanted(wave)
+    kinds, specs, waves = _wanted([kind] if isinstance(kind, str) else kind), _wanted(spec), _wanted(wave)
     points, gaps = [], []
     previous = None   # the closed count of the day before, when that day is a point; None after a gap and at the start
     for k in range((last - first).days + 1):
@@ -47,7 +49,7 @@ def cfd(samples, columns, zone="UTC", kind=None, skips=(), spec=None, wave=None)
             previous = None
             continue
         carried = last_of_day[day]
-        totals, frozen, none = _carried(carried, kind, specs, waves)
+        totals, frozen, none = _carried(carried, kinds, specs, waves)
         bands = {c: totals.get(c, 0) for c in columns}
         bands[FROZEN] = frozen
         bands[NO_COLUMN] = none + sum(n for c, n in totals.items() if c not in columns)
@@ -72,26 +74,26 @@ def _wanted(values):
     return {str(v) for v in values} if values else None
 
 
-def _carried(sample, kind, specs, waves):
+def _carried(sample, kinds, specs, waves):
     """(totals by column, frozen, none) of one sample under the filters. A sample with no cells answers no spec and no
-    wave: it keeps a card only when the filter names `none` for that dimension."""
+    wave: it keeps a card only when the filter names `none` for that dimension. Its kinds are its counts' keys."""
     if "cells" not in sample:
-        if (specs and NONE not in specs) or (waves and NONE not in waves):
+        if (specs and NONE not in specs) or (waves and f"{NONE}/{NONE}" not in waves):
             return Counter(), 0, 0
-        return _totals(sample, kind), sample["frozen"], sample["none"]
+        return _totals(sample, kinds), sample["frozen"], sample["none"]
     totals, frozen, none = Counter(), 0, 0
     for k_kind, k_spec, k_wave, column, fz, n in sample["cells"]:
-        if kind is not None and k_kind != kind: continue
+        if kinds and k_kind not in kinds: continue
         if specs and k_spec not in specs: continue
-        if waves and k_wave not in waves: continue
+        if waves and f"{k_spec}/{k_wave}" not in waves: continue
         if column is None: none += n
         else: totals[column] += n
         if fz: frozen += n
     return totals, frozen, none
 
 
-def _totals(sample, kind):
-    per_kind = sample["counts"].values() if kind is None else [sample["counts"].get(kind, {})]
+def _totals(sample, kinds):
+    per_kind = [by for k, by in sample["counts"].items() if not kinds or k in kinds]
     totals = Counter()
     for per_column in per_kind:
         totals.update(per_column)

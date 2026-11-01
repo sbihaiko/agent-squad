@@ -22,8 +22,11 @@ function waveOptions(rows){
   const seen=new Map();
   rows.forEach(x=>{if(x.sp)return;const key=waveOptKey(x);if(!seen.has(key))seen.set(key,{key,spec:x.pa==null?null:+x.pa,wave:laneWaveOf(x)})});
   return[...seen.values()].sort((a,b)=>numCmp(a.spec,b.spec)||numCmp(a.wave,b.wave)).map(o=>({key:o.key,label:waveLabel(o.spec,o.wave)}))}
-// The filters (#899): an empty list means all; the two lists combine with AND. Keys are the values the bar offers.
-const boardOk=(x,fw,fs)=>(!fw.length||fw.includes(waveOptKey(x)))&&(!fs.length||fs.includes(specKey(x)));
+// A card's kind for the Kinds filter (#904): a pull request, a bug (labelled bug or loop-bug), or an issue.
+const kindKey=x=>x.kind==="pr"?"pr":(hasLabel(x,"bug")||hasLabel(x,"loop-bug"))?"bug":"issue";
+const KIND_OPTIONS=[["issue","Issue"],["bug","Bug"],["pr","PR"]];
+// The filters (#899, #904): an empty list means all; the lists combine with AND. Keys are the values the bar offers.
+const boardOk=(x,fw,fs,fk=[])=>(!fw.length||fw.includes(waveOptKey(x)))&&(!fs.length||fs.includes(specKey(x)))&&(!fk.length||fk.includes(kindKey(x)));
 // The Specs options (#981): a spec is one only while it is unfinished, its card open and an open ticket under it.
 const finishedCard=(name,closed,abandoned)=>name===closed||name===(abandoned||"Abandoned");
 function specOptions(groups,closed,abandoned){
@@ -35,12 +38,12 @@ function specOptions(groups,closed,abandoned){
   return keys.sort((a,b)=>a==="none"?1:b==="none"?-1:+a-+b)}
 // A saved Specs filter keeps only the options the board offers now, so a finished spec's key is dropped on load (#981).
 const keptSpecs=(saved,groups,closed,abandoned)=>{const opts=specOptions(groups,closed,abandoned);return saved.filter(k=>opts.includes(k))};
-// groups: the issue columns in board order, each { name, items }. o: { mode: "spec"|"wave", fw, fs, text, lc, hideDone,
+// groups: the issue columns in board order, each { name, items }. o: { mode: "spec"|"wave", fw, fs, fk, text, lc, hideDone,
 // closed, hidden }. `text` is the search predicate; progress counts every row, so a search or a filter never moves a bar.
 // Returns { cols, vc, hc, lanes }: vc are the columns drawn, hc the hidden ones with their counts, lanes the shown lanes in order.
 function buildBoard(groups,o){
-  const mode=o.mode,cols=groups.map(g=>g.name),closed=o.closed,fw=o.fw||[],fs=o.fs||[],text=o.text||(()=>true);
-  const hasFilter=!!(fw.length||fs.length||o.search);
+  const mode=o.mode,cols=groups.map(g=>g.name),closed=o.closed,fw=o.fw||[],fs=o.fs||[],fk=o.fk||[],text=o.text||(()=>true);
+  const hasFilter=!!(fw.length||fs.length||fk.length||o.search);
   const specs=new Map(),rows=[];
   const gone=new Set([closed,o.abandoned||"Abandoned"]),goneSpecs=new Set();   // a spec whose card is closed or abandoned has no work left: no lane (#890)
 groups.forEach(g=>g.items.forEach(x=>{if(x.sp){if(gone.has(g.name))goneSpecs.add(x.n);else if(!specs.has(x.n))specs.set(x.n,{title:plain(x.t),st:g.name,sc:x.sc});   // a spec card carries its own closed/total (#890)
@@ -54,7 +57,7 @@ groups.forEach(g=>g.items.forEach(x=>{if(x.sp){if(gone.has(g.name))goneSpecs.add
     return["s"+x.pa,{kind:"s",num:x.pa,title:sp.title,st:sp.st,sc:sp.sc}]};
   if(mode!=="wave")specs.forEach((sp,num)=>ensure("s"+num,{kind:"s",num,title:sp.title,st:sp.st,sc:sp.sc}));   // a spec card on the board is always a lane
   rows.forEach(x=>{if(goneSpecs.has(x.pa)&&gone.has(x.col))return;   // a closed spec keeps no lane: its open card falls to No spec, its closed card is history (#890)
-  const[id,meta]=goneSpecs.has(x.pa)?(mode==="wave"?waveLane(null,laneWaveOf(x)):["none",{kind:"none",title:"No spec"}]):laneOf(x),l=ensure(id,meta);l.all.push(x);if(boardOk(x,fw,fs)&&text(x))l.vis.push(x)});
+  const[id,meta]=goneSpecs.has(x.pa)?(mode==="wave"?waveLane(null,laneWaveOf(x)):["none",{kind:"none",title:"No spec"}]):laneOf(x),l=ensure(id,meta);l.all.push(x);if(boardOk(x,fw,fs,fk)&&text(x))l.vis.push(x)});
   const shown=[...lanes.values()].filter(l=>l.vis.length>0||(!hasFilter&&l.kind==="s"));
   shown.forEach(l=>{l.n=l.vis.length;l.total=l.all.length;l.closed=l.all.filter(x=>x.col===closed).length;
     const m=/^(\d+)\/(\d+)$/.exec(String(l.sc||""));   // a closed ticket never reaches the board with its parent, so the count comes from the spec card

@@ -47,6 +47,14 @@ def wave_key(labels):
     return str(min(nums)) if nums else NONE
 
 
+def kind_key(row):
+    """The kind the board's Kinds filter reads: the row's own kind when it names one, `bug` for a card labelled bug or
+    loop-bug, else `issue` (the board's kindKey)."""
+    if row.get("k"): return row["k"]
+    labels = row.get("l") or ()
+    return "bug" if "bug" in labels or "loop-bug" in labels else DEFAULT_KIND
+
+
 def spec_key(row):
     """The spec the board filter reads: the parent spec's number, or `none` (the board's specKey)."""
     parent = row.get("pa")
@@ -54,7 +62,7 @@ def spec_key(row):
 
 
 def sample(rows, now=None):
-    """One sample. `cells` holds each card's kind, spec, wave, column, frozen flag and count as
+    """One sample. `cells` holds each card's kind (kind_key), spec, wave, column, frozen flag and count as
     [kind, spec, wave, column, frozen, n]: the charts filter by these (#904). A card in no shipped column has column null.
     `counts`, `frozen` and `none` are the totals those cells add up to, so a reader of the older shape still works."""
     names = {c["name"] for c in _columns.view_columns()}
@@ -62,9 +70,9 @@ def sample(rows, now=None):
     for r in rows:
         closed = str(r.get("s", "")).lower() == "closed"
         column, freeze = _columns.view_column(r.get("st"), closed, r.get("l"), r.get("cr"))
-        key = (r.get("k") or DEFAULT_KIND, spec_key(r), wave_key(r.get("l")), column if column in names else None, 1 if freeze else 0)
+        key = (kind_key(r), spec_key(r), wave_key(r.get("l")), column if column in names else None, 1 if freeze else 0)
         cells[key] = cells.get(key, 0) + 1
-    listed = [[*key, n] for key, n in cells.items()]
+    listed = sorted(([*key, n] for key, n in cells.items()), key=json.dumps)   # one order, so equal cards are equal cells
     counts, frozen, none = _totals_of(listed)
     return {"t": int(time.time() if now is None else now), "counts": counts, "frozen": frozen, "none": none, "cells": listed}
 
@@ -83,7 +91,8 @@ def _totals_of(cells):
 
 
 def append(path, rows, now=None, incomplete=None):
-    """Append one sample of `rows` when its counts differ from the last sample. Equal counts write a sample only when no
+    """Append one sample of `rows` when its counts or its cells differ from the last sample (a card that changes spec, wave
+    or kind changes the cells and no count, #904). Equal ones write a sample only when no
     sample was written on this UTC day yet: at most one unchanged sample a day, so a quiet day is a point (#894). Old lines
     roll up past RAW_DAYS. `incomplete` is the reason the read is not whole (the caller's completeness signal): such a read
     is never a sample, at any total, and is recorded as a flow_skip line that names the reason. Returns the new sample, or None."""
@@ -97,7 +106,7 @@ def append(path, rows, now=None, incomplete=None):
         return None
     lines, rebucketed = _rebucket_once(lines, rows, s["t"])
     samples = [obj for _, obj in lines if _is_sample(obj)]
-    if samples and samples[-1]["counts"] == s["counts"] and _day(samples[-1]["t"]) == _day(s["t"]):
+    if samples and samples[-1]["counts"] == s["counts"] and samples[-1].get("cells") == s["cells"] and _day(samples[-1]["t"]) == _day(s["t"]):
         if rebucketed: _write(path, _rollup(lines, s["t"]))
         return None
     lines.append((json.dumps(s), s))

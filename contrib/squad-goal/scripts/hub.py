@@ -2970,24 +2970,27 @@ LEAD_TIMEFRAMES = [("7", 7), ("14", 14), ("30", 30), ("90", 90), ("180", 180), (
 
 
 def lead_rows():
-    """The closed-card rows the lead-time arithmetic reads, one per board item (#900). Each row names its spec and wave,
-    the values the board's bar filters by (#904)."""
+    """The closed-card rows the lead-time arithmetic reads, one per board item (#900). Each row names its spec, its Waves
+    key `spec/wave` (#980) and its kind: the values the board's bar filters by (#904)."""
     return [{"n": i["n"], "column": _columns_module.view_column(i["st"], str(i["s"]).lower() == "closed", i.get("l"), i.get("cr"))[0],
              "reason": _leadtime.NOT_DELIVERED if _columns_module.not_planned(i.get("cr")) else None,   # the chart's own word (#921)
              "c": i.get("c") if str(i["s"]).lower() == "closed" else None, "o": i.get("o"), "t": i.get("t", ""),
-             "spec": _flow.spec_key(i), "wave": _flow.wave_key(i.get("l"))} for i in board_cache["items"]]
+             "spec": _flow.spec_key(i), "wave": f'{_flow.spec_key(i)}/{_flow.wave_key(i.get("l"))}', "kind": _flow.kind_key(i)}
+            for i in board_cache["items"]]
 
 
 def board_filters(query):
-    """The bar's Waves and Specs values from a query string, `fw=4,none&fs=5` (#904). An absent value is an empty list: all."""
+    """The bar's Waves, Specs and Kinds values from a query string, `fw=5/4,none/none&fs=5&fk=bug` (#904): (fw, fs, fk).
+    An absent value is an empty list: all."""
     q = urllib.parse.parse_qs(query or "")
     def values(key): return [v for v in (q.get(key, [""])[0]).split(",") if v]
-    return values("fw"), values("fs")
+    return values("fw"), values("fs"), values("fk")
 
 
-def _in_bar(row, fw, fs):
-    """A row the bar keeps: its wave is among the waves named, and its spec among the specs named. Empty lists keep all."""
-    return (not fw or row["wave"] in fw) and (not fs or row["spec"] in fs)
+def _in_bar(row, fw, fs, fk=()):
+    """A row the bar keeps: its Waves key is among the waves named, its spec among the specs named, and its kind among the
+    kinds named. Empty lists keep all."""
+    return (not fw or row["wave"] in fw) and (not fs or row["spec"] in fs) and (not fk or row["kind"] in fk)
 
 
 def lead_zoom(query):
@@ -2999,8 +3002,8 @@ def lead_zoom(query):
     if b == COLUMN["issue_closed"]: b = None
     if any(c is not None and c not in ORDER for c in (a, b)): return {"error": "bad column: a and b name a board column"}
     log = q.get("scale", ["jira"])[0] == "log"
-    fw, fs = board_filters(query)
-    rows = _leadtime.span([r for r in lead_rows() if _in_bar(r, fw, fs)], card_transitions(), start=a, end=b)
+    fw, fs, fk = board_filters(query)
+    rows = _leadtime.span([r for r in lead_rows() if _in_bar(r, fw, fs, fk)], card_transitions(), start=a, end=b)
     measure = f"{a or 'opened'} -> {b or 'closed'}"
     if "from" not in q and "to" not in q and "tf" in q:
         days = dict(LEAD_TIMEFRAMES).get(q["tf"][0], 0)
@@ -3030,11 +3033,11 @@ def history_key():
     try: st = path.stat(); return (str(path), st.st_mtime_ns, st.st_size)
     except OSError: return (str(path), None)
 
-def _cfd_payload(fw=(), fs=()):
+def _cfd_payload(fw=(), fs=(), fk=()):
     """The cumulative flow's numbers, computed here from board_cfd; the page draws them and computes none.
-    `fw` and `fs` are the bar's Waves and Specs values: the chart keeps only the cards the bar keeps (#904)."""
+    `fw`, `fs` and `fk` are the bar's Waves, Specs and Kinds values: the chart keeps only the cards the bar keeps (#904)."""
     path = _flow.history_path(BOARD, REPO)
-    cfd = _cfd.cfd(_flow.samples(path), ORDER, skips=_flow.skips(path), spec=fs, wave=fw)
+    cfd = _cfd.cfd(_flow.samples(path), ORDER, skips=_flow.skips(path), spec=fs, wave=fw, kind=fk)
     extents = {p["day"]: _band_extents(p["bands"]) for p in cfd["points"]}
     days = sorted([*extents, *cfd["gaps"]])   # one entry per calendar day: a day with no sample carries no value (#894)
     yticks = _y_ticks(max((e[FLOW_BANDS[0]][1] for e in extents.values()), default=0))
@@ -3059,10 +3062,10 @@ def _cfd_payload(fw=(), fs=()):
     return {"cfd": {**view(None), "ranges": {key: view(width) for key, width in CFD_RANGES}}}
 
 
-def _lead_payload(fw=(), fs=()):
+def _lead_payload(fw=(), fs=(), fk=()):
     """The lead-time numbers over the closed cards of the board read, computed here; the page draws them and computes none.
-    The bar's values `fw` and `fs` filter the rows (#904)."""
-    rows = [r for r in lead_rows() if _in_bar(r, fw, fs)]
+    The bar's values `fw`, `fs` and `fk` filter the rows (#904)."""
+    rows = [r for r in lead_rows() if _in_bar(r, fw, fs, fk)]
     lead = _leadtime.lead_time(rows)
     now = dt.datetime.now(dt.UTC)
     control = {scale: {key: _leadtime.control_chart(rows, timeframe=days, log=scale == "log", now=now)
@@ -3073,12 +3076,12 @@ def _lead_payload(fw=(), fs=()):
                      "control": control, "columns": ORDER}}
 
 
-def flow_cfd(fw=(), fs=()):
+def flow_cfd(fw=(), fs=(), fk=()):
     """The cumulative flow for the bar's values; the cache key holds them, so a filter change reads anew (#904)."""
-    return chart("cfd", (history_key(), tuple(fw), tuple(fs)), lambda: _cfd_payload(fw, fs))
+    return chart("cfd", (history_key(), tuple(fw), tuple(fs), tuple(fk)), lambda: _cfd_payload(fw, fs, fk))
 
-def flow_lead(fw=(), fs=()):
-    return chart("lead", (board_cache.get("t"), tuple(fw), tuple(fs)), lambda: _lead_payload(fw, fs))
+def flow_lead(fw=(), fs=(), fk=()):
+    return chart("lead", (board_cache.get("t"), tuple(fw), tuple(fs), tuple(fk)), lambda: _lead_payload(fw, fs, fk))
 
 
 def drawn_column(i, moves, read_at, window):
@@ -3111,7 +3114,7 @@ def drawn_column(i, moves, read_at, window):
             "recorded": recorded, "entry": entry}
 
 
-def board(fw=(), fs=()):
+def board():
     overlay = overlay_on()   # one setting turns the overlay off: the served board is then the list read alone (#651)
     moves = read_moves() if overlay else {}   # the record is read on every serve, so a page reload sees the same overlay (#650)
     read_at = board_cache.get("rt")   # the instant the list read began, never the completion stamp `t`: a read that began before a move cannot have carried it, however late it finished
@@ -3744,7 +3747,7 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 </aside>
 <main id=content>
 <section id=tab-board class="pane on" aria-label=Board>
-<div id=board><div id=bhead><label>Swimlanes <select id=lmode title="swimlanes: one lane per spec (Spec), per wave (Wave), or no lanes, today's board (None)"><option value=spec>Spec</option><option value=wave>Wave</option><option value=none>None</option></select></label> <details id=fw class=fsel><summary>Waves: all</summary><div class=fpop id=fwl></div></details> <details id=fs class=fsel><summary>Specs: all</summary><div class=fpop id=fsl></div></details> <button id=lcall title="collapse every swimlane">Collapse all</button> <button id=lexp title="expand every swimlane">Expand all</button> <label class=hck title="hide the swimlanes whose every ticket is closed"><input type=checkbox id=lhd> Hide done lanes</label> <span id=lhc></span><span id=bt class=m></span> <span id=hlrel class=hlrel hidden></span></div><div id=bcases></div><div id=bbody></div></div>
+<div id=board><div id=bhead><label>Swimlanes <select id=lmode title="swimlanes: one lane per spec (Spec), per wave (Wave), or no lanes, today's board (None)"><option value=spec>Spec</option><option value=wave>Wave</option><option value=none>None</option></select></label> <details id=fw class=fsel><summary>Waves: all</summary><div class=fpop id=fwl></div></details> <details id=fs class=fsel><summary>Specs: all</summary><div class=fpop id=fsl></div></details> <details id=fk class=fsel><summary>Kinds: all</summary><div class=fpop id=fkl></div></details> <button id=lcall title="collapse every swimlane">Collapse all</button> <button id=lexp title="expand every swimlane">Expand all</button> <label class=hck title="hide the swimlanes whose every ticket is closed"><input type=checkbox id=lhd> Hide done lanes</label> <span id=lhc></span><span id=bt class=m></span> <span id=hlrel class=hlrel hidden></span></div><div id=bcases></div><div id=bbody></div></div>
 </section>
 <section id=tab-flow class=pane aria-label="Flow charts">
 <div class=rkt id=flowtabs><button id=bruns title="the live run dashboards">Runs</button><button id=bflow title="the development flow: the cards in each column over time, from the flow history (SPEC 111)">Cumulative Flow Diagram</button><button id=blead title="the lead time of the closed cards, opened to closed (SPEC 111)">Lead Time</button></div>
@@ -4381,13 +4384,13 @@ $("#flowb").onclick=e=>{if(LT.noclick){LT.noclick=false;return}
   const k=e.target.closest("circle[data-k]");if(k){LT.pick=+k.dataset.k;drawFlow();return}const r=e.target.closest("tr[data-o]");if(r)showIssue(+r.dataset.o,"__REPO__")};
 $("#bflow").onclick=()=>flowOpen("cfd");$("#blead").onclick=()=>flowOpen("lead");addEventListener("resize",()=>{if(!$("#flowov").hidden)drawFlow()});
 // flow-charts:end
-const barQuery=()=>`fw=${encodeURIComponent((bo.fw||[]).join(","))}&fs=${encodeURIComponent((bo.fs||[]).join(","))}`;   // the bar's Waves and Specs, read by the board and both diagrams (#904)
-async function pollBoard(){lim.busy=1;try{const b=await (await fetch(`/api/board?${barQuery()}`)).json(),FLOW=/*BOARD_FLOW*/,   // development flow, left to right
+const barQuery=()=>["fw","fs","fk"].map(k=>`${k}=${encodeURIComponent((bo[k]||[]).join(","))}`).join("&");   // the bar's Waves, Specs and Kinds, read by both diagrams; the board filters on the page (#904)
+async function pollBoard(){lim.busy=1;try{const b=await (await fetch("/api/board")).json(),FLOW=/*BOARD_FLOW*/,   // development flow, left to right
 all=[b.prs,...b.groups.sort((x,y)=>{const i=n=>{const k=FLOW.indexOf(n);return k<0?FLOW.length:k};return i(x.name)-i(y.name)})],f=q.trim().replace(/^#/,"");
 if(bo.open===undefined||!all.some(g=>g.name===bo.open))bo.open=(all.find(g=>g.n&&g.name!==COLNAME.issue_closed&&!isPR(g.name))||all[2]).name;
 const CN=all.map(g=>g.name);   // every column of this board: what colOf reads the user columns out of, never a colour of its own
 lastRead=Date.now();readStale=!!b.err;$("#bcases").innerHTML=caseRows(b.cases);$("#bt").textContent=b.err?"(stale)":"";
-const fw=bo.fw||[],boardGroups=all.filter(g=>!isPR(g.name)),allRows=boardGroups.flatMap(g=>g.items),specTitle=new Map();   // the filter bar: the waves and specs the board holds (#899)
+const fw=bo.fw||[],fk=bo.fk||[],boardGroups=all.filter(g=>!isPR(g.name)),allRows=boardGroups.flatMap(g=>g.items),specTitle=new Map();   // the filter bar: the waves, specs and kinds the board holds (#899, #904)
 allRows.forEach(x=>{if(x.sp)specTitle.set(String(x.n),x.t)});
 const wOpts=waveOptions(allRows),sOpts=specOptions(boardGroups,COLNAME.issue_closed,COLNAME.abandoned);   // a finished spec is no option (#981)
 const fs=keptSpecs(bo.fs||[],boardGroups,COLNAME.issue_closed,COLNAME.abandoned);
@@ -4398,6 +4401,7 @@ const fillBar=(id,opts,label,sel,name)=>{const box=$("#"+id),k=opts.join("|");
  box.parentElement.querySelector("summary").textContent=sel.length?`${name} (${sel.length})`:`${name}: all`;box.parentElement.classList.toggle("set",sel.length>0)};
 fillBar("fwl",wOpts.map(o=>o.key),k=>wOpts.find(o=>o.key===k).label,fw,"Waves");
 fillBar("fsl",sOpts,s=>s==="none"?"No spec":"#"+s+(specTitle.get(s)?" "+specTitle.get(s):""),fs,"Specs");
+fillBar("fkl",KIND_OPTIONS.map(o=>o[0]),k=>KIND_OPTIONS.find(o=>o[0]===k)[1],fk,"Kinds");
 const hid=new Set(hidCols()),bottom=true,eye=(g,off=hid.has(g.name))=>`<span class=eye data-eye="${esc(g.name)}" title="${off?"show":"hide"} this column"><svg viewBox="0 0 24 24" width=14 height=14 fill=none stroke=currentColor stroke-width=2 stroke-linecap=round stroke-linejoin=round><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx=12 cy=12 r=3 />${off?'<path d="M3 3l18 18"/>':""}</svg></span>`;
 const LC=b.lc||{},rgb=h=>[0,2,4].map(i=>parseInt(h.slice(i,i+2),16)),mix=(a,t)=>a.map((v,i)=>Math.round(v*t+[28,34,44][i]*(1-t))),   // label color blended into the card's #1c222c
 tint=x=>{const cs=(x.l||[]).map(l=>LC[l]).filter(c=>/^[0-9a-f]{6}$/.test(c||"")).map(rgb);if(!cs.length)return"";const avg=[0,1,2].map(i=>cs.reduce((s,c)=>s+c[i],0)/cs.length);return`;--bg:rgb(${mix(avg,.10)});--bgh:rgb(${mix(avg,.16)})`},
@@ -4426,11 +4430,11 @@ const laneHtml=m=>{const ccount=c=>m.lanes.reduce((s,l)=>s+(l.counts[c]||0),0),p
   h+="</section>"}
  return h+"</div>"};
 const perr=g=>g.err?`<div class=perr title="a repository the hub was told to read and could not: the rows this column still shows for it are its last good ones">&#9888; ${esc(g.err)}</div>`:"";   // a repository the hub cannot read is an error on the column, never an empty column (#1820)
-const fits={};all.forEach(g=>fits[g.name]=g.items.filter(x=>(!f||String(x.n).includes(f)||x.t.toLowerCase().includes(f.toLowerCase()))&&(isPR(g.name)||boardOk(x,fw,fs))));   // the Specs filter shows, only shows, or hides the spec-labelled items, never a column of its own (#247, #456)
+const fits={};all.forEach(g=>fits[g.name]=g.items.filter(x=>(!f||String(x.n).includes(f)||x.t.toLowerCase().includes(f.toLowerCase()))&&(isPR(g.name)?boardOk({...x,kind:"pr"},[],[],fk):boardOk(x,fw,fs,fk))));   // the Specs filter shows, only shows, or hides the spec-labelled items, never a column of its own (#247, #456)
 const kept=new Set(bo.kept||[]),
  autoHidden=g=>!hid.has(g.name)&&!kept.has(g.name)&&!fits[g.name].length&&!g.tracking,   // the columns the strip's lines stand for, and the only ones: a column the user hid is a chip, one the user kept is drawn, and the lane is always drawn -- empty, it says 0 (#440)
  vis=all.filter(g=>!bottom||(!hid.has(g.name)&&!autoHidden(g))),autos=bottom?all.filter(autoHidden):[];
-const badge=g=>`<span class=n>${f||fw.length||fs.length?fits[g.name].length+"/":""}${g.n}</span>`;   // the number the header shows, and the number the strip's line repeats
+const badge=g=>`<span class=n>${f||fw.length||fs.length||fk.length?fits[g.name].length+"/":""}${g.n}</span>`;   // the number the header shows, and the number the strip's line repeats
 const one=g=>{const it=fits[g.name],shown=it.slice(0,lim[g.name]||25),dot=`<i style="background:${colOf(g.name,CN)}"></i>`,cnt=badge(g),isOpen=g.name===COLNAME.pr_open?bo.prOpen!==false:bo.open===g.name;
 if(bottom)return `<div class="col${isPR(g.name)?" prs lane":""}" style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><div class=ch><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}</span></div><div class=sc data-g="${esc(g.name)}">${perr(g)}${cards(g,it,shown)}</div></div>`;
 return `<div class="acc${isPR(g.name)?" prs lane":""} ${hid.has(g.name)?"hidcol":""} ${isOpen?"open":""}" style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><div class=ah><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}</span></div><div class=sc data-g="${esc(g.name)}">${perr(g)}${cards(g,it,shown)}</div><div class=pad></div></div>`};
@@ -4440,7 +4444,7 @@ const fmtN=n=>n>=1000?n.toLocaleString("en-US"):""+n;   // "688" is one token; o
 // exception is a column #1793's map does not name, which takes the ring colour and can only come from colOf here.
 const hidchip=g=>{const c=colOf(g.name,CN),ring=!Object.hasOwn(COLORS,g.name);return `<span class=chip data-eye="${esc(g.name)}" data-col="${esc(g.name)}" title="${esc(g.name+" — "+fmtN(g.n))}"><span class=lbl>${esc(g.name)}</span><b${ring?` style="color:${c}"`:""}>${fmtN(g.n)}</b></span>`};
 const html=vis.map(one).join("")+(bottom&&hid.size?`<div class=hidbar>${all.filter(g=>hid.has(g.name)).map(hidchip).join("")}`:"")+(bottom&&(hid.size||autos.length)?`${hid.size?"":`<div class=hidbar>`}${autos.length?(hid.size?'<div class=hidsep></div>':"")+autos.map(g=>`<span class=hidline style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><span>${esc(g.name)}</span><b>${badge(g)}</b>${eye(g,true)}</span>`).join(""):""}</div>`:"");   // one quiet line per column hidden only because it is empty, behind a divider (#1809)
-const model=bo.lmode==="none"?null:buildBoard(all.filter(g=>!isPR(g.name)),{mode:bo.lmode||"spec",fw:bo.fw||[],fs:bo.fs||[],closed:COLNAME.issue_closed,abandoned:COLNAME.abandoned,hidden:hidCols(),lc:bo.lc||{},hideDone:!!bo.hideDone,search:!!f,text:x=>!f||String(x.n).includes(f)||x.t.toLowerCase().includes(f.toLowerCase())});   // the lanes read every row; the search and the filters only hide rows (#890)
+const model=bo.lmode==="none"?null:buildBoard(all.filter(g=>!isPR(g.name)),{mode:bo.lmode||"spec",fw:bo.fw||[],fs:bo.fs||[],fk:bo.fk||[],closed:COLNAME.issue_closed,abandoned:COLNAME.abandoned,hidden:hidCols(),lc:bo.lc||{},hideDone:!!bo.hideDone,search:!!f,text:x=>!f||String(x.n).includes(f)||x.t.toLowerCase().includes(f.toLowerCase())});   // the lanes read every row; the search and the filters only hide rows (#890)
 const lanesHtml=model?laneHtml(model):null;lanesNow=model;$("#lhd").checked=!!bo.hideDone;
 $("#lmode").value=bo.lmode||"spec";$("#bbody").classList.toggle("lanes",!!model);
 $("#lhc").innerHTML=model&&model.hc.length?`<button class=hcpill id=lhcx title="columns with no card in an expanded lane: click to expand the lanes that hold their cards">+${model.hc.length} hidden: ${model.hc.map(x=>x.user?`<span class=hcu data-eye="${esc(x.name)}" title="show this column">${esc(x.name)} <b>${x.count}</b></span>`:esc(x.name)+" <b>"+x.count+"</b>").join(" · ")}</button>`:"";
@@ -4518,9 +4522,9 @@ document.addEventListener("click",e=>{const h=e.target.closest("#bbody .lh");if(
  const p=e.target.closest("#lhcx");if(p&&lanesNow){if(p.hasAttribute("data-hide")){bo.showClosed=false;saveB();pollBoard();return}
   const end=new Set([COLNAME.issue_closed,COLNAME.abandoned]),names=new Set(lanesNow.hc.map(x=>x.name).filter(c=>!end.has(c)));bo.lc=bo.lc||{};   // a hidden column's pill expands the lanes that hold its cards; the end columns are drawn, never a lane opened for them
   for(const l of lanesNow.lanes)if(l.collapsed&&Object.keys(l.counts).some(c=>names.has(c)))bo.lc[l.id]=false;saveB();pollBoard()}});
-const barMoved=()=>{LT.tok++;LT.zc=null;LT.zr=null;FLOWD={};if(!$("#flowov").hidden&&FLOWK)flowOpen(FLOWK)};   // a bar value changes both charts: each reads its route anew (#904)
+const barMoved=()=>{LT.tok++;LT.zc=null;LT.zr=null;FLOWD={};if(!$("#flowov").hidden&&FLOWK){flowOpen(FLOWK);if(FLOWK==="lead"&&ltOwn())ltGet()}};   // a bar value changes both charts: each reads its route anew, and a chosen span its own chart (#904, #905)
 const pickFilter=(id,key)=>{const box=$("#"+id);box.addEventListener("change",e=>{const v=e.target.value,h=new Set(bo[key]||[]);e.target.checked?h.add(v):h.delete(v);bo[key]=[...h];barMoved();saveB();pollBoard()});box.addEventListener("click",e=>{if(!e.target.closest("[data-clear]"))return;e.preventDefault();bo[key]=[];barMoved();saveB();pollBoard()})};
-pickFilter("fwl","fw");pickFilter("fsl","fs");
+pickFilter("fwl","fw");pickFilter("fsl","fs");pickFilter("fkl","fk");
 // The owner's one move (#560): the arrow a Backlog card carries delegates to the hub, and the card shows the reason a
 // refusal gives. Which cards carry the arrow is the row's own fact (`x.pm`), never the page's rule.
 document.addEventListener("click",async e=>{const b=e.target.closest("#bbody .pmp");if(!b)return;e.preventDefault();e.stopPropagation();const n=+b.dataset.n,card=b.closest(".it");b.disabled=true;
@@ -5519,7 +5523,7 @@ class H(BaseHTTPRequestHandler):
             m = re.search(r"[?&]n=(\d{1,6})\b", self.path); rr = re.search(r"[?&]r=([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)", self.path)
             body, ct = json.dumps(issue_detail(int(m[1]), rr[1] if rr else None) if m else {"err": "bad n"}).encode(), "application/json"
         elif self.path.startswith("/api/board"):
-            try: body, ct = json.dumps(board(*board_filters(self.path.partition("?")[2]))).encode(), "application/json"
+            try: body, ct = json.dumps(board()).encode(), "application/json"   # every card: the page filters the board by the bar (#899)
             except ValueError as e: body, ct = json.dumps({"error": str(e)}).encode(), "application/json"
         elif self.path.startswith("/api/chart/cfd"): body, ct = json.dumps(flow_cfd(*board_filters(self.path.partition("?")[2]))).encode(), "application/json"
         elif self.path.startswith("/api/chart/lead"): body, ct = json.dumps(flow_lead(*board_filters(self.path.partition("?")[2]))).encode(), "application/json"
