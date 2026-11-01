@@ -79,7 +79,7 @@ def coder(chain, seq, first=None):
     return at(chain, changes(seq), first)
 
 
-NO_ARTIFACT = ("child_ended_early", "session_end_unknown")    # session.missing_artifact_reason; a session_error:<subtype> is one too
+NO_ARTIFACT = ("artifact_missing", "child_ended_early", "session_end_unknown")    # session.missing_artifact_reason; a session_error:<subtype> is one too; artifact_missing is the reason of a record written before #1066
 
 
 def unanswered(outcome, reasons):
