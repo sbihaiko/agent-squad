@@ -7,7 +7,6 @@ const hasLabel=(x,l)=>(x.l||[]).includes(l);
 const plain=t=>String(t==null?"":t).replace(/^\s*\[SPEC(?:\s*#?\d+)?\]\s*/i,"");
 // A cell shows every card it holds: the owner reads the whole lane at once, so no cap and no "+N more" (#891).
 const cellView=rows=>({shown:rows,more:0});
-// <card-rules>: the spec color and wave rules; the mobile page inlines this block alone (#917).
 const laneWaveOf=x=>{const w=(x.l||[]).map(l=>(String(l).match(/^wave:(\d+)$/)||[])[1]).filter(v=>v!==undefined).map(Number);return w.length?Math.min(...w):null};
 const waveKey=x=>{const w=laneWaveOf(x);return w===null?"none":String(w)};
 const specKey=x=>x.pa==null?"none":String(x.pa);
@@ -38,6 +37,8 @@ function specOptions(groups,closed,abandoned){
   return keys.sort((a,b)=>a==="none"?1:b==="none"?-1:+a-+b)}
 // A saved Specs filter keeps only the options the board offers now, so a finished spec's key is dropped on load (#981).
 const keptSpecs=(saved,groups,closed,abandoned)=>{const opts=specOptions(groups,closed,abandoned);return saved.filter(k=>opts.includes(k))};
+// <card-rules>: the spec color and wave chip rules; the mobile page inlines this block alone (#917). It reads
+// laneWaveOf, which each page declares once: the board above, the mobile page in its gesture module (#980).
 // A spec's color (#917): the spec number picks a palette slot, number mod 8. A slot already taken goes to the next free
 // slot, so two specs differ while the palette has room. Specs are read in number order, so the board order changes nothing.
 const SPEC_GREY="var(--mute)";   // a card with no spec
