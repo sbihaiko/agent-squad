@@ -1935,6 +1935,27 @@ def foot_refresh(now=None):
     LOAD_STATE["facts"] = foot_items(src, now)
     return LOAD_STATE["facts"]
 
+def spec_progress(items):
+    """The Monitor card's spec bar: closed over total sub-issues, summed over every open spec on the board cache. An open
+    spec is a card with the spec label whose column is neither Closed nor Abandoned. A spec with no sub-issue count adds
+    nothing. The count is the one `task_count` reads, so no new GitHub read; the page only draws this value (ADR-0137)."""
+    gone = (COLUMN["issue_closed"], COLUMN["abandoned"])
+    done = total = 0
+    tips = []
+    for i in items or []:
+        if _columns_module.SPEC_LABEL not in (i.get("l") or []): continue
+        closed = str(i.get("s")).lower() == "closed"
+        if _columns_module.view_column(i.get("st"), closed, i.get("l"), i.get("cr"))[0] in gone: continue
+        sc = task_count(i)
+        if not sc: continue
+        c, t = (int(x) for x in sc.split("/"))
+        done, total = done + c, total + t
+        tips.append(f"#{i.get('n')} {i.get('t') or ''} {sc}")
+    if not total: return {"done": 0, "total": 0, "specs": 0, "pct": 0, "text": "no open spec", "tip": ""}
+    pct = int(100 * done / total + 0.5)
+    return {"done": done, "total": total, "specs": len(tips), "pct": pct,
+            "text": f"Specs {done}/{total} · {pct}% · {len(tips)} open", "tip": "\n".join(tips)}
+
 def load_payload():
     """What /api/load serves: the cached reading, never a fresh one, so three open tabs cost three JSON bodies and no
     sample. `cpu` is the newest reading, `warn` is the two-sample rule over the history, `runs` the shares the cards use,
@@ -1947,6 +1968,7 @@ def load_payload():
             "ram": LOAD_STATE.get("ram"), "gpu": LOAD_STATE.get("gpu"),
             "warn": sustained(hist), "runs": dict(LOAD_STATE.get("runs") or {}),
             "facts": list(LOAD_STATE.get("facts") or []),
+            "specs": spec_progress(board_cache.get("items") or []),   # the open specs' total, off the board cache: no GitHub read
             "secs": LOAD_SAMPLE_SECS, "asof": LOAD_STATE.get("asof", 0.0)}
 
 def status_payload():
@@ -3941,6 +3963,7 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 #inst .at.ok .dot{background:var(--ok)}#inst .at.err .dot{background:var(--err)}#inst .at.info .dot{background:var(--acc)}
 #inst .at .av{display:block;color:var(--fg);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}#inst .at.err .av{color:var(--err)}#inst .at a{color:var(--acc);text-decoration:none}#inst .at a:hover{text-decoration:underline}
 #inst .at details>summary{cursor:pointer;color:var(--mute)}#inst .at details>ul{margin:4px 0 0;padding:0 0 0 14px;color:var(--mute);overflow-wrap:anywhere}
+#inst .isp{padding:4px 0;font-size:var(--fs-min);color:var(--mute)}#inst .isb{height:4px;margin-top:3px;border-radius:2px;background:var(--line);overflow:hidden}#inst .isb i{display:block;height:100%;background:var(--ok)}
 #inst .irw{display:flex;justify-content:space-between;align-items:baseline;gap:8px;padding:3px 0;border-top:1px solid var(--line);font-size:var(--fs-min);color:var(--mute)}
 #inst .irw b{color:var(--fg);font-weight:600;font-variant-numeric:tabular-nums;text-align:right;min-width:0;overflow-wrap:anywhere}#inst .irw b.bad{color:var(--warn)}
 @media (prefers-reduced-motion: reduce){#inst .ig .gn{transition:none}}
@@ -3960,7 +3983,7 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 <details id=plans class=sp><summary>Subscriptions<span class=sr id=plsr></span></summary><div class=sb><div id=subs></div></div></details>
 <details id=stats class=sp><summary>Cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><h4>Spend <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Figures at API list prices (API-equivalent)."></span></h4><div class=tot id=tot></div><div class=m id=totnote></div><div class=cash id=cash></div><h4>Spend over time <span class=row id=per></span></h4><div id=chart></div><div id=kpi></div><div id=open></div><h4>Model cost · this month</h4><div class=m id=piet>API-equivalent</div><div id=pie></div></div></details>
 <details id=sqd class=sp open><summary>Squad models<span class=sr id=sqsr></span></summary><div class=sb id=sqm></div></details>
-<details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div class=ian id=ian></div><div id=iloop></div><div class=irw><span>Next cycle</span><b id=icyc aria-live=off>?</b></div><div id=iuse></div></div></details>
+<details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div class=ian id=ian></div><div id=ispec></div><div id=iloop></div><div class=irw><span>Next cycle</span><b id=icyc aria-live=off>?</b></div><div id=iuse></div></div></details>
 </aside>
 <main id=content>
 <section id=tab-board class="pane on" aria-label=Board>
@@ -4060,6 +4083,8 @@ function cycleLeft(text){const m=/^cycle (?:in |\+)(?:(\d+)h(\d\d)m|(\d+)m(\d\d)
 function cycleFmt(left){const s=Math.abs(Math.round(left)),h=Math.floor(s/3600),mi=Math.floor(s/60)%60,p=n=>String(n).padStart(2,"0"),
  t=h?`${h}h${p(mi)}m`:`${Math.floor(s/60)}m${p(s%60)}s`;return left<0?`+${t} late`:`in ${t}`}
 function instUsage(facts){const f=instFact(facts,"burn");if(!f||!f.text)return null;const p=String(f.text).split(" · ");return{tok:p[0].replace(/^tokens\s*/,""),calls:p.slice(1).join(" · ")}}
+function specBar(p){p=p||{};const w=Math.max(0,Math.min(100,Number(p.pct)||0)),t=p.text||"no open spec";   // the hub decides the count and the text; the page only draws them
+ return `<div class=isp${p.tip?` title="${iq(p.tip)}"`:""}><span class=isl>${esc(t)}</span><div class=isb aria-hidden="true"><i style="width:${w}%"></i></div></div>`}
 let instCyc=null,instLast={};
 function instSet(id,h){const e=$("#"+id);if(e&&instLast[id]!==h){instLast[id]=h;e.innerHTML=h}}
 function instTick(){const e=$("#icyc");if(e)e.textContent=instCyc===null?"?":cycleFmt(instCyc-Date.now()/1000)}
@@ -4068,7 +4093,7 @@ function instDraw(d){const c=$("#inst");if(!c)return;const facts=(d||{}).facts||
  else if(gs)ldCells(d).forEach((x,i)=>{const n=gs.children[i],g=gaugeGeom((d||{})[x.k.toLowerCase()]);if(!n)return;n.classList.toggle("ldred",x.red);
   const ln=n.querySelector(".gn"),f=n.querySelector(".gf"),v=n.querySelector(".gv");
   if(ln){ln.style.transform=`rotate(${g.deg}deg)`;ln.setAttribute("visibility",g.known?"visible":"hidden")}if(f){f.setAttribute("d",`M4 32 A26 26 0 0 1 ${g.x} ${g.y}`);f.setAttribute("stroke",g.col)}if(v)v.innerHTML=`<b>${x.k}</b> ${esc(x.t)}`});
- instSet("ian",instTiles(facts).map(tileHtml).join(""));
+ instSet("ian",instTiles(facts).map(tileHtml).join(""));instSet("ispec",specBar((d||{}).specs));
  const u=instUsage(facts);instSet("iuse",u?`<div class=irw><span>Tokens</span><b class=bad>${esc(u.tok)}</b></div><div class=irw><span>Calls over cap</span><b class=bad>${esc(u.calls)}</b></div>`:"<div class=irw><span>Tokens</span><b>no call over the cap</b></div>");
  const s=$("#instsr");if(s)s.textContent=instSum(facts);
  const cy=instFact(facts,"cycle"),l=cy?cycleLeft(cy.text):null;instCyc=l===null?null:Date.now()/1000+l;instTick()}
