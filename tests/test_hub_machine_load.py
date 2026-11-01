@@ -606,7 +606,7 @@ def test_the_left_pane_carries_only_what_a_reader_watches(hub):
     Re-anchored (#1028): the two configuration cards left the sidebar for the Settings tab. Re-anchored again (owner,
     2026-11-01): Last ended is gone and Live runs sits under the Monitor, so the pane reads cost, machine, live work."""
     side = hub.PAGE[hub.PAGE.index("<aside id=side>"):hub.PAGE.index("</aside>")]
-    assert re.findall(r"<details id=(\w+)", side) == ["stats", "inst", "lrd"]
+    assert re.findall(r"<details id=(\w+)", side) == ["inst", "usage", "stats", "lrd"]
     for gone in ("id=wts", "id=wtsr", "id=wtb", "id=wtcl", "id=wtmsg", "wtDraw", "wtClean", "wtSay", "wtBusy"):
         assert gone not in hub.PAGE, gone
 
@@ -860,7 +860,7 @@ def test_the_monitor_draws_a_labelled_bar_and_a_reset_per_subscription(hub):
     under #isub. A named bar answers "how much of the weekly window is spent, and when does it reset" without a caption."""
     page = hub.PAGE
     assert 'id=isub' in page, "no panel carries the subscription row"
-    assert page.index("id=isub") > page.index("id=stats"), "the subscription row belongs at the top of Cost & usage"
+    assert page.index("id=usage") < page.index("id=isub") < page.index("id=stats"), "the subscription row leads the Usage panel"
     i = page.index("function subsGauges(d)")
     fn = page[i:page.index("function instGauges(d)", i)]
     assert "gaugeSvg(p)" not in fn, "the dial is back under #isub, where #inst never styles it and it paints black"

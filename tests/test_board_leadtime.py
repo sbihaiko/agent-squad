@@ -3,7 +3,6 @@ import ast
 import importlib.util
 import json
 import math
-import re
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
