@@ -95,6 +95,7 @@ def state_dir():
     if not st: sys.exit("hub: no state directory (export SG_STATE, or repair the seam, address.sh)")
     return st
 STATE = pathlib.Path(state_dir())
+os.environ.setdefault("SG_STATE", str(STATE))   # the issue ledger reads SG_STATE from the environment (#1022)
 # hub state lives in the target repo's runs area (already gitignored there), never versioned; SG_HUB_DIR overrides
 HUBDIR = pathlib.Path(os.environ.get("SG_HUB_DIR") or pathlib.Path(CHECKOUT) / "runs" / ".hub"); HUBDIR.mkdir(parents=True, exist_ok=True)
 def shared_dir():
