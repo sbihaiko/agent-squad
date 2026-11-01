@@ -69,7 +69,7 @@ def test_the_monitor_draws_gauges_tiles_and_the_spec_bar(hub):
     """, routes=_routes(hub))
     assert out["shown"], "the Monitor is the default for a new visitor"
     assert out["igs"].count("<svg") == 3 and 'stroke="hsl(' in out["igs"] and "ldred" in out["igs"]
-    for k in ("Gate", "Loop", "Landed", "took 2m07s · avg 2m49s", "https://github.com/x/y/pull/73"):
+    for k in ("Gate", "Loop", "Landed", "took 2m07s · avg 2m49s", f"https://github.com/{hub.REPO}/pull/73"):
         assert k in out["ian"], k
     assert "Specs" in out["ispec"] and "role=progressbar" in out["ispec"]
     assert out["sum"] == "ON · 1 fail"
