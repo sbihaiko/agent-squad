@@ -302,6 +302,9 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 #5aa9ff}
 <button data-tab="terminals">Terminals</button>
 <button data-tab="more">More</button>
 </nav>
+<!-- The session overlay (#898) sits above the tab bar; the page script stays the last one. -->
+<style>:root{--sq-ov-bottom:calc(72px + env(safe-area-inset-bottom))}</style>
+<!--OVERLAY-->
 <script>
 /*GESTURE*/
 /*MOVE*/

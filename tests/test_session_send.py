@@ -446,9 +446,11 @@ def test_the_project_route_lists_two_sessions_in_the_checkout_so_the_owner_picks
 
 
 def test_over_the_tailnet_with_send_off_the_project_route_names_the_setting(home, tmp_path, hub):
-    h = hub()
-    _, out = get_json(h.port, "/api/sessions/project", host=TAILNET, login=ANA)
+    _, out = get_json(hub().port, "/api/sessions/project", host=TAILNET, login=ANA)
     assert out["send"] is False and "SQUAD_TAILNET_TERMINALS_SEND" in out["why"]
+
+
+def test_over_the_tailnet_with_send_on_the_project_route_lets_the_owner_send(home, tmp_path, hub):
     _, on = get_json(hub(terminals_send=True).port, "/api/sessions/project", host=TAILNET, login=ANA)
     assert on["send"] is True and on["why"] == ""
 

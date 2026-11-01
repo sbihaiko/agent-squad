@@ -4914,7 +4914,7 @@ endedPoll();setInterval(endedPoll,30000);
 setTab(location.hash==="#set"?"set":TABS[ls.tab]?ls.tab:"board");   // the phone menu links here with #set (#913)
 let ver=null;setInterval(async()=>{try{const v=(await (await fetch("/api/version")).json()).v;if(ver===null)ver=v;else if(v!==ver)location.reload()}catch(e){}},3000);
 </script>"""
-PAGE = PAGE.replace("/*WEB_TOKENS*/", WEB_TOKENS)
+PAGE = PAGE.replace("/*WEB_TOKENS*/", WEB_TOKENS) + "\n<!--OVERLAY-->"
 SWITCHER_JS = (pathlib.Path(__file__).resolve().parent / "hub-switcher.js").read_text()   # the project switcher, both pages (#876)
 PAGE = PAGE.replace("/*SWITCHER_JS*/", SWITCHER_JS)
 BOARD_FILTER_JS = (pathlib.Path(__file__).resolve().parent / "board-filter.js").read_text()
@@ -5706,6 +5706,33 @@ def conversation_payload(query):
     return sessions.conversation(os.environ.get("SG_PROFILE", ""), (q.get("sid") or [""])[0], int(before) if before.isdigit() else None,
                                  profiles_of=profiles_of_cwd)
 
+SEND_SETTING = "SQUAD_TAILNET_TERMINALS_SEND"
+def send_rule(a):
+    """(may this request send to a session, why not): loopback always sends; the tailnet sends only with its grant (ADR-0152 rule 9)."""
+    if not a.tailnet: return True, ""
+    if tailnet_block().get("terminals_send") is True: return True, ""
+    return False, f"Sending from the tailnet is off. The owner sets {SEND_SETTING} (tailnet.terminals_send) to send."
+
+def project_payload(a):
+    """What /api/sessions/project serves (#898): the sessions in this profile's checkout and the send rule for this request."""
+    ok, why = send_rule(a)
+    return {"sessions": sessions.project_sessions(os.environ.get("SG_PROFILE", ""), CHECKOUT, profiles_of=profiles_of_cwd), "send": ok, "why": why}
+
+# The session overlay (#898): one source, hub-overlay.js, on every page the hub serves. Each page names where its session
+# routes are: the hub and mobile pages a quoted path the mux gives the profile prefix, a run dashboard its own path up to
+# /dash/, which the mux never rewrites.
+OVERLAY_JS = (pathlib.Path(__file__).resolve().parent / "hub-overlay.js").read_text()
+OVERLAY_HUB = 'async()=>[{label:"",api:"/api/sessions"}]'
+OVERLAY_DASH = 'async()=>[{label:"",api:location.pathname.split("/dash/")[0]+"/api"+"/sessions"}]'
+def overlay_tag(sources):
+    return f"<script>window.SQUAD_OV_SOURCES={sources};\n{OVERLAY_JS}</script>"
+
+def with_overlay(body, dash=False):
+    """A page with the overlay before its closing body tag, or at its end when it has none."""
+    tag = overlay_tag(OVERLAY_DASH if dash else OVERLAY_HUB).encode()
+    i = body.rfind(b"</body>")
+    return body[:i] + tag + body[i:] if i >= 0 else body + tag
+
 MOBILE_CSP = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self'"
 
 GESTURE_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-gesture.js").read_text()
@@ -5721,7 +5748,7 @@ INST_CSS = re.search(r"^/\* INST-CSS\{ \*/$.*?^/\* \}INST-CSS \*/$", PAGE, re.M 
 INST_JS = "\n".join([re.search(r"^const LOAD_ERR=.*$", PAGE, re.M).group(0),
                      *re.findall(r"^function ld(?:Num|Round|Cell|Cells)\(.*$", PAGE, re.M),
                      re.search(r"^// INST\{.*?^// \}INST$", PAGE, re.M | re.S).group(0)]).replace("__LOADERR__", str(LOAD_ERR_PCT)).replace("__REPO__", REPO)
-MOBILE_PAGE = (pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text().replace("<!--INST_CARD-->", INST_CARD).replace("/*INST_CSS*/", INST_CSS).replace("/*INST_JS*/", INST_JS).replace("/*SWITCHER_JS*/", SWITCHER_JS).replace("/*GESTURE*/", GESTURE_JS).replace("/*MOVE*/", MOVE_JS).replace("/*RUN*/", RUN_JS).replace("/*BOARD_FILTER*/", BOARD_FILTER_JS).replace("/*WEB_TOKENS*/", WEB_TOKENS).replace("/*CARD_RULES*/", CARD_RULES_JS)
+MOBILE_PAGE = (pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text().replace("<!--OVERLAY-->", overlay_tag(OVERLAY_HUB)).replace("<!--INST_CARD-->", INST_CARD).replace("/*INST_CSS*/", INST_CSS).replace("/*INST_JS*/", INST_JS).replace("/*SWITCHER_JS*/", SWITCHER_JS).replace("/*GESTURE*/", GESTURE_JS).replace("/*MOVE*/", MOVE_JS).replace("/*RUN*/", RUN_JS).replace("/*BOARD_FILTER*/", BOARD_FILTER_JS).replace("/*WEB_TOKENS*/", WEB_TOKENS).replace("/*CARD_RULES*/", CARD_RULES_JS)
 MOBILE_SHELL = ["/mobile/", "/mobile/manifest.webmanifest", "/mobile/icon.svg"]
 SW_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-sw.js").read_text().replace("/*SHELL*/[]", json.dumps(MOBILE_SHELL))
 MANIFEST_JSON = json.dumps({"id": "/mobile/", "name": f"Squad hub {REPO}", "short_name": "Hub", "start_url": "/mobile/", "scope": "/mobile/", "display": "standalone", "background_color": "#0f1115", "theme_color": "#0f1115", "icons": [{"src": "/mobile/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}]}).encode()
@@ -5744,7 +5771,7 @@ def served_page(login=""):
     """The page as the hub serves it, every placeholder substituted. The model-id shape replaces its quoted placeholder:
     json.dumps brings its own quotes, and a second pair is a syntax error that empties the page."""
     who = f"signed in as {html.escape(login)}" if login else ""
-    return PAGE.replace("__WHO__", who).replace("__REPO__", REPO).replace("__CAPS__", json.dumps(loop_caps())).replace("__LOADMS__", str(int(LOAD_SAMPLE_SECS * 1000))).replace("__LOADERR__", str(LOAD_ERR_PCT))
+    return PAGE.replace("__WHO__", who).replace("__REPO__", REPO).replace("__CAPS__", json.dumps(loop_caps())).replace("__LOADMS__", str(int(LOAD_SAMPLE_SECS * 1000))).replace("__LOADERR__", str(LOAD_ERR_PCT)).replace("<!--OVERLAY-->", overlay_tag(OVERLAY_HUB))
 
 
 def own_host(h):
@@ -5872,11 +5899,15 @@ class H(BaseHTTPRequestHandler):
         except (OSError, http.client.HTTPException):
             up.close(); msg = b"dashboard unreachable\n"
             self.send_response(502); self.send_header("Content-Length", str(len(msg))); self.end_headers(); self.wfile.write(msg); return
+        page = method == "GET" and target[1] == "/" and r.status == 200 and "text/html" in (r.getheader("Content-Type") or "")
         try:
+            data = with_overlay(r.read(), dash=True) if page else None   # the run's page gains the session overlay (#898); a stream is never held
             self.send_response(r.status)
             for k, v in r.getheaders():
-                if k.lower() in DASH_REPLY_HEADERS: self.send_header(k, v)
+                if k.lower() in DASH_REPLY_HEADERS and not (data is not None and k.lower() == "content-length"): self.send_header(k, v)
+            if data is not None: self.send_header("Content-Length", str(len(data)))
             self.send_header("Connection", "close"); self.end_headers(); self.close_connection = True
+            if data is not None: self.wfile.write(data); return
             while chunk := r.read1(65536):
                 self.wfile.write(chunk); self.wfile.flush()
         except (OSError, http.client.HTTPException): pass
@@ -5924,6 +5955,7 @@ class H(BaseHTTPRequestHandler):
             out = session_send.status(os.environ.get("SG_PROFILE", ""), (q.get("sid") or [""])[0], (q.get("client_id") or [""])[0], profiles_of=profiles_of_cwd, root=STATE)
             body, ct = json.dumps(out).encode(), "application/json"
         elif self.path.split("?", 1)[0] == "/api/loop": body, ct = json.dumps(loop_view(a)).encode(), "application/json"
+        elif self.path.split("?", 1)[0] == "/api/sessions/project": body, ct = json.dumps(project_payload(a)).encode(), "application/json"
         elif self.path.startswith("/api/sessions/conversation"):
             page = conversation_payload(self.path.partition("?")[2])
             if page is None: return self.not_found()
@@ -5947,13 +5979,14 @@ class H(BaseHTTPRequestHandler):
         data = json.dumps(out).encode(); self.send_response(code); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
 
     def send_to_session(self, a):
-        """The phone's message to a live session (#834): a tailnet login the profile allows, the tailnet Origin, a JSON body, and the grant."""
+        """A message to a live session (#834, #898): a JSON body, and from loopback the hub's own Origin, from the tailnet an
+        allowed login, the tailnet Origin and the grant (ADR-0152 rule 9)."""
         length = self.headers.get("Content-Length") or "0"
         raw = self.rfile.read(min(int(length), 1 << 20)) if length.isdigit() else b""
         if not a.allowed: return self.refuse(a.reason)
         tn = tailnet_block()
-        if not (a.tailnet and tn.get("terminals_send") is True and (self.headers.get("Origin") or "") == f"https://{tn.get('host')}"
-                and "json" in (self.headers.get("Content-Type") or "")): return self.refuse("forbidden")
+        origin_ok = (self.headers.get("Origin") or "") == f"https://{tn.get('host')}" if a.tailnet else own_origin(self)
+        if not (send_rule(a)[0] and origin_ok and "json" in (self.headers.get("Content-Type") or "")): return self.refuse("forbidden")
         try: body = json.loads(raw)
         except ValueError: body = None
         if not isinstance(body, dict) or set(body) != {"sid", "text", "client_id"}:

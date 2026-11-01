@@ -146,7 +146,7 @@ def root_page(apps, title, note=None):
         rows.append(f'<li><a href="/{slug}"><b>{slug}</b></a> <span class="repo">{repo}</span> {badge}{runs}</li>')
     return (f'<!doctype html><meta charset=utf-8><title>squad hub</title><style>{WEB_TOKENS}{CSS}</style><body>'
             f'<h1>{html.escape(title)}</h1>{note or ""}<ul id="repos">{"".join(rows) or "<li>no profile known</li>"}</ul>'
-            f'<script>{INDEX_JS}</script>').encode()
+            f'<script>{INDEX_JS}</script>{OVERLAY}').encode()
 
 
 # The index repaints its list from /api/hub every 10 s, so a profile added or gone and the live counts show with no reload
@@ -164,6 +164,13 @@ function paint(h){
 async function poll(){try{const r=await fetch("/api/hub",{cache:"no-store"});if(r.ok)paint(await r.json());}catch(e){}}
 setInterval(poll,10000);
 """
+
+
+# The session overlay (#898) on the index: the one source hub.py serves on every profile page, here over every repository
+# the request may see. Each repository's sessions sit under its own path; with more than one session the owner picks.
+OVERLAY_SOURCES = ('async()=>{const r=await fetch("/api/hub",{cache:"no-store"});const h=await r.json();'
+                   'return h.repos.filter(x=>!x.err).map(x=>({label:x.slug,api:"/"+encodeURIComponent(x.slug)+"/api"+"/sessions"}));}')
+OVERLAY = f'<script>window.SQUAD_OV_SOURCES={OVERLAY_SOURCES};\n{(HERE / "hub-overlay.js").read_text()}</script>'
 
 
 def test_note(slug, apps):

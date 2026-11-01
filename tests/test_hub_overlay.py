@@ -94,7 +94,7 @@ def test_the_button_is_a_red_lens_in_a_metal_ring_named_chat_with_the_ai():
 def test_the_lens_center_moves_by_a_damped_spring_and_never_jumps():
     path = run_js("""(()=>{let s={x:0,y:0,vx:0,vy:0};const xs=[];
       for(let i=0;i<120;i++){s=SQ.springStep(s,{x:4,y:0},1/60);xs.push(s.x);} return xs;})()""")
-    steps = [b - a for a, b in zip([0] + path, path)]
+    steps = [b - a for a, b in zip([0] + path[:-1], path, strict=True)]
     assert max(abs(d) for d in steps) < 1.0
     assert abs(path[-1] - 4) < 0.05
 

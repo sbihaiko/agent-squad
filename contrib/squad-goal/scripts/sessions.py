@@ -187,3 +187,11 @@ def list_sessions(profile, profiles_of=profiles_of):
         groups.setdefault(r["project"], []).append({k: r[k] for k in ("sid", "name", "status", "waiting", "last")})
     return {"waiting": sum(r["waiting"] for r in rows),
             "groups": [{"project": p, "sessions": s} for p, s in sorted(groups.items())]}
+
+def project_sessions(profile, checkout, profiles_of=profiles_of):
+    """The project's sessions (#898): this profile's live sessions whose working directory is the profile's checkout itself,
+    by the one membership rule above. The overlay opens the one it finds, and asks the owner to pick when there are more."""
+    home = os.path.realpath(checkout) if checkout else ""
+    rows = [{"sid": rec["sessionId"], "name": rec["name"], "status": rec["status"]}
+            for rec, _ in live_sessions(profile, profiles_of) if home and os.path.realpath(rec["cwd"]) == home]
+    return sorted(rows, key=lambda r: (r["status"] != "waiting", r["name"], r["sid"]))
