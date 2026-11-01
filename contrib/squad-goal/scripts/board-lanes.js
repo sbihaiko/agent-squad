@@ -7,6 +7,7 @@ const hasLabel=(x,l)=>(x.l||[]).includes(l);
 const plain=t=>String(t==null?"":t).replace(/^\s*\[SPEC(?:\s*#?\d+)?\]\s*/i,"");
 // A cell shows every card it holds: the owner reads the whole lane at once, so no cap and no "+N more" (#891).
 const cellView=rows=>({shown:rows,more:0});
+// <card-rules>: the spec color and wave rules; the mobile page inlines this block alone (#917).
 const laneWaveOf=x=>{const w=(x.l||[]).map(l=>(String(l).match(/^wave:(\d+)$/)||[])[1]).filter(v=>v!==undefined).map(Number);return w.length?Math.min(...w):null};
 const waveKey=x=>{const w=laneWaveOf(x);return w===null?"none":String(w)};
 const specKey=x=>x.pa==null?"none":String(x.pa);
@@ -47,6 +48,7 @@ const specColor=(slots,n)=>n==null||!Number.isFinite(Number(n))?SPEC_GREY:`var(-
 const cardSpec=x=>x.sp?x.n:x.pa;   // a spec card wears its own color
 // The wave chip (#917): text that names the card's wave, never a shade; a card with no wave shows none.
 const waveChip=x=>{const w=laneWaveOf(x);return w===null?"":`<span class=lchip data-k=wave title="wave ${w}">W${w}</span>`};
+// </card-rules>
 // groups: the issue columns in board order, each { name, items }. o: { mode: "spec"|"wave", fw, fs, fk, text, lc, hideDone,
 // closed, hidden }. `text` is the search predicate; progress counts every row, so a search or a filter never moves a bar.
 // Returns { cols, vc, hc, lanes }: vc are the columns drawn, hc the hidden ones with their counts, lanes the shown lanes in order.

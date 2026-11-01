@@ -3678,7 +3678,7 @@ PAGE = r"""<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport 
 /*WEB_TOKENS*/
 :root{--col-w:185px}   /* the docked strip's column geometry: the one place its width is set (#1791); a column holding no cards is not drawn at all, so it reserves none (#1809) */
 /* The mock's palette (#889): one dark theme, brighter text, one more card step. The token block above still floors every size and height. */
-:root{--card:#1c212b;--fg:#e6e8ee;--mute:#b8c0cf;--acc:#7aa2ff;--ok:#5fd38d;--warn:#f2c14e;--bad:#ff6b7f;--s1:#7aa2ff;--s2:#c792ea;--s3:#5fd3c4;--s4:#f2c14e;--s5:#ff8a5c;--s6:#9ccc65;--s7:#f48fb1;--s8:#90a4ae;--sep:#353d4b}
+:root{--card:#1c212b;--fg:#e6e8ee;--mute:#b8c0cf;--acc:#7aa2ff;--ok:#5fd38d;--warn:#f2c14e;--bad:#ff6b7f;--sep:#353d4b}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:var(--fs-body)/1.55 var(--font-ui);display:flex;flex-direction:column;height:100vh}
 #win{flex:1;min-height:0;display:flex;overflow:hidden}
 #side{width:280px;padding:12px;border-right:1px solid #232833;overflow:auto;background:#121519;flex:none}#content{flex:1;min-width:0;overflow:auto}.pane{display:none;padding:12px 16px}.pane.on{display:block}.pane>h2{font-size:var(--fs-min);text-transform:uppercase;letter-spacing:.06em;color:var(--mute);margin:4px 0 8px}
@@ -5584,7 +5584,10 @@ MOBILE_CSP = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src '
 GESTURE_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-gesture.js").read_text()
 MOVE_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-move.js").read_text()
 RUN_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-run.js").read_text()
-MOBILE_PAGE = (pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text().replace("/*SWITCHER_JS*/", SWITCHER_JS).replace("/*GESTURE*/", GESTURE_JS).replace("/*MOVE*/", MOVE_JS).replace("/*RUN*/", RUN_JS).replace("/*BOARD_FILTER*/", BOARD_FILTER_JS).replace("/*WEB_TOKENS*/", WEB_TOKENS)
+# The card rules of the desktop board (#917): spec color and wave, one block of board-lanes.js, so the mobile page holds no
+# rule of its own and never the board's column names (ADR-0137).
+CARD_RULES_JS = re.search(r"// <card-rules>.*?// </card-rules>", (pathlib.Path(__file__).resolve().parent / "board-lanes.js").read_text(), re.S).group(0)
+MOBILE_PAGE = (pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text().replace("/*SWITCHER_JS*/", SWITCHER_JS).replace("/*GESTURE*/", GESTURE_JS).replace("/*MOVE*/", MOVE_JS).replace("/*RUN*/", RUN_JS).replace("/*BOARD_FILTER*/", BOARD_FILTER_JS).replace("/*WEB_TOKENS*/", WEB_TOKENS).replace("/*CARD_RULES*/", CARD_RULES_JS)
 MOBILE_SHELL = ["/mobile/", "/mobile/manifest.webmanifest", "/mobile/icon.svg"]
 SW_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-sw.js").read_text().replace("/*SHELL*/[]", json.dumps(MOBILE_SHELL))
 MANIFEST_JSON = json.dumps({"id": "/mobile/", "name": f"Squad hub {REPO}", "short_name": "Hub", "start_url": "/mobile/", "scope": "/mobile/", "display": "standalone", "background_color": "#0f1115", "theme_color": "#0f1115", "icons": [{"src": "/mobile/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}]}).encode()

@@ -80,9 +80,13 @@ def test_the_spec_lane_header_takes_the_spec_color():
 def test_no_card_carries_the_column_left_border():
     """The card's lines take the spec color or grey; the column color `--cc` never reaches a card border."""
     css = HUB_PY.read_text() + (SCRIPTS / "board-lanes.css").read_text()
-    for rule in re.findall(r"[^{}]*\.it\b[^{}]*\{[^}]*\}", css):
-        sel, body = rule[:rule.index("{")], rule[rule.index("{"):]
-        if not any(re.search(r"\.it(\.[\w-]+|\[[^]]*\]|:[\w-]+)*$", s.strip()) for s in sel.split(",")):
+    parts = re.split(r"([{}])", css)   # one linear pass over the braces: a regex rule match backtracks over the page script
+    for i in range(0, len(parts) - 4, 2):
+        if parts[i + 1] != "{" or parts[i + 3] != "}":
+            continue
+        sel, body = parts[i], parts[i + 2]
+        rule = sel + "{" + body + "}"
+        if ".it" not in sel or len(sel) > 400 or not any(re.search(r"\.it(\.[\w-]+|\[[^]]*\]|:[\w-]+)*$", s.strip()) for s in sel.split(",")):
             continue   # a rule for a part inside the card, not the card itself
         assert not re.search(r"border(-left|-top)?(-color)?:[^;}]*var\(--cc", body), rule.strip()
 
@@ -92,3 +96,35 @@ def test_the_spec_filter_shows_each_spec_color():
     bar = re.search(r"const fillBar=.*?\n.*?\n", page).group(0)
     assert "class=sw" in bar, "the filter options draw no swatch"
     assert re.search(r'fillBar\("fsl",.*specColor\(SLOTS,', page), "the spec filter passes no spec color"
+
+
+TOKENS_CSS = SCRIPTS / "web-tokens.css"
+MOBILE = SCRIPTS / "hub-mobile.html"
+SLOTS8 = [f"--s{i}" for i in range(1, 9)]
+
+
+def test_the_palette_is_one_block_in_the_shared_tokens():
+    """The eight slots live in the shared tokens, so every surface reads one palette; the hub page writes none again."""
+    tokens = TOKENS_CSS.read_text()
+    for s in SLOTS8:
+        assert re.search(re.escape(s) + r":#[0-9a-fA-F]{6}", tokens), f"{s} is not in the shared tokens"
+        assert not re.search(re.escape(s) + r":#", HUB_PY.read_text()), f"hub.py writes {s} a second time"
+
+
+def test_the_mobile_page_carries_the_lane_rules():
+    page = MOBILE.read_text()
+    assert "/*CARD_RULES*/" in page, "the mobile page does not take the card rules"
+    assert re.search(r'MOBILE_PAGE = .*\.replace\("/\*CARD_RULES\*/", CARD_RULES_JS\)', HUB_PY.read_text()), \
+        "the hub does not fill the card rules into the mobile page"
+
+
+def test_a_mobile_card_wears_its_spec_color_and_wave_chip():
+    page = MOBILE.read_text()
+    card = re.search(r"function cardButton\(x, i\) \{.*?\n\}", page, re.S).group(0)
+    assert "specColor(mSlots(), cardSpec(x))" in card, "the mobile card does not set its spec color"
+    assert "laneWaveOf(x)" in card, "the mobile card draws no wave chip from the lane rule"
+    assert re.search(r"\.card\{[^}]*border-top:3px solid var\(--lc", page), "the mobile card has no top line in its color"
+    head = re.search(r"function laneHeader\(l\) \{.*?\n\}", page, re.S).group(0)
+    assert "specColor(mSlots(), l.num)" in head, "the mobile lane header does not take the spec color"
+    lid = re.findall(r"\.lane-h \.lid\{([^}]*)\}", page)
+    assert lid and "color:var(--lc" in lid[-1], "the last lane id rule does not draw the spec color"

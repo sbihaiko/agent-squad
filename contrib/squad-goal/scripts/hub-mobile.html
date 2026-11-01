@@ -46,12 +46,14 @@ h2{font-size:var(--fs-md);margin:6px 0 10px}
 #lfl{position:absolute;z-index:5;top:44px;left:0;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:8px;display:grid;gap:4px;min-width:200px;max-height:60vh;overflow:auto}
 #lfl label{font-size:var(--fs-body);display:flex;align-items:center;gap:6px;min-height:44px}
 #cards{touch-action:pan-y;min-height:50vh;display:flex;flex-direction:column;gap:8px}
-.card{display:block;width:100%;text-align:left;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:10px 12px;font:var(--fs-body) system-ui,sans-serif;min-height:44px}
+.card{display:block;width:100%;text-align:left;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-top:3px solid var(--lc,var(--mute));border-radius:8px;padding:10px 12px;font:var(--fs-body) system-ui,sans-serif;min-height:44px}
 .card .cid{display:block;color:var(--mute);font-size:var(--fs-min);margin-bottom:2px}
+.card .lchip{display:inline-block;margin-left:6px;padding:0 6px;border:1px solid var(--line);border-radius:9px;font-size:var(--fs-min);color:var(--mute)}
+.card .lchip[data-k=spec]{color:var(--lc,var(--mute));border-color:var(--lc,var(--line))}   /* the spec in its color; the wave is text, never a shade (#917) */
 .empty{color:var(--mute);text-align:center;padding:24px 0}
 .lane-h{display:flex;align-items:center;gap:8px;min-height:44px;padding:0 4px;color:var(--mute);font-size:var(--fs-body);cursor:pointer;border-bottom:1px solid var(--line)}
 .lane-h .tw{width:14px;color:var(--mute)}
-.lane-h .lid{color:var(--mute);font-size:var(--fs-min)}
+.lane-h .lid{color:var(--lc,var(--mute));font-size:var(--fs-min)}
 .lane-h .ltt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg)}
 .lane-h .pc{color:var(--mute);font-size:var(--fs-min)}
 /* The ticket sheet takes about 60% of the screen (#919), so the card it names stays visible above it. */
@@ -285,6 +287,7 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 #5aa9ff}
 /*MOVE*/
 /*RUN*/
 /*BOARD_FILTER*/
+/*CARD_RULES*/
 const $ = id => document.getElementById(id);
 const base = location.pathname.replace(/mobile\/?$/, "");
 $("to-desktop").href = base;
@@ -391,11 +394,19 @@ let view = { col: 0, cols: 0, card: 0, cards: 0, sheet: false };
 let bo = JSON.parse(localStorage.getItem("squad-mobile-board") || "{}");
 const saveB = () => localStorage.setItem("squad-mobile-board", JSON.stringify(bo));
 const rolesOf = el => { const out = []; for (let e = el; e; e = e.parentElement) if (e.dataset && e.dataset.role) out.push(e.dataset.role); return out; };
+// One palette slot per spec on the whole board (#917), so a spec keeps its color on every column.
+const mSlots = () => specSlots(((board && board.groups) || []).flatMap(g => g.items.map(cardSpec)).filter(n => n != null));
 const columnCards = g => g.items.filter(x => labelOk(bo.labels || [], bo.lmode, x) && spOk(x));
 function cardButton(x, i) {
   const b = document.createElement("button");
   b.className = "card"; b.dataset.role = "card"; b.dataset.i = i; b.dataset.n = x.n;
   const id = document.createElement("span"); id.className = "cid"; id.textContent = "#" + x.n;
+  // The card wears its spec's color and its wave as a text chip (#917); the rules are the desktop board's (board-lanes.js).
+  b.setAttribute("style", "--lc:" + specColor(mSlots(), cardSpec(x)));
+  const chip = (k, text) => { const c = document.createElement("span"); c.className = "lchip"; c.dataset.k = k; c.textContent = text; return c; };
+  if (x.pa != null && !x.sp) id.append(chip("spec", x.pa));
+  const w = laneWaveOf(x);
+  if (w !== null) id.append(chip("wave", "W" + w));
   const t = document.createElement("span"); t.textContent = x.t;
   b.append(id, t);
   // The reason the hub refused this card's move is page state the card reads, so every render after the refusal draws it
@@ -417,6 +428,7 @@ function laneHeader(l) {
   const h = document.createElement("div");
   h.className = "lane-h"; h.dataset.lane = l.id; h.dataset.coll = l.collapsed ? "1" : "0";
   h.setAttribute("role", "button"); h.tabIndex = 0; h.setAttribute("aria-expanded", String(!l.collapsed));
+  if (l.num != null) h.setAttribute("style", "--lc:" + specColor(mSlots(), l.num));   // the lane header takes its spec color (#917)
   const tw = document.createElement("span"); tw.className = "tw"; tw.textContent = l.collapsed ? "▸" : "▾";
   const id = document.createElement("span"); id.className = "lid"; id.textContent = l.sid;
   id.style.color = l.pi == null ? "var(--s8)" : `var(--s${l.pi + 1})`;
