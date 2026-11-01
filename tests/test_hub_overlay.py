@@ -329,3 +329,13 @@ def test_a_screenshot_turn_sits_in_its_own_bubble():
     assert "const role = onlyImage ? \"owner\" : t.role;" in js and "sq-onlyimg" in js
     assert ".sq-onlyimg{max-width:min(86%,280px)}" in js
     assert ".sq-onlyimg .sq-img img{width:100%" in js
+
+def test_an_image_the_owner_sent_joins_the_message_it_came_with():
+    """Owner, 2026-11-01: the harness records an attached image as its own turn, so the picture drew as a second bubble under
+    the message. A turn that is only an image joins the owner turn just above it."""
+    js = OVERLAY.read_text()
+    assert "function stitch(turns)" in js and "said = stitch(shown)" in js
+    assert "stitch(earlier).map(turnNode)" in js
+    body = js[js.index("function stitch(turns) {"):js.index("function feed(turns) {")]
+    assert 'prev.role === "owner"' in body and "IMG_ONLY.test(String(prev.text" in body
+    assert 'out[out.length - 1] = { ...prev, text:' in body

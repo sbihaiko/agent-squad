@@ -400,14 +400,27 @@ function turnNode(t) {
   clamp(body, CLAMP[role] || 116);
   return d;
 }
+// An image the owner sent belongs to the message it came with (owner, 2026-11-01): the harness records it as a turn of its
+// own, so it would draw as a second bubble under the first. A turn that is only an image joins the owner turn just above it.
+const IMG_ONLY = /^\s*\[Image: source: [^\]\n]+\]\s*$/;
+function stitch(turns) {
+  const out = [];
+  for (const t of turns || []) {
+    const prev = out[out.length - 1], mine = IMG_ONLY.test(String(t.text || ""));
+    const join = mine && prev && (prev.role === "owner" || IMG_ONLY.test(String(prev.text || "")));
+    if (join) out[out.length - 1] = { ...prev, text: String(prev.text || "").replace(/\s+$/, "") + "\n" + String(t.text) };
+    else out.push(t);
+  }
+  return out;
+}
 function feed(turns) {
-  const { earlier, shown } = SQ.splitEarlier(turns), nodes = [];
+  const { earlier, shown } = SQ.splitEarlier(turns), nodes = [], said = stitch(shown);
   if (earlier.length) {
     const d = document.createElement("details"); d.className = "sq-earlier";
     const s = document.createElement("summary"); s.textContent = "Earlier activity · " + earlier.length + " turns";
-    d.append(s, ...earlier.map(turnNode)); nodes.push(d);
+    d.append(s, ...stitch(earlier).map(turnNode)); nodes.push(d);
   }
-  nodes.push(...shown.map(turnNode));
+  nodes.push(...said.map(turnNode));
   return nodes;
 }
 // The feed stays at its newest line (owner, 2026-11-01): a scroll away from the end stops that, and the bottom is re-pinned
