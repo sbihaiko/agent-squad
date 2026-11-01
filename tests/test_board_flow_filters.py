@@ -1,9 +1,9 @@
-"""The flow history keeps each card's kind, spec and wave, and the cumulative flow and the control chart filter by the bar's values (SPEC 889, #904).
+"""The flow journal keeps each card's kind, spec and wave, and the cumulative flow and the control chart filter by the bar's values (SPEC 889, #904, #1024).
 
-The sample names a card's kind (issue or bug), spec and wave in `cells`. A sample written before that carries no `cells`: it answers no
-spec and no wave, and the chart says so. The bar's values are the keys the board filter reads: a spec's number or `none`,
-a Waves key `spec/wave` (#980), a kind `issue`, `bug` or `pr`, an empty list for all. The board reads every card and
-the page filters it; the two chart routes take the bar's values in their query.
+The journal's sample names a card's kind (issue or bug), spec and wave in `cells`. The bar's values are the keys the board
+filter reads: a spec's number or `none`, a Waves key `spec/wave` (#980), a kind `issue`, `bug` or `pr`, a type `task`,
+`bug` or `spec`, an empty list for all. The board reads every card and the page filters it; the two chart routes take the
+bar's values in their query and answer from the history store's column intervals.
 """
 import importlib.util
 import json
@@ -21,9 +21,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"
 HUB_PY = SCRIPTS / "hub.py"
 FLOW_PY = SCRIPTS / "board_flow_history.py"
-CFD_PY = SCRIPTS / "board_cfd.py"
 OPENED = "2026-10-01T09:00:00Z"
-COLUMNS = ["Todo", "Doing", "Closed"]
 
 
 def _load(name, path):
@@ -46,32 +44,9 @@ def _row(n, st="Todo", pa=None, labels=()):
     return row
 
 
-def _sample(day, cells):
-    """A sample as board_flow_history writes it: the cells, and the counts, frozen and none they add up to."""
-    counts, frozen, none = {}, 0, 0
-    for kind, _spec, _wave, column, fz, n, *_ in cells:
-        if column is None:
-            none += n
-        else:
-            counts.setdefault(kind, {})[column] = counts.get(kind, {}).get(column, 0) + n
-        if fz:
-            frozen += n
-    return {"t": _epoch(day), "counts": counts, "frozen": frozen, "none": none, "cells": [list(c) for c in cells]}
-
-
-def _legacy(day, counts):
-    """A sample written before the change: no cells."""
-    return {"t": _epoch(day), "counts": counts, "frozen": 0, "none": 0}
-
-
 @pytest.fixture(scope="module")
 def flow():
     return _load("board_flow_history_filters", FLOW_PY)
-
-
-@pytest.fixture(scope="module")
-def cfd():
-    return _load("board_cfd_filters", CFD_PY).cfd
 
 
 # -- the sample format -------------------------------------------------------------------------------------------------
@@ -123,95 +98,18 @@ def test_the_spec_and_wave_keys_are_the_values_the_board_filter_offers(flow):
     assert flow.kind_key({"l": []}) == "issue"
 
 
-# -- the cumulative flow's filter --------------------------------------------------------------------------------------
-
-def test_a_spec_filter_keeps_only_that_specs_cards(cfd):
-    samples = [_sample(20, [["issue", "5", "none", "Todo", 0, 2], ["issue", "6", "none", "Todo", 0, 3]])]
-    assert cfd(samples, COLUMNS, spec=["5"])["points"][0]["bands"]["Todo"] == 2
-
-
-def test_a_wave_filter_keeps_only_that_waves_cards(cfd):
-    samples = [_sample(20, [["issue", "none", "4", "Todo", 0, 2], ["issue", "none", "5", "Todo", 0, 3],
-                            ["issue", "7", "4", "Todo", 0, 8]])]
-    assert cfd(samples, COLUMNS, wave=["none/4"])["points"][0]["bands"]["Todo"] == 2, "a Waves key is spec/wave (#980)"
-    assert cfd(samples, COLUMNS, wave=["7/4"])["points"][0]["bands"]["Todo"] == 8
+def _write_history(hub_mod, items, day=20):
+    flow_mod = hub_mod._flow
+    flow_mod.append(flow_mod.history_path(hub_mod.BOARD, hub_mod.REPO), items,
+                    now=datetime(2026, 10, day, 12, tzinfo=UTC).timestamp())
 
 
-def test_a_kind_filter_takes_a_list_of_the_bars_kinds(cfd):
-    samples = [_sample(20, [["issue", "none", "none", "Todo", 0, 2], ["bug", "none", "none", "Todo", 0, 3],
-                            ["pr", "none", "none", "Todo", 0, 5]])]
-    assert cfd(samples, COLUMNS, kind=["bug"])["points"][0]["bands"]["Todo"] == 3
-    assert cfd(samples, COLUMNS, kind=["issue", "bug"])["points"][0]["bands"]["Todo"] == 5
-    assert cfd(samples, COLUMNS, kind=[])["points"][0]["bands"]["Todo"] == 10
+def test_the_flow_history_keeps_each_cards_spec_and_wave(hub, board):
+    items = [_item(hub, 1, hub.COLUMN["unscheduled"], pa=5, labels=["wave:4"])]
+    _write_history(hub, items)
+    line = hub._flow.history_path(hub.BOARD, hub.REPO).read_text().splitlines()[-1]
+    assert ["issue", "5", "4", hub.COLUMN["unscheduled"], 0, 1, "task"] in json.loads(line)["cells"]
 
-
-def test_spec_and_wave_filters_combine_with_and(cfd):
-    samples = [_sample(20, [
-        ["issue", "5", "4", "Todo", 0, 1],
-        ["issue", "5", "none", "Todo", 0, 2],
-        ["issue", "6", "4", "Todo", 0, 4],
-        ["bug", "5", "4", "Todo", 0, 8],
-    ])]
-    assert cfd(samples, COLUMNS, spec=["5"], wave=["5/4"])["points"][0]["bands"]["Todo"] == 9
-    assert cfd(samples, COLUMNS, spec=["5", "6"], wave=["5/4", "6/4"])["points"][0]["bands"]["Todo"] == 13
-    assert cfd(samples, COLUMNS, spec=["5"], wave=["5/4"], kind=["bug"])["points"][0]["bands"]["Todo"] == 8
-
-
-def test_an_empty_filter_list_keeps_every_card(cfd):
-    samples = [_sample(20, [["issue", "5", "4", "Todo", 0, 1], ["issue", "none", "none", "Todo", 0, 6]])]
-    assert cfd(samples, COLUMNS, spec=[], wave=[])["points"][0]["bands"]["Todo"] == 7
-
-
-def test_a_filter_takes_the_frozen_and_no_column_cards_of_the_kept_cards(cfd):
-    samples = [_sample(20, [
-        ["issue", "5", "none", "Todo", 1, 2],
-        ["issue", "6", "none", "Todo", 0, 1],
-        ["issue", "5", "none", None, 0, 1],
-    ])]
-    bands = cfd(samples, COLUMNS, spec=["5"])["points"][0]["bands"]
-    assert bands["Todo"] == 2
-    assert bands["frozen"] == 2
-    assert bands["No column"] == 1
-
-
-def test_the_kind_filter_still_holds_with_cells(cfd):
-    samples = [_sample(20, [["issue", "none", "none", "Todo", 0, 2], ["pr", "none", "none", "Todo", 0, 3]])]
-    assert cfd(samples, COLUMNS, kind="pr")["points"][0]["bands"]["Todo"] == 3
-
-
-def test_a_sample_without_cells_answers_no_spec_and_no_wave(cfd):
-    legacy = [_legacy(20, {"card": {"Todo": 4}})]
-    assert cfd(legacy, COLUMNS, spec=["5"])["points"][0]["bands"]["Todo"] == 0
-    assert cfd(legacy, COLUMNS, wave=["none/none"])["points"][0]["bands"]["Todo"] == 4
-    assert cfd(legacy, COLUMNS, wave=["5/none"])["points"][0]["bands"]["Todo"] == 0
-    assert cfd(legacy, COLUMNS)["points"][0]["bands"]["Todo"] == 4
-
-
-def test_a_sample_without_cells_answers_no_kind(cfd):
-    """Its counts are keyed by the project's Kind field (task, spec, bug), never by the bar's kinds (#904)."""
-    legacy = [_legacy(20, {"task": {"Todo": 4}, "bug": {"Todo": 1}})]
-    for kind in (["issue"], ["bug"], ["pr"], ["issue", "bug", "pr"]):
-        point = cfd(legacy, COLUMNS, kind=kind)["points"][0]
-        assert point["bands"]["Todo"] == 0, kind
-        assert point["legacy"] is True
-    assert cfd(legacy, COLUMNS, kind=[])["points"][0]["bands"]["Todo"] == 5
-
-
-def test_a_day_read_from_a_sample_without_cells_is_flagged(cfd):
-    samples = [_legacy(20, {"card": {"Todo": 4}}), _sample(21, [["issue", "5", "none", "Todo", 0, 1, "task"]])]
-    points = cfd(samples, COLUMNS)["points"]
-    assert points[0].get("legacy") is True
-    assert not points[1].get("legacy")
-
-
-def test_cells_and_counts_give_the_same_bands_when_nothing_is_filtered(cfd):
-    with_cells = _sample(20, [["issue", "5", "4", "Todo", 1, 2], ["issue", "none", "none", "Doing", 0, 1],
-                              ["issue", "none", "none", None, 0, 3]])
-    without = {k: v for k, v in with_cells.items() if k != "cells"}
-    assert cfd([with_cells], COLUMNS)["points"][0]["bands"] == cfd([without], COLUMNS)["points"][0]["bands"]
-
-
-# -- the hub: the board read takes the bar's values, and the page carries them ---------------------------------------
 
 @pytest.fixture(scope="module")
 def hub(tmp_path_factory):
@@ -249,33 +147,33 @@ def _item(hub_mod, n, st, pa=None, labels=(), closed_at=None, k=None):
     return row
 
 
-def _write_history(hub_mod, items, day=20):
-    flow_mod = hub_mod._flow
-    flow_mod.append(flow_mod.history_path(hub_mod.BOARD, hub_mod.REPO), items,
-                    now=datetime(2026, 10, day, 12, tzinfo=UTC).timestamp())
+def _seed(hub_mod, items):
+    """The board's items, and the history store's record of each: Todo from its opening, Closed at its close (#1024)."""
+    hub_mod.board_cache["items"] = items
+    path = hub_mod._hist.history_path(hub_mod.BOARD, hub_mod.REPO)
+    for i in items:
+        events = [{"t": OPENED, "type": "added"}, {"t": OPENED, "type": "status", "status": "Todo"}]
+        if i["c"]:
+            events += [{"t": i["c"], "type": "status", "status": "Closed"}, {"t": i["c"], "type": "closed"}]
+        hub_mod._hist.record_issue(path, i["n"], OPENED, OPENED, events, True, now=time.time())
 
 
-def _backlog_counts(cfd):
-    return {b["name"]: b for b in cfd["cfd"]["bands"]}
+def _last_counts(payload):
+    """Each band's count on the last day; a filter that keeps no card has no day, so its count is 0."""
+    return {b["name"]: (b["count"][-1] if b["count"] else 0) for b in payload["cfd"]["bands"]}
 
 
-def test_the_flow_history_keeps_each_cards_spec_and_wave(hub, board):
-    items = [_item(hub, 1, hub.COLUMN["unscheduled"], pa=5, labels=["wave:4"])]
-    _write_history(hub, items)
-    line = hub._flow.history_path(hub.BOARD, hub.REPO).read_text().splitlines()[-1]
-    assert ["issue", "5", "4", hub.COLUMN["unscheduled"], 0, 1, "task"] in json.loads(line)["cells"]
-
+# -- the cumulative flow's filter --------------------------------------------------------------------------------------
 
 def test_the_chart_route_filters_the_cumulative_flow_by_the_bar_values(hub, board):
-    backlog = hub.COLUMN["unscheduled"]
+    backlog = hub.COLUMN["issue_todo"]
     items = [_item(hub, 1, backlog, pa=5, labels=["wave:4"]),
              _item(hub, 2, backlog, labels=["bug"]),
              _item(hub, 3, backlog, pa=6, labels=["wave:4", "bug"])]
-    hub.board_cache["items"] = items
-    _write_history(hub, items)
+    _seed(hub, items)
 
     def last(query):
-        return _backlog_counts(hub.flow_cfd(*hub.board_filters(query)))[backlog]["count"][-1]
+        return _last_counts(hub.flow_cfd(*hub.board_filters(query)))[backlog]
 
     assert last("ty=task") == 1, "the default type is tasks: only the first card"
     assert last("ty=bug") == 2
@@ -291,20 +189,19 @@ def test_the_chart_route_filters_the_cumulative_flow_by_the_bar_values(hub, boar
 
 def _kind_items(hub):
     """Cards whose project Kind field is set, as the live board holds them: Task and Spec, labelled bug and not."""
-    backlog = hub.COLUMN["unscheduled"]
+    backlog = hub.COLUMN["issue_todo"]
     return [_item(hub, 1, backlog, k="task"), _item(hub, 2, backlog, k="spec"),
             _item(hub, 3, backlog, k="task", labels=["bug"]), _item(hub, 4, backlog, k="spec", labels=["loop-bug"]),
             _item(hub, 5, backlog, k="bug")]
 
 
 def test_the_kind_field_never_names_the_charts_kind(hub, board):
-    backlog = hub.COLUMN["unscheduled"]
+    backlog = hub.COLUMN["issue_todo"]
     items = _kind_items(hub)
-    hub.board_cache["items"] = items
-    _write_history(hub, items)
+    _seed(hub, items)
 
     def last(query):
-        return _backlog_counts(hub.flow_cfd(*hub.board_filters(query)))[backlog]["count"][-1]
+        return _last_counts(hub.flow_cfd(*hub.board_filters(query)))[backlog]
 
     assert last("ty=task") == 3
     assert last("ty=task&fk=issue") == 3, "a Task or Spec card with no bug label is an issue, as on the board"
@@ -331,7 +228,7 @@ def test_the_control_chart_takes_the_same_filters(hub, board):
     closed = hub.COLUMN["issue_closed"]
     items = [_item(hub, 1, closed, pa=5, labels=["wave:2"], closed_at="2026-10-02T15:00:00Z"),
              _item(hub, 2, closed, pa=6, labels=["bug"], closed_at="2026-10-03T15:00:00Z")]
-    hub.board_cache["items"] = items
+    _seed(hub, items)
 
     def dots(query):
         return sorted(d["n"] for d in hub.flow_lead(*hub.board_filters(query))["lead"]["control"]["jira"]["all"]["dots"])
@@ -347,8 +244,8 @@ def test_the_control_chart_takes_the_same_filters(hub, board):
 
 def test_the_drag_zoom_takes_the_same_filters(hub, board):
     closed = hub.COLUMN["issue_closed"]
-    hub.board_cache["items"] = [_item(hub, 1, closed, pa=5, closed_at="2026-10-02T15:00:00Z"),
-                                _item(hub, 2, closed, labels=["bug"], closed_at="2026-10-03T15:00:00Z")]
+    _seed(hub, [_item(hub, 1, closed, pa=5, closed_at="2026-10-02T15:00:00Z"),
+                _item(hub, 2, closed, labels=["bug"], closed_at="2026-10-03T15:00:00Z")])
     span = "from=2026-09-01T00:00:00&to=2026-11-01T00:00:00"
     assert [d["n"] for d in hub.lead_zoom(span)["dots"]] == [1]
     assert [d["n"] for d in hub.lead_zoom(span + "&ty=bug&fk=bug")["dots"]] == [2]
@@ -409,10 +306,9 @@ def _bar(fw="", fs="", fk="", ty="task"):
 
 
 def test_a_kind_pick_redraws_the_open_cumulative_flow_with_the_filtered_route(hub, board):
-    backlog = hub.COLUMN["unscheduled"]
+    backlog = hub.COLUMN["issue_todo"]
     items = [_item(hub, 1, backlog), _item(hub, 2, backlog, labels=["bug"]), _item(hub, 3, backlog, labels=["bug"])]
-    hub.board_cache["items"] = items
-    _write_history(hub, items)
+    _seed(hub, items)
     answers = {f"/api/chart/cfd?{q}": hub.flow_cfd(*hub.board_filters(q)) for q in (_bar(), _bar(fk="bug"))}
     out = _page_harness(hub, answers, """
 pickFilter("fkl","fk");
@@ -421,14 +317,14 @@ EL["#fkl"].handlers.change({target:{value:"bug",checked:true}});await settle();a
 console.log(JSON.stringify({fetched:FETCHED,bo,last:DRAWN[DRAWN.length-1],saved:SAVED.length,polled:POLLED.length}));""")
     assert out["fetched"] == [f"/api/chart/cfd?{_bar()}", f"/api/chart/cfd?{_bar(fk='bug')}"]
     assert out["bo"]["fk"] == ["bug"] and out["saved"] == 1 and out["polled"] == 1, "the pick is stored as the board's own"
-    count = {b["name"]: b for b in out["last"]["cfd"]["bands"]}[backlog]["count"][-1]
+    count = _last_counts(out["last"])[backlog]
     assert count == 0, "the open chart is redrawn from the filtered route: no task is a bug"
 
 
 def test_a_spec_clear_redraws_the_open_control_chart_and_its_chosen_span(hub, board):
     closed = hub.COLUMN["issue_closed"]
-    hub.board_cache["items"] = [_item(hub, 1, closed, pa=5, closed_at="2026-10-02T15:00:00Z"),
-                                _item(hub, 2, closed, closed_at="2026-10-03T15:00:00Z")]
+    _seed(hub, [_item(hub, 1, closed, pa=5, closed_at="2026-10-02T15:00:00Z"),
+                _item(hub, 2, closed, closed_at="2026-10-03T15:00:00Z")])
     q5, qall = _bar(fs="5"), _bar()
     span = "&scale=jira&a=Todo&b="
     answers = {f"/api/chart/lead?{q5}": hub.flow_lead(*hub.board_filters(q5)),
@@ -447,10 +343,9 @@ console.log(JSON.stringify({fetched:FETCHED,fs:bo.fs,zc:LT.zc,lead:FLOWD.lead}))
 
 
 def test_an_answer_for_an_old_bar_value_is_never_drawn(hub, board):
-    backlog = hub.COLUMN["unscheduled"]
+    backlog = hub.COLUMN["issue_todo"]
     items = [_item(hub, 1, backlog), _item(hub, 2, backlog, labels=["bug"])]
-    hub.board_cache["items"] = items
-    _write_history(hub, items)
+    _seed(hub, items)
     answers = {f"/api/chart/cfd?{q}": hub.flow_cfd(*hub.board_filters(q)) for q in (_bar(), _bar(fk="bug"))}
     out = _page_harness(hub, answers, """
 pickFilter("fkl","fk");
@@ -458,7 +353,7 @@ const first=flowOpen("cfd");
 EL["#fkl"].handlers.change({target:{value:"bug",checked:true}});
 await first;await settle();await settle();
 console.log(JSON.stringify({last:DRAWN[DRAWN.length-1]}));""")
-    count = {b["name"]: b for b in out["last"]["cfd"]["bands"]}[backlog]["count"][-1]
+    count = _last_counts(out["last"])[backlog]
     assert count == 0, "the answer for the picked kind is drawn, not the one read before the pick"
 
 
@@ -491,22 +386,6 @@ def _flow_block(hub):
     return m.group(1)
 
 
-@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-def test_the_chart_says_which_days_answer_no_spec_and_no_wave(hub, board, tmp_path):
-    history = hub._flow.history_path(hub.BOARD, hub.REPO)
-    history.write_text(json.dumps({"t": _epoch(20), "counts": {"issue": {hub.COLUMN["unscheduled"]: 2}},
-                                   "frozen": 0, "none": 0}) + "\n")
-    cfd = hub.flow_cfd()["cfd"]
-    block = _flow_block(hub).split("const drawFlow")[0]
-    drawing = "\n".join(["const COLORS={},COLNAME={};", "const esc=s=>String(s);", "const ls={};", block,
-                         f"process.stdout.write(flowCFD({json.dumps(cfd)}));"])
-    path = tmp_path / "flow-cfd-legacy.js"
-    path.write_text(drawing)
-    result = subprocess.run(["node", str(path)], capture_output=True, text=True)
-    assert result.returncode == 0, result.stderr
-    assert "answer none of these" in result.stdout
-
-
 # -- the Type filter: specs, tasks or bugs (#985) ------------------------------------------------------------------------
 
 def test_a_card_is_a_spec_a_bug_or_a_task_by_its_labels(flow):
@@ -522,23 +401,6 @@ def test_a_sample_names_each_cards_type_in_its_cell(flow):
     assert ["issue", "none", "none", "Todo", 0, 1, "spec"] in s["cells"]
     assert ["bug", "none", "none", "Todo", 0, 1, "bug"] in s["cells"]
     assert ["issue", "none", "none", "Todo", 0, 1, "task"] in s["cells"]
-
-
-def test_a_type_filter_keeps_only_that_types_cards(cfd):
-    s = _sample(20, [("issue", "none", "none", "Todo", 0, 2, "task"),
-                     ("issue", "none", "none", "Todo", 0, 3, "bug"),
-                     ("issue", "5", "none", "Doing", 0, 4, "spec")])
-    assert cfd([s], COLUMNS, ty=["task"])["points"][0]["bands"]["Todo"] == 2
-    assert cfd([s], COLUMNS, ty=["bug"])["points"][0]["bands"]["Todo"] == 3
-    assert cfd([s], COLUMNS, ty=["spec"])["points"][0]["bands"]["Doing"] == 4
-
-
-def test_a_sample_whose_cells_predate_the_type_answers_no_type(cfd):
-    old = {"t": _epoch(20), "counts": {"issue": {"Todo": 2}}, "frozen": 0, "none": 0,
-           "cells": [["issue", "none", "none", "Todo", 0, 2]]}
-    assert cfd([old], COLUMNS, ty=["task"])["points"][0]["bands"]["Todo"] == 0
-    assert cfd([old], COLUMNS)["points"][0]["bands"]["Todo"] == 2
-    assert cfd([old], COLUMNS, ty=["task"])["points"][0]["legacy"] is True
 
 
 def test_the_bar_names_a_type_and_the_default_is_tasks(hub):
@@ -565,13 +427,13 @@ def _dots(chart):
 
 
 def test_each_type_selects_only_its_issues_in_the_control_chart(hub, board):
-    hub.board_cache["items"] = _typed_items(hub)
+    _seed(hub, _typed_items(hub))
     for ty, expected in (("task", [1, 2, 3]), ("bug", [5, 6]), ("spec", [7])):
         assert _dots(hub.flow_lead(ty=ty)["lead"]["control"]["jira"]["all"]) == expected, ty
 
 
 def test_each_statistic_is_computed_over_the_selected_type_only(hub, board):
-    hub.board_cache["items"] = _typed_items(hub)
+    _seed(hub, _typed_items(hub))
     tasks = hub.flow_lead(ty="task")["lead"]
     assert tasks["summary"]["average"]["text"] == "2d" and tasks["summary"]["median"]["text"] == "2d"
     assert tasks["summary"]["p85"]["text"] == "3d"
@@ -589,20 +451,19 @@ def test_each_statistic_is_computed_over_the_selected_type_only(hub, board):
 
 
 def test_the_cumulative_flow_takes_the_type(hub, board):
-    backlog = hub.COLUMN["unscheduled"]
+    backlog = hub.COLUMN["issue_todo"]
     items = [_item(hub, 1, backlog), _item(hub, 2, backlog), _item(hub, 3, backlog, labels=["bug"]),
              _item(hub, 4, backlog, labels=["spec"])]
-    hub.board_cache["items"] = items
-    _write_history(hub, items)
+    _seed(hub, items)
 
     def last(ty):
-        return _backlog_counts(hub.flow_cfd(ty=ty))[backlog]["count"][-1]
+        return _last_counts(hub.flow_cfd(ty=ty))[backlog]
 
     assert [last("task"), last("bug"), last("spec")] == [2, 1, 1]
 
 
 def test_the_drag_zoom_takes_the_type(hub, board):
-    hub.board_cache["items"] = _typed_items(hub)
+    _seed(hub, _typed_items(hub))
     span = "from=2026-09-01T00:00:00&to=2026-11-01T00:00:00"
     assert _dots(hub.lead_zoom(span)) == [1, 2, 3]
     assert _dots(hub.lead_zoom(span + "&ty=bug")) == [5, 6]
@@ -611,7 +472,7 @@ def test_the_drag_zoom_takes_the_type(hub, board):
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_the_header_names_the_type_the_chart_holds(hub, board):
-    hub.board_cache["items"] = _typed_items(hub)
+    _seed(hub, _typed_items(hub))
     lead = hub.flow_lead(ty="task")["lead"]
     block = _flow_block(hub).split("const drawFlow")[0]
     script = "\n".join(["const COLORS={},COLNAME={};", "const esc=s=>String(s);", "const ls={};", block,
@@ -646,7 +507,7 @@ def test_the_type_and_the_chart_settings_are_restored_on_load(hub):
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_a_type_pick_saves_the_choice_and_redraws_the_open_lead_chart(hub, board):
-    hub.board_cache["items"] = _typed_items(hub)
+    _seed(hub, _typed_items(hub))
     answers = {f"/api/chart/lead?{_bar(ty=ty)}": hub.flow_lead(ty=ty) for ty in ("task", "bug")}
     onchange = re.search(r'\$\("#flowb"\)\.onchange=.*?(?=\$\("#flowb"\)\.onclick=)', hub.PAGE, re.S).group(0)
     out = _page_harness(hub, answers, """

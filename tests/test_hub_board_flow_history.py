@@ -406,50 +406,6 @@ def test_flow_skip_lines_older_than_thirty_days_keep_one_per_utc_day(tmp_path):
     assert kept == [int(d0 + 5 * HOUR), int(d0 + DAY + 3 * HOUR), int(recent)], "the last skip of each old UTC day stays; recent ones stay raw"
 
 
-def test_the_cfd_of_a_history_with_a_skipped_read_has_no_tooth(board):
-    flow = _load_flow()
-    cfd = _load("board_cfd_tooth", SCRIPTS / "board_cfd.py").cfd
-    path = _flow(board)
-    day = datetime(2026, 10, 20, 12, tzinfo=UTC).timestamp()
-    flow.append(path, _rows(9), now=day)
-    flow.append(path, _rows(1), now=day + DAY, incomplete="relations read incomplete")
-    flow.append(path, _rows(9, column="Doing"), now=day + 2 * DAY)
-    result = cfd(flow.samples(path), ["Todo", "Doing", "Closed"], skips=flow.skips(path))
-    assert [p["wip"] for p in result["points"]] == [9, 9]
-    assert [p["day"] for p in result["points"]] == ["2026-10-20", "2026-10-22"]
-    assert result["gaps"] == ["2026-10-21"], "the skipped day is a break in the data, not a tooth"
-
-
-def test_a_quiet_day_between_two_whole_reads_is_a_point_not_a_gap(tmp_path):
-    """The first whole read of a day writes a sample even when its counts did not move: the CFD must not read that day as a gap."""
-    flow = _load_flow()
-    cfd = _load("board_cfd_quiet", SCRIPTS / "board_cfd.py").cfd
-    path = tmp_path / "hub-flow.x_y.jsonl"
-    day = datetime(2026, 10, 20, 12, tzinfo=UTC).timestamp()
-    flow.append(path, _rows(9), now=day)
-    assert flow.append(path, _rows(9), now=day + DAY) is not None, "the first unchanged read of a day writes one sample"
-    flow.append(path, _rows(9, column="Doing"), now=day + 2 * DAY)
-    result = cfd(flow.samples(path), ["Todo", "Doing", "Closed"], skips=flow.skips(path))
-    assert [p["day"] for p in result["points"]] == ["2026-10-20", "2026-10-21", "2026-10-22"]
-    assert [p["wip"] for p in result["points"]] == [9, 9, 9]
-    assert result["gaps"] == []
-
-
-def test_a_day_with_a_skip_and_a_whole_unchanged_read_is_a_point(tmp_path):
-    flow = _load_flow()
-    cfd = _load("board_cfd_quiet_skip", SCRIPTS / "board_cfd.py").cfd
-    path = tmp_path / "hub-flow.x_y.jsonl"
-    day = datetime(2026, 10, 20, 12, tzinfo=UTC).timestamp()
-    flow.append(path, _rows(9), now=day)
-    assert flow.append(path, _rows(9), now=day + DAY, incomplete="relations read incomplete") is None
-    assert flow.append(path, _rows(9), now=day + DAY + HOUR) is not None, "the day's first whole read writes its sample"
-    assert flow.append(path, _rows(9), now=day + DAY + 2 * HOUR) is None, "a second unchanged read that day writes nothing"
-    flow.append(path, _rows(9, column="Doing"), now=day + 2 * DAY)
-    result = cfd(flow.samples(path), ["Todo", "Doing", "Closed"], skips=flow.skips(path))
-    assert [p["day"] for p in result["points"]] == ["2026-10-20", "2026-10-21", "2026-10-22"]
-    assert result["gaps"] == [], "a day with a whole read is a point, even when it also has a skip"
-
-
 def test_a_legacy_file_recreated_by_an_old_hub_is_not_renamed_again_in_this_process(tmp_path):
     flow = _load_flow()
     board = tmp_path / "hub-board.json"
