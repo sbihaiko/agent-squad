@@ -152,7 +152,7 @@ def test_the_usage_row_states_tokens_then_calls_and_invents_no_budget(hub):
 
 def test_the_card_sits_in_the_sidebar_and_the_settings_strip_is_gone(hub):
     page = hub.PAGE
-    side = page[page.index("<div id=side>"):page.index("<div id=content")]
+    side = page[page.index("<aside id=side>"):page.index("<main id=content")]
     assert "<details id=inst class=sp open><summary>Machine &amp; loop<span class=sr id=instsr></span></summary>" in side
     for gone in ("sts", "foot", "ldline", "ldfacts"):
         assert not re.search(rf"id={gone}\b", page), gone
