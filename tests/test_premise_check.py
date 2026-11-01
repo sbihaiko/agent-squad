@@ -941,6 +941,37 @@ def test_a_refutation_that_gh_fails_exits_transient_so_the_loop_retries_it(monke
     assert "transient" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("stderr", ["HTTP 502", "gh: Bad Gateway (HTTP 503)", "dial tcp: connect: connection refused",
+                                    "net/http: TLS handshake timeout", "API rate limit exceeded for user"])
+def test_a_transient_gh_error_on_a_refutation_exits_75(monkeypatch, capsys, stderr):
+    def gh_down(args, **kw):
+        raise subprocess.CalledProcessError(1, args, stderr=stderr)
+
+    monkeypatch.setattr(pc, "_sh", gh_down)
+    assert pc.main(["878", "--refute", PROBE_PREMISE, "--repo", "x/y"]) == pc.EX_TEMPFAIL
+
+
+def test_a_gh_timeout_on_a_refutation_exits_75(monkeypatch, capsys):
+    def gh_slow(args, **kw):
+        raise subprocess.TimeoutExpired(args, 30)
+
+    monkeypatch.setattr(pc, "_sh", gh_slow)
+    assert pc.main(["878", "--refute", PROBE_PREMISE, "--repo", "x/y"]) == pc.EX_TEMPFAIL
+
+
+@pytest.mark.parametrize("stderr", ["gh: Not Found (HTTP 404)", "gh: Resource not accessible by integration (HTTP 403)",
+                                    "gh: Validation Failed (HTTP 422)"])
+def test_a_gh_4xx_on_a_refutation_exits_2_so_the_loop_never_retries_it(monkeypatch, capsys, stderr):
+    """A 4xx never changes on a retry, so it takes the PROBE-REFUSED path, never a retry forever (ADR-0134)."""
+    def gh_refuses(args, **kw):
+        raise subprocess.CalledProcessError(1, args, stderr=stderr)
+
+    monkeypatch.setattr(pc, "_sh", gh_refuses)
+    assert pc.main(["878", "--refute", PROBE_PREMISE, "--repo", "x/y"]) == 2
+    err = capsys.readouterr().err
+    assert "transient" not in err and stderr in err
+
+
 def test_a_refutation_the_check_refuses_exits_2_so_the_loop_never_retries_it(monkeypatch, tmp_path, capsys):
     gh = StubGithub()
     gh.say(probe_comment(tmp_path, PROBE), login="squad-loop")

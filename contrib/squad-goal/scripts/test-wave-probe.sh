@@ -20,8 +20,9 @@ n,labels,body=int(sys.argv[1]),[l for l in sys.argv[2].split(",") if l],sys.argv
 node={"number":n,"title":"t","body":body,"state":"OPEN","labels":{"nodes":[{"name":l} for l in labels]}}
 print(json.dumps({"data":{"repository":{f"i{n}":node}}}))' "$@" > "$T/issue-$1.json"; }
 printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/gh.log"\nn=$(printf "%%s" "$*" | sed -n "s/.*issue(number: \\([0-9]*\\)).*/\\1/p")\nif [ -n "$n" ] && [ -f "%s/issue-$n.json" ]; then cat "%s/issue-$n.json"; else printf "{}"; fi\n' "$T" "$T" "$T" > "$T/bin/gh"; chmod +x "$T/bin/gh"
-# verdict <run> <verdict> [reason]: the run's record, as the run writes it.
-verdict() { mkdir -p "$T/co/runs/$1"; printf '{"event":"run_start"}\n{"event":"verdict","verdict":"%s","reasons":["%s"]}\n' "$2" "${3:-}" > "$T/co/runs/$1/record.jsonl"; }
+# verdict <run> <verdict> [reason...]: the run's record, as the run writes it.
+verdict() { mkdir -p "$T/co/runs/$1"; python3 -c 'import json,sys
+print(json.dumps({"event":"run_start"})); print(json.dumps({"event":"verdict","verdict":sys.argv[1],"reasons":sys.argv[2:] or [""]}))' "${@:2}" > "$T/co/runs/$1/record.jsonl"; }
 w() { PATH="$T/bin:$PATH" bash "$T/s/wave.sh" "$@" 2>&1; }
 cnt() { SG_STATE="$T/st" SG_REPO=x/y python3 "$T/s/issue_ledger.py" count "x/y#$1" 2>/dev/null; }
 froze() { /usr/bin/grep -Fqx -- "api -X POST repos/x/y/issues/$1/labels -f labels[]=frozen:owner" "$T/gh.log"; }
@@ -92,6 +93,19 @@ issue 56 probe "$PROBE"
 o=$(SG_PREMISE_CHECK= SG_SQUAD="$T/sq" SG_GATE_PY="$T/host/python" w fail 56 run-red "ended failed: ac-verify:ac_failed")
 [ "$(cat "$T/py.log" 2>/dev/null)" = "squad -m squad.cli premise-check 878 --refute the check comments on the spec --repo x/y" ] \
   && ok "H: premise-check runs on the plugin's interpreter" || ko "H: interpreter calls '$(cat "$T/py.log" 2>/dev/null)': '$o'"
+
+# I: only an unmet acceptance command refutes. A prose command (malformed), a child tree the gate could not find
+# (child_tree_missing, the loop's false red of #862), or a mix of either with ac_failed is no answer from the probe: premise-check
+# is not called, and the run takes the normal fail path (it is counted).
+verdict run-mal failed "ac-verify:malformed:check that the spec reads well"
+verdict run-miss failed "ac-verify:child_tree_missing:git log -1 @wt-58"
+verdict run-mix failed "ac-verify:ac_failed:true" "ac-verify:malformed:prose here"
+for r in mal:58 miss:59 mix:60; do
+  : > "$T/pc.log"; n=${r#*:}; issue "$n" probe "$PROBE"
+  o=$(w fail "$n" "run-${r%%:*}" "ended failed: ac-verify")
+  [ "$(pcs)" = 0 ] && [ "$(cnt "$n")" = 1 ] && ! froze "$n" \
+    && ok "I: a ${r%%:*} ac-verify finding refutes nothing and takes the fail path" || ko "I: ${r%%:*}: pc $(pcs), count $(cnt "$n"): '$o'"
+done
 
 exec 2>&3; if /usr/bin/grep -q "command not found" "$T.err"; then ko "stderr: $(cat "$T.err")"; fi; rm -f "$T.err"
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }
