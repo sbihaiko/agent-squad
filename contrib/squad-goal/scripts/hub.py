@@ -3454,8 +3454,12 @@ def chart(name, key, build):
     if hit and hit[0] == key: return hit[1]
     t = time.time()   # the instant the chart reads its data: a cached answer keeps it, however late it is served
     answer = {"t": t, **build()}
-    CHARTS[name] = (key, answer)
+    if not _read_failed(answer): CHARTS[name] = (key, answer)
     return answer
+
+def _read_failed(answer):
+    """True when a chart answer names a failed read, so the next request reads anew (#1072)."""
+    return "err" in answer or "err" in (answer.get("burn") or {})
 
 def _file_key(path):
     try: st = path.stat(); return (str(path), st.st_mtime_ns, st.st_size)
@@ -3544,11 +3548,17 @@ def _burnup_payload(spec, path):
 
 def spec_children(spec):
     """The spec's sub-issues on the platform relation the board and the spec card read, in this repository: (children, None),
-    or (None, the read's reason) when the relation did not answer (#1072)."""
+    or (None, the read's reason) when the relation did not answer. One read per board read serves both charts; a failed read
+    is never kept (#1072)."""
+    key = board_cache.get("t")
+    hit = CHARTS.get(f"children-{spec}")
+    if hit and hit[0] == key: return hit[1]
     try: subs, err = sub_issues(spec, REPO)
     except Exception as e: return None, f"sub-issues: {str(e)[:200] or 'the read did not answer'}"
     if err: return None, err
-    return [s for s in subs if isinstance(s, dict) and _repo_of(s.get("repository_url"), REPO) == REPO.lower()], None
+    answer = ([s for s in subs if isinstance(s, dict) and _repo_of(s.get("repository_url"), REPO) == REPO.lower()], None)
+    CHARTS[f"children-{spec}"] = (key, answer)
+    return answer
 
 
 def _with_children(store, spec):
@@ -3558,7 +3568,8 @@ def _with_children(store, spec):
     if err: return None, err
     merged = {n: {"events": list(rec.get("events") or [])} for n, rec in store.items()}
     for child in children:
-        merged.setdefault(child["number"], {"events": []})["events"] += _hist.child_events(child, spec)
+        stored = (store.get(child["number"]) or {}).get("events") or []
+        merged.setdefault(child["number"], {"events": []})["events"] += _hist.child_events(child, spec, stored)
     return merged, None
 
 
