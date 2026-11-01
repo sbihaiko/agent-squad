@@ -75,3 +75,41 @@ def test_the_page_offers_start_and_end_selectors_and_sends_them(hub):  # noqa: F
     assert "id=lta" in hub.PAGE and "id=ltb" in hub.PAGE
     assert "&a=" in hub.PAGE and "&b=" in hub.PAGE
     assert hub.flow_lead()["lead"]["columns"] == hub.ORDER
+
+
+def _leave(issue, frm, to, at):
+    return {**_move(issue, to, at), "from": frm}
+
+
+def test_a_card_born_in_todo_enters_todo_at_its_creation(lt):  # noqa: F811
+    """#1012: the record holds no move into the column a card was created in; its first move leaves that column."""
+    rows = [_row(1, "2026-10-01T00:00:00+00:00", "2026-10-04T00:00:00+00:00")]
+    moves = [_leave(1, "Todo", "Doing", "2026-10-02T00:00:00Z"), _leave(1, "Doing", "Closed", "2026-10-04T00:00:00Z")]
+    out = lt.span(rows, moves, start="Todo", end="Closed")
+    assert lt.lead_time(out)["series"][0]["hours"] == 72.0
+
+
+def test_an_explicit_move_into_todo_wins_over_creation(lt):  # noqa: F811
+    rows = [_row(2, "2026-10-01T00:00:00+00:00", "2026-10-04T00:00:00+00:00")]
+    moves = [_leave(2, "Backlog", "Todo", "2026-10-03T00:00:00Z"), _leave(2, "Todo", "Closed", "2026-10-04T00:00:00Z")]
+    out = lt.span(rows, moves, start="Todo", end="Closed")
+    assert lt.lead_time(out)["series"][0]["hours"] == 24.0
+
+
+def test_a_card_born_in_backlog_is_not_taken_as_born_in_todo(lt):  # noqa: F811
+    rows = [_row(3, "2026-10-01T00:00:00+00:00", "2026-10-04T00:00:00+00:00")]
+    moves = [_leave(3, "Backlog", "Doing", "2026-10-02T00:00:00Z")]
+    assert lt.lead_time(lt.span(rows, moves, start="Todo"))["excluded"] == {"no_transition": 1}
+
+
+def test_start_todo_on_the_hub_plots_a_card_born_in_todo(hub, board):  # noqa: F811
+    closed = hub.COLUMN["issue_closed"]
+    hub.board_cache["items"] = [_card(1, st=closed, s="CLOSED", c="2026-10-05T00:00:00Z", o="2026-10-01T00:00:00Z")]
+    (hub.STATE / "board-transitions.x_y.jsonl").write_text(
+        json.dumps(_leave(1, "Todo", "Doing", "2026-10-02T00:00:00Z")) + "\n")
+    try:
+        todo = hub.lead_zoom("tf=all&scale=jira&a=Todo")
+    finally:
+        (hub.STATE / "board-transitions.x_y.jsonl").unlink()
+    assert [(d["n"], d["hours"]) for d in todo["dots"]] == [(1, 96.0)]
+    assert todo["excluded_total"] == 0

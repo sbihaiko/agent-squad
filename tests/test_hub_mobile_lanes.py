@@ -36,12 +36,24 @@ BOARD = [
         {"n": 13, "t": "thirteen", "l": []},
         {"n": 14, "t": "fourteen", "pa": 20, "l": []},
     ]},
-    {"name": "Closed", "items": [{"n": 15, "t": "fifteen", "pa": 10, "l": [], "dn": True}]},
+    {"name": "Closed", "end": True, "n": 1, "items": []},
 ]
+SUM = {
+    "specs": [
+        {"n": 10, "st": "Todo", "closed": 1, "total": 3},
+        {"n": 20, "st": None, "closed": 0, "total": 1},
+        {"n": 41, "st": "Closed", "closed": 2, "total": 2},
+    ],
+    "waves": [
+        {"spec": 10, "wave": None, "closed": 1, "total": 3},
+        {"spec": 20, "wave": None, "closed": 0, "total": 1},
+        {"spec": None, "wave": None, "closed": 0, "total": 1},
+    ],
+}
 
 
-def lanes(cards, lc=None, groups=BOARD):
-    args = json.dumps({"groups": groups, "cards": cards, "lc": lc or {}})
+def lanes(cards, lc=None, groups=BOARD, summary=SUM):
+    args = json.dumps({"groups": groups, "cards": cards, "lc": lc or {}, "sum": summary})
     return run_js(GESTURE_JS.read_text(), f"columnLanes({args})")
 
 
@@ -132,10 +144,23 @@ def test_a_column_with_no_visible_card_has_no_lane():
 def test_a_lane_whose_spec_is_done_starts_collapsed_and_its_cards_leave_the_flat_list():
     done = [
         {"name": "Todo", "items": [{"n": 30, "t": "s", "sp": True, "l": []}]},
-        {"name": "Closed", "items": [{"n": 32, "t": "b", "pa": 30, "l": [], "dn": True}]},
+        {"name": "Closed", "end": True, "n": 1, "items": []},
     ]
-    out = lanes(done[0]["items"], groups=done)
+    summary = {"specs": [{"n": 30, "st": "Todo", "closed": 1, "total": 1}], "waves": []}
+    out = lanes(done[0]["items"], groups=done, summary=summary)
     assert out["lanes"][0]["collapsed"] is True and out["flat"] == []
+
+
+@pytest.mark.node_bound
+def test_an_open_ticket_of_a_closed_spec_lands_in_no_spec():
+    out = lanes([{"n": 16, "t": "sixteen", "pa": 41, "l": []}])
+    assert [ln["id"] for ln in out["lanes"]] == ["none|none"], out["lanes"]
+
+
+@pytest.mark.node_bound
+def test_a_closed_column_names_the_count_the_answer_carries():
+    out = run_js(GESTURE_JS.read_text(), "carouselColumns([{name: 'Closed', end: true, n: 5, items: []}], [0], true)")
+    assert out["closed"] == [{"name": "Closed", "count": 5}]
 
 
 @pytest.mark.node_bound
@@ -164,7 +189,14 @@ def test_the_page_draws_a_tappable_lane_header_with_its_collapse_kept_on_the_dev
     assert "bo.mlc" in html and "saveB()" in html
 
 
-def test_the_hub_marks_each_closed_row_and_the_page_names_no_column():
-    text = HUB_PY.read_text()
-    assert 'row["dn"] = True' in text and 'COLUMN["issue_closed"]' in text
+def test_the_board_answer_marks_no_row_done_because_it_serves_no_closed_row():
+    assert 'row["dn"]' not in HUB_PY.read_text()
     assert "/*BOARD_NAMES*/" not in PAGE.read_text()
+
+
+@pytest.mark.node_bound
+def test_a_lane_holding_an_open_ticket_is_never_done():
+    summary = {"specs": [{"n": 41, "st": "Closed", "closed": 2, "total": 2}],
+               "waves": [{"spec": None, "wave": None, "closed": 3, "total": 3}]}
+    lane = lanes([{"n": 16, "t": "sixteen", "pa": 41, "l": []}], summary=summary)["lanes"][0]
+    assert lane["id"] == "none|none" and lane["collapsed"] is False, lane

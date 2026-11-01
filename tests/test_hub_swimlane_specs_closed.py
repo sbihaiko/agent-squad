@@ -1,8 +1,9 @@
-"""A spec whose card is closed or abandoned draws no swimlane: its tickets are done, so the lane would be empty.
+"""A spec whose card is closed or abandoned draws no swimlane, and the lanes read the board's summaries, never closed rows.
 
-The board drew one lane per spec it could find, and the spec map was built from every column, so every spec that ever
-shipped came back as a 0/0 lane marked Closed, and the board filled with them: the live board showed 20 finished specs
-above the work in flight. A lane belongs to work still on the board (#890), so the spec map reads the open columns only.
+The board answer serves the open rows, one count per closed status, and one summary per spec and per wave (#972). A spec
+lane's and a wave lane's progress come from those summaries, so a closed ticket counts without being served. A closed
+spec keeps no lane: its open tickets fall to No spec, read from the spec summary's state. A spec whose tickets are all
+closed while its own card is open is a done lane, and Hide done lanes hides it.
 """
 import json
 import shutil
@@ -26,22 +27,39 @@ def _row(n, col, pa=None, sp=False):
 
 
 GROUPS = [
-    {"name": "Todo", "items": [_row(899, "Todo", pa=889)]},
+    {"name": "Todo", "items": [_row(899, "Todo", pa=889), _row(44, "Todo", pa=41), _row(45, "Todo", pa=492)]},
     {"name": "Doing", "items": [_row(889, "Doing", sp=True), _row(890, "Doing", pa=889)]},
-    {"name": "Closed", "end": True, "items": [_row(41, "Closed", sp=True), _row(43, "Closed", pa=41)]},
-    {"name": "Abandoned", "end": True, "items": [_row(492, "Abandoned", sp=True), _row(494, "Abandoned", pa=492)]},
+    {"name": "Closed", "end": True, "items": []},
+    {"name": "Abandoned", "end": True, "items": []},
 ]
+SUM = {
+    "specs": [
+        {"n": 889, "st": "Doing", "closed": 1, "total": 3},
+        {"n": 41, "st": "Closed", "closed": 1, "total": 2},
+        {"n": 492, "st": "Abandoned", "closed": 0, "total": 1},
+    ],
+    "waves": [],
+}
+DONE_GROUPS = [
+    GROUPS[0],
+    {"name": "Doing", "items": [*GROUPS[1]["items"], _row(700, "Doing", sp=True)]},
+    *GROUPS[2:],
+]
+DONE_SUM = {**SUM, "specs": [*SUM["specs"], {"n": 700, "st": "Doing", "closed": 2, "total": 2}]}
 
 
-def _build(**o):
+def _run(script):
     if NODE is None:
         pytest.skip("node is required")
-    opts = {"mode": "spec", "fw": [], "fs": [], "lc": {}, "hideDone": False, "closed": "Closed",
-            "abandoned": "Abandoned", **o}
-    src = LANES_JS.read_text() + f"\nconsole.log(JSON.stringify(buildBoard({json.dumps(GROUPS)},{json.dumps(opts)})));"
-    p = subprocess.run([NODE, "-"], input=src, capture_output=True, text=True, timeout=30)
+    p = subprocess.run([NODE, "-"], input=LANES_JS.read_text() + "\n" + script, capture_output=True, text=True, timeout=30)
     assert p.returncode == 0, p.stderr
     return json.loads(p.stdout)
+
+
+def _build(groups=GROUPS, summary=SUM, **o):
+    opts = {"mode": "spec", "fw": [], "fs": [], "lc": {}, "hideDone": False, "closed": "Closed",
+            "abandoned": "Abandoned", "sum": summary, **o}
+    return _run(f"console.log(JSON.stringify(buildBoard({json.dumps(groups)},{json.dumps(opts)})));")
 
 
 def test_a_closed_spec_draws_no_lane():
@@ -49,9 +67,14 @@ def test_a_closed_spec_draws_no_lane():
     assert "s41" not in ids, f"a closed spec drew a lane: {ids}"
 
 
-def test_an_abandoned_spec_draws_no_lane():
-    ids = [ln["id"] for ln in _build()["lanes"]]
-    assert "s492" not in ids, f"an abandoned spec drew a lane: {ids}"
+def test_an_open_ticket_of_a_closed_or_abandoned_spec_falls_to_no_spec():
+    lane = next(ln for ln in _build()["lanes"] if ln["id"] == "none")
+    assert sorted(r["n"] for r in lane["all"]) == [44, 45], lane
+
+
+def test_a_spec_lane_counts_its_closed_tickets_from_the_summary():
+    lane = next(ln for ln in _build()["lanes"] if ln["id"] == "s889")
+    assert (lane["closed"], lane["total"]) == (1, 3), "the closed ticket is not counted: it is served by no row"
 
 
 def test_progress_reads_the_spec_sub_issue_count_not_the_served_rows():
@@ -61,17 +84,43 @@ def test_progress_reads_the_spec_sub_issue_count_not_the_served_rows():
         {"name": "Doing", "items": [{"n": 889, "t": "SPEC 889", "l": ["spec"], "sp": True, "sc": "26/34"}]},
         {"name": "Doing", "items": [_row(890, "Doing", pa=889)]},
     ]
-    if NODE is None:
-        pytest.skip("node is required")
-    opts = {"mode": "spec", "fw": [], "fs": [], "lc": {}, "hideDone": False, "closed": "Closed", "abandoned": "Abandoned"}
-    src = LANES_JS.read_text() + f"\nconsole.log(JSON.stringify(buildBoard({json.dumps(groups)},{json.dumps(opts)})));"
-    p = subprocess.run([NODE, "-"], input=src, capture_output=True, text=True, timeout=30)
-    assert p.returncode == 0, p.stderr
-    lane = next(ln for ln in json.loads(p.stdout)["lanes"] if ln["id"] == "s889")
+    lane = next(ln for ln in _build(groups=groups, summary={"specs": [], "waves": []})["lanes"] if ln["id"] == "s889")
     assert (lane["closed"], lane["total"]) == (26, 34), lane
 
 
 def test_a_spec_with_open_cards_still_draws_its_lane():
     lane = next((ln for ln in _build()["lanes"] if ln["id"] == "s889"), None)
     assert lane is not None, "the open spec lost its lane"
-    assert lane["total"] == 2, lane
+    assert lane["total"] == 3, lane
+
+
+def test_a_spec_whose_tickets_are_all_closed_is_a_done_lane():
+    lane = next(ln for ln in _build(groups=DONE_GROUPS, summary=DONE_SUM)["lanes"] if ln["id"] == "s700")
+    assert lane["done"] is True and lane["collapsed"] is True, lane
+
+
+def test_hide_done_lanes_hides_a_spec_whose_tickets_are_all_closed():
+    ids = [ln["id"] for ln in _build(groups=DONE_GROUPS, summary=DONE_SUM, hideDone=True)["lanes"]]
+    assert "s700" not in ids and "s889" in ids, ids
+
+
+def test_a_wave_lane_counts_its_closed_tickets_from_the_summary():
+    groups = [
+        {"name": "Todo", "items": [{"n": 10, "t": "ten", "l": ["wave:01"], "pa": 889, "c": None}]},
+        {"name": "Closed", "end": True, "items": []},
+    ]
+    summary = {"specs": [], "waves": [{"spec": 889, "wave": 1, "closed": 2, "total": 3}]}
+    lane = _build(groups=groups, summary=summary, mode="wave")["lanes"][0]
+    assert lane["title"] == "SPEC 889 · Wave 1" and (lane["closed"], lane["total"]) == (2, 3), lane
+
+
+def test_spec_options_leave_out_a_finished_spec():
+    opts = _run(f"console.log(JSON.stringify(specOptions({json.dumps(GROUPS)},{json.dumps(SUM)})));")
+    assert opts == ["889"], opts
+
+
+@pytest.mark.parametrize("mode, lane_id", [("spec", "none"), ("wave", "none/none")])
+def test_a_lane_holding_an_open_ticket_is_never_done(mode, lane_id):
+    summary = {**SUM, "waves": [{"spec": None, "wave": None, "closed": 3, "total": 3}]}
+    lane = next(ln for ln in _build(summary=summary, mode=mode)["lanes"] if ln["id"] == lane_id)
+    assert lane["n"] == 2 and lane["done"] is False, lane

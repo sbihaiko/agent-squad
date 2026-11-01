@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Squad hub for every repository: one process on one loopback port, one path per repository (#20).
-usage: hubmux.py [port]   default 7700. `/<profile>` is that profile's hub page (hub.py, loaded once per profile with the
+usage: hubmux.py [port]   default 7700, the live hub. Any other port is a check hub: it keeps its board cache and flow history out of the live one (#1000). `/<profile>` is that profile's hub page (hub.py, loaded once per profile with the
 profile's own context from the seam, address.sh); `/` lists the repositories and their live workers that the request may see
 (every one on loopback; on the tailnet, those whose own allow list admits the login); a path no profile owns answers 404 with
 that list; `/api/hub` names the hub and its repositories, so hubctl.sh can tell this hub from any other listener. A refused
@@ -20,6 +20,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = pathlib.Path(__file__).resolve().parent
 CTX = HERE / "address.sh"
+LIVE_PORT = 7700
+PORT = LIVE_PORT   # the port this process serves; any port but LIVE_PORT is a check hub (#1000)
 
 
 def _ctx(arg):
@@ -61,7 +63,7 @@ def load_one(slug):
     pinned = {"SG_REPO": c.get("SG_REPO", ""), "SG_OWNER": c.get("SG_OWNER", ""), "SG_PROJECT": c.get("SG_PROJECT", ""),
               "SG_CHECKOUT": c.get("SG_CHECKOUT", ""), "SG_STATE": c.get("SG_STATE", ""), "SG_PROFILE": slug, "SG_HUB_DIR": "",
               "SG_PROJECTS": c.get("SG_PROJECTS", ""), "SG_FORK_DIR": c.get("SG_FORK_DIR", ""),   # the profile's own run roots, never the shell's (#859)
-              "SG_BOARD_CACHE": c.get("SG_BOARD_CACHE", ""),   # the profile's own board cache, never the shell's (#512)
+              "SG_BOARD_CACHE": c.get("SG_BOARD_CACHE", "") if PORT == LIVE_PORT else "",   # the live board cache is the live hub's (#512, #1000)
               "SG_SHARED": c.get("SG_SHARED", "")}   # the one shared directory the loop reads, never the profile's state (#678)
     before = {k: os.environ.get(k) for k in pinned}
     try:
@@ -144,7 +146,7 @@ def root_page(apps, title, note=None):
         rows.append(f'<li><a href="/{slug}"><b>{slug}</b></a> <span class="repo">{repo}</span> {badge}{runs}</li>')
     return (f'<!doctype html><meta charset=utf-8><title>squad hub</title><style>{WEB_TOKENS}{CSS}</style><body>'
             f'<h1>{html.escape(title)}</h1>{note or ""}<ul id="repos">{"".join(rows) or "<li>no profile known</li>"}</ul>'
-            f'<script>{INDEX_JS}</script>').encode()
+            f'<script>{INDEX_JS}</script>{OVERLAY}').encode()
 
 
 # The index repaints its list from /api/hub every 10 s, so a profile added or gone and the live counts show with no reload
@@ -162,6 +164,13 @@ function paint(h){
 async function poll(){try{const r=await fetch("/api/hub",{cache:"no-store"});if(r.ok)paint(await r.json());}catch(e){}}
 setInterval(poll,10000);
 """
+
+
+# The session overlay (#898) on the index: the one source hub.py serves on every profile page, here over every repository
+# the request may see. Each repository's sessions sit under its own path; with more than one session the owner picks.
+OVERLAY_SOURCES = ('async()=>{const r=await fetch("/api/hub",{cache:"no-store"});const h=await r.json();'
+                   'return h.repos.filter(x=>!x.err).map(x=>({label:x.slug,api:"/"+encodeURIComponent(x.slug)+"/api"+"/sessions"}));}')
+OVERLAY = f'<script>window.SQUAD_OV_SOURCES={OVERLAY_SOURCES};\n{(HERE / "hub-overlay.js").read_text()}</script>'
 
 
 def test_note(slug, apps):
@@ -217,6 +226,8 @@ def server(port, apps, on_new=None):
             self._send(403, reason.encode(), "text/plain; charset=utf-8")
         def not_found(self): return self.profile.not_found(self)
         def dash(self, method, body=b""): return self.profile.dash(self, method, body)
+        def send_to_session(self, a): return self.profile.send_to_session(self, a)   # the overlay's and the phone's send (#898)
+        def loop_post(self, a): return self.profile.loop_post(self, a)   # the loop switch's write (#923)
 
         def _route(self, method):
             path = self.path.split("?", 1)[0]
@@ -256,6 +267,7 @@ def server(port, apps, on_new=None):
 
 
 if __name__ == "__main__":
+    PORT = int(sys.argv[1]) if len(sys.argv) > 1 else LIVE_PORT
     apps = load_apps()
     for k in ("SG_REPO", "SG_OWNER", "SG_PROJECT", "SG_CHECKOUT", "SG_STATE", "SG_PROJECTS", "SG_FORK_DIR"):   # each page reads its own profile, never the shell's
         os.environ.pop(k, None)
@@ -265,4 +277,4 @@ if __name__ == "__main__":
         for f in ("refresh_prs", "refresh_quota", "refresh_board", "load_sampler"):
             threading.Thread(target=getattr(m, f), daemon=True).start()
     for a in apps.values(): start(a)
-    server(int(sys.argv[1]) if len(sys.argv) > 1 else 7700, apps, on_new=start).serve_forever()
+    server(PORT, apps, on_new=start).serve_forever()

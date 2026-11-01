@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import time
+import types
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -165,9 +166,9 @@ def test_a_card_closed_as_not_planned_is_no_delivery_and_the_chart_names_it(hub,
     assert lead["excluded"] == [{"reason": "not_planned", "count": 3}]
     assert lead["excluded_total"] == 3
     abandoned = next(g for g in groups if g["name"] == "Abandoned")
-    assert [r["n"] for r in abandoned["items"]] == [2, 3, 4], "a card closed as not planned is drawn Abandoned, never Closed"
+    assert abandoned["items"] == [] and abandoned["n"] == 3, "a card closed as not planned is counted Abandoned, never Closed"
     closed = next(g for g in groups if g["name"] == hub.COLUMN["issue_closed"])
-    assert [r["n"] for r in closed["items"]] == [1]
+    assert closed["items"] == [] and closed["n"] == 1
 
 
 def test_the_closed_band_never_steps_down_where_the_close_reason_began(hub, board):
@@ -450,7 +451,11 @@ def test_the_control_chart_names_its_lines_and_controls_the_jira_way(hub):
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-def test_the_control_chart_draws_one_mark_per_cluster_on_the_date_axis(hub, board, tmp_path):
+def test_the_control_chart_draws_one_mark_per_cluster_on_the_date_axis(hub, board, tmp_path, monkeypatch):
+    class Frozen(datetime):   # the page draws the 30-day timeframe: pin "now" so the cards stay inside it
+        @classmethod
+        def now(cls, tz=None): return cls(2026, 10, 10, tzinfo=tz)
+    monkeypatch.setattr(hub, "dt", types.SimpleNamespace(**{**vars(hub.dt), "datetime": Frozen}))
     hub.board_cache["items"] = [
         _card(1, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-02T09:00:00Z"),
         _card(2, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-02T09:00:00Z"),

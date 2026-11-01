@@ -28,15 +28,34 @@ def _exclusion(row):
     return None
 
 
+def entries(transitions, born):
+    """Every instant a card entered a column, keyed (issue, column) (#1012). The record holds only moves, so a card created
+    in a column has no move into it: when a card's earliest recorded move leaves column X, it entered X at `born[issue]`,
+    its board add time or else its creation (ISO). A birth after that first move is no instant. A recorded move into X is
+    kept as written, so an explicit move wins for any later entry."""
+    moves, first = {}, {}
+    for t in transitions:
+        at = datetime.fromisoformat(t["at"])
+        moves.setdefault((t.get("issue"), t.get("to")), []).append(at)
+        if t.get("issue") not in first or at < first[t.get("issue")][0]:
+            first[t.get("issue")] = (at, t.get("from"))
+    for issue, (at, column) in first.items():
+        stamp = born.get(issue)
+        if not column or not stamp:
+            continue
+        birth = datetime.fromisoformat(stamp)
+        if birth <= at:
+            moves.setdefault((issue, column), []).append(birth)
+    return moves
+
+
 def span(items, transitions, start=None, end=None):
     """Each row measured from its first move into `start` to its last move into `end` (#905). None is the card's own
     opened or closed instant. A row the chart would plot with no such move, or an end before its start, is marked
     no_transition. A row already left out keeps its own reason."""
     if start is None and end is None:
         return items
-    moves = {}
-    for t in transitions:
-        moves.setdefault((t.get("issue"), t.get("to")), []).append(datetime.fromisoformat(t["at"]))
+    moves = entries(transitions, {row["n"]: row.get("o") for row in items})
     out = []
     for row in items:
         if _exclusion(row):

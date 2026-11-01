@@ -89,6 +89,11 @@ def test_the_board_columns_are_the_shipped_statuses_in_order_with_their_colours(
 @pytest.mark.parametrize("item,column,freeze", CARDS, ids=[f"#{c[0]['n']}-{c[1]}" for c in CARDS])
 def test_each_card_sits_in_the_column_the_table_names(board, item, column, freeze):
     where = [(g["name"], x) for g in board["groups"] for x in g["items"] if x["n"] == item["n"]]
+    ends = {g["name"]: g["n"] for g in board["groups"] if g.get("end")}
+    if column in ends:
+        assert where == [], f"#{item['n']} ({item['st']}) is served as a row: a closed row never is"
+        assert ends[column] == [c[1] for c in CARDS].count(column), f"the {column} count is wrong: {ends}"
+        return
     assert [w[0] for w in where] == [column], f"#{item['n']} ({item['st']}) is not in {column}"
     assert where[0][1].get("fz") == freeze, f"#{item['n']} wears the wrong freeze marker"
 

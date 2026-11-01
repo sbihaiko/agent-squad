@@ -171,7 +171,10 @@ def test_the_mobile_page_reads_only_the_existing_routes(hub):
     # through a variable path, or a method set after the call's own `)`, carries it once too often, whatever the shape of
     # the call (#829).
     assert 'fetch(runURLs(id).control, { method: "POST"' in hub.MOBILE_PAGE, "the run screen's write is not the run's control route"
-    assert hub.MOBILE_PAGE.count("method:") == 4, "the mobile page holds a fifth write, or a method outside the four fetches"
+    # The session overlay (#898) rides on the page and posts the same send route, through the source the page names.
+    overlay = hub.OVERLAY_JS.count("method:")
+    assert overlay == 1 and 'fetch(s.src.api + "/send", { method: "POST"' in hub.OVERLAY_JS
+    assert hub.MOBILE_PAGE.count("method:") == 4 + overlay, "the mobile page holds a fifth write, or a method outside the four fetches"
 
 
 def test_the_sheet_links_to_the_issue_on_github(hub):
@@ -264,6 +267,16 @@ HR_BOARD = {"t": 1, "err": None, "labels": [], "lc": {}, "cases": [], "flow": No
                 {"n": 3, "t": "three", "l": [], "hr": "run-a"},
                 {"n": 4, "t": "four", "l": [], "hr": "run-b"}]},
                 {"name": "Todo", "n": 0, "items": []}]}
+
+
+@pytest.mark.node_bound
+def test_a_blocker_to_a_closed_card_the_board_does_not_hold_opens_its_sheet(hub):
+    out = run_page(hub.MOBILE_PAGE, """
+        await loadBoard();
+        openCard(99);
+        return { open: !$("sheet").hidden, n: offBoard && offBoard.n };
+    """, board=[HR_BOARD])
+    assert out == {"open": True, "n": 99}, out
 
 
 @pytest.mark.node_bound
