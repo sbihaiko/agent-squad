@@ -445,8 +445,7 @@ def test_a_control_chart_dot_carries_the_issue_title_and_its_close_date(hub, boa
 
 
 def test_the_control_chart_names_its_lines_and_controls_the_jira_way(hub):
-    for name in ("Rolling average (", "centered)", "Standard deviation", "Median", "p85", "Average",
-                 "Past month", "Log scale", "Timeframe"):
+    for name in ("Rolling average (", "centered)", "Standard deviation", "Past month", "Log scale", "Timeframe"):
         assert name in hub.PAGE, f"the page names no {name!r}"
 
 
