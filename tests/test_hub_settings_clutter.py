@@ -4,6 +4,7 @@ Configuration lives on the Settings tab: the subscription plans and the run hist
 keeps only what a reader watches. The tab bar keeps Kanban, Charts and Settings.
 """
 import importlib.util
+import re
 import sys
 from pathlib import Path
 
@@ -57,10 +58,13 @@ def test_the_settings_tab_holds_the_plans_and_the_run_history(hub):
     assert "id=list" in pane, "the run history is not on the Settings tab"
 
 
-def test_the_last_ended_history_link_opens_the_settings_loop_theme(hub):
-    line = next(x for x in hub.PAGE.splitlines() if '#enall' in x and "addEventListener" in x)
-    assert 'setTab("set")' in line, "the History link still opens a tab of its own"
-    assert 'setTheme("lop")' in line, "the History link does not open the Loop theme that holds the history"
+def test_the_history_lives_in_the_settings_loop_theme_and_has_no_panel_of_its_own(hub):
+    """Owner, 2026-11-01: Last ended left the sidebar; the run history is a block of the Loop theme."""
+    side = hub.PAGE[hub.PAGE.index("<aside id=side>"):hub.PAGE.index("</aside>")]
+    assert "Last ended" not in side, "the Last ended card is back on the first screen"
+    assert "#ended" not in hub.PAGE and "#enall" not in hub.PAGE, "a script still writes the removed panel"
+    assert re.search(r'<details id=lop[^>]*>.*?id=histb.*?<h4>Run history</h4>', hub.PAGE, re.S), \
+        "the run history is not in the Loop theme"
 
 
 def test_the_models_renderer_writes_no_sidebar_card(hub):
