@@ -187,7 +187,7 @@ def test_the_switch_reads_as_the_state_it_is_and_the_row_shows_the_model_is_out(
     src = HUB_PY.read_text()
     row = src[src.index("function mdlRender()"):src.index("async function mdlLoad()")]
     # re-anchored (#913): a row is de-emphasised when the file holds it off or its model is off, the order untouched
-    assert 'class="mr${cof||mof?" off":""}"' in row
+    assert 'class="mr${cof||mof?" off":""}' in row   # re-anchored (#913 review): a marked row adds " rmk" after it
     assert "off (chain)</span>" in row and "off (model)</span>" in row   # and says which
     css = src[src.index("<style>"):src.index("</style>")]
     assert ".mr.off .rk" in css

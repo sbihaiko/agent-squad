@@ -172,11 +172,11 @@ def test_the_page_draws_no_chip_that_writes_at_once(page):
     assert "data-mo=" not in page
 
 
-def test_the_chip_is_a_44_px_target_on_the_phone_with_a_focus_ring(page):
-    phone = re.search(r"@media \(max-width:600px\)\{(.*?)\n", page, re.S)
-    assert phone is not None
-    assert re.search(r"\.mch\{[^}]*min-height:44px", page), "the chip has no 44 px target on the phone"
-    assert re.search(r"\.mch:focus-visible\{[^}]*outline", page), "the chip has no visible focus ring"
+def test_the_switch_is_a_44_px_target_on_the_phone_with_a_focus_ring(page):
+    """Re-anchored (#913 review): the chip is gone; the models table switch (.mtg) is the one control left."""
+    assert ".mch" not in page, "dead chip CSS is back"
+    assert re.search(r"@media \(max-width:600px\)\{\.mtg\{[^}]*min-height:44px", page), "the switch has no 44 px target on the phone"
+    assert re.search(r"\.mtg:focus-visible\{[^}]*outline", page), "the switch has no visible focus ring"
 
 
 def test_the_chain_rows_no_longer_carry_a_chain_level_switch_button(page):

@@ -47,8 +47,9 @@ def test_the_control_line_wraps_rather_than_clipping_its_last_control(page):
 def test_the_row_still_ships_the_remove_button_and_its_reason(page):
     m = REMOVE.search(page)
     assert m, "the model row no longer renders a remove button"
-    assert 'title="remove from chain"' in m.group(1), m.group(1)
-    assert "mdl[k].length>1" in m.group(1), "the last row of a chain must keep its remove button disabled"
+    # re-anchored (#913 review): ✕ marks the row until Save, so the title says so and the count is of unmarked rows
+    assert 'title="${rmk?"keep this model in the chain":"remove from chain on Save"}"' in m.group(1), m.group(1)
+    assert "rmk||live>1" in m.group(1), "the last unmarked row of a chain must keep its remove button disabled"
 
 
 def test_the_control_cluster_is_one_unbreakable_group(page):

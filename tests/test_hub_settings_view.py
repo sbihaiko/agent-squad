@@ -115,7 +115,7 @@ def _node(hub, body):
     setv = re.search(r"^// SETV\{.*?^// \}SETV$", page, re.M | re.S)
     assert setv, "the page carries no SETV block"
     panel = _between(page, "let mdl=null", "async function mdlLoad()")
-    stub = 'const STORE={};const $=s=>STORE[s]||(STORE[s]={innerHTML:"",textContent:""});const MODELRE=/^[\\w.:-]+$/;'
+    stub = 'const STORE={};const $=s=>STORE[s]||(STORE[s]={innerHTML:"",textContent:""});'
     out = subprocess.run(["node", "-"], input="\n".join([stub, esc, setv.group(0), panel, body]),
                          capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
@@ -269,3 +269,11 @@ def test_a_removed_row_stays_marked_until_save_and_the_diff_drops_it(hub):
     row = re.search(r'<div class="mr[^"]*"[^>]*data-row="coding_models\|b"', got["b"])
     assert row and " rmk" in row.group(0), "the removed row is not marked"
     assert 'aria-label="undo remove b"' in got["b"]
+
+
+def test_the_last_unmarked_row_cannot_be_marked_and_a_marked_row_can_be_kept(hub):
+    got = _node(hub, f"mdl={json.dumps(FIXTURE)};mdlSrv=JSON.stringify(mdl);mdlRmToggle(\"coding_models\",\"a\");mdlRender();"
+                     "console.log(JSON.stringify($(\"#mbody\").innerHTML))")
+    btn = dict(re.findall(r'<button class=x data-rm="coding_models\|(\d)"([^>]*)>', got))
+    assert "disabled" not in btn["0"], "a marked row cannot be kept"
+    assert "disabled" in btn["1"], "the last unmarked row can be marked"
