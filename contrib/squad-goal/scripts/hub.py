@@ -56,6 +56,11 @@ _PROFILE_ENV = {**os.environ, "SG_REPO": REPO, "SG_OWNER": OWNER, "SG_PROJECT": 
 if not REPO: sys.exit("hub: no SG_REPO (set SG_PROFILE to a profile address.sh knows)")
 CHECKOUT = PROF["SG_CHECKOUT"]
 PROJECTS, FORK_DIR = os.environ.get("SG_PROJECTS", ""), os.environ.get("SG_FORK_DIR", "")   # read once at import: the mux pins them per profile (#859)
+# The profile this hub was loaded under, read once. hubmux.py pins the profile environment around the hub's import
+# and restores the shell's after it, so a read at request time found no SG_PROFILE and every session route answered
+# empty through the mux (#1073). A request path reads this name, never the environment.
+PROFILE_NAME = os.environ.get("SG_PROFILE", "")
+PROFILES_DIR_AT_IMPORT = os.environ.get("SG_PROFILES_DIR", "")
 if not CHECKOUT: sys.exit("hub: no SG_CHECKOUT (the profile in force names no checkout)")
 def repos_from(primary, *others):
     """The repositories the board reads, named in ONE place and never guessed: the profile's SG_REPO, plus each
@@ -1176,7 +1181,7 @@ MODELS_LEDGER = "models-switch-ledger.jsonl"   # one line per model-level switch
 
 def profiles_dir():
     """The directory the profiles live in: SG_PROFILES_DIR when the runner exports it (env.sh does), else the seam's answer."""
-    d = os.environ.get("SG_PROFILES_DIR")
+    d = os.environ.get("SG_PROFILES_DIR") or PROFILES_DIR_AT_IMPORT
     if d: return pathlib.Path(d)
     try:
         r = subprocess.run(["bash", "-c", '. "$1/address.sh" >/dev/null 2>&1; sg_profiles_dir', "_", str(SCRIPTS)],
@@ -1187,7 +1192,7 @@ def profiles_dir():
 def profile_file():
     """The profile in force: the one file the token guard sources on every pass. None when no profile is in force, and a
     theme that cannot name the file reads nothing and writes nothing."""
-    slug, d = os.environ.get("SG_PROFILE", ""), profiles_dir()
+    slug, d = PROFILE_NAME, profiles_dir()
     return d / f"{slug}.sh" if slug and d is not None else None
 
 def profile_limits(path=None):
@@ -1376,7 +1381,7 @@ _SLACK_CHANNEL = re.compile(r"^#?[^\s#]{1,80}$")
 
 def slack_file():
     """The per-profile Slack settings beside the profile, or None when no profile is in force."""
-    slug, d = os.environ.get("SG_PROFILE", ""), profiles_dir()
+    slug, d = PROFILE_NAME, profiles_dir()
     return d / f"{slug}.slack.json" if slug and d is not None else None
 
 def slack_read(path):
@@ -6107,13 +6112,13 @@ profiles_of_cwd = sessions.profiles_of
 
 def sessions_payload():
     """What /api/sessions serves: this profile's live sessions, grouped by project (#833)."""
-    return sessions.list_sessions(os.environ.get("SG_PROFILE", ""), profiles_of=profiles_of_cwd)
+    return sessions.list_sessions(PROFILE_NAME, profiles_of=profiles_of_cwd)
 
 def conversation_payload(query):
     """What /api/sessions/conversation serves: one page of a live session of this profile, None when it is not one (#840)."""
     q = urllib.parse.parse_qs(query)
     before = (q.get("before") or [""])[0]
-    return sessions.conversation(os.environ.get("SG_PROFILE", ""), (q.get("sid") or [""])[0], int(before) if before.isdigit() else None,
+    return sessions.conversation(PROFILE_NAME, (q.get("sid") or [""])[0], int(before) if before.isdigit() else None,
                                  profiles_of=profiles_of_cwd)
 
 SCREENSHOT_MAX = 5 * 1024 * 1024   # the owner's grant (ADR-0024): a PNG of at most 5 MB
@@ -6128,7 +6133,7 @@ def send_rule(a):
 def project_payload(a):
     """What /api/sessions/project serves (#898): the sessions in this profile's checkout and the send rule for this request."""
     ok, why = send_rule(a)
-    return {"sessions": sessions.project_sessions(os.environ.get("SG_PROFILE", ""), CHECKOUT, profiles_of=profiles_of_cwd), "send": ok, "why": why}
+    return {"sessions": sessions.project_sessions(PROFILE_NAME, CHECKOUT, profiles_of=profiles_of_cwd), "send": ok, "why": why}
 
 # The session overlay (#898): one source, hub-overlay.js, on every page the hub serves. Each page names where its session
 # routes are: the hub and mobile pages a quoted path the mux gives the profile prefix, a run dashboard its own path up to
@@ -6377,7 +6382,7 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/status"): body, ct = json.dumps(status_payload()).encode(), "application/json"
         elif self.path.startswith("/api/sessions/send"):
             q = urllib.parse.parse_qs(self.path.partition("?")[2])
-            out = session_send.status(os.environ.get("SG_PROFILE", ""), (q.get("sid") or [""])[0], (q.get("client_id") or [""])[0], profiles_of=profiles_of_cwd, root=STATE)
+            out = session_send.status(PROFILE_NAME, (q.get("sid") or [""])[0], (q.get("client_id") or [""])[0], profiles_of=profiles_of_cwd, root=STATE)
             body, ct = json.dumps(out).encode(), "application/json"
         elif self.path.split("?", 1)[0] == "/api/loop": body, ct = json.dumps(loop_view(a)).encode(), "application/json"
         elif self.path.split("?", 1)[0] == "/api/sessions/project": body, ct = json.dumps(project_payload(a)).encode(), "application/json"
@@ -6418,7 +6423,7 @@ class H(BaseHTTPRequestHandler):
         if not isinstance(body, dict) or set(body) != {"sid", "text", "client_id"}:
             out, code = {"err": "bad request"}, 400
         else:
-            out, code = session_send.send(os.environ.get("SG_PROFILE", ""), body["sid"], body["text"], body["client_id"], profiles_of=profiles_of_cwd, root=STATE), 200
+            out, code = session_send.send(PROFILE_NAME, body["sid"], body["text"], body["client_id"], profiles_of=profiles_of_cwd, root=STATE), 200
         data = json.dumps(out).encode(); self.send_response(code); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
 
     def send_screenshot(self, a):
@@ -6443,7 +6448,7 @@ class H(BaseHTTPRequestHandler):
         folder = STATE / "screenshots"; folder.mkdir(parents=True, exist_ok=True)
         path = folder / f"{cid}.png"; part = folder / f"{cid}.png.part"
         part.write_bytes(raw); os.replace(part, path)
-        self.answer(200, session_send.send(os.environ.get("SG_PROFILE", ""), sid, f"Screenshot: {path}", cid, profiles_of=profiles_of_cwd, root=STATE))
+        self.answer(200, session_send.send(PROFILE_NAME, sid, f"Screenshot: {path}", cid, profiles_of=profiles_of_cwd, root=STATE))
 
     def answer(self, code, out):
         data = json.dumps(out).encode(); self.send_response(code); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
