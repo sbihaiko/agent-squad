@@ -3391,9 +3391,9 @@ def drawn_column(i, moves, read_at, window):
             "recorded": recorded, "entry": entry}
 
 
-def board():
+def board(moves=None):
     overlay = overlay_on()   # one setting turns the overlay off: the served board is then the list read alone (#651)
-    moves = read_moves() if overlay else {}   # the record is read on every serve, so a page reload sees the same overlay (#650)
+    if moves is None: moves = read_moves() if overlay else {}   # the serve passes the record it already read, so one serve reads it once (#973); the record is read on every serve, so a page reload sees the same overlay (#650)
     read_at = board_cache.get("rt")   # the instant the list read began, never the completion stamp `t`: a read that began before a move cannot have carried it, however late it finished
     window = pending_window()   # an entry older than the window expires even with no read agreeing (#651)
     agreed, expired = set(), {}   # expired: item id -> (card number, the recorded column, the column the read holds, the move's dispatch context)
@@ -3472,6 +3472,7 @@ def board():
                        "rollup": p.get("rollup"), "ci": p.get("ci"), "o": p.get("o"), "by": p.get("by"), "cl": p.get("cl"),
                        "r": p.get("r") or REPO, "rt": repo_tag(p.get("r") or REPO), "kind": p["kind"]} for p in open_prs]}
     if agreed or expired:
+        _served_board["settling"] = True   # a build that settles entries is not kept: the next serve retries a drop that failed (#651, #973)
         dropped = drop_moves(agreed | set(expired))   # agreement settles an entry; the window settles one no read ever agreed with (#651)
         for item, (n, recorded, read, context) in expired.items():
             if dropped and item in dropped: report_expired(n, item, recorded, read, window, context)   # only a drop that really happened is reported, so a retry never repeats a line
@@ -3489,9 +3490,10 @@ def board_served():
     moves = read_moves() if overlay_on() else {}
     key = hashlib.sha256(json.dumps([board_cache, moves, overlay_on(), pending_window()], sort_keys=True, default=str).encode()).hexdigest()
     if _served_board.get("key") == key: return _served_board["body"], _served_board["etag"]
-    try: body = json.dumps(board()).encode()   # every card: the page filters the board by the bar (#899)
+    try: body = json.dumps(board(moves)).encode()   # every card: the page filters the board by the bar (#899)
     except ValueError as e: return json.dumps({"error": str(e)}).encode(), None
     etag = '"' + hashlib.sha256(body).hexdigest()[:32] + '"'
+    if _served_board.pop("settling", False): _served_board.pop("key", None); return body, etag
     _served_board.update(key=key, body=body, etag=etag)
     return body, etag
 
