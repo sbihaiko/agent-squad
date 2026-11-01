@@ -1739,14 +1739,40 @@ def loop_alive():
     except (ValueError, IndexError): return False
     return _pid_alive(pid)
 
+LOOP_RUN_CMD = os.environ.get("SG_RUN_CMD_RE") or r"[s]quad start( |$)"   # a squad run's command, as heartbeat.sh reads it
+LOOP_LAUNCH_S = 60 * float(os.environ.get("HB_DEAD_IDLE_MIN") or 1)   # a record with no call_start that moved this recently is a launch, not a death
+
+def loop_record(run):
+    return pathlib.Path(run) / "record.jsonl" if run.startswith("/") else pathlib.Path(CHECKOUT) / "runs" / run / "record.jsonl"
+
+def loop_run_pid(run, rows=None):
+    """The pid of a live run's own process: its record's last call_start, while that pid is alive as a squad run (its command
+    matches SG_RUN_CMD_RE) and is not this hub. A reused pid that names any other process is never a run's. A run is started
+    in its own session (start_new_session), so the supervisor's group stop never reaches it."""
+    for raw in reversed(_read(loop_record(run)).splitlines()):
+        try: e = json.loads(raw)
+        except ValueError: continue
+        if e.get("event") == "call_start" and isinstance(e.get("pid"), int):
+            pid = e["pid"]
+            if pid <= 1 or pid == os.getpid(): return None
+            cmd = next((c for p, _, c in (_ps_rows() if rows is None else rows) if p == pid), "")
+            return pid if re.search(LOOP_RUN_CMD, cmd) else None
+    return None
+
+def loop_run_live(run, rows=None, now=None):
+    """A run is live while it has no verdict and its process runs: the last call_start pid is a live squad run, or, before its
+    first call, its record moved within the launch window. A run that died with no verdict (a crash, a kill) is not live."""
+    f = loop_record(run); text = _read(f)
+    if re.search(r'"event":\s*"verdict"', text): return False
+    if re.search(r'"event":\s*"call_start"', text): return loop_run_pid(run, rows) is not None
+    try: return (time.time() if now is None else now) - f.stat().st_mtime < LOOP_LAUNCH_S
+    except OSError: return False
+
 def loop_live():
-    """The live runs (an active-runs line with no verdict) and the held gate (the gate lock's pid file naming a live pid): what a stop kills."""
-    runs = []
-    for line in _read(STATE / "active-runs.txt").splitlines():
-        r = line.strip()
-        if not r: continue
-        f = pathlib.Path(r) / "record.jsonl" if r.startswith("/") else pathlib.Path(CHECKOUT) / "runs" / r / "record.jsonl"
-        if not re.search(r'"event":\s*"verdict"', _read(f)): runs.append(r)
+    """The live runs (an active-runs line whose run still runs, `loop_run_live`) and the held gate (the gate lock's pid file
+    naming a live pid): what a stop kills, and what a drain waits for."""
+    rows = _ps_rows()
+    runs = [r for r in (x.strip() for x in _read(STATE / "active-runs.txt").splitlines()) if r and loop_run_live(r, rows)]
     gate = _read(STATE / "locks" / "gate" / "pid").strip()
     gates = [f"gate pid {gate}"] if gate.isdigit() and _pid_alive(int(gate)) else []
     return {"runs": runs, "gates": gates}
@@ -1779,13 +1805,22 @@ def loop_state(last, now=None):
 
 LOOP_STATE_ACTIONS = {"off": ["start"], "on": ["drain", "stop-now"], "draining": ["stop-now"], "starting": []}   # the hub's rule, so no page holds one
 
+LOOP_STARTED = STATE / "watchd.started"   # every watchd start stamps it with its epoch second, from the hub or the terminal
+
+def loop_started_after(at):
+    """True when a watchd start came after the audit time `at`: an old hub failure then no longer describes the loop."""
+    try: when = dt.datetime.fromisoformat(at).timestamp()
+    except (TypeError, ValueError): return False
+    try: return int(_read(LOOP_STARTED).split()[0]) > int(when)
+    except (ValueError, IndexError): return False
+
 def loop_view(a):
     last = (loop_audit_last(1) or [{}])[-1]
     tn = tailnet_block()
     write = a.allowed and (not a.tailnet or tn.get("loop_write") is True)
     state = loop_state(last)
     return {"state": state, "actions": list(LOOP_STATE_ACTIONS.get(state, [])) if write else [], "who": last.get("who", ""), "when": last.get("at", ""), "live": loop_live(),
-            "failed": last.get("failed", "") if state == "off" else "",
+            "failed": last.get("failed", "") if state == "off" and not loop_started_after(last.get("at", "")) else "",
             "log": loop_audit_last(20)[::-1], "write": write, "reason": "" if write else LOOP_READ_ONLY,
             "tailnet": a.tailnet, "access": {"loop_write": tn.get("loop_write") is True, "terminals_send": tn.get("terminals_send") is True}}   # Settings > Access reads the tailnet rule here
 
@@ -1821,24 +1856,25 @@ def loop_kill(root):
             time.sleep(0.1)
     return not _pid_alive(root)
 
-def loop_run_pid(run):
-    """The pid of a live run's own process: its record's last call_start, while that pid is a live python process. A run is
-    started in its own session (start_new_session), so the supervisor's group stop never reaches it."""
-    f = pathlib.Path(run) / "record.jsonl" if run.startswith("/") else pathlib.Path(CHECKOUT) / "runs" / run / "record.jsonl"
-    for raw in reversed(_read(f).splitlines()):
-        try: e = json.loads(raw)
-        except ValueError: continue
-        if e.get("event") == "call_start" and isinstance(e.get("pid"), int) and e["pid"] > 1:
-            cmd = next((c for p, _, c in _ps_rows() if p == e["pid"]), "")
-            return e["pid"] if "python" in cmd.lower() else None
-    return None
+def loop_mark_killed(run):
+    """Give a run stop-now ended its verdict at once, through squad.killed (the one writer), so it never reads live again.
+    False when it could not be written: the run then still reads not live, since its process is gone."""
+    try:
+        (K,) = load_squad(squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__), ("killed",))
+        K.mark_killed(loop_record(run).parent, "killed/stop-now")
+        return True
+    except Exception as e:
+        log_once(f"hub: stop-now could not write the killed verdict of {run}: {type(e).__name__}: {' '.join(str(e).split())}")
+        return False
 
 def loop_stop_now(live):
-    """End each listed run and gate; answer what died and what survived."""
+    """End each listed run and gate; answer what died and what survived. A run that died gets its killed verdict."""
     killed, survived = {"runs": [], "gates": []}, {"runs": [], "gates": []}
     for r in live["runs"]:
         pid = loop_run_pid(r)
-        (killed if pid and loop_kill(pid) else survived)["runs"].append(r)
+        if pid and loop_kill(pid):
+            killed["runs"].append(r); loop_mark_killed(r)
+        else: survived["runs"].append(r)
     for g in live["gates"]:
         pid = int(g.rsplit(" ", 1)[-1])
         (killed if pid != os.getpid() and loop_kill(pid) else survived)["gates"].append(g)

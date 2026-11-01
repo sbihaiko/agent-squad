@@ -12,13 +12,18 @@ orphans() { /bin/ps -axwwo pid=,ppid=,command= 2>/dev/null | awk -v a="$(dirname
 # names a later publish to another sha as a restart only the owner makes (#700). No sha known: no stale driver.sha.
 record_sha() { k=$(dirname "$(dirname "$me")"); ds=$(cut -d' ' -f1 "$k/PUBLISHED" 2>/dev/null); [ -n "$ds" ] || ds=$(git -C "$k" rev-parse HEAD 2>/dev/null)
   if [ -n "$ds" ]; then printf '%s\n' "$ds" > "$SG_STATE/driver.sha.$$" && mv "$SG_STATE/driver.sha.$$" "$SG_STATE/driver.sha"; else rm -f "$SG_STATE/driver.sha"; fi; }
-# The live work a drain waits for: a run with no verdict in active-runs.txt, or a gate whose lock pid is alive (#923).
+# The live work a drain waits for: a run in active-runs.txt that still runs, or a gate whose lock pid is alive (#923).
 drain_busy() {
-  local r f g
+  local r f g p
   while IFS= read -r r; do
     [ -n "$r" ] || continue
     case "$r" in /*) f="$r/record.jsonl";; *) f="$SG_CHECKOUT/runs/$r/record.jsonl";; esac
-    grep -Eq '"event": ?"verdict"' "$f" 2>/dev/null || return 0
+    grep -Eq '"event": ?"verdict"' "$f" 2>/dev/null && continue
+    # The hub's rule (loop_run_live): live while the last call_start pid runs as a squad run, or, before the first call, while
+    # the record moved within the launch window. A run that died with no verdict never holds the drain.
+    p=$(grep -E '"event": ?"call_start"' "$f" 2>/dev/null | tail -1 | sed -nE 's/.*"pid": ?([0-9]+).*/\1/p')
+    if [ -n "$p" ]; then /bin/ps -p "$p" -ww -o command= 2>/dev/null | grep -qE "${SG_RUN_CMD_RE:-[s]quad start( |\$)}" && return 0
+    else [ -n "$(find "$f" -mmin -"${HB_DEAD_IDLE_MIN:-1}" 2>/dev/null)" ] && return 0; fi
   done < "$SG_STATE/active-runs.txt" 2>/dev/null
   g=$(cat "$SG_STATE/locks/gate/pid" 2>/dev/null)
   [ -n "$g" ] && kill -0 "$g" 2>/dev/null && return 0
@@ -33,6 +38,7 @@ case "${1:-status}" in
     # while it dispatches nothing. A pause the owner set before the drain has no drain-pause mark, and stays.
     rm -f "$SG_STATE/auto/drain"; [ -e "$SG_STATE/auto/drain-pause" ] && rm -f "$SG_STATE/auto/off" "$SG_STATE/auto/drain-pause"
     record_sha
+    date +%s > "$SG_STATE/watchd.started"   # the hub drops an older failed start once a later start ran (#923)
     python3 -I -c 'import subprocess,sys;subprocess.Popen(["bash",sys.argv[1],"run"],start_new_session=True,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)' "$me"
     for _ in 1 2 3 4 5 6 7 8 9 10; do alive && { echo "watchd started pid=$pid"; exit 0; }; sleep 1; done
     echo "watchd failed to start" >&2; exit 1;;

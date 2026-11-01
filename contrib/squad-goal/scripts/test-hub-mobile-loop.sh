@@ -31,7 +31,16 @@ check("the phone has the desktop's loopWhen", m is not None)
 if m and shutil.which("node"):
     r = subprocess.run(["node", "-e", m.group(0) + '\nprocess.stdout.write(loopWhen("2026-10-31T16:02:09-03:00")+"|"+loopWhen(""))'], capture_output=True, text=True, timeout=10)
     check("loopWhen reads 2026-10-31 16:02 from an ISO stamp", r.stdout == "2026-10-31 16:02|")
-check("the reason a tailnet request is read-only is shown", '$("loop-reason").textContent = v.reason' in t)
+check("the reason line is drawn by loopReason", '$("loop-reason").textContent = loopReason(v)' in t)
+m = re.search(r"^const loopReason = .*;$", t, re.M)
+check("the phone has loopReason", m is not None)
+if m and shutil.which("node"):
+    js = m.group(0) + '\nprocess.stdout.write(loopReason({reason:"read-only from the tailnet",failed:"watchd did not start"})+"|"+loopReason({reason:"read-only from the tailnet",failed:""})+"|"+loopReason({reason:"",failed:"watchd did not start"}))'
+    r = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=10)
+    a, b, c = (r.stdout.split("|") + ["", "", ""])[:3]
+    check("a read-only view still shows the failure reason (#923 review 2)", "read-only from the tailnet" in a and "watchd did not start" in a)
+    check("the read-only reason alone is shown alone", b == "read-only from the tailnet")
+    check("the failure alone is shown on a writable view", "watchd did not start" in c and "read-only" not in c)
 check("the change log lists the hub's audit lines", '$("loop-log").replaceChildren(...v.log.map' in t and 'e.from + "): " + e.action' in t)
 check("the draining and starting states have their own colour", "#loop.draining #loop-text" in t and "#loop.starting #loop-text" in t)
 block = t.split('<div id=loop>', 1)[1].split('</details>', 1)[0] if '<div id=loop>' in t else ""

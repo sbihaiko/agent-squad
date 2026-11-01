@@ -340,6 +340,8 @@ setInterval(status, 5000);
 
 let loopNow = { runs: [], gates: [] };
 const loopWhen = s => { const m = String(s || "").match(/^(\d{4}-\d\d-\d\d)T(\d\d:\d\d)/); return m ? m[1] + " " + m[2] : String(s || ""); };
+// a read-only view and a failed start: both reasons show (#923)
+const loopReason = v => [v.reason, v.failed ? "The last start failed: " + v.failed : ""].filter(Boolean).join(". ");
 const loopLive = l => (l.runs || []).map(r => "run " + r.split("/").pop()).concat(l.gates || []);
 async function loopView() {
   try {
@@ -350,7 +352,7 @@ async function loopView() {
     $("loop-start").disabled = !can.includes("start");
     $("loop-drain").disabled = !can.includes("drain");
     $("loop-now").disabled = !can.includes("stop-now");
-    $("loop-reason").textContent = v.reason || (v.failed ? "The last start failed: " + v.failed : "");
+    $("loop-reason").textContent = loopReason(v);
     loopNow = v.live;
     $("loop-log").replaceChildren(...v.log.map(e => {
       const li = document.createElement("li");

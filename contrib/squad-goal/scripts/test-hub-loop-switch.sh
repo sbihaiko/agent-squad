@@ -11,6 +11,11 @@ out=$(python3 - <<'PY' 2>&1
 import datetime as dt, importlib.util, json, os, pathlib, subprocess
 spec = importlib.util.spec_from_file_location("hub", os.environ["HUB_SRC"]); hub = importlib.util.module_from_spec(spec); spec.loader.exec_module(hub)
 STATE = pathlib.Path(os.environ["SG_STATE"]); STATE.mkdir(parents=True, exist_ok=True)
+import sys; sys.path.insert(0, str(pathlib.Path(os.environ["HUB_SRC"]).resolve().parents[3])); from squad import record as R
+def real_record(d, pid):   # a record as a run writes it: run_start, then call_start with the run process pid
+    f = pathlib.Path(d) / "record.jsonl"; f.unlink(missing_ok=True); r = R.Record(f)
+    r.append("run_start", run_id="r", graph_name="g", graph_hash="h", engine_options={}, root=".", plan=[])
+    r.append("call_start", node="n", entry=1, session="s", pid=pid, limit=None, started_at=0)
 calls = []
 def watchd(*args):   # the marks watchd.sh leaves: a drain pauses dispatch and marks it, a stop clears the mark
     calls.append(list(args))
@@ -129,10 +134,14 @@ check("a start while starting is refused with 409", code == 409 and calls == [] 
 # stop-now ends each listed run and the held gate itself: a run is detached from the supervisor's group (start_new_session),
 # so watchd's group TERM never reaches it. The audit names only what died.
 import time
-def detached(code):   # a process its launcher leaves behind, as autofrontier leaves a run: own session, parent gone
-    out = subprocess.run(["python3", "-c", "import subprocess,sys;p=subprocess.Popen(['python3','-c',sys.argv[1]],start_new_session=True,"
-                          "stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL);print(p.pid)", code], capture_output=True, text=True)
+def detached(code, *argv):   # a process its launcher leaves behind, as autofrontier leaves a run: own session, parent gone
+    out = subprocess.run(["python3", "-c", "import subprocess,sys;p=subprocess.Popen(['python3','-c',*sys.argv[1:]],start_new_session=True,"
+                          "stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL);print(p.pid)", code, *argv], capture_output=True, text=True)
     return int(out.stdout)
+def gone_now(pid):
+    try: os.kill(pid, 0)
+    except OSError: return True
+    return False
 def gone(pid):
     for _ in range(50):
         try: os.kill(pid, 0)
@@ -140,13 +149,13 @@ def gone(pid):
         time.sleep(0.1)
     return False
 kid = STATE / "kid.pid"
-run_pid = detached(f"import subprocess,time;c=subprocess.Popen(['sleep','300']);open({str(kid)!r},'w').write(str(c.pid));time.sleep(300)")
+run_pid = detached(f"import subprocess,time;c=subprocess.Popen(['sleep','300']);open({str(kid)!r},'w').write(str(c.pid));time.sleep(300)", "squad", "start")   # argv as a run has it: squad start
 gate_pid = detached("import time;time.sleep(300)")
 for _ in range(50):
     if kid.is_file() and kid.read_text(): break
     time.sleep(0.1)
 kid_pid = int(kid.read_text())
-(live_run / "record.jsonl").write_text('{"event": "start"}\n' + json.dumps({"event": "call_start", "node": "n", "pid": run_pid}) + "\n")
+real_record(live_run, run_pid)
 orphan = STATE.parent / "runs" / "r2"; orphan.mkdir(parents=True, exist_ok=True); (orphan / "record.jsonl").write_text('{"event": "start"}\n')
 (STATE / "active-runs.txt").write_text(f"{live_run}\n{orphan}\n")
 (STATE / "locks" / "gate" / "pid").write_text(f"{gate_pid}\n")
@@ -156,9 +165,33 @@ check("stop-now kills a detached run, its child and the held gate", gone(run_pid
 a = audit()[-1] if audit() else {}
 check("the audit names the run and the gate that died", a.get("killed", {}).get("runs") == [str(live_run)] and a.get("killed", {}).get("gates") == [f"gate pid {gate_pid}"], a)
 check("a run with no process to end is named as survived, not killed", a.get("survived", {}).get("runs") == [str(orphan)] and got.get("survived") == a.get("survived"), (a, got))
+last = json.loads((live_run / "record.jsonl").read_text().splitlines()[-1])
+check("stop-now gives the run it killed its verdict at once, through squad.killed", last.get("event") == "verdict" and "killed/stop-now" in json.dumps(last), last)
+check("a killed run is no longer live, so the confirm and a later drain do not wait on it", str(live_run) not in hub.loop_live()["runs"], hub.loop_live())
 for p in (run_pid, kid_pid, gate_pid):
     try: os.kill(p, 9)
     except OSError: pass
+
+# A run whose process died with no verdict (a crash, or a kill the record never heard of) is not live: liveness is the last
+# call_start pid alive as a squad run, never the missing verdict alone.
+crashed = STATE.parent / "runs" / "r3"; crashed.mkdir(parents=True, exist_ok=True)
+real_record(crashed, dead_pid())
+(STATE / "active-runs.txt").write_text(f"{crashed}\n")
+check("a run whose call_start pid is dead is not live", hub.loop_live()["runs"] == [], hub.loop_live())
+
+# A call_start pid that names a process that is not a squad run (a reused pid: the hub itself, or any other python) is never
+# ended: stop-now kills only a process whose command matches SG_RUN_CMD_RE.
+other = detached("import time;time.sleep(300)")
+mine, theirs = STATE.parent / "runs" / "r4", STATE.parent / "runs" / "r5"
+for r, pid in ((mine, os.getpid()), (theirs, other)):
+    r.mkdir(parents=True, exist_ok=True)
+    real_record(r, pid)
+check("the hub's own pid is never a run's pid", hub.loop_run_pid(str(mine)) is None, hub.loop_run_pid(str(mine)))
+check("a python process that is not a squad run is never a run's pid", hub.loop_run_pid(str(theirs)) is None, hub.loop_run_pid(str(theirs)))
+killed, survived = hub.loop_stop_now({"runs": [str(mine), str(theirs)], "gates": []})
+check("stop-now ends neither the hub nor an unrelated python process", not gone_now(other) and killed["runs"] == [] and survived["runs"] == [str(mine), str(theirs)], (killed, survived))
+try: os.kill(other, 9)
+except OSError: pass
 (live_run / "record.jsonl").write_text('{"event": "start"}\n'); (STATE / "active-runs.txt").write_text(f"{live_run}\n"); (STATE / "locks" / "gate" / "pid").unlink()
 
 view = hub.loop_view(LOOP["tail"])

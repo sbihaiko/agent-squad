@@ -1,8 +1,8 @@
-"""The loop switch on the desktop hub (#923, ADR-0162): the alert strip and Settings > Loop draw one view of `/api/loop`.
+"""The loop switch on the desktop hub (#923, ADR-0162): the Monitor card and Settings > Loop draw one view of `/api/loop`.
 
 The route is tested over HTTP here, not only as functions: a loopback start writes one audit line, a cross-site write is
 refused, and a tailnet write is refused with its reason unless `tailnet.loop_write` is on. The page's renderers are run in
-node: the strip and the Loop theme show the state, who changed it and when; the stop confirm lists every live run and gate;
+node: the Monitor card and the Loop theme show the state, who changed it and when; the stop confirm lists every live run and gate;
 the Access theme holds the tailnet rule. The Loop theme has no Save.
 """
 import http.client
@@ -169,7 +169,7 @@ def test_the_loop_theme_has_no_save():
     assert fn and not re.search(r"save", fn.group(0), re.I)
 
 
-def test_the_strip_no_longer_draws_a_dead_start_button():
+def test_the_page_draws_no_dead_start_button():
     src = page()
     assert "The hub has no route that starts the loop" not in src
     assert re.search(r'fetch\("/api/loop"\)', src)
@@ -199,14 +199,23 @@ def js_view(**over):
     return json.dumps({**VIEW, **over})
 
 
-def test_the_strip_shows_the_state_who_and_when():
-    out = run_js(f"loopStripHtml({js_view()})")
+def test_the_monitor_card_holds_the_switch():
+    """The owner removed the alert strip: the Monitor card carries the loop, so the switch is drawn there."""
+    src = page()
+    card = src.split("<details id=inst", 1)[1].split("</details>", 1)[0]
+    assert "id=iloop" in card
+    assert re.search(r'function instLoopDraw\(\)\{const e=\$\("#iloop"\).*?loopCardHtml\(loopV\)', src)
+    assert re.search(r"function loopDraw\(\)\{.*?instLoopDraw\(\)\}", src, re.S)
+
+
+def test_the_monitor_card_shows_the_state_who_and_when():
+    out = run_js(f"loopCardHtml({js_view()})")
     assert "on" in out and "owner" in out and "16:02" in out
     assert "Stop" in out and "disabled" not in out
 
 
-def test_the_strip_button_is_read_only_with_its_reason_from_the_tailnet():
-    out = run_js(f"loopStripHtml({js_view(write=False, reason='read-only from the tailnet: SQUAD_TAILNET_LOOP_WRITE is not on')})")
+def test_the_monitor_card_button_is_read_only_with_its_reason_from_the_tailnet():
+    out = run_js(f"loopCardHtml({js_view(write=False, reason='read-only from the tailnet: SQUAD_TAILNET_LOOP_WRITE is not on')})")
     assert "disabled" in out and "SQUAD_TAILNET_LOOP_WRITE" in out
 
 
