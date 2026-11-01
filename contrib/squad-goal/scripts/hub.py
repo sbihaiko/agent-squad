@@ -1941,18 +1941,18 @@ def foot_refresh(now=None):
     return LOAD_STATE["facts"]
 
 SPEC_TIP_LINES = 8   # the spec tile's tooltip names at most this many specs, then "+k more"
-NOSPEC_DAYS = 7      # the No spec group counts the cards closed in this many days (owner)
+NOSPEC_HOURS = 24    # the No spec group counts the closed cards opened in this many hours (owner)
 
 def nospec_count(items, moves=None, read_at=None, window=None, now=None):
-    """The No spec group (bugs and single tickets): `total` is its open cards plus its cards closed in the last NOSPEC_DAYS
-    days by the read's own closed-at (`c`); `closed` is the closed ones. A card is in the group as the board's No spec
+    """The No spec group (bugs and single tickets): `total` is its open cards plus its closed cards opened in the last
+    NOSPEC_HOURS hours by the read's own opened-at (`o`); `closed` is those closed ones. A card is in the group as the board's No spec
     lane holds it: no spec label, no loop-bug label, and no parent spec, or a parent spec the board draws closed (an open
-    card only: a closed card of a closed spec is history). An abandoned card, or a closed card with no closed-at, never
+    card only: a closed card of a closed spec is history). An abandoned card, or a closed card with no opened-at, never
     counts. The column is `drawn_column`, with the door's overlay, so the lane, the summary and the tile agree (ADR-0137)."""
     if moves is None: moves = read_moves() if overlay_on() else {}
     if read_at is None: read_at = board_cache.get("rt")
     if window is None: window = pending_window()
-    since = (time.time() if now is None else now) - NOSPEC_DAYS * 86400
+    since = (time.time() if now is None else now) - NOSPEC_HOURS * 3600
     ends, closed_col = (COLUMN["issue_closed"], COLUMN["abandoned"]), COLUMN["issue_closed"]
     cols = [(i, drawn_column(i, moves, read_at, window)["st"]) for i in items or []]
     gone = {i.get("n") for i, st in cols if _columns_module.SPEC_LABEL in (i.get("l") or []) and st in ends}
@@ -1963,7 +1963,7 @@ def nospec_count(items, moves=None, read_at=None, window=None, now=None):
         pa = i.get("pa") if isinstance(i.get("pa"), int) else None
         if pa is not None and (pa not in gone or st == closed_col): continue
         if st != closed_col: total += 1; continue
-        try: at = _utc(i["c"]).timestamp() if i.get("c") else None
+        try: at = _utc(i["o"]).timestamp() if i.get("o") else None
         except Exception: at = None
         if at is not None and at >= since: done, total = done + 1, total + 1
     return {"closed": done, "total": total}
