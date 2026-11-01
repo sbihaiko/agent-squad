@@ -1,4 +1,4 @@
-"""The hub's mobile page: five tabs, the links to and from the desktop page, the Status tab's facts (#826).
+"""The hub's mobile page: five tabs, the links to and from the desktop page, the Monitor tab's facts (#826, #983).
 
 The page and the status route are driven over HTTP, through the hub and through the mux under a profile path. The loop
 stamp rule is tested as a function, with no server and no page loaded. The page holds no rule code (ADR-0137): a guard
@@ -20,7 +20,7 @@ SCRIPTS = ROOT / "contrib/squad-goal/scripts"
 HUB_PY = SCRIPTS / "hub.py"
 MUX_PY = SCRIPTS / "hubmux.py"
 GHREAD_PY = SCRIPTS / "ghread.py"
-TABS = ["status", "board", "runs", "terminals", "more"]
+TABS = ["monitor", "board", "runs", "terminals", "more"]
 TAILNET = "hub.tail1234.ts.net"
 ANA = "ana@example.com"
 
@@ -157,7 +157,7 @@ def test_mobile_page_holds_no_board_rule_code(hub):
 def test_mobile_page_keeps_no_credential(hub):
     mod, port = hub
     _, _, body = get(port, "/mobile")
-    assert 'data-tab="status"' in body
+    assert 'data-tab="monitor"' in body
     low = body.lower()
     assert "<form" not in low
     assert 'type="password"' not in low and "type=password" not in low

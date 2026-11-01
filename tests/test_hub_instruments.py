@@ -167,3 +167,41 @@ def test_the_card_reads_the_one_load_route_and_stays_calm(hub):
     assert re.search(r"prefers-reduced-motion:\s*reduce\)\s*\{[^}]*#inst", page)
     assert 'aria-live="off"' in page or "aria-live=off" in page
     assert "@keyframes" not in page[page.index("// INST{"):page.index("// }INST")]
+
+
+def _rules(css):
+    """The card's style rules as (selectors, declarations), comments stripped, in source order."""
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+    css = re.sub(r"@media[^{]*\{((?:[^{}]*\{[^{}]*\})*)[^{}]*\}", r"\1", css)
+    return [([s.strip() for s in m.group(1).split(",")], m.group(2)) for m in re.finditer(r"([^{}]+)\{([^{}]*)\}", css)]
+
+
+def test_every_card_selector_names_the_card_once(hub):
+    """A stray `#inst` prefix nests the card in itself, so the rule matches nothing on either page."""
+    for sels, _ in _rules(hub.INST_CSS):
+        for s in sels:
+            assert re.match(r"#(inst|ispec)\b", s), s
+            assert len(re.findall(r"#inst\b", s)) <= 1, s
+
+
+def test_a_red_cell_draws_its_needle_and_its_value_red(hub):
+    rules = _rules(hub.INST_CSS)
+    assert any("#inst .ig.ldred .gn" in sels and "stroke:var(--err)" in d.replace(" ", "") for sels, d in rules), "the overload needle is red"
+    assert any("#inst .gv" in sels and "font-size:var(--fs-min)" in d for sels, d in rules), "the gauge value is small text"
+
+
+def _spec(sel):
+    return (sel.count("#"), sel.count(".") + sel.count(":"), len(re.findall(r"(?:^|\s)[a-z]", sel)))
+
+
+def test_a_red_arc_stays_red_when_the_card_warns(hub):
+    """A red cell sits above the machine-wide amber of `#inst.warn`, and never yields to it (review of #983)."""
+    rules = _rules(hub.INST_CSS)
+    reds = [(i, s) for i, (sels, d) in enumerate(rules) for s in sels
+            if s.endswith(".ldred .gf") and "stroke:var(--err)" in d.replace(" ", "")]
+    assert reds, "a red cell's arc is red"
+    assert any(s.startswith("#inst.warn") for _, s in reds), "the red rule names the warning card too"
+    for i, (sels, d) in enumerate(rules):
+        for s in sels:
+            if ".warn" in s and ".ldred" not in s and s.endswith(".gf") and "stroke:" in d:
+                assert any(_spec(r) > _spec(s) or (_spec(r) == _spec(s) and j > i) for j, r in reds), s

@@ -24,7 +24,8 @@ GESTURE_JS = SCRIPTS / "hub-mobile-gesture.js"
 FILTER_JS = SCRIPTS / "board-filter.js"
 NODE = shutil.which("node")
 ROUTES = {"/api/status", "/api/hub", "/api/board", "/api/issue", "/api/subs", "/api/models", "/api/stats", "/api/runs", "/api/ended",
-          "/api/sessions", "/api/sessions/conversation", "/api/sessions/send", "/api/promote", "/api/loop"}   # the owner's move is a write (#829)
+          "/api/sessions", "/api/sessions/conversation", "/api/sessions/send", "/api/promote", "/api/loop",
+          "/api/load"}   # the owner's move is a write (#829); the Monitor reads the desktop card's route (#983)
 
 
 def run_js(src, expr, prelude=""):
