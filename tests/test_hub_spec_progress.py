@@ -51,22 +51,53 @@ BOARD = [
 
 
 def test_the_bar_totals_open_specs_only(hub):
-    p = hub.spec_progress(BOARD)
-    assert (p["done"], p["total"], p["specs"], p["pct"]) == (5, 9, 2, 56)
-    assert p["text"] == "Specs 5/9 · 56% · 2 open"
-    assert "#1 Spec 1 2/5" in p["tip"] and "#2 Spec 2 3/4" in p["tip"]
-    assert "#3" not in p["tip"] and "#7" not in p["tip"]
+    p = hub.spec_progress(BOARD, moves={})
+    assert (p["done"], p["total"], p["open"], p["pct"], p["state"], p["bar"]) == (5, 9, 3, 55, "info", True)
+    assert p["value"] == "5/9 · 55%" and p["so"] == "3 open"
+    assert p["frac"] == pytest.approx(5 / 9)
+    assert p["tip"].split("\n") == ["#7 Spec 7 — no sub-issue", "#1 Spec 1 — 2/5", "#2 Spec 2 — 3/4"]
+
+
+def test_percent_rounds_down_and_reads_100_only_when_all_done(hub):
+    p = hub.spec_progress([_item(1, "Todo", si=(199, 200))], moves={})
+    assert (p["pct"], p["value"], p["state"]) == (99, "199/200 · 99%", "info")
+    assert p["frac"] == pytest.approx(0.995)
+    p = hub.spec_progress([_item(1, "Todo", si=(4, 4))], moves={})
+    assert (p["pct"], p["value"], p["state"]) == (100, "4/4 · 100%", "ok")
 
 
 def test_no_open_spec_reads_no_open_spec(hub):
-    for items in ([], [BOARD[2], BOARD[5], BOARD[6]], [_item(9, "Todo", si=(0, 0))]):
-        p = hub.spec_progress(items)
-        assert (p["done"], p["total"], p["pct"], p["text"]) == (0, 0, 0, "no open spec")
+    for items in ([], [BOARD[2], BOARD[5], BOARD[6]]):
+        p = hub.spec_progress(items, moves={})
+        assert (p["open"], p["value"], p["state"], p["bar"], p["tip"]) == (0, "no open spec", "none", False, "")
 
 
-def test_the_load_route_serves_the_bar(hub):
-    hub.board_cache["items"] = BOARD
-    assert hub.load_payload()["specs"]["text"] == "Specs 5/9 · 56% · 2 open"
+def test_open_specs_with_no_sub_issue_draw_an_empty_track(hub):
+    p = hub.spec_progress([_item(9, "Todo", si=(0, 0)), _item(8, "Backlog")], moves={})
+    assert (p["open"], p["value"], p["state"], p["bar"], p["frac"]) == (2, "2 open · no sub-issue yet", "info", True, 0)
+
+
+def test_the_tip_keeps_eight_lines_then_counts_the_rest(hub):
+    p = hub.spec_progress([_item(n, "Todo", si=(n, 20)) for n in range(1, 12)], moves={})
+    lines = p["tip"].split("\n")
+    assert lines[0] == "#1 Spec 1 — 1/20" and lines[7] == "#8 Spec 8 — 8/20" and lines[8] == "+3 more" and len(lines) == 9
+
+
+def test_a_pending_move_to_abandoned_is_not_counted(hub, monkeypatch):
+    spec = dict(_item(1, "Todo", si=(2, 5)), i="PVTI_1")
+    other = _item(2, "Todo", si=(1, 4))
+    moves = {"PVTI_1": {"column": "Abandoned", "at": "2099-01-01T00:00:00Z", "by": "owner"}}
+    p = hub.spec_progress([spec, other], moves=moves, read_at=0, window=120.0)
+    assert (p["open"], p["done"], p["total"]) == (1, 1, 4)
+    monkeypatch.setattr(hub, "read_moves", lambda: moves)
+    monkeypatch.setattr(hub, "board_cache", {"items": [spec, other], "rt": 0})
+    assert hub.spec_progress([spec, other])["open"] == 1
+
+
+def test_the_load_route_serves_the_bar(hub, monkeypatch):
+    monkeypatch.setattr(hub, "board_cache", dict(hub.board_cache, items=BOARD))
+    monkeypatch.setattr(hub, "read_moves", lambda: {})
+    assert hub.load_payload()["specs"]["value"] == "5/9 · 55%"
 
 
 def _run(hub, expr):
@@ -80,12 +111,20 @@ def _run(hub, expr):
     return json.loads(out.stdout)
 
 
-def test_the_page_draws_the_label_and_the_width(hub):
-    html = _run(hub, f"specBar({json.dumps(hub.spec_progress(BOARD))})")
-    assert "Specs 5/9 · 56% · 2 open" in html and "width:56%" in html and 'title="' in html
-    empty = _run(hub, f"specBar({json.dumps(hub.spec_progress([]))})")
-    assert "no open spec" in empty and "width:0%" in empty
+def test_the_page_draws_the_tile(hub):
+    html = _run(hub, f"specBar({json.dumps(hub.spec_progress(BOARD, moves={}))})")
+    assert 'class="at info"' in html and "<span class=so>3 open</span>" in html and "5/9 · 55%" in html
+    assert "role=progressbar" in html and "aria-valuemax=9" in html and "aria-valuenow=5" in html
+    assert f"width:{100 * 5 / 9}%" in html and 'title="#7 Spec 7' in html
+    done = _run(hub, f"specBar({json.dumps(hub.spec_progress([_item(1, 'Todo', si=(4, 4))], moves={}))})")
+    assert 'class="at ok"' in done and "width:100%" in done
+    empty = _run(hub, f"specBar({json.dumps(hub.spec_progress([], moves={}))})")
+    assert "no open spec" in empty and "progressbar" not in empty and 'class="at"' in empty
     assert "no open spec" in _run(hub, "specBar(undefined)")
+
+
+def test_the_fill_has_a_reduced_motion_rule(hub):
+    assert re.search(r"@media \(prefers-reduced-motion: reduce\)\{#inst \.pf\{transition:none\}\}", hub.PAGE)
 
 
 def test_the_bar_sits_below_the_tiles_and_above_the_loop_row(hub):
