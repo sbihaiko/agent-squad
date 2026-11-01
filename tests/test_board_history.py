@@ -105,6 +105,18 @@ def test_a_card_missing_from_the_hourly_search_ends_its_interval(tmp_path):
     assert bh.intervals(store[5]["events"])[-1]["on_board"] is True
 
 
+def test_the_hourly_search_writes_one_record_for_each_card_it_did_not_find(tmp_path):
+    path = tmp_path / "hub-board.jsonl"
+    for n in (5, 6, 7):
+        bh.record_issue(path, n, "2026-10-01T00:00:00Z", "2026-10-01T00:00:00Z",
+                        [{"t": "2026-10-01T00:00:00Z", "type": "added"}], complete=True, now=T0)
+    before = len(bh.read_records(path))
+    bh.record_search(path, found=[5, 7], now=T0 + 3600)
+    appended = bh.read_records(path)[before:]
+    assert [r["k"] for r in appended] == ["search", "issue"]
+    assert appended[1]["n"] == 6 and appended[1]["events"][-1]["type"] == "gone"
+
+
 def test_points_per_hour_counts_only_the_last_hour(tmp_path):
     path = tmp_path / "hub-board.jsonl"
     bh.record_points(path, 1, T0)
