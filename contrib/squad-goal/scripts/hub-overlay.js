@@ -68,7 +68,7 @@ SQ.MARKUP = `<style>
 html.sq-docked #sq-ov-btn{display:none}
 html.sq-docked body{margin-right:var(--sq-dock)}
 #sq-ov-lens{will-change:transform}
-#sq-ov{position:fixed;z-index:1000;right:16px;bottom:calc(var(--sq-ov-bottom,16px) + 64px);width:min(440px,calc(100vw - 32px));height:min(640px,calc(100vh - 120px));display:flex;flex-direction:column;box-sizing:border-box;background:#11151c;color:#e6e8ee;border:1px solid #353d4b;border-radius:13px;box-shadow:0 18px 50px #000c;font:14px/1.45 system-ui,-apple-system,sans-serif;text-align:left}
+#sq-ov{position:fixed;z-index:1000;right:16px;bottom:calc(var(--sq-ov-bottom,16px) + 64px);width:min(440px,calc(100vw - 32px));height:min(640px,calc(100vh - 120px));display:flex;flex-direction:column;box-sizing:border-box;background:#11151c;color:#e6e8ee;border:1px solid #353d4b;border-radius:13px;box-shadow:0 18px 50px #000c;--sq-fs:13px;font:14px/1.45 system-ui,-apple-system,sans-serif;text-align:left}
 #sq-ov[hidden]{display:none}
 #sq-ov *{box-sizing:border-box}
 #sq-ov[data-mode=docked]{top:0;right:0;bottom:0;height:auto;width:var(--sq-dock);border-radius:0;border-width:0 0 0 1px;box-shadow:none}
@@ -89,25 +89,26 @@ html.sq-docked body{margin-right:var(--sq-dock)}
 #sq-ov-pick p{margin:0 0 2px;width:100%;color:#b8c0cf;font-size:13px}
 #sq-ov-pick button{min-height:44px;padding:4px 10px;border:1px solid #353d4b;border-radius:8px;background:#1c212b;color:#e6e8ee;cursor:pointer;font:inherit;font-size:13px}
 #sq-ov-pick button[aria-pressed=true]{border-color:#7aa2ff}
+.sq-ov-fsb{font:600 13px/1 system-ui;min-width:34px;height:34px;padding:0 6px}
 #sq-ov-log{flex:1;min-height:0;overflow:auto;padding:13px 14px}
 #sq-ov-log .sq-empty{color:#b8c0cf}
 .sq-turn{margin:0 0 4px;padding-left:8px;border-left:2px solid transparent;line-height:1.45}
 .sq-who{display:block;font-size:10px;line-height:1.2;color:#707988;margin-bottom:2px;letter-spacing:.02em}
-.sq-txt{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;color:#d8dee9}
+.sq-txt{white-space:pre-wrap;overflow-wrap:anywhere;font-size:var(--sq-fs);color:#d8dee9}
 .sq-p{margin:0 0 5px}.sq-p:last-child{margin-bottom:0}
 .sq-owner{border-left:0;background:rgba(122,162,255,.08);border-radius:6px;padding:5px 9px}
 .sq-owner .sq-who{color:#7aa2ff}
 .sq-system{border-left-color:#3f4756}.sq-system .sq-who{color:#707988}.sq-system .sq-txt{color:#9aa3b2}
 .sq-answer{border-left-color:#3ecf8e}.sq-answer .sq-who{color:#3ecf8e}
-.sq-h{font-weight:600;font-size:13px;color:#eef1f5;margin:6px 0 3px}
+.sq-h{font-weight:600;font-size:calc(var(--sq-fs) + 0px);color:#eef1f5;margin:6px 0 3px}
 .sq-ul{margin:3px 0;padding-left:16px}.sq-ul li{margin:0 0 2px}
 .sq-code{margin:4px 0}.sq-code summary{font-size:11px;color:#7aa2ff;cursor:pointer;list-style:none}
-.sq-code pre{margin:3px 0 0;padding:5px 8px;background:#0d1117;border:1px solid #232a36;border-radius:6px;overflow:auto;font:12px/1.4 ui-monospace,SFMono-Regular,monospace;color:#b8c0cf;white-space:pre}
+.sq-code pre{margin:3px 0 0;padding:5px 8px;background:#0d1117;border:1px solid #232a36;border-radius:6px;overflow:auto;font-family:ui-monospace,SFMono-Regular,monospace;font-size:calc(var(--sq-fs) - 1px);line-height:1.4;color:#b8c0cf;white-space:pre}
 .sq-img{display:block;margin:4px 0}.sq-img img{max-width:100%;max-height:180px;border:1px solid #232a36;border-radius:6px;display:block}
 .sq-more{margin:1px 0 4px;padding:1px 0;border:0;background:none;color:#7aa2ff;font-size:11px;cursor:pointer}
 .sq-earlier{margin:0 0 6px}.sq-earlier summary{font-size:11px;color:#707988;cursor:pointer}
 .sq-tool{border-left-color:#f5b041}.sq-tool .sq-who{color:#f5b041}
-.sq-tool .sq-txt{color:#9aa3b2;font:12.5px/1.35 ui-monospace,SFMono-Regular,monospace}
+.sq-tool .sq-txt{color:#9aa3b2;font-family:ui-monospace,SFMono-Regular,monospace;font-size:calc(var(--sq-fs) - .5px);line-height:1.35}
 #sq-ov-form{position:relative;display:flex;align-items:flex-end;gap:6px;padding:8px;border-top:1px solid #353d4b}
 #sq-ov-plus{flex:none;width:44px;height:44px;border:1px solid #353d4b;border-radius:50%;background:#1c212b;color:#e6e8ee;font:22px/1 system-ui;cursor:pointer}
 #sq-ov-menu{position:absolute;left:8px;bottom:60px;z-index:2;display:flex;flex-direction:column;min-width:170px;padding:4px;background:#1c212b;border:1px solid #353d4b;border-radius:10px;box-shadow:0 10px 30px #000a}
@@ -141,6 +142,8 @@ html.sq-over .sq-ov-back{display:inline-flex;align-items:center;min-height:44px;
 <div id="sq-ov" role="dialog" aria-labelledby="sq-ov-title" hidden>
 <div id="sq-ov-handle" role="separator" aria-orientation="vertical" aria-label="Resize the session panel" tabindex="0"></div>
 <header><h2 id="sq-ov-title">Terminal - Claude CLI</h2>
+<button type="button" class="sq-ov-dockctl sq-ov-fsb" id="sq-ov-fsdown" aria-label="Smaller text" title="Smaller text">A−</button>
+<button type="button" class="sq-ov-dockctl sq-ov-fsb" id="sq-ov-fsup" aria-label="Larger text" title="Larger text">A+</button>
 <button type="button" class="sq-ov-dockctl" id="sq-ov-dock" aria-label="Dock right" title="Dock right"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="13" y="5" width="7" height="14" fill="currentColor"/></svg></button>
 <button type="button" class="sq-ov-dockctl" id="sq-ov-undock" aria-label="Undock" title="Undock"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="8" width="13" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M11 4h9v9M20 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
 <button type="button" id="sq-ov-close" aria-label="Close" title="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
@@ -430,10 +433,30 @@ function placeSheets() {
   de.classList.toggle("sq-over", over);
 }
 for (const el of document.querySelectorAll(SHEETS)) new MutationObserver(placeSheets).observe(el, { attributes: true, attributeFilter: ["class", "style", "hidden"] });
+// The text size is the reader's (owner, 2026-11-01): two buttons in the header step it, and the choice outlives the page.
+const FS_KEY = "sq-ov-fs", FS_MIN = 10, FS_MAX = 22, FS_STEP = 1;
+let fsNow = 13;
+function fsSet(px) {
+  fsNow = Math.min(FS_MAX, Math.max(FS_MIN, Math.round(px)));
+  ov.style.setProperty("--sq-fs", fsNow + "px");
+  const down = $("sq-ov-fsdown"), up = $("sq-ov-fsup");
+  if (down) down.disabled = fsNow <= FS_MIN;
+  if (up) up.disabled = fsNow >= FS_MAX;
+  try { localStorage.setItem(FS_KEY, String(fsNow)); } catch (e) {}
+}
+function fsInit() {
+  let v = 13;
+  try { v = Number(localStorage.getItem(FS_KEY)) || 13; } catch (e) {}
+  fsSet(v);
+  const down = $("sq-ov-fsdown"), up = $("sq-ov-fsup");
+  if (down) down.onclick = () => fsSet(fsNow - FS_STEP);
+  if (up) up.onclick = () => fsSet(fsNow + FS_STEP);
+}
 function openOverlay(){
   ov.hidden = false; btn.setAttribute("aria-expanded", "true");
   applyLayout();
   // The field opens empty (owner, 2026-11-01): the page context is one click away in the + menu, never typed for you.
+  fsInit();
   loadSessions();
   clearInterval(timer); timer = setInterval(loadConversation, SQ.POLL_MS);
   text.focus();

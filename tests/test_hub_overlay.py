@@ -226,3 +226,15 @@ def test_the_feed_keeps_the_latest_turns_and_folds_the_older_ones():
               keep3: [c.earlier.length, c.shown.length]};
     })()""")
     assert out == {"earlier": 8, "shown": "t8", "short": 0, "keep3": [17, 3]}, out
+
+def test_the_reader_can_step_the_text_size_and_the_choice_outlives_the_page():
+    """Owner, 2026-11-01: the feed needed its own size control. Two header buttons step one CSS variable, the page keeps the
+    choice, and every text rule reads the variable so one step moves the whole talk."""
+    src = pathlib.Path(__file__).resolve().parents[1] / "contrib/squad-goal/scripts/hub-overlay.js"
+    js = src.read_text()
+    assert 'id="sq-ov-fsdown"' in js and 'id="sq-ov-fsup"' in js
+    assert "--sq-fs:13px" in js
+    assert js.index("--sq-fs") < js.index(".sq-txt{white-space:pre-wrap")
+    assert "font-size:var(--sq-fs)" in js
+    assert "localStorage.setItem(FS_KEY" in js and "localStorage.getItem(FS_KEY)" in js
+    assert "FS_MIN" in js and "FS_MAX" in js

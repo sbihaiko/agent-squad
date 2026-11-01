@@ -492,7 +492,7 @@ def test_a_hook_injected_message_reads_system_and_never_as_the_owner(home):
     assert [(t["id"], t["role"]) for t in page["turns"]] == [("u1", "owner"), ("m1", "system")]
 
 
-def test_a_command_record_and_a_task_notice_read_system_and_never_as_the_owner(home):
+def test_a_command_record_and_a_task_notice_are_no_turn_of_the_talk(home):
     """`/compact` and a background task write their own user turns with no `isMeta`: the owner read a command's markup and a
     task's notification as words they typed (owner, 2026-11-01)."""
     mod = load_sessions()
@@ -506,7 +506,7 @@ def test_a_command_record_and_a_task_notice_read_system_and_never_as_the_owner(h
     folder.mkdir(parents=True, exist_ok=True)
     (folder / "s2.jsonl").write_text("".join(json.dumps(e) + "\n" for e in entries))
     page = mod.read_conversation(str(cwd), "s2")
-    assert [t["role"] for t in page["turns"]] == ["owner", "system", "system", "system", "owner"]
+    assert [t["role"] for t in page["turns"]] == ["owner", "owner"]   # the harness's own records are no turns
 
 
 def test_a_poll_that_meets_no_new_byte_reads_no_file_again(home):

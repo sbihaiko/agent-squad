@@ -145,7 +145,7 @@ _ONE_ENVELOPE = re.compile(r"\s*<(%s)\b.*?</\1>" % "|".join(HARNESS_TAGS), re.S 
 
 def _harness_only(text):
     """True when the whole message is what the harness wrote into the transcript itself: a command's record, its output,
-    or a background task's notification. The owner typed none of it, so it never reads You (owner, 2026-11-01)."""
+    or a background task's notification. The owner typed none of it, so it is no turn of the talk (owner, 2026-11-01)."""
     rest = text
     while True:
         m = _ONE_ENVELOPE.match(rest)
@@ -164,7 +164,8 @@ def _turns_of(obj):
         if not isinstance(p, dict): continue
         text = p.get("text")
         if kind == "user" and p.get("type") == "text" and isinstance(text, str) and text:
-            out.append(("system" if owner_role == "owner" and _harness_only(text) else owner_role, uid, text))
+            if owner_role == "owner" and _harness_only(text): continue   # the harness's own record, never a turn of the talk
+            out.append((owner_role, uid, text))
         elif kind == "assistant" and p.get("type") == "text" and isinstance(text, str) and text: out.append(("answer", uid, text))
         # A tool call is not a turn of the conversation: a working session answers with hundreds of them, and they filled
         # the page while the owner's and the AI's words never arrived (#1073). The terminal stays their record.
