@@ -18,7 +18,8 @@ def make_row(run_id="run-1", phase="code", review_round=0, entry_index=1, attemp
              outcome="accepted", tokens_in=10):
     row = dict(schema=profiler.SCHEMA, issue=issue, run_id=run_id, phase=phase, review_round=review_round,
                chain_id="chain-a", entry_index=entry_index, model_id="model-a", provider="provider-a",
-               attempt=attempt, outcome=outcome, tokens_in=tokens_in, tokens_out=5, tokens_cache=None, turns=2)
+               attempt=attempt, outcome=outcome, tokens_in=tokens_in, tokens_out=5, tokens_cache=None,
+               tokens_src="record", turns=2)
     row["key"] = profiler.key(row)
     return row
 

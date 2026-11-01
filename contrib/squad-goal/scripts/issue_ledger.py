@@ -20,6 +20,10 @@ usage: issue_ledger.py read  <key> [state|count|last_fail|held|wave]  the record
        issue_ledger.py requeued <key> <run>                  the head the run requeued the issue on, "" when it did not
        issue_ledger.py review <key> <run> <verdict> <findings> [round]  one review of the issue's work: prints recorded|reset|duplicate|frozen|floor
        issue_ledger.py coder <key>                           the places down the coder chain the next attempt starts
+       issue_ledger.py board <key> <run> <column> <req> [instant]  one board write of a dispatch: prints recorded|duplicate|stale|floor
+       issue_ledger.py boardw <key> <run> <column>           that write landed: prints written|duplicate|superseded
+       issue_ledger.py boardx <key> <run> <column>           the pending write is dropped unwritten: prints dropped|superseded
+       issue_ledger.py pending <key|owner/repo>              "<n>\t<run>\t<column>\t<instant>\t<req>" for each board write not yet landed
 
 This module is the only writer of $SG_STATE/state/<owner>__<repo>__<n>.json. The key is <owner>/<repo>#<n>, the address
 seam's (ADR-0138), never a bare issue number. Owner intent stays on GitHub (ready-for-agent, the Todo card, frozen:owner,
@@ -49,6 +53,13 @@ work is in the base. It is keyed by the run that landed it (`kind` run) or by th
 branch), with the branch and the sha. Rule R reads it instead of a run's land heads (#691, #695): a landing is delivered work
 only when a landing pass wrote the fact. A `requeue` fact holds the head a run requeued the issue's child on, so the pass
 that requeued it is not tried again on the same head (the old auto/requeued-<run>-<child> marker, ADR-0149 rule 6).
+
+A `board` fact is one card write of a dispatch (ADR-0164): `{run, column, instant, state, req}`. Its identity is the run and the
+column, and its instant is the event's own time, set once when the event is first recorded. `board` records the event `pending`
+before the card write; `boardw` marks it `written` when the write lands, and `boardx` drops it unwritten when the gates no longer back it. A retry of the same event is a duplicate and keeps its
+first instant and its state; an event older than the fact is `stale`, so a late delivery never overwrites a newer one; a write
+for an event the fact no longer holds is `superseded`. `pending` lists what has not landed, so a dispatch that crashed between
+the event and its write finds the event and resumes it with the stored request.
 
 A `review` event is one review of the issue's work, keyed by its run and round (ADR-0151, ADR-0149 rule 1): a retry of one
 round is no second verdict. The streak holds the consecutive `changes` verdicts, the `moves` identical findings twice made
@@ -166,7 +177,7 @@ def load(key):
         return empty(key)   # a new issue: no loop fact yet
     except (ValueError, UnicodeDecodeError) as e: raise Corrupt(f"a corrupt ledger holds the issue: {p} ({e})") from None
     if not (isinstance(rec, dict) and all(isinstance(rec.get(led), dict) and isinstance(rec[led].get("runs"), list) for led in LEDGERS)
-            and all(isinstance(rec.get(k, {}), dict) for k in ("wave", "landed", "requeued", "review"))
+            and all(isinstance(rec.get(k, {}), dict) for k in ("wave", "landed", "requeued", "review", "board"))
             and isinstance((rec.get("review") or {}).get("verdicts", []), list)):
         raise Corrupt(f"a corrupt ledger holds the issue: {p} (not a ledger record)")
     return rec
@@ -210,7 +221,8 @@ def read(key):   # a corrupt file, or a missing one beside the old counters, rea
     try: rec = load(key)
     except Held as e: return {**empty(key), "wave": {}, "landed": {}, "requeued": {}, "state": "held", "held": str(e), "attempts": 0, "last_fail": ""}
     return {**rec, "wave": rec.get("wave", {}), "landed": rec.get("landed", {}), "requeued": rec.get("requeued", {}),
-            "review": review_fact(rec), "state": state(rec), "held": "", "attempts": rec["own"]["count"], "last_fail": last_fail(rec)}
+            "board": rec.get("board", {}), "review": review_fact(rec), "state": state(rec), "held": "",
+            "attempts": rec["own"]["count"], "last_fail": last_fail(rec)}
 
 
 def count(key, led="own"):
@@ -314,13 +326,40 @@ def _rearm(rec, ev):   # the loop facts go, and the floor (#692) keeps every run
     runs |= set((old.get("wave") or {}).keys()) | set((old.get("requeued") or {}).keys()) | set((old.get("rearmed") or {}).get("runs", []))
     runs |= {x["run"] for x in ((old.get("review") or {}).get("verdicts") or []) if isinstance(x, dict) and x.get("run")}
     runs |= {k for k, f in (old.get("landed") or {}).items() if isinstance(f, dict) and f.get("kind") == "run"}
+    runs |= {(old.get("board") or {}).get("run", "")} - {""}
     rec.clear(); rec.update(empty(ev["key"]))
     rec["rearmed"] = {"ts": time.time(), "runs": sorted(runs)}   # a corrupt file has no runs to read: the time is the floor
     return None, True
 
 
+def _board(rec, ev):   # -> (recorded|duplicate|stale|floor, changed): one card write of a dispatch, pending before the write (ADR-0164)
+    run, col = ev["run"], ev["column"]
+    if not run or not col: raise ValueError("a board event names its run and its column")
+    if run in floor_runs(rec): return "floor", False
+    old = rec.get("board") or {}
+    if old and ev["instant"] < old["instant"]: return "stale", False   # a late delivery never overwrites a newer event
+    if old and (old["run"], old["column"]) == (run, col): return "duplicate", False   # the same event: the first instant stands
+    rec["board"] = {"run": run, "column": col, "instant": ev["instant"], "state": "pending", "req": ev["req"]}
+    return "recorded", True
+
+
+def _boardw(rec, ev):   # -> (written|duplicate|superseded, changed): the card write of an event landed
+    old = rec.get("board") or {}
+    if (old.get("run"), old.get("column")) != (ev["run"], ev["column"]): return "superseded", False
+    if old["state"] == "written": return "duplicate", False
+    rec["board"] = {**old, "state": "written"}
+    return "written", True
+
+
+def _boardx(rec, ev):   # -> (dropped|superseded, changed): a pending event the gates no longer back is dropped, never written
+    old = rec.get("board") or {}
+    if (old.get("run"), old.get("column")) != (ev["run"], ev["column"]) or old.get("state") != "pending": return "superseded", False
+    rec["board"] = {**old, "state": "dropped"}
+    return "dropped", True
+
+
 RULES = {"fail": _fail, "stop": _stop, "wave": _wave, "landed": _landed, "requeue": _requeue, "review": _review,
-         "rearm": _rearm, "migrate": _migrate}
+         "rearm": _rearm, "migrate": _migrate, "board": _board, "boardw": _boardw, "boardx": _boardx}
 
 
 def transition(key, ev):   # the one transition function (ADR-0149): every event of every writer, under the issue's lock
@@ -385,6 +424,25 @@ def requeued(key, run):   # the head the run requeued the issue on, "" when it d
 
 def review(key, run, verdict, findings="", rnd=0):   # -> recorded|reset|duplicate|frozen|floor: one review of the issue
     return transition(key, {"op": "review", "run": run, "verdict": verdict, "findings": findings, "round": rnd})
+
+
+def board(key, run, column, req="", instant=None):   # -> recorded|duplicate|stale|floor: a card write is an event, pending before it
+    return transition(key, {"op": "board", "run": run, "column": column, "req": req,
+                            "instant": time.time() if instant is None else float(instant)})
+
+
+def boardw(key, run, column):   # -> written|duplicate|superseded: the card write of the event landed
+    return transition(key, {"op": "boardw", "run": run, "column": column})
+
+
+def boardx(key, run, column):   # -> dropped|superseded: a pending card write the gates no longer back, dropped unwritten
+    return transition(key, {"op": "boardx", "run": run, "column": column})
+
+
+def pending(target):   # -> [(n, run, column, instant, req)]: the board writes not yet landed, of one issue or of a repository
+    recs = [(parse(target)[2], load(target))] if "#" in target else repo_files(target)
+    return [(n, b["run"], b["column"], b["instant"], b.get("req", "")) for n, rec in recs
+            for b in [rec.get("board") or {}] if b.get("state") == "pending"]
 
 
 def coder(key):   # the places down the coder chain the next fix attempt starts: one per repeated finding (ADR-0151 rule 2)
@@ -460,6 +518,9 @@ def main(argv):
         if op == "entered":
             for run, n in entered(key): print(f"{run}\t{n}")
             return 0
+        if op == "pending":
+            for row in pending(key): print("\t".join(str(x) for x in row))
+            return 0
         if op == "owed" and rest:
             for sha, w, n in owed(key, rest[0]): print(f"{sha}\t{w}\t{n}")
             return 0
@@ -488,6 +549,9 @@ def main(argv):
             if diffs:
                 print(f"issue_ledger.py: replay of {key} differs: " + "; ".join(diffs), file=sys.stderr); return 1
             print(f"REPLAY {key}: ok")
+        elif op == "board" and len(rest) >= 3: print(board(key, rest[0], rest[1], rest[2], *(rest[3:4] or [])))
+        elif op == "boardw" and len(rest) >= 2: print(boardw(key, rest[0], rest[1]))
+        elif op == "boardx" and len(rest) >= 2: print(boardx(key, rest[0], rest[1]))
         elif op == "coder": print(coder(key))
         elif op == "wave" and len(rest) >= 3: print(wave(key, rest[0], rest[1], rest[2], rest[3:4] == ["keep"]))
         elif op == "migrate": migrate(key); print(f"MIGRATE {key}: the old counters are in its ledger file; they are read no more")

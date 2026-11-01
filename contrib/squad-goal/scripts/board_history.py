@@ -5,6 +5,7 @@ which decides what to read, keeps what it read, and counts the GraphQL points it
 per line, and the last issue record wins. board_flow_history.py is the flow-sample journal and stays a separate store.
 """
 import importlib.util
+import itertools
 import json
 import pathlib
 from datetime import UTC, datetime
@@ -112,6 +113,54 @@ def intervals(events):
         if out: out[-1]["to"] = e["t"]
         out.append({"from": e["t"], "to": None, **snap})
     return out
+
+
+ROLE = _columns.ROLE
+_EMPTY = {"on_board": False, "column": None, "hold": None, "spec": None}
+
+
+def _in_scope(s, spec):
+    return bool(s["on_board"]) and s["spec"] == spec
+
+
+def _active(s, spec):
+    return _in_scope(s, spec) and s["column"] != ROLE["abandoned"]
+
+
+def _marks(prev, cur, spec):
+    was, now = _active(prev, spec), _active(cur, spec)
+    if now and not was:
+        return ["reopened" if _in_scope(prev, spec) else "added"]
+    if was and not now:
+        return ["cancelled" if _in_scope(cur, spec) else "removed"]
+    if not now:
+        return []
+    marks = []
+    if prev["column"] == ROLE["issue_closed"] and cur["column"] != ROLE["issue_closed"]: marks.append("reopened")
+    if cur["column"] == ROLE["unscheduled"] and prev["column"] not in (None, ROLE["unscheduled"], ROLE["issue_closed"]): marks.append("parked")
+    if cur["hold"] and not prev["hold"]: marks.append("held")
+    if prev["hold"] and not cur["hold"]: marks.append("released")
+    return marks
+
+
+def burnup(store, spec):
+    """A spec's burn-up (#1025): one point per instant its scope changes. Scope counts the cards whose spec is `spec`, on the
+    board and not cancelled; done counts those closed; held counts those under a hold. Each point carries the marks the instant
+    made, so a line may go down on a removal, a cancellation or a reopening."""
+    moments = sorted(((s["from"], n, s) for n, rec in store.items() for s in intervals(rec.get("events") or [])),
+                     key=lambda m: (m[0], m[1]))
+    state, points, last = {}, [], (0, 0, 0)
+    for t, group in itertools.groupby(moments, key=lambda m: m[0]):
+        marks = []
+        for _, n, s in group:
+            marks += [{"k": k, "n": n} for k in _marks(state.get(n, _EMPTY), s, spec)]
+            state[n] = s
+        active = [s for s in state.values() if _active(s, spec)]
+        counts = (len(active), sum(s["column"] == ROLE["issue_closed"] for s in active), sum(bool(s["hold"]) for s in active))
+        if marks or counts != last:
+            points.append({"t": t, "scope": counts[0], "done": counts[1], "held": counts[2], "marks": marks})
+            last = counts
+    return {"spec": spec, "points": points}
 
 
 def _iso(epoch):
