@@ -513,3 +513,15 @@ def test_a_loop_switch_write_through_the_mux_gets_an_answer(home, tmp_path, hub)
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def test_the_project_route_names_the_profile_the_hub_was_loaded_under(home, tmp_path, hub, monkeypatch):
+    """hubmux.py pins the profile environment around the hub's import and restores the shell's after it, so a read of
+    SG_PROFILE at request time found nothing and the route answered no session through the mux (#1073). The hub keeps
+    the name it was loaded under."""
+    h = hub()
+    seen = []
+    h.mod.sessions.project_sessions = lambda profile, checkout, profiles_of=None: seen.append(profile) or []
+    monkeypatch.delenv("SG_PROFILE", raising=False)
+    h.mod.project_payload(SimpleNamespace(tailnet=False))
+    assert seen == ["p1"], seen

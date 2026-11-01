@@ -56,6 +56,11 @@ _PROFILE_ENV = {**os.environ, "SG_REPO": REPO, "SG_OWNER": OWNER, "SG_PROJECT": 
 if not REPO: sys.exit("hub: no SG_REPO (set SG_PROFILE to a profile address.sh knows)")
 CHECKOUT = PROF["SG_CHECKOUT"]
 PROJECTS, FORK_DIR = os.environ.get("SG_PROJECTS", ""), os.environ.get("SG_FORK_DIR", "")   # read once at import: the mux pins them per profile (#859)
+# The profile this hub was loaded under, read once. hubmux.py pins the profile environment around the hub's import
+# and restores the shell's after it, so a read at request time found no SG_PROFILE and every session route answered
+# empty through the mux (#1073). A request path reads this name, never the environment.
+PROFILE_NAME = os.environ.get("SG_PROFILE", "")
+PROFILES_DIR_AT_IMPORT = os.environ.get("SG_PROFILES_DIR", "")
 if not CHECKOUT: sys.exit("hub: no SG_CHECKOUT (the profile in force names no checkout)")
 def repos_from(primary, *others):
     """The repositories the board reads, named in ONE place and never guessed: the profile's SG_REPO, plus each
@@ -1176,7 +1181,7 @@ MODELS_LEDGER = "models-switch-ledger.jsonl"   # one line per model-level switch
 
 def profiles_dir():
     """The directory the profiles live in: SG_PROFILES_DIR when the runner exports it (env.sh does), else the seam's answer."""
-    d = os.environ.get("SG_PROFILES_DIR")
+    d = os.environ.get("SG_PROFILES_DIR") or PROFILES_DIR_AT_IMPORT
     if d: return pathlib.Path(d)
     try:
         r = subprocess.run(["bash", "-c", '. "$1/address.sh" >/dev/null 2>&1; sg_profiles_dir', "_", str(SCRIPTS)],
@@ -1187,7 +1192,7 @@ def profiles_dir():
 def profile_file():
     """The profile in force: the one file the token guard sources on every pass. None when no profile is in force, and a
     theme that cannot name the file reads nothing and writes nothing."""
-    slug, d = os.environ.get("SG_PROFILE", ""), profiles_dir()
+    slug, d = PROFILE_NAME, profiles_dir()
     return d / f"{slug}.sh" if slug and d is not None else None
 
 def profile_limits(path=None):
@@ -1376,7 +1381,7 @@ _SLACK_CHANNEL = re.compile(r"^#?[^\s#]{1,80}$")
 
 def slack_file():
     """The per-profile Slack settings beside the profile, or None when no profile is in force."""
-    slug, d = os.environ.get("SG_PROFILE", ""), profiles_dir()
+    slug, d = PROFILE_NAME, profiles_dir()
     return d / f"{slug}.slack.json" if slug and d is not None else None
 
 def slack_read(path):
@@ -2377,25 +2382,26 @@ def stats(period, src="both"):
     b = {}; amt = (lambda r: r["spend"]) if src == "both" else (lambda r: r["sub"] if src == "sub" else r["api"])
     allr = [dict(r, spend=amt(r)) for r in all_runs()]
     calls = ledger_calls()   # review calls: they carry spend and tokens, never a run
+    def _tok(r):   # a run's tokens: in + out over every model it called, the count the token ring draws (#1073)
+        return sum(v["in"] + v["out"] for v in r["mod"].values())
     for r in allr:
-        k = time.strftime(fmt, time.localtime(r["t0"])); x = b.setdefault(k, {"t": k, "spend": 0.0, "runs": 0, "durs": []})
-        x["spend"] += r["spend"]; x["runs"] += 1
+        k = time.strftime(fmt, time.localtime(r["t0"])); x = b.setdefault(k, {"t": k, "spend": 0.0, "tokens": 0, "runs": 0, "durs": []})
+        x["spend"] += r["spend"]; x["tokens"] += _tok(r); x["runs"] += 1
         if r["done"]: x["durs"].append(r["dur"])
     for c in calls:
-        k = time.strftime(fmt, time.localtime(c["t0"])); x = b.setdefault(k, {"t": k, "spend": 0.0, "runs": 0, "durs": []})
-        x["spend"] += _billed(src, c["model"], c["spend"])
+        k = time.strftime(fmt, time.localtime(c["t0"])); x = b.setdefault(k, {"t": k, "spend": 0.0, "tokens": 0, "runs": 0, "durs": []})
+        x["spend"] += _billed(src, c["model"], c["spend"]); x["tokens"] += c["in"] + c["out"]
     ks = sorted(b)[-48:]
-    rows = [{"t": k, "spend": round(b[k]["spend"], 2), "runs": b[k]["runs"], "median_dur": round(st.median(b[k]["durs"]), 1) if b[k]["durs"] else None} for k in ks]
+    rows = [{"t": k, "spend": round(b[k]["spend"], 2), "tokens": int(b[k]["tokens"]), "runs": b[k]["runs"], "median_dur": round(st.median(b[k]["durs"]), 1) if b[k]["durs"] else None} for k in ks]
     now = time.localtime(); tot = {"today": 0.0, "month": 0.0, "all": 0.0, "unpriced": sum(1 for c in calls if c["unpriced"]),
-           "uncounted": sum(1 for c in calls if c["uncounted"])}
-    for r in allr:
-        lt = time.localtime(r["t0"]); tot["all"] += r["spend"]
-        if lt[:2] == now[:2]: tot["month"] += r["spend"]
-        if lt[:3] == now[:3]: tot["today"] += r["spend"]
-    for c in calls:
-        lt = time.localtime(c["t0"]); sp = _billed(src, c["model"], c["spend"]); tot["all"] += sp
-        if lt[:2] == now[:2]: tot["month"] += sp
-        if lt[:3] == now[:3]: tot["today"] += sp
+           "uncounted": sum(1 for c in calls if c["uncounted"]),
+           "tok_today": 0, "tok_month": 0, "tok_all": 0}
+    def _add(lt, spend, tokens):
+        tot["all"] += spend; tot["tok_all"] += tokens
+        if lt[:2] == now[:2]: tot["month"] += spend; tot["tok_month"] += tokens
+        if lt[:3] == now[:3]: tot["today"] += spend; tot["tok_today"] += tokens
+    for r in allr: _add(time.localtime(r["t0"]), r["spend"], _tok(r))
+    for c in calls: _add(time.localtime(c["t0"]), _billed(src, c["model"], c["spend"]), c["in"] + c["out"])
     mt = {}
     for r in allr:
         in_month = time.localtime(r["t0"])[:2] == now[:2]
@@ -2420,7 +2426,7 @@ def stats(period, src="both"):
         return box
     models = sorted(({**{k: v for k, v in x.items() if k not in ("src", "srcs")}, "spend": round(x["spend"], 2), "box": _box(x)} for x in mt.values()),
                     key=lambda x: -(x["in"] + x["out"]))
-    return {"buckets": rows, "totals": {k: round(v, 2) for k, v in tot.items()}, "models": models}
+    return {"buckets": rows, "totals": {**{k: round(v, 2) for k, v in tot.items() if not k.startswith("tok_")}, **{k: tot[k] for k in ("tok_today", "tok_month", "tok_all")}}, "models": models}
 
 def adapter_errors():
     """Every `adapter_error` run verdict of the run folders still on disk, counted by (model, backend, cause) (#698).
@@ -4426,8 +4432,8 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 <span class=pill id=bread></span></header>
 <div id=win>
 <aside id=side>
-<details id=stats class=sp><summary>Cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><div class="igs isub" id=isub title="subscriptions: the used share of the weekly window and the days to its reset"></div><h4>Spend <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Figures at API list prices (API-equivalent)."></span></h4><div class=tot id=tot></div><div class=irw id=burn><span>Tokens · 24 h</span><b></b></div><div class=cash id=cash></div><h4>Spend over time <span class=row id=per></span></h4><div id=chart></div><div id=kpi></div><div id=open></div><h4>Model tokens · this month</h4><div class=m id=piet>in + out</div><div id=pie></div></div></details>
 <details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div class=ian id=ian></div><div id=ispec></div><div id=ispeed></div><div id=ilate></div></div></details>
+<details id=usage class=sp><summary>Usage</summary><div class=sb><div class="igs isub" id=isub title="subscriptions: the used share of the weekly window and the days to its reset"></div></div></details><details id=stats class=sp><summary>Spend<span class=sr id=stsr></span></summary><div class=sb><h4>Tokens <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Counted in tokens: in + out, the same count the ring draws."></span></h4><div class=tot id=tot></div><h4>Tokens over time <span class=row id=per></span></h4><div id=chart></div><h4>Model tokens · this month</h4><div class=m id=piet>in + out</div><div id=pie></div></div></details>
 <details id=lrd class=sp open><summary>Live runs<span class=sr id=lrs></span></summary><div class=sb id=lrun></div></details>
 </aside>
 <main id=content>
@@ -4596,33 +4602,35 @@ function selectNew(){const ids=allRuns.filter(r=>r.kind!=="childcc").map(r=>r.id
   if(!fresh.length)return;const id=fresh.sort((x,y)=>x.age-y.age)[0].id;
   if(N===1)pins.clear();else if(pins.size>=N)pins.delete([...pins][0]);pins.add(id);save()}   // a run starting moves the pins, never the accordions
 async function poll(){try{allRuns=await (await fetch("/api/runs")).json();selectNew();applyFilter();refresh()}catch(e){}}
-function barChart(rows,W=280,H=64,L=44){const n=rows.length,vals=rows.map(r=>r.spend).filter(v=>v!=null),mx=Math.max(...vals,0.01),bw=W/Math.max(n,1),base=12+H,xl=t=>String(t).replace(/^\d{4}-/,"");
+function barChart(rows,W=280,H=64,L=44){const n=rows.length,vals=rows.map(r=>r.tokens).filter(v=>v!=null),mx=Math.max(...vals,1),bw=W/Math.max(n,1),base=12+H,xl=t=>String(t).replace(/^\d{4}-/,"");
   const y=v=>base-v/mx*H,wd=Math.max(bw-2,1);
-  const bars=rows.map((r,i)=>{const x=L+i*bw+1,cx=x+wd/2,title=`${xl(r.t)}: ${r.spend==null?"no read":usd(r.spend)} · ${r.runs} runs`;
-    if(r.spend==null)return{kind:"missing",i,x,w:wd,cx,y:base,h:0,title};
-    if(r.spend===0)return{kind:"zero",i,x,w:wd,cx,y:base-2,h:2,title};
-    return{kind:"bar",i,x,w:wd,cx,y:y(r.spend),h:r.spend/mx*H,top:r.spend>=mx,title}});
-  const im=vals.length?rows.findIndex(r=>r.spend===mx):-1,named=im>=0?bars[im]:null;
-  return{W,H,L,base,bars,ticks:[0,mx/2,mx].map(v=>({v,y:y(v),label:usd(v)})),
-    max:named?{bar:im,x:named.cx,y:named.y-4,anchor:named.cx>L+W*.75?"end":named.cx<L+W*.25?"start":"middle",text:"max "+usd(mx)}:null,
+  const bars=rows.map((r,i)=>{const x=L+i*bw+1,cx=x+wd/2,title=`${xl(r.t)}: ${r.tokens==null?"no read":tk(r.tokens)+" tokens"} \u00b7 ${r.runs} runs`;
+    if(r.tokens==null)return{kind:"missing",i,x,w:wd,cx,y:base,h:0,title};
+    if(r.tokens===0)return{kind:"zero",i,x,w:wd,cx,y:base-2,h:2,title};
+    return{kind:"bar",i,x,w:wd,cx,y:y(r.tokens),h:r.tokens/mx*H,top:r.tokens>=mx,title}});
+  const im=vals.length?rows.findIndex(r=>r.tokens===mx):-1,named=im>=0?bars[im]:null;
+  return{W,H,L,base,bars,ticks:[0,mx/2,mx].map(v=>({v,y:y(v),label:tk(v)})),
+    max:named?{bar:im,x:named.cx,y:named.y-4,anchor:named.cx>L+W*.75?"end":named.cx<L+W*.25?"start":"middle",text:"max "+tk(mx)}:null,
     first:n?xl(rows[0].t):"",now:"now"}}
-function bars(rows){if(!rows.length)return"";const c=barChart(rows),{W,H,L,base}=c;
-  return `<svg viewBox="0 0 ${L+W} ${base+14}" role=img aria-label="spend per interval">`
-    +c.ticks.map(t=>`<line x1="${L}" y1="${t.y}" x2="${L+W}" y2="${t.y}" stroke="#2a303b"/><text x="${L-4}" y="${t.y+4}" fill="#8a93a3" style="font-size:var(--fs-min)" text-anchor="end">${t.label}</text>`).join("")
+function bars(rows){if(!rows.length)return"";const c=barChart(rows),{W,H,L,base}=c;   // tokens are the work: the chart never counts dollars
+  return `<svg viewBox="0 0 ${L+W} ${base+14}" role=img aria-label="tokens per interval">`
+    +c.ticks.map(t=>`<line x1="${L}" y1="${t.y}" x2="${L+W}" y2="${t.y}" stroke="#2a303b" stroke-dasharray="3 2"/><text x="${L-4}" y="${t.y+4}" fill="#8a93a3" style="font-size:var(--fs-min)" text-anchor="end">${t.label}</text>`).join("")
     +c.bars.map(b=>b.kind==="missing"?`<line class=miss x1="${b.x}" y1="${base}" x2="${b.x+b.w}" y2="${base}" stroke="#8a93a3" stroke-dasharray="2 2"><title>${esc(b.title)}</title></line>`
       :b.kind==="zero"?`<rect class=zero x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" style="fill:var(--mute)"><title>${esc(b.title)}</title></rect>`
       :`<rect class=bar x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" fill="${b.top?"#3ecf8e":"#5aa9ff"}"><title>${esc(b.title)}</title></rect>`).join("")
     +(c.max?`<text x="${c.max.x}" y="${c.max.y}" fill="#3ecf8e" style="font-size:var(--fs-min)" text-anchor="${c.max.anchor}">${c.max.text}</text>`:"")
     +`<text x="${L}" y="${base+12}" fill="#8a93a3" style="font-size:var(--fs-min)">${c.first}</text><text x="${L+W}" y="${base+12}" fill="#8a93a3" style="font-size:var(--fs-min)" text-anchor="end">${c.now}</text></svg>`}
 function cmp(v,base,unit,lowerBetter=true){const d=Math.round((v-base)/base*100),good=lowerBetter?d<0:d>0,dir=d===0?"":lowerBetter?(d<0?"faster":"slower"):(d>0?"more":"fewer"),head=`was ${base}${unit?" "+unit:""}`,pct=d===0?"":`${Math.abs(d)}% ${dir}`;
-  return {text:pct?`${head} · ${pct}`:head,head,pct,dir,good}}
+  return {text:pct?`${head} \u00b7 ${pct}`:head,head,pct,dir,good}}
 function kr(label,sub,v,unit,base,lowerBetter=true){if(v==null)return`<div class=kr><span class=l>${label}${sub?`<small>${sub}</small>`:""}</span><b>—</b></div>`;
   const u=unit?String(unit).trim():"";
-  let chip="";if(base){const c=cmp(v,base,u,lowerBetter);
-    chip=`<span class=d>${c.head}${c.pct?` · <span class="${c.good?"good":"bad"}">${c.pct}</span>`:""}</span>`}
+  let chip="";if(base){const d=Math.round((v-base)/base*100),good=lowerBetter?d<0:d>0;
+    const pct=`<span class="${good?"good":"bad"}">${Math.abs(d)}% ${lowerBetter?(d<0?"faster":"slower"):(d>0?"more":"fewer")}</span>`;
+    chip=d===0?`<span class=d>was ${base}${u?" "+u:""}</span>`:`<span class=d>was ${base}${u?" "+u:""} · ${pct}</span>`}
   return `<div class=kr><span class=l>${label}${sub?`<small>${sub}</small>`:""}</span><b${v===0?" class=m":""}>${v}${u?`<small>${u}</small>`:""}</b>${chip}</div>`}
-function openRows(o){if(!(o&&o.length))return"";return `<h4>Open branches <small>oldest first</small></h4>`
-  +o.map((x,i)=>`<div class=kr><span class=l>#${x.n} · <b${x.min>=30?" class=w":""}>${x.min}</b> min${i===0?" (warns at 30)":""}</span></div>`).join("")}
+function openRows(o){return `<h4>Open branches <small>oldest first</small></h4>`
+  +(o&&o.length?o.map((x,i)=>`<div class=kr><span class=l>#${x.n} · <b${x.min>=30?" class=w":""}>${x.min}</b> min${i===0?" (warns at 30)":""}</span></div>`).join("")
+   :`<div class=kr><span class=l>none open</span></div>`)}
 // SETV{ the settings view's pure rules (#913): the reset text, the add list, the diff before save. Run in node by tests.
 function rstText(t,now){if(!t)return"reset unknown";const x=t-now;if(x<=0)return"resets now";if(x>=86400)return`resets in ${(x/86400).toFixed(1)} d`;if(x>=3600)return`resets in ${Math.round(x/3600)} h`;return`resets in ${Math.max(1,Math.round(x/60))} min`}
 function addOpts(sug,chain,isOff){return (sug||[]).filter(s=>!(chain||[]).includes(s.id)&&!isOff(s.id))}
@@ -4859,7 +4867,7 @@ const money=(a,c)=>{try{return new Intl.NumberFormat(undefined,{style:"currency"
 async function pollSubs(){try{const d=await (await fetch("/api/subs")).json(),ae=document.activeElement;if(ae&&ae.closest&&ae.closest("#subs")&&ae.tagName==="INPUT")return;
  const tot=Object.values(d.subs).reduce((a,v)=>a+(v.saved||0),0),any=Object.values(d.subs).some(v=>v.saved!=null);{const lims=Object.values(d.subs).filter(v=>{const aq=v.quota,aw=aq&&aq.windows&&aq.windows[0],pl=v.plan,q=aw?aw.pct:(pl&&pl.quota!=null?pl.quota:null);return q!=null&&q>=100});
  $("#subsr").textContent=lims.length?`${lims.length} at limit`:(any||d.api?"none at limit":"set plan prices")}   // the card says what needs a look; the prices stay in the cost card
- $("#cash").textContent="at API list prices (API-equivalent) · cash this month: "+(any||d.api?`plans ${usd(d.plans)} + API ${usd(d.api)} = ${usd(d.total)}`:"set plan prices");
+ const cashEl=$("#cash"); if(cashEl)cashEl.textContent="at API list prices (API-equivalent) · cash this month: "+(any||d.api?`plans ${usd(d.plans)} + API ${usd(d.api)} = ${usd(d.total)}`:"set plan prices");
  $("#subs").innerHTML=`<div class=subx>Per subscription: quota used, as each provider's CLI reports it. With no reading, the bar is the API-equivalent usage vs the plan price.</div><datalist id=curs>${["USD","BRL","EUR","GBP","ARS","MXN","CAD","JPY"].map(c=>`<option value=${c}>`).join("")}</datalist>`+Object.entries(d.subs).map(([k,v])=>{const ok=v.saved!=null,pl=v.plan,pr=d.presets[k],custom=pl&&pl.plan==="custom";
   const sel=`<select data-plan=${k} data-f=plan aria-label="${k} plan"><option value="" ${pl?"":"selected"}>choose a plan…</option>${Object.entries(pr).map(([i,p])=>`<option value=${i} ${pl&&pl.plan===i?"selected":""}>${esc(p.name)} · US$${p.usd}</option>`).join("")}<option value=custom ${custom?"selected":""}>Custom amount…</option></select>`;
   const cust=custom?`<span class=pr><span>amount</span><input data-plan=${k} data-f=amount type=number min=0 step=0.01 value="${pl.amount}" aria-label="${k} custom amount"> <input data-plan=${k} data-f=cur list=curs value="${esc(pl.currency)}" placeholder="BRL" aria-label="${k} currency" title="R$, U$, € or any 3-letter code"></span>`:"";
@@ -4881,18 +4889,12 @@ async function pollStats(){try{pollSubs();
   $("#src").innerHTML=[["both","all"],["sub","plans"],["api","API"]].map(([v,l])=>`<button data-s=${v} class="${v===src?"on":""}">${l}</button>`).join("");
   document.querySelectorAll("#src button").forEach(b=>b.onclick=()=>{src=b.dataset.s;save();pollStats()});
   document.querySelectorAll("#per button").forEach(b=>b.onclick=()=>{per=b.dataset.p;save();pollStats()});
-  $("#stsr").textContent=usd(st.totals.today)+" today";
+  $("#stsr").textContent=tk(st.totals.tok_today)+" tokens today";
   $("#chart").innerHTML=bars(st.buckets);$("#pie").innerHTML=pie(st.models||[]);
-  const same=st.totals.all===st.totals.month;
-  $("#tot").innerHTML=`<div>today<b>${usd(st.totals.today)}</b></div><div>this month<b>${usd(st.totals.month)}</b></div><div>all time<b${same?" class=m":""}>${same?"= this month":usd(st.totals.all)}</b></div>`;
-  const b=sp.baseline,n=sp.pr.after.n,cut=b.cutoff.slice(5,16).replace("T"," ");
-  $("#kpi").innerHTML=`<h4>Speed <small>since ${cut} UTC · ${n} PR${n===1?"":"s"}</small>${[n<10?`<span class=warnl>Provisional: only ${n} PR${n===1?"":"s"} so far; the comparison firms up at ~10.</span>`:"",sp.pr.stale?"<span class=warnl>PR data stale</span>":""].join("")}</h4>`
-   +kr("Merge time",", median",sp.pr.after.median,"min",b.pr.median)
-   +kr("Merge time",", average",sp.pr.after.mean,"min",b.pr.mean)
-   +kr("Run time",", median today",sp.runs.today_median,"min",b.run_median)
-   +kr("Review rounds",", average",sp.rounds.mean,"",null)
-   +kr("Hung runs killed","",sp.kills.count,"",null);
-  $("#open").innerHTML=openRows(sp.pr.open);
+  const same=st.totals.tok_all===st.totals.tok_month;
+  $("#tot").innerHTML=`<div>today<b>${tk(st.totals.tok_today)}</b></div><div>this month<b>${tk(st.totals.tok_month)}</b></div><div>all time<b${same?" class=m":""}>${same?"= this month":tk(st.totals.tok_all)}</b></div>`;
+  // The Speed block and the open-branches list left the panel (owner, 2026-11-01): the panel leads with the throughput, the
+  // subscription gauges, the spend chart and the token ring. The PR speed figures stay on the hub's own reading, not here.
 }catch(e){}}
 pollStats();setInterval(pollStats,30000);
 poll();setInterval(poll,3000);
@@ -5327,6 +5329,8 @@ const accHtml=v=>{const a=v.access||{},yn=x=>x?"<span class=ok>allowed</span>":"
  +`<div class=kr><span class=l>Phone check</span><b><code>/agent-squad:start-mobile</code></b></div>`
  +`<p>Read here; the owner sets them in the project file or <code>.env</code> on the machine (ADR-0152, ADR-0162). A write the tailnet refuses still works from this machine.</p>`};
 // loop-switch:end
+// The Monitor shows the loop state as one read-only line: the switch itself lives in the Loop panel, so one control
+// writes the switch and no second button carries the same id (ADR-0162).
 function loopDraw(){if(!loopV)return;const b=$("#lopb"),h=loopSetHtml(loopV);if(b.dataset.h!==h){b.dataset.h=h;b.innerHTML=h}
  const c=$("#accb"),ah=accHtml(loopV);if(c.dataset.h!==ah){c.dataset.h=ah;c.innerHTML=ah}
  $("#lopsr").textContent=`${loopV.state}${loopV.who?` · ${loopV.who} · ${loopWhen(loopV.when)}`:""}`}
@@ -6162,13 +6166,13 @@ profiles_of_cwd = sessions.profiles_of
 
 def sessions_payload():
     """What /api/sessions serves: this profile's live sessions, grouped by project (#833)."""
-    return sessions.list_sessions(os.environ.get("SG_PROFILE", ""), profiles_of=profiles_of_cwd)
+    return sessions.list_sessions(PROFILE_NAME, profiles_of=profiles_of_cwd)
 
 def conversation_payload(query):
     """What /api/sessions/conversation serves: one page of a live session of this profile, None when it is not one (#840)."""
     q = urllib.parse.parse_qs(query)
     before = (q.get("before") or [""])[0]
-    return sessions.conversation(os.environ.get("SG_PROFILE", ""), (q.get("sid") or [""])[0], int(before) if before.isdigit() else None,
+    return sessions.conversation(PROFILE_NAME, (q.get("sid") or [""])[0], int(before) if before.isdigit() else None,
                                  profiles_of=profiles_of_cwd)
 
 SCREENSHOT_MAX = 5 * 1024 * 1024   # the owner's grant (ADR-0024): a PNG of at most 5 MB
@@ -6180,10 +6184,29 @@ def send_rule(a):
     if tailnet_block().get("terminals_send") is True: return True, ""
     return False, f"Sending from the tailnet is off. The owner sets {SEND_SETTING} (tailnet.terminals_send) to send."
 
+IMAGE_SUFFIX = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp"}
+IMAGE_MAX = 12 * 1024 * 1024
+
+def image_payload(query):
+    """One screenshot a transcript names, as (bytes, content type), or None. A transcript line names its image by the path
+    the session wrote it under, so the route serves exactly that file and nothing a caller names freely: the path must sit in
+    an `images` directory, end in an image suffix, be a regular file, and stay inside the session's own project directory.
+    A thumbnail of the owner's screenshots reads better than the path, and the path is what the transcript keeps (#1073)."""
+    q = urllib.parse.parse_qs(query or ""); sid = (q.get("sid") or [""])[0]; raw = (q.get("p") or [""])[0]
+    if sessions.SID.fullmatch(sid) is None or not raw: return None
+    path = os.path.realpath(raw)
+    ct = IMAGE_SUFFIX.get(pathlib.Path(path).suffix.lower())
+    if not ct or "images" not in pathlib.Path(path).parts: return None
+    if sid not in path: return None
+    try:
+        if not os.path.isfile(path) or os.path.getsize(path) > IMAGE_MAX: return None
+        return pathlib.Path(path).read_bytes(), ct
+    except OSError: return None
+
 def project_payload(a):
     """What /api/sessions/project serves (#898): the sessions in this profile's checkout and the send rule for this request."""
     ok, why = send_rule(a)
-    return {"sessions": sessions.project_sessions(os.environ.get("SG_PROFILE", ""), CHECKOUT, profiles_of=profiles_of_cwd), "send": ok, "why": why}
+    return {"sessions": sessions.project_sessions(PROFILE_NAME, CHECKOUT, profiles_of=profiles_of_cwd), "send": ok, "why": why}
 
 # The session overlay (#898): one source, hub-overlay.js, on every page the hub serves. Each page names where its session
 # routes are: the hub and mobile pages a quoted path the mux gives the profile prefix, a run dashboard its own path up to
@@ -6432,7 +6455,7 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/status"): body, ct = json.dumps(status_payload()).encode(), "application/json"
         elif self.path.startswith("/api/sessions/send"):
             q = urllib.parse.parse_qs(self.path.partition("?")[2])
-            out = session_send.status(os.environ.get("SG_PROFILE", ""), (q.get("sid") or [""])[0], (q.get("client_id") or [""])[0], profiles_of=profiles_of_cwd, root=STATE)
+            out = session_send.status(PROFILE_NAME, (q.get("sid") or [""])[0], (q.get("client_id") or [""])[0], profiles_of=profiles_of_cwd, root=STATE)
             body, ct = json.dumps(out).encode(), "application/json"
         elif self.path.split("?", 1)[0] == "/api/loop": body, ct = json.dumps(loop_view(a)).encode(), "application/json"
         elif self.path.split("?", 1)[0] == "/api/sessions/project": body, ct = json.dumps(project_payload(a)).encode(), "application/json"
@@ -6440,6 +6463,11 @@ class H(BaseHTTPRequestHandler):
             page = conversation_payload(self.path.partition("?")[2])
             if page is None: return self.not_found()
             body, ct = json.dumps(page).encode(), "application/json"
+        elif self.path.startswith("/api/sessions/image"):
+            got = image_payload(self.path.partition("?")[2])
+            if got is None: return self.not_found()
+            self.send_response(200); self.send_header("Content-Type", got[1]); self.send_header("Cache-Control", "max-age=3600")
+            self.send_header("Content-Length", str(len(got[0]))); self.end_headers(); self.wfile.write(got[0]); return
         elif self.path.startswith("/api/sessions"): body, ct = json.dumps(sessions_payload()).encode(), "application/json"
         elif (asset := MOBILE_ASSETS.get(self.path.split("?", 1)[0])): body, ct = asset
         else: body, ct = served_page(a.login).encode(), "text/html; charset=utf-8"
@@ -6473,7 +6501,7 @@ class H(BaseHTTPRequestHandler):
         if not isinstance(body, dict) or set(body) != {"sid", "text", "client_id"}:
             out, code = {"err": "bad request"}, 400
         else:
-            out, code = session_send.send(os.environ.get("SG_PROFILE", ""), body["sid"], body["text"], body["client_id"], profiles_of=profiles_of_cwd, root=STATE), 200
+            out, code = session_send.send(PROFILE_NAME, body["sid"], body["text"], body["client_id"], profiles_of=profiles_of_cwd, root=STATE), 200
         data = json.dumps(out).encode(); self.send_response(code); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
 
     def send_screenshot(self, a):
@@ -6498,7 +6526,7 @@ class H(BaseHTTPRequestHandler):
         folder = STATE / "screenshots"; folder.mkdir(parents=True, exist_ok=True)
         path = folder / f"{cid}.png"; part = folder / f"{cid}.png.part"
         part.write_bytes(raw); os.replace(part, path)
-        self.answer(200, session_send.send(os.environ.get("SG_PROFILE", ""), sid, f"Screenshot: {path}", cid, profiles_of=profiles_of_cwd, root=STATE))
+        self.answer(200, session_send.send(PROFILE_NAME, sid, f"Screenshot: {path}", cid, profiles_of=profiles_of_cwd, root=STATE))
 
     def answer(self, code, out):
         data = json.dumps(out).encode(); self.send_response(code); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)

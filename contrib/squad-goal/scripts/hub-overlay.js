@@ -8,6 +8,11 @@ const SQ = {};
 SQ.MIN_W = 360; SQ.MIN_BOARD = 480; SQ.MAX_FRAC = 0.7; SQ.STEP = 24; SQ.DEFAULT_W = 440; SQ.SHEET_W = 420; SQ.PHONE_W = 600;
 SQ.IDLE_MS = 3000; SQ.LENS_R = 5; SQ.REACH = 240; SQ.POLL_MS=3000; SQ.TEXT_MAX = 4000;
 SQ.SEND_SETTING = "SQUAD_TAILNET_TERMINALS_SEND";
+// The feed reads like a terminal: the latest turns stand, older ones fold into one line, and a long answer is clamped with
+// "Show more" (owner, 2026-11-01; the terminal reads clearer because it summarizes age and length, not because it says less).
+SQ.KEEP = 12;
+SQ.splitEarlier = (turns, keep = SQ.KEEP) => turns.length <= keep ? { earlier: [], shown: turns }
+  : { earlier: turns.slice(0, turns.length - keep), shown: turns.slice(turns.length - keep) };
 
 // The docked width: at least 360 px, at most 70% of the viewport, and the board keeps 480 px.
 SQ.clampWidth = (w, vw) => {
@@ -86,11 +91,23 @@ html.sq-docked body{margin-right:var(--sq-dock)}
 #sq-ov-pick button[aria-pressed=true]{border-color:#7aa2ff}
 #sq-ov-log{flex:1;min-height:0;overflow:auto;padding:13px 14px}
 #sq-ov-log .sq-empty{color:#b8c0cf}
-.sq-turn{margin:0 0 13px}
-.sq-who{display:block;font-size:13px;color:#b8c0cf;margin-bottom:2px}
-.sq-txt{white-space:pre-wrap;overflow-wrap:anywhere}
-.sq-owner .sq-txt{background:#1c2433;border-radius:8px;padding:6px 10px}
-.sq-tool .sq-txt{color:#b8c0cf;font:13px ui-monospace,SFMono-Regular,monospace}
+.sq-turn{margin:0 0 4px;padding-left:8px;border-left:2px solid transparent;line-height:1.45}
+.sq-who{display:block;font-size:10px;line-height:1.2;color:#707988;margin-bottom:2px;letter-spacing:.02em}
+.sq-txt{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;color:#d8dee9}
+.sq-p{margin:0 0 5px}.sq-p:last-child{margin-bottom:0}
+.sq-owner{border-left:0;background:rgba(122,162,255,.08);border-radius:6px;padding:5px 9px}
+.sq-owner .sq-who{color:#7aa2ff}
+.sq-system{border-left-color:#3f4756}.sq-system .sq-who{color:#707988}.sq-system .sq-txt{color:#9aa3b2}
+.sq-answer{border-left-color:#3ecf8e}.sq-answer .sq-who{color:#3ecf8e}
+.sq-h{font-weight:600;font-size:13px;color:#eef1f5;margin:6px 0 3px}
+.sq-ul{margin:3px 0;padding-left:16px}.sq-ul li{margin:0 0 2px}
+.sq-code{margin:4px 0}.sq-code summary{font-size:11px;color:#7aa2ff;cursor:pointer;list-style:none}
+.sq-code pre{margin:3px 0 0;padding:5px 8px;background:#0d1117;border:1px solid #232a36;border-radius:6px;overflow:auto;font:12px/1.4 ui-monospace,SFMono-Regular,monospace;color:#b8c0cf;white-space:pre}
+.sq-img{display:block;margin:4px 0}.sq-img img{max-width:100%;max-height:180px;border:1px solid #232a36;border-radius:6px;display:block}
+.sq-more{margin:1px 0 4px;padding:1px 0;border:0;background:none;color:#7aa2ff;font-size:11px;cursor:pointer}
+.sq-earlier{margin:0 0 6px}.sq-earlier summary{font-size:11px;color:#707988;cursor:pointer}
+.sq-tool{border-left-color:#f5b041}.sq-tool .sq-who{color:#f5b041}
+.sq-tool .sq-txt{color:#9aa3b2;font:12.5px/1.35 ui-monospace,SFMono-Regular,monospace}
 #sq-ov-form{position:relative;display:flex;align-items:flex-end;gap:6px;padding:8px;border-top:1px solid #353d4b}
 #sq-ov-plus{flex:none;width:44px;height:44px;border:1px solid #353d4b;border-radius:50%;background:#1c212b;color:#e6e8ee;font:22px/1 system-ui;cursor:pointer}
 #sq-ov-menu{position:absolute;left:8px;bottom:60px;z-index:2;display:flex;flex-direction:column;min-width:170px;padding:4px;background:#1c212b;border:1px solid #353d4b;border-radius:10px;box-shadow:0 10px 30px #000a}
@@ -110,7 +127,7 @@ html.sq-docked body{margin-right:var(--sq-dock)}
 .sq-ov-back{display:none}
 html.sq-over .sq-ov-back{display:inline-flex;align-items:center;min-height:44px;padding:3px 10px;border:1px solid #353d4b;border-radius:6px;background:none;color:inherit;cursor:pointer}
 </style>
-<button id="sq-ov-btn" type="button" aria-label="Chat with the AI" title="Chat with the AI" aria-haspopup="dialog" aria-expanded="false" aria-controls="sq-ov"><svg viewBox="0 0 64 64" aria-hidden="true" focusable="false"><defs>
+<button id="sq-ov-btn" type="button" aria-label="Terminal - Claude CLI" title="Terminal - Claude CLI" aria-haspopup="dialog" aria-expanded="false" aria-controls="sq-ov"><svg viewBox="0 0 64 64" aria-hidden="true" focusable="false"><defs>
 <radialGradient id="sq-ov-g-ring" cx="38%" cy="28%" r="80%"><stop offset="0" stop-color="#eef1f5"/><stop offset=".3" stop-color="#9aa1ab"/><stop offset=".65" stop-color="#40454d"/><stop offset="1" stop-color="#121417"/></radialGradient>
 <radialGradient id="sq-ov-g-lens" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#fff7dc"/><stop offset=".09" stop-color="#ffc640"/><stop offset=".26" stop-color="#ff3a10"/><stop offset=".58" stop-color="#a50000"/><stop offset="1" stop-color="#2a0000" stop-opacity="0"/></radialGradient>
 <clipPath id="sq-ov-clip"><circle cx="32" cy="32" r="21"/></clipPath></defs>
@@ -123,7 +140,7 @@ html.sq-over .sq-ov-back{display:inline-flex;align-items:center;min-height:44px;
 </svg></button>
 <div id="sq-ov" role="dialog" aria-labelledby="sq-ov-title" hidden>
 <div id="sq-ov-handle" role="separator" aria-orientation="vertical" aria-label="Resize the session panel" tabindex="0"></div>
-<header><h2 id="sq-ov-title">Chat with the AI</h2>
+<header><h2 id="sq-ov-title">Terminal - Claude CLI</h2>
 <button type="button" class="sq-ov-dockctl" id="sq-ov-dock" aria-label="Dock right" title="Dock right"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="13" y="5" width="7" height="14" fill="currentColor"/></svg></button>
 <button type="button" class="sq-ov-dockctl" id="sq-ov-undock" aria-label="Undock" title="Undock"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="8" width="13" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M11 4h9v9M20 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
 <button type="button" id="sq-ov-close" aria-label="Close" title="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
@@ -174,12 +191,6 @@ function defaultContext() {
            selection: sheets.slice(0, 6), filters: filters.slice(0, 12), errors: errors.slice(0, 8) };
 }
 if (typeof window.squadPageContext !== "function") window.squadPageContext = defaultContext;
-function draftContext() {
-  let ctx;
-  try { ctx = window.squadPageContext(); } catch (e) { ctx = defaultContext(); }
-  text.value = SQ.draft(ctx || defaultContext());
-  grow(); syncSend();
-}
 function addLine(line) {
   text.value = (text.value && !text.value.endsWith("\n") ? text.value + "\n" : text.value) + line + "\n";
   grow(); syncSend(); text.focus();
@@ -213,7 +224,7 @@ function paintPick() {
   pick.replaceChildren(p, ...items);
 }
 function paintHead() {
-  title.textContent = cur ? `Chat with the AI · ${cur.name || cur.sid.slice(0, 8)}` : "Chat with the AI";
+  title.textContent = cur ? `Terminal - Claude CLI · ${cur.name || cur.sid.slice(0, 8)}` : "Terminal - Claude CLI";
   syncSend();
 }
 async function loadSessions() {
@@ -239,13 +250,73 @@ async function loadSessions() {
   else if (!found.length) empty("No session runs in this project's checkout. Start Claude Code there, then open this again.");
   else empty("Pick a session above.");
 }
+// Only the structure that carries meaning in a 400 px panel: headings, bullets, a fence. Everything else stays text.
+// A transcript names a screenshot by the path it was written to: the hub serves that file and the panel draws a thumbnail
+// (owner, 2026-11-01). "[Image #7]" alone names no file, so it stays text.
+const IMG_RE = /^\s*\[Image: source: ([^\]]+)\]\s*$/;
+function imageNode(path) {
+  const t = cur, a = document.createElement("a"), i = document.createElement("img");
+  a.className = "sq-img"; a.href = t.src.api + "/image?sid=" + encodeURIComponent(t.sid) + "&p=" + encodeURIComponent(path);
+  a.target = "_blank"; a.rel = "noopener";
+  i.loading = "lazy"; i.alt = "screenshot"; i.src = a.href;
+  i.onerror = () => { a.replaceWith(document.createTextNode("[Image: " + path + "]")); };
+  a.append(i);
+  return a;
+}
+function richText(text) {
+  const box = document.createElement("div");
+  box.className = "sq-txt";
+  const lines = String(text || "").split("\n");
+  let buf = [], ul = null, fence = null;
+  const para = () => { if (!buf.length) return; const p = document.createElement("div"); p.className = "sq-p"; p.textContent = buf.join("\n"); box.append(p); buf = []; };
+  const list = () => { if (ul) { box.append(ul); ul = null; } };
+  const code = () => { if (!fence) return; const d = document.createElement("details"); d.className = "sq-code";
+    const s = document.createElement("summary"); s.textContent = "Code · " + fence.length + " line" + (fence.length === 1 ? "" : "s");
+    const pre = document.createElement("pre"); pre.textContent = fence.join("\n");
+    d.append(s, pre); if (fence.length <= 8) d.open = true; box.append(d); fence = null; };
+  for (const raw of lines) {
+    if (raw.trim().startsWith("```")) { if (fence) code(); else { para(); list(); fence = []; } continue; }
+    if (fence) { fence.push(raw); continue; }
+    const h = /^#{1,6}\s+(.*)$/.exec(raw);
+    if (h) { para(); list(); const d = document.createElement("div"); d.className = "sq-h"; d.textContent = h[1]; box.append(d); continue; }
+    const li = /^\s*[-*]\s+(.*)$/.exec(raw);
+    if (li) { para(); if (!ul) { ul = document.createElement("ul"); ul.className = "sq-ul"; } const it = document.createElement("li"); it.textContent = li[1]; ul.append(it); continue; }
+    if (!raw.trim()) { para(); list(); continue; }
+    const img = IMG_RE.exec(raw);
+    if (img && cur && cur.src) { para(); list(); box.append(imageNode(img[1])); continue; }
+    list(); buf.push(raw);
+  }
+  if (fence) code();
+  para(); list();
+  return box;
+}
+const CLAMP = { owner: 60, answer: 116, tool: 60 };
+function clamp(body, px) {
+  if (body.scrollHeight <= px + 6) return;
+  body.style.maxHeight = px + "px"; body.style.overflow = "hidden";
+  const b = document.createElement("button"); b.type = "button"; b.className = "sq-more"; b.textContent = "Show more";
+  b.onclick = () => { const on = body.style.maxHeight !== ""; body.style.maxHeight = on ? "" : px + "px";
+                      body.style.overflow = on ? "" : "hidden"; b.textContent = on ? "Show less" : "Show more"; };
+  body.after(b);
+}
 function turnNode(t) {
-  const d = document.createElement("div"), who = document.createElement("span"), body = document.createElement("div");
+  const d = document.createElement("div"), who = document.createElement("span");
   d.className = "sq-turn sq-" + t.role;
-  who.className = "sq-who"; who.textContent = t.role === "owner" ? "You" : t.role === "tool" ? "Tool" : "AI";
-  body.className = "sq-txt"; body.textContent = t.text;
+  who.className = "sq-who"; who.textContent = t.role === "owner" ? "You" : t.role === "system" ? "System" : t.role === "tool" ? "Tool" : "AI";
+  const body = richText(t.text);
   d.append(who, body);
+  clamp(body, CLAMP[t.role] || 116);
   return d;
+}
+function feed(turns) {
+  const { earlier, shown } = SQ.splitEarlier(turns), nodes = [];
+  if (earlier.length) {
+    const d = document.createElement("details"); d.className = "sq-earlier";
+    const s = document.createElement("summary"); s.textContent = "Earlier activity · " + earlier.length + " turns";
+    d.append(s, ...earlier.map(turnNode)); nodes.push(d);
+  }
+  nodes.push(...shown.map(turnNode));
+  return nodes;
 }
 async function loadConversation() {
   const s = cur;
@@ -260,7 +331,7 @@ async function loadConversation() {
     const atEnd = !lastSig || log.scrollHeight - log.scrollTop - log.clientHeight < 48;
     lastSig = sig;
     if (!turns.length) { empty("No turns yet."); lastSig = sig; return; }
-    log.replaceChildren(...turns.map(turnNode));
+    log.replaceChildren(...feed(turns));
     if (atEnd) log.scrollTop = log.scrollHeight;
   } catch (e) { /* the next poll tries again */ }
 }
@@ -362,7 +433,7 @@ for (const el of document.querySelectorAll(SHEETS)) new MutationObserver(placeSh
 function openOverlay(){
   ov.hidden = false; btn.setAttribute("aria-expanded", "true");
   applyLayout();
-  if (!text.value.trim()) draftContext();
+  // The field opens empty (owner, 2026-11-01): the page context is one click away in the + menu, never typed for you.
   loadSessions();
   clearInterval(timer); timer = setInterval(loadConversation, SQ.POLL_MS);
   text.focus();

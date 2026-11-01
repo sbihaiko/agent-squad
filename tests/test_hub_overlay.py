@@ -70,7 +70,7 @@ def test_a_run_dashboard_through_the_hub_gains_the_overlay(hub):
 
 def test_the_workflow_editor_carries_no_overlay():
     editor = (ROOT / "dashboard" / "agent-squad-run-dashboard.html").read_text()
-    assert "hub-overlay" not in editor and "Chat with the AI" not in editor
+    assert "hub-overlay" not in editor and "Terminal - Claude CLI" not in editor
 
 
 def test_the_overlay_names_no_api_route_the_hub_would_rewrite():
@@ -84,7 +84,7 @@ def test_the_overlay_names_no_api_route_the_hub_would_rewrite():
 
 def test_the_button_is_a_red_lens_in_a_metal_ring_named_chat_with_the_ai():
     src = OVERLAY.read_text()
-    assert 'aria-label="Chat with the AI"' in src
+    assert 'aria-label="Terminal - Claude CLI"' in src
     assert "radialGradient" in src and "sq-ov-lens" in src and "sq-ov-ring" in src
     button = re.search(r"<button id=\"sq-ov-btn\".*?</button>", src, re.S).group(0)
     assert "?" not in re.sub(r"<[^>]*>", "", button)
@@ -168,12 +168,13 @@ def test_the_page_context_is_drafted_as_editable_text():
     assert len(run_js("SQ.draft({screen:'x'.repeat(9000),route:'/',selection:[],filters:[],errors:[]})")) <= 4000
 
 
-def test_opening_the_overlay_drafts_the_context_and_sends_nothing_by_itself():
+def test_opening_the_overlay_leaves_the_field_empty_and_sends_nothing():
+    """The page context is fetched on demand from the + menu: opening the panel never types for the owner (owner, 2026-11-01)."""
     src = OVERLAY.read_text()
     dom = src.split("// dom:begin")[1]
     open_fn = re.search(r"function openOverlay\(\)\{.*?\n\}", dom, re.S).group(0)
-    assert "draftContext()" in open_fn and "send(" not in open_fn
-    assert "window.squadPageContext" in src
+    assert "draftContext" not in dom and "send(" not in open_fn
+    assert "window.squadPageContext" in src and 'data-act="ctx"' in src
 
 
 # ---------------------------------------------------------------- the dock
@@ -214,3 +215,14 @@ def test_the_header_keeps_the_title_on_one_line_and_its_buttons_from_shrinking()
     assert re.search(r"#sq-ov header button\{[^}]*flex:none", src)
     for label in ("Dock right", "Undock", "Close"):
         assert f'aria-label="{label}"' in src
+
+
+def test_the_feed_keeps_the_latest_turns_and_folds_the_older_ones():
+    """The panel reads like the terminal: the last twelve turns stand, the older ones fold behind one line (owner, 2026-11-01)."""
+    out = run_js("""(() => {
+      const turns = Array.from({length: 20}, (_, i) => ({id: 't'+i, role: i % 2 ? 'answer' : 'owner', text: 'x'+i}));
+      const a = SQ.splitEarlier(turns), b = SQ.splitEarlier(turns.slice(0, 12)), c = SQ.splitEarlier(turns, 3);
+      return {earlier: a.earlier.length, shown: a.shown.map(t => t.id)[0], short: b.earlier.length,
+              keep3: [c.earlier.length, c.shown.length]};
+    })()""")
+    assert out == {"earlier": 8, "shown": "t8", "short": 0, "keep3": [17, 3]}, out
