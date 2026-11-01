@@ -20,11 +20,13 @@ A fact the record does not hold is `unknown`, never a guess (ADR-0155): an old r
 call answers `unknown`, and its chain is never rebuilt from the current configuration.
 """
 from squad import record
+from squad.transcript import transcript_tokens
 
 SCHEMA = 1                          # the row's own schema version: an older line stays readable
 UNKNOWN = "unknown"                 # the answer for a fact the record does not hold
 NO_MODEL = "none"                   # a node that ran no model: a gate, a loop, an action, a landing
 OUTCOMES = ("accepted", "refused", "skipped", "failed")
+TOKEN_SOURCES = ("record", "transcript", "missing")   # where the row's tokens came from; none is a zero
 PHASES = ("plan", "code", "review", "fix", "gate", "land")
 
 # The phase map: the graph's own node names to the loop's phase. A node the map does not place answers `unknown`
@@ -42,7 +44,7 @@ PHASE_OF = {
 }
 
 COLUMNS = ("schema", "issue", "run_id", "phase", "review_round", "chain_id", "entry_index", "model_id",
-           "provider", "attempt", "outcome", "tokens_in", "tokens_out", "tokens_cache", "turns", "key")
+           "provider", "attempt", "outcome", "tokens_in", "tokens_out", "tokens_cache", "tokens_src", "turns", "key")
 
 
 class RowError(Exception):
@@ -62,6 +64,8 @@ def validate(row):
             raise RowError(f"profile row lacks {f}")
     if row["outcome"] not in OUTCOMES:
         raise RowError(f"outcome {row['outcome']!r} is not one of {list(OUTCOMES)}")
+    if row["tokens_src"] not in TOKEN_SOURCES:
+        raise RowError(f"tokens_src {row['tokens_src']!r} is not one of {list(TOKEN_SOURCES)}")
     if row["key"] != key(row):
         raise RowError(f"key {row['key']!r} is not the key of its own columns ({key(row)!r})")
     return row
@@ -94,6 +98,19 @@ def _cache(e):
     return (read or 0) + (write or 0)
 
 
+def _tokens(e, model, outcome, transcripts, node, entry):
+    """(tokens in, tokens out, tokens cache, source): the record's count when it holds one, else the transcript's
+    count for the model that answered, else none. A refused or skipped entry ran no session, so it has no transcript."""
+    if e.get("tokens_in") is not None or e.get("tokens_out") is not None:
+        return e.get("tokens_in"), e.get("tokens_out"), _cache(e), "record"
+    ran = transcripts is not None and outcome in ("accepted", "failed") and model not in (NO_MODEL, UNKNOWN)
+    files = transcripts(node, entry) if ran else None
+    got = transcript_tokens(files, model) if files is not None else None
+    if got is None:
+        return None, None, None, "missing"
+    return (*got, "transcript")
+
+
 def _attempt(e):
     """(model, outcome, event) for one attempt the record holds, else None."""
     kind = e["event"]
@@ -108,8 +125,9 @@ def _attempt(e):
     return None
 
 
-def rows(events, phase_of_map=None):
-    """One row per phase per model attempt, in record order. `phase_of_map` adds or overrides the phase map."""
+def rows(events, phase_of_map=None, transcripts=None):
+    """One row per phase per model attempt, in record order. `phase_of_map` adds or overrides the phase map.
+    `transcripts(node, entry)` answers the transcript files of one chain entry, or None; the default answers nothing."""
     start = _start(events)
     run_id = start.get("run_id") or UNKNOWN
     issue = start.get("issue") or UNKNOWN
@@ -126,11 +144,13 @@ def rows(events, phase_of_map=None):
         node, entry = ev.get("node"), ev.get("entry")
         group = (node, entry, rounds.get(node, 0))
         attempts[group] = attempts.get(group, 0) + 1
+        model_id = model or UNKNOWN
+        tin, tout, tcache, src = _tokens(ev, model_id, outcome, transcripts, node, entry)
         row = {"schema": SCHEMA, "issue": issue, "run_id": run_id, "phase": phase_of(node, phase_of_map),
                "review_round": rounds.get(node, 0), "chain_id": chains.get((node, entry)) or UNKNOWN,
-               "entry_index": entry, "model_id": model or UNKNOWN, "provider": ev.get("provider") or UNKNOWN,
-               "attempt": attempts[group], "outcome": outcome, "tokens_in": ev.get("tokens_in"),
-               "tokens_out": ev.get("tokens_out"), "tokens_cache": _cache(ev), "turns": ev.get("turns")}
+               "entry_index": entry, "model_id": model_id, "provider": ev.get("provider") or UNKNOWN,
+               "attempt": attempts[group], "outcome": outcome, "tokens_in": tin,
+               "tokens_out": tout, "tokens_cache": tcache, "tokens_src": src, "turns": ev.get("turns")}
         row["key"] = key(row)
         out.append(validate(row))
     return out
@@ -147,6 +167,6 @@ def winner(rows, phase):
     return win
 
 
-def from_file(path, phase_of_map=None):
+def from_file(path, phase_of_map=None, transcripts=None):
     """Read a run record on disk and answer its rows."""
-    return rows(record.read(path), phase_of_map)
+    return rows(record.read(path), phase_of_map, transcripts)
