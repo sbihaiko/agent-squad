@@ -3680,7 +3680,7 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 #inst .at .av{display:block;color:var(--fg);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}#inst .at.err .av{color:var(--err)}#inst .at a{color:var(--acc);text-decoration:none}#inst .at a:hover{text-decoration:underline}
 #inst .at details>summary{cursor:pointer;color:var(--mute)}#inst .at details>ul{margin:4px 0 0;padding:0 0 0 14px;color:var(--mute);overflow-wrap:anywhere}
 #inst .irw{display:flex;justify-content:space-between;align-items:baseline;gap:8px;padding:3px 0;border-top:1px solid var(--line);font-size:var(--fs-min);color:var(--mute)}
-#inst .irw b{color:var(--fg);font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}#inst .irw b.bad{color:var(--warn)}
+#inst .irw b{color:var(--fg);font-weight:600;font-variant-numeric:tabular-nums;text-align:right;min-width:0;overflow-wrap:anywhere}#inst .irw b.bad{color:var(--warn)}
 @media (prefers-reduced-motion: reduce){#inst .ig .gn{transition:none}}
 </style>
 <div id=who>__WHO__</div>
@@ -3698,7 +3698,7 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 <details id=plans class=sp><summary>Subscriptions<span class=sr id=plsr></span></summary><div class=sb><div id=subs></div></div></details>
 <details id=stats class=sp><summary>Cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><h4>Spend <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Figures at API list prices (API-equivalent)."></span></h4><div class=tot id=tot></div><div class=m id=totnote></div><div class=cash id=cash></div><h4>Spend over time <span class=row id=per></span></h4><div id=chart></div><div id=kpi></div><div id=open></div><h4>Tokens by model <small class=m id=piet>all time</small></h4><div id=pie></div></div></details>
 <details id=sqd class=sp open><summary>Squad models<span class=sr id=sqsr></span></summary><div class=sb id=sqm></div></details>
-<details id=inst class=sp open><summary>Machine &amp; loop<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div class=ian id=ian></div><div class=irw><span>Next cycle</span><b id=icyc aria-live=off>?</b></div><div class=irw id=iuse></div></div></details>
+<details id=inst class=sp open><summary>Machine &amp; loop<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div class=ian id=ian></div><div class=irw><span>Next cycle</span><b id=icyc aria-live=off>?</b></div><div id=iuse></div></div></details>
 </div>
 <div id=content>
 <section id=tab-board class="pane on" aria-label=Board>
@@ -3762,7 +3762,7 @@ function loadMark(r){return r.cpu?`<span class=load title="this run owns ${r.cpu
 // from the numbers `/api/load` already serves and paints each on its own. These mirror the server's `pct_cell` — the same
 // order, the same ` · `, the same rounding — so the reading still reads exactly as it read; only a cell at the machine's
 // ceiling is red, and that is `LOAD_ERR`, substituted when the page is served. A source the hub cannot see stays `?`:
-// a missing reading is not a high one. Red sits above the older, machine-wide amber of `#foot.warn`, and never replaces it.
+// a missing reading is not a high one. Red sits above the older, machine-wide amber of `#inst.warn`, and never replaces it.
 const LOAD_ERR=Number("__LOADERR__");
 const MODELID_SRC="__MODELID__";   // the one model-id shape, substituted when the page is served (#221): the Add boxes test it, never a copy of it
 const MODELRE=new RegExp("^"+MODELID_SRC+"$");   // an unsubstituted page still evaluates: the placeholder is a string, never a bare name
@@ -3803,7 +3803,7 @@ function instDraw(d){const c=$("#inst");if(!c)return;const facts=(d||{}).facts||
   const ln=n.querySelector(".gn"),f=n.querySelector(".gf"),v=n.querySelector(".gv");
   if(ln){ln.style.transform=`rotate(${g.deg}deg)`;ln.setAttribute("visibility",g.known?"visible":"hidden")}if(f)f.setAttribute("d",`M4 32 A26 26 0 0 1 ${g.x} ${g.y}`);if(v)v.innerHTML=`<b>${x.k}</b> ${esc(x.t)}`});
  instSet("ian",instTiles(facts).map(tileHtml).join(""));
- const u=instUsage(facts);instSet("iuse",u?`<span>Tokens</span><b class=bad>${esc(u.tok)} · ${esc(u.calls)}</b>`:"<span>Tokens</span><b>no call over the cap</b>");
+ const u=instUsage(facts);instSet("iuse",u?`<div class=irw><span>Tokens</span><b class=bad>${esc(u.tok)}</b></div><div class=irw><span>Calls over cap</span><b class=bad>${esc(u.calls)}</b></div>`:"<div class=irw><span>Tokens</span><b>no call over the cap</b></div>");
  const s=$("#instsr");if(s)s.textContent=instSum(facts);
  const cy=instFact(facts,"cycle"),l=cy?cycleLeft(cy.text):null;instCyc=l===null?null:Date.now()/1000+l;instTick()}
 // }INST
