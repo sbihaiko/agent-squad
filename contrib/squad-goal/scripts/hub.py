@@ -1593,7 +1593,7 @@ def foot_items(src, now=None):
                    parts=nightly or None, tip=(nightly[0].get("tip") if nightly else None),
                    detail=(nightly[0].get("detail") if nightly else None)),
              _fact("quota", _quota_fact(src.get("quota"), now)),
-             _fact("cycle", "cycle off" if src.get("loop") is False else _cycle_fact(src.get("cycle"), now)),   # a stopped loop has no next cycle
+             _fact("cycle", "cycle off" if src.get("loop") is False and src.get("cycle") else _cycle_fact(src.get("cycle"), now)),   # a stopped loop has no next cycle
              _fact("subs", _subs_fact(src.get("subs"), now), parts=_subs_parts(src.get("subs"), now))]
     if "loop" in src:   # the loop state ends the line (the owner's ask, #554): one word read across the room, so it survives a narrow window
         on = bool(src["loop"])
