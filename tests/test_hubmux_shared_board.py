@@ -35,7 +35,7 @@ def shared_board(tmp_path, monkeypatch):
     cache = base / "_boards" / "x_5" / "hub-board.json"   # the one file both profiles name (address.sh sg_board_cache)
     cache.parent.mkdir(parents=True)
     # beta's hub wrote the shared file last: its rows carry no repository, the file names beta
-    cache.write_text(json.dumps({"t": 1.0, "rt": 1, "rv": 1, "repo": "x/beta", "err": None, "errs": [],
+    cache.write_text(json.dumps({"t": 1.0, "rt": 1, "rv": 2, "repo": "x/beta", "err": None, "errs": [],   # rv = hub.BOARD_READ
                                  "items": [_spec(1, "Beta spec", 4, 10), _ticket(2, "Beta ticket")],
                                  "prs": [], "landed": [], "cases": []}))
     spec = importlib.util.spec_from_file_location("hubmux_shared_board", SCRIPTS / "hubmux.py")

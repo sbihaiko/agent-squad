@@ -12,6 +12,7 @@ test-basecheck.sh 3.73
 test-board-add.sh 8.13
 test-board-clear-run.sh 0.65
 test-board-define.sh 0.79
+test-board-fast.sh 0.18
 test-board-history.sh 0.34
 test-board-migrate.sh 0.15
 test-board-move-unchanged.sh 1.72
