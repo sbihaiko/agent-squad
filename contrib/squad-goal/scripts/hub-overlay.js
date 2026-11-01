@@ -92,14 +92,15 @@ html.sq-docked body{margin-right:var(--sq-dock)}
 .sq-ov-fsb{font:600 13px/1 system-ui;min-width:34px;height:34px;padding:0 6px}
 #sq-ov-log{flex:1;min-height:0;overflow:auto;padding:13px 14px}
 #sq-ov-log .sq-empty{color:#b8c0cf}
-.sq-turn{margin:0 0 10px;padding:0;border-left:0;line-height:1.5}
+.sq-turn{margin:0 0 8px;padding:0;border-left:0;line-height:1.38;text-indent:0}
 .sq-who{display:block;font-family:var(--sq-mono);font-size:10px;line-height:1.2;color:#707988;margin-bottom:2px;letter-spacing:.02em}
 .sq-txt{white-space:pre-wrap;overflow-wrap:anywhere;font-family:var(--sq-mono);font-size:var(--sq-fs);color:#c9d1d9}
 .sq-p{margin:0 0 5px}.sq-p:last-child{margin-bottom:0}
-.sq-owner{padding:0}
-.sq-owner .sq-who{color:#c8d1dc}.sq-owner .sq-txt{color:#e6edf3}
-.sq-system .sq-who{color:#6b7280}.sq-system .sq-txt{color:#8b949e;font-style:italic}
-.sq-answer .sq-who{color:#8b949e}
+.sq-owner{margin:0 0 10px;border:1px solid #3a4250;border-radius:7px;padding:7px 10px}
+.sq-owner .sq-who{color:#8b949e;font-size:11px}.sq-owner .sq-txt{color:#e6edf3}
+.sq-system .sq-who{color:#565d69;font-size:11px}.sq-system .sq-txt{color:#8b949e;font-style:italic}
+.sq-answer{padding-left:14px;position:relative}.sq-answer .sq-who{color:#8b949e;font-size:11px}
+.sq-answer::before{content:"\u25CF";position:absolute;left:0;top:0;color:#3ecf8e;font-size:10px}
 .sq-h{font-family:var(--sq-mono);font-weight:600;font-size:calc(var(--sq-fs) + 0px);color:#eef1f5;margin:6px 0 3px}
 .sq-ul{margin:3px 0;padding-left:16px}.sq-ul li{margin:0 0 2px}.sq-ol{list-style:decimal}
 .sq-ic{font-family:var(--sq-mono);background:#1b212b;border:1px solid #2b3340;border-radius:4px;padding:0 4px;font-size:calc(var(--sq-fs) - 1px)}
@@ -330,7 +331,8 @@ function clamp(body, px) {
 function turnNode(t) {
   const d = document.createElement("div"), who = document.createElement("span");
   d.className = "sq-turn sq-" + t.role;
-  who.className = "sq-who"; who.textContent = t.role === "owner" ? "You" : t.role === "system" ? "System" : t.role === "tool" ? "Tool" : "AI";
+  who.className = "sq-who";
+  who.textContent = t.role === "owner" ? "\u203A you" : t.role === "system" ? "system" : t.role === "tool" ? "tool" : "";
   const body = richText(t.text);
   d.append(who, body);
   clamp(body, CLAMP[t.role] || 116);
