@@ -4,7 +4,7 @@
 # usage: bash test-live-guard.sh [path/to/live-guard.sh]
 # Hermetic: every inherited SG_* is dropped, and the fixture is a throwaway checkout and a throwaway live skill.
 for v in $(compgen -e | /usr/bin/grep '^SG_'); do unset "$v"; done
-d=$(dirname "$0"); src=${1:-$d/live-guard.sh}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
+d=$(dirname "$0"); src=${1:-$d/live-guard.sh}; T=$(mktemp -d); . "$d/driver-tree.sh"; trap 'driver_tree_kill "$T"; rm -rf "$T"' EXIT; fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 
 S=$T/scripts; co=$T/co; live=$T/home/.claude/skills/squad-goal; repo=$co/contrib/squad-goal
 mkdir -p "$S" "$repo/scripts/profiles" "$live/scripts/profiles" "$T/st"

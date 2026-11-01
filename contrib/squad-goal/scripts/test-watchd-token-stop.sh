@@ -2,7 +2,7 @@
 # `watchd.sh stop` stops the loop for good (#489): the stop takes the supervisor down with it, so the supervisor, the cycle
 # and the fast lane all exit, and nothing restarts. A start is a relight: it clears the token guard's markers.
 # Offline: a temp state dir, a stub env.sh and a stub watch.sh that stops the daemon from inside a cycle.
-d=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); trap 'kill -9 "$sup" 2>/dev/null; rm -rf "$T"' EXIT; fail=0
+d=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); . "$d/driver-tree.sh"; trap 'kill -9 "$sup" 2>/dev/null; driver_tree_kill "$T"; rm -rf "$T"' EXIT; fail=0
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 unset "${!SG_@}"; export SG_STATE="$T/st" SG_PROFILE= HOME="$T/home"; mkdir -p "$SG_STATE" "$HOME"
 cp "$d/watchd.sh" "$T/watchd.sh"
