@@ -910,6 +910,37 @@ def test_a_speeding_board_reads_up_and_a_slowing_one_reads_down(hub, tmp_path, m
     assert hub.throughput_fact(now=THROUGHPUT_NOW)["trend"] == "down"
 
 
+def _speed_text(hub, sp):
+    """The throughput row as the page draws it, run by node: the words the reader sees, markup stripped."""
+    if shutil.which("node") is None:
+        pytest.skip("node is required")
+    esc = re.search(r"^const esc=.*$", hub.PAGE, re.M).group(0)
+    i = hub.PAGE.index("function speedRow(sp)")
+    script = f"{esc}\n{hub.PAGE[i:hub.PAGE.index('function instUsage', i)]}\nconsole.log(speedRow({json.dumps(sp)}))"
+    out = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    return re.sub(r"<[^>]+>", " ", out.stdout)
+
+
+def test_the_throughput_row_with_one_day_names_the_wait_and_draws_no_trend(hub, tmp_path, monkeypatch):
+    """One day is one number: the row names the wait for a finished day and draws no trend word."""
+    _closing_store(hub, tmp_path, monkeypatch, [0, 5])
+    text = _speed_text(hub, hub.throughput_fact(now=THROUGHPUT_NOW))
+    assert "steady" not in text and "accelerating" not in text and "slowing" not in text, text
+    assert "first day" in text, text
+    assert re.search(r"5\s+cards closed today", text), text
+
+
+def test_the_throughput_row_with_several_days_names_the_trend_it_compared(hub, tmp_path, monkeypatch):
+    """The trend word follows the finished days compared, and the unit says what the number is."""
+    _closing_store(hub, tmp_path, monkeypatch, [0, 1, 2, 3, 4, 5, 8, 12, 16])
+    up = _speed_text(hub, hub.throughput_fact(now=THROUGHPUT_NOW))
+    assert "accelerating" in up and "first day" not in up, up
+    assert "cards closed today" in up and "per day" not in up, up
+    _closing_store(hub, tmp_path, monkeypatch, [0, 9, 18, 27, 36, 45, 46, 47, 48])
+    assert "slowing" in _speed_text(hub, hub.throughput_fact(now=THROUGHPUT_NOW))
+
+
 def test_no_history_reads_no_speed_and_the_page_draws_no_fake_zero(hub):
     assert hub.throughput_fact() is None
     assert "no history yet" in hub.PAGE
