@@ -77,16 +77,88 @@ def test_a_pass_stores_each_card_timeline_and_leaves_a_fresh_one_unread(hub, wri
     assert reads == []
 
 
-def test_a_fresh_pass_rereads_a_card_once_an_hour_has_passed(hub, writer):
+def test_a_complete_card_is_reread_only_once_its_status_has_moved(hub, writer, monkeypatch):
     reads = []
+    monkeypatch.setitem(hub.board_cache, "items", [{"n": 1, "su": TODO}, {"n": 2, "su": TODO}])
     hub.history_pass(read_issue=lambda n, c: reads.append(n) or _payload(n, []), read_search=lambda: [1, 2], now=T0)
     reads.clear()
     hub.history_pass(read_issue=lambda n, c: reads.append(n) or _payload(n, []), read_search=lambda: [1, 2],
                      now=T0 + hub._hist.WINDOW)
-    assert reads == [1, 2]
+    assert reads == []
+    monkeypatch.setitem(hub.board_cache, "items", [{"n": 1, "su": "2026-10-03T09:00:00Z"}, {"n": 2, "su": TODO}])
+    hub.history_pass(read_issue=lambda n, c: reads.append(n) or _payload(n, []), read_search=lambda: [1, 2],
+                     now=T0 + 2 * hub._hist.WINDOW)
+    assert reads == [1]
 
 
-def test_a_partial_timeline_resumes_from_its_cursor(hub, writer):
+def test_a_complete_card_keeps_its_record_until_its_new_read_is_complete(hub, writer, monkeypatch):
+    monkeypatch.setitem(hub.board_cache, "items", [{"n": 1, "su": TODO}, {"n": 2, "su": TODO}])
+    hub.history_pass(read_issue=lambda n, c: _payload(n, [_status(OPENED, "Todo")]), read_search=lambda: [1, 2], now=T0)
+    monkeypatch.setitem(hub.board_cache, "items", [{"n": 1, "su": "2026-10-03T09:00:00Z"}, {"n": 2, "su": TODO}])
+
+    def read(n, cursor):
+        if n == 2:
+            return _payload(n, [_status(OPENED, "Todo")])
+        if cursor is None:
+            return _payload(n, [_status(TODO, "Doing")], cursor="C1", more=True)
+        return None
+
+    hub.history_pass(read_issue=read, read_search=lambda: [1, 2], now=T0 + hub._hist.WINDOW)
+    store = hub._hist.load_store(writer)
+    assert store[1]["complete"] is True
+    assert [e["status"] for e in store[1]["events"]] == ["Todo"]
+
+
+def test_a_pass_keeps_only_the_last_record_of_each_card(hub, writer, monkeypatch):
+    monkeypatch.setitem(hub.board_cache, "items", [{"n": 1, "su": TODO}])
+    hub.history_pass(read_issue=lambda n, c: _payload(n, [_status(OPENED, "Todo")]), read_search=lambda: [1], now=T0)
+    monkeypatch.setitem(hub.board_cache, "items", [{"n": 1, "su": "2026-10-03T09:00:00Z"}])
+    hub.history_pass(read_issue=lambda n, c: _payload(n, [_status(OPENED, "Todo"), _status(TODO, "Doing")]),
+                     read_search=lambda: [1], now=T0 + 1)
+    records = [r for r in hub._hist.read_records(writer) if r.get("k") == "issue" and r["n"] == 1]
+    assert len(records) == 1
+    assert [e["status"] for e in hub._hist.load_store(writer)[1]["events"]] == ["Todo", "Doing"]
+
+
+def test_a_search_capped_at_its_results_limit_is_not_read(hub, monkeypatch):
+    search = {"issueCount": 1500, "pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": [{"number": 1}, {"number": 2}]}
+    monkeypatch.setattr(hub, "gh_graphql", lambda query, **kw: {"data": {"search": search}})
+    assert hub._history_search() is None
+    search["issueCount"] = 2
+    assert hub._history_search() == [1, 2]
+
+
+def test_the_coverage_counts_only_the_stored_cards_on_the_board(hub, writer):
+    hub._hist.record_issue(writer, 1, OPENED, OPENED, [], True, T0)
+    hub._hist.record_issue(writer, 9, OPENED, OPENED, [], True, T0)
+    assert hub._coverage_payload(hub._hist.load_store(writer)) == {
+        "read": 1, "complete": 1, "total": 2, "last": hub._hist._iso(T0)}
+
+
+def test_a_card_that_left_the_board_still_counts_in_the_cfd(hub, writer, monkeypatch):
+    monkeypatch.setitem(hub.board_cache, "items", [])
+    events = [{"t": OPENED, "type": "added"}, {"t": TODO, "type": "status", "status": "Doing"},
+              {"t": "2026-10-03T09:00:00Z", "type": "closed"}]
+    hub._hist.record_issue(writer, 1, OPENED, TODO, events, True, T0)
+    closed = next(b for b in hub._cfd_payload()["cfd"]["bands"] if b["name"] == hub.COLUMN["issue_closed"])
+    assert closed["count"][-1] == 1
+
+
+def test_the_cfd_serves_each_held_band_top_as_the_page_draws_it(hub, writer, monkeypatch):
+    monkeypatch.setitem(hub.board_cache, "items", [{"n": 1, "s": "open", "st": "Doing", "l": [], "t": "card"}])
+    events = [{"t": OPENED, "type": "added"}, {"t": TODO, "type": "status", "status": "Doing"},
+              {"t": "2026-10-03T09:00:00Z", "type": "label", "name": "frozen:owner"}]
+    hub._hist.record_issue(writer, 1, OPENED, TODO, events, True, T0)
+    for band in hub._cfd_payload()["cfd"]["bands"]:
+        assert band["held_upper"] == [lo + h for lo, h in zip(band["lower"], band["held"], strict=True)]
+
+
+def test_a_closed_card_the_history_has_not_read_is_not_yet_read(hub, writer, monkeypatch):
+    monkeypatch.setitem(hub.board_cache, "items", [{"n": 1, "s": "closed", "st": "Done", "l": [], "t": "card", "c": TODO, "o": OPENED}])
+    assert hub.lead_rows()[0]["reason"] == "not_read"
+
+
+def test_a_partial_timeline_resumes_from_its_cursor_once_the_budget_allows(hub, writer):
     seen = []
 
     def read(n, cursor):
@@ -97,9 +169,10 @@ def test_a_partial_timeline_resumes_from_its_cursor(hub, writer):
             return _payload(n, [_status(OPENED, "Todo")], cursor="C1", more=True)
         return _payload(n, [_status(TODO, "In Progress")])
 
+    hub._hist.record_points(writer, hub._hist.POINTS_CEILING - 1, T0)
     hub.history_pass(read_issue=read, read_search=lambda: [1, 2], now=T0)
     assert hub._hist.load_store(writer)[1]["complete"] is False
-    hub.history_pass(read_issue=read, read_search=lambda: [1, 2], now=T0 + 1)
+    hub.history_pass(read_issue=read, read_search=lambda: [1, 2], now=T0 + hub._hist.WINDOW + 1)
     assert (1, "C1") in seen
     store = hub._hist.load_store(writer)
     assert store[1]["complete"] is True
@@ -127,9 +200,10 @@ def test_an_hourly_search_ends_the_interval_of_a_card_it_did_not_find(hub, write
     assert store[1]["events"][-1]["type"] != "gone"
 
 
-def test_a_failed_search_records_nothing(hub, writer):
-    hub.history_pass(read_issue=lambda n, c: _payload(n, []), read_search=lambda: None, now=T0)
-    assert hub._hist.search_due(hub._hist.read_records(writer), T0 + 1) is True
+def test_a_search_that_is_not_read_ends_no_interval_and_waits_an_hour(hub, writer):
+    hub.history_pass(read_issue=lambda n, c: _payload(n, [_status(OPENED, "Todo")]), read_search=lambda: None, now=T0)
+    assert all(e["type"] != "gone" for e in hub._hist.load_store(writer)[2]["events"])
+    assert hub._hist.search_due(hub._hist.read_records(writer), T0 + 1) is False
 
 
 def test_the_day_zone_is_the_zone_the_environment_names(hub, monkeypatch):

@@ -155,7 +155,7 @@ def _seed(hub_mod, items):
         events = [{"t": OPENED, "type": "added"}, {"t": OPENED, "type": "status", "status": "Todo"}]
         if i["c"]:
             events += [{"t": i["c"], "type": "status", "status": "Closed"}, {"t": i["c"], "type": "closed"}]
-        hub_mod._hist.record_issue(path, i["n"], OPENED, OPENED, events, True, now=time.time())
+        hub_mod._hist.record_issue(path, i["n"], OPENED, OPENED, events, True, now=time.time(), keys=hub_mod.bar_keys(i))
 
 
 def _last_counts(payload):
@@ -479,7 +479,7 @@ def test_the_header_names_the_type_the_chart_holds(hub, board):
                         f"process.stdout.write(flowLead({json.dumps(lead)}));"])
     result = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr
-    assert "tasks · <b>opened -> closed</b> · window 20 issues" in result.stdout
+    assert "tasks · <b>on board -> closed</b> · window 20 issues" in result.stdout
 
 
 def test_the_type_control_sits_beside_timeframe_and_scale(hub):

@@ -130,7 +130,7 @@ def test_points_per_hour_counts_only_the_last_hour(tmp_path):
 def test_over_the_ceiling_the_next_read_is_deferred_to_the_window_edge(tmp_path):
     path = tmp_path / "hub-board.jsonl"
     bh.record_points(path, bh.POINTS_CEILING, T0)
-    ok, wait_until = bh.may_read(path, T0 + 10, 1)
+    ok, wait_until = bh.allow(bh.read_records(path), T0 + 10, 1)
     assert ok is False
     assert wait_until == T0 + 3600
 
@@ -138,8 +138,8 @@ def test_over_the_ceiling_the_next_read_is_deferred_to_the_window_edge(tmp_path)
 def test_retry_after_defers_the_next_read(tmp_path):
     path = tmp_path / "hub-board.jsonl"
     bh.record_points(path, 1, T0, retry_after=120)
-    assert bh.may_read(path, T0 + 60, 1) == (False, T0 + 120)
-    assert bh.may_read(path, T0 + 120, 1) == (True, None)
+    assert bh.allow(bh.read_records(path), T0 + 60, 1) == (False, T0 + 120)
+    assert bh.allow(bh.read_records(path), T0 + 120, 1) == (True, None)
 
 
 def test_the_monitor_fact_shows_the_points_the_store_counted(tmp_path):
@@ -253,6 +253,22 @@ def test_lead_span_marks_a_card_whose_first_run_is_not_on_the_board_as_unknown_f
     runs = bh.intervals(_timeline((10, 1, "status", {"status": "Todo"}), (10, 2, "added", {}), (11, 0, "closed", {})))
     span = bh.lead_span(runs, start="Todo")
     assert span["unknown_first"] is True
+
+
+def test_lead_span_is_not_unknown_first_for_a_card_labelled_and_parented_before_its_add():
+    runs = bh.intervals(_timeline(
+        (10, 0, "label", {"name": "bug"}),
+        (10, 0, "spec", {"spec": 5}),
+        (10, 1, "added", {}),
+        (10, 2, "status", {"status": "Todo"}),
+        (11, 0, "closed", {}),
+    ))
+    assert bh.lead_span(runs, start="Todo")["unknown_first"] is False
+
+
+def test_lead_span_is_unknown_first_for_an_incomplete_timeline():
+    runs = bh.intervals(_timeline((10, 1, "added", {}), (10, 2, "status", {"status": "Todo"}), (11, 0, "closed", {})))
+    assert bh.lead_span(runs, start="Todo", complete=False)["unknown_first"] is True
 
 
 def test_lead_span_marks_an_approximate_boundary_inside_the_window():

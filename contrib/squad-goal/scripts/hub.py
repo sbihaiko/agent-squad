@@ -3385,13 +3385,17 @@ def bar_keys(i):
 def lead_rows(a=None, b=None):
     """The closed-card rows the lead-time arithmetic reads, one per board item (#900). A row's hours are the flowing and held
     time of its column intervals in the history store, from its first entry into `a` to its last entry into `b` (#1024). A
-    closed card with no such span is no_transition; the row's bar keys filter it (#904)."""
+    closed card the store has not read is not_read, and one with no such span is no_transition; the row's bar keys filter it (#904)."""
     store = _hist.load_store(_hist.history_path(BOARD, REPO))
     rows = []
     for i in board_cache["items"]:
         closed = str(i["s"]).lower() == "closed"
-        span = _hist.lead_span(_hist.intervals(store[i["n"]]["events"]), start=a, end=b) if closed and i["n"] in store else None
-        reason = _leadtime.NOT_DELIVERED if _columns_module.not_planned(i.get("cr")) else (_leadtime.NO_TRANSITION if closed and span is None else None)
+        read = store.get(i["n"])
+        span = _hist.lead_span(_hist.intervals(read["events"]), start=a, end=b, complete=read["complete"]) if closed and read else None
+        if _columns_module.not_planned(i.get("cr")): reason = _leadtime.NOT_DELIVERED
+        elif closed and read is None: reason = _leadtime.NOT_READ
+        elif closed and span is None: reason = _leadtime.NO_TRANSITION
+        else: reason = None
         row = {"n": i["n"], "column": _columns_module.view_column(i["st"], closed, i.get("l"), i.get("cr"))[0], "reason": reason,
                "c": i.get("c") if closed else None, "o": i.get("o"), "t": i.get("t", ""), **bar_keys(i),
                "hours": 0.0, "flowing": 0.0, "held": 0.0, "approx": False, "unknown_first": False}
@@ -3461,8 +3465,9 @@ def history_key():
     return _file_key(_hist.history_path(BOARD, REPO))
 
 def _coverage_payload(store):
-    """How much of the board the history store has read: the cards read of the board's total, the complete timelines, and the last refresh."""
-    c = _hist.coverage(store)
+    """How much of the board the history store has read: the board's cards it holds, their complete timelines, and the last refresh."""
+    numbers = {i["n"] for i in board_cache["items"]}
+    c = _hist.coverage({n: r for n, r in store.items() if n in numbers})
     return {"read": c["read"], "complete": c["complete"], "total": len(board_cache["items"]),
             "last": _hist._iso(c["last"]) if c["last"] is not None else None}
 
@@ -3471,8 +3476,8 @@ def _cfd_payload(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
     """The cumulative flow's numbers, counted per day by board_cfd from the history store's column intervals; the page draws
     them and computes none. `fw`, `fs`, `fk` and `ty` are the bar's values: the chart keeps only the cards the bar keeps (#904, #1024)."""
     store = _hist.load_store(_hist.history_path(BOARD, REPO))
-    cards = [_hist.intervals(store[i["n"]]["events"]) for i in board_cache["items"]
-             if i["n"] in store and _in_bar(bar_keys(i), fw, fs, fk, ty)]
+    cards = [_hist.intervals(rec.get("events") or []) for rec in store.values()
+             if rec.get("keys") is None or _in_bar(rec["keys"], fw, fs, fk, ty)]
     zone = day_zone()
     cfd = _cfd.cfd(cards, ORDER, zone=zone, now=dt.datetime.now(dt.UTC))
     extents = {p["day"]: _band_extents(p["bands"]) for p in cfd["points"]}
@@ -3486,14 +3491,16 @@ def _cfd_payload(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
         top = max((extents[d][FLOW_BANDS[0]][1] for d in window), default=0)
         ticks = _y_ticks(top)
         def cut(arr): return [arr[days.index(d)] for d in window]
+        def band(name):
+            lower, held = cut(values(name, 0)), [points[d]["held"][name] for d in window]
+            return {"name": name, "lower": lower, "upper": cut(values(name, 1)),
+                    "count": [extents[d][name][1] - extents[d][name][0] for d in window], "held": held,
+                    "held_upper": [lo + h for lo, h in zip(lower, held, strict=True)]}
         return {"start": dt.datetime.fromtimestamp(cfd["start"], dt.UTC).date().isoformat() if cfd["start"] is not None else None,
                 "days": window, "ymax": ticks[-1], "yticks": ticks, "xticks": _x_ticks(window), "coverage": coverage, "zone": zone,
                 "wip": [points[d]["wip"] for d in window],
                 "throughput": [points[d]["throughput"] for d in window],
-                "bands": [{"name": n, "lower": cut(values(n, 0)), "upper": cut(values(n, 1)),
-                           "count": [extents[d][n][1] - extents[d][n][0] for d in window],
-                           "held": [points[d]["held"][n] for d in window]}
-                          for n in FLOW_BANDS]}
+                "bands": [band(n) for n in FLOW_BANDS]}
     return {"cfd": {**view(None), "zone": zone, "ranges": {key: view(width) for key, width in CFD_RANGES}}}
 
 
@@ -3537,7 +3544,7 @@ HISTORY_TIMELINE = ("query($owner:String!,$name:String!,$number:Int!,$after:Stri
                     "... on ClosedEvent{createdAt} ... on ReopenedEvent{createdAt} "
                     "... on AddedToProjectV2Event{createdAt} ... on RemovedFromProjectV2Event{createdAt} "
                     "... on ParentIssueAddedEvent{createdAt parent{... on Issue{number}}} ... on ParentIssueRemovedEvent{createdAt}}}}}}")
-HISTORY_SEARCH = ("query($q:String!,$after:String){search(query:$q,type:ISSUE,first:100,after:$after){"
+HISTORY_SEARCH = ("query($q:String!,$after:String){search(query:$q,type:ISSUE,first:100,after:$after){issueCount "
                   "pageInfo{hasNextPage endCursor} nodes{... on Issue{number}}}}")
 
 
@@ -3554,47 +3561,66 @@ def _history_timeline(n, cursor):
 
 
 def _history_search():
-    """Every issue number the repository holds, page by page; None when a page answered nothing, so no absence is read (#1024)."""
+    """Every issue number the repository holds, page by page. None when a page answered nothing, or when the pages fall short
+    of the repository's count: GitHub caps a search at 1000 results, and a capped search reads no absence (#1024)."""
     found, after = [], None
     while True:
         search = (((gh_graphql(HISTORY_SEARCH, q=f"repo:{REPO} is:issue", **({"after": after} if after else {})) or {})
                    .get("data") or {}).get("search"))
         if search is None: return None
         found += [node["number"] for node in search["nodes"] if node.get("number")]
-        if not search["pageInfo"]["hasNextPage"]: return found
+        if not search["pageInfo"]["hasNextPage"]:
+            return found if len(found) == search["issueCount"] else None
         after = search["pageInfo"]["endCursor"]
 
 
-def _history_due(store, now):
-    """The cards a pass reads: no complete timeline yet, or a complete one an hour old."""
-    return [i["n"] for i in board_cache.get("items") or []
-            if (rec := store.get(i["n"])) is None or not rec.get("complete") or now - rec["t"] >= _hist.WINDOW]
+def _history_due(store, items):
+    """The cards a pass reads: no timeline yet, a partial one, or one whose Status moved past its record (#1024)."""
+    return _hist.due_reads([{"n": i["n"], "status_updated": i.get("su") or ""} for i in items], store)
+
+
+def _read_timeline(n, prior, keys, read_issue, path, recs, now):
+    """Read one card's timeline into the store. A partial timeline resumes from its cursor; a complete one is read from the
+    start and replaces its record only once read whole, so a cut-short read never truncates it. False when the budget ran
+    out or a read failed, which ends the pass."""
+    work = {n: prior} if prior and not prior.get("complete") else {}
+    ok = True
+    while not (n in work and work[n]["complete"]):
+        if not _hist.allow(recs, now, 1)[0]:
+            ok = False
+            break
+        payload = read_issue(n, work[n]["cursor"] if n in work else None)
+        if payload is None:
+            ok = False
+            break
+        data = payload.get("data") or {}
+        recs.append(_hist.record_points(path, (data.get("rateLimit") or {}).get("cost", 1), now))
+        issue = (data.get("repository") or {}).get("issue")
+        if issue is None: return True
+        facts = _hist.item_facts(issue, int(PROJECT_NO))
+        _hist.record_page(work, n, issue["timelineItems"], facts["issue_updated"], facts["status_updated"])
+    rec = work.get(n)
+    if rec and (prior is None or not prior.get("complete") or rec["complete"]):
+        recs.append(_hist.record_issue(path, n, rec["issue_updated"], rec["status_updated"], rec["events"], rec["complete"], now,
+                                       rec["cursor"], keys))
+    return ok
 
 
 def history_pass(read_issue=None, read_search=None, now=None):
-    """Read the timelines due and the hourly search into the history store. A read that answers nothing ends the pass; the
-    next pass resumes a partial timeline from its cursor (#1024)."""
+    """Read the timelines due and the hourly search into the history store. A read the budget refuses ends the pass; the next
+    pass resumes a partial timeline from its cursor (#1024)."""
     read_issue, read_search = read_issue or _history_timeline, read_search or _history_search
     path = _hist.history_path(BOARD, REPO)
     now = time.time() if now is None else now
-    store = _hist.load_store(path)
-    for n in _history_due(store, now):
-        if not _hist.may_read(path, now, 1)[0]: return
-        rec = store.get(n)
-        payload = read_issue(n, _hist.timeline_after(rec))
-        if payload is None: return
-        data = payload.get("data") or {}
-        _hist.record_points(path, (data.get("rateLimit") or {}).get("cost", 1), now)
-        issue = (data.get("repository") or {}).get("issue")
-        if issue is None: continue
-        if rec and rec.get("complete"): store.pop(n)
-        facts = _hist.item_facts(issue, PROJECT_NO)
-        _hist.record_page(store, n, issue["timelineItems"], facts["issue_updated"], facts["status_updated"])
-        kept = store[n]
-        _hist.record_issue(path, n, facts["issue_updated"], facts["status_updated"], kept["events"], kept["complete"], now, kept["cursor"])
-    if _hist.search_due(_hist.read_records(path), now):
-        found = read_search()
-        if found is not None: _hist.record_search(path, found, now)
+    store, recs, items = _hist.load_store(path), _hist.read_records(path), board_cache.get("items") or []
+    keys = {i["n"]: bar_keys(i) for i in items}
+    try:
+        for n in _history_due(store, items):
+            if not _read_timeline(n, store.get(n), keys[n], read_issue, path, recs, now): return
+        if _hist.search_due(recs, now):
+            _hist.record_search(path, read_search(), now)
+    finally:
+        _hist.compact(path, now)
 
 
 def refresh_history():
@@ -4991,7 +5017,7 @@ const flowCFD=c=>{const sel=`<label class=fhead>Range <select id=cfdr>${CFD_R.ma
     const low=[...run].reverse().flatMap(i=>one?[[flowX(i,n)+h,b.lower[i]],[flowX(i,n)-h,b.lower[i]]]:[[flowX(i,n),b.lower[i]]]);
     return [...up,...low].map(([x,v])=>`${x},${flowY(v,c.ymax)}`).join(" ");};
   const polys=b=>runs(b).map(run=>`<polygon points="${band(b,run)}" fill="${COLORS[b.name]||"#888"}" fill-opacity=".85"><title>${esc(b.name)}</title></polygon>`).join("");
-  const heldBand=b=>({name:b.name,lower:b.lower,upper:b.lower.map((v,i)=>v===null?null:v+(b.held?b.held[i]:0))});
+  const heldBand=b=>({name:b.name,lower:b.lower,upper:b.held_upper});
   const heldPolys=b=>b.held&&b.held.some(v=>v>0)?runs(heldBand(b)).map(run=>`<polygon points="${band(heldBand(b),run)}" fill="#000" fill-opacity=".45"><title>${esc(b.name)} held</title></polygon>`).join(""):"";
   const hover=c.days.map((d,i)=>{const gap=c.bands.length&&c.bands[0].upper[i]===null;   // a day's counts, WIP and throughput, on hover (#901)
     const parts=c.bands.map(b=>`${esc(b.name)} ${(b.count||[])[i]}`).join(", "),tp=c.throughput?c.throughput[i]:null;

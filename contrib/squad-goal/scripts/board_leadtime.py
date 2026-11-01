@@ -3,7 +3,7 @@ import math
 import statistics
 from datetime import UTC, datetime, timedelta
 
-MEASURE = "opened -> closed"
+MEASURE = "on board -> closed"
 ABANDONED = "Abandoned"
 # The chart's own reason for a card the hub names as closed without delivery (#921). It is a label, not the carrier's
 # vocabulary: board_columns reads the carrier's `state_reason` and hands this row its word, so the chart holds no copy
@@ -12,11 +12,12 @@ NOT_DELIVERED = "not_planned"
 
 
 NO_TRANSITION = "no_transition"
+NOT_READ = "not_read"
 
 
 def _exclusion(row):
-    if row.get("reason") == NO_TRANSITION:
-        return NO_TRANSITION
+    if row.get("reason") in (NO_TRANSITION, NOT_READ):
+        return row["reason"]
     if row.get("reason") == NOT_DELIVERED:
         return "not_planned"
     if row["column"] == ABANDONED:
@@ -97,7 +98,8 @@ PLOT_W, PLOT_H = 728, 268     # the page's plot in pixels, for clusters: its 800
 DOT_PX = 9                    # dots closer than this many pixels merge into a numbered cluster
 REASON_TEXT = {"not_planned": "closed as not planned", "abandoned": "closed as abandoned", "open": "still open",
                "no_opened": "no opened date",
-               NO_TRANSITION: "no transition into the chosen columns"}
+               NO_TRANSITION: "no transition into the chosen columns",
+               NOT_READ: "not yet read by the history pass"}
 LOG_TICKS = [(1 / 24, "1 h"), (1, "1 d"), (7, "1 w")]
 CUBE_TICKS = [(1, "1 d"), (7, "1 w"), (30, "30 d"), (60, "60 d")]
 

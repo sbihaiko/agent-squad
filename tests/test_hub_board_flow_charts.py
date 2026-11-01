@@ -29,6 +29,11 @@ def _load(name, path):
     return mod
 
 
+@pytest.fixture(autouse=True)
+def _chart_days_end_in_utc(monkeypatch):
+    monkeypatch.setenv("TZ", "UTC")
+
+
 @pytest.fixture(scope="module")
 def hub(tmp_path_factory):
     mp = pytest.MonkeyPatch()
@@ -82,8 +87,8 @@ def _done(n, closed_at):
 def _seed(hub, cards):
     """The board's items and the history store's records for `cards`, a map of number to (item, events) (#1023)."""
     path = hub._hist.history_path(hub.BOARD, hub.REPO)
-    for n, (_, events) in cards.items():
-        hub._hist.record_issue(path, n, OPENED, OPENED, events, True, now=time.time())
+    for n, (item, events) in cards.items():
+        hub._hist.record_issue(path, n, OPENED, OPENED, events, True, now=time.time(), keys=hub.bar_keys(item))
     hub.board_cache["items"] = [item for item, _ in cards.values()]
 
 
@@ -161,7 +166,7 @@ def test_lead_time_summary_measure_window_and_excluded_count(hub, board):
         4: _todo(4),
     })
     lead = _flow(hub)["lead"]
-    assert lead["measure"] == "opened -> closed"
+    assert lead["measure"] == "on board -> closed"
     assert lead["window"] == {"size": 20, "unit": "issues"}
     assert lead["summary"]["average"]["text"] == "1d 10h"
     assert lead["summary"]["median"]["text"] == "1d"
@@ -209,7 +214,7 @@ def test_the_lead_time_chart_names_the_cards_closed_as_not_planned(hub, tmp_path
     block = _flow_block(hub).split("const drawFlow")[0]
     drawing = "\n".join([
         "const COLORS={},COLNAME={};", "const esc=s=>String(s);", "const ls={};", block,
-        'process.stdout.write(flowLead({type:"task",measure:"opened -> closed",window:{size:20,unit:"issues"},'
+        'process.stdout.write(flowLead({type:"task",measure:"on board -> closed",window:{size:20,unit:"issues"},'
         'excluded:[{reason:"not_planned",count:3}],excluded_total:3,series:[],summary:null}));',
     ])
     path = tmp_path / "flow-lead-not-planned.js"

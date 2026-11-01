@@ -7,6 +7,7 @@ per line, and the last issue record wins. board_flow_history.py is the flow-samp
 import importlib.util
 import itertools
 import json
+import os
 import pathlib
 from datetime import UTC, datetime
 
@@ -112,7 +113,8 @@ def intervals(events):
         if out and {k: out[-1][k] for k in snap} == snap:
             continue
         if out: out[-1]["to"] = e["t"]
-        out.append({"from": e["t"], "to": None, **snap, "approx": e["type"] == "gone"})
+        out.append({"from": e["t"], "to": None, **snap, "approx": e["type"] == "gone",
+                    "unknown": e["type"] == "added" and bool(state["status"])})
     return out
 
 
@@ -164,12 +166,12 @@ def burnup(store, spec):
     return {"spec": spec, "points": points}
 
 
-def lead_span(runs, start=None, end=None):
+def lead_span(runs, start=None, end=None, complete=True):
     """The flowing and held hours from a card's first entry into `start` to its last entry into `end`, or None when it has
     no entry into `start` or no entry into `end`. None `start` is the card's first time on the board; None `end` is Closed.
-    Backlog with no hold is the parked time: it counts in neither. `unknown_first` marks a card whose first run is off the
-    board while it later holds a column: its start is not in the store. `approx` marks a boundary inside the window that a
-    search set (the card's absence was found, not read)."""
+    Backlog with no hold is the parked time: it counts in neither. `unknown_first` marks a card whose column was set before
+    its add, so the instant it took that column is not in the store, or a timeline not yet read whole. `approx` marks a
+    boundary inside the window that a search set (the card's absence was found, not read)."""
     end = end or _columns.ROLE["issue_closed"]
     entered = next((r for r in runs if (r["on_board"] if start is None else r["column"] == start)), None)
     closed = next((r for r in reversed(runs) if r["column"] == end), None)
@@ -189,7 +191,7 @@ def lead_span(runs, start=None, end=None):
         else: flowing += (b - a).total_seconds() / 3600
     return {"start": entered["from"], "end": closed["from"], "flowing": flowing, "held": held,
             "approx": any(r["approx"] and lo < _instant(r["from"]) <= hi for r in runs),
-            "unknown_first": not runs[0]["on_board"] and any(r["column"] for r in runs)}
+            "unknown_first": not complete or bool(next((r["unknown"] for r in runs if r["on_board"]), False))}
 
 
 def _instant(text):
@@ -210,6 +212,13 @@ def read_records(path):
 def _append(path, rec):
     with open(path, "a") as f:
         f.write(json.dumps(rec, sort_keys=True) + "\n")
+    return rec
+
+
+def _rewrite(path, recs):
+    tmp = pathlib.Path(f"{path}.tmp")
+    tmp.write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in recs))
+    os.replace(tmp, path)
 
 
 def load_store(path):
@@ -217,9 +226,21 @@ def load_store(path):
     return {r["n"]: r for r in read_records(path) if r.get("k") == "issue"}
 
 
-def record_issue(path, number, issue_updated, status_updated, events, complete, now, cursor=None):
-    _append(path, {"k": "issue", "n": number, "issue_updated": issue_updated, "status_updated": status_updated,
-                   "events": events, "complete": complete, "cursor": cursor, "t": now})
+def record_issue(path, number, issue_updated, status_updated, events, complete, now, cursor=None, keys=None):
+    """One card's timeline as read; `keys` are the bar values the board filters the card by, kept for the cards off the board."""
+    return _append(path, {"k": "issue", "n": number, "issue_updated": issue_updated, "status_updated": status_updated,
+                          "events": events, "complete": complete, "cursor": cursor, "t": now, "keys": keys})
+
+
+def compact(path, now):
+    """Rewrite the store with each card's last issue record, the points inside the window, and the last search."""
+    if not pathlib.Path(path).exists(): return
+    recs = read_records(path)
+    issues = {r["n"]: r for r in recs if r.get("k") == "issue"}
+    points = [r for r in recs if r.get("k") == "points" and now - WINDOW < r["t"] <= now]
+    defers = [r for r in recs if r.get("k") == "defer" and r["until"] > now]
+    searches = [r for r in recs if r.get("k") == "search"][-1:]
+    _rewrite(path, [*issues.values(), *points, *defers, *searches])
 
 
 def coverage(store):
@@ -241,21 +262,27 @@ def search_due(records, now):
 
 
 def record_search(path, found, now):
-    """Log one hourly search. A stored card the search did not return ends its interval: a transfer, a deletion or a removal."""
+    """Log one hourly search. A stored card the search did not return ends its interval: a transfer, a deletion or a removal.
+    A search that was not read (`found` None) logs its time only: no absence is read from it, and it is not retried this hour."""
+    search = _append(path, {"k": "search", "t": now, "read": found is not None})
+    if found is None:
+        return search
     found, stamp, store = set(found), _iso(now), load_store(path)
-    _append(path, {"k": "search", "t": now})
     for n, rec in sorted(store.items()):
         if n in found or (rec["events"] and rec["events"][-1]["type"] == "gone"):
             continue
         events = rec["events"] + [{"t": stamp, "type": "gone"}]
-        record_issue(path, n, rec["issue_updated"], rec["status_updated"], events, rec["complete"], now, rec.get("cursor"))
+        record_issue(path, n, rec["issue_updated"], rec["status_updated"], events, rec["complete"], now, rec.get("cursor"),
+                     rec.get("keys"))
+    return search
 
 
 def record_points(path, cost, now, retry_after=None):
     """Log the points one call cost; a Retry-After defers the next read until it has passed."""
-    _append(path, {"k": "points", "t": now, "cost": cost})
+    points = _append(path, {"k": "points", "t": now, "cost": cost})
     if retry_after is not None:
         _append(path, {"k": "defer", "until": now + retry_after})
+    return points
 
 
 def points_last_hour(path, now):
@@ -263,9 +290,8 @@ def points_last_hour(path, now):
                if r.get("k") == "points" and now - WINDOW < r["t"] <= now)
 
 
-def may_read(path, now, cost):
-    """(True, None) when a read of `cost` points fits, else (False, the time it may run again)."""
-    recs = read_records(path)
+def allow(recs, now, cost):
+    """(True, None) when a read of `cost` points fits in the records, else (False, the time it may run again)."""
     deferred = max((r["until"] for r in recs if r.get("k") == "defer"), default=0)
     if now < deferred:
         return False, deferred

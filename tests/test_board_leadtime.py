@@ -147,7 +147,7 @@ def test_a_day_and_hours_render_as_days_then_hours(lt):
 def test_result_names_the_window_in_issues_and_the_measure(lt):
     result = lt.lead_time([_card(1, 5)])
 
-    assert result["measure"] == "opened -> closed"
+    assert result["measure"] == "on board -> closed"
     assert result["window"] == {"size": 20, "unit": "issues"}
     assert lt.lead_time([_card(1, 5)], window=3)["window"] == {"size": 3, "unit": "issues"}
 
