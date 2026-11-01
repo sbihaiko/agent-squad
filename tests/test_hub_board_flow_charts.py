@@ -573,7 +573,7 @@ def test_each_chart_has_its_own_route_and_the_page_fetches_it_on_open(hub):
     source = HUB_PY.read_text()
     assert 'self.path.startswith("/api/chart/cfd")' in source
     assert 'self.path.startswith("/api/chart/lead")' in source
-    assert "fetch(`/api/chart/${k}`)" in hub.PAGE
+    assert "fetch(`/api/chart/${k}?${q}`)" in hub.PAGE   # the bar's values ride on the route (#904)
     assert "b.flow" not in hub.PAGE, "the board poll still hands the chart its data"
 
 

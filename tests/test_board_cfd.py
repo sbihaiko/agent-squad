@@ -46,14 +46,16 @@ def test_missing_column_reads_zero_and_unknown_column_folds_into_no_column(cfd):
     assert point["bands"]["No column"] == 6
 
 
-def test_counts_sum_over_kinds_and_kind_filter_keeps_one(cfd):
+def test_counts_sum_over_kinds_and_a_kind_filter_keeps_none_of_a_sample_without_cells(cfd):
+    """A sample without cells keys its counts by the project's Kind field, not by the bar's kinds (#904)."""
     samples = [_sample(_epoch(2026, 10, 20, 12), {"issue": {"Todo": 2}, "pr": {"Todo": 3, "Doing": 1}})]
     everything = cfd(samples, COLUMNS)["points"][0]["bands"]
-    only_pr = cfd(samples, COLUMNS, kind="pr")["points"][0]["bands"]
+    only_pr = cfd(samples, COLUMNS, kind="pr")["points"][0]
     assert everything["Todo"] == 5
     assert everything["Doing"] == 1
-    assert only_pr["Todo"] == 3
-    assert only_pr["Doing"] == 1
+    assert only_pr["bands"]["Todo"] == 0
+    assert only_pr["bands"]["Doing"] == 0
+    assert only_pr["legacy"] is True
 
 
 def test_several_samples_in_one_day_keep_the_last_in_the_named_zone(cfd):

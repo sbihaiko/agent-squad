@@ -1718,6 +1718,202 @@ def loop_status():
     on = _loop_on(); prev = _json(LOOP_STAMP) or {}
     return {"on": on, "since": prev.get("since") if bool(prev.get("on")) == on else None}
 
+LOOP_AUDIT = STATE / "loop-audit.jsonl"   # one line per loop switch change: who, when, from where, and what a stop-now killed (#923)
+LOOP_READ_ONLY = "read-only from the tailnet: SQUAD_TAILNET_LOOP_WRITE is not on (tailnet.loop_write)"
+LOOP_ACTIONS = ("start", "drain", "stop-now")
+WATCHD = pathlib.Path(__file__).resolve().parent / "watchd.sh"
+
+def loop_watchd(*args):
+    # the mux pins a profile's env only while it imports this file: watchd gets this profile, its state and its checkout, never the hub's cwd
+    env = {**_PROFILE_ENV, "SG_STATE": str(STATE), "SG_CHECKOUT": CHECKOUT}
+    return subprocess.run(["bash", str(WATCHD), *args], capture_output=True, text=True, timeout=60, env=env, cwd=CHECKOUT).returncode
+
+def _pid_alive(pid):
+    try: os.kill(pid, 0)
+    except PermissionError: return True
+    except OSError: return False
+    return True
+
+def loop_alive():
+    try: pid = int(_read(STATE / "watchd.pid").split()[0])
+    except (ValueError, IndexError): return False
+    return _pid_alive(pid)
+
+LOOP_RUN_CMD = os.environ.get("SG_RUN_CMD_RE") or r"[s]quad start( |$)"   # a squad run's command, as heartbeat.sh reads it
+LOOP_LAUNCH_S = 60 * float(os.environ.get("HB_DEAD_IDLE_MIN") or 1)   # a record with no call_start that moved this recently is a launch, not a death
+
+def loop_record(run):
+    return pathlib.Path(run) / "record.jsonl" if run.startswith("/") else pathlib.Path(CHECKOUT) / "runs" / run / "record.jsonl"
+
+def loop_run_pid(run, rows=None):
+    """The pid of a live run's own process: its record's last call_start, while that pid is alive as a squad run (its command
+    matches SG_RUN_CMD_RE) and is not this hub. A reused pid that names any other process is never a run's. A run is started
+    in its own session (start_new_session), so the supervisor's group stop never reaches it."""
+    for raw in reversed(_read(loop_record(run)).splitlines()):
+        try: e = json.loads(raw)
+        except ValueError: continue
+        if e.get("event") == "call_start" and isinstance(e.get("pid"), int):
+            pid = e["pid"]
+            if pid <= 1 or pid == os.getpid(): return None
+            cmd = next((c for p, _, c in (_ps_rows() if rows is None else rows) if p == pid), "")
+            return pid if re.search(LOOP_RUN_CMD, cmd) else None
+    return None
+
+def loop_run_live(run, rows=None, now=None):
+    """A run is live while it has no verdict and its process runs: the last call_start pid is a live squad run, or, before its
+    first call, its record moved within the launch window. A run that died with no verdict (a crash, a kill) is not live."""
+    f = loop_record(run); text = _read(f)
+    if re.search(r'"event":\s*"verdict"', text): return False
+    if re.search(r'"event":\s*"call_start"', text): return loop_run_pid(run, rows) is not None
+    try: return (time.time() if now is None else now) - f.stat().st_mtime < LOOP_LAUNCH_S
+    except OSError: return False
+
+def loop_live():
+    """The live runs (an active-runs line whose run still runs, `loop_run_live`) and the held gate (the gate lock's pid file
+    naming a live pid): what a stop kills, and what a drain waits for."""
+    rows = _ps_rows()
+    runs = [r for r in (x.strip() for x in _read(STATE / "active-runs.txt").splitlines()) if r and loop_run_live(r, rows)]
+    gate = _read(STATE / "locks" / "gate" / "pid").strip()
+    gates = [f"gate pid {gate}"] if gate.isdigit() and _pid_alive(int(gate)) else []
+    return {"runs": runs, "gates": gates}
+
+def loop_audit_add(who, frm, action, killed=None, **extra):
+    line = {"at": dt.datetime.now().astimezone().isoformat(timespec="seconds"), "who": who, "from": frm, "action": action}
+    if killed is not None: line["killed"] = killed
+    line.update(extra)   # a failed start's reason, or a stop-now's survivors
+    with LOOP_AUDIT.open("a") as f: f.write(json.dumps(line) + "\n")
+
+def loop_audit_last(n):
+    out = []
+    for raw in _read(LOOP_AUDIT).splitlines()[-n:]:
+        try: out.append(json.loads(raw))
+        except ValueError: pass
+    return out
+
+LOOP_STARTING = STATE / "auto" / "starting"   # the hub's pending mark: written before watchd start runs, removed when it returns
+LOOP_START_WINDOW = 90   # a mark older than this outlived its hub (the call times out at 60 s): it reads off
+
+def loop_state(last, now=None):
+    """on or draining while the supervisor is alive; starting only while a hub start is in progress; off otherwise. A start
+    that failed reads off, and the view carries the failure, so no disabled button hides it."""
+    if loop_alive(): return "draining" if (STATE / "auto" / "drain").exists() else "on"
+    now = time.time() if now is None else now
+    try:
+        if now - LOOP_STARTING.stat().st_mtime < LOOP_START_WINDOW: return "starting"
+    except OSError: pass
+    return "off"
+
+LOOP_STATE_ACTIONS = {"off": ["start"], "on": ["drain", "stop-now"], "draining": ["stop-now"], "starting": []}   # the hub's rule, so no page holds one
+
+LOOP_STARTED = STATE / "watchd.started"   # every watchd start stamps it with its epoch second, from the hub or the terminal
+
+def loop_started_after(at):
+    """True when a watchd start came after the audit time `at`: an old hub failure then no longer describes the loop."""
+    try: when = dt.datetime.fromisoformat(at).timestamp()
+    except (TypeError, ValueError): return False
+    try: return int(_read(LOOP_STARTED).split()[0]) > int(when)
+    except (ValueError, IndexError): return False
+
+def loop_view(a):
+    last = (loop_audit_last(1) or [{}])[-1]
+    tn = tailnet_block()
+    write = a.allowed and (not a.tailnet or tn.get("loop_write") is True)
+    state = loop_state(last)
+    return {"state": state, "actions": list(LOOP_STATE_ACTIONS.get(state, [])) if write else [], "who": last.get("who", ""), "when": last.get("at", ""), "live": loop_live(),
+            "failed": last.get("failed", "") if state == "off" and not loop_started_after(last.get("at", "")) else "",
+            "log": loop_audit_last(20)[::-1], "write": write, "reason": "" if write else LOOP_READ_ONLY,
+            "tailnet": a.tailnet, "access": {"loop_write": tn.get("loop_write") is True, "terminals_send": tn.get("terminals_send") is True}}   # Settings > Access reads the tailnet rule here
+
+def loop_refusal(a, origin_ok, tn):
+    """The reason a loop write is refused, or '' when it may run: the access rule, then the tailnet grant, then the origin and body."""
+    if not a.allowed: return a.reason
+    if a.tailnet and tn.get("loop_write") is not True: return LOOP_READ_ONLY
+    return "" if origin_ok else "forbidden"
+
+def _ps_rows():
+    """Every process as (pid, ppid, command), from one `ps`."""
+    try: out = subprocess.run(["/bin/ps", "-axwwo", "pid=,ppid=,command="], capture_output=True, text=True, timeout=30).stdout
+    except (OSError, subprocess.SubprocessError): return []
+    rows = []
+    for line in out.splitlines():
+        f = line.split(None, 2)
+        if len(f) >= 2 and f[0].isdigit() and f[1].isdigit(): rows.append((int(f[0]), int(f[1]), f[2] if len(f) > 2 else ""))
+    return rows
+
+def loop_kill(root):
+    """End `root` and every process under it: TERM, then KILL what is left. True when `root` is gone after it."""
+    rows = _ps_rows(); kids = {}
+    for pid, ppid, _ in rows: kids.setdefault(ppid, []).append(pid)
+    tree, stack = [], [root]
+    while stack:
+        pid = stack.pop(); tree.append(pid); stack.extend(kids.get(pid, ()))
+    for sig in (15, 9):
+        for pid in tree:
+            try: os.kill(pid, sig)
+            except OSError: pass
+        for _ in range(30):
+            if not any(_pid_alive(p) for p in tree): return True
+            time.sleep(0.1)
+    return not _pid_alive(root)
+
+def loop_mark_killed(run):
+    """Give a run stop-now ended its verdict at once, through squad.killed (the one writer), so it never reads live again.
+    False when it could not be written: the run then still reads not live, since its process is gone."""
+    try:
+        (K,) = load_squad(squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__), ("killed",))
+        K.mark_killed(loop_record(run).parent, "killed/stop-now")
+        return True
+    except Exception as e:
+        log_once(f"hub: stop-now could not write the killed verdict of {run}: {type(e).__name__}: {' '.join(str(e).split())}")
+        return False
+
+def loop_stop_now(live):
+    """End each listed run and gate; answer what died and what survived. A run that died gets its killed verdict."""
+    killed, survived = {"runs": [], "gates": []}, {"runs": [], "gates": []}
+    for r in live["runs"]:
+        pid = loop_run_pid(r)
+        if pid and loop_kill(pid):
+            killed["runs"].append(r); loop_mark_killed(r)
+        else: survived["runs"].append(r)
+    for g in live["gates"]:
+        pid = int(g.rsplit(" ", 1)[-1])
+        (killed if pid != os.getpid() and loop_kill(pid) else survived)["gates"].append(g)
+    return killed, survived
+
+def loop_switch(a, body, origin_ok):
+    why = loop_refusal(a, origin_ok, tailnet_block())
+    if why: return 403, {"err": "forbidden", "reason": why}
+    action = body.get("action") if isinstance(body, dict) else None
+    if action not in LOOP_ACTIONS: return 400, {"err": "bad request"}
+    state = loop_state((loop_audit_last(1) or [{}])[-1])
+    if action not in LOOP_STATE_ACTIONS.get(state, []):   # the route applies the rule the view publishes
+        return 409, {"err": "the loop is not running" if state == "off" else f"the loop is {state}: {action} does not apply"}
+    who, frm = a.login or "owner", "tailnet" if a.tailnet else "loopback"
+    if action == "start":
+        for f in ("off", "drain", "drain-pause"): (STATE / "auto" / f).unlink(missing_ok=True)
+        LOOP_STARTING.parent.mkdir(parents=True, exist_ok=True); LOOP_STARTING.write_text(f"{time.time()}\n")
+        try:
+            try: rc = loop_watchd("start")
+            except subprocess.TimeoutExpired: rc = -1
+            failed = "watchd did not start" if rc else "" if loop_alive() else "the supervisor was not running after its start"
+        finally: LOOP_STARTING.unlink(missing_ok=True)
+        if failed:
+            loop_audit_add(who, frm, action, failed=failed)
+            return 500, {"err": failed}
+        loop_audit_add(who, frm, action)
+        return 200, {"ok": True, "action": action}
+    if action == "drain":
+        if loop_watchd("drain"): return 500, {"err": "watchd did not drain"}
+        loop_audit_add(who, frm, action)
+        return 200, {"ok": True, "action": action}
+    if body.get("confirm") is not True: return 400, {"err": "confirm the stop: it kills the live runs and gates listed"}
+    live = loop_live()
+    if loop_watchd("stop"): return 500, {"err": "watchd did not stop"}
+    killed, survived = loop_stop_now(live)
+    extra = {"survived": survived} if survived["runs"] or survived["gates"] else {}
+    loop_audit_add(who, frm, action, killed, **extra)
+    return 200, {"ok": True, "action": action, "killed": killed, **extra}
+
 def foot_sources(now=None):
     """One reading of every source the line draws on. A source that is not there reads as `None` for its own fact only,
     so one unreadable file costs one `?` and never the rest of the line."""
@@ -2970,22 +3166,40 @@ LEAD_TIMEFRAMES = [("7", 7), ("14", 14), ("30", 30), ("90", 90), ("180", 180), (
 
 
 def lead_rows():
-    """The closed-card rows the lead-time arithmetic reads, one per board item (#900)."""
+    """The closed-card rows the lead-time arithmetic reads, one per board item (#900). Each row names its spec, its Waves
+    key `spec/wave` (#980) and its kind: the values the board's bar filters by (#904)."""
     return [{"n": i["n"], "column": _columns_module.view_column(i["st"], str(i["s"]).lower() == "closed", i.get("l"), i.get("cr"))[0],
              "reason": _leadtime.NOT_DELIVERED if _columns_module.not_planned(i.get("cr")) else None,   # the chart's own word (#921)
-             "c": i.get("c") if str(i["s"]).lower() == "closed" else None, "o": i.get("o"), "t": i.get("t", "")} for i in board_cache["items"]]
+             "c": i.get("c") if str(i["s"]).lower() == "closed" else None, "o": i.get("o"), "t": i.get("t", ""),
+             "spec": _flow.spec_key(i), "wave": f'{_flow.spec_key(i)}/{_flow.wave_key(i.get("l"))}', "kind": _flow.kind_key(i)}
+            for i in board_cache["items"]]
+
+
+def board_filters(query):
+    """The bar's Waves, Specs and Kinds values from a query string, `fw=5/4,none/none&fs=5&fk=bug` (#904): (fw, fs, fk).
+    An absent value is an empty list: all."""
+    q = urllib.parse.parse_qs(query or "")
+    def values(key): return [v for v in (q.get(key, [""])[0]).split(",") if v]
+    return values("fw"), values("fs"), values("fk")
+
+
+def _in_bar(row, fw, fs, fk=()):
+    """A row the bar keeps: its Waves key is among the waves named, its spec among the specs named, and its kind among the
+    kinds named. Empty lists keep all."""
+    return (not fw or row["wave"] in fw) and (not fs or row["spec"] in fs) and (not fk or row["kind"] in fk)
 
 
 def lead_zoom(query):
     """The control chart over a dragged range (`from` and `to`, ISO datetimes) or a timeframe preset (`tf`), `scale` jira
     or log (#900), measured from the start column `a` to the end column `b` (#905). No `a` is the card's opened instant;
-    no `b`, or the closed column, is its closed instant."""
+    no `b`, or the closed column, is its closed instant. The bar's values in the query filter its rows (#904)."""
     q = urllib.parse.parse_qs(query)
     a, b = (q.get(k, [""])[0] or None for k in ("a", "b"))
     if b == COLUMN["issue_closed"]: b = None
     if any(c is not None and c not in ORDER for c in (a, b)): return {"error": "bad column: a and b name a board column"}
     log = q.get("scale", ["jira"])[0] == "log"
-    rows = _leadtime.span(lead_rows(), card_transitions(), start=a, end=b)
+    fw, fs, fk = board_filters(query)
+    rows = _leadtime.span([r for r in lead_rows() if _in_bar(r, fw, fs, fk)], card_transitions(), start=a, end=b)
     measure = f"{a or 'opened'} -> {b or 'closed'}"
     if "from" not in q and "to" not in q and "tf" in q:
         days = dict(LEAD_TIMEFRAMES).get(q["tf"][0], 0)
@@ -3015,15 +3229,17 @@ def history_key():
     try: st = path.stat(); return (str(path), st.st_mtime_ns, st.st_size)
     except OSError: return (str(path), None)
 
-def _cfd_payload():
-    """The cumulative flow's numbers, computed here from board_cfd; the page draws them and computes none."""
+def _cfd_payload(fw=(), fs=(), fk=()):
+    """The cumulative flow's numbers, computed here from board_cfd; the page draws them and computes none.
+    `fw`, `fs` and `fk` are the bar's Waves, Specs and Kinds values: the chart keeps only the cards the bar keeps (#904)."""
     path = _flow.history_path(BOARD, REPO)
-    cfd = _cfd.cfd(_flow.samples(path), ORDER, skips=_flow.skips(path))
+    cfd = _cfd.cfd(_flow.samples(path), ORDER, skips=_flow.skips(path), spec=fs, wave=fw, kind=fk)
     extents = {p["day"]: _band_extents(p["bands"]) for p in cfd["points"]}
     days = sorted([*extents, *cfd["gaps"]])   # one entry per calendar day: a day with no sample carries no value (#894)
     yticks = _y_ticks(max((e[FLOW_BANDS[0]][1] for e in extents.values()), default=0))
     def values(name, k): return [extents[d][name][k] if d in extents else None for d in days]
     points = {p["day"]: p for p in cfd["points"]}
+    legacy = {p["day"] for p in cfd["points"] if p.get("legacy")}   # a day whose sample predates the kind, spec and wave (#904)
     def view(width):
         """The chart over the last `width` calendar days (all of them when None): the same arrays, cut to the window (#901)."""
         window = days if width is None else days[-width:]
@@ -3033,6 +3249,7 @@ def _cfd_payload():
         def cut(arr): return [arr[days.index(d)] for d in window]
         return {"start": dt.datetime.fromtimestamp(cfd["start"], dt.UTC).date().isoformat() if cfd["start"] is not None else None,
                 "days": window, "ymax": ticks[-1], "yticks": ticks, "xticks": _x_ticks(window),
+                "legacy": sum(1 for d in window if d in legacy),
                 "wip": [points[d]["wip"] if d in points else None for d in window],
                 "throughput": [points[d]["throughput"] if d in points else None for d in window],
                 "bands": [{"name": n, "lower": cut(values(n, 0)), "upper": cut(values(n, 1)),
@@ -3041,9 +3258,10 @@ def _cfd_payload():
     return {"cfd": {**view(None), "ranges": {key: view(width) for key, width in CFD_RANGES}}}
 
 
-def _lead_payload():
-    """The lead-time numbers over the closed cards of the board read, computed here; the page draws them and computes none."""
-    rows = lead_rows()
+def _lead_payload(fw=(), fs=(), fk=()):
+    """The lead-time numbers over the closed cards of the board read, computed here; the page draws them and computes none.
+    The bar's values `fw`, `fs` and `fk` filter the rows (#904)."""
+    rows = [r for r in lead_rows() if _in_bar(r, fw, fs, fk)]
     lead = _leadtime.lead_time(rows)
     now = dt.datetime.now(dt.UTC)
     control = {scale: {key: _leadtime.control_chart(rows, timeframe=days, log=scale == "log", now=now)
@@ -3054,9 +3272,12 @@ def _lead_payload():
                      "control": control, "columns": ORDER}}
 
 
-def flow_cfd(): return chart("cfd", history_key(), _cfd_payload)
+def flow_cfd(fw=(), fs=(), fk=()):
+    """The cumulative flow for the bar's values; the cache key holds them, so a filter change reads anew (#904)."""
+    return chart("cfd", (history_key(), tuple(fw), tuple(fs), tuple(fk)), lambda: _cfd_payload(fw, fs, fk))
 
-def flow_lead(): return chart("lead", board_cache.get("t"), _lead_payload)
+def flow_lead(fw=(), fs=(), fk=()):
+    return chart("lead", (board_cache.get("t"), tuple(fw), tuple(fs), tuple(fk)), lambda: _lead_payload(fw, fs, fk))
 
 
 def drawn_column(i, moves, read_at, window):
@@ -3665,6 +3886,12 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
    screen the 300 px sidebar and the board column are what a reader has to scroll sideways to reach. */
 @media (max-width:600px){body{height:auto}body.tkopen #win{margin-right:0}body.tkopen #board{width:auto}#win{display:block;overflow:visible}body.dockb #win{display:block;grid-template-columns:none;grid-template-rows:none}#side{width:auto;border-right:0;border-bottom:1px solid var(--line)}body.dockb #side{grid-row:auto;grid-column:auto}#main{min-height:50vh}body.dockb #main{grid-column:auto;grid-row:auto}#board{width:auto}body.dockb #board{grid-column:auto;grid-row:auto;height:60vh}#lbody input{width:92px}}
 /* The page frame of the mock (#889): the header with its tabs, and the sidebar cards. */
+/* The loop switch (#923): the strip's draining and starting states, Settings > Loop and Access, and the stop confirm. */
+#lopb .ls.draining,#lopb .ls.starting{color:var(--warn)}#iloop .ls,#lopb .ls{font-weight:600}#iloop .ls.on{color:var(--ok)}#iloop .ls.off{color:var(--warn)}#iloop .ls.draining,#iloop .ls.starting{color:var(--warn)}#iloop small{color:var(--mute)}#loopbtn{padding:2px 10px;font-size:var(--fs-min)}#loopbtn:disabled{opacity:.6;cursor:default}#lopb .ls.on{color:var(--ok)}#lopb .ls.off{color:var(--warn)}
+#lopb .lnow{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#10141a;margin:6px 0}#lopb .lnow small{display:block;color:var(--mute)}#lopb .lnow button{margin-left:auto}
+#lopb .lwhy{color:var(--warn);margin:4px 0}#lopb .lerr{color:var(--err);margin:4px 0}#lopb ul.laud{list-style:none;margin:4px 0 0;padding:0}#lopb ul.laud li{padding:4px 0;border-bottom:1px solid var(--line)}#lopb ul.laud li:last-child{border:0}
+#accb .kr b{font-weight:500;font-size:var(--fs-min);line-height:1.3;text-align:right}#accb .ok{color:var(--ok)}#accb .no{color:var(--warn)}#accb p{color:var(--mute);margin:8px 0 0}
+#ldg{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:10px;padding:16px;width:min(520px,92vw)}#ldg::backdrop{background:#000a}#ldg .lrad{display:flex;gap:8px;align-items:flex-start;padding:8px 0;cursor:pointer}#ldg .lrad small{display:block;color:var(--mute)}#ldg ul{margin:4px 0 0;padding-left:18px}#ldg .lact{display:flex;gap:6px;margin-top:10px}
 header.top{position:relative;display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--line);flex:none}
 header.top h1{font-size:var(--fs-xl);margin:0}header.top .spx{flex:1}
 header.top .pill{font-size:var(--fs-min);color:var(--mute)}
@@ -3718,22 +3945,25 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 <details id=plans class=sp><summary>Subscriptions<span class=sr id=plsr></span></summary><div class=sb><div id=subs></div></div></details>
 <details id=stats class=sp><summary>Cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><h4>Spend <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Figures at API list prices (API-equivalent)."></span></h4><div class=tot id=tot></div><div class=m id=totnote></div><div class=cash id=cash></div><h4>Spend over time <span class=row id=per></span></h4><div id=chart></div><div id=kpi></div><div id=open></div><h4>Tokens by model <small class=m id=piet>all time</small></h4><div id=pie></div></div></details>
 <details id=sqd class=sp open><summary>Squad models<span class=sr id=sqsr></span></summary><div class=sb id=sqm></div></details>
-<details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div class=ian id=ian></div><div class=irw><span>Next cycle</span><b id=icyc aria-live=off>?</b></div><div id=iuse></div></div></details>
+<details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div class=ian id=ian></div><div id=iloop></div><div class=irw><span>Next cycle</span><b id=icyc aria-live=off>?</b></div><div id=iuse></div></div></details>
 </aside>
 <main id=content>
 <section id=tab-board class="pane on" aria-label=Board>
-<div id=board><div id=bhead><label>Swimlanes <select id=lmode title="swimlanes: one lane per spec (Spec), per wave (Wave), or no lanes, today's board (None)"><option value=spec>Spec</option><option value=wave>Wave</option><option value=none>None</option></select></label> <details id=fw class=fsel><summary>Waves: all</summary><div class=fpop id=fwl></div></details> <details id=fs class=fsel><summary>Specs: all</summary><div class=fpop id=fsl></div></details> <button id=lcall title="collapse every swimlane">Collapse all</button> <button id=lexp title="expand every swimlane">Expand all</button> <label class=hck title="hide the swimlanes whose every ticket is closed"><input type=checkbox id=lhd> Hide done lanes</label> <span id=lhc></span><span id=bt class=m></span> <span id=hlrel class=hlrel hidden></span></div><div id=bcases></div><div id=bbody></div></div>
+<div id=board><div id=bhead><label>Swimlanes <select id=lmode title="swimlanes: one lane per spec (Spec), per wave (Wave), or no lanes, today's board (None)"><option value=spec>Spec</option><option value=wave>Wave</option><option value=none>None</option></select></label> <details id=fw class=fsel><summary>Waves: all</summary><div class=fpop id=fwl></div></details> <details id=fs class=fsel><summary>Specs: all</summary><div class=fpop id=fsl></div></details> <details id=fk class=fsel><summary>Kinds: all</summary><div class=fpop id=fkl></div></details> <button id=lcall title="collapse every swimlane">Collapse all</button> <button id=lexp title="expand every swimlane">Expand all</button> <label class=hck title="hide the swimlanes whose every ticket is closed"><input type=checkbox id=lhd> Hide done lanes</label> <span id=lhc></span><span id=bt class=m></span> <span id=hlrel class=hlrel hidden></span></div><div id=bcases></div><div id=bbody></div></div>
 </section>
 <section id=tab-flow class=pane aria-label="Flow charts">
 <div class=rkt id=flowtabs><button id=bruns title="the live run dashboards">Runs</button><button id=bflow title="the development flow: the cards in each column over time, from the flow history (SPEC 111)">Cumulative Flow Diagram</button><button id=blead title="the lead time of the closed cards, opened to closed (SPEC 111)">Lead Time</button></div>
 <div id=main></div>
 <div id=flowov hidden><div id=flowb></div></div>
 </section>
+<dialog id=ldg aria-label="Stop the loop"><form method=dialog id=ldgb></form></dialog>
 <section id=tab-hist class=pane aria-label=History><h2>Run history</h2><div id=list></div></section>
 <section id=tab-set class=pane aria-label=Settings><h2>Settings</h2>
 <details id=lim class=sp open><summary>Spend &amp; limits<span class=sr id=limsr></span></summary><div class=sb id=lbody></div></details>
 <details id=mdl class=sp open><summary>Models &amp; chains<span class=sr id=mdsr></span></summary><div class=sb id=mbody></div></details>
 <details id=slk class=sp><summary>Communication<span class=sr id=slksr></span></summary><div class=sb id=sbody></div></details>
+<details id=lop class=sp open><summary>Loop<span class=sr id=lopsr>start, stop, change log</span></summary><div class=sb id=lopb></div></details>
+<details id=acc class=sp><summary>Access<span class=sr>tailnet and phone</span></summary><div class=sb id=accb></div></details>
 <details id=dev class=sp open><summary>This device<span class=sr>desktop or phone view</span></summary><div class=sb><a id=mobile-link href="#">mobile view</a><script>document.getElementById("mobile-link").href=location.pathname.replace(/\/?$/,"/")+"mobile"</script></div></details>
 </section>
 </main>
@@ -4299,7 +4529,7 @@ const flowCFD=c=>{const sel=`<label class=fhead>Range <select id=cfdr>${CFD_R.ma
     const text=gap?`${esc(d)}: no whole read this day`:`${esc(d)}: ${parts} · WIP ${(c.wip||[])[i]} · throughput ${tp===null?"none":tp}`;
     return `<rect x=${flowX(i,n)-cw/2} y=${flowP-10} width=${cw} height=${flowH-2*flowP+10} fill=transparent><title>${text}</title></rect>`;}).join("");
   return sel+`<svg viewBox="0 0 ${flowW} ${flowH}">${c.bands.map(polys).join("")}${cfdAxis(c)}${hover}</svg>`+
-    `<p class=fnote>history from ${esc(c.start)} UTC</p><p>${c.bands.map(b=>`<span class=flg><i style="background:${COLORS[b.name]||"#888"}"></i>${esc(b.name)}</span>`).join("")}</p>`;};
+    `<p class=fnote>history from ${esc(c.start)} UTC</p>${c.legacy?`<p class=fnote>${c.legacy} ${c.legacy===1?"day comes":"days come"} from before the kind, spec and wave history: they answer no kind, no spec and no wave</p>`:""}<p>${c.bands.map(b=>`<span class=flg><i style="background:${COLORS[b.name]||"#888"}"></i>${esc(b.name)}</span>`).join("")}</p>`;};
 const EXREASON={not_planned:"closed as not planned",abandoned:"closed as abandoned",open:"still open",no_opened:"no opened date"};   // the cards the chart leaves out, in words (#921)
 let LT={tf:"30",log:false,pick:null,zc:null,zr:null,rng:null,tok:0,noclick:false,a:"",b:"",cols:[]};   // the control chart's timeframe, its scale, the cluster listed under it, and a drag zoom: the hub's chart over zr=[from,to] (#900)
 const ltSpan=(r,a,b)=>{const t0=Date.parse(r.start),t1=Date.parse(r.end),at=f=>new Date(t0+f*(t1-t0)).toISOString();return [at(a<0?0:a),at(b>1?1:b)]};   // plot fractions to the dates they name (#900)
@@ -4337,10 +4567,10 @@ const flowLead=l=>{const S=l.summary,ex=l.excluded.map(e=>`${e.count} ${esc(EXRE
 const drawFlow=()=>{{const w=$("#flowb").clientWidth-20;flowW=w<600?600:w>1600?1600:(w|0)}const cfd=FLOWK==="cfd";
   const a=FLOWD[FLOWK];
   $("#flowb").innerHTML=!a?"<p class=fnote>loading the chart from the hub</p>":(cfd?flowCFD(a.cfd.ranges[CF.r]):flowLead(a.lead))+`<p class=fnote>data read ${new Date(a.t*1000).toLocaleTimeString()}</p>`};
-const flowOpen=async k=>{FLOWK=k;$("#flowov").hidden=false;drawFlow();try{const a=await (await fetch(`/api/chart/${k}`)).json();FLOWD[k]=a;if(FLOWK===k)drawFlow()}catch(e){}};
-const ltQ=()=>`&scale=${LT.log?"log":"jira"}&a=${encodeURIComponent(LT.a)}&b=${encodeURIComponent(LT.b)}`,ltOwn=()=>LT.a!==""||LT.b!=="";   // a span other than created to closed is the hub's chart for it (#905)
+const flowOpen=async k=>{FLOWK=k;$("#flowov").hidden=false;drawFlow();const q=barQuery();try{const a=await (await fetch(`/api/chart/${k}?${q}`)).json();if(q!==barQuery())return;FLOWD[k]=a;if(FLOWK===k)drawFlow()}catch(e){}};
+const ltQ=()=>`&scale=${LT.log?"log":"jira"}&a=${encodeURIComponent(LT.a)}&b=${encodeURIComponent(LT.b)}&${barQuery()}`,ltOwn=()=>LT.a!==""||LT.b!=="";   // a span other than created to closed is the hub's chart for it (#905); the bar's values filter it (#904)
 const ltZoom=async(f,t)=>{const tok=++LT.tok;try{const c=await (await fetch(`/api/leadtime?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}${ltQ()}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;LT.zr=[f,t];LT.pick=null;drawFlow()}catch(e){}};   // the hub recomputes the chart for the dragged range (#900)
-const ltGet=async()=>{const tok=++LT.tok;LT.zc=null;LT.pick=null;if(!ltOwn()){drawFlow();return}try{const c=await (await fetch(`/api/leadtime?tf=${LT.tf}${ltQ()}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;drawFlow()}catch(e){}};   // the timeframe's chart for the chosen span (#905)   // the hub recomputes the chart for the dragged range (#900)
+const ltGet=async()=>{const tok=++LT.tok;LT.zc=null;LT.pick=null;if(!ltOwn()){drawFlow();return}try{const c=await (await fetch(`/api/leadtime?tf=${LT.tf}${ltQ()}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;drawFlow()}catch(e){}};   // the timeframe's chart for the chosen span (#905)
 const ltPx=(e,s)=>{const r=s.getBoundingClientRect();return (e.clientX-r.left)/r.width*flowW};
 const ltClamp=x=>x<flowP?flowP:x>flowW-flowP?flowW-flowP:x,ltLo=(p,q)=>p<q?p:q,ltHi=(p,q)=>p<q?q:p;
 let LTD=null;   // the drag across a control chart's plot in progress (#900)
@@ -4359,21 +4589,24 @@ $("#flowb").onclick=e=>{if(LT.noclick){LT.noclick=false;return}
   const k=e.target.closest("circle[data-k]");if(k){LT.pick=+k.dataset.k;drawFlow();return}const r=e.target.closest("tr[data-o]");if(r)showIssue(+r.dataset.o,"__REPO__")};
 $("#bflow").onclick=()=>flowOpen("cfd");$("#blead").onclick=()=>flowOpen("lead");addEventListener("resize",()=>{if(!$("#flowov").hidden)drawFlow()});
 // flow-charts:end
+const barQuery=()=>["fw","fs","fk"].map(k=>`${k}=${encodeURIComponent((bo[k]||[]).join(","))}`).join("&");   // the bar's Waves, Specs and Kinds, read by both diagrams; the board filters on the page (#904)
 async function pollBoard(){lim.busy=1;try{const b=await (await fetch("/api/board")).json(),FLOW=/*BOARD_FLOW*/,   // development flow, left to right
 all=[b.prs,...b.groups.sort((x,y)=>{const i=n=>{const k=FLOW.indexOf(n);return k<0?FLOW.length:k};return i(x.name)-i(y.name)})],f=q.trim().replace(/^#/,"");
 if(bo.open===undefined||!all.some(g=>g.name===bo.open))bo.open=(all.find(g=>g.n&&g.name!==COLNAME.issue_closed&&!isPR(g.name))||all[2]).name;
 const CN=all.map(g=>g.name);   // every column of this board: what colOf reads the user columns out of, never a colour of its own
 lastRead=Date.now();readStale=!!b.err;$("#bcases").innerHTML=caseRows(b.cases);$("#bt").textContent=b.err?"(stale)":"";
-const fw=bo.fw||[],fs=bo.fs||[],allRows=all.filter(g=>!isPR(g.name)).flatMap(g=>g.items),specTitle=new Map();   // the filter bar: the waves and specs the board holds (#899)
+const fw=bo.fw||[],fk=bo.fk||[],boardGroups=all.filter(g=>!isPR(g.name)),allRows=boardGroups.flatMap(g=>g.items),specTitle=new Map();   // the filter bar: the waves, specs and kinds the board holds (#899, #904)
 allRows.forEach(x=>{if(x.sp)specTitle.set(String(x.n),x.t)});
-const numKeys=(a,b)=>a==="none"?1:b==="none"?-1:+a-+b;
-const wOpts=waveOptions(allRows),sOpts=[...new Set(allRows.map(x=>x.sp?String(x.n):specKey(x)))].sort(numKeys);
+const wOpts=waveOptions(allRows),sOpts=specOptions(boardGroups,COLNAME.issue_closed,COLNAME.abandoned);   // a finished spec is no option (#981)
+const fs=keptSpecs(bo.fs||[],boardGroups,COLNAME.issue_closed,COLNAME.abandoned);
+if(!b.err&&fs.length!==(bo.fs||[]).length){bo.fs=fs;saveB()}   // a saved key whose spec finished is dropped (#981)
 const fillBar=(id,opts,label,sel,name)=>{const box=$("#"+id),k=opts.join("|");
  if(box.dataset.k!==k){box.dataset.k=k;box.innerHTML=`<div class=fpopb><button type=button data-clear>clear</button></div>`+opts.map(v=>`<label><input type=checkbox value="${esc(v)}"> ${esc(label(v))}</label>`).join("")}
  box.querySelectorAll("input").forEach(c=>c.checked=sel.includes(c.value));
  box.parentElement.querySelector("summary").textContent=sel.length?`${name} (${sel.length})`:`${name}: all`;box.parentElement.classList.toggle("set",sel.length>0)};
 fillBar("fwl",wOpts.map(o=>o.key),k=>wOpts.find(o=>o.key===k).label,fw,"Waves");
 fillBar("fsl",sOpts,s=>s==="none"?"No spec":"#"+s+(specTitle.get(s)?" "+specTitle.get(s):""),fs,"Specs");
+fillBar("fkl",KIND_OPTIONS.map(o=>o[0]),k=>KIND_OPTIONS.find(o=>o[0]===k)[1],fk,"Kinds");
 const hid=new Set(hidCols()),bottom=true,eye=(g,off=hid.has(g.name))=>`<span class=eye data-eye="${esc(g.name)}" title="${off?"show":"hide"} this column"><svg viewBox="0 0 24 24" width=14 height=14 fill=none stroke=currentColor stroke-width=2 stroke-linecap=round stroke-linejoin=round><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx=12 cy=12 r=3 />${off?'<path d="M3 3l18 18"/>':""}</svg></span>`;
 const LC=b.lc||{},rgb=h=>[0,2,4].map(i=>parseInt(h.slice(i,i+2),16)),mix=(a,t)=>a.map((v,i)=>Math.round(v*t+[28,34,44][i]*(1-t))),   // label color blended into the card's #1c222c
 tint=x=>{const cs=(x.l||[]).map(l=>LC[l]).filter(c=>/^[0-9a-f]{6}$/.test(c||"")).map(rgb);if(!cs.length)return"";const avg=[0,1,2].map(i=>cs.reduce((s,c)=>s+c[i],0)/cs.length);return`;--bg:rgb(${mix(avg,.10)});--bgh:rgb(${mix(avg,.16)})`},
@@ -4402,11 +4635,11 @@ const laneHtml=m=>{const ccount=c=>m.lanes.reduce((s,l)=>s+(l.counts[c]||0),0),p
   h+="</section>"}
  return h+"</div>"};
 const perr=g=>g.err?`<div class=perr title="a repository the hub was told to read and could not: the rows this column still shows for it are its last good ones">&#9888; ${esc(g.err)}</div>`:"";   // a repository the hub cannot read is an error on the column, never an empty column (#1820)
-const fits={};all.forEach(g=>fits[g.name]=g.items.filter(x=>(!f||String(x.n).includes(f)||x.t.toLowerCase().includes(f.toLowerCase()))&&(isPR(g.name)||boardOk(x,fw,fs))));   // the Specs filter shows, only shows, or hides the spec-labelled items, never a column of its own (#247, #456)
+const fits={};all.forEach(g=>fits[g.name]=g.items.filter(x=>(!f||String(x.n).includes(f)||x.t.toLowerCase().includes(f.toLowerCase()))&&(isPR(g.name)?boardOk({...x,kind:"pr"},[],[],fk):boardOk(x,fw,fs,fk))));   // the Specs filter shows, only shows, or hides the spec-labelled items, never a column of its own (#247, #456)
 const kept=new Set(bo.kept||[]),
  autoHidden=g=>!hid.has(g.name)&&!kept.has(g.name)&&!fits[g.name].length&&!g.tracking,   // the columns the strip's lines stand for, and the only ones: a column the user hid is a chip, one the user kept is drawn, and the lane is always drawn -- empty, it says 0 (#440)
  vis=all.filter(g=>!bottom||(!hid.has(g.name)&&!autoHidden(g))),autos=bottom?all.filter(autoHidden):[];
-const badge=g=>`<span class=n>${f||fw.length||fs.length?fits[g.name].length+"/":""}${g.n}</span>`;   // the number the header shows, and the number the strip's line repeats
+const badge=g=>`<span class=n>${f||fw.length||fs.length||fk.length?fits[g.name].length+"/":""}${g.n}</span>`;   // the number the header shows, and the number the strip's line repeats
 const one=g=>{const it=fits[g.name],shown=it.slice(0,lim[g.name]||25),dot=`<i style="background:${colOf(g.name,CN)}"></i>`,cnt=badge(g),isOpen=g.name===COLNAME.pr_open?bo.prOpen!==false:bo.open===g.name;
 if(bottom)return `<div class="col${isPR(g.name)?" prs lane":""}" style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><div class=ch><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}</span></div><div class=sc data-g="${esc(g.name)}">${perr(g)}${cards(g,it,shown)}</div></div>`;
 return `<div class="acc${isPR(g.name)?" prs lane":""} ${hid.has(g.name)?"hidcol":""} ${isOpen?"open":""}" style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><div class=ah><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}</span></div><div class=sc data-g="${esc(g.name)}">${perr(g)}${cards(g,it,shown)}</div><div class=pad></div></div>`};
@@ -4416,7 +4649,7 @@ const fmtN=n=>n>=1000?n.toLocaleString("en-US"):""+n;   // "688" is one token; o
 // exception is a column #1793's map does not name, which takes the ring colour and can only come from colOf here.
 const hidchip=g=>{const c=colOf(g.name,CN),ring=!Object.hasOwn(COLORS,g.name);return `<span class=chip data-eye="${esc(g.name)}" data-col="${esc(g.name)}" title="${esc(g.name+" — "+fmtN(g.n))}"><span class=lbl>${esc(g.name)}</span><b${ring?` style="color:${c}"`:""}>${fmtN(g.n)}</b></span>`};
 const html=vis.map(one).join("")+(bottom&&hid.size?`<div class=hidbar>${all.filter(g=>hid.has(g.name)).map(hidchip).join("")}`:"")+(bottom&&(hid.size||autos.length)?`${hid.size?"":`<div class=hidbar>`}${autos.length?(hid.size?'<div class=hidsep></div>':"")+autos.map(g=>`<span class=hidline style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><span>${esc(g.name)}</span><b>${badge(g)}</b>${eye(g,true)}</span>`).join(""):""}</div>`:"");   // one quiet line per column hidden only because it is empty, behind a divider (#1809)
-const model=bo.lmode==="none"?null:buildBoard(all.filter(g=>!isPR(g.name)),{mode:bo.lmode||"spec",fw:bo.fw||[],fs:bo.fs||[],closed:COLNAME.issue_closed,abandoned:COLNAME.abandoned,hidden:hidCols(),lc:bo.lc||{},hideDone:!!bo.hideDone,search:!!f,text:x=>!f||String(x.n).includes(f)||x.t.toLowerCase().includes(f.toLowerCase())});   // the lanes read every row; the search and the filters only hide rows (#890)
+const model=bo.lmode==="none"?null:buildBoard(all.filter(g=>!isPR(g.name)),{mode:bo.lmode||"spec",fw:bo.fw||[],fs:bo.fs||[],fk:bo.fk||[],closed:COLNAME.issue_closed,abandoned:COLNAME.abandoned,hidden:hidCols(),lc:bo.lc||{},hideDone:!!bo.hideDone,search:!!f,text:x=>!f||String(x.n).includes(f)||x.t.toLowerCase().includes(f.toLowerCase())});   // the lanes read every row; the search and the filters only hide rows (#890)
 const lanesHtml=model?laneHtml(model):null;lanesNow=model;$("#lhd").checked=!!bo.hideDone;
 $("#lmode").value=bo.lmode||"spec";$("#bbody").classList.toggle("lanes",!!model);
 $("#lhc").innerHTML=model&&model.hc.length?`<button class=hcpill id=lhcx title="columns with no card in an expanded lane: click to expand the lanes that hold their cards">+${model.hc.length} hidden: ${model.hc.map(x=>x.user?`<span class=hcu data-eye="${esc(x.name)}" title="show this column">${esc(x.name)} <b>${x.count}</b></span>`:esc(x.name)+" <b>"+x.count+"</b>").join(" · ")}</button>`:"";
@@ -4470,6 +4703,48 @@ new MutationObserver(flowTabs).observe($("#flowov"),{attributes:true});
  document.addEventListener("click",e=>{if(!e.target.closest("#psw")&&psw.classList.contains("on")){psw.classList.remove("on");pj.setAttribute("aria-expanded","false")}})}
 // "board read N s ago": the stamp of the last board answer
 setInterval(()=>{const b=$("#bread");if(!b)return;b.textContent=lastRead?`board read ${Math.max(0,Math.round((Date.now()-lastRead)/1000))} s ago${readStale?" (stale)":""}`:""},1000);
+// loop-switch:start
+// The loop switch (#923, ADR-0162): /api/loop is the one read and the one write. The strip and Settings > Loop draw one view;
+// a start posts at once, a stop opens the confirm, which drains by default and lists every live run and gate a stop-now kills.
+// The renderers are pure: tests/test_hub_loop_switch_page.py runs them in node.
+let loopV=null,loopErr="";
+const loopWhen=s=>{const m=String(s||"").match(/^(\d{4}-\d\d-\d\d)T(\d\d:\d\d)/);return m?m[1]+" "+m[2]:String(s||"")};
+const loopBy=v=>v.who?`${v.who} · ${loopWhen(v.when)}`:"";
+const loopBtn=v=>({on:"Stop…",draining:"Stop now…",starting:"Starting…"})[v.state]||"Start loop";
+const loopTip=v=>!v.write?v.reason:v.state==="on"?"stop after the live runs and gates finish, or now":v.state==="draining"?"stop now: kills what is still live":v.state==="starting"?"the loop is starting":"start the loop (watchd)";
+const loopB=v=>`<button data-loop${v.write&&v.state!=="starting"?"":" disabled"} title="${esc(loopTip(v))}">${loopBtn(v)}</button>`;
+const loopAct=e=>e.failed?`${String(e.action||"")} failed: ${e.failed}`:e.action==="drain"?"stop after the live runs and gates finish":e.action==="stop-now"?`stop now${e.killed?` (killed ${(e.killed.runs||[]).length} runs, ${(e.killed.gates||[]).length} gates${e.survived?`; ${(e.survived.runs||[]).length+(e.survived.gates||[]).length} not ended`:""})`:""}`:String(e.action||"");
+const loopRun=r=>String(r).split("/").filter(Boolean).pop()||String(r);
+const loopCardHtml=v=>`<div class=irw id=loopst title="${esc(v.state+(v.who?` · changed by ${v.who} at ${loopWhen(v.when)}`:""))}"><span>Loop: <span class="ls ${esc(v.state)}">${esc(v.state)}</span>${loopBy(v)?` <small>${esc(loopBy(v))}</small>`:""}</span>${loopB(v).replace("<button ","<button id=loopbtn ")}</div>`;
+const loopSetHtml=v=>`<div class=lnow><span><span class="ls ${esc(v.state)}">Loop: ${esc(v.state)}</span><small>${v.who?`changed by ${esc(v.who)} at ${esc(loopWhen(v.when))}`:"no change from the hub yet"}${v.state==="draining"?` · ${v.live.runs.length+v.live.gates.length} live to finish`:""}</small></span>${loopB(v)}</div>`
+ +(v.write?"":`<div class=lwhy>${esc(v.reason)}. The rule is in Access.</div>`)+(v.failed?`<div class=lerr role=alert>The last start failed: ${esc(v.failed)}</div>`:"")+(loopErr?`<div class=lerr role=alert>${esc(loopErr)}</div>`:"")
+ +`<p class=m>A stop drains by default: no new dispatch, the live runs and gates finish, then the loop stops. Each change writes one line to the change log.</p>`
+ +`<h4>Changes</h4><ul class=laud>${v.log.length?v.log.map(e=>`<li><b>${esc(loopWhen(e.at))}</b> · ${esc(e.who)} (${esc(e.from)}) · ${esc(loopAct(e))}</li>`).join(""):"<li class=m>no change yet</li>"}</ul>`;
+const loopConfirmHtml=v=>{const r=v.live.runs,g=v.live.gates,drain=v.state==="on";
+ return `<b>Stop the loop?</b><p class=m>Live now: ${r.length} run${r.length===1?"":"s"}, ${g.length} gate${g.length===1?"":"s"}.</p>`
+ +(drain?`<label class=lrad><input type=radio name=lm value=drain checked><span><b>Stop after the live runs and gates finish</b><small>No new dispatch. The live work runs to its end, then the loop stops. The safe default.</small></span></label>`:"")
+ +`<label class=lrad><input type=radio name=lm value=stop-now${drain?"":" checked"}><span><b>Stop now</b><small>Kills these at once; their work in progress is lost:</small><ul>${r.map(x=>`<li>run ${esc(loopRun(x))}</li>`).join("")}${g.map(x=>`<li>${esc(x)}</li>`).join("")}${r.length||g.length?"":"<li>no live run or gate</li>"}</ul></span></label>`
+ +`<div class=lact><button value=ok id=lok>Confirm</button><button value=no id=lno>Back</button></div>`};
+const accHtml=v=>{const a=v.access||{},yn=x=>x?"<span class=ok>allowed</span>":"<span class=no>refused</span>";
+ return `<div class=kr><span class=l>This page is reached</span><b>${v.tailnet?"over the tailnet, through the hub":"from this machine (loopback)"}</b></div>`
+ +`<div class=kr><span class=l>Loop start and stop from the tailnet</span><b>${yn(a.loop_write)} <small>SQUAD_TAILNET_LOOP_WRITE (tailnet.loop_write)</small></b></div>`
+ +`<div class=kr><span class=l>Terminal send from the tailnet</span><b>${yn(a.terminals_send)} <small>SQUAD_TAILNET_TERMINALS_SEND (tailnet.terminals_send)</small></b></div>`
+ +`<div class=kr><span class=l>Run dashboards over the tailnet</span><b>read only, through the hub</b></div>`
+ +`<p>Read here; the owner sets them in the project file or <code>.env</code> on the machine (ADR-0152, ADR-0162). A write the tailnet refuses still works from this machine.</p>`};
+// loop-switch:end
+function instLoopDraw(){const e=$("#iloop");if(!e||!loopV)return;const h=loopCardHtml(loopV);if(e.dataset.h!==h){e.dataset.h=h;e.innerHTML=h}}
+function loopDraw(){if(!loopV)return;const b=$("#lopb"),h=loopSetHtml(loopV);if(b.dataset.h!==h){b.dataset.h=h;b.innerHTML=h}
+ const c=$("#accb"),ah=accHtml(loopV);if(c.dataset.h!==ah){c.dataset.h=ah;c.innerHTML=ah}
+ $("#lopsr").textContent=`${loopV.state}${loopV.who?` · ${loopV.who} · ${loopWhen(loopV.when)}`:""}`;instLoopDraw()}
+async function loopPoll(){try{loopV=await (await fetch("/api/loop")).json();loopDraw()}catch(e){}}
+async function loopPost(body){loopErr="";try{const r=await fetch("/api/loop",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}),d=await r.json();if(!r.ok)loopErr=d.reason||d.err||"refused"}catch(e){loopErr="the hub did not answer"}
+ await loopPoll();loopDraw()}
+document.addEventListener("click",e=>{const b=e.target.closest("button[data-loop]");if(!b||b.disabled||!loopV)return;e.preventDefault();
+ if(loopV.state==="off"){loopPost({action:"start"});return}
+ const d=$("#ldg");$("#ldgb").innerHTML=loopConfirmHtml(loopV);d.showModal()});
+$("#ldg").addEventListener("close",()=>{const d=$("#ldg");if(d.returnValue!=="ok")return;const m=(d.querySelector('input[name="lm"]:checked')||{}).value;
+ if(m==="drain")loopPost({action:"drain"});else if(m==="stop-now")loopPost({action:"stop-now",confirm:true})});
+setInterval(loopPoll,5000);loopPoll();
 /*BOARD_LANES*/
 $("#lmode").onchange=e=>{bo.lmode=e.target.value;saveB();pollBoard()};
 // The swimlanes' state (#891): collapse and open state live in `bo`, so the device keeps them across a reload.
@@ -4494,8 +4769,9 @@ document.addEventListener("click",e=>{const h=e.target.closest("#bbody .lh");if(
  const p=e.target.closest("#lhcx");if(p&&lanesNow){if(p.hasAttribute("data-hide")){bo.showClosed=false;saveB();pollBoard();return}
   const end=new Set([COLNAME.issue_closed,COLNAME.abandoned]),names=new Set(lanesNow.hc.map(x=>x.name).filter(c=>!end.has(c)));bo.lc=bo.lc||{};   // a hidden column's pill expands the lanes that hold its cards; the end columns are drawn, never a lane opened for them
   for(const l of lanesNow.lanes)if(l.collapsed&&Object.keys(l.counts).some(c=>names.has(c)))bo.lc[l.id]=false;saveB();pollBoard()}});
-const pickFilter=(id,key)=>{const box=$("#"+id);box.addEventListener("change",e=>{const v=e.target.value,h=new Set(bo[key]||[]);e.target.checked?h.add(v):h.delete(v);bo[key]=[...h];saveB();pollBoard()});box.addEventListener("click",e=>{if(!e.target.closest("[data-clear]"))return;e.preventDefault();bo[key]=[];saveB();pollBoard()})};
-pickFilter("fwl","fw");pickFilter("fsl","fs");
+const barMoved=()=>{LT.tok++;LT.zc=null;LT.zr=null;FLOWD={};if(!$("#flowov").hidden&&FLOWK){flowOpen(FLOWK);if(FLOWK==="lead"&&ltOwn())ltGet()}};   // a bar value changes both charts: each reads its route anew, and a chosen span its own chart (#904, #905)
+const pickFilter=(id,key)=>{const box=$("#"+id);box.addEventListener("change",e=>{const v=e.target.value,h=new Set(bo[key]||[]);e.target.checked?h.add(v):h.delete(v);bo[key]=[...h];barMoved();saveB();pollBoard()});box.addEventListener("click",e=>{if(!e.target.closest("[data-clear]"))return;e.preventDefault();bo[key]=[];barMoved();saveB();pollBoard()})};
+pickFilter("fwl","fw");pickFilter("fsl","fs");pickFilter("fkl","fk");
 // The owner's one move (#560): the arrow a Backlog card carries delegates to the hub, and the card shows the reason a
 // refusal gives. Which cards carry the arrow is the row's own fact (`x.pm`), never the page's rule.
 document.addEventListener("click",async e=>{const b=e.target.closest("#bbody .pmp");if(!b)return;e.preventDefault();e.stopPropagation();const n=+b.dataset.n,card=b.closest(".it");b.disabled=true;
@@ -5494,10 +5770,10 @@ class H(BaseHTTPRequestHandler):
             m = re.search(r"[?&]n=(\d{1,6})\b", self.path); rr = re.search(r"[?&]r=([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)", self.path)
             body, ct = json.dumps(issue_detail(int(m[1]), rr[1] if rr else None) if m else {"err": "bad n"}).encode(), "application/json"
         elif self.path.startswith("/api/board"):
-            try: body, ct = json.dumps(board()).encode(), "application/json"
+            try: body, ct = json.dumps(board()).encode(), "application/json"   # every card: the page filters the board by the bar (#899)
             except ValueError as e: body, ct = json.dumps({"error": str(e)}).encode(), "application/json"
-        elif self.path.startswith("/api/chart/cfd"): body, ct = json.dumps(flow_cfd()).encode(), "application/json"
-        elif self.path.startswith("/api/chart/lead"): body, ct = json.dumps(flow_lead()).encode(), "application/json"
+        elif self.path.startswith("/api/chart/cfd"): body, ct = json.dumps(flow_cfd(*board_filters(self.path.partition("?")[2]))).encode(), "application/json"
+        elif self.path.startswith("/api/chart/lead"): body, ct = json.dumps(flow_lead(*board_filters(self.path.partition("?")[2]))).encode(), "application/json"
         elif self.path.startswith("/api/leadtime"): body, ct = json.dumps(lead_zoom(self.path.partition("?")[2])).encode(), "application/json"   # the control chart over a dragged range (#900)
         elif self.path.startswith("/api/version"): body, ct = json.dumps({"v": BOOT}).encode(), "application/json"
         elif self.path.startswith("/api/subs"): body, ct = json.dumps({**subs_month(), "presets": {k: {i: {"name": n, "usd": p} for i, (n, p) in v.items()} for k, v in PRESETS.items()}}).encode(), "application/json"
@@ -5511,6 +5787,7 @@ class H(BaseHTTPRequestHandler):
             q = urllib.parse.parse_qs(self.path.partition("?")[2])
             out = session_send.status(os.environ.get("SG_PROFILE", ""), (q.get("sid") or [""])[0], (q.get("client_id") or [""])[0], profiles_of=profiles_of_cwd, root=STATE)
             body, ct = json.dumps(out).encode(), "application/json"
+        elif self.path.split("?", 1)[0] == "/api/loop": body, ct = json.dumps(loop_view(a)).encode(), "application/json"
         elif self.path.startswith("/api/sessions/conversation"):
             page = conversation_payload(self.path.partition("?")[2])
             if page is None: return self.not_found()
@@ -5521,6 +5798,17 @@ class H(BaseHTTPRequestHandler):
         self.send_response(200); self.send_header("Content-Type", ct); self.send_header("Cache-Control", "no-store")
         if self.path.split("?", 1)[0] in ("/mobile", "/mobile/"): self.send_header("Content-Security-Policy", MOBILE_CSP)
         self.end_headers(); self.wfile.write(body)
+
+    def loop_post(self, a):
+        """The loop switch's write (#923): the access rule, the tailnet grant, the own or tailnet origin and a JSON body, then the switch."""
+        length = self.headers.get("Content-Length") or "0"
+        raw = self.rfile.read(min(int(length), 1 << 20)) if length.isdigit() else b""
+        tn = tailnet_block()
+        origin_ok = "json" in (self.headers.get("Content-Type") or "") and ((self.headers.get("Origin") or "") == f"https://{tn.get('host')}" if a.tailnet else own_origin(self))
+        try: body = json.loads(raw or b"{}")
+        except ValueError: body = None
+        code, out = loop_switch(a, body, origin_ok)
+        data = json.dumps(out).encode(); self.send_response(code); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
 
     def send_to_session(self, a):
         """The phone's message to a live session (#834): a tailnet login the profile allows, the tailnet Origin, a JSON body, and the grant."""
@@ -5548,6 +5836,7 @@ class H(BaseHTTPRequestHandler):
             if not (a.tailnet or own_origin(self)) or "json" not in (self.headers.get("Content-Type") or ""): return self.refuse("forbidden")
             return self.dash("POST", raw)
         if self.path.split("?", 1)[0] == "/api/sessions/send": return self.send_to_session(a)
+        if self.path.split("?", 1)[0] == "/api/loop": return self.loop_post(a)
         ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote", "/api/limits", "/api/slack") and (a.tailnet or own_origin(self)) and "json" in (self.headers.get("Content-Type") or "")
         try:
             raw = self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 1 << 20))   # read before any answer: a refusal that leaves the body unread resets the connection; the models panel posts back ~20 KB of read-only fields (#684)

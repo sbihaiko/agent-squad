@@ -18,7 +18,9 @@ main{padding:12px 12px 84px}
 section[hidden]{display:none}
 h2{font-size:var(--fs-md);margin:6px 0 10px}
 #loop{padding:12px;border-radius:8px;background:var(--panel);border:1px solid var(--line)}
-#loop.on #loop-text{color:var(--ok)}#loop.off #loop-text{color:var(--err)}
+#loop.on #loop-text{color:var(--ok)}#loop.off #loop-text{color:var(--err)}#loop.draining #loop-text,#loop.starting #loop-text{color:var(--warn,#d4a017)}
+#loop-ctl{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}#loop-ctl button:disabled{opacity:.45}#loop-reason:not(:empty){color:var(--muted,#8a8f98)}
+#loop-confirm{border:1px solid var(--err);border-radius:8px;padding:10px;margin:8px 0}
 .tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:12px 0}
 .tile{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 6px;text-align:center}
 .tile b{display:block;font-size:var(--fs-xl)}
@@ -160,6 +162,14 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 #5aa9ff}
 <section data-panel="status">
 <h2>Status</h2>
 <div id=loop><span id=loop-text>loading</span></div>
+<div id=loop-ctl>
+<button id=loop-start type=button>Start</button>
+<button id=loop-drain type=button>Drain and stop</button>
+<button id=loop-now type=button>Stop now</button>
+</div>
+<p id=loop-reason></p>
+<div id=loop-confirm hidden><p id=loop-confirm-text></p><button id=loop-confirm-go type=button>Stop now</button><button id=loop-confirm-no type=button>Cancel</button></div>
+<details id=loop-log-box><summary>Change log</summary><ol id=loop-log></ol></details>
 <div class=tiles>
 <div class=tile><b id=t-live>-</b><span>live runs</span></div>
 <div class=tile><b id=t-spend>-</b><span>spend today</span></div>
@@ -310,8 +320,6 @@ async function status() {
     const s = await call("/api/status");
     $("msg").textContent = "";
     $("reconnect").hidden = true;
-    $("loop").className = s.loop.on ? "on" : "off";
-    $("loop-text").textContent = (s.loop.on ? "on" : "off") + " since " + (s.loop.since || "unknown");
     $("t-live").textContent = s.live;
     $("t-spend").textContent = money(s.spend_today);
     $("t-bugs").textContent = s.open_bugs;
@@ -329,6 +337,52 @@ $("retry").onclick = status;
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/mobile/sw.js", { scope: "/mobile/" }).catch(() => {});
 status();
 setInterval(status, 5000);
+
+let loopNow = { runs: [], gates: [] };
+const loopWhen = s => { const m = String(s || "").match(/^(\d{4}-\d\d-\d\d)T(\d\d:\d\d)/); return m ? m[1] + " " + m[2] : String(s || ""); };
+// a read-only view and a failed start: both reasons show (#923)
+const loopReason = v => [v.reason, v.failed ? "The last start failed: " + v.failed : ""].filter(Boolean).join(". ");
+const loopLive = l => (l.runs || []).map(r => "run " + r.split("/").pop()).concat(l.gates || []);
+async function loopView() {
+  try {
+    const v = await call("/api/loop");
+    $("loop").className = v.state;
+    $("loop-text").textContent = v.state + (v.who ? " - changed by " + v.who + " at " + loopWhen(v.when) : "");
+    const can = v.actions || [];   // the hub names the allowed actions; this page holds no state rule
+    $("loop-start").disabled = !can.includes("start");
+    $("loop-drain").disabled = !can.includes("drain");
+    $("loop-now").disabled = !can.includes("stop-now");
+    $("loop-reason").textContent = loopReason(v);
+    loopNow = v.live;
+    $("loop-log").replaceChildren(...v.log.map(e => {
+      const li = document.createElement("li");
+      li.textContent = loopWhen(e.at) + " " + e.who + " (" + e.from + "): " + e.action + (e.failed ? " failed: " + e.failed : "") + (e.killed ? ", killed " + (loopLive(e.killed).join(", ") || "nothing") : "") + (e.survived ? ", not ended " + loopLive(e.survived).join(", ") : "");
+      return li;
+    }));
+  } catch (e) { $("loop-reason").textContent = e.message; }
+}
+async function loopAct(action, extra) {
+  $("loop-reason").textContent = "";
+  try {
+    const r = await fetch("/api/loop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, ...extra }), cache: "no-store" });
+    const out = await r.json();
+    if (!r.ok) throw new Error(out.reason || out.err || "The hub answered " + r.status + ".");
+    if (action === "stop-now") $("loop-reason").textContent = "Stopped. Killed: " + (loopLive(out.killed).join(", ") || "nothing") + "." + (out.survived ? " Not ended: " + loopLive(out.survived).join(", ") + "." : "");
+  } catch (e) { $("loop-reason").textContent = e.message; }
+  $("loop-confirm").hidden = true;
+  loopView();
+}
+$("loop-start").onclick = () => loopAct("start");
+$("loop-drain").onclick = () => loopAct("drain");
+$("loop-now").onclick = () => {
+  const names = loopLive(loopNow);
+  $("loop-confirm-text").textContent = names.length ? "Stop now kills: " + names.join(", ") + "." : "Stop now kills no live run or gate.";
+  $("loop-confirm").hidden = false;
+};
+$("loop-confirm-go").onclick = () => loopAct("stop-now", { confirm: true });
+$("loop-confirm-no").onclick = () => { $("loop-confirm").hidden = true; };
+loopView();
+setInterval(loopView, 5000);
 
 let board = null, shown = [], issueKey = "", touch = null;
 const reasons = {};   // issue number -> {why, col}: a refusal the card reads on every render, until its card moves again

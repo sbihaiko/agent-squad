@@ -127,6 +127,66 @@ def test_the_filters_apply_to_the_swimlanes(hub):
     assert shown == [890], f"the filters did not narrow the swimlanes: {shown}"
 
 
+# ---- the Specs options: an unfinished spec only (#981) ----
+
+def _spec_options(groups):
+    return _node(f"console.log(JSON.stringify(specOptions({json.dumps(groups)},'Closed','Abandoned')));", LANES_JS)
+
+
+def test_a_closed_spec_is_not_an_option(hub):
+    groups = [
+        {"name": "Todo", "items": [{"n": 42, "t": "open ticket", "l": [], "pa": 41}]},
+        {"name": "Closed", "items": [{"n": 41, "t": "SPEC 41", "l": ["spec"], "sp": True}]},
+    ]
+    assert "41" not in _spec_options(groups)
+
+
+def test_an_open_spec_whose_tickets_are_all_closed_is_not_an_option(hub):
+    groups = [
+        {"name": "Doing", "items": [{"n": 889, "t": "SPEC 889", "l": ["spec"], "sp": True}]},
+        {"name": "Closed", "items": [{"n": 890, "t": "done", "l": [], "pa": 889}]},
+    ]
+    assert "889" not in _spec_options(groups)
+
+
+def test_an_open_spec_with_an_open_ticket_is_an_option(hub):
+    groups = [
+        {"name": "Doing", "items": [{"n": 889, "t": "SPEC 889", "l": ["spec"], "sp": True}]},
+        {"name": "Todo", "items": [{"n": 890, "t": "open", "l": [], "pa": 889}]},
+        {"name": "Closed", "items": [{"n": 891, "t": "done", "l": [], "pa": 889}]},
+    ]
+    assert _spec_options(groups) == ["889"]
+
+
+def test_an_abandoned_spec_is_not_an_option(hub):
+    groups = [
+        {"name": "Todo", "items": [{"n": 494, "t": "open ticket", "l": [], "pa": 492}]},
+        {"name": "Abandoned", "items": [{"n": 492, "t": "SPEC 492", "l": ["spec"], "sp": True}]},
+    ]
+    assert "492" not in _spec_options(groups)
+
+
+def test_a_saved_spec_filter_naming_a_finished_spec_is_dropped_on_load(hub):
+    groups = [
+        {"name": "Doing", "items": [{"n": 889, "t": "SPEC 889", "l": ["spec"], "sp": True}]},
+        {"name": "Todo", "items": [{"n": 890, "t": "open", "l": [], "pa": 889}, {"n": 900, "t": "no spec", "l": []}]},
+        {"name": "Closed", "items": [{"n": 41, "t": "SPEC 41", "l": ["spec"], "sp": True}]},
+    ]
+    kept = _node(f"console.log(JSON.stringify(keptSpecs({json.dumps(['41', '889', 'none'])},"
+                 f"{json.dumps(groups)},'Closed','Abandoned')));", LANES_JS)
+    assert kept == ["889", "none"], "a finished spec's key survived the load"
+
+
+def test_a_saved_spec_filter_of_only_finished_specs_is_empty(hub):
+    groups = [{"name": "Closed", "items": [{"n": 41, "t": "SPEC 41", "l": ["spec"], "sp": True}]}]
+    kept = _node(f"console.log(JSON.stringify(keptSpecs(['41'],{json.dumps(groups)},'Closed','Abandoned')));", LANES_JS)
+    assert kept == [], "the board would filter to nothing"
+
+
+def test_the_page_builds_the_specs_options_from_the_unfinished_rule(hub):
+    assert "specOptions(" in hub.PAGE and "keptSpecs(" in hub.PAGE
+
+
 # ---- the saved state from removed controls ----
 
 def test_drop_removed_clears_the_old_keys_and_keeps_the_kept_ones(hub):

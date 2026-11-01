@@ -151,3 +151,15 @@ def test_terminals_send_takes_true_or_false_and_names_its_key_otherwise():
 def test_the_shipped_default_leaves_the_phone_send_off():
     text = (pathlib.Path(__file__).resolve().parent.parent / "config" / "agent-defaults.yaml").read_text()
     assert "terminals_send: false" in text.split("tailnet:", 1)[1].split("\nwatch:", 1)[0]
+
+
+def test_loop_write_takes_true_or_false_and_names_its_key_otherwise():
+    P.validate({"tailnet": {"loop_write": True}})
+    P.validate({"tailnet": {"loop_write": False}})
+    with pytest.raises(OptionError, match="tailnet.loop_write"):
+        P.validate({"tailnet": {"loop_write": "yes"}})
+
+
+def test_the_shipped_default_leaves_the_tailnet_loop_switch_read_only():
+    text = (pathlib.Path(__file__).resolve().parent.parent / "config" / "agent-defaults.yaml").read_text()
+    assert "loop_write: false" in text.split("tailnet:", 1)[1].split("\nwatch:", 1)[0]
