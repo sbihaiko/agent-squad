@@ -103,3 +103,58 @@ def test_the_status_facts_the_monitor_lacks_stay_in_its_panel(hub):
     assert "id=load>" not in panel, "the gauges say the load: the text line is dropped"
     assert "The hub does not answer" in page
     assert re.search(r"#loop-ctl button[^{]*\{[^}]*min-height:44px", page)
+
+
+def test_the_phone_card_never_folds(hub):
+    """The Monitor is the whole tab on the phone: a tap on its title does nothing. The desktop card still folds."""
+    out = run_page(hub.MOBILE_PAGE, """
+      const s = document.getElementById("inst").querySelector("summary");
+      let prevented = false;
+      const ev = { target: s, preventDefault() { prevented = true; } };
+      (s.listeners.click || []).forEach(f => f(ev));
+      if (s.onclick) s.onclick(ev);
+      return { prevented, tab: s.tabIndex };
+    """, routes=_routes(hub))
+    assert out["prevented"], "a tap on the summary never toggles the card"
+    assert out["tab"] == -1, "the inert title takes no focus"
+    assert "preventDefault" not in hub.INST_JS, "the shared card code leaves the desktop's fold alone"
+
+
+def _stale(hub, fail):
+    good = {"body": json.dumps(_load(hub))}
+    routes = _routes(hub)
+    routes["/api/load"] = [good, good, good]
+    return run_page(hub.MOBILE_PAGE, """
+      const b = id => document.getElementById(id);
+      const real = fetch;
+      """ + fail + """
+      await loadPoll();
+      b("icyc").textContent = "frozen"; monitorTick();
+      const bad = { cls: b("inst").classList.contains("stale"), note: b("inst-stale") && !b("inst-stale").hidden,
+                    text: b("inst-stale") ? b("inst-stale").textContent : "", inCard: !!(b("inst-stale") && b("inst-stale").closest("#inst")),
+                    cyc: b("icyc").textContent };
+      fetch = real; __state.routes["/api/load"] = [""" + json.dumps(good) + """];
+      await loadPoll(); monitorTick();
+      return { bad, cls: b("inst").classList.contains("stale"), hidden: b("inst-stale").hidden, cyc: b("icyc").textContent };
+    """, routes=routes)
+
+
+@pytest.mark.parametrize("fail", [
+    '__state.routes["/api/load"] = [{ body: "{}", status: 500 }];',
+    'fetch = () => Promise.reject(new Error("offline"));',
+], ids=["non-ok", "network"])
+def test_a_failed_load_read_marks_the_card_stale_and_freezes_the_countdown(hub, fail):
+    out = _stale(hub, fail)
+    assert out["bad"]["cls"] and out["bad"]["note"] and out["bad"]["inCard"], out
+    assert out["bad"]["text"], "the card says why it is not current"
+    assert out["bad"]["cyc"] == "frozen", "no countdown runs over an old reading"
+    assert not out["cls"] and out["hidden"], "the next good read clears it"
+    assert out["cyc"] != "frozen", "the countdown runs again"
+
+
+def test_an_imported_pr_link_is_a_44px_target_on_the_phone(hub):
+    page = hub.MOBILE_PAGE
+    css = page[page.index("<style>"):page.index("</style>")]
+    tail = css[css.rindex("/* }INST-CSS */"):]
+    assert re.search(r"#inst \.at a\{[^}]*min-height:44px", tail), "the phone override follows the shared card style"
+    assert re.search(r"#inst \.at a\{[^}]*min-width:44px", tail)
