@@ -119,21 +119,17 @@ def test_no_tot3_tile_grid():
     assert re.search(r"<div class=tot id=tot>", html)
 
 
-def test_section_order_is_spend_chart_speed_open_tokens():
+def test_section_order_is_gauges_tokens_spend_chart():
+    """Owner, 2026-11-01: the token ring rises to sit under the subscription gauges, and the speed block and the cash line
+    leave the panel. The panel reads: subscriptions, the token ring, the spend tiles, then the spend chart."""
     html = _stats()
-    pos = [html.find("Spend"), html.find("Spend over time"), html.find("id=chart"),
-           html.find("id=kpi"), html.find("id=open"), html.find("Model tokens · this month"), html.find("id=pie")]
+    pos = [html.find("id=isub"), html.find("Model tokens · this month"), html.find("id=pie"),
+           html.find("Spend "), html.find("Spend over time"), html.find("id=chart")]
     assert all(p >= 0 for p in pos), pos
     assert pos == sorted(pos), pos
+    for gone in ("id=kpi", "id=open", "id=cash", "id=totnote"):
+        assert gone not in html, gone
 
-
-def test_spend_block_holds_the_cash_line():
-    html = _stats()
-    assert re.search(r"<h4>Spend\b", html)
-    cash_at = html.index("id=cash")
-    assert html.index("id=tot") < cash_at < html.index("id=per")
-    txt = _cash_line()
-    assert re.match(r"^at API list prices \(API-equivalent\) · cash this month: plans \$\d.*\+ API \$\d.*= \$\d", txt), txt
 
 
 def test_src_toggle_reads_all_plans_api():
@@ -211,46 +207,10 @@ def _rows(html):
             for m in re.findall(r"<div class=kr>.*?</div>", html)]
 
 
-def test_speed_header_reads_since_and_pr_count():
-    header = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", re.search(r"<h4>Speed <small>.*?</small></h4>", _speed_html()).group(0))).strip()
-    assert re.fullmatch(r"Speed since \d\d-\d\d \d\d:\d\d UTC · \d+ PRs?", header), header
-
-
-def test_speed_header_says_one_pr_in_the_singular():
-    html = _render(SPEED.replace("after:{n:n,", "after:{n:1,").replace("const n=42,", "const n=1,"), _stmt('$("#kpi").innerHTML='))
-    assert re.search(r"· 1 PR</small>", html), html
-
-
-def test_speed_rows_are_the_five_the_issue_names():
-    html = _speed_html()
-    assert "sample size" not in html and "since then" not in html
-    assert _rows(html) == [
-        "Merge time , median 18 min was 38 min · 53% faster",
-        "Merge time , average 22 min was 41 min · 46% faster",
-        "Run time , median today 12 min was 64 min · 81% faster",
-        "Review rounds , average 1.5",
-        "Hung runs killed 0",
-    ], _rows(html)
-
-
-def test_speed_row_delta_is_muted_text_with_only_the_percentage_coloured():
-    html = _speed_html()
-    delta = re.search(r'<span class=d>(.*?)</span></div>', html).group(1)
-    assert re.sub(r"<[^>]+>", "", delta) == "was 38 min · 53% faster"
-    assert "background" not in delta
-    pct = re.search(r'<span class="(good|bad)">([^<]+)</span>', delta)
-    assert pct and pct.group(2) == "53% faster"
-    assert not re.search(r'class="d (?:good|bad)"', html)
-
-
-def test_speed_zero_value_is_muted():
-    html = _speed_html()
-    assert re.search(r"<b class=m>0</b>", html), html
-
-
-def test_speed_keeps_the_provisional_note():
-    html = _render(SPEED.replace("after:{n:n,", "after:{n:4,").replace("const n=42,", "const n=4,"), _stmt('$("#kpi").innerHTML='))
-    assert "Provisional: only 4 PRs so far" in html and "firms up at ~10" in html
+def test_the_speed_block_and_the_open_list_left_the_panel():
+    """Owner, 2026-11-01: remove the Speed block. The PR speed figures stay on the hub's own reading, never on this panel."""
+    html = _stats()
+    assert "Speed" not in html and "Provisional" not in html and "Open branches" not in html, html
 
 
 def test_open_rows_read_number_and_minutes():
@@ -410,11 +370,3 @@ def test_the_pie_merges_the_spellings_of_one_model_name():
     assert "ids.join" in body and "ids.includes(m.model)" in body, body
 
 
-def test_a_floor_note_names_unpriced_and_uncounted_review_calls():
-    """The totals are a floor: the note beside the tiles says how many calls priced at 0.0 or had no usage count (#789)."""
-    html = _render("const st={totals:{today:1,month:2,all:2,unpriced:2,uncounted:1}};\n",
-                   _stmt('$("#totnote").innerHTML='))
-    assert "2" in html and "unpriced" in html and "1" in html and "no usage" in html and "floor" in html, html
-    clean = _render("const st={totals:{today:1,month:2,all:2,unpriced:0,uncounted:0}};\n",
-                    _stmt('$("#totnote").innerHTML='))
-    assert clean.strip() in ("", "''", '""'), clean
