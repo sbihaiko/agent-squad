@@ -67,9 +67,9 @@ An ADR holds a decision and its reason. It is not a ledger: no dates, counts, st
 | [0162](0162-the-hub-writes-the-loop-switch-and-drains-by-default.md) | The hub writes the loop switch through one route: drain is the default and waits for live runs and gates, stop-now confirms what it kills, every change is audited, and a tailnet write needs `tailnet.loop_write` |
 
 | [0163](0163-a-proof-is-bounded-at-fifteen-minutes.md) | A proof is bounded at fifteen minutes: past it the full suite is killed and the delta proof answers, and what the delta does not cover is proven hot |
-| [0164](0164-a-dispatch-waits-for-its-card-write.md) | A dispatch's card write is an event held pending until it lands; no run starts while it is pending, and recovery writes it before anything launches |
 
 | [0164](0164-delivery-outranks-the-proof.md) | Delivery outranks the proof: an unfinished proof never holds a landing or a promotion, a failed one always does, and the record names which of the three a promotion was |
+| [0165](0165-a-dispatch-waits-for-its-card-write.md) | A dispatch's card write is an event held pending until it lands; no run starts while it is pending, and recovery writes it before anything launches |
 
 ## Adding an ADR
 
