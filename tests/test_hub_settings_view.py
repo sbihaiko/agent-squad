@@ -72,7 +72,7 @@ def test_settings_has_a_theme_list_a_phone_select_and_one_page_save(hub):
     assert sel and re.findall(r"value=(\w+)", sel.group(1)) == themes, "the phone select does not list the same themes"
     assert view.count("id=ssave") == 1, "Settings needs exactly one page-level Save"
     for sp in ("lop", "acc"):
-        panel = re.search(rf'<section class="spn[^"]*" data-sp={sp}.*?</section>', view, re.S).group(0)
+        panel = re.search(rf"<details id={sp} class=sp data-sp={sp}.*?</details>", view, re.S).group(0)
         assert "Save" not in panel, f"the {sp} theme carries a Save"
 
 

@@ -109,5 +109,5 @@ def test_the_page_draws_subscription_and_quota_on_all_four_chains(hub):
     assert "function mdlSub(" in src
     assert src.count("${mdlSub(x)}") == 1                         # one row form draws all four chains
     assert src.count("mdlSub(") >= 2                              # the definition and its one call
-    assert "list=mk-${k}" in src and "id=mk-${k}" in src          # one dropdown per chain, the router's included
+    assert src.count('<select data-add="${k}"') == 1               # re-anchored (#913): one add list per chain, the router's included
     assert 'sugId("router_known"' not in src

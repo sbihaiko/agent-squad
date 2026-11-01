@@ -54,4 +54,5 @@ def test_the_panel_gets_labels_and_never_stores_them(hub, monkeypatch, tmp_path)
 def test_each_add_box_option_carries_its_label(hub):
     src = HUB_PY.read_text()
     # re-anchored (#687, SPEC 750): one option form serves every chain's add box, the router's included
-    assert src.count('<option value="${esc(s.text)}" label="${esc(s.id)}">') == 1
+    # re-anchored (#913): the add list is a select; an option saves the id and shows the label
+    assert src.count('<option value="${esc(s.id)}">${esc(s.text)}</option>') == 1

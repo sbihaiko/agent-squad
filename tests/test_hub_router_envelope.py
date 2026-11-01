@@ -109,7 +109,7 @@ def test_the_panel_draws_the_router_as_the_fourth_chain():
     assert "function mdlRouter()" not in src and "+mdlRouter()" not in src, "the bespoke queue survives"
     # the switch is per model now, drawn in the Models table (SPEC 889 #920), not on the router's chain row
     assert "data-mt=" in src and "data-sw=" not in src, "the model switch is not in the Models table"
-    for control in ("data-mv", "data-rm", "data-addb"):
+    for control in ("data-mv", "data-rm", "data-add"):   # re-anchored (#913): the add control is a select
         assert f"{control}=" in src, f"the router row has no {control} control"
 
 

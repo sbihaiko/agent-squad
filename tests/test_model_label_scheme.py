@@ -123,7 +123,6 @@ def test_every_suggestion_text_is_unique_in_its_list(hub, monkeypatch):
 
 def test_the_dropdowns_render_the_label_first_and_map_it_back_to_the_id():
     src = HUB_PY.read_text()
-    assert '<datalist id=mk-${k}>${((mdl.suggest||{})[k]||[]).map' in src   # one dropdown per role chain, from its own list (#545)
-    assert '<datalist id=mk-${k}>' in src and 'mdl.suggest||{})[k]' in src
-    assert '<option value="${esc(s.text)}" label="${esc(s.id)}">' in src
-    assert src.count("sugId(") >= 2   # one helper, used by the one Add button of every chain
+    # re-anchored (#913): one add select per role chain, from its own list (#545); an option shows the label and saves the id
+    assert '<select data-add="${k}"' in src and "addOpts((mdl.suggest||{})[k]" in src
+    assert '<option value="${esc(s.id)}">${esc(s.text)}</option>' in src
