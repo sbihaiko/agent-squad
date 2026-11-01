@@ -3527,11 +3527,39 @@ def flow_lead(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
     return chart("lead", (board_cache.get("t"), history_key(), tuple(fw), tuple(fs), tuple(fk), ty), lambda: _lead_payload(fw, fs, fk, ty))
 
 def flow_burnup(spec):
-    """One spec's burn-up for its swimlane (#1025); the cache holds it until the repository's history store changes."""
+    """One spec's burn-up for its swimlane (#1025); the cache holds it until the history store or the board read changes."""
     path = _hist.history_path(BOARD, REPO)
     try: stamp = path.stat().st_mtime_ns
     except OSError: stamp = None
-    return chart(f"burnup-{spec}", (str(path), stamp), lambda: _hist.burnup(_hist.load_store(path), spec))
+    return chart(f"burnup-{spec}", (str(path), stamp, board_cache.get("t")), lambda: _burnup_payload(spec, path))
+
+
+def _burnup_payload(spec, path):
+    store, err = _with_children(_hist.load_store(path), spec)
+    if err: return {"spec": spec, "points": [], "err": err}
+    answer = _hist.burnup(store, spec)
+    if not answer["points"]: answer["reason"] = _burndown.NO_CHILD
+    return answer
+
+
+def spec_children(spec):
+    """The spec's sub-issues on the platform relation the board and the spec card read, in this repository: (children, None),
+    or (None, the read's reason) when the relation did not answer (#1072)."""
+    try: subs, err = sub_issues(spec, REPO)
+    except Exception as e: return None, f"sub-issues: {str(e)[:200] or 'the read did not answer'}"
+    if err: return None, err
+    return [s for s in subs if isinstance(s, dict) and _repo_of(s.get("repository_url"), REPO) == REPO.lower()], None
+
+
+def _with_children(store, spec):
+    """The history store with the spec's sub-issues added: each child keeps its store timeline and gains the events its created
+    and closed instants carry (#1072). (None, reason) when the relation did not answer."""
+    children, err = spec_children(spec)
+    if err: return None, err
+    merged = {n: {"events": list(rec.get("events") or [])} for n, rec in store.items()}
+    for child in children:
+        merged.setdefault(child["number"], {"events": []})["events"] += _hist.child_events(child, spec)
+    return merged, None
 
 
 HISTORY_EVERY = 60   # seconds between history passes; a pass reads only the timelines that are due (#1024)
@@ -3639,10 +3667,10 @@ def _burndown_payload(spec=None, today=None):
              if _flow.type_key(i) == "spec" and str(i["s"]).lower() != "closed"]
     spec = spec if spec is not None else (specs[0]["n"] if specs else None)
     if spec is None: return {"specs": specs, "spec": None, "burn": None}
-    store = _hist.load_store(_hist.history_path(BOARD, REPO))
+    store, err = _with_children(_hist.load_store(_hist.history_path(BOARD, REPO)), spec)
     reads = [s["t"] for s in _flow.samples(_flow.history_path(BOARD, REPO))]
-    series = _burndown.burndown(store, reads, spec)
-    burn = {**series, **_burndown.summary(series, today, forecast=None)}
+    series = _burndown.burndown(store, reads, spec) if err is None else {"spec": spec, "start": None, "points": [], "gaps": [], "reason": None}
+    burn = {**series, **_burndown.summary(series, today, forecast=None), **({"err": err} if err else {})}
     burn["ymax"] = max([1, *(p["remaining"] for p in series["points"]), *([burn["guide"]["from"]["remaining"]] if burn["guide"] else [])])
     end = max([today, *([dt.date.fromisoformat(burn["guide"]["to"]["day"])] if burn["guide"] else [])])
     first = dt.date.fromisoformat(series["start"]) if series["start"] else end

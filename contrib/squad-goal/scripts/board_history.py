@@ -77,6 +77,16 @@ def events_of(issue):
     return [e for e in map(_event, issue["timelineItems"]["nodes"]) if e]
 
 
+def child_events(child, spec):
+    """The events a sub-issue of a spec carries: it joins the spec and the board at its created instant, and a closed one
+    closes at its closed instant with Status Done, so the burn-up counts it delivered (#1072)."""
+    created = child["created_at"]
+    events = [{"t": created, "type": "added"}, {"t": created, "type": "spec", "spec": spec}]
+    if child.get("closed_at"):
+        events += [{"t": child["closed_at"], "type": "closed"}, {"t": child["closed_at"], "type": "status", "status": "Done"}]
+    return events
+
+
 def record_page(store, number, page, issue_updated, status_updated):
     """Merge one timeline page into the in-memory store: its events follow the stored ones, and its end cursor resumes the next read."""
     prev = store.get(number, {})
