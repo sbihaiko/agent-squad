@@ -55,6 +55,7 @@ def board(hub, tmp_path, monkeypatch):
     monkeypatch.setattr(hub, "board_cache", {"t": time.time(), "rt": None, "items": [], "prs": [], "cases": [],
                                              "errs": [], "lc": {}, "err": None})
     monkeypatch.setattr(hub, "CHARTS", {})
+    monkeypatch.setattr(hub, "sub_issues", lambda issue, repo: ([], None))
     return tmp_path
 
 
@@ -134,6 +135,28 @@ def test_a_spec_with_no_child_answers_its_reason(hub, board):
     burn = hub._burndown_payload(1045, today=TODAY)["burn"]
     assert burn["points"] == []
     assert burn["reason"] == "no child ticket"
+
+
+def _sub(number, created, closed=None):
+    return {"number": number, "created_at": created, "closed_at": closed, "state": "closed" if closed else "open",
+            "repository_url": "https://api.github.com/repos/x/y"}
+
+
+def test_a_spec_with_sub_issues_draws_the_burndown_from_their_instants(hub, board, monkeypatch):
+    children = [_sub(1064, _at(19), _at(21)), _sub(1065, _at(20), _at(22))]
+    monkeypatch.setattr(hub, "sub_issues", lambda issue, repo: (children, None))
+    _write_reads(hub, [], (19, 20, 21, 22))
+    burn = hub.flow_burn(1063)["burn"]
+    assert [(p["day"], p["remaining"], p["added"], p["closed"]) for p in burn["points"]] == [
+        ("2026-10-19", 1, 1, 0), ("2026-10-20", 2, 1, 0), ("2026-10-21", 1, 0, 1), ("2026-10-22", 0, 0, 1)]
+    assert burn["reason"] is None and "err" not in burn
+
+
+def test_a_failed_sub_issue_read_on_the_burndown_is_named_apart(hub, board, monkeypatch):
+    monkeypatch.setattr(hub, "sub_issues", lambda issue, repo: (None, "sub-issues: refused"))
+    burn = hub._burndown_payload(1063, today=TODAY)["burn"]
+    assert burn["points"] == [] and burn["err"] == "sub-issues: refused"
+    assert burn["reason"] != "no child ticket"
 
 
 def test_the_cache_reads_anew_when_the_history_changes_on_the_same_board_read(hub, board):
