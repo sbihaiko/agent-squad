@@ -96,3 +96,54 @@ def test_reduced_motion_turns_every_animation_off(hub):  # noqa: F811
     for sel in (".card.cin", ".lout", "#sheet", "#psheet"):
         assert sel in body, f"{sel} keeps its motion under reduced motion"
     assert "animation:none" in body and "transition:none" in body
+
+
+def _two_columns(*extra):
+    b = copy.deepcopy(BOARD_ONE)
+    b["labels"] = ["x"]
+    b["groups"][0]["items"] = [{"n": 7, "t": "ticket 7", "l": []}, {"n": 8, "t": "ticket 8", "l": ["x"]}]
+    b["groups"][0]["items"] += [{"n": n, "t": f"ticket {n}", "l": []} for n in extra]
+    b["groups"][0]["n"] = len(b["groups"][0]["items"])
+    b["groups"][1]["items"] = [{"n": 9, "t": "ticket 9", "l": []}]
+    b["groups"][1]["n"] = 1
+    return b
+
+
+@pytest.mark.node_bound
+def test_a_column_switch_or_a_filter_change_fades_no_card(hub):  # noqa: F811
+    """The seen set is the board's, kept across renders: only a card new to the board after a read fades in."""
+    out = run_page(hub.MOBILE_PAGE, """
+      const cin = () => $("cards").querySelectorAll('[data-role="card"]').filter(c => c.classList.contains("cin")).map(c => String(c.dataset.n));
+      await loadBoard(); await loadBoard();
+      $("col-next").onclick(); const b = cin();
+      $("col-prev").onclick(); const a = cin();
+      $("lfl").onchange({ target: { checked: true, value: "x" } }); const narrowed = cin();
+      $("lfl").onchange({ target: { checked: false, value: "x" } }); const widened = cin();
+      await loadBoard(); const read = cin();
+      $("col-next").onclick(); $("col-prev").onclick(); const after = cin();
+      return { b, a, narrowed, widened, read, after };
+    """, board=[_two_columns(), _two_columns(), _two_columns(10)])
+    assert out == {"b": [], "a": [], "narrowed": [], "widened": [], "read": ["10"], "after": []}, out
+
+
+@pytest.mark.node_bound
+def test_a_folded_lane_clone_carries_no_card_lookup_key(hub):  # noqa: F811
+    """A lane that shuts folds its old cards in a .lout clone; no clone keeps data-role, data-n or data-i."""
+    out = run_page(hub.MOBILE_PAGE, """
+      globalThis.matchMedia = () => ({ matches: false });
+      const P = Object.getPrototypeOf($("cards"));
+      Object.defineProperty(P, "nextElementSibling", { get() {
+        const s = this.parentElement && this.parentElement.children; return s ? s[s.indexOf(this) + 1] || null : null; } });
+      P.after = function (n) { const s = this.parentElement.children; n.parentElement = this.parentElement; s.splice(s.indexOf(this) + 1, 0, n); };
+      P.remove = function () { const s = this.parentElement && this.parentElement.children; if (s) s.splice(s.indexOf(this), 1); };
+      await loadBoard();
+      const before = $("cards").querySelectorAll('[data-role="card"]').length;
+      $("cards").onclick({ target: $("cards").querySelector(".lane-h") });
+      const outs = $("cards").querySelectorAll(".lout");
+      const folded = outs.flatMap(g => g.querySelectorAll(".card"));
+      const keyed = folded.filter(c => "role" in c.dataset || "n" in c.dataset || "i" in c.dataset).length;
+      return { before, outs: outs.length, folded: folded.length, keyed,
+               live: $("cards").querySelectorAll('[data-role="card"]').length,
+               hit: $("cards").querySelectorAll('[data-n="7"]').length };
+    """, board=[_board(7, 8)])
+    assert out == {"before": 2, "outs": 1, "folded": 2, "keyed": 0, "live": 0, "hit": 0}, out
