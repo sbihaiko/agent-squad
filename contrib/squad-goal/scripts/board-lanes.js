@@ -55,6 +55,7 @@ const cardSpec=x=>x.sp?x.n:x.pa;   // a spec card wears its own color
 // The wave chip (#917): text that names the card's wave, never a shade; a card with no wave shows none.
 const waveChip=x=>{const w=laneWaveOf(x);return w===null?"":`<span class=lchip data-k=wave title="wave ${w}">W${w}</span>`};
 // </card-rules>
+const SPEC_IN_FLIGHT=["Doing","Code Review","Code Complete","Pushing","Testing"];   // a ticket past dispatch and before done (board_facts.py LIVE_WORK)
 // groups: the issue columns in board order, each { name, items }. o: { mode: "spec"|"wave", fw, fs, fk, text, lc, hideDone,
 // closed, hidden }. `text` is the search predicate; progress counts every row, so a search or a filter never moves a bar.
 // Returns { cols, vc, hc, lanes }: vc are the columns drawn, hc the hidden ones with their counts, lanes the shown lanes in order.
@@ -84,9 +85,10 @@ groups.forEach(g=>g.items.forEach(x=>{if(x.sp){if(!ends.has(g.name)&&!specs.has(
     if(s){l.closed=s.closed;l.total=s.total}
     const m=/^(\d+)\/(\d+)$/.exec(String(l.sc||""));   // a closed ticket never reaches the board with its parent, so the count comes from the spec card
     if(l.kind==="s"&&m){l.closed=+m[1];l.total=+m[2]}
-    l.done=l.total>0&&l.closed===l.total&&!l.all.some(x=>!ends.has(x.col));l.live=l.vis.some(x=>!!x.ho);l.counts={};l.vis.forEach(x=>{l.counts[x.col]=(l.counts[x.col]||0)+1})});
-  const rank=l=>l.kind==="bugs"?0:(l.kind==="none"||(l.kind==="sw"&&l.num==null))?2:1;
-  const order=(a,b)=>mode==="wave"?(numCmp(a.num,b.num)||numCmp(a.wave,b.wave)):((b.live-a.live)||((a.num??0)-(b.num??0)));
+    l.done=l.total>0&&l.closed===l.total&&!l.all.some(x=>!ends.has(x.col));l.inFlight=l.all.filter(x=>SPEC_IN_FLIGHT.includes(x.col)).length;l.started=l.kind==="s"&&(l.st==="Todo"||l.inFlight>0);l.counts={};l.vis.forEach(x=>{l.counts[x.col]=(l.counts[x.col]||0)+1})});
+  const frac=l=>l.total>0?l.closed/l.total:0;
+  const rank=l=>l.kind==="bugs"?0:mode==="wave"?((l.kind==="none"||(l.kind==="sw"&&l.num==null))?2:1):l.kind==="none"?3:l.started?1:2;
+  const order=(a,b)=>mode==="wave"?(numCmp(a.num,b.num)||numCmp(a.wave,b.wave)):a.started?((frac(b)-frac(a))||(b.inFlight-a.inFlight)||((a.num??0)-(b.num??0))):((a.num??0)-(b.num??0));
   const list=shown.filter(l=>!(o.hideDone&&l.done)).sort((a,b)=>rank(a)-rank(b)||order(a,b));
   const lc=o.lc||{};
   list.forEach(l=>{l.collapsed=Object.prototype.hasOwnProperty.call(lc,l.id)?!!lc[l.id]:l.done});   // a done lane starts collapsed (#891)
