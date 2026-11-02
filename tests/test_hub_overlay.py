@@ -365,6 +365,22 @@ def test_an_image_the_owner_sent_joins_the_message_it_came_with():
     assert 'prev.role === "owner"' in body and "IMG_ONLY.test(String(prev.text" in body
     assert 'out[out.length - 1] = { ...prev, text:' in body
 
+@pytest.mark.node_bound
+def test_an_open_page_reloads_when_the_hub_build_changes():
+    """Owner, 2026-11-01: a tab kept the overlay it loaded after the hub changed. Every page that carries the overlay asks
+    the build its session route belongs to, and reloads when that build changes."""
+    assert run_js('[SQ.versionRoute("/api/sessions"), SQ.versionRoute("/repo/api/sessions")]') == ["/api/version", "/repo/api/version"]
+    assert run_js("[SQ.buildStep(null, 5), SQ.buildStep(5, 5), SQ.buildStep(5, 6)]") == [
+        {"seen": 5, "reload": False}, {"seen": 5, "reload": False}, {"seen": 5, "reload": True}]
+
+
+def test_the_build_poll_names_no_api_route_the_hub_would_rewrite():
+    js = OVERLAY.read_text()
+    assert "/api/version" not in js
+    body = js[js.index("// A new hub build reloads"):js.index("applyLayout(); syncSend();")]
+    assert "window.SQUAD_OV_SOURCES()" in body and "SQ.versionRoute(" in body and "location.reload()" in body
+
+
 def test_an_empty_session_list_never_takes_away_the_talk():
     """Owner, 2026-11-01: the panel went blank on "No session runs here" while it held a live talk. A list that answers
     empty keeps what the panel shows and asks again; the empty screen belongs to a panel that never had a session."""
