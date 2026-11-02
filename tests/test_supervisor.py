@@ -158,6 +158,111 @@ def test_daemon_answers_no_input_for_a_session_it_did_not_start(state, echo):
         sv.call(state, "write", session=session, text="x\n")
 
 
+@pytest.fixture
+def sleeper():
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
+    yield child
+    child.kill()
+    child.wait()
+
+
+@pytest.fixture
+def dead_pid():
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    child.wait()
+    return child.pid
+
+
+def events(state):
+    path = state / "sessions.jsonl"
+    return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+
+def write_start(state, **fields):
+    with (state / "sessions.jsonl").open("a") as ledger:
+        ledger.write(json.dumps({"ts": 0.0, "event": "start", **fields}) + "\n")
+
+
+def end_reasons(state, session):
+    return [e["reason"] for e in events(state) if e["event"] == "end" and e["session"] == session]
+
+
+def test_start_writes_one_record_with_identity_process_terminal_and_cwd(state, echo, tmp_path):
+    sid = sv.Supervisor(state).start("p#7", echo, str(tmp_path))
+    [start] = [e for e in events(state) if e["event"] == "start"]
+    assert start["session"] == sid
+    assert start["job"] == "p#7"
+    assert start["lstart"] == sv.lstart(start["pid"])
+    assert start["terminal"].startswith("/dev/")
+    assert start["cwd"] == str(tmp_path)
+
+
+def test_attach_transport_is_recorded_once_per_session(state, echo):
+    sv.ensure(state)
+    session = sv.call(state, "start", job="p#11", argv=echo)["session"]
+    sv.call(state, "read", session=session, offset=0)
+    sv.call(state, "read", session=session, offset=0)
+    attaches = [(e["session"], e["transport"]) for e in events(state) if e["event"] == "attach"]
+    assert attaches == [(session, "unix")]
+
+
+def test_live_record_survives_a_restart_and_keeps_its_job(state, echo, sleeper):
+    write_start(state, session="old-1", job="p#9", pid=sleeper.pid, lstart=sv.lstart(sleeper.pid))
+    restarted = sv.Supervisor(state)
+    assert end_reasons(state, "old-1") == []
+    with pytest.raises(sv.Refused, match="old-1"):
+        restarted.start("p#9", echo, None)
+
+
+def test_record_of_a_dead_process_is_ended_lost_and_frees_its_job(state, echo, dead_pid):
+    write_start(state, session="old-2", job="p#10", pid=dead_pid, lstart="Mon Jan  1 00:00:00 1990")
+    restarted = sv.Supervisor(state)
+    assert end_reasons(state, "old-2") == ["lost"]
+    assert restarted.start("p#10", echo, None) != "old-2"
+
+
+def test_record_with_a_reused_pid_is_ended_lost(state, sleeper):
+    write_start(state, session="old-3", job="p#12", pid=sleeper.pid, lstart="Mon Jan  1 00:00:00 1990")
+    sv.Supervisor(state)
+    assert end_reasons(state, "old-3") == ["lost"]
+
+
+def test_second_start_for_a_live_job_is_refused_naming_the_live_session(state, echo):
+    supervisor = sv.Supervisor(state)
+    first = supervisor.start("p#8", echo, None)
+    with pytest.raises(sv.Refused, match=first):
+        supervisor.start("p#8", echo, None)
+
+
+def test_owner_grant_naming_both_sessions_admits_a_second_start(state, echo):
+    supervisor = sv.Supervisor(state)
+    first = supervisor.start("p#13", echo, None)
+    with pytest.raises(sv.Refused, match=first):
+        supervisor.start("p#13", echo, None, session="second-13")
+    (state / "grants.json").write_text(json.dumps([{"replaces": first, "with": "second-13"}]))
+    assert supervisor.start("p#13", echo, None, session="second-13") == "second-13"
+
+
+def test_grant_naming_another_session_admits_nothing(state, echo):
+    supervisor = sv.Supervisor(state)
+    first = supervisor.start("p#14", echo, None)
+    (state / "grants.json").write_text(json.dumps([{"replaces": "someone-else", "with": "second-14"}]))
+    with pytest.raises(sv.Refused, match=first):
+        supervisor.start("p#14", echo, None, session="second-14")
+
+
+@pytest.mark.parametrize("job", ["", "p#", "p#0", "#7", "p #1", "p/x", "p#1#2", "p\n", "a" * 65])
+def test_malformed_job_name_is_refused_before_anything_starts(state, echo, job):
+    with pytest.raises(sv.Refused):
+        sv.Supervisor(state).start(job, echo, None)
+    assert events(state) == []
+
+
+@pytest.mark.parametrize("job", ["bihaiko#1094", "label-x", "p.q_r", "a" * 64])
+def test_well_formed_job_name_is_accepted(job):
+    assert sv.valid_job(job)
+
+
 def test_hub_module_holds_no_pty_or_fork_on_the_job_path():
     source = (ROOT / "contrib" / "squad-goal" / "scripts" / "hub.py").read_text()
     for token in ("openpty", "forkpty", "os.fork(", "pty.spawn"):
