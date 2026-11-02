@@ -65,6 +65,8 @@ SQ.composerKey = (key, shift, composing) => key !== "Enter" || composing ? "none
 SQ.canSend = (text, allowed) => !!allowed && String(text || "").trim() !== "";
 SQ.sendState = info => info && info.send ? { disabled: false, note: "" }
   : { disabled: true, note: (info && info.why) || `Sending is off. The owner sets ${SQ.SEND_SETTING} to send.` };
+SQ.supervisorLine = info => info && info.state === "refused"
+  ? `The terminal supervisor is not running: ${String(info.why || "no reason was recorded").replace(/\.$/, "")}.` : "";
 SQ.draft = ctx => {
   const list = v => (Array.isArray(v) ? v : v ? [v] : []).map(String).filter(Boolean);
   const lines = ["Page context", `Screen: ${ctx.screen || ""}`, `Route: ${ctx.route || ""}`];
@@ -291,7 +293,7 @@ function retrySoon() {
 async function loadSessions() {
   let srcs = [];
   try { srcs = await window.SQUAD_OV_SOURCES(); } catch (e) { srcs = []; }
-  const found = []; let rl = null, answered = 0;
+  const found = []; let rl = null, sup = null, answered = 0;
   for (const src of srcs || []) {
     try {
       const r = await fetch(src.api + "/project", { cache: "no-store" });
@@ -299,6 +301,7 @@ async function loadSessions() {
       const d = await r.json();
       answered++;
       rl = rl || { send: d.send, why: d.why };
+      sup = sup || d.supervisor || null;
       for (const s of d.sessions || []) found.push({ ...s, src, send: d.send, why: d.why });
     } catch (e) { /* that repository's hub did not answer: its sessions are left out */ }
   }
@@ -324,6 +327,8 @@ async function loadSessions() {
   cur = (cur && found.find(s => s.sid === cur.sid && s.src.api === cur.src.api))
      || found.find(s => s.src.api + " " + s.sid === kept) || (found.length === 1 ? found[0] : null);
   paintPick(); paintHead();
+  const line = SQ.supervisorLine(sup);
+  if (line) say(line);
   if (cur) loadConversation();
   else if (!found.length) empty("No session runs in this project's checkout. Start Claude Code there, then open this again.");
   else empty("Pick a session above.");

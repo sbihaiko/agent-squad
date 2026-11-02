@@ -6321,7 +6321,7 @@ def image_payload(query):
 def project_payload(a):
     """What /api/sessions/project serves (#898): the sessions in this profile's checkout and the send rule for this request."""
     ok, why = send_rule(a)
-    return {"sessions": sessions.project_sessions(PROFILE_NAME, CHECKOUT, profiles_of=profiles_of_cwd), "send": ok, "why": why}
+    return {"sessions": sessions.project_sessions(PROFILE_NAME, CHECKOUT, profiles_of=profiles_of_cwd), "send": ok, "why": why, "supervisor": dict(TERMINAL)}
 
 # The session overlay (#898): one source, hub-overlay.js, on every page the hub serves. Each page names where its session
 # routes are: the hub and mobile pages a quoted path the mux gives the profile prefix, a run dashboard its own path up to
@@ -6471,6 +6471,17 @@ def terminal_supervisor():
     if "sv" not in _PROJECT:
         (_PROJECT["sv"],) = load_squad(tailnet_roots(), ("supervisor",))
     return _PROJECT["sv"]
+
+TERMINAL = {"state": "starting", "why": ""}   # the start outcome the panel reads through /api/sessions/project
+
+def start_terminal_supervisor():
+    """Bring the terminal supervisor up for this hub. A refusal or a failure is recorded with its reason, and the hub keeps serving."""
+    try:
+        terminal_supervisor().ensure(STATE)
+        TERMINAL.update(state="up", why="")
+    except Exception as e:
+        TERMINAL.update(state="refused", why=str(e))
+    print(f"terminal supervisor: {TERMINAL['state']}" + (f": {TERMINAL['why']}" if TERMINAL["why"] else ""), file=sys.stderr, flush=True)
 
 def access(h, action):
     """The one rule for every route: the loopback Host as own_host has always answered it, a tailnet request through the seam.
@@ -6794,5 +6805,5 @@ def watch_self():
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 7700
     refresh_runs()
-    threading.Thread(target=refresh_prs, daemon=True).start(); threading.Thread(target=refresh_quota, daemon=True).start(); threading.Thread(target=watch_self, daemon=True).start(); threading.Thread(target=refresh_board, daemon=True).start(); threading.Thread(target=refresh_history, daemon=True).start(); threading.Thread(target=refresh_fast, daemon=True).start();threading.Thread(target=load_sampler, daemon=True).start(); threading.Thread(target=watch_runs, daemon=True).start()
+    threading.Thread(target=start_terminal_supervisor, daemon=True).start(); threading.Thread(target=refresh_prs, daemon=True).start(); threading.Thread(target=refresh_quota, daemon=True).start(); threading.Thread(target=watch_self, daemon=True).start(); threading.Thread(target=refresh_board, daemon=True).start(); threading.Thread(target=refresh_history, daemon=True).start(); threading.Thread(target=refresh_fast, daemon=True).start();threading.Thread(target=load_sampler, daemon=True).start(); threading.Thread(target=watch_runs, daemon=True).start()
     ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
