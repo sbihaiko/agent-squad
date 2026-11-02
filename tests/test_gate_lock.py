@@ -240,7 +240,8 @@ def test_a_gate_lock_shell_suite_is_executable(name):
 
 def test_two_hand_gates_started_at_once_run_one_after_the_other_in_short(tmp_path):
     """The short form of the soak below. The first gate holds the lock until the second prints its wait line, so the proof
-    never races the slot take that gate.sh runs before the lock (a python start, seconds under load)."""
+    never races the second gate's start-up (a python start, seconds under load). The lock comes first and the slots
+    second (#1166), so a gate queued here takes no slot while it waits."""
     d = _tree(tmp_path)
     log = tmp_path / "log"
     release = tmp_path / "release"

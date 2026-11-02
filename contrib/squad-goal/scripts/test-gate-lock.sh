@@ -2,12 +2,17 @@
 # Regression test for gate.sh (#392): one command runs a hand gate under the machine-wide `gate` lock, the lock serial.sh owns.
 # Two gates started at once run one after the other and never together; the second waits and then runs, and its wait shows on one
 # log line; a gate whose holder died takes the lock; the exit code passes through. Offline, a throwaway SG_STATE.
+# (#1166) The lock comes first and the slots second: a gate queued behind a holder takes no slot while it waits, a gate that
+# cannot take its slots gives the lock back at once (exit 73), every exit frees both, and a killed holder loses both to the
+# next gate. A throwaway budget (SQUAD_CAPS_DIR) is the only one these slots are taken from.
 # usage: bash test-gate-lock.sh [scripts dir]
+# mirrors: gate.sh serial.sh caps.sh
 unset SG_SERIAL_HELD   # a gate inside a gate hands the lock name down; this suite takes its own gate lock, so the order is proved
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/s"; cp "$d/gate.sh" "$d/serial.sh" "$d/caps.sh" "$T/s/" 2>/dev/null
 export SG_STATE=$T/st; mkdir -p "$SG_STATE"
-# (#567) A gate takes SG_GATE_WORKERS gate slots of the machine-wide budget (caps.gates) before the lock: a throwaway budget here.
+cd "$T"   # a target with no project settings file: the budget is the plugin's, so no project value decides the counts
+# (#567) A gate takes SG_GATE_WORKERS gate slots of the machine-wide budget (caps.gates) inside the lock: a throwaway budget here.
 export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR=$T/caps SQUAD_CAPS_POLL=0.2 SG_GATE_WORKERS=2
 capsctl() { PYTHONPATH="$SG_SQUAD" python3 -m squad.caps "$@"; }
 occ() { capsctl | python3 -c 'import json,sys; print(json.load(sys.stdin)["occupancy"]["'"$1"'"])'; }
@@ -47,8 +52,9 @@ sleep 120 >/dev/null 2>&1 & live=$!; trap 'kill $live 2>/dev/null' EXIT   # a ho
 rm -rf "$T/caps"; mkdir -p "$T/caps"
 : > "$T/log"; bash "$T/s/gate.sh" sh -c "sleep 3" & g1=$!; sleep 0.5
 bash "$T/s/gate.sh" sh -c "echo second >> $T/log" 2>"$T/err2" & g2=$!; sleep 1.5
-[ "$(occ gates)" = 4 ] && ok "a second gate takes its slots while it waits for the lock: slots come before the lock" || ko "slots before the lock: $(occ gates) held, want 4"
-wait $g1 $g2; [ "$(cat "$T/log")" = second ] && ok "the gate that waited for the lock ran after its slots" || ko "second gate: '$(cat "$T/log")'"
+[ "$(occ gates)" = 2 ] && ok "a gate queued behind a live holder takes no slot while it waits" || ko "a waiting gate holds slots: $(occ gates) held, want the holder's 2"
+/usr/bin/grep -q '^serial: waiting for lock gate held by pid' "$T/err2" && ok "the queued gate says it waits for the lock" || ko "wait line: $(cat "$T/err2")"
+wait $g1 $g2; [ "$(cat "$T/log")" = second ] && ok "the gate that waited for the lock ran after it, on its own slots" || ko "second gate: '$(cat "$T/log")'"
 [ "$(occ gates)" = 0 ] && ok "a finished gate gives its slots back" || ko "slots left behind: $(occ gates)"
 bash "$T/s/gate.sh" sh -c "bash $T/s/gate.sh sh -c 'echo \$SQUAD_GATE_WORKERS > $T/inner; sleep 1.5' & sleep 0.8; PYTHONPATH=$SG_SQUAD python3 -m squad.caps > $T/nested.json; wait"
 [ "$(cat "$T/inner" 2>/dev/null)" = 2 ] && python3 -c 'import json,sys; sys.exit(json.load(open(sys.argv[1]))["occupancy"]["gates"] != 2)' "$T/nested.json" && ok "a gate inside a gate holder takes no more slots, and keeps the holder's count" || ko "nested gate: inner '$(cat "$T/inner" 2>&1)', $(cat "$T/nested.json" 2>&1)"
@@ -72,13 +78,32 @@ capsctl take gates other --count 11 --pid "$live" >/dev/null
 t0=$(date +%s); SERIAL_TRY=1 SG_GATE_WORKERS=6 bash "$T/s/gate.sh" true 2>"$T/err3"; rc=$?
 [ $rc = 73 ] && [ $(( $(date +%s) - t0 )) -lt 5 ] && ok "try mode skips at once when fewer than two slots are free (exit 73)" || ko "try mode: rc $rc"
 [ "$(occ gates)" = 11 ] && ok "a gate that cannot have two of its slots holds none of them" || ko "partial hold: $(occ gates) held, want 11"
+[ -d "$SG_STATE/locks/gate" ] && ko "a try gate that cannot take its slots left the lock held" || ok "a try gate that cannot take its slots gives the lock back at once"
 /usr/bin/grep -c 'caps.gates' "$T/err3" | /usr/bin/grep -q '^1$' && ok "the skip says so on one line naming the ceiling" || ko "skip line: $(cat "$T/err3")"
-SERIAL_WAIT_SECONDS=1 SG_GATE_WORKERS=6 bash "$T/s/gate.sh" true 2>"$T/err4"; rc=$?
-[ $rc = 75 ] && ok "a wait for slots ends at its bound (exit 75)" || ko "slot wait: rc $rc"
-[ "$(/usr/bin/grep -c 'waiting' "$T/err4")" = 1 ] && /usr/bin/grep 'waiting' "$T/err4" | /usr/bin/grep -q 'caps.gates.*other' && ok "a step that waits logs one line naming the full ceiling and its holder" || ko "wait line: $(cat "$T/err4")"
-SG_CALL_DEADLINE_SECONDS=1 SG_GATE_WORKERS=6 bash "$T/s/gate.sh" true 2>/dev/null; [ $? = 75 ] && ok "inside a run the wait stays inside the call deadline" || ko "the wait outlived SG_CALL_DEADLINE_SECONDS"
+# A gate that is not in try mode answers the same way: it never waits for a slot while it holds the lock, so no other gate
+# queues behind a budget it cannot use. The call deadline and the wait bound never decide a slot take that cannot happen.
+t0=$(date +%s); SERIAL_WAIT_SECONDS=1 SG_CALL_DEADLINE_SECONDS=1 SG_GATE_WORKERS=6 bash "$T/s/gate.sh" true 2>"$T/err4"; rc=$?
+[ $rc = 73 ] && [ $(( $(date +%s) - t0 )) -lt 5 ] && ok "a gate that cannot take its slots answers at once, never waiting under the lock (exit 73)" || ko "full budget: rc $rc"
+[ -d "$SG_STATE/locks/gate" ] && ko "a gate that could not take its slots left the lock held" || ok "a gate that could not take its slots gives the lock back at once"
+[ "$(occ gates)" = 11 ] && ok "the full budget is unchanged by the gate that could not take its slots" || ko "the backed-off gate changed the budget: $(occ gates) held, want 11"
 capsctl release gates other
 capsctl take gates ghost --count 12 --pid 99999999 >/dev/null
 out=$(SG_GATE_WORKERS=6 bash "$T/s/gate.sh" sh -c 'echo $SQUAD_GATE_WORKERS' 2>&1)
 [ "$out" = 6 ] && ok "the slots of a dead holder are reclaimed" || ko "a dead holder's slots blocked the gate: '$out'"
+
+# (#1166) A process that dies holding the lock and its slots loses both to the next caller: the lock is reaped by serial.sh,
+# the leases are counted dead by the next count, and the next gate neither waits for the lock nor is short of slots.
+kill_tree() {  # <pid>: the leaves first, so nothing is left to keep a lease or the lock alive (ps -P is not on every ps)
+  local p=$1 c; for c in $(/bin/ps -ax -o pid=,ppid= | awk -v p="$p" '$2 == p {print $1}'); do kill_tree "$c"; done; kill -KILL "$p" 2>/dev/null
+}
+rm -rf "$T/caps"; : > "$T/log"
+bash "$T/s/gate.sh" sh -c "sleep 60" 2>/dev/null & gk=$!
+for i in $(seq 1 100); do [ -d "$SG_STATE/locks/gate" ] && [ "$(occ gates)" = 2 ] && break; sleep 0.05; done
+helds=$(occ gates)
+kill_tree "$gk"
+for i in $(seq 1 100); do /bin/ps -p "$gk" >/dev/null 2>&1 || break; sleep 0.05; done
+[ "$(occ gates)" = 0 ] && ok "a killed holder's slots are free again" || ko "slots after the kill: $(occ gates) held, want 0"
+t0=$(date +%s); out=$(SERIAL_WAIT_SECONDS=5 SG_GATE_WORKERS=6 bash "$T/s/gate.sh" sh -c 'echo $SQUAD_GATE_WORKERS' 2>"$T/err6"); rc=$?
+[ "$helds" = 2 ] && [ $rc = 0 ] && [ "$out" = 6 ] && [ $(( $(date +%s) - t0 )) -lt 5 ] && ok "a killed holder's lock is taken by the next gate, with no wait" || ko "after a kill: held $helds, rc $rc, out '$out', $(cat "$T/err6")"
+[ "$(occ gates)" = 0 ] && ok "the next gate gives back its slots" || ko "slots left behind: $(occ gates)"
 rm -rf "$T"; exit $fail

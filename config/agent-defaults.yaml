@@ -48,7 +48,7 @@ run:                                # mirrors the graph run block (schema run_bl
 caps:                               # machine-wide, across every repository and every run (squad/caps.py); not the per-run pair run.max_parallel and dispatch max_children
   runs: 10                          # live runs on this machine; a run above it waits for a slot, bounded by the run deadline
   children: 20                      # live dispatch children on this machine; a child above it waits, bounded by its call deadline
-  gates: 12                         # gate worker slots on this machine: a gate takes SG_GATE_WORKERS of them, all or none, before it takes the gate lock; a project may lower it, and a gate then takes min(workers, this)
+  gates: 12                         # gate worker slots on this machine: a gate takes SG_GATE_WORKERS of them, all or none, after it takes the gate lock; a project may lower it, and a gate then takes min(workers, this)
   reviews: 4                        # live reviews on this machine, branch and child alike: a childcc review that finds none skips this pass, a branch review waits
 
 dashboard:                          # the run dashboard page; run_start records it, the page reads it from the record
