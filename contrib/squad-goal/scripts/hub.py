@@ -6426,8 +6426,7 @@ def route_action(method, path):
     The seam decides on the action; a method only names which routes can write."""
     path = path.split("?", 1)[0]
     if method == "GET":
-        if path == "/api/terminals/read": return "read"
-        return "read" if path.startswith("/api/sessions/conversation") else "view"
+        return "read" if path == "/api/terminals/read" else "view"
     if path in TERMINAL_ATTACH: return "attach"
     return "send" if path in TERMINAL_SENDS else "control"
 
@@ -6683,7 +6682,7 @@ class H(BaseHTTPRequestHandler):
         length = self.headers.get("Content-Length") or "0"
         raw = self.rfile.read(min(int(length), 1 << 20)) if length.isdigit() else b""
         if not a.allowed: return self.refuse(a.reason)
-        if "json" not in (self.headers.get("Content-Type") or ""): return self.refuse("forbidden")
+        if not (a.tailnet or own_origin(self)) or "json" not in (self.headers.get("Content-Type") or ""): return self.refuse("forbidden")
         try: body = json.loads(raw)
         except ValueError: body = None
         if not isinstance(body, dict) or set(body) != keys: return self.answer(400, {"err": "bad request"})

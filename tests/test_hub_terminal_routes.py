@@ -163,3 +163,11 @@ def test_loopback_request_carrying_a_login_never_writes(hub):
                         origin=f"http://127.0.0.1:{h.port}")
     assert status == 403
     assert h.fake.calls == []
+
+
+@pytest.mark.parametrize("path, body", [("/api/terminals/attach", ATTACH), ("/api/terminals/write", WRITE)])
+def test_loopback_terminal_post_without_an_origin_is_refused(hub, path, body):
+    h = hub()
+    status, _ = request(h.port, "POST", path, body, host=f"127.0.0.1:{h.port}", login=None, origin=None)
+    assert status == 403
+    assert h.fake.calls == []

@@ -1,13 +1,14 @@
-"""The one audit line for a hosted terminal: one JSON line per start, attach, detach, write, stop and end, and per refusal.
+"""The one audit line for a hosted terminal: one JSON line per start, attach, detach, stop and end, and per refusal.
 
-A line carries the byte count of input, never the input itself.
+A line carries the byte count of input, never the input itself. Input writes add no line of their own: the count of an
+attach is the bytes typed under it, and the detach line carries that total.
 """
 import json
 import time
 from pathlib import Path
 
 FILE = "terminal-audit.log"
-EVENTS = ("start", "attach", "detach", "write", "stop", "end")
+EVENTS = ("start", "attach", "detach", "stop", "end")
 
 
 def record(state: Path, event: str, *, job: str, session: str, login: str, transport: str, client_id: str, input_bytes: int) -> None:

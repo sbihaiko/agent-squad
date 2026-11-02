@@ -418,7 +418,7 @@ def wait_for_audit(state, event, timeout=10.0):
         time.sleep(0.05)
 
 
-def test_each_of_the_six_events_writes_one_audit_line_and_no_input_text(state):
+def test_each_of_the_five_events_writes_one_audit_line_and_no_input_text(state):
     sv.ensure(state)
     who = {"login": "ana@example.com", "client_id": "c1", "transport": "tailnet"}
     session = sv.call(state, "start", job="p#30", **who)["session"]
@@ -428,13 +428,13 @@ def test_each_of_the_six_events_writes_one_audit_line_and_no_input_text(state):
     sv.call(state, "stop", session=session, **who)
     wait_for_audit(state, "end")
     lines = audit_lines(state)
-    assert [line["event"] for line in lines] == ["start", "attach", "write", "detach", "stop", "end"]
+    assert [line["event"] for line in lines] == ["start", "attach", "detach", "stop", "end"]
     for line in lines:
         assert set(line) == AUDIT_KEYS
         assert line["job"] == "p#30" and line["session"] == session
     typed = len(TYPED.encode())
-    assert [line["input_bytes"] for line in lines] == [0, 0, typed, typed, 0, 0]
-    for line in lines[:5]:
+    assert [line["input_bytes"] for line in lines] == [0, 0, typed, 0, 0]
+    for line in lines[:4]:
         assert (line["login"], line["client_id"], line["transport"]) == ("ana@example.com", "c1", "tailnet")
     assert TYPED not in (state / "terminal-audit.log").read_text()
 

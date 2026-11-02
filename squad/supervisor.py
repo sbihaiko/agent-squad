@@ -315,7 +315,6 @@ class Supervisor:
         with self.lock:
             key = (sid, caller.transport, caller.client_id)
             self.attachments[key] = self.attachments.get(key, 0) + len(data)
-            self._line("write", sid, caller, self.attachments[key])
 
     def read(self, sid: str, offset: int) -> dict:
         return self._session(sid).read(offset)
