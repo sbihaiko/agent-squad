@@ -1,8 +1,8 @@
-"""The Monitor leads with the machine instruments and states the loop once (#1071, parent #1068).
+"""The Monitor leads with the machine instruments, then Throughput, and states the loop once (#1071, parent #1068).
 
 The loop's state renders in the Loop panel only, through one switch that drains when turned off (ADR-0162). The Monitor
-carries no loop tile and no loop words in its heading. The CPU, RAM and GPU gauges sit first in the Monitor, above the
-specs, usage and spend sections, which keep the donut and the bar chart. The Monitor carries no throughput card (owner).
+carries no loop tile and no loop words in its heading. The CPU, RAM and GPU gauges sit first in the Monitor, then the
+throughput row, above the usage and spend sections, which keep the donut and the bar chart.
 """
 import importlib.util
 import json
@@ -97,26 +97,28 @@ def test_turning_the_switch_off_drains_and_the_page_says_so_before_it_happens(hu
     assert re.search(r'value=drain checked', confirm)
 
 
-def test_the_loop_switch_sits_in_the_loop_panel_and_the_monitor_has_none(hub):
+def test_the_monitor_carries_the_one_loop_switch_and_the_panel_keeps_the_log(hub):
+    """The owner moved the switch to the Monitor; the Loop panel carries the change log and the history, never a button."""
     page = hub.PAGE
     monitor = _section(page, "inst")
-    assert "role=switch" not in monitor and "loopSetHtml" not in monitor
-    assert 'data-loop' not in monitor
+    assert "id=iloop" in monitor, "the Monitor carries the loop slot"
+    panel = _section(page, "lop")
+    assert "id=lopb" in panel and "id=histb" in panel, panel[:200]
+    assert "role=switch" not in panel, "the Loop panel carries no second switch"
 
 
-def test_the_instruments_lead_the_monitor_and_the_specs_follow(hub):
+def test_the_instruments_lead_the_monitor_and_throughput_follows(hub):
     page = hub.PAGE
     monitor = _section(page, "inst")
-    assert monitor.index("id=igs") < monitor.index("id=ispec")
+    assert monitor.index("id=igs") < monitor.index("id=ispeed")
+    assert monitor.index("id=ispeed") < monitor.index("id=ispec")
 
 
-def test_the_monitor_carries_no_throughput_card(hub):
-    """The owner removed the card: the page draws no throughput row, and no reader works one out."""
+def test_the_throughput_row_sits_above_every_cost_and_subscription_section(hub):
     page = hub.PAGE
-    monitor = _section(page, "inst")
-    assert "id=ispeed" not in page and "speedRow" not in page
-    assert "cards closed today" not in page and "cards closed today" not in monitor
-    assert "throughput" not in monitor.lower()
+    after = page.index("id=ispeed")
+    for sid in ("usage", "isub", "stats", "chart", "pie", "lim", "sub"):
+        assert page.index(f"id={sid}") > after, sid
 
 
 def test_the_donut_and_the_bar_chart_stay_in_the_spend_section(hub):
@@ -132,3 +134,13 @@ def test_the_monitor_carries_no_queue_tile(hub):
     facts = [{"key": "queue", "text": "queue 5 held", "tone": "wait"}]
     tiles = _run(page, f"instTiles({json.dumps(facts)}).map(t=>t.k)", _monitor_blocks(page))
     assert tiles == ["Gate"], tiles
+
+def test_a_reader_learns_the_throughput_and_its_direction_in_one_row(hub):
+    page = hub.PAGE
+    row = _run(page, 'speedRow({today:5,median:3,min:1,max:6,trend:"up"})', _monitor_blocks(page))
+    assert "accelerating" in row and "5" in row and "cards closed today" in row
+
+def test_the_monitor_carries_no_late_writes_row(hub):
+    """The owner removed it: no late-writes row and no reader that builds one."""
+    page = hub.PAGE
+    assert "id=ilate" not in page and "lateRows" not in page

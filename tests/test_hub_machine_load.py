@@ -1,6 +1,7 @@
 """Hub machine load (#1776): the left pane's footer strip reads CPU, RAM and GPU, and the card of the run that owns
 the load says so. These pin the parts that carry a rule — the cell formatting, the `?` fallback when a source cannot
 answer, the two-sample warn rule, the attribution by worktree path and the marker that clears with the load."""
+import datetime as dt
 import importlib.util
 import json
 import os
@@ -868,3 +869,104 @@ def test_the_monitor_draws_a_labelled_bar_and_a_reset_per_subscription(hub):
     assert 'style="width:${' in fn, "the bar carries no spent share"
     assert "resets in" in fn, "the reset does not say what the time is"
     assert ".subs" in fn
+
+
+# ---------------------------------------------------------------- the throughput row (owner, 2026-11-01)
+
+THROUGHPUT_NOW = dt.datetime(2026, 10, 20, 23, 0, tzinfo=dt.UTC)
+
+
+def _closing_store(hub, tmp_path, monkeypatch, closed_per_day):
+    """A history store whose cards close so each day ends with the given closed total, the last day being today (#1024)."""
+    monkeypatch.setenv("TZ", "UTC")
+    monkeypatch.setattr(hub, "BOARD", tmp_path / "board.json")
+    monkeypatch.setattr(hub, "REPO", "x/y")
+    path = hub._hist.history_path(hub.BOARD, hub.REPO)
+    first = THROUGHPUT_NOW.date() - dt.timedelta(days=len(closed_per_day) - 1)
+    def stamp(day, hour):
+        return dt.datetime.combine(day, dt.time(hour), tzinfo=dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    for n in range(closed_per_day[-1]):
+        day = next(i for i, total in enumerate(closed_per_day) if total > n)
+        events = [{"t": stamp(first, 0), "type": "added"}, {"t": stamp(first, 0), "type": "status", "status": "Todo"},
+                  {"t": stamp(first + dt.timedelta(days=day), 12), "type": "closed"}]
+        hub._hist.record_issue(path, n + 1, stamp(first, 0), stamp(first, 0), events, True, 0)
+    return path
+
+
+def test_the_speed_row_compares_today_with_the_finished_days(hub, tmp_path, monkeypatch):
+    """Today is partial, so it is never part of the median it is judged against."""
+    days = [0, 2, 6, 10, 14, 16]
+    _closing_store(hub, tmp_path, monkeypatch, days)
+    got = hub.throughput_fact(now=THROUGHPUT_NOW)
+    done = [days[i + 1] - days[i] for i in range(len(days) - 1)]
+    assert got["today"] == done[-1], "the newest day is partial and is the one judged"
+    assert got["median"] == 4 and got["min"] == 2 and got["max"] == 4, (got, done)
+
+
+def test_the_speed_fact_carries_the_age_of_the_store_it_counted(hub, tmp_path, monkeypatch):
+    """#1193: a frozen store read as a slowdown. The fact names the newest record it counted, so the reader sees the age."""
+    _closing_store(hub, tmp_path, monkeypatch, [0, 2, 6, 10, 14, 16])
+    got = hub.throughput_fact(now=THROUGHPUT_NOW)
+    assert got["as_of"] is None, "the fixture records carry no stamp of their own"
+    monkeypatch.setattr(hub.time, "time", lambda: THROUGHPUT_NOW.timestamp())
+    path = hub._hist.history_path(hub.BOARD, hub.REPO)
+    hub._hist.record_issue(path, 99, "2026-10-20T22:00:00Z", "2026-10-20T22:00:00Z", [], True,
+                           THROUGHPUT_NOW.timestamp() - 600)
+    got = hub.throughput_fact(now=THROUGHPUT_NOW)
+    assert got["as_of"] == int(THROUGHPUT_NOW.timestamp()) - 600 and got["age_secs"] == 600, got
+
+
+def test_a_speeding_board_reads_up_and_a_slowing_one_reads_down(hub, tmp_path, monkeypatch):
+    _closing_store(hub, tmp_path, monkeypatch, [0, 1, 2, 3, 4, 5, 8, 12, 16])
+    assert hub.throughput_fact(now=THROUGHPUT_NOW)["trend"] == "up"
+    _closing_store(hub, tmp_path, monkeypatch, [0, 9, 18, 27, 36, 45, 46, 47, 48])
+    assert hub.throughput_fact(now=THROUGHPUT_NOW)["trend"] == "down"
+
+
+def _speed_text(hub, sp):
+    """The throughput row as the page draws it, run by node: the words the reader sees, markup stripped."""
+    if shutil.which("node") is None:
+        pytest.skip("node is required")
+    esc = re.search(r"^const esc=.*$", hub.PAGE, re.M).group(0)
+    i = hub.PAGE.index("function speedRow(sp)")
+    script = f"{esc}\n{hub.PAGE[i:hub.PAGE.index('function instUsage', i)]}\nconsole.log(speedRow({json.dumps(sp)}))"
+    out = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    return re.sub(r"<[^>]+>", " ", out.stdout)
+
+
+def test_the_throughput_row_with_one_day_names_the_wait_and_draws_no_trend(hub, tmp_path, monkeypatch):
+    """One day is one number: the row names the wait for a finished day and draws no trend word."""
+    _closing_store(hub, tmp_path, monkeypatch, [0, 5])
+    text = _speed_text(hub, hub.throughput_fact(now=THROUGHPUT_NOW))
+    assert "steady" not in text and "accelerating" not in text and "slowing" not in text, text
+    assert "first day" in text, text
+    assert re.search(r"5\s+cards closed today", text), text
+
+
+def test_the_throughput_row_with_several_days_names_the_trend_it_compared(hub, tmp_path, monkeypatch):
+    """The trend word follows the finished days compared, and the unit says what the number is."""
+    _closing_store(hub, tmp_path, monkeypatch, [0, 1, 2, 3, 4, 5, 8, 12, 16])
+    up = _speed_text(hub, hub.throughput_fact(now=THROUGHPUT_NOW))
+    assert "accelerating" in up and "first day" not in up, up
+    assert "cards closed today" in up and "per day" not in up, up
+    _closing_store(hub, tmp_path, monkeypatch, [0, 9, 18, 27, 36, 45, 46, 47, 48])
+    assert "slowing" in _speed_text(hub, hub.throughput_fact(now=THROUGHPUT_NOW))
+
+
+def test_no_history_reads_no_speed_and_the_page_draws_no_fake_zero(hub):
+    assert hub.throughput_fact() is None
+    assert "no history yet" in hub.PAGE
+
+
+def test_todays_count_follows_the_board_cache_not_a_quiet_history_store(hub):
+    """#1193, owner: a store that stops moving must not freeze the number. A card the cache shows closed today counts."""
+    import datetime as dt
+    now = dt.datetime(2026, 11, 2, 18, 0, tzinfo=dt.UTC).timestamp()
+    items = [{"n": 1, "s": "closed", "c": "2026-11-02T17:00:00Z"},
+             {"n": 2, "s": "closed", "c": "2026-11-01T23:00:00Z"},
+             {"n": 3, "s": "open"},
+             {"n": 4, "s": "closed"}]
+    assert hub.closed_today(items, now) == 1
+    assert hub.closed_today([], now) is None
+

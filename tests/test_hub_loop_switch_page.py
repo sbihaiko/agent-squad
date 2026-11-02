@@ -199,18 +199,21 @@ def js_view(**over):
     return json.dumps({**VIEW, **over})
 
 
-def test_the_monitor_carries_no_loop_state_and_never_its_switch():
-    """The loop states once, in the Loop panel: the Monitor has no Loop tile and no switch (#1071, parent #1068)."""
+def test_the_monitor_carries_the_one_loop_switch_and_no_loop_tile():
+    """The owner moved the switch into the Monitor: one switch there, no Loop tile, and the panel carries no button."""
     src = page()
     card = src.split("<details id=inst", 1)[1].split("</details>", 1)[0]
-    assert "id=iloop" not in card and "loopCardHtml" not in src
-    assert src.count('{k:"Loop",text:') == 0
-    assert "loopSw(" not in card and "role=switch" not in card
+    assert "id=iloop" in card, "the Monitor carries the loop slot"
+    assert src.count('{k:"Loop",text:') == 0, "the Monitor carries no Loop tile"
+    panel = src.split("<details id=lop", 1)[1].split("</details>", 1)[0]
+    assert "role=switch" not in panel, "the Loop panel carries no second switch"
 
 
-def test_the_loop_theme_shows_state_who_when_and_the_change_log():
+def test_the_loop_switch_shows_state_who_and_when_and_the_log_keeps_the_changes():
     out = run_js(f"loopSetHtml({js_view()})")
-    assert "owner" in out and "16:02" in out and "loopback" in out and "start" in out
+    assert "owner" in out and "16:02" in out
+    log = run_js(f"loopLogHtml({js_view()})")
+    assert "owner" in log and "loopback" in log and "start" in log
 
 
 def test_the_loop_theme_shows_the_read_only_reason():
@@ -222,8 +225,8 @@ def test_a_failed_start_is_shown_in_the_loop_theme_and_the_log():
     """A start that did not hold reads off with its failure shown, never a disabled Starting... that hides it (#923 review)."""
     log = [{"at": "2026-10-31T16:02:00-03:00", "who": "owner", "from": "loopback", "action": "start", "failed": "watchd did not start"}]
     out = run_js(f"loopSetHtml({js_view(state='off', failed='watchd did not start', log=log)})")
-    assert out.count("watchd did not start") >= 2
-    assert "Loop off" in out and "disabled" not in out
+    assert "watchd did not start" in out and "Loop off" in out and "disabled" not in out
+    assert "watchd did not start" in run_js(f"loopLogHtml({js_view(state='off', failed='watchd did not start', log=log)})")
 
 
 def test_the_stop_confirm_lists_every_live_run_and_gate_and_drains_by_default():
