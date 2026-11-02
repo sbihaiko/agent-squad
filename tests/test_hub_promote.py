@@ -602,9 +602,6 @@ def test_a_proved_move_is_the_same_column_in_both_routes(hub, monkeypatch, tmp_p
     assert "not Backlog" in out.get("err", ""), out
 
 
-BATCH_URL = "/api/promote/batch"
-
-
 def batch_fixture(mod, monkeypatch, tmp_path):
     """A Backlog spec (#9) with one open ticket (#20), a standalone Backlog issue (#7) and a Todo card (#8) the batch leaves."""
     mod.BATCH_AUDIT = tmp_path / "batch.jsonl"
@@ -617,7 +614,7 @@ def test_the_batch_names_its_count_and_writes_nothing_until_confirmed(hub, monke
     batch_fixture(mod, monkeypatch, tmp_path)
     calls = []
     mod.promote_write = writer(calls)
-    status, out = post(port, {}, path=BATCH_URL)
+    status, out = post(port, {"batch": True}, path="/api/promote")
     assert status == 200 and out == {"count": 3, "issues": [9, 20, 7]}, out
     assert calls == [] and not mod.BATCH_AUDIT.exists()
 
@@ -627,7 +624,7 @@ def test_the_batch_moves_every_backlog_card_in_one_write_with_the_spec_first(hub
     batch_fixture(mod, monkeypatch, tmp_path)
     calls = []
     mod.promote_write = writer(calls)
-    status, out = post(port, {"confirm": 3}, path=BATCH_URL)
+    status, out = post(port, {"batch": True, "confirm": 3}, path="/api/promote")
     assert status == 200 and out == {"ok": True, "count": 3, "moved": [9, 20, 7]}, out
     assert calls == [([9, 20, 7], False)], calls
     groups = {g["name"]: [i["n"] for i in g["items"]] for g in mod.board()["groups"]}
@@ -639,7 +636,7 @@ def test_the_batch_never_moves_a_card_outside_backlog(hub, monkeypatch, tmp_path
     batch_fixture(mod, monkeypatch, tmp_path)
     calls = []
     mod.promote_write = writer(calls)
-    post(port, {"confirm": 3}, path=BATCH_URL)
+    post(port, {"batch": True, "confirm": 3}, path="/api/promote")
     assert all(8 not in issues for issues, _ in calls), calls
     assert next(i for i in mod.board_cache["items"] if i["n"] == 8)["st"] == "Todo"
 
@@ -649,7 +646,7 @@ def test_the_batch_refuses_a_count_that_is_not_the_one_named(hub, monkeypatch, t
     batch_fixture(mod, monkeypatch, tmp_path)
     calls = []
     mod.promote_write = writer(calls)
-    status, out = post(port, {"confirm": 2}, path=BATCH_URL)
+    status, out = post(port, {"batch": True, "confirm": 2}, path="/api/promote")
     assert status == 400 and "err" in out, (status, out)
     assert calls == [] and not mod.BATCH_AUDIT.exists()
     assert all(i["st"] == "Backlog" for i in mod.board_cache["items"] if i["n"] in (7, 9, 20))
@@ -661,7 +658,7 @@ def test_an_empty_backlog_moves_nothing(hub, monkeypatch, tmp_path):
     mod.board_cache["items"] = [dict(TODO)]
     calls = []
     mod.promote_write = writer(calls)
-    status, out = post(port, {"confirm": 0}, path=BATCH_URL)
+    status, out = post(port, {"batch": True, "confirm": 0}, path="/api/promote")
     assert status == 400 and "err" in out, (status, out)
     assert calls == []
 
@@ -673,7 +670,7 @@ def test_a_failed_ticket_read_moves_no_batch(hub, monkeypatch, tmp_path):
     mod.BATCH_AUDIT = tmp_path / "batch.jsonl"
     calls = []
     mod.promote_write = writer(calls)
-    status, out = post(port, {}, path=BATCH_URL)
+    status, out = post(port, {"batch": True}, path="/api/promote")
     assert status == 400 and out.get("err"), out
     assert calls == [] and not mod.BATCH_AUDIT.exists()
 
@@ -682,7 +679,7 @@ def test_the_batch_is_recorded_with_its_count_and_who_asked(hub, monkeypatch, tm
     mod, port = hub
     batch_fixture(mod, monkeypatch, tmp_path)
     mod.promote_write = writer([])
-    status, _ = post(port, {"confirm": 3}, path=BATCH_URL)
+    status, _ = post(port, {"batch": True, "confirm": 3}, path="/api/promote")
     assert status == 200
     lines = [json.loads(x) for x in mod.BATCH_AUDIT.read_text().splitlines()]
     assert len(lines) == 1, lines
@@ -695,7 +692,7 @@ def test_the_batch_route_keeps_the_write_guard(hub, monkeypatch, tmp_path):
     batch_fixture(mod, monkeypatch, tmp_path)
     calls = []
     mod.promote_write = writer(calls)
-    status, out = post(port, {"confirm": 3}, path=BATCH_URL, origin="https://evil.example")
+    status, out = post(port, {"batch": True, "confirm": 3}, path="/api/promote", origin="https://evil.example")
     assert status == 400 and out == {"err": "forbidden"}, (status, out)
     assert calls == []
 
@@ -703,7 +700,7 @@ def test_the_batch_route_keeps_the_write_guard(hub, monkeypatch, tmp_path):
 def test_the_desktop_page_puts_the_batch_control_on_the_backlog_column(hub):
     mod, _ = hub
     page = mod.PAGE
-    assert 'fetch("/api/promote/batch"' in page, "the batch control does not reach the batch route"
+    assert 'fetch("/api/promote",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({batch:true' in page, "the batch control does not send the batch request"
     rule = page.split("#bbody .bmv{", 1)[1].split("}", 1)[0]
     assert "min-height:32px" in rule and "var(--acc)" in rule, rule
 
