@@ -3,6 +3,7 @@
 The card is the session's open AskUserQuestion call; an answer is a message the session's send route carries. No test here
 opens a socket or reads a real session: the transcript is a list of lines and the send route is replaced.
 """
+import json
 import pathlib
 import re
 import sys
@@ -122,13 +123,13 @@ def test_the_hub_refuses_an_unanswered_card_without_sending(hub, monkeypatch):
 
 
 def test_the_transcript_tail_of_a_session_holds_its_open_card(tmp_path, monkeypatch):
-    import json as _json
+
     import sessions
     monkeypatch.setenv("HOME", str(tmp_path))
     cwd = "/work/project"
     folder = tmp_path / ".claude" / "projects" / "-work-project"
     folder.mkdir(parents=True)
     lines = [PLAIN, FIRST]
-    (folder / "sid-1.jsonl").write_text("\n".join(_json.dumps(line) for line in lines) + "\n")
+    (folder / "sid-1.jsonl").write_text("\n".join(json.dumps(line) for line in lines) + "\n")
     (folder / "sid-1.jsonl").chmod(0o600)
     assert session_card.pending(sessions._transcript_tail(cwd, "sid-1")) == PENDING_CARD
