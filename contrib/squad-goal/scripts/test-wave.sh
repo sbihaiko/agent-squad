@@ -891,6 +891,19 @@ case "$r" in *"WAVE REFUSE"*) ko "Y4: the capped wave was refused: '$r'";; *) ok
 case "$r" in *"WAVE REQUEUE #741"*"age cap"*) ok "Y4: the orphan's issue goes back to the queue";; *) ko "Y4: the issue was not requeued: '$r'";; esac
 /usr/bin/grep -qx 'o 3 Todo 741' "$T/board.log" && ok "Y4: the card of the requeued issue reads Todo" || ko "Y4: no Todo card for #741"
 $O rev-parse -q --verify "refs/heads/$W26" >/dev/null && ko "Y4: the capped wave branch is kept" || ok "Y4: the capped wave branch goes"
+# Y5 (#1106): an issue the run itself requeued is no orphan. Its child commit stays on the run's branch and the loop builds the
+# issue again, so the wave lands empty instead of refusing on every later cycle.
+W27=wave/run-1106; start2 run-1106 >/dev/null
+mkdir -p "$T/co/runs/run-1106"; printf '%s\n' 'CHILD — GitHub issue #761 (bug; one root cause, one branch):' > "$T/co/runs/run-1106/request.txt"
+printf '%s\n%s\n' '{"event": "run_start"}' '{"event": "verdict", "verdict": "completed", "reasons": []}' > "$T/co/runs/run-1106/record.jsonl"
+x7=$(mktemp -d); $G clone -q "$T/origin.git" "$x7/c" 2>/dev/null
+(cd "$x7/c" && $G checkout -q -b tmp dev && echo fix > f761 && $G add f761 && $G -c user.email=a@b -c user.name=t commit -q -m "fix 761" -m "Refs #761")
+X7SHA=$($G -C "$x7/c" rev-parse HEAD); $G -C "$T/co" fetch -q "$x7/c" HEAD:refs/heads/squad/run/run-1106 2>/dev/null
+SG_STATE=$T/st python3 "$T/s/issue_ledger.py" requeue "x/y#761" run-1106 "$X7SHA" >/dev/null 2>&1
+r=$(land2 run-1106 2>&1); rc=$?
+[ $rc = 0 ] && case "$r" in *"landed empty"*) ok "Y5: a commit of an issue the run requeued does not hold the wave";; *) ko "Y5: not an empty landing: '$r'";; esac || ko "Y5: exit $rc: '$r'"
+case "$r" in *"WAVE REFUSE"*) ko "Y5: the wave was refused: '$r'";; *) ok "Y5: no WAVE REFUSE line";; esac
+
 # (#845) The orphan-commit refusal applies only to a run whose verdict is completed. A failed, needs-human, stopped or verdict-less
 # run's child commit never holds its wave: the wave takes its normal path (an empty landing here, with no requeue).
 for k in failed:751 needs-human:752 stopped:753 none:754; do

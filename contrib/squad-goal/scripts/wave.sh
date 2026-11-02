@@ -879,7 +879,11 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
       # (#845) Only a completed run's child commit holds the wave: a failed, needs-human, stopped or verdict-less run's commit never
       # does, so its wave takes the normal path. The refusal is said once per wave and commit: the marker names the commit last said.
       local undel="" orph refused="$SG_STATE/auto/orphan-refused-$run"
-      for n in $(run_issues "$rd"); do case " $delivered " in *" $n "*) ;; *) undel="${undel:+$undel }$n";; esac; done
+      # (#1106) An issue this run requeued is no orphan. Its child commit stays on the run's branch by design: the loop builds the
+      # issue again on a new branch. Without this the wave refused on every later cycle, so the run never landed and the commits
+      # of its other children stayed on their branches too.
+      requeued_here() { [ -n "$(python3 "$here/issue_ledger.py" requeued "$SG_REPO#$1" "$run" 2>/dev/null)" ]; }
+      for n in $(run_issues "$rd"); do case " $delivered " in *" $n "*) ;; *) requeued_here "$n" || undel="${undel:+$undel }$n";; esac; done
       if [ "$capped" != 1 ] && [ -n "$undel" ] && orph=$(orphan_child "$run" "$rd" "$S" "$w" $undel); then
         if [ "$(cat "$refused" 2>/dev/null)" != "${orph% *}" ]; then
           mkdir -p "$SG_STATE/auto" && printf '%s\n' "${orph% *}" > "$refused"
