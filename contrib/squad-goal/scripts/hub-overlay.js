@@ -62,7 +62,15 @@ SQ.motionOn = (reduced, hidden) => !reduced && !hidden;
 // The session and the composer.
 SQ.pickNeeded = list => list.length > 1;
 SQ.composerKey = (key, shift, composing) => key !== "Enter" || composing ? "none" : shift ? "newline" : "send";
-SQ.canSend = (text, allowed) => !!allowed && String(text || "").trim() !== "";
+// An attachment (#1154): the composer stages one file, shows it as one chip, and sends the text and the file under one
+// client message id. One file per message: a paste or a drop that brings several keeps the first. While the file is
+// being read, or a send is in flight, the button stays disabled.
+SQ.IMG_RE = /^\s*\[Image: source: ([^\]\n]+)\](?:\s.*)?$/;
+SQ.attached = text => SQ.IMG_RE.test(String(text || "").split("\n", 1)[0]);
+SQ.oneFile = list => (list && list[0]) || null;
+SQ.canSend = (text, allowed, attach) => !!allowed && (!!attach || String(text || "").trim() !== "");
+SQ.sendLocked = (text, allowed, attach, sending) =>
+  !!sending || !!(attach && !attach.ready) || !SQ.canSend(text, allowed, !!(attach && attach.ready));
 SQ.sendState = info => info && info.send ? { disabled: false, note: "" }
   : { disabled: true, note: (info && info.why) || `Sending is off. The owner sets ${SQ.SEND_SETTING} to send.` };
 SQ.supervisorLine = info => info && info.state === "refused"
@@ -153,7 +161,16 @@ html.sq-docked body{margin-right:var(--sq-dock)}
 .sq-earlier{margin:0 0 6px}.sq-earlier summary{font-size:13px;color:var(--ink-muted);cursor:pointer;display:flex;align-items:center}
 .sq-tool{}.sq-tool .sq-who{color:var(--warn)}
 .sq-tool .sq-txt{color:var(--ink-tool);font-family:var(--sq-mono);font-size:var(--sq-fs);line-height:1.55}
-#sq-ov-form{position:relative;display:flex;align-items:flex-end;gap:6px;padding:8px;border-top:1px solid var(--line-strong)}
+#sq-ov-form{position:relative;display:flex;flex-direction:column;border-top:1px solid var(--line-strong)}
+#sq-ov-row{display:flex;align-items:flex-end;gap:6px;padding:8px}
+/* One staged file (#1154): a thumbnail, its name and one Remove. The chip sits above the controls, as the wireframe draws it. */
+#sq-ov-attach{display:flex;align-items:center;gap:8px;padding:8px 14px 0}
+#sq-ov-attach[hidden]{display:none}
+#sq-ov-attach img{flex:none;width:44px;height:44px;object-fit:cover;border:1px solid var(--line);border-radius:6px;background:var(--input)}
+#sq-ov-attach-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;color:var(--fg)}
+#sq-ov-attach-x{flex:none;width:44px;height:44px;padding:0;border:0;border-radius:8px;background:none;color:var(--mute);font:20px/1 system-ui;cursor:pointer}
+#sq-ov-attach-x:hover{background:var(--card);color:var(--fg)}
+#sq-ov-form.sq-drop{outline:2px dashed var(--acc);outline-offset:-4px}
 #sq-ov-plus{flex:none;width:44px;height:44px;border:1px solid var(--line-strong);border-radius:50%;background:var(--card);color:var(--fg);font:22px/1 system-ui;cursor:pointer}
 #sq-ov-menu{position:absolute;left:8px;bottom:60px;z-index:2;display:flex;flex-direction:column;min-width:170px;padding:4px;background:var(--card);border:1px solid var(--line-strong);border-radius:10px;box-shadow:0 10px 30px var(--scrim)}
 #sq-ov-menu[hidden]{display:none}
@@ -201,10 +218,13 @@ html.sq-over .sq-ov-back{display:inline-flex;align-items:center;min-height:44px;
 <div id="sq-ov-log" role="log" aria-live="polite" aria-label="Session conversation"></div>
 <p id="sq-ov-live" aria-live="off" hidden></p>
 <div id="sq-ov-form">
+<div id="sq-ov-attach" role="group" aria-label="Attachment" hidden><img id="sq-ov-attach-img" alt=""><span id="sq-ov-attach-name"></span><button type="button" id="sq-ov-attach-x" aria-label="Remove the attachment" title="Remove the attachment">×</button></div>
+<div id="sq-ov-row">
 <button type="button" id="sq-ov-plus" aria-label="Add to the message" aria-haspopup="menu" aria-expanded="false" aria-controls="sq-ov-menu">+</button>
 <div id="sq-ov-menu" role="menu" hidden><button type="button" role="menuitem" data-act="shot">Attach screenshot</button><button type="button" role="menuitem" data-act="ctx">Page context</button></div>
-<textarea id="sq-ov-text" rows="1" maxlength="4000" aria-label="Message to the session" placeholder="Message the session"></textarea>
+<textarea id="sq-ov-text" rows="1" maxlength="4000" aria-label="Message to the session" placeholder="Message the session · paste or drop an image"></textarea>
 <button id="sq-ov-send" type="button" aria-label="Send" title="Send" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+</div>
 </div>
 <p id="sq-ov-status" role="status"></p>
 <p id="sq-ov-note"></p>
@@ -223,9 +243,12 @@ const $ = id => document.getElementById(id);
 const btn = $("sq-ov-btn"), ov = $("sq-ov"), title = $("sq-ov-title"), pick = $("sq-ov-pick"), log = $("sq-ov-log"),
       text = $("sq-ov-text"), sendBtn = $("sq-ov-send"), plus = $("sq-ov-plus"), menu = $("sq-ov-menu"), note = $("sq-ov-note"),
       stat = $("sq-ov-status"), supLine = $("sq-ov-supervisor"), handle = $("sq-ov-handle"), dockBtn = $("sq-ov-dock"),
-      undockBtn = $("sq-ov-undock"), lens = $("sq-ov-lens"), live = $("sq-ov-live");
+      undockBtn = $("sq-ov-undock"), lens = $("sq-ov-lens"), live = $("sq-ov-live"),
+      form = $("sq-ov-form"), chip = $("sq-ov-attach"), chipImg = $("sq-ov-attach-img"),
+      chipName = $("sq-ov-attach-name"), chipX = $("sq-ov-attach-x");
 const de = document.documentElement;
 let sessions = [], cur = null, rule = null, timer = 0, lastSig = "", liveAct = null, liveTick = 0;
+let attach = null, sending = false;   // the one staged file and the send in flight (#1154)
 
 // ---- the page context: each page exposes one function; a page without its own gets this one
 const shown = e => !!(e && (e.offsetWidth || e.offsetHeight || e.getClientRects().length)) && !e.closest("#sq-ov");
@@ -268,7 +291,7 @@ function syncSend() {
   const st = SQ.sendState(cur || rule);
   text.disabled = !!(rule || cur) && st.disabled;
   note.textContent = st.disabled && (rule || cur) ? st.note : NOTE;
-  sendBtn.disabled = !(cur && SQ.canSend(text.value, cur.send));
+  sendBtn.disabled = !cur || SQ.sendLocked(text.value, cur.send, attach, sending);
 }
 function empty(msg) {
   const p = document.createElement("p"); p.className = "sq-empty"; p.textContent = msg;
@@ -345,7 +368,7 @@ async function loadSessions() {
 // Only the structure that carries meaning in a 400 px panel: headings, bullets, a fence. Everything else stays text.
 // A transcript names a screenshot by the path it was written to: the hub serves that file and the panel draws a thumbnail
 // (owner, 2026-11-01). "[Image #7]" alone names no file, so it stays text.
-const IMG_RE = /^\s*\[Image: source: ([^\]\n]+)\](?:\s.*)?$/;
+const IMG_RE = SQ.IMG_RE;
 function imageNode(path) {
   const t = cur, a = document.createElement("a"), i = document.createElement("img");
   a.className = "sq-img"; a.href = t.src.api + "/image?sid=" + encodeURIComponent(t.sid) + "&p=" + encodeURIComponent(path);
@@ -447,8 +470,10 @@ function clock(iso) {
 }
 function turnNode(t) {
   // A system turn folds to one line (owner, 2026-11-01): a reminder or a hook's note is worth one sentence, not a wall.
+  // A message that opens with the image marker is the owner's attachment, with or without words after it (#1154).
   const onlyImage = IMG_RE.test(String(t.text || ""));
-  if ((t.role === "system" || t.role === "tool") && !onlyImage) {
+  const attached = onlyImage || SQ.attached(String(t.text || ""));
+  if ((t.role === "system" || t.role === "tool") && !attached) {
     const d = document.createElement("details"), sum = document.createElement("summary");
     d.className = "sq-turn sq-" + t.role + " sq-fold";
     const one = String(t.text || "").replace(/\s+/g, " ").trim();
@@ -459,11 +484,11 @@ function turnNode(t) {
   const d = document.createElement("div"), who = document.createElement("span"), head = document.createElement("div");
   // A screenshot is the owner's, whatever the harness calls the turn: it is a bubble of its own on the owner's side
   // (owner, 2026-11-01).
-  const role = onlyImage ? "owner" : t.role;
+  const role = attached ? "owner" : t.role;
   d.className = "sq-turn sq-" + role + (onlyImage ? " sq-onlyimg" : "");
   who.className = "sq-who";
   // The owner's bubble says "you"; the answer's says the model that wrote it, as the transcript names it (owner, 2026-11-02).
-  who.textContent = onlyImage ? "" : t.role === "owner" ? "\u203A you" : String(t.m || "");
+  who.textContent = onlyImage ? "" : attached || t.role === "owner" ? "\u203A you" : String(t.m || "");
   const body = richText(t.text);
   // The clock rides the bubble's own header line, at the right corner, level with the owner's label: floated alone it hung
   // above the bubble and pushed its first line down (owner, 2026-11-02, #1099).
@@ -573,17 +598,30 @@ async function loadConversation() {
 const uuid = () => (crypto.randomUUID ? crypto.randomUUID()
   : "10000000-1000-4000-8000-100000000000".replace(/[018]/g, c => (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)));
 async function send() {
-  const s = cur, body = text.value;
-  if (!s || !SQ.canSend(body, s.send)) return;
-  sendBtn.disabled = true; say("Sending");
+  const s = cur, body = text.value, file = attach;
+  if (!s || SQ.sendLocked(body, s.send, file, sending)) return;
+  const cid = uuid();   // one client message id for the one send
+  sending = true; syncSend();
+  say(file ? "Sending the message and the file" : "Sending");
   try {
-    const r = await fetch(s.src.api + "/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sid: s.sid, text: body, client_id: uuid() }) });
+    let r;
+    if (file) {
+      // One request carries the words and the file, so the hub sends one message under one client message id (#1154).
+      // The page never decides the type: the hub sniffs the bytes of whatever this is.
+      const q = "kind=image&sid=" + encodeURIComponent(s.sid) + "&client_id=" + encodeURIComponent(cid) + "&text=" + encodeURIComponent(body);
+      r = await fetch(s.src.api + "/attach?" + q, { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: file.bytes });
+    } else {
+      r = await fetch(s.src.api + "/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sid: s.sid, text: body, client_id: cid }) });
+    }
     const d = await r.json().catch(() => ({}));
     const st = r.ok ? d.status : "refused";
-    say(st === "sent" ? "Sent: the session's inbox accepted the message." : st === "refused" ? "Refused" + (d.reason ? ": " + d.reason : ": the hub did not send it.") : "Uncertain: the send was interrupted.");
-    if (st === "sent") { text.value = ""; grow(); }
+    if (st === "sent") { text.value = ""; grow(); if (file) clearAttach(); }
+    if (file && st !== "sent") clearAttach();   // a refused file clears its chip; the words stay for another try
+    say(st === "sent" ? (file ? "Sent: the session's inbox accepted the message and the file." : "Sent: the session's inbox accepted the message.")
+      : st === "refused" ? "Refused" + (d.reason || d.err ? ": " + (d.reason || d.err) : ": the hub did not send it.")
+      : "Uncertain: the send was interrupted.");
   } catch (e) { say("Uncertain: no answer from the hub."); }
-  syncSend(); loadConversation();
+  sending = false; syncSend(); loadConversation();
 }
 
 // ---- the composer
@@ -593,6 +631,45 @@ text.addEventListener("keydown", e => {
   if (SQ.composerKey(e.key, e.shiftKey, e.isComposing) === "send") { e.preventDefault(); send(); }
 });
 sendBtn.addEventListener("click", send);
+// The staged file (#1154): one file, one chip, one Remove. It is read here and reaches the session only on the send, so a
+// wrong file is removed before anything is written. A read in flight holds the button; Remove clears the chip at once.
+function paintAttach() {
+  chip.hidden = !attach;
+  if (!attach) { chipImg.removeAttribute("src"); chipImg.alt = ""; chipName.textContent = ""; chip.dataset.ready = "false"; syncSend(); return; }
+  chipImg.src = attach.url; chipImg.alt = attach.name;
+  chipName.textContent = attach.ready ? attach.name : "Reading " + attach.name + "…";
+  chip.dataset.ready = attach.ready ? "true" : "false";
+  syncSend();
+}
+function clearAttach() {
+  if (attach && attach.url) URL.revokeObjectURL(attach.url);
+  attach = null; paintAttach();
+}
+async function stage(file) {
+  if (!file) return;   // a text paste or a drop with no file stays what it was
+  clearAttach();       // one file per message: a second paste or drop replaces the first
+  attach = { file, name: String(file.name || "image"), url: URL.createObjectURL(file), bytes: null, ready: false };
+  paintAttach();
+  let bytes = null;
+  try { bytes = await file.arrayBuffer(); } catch (e) { bytes = null; }
+  if (!attach || attach.file !== file) return;   // removed or replaced while it was read
+  if (!bytes) { say("No attachment: the file could not be read."); clearAttach(); return; }
+  attach.bytes = bytes; attach.ready = true;
+  paintAttach();
+}
+text.addEventListener("paste", e => {
+  const file = SQ.oneFile(e.clipboardData && e.clipboardData.files);
+  if (!file) return;
+  e.preventDefault();
+  stage(file);
+});
+form.addEventListener("dragover", e => { e.preventDefault(); form.classList.add("sq-drop"); });
+form.addEventListener("dragleave", () => form.classList.remove("sq-drop"));
+form.addEventListener("drop", e => {
+  e.preventDefault(); form.classList.remove("sq-drop");
+  stage(SQ.oneFile(e.dataTransfer && e.dataTransfer.files));
+});
+chipX.addEventListener("click", () => { say(""); clearAttach(); text.focus(); });
 function setMenu(open) { menu.hidden = !open; plus.setAttribute("aria-expanded", String(open)); if (open) menu.querySelector("button").focus(); }
 plus.addEventListener("click", () => setMenu(menu.hidden));
 menu.addEventListener("click", e => {
@@ -766,7 +843,7 @@ let build = null;
     } catch (e) { /* the hub did not answer: the page keeps what it shows */ }
   }, SQ.POLL_MS);
 })();
-applyLayout(); syncSend();
+applyLayout(); paintAttach();
 // A reload puts the panel back as it was left (owner, 2026-11-01): the page reloads when the hub build changes, and the
 // terminal closing on that reload loses the reader's place.
 if (wasOpen()) openOverlay();

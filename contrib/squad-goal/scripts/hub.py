@@ -6890,11 +6890,14 @@ class H(BaseHTTPRequestHandler):
         """The one attach route (#1151): one file beside one message, under the send's write gate. The body is read and
         drained before any refusal, so a keep-alive connection is never mis-framed by the part a refusal did not read.
         The type is the file's magic bytes, never its name or the request header; the cap is ATTACH_MAX. The overlay's
-        screenshot arrives here as kind=screenshot and keeps its PNG rule. Causes, in this order: the write gate,
-        malformed id, no session, too large, type not allowed; a refusal is one line and writes nothing."""
+        screenshot arrives here as kind=screenshot and keeps its PNG rule. A `text` query rides in the same message
+        (#1154), so the owner's words and the file carry one client message id; the whole message keeps the send's
+        character cap. Causes, in this order: the write gate, malformed id, no session, too large, type not allowed,
+        too long; a refusal is one line and writes nothing."""
         q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
         kind = kind or (q.get("kind") or [""])[0]
         sid, cid = (q.get("sid") or [""])[0], (q.get("client_id") or [""])[0]
+        said = (q.get("text") or [""])[0]
         length = self.headers.get("Content-Length") or "0"
         n = int(length) if length.isdigit() else 0
         raw = self.rfile.read(min(n, ATTACH_MAX + 1))
@@ -6916,12 +6919,14 @@ class H(BaseHTTPRequestHandler):
         else:
             suffix = sniff_image(raw)
             if suffix is None: return self.answer(415, {"err": "type not allowed"})
-        attachments_purge()   # the one purge (#1153): the new file is young, so it never removes what this route writes
         path, line = screenshot_written(sid, cid, suffix)
+        message = line if not said.strip() else line + "\n\n" + said   # the marker first, so the page draws it above the text
+        if len(message) > session_send.MAX_CHARS: return self.answer(400, {"err": "too long"})
+        attachments_purge()   # the one purge (#1153): the new file is young, so it never removes what this route writes
         path.parent.mkdir(parents=True, exist_ok=True)
         part = path.with_name(path.name + ".part")
         part.write_bytes(raw); os.replace(part, path)
-        out = session_send.send(PROFILE_NAME, sid, line, cid, profiles_of=profiles_of_cwd, root=STATE)
+        out = session_send.send(PROFILE_NAME, sid, message, cid, profiles_of=profiles_of_cwd, root=STATE)
         if kind == "image" and out.get("status") == "refused":   # the session ended between the check and the send: no orphan file
             path.unlink(missing_ok=True)
             return self.answer(404, {"err": "no session"})

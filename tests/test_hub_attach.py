@@ -10,6 +10,7 @@ import os
 import pathlib
 import threading
 import time
+import urllib.parse
 from http.server import ThreadingHTTPServer
 
 import pytest
@@ -196,6 +197,27 @@ def test_the_screenshot_door_keeps_its_png_rule_while_the_image_kind_sniffs(serv
     assert stored(state) == [] and sent == []
     assert post(port, route(), GIF, ctype="image/png")[0] == 200   # the image kind admits a sniffed GIF
     assert stored(state) == [state / "sessions" / SID / "images" / f"{CID}.gif"]
+
+
+def test_the_text_rides_with_the_file_in_one_message_under_one_client_message_id(served):
+    """#1154: the composer sends the owner's words and the file together, so the session reads one message and the hub
+    records one client message id. The marker line comes first, so the page draws the thumbnail above the text."""
+    mod, state, port, sent = served
+    text = "Look at the right edge."
+    status, data = post(port, route() + "&text=" + urllib.parse.quote(text), PNG)
+    assert status == 200, data
+    f = state / "sessions" / SID / "images" / f"{CID}.png"
+    assert f.read_bytes() == PNG
+    assert sent == [(SID, f"[Image: source: {f}] {NOTE}\n\n{text}", CID)]
+
+
+def test_a_text_that_overflows_the_send_cap_is_refused_before_the_file_is_written(served):
+    """The whole message keeps the send's 4000-character cap; a refusal names the cause and leaves the disk empty."""
+    mod, state, port, sent = served
+    status, data = post(port, route() + "&text=" + "x" * 4000, PNG)
+    assert status == 400
+    assert json.loads(data) == {"err": "too long"}
+    assert stored(state) == [] and sent == []
 
 
 def test_an_attach_runs_the_one_purge_and_keeps_its_own_file(served):
