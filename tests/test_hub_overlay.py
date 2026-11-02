@@ -397,7 +397,7 @@ def test_a_poll_that_answers_with_an_error_or_fails_to_render_says_so():
     """#1079: an error answer and a render that throws both reach the console; neither freezes the feed in silence."""
     js = OVERLAY.read_text()
     body = js[js.index("async function loadConversation() {"):js.index("const uuid =")]
-    refusal = body[body.index("if (!r.ok)"):body.index("const turns")]
+    refusal = body[body.index("if (!r.ok)"):body.index("const page =")]   # the feed read answers one page: turns and the activity line together
     assert 'console.warn("conversation:"' in refusal, refusal
     assert body.index("try {") < body.index("log.replaceChildren(") < body.index('console.warn("conversation:", e)')
 
