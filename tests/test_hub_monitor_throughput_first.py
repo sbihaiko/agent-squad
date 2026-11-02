@@ -97,11 +97,14 @@ def test_turning_the_switch_off_drains_and_the_page_says_so_before_it_happens(hu
     assert re.search(r'value=drain checked', confirm)
 
 
-def test_the_loop_switch_sits_in_the_loop_panel_and_the_monitor_has_none(hub):
+def test_the_monitor_carries_the_one_loop_switch_and_the_panel_keeps_the_log(hub):
+    """The owner moved the switch to the Monitor; the Loop panel carries the change log and the history, never a button."""
     page = hub.PAGE
     monitor = _section(page, "inst")
-    assert "role=switch" not in monitor and "loopSetHtml" not in monitor
-    assert 'data-loop' not in monitor
+    assert "id=iloop" in monitor, "the Monitor carries the loop slot"
+    panel = _section(page, "lop")
+    assert "id=lopb" in panel and "id=histb" in panel, panel[:200]
+    assert "role=switch" not in panel, "the Loop panel carries no second switch"
 
 
 def test_the_instruments_lead_the_monitor_and_the_specs_follow(hub):
