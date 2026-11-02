@@ -6225,11 +6225,12 @@ def sessions_payload():
     return sessions.list_sessions(PROFILE_NAME, profiles_of=profiles_of_cwd)
 
 def conversation_payload(query):
-    """What /api/sessions/conversation serves: one page of a live session of this profile, None when it is not one (#840)."""
+    """What /api/sessions/conversation serves: one page of a live session of this profile, None when it is not one (#840). The
+    newest page is the window's read: its `end` is the offset the push stream resumes from."""
     q = urllib.parse.parse_qs(query)
-    before = (q.get("before") or [""])[0]
-    return sessions.conversation(PROFILE_NAME, (q.get("sid") or [""])[0], int(before) if before.isdigit() else None,
-                                 profiles_of=profiles_of_cwd)
+    sid, before = (q.get("sid") or [""])[0], (q.get("before") or [""])[0]
+    if before.isdigit(): return sessions.conversation(PROFILE_NAME, sid, int(before), profiles_of=profiles_of_cwd)
+    return TRANSCRIPTS.refresh(sid, hubstream.tick())
 
 def card_payload(query):
     """What /api/sessions/card serves: the question card a live session of this profile is waiting on, or None (#1093)."""
@@ -6328,8 +6329,7 @@ MOBILE_SHELL = ["/mobile/", "/mobile/manifest.webmanifest", "/mobile/icon.svg"]
 SW_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-sw.js").read_text().replace("/*SHELL*/[]", json.dumps(MOBILE_SHELL))
 MANIFEST_JSON = json.dumps({"id": "/mobile/", "name": f"Squad hub {REPO}", "short_name": "Hub", "start_url": "/mobile/", "scope": "/mobile/", "display": "standalone", "background_color": "#0f1115", "theme_color": "#0f1115", "icons": [{"src": "/mobile/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}]}).encode()
 MOBILE_ICON = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192"><rect width="192" height="192" rx="36" fill="#0f1115"/><circle cx="96" cy="96" r="52" fill="#3ecf8e"/></svg>'
-MOBILE_ASSETS = {"/mobile": (MOBILE_PAGE.encode(), "text/html; charset=utf-8"), "/mobile/": (MOBILE_PAGE.encode(), "text/html; charset=utf-8"),
-                 "/mobile/manifest.webmanifest": (MANIFEST_JSON, "application/manifest+json"), "/mobile/icon.svg": (MOBILE_ICON, "image/svg+xml"),
+MOBILE_ASSETS = {"/mobile/manifest.webmanifest": (MANIFEST_JSON, "application/manifest+json"), "/mobile/icon.svg": (MOBILE_ICON, "image/svg+xml"),
                  "/mobile/sw.js": (SW_JS.encode(), "text/javascript; charset=utf-8")}
 
 def test_log_page(d, lg):
@@ -6347,6 +6347,11 @@ HUB_STREAM_JS = (pathlib.Path(__file__).resolve().parent / "hub-stream.js").read
 def stream_tag():
     """The page's push stream: its path, then the script; the mux gives the path its profile prefix."""
     return f'<script>window.SQUAD_HUB_STREAM="{hubstream.PATH}";\n{HUB_STREAM_JS}</script>'
+
+def mobile_html():
+    """The phone page as the hub serves it: its push stream rides in the page only while the stream is on."""
+    stream = f'window.SQUAD_HUB_STREAM="{hubstream.PATH}";\n{HUB_STREAM_JS}' if hubstream.enabled() else ""
+    return MOBILE_PAGE.replace("/*STREAM*/", stream).encode()
 
 def served_page(login=""):
     """The page as the hub serves it, every placeholder substituted. The model-id shape replaces its quoted placeholder:
@@ -6480,7 +6485,8 @@ def request_target(h):
     return parts[1] if len(parts) > 1 and parts[1].startswith("//") else h.path
 
 CHART_INPUTS = {"cfd": lambda: history_key(), "lead": lambda: (board_cache.get("t"), history_key())}
-VERSIONS = hubstream.Versions({"runs": lambda: run_list(), **CHART_INPUTS})
+VERSIONS = hubstream.Versions({"runs": lambda: run_list(), "board": lambda: json.loads(board_served()[0]), "sessions": lambda: sessions_payload(), **CHART_INPUTS})
+TRANSCRIPTS = hubstream.Transcripts(lambda sid: sessions.conversation(PROFILE_NAME, sid, None, profiles_of=profiles_of_cwd))
 
 def stream_origin_ok(h, tailnet):
     """A stream opens for no origin but this hub's own (loopback) or, on the tailnet, the tailnet's; an absent Origin is a non-browser reader."""
@@ -6527,9 +6533,14 @@ class H(BaseHTTPRequestHandler):
         except (OSError, http.client.HTTPException): pass
         finally: up.close()
     def stream(self, a):
-        """The page's push stream: every subject the reader does not hold yet, then a heartbeat while nothing changes."""
+        """The page's push stream: every subject the reader does not hold yet, the conversations it watches from its offsets,
+        then a heartbeat while nothing changes. Each subject is read once a tick, whatever the pages that watch it."""
         if not stream_origin_ok(self, a.tailnet): return self.refuse("forbidden origin")
-        held = hubstream.held_from(self.path.partition("?")[2])
+        query = self.path.partition("?")[2]
+        held = hubstream.held_from(query)
+        at = hubstream.conv_from(query)
+        watched = list(at)
+        for sid in watched: TRANSCRIPTS.watch(sid)
         self.protocol_version = "HTTP/1.1"   # the body is streamed, so its end is framed: chunked, then the close
         self.send_response(200); self.send_header("Content-Type", hubstream.CTYPE); self.send_header("Cache-Control", "no-store")
         self.send_header("Transfer-Encoding", "chunked"); self.send_header("Connection", "close"); self.end_headers()
@@ -6539,16 +6550,24 @@ class H(BaseHTTPRequestHandler):
         quiet = time.monotonic()
         try:
             while True:
-                VERSIONS.refresh(hubstream.tick())
-                fresh = VERSIONS.newer(held)
-                for name, v in sorted(fresh.items()):
-                    chunk(hubstream.event(name, v)); held[name] = v
+                tick = hubstream.tick()
+                VERSIONS.refresh(tick)
+                sent = False
+                for name, (v, body) in sorted(VERSIONS.fresh(held).items()):
+                    chunk(hubstream.event(name, v, None if name == "runs" else body)); held[name] = v; sent = True
+                for sid in watched:
+                    TRANSCRIPTS.refresh(sid, tick)
+                    events, epoch, offset = TRANSCRIPTS.pull(sid, *at[sid])
+                    for name, obj in events: chunk(hubstream.frame(name, obj)); sent = True
+                    at[sid] = (epoch, offset)
                 now = time.monotonic()
-                if fresh: quiet = now
+                if sent: quiet = now
                 elif now - quiet >= hubstream.HEARTBEAT_SECONDS:
                     chunk(b": ping\n\n"); quiet = now
                 time.sleep(hubstream.TICK_SECONDS)
         except OSError: return
+        finally:
+            for sid in watched: TRANSCRIPTS.unwatch(sid)
 
     def do_GET(self):
         a = access(self, route_action("GET", self.path))
@@ -6613,6 +6632,7 @@ class H(BaseHTTPRequestHandler):
             self.send_response(200); self.send_header("Content-Type", got[1]); self.send_header("Cache-Control", "max-age=3600")
             self.send_header("Content-Length", str(len(got[0]))); self.end_headers(); self.wfile.write(got[0]); return
         elif self.path.startswith("/api/sessions"): body, ct = json.dumps(sessions_payload()).encode(), "application/json"
+        elif self.path.split("?", 1)[0] in ("/mobile", "/mobile/"): body, ct = mobile_html(), "text/html; charset=utf-8"
         elif (asset := MOBILE_ASSETS.get(self.path.split("?", 1)[0])): body, ct = asset
         else: body, ct = served_page(a.login).encode(), "text/html; charset=utf-8"
         self.send_response(200); self.send_header("Content-Type", ct); self.send_header("Cache-Control", "no-store")

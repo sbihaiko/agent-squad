@@ -324,6 +324,8 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 #5aa9ff}
 <style>:root{--sq-ov-bottom:calc(72px + env(safe-area-inset-bottom))}</style>
 <!--OVERLAY-->
 <script>
+/*STREAM*/
+const squadStream = window.squadStream || { on() {}, watch() {}, unwatch() {}, live: () => false };
 /*GESTURE*/
 /*MOVE*/
 /*RUN*/
@@ -806,29 +808,32 @@ const refresh = () => { renderBoard(); renderSheet(); renderFilters(); };
 const step = g => { offBoard = null; view = sheetStep(view, shown, g); refresh(); };
 async function loadBoard(fresh) {
   if (!board) renderBoard();   // before the first read answers, the board says it is loading (#1008)
-  try {
-    const b = await call("/api/board", fresh);
-    if (!b.groups) throw new Error(b.error || "The board is not ready.");
-    // The open sheet keeps its issue and column by identity, never by index (#1005).
-    const open = view.sheet && !offBoard && shown[view.card];
-    const id = open ? { name: (carouselColumns(((board && board.groups) || []), ((board && board.groups) || []).map(g => columnCards(g).length), bo.hideEmpty !== false).shown[view.col] || {}).name, key: cardKey(open) } : null;
-    board = b;
-    if (id) {
-      const gs = b.groups, sh = carouselColumns(gs, gs.map(g => columnCards(g).length), bo.hideEmpty !== false).shown;
-      view = anchorView(view, sh.map(g => ({ name: g.name, flat: laneModelOf(g).flat })), id);
-    }
-    // The seen set holds every card key a board read gave in this page session, so only a card new to the board fades.
-    const keys = b.groups.flatMap(g => g.items.map(cardKey));
-    freshNow = new Set(freshCards(seenCards, keys));
-    seenCards = new Set([...(seenCards || []), ...keys]);
-    // A refusal stays on its card while the card keeps the column it was refused in; a read the move reached clears it.
-    for (const n of Object.keys(reasons)) if (rowColumn(+n) !== reasons[n].col) delete reasons[n];
-    $("bmsg").textContent = b.err ? "(stale)" : "";
-    refresh();
-    freshNow = new Set();
-  } catch (e) { $("bmsg").textContent = e.message; }
+  try { applyBoard(await call("/api/board", fresh)); }
+  catch (e) { $("bmsg").textContent = e.message; }
 }
-every("board", loadBoard, 10000);
+// A board read or a pushed board draws the same way: the payload is the board, whichever route carried it.
+function applyBoard(b) {
+  if (!b.groups) throw new Error(b.error || "The board is not ready.");
+  // The open sheet keeps its issue and column by identity, never by index (#1005).
+  const open = view.sheet && !offBoard && shown[view.card];
+  const id = open ? { name: (carouselColumns(((board && board.groups) || []), ((board && board.groups) || []).map(g => columnCards(g).length), bo.hideEmpty !== false).shown[view.col] || {}).name, key: cardKey(open) } : null;
+  board = b;
+  if (id) {
+    const gs = b.groups, sh = carouselColumns(gs, gs.map(g => columnCards(g).length), bo.hideEmpty !== false).shown;
+    view = anchorView(view, sh.map(g => ({ name: g.name, flat: laneModelOf(g).flat })), id);
+  }
+  // The seen set holds every card key a board read gave in this page session, so only a card new to the board fades.
+  const keys = b.groups.flatMap(g => g.items.map(cardKey));
+  freshNow = new Set(freshCards(seenCards, keys));
+  seenCards = new Set([...(seenCards || []), ...keys]);
+  // A refusal stays on its card while the card keeps the column it was refused in; a read the move reached clears it.
+  for (const n of Object.keys(reasons)) if (rowColumn(+n) !== reasons[n].col) delete reasons[n];
+  $("bmsg").textContent = b.err ? "(stale)" : "";
+  refresh();
+  freshNow = new Set();
+}
+squadStream.on("board", applyBoard);
+every("board", () => { if (!squadStream.live()) loadBoard(); }, 10000);
 
 $("bsp").onclick = () => { bo.specs = (specMode() + 1) % 3; saveB(); refresh(); };
 $("hide-empty").onclick = () => { bo.hideEmpty = bo.hideEmpty === false; saveB(); refresh(); };
@@ -1241,7 +1246,8 @@ every("runs", () => { if ($("runview").hidden) loadRuns(); }, 10000);
 every("runs", () => { if (runId && !$("runview").hidden) loadRunControl(); }, 10000);   // the run may pause, resume or end while the screen is open
 // terminals:begin
 const termOpen = () => !$("termview").hidden;
-let termSid = null, termCursor = null, termLast = null, termBusy = false;
+let termSid = null, termCursor = null, termBusy = false;
+const termDrawn = new Set();
 // One composer per session (#1006): its draft, its send feedback, its pending request, and the request id a retry reuses.
 const termDrafts = new Map();
 const termDraft = sid => { if (!termDrafts.has(sid)) termDrafts.set(sid, { text: "", sent: "", pending: false, cid: null, cidText: null }); return termDrafts.get(sid); };
@@ -1262,35 +1268,55 @@ function turnRow(t) {
   d.append(who, text);
   return d;
 }
-async function loadSessions() {
-  try {
-    const d = await call("/api/sessions");
-    $("sessions").replaceChildren(...d.groups.flatMap(g => g.sessions.map(s => sessionRow(g.project, s))));
-    $("sessions-msg").textContent = "";
-  } catch (e) { $("sessions-msg").textContent = e.message; }
+function applySessions(d) {
+  $("sessions").replaceChildren(...d.groups.flatMap(g => g.sessions.map(s => sessionRow(g.project, s))));
+  $("sessions-msg").textContent = "";
 }
+async function loadSessions() {
+  try { applySessions(await call("/api/sessions")); }
+  catch (e) { $("sessions-msg").textContent = e.message; }
+}
+squadStream.on("sessions", applySessions);
 function readConversation(before) {
   return call("/api/sessions/conversation?sid=" + encodeURIComponent(termSid) + (before ? "&before=" + before : ""));
 }
-async function loadConversation() {
+// Each turn is drawn once: the drawn ids are the record, so a poll, a push and an older page never repeat one.
+function drawTurns(turns) {
+  const fresh = turns.filter(t => !termDrawn.has(t.id));
+  if (!fresh.length) return;
+  $("termview-turns").append(...fresh.map(turnRow));
+  for (const t of fresh) termDrawn.add(t.id);
+}
+async function loadConversation(force) {
   if (termBusy || !termOpen() || !termSid) return;
+  if (!force && squadStream.live()) return;
   termBusy = true;
   const sid = termSid, el = $("termview-turns");
   try {
     const page = await readConversation(null);
     if (sid !== termSid) return;
-    const keys = page.turns.map(t => JSON.stringify(t));
-    const atEnd = termLast === null || el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-    if (termLast === null) termCursor = page.next;
-    const fresh = page.turns.slice(termLast === null ? 0 : keys.lastIndexOf(termLast) + 1);
-    if (fresh.length) { el.append(...fresh.map(turnRow)); termLast = keys[keys.length - 1]; }
+    const atEnd = termDrawn.size === 0 || el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    if (termDrawn.size === 0) termCursor = page.next;
+    drawTurns(page.turns);
     if (atEnd) el.scrollTop = el.scrollHeight;
+    if (force) squadStream.watch(sid, page.epoch, page.end);
     $("termview-older").hidden = termCursor === null;
     await loadCard();
     $("termview-msg").textContent = "";
   } catch (e) { if (sid === termSid) $("termview-msg").textContent = e.message; }
   finally { termBusy = false; }
 }
+squadStream.on("conversation", d => {
+  if (d.sid !== termSid || !termOpen()) return;
+  const el = $("termview-turns"), atEnd = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  drawTurns(d.lines.split("\n").filter(Boolean).map(line => JSON.parse(line)));
+  if (atEnd) el.scrollTop = el.scrollHeight;
+});
+squadStream.on("gap", d => {
+  if (d.sid !== termSid) return;
+  $("termview-turns").replaceChildren();
+  termDrawn.clear();
+});
 // The question card the open session waits on (#1093) belongs to the session: the page draws the one the hub reads, so a
 // card still pending when the page closed is answerable when it comes back.
 let termCard = null;   // { id, el } of the drawn card
@@ -1322,6 +1348,7 @@ async function loadOlder() {
     const page = await readConversation(termCursor);
     if (sid !== termSid) return;
     el.prepend(...page.turns.map(turnRow));
+    for (const t of page.turns) termDrawn.add(t.id);
     el.scrollTop += el.scrollHeight - before;
     termCursor = page.next;
     $("termview-older").hidden = termCursor === null;
@@ -1330,16 +1357,20 @@ async function loadOlder() {
 }
 function openConversation(sid, name) {
   keepDraft();
-  termSid = sid; termCursor = null; termLast = null; dropCard();
+  termSid = sid; termCursor = null; termDrawn.clear(); dropCard();
   $("termview-turns").replaceChildren();
   $("termview-name").textContent = name;
   $("termview-older").hidden = true;
   $("termview-msg").textContent = "";
   showDraft();
   $("termview").hidden = false;
-  loadConversation();
+  loadConversation(true);
 }
-function closeConversation() { keepDraft(); $("termview").hidden = true; termSid = null; dropCard(); $("termview-turns").replaceChildren(); }
+function closeConversation() {
+  keepDraft(); $("termview").hidden = true;
+  if (termSid) squadStream.unwatch(termSid);
+  termSid = null; dropCard(); $("termview-turns").replaceChildren();
+}
 $("sessions").onclick = e => { const b = e.target.closest(".runrow"); if (b) openConversation(b.dataset.sid, b.dataset.name); };
 $("termview-back").onclick = closeConversation;
 $("termview-older").onclick = loadOlder;
@@ -1367,7 +1398,7 @@ $("termview-send").onclick = async () => {
   } catch (err) { say(err.message); }
   finally { d.pending = false; if (sid === termSid) $("termview-send").disabled = false; }
 };
-every("terminals", () => { if (!termOpen()) loadSessions(); }, 10000);
+every("terminals", () => { if (!termOpen() && !squadStream.live()) loadSessions(); }, 10000);
 // terminals:end
 // The first tab was "Status" before it became the Monitor: a stored "status" opens the Monitor.
 function tabOf(s) { const t = s === "status" ? "monitor" : s; return tabs.some(b => b.dataset.tab === t) ? t : tabs[0].dataset.tab; }
