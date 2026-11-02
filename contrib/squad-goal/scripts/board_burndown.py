@@ -110,3 +110,48 @@ def _day(t, tz):
 
 def _start(day, tz):
     return datetime.combine(day, time.min, tzinfo=tz).timestamp()
+
+
+def burnup_series(points, reads, zone="UTC"):
+    """The burn-up of one spec on the days of its whole reads, from board_history's change points: each day carries the scope
+    and the delivered count at its end. Delivered never falls: a reopened child keeps its count. A day with no whole read is
+    a gap, never a zero. The guide runs from the first point to the scope at the day the trailing pace reaches it."""
+    if not points:
+        return {"start": None, "days": [], "gaps": [], "scope": None, "guide": None, "guide_reason": None, "reason": NO_CHILD}
+    tz = ZoneInfo(zone)
+    start = _day(_epoch(points[0]["t"]), tz)
+    read_days = {_day(t, tz) for t in reads}
+    last_read = max((d for d in read_days if d >= start), default=None)
+    if last_read is None:
+        return {"start": start.isoformat(), "days": [], "gaps": [], "scope": None, "guide": None, "guide_reason": None,
+                "reason": NO_READ}
+    days, gaps, k, scope, delivered = [], [], 0, 0, 0
+    day = start
+    while day <= last_read:
+        end = _start(day + timedelta(days=1), tz)
+        while k < len(points) and _epoch(points[k]["t"]) < end:
+            scope, delivered = points[k]["scope"], max(delivered, points[k]["done"])
+            k += 1
+        n = (day - start).days + 1
+        if day in read_days: days.append({"day": day.isoformat(), "n": n, "scope": scope, "delivered": delivered})
+        else: gaps.append({"day": day.isoformat(), "n": n})
+        day += timedelta(days=1)
+    guide, why = _burnup_guide(days, last_read, start, scope)
+    return {"start": start.isoformat(), "days": days, "gaps": gaps, "scope": scope, "guide": guide, "guide_reason": why,
+            "reason": None}
+
+
+def _burnup_guide(days, last_read, start, scope):
+    """(guide, reason): the guide from the first point to the scope at the deadline, or no guide and the reason. The deadline
+    is the day the trailing closes reach the scope, counted in whole days."""
+    first, last = days[0], days[-1]
+    window = (last_read - timedelta(days=TRAILING_DAYS - 1)).isoformat()
+    base = max([d["delivered"] for d in days if d["day"] < window], default=0)
+    closed, remaining = last["delivered"] - base, scope - last["delivered"]
+    if remaining == 0: target, source = last_read, "done"
+    elif closed: target, source = last_read + timedelta(days=-(-remaining * TRAILING_DAYS // closed)), "trailing"
+    else: return None, f"no ticket closed in the last {TRAILING_DAYS} days"
+    span = (target - start).days + 1 - first["n"]
+    pace = (scope - first["delivered"]) / span if span else None
+    return {"source": source, "pace": pace, "from": {"day": first["day"], "n": first["n"], "delivered": first["delivered"]},
+            "to": {"day": target.isoformat(), "n": (target - start).days + 1, "scope": scope}}, None
