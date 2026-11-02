@@ -149,4 +149,26 @@ out=$(env SG_STATE="$ST" SG_REPO=o/r SG_BASE=dev SG_NIGHTLY_REMOTE="$T/origin.gi
   SG_NIGHTLY_PARALLEL="$T/five.sh" SG_NIGHTLY_SERIAL="$T/serial.sh" HEALTH_NOTIFY="$T/notify.sh" bash "$S/nightly.sh" 2>&1); rc=$?
 [ $rc = 1 ] && ok "a configured command that exits 5 is still red" || ko "configured exit 5 rc $rc"
 
+# 10) (#1046, ADR-0164) an open bound marker: the nightly proves the marked tip, not the dev tip, and settles the marker with
+#     the result. Dev moves past the marked tip first, so the record can only name the marked one.
+$G -C "$T/src" commit -q --allow-empty -m two; $G -C "$T/src" push -q "$T/origin.git" dev; newtip=$($G -C "$T/src" rev-parse dev)
+rm -f "$T/ran.log" "$ST/alerts.log" "$ST/nightly-result" "$ST/promote-bound" "$ST/promote-bound-settled"; mark
+printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$sha" 1 "squad/x.py" >> "$ST/promote-bound"
+out=$(ng); rc=$?; rec
+[ "$rc $r_res $r_sha" = "0 pass $sha" ] && ok "an open bound marker makes the nightly prove the marked tip" \
+  || ko "marked tip: rc $rc, record '$r_res $r_sha', dev $newtip (out: $out)"
+IFS=$'\t' read -r _ st_t st_r < "$ST/promote-bound-settled" 2>/dev/null
+[ "$st_t $st_r" = "$sha pass" ] && ok "the nightly settles the marker with its result" || ko "settled: '$st_t $st_r'"
+
+# 10b) the marker is settled: the next day's nightly proves the dev tip again
+mark; out=$(ng); rc=$?; rec
+[ "$rc $r_sha" = "0 $newtip" ] && ok "a settled marker no longer changes the nightly tip" || ko "after settle: rc $rc, record sha $r_sha, dev $newtip"
+
+# 10c) a red on the marked tip is settled as red and fails the record: the nightly never turns a red into a pass
+rm -f "$ST/promote-bound-settled" "$ST/alerts.log" "$ST/nightly-result"; mark
+out=$(ng FAIL_parallel=1); rc=$?; rec
+IFS=$'\t' read -r _ st_t st_r < "$ST/promote-bound-settled" 2>/dev/null
+[ "$rc $r_res $r_sha" = "1 fail $sha" ] && [ "$st_t $st_r" = "$sha fail" ] && ok "a red on the marked tip fails the record and settles the marker as red" \
+  || ko "red marked tip: rc $rc, record '$r_res $r_sha', settled '$st_t $st_r'"
+
 rm -rf "$T"; exit $fail

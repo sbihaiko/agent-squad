@@ -182,16 +182,23 @@ for _ in $(seq 1 60); do sleep 0.25; [ ! -e "$SG_STATE/promote-reserve" ] && bre
 wait "$bp"; rc=$?
 [ "$rc" = 0 ] && [ "$(tip stg)" = "$tb" ] && ok "a proof that lifted its reserve still promotes its tip" || ko "lifted proof: rc $rc, stg $(tip stg), dev $tb"
 rm -f "$T/suite-sleep"
-adv dev slow; ts=$(tip dev); before=$(tip stg); echo 30 > "$T/suite-sleep"; rm -f "$SG_STATE/promote-indeterminate" "$T/suite-rc"
+# ADR-0164 (#1046): a bound the delta cannot carry still ships the tip. The proven base P is the tip before the slow commit, and the
+# slow commit adds two paths outside the delta map, so the delta refuses and the bound-ended proof promotes the tip with a marker.
+p0=$(tip dev); printf '%s\tfull\tpass\t%s\n' "$(date +%s)" "$p0" > "$SG_STATE/gate-status-full"; rm -f "$SG_STATE/gate-status-delta"
+$W fetch -q origin; $W checkout -q -B dev origin/dev; mkdir -p "$T/w/squad"; echo x > "$T/w/squad/slow.py"; echo x > "$T/w/squad/other.py"
+$W add -A; $W commit -q -m slow; $W push -q origin dev
+ts=$(tip dev); echo 30 > "$T/suite-sleep"; rm -f "$SG_STATE/promote-indeterminate" "$SG_STATE/promote-bound" "$T/suite-rc"
 s0=$(date +%s); SG_PROMOTE_BOUND_SECONDS=1 SG_PROMOTE_FALLBACK_SECONDS=0 SG_PROMOTE_RESERVE_SECONDS=600 bash "$d/promote-pass.sh" > "$T/out3" 2>&1; rc=$?; el=$(( $(date +%s) - s0 ))
-[ "$rc" != 0 ] && [ "$el" -lt 15 ] && ok "a proof past its deadline is killed, not awaited (${el}s)" || ko "deadline: rc $rc after ${el}s"
-[ "$(tip stg)" = "$before" ] && ok "a killed proof promotes nothing" || ko "a killed proof promoted stg to $(tip stg)"
-IFS=$'\t' read -r _ mt mb < "$SG_STATE/promote-indeterminate" 2>/dev/null
-[ "$mt" = "$ts" ] && [ "$mb" = 1 ] && ok "the indeterminate record names the tip and the bound it passed" \
-  || ko "indeterminate record: '$(cat "$SG_STATE/promote-indeterminate" 2>/dev/null)'"
-[ "$(/usr/bin/grep -c "^$ts " "$SG_STATE/promote-pass.tips" 2>/dev/null)" = 0 ] && ok "an indeterminate tip is not marked refused, so a later pass retries it" \
-  || ko "the indeterminate tip was marked refused"
-/usr/bin/grep -q "promote-pass: $ts not tested" "$SG_STATE/promote.log" && ok "the log says the tip is not tested" || ko "no not-tested line for $ts"
+[ "$rc" = 0 ] && [ "$el" -lt 15 ] && ok "a proof past its bound is killed, not awaited, and its tip ships (${el}s)" || ko "bound: rc $rc after ${el}s, out '$(cat "$T/out3")'"
+[ "$(tip stg)" = "$ts" ] && ok "a bound the delta cannot carry still promotes the dev tip" || ko "bound ship: stg $(tip stg), dev $ts"
+IFS=$'\t' read -r _ mt mb mg < "$SG_STATE/promote-bound" 2>/dev/null
+[ "$mt" = "$ts" ] && [ "$mb" = 1 ] && ok "the bound marker names the tip and the bound it passed" \
+  || ko "bound marker: '$(cat "$SG_STATE/promote-bound" 2>/dev/null)'"
+case "$mg" in *"squad/other.py, squad/slow.py"*) ok "the bound marker names every part the delta did not cover";; *) ko "bound marker gap: '$mg'";; esac
+/usr/bin/grep -q "^$ts promoted: bound-ended" "$SG_STATE/promote-pass.tips" && ok "the tip is marked bound-ended, not as a full or a delta pass" \
+  || ko "tip mark: '$(/usr/bin/grep "^$ts " "$SG_STATE/promote-pass.tips" 2>/dev/null)'"
+[ "$(/usr/bin/grep -c "^$ts not promoted" "$SG_STATE/promote-pass.tips" 2>/dev/null)" = 0 ] && ok "a bound-ended tip is not marked refused" || ko "the bound-ended tip was marked refused"
+/usr/bin/grep -q "promote-pass: $ts not tested" "$SG_STATE/promote.log" && ok "the log says the tip is not tested until the nightly proves it" || ko "no not-tested line for $ts"
 rm -f "$T/suite-sleep"
 
 # An owner-named bound still reserves the machine while the suite runs, and the marker is gone after the proof: a standing
@@ -325,6 +332,32 @@ env -u SG_GATE_PY -u SG_PROMOTE_SUITE SG_CHECKOUT="$T/wt-novenv" bash "$d/promot
   || ko "no venv of its own: rc $rc, stg $(tip stg), out '$(cat "$T/out")'"
 /usr/bin/grep -q "w/.venv/bin/python" "$T/py.log" 2>/dev/null && ok "the suite's interpreter is the venv beside the common git directory" \
   || ko "interpreter used: '$(cat "$T/py.log" 2>/dev/null)'"
+
+# ADR-0164 (#1046): promote-stg.sh takes the bound-ended proof only for the tip promote-pass.sh recorded indeterminate, and never for a
+# tip whose last proof was red. A red the delta measured holds the tip, and writes no indeterminate record.
+adv dev nobound; tn=$(tip dev); rm -f "$SG_STATE/promote-indeterminate"
+SG_PROMOTE_PROOF=bound bash "$d/promote-stg.sh" > "$T/out7" 2>&1; rc=$?
+[ "$rc" != 0 ] && [ "$(tip stg)" = "$ts" ] && /usr/bin/grep -q "no bound-ended proof" "$T/out7" && ok "a bound-ended proof for a tip with no indeterminate record is refused" \
+  || ko "no indeterminate record: rc $rc, stg $(tip stg), out '$(cat "$T/out7")'"
+adv dev redlast; tr=$(tip dev); printf '%s\t%s\t1\n' "$(date +%s)" "$tr" > "$SG_STATE/promote-indeterminate"
+printf '%s\tfull\tfail\t%s\n' "$(date +%s)" "$tr" > "$SG_STATE/gate-status-full"
+SG_PROMOTE_PROOF=bound bash "$d/promote-stg.sh" > "$T/out8" 2>&1; rc=$?
+[ "$rc" != 0 ] && [ "$(tip stg)" = "$ts" ] && /usr/bin/grep -q "is a fail" "$T/out8" && ok "a bound-ended proof for a tip whose last full proof was red is refused" \
+  || ko "red full proof: rc $rc, stg $(tip stg), out '$(cat "$T/out8")'"
+printf '%s\tfull\tpass\t%s\n' "$(date +%s)" "$ts" > "$SG_STATE/gate-status-full"; printf '%s\tdelta\tfail\t%s\t%s\tx\n' "$(date +%s)" "$ts" "$tr" > "$SG_STATE/gate-status-delta"
+SG_PROMOTE_PROOF=bound bash "$d/promote-stg.sh" > "$T/out9" 2>&1; rc=$?
+[ "$rc" != 0 ] && [ "$(tip stg)" = "$ts" ] && /usr/bin/grep -q "delta proof of the dev tip is a fail" "$T/out9" && ok "a bound-ended proof for a tip whose last delta was red is refused" \
+  || ko "red delta: rc $rc, stg $(tip stg), out '$(cat "$T/out9")'"
+rm -f "$SG_STATE/gate-status-delta"
+$W fetch -q origin; $W checkout -q -B dev origin/dev; p1=$(tip dev); printf '%s\tfull\tpass\t%s\n' "$(date +%s)" "$p1" > "$SG_STATE/gate-status-full"
+echo x > "$T/w/contrib/squad-goal/scripts/test-nightly.sh"; $W add -A; $W commit -q -m covered-red; $W push -q origin dev
+td=$(tip dev); rm -f "$SG_STATE/promote-indeterminate" "$SG_STATE/promote-bound" "$SG_STATE/gate-status-delta"; echo 30 > "$T/suite-sleep"
+SG_DELTA_SUITE=false SG_PROMOTE_BOUND_SECONDS=1 SG_PROMOTE_FALLBACK_SECONDS=0 bash "$d/promote-pass.sh" > "$T/out10" 2>&1; rc=$?
+[ "$rc" != 0 ] && [ "$(tip stg)" = "$ts" ] && [ ! -e "$SG_STATE/promote-indeterminate" ] && [ ! -e "$SG_STATE/promote-bound" ] \
+  && ok "a red the delta measured holds the tip and writes no bound-ended record" || ko "red delta in pass: rc $rc, stg $(tip stg), out '$(cat "$T/out10")'"
+/usr/bin/grep -q "^$td not promoted: the delta suite failed" "$SG_STATE/promote-pass.tips" && ok "the delta's red is marked refused for its tip" \
+  || ko "delta red mark: '$(/usr/bin/grep "^$td " "$SG_STATE/promote-pass.tips" 2>/dev/null)'"
+rm -f "$T/suite-sleep"
 
 rm -f "$T/suite-rc" "$T"/checks-*
 
