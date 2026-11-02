@@ -60,6 +60,28 @@ seen = {}
 hub.subprocess.run = lambda argv, **kw: seen.update(env=kw.get("env") or {}) or type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 real_write([7])
 check("the owner's arrow names the owner as its dispatch context", seen["env"].get("SG_MOVE_BY") == "owner", seen)
+import json, pathlib
+hub.BATCH_AUDIT = pathlib.Path(os.environ["SG_CHECKOUT"]) / "batch.jsonl"
+rc = lambda code, out, err: type("R", (), {"returncode": code, "stdout": out, "stderr": err})()
+batch_spec = {"n": 30, "i": 130, "s": "open", "st": "Backlog", "l": ["spec"], "t": "t"}
+batch_ticket = {"n": 31, "i": 131, "s": "open", "st": "Backlog", "l": [], "pa": 30, "t": "t"}
+def batch(confirm):
+    hub.board_cache["items"] = [dict(batch_spec), dict(batch_ticket)]
+    subs["answer"] = [{"number": 31, "state": "open", "labels": []}]
+    calls.clear()
+    return hub.promote_batch({"batch": True, "spec": 30, "confirm": confirm}, "owner")
+hub.promote_write = lambda issues, add=False: calls.append((issues, add)) or rc(0, "", "")
+got = batch(2)
+check("a confirmed spec batch moves the spec and its ticket in one write", got == {"ok": True, "count": 2, "moved": [30, 31]} and calls == [([30, 31], False)], (got, calls))
+got = batch(5)
+check("a spec batch with a changed count moves nothing", got.get("count") == 2 and "err" in got and calls == [], (got, calls))
+hub.promote_write = lambda issues, add=False: calls.append((issues, add)) or rc(1, "#30 -> Todo\n", "#31: refused\n")
+got = batch(2)
+check("a spec batch that fails part way names the cards that moved and those that did not",
+      got.get("moved") == [30] and got.get("unmoved") == [31] and "err" in got, (got, calls))
+lines = [json.loads(x) for x in hub.BATCH_AUDIT.read_text().splitlines()]
+check("each confirmed spec batch writes one audit line with its outcome",
+      [x["outcome"] for x in lines] == ["moved", "refused", "partial"] and all(x["scope"] == 30 for x in lines), lines)
 PY
 )
 echo "$out"; case "$out" in *FAIL*|*Error*|*Traceback*) fail=1;; esac

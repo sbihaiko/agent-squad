@@ -740,7 +740,7 @@ def test_a_spec_plan_names_a_ticket_past_backlog_as_skipped_and_never_plans_it(h
 def test_a_spec_outside_backlog_is_refused_in_one_line(hub, monkeypatch, tmp_path):
     mod, port = hub
     spec_plan_fixture(mod, monkeypatch, tmp_path, [sub(20)])
-    next(i for i in mod.board_cache["items"] if i["n"] == 9)["st"] = "Todo"
+    next(i for i in mod.board_cache["items"] if i["n"] == 9)["st"] = "Doing"
     status, out = post(port, {"batch": True, "spec": 9}, path="/api/promote")
     assert status == 400 and "Backlog" in out.get("err", "") and "\n" not in out["err"], out
 
@@ -779,13 +779,78 @@ def test_a_ticket_reached_twice_enters_the_spec_plan_once(hub, monkeypatch, tmp_
     assert status == 200 and out == {"count": 3, "issues": [9, 20, 21], "skipped": []}, out
 
 
-def test_a_spec_plan_with_a_confirm_writes_nothing(hub, monkeypatch, tmp_path):
+def partial_writer(calls, moved, err):
+    """The board seam as it answers a batch that fails part way: each card it proved prints its move, and the call fails."""
+    def run(issues, add=False):
+        calls.append((issues, add))
+        return subprocess.CompletedProcess(["board.sh"], 1, "".join(f"#{n} -> Todo\n" for n in issues if n in moved), err)
+    return run
+
+
+def column_of(mod, n):
+    return next(i for i in mod.board_cache["items"] if i["n"] == n)["st"]
+
+
+def test_a_confirmed_spec_batch_moves_its_cards_in_one_write_with_the_spec_first(hub, monkeypatch, tmp_path):
     mod, port = hub
-    spec_plan_fixture(mod, monkeypatch, tmp_path, [sub(20)])
+    spec_plan_fixture(mod, monkeypatch, tmp_path, [sub(21), sub(20)])
+    calls = []
+    mod.promote_write = writer(calls)
+    status, out = post(port, {"batch": True, "spec": 9, "confirm": 3}, path="/api/promote")
+    assert status == 200 and out == {"ok": True, "count": 3, "moved": [9, 20, 21]}, out
+    assert calls == [([9, 20, 21], False)], calls
+    assert [column_of(mod, n) for n in (9, 20, 21)] == ["Todo", "Todo", "Todo"]
+
+
+def test_a_spec_batch_with_a_changed_count_is_refused_and_moves_nothing(hub, monkeypatch, tmp_path):
+    mod, port = hub
+    spec_plan_fixture(mod, monkeypatch, tmp_path, [sub(21), sub(20)])
     calls = []
     mod.promote_write = writer(calls)
     status, out = post(port, {"batch": True, "spec": 9, "confirm": 2}, path="/api/promote")
-    assert status == 400 and "err" in out, out
-    assert calls == [] and not mod.BATCH_AUDIT.exists()
+    assert status == 400 and out.get("count") == 3 and "not 2" in out.get("err", ""), out
+    assert calls == [] and [column_of(mod, n) for n in (9, 20, 21)] == ["Backlog"] * 3
+
+
+def test_a_spec_batch_that_fails_part_way_names_the_cards_that_moved_and_those_that_did_not(hub, monkeypatch, tmp_path):
+    mod, port = hub
+    spec_plan_fixture(mod, monkeypatch, tmp_path, [sub(21), sub(20)])
+    calls = []
+    mod.promote_write = partial_writer(calls, moved={9, 20}, err="#21: the board carries no 'Todo' on it after 3 reads\n")
+    status, out = post(port, {"batch": True, "spec": 9, "confirm": 3}, path="/api/promote")
+    assert status == 400 and out.get("moved") == [9, 20] and out.get("unmoved") == [21] and "read" in out.get("err", ""), out
+    assert [column_of(mod, n) for n in (9, 20, 21)] == ["Todo", "Todo", "Backlog"]
+    assert [json.loads(x)["outcome"] for x in mod.BATCH_AUDIT.read_text().splitlines()] == ["partial"]
+
+
+def test_a_second_spec_batch_moves_only_what_is_still_in_backlog(hub, monkeypatch, tmp_path):
+    mod, port = hub
+    spec_plan_fixture(mod, monkeypatch, tmp_path, [sub(21), sub(20)])
+    calls = []
+    mod.promote_write = writer(calls)
+    assert post(port, {"batch": True, "spec": 9, "confirm": 3}, path="/api/promote")[0] == 200
+    status, out = post(port, {"batch": True, "spec": 9}, path="/api/promote")
+    assert status == 200 and out["count"] == 0 and out["issues"] == [], out
+    status, out = post(port, {"batch": True, "spec": 9, "confirm": 0}, path="/api/promote")
+    assert status == 400 and out.get("count") == 0 and len(calls) == 1, (out, calls)
+    mod.board_cache["items"].append({"n": 22, "i": 122, "t": "ticket c", "s": "OPEN", "st": "Backlog", "l": [], "pa": 9})
+    sub_issues(monkeypatch, answer=[sub(20), sub(21), sub(22)])
+    status, out = post(port, {"batch": True, "spec": 9}, path="/api/promote")
+    assert status == 200 and out["count"] == 1 and out["issues"] == [22], out
+
+
+def test_a_spec_batch_writes_one_audit_line_per_confirmed_request(hub, monkeypatch, tmp_path):
+    mod, port = hub
+    spec_plan_fixture(mod, monkeypatch, tmp_path, [sub(21), sub(20)])
+    mod.promote_write = writer([])
+    post(port, {"batch": True, "spec": 9}, path="/api/promote")
+    post(port, {"batch": True, "spec": 9, "confirm": 2}, path="/api/promote")
+    post(port, {"batch": True, "spec": 9, "confirm": 3}, path="/api/promote")
+    lines = [json.loads(x) for x in mod.BATCH_AUDIT.read_text().splitlines()]
+    assert [x["outcome"] for x in lines] == ["refused", "moved"], lines
+    moved = lines[1]
+    assert moved["action"] == "promote-spec-batch" and moved["scope"] == 9 and moved["count"] == 3, moved
+    assert moved["issues"] == [9, 20, 21] and moved["moved"] == [9, 20, 21] and moved["who"] == "owner" and moved["at"], moved
+    assert lines[0]["moved"] == [] and lines[0]["count"] == 3, lines[0]
 
 
