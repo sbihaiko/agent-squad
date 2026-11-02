@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import os
+import platform
 import pty
 import secrets
 import signal
@@ -44,13 +45,16 @@ def lstart(pid: int) -> str:
     return out.stdout.strip()
 
 
+_SO_PEERCRED = 17  # Linux only; the socket module does not expose it on macOS
+
+
 def peer_cred(sock: socket.socket) -> tuple[int, int]:
-    if sys.platform == "darwin":
+    if platform.system() == "Darwin":
         pid = struct.unpack("i", sock.getsockopt(0, 2, struct.calcsize("i")))[0]  # SOL_LOCAL, LOCAL_PEERPID
         xucred = sock.getsockopt(0, 1, 76)  # SOL_LOCAL, LOCAL_PEERCRED; struct xucred is 76 bytes
         uid = struct.unpack("I", xucred[4:8])[0]
         return pid, uid
-    pid, uid, _ = struct.unpack("3i", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")))
+    pid, uid, _ = struct.unpack("3i", sock.getsockopt(socket.SOL_SOCKET, _SO_PEERCRED, struct.calcsize("3i")))
     return pid, uid
 
 
@@ -249,6 +253,8 @@ class Supervisor:
 
 
 class _Handler(socketserver.StreamRequestHandler):
+    server: "_Server"
+
     def handle(self) -> None:
         line = self.rfile.readline(1 << 20)
         try:
