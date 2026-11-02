@@ -69,11 +69,12 @@ def test_the_monitor_draws_gauges_tiles_and_the_spec_bar(hub):
     """, routes=_routes(hub))
     assert out["shown"], "the Monitor is the default for a new visitor"
     assert out["igs"].count("<svg") == 3 and 'stroke="hsl(' in out["igs"] and "ldred" in out["igs"]
-    for k in ("Gate", "Loop", "fast fail", "took 2m07s · avg 2m49s"):
+    for k in ("Gate", "fast fail", "took 2m07s · avg 2m49s"):
         assert k in out["ian"], k
     assert "Landed" not in out["ian"], "the owner removed the Landed tile (2026-11-01)"
+    assert "Loop" not in out["ian"], "the loop state lives in its own panel (#1071)"
     assert "Specs" in out["ispec"] and "role=progressbar" in out["ispec"]
-    assert out["sum"] == "ON · 1 fail"
+    assert out["sum"] == "1 fail"
 
 
 @pytest.mark.parametrize("stored, tab", [(None, "monitor"), ("status", "monitor"), ("monitor", "monitor"),

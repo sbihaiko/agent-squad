@@ -3972,20 +3972,66 @@ def promote(issue):
         tickets, err = spec_tickets(issue, item)
         if err: return {"err": err}
     cards = [item, *tickets]
+    err = write_cards(cards)
+    if err: return {"err": err}
+    return {"ok": True, "issue": issue, "to": PROMOTE_TO, "moved": [c["n"] for c in cards]}
+
+def write_cards(cards):
+    """The one write of a card set: the seam moves every card in one call, in the order given, so a spec's card lands before
+    its tickets (ADR-0142). Returns the refusal, or None when the cards moved and the cache follows them."""
     try: r = promote_write([c["n"] for c in cards], add=any(not c.get("i") for c in cards))   # no item id: the row came from the open-issue read (#815)
     except subprocess.TimeoutExpired as e:
         # board.py may have moved some of the cards before the writer ran out of time. The cache is not written over a move
         # it cannot prove; the board-dirty flag asks the next pass to read the columns as they now stand (#838).
         try: (STATE / "board-dirty").touch()
         except OSError: pass
-        return {"err": f"the writer did not answer in {int(e.timeout)} s: the move may be partial, and the board is read again"}
-    except Exception as e: return {"err": str(e)[:200] or "the writer did not answer"}
+        return f"the writer did not answer in {int(e.timeout)} s: the move may be partial, and the board is read again"
+    except Exception as e: return str(e)[:200] or "the writer did not answer"
     if r.returncode:
         lines = (r.stderr or r.stdout or f"exit {r.returncode}").strip().splitlines()
-        return {"err": (next((l for l in lines if l.startswith("#")), lines[0] if lines else "") or "the writer refused")[:300]}
+        return (next((l for l in lines if l.startswith("#")), lines[0] if lines else "") or "the writer refused")[:300]
     for c in cards: c["st"] = PROMOTE_TO   # the cache follows the write, so the next refresh shows the move without a GitHub read after it
     save_board()
-    return {"ok": True, "issue": issue, "to": PROMOTE_TO, "moved": [c["n"] for c in cards]}
+    return None
+
+BATCH_AUDIT = STATE / "board-batch.jsonl"   # one line per batch write the owner asked for: the count, the cards and who asked (#1098)
+def promote_batch_plan():
+    """The cards the batch moves, in write order, or the refusal. Every card the owner's move would start goes in, a spec
+    first, then the open Backlog tickets of every spec, then the rest, so a spec's card never lands after its tickets'.
+    A card reached twice moves once."""
+    moves = read_moves() if overlay_on() else {}
+    window = pending_window()
+    starts = [i for i in board_cache.get("items") or [] if promotable({**i, "st": drawn_column(i, moves, window)["st"]})]
+    specs = [i for i in starts if _columns_module.SPEC_LABEL in (i.get("l") or [])]
+    ordered, seen = [], set()
+    def add(card):
+        if card["n"] not in seen:
+            seen.add(card["n"])
+            ordered.append(card)
+    for spec in specs: add(spec)
+    for spec in specs:
+        tickets, err = spec_tickets(spec["n"], spec)
+        if err: return None, err
+        for ticket in tickets: add(ticket)
+    for card in starts: add(card)
+    return ordered, None
+def promote_batch(body, who):
+    """The owner's batch move (#1098). With no `confirm`, the hub answers the count it would move and the numbers, and nothing
+    moves. With `confirm` equal to that count, one write moves every card of the plan, and the hub records the count and who
+    asked. A count that changed since the owner read it is refused, so the owner confirms the number that moves."""
+    cards, err = promote_batch_plan()
+    if err: return {"err": err}
+    issues = [c["n"] for c in cards]
+    if "confirm" not in body: return {"count": len(issues), "issues": issues}
+    if not cards: return {"err": "no card is in Backlog"}
+    if type(body["confirm"]) is not int or body["confirm"] != len(cards): return {"err": f"the batch is {len(cards)} cards now, not {body['confirm']}: read it again"}
+    err = write_cards(cards)
+    record = {"at": dt.datetime.now().astimezone().isoformat(timespec="seconds"), "who": who, "action": "promote-batch",
+              "count": len(cards), "issues": issues, "ok": err is None}
+    if err: record["err"] = err
+    with BATCH_AUDIT.open("a") as f: f.write(json.dumps(record) + "\n")
+    if err: return {"err": err}
+    return {"ok": True, "count": len(cards), "moved": issues}
 
 _issue_cache = {}
 def gh_json(path, timeout=30):
@@ -4253,7 +4299,7 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #bbody .it .lbs{display:block;margin-top:4px}#bbody .it .lbs span{display:inline-block;background:var(--lb,#2a303b);border:1px solid transparent;border-radius:9px;padding:0 6px;margin:0 3px 2px 0;font-size:var(--fs-min);color:#c9d1d9}#bbody .it .lbs span.on{border-color:var(--warn);color:var(--fg)}
 #bbody .it .id:hover{color:var(--acc)}#bbody .it .tt{order:2;flex:1 1 100%;font-size:var(--fs-body);color:var(--fg)}#bbody .it>*{order:3}#bbody .it>.id{order:1}#bbody .it>.tt{order:2}#bbody .it>.lchip,#bbody .it>.bugc,#bbody .it>.rpo,#bbody .it>.pbg,#bbody .it>.cir,#bbody .it>.fz,#bbody .it>.pnd,#bbody .it>.pst{order:0;margin:0}#bbody .it>.dt{float:none}#bbody .it>.gstrip,#bbody .it>.blk,#bbody .it>.clos,#bbody .it>.prr,#bbody .it>.perr,#bbody .it>.ft{flex:1 1 100%;margin-top:2px}#bbody .it .hld{flex:1 1 100%;font-size:var(--fs-min);color:var(--mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#bbody .it .hld::before{content:"\25CF ";color:var(--s5)}#bbody .cell .it .lbs{display:none}
 #bbody .lchip{border-radius:10px;padding:0 8px;font-size:var(--fs-min);font-weight:600;border:1px solid #3a4252;line-height:20px;white-space:nowrap;color:var(--mute)}#bbody .lchip[data-k=spec]{color:var(--lc,var(--mute));border-color:var(--lc,#3a4252)}
-#bbody .it .pmp{display:inline-block;margin-top:4px;font:inherit;font-size:var(--fs-min);padding:0 7px;border-radius:9px;cursor:pointer;color:var(--acc);background:#12161c;border:1px solid var(--line)}#bbody .it .pmp:hover{border-color:var(--acc)}#bbody .it .pmp:disabled{opacity:.5;cursor:default}   /* the owner's move, on a Backlog card only (#560) */
+#bbody .it .pmp{display:inline-block;margin-top:4px;font:inherit;font-size:var(--fs-min);padding:0 7px;border-radius:9px;cursor:pointer;color:var(--acc);background:#12161c;border:1px solid var(--line)}#bbody .it .pmp:hover{border-color:var(--acc)}#bbody .it .pmp:disabled{opacity:.5;cursor:default}#bbody .bmv{display:inline-block;margin-left:8px;min-height:32px;padding:0 10px;font:inherit;font-size:var(--fs-min);border-radius:9px;cursor:pointer;color:var(--acc);background:#12161c;border:1px solid var(--line)}#bbody .bmv:disabled{opacity:.5;cursor:default}   /* the owner's move, on a Backlog card only (#560) */
 #bbody .it .prr{display:block;margin-top:2px;font-size:var(--fs-min);color:var(--mute);max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #bbody .it .blk{display:block;margin-top:4px;font-size:var(--fs-min);color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}#bbody .it .blk a{color:var(--acc);text-decoration:none}
 #bbody .prs .it .cir{display:inline-block;margin-left:6px;font-size:var(--fs-min);letter-spacing:.04em;text-transform:uppercase;color:var(--cc);border:1px solid color-mix(in srgb,var(--cc) 45%,transparent);border-radius:999px;padding:0 5px;white-space:nowrap}   /* the pull request's own CI rollup (#440) */
@@ -4376,7 +4422,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 @media (max-width:600px){body{height:auto}body.tkopen #win{margin-right:0}body.tkopen #board{width:auto}#win{display:block;overflow:visible}body.dockb #win{display:block;grid-template-columns:none;grid-template-rows:none}#side{width:auto;border-right:0;border-bottom:1px solid var(--line)}body.dockb #side{grid-row:auto;grid-column:auto}#main{min-height:50vh}body.dockb #main{grid-column:auto;grid-row:auto}#board{width:auto}body.dockb #board{grid-column:auto;grid-row:auto;height:60vh}#lbody input{width:92px}}
 /* The page frame of the mock (#889): the header with its tabs, and the sidebar cards. */
 /* The loop switch (#923): the strip's draining and starting states, Settings > Loop and Access, and the stop confirm. */
-#lopb .ls.draining,#lopb .ls.starting{color:var(--warn)}#lopb .ls{font-weight:600}#loopbtn{padding:2px 10px;font-size:var(--fs-min)}#loopbtn:disabled{opacity:.6;cursor:default}#lopb .ls.on{color:var(--ok)}#lopb .ls.off{color:var(--warn)}
+#lopb .ls.draining,#lopb .ls.starting{color:var(--warn)}#lopb .ls{font-weight:600}#lopb .lsw{position:relative;flex:none;width:52px;height:32px;padding:0;border:0;border-radius:16px;background:#3a414c;cursor:pointer;transition:background .15s}#lopb .lsw[aria-checked=true]{background:var(--ok)}#lopb .lsw i{position:absolute;top:3px;left:3px;width:26px;height:26px;border-radius:50%;background:#fff;transition:transform .15s}#lopb .lsw[aria-checked=true] i{transform:translateX(20px)}#lopb .lsw:disabled{opacity:.6;cursor:default}#lopb .lsw:focus-visible{outline:2px solid var(--acc);outline-offset:2px}#lopb .ls.on{color:var(--ok)}#lopb .ls.off{color:var(--warn)}
 #lopb .lnow{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#10141a;margin:6px 0}#lopb .lnow small{display:block;color:var(--mute)}#lopb .lnow button{margin-left:auto}
 #lopb .lwhy{color:var(--warn);margin:4px 0}#lopb .lerr{color:var(--err);margin:4px 0}#lopb ul.laud{list-style:none;margin:4px 0 0;padding:0}#lopb ul.laud li{padding:4px 0;border-bottom:1px solid var(--line)}#lopb ul.laud li:last-child{border:0}
 #accb .kr b{font-weight:500;font-size:var(--fs-min);line-height:1.3;text-align:right}#accb .ok{color:var(--ok)}#accb .no{color:var(--warn)}#accb p{color:var(--mute);margin:8px 0 0}
@@ -4442,13 +4488,13 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 <span class=pill id=bread></span></header>
 <div id=win>
 <aside id=side>
-<details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div class=ian id=ian></div><div id=ispec></div><div id=ispeed></div><div id=ilate></div></div></details>
+<details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div id=ispeed></div><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div class=ian id=ian></div><div id=ispec></div><div id=ilate></div></div></details>
 <details id=usage class=sp><summary>Usage</summary><div class=sb><div class="igs isub" id=isub title="subscriptions: the used share of the weekly window and the days to its reset"></div></div></details><details id=stats class=sp><summary>Spend<span class=sr id=stsr></span></summary><div class=sb><h4>Tokens <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Counted in tokens: in + out, the same count the ring draws."></span></h4><div class=tot id=tot></div><h4>Tokens over time <span class=row id=per></span></h4><div id=chart></div><h4>Model tokens · this month</h4><div class=m id=piet>in + out</div><div id=pie></div></div></details>
 <details id=lrd class=sp open><summary>Live runs<span class=sr id=lrs></span></summary><div class=sb id=lrun></div></details>
 </aside>
 <main id=content>
 <section id=tab-board class="pane on" aria-label=Board>
-<div id=board><div id=bhead><label>Swimlanes <select id=lmode title="swimlanes: one lane per spec (Spec), per wave (Wave), or no lanes, today's board (None)"><option value=spec>Spec</option><option value=wave>Wave</option><option value=none>None</option></select></label> <details id=fw class=fsel><summary>Waves: all</summary><div class=fpop id=fwl></div></details> <details id=fs class=fsel><summary>Specs: all</summary><div class=fpop id=fsl></div></details> <details id=fk class=fsel><summary>Kinds: all</summary><div class=fpop id=fkl></div></details> <button id=lcall title="collapse every swimlane">Collapse all</button> <button id=lexp title="expand every swimlane">Expand all</button> <label class=hck title="hide the swimlanes whose every ticket is closed"><input type=checkbox id=lhd> Hide done lanes</label> <span id=lhc></span><span id=bt class=m></span> <span id=hlrel class=hlrel hidden></span></div><div id=bcases></div><div id=bbody></div></div>
+<div id=board><div id=bhead><label>Swimlanes <select id=lmode title="swimlanes: one lane per spec (Spec), per wave (Wave), or no lanes, today's board (None)"><option value=spec>Spec</option><option value=wave>Wave</option><option value=none>None</option></select></label> <details id=fw class=fsel><summary>Waves: all</summary><div class=fpop id=fwl></div></details> <details id=fs class=fsel><summary>Specs: all</summary><div class=fpop id=fsl></div></details> <details id=fk class=fsel><summary>Kinds: all</summary><div class=fpop id=fkl></div></details> <button id=lcall title="collapse every swimlane">Collapse all</button> <button id=lexp title="expand every swimlane">Expand all</button> <label class=hck title="hide the swimlanes whose every ticket is closed"><input type=checkbox id=lhd> Hide done lanes</label> <span id=lhc></span><span id=sse class=m hidden></span><span id=bt class=m></span> <span id=hlrel class=hlrel hidden></span></div><div id=bcases></div><div id=bbody></div></div>
 </section>
 <section id=tab-flow class=pane aria-label="Flow charts">
 <div class=rkt id=flowtabs><button id=bruns title="the live run dashboards">Runs</button><button id=bflow title="the development flow: the cards in each column over time, from the flow history (SPEC 111)">Cumulative Flow Diagram</button><button id=bburn title="the scope, the done and the held of one spec over time, from the flow history (#1025)">Burn-Down</button><button id=blead title="the lead time of the closed cards, opened to closed (SPEC 111)">Lead Time</button></div>
@@ -4540,14 +4586,12 @@ function subsGauges(d){const xs=(d||{}).subs||[];if(!xs.length)return"";
 function instGauges(d){return ldCells(d).map(c=>`<div class="ig${c.red?" ldred":""}">${gaugeSvg((d||{})[c.k.toLowerCase()])}<span class=gv><b>${c.k}</b> ${esc(c.t)}</span></div>`).join("")}
 const instFact=(facts,k)=>(facts||[]).find(f=>f&&f.key===k);
 function instTile(k,f,lead){if(!f)return{k,text:"no reading",tone:"neutral"};const p=(f.parts||[])[0]||{},t=String(f.text||"").replace(lead,"").trim()||"?";return{k,text:t,tone:p.tone==="ok"||p.tone==="err"?p.tone:"neutral",tip:f.tip||null,detail:f.detail||null,times:p.times||null}}
-function instTiles(facts){const lp=instFact(facts,"loop"),on=lp?/:ON$/.test(lp.text):null;
- return[instTile("Gate",instFact(facts,"gate"),/^gate\s*/),
-  {k:"Loop",text:on===null?"?":on?"ON":"OFF",tone:on===null?"neutral":on?"ok":"err"}]}
+function instTiles(facts){return[instTile("Gate",instFact(facts,"gate"),/^gate\s*/)]}
 const iq=t=>esc(t).replace(/"/g,"&quot;");
 function tileHtml(t){const v=t.href?esc(t.text).replace(/PR #\d+/,x=>`<a target=_blank rel=noopener href="${iq(t.href)}">${x}</a>`):esc(t.text),
  d=(t.detail||[]).length?`<details><summary>${t.detail.length} failed</summary><ul>${t.detail.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></details>`:"";
  return `<div class="at ${t.tone}"${t.tip?` title="${iq(t.tip)}"`:""}><span class=ah><span class=dot aria-hidden="true"></span>${esc(t.k)}</span><span class=av>${v}</span>${t.times?`<span class=atm>${esc(t.times)}</span>`:""}${d}</div>`}
-function instSum(facts){const t=instTiles(facts);return t.find(x=>x.k==="Loop").text+" · "+t.filter(x=>x.k!=="Loop"&&x.tone==="err").length+" fail"}
+function instSum(facts){return instTiles(facts).filter(x=>x.tone==="err").length+" fail"}
 function speedRow(sp){if(!sp)return `<div class="spd none"><b>Throughput</b><span class=spn>no history yet</span></div>`;
  const {today,median,min,max,trend}=sp,hi=Math.max(max||0,today||0,1),at=v=>Math.max(0,Math.min(100,100*(v||0)/hi));
  const tag=trend==="up"?["\u25B2","accelerating","up"]:trend==="down"?["\u25BC","slowing","down"]:trend==="flat"?["\u25AC","steady","flat"]:["\u25CB","first day","wait"];
@@ -5182,6 +5226,9 @@ $("#flowb").onclick=e=>{if(LT.noclick){LT.noclick=false;return}
   if(e.target.id==="ltfit"){ltZoom(e.target.dataset.f,e.target.dataset.t);return}
   const k=e.target.closest("circle[data-k]");if(k){LT.pick=+k.dataset.k;drawFlow();return}const r=e.target.closest("tr[data-o]");if(r)showIssue(+r.dataset.o,"__REPO__")};
 $("#bflow").onclick=()=>flowOpen("cfd");$("#bburn").onclick=()=>flowOpen("burndown");$("#blead").onclick=()=>flowOpen("lead");addEventListener("resize",()=>{if(!$("#flowov").hidden)drawFlow()});
+function squadChart(k){if(FLOWK===k&&!$("#flowov").hidden)flowOpen(k)}   // a pushed version redraws only the chart it names
+function squadStreamLost(){$("#sse").hidden=false;$("#sse").textContent="live stream lost: retrying; the page keeps what it drew"}
+function squadStreamBack(){$("#sse").hidden=true;poll();pollBoard();if(FLOWK&&!$("#flowov").hidden)flowOpen(FLOWK)}   // one read each of the runs, the board and the open chart
 // flow-charts:end
 const barQuery=()=>["fw","fs","fk"].map(k=>`${k}=${encodeURIComponent((bo[k]||[]).join(","))}`).join("&")+`&ty=${LT.ty}`;   // the bar's Waves, Specs and Kinds and the chart's Type, read by both diagrams; the board filters on the page (#904, #985)
 let boardTag=null,boardBody=null;   // the board the page holds and its ETag: a 304 keeps it (#973)
@@ -5237,9 +5284,9 @@ const kept=new Set(bo.kept||[]),
  autoHidden=g=>!hid.has(g.name)&&!kept.has(g.name)&&!fits[g.name].length&&!g.tracking,   // the columns the strip's lines stand for, and the only ones: a column the user hid is a chip, one the user kept is drawn, and the lane is always drawn -- empty, it says 0 (#440)
  vis=all.filter(g=>!g.end&&(!bottom||(!hid.has(g.name)&&!autoHidden(g)))),autos=bottom?all.filter(g=>!g.end&&autoHidden(g)):[];   // a closed status is never a column, so it has no eye and no line to show it (#969)
 const badge=g=>`<span class=n>${f||fw.length||fs.length||fk.length?fits[g.name].length+"/":""}${g.n}</span>`;   // the number the header shows, and the number the strip's line repeats
-const one=g=>{const it=fits[g.name],shown=it.slice(0,lim[g.name]||25),dot=`<i style="background:${colOf(g.name,CN)}"></i>`,cnt=badge(g),isOpen=g.name===COLNAME.pr_open?bo.prOpen!==false:bo.open===g.name;
-if(bottom)return `<div class="col${isPR(g.name)?" prs lane":""}" style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><div class=ch><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}</span></div><div class=sc data-g="${esc(g.name)}">${perr(g)}${cards(g,it,shown)}</div></div>`;
-return `<div class="acc${isPR(g.name)?" prs lane":""} ${hid.has(g.name)?"hidcol":""} ${isOpen?"open":""}" style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><div class=ah><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}</span></div><div class=sc data-g="${esc(g.name)}">${perr(g)}${cards(g,it,shown)}</div><div class=pad></div></div>`};
+const one=g=>{const bmv=g.name===COLNAME.unscheduled?`<button class=bmv type=button title="move every Backlog card to Todo: the hub names how many first">Move all to Todo</button>`:"",it=fits[g.name],shown=it.slice(0,lim[g.name]||25),dot=`<i style="background:${colOf(g.name,CN)}"></i>`,cnt=badge(g),isOpen=g.name===COLNAME.pr_open?bo.prOpen!==false:bo.open===g.name;
+if(bottom)return `<div class="col${isPR(g.name)?" prs lane":""}" style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><div class=ch><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}${bmv}</span></div><div class=sc data-g="${esc(g.name)}">${perr(g)}${cards(g,it,shown)}</div></div>`;
+return `<div class="acc${isPR(g.name)?" prs lane":""} ${hid.has(g.name)?"hidcol":""} ${isOpen?"open":""}" style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><div class=ah><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}${bmv}</span></div><div class=sc data-g="${esc(g.name)}">${perr(g)}${cards(g,it,shown)}</div><div class=pad></div></div>`};
 const fmtN=n=>n>=1000?n.toLocaleString("en-US"):""+n;   // "688" is one token; only 1000 and over needs separators
 // One tile of the hidden: strip: the name as a caption over the count, the count's colour deciding what the count
 // means. data-col names the column, so the colour is a CSS rule per category rather than an inline value; the one
@@ -5307,14 +5354,13 @@ setInterval(()=>{const b=$("#bread");if(!b)return;b.textContent=lastRead?`board 
 let loopV=null,loopErr="";
 const loopWhen=s=>{const m=String(s||"").match(/^(\d{4}-\d\d-\d\d)T(\d\d:\d\d)/);return m?m[1]+" "+m[2]:String(s||"")};
 const loopBy=v=>v.who?`${v.who} · ${loopWhen(v.when)}`:"";
-const loopBtn=v=>({on:"Stop…",draining:"Stop now…",starting:"Starting…"})[v.state]||"Start loop";
-const loopTip=v=>!v.write?v.reason:v.state==="on"?"stop after the live runs and gates finish, or now":v.state==="draining"?"stop now: kills what is still live":v.state==="starting"?"the loop is starting":"start the loop (watchd)";
-const loopB=v=>`<button data-loop${v.write&&v.state!=="starting"?"":" disabled"} title="${esc(loopTip(v))}">${loopBtn(v)}</button>`;
+const loopTip=v=>!v.write?v.reason:v.state==="on"?"turn off: stop after the live runs and gates finish, or now":v.state==="draining"?"turn on: keep the loop running; turn off again to stop now":v.state==="starting"?"the loop is starting":"turn on: start the loop (watchd)";
+const loopSw=v=>`<button type=button role=switch aria-label="Loop" aria-checked="${v.state!=="off"}" data-loop${v.write&&v.state!=="starting"?"":" disabled"} class=lsw title="${esc(loopTip(v))}"><i aria-hidden="true"></i></button>`;
 const loopAct=e=>e.failed?`${String(e.action||"")} failed: ${e.failed}`:e.action==="drain"?"stop after the live runs and gates finish":e.action==="stop-now"?`stop now${e.killed?` (killed ${(e.killed.runs||[]).length} runs, ${(e.killed.gates||[]).length} gates${e.survived?`; ${(e.survived.runs||[]).length+(e.survived.gates||[]).length} not ended`:""})`:""}`:String(e.action||"");
 const loopRun=r=>String(r).split("/").filter(Boolean).pop()||String(r);
-const loopSetHtml=v=>`<div class=lnow><span><span class="ls ${esc(v.state)}">Loop: ${esc(v.state)}</span><small>${v.who?`changed by ${esc(v.who)} at ${esc(loopWhen(v.when))}`:"no change from the hub yet"}${v.state==="draining"?` · ${v.live.runs.length+v.live.gates.length} live to finish`:""}</small></span>${loopB(v)}</div>`
+const loopSetHtml=v=>`<div class=lnow>${loopSw(v)}<span><span class="ls ${esc(v.state)}">Loop ${esc(v.state)}</span><small>${v.who?`changed by ${esc(v.who)} at ${esc(loopWhen(v.when))}`:"no change from the hub yet"}${v.state==="draining"?` · ${v.live.runs.length+v.live.gates.length} live to finish`:""}</small></span></div>`
  +(v.write?"":`<div class=lwhy>${esc(v.reason)}. The rule is in Access.</div>`)+(v.failed?`<div class=lerr role=alert>The last start failed: ${esc(v.failed)}</div>`:"")+(loopErr?`<div class=lerr role=alert>${esc(loopErr)}</div>`:"")
- +`<p class=m>A stop drains by default: no new dispatch, the live runs and gates finish, then the loop stops. Each change writes one line to the change log.</p>`
+ +`<p class=m>Turning it off drains: no new dispatch, the live runs and gates finish, then the loop stops. Each change writes one line to the change log.</p>`
  +`<h4>Changes</h4><ul class=laud>${v.log.length?v.log.map(e=>`<li><b>${esc(loopWhen(e.at))}</b> · ${esc(e.who)} (${esc(e.from)}) · ${esc(loopAct(e))}</li>`).join(""):"<li class=m>no change yet</li>"}</ul>`;
 const loopConfirmHtml=v=>{const r=v.live.runs,g=v.live.gates,drain=v.state==="on";
  return `<b>Stop the loop?</b><p class=m>Live now: ${r.length} run${r.length===1?"":"s"}, ${g.length} gate${g.length===1?"":"s"}.</p>`
@@ -5332,8 +5378,7 @@ const accHtml=v=>{const a=v.access||{},yn=x=>x?"<span class=ok>allowed</span>":"
 // The Monitor shows the loop state as one read-only line: the switch itself lives in the Loop panel, so one control
 // writes the switch and no second button carries the same id (ADR-0162).
 function loopDraw(){if(!loopV)return;const b=$("#lopb"),h=loopSetHtml(loopV);if(b.dataset.h!==h){b.dataset.h=h;b.innerHTML=h}
- const c=$("#accb"),ah=accHtml(loopV);if(c.dataset.h!==ah){c.dataset.h=ah;c.innerHTML=ah}
- $("#lopsr").textContent=`${loopV.state}${loopV.who?` · ${loopV.who} · ${loopWhen(loopV.when)}`:""}`}
+ const c=$("#accb"),ah=accHtml(loopV);if(c.dataset.h!==ah){c.dataset.h=ah;c.innerHTML=ah}}
 async function loopPoll(){try{loopV=await (await fetch("/api/loop")).json();loopDraw()}catch(e){}}
 async function loopPost(body){loopErr="";try{const r=await fetch("/api/loop",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}),d=await r.json();if(!r.ok)loopErr=d.reason||d.err||"refused"}catch(e){loopErr="the hub did not answer"}
  await loopPoll();loopDraw()}
@@ -5375,8 +5420,19 @@ document.addEventListener("click",async e=>{const b=e.target.closest("#bbody .pm
 try{const r=await fetch("/api/promote",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({issue:n})}),d=await r.json();
  if(d.err){card.insertAdjacentHTML("beforeend",`<div class=perr>${esc(d.err)}</div>`);b.disabled=false}
  else{b.textContent="moved to Todo ✓";pollBoard()}}catch(x){card.insertAdjacentHTML("beforeend","<div class=perr>the hub did not answer</div>");b.disabled=false}});
+// The batch move (#1098): the hub names how many cards it would move, the owner confirms that count, and one write moves them.
+const batchPost=body=>fetch("/api/promote",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({batch:true,...body})}).then(r=>r.json());
+document.addEventListener("click",async e=>{const b=e.target.closest("#bbody .bmv");if(!b)return;e.preventDefault();e.stopPropagation();
+ const say=m=>b.insertAdjacentHTML("afterend",`<div class=perr>${esc(m)}</div>`);
+ try{const plan=await batchPost({});if(plan.err)return say(plan.err);
+  if(!plan.count)return say("no card is in Backlog");
+  if(!confirm(`Move ${plan.count} card${plan.count===1?"":"s"} from Backlog to Todo?`))return;
+  const d=await batchPost({confirm:plan.count});if(d.err)return say(d.err);
+  pollBoard()}catch(x){say("the hub did not answer")}});
 document.addEventListener("click",e=>{for(const d of["#fw","#fs"])if($(d)&&!e.target.closest(d))$(d).open=false});
 pollBoard();setInterval(pollBoard,5000);
+function squadChartTick(){if(!window.squadStreamLive&&FLOWK&&!$("#flowov").hidden)flowOpen(FLOWK)}   // with no live stream the open chart is re-read on the board tick
+setInterval(squadChartTick,5000);
 // Last ended: the runs that ended today, read from the hub (#889)
 async function endedPoll(){try{const rows=await (await fetch("/api/ended")).json();ENDED=rows;drawMain();rows.slice(0,5).map(r=>`<div class=r data-rid="${esc(r.id)}" tabindex=0 role=button><div><span class="b ${r.state}">${esc(r.badge||r.state)}</span> <b>${esc(name(r))}</b><div class=m>${usd(r.spend)} \u00b7 ${age(r.age)} ago</div></div></div>`).join("")||"<div class=m>no run ended today</div>"}catch(e){}}
 endedPoll();setInterval(endedPoll,30000);
@@ -6405,7 +6461,8 @@ def request_target(h):
     parts = h.requestline.split()
     return parts[1] if len(parts) > 1 and parts[1].startswith("//") else h.path
 
-VERSIONS = hubstream.Versions({"runs": lambda: run_list()})
+CHART_INPUTS = {"cfd": lambda: history_key(), "lead": lambda: (board_cache.get("t"), history_key())}
+VERSIONS = hubstream.Versions({"runs": lambda: run_list(), **CHART_INPUTS})
 
 def stream_origin_ok(h, tailnet):
     """A stream opens for no origin but this hub's own (loopback) or, on the tailnet, the tailnet's; an absent Origin is a non-browser reader."""
@@ -6615,7 +6672,8 @@ class H(BaseHTTPRequestHandler):
             if not ok: out = {"err": "forbidden"}
             else:
                 body = json.loads(raw or b"{}")
-                if self.path == "/api/promote": out = promote(body.get("issue")) if isinstance(body, dict) else {"err": "bad request"}   # the owner's move (#560)
+                if self.path == "/api/promote" and isinstance(body, dict) and body.get("batch") is True: out = promote_batch(body, a.login or "owner")   # the owner's batch move (#1098)
+                elif self.path == "/api/promote": out = promote(body.get("issue")) if isinstance(body, dict) else {"err": "bad request"}   # the owner's move (#560)
                 elif self.path == "/api/limits": out = limits_set(body)   # Settings > Spend & limits (#926)
                 elif self.path == "/api/slack": out = slack_set(body)   # Settings > Communication (#924)
                 else: out = (plans_set if self.path == "/api/plans" else models_set)(body)

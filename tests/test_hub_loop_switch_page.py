@@ -199,14 +199,13 @@ def js_view(**over):
     return json.dumps({**VIEW, **over})
 
 
-def test_the_monitor_shows_the_loop_state_once_and_never_its_switch():
-    """The owner read the loop twice in one panel: Monitor carries one read-only row, and the switch lives in its own
-    panel (owner, 2026-11-01)."""
+def test_the_monitor_carries_no_loop_state_and_never_its_switch():
+    """The loop states once, in the Loop panel: the Monitor has no Loop tile and no switch (#1071, parent #1068)."""
     src = page()
     card = src.split("<details id=inst", 1)[1].split("</details>", 1)[0]
     assert "id=iloop" not in card and "loopCardHtml" not in src
-    assert src.count('{k:"Loop",text:') == 1     # one Loop row, the tile the summary reads
-    assert "loopB(" not in card                  # the Monitor never draws the switch
+    assert src.count('{k:"Loop",text:') == 0
+    assert "loopSw(" not in card and "role=switch" not in card
 
 
 def test_the_loop_theme_shows_state_who_when_and_the_change_log():
@@ -224,7 +223,7 @@ def test_a_failed_start_is_shown_in_the_loop_theme_and_the_log():
     log = [{"at": "2026-10-31T16:02:00-03:00", "who": "owner", "from": "loopback", "action": "start", "failed": "watchd did not start"}]
     out = run_js(f"loopSetHtml({js_view(state='off', failed='watchd did not start', log=log)})")
     assert out.count("watchd did not start") >= 2
-    assert "Start loop" in out and "disabled" not in out
+    assert "Loop off" in out and "disabled" not in out
 
 
 def test_the_stop_confirm_lists_every_live_run_and_gate_and_drains_by_default():

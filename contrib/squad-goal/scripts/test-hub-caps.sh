@@ -2,9 +2,10 @@
 # Regression test for the hub footer ceilings: loop_caps() must find the squad package from a hub.py that runs outside the repository
 # (the live copy under ~/.claude/skills, where parents[3] is ~/.claude), and a failure to find it must be logged once, never swallowed
 # (no network, no server). usage: bash test-hub-caps.sh
+# mirrors: hub.py hubstream.py hub-stream.js web-tokens.css chainhealth.py provkey.py session_send.py session_card.py sessions.py modelreg.py registry.json router_envelope.py agyquota.py board-lanes.js board-lanes.css run-sheet.js run-sheet.css hub-switcher.js board_columns.py board_fast.py board_history.py board_flow_history.py board_burndown.py board_cfd.py board_leadtime.py issue_state.py issue_ledger.py board_lag.py ghread.py ghthrottle.py hub-mobile.html hub-mobile-gesture.js hub-mobile-move.js hub-question-card.js hub-mobile-run.js hub-mobile-sw.js board-filter.js board-definition.json hub-overlay.js vendor-html2canvas-1.4.1.min.js
 d=$(cd "$(dirname "$0")" && pwd); repo=$(cd "$d/../../.." && pwd); T=$(mktemp -d); trap 'rm -rf "$T"' EXIT; fail=0
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-live="$T/home/.claude/skills/squad-goal/scripts"; mkdir -p "$live" "$T/bare"; cp "$d/hub.py" "$d/hubstream.py" "$d/hub-stream.js" "$d/web-tokens.css" "$d/chainhealth.py" "$d/provkey.py" "$d/session_send.py" "$d/session_card.py" "$d/sessions.py" "$d/modelreg.py" "$d/registry.json" "$d/router_envelope.py" "$d/agyquota.py" "$d/board-lanes.js" "$d/board-lanes.css" "$d/run-sheet.js" "$d/run-sheet.css" "$d/hub-switcher.js" "$d/board_columns.py" "$d/board_fast.py" "$d/board_history.py" "$d/board_flow_history.py" "$d/board_burndown.py" "$d/board_cfd.py" "$d/board_leadtime.py" "$d/issue_state.py" "$d/issue_ledger.py" "$d/board_lag.py" "$d/ghread.py" "$d/ghthrottle.py" "$d/hub-mobile.html" "$d/hub-mobile-gesture.js" "$d/hub-mobile-move.js" "$d/hub-question-card.js" "$d/hub-mobile-run.js" "$d/hub-mobile-sw.js" "$d/board-filter.js" "$d/board-definition.json" "$d/hub-overlay.js" "$d/vendor-html2canvas-1.4.1.min.js" "$live/"   # hub.py reads chainhealth.py, ghread.py, provkey.py, router_envelope.py, agyquota.py, board_columns.py, board_flow_history.py, board_cfd.py, board_leadtime.py, issue_state.py, board_lag.py, the swimlane and run sheet assets, the pinned board-definition.json and the vendored capture library beside itself
+live="$T/home/.claude/skills/squad-goal/scripts"; mkdir -p "$live" "$T/bare"; for f in $(sed -n 's/^# mirrors: //p' "$0" | head -n 1); do cp "$d/$f" "$live/"; done   # the copy is the list the mirrors line states
 
 # probe <env...> : load the copied hub.py in a fresh process, call loop_caps() twice; stdout is one JSON line, stderr is the hub's log.
 # Case 3 is a proof of the resolution and of nothing else: the gate runs every suite under `uv run`, whose PATH puts this
@@ -52,5 +53,21 @@ PY
     SG_HUB_DIR="$T/hub2" SG_STATE="$T/st2" HOME="$T/home" python3 "$T/board.py" "$live/hub.py" >"$T/names" 2>"$T/names.err" )
 /usr/bin/grep -q '"unscheduled":"Backlog"' "$T/names" && ok "the live copy names its board columns from the table beside it" \
   || ko "the live copy names no board column: $(cat "$T/names") ($(head -2 "$T/names.err" | tr '\n' ' '))"
+
+# 5. the copy is the list the `# mirrors:` line states, and that list holds every local module hub.py imports (#1108): the gate
+# reads the same line to pick this suite whenever a listed file changes, so a new import that the list misses fails here.
+imported=$(python3 - "$d/hub.py" "$d" <<'PY'
+import ast, os, sys
+src, d = sys.argv[1], sys.argv[2]
+mods = set()
+for n in ast.walk(ast.parse(open(src).read())):
+    if isinstance(n, ast.Import): mods |= {a.name.split(".")[0] for a in n.names}
+    elif isinstance(n, ast.ImportFrom) and n.module and n.level == 0: mods.add(n.module.split(".")[0])
+print(" ".join(sorted(m + ".py" for m in mods if os.path.isfile(os.path.join(d, m + ".py")))))
+PY
+)
+mirrored=$(sed -n 's/^# mirrors: //p' "$0" | head -n 1 | tr ' ' '\n' | sort | tr '\n' ' ')
+for f in $imported; do case " $mirrored" in *" $f "*) ;; *) ko "hub.py imports $f, which the mirror statement does not name";; esac; done
+[ -n "$mirrored" ] && ok "the mirror statement names every local module hub.py imports"
 
 exit $fail

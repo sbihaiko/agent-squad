@@ -272,7 +272,7 @@ function paintHead() {
 // A read that fails says nothing about the sessions (owner, 2026-11-01): it used to blank the panel and drop the reader's
 // session, so a reload that landed during a hub restart read as "no session runs here". The panel keeps what it shows and
 // asks again, and only a read that answered may say a session is gone.
-let retryT = 0, retryN = 0, missT = 0;
+let retryT = 0, retryN = 0, missT = 0, emptyN = 0;
 function retrySoon() {
   if (retryT || retryN >= 20) return;
   retryT = setTimeout(() => { retryT = 0; retryN++; loadSessions(); }, 1500);
@@ -298,10 +298,10 @@ async function loadSessions() {
     return;   // nothing is dropped on a read that did not answer
   }
   retryN = 0;
-  // An empty answer never takes away a talk the reader is reading (owner, 2026-11-01): the registry scan passes through
-  // moments with no session, and a restart makes them longer. The panel keeps what it shows and asks again; the empty
-  // screen belongs to a panel that never had a session (#1077).
-  if (cur && !found.length) {
+  // One empty answer never takes away a talk the reader is reading (owner, 2026-11-01): the registry scan passes through
+  // moments with no session. Only a repeated empty answer may blank it.
+  emptyN = found.length ? 0 : emptyN + 1;
+  if (cur && !found.length && emptyN < 3) {
     say("the session list came back empty · asking again");
     retrySoon();
     return;

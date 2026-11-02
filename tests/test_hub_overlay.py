@@ -383,17 +383,19 @@ def test_the_build_poll_names_no_api_route_the_hub_would_rewrite():
     assert "window.SQUAD_OV_SOURCES()" in body and "SQ.versionRoute(" in body and "location.reload()" in body
 
 
-def test_an_empty_session_list_never_takes_away_the_talk():
-    """Owner, 2026-11-01: the panel went blank on "No session runs here" while it held a live talk. A list that answers
-    empty keeps what the panel shows and asks again; the empty screen belongs to a panel that never had a session."""
+def test_an_empty_session_list_blanks_the_talk_only_when_the_emptiness_repeats():
+    """Owner, 2026-11-01: the panel went blank on "No session runs here" after one empty list answer while it held a live
+    talk. A list that answers empty keeps what the panel shows and asks again; only a third empty answer in a row may
+    blank it, and any answer with a session resets the count."""
     js = OVERLAY.read_text()
     body = js[js.index("async function loadSessions() {"):js.index("// Only the structure that carries meaning")]
-    guard = body.index("if (cur && !found.length) {")
+    count = body.index("emptyN = found.length ? 0 : emptyN + 1;")
+    guard = body.index("if (cur && !found.length && emptyN < 3) {")
+    assert count < guard
     assert "retrySoon();" in body[guard:guard + 160]
     assert body[guard:guard + 160].count("return;") == 1
     for later in ("sessions = found", "cur = ", 'empty("No session runs'):
         assert guard < body.index(later), later
-    assert "EMPTY_N" not in js
 
 def test_a_poll_that_answers_with_an_error_or_fails_to_render_says_so():
     """#1079: an error answer and a render that throws both reach the console; neither freezes the feed in silence."""

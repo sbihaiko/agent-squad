@@ -93,15 +93,14 @@ def test_the_gauge_svg_is_hidden_from_a_screen_reader_and_the_value_is_text(hub)
 
 # ---------------------------------------------------------------- the annunciators
 
-def test_the_tiles_read_gate_and_loop_and_nothing_the_owner_removed(hub):
-    """The owner removed Nightly, then Landed and GraphQL: the card keeps the two facts it acts on."""
+def test_the_tiles_read_the_gate_alone_and_nothing_the_owner_removed(hub):
+    """The owner removed Nightly, then Landed and GraphQL, and the loop state moved to its own panel (#1071): the card keeps the gate."""
     facts = _facts(hub, gate=GATE_FAIL, nightly=NIGHTLY_PASS, loop=True)
     tiles = _run(hub, f"instTiles({json.dumps(facts)})")
-    assert [t["k"] for t in tiles] == ["Gate", "Loop"]
-    gate, loop = tiles
+    assert [t["k"] for t in tiles] == ["Gate"]
+    gate, = tiles
     assert (gate["tone"], gate["text"]) == ("err", "fast fail 5m ago")
     assert gate["tip"] == "ran at 0123456"
-    assert (loop["tone"], loop["text"]) == ("ok", "ON")
 
 
 def test_the_gate_tile_shows_the_last_run_time_and_the_mean(hub):
@@ -116,25 +115,18 @@ def test_the_gate_tile_shows_the_last_run_time_and_the_mean(hub):
 
 
 def test_a_source_with_no_reading_says_so_and_never_draws_a_pass(hub):
-    tiles = _run(hub, f"instTiles({json.dumps(_facts(hub))})")
-    gate, loop, *_ = tiles
+    gate, = _run(hub, f"instTiles({json.dumps(_facts(hub))})")
     assert gate["tone"] == "neutral" and "pass" not in gate["text"]
-    assert loop["text"] == "?" and loop["tone"] == "neutral"
-
-
-def test_a_loop_that_is_off_reads_off_in_the_error_tone(hub):
-    loop = _run(hub, f"instTiles({json.dumps(_facts(hub, loop=False))})[1]")
-    assert (loop["text"], loop["tone"]) == ("OFF", "err")
 
 
 # ---------------------------------------------------------------- the summary and the rows
 
-def test_the_collapsed_summary_names_the_loop_state_and_the_failed_tiles(hub):
+def test_the_collapsed_summary_counts_the_failed_tiles_and_names_no_loop_state(hub):
     one = _facts(hub, gate=GATE_FAIL, nightly=NIGHTLY_PASS, loop=True)
     two = _facts(hub, gate=GATE_FAIL, nightly={**NIGHTLY_PASS, "result": "fail", "serial": "fail"}, loop=False)
-    assert _run(hub, f"instSum({json.dumps(one)})") == "ON · 1 fail"
-    assert _run(hub, f"instSum({json.dumps(two)})") == "OFF · 1 fail"      # no nightly tile; the loop's OFF is not counted twice
-    assert _run(hub, f"instSum({json.dumps(_facts(hub))})") == "? · 0 fail"
+    assert _run(hub, f"instSum({json.dumps(one)})") == "1 fail"
+    assert _run(hub, f"instSum({json.dumps(two)})") == "1 fail"      # no nightly tile; the loop's state is not in the summary
+    assert _run(hub, f"instSum({json.dumps(_facts(hub))})") == "0 fail"
 
 
 def test_the_card_carries_no_cycle_countdown(hub):

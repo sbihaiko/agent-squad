@@ -600,3 +600,108 @@ def test_a_proved_move_is_the_same_column_in_both_routes(hub, monkeypatch, tmp_p
     status, out = post(port, {"issue": 7})
     assert status == 400 and calls == [], (status, out, calls)
     assert "not Backlog" in out.get("err", ""), out
+
+
+def batch_fixture(mod, monkeypatch, tmp_path):
+    """A Backlog spec (#9) with one open ticket (#20), a standalone Backlog issue (#7) and a Todo card (#8) the batch leaves."""
+    mod.BATCH_AUDIT = tmp_path / "batch.jsonl"
+    mod.board_cache["items"].append({"n": 20, "i": 120, "t": "ticket a", "s": "OPEN", "st": "Backlog", "l": [], "pa": 9})
+    sub_issues(monkeypatch, answer=[{"number": 20, "state": "open", "labels": []}])
+
+
+def test_the_batch_names_its_count_and_writes_nothing_until_confirmed(hub, monkeypatch, tmp_path):
+    mod, port = hub
+    batch_fixture(mod, monkeypatch, tmp_path)
+    calls = []
+    mod.promote_write = writer(calls)
+    status, out = post(port, {"batch": True}, path="/api/promote")
+    assert status == 200 and out == {"count": 3, "issues": [9, 20, 7]}, out
+    assert calls == [] and not mod.BATCH_AUDIT.exists()
+
+
+def test_the_batch_moves_every_backlog_card_in_one_write_with_the_spec_first(hub, monkeypatch, tmp_path):
+    mod, port = hub
+    batch_fixture(mod, monkeypatch, tmp_path)
+    calls = []
+    mod.promote_write = writer(calls)
+    status, out = post(port, {"batch": True, "confirm": 3}, path="/api/promote")
+    assert status == 200 and out == {"ok": True, "count": 3, "moved": [9, 20, 7]}, out
+    assert calls == [([9, 20, 7], False)], calls
+    groups = {g["name"]: [i["n"] for i in g["items"]] for g in mod.board()["groups"]}
+    assert {7, 9, 20} <= set(groups["Todo"]) and not {7, 9, 20} & set(groups["Backlog"]), groups
+
+
+def test_the_batch_never_moves_a_card_outside_backlog(hub, monkeypatch, tmp_path):
+    mod, port = hub
+    batch_fixture(mod, monkeypatch, tmp_path)
+    calls = []
+    mod.promote_write = writer(calls)
+    post(port, {"batch": True, "confirm": 3}, path="/api/promote")
+    assert all(8 not in issues for issues, _ in calls), calls
+    assert next(i for i in mod.board_cache["items"] if i["n"] == 8)["st"] == "Todo"
+
+
+def test_the_batch_refuses_a_count_that_is_not_the_one_named(hub, monkeypatch, tmp_path):
+    mod, port = hub
+    batch_fixture(mod, monkeypatch, tmp_path)
+    calls = []
+    mod.promote_write = writer(calls)
+    status, out = post(port, {"batch": True, "confirm": 2}, path="/api/promote")
+    assert status == 400 and "err" in out, (status, out)
+    assert calls == [] and not mod.BATCH_AUDIT.exists()
+    assert all(i["st"] == "Backlog" for i in mod.board_cache["items"] if i["n"] in (7, 9, 20))
+
+
+def test_an_empty_backlog_moves_nothing(hub, monkeypatch, tmp_path):
+    mod, port = hub
+    mod.BATCH_AUDIT = tmp_path / "batch.jsonl"
+    mod.board_cache["items"] = [dict(TODO)]
+    calls = []
+    mod.promote_write = writer(calls)
+    status, out = post(port, {"batch": True, "confirm": 0}, path="/api/promote")
+    assert status == 400 and "err" in out, (status, out)
+    assert calls == []
+
+
+def test_a_failed_ticket_read_moves_no_batch(hub, monkeypatch, tmp_path):
+    mod, port = hub
+    gh = sys.modules["ghread"]
+    sub_issues(monkeypatch, failure=gh.Read(kind=gh.FAILED, detail="gh timed out"))
+    mod.BATCH_AUDIT = tmp_path / "batch.jsonl"
+    calls = []
+    mod.promote_write = writer(calls)
+    status, out = post(port, {"batch": True}, path="/api/promote")
+    assert status == 400 and out.get("err"), out
+    assert calls == [] and not mod.BATCH_AUDIT.exists()
+
+
+def test_the_batch_is_recorded_with_its_count_and_who_asked(hub, monkeypatch, tmp_path):
+    mod, port = hub
+    batch_fixture(mod, monkeypatch, tmp_path)
+    mod.promote_write = writer([])
+    status, _ = post(port, {"batch": True, "confirm": 3}, path="/api/promote")
+    assert status == 200
+    lines = [json.loads(x) for x in mod.BATCH_AUDIT.read_text().splitlines()]
+    assert len(lines) == 1, lines
+    assert lines[0]["action"] == "promote-batch" and lines[0]["count"] == 3 and lines[0]["issues"] == [9, 20, 7], lines
+    assert lines[0]["who"] == "owner" and lines[0]["ok"] is True and lines[0]["at"], lines
+
+
+def test_the_batch_route_keeps_the_write_guard(hub, monkeypatch, tmp_path):
+    mod, port = hub
+    batch_fixture(mod, monkeypatch, tmp_path)
+    calls = []
+    mod.promote_write = writer(calls)
+    status, out = post(port, {"batch": True, "confirm": 3}, path="/api/promote", origin="https://evil.example")
+    assert status == 400 and out == {"err": "forbidden"}, (status, out)
+    assert calls == []
+
+
+def test_the_desktop_page_puts_the_batch_control_on_the_backlog_column(hub):
+    mod, _ = hub
+    page = mod.PAGE
+    assert 'fetch("/api/promote",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({batch:true' in page, "the batch control does not send the batch request"
+    rule = page.split("#bbody .bmv{", 1)[1].split("}", 1)[0]
+    assert "min-height:32px" in rule and "var(--acc)" in rule, rule
+
+
