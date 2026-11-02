@@ -6,8 +6,10 @@ route under `kind=screenshot`, with the behaviour it had: PNG by magic and `Cont
 import http.client
 import importlib.util
 import json
+import os
 import pathlib
 import threading
+import time
 from http.server import ThreadingHTTPServer
 
 import pytest
@@ -194,6 +196,18 @@ def test_the_screenshot_door_keeps_its_png_rule_while_the_image_kind_sniffs(serv
     assert stored(state) == [] and sent == []
     assert post(port, route(), GIF, ctype="image/png")[0] == 200   # the image kind admits a sniffed GIF
     assert stored(state) == [state / "sessions" / SID / "images" / f"{CID}.gif"]
+
+
+def test_an_attach_runs_the_one_purge_and_keeps_its_own_file(served):
+    """#1153: the route writes through the one purge; an attachment older than the lifetime goes, the new one stays."""
+    mod, state, port, sent = served
+    old, _ = mod.screenshot_written(SID, "old")
+    old.parent.mkdir(parents=True, exist_ok=True)
+    old.write_bytes(PNG)
+    os.utime(old, (time.time() - 8 * 86400, time.time() - 8 * 86400))
+    assert post(port, route(), PNG)[0] == 200
+    assert not old.exists()
+    assert (state / "sessions" / SID / "images" / f"{CID}.png").exists()
 
 
 TAILNET = "hub.tail1234.ts.net"
