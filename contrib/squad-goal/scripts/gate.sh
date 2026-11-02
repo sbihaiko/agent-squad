@@ -4,8 +4,10 @@
 # waits for the first and then runs; it is never dropped, so the wait is long (SERIAL_WAIT_SECONDS, default 86400) and says so on one
 # line naming the holder. A gate holder that died, or that outlived its run, loses the lock to the next gate (serial.sh).
 # SERIAL_HOLD_SECONDS (default 7200) is the longest a gate may hold the lock. The exit code of the command is passed through.
-# The hub reads the latest result from $SG_STATE/gate-status: `<epoch> TAB <kind> TAB <pass|fail> TAB <sha>`, and a fifth field
-# when the gate ran the test battery: its selection, `selected N files` or `all: <reason>` (GATE_SELECT_FILE carries it out).
+# The hub reads the latest result from $SG_STATE/gate-status: `<epoch> TAB <kind> TAB <pass|fail> TAB <sha>`, and, when the
+# gate ran the test battery, a fifth field, its selection (`selected N files` or `all: <reason>`; GATE_SELECT_FILE carries it
+# out), and a sixth, the scope that selection names, `delta` or `full` (GATE_SCOPE_FILE carries it out). The reason in an
+# `all:` line is why a delta refused.
 # SG_GATE_KIND is fast for a tip or wave entry, full for a promotion to stg, and gate by default. A later gate replaces this
 # hub line. A full result also writes $SG_STATE/gate-status-full, so a later fast result cannot replace promotion proof.
 # The sha is the HEAD the gate ran at, read from the working directory. The lock lives in $SG_STATE/locks/gate. With SG_STATE
@@ -23,39 +25,45 @@
 # that calls it sets SG_GATE_STATUS=self, so the gate does not overwrite it with the HEAD it was started in. Each line is written
 # by a temp file and a mv, so no reader sees half of it. SG_STATE unset: /tmp/sg-state, never TMPDIR.
 # Each finished gate also appends one line to $SG_STATE/gate-history: `<finish epoch> TAB <kind> TAB <result> TAB <sha> TAB <start epoch>
-# TAB <selection>`, the selection empty when the gate ran no battery. The duration is finish minus start, and start is read inside the
+# TAB <selection> [TAB <scope>]`, the selection empty when the gate ran no battery, and the scope (`delta` or `full`) present
+# only when the battery named one. The duration is finish minus start, and start is read inside the
 # lock, after the wait: it is the gate's run time, never its queue time. A gate that sets SG_GATE_STATUS=self writes no history line,
 # as it writes no status line. The file only grows: the throughput report reads it, and nothing rewrites it.
 here="$(cd "$(dirname "$0")" && pwd)"; st=${SG_STATE:-/tmp/sg-state}
 write_status() {  # <path> <line>
   printf '%s\n' "$2" > "$1.$$" && mv -f "$1.$$" "$1"
 }
-status() {  # <kind> <result> <sha> [<test selection>]
+status() {  # <kind> <result> <sha> [<test selection>] [<test scope>]
   mkdir -p "$st" 2>/dev/null || return 0
   printf -v line '%s\t%s\t%s\t%s' "$(date +%s)" "$1" "$2" "$3"
   [ -z "${4:-}" ] || line="$line"$'\t'"$4"
+  [ -z "${5:-}" ] || line="$line"$'\t'"$5"
   write_status "$st/gate-status" "$line" || return
   [ "$1" != full ] || write_status "$st/gate-status-full" "$line"
 }
 append_line() {  # <path> <line>: one short write at the end of the file, never a rewrite
   printf '%s\n' "$2" >> "$1"
 }
-gate_history() {  # <kind> <result> <sha> <start epoch> [<test selection>]
+gate_history() {  # <kind> <result> <sha> <start epoch> [<test selection>] [<test scope>]
   mkdir -p "$st" 2>/dev/null || return 0
   printf -v line '%s\t%s\t%s\t%s\t%s\t%s' "$(date +%s)" "$1" "$2" "$3" "$4" "${5:-}"
+  [ -z "${6:-}" ] || line="$line"$'\t'"$6"
   append_line "$st/gate-history" "$line"
 }
 case "${1:-}" in
   --status) [ $# = 4 ] || { echo "usage: gate.sh --status <kind> <pass|fail> <sha>" >&2; exit 2; }; status "$2" "$3" "$4"; exit 0;;
   --run)    # inside the lock: run the command, then write the line. A command the holder stops at its deadline (TERM) is a fail.
-    shift; export GATE_SELECT_FILE; GATE_SELECT_FILE=$(mktemp "${TMPDIR:-/tmp}/gate-select.XXXXXX" 2>/dev/null) || GATE_SELECT_FILE=
+    shift; export GATE_SELECT_FILE GATE_SCOPE_FILE
+    GATE_SELECT_FILE=$(mktemp "${TMPDIR:-/tmp}/gate-select.XXXXXX" 2>/dev/null) || GATE_SELECT_FILE=
+    GATE_SCOPE_FILE=$(mktemp "${TMPDIR:-/tmp}/gate-scope.XXXXXX" 2>/dev/null) || GATE_SCOPE_FILE=
     start=$(date +%s)
     note() {
       if [ "${SG_GATE_STATUS:-}" != self ]; then
-        sha=$(git rev-parse HEAD 2>/dev/null); sel=$(cat "$GATE_SELECT_FILE" 2>/dev/null)
-        status "${SG_GATE_KIND:-gate}" "$1" "$sha" "$sel"; gate_history "${SG_GATE_KIND:-gate}" "$1" "$sha" "$start" "$sel"
+        sha=$(git rev-parse HEAD 2>/dev/null); sel=$(cat "$GATE_SELECT_FILE" 2>/dev/null); scope=$(cat "$GATE_SCOPE_FILE" 2>/dev/null)
+        status "${SG_GATE_KIND:-gate}" "$1" "$sha" "$sel" "$scope"; gate_history "${SG_GATE_KIND:-gate}" "$1" "$sha" "$start" "$sel" "$scope"
       fi
       [ -z "$GATE_SELECT_FILE" ] || rm -f "$GATE_SELECT_FILE"
+      [ -z "$GATE_SCOPE_FILE" ] || rm -f "$GATE_SCOPE_FILE"
     }
     trap 'note fail; exit 143' TERM
     "$@"; rc=$?; if [ $rc = 0 ]; then note pass; else note fail; fi; exit $rc;;

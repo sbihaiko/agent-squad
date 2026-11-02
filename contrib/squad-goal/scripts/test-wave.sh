@@ -818,13 +818,14 @@ awk -F '\t' '$2 == "run-15" && $3 == "151"' "$T/st/wave-outside.tsv" 2>/dev/null
 # (#646) The wave tip's check is the base battery over origin/$SG_BASE, and its pytest runs over the selection. The check's command
 # is built from the shared definition and run in a clone of the remote, as wave.sh runs it; a stub python logs each call's argv.
 printf '#!/bin/bash\necho "$*" >> "%s/argv.log"\ncase "$*" in *squad.testselect*) cat "%s/select.out" 2>/dev/null;; esac\nexit 0\n' "$T" "$T" > "$T/selpy"; chmod +x "$T/selpy"
-tipcmd=$(SG_GATE_WORKERS=3 sg_base_gate "origin/dev" "$T/selpy" 2>/dev/null)
+tipcmd=$(SG_GATE_WORKERS=3 sg_base_gate "origin/dev" "$T/selpy" wave-tip 2>/dev/null)
 rm -rf "$T/tipclone"; $G clone -q "$T/origin.git" "$T/tipclone" 2>/dev/null
 printf 'tests/test_a.py\n' > "$T/select.out"; rm -f "$T/argv.log"
 r=$(cd "$T/tipclone" && SG_GATE_WORKERS=3 SG_STATE="$T/st" bash -c "$tipcmd" 2>&1); rc=$?
 [ $rc = 0 ] && /usr/bin/grep -qx -- "-m pytest -p no:deepeval -o heavy_cap_seconds=20 -n 3 -m not heavy tests/test_a.py" "$T/argv.log" && ok "the wave tip check passes the selection to pytest" || ko "tip check argv: rc $rc: '$(cat "$T/argv.log" 2>&1)' $r"
-IFS=$'\t' read -r _ kind res _ sel < "$T/st/gate-status" 2>/dev/null
-[ "$kind $res $sel" = "fast pass selected 1 files" ] && ok "the wave tip check's status line states the selected file count" || ko "tip check status: '$(cat "$T/st/gate-status" 2>&1)'"
+/usr/bin/grep -q -- "squad.testselect --stage wave-tip --base origin/dev" "$T/argv.log" && ok "the wave tip check selects the delta at the wave-tip stage" || ko "wave-tip stage: '$(cat "$T/argv.log" 2>&1)'"
+IFS=$'\t' read -r _ kind res _ sel scope < "$T/st/gate-status" 2>/dev/null
+[ "$kind $res $sel $scope" = "fast pass selected 1 files delta" ] && ok "the wave tip check's status line states the selected file count and the delta scope" || ko "tip check status: '$(cat "$T/st/gate-status" 2>&1)'"
 
 # X (#836): the empty landing names the issues of the run's own request (request.txt, its CHILD header), before the record: the
 # record's #710 is not named when the request names other issues.

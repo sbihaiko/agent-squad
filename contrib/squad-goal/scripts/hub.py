@@ -1649,12 +1649,15 @@ def _last_landing():
 
 def _gate_status():
     """The one line the gate wrapper leaves in $SG_STATE/gate-status, `<epoch> TAB <kind> TAB <pass|fail> TAB <sha>`, and for a
-    gate that ran the test battery a fifth field, its selection (`selected N files` or `all: <reason>`): the latest gate, its
-    result, the sha it ran at and that selection. None when the file is absent or is not that line."""
+    gate that ran the test battery a fifth field, its selection (`selected N files` or `all: <reason>`), and a sixth, the
+    scope it names (`delta` or `full`): the latest gate, its result, the sha it ran at, that selection and its scope. None
+    when the file is absent or is not that line."""
     f = _read(STATE / "gate-status").rstrip("\n").split("\t")
-    if len(f) not in (4, 5) or not f[0].isdigit() or not all(f[1:4]) or (len(f) == 5 and not f[4]): return None
+    if len(f) not in (4, 5, 6) or not f[0].isdigit() or not all(f[1:4]) or (len(f) >= 5 and not f[4]): return None
+    if len(f) == 6 and f[5] not in ("delta", "full"): return None
     line = {"kind": f[1], "result": f[2], "sha": f[3], "ts": float(f[0])}
-    if len(f) == 5: line["selection"] = f[4]
+    if len(f) >= 5: line["selection"] = f[4]
+    if len(f) == 6: line["scope"] = f[5]
     took, avg = _gate_times(f[1])
     if took is not None: line["took"], line["avg"] = took, avg
     return line

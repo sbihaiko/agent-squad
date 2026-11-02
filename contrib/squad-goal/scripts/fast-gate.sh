@@ -1,7 +1,8 @@
 #!/bin/bash
 # usage: fast-gate.sh      the fast gate of a work-branch tip or of a child that enters a wave (ADR-0145), run in that tip's worktree.
 #
-# It is the base battery (ruff, mypy and the fast pytest, SG_FAST_CMD), then the shell suite test-<script>.sh of every .sh or .py
+# It is the base battery (ruff, mypy and the fast pytest, SG_FAST_CMD) at the `fast` stage, so the pytest runs the delta the
+# tip reaches, then the shell suite test-<script>.sh of every .sh or .py
 # script under contrib/squad-goal/scripts that the tip changes; a changed test-<script>.sh runs itself. The changed files are the diff of HEAD
 # against its merge-base with SG_FAST_BASE (default origin/$SG_BASE, else origin/dev), so work that landed on the base after the
 # branch point adds no suite. A base that does not resolve fails the gate, never skips the suites. Each suite runs hermetic, as
@@ -15,7 +16,7 @@ base=${SG_FAST_BASE:-origin/${SG_BASE:-dev}}
 # over the same fast gate. Its pytest takes a bounded worker count, SG_GATE_WORKERS, never `auto`.
 . "$here/base-battery.sh"
 py=${SG_GATE_PY:-$SG_CHECKOUT/.venv/bin/python}; [ -x "$py" ] || py=python3
-fastcmd=${SG_FAST_CMD:-"$(sg_base_battery "$py" "$base")"}
+fastcmd=${SG_FAST_CMD:-"$(sg_base_battery "$py" "$base" fast)"}
 retrycmd=${SG_FAST_RETRY_CMD:-"$py -m pytest -p no:deepeval -p no:xdist -o heavy_cap_seconds=20"}
 # The memo key is the working tree (its tip and its uncommitted state), the base ref, the base's commit and the battery text.
 # The battery runs over the tree, so a pass won on a dirty tree must never answer for the commit. It is read before the machine

@@ -239,13 +239,16 @@ reset; r=$(SG_GH_AGGREGATE_WINDOW=0 LANDBUG=641 LANDBUG_LABEL=loop-bug CHECKS="$
 rerunline=$(/usr/bin/grep -E '^rerun=' "$d/branchland.sh")
 case "$rerunline" in *'$SG_GATE_FAILED'*) ok "the rerun runs only the failed names";; *) ko "the rerun does not take the failed names: '$rerunline'";; esac
 case "${rerunline#*pytest}" in *' -n '*) ko "the serial rerun takes workers: '$rerunline'";; *) ok "the serial rerun stays serial";; esac
-# (#646) The landing check's pytest runs over the selection the selector answers for refs/sg-gate/$land; a stub python logs each argv.
-printf '#!/bin/bash\necho "$*" >> "%s/selpy.log"\ncase "$*" in *squad.testselect*) cat "%s/select.out" 2>/dev/null;; esac\nexit 0\n' "$T" "$T" > "$T/selpy"; chmod +x "$T/selpy"
+# (#646, the scope rule) The landing check runs the full battery whatever the delta would select: it asks the selector at the
+# landing stage, and that answer is `all`, so pytest gets no file list. A stub python logs each argv and answers the stage.
+printf '#!/bin/bash\necho "$*" >> "%s/selpy.log"\ncase "$*" in *squad.testselect*) case "$*" in *"--stage landing"*) echo "all: landing runs the full battery";; *) cat "%s/select.out" 2>/dev/null;; esac;; esac\nexit 0\n' "$T" "$T" > "$T/selpy"; chmod +x "$T/selpy"
 printf 'tests/test_a.py\n' > "$T/select.out"
 reset; rm -f "$T/selpy.log"; r=$(SG_STATE="$T/st" SG_GATE_PY="$T/selpy" SG_GATE_WORKERS=3 CHECKS='{"check_runs":[]}' bl)
-/usr/bin/grep -qx -- "-m pytest -p no:deepeval -o heavy_cap_seconds=20 -n 3 -m not heavy tests/test_a.py" "$T/selpy.log" 2>/dev/null && ok "the landing check passes the selection to pytest" || ko "landing check argv: '$(cat "$T/selpy.log" 2>&1)' $r"
-IFS=$'\t' read -r _ kind res _ sel < "$T/st/gate-status" 2>/dev/null
-[ "$kind $res $sel" = "fast pass selected 1 files" ] && ok "the landing check's status line states the selected file count" || ko "landing status: '$(cat "$T/st/gate-status" 2>&1)'"
+/usr/bin/grep -q -- "squad.testselect --stage landing --base refs/sg-gate/dev" "$T/selpy.log" 2>/dev/null && ok "the landing check asks the selector at the landing stage" || ko "landing stage: '$(cat "$T/selpy.log" 2>&1)' $r"
+/usr/bin/grep -qx -- "-m pytest -p no:deepeval -o heavy_cap_seconds=20 -n 3 -m not heavy" "$T/selpy.log" 2>/dev/null && ok "the landing check runs the full battery, never the selection" || ko "landing check argv: '$(cat "$T/selpy.log" 2>&1)' $r"
+! /usr/bin/grep -q "tests/test_a.py" "$T/selpy.log" && ok "the landing check narrows nothing a delta would have selected" || ko "landing check selected: '$(cat "$T/selpy.log" 2>&1)'"
+IFS=$'\t' read -r _ kind res _ sel scope < "$T/st/gate-status" 2>/dev/null
+[ "$kind $res $sel $scope" = "fast pass all: landing runs the full battery full" ] && ok "the landing check's status line states the full scope and its reason" || ko "landing status: '$(cat "$T/st/gate-status" 2>&1)'"
 # (#786) A red base holds the landing, and the base is read before the gate: the branch tip is green, the base head (dev) is red.
 # The pass names the base, lands nothing, pushes nothing to dev, and says it once on alerts.log; the issue landed at the dev head
 # gets one queued comment. BASECHECKS answers the check runs of the base head; CHECKS answers the branch tip.

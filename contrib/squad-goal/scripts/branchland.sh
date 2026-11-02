@@ -32,10 +32,10 @@ say() { local m="$A/branchland-$1-$(printf '%s' "$2" | tr '/' '_')-${3:0:9}-$4";
 # replaces the gate command (tests stub it). A red or running check never starts it.
 here=$(cd "$(dirname "$0")" && pwd)
 py=${SG_GATE_PY:-$SG_CHECKOUT/.venv/bin/python}; [ -x "$py" ] || py=python3
-# The default is the fast gate (fast-gate.sh) over the one base battery (base-battery.sh), the shell suites of the scripts
-# the tip changes read against refs/sg-gate/$land.
+# The default is the fast gate (fast-gate.sh) over the one base battery (base-battery.sh) at the `landing` stage, so its
+# pytest is the full battery, never a delta; the shell suites of the scripts the tip changes are read against refs/sg-gate/$land.
 . "$here/base-battery.sh"
-gatecmd=${SG_LOCAL_GATE_CMD:-"$(sg_base_gate "refs/sg-gate/$land" "$py")"}
+gatecmd=${SG_LOCAL_GATE_CMD:-"$(sg_base_gate "refs/sg-gate/$land" "$py" landing)"}
 # The gate runs with none of the loop's SG_* variables, so a test reads its own fixture and never the live loop state, and with the
 # 2 s line lifted to the 20 s cap: that line is the CI speed rule, and this machine's load is not a defect of the branch.
 # SG_SERIAL_HELD stays: it is not loop state but the guard of the lock the gate holds, and a gate nested in the gate command
