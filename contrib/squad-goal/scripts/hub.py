@@ -3,7 +3,7 @@
 usage: hub.py [port]   default 7700, loopback only. Read-only: it discovers servers via ps/lsof and reads record.jsonl."""
 import datetime as dt, glob, hashlib, html, importlib.util, itertools, json, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, pathlib, urllib.parse, urllib.request
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
-import agyquota, board_lag, chainhealth, ghread, ghthrottle, modelreg, provkey, session_send, sessions   # the chains and the one registry resolve a model (ADR-0147); ghread is the one GitHub door (ADR-0277)
+import agyquota, board_lag, chainhealth, ghread, ghthrottle, hubstream, modelreg, provkey, session_send, sessions   # the chains and the one registry resolve a model (ADR-0147); ghread is the one GitHub door (ADR-0277)
 from issue_state import board_state, KINDS, TEST_CASE_TITLE, _utc
 import http.client
 import zoneinfo
@@ -6278,11 +6278,17 @@ def mobile_refusal(reason):
     return ('<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Hub</title>'
             f'<style>{WEB_TOKENS}</style><body style="font:var(--fs-body) system-ui;margin:24px"><h1>The hub refused this login</h1><p>{html.escape(reason)}</p>').encode()
 
+HUB_STREAM_JS = (pathlib.Path(__file__).resolve().parent / "hub-stream.js").read_text()
+
+def stream_tag():
+    """The page's push stream: its path, then the script; the mux gives the path its profile prefix."""
+    return f'<script>window.SQUAD_HUB_STREAM="{hubstream.PATH}";\n{HUB_STREAM_JS}</script>'
+
 def served_page(login=""):
     """The page as the hub serves it, every placeholder substituted. The model-id shape replaces its quoted placeholder:
     json.dumps brings its own quotes, and a second pair is a syntax error that empties the page."""
     who = f"signed in as {html.escape(login)}" if login else ""
-    return PAGE.replace("__WHO__", who).replace("__REPO__", REPO).replace("__CAPS__", json.dumps(loop_caps())).replace("__LOADMS__", str(int(LOAD_SAMPLE_SECS * 1000))).replace("__LOADERR__", str(LOAD_ERR_PCT)).replace("<!--OVERLAY-->", overlay_tag(OVERLAY_HUB))
+    return PAGE.replace("__WHO__", who).replace("__REPO__", REPO).replace("__CAPS__", json.dumps(loop_caps())).replace("__LOADMS__", str(int(LOAD_SAMPLE_SECS * 1000))).replace("__LOADERR__", str(LOAD_ERR_PCT)).replace("<!--OVERLAY-->", overlay_tag(OVERLAY_HUB) + (stream_tag() if hubstream.enabled() else ""))
 
 
 def own_host(h):
@@ -6391,6 +6397,14 @@ def request_target(h):
     parts = h.requestline.split()
     return parts[1] if len(parts) > 1 and parts[1].startswith("//") else h.path
 
+VERSIONS = hubstream.Versions({"runs": lambda: run_list()})
+
+def stream_origin_ok(h, tailnet):
+    """A stream opens for no origin but this hub's own (loopback) or, on the tailnet, the tailnet's; an absent Origin is a non-browser reader."""
+    org = h.headers.get("Origin")
+    if org is None: return True
+    return org == f"https://{tailnet_block().get('host')}" if tailnet else own_origin(h)
+
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
     def refuse(self, reason, page=False):
@@ -6429,9 +6443,34 @@ class H(BaseHTTPRequestHandler):
                 self.wfile.write(chunk); self.wfile.flush()
         except (OSError, http.client.HTTPException): pass
         finally: up.close()
+    def stream(self, a):
+        """The page's push stream: every subject the reader does not hold yet, then a heartbeat while nothing changes."""
+        if not stream_origin_ok(self, a.tailnet): return self.refuse("forbidden origin")
+        held = hubstream.held_from(self.path.partition("?")[2])
+        self.protocol_version = "HTTP/1.1"   # the body is streamed, so its end is framed: chunked, then the close
+        self.send_response(200); self.send_header("Content-Type", hubstream.CTYPE); self.send_header("Cache-Control", "no-store")
+        self.send_header("Transfer-Encoding", "chunked"); self.send_header("Connection", "close"); self.end_headers()
+        self.close_connection = True
+        def chunk(data):
+            self.wfile.write(b"%x\r\n" % len(data) + data + b"\r\n")
+        quiet = time.monotonic()
+        try:
+            while True:
+                VERSIONS.refresh()
+                fresh = VERSIONS.newer(held)
+                for name, v in sorted(fresh.items()):
+                    chunk(hubstream.event(name, v)); held[name] = v
+                now = time.monotonic()
+                if fresh: quiet = now
+                elif now - quiet >= hubstream.HEARTBEAT_SECONDS:
+                    chunk(b": ping\n\n"); quiet = now
+                time.sleep(hubstream.TICK_SECONDS)
+        except OSError: return
+
     def do_GET(self):
         a = access(self, "GET")
         if not a.allowed: return self.refuse(a.reason, page=self.path.split("?", 1)[0] in ("/mobile", "/mobile/"))
+        if self.path.split("?", 1)[0] == hubstream.PATH and hubstream.enabled(): return self.stream(a)
         if request_target(self).startswith(DASH_PREFIXES): return self.dash("GET")
         if self.path.startswith(("/held/", "/ended/")):   # a run the childcc pass holds, or one that ended today: its dashboard (#689, #830)
             name = re.sub(r"[^\w-]", "", self.path.split("/", 2)[2].split("?")[0])
