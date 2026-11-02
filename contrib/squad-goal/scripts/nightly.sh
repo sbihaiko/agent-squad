@@ -16,6 +16,8 @@
 # (ghcall.sh, gh_dispatch_hold) until one green run replaces it.
 # A red result raises one alert on the path health.sh already uses: one line in $SG_STATE/alerts.log and one notification
 # (HEALTH_NOTIFY overrides the notifier). The two mode logs stay in $SG_STATE/nightly-parallel.log and nightly-serial.log.
+# An open bound marker (promote-pass.sh writes $SG_STATE/promote-bound, ADR-0164) moves the run to the oldest marked tip that
+# $SG_STATE/promote-bound-settled does not name; the result then settles that tip there, pass or fail, and dev waits a day.
 here="$(cd "$(dirname "$0")" && pwd)"; st=${SG_STATE:-/tmp/sg-state}
 mkdir -p "$st/auto" "$st/locks"
 day=$st/auto/nightly-$(date +%F)
@@ -29,10 +31,23 @@ fi
 tree=${SG_NIGHTLY_TREE:-$st/nightly-tree}; remote=${SG_NIGHTLY_REMOTE:-https://github.com/$SG_REPO.git}; base=${SG_BASE:-dev}
 export GIT_TERMINAL_PROMPT=0
 g() { /usr/bin/git -C "$tree" "$@"; }
+bound_open() {  # the oldest bound-ended tip that no settlement line names
+  [ -f "$st/promote-bound" ] || return 0
+  local t
+  while IFS=$'\t' read -r _ t _; do
+    [ -n "$t" ] || continue
+    awk -F'\t' -v t="$t" '$2 == t { f = 1 } END { exit !f }' "$st/promote-bound-settled" 2>/dev/null || { printf '%s\n' "$t"; return 0; }
+  done < "$st/promote-bound"
+}
 [ -d "$tree/.git" ] || { mkdir -p "$tree" && g init -q . && g remote add origin "$remote"; } || exit 1
 g remote set-url origin "$remote"
 o=$(g fetch -q origin "+refs/heads/$base:refs/remotes/origin/$base" 2>&1) || { echo "nightly: fetch of $base failed: $(printf '%s' "$o" | tail -1)" >&2; exit 1; }
 tip=$(g rev-parse "origin/$base") || exit 1
+# ADR-0164 (#1046): an open bound marker names a tip the full suite never finished. The nightly proves that tip, not dev, and
+# settles the marker with its result; a red settles as red and fails the record.
+bt=$(bound_open)
+if [ -n "$bt" ] && ! g cat-file -e "$bt^{commit}" 2>/dev/null && ! g fetch -q origin "$bt" 2>/dev/null; then bt=; fi
+[ -n "$bt" ] && tip=$bt
 g checkout -q -f --detach "$tip" && g clean -q -ffdx || { echo "nightly: the tree could not check out $tip" >&2; exit 1; }
 py=${SG_GATE_PY:-${SG_CHECKOUT:+$SG_CHECKOUT/.venv/bin/python}}; [ -x "$py" ] || py=python3
 # The two modes are one command each, so a caller may point them elsewhere: the whole suite, heavy included, in both.
@@ -67,6 +82,7 @@ if [ "$res" = fail ]; then
   notify=${HEALTH_NOTIFY:-/usr/bin/osascript}
   "$notify" -e "display notification \"${msg//\"/\'}\" with title \"squad-goal\"" >/dev/null 2>&1
 fi
+[ -n "$bt" ] && printf '%s\t%s\t%s\n' "$(date +%s)" "$bt" "$res" >> "$st/promote-bound-settled"
 : > "$day"   # the run is spent for today, green or red
 [ "$res" = pass ] && exit 0
 exit 1

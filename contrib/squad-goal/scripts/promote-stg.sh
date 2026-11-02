@@ -13,6 +13,9 @@
 #     A delta record (ADR-0156, $SG_STATE/gate-status-delta) carries the full pass of an ancestor P across a covered change: stg
 #     moves on it when the record says pass for the dev tip, P has a full pass and the changed-file list still hashes to P..tip.
 #     Each carried P is appended to $SG_STATE/gate-carried after the merge, and a P already there refuses.
+#   bound: the bound-ended proof (ADR-0164). Only for the tip promote-pass.sh recorded in $SG_STATE/promote-indeterminate, and
+#     only while neither the full line nor the delta record says fail for that tip. The merge carries the marker's meaning:
+#     no test reached every part of the tip, and the nightly proves it later.
 # Exit 0: the dev tip is in stg (promoted, or already there). Exit 1: nothing promoted; the one reason goes to $SG_STATE/promote.log
 # once per tip and reason (the dedupe list keeps its last 20 lines), so a pass that repeats says nothing new, and to stderr.
 # A later green tip carries the earlier work with it. The consolidation is one pull request (#743, owner rule for every project):
@@ -79,6 +82,14 @@ prove() {  # <tip>: refuse unless the proof for this tip is green, each refusal 
     list=$(g diff --name-only "$dP..$1" | LC_ALL=C sort)
     [ "$(printf '%s\n' "$list" | hash_list)" = "$dh" ] || refuse "$1" "not promoted: the proved changed-file list no longer hashes to P..T"
     carried=$dP
+  elif [ "$proof" = bound ]; then
+    # ADR-0164 (#1046): the bound-ended proof is the tip promote-pass.sh recorded as the bound's, and never a tip a test measured red.
+    IFS=$'\t' read -r _ it _ 2>/dev/null < "$state/promote-indeterminate"
+    [ "$it" = "$1" ] || refuse "$1" "not promoted: no bound-ended proof: $state/promote-indeterminate holds no record for the dev tip $1"
+    IFS=$'\t' read -r _ kind res sha 2>/dev/null < "$state/gate-status-full"
+    [ "$kind" = full ] && [ "$sha" = "$1" ] && [ "$res" = fail ] && refuse "$1" "not promoted: the last full proof of the dev tip is a fail"
+    IFS=$'\t' read -r _ dk dres _ dT _ 2>/dev/null < "$state/gate-status-delta"
+    [ "$dk" = delta ] && [ "$dT" = "$1" ] && [ "$dres" = fail ] && refuse "$1" "not promoted: the delta proof of the dev tip is a fail"
   else
     st=$(ci_state "$1" 2>/dev/null)
     [ "$st" = green ] || refuse "$1" "not promoted: CI is ${st:-unknown} (green needed)"

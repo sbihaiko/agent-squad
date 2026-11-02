@@ -39,6 +39,7 @@ n=$(printf '%s\n' "$changed" | awk 'NF' | wc -l | tr -d ' ')
 binary=$(g diff --numstat "$P..$T" | awk -F'\t' '$1 == "-" || $2 == "-"' | wc -l | tr -d ' ')
 [ "$binary" = 0 ] || refuse "the delta holds a binary change; the carry takes none"
 guards=()
+uncov=()
 while IFS= read -r p; do
   [ -n "$p" ] || continue
   hit=""
@@ -46,8 +47,12 @@ while IFS= read -r p; do
     case "$glob" in ""|\#*) continue;; esac
     if [[ "$p" == $glob ]]; then hit=1; [ "$cmd" = SELF ] && cmd=$p; guards+=("$cmd"); fi
   done < "$d/delta-guards.txt"
-  [ -n "$hit" ] || refuse "uncovered path: $p has no line in delta-guards.txt; the full proof is needed"
+  [ -n "$hit" ] || uncov+=("$p")
 done <<< "$changed"
+if [ "${#uncov[@]}" -gt 0 ]; then
+  list=$(printf '%s, ' "${uncov[@]}"); list=${list%, }
+  refuse "uncovered paths: $list; each needs a line in delta-guards.txt; the full proof is needed"
+fi
 [ -z "$(g status --porcelain --untracked-files=no)" ] || refuse "the delta tree is dirty; it must be clean before the proof"
 . "$d/caps.sh"
 py=$(sg_gate_python)
