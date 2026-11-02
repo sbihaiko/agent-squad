@@ -209,11 +209,12 @@ def test_the_monitor_carries_the_one_loop_switch_and_no_loop_tile():
     assert "role=switch" not in panel, "the Loop panel carries no second switch"
 
 
-def test_the_loop_switch_shows_state_who_and_when_and_the_log_keeps_the_changes():
+def test_the_loop_switch_shows_the_state_and_the_log_keeps_who_and_when():
+    """Owner: the switch is one key, so the state sits by it and every who and when stays in the change log."""
     out = run_js(f"loopSetHtml({js_view()})")
-    assert "owner" in out and "16:02" in out
+    assert "Loop on" in out and "owner" not in out and "16:02" not in out
     log = run_js(f"loopLogHtml({js_view()})")
-    assert "owner" in log and "loopback" in log and "start" in log
+    assert "owner" in log and "16:02" in log and "loopback" in log and "start" in log
 
 
 def test_the_loop_theme_shows_the_read_only_reason():

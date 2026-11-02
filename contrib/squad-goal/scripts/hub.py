@@ -5488,13 +5488,9 @@ const loopTip=v=>!v.write?v.reason:v.state==="on"?"turn off: stop after the live
 const loopSw=v=>`<button type=button role=switch aria-label="Loop" aria-checked="${v.state!=="off"}" data-loop${v.write&&v.state!=="starting"?"":" disabled"} class=lsw title="${esc(loopTip(v))}"><i aria-hidden="true"></i></button>`;
 const loopAct=e=>e.failed?`${String(e.action||"")} failed: ${e.failed}`:e.action==="drain"?"stop after the live runs and gates finish":e.action==="stop-now"?`stop now${e.killed?` (killed ${(e.killed.runs||[]).length} runs, ${(e.killed.gates||[]).length} gates${e.survived?`; ${(e.survived.runs||[]).length+(e.survived.gates||[]).length} not ended`:""})`:""}`:String(e.action||"");
 const loopRun=r=>String(r).split("/").filter(Boolean).pop()||String(r);
-const loopSetHtml=v=>`<div class=lnow>${loopSw(v)}<span><span class="ls ${esc(v.state)}">Loop ${esc(v.state)}</span><small>${v.who?`changed by ${esc(v.who)} at ${esc(loopWhen(v.when))}`:"no change from the hub yet"}${v.state==="draining"?` · ${v.live.runs.length+v.live.gates.length} live to finish`:""}</small></span></div>`
- +(v.write?"":`<div class=lwhy>${esc(v.reason)}. The rule is in Access.</div>`)+(v.failed?`<div class=lerr role=alert>The last start failed: ${esc(v.failed)}</div>`:"")+(loopErr?`<div class=lerr role=alert>${esc(loopErr)}</div>`:"")
-
-
- +`<p class=m>Turning it off drains: no new dispatch, the live runs and gates finish, then the loop stops. Each change writes one line to the change log.</p>`;
-const loopLogHtml=v=>`<p class=m>Turning it off drains: no new dispatch, the live runs and gates finish, then the loop stops. Each change writes one line to the change log.</p>`
- +`<h4>Changes</h4><ul class=laud>${v.log.length?v.log.map(e=>`<li><b>${esc(loopWhen(e.at))}</b> · ${esc(e.who)} (${esc(e.from)}) · ${esc(loopAct(e))}</li>`).join(""):"<li class=m>no change yet</li>"}</ul>`;
+const loopSetHtml=v=>`<div class=lnow>${loopSw(v)}<span class="ls ${esc(v.state)}">Loop ${esc(v.state)}</span></div>`
+ +(v.write?"":`<div class=lwhy>${esc(v.reason)}. The rule is in Access.</div>`)+(v.failed?`<div class=lerr role=alert>The last start failed: ${esc(v.failed)}</div>`:"")+(loopErr?`<div class=lerr role=alert>${esc(loopErr)}</div>`:"");
+const loopLogHtml=v=>`<h4>Changes</h4><ul class=laud>${v.log.length?v.log.map(e=>`<li><b>${esc(loopWhen(e.at))}</b> · ${esc(e.who)} (${esc(e.from)}) · ${esc(loopAct(e))}</li>`).join(""):"<li class=m>no change yet</li>"}</ul>`;
 const loopConfirmHtml=v=>{const r=v.live.runs,g=v.live.gates,drain=v.state==="on";
  return `<b>Stop the loop?</b><p class=m>Live now: ${r.length} run${r.length===1?"":"s"}, ${g.length} gate${g.length===1?"":"s"}.</p>`
  +(drain?`<label class=lrad><input type=radio name=lm value=drain checked><span><b>Stop after the live runs and gates finish</b><small>No new dispatch. The live work runs to its end, then the loop stops. The safe default.</small></span></label>`:"")

@@ -89,10 +89,17 @@ def test_the_loop_switch_is_off_to_the_left_and_says_so(hub):
     assert 'aria-checked="false"' in out and "Loop off" in out and "Start loop" not in out
 
 
-def test_turning_the_switch_off_drains_and_the_page_says_so_before_it_happens(hub):
+def test_the_switch_is_one_key_and_carries_no_explanation(hub):
+    """Owner: the Monitor shows one on/off key for the loop, never a paragraph beside it.
+
+    The drain rule still names itself where the write happens, in the stop confirm, and the change log keeps the history.
+    """
     page = hub.PAGE
     out = _run(page, f"loopSetHtml({json.dumps(LOOP_VIEW)})", _monitor_blocks(page))
-    assert "Turning it off drains" in out
+    assert out.count('role=switch') == 1
+    assert "drains" not in out and "<p" not in out and "<small" not in out, out
+    log = _run(page, f"loopLogHtml({json.dumps(LOOP_VIEW)})", _monitor_blocks(page))
+    assert "drains" not in log and "<h4>Changes</h4>" in log, log
     confirm = _run(page, f"loopConfirmHtml({json.dumps(LOOP_VIEW)})", _monitor_blocks(page))
     assert re.search(r'value=drain checked', confirm)
 
