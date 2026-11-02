@@ -82,6 +82,17 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
       mark "$tip" "promoted: the CI shards carried the full pass"; exit 0;;
     fail*) mark "$tip" "not promoted: CI ${v#fail } is red"; exit 1;;
   esac
+  # (#1192) A tip whose CI has not answered yet is measured by waiting, never by a local suite. The suite saturates the machine
+  # for eleven minutes, and the loop's own runs then die at the takeover bound, while the check that would have answered is
+  # already in flight on the tip's pull request. Past SG_PROMOTE_CI_WAIT the suite answers as before, so a CI that never
+  # reports never holds delivery. No marker is written: a later pass takes the same tip.
+  age=$(( $(date +%s) - $(g show -s --format=%ct "$tip" 2>/dev/null || echo 0) ))
+  wait_for=${SG_PROMOTE_CI_WAIT:-900}
+  if [ "$age" -lt "$wait_for" ]; then
+    echo "$(date -u +%FT%TZ) promote-pass: $tip waiting for CI: the check has not reported on it yet ($age s of ${wait_for}s)" >> "$log"
+    echo "promote-pass: $tip waiting for CI"
+    exit 0
+  fi
   # ADR-0156: a full pass carries across a covered delta. When one is on record and the tip moved only by covered paths, the
   # delta proof runs instead of the full suite and the promotion reads its record. Any refusal (an uncovered path, a bound, no
   # full pass) or a held delta lock falls through to the full suite below: the cheaper proof is an optimization, never a weaker gate.
