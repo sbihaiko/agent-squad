@@ -291,8 +291,8 @@ done
 ! /usr/bin/grep -q ' 2047$' "$T/board.calls" 2>/dev/null && ok "a child of a spec in Backlog stays in Backlog" || ko "#2047 moved: $(/usr/bin/grep ' 2047$' "$T/board.calls")"
 # A spec is never work (#665): a commit subject that names it is its children's, so no work rule writes its card, and the
 # fold alone sets it -- including the correction of a card a work rule moved forward while its children were in flight.
-! /usr/bin/grep -q '^STATUS o 4 [A-Za-z ]* 2050$' "$T/board.calls" 2>/dev/null && ok "a spec card a work rule moved forward is not written back: moving it below Doing is the owner's (ADR-0143, #1034)" || ko "#2050 written: $(bc) $o"
-! /usr/bin/grep -q 'BOARD-RECONCILE #2050' "$T/st/cycle.log" 2>/dev/null && ok "no correction of #2050 is named in cycle.log" || ko "#2050 correction named: $(cat "$T/st/cycle.log" 2>/dev/null)"
+/usr/bin/grep -q '^STATUS o 4 Todo 2050$' "$T/board.calls" 2>/dev/null && ok "a spec card a work rule moved to Code Complete goes back to the owner's column (ADR-0143, #1034)" || ko "#2050 not returned to Todo: $(bc) $o"
+/usr/bin/grep -q 'BOARD-RECONCILE #2050: card -> Todo (spec folds over its sub-issues)' "$T/st/cycle.log" 2>/dev/null && ok "the return is named in cycle.log" || ko "#2050 return not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
 ! /usr/bin/grep -q ' 2053$' "$T/board.calls" 2>/dev/null && ok "a commit that names a spec never moves its card forward" || ko "#2053 moved: $(/usr/bin/grep ' 2053$' "$T/board.calls")"
 ! /usr/bin/grep -q ' 2054$' "$T/board.calls" 2>/dev/null && ok "the correction leaves its queued child's card alone" || ko "#2054 moved: $(/usr/bin/grep ' 2054$' "$T/board.calls")"
 # The fold adds no GitHub call: the children come with the open-issue read, never from a sub-issues route.
