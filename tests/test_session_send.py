@@ -159,6 +159,20 @@ def test_the_wire_falls_back_to_the_sessions_own_flags_when_the_transcript_has_n
         proc.wait()
 
 
+def test_the_targets_argv_is_read_whole_past_a_truncating_ps_column(home, tmp_path):
+    """CI cut the target's flags at the `ps` column and read the mode as empty (2026-11-02): the reader takes the process's
+    argv whole, so a flag behind a long argument still answers."""
+    send = load_send()
+    proc = subprocess.Popen([sys.executable, "-c", "import time;time.sleep(30)", "x" * 300,
+                             "--dangerously-skip-permissions"])
+    try:
+        add_session(home, "s1", tmp_path / "app", pid=proc.pid)
+        assert send.sessions.permission_mode(tmp_path / "app", "s1", proc.pid) == "bypassPermissions"
+    finally:
+        proc.kill()
+        proc.wait()
+
+
 def test_two_concurrent_sends_with_one_id_send_once(home, tmp_path):
     send = load_send()
     add_session(home, "s1", tmp_path / "app")

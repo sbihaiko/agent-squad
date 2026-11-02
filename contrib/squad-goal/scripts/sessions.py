@@ -219,13 +219,25 @@ def permission_mode(cwd, sid, pid=None):
 ARGV_MODE = {"--dangerously-skip-permissions": "bypassPermissions", "--bypass-permissions": "bypassPermissions"}
 
 
-def argv_mode(pid):
-    """The mode a live session's own argv names, or "". Read-only: one `ps` call, no signal, no write."""
+def argv_of(pid):
+    """The argv the process was started with, or (). `/proc` first: it has no column width and no external tool, so a flag
+    past the `ps` column survives (a CI run cut a flag off and read the mode as empty); `ps -ww` answers elsewhere, wide."""
     try:
-        argv = subprocess.run(["ps", "-p", str(int(pid)), "-o", "args="], capture_output=True, text=True,
-                              timeout=5).stdout.split()
+        raw = open(f"/proc/{int(pid)}/cmdline", "rb").read()
+        if raw: return [a.decode("utf-8", "replace") for a in raw.split(b"\0") if a]
+    except (OSError, ValueError):
+        pass
+    try:
+        out = subprocess.run(["ps", "-ww", "-p", str(int(pid)), "-o", "args="], capture_output=True, text=True,
+                             timeout=5).stdout
     except (OSError, ValueError, subprocess.SubprocessError):
-        return ""
+        return []
+    return out.split()
+
+
+def argv_mode(pid):
+    """The mode a live session's own argv names, or "". Read-only: one read of the process's argv, no signal, no write."""
+    argv = argv_of(pid)
     for k, tok in enumerate(argv):
         if tok in ARGV_MODE: return ARGV_MODE[tok]
         if tok.startswith("--permission-mode="): return tok.split("=", 1)[1]
