@@ -53,6 +53,8 @@ before=$(alerts); out=$(sg_todo_cards "803,804,805" 2>"$T/err2"); rc=$?; after=$
 /usr/bin/grep -q "go-labelled #805 has no readable card" "$T/err2" && ok "only the issue that answers go-labelled and has no card is named unread" || ko "only the issue that answers go-labelled and has no card is named unread (stderr: $(tr '\n' ' ' < "$T/err2"))"
 [ "${after:-0}" = "$(( ${before:-0} + 1 ))" ] && ok "one alert line, for the card the board really cannot read" || ko "one alert line, for the card the board really cannot read (before ${before:-0}, after ${after:-0})"
 /usr/bin/grep -q "#805" "$SG_STATE/alerts.log" 2>/dev/null && ok "the alert names the go-labelled issue" || ko "the alert names the go-labelled issue"
+sg_todo_cards "803,804,805" >/dev/null 2>&1; [ "$(alerts)" = "$after" ] && ok "an issue already named unread for the same reason is not named again on the next pass" || ko "an issue already named unread is named again (alerts $after -> $(alerts))"
+/usr/bin/grep -q "#802 is in the go list, but its issue read did not answer" "$SG_STATE/alerts.log" && ok "an issue whose own read did not answer names that read" || ko "an issue whose own read did not answer names that read"
 /usr/bin/grep -q "#803" "$SG_STATE/alerts.log" 2>/dev/null && ko "a closed issue is never named go-labelled in alerts.log" || ok "a closed issue is never named go-labelled in alerts.log"
 /usr/bin/grep -q "#804" "$SG_STATE/alerts.log" 2>/dev/null && ko "an issue with no go label is never named go-labelled in alerts.log" || ok "an issue with no go label is never named go-labelled in alerts.log"
 echo "$out" | /usr/bin/grep -qx 803 && ko "a closed issue is not listed as Todo" || ok "a closed issue is not listed as Todo"

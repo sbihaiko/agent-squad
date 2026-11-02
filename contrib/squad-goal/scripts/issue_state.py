@@ -133,6 +133,7 @@ class State:
 
     def __init__(self, binding):
         self.binding = binding
+        self.unanswered = set()   # the go issues whose own read did not answer in the last naming pass
 
     @property
     def name(self):
@@ -192,7 +193,9 @@ class State:
         or when the read does not answer -- a premise a failed read never settles one way or the other (#1031, ADR-0155)."""
         facts = getattr(self.binding, "issue_facts", None)
         f = facts(issue) if facts else None
-        if f is None: return ""
+        if f is None:
+            self.unanswered.add(str(issue))
+            return ""
         state, labels = f
         if state and state != "open": return "closed"
         if label and label not in labels: return f"no {label} label"
@@ -705,6 +708,23 @@ def board_state(owner=None, project=None, repo=None, **kw):
     return State(BoardBinding(owner, project, repo, env=env, **kw))
 
 
+def _name_unread(state_dir, missing, unanswered):
+    """One alerts.log line for each go issue the pass names unread for a reason it was not named for on the last pass. An
+    issue whose own read did not answer is named as that failed read, never as a card the board does not carry."""
+    path = pathlib.Path(state_dir) / "frontier-unread.json"
+    try: named = json.loads(path.read_text())
+    except (OSError, ValueError): named = {}
+    reasons = {m: ("issue read" if m in unanswered else "card") for m in missing}
+    card = [m for m in missing if reasons[m] == "card" and named.get(m) != "card"]
+    failed = [m for m in missing if reasons[m] == "issue read" and named.get(m) != "issue read"]
+    with open(pathlib.Path(state_dir) / "alerts.log", "a") as f:
+        if card: f.write(f"{_now()} FRONTIER unread: go-labelled {', '.join('#' + m for m in card)} has no readable card on the board\n")
+        for m in failed: f.write(f"{_now()} FRONTIER unread: #{m} is in the go list, but its issue read did not answer and the board read carries no card for it\n")
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(reasons))
+    os.replace(tmp, path)
+
+
 def _fresh_hub_items(require_fresh=True, repo=None):
     """Return verified rows for this repository, optionally requiring a recent refresh stamp."""
     path = pathlib.Path(os.environ.get("SG_BOARD_CACHE", "/nonexistent"))
@@ -750,10 +770,7 @@ def main(argv):
         for n, s in sorted(rows.items(), key=lambda kv: int(kv[0])): print(f"{n}\t{s}")
         if missing:
             print("UNREAD\t" + ",".join(missing))
-            alerts = os.environ.get("SG_STATE")
-            if alerts:
-                with open(os.path.join(alerts, "alerts.log"), "a") as f:
-                    f.write(f"{_now()} FRONTIER unread: go-labelled {', '.join('#' + m for m in missing)} has no readable card on the board\n")
+            if os.environ.get("SG_STATE"): _name_unread(os.environ["SG_STATE"], missing, state.unanswered)
         return 0
     if args[:1] == ["--kinds"]:
         cached = _fresh_hub_items(repo=repo or None)
