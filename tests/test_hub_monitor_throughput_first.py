@@ -1,8 +1,8 @@
-"""The Monitor leads with Throughput and states the loop once (#1071, parent #1068).
+"""The Monitor leads with the machine instruments, then Throughput, and states the loop once (#1071, parent #1068).
 
 The loop's state renders in the Loop panel only, through one switch that drains when turned off (ADR-0162). The Monitor
-carries no loop tile and no loop words in its heading. Throughput sits first in the Monitor, above the usage and spend
-sections, which keep the donut and the bar chart.
+carries no loop tile and no loop words in its heading. The CPU, RAM and GPU gauges sit first in the Monitor, then the
+throughput row, above the usage and spend sections, which keep the donut and the bar chart.
 """
 import importlib.util
 import json
@@ -104,10 +104,10 @@ def test_the_loop_switch_sits_in_the_loop_panel_and_the_monitor_has_none(hub):
     assert 'data-loop' not in monitor
 
 
-def test_the_throughput_row_leads_the_monitor(hub):
+def test_the_instruments_lead_the_monitor_and_throughput_follows(hub):
     page = hub.PAGE
     monitor = _section(page, "inst")
-    assert monitor.index("id=ispeed") < monitor.index("id=igs")
+    assert monitor.index("id=igs") < monitor.index("id=ispeed")
     assert monitor.index("id=ispeed") < monitor.index("id=ispec")
 
 
