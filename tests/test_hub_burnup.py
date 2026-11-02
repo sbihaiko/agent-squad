@@ -1,4 +1,5 @@
 """The spec lane's burn-up (#1025): the hub answers one spec's lines from the history store, and the page opens it from the lane."""
+import datetime as dt
 import importlib.util
 import re
 from pathlib import Path
@@ -169,3 +170,67 @@ def test_a_stored_removal_after_the_child_joined_keeps_it_out_of_scope(hub, stor
         {"t": _day(1), "scope": 1, "done": 0, "held": 0, "marks": [{"k": "added", "n": 21}]},
         {"t": _day(2), "scope": 0, "done": 0, "held": 0, "marks": [{"k": "removed", "n": 21}]},
     ]
+
+
+def _read(d):
+    return dt.datetime(2026, 10, d, 9, tzinfo=dt.UTC).timestamp()
+
+
+def _open_child(hub, store, number, joined, *later):
+    events = [_ev(joined, "added"), _ev(joined, "status", status="Doing"), _ev(joined, "spec", spec=SPEC)]
+    events += [_ev(d, kind) for d, kind in later]
+    hub._hist.record_issue(store, number, OPENED, OPENED, events, True, 1_700_000_000)
+
+
+
+def test_the_burnup_series_is_cumulative_by_day_with_the_unread_day_named_as_a_gap(hub, store, monkeypatch):
+    _open_child(hub, store, 21, 1, (3, "closed"))
+    _open_child(hub, store, 22, 2)
+    _open_child(hub, store, 23, 2)
+    monkeypatch.setattr(hub._flow, "samples", lambda path: [{"t": _read(d)} for d in (1, 2, 4, 5)])
+    answer = hub.flow_burnup(SPEC)
+    assert answer["series"]["days"] == [
+        {"day": "2026-10-01", "n": 1, "scope": 1, "delivered": 0},
+        {"day": "2026-10-02", "n": 2, "scope": 3, "delivered": 0},
+        {"day": "2026-10-04", "n": 4, "scope": 3, "delivered": 1},
+        {"day": "2026-10-05", "n": 5, "scope": 3, "delivered": 1},
+    ]
+    assert answer["series"]["gaps"] == [{"day": "2026-10-03", "n": 3}]
+    assert answer["series"]["days"][-1]["delivered"] == 1
+
+
+def test_the_guide_runs_from_the_first_point_to_the_scope_at_the_trailing_pace(hub, store, monkeypatch):
+    _open_child(hub, store, 21, 1, (3, "closed"))
+    _open_child(hub, store, 22, 2)
+    _open_child(hub, store, 23, 2)
+    monkeypatch.setattr(hub._flow, "samples", lambda path: [{"t": _read(d)} for d in (1, 2, 4, 5)])
+    answer = hub.flow_burnup(SPEC)
+    guide = answer["series"]["guide"]
+    assert {k: guide[k] for k in ("source", "from", "to")} == {
+        "source": "trailing",
+        "from": {"day": "2026-10-01", "n": 1, "delivered": 0},
+        "to": {"day": "2026-10-19", "n": 19, "scope": 3},
+    }
+    assert guide["pace"] == pytest.approx(3 / 18)
+    assert answer["series"]["scope"] == 3
+
+
+def test_the_delivered_line_never_falls_when_a_delivered_child_is_reopened(hub, store, monkeypatch):
+    _open_child(hub, store, 21, 1, (2, "closed"), (4, "reopened"))
+    monkeypatch.setattr(hub._flow, "samples", lambda path: [{"t": _read(d)} for d in (1, 2, 3, 4)])
+    answer = hub.flow_burnup(SPEC)
+    assert [d["delivered"] for d in answer["series"]["days"]] == [0, 1, 1, 1]
+
+
+def test_without_a_whole_read_the_series_names_the_missing_read(hub, store, monkeypatch):
+    _open_child(hub, store, 21, 1)
+    monkeypatch.setattr(hub._flow, "samples", lambda path: [])
+    answer = hub.flow_burnup(SPEC)
+    assert answer["series"]["days"] == []
+    assert answer["series"]["reason"] == "no whole board read after the first ticket"
+
+
+def test_the_page_names_the_day_and_delivered_axes_and_the_scope_line(hub):
+    assert "day number (day ${n0} = first whole read)" in hub.PAGE
+    assert "delivered (count)" in hub.PAGE
+    assert "scope ${sc}" in hub.PAGE
