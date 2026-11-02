@@ -399,5 +399,98 @@ printf '%s\t%s\t%s\t%s\t%s\t%s\tred\t%s\n' "$(date +%s)" o/r "$newtip" - full ru
 o=$(env -u SG_CHECKOUT SG_STATE="$ST" bash -c '. "$0"; gh_dispatch_hold' "$S/ghcall.sh"); rc=$?
 [ "$rc" = 0 ] && ok "a pass that cannot read the tip still holds for a red from this period" \
   || ko "a current red did not hold: '$o'"
+rm -rf "$OBL" "$SET"
+
+# 21) (#1201) a mode that ends before pytest writes its summary did not fail: it never finished. The parallel mode below is
+#     what the nightly logs showed -- pytest's dots, then the workers' old-style hookwrapper warning at
+#     pytest_sessionfinish and no `... in Ns` line, the mode's process ended by signal 15 (143). Such a mode is bounded,
+#     never a red with an empty id list, and the alert names the mode, the signal and the cause instead of "no failing
+#     test named".
+cat > "$T/killed.sh" <<EOF
+#!/bin/bash
+echo "killed \$PWD" >> "$T/ran.log"
+printf '.F.s..\nPluggyTeardownRaisedWarning: A plugin raised an exception during an old-style hookwrapper teardown.\nHook: pytest_sessionfinish\nOSError: cannot send (already closed?)\n'
+exit 143
+EOF
+chmod +x "$T/killed.sh"
+rm -f "$ST/alerts.log" "$ST/nightly-result" "$T/ran.log"; mark
+out=$(env SG_STATE="$ST" SG_REPO=o/r SG_BASE=dev SG_NIGHTLY_REMOTE="$T/origin.git" SG_NIGHTLY_TREE="$T/tree" \
+  SG_NIGHTLY_PARALLEL="$T/killed.sh" SG_NIGHTLY_SERIAL="$T/serial.sh" HEALTH_NOTIFY="$T/notify.sh" bash "$S/nightly.sh" 2>&1); rc=$?
+rec
+[ "$rc $r_res $r_par $r_ser" = "1 bounded bounded:signal-15 pass" ] \
+  && ok "a mode killed before its summary is bounded, never fail" || ko "killed mode record: rc $rc '$r_res $r_par $r_ser' (out: $out)"
+[ "$r_ids" = '[]' ] && ok "a mode that never finished names no failing test" || ko "killed mode ids: '$r_ids'"
+/usr/bin/grep -q "ended before its summary" "$ST/alerts.log" 2>/dev/null && ok "the alert names the mode that ended before its summary" || ko "no kill in the alert: '$(cat "$ST/alerts.log" 2>&1)'"
+/usr/bin/grep -q "SIGTERM" "$ST/alerts.log" 2>/dev/null && ok "the alert names the signal that ended the mode" || ko "no signal in the alert: '$(cat "$ST/alerts.log" 2>&1)'"
+/usr/bin/grep -q "parallel" "$ST/alerts.log" 2>/dev/null && ok "the alert names the parallel mode" || ko "the alert names no mode: '$(cat "$ST/alerts.log" 2>&1)'"
+/usr/bin/grep -q "cannot send" "$ST/alerts.log" 2>/dev/null && ok "the alert names the OSError at pytest_sessionfinish" || ko "the alert names no cause: '$(cat "$ST/alerts.log" 2>&1)'"
+/usr/bin/grep -qi "no failing test named" "$ST/alerts.log" 2>/dev/null && ko "the alert still reads 'no failing test named'" || ok "the alert never says 'no failing test named'"
+hold >/dev/null; [ $? = 1 ] && ok "a bounded record never holds dispatch" || ko "a bounded record held dispatch: $(hold)"
+
+# 22) (#1201) a mode that ends without a summary once is run once more: the end may be transient, and the retry's own
+#     summary is the reading. The first attempt's log is kept beside the second, never overwritten.
+cat > "$T/retry.sh" <<EOF
+#!/bin/bash
+echo "retry \$PWD" >> "$T/ran.log"
+n=\$(cat "$T/retry.n" 2>/dev/null || echo 0); echo \$((n+1)) > "$T/retry.n"
+[ "\$n" = 0 ] && { printf 'F..\nOSError: cannot send (already closed?)\n'; exit 143; }
+printf '4270 passed, 25 skipped, 24 deselected in 2844.15s\n'; exit 0
+EOF
+chmod +x "$T/retry.sh"
+rm -f "$ST/alerts.log" "$ST/nightly-result" "$T/retry.n" "$T/ran.log"; mark
+out=$(env SG_STATE="$ST" SG_REPO=o/r SG_BASE=dev SG_NIGHTLY_REMOTE="$T/origin.git" SG_NIGHTLY_TREE="$T/tree" \
+  SG_NIGHTLY_PARALLEL="$T/retry.sh" SG_NIGHTLY_SERIAL="$T/serial.sh" HEALTH_NOTIFY="$T/notify.sh" bash "$S/nightly.sh" 2>&1); rc=$?
+rec
+[ "$rc $r_res $r_par $r_ser" = "0 pass pass pass" ] \
+  && ok "a mode that ended without a summary is run once more, and the retry's summary is the record" \
+  || ko "retry: rc $rc '$r_res $r_par $r_ser' (out: $out)"
+/usr/bin/grep -q "4270 passed" "$ST/nightly-parallel.log" 2>/dev/null && ok "the parallel mode log carries a real pytest summary line" || ko "the mode log has no summary: '$(cat "$ST/nightly-parallel.log" 2>&1)'"
+/usr/bin/grep -q "cannot send" "$ST/nightly-parallel.log.first" 2>/dev/null && ok "the first attempt's log is kept beside the second" || ko "the first attempt's log is gone: '$(/bin/ls "$ST" 2>&1)'"
+[ ! -e "$ST/alerts.log" ] && ok "a retry that finished raises no alert" || ko "a finished retry alerted: '$(cat "$ST/alerts.log" 2>&1)'"
+
+# 23) (#1201) a start killed before a mode result still leaves the one record, and it names the kill: the trap writes the
+#     line with the modes it had, an alert names the signal, and no day marker is spent, so the next cycle tries again.
+cat > "$T/slow.sh" <<'SLEOF'
+#!/bin/bash
+trap 'exit 143' TERM INT
+echo started
+while :; do sleep 1; done
+SLEOF
+chmod +x "$T/slow.sh"
+start_tip=$($G -C "$T/src" rev-parse dev)
+rm -f "$ST/alerts.log" "$ST/nightly-result" "$T/ran.log" "$ST/auto/nightly-$(date +%F)"
+env SG_STATE="$ST" SG_REPO=o/r SG_BASE=dev SG_NIGHTLY_REMOTE="$T/origin.git" SG_NIGHTLY_TREE="$T/tree" \
+  SG_NIGHTLY_PARALLEL="$T/slow.sh" SG_NIGHTLY_SERIAL="$T/serial.sh" HEALTH_NOTIFY="$T/notify.sh" \
+  bash "$S/nightly.sh" > "$T/killed-start.out" 2>&1 &
+kpid=$!
+i=0; while [ $i -lt 100 ] && ! /usr/bin/grep -q started "$ST/nightly-parallel.log" 2>/dev/null; do sleep 0.1; i=$((i+1)); done
+kill -TERM $kpid; wait $kpid; rc=$?
+# The holder exits as soon as it has passed the signal on, and the nightly writes its record on the trap: wait for it.
+i=0; while [ $i -lt 100 ] && [ ! -s "$ST/nightly-result" ]; do sleep 0.1; i=$((i+1)); done
+i=0; while [ $i -lt 100 ] && [ ! -s "$ST/alerts.log" ]; do sleep 0.1; i=$((i+1)); done
+rec
+[ "$rc" = 143 ] && ok "a killed start exits on its own signal" || ko "killed start rc $rc: $(cat "$T/killed-start.out")"
+[ "$r_res $r_par $r_ser" = "bounded bounded:signal-15 bounded:signal-15" ] \
+  && ok "a start killed before its first mode result writes the record, never no record" \
+  || ko "killed start record: '$r_res $r_par $r_ser'"
+[ "$r_sha" = "$start_tip" ] && ok "the killed start's record names the tip it was proving" || ko "killed start sha: '$r_sha', dev $start_tip"
+/usr/bin/grep -q "SIGTERM" "$ST/alerts.log" 2>/dev/null && ok "the alert names the signal that ended the start" || ko "no signal in the alert: '$(cat "$ST/alerts.log" 2>&1)'"
+[ ! -e "$ST/auto/nightly-$(date +%F)" ] && ok "a killed start spends no day marker, so the next cycle runs again" || ko "a killed start spent the day marker"
+[ ! -e "$ST/locks/nightly" ] && ok "a killed start releases its lock" || ko "the lock outlived the killed start"
+rm -f "$ST/alerts.log" "$ST/nightly-result"
+
+# 24) (#1201) the two readings are told apart at the readers: a red record holds dispatch and names its ids, and a bounded
+#     one names no test and holds nothing. A bounded result over a red mode is still no reading.
+rm -f "$T/ran.log"; mark
+out=$(ng FAIL_parallel=1); rc=$?; rec
+[ "$r_res $r_par" = "fail fail" ] && [ -n "$r_ids" ] && hold >/dev/null \
+  && ok "a red record names its ids and holds dispatch" || ko "red record: '$r_res $r_par $r_ids'"
+printf '%s\tbounded\t%s\tbounded:signal-15\tpass\t[]\n' "$(date +%s)" "$start_tip" > "$ST/nightly-result"
+o=$(hold); rc=$?
+[ $rc = 1 ] && ok "a bounded record holds no dispatch" || ko "a bounded record held dispatch: '$o'"
+case "$o" in *bounded*) ok "the pass says the nightly was stopped and names the mode";; *) ko "the note does not name the bounded run: '$o'";; esac
+bad_rec "$(date +%s)\tpass\t$sha\tpass\tbounded:signal-15\t[]\n" && ok "a pass over a bounded mode is no reading" || ko "a pass over a bounded mode held dispatch"
+bad_rec "$(date +%s)\tbounded\t$sha\tfail\tpass\t[]\n" && ok "a bounded result over a red mode is no reading" || ko "a bounded result over a red mode held dispatch"
+rm -f "$ST/nightly-result"
 
 rm -rf "$T"; exit $fail

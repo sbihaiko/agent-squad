@@ -183,6 +183,24 @@ def test_a_default_check_the_tree_cannot_measure_is_reported_not_settled(nightly
     assert "OBLIGATION unmeasured" in alert and nightly["sha"][:7] in alert
 
 
+def test_a_mode_that_never_finished_is_retried_and_keeps_its_first_log(nightly, tmp_path):
+    """A mode that ends before pytest's summary is run once more; the retry's summary is the record, and the first log,
+    with the OSError that names the cause, stays beside it (#1201)."""
+    n = tmp_path / "retry.n"
+    retry = _script(
+        tmp_path / "retry.sh",
+        f'n=$(cat "{n}" 2>/dev/null || echo 0); echo $((n+1)) > "{n}"\n'
+        "[ \"$n\" = 0 ] && { printf 'F..\\nOSError: cannot send (already closed?)\\n'; exit 143; }\n"
+        "printf '22 passed in 1.00s\\n'; exit 0\n",
+    )
+    res = nightly["run"](SG_NIGHTLY_PARALLEL=str(retry))
+    assert res.returncode == 0, res.stderr
+    fields = (nightly["st"] / "nightly-result").read_text().split("\t")
+    assert (fields[1], fields[3]) == ("pass", "pass")
+    assert "22 passed in 1.00s" in (nightly["st"] / "nightly-parallel.log").read_text()
+    assert "cannot send" in (nightly["st"] / "nightly-parallel.log.first").read_text()
+
+
 def test_a_bounded_full_suite_never_settles_a_pytest_obligation_red(nightly, tmp_path):
     """A suite a signal stopped measured no red, so the obligation that needs pytest stays open: the nightly never answers
     it with a red the suite did not find (#1183, ADR-0164)."""

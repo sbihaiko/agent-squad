@@ -19,8 +19,13 @@
 # the tests it failed, and the hub draws them. An id is never split at a space, so a parametrized case id such as
 # `test_x[case with space]` reaches the hub whole. A red record holds dispatch (ghcall.sh, gh_dispatch_hold) until one green
 # run replaces it; a bounded record is unproven, so it holds nothing.
-# A red result raises one alert on the path health.sh already uses: one line in $SG_STATE/alerts.log and one notification
-# (HEALTH_NOTIFY overrides the notifier). The two mode logs stay in $SG_STATE/nightly-parallel.log and nightly-serial.log.
+# A mode finished when pytest wrote its summary line (`<n> passed ... in 12.34s`). A mode that ended with any other last
+# line was killed before the summary: it is bounded, never a red with no test named (#1201). Such a mode is run once more,
+# and the first log stays as `<log>.first`. A start the loop kills itself leaves the record too, naming the signal.
+# A red or a bounded result raises one alert on the path health.sh already uses: one line in $SG_STATE/alerts.log and one
+# notification (HEALTH_NOTIFY overrides the notifier). The alert names the mode, the exit status, the signal and the log
+# line that names the cause, never "no failing test named". The two mode logs stay in $SG_STATE/nightly-parallel.log and
+# nightly-serial.log.
 # An open bound marker (promote-pass.sh writes $SG_STATE/promote-bound, ADR-0164) moves the run to the oldest marked tip that
 # no pass or fail settlement in $SG_STATE/promote-bound-settled names; the result then settles that tip there -- pass, fail,
 # or bounded for an attempt the suite never finished, which leaves the marker open -- and dev waits a day.
@@ -84,32 +89,103 @@ ids_of() { sed -n -e 's/^FAILED //p' -e 's/^ERROR //p' "$1" | sed -e 's/ - .*//'
 # signal-(code-128) for it. The nightly cannot see the wrapper's own choice; the reader reads the tag as the stop reason.
 rc_reason() { if [ "$1" -ge 129 ] && [ "$1" -le 192 ]; then echo "signal-$(( $1 - 128 ))"; else echo "exit-$1"; fi; }
 is_signal_rc() { [ "$1" -ge 129 ] && [ "$1" -le 192 ]; }
+# A mode finished when pytest wrote its last line, the summary `<n> passed ... in 12.34s`. A mode that ends with any other
+# last line was killed, or its interpreter died, before the summary: its output names no failing test, and it is not a red
+# the suite measured (#1201: a dead controller leaves every worker in `PluggyTeardownRaisedWarning ... OSError: cannot send
+# (already closed?)` and the run prints no summary). `lastline` is the last line with content, so trailing blank lines never
+# hide it.
+lastline() { awk 'NF { l = $0 } END { print l }' "$1" 2>/dev/null; }
+finished() { lastline "$1" | /usr/bin/grep -qE '(passed|failed|error|errors|no tests ran|skipped|deselected|xfailed|xpassed).* in [0-9]+([.][0-9]+)?s( =+)?$'; }
+# A code above 128 is a signal: the shell reports 143 for a process a TERM ended, and the alert names it as a signal.
+signame() {
+  case "$1" in
+    129) echo SIGHUP;; 130) echo SIGINT;; 131) echo SIGQUIT;; 134) echo SIGABRT;; 137) echo SIGKILL;;
+    139) echo SIGSEGV;; 143) echo SIGTERM;; *) echo "exit $1";;
+  esac
+}
 pout=$st/nightly-parallel.log; sout=$st/nightly-serial.log
-# mode <command> <log> <configured>: one leg of the suite, answering 0 pass, 1 fail or 2 bounded, and leaving its exit code
-# in mode_rc. A leg whose log names a failing test is red whatever it exited with. A leg that ended non-zero and named no
-# failing test measured nothing: it is bounded, carrying the signal or the exit it died of, so a killed suite is never
-# recorded as a red the suite found (ADR-0164).
+# verdict <log> <exit status> <configured command>: the mode field. A leg whose log names a failing test is red whatever it
+# exited with (and names the signal that also stopped it). A leg that ended non-zero and named no failing test measured
+# nothing: it is bounded, carrying the signal or the exit it died of, so a killed suite is never recorded as a red the suite
+# found (ADR-0164).
 # pytest exits 5 when it collects no test. Under the default command that is a repository with no Python suite, and no
 # suite is not red (#758); under a configured command, 5 names no test either, so it is bounded like any other non-zero
 # exit that named none.
-mode() {
-  ( cd "$tree" && bash -c "$1" ) > "$2" 2>&1; mode_rc=$?
-  [ "$mode_rc" = 0 ] && return 0
-  [ "$mode_rc" = 5 ] && [ -z "$3" ] && return 0
-  [ -n "$(ids_of "$2")" ] || return 2
-  return 1
+verdict() {
+  if [ "$2" = 0 ] || { [ "$2" = 5 ] && [ -z "$3" ]; }; then echo pass; return; fi
+  if [ -n "$(ids_of "$1")" ]; then
+    if is_signal_rc "$2"; then echo "fail:signal-$(( $2 - 128 ))"; else echo fail; fi
+    return
+  fi
+  echo "bounded:$(rc_reason "$2")"
 }
-# leg <mode result> <exit code>: the mode field. A red that a signal also stopped is `fail:signal-<n>`: it stays a red the
-# suite measured -- its ids, its alert and its hold are unchanged -- and the record keeps the stop reason beside it.
-leg() {
-  case "$1" in
-    0) echo pass;;
-    1) if is_signal_rc "$2"; then echo "fail:signal-$(( $2 - 128 ))"; else echo fail; fi;;
-    *) echo "bounded:$(rc_reason "$2")";;
+# One mode, and one retry when it ended before its summary: the end may be transient, and the retry's own summary is the
+# reading. The first attempt's log stays as `<log>.first`, so the end, and the OSError that names its cause, are never lost.
+# The mode runs in the background so the signal trap below can stop it at once, which a foreground command would delay.
+ms=; mr=; mpid=
+run_mode() {  # <command> <log> <configured command>; sets ms and mr
+  local r
+  ( cd "$tree" && bash -c "$1" ) > "$2" 2>&1 & mpid=$!
+  wait "$mpid"; r=$?; mpid=
+  ms=$(verdict "$2" "$r" "$3"); mr=$r
+  case "$ms" in bounded:*)
+    finished "$2" || {
+      mv -f "$2" "$2.first"
+      ( cd "$tree" && bash -c "$1" ) > "$2" 2>&1 & mpid=$!
+      wait "$mpid"; r=$?; mpid=
+      ms=$(verdict "$2" "$r" "$3"); mr=$r
+    };; esac
+}
+# One record, by temp file and rename (ADR-0030). The trap below writes the same line, so a killed start leaves a record.
+write_record() {  # <result> <parallel> <serial> <ids>
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "${now:-$(date +%s)}" "$1" "$tip" "$2" "$3" "$4" > "$st/nightly-result.$$" \
+    && mv -f "$st/nightly-result.$$" "$st/nightly-result"
+}
+alert() {  # <message>
+  local msg=$1 net
+  printf '%s %s\n' "$(date '+%F %T')" "$msg" >> "$st/alerts.log"
+  net=${HEALTH_NOTIFY:-/usr/bin/osascript}
+  "$net" -e "display notification \"${msg//\"/\'}\" with title \"squad-goal\"" >/dev/null 2>&1
+}
+# mode_why <mode field> <log>: one phrase naming the stop and the line that names its cause, for the alert. A bounded leg
+# names no failing test, so the alert never says "no failing test named".
+mode_why() {
+  local m=$1 log=$2 n=${1##*-} why d
+  case "$m" in
+    bounded:signal-*) if finished "$log"; then why="named no failing test and was stopped by signal $n ($(signame $(( n + 128 ))))"
+                      else why="ended before its summary, stopped by signal $n ($(signame $(( n + 128 ))))"; fi;;
+    bounded:exit-*) if finished "$log"; then why="ended without naming a failing test (exit $n)"
+                    else why="ended before its summary (exit $n)"; fi;;
+    *) why=$m;;
   esac
+  d=$(/usr/bin/grep -E 'OSError|PluggyTeardownRaisedWarning|cannot send|Terminated|Killed' "$log" 2>/dev/null | tail -n 1)
+  [ -n "$d" ] || d=$(lastline "$log")
+  [ -n "$d" ] && why="$why: $(printf '%s' "$d" | tr '\t\n' '  ' | cut -c1-180)"
+  printf '%s' "$why"
 }
-mode "$par" "$pout" "${SG_NIGHTLY_PARALLEL:-}"; ps=$?; prc=$mode_rc; pm=$(leg "$ps" "$prc")
-mode "$ser" "$sout" "${SG_NIGHTLY_SERIAL:-}"; ss=$?; src=$mode_rc; sm=$(leg "$ss" "$src")   # both modes always run: the record says which one broke
+# A start that is killed before a mode result leaves the record too, and it names the kill: no reader takes a killed start
+# for a red suite. It spends no day marker, so the next cycle tries again.
+pm=; sm=; pmf=; smf=; cur=parallel
+killed() {  # <signal name> <exit code>
+  trap - TERM INT HUP
+  [ -n "$mpid" ] && kill -TERM "$mpid" 2>/dev/null
+  if [ -z "$tip" ]; then alert "NIGHTLY start killed by $1 before a tip was read"; exit "$2"; fi
+  local n=$(( $2 - 128 ))
+  [ -n "$pmf" ] || pm="bounded:signal-$n"
+  [ -n "$smf" ] || sm="bounded:signal-$n"
+  write_record bounded "$pm" "$sm" '[]'
+  alert "NIGHTLY start killed at ${tip:0:7} by $1 before the ${cur:-first} mode finished"
+  exit "$2"
+}
+trap 'killed SIGTERM 143' TERM
+trap 'killed SIGINT 130' INT
+trap 'killed SIGHUP 129' HUP
+set +m   # serial.sh runs this command in its own group; job notices here would only write "Terminated: 15" over the log
+run_mode "$par" "$pout" "${SG_NIGHTLY_PARALLEL:-}"; pm=$ms; pmf=1
+cur=serial
+run_mode "$ser" "$sout" "${SG_NIGHTLY_SERIAL:-}"; sm=$ms; smf=1   # both modes always run: the record says which one broke
+cur=
+trap - TERM INT HUP
 failed=$st/nightly-failing.$$   # one complete id per line, so no id is ever split
 { ids_of "$pout"; ids_of "$sout"; } | sort -u > "$failed"
 nfail=$(awk 'END{print NR}' "$failed")
@@ -119,8 +195,8 @@ rm -f "$failed"
 # The result follows its modes: pass only when both finished green, fail when a leg named tests, and bounded when a leg was
 # stopped and none was red. The record carries the two facts on its own (ADR-0164).
 res=pass
-if [ "$ps" = 1 ] || [ "$ss" = 1 ]; then res=fail
-elif [ "$ps" != 0 ] || [ "$ss" != 0 ]; then res=bounded; fi
+case "$pm $sm" in *fail*) res=fail;; esac
+if [ "$res" != fail ] && { [ "$pm" != pass ] || [ "$sm" != pass ]; }; then res=bounded; fi
 # The proof obligations a gate left (spec 1163, gate.sh). An unproven entry writes one record:
 #   $st/obligations/<key>: `<repository> TAB <tree sha> TAB <base> TAB <checks that did not run> TAB <scope> TAB <deadline>`
 # The nightly settles it: it reads the record, runs the checks the record names over the tree the record names, and writes
@@ -140,15 +216,17 @@ elif [ "$ps" != 0 ] || [ "$ss" != 0 ]; then res=bounded; fi
 now=$(date +%s); run="$now@$tip"
 # The suite's own record goes first, exactly as it did before the obligations existed: the hub and the dispatch hold read
 # it, and a settlement that hangs or is stopped never holds it back (ADR-0153).
-printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$now" "$res" "$tip" "$pm" "$sm" "$ids" > "$st/nightly-result.$$" \
-  && mv -f "$st/nightly-result.$$" "$st/nightly-result" || { echo "nightly: the result record could not be written" >&2; exit 1; }
-# Only a red the suite measured alerts: a red mode always names at least one failing test, so the alert names them. A
-# bounded leg is unproven, not red, and alerts nothing.
+write_record "$res" "$pm" "$sm" "$ids" || { echo "nightly: the result record could not be written" >&2; exit 1; }
+# Only a red the suite measured alerts as red: a red mode always names at least one failing test, so the alert names them.
+# A bounded leg is unproven, not red; its own alert names the mode, the stop reason and the log line that caused it, so the
+# cause is never "no failing test named" (#1201).
 if [ "$res" = fail ]; then
-  msg="NIGHTLY full suite red at ${tip:0:7}: $nfail failing test(s)"
-  printf '%s %s\n' "$(date '+%F %T')" "$msg" >> "$st/alerts.log"
-  notify=${HEALTH_NOTIFY:-/usr/bin/osascript}
-  "$notify" -e "display notification \"${msg//\"/\'}\" with title \"squad-goal\"" >/dev/null 2>&1
+  alert "NIGHTLY full suite red at ${tip:0:7}: $nfail failing test(s)"
+elif [ "$res" = bounded ]; then
+  why=
+  case "$pm" in bounded:*) why="the parallel mode $(mode_why "$pm" "$pout")";; esac
+  case "$sm" in bounded:*) why="${why:+$why; }the serial mode $(mode_why "$sm" "$sout")";; esac
+  alert "NIGHTLY full suite bounded at ${tip:0:7}: $why"
 fi
 # The marker is settled with what the run found: pass, fail, or bounded for an attempt the suite never finished. Only a
 # pass or a fail closes it; a bounded settlement leaves it open as unproven, so a later nightly proves the marked tip
