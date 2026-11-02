@@ -415,3 +415,59 @@ def test_the_talk_is_read_again_the_moment_the_tab_is_looked_at():
 def test_the_paragraph_gap_is_one_line_box_at_the_smallest_and_largest_size():
     p = subprocess.run(["bash", str(SCRIPTS / "test-hub-paragraph-gap.sh")], capture_output=True, text=True, timeout=30)
     assert p.returncode == 0, p.stdout + p.stderr
+# ---------------------------------------------------------------- the live activity line (#1082)
+
+@pytest.mark.node_bound
+def test_the_live_line_reads_spinner_verb_elapsed_and_tokens():
+    assert run_js("SQ.liveText({status:'busy', elapsed:92, got:0, tokens:2400}, 0)") == "⠋ Working · 1m 32s · ↓ 2.4k tokens"
+
+
+@pytest.mark.node_bound
+def test_the_live_line_moves_each_second_while_the_session_works():
+    moved, same_second = run_js("[SQ.liveText({status:'busy', elapsed:92, got:0, tokens:2400}, 1000),"
+                                " SQ.liveText({status:'busy', elapsed:92, got:0, tokens:2400}, 0)]")
+    assert moved == "⠙ Working · 1m 33s · ↓ 2.4k tokens" and moved != same_second
+
+
+@pytest.mark.node_bound
+def test_the_live_line_is_empty_when_idle_and_dashes_what_is_unknown():
+    idle, waiting, unknown = run_js("[SQ.liveText({status:'idle', elapsed:5, got:0, tokens:9}, 0),"
+                                    " SQ.liveText({status:'waiting', elapsed:5, got:0, tokens:9}, 0),"
+                                    " SQ.liveText({status:'busy', elapsed:null, got:0, tokens:null}, 0)]")
+    assert idle == "" and waiting.endswith("Waiting for you · 5s · ↓ 9 tokens")
+    assert unknown == "⠋ Working · — · ↓ — tokens"
+
+
+def test_the_live_line_keeps_its_own_row_between_the_talk_and_the_composer():
+    src = OVERLAY.read_text()
+    markup = src.split("SQ.MARKUP = `", 1)[1].split("`;", 1)[0]
+    assert '<p id="sq-ov-live"' in markup and "<button" not in markup[markup.index('id="sq-ov-live"'):markup.index('id="sq-ov-form"')]
+    assert markup.index('id="sq-ov-log"') < markup.index('id="sq-ov-live"') < markup.index('id="sq-ov-form"')
+    rule = re.search(r"#sq-ov-live\{[^}]*\}", src).group(0)
+    assert "white-space:nowrap" in rule and "overflow:hidden" in rule and "font-variant-numeric:tabular-nums" in rule
+
+
+def _relative_luminance(hex_color):
+    channels = [int(hex_color[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+    lin = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+
+
+def test_the_live_line_keeps_the_served_floors():
+    src = OVERLAY.read_text()
+    rule = re.search(r"#sq-ov-live\{[^}]*\}", src).group(0)
+    assert "font-size:var(--sq-fs)" in rule and "--sq-fs:14px" in src and "FS_MIN = 13" in src
+    fg = re.search(r"color:(#[0-9a-f]{6})", rule).group(1)
+    bg = re.search(r"#sq-ov\{[^}]*background:(#[0-9a-f]{6})", src).group(1)
+    hi, lo = sorted([_relative_luminance(fg), _relative_luminance(bg)], reverse=True)
+    assert (hi + 0.05) / (lo + 0.05) >= 4.5
+
+
+def test_the_live_line_repaints_each_second_and_leaves_the_status_row_to_one_off_messages():
+    dom = OVERLAY.read_text().split("// dom:begin", 1)[1]
+    assert "setInterval(paintLive, 1000)" in dom and "clearInterval(live" in dom
+    paint = re.search(r"function paintLive\(\)\{.*?\n\}", dom, re.S).group(0)
+    assert "stat" not in paint and "live.hidden = " in paint and "live.textContent" in paint
+    assert 'function say(msg) { stat.textContent = msg || ""; }' in dom
+    conv = dom[dom.index("async function loadConversation() {"):dom.index("const uuid =")]
+    assert "setActivity(" in conv and conv.index("setActivity(") < conv.index("if (sig === lastSig) return;")

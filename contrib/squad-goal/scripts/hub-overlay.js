@@ -64,6 +64,18 @@ SQ.draft = ctx => {
   return (lines.join("\n") + "\n\n").slice(0, SQ.TEXT_MAX);
 };
 
+// The live activity line (#1082): busy or waiting shows a spinner, the verb, the time and the output tokens since the owner's
+// last turn; idle shows nothing. The spinner turns each second; a count the transcript does not show reads as a dash.
+SQ.SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+SQ.fmtElapsed = s => s == null ? "—" : s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${Math.floor(s / 3600)}h ${Math.floor(s % 3600 / 60)}m`;
+SQ.fmtTokens = n => n == null ? "—" : n < 1000 ? String(n) : `${(n / 1000).toFixed(1)}k`;
+SQ.liveText = (a, now) => {
+  if (!a || (a.status !== "busy" && a.status !== "waiting")) return "";
+  const secs = a.elapsed == null ? null : a.elapsed + Math.floor((now - a.got) / 1000);
+  const verb = a.status === "busy" ? "Working" : "Waiting for you";
+  return [`${SQ.SPIN[Math.floor(now / 1000) % SQ.SPIN.length]} ${verb}`, SQ.fmtElapsed(secs), `↓ ${SQ.fmtTokens(a.tokens)} tokens`].join(" · ");
+};
+
 SQ.MARKUP = `<style>
 #sq-ov-btn{position:fixed;right:16px;bottom:var(--sq-ov-bottom,16px);z-index:999;width:52px;height:52px;padding:0;border:0;border-radius:50%;background:none;cursor:pointer;filter:drop-shadow(0 4px 10px #000b)}
 #sq-ov-btn svg{display:block;width:100%;height:100%}
@@ -142,6 +154,8 @@ html.sq-docked body{margin-right:var(--sq-dock)}
 #sq-ov-note:empty{display:none}
 #sq-ov-status{margin:0;padding:0 13px 8px;font-size:13px;color:#e6e8ee}
 #sq-ov-status:empty{display:none}
+#sq-ov-live{margin:0;padding:0 14px 6px;font-family:var(--sq-mono);font-size:var(--sq-fs);line-height:1.55;color:#b8c0cf;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
+#sq-ov-live[hidden]{display:none}
 .sq-ov-back{display:none}
 html.sq-over .sq-ov-back{display:inline-flex;align-items:center;min-height:44px;padding:3px 10px;border:1px solid #353d4b;border-radius:6px;background:none;color:inherit;cursor:pointer}
 </style>
@@ -167,6 +181,7 @@ html.sq-over .sq-ov-back{display:inline-flex;align-items:center;min-height:44px;
 </header>
 <div id="sq-ov-pick" hidden></div>
 <div id="sq-ov-log" role="log" aria-live="polite" aria-label="Session conversation"></div>
+<p id="sq-ov-live" aria-live="off" hidden></p>
 <div id="sq-ov-form">
 <button type="button" id="sq-ov-plus" aria-label="Add to the message" aria-haspopup="menu" aria-expanded="false" aria-controls="sq-ov-menu">+</button>
 <div id="sq-ov-menu" role="menu" hidden><button type="button" role="menuitem" data-act="shot">Attach screenshot</button><button type="button" role="menuitem" data-act="ctx">Page context</button></div>
@@ -189,9 +204,10 @@ document.body.appendChild(document.createRange().createContextualFragment(SQ.MAR
 const $ = id => document.getElementById(id);
 const btn = $("sq-ov-btn"), ov = $("sq-ov"), title = $("sq-ov-title"), pick = $("sq-ov-pick"), log = $("sq-ov-log"),
       text = $("sq-ov-text"), sendBtn = $("sq-ov-send"), plus = $("sq-ov-plus"), menu = $("sq-ov-menu"), note = $("sq-ov-note"),
-      stat = $("sq-ov-status"), handle = $("sq-ov-handle"), dockBtn = $("sq-ov-dock"), undockBtn = $("sq-ov-undock"), lens = $("sq-ov-lens");
+      stat = $("sq-ov-status"), handle = $("sq-ov-handle"), dockBtn = $("sq-ov-dock"), undockBtn = $("sq-ov-undock"), lens = $("sq-ov-lens"),
+      live = $("sq-ov-live");
 const de = document.documentElement;
-let sessions = [], cur = null, rule = null, timer = 0, lastSig = "";
+let sessions = [], cur = null, rule = null, timer = 0, lastSig = "", liveAct = null, liveTick = 0;
 
 // ---- the page context: each page exposes one function; a page without its own gets this one
 const shown = e => !!(e && (e.offsetWidth || e.offsetHeight || e.getClientRects().length)) && !e.closest("#sq-ov");
@@ -218,6 +234,12 @@ function addLine(line) {
 
 // ---- the session
 function say(msg) { stat.textContent = msg || ""; }
+// The live line keeps its own row: the spinner turns each second from the last read, and a read sets the count (#1082).
+function setActivity(a) { liveAct = a ? { ...a, got: Date.now() } : null; paintLive(); }
+function paintLive(){
+  const t = SQ.liveText(liveAct, Date.now());
+  live.hidden = !t; live.textContent = t;
+}
 function syncSend() {
   const st = SQ.sendState(cur || rule);
   text.disabled = !!(rule || cur) && st.disabled;
@@ -476,7 +498,8 @@ async function loadConversation() {
       if (r.status === 404 && Date.now() - missT > 5000) { missT = Date.now(); loadSessions(); }
       return;
     }
-    const turns = (await r.json()).turns || [], last = turns[turns.length - 1];
+    const page = await r.json(), turns = page.turns || [], last = turns[turns.length - 1];
+    setActivity(page.activity);
     const sig = turns.length + ":" + (last ? last.id + ":" + last.text.length : "");
     if (sig === lastSig) return;
     const atEnd = !lastSig || stick;
@@ -610,11 +633,13 @@ function openOverlay(){
   fsInit();
   loadSessions();
   clearInterval(timer); timer = setInterval(loadConversation, SQ.POLL_MS);
+  clearInterval(liveTick); liveTick = setInterval(paintLive, 1000);
   text.focus();
 }
 function closeOverlay() {
   ov.hidden = true; btn.setAttribute("aria-expanded", "false"); setMenu(false);
   clearInterval(timer); timer = 0;
+  clearInterval(liveTick); liveTick = 0;
   wantOpen(false);
   applyLayout(); btn.focus();
 }
