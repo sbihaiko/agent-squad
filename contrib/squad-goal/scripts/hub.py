@@ -1954,11 +1954,13 @@ def foot_refresh(now=None):
     return LOAD_STATE["facts"]
 
 SPEC_TIP_LINES = 8   # the spec tile's tooltip names at most this many specs, then "+k more"
-NOSPEC_HOURS = 24    # the No spec group counts the closed cards opened in this many hours (owner)
+NOSPEC_HOURS = 4     # the No spec group counts the cards closed in this many hours (owner, 2026-11-02)
 
 def nospec_count(items, moves=None, window=None, now=None):
-    """The No spec group (bugs and single tickets): `total` is its open cards plus its closed cards opened in the last
-    NOSPEC_HOURS hours by the read's own opened-at (`o`); `closed` is those closed ones. A card is in the group as the board's No spec
+    """The No spec group (bugs and single tickets): `total` is its open cards plus its closed cards closed in the last
+    NOSPEC_HOURS hours by the read's own closed-at (`c`); `closed` is those closed ones. The window reads the closing, never the
+    opening: the work takes hours, so a card opened in the window is rarely closed in it, and the group answered zero (owner,
+    2026-11-02). A card is in the group as the board's No spec
     lane holds it: no spec label, no loop-bug label, and no parent spec, or a parent spec the board draws closed (an open
     card only: a closed card of a closed spec is history). An abandoned card, or a closed card with no opened-at, never
     counts. The column is `drawn_column`, with the door's overlay, so the lane, the summary and the tile agree (ADR-0137)."""
@@ -1975,7 +1977,7 @@ def nospec_count(items, moves=None, window=None, now=None):
         pa = i.get("pa") if isinstance(i.get("pa"), int) else None
         if pa is not None and (pa not in gone or st == closed_col): continue
         if st != closed_col: total += 1; continue
-        try: at = _utc(i["o"]).timestamp() if i.get("o") else None
+        try: at = _utc(i["c"]).timestamp() if i.get("c") else None
         except Exception: at = None
         if at is not None and at >= since: done, total = done + 1, total + 1
     return {"closed": done, "total": total}
@@ -3541,13 +3543,16 @@ def flow_burnup(spec):
     path = _hist.history_path(BOARD, REPO)
     try: stamp = path.stat().st_mtime_ns
     except OSError: stamp = None
-    return chart(f"burnup-{spec}", (str(path), stamp, board_cache.get("t")), lambda: _burnup_payload(spec, path))
+    return chart(f"burnup-{spec}", (str(path), stamp, board_cache.get("t"), _file_key(_flow.history_path(BOARD, REPO))),
+                 lambda: _burnup_payload(spec, path))
 
 
 def _burnup_payload(spec, path):
     store, err = _with_children(_hist.load_store(path), spec)
     if err: return {"spec": spec, "points": [], "err": err}
     answer = _hist.burnup(store, spec)
+    reads = [s["t"] for s in _flow.samples(_flow.history_path(BOARD, REPO))]
+    answer["series"] = _burndown.burnup_series(answer["points"], reads)
     if not answer["points"]: answer["reason"] = _burndown.NO_CHILD
     return answer
 
@@ -5205,15 +5210,22 @@ const cards=(g,it,shown)=>{const GHI='<svg viewBox="0 0 16 16" width="13" height
 // A spec's burn-up (#1025): its panel opens from the spec lane's header. The hub answers the lines; the page draws them and counts nothing.
 const BU=window.BU||(window.BU={open:{},data:{},raw:{}});   // one store across the page's scopes: the handler and the lane render read the same (#1075)
 const buDay=t=>String(t||"").slice(0,10);
-function buChart(d){const pts=d.points||[];if(!pts.length)return `<div class=bunote>no change in this spec's scope is recorded yet</div>`;
- const W=600,H=170,P=22,top=Math.max(1,...pts.map(p=>p.scope)),t0=Date.parse(pts[0].t),span=(Date.parse(pts[pts.length-1].t)-t0)||1;
- const X=t=>(P+(W-2*P)*(Date.parse(t)-t0)/span).toFixed(1),Y=v=>(H-P-(H-2*P)*v/top).toFixed(1);
- const line=k=>pts.flatMap((p,i)=>i?[[X(p.t),Y(pts[i-1][k])],[X(p.t),Y(p[k])]]:[[X(p.t),Y(p[k])]]).map(q=>q.join(",")).join(" ");
- const marks=pts.filter(p=>p.marks.length).map(p=>`<circle cx="${X(p.t)}" cy="${Y(p.scope)}" r="3" fill="currentColor"><title>${esc(p.marks.map(m=>m.k+" #"+m.n).join(", "))}</title></circle>`).join("");
+function buChart(d){const s=d.series||{},days=s.days||[],pts=d.points||[];if(!days.length)return `<div class=bunote>${esc(s.reason||d.reason||"no whole board read in this spec's window yet")}</div>`;
+ const W=600,H=190,P=34,g=s.guide,sc=s.scope||0,n0=days[0].n,n1=Math.max(days[days.length-1].n,g?g.to.n:0),span=Math.max(1,n1-n0),ymax=Math.max(1,sc,...days.map(p=>p.delivered));
+ const X=n=>(P+(W-2*P)*(n-n0)/span).toFixed(1),Y=v=>(H-P-(H-2*P)*v/ymax).toFixed(1);
+ const runs=[];for(const p of days){const r=runs[runs.length-1];if(r&&r[r.length-1].n===p.n-1)r.push(p);else runs.push([p])}
+ const lines=runs.map(r=>`<polyline fill=none style="stroke:var(--ok)" stroke-width=2 points="${r.map(p=>X(p.n)+","+Y(p.delivered)).join(" ")}"/>`).join("");
+ const gaps=(s.gaps||[]).map(q=>`<line x1="${X(q.n)}" x2="${X(q.n)}" y1="${Y(0)}" y2="${Y(ymax)}" style="stroke:var(--warn)" stroke-dasharray="1 3"><title>no whole read on day ${q.n}: a gap, never a zero</title></line>`).join("");
+ const guide=g?`<line x1="${X(g.from.n)}" y1="${Y(g.from.delivered)}" x2="${X(g.to.n)}" y2="${Y(g.to.scope)}" style="stroke:var(--warn)" stroke-width=1.5 stroke-dasharray="4 3"/>`:"";
+ const scope=`<line x1="${X(n0)}" x2="${X(n1)}" y1="${Y(sc)}" y2="${Y(sc)}" style="stroke:var(--acc)" stroke-width=2/><text x="${X(n1)}" y="${Y(sc)-4}" text-anchor=end>scope ${sc}</text>`;
+ const axes=`<line x1=${P} x2=${P} y1=${P} y2=${H-P} stroke=currentColor /><line x1=${P} x2=${W-P} y1=${H-P} y2=${H-P} stroke=currentColor />`
+  +`<text x=${P} y=${H-P+14}>day ${n0}</text><text x=${W-P} y=${H-P+14} text-anchor=end>day ${n1}</text><text x=${W/2} y=${H-4} text-anchor=middle>day number (day ${n0} = first whole read)</text>`
+  +`<text x=${P-6} y=${Y(0)} text-anchor=end>0</text><text x=${P-6} y=${Y(ymax)} text-anchor=end>${ymax}</text><text x=10 y=${H/2} transform="rotate(-90 10 ${H/2})" text-anchor=middle>delivered (count)</text>`;
+ const last=days[days.length-1],guideNote=g?`guide from day ${g.from.n} to day ${g.to.n} (${esc(g.to.day)}), pace ${g.pace==null?"n/a":g.pace.toFixed(2)} per day${g.source==="done"?" (every child is closed)":" at the trailing close rate"}`:`no guide: ${esc(s.guide_reason||"no pace")}`;
+ const unreadNote=s.gaps&&s.gaps.length?` · no whole read on day ${s.gaps.map(q=>q.n).join(", ")}`:"";
  const log=pts.flatMap(p=>p.marks.map(m=>`<li>${esc(buDay(p.t))} ${esc(m.k)} #${m.n}</li>`)).slice(-30).join("");
- const last=pts[pts.length-1];
- return `<svg viewBox="0 0 ${W} ${H}" role=img aria-label="burn-up of SPEC ${d.spec}"><polyline fill=none style="stroke:var(--acc)" stroke-width=2 points="${line("scope")}"/><polyline fill=none style="stroke:var(--ok)" stroke-width=2 points="${line("done")}"/><polyline fill=none style="stroke:var(--warn)" stroke-width=1.5 stroke-dasharray="4 3" points="${line("held")}"/>${marks}</svg>`
-  +`<div class=bunote>scope ${last.scope} · done ${last.done} · held ${last.held} (blue scope, green done, dashed amber held)</div><ul class=bumarks>${log}</ul>`}
+ return `<svg viewBox="0 0 ${W} ${H}" role=img aria-label="burn-up of SPEC ${d.spec}: delivered count by day against the scope ${sc}">${axes}${gaps}${scope}${guide}${lines}</svg>`
+  +`<div class=bunote>delivered ${last.delivered} of scope ${sc} at day ${last.n} (${esc(last.day)}) · ${guideNote}${unreadNote}</div><ul class=bumarks>${log}</ul>`}
 const buPanel=n=>{const d=BU.data[n];return `<div class=bupanel data-bu-panel="${n}">${!d?`<div class=bunote>loading…</div>`:d.err?`<div class=bunote>${esc(d.err)}</div>`:buChart(d)}</div>`};
 async function buFetch(n){try{const d=await (await fetch("/api/chart/burnup?spec="+n)).json(),s=JSON.stringify(d);if(BU.raw[n]!==s){BU.raw[n]=s;BU.data[n]=d;pollBoard()}}catch(e){}}
 function buToggle(n){n=+n;BU.open[n]=!BU.open[n];if(BU.open[n]){delete BU.raw[n];buFetch(n)}else delete BU.data[n];pollBoard()}

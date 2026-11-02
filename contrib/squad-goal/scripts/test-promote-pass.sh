@@ -291,6 +291,41 @@ shards "$to" success success success success; SG_GHREAD="$T/bin/ghread" pass; rc
 [ $rc = 0 ] && [ "$(tip stg)" = "$to" ] && ok "the next pass reads the shards that ran on the opened pull request, and promotes by CI" \
   || ko "next pass after the pull request: rc $rc, stg $(tip stg), dev $to"
 
+# #1086: an interpreter that lacks a tool the suite runs refuses the pass before any suite runs. The refusal names the tool,
+# writes no marker and no status, and the same tip is proved by a later pass once an interpreter holds the tool.
+mkpy() {  # <path> <tool it lacks, or none>: a stand-in interpreter that logs its path and fails any probe of that tool
+  mkdir -p "$(dirname "$1")"
+  cat > "$1" <<EOF
+#!/bin/bash
+echo "\$0" >> "$T/py.log"
+case "\$*" in *"-m $2 "*|*"import $2"*) exit 1;; esac
+exit 0
+EOF
+  chmod +x "$1"; }
+for tool in ruff mypy pytest; do
+  adv dev "no-$tool"; tt=$(tip dev); before=$(tip stg); : > "$T/gh.log"
+  mkpy "$T/no-$tool/bin/python" "$tool"
+  env -u SG_PROMOTE_SUITE SG_GATE_PY="$T/no-$tool/bin/python" bash "$d/promote-pass.sh" > "$T/out" 2>&1; rc=$?
+  [ $rc = 2 ] && /usr/bin/grep -q "holds no $tool," "$T/out" && [ "$(tip stg)" = "$before" ] \
+    && ! /usr/bin/grep -q "statuses/$tt" "$T/gh.log" && ! /usr/bin/grep -q "^$tt " "$SG_STATE/promote-pass.tips" 2>/dev/null \
+    && ! /usr/bin/grep -q "$tt" "$SG_STATE/gate-status-delta" 2>/dev/null \
+    && ok "an interpreter with no $tool refuses the pass, names $tool, and leaves the tip unmarked" \
+    || ko "no $tool: rc $rc, stg $(tip stg), out '$(cat "$T/out")'"
+done
+mkpy "$T/all-tools/bin/python" none
+env -u SG_PROMOTE_SUITE SG_GATE_PY="$T/all-tools/bin/python" bash "$d/promote-pass.sh" > "$T/out" 2>&1; rc=$?
+[ $rc = 0 ] && [ "$(tip stg)" = "$tt" ] && ok "the refused tip is proved by a later pass once an interpreter holds every tool" \
+  || ko "retry after refusal: rc $rc, stg $(tip stg), out '$(cat "$T/out")'"
+
+# #1086: a checkout with no venv of its own resolves the venv beside its common git directory, not the system python3.
+$W worktree add -q "$T/wt-novenv" -b novenv; mkpy "$T/w/.venv/bin/python" none
+adv dev venv-beside; tv=$(tip dev); rm -f "$T/py.log" "$SG_STATE/gate-carried" "$SG_STATE/gate-status-delta"
+env -u SG_GATE_PY -u SG_PROMOTE_SUITE SG_CHECKOUT="$T/wt-novenv" bash "$d/promote-pass.sh" > "$T/out" 2>&1; rc=$?
+[ $rc = 0 ] && [ "$(tip stg)" = "$tv" ] && ok "a checkout with no venv of its own promotes its tip" \
+  || ko "no venv of its own: rc $rc, stg $(tip stg), out '$(cat "$T/out")'"
+/usr/bin/grep -q "w/.venv/bin/python" "$T/py.log" 2>/dev/null && ok "the suite's interpreter is the venv beside the common git directory" \
+  || ko "interpreter used: '$(cat "$T/py.log" 2>/dev/null)'"
+
 rm -f "$T/suite-rc" "$T"/checks-*
 
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'

@@ -732,13 +732,27 @@ deliver() {
   return 0
 }
 
-# wave_conflict <run> <wave> <run folder> <clone> <rebase output> (#844): a rebase of the wave on the base that conflicts is terminal
+# file_conflict_bug <issue> <run> <wave> <commit> <paths> (#1061): the second identical conflict of an issue files one loop bug. The
+# landing path is the defect, so the bug carries `loop-bug` beside `bug` and is worked outside the loop (ADR-0146).
+file_conflict_bug() {
+  local n=$1 run=$2 w=$3 at=$4 paths=$5 body out rc
+  body=$(mktemp) || return 0
+  printf 'Wave %s conflicts with %s at %s in %s. Run %s is the second run to hit this conflict on this base, so the loop stopped requeuing #%s.\n\nFiled by wave.sh (ADR-0151 rule 2).\n' \
+    "$w" "$base" "$at" "${paths:-no path named by git}" "$run" "$n" > "$body"
+  out=$(gh_send -X POST "repos/$SG_REPO/issues" -f "title=[SQUAD] wave rebase conflict on #$n: ${paths:-no path named by git}" \
+    -F "body=@$body" -f "labels[]=bug" -f "labels[]=loop-bug" 2>&1); rc=$?
+  rm -f "$body"
+  if [ "$rc" -eq 0 ]; then echo "WAVE-BUG #$n: the same rebase conflict on $base twice; filed as a loop bug"
+  else echo "WAVE-BUG #$n filing refused: $out"; fi
+}
+
+# wave_conflict <run> <wave> <run folder> <clone> <rebase output> <conflicting paths> (#844): a rebase of the wave on the base that conflicts is terminal
 # for this wave head. The same rebase on the next cycle cannot succeed, so the landing is not retried: the issues the run was
 # dispatched for (the Refs of the wave when the run names none) go back to the queue through requeue, so its loop cap and the
 # needs-human path apply as they do to any requeue. The run's wave marker goes, so the loop stops calling the landing. The wave
 # branch stays on the remote with its commits: they may exist on no other ref. One line names the commit that conflicts. Returns 1.
 wave_conflict() {
-  local run=$1 w=$2 rd=$3 S=$4 out=$5 at refs dset list n n2 named="" outs=""
+  local run=$1 w=$2 rd=$3 S=$4 out=$5 files at refs dset list n n2 named="" outs="" sig hit firsts="" repeats="" held=""
   at=$(printf '%s\n' "$out" | /usr/bin/grep -oE 'Could not apply [0-9a-f]+' | head -1 | awk '{print $4}')
   at=${at:-unknown}
   refs=$(refs_of "$S" "origin/$base..origin/$w")
@@ -747,15 +761,28 @@ wave_conflict() {
   # and gets no requeue, label, card move, comment or try.
   if [ -n "${dset// /}" ]; then list=$dset; for n2 in $refs; do case " $dset " in *" $n2 "*) ;; *) outs="${outs:+$outs }$n2";; esac; done
   else list=$refs; fi
-  for n in $list; do named="${named:+$named, }#$n"; done
-  echo "WAVE CONFLICT $w: the rebase on $base conflicts at $at; ${named:-no issue} requeued on the current base"
+  files=${6:-}; files=${files% }
+  sig="$($G -C "$S" rev-parse "origin/$base" 2>/dev/null) $files"
+  for n in $list; do
+    wave_fact "$run" "$n" refused "the rebase on $base conflicts at $at"
+    hit=$(ledger conflict "$n" "$run" "$sig" 2>&1) || { echo "WAVE-LEDGER #$n refused: $hit"; continue; }
+    case $hit in
+      first) named="${named:+$named, }#$n"; firsts="$firsts $n";;
+      repeat) repeats="$repeats $n";;
+      *) held="${held:+$held, }#$n";;
+    esac
+  done
+  echo "WAVE CONFLICT $w: the rebase on $base conflicts at $at${files:+ in $files}; ${named:-no issue} requeued on the current base${held:+; $held not requeued, the same conflict again}"
   for n2 in $outs; do
     echo "WAVE-NOTE #$n2: $w names it (Refs #$n2) outside the dispatch set of run $run; reported, not frozen"
     printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$run" "$n2" "$w" >> "$SG_STATE/wave-outside.tsv"
   done
-  for n in $list; do
-    wave_fact "$run" "$n" refused "the rebase on $base conflicts at $at"
-    requeue "$n" "the rebase on $base conflicts at $at: $w cannot land on the current base"
+  for n in $firsts; do
+    requeue "$n" "the rebase on $base conflicts at $at in ${files:-no path named by git}: $w cannot land on the current base"
+    gh_send -X POST "repos/$SG_REPO/issues/$n/labels" -f "labels[]=rework" >/dev/null 2>&1 || echo "WAVE-LABEL #$n rework refused"
+  done
+  for n in $repeats; do
+    file_conflict_bug "$n" "$run" "$w" "$at" "$files"
   done
   rm -f "$SG_STATE/auto/wave-$run" "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run"
   return 1
@@ -802,10 +829,11 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
   # entered, so a base that moved under the wave is rebased onto now, before the one push. A push the remote refuses -- the
   # base moved once more between this rebase and the push -- repeats from the fetch: the moved base is fetched, the wave is
   # rebased on it, and the push goes again (ADR-0145 rule 2). One repeat, as the entry does.
-  local out sha try=1 issues n anyref=0
+  local out sha try=1 issues n anyref=0 files
   while :; do
-    out=$(sc rebase "origin/$base" 2>&1) || { sc rebase --abort >/dev/null 2>&1
-      wave_conflict "$run" "$w" "$rd" "$S" "$out"; rm -rf "$S"; return 1; }
+    out=$(sc rebase "origin/$base" 2>&1) || { files=$(sc diff --name-only --diff-filter=U | sort -u | tr '\n' ' ')
+      sc rebase --abort >/dev/null 2>&1
+      wave_conflict "$run" "$w" "$rd" "$S" "$out" "$files"; rm -rf "$S"; return 1; }
     # Nothing ahead of the base is a wave that landed empty (a run with no dispatch, every child failed its gates, no child):
     # there is nothing to push or close, so the wave ref goes, the marker goes, and the run is done, exit 0. It is read
     # BEFORE the tip's check: an empty wave has no child commit to blame for a red check, so that check can only fail the

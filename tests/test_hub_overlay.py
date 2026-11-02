@@ -227,16 +227,29 @@ def test_the_feed_keeps_the_latest_turns_and_folds_the_older_ones():
     })()""")
     assert out == {"earlier": 8, "shown": "t8", "short": 0, "keep3": [17, 3]}, out
 
-def test_each_bubble_carries_its_clock_as_whatsapp_does():
-    """Owner, 2026-11-01: the bubble says when it was said. The turn's own transcript clock is drawn at the end of the last line
-    in the muted floor size, and no bubble carries a tick."""
+def test_each_bubble_carries_its_clock_in_its_header_line():
+    """Owner, 2026-11-01: the bubble says when it was said. The clock rides the bubble's own header line at the right corner,
+    level with the owner's `> you` label, in the muted floor size, and no bubble carries a tick. Floated alone it hung above
+    the bubble and pushed the first line down (owner, 2026-11-02, #1099)."""
     js = OVERLAY.read_text()
     assert "const CLOCK = " in js and 'hour: "numeric", minute: "2-digit"' in js
     assert "const at = clock(t.at);" in js and 'tm.className = "sq-time"' in js
     assert "tm.textContent = at;" in js                     # the clock alone: the owner asked for no tick
     assert "\u2713" not in js and "\u2714" not in js
+    body = js[js.index("head.className = "):js.index("clamp(body, CLAMP[role]")]
+    assert "if (who.textContent) head.append(who);" in body and "head.append(tm);" in body
+    assert "if (head.childElementCount) d.append(head);" in body and "float" not in body
+    head_rule = js[js.index(".sq-head{"):js.index(".sq-head{") + 140]
+    assert "display:flex" in head_rule and "justify-content:space-between" in head_rule, head_rule
     rule = js[js.index(".sq-time{"):js.index(".sq-time{") + 160]
-    assert "font-size:13px" in rule and "float:right" in rule, rule
+    assert "font-size:13px" in rule and "float" not in rule, rule
+
+def test_the_answer_bubble_names_the_model_that_wrote_it():
+    """Owner, 2026-11-02: where the owner's bubble says "you", the answer's says the model the harness recorded on the turn."""
+    js = OVERLAY.read_text()
+    line = next(row for row in js.splitlines() if "who.textContent = onlyImage" in row)
+    assert r'\u203A you' in line and 'String(t.m || "")' in line, line
+    assert "t.role === \"owner\"" in line, line
 
 def test_the_reader_can_step_the_text_size_and_the_choice_outlives_the_page():
     """Owner, 2026-11-01: the feed needed its own size control. Two header buttons step one CSS variable, the page keeps the

@@ -154,17 +154,23 @@ def _iso(t):
 NOSPEC = [
     _item(20, "Todo", labels=("bug",), o=_iso(NOW - 30 * DAY)),                   # open, opened long ago: counts, open
     _item(21, "Doing", labels=(), o=_iso(NOW - 3 * DAY)),                         # open single ticket: counts, open
-    _item(22, "Closed", s="CLOSED", labels=("bug",), o=_iso(NOW - 3600), c=_iso(NOW - 600)),   # opened 1 h ago, closed: counts, done
-    _item(23, "Closed", s="CLOSED", labels=(), o=_iso(NOW - 2 * DAY), c=_iso(NOW - 3600)),     # opened 2 days ago, closed now: out
+    _item(22, "Closed", s="CLOSED", labels=("bug",), o=_iso(NOW - 3600), c=_iso(NOW - 600)),   # closed 10 min ago: counts, done
+    _item(23, "Closed", s="CLOSED", labels=(), o=_iso(NOW - 2 * DAY), c=_iso(NOW - 3600)),     # opened 2 days ago, closed 1 h ago: counts, done
     _item(24, "Todo", s="CLOSED", labels=(), cr="not_planned", o=_iso(NOW - 3600), c=_iso(NOW - 600)),   # abandoned: never counted
     _item(25, "Todo", labels=("bug", "loop-bug"), o=_iso(NOW - 3600)),           # a loop bug has its own lane
     _item(26, "Todo", labels=(), pa=1, o=_iso(NOW - 3600)),                      # a spec ticket
-    _item(27, "Closed", s="CLOSED", labels=()),                                  # closed with no opened-at: no instant to place it
+    _item(27, "Closed", s="CLOSED", labels=()),                                  # closed with no closed-at: no instant to place it
 ]
 
 
-def test_no_spec_counts_open_cards_and_the_closed_ones_opened_in_the_last_day(hub):
-    assert hub.nospec_count(NOSPEC, moves={}, now=NOW) == {"closed": 1, "total": 3}
+def test_no_spec_counts_open_cards_and_the_ones_closed_in_the_last_four_hours(hub):
+    """The window reads the closing (owner, 2026-11-02): the work takes hours, so a card opened in it is rarely closed in it."""
+    assert hub.nospec_count(NOSPEC, moves={}, now=NOW) == {"closed": 2, "total": 4}
+
+
+def test_a_card_closed_before_the_window_leaves_the_count(hub):
+    old = [_item(40, "Closed", s="CLOSED", labels=(), o=_iso(NOW - 2 * DAY), c=_iso(NOW - 5 * 3600))]
+    assert hub.nospec_count(old, moves={}, now=NOW) == {"closed": 0, "total": 0}
 
 
 def test_the_open_card_of_a_closed_spec_counts_as_no_spec(hub):
@@ -175,16 +181,16 @@ def test_the_open_card_of_a_closed_spec_counts_as_no_spec(hub):
 
 def test_the_monitor_tile_adds_the_no_spec_group(hub):
     p = hub.spec_progress(BOARD + NOSPEC, moves={}, now=NOW)
-    assert (p["done"], p["total"], p["open"]) == (6, 12, 3)
-    assert p["so"] == "3 open + no spec" and p["value"] == "6/12 · 50%"
-    assert p["none"] == {"closed": 1, "total": 3}
-    assert p["tip"].split("\n")[-1] == "No spec — 1/3"
+    assert (p["done"], p["total"], p["open"]) == (7, 13, 3)
+    assert p["so"] == "3 open + no spec" and p["value"] == "7/13 · 53%"
+    assert p["none"] == {"closed": 2, "total": 4}
+    assert p["tip"].split("\n")[-1] == "No spec — 2/4"
 
 
 def test_the_tile_draws_no_spec_alone(hub):
     p = hub.spec_progress(NOSPEC, moves={}, now=NOW)
-    assert (p["open"], p["so"], p["value"], p["state"], p["bar"]) == (0, "no spec", "1/3 · 33%", "info", True)
-    assert p["tip"] == "No spec — 1/3"
+    assert (p["open"], p["so"], p["value"], p["state"], p["bar"]) == (0, "no spec", "2/4 · 50%", "info", True)
+    assert p["tip"] == "No spec — 2/4"
 
 
 def test_the_board_summary_serves_the_no_spec_count(hub, monkeypatch):
@@ -193,4 +199,4 @@ def test_the_board_summary_serves_the_no_spec_count(hub, monkeypatch):
     monkeypatch.setattr(hub.time, "time", lambda: NOW)
     monkeypatch.setattr(hub, "board_cache", {"t": 1.0, "rt": 1.0, "err": None, "lc": {}, "prs": [], "errs": [], "cases": [],
                                              "items": [dict(i, i=f"PVT_{i['n']}") for i in NOSPEC]})
-    assert hub.board()["sum"]["none"] == {"closed": 1, "total": 3}
+    assert hub.board()["sum"]["none"] == {"closed": 2, "total": 4}

@@ -303,6 +303,19 @@ def _requeue(rec, ev):   # -> (recorded|duplicate|floor, changed): the head a ru
     return "recorded", True
 
 
+def _conflict(rec, ev):   # -> (first|repeat|held|duplicate|floor, changed): a rebase conflict of the issue's wave (ADR-0151 rule 2)
+    run, sig = ev["run"], ev["sig"]
+    if not run: raise ValueError("a conflict names its run")
+    if run in floor_runs(rec): return "floor", False
+    C = rec.get("conflict")
+    if C and C["sig"] == sig:   # the same base and the same paths: the same conflict, whichever run hit it
+        if run in C["runs"]: return "duplicate", False
+        C["runs"].append(run); C["count"] += 1
+        return ("repeat" if C["count"] == 2 else "held"), True
+    rec["conflict"] = {"sig": sig, "runs": [run], "count": 1}
+    return "first", True
+
+
 def _review(rec, ev):   # -> (recorded|reset|duplicate|frozen|floor, changed): one review of the issue's work (ADR-0151)
     run, v, f, rnd = ev["run"], ev["verdict"], ev["findings"], str(ev.get("round") or 0)
     if v not in VERDICTS: raise ValueError(f"not a review verdict: {v!r} (one of {', '.join(VERDICTS)})")
@@ -369,7 +382,7 @@ def _boardx(rec, ev):   # -> (dropped|superseded, changed): a pending event the 
     return "dropped", True
 
 
-RULES = {"fail": _fail, "stop": _stop, "wave": _wave, "landed": _landed, "requeue": _requeue, "review": _review,
+RULES = {"fail": _fail, "stop": _stop, "wave": _wave, "landed": _landed, "requeue": _requeue, "conflict": _conflict, "review": _review,
          "rearm": _rearm, "migrate": _migrate, "board": _board, "boardw": _boardw, "boardx": _boardx}
 
 
@@ -427,6 +440,10 @@ def landed(key, ref, kind, sha):   # -> recorded|duplicate|floor: a landing pass
 
 def requeue(key, run, head):   # -> recorded|duplicate|floor: the head a run requeued the issue's child on
     return transition(key, {"op": "requeue", "run": run, "head": head})
+
+
+def conflict(key, run, sig):   # -> first|repeat|held|duplicate|floor: one rebase conflict of the issue's wave (ADR-0151 rule 2)
+    return transition(key, {"op": "conflict", "run": run, "sig": sig})
 
 
 def requeued(key, run):   # the head the run requeued the issue on, "" when it did not
@@ -565,6 +582,7 @@ def main(argv):
         elif op == "landed" and len(rest) >= 3: print(landed(key, rest[0], rest[1], rest[2]))
         elif op == "requeue" and len(rest) >= 2: print(requeue(key, rest[0], rest[1]))
         elif op == "requeued" and rest: print(requeued(key, rest[0]))
+        elif op == "conflict" and len(rest) >= 2: print(conflict(key, rest[0], rest[1]))
         elif op == "review" and len(rest) >= 3: print(review(key, rest[0], rest[1], rest[2], *(rest[3:4] or [0])))
         elif op == "replay":
             diffs = replay(key)

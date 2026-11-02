@@ -50,7 +50,7 @@ while IFS= read -r p; do
 done <<< "$changed"
 [ -z "$(g status --porcelain --untracked-files=no)" ] || refuse "the delta tree is dirty; it must be clean before the proof"
 . "$d/caps.sh"
-py=${SG_GATE_PY:-${SG_CHECKOUT:+$SG_CHECKOUT/.venv/bin/python}}; [ -x "$py" ] || py=python3
+py=$(sg_gate_python)
 suite=${SG_DELTA_SUITE:-"$py -m ruff check squad tests && $py -m mypy squad && $py -m pytest -p no:deepeval -m 'not heavy' -n ${SG_PROMOTE_WORKERS:-$(sg_battery_workers)}"}
 if [ -z "${SG_DELTA_SUITE:-}" ]; then
   while IFS= read -r c; do
@@ -58,6 +58,10 @@ if [ -z "${SG_DELTA_SUITE:-}" ]; then
   done < <(printf '%s\n' "${guards[@]:-}" | awk 'NF' | LC_ALL=C sort -u)
   # The assembled suite is what the map decides; a test reads it here instead of running ruff, mypy and the battery.
   [ -n "${SG_DELTA_PRINT_SUITE:-}" ] && { printf '%s\n' "$suite"; exit 0; }
+fi
+if [ -z "${SG_DELTA_SUITE:-}" ]; then
+  miss=$(sg_missing_tool "$py")
+  [ -z "$miss" ] || refuse "$py holds no $miss, so the suite would answer a red of the tip that is a red of the proof"
 fi
 h=$(printf '%s\n' "$changed" | hash_list)
 SG_DELTA_RUN=$suite SERIAL_TRY=1 SERIAL_HOLD_SECONDS=${SG_DELTA_HOLD_SECONDS:-10800} \

@@ -317,6 +317,18 @@ def test_a_turn_carries_the_clock_its_bubble_shows(home):
         ("u1", "2026-11-01T21:25:00.000Z"), ("a1", "2026-11-01T21:26:03.000Z"), ("u2", "")]
 
 
+def test_an_answer_carries_the_model_that_wrote_it(home):
+    """Owner, 2026-11-02: the owner's bubble says "you", so the answer's says which model spoke. The name is the one the
+    harness records on the turn, never inferred, and a turn that names none carries an empty name."""
+    mod = load_sessions()
+    cwd = home.path / "p1" / "app"
+    named = {"type": "assistant", "uuid": "a1", "timestamp": "2026-11-01T21:26:03.000Z",
+             "message": {"role": "assistant", "model": "claude-opus-5-5", "content": [{"type": "text", "text": "hello"}]}}
+    write_transcript(home, cwd, "s1", [user("u1", "hi"), named, answer("a2", "unnamed")])
+    page = mod.read_conversation(str(cwd), "s1")
+    assert [(t["id"], t["m"]) for t in page["turns"]] == [("u1", ""), ("a1", "claude-opus-5-5"), ("a2", "")]
+
+
 def test_a_conversation_page_grows_its_window_until_it_holds_the_conversation(home):
     """A turn is not a byte count: the window doubles until the page holds the recent text turns (#1073)."""
     mod = load_sessions()
@@ -447,7 +459,7 @@ def test_the_hub_mux_leaves_turn_text_and_message_ids_unchanged(home, serve):
     finally:
         httpd.shutdown()
         httpd.server_close()
-    assert status == 200 and json.loads(body)["turns"] == [{"id": "m-7", "role": "owner", "text": text, "at": ""}]
+    assert status == 200 and json.loads(body)["turns"] == [{"id": "m-7", "role": "owner", "text": text, "at": "", "m": ""}]
 
 
 def test_a_turn_with_markup_is_returned_as_its_plain_text(home, serve):
@@ -458,7 +470,7 @@ def test_a_turn_with_markup_is_returned_as_its_plain_text(home, serve):
     srv = serve()
     status, body, head = fetch(srv.port, "/api/sessions/conversation?sid=s1", f"127.0.0.1:{srv.port}")
     assert status == 200 and head["content-type"].startswith("application/json")
-    assert json.loads(body)["turns"] == [{"id": "a1", "role": "answer", "text": markup, "at": ""}]
+    assert json.loads(body)["turns"] == [{"id": "a1", "role": "answer", "text": markup, "at": "", "m": ""}]
 
 
 def test_the_mobile_page_sends_a_csp_that_loads_nothing_from_outside_the_hub(home, serve):
