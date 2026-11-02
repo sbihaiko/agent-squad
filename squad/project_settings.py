@@ -53,6 +53,8 @@ CATALOG = {
     "claude_md.max_section_lines": ("int", 5, 10000, "lines", "length of one CLAUDE.md section before `squad setup --check` flags it"),
     "tailnet.host": ("str", None, None, "MagicDNS name", "name of this machine on the tailnet"),
     "tailnet.allow": ("emails", None, None, "login names", "logins a tailnet request may come from"),
+    "tailnet.terminals_read": ("bool", None, None, "true or false", "the tailnet may read the scrollback of a hosted session of this profile; the grant holds for every allowed login"),
+    "tailnet.terminals_attach": ("bool", None, None, "true or false", "the tailnet may attach to and detach from a hosted session of this profile; the grant holds for every allowed login"),
     "tailnet.terminals_send": ("bool", None, None, "true or false", "the phone may send a message to a live session of this profile; the grant holds for every allowed login of the profile"),
     "tailnet.loop_write": ("bool", None, None, "true or false", "the tailnet may start and stop the loop from the hub; off, the switch is read-only from the tailnet"),
 }
@@ -66,7 +68,9 @@ CALL = ("limits.max_output_tokens", "limits.context_tokens", "limits.max_stalls"
 
 # The tailnet block is personal (a machine name, a login), so it lives in the project's gitignored `.env`, never in the tracked file.
 ENV = ".env"
-ENV_KEYS = {"tailnet.host": "SQUAD_TAILNET_HOST", "tailnet.allow": "SQUAD_TAILNET_ALLOW", "tailnet.terminals_send": "SQUAD_TAILNET_TERMINALS_SEND", "tailnet.loop_write": "SQUAD_TAILNET_LOOP_WRITE"}
+ENV_KEYS = {"tailnet.host": "SQUAD_TAILNET_HOST", "tailnet.allow": "SQUAD_TAILNET_ALLOW", "tailnet.terminals_read": "SQUAD_TAILNET_TERMINALS_READ",
+            "tailnet.terminals_attach": "SQUAD_TAILNET_TERMINALS_ATTACH", "tailnet.terminals_send": "SQUAD_TAILNET_TERMINALS_SEND",
+            "tailnet.loop_write": "SQUAD_TAILNET_LOOP_WRITE"}
 
 
 def _env_lines(target):

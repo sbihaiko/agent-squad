@@ -381,6 +381,18 @@ def test_turns_carry_the_message_id_and_role_and_a_tool_call_is_no_turn(home):
         ("u1", "owner", "list the files"), ("a1", "answer", "Running it.")]
 
 
+def test_two_text_parts_of_one_message_are_two_turns_with_distinct_keys(home):
+    mod = load_sessions()
+    cwd = home.path / "p1" / "app"
+    write_transcript(home, cwd, "s1", [
+        {"type": "assistant", "uuid": "a1", "message": {"role": "assistant", "content": [
+            {"type": "text", "text": "first"}, {"type": "text", "text": "second"}]}},
+    ])
+    page = mod.read_conversation(str(cwd), "s1")
+    assert [(t["id"], t["text"]) for t in page["turns"]] == [("a1", "first"), ("a1", "second")]
+    assert len({t["k"] for t in page["turns"]}) == 2
+
+
 def test_the_token_and_credential_shapes_are_in_no_turn_and_no_log(home, capfd):
     mod = load_sessions()
     cwd = home.path / "p1" / "app"
@@ -459,7 +471,7 @@ def test_the_hub_mux_leaves_turn_text_and_message_ids_unchanged(home, serve):
     finally:
         httpd.shutdown()
         httpd.server_close()
-    assert status == 200 and json.loads(body)["turns"] == [{"id": "m-7", "role": "owner", "text": text, "at": "", "m": ""}]
+    assert status == 200 and json.loads(body)["turns"] == [{"id": "m-7", "k": "0:0", "role": "owner", "text": text, "at": "", "m": ""}]
 
 
 def test_a_turn_with_markup_is_returned_as_its_plain_text(home, serve):
@@ -470,7 +482,7 @@ def test_a_turn_with_markup_is_returned_as_its_plain_text(home, serve):
     srv = serve()
     status, body, head = fetch(srv.port, "/api/sessions/conversation?sid=s1", f"127.0.0.1:{srv.port}")
     assert status == 200 and head["content-type"].startswith("application/json")
-    assert json.loads(body)["turns"] == [{"id": "a1", "role": "answer", "text": markup, "at": "", "m": ""}]
+    assert json.loads(body)["turns"] == [{"id": "a1", "k": "0:0", "role": "answer", "text": markup, "at": "", "m": ""}]
 
 
 def test_the_mobile_page_sends_a_csp_that_loads_nothing_from_outside_the_hub(home, serve):

@@ -278,8 +278,8 @@ def read_conversation(cwd, sid, secrets=(), before=None):
         said = sum(1 for _, found in kept for role, *_ in found if role != "tool")
         if said >= PAGE_TURNS or not start or window >= MAX_TAIL_BYTES: break
         window *= 2
-    out = [{"id": uid, "role": role, "text": redact(text, secrets), "at": at, "m": model}
-           for _, found in kept for role, uid, text, at, model in found]
+    out = [{"id": uid, "k": f"{offset}:{n}", "role": role, "text": redact(text, secrets), "at": at, "m": model}
+           for offset, found in kept for n, (role, uid, text, at, model) in enumerate(found)]
     cursor = kept[0][0] if kept else start
     page = {"turns": out, "next": cursor or None}
     if st:

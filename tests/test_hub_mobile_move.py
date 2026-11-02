@@ -54,7 +54,7 @@ class El {
   get textContent() { return this._text + this.children.map(c => c.textContent).join(""); }
   set textContent(v) { this.children = []; this._text = String(v); }
   append(...kids) { for (const k of kids) { if (k && k.tagName) { k.parentElement = this; this.children.push(k); } } }
-  prepend(...kids) { for (const k of kids) { if (k && k.tagName) { k.parentElement = this; this.children.unshift(k); } } }
+  prepend(...kids) { const ok = kids.filter(k => k && k.tagName); for (const k of ok) k.parentElement = this; this.children.unshift(...ok); }
   replaceChildren(...kids) { this.children = []; this._text = ""; this.append(...kids); }
   setAttribute(name, v) {
     if (name.startsWith("data-")) this.dataset[name.slice(5).replace(/-(\w)/g, (_, c) => c.toUpperCase())] = String(v);
@@ -140,10 +140,11 @@ const reply = (body, status, ct) => ({
 });
 const jsonReply = (o, status) => reply(JSON.stringify(o), status || 200, "application/json");
 const boot = {
-  __state: { board: __BOARD__, promote: __PROMOTE__, reads: 0, routes: __ROUTES__, posts: [] },
+  __state: { board: __BOARD__, promote: __PROMOTE__, reads: 0, routes: __ROUTES__, posts: [], gets: {}, streams: [] },
   __skew: 0,
   fetch: async (path, opts) => {
     const name = String(path).split("?")[0];            // a route named here answers as the hub would; a write is recorded
+    if (!(opts && opts.method === "POST")) boot.__state.gets[name] = (boot.__state.gets[name] || 0) + 1;
     if (boot.__state.routes[name]) {
       if (opts && opts.method === "POST") boot.__state.posts.push({ path: name, opts });
       const q = boot.__state.routes[name];
@@ -167,16 +168,22 @@ const boot = {
   },
 };
 const timers = {};
+const intervals = [];
 let timerSeq = 0;
 const RealDate = Date;
 class FakeDate extends RealDate {
   constructor(...a) { if (a.length === 0) super(RealDate.now() + boot.__skew); else super(...a); }
   static now() { return RealDate.now() + boot.__skew; }
 }
+class FakeEventSource {
+  constructor(url) { this.url = url; this.handlers = {}; boot.__state.streams.push(this); }
+  addEventListener(t, fn) { (this.handlers[t] = this.handlers[t] || []).push(fn); }
+  close() { this.closed = true; }
+}
 const box = {
   console, JSON, Math, Date: FakeDate, Object, Array, String, Number, Promise, Set, Map, Error, RegExp, parseInt, parseFloat,
   isNaN, encodeURIComponent, decodeURIComponent, Boolean, Symbol, TypeError,
-  fetch: boot.fetch,
+  fetch: boot.fetch, EventSource: FakeEventSource,
   scrollY: 0,
   scrollTo: (_x, y) => { box.scrollY = y; },
   __skip: ms => { boot.__skew += ms; return boot.__skew; },
@@ -184,9 +191,10 @@ const box = {
   Option: class { constructor(text, value) { this.text = text; this.value = value; } },
   setTimeout: (fn, ms) => { const id = ++timerSeq; timers[id] = { fn, ms }; return id; },
   clearTimeout: id => { delete timers[id]; },
-  setInterval: () => 0,
+  setInterval: (fn, ms) => { intervals.push({ fn, ms }); return 0; },
   clearInterval: () => {},
   __timers: timers,
+  __intervals: intervals,
   __fire: () => { const ids = Object.keys(timers); for (const id of ids) { const t = timers[id]; delete timers[id]; t.fn(); } return ids.length; },
   __tick: ms => new Promise(r => hostSetTimeout(r, ms || 0)),
   addEventListener: (t, fn) => { (docListeners[t] = docListeners[t] || []).push(fn); },

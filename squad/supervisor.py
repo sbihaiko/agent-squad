@@ -18,8 +18,9 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from typing import NamedTuple
 
-from squad import sandbox
+from squad import sandbox, terminal_audit
 from squad.redact import redact, safe_cut
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,7 +29,7 @@ PIDFILE = "supervisor.pid"
 LEDGER = "sessions.jsonl"
 CLIENTS = "clients.json"
 GRANTS = "grants.json"
-AUDIT = "supervisor-audit.log"
+TRANSPORTS = ("unix", "loopback", "tailnet")
 LOG = "supervisor.log"
 TRANSCRIPTS = "transcripts"
 WINDOW = 1 << 16
@@ -39,6 +40,12 @@ SESSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 
 class Refused(Exception):
     pass
+
+
+class Caller(NamedTuple):
+    login: str = ""
+    client_id: str = ""
+    transport: str = ""
 
 
 def valid_job(job: str) -> bool:
@@ -176,6 +183,7 @@ class Supervisor:
         self.gate = Gate(state / CLIENTS, self.secret, os.geteuid())
         self.sessions: dict[str, Session] = {}
         self.attached: set[tuple[str, str]] = set()
+        self.attachments: dict[tuple[str, str, str], int] = {}
         self.lock = threading.RLock()
         self._settle_records()
 
@@ -183,9 +191,11 @@ class Supervisor:
         with (self.state / LEDGER).open("a") as ledger:
             ledger.write(json.dumps({"ts": time.time(), **event}) + "\n")
 
-    def _audit(self, op: str, **fields: object) -> None:
-        with self.lock, (self.state / AUDIT).open("a") as audit:
-            audit.write(json.dumps({"ts": time.time(), "op": op, **fields}) + "\n")
+    def _line(self, event: str, sid: str, caller: Caller, input_bytes: int = 0) -> None:
+        with self.lock:
+            job = self.sessions[sid].job
+            terminal_audit.record(self.state, event, job=job, session=sid, login=caller.login, transport=caller.transport,
+                                  client_id=caller.client_id, input_bytes=input_bytes)
 
     def _records(self) -> dict[str, dict]:
         path = self.state / LEDGER
@@ -223,14 +233,20 @@ class Supervisor:
             return False
         return any(isinstance(g, dict) and g.get("replaces") == live and g.get("with") == new for g in grants)
 
-    def _attach(self, sid: str, transport: str) -> None:
+    def _attach(self, sid: str, caller: Caller) -> None:
         with self.lock:
-            if sid not in self.sessions or (sid, transport) in self.attached:
+            if sid not in self.sessions:
                 return
-            self.attached.add((sid, transport))
-            self._ledger({"event": "attach", "session": sid, "transport": transport})
+            if (sid, caller.transport) not in self.attached:
+                self.attached.add((sid, caller.transport))
+                self._ledger({"event": "attach", "session": sid, "transport": caller.transport})
+            key = (sid, caller.transport, caller.client_id)
+            if key not in self.attachments:
+                self.attachments[key] = 0
+                self._line("attach", sid, caller)
 
-    def start(self, job: str, cwd: str | None, session: str | None = None) -> str:
+    def start(self, job: str, cwd: str | None, session: str | None = None, caller: Caller | None = None) -> str:
+        caller = caller or Caller()
         if not valid_job(job):
             raise Refused(f"job name {job!r} is not valid")
         if session is not None and SESSION.fullmatch(session) is None:
@@ -256,6 +272,7 @@ class Supervisor:
             self._ledger({"event": "start", "session": sid, "job": job, "pid": proc.pid,
                           "lstart": lstart(proc.pid), "terminal": terminal, "cwd": running.cwd,
                           "argv": HOSTED_ARGV})
+            self._line("start", sid, caller)
             running.pump.start()
         threading.Thread(target=self._reap, args=(running,), daemon=True).start()
         return sid
@@ -275,6 +292,7 @@ class Supervisor:
         with self.lock:
             self._ledger({"event": "end", "session": session.sid, "reason": reason,
                           "returncode": session.proc.returncode})
+            self._line("end", session.sid, Caller())
 
     def _session(self, sid: str) -> Session:
         session = self.sessions.get(sid)
@@ -282,7 +300,7 @@ class Supervisor:
             raise Refused("not started by this daemon")
         return session
 
-    def write(self, sid: str, text: str) -> None:
+    def write(self, sid: str, text: str, caller: Caller) -> None:
         session = self._session(sid)
         for line in text.splitlines():
             if line.startswith("!"):
@@ -294,49 +312,67 @@ class Supervisor:
                 raise Refused("session ended")
             data = text.encode()
             os.write(session.master, data)
-        self._audit("write", session=sid, bytes=len(data))
+        with self.lock:
+            key = (sid, caller.transport, caller.client_id)
+            self.attachments[key] = self.attachments.get(key, 0) + len(data)
 
     def read(self, sid: str, offset: int) -> dict:
-        self._audit("read", session=sid)
         return self._session(sid).read(offset)
 
-    def stop(self, sid: str) -> None:
+    def detach(self, sid: str, caller: Caller) -> None:
+        with self.lock:
+            key = (sid, caller.transport, caller.client_id)
+            if key not in self.attachments:
+                raise Refused("not attached")
+            self._line("detach", sid, caller, self.attachments.pop(key))
+
+    def stop(self, sid: str, caller: Caller) -> None:
         session = self._session(sid)
         session.stop_requested = True
         try:
             os.killpg(session.proc.pid, signal.SIGTERM)
         except ProcessLookupError:
             pass
-        self._audit("stop", session=sid)
+        with self.lock:
+            self._line("stop", sid, caller, self.attachments.get((sid, caller.transport, caller.client_id), 0))
 
     def dispatch(self, request: dict, sock: socket.socket) -> dict:
         pid, uid = peer_cred(sock)
         reason = self.gate.admit(presented=str(request.get("secret", "")), peer_pid=pid, peer_uid=uid,
                                  peer_lstart=lstart(pid))
         if reason is not None:
-            self._audit("refused", peer_pid=pid, peer_uid=uid, reason=reason)
+            terminal_audit.refused(self.state, reason=reason, peer_pid=pid, peer_uid=uid)
             return {"ok": False, "reason": reason}
         try:
-            return {"ok": True, **self._op(request, transport="unix")}
+            return {"ok": True, **self._op(request)}
         except Refused as error:
-            self._audit("refused", peer_pid=pid, peer_uid=uid, reason=str(error))
+            terminal_audit.refused(self.state, reason=str(error), peer_pid=pid, peer_uid=uid)
             return {"ok": False, "reason": str(error)}
 
-    def _op(self, request: dict, transport: str) -> dict:
+    def _op(self, request: dict) -> dict:
         op = request.get("op")
+        caller = Caller(login=str(request.get("login", "")), client_id=str(request.get("client_id", "")),
+                        transport=str(request.get("transport", "unix")))
+        if caller.transport not in TRANSPORTS:
+            raise Refused(f"transport {caller.transport!r} is not known")
         if op == "ping":
             return {}
         if op == "start":
-            return {"session": self.start(request["job"], request.get("cwd"), request.get("session"))}
-        if op in ("read", "write", "stop"):
-            self._attach(request["session"], transport)
+            return {"session": self.start(request["job"], request.get("cwd"), request.get("session"), caller)}
+        if op in ("attach", "read", "write"):
+            self._attach(request["session"], caller)
+        if op == "attach":
+            return {}
         if op == "read":
             return self.read(request["session"], int(request["offset"]))
         if op == "write":
-            self.write(request["session"], request["text"])
+            self.write(request["session"], request["text"], caller)
+            return {}
+        if op == "detach":
+            self.detach(request["session"], caller)
             return {}
         if op == "stop":
-            self.stop(request["session"])
+            self.stop(request["session"], caller)
             return {}
         raise Refused(f"unknown op {op}")
 

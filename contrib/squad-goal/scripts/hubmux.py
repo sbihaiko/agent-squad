@@ -247,7 +247,7 @@ def admitted(apps, h, method):
     seen, reasons = {}, []
     for slug, app in apps.items():
         if "mod" not in app: continue
-        v = app["mod"].access(h, method)
+        v = app["mod"].access(h, app["mod"].route_action(method, h.path))
         if v.allowed: seen[slug] = app
         else: reasons.append(v.reason)
     if seen: return seen, ""
@@ -271,6 +271,9 @@ def server(port, apps, on_new=None):
         def stream(self, a): return self.profile.stream(self, a)
         def send_to_session(self, a): return self.profile.send_to_session(self, a)   # the overlay's and the phone's send (#898)
         def answer_card(self, a): return self.profile.answer_card(self, a)   # the owner's answer to a session's question card (#1093)
+        def terminal_read(self, a): return self.profile.terminal_read(self, a)   # a hosted session's scrollback (ADR-0152 rule 9)
+        def terminal_post(self, a, op, keys): return self.profile.terminal_post(self, a, op, keys)   # an attach, a detach or an input
+        def terminal_call(self, a, op, **fields): return self.profile.terminal_call(self, a, op, **fields)
         def send_screenshot(self, a): return self.profile.send_screenshot(self, a)   # the overlay's screenshot (#903)
         def answer(self, code, out): return self.profile.answer(self, code, out)
         def loop_post(self, a): return self.profile.loop_post(self, a)   # the loop switch's write (#923)

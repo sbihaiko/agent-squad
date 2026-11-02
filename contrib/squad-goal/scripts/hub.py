@@ -6225,11 +6225,12 @@ def sessions_payload():
     return sessions.list_sessions(PROFILE_NAME, profiles_of=profiles_of_cwd)
 
 def conversation_payload(query):
-    """What /api/sessions/conversation serves: one page of a live session of this profile, None when it is not one (#840)."""
+    """What /api/sessions/conversation serves: one page of a live session of this profile, None when it is not one (#840). The
+    newest page is the window's read: its `end` is the offset the push stream resumes from."""
     q = urllib.parse.parse_qs(query)
-    before = (q.get("before") or [""])[0]
-    return sessions.conversation(PROFILE_NAME, (q.get("sid") or [""])[0], int(before) if before.isdigit() else None,
-                                 profiles_of=profiles_of_cwd)
+    sid, before = (q.get("sid") or [""])[0], (q.get("before") or [""])[0]
+    if not before.isdigit() and hubstream.enabled(): return TRANSCRIPTS.refresh(sid, hubstream.tick())
+    return sessions.conversation(PROFILE_NAME, sid, int(before) if before.isdigit() else None, profiles_of=profiles_of_cwd)
 
 def card_payload(query):
     """What /api/sessions/card serves: the question card a live session of this profile is waiting on, or None (#1093)."""
@@ -6328,8 +6329,7 @@ MOBILE_SHELL = ["/mobile/", "/mobile/manifest.webmanifest", "/mobile/icon.svg"]
 SW_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-sw.js").read_text().replace("/*SHELL*/[]", json.dumps(MOBILE_SHELL))
 MANIFEST_JSON = json.dumps({"id": "/mobile/", "name": f"Squad hub {REPO}", "short_name": "Hub", "start_url": "/mobile/", "scope": "/mobile/", "display": "standalone", "background_color": "#0f1115", "theme_color": "#0f1115", "icons": [{"src": "/mobile/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}]}).encode()
 MOBILE_ICON = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192"><rect width="192" height="192" rx="36" fill="#0f1115"/><circle cx="96" cy="96" r="52" fill="#3ecf8e"/></svg>'
-MOBILE_ASSETS = {"/mobile": (MOBILE_PAGE.encode(), "text/html; charset=utf-8"), "/mobile/": (MOBILE_PAGE.encode(), "text/html; charset=utf-8"),
-                 "/mobile/manifest.webmanifest": (MANIFEST_JSON, "application/manifest+json"), "/mobile/icon.svg": (MOBILE_ICON, "image/svg+xml"),
+MOBILE_ASSETS = {"/mobile/manifest.webmanifest": (MANIFEST_JSON, "application/manifest+json"), "/mobile/icon.svg": (MOBILE_ICON, "image/svg+xml"),
                  "/mobile/sw.js": (SW_JS.encode(), "text/javascript; charset=utf-8")}
 
 def test_log_page(d, lg):
@@ -6347,6 +6347,11 @@ HUB_STREAM_JS = (pathlib.Path(__file__).resolve().parent / "hub-stream.js").read
 def stream_tag():
     """The page's push stream: its path, then the script; the mux gives the path its profile prefix."""
     return f'<script>window.SQUAD_HUB_STREAM="{hubstream.PATH}";\n{HUB_STREAM_JS}</script>'
+
+def mobile_html():
+    """The phone page as the hub serves it: its push stream rides in the page only while the stream is on."""
+    stream = f'window.SQUAD_HUB_STREAM="{hubstream.PATH}";\n{HUB_STREAM_JS}' if hubstream.enabled() else ""
+    return MOBILE_PAGE.replace("/*STREAM*/", stream).encode()
 
 def served_page(login=""):
     """The page as the hub serves it, every placeholder substituted. The model-id shape replaces its quoted placeholder:
@@ -6416,7 +6421,27 @@ class Access(NamedTuple):
     tailnet: bool   # the request is addressed to the tailnet name
 
 LOGIN_HEADER = "Tailscale-User-Login"   # the seam's name, for a hub with no seam: a request that carries it is never loopback
-def access(h, method):
+TERMINAL_GRANTS = ("terminals_read", "terminals_attach", "terminals_send")
+TERMINAL_SENDS = ("/api/sessions/send", "/api/sessions/card/answer", "/api/sessions/screenshot", "/api/terminals/write")
+TERMINAL_ATTACH = ("/api/terminals/attach", "/api/terminals/detach")
+TERMINAL_OPS = {"/api/terminals/attach": ("attach", {"sid", "client_id"}), "/api/terminals/detach": ("detach", {"sid", "client_id"}),
+                "/api/terminals/write": ("write", {"sid", "text", "client_id"})}
+def route_action(method, path):
+    """What a request asks for, the access seam's action (ADR-0152 rule 9): a terminal read, an attach or detach, a send to a session, or a control write.
+    The seam decides on the action; a method only names which routes can write."""
+    path = path.split("?", 1)[0]
+    if method == "GET":
+        return "read" if path == "/api/terminals/read" else "view"
+    if path in TERMINAL_ATTACH: return "attach"
+    return "send" if path in TERMINAL_SENDS else "control"
+
+def terminal_supervisor():
+    """The terminal supervisor's client (squad/supervisor.py), loaded from the first root that holds the squad package."""
+    if "sv" not in _PROJECT:
+        (_PROJECT["sv"],) = load_squad(tailnet_roots(), ("supervisor",))
+    return _PROJECT["sv"]
+
+def access(h, action):
     """The one rule for every route: the loopback Host as own_host has always answered it, a tailnet request through the seam.
     A request that carries the tailnet login header is a tailnet request whatever its Host: on a loopback Host it reads, and
     it never writes, so a `tailscale serve` that hands the hub a loopback Host never earns a loopback write (ADR-0152 rule 9)."""
@@ -6424,14 +6449,12 @@ def access(h, method):
     login = h.headers.get(seam.LOGIN_HEADER if seam else LOGIN_HEADER) or ""
     if own_host(h) and not login: return Access(True, "", "", False)
     if seam is None: return Access(False, "no tailnet access seam", "", bool(login))
-    if own_host(h):   # a read passes as a loopback read always has; a write needs the tailnet Host (rules 3 and 5)
-        read = method.upper() in seam.READ_METHODS
-        return Access(read, "" if read else "forbidden host", "", True)
     host = h.headers.get("Host") or ""
     tn = tailnet_block()
-    v = seam.decide(host=host, origin=h.headers.get("Origin") or "", method=method, login=login,
-                    port=h.server.server_port, tailnet_host=tn.get("host") or "", allowed_logins=tn.get("allow") or [])
-    return Access(v.allowed, v.reason, login if v.allowed else "", bool(tn.get("host")) and host == tn["host"])
+    grants = frozenset(g for g in TERMINAL_GRANTS if tn.get(g) is True)
+    v = seam.decide(host=host, origin=h.headers.get("Origin"), action=action, login=login, port=h.server.server_port,
+                    tailnet_host=tn.get("host") or "", allowed_logins=tn.get("allow") or [], grants=grants)
+    return Access(v.allowed, v.reason, login if v.allowed and not own_host(h) else "", bool(login) or (bool(tn.get("host")) and host == tn["host"]))
 
 DASH_PREFIXES = ("/dash/", "//")
 DASH_PATH = re.compile(r"/dash/([\w-]+)(/[\w./-]*)?")   # a run id, then plain names only: no escape, host or port
@@ -6462,7 +6485,8 @@ def request_target(h):
     return parts[1] if len(parts) > 1 and parts[1].startswith("//") else h.path
 
 CHART_INPUTS = {"cfd": lambda: history_key(), "lead": lambda: (board_cache.get("t"), history_key())}
-VERSIONS = hubstream.Versions({"runs": lambda: run_list(), **CHART_INPUTS})
+VERSIONS = hubstream.Versions({"runs": lambda: run_list(), "board": lambda: json.loads(board_served()[0]), "sessions": lambda: sessions_payload(), **CHART_INPUTS})
+TRANSCRIPTS = hubstream.Transcripts(lambda sid: sessions.conversation(PROFILE_NAME, sid, None, profiles_of=profiles_of_cwd))
 
 def stream_origin_ok(h, tailnet):
     """A stream opens for no origin but this hub's own (loopback) or, on the tailnet, the tailnet's; an absent Origin is a non-browser reader."""
@@ -6509,33 +6533,48 @@ class H(BaseHTTPRequestHandler):
         except (OSError, http.client.HTTPException): pass
         finally: up.close()
     def stream(self, a):
-        """The page's push stream: every subject the reader does not hold yet, then a heartbeat while nothing changes."""
+        """The page's push stream: every subject the reader does not hold yet, the conversations it watches from its offsets,
+        then a heartbeat while nothing changes. Each subject is read once a tick, whatever the pages that watch it."""
         if not stream_origin_ok(self, a.tailnet): return self.refuse("forbidden origin")
-        held = hubstream.held_from(self.path.partition("?")[2])
-        self.protocol_version = "HTTP/1.1"   # the body is streamed, so its end is framed: chunked, then the close
-        self.send_response(200); self.send_header("Content-Type", hubstream.CTYPE); self.send_header("Cache-Control", "no-store")
-        self.send_header("Transfer-Encoding", "chunked"); self.send_header("Connection", "close"); self.end_headers()
-        self.close_connection = True
-        def chunk(data):
-            self.wfile.write(b"%x\r\n" % len(data) + data + b"\r\n")
-        quiet = time.monotonic()
+        query = self.path.partition("?")[2]
+        held = hubstream.held_from(query)
+        at = hubstream.conv_from(query)
+        want = hubstream.want_from(query)
+        watched = list(at)
         try:
+            for sid in watched: TRANSCRIPTS.watch(sid)
+            self.protocol_version = "HTTP/1.1"   # the body is streamed, so its end is framed: chunked, then the close
+            self.send_response(200); self.send_header("Content-Type", hubstream.CTYPE); self.send_header("Cache-Control", "no-store")
+            self.send_header("Transfer-Encoding", "chunked"); self.send_header("Connection", "close"); self.end_headers()
+            self.close_connection = True
+            def chunk(data):
+                self.wfile.write(b"%x\r\n" % len(data) + data + b"\r\n")
+            quiet = time.monotonic()
             while True:
-                VERSIONS.refresh()
-                fresh = VERSIONS.newer(held)
-                for name, v in sorted(fresh.items()):
-                    chunk(hubstream.event(name, v)); held[name] = v
+                tick = hubstream.tick()
+                VERSIONS.refresh(tick)
+                sent = False
+                for name, (v, body) in sorted(VERSIONS.fresh(held).items()):
+                    chunk(hubstream.event(name, v, body if name in want else None)); held[name] = v; sent = True
+                for sid in watched:
+                    TRANSCRIPTS.refresh(sid, tick)
+                    events, epoch, offset = TRANSCRIPTS.pull(sid, *at[sid])
+                    for name, obj in events: chunk(hubstream.frame(name, obj)); sent = True
+                    at[sid] = (epoch, offset)
                 now = time.monotonic()
-                if fresh: quiet = now
+                if sent: quiet = now
                 elif now - quiet >= hubstream.HEARTBEAT_SECONDS:
-                    chunk(b": ping\n\n"); quiet = now
+                    chunk(hubstream.frame("ping", {})); quiet = now
                 time.sleep(hubstream.TICK_SECONDS)
         except OSError: return
+        finally:
+            for sid in watched: TRANSCRIPTS.unwatch(sid)
 
     def do_GET(self):
-        a = access(self, "GET")
+        a = access(self, route_action("GET", self.path))
         if not a.allowed: return self.refuse(a.reason, page=self.path.split("?", 1)[0] in ("/mobile", "/mobile/"))
         if self.path.split("?", 1)[0] == hubstream.PATH and hubstream.enabled(): return self.stream(a)
+        if self.path.split("?", 1)[0] == "/api/terminals/read": return self.terminal_read(a)
         if request_target(self).startswith(DASH_PREFIXES): return self.dash("GET")
         if self.path.startswith(("/held/", "/ended/")):   # a run the childcc pass holds, or one that ended today: its dashboard (#689, #830)
             name = re.sub(r"[^\w-]", "", self.path.split("/", 2)[2].split("?")[0])
@@ -6594,6 +6633,7 @@ class H(BaseHTTPRequestHandler):
             self.send_response(200); self.send_header("Content-Type", got[1]); self.send_header("Cache-Control", "max-age=3600")
             self.send_header("Content-Length", str(len(got[0]))); self.end_headers(); self.wfile.write(got[0]); return
         elif self.path.startswith("/api/sessions"): body, ct = json.dumps(sessions_payload()).encode(), "application/json"
+        elif self.path.split("?", 1)[0] in ("/mobile", "/mobile/"): body, ct = mobile_html(), "text/html; charset=utf-8"
         elif (asset := MOBILE_ASSETS.get(self.path.split("?", 1)[0])): body, ct = asset
         else: body, ct = served_page(a.login).encode(), "text/html; charset=utf-8"
         self.send_response(200); self.send_header("Content-Type", ct); self.send_header("Cache-Control", "no-store")
@@ -6650,12 +6690,43 @@ class H(BaseHTTPRequestHandler):
         part.write_bytes(raw); os.replace(part, path)
         self.answer(200, session_send.send(PROFILE_NAME, sid, f"Screenshot: {path}", cid, profiles_of=profiles_of_cwd, root=STATE))
 
+    def terminal_read(self, a):
+        """A hosted session's scrollback, through the supervisor for this caller (ADR-0152 rule 9): the read grant on the tailnet."""
+        if not a.allowed: return self.refuse(a.reason)
+        q = urllib.parse.parse_qs(self.path.partition("?")[2])
+        sid, cid, offset = (q.get("sid") or [""])[0], (q.get("client_id") or [""])[0], (q.get("offset") or ["0"])[0]
+        if not sessions.SID.fullmatch(sid) or not session_send.CLIENT_ID.fullmatch(cid) or not offset.isdigit(): return self.answer(400, {"err": "bad request"})
+        self.terminal_call(a, "read", session=sid, offset=int(offset), client_id=cid)
+
+    def terminal_post(self, a, op, keys):
+        """An attach, a detach or an input to a hosted session: a JSON body with exactly `keys`, under the seam's rule for its action."""
+        length = self.headers.get("Content-Length") or "0"
+        raw = self.rfile.read(min(int(length), 1 << 20)) if length.isdigit() else b""
+        if not a.allowed: return self.refuse(a.reason)
+        if not (a.tailnet or own_origin(self)) or "json" not in (self.headers.get("Content-Type") or ""): return self.refuse("forbidden")
+        try: body = json.loads(raw)
+        except ValueError: body = None
+        if not isinstance(body, dict) or set(body) != keys: return self.answer(400, {"err": "bad request"})
+        sid, cid = str(body["sid"]), str(body["client_id"])
+        if not sessions.SID.fullmatch(sid) or not session_send.CLIENT_ID.fullmatch(cid): return self.answer(400, {"err": "bad request"})
+        if op != "write": return self.terminal_call(a, op, session=sid, client_id=cid)
+        if not isinstance(body["text"], str): return self.answer(400, {"err": "bad request"})
+        self.terminal_call(a, op, session=sid, text=body["text"], client_id=cid)
+
+    def terminal_call(self, a, op, **fields):
+        """One op on the supervisor for this caller: the login it acts for and the transport it came by. A refusal is a 403, a daemon that is not running a 503."""
+        sv = terminal_supervisor()
+        try: out = sv.call(STATE, op, login=a.login, transport="tailnet" if a.tailnet else "loopback", **fields)
+        except sv.Refused as e: return self.answer(403, {"err": str(e)})
+        except OSError: return self.answer(503, {"err": "the terminal supervisor is not running"})
+        self.answer(200, out)
+
     def answer(self, code, out):
         data = json.dumps(out).encode(); self.send_response(code); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
 
     def do_POST(self):
         # a cross-site page must not be able to write: a loopback write needs our own origin, a tailnet write the tailnet origin (the seam), and a JSON body
-        a = access(self, "POST")
+        a = access(self, route_action("POST", self.path))
         if request_target(self).startswith(DASH_PREFIXES):   # the body is read before any refusal, as below
             length = self.headers.get("Content-Length") or "0"
             raw = self.rfile.read(min(int(length), 1 << 20)) if length.isdigit() else b""
@@ -6665,6 +6736,7 @@ class H(BaseHTTPRequestHandler):
         if self.path.split("?", 1)[0] == "/api/sessions/send": return self.send_to_session(a)
         if self.path.split("?", 1)[0] == "/api/sessions/card/answer": return self.answer_card(a)
         if self.path.split("?", 1)[0] == "/api/sessions/screenshot": return self.send_screenshot(a)
+        if self.path.split("?", 1)[0] in TERMINAL_OPS: return self.terminal_post(a, *TERMINAL_OPS[self.path.split("?", 1)[0]])
         if self.path.split("?", 1)[0] == "/api/loop": return self.loop_post(a)
         ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote", "/api/limits", "/api/slack") and (a.tailnet or own_origin(self)) and "json" in (self.headers.get("Content-Type") or "")
         try:
