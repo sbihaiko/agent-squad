@@ -270,6 +270,7 @@ def server(port, apps, on_new=None):
         def dash(self, method, body=b""): return self.profile.dash(self, method, body)
         def stream(self, a): return self.profile.stream(self, a)
         def send_to_session(self, a): return self.profile.send_to_session(self, a)   # the overlay's and the phone's send (#898)
+        def answer_card(self, a): return self.profile.answer_card(self, a)   # the owner's answer to a session's question card (#1093)
         def send_screenshot(self, a): return self.profile.send_screenshot(self, a)   # the overlay's screenshot (#903)
         def answer(self, code, out): return self.profile.answer(self, code, out)
         def loop_post(self, a): return self.profile.loop_post(self, a)   # the loop switch's write (#923)

@@ -3,7 +3,7 @@
 usage: hub.py [port]   default 7700, loopback only. Read-only: it discovers servers via ps/lsof and reads record.jsonl."""
 import datetime as dt, glob, hashlib, html, importlib.util, itertools, json, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, pathlib, urllib.parse, urllib.request
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
-import agyquota, board_lag, chainhealth, ghread, ghthrottle, hubstream, modelreg, provkey, session_send, sessions   # the chains and the one registry resolve a model (ADR-0147); ghread is the one GitHub door (ADR-0277)
+import agyquota, board_lag, chainhealth, ghread, ghthrottle, hubstream, modelreg, provkey, session_card, session_send, sessions   # the chains and the one registry resolve a model (ADR-0147); ghread is the one GitHub door (ADR-0277)
 from issue_state import board_state, KINDS, TEST_CASE_TITLE, _utc
 import http.client
 import zoneinfo
@@ -6175,6 +6175,33 @@ def conversation_payload(query):
     return sessions.conversation(PROFILE_NAME, (q.get("sid") or [""])[0], int(before) if before.isdigit() else None,
                                  profiles_of=profiles_of_cwd)
 
+def card_payload(query):
+    """What /api/sessions/card serves: the question card a live session of this profile is waiting on, or None (#1093)."""
+    sid = (urllib.parse.parse_qs(query).get("sid") or [""])[0]
+    return {"card": sessions.pending_card(PROFILE_NAME, sid, profiles_of=profiles_of_cwd)}
+
+def card_answer_payload(body):
+    """The owner's answer to a session's question card (#1093): the card's picks become one message, and the session's own
+    send route carries it. The card and its answer checks live in session_card; nothing here writes a second way."""
+    card = sessions.pending_card(PROFILE_NAME, body["sid"], profiles_of=profiles_of_cwd)
+    try: text, cid = session_card.answer(card, body["card_id"], body["answers"])
+    except session_card.Refused as refused: return {"status": "refused", "reason": str(refused)}
+    return session_send.send(PROFILE_NAME, body["sid"], text, cid, profiles_of=profiles_of_cwd, root=STATE)
+
+def session_write(h, a, raw, keys, run):
+    """Answers one JSON write to a session under the write gate, with the body's exact keys; `run` returns what it sends back."""
+    if not a.allowed: return h.refuse(a.reason)
+    tn = tailnet_block()
+    origin_ok = (h.headers.get("Origin") or "") == f"https://{tn.get('host')}" if a.tailnet else own_origin(h)
+    if not (send_rule(a)[0] and origin_ok and "json" in (h.headers.get("Content-Type") or "")): return h.refuse("forbidden")
+    try: body = json.loads(raw)
+    except ValueError: body = None
+    if not isinstance(body, dict) or set(body) != keys:
+        out, code = {"err": "bad request"}, 400
+    else:
+        out, code = run(body), 200
+    data = json.dumps(out).encode(); h.send_response(code); h.send_header("Content-Type", "application/json"); h.send_header("Content-Length", str(len(data))); h.end_headers(); h.wfile.write(data)
+
 SCREENSHOT_MAX = 5 * 1024 * 1024   # the owner's grant (ADR-0024): a PNG of at most 5 MB
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 SEND_SETTING = "SQUAD_TAILNET_TERMINALS_SEND"
@@ -6493,6 +6520,7 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/speed"): body, ct = json.dumps(speed()).encode(), "application/json"
         elif self.path.startswith("/api/load"): body, ct = json.dumps(load_payload()).encode(), "application/json"
         elif self.path.startswith("/api/status"): body, ct = json.dumps(status_payload()).encode(), "application/json"
+        elif self.path.startswith("/api/sessions/card"): body, ct = json.dumps(card_payload(self.path.partition("?")[2])).encode(), "application/json"
         elif self.path.startswith("/api/sessions/send"):
             q = urllib.parse.parse_qs(self.path.partition("?")[2])
             out = session_send.status(PROFILE_NAME, (q.get("sid") or [""])[0], (q.get("client_id") or [""])[0], profiles_of=profiles_of_cwd, root=STATE)
@@ -6532,17 +6560,14 @@ class H(BaseHTTPRequestHandler):
         allowed login, the tailnet Origin and the grant (ADR-0152 rule 9)."""
         length = self.headers.get("Content-Length") or "0"
         raw = self.rfile.read(min(int(length), 1 << 20)) if length.isdigit() else b""
-        if not a.allowed: return self.refuse(a.reason)
-        tn = tailnet_block()
-        origin_ok = (self.headers.get("Origin") or "") == f"https://{tn.get('host')}" if a.tailnet else own_origin(self)
-        if not (send_rule(a)[0] and origin_ok and "json" in (self.headers.get("Content-Type") or "")): return self.refuse("forbidden")
-        try: body = json.loads(raw)
-        except ValueError: body = None
-        if not isinstance(body, dict) or set(body) != {"sid", "text", "client_id"}:
-            out, code = {"err": "bad request"}, 400
-        else:
-            out, code = session_send.send(PROFILE_NAME, body["sid"], body["text"], body["client_id"], profiles_of=profiles_of_cwd, root=STATE), 200
-        data = json.dumps(out).encode(); self.send_response(code); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
+        session_write(self, a, raw, {"sid", "text", "client_id"}, lambda body: session_send.send(
+            PROFILE_NAME, body["sid"], body["text"], body["client_id"], profiles_of=profiles_of_cwd, root=STATE))
+
+    def answer_card(self, a):
+        """The owner's answer to a session's question card (#1093), under the same write gate as a message to a session."""
+        length = self.headers.get("Content-Length") or "0"
+        raw = self.rfile.read(min(int(length), 1 << 20)) if length.isdigit() else b""
+        session_write(self, a, raw, {"sid", "card_id", "answers"}, card_answer_payload)
 
     def send_screenshot(self, a):
         """The overlay's screenshot (#903): a PNG of the page beneath it, written under the hub state folder, then the session
@@ -6581,6 +6606,7 @@ class H(BaseHTTPRequestHandler):
             if not (a.tailnet or own_origin(self)) or "json" not in (self.headers.get("Content-Type") or ""): return self.refuse("forbidden")
             return self.dash("POST", raw)
         if self.path.split("?", 1)[0] == "/api/sessions/send": return self.send_to_session(a)
+        if self.path.split("?", 1)[0] == "/api/sessions/card/answer": return self.answer_card(a)
         if self.path.split("?", 1)[0] == "/api/sessions/screenshot": return self.send_screenshot(a)
         if self.path.split("?", 1)[0] == "/api/loop": return self.loop_post(a)
         ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote", "/api/limits", "/api/slack") and (a.tailnet or own_origin(self)) and "json" in (self.headers.get("Content-Type") or "")

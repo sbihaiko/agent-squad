@@ -76,6 +76,8 @@ function cardSubmit(doc, state) {
   return { ok: true, why: "", unanswered: [], answers, state: next };
 }
 
+const cardUnsent = state => ({ ...state, sent: false });
+
 function cardView(doc, state = cardStart(doc)) {
   const errors = cardCheck(doc);
   if (errors.length) return { ok: false, errors };
