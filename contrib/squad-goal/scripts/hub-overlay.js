@@ -8,6 +8,9 @@ const SQ = {};
 SQ.MIN_W = 360; SQ.MIN_BOARD = 480; SQ.MAX_FRAC = 0.7; SQ.STEP = 24; SQ.DEFAULT_W = 440; SQ.SHEET_W = 420; SQ.PHONE_W = 600;
 SQ.IDLE_MS = 3000; SQ.LENS_R = 5; SQ.REACH = 240; SQ.POLL_MS=3000; SQ.TEXT_MAX = 4000;
 SQ.SEND_SETTING = "SQUAD_TAILNET_TERMINALS_SEND";
+// The build route sits beside the session route the page names: its base holds the same profile prefix.
+SQ.versionRoute = api => api.slice(0, api.lastIndexOf("/") + 1) + "version";
+SQ.buildStep = (seen, v) => ({ seen: seen === null ? v : seen, reload: seen !== null && v !== seen });
 // The feed reads like a terminal: the latest turns stand, older ones fold into one line, and a long answer is clamped with
 // "Show more" (owner, 2026-11-01; the terminal reads clearer because it summarizes age and length, not because it says less).
 SQ.KEEP = 12;
@@ -656,6 +659,22 @@ const reread = () => { if (!ov.hidden && !document.hidden) loadConversation(); }
 document.addEventListener("visibilitychange", () => { lastT = 0; kick(); reread(); });
 addEventListener("focus", reread);
 if (reduced.addEventListener) reduced.addEventListener("change", kick);
+// A new hub build reloads the open page, so no tab keeps an overlay the hub no longer serves (owner, 2026-11-01).
+let build = null;
+(async () => {
+  let srcs = [];
+  try { srcs = await window.SQUAD_OV_SOURCES(); } catch (e) { return; }
+  const src = (srcs || [])[0];
+  if (!src) return;
+  const route = SQ.versionRoute(src.api);
+  setInterval(async () => {
+    try {
+      const s = SQ.buildStep(build, (await (await fetch(route, { cache: "no-store" })).json()).v);
+      build = s.seen;
+      if (s.reload) location.reload();
+    } catch (e) { /* the hub did not answer: the page keeps what it shows */ }
+  }, SQ.POLL_MS);
+})();
 applyLayout(); syncSend();
 // A reload puts the panel back as it was left (owner, 2026-11-01): the page reloads when the hub build changes, and the
 // terminal closing on that reload loses the reader's place.
