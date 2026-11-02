@@ -402,3 +402,8 @@ def test_the_talk_is_read_again_the_moment_the_tab_is_looked_at():
     assert 'document.addEventListener("visibilitychange"' in js
     assert js.count('addEventListener("focus", reread)') == 1   # registered once, never per open
     assert 'console.warn("conversation:", e)' in js             # a failed poll says so; it never freezes in silence
+
+
+def test_the_paragraph_gap_is_one_line_box_at_the_smallest_and_largest_size():
+    p = subprocess.run(["bash", str(SCRIPTS / "test-hub-paragraph-gap.sh")], capture_output=True, text=True, timeout=30)
+    assert p.returncode == 0, p.stdout + p.stderr
