@@ -3,7 +3,8 @@
 #
 # It is the base battery (ruff, mypy and the fast pytest, SG_FAST_CMD) at the `fast` stage, so the pytest runs the delta the
 # tip reaches, then the shell suite test-<script>.sh of every .sh or .py
-# script under contrib/squad-goal/scripts that the tip changes; a changed test-<script>.sh runs itself. The changed files are the diff of HEAD
+# script under contrib/squad-goal/scripts that the tip changes, and every fixture suite whose `# mirrors:` line names a changed
+# file; a changed test-<script>.sh runs itself. The changed files are the diff of HEAD
 # against its merge-base with SG_FAST_BASE (default origin/$SG_BASE, else origin/dev), so work that landed on the base after the
 # branch point adds no suite. A base that does not resolve fails the gate, never skips the suites. Each suite runs hermetic, as
 # shell-suites.sh runs it: no SG_* variable, its own HOME. The promotion gate is the full suite (promote-stg.sh), not this.
@@ -97,8 +98,16 @@ done
 # (#885) The pytest tally and the code-quality reading print together; the pipe's status is tee's, so the reading never changes the exit.
 tally=$(/usr/bin/grep -E '[0-9]+ (passed|failed|errors?)' "$lg" | tail -n 1)
 { echo "fast-gate: pytest tally: ${tally:-none: no pytest count in the battery log}"; "$py" "$here/quality-reading.py" "$base"; } 2>&1 | tee -a "$lg"
-suites=$(git diff --name-only --diff-filter=d "$mb" HEAD | sed -n -e 's|^contrib/squad-goal/scripts/\(.*\)\.sh$|\1|p' -e 's|^contrib/squad-goal/scripts/\(.*\)\.py$|\1|p' | grep -v / \
-  | sed 's|^test-||' | sort -u)
+changed=$(git diff --name-only --diff-filter=d "$mb" HEAD)
+suites=$(printf '%s\n' "$changed" | sed -n -e 's|^contrib/squad-goal/scripts/\(.*\)\.sh$|\1|p' -e 's|^contrib/squad-goal/scripts/\(.*\)\.py$|\1|p' | grep -v / \
+  | sed 's|^test-||')
+# A fixture suite that copies a module list names it in its `# mirrors:` line; a change to any listed file runs that suite.
+for t in "$top"/contrib/squad-goal/scripts/test-*.sh; do [ -f "$t" ] || continue
+  for f in $(sed -n 's/^# mirrors: //p' "$t" | head -n 1); do
+    printf '%s\n' "$changed" | /usr/bin/grep -qxF "contrib/squad-goal/scripts/$f" && { suites="$suites"$'\n'"$(basename "$t" .sh | sed 's/^test-//')"; break; }
+  done
+done
+suites=$(printf '%s\n' $suites | sort -u)
 failed=""
 for n in $suites; do s=$top/contrib/squad-goal/scripts/test-$n.sh; [ -f "$s" ] || continue
   echo "=== test-$n.sh"

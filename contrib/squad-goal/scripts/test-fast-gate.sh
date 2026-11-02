@@ -286,5 +286,22 @@ wait "$qp"; qrc1=$?
 [ $qrc1 = 0 ] && [ $qrc2 = 0 ] && [ "$(battery_runs)" = 1 ] && ok "two gates queued at one key share one battery, because the memo is read again inside the lock" || ko "queued gates: rc $qrc1/$qrc2 runs $(battery_runs): '$(cat "$T/q2.out")'"
 case "$(cat "$T/q2.out")" in *memo:*) ok "the gate that waited reads the pass the first one kept";; *) ko "the gate that waited ran a battery: '$(cat "$T/q2.out")'";; esac
 
+# (#1108) A fixture suite that copies a module list states it in a `# mirrors:` line. A change to a listed file runs that suite,
+# and a suite with no such line is never picked by its module list. The base carries the suites; each case is one branch.
+$G -C "$R" checkout -q dev
+printf '#!/bin/bash\n# mirrors: hub.py session_card.py\necho "test-hub-caps.sh" >> "%s/ran.log"\n' "$T" > "$S/test-hub-caps.sh"
+printf '#!/bin/bash\necho "test-hub-other.sh" >> "%s/ran.log"\n' "$T" > "$S/test-hub-other.sh"
+printf 'import session_card\n' > "$S/hub.py"; printf 'x = 1\n' > "$S/session_card.py"; printf 'x = 1\n' > "$S/unrelated.py"
+$G -C "$R" add -A; $G -C "$R" commit -q -m mirror-base
+$G -C "$R" checkout -q -b gui/hub-import dev && echo 'import session_card  # new import' >> "$S/hub.py"
+$G -C "$R" add -A; $G -C "$R" commit -q -m hub-import
+out=$(fg); rc=$?
+[ $rc = 0 ] && /usr/bin/grep -qx "test-hub-caps.sh" "$T/ran.log" && ok "a change to hub.py runs the fixture suite whose mirror statement names it" || ko "hub.py change: rc $rc ran '$(cat "$T/ran.log" 2>/dev/null)': $out"
+/usr/bin/grep -qx "test-hub-other.sh" "$T/ran.log" 2>/dev/null && ko "a suite with no mirror statement ran" || ok "a suite with no mirror statement is not picked by its module list"
+$G -C "$R" checkout -q dev && $G -C "$R" checkout -q -b gui/unrelated dev && echo 'y = 2' >> "$S/unrelated.py"
+$G -C "$R" add -A; $G -C "$R" commit -q -m unrelated
+out=$(fg); rc=$?
+/usr/bin/grep -q "test-hub-caps.sh" "$T/ran.log" 2>/dev/null && ko "an unlisted module ran the fixture suite" || ok "a module the mirror statement does not name runs no fixture suite"
+
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 rm -rf "$T"; exit $fail
