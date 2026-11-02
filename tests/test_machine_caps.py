@@ -16,7 +16,7 @@ import anyio
 import pytest
 import yaml
 
-from squad import caps, defaults
+from squad import caps, defaults, record
 from squad.adapter import ScriptedAdapter
 from squad.engine import Engine
 from squad.graph import from_doc
@@ -134,6 +134,73 @@ def test_a_lease_of_a_reused_pid_is_reclaimed_and_the_ceiling_recovers(tmp_path)
     lease.write_text(json.dumps({**data, "since": 1.0}))
     assert c.occupancy()["runs"] == 0                    # this process started after the dead run's lease
     assert c.try_take("runs", "next-run") is not None
+
+
+def listed(tmp_path, *runs):
+    """An active-runs.txt naming one run folder per (name, finished) pair, each with its record. `True` writes the record's
+    final verdict through the record's own writer; `False` writes an ordinary event; `None` writes no record at all (a run in
+    its launch window). The entries are absolute, as launch.py writes them."""
+    st = tmp_path / "st"
+    st.mkdir(parents=True, exist_ok=True)
+    path = st / "active-runs.txt"
+    names = []
+    for name, finished in runs:
+        folder = tmp_path / "runs" / name
+        folder.mkdir(parents=True, exist_ok=True)
+        if finished is not None:
+            rec = record.Record(folder / "record.jsonl")
+            if finished:
+                rec.append("verdict", verdict="completed", exit_code=0, reasons=[], remains=[], folded=[])
+            else:
+                rec.append("progress", node="root", entry=1, item=0, session="s", messages=1, context_tokens=1, tool="Read")
+        names.append(str(folder))
+    path.write_text("".join(n + "\n" for n in names))
+    return path
+
+
+def test_a_run_with_a_final_verdict_holds_no_run_slot(tmp_path):
+    """Dispatch counted a run with a verdict as live until its issue closes, so finished runs starved caps.runs. Two finished
+    runs still hold a lease the engine has not released yet and one run is live; caps.runs is two, so one slot is free: the
+    record is the truth, not the lease."""
+    c = caps.Ceiling({**FOUR, "runs": 2}, tmp_path / "leases")
+    p = listed(tmp_path, ("run-done-a", True), ("run-done-b", True), ("run-live", False))
+    assert c.try_take("runs", "run-done-a") and c.try_take("runs", "run-done-b")
+    assert c.run_holders(p, root=tmp_path) == ["run-live"]
+    assert caps.free_runs(c, p, root=tmp_path) == 1
+
+
+def test_a_run_without_a_verdict_keeps_its_slot(tmp_path):
+    c = caps.Ceiling({**FOUR, "runs": 2}, tmp_path / "leases")
+    p = listed(tmp_path, ("run-a", False), ("run-b", False))
+    assert caps.free_runs(c, p, root=tmp_path) == 0
+    assert c.try_take("runs", "run-a")                 # its own lease never counts it twice
+    assert caps.free_runs(c, p, root=tmp_path) == 0
+
+
+def test_a_listed_run_with_no_record_yet_keeps_its_slot(tmp_path):
+    """A run in its launch window has no record and no verdict: it is live, so it holds its slot."""
+    c = caps.Ceiling({**FOUR, "runs": 1}, tmp_path / "leases")
+    p = listed(tmp_path, ("run-starting", None))
+    assert caps.free_runs(c, p, root=tmp_path) == 0
+
+
+def test_a_live_lease_of_a_run_the_list_does_not_name_still_counts(tmp_path):
+    c = caps.Ceiling({**FOUR, "runs": 1}, tmp_path / "leases")
+    p = listed(tmp_path, ("run-done", True))
+    assert c.try_take("runs", "another-repo:run-9")    # a run another checkout started
+    assert caps.free_runs(c, p, root=tmp_path) == 0
+
+
+def test_the_run_with_a_verdict_stays_listed_for_the_reader_that_closes_its_issues(tmp_path):
+    """The counter frees the slot and leaves the ledger alone: the janitor (rules E, O and R) and childcc still find the
+    finished run where they look, and its record still reads to its verdict."""
+    c = caps.Ceiling({**FOUR, "runs": 1}, tmp_path / "leases")
+    p = listed(tmp_path, ("run-done", True), ("run-live", False))
+    before = p.read_text()
+    assert caps.free_runs(c, p, root=tmp_path) == 0
+    assert p.read_text() == before
+    assert str(tmp_path / "runs" / "run-done") in p.read_text()
+    assert read(tmp_path / "runs" / "run-done" / "record.jsonl")[-1]["event"] == "verdict"
 
 
 @pytest.mark.anyio

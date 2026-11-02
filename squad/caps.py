@@ -16,6 +16,10 @@ they number two or more, so a third gate runs with fewer workers instead of givi
 a gate never holds part of its slots while it waits for the rest. Bash takes and releases through `python3 -m squad.caps take|release`; the try mode skips at once (exit 73), as
 `SERIAL_TRY` does for serial.sh, and a wait that outlives its bound exits 75. A count above the ceiling is lowered to it.
 
+The loop's free run slots are one count (`free_runs`, `Ceiling.run_holders`): the live leases of every repository, and the runs
+the loop's active list names, less a run whose record carries a final verdict. A finished run frees its slot at once, and its
+folder and record stay listed for the readers that close its issues; the counter is a reader and never rewrites the list.
+
 Guard: `tests/test_machine_caps.py`.
 """
 import contextlib
@@ -34,6 +38,7 @@ from squad.options import OptionError
 
 KINDS = ("runs", "children", "gates", "reviews")
 SKIPPED, EXPIRED = 73, 75   # the exits serial.sh uses for a try-mode skip and for a wait that ran out
+VERDICT = re.compile(r'"event"\s*:\s*"verdict"')   # the record's final verdict, whichever spacing its writer used
 
 
 class CapsError(OptionError):
@@ -168,6 +173,38 @@ class Ceiling:
     def waiting(self):
         return self.occupancy()["waiting"]
 
+    def run_holders(self, active_runs, root="."):
+        """The runs that hold a slot of `caps.runs`, each named once: every live lease machine-wide, and every run the loop's
+        active list names whose record carries no final verdict. A listed run with a verdict is over: it holds no slot, though
+        its folder and record stay listed for the readers that close its issues (the janitor and childcc read the same file).
+        A lease whose holder resolves to a listed finished run is one the engine has not released yet; it holds no slot either.
+        A listed run with no readable record still holds its slot: a live run keeps it until its verdict exists.
+        `root` resolves a relative entry, as autofrontier.sh and autobug.sh do (`$SG_CHECKOUT/runs/<name>`)."""
+        try:
+            rows = Path(active_runs).read_text().split()
+        except OSError:
+            rows = []
+        listed = {}
+        for r in rows:
+            folder = Path(r) if r.startswith("/") else Path(root) / "runs" / r
+            listed[folder.name] = folder
+        finished = set()
+        for name, folder in listed.items():
+            try:
+                if VERDICT.search((folder / "record.jsonl").read_text()):
+                    finished.add(name)
+            except OSError:
+                continue   # no record yet: the run is in its launch window, so it still holds its slot
+        holders = []
+        for lease in self._live("runs"):
+            holder = lease.get("holder")
+            if holder not in finished and holder not in holders:
+                holders.append(holder)
+        for name in listed:
+            if name not in finished and name not in holders:
+                holders.append(name)
+        return holders
+
     def try_take(self, kind, holder, pid=None):
         """Take one slot of `kind` for `holder` if the ceiling has room. Return the lease path, or None when it is full."""
         with self._lock():
@@ -248,6 +285,12 @@ class Ceiling:
             return lease
         finally:
             mark.unlink(missing_ok=True)
+
+
+def free_runs(c, active_runs, root="."):
+    """The free slots of `caps.runs`: the ceiling less the runs that hold one (`Ceiling.run_holders`), never below zero.
+    This is the one counter the loop's dispatchers read, so a run with a final verdict frees its slot there and nowhere else."""
+    return max(c.caps["runs"] - len(c.run_holders(active_runs, root)), 0)
 
 
 def ceiling(target=None, defaults_path=None, where=None):

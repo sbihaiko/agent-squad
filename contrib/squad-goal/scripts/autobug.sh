@@ -187,25 +187,19 @@ lab=${SG_BUG_LABEL:-bug}; skip=${SG_BUG_SKIP_LABELS:-needs-owner,no-auto,wontfix
 # SG_BUG_SKIP_LABELS and env.sh exports it, so a default here never applied and a frozen:dependency issue was dispatched.
 skip="$skip,frozen:owner,frozen:dependency,frozen:not-startable,needs-info"   # needs-info: a ticket waits on an answer (#729)
 read -r free < <(cd "$SG_CHECKOUT" && python3 - "$SG_STATE/active-runs.txt" <<'PY'
-import os, re, sys, pathlib
+import os, sys
 # The free slots come from the machine-wide ceiling caps.runs in squad/caps.py, the one resolution the engine enforces, lowered
-# by the project file of SG_CHECKOUT. The live count is the larger of the live runs of this repository and the live leases of
-# every repository. A missing caps block is a named failure: the pass stops and says so, never a default.
+# by the project file of SG_CHECKOUT. `C.free_runs` is the one counter of the runs that hold a slot: every live lease
+# machine-wide and every run the active list names, less a run whose record carries a final verdict (that run is over, and its
+# line stays listed for the readers that close its issues). A missing caps block is a named failure: the pass stops and says
+# so, never a default.
 sys.path.insert(0, os.environ.get("SG_SQUAD") or ".")
 from squad import caps as C
 try:
     ceil = C.ceiling(".")
 except Exception as e:
     print(f"squad.caps: {e}", file=sys.stderr); sys.exit(2)
-cap, held = ceil.caps["runs"], ceil.occupancy()["runs"]
-live = 0
-for r in open(sys.argv[1]).read().split():
-    f = pathlib.Path(r if r.startswith("/") else "runs/" + r) / "record.jsonl"
-    if not f.exists(): continue
-    t = f.read_text()
-    if '"event": "verdict"' in t or '"event":"verdict"' in t: continue
-    live += 1
-print(max(cap - max(live, held), 0))
+print(C.free_runs(ceil, sys.argv[1], root="."))
 PY
 
 )
