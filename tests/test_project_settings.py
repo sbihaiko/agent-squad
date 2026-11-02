@@ -175,7 +175,7 @@ def test_the_defaults_checker_and_config_check_read_one_catalog():
     assert defaults.check(cfg) == ["limits.max_stalls"]
 
 
-def test_this_repository_overlay_raises_only_the_run_slot_cap_to_eight():
+def test_this_repository_overlay_raises_only_the_run_slot_cap_to_six():
     overlay = yaml.safe_load((Path(__file__).resolve().parents[1] / "docs" / "squad" / "defaults.yaml").read_text())
-    assert overlay["caps"] == {"runs": 8}
+    assert overlay["caps"] == {"runs": 6}
     assert overlay["limits"]["max_budget_usd"] == 30

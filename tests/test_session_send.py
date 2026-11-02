@@ -146,6 +146,19 @@ def test_the_wire_asserts_the_mode_the_session_last_recorded(home, tmp_path):
     assert inbox_of(home).frames[1]["from_mode"] == "bypassPermissions"
 
 
+def test_the_wire_falls_back_to_the_sessions_own_flags_when_the_transcript_has_no_mode(home, tmp_path):
+    """A session writes its mode line with its first turn, and the owner reads the hub from the web, where a held message
+    has no approval to reach it (#1081): the hub reads the mode the target process was started with."""
+    send = load_send()
+    proc = subprocess.Popen([sys.executable, "-c", "import time;time.sleep(30)", "--dangerously-skip-permissions"])
+    try:
+        add_session(home, "s1", tmp_path / "app", pid=proc.pid)
+        assert send.sessions.permission_mode(tmp_path / "app", "s1", proc.pid) == "bypassPermissions"
+    finally:
+        proc.kill()
+        proc.wait()
+
+
 def test_two_concurrent_sends_with_one_id_send_once(home, tmp_path):
     send = load_send()
     add_session(home, "s1", tmp_path / "app")

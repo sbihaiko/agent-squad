@@ -178,17 +178,19 @@ def _page_url(hub):
     """The URL the page's Burndown view fetches, built by the page's own flowOpen."""
     assert NODE is not None, "node is a test dependency of the burndown page"
     lines = "\n".join(_page_block(hub, p) for p in ("let FLOWK=", "let flowW=", "const flowX=", "const flowY=",
-                                                    "const flowViews=", "const flowBurn=", "const drawFlow=", "const flowOpen="))
+                                                    "const flowBurn=", "const drawFlow=", "const flowOpen="))
     script = (f"const calls=[];globalThis.fetch=async u=>{{calls.push(u);return {{json:async()=>({{}})}}}};"
               "const el={hidden:true,clientWidth:800,innerHTML:''};const $=()=>el;const esc=t=>String(t);"
-              "const barQuery=()=>'';let BURN={s:null};\n"
+              "const barQuery=()=>'';let BURN={s:1045};const flowTabs=()=>{};\n"
               f"{lines}\nflowOpen(VIEW).then(()=>console.log(calls[0]));")
     return subprocess.run([NODE, "-e", script.replace("VIEW", json.dumps(_view_key(hub)))], capture_output=True, text=True,
                           timeout=30).stdout.strip()
 
 
 def _view_key(hub):
-    return re.search(r'value=(\w+)\$\{k==="\1"\?" selected":""\}>Burndown<', hub.PAGE)[1]
+    """The Burndown tab's own key: one tab per chart (#1080), opened by the tab itself."""
+    assert 'flowOpen("burndown")' in hub.PAGE
+    return "burndown"
 
 
 def _get(port, path):
@@ -211,8 +213,10 @@ def test_the_page_fetches_the_route_the_server_answers(hub, board):
     assert json.loads(body)["spec"] == 1045
 
 
-def test_the_burndown_is_a_view_of_the_throughput_tab(hub):
-    assert "id=flowv" in hub.PAGE, "the burndown is a view of the Throughput tab, never a fourth tab"
+def test_the_burndown_is_its_own_throughput_tab(hub):
+    """Owner, #1080: one tab per chart, so the burndown is never drawn inside the cumulative flow."""
+    assert 'id=bburn' in hub.PAGE and 'id=flowv' not in hub.PAGE
+    assert 'flowOpen("burndown")' in hub.PAGE, "the Burndown tab opens the burndown view"
 
 
 def _page_block(hub, prefix):
@@ -228,7 +232,7 @@ def _page_block(hub, prefix):
 
 def _draw(hub, payload):
     assert NODE is not None, "node is a test dependency of the burndown page"
-    lines = "\n".join(_page_block(hub, p) for p in ("let flowW=", "const flowX=", "const flowY=", "const flowViews=",
+    lines = "\n".join(_page_block(hub, p) for p in ("let flowW=", "const flowX=", "const flowY=",
                                                     "const flowBurn="))
     script = f"const esc=t=>String(t);\n{lines}\nconsole.log(flowBurn({json.dumps(payload)}));"
     result = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=30)

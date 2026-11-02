@@ -291,6 +291,8 @@ const ls={{}},save=()=>SAVED.push(JSON.stringify(ls.lt));
 EL["#flowb"]=el();
 const drawFlow=()=>DRAWN.push(JSON.parse(JSON.stringify(FLOWD[FLOWK]||null)));
 const saveB=()=>SAVED.push(JSON.stringify(bo)),pollBoard=()=>POLLED.push(1);
+const flowTabs=()=>{{}};   // the tab strip is not what this harness drives (#1080)
+
 const settle=()=>new Promise(r=>setTimeout(r,0));
 """
     script = stubs + "\n".join(lines) + "\n" + onchange + "\n(async()=>{" + drive + "})().catch(e=>{console.error(e.stack);process.exit(1)});"

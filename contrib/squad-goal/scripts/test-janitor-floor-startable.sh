@@ -31,14 +31,14 @@ case "$a" in
   *projectsV2/4/items*)
     printf '2201\tBacklog\thttps://api.github.com/repos/x/y\n2202\tCode Complete\thttps://api.github.com/repos/x/y\n'
     for n in 2203 2204 2205 2206 2207 2208; do printf '%s\tBacklog\thttps://api.github.com/repos/x/y\n' "$n"; done
-    printf '2209\tTodo\thttps://api.github.com/repos/x/y\n';;
+    printf '2209\tTodo\thttps://api.github.com/repos/x/y\n2213\tDoing\thttps://api.github.com/repos/x/y\n';;
   *graphql*)
     printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":['
-    sep=""; for n in 2201 2202 2203 2204 2205 2206 2207 2208 2209 2210 2211 2212; do
+    sep=""; for n in 2201 2202 2203 2204 2205 2206 2207 2208 2209 2210 2211 2212 2213; do
       case $n in
         2201) l='';; 2202) l='"bug","no-auto"';; 2203) l='"bug"';; 2204) l='"ready-for-agent"';; 2205) l='"debt"';;
         2206) l='"run-parent","enhancement"';; 2207) l='"ready-for-agent","frozen:dependency"';; 2208) l='"bug","frozen:dependency"';;
-        2209) l='"bug","no-auto"';; 2210) l='"bug"';; 2211) l='';; 2212) l='"ready-for-agent"';;
+        2209) l='"bug","no-auto"';; 2213) l='"ready-for-agent"';; 2210) l='"bug"';; 2211) l='';; 2212) l='"ready-for-agent"';;
       esac
       labs=$(printf '%s' "[$l]" | jq -c '{nodes:[.[]|{name:.}]}')
       printf '%s{"number":%s,"title":"Issue %s","body":"","state":"OPEN","labels":%s,"subIssuesSummary":{"total":0,"completed":0},"subIssues":{"nodes":[]},"comments":{"nodes":[]}}' "$sep" "$n" "$n" "$labs"; sep=,; done
@@ -69,6 +69,18 @@ o=$(run env SG_FRONTIER_LABEL=ready-for-agent)
 n2=$(/usr/bin/grep -cF "$bl" "$T/st/cycle.log" 2>/dev/null); n2=${n2:-0}
 [ "$n2" = 1 ] && ok "a second pass over the same state prints the BUG-IN-BACKLOG note no more" || ko "BUG-IN-BACKLOG for #2203 printed $n2 times over two passes (want 1)"
 ! has ' 2204$' && ok "an issue with the frontier label in Backlog keeps its column" || ko "#2204 moved: $(bc)"
+# #1034: a Doing card that no run holds and no marker claims is never released. A card a person placed and a stuck card look
+# the same, so the janitor names it once and leaves it; only the owner moves it (ADR-0143 rule 1).
+dl="janitor DOING-NO-RUN #2213: a card sits in Doing with no live run and no marker; the janitor leaves it and the owner moves it"
+rm -f "$T/st/cycle.log" "$T/st/auto/janitor-doing-norun-"*
+o=$(run env SG_FRONTIER_LABEL=ready-for-agent)
+d1=$(/usr/bin/grep -cF "$dl" "$T/st/cycle.log" 2>/dev/null); d1=${d1:-0}
+[ "$d1" = 1 ] && ok "a Doing card with no live run and no marker is named once" || ko "DOING-NO-RUN for #2213 printed $d1 times (want 1)"
+! has ' 2213$' && ok "a Doing card with no live run and no marker is never moved" || ko "#2213 moved: $(bc)"
+o=$(run env SG_FRONTIER_LABEL=ready-for-agent)
+d2=$(/usr/bin/grep -cF "$dl" "$T/st/cycle.log" 2>/dev/null); d2=${d2:-0}
+[ "$d2" = 1 ] && ok "a second pass over the same state prints the DOING-NO-RUN note no more" || ko "DOING-NO-RUN for #2213 printed $d2 times over two passes (want 1)"
+! has ' 2213$' && ok "the second pass leaves the Doing card alone too" || ko "#2213 moved on the second pass: $(bc)"
 ! has ' 2205$' && ok "a debt issue in Backlog keeps its column" || ko "#2205 moved: $(bc)"
 has '^STATUS --remove o 4 2206$' && ! has 'STATUS o 4 [A-Za-z ]* 2206$' && ok "a run parent gets no column, and its card is removed (#500)" || ko "#2206 not removed: $(bc)"
 ! has ' 2207$' && ok "the frontier label with a frontier skip label keeps its column" || ko "#2207 moved: $(bc)"

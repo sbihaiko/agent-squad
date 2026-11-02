@@ -843,6 +843,9 @@ def reconcile_board():
     oans, olabels = open_issues()
     specs = {k for k, ls in olabels.items() if "spec" in ls} if oans else set()
     if oans:
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the fold sits beside this script; -I keeps the script's directory off sys.path
+        import spec_fold
+        have_cards = cards(proj)[1]   # every card's Status, read once per pass: the fold, rule 12 and the Doing note share it
         for n in sorted(olabels, key=int):
             if holding(n) and n not in expected: continue   # a run still delivers it and no rule named its column: the floor never sends it back to Todo (#540)
             fresh = (lambda a, m: a and not m.get(str(n)))(*cards(proj))   # an answered read that holds no card for it, or a card with no Status: no column yet
@@ -863,11 +866,8 @@ def reconcile_board():
                 # A parent's column is a fold over its sub-issues' cards (spec_fold.py): the relation came with the one read above and
                 # the cards are read once per pass, so the fold adds no call. A parent that is not a spec takes the Doing lift only
                 # (#942): the spec vocabulary's Closed and Abandoned are never written to it.
-                sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the fold sits beside this script; -I keeps the script's directory off sys.path
-                import spec_fold
-                have_cards = cards(proj)[1]
-                col, reverted = spec_fold.fold([have_cards.get(k, "") for k in _kids.get(n, [])], have_cards.get(n, ""))
-                if col and (is_spec or col == spec_fold.DOING): set_expected(n, col, ("spec" if is_spec else "parent") + " folds over its sub-issues" + (": a child reopened, the card keeps its column" if reverted else ""), rank=15)   # forward only: below Doing the fold writes nothing, and the spec keeps the owner's column (#550)
+                col, reverted = spec_fold.fold([have_cards.get(k, "") for k in _kids.get(n, [])], have_cards.get(n, ""), os.environ.get("SG_TODO", "Todo"))
+                if col and (is_spec or col == spec_fold.DOING): set_expected(n, col, ("spec" if is_spec else "parent") + " folds over its sub-issues" + (": a child reopened, the card keeps its column" if reverted else ""), rank=15)   # a card the fold lifted to Doing returns to the owner's column once no child reaches Doing (#1034)
             if is_spec:
                 # The owner starts a spec by moving its card to Todo, and its children follow it there (#589): a child in Backlog,
                 # or with no column yet, goes to Todo. Forward only: a child past Backlog keeps its column (ADR-0143). The fold
@@ -893,6 +893,13 @@ def reconcile_board():
                 if reverted:
                     say(f"SPEC-REVERTED #{n}: a child reopened, the card keeps {col} and carries the tag {spec_fold.TAG}")
                     if not dry and spec_fold.TAG not in olabels[n]: _run(["bash", "-c", '. "$0"; "$@"', str(pathlib.Path(__file__).parent / "ghcall.sh"), "gh_send", "-X", "POST", f"repos/{repo0}/issues/{n}/labels", "-f", f"labels[]={spec_fold.TAG}"])
+            # A Doing card that no run holds and no marker claims is left alone (#1034): a card a person placed and a stuck one
+            # look the same, so only the owner moves it (ADR-0143 rule 1). The pass names it once and writes nothing.
+            if not is_spec and have_cards.get(n, "") == spec_fold.DOING and not holding(n) and not (st / "auto" / f"disp-{n}").exists() and not (st / "auto" / f"bug-{n}").exists():
+                mk = st / "auto" / f"janitor-doing-norun-{n}"
+                if not mk.exists():
+                    say(f"DOING-NO-RUN #{n}: a card sits in Doing with no live run and no marker; the janitor leaves it and the owner moves it")
+                    if not dry: mk.touch()
             if olabels[n] & {"needs-owner", "needs-ratification"}:
                 set_expected(n, "Blocked", "issue is blocked by owner label", rank=100)
     for n in sorted(set(expected) | (set(olabels) if oans else set()), key=int):   # every open issue, as when the floor named each one: a rule below can still move a card forward

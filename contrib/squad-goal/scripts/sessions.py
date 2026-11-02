@@ -197,19 +197,38 @@ def _page_kept(raw, start):
     kept.reverse()
     return kept
 
-def permission_mode(cwd, sid):
-    """The permission mode the session last recorded in its transcript, or "". A sender that asserts the receiver's own mode
-    is not held for approval: a hub that asserts none, into a session that bypasses, is (`docs/design/session-wire-protocol.md`;
-    owner, 2026-11-01)."""
+def permission_mode(cwd, sid, pid=None):
+    """The permission mode the session last recorded in its transcript, else the one its own process was started with, else "".
+    A sender that asserts the receiver's own mode is not held for approval: a hub that asserts none, into a session that
+    bypasses, is (`docs/design/session-wire-protocol.md`; owner, 2026-11-01). The fallback matters because a session holds
+    no mode line in its transcript until its first turn is written, and the owner reads the hub from the web, where a held
+    message has no approval to reach it (#1081)."""
     if SID.fullmatch(sid or "") is None: return ""
     try: raw, _ = _read_under_home(["projects", re.sub(r"[^A-Za-z0-9]", "-", str(cwd)), f"{sid}.jsonl"], limit=TAIL_BYTES)
-    except OSError: return ""
+    except OSError: raw = b""
     for piece in reversed(raw.split(b"\n")):
         if b'"permissionMode"' not in piece: continue
         try: obj = json.loads(piece)
         except ValueError: continue
         mode = obj.get("permissionMode")
         if isinstance(mode, str) and mode: return mode
+    return argv_mode(pid)
+
+
+ARGV_MODE = {"--dangerously-skip-permissions": "bypassPermissions", "--bypass-permissions": "bypassPermissions"}
+
+
+def argv_mode(pid):
+    """The mode a live session's own argv names, or "". Read-only: one `ps` call, no signal, no write."""
+    try:
+        argv = subprocess.run(["ps", "-p", str(int(pid)), "-o", "args="], capture_output=True, text=True,
+                              timeout=5).stdout.split()
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return ""
+    for k, tok in enumerate(argv):
+        if tok in ARGV_MODE: return ARGV_MODE[tok]
+        if tok.startswith("--permission-mode="): return tok.split("=", 1)[1]
+        if tok == "--permission-mode" and k + 1 < len(argv): return argv[k + 1]
     return ""
 
 def read_conversation(cwd, sid, secrets=(), before=None):

@@ -8,7 +8,7 @@
 # coordinator deletes auto/bug-<n> to retry. It IS freed when mkreq.sh refuses the request (#1529), and when launch.py refuses the
 # start (#852): a dispatch that never happened must not mark the issue done, and its card goes back to Todo. The janitor frees it for a run that never starts (no record.jsonl, rule J, at
 # most twice) or that ends with a failed verdict and nothing landed (janitor rule O, which also puts the cards back). SG_AUTO_BUGFIX=no turns it off.
-# The card write comes before the launch: a dispatch is a pending ledger event until its write lands (#1021, ADR-0164).
+# The card write comes before the launch: a dispatch is a pending ledger event until its write lands (#1021, ADR-0165).
 . "$(dirname "$0")/env.sh"; . "$(dirname "$0")/startability.sh"; . "$(dirname "$0")/refusal-names.sh"; . "$(dirname "$0")/workbranches.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
 export SG_GH_PASS=autobug   # the pass that spends the GitHub calls below, named in the call log (ADR-0277)
 export SG_FILE_PASS="autobug-$$-$(date +%s)"   # the filings of THIS pass share one ceiling (#140): a fresh pass is never held by the ledger of one that ended
@@ -94,7 +94,7 @@ sg_issue_body() {
   printf '%s' "$j" | grep -q "\"number\":[[:space:]]*$1\b" || return 2
   printf '%s' "$j"
 }
-# ---- The card write before the launch (#1021, ADR-0164) ----------------------------------------------------------
+# ---- The card write before the launch (#1021, ADR-0165) ----------------------------------------------------------
 # A dispatch is an event the ledger holds pending before its card write, and its launch comes only after that write.
 # A write that did not land stays pending, and the next pass writes it again (ab_resume) before anything launches.
 doing="In Progress"; [ "${SG_BOARD_VOCAB:-}" = shipped ] && doing=Doing   # "In Progress" is no column on the shipped vocabulary (#249)
@@ -293,7 +293,7 @@ for sel in "$lab" debt; do
   while IFS=$'\x1f' read -r n labels; do
     [ -n "$n" ] || continue; case "$n" in *[!0-9]*) echo "AUTOBUG: dropping candidate '$n': not a decimal issue number" >&2; exit 0;; esac   # before any gate, so a word is named, never dropped in silence (#1855)
     sg_dispatch_claimed "$n" && continue; case "$refs" in *" $n "*) continue;; esac; case ",$busy," in *",$n,"*) continue;; esac
-    case "$pendset" in *" $n "*) echo "AUTOBUG skip #$n: its card write is pending (ADR-0164)"; continue;; esac
+    case "$pendset" in *" $n "*) echo "AUTOBUG skip #$n: its card write is pending (ADR-0165)"; continue;; esac
     s=0; for k in ${skip//,/ }; do case ",$labels," in *",$k,"*) s=1;; esac; done; [ $s = 1 ] && continue
     case ",$labels," in *",$go,"*) ;; *) continue;; esac; case "$todo" in *" $n "*) ;; *) continue;; esac   # no go label, or the card is not in Todo: not started
     # ... and an issue the loop itself marked not startable is not a candidate either: a repeated identical failure is a
