@@ -48,6 +48,10 @@ if [ -n "$memokey" ] && [ -r "$(memo_file "$memokey")" ]; then
   fi
 fi
 case ":${SG_SERIAL_HELD:-}:" in *":gate:"*) ;; *) SG_GATE_KIND=fast exec bash "$here/gate.sh" bash "$0" "$@";; esac
+# The base the gate read the tree against goes out beside the scope (GATE_BASE_FILE), so an unproven entry's obligation
+# names it (gate.sh, spec 1163): the commit when the base resolves, else the ref as it was named.
+gbase=$(git rev-parse --verify -q "$base^{commit}" 2>/dev/null)
+[ -z "${GATE_BASE_FILE:-}" ] || printf '%s\n' "${gbase:-$base}" > "$GATE_BASE_FILE"
 # verdict <outcome> <reason> <ran> <not run>: the verdict the history line carries (spec 1163). gate.sh hands the file over and reads it
 # inside the lock; a field is never empty, so a dash stands for none.
 verdict() {
