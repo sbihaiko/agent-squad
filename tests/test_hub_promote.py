@@ -917,7 +917,7 @@ def test_the_page_draws_the_start_control_beside_the_move_arrow(hub):
 
 def test_the_card_render_asks_for_no_count(hub):
     mod, _ = hub
-    cards_line = next(l for l in mod.PAGE.splitlines() if l.startswith("const cards="))
+    cards_line = next(line for line in mod.PAGE.splitlines() if line.startswith("const cards="))
     assert "spec:" not in cards_line and "specPost" not in cards_line and "batchPost" not in cards_line, cards_line[:200]
     assert mod.PAGE.index('closest("#bbody .spb")') < mod.PAGE.index("{spec:n}"), "the count is asked for outside the press"
     assert mod.PAGE.count("{spec:") == 2, "the count is asked for outside the press and the confirm"
