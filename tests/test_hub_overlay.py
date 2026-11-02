@@ -72,7 +72,7 @@ def test_a_run_dashboard_through_the_hub_gains_the_overlay(hub):
 
 def test_the_workflow_editor_carries_no_overlay():
     editor = (ROOT / "dashboard" / "agent-squad-run-dashboard.html").read_text()
-    assert "hub-overlay" not in editor and "Terminal - Claude CLI" not in editor
+    assert "hub-overlay" not in editor and "sq-ov-btn" not in editor
 
 
 def test_the_overlay_names_no_api_route_the_hub_would_rewrite():
@@ -86,7 +86,7 @@ def test_the_overlay_names_no_api_route_the_hub_would_rewrite():
 
 def test_the_button_is_a_red_lens_in_a_metal_ring_named_chat_with_the_ai():
     src = OVERLAY.read_text()
-    assert 'aria-label="Terminal - Claude CLI"' in src
+    assert 'aria-label="Terminal"' in src
     assert "radialGradient" in src and "sq-ov-lens" in src and "sq-ov-ring" in src
     button = re.search(r"<button id=\"sq-ov-btn\".*?</button>", src, re.S).group(0)
     assert "?" not in re.sub(r"<[^>]*>", "", button)
