@@ -173,6 +173,31 @@ def test_the_targets_argv_is_read_whole_past_a_truncating_ps_column(home, tmp_pa
         proc.wait()
 
 
+def test_the_mode_line_is_found_when_a_huge_line_fills_the_transcript_tail(home, tmp_path):
+    """A tool result can be megabytes: the last window holds no mode line, so the hub must read further back, not hold the
+    message as one that asserts no mode (#1081)."""
+    send = load_send()
+    path = add_session(home, "s1", tmp_path / "app")
+    mode = json.dumps({"type": "user", "permissionMode": "bypassPermissions", "message": {"role": "user", "content": "hi"}})
+    big = json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_result", "text": "x" * (600 * 1024)}]}})
+    path.write_text(mode + "\n" + big + "\n")
+    assert send.sessions.permission_mode(tmp_path / "app", "s1", os.getpid()) == "bypassPermissions"
+
+
+def test_a_session_with_no_mode_line_gets_the_flag_in_its_frame(home, tmp_path, monkeypatch):
+    """The frame carries the mode the target was started with when its transcript holds no mode line (#1081)."""
+    send = load_send()
+    proc = subprocess.Popen([sys.executable, "-c", "import time;time.sleep(30)", "--dangerously-skip-permissions"])
+    try:
+        add_session(home, "s1", tmp_path / "app", pid=proc.pid)
+        monkeypatch.setattr(send, "peer_pid", lambda s: proc.pid)
+        assert send.send("p1", "s1", "hello there", CID, profiles_of=profile_p1, root=home.state)["status"] == "sent"
+        assert inbox_of(home).frames[1]["from_mode"] == "bypassPermissions"
+    finally:
+        proc.kill()
+        proc.wait()
+
+
 def test_two_concurrent_sends_with_one_id_send_once(home, tmp_path):
     send = load_send()
     add_session(home, "s1", tmp_path / "app")
