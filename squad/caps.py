@@ -21,7 +21,7 @@ loop's active list names whose last invocation has no final verdict, each run on
 its folder and record stay listed for the readers that close its issues; the counter is a reader and never rewrites the list.
 The reading is ADR-0105's, the one the dashboard, `wave.sh` and `wtclean.sh` use: a verdict before a later `run_start` or
 `resume` is history, and the run is live again.
-This is the dispatcher's side (ADR-0166): the engine's admission still counts raw leases, and the dispatcher never shows more
+This is the dispatcher's side (ADR-0167): the engine's admission still counts raw leases, and the dispatcher never shows more
 free slots than that admission holds.
 
 Guard: `tests/test_machine_caps.py`.
@@ -214,7 +214,7 @@ class Ceiling:
         window only: past `LAUNCH_GRACE` the janitor drops a launch that never started, so it never pins a slot, and a listed
         folder that is gone holds no slot at all.
         A live lease always counts, even when its run is finished: the engine's admission counts raw leases, and a dispatcher
-        that freed a lingering lease would start a run the engine refuses (ADR-0166). The engine releases its lease before it
+        that freed a lingering lease would start a run the engine refuses (ADR-0167). The engine releases its lease before it
         writes the verdict, so a finished run normally holds none.
         `root` resolves a relative entry, as autofrontier.sh and autobug.sh do (`$SG_CHECKOUT/runs/<name>`)."""
         now = time.time() if now is None else now

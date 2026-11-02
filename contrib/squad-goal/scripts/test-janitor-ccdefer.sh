@@ -3,8 +3,8 @@
 # childcc writes auto/ccdefer-<run>-<child> for a child its run never reviewed, and the wave reads that run's marker as a wait
 # that is still owed: after the run recorded a verdict the marker names a wait that can never end, so watch.sh prints
 # "its landing is deferred" every cycle for hours (run-20261030-184206-f63e6b, #886, #931). The finished-run branch drops
-# every marker of a run that has its verdict and names them in cycle.log; a live run keeps its own, and a run whose name only
-# starts with another run's name is never touched.
+# every marker of a run that has its verdict and names them in cycle.log; a live run keeps its own, a run whose name only
+# starts with another run's name is never touched, and a verdict before a later start or resume is history (ADR-0105).
 # Stubbed gh/board, a temp state dir: the live markers and cycle.log are never read or written.
 # usage: bash test-janitor-ccdefer.sh [janitor.py]
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0
@@ -41,12 +41,18 @@ mk run-live; live run-live
 printf 'def5678 4 0\n' > "$T/st/auto/ccdefer-run-live-c1"
 mk run-ended-long; live run-ended-long
 printf 'fed9876 1 0\n' > "$T/st/auto/ccdefer-run-ended-long-c1"
+# A verdict is final only after the last start or resume (ADR-0105): a run resumed after a verdict is live again, so its
+# deferral marker must survive the pass. The record carries the old verdict, then the later start, and no verdict after it.
+mk run-resumed; ended run-resumed
+printf '%s\n' '{"event":"run_start","run_id":"run-resumed"}' >> "$T/co/runs/run-resumed/record.jsonl"
+printf 'aaa1111 3 0\n' > "$T/st/auto/ccdefer-run-resumed-c1"
 run() { SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_BOARD_VOCAB= SG_FORK_DIR= SG_FORK_BASE= SG_HUB_DIR="$T/hub" JANITOR_DASHBOARD_MAX=0 JANITOR_NOTIFY=true python3 -I "$T/s/janitor.py" 2>&1; }
 o=$(run)
 [ ! -e "$T/st/auto/ccdefer-run-ended-c1" ] && ok "a finished run's deferral marker is dropped" || ko "ccdefer-run-ended-c1 survived the pass: $o"
 [ ! -e "$T/st/auto/ccdefer-run-ended-c2" ] && ok "every deferral marker of the finished run is dropped, not just the first" || ko "ccdefer-run-ended-c2 survived the pass: $o"
 /usr/bin/grep -q 'CCDEFER-DROPPED run-ended' "$T/st/cycle.log" 2>/dev/null && ok "the pass names the dropped markers in cycle.log" || ko "cycle.log does not name run-ended's dropped markers: $(cat "$T/st/cycle.log" 2>/dev/null) $o"
 [ -e "$T/st/auto/ccdefer-run-live-c1" ] && ok "a live run keeps its deferral marker" || ko "a live run lost its marker: $o"
+[ -e "$T/st/auto/ccdefer-run-resumed-c1" ] && ok "a verdict before a later run_start is history: the resumed run keeps its marker" || ko "the pass read a resumed run as finished and dropped its marker: $o"
 [ -e "$T/st/auto/ccdefer-run-ended-long-c1" ] && ok "another run's marker is never dropped by a shared name prefix" || ko "run-ended's drop took run-ended-long's marker: $o"
 
 # The collision (#945, #931): the janitor drops a finished run's auto/ccdefer-* markers every 90 s, and childcc beats every

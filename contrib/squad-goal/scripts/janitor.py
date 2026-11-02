@@ -225,9 +225,13 @@ def read(f):
             if isinstance(d.get("ts"), (int, float)): spawn_ts = max(spawn_ts, float(d["ts"]))
         elif spawned and ev:
             decided = True
-        if ev == "run_start":
-            rid = str(d.get("run_id") or rid); rts = str(d.get("ts") or d.get("started_at") or rts)
-        if ev == "verdict":   # the fold takes the last verdict event of a resumed record (ADR-0105)
+        if ev in ("run_start", "resume"):
+            rid = str(d.get("run_id") or rid)
+            if ev == "run_start": rts = str(d.get("ts") or d.get("started_at") or rts)
+            # A verdict is final only after the last start or resume (ADR-0105): a resumed run is live again until its
+            # next verdict, so an earlier verdict no longer reads it as finished (ADR-0167).
+            v = False; ver = None; rs = []; vts = None; vkey = ""
+        if ev == "verdict":   # the fold takes the last verdict event after the last start or resume (ADR-0105)
             v = True; ver = d.get("verdict"); rs = [str(x) for x in (d.get("reasons") or [])]
             vts = d.get("ts") if isinstance(d.get("ts"), (int, float)) else None; vkey = f"{vts if vts is not None else ''}:{nv}"; nv += 1
         if ev == "land":   # only the landing stage's own event counts; a router's `routed: continue` is not a landing

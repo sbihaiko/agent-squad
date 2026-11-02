@@ -238,7 +238,7 @@ def test_a_live_lease_of_a_run_the_list_does_not_name_still_counts(tmp_path):
 def test_a_lingering_lease_of_a_finished_run_still_counts(tmp_path):
     """The dispatcher's count is never more free than the engine's admission: the engine counts raw leases at `try_take`,
     so a finished run's lease the engine has not released is counted here too. The engine releases its lease before it
-    writes the verdict, so this is the rare lingering lease and not the normal case (ADR-0166)."""
+    writes the verdict, so this is the rare lingering lease and not the normal case (ADR-0167)."""
     c = caps.Ceiling({**FOUR, "runs": 2}, tmp_path / "leases")
     p = listed(tmp_path, ("run-done", ("verdict",)), ("run-live", ("progress",)))
     assert caps.free_runs(c, p, root=tmp_path) == 1

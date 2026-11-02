@@ -73,7 +73,7 @@ An ADR holds a decision and its reason. It is not a ledger: no dates, counts, st
 | [0166](0166-a-run-past-thirty-minutes-is-taken-over.md) | A run past thirty minutes is taken over, never requeued: the loop ends it with no exception and keeps its issues claimed behind a `taken-<run>` marker until a hand fix closes them |
 | [0168](0168-a-gate-stage-reuses-a-green-verdict.md) | A gate stage reuses a green verdict for its tree and its suite: the suite is what the stage runs, never the id of its check; the tree is its commit and a digest of its uncommitted state, read from `porcelain -z`; and the reuse is a recorded `gate_reuse` event, never a silent skip |
 | [0169](0169-a-gate-runs-the-test-scope-its-stage-names.md) | A gate runs the test scope its stage names: an intermediate stage runs the delta the change reaches, the landing gate, the promotion proof and the nightly run the full battery, an unknown stage is full, a delta that cannot cover the change falls back to the full battery with its reason, and the record states the scope |
-| [0166](0166-a-finished-run-frees-its-run-slot.md) | A finished run frees its run slot: the loop counts every live lease and every listed run whose last invocation has no verdict, a verdict before a later start is history, and the ceiling never widens |
+| [0167](0167-a-finished-run-frees-its-run-slot.md) | A finished run frees its run slot: the loop counts every live lease and every listed run whose last invocation has no verdict, a verdict before a later start is history, and the ceiling never widens |
 
 ## Adding an ADR
 
