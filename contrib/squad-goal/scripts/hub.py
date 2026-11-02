@@ -1037,25 +1037,50 @@ def _queue_parts(q):
     tip = FOOT_SEP.join(names) + (f" +{rest} more" if rest > 0 else "")
     return [{"text": f"queue {len(eps)} held{FOOT_SEP}{causes}{FOOT_SEP}oldest {_age(oldest)} ago", "tone": "", "tip": tip}]
 
+NIGHTLY_MODES = ("pass", "fail")
+NIGHTLY_FAILED = re.compile(r"fail(?::signal-\d+)?")   # a red leg, naming the signal that also stopped it (#1183)
+NIGHTLY_BOUNDED = re.compile(r"bounded:(?:signal|exit)-\d+")   # a leg that ended without naming a failing test (#1183)
+
+def _nightly_mode(v):
+    """A nightly record's mode field: `pass`, `fail`, `fail:signal-<n>` for a red leg a signal also stopped, or
+    `bounded:<signal|exit>-<n>` for a leg that measured nothing (a suite a signal killed, or a command that ended non-zero
+    and named no test). Anything else is no reading."""
+    return isinstance(v, str) and (v == "pass" or NIGHTLY_FAILED.fullmatch(v) is not None
+                                   or NIGHTLY_BOUNDED.fullmatch(v) is not None)
+
+def _nightly_red(v):
+    """A mode a failing test made red: `fail`, or `fail:signal-<n>` when a signal also stopped that leg. A red holds
+    delivery whatever else stopped it; the tag only carries the stop reason."""
+    return isinstance(v, str) and v.startswith("fail")
+
+def _nightly_fold(parallel, serial):
+    """The one result two modes make: a pass only when both pass, a fail when either named a failing test, and `bounded`
+    when a leg was stopped before it measured anything and none was red (#1183)."""
+    if _nightly_red(parallel) or _nightly_red(serial): return "fail"
+    if parallel == "pass" and serial == "pass": return "pass"
+    return "bounded"
+
 def _nightly_parts(n, now):
     """`nightly pass 6h ago`: the last full suite in both modes (nightly.sh, #704), its result and its age. A pass reads in
-    the ok tone and a fail in the err tone; a record the hub cannot read is `nightly ?` in the neutral tone, never a pass.
+    the ok tone, a bounded attempt in the warn tone -- the suite never finished, so the tip is unproven, never red (#1183,
+    ADR-0164) -- and a fail in the err tone; a record the hub cannot read is `nightly ?` in the neutral tone, never a pass.
     No record at all draws no block.
-    The tooltip carries which mode failed and the sha it ran at. The operator acts on the test ids, so every one of them
-    is carried: the tooltip names them all, and `detail` gives the page a list a keyboard and a screen reader can open.
-    The line itself stays one compact reading — the ids are MOVED off it, never dropped from the hub, as the gate's sha is
-    (the section's rule (b))."""
+    The tooltip carries which mode failed, which was stopped, and the sha it ran at. The operator acts on the test ids, so
+    every one of them is carried: the tooltip names them all, and `detail` gives the page a list a keyboard and a screen
+    reader can open. The line itself stays one compact reading — the ids are MOVED off it, never dropped from the hub, as
+    the gate's sha is (the section's rule (b))."""
     if n is None: return []
-    modes = ("pass", "fail")
-    red = isinstance(n, dict) and (n.get("parallel") != "pass" or n.get("serial") != "pass")
-    ok = isinstance(n, dict) and n.get("result") in modes and n.get("sha") and n.get("parallel") in modes \
-        and n.get("serial") in modes and isinstance(n.get("ts"), (int, float)) and not isinstance(n.get("ts"), bool) \
-        and isinstance(n.get("ids"), list) and n["result"] == ("fail" if red else "pass")
+    modes = NIGHTLY_MODES + ("bounded",)
+    ok = isinstance(n, dict) and n.get("result") in modes and n.get("sha") \
+        and _nightly_mode(n.get("parallel")) and _nightly_mode(n.get("serial")) \
+        and isinstance(n.get("ts"), (int, float)) and not isinstance(n.get("ts"), bool) \
+        and isinstance(n.get("ids"), list) and n["result"] == _nightly_fold(n["parallel"], n["serial"]) \
+        and (n["result"] != "bounded" or not n["ids"])
     if not ok: return [{"text": "nightly ?", "tone": FOOT_NEUTRAL}]
     text = f"nightly {n['result']} {_age(max(now - n['ts'], 0.0))} ago"
     tip = [f"parallel {n['parallel']} · serial {n['serial']} · ran at {str(n['sha'])[:7]}"]
     ids = [str(x) for x in n["ids"] if x]
-    part = {"text": text, "tone": "ok" if n["result"] == "pass" else "err"}
+    part = {"text": text, "tone": {"pass": "ok", "bounded": "warn"}.get(n["result"], "err")}
     if ids:
         tip.append(f"{len(ids)} failed: " + ", ".join(ids))
         part["detail"] = ids
@@ -1717,28 +1742,36 @@ def _gate_times(kind, n=20):
     return runs[-1], round(sum(last) / len(last))
 
 def _nightly_status():
-    """The one result line the nightly full suite leaves in $SG_STATE/nightly-result, `<epoch> TAB <pass|fail> TAB <sha>
-    TAB <parallel> TAB <serial> TAB <ids>` (nightly.sh, #704): the last full run in both modes, its result, the sha it ran
-    at, each mode's own result and the failing test ids. None when the file is absent or is not that line.
+    """The one result line the nightly full suite leaves in $SG_STATE/nightly-result, `<epoch> TAB
+    <pass|fail|bounded> TAB <sha> TAB <parallel> TAB <serial> TAB <ids>` (nightly.sh, #704, #1183): the last full run in both
+    modes, its result, the sha it ran at, each mode's own result and the failing test ids. None when the file is absent or
+    is not that line.
+
+    A mode is `pass`, `fail`, `fail:signal-<n>` for a red leg a signal also stopped, or `bounded:<signal|exit>-<n>` for a
+    leg that ended without naming a failing test (#1183): a red stays red and holds delivery whatever also stopped it, and
+    a suite a signal killed measured nothing, so the record says bounded and the tip stays unproven, never red (ADR-0164).
 
     `<ids>` is ONE JSON array of strings, `[]` when none: a pytest node id may itself carry a space (a parametrized case
-    id), so the ids are never read as a whitespace-separated list, which would cut such an id in two.
+    id), so the ids are never read as a whitespace-separated list, which would cut such an id in two. A bounded leg names
+    no failing test, so a bounded record that carries one is no reading.
 
-    A record whose modes are outside pass|fail, whose ids are not that array, or whose result contradicts its modes — a
-    `pass` over a red mode — is not that line either: a record the hub cannot trust is no reading, and it never draws a
-    pass. The record is one line, and it is read whole: a file with anything after its one line is no reading either,
-    because a first line alone never proves the file whole. `gh_dispatch_hold` drops the same lines, so the hub and the
-    hold never disagree about which record they are looking at (ADR-0153)."""
+    A record whose modes are outside the three, whose ids are not that array, or whose result contradicts its modes — a
+    `pass` over a red mode, a `bounded` over two finished legs, or a `fail` with no red leg — is not that line either: a
+    record the hub cannot trust is no reading, and it never draws a pass. The record is one line, and it is read whole: a
+    file with anything after its one line is no reading either, because a first line alone never proves the file whole.
+    `gh_dispatch_hold` drops the same lines, so the hub and the hold never disagree about which record they are looking at
+    (ADR-0153)."""
     text = _read(STATE / "nightly-result")
     if text.endswith("\n"): text = text[:-1]   # the one line may end in a newline, and nothing else follows it
     if "\n" in text: return None
     f = text.split("\t")
-    if len(f) != 6 or not f[0].isdigit() or f[1] not in ("pass", "fail") or not f[2]: return None
-    if f[3] not in ("pass", "fail") or f[4] not in ("pass", "fail"): return None
-    if f[1] != ("pass" if f[3] == "pass" and f[4] == "pass" else "fail"): return None
+    if len(f) != 6 or not f[0].isdigit() or f[1] not in NIGHTLY_MODES + ("bounded",) or not f[2]: return None
+    if not _nightly_mode(f[3]) or not _nightly_mode(f[4]): return None
+    if f[1] != _nightly_fold(f[3], f[4]): return None
     try: ids = json.loads(f[5])
     except (TypeError, ValueError): return None
     if not isinstance(ids, list) or not all(isinstance(x, str) for x in ids): return None
+    if f[1] == "bounded" and ids: return None
     return {"result": f[1], "sha": f[2], "parallel": f[3], "serial": f[4], "ids": ids, "ts": float(f[0])}
 
 def _newest_mtime(*paths):

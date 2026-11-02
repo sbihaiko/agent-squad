@@ -183,6 +183,19 @@ def test_a_default_check_the_tree_cannot_measure_is_reported_not_settled(nightly
     assert "OBLIGATION unmeasured" in alert and nightly["sha"][:7] in alert
 
 
+def test_a_bounded_full_suite_never_settles_a_pytest_obligation_red(nightly, tmp_path):
+    """A suite a signal stopped measured no red, so the obligation that needs pytest stays open: the nightly never answers
+    it with a red the suite did not find (#1183, ADR-0164)."""
+    killed = _script(tmp_path / "killed.sh", "printf 'F..\\nOSError: cannot send (already closed?)\\n'\nexit 143\n")
+    nightly["oblige"]("pytest", "delta", "9999999999")
+    res = nightly["run"](SG_NIGHTLY_PARALLEL=str(killed))
+    fields = (nightly["st"] / "nightly-result").read_text().split("\t")
+    assert fields[1] == "bounded"
+    assert res.returncode == 1
+    assert list((nightly["st"] / "obligations").glob("*")), "a bounded suite dropped the pytest obligation"
+    assert not list((nightly["st"] / "obligation-settled").glob("*")), "a bounded suite settled the obligation"
+
+
 def test_a_stale_settled_red_is_pruned_and_holds_only_while_current(nightly):
     """Red records never collect: one off the tip, or older than a nightly period, goes with a report; a pass with no tip
     holds only for a red from this period."""

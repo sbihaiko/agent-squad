@@ -85,6 +85,66 @@ def test_the_fact_lists_every_failing_test_and_the_page_draws_no_nightly_tile(hu
     assert "Nightly" not in _paint(hub, [fact])
 
 
+def test_a_leg_stopped_by_a_signal_reads_bounded_and_names_it_apart_from_the_finished_leg(hub):
+    """A nightly leg that ended non-zero without naming a failing test measured nothing (#1183): the record says which mode
+    finished and which was stopped, carries the signal it died of, and reads as unproven, never as a red (ADR-0164)."""
+    (fact,) = _nightly(hub, result="bounded", serial="bounded:signal-15")
+    assert fact["text"] == "nightly bounded 4m ago"
+    assert not fact["bad"]
+    assert fact["tip"] == "parallel pass · serial bounded:signal-15 · ran at 0123456"
+
+
+def test_a_red_leg_a_signal_also_stopped_stays_red_and_names_the_signal(hub):
+    """A leg that named a failing test and was then killed is still a red the suite measured (#1183): the result stays
+    fail, the error tone stays, and the mode names the signal beside it, so the stop reason is not lost."""
+    ids = ["tests/test_x.py::test_a"]
+    (fact,) = _nightly(hub, result="fail", serial="fail:signal-15", ids=ids)
+    assert fact["text"] == "nightly fail 4m ago"
+    assert any(p["tone"] == "err" for p in fact["parts"])
+    assert fact["tip"] == "parallel pass · serial fail:signal-15 · ran at 0123456 · 1 failed: " + ids[0]
+    assert fact["detail"] == ids
+
+
+def test_red_and_bounded_are_told_apart_in_the_record_alone(hub, tmp_path, monkeypatch):
+    """The two cases stay apart in the record alone (ADR-0164, #1183/#1201): a red carries its failing ids, a bounded leg
+    carries the kill and no id, and a bounded result over a red or a finished leg -- or a reason that is neither a signal
+    nor an exit -- is no reading at all."""
+    st = tmp_path / "st"
+    st.mkdir()
+    monkeypatch.setattr(hub, "STATE", st)
+    (st / "nightly-result").write_text(f"{int(NOW - 60)}\tbounded\t{SHA}\tpass\tbounded:signal-15\t[]\n")
+    assert hub.foot_sources(NOW)["nightly"]["result"] == "bounded"
+    (st / "nightly-result").write_text(f'{int(NOW - 60)}\tfail\t{SHA}\tpass\tfail\t["tests/test_x.py::test_a"]\n')
+    red = hub.foot_sources(NOW)["nightly"]
+    assert red["result"] == "fail" and red["ids"] == ["tests/test_x.py::test_a"]
+    (fact,) = [i for i in hub.foot_items({"nightly": red}, NOW) if i["key"] == "nightly"]
+    assert fact["bad"] and fact["text"] == "nightly fail 60s ago"
+    # a bounded result over two finished legs, over a red leg, with an unreadable reason, or with a failing id is no line
+    for record in (f"{int(NOW - 60)}\tbounded\t{SHA}\tpass\tpass\t[]\n",
+                   f"{int(NOW - 60)}\tbounded\t{SHA}\tpass\tfail\t[]\n",
+                   f"{int(NOW - 60)}\tbounded\t{SHA}\tpass\tbounded:15\t[]\n",
+                   f'{int(NOW - 60)}\tbounded\t{SHA}\tpass\tbounded:signal-15\t["tests/test_x.py::test_a"]\n',
+                   f"{int(NOW - 60)}\tfail\t{SHA}\tpass\tpass\t[]\n"):
+        (st / "nightly-result").write_text(record)
+        assert hub.foot_sources(NOW)["nightly"] is None, record
+
+
+def test_a_red_leg_with_a_signal_is_a_record_the_footer_reads(hub, tmp_path, monkeypatch):
+    st = tmp_path / "st"
+    st.mkdir()
+    (st / "nightly-result").write_text(
+        f'{int(NOW - 60)}\tfail\t{SHA}\tpass\tfail:signal-15\t["tests/test_x.py::test_a"]\n')
+    monkeypatch.setattr(hub, "STATE", st)
+    src = hub.foot_sources(NOW)["nightly"]
+    assert src["result"] == "fail" and src["serial"] == "fail:signal-15"
+    # a red leg stays a red result: a bounded or a pass result over it is still no reading
+    (st / "nightly-result").write_text(
+        f'{int(NOW - 60)}\tbounded\t{SHA}\tpass\tfail:signal-15\t["tests/test_x.py::test_a"]\n')
+    assert hub.foot_sources(NOW)["nightly"] is None
+    (st / "nightly-result").write_text(f"{int(NOW - 60)}\tpass\t{SHA}\tpass\tfail:signal-15\t[]\n")
+    assert hub.foot_sources(NOW)["nightly"] is None
+
+
 def test_a_green_nightly_carries_no_detail_list(hub):
     assert _nightly(hub)[0]["detail"] is None
 
