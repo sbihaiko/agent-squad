@@ -74,6 +74,7 @@ test-hub-mobile-run.sh 0.05
 test-hub-mobile-sheet.sh 0.09
 test-hub-paragraph-gap.sh 0.08
 test-hub-promote.sh 0.28
+test-hub-question-card.sh 0.08
 test-hub-run-issue.sh 0.33
 test-hub-screenshot.sh 0.15
 test-hub-state-default.sh 0.20
