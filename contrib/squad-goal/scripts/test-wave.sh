@@ -402,6 +402,22 @@ $O rev-parse -q --verify "refs/heads/$W7" >/dev/null && ok "K: the wave branch k
 /usr/bin/grep -q 'labels\[\]=frozen:owner' "$T/gh.log" && ko "K: a conflict below the cap froze the issue" || ok "K: a conflict below the cap freezes nothing"
 case "$r1" in *"WAVE-ERROR"*|*"WAVE NEEDS-HUMAN"*) ko "K: the stuck path was taken: '$r1'";; *) ok "K: the stuck path is not taken";; esac
 
+# KC (#1061): two waves of one issue, cut on one base, conflict with dev on the same path. The first conflict re-dispatches the
+# child once, with the path named in its request and a rework label on its card; the second identical conflict files one loop
+# bug and does not requeue the child again.
+start2 run-k8 >/dev/null; start2 run-k10 >/dev/null
+child 71 cf2 origin/dev; en2 run-k8 71 >/dev/null
+child 71 cf2 origin/dev; en2 run-k10 71 >/dev/null
+rm -rf "$T/w4"; $G clone -q "$T/origin.git" "$T/w4" 2>/dev/null
+(cd "$T/w4" && $G checkout -q dev && echo dev > cf2 && $G add cf2 && $G -c user.email=a@b -c user.name=t commit -q -m "dev moves cf2" && $G push -q origin HEAD:dev)
+: > "$T/gh.log"; rm -f "$T"/st/cq/*71-*
+rk8=$(land2 run-k8); rk10=$(land2 run-k10)
+case "$rk8" in *"WAVE REQUEUE #71"*) ok "KC: the first conflict re-dispatches its child";; *) ko "KC: no requeue of #71: '$rk8'";; esac
+cat "$T"/st/cq/*71-* 2>/dev/null | /usr/bin/grep -q cf2 && ok "KC: the child's next request names the conflicting path" || ko "KC: the request names no path: '$(cat "$T"/st/cq/*71-* 2>/dev/null)'"
+/usr/bin/grep -q 'issues/71/labels.*labels\[\]=rework' "$T/gh.log" && ok "KC: the card of #71 carries rework" || ko "KC: no rework label for #71"
+case "$rk10" in *"WAVE REQUEUE #71"*) ko "KC: the repeated conflict requeued #71 again: '$rk10'";; *) ok "KC: the repeated conflict does not requeue #71";; esac
+[ "$(/usr/bin/grep -c 'labels\[\]=bug' "$T/gh.log")" = 1 ] && ok "KC: the repeated conflict files one bug" || ko "KC: $(/usr/bin/grep -c 'labels\[\]=bug' "$T/gh.log") bugs filed"
+
 # K3 (#844): the requeue cap bounds a conflict that keeps coming back: at SG_LOOP_REQUEUE_CAP the issue goes to the owner, as any
 # requeue does (requeue, loop_stop). A second wave of #73 conflicts with dev moved again after its entry.
 W44=wave/run-44; start2 run-44 >/dev/null; child 73 cf "origin/$W44"; en2 run-44 73 >/dev/null
@@ -775,7 +791,7 @@ r=$(cd "$T/co" && bash "$T/s/wave.sh" land run-14 "$RD" 2>&1); rc=$?
 [ $rc = 0 ] && /usr/bin/grep -q 'issues/140 -f state=closed' "$T/gh.log" && ok "S775: the dispatched issue closes with the landing" || ko "S775: #140 not closed: rc $rc '$r'"
 /usr/bin/grep -q 'issues/141 -f state=closed' "$T/gh.log" && ko "S775: #141, outside the dispatch set, was closed: '$r'" || ok "S775: a Refs outside the dispatch set is not closed"
 /usr/bin/grep -q ' 141$' "$T/board.log" && ko "S775: #141's card moved" || ok "S775: the card of an issue outside the dispatch set does not move"
-[ -z "$(/bin/ls "$T/st/cq" | /usr/bin/grep '141')" ] && ok "S775: no delivery comment is queued for #141" || ko "S775: a comment is queued for #141"
+[ -z "$(/bin/ls "$T/st/cq" | /usr/bin/grep '#141-')" ] && ok "S775: no delivery comment is queued for #141" || ko "S775: a comment is queued for #141"
 [ "$(printf '%s\n' "$r" | /usr/bin/grep -c 'WAVE-NOTE.*#141.*outside.*dispatch')" = 1 ] && ok "S775: the outside Refs is named in one log line" || ko "S775: no single WAVE-NOTE for #141: '$r'"
 awk -F '\t' '$2 == "run-14" && $3 == "141"' "$T/st/wave-outside.tsv" 2>/dev/null | /usr/bin/grep -q . && ok "S775: the outside Refs is recorded in wave-outside.tsv" || ko "S775: no wave-outside.tsv row: '$(cat "$T/st/wave-outside.tsv" 2>&1)'"
 
@@ -791,10 +807,10 @@ rm -rf "$T/w15"; $G clone -q "$T/origin.git" "$T/w15" 2>/dev/null
 (cd "$T/w15" && $G checkout -q dev && echo other > g150 && $G add g150 && $G -c user.email=a@b -c user.name=t commit -q -m "conflicting work" && $G push -q origin HEAD:dev)
 : > "$T/gh.log"; : > "$T/board.log"; rm -f "$T/st/cq/"*151* "$T/st/wave-outside.tsv"
 r=$(cd "$T/co" && SG_WAVE_LAND_TRIES=1 bash "$T/s/wave.sh" land run-15 "$RD" 2>&1); rc=$?
-[ $rc = 1 ] && /usr/bin/grep -qx "o 3 Todo 150" "$T/board.log" && ! /usr/bin/grep -q 'issues/150/labels' "$T/gh.log" && ok "S776: the dispatched issue is requeued when the conflicting landing gives up (#844)" || ko "S776: #150 not requeued: rc $rc '$r'"
+[ $rc = 1 ] && /usr/bin/grep -qx "o 3 Todo 150" "$T/board.log" && /usr/bin/grep -q 'issues/150/labels.*labels\[\]=rework' "$T/gh.log" && ok "S776: the dispatched issue is requeued with rework when the conflicting landing gives up (#844, #1061)" || ko "S776: #150 not requeued: rc $rc '$r'"
 /usr/bin/grep -q 'issues/151/' "$T/gh.log" && ko "S776: #151, outside the dispatch set, was written: '$(cat "$T/gh.log")'" || ok "S776: a Refs outside the dispatch set gets no label"
 /usr/bin/grep -q ' 151$' "$T/board.log" && ko "S776: #151's card moved" || ok "S776: the card of an issue outside the dispatch set does not move"
-[ -z "$(/bin/ls "$T/st/cq" | /usr/bin/grep '151')" ] && ok "S776: no comment is queued for #151" || ko "S776: a comment is queued for #151"
+[ -z "$(/bin/ls "$T/st/cq" | /usr/bin/grep '#151-')" ] && ok "S776: no comment is queued for #151" || ko "S776: a comment is queued for #151"
 [ -z "$(tries 151 run-15)" ] && ok "S776: no landing try is counted for #151" || ko "S776: tries of #151: $(tries 151 run-15)"
 [ "$(printf '%s\n' "$r" | /usr/bin/grep -c 'WAVE-NOTE.*#151.*outside.*dispatch')" = 1 ] && ok "S776: the outside Refs is named in one log line" || ko "S776: no single WAVE-NOTE for #151: '$r'"
 awk -F '\t' '$2 == "run-15" && $3 == "151"' "$T/st/wave-outside.tsv" 2>/dev/null | /usr/bin/grep -q . && ok "S776: the outside Refs is recorded in wave-outside.tsv" || ko "S776: no wave-outside.tsv row: '$(cat "$T/st/wave-outside.tsv" 2>&1)'"
