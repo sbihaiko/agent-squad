@@ -111,11 +111,19 @@ def peer_pid(s):
         return None
 
 
+def live_session(profile, sid, profiles_of=sessions.profiles_of):
+    """The live session of this profile with that id, or None: the one read the hub's `no session` refusal and the
+    delivery both use, so a message and its attachment answer for the same registry (#1151)."""
+    for rec, _ in sessions.live_sessions(profile, profiles_of):
+        if rec["sessionId"] == sid:
+            return rec
+    return None
+
+
 def _deliver(profile, sid, text, cid, profiles_of):
-    found = [rec for rec, _ in sessions.live_sessions(profile, profiles_of) if rec["sessionId"] == sid]
-    if not found:
+    rec = live_session(profile, sid, profiles_of)
+    if rec is None:
         raise Refused("no live session of this profile has that id")
-    rec = found[0]
     pid, sock = int(rec["pid"]), rec["socket"]
     token = _key_token(pid, sock)
     frames = (json.dumps({"type": "auth", "token": token}) + "\n"
