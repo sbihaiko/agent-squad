@@ -78,7 +78,8 @@ groups.forEach(g=>g.items.forEach(x=>{if(x.sp){if(!ends.has(g.name)&&!specs.has(
   const[id,meta]=goneSpecs.has(x.pa)?(mode==="wave"?waveLane(null,laneWaveOf(x)):["none",{kind:"none",title:"No spec"}]):laneOf(x),l=ensure(id,meta);l.all.push(x);if(!ends.has(x.col)&&boardOk(x,fw,fs,fk)&&text(x))l.vis.push(x)});   // a closed status is history: its cards count for progress, never for a card, a count or the search (#969)
   const shown=[...lanes.values()].filter(l=>l.vis.length>0||(!hasFilter&&l.kind==="s"));
   shown.forEach(l=>{l.n=l.vis.length;l.total=l.all.length;l.closed=l.all.filter(x=>x.col===closed).length;
-    l.doing=o.doing?l.all.filter(x=>x.col===o.doing).length:0;   // the amber share of the bar: the cards a run claims (owner, 2026-11-02)
+    l.doing=o.doing?l.all.filter(x=>x.col===o.doing).length:0;
+    l.review=o.review?l.all.filter(x=>x.col===o.review).length:0;   // the review share of the bar, in its own colour after the held share (owner, 2026-11-02)   // the bar's held share: the cards a run claims, drawn in the closed green read through (owner, 2026-11-02)
     const s=l.kind==="s"?sumSpec.get(l.num):l.kind==="sw"?sumWave.get(sumKey(l.num,l.wave)):l.kind==="none"?o.sum?.none:null;   // No spec: open cards plus the last seven days closed, counted by the hub (owner)   // a closed row is never served: the summary counts it (#972)
     if(s){l.closed=s.closed;l.total=s.total}
     const m=/^(\d+)\/(\d+)$/.exec(String(l.sc||""));   // a closed ticket never reaches the board with its parent, so the count comes from the spec card
