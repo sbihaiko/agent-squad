@@ -342,9 +342,9 @@ def test_the_owner_turn_is_a_bubble_on_the_right_and_the_answer_one_on_the_left(
         return m.group(1)
     own, ans = rule(".sq-owner"), rule(".sq-answer")
     assert "margin:0 0 10px auto" in own and "width:fit-content" in own and "max-width:86%" in own
-    assert "border-radius:14px 14px 4px 14px" in own and "background:#12302a" in own
+    assert "border-radius:14px 14px 4px 14px" in own and "background:var(--tint-ok)" in own
     assert "margin:0 auto 10px 0" in ans and "width:fit-content" in ans and "max-width:100%" in ans
-    assert "border-radius:14px 14px 14px 4px" in ans and "background:#161c24" in ans
+    assert "border-radius:14px 14px 14px 4px" in ans and "background:var(--bubble)" in ans
     # a bubble carries no type of its own: the size, the family and the spacing stay the text's
     for body in (own, ans):
         assert "font-size" not in body and "font-family" not in body and "line-height" not in body
@@ -457,12 +457,18 @@ def _relative_luminance(hex_color):
     return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
 
 
+def _token(name):
+    m = re.search(rf"\{name}:(#[0-9a-f]{{6}})", (SCRIPTS / "web-tokens.css").read_text())
+    assert m, f"{name} is not a role in the token block"
+    return m.group(1)
+
+
 def test_the_live_line_keeps_the_served_floors():
     src = OVERLAY.read_text()
     rule = re.search(r"#sq-ov-live\{[^}]*\}", src).group(0)
     assert "font-size:var(--sq-fs)" in rule and "--sq-fs:14px" in src and "FS_MIN = 13" in src
-    fg = re.search(r"color:(#[0-9a-f]{6})", rule).group(1)
-    bg = re.search(r"#sq-ov\{[^}]*background:(#[0-9a-f]{6})", src).group(1)
+    fg = _token(re.search(r"color:var\((--[\w-]+)\)", rule).group(1))
+    bg = _token(re.search(r"#sq-ov\{[^}]*background:var\((--[\w-]+)\)", src).group(1))
     hi, lo = sorted([_relative_luminance(fg), _relative_luminance(bg)], reverse=True)
     assert (hi + 0.05) / (lo + 0.05) >= 4.5
 

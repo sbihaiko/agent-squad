@@ -70,8 +70,9 @@ def test_every_shipped_column_is_reachable_on_the_board(table, hub):
 
 def test_the_hub_vocabulary_is_the_table(table, hub):
     assert hub.BOARD_COLUMNS == table.view_columns(), "the hub holds a vocabulary of its own"
-    colours = re.findall(r'"?([A-Za-z ]+)"?:"(#[0-9a-f]{6})"', re.search(r"const COLORS=\{(.*?)\};", hub.PAGE).group(1))
-    assert colours == [(c["name"], c["color"]) for c in [*table.view_columns(), *table.LANES]], \
+    # The table names a role, and the page reads it; the anchor is the table's own name and role, never a copy of a value.
+    colours = json.loads(re.search(r"const COLORS=(\{.*?\});", hub.PAGE).group(1))
+    assert list(colours.items()) == [(c["name"], c["color"]) for c in [*table.view_columns(), *table.LANES]], \
         "the page's colour map is not the table's, so a column wears a colour of its own"
 
 

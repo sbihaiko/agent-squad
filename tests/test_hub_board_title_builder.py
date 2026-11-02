@@ -120,8 +120,8 @@ def test_the_column_names_are_unchanged(hub):
     assert m, "COLORS missing"
     # The map is written from the column table, so its key order and quoting are not the guard; its names and colours are.
     assert json.loads("{" + m.group(1) + "}") == {
-        # the shipped columns (#247), then the one open-PR lane beside the axis (#440)
-        "Backlog": "#9aa4b1", "Todo": "#79b8ff", "Doing": "#e8d44d", "Code Review": "#fdba74", "Code Complete": "#f5b041", "Closed": "#3ecf8e", "Abandoned": "#ff6b6b", "Open PRs": "#5aa9ff",
+        # the shipped columns (#247), then the one open-PR lane beside the axis (#440); each wears a palette role
+        "Backlog": "var(--s8)", "Todo": "var(--s1)", "Doing": "var(--wait)", "Code Review": "var(--s5)", "Code Complete": "var(--warn)", "Closed": "var(--ok)", "Abandoned": "var(--err)", "Open PRs": "var(--acc)",
     }
 
 

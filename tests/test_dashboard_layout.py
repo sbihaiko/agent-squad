@@ -204,7 +204,7 @@ def test_the_open_panel_is_a_drawer_at_the_right_edge_under_the_top_bar():
     assert _computed("#left") == {
         "position": "fixed", "top": "37px", "right": "0", "bottom": "0", "left": "auto",
         "width": "var(--side-w,420px)", "max-height": "none", "transform": "none", "border-radius": "0",
-        "border": "0", "border-left": "1px solid var(--line)", "box-shadow": "-8px 0 32px #0008",
+        "border": "0", "border-left": "1px solid var(--line)", "box-shadow": "-8px 0 32px var(--shadow-soft)",
         "z-index": "7", "padding": "8px 16px 16px", "overflow": "auto", "background": "var(--panel)",
     }
     assert _computed("body.noside #left")["display"] == "none"   # collapsed is still no panel at all

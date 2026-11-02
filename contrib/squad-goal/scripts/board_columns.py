@@ -77,16 +77,16 @@ def column_for(facts):
 # The open-PR lane stands beside the axis, never a column, and it is for tracking only (#384): no writer moves a card
 # because of it and no gate reads it, which is what `tracking` records. A work branch has no lane at all: it is reached
 # through the kinds view, under its own `branch` kind (#440). A landed branch is read from its issue card (Done = in dev).
-HEX = {"GRAY": "#9aa4b1", "BLUE": "#79b8ff", "YELLOW": "#e8d44d", "ORANGE": "#f5b041", "PURPLE": "#b087f9",
-       "PINK": "#f78fb3", "GREEN": "#3ecf8e", "RED": "#ff6b6b"}
-LANES = ({"key": "pr_open", "name": "Open PRs", "color": "#5aa9ff", "tracking": True},)
+HEX = {"GRAY": "var(--s8)", "BLUE": "var(--s1)", "YELLOW": "var(--wait)", "ORANGE": "var(--warn)",
+       "PURPLE": "var(--none)", "PINK": "var(--s7)", "GREEN": "var(--ok)", "RED": "var(--err)"}
+LANES = ({"key": "pr_open", "name": "Open PRs", "color": "var(--acc)", "tracking": True},)
 ROLE = {"issue_closed": "Closed", "abandoned": "Abandoned", "unscheduled": "Backlog", "issue_todo": "Todo"}
 DOING = "Doing"   # the column a claimed card wears: the lane bar counts it as the amber share (owner, 2026-11-02)
 SPEC_LABEL = "spec"
 
 
 # A column whose GitHub colour another column already wears takes its own hex here: the hub draws one colour per column.
-COLUMN_HEX = {CODE_REVIEW: "#fdba74"}
+COLUMN_HEX = {CODE_REVIEW: "var(--s5)"}
 
 
 def view_columns():

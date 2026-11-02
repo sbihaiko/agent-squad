@@ -172,3 +172,44 @@ def test_the_hub_and_the_dashboard_render_the_same_card_ink_and_accent(surfaces)
             assert f"var({role})" in surfaces[name], f"{name} does not read {role}"
     # one module, so the resolved card, ink and accent are one value on both surfaces
     assert len({values[r] for r in ("--card", "--fg", "--acc")}) == 3
+
+
+# --- The palette fold (SPEC 1123, #1134) ---
+# Every colour a surface draws with is a role in the one module. The phone reads the same roles at its own density, and
+# no surface fetches an asset from outside itself.
+PALETTE_SURFACES = ("hub", "hub-mobile", "hubmux-root", "hub-refusal", "hub-test-log", "dashboard")
+
+
+def test_no_surface_carries_a_colour_literal(surfaces):
+    """A colour outside the token module is a second palette, wherever it is typed."""
+    found = {name: sorted(set(values)) for name, values in _literals_by_surface(surfaces).items()
+             if name in PALETTE_SURFACES and values}
+    assert not found, f"a surface still carries a colour literal: {found}"
+
+
+def test_the_phone_corrects_the_misspelt_token(surfaces):
+    """The phone reads `mute`, never the misspelling `muted` whose fallback hid the defect."""
+    assert "var(--muted" not in surfaces["hub-mobile"], "the phone still reads the misspelt --muted"
+    assert "var(--mute)" in surfaces["hub-mobile"], "the phone does not read --mute"
+
+
+def test_no_surface_declares_a_palette_of_its_own(surfaces):
+    """Every surface inlines the one module and redefines no palette role beside it."""
+    tokens = TOKENS_FILE.read_text()
+    for name in PALETTE_SURFACES:
+        assert tokens.strip() in surfaces[name], f"{name} does not carry the token module"
+        assert not _root_overrides(surfaces[name], tokens), f"{name} defines a palette of its own"
+
+
+def test_the_accent_and_the_first_series_are_not_one_colour():
+    """The collisions the spec names: the accent is not the first series, and no two tones share a hue."""
+    values = dict(re.findall(r"(--[\w-]+)\s*:\s*(#[0-9a-fA-F]{3,8})\s*[;}]", TOKENS_FILE.read_text()))
+    for left, right in (("--acc", "--s1"), ("--warn", "--s4"), ("--run", "--s3"), ("--none", "--s2")):
+        assert values[left] != values[right], f"{left} and {right} are one colour: {values[left]}"
+
+
+def test_the_pages_fetch_no_external_asset(surfaces):
+    """A page carries no webfont, icon library or sprite: nothing it draws arrives from outside."""
+    pattern = re.compile(r"<(?:script|link|img|iframe)\b[^>]*(?:src|href)\s*=\s*[\"']?https?://", re.I)
+    for name, html in surfaces.items():
+        assert not pattern.search(html), f"{name} fetches an external asset"

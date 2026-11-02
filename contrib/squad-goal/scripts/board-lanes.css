@@ -23,7 +23,7 @@ body.dockb #bbody.lanes{display:block;overflow:visible}
 #bbody .lh .bar i.dn{background:var(--ok);opacity:.45}   /* the share a run holds: the closed green, read through, until the card is done (owner, 2026-11-02) */
 #bbody .lh .bar i.rv{background:var(--ok);opacity:.25}   /* the share in review: the same green, fainter than the held share (owner, 2026-11-02) */
 #bbody .lh .pc{font-size:var(--fs-min);font-weight:600;color:var(--fg);font-variant-numeric:tabular-nums}
-#bbody .lh .lst{font-size:var(--fs-min);font-weight:600;color:var(--mute);border:1px solid #3a4252;border-radius:10px;padding:0 8px;line-height:20px;white-space:nowrap}
+#bbody .lh .lst{font-size:var(--fs-min);font-weight:600;color:var(--mute);border:1px solid var(--line-strong);border-radius:10px;padding:0 8px;line-height:20px;white-space:nowrap}
 #bbody .lh .lf-id.full{grid-column:1/-1;justify-content:flex-start}
 #bbody .lh .lh-facts{grid-column:2;display:flex;flex-wrap:wrap;align-items:center;column-gap:12px;row-gap:6px;min-width:0}
 #bbody .lh .lh-facts .lf{flex:none}
@@ -31,11 +31,11 @@ body.dockb #bbody.lanes{display:block;overflow:visible}
 #bbody .lh .lh-counts .lf{flex:none}
 #bbody .lh .lh-counts b{color:var(--fg);font-weight:600;font-variant-numeric:tabular-nums}
 #bbody .lane.alarm .lh .lid{color:var(--err)}
-#bbody .cell{min-width:0;min-height:48px;display:flex;flex-direction:column;gap:8px;padding:8px;background:#121519;border-right:1px solid var(--sep);border-bottom:1px solid var(--line)}
+#bbody .cell{min-width:0;min-height:48px;display:flex;flex-direction:column;gap:8px;padding:8px;background:var(--panel);border-right:1px solid var(--sep);border-bottom:1px solid var(--line)}
 #bbody .cell:last-of-type{border-right:0}
 #bbody .cell .it{margin:0}
-#bbody .bugc{display:inline-block;border-radius:10px;padding:0 8px;line-height:20px;border:1px solid #7a3a46;background:#3a1d2440;color:var(--err);font-size:var(--fs-min);font-weight:600}
-#bbody .bugc.loop{border-color:#7a3a46;color:var(--err)}
+#bbody .bugc{display:inline-block;border-radius:10px;padding:0 8px;line-height:20px;border:1px solid var(--tint-err-line);background:var(--tint-err);color:var(--err);font-size:var(--fs-min);font-weight:600}
+#bbody .bugc.loop{border-color:var(--tint-err-line);color:var(--err)}
 #bbody .lempty{padding:24px;color:var(--mute);font-size:var(--fs-body)}
 #lhc:empty{display:none}
 #lhc{margin-left:auto}
@@ -47,17 +47,17 @@ body.dockb #bbody.lanes{display:block;overflow:visible}
 #lhd{vertical-align:middle}
 #bhead details.fsel{position:relative;display:inline-block}
 #bhead details.fsel>summary{list-style:none;cursor:pointer;display:flex;align-items:center;border:1px solid var(--line);border-radius:6px;padding:4px 12px;min-height:32px;background:var(--panel);color:var(--fg);white-space:nowrap}
-#bhead details.fsel>summary:hover{border-color:#3a4252}
+#bhead details.fsel>summary:hover{border-color:var(--line-strong)}
 #bhead details.fsel>summary::-webkit-details-marker{display:none}
 #bhead details.fsel.set>summary{color:var(--warn);border-color:var(--warn)}
-#bhead .fpop{position:absolute;left:0;top:calc(100% + 4px);z-index:20;min-width:240px;max-height:320px;overflow-y:auto;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px;box-shadow:0 8px 24px #000a}
+#bhead .fpop{position:absolute;left:0;top:calc(100% + 4px);z-index:20;min-width:240px;max-height:320px;overflow-y:auto;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px;box-shadow:0 8px 24px var(--scrim)}
 #bhead .fpop label{display:flex;gap:8px;align-items:center;padding:4px 8px;border-radius:4px;cursor:pointer;white-space:nowrap;min-height:32px}
-#bhead .fpop label:hover{background:#1f2430}
+#bhead .fpop label:hover{background:var(--raise)}
 #bhead .fpop .sw{flex:none;width:10px;height:10px;border-radius:50%}   /* the spec's color: the filter is the legend (#917) */
 #bhead .fpopb{display:flex;justify-content:flex-end;padding:0 2px 6px;margin-bottom:4px;border-bottom:1px solid var(--line)}
 #bhead .fpopb button{font:inherit;min-height:32px}
 /* A lane waiting on the board read: a loading mark across its middle, shown only past a short delay so a fast read never flashes it. */
-#bbody .lload{grid-column:1/-1;display:flex;align-items:center;justify-content:center;gap:8px;min-height:56px;color:var(--mut,#8b949e);font-size:var(--fs-min,13px);opacity:0;animation:lfade .2s ease-in-out .15s forwards}
+#bbody .lload{grid-column:1/-1;display:flex;align-items:center;justify-content:center;gap:8px;min-height:56px;color:var(--mut,var(--ink-muted));font-size:var(--fs-min,13px);opacity:0;animation:lfade .2s ease-in-out .15s forwards}
 #bbody .lload i{width:18px;height:18px;border-radius:50%;border:2px solid currentColor;border-right-color:transparent;animation:lspin .8s linear infinite}
 @keyframes lspin{to{transform:rotate(360deg)}}
 @keyframes lfade{to{opacity:1}}
