@@ -62,7 +62,8 @@ def test_choosing_doing_to_closed_changes_the_dots_to_that_span(hub, board):  # 
     doing = hub.lead_zoom(f"tf=all&scale=jira&a=Doing&b={hub.COLUMN['issue_closed']}")
     assert [(d["n"], d["hours"]) for d in full["dots"]] == [(1, 96.0), (2, 120.0)]
     assert [(d["n"], d["hours"]) for d in doing["dots"]] == [(1, 24.0)]
-    assert doing["excluded_total"] == 1 and "1 excluded because no transition into the chosen columns" in doing["text"]
+    assert doing["excluded_total"] == 1
+    assert doing["text"] == "all closed cards, Doing -> closed, 1 issue plotted; Timeframe selects by end transition"
 
 
 def test_a_card_with_no_start_transition_is_excluded_and_counted(hub, board):  # noqa: F811
