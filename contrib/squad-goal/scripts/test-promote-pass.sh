@@ -377,6 +377,16 @@ SG_DELTA_SUITE=false SG_PROMOTE_BOUND_SECONDS=1 SG_PROMOTE_FALLBACK_SECONDS=0 ba
   || ko "delta red mark: '$(/usr/bin/grep "^$td " "$SG_STATE/promote-pass.tips" 2>/dev/null)'"
 rm -f "$T/suite-sleep"
 
+# (spec 1163, #1174) The promotion reads the gate's three outcomes with the wave entry's meaning: pass promotes, fail holds,
+# and an unfinished proof never rides the full line. A full line that says `unproven` is refused by its own name, because the
+# bound-ended proof is the one route an unfinished proof takes, and it carries its obligation marker.
+adv dev vocab-unproven; tv=$(tip dev); sb=$(tip stg)
+printf '%s\tfull\tunproven\t%s\n' "$(date +%s)" "$tv" > "$SG_STATE/gate-status-full"; rm -f "$SG_STATE/gate-status-delta" "$SG_STATE/promote-indeterminate"
+SG_PROMOTE_PROOF=local bash "$d/promote-stg.sh" > "$T/out12" 2>&1; rc=$?
+[ "$rc" != 0 ] && [ "$(tip stg)" = "$sb" ] && /usr/bin/grep -q "is unproven, not a pass" "$T/out12" \
+  && ok "an unproven local proof is refused by its own word, never read as a pass" \
+  || ko "unproven local proof: rc $rc, stg $(tip stg), out '$(cat "$T/out12")'"
+
 rm -f "$T/suite-rc" "$T"/checks-*
 
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'

@@ -512,6 +512,46 @@ def test_a_legend_entry_stays_on_one_line(hub):
     assert re.search(r"\.ltlg span\{[^}]*white-space:nowrap", hub.PAGE), "a legend entry may wrap across lines"
 
 
+def test_every_word_in_the_chart_box_takes_the_page_body_size(hub):
+    """#1144: the chart box is one body-size block; nothing in it is set at the page minimum."""
+    box = re.search(r"#flowb\{[^}]*\}", hub.PAGE)
+    assert box, "the chart box has no rule"
+    assert "font-size:var(--fs-body)" in box.group(0), "the chart box does not take the page's body size"
+    assert "var(--fs-min)" not in _flow_block(hub), "a chart label is still set at the page minimum"
+    stat = re.search(r"#flowb \.flstat\{[^}]*\}", hub.PAGE)
+    assert stat and "font-size" not in stat.group(0), "the chart status line sets its own size"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_chart_svg_text_sets_no_size_of_its_own_and_inherits_the_box(hub, board, tmp_path):
+    """#1144: the SVG's ticks and axis title take the box size, never a size of their own."""
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
+    out = _lt_chart(hub, tmp_path, "lt-body-size.js", _flow(hub)["lead"]["control"]["jira"]["all"])
+    texts = re.findall(r"<text [^>]*>", out)
+    assert texts, "the chart draws no text"
+    assert all("font-size" not in text for text in texts), "an SVG text sets its own size instead of inheriting the box's"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_plot_height_follows_the_window_between_a_floor_and_a_ceiling(hub, tmp_path):
+    """#1144: the plot height is layout, a function of the window height with a floor and a ceiling."""
+    def plot_height(px):
+        return int(_render(hub, tmp_path, f"plot-height-{px}.js", f"String(flowHeight({px}))"))
+
+    floor, middle, ceiling = plot_height(200), plot_height(900), plot_height(4000)
+
+    assert plot_height(300) == floor, "a window below the floor does not hold the floor"
+    assert plot_height(4000) == plot_height(9000) == ceiling, "a tall window leaves the ceiling"
+    assert floor < middle < ceiling, "a taller window does not draw a taller plot"
+
+
+def test_the_plot_height_is_computed_beside_the_width_from_the_window(hub):
+    """#1144: the height is layout, computed where the width is computed today, never a series."""
+    draw = next(line for line in hub.PAGE.splitlines() if line.startswith("const drawFlow="))
+    assert "flowW=" in draw, "the width is no longer computed in drawFlow"
+    assert "flowH=flowHeight(window.innerHeight)" in draw, "the plot height is not computed beside the width"
+
+
 def test_the_refresh_time_is_a_quiet_status_line(hub):
     block = _flow_block(hub)
     assert "<p class=flstat role=status>data read" in block, "the refresh time is not a status line"

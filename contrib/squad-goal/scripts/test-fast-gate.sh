@@ -360,5 +360,21 @@ out=$(cd "$R" && SG_FAST_BASE=no-such-ref SG_FAST_CMD="bash $T/clean.sh" bash "$
 [ $rc = 2 ] && [ "$(vhist | cut -f8)" = unproven ] && case "$(vhist | cut -f9)" in *"does not resolve"*) true;; *) false;; esac \
   && ok "an unresolved base is unproven: it exits 2 and the reason says the base does not resolve" || ko "unresolved base verdict: rc $rc: '$(vhist)'"
 
+# (#1174) The caller reads the gate's own word. GATE_OUTCOME_READ_FILE receives the outcome line gate.sh read inside the
+# lock, so the wave entry, the landing and the promotion decide on pass, fail or unproven and never on the exit code alone.
+# The command the gate runs never sees the variable, so a nested gate cannot overwrite the caller's copy.
+vfr() {  # <battery stub>: vfg with a caller-named outcome copy
+  rm -f "$T/ran.log" "$SG_STATE/gate-status" "$T/outcome"; (cd "$R" && SG_FAST_BASE=dev SG_FAST_CMD="bash $T/$1.sh" SG_FAST_RETRY_CMD="bash $T/retry.sh" GATE_OUTCOME_READ_FILE="$T/outcome" bash "$d/fast-gate.sh" 2>&1)
+}
+out=$(vfr clean); rc=$?
+[ $rc = 0 ] && [ "$(cut -f1 "$T/outcome" 2>/dev/null)" = pass ] && ok "a pass entry gives the caller the word pass" || ko "read pass: rc $rc, '$(cat "$T/outcome" 2>/dev/null)'"
+out=$(vfr typed); rc=$?
+[ $rc = 1 ] && [ "$(cut -f1 "$T/outcome" 2>/dev/null)" = fail ] && ok "a fail entry gives the caller the word fail" || ko "read fail: rc $rc, '$(cat "$T/outcome" 2>/dev/null)'"
+out=$(vfr absent); rc=$?
+[ $rc = 4 ] && [ "$(cut -f1 "$T/outcome" 2>/dev/null)" = unproven ] && ok "an unproven entry gives the caller the word unproven" || ko "read unproven: rc $rc, '$(cat "$T/outcome" 2>/dev/null)'"
+printf '#!/bin/bash\necho "read=${GATE_OUTCOME_READ_FILE:-unset}" >> "%s/ran.log"\nexit 0\n' "$T" > "$T/leak.sh"
+out=$(vfr leak); rc=$?
+[ $rc = 0 ] && /usr/bin/grep -qx 'read=unset' "$T/ran.log" && ok "the command never sees the caller's outcome file" || ko "the caller's variable leaked into the command: '$(cat "$T/ran.log" 2>/dev/null)'"
+
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 rm -rf "$T"; exit $fail
