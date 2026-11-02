@@ -5125,8 +5125,8 @@ const ltChart=c=>{const n=c.dots.length,base=flowH-flowP,ink="#b8c0cf",mute="var
   const pk=LT.pick!=null&&c.clusters[LT.pick]?c.clusters[LT.pick]:null;
   const rows=pk?`<table class=rt><thead><tr><th>Issue</th><th>Title</th><th>Elapsed</th><th>Closed</th></tr></thead><tbody>${pk.dots.map(d=>`<tr data-o=${d.n} style="cursor:pointer"><td>#${d.n}</td><td>${esc(d.title)}</td><td>${esc(d.text)}</td><td>${esc(d.closed)}</td></tr>`).join("")}</tbody></table>`:"";
   return ctl+S+legend+`<svg data-lt viewBox="0 0 ${flowW} ${flowH}">${axes}${ys}${xs}${band}${roll}${lines}${dots}</svg>`+note+rows;};
-const flowLead=l=>{const S=l.summary,ex=l.excluded.map(e=>`${e.count} ${esc(EXREASON[e.reason]||e.reason)}`).join(", ");
-  const head=`<p class=fhead>${esc(LT_TYPES.find(([k])=>k===l.type)[1].toLowerCase())} · <b>${esc(l.measure)}</b> · window ${l.window.size} ${esc(l.window.unit)} · excluded ${l.excluded_total}${ex?" ("+ex+")":""}</p>`;
+const flowLead=l=>{const S=l.summary,c=LT.zc,exc=c?Object.entries(c.excluded).map(([r,n])=>({reason:r,count:n})):l.excluded,total=c?c.excluded_total:l.excluded_total,ex=exc.map(e=>`${e.count} ${esc(EXREASON[e.reason]||e.reason)}`).join(", ");
+  const head=`<p class=fhead>${esc(LT_TYPES.find(([k])=>k===l.type)[1].toLowerCase())} · <b>${esc(l.measure)}</b> · window ${l.window.size} ${esc(l.window.unit)} · excluded ${total}${ex?" ("+ex+")":""}</p>`;
   LT.cols=l.columns||[];if(!S)return head+"<p class=fnote>no closed card yet</p>";
   return head+coverNote(l.coverage)+ltChart(LT.zc||l.control[LT.log?"log":"jira"][LT.tf]);};
 let BURN={s:null};   // the spec the burndown draws; null lets the hub name the first open spec (#1048)

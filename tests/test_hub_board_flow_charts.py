@@ -471,6 +471,32 @@ def test_the_caption_names_the_start_column_the_bar_chose(hub, board):
     assert f"{hub.ORDER[0]} -> closed" in chosen
 
 
+def test_the_caption_names_the_end_column_the_bar_chose(hub, board):
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
+    span = "from=2026-09-01T00:00:00Z&to=2026-12-01T00:00:00Z"
+    from urllib.parse import quote
+    default = hub.lead_zoom(span)["text"]
+    end = hub.ORDER[1]
+    chosen = hub.lead_zoom(f"{span}&b={quote(end)}")["text"]
+    assert chosen != default
+    assert f"opened -> {end}" in chosen
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_chosen_span_shows_its_own_exclusions_in_the_one_total(hub, board, tmp_path):
+    _seed(hub, {
+        1: (_card(1, st="Closed", s="CLOSED", c="2026-10-05T00:00:00Z"),
+            _life("2026-10-01T00:00:00Z", ("2026-10-04T00:00:00Z", "Doing"), ("2026-10-05T00:00:00Z", "Closed"))),
+        2: _done(2, "2026-10-03T09:00:00Z"),
+    })
+    lead = hub.flow_lead(ty="task")["lead"]
+    span = hub.lead_zoom("tf=all&scale=jira&a=Doing")
+    assert span["excluded_total"] == 1
+    out = _render(hub, tmp_path, "lt-span-exclusion.js", f"(LT.zc={json.dumps(span)},flowLead({json.dumps(lead)}))")
+    assert out.count("excluded") == 1, "the page shows the exclusion more than once"
+    assert "excluded 1 (1 no transition into the chosen columns)" in out, "the one total is the base lead, not the chosen span"
+
+
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_the_legend_marks_each_entry_once_and_keeps_the_band_entry_whole(hub, board, tmp_path):
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z"), 2: _done(2, "2026-10-03T09:00:00Z")})
