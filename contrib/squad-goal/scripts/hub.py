@@ -2098,28 +2098,6 @@ def spec_progress(items, moves=None, window=None, now=None):
     pct = done * 100 // total
     return dict(out, pct=pct, frac=done / total, value=f"{done}/{total} · {pct}%", state="ok" if done == total else "info", bar=True)
 
-DAYS_SPEED = 14   # the finished days the throughput row compares today with (two weeks)
-
-def throughput_fact(now=None):
-    """How fast the board is closing cards: the closed count per local day from the history store, the newest day partial.
-    `done` holds the finished days' figures, so today is compared with them and never with itself."""
-    store = _hist.load_store(_hist.history_path(BOARD, REPO))
-    cfd = _cfd.cfd([_hist.intervals(rec.get("events") or []) for rec in store.values()], ORDER, zone=day_zone(), now=now)
-    pts = [p for p in cfd["points"] if p["throughput"] is not None]
-    if not pts: return None
-    today = pts[-1]["throughput"]; done = [p["throughput"] for p in pts[:-1]][-DAYS_SPEED:]
-    # (#1193) The figure is only as fresh as the store behind it, and a frozen store once read as a slowdown. The fact carries
-    # the stamp of the newest record it counted, so a reader can see the age of the number instead of trusting it.
-    newest = max((r.get("t") or 0 for r in store.values()), default=0)
-    now_ts = now.timestamp() if hasattr(now, "timestamp") else (time.time() if now is None else now)
-    age = now_ts - newest if newest else None
-    if not done: return {"today": today, "median": None, "min": None, "max": None, "trend": None, "days": [],
-                         "as_of": newest or None, "age_secs": age}
-    med = st.median(done); recent = done[-3:]; avg = sum(recent) / len(recent)
-    trend = "up" if med and avg > med * 1.2 else "down" if med and avg < med * 0.8 else "flat"
-    return {"today": today, "median": med, "min": min(done), "max": max(done), "trend": trend, "days": done,
-            "as_of": newest or None, "age_secs": age}
-
 def subs_gauges(now=None):
     """Each subscription's weekly window for the Monitor: its used share and when it resets, or why there is no reading.
     The weekly window is the one the reset matters for; a provider that reports only a short window shows that one."""
@@ -2160,7 +2138,6 @@ def load_payload():
             "facts": list(LOAD_STATE.get("facts") or []) + [_hist.budget_fact(_hist.history_path(BOARD, REPO), time.time())],
             "specs": spec_progress(board_cache.get("items") or []),   # the open specs' total, off the board cache: no GitHub read
             "subs": subs_gauges(),   # the Monitor's subscription instruments: each weekly window and its reset, off the quota cache
-            "speed": throughput_fact(),   # the Monitor's throughput row: today against the finished days
             "late": late_payload(),   # the Monitor's late-writes row: the rows and their lag by actor, off the ledger (#1022)
             "secs": LOAD_SAMPLE_SECS, "asof": LOAD_STATE.get("asof", 0.0)}
 
@@ -4554,7 +4531,7 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 #main .r{display:flex;gap:8px;align-items:baseline;padding:8px 10px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;background:var(--card);cursor:pointer}#main .r:hover,#main .r:focus-visible{border-color:var(--acc)}#main h3{font-size:var(--fs-min);text-transform:uppercase;letter-spacing:.06em;color:var(--mute);margin:12px 0 6px}
 #bhead select{min-height:32px;padding:4px 12px;font-size:var(--fs-body);border-radius:6px}#bhead label.hck input{width:18px;aspect-ratio:1;padding:0}
 #bbody .it>.hld{order:1;flex:0 0 auto;margin:0;font-size:var(--fs-min);font-weight:600;color:var(--s5);white-space:nowrap}#bbody .it>.hld::before{content:"\25CF";margin-right:4px;color:var(--s5)}
-#ispeed .spd{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:8px;background:var(--card)}#ispeed .spdh{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}#ispeed .spdt{font-size:var(--fs-min);font-weight:600}#ispeed .spdt.up{color:#3ecf8e}#ispeed .spdt.down{color:var(--err)}#ispeed .spdt.flat{color:var(--mute)}#ispeed .spdt.wait{color:var(--mute)}#ispeed .spr{position:relative;height:16px;border-radius:8px;background:linear-gradient(90deg,#2a3140,#3a4457)}#ispeed .spr i{position:absolute;top:0;bottom:0;width:2px;background:var(--mute)}#ispeed .spr .spmed{width:3px;background:#e0a23a}#ispeed .spr .spt{width:10px;height:10px;top:3px;border-radius:50%;background:#5aa9ff;margin-left:-5px;box-shadow:0 0 0 2px #0d1117}#ispeed .spr .spt.up{background:#3ecf8e}#ispeed .spr .spt.down{background:#d9534f}#ispeed .spl{display:flex;justify-content:space-between;font-size:var(--fs-min);color:var(--mute);margin-top:3px}#ispeed .spn{font-size:var(--fs-min);color:var(--mute);margin-top:4px}#ispeed .spn b{color:var(--fg);font-size:var(--fs-body)}#isub{display:grid;gap:2px;margin:0 0 10px}#isub .srow{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"n p" "b r";align-items:center;gap:3px 8px;padding:5px 0;font-size:var(--fs-min);border-bottom:1px solid var(--line)}#isub .srow:last-child{border-bottom:0}#isub .sn{grid-area:n;color:var(--fg);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#isub .sp2{grid-area:p;text-align:right;font-variant-numeric:tabular-nums;color:var(--fg);font-weight:600}#isub .sb2{grid-area:b;height:6px;border-radius:3px;background:var(--line);overflow:hidden}#isub .sb2 i{display:block;height:100%;border-radius:3px;background:var(--ok)}#isub .srow.warn .sb2 i{background:var(--warn)}#isub .srow.red .sb2 i{background:var(--err)}#isub .srow.na .sb2{background:repeating-linear-gradient(90deg,var(--line) 0 3px,transparent 3px 7px)}#isub .srow.na .sp2{color:var(--mute)}#isub .sr2{grid-area:r;text-align:right;color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap}
+#isub{display:grid;gap:2px;margin:0 0 10px}#isub .srow{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"n p" "b r";align-items:center;gap:3px 8px;padding:5px 0;font-size:var(--fs-min);border-bottom:1px solid var(--line)}#isub .srow:last-child{border-bottom:0}#isub .sn{grid-area:n;color:var(--fg);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#isub .sp2{grid-area:p;text-align:right;font-variant-numeric:tabular-nums;color:var(--fg);font-weight:600}#isub .sb2{grid-area:b;height:6px;border-radius:3px;background:var(--line);overflow:hidden}#isub .sb2 i{display:block;height:100%;border-radius:3px;background:var(--ok)}#isub .srow.warn .sb2 i{background:var(--warn)}#isub .srow.red .sb2 i{background:var(--err)}#isub .srow.na .sb2{background:repeating-linear-gradient(90deg,var(--line) 0 3px,transparent 3px 7px)}#isub .srow.na .sp2{color:var(--mute)}#isub .sr2{grid-area:r;text-align:right;color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap}
 #tab-set .sp .sb{padding:0 12px 12px}
 /* Settings (#913): a left theme list, one theme at a time, one Save bar; on the phone a select replaces the list and rows stack. */
 #tab-set .swrap{display:grid;grid-template-columns:200px minmax(0,1fr);gap:16px;max-width:1120px;align-items:start}#tab-set .spanels{min-width:0}
@@ -4618,7 +4595,7 @@ html.sbshut #sbtn svg{transform:scaleX(-1)}
 <div id=win>
 <script id=sbboot>try{if(sideState(JSON.parse(localStorage.hub||"{}").side,matchMedia("(min-width: 601px)").matches))document.documentElement.classList.add("sbshut")}catch(e){}</script>
 <aside id=side><button id=sbtn type=button aria-label="Collapse the Monitor bar" aria-controls=side aria-expanded=true title="Collapse the Monitor bar"><svg viewBox="0 0 12 12" aria-hidden=true focusable=false><path d="M8 2L4 6l4 4" fill=none stroke=currentColor stroke-width=1.6 stroke-linecap=round stroke-linejoin=round /></svg></button><div id=sbody>
-<details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div id=ispeed></div><div class=ian id=ian></div><div id=ispec></div><div id=ilate></div></div></details>
+<details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div class=ian id=ian></div><div id=ispec></div><div id=ilate></div></div></details>
 <details id=usage class=sp><summary>Usage</summary><div class=sb><div class="igs isub" id=isub title="subscriptions: the used share of the weekly window and the days to its reset"></div></div></details><details id=stats class=sp><summary>Spend<span class=sr id=stsr></span></summary><div class=sb><h4>Tokens <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Counted in tokens: in + out, the same count the ring draws."></span></h4><div class=tot id=tot></div><h4>Tokens over time <span class=row id=per></span></h4><div id=chart></div><h4>Model tokens · this month</h4><div class=m id=piet>in + out</div><div id=pie></div></div></details>
 <details id=lrd class=sp open><summary>Live runs<span class=sr id=lrs></span></summary><div class=sb id=lrun></div></details>
 </div></aside>
@@ -4730,15 +4707,6 @@ function tileHtml(t){const v=t.href?esc(t.text).replace(/PR #\d+/,x=>`<a target=
  d=(t.detail||[]).length?`<details><summary>${t.detail.length} failed</summary><ul>${t.detail.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></details>`:"";
  return `<div class="at ${t.tone}"${t.tip?` title="${iq(t.tip)}"`:""}><span class=ah><span class=dot aria-hidden="true"></span>${esc(t.k)}</span><span class=av>${v}</span>${t.times?`<span class=atm>${esc(t.times)}</span>`:""}${d}</div>`}
 function instSum(facts){return instTiles(facts).filter(x=>x.tone==="err").length+" fail"}
-function speedRow(sp){if(!sp)return `<div class="spd none"><b>Throughput</b><span class=spn>no history yet</span></div>`;
- const {today,median,min,max,trend}=sp,hi=Math.max(max||0,today||0,1),at=v=>Math.max(0,Math.min(100,100*(v||0)/hi));
- const tag=trend==="up"?["\u25B2","accelerating","up"]:trend==="down"?["\u25BC","slowing","down"]:trend==="flat"?["\u25AC","steady","flat"]:["\u25CB","first day","wait"];
- const mark=(v,cls,lbl)=>v==null?"":`<i class="${cls}" style="left:${at(v)}%" title="${lbl} ${v}"></i>`;
- return `<div class=spd><div class=spdh><b>Throughput</b><span class="spdt ${tag[2]}">${tag[0]} ${tag[1]}</span></div>`
-  +`<div class=spr role=img aria-label="cards closed today: ${today}, median ${median==null?"unknown":median}, minimum ${min==null?"unknown":min}, maximum ${max==null?"unknown":max}">`
-  +mark(min,"spmin","minimum")+mark(median,"spmed","median")+mark(max,"spmax","maximum")+`<i class="spt ${tag[2]}" style="left:${at(today)}%" title="today ${today}"></i></div>`
-  +`<div class=spl><span>min ${min==null?"?":min}</span><span>med ${median==null?"?":median}</span><span>max ${max==null?"?":max}</span></div>`
-  +`<div class=spn><b>${today==null?"?":today}</b> cards closed today${trend==null?" \u00b7 no finished day to compare":""}</div></div>`}
 function instUsage(facts){const f=instFact(facts,"burn");if(!f||!f.text)return null;const p=String(f.text).split(" · ");return{tok:p[0].replace(/^tokens\s*/,""),calls:p.slice(1).join(" · ")}}
 function specBar(p){p=p||{};const st=p.state==="ok"||p.state==="info"?" "+p.state:"";   // the hub decides the count, the text and the state; the page only draws them
  const w=100*Math.max(0,Math.min(1,Number(p.frac)||0)),bar=p.bar?`<span class=pb role=progressbar aria-label="Open spec progress" aria-valuemin=0 aria-valuemax=${Number(p.total)||0} aria-valuenow=${Number(p.done)||0}><span class=pf style="width:${w}%"></span></span>`:"";
@@ -4751,7 +4719,7 @@ function instDraw(d){const c=$("#inst");if(!c)return;const facts=(d||{}).facts||
  else if(gs)ldCells(d).forEach((x,i)=>{const n=gs.children[i],g=gaugeGeom((d||{})[x.k.toLowerCase()]);if(!n)return;n.classList.toggle("ldred",x.red);
   const ln=n.querySelector(".gn"),f=n.querySelector(".gf"),v=n.querySelector(".gv");
   if(ln){ln.style.transform=`rotate(${g.deg}deg)`;ln.setAttribute("visibility",g.known?"visible":"hidden")}if(f){f.setAttribute("d",`M4 32 A26 26 0 0 1 ${g.x} ${g.y}`);f.setAttribute("stroke",g.col)}if(v)v.innerHTML=`<b>${x.k}</b> ${esc(x.t)}`});
- instSet("ian",instTiles(facts).map(tileHtml).join(""));instSet("isub",subsGauges(d||{}));instSet("ispec",specBar((d||{}).specs));instSet("ispeed",speedRow((d||{}).speed));instSet("ilate",lateRows((d||{}).late));
+ instSet("ian",instTiles(facts).map(tileHtml).join(""));instSet("isub",subsGauges(d||{}));instSet("ispec",specBar((d||{}).specs));instSet("ilate",lateRows((d||{}).late));
  const u=instUsage(facts);instSet("burn",u?`<span>Tokens · 24 h</span><b class=bad>${esc(u.tok)}</b>`:"<span>Tokens · 24 h</span><b>no reading</b>");
  const s=$("#instsr");if(s)s.textContent=instSum(facts);
 }

@@ -1,8 +1,8 @@
-"""The Monitor leads with the machine instruments, then Throughput, and states the loop once (#1071, parent #1068).
+"""The Monitor leads with the machine instruments and states the loop once (#1071, parent #1068).
 
 The loop's state renders in the Loop panel only, through one switch that drains when turned off (ADR-0162). The Monitor
-carries no loop tile and no loop words in its heading. The CPU, RAM and GPU gauges sit first in the Monitor, then the
-throughput row, above the usage and spend sections, which keep the donut and the bar chart.
+carries no loop tile and no loop words in its heading. The CPU, RAM and GPU gauges sit first in the Monitor, above the
+specs, usage and spend sections, which keep the donut and the bar chart. The Monitor carries no throughput card (owner).
 """
 import importlib.util
 import json
@@ -104,18 +104,19 @@ def test_the_loop_switch_sits_in_the_loop_panel_and_the_monitor_has_none(hub):
     assert 'data-loop' not in monitor
 
 
-def test_the_instruments_lead_the_monitor_and_throughput_follows(hub):
+def test_the_instruments_lead_the_monitor_and_the_specs_follow(hub):
     page = hub.PAGE
     monitor = _section(page, "inst")
-    assert monitor.index("id=igs") < monitor.index("id=ispeed")
-    assert monitor.index("id=ispeed") < monitor.index("id=ispec")
+    assert monitor.index("id=igs") < monitor.index("id=ispec")
 
 
-def test_the_throughput_row_sits_above_every_cost_and_subscription_section(hub):
+def test_the_monitor_carries_no_throughput_card(hub):
+    """The owner removed the card: the page draws no throughput row, and no reader works one out."""
     page = hub.PAGE
-    after = page.index("id=ispeed")
-    for sid in ("usage", "isub", "stats", "chart", "pie", "lim", "sub"):
-        assert page.index(f"id={sid}") > after, sid
+    monitor = _section(page, "inst")
+    assert "id=ispeed" not in page and "speedRow" not in page
+    assert "cards closed today" not in page and "cards closed today" not in monitor
+    assert "throughput" not in monitor.lower()
 
 
 def test_the_donut_and_the_bar_chart_stay_in_the_spend_section(hub):
@@ -124,9 +125,3 @@ def test_the_donut_and_the_bar_chart_stay_in_the_spend_section(hub):
     assert 'id=chart' in stats and 'id=pie' in stats
     assert "hidden" not in re.search(r"<div id=chart[^>]*>", stats).group(0)
     assert "hidden" not in re.search(r"<div id=pie[^>]*>", stats).group(0)
-
-
-def test_a_reader_learns_the_throughput_and_its_direction_in_one_row(hub):
-    page = hub.PAGE
-    row = _run(page, 'speedRow({today:5,median:3,min:1,max:6,trend:"up"})', _monitor_blocks(page))
-    assert "accelerating" in row and "5" in row and "cards closed today" in row
