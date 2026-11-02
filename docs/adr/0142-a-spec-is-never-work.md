@@ -34,7 +34,9 @@ answer, one closed as not-work. Each is startable by its labels and none is a un
    says only that an agent may take the issue; the owner starts it by moving its card to Todo. A card
    with no column is not in Todo. A spec and its tickets are created with their card in Backlog; a
    bug is created in Todo. The loop never moves a card into Backlog or Todo on its own; only the
-   owner's move starts that. A spec stays below Doing in the column the owner gave it. The column
+   owner's move starts that. A spec's card follows its own tickets: the fold moves it with the
+   most advanced open ticket, into Doing, Code Review and Code Complete, and never ahead of it. The
+   spec is kept out of every count of work by its `spec` label, never by its column. The column
    carries no blocking edge — a ticket whose blocker is still open waits on the dispatch's reading of
    that edge, not on a column of its own.
 6. **The owner starts a spec by moving its card to Todo, and its tickets follow.** When a spec's card
