@@ -417,6 +417,82 @@ def test_the_legend_says_what_each_line_answers(hub):
     assert "ltV(c.p85)" in hub.PAGE and "ltV(c.median)" in hub.PAGE, "the legend carries no value beside its line"
 
 
+def _lt_chart(hub, tmp_path, name, chart, zr=None):
+    """The lead chart's markup for one control chart; `zr` is the drag zoom the page holds, or none."""
+    zoom = f"LT.zr={json.dumps(zr)}" if zr else "LT.zr=null"
+    return _render(hub, tmp_path, name, f"({zoom},ltChart({json.dumps(chart)}))")
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_controls_are_grouped_by_what_they_do_and_the_page_names_their_order(hub, board, tmp_path):
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
+    out = _lt_chart(hub, tmp_path, "lt-groups.js", _flow(hub)["lead"]["control"]["jira"]["all"])
+    order = ["Filters", "id=ltr", "id=lty", "Measurement", "id=lta", "id=ltb", "Display", "id=lts", "View", "id=ltz"]
+    marks = [out.index(mark) for mark in order]
+    assert marks == sorted(marks), f"the controls are not grouped in the order named: {order}"
+    assert "Set the controls in order: filters, then measurement, then display, then view." in out
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_zoom_button_names_the_view_it_returns_to_and_is_disabled_in_it(hub, board, tmp_path):
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
+    chart = _flow(hub)["lead"]["control"]["jira"]["all"]
+    home = _lt_chart(hub, tmp_path, "lt-zoom-home.js", chart)
+    zoomed = _lt_chart(hub, tmp_path, "lt-zoom-held.js", chart, zr=["2026-10-01T00:00:00+00:00", "2026-10-03T00:00:00+00:00"])
+    assert re.search(r"<button id=ltz disabled[^>]*>Back to All</button>", home), "the zoom button is live in the view it names"
+    assert re.search(r'<button id=ltz title="[^"]*">Back to All</button>', zoomed), "the zoom button is disabled while zoomed"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_clustered_view_offers_a_fit_button_that_names_its_range(hub, board, tmp_path):
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
+    out = _lt_chart(hub, tmp_path, "lt-fit.js", _flow(hub)["lead"]["control"]["jira"]["all"])
+    assert "Fit to data: Oct 2 09:00 to Oct 2 10:00 UTC" in out
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_one_exclusion_total_is_shown_and_the_plotted_sample_is_stated(hub, board, tmp_path):
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z"), 2: _todo(2), 3: _todo(3)})
+    lead = hub.flow_lead(ty="task")["lead"]
+    chart = lead["control"]["jira"]["all"]
+    assert chart["excluded_total"] == sum(chart["excluded"].values()) == 2, "the total is the rows the chart counted"
+    out = _render(hub, tmp_path, "lt-exclusion.js", f"flowLead({json.dumps(lead)})")
+    assert out.count("excluded") == 1, "the page shows the exclusion more than once"
+    assert "1 issue plotted" in out
+
+
+def test_the_caption_names_the_start_column_the_bar_chose(hub, board):
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
+    span = "from=2026-09-01T00:00:00Z&to=2026-12-01T00:00:00Z"
+    from urllib.parse import quote
+    default = hub.lead_zoom(span)["text"]
+    chosen = hub.lead_zoom(f"{span}&a={quote(hub.ORDER[0])}")["text"]
+    assert chosen != default
+    assert f"{hub.ORDER[0]} -> closed" in chosen
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_legend_marks_each_entry_once_and_keeps_the_band_entry_whole(hub, board, tmp_path):
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z"), 2: _done(2, "2026-10-03T09:00:00Z")})
+    out = _lt_chart(hub, tmp_path, "lt-legend.js", _flow(hub)["lead"]["control"]["jira"]["all"])
+    legend = re.search(r'<p class="flg ltlg">(.*?)</p>', out).group(1)
+    entries = re.findall(r"<span>(.*?)</span>", legend)
+    assert len(entries) == 5, entries
+    assert all(entry.count("<i") == 1 for entry in entries), "an entry has no marker or two"
+    band = next(entry for entry in entries if "Standard deviation" in entry)
+    assert "<i" in band, "the band's label is split from its marker"
+
+
+def test_a_legend_entry_stays_on_one_line(hub):
+    assert re.search(r"\.ltlg span\{[^}]*white-space:nowrap", hub.PAGE), "a legend entry may wrap across lines"
+
+
+def test_the_refresh_time_is_a_quiet_status_line(hub):
+    block = _flow_block(hub)
+    assert "<p class=flstat role=status>data read" in block, "the refresh time is not a status line"
+    assert "<p class=fnote>data read" not in block, "the refresh time is still page chatter"
+
+
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_the_control_chart_draws_one_mark_per_cluster_on_the_date_axis(hub, board, tmp_path, monkeypatch):
     class Frozen(datetime):   # the page draws the 30-day timeframe: pin "now" so the cards stay inside it
@@ -526,7 +602,7 @@ def test_the_server_answers_the_leadtime_route_and_the_page_calls_it(hub):
     source = HUB_PY.read_text()
     assert 'self.path.startswith("/api/leadtime")' in source
     assert "/api/leadtime?" in hub.PAGE
-    assert "Reset zoom" in hub.PAGE
+    assert "Back to " in hub.PAGE
 
 
 def test_the_board_answer_carries_no_flow_data(hub, board):

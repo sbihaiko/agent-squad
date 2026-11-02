@@ -486,7 +486,7 @@ def test_the_header_names_the_type_the_chart_holds(hub, board):
 
 def test_the_type_control_sits_beside_timeframe_and_scale(hub):
     page = hub.PAGE
-    assert page.index("<select id=ltr>") < page.index("<select id=lts>") < page.index("<select id=lty>")
+    assert page.index("<select id=ltr>") < page.index("<select id=lty>") < page.index("<select id=lts>"), "Type groups with Timeframe; Scale is display"
     assert '[["spec","Specs"],["task","Tasks"],["bug","Bugs"]]' in page
 
 
