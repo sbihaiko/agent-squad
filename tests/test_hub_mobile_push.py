@@ -108,6 +108,22 @@ def test_an_older_page_draws_only_the_turns_not_yet_drawn(hub, monkeypatch):  # 
     assert out["drawn"] == ["ownerold", "ownerfirst"], out["drawn"]
 
 
+def test_the_phone_page_takes_the_desktop_chart_and_loss_events_without_error(hub, monkeypatch):  # noqa: F811
+    page = stream_page(hub, monkeypatch)
+    driver = EMIT + """
+      await __tick(5);
+      emit("cfd", { v: 3 });
+      emit("lead", { v: 4 });
+      emit("ping", {});
+      stream().onerror();
+      stream().onopen();
+      await __tick(5);
+      return { live: squadStream.live() };
+    """
+    out = run_page(page, driver)
+    assert out["live"] is True
+
+
 def test_the_polls_stay_as_the_fallback_when_no_stream_is_live(hub):  # noqa: F811
     driver = """
       openConversation(%(sid)s, "Session one");
