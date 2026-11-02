@@ -114,6 +114,36 @@ def deny_reason(tool, tool_input, root, env=None, home=None):
     return None
 
 
+def _tokens(cmd):
+    try:
+        return shlex.split(cmd, posix=True)
+    except ValueError:
+        return cmd.split()
+
+
+def _names_outside(token, top, home):
+    raw = token.lstrip("0123456789<>&|=")
+    if raw.startswith("~"):
+        raw = home + raw[1:] if home else raw
+    if not (raw.startswith(("/", "..")) or "/../" in raw) or raw == "/dev/null":
+        return False
+    return not _inside(os.path.realpath(os.path.join(top, raw)), top)
+
+
+def bang_reason(command, root, env=None, home=None):
+    """Why a bang command typed into a hosted session is refused, or None: the Bash wall, and no path outside `root`."""
+    env = os.environ if env is None else env
+    home = home if home is not None else env.get("HOME") or os.path.expanduser("~")
+    reason = deny_reason("Bash", {"command": command}, root, env, home)
+    if reason is not None:
+        return reason
+    top = os.path.realpath(root)
+    for token in _tokens(command):
+        if _names_outside(token, top, home):
+            return f"sandbox: a command that names {token} outside its working directory {top} is denied"
+    return None
+
+
 def pre_tool_use(root, on_deny, env=None, home=None):
     """The hook callback: deny with a reason, and tell `on_deny(tool, reason)` once per denial."""
     async def hook(input_data, tool_use_id, context):

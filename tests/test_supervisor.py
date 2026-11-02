@@ -10,15 +10,62 @@ from pathlib import Path
 import pytest
 
 from squad import supervisor as sv
+from squad.redact import MARK
 
 ROOT = Path(__file__).resolve().parents[1]
-ECHO_SOURCE = "import sys\nfor line in sys.stdin:\n    print('echo:' + line.rstrip('\\n'), flush=True)\n"
+TRANSCRIPT_KEY = "key sk-ant-api03-abcdefghijklmnopqrstu\n"
+
+# A stand-in for claude_agent_sdk: the adapter builds its real options and hooks, and a prompt "TOOL <name> <json>"
+# runs the PreToolUse hooks of those options, so the sandbox wall answers as it does in a real session. No spend.
+STUB_SDK = '''
+import json
+from dataclasses import dataclass, field
+
+
+@dataclass
+class TextBlock:
+    text: str
+
+
+@dataclass
+class AssistantMessage:
+    content: list
+    model: str = "stub"
+    error: object = None
+
+
+class ClaudeAgentOptions:
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+
+
+@dataclass
+class HookMatcher:
+    matcher: object = None
+    hooks: list = field(default_factory=list)
+    timeout: object = None
+
+
+async def query(*, prompt, options):
+    if prompt.startswith("TOOL "):
+        name, _, raw = prompt[5:].partition(" ")
+        out = {}
+        for m in options.hooks["PreToolUse"]:
+            if m.matcher is None or name in m.matcher.split("|"):
+                for h in m.hooks:
+                    out = await h({"hook_event_name": "PreToolUse", "tool_name": name, "tool_input": json.loads(raw)}, "tu-1", {"signal": None}) or out
+        reason = (out.get("hookSpecificOutput") or {}).get("permissionDecisionReason")
+        texts = [reason or "allowed"]
+    else:
+        texts = ["echo:" + prompt]
+    yield AssistantMessage(content=[TextBlock(text=t) for t in texts])
+'''
 
 HUB_START = """
-import json, sys, time
+import sys, time
 from pathlib import Path
 from squad import supervisor as sv
-sid = sv.call(Path(sys.argv[1]), "start", job="echo-hub", argv=json.loads(sys.argv[2]))["session"]
+sid = sv.call(Path(sys.argv[1]), "start", job="echo-hub")["session"]
 print(sid, flush=True)
 time.sleep(600)
 """
@@ -37,6 +84,14 @@ while time.time() < deadline:
         break
     time.sleep(0.05)
 """
+
+
+@pytest.fixture(autouse=True)
+def stub_sdk(tmp_path, monkeypatch):
+    folder = tmp_path / "sdk"
+    folder.mkdir()
+    (folder / "claude_agent_sdk.py").write_text(STUB_SDK)
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join([str(folder), str(ROOT)]))
 
 
 @pytest.fixture
@@ -60,15 +115,8 @@ def state(tmp_path):
                 pass
 
 
-@pytest.fixture
-def echo(tmp_path):
-    program = tmp_path / "echo.py"
-    program.write_text(ECHO_SOURCE)
-    return [sys.executable, "-u", str(program)]
-
-
 def pythonpath_env():
-    return {**os.environ, "PYTHONPATH": str(ROOT)}
+    return dict(os.environ)
 
 
 def wait_for_text(state, session, needle, timeout=10.0):
@@ -82,17 +130,38 @@ def wait_for_text(state, session, needle, timeout=10.0):
     raise AssertionError(f"{needle!r} not seen; output was {data!r}")
 
 
-def test_echo_program_answers_a_line_through_attach(state, echo):
+def wait_for_file(path, needle, timeout=10.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if path.exists() and needle in path.read_text():
+            return path.read_text()
+        time.sleep(0.05)
+    raise AssertionError(f"{needle!r} not written to {path}")
+
+
+def hosted(state, job, cwd=None):
+    return sv.call(state, "start", job=job, cwd=cwd)["session"]
+
+
+def test_hosted_session_answers_a_line_through_attach(state):
     sv.ensure(state)
-    session = sv.call(state, "start", job="echo-1", argv=echo)["session"]
+    session = hosted(state, "echo-1")
     sv.call(state, "write", session=session, text="hello\n")
     wait_for_text(state, session, "echo:hello")
 
 
-def test_daemon_outlives_the_hub_and_the_same_program_answers(state, echo):
+def test_hook_of_the_adapter_refuses_a_tool_call_in_a_hosted_session(state, tmp_path):
+    sv.ensure(state)
+    session = hosted(state, "p#20", cwd=str(tmp_path))
+    sv.call(state, "write", session=session, text='TOOL Bash {"command": "cat ~/.claude/settings.json"}\n')
+    data = wait_for_text(state, session, "sandbox:")
+    assert "a command that names ~/.claude is denied" in data
+
+
+def test_daemon_outlives_the_hub_and_the_same_program_answers(state):
     sv.ensure(state)
     hub = subprocess.Popen(
-        [sys.executable, "-c", HUB_START, str(state), json.dumps(echo)],
+        [sys.executable, "-c", HUB_START, str(state)],
         stdout=subprocess.PIPE, text=True, env=pythonpath_env(),
     )
     session = hub.stdout.readline().strip()
@@ -142,12 +211,12 @@ def test_process_whose_start_time_does_not_match_the_record_is_refused(state):
     assert "start time" in reason
 
 
-def test_daemon_answers_no_input_for_a_session_it_did_not_start(state, echo):
+def test_daemon_answers_no_input_for_a_session_it_did_not_start(state):
     sv.ensure(state)
     with pytest.raises(sv.Refused):
         sv.call(state, "write", session="no-such-session", text="x\n")
 
-    session = sv.call(state, "start", job="echo-4", argv=echo)["session"]
+    session = hosted(state, "echo-4")
     pid = int((state / "supervisor.pid").read_text())
     os.kill(pid, signal.SIGKILL)
     (state / "supervisor.pid").unlink()
@@ -187,38 +256,39 @@ def end_reasons(state, session):
     return [e["reason"] for e in events(state) if e["event"] == "end" and e["session"] == session]
 
 
-def test_start_writes_one_record_with_identity_process_terminal_and_cwd(state, echo, tmp_path):
-    sid = sv.Supervisor(state).start("p#7", echo, str(tmp_path))
+def test_start_writes_one_record_with_identity_process_terminal_and_cwd(state, tmp_path):
+    sid = sv.Supervisor(state).start("p#7", str(tmp_path))
     [start] = [e for e in events(state) if e["event"] == "start"]
     assert start["session"] == sid
     assert start["job"] == "p#7"
     assert start["lstart"] == sv.lstart(start["pid"])
     assert start["terminal"].startswith("/dev/")
     assert start["cwd"] == str(tmp_path)
+    assert "squad.sdk_adapter" in start["argv"]
 
 
-def test_attach_transport_is_recorded_once_per_session(state, echo):
+def test_attach_transport_is_recorded_once_per_session(state):
     sv.ensure(state)
-    session = sv.call(state, "start", job="p#11", argv=echo)["session"]
+    session = hosted(state, "p#11")
     sv.call(state, "read", session=session, offset=0)
     sv.call(state, "read", session=session, offset=0)
     attaches = [(e["session"], e["transport"]) for e in events(state) if e["event"] == "attach"]
     assert attaches == [(session, "unix")]
 
 
-def test_live_record_survives_a_restart_and_keeps_its_job(state, echo, sleeper):
+def test_live_record_survives_a_restart_and_keeps_its_job(state, sleeper):
     write_start(state, session="old-1", job="p#9", pid=sleeper.pid, lstart=sv.lstart(sleeper.pid))
     restarted = sv.Supervisor(state)
     assert end_reasons(state, "old-1") == []
     with pytest.raises(sv.Refused, match="old-1"):
-        restarted.start("p#9", echo, None)
+        restarted.start("p#9", None)
 
 
-def test_record_of_a_dead_process_is_ended_lost_and_frees_its_job(state, echo, dead_pid):
+def test_record_of_a_dead_process_is_ended_lost_and_frees_its_job(state, dead_pid):
     write_start(state, session="old-2", job="p#10", pid=dead_pid, lstart="Mon Jan  1 00:00:00 1990")
     restarted = sv.Supervisor(state)
     assert end_reasons(state, "old-2") == ["lost"]
-    assert restarted.start("p#10", echo, None) != "old-2"
+    assert restarted.start("p#10", None) != "old-2"
 
 
 def test_record_with_a_reused_pid_is_ended_lost(state, sleeper):
@@ -227,40 +297,101 @@ def test_record_with_a_reused_pid_is_ended_lost(state, sleeper):
     assert end_reasons(state, "old-3") == ["lost"]
 
 
-def test_second_start_for_a_live_job_is_refused_naming_the_live_session(state, echo):
+def test_second_start_for_a_live_job_is_refused_naming_the_live_session(state):
     supervisor = sv.Supervisor(state)
-    first = supervisor.start("p#8", echo, None)
+    first = supervisor.start("p#8", None)
     with pytest.raises(sv.Refused, match=first):
-        supervisor.start("p#8", echo, None)
+        supervisor.start("p#8", None)
 
 
-def test_owner_grant_naming_both_sessions_admits_a_second_start(state, echo):
+def test_owner_grant_naming_both_sessions_admits_a_second_start(state):
     supervisor = sv.Supervisor(state)
-    first = supervisor.start("p#13", echo, None)
+    first = supervisor.start("p#13", None)
     with pytest.raises(sv.Refused, match=first):
-        supervisor.start("p#13", echo, None, session="second-13")
+        supervisor.start("p#13", None, session="second-13")
     (state / "grants.json").write_text(json.dumps([{"replaces": first, "with": "second-13"}]))
-    assert supervisor.start("p#13", echo, None, session="second-13") == "second-13"
+    assert supervisor.start("p#13", None, session="second-13") == "second-13"
 
 
-def test_grant_naming_another_session_admits_nothing(state, echo):
+def test_grant_naming_another_session_admits_nothing(state):
     supervisor = sv.Supervisor(state)
-    first = supervisor.start("p#14", echo, None)
+    first = supervisor.start("p#14", None)
     (state / "grants.json").write_text(json.dumps([{"replaces": "someone-else", "with": "second-14"}]))
     with pytest.raises(sv.Refused, match=first):
-        supervisor.start("p#14", echo, None, session="second-14")
+        supervisor.start("p#14", None, session="second-14")
 
 
 @pytest.mark.parametrize("job", ["", "p#", "p#0", "#7", "p #1", "p/x", "p#1#2", "p\n", "a" * 65])
-def test_malformed_job_name_is_refused_before_anything_starts(state, echo, job):
+def test_malformed_job_name_is_refused_before_anything_starts(state, job):
     with pytest.raises(sv.Refused):
-        sv.Supervisor(state).start(job, echo, None)
+        sv.Supervisor(state).start(job, None)
     assert events(state) == []
 
 
 @pytest.mark.parametrize("job", ["bihaiko#1094", "label-x", "p.q_r", "a" * 64])
 def test_well_formed_job_name_is_accepted(job):
     assert sv.valid_job(job)
+
+
+@pytest.mark.parametrize("session", ["../escape", "a/b", ".hidden", "x" * 65])
+def test_session_name_that_is_not_a_file_name_is_refused(state, session):
+    with pytest.raises(sv.Refused, match="session name"):
+        sv.Supervisor(state).start("p#18", None, session=session)
+    assert events(state) == []
+
+
+def test_bang_command_outside_the_working_directory_is_refused_in_a_hosted_session(state, tmp_path):
+    sv.ensure(state)
+    session = hosted(state, "p#15", cwd=str(tmp_path))
+    with pytest.raises(sv.Refused, match="outside"):
+        sv.call(state, "write", session=session, text="!cat /etc/hosts\n")
+
+
+def test_bang_command_the_sandbox_denies_is_refused_in_a_hosted_session(state, tmp_path):
+    sv.ensure(state)
+    session = hosted(state, "p#16", cwd=str(tmp_path))
+    with pytest.raises(sv.Refused, match="sandbox"):
+        sv.call(state, "write", session=session, text="!cat ~/.claude/settings.json\n")
+
+
+def test_bang_command_inside_the_working_directory_runs(state, tmp_path):
+    sv.ensure(state)
+    session = hosted(state, "p#17", cwd=str(tmp_path))
+    sv.call(state, "write", session=session, text="!echo done-$((6*7))\n")
+    wait_for_text(state, session, "done-42")
+
+
+def test_transcript_is_written_redacted(state):
+    sv.ensure(state)
+    session = hosted(state, "p#21")
+    sv.call(state, "write", session=session, text=TRANSCRIPT_KEY)
+    wait_for_text(state, session, MARK)
+    sv.call(state, "stop", session=session)
+    text = wait_for_file(state / "transcripts" / f"{session}.txt", MARK)
+    assert "sk-ant-api03" not in text
+
+
+def test_scrollback_read_is_redacted_on_replay(state):
+    sv.ensure(state)
+    session = hosted(state, "p#22")
+    sv.call(state, "write", session=session, text=TRANSCRIPT_KEY)
+    live = wait_for_text(state, session, MARK)
+    replay = sv.call(state, "read", session=session, offset=0)["data"]
+    assert "sk-ant-api03" not in live
+    assert "sk-ant-api03" not in replay
+    assert MARK in replay
+
+
+def test_scrollback_is_dropped_when_the_session_ends(state):
+    sv.ensure(state)
+    session = hosted(state, "p#23")
+    sv.call(state, "write", session=session, text="hello\n")
+    wait_for_text(state, session, "echo:hello")
+    sv.call(state, "stop", session=session)
+    deadline = time.time() + 10
+    while time.time() < deadline and '"event": "end"' not in (state / "sessions.jsonl").read_text():
+        time.sleep(0.05)
+    assert sv.call(state, "read", session=session, offset=0)["data"] == ""
 
 
 def test_hub_module_holds_no_pty_or_fork_on_the_job_path():

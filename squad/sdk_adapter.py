@@ -14,12 +14,15 @@ is read and dropped.
 import json
 import os
 import re
+import subprocess
+import sys
 import time
+import uuid
 
 import anyio
 
 from squad import modelreg, prices, sandbox, workcmd
-from squad.adapter import AdapterError, CallResult, MessageOverCeiling
+from squad.adapter import AdapterError, CallRequest, CallResult, MessageOverCeiling
 from squad.stall import StallWatch
 
 STOP_REASONS = {"error_max_budget_usd": "spend_cap"}
@@ -391,3 +394,36 @@ class SdkAdapter:
                           getattr(result, "num_turns", None), reason,
                           subagents, getattr(result, "session_id", None) or req.session_id,
                           ended=ended_of(result, subtype), usage=usage, spend_source=source if spend is not None else None)
+
+
+HOSTED_MODEL = "claude-sonnet-5-5"
+HOSTED_TOOLS = ["Read", "Glob", "Grep", "Edit", "MultiEdit", "Write", "Bash"]
+
+
+def host():
+    """A hosted session: each stdin line is a prompt run through this adapter's options, or a `!` shell command run in the
+    working directory. The supervisor writes the lines and reads what this prints."""
+    adapter = SdkAdapter()
+    for line in sys.stdin:
+        text = line.rstrip("\n")
+        if text.startswith("!"):
+            done = subprocess.run(text[1:], shell=True, capture_output=True, text=True)
+            print(done.stdout + done.stderr, end="", flush=True)
+        elif text:
+            anyio.run(_answer, adapter, text)
+
+
+async def _answer(adapter, prompt):
+    query, _ = adapter._sdk()
+    req = CallRequest(node="hosted", entry=0, item=None, prompt=prompt, model=HOSTED_MODEL, effort=None,
+                      tools=HOSTED_TOOLS, max_stalls=3, max_spend=5.0, workspace=os.getcwd(), deadline=600.0,
+                      session_id=uuid.uuid4().hex)
+    async for message in query(prompt=prompt, options=adapter.options(req)):
+        if type(message).__name__ == "AssistantMessage":
+            for block in getattr(message, "content", None) or []:
+                if type(block).__name__ == "TextBlock":
+                    print(block.text, flush=True)
+
+
+if __name__ == "__main__" and sys.argv[1:] == ["host"]:
+    host()

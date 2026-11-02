@@ -219,3 +219,14 @@ def test_a_child_can_read_the_fast_gate_result_without_naming_the_state_dir(tmp_
     log = Path(last.rsplit("(log ", 1)[1].removesuffix(")"))
     assert log.is_file() and not log.resolve().is_relative_to(state.resolve()), last
     assert sandbox.deny_reason("Bash", {"command": f"cat {log}"}, str(repo), env=env, home=str(home)) is None
+
+
+@pytest.mark.parametrize("command", ["cat /etc/hosts", "cat ../outside.txt", "tail -1 >/etc/x", "ls ~/.claude/skills"])
+def test_bang_command_outside_the_working_directory_is_refused(tmp_path, command):
+    reason = sandbox.bang_reason(command, str(tmp_path))
+    assert reason and reason.startswith("sandbox:"), reason
+
+
+@pytest.mark.parametrize("command", ["cat ./notes.txt", "echo hi >/dev/null", "ls -la", "echo done-42"])
+def test_bang_command_inside_the_working_directory_is_allowed(tmp_path, command):
+    assert sandbox.bang_reason(command, str(tmp_path)) is None

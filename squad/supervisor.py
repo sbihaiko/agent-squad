@@ -19,6 +19,9 @@ import time
 import uuid
 from pathlib import Path
 
+from squad import sandbox
+from squad.redact import redact, safe_cut
+
 ROOT = Path(__file__).resolve().parents[1]
 SECRET = "supervisor.secret"
 PIDFILE = "supervisor.pid"
@@ -27,8 +30,11 @@ CLIENTS = "clients.json"
 GRANTS = "grants.json"
 AUDIT = "supervisor-audit.log"
 LOG = "supervisor.log"
+TRANSCRIPTS = "transcripts"
 WINDOW = 1 << 16
+HOSTED_ARGV = [sys.executable, "-m", "squad.sdk_adapter", "host"]
 JOB = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}(?:#[1-9][0-9]{0,8})?")
+SESSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 
 
 class Refused(Exception):
@@ -105,14 +111,26 @@ class Gate:
         return None
 
 
+def _write_atomic(path: Path, data: bytes) -> None:
+    tmp = path.with_name(path.name + ".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as handle:
+        handle.write(data)
+    os.replace(tmp, path)
+
+
 class Session:
-    def __init__(self, sid: str, job: str, proc: subprocess.Popen, master: int):
+    def __init__(self, sid: str, job: str, proc: subprocess.Popen, master: int, cwd: str, transcript: Path):
         self.sid = sid
         self.job = job
         self.proc = proc
         self.master = master
+        self.cwd = cwd
         self.buf = bytearray()
         self.base = 0
+        self.sent = 0
+        self.transcript = transcript
+        self.record = bytearray()
         self.buf_lock = threading.Lock()
         self.write_lock = threading.Lock()
         self.closed = False
@@ -133,13 +151,22 @@ class Session:
                 if over > 0:
                     del self.buf[:over]
                     self.base += over
+                self._transcribe(final=False)
+
+    def _transcribe(self, final: bool) -> None:
+        start = max(self.sent, self.base)
+        raw = bytes(self.buf[start - self.base:])
+        end = safe_cut(raw, final)
+        if end:
+            self.record += redact(raw[:end].decode("utf-8", "replace")).encode()
+            self.sent = start + end
 
     def read(self, offset: int) -> dict:
         with self.buf_lock:
-            end = self.base + len(self.buf)
             start = max(offset, self.base)
-            data = bytes(self.buf[start - self.base:])
-            return {"data": data.decode("utf-8", "replace"), "offset": end, "gap": offset < self.base}
+            raw = bytes(self.buf[start - self.base:])
+            end = safe_cut(raw)
+            return {"data": redact(raw[:end].decode("utf-8", "replace")), "offset": start + end, "gap": offset < self.base}
 
 
 class Supervisor:
@@ -203,9 +230,11 @@ class Supervisor:
             self.attached.add((sid, transport))
             self._ledger({"event": "attach", "session": sid, "transport": transport})
 
-    def start(self, job: str, argv: list[str], cwd: str | None, session: str | None = None) -> str:
+    def start(self, job: str, cwd: str | None, session: str | None = None) -> str:
         if not valid_job(job):
             raise Refused(f"job name {job!r} is not valid")
+        if session is not None and SESSION.fullmatch(session) is None:
+            raise Refused(f"session name {session!r} is not valid")
         with self.lock:
             holder = self._live_holder(job)
             if holder is not None and not self._granted(holder["session"], session):
@@ -213,18 +242,20 @@ class Supervisor:
             sid = session or uuid.uuid4().hex
             if sid in self._records():
                 raise Refused(f"session {sid} is already recorded")
+            (self.state / TRANSCRIPTS).mkdir(mode=0o700, exist_ok=True)
+            env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(ROOT), os.environ.get("PYTHONPATH", "")])}
             master, slave = pty.openpty()
             try:
                 terminal = os.ttyname(slave)
-                proc = subprocess.Popen(argv, stdin=slave, stdout=slave, stderr=slave, cwd=cwd,
+                proc = subprocess.Popen(HOSTED_ARGV, stdin=slave, stdout=slave, stderr=slave, cwd=cwd, env=env,
                                         start_new_session=True, close_fds=True)
             finally:
                 os.close(slave)
-            running = Session(sid, job, proc, master)
+            running = Session(sid, job, proc, master, cwd or os.getcwd(), self.state / TRANSCRIPTS / f"{sid}.txt")
             self.sessions[sid] = running
             self._ledger({"event": "start", "session": sid, "job": job, "pid": proc.pid,
-                          "lstart": lstart(proc.pid), "terminal": terminal, "cwd": cwd or os.getcwd(),
-                          "argv": argv})
+                          "lstart": lstart(proc.pid), "terminal": terminal, "cwd": running.cwd,
+                          "argv": HOSTED_ARGV})
             running.pump.start()
         threading.Thread(target=self._reap, args=(running,), daemon=True).start()
         return sid
@@ -235,6 +266,11 @@ class Supervisor:
         with session.write_lock:
             session.closed = True
             os.close(session.master)
+        with session.buf_lock:
+            session._transcribe(final=True)
+            _write_atomic(session.transcript, bytes(session.record))
+            session.record.clear()
+            session.buf.clear()
         reason = "stopped" if session.stop_requested else "exited"
         with self.lock:
             self._ledger({"event": "end", "session": session.sid, "reason": reason,
@@ -248,6 +284,11 @@ class Supervisor:
 
     def write(self, sid: str, text: str) -> None:
         session = self._session(sid)
+        for line in text.splitlines():
+            if line.startswith("!"):
+                reason = sandbox.bang_reason(line[1:], session.cwd)
+                if reason is not None:
+                    raise Refused(reason)
         with session.write_lock:
             if session.closed:
                 raise Refused("session ended")
@@ -286,8 +327,7 @@ class Supervisor:
         if op == "ping":
             return {}
         if op == "start":
-            return {"session": self.start(request["job"], request["argv"], request.get("cwd"),
-                                          request.get("session"))}
+            return {"session": self.start(request["job"], request.get("cwd"), request.get("session"))}
         if op in ("read", "write", "stop"):
             self._attach(request["session"], transport)
         if op == "read":
