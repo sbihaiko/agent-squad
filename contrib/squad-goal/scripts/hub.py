@@ -6170,6 +6170,12 @@ def send_rule(a):
 IMAGE_SUFFIX = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp"}
 IMAGE_MAX = 12 * 1024 * 1024
 
+def screenshot_written(sid, cid):
+    """Where the overlay's screenshot is written, and the line that tells the session its path (#1118). One function owns both,
+    so the image route serves exactly the file the session is told about."""
+    path = STATE / "sessions" / sid / "images" / f"{cid}.png"
+    return path, f"[Image: source: {path}]"
+
 def image_payload(query):
     """One screenshot a transcript names, as (bytes, content type), or None. A transcript line names its image by the path
     the session wrote it under, so the route serves exactly that file and nothing a caller names freely: the path must sit in
@@ -6562,8 +6568,8 @@ class H(BaseHTTPRequestHandler):
         session_write(self, a, raw, {"sid", "card_id", "answers"}, card_answer_payload)
 
     def send_screenshot(self, a):
-        """The overlay's screenshot (#903): a PNG of the page beneath it, written under the hub state folder, then the session
-        is told its path. The send's rule admits it, and the wire carries no image: the message is the path."""
+        """The overlay's screenshot (#903): a PNG of the page beneath it, written where the image route serves it, then the
+        session is told its path as an image marker. The send's rule admits it, and the wire carries no image: the message is the path."""
         length = self.headers.get("Content-Length") or "0"
         n = int(length) if length.isdigit() else 0
         raw = self.rfile.read(min(n, SCREENSHOT_MAX + 1))
@@ -6580,10 +6586,11 @@ class H(BaseHTTPRequestHandler):
         q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
         sid, cid = (q.get("sid") or [""])[0], (q.get("client_id") or [""])[0]
         if not sessions.SID.fullmatch(sid) or not session_send.CLIENT_ID.fullmatch(cid): return self.answer(400, {"err": "bad request"})
-        folder = STATE / "screenshots"; folder.mkdir(parents=True, exist_ok=True)
-        path = folder / f"{cid}.png"; part = folder / f"{cid}.png.part"
+        path, line = screenshot_written(sid, cid)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        part = path.with_name(path.name + ".part")
         part.write_bytes(raw); os.replace(part, path)
-        self.answer(200, session_send.send(PROFILE_NAME, sid, f"Screenshot: {path}", cid, profiles_of=profiles_of_cwd, root=STATE))
+        self.answer(200, session_send.send(PROFILE_NAME, sid, line, cid, profiles_of=profiles_of_cwd, root=STATE))
 
     def terminal_read(self, a):
         """A hosted session's scrollback, through the supervisor for this caller (ADR-0152 rule 9): the read grant on the tailnet."""
