@@ -3972,20 +3972,66 @@ def promote(issue):
         tickets, err = spec_tickets(issue, item)
         if err: return {"err": err}
     cards = [item, *tickets]
+    err = write_cards(cards)
+    if err: return {"err": err}
+    return {"ok": True, "issue": issue, "to": PROMOTE_TO, "moved": [c["n"] for c in cards]}
+
+def write_cards(cards):
+    """The one write of a card set: the seam moves every card in one call, in the order given, so a spec's card lands before
+    its tickets (ADR-0142). Returns the refusal, or None when the cards moved and the cache follows them."""
     try: r = promote_write([c["n"] for c in cards], add=any(not c.get("i") for c in cards))   # no item id: the row came from the open-issue read (#815)
     except subprocess.TimeoutExpired as e:
         # board.py may have moved some of the cards before the writer ran out of time. The cache is not written over a move
         # it cannot prove; the board-dirty flag asks the next pass to read the columns as they now stand (#838).
         try: (STATE / "board-dirty").touch()
         except OSError: pass
-        return {"err": f"the writer did not answer in {int(e.timeout)} s: the move may be partial, and the board is read again"}
-    except Exception as e: return {"err": str(e)[:200] or "the writer did not answer"}
+        return f"the writer did not answer in {int(e.timeout)} s: the move may be partial, and the board is read again"
+    except Exception as e: return str(e)[:200] or "the writer did not answer"
     if r.returncode:
         lines = (r.stderr or r.stdout or f"exit {r.returncode}").strip().splitlines()
-        return {"err": (next((l for l in lines if l.startswith("#")), lines[0] if lines else "") or "the writer refused")[:300]}
+        return (next((l for l in lines if l.startswith("#")), lines[0] if lines else "") or "the writer refused")[:300]
     for c in cards: c["st"] = PROMOTE_TO   # the cache follows the write, so the next refresh shows the move without a GitHub read after it
     save_board()
-    return {"ok": True, "issue": issue, "to": PROMOTE_TO, "moved": [c["n"] for c in cards]}
+    return None
+
+BATCH_AUDIT = STATE / "board-batch.jsonl"   # one line per batch write the owner asked for: the count, the cards and who asked (#1098)
+def promote_batch_plan():
+    """The cards the batch moves, in write order, or the refusal. Every card the owner's move would start goes in, a spec
+    first, then the open Backlog tickets of every spec, then the rest, so a spec's card never lands after its tickets'.
+    A card reached twice moves once."""
+    moves = read_moves() if overlay_on() else {}
+    window = pending_window()
+    starts = [i for i in board_cache.get("items") or [] if promotable({**i, "st": drawn_column(i, moves, window)["st"]})]
+    specs = [i for i in starts if _columns_module.SPEC_LABEL in (i.get("l") or [])]
+    ordered, seen = [], set()
+    def add(card):
+        if card["n"] not in seen:
+            seen.add(card["n"])
+            ordered.append(card)
+    for spec in specs: add(spec)
+    for spec in specs:
+        tickets, err = spec_tickets(spec["n"], spec)
+        if err: return None, err
+        for ticket in tickets: add(ticket)
+    for card in starts: add(card)
+    return ordered, None
+def promote_batch(body, who):
+    """The owner's batch move (#1098). With no `confirm`, the hub answers the count it would move and the numbers, and nothing
+    moves. With `confirm` equal to that count, one write moves every card of the plan, and the hub records the count and who
+    asked. A count that changed since the owner read it is refused, so the owner confirms the number that moves."""
+    cards, err = promote_batch_plan()
+    if err: return {"err": err}
+    issues = [c["n"] for c in cards]
+    if "confirm" not in body: return {"count": len(issues), "issues": issues}
+    if not cards: return {"err": "no card is in Backlog"}
+    if type(body["confirm"]) is not int or body["confirm"] != len(cards): return {"err": f"the batch is {len(cards)} cards now, not {body['confirm']}: read it again"}
+    err = write_cards(cards)
+    record = {"at": dt.datetime.now().astimezone().isoformat(timespec="seconds"), "who": who, "action": "promote-batch",
+              "count": len(cards), "issues": issues, "ok": err is None}
+    if err: record["err"] = err
+    with BATCH_AUDIT.open("a") as f: f.write(json.dumps(record) + "\n")
+    if err: return {"err": err}
+    return {"ok": True, "count": len(cards), "moved": issues}
 
 _issue_cache = {}
 def gh_json(path, timeout=30):
@@ -4253,7 +4299,7 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #bbody .it .lbs{display:block;margin-top:4px}#bbody .it .lbs span{display:inline-block;background:var(--lb,#2a303b);border:1px solid transparent;border-radius:9px;padding:0 6px;margin:0 3px 2px 0;font-size:var(--fs-min);color:#c9d1d9}#bbody .it .lbs span.on{border-color:var(--warn);color:var(--fg)}
 #bbody .it .id:hover{color:var(--acc)}#bbody .it .tt{order:2;flex:1 1 100%;font-size:var(--fs-body);color:var(--fg)}#bbody .it>*{order:3}#bbody .it>.id{order:1}#bbody .it>.tt{order:2}#bbody .it>.lchip,#bbody .it>.bugc,#bbody .it>.rpo,#bbody .it>.pbg,#bbody .it>.cir,#bbody .it>.fz,#bbody .it>.pnd,#bbody .it>.pst{order:0;margin:0}#bbody .it>.dt{float:none}#bbody .it>.gstrip,#bbody .it>.blk,#bbody .it>.clos,#bbody .it>.prr,#bbody .it>.perr,#bbody .it>.ft{flex:1 1 100%;margin-top:2px}#bbody .it .hld{flex:1 1 100%;font-size:var(--fs-min);color:var(--mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#bbody .it .hld::before{content:"\25CF ";color:var(--s5)}#bbody .cell .it .lbs{display:none}
 #bbody .lchip{border-radius:10px;padding:0 8px;font-size:var(--fs-min);font-weight:600;border:1px solid #3a4252;line-height:20px;white-space:nowrap;color:var(--mute)}#bbody .lchip[data-k=spec]{color:var(--lc,var(--mute));border-color:var(--lc,#3a4252)}
-#bbody .it .pmp{display:inline-block;margin-top:4px;font:inherit;font-size:var(--fs-min);padding:0 7px;border-radius:9px;cursor:pointer;color:var(--acc);background:#12161c;border:1px solid var(--line)}#bbody .it .pmp:hover{border-color:var(--acc)}#bbody .it .pmp:disabled{opacity:.5;cursor:default}   /* the owner's move, on a Backlog card only (#560) */
+#bbody .it .pmp{display:inline-block;margin-top:4px;font:inherit;font-size:var(--fs-min);padding:0 7px;border-radius:9px;cursor:pointer;color:var(--acc);background:#12161c;border:1px solid var(--line)}#bbody .it .pmp:hover{border-color:var(--acc)}#bbody .it .pmp:disabled{opacity:.5;cursor:default}#bbody .bmv{display:inline-block;margin-left:8px;min-height:32px;padding:0 10px;font:inherit;font-size:var(--fs-min);border-radius:9px;cursor:pointer;color:var(--acc);background:#12161c;border:1px solid var(--line)}#bbody .bmv:disabled{opacity:.5;cursor:default}   /* the owner's move, on a Backlog card only (#560) */
 #bbody .it .prr{display:block;margin-top:2px;font-size:var(--fs-min);color:var(--mute);max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #bbody .it .blk{display:block;margin-top:4px;font-size:var(--fs-min);color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}#bbody .it .blk a{color:var(--acc);text-decoration:none}
 #bbody .prs .it .cir{display:inline-block;margin-left:6px;font-size:var(--fs-min);letter-spacing:.04em;text-transform:uppercase;color:var(--cc);border:1px solid color-mix(in srgb,var(--cc) 45%,transparent);border-radius:999px;padding:0 5px;white-space:nowrap}   /* the pull request's own CI rollup (#440) */
@@ -5238,9 +5284,9 @@ const kept=new Set(bo.kept||[]),
  autoHidden=g=>!hid.has(g.name)&&!kept.has(g.name)&&!fits[g.name].length&&!g.tracking,   // the columns the strip's lines stand for, and the only ones: a column the user hid is a chip, one the user kept is drawn, and the lane is always drawn -- empty, it says 0 (#440)
  vis=all.filter(g=>!g.end&&(!bottom||(!hid.has(g.name)&&!autoHidden(g)))),autos=bottom?all.filter(g=>!g.end&&autoHidden(g)):[];   // a closed status is never a column, so it has no eye and no line to show it (#969)
 const badge=g=>`<span class=n>${f||fw.length||fs.length||fk.length?fits[g.name].length+"/":""}${g.n}</span>`;   // the number the header shows, and the number the strip's line repeats
-const one=g=>{const it=fits[g.name],shown=it.slice(0,lim[g.name]||25),dot=`<i style="background:${colOf(g.name,CN)}"></i>`,cnt=badge(g),isOpen=g.name===COLNAME.pr_open?bo.prOpen!==false:bo.open===g.name;
-if(bottom)return `<div class="col${isPR(g.name)?" prs lane":""}" style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><div class=ch><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}</span></div><div class=sc data-g="${esc(g.name)}">${perr(g)}${cards(g,it,shown)}</div></div>`;
-return `<div class="acc${isPR(g.name)?" prs lane":""} ${hid.has(g.name)?"hidcol":""} ${isOpen?"open":""}" style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><div class=ah><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}</span></div><div class=sc data-g="${esc(g.name)}">${perr(g)}${cards(g,it,shown)}</div><div class=pad></div></div>`};
+const one=g=>{const bmv=g.name===COLNAME.unscheduled?`<button class=bmv type=button title="move every Backlog card to Todo: the hub names how many first">Move all to Todo</button>`:"",it=fits[g.name],shown=it.slice(0,lim[g.name]||25),dot=`<i style="background:${colOf(g.name,CN)}"></i>`,cnt=badge(g),isOpen=g.name===COLNAME.pr_open?bo.prOpen!==false:bo.open===g.name;
+if(bottom)return `<div class="col${isPR(g.name)?" prs lane":""}" style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><div class=ch><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}${bmv}</span></div><div class=sc data-g="${esc(g.name)}">${perr(g)}${cards(g,it,shown)}</div></div>`;
+return `<div class="acc${isPR(g.name)?" prs lane":""} ${hid.has(g.name)?"hidcol":""} ${isOpen?"open":""}" style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><div class=ah><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}${bmv}</span></div><div class=sc data-g="${esc(g.name)}">${perr(g)}${cards(g,it,shown)}</div><div class=pad></div></div>`};
 const fmtN=n=>n>=1000?n.toLocaleString("en-US"):""+n;   // "688" is one token; only 1000 and over needs separators
 // One tile of the hidden: strip: the name as a caption over the count, the count's colour deciding what the count
 // means. data-col names the column, so the colour is a CSS rule per category rather than an inline value; the one
@@ -5374,6 +5420,15 @@ document.addEventListener("click",async e=>{const b=e.target.closest("#bbody .pm
 try{const r=await fetch("/api/promote",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({issue:n})}),d=await r.json();
  if(d.err){card.insertAdjacentHTML("beforeend",`<div class=perr>${esc(d.err)}</div>`);b.disabled=false}
  else{b.textContent="moved to Todo ✓";pollBoard()}}catch(x){card.insertAdjacentHTML("beforeend","<div class=perr>the hub did not answer</div>");b.disabled=false}});
+// The batch move (#1098): the hub names how many cards it would move, the owner confirms that count, and one write moves them.
+const batchPost=body=>fetch("/api/promote/batch",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).then(r=>r.json());
+document.addEventListener("click",async e=>{const b=e.target.closest("#bbody .bmv");if(!b)return;e.preventDefault();e.stopPropagation();
+ const say=m=>b.insertAdjacentHTML("afterend",`<div class=perr>${esc(m)}</div>`);
+ try{const plan=await batchPost({});if(plan.err)return say(plan.err);
+  if(!plan.count)return say("no card is in Backlog");
+  if(!confirm(`Move ${plan.count} card${plan.count===1?"":"s"} from Backlog to Todo?`))return;
+  const d=await batchPost({confirm:plan.count});if(d.err)return say(d.err);
+  pollBoard()}catch(x){say("the hub did not answer")}});
 document.addEventListener("click",e=>{for(const d of["#fw","#fs"])if($(d)&&!e.target.closest(d))$(d).open=false});
 pollBoard();setInterval(pollBoard,5000);
 function squadChartTick(){if(!window.squadStreamLive&&FLOWK&&!$("#flowov").hidden)flowOpen(FLOWK)}   // with no live stream the open chart is re-read on the board tick
@@ -6611,13 +6666,14 @@ class H(BaseHTTPRequestHandler):
         if self.path.split("?", 1)[0] == "/api/sessions/card/answer": return self.answer_card(a)
         if self.path.split("?", 1)[0] == "/api/sessions/screenshot": return self.send_screenshot(a)
         if self.path.split("?", 1)[0] == "/api/loop": return self.loop_post(a)
-        ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote", "/api/limits", "/api/slack") and (a.tailnet or own_origin(self)) and "json" in (self.headers.get("Content-Type") or "")
+        ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote", "/api/promote/batch", "/api/limits", "/api/slack") and (a.tailnet or own_origin(self)) and "json" in (self.headers.get("Content-Type") or "")
         try:
             raw = self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 1 << 20))   # read before any answer: a refusal that leaves the body unread resets the connection; the models panel posts back ~20 KB of read-only fields (#684)
             if not ok: out = {"err": "forbidden"}
             else:
                 body = json.loads(raw or b"{}")
                 if self.path == "/api/promote": out = promote(body.get("issue")) if isinstance(body, dict) else {"err": "bad request"}   # the owner's move (#560)
+                elif self.path == "/api/promote/batch": out = promote_batch(body, a.login or "owner") if isinstance(body, dict) else {"err": "bad request"}   # the owner's batch move (#1098)
                 elif self.path == "/api/limits": out = limits_set(body)   # Settings > Spend & limits (#926)
                 elif self.path == "/api/slack": out = slack_set(body)   # Settings > Communication (#924)
                 else: out = (plans_set if self.path == "/api/plans" else models_set)(body)
