@@ -175,7 +175,10 @@ def test_the_defaults_checker_and_config_check_read_one_catalog():
     assert defaults.check(cfg) == ["limits.max_stalls"]
 
 
-def test_this_repository_overlay_raises_only_the_run_slot_cap_to_six():
+def test_this_repository_overlay_caps_runs_and_lowers_the_gate_slots():
     overlay = yaml.safe_load((Path(__file__).resolve().parents[1] / "docs" / "squad" / "defaults.yaml").read_text())
-    assert overlay["caps"] == {"runs": 6}
+    # The run ceiling stays at six. The gate slots go below the plugin's twelve so one gate runs at a time: at twelve, three
+    # gates held the machine between them, each kept its slots while it waited for the lock, and the queue outlived the
+    # takeover bound (#1191). A project may only lower a machine-wide cap, and this one lowers it.
+    assert overlay["caps"] == {"runs": 6, "gates": 6}
     assert overlay["limits"]["max_budget_usd"] == 30
