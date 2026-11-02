@@ -6,7 +6,7 @@ usage: issue_ledger.py read  <key> [state|count|last_fail|held|wave]  the record
        issue_ledger.py count <key> [own|loop]                the count of one ledger
        issue_ledger.py fail  <key> <run> <evo> <why> [own|loop]  one failed dispatch: prints "<count> <fresh> <stopped>"
        issue_ledger.py stop  <key> <why> [own|loop]          the ledger stops: prints "- <run>: <why>" for each run counted
-       issue_ledger.py wave  <key> <run> <state> <cause> [keep]  one wave event: prints recorded|duplicate|terminal|kept|floor
+       issue_ledger.py wave  <key> <run> <state> <cause> [keep]  one wave event: prints recorded|duplicate|observed|opened|closed|stale|terminal|kept|floor
        issue_ledger.py rearm <key>                           the facts go, and the SQUAD-NOT-STARTABLE comment with them
        issue_ledger.py replay <key>                          the state rebuilt from the ledger's events, against the stored state and the old counters
        issue_ledger.py migrate <key>                         the old auto/ counters of a missing ledger become its file, once
@@ -39,7 +39,7 @@ ledger's appended line did.
 One transition function (ADR-0149): `transition` takes every event -- fail, stop, wave, rearm -- under the issue's lock, and
 no other code changes the file. An event's identity is its kind and its run. A wave event (wave.sh: `entered`, `held`,
 `refused`, `stuck`, `delivered`) sets the run's wave fact, `{state, cause, ts}`: the same state and cause again is a
-duplicate and writes nothing; a `delivered` run is terminal, so a late event of that run changes nothing; `keep` leaves a
+duplicate and writes nothing (a held or stuck one raises its episode's count, see below); a `delivered` run is terminal, so a late event of that run changes nothing; `keep` leaves a
 fact the run already has; any other event of the run replaces its fact, in the order the writers send them. An `entered`
 event also sets the fact's `entered` field, and every later event of the run keeps it: a child that left its wave after the
 entry still entered it. That field is the entry's one record; `entered` lists it for the wave readers (janitor, startability).
@@ -47,6 +47,12 @@ A `landtry` event is a failed landing of the run's wave, on a cause a repeat doe
 adds one to its `tries`, the same cause too; any other event of the run keeps the tries (wave.sh stops at SG_WAVE_LAND_TRIES). An `owe` event
 sets the fact `owed`, with the wave and the sha that landed, for an issue the landed wave could not close; `owed` lists them
 for the run, and the `delivered` event of the close ends it.
+
+A hold is one episode (#1167): a `held` or `stuck` wave event of a run opens its episode, `{run, cause, start, count}`, and a
+repeat of the same cause counts one more observation of it -- the file changes in the count and nothing else. A different
+cause or any other state of the run closes the episode, and `rearm` closes it and keeps it, so a later hold opens a new one.
+A keyed writer passes the episode's `start`; a key that is not the open episode's is `stale` and writes nothing. A writer that
+may not wait for the lock (`wait` false) is `locked`. `read <key> episodes` gives each episode with its age.
 
 A `landed` fact is the landing pass's own record (`wave.sh` for a wave, `branchland.sh` for a pushed work branch): the issue's
 work is in the base. It is keyed by the run that landed it (`kind` run) or by the branch a branchland pass landed (`kind`
@@ -102,6 +108,7 @@ import time
 LEDGERS = ("own", "loop")
 OLD = {"own": "requeues", "loop": "loopqueues"}   # the old marker names wave.sh wrote in auto/ before #673
 WAVE = ("entered", "held", "refused", "stuck", "owed", "delivered")   # the wave events wave.sh sends (ADR-0149)
+EPISODE = ("held", "stuck")   # the wave states a hold episode covers (#1167)
 BOARD_FIELD = "Status"   # the project field a card's column is written to (ADR-0164)
 STREAK = 3   # consecutive CHANGES verdicts that end the issue needs-human (ADR-0151 rule 1)
 VERDICTS = ("changes", "approve")   # the review verdicts the streak counts (ADR-0151)
@@ -209,11 +216,16 @@ def save(key, rec):   # temp file, fsync, rename, then the directory's fsync: a 
 
 
 @contextlib.contextmanager
-def locked(key):   # one lock per issue: a writer holds it from its read to its rename; the kernel frees it when a writer dies
+def locked(key, wait=True):   # one lock per issue: a writer holds it from its read to its rename; the kernel frees it when a writer dies
     p = path(key); p.parent.mkdir(parents=True, exist_ok=True)
     with open(str(p) + ".lock", "a") as f:
-        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-        try: yield
+        if wait: fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        else:
+            try: fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                yield False
+                return
+        try: yield True
         finally: fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 
@@ -227,11 +239,17 @@ def last_fail(rec):   # the reason of the newest own failure, the one a redispat
     return runs[-1]["why"] if runs else ""
 
 
+def episodes(rec, now=None):   # the hold episodes with their age: an open one ages to now, a closed one to its close (#1167)
+    now = time.time() if now is None else now
+    return [{"run": e["run"], "cause": e["cause"], "start": e["start"], "count": e["count"], "open": "closed" not in e,
+             "age": round(e.get("closed", now) - e["start"], 3)} for e in rec.get("episodes") or []]
+
+
 def read(key):   # a corrupt file, or a missing one beside the old counters, reads held with its cause: the reader holds the issue
     try: rec = load(key)
-    except Held as e: return {**empty(key), "wave": {}, "landed": {}, "requeued": {}, "state": "held", "held": str(e), "attempts": 0, "last_fail": ""}
+    except Held as e: return {**empty(key), "wave": {}, "landed": {}, "requeued": {}, "episodes": [], "state": "held", "held": str(e), "attempts": 0, "last_fail": ""}
     return {**rec, "wave": rec.get("wave", {}), "landed": rec.get("landed", {}), "requeued": rec.get("requeued", {}),
-            "board": rec.get("board", {}), "review": review_fact(rec), "state": state(rec), "held": "",
+            "board": rec.get("board", {}), "episodes": episodes(rec), "review": review_fact(rec), "state": state(rec), "held": "",
             "attempts": rec["own"]["count"], "last_fail": last_fail(rec)}
 
 
@@ -265,7 +283,23 @@ def _stop(rec, ev):   # -> (the runs counted, one comment line each, changed)
     return [f"- {x['run'] or '(no run named)'}: {x['why']}" for x in L["runs"]], True
 
 
-def _wave(rec, ev):   # -> (recorded|duplicate|terminal|kept|floor, changed): one wave event of one run (ADR-0149)
+def _episode(rec, run, st, cause, start, now):   # -> (observed|opened|closed|stale|None, changed): the run's hold episode (#1167)
+    E = rec.setdefault("episodes", [])
+    cur = next((e for e in E if e["run"] == run and "closed" not in e), None)
+    if st not in EPISODE:
+        if cur is None: return None, False
+        cur["closed"] = now
+        return "closed", True
+    if start is not None and (cur is None or start != cur["start"]): return "stale", False   # a writer holds a key that is not the open episode's
+    if cur is not None and cur["cause"] == cause:
+        cur["count"] += 1
+        return "observed", True
+    if cur is not None: cur["closed"] = now
+    E.append({"run": run, "cause": cause, "start": now, "count": 1})
+    return "opened", True
+
+
+def _wave(rec, ev):   # -> (recorded|duplicate|observed|opened|closed|stale|terminal|kept|floor, changed): one wave event of one run (ADR-0149)
     run, st, cause = ev["run"], ev["state"], first_line(ev["cause"])
     if st not in WAVE: raise ValueError(f"not a wave event: {st!r} (one of {', '.join(WAVE)})")
     if not run: raise ValueError("a wave event names its run")
@@ -273,8 +307,11 @@ def _wave(rec, ev):   # -> (recorded|duplicate|terminal|kept|floor, changed): on
     W = rec.setdefault("wave", {}); old = W.get(run)
     if old and old.get("state") == "delivered": return "terminal", False
     if old and ev.get("keep"): return "kept", False
+    ep, ep_changed = _episode(rec, run, st, cause, ev.get("start"), time.time())
+    if ep == "stale": return "stale", False
     tries = ev.get("try") and (old or {}).get("tries", 0) + 1
-    if not tries and old and old.get("state") == st and old.get("cause") == cause: return "duplicate", False
+    if not tries and old and old.get("state") == st and old.get("cause") == cause:
+        return (ep, True) if ep_changed else ("duplicate", False)   # a repeated hold is one observation of its episode, not a new fact
     W[run] = {"state": st, "cause": cause, "ts": time.time(), **(ev.get("extra") or {})}
     if st == "entered": W[run]["entered"] = cause
     elif old and old.get("entered"): W[run]["entered"] = old["entered"]   # the entry stays a fact of the run
@@ -350,8 +387,11 @@ def _rearm(rec, ev):   # the loop facts go, and the floor (#692) keeps every run
     runs |= {x["run"] for x in ((old.get("review") or {}).get("verdicts") or []) if isinstance(x, dict) and x.get("run")}
     runs |= {k for k, f in (old.get("landed") or {}).items() if isinstance(f, dict) and f.get("kind") == "run"}
     runs |= {(old.get("board") or {}).get("run", "")} - {""}
+    now = time.time()
+    closed = [{**e, "closed": e.get("closed", now)} for e in old.get("episodes") or []]   # an episode the rearm ends keeps its count and age (#1167)
     rec.clear(); rec.update(empty(ev["key"]))
-    rec["rearmed"] = {"ts": time.time(), "runs": sorted(runs)}   # a corrupt file has no runs to read: the time is the floor
+    rec["rearmed"] = {"ts": now, "runs": sorted(runs)}   # a corrupt file has no runs to read: the time is the floor
+    rec["episodes"] = closed
     return None, True
 
 
@@ -387,7 +427,8 @@ RULES = {"fail": _fail, "stop": _stop, "wave": _wave, "landed": _landed, "requeu
 
 
 def transition(key, ev):   # the one transition function (ADR-0149): every event of every writer, under the issue's lock
-    with locked(key):
+    with locked(key, ev.get("wait", True)) as got:
+        if not got: return "locked"   # a writer that may not wait is refused by name, never queued behind the lock holder
         try: rec = load(key); ev = {**ev, "old": rec if ev["op"] in ("rearm", "migrate") else None}
         except Corrupt:
             if ev["op"] != "rearm": raise   # a writer never overwrites a corrupt file: the issue stays held, the file stays for the owner
@@ -408,8 +449,8 @@ def stop(key, why, led="own"):
     return transition(key, {"op": "stop", "why": why, "led": led})
 
 
-def wave(key, run, st, cause, keep=False, extra=None):
-    return transition(key, {"op": "wave", "run": run, "state": st, "cause": cause, "keep": keep, "extra": extra})
+def wave(key, run, st, cause, keep=False, extra=None, start=None, wait=True):   # start: the open episode's key a keyed writer holds
+    return transition(key, {"op": "wave", "run": run, "state": st, "cause": cause, "keep": keep, "extra": extra, "start": start, "wait": wait})
 
 
 def migrate(key):

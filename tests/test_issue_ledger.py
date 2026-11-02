@@ -4,6 +4,7 @@ issue_ledger.py is the only writer of $SG_STATE/state/<owner>__<repo>__<n>.json.
 the repository (ADR-0138), a missing file of a new issue reads as todo with 0 attempts, and a missing file beside the old
 requeues-N files holds the issue until `migrate` carries them in (ADR-0149 rule 4).
 """
+import fcntl
 import importlib.util
 import json
 import os
@@ -371,3 +372,82 @@ def test_a_state_dir_with_no_profile_is_refused_by_name(monkeypatch):
     mod = import_ledger("il_unpinned")
     with pytest.raises(RuntimeError, match="SG_STATE"):
         mod.state_dir()
+
+
+class _Clock:
+    def __init__(self, now):
+        self.now = now
+
+    def time(self):
+        return self.now
+
+
+def _in_process(tmp_path, monkeypatch, now=1000.0):
+    monkeypatch.setenv("SG_STATE", str(tmp_path))
+    monkeypatch.setenv("SG_REPO", "a/b")
+    mod = import_ledger("il_episode")
+    clock = _Clock(now)
+    monkeypatch.setattr(mod, "time", clock)
+    return mod, clock
+
+
+@pytest.mark.parametrize("state", ["held", "stuck"])
+def test_forty_polls_of_one_stuck_child_are_one_episode_counted_forty(tmp_path, monkeypatch, state):
+    """A hold is one ledger episode, not a polling event (#1167): each poll of the same cause is an observation of it."""
+    mod, _ = _in_process(tmp_path, monkeypatch)
+    outs = [mod.wave("a/b#7", "r1", state, "gate lock held by pid 9") for _ in range(40)]
+    assert outs[0] == "recorded" and set(outs[1:]) == {"observed"}
+    assert [(e["run"], e["count"], e["cause"], e["open"]) for e in mod.read("a/b#7")["episodes"]] == [
+        ("r1", 40, "gate lock held by pid 9", True)]
+
+
+def test_a_repeated_observation_writes_only_its_count(tmp_path, monkeypatch):
+    mod, _ = _in_process(tmp_path, monkeypatch)
+    mod.wave("a/b#7", "r1", "held", "gate lock")
+    before = json.loads(mod.path("a/b#7").read_text())
+    assert mod.wave("a/b#7", "r1", "held", "gate lock") == "observed"
+    after = json.loads(mod.path("a/b#7").read_text())
+    before["episodes"][0]["count"] = 2
+    assert after == before, "the file changes in the count and nothing else"
+
+
+def test_a_rearm_closes_the_episode_and_a_later_hold_opens_a_new_one(tmp_path, monkeypatch):
+    mod, clock = _in_process(tmp_path, monkeypatch, now=1000.0)
+    for _ in range(3):
+        mod.wave("a/b#7", "r1", "held", "gate lock")
+    clock.now = 1100.0
+    mod.rearm("a/b#7")
+    clock.now = 1300.0
+    for _ in range(2):
+        mod.wave("a/b#7", "r9", "held", "gate lock")
+    clock.now = 5000.0
+    first, second = mod.read("a/b#7")["episodes"]
+    assert (first["run"], first["count"], first["start"], first["open"], first["age"]) == ("r1", 3, 1000.0, False, 100.0)
+    assert (second["run"], second["count"], second["start"], second["open"], second["age"]) == ("r9", 2, 1300.0, True, 3700.0)
+
+
+def test_a_writer_with_a_stale_episode_key_is_refused_and_writes_nothing(tmp_path, monkeypatch):
+    mod, _ = _in_process(tmp_path, monkeypatch, now=1000.0)
+    assert mod.wave("a/b#7", "r1", "held", "gate lock") == "recorded"
+    assert mod.wave("a/b#7", "r1", "held", "gate lock", start=1000.0) == "observed", "the live key folds in"
+    before = mod.path("a/b#7").read_bytes()
+    assert mod.wave("a/b#7", "r1", "held", "gate lock", start=555.0) == "stale"
+    assert mod.path("a/b#7").read_bytes() == before
+
+
+def test_a_writer_that_cannot_take_the_issue_lock_is_refused_not_waited_for(tmp_path, monkeypatch):
+    mod, _ = _in_process(tmp_path, monkeypatch)
+    mod.wave("a/b#7", "r1", "held", "gate lock")
+    before = mod.path("a/b#7").read_bytes()
+    with open(str(mod.path("a/b#7")) + ".lock", "a") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        assert mod.wave("a/b#7", "r1", "held", "gate lock", wait=False) == "locked"
+    assert mod.path("a/b#7").read_bytes() == before
+
+
+def test_the_reader_sees_the_count_the_cause_and_the_age_from_the_ledger_alone(tmp_path):
+    for _ in range(3):
+        run(tmp_path, "wave", "a/b#7", "r1", "held", "gate lock")
+    eps = json.loads(run(tmp_path, "read", "a/b#7", "episodes").stdout)
+    assert len(eps) == 1 and eps[0]["count"] == 3 and eps[0]["cause"] == "gate lock"
+    assert 0 <= eps[0]["age"] < 60
