@@ -246,12 +246,16 @@ def test_two_hand_gates_started_at_once_run_one_after_the_other_in_short(tmp_pat
     release = tmp_path / "release"
     cmd = ["bash", str(d / "gate.sh"), "sh", "-c", f"echo start >> {log}; while [ ! -e {release} ]; do sleep 0.02; done; echo end >> {log}"]
     env = _env(tmp_path / "st") | POLL | {"SERIAL_WAIT_SECONDS": "20", "SERIAL_HOLD_SECONDS": "20"}
-    first = subprocess.Popen(cmd, env=env, stderr=subprocess.PIPE, text=True)
+    # The gate takes its slots against the project file above its working directory, and this repository lowers caps.gates
+    # to one gate's worth (docs/squad/defaults.yaml): run from the repository root, the second gate could never take its
+    # slots, so the case stopped proving the lock. The throwaway tree carries no project file, so the budget is the
+    # plugin's, and the two gates prove the lock as intended.
+    first = subprocess.Popen(cmd, env=env, cwd=str(d), stderr=subprocess.PIPE, text=True)
     try:
         deadline = time.time() + 20
         while not log.exists() and time.time() < deadline:
             time.sleep(0.02)
-        second = subprocess.Popen(cmd, env=env, stderr=subprocess.PIPE, text=True)
+        second = subprocess.Popen(cmd, env=env, cwd=str(d), stderr=subprocess.PIPE, text=True)
         seen = []
         for line in second.stderr:   # EOF ends the read: the second gate gives up after SERIAL_WAIT_SECONDS
             seen.append(line)
@@ -269,9 +273,9 @@ def test_two_hand_gates_started_at_once_run_one_after_the_other(tmp_path):
     d = _tree(tmp_path)
     log = tmp_path / "log"
     cmd = ["bash", str(d / "gate.sh"), "sh", "-c", f"echo start >> {log}; sleep 2; echo end >> {log}"]
-    first = subprocess.Popen(cmd, env=_env(tmp_path / "st"), stderr=subprocess.PIPE, text=True)
+    first = subprocess.Popen(cmd, env=_env(tmp_path / "st"), cwd=str(d), stderr=subprocess.PIPE, text=True)
     time.sleep(0.5)
-    second = subprocess.Popen(cmd, env=_env(tmp_path / "st"), stderr=subprocess.PIPE, text=True)
+    second = subprocess.Popen(cmd, env=_env(tmp_path / "st"), cwd=str(d), stderr=subprocess.PIPE, text=True)
     err = first.communicate(timeout=60)[1] + second.communicate(timeout=60)[1]
     assert log.read_text().split() == ["start", "end", "start", "end"], "two gates overlapped, or one was dropped"
     assert len(WAIT_LINE.findall(err)) == 1, err
