@@ -137,7 +137,10 @@ def test_page_draws_the_review_share_after_the_held_share(hub):
     css = (SCRIPTS / "board-lanes.css").read_text()
     rule = css[css.index("#bbody .lh .bar i.rv{"):]
     rule = rule[:rule.index("}")]
-    assert "background:var(--acc)" in rule, rule
+    assert "background:var(--ok)" in rule, rule
+    held = css[css.index("#bbody .lh .bar i.dn{"):]
+    held = held[:held.index("}")]
+    assert "opacity:.45" in held and "opacity:.25" in rule, (held, rule)
 
 
 def test_page_draws_the_doing_share_after_the_closed_share(hub):
