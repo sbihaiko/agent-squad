@@ -4,7 +4,8 @@
 # ADR-0136 §1-§4, the guard the ADR names. A defect is fixed test-first and the red is measured at the parent:
 # this check takes every test the range adds or changes, puts that test's own version into a scratch checkout of
 # the commit BEFORE the one that carried it, and runs it there. The test must FAIL at that parent -- a test that
-# passes there is not this fix's red, and a range that carries no test at all is the same refusal (§2/§4).
+# passes there is not this fix's red, and a range that carries no test at all is the same refusal (§2/§4) -- unless
+# every path it changes is a document or another non-code file, which is no defect fix and prints "TDD-RED N/A".
 #
 # The range's files are the diff from the merge-base of <base> and <head>, so a base that moved on adds none (#640).
 # A test the merge-base already holds that the range changes and that still passes at its parent (a fixture list, say)
@@ -74,8 +75,24 @@ red_recorded() {
 }
 
 fails=0; reds=0; companions=""
+# no_code: every path the range changes is a document or another non-code file. ADR-0136 fixes DEFECTS test-first; a
+# document is not a defect, so it carries no red to measure. The denylist is the code surfaces this repository holds: an
+# extension it does not name counts as code, so an unknown file never buys the exemption by accident.
+no_code() {
+  local f changed=0
+  for f in $($G diff --name-only "$mb" "$head" 2>/dev/null); do
+    changed=1
+    case "$f" in
+      *.py|*.sh|*.bash|*.zsh|*.js|*.mjs|*.cjs|*.ts|*.tsx|*.jsx|*.html|*.css|*.scss|*.sass|*.less|\
+      *.json|*.yaml|*.yml|*.toml|*.ini|*.cfg|*.sql|*.go|*.rs|*.rb|*.java|*.kt|*.swift|*.php|*.pl|*.lua) return 1;;
+    esac
+  done
+  [ "$changed" = 1 ]
+}
 if [ -z "$tests" ]; then
-  if red_recorded; then
+  if no_code; then
+    echo "TDD-RED N/A: $base..$head changes no code and no test ($($G diff --name-only "$mb" "$head" 2>/dev/null | tr '\n' ' ')); a document is not a defect fix (ADR-0136)"
+  elif red_recorded; then
     echo "TDD-RED OK: $base..$head carries no test, and the red run is recorded in the deliverable (ADR-0136 §3)"
   else
     echo "TDD-RED REFUSED: $base..$head adds or changes no test and records no red run: a fix carries the test that fails at its parent (ADR-0136 §1/§2), and where that test is missing the red run is recorded in the deliverable (§3)"
