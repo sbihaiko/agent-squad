@@ -63,7 +63,10 @@ prove() {  # <tip>: refuse unless the proof for this tip is green, each refusal 
   if [ "$proof" = local ]; then
     IFS=$'\t' read -r _ kind res sha < "$state/gate-status-full" 2>/dev/null
     if [ "$kind" = full ] && [ "$sha" = "$1" ]; then
-      [ "$res" = pass ] || refuse "$1" "not promoted: the local proof is a fail, not a pass"
+      # The gate's own word (spec 1163, #1174): `pass` promotes, and a line that says `unproven` is named as such, never read
+      # as a pass or misnamed a fail. The bound-ended proof is the one route an unfinished proof takes, with its marker.
+      [ "$res" = pass ] || { local w; case "${res:-}" in fail) w="a fail";; '') w=none;; *) w=$res;; esac
+        refuse "$1" "not promoted: the local proof is $w, not a pass"; }
       return
     fi
     if [ ! -s "$state/gate-status-delta" ]; then
@@ -73,7 +76,8 @@ prove() {  # <tip>: refuse unless the proof for this tip is green, each refusal 
     # A delta (ADR-0156) carries a full pass across a covered change; every check is repeated here, on the tree this pass reads.
     IFS=$'\t' read -r _ dk dres dP dT dh < "$state/gate-status-delta" 2>/dev/null
     [ "$dk" = delta ] || refuse "$1" "not promoted: $state/gate-status-delta is not a delta record"
-    [ "$dres" = pass ] || refuse "$1" "not promoted: the delta is a fail, not a pass"
+    [ "$dres" = pass ] || { local w; case "${dres:-}" in fail) w="a fail";; '') w=none;; *) w=$dres;; esac
+      refuse "$1" "not promoted: the delta is $w, not a pass"; }
     if [ "$dT" != "$1" ] && g merge-base --is-ancestor "$dT" "$1" 2>/dev/null; then refuse "$1" "not promoted: the record is stale because the tip moved from $dT to $1"; fi
     [ "$dT" = "$1" ] || refuse "$1" "not promoted: the delta proved $dT, not the dev tip $1"
     [ "$kind" = full ] && [ "$sha" = "$dP" ] && [ "$res" = pass ] || refuse "$1" "not promoted: its P $dP has no full pass"

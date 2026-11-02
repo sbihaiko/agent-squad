@@ -88,6 +88,19 @@ mark() { mkdir -p "$SG_STATE/auto" && printf '%s\n' "$2" > "$SG_STATE/auto/wave-
 # run_dir <run>: the run folder, its line in active-runs.txt, else $SG_CHECKOUT/runs/<run>.
 run_dir() { local rd; rd=$(/usr/bin/grep "/$1\$" "$SG_STATE/active-runs.txt" 2>/dev/null | tail -1); printf '%s\n' "${rd:-${SG_CHECKOUT:-.}/runs/$1}"; }
 
+# obligation_of <tree sha>: the newest proof obligation the gate wrote for that tree, its path, "" when it wrote none (spec 1163).
+# gate.sh is its one writer; the entry reads it to carry the job the unproven tree owes into the run's entry record.
+obligation_of() {
+  local f osh t best="" bt=-1
+  for f in "$SG_STATE"/obligations/*; do
+    [ -f "$f" ] || continue
+    osh=$(cut -f2 "$f" 2>/dev/null); [ "$osh" = "$1" ] || continue
+    if stat --version >/dev/null 2>&1; then t=$(stat -c %Y "$f" 2>/dev/null || echo 0); else t=$(stat -f %m "$f" 2>/dev/null || echo 0); fi
+    [ "$t" -gt "$bt" ] 2>/dev/null && { bt=$t; best=$f; }
+  done
+  [ -n "$best" ] && printf '%s\n' "$best"
+}
+
 # gate_failed <run>: 0 when the run's verdict failed on its final gate (#694), read as the dashboard reads it: the last verdict
 # after the last run_start or resume, `failed`, with a reason that starts `ac-verify:`. `ac-verify:no_ac_commands` ran no
 # command, so it is no failed gate (watch.sh reads it as landed). A run with no verdict yet, or no record, is not failed.
@@ -476,7 +489,10 @@ fail() {   # <issue> <run> <why> [own|loop]: the run ended with nothing delivere
 }
 
 enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on the wave tip, and the --ff-only entry.
+  # obl is the obligation of an unproven entry and gwhy/gnot the word and the checks the gate named: gates() sets them, and the
+  # entry carries them into the run's entry record. grc is the gate's exit code.
   local run=$1 iss=$2 w br sha files out SG_REQUEUE_RUN=$1; w=$(wave_of "$run")
+  local obl="" gwhy="" gnot="" grc=0
   { [ -n "$run" ] && [ -n "$iss" ]; } || { echo "WAVE-ERROR wave.sh enter <run> <issue>"; return 2; }
   br=$($G symbolic-ref --quiet --short HEAD) || { echo "WAVE-ERROR $PWD is on no branch (#$iss)"; return 2; }
   [ -n "${SG_WAVE_GATES:-}" ] || { echo "WAVE-ERROR no gates are set for this repository (SG_WAVE_GATES): a child never enters a wave ungated (#$iss)"; return 2; }
@@ -528,13 +544,31 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
   # there stops every dispatch, so a lock held by another gate holds the child out until a later pass, with no requeue.
   # The landing waits a bounded time instead (#955): a bounded wait in a detached pass never stops dispatch, because dispatch rides fastloop.
   gates() {
-    out=$(SERIAL_TRY=1 SG_GATE_KIND=fast bash "$here/gate.sh" bash -c "$SG_WAVE_GATES" 2>&1); grc=$?
+    # The gate's word decides (spec 1163, #1174, ADR-0164): pass admits the child, fail refuses it and requeues it, and unproven
+    # admits it with its obligation. The word is read from the caller's copy gate.sh writes inside the lock; the exit code alone
+    # never admits or refuses. A hold (the lock or its slots are taken, or a bounded wait ran out) is no outcome at all, so the
+    # child is held, never requeued: the machine, not the child, gave no answer.
+    local of oc rs ran notran
+    of=$(mktemp "${TMPDIR:-/tmp}/wave-outcome.XXXXXX" 2>/dev/null) || of=
+    [ -z "$of" ] || : > "$of"
+    out=$(GATE_OUTCOME_READ_FILE="$of" SERIAL_TRY=1 SG_GATE_KIND=fast bash "$here/gate.sh" bash -c "$SG_WAVE_GATES" 2>&1); grc=$?
+    oc= rs= ran= notran=
+    [ -z "$of" ] || IFS=$'\t' read -r oc rs ran notran < "$of" 2>/dev/null
+    [ -z "$of" ] || rm -f "$of"
+    obl=""; gwhy=""; gnot=""
     if [ $grc = 73 ] && h=$(held_by "$out"); then
       case "$h" in slots:*) hold "the gate slots (caps.gates) are full, held by ${h#slots:}; the child enters on a later pass";;
         *) hold "the gate lock is held by pid $h; the child enters on a later pass";; esac; return 1; fi
-    # Exit 4 is an inconclusive gate (#699): the machine gave no answer, so the child is held, never requeued.
-    [ $grc = 4 ] && { hold "the local gates were inconclusive: $(printf '%s' "$out" | /usr/bin/grep -v '^$' | tail -1); the child enters on a later pass"; return 1; }
-    [ $grc = 0 ] || { refuse "the local gates failed: $(printf '%s' "$out" | /usr/bin/grep -v '^$' | tail -1)"; return 1; }
+    [ $grc = 75 ] && waited_out "$out" && { hold "the local gates waited for the gate lock past their bound; the child enters on a later pass"; return 1; }
+    case "$oc" in
+      pass) return 0;;
+      unproven) obl=$(obligation_of "$($G rev-parse HEAD)"); gwhy=$rs; gnot=$notran; return 0;;
+      fail) refuse "the local gates failed: $(printf '%s' "$out" | /usr/bin/grep -v '^$' | tail -1)"; return 1;;
+    esac
+    # No word: a memo hit writes none and is always a pass (#955); fast-gate's 2 and 4 are its unproven codes (spec 1163).
+    [ $grc = 0 ] && return 0
+    case "$grc" in 2|4) obl=$(obligation_of "$($G rev-parse HEAD)"); gwhy=$rs; gnot=$notran; return 0;; esac
+    hold "the local gates reported no outcome (exit $grc); the child enters on a later pass"; return 1
   }
   rebase_on_tip || return $?
   gates || return 1
@@ -543,8 +577,17 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
     sha=$($G rev-parse HEAD)
     if $G push -q origin "HEAD:refs/heads/$w" 2>/dev/null; then
       board_write "Code Complete" "$iss"   # a refused write is named, never dropped (#593)
-      wave_fact "$run" "$iss" entered "entered $w at $sha"   # the durable record of the entry (#467, ADR-0149): the janitor's Code Complete reads it, never the run's own land
-      echo "WAVE $br $sha entered $w (#$iss)"; return 0
+      # The run's entry record is the ledger's entered fact (#467, ADR-0149): the janitor's Code Complete reads it, never the
+      # run's own land. An unproven entry carries its obligation there, so the job that settles it is attached to the run that
+      # admitted the child (spec 1163, #1174). A pass carries none; gate.sh is the obligation's one writer.
+      local cause="entered $w at $sha"
+      if [ -n "$obl" ]; then
+        local oba och osc odl
+        IFS=$'\t' read -r _ _ oba och osc odl < "$obl" 2>/dev/null
+        cause="$cause; unproven: ${gwhy:--}; not run: ${gnot:--}; obligation $(basename "$obl") ($och at $osc, base $oba, deadline $odl)"
+      fi
+      wave_fact "$run" "$iss" entered "$cause"
+      echo "WAVE $br $sha entered $w (#$iss)$([ -n "$obl" ] && printf ', unproven with obligation %s' "$(basename "$obl")")"; return 0
     fi
     [ "$try" = 1 ] || break
     try=2; rebase_on_tip || return $?
@@ -591,27 +634,40 @@ child_gate() {
 # again against the tip, the last entrant first; the first child whose suite fails leaves the wave -- its commits are dropped
 # from the tip and its issue goes back to the queue -- and the check runs again, so the wave without it can land. Exit 0:
 # the tip's check is green (after any child left); 1: it stayed red, so the landing fails as before; 3: the gate lock stayed
-# held past its bounded wait; 4: the check was inconclusive (#699), so no child is blamed.
+# held past its bounded wait; 5: the check is unproven (spec 1163, #1174), so the wave lands with its obligation and no child is
+# blamed. The gate's word decides: pass and unproven admit, fail is the red path.
 wave_check() {
-  local S=$1 w=$2 rc found cx clog
+  local S=$1 w=$2 rc found cx clog oc of
   [ -n "$tipgate" ] || return 0
+  of=$(mktemp "${TMPDIR:-/tmp}/wave-tip-outcome.XXXXXX" 2>/dev/null) || of=
   while :; do
     clog="$SG_STATE/wave-check-$(printf '%s' "$w" | tr / _).log"   # the check's own output, kept: a red that names no cause has to name its log (#447)
+    [ -z "$of" ] || : > "$of"
     # The check waits for the gate lock a bounded time (SERIAL_WAIT_SECONDS, 900 s): a try that gave up on its first look lost the
     # cycle, and the wave waited a whole cycle for each retry (#946 lost three cycles). The landing runs in its own detached pass
     # (watch.sh), so this wait holds no watch cycle, and dispatch rides fastloop, which never runs a landing (#955).
-    (cd "$S" && export SERIAL_WAIT_SECONDS=${SERIAL_WAIT_SECONDS:-900} && eval "$tipgate") >"$clog" 2>&1; rc=$?
-    [ $rc = 0 ] && { rm -f "$clog"; return 0; }
-    [ $rc = 73 ] && held_by "$(cat "$clog")" >/dev/null && { rm -f "$clog"; return 3; }   # 3: the gate lock is held, so the check did not run
-    [ $rc = 75 ] && waited_out "$(cat "$clog")" && { rm -f "$clog"; return 3; }   # the bounded wait ran out: the check did not run either
-    [ $rc = 4 ] && return 4   # 4: the check was inconclusive (#699): no child is blamed, and the wave does not land
+    # The check writes its word to $of: GATE_OUTCOME_READ_FILE is the copy gate.sh makes inside the lock, and GATE_OUTCOME_FILE
+    # is the file a raw tip check writes, as the entry's gate does.
+    (cd "$S" && export SERIAL_WAIT_SECONDS=${SERIAL_WAIT_SECONDS:-900} GATE_OUTCOME_FILE="$of" GATE_OUTCOME_READ_FILE="$of" && eval "$tipgate") >"$clog" 2>&1; rc=$?
+    oc=
+    [ -z "$of" ] || IFS=$'\t' read -r oc _ _ _ < "$of" 2>/dev/null
+    [ $rc = 73 ] && held_by "$(cat "$clog")" >/dev/null && { rm -f "$clog" "$of"; return 3; }   # 3: the gate lock is held, so the check did not run
+    [ $rc = 75 ] && waited_out "$(cat "$clog")" && { rm -f "$clog" "$of"; return 3; }   # the bounded wait ran out: the check did not run either
+    case "$oc" in
+      pass) rm -f "$clog" "$of"; return 0;;
+      unproven) rm -f "$of"; return 5;;   # the log stays, as it does for a red
+      fail) : ;;                          # the red path below
+      *) [ $rc = 0 ] && { rm -f "$clog" "$of"; return 0; }
+         [ $rc = 4 ] && { rm -f "$of"; return 5; }   # a raw check that names no word keeps the old inconclusive code (#699)
+         : ;;                                          # any other exit is the red path below
+    esac
     found=""; while read -r sha; do
       [ -n "$sha" ] || continue
       child_gate "$S" "$sha^" "$sha" "$(child_of "$S" "$sha")" || { found=$sha; break; }
     done < <($G -C "$S" log --format=%H "origin/$base..HEAD" 2>/dev/null)   # newest first: the last entrant is tried first
-    [ -n "$found" ] || { echo "WAVE CHECK RED $w: the wave tip's check is red and no child's own suite names the cause (the check's own output is $clog)"; return 1; }
+    [ -n "$found" ] || { rm -f "$of"; echo "WAVE CHECK RED $w: the wave tip's check is red and no child's own suite names the cause (the check's own output is $clog)"; return 1; }
     cx=$(child_of "$S" "$found")
-    $G -C "$S" rebase --onto "$found^" "$found" >/dev/null 2>&1 || { $G -C "$S" rebase --abort >/dev/null 2>&1
+    $G -C "$S" rebase --onto "$found^" "$found" >/dev/null 2>&1 || { $G -C "$S" rebase --abort >/dev/null 2>&1; rm -f "$of"
       echo "WAVE CHECK RED $w: #$cx broke the wave tip and cannot leave it (a rebase conflict): the wave does not land"; return 1; }
     wave_fact "$run" "$cx" refused "the check at the wave tip was red: #$cx broke it, so the child left the wave"   # land's run (#682)
     requeue "$cx" "the check at the wave tip was red: #$cx broke it, so the child left the wave"
@@ -830,7 +886,7 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
   # entered, so a base that moved under the wave is rebased onto now, before the one push. A push the remote refuses -- the
   # base moved once more between this rebase and the push -- repeats from the fetch: the moved base is fetched, the wave is
   # rebased on it, and the push goes again (ADR-0145 rule 2). One repeat, as the entry does.
-  local out sha try=1 issues n anyref=0 files
+  local out sha try=1 issues n anyref=0 files rc ob
   while :; do
     out=$(sc rebase "origin/$base" 2>&1) || { files=$(sc diff --name-only --diff-filter=U | sort -u | tr '\n' ' ')
       sc rebase --abort >/dev/null 2>&1
@@ -905,13 +961,14 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
       if [ -n "$delivered" ]; then deliver "$run" "$w" "$sha" "$delivered" || return 1; else rm -f "$SG_STATE/auto/wave-$run"; fi
       return 0; }
     # The wave tip's check (#377, ADR-0145 rule 11): a red tip names the child that broke it, and that child leaves the wave
-    # before it lands. A tip that stays red with no child named is a landing that failed, as any other cause is.
+    # before it lands. A tip that stays red with no child named is a landing that failed, as any other cause is. An unproven tip
+    # holds nothing delivery needs (spec 1163, #1174, ADR-0164): the wave lands with its obligation, and the nightly settles it.
     # The base's own check (#786): a red completed check on $base holds the landing until its head is green.
     red=$(sg_base_red "$base") && { echo "WAVE WAIT $w: $red"; rm -rf "$S"; return 1; }
     wave_check "$S" "$w"; rc=$?
     [ $rc = 3 ] && { echo "WAVE WAIT $w: the gate lock or the gate slots are held by another gate, so the tip's check did not run; the wave lands on a later pass"; rm -rf "$S"; return 1; }
-    [ $rc = 4 ] && { stuck "$run" "$w" "$S" "the check at the tip of $w is inconclusive, so the wave does not land: $(/usr/bin/grep -v '^$' "$SG_STATE/wave-check-$(printf '%s' "$w" | tr / _).log" 2>/dev/null | tail -1)"; rm -rf "$S"; return 1; }
-    [ $rc = 0 ] || { stuck "$run" "$w" "$S" "the check at the tip of $w is red and no child's own suite names the cause"; rm -rf "$S"; return 1; }
+    [ $rc = 5 ] && { ob=$(obligation_of "$(sc rev-parse HEAD)"); echo "WAVE $w: the tip's check is unproven: the wave lands with its obligation${ob:+ $(basename "$ob")}${ob:- (none: the tip check wrote no obligation record)}"; }
+    { [ $rc = 0 ] || [ $rc = 5 ]; } || { stuck "$run" "$w" "$S" "the check at the tip of $w is red and no child's own suite names the cause"; rm -rf "$S"; return 1; }
     sha=$(sc rev-parse HEAD)
     # The issues the wave delivers, read here, after the rebase, from what is ahead of the base: a commit the base already holds
     # is dropped by the rebase, and its issue was not delivered by this landing. A repeat from a refused push reads them again.

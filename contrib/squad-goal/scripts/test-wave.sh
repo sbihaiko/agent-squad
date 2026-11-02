@@ -67,6 +67,8 @@ en() { local n=$1; rev "$n"; (cd "$T/c$n" && SG_WAVE_GATES=${GATES-true} bash "$
 # wfact <issue> <run>: the wave fact the issue's ledger holds for the run, "<state> <cause>" (ADR-0149: wave events write it).
 wfact() { SG_STATE=$T/st python3 "$T/s/issue_ledger.py" read "x/y#$1" wave 2>/dev/null | python3 -c 'import json,sys; r=json.load(sys.stdin).get(sys.argv[1]) or {}; print(r.get("state",""), r.get("cause",""))' "$2" 2>/dev/null; }
 tries() { SG_STATE=$T/st python3 "$T/s/issue_ledger.py" read "x/y#$1" wave 2>/dev/null | python3 -c 'import json,sys; print((json.load(sys.stdin).get(sys.argv[1]) or {}).get("tries",""))' "$2" 2>/dev/null; }
+# obl_for <tree sha>: the obligation record the gate wrote for that tree, "" when there is none (spec 1163).
+obl_for() { local f; for f in "$T/st/obligations"/*; do [ -f "$f" ] || continue; [ "$(cut -f2 "$f")" = "$1" ] && { printf '%s\n' "$f"; return 0; }; done; return 1; }
 entered() { $O merge-base --is-ancestor "$($G -C "$T/c$1" rev-parse HEAD)" $W 2>/dev/null && echo yes || echo no; }
 # The wave's landing pass runs beside the run, never in the owner's checkout (it works in a throwaway clone).
 land() { (cd "$T/co" && bash "$T/s/wave.sh" land "$@"); }
@@ -763,17 +765,25 @@ for rn in 42 43; do n=$((410 + rn - 41))
 done
 
 
-# AA (#699): an inconclusive gate (exit 4) holds. At the entry the child is held, never requeued: the machine, not the child,
-# gave no answer. At the tip no child is blamed and the wave does not land; the hold is the loop's, so no landing try is counted.
-start2 run-50 >/dev/null; child 500 g500 "origin/wave/run-50"; REV_BASE=wave/run-50 rev 500; : > "$T/board.log"
-r=$(cd "$T/c500" && SG_WAVE_GATES="echo 'fast-gate: saturation: the battery crashed twice; inconclusive'; exit 4" bash "$T/s/wave.sh" enter run-50 500 2>&1); rc=$?
-[ $rc != 0 ] && ! $O cat-file -e wave/run-50:g500 2>/dev/null && case "$r" in *"WAVE HOLD #500"*saturation*) true;; *) false;; esac && ok "AA: an inconclusive entry gate holds the child" || ko "AA: entry exit $rc: '$r'"
-case "$r" in *REQUEUE*) ko "AA: an inconclusive entry gate requeued the child: '$r'";; *) /usr/bin/grep -q 'Todo 500' "$T/board.log" && ko "AA: the card went back to Todo" || ok "AA: an inconclusive entry gate requeues nothing";; esac
-start2 run-51 >/dev/null; child 510 g510 "origin/wave/run-51"; en2 run-51 510 >/dev/null; : > "$T/board.log"
-r=$(SG_WAVE_TIP_GATES="echo 'fast-gate: unknown: no class; inconclusive'; exit 4" SG_WAVE_CHILD_GATES='exit 1' land2 run-51 2>&1); rc=$?
-[ $rc != 0 ] && ! $O cat-file -e dev:g510 2>/dev/null && case "$r" in *inconclusive*) true;; *) false;; esac && ok "AA: an inconclusive tip check holds the landing and says so" || ko "AA: tip exit $rc: '$r'"
-case "$r" in *"WAVE CHECK RED"*|*REQUEUE*) ko "AA: an inconclusive tip check blamed a child: '$r'";; *) ok "AA: an inconclusive tip check blames no child";; esac
-[ -z "$(tries 510 run-51)" ] && ok "AA: an inconclusive tip check counts no landing try" || ko "AA: tries $(tries 510 run-51)"
+# AA (spec 1163, #1174): an unproven outcome admits with its obligation. At the entry the child enters and the run's entry
+# record carries the obligation; at the tip the wave lands on the same word and no child is blamed. A measured red still
+# refuses (case C) -- only a word the gate wrote can admit.
+start2 run-50 >/dev/null; child 500 g500 "origin/wave/run-50"; REV_BASE=wave/run-50 rev 500; : > "$T/board.log"; rm -rf "$T/st/obligations"
+r=$(cd "$T/c500" && SG_WAVE_GATES='printf "unproven\tsaturation: the battery crashed twice\tunknown\truff\n" > "$GATE_OUTCOME_FILE"; exit 4' bash "$T/s/wave.sh" enter run-50 500 2>&1); rc=$?
+[ $rc = 0 ] && $O cat-file -e wave/run-50:g500 2>/dev/null && ok "AA: an unproven entry gate admits the child" || ko "AA: entry exit $rc: '$r'"
+case "$(wfact 500 run-50)" in "entered "*unproven*obligation*) ok "AA: the entry fact carries the obligation in the run's record";; *) ko "AA: entry fact '$(wfact 500 run-50)'";; esac
+obf=$(obl_for "$($G -C "$T/c500" rev-parse HEAD)"); [ -n "$obf" ] && [ "$(cut -f4 "$obf")" = ruff ] && ok "AA: the obligation record names the check that did not run" || ko "AA: obligation '$(cat "$T/st/obligations"/* 2>/dev/null)'"
+/usr/bin/grep -qx 'o 3 Code Complete 500' "$T/board.log" && ok "AA: an unproven entry moves the card to Code Complete" || ko "AA: card: $(cat "$T/board.log" 2>/dev/null)"
+# AC: a pass entry carries no obligation: the run's entry record names none, and no obligation record names its tree.
+start2 run-52 >/dev/null; child 520 g520 "origin/wave/run-52"; REV_BASE=wave/run-52 rev 520; rm -rf "$T/st/obligations"
+r=$(cd "$T/c520" && SG_WAVE_GATES=true bash "$T/s/wave.sh" enter run-52 520 2>&1); rc=$?
+case "$(wfact 520 run-52)" in *obligation*) ko "AC: a pass entry's fact carries an obligation: '$(wfact 520 run-52)'";; *) ok "AC: a pass entry's fact carries no obligation";; esac
+[ $rc = 0 ] && [ -z "$(obl_for "$($G -C "$T/c520" rev-parse HEAD)")" ] && ok "AC: a pass entry writes no obligation record" || ko "AC: pass obligation '$(cat "$T/st/obligations"/* 2>/dev/null)'"
+start2 run-51 >/dev/null; child 510 g510 "origin/wave/run-51"; en2 run-51 510 >/dev/null; : > "$T/board.log"; rm -rf "$T/st/obligations"
+r=$(SG_WAVE_TIP_GATES='printf "unproven\tsaturation: the battery crashed twice\tunknown\truff\n" > "$GATE_OUTCOME_FILE"; exit 4' SG_WAVE_CHILD_GATES='exit 1' land2 run-51 2>&1); rc=$?
+[ $rc = 0 ] && $O cat-file -e dev:g510 2>/dev/null && case "$r" in *unproven*) true;; *) false;; esac && ok "AA: an unproven tip check lands the wave and says so" || ko "AA: tip exit $rc: '$r'"
+case "$r" in *"WAVE CHECK RED"*|*REQUEUE*) ko "AA: an unproven tip check blamed a child: '$r'";; *) ok "AA: an unproven tip check blames no child";; esac
+[ -z "$(tries 510 run-51)" ] && ok "AA: an unproven tip check counts no landing try" || ko "AA: tries $(tries 510 run-51)"
 
 # The ledger replaced the auto/excluded-<run>-<n> marker (ADR-0149 rule 6): no case leaves one.
 [ -z "$(/bin/ls "$T/st/auto" | /usr/bin/grep '^excluded-')" ] && ok "no excluded- marker is written" || ko "excluded markers: $(/bin/ls "$T/st/auto" | /usr/bin/grep '^excluded-' | tr '\n' ' ')"

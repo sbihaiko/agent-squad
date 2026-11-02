@@ -46,6 +46,9 @@
 # is finish minus start, and start is read inside the lock, after the wait: it is the gate's run time, never its queue time. A gate
 # that sets SG_GATE_STATUS=self writes no history line, as it writes no status line and no obligation. The file only grows: the throughput report
 # reads it, and nothing rewrites it.
+# A caller that names GATE_OUTCOME_READ_FILE gets the same outcome line copied there inside the lock, so it decides on the word
+# the gate wrote, never on the exit code alone (spec 1163, #1174). The variable goes before the command runs, so a gate inside a
+# gate never overwrites the caller's copy.
 here="$(cd "$(dirname "$0")" && pwd)"; st=${SG_STATE:-/tmp/sg-state}
 write_status() {  # <path> <line>
   printf '%s\n' "$2" > "$1.$$" && mv -f "$1.$$" "$1"
@@ -118,7 +121,9 @@ case "${1:-}" in
     trap 'sg_caps release gates "gate-$$"' EXIT
     bash "$here/gate.sh" --run "$@"; exit $?;;
   --run)    # inside the lock: run the command, then write the line. A command the holder stops at its deadline (TERM) is a fail.
-    shift; export GATE_SELECT_FILE GATE_SCOPE_FILE GATE_OUTCOME_FILE GATE_BASE_FILE
+    shift
+    outread=${GATE_OUTCOME_READ_FILE:-}; unset GATE_OUTCOME_READ_FILE   # the caller's copy: the command never sees it
+    export GATE_SELECT_FILE GATE_SCOPE_FILE GATE_OUTCOME_FILE GATE_BASE_FILE
     GATE_SELECT_FILE=$(mktemp "${TMPDIR:-/tmp}/gate-select.XXXXXX" 2>/dev/null) || GATE_SELECT_FILE=
     GATE_SCOPE_FILE=$(mktemp "${TMPDIR:-/tmp}/gate-scope.XXXXXX" 2>/dev/null) || GATE_SCOPE_FILE=
     GATE_OUTCOME_FILE=$(mktemp "${TMPDIR:-/tmp}/gate-outcome.XXXXXX" 2>/dev/null) || GATE_OUTCOME_FILE=
@@ -130,6 +135,9 @@ case "${1:-}" in
         oc= rs= ran= notran=
         [ -z "$GATE_OUTCOME_FILE" ] || IFS=$'\t' read -r oc rs ran notran < "$GATE_OUTCOME_FILE" 2>/dev/null
         [ -n "$oc" ] || { oc=$2; rs=$3; ran=-; notran=-; }
+        # The caller's copy of the word this gate wrote, written inside the lock so no other gate can answer for it (#1174).
+        [ -z "$outread" ] || { printf '%s\t%s\t%s\t%s\n' "$oc" "$rs" "$ran" "$notran" > "$outread.$$" 2>/dev/null \
+          && mv -f "$outread.$$" "$outread" 2>/dev/null; }
         status "${SG_GATE_KIND:-gate}" "$1" "$sha" "$sel" "$scope"
         gate_history "${SG_GATE_KIND:-gate}" "$1" "$sha" "$start" "$sel" "$scope" "$oc" "$rs" "${ran:--}" "${notran:--}" "${SQUAD_GATE_WORKERS:-0}"
         if [ "$oc" = unproven ]; then
