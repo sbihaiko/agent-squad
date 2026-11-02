@@ -232,8 +232,9 @@ out2=$(fg); pg2=$(lgof "$(last "$out2")")
 out=$(BASE_FAIL=1 RETRY_FAIL=1 fg); rc=$?
 rg=$(lgof "$(last "$out")")
 [ $rc = 1 ] && [ -n "$rg" ] && [ -f "$rg" ] && case "$rg" in "$SG_STATE"/*) ko "a red names a log inside the state directory: $rg";; *) ok "a red names a log the child may read, outside the state directory";; esac
-# (memo) A pass is kept for its (sha, base ref, base sha, battery): a second gate at that key prints one memo line and runs no battery.
-# A red gate leaves no memo, and a different base ref or battery is a different key. Each case has its own state directory.
+# (memo) A pass is kept for its (tree content, dirty state, base ref, base sha, merge-base, battery): a second gate at that key
+# prints one memo line and runs no battery. A red gate leaves no memo, and a different base ref or battery is a different key.
+# Each case has its own state directory.
 mg() {  # <state dir> <base> [battery command]: a gate on gui/quality, the memo on unless `memo=0` is set; the stub battery logs to ran.log
   local st=$1 base=$2 cmd=${3:-"bash $T/base.sh"}; rm -f "$T/ran.log"
   (cd "$R" && SG_STATE=$st SG_FAST_MEMO=${memo:-1} SG_FAST_BASE=$base SG_FAST_CMD="$cmd" SG_FAST_RETRY_CMD=false bash "$d/fast-gate.sh" 2>&1)
@@ -272,20 +273,27 @@ out=$(mg "$md" dev); rc=$?
 [ $rc = 0 ] && [ "$(battery_runs)" = 1 ] && ok "an uncommitted change is a different key: the battery runs over the tree, never for the memo of the commit" || ko "dirty tree reused a clean pass: rc $rc runs $(battery_runs): $out"
 $G -C "$R" checkout -q -- docs/x.md
 
-# (#1198) A child's gate is its last step, and the memo is the commit it handed in, never the content alone. A second gate on
-# the same commit reuses the pass; a commit after the pass runs a fresh battery; and the same content under a new commit sha,
-# as the wave entry's rebase makes, is a different key too, so a rebased child's pass never answers for the entry tree.
+# (#1205) The memo names the tree's content and the suite, never the commit sha. A second gate on the same commit reuses the
+# pass; a rebase that keeps every file rewrites the sha alone, so the entry gate reuses it too; and a commit that changes a
+# file is a new tree, so the gate runs a fresh battery.
 mc=$T/memo-commit; mkdir -p "$mc"
-out=$(mg "$mc" dev); rc=$?
+$G -C "$R" branch memo-base dev   # the base the gate reads, held while the tip moves under it
+out=$(mg "$mc" memo-base); rc=$?
 [ $rc = 0 ] && [ "$(battery_runs)" = 1 ] && ok "a committed tree passes and keeps its memo" || ko "committed memo: rc $rc runs $(battery_runs): $out"
-out=$(mg "$mc" dev); rc=$?
+out=$(mg "$mc" memo-base); rc=$?
 [ $rc = 0 ] && [ ! -e "$T/ran.log" ] && ok "a second gate on the same commit reuses the pass: no battery" || ko "same commit reran the battery: rc $rc: $out"
-$G -C "$R" commit -q --amend -m "same tree, a new commit"
-out=$(mg "$mc" dev); rc=$?
-[ $rc = 0 ] && [ "$(battery_runs)" = 1 ] && ok "the same tree under a new commit sha is a new key, as a rebase makes: the entry gate runs its battery" || ko "new sha reused the pass: rc $rc runs $(battery_runs): $out"
+# The wave tip moves under the child without changing one file (an empty commit), and the child rebases onto it: the sha is
+# new and the tree is the same, so the memo still answers.
+bt=$(git -C "$R" rev-parse "HEAD^{tree}"); bs=$(git -C "$R" rev-parse HEAD)
+$G -C "$R" checkout -q dev && $G -C "$R" commit -q --allow-empty -m "tip moved, tree unchanged" && $G -C "$R" checkout -q gui/quality
+$G -C "$R" rebase -q dev
+at=$(git -C "$R" rev-parse "HEAD^{tree}"); as=$(git -C "$R" rev-parse HEAD)
+[ "$bt" = "$at" ] && [ "$bs" != "$as" ] && ok "the fixture rebase keeps the tree and rewrites the commit sha" || ko "rebase fixture: tree '$bt' -> '$at', sha '$bs' -> '$as'"
+out=$(mg "$mc" memo-base); rc=$?
+[ $rc = 0 ] && [ ! -e "$T/ran.log" ] && ok "a rebase over the same tree reuses the pass: the memo names the tree, not the commit" || ko "a rebased tree missed its pass: rc $rc: $out"
 echo more >> "$R/docs/x.md"; $G -C "$R" add -A; $G -C "$R" commit -q -m "an edit after the gate"
-out=$(mg "$mc" dev); rc=$?
-[ $rc = 0 ] && [ "$(battery_runs)" = 1 ] && ok "a commit after the pass is a new key: the entry gate runs a fresh battery" || ko "post-gate commit reused a pass: rc $rc runs $(battery_runs): $out"
+out=$(mg "$mc" memo-base); rc=$?
+[ $rc = 0 ] && [ "$(battery_runs)" = 1 ] && ok "a commit that changes a file is a new tree: the entry gate runs a fresh battery" || ko "post-gate commit reused a pass: rc $rc runs $(battery_runs): $out"
 
 cur=$($G -C "$R" rev-parse --abbrev-ref HEAD)
 $G -C "$R" checkout -q dev && $G -C "$R" commit -q --allow-empty -m moved && $G -C "$R" checkout -q "$cur"
