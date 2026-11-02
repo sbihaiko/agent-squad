@@ -21,15 +21,20 @@ base=${SG_FAST_BASE:-origin/${SG_BASE:-dev}}
 py=${SG_GATE_PY:-$SG_CHECKOUT/.venv/bin/python}; [ -x "$py" ] || py=python3
 fastcmd=${SG_FAST_CMD:-"$(sg_base_battery "$py" "$base" fast)"}
 retrycmd=${SG_FAST_RETRY_CMD:-"$py -m pytest -p no:deepeval -p no:xdist -o heavy_cap_seconds=20"}
-# The memo key is the working tree (its tip and its uncommitted state), the base ref, the base's commit and the battery text.
-# The battery runs over the tree, so a pass won on a dirty tree must never answer for the commit. It is read before the machine
-# lock, so a memo hit waits for no gate, and again inside the lock, so two gates that miss together share one battery.
+# The memo key names what the suite reads: the tree's content (HEAD's tree object, never its commit), its uncommitted state,
+# the base ref and its commit, the merge-base the delta starts from, and the battery text. The battery runs over the tree, so
+# a pass won on a dirty tree must never answer for the commit. A rebase that keeps every file rewrites the commit sha and the
+# tree object stays, so the pass still answers (#1205); a commit that changes a file is a new tree and runs the battery. It is
+# read before the machine lock, so a memo hit waits for no gate, and again inside the lock, so two gates that miss together
+# share one battery.
 st=${SG_STATE:-/tmp/sg-state}
 memokey=
 if [ "${SG_FAST_MEMO:-1}" != 0 ]; then
-  bsha=$(git rev-parse --verify -q "$base^{commit}" 2>/dev/null); hsha=$(git rev-parse HEAD 2>/dev/null)
+  bsha=$(git rev-parse --verify -q "$base^{commit}" 2>/dev/null); hsha=$(git rev-parse --verify -q HEAD 2>/dev/null)
+  tsha=$(git rev-parse --verify -q "HEAD^{tree}" 2>/dev/null); mb=$(git merge-base HEAD "$base" 2>/dev/null)
   dirt=$( { git status --porcelain; git diff HEAD; git ls-files -o --exclude-standard -z | while IFS= read -r -d '' f; do printf '%s\n' "$f"; cat -- "$f" 2>/dev/null; done; } 2>/dev/null | cksum | cut -d' ' -f1)
-  [ -n "$bsha" ] && [ -n "$hsha" ] && memokey="$hsha ${dirt:-x} $base $bsha $(printf '%s\n%s' "$fastcmd" "$retrycmd" | cksum | cut -d' ' -f1)"
+  [ -n "$bsha" ] && [ -n "$hsha" ] && [ -n "$tsha" ] && [ -n "$mb" ] \
+    && memokey="$tsha ${dirt:-x} $base $bsha $mb $(printf '%s\n%s' "$fastcmd" "$retrycmd" | cksum | cut -d' ' -f1)"
 fi
 memo_file() {  # <key>: the file that holds a key; the name is a checksum, the key inside it is compared whole
   echo "$st/gate-memo/$(printf '%s' "$1" | cksum | cut -d' ' -f1)"
@@ -41,10 +46,10 @@ memo_store() {  # <key> <log>: a temp file and a mv, so no reader sees half of i
 if [ -n "$memokey" ] && [ -r "$(memo_file "$memokey")" ]; then
   IFS=$'\t' read -r mk ml < "$(memo_file "$memokey")"
   if [ "$mk" = "$memokey" ]; then
-    ms=${memokey%% *}
-    # The hit writes the pass line itself and no history line: a line with no selection and no run time would read as a whole battery.
-    SG_GATE_STATUS=self bash "$here/gate.sh" --status fast pass "$ms"
-    echo "fast-gate: pass ${ms:0:9} (log $ml) memo: the same sha, base and battery passed, so no battery ran"; exit 0
+    # The hit writes the pass line itself and no history line: a line with no selection and no run time would read as a whole
+    # battery. The line names the current commit, not the tree object: the pass answers for the tip the gate stands on.
+    SG_GATE_STATUS=self bash "$here/gate.sh" --status fast pass "$hsha"
+    echo "fast-gate: pass ${hsha:0:9} (log $ml) memo: the same tree, base and battery passed, so no battery ran"; exit 0
   fi
 fi
 case ":${SG_SERIAL_HELD:-}:" in *":gate:"*) ;; *) SG_GATE_KIND=fast exec bash "$here/gate.sh" bash "$0" "$@";; esac
