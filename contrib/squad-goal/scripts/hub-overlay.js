@@ -76,7 +76,7 @@ SQ.draft = ctx => {
 };
 
 // The live activity line (#1082): busy or waiting shows a spinner, the verb, the time and the output tokens since the owner's
-// last turn; idle shows nothing. The spinner turns each second; a count the transcript does not show reads as a dash.
+// last turn; idle shows nothing. The spinner turns about eight times a second; a count the transcript does not show reads as a dash.
 SQ.SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 SQ.fmtElapsed = s => s == null ? "—" : s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${Math.floor(s / 3600)}h ${Math.floor(s % 3600 / 60)}m`;
 SQ.fmtTokens = n => n == null ? "—" : n < 1000 ? String(n) : `${(n / 1000).toFixed(1)}k`;
@@ -84,7 +84,7 @@ SQ.liveText = (a, now) => {
   if (!a || (a.status !== "busy" && a.status !== "waiting")) return "";
   const secs = a.elapsed == null ? null : a.elapsed + Math.floor((now - a.got) / 1000);
   const verb = a.status === "busy" ? "Working" : "Waiting for you";
-  return [`${SQ.SPIN[Math.floor(now / 1000) % SQ.SPIN.length]} ${verb}`, SQ.fmtElapsed(secs), `↓ ${SQ.fmtTokens(a.tokens)} tokens`].join(" · ");
+  return [`${SQ.SPIN[Math.floor(now / 120) % SQ.SPIN.length]} ${verb}`, SQ.fmtElapsed(secs), `↓ ${SQ.fmtTokens(a.tokens)} tokens`].join(" · ");
 };
 
 SQ.MARKUP = `<style>
@@ -245,7 +245,7 @@ function addLine(line) {
 
 // ---- the session
 function say(msg) { stat.textContent = msg || ""; }
-// The live line keeps its own row: the spinner turns each second from the last read, and a read sets the count (#1082).
+// The live line keeps its own row: the spinner turns about eight times a second from the last read, and a read sets the count (#1082).
 function setActivity(a) { liveAct = a ? { ...a, got: Date.now() } : null; paintLive(); }
 function paintLive(){
   const t = SQ.liveText(liveAct, Date.now());
@@ -682,7 +682,7 @@ function openOverlay(){
   if (cur && watched === cur.sid && talk.length) paintTalk(true);   // turns the stream pushed while the panel was shut
   loadSessions();
   clearInterval(timer); timer = setInterval(loadConversation, SQ.POLL_MS);
-  clearInterval(liveTick); liveTick = setInterval(paintLive, 1000);
+  clearInterval(liveTick); liveTick = setInterval(paintLive, 120);
   text.focus();
 }
 function closeOverlay() {
