@@ -1,9 +1,11 @@
 import json
 import os
+import shutil
 import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -184,6 +186,47 @@ def test_socket_and_secret_are_mode_0600(state):
     sv.ensure(state)
     assert sv.socket_path(state).stat().st_mode & 0o777 == 0o600
     assert (state / "supervisor.secret").stat().st_mode & 0o777 == 0o600
+
+
+def test_socket_folder_is_read_from_the_environment(tmp_path, monkeypatch, state):
+    folder = tmp_path / "supervisor"
+    monkeypatch.setenv("SQUAD_SUPERVISOR_DIR", str(folder))
+    assert sv.socket_path(state).parent == folder
+
+
+def test_start_command_is_read_from_the_environment_and_names_the_state_folder(tmp_path, monkeypatch, state):
+    monkeypatch.setenv("SQUAD_SUPERVISOR_CMD", "my-supervisor serve {state}")
+    assert sv.start_argv(state) == ["my-supervisor", "serve", str(state)]
+
+
+def test_default_start_command_runs_the_module(state):
+    assert sv.start_argv(state)[:4] == [sys.executable, "-m", "squad.supervisor", "serve"]
+    assert sv.start_argv(state)[4] == str(state)
+
+
+def test_a_refused_start_command_names_its_reason(tmp_path, monkeypatch, state):
+    folder = Path(tempfile.mkdtemp(prefix="sq1160-", dir="/tmp"))
+    monkeypatch.setenv("SQUAD_SUPERVISOR_DIR", str(folder))
+    monkeypatch.setenv("SQUAD_SUPERVISOR_CMD", "/nonexistent/supervisor {state}")
+    try:
+        with pytest.raises(FileNotFoundError, match="nonexistent"):
+            sv.ensure(state)
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+@pytest.mark.heavy
+@pytest.mark.slow(reason="starts a real supervisor daemon")
+def test_ensure_starts_the_daemon_in_the_environment_folder_and_it_answers(tmp_path, monkeypatch, state):
+    folder = Path(tempfile.mkdtemp(prefix="sq1160-", dir="/tmp"))
+    monkeypatch.setenv("SQUAD_SUPERVISOR_DIR", str(folder))
+    try:
+        sv.ensure(state)
+        assert sv.socket_path(state).parent == folder
+        assert sv.call(state, "ping") == {"ok": True}
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+        monkeypatch.delenv("SQUAD_SUPERVISOR_DIR")
 
 
 def test_client_without_the_secret_is_refused(state):

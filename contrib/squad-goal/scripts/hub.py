@@ -6537,14 +6537,17 @@ def terminal_supervisor():
     return _PROJECT["sv"]
 
 TERMINAL = {"state": "starting", "why": ""}   # the start outcome the panel reads through /api/sessions/project
+TERMINAL_LOCK = threading.Lock()   # one start at a time: ensure() pings first, so a second caller never spawns a second daemon
 
 def start_terminal_supervisor():
-    """Bring the terminal supervisor up for this hub. A refusal or a failure is recorded with its reason, and the hub keeps serving."""
-    try:
-        terminal_supervisor().ensure(STATE)
-        TERMINAL.update(state="up", why="")
-    except Exception as e:
-        TERMINAL.update(state="refused", why=str(e))
+    """Bring the terminal supervisor up for this hub, or record its refusal with the reason. The hub keeps serving either way.
+    ensure() answers at once while a daemon is alive, so a later call after a death starts one again and nothing starts per request."""
+    with TERMINAL_LOCK:
+        try:
+            terminal_supervisor().ensure(STATE)
+            TERMINAL.update(state="up", why="")
+        except Exception as e:
+            TERMINAL.update(state="refused", why=str(e))
     print(f"terminal supervisor: {TERMINAL['state']}" + (f": {TERMINAL['why']}" if TERMINAL["why"] else ""), file=sys.stderr, flush=True)
 
 def access(h, action):
@@ -6817,11 +6820,19 @@ class H(BaseHTTPRequestHandler):
         self.terminal_call(a, op, session=sid, text=body["text"], client_id=cid)
 
     def terminal_call(self, a, op, **fields):
-        """One op on the supervisor for this caller: the login it acts for and the transport it came by. A refusal is a 403, a daemon that is not running a 503."""
+        """One op on the supervisor for this caller: the login it acts for and the transport it came by. A refusal is a 403.
+        A daemon that is not running is started again once and the call retried; a start that refuses answers 503 with its reason."""
         sv = terminal_supervisor()
-        try: out = sv.call(STATE, op, login=a.login, transport="tailnet" if a.tailnet else "loopback", **fields)
+        def call(): return sv.call(STATE, op, login=a.login, transport="tailnet" if a.tailnet else "loopback", **fields)
+        try: out = call()
         except sv.Refused as e: return self.answer(403, {"err": str(e)})
-        except OSError: return self.answer(503, {"err": "the terminal supervisor is not running"})
+        except OSError:
+            start_terminal_supervisor()
+            try: out = call()
+            except sv.Refused as e: return self.answer(403, {"err": str(e)})
+            except OSError:
+                why = TERMINAL["why"] or "no reason was recorded"
+                return self.answer(503, {"err": f"the terminal supervisor is not running: {why}"})
         self.answer(200, out)
 
     def answer(self, code, out):

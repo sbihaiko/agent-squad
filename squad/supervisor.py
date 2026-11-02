@@ -8,6 +8,7 @@ import platform
 import pty
 import re
 import secrets
+import shlex
 import signal
 import socket
 import socketserver
@@ -34,6 +35,9 @@ LOG = "supervisor.log"
 TRANSCRIPTS = "transcripts"
 WINDOW = 1 << 16
 HOSTED_ARGV = [sys.executable, "-m", "squad.sdk_adapter", "host"]
+SUP_DIR = "SQUAD_SUPERVISOR_DIR"   # the folder that holds the socket; a test points it at a temporary dir
+SUP_CMD = "SQUAD_SUPERVISOR_CMD"   # the start command, {state} replaced; a test can substitute a refused start
+DEFAULT_START = [sys.executable, "-m", "squad.supervisor", "serve"]
 JOB = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}(?:#[1-9][0-9]{0,8})?")
 SESSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 
@@ -55,9 +59,16 @@ def valid_job(job: str) -> bool:
 def socket_path(state: Path) -> Path:
     # AF_UNIX paths are capped near 104 bytes on macOS, which a state folder under a temp dir exceeds.
     digest = hashlib.sha256(str(state.resolve()).encode()).hexdigest()[:16]
-    folder = Path("/tmp") / f"squad-sup-{os.getuid()}"
+    folder = Path(os.environ[SUP_DIR]) if os.environ.get(SUP_DIR) else Path("/tmp") / f"squad-sup-{os.getuid()}"
     folder.mkdir(mode=0o700, exist_ok=True)
     return folder / f"{digest}.sock"
+
+
+def start_argv(state: Path) -> list[str]:
+    """The one command that starts a daemon: the module by default, or SQUAD_SUPERVISOR_CMD with {state} replaced."""
+    spec = os.environ.get(SUP_CMD)
+    words = shlex.split(spec) if spec else [*DEFAULT_START, "{state}"]
+    return [word.replace("{state}", str(state)) for word in words]
 
 
 def lstart(pid: int) -> str:
@@ -437,17 +448,26 @@ def _answers(state: Path) -> bool:
     return True
 
 
+def _log_tail(state: Path) -> str:
+    try:
+        lines = (state / LOG).read_text(errors="replace").strip().splitlines()
+    except OSError:
+        return ""
+    return lines[-1].strip() if lines else ""
+
+
 def ensure(state: Path, timeout: float = 10.0) -> None:
     if _answers(state):
         return
     state.mkdir(parents=True, exist_ok=True)
     with (state / LOG).open("ab") as log:
-        subprocess.Popen([sys.executable, "-m", "squad.supervisor", "serve", str(state)], cwd=ROOT,
+        subprocess.Popen(start_argv(state), cwd=ROOT,
                          stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
     deadline = time.time() + timeout
     while not _answers(state):
         if time.time() > deadline:
-            raise RuntimeError(f"supervisor did not answer in {state}")
+            detail = _log_tail(state)
+            raise RuntimeError(f"supervisor did not answer in {state}" + (f": {detail}" if detail else ""))
         time.sleep(0.05)
 
 

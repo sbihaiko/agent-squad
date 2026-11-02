@@ -3,11 +3,15 @@ and a loopback caller needs no grant. The supervisor is a fake here: what the te
 """
 import importlib.util
 import json
+import os
 import pathlib
 import shutil
+import signal
 import subprocess
 import sys
+import tempfile
 import threading
+import time
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 from types import SimpleNamespace
@@ -30,10 +34,11 @@ class FakeSupervisor:
     class Refused(Exception):
         pass
 
-    def __init__(self, ensure_error=None):
+    def __init__(self, ensure_error=None, call_errors=()):
         self.calls = []
         self.ensures = []
         self.ensure_error = ensure_error
+        self.call_errors = list(call_errors)
 
     def ensure(self, state, timeout=10.0):
         self.ensures.append(state)
@@ -42,10 +47,12 @@ class FakeSupervisor:
 
     def call(self, state, op, **fields):
         self.calls.append((op, fields))
+        if self.call_errors:
+            raise self.call_errors.pop(0)
         return {"ok": True, "data": "", "offset": 0, "gap": False}
 
 
-def load_hub(monkeypatch, tmp_path, grants=(), allow=(ANA,), ensure_error=None):
+def load_hub(monkeypatch, tmp_path, grants=(), allow=(ANA,), ensure_error=None, call_errors=()):
     checkout = tmp_path / "checkout"
     (checkout / "docs" / "squad").mkdir(parents=True)
     lines = ["tailnet:", f"  host: {TAILNET}", f"  allow: {json.dumps(list(allow))}"] + [f"  {g}: true" for g in grants]
@@ -58,11 +65,19 @@ def load_hub(monkeypatch, tmp_path, grants=(), allow=(ANA,), ensure_error=None):
     spec.loader.exec_module(mod)
     mod.run_list = lambda: []
     mod.loop_caps = lambda: None
-    fake = FakeSupervisor(ensure_error=ensure_error)
+    fake = FakeSupervisor(ensure_error=ensure_error, call_errors=call_errors)
     mod.terminal_supervisor = lambda: fake
     srv = ThreadingHTTPServer(("127.0.0.1", 0), mod.H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return SimpleNamespace(port=srv.server_port, fake=fake, server=srv, mod=mod)
+
+
+@pytest.fixture
+def socket_dir():
+    """A short temporary folder for the supervisor's socket: an AF_UNIX path is capped near 104 bytes."""
+    folder = pathlib.Path(tempfile.mkdtemp(prefix="sq1160-", dir="/tmp"))
+    yield folder
+    shutil.rmtree(folder, ignore_errors=True)
 
 
 @pytest.fixture
@@ -190,6 +205,10 @@ def test_hub_start_brings_the_terminal_supervisor_up_and_records_it(hub):
     assert h.mod.TERMINAL == {"state": "up", "why": ""}
 
 
+def test_the_hub_main_hands_its_start_to_the_terminal_supervisor():
+    assert "threading.Thread(target=start_terminal_supervisor" in HUB_PY.read_text()
+
+
 @pytest.mark.parametrize("error", [RuntimeError("supervisor did not answer in /tmp/state"), OSError("spawn refused")])
 def test_refused_supervisor_start_keeps_its_reason_and_the_hub_keeps_serving(hub, capsys, error):
     h = hub(ensure_error=error)
@@ -207,14 +226,153 @@ def test_refused_supervisor_start_reaches_the_panel_on_the_project_route_and_the
     assert json.loads(body)["supervisor"] == {"state": "refused", "why": "supervisor did not answer in /tmp/state"}
 
 
+def test_a_terminal_call_after_the_daemon_died_starts_it_again_and_answers(hub):
+    h = hub(call_errors=[OSError("no socket")])
+    status, _ = request(h.port, "GET", READ, host=f"127.0.0.1:{h.port}", login=None, origin=f"http://127.0.0.1:{h.port}")
+    assert status == 200
+    assert h.fake.ensures == [h.mod.STATE]
+    assert [op for op, _ in h.fake.calls] == ["read", "read"]
+
+
+def test_a_refused_restart_answers_503_with_the_reason_and_the_panel_reads_it(hub, monkeypatch):
+    h = hub(call_errors=[OSError("no socket"), OSError("still no socket")],
+            ensure_error=RuntimeError("start command refused"))
+    monkeypatch.setattr(h.mod.sessions, "project_sessions", lambda profile, checkout, profiles_of=None: [])
+    status, body = request(h.port, "GET", READ, host=f"127.0.0.1:{h.port}", login=None, origin=f"http://127.0.0.1:{h.port}")
+    assert status == 503
+    assert json.loads(body)["err"] == "the terminal supervisor is not running: start command refused"
+    status, body = request(h.port, "GET", "/api/sessions/project", host=f"127.0.0.1:{h.port}", login=None, origin=None)
+    assert status == 200
+    assert json.loads(body)["supervisor"] == {"state": "refused", "why": "start command refused"}
+
+
+def test_a_real_refused_start_keeps_its_reason(monkeypatch, tmp_path, socket_dir):
+    h = load_hub(monkeypatch, tmp_path)
+    from squad import supervisor as real
+    h.mod.terminal_supervisor = lambda: real
+    monkeypatch.setenv("SQUAD_SUPERVISOR_DIR", str(socket_dir))
+    monkeypatch.setenv("SQUAD_SUPERVISOR_CMD", "/nonexistent/supervisor {state}")
+    try:
+        h.mod.start_terminal_supervisor()
+        assert h.mod.TERMINAL["state"] == "refused"
+        assert "nonexistent" in h.mod.TERMINAL["why"]
+    finally:
+        h.server.shutdown()
+        h.server.server_close()
+
+
+STUB_SDK = '''
+import json
+from dataclasses import dataclass, field
+
+
+@dataclass
+class TextBlock:
+    text: str
+
+
+@dataclass
+class AssistantMessage:
+    content: list
+    model: str = "stub"
+    error: object = None
+
+
+class ClaudeAgentOptions:
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+
+
+@dataclass
+class HookMatcher:
+    matcher: object = None
+    hooks: list = field(default_factory=list)
+    timeout: object = None
+
+
+async def query(*, prompt, options):
+    if prompt.startswith("TOOL "):
+        name, _, raw = prompt[5:].partition(" ")
+        out = {}
+        for m in options.hooks["PreToolUse"]:
+            if m.matcher is None or name in m.matcher.split("|"):
+                for h in m.hooks:
+                    out = await h({"hook_event_name": "PreToolUse", "tool_name": name, "tool_input": json.loads(raw)}, "tu-1", {"signal": None}) or out
+        reason = (out.get("hookSpecificOutput") or {}).get("permissionDecisionReason")
+        texts = [reason or "allowed"]
+    else:
+        texts = ["echo:" + prompt]
+    yield AssistantMessage(content=[TextBlock(text=t) for t in texts])
+'''
+
+
+def stop_real_supervisor(state):
+    ledger = state / "sessions.jsonl"
+    if ledger.exists():
+        for line in ledger.read_text().splitlines():
+            event = json.loads(line)
+            if event.get("event") == "start":
+                try:
+                    os.killpg(event["pid"], signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+    pid_file = state / "supervisor.pid"
+    if pid_file.exists():
+        try:
+            os.kill(int(pid_file.read_text()), signal.SIGKILL)
+        except (ProcessLookupError, ValueError):
+            pass
+
+
+@pytest.mark.heavy
+@pytest.mark.slow(reason="starts a real supervisor daemon and a hosted session")
+def test_a_hub_start_brings_the_real_supervisor_up_and_read_and_attach_answer(hub, monkeypatch, tmp_path, socket_dir):
+    from squad import supervisor as real
+    h = hub()
+    h.mod.terminal_supervisor = lambda: real
+    monkeypatch.setenv("SQUAD_SUPERVISOR_DIR", str(socket_dir))
+    sdk = tmp_path / "sdk"
+    sdk.mkdir()
+    (sdk / "claude_agent_sdk.py").write_text(STUB_SDK)
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join([str(sdk), str(ROOT)]))
+    state = h.mod.STATE
+    try:
+        h.mod.start_terminal_supervisor()
+        assert h.mod.TERMINAL == {"state": "up", "why": ""}
+        assert socket_dir.is_dir()
+        session = real.call(state, "start", job="echo-hub")["session"]
+        real.call(state, "write", session=session, text="hello\n")
+        deadline = time.time() + 15
+        while True:
+            status, body = request(h.port, "GET", f"/api/terminals/read?sid={session}&client_id={CID}&offset=0",
+                                   host=f"127.0.0.1:{h.port}", login=None, origin=f"http://127.0.0.1:{h.port}")
+            if status == 200 and "echo:hello" in json.loads(body)["data"]:
+                break
+            assert time.time() < deadline, (status, body)
+            time.sleep(0.05)
+        status, _ = request(h.port, "POST", "/api/terminals/attach", {"sid": session, "client_id": CID},
+                            host=f"127.0.0.1:{h.port}", login=None, origin=f"http://127.0.0.1:{h.port}")
+        assert status == 200
+    finally:
+        stop_real_supervisor(state)
+
+
 NODE = shutil.which("node")
 
 
-def supervisor_line(info):
-    script = f"{OVERLAY_JS}\nconst SQ=module.exports;\nconsole.log(JSON.stringify(SQ.supervisorLine({json.dumps(info)})));"
+def node_json(expr):
+    script = f"{OVERLAY_JS}\nconst SQ=module.exports;\nconsole.log(JSON.stringify({expr}));"
     p = subprocess.run([NODE, "-"], input=script, capture_output=True, text=True, timeout=30)
     assert p.returncode == 0, p.stderr
     return json.loads(p.stdout)
+
+
+def supervisor_line(info):
+    return node_json(f"SQ.supervisorLine({json.dumps(info)})")
+
+
+def supervisor_view(info):
+    return node_json(f"SQ.supervisorView({json.dumps(info)})")
 
 
 @pytest.mark.node_bound
@@ -227,3 +385,17 @@ def test_panel_names_a_refused_supervisor_in_one_sentence():
 @pytest.mark.parametrize("info", [{"state": "up", "why": ""}, {"state": "starting", "why": ""}, None])
 def test_panel_says_nothing_about_a_supervisor_that_is_up_or_starting(info):
     assert supervisor_line(info) == ""
+
+
+@pytest.mark.node_bound
+def test_panel_keeps_the_supervisor_sentence_in_its_own_element():
+    assert 'id="sq-ov-supervisor"' in OVERLAY_JS
+    view = supervisor_view({"state": "refused", "why": "supervisor did not answer in /tmp/state"})
+    assert view == {"hidden": False,
+                    "text": "The terminal supervisor is not running: supervisor did not answer in /tmp/state."}
+
+
+@pytest.mark.node_bound
+@pytest.mark.parametrize("info", [{"state": "up", "why": ""}, {"state": "starting", "why": ""}, None])
+def test_panel_hides_the_supervisor_element_when_the_supervisor_is_up_or_starting(info):
+    assert supervisor_view(info) == {"hidden": True, "text": ""}
