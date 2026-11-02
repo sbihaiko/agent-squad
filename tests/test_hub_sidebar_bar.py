@@ -118,8 +118,8 @@ def test_the_bar_stays_at_the_left_and_slides_left_when_shut(page):
     assert re.search(r"#side\{[^}]*position:relative", css)
     assert re.search(r"#side\{[^}]*overflow:hidden", css)  # the body is clipped, never a second column
     assert re.search(r"html\.sbshut #side\{[^}]*width:28px", css)
-    assert re.search(r"#sbody\{[^}]*transition:transform[^;}]*ease-out", css)
-    assert re.search(r"html\.sbshut #sbody\{[^}]*translateX\(-100%\)[^}]*ease-in", css)
+    assert re.search(r"#sbbody\{[^}]*transition:transform[^;}]*ease-out", css)
+    assert re.search(r"html\.sbshut #sbbody\{[^}]*translateX\(-100%\)[^}]*ease-in", css)
     assert re.search(r"#sbtn\{[^}]*right:4px", css)        # on the bar's leading edge
     assert "html.sbshut #sbtn{" not in css                 # the chevron never moves on its own
 
@@ -134,16 +134,16 @@ def test_the_slide_takes_150_to_200_ms_eased_out_on_open_and_in_on_close(page):
     durations = [float(v) * (1000 if u == "s" else 1) for v, u in re.findall(r"transition\s*:[^;}]*?(\d*\.?\d+)(ms|s)\b", css)]
     assert durations and all(150 <= d <= 200 for d in durations), durations
     assert re.search(r"#side\{[^}]*transition:width[^;}]*ease-out", css)
-    assert re.search(r"#sbody\{[^}]*transition:transform[^;}]*ease-out", css)
+    assert re.search(r"#sbbody\{[^}]*transition:transform[^;}]*ease-out", css)
     assert re.search(r"html\.sbshut #side\{[^}]*ease-in", css)
-    assert re.search(r"html\.sbshut #sbody\{[^}]*ease-in", css)
+    assert re.search(r"html\.sbshut #sbbody\{[^}]*ease-in", css)
 
 
 def test_reduced_motion_shows_and_hides_the_bar_with_no_slide(page):
     css = _css(page)
-    assert "@media (prefers-reduced-motion: reduce){#side,#sbody{transition:none}}" in css
+    assert "@media (prefers-reduced-motion: reduce){#side,#sbbody{transition:none}}" in css
     animated = {s.strip() for s in re.findall(r"([^{}]+)\{[^{}]*\btransition\s*:(?!\s*none)", css)}
-    assert animated == {"#side", "#sbody"}, animated
+    assert animated == {"#side", "#sbbody"}, animated
 
 
 # ---------------------------------------------------------------- the rail
@@ -156,7 +156,7 @@ def test_a_shut_bar_leaves_one_rail_at_the_left_edge_and_nothing_else(page):
     assert page.count("<aside id=side>") == 1
     inner = re.search(r"<aside id=side>(.*?)</aside>", page, re.S).group(1)
     # the rail holds the chevron; the body is the only other child, and the shut state clips it
-    assert re.match(r"\s*<button\b[^>]*id=sbtn\b.*?</button>\s*<div id=sbody>.*</div>\s*$", inner, re.S), inner[:200]
+    assert re.match(r"\s*<button\b[^>]*id=sbtn\b.*?</button>\s*<div id=sbbody>.*</div>\s*$", inner, re.S), inner[:200]
 
 
 def test_the_toggle_is_shown_only_on_a_desktop_width(page):
@@ -218,3 +218,10 @@ def test_a_phone_width_never_shows_the_bar_shut(page):
     rule, block = _state_rule(page), _block(page)
     src = _stub("shut", False) + rule + "\n" + block + "\nconsole.log(JSON.stringify([...classes]));"
     assert _run_node(src) == []
+
+def test_the_page_never_declares_the_same_id_twice(page):
+    """One id, one element: a bar body named like a settings panel let the panel's script fill the bar (#1159)."""
+    markup = re.sub(r"<script\b.*?</script>", "", page, flags=re.S)   # a template string is not the document
+    ids = re.findall(r"\bid=([\w-]+)", markup)
+    dupes = sorted({i for i in ids if ids.count(i) > 1})
+    assert not dupes, f"the page declares these ids twice: {dupes}"
