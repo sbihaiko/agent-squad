@@ -125,3 +125,10 @@ def test_the_donut_and_the_bar_chart_stay_in_the_spend_section(hub):
     assert 'id=chart' in stats and 'id=pie' in stats
     assert "hidden" not in re.search(r"<div id=chart[^>]*>", stats).group(0)
     assert "hidden" not in re.search(r"<div id=pie[^>]*>", stats).group(0)
+
+def test_the_monitor_carries_no_queue_tile(hub):
+    """The owner asked for no queue in the Monitor: a queue fact stays in the footer, never as a Monitor tile."""
+    page = hub.PAGE
+    facts = [{"key": "queue", "text": "queue 5 held", "tone": "wait"}]
+    tiles = _run(page, f"instTiles({json.dumps(facts)}).map(t=>t.k)", _monitor_blocks(page))
+    assert tiles == ["Gate"], tiles

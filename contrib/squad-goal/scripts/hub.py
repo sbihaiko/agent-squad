@@ -4571,8 +4571,8 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
    of the bar, so it rides the leading edge and never crosses the board. */
 #sbtn{display:none}
 @media (min-width:601px){
-#side{position:relative;padding:0;overflow:hidden;transition:width .16s ease-out}
-#sbbody{width:280px;height:100%;overflow:auto;padding:44px 12px 12px;box-sizing:border-box;transition:transform .16s ease-out}
+#side{position:relative;padding:0;overflow:hidden;display:flex;flex-direction:column;box-sizing:border-box;transition:width .16s ease-out}
+#sbbody{flex:1 1 auto;min-height:0;width:100%;overflow:auto;padding:34px 12px 12px;box-sizing:border-box;transition:transform .16s ease-out}
 #sbtn{display:flex;position:absolute;top:12px;right:4px;z-index:1;width:20px;height:32px;align-items:center;justify-content:center;padding:0;border:0;border-radius:0;background:none;color:var(--mute);cursor:pointer}
 #sbtn:hover{color:var(--fg)}#sbtn:focus-visible{outline:var(--focus-w) solid var(--focus);outline-offset:2px}
 #sbtn svg{width:12px;height:12px}
@@ -4701,7 +4701,7 @@ function subsGauges(d){const xs=(d||{}).subs||[];if(!xs.length)return"";
 function instGauges(d){return ldCells(d).map(c=>`<div class="ig${c.red?" ldred":""}">${gaugeSvg((d||{})[c.k.toLowerCase()])}<span class=gv><b>${c.k}</b> ${esc(c.t)}</span></div>`).join("")}
 const instFact=(facts,k)=>(facts||[]).find(f=>f&&f.key===k);
 function instTile(k,f,lead){if(!f)return{k,text:"no reading",tone:"neutral"};const p=(f.parts||[])[0]||{},t=String(f.text||"").replace(lead,"").trim()||"?";return{k,text:t,tone:p.tone==="ok"||p.tone==="err"?p.tone:"neutral",tip:f.tip||null,detail:f.detail||null,times:p.times||null}}
-function instTiles(facts){const q=instFact(facts,"queue");return[instTile("Gate",instFact(facts,"gate"),/^gate\s*/)].concat(q?[instTile("Queue",q,/^queue\s*/)]:[])}   // the queue is one fact the page already holds: no request per waiting child (#1173)
+function instTiles(facts){return[instTile("Gate",instFact(facts,"gate"),/^gate\s*/)]}   // the Monitor carries the gate and no queue tile (owner)
 const iq=t=>esc(t).replace(/"/g,"&quot;");
 function tileHtml(t){const v=t.href?esc(t.text).replace(/PR #\d+/,x=>`<a target=_blank rel=noopener href="${iq(t.href)}">${x}</a>`):esc(t.text),
  d=(t.detail||[]).length?`<details><summary>${t.detail.length} failed</summary><ul>${t.detail.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></details>`:"";

@@ -225,3 +225,12 @@ def test_the_page_never_declares_the_same_id_twice(page):
     ids = re.findall(r"\bid=([\w-]+)", markup)
     dupes = sorted({i for i in ids if ids.count(i) > 1})
     assert not dupes, f"the page declares these ids twice: {dupes}"
+
+def test_the_bar_body_scrolls_inside_the_bar(page):
+    """A body taller than the window scrolls, and the bar never clips it: the bar is a column and the body takes the rest."""
+    side, body = _rule(page, "#side"), _rule(page, "#sbbody")
+    assert "display:flex" in side and "flex-direction:column" in side, side
+    assert "overflow:hidden" in side, "the bar's own overflow stays hidden: the body is what scrolls"
+    assert "flex:1 1 auto" in body and "min-height:0" in body, body
+    assert "overflow:auto" in body, body
+    assert "height:100%" not in body, "a percentage height on the body resolves against an auto-height bar and never scrolls"
