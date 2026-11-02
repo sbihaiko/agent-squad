@@ -8,8 +8,10 @@ height check models the cascade by rule, not by element match: a phone rule rest
 desktop twin.
 """
 import importlib.util
+import os
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -40,8 +42,21 @@ def _load(name, path):
 
 
 def _surfaces():
-    hub = _load("hub_web_tokens", SCRIPTS / "hub.py")
-    mux = _load("hubmux_web_tokens", SCRIPTS / "hubmux.py")
+    # The hub module reads its address at import time, so the test names one: a runner with no profile (CI, the fast
+    # gate) still renders the same static page, and the guard never depends on the machine it runs on.
+    env = {"SG_REPO": "x/y", "SG_OWNER": "x", "SG_PROJECT": "1", "SG_CHECKOUT": str(ROOT),
+           "SG_STATE": tempfile.mkdtemp(prefix="web-tokens-")}
+    before = {k: os.environ.get(k) for k in env}
+    os.environ.update(env)
+    try:
+        hub = _load("hub_web_tokens", SCRIPTS / "hub.py")
+        mux = _load("hubmux_web_tokens", SCRIPTS / "hubmux.py")
+    finally:
+        for k, v in before.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
     return {
         "hub": hub.PAGE,
         "hub-mobile": hub.MOBILE_PAGE,
@@ -284,3 +299,181 @@ def test_the_phone_media_block_sets_the_phone_target(tokens):
     assert m, "no phone media block in the tokens"
     heights = [_px(_resolve(d.get("min-height", ""), tokens)) for _, b in _blocks(m.group(1)) for d in [dict(_decls(b))]]
     assert heights and min(h for h in heights if h is not None) >= PHONE_CONTROL_PX
+
+
+# --- The shared palette and the chart roles (SPEC 1181, #1184) ---
+# The roles every surface already draws with, and the literal each one replaces. This ticket only names them in the token
+# file; a surface reads a role later, in its own batch. `--highlight` carries #fff, which #ffffff writes long.
+SHARED_ROLES = {
+    "--well": "#0d1117",
+    "--inset": "#10141a",
+    "--table-head": "#101a16",
+    "--float": "#11151c",
+    "--bubble": "#161c24",
+    "--raise": "#2a3140",
+    "--hover": "#2e3846",
+    "--well-line": "#232a36",
+    "--bubble-line": "#26303c",
+    "--line-strong": "#353d4b",
+    "--tint-ok": "#12302a",
+    "--tint-ok-line": "#2e6b4f",
+    "--ink-strong": "#eef1f5",
+    "--ink-body": "#c9d1d9",
+    "--ink-soft": "#b8c0cf",
+    "--ink-muted": "#8b949e",
+    "--ink-tool": "#9aa3b2",
+    "--code-ink": "#e6c07b",
+    "--on-tint": "#e6edf3",
+    "--highlight": "#fff",
+    "--s1-faint": "#7aa2ff55",
+    "--scrim": "#000a",
+    "--shadow-soft": "#0008",
+    "--shadow-float": "#000b",
+    "--shadow-deep": "#000c",
+}
+
+# The chart family: a chart carries no literal of its own. A structural role reads the palette; a mark the palette does not
+# name yet gets its own value here, the one place a colour literal lives.
+CHART_ROLES = {
+    "--chart-grid": "#2a303b",
+    "--chart-axis": "#8a93a3",
+    "--chart-ink": "#b8c0cf",
+    "--chart-value": "#e6e8ee",
+    "--chart-bg": "#161a21",
+    "--chart-hollow": "#0f1115",
+    "--chart-track": "#2a303b",
+    "--chart-needle": "#e6e8ee",
+    "--chart-bar": "#5aa9ff",
+    "--chart-bar-max": "#3ecf8e",
+    "--chart-ok": "#3ecf8e",
+    "--chart-warn": "#f5b041",
+    "--chart-err": "#ff6b6b",
+    "--chart-none": "#b79cf6",
+    "--chart-run": "#2dd4bf",
+    "--chart-drop": "#c678dd",
+    "--chart-series-1": "#7aa2ff",
+    "--chart-series-2": "#c792ea",
+    "--chart-series-3": "#5fd3c4",
+    "--chart-series-4": "#f2c14e",
+    "--chart-series-5": "#ff8a5c",
+    "--chart-series-6": "#9ccc65",
+    "--chart-series-7": "#f48fb1",
+    "--chart-series-8": "#90a4ae",
+    "--chart-series-extra": "#e5c07b",
+    "--chart-series-other": "#8a93a3",
+    "--chart-series-fallback": "#888",
+    "--chart-held": "#000",
+}
+
+SURFACE_HEX = re.compile(r"(?<!&)#[0-9a-fA-F]{3,8}\b")
+
+
+def _strip_all_comments(text):
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    text = re.sub(r"<!--.*?-->", "", text, flags=re.S)
+    return re.sub(r"(?<!:)//[^\n]*", "", text)
+
+
+def _surface_colours(html):
+    """Every colour literal in one served surface, with the token block and every comment removed.
+
+    The scan is the hex guard's (tests/test_web_hex_budget.py): a colour sits in a declaration body, a style attribute or a
+    quoted string, and a hex in a selector is an element id.
+    """
+    text = html.replace(TOKENS_FILE.read_text().strip(), "")
+    css = "\n".join(re.findall(r"<style[^>]*>(.*?)</style>", text, flags=re.S))
+    css = re.sub(r"[^{}]+(?=\{)", "", _strip_all_comments(css))
+    quoted = "\n".join(m.group(0) for m in re.finditer(r"\"[^\"]*\"|'[^']*'", _strip_all_comments(text)))
+    return SURFACE_HEX.findall(css + "\n" + quoted)
+
+
+def _long_hex(value):
+    """One spelling of a colour: #fff and #ffffff are one value, and #000a and #000000aa are one too."""
+    h = value.lstrip("#").lower()
+    if len(h) in (3, 4):
+        h = "".join(c * 2 for c in h)
+    return "#" + h
+
+
+def _phone_tokens():
+    """The roles a phone viewport resolves: the :root block, then the phone media block in cascade order.
+
+    The two themes are the desktop and the phone blocks of the one file. The phone block sets density, never colour, so
+    every role resolves to the same value in both; a role redefined differently there would break this.
+    """
+    css = TOKENS_FILE.read_text()
+    out = _vars(css)
+    out.update(_vars(_phone_inner(css)))
+    return out
+
+
+def _role_value(tokens, role):
+    value = _resolve(f"var({role})", tokens)
+    assert re.fullmatch(r"#[0-9a-fA-F]{3,8}", value), f"{role} does not resolve to a colour: {value}"
+    return value
+
+
+def test_every_colour_two_surfaces_share_is_a_named_role(surfaces):
+    """A literal two surfaces draw with is a role in the token file; no second palette survives."""
+    counts = {}
+    for html in surfaces.values():
+        for literal in set(_surface_colours(html)):
+            counts[literal] = counts.get(literal, 0) + 1
+    shared = {literal for literal, n in counts.items() if n >= 2}
+    named = {_long_hex(v) for v in _vars(TOKENS_FILE.read_text()).values() if re.fullmatch(r"#[0-9a-fA-F]{3,8}", v)}
+    missing = sorted(literal for literal in shared if _long_hex(literal) not in named)
+    assert not missing, f"a colour two surfaces share is not a role: {missing}"
+
+
+def test_every_role_resolves_in_both_themes(tokens):
+    """Every shared and chart role resolves on the desktop and the phone, and its value is the one it replaces."""
+    phone = _phone_tokens()
+    for role, value in {**SHARED_ROLES, **CHART_ROLES}.items():
+        assert role in tokens, f"{role} is not a role in the token file"
+        desktop, handset = _role_value(tokens, role), _role_value(phone, role)
+        assert handset == desktop, f"{role} is {handset} on the phone and {desktop} on the desktop"
+        assert _long_hex(desktop) == _long_hex(value), f"{role} is {desktop}, not {value}"
+
+
+def test_the_chart_family_reads_the_palette(tokens):
+    """A structural chart role reads the palette instead of copying a value."""
+    sources = {
+        "--chart-grid": "--line",
+        "--chart-axis": "--mute",
+        "--chart-ink": "--ink-soft",
+        "--chart-value": "--fg",
+        "--chart-bg": "--panel",
+        "--chart-hollow": "--bg",
+        "--chart-track": "--line",
+        "--chart-needle": "--fg",
+        "--chart-bar": "--acc",
+        "--chart-bar-max": "--ok",
+        "--chart-ok": "--ok",
+        "--chart-warn": "--warn",
+        "--chart-err": "--err",
+        "--chart-none": "--none",
+        "--chart-run": "--run",
+        "--chart-drop": "--drop",
+        "--chart-series-other": "--mute",
+        **{f"--chart-series-{i}": f"--s{i}" for i in range(1, 9)},
+    }
+    for role, source in sources.items():
+        assert tokens[role] == f"var({source})", f"{role} copies a value instead of reading {source}"
+
+
+def test_a_surface_reads_the_token_file_not_a_copy_of_its_value(surfaces):
+    """The token block is inlined verbatim, and no surface declares a shared role beside it."""
+    block = TOKENS_FILE.read_text().strip()
+    for name in ("hub", "hub-mobile", "dashboard"):
+        assert block in surfaces[name], f"{name} does not carry the token block"
+        for role in (*SHARED_ROLES, *CHART_ROLES):
+            assert len(re.findall(re.escape(role) + r"\s*:", surfaces[name])) == 1, f"{name} declares {role} outside the token file"
+
+
+def test_the_token_file_wins_over_the_overlay(tokens):
+    """Where the overlay drew a different value, the palette keeps its own; the overlay follows it in #1188."""
+    assert tokens["--fg"] == "#e6e8ee", "the overlay's #d8dde6 must not replace --fg"
+    assert tokens["--mute"] == "#8a93a3", "the overlay's #b8c0cf is --ink-soft, never --mute"
+    assert tokens["--acc"] == "#5aa9ff", "the overlay's #7aa2ff is --s1, never --acc"
+    assert tokens["--ok"] == "#3ecf8e", "the overlay's #5fd38d must not replace --ok"
+    assert tokens["--warn"] == "#f5b041", "the overlay's #f2c14e must not replace --warn"
