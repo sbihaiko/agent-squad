@@ -274,4 +274,4 @@ def test_the_store_a_pass_writes_is_the_store_the_charts_and_the_monitor_read(hu
     hub.history_pass(read_issue=read, read_search=lambda: [1, 2], now=now)
     assert hub._cfd_payload()["cfd"]["coverage"]["read"] == 2
     assert hub._coverage_payload(hub._hist.load_store(writer))["read"] == 2
-    assert hub._hist.load_store(writer), "the pass wrote its records to the store the charts read"
+    assert hub.throughput_fact() is not None
