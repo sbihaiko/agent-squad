@@ -1954,11 +1954,13 @@ def foot_refresh(now=None):
     return LOAD_STATE["facts"]
 
 SPEC_TIP_LINES = 8   # the spec tile's tooltip names at most this many specs, then "+k more"
-NOSPEC_HOURS = 24    # the No spec group counts the closed cards opened in this many hours (owner)
+NOSPEC_HOURS = 4     # the No spec group counts the cards closed in this many hours (owner, 2026-11-02)
 
 def nospec_count(items, moves=None, window=None, now=None):
-    """The No spec group (bugs and single tickets): `total` is its open cards plus its closed cards opened in the last
-    NOSPEC_HOURS hours by the read's own opened-at (`o`); `closed` is those closed ones. A card is in the group as the board's No spec
+    """The No spec group (bugs and single tickets): `total` is its open cards plus its closed cards closed in the last
+    NOSPEC_HOURS hours by the read's own closed-at (`c`); `closed` is those closed ones. The window reads the closing, never the
+    opening: the work takes hours, so a card opened in the window is rarely closed in it, and the group answered zero (owner,
+    2026-11-02). A card is in the group as the board's No spec
     lane holds it: no spec label, no loop-bug label, and no parent spec, or a parent spec the board draws closed (an open
     card only: a closed card of a closed spec is history). An abandoned card, or a closed card with no opened-at, never
     counts. The column is `drawn_column`, with the door's overlay, so the lane, the summary and the tile agree (ADR-0137)."""
@@ -1975,7 +1977,7 @@ def nospec_count(items, moves=None, window=None, now=None):
         pa = i.get("pa") if isinstance(i.get("pa"), int) else None
         if pa is not None and (pa not in gone or st == closed_col): continue
         if st != closed_col: total += 1; continue
-        try: at = _utc(i["o"]).timestamp() if i.get("o") else None
+        try: at = _utc(i["c"]).timestamp() if i.get("c") else None
         except Exception: at = None
         if at is not None and at >= since: done, total = done + 1, total + 1
     return {"closed": done, "total": total}
