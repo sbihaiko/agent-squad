@@ -3,7 +3,8 @@
 usage: hubmux.py [port]   default 7700, the live hub. Any other port is a check hub: it keeps its board cache and flow history out of the live one (#1000). `/<profile>` is that profile's hub page (hub.py, loaded once per profile with the
 profile's own context from the seam, address.sh); `/` lists the repositories and their live workers that the request may see
 (every one on loopback; on the tailnet, those whose own allow list admits the login); a path no profile owns answers 404 with
-that list; `/api/hub` names the hub and its repositories, so hubctl.sh can tell this hub from any other listener. A refused
+that list; `/api/hub` names the hub and its repositories, and `?identity=1` answers that name from the loaded profiles
+alone, with no per-profile state read, so hubctl.sh can tell this hub from any other listener inside its bound (#1202). A refused
 tailnet request answers 403 with its reason. Read-only, as hub.py is: it starts no run."""
 import html
 import importlib.util
@@ -121,6 +122,13 @@ def alert(app):
 
 def listing(apps):
     return {"hub": "squad-hub", "repos": [{"slug": s, "repo": a["repo"], "path": f"/{s}", "live": live(a), "alert": alert(a), **({"err": a["err"]} if "err" in a else {})} for s, a in apps.items()]}
+
+
+def identity(apps):
+    """The answer hubctl.sh checks before it stops or starts anything: the hub's name and the profiles it loaded. It reads
+    no profile's state, so a loaded machine cannot push the answer past the command's bound and turn a real hub into a
+    foreign listener (#1202)."""
+    return {"hub": "squad-hub", "repos": [{"slug": s, "repo": a["repo"], "path": f"/{s}"} for s, a in apps.items()]}
 
 
 WEB_TOKENS = (pathlib.Path(__file__).resolve().parent / "web-tokens.css").read_text()
@@ -279,7 +287,13 @@ def server(port, apps, on_new=None):
         def loop_post(self, a): return self.profile.loop_post(self, a)   # the loop switch's write (#923)
 
         def _route(self, method):
-            path = self.path.split("?", 1)[0]
+            path, _, query = self.path.partition("?")
+            if path == "/api/hub" and query == "identity=1":
+                # The identity check reads the apps loaded at startup and never their state, so a loaded machine cannot
+                # time it out (#1202). The access rule still applies: a tailnet request sees only what it may see.
+                seen, reason = admitted(dict(apps), self, method)
+                if reason: return self.refuse(reason)
+                return self._send(200, json.dumps(identity(seen)).encode(), "application/json")
             if path in ("/", "/api/hub"):
                 with LOCK:   # the index reads the profile list now, so a profile added or gone shows at once (#917)
                     refresh(apps, on_new)

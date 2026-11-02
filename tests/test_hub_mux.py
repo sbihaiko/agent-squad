@@ -61,9 +61,9 @@ def fleet(tmp_path_factory):
             os.environ[k] = v
 
 
-def _get(url):
+def _get(url, timeout=10):
     try:
-        with urllib.request.urlopen(url, timeout=10) as r:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
             return r.status, r.read().decode()
     except urllib.error.HTTPError as e:
         return e.code, e.read().decode()
@@ -266,6 +266,45 @@ def test_the_hub_names_itself_and_its_repositories(fleet):
         ("alpha", "x/alpha", ["run-alpha-7"]), ("beta", "y/beta", [])]
 
 
+@pytest.mark.heavy
+def test_the_identity_answers_inside_hubctls_bound_without_a_state_read(tmp_path, monkeypatch):
+    """#1202: listing() calls live() and alert() for every profile, and each reads that profile's state. On a machine under
+    load the /api/hub read passed hubctl.sh's 3 s bound, so a hub on the port read as a foreign listener and --restart
+    refused to start the published copy. The identity query answers from the hub's loaded profiles, never from their state."""
+    prof, base = tmp_path / "profiles", tmp_path / "state"
+    prof.mkdir()
+    for slug, repo in (("alpha", "x/alpha"), ("beta", "y/beta")):
+        (tmp_path / f"co-{slug}").mkdir()
+        _profile(prof, slug, repo, tmp_path / f"co-{slug}")
+    monkeypatch.setenv("SG_PROFILES_DIR", str(prof))
+    monkeypatch.setenv("SG_STATE_BASE", str(base))
+    spec = importlib.util.spec_from_file_location("hubmux_identity_under_test", SCRIPTS / "hubmux.py")
+    mux = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mux)
+    apps = mux.load_apps()
+    reads = []
+
+    def slow_runs():
+        reads.append(1)
+        time.sleep(2)   # two profiles at 2 s: listing() reads live() for each, past hubctl.sh's 3 s bound
+        return []
+
+    for slug in apps:
+        monkeypatch.setattr(apps[slug]["mod"], "runs", slow_runs)
+    srv = mux.server(0, apps)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        start = time.monotonic()
+        code, body = _get(f"http://127.0.0.1:{srv.server_address[1]}/api/hub?identity=1", timeout=30)
+        took = time.monotonic() - start
+    finally:
+        srv.shutdown()
+    assert code == 200, body
+    assert json.loads(body)["hub"] == "squad-hub", body
+    assert took < 3, f"the identity read took {took:.1f} s, past hubctl.sh's 3 s bound"
+    assert reads == [], "the identity read waited on a per-profile state read"
+
+
 def _row(id_, state, kind="code"):
     return {"id": id_, "state": state, "kind": kind, "live": True, "age": 5}
 
@@ -377,6 +416,12 @@ def _hub_pid(port):
         return None
 
 
+def _listener_pid(port):
+    """The pid that holds the listening socket: the hub hubctl.sh starts runs detached, so the test finds it by the port."""
+    out = subprocess.run(["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"], capture_output=True, text=True).stdout
+    return int(out.split()[0]) if out.split() else None
+
+
 @pytest.fixture
 def fake_hub_dir(fleet, tmp_path):
     """hubctl.sh and address.sh beside a hubmux.py that only answers /api/hub, so a restart is observable offline."""
@@ -411,10 +456,63 @@ def test_hubctl_restart_replaces_the_running_hub_and_prints_its_url(fleet, fake_
     p = _restart(d, port, fleet["env"])
     assert p.returncode == 0, p.stderr
     assert p.stdout.strip() == f"http://127.0.0.1:{port}/beta"
+    assert f"pid {old}" in p.stderr, p.stderr   # the restart says which pid it stopped (#1202)
     new = _hub_pid(port)
     assert new and new != old
     with pytest.raises(ProcessLookupError):
         os.kill(old, 0)
+
+
+@pytest.mark.heavy
+def test_hubctl_restart_stops_a_running_hubmux_and_names_its_pid(tmp_path):
+    """#1202: the restart must work on the real hubmux.py, not a stand-in, and it must say which pid it stopped."""
+    prof, home = tmp_path / "profiles", tmp_path / "home"
+    prof.mkdir()
+    home.mkdir()
+    for slug, repo in (("alpha", "x/alpha"), ("beta", "y/beta")):
+        (tmp_path / f"co-{slug}").mkdir()
+        _profile(prof, slug, repo, tmp_path / f"co-{slug}")
+    port = _free_port()
+    # The hub's state stays in the temp home, and no SG_* of this shell reaches it (test-hubmux-check-board.sh's pattern).
+    drop = {"SG_STATE", "SG_STATE_BASE", "SG_BOARD_CACHE", "SG_HUB_DIR", "SG_PROFILE", "SG_SHARED", "SG_CHECKOUT",
+            "SG_REPO", "SG_OWNER", "SG_PROJECT", "SG_PROJECTS", "SG_FORK_DIR"}
+    env = {k: v for k, v in os.environ.items() if k not in drop}
+    env.update(HOME=str(home), SG_PROFILES_DIR=str(prof), SG_PROFILE="beta")
+    hub = subprocess.Popen([sys.executable, str(SCRIPTS / "hubmux.py"), str(port)], cwd=SCRIPTS, env=env,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    listener = None
+    try:
+        for _ in range(150):
+            if _up(port):
+                break
+            time.sleep(0.1)
+        else:
+            pytest.fail("the real hubmux never listened")
+        for _ in range(100):
+            try:
+                if _get(f"http://127.0.0.1:{port}/api/hub?identity=1", timeout=3)[0] == 200:
+                    break
+            except OSError:
+                pass
+            time.sleep(0.1)
+        p = subprocess.run(["bash", str(SCRIPTS / "hubctl.sh"), "--restart", str(port)], cwd=tmp_path,
+                           capture_output=True, text=True, timeout=60, env=env)
+        listener = _listener_pid(port)   # read before the asserts, so the teardown ends the hub the restart started
+        assert p.returncode == 0, p.stderr
+        assert p.stdout.strip() == f"http://127.0.0.1:{port}/beta"
+        assert f"pid {hub.pid}" in p.stderr, p.stderr
+        hub.wait(timeout=10)   # the hub this test started is gone
+        assert listener and listener != hub.pid
+        assert _get(f"http://127.0.0.1:{port}/api/hub?identity=1", timeout=5)[0] == 200
+    finally:
+        if hub.poll() is None:
+            hub.kill()
+            hub.wait()
+        if listener:
+            try:
+                os.kill(listener, 15)
+            except ProcessLookupError:
+                pass
 
 
 @pytest.mark.heavy

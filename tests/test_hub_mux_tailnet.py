@@ -105,7 +105,7 @@ def test_tailnet_root_lists_only_the_profiles_that_allow_the_login(fleet):
 
 
 def test_tailnet_login_no_profile_allows_gets_403_with_reason_and_no_list(fleet):
-    for path in ("/", "/api/hub"):
+    for path in ("/", "/api/hub", "/api/hub?identity=1"):
         code, body = _get(fleet["port"], path, login=EVE)
         assert code == 403, path
         assert body == "login not allowed", path
