@@ -1,11 +1,14 @@
 """The hub writes the history store (#1024): each card's timeline is read into it, partial timelines resume, the points are counted, and an hourly search ends the interval of a card that has gone."""
+import ast
 import importlib.util
+import time
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 HUB_PY = ROOT / "contrib" / "squad-goal" / "scripts" / "hub.py"
+MUX_PY = ROOT / "contrib" / "squad-goal" / "scripts" / "hubmux.py"
 HIST_PY = ROOT / "contrib" / "squad-goal" / "scripts" / "board_history.py"
 T0 = 1_800_000_000
 OPENED = "2026-10-01T09:00:00Z"
@@ -221,3 +224,27 @@ def test_the_cfd_payload_states_the_zone_it_samples_in(hub, monkeypatch):
 def test_the_hub_starts_the_history_writer_as_a_thread(hub):
     source = HUB_PY.read_text()
     assert "target=refresh_history" in source
+
+
+def _mux_read_threads():
+    """The read functions the live server starts for each profile's hub: the names in hubmux's loop over its read threads."""
+    for node in ast.walk(ast.parse(MUX_PY.read_text())):
+        if isinstance(node, ast.For) and isinstance(node.iter, ast.Tuple):
+            names = [e.value for e in node.iter.elts if isinstance(e, ast.Constant)]
+            if "refresh_board" in names:
+                return names
+    raise AssertionError("hubmux starts no board read")
+
+
+def test_the_live_mux_starts_the_history_writer_as_a_thread():
+    assert "refresh_history" in _mux_read_threads()
+
+
+def test_the_store_a_pass_writes_is_the_store_the_charts_and_the_monitor_read(hub, writer):
+    now = time.time()
+    read = lambda n, c: _payload(n, [_status(OPENED, "Todo")])   # noqa: E731
+    hub.history_pass(read_issue=read, read_search=lambda: [1, 2], now=now - 86400)
+    hub.history_pass(read_issue=read, read_search=lambda: [1, 2], now=now)
+    assert hub._cfd_payload()["cfd"]["coverage"]["read"] == 2
+    assert hub._coverage_payload(hub._hist.load_store(writer))["read"] == 2
+    assert hub.throughput_fact() is not None

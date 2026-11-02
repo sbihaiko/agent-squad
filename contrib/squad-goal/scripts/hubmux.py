@@ -321,7 +321,7 @@ if __name__ == "__main__":
     def start(a):   # each profile's own background reads: a profile added later starts its own too (#917)
         m = a.get("mod")
         if m is None: return
-        for f in ("refresh_prs", "refresh_quota", "refresh_board", "load_sampler"):
+        for f in ("refresh_prs", "refresh_quota", "refresh_board", "refresh_history", "load_sampler"):
             threading.Thread(target=getattr(m, f), daemon=True).start()
     for a in apps.values(): start(a)
     server(PORT, apps, on_new=start).serve_forever()

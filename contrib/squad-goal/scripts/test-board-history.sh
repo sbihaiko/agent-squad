@@ -31,6 +31,15 @@ grep -q "^fact GraphQL 5/" "$T/out.txt" && ok "the Monitor fact reports the coun
 grep -q '^other 0$' "$T/out.txt" && ok "the second repository's file holds nothing from the first" || ko "mixed: $(cat "$T/out.txt")"
 
 grep -q "board_history" "$here/hub.py" && ok "the hub loads the module" || ko "hub.py does not load board_history"
+"$py" - "$here/hubmux.py" <<'PY' && ok "the live server starts the history writer" || ko "the live server starts no history writer (hubmux read threads)"
+import ast, sys
+for n in ast.walk(ast.parse(open(sys.argv[1]).read())):
+    if isinstance(n, ast.For) and isinstance(n.iter, ast.Tuple):
+        names = [e.value for e in n.iter.elts if isinstance(e, ast.Constant)]
+        if "refresh_board" in names:
+            sys.exit(0 if "refresh_history" in names else 1)
+sys.exit(1)
+PY
 grep -q 'budget_fact(_hist.history_path' "$here/hub.py" \
   && ok "the Monitor facts carry the GraphQL points" || ko "the Monitor facts do not carry the GraphQL points"
 ! grep -q 'instTile("GraphQL"' "$here/hub.py" \
