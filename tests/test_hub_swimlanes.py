@@ -95,6 +95,31 @@ def test_page_offers_spec_wave_and_none_with_spec_as_the_default(hub):
     assert 'bo.lmode==="none"' in page, "None does not draw today's board"
 
 
+def test_the_lane_counts_the_cards_a_run_holds():
+    """Owner, 2026-11-02: the lane bar grows an amber share for the cards a run claims, so the bar reads closed then
+    doing, both out of the lane's own total."""
+    g = [{"name": "Todo", "end": False, "n": 0, "items": [_card(10, st="Todo")]},
+         {"name": "Doing", "end": False, "n": 0, "items": [_card(11, st="Doing"), _card(12, st="Doing")]}]
+    lane = _build(g, doing="Doing")["lanes"][0]
+    assert (lane["closed"], lane["total"], lane["doing"]) == (0, 3, 2), lane
+
+
+def test_a_lane_with_no_doing_card_draws_no_amber_share():
+    g = [{"name": "Todo", "end": False, "n": 0, "items": [_card(10, st="Todo")]},
+         {"name": "Closed", "end": True, "n": 0, "items": [_card(11, st="Closed", s="CLOSED")]}]
+    lane = _build(g, doing="Doing")["lanes"][0]
+    assert (lane["doing"], lane["closed"]) == (0, 1), lane
+
+
+def test_page_draws_the_doing_share_after_the_closed_share(hub):
+    page = hub.PAGE
+    assert "/*BOARD_DOING*/" not in page, "the Doing name did not reach the page"
+    bar = page[page.index("class=bar title="):page.index("class=bar title=") + 400]
+    assert "i class=dn" in bar and "left:${pct(l)}%" in bar, bar
+    css = (SCRIPTS / "board-lanes.css").read_text()
+    assert "#bbody .lh .bar i.dn{background:var(--warn)}" in css
+
+
 def test_page_inlines_the_lane_rule(hub):
     assert "/*BOARD_LANES*/" not in hub.PAGE
     assert "function buildBoard" in hub.PAGE or "const buildBoard" in hub.PAGE

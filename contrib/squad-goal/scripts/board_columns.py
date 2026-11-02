@@ -65,7 +65,7 @@ def column_for(facts):
     if facts.get("landing"): return "Pushing", freeze
     if facts.get("wave_branch"): return "Code Complete", freeze
     if facts.get("review_wait"): return CODE_REVIEW, freeze
-    if facts.get("run_live") or facts.get("child_live"): return "Doing", freeze
+    if facts.get("run_live") or facts.get("child_live"): return DOING, freeze
     # A spec is a document, never work (ADR-0142): the child_live fact above moves the spec's card, and never a dispatch.
     if facts.get("spec") or freeze: return "Backlog", freeze
     return "Todo", None
@@ -82,6 +82,7 @@ HEX = {"GRAY": "#9aa4b1", "BLUE": "#79b8ff", "YELLOW": "#e8d44d", "ORANGE": "#f5
        "PINK": "#f78fb3", "GREEN": "#3ecf8e", "RED": "#ff6b6b"}
 LANES = ({"key": "pr_open", "name": "Open PRs", "color": "#5aa9ff", "tracking": True},)
 ROLE = {"issue_closed": "Closed", "abandoned": "Abandoned", "unscheduled": "Backlog", "issue_todo": "Todo", "dev_ci": "Testing"}
+DOING = "Doing"   # the column a claimed card wears: the lane bar counts it as the amber share (owner, 2026-11-02)
 SPEC_LABEL = "spec"
 
 
@@ -103,7 +104,7 @@ def past(have, want):
     return have in order and want in order and order.index(have) > order.index(want)
 
 
-UNCLAIM = ("Doing", "Todo")   # the one backward move: the loop's dispatch undoes its own claim (ADR-0143)
+UNCLAIM = (DOING, "Todo")   # the one backward move: the loop's dispatch undoes its own claim (ADR-0143)
 NO_LANDING = "no-landing"     # the reason a run that landed nothing gives: the column the loop set goes back to Todo (#1059)
 
 
