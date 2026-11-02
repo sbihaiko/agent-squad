@@ -4283,7 +4283,7 @@ body.tkopen #win{margin-right:420px}
 #tkb pre{white-space:pre-wrap;overflow-wrap:anywhere;font:var(--fs-min)/1.45 ui-monospace,Menlo,monospace;background:#12161c;border:1px solid var(--line);border-radius:6px;padding:8px 10px;margin:6px 0}
 #tkb h3{font-size:var(--fs-min);color:var(--mute);margin:14px 0 4px}#tkb .cm{border-left:3px solid var(--acc);padding-left:8px;margin:8px 0}
 #tkb .bar button{min-width:28px}#tkb .bar button:disabled{opacity:.35;cursor:default}#tkb .bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}#tkb a.gh{color:var(--acc);font-weight:700}
-#bbody .it{cursor:pointer}#bbody .bu{font:inherit;font-size:13px;margin-left:6px;padding:0 6px;border:1px solid currentColor;border-radius:4px;background:none;color:inherit;cursor:pointer}#bbody .bupanel{padding:6px 10px}#bbody .bupanel svg{width:100%;height:auto}#bbody .bunote{font-size:13px;opacity:.75}#bbody .bumarks{font-size:13px;opacity:.8;max-height:7em;overflow:auto;margin:4px 0 0;padding-left:16px}#bbody .it.hit{box-shadow:0 0 0 2px var(--warn)}#bbody .it.hl{box-shadow:0 0 0 2px var(--acc)}#bbody .it.dim{opacity:.35}#list .r.hlr{outline:2px solid var(--acc);outline-offset:-2px}.hlrel{color:var(--acc);font-size:var(--fs-min);margin-left:6px}.hlrel[hidden]{display:none}.ghl{color:var(--mute);margin-left:6px;display:inline-flex;align-items:center;opacity:.65;text-decoration:none}.ghl:hover,.ghl:focus-visible{opacity:1;color:var(--fg)}   /* the cards the sheet's Highlight related marks (#919) */
+#bbody .it{cursor:pointer}#bbody .bu{font:inherit;font-size:13px;margin-left:6px;padding:0 6px;border:1px solid currentColor;border-radius:4px;background:none;color:inherit;cursor:pointer}#bbody .it.hit{box-shadow:0 0 0 2px var(--warn)}#bbody .it.hl{box-shadow:0 0 0 2px var(--acc)}#bbody .it.dim{opacity:.35}#list .r.hlr{outline:2px solid var(--acc);outline-offset:-2px}.hlrel{color:var(--acc);font-size:var(--fs-min);margin-left:6px}.hlrel[hidden]{display:none}.ghl{color:var(--mute);margin-left:6px;display:inline-flex;align-items:center;opacity:.65;text-decoration:none}.ghl:hover,.ghl:focus-visible{opacity:1;color:var(--fg)}   /* the cards the sheet's Highlight related marks (#919) */
 #tkb h2{font:600 var(--fs-md)/1.35 -apple-system,system-ui,sans-serif;margin:4px 0 8px}
 #tkb .md{font:var(--fs-body)/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;color:#d8dde6;overflow-wrap:anywhere}
 #tkb .md>:first-child{margin-top:0}#tkb .md p{margin:.6em 0}#tkb .md h2,#tkb .md h3,#tkb .md h4,#tkb .md h5{font-weight:600;margin:1.3em 0 .4em;line-height:1.3;color:#eef1f6}
@@ -5155,6 +5155,7 @@ const drawFlow=()=>{{const w=$("#flowb").clientWidth-20;flowW=w<600?600:w>1600?1
   const a=FLOWD[FLOWK];
   $("#flowb").innerHTML=!a?"<p class=fnote>loading the chart from the hub</p>":(FLOWK==="burndown"?flowBurn(a):cfd?flowCFD(a.cfd.ranges[CF.r]):flowLead(a.lead))+`<p class=flstat role=status>data read ${new Date(a.t*1000).toLocaleTimeString()}</p>`};
 const flowOpen=async k=>{FLOWK=k;$("#flowov").hidden=false;flowTabs();drawFlow();const want=()=>k==="burndown"?`spec=${BURN.s||""}`:barQuery(),q=want();try{const a=await (await fetch(`/api/chart/${k}?${q}`)).json();if(q!==want())return;FLOWD[k]=a;if(FLOWK===k)drawFlow()}catch(e){}};
+const openBurn=n=>{BURN.s=n;delete FLOWD.burndown;setTab("flow",{keep:true});flowOpen("burndown")};
 const ltQ=()=>`&scale=${LT.log?"log":"jira"}&a=${encodeURIComponent(LT.a)}&b=${encodeURIComponent(LT.b)}&${barQuery()}`,ltOwn=()=>LT.a!==""||LT.b!=="";   // a span other than created to closed is the hub's chart for it (#905); the bar's values filter it (#904)
 const ltZoom=async(f,t)=>{const tok=++LT.tok;try{const c=await (await fetch(`/api/leadtime?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}${ltQ()}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;LT.zr=[f,t];LT.pick=null;drawFlow()}catch(e){}};   // the hub recomputes the chart for the dragged range (#900)
 const ltGet=async()=>{const tok=++LT.tok;LT.zc=null;LT.pick=null;if(!ltOwn()){drawFlow();return}try{const c=await (await fetch(`/api/leadtime?tf=${LT.tf}${ltQ()}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;drawFlow()}catch(e){}};   // the timeframe's chart for the chosen span (#905)
@@ -5214,30 +5215,7 @@ const cards=(g,it,shown)=>{const GHI='<svg viewBox="0 0 16 16" width="13" height
 // collapsed one is accounted for by a line at the foot of the hidden: strip. Which columns those are is derived on
 // every render -- from the filtered count, the user's hidden set and the set the line's eye added -- and never
 // stored, so a card appearing brings the column back on its own and the last one leaving collapses it again (#1809).
-// A spec's burn-up (#1025): its panel opens from the spec lane's header. The hub answers the lines; the page draws them and counts nothing.
-const BU=window.BU||(window.BU={open:{},data:{},raw:{}});   // one store across the page's scopes: the handler and the lane render read the same (#1075)
-const buDay=t=>String(t||"").slice(0,10);
-function buChart(d){const s=d.series||{},days=s.days||[],pts=d.points||[];if(!days.length)return `<div class=bunote>${esc(s.reason||d.reason||"no whole board read in this spec's window yet")}</div>`;
- const W=600,H=190,P=34,g=s.guide,sc=s.scope||0,n0=days[0].n,n1=Math.max(days[days.length-1].n,g?g.to.n:0),span=Math.max(1,n1-n0),ymax=Math.max(1,sc,...days.map(p=>p.delivered));
- const X=n=>(P+(W-2*P)*(n-n0)/span).toFixed(1),Y=v=>(H-P-(H-2*P)*v/ymax).toFixed(1);
- const runs=[];for(const p of days){const r=runs[runs.length-1];if(r&&r[r.length-1].n===p.n-1)r.push(p);else runs.push([p])}
- const lines=runs.map(r=>`<polyline fill=none style="stroke:var(--ok)" stroke-width=2 points="${r.map(p=>X(p.n)+","+Y(p.delivered)).join(" ")}"/>`).join("");
- const gaps=(s.gaps||[]).map(q=>`<line x1="${X(q.n)}" x2="${X(q.n)}" y1="${Y(0)}" y2="${Y(ymax)}" style="stroke:var(--warn)" stroke-dasharray="1 3"><title>no whole read on day ${q.n}: a gap, never a zero</title></line>`).join("");
- const guide=g?`<line x1="${X(g.from.n)}" y1="${Y(g.from.delivered)}" x2="${X(g.to.n)}" y2="${Y(g.to.scope)}" style="stroke:var(--warn)" stroke-width=1.5 stroke-dasharray="4 3"/>`:"";
- const scope=`<line x1="${X(n0)}" x2="${X(n1)}" y1="${Y(sc)}" y2="${Y(sc)}" style="stroke:var(--acc)" stroke-width=2/><text x="${X(n1)}" y="${Y(sc)-4}" text-anchor=end>scope ${sc}</text>`;
- const axes=`<line x1=${P} x2=${P} y1=${P} y2=${H-P} stroke=currentColor /><line x1=${P} x2=${W-P} y1=${H-P} y2=${H-P} stroke=currentColor />`
-  +`<text x=${P} y=${H-P+14}>day ${n0}</text><text x=${W-P} y=${H-P+14} text-anchor=end>day ${n1}</text><text x=${W/2} y=${H-4} text-anchor=middle>day number (day ${n0} = first whole read)</text>`
-  +`<text x=${P-6} y=${Y(0)} text-anchor=end>0</text><text x=${P-6} y=${Y(ymax)} text-anchor=end>${ymax}</text><text x=10 y=${H/2} transform="rotate(-90 10 ${H/2})" text-anchor=middle>delivered (count)</text>`;
- const last=days[days.length-1],guideNote=g?`guide from day ${g.from.n} to day ${g.to.n} (${esc(g.to.day)}), pace ${g.pace==null?"n/a":g.pace.toFixed(2)} per day${g.source==="done"?" (every child is closed)":" at the trailing close rate"}`:`no guide: ${esc(s.guide_reason||"no pace")}`;
- const unreadNote=s.gaps&&s.gaps.length?` · no whole read on day ${s.gaps.map(q=>q.n).join(", ")}`:"";
- const log=pts.flatMap(p=>p.marks.map(m=>`<li>${esc(buDay(p.t))} ${esc(m.k)} #${m.n}</li>`)).slice(-30).join("");
- return `<svg viewBox="0 0 ${W} ${H}" role=img aria-label="burn-up of SPEC ${d.spec}: delivered count by day against the scope ${sc}">${axes}${gaps}${scope}${guide}${lines}</svg>`
-  +`<div class=bunote>delivered ${last.delivered} of scope ${sc} at day ${last.n} (${esc(last.day)}) · ${guideNote}${unreadNote}</div><ul class=bumarks>${log}</ul>`}
-const buPanel=n=>{const d=BU.data[n];return `<div class=bupanel data-bu-panel="${n}">${!d?`<div class=bunote>loading…</div>`:d.err?`<div class=bunote>${esc(d.err)}</div>`:buChart(d)}</div>`};
-async function buFetch(n){try{const d=await (await fetch("/api/chart/burnup?spec="+n)).json(),s=JSON.stringify(d);if(BU.raw[n]!==s){BU.raw[n]=s;BU.data[n]=d;pollBoard()}}catch(e){}}
-function buToggle(n){n=+n;BU.open[n]=!BU.open[n];if(BU.open[n]){delete BU.raw[n];buFetch(n)}else delete BU.data[n];pollBoard()}
-window.buToggle=buToggle;   // the board's click handler sits in another scope of the served page: it reaches the toggle here (#1075)
-const laneHtml=m=>{const ccount=c=>m.lanes.reduce((s,l)=>s+(l.counts[c]||0),0),pct=l=>l.total?Math.round(l.closed/l.total*100):0,
+const laneHtml=m=>{const ccount=c=>m.lanes.reduce((s,l)=>s+(l.counts[c]||0),0),pct=l=>l.total?Math.round(l.closed/l.total*100):0;
   share=x=>l=>l.total?Math.round((x||0)/l.total*100):0;   // a share of the lane bar, drawn after the closed share: the held green of a claimed card, then the review's own colour (owner, 2026-11-02)
  if(!m.lanes.length)return `<div class=lempty>${f?"No card matches this search.":"No card on the board."}</div>`;
  let h=`<div class=lgrid style="--vc:${Math.max(1,m.vc.length)}">`+m.vc.map(c=>`<div class=lcolh style="--cc:${colOf(c,CN)}"><span>${esc(c)}</span><b>${ccount(c)}</b>${eye({name:c})}</div>`).join("");
@@ -5247,7 +5225,6 @@ const laneHtml=m=>{const ccount=c=>m.lanes.reduce((s,l)=>s+(l.counts[c]||0),0),p
     +`<span class="lid${l.kind==="sw"?" sw":""}">${l.kind==="sw"?`<span class=sid>${esc(l.sid)}</span> · ${esc(l.wl)}`:esc(lid)}</span>`+(ltt?`<span class="ltt${l.kind==="s"?"":" subt"}">${esc(ltt)}</span>`:"")
     +(l.kind==="s"||l.kind==="none"?`<span class=bar title="${l.closed} of ${l.total} closed${l.doing?`, ${l.doing} doing`:""}${l.review?`, ${l.review} in review`:""}"><i style="width:${pct(l)}%"></i>${l.doing?`<i class=dn style="left:${pct(l)}%;width:${share(l.doing)(l)}%"></i>`:""}${l.review?`<i class=rv style="left:${pct(l)+(l.doing?share(l.doing)(l):0)}%;width:${share(l.review)(l)}%"></i>`:""}</span><span class=pc>${l.closed}/${l.total}</span>`+(l.st?`<span class=lst>${esc(l.st)}</span>`:"")+(l.kind==="s"?`<button class=bu data-bu="${l.num}" title="burnup of SPEC ${l.num}">burnup</button><a class=ghl target=_blank rel=noopener title="open SPEC ${l.num} on GitHub" aria-label="open SPEC ${l.num} on GitHub" href="https://github.com/${esc(l.r||"__REPO__")}/issues/${l.num}"><svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg></a>`:""):"")
     +`<span class=sum>${cl?m.cols.filter(c=>l.counts[c]).map(c=>`<span>${esc(c)} <b>${l.counts[c]}</b></span>`).join(""):""}</span></header>`;
-  if(!cl&&l.kind==="s"&&BU.open[l.num])h+=buPanel(l.num);
   if(!cl)for(const c of m.vc){const key=l.id+"|"+c,v=cellView(l.cells[c],!!(bo.cx||{})[key]);h+=`<div class=cell data-lane="${esc(l.id)}" data-col="${esc(c)}">${cards({name:c},v.shown,v.shown)}${v.more?`<button class=more data-cell="${esc(key)}" title="show every card of this cell">+${v.more} more</button>`:""}</div>`}
   h+="</section>"}
  return h+"</div>"};
@@ -5273,7 +5250,7 @@ $("#lmode").value=bo.lmode||"spec";$("#bbody").classList.toggle("lanes",!!model)
 $("#lhc").innerHTML=model&&model.hc.length?`<button class=hcpill id=lhcx title="columns with no card in an expanded lane: click to expand the lanes that hold their cards">+${model.hc.length} hidden: ${model.hc.map(x=>x.user?`<span class=hcu data-eye="${esc(x.name)}" title="show this column">${esc(x.name)} <b>${x.count}</b></span>`:esc(x.name)+" <b>"+x.count+"</b>").join(" · ")}</button>`:"";
 if(lanesHtml!==null){if($("#bbody").dataset.h!==lanesHtml){$("#bbody").dataset.h=lanesHtml;$("#bbody").innerHTML=lanesHtml;restore()}}
 else if($("#bbody").dataset.h!==html){$("#bbody").dataset.h=html;$("#bbody").innerHTML=html;restore()}   // same cards: leave the DOM alone, so a scroll in progress is never interrupted
-boardRows=all.flatMap(g=>g.items);paintHL();Object.keys(BU.open).forEach(n=>BU.open[n]&&buFetch(n));
+boardRows=all.flatMap(g=>g.items);paintHL();
 }catch(e){}finally{lim.busy=0}}
 // highlight:begin
 // The highlight follows the selection and is never stored: `hl` is {run: id} for a run, or {n, r, kind} for a card. Its
@@ -5382,7 +5359,7 @@ let lanesNow=null;   // the model the board last drew: the controls act on its l
 $("#lhd").onchange=e=>{bo.hideDone=e.target.checked;saveB();pollBoard()};
 const laneSet=v=>{bo.lc=bo.lc||{};for(const l of(lanesNow?lanesNow.lanes:[]))bo.lc[l.id]=v;saveB();pollBoard()};
 $("#lcall").onclick=()=>laneSet(true);$("#lexp").onclick=()=>laneSet(false);
-document.addEventListener("click",e=>{if(e.target.closest(".ghl"))return;const bu=e.target.closest("#bbody .bu");if(bu){window.buToggle(bu.dataset.bu);return}const h=e.target.closest("#bbody .lh");if(h){const id=h.dataset.lane,coll=h.closest(".lane").classList.contains("coll");bo.lc=bo.lc||{};laneToggle(id,coll);return}
+document.addEventListener("click",e=>{if(e.target.closest(".ghl"))return;const bu=e.target.closest("#bbody .bu");if(bu){openBurn(+bu.dataset.bu);return}const h=e.target.closest("#bbody .lh");if(h){const id=h.dataset.lane,coll=h.closest(".lane").classList.contains("coll");bo.lc=bo.lc||{};laneToggle(id,coll);return}
  const m=e.target.closest("#bbody .more");if(m){bo.cx=bo.cx||{};bo.cx[m.dataset.cell]=true;saveB();pollBoard();return}   // a more click opens its own cell only
  const p=e.target.closest("#lhcx");if(p&&lanesNow){const names=new Set(lanesNow.hc.map(x=>x.name));bo.lc=bo.lc||{};   // a hidden column's pill expands the lanes that hold its cards
   for(const l of lanesNow.lanes)if(l.collapsed&&Object.keys(l.counts).some(c=>names.has(c)))bo.lc[l.id]=false;saveB();pollBoard()}});
