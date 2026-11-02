@@ -123,10 +123,16 @@ def test_the_repo_review_chain_is_the_live_chain(reg):
     assert [e.effort for e in repo] == [None, "medium"]
 
 
-@pytest.mark.parametrize("raw", ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-sol-fast", "gpt-5.6-terra-fast", "gpt-5.6-luna-fast"])
+@pytest.mark.parametrize("raw", ["gpt-6.1-sol", "gpt-6.1-sol-fast", "gpt-5.6-terra-fast", "gpt-5.6-luna-fast"])
 def test_a_tools_entry_with_no_cli_route_keeps_codex_with_tools(reg, raw):
     got = modelreg.review_route(raw, reg)
     assert (got.route, got.runner, got.wire, got.tools) == ("cli", "codex", raw, True)
+
+
+def test_a_served_gpt_6_astra_reviews_on_its_own_cli_route(reg):
+    assert "cli" in reg.entries["gpt-6-astra"].routes
+    got = modelreg.review_route("gpt-6-astra", reg)
+    assert (got.route, got.runner, got.wire, got.tools) == ("cli", "codex", "gpt-6-astra", True)
 
 
 def test_the_no_tools_call_runs_only_when_the_registry_says_no_tools():
