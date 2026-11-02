@@ -6,8 +6,10 @@ route under `kind=screenshot`, with the behaviour it had: PNG by magic and `Cont
 import http.client
 import importlib.util
 import json
+import os
 import pathlib
 import threading
+import time
 from http.server import ThreadingHTTPServer
 
 import pytest
@@ -194,3 +196,111 @@ def test_the_screenshot_door_keeps_its_png_rule_while_the_image_kind_sniffs(serv
     assert stored(state) == [] and sent == []
     assert post(port, route(), GIF, ctype="image/png")[0] == 200   # the image kind admits a sniffed GIF
     assert stored(state) == [state / "sessions" / SID / "images" / f"{CID}.gif"]
+
+
+def test_an_attach_runs_the_one_purge_and_keeps_its_own_file(served):
+    """#1153: the route writes through the one purge; an attachment older than the lifetime goes, the new one stays."""
+    mod, state, port, sent = served
+    old, _ = mod.screenshot_written(SID, "old")
+    old.parent.mkdir(parents=True, exist_ok=True)
+    old.write_bytes(PNG)
+    os.utime(old, (time.time() - 8 * 86400, time.time() - 8 * 86400))
+    assert post(port, route(), PNG)[0] == 200
+    assert not old.exists()
+    assert (state / "sessions" / SID / "images" / f"{CID}.png").exists()
+
+
+TAILNET = "hub.tail1234.ts.net"
+ALLOWED = "ana@example.com"
+UNLISTED = "eve@example.com"
+
+
+def tailnet_served(monkeypatch, tmp_path, send_on):
+    """A hub over the tailnet under one send grant (#1152): the profile's tailnet block is written, the session send is
+    stubbed, and both routes answer against the same access decision."""
+    checkout = tmp_path / "checkout"
+    (checkout / "docs" / "squad").mkdir(parents=True)
+    (checkout / "docs" / "squad" / "defaults.yaml").write_text(
+        f"tailnet:\n  host: {TAILNET}\n  allow: [\"{ALLOWED}\"]\n  terminals_send: {str(send_on).lower()}\n")
+    state = tmp_path / "state"
+    state.mkdir()
+    for k, v in (("SG_REPO", "x/y"), ("SG_OWNER", "x"), ("SG_PROJECT", "4"), ("SG_PROFILE", "p1"),
+                 ("HOME", str(tmp_path)), ("SG_CHECKOUT", str(checkout)), ("SG_HUB_DIR", str(tmp_path / "hub")),
+                 ("SG_STATE", str(state))):
+        monkeypatch.setenv(k, v)
+    for k in ("SG_STATE_BASE", "SG_SHARED"):
+        monkeypatch.delenv(k, raising=False)
+    spec = importlib.util.spec_from_file_location("hub_attach_tailnet", HUB_PY)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    sent = []
+    monkeypatch.setattr(mod.session_send, "send", lambda profile, sid, text, cid, **kw: sent.append((sid, text, cid)) or {"status": "sent"})
+    monkeypatch.setattr(mod.session_send, "live_session", lambda profile, sid, **kw: {"sessionId": sid} if sid == SID else None)
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), mod.H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return mod, state, srv, sent
+
+
+def answer_of(port, path, body, ctype, host, login, origin):
+    """(status, body): the whole answer, so the matrix holds the refusal cause and not only its code."""
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=60)
+    headers = {"Host": host, "Content-Type": ctype, "Origin": origin}
+    if login:
+        headers["Tailscale-User-Login"] = login
+    conn.request("POST", path, body=body, headers=headers)
+    r = conn.getresponse()
+    data = r.read()
+    conn.close()
+    return r.status, data
+
+
+@pytest.mark.parametrize("send_on", [False, True], ids=["grant off", "grant on"])
+def test_the_attach_route_and_the_send_route_answer_the_same_way_on_the_tailnet(monkeypatch, tmp_path, send_on):
+    """The matrix from #1152: every access case answers alike on /api/sessions/attach and /api/sessions/send, and a
+    refusal writes no file. One grant admits both routes or neither, on the loopback page and over the tailnet."""
+    _, state, srv, _sent = tailnet_served(monkeypatch, tmp_path, send_on)
+    try:
+        assert_grant_matrix(srv.server_port, state, "")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+@pytest.mark.parametrize("send_on", [False, True], ids=["grant off", "grant on"])
+def test_the_same_grant_matrix_holds_through_the_tailnet_mux(monkeypatch, tmp_path, send_on):
+    """The mux is the tailnet's door: it strips the profile prefix, then the attach and send routes answer the same way."""
+    mod, state, hub_srv, _sent = tailnet_served(monkeypatch, tmp_path, send_on)
+    spec = importlib.util.spec_from_file_location("hubmux_attach", SCRIPTS / "hubmux.py")
+    mux = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mux)
+    mux_srv = mux.server(0, {"p1": {"repo": "x/y", "state": "", "mod": mod}})
+    threading.Thread(target=mux_srv.serve_forever, daemon=True).start()
+    try:
+        assert_grant_matrix(mux_srv.server_address[1], state, "/p1")
+    finally:
+        mux_srv.shutdown()
+        mux_srv.server_close()
+        hub_srv.shutdown()
+        hub_srv.server_close()
+
+
+def assert_grant_matrix(port, state, prefix):
+    own = f"http://127.0.0.1:{port}"
+    cases = [
+        ("loopback own origin", f"127.0.0.1:{port}", None, own),
+        ("loopback foreign origin", f"127.0.0.1:{port}", None, "https://evil.example"),
+        ("loopback host with an identity", f"127.0.0.1:{port}", ALLOWED, own),
+        ("tailnet own origin", TAILNET, ALLOWED, f"https://{TAILNET}"),
+        ("tailnet foreign origin", TAILNET, ALLOWED, "https://evil.example"),
+        ("tailnet without identity", TAILNET, None, f"https://{TAILNET}"),
+        ("tailnet unlisted login", TAILNET, UNLISTED, f"https://{TAILNET}"),
+    ]
+    for i, (name, host, login, origin) in enumerate(cases):
+        cid = f"case-{i:04d}"
+        attach = answer_of(port, prefix + route(cid=cid), PNG, "image/png", host, login, origin)
+        send = answer_of(port, prefix + "/api/sessions/send",
+                         json.dumps({"sid": SID, "text": "hello", "client_id": cid}),
+                         "application/json", host, login, origin)
+        assert attach == send, f"{name}: the attach route answered {attach}, the send route answered {send}"
+        written = state / "sessions" / SID / "images" / f"{cid}.png"
+        assert written.exists() == (attach[0] == 200), f"{name}: attach {attach[0]} but file exists={written.exists()}"
