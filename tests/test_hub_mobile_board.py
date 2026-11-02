@@ -25,7 +25,7 @@ FILTER_JS = SCRIPTS / "board-filter.js"
 NODE = shutil.which("node")
 ROUTES = {"/api/status", "/api/hub", "/api/board", "/api/issue", "/api/subs", "/api/models", "/api/stats", "/api/runs", "/api/ended",
           "/api/sessions", "/api/sessions/card", "/api/sessions/card/answer", "/api/sessions/conversation", "/api/sessions/send", "/api/promote", "/api/loop",
-          "/api/load", "/api/chart/burndown"}   # the owner's move is a write (#829); the Monitor reads the desktop card's route (#983); the Throughput screen reads the burndown (#1049)
+          "/api/load"}   # the owner's move is a write (#829); the Monitor reads the desktop card's route (#983)
 
 
 def run_js(src, expr, prelude=""):
