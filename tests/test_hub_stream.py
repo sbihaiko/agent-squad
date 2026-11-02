@@ -126,6 +126,7 @@ def test_foreign_origin_gets_no_stream(on, origin):
 
 @pytest.mark.heavy
 def test_reconnect_repeating_a_held_version_sees_no_duplicate(on):
+    time.sleep(_hubstream().TICK_SECONDS + 0.1)   # a subject is read once a tick: let the reset land before the first version is held
     s = _open(on["port"], "/alpha/api/stream")
     first = _version(_read_until(s, b"event: runs"))
     s.close()
@@ -179,3 +180,14 @@ def test_versions_rise_only_when_content_changes():
     restarted.refresh()
     assert restarted.newer({})["runs"] > two
     assert hubstream.held_from("held=runs:7,board:x") == {"runs": 7}
+
+
+def test_one_read_per_subject_per_tick_whatever_the_pages():
+    hubstream = _hubstream()
+    reads = []
+    v = hubstream.Versions({"runs": lambda: reads.append(1) or []})
+    for _ in range(3):   # three open pages, one tick
+        v.refresh(tick=7)
+    assert len(reads) == 1
+    v.refresh(tick=8)
+    assert len(reads) == 2

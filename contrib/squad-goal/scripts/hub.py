@@ -6539,7 +6539,7 @@ class H(BaseHTTPRequestHandler):
         quiet = time.monotonic()
         try:
             while True:
-                VERSIONS.refresh()
+                VERSIONS.refresh(hubstream.tick())
                 fresh = VERSIONS.newer(held)
                 for name, v in sorted(fresh.items()):
                     chunk(hubstream.event(name, v)); held[name] = v

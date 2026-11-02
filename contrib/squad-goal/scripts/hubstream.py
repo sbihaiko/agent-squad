@@ -21,15 +21,23 @@ def enabled():
     return os.environ.get("SQUAD_HUB_STREAM") == "1"
 
 
+def tick():
+    return int(time.monotonic() // TICK_SECONDS)
+
+
 class Versions:
     def __init__(self, subjects):
         self._subjects = subjects   # {name: zero-argument read returning JSON-able content}
         self._digest = {}
         self._version = {}
+        self._read_at = None
         self._lock = threading.Lock()
 
-    def refresh(self):
+    def refresh(self, tick=None):
         with self._lock:
+            if tick is not None:
+                if tick == self._read_at: return
+                self._read_at = tick
             for name, read in self._subjects.items():
                 digest = hashlib.sha1(json.dumps(read(), sort_keys=True, default=str).encode()).hexdigest()
                 if name not in self._version or digest != self._digest[name]:
