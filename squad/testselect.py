@@ -14,7 +14,7 @@ DATA_READERS = {"tests/shell_suites_seconds.txt": "tests/shell_suites.py"}
 # The gate stages that may run the delta: the tests a change reaches. The landing, the promotion proof and the nightly
 # always run the full battery, so a cheaper check never weakens the gate a delivery stands on (ADR-0018). A stage this
 # list does not name is full too: a typo in a stage never narrows a gate.
-DELTA_STAGES = frozenset({"fast", "wave-entry", "wave-tip", "prepush", "child"})
+DELTA_STAGES = frozenset({"fast", "wave-entry", "wave-tip", "prepush"})
 
 
 class _All(Exception):

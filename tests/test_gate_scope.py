@@ -1,7 +1,9 @@
 """The scope a gate stage runs at, through the one battery the loop shares: an intermediate stage runs the delta a change
 reaches, an uncovered change falls back to the full battery with its reason, and the landing stage runs the full battery
 whatever the delta would say. The proof is the selector's own answer and the two record files the gate wrapper reads
-(GATE_SELECT_FILE and GATE_SCOPE_FILE), so the stage naming and the fallback are tested together, never one shape alone."""
+(GATE_SELECT_FILE and GATE_SCOPE_FILE), so the stage naming and the fallback are tested together, never one shape alone.
+The last case guards the wiring the battery cannot show: the landing gate asks for the `landing` stage, and the
+promotion proof and the nightly never ask the selector, so no stage name can narrow them (ADR-0166)."""
 import os
 import subprocess
 import sys
@@ -35,6 +37,8 @@ def battery(tmp_path, repo, stage):
     scope = tmp_path / f"scope-{stage}"
     env = {**os.environ, "PYTHONPATH": str(ROOT), "SG_SCOPE_ROOT": str(ROOT),
            "GATE_SELECT_FILE": str(sel), "GATE_SCOPE_FILE": str(scope)}
+    env.pop("SG_TEST_SELECT", None)   # a gate that runs this suite may hold it; the case reads its own stage, never the live one
+    env.pop("SG_GATE_STAGE", None)
     cmd = f'. "{BASE_BATTERY}"; sg_battery_run "{py}" main 2 yes "{stage}"'
     done = subprocess.run(["bash", "-c", cmd], cwd=repo, env=env, capture_output=True, text=True)
     assert done.returncode == 0, done.stdout + done.stderr
@@ -69,3 +73,19 @@ def test_a_full_stage_runs_the_full_battery_whatever_the_delta_says(tmp_path, st
     sel, scope, argv = battery(tmp_path, repo, stage)
     assert sel == f"all: {stage} runs the full battery" and scope == "full"
     assert "tests/test_" not in pytest_line(argv)
+
+
+def test_the_delivery_gates_never_take_the_delta_scope():
+    """The wiring the battery cannot show: the landing check asks for `landing`, so pytest is the whole tree, and the wave
+    tip check asks for `wave-tip`, so it stays a delta. The promotion proof and the nightly do not build the battery or read
+    the selector at all, so no stage name narrows them. They run pytest over the whole tree themselves."""
+    scripts = ROOT / "contrib/squad-goal/scripts"
+    land = (scripts / "branchland.sh").read_text()
+    assert 'sg_base_gate "refs/sg-gate/$land" "$py" landing' in land
+    wave = (scripts / "wave.sh").read_text()
+    assert 'sg_base_gate "origin/$base" "$py" wave-tip' in wave
+    for name in ("promote-pass.sh", "nightly.sh"):
+        text = (scripts / name).read_text()
+        assert "-m pytest" in text, name
+        assert "testselect" not in text, name
+        assert "sg_base_battery" not in text, name
