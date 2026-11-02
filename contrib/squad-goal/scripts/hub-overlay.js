@@ -454,7 +454,7 @@ async function loadConversation() {
     if (!turns.length) { empty("No turns yet."); lastSig = sig; return; }
     log.replaceChildren(...feed(turns));
     if (atEnd) pinBottom();   // the talk opens at its newest line, until the reader scrolls up (owner, 2026-11-01)
-  } catch (e) { /* the next poll tries again */ }
+  } catch (e) { console.warn("conversation:", e); }   // the next poll tries again; a swallowed failure froze the feed silently (#1079)
 }
 const uuid = () => (crypto.randomUUID ? crypto.randomUUID()
   : "10000000-1000-4000-8000-100000000000".replace(/[018]/g, c => (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)));
@@ -627,7 +627,11 @@ function frame(t) {
   if (!rest || tg.x || tg.y) kick(); else lastT = 0;
 }
 addEventListener("pointermove", e => { ptr = { x: e.clientX, y: e.clientY }; lastMove = performance.now(); kick(); }, { passive: true });
-document.addEventListener("visibilitychange", () => { lastT = 0; kick(); });
+// A background tab throttles timers to about once a minute, so a reader who works in another window waits (#1079):
+// the talk is read again the moment this one is looked at or focused. Registered once, never per open.
+const reread = () => { if (!ov.hidden && !document.hidden) loadConversation(); };
+document.addEventListener("visibilitychange", () => { lastT = 0; kick(); reread(); });
+addEventListener("focus", reread);
 if (reduced.addEventListener) reduced.addEventListener("change", kick);
 applyLayout(); syncSend();
 // A reload puts the panel back as it was left (owner, 2026-11-01): the page reloads when the hub build changes, and the

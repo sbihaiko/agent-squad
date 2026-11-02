@@ -352,3 +352,13 @@ def test_an_empty_session_list_never_takes_away_the_talk():
     for later in ("sessions = found", "cur = ", 'empty("No session runs'):
         assert guard < body.index(later), later
     assert "EMPTY_N" not in js
+
+def test_the_talk_is_read_again_the_moment_the_tab_is_looked_at():
+    """Owner, 2026-11-01: the panel updated only after a long wait when he worked in another window. A background tab
+    throttles timers to about once a minute, so the panel reads the talk again on focus and on coming back (#1079)."""
+    js = OVERLAY.read_text()
+    assert 'const reread = () => { if (!ov.hidden && !document.hidden) loadConversation(); };' in js
+    assert 'addEventListener("focus", reread);' in js
+    assert 'document.addEventListener("visibilitychange"' in js
+    assert js.count('addEventListener("focus", reread)') == 1   # registered once, never per open
+    assert 'console.warn("conversation:", e)' in js             # a failed poll says so; it never freezes in silence
