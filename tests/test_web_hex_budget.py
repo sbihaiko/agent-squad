@@ -8,8 +8,10 @@ counted. The checks read the served text; no browser runs.
 """
 import importlib.util
 import json
+import os
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -36,8 +38,21 @@ def _load(name, path):
 
 
 def _surfaces():
-    hub = _load("hub_web_hex_budget", SCRIPTS / "hub.py")
-    mux = _load("hubmux_web_hex_budget", SCRIPTS / "hubmux.py")
+    # The hub module reads its address at import time, so the test names one: a runner with no profile (CI) still renders
+    # the same static page, and the guard never depends on the machine it runs on.
+    env = {"SG_REPO": "x/y", "SG_OWNER": "x", "SG_PROJECT": "1", "SG_CHECKOUT": str(ROOT),
+           "SG_STATE": tempfile.mkdtemp(prefix="web-hex-budget-")}
+    before = {k: os.environ.get(k) for k in env}
+    os.environ.update(env)
+    try:
+        hub = _load("hub_web_hex_budget", SCRIPTS / "hub.py")
+        mux = _load("hubmux_web_hex_budget", SCRIPTS / "hubmux.py")
+    finally:
+        for k, v in before.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
     return {
         "hub": hub.PAGE,
         "hub-mobile": hub.MOBILE_PAGE,
