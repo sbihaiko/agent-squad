@@ -54,6 +54,7 @@ test-fastloop-pid.sh 0.05
 test-gate-lock.sh 14.58
 test-gate.sh 0.56
 test-gh-pass-bounded.sh 3.40
+test-hand-gate.sh 1.86
 test-ghcache.sh 2.83
 test-ghcall-refusal.sh 0.41
 test-ghspend.sh 6.27
