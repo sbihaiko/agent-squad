@@ -4441,7 +4441,7 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 <div id=board><div id=bhead><label>Swimlanes <select id=lmode title="swimlanes: one lane per spec (Spec), per wave (Wave), or no lanes, today's board (None)"><option value=spec>Spec</option><option value=wave>Wave</option><option value=none>None</option></select></label> <details id=fw class=fsel><summary>Waves: all</summary><div class=fpop id=fwl></div></details> <details id=fs class=fsel><summary>Specs: all</summary><div class=fpop id=fsl></div></details> <details id=fk class=fsel><summary>Kinds: all</summary><div class=fpop id=fkl></div></details> <button id=lcall title="collapse every swimlane">Collapse all</button> <button id=lexp title="expand every swimlane">Expand all</button> <label class=hck title="hide the swimlanes whose every ticket is closed"><input type=checkbox id=lhd> Hide done lanes</label> <span id=lhc></span><span id=bt class=m></span> <span id=hlrel class=hlrel hidden></span></div><div id=bcases></div><div id=bbody></div></div>
 </section>
 <section id=tab-flow class=pane aria-label="Flow charts">
-<div class=rkt id=flowtabs><button id=bruns title="the live run dashboards">Runs</button><button id=bflow title="the development flow: the cards in each column over time, from the flow history (SPEC 111)">Cumulative Flow Diagram</button><button id=blead title="the lead time of the closed cards, opened to closed (SPEC 111)">Lead Time</button></div>
+<div class=rkt id=flowtabs><button id=bruns title="the live run dashboards">Runs</button><button id=bflow title="the development flow: the cards in each column over time, from the flow history (SPEC 111)">Cumulative Flow Diagram</button><button id=bburn title="the scope, the done and the held of one spec over time, from the flow history (#1025)">Burn-Down</button><button id=blead title="the lead time of the closed cards, opened to closed (SPEC 111)">Lead Time</button></div>
 <div id=main></div>
 <div id=flowov hidden><div id=flowb></div></div>
 </section>
@@ -5062,8 +5062,8 @@ const cfdAxis=c=>{const n=c.days.length,base=flowH-flowP;   // every number and 
 const coverNote=v=>!v?"":`<p class=fnote>cards read ${v.read} of ${v.total}, ${v.complete} complete, last refresh ${v.last?esc(v.last):"never"}</p>`;
 let CF={r:"30"};   // the cumulative flow's range, 30 days at first (#901)
 const CFD_R=[["7","7 days"],["30","30 days"],["90","90 days"],["all","All"]];   // the cumulative flow's range views (#901)
-const flowViews=k=>`<label class=fhead>View <select id=flowv><option value=cfd${k==="cfd"?" selected":""}>Cumulative flow</option><option value=burndown${k==="burndown"?" selected":""}>Burndown</option></select></label>`;   // one Throughput tab, two charts (#1048)
-const flowCFD=c=>{const sel=`<label class=fhead>Range <select id=cfdr>${CFD_R.map(([k,v])=>`<option value=${k}${CF.r===k?" selected":""}>${v}</option>`).join("")}</select></label> ${flowViews("cfd")}`;
+
+const flowCFD=c=>{const sel=`<label class=fhead>Range <select id=cfdr>${CFD_R.map(([k,v])=>`<option value=${k}${CF.r===k?" selected":""}>${v}</option>`).join("")}</select></label>`;
   if(!c.days.length)return sel+"<p class=fnote>the flow history has no sample yet</p>";
   const n=c.days.length,cw=(flowW-2*flowP)/(n<2?1:n);
   const runs=b=>{const out=[];let cur=null;c.days.forEach((_,i)=>{if(b.upper[i]===null){cur=null;return}if(!cur){cur=[];out.push(cur)}cur.push(i)});return out};
@@ -5121,7 +5121,7 @@ const flowLead=l=>{const S=l.summary,ex=l.excluded.map(e=>`${e.count} ${esc(EXRE
   return head+coverNote(l.coverage)+ltChart(LT.zc||l.control[LT.log?"log":"jira"][LT.tf]);};
 let BURN={s:null};   // the spec the burndown draws; null lets the hub name the first open spec (#1048)
 const flowBurn=a=>{const b=a.burn,opts=a.specs.map(s=>`<option value=${s.n}${s.n===a.spec?" selected":""}>#${s.n} ${esc(s.t)}</option>`).join("");
-  const sel=`<label class=fhead>Spec <select id=burns>${opts}</select></label> ${flowViews("burndown")}`;
+  const sel=`<label class=fhead>Spec <select id=burns>${opts}</select></label>`;
   if(!a.specs.length)return sel+"<p class=fnote>no open spec on the board</p>";
   if(!b)return sel;
   if(b.reason)return sel+`<p class=fnote>this spec reads as empty: ${esc(b.reason)}</p>`;
@@ -5158,7 +5158,6 @@ document.addEventListener("pointerup",()=>{const d=LTD;LTD=null;if(!d||!d.moved)
   const a=(ltLo(d.x0,d.x1)-flowP)/(flowW-2*flowP),b=(ltHi(d.x0,d.x1)-flowP)/(flowW-2*flowP);if(b-a<0.005||!LT.rng)return;const [f,t]=ltSpan(LT.rng,a,b);ltZoom(f,t)});
 $("#flowb").onchange=e=>{if(e.target.id==="cfdr"){CF.r=e.target.value;drawFlow();return}
   if(e.target.id==="burns"){BURN.s=+e.target.value;delete FLOWD.burndown;flowOpen("burndown");return}
-  if(e.target.id==="flowv"){flowOpen(e.target.value);return}
   if(e.target.id==="ltr"){LT.tf=e.target.value;saveLT();LT.zr=null;ltGet();return}
   if(e.target.id==="lty"){LT.ty=e.target.value;saveLT();barMoved();return}
   if(e.target.id==="lta"||e.target.id==="ltb"){LT[e.target.id==="lta"?"a":"b"]=e.target.value;LT.pick=null;if(LT.zr){ltZoom(LT.zr[0],LT.zr[1]);return}ltGet();return}
@@ -5166,7 +5165,7 @@ $("#flowb").onchange=e=>{if(e.target.id==="cfdr"){CF.r=e.target.value;drawFlow()
 $("#flowb").onclick=e=>{if(LT.noclick){LT.noclick=false;return}
   if(e.target.id==="ltz"){LT.zr=null;ltGet();return}
   const k=e.target.closest("circle[data-k]");if(k){LT.pick=+k.dataset.k;drawFlow();return}const r=e.target.closest("tr[data-o]");if(r)showIssue(+r.dataset.o,"__REPO__")};
-$("#bflow").onclick=()=>flowOpen("cfd");$("#blead").onclick=()=>flowOpen("lead");addEventListener("resize",()=>{if(!$("#flowov").hidden)drawFlow()});
+$("#bflow").onclick=()=>flowOpen("cfd");$("#bburn").onclick=()=>flowOpen("burndown");$("#blead").onclick=()=>flowOpen("lead");addEventListener("resize",()=>{if(!$("#flowov").hidden)drawFlow()});
 // flow-charts:end
 const barQuery=()=>["fw","fs","fk"].map(k=>`${k}=${encodeURIComponent((bo[k]||[]).join(","))}`).join("&")+`&ty=${LT.ty}`;   // the bar's Waves, Specs and Kinds and the chart's Type, read by both diagrams; the board filters on the page (#904, #985)
 let boardTag=null,boardBody=null;   // the board the page holds and its ETag: a 304 keeps it (#973)
@@ -5292,7 +5291,7 @@ function setTab(t,o){if(!TABS[t])t="board";TAB=t;ls.tab=t;save();
  drawMain()}
 document.querySelector(".tabs").addEventListener("click",e=>{const b=e.target.closest("button[data-t]");if(b)setTab(b.dataset.t)});
 $("#bruns").onclick=()=>{$("#flowov").hidden=true;flowTabs()};
-function flowTabs(){const h=$("#flowov").hidden,k=typeof FLOWK==="string"?FLOWK:"cfd";$("#bruns").classList.toggle("on",h);$("#bflow").classList.toggle("on",!h&&(k==="cfd"||k==="burndown"));$("#blead").classList.toggle("on",!h&&k==="lead")}
+function flowTabs(){const h=$("#flowov").hidden,k=typeof FLOWK==="string"?FLOWK:"cfd";$("#bruns").classList.toggle("on",h);$("#bflow").classList.toggle("on",!h&&k==="cfd");$("#bburn").classList.toggle("on",!h&&k==="burndown");$("#blead").classList.toggle("on",!h&&k==="lead")}
 $("#main").addEventListener("click",e=>{const r=e.target.closest(".r[data-rid]");if(r)openRun(r.dataset.rid)});   // a run row on the Runs tab opens the sheet (#984)
 $("#main").addEventListener("keydown",e=>{const r=e.target.closest(".r[data-rid]");if(r&&(e.key==="Enter"||e.key===" ")){e.preventDefault();openRun(r.dataset.rid)}});
 new MutationObserver(flowTabs).observe($("#flowov"),{attributes:true});
