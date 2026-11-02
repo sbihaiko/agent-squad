@@ -103,8 +103,10 @@ html.sq-docked body{margin-right:var(--sq-dock)}
 .sq-fold summary::-webkit-details-marker{display:none}.sq-fold[open] summary{color:#8b949e}
 .sq-answer{margin:0 auto 10px 0;width:fit-content;max-width:100%;border:1px solid #26303c;border-radius:14px 14px 14px 4px;padding:8px 12px;background:#161c24}
 .sq-answer .sq-who{color:#8b949e;font-size:13px}
-/* The clock sits at the end of the last line, as WhatsApp draws it (owner, 2026-11-01); no tick, so the bubble says only the time. */
-.sq-time{float:right;margin:4px 0 0 10px;color:#8b949e;font-size:13px;line-height:1.55;white-space:nowrap;user-select:none}
+/* One header line per bubble: the owner's label at the left, the clock at the right corner, as WhatsApp draws it (owner,
+   2026-11-01). Floated alone, the clock hung above the bubble and pushed the first line down (#1099). No tick. */
+.sq-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin:0 0 3px}
+.sq-time{margin-left:auto;color:#8b949e;font-size:13px;line-height:1.4;white-space:nowrap;user-select:none}
 .sq-h{font-family:var(--sq-mono);font-weight:600;font-size:var(--sq-fs);color:#eef1f5;margin:1.55em 0 0}
 .sq-tbl{width:100%;border-collapse:collapse;margin:0 0 1.55em;font-size:var(--sq-fs)}
 .sq-tbl th,.sq-tbl td{border:1px solid #353d4b;padding:4px 8px;text-align:left;vertical-align:top}
@@ -404,7 +406,7 @@ function turnNode(t) {
     d.append(sum, richText(t.text));
     return d;
   }
-  const d = document.createElement("div"), who = document.createElement("span");
+  const d = document.createElement("div"), who = document.createElement("span"), head = document.createElement("div");
   // A screenshot is the owner's, whatever the harness calls the turn: it is a bubble of its own on the owner's side
   // (owner, 2026-11-01).
   const role = onlyImage ? "owner" : t.role;
@@ -412,15 +414,19 @@ function turnNode(t) {
   who.className = "sq-who";
   who.textContent = !onlyImage && t.role === "owner" ? "\u203A you" : "";
   const body = richText(t.text);
-  if (who.textContent) d.append(who);
-  d.append(body);
+  // The clock rides the bubble's own header line, at the right corner, level with the owner's label: floated alone it hung
+  // above the bubble and pushed its first line down (owner, 2026-11-02, #1099).
+  head.className = "sq-head";
+  if (who.textContent) head.append(who);
   const at = clock(t.at);
   if (at) {
     const tm = document.createElement("span");
     tm.className = "sq-time";
     tm.textContent = at;
-    d.append(tm);
+    head.append(tm);
   }
+  if (head.childElementCount) d.append(head);
+  d.append(body);
   clamp(body, CLAMP[role] || 116);
   return d;
 }
