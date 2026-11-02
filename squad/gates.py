@@ -126,39 +126,86 @@ def suite_runs(params, inp):
     return [], False
 
 
-def suite_key(check_id, params, inp):
-    """The identity of the suite a gate stage would run, or None when the stage runs no suite: only a suite gate is memoed.
+def stage_commands(check_id, params, inp, values=None):
+    """The (argv, tree) pairs a gate stage is about to run, in the order it runs them; () when it runs no shell command.
+
+    The identity of a suite is what the stage runs, never the id of its check. `ac-verify` runs each command through
+    `/bin/sh -c`; `review-command` runs its argv as it stands. Two gate stages of one run that meet the same pairs over
+    the same tree run one suite, whatever checks name them.
+    """
+    if check_id == "ac-verify":
+        runs = list(dict.fromkeys(suite_runs(params, inp)[0]))     # `ac_verify` runs each pair once, so the key holds each once
+        return tuple((("/bin/sh", "-c", c), tree) for c, tree in runs)
+    if check_id == "review-command":
+        argv = review_argv(params["argv"], values or {"worktree": inp.cwd})     # the same values `review_check` fills
+        return ((tuple(argv), None),)
+    return ()
+
+
+def suite_key(check_id, params, inp, values=None):
+    """The identity of the suite a gate stage would run, or None when the stage runs no shell command.
 
     Two stages with one key run the same commands over the same trees, so one green verdict answers for both. Any doubt --
-    no git tree, or no commands -- is no key, and the stage runs its check.
+    no command, or no git tree -- is no key, and the stage runs its check.
     """
-    if check_id != "ac-verify":
-        return None
-    runs, _dispatch = suite_runs(params, inp)
-    return json.dumps([list(r) for r in runs], separators=(",", ":")) if runs else None
+    cmds = stage_commands(check_id, params, inp, values)
+    return json.dumps([[list(argv), tree] for argv, tree in cmds], separators=(",", ":")) if cmds else None
+
+
+def _porcelain_entries(raw):
+    """The (code, path) pairs of a `status --porcelain=v1 -z` stream, with no quoting.
+
+    Each entry is `XY <path>`. A rename or copy follows its new path with its old path as a separate token, which is
+    skipped. The `-z` form prints a path as it is, so a name with a space, a tab or a non-ASCII character reads whole.
+    """
+    tokens, out, i = raw.split("\0"), [], 0
+    while i < len(tokens):
+        tok = tokens[i]
+        i += 1
+        if len(tok) < 4:
+            continue
+        out.append((tok[:2], tok[3:]))
+        if "R" in tok[:2] or "C" in tok[:2]:
+            i += 1
+    return out
 
 
 def tree_key(cwd):
-    """The tree a verdict is kept for: (its commit, a digest of its uncommitted state). None outside a git tree.
+    """The tree a verdict is kept for: (its commit, a digest of its uncommitted state). None outside a git tree, or for
+    a dirty state the key cannot read.
 
     A pass over uncommitted work must never answer for the commit, so the digest is part of the key and is empty only
-    for a tree git reports clean at that commit.
+    for a tree git reports clean at that commit. An untracked path counts by its contents: the path comes from
+    `porcelain -z`, so a quoted name is read as the file it is. A dirty path the key cannot read -- a directory, or a
+    file it may not open -- is no key at all, and the stage runs its check instead of reusing a verdict.
     """
     sha = git.head(cwd)
     if sha is None:
         return None
-    status = git.run(["status", "--porcelain=v1", "-uall"], cwd).stdout or ""
-    diff = git.run(["diff", "HEAD"], cwd).stdout or ""
-    if not status.strip() and not diff.strip():
+    try:
+        st = git.run(["status", "--porcelain=v1", "-z", "-uall"], cwd)
+        diff = git.run(["diff", "HEAD"], cwd)
+    except (OSError, UnicodeDecodeError):
+        return None
+    if st.returncode != 0 or diff.returncode != 0:
+        return None                            # a status or a diff that failed is a state the key cannot account for
+    status, difftext = st.stdout or "", diff.stdout or ""
+    if not status and not difftext:
         return sha, ""
-    parts = [status, diff]
-    for line in status.splitlines():     # an untracked file counts by its contents, not only by its name
-        if line.startswith("?? "):
-            f = Path(cwd) / line[3:]
-            try:
-                parts.append(f.read_text(errors="replace") if f.is_file() else "")
-            except OSError:
-                parts.append("<unreadable>")
+    parts = [status, difftext]
+    for code, path in _porcelain_entries(status):
+        if code != "??":
+            continue
+        f = Path(cwd) / path
+        try:
+            if f.is_symlink():
+                parts.append(os.readlink(f))    # an untracked link counts by its target, never by what it points at
+            elif not f.is_file():
+                return None                     # a directory git does not expand: the key cannot read its state
+            else:
+                parts.append(f.read_text(errors="replace"))
+        except OSError:
+            return None                         # an unreadable path is no key: the stage runs its check
     return sha, hashlib.sha256("\0".join(parts).encode()).hexdigest()
 
 
@@ -173,6 +220,18 @@ def green_verdict(events, sha, dirt, suite):
                 and ev.get("sha") == sha and ev.get("dirt") == dirt and ev.get("suite") == suite):
             return ev
     return None
+
+
+def memo(check_id, params, inp, cwd, events, values=None):
+    """The (key, tree, hit) a gate stage reads before it runs: `hit` is the green verdict it reuses, or None.
+
+    `key` and `tree` are None when the stage is not memoed. A stage records a `gate_result` with them after it runs, and
+    a later stage of the same run reads its hit here.
+    """
+    key = suite_key(check_id, params, inp, values)
+    tree = tree_key(cwd) if key else None
+    hit = green_verdict(events, tree[0], tree[1], key) if tree else None
+    return key, tree, hit
 
 
 def ac_verify(params, inp):

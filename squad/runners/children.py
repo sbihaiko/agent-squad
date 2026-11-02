@@ -89,9 +89,7 @@ class Children:
         for g in disp["checks"]:
             gn = e.nodes[g]
             inp = GateInput(arts, facts, cwd)
-            key = gates.suite_key(gn["check"], gn["params"], inp)
-            tree = gates.tree_key(cwd) if key else None
-            hit = gates.green_verdict(e.record.events, tree[0], tree[1], key) if tree else None
+            key, tree, hit = gates.memo(gn["check"], gn["params"], inp, cwd, e.record.events)
             if hit is not None:
                 e.record.append("gate_reuse", node=g, entry=entry, item=None, sha=tree[0], suite=key, source=hit["source"])
                 res[g] = "pass"

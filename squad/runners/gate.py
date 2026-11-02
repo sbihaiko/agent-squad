@@ -14,9 +14,7 @@ class GateRunner:
                           limit=node.get("deadline"), started_at=ctx.wall())
         inp = GateInput(ctx.artifacts.view(sc.item), {n: f.value for (n, it), f in ctx.facts.values.items() if it in (None, sc.item)},
                         str(ctx.workspace_path(None, sc.item)))
-        key = gates.suite_key(node["check"], node["params"], inp)
-        tree = gates.tree_key(inp.cwd) if key else None
-        hit = gates.green_verdict(ctx.record.events, tree[0], tree[1], key) if tree else None
+        key, tree, hit = gates.memo(node["check"], node["params"], inp, inp.cwd, ctx.record.events)
         if hit is not None:
             # A stage of this run already proved this tree and suite: reuse that verdict, and say so. A silent skip is the
             # defect this replaces, so the record names the tree and the stage it reused (`gate_reuse`).
