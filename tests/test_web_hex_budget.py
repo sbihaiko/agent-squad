@@ -62,6 +62,8 @@ def _surfaces():
         # The stylesheets the hub inlines. They are scanned as they are served inside its page (#1185).
         "board-lanes": "<style>" + (SCRIPTS / "board-lanes.css").read_text() + "</style>",
         "run-sheet": "<style>" + (SCRIPTS / "run-sheet.css").read_text() + "</style>",
+        # The session overlay's styles and page script, served inside the hub page and the phone page (#1188).
+        "hub-overlay": hub.OVERLAY_JS,
         "dashboard": DASHBOARD.read_text(),
     }
 
@@ -170,6 +172,15 @@ def test_the_hub_stylesheets_read_roles(surfaces):
         assert "var(--" in surfaces[name], f"{name}.css reads no role"
 
 
+# --- The overlay (SPEC 1181, #1188) ---
+def test_the_overlay_is_a_guarded_surface(surfaces):
+    """The overlay is its own guarded surface: no literal, and it draws with the roles (#1188)."""
+    assert "hub-overlay" in surfaces, "the guard does not read the overlay"
+    assert "hub-overlay" in LITERAL_SURFACES, "the overlay is not a guarded surface"
+    assert not _literals(surfaces["hub-overlay"], TOKENS_FILE.read_text()), "the overlay carries a colour literal"
+    assert "var(--" in surfaces["hub-overlay"], "the overlay reads no role"
+
+
 def test_the_dashboard_writes_no_palette_of_its_own():
     for path in DASHBOARD_SOURCES:
         assert not _root_overrides(path.read_text(), TOKENS_FILE.read_text()), f"{path.relative_to(ROOT)} defines a palette of its own"
@@ -198,9 +209,9 @@ def test_the_hub_and_the_dashboard_render_the_same_card_ink_and_accent(surfaces)
 # Every colour a surface draws with is a role in the one module. The phone reads the same roles at its own density, and
 # no surface fetches an asset from outside itself.
 PALETTE_SURFACES = ("hub", "hub-mobile", "hubmux-root", "hub-refusal", "hub-test-log", "dashboard")
-# A stylesheet the hub inlines: it reads the one module from the page that carries it, so it holds no palette of its own.
-# The literal guard reads it as its own surface, so a colour typed here cannot pass (#1185).
-INLINE_SURFACES = ("board-lanes", "run-sheet")
+# A surface a page inlines: it reads the one module from the page that carries it, so it holds no palette of its own.
+# The literal guard reads it as its own surface, so a colour typed here cannot pass (#1185, #1188).
+INLINE_SURFACES = ("board-lanes", "run-sheet", "hub-overlay")
 LITERAL_SURFACES = (*PALETTE_SURFACES, *INLINE_SURFACES)
 
 

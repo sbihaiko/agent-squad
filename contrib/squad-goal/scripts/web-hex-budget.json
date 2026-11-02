@@ -8,6 +8,7 @@
     "hubmux-root": 0,
     "board-lanes": 0,
     "run-sheet": 0,
+    "hub-overlay": 0,
     "dashboard": 0
   },
   "total": 0,
