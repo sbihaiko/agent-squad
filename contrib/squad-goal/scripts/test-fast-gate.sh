@@ -319,6 +319,15 @@ out=$(vfg absent); rc=$?
 [ "$(/usr/bin/grep -c '^battery' "$T/ran.log")" = 1 ] && ok "an absent tool is not retried" || ko "absent tool retried: '$(cat "$T/ran.log")'"
 [ "$(vhist | cut -f8-11)" = "$(printf 'unproven\tmypy is absent from the battery'"'"'s interpreter, so its check did not run\truff\tmypy pytest')" ] \
   && ok "the history line says unproven, names mypy as the reason, and lists ruff as run and mypy and pytest as not run" || ko "absent history: '$(vhist)'"
+# The obligation of that entry names the base the gate read the tree against, as a commit (gate.sh, spec 1163). The state
+# directory already holds an obligation for an earlier unresolved base, so the record is found by its tree and base.
+wantb=$(git -C "$R" rev-parse HEAD); devb=$(git -C "$R" rev-parse dev); ob=
+for f in "$SG_STATE"/obligations/*; do [ -f "$f" ] || continue
+  IFS=$'\t' read -r _ os obase _ _ _ < "$f"
+  [ "$os" = "$wantb" ] && [ "$obase" = "$devb" ] && { ob=$f; break; }
+done
+[ -n "$ob" ] && ok "the unproven entry's obligation names the base commit the gate read" \
+  || ko "no obligation for ${wantb:0:9} names the dev commit $devb: '$(cat "$SG_STATE"/obligations/* 2>&1)'"
 
 vstub typed 'echo "squad/x.py:12: error: bad type"; exit 1'
 out=$(vfg typed); rc=$?

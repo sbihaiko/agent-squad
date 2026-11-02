@@ -59,6 +59,49 @@ case "$(printf '%s' "$vl" | cut -f12)" in ''|*[!0-9]*) ko "the history line carr
 (cd "$T/w" && SG_GATE_KIND=fast bash "$d/gate.sh" sh -c 'exit 7')
 [ "$(tail -n 1 "$H" | cut -f8-11)" = "$(printf 'fail\texit 7\t-\t-')" ] && ok "a gate with no outcome file that fails writes fail and its exit code as the reason" || ko "fail verdict: '$(tail -n 1 "$H")'"
 
+# --- the proof obligation (spec 1163): an unproven entry writes one obligation, the job that settles it later. The record
+# names the repository, the tree sha, the base, the checks that did not run and their scope, and a deadline: the proof bound
+# (ADR-0163) past the gate. A pass and a fail write none. A second obligation for the same entry merges into the one record,
+# never a second one, and the deadline never moves later. Its own state directory, so no earlier case answers a count.
+OS=$T/obl; mkdir -p "$OS"; O=$OS/obligations; HS=$OS/gate-history
+cat > "$T/unproven.sh" <<'S'
+#!/bin/bash
+printf 'unproven\tmypy is not installed\truff\t%s\n' "$CHECKS" > "$GATE_OUTCOME_FILE"
+[ -z "${SCOPE:-}" ] || printf '%s\n' "$SCOPE" > "$GATE_SCOPE_FILE"
+[ -z "${BASE:-}" ] || printf '%s\n' "$BASE" > "$GATE_BASE_FILE"
+exit 4
+S
+obn() { /bin/ls "$O" 2>/dev/null | /usr/bin/grep -c .; }
+obf() { /bin/ls "$O"/* 2>/dev/null | head -n 1; }
+ou() { (cd "$T/w" && SG_STATE="$OS" SG_REPO=owner/repo SG_GATE_KIND=fast CHECKS="$1" SCOPE="$2" BASE="$3" bash "$d/gate.sh" bash "$T/unproven.sh" 2>&1); }
+out=$(ou "mypy pytest" delta 0123456789abcdef); rc=$?
+IFS=$'\t' read -r orp osh oba och osc odl < "$(obf)" 2>/dev/null
+[ $rc = 4 ] && [ "$(obn)" = 1 ] && [ "$orp $osh $oba" = "owner/repo $sha 0123456789abcdef" ] \
+  && ok "an unproven entry writes one obligation naming the repository, the tree sha and the base" || ko "unproven obligation: rc $rc, $(obn) record(s): '$(cat "$(obf)" 2>&1)'"
+[ "$och $osc" = "mypy pytest delta" ] && ok "the obligation names the checks that did not run and their scope" || ko "obligation checks and scope: '$och' '$osc'"
+fin=$(tail -n 1 "$HS" | cut -f1)
+[ "$odl" = "$((fin + 900))" ] && [ "$odl" -gt "$(date +%s)" ] && ok "the obligation carries a deadline, the proof bound after the gate" || ko "obligation deadline: '$odl' after finish '$fin'"
+d1=$odl; sleep 1
+out=$(ou "ruff" full 0123456789abcdef); rc=$?
+IFS=$'\t' read -r _ _ _ och osc odl < "$(obf)" 2>/dev/null
+[ $rc = 4 ] && [ "$(obn)" = 1 ] && [ "$och $osc" = "mypy pytest ruff full" ] && [ "$odl" = "$d1" ] \
+  && ok "a second obligation for the same entry merges into the one record: the checks join, the wider scope wins and the deadline stays" || ko "merged obligation: $(obn) record(s), checks '$och', scope '$osc', deadline '$odl' (was '$d1')"
+# A gate that named no missing check and no scope still writes a record that names them: every check of the gate is unproven,
+# and a check that did not run cannot be said to cover less than the whole tree (ADR-0018).
+out=$(ou - "" 0123456789abcdef); rc=$?
+IFS=$'\t' read -r _ _ _ och osc _ < "$(obf)" 2>/dev/null
+[ $rc = 4 ] && [ "$(obn)" = 1 ] && [ "$och $osc" = "all full" ] \
+  && ok "an unproven gate that named no check writes the checks as all and the scope as full" || ko "unnamed obligation: $(obn) record(s), '$och' '$osc'"
+$G -C "$T/w" commit -q --allow-empty -m moved
+out=$(ou "pytest" delta 0123456789abcdef); rc=$?
+[ $rc = 4 ] && [ "$(obn)" = 2 ] && ok "another tree sha is another entry: a second obligation record" || ko "second entry: $(obn) record(s)"
+op=$T/obl-pass; mkdir -p "$op"
+(cd "$T/w" && SG_STATE="$op" SG_GATE_KIND=fast bash "$d/gate.sh" true) >/dev/null 2>&1
+[ -z "$(/bin/ls -A "$op/obligations" 2>/dev/null)" ] && ok "a pass entry writes no obligation" || ko "a pass wrote: '$(/bin/ls "$op/obligations" 2>/dev/null)'"
+ofail=$T/obl-fail; mkdir -p "$ofail"
+(cd "$T/w" && SG_STATE="$ofail" SG_GATE_KIND=fast bash "$d/gate.sh" sh -c 'exit 7') >/dev/null 2>&1
+[ -z "$(/bin/ls -A "$ofail/obligations" 2>/dev/null)" ] && ok "a fail entry writes no obligation" || ko "a fail wrote: '$(/bin/ls "$ofail/obligations" 2>/dev/null)'"
+
 # The second gate waits for the first (a 3 s hold). Its duration is the run time, not the wait: the history shows the hold, and not the queue.
 (cd "$T/w" && SG_GATE_KIND=fast bash "$d/gate.sh" sh -c 'sleep 3') & hold=$!
 sleep 1
