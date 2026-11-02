@@ -71,8 +71,9 @@ def test_a_record_that_has_never_had_an_event_is_the_starting_row(hub, tmp_path)
 def test_the_age_is_the_time_since_the_last_write_and_every_card_names_it(hub, tmp_path):
     folder = tmp_path / "runs" / "run-w"
     record = write_record(folder, run_events(NOW - 3600))
-    os.utime(record, (NOW - 4, NOW - 4))
+    t0 = time.time()   # the age is measured against the clock at the call, never the clock at import
+    os.utime(record, (t0 - 4, t0 - 4))
     row, _ = hub.run_row(str(folder), "4321", [])
-    assert 3 <= row["age"] <= 5
+    assert 3 <= row["age"] <= 5 + (time.time() - t0)
     assert hub.PAGE.count("last write ${age(r.age)} ago") == 3
     assert not re.search(r"(?<!last write )\$\{age\(r\.age\)\} ago", hub.PAGE)
