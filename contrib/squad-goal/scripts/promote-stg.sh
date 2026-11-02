@@ -14,8 +14,9 @@
 #     moves on it when the record says pass for the dev tip, P has a full pass and the changed-file list still hashes to P..tip.
 #     Each carried P is appended to $SG_STATE/gate-carried after the merge, and a P already there refuses.
 #   bound: the bound-ended proof (ADR-0164). Only for the tip promote-pass.sh recorded in $SG_STATE/promote-indeterminate, and
-#     only while neither the full line nor the delta record says fail for that tip. The merge carries the marker's meaning:
-#     no test reached every part of the tip, and the nightly proves it later.
+#     only while neither the full line nor the delta record says fail for that tip. Nothing else measured the tip, so a CI check
+#     that reported a defect on it refuses the merge by name (#1196); a check still running or absent holds nothing. The merge
+#     carries the marker's meaning: no test reached every part of the tip, and the nightly proves it later.
 # Exit 0: the dev tip is in stg (promoted, or already there). Exit 1: nothing promoted; the one reason goes to $SG_STATE/promote.log
 # once per tip and reason (the dedupe list keeps its last 20 lines), so a pass that repeats says nothing new, and to stderr.
 # A later green tip carries the earlier work with it. The consolidation is one pull request (#743, owner rule for every project):
@@ -103,9 +104,17 @@ g merge-base --is-ancestor "$tip" origin/stg && exit 0   # the dev tip is alread
 o=$(g rev-list --no-merges "$tip..origin/stg" 2>/dev/null) || o=
 [ -z "$o" ] || refuse "$tip" "not promoted: stg holds $(printf '%s\n' "$o" | /usr/bin/grep -c .) commit(s) the dev tip lacks; the owner resolves it"
 prove "$tip"
+. "$d/ghcall.sh"
+# ADR-0164 (#1196): delivery outranks the proof, but only an unfinished proof. A failed one always holds. Under the bound proof
+# nothing else measured the tip, so the pull request's own CI check is the only evidence left: a red check on the tip refuses the
+# merge by name. A check still running or absent holds nothing, so a slow CI never keeps delivery back. The ci proof already
+# reads that check, and the local proof is the owner's own full suite, which outranks a CI run of a narrower scope.
+if [ "$proof" = bound ]; then
+  red=$(gh_api "repos/$SG_REPO/commits/$tip/check-runs" -q '[.check_runs[] | select(.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "cancelled") | .name + " " + .conclusion] | join(", ")' 2>/dev/null) || red=""
+  [ -z "$red" ] || refuse "$tip" "not promoted: the CI check on the dev tip is red ($red)"
+fi
 # The owner's consolidation rule (#743): one pull request, never a push. The merge is a merge commit, so the next tip is read
 # by ancestry and a tip already in stg is no work.
-. "$d/ghcall.sh"
 pr=$(gh_api "repos/$SG_REPO/pulls?state=open" -q '[.[] | select(.head.ref == "dev" and .base.ref == "stg")][0].number // empty' 2>/dev/null) \
   || refuse "$tip" "not promoted: the open dev -> stg pull request could not be read"
 if [ -z "$pr" ]; then

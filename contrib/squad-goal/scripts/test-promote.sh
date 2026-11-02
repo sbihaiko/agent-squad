@@ -90,6 +90,16 @@ adv dev real-green; printf '%s' "$GREEN_P" > "$T/checks.json"; rm -f "$T/pr"
 out=$(bash "$d/promote-stg.sh" 2>&1); rc=$?
 [ $rc = 0 ] && [ "$(tip stg)" = "$(tip dev)" ] && ok "real CI: a green tip is promoted" || ko "real CI green: rc $rc out '$out'"
 
+# (#1196) The bound-ended proof answers for a suite the bound cut short; it never answers for a check that already reported a
+# defect, which is the hole that merged pull request #1194 while its own CI check was red.
+adv dev bound-red; tb=$(tip dev); before=$(tip stg); printf '%s' "$RED_P" > "$T/checks.json"
+printf '%s\t%s\t1\n' "$(date +%s)" "$tb" > "$SG_STATE/promote-indeterminate"
+rm -f "$SG_STATE/gate-status-full" "$SG_STATE/gate-status-delta"
+SG_PROMOTE_PROOF=bound bash "$d/promote-stg.sh" > "$T/out-bound-red" 2>&1; rc=$?
+out=$(cat "$T/out-bound-red")
+[ $rc -ne 0 ] && [ "$(tip stg)" = "$before" ] && case "$out" in *"CI check on the dev tip is red"*) ok "bound proof: a red check on the tip refuses the merge";; *) ko "bound proof red: out '$out'";; esac || ko "bound proof red: rc $rc, stg $(tip stg), out '$out'"
+rm -f "$SG_STATE/promote-indeterminate"
+
 # The local proof: the promotion gate's own status line, and nothing else.
 export SG_PROMOTE_PROOF=local
 adv dev two; before=$(tip stg); rm -f "$SG_STATE/gate-status"
