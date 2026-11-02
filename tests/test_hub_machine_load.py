@@ -472,7 +472,7 @@ def test_the_facts_are_read_from_the_files_the_loop_already_writes(hub, tmp_path
     monkeypatch.setattr(hub, "STATE", tmp_path / "nothing-here")               # a state dir with none of these files
     monkeypatch.setattr(hub, "SHARED", tmp_path / "nothing-here")              # and a shared dir with no limit marker
     assert hub.foot_line(hub.foot_items(hub.foot_sources(now), now)) \
-        == "landed ? · CL ? · GK ? · GPT ? · GEM ? · Loop:OFF"   # no watchd.pid: the loop is off (#554)
+        == "landed ? · queue empty · CL ? · GK ? · GPT ? · GEM ? · Loop:OFF"   # no watchd.pid: the loop is off (#554); the ledger has no open hold: an empty queue is a reading (#1173)
 
 
 def _iso(ts):

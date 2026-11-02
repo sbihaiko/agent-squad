@@ -3,7 +3,7 @@
 usage: hub.py [port]   default 7700, loopback only. Read-only: it discovers servers via ps/lsof and reads record.jsonl."""
 import datetime as dt, glob, hashlib, html, importlib.util, itertools, json, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, pathlib, urllib.parse, urllib.request
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
-import agyquota, board_lag, chainhealth, ghread, ghthrottle, hubstream, modelreg, provkey, session_card, session_send, sessions   # the chains and the one registry resolve a model (ADR-0147); ghread is the one GitHub door (ADR-0277)
+import agyquota, board_lag, chainhealth, ghread, ghthrottle, hubstream, issue_ledger, modelreg, provkey, session_card, session_send, sessions   # the chains and the one registry resolve a model (ADR-0147); ghread is the one GitHub door (ADR-0277); the ledger is the one source of a hold (#1173)
 from issue_state import board_state, KINDS, TEST_CASE_TITLE, _utc
 import http.client
 import zoneinfo
@@ -922,6 +922,12 @@ def load_tick(sample=None):
 # is a pull request (#75), so the merge is the landing; it reads the rows the board pass already holds, so no log line is
 # parsed and no GitHub call is made. The `auto/fork-<n>-<sha9>` marker is NOT read: a marker outlives the landing it named,
 # and a bar that reports it names a landing nothing made.
+# The gate queue earns the line beside the gate (#1173): `queue 2 held · gate lock 1 · gate slots 1 · oldest 2h ago`. It
+# answers the question the gate block raises the moment a gate is slow — who waits behind it, and for how long — and it is
+# one reading the operator acts on within the minute. Its figures are the issue ledger's open hold episodes, which are the
+# one record of a hold (ADR-0149): the hub keeps no count of its own and reads the episodes once per refresh, so a queue of
+# twenty children costs the same one read as a queue of one. An empty queue reads `queue empty`; a ledger the hub cannot
+# read reads `queue ?`, never either a count or an empty.
 # The quota pair (`codex ok · agy reset 14:20`) left the line for the opposite reason (#87): each marker names a CLI whose
 # subscription the subs block already carries as a token, so the purple block repeated the green one. `MARKER_SUB` keeps
 # the pairing, and a marker returns the day its subscription leaves SUBS: a fact is never lost, only never said twice.
@@ -938,7 +944,7 @@ FOOT_SEP = " · "
 # them, and a block that is no longer drawn carries no palette entry to drift.
 FOOT_TONES = ("ok", "warn", "err")   # the three tones the load strip already paints (#1816), reused and never a second ladder
 FOOT_NEUTRAL = "neutral"             # a value the hub could not verify: the bar's own plain colour, never one of the tones
-FOOT_BLOCK_COLORS = {"burn": "err", "landing": "wait", "gate": "none", "nightly": "run",
+FOOT_BLOCK_COLORS = {"burn": "err", "landing": "wait", "gate": "none", "queue": "wait", "nightly": "run",
                      "quota": "none", "cycle": "wait", "subs": "run", "loop": "none"}  # subs teal: it shares with landing, which is not its neighbour; loop ends the line (#554)
 # A quota marker names the CLI (`codex-limited`, `agy-limited`); the subs token names the same account by its plan.
 MARKER_SUB = {"codex": "gpt", "agy": "gemini"}
@@ -996,6 +1002,40 @@ def _gate_parts(g, now):
 def _gate_span(s):
     """A gate's run time: `45s`, `2m07s`. Its own name: the cycle countdown's `_span` reads `0m45s`."""
     return f"{s}s" if s < 60 else f"{s // 60}m{s % 60:02d}s"
+
+QUEUE_CAUSES = (("the gate lock", "gate lock"), ("the gate slots", "gate slots"))   # the causes wave.sh holds a child on (#1173)
+QUEUE_CAUSE_MAX = 28   # the characters any other cause keeps on the line: the hold's first clause, cut here
+QUEUE_TIP_MAX = 6      # the waiting children the tooltip names before it counts the rest
+
+def _queue_cause(cause):
+    """The queue's short name for a hold cause. `gate lock` and `gate slots` are the gate's own words, so the line reads the
+    two the operator knows (wave.sh's hold). Any other cause keeps its first clause, cut to QUEUE_CAUSE_MAX; a cause the
+    ledger does not spell reads `?`, never a guessed name."""
+    c = " ".join(str(cause or "").split()).split(";")[0].strip()
+    for lead, name in QUEUE_CAUSES:
+        if c.startswith(lead): return name
+    return c[:QUEUE_CAUSE_MAX].rstrip() or "?"
+
+def _queue_parts(q):
+    """`queue 2 held · gate lock 1 · gate slots 1 · oldest 2h ago`: the children that wait in the gate queue, counted on
+    their causes, and the age of the oldest open episode. The figures ARE the ledger's episodes, from one reading of them
+    (#1173, ADR-0149): the hub keeps no count of its own and makes no request per child. An empty queue reads `queue
+    empty`, which is a reading; a ledger the hub cannot read is `queue ?` in the neutral tone, never empty. A queue is no
+    state signal, so the block carries no tone. The tooltip names each waiting child with its cause and age, which is how
+    the children are MOVED off the line and never lost (the section's rule (b))."""
+    if not isinstance(q, dict) or not q.get("read"): return [{"text": "queue ?", "tone": FOOT_NEUTRAL}]
+    eps = q.get("episodes") or []
+    if not eps: return [{"text": "queue empty", "tone": ""}]
+    counts = {}
+    for e in eps:
+        name = _queue_cause(e.get("cause"))
+        counts[name] = counts.get(name, 0) + 1
+    causes = FOOT_SEP.join(f"{name} {k}" for name, k in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
+    oldest = max(float(e.get("age") or 0.0) for e in eps)
+    names = [f"{e.get('key')} {_queue_cause(e.get('cause'))} {_age(e.get('age') or 0.0)} ago" for e in eps[:QUEUE_TIP_MAX]]
+    rest = len(eps) - QUEUE_TIP_MAX
+    tip = FOOT_SEP.join(names) + (f" +{rest} more" if rest > 0 else "")
+    return [{"text": f"queue {len(eps)} held{FOOT_SEP}{causes}{FOOT_SEP}oldest {_age(oldest)} ago", "tone": "", "tip": tip}]
 
 def _nightly_parts(n, now):
     """`nightly pass 6h ago`: the last full suite in both modes (nightly.sh, #704), its result and its age. A pass reads in
@@ -1597,11 +1637,14 @@ def foot_items(src, now=None):
     src = src or {}
     land = _landing_parts(src.get("landing"), now)
     gate = _gate_parts(src.get("gate"), now)
+    queue = _queue_parts(src.get("queue")) if "queue" in src else []   # no source read, no block: a queue read and found empty draws `queue empty`
     nightly = _nightly_parts(src.get("nightly"), now)
     items = [_fact("burn", _burn_fact(src.get("burn")), bad=True, tip=_burn_tip(src.get("burn"))),
              _fact("landing", FOOT_SEP.join(p["text"] for p in land), parts=land),
              _fact("gate", FOOT_SEP.join(p["text"] for p in gate), bad=any(p["tone"] == "err" for p in gate),
                    parts=gate or None, tip=(gate[0].get("tip") if gate else None)),
+             _fact("queue", FOOT_SEP.join(p["text"] for p in queue), parts=queue or None,
+                   tip=(queue[0].get("tip") if queue else None)),
              _fact("nightly", FOOT_SEP.join(p["text"] for p in nightly), bad=any(p["tone"] == "err" for p in nightly),
                    parts=nightly or None, tip=(nightly[0].get("tip") if nightly else None),
                    detail=(nightly[0].get("detail") if nightly else None)),
@@ -1937,9 +1980,11 @@ def loop_switch(a, body, origin_ok):
 
 def foot_sources(now=None):
     """One reading of every source the line draws on. A source that is not there reads as `None` for its own fact only,
-    so one unreadable file costs one `?` and never the rest of the line."""
+    so one unreadable file costs one `?` and never the rest of the line.
+    The queue is one pass over the issue ledger's open hold episodes (#1173), taken here once per refresh: the page then
+    draws the whole queue from that one reading, with no request per waiting child and no count of the hub's own."""
     now = time.time() if now is None else now
-    out = {"landing": _last_landing(), "gate": _gate_status(), "nightly": _nightly_status(),
+    out = {"landing": _last_landing(), "gate": _gate_status(), "queue": issue_ledger.open_episodes(STATE, now), "nightly": _nightly_status(),
            "quota": {"codex": limited_until(_read(SHARED / "codex-limited"), now),
                      "agy": limited_until(_read(SHARED / "agy-limited"), now)}}
     plans = plans_get()   # the hand-entered percentage, for a probe that did not answer: the two things #1839's tokens read
@@ -4621,7 +4666,7 @@ function subsGauges(d){const xs=(d||{}).subs||[];if(!xs.length)return"";
 function instGauges(d){return ldCells(d).map(c=>`<div class="ig${c.red?" ldred":""}">${gaugeSvg((d||{})[c.k.toLowerCase()])}<span class=gv><b>${c.k}</b> ${esc(c.t)}</span></div>`).join("")}
 const instFact=(facts,k)=>(facts||[]).find(f=>f&&f.key===k);
 function instTile(k,f,lead){if(!f)return{k,text:"no reading",tone:"neutral"};const p=(f.parts||[])[0]||{},t=String(f.text||"").replace(lead,"").trim()||"?";return{k,text:t,tone:p.tone==="ok"||p.tone==="err"?p.tone:"neutral",tip:f.tip||null,detail:f.detail||null,times:p.times||null}}
-function instTiles(facts){return[instTile("Gate",instFact(facts,"gate"),/^gate\s*/)]}
+function instTiles(facts){const q=instFact(facts,"queue");return[instTile("Gate",instFact(facts,"gate"),/^gate\s*/)].concat(q?[instTile("Queue",q,/^queue\s*/)]:[])}   // the queue is one fact the page already holds: no request per waiting child (#1173)
 const iq=t=>esc(t).replace(/"/g,"&quot;");
 function tileHtml(t){const v=t.href?esc(t.text).replace(/PR #\d+/,x=>`<a target=_blank rel=noopener href="${iq(t.href)}">${x}</a>`):esc(t.text),
  d=(t.detail||[]).length?`<details><summary>${t.detail.length} failed</summary><ul>${t.detail.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></details>`:"";
