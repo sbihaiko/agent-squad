@@ -54,17 +54,18 @@ def column_for(facts):
     """(column, freeze label or None) the shipped table names for one open or closed issue's facts.
 
     The furthest the work reached sets the column; a freeze never moves it (the definition's own rule). Facts are booleans,
-    each missing one false: abandoned, closed, in_dev (the wave is in dev), wave_branch, run_live, spec, child_live (a spec whose sub-issue is live
-    work), owner (an owner label), gated (another item gates it), and review_wait (the child's code is done and its review
-    or a fix round holds it: Code Review, #603). The push, the approval and the dev CI are reported facts, never a column:
-    a card in the wave holds Code Complete until its wave is in dev, and then it is Closed."""
+    each missing one false: abandoned, closed, in_dev (the wave is in dev), wave_branch, run_live, spec, child_live (a spec
+    whose sub-issue is in flight), owner (an owner label), gated (another item gates it), and review_wait (the child's code
+    is done and its review or a fix round holds it: Code Review, #603). The push, the approval and the dev CI are reported
+    facts, never a column: a card in the wave holds Code Complete until its wave is in dev, and then it is Closed."""
     freeze = FREEZE_LABEL["owner"] if facts.get("owner") else FREEZE_LABEL["gated"] if facts.get("gated") else None
     if facts.get("abandoned"): return "Abandoned", freeze
     if facts.get("closed") or facts.get("in_dev"): return "Closed", freeze
     if facts.get("wave_branch"): return "Code Complete", freeze
     if facts.get("review_wait"): return CODE_REVIEW, freeze
-    if facts.get("run_live") or facts.get("child_live"): return DOING, freeze
-    # A spec is a document, never work (ADR-0142): the child_live fact above moves the spec's card, and never a dispatch.
+    if facts.get("run_live"): return DOING, freeze
+    # A spec is a document, never work (ADR-0142): a ticket in flight lifts its card to Todo, never to a work column (#1131).
+    if facts.get("child_live"): return "Todo", freeze
     if facts.get("spec") or freeze: return "Backlog", freeze
     return "Todo", None
 

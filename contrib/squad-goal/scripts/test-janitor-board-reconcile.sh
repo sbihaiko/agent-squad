@@ -61,10 +61,11 @@ case "$a" in
     printf '2042\tTodo\thttps://api.github.com/repos/x/y\n2043\tBacklog\thttps://api.github.com/repos/x/y\n2044\tBlocked\thttps://api.github.com/repos/x/y\n'   # the owner moved spec #2042 to Todo
     printf '2046\tBacklog\thttps://api.github.com/repos/x/y\n2047\tBacklog\thttps://api.github.com/repos/x/y\n'   # spec #2046 still sits in Backlog
     printf '2015\tBlocked\thttps://api.github.com/repos/x/y\n'   # stale Blocked card with no current blocking cause
-    printf '2070\tBacklog\thttps://api.github.com/repos/x/y\n2071\tDoing\thttps://api.github.com/repos/x/y\n2072\tBacklog\thttps://api.github.com/repos/x/y\n2073\tTodo\thttps://api.github.com/repos/x/y\n2075\tDoing\thttps://api.github.com/repos/x/y\n2076\tBacklog\thttps://api.github.com/repos/x/y\n2077\tDone\thttps://api.github.com/repos/x/y\n';;   # #942: parents that are not specs, and their children
+    printf '2070\tBacklog\thttps://api.github.com/repos/x/y\n2071\tDoing\thttps://api.github.com/repos/x/y\n2072\tBacklog\thttps://api.github.com/repos/x/y\n2073\tTodo\thttps://api.github.com/repos/x/y\n2075\tDoing\thttps://api.github.com/repos/x/y\n2076\tBacklog\thttps://api.github.com/repos/x/y\n2077\tDone\thttps://api.github.com/repos/x/y\n'   # #942: parents that are not specs, and their children
+    printf '2080\tTodo\thttps://api.github.com/repos/x/y\n2081\tIn Progress\thttps://api.github.com/repos/x/y\n2082\tBacklog\thttps://api.github.com/repos/x/y\n2090\tBacklog\thttps://api.github.com/repos/x/y\n2091\tTodo\thttps://api.github.com/repos/x/y\n2092\tBacklog\thttps://api.github.com/repos/x/y\n2093\tBacklog\thttps://api.github.com/repos/x/y\n2094\tIn Progress\thttps://api.github.com/repos/x/y\n2095\tCode Complete\thttps://api.github.com/repos/x/y\n';;   # #1131: a spec reads Todo while a ticket is in flight, and never a work column
   *graphql*)   # the open-issue list in ONE request: every open issue of the repository, with its labels
     printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":['
-    sep=""; for n in 2001 2002 2003 2004 2005 2006 2007 2008 2009 2011 2012 2013 2014 2015 2016 2017 2018 2019 2020 2021 2027 2028 2029 2032 2040 2041 2042 2043 2044 2045 2046 2047 2050 2051 2052 2053 2054 2060 2070 2071 2072 2073 2074 2075 2076 2077; do
+    sep=""; for n in 2001 2002 2003 2004 2005 2006 2007 2008 2009 2011 2012 2013 2014 2015 2016 2017 2018 2019 2020 2021 2027 2028 2029 2032 2040 2041 2042 2043 2044 2045 2046 2047 2050 2051 2052 2053 2054 2060 2070 2071 2072 2073 2074 2075 2076 2077 2080 2081 2082 2090 2091 2092 2093 2094 2095; do
       body=""; subs='{"total":0,"completed":0}'; kids='[]'
       case $n in
         2007|2016) labs='{"nodes":[{"name":"needs-owner"}]}';;
@@ -99,6 +100,14 @@ case "$a" in
         2074) labs='{"nodes":[{"name":"run-parent"}]}'; subs='{"total":1,"completed":0}'; kids='[{"number":2075}]';;
         2076) labs='{"nodes":[]}'; subs='{"total":1,"completed":1}'; kids='[{"number":2077}]';;
         2071|2073|2075|2077) labs='{"nodes":[]}';;
+        # #1131: a spec reads Todo while any ticket is in flight, and it never follows one into a work column. #2080 is in
+        # Todo with a ticket in progress; #2090 is in Backlog with a ticket in Todo, so the fold lifts it; #2092 sits in
+        # Backlog with no ticket in flight, so it keeps the owner's column; #2094 sits in a work column and returns to Todo.
+        2080) labs='{"nodes":[{"name":"spec"}]}'; subs='{"total":2,"completed":0}'; kids='[{"number":2081},{"number":2082}]';;
+        2090) labs='{"nodes":[{"name":"spec"}]}'; subs='{"total":1,"completed":0}'; kids='[{"number":2091}]';;
+        2092) labs='{"nodes":[{"name":"spec"}]}'; subs='{"total":1,"completed":0}'; kids='[{"number":2093}]';;
+        2094) labs='{"nodes":[{"name":"spec"}]}'; subs='{"total":1,"completed":0}'; kids='[{"number":2095}]';;
+        2081|2082|2091|2093|2095) labs='{"nodes":[{"name":"ready-for-agent"}]}';;
         2043|2044|2045|2047|2051|2052|2054) labs='{"nodes":[{"name":"ready-for-agent"}]}';;
         2019) labs='{"nodes":[{"name":"ready-for-agent"},{"name":"wave:02"}]}'; body='## Blocked by\n\n- #2006 the shape lands first';;
         *) labs='{"nodes":[]}';;
@@ -295,6 +304,14 @@ done
 /usr/bin/grep -q 'BOARD-RECONCILE #2050: card -> Todo (spec folds over its sub-issues)' "$T/st/cycle.log" 2>/dev/null && ok "the return is named in cycle.log" || ko "#2050 return not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
 ! /usr/bin/grep -q ' 2053$' "$T/board.calls" 2>/dev/null && ok "a commit that names a spec never moves its card forward" || ko "#2053 moved: $(/usr/bin/grep ' 2053$' "$T/board.calls")"
 ! /usr/bin/grep -q ' 2054$' "$T/board.calls" 2>/dev/null && ok "the correction leaves its queued child's card alone" || ko "#2054 moved: $(/usr/bin/grep ' 2054$' "$T/board.calls")"
+# A spec reads Todo while any of its tickets is in flight, and it never follows one into a work column (#1131,
+# ADR-0142 rule 5, ADR-0143 rule 1). The lane reports the count in each column, so the spec card itself never moves there.
+! /usr/bin/grep -q ' 2080$' "$T/board.calls" 2>/dev/null && ok "a spec in Todo with a ticket in progress stays in Todo" || ko "#2080 moved: $(/usr/bin/grep ' 2080$' "$T/board.calls")"
+! /usr/bin/grep -q 'In Progress 2080' "$T/board.calls" 2>/dev/null && ok "a spec never follows a ticket into a work column" || ko "#2080 read as work: $(bc)"
+/usr/bin/grep -q '^STATUS o 4 Todo 2090$' "$T/board.calls" 2>/dev/null && ok "a spec in Backlog with a ticket in Todo is lifted to Todo" || ko "#2090 not lifted to Todo: $(bc) $o"
+/usr/bin/grep -q 'BOARD-RECONCILE #2090: card -> Todo (spec folds over its sub-issues)' "$T/st/cycle.log" 2>/dev/null && ok "the lift is named in cycle.log" || ko "#2090 lift not named: $(/usr/bin/grep 2090 "$T/st/cycle.log" 2>/dev/null)"
+! /usr/bin/grep -q ' 2092$' "$T/board.calls" 2>/dev/null && ok "a spec with no ticket in flight keeps the column the owner gave it" || ko "#2092 moved: $(/usr/bin/grep ' 2092$' "$T/board.calls")"
+/usr/bin/grep -q '^STATUS o 4 Todo 2094$' "$T/board.calls" 2>/dev/null && ok "a spec in a work column returns to Todo" || ko "#2094 not returned to Todo: $(bc) $o"
 # The fold adds no GitHub call: the children come with the open-issue read, never from a sub-issues route.
 ! /usr/bin/grep -q 'sub_issues' "$T/gh.calls" 2>/dev/null && ok "no sub-issues route is called" || ko "a sub-issues call: $(/usr/bin/grep sub_issues "$T/gh.calls")"
 [ "$(/usr/bin/grep -c graphql "$T/gh.calls")" = 1 ] && ok "the fold rides the one open-issue read" || ko "reads: $(/usr/bin/grep -c graphql "$T/gh.calls")"

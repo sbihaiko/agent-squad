@@ -42,8 +42,9 @@ answer, one closed as not-work. Each is startable by its labels and none is a un
 6. **The owner starts a spec by moving its card to Todo, and its tickets follow.** When a spec's card
    sits in Todo, each open ticket of it whose card is in Backlog, or has no column, moves to Todo.
    The move is forward only (ADR-0143): a ticket past Backlog keeps its column. The spec's column is
-   still a fold over its tickets, and the fold writes nothing below Doing, so the two never fight.
-   A run, an owner label or a closure outranks the follow.
+   still a fold over its tickets: it reads Todo while any ticket is in flight, and the fold writes no
+   other column below Doing, so the two never fight. A run, an owner label or a closure outranks the
+   follow.
 7. **A spec whose tickets are all closed is done, and the loop closes it.** The proof is the
    tracker's count: at least one sub-issue, and every one closed. A spec with no sub-issue proves
    nothing and stays open. The close carries a comment that names the count, and the card follows

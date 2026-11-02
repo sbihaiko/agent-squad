@@ -925,10 +925,10 @@ def reconcile_board():
                 # the cards are read once per pass, so the fold adds no call. A parent that is not a spec takes the Doing lift only
                 # (#942): the spec vocabulary's Closed and Abandoned are never written to it.
                 kid_cols = [have_cards.get(k, "") for k in _kids.get(n, [])]
-                spec_owner = os.environ.get("SG_TODO", "Todo") if any(c not in ("", "Backlog") for c in kid_cols) else "Backlog"   # ADR-0142: a ticket past Backlog means the owner started the spec; with none, the floor column
-                col, reverted = spec_fold.fold(kid_cols, have_cards.get(n, ""), spec_owner if is_spec else os.environ.get("SG_TODO", "Todo"))
-                if is_spec and col == spec_fold.DOING: col = spec_owner if have_cards.get(n, "") in spec_fold.WORK else None   # a spec never enters Doing (ADR-0142 rule 5); a work column returns to the owner's
-                if col and (is_spec or col == spec_fold.DOING): set_expected(n, col, ("spec" if is_spec else "parent") + " folds over its sub-issues" + (": a child reopened, the card keeps its column" if reverted else ""), rank=15)   # forward only: below Doing the fold writes nothing, and the spec keeps the owner's column (#550)
+                todo = os.environ.get("SG_TODO", "Todo")
+                col, reverted = spec_fold.fold(kid_cols, have_cards.get(n, ""), todo, spec=is_spec, todo=todo)   # a spec reads Todo while a ticket is in flight, and never a work column (#1131)
+                if is_spec and col == todo and not have_cards.get(n, ""): col = None   # a spec with no card is created by the floor, in Backlog (ADR-0142)
+                if col and (is_spec or col == spec_fold.DOING): set_expected(n, col, ("spec" if is_spec else "parent") + " folds over its sub-issues" + (": a child reopened, the card keeps its column" if reverted else ""), rank=15)   # forward only: below Todo the fold writes nothing, and the spec keeps the owner's column (#550)
             if is_spec:
                 # The owner starts a spec by moving its card to Todo, and its children follow it there (#589): a child in Backlog,
                 # or with no column yet, goes to Todo. Forward only: a child past Backlog keeps its column (ADR-0143). The fold

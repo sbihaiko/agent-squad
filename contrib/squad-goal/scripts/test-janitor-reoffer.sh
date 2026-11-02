@@ -8,7 +8,7 @@
 #  (D) a live run's card #913 is left alone;
 #  (E) an owner-frozen zombie card #914 keeps its column;
 #  (F) a second pass writes no card again, and no reoffer marker is left behind;
-#  (G) a spec #922 that sits in Doing with no live child goes back to its Backlog column (ADR-0143 derivation correction);
+#  (G) a spec #922 that sits in Doing with no live child goes back to Todo, the column its lift started from (ADR-0143 correction);
 #  (H) a spec #923 in Doing whose child #924 waits in Todo goes back to Todo, the owner's column, not Backlog;
 #  (I) a spec #925 in Code Complete whose child #926 is in Doing under a live run leaves Code Complete for Todo;
 #  (J) a card #927 in Doing with a wave label, no run, no marker and nothing landed goes back to Todo (the one-time recovery);
@@ -86,7 +86,8 @@ o=$(run)
 /usr/bin/grep -q '^o 4 Todo 911$' "$T/board.calls" 2>/dev/null && ok "A: a zombie run with no marker returns its card to Todo" || ko "A #911 card not back in Todo: $o $(bc)"
 [ "$(/usr/bin/grep -c '^o 4 [A-Za-z ]* 911$' "$T/board.calls" 2>/dev/null)" = 1 ] && ok "A: the zombie's card is written once" || ko "A #911 written more than once: $(bc)"
 /usr/bin/grep -q '^o 4 Doing 920$' "$T/board.calls" 2>/dev/null && ko "C spec #920 lifted into Doing: $(bc)" || ok "C: a spec card is never lifted into Doing"
-/usr/bin/grep -q '^o 4 Backlog 922$' "$T/board.calls" 2>/dev/null && ok "G: a spec card in Doing with no live child returns to Backlog" || ko "G spec #922 not returned to Backlog: $(bc) $o"
+/usr/bin/grep -q '^o 4 Todo 922$' "$T/board.calls" 2>/dev/null && ok "G: a spec card in Doing with no live child returns to Todo" || ko "G spec #922 not returned to Todo: $(bc) $o"
+/usr/bin/grep -q '^o 4 Backlog 922$' "$T/board.calls" 2>/dev/null && ko "G spec #922 returned to Backlog, which the board refuses: $(bc)" || ok "G: the correction is not Backlog, which the board refuses"
 /usr/bin/grep -q '^o 4 [A-Za-z ]* 913$' "$T/board.calls" 2>/dev/null && ko "D live run #913 card written: $(bc)" || ok "D: a live run's card is left alone"
 /usr/bin/grep -q '^o 4 [A-Za-z ]* 914$' "$T/board.calls" 2>/dev/null && ko "E owner-frozen #914 card written: $(bc)" || ok "E: an owner-frozen card keeps its column"
 o2=$(run)

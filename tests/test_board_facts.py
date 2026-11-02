@@ -62,9 +62,9 @@ def _spec(*children):
     return {"spec": True, **facts.spec_facts(list(children))}
 
 
-def test_a_spec_with_a_live_child_reads_doing():
-    for child in ("Doing", "Code Review", "Code Complete"):
-        assert columns.column_for(_spec(child))[0] == "Doing"
+def test_a_spec_with_a_ticket_in_flight_reads_todo():
+    for child in ("Todo", "In Progress", "Doing", "Code Review", "Code Complete"):
+        assert columns.column_for(_spec(child))[0] == "Todo"
 
 
 def test_a_spec_whose_child_is_no_longer_a_column_reads_backlog():
@@ -72,9 +72,9 @@ def test_a_spec_whose_child_is_no_longer_a_column_reads_backlog():
         assert columns.column_for(_spec(child))[0] == "Backlog"
 
 
-def test_a_spec_with_no_live_child_reads_backlog():
+def test_a_spec_with_no_ticket_in_flight_reads_backlog():
     assert columns.column_for(_spec())[0] == "Backlog"
-    assert columns.column_for(_spec("Todo"))[0] == "Backlog"
+    assert columns.column_for(_spec("Backlog"))[0] == "Backlog"
     assert columns.column_for(_spec("Closed", "Abandoned"))[0] == "Backlog"
 
 
@@ -83,10 +83,11 @@ def test_an_open_work_issue_with_no_spec_label_still_reads_todo():
     assert columns.column_for({"child_live": False}) == ("Todo", None)
 
 
-def test_the_child_live_fact_marks_live_work_only():
-    assert facts.spec_facts(["Todo", "Closed", "Abandoned"]) == {"child_live": False}
+def test_the_child_live_fact_marks_a_ticket_in_flight():
+    assert facts.spec_facts(["Todo", "Closed", "Abandoned"]) == {"child_live": True}
     assert facts.spec_facts(["Code Complete"]) == {"child_live": True}
     assert facts.spec_facts(["Code Review", "Todo"]) == {"child_live": True}
+    assert facts.spec_facts(["Backlog", "Closed"]) == {"child_live": False}
 
 
 def test_the_hub_legacy_table_names_no_pull_request_fact():
