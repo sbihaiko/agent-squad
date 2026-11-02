@@ -209,15 +209,24 @@ def permission_mode(cwd, sid, pid=None):
     no mode line in its transcript until its first turn is written, and the owner reads the hub from the web, where a held
     message has no approval to reach it (#1081)."""
     if SID.fullmatch(sid or "") is None: return ""
-    try: raw, _ = _read_under_home(["projects", re.sub(r"[^A-Za-z0-9]", "-", str(cwd)), f"{sid}.jsonl"], limit=TAIL_BYTES)
-    except OSError: raw = b""
+    path = ["projects", re.sub(r"[^A-Za-z0-9]", "-", str(cwd)), f"{sid}.jsonl"]
+    window = TAIL_BYTES
+    while True:
+        try: raw, start = _read_under_home(path, limit=window)
+        except OSError: raw, start = b"", 0
+        mode = _last_mode(raw)
+        if mode or not start or window >= MAX_TAIL_BYTES: return mode or argv_mode(pid)
+        window *= 2
+
+
+def _last_mode(raw):
     for piece in reversed(raw.split(b"\n")):
         if b'"permissionMode"' not in piece: continue
         try: obj = json.loads(piece)
         except ValueError: continue
         mode = obj.get("permissionMode")
         if isinstance(mode, str) and mode: return mode
-    return argv_mode(pid)
+    return ""
 
 
 ARGV_MODE = {"--dangerously-skip-permissions": "bypassPermissions", "--bypass-permissions": "bypassPermissions"}
