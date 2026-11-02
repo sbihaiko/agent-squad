@@ -3859,14 +3859,15 @@ def spec_tickets(issue, item):
     repository. The sub-issue list is read through ghread, so a refusal or a failure is named and never read as "no ticket":
     it answers `(tickets, None)` or `(None, reason)`. A closed ticket, a ticket in another column, a ticket that is itself a
     spec, and a ticket the owner holds (TICKET_HOLD_LABELS) keep their column (ADR-0143, ADR-0142). A sub-issue of another
-    repository is never a card of this board, even when its number is one (write-side: board.sh is bound to SG_REPO)."""
+    repository is never a card of this board, even when its number is one (write-side: board.sh is bound to SG_REPO).
+    It answers `(tickets, skipped, None)`, where `skipped` names the open tickets past Backlog, or `(None, None, reason)`."""
     closed = lambda v: str(v or "").lower() == "closed"
     repo = item.get("r") or REPO
     try: subs, err = sub_issues(issue, repo)
-    except Exception as e: return None, f"sub-issues: {str(e)[:200] or 'the read did not answer'}"
-    if err: return None, err
+    except Exception as e: return None, None, f"sub-issues: {str(e)[:200] or 'the read did not answer'}"
+    if err: return None, None, err
     cards = {((i.get("r") or REPO).lower(), i.get("n")): i for i in board_cache.get("items") or []}
-    tickets = []
+    tickets, skipped = [], []
     for sub in subs:
         if not isinstance(sub, dict): continue
         c = cards.get((repo.lower(), sub.get("number")))
@@ -3874,9 +3875,11 @@ def spec_tickets(issue, item):
         if closed(sub.get("state")) or closed(c.get("s")): continue
         labels = {*(c.get("l") or []), *(x.get("name") for x in sub.get("labels") or [] if isinstance(x, dict))}
         if _columns_module.SPEC_LABEL in labels or labels & set(TICKET_HOLD_LABELS): continue
-        if _columns_module.view_column(c.get("st"), False, c.get("l"))[0] != COLUMN["unscheduled"]: continue
+        if _columns_module.view_column(c.get("st"), False, c.get("l"))[0] != COLUMN["unscheduled"]:
+            skipped.append(c["n"])
+            continue
         tickets.append(c)
-    return tickets, None
+    return tickets, skipped, None
 def promote(issue):
     """Move one open card from Backlog to Todo through the board seam (#560). Only a card the hub holds in Backlog now
     is accepted: a closed issue keeps its column (ADR-0143), and a card already in Todo sends no write (ADR-0144). A card
@@ -3898,7 +3901,7 @@ def promote(issue):
     if not promotable({**item, "st": st}): return {"err": "the card is a ticket of a spec: it moves with its spec, never alone (ADR-0142)"}
     tickets = []
     if _columns_module.SPEC_LABEL in (item.get("l") or []):
-        tickets, err = spec_tickets(issue, item)
+        tickets, _, err = spec_tickets(issue, item)
         if err: return {"err": err}
     cards = [item, *tickets]
     err = write_cards(cards)
@@ -3939,15 +3942,43 @@ def promote_batch_plan():
             ordered.append(card)
     for spec in specs: add(spec)
     for spec in specs:
-        tickets, err = spec_tickets(spec["n"], spec)
+        tickets, _, err = spec_tickets(spec["n"], spec)
         if err: return None, err
         for ticket in tickets: add(ticket)
     for card in starts: add(card)
     return ordered, None
+def spec_batch_plan(number):
+    """What one spec's start would move, read only (#1126): the spec's card first, then its open Backlog tickets in board
+    order, each card once. The open tickets past Backlog are named as skipped. Returns `(plan, None)` or `(None, reason)`."""
+    if isinstance(number, bool) or not isinstance(number, int) or number <= 0: return None, "spec: a number"
+    items = board_cache.get("items") or []
+    item = next((i for i in items if i.get("n") == number), None)
+    if item is None: return None, "not on the board"
+    if str(item.get("s") or "").lower() == "closed": return None, f"the spec #{number} is closed: nothing to start"
+    st = drawn_column(item, read_moves() if overlay_on() else {}, pending_window())["st"]
+    col, _ = _columns_module.view_column(st, False, item.get("l"))
+    if col != COLUMN["unscheduled"]: return None, f"the spec #{number} is in {col}, not {COLUMN['unscheduled']}: only a Backlog spec starts"
+    if _columns_module.SPEC_LABEL not in (item.get("l") or []): return None, f"#{number} is not a spec"
+    tickets, skipped, err = spec_tickets(number, item)
+    if err: return None, err
+    if not tickets and not skipped: return None, f"the spec #{number} has no open ticket: nothing to start"
+    order = {id(c): k for k, c in enumerate(items)}
+    cards, seen = [], set()
+    for card in [item, *sorted(tickets, key=lambda c: order[id(c)])]:
+        if card["n"] not in seen:
+            seen.add(card["n"])
+            cards.append(card)
+    skipped = list(dict.fromkeys(skipped))
+    return {"count": len(cards), "issues": [c["n"] for c in cards], "skipped": skipped}, None
 def promote_batch(body, who):
     """The owner's batch move (#1098). With no `confirm`, the hub answers the count it would move and the numbers, and nothing
     moves. With `confirm` equal to that count, one write moves every card of the plan, and the hub records the count and who
-    asked. A count that changed since the owner read it is refused, so the owner confirms the number that moves."""
+    asked. A count that changed since the owner read it is refused, so the owner confirms the number that moves. With a
+    `spec` the answer is that one spec's plan (#1126) and nothing is written: a spec's batch has no write yet."""
+    if "spec" in body:
+        if "confirm" in body: return {"err": "a spec's batch is read only: nothing is written here"}
+        plan, err = spec_batch_plan(body["spec"])
+        return {"err": err} if err else plan
     cards, err = promote_batch_plan()
     if err: return {"err": err}
     issues = [c["n"] for c in cards]
