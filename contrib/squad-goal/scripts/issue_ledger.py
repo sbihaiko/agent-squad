@@ -53,6 +53,8 @@ repeat of the same cause counts one more observation of it -- the file changes i
 cause or any other state of the run closes the episode, and `rearm` closes it and keeps it, so a later hold opens a new one.
 A keyed writer passes the episode's `start`; a key that is not the open episode's is `stale` and writes nothing. A writer that
 may not wait for the lock (`wait` false) is `locked`. `read <key> episodes` gives each episode with its age.
+`open_episodes` reads every issue's open episodes in one pass over the state directory, for a reader that needs the whole
+queue and never one read per child.
 
 A `landed` fact is the landing pass's own record (`wave.sh` for a wave, `branchland.sh` for a pushed work branch): the issue's
 work is in the base. It is keyed by the run that landed it (`kind` run) or by the branch a branchland pass landed (`kind`
@@ -243,6 +245,36 @@ def episodes(rec, now=None):   # the hold episodes with their age: an open one a
     now = time.time() if now is None else now
     return [{"run": e["run"], "cause": e["cause"], "start": e["start"], "count": e["count"], "open": "closed" not in e,
              "age": round(e.get("closed", now) - e["start"], 3)} for e in rec.get("episodes") or []]
+
+
+def _key_of(name):   # the issue key a ledger file name spells, `<owner>__<repo>__<n>.json`; None when it is not that name
+    stem = name[:-5] if name.endswith(".json") else ""
+    parts = stem.rsplit("__", 2)
+    if len(parts) != 3: return None
+    key = f"{parts[0]}/{parts[1]}#{parts[2]}"
+    try: parse(key)
+    except ValueError: return None
+    return key
+
+
+def open_episodes(state=None, now=None):
+    """Every open hold episode in the ledger, in one pass over the state directory (#1173): each issue file is opened
+    once, and an episode with no `closed` is a child that still waits. Each episode carries its key beside its run, cause,
+    start, count and age, oldest first. `read` is False when a file the ledger owns does not parse as one: the queue is
+    then unknown, never empty, because a missing reading is not a reading of nothing (ADR-0018)."""
+    d = pathlib.Path(state) if state is not None else state_dir()
+    now = time.time() if now is None else now
+    out, read = [], True
+    for f in sorted((d / "state").glob("*.json")):
+        try: rec = json.loads(f.read_text())
+        except (OSError, ValueError): read = False; continue
+        key = _key_of(f.name)
+        if not isinstance(rec, dict) or key is None: read = False; continue
+        try: eps = episodes(rec, now)
+        except (KeyError, TypeError): read = False; continue
+        out += [{"key": key, **{k: e[k] for k in ("run", "cause", "start", "count", "age")}} for e in eps if e["open"]]
+    out.sort(key=lambda e: e["start"])
+    return {"episodes": out, "read": read}
 
 
 def read(key):   # a corrupt file, or a missing one beside the old counters, reads held with its cause: the reader holds the issue

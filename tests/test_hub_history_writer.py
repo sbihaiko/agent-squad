@@ -194,6 +194,33 @@ def test_the_points_a_read_costs_are_counted_in_the_store(hub, writer):
     assert hub._hist.points_last_hour(writer, T0) == 6
 
 
+def test_the_search_names_a_card_the_board_read_missed_and_its_timeline_is_read(hub, writer):
+    """#1193: the pass read only the cards the board cache listed, so a card the cache missed -- the window in which the
+    frontier logged "the board read carries no card for it" -- never had its timeline read, and the closure the loop itself
+    caused never reached the store. The hourly search knows every number the repository holds, so a number it returns and the
+    store lacks a complete record of is due."""
+    reads = []
+
+    def read(n, cursor):
+        reads.append(n)
+        return _payload(n, [_status(OPENED, "Todo"), _status(TODO, "Done")])
+
+    hub.history_pass(read_issue=read, read_search=lambda: [1, 2, 7], now=T0)
+    assert 7 in reads, "the search named #7, the board cache does not list it, and no timeline was read for it"
+    store = hub._hist.load_store(writer)
+    assert store[7]["complete"] and store[7]["events"][-1]["status"] == "Done"
+
+
+def test_a_card_the_search_names_and_the_store_already_holds_complete_is_not_read_again(hub, writer):
+    reads = []
+    hub.history_pass(read_issue=lambda n, c: reads.append(n) or _payload(n, [_status(OPENED, "Todo")]),
+                     read_search=lambda: [1, 2, 7], now=T0)
+    before = list(reads)
+    hub.history_pass(read_issue=lambda n, c: reads.append(n) or _payload(n, [_status(OPENED, "Todo")]),
+                     read_search=lambda: [1, 2, 7], now=T0 + hub._hist.SEARCH_EVERY)
+    assert reads.count(7) == 1 and before.count(7) == 1, f"#7 was read again while its record stood complete: {reads}"
+
+
 def test_an_hourly_search_ends_the_interval_of_a_card_it_did_not_find(hub, writer):
     hub.history_pass(read_issue=lambda n, c: _payload(n, [_status(OPENED, "Todo")]), read_search=lambda: [1, 2], now=T0)
     hub.history_pass(read_issue=lambda n, c: _payload(n, [_status(OPENED, "Todo")]), read_search=lambda: [1],

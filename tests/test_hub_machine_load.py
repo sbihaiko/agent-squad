@@ -472,7 +472,7 @@ def test_the_facts_are_read_from_the_files_the_loop_already_writes(hub, tmp_path
     monkeypatch.setattr(hub, "STATE", tmp_path / "nothing-here")               # a state dir with none of these files
     monkeypatch.setattr(hub, "SHARED", tmp_path / "nothing-here")              # and a shared dir with no limit marker
     assert hub.foot_line(hub.foot_items(hub.foot_sources(now), now)) \
-        == "landed ? · CL ? · GK ? · GPT ? · GEM ? · Loop:OFF"   # no watchd.pid: the loop is off (#554)
+        == "landed ? · queue empty · CL ? · GK ? · GPT ? · GEM ? · Loop:OFF"   # no watchd.pid: the loop is off (#554); the ledger has no open hold: an empty queue is a reading (#1173)
 
 
 def _iso(ts):
@@ -901,6 +901,19 @@ def test_the_speed_row_compares_today_with_the_finished_days(hub, tmp_path, monk
     done = [days[i + 1] - days[i] for i in range(len(days) - 1)]
     assert got["today"] == done[-1], "the newest day is partial and is the one judged"
     assert got["median"] == 4 and got["min"] == 2 and got["max"] == 4, (got, done)
+
+
+def test_the_speed_fact_carries_the_age_of_the_store_it_counted(hub, tmp_path, monkeypatch):
+    """#1193: a frozen store read as a slowdown. The fact names the newest record it counted, so the reader sees the age."""
+    _closing_store(hub, tmp_path, monkeypatch, [0, 2, 6, 10, 14, 16])
+    got = hub.throughput_fact(now=THROUGHPUT_NOW)
+    assert got["as_of"] is None, "the fixture records carry no stamp of their own"
+    monkeypatch.setattr(hub.time, "time", lambda: THROUGHPUT_NOW.timestamp())
+    path = hub._hist.history_path(hub.BOARD, hub.REPO)
+    hub._hist.record_issue(path, 99, "2026-10-20T22:00:00Z", "2026-10-20T22:00:00Z", [], True,
+                           THROUGHPUT_NOW.timestamp() - 600)
+    got = hub.throughput_fact(now=THROUGHPUT_NOW)
+    assert got["as_of"] == int(THROUGHPUT_NOW.timestamp()) - 600 and got["age_secs"] == 600, got
 
 
 def test_a_speeding_board_reads_up_and_a_slowing_one_reads_down(hub, tmp_path, monkeypatch):

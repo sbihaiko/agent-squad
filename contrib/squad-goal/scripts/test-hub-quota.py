@@ -145,7 +145,7 @@ ck(close["parts"][0]["text"] == "CL 42% 1m" and close["parts"][0].get("tip") == 
 ck(hub._quota_fact({"codex": NOW + 60, "agy": None}, NOW, subs=()) == "codex reset 05:01 · agy ok",
    "the quota block keeps its reset time", hub._quota_fact({"codex": NOW + 60, "agy": None}, NOW, subs=()))
 hub.quota["claude"] = {"windows": [{"label": "weekly", "pct": 42, "resets": NOW + 3 * 3600 + 20 * 60}], "asof": NOW}
-ck([i["key"] for i in items] == ["landing", "subs", "loop"], "the fact joins the landing the line already has, and the loop state ends the line (#554)", [i["key"] for i in items])
+ck([i["key"] for i in items] == ["landing", "queue", "subs", "loop"], "the fact joins the landing the line already has, the empty queue reads beside it (#1173), and the loop state ends the line (#554)", [i["key"] for i in items])
 sub = next((i for i in items if i["key"] == "subs"), {"text": ""})
 ck(all(a in sub["text"] for a in ("CL", "GK", "GPT", "GEM"))
    and not any(a in " ".join(i["text"] for i in items if i is not sub) for a in ("CL 42%", "GK 88%")),
