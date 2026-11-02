@@ -244,6 +244,13 @@ def test_each_bubble_carries_its_clock_in_its_header_line():
     rule = js[js.index(".sq-time{"):js.index(".sq-time{") + 160]
     assert "font-size:13px" in rule and "float" not in rule, rule
 
+def test_the_answer_bubble_names_the_model_that_wrote_it():
+    """Owner, 2026-11-02: where the owner's bubble says "you", the answer's says the model the harness recorded on the turn."""
+    js = OVERLAY.read_text()
+    line = next(row for row in js.splitlines() if "who.textContent = onlyImage" in row)
+    assert r'\u203A you' in line and 'String(t.m || "")' in line, line
+    assert "t.role === \"owner\"" in line, line
+
 def test_the_reader_can_step_the_text_size_and_the_choice_outlives_the_page():
     """Owner, 2026-11-01: the feed needed its own size control. Two header buttons step one CSS variable, the page keeps the
     choice, and every text rule reads the variable so one step moves the whole talk."""

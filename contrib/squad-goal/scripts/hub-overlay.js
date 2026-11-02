@@ -412,7 +412,8 @@ function turnNode(t) {
   const role = onlyImage ? "owner" : t.role;
   d.className = "sq-turn sq-" + role + (onlyImage ? " sq-onlyimg" : "");
   who.className = "sq-who";
-  who.textContent = !onlyImage && t.role === "owner" ? "\u203A you" : "";
+  // The owner's bubble says "you"; the answer's says the model that wrote it, as the transcript names it (owner, 2026-11-02).
+  who.textContent = onlyImage ? "" : t.role === "owner" ? "\u203A you" : String(t.m || "");
   const body = richText(t.text);
   // The clock rides the bubble's own header line, at the right corner, level with the owner's label: floated alone it hung
   // above the bubble and pushed its first line down (owner, 2026-11-02, #1099).
