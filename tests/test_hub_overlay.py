@@ -13,6 +13,8 @@ import tempfile
 
 import pytest
 
+from tests import shell_suites
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib/squad-goal/scripts"
 OVERLAY = SCRIPTS / "hub-overlay.js"
@@ -413,7 +415,7 @@ def test_the_talk_is_read_again_the_moment_the_tab_is_looked_at():
 
 
 def test_the_paragraph_gap_is_one_line_box_at_the_smallest_and_largest_size():
-    p = subprocess.run(["bash", str(SCRIPTS / "test-hub-paragraph-gap.sh")], capture_output=True, text=True, timeout=30)
+    p = shell_suites.run(SCRIPTS / "test-hub-paragraph-gap.sh")
     assert p.returncode == 0, p.stdout + p.stderr
 # ---------------------------------------------------------------- the live activity line (#1082)
 
