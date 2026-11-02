@@ -85,14 +85,16 @@ def _blocks(css):
 
 def _root_overrides(html, tokens):
     """The palette roles a surface redefines outside the shared module: a second palette, not a read of the one."""
-    css = "\n".join(re.findall(r"<style[^>]*>(.*?)</style>", html, flags=re.S)).replace(tokens.strip(), "")
+    text = _strip_comments(html.replace(tokens.strip(), ""))
+    css_blocks = re.findall(r"<style[^>]*>(.*?)</style>", text, flags=re.S) or [text]
     out = []
-    for selector, body in _blocks(css):
-        if selector != ":root":
-            continue
-        for key in re.findall(r"(--[\w-]+)\s*:", body):
-            if key.lstrip("-") in PALETTE_ROLES:
-                out.append(key)
+    for css in css_blocks:
+        for selector, body in _blocks(css):
+            if not selector.endswith(":root"):
+                continue
+            for key in re.findall(r"(--[\w-]+)\s*:", body):
+                if key.lstrip("-") in PALETTE_ROLES:
+                    out.append(key)
     return out
 
 
@@ -135,9 +137,7 @@ def test_the_guard_catches_a_new_literal_on_each_surface():
 
 def test_the_dashboard_writes_no_palette_of_its_own():
     for path in DASHBOARD_SOURCES:
-        text = path.read_text()
-        html = f"<style>{text}</style>" if path.suffix == ".css" else text
-        assert not _root_overrides(html, TOKENS_FILE.read_text()), f"{path.relative_to(ROOT)} defines a palette of its own"
+        assert not _root_overrides(path.read_text(), TOKENS_FILE.read_text()), f"{path.relative_to(ROOT)} defines a palette of its own"
 
 
 def test_the_hub_and_the_dashboard_read_the_one_module(surfaces):
