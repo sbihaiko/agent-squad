@@ -331,7 +331,7 @@ async function loadSessions() {
 // Only the structure that carries meaning in a 400 px panel: headings, bullets, a fence. Everything else stays text.
 // A transcript names a screenshot by the path it was written to: the hub serves that file and the panel draws a thumbnail
 // (owner, 2026-11-01). "[Image #7]" alone names no file, so it stays text.
-const IMG_RE = /^\s*\[Image: source: ([^\]]+)\]\s*$/;
+const IMG_RE = /^\s*\[Image: source: ([^\]\n]+)\](?:\s.*)?$/;
 function imageNode(path) {
   const t = cur, a = document.createElement("a"), i = document.createElement("img");
   a.className = "sq-img"; a.href = t.src.api + "/image?sid=" + encodeURIComponent(t.sid) + "&p=" + encodeURIComponent(path);
@@ -433,7 +433,7 @@ function clock(iso) {
 }
 function turnNode(t) {
   // A system turn folds to one line (owner, 2026-11-01): a reminder or a hook's note is worth one sentence, not a wall.
-  const onlyImage = /^\s*\[Image: source: [^\]]+\]\s*$/.test(String(t.text || ""));
+  const onlyImage = IMG_RE.test(String(t.text || ""));
   if ((t.role === "system" || t.role === "tool") && !onlyImage) {
     const d = document.createElement("details"), sum = document.createElement("summary");
     d.className = "sq-turn sq-" + t.role + " sq-fold";
@@ -469,12 +469,11 @@ function turnNode(t) {
 }
 // An image the owner sent belongs to the message it came with (owner, 2026-11-01): the harness records it as a turn of its
 // own, so it would draw as a second bubble under the first. A turn that is only an image joins the owner turn just above it.
-const IMG_ONLY = /^\s*\[Image: source: [^\]\n]+\]\s*$/;
 function stitch(turns) {
   const out = [];
   for (const t of turns || []) {
-    const prev = out[out.length - 1], mine = IMG_ONLY.test(String(t.text || ""));
-    const join = mine && prev && (prev.role === "owner" || IMG_ONLY.test(String(prev.text || "")));
+    const prev = out[out.length - 1], mine = IMG_RE.test(String(t.text || ""));
+    const join = mine && prev && (prev.role === "owner" || IMG_RE.test(String(prev.text || "")));
     if (join) out[out.length - 1] = { ...prev, text: String(prev.text || "").replace(/\s+$/, "") + "\n" + String(t.text) };
     else out.push(t);
   }
