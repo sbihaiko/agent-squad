@@ -705,3 +705,87 @@ def test_the_desktop_page_puts_the_batch_control_on_the_backlog_column(hub):
     assert "min-height:32px" in rule and "var(--acc)" in rule, rule
 
 
+def spec_plan_fixture(mod, monkeypatch, tmp_path, subs):
+    """A Backlog spec (#9) with two Backlog tickets (#20, #21) on the board in that order; the sub-issue read answers `subs`."""
+    mod.BATCH_AUDIT = tmp_path / "batch.jsonl"
+    mod.board_cache["items"] += [{"n": 20, "i": 120, "t": "ticket a", "s": "OPEN", "st": "Backlog", "l": [], "pa": 9},
+                                 {"n": 21, "i": 121, "t": "ticket b", "s": "OPEN", "st": "Backlog", "l": [], "pa": 9}]
+    sub_issues(monkeypatch, answer=subs)
+
+
+def sub(number, state="open", labels=()):
+    return {"number": number, "state": state, "labels": [{"name": x} for x in labels]}
+
+
+def test_a_spec_plan_names_its_count_and_order_and_writes_nothing(hub, monkeypatch, tmp_path):
+    mod, port = hub
+    spec_plan_fixture(mod, monkeypatch, tmp_path, [sub(21), sub(20)])
+    calls = []
+    mod.promote_write = writer(calls)
+    before = json.dumps(mod.board_cache, sort_keys=True)
+    status, out = post(port, {"batch": True, "spec": 9}, path="/api/promote")
+    assert status == 200 and out == {"count": 3, "issues": [9, 20, 21], "skipped": []}, out
+    assert calls == [] and not mod.BATCH_AUDIT.exists()
+    assert json.dumps(mod.board_cache, sort_keys=True) == before
+
+
+def test_a_spec_plan_names_a_ticket_past_backlog_as_skipped_and_never_plans_it(hub, monkeypatch, tmp_path):
+    mod, port = hub
+    spec_plan_fixture(mod, monkeypatch, tmp_path, [sub(21), sub(22), sub(20)])
+    mod.board_cache["items"].append({"n": 22, "i": 122, "t": "started", "s": "OPEN", "st": "Todo", "l": [], "pa": 9})
+    status, out = post(port, {"batch": True, "spec": 9}, path="/api/promote")
+    assert status == 200 and out == {"count": 3, "issues": [9, 20, 21], "skipped": [22]}, out
+
+
+def test_a_spec_outside_backlog_is_refused_in_one_line(hub, monkeypatch, tmp_path):
+    mod, port = hub
+    spec_plan_fixture(mod, monkeypatch, tmp_path, [sub(20)])
+    next(i for i in mod.board_cache["items"] if i["n"] == 9)["st"] = "Todo"
+    status, out = post(port, {"batch": True, "spec": 9}, path="/api/promote")
+    assert status == 400 and "Backlog" in out.get("err", "") and "\n" not in out["err"], out
+
+
+def test_a_spec_with_no_open_ticket_is_refused_in_one_line(hub, monkeypatch, tmp_path):
+    mod, port = hub
+    spec_plan_fixture(mod, monkeypatch, tmp_path, [sub(20, state="closed"), sub(21, state="closed")])
+    status, out = post(port, {"batch": True, "spec": 9}, path="/api/promote")
+    assert status == 400 and "no open ticket" in out.get("err", "") and "\n" not in out["err"], out
+
+
+@pytest.mark.parametrize("kind", ["failed", "refused"])
+def test_a_failed_or_refused_sub_issue_read_refuses_the_plan(hub, monkeypatch, tmp_path, kind):
+    mod, port = hub
+    spec_plan_fixture(mod, monkeypatch, tmp_path, [])
+    gh = sys.modules["ghread"]
+    sub_issues(monkeypatch, failure=gh.Read(kind=gh.FAILED if kind == "failed" else gh.REFUSED, detail="gh said no"))
+    status, out = post(port, {"batch": True, "spec": 9}, path="/api/promote")
+    assert status == 400 and out.get("err") and "count" not in out, out
+
+
+def test_a_spec_plan_keeps_closed_spec_and_owner_held_tickets_out(hub, monkeypatch, tmp_path):
+    mod, port = hub
+    spec_plan_fixture(mod, monkeypatch, tmp_path, [sub(20), sub(21), sub(23, state="closed"), sub(24), sub(25)])
+    mod.board_cache["items"] += [{"n": 23, "i": 123, "t": "closed", "s": "OPEN", "st": "Backlog", "l": [], "pa": 9},
+                                 {"n": 24, "i": 124, "t": "a spec", "s": "OPEN", "st": "Backlog", "l": ["spec"], "pa": 9},
+                                 {"n": 25, "i": 125, "t": "held", "s": "OPEN", "st": "Backlog", "l": ["needs-owner"], "pa": 9}]
+    status, out = post(port, {"batch": True, "spec": 9}, path="/api/promote")
+    assert status == 200 and out == {"count": 3, "issues": [9, 20, 21], "skipped": []}, out
+
+
+def test_a_ticket_reached_twice_enters_the_spec_plan_once(hub, monkeypatch, tmp_path):
+    mod, port = hub
+    spec_plan_fixture(mod, monkeypatch, tmp_path, [sub(20), sub(21), sub(20)])
+    status, out = post(port, {"batch": True, "spec": 9}, path="/api/promote")
+    assert status == 200 and out == {"count": 3, "issues": [9, 20, 21], "skipped": []}, out
+
+
+def test_a_spec_plan_with_a_confirm_writes_nothing(hub, monkeypatch, tmp_path):
+    mod, port = hub
+    spec_plan_fixture(mod, monkeypatch, tmp_path, [sub(20)])
+    calls = []
+    mod.promote_write = writer(calls)
+    status, out = post(port, {"batch": True, "spec": 9, "confirm": 2}, path="/api/promote")
+    assert status == 400 and "err" in out, out
+    assert calls == [] and not mod.BATCH_AUDIT.exists()
+
+

@@ -2217,15 +2217,21 @@ def _start_dashboard(folder):
     if p.returncode != 0: raise RuntimeError((p.stderr or "").strip().splitlines()[-1:] or "exit " + str(p.returncode))
     return int(p.stdout.split()[-1])
 
+UNREADABLE_TIP = "the record read empty on this poll: the figures are from the last read that had an event"
+READ_FIGURES = {}   # run folder -> (the last scan that had an event, the record's write time then)
+
 def run_row(d, port, ps_lines):
     """One run folder's row of the list and its load-attribution entry (None while the record is empty). `port` is its
     dashboard server's, or "" when it has none."""
     p = pathlib.Path(d) / "record.jsonl"
     r = scan(p)
-    if r is None:
+    unreadable = r is None or r["t0"] is None
+    if unreadable and d not in READ_FIGURES:
         b = badge_of("starting")
         return {"id": os.path.basename(d), "port": port, "state": "starting", "badge": b["text"], "tip": b["title"], "label": "run " + os.path.basename(d)[-6:], "issues": [], "age": 0, "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": 0, "spend": 0, "dur": 0, "kind": "code", "live": True, "running": True, "agents": 0}, None
-    age = time.time() - p.stat().st_mtime; st = state_of(r, age)
+    if unreadable: r, written = READ_FIGURES[d]
+    else: written = p.stat().st_mtime; READ_FIGURES[d] = (r, written)
+    age = time.time() - written; st = state_of(r, age)
     try: request = (pathlib.Path(d) / "request.txt").read_text(errors="replace")
     except OSError: request = None
     gone = run_gone(r, age, ps_lines, d, request)   # killed: no verdict will come, so it is not live whatever its age
@@ -2235,6 +2241,7 @@ def run_row(d, port, ps_lines):
     b = badge_of(st, r)
     if gone: b = gone_badge(b)
     rank = run_rank(st, live=not gone)
+    if unreadable: st, b = "unreadable", {**badge_of("unreadable"), "title": UNREADABLE_TIP}
     t1 = r["t1"] or time.time()
     return {"id": os.path.basename(d), "port": port, "state": st, "badge": b["text"], "tip": b["title"], "label": r.get("label"), "issues": r["issues"], "issue_src": r.get("issue_src"), "issue_why": r.get("issue_why"), "age": int(age), "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": rank, "spend": r["spend"], "dur": round((t1 - (r["t0"] or t1)) / 60, 1), "kind": r.get("kind", "code"), "fix": r.get("fix"), "stack": r.get("stack"), "bug": r.get("bug"), "merge": r.get("merge"), "titles": {i: TITLE.get(int(i), "") for i in r["issues"]}, "live": not gone, "running": r["verdict"] is None and not gone, "agents": 0 if gone else r.get("agents") or 0, "share": r.get("share")}, {"id": os.path.basename(d), "dir": d, "wts": r.get("wts") or []}   # the row, and what the load attribution needs and nothing else
 
@@ -3852,14 +3859,15 @@ def spec_tickets(issue, item):
     repository. The sub-issue list is read through ghread, so a refusal or a failure is named and never read as "no ticket":
     it answers `(tickets, None)` or `(None, reason)`. A closed ticket, a ticket in another column, a ticket that is itself a
     spec, and a ticket the owner holds (TICKET_HOLD_LABELS) keep their column (ADR-0143, ADR-0142). A sub-issue of another
-    repository is never a card of this board, even when its number is one (write-side: board.sh is bound to SG_REPO)."""
+    repository is never a card of this board, even when its number is one (write-side: board.sh is bound to SG_REPO).
+    It answers `(tickets, skipped, None)`, where `skipped` names the open tickets past Backlog, or `(None, None, reason)`."""
     closed = lambda v: str(v or "").lower() == "closed"
     repo = item.get("r") or REPO
     try: subs, err = sub_issues(issue, repo)
-    except Exception as e: return None, f"sub-issues: {str(e)[:200] or 'the read did not answer'}"
-    if err: return None, err
+    except Exception as e: return None, None, f"sub-issues: {str(e)[:200] or 'the read did not answer'}"
+    if err: return None, None, err
     cards = {((i.get("r") or REPO).lower(), i.get("n")): i for i in board_cache.get("items") or []}
-    tickets = []
+    tickets, skipped = [], []
     for sub in subs:
         if not isinstance(sub, dict): continue
         c = cards.get((repo.lower(), sub.get("number")))
@@ -3867,9 +3875,11 @@ def spec_tickets(issue, item):
         if closed(sub.get("state")) or closed(c.get("s")): continue
         labels = {*(c.get("l") or []), *(x.get("name") for x in sub.get("labels") or [] if isinstance(x, dict))}
         if _columns_module.SPEC_LABEL in labels or labels & set(TICKET_HOLD_LABELS): continue
-        if _columns_module.view_column(c.get("st"), False, c.get("l"))[0] != COLUMN["unscheduled"]: continue
+        if _columns_module.view_column(c.get("st"), False, c.get("l"))[0] != COLUMN["unscheduled"]:
+            skipped.append(c["n"])
+            continue
         tickets.append(c)
-    return tickets, None
+    return tickets, skipped, None
 def promote(issue):
     """Move one open card from Backlog to Todo through the board seam (#560). Only a card the hub holds in Backlog now
     is accepted: a closed issue keeps its column (ADR-0143), and a card already in Todo sends no write (ADR-0144). A card
@@ -3891,7 +3901,7 @@ def promote(issue):
     if not promotable({**item, "st": st}): return {"err": "the card is a ticket of a spec: it moves with its spec, never alone (ADR-0142)"}
     tickets = []
     if _columns_module.SPEC_LABEL in (item.get("l") or []):
-        tickets, err = spec_tickets(issue, item)
+        tickets, _, err = spec_tickets(issue, item)
         if err: return {"err": err}
     cards = [item, *tickets]
     err = write_cards(cards)
@@ -3932,15 +3942,43 @@ def promote_batch_plan():
             ordered.append(card)
     for spec in specs: add(spec)
     for spec in specs:
-        tickets, err = spec_tickets(spec["n"], spec)
+        tickets, _, err = spec_tickets(spec["n"], spec)
         if err: return None, err
         for ticket in tickets: add(ticket)
     for card in starts: add(card)
     return ordered, None
+def spec_batch_plan(number):
+    """What one spec's start would move, read only (#1126): the spec's card first, then its open Backlog tickets in board
+    order, each card once. The open tickets past Backlog are named as skipped. Returns `(plan, None)` or `(None, reason)`."""
+    if isinstance(number, bool) or not isinstance(number, int) or number <= 0: return None, "spec: a number"
+    items = board_cache.get("items") or []
+    item = next((i for i in items if i.get("n") == number), None)
+    if item is None: return None, "not on the board"
+    if str(item.get("s") or "").lower() == "closed": return None, f"the spec #{number} is closed: nothing to start"
+    st = drawn_column(item, read_moves() if overlay_on() else {}, pending_window())["st"]
+    col, _ = _columns_module.view_column(st, False, item.get("l"))
+    if col != COLUMN["unscheduled"]: return None, f"the spec #{number} is in {col}, not {COLUMN['unscheduled']}: only a Backlog spec starts"
+    if _columns_module.SPEC_LABEL not in (item.get("l") or []): return None, f"#{number} is not a spec"
+    tickets, skipped, err = spec_tickets(number, item)
+    if err: return None, err
+    if not tickets and not skipped: return None, f"the spec #{number} has no open ticket: nothing to start"
+    order = {id(c): k for k, c in enumerate(items)}
+    cards, seen = [], set()
+    for card in [item, *sorted(tickets, key=lambda c: order[id(c)])]:
+        if card["n"] not in seen:
+            seen.add(card["n"])
+            cards.append(card)
+    skipped = list(dict.fromkeys(skipped))
+    return {"count": len(cards), "issues": [c["n"] for c in cards], "skipped": skipped}, None
 def promote_batch(body, who):
     """The owner's batch move (#1098). With no `confirm`, the hub answers the count it would move and the numbers, and nothing
     moves. With `confirm` equal to that count, one write moves every card of the plan, and the hub records the count and who
-    asked. A count that changed since the owner read it is refused, so the owner confirms the number that moves."""
+    asked. A count that changed since the owner read it is refused, so the owner confirms the number that moves. With a
+    `spec` the answer is that one spec's plan (#1126) and nothing is written: a spec's batch has no write yet."""
+    if "spec" in body:
+        if "confirm" in body: return {"err": "a spec's batch is read only: nothing is written here"}
+        plan, err = spec_batch_plan(body["spec"])
+        return {"err": err} if err else plan
     cards, err = promote_batch_plan()
     if err: return {"err": err}
     issues = [c["n"] for c in cards]
@@ -4119,6 +4157,7 @@ RUN_STATES = [
     {"state": "handled", "label": "Needs-human run, landed in the fork", "color": "ok", "css": ""},
     {"state": "running", "label": "Run in progress", "color": "run", "css": ""},
     {"state": "starting", "label": "Run starting", "color": "run", "css": "border-style:dotted"},
+    {"state": "unreadable", "label": "Record could not be read on the last poll", "color": "warn", "css": "border-style:dotted"},
     {"state": "stalled", "label": "Run stalled", "color": "wait", "css": "border-style:dashed"},
     {"state": "no verdict yet", "label": "No verdict yet", "color": "none", "css": ""},
 ]
@@ -4254,7 +4293,7 @@ body.tkopen #win{margin-right:420px}
 #tkb pre{white-space:pre-wrap;overflow-wrap:anywhere;font:var(--fs-min)/1.45 ui-monospace,Menlo,monospace;background:#12161c;border:1px solid var(--line);border-radius:6px;padding:8px 10px;margin:6px 0}
 #tkb h3{font-size:var(--fs-min);color:var(--mute);margin:14px 0 4px}#tkb .cm{border-left:3px solid var(--acc);padding-left:8px;margin:8px 0}
 #tkb .bar button{min-width:28px}#tkb .bar button:disabled{opacity:.35;cursor:default}#tkb .bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}#tkb a.gh{color:var(--acc);font-weight:700}
-#bbody .it{cursor:pointer}#bbody .bu{font:inherit;font-size:13px;margin-left:6px;padding:0 6px;border:1px solid currentColor;border-radius:4px;background:none;color:inherit;cursor:pointer}#bbody .it.hit{box-shadow:0 0 0 2px var(--warn)}#bbody .it.hl{box-shadow:0 0 0 2px var(--acc)}#bbody .it.dim{opacity:.35}#list .r.hlr{outline:2px solid var(--acc);outline-offset:-2px}.hlrel{color:var(--acc);font-size:var(--fs-min);margin-left:6px}.hlrel[hidden]{display:none}.ghl{color:var(--mute);margin-left:6px;display:inline-flex;align-items:center;opacity:.65;text-decoration:none}.ghl:hover,.ghl:focus-visible{opacity:1;color:var(--fg)}   /* the cards the sheet's Highlight related marks (#919) */
+#bbody .it{cursor:pointer}#bbody .bu{font:inherit;font-size:13px;margin-left:6px;padding:0 6px;border:1px solid currentColor;border-radius:4px;background:none;color:inherit;cursor:pointer}#bbody .it.hit{box-shadow:0 0 0 2px var(--warn)}#bbody .it.hl{box-shadow:0 0 0 2px var(--acc)}#bbody .it.dim{opacity:.35}#list .r.hlr{outline:2px solid var(--acc);outline-offset:-2px}.hlrel{color:var(--acc);font-size:var(--fs-min);margin-left:6px}.hlrel[hidden]{display:none}.ghl{color:var(--mute);margin-left:6px;display:inline-flex;flex:none;align-items:center;opacity:.65;text-decoration:none}.ghl svg{width:13px;height:13px}.ghl:hover,.ghl:focus-visible{opacity:1;color:var(--fg)}   /* the cards the sheet's Highlight related marks (#919) */
 #tkb h2{font:600 var(--fs-md)/1.35 -apple-system,system-ui,sans-serif;margin:4px 0 8px}
 #tkb .md{font:var(--fs-body)/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;color:#d8dde6;overflow-wrap:anywhere}
 #tkb .md>:first-child{margin-top:0}#tkb .md p{margin:.6em 0}#tkb .md h2,#tkb .md h3,#tkb .md h4,#tkb .md h5{font-weight:600;margin:1.3em 0 .4em;line-height:1.3;color:#eef1f6}
@@ -4557,7 +4596,7 @@ function drawList(){
   if(openGroups===null){const first=GROUPS.find(g=>by[g[0]]);openGroups=new Set(first?[first[0]]:[]);saveGroups()}   // nothing stored yet: the first filled group opens once
   const filled=GROUPS;   // the whole age ladder stays visible, so a band that holds no run still draws its header, and an open group that emptied keeps its header and shows no rows
   const ccRow=r=>{const h=r.held&&runs.some(x=>x.id===r.held)?r.held:null;return `<div class="r cc ${h&&shown.has(h)?"show":""}"${h?` data-id="${esc(h)}" title="open ${esc(h)}"`:""}><div><span class="b ${r.state}"${r.tip?` title="${esc(r.tip)}"`:""}>${esc(r.badge)}</span> <b>${esc(r.label)}</b>${r.sub?`<div class=st title="${esc(r.sub)}">${esc(r.sub)}</div>`:""}${(r.lines||[]).map(l=>`<div class=st>${esc(l)}</div>`).join("")}${r.live?`<div class=m>age ${age(r.age)}</div>`:""}</div></div>`};
-  const row=r=>r.kind==="childcc"?ccRow(r):`<div class="r ${shown.has(r.id)?"show":""}" data-id="${r.id}"><div>${r.kind==="test"?`<span class=kd title="GUI test run">🧪</span>`:""}<span class="b ${r.state}"${r.tip?` title="${esc(r.tip)}"`:""}>${esc(r.badge||r.state)}</span> <b title="${esc(labelTip(r))}">${esc(name(r))}</b>${loadMark(r)}${!(r.issues||[]).length&&r.issue_why&&!r.fix&&!r.url?`<div class=st>${esc(labelTip(r))}</div>`:""}${sub(r)?`<div class=st title="${esc(sub(r))}">${esc(sub(r))}</div>`:""}<div class=m>${r.share?`<span class="sh${r.share.pct===100?" done":""}" title="the newest gate that counted ran ${r.share.total} tests, ${r.share.passed} passed">${r.share.passed}/${r.share.total} · ${r.share.pct}%</span> · `:""}${usd(r.spend)} · ${Math.round(r.dur)}m · ${age(r.age)} ago · ${r.id.slice(-6)} · :${r.port}</div></div><span class=pn title="shown in the panel">${pins.has(r.id)?"●":"○"}</span></div>`;
+  const row=r=>r.kind==="childcc"?ccRow(r):`<div class="r ${shown.has(r.id)?"show":""}" data-id="${r.id}"><div>${r.kind==="test"?`<span class=kd title="GUI test run">🧪</span>`:""}<span class="b ${r.state}"${r.tip?` title="${esc(r.tip)}"`:""}>${esc(r.badge||r.state)}</span> <b title="${esc(labelTip(r))}">${esc(name(r))}</b>${loadMark(r)}${!(r.issues||[]).length&&r.issue_why&&!r.fix&&!r.url?`<div class=st>${esc(labelTip(r))}</div>`:""}${sub(r)?`<div class=st title="${esc(sub(r))}">${esc(sub(r))}</div>`:""}<div class=m>${r.share?`<span class="sh${r.share.pct===100?" done":""}" title="the newest gate that counted ran ${r.share.total} tests, ${r.share.passed} passed">${r.share.passed}/${r.share.total} · ${r.share.pct}%</span> · `:""}${usd(r.spend)} · ${Math.round(r.dur)}m · last write ${age(r.age)} ago · ${r.id.slice(-6)} · :${r.port}</div></div><span class=pn title="shown in the panel">${pins.has(r.id)?"●":"○"}</span></div>`;
   {const live=runs.filter(r=>r.rank===0);$("#lrun").innerHTML=live.map(row).join("")||"<div class=m>no live runs</div>";$("#lrs").textContent=live.length?`${live.length} \u00b7 ${live.filter(r=>r.state==="running").length} running`:"none"}   // the sidebar card: the runs that are live now, the same rows as the history
   $("#list").innerHTML=filled.map(([k,t])=>{const rows=by[k]||[],h=groupHeader(k,rows);return `<div class="gh ${openGroups.has(k)?"op":""}" data-g="${k}" tabindex=0>${t}<span class=sr title="${esc(h.title)}">${h.text}</span></div>${openGroups.has(k)?rows.map(row).join(""):""}`}).join("")||"<div class=m style=padding:10px>no live dashboards</div>";
   document.querySelectorAll(".gh").forEach(e=>e.onclick=()=>{const k=e.dataset.g;   // the header is the only writer: a click toggles this group and nothing else
@@ -4567,7 +4606,7 @@ function drawList(){
 }
 // The Runs chart tab lists the live runs and the runs ended today; a row opens the run sheet, never an embedded dashboard (#984).
 function drawMain(){if(typeof TAB==="string"&&TAB!=="flow")return;
-  const row=r=>`<div class=r data-rid="${esc(r.id)}" tabindex=0 role=button><span class="b ${esc(r.state)}">${esc(r.badge||r.state)}</span><b>${esc(name(r))}</b><span class=m>${usd(r.spend)} \u00b7 ${age(r.age)} ago</span></div>`;
+  const row=r=>`<div class=r data-rid="${esc(r.id)}" tabindex=0 role=button><span class="b ${esc(r.state)}">${esc(r.badge||r.state)}</span><b>${esc(name(r))}</b><span class=m>${usd(r.spend)} \u00b7 last write ${age(r.age)} ago</span></div>`;
   const live=runs.filter(r=>r.rank===0||r.running),ids=new Set(live.map(r=>r.id)),ended=ENDED.filter(r=>!ids.has(r.id));
   $("#main").innerHTML=(live.length?"<h3>Live</h3>"+live.map(row).join(""):"")+(ended.length?"<h3>Ended today</h3>"+ended.map(row).join(""):"")||"<div class=m>no run is live and none ended today</div>"}
 function refresh(){plan();drawList();paintHL();drawMain();rkFollow()}
@@ -5333,7 +5372,7 @@ pollBoard();setInterval(pollBoard,5000);
 function squadChartTick(){if(!window.squadStreamLive&&FLOWK&&!$("#flowov").hidden)flowOpen(FLOWK)}   // with no live stream the open chart is re-read on the board tick
 setInterval(squadChartTick,5000);
 // Last ended: the runs that ended today, read from the hub (#889)
-async function endedPoll(){try{const rows=await (await fetch("/api/ended")).json();ENDED=rows;drawMain();rows.slice(0,5).map(r=>`<div class=r data-rid="${esc(r.id)}" tabindex=0 role=button><div><span class="b ${r.state}">${esc(r.badge||r.state)}</span> <b>${esc(name(r))}</b><div class=m>${usd(r.spend)} \u00b7 ${age(r.age)} ago</div></div></div>`).join("")||"<div class=m>no run ended today</div>"}catch(e){}}
+async function endedPoll(){try{const rows=await (await fetch("/api/ended")).json();ENDED=rows;drawMain();rows.slice(0,5).map(r=>`<div class=r data-rid="${esc(r.id)}" tabindex=0 role=button><div><span class="b ${r.state}">${esc(r.badge||r.state)}</span> <b>${esc(name(r))}</b><div class=m>${usd(r.spend)} \u00b7 last write ${age(r.age)} ago</div></div></div>`).join("")||"<div class=m>no run ended today</div>"}catch(e){}}
 endedPoll();setInterval(endedPoll,30000);
 setTab(location.hash==="#set"?"set":TABS[ls.tab]?ls.tab:"board");   // the phone menu links here with #set (#913)
 // The open page follows the hub build that served it (#1114)

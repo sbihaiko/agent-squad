@@ -40,6 +40,7 @@ function sourcesModule({ STATES }) {
     { state: "handled", cls: null, text: "ended · handled (landed in fork)", label: "Needs-human run, landed in the fork", color: "ok", css: "", hub_only: true },
     { state: "running", cls: "v-live", text: "running", label: "Run in progress", color: "run", css: "" },
     { state: "starting", cls: null, text: "starting", label: "Run starting", color: "run", css: "border-style:dotted", hub_only: true },
+    { state: "unreadable", cls: null, text: "unreadable", label: "Record could not be read on the last poll", color: "warn", css: "border-style:dotted", hub_only: true },
     { state: "stalled", cls: "v-wait", text: "stalled", label: "Run stalled", color: "wait", css: "border-style:dashed" },
     { state: "no verdict yet", cls: "v-none", text: "no verdict yet", label: "No verdict yet", color: "none", css: "" },
   ];
