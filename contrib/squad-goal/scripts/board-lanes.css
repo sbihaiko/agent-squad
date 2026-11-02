@@ -19,8 +19,9 @@ body.dockb #bbody.lanes{display:block;overflow:visible}
 #bbody .lh .ltt.subt{color:var(--mute)}
 #bbody .lh .bar,#bbody .lh .pc,#bbody .lh .lst{flex:0 0 auto}
 @media (max-width:520px){#bbody .lh{flex-wrap:wrap}}   /* a phone keeps the chip on its own line rather than squeezing the title */
-#bbody .lh .bar{display:inline-block;width:120px;height:8px;border-radius:4px;background:var(--line);overflow:hidden}
-#bbody .lh .bar i{display:block;height:100%;background:var(--ok)}
+#bbody .lh .bar{position:relative;display:inline-block;width:120px;height:8px;border-radius:4px;background:var(--line);overflow:hidden}
+#bbody .lh .bar i{position:absolute;left:0;top:0;display:block;height:100%;background:var(--ok)}
+#bbody .lh .bar i.dn{background:var(--warn);opacity:.45}   /* the share a run holds, drawn after the closed share (owner, 2026-11-02); it is not concrete work yet, so it reads through */
 #bbody .lh .pc{font-size:var(--fs-min);font-weight:600;color:var(--fg);font-variant-numeric:tabular-nums}
 #bbody .lh .lst{font-size:var(--fs-min);font-weight:600;color:var(--mute);border:1px solid #3a4252;border-radius:10px;padding:0 8px;line-height:20px;white-space:nowrap}
 #bbody .lh .sum{margin-left:auto;display:flex;gap:14px;flex-wrap:wrap;justify-content:flex-end;font-size:var(--fs-body);color:var(--mute)}

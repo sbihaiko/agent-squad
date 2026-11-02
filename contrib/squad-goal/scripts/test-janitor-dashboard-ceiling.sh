@@ -26,7 +26,7 @@ died() {   # the pass signals, the process needs a moment to be gone
 }
 # a run that is still going: in active-runs.txt, a record with no verdict, a fresh request
 mkdir -p "$T/co/runs/run-live"; printf 'CHILD — GitHub issue(s) 700 (bug)\n' > "$T/co/runs/run-live/request.txt"
-printf '{"event": "run_start", "run_id": "run-live", "ts": 1}\n' > "$T/co/runs/run-live/record.jsonl"
+printf '{"event": "run_start", "run_id": "run-live", "ts": %s}\n' "$(date +%s)" > "$T/co/runs/run-live/record.jsonl"
 # a finished run the pass still holds: its dashboard is young, so rule B (1 h old) does not reap it either
 mkdir -p "$T/co/runs/run-fin"; printf 'CHILD — GitHub issue(s) 701 (bug)\n' > "$T/co/runs/run-fin/request.txt"
 printf '{"event": "verdict", "verdict": "failed", "reasons": ["x"]}\n' > "$T/co/runs/run-fin/record.jsonl"

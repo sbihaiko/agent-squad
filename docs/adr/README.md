@@ -70,6 +70,7 @@ An ADR holds a decision and its reason. It is not a ledger: no dates, counts, st
 
 | [0164](0164-delivery-outranks-the-proof.md) | Delivery outranks the proof: an unfinished proof never holds a landing or a promotion, a failed one always does, and the record names which of the three a promotion was |
 | [0165](0165-a-dispatch-waits-for-its-card-write.md) | A dispatch's card write is an event held pending until it lands; no run starts while it is pending, and recovery writes it before anything launches |
+| [0166](0166-a-run-past-thirty-minutes-is-taken-over.md) | A run past thirty minutes is taken over, never requeued: the loop ends it with no exception and keeps its issues claimed behind a `taken-<run>` marker until a hand fix closes them |
 
 ## Adding an ADR
 

@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from tests.dashstop import dashboard_pattern
@@ -53,7 +54,8 @@ def _run(name, root, *, live):
     f = root / "co" / "runs" / name
     f.mkdir(parents=True, exist_ok=True)
     (f / "request.txt").write_text("CHILD — GitHub issue(s) 700 (bug)\n")
-    event = '{"event": "run_start", "run_id": "%s", "ts": 1}\n' if live else '{"event": "verdict", "verdict": "failed", "reasons": ["x"]}\n'
+    # A live run started now: a start past the takeover bound is a run rule T ends (ADR-0166).
+    event = '{"event": "run_start", "run_id": "%s", "ts": ' + str(time.time()) + '}\n' if live else '{"event": "verdict", "verdict": "failed", "reasons": ["x"]}\n'
     (f / "record.jsonl").write_text(event % name if live else event)
     return f
 
