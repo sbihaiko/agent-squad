@@ -854,3 +854,103 @@ def test_a_spec_batch_writes_one_audit_line_per_confirmed_request(hub, monkeypat
     assert lines[0]["moved"] == [] and lines[0]["count"] == 3, lines[0]
 
 
+def rows_by_number(mod):
+    return {i["n"]: i for g in mod.board()["groups"] for i in g["items"]}
+
+
+def test_a_spec_card_in_backlog_with_a_plan_carries_the_start_control(hub, monkeypatch, tmp_path):
+    """#1128: the control is drawn on the spec's card in Backlog, and on no ticket or other card."""
+    mod, _ = hub
+    spec_plan_fixture(mod, monkeypatch, tmp_path, [sub(20), sub(21)])
+    rows = rows_by_number(mod)
+    assert rows[9].get("sb") is True, "a Backlog spec with open tickets carries no start control"
+    assert not rows[20].get("sb") and not rows[21].get("sb") and not rows[7].get("sb"), "a non-spec card carries the start control"
+
+
+@pytest.mark.parametrize("ticket_extra", [
+    None,
+    {"s": "closed"},
+    {"l": ["needs-owner"]},
+    {"l": ["spec"]},
+])
+def test_a_spec_card_with_an_empty_plan_carries_no_start_control(hub, ticket_extra):
+    """#1128: a spec whose plan holds no open ticket the batch would move carries no control."""
+    mod, _ = hub
+    if ticket_extra is not None:
+        mod.board_cache["items"].append({"n": 22, "i": 122, "t": "ticket c", "s": "OPEN", "st": "Backlog", "l": [], "pa": 9,
+                                         **ticket_extra})
+    assert not rows_by_number(mod)[9].get("sb"), ticket_extra
+
+
+def test_a_started_spec_carries_no_start_control(hub, monkeypatch, tmp_path):
+    mod, _ = hub
+    spec_plan_fixture(mod, monkeypatch, tmp_path, [sub(20), sub(21)])
+    next(i for i in mod.board_cache["items"] if i["n"] == 9)["st"] = "Todo"
+    assert not rows_by_number(mod)[9].get("sb"), "a spec already in Todo carries the start control"
+
+
+def test_a_spec_whose_only_open_ticket_is_past_backlog_still_carries_the_control(hub, monkeypatch, tmp_path):
+    """The plan is refused only when it holds no ticket and no skipped ticket, so a skipped ticket keeps the control."""
+    mod, _ = hub
+    spec_plan_fixture(mod, monkeypatch, tmp_path, [sub(22)])
+    mod.board_cache["items"].append({"n": 22, "i": 122, "t": "started", "s": "OPEN", "st": "Todo", "l": [], "pa": 9})
+    assert rows_by_number(mod)[9].get("sb") is True
+
+
+def test_a_render_makes_no_batch_read(hub, monkeypatch, tmp_path):
+    """#1128: the count is asked for on the press, never on a render: the board reads the cache only."""
+    mod, _ = hub
+    spec_plan_fixture(mod, monkeypatch, tmp_path, [sub(20), sub(21)])
+    routes = sub_issues(monkeypatch, answer=[sub(20), sub(21)])
+    monkeypatch.setattr(mod, "spec_batch_cards", lambda number: pytest.fail("a render read the spec's batch"))
+    rows_by_number(mod)
+    assert routes == [], routes
+
+
+def test_the_page_draws_the_start_control_beside_the_move_arrow(hub):
+    mod, _ = hub
+    page = mod.PAGE
+    assert "Start this spec" in page and "class=spb" in page, "the card carries no start control"
+    assert "x.sb" in page, "the control is not bound to the row's own fact"
+    assert page.index("class=pmp") < page.index("class=spb"), "the control is not beside the card's move arrow"
+
+
+def test_the_card_render_asks_for_no_count(hub):
+    mod, _ = hub
+    cards_line = next(line for line in mod.PAGE.splitlines() if line.startswith("const cards="))
+    assert "spec:" not in cards_line and "specPost" not in cards_line and "batchPost" not in cards_line, cards_line[:200]
+    assert mod.PAGE.index('closest("#bbody .spb")') < mod.PAGE.index("{spec:n}"), "the count is asked for outside the press"
+    assert mod.PAGE.count("{spec:") == 2, "the count is asked for outside the press and the confirm"
+
+
+def test_a_refused_start_replaces_the_dialog_with_the_reason(hub):
+    mod, _ = hub
+    page = mod.PAGE
+    assert "dlg.innerHTML=`<div class=perr>${esc(plan.err)}</div>" in page, "a refused plan does not replace the dialog"
+    assert "dlg.innerHTML=`<div class=perr>${esc(d.err)}</div>" in page, "a refused write does not replace the dialog"
+
+
+def test_a_changed_count_is_refused_with_the_current_count_and_moves_nothing(hub, monkeypatch, tmp_path):
+    mod, port = hub
+    spec_plan_fixture(mod, monkeypatch, tmp_path, [sub(21), sub(20)])
+    calls = []
+    mod.promote_write = writer(calls)
+    status, out = post(port, {"batch": True, "spec": 9, "confirm": 5}, path="/api/promote")
+    assert status == 400 and out["count"] == 3 and "the batch is 3 cards now, not 5" in out["err"], out
+    assert calls == []
+
+
+def test_a_successful_start_repaints_the_board_and_states_the_count(hub):
+    mod, _ = hub
+    page = mod.PAGE
+    confirm = page.split('closest("#spdlg .spgo")', 1)[1].split("document.addEventListener", 1)[0]
+    assert "pollBoard()" in confirm and "d.moved.length" in confirm, confirm
+    assert "#spnote" in page, "the success count does not survive the repaint"
+
+
+def test_the_phone_page_gains_no_start_control():
+    for name in ("hub-mobile.html", "hub-mobile-move.js", "hub-mobile-run.js", "hub-mobile-gesture.js"):
+        text = (ROOT / "contrib/squad-goal/scripts" / name).read_text()
+        assert "Start this spec" not in text and "spb" not in text and "{spec:" not in text, name
+
+
