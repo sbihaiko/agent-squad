@@ -6,5 +6,8 @@
 # dispatch node's own grant with spend_over_ceiling.
 caps:
   runs: 6
+  gates: 6                          # one gate at a time on this 8-core machine: at twelve slots three gates held the machine
+                                    # between them, each waited for the lock while keeping its slots, and the queue outlived
+                                    # the takeover bound (#1191, #1192)
 limits:
   max_budget_usd: 30
