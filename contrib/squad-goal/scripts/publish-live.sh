@@ -36,7 +36,8 @@ autopilot.sh
 prland.sh
 retryfix.sh
 revci.sh
-speed.py"
+speed.py
+board_burndown.py"
 # A retired name takes its suites with it: the fork route's suites stayed in the live copy after its scripts were gone, and
 # every one of them failed on a call to a file that is not there (#210). Some do not carry their subject in their name, so
 # they are named here.
