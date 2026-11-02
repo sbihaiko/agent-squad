@@ -1235,6 +1235,7 @@ $("termview-back").onclick = closeConversation;
 $("termview-older").onclick = loadOlder;
 $("termview-turns").onscroll = () => { if ($("termview-turns").scrollTop < 40) loadOlder(); };
 every("terminals", loadConversation, 3000);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") loadConversation(); });
 $("termview-send").onclick = async () => {
   const text = $("termview-text").value.trim(), sid = termSid;
   if (!text || !sid) return;

@@ -471,7 +471,11 @@ async function loadConversation() {
     if (cur !== s) return;
     // A 404 is a question for the session list, never a verdict of its own: only the list read may drop the session, and
     // one miss is asked about at most every five seconds (#1102, owner, 2026-11-01).
-    if (!r.ok) { if (r.status === 404 && Date.now() - missT > 5000) { missT = Date.now(); loadSessions(); } return; }
+    if (!r.ok) {
+      console.warn("conversation:", r.status);
+      if (r.status === 404 && Date.now() - missT > 5000) { missT = Date.now(); loadSessions(); }
+      return;
+    }
     const turns = (await r.json()).turns || [], last = turns[turns.length - 1];
     const sig = turns.length + ":" + (last ? last.id + ":" + last.text.length : "");
     if (sig === lastSig) return;
