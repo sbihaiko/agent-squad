@@ -139,11 +139,19 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
       [ $rcd = 0 ] || { mark "$tip" "not promoted: $(printf '%s' "$o" | tail -1)"; exit 1; }
       mark "$tip" "promoted: the full suite was killed by the ${bound}s bound, the delta carried the tip ($state/delta-pass-over-bound.log)"; exit 0
     fi
+    # ADR-0164 (#1046): a red the delta measured holds the tip as the full suite's red does; only an unfinished proof ships.
+    IFS=$'\t' read -r _ dk dres _ dT _ 2>/dev/null < "$state/gate-status-delta"
+    [ "$dk" = delta ] && [ "$dT" = "$tip" ] && [ "$dres" = fail ] && { mark "$tip" "not promoted: the delta suite failed ($state/delta-pass-over-bound.log)"; exit 1; }
+    gap=$(sed -n 's/^delta-pass: uncovered paths: \(.*\); each needs a line.*/\1/p' "$state/delta-pass-over-bound.log" | tail -n 1)
+    [ -n "$gap" ] || gap="every part of the tip (delta: $(tail -n 1 "$state/delta-pass-over-bound.log" | sed 's/^delta-pass: //'))"
     printf '%s\t%s\t%s\n' "$(date +%s)" "$tip" "$bound" > "$state/promote-indeterminate.$$" \
       && mv "$state/promote-indeterminate.$$" "$state/promote-indeterminate"
     echo "$(date -u +%FT%TZ) promote-pass: $tip not tested: the proof passed its ${bound}s bound and the delta could not carry it" >> "$log"
-    echo "promote-pass: $tip not tested: the proof passed its ${bound}s bound and the delta could not carry it"
-    exit 1; fi
+    o=$(SG_PROMOTE_PROOF=bound bash "$d/promote-stg.sh" 2>&1); rcb=$?
+    [ $rcb = 0 ] || { mark "$tip" "not promoted: $(printf '%s' "$o" | tail -1)"; exit 1; }
+    printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$tip" "$bound" "$gap" >> "$state/promote-bound"
+    mark "$tip" "promoted: bound-ended: the ${bound}s bound ended the full suite and the delta could not carry the tip; not covered: $gap"; exit 0
+  fi
   if [ "$rc" != 0 ]; then
     kill "$mon" 2>/dev/null; wait "$mon" 2>/dev/null
     read -r peak mean < <(awk '{ if ($1 + 0 > p) p = $1 + 0; s += $1 + 0; n++ } END { printf "%d %.2f", p, (n ? s / n : 0) }' "$samples" 2>/dev/null)

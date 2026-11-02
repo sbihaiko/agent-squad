@@ -272,3 +272,41 @@ def test_the_fresh_cache_path_applies_the_same_naming_rule(tmp_path, monkeypatch
     assert not any(line.startswith("UNREAD") for line in out), f"nothing the issue itself denies is named unread: {out}"
     assert not (tmp_path / "alerts.log").exists(), "an issue with no go label and a closed one never alert"
     assert binding.reads == 0, "the fresh cache answers the rows: the naming rule ran on the cache path, not a board read"
+
+
+# #1102: a closed issue is never alerted, and an issue whose own read did not answer is named as that failed read, once.
+
+
+def _go_pass(monkeypatch, tmp_path, binding, go, label="go"):
+    monkeypatch.setenv("SG_STATE", str(tmp_path))
+    monkeypatch.delenv("SG_BOARD_CACHE", raising=False)
+    monkeypatch.setattr(issue_state, "board_state", lambda repo="": issue_state.State(binding))
+    assert issue_state.main(["issue_state.py", "--go", go, "--label", label]) == 0
+
+
+def test_a_go_issue_whose_issue_read_did_not_answer_is_named_as_that_failed_read(tmp_path, monkeypatch):
+    binding = FakeBinding({"801": "Todo"}, facts={"800": None})
+
+    _go_pass(monkeypatch, tmp_path, binding, "800,801")
+
+    alert = (tmp_path / "alerts.log").read_text()
+    assert "#800" in alert and "issue read did not answer" in alert, alert
+
+
+def test_an_issue_already_named_unread_is_not_named_again_on_the_next_pass(tmp_path, monkeypatch):
+    binding = FakeBinding({"801": "Todo"}, facts={"800": None})
+
+    for _ in range(3):
+        _go_pass(monkeypatch, tmp_path, binding, "800,801")
+
+    assert len((tmp_path / "alerts.log").read_text().splitlines()) == 1
+
+
+def test_a_closed_issue_whose_card_is_gone_is_never_alerted_on_any_pass(tmp_path, monkeypatch, capsys):
+    binding = FakeBinding({"801": "Todo"}, facts={"800": ("closed", ["bug", "go"])})
+
+    for _ in range(3):
+        _go_pass(monkeypatch, tmp_path, binding, "800,801")
+
+    assert not (tmp_path / "alerts.log").exists()
+    assert "NOTE\t800\tclosed" in capsys.readouterr().out

@@ -19,6 +19,8 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = pathlib.Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import hubstream   # the push stream's path is passed unbuffered, as /dash/ is
 CTX = HERE / "address.sh"
 LIVE_PORT = 7700
 PORT = LIVE_PORT   # the port this process serves; any port but LIVE_PORT is a check hub (#1000)
@@ -266,6 +268,7 @@ def server(port, apps, on_new=None):
             self._send(403, reason.encode(), "text/plain; charset=utf-8")
         def not_found(self): return self.profile.not_found(self)
         def dash(self, method, body=b""): return self.profile.dash(self, method, body)
+        def stream(self, a): return self.profile.stream(self, a)
         def send_to_session(self, a): return self.profile.send_to_session(self, a)   # the overlay's and the phone's send (#898)
         def send_screenshot(self, a): return self.profile.send_screenshot(self, a)   # the overlay's screenshot (#903)
         def answer(self, code, out): return self.profile.answer(self, code, out)
@@ -291,7 +294,8 @@ def server(port, apps, on_new=None):
             self.profile = app["mod"].H
             self.path = self.path[len(slug) + 1:] or "/"
             if self.path.startswith("?"): self.path = "/" + self.path
-            if self.path.startswith("/dash/"):   # a run's dashboard streams as it arrives: never buffered, never rewritten
+            streams = self.path.split("?", 1)[0] == hubstream.PATH and hubstream.enabled()
+            if self.path.startswith("/dash/") or streams:   # a run's dashboard and the hub's push stream arrive as they come: never buffered, never rewritten
                 return getattr(self.profile, "do_" + method)(self)
             real, buf = self.wfile, io.BytesIO()
             self.wfile = buf

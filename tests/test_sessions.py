@@ -569,3 +569,45 @@ def test_a_poll_that_meets_no_new_byte_reads_no_file_again(home):
         f.write(json.dumps(user("u99", "a new turn")) + "\n")
     third = mod.read_conversation(str(cwd), "s1")
     assert len(calls) > n and third["turns"][-1]["text"] == "a new turn"
+
+
+def timed(uuid, at, text):
+    return {"type": "user", "uuid": uuid, "timestamp": at, "message": {"role": "user", "content": text}}
+
+
+def reply(uuid, at, mid, output_tokens, text=None):
+    content = [{"type": "text", "text": text}] if text else [{"type": "tool_use", "id": uuid, "name": "Bash", "input": {}}]
+    return {"type": "assistant", "uuid": uuid, "timestamp": at,
+            "message": {"id": mid, "role": "assistant", "model": "claude-test", "content": content,
+                        "usage": {"output_tokens": output_tokens}}}
+
+
+def test_the_page_carries_the_live_activity_of_a_busy_session(home, tmp_path):
+    cwd = tmp_path / "app"
+    add_session(home, os.getpid(), "s1", cwd, status="busy")
+    write_transcript(home, cwd, "s1", [
+        timed("u0", "2026-11-01T10:00:00.000Z", "build it"),
+        reply("a0", "2026-11-01T10:00:05.000Z", "m1", 300),
+        reply("a1", "2026-11-01T10:00:06.000Z", "m1", 300, text="ok"),
+        reply("a2", "2026-11-01T10:00:09.000Z", "m2", 2100, text="more"),
+    ])
+    activity = load_sessions().conversation("p1", "s1", profiles_of=lambda c: ["p1"])["activity"]
+    assert activity["status"] == "busy"
+    assert activity["tokens"] == 2400   # m1 is one message on two lines: its 300 output tokens count once
+    assert isinstance(activity["elapsed"], int) and activity["elapsed"] >= 0
+
+
+def test_the_page_reports_an_idle_session_as_idle(home, tmp_path):
+    cwd = tmp_path / "app"
+    add_session(home, os.getpid(), "s1", cwd, status="idle")
+    write_transcript(home, cwd, "s1", [timed("u0", "2026-11-01T10:00:00.000Z", "build it"),
+                                       reply("a0", "2026-11-01T10:00:05.000Z", "m1", 40, text="done")])
+    assert load_sessions().conversation("p1", "s1", profiles_of=lambda c: ["p1"])["activity"]["status"] == "idle"
+
+
+def test_no_owner_turn_leaves_elapsed_and_tokens_unknown(home, tmp_path):
+    cwd = tmp_path / "app"
+    add_session(home, os.getpid(), "s1", cwd, status="busy")
+    write_transcript(home, cwd, "s1", [reply("a0", "2026-11-01T10:00:05.000Z", "m1", 40, text="hi")])
+    activity = load_sessions().conversation("p1", "s1", profiles_of=lambda c: ["p1"])["activity"]
+    assert activity == {"status": "busy", "elapsed": None, "tokens": None}

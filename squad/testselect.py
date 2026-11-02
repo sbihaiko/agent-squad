@@ -11,6 +11,10 @@ DYNAMIC = {"import_module", "spec_from_file_location", "__import__"}
 LITERAL = {"import_module", "__import__"}
 # A data file under tests/ is read by one module; its importers are the suites it reaches.
 DATA_READERS = {"tests/shell_suites_seconds.txt": "tests/shell_suites.py"}
+# The gate stages that may run the delta: the tests a change reaches. The landing, the promotion proof and the nightly
+# always run the full battery, so a cheaper check never weakens the gate a delivery stands on (ADR-0018). A stage this
+# list does not name is full too: a typo in a stage never narrows a gate.
+DELTA_STAGES = frozenset({"fast", "wave-entry", "wave-tip", "prepush"})
 
 
 class _All(Exception):
@@ -186,7 +190,14 @@ def main(argv=None):
     parser = argparse.ArgumentParser(prog="python3 -m squad.testselect")
     parser.add_argument("--base", required=True)
     parser.add_argument("--worktree", default=".")
+    parser.add_argument("--stage", default="fast",
+                        help="the gate stage; a delta stage selects tests, any other stage runs the full battery")
     args = parser.parse_args(argv)
+    # A full stage never asks the diff: the landing, the promotion proof and the nightly run the whole battery whatever
+    # the delta would cover, and the reason says which stage asked for it.
+    if args.stage not in DELTA_STAGES:
+        print(f"all: {args.stage} runs the full battery")
+        return 0
     try:
         for path in _answer(Path(args.worktree).resolve(), args.base):
             print(path)

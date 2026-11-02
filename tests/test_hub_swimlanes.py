@@ -96,19 +96,51 @@ def test_page_offers_spec_wave_and_none_with_spec_as_the_default(hub):
 
 
 def test_the_lane_counts_the_cards_a_run_holds():
-    """Owner, 2026-11-02: the lane bar grows an amber share for the cards a run claims, so the bar reads closed then
-    doing, both out of the lane's own total."""
+    """Owner, 2026-11-02: the lane bar grows a share for the cards a run claims: the closed green read through, so the bar reads
+    closed then in flight, both out of the lane's own total."""
     g = [{"name": "Todo", "end": False, "n": 0, "items": [_card(10, st="Todo")]},
          {"name": "Doing", "end": False, "n": 0, "items": [_card(11, st="Doing"), _card(12, st="Doing")]}]
     lane = _build(g, doing="Doing")["lanes"][0]
     assert (lane["closed"], lane["total"], lane["doing"]) == (0, 3, 2), lane
 
 
-def test_a_lane_with_no_doing_card_draws_no_amber_share():
+def test_a_lane_with_no_doing_card_draws_no_held_share():
     g = [{"name": "Todo", "end": False, "n": 0, "items": [_card(10, st="Todo")]},
          {"name": "Closed", "end": True, "n": 0, "items": [_card(11, st="Closed", s="CLOSED")]}]
     lane = _build(g, doing="Doing")["lanes"][0]
     assert (lane["doing"], lane["closed"]) == (0, 1), lane
+
+
+def test_the_lane_counts_the_cards_in_review():
+    """Owner, 2026-11-02: a lane bar carries a third share for the cards in review, after the closed and claiming shares."""
+    g = [{"name": "Doing", "end": False, "n": 0, "items": [_card(11, st="Doing")]},
+         {"name": "Code Review", "end": False, "n": 0, "items": [_card(12, st="Code Review"), _card(13, st="Code Review")]},
+         {"name": "Closed", "end": True, "n": 0, "items": [_card(14, st="Closed", s="CLOSED")]},
+         {"name": "Todo", "end": False, "n": 0, "items": [_card(15, st="Todo")]}]
+    lane = _build(g, doing="Doing", review="Code Review")["lanes"][0]
+    assert (lane["closed"], lane["total"], lane["doing"], lane["review"]) == (1, 5, 1, 2), lane
+
+
+def test_a_lane_with_no_card_in_review_draws_no_review_share():
+    g = [{"name": "Doing", "end": False, "n": 0, "items": [_card(11, st="Doing")]},
+         {"name": "Todo", "end": False, "n": 0, "items": [_card(10, st="Todo")]}]
+    lane = _build(g, doing="Doing", review="Code Review")["lanes"][0]
+    assert lane["review"] == 0, lane
+
+
+def test_page_draws_the_review_share_after_the_held_share(hub):
+    page = hub.PAGE
+    assert "/*BOARD_REVIEW*/" not in page, "the Code Review name did not reach the page"
+    bar = page[page.index("class=bar title="):page.index("class=bar title=") + 600]
+    assert "i class=rv" in bar, bar
+    assert bar.index("i class=dn") < bar.index("i class=rv"), "the review share is drawn before the held share"
+    css = (SCRIPTS / "board-lanes.css").read_text()
+    rule = css[css.index("#bbody .lh .bar i.rv{"):]
+    rule = rule[:rule.index("}")]
+    assert "background:var(--ok)" in rule, rule
+    held = css[css.index("#bbody .lh .bar i.dn{"):]
+    held = held[:held.index("}")]
+    assert "opacity:.45" in held and "opacity:.25" in rule, (held, rule)
 
 
 def test_page_draws_the_doing_share_after_the_closed_share(hub):
@@ -119,7 +151,7 @@ def test_page_draws_the_doing_share_after_the_closed_share(hub):
     css = (SCRIPTS / "board-lanes.css").read_text()
     rule = css[css.index("#bbody .lh .bar i.dn{"):]
     rule = rule[:rule.index("}")]
-    assert "background:var(--warn)" in rule, rule
+    assert "background:var(--ok)" in rule, rule
     # A claimed card is not concrete work yet, so its share reads through the lane bar instead of painting over it.
     assert "opacity:" in rule and "opacity:1" not in rule, rule
 

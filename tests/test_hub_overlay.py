@@ -13,6 +13,8 @@ import tempfile
 
 import pytest
 
+from tests import shell_suites
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib/squad-goal/scripts"
 OVERLAY = SCRIPTS / "hub-overlay.js"
@@ -365,6 +367,22 @@ def test_an_image_the_owner_sent_joins_the_message_it_came_with():
     assert 'prev.role === "owner"' in body and "IMG_ONLY.test(String(prev.text" in body
     assert 'out[out.length - 1] = { ...prev, text:' in body
 
+@pytest.mark.node_bound
+def test_an_open_page_reloads_when_the_hub_build_changes():
+    """Owner, 2026-11-01: a tab kept the overlay it loaded after the hub changed. Every page that carries the overlay asks
+    the build its session route belongs to, and reloads when that build changes."""
+    assert run_js('[SQ.versionRoute("/api/sessions"), SQ.versionRoute("/repo/api/sessions")]') == ["/api/version", "/repo/api/version"]
+    assert run_js("[SQ.buildStep(null, 5), SQ.buildStep(5, 5), SQ.buildStep(5, 6)]") == [
+        {"seen": 5, "reload": False}, {"seen": 5, "reload": False}, {"seen": 5, "reload": True}]
+
+
+def test_the_build_poll_names_no_api_route_the_hub_would_rewrite():
+    js = OVERLAY.read_text()
+    assert "/api/version" not in js
+    body = js[js.index("// A new hub build reloads"):js.index("applyLayout(); syncSend();")]
+    assert "window.SQUAD_OV_SOURCES()" in body and "SQ.versionRoute(" in body and "location.reload()" in body
+
+
 def test_an_empty_session_list_never_takes_away_the_talk():
     """Owner, 2026-11-01: the panel went blank on "No session runs here" while it held a live talk. A list that answers
     empty keeps what the panel shows and asks again; the empty screen belongs to a panel that never had a session."""
@@ -377,6 +395,14 @@ def test_an_empty_session_list_never_takes_away_the_talk():
         assert guard < body.index(later), later
     assert "EMPTY_N" not in js
 
+def test_a_poll_that_answers_with_an_error_or_fails_to_render_says_so():
+    """#1079: an error answer and a render that throws both reach the console; neither freezes the feed in silence."""
+    js = OVERLAY.read_text()
+    body = js[js.index("async function loadConversation() {"):js.index("const uuid =")]
+    refusal = body[body.index("if (!r.ok)"):body.index("const page =")]   # the feed read answers one page: turns and the activity line together
+    assert 'console.warn("conversation:"' in refusal, refusal
+    assert body.index("try {") < body.index("log.replaceChildren(") < body.index('console.warn("conversation:", e)')
+
 def test_the_talk_is_read_again_the_moment_the_tab_is_looked_at():
     """Owner, 2026-11-01: the panel updated only after a long wait when he worked in another window. A background tab
     throttles timers to about once a minute, so the panel reads the talk again on focus and on coming back (#1079)."""
@@ -386,3 +412,64 @@ def test_the_talk_is_read_again_the_moment_the_tab_is_looked_at():
     assert 'document.addEventListener("visibilitychange"' in js
     assert js.count('addEventListener("focus", reread)') == 1   # registered once, never per open
     assert 'console.warn("conversation:", e)' in js             # a failed poll says so; it never freezes in silence
+
+
+def test_the_paragraph_gap_is_one_line_box_at_the_smallest_and_largest_size():
+    p = shell_suites.run(SCRIPTS / "test-hub-paragraph-gap.sh")
+    assert p.returncode == 0, p.stdout + p.stderr
+# ---------------------------------------------------------------- the live activity line (#1082)
+
+@pytest.mark.node_bound
+def test_the_live_line_reads_spinner_verb_elapsed_and_tokens():
+    assert run_js("SQ.liveText({status:'busy', elapsed:92, got:0, tokens:2400}, 0)") == "⠋ Working · 1m 32s · ↓ 2.4k tokens"
+
+
+@pytest.mark.node_bound
+def test_the_live_line_moves_each_second_while_the_session_works():
+    moved, same_second = run_js("[SQ.liveText({status:'busy', elapsed:92, got:0, tokens:2400}, 1000),"
+                                " SQ.liveText({status:'busy', elapsed:92, got:0, tokens:2400}, 0)]")
+    assert moved == "⠙ Working · 1m 33s · ↓ 2.4k tokens" and moved != same_second
+
+
+@pytest.mark.node_bound
+def test_the_live_line_is_empty_when_idle_and_dashes_what_is_unknown():
+    idle, waiting, unknown = run_js("[SQ.liveText({status:'idle', elapsed:5, got:0, tokens:9}, 0),"
+                                    " SQ.liveText({status:'waiting', elapsed:5, got:0, tokens:9}, 0),"
+                                    " SQ.liveText({status:'busy', elapsed:null, got:0, tokens:null}, 0)]")
+    assert idle == "" and waiting.endswith("Waiting for you · 5s · ↓ 9 tokens")
+    assert unknown == "⠋ Working · — · ↓ — tokens"
+
+
+def test_the_live_line_keeps_its_own_row_between_the_talk_and_the_composer():
+    src = OVERLAY.read_text()
+    markup = src.split("SQ.MARKUP = `", 1)[1].split("`;", 1)[0]
+    assert '<p id="sq-ov-live"' in markup and "<button" not in markup[markup.index('id="sq-ov-live"'):markup.index('id="sq-ov-form"')]
+    assert markup.index('id="sq-ov-log"') < markup.index('id="sq-ov-live"') < markup.index('id="sq-ov-form"')
+    rule = re.search(r"#sq-ov-live\{[^}]*\}", src).group(0)
+    assert "white-space:nowrap" in rule and "overflow:hidden" in rule and "font-variant-numeric:tabular-nums" in rule
+
+
+def _relative_luminance(hex_color):
+    channels = [int(hex_color[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+    lin = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+
+
+def test_the_live_line_keeps_the_served_floors():
+    src = OVERLAY.read_text()
+    rule = re.search(r"#sq-ov-live\{[^}]*\}", src).group(0)
+    assert "font-size:var(--sq-fs)" in rule and "--sq-fs:14px" in src and "FS_MIN = 13" in src
+    fg = re.search(r"color:(#[0-9a-f]{6})", rule).group(1)
+    bg = re.search(r"#sq-ov\{[^}]*background:(#[0-9a-f]{6})", src).group(1)
+    hi, lo = sorted([_relative_luminance(fg), _relative_luminance(bg)], reverse=True)
+    assert (hi + 0.05) / (lo + 0.05) >= 4.5
+
+
+def test_the_live_line_repaints_each_second_and_leaves_the_status_row_to_one_off_messages():
+    dom = OVERLAY.read_text().split("// dom:begin", 1)[1]
+    assert "setInterval(paintLive, 1000)" in dom and "clearInterval(live" in dom
+    paint = re.search(r"function paintLive\(\)\{.*?\n\}", dom, re.S).group(0)
+    assert "stat" not in paint and "live.hidden = " in paint and "live.textContent" in paint
+    assert 'function say(msg) { stat.textContent = msg || ""; }' in dom
+    conv = dom[dom.index("async function loadConversation() {"):dom.index("const uuid =")]
+    assert "setActivity(" in conv and conv.index("setActivity(") < conv.index("if (sig === lastSig) return;")

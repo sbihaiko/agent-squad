@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import anyio
 
-from squad import actions, git, limits, node_commit, session
+from squad import actions, gates, git, limits, node_commit, session
 from squad.adapter import CallRequest, new_session_id
 from squad.caps import CeilingWaitExpired
 from squad.engine_errors import Frontier
@@ -77,16 +77,28 @@ class Children:
         return (done["outcome"] == "needs-human" and bool(done["reasons"])
                 and done["reasons"][0] in ("ledger_held", "after_held"))
 
-    def run_checks(self, disp, output, cwd):
-        """The `checks` gates run after every child. A child cannot omit or edit them."""
+    def run_checks(self, disp, output, cwd, child=None, entry=1):
+        """The `checks` gates run after every child. A child cannot omit or edit them.
+
+        A check that runs a suite also takes part in the run's verdict memo: a green result is kept for its tree and
+        suite, and a later stage of this run reuses it instead of running the same suite again."""
         e = self.e
         facts = {n: f.value for (n, it), f in e.facts.values.items() if it is None}
         arts = {**e.artifacts.view(None), **(output if isinstance(output, dict) else {})}
         res = {}
         for g in disp["checks"]:
             gn = e.nodes[g]
-            r = run_check(gn["check"], gn["params"], GateInput(arts, facts, cwd))
+            inp = GateInput(arts, facts, cwd)
+            key, tree, hit = gates.memo(gn["check"], gn["params"], inp, cwd, e.record.events)
+            if hit is not None:
+                e.record.append("gate_reuse", node=g, entry=entry, item=None, sha=tree[0], suite=key, source=hit["source"])
+                res[g] = "pass"
+                continue
+            r = run_check(gn["check"], gn["params"], inp)
             res[g] = "pass" if r.ok else "fail"
+            if key and tree:
+                e.record.append("gate_result", node=g, entry=entry, item=None, sha=tree[0], dirt=tree[1], suite=key,
+                                outcome=res[g], source=f"{g}:{child}.{entry}" if child else f"{g}.{entry}")
             if not r.ok:
                 res[f"{g}:findings"] = r.findings
                 if r.evidence:
@@ -310,7 +322,7 @@ class Children:
             extra["diagnostic"] = {"ended": r.ended}
         if isinstance(r.output, dict):
             rel = e.artifacts.put(name, None, entry, r.output, None)
-            outcome, reasons = self.check(disp, r.output, ws, outcome, reasons, extra)
+            outcome, reasons = self.check(disp, r.output, ws, outcome, reasons, extra, name, entry)
         if diag_cap:      # a cap that left a valid artifact: the child passes, and the cap rides in the record
             extra["diagnostic"] = {**extra.get("diagnostic", {}), "cap": diag_cap}
         if self.isolated(d):    # #84: a child's own worktree is committed by the engine when the child passed, before its snapshot
@@ -323,9 +335,9 @@ class Children:
                             min(d["deadline"] - out.elapsed / e.scale, (ctx.dl_at - e.clock()) / e.scale), r.session_id or "unknown")
         return self.outcome(name, outcome, reasons, rel, {"spend": r.spend, "turns": r.turns, "cap": res.amount, "elapsed": out.elapsed, **extra}, entry)
 
-    def check(self, disp, output, ws, outcome, reasons, extra):
+    def check(self, disp, output, ws, outcome, reasons, extra, child=None, entry=1):
         """Run the `checks` gates over a child's artifact. A failed gate fails a passing child. Write the gate results into `extra`."""
-        checks = self.run_checks(disp, output, ws)
+        checks = self.run_checks(disp, output, ws, child, entry)
         failed = [g for g in disp["checks"] if checks[g] == "fail"]
         if failed and outcome == "pass":
             outcome, reasons = "fail", [f"check:{g}:{f}" for g in failed for f in checks[f"{g}:findings"]] or [f"check:{g}" for g in failed]

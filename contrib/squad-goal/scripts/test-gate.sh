@@ -35,11 +35,13 @@ IFS=$'\t' read -r _ kind res at < "$F" 2>/dev/null
 # --- the history: one line per finished gate, appended, its duration the run time after the lock wait (#647) ---
 H=$SG_STATE/gate-history
 hn0=$(wc -l < "$H" 2>/dev/null | tr -d ' '); hn0=${hn0:-0}; cp "$H" "$T/h0" 2>/dev/null || : > "$T/h0"
-(cd "$T/w" && SG_GATE_KIND=fast bash "$d/gate.sh" sh -c 'sleep 1; echo "selected 2 files" > "$GATE_SELECT_FILE"'); rc=$?
-IFS=$'\t' read -r fin kind res at start sel < <(tail -n 1 "$H")
+(cd "$T/w" && SG_GATE_KIND=fast bash "$d/gate.sh" sh -c 'sleep 1; echo "selected 2 files" > "$GATE_SELECT_FILE"; echo delta > "$GATE_SCOPE_FILE"'); rc=$?
+IFS=$'\t' read -r fin kind res at start sel scope < <(tail -n 1 "$H")
 [ $rc = 0 ] && [ "$kind" = fast ] && [ "$res" = pass ] && [ "$at" = "$sha" ] && ok "a finished gate appends one history line: kind, result and sha" || ko "history line: '$(tail -n 1 "$H" 2>&1)'"
-[ "$(tail -n 1 "$H" | tr -cd '\t' | wc -c | tr -d ' ')" = 5 ] && ok "the history line has six fields" || ko "history fields: '$(tail -n 1 "$H")'"
-[ "$sel" = "selected 2 files" ] && ok "the history line carries the gate's selection" || ko "history selection: '$sel'"
+[ "$(tail -n 1 "$H" | tr -cd '\t' | wc -c | tr -d ' ')" = 6 ] && ok "the history line has seven fields, the scope beside the selection" || ko "history fields: '$(tail -n 1 "$H")'"
+[ "$sel $scope" = "selected 2 files delta" ] && ok "the history line carries the gate's selection and its scope" || ko "history selection: '$sel' scope: '$scope'"
+IFS=$'\t' read -r _ kind res _ sel scope < "$S" 2>/dev/null
+[ "$sel $scope" = "selected 2 files delta" ] && ok "the status line carries the selection and the scope" || ko "status selection: '$(cat "$S" 2>&1)'"
 case "$start" in ''|*[!0-9]*) ko "the history line carries no start epoch: '$start'";; *) [ "$((fin - start))" -ge 1 ] && ok "the duration is finish minus start, and the sleep counts" || ko "duration: fin $fin start $start";; esac
 cmp -s "$T/h0" <(head -n "$hn0" "$H") && [ "$(wc -l < "$H" | tr -d ' ')" = "$((hn0 + 1))" ] && ok "the history is append-only: earlier lines are untouched" || ko "history was rewritten"
 

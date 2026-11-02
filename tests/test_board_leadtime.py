@@ -282,12 +282,13 @@ def test_dots_closer_than_one_dot_merge_into_a_numbered_cluster(lt):
     assert [d["n"] for d in merged["dots"]] == [1, 2]
 
 
-def test_the_window_text_names_the_days_and_the_excluded_reasons(lt):
+def test_the_window_text_names_the_days_and_the_plotted_sample(lt):
     items = [_closed(1, 5, days_ago=1), _open(2), _no_opened(3, 4)]
 
     result = _chart(lt, items, timeframe=30)
 
-    assert result["text"] == "last 30 days, 2 excluded because still open, no opened date"
+    assert result["text"] == "last 30 days, on board -> closed, 1 issue plotted; Timeframe selects by end transition"
+    assert result["excluded_total"] == 2
 
 
 def test_the_average_median_and_p85_carry_values_and_positions(lt):
@@ -307,7 +308,8 @@ def test_no_closed_card_gives_no_dots_and_no_lines(lt):
 
     assert result["dots"] == []
     assert result["average"] is None
-    assert result["text"] == "all closed cards, 1 excluded because still open"
+    assert result["text"] == "all closed cards, on board -> closed, 0 issues plotted; Timeframe selects by end transition"
+    assert result["excluded_total"] == 1
 
 
 # SPEC 889 #900: a drag across the plot zooms to a date range. The hub recomputes the chart for that range.
@@ -340,7 +342,7 @@ def test_a_zoom_range_names_its_dates_in_the_window_text(lt):
     start, end = datetime(2026, 9, 30, tzinfo=UTC), datetime(2026, 10, 8, tzinfo=UTC)
     result = _chart(lt, [_closed(1, 5, days_ago=20)], start=start, end=end)
 
-    assert result["text"] == "Sep 30 to Oct 8"
+    assert result["text"] == "Sep 30 to Oct 8, on board -> closed, 0 issues plotted; Timeframe selects by end transition"
 
 
 def test_a_zoom_range_with_no_card_keeps_its_range_and_no_dots(lt):
@@ -366,3 +368,58 @@ def test_a_dot_marks_an_approximate_or_unknown_first_interval(lt):
     series = lt.lead_time([row])["series"][0]
     assert series["approx"] is True
     assert series["unknown_first"] is True
+
+
+# SPEC 1063 #1065: the caption names the span, the measure and the plotted sample; a fit-to-data range and hour or day axis labels.
+def _at(n, closed):
+    return {"n": n, "t": f"card {n}", "o": _iso(closed - timedelta(hours=1)), "c": _iso(closed), "column": "Done",
+            **_flags(1.0)}
+
+
+def test_the_caption_names_the_span_the_measure_and_the_plotted_sample(lt):
+    result = _chart(lt, [_closed(1, 5, days_ago=1)], timeframe=30)
+
+    assert result["text"] == "last 30 days, on board -> closed, 1 issue plotted; Timeframe selects by end transition"
+
+
+def test_the_caption_changes_with_the_start_and_end_filters(lt):
+    items = [_closed(1, 5, days_ago=1)]
+
+    default = _chart(lt, items, timeframe=30)["text"]
+    chosen = _chart(lt, items, timeframe=30, measure="opened -> Doing")["text"]
+
+    assert chosen != default
+    assert "opened -> Doing" in chosen
+
+
+def test_a_clustered_view_offers_a_fit_range_that_names_its_instants(lt):
+    items = [_at(1, NOW - timedelta(hours=5)), _at(2, NOW - timedelta(hours=4)), _at(3, NOW - timedelta(hours=3))]
+
+    fit = _chart(lt, items, timeframe=30)["fit"]
+
+    assert fit["start"] == "2026-11-29T18:00:00+00:00"
+    assert fit["end"] == "2026-11-29T22:00:00+00:00"
+    assert fit["text"] == "Nov 29 18:00 to Nov 29 22:00 UTC"
+
+
+def test_a_spread_view_offers_no_fit_range(lt):
+    items = [_closed(1, 5, days_ago=1), _closed(2, 5, days_ago=10), _closed(3, 5, days_ago=20)]
+
+    assert _chart(lt, items, timeframe=30)["fit"] is None
+
+
+def test_a_short_range_labels_its_axis_in_hours_and_a_long_one_in_days(lt):
+    short = _chart(lt, [_closed(1, 5, days_ago=0)], timeframe=1)
+    long = _chart(lt, [_closed(1, 5, days_ago=0)], timeframe=30)
+
+    assert [tick["text"] for tick in short["xticks"]] == ["00:00", "04:00", "08:00", "12:00", "16:00", "20:00", "00:00"]
+    assert [tick["text"] for tick in long["xticks"]] == ["Oct 31", "Nov 5", "Nov 10", "Nov 15", "Nov 20", "Nov 25", "Nov 30"]
+
+
+def test_a_fit_range_labels_its_axis_in_hours(lt):
+    items = [_at(1, NOW - timedelta(hours=5)), _at(2, NOW - timedelta(hours=4)), _at(3, NOW - timedelta(hours=3))]
+    fit = _chart(lt, items, timeframe=30)["fit"]
+
+    zoomed = _chart(lt, items, start=datetime.fromisoformat(fit["start"]), end=datetime.fromisoformat(fit["end"]))
+
+    assert [tick["text"] for tick in zoomed["xticks"]] == ["18:00", "18:40", "19:20", "20:00", "20:40", "21:20", "22:00"]

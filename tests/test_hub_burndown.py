@@ -1,6 +1,7 @@
 """The Throughput tab's burndown: the hub answers one open spec's series, and the page draws it with its gaps and guide (#1048)."""
 import importlib.util
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -216,6 +217,71 @@ def test_the_burndown_is_its_own_throughput_tab(hub):
     """Owner, #1080: one tab per chart, so the burndown is never drawn inside the cumulative flow."""
     assert 'id=bburn' in hub.PAGE and 'id=flowv' not in hub.PAGE
     assert 'flowOpen("burndown")' in hub.PAGE, "the Burndown tab opens the burndown view"
+
+
+def _flow_block(hub):
+    m = re.search(r"// flow-charts:\n(.*?)// flow-charts:end", hub.PAGE, re.S)
+    assert m, "the page carries no flow-charts block"
+    return m.group(1)
+
+
+_STUBS = "\n".join([
+    "const COLORS={},COLNAME={};const esc=s=>String(s);const ls={};",
+    "const ON={};const document={addEventListener(){}};const addEventListener=()=>{};",
+    "const EL={};const $=s=>EL[s]||(EL[s]={hidden:false,innerHTML:'',clientWidth:900,classList:{toggle(c,v){ON[s]=!!v}}});",
+    "const barQuery=()=>'';",
+])
+
+
+@pytest.mark.skipif(NODE is None, reason="node is a test dependency of the burndown page")
+def test_a_lane_burnup_button_opens_the_throughput_burndown_of_its_spec(hub):
+    """Owner, #1080: a lane's burn-up button opens the same burndown the Throughput tab shows, for that spec."""
+    assert "buToggle(bu.dataset.bu)" not in hub.PAGE and "buPanel(l.num)" not in hub.PAGE
+    assert "openBurn(+bu.dataset.bu)" in hub.PAGE
+    script = "\n".join([
+        _STUBS,
+        "const FETCHED=[],TABCALLS=[];",
+        "const fetch=async u=>{FETCHED.push(u);return {json:async()=>({t:0})}};",
+        "const setTab=(t,o)=>TABCALLS.push([t,o]);",
+        _flow_block(hub),
+        _page_block(hub, "function flowTabs("),
+        "openBurn(7);",
+        "setTimeout(()=>console.log(JSON.stringify({fetched:FETCHED,tabs:TABCALLS,flowk:FLOWK,spec:BURN.s})),0);",
+    ])
+    result = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    got = json.loads(result.stdout)
+    assert got["fetched"] == ["/api/chart/burndown?spec=7"]
+    assert got["tabs"] == [["flow", {"keep": True}]], "the Throughput tab is the one lit"
+    assert got["flowk"] == "burndown" and got["spec"] == 7
+
+
+@pytest.mark.skipif(NODE is None, reason="node is a test dependency of the burndown page")
+def test_the_lit_tab_names_the_chart_drawn_for_every_chart(hub, board):
+    """Owner, #1080: the lit tab and the chart drawn name the same chart, so a guard fails when they can disagree."""
+    payloads = {"cfd": hub.flow_cfd(), "burndown": hub.flow_burn(None), "lead": hub.flow_lead()}
+    script = "\n".join([
+        _STUBS,
+        _flow_block(hub),
+        _page_block(hub, "function flowTabs("),
+        f"const PAYLOADS={json.dumps(payloads)};",
+        "const out={};",
+        "for(const k of ['cfd','burndown','lead']){for(const s in ON)delete ON[s];FLOWK=k;FLOWD[k]=PAYLOADS[k];",
+        "  flowTabs();drawFlow();",
+        "  out[k]={lit:Object.keys(ON).filter(s=>ON[s]).sort(),drawn:$('#flowb').innerHTML};}",
+        "console.log(JSON.stringify(out));",
+    ])
+    result = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    got = json.loads(result.stdout)
+    tab = {"cfd": "#bflow", "burndown": "#bburn", "lead": "#blead"}
+    marker = {"cfd": "id=cfdr", "burndown": "id=burns", "lead": "excluded "}
+    for k in tab:
+        assert got[k]["lit"] == [tab[k]], f"{k}: the lit tab is {got[k]['lit']}"
+        assert marker[k] in got[k]["drawn"], f"{k}: the chart drawn is not the one the tab names"
+        for other in marker:
+            if other != k:
+                assert marker[other] not in got[k]["drawn"], f"{k}: a second chart is drawn in the panel"
 
 
 def _page_block(hub, prefix):

@@ -72,13 +72,16 @@ test-hub-mobile-loop.sh 0.09
 test-hub-mobile-move.sh 0.04
 test-hub-mobile-run.sh 0.05
 test-hub-mobile-sheet.sh 0.09
+test-hub-paragraph-gap.sh 0.08
 test-hub-promote.sh 0.28
+test-hub-question-card.sh 0.08
 test-hub-run-issue.sh 0.33
 test-hub-screenshot.sh 0.15
 test-hub-state-default.sh 0.20
 test-hub-test-panel.sh 0.09
 test-hubmux-check-board.sh 0.81
 test-hubmux-live.sh 0.12
+test-hubstream.sh 8.84
 test-issue-ledger.sh 2.21
 test-janitor-board-facts.sh 1.24
 test-janitor-board-reconcile.sh 4.71
@@ -108,6 +111,7 @@ test-janitor-own-pass.sh 3.46
 test-janitor-pid-reuse.sh 0.35
 test-janitor-probe-retry.sh 4.19
 test-janitor-rearm-floor.sh 1.08
+test-janitor-reoffer.sh 2.94
 test-janitor-rule-o.sh 1.24
 test-janitor-rule-p.sh 1.48
 test-janitor-run-fields-unchanged.sh 1.75

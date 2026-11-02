@@ -442,13 +442,24 @@ class Dispatch:
         While it runs, a `review_progress` event moves the record, so the heartbeat never reads it as wedged (ADR-0051)."""
         e, gate = self.e, node["review"]
         params = e.nodes[gate]["params"]
-        argv = gates.review_argv(params["argv"], {"run_id": e.run_id, "child": name, "issue": self.issue(d), "worktree": path, "base": base})
+        values = {"run_id": e.run_id, "child": name, "issue": self.issue(d), "worktree": path, "base": base}
+        argv = gates.review_argv(params["argv"], values)
+        # The review command is a gate stage of this run: a stage of this run that already approved this tree through
+        # this same command proved the suite it would run, so this one reuses that verdict and records the reuse.
+        key, tree, hit = gates.memo("review-command", params, gates.GateInput({}, {}, str(path)), str(path), e.record.events, values)
+        if hit is not None:
+            e.record.append("gate_reuse", node=name, entry=n, item=None, sha=tree[0], suite=key, source=hit["source"])
+            return {"command": argv, "elapsed": 0.0, "exit_code": 0, "verdict": "approve", "findings": "", "stderr": "", "reused_from": hit["source"]}
         env = {"SQUAD_REVIEW_ROUND": str(n), "SQUAD_REVIEW_FIX": "1" if offer else "0"}
 
         def tick(elapsed):
             anyio.from_thread.run_sync(lambda: e.record.append("review_progress", node=name, gate=gate, elapsed=elapsed))
         cap = params["deadline"] * e.scale if deadline is None else deadline
-        return await anyio.to_thread.run_sync(lambda: gates.review_command(argv, str(path), cap, REVIEW_TICK_S, tick, env))
+        review = await anyio.to_thread.run_sync(lambda: gates.review_command(argv, str(path), cap, REVIEW_TICK_S, tick, env))
+        if key and tree and review["verdict"] == "approve":     # only an approval proves the suite; no_review proves nothing
+            e.record.append("gate_result", node=name, entry=n, item=None, sha=tree[0], dirt=tree[1], suite=key, outcome="pass",
+                            source=f"{gate}:{name}.{n}")
+        return review
 
     def issue(self, d):
         """The child's issue: the `GitHub issue #<n>` header or `Refs #<n>` line of its task or prompt (the dispatched

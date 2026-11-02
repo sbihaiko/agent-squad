@@ -53,6 +53,8 @@ The session queues the text as a meta user turn. The transcript (`~/.claude/proj
 
 The receiver can hold a peer message for its user's approval. Hold causes: a `crossSessionInbound: "hold"` setting (explicit, managed, repo), `mode-mismatch` (the sender asserts another permission class), and `no-mode-asserted` (the sender asserts no mode while the receiver bypasses permissions). A held message waits for approval; it can expire, be refused or be dropped. A hub that sends to a session in `bypassPermissions` must expect a hold unless it asserts a matching `from_mode`. The probe target ran in auto mode with no `from_mode`, and nothing was held.
 
+The hub reads the receiver's mode in this order: the last `permissionMode` line of its transcript, searched back through the file; then the mode its argv names. The argv read is not reliable for an interactive session. Claude Code sets its process title to `claude` on the interactive path (unless `CLAUDE_CODE_DISABLE_TERMINAL_TITLE` is set), and on macOS a title change replaces the argv that `ps -ww -o args=` shows, so a flag given at start is no longer visible. A session with no transcript mode line and a replaced title has no readable mode, and the hub sends no `from_mode`.
+
 ## Auth on macOS
 
 On macOS the inbox runs with auth optional. The CLI logs "peers will send unauthenticated (accepted: auth is optional on this platform)". A connection with a wrong token, or no auth line, still delivers. A good token marks the sender class `peer`. Send the key anyway: auth can become required (the CLI says "auth line REQUIRED" for an inbox that requires it), and then an unauthenticated line closes the connection.

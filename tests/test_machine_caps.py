@@ -16,7 +16,7 @@ import anyio
 import pytest
 import yaml
 
-from squad import caps, defaults
+from squad import caps, defaults, record
 from squad.adapter import ScriptedAdapter
 from squad.engine import Engine
 from squad.graph import from_doc
@@ -134,6 +134,128 @@ def test_a_lease_of_a_reused_pid_is_reclaimed_and_the_ceiling_recovers(tmp_path)
     lease.write_text(json.dumps({**data, "since": 1.0}))
     assert c.occupancy()["runs"] == 0                    # this process started after the dead run's lease
     assert c.try_take("runs", "next-run") is not None
+
+
+def listed(tmp_path, *runs):
+    """An active-runs.txt naming one run folder per (name, events) pair; the entries are absolute, as launch.py writes them.
+    `events` is None for a run with no record yet (a launch, with a fresh `request.txt` as launch.py writes), else the
+    record's events in order, each of "verdict", "run_start" or "progress"."""
+    st = tmp_path / "st"
+    st.mkdir(parents=True, exist_ok=True)
+    path = st / "active-runs.txt"
+    names = []
+    for name, events in runs:
+        folder = tmp_path / "runs" / name
+        folder.mkdir(parents=True, exist_ok=True)
+        if events is None:
+            (folder / "request.txt").write_text(f"run the ticket for {name}\n")
+        else:
+            rec = record.Record(folder / "record.jsonl")
+            for event in events:
+                if event == "verdict":
+                    rec.append("verdict", verdict="completed", exit_code=0, reasons=[], remains=[], folded=[])
+                elif event == "run_start":
+                    rec.append("run_start", run_id=name, graph_name="g", graph_hash="h", engine_options={}, root="root", plan=[])
+                elif event == "progress":
+                    rec.append("progress", node="root", entry=1, item=0, session="s", messages=1, context_tokens=1, tool="Read")
+                else:
+                    raise ValueError(event)
+        names.append(str(folder))
+    path.write_text("".join(n + "\n" for n in names))
+    return path
+
+
+def test_a_run_with_a_final_verdict_holds_no_run_slot(tmp_path):
+    """Dispatch counted a run with a verdict as live until its issue closes, so finished runs starved caps.runs. Two finished
+    runs and one live run stand listed; caps.runs is two, so one slot is free: the record is the truth."""
+    c = caps.Ceiling({**FOUR, "runs": 2}, tmp_path / "leases")
+    p = listed(tmp_path, ("run-done-a", ("verdict",)), ("run-done-b", ("verdict",)), ("run-live", ("progress",)))
+    assert c.run_holders(p, root=tmp_path) == ["run-live"]
+    assert caps.free_runs(c, p, root=tmp_path) == 1
+
+
+def test_a_resumed_run_holds_its_slot_though_a_verdict_stands(tmp_path):
+    """A verdict is final only as the last one after the last `run_start` or `resume` (ADR-0105), as the dashboard, wave.sh
+    and wtclean.sh read it. A run resumed by `squad resume --auto-source autonomy` carries an old verdict and a later start;
+    it is live, so it holds its slot and the dispatcher never starts a run the engine's `try_take` refuses."""
+    c = caps.Ceiling({**FOUR, "runs": 2}, tmp_path / "leases")
+    p = listed(tmp_path, ("run-resumed", ("verdict", "run_start")), ("run-done", ("verdict",)))
+    assert c.run_holders(p, root=tmp_path) == ["run-resumed"]
+    assert caps.free_runs(c, p, root=tmp_path) == 1
+
+
+def test_a_run_without_a_verdict_keeps_its_slot(tmp_path):
+    c = caps.Ceiling({**FOUR, "runs": 2}, tmp_path / "leases")
+    p = listed(tmp_path, ("run-a", ("progress",)), ("run-b", ("progress",)))
+    assert caps.free_runs(c, p, root=tmp_path) == 0
+
+
+def test_a_live_runs_lease_and_its_listed_line_are_one_holder(tmp_path):
+    """A run holds one slot, never two: the lease its engine took and the line the loop lists it by are one holder. With room
+    to spare the count stays at one, so a live run never eats a slot it does not use."""
+    c = caps.Ceiling({**FOUR, "runs": 3}, tmp_path / "leases")
+    p = listed(tmp_path, ("run-a", ("progress",)), ("run-b", ("progress",)))
+    assert caps.free_runs(c, p, root=tmp_path) == 1
+    assert c.try_take("runs", "run-a")
+    assert caps.free_runs(c, p, root=tmp_path) == 1     # two holders, not three
+
+
+def test_a_listed_run_with_no_record_yet_keeps_its_slot(tmp_path):
+    """A run in its launch window has no record and no verdict: it is live, so it holds its slot."""
+    c = caps.Ceiling({**FOUR, "runs": 1}, tmp_path / "leases")
+    p = listed(tmp_path, ("run-starting", None))
+    assert caps.free_runs(c, p, root=tmp_path) == 0
+
+
+def test_a_listed_run_with_no_record_past_its_launch_window_holds_no_slot(tmp_path):
+    """A launch that never started must not pin a slot for ever: the janitor drops an entry with no record past the same
+    bound (rule J, the 300-second `request.txt` window), so the counter stops holding it there too."""
+    c = caps.Ceiling({**FOUR, "runs": 1}, tmp_path / "leases")
+    p = listed(tmp_path, ("run-stuck", None))
+    old = time.time() - caps.LAUNCH_GRACE - 1
+    os.utime(tmp_path / "runs" / "run-stuck" / "request.txt", (old, old))
+    assert caps.free_runs(c, p, root=tmp_path) == 1
+
+
+def test_a_listed_run_whose_folder_is_gone_holds_no_slot(tmp_path):
+    """A purged run folder runs nothing, so it holds no slot: the janitor drops the missing entry, and a slot never waits
+    for a folder that is not there."""
+    c = caps.Ceiling({**FOUR, "runs": 1}, tmp_path / "leases")
+    p = listed(tmp_path, ("run-gone", None))
+    gone = tmp_path / "runs" / "run-gone"
+    (gone / "request.txt").unlink()
+    gone.rmdir()
+    assert caps.free_runs(c, p, root=tmp_path) == 1
+
+
+def test_a_live_lease_of_a_run_the_list_does_not_name_still_counts(tmp_path):
+    c = caps.Ceiling({**FOUR, "runs": 1}, tmp_path / "leases")
+    p = listed(tmp_path, ("run-done", ("verdict",)))
+    assert c.try_take("runs", "another-repo:run-9")    # a run another checkout started
+    assert caps.free_runs(c, p, root=tmp_path) == 0
+
+
+def test_a_lingering_lease_of_a_finished_run_still_counts(tmp_path):
+    """The dispatcher's count is never more free than the engine's admission: the engine counts raw leases at `try_take`,
+    so a finished run's lease the engine has not released is counted here too. The engine releases its lease before it
+    writes the verdict, so this is the rare lingering lease and not the normal case (ADR-0167)."""
+    c = caps.Ceiling({**FOUR, "runs": 2}, tmp_path / "leases")
+    p = listed(tmp_path, ("run-done", ("verdict",)), ("run-live", ("progress",)))
+    assert caps.free_runs(c, p, root=tmp_path) == 1
+    assert c.try_take("runs", "run-done")
+    assert caps.free_runs(c, p, root=tmp_path) == 0    # the dispatcher frees no slot the engine still holds
+
+
+def test_the_run_with_a_verdict_stays_listed_for_the_reader_that_closes_its_issues(tmp_path):
+    """The counter frees the slot and leaves the ledger alone: the janitor (rules E, O and R) and childcc still find the
+    finished run where they look, and its record still reads to its verdict."""
+    c = caps.Ceiling({**FOUR, "runs": 1}, tmp_path / "leases")
+    p = listed(tmp_path, ("run-done", ("verdict",)), ("run-live", ("progress",)))
+    before = p.read_text()
+    assert caps.free_runs(c, p, root=tmp_path) == 0
+    assert p.read_text() == before
+    assert str(tmp_path / "runs" / "run-done") in p.read_text()
+    assert read(tmp_path / "runs" / "run-done" / "record.jsonl")[-1]["event"] == "verdict"
 
 
 @pytest.mark.anyio

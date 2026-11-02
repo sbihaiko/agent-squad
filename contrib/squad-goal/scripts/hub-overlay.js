@@ -8,6 +8,9 @@ const SQ = {};
 SQ.MIN_W = 360; SQ.MIN_BOARD = 480; SQ.MAX_FRAC = 0.7; SQ.STEP = 24; SQ.DEFAULT_W = 440; SQ.SHEET_W = 420; SQ.PHONE_W = 600;
 SQ.IDLE_MS = 3000; SQ.LENS_R = 5; SQ.REACH = 240; SQ.POLL_MS=3000; SQ.TEXT_MAX = 4000;
 SQ.SEND_SETTING = "SQUAD_TAILNET_TERMINALS_SEND";
+// The build route sits beside the session route the page names: its base holds the same profile prefix.
+SQ.versionRoute = api => api.slice(0, api.lastIndexOf("/") + 1) + "version";
+SQ.buildStep = (seen, v) => ({ seen: seen === null ? v : seen, reload: seen !== null && v !== seen });
 // The feed reads like a terminal: the latest turns stand, older ones fold into one line, and a long answer is clamped with
 // "Show more" (owner, 2026-11-01; the terminal reads clearer because it summarizes age and length, not because it says less).
 SQ.KEEP = 12;
@@ -59,6 +62,18 @@ SQ.draft = ctx => {
     lines.push(`${name}: ${items.length ? items.join("; ") : "none"}`);
   }
   return (lines.join("\n") + "\n\n").slice(0, SQ.TEXT_MAX);
+};
+
+// The live activity line (#1082): busy or waiting shows a spinner, the verb, the time and the output tokens since the owner's
+// last turn; idle shows nothing. The spinner turns each second; a count the transcript does not show reads as a dash.
+SQ.SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+SQ.fmtElapsed = s => s == null ? "—" : s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${Math.floor(s / 3600)}h ${Math.floor(s % 3600 / 60)}m`;
+SQ.fmtTokens = n => n == null ? "—" : n < 1000 ? String(n) : `${(n / 1000).toFixed(1)}k`;
+SQ.liveText = (a, now) => {
+  if (!a || (a.status !== "busy" && a.status !== "waiting")) return "";
+  const secs = a.elapsed == null ? null : a.elapsed + Math.floor((now - a.got) / 1000);
+  const verb = a.status === "busy" ? "Working" : "Waiting for you";
+  return [`${SQ.SPIN[Math.floor(now / 1000) % SQ.SPIN.length]} ${verb}`, SQ.fmtElapsed(secs), `↓ ${SQ.fmtTokens(a.tokens)} tokens`].join(" · ");
 };
 
 SQ.MARKUP = `<style>
@@ -139,6 +154,8 @@ html.sq-docked body{margin-right:var(--sq-dock)}
 #sq-ov-note:empty{display:none}
 #sq-ov-status{margin:0;padding:0 13px 8px;font-size:13px;color:#e6e8ee}
 #sq-ov-status:empty{display:none}
+#sq-ov-live{margin:0;padding:0 14px 6px;font-family:var(--sq-mono);font-size:var(--sq-fs);line-height:1.55;color:#b8c0cf;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
+#sq-ov-live[hidden]{display:none}
 .sq-ov-back{display:none}
 html.sq-over .sq-ov-back{display:inline-flex;align-items:center;min-height:44px;padding:3px 10px;border:1px solid #353d4b;border-radius:6px;background:none;color:inherit;cursor:pointer}
 </style>
@@ -164,6 +181,7 @@ html.sq-over .sq-ov-back{display:inline-flex;align-items:center;min-height:44px;
 </header>
 <div id="sq-ov-pick" hidden></div>
 <div id="sq-ov-log" role="log" aria-live="polite" aria-label="Session conversation"></div>
+<p id="sq-ov-live" aria-live="off" hidden></p>
 <div id="sq-ov-form">
 <button type="button" id="sq-ov-plus" aria-label="Add to the message" aria-haspopup="menu" aria-expanded="false" aria-controls="sq-ov-menu">+</button>
 <div id="sq-ov-menu" role="menu" hidden><button type="button" role="menuitem" data-act="shot">Attach screenshot</button><button type="button" role="menuitem" data-act="ctx">Page context</button></div>
@@ -186,9 +204,10 @@ document.body.appendChild(document.createRange().createContextualFragment(SQ.MAR
 const $ = id => document.getElementById(id);
 const btn = $("sq-ov-btn"), ov = $("sq-ov"), title = $("sq-ov-title"), pick = $("sq-ov-pick"), log = $("sq-ov-log"),
       text = $("sq-ov-text"), sendBtn = $("sq-ov-send"), plus = $("sq-ov-plus"), menu = $("sq-ov-menu"), note = $("sq-ov-note"),
-      stat = $("sq-ov-status"), handle = $("sq-ov-handle"), dockBtn = $("sq-ov-dock"), undockBtn = $("sq-ov-undock"), lens = $("sq-ov-lens");
+      stat = $("sq-ov-status"), handle = $("sq-ov-handle"), dockBtn = $("sq-ov-dock"), undockBtn = $("sq-ov-undock"), lens = $("sq-ov-lens"),
+      live = $("sq-ov-live");
 const de = document.documentElement;
-let sessions = [], cur = null, rule = null, timer = 0, lastSig = "";
+let sessions = [], cur = null, rule = null, timer = 0, lastSig = "", liveAct = null, liveTick = 0;
 
 // ---- the page context: each page exposes one function; a page without its own gets this one
 const shown = e => !!(e && (e.offsetWidth || e.offsetHeight || e.getClientRects().length)) && !e.closest("#sq-ov");
@@ -215,6 +234,12 @@ function addLine(line) {
 
 // ---- the session
 function say(msg) { stat.textContent = msg || ""; }
+// The live line keeps its own row: the spinner turns each second from the last read, and a read sets the count (#1082).
+function setActivity(a) { liveAct = a ? { ...a, got: Date.now() } : null; paintLive(); }
+function paintLive(){
+  const t = SQ.liveText(liveAct, Date.now());
+  live.hidden = !t; live.textContent = t;
+}
 function syncSend() {
   const st = SQ.sendState(cur || rule);
   text.disabled = !!(rule || cur) && st.disabled;
@@ -468,8 +493,13 @@ async function loadConversation() {
     if (cur !== s) return;
     // A 404 is a question for the session list, never a verdict of its own: only the list read may drop the session, and
     // one miss is asked about at most every five seconds (#1102, owner, 2026-11-01).
-    if (!r.ok) { if (r.status === 404 && Date.now() - missT > 5000) { missT = Date.now(); loadSessions(); } return; }
-    const turns = (await r.json()).turns || [], last = turns[turns.length - 1];
+    if (!r.ok) {
+      console.warn("conversation:", r.status);
+      if (r.status === 404 && Date.now() - missT > 5000) { missT = Date.now(); loadSessions(); }
+      return;
+    }
+    const page = await r.json(), turns = page.turns || [], last = turns[turns.length - 1];
+    setActivity(page.activity);
     const sig = turns.length + ":" + (last ? last.id + ":" + last.text.length : "");
     if (sig === lastSig) return;
     const atEnd = !lastSig || stick;
@@ -603,11 +633,13 @@ function openOverlay(){
   fsInit();
   loadSessions();
   clearInterval(timer); timer = setInterval(loadConversation, SQ.POLL_MS);
+  clearInterval(liveTick); liveTick = setInterval(paintLive, 1000);
   text.focus();
 }
 function closeOverlay() {
   ov.hidden = true; btn.setAttribute("aria-expanded", "false"); setMenu(false);
   clearInterval(timer); timer = 0;
+  clearInterval(liveTick); liveTick = 0;
   wantOpen(false);
   applyLayout(); btn.focus();
 }
@@ -656,6 +688,22 @@ const reread = () => { if (!ov.hidden && !document.hidden) loadConversation(); }
 document.addEventListener("visibilitychange", () => { lastT = 0; kick(); reread(); });
 addEventListener("focus", reread);
 if (reduced.addEventListener) reduced.addEventListener("change", kick);
+// A new hub build reloads the open page, so no tab keeps an overlay the hub no longer serves (owner, 2026-11-01).
+let build = null;
+(async () => {
+  let srcs = [];
+  try { srcs = await window.SQUAD_OV_SOURCES(); } catch (e) { return; }
+  const src = (srcs || [])[0];
+  if (!src) return;
+  const route = SQ.versionRoute(src.api);
+  setInterval(async () => {
+    try {
+      const s = SQ.buildStep(build, (await (await fetch(route, { cache: "no-store" })).json()).v);
+      build = s.seen;
+      if (s.reload) location.reload();
+    } catch (e) { /* the hub did not answer: the page keeps what it shows */ }
+  }, SQ.POLL_MS);
+})();
 applyLayout(); syncSend();
 // A reload puts the panel back as it was left (owner, 2026-11-01): the page reloads when the hub build changes, and the
 // terminal closing on that reload loses the reader's place.

@@ -3,7 +3,7 @@
 usage: hub.py [port]   default 7700, loopback only. Read-only: it discovers servers via ps/lsof and reads record.jsonl."""
 import datetime as dt, glob, hashlib, html, importlib.util, itertools, json, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, pathlib, urllib.parse, urllib.request
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
-import agyquota, board_lag, chainhealth, ghread, ghthrottle, modelreg, provkey, session_send, sessions   # the chains and the one registry resolve a model (ADR-0147); ghread is the one GitHub door (ADR-0277)
+import agyquota, board_lag, chainhealth, ghread, ghthrottle, hubstream, modelreg, provkey, session_send, sessions   # the chains and the one registry resolve a model (ADR-0147); ghread is the one GitHub door (ADR-0277)
 from issue_state import board_state, KINDS, TEST_CASE_TITLE, _utc
 import http.client
 import zoneinfo
@@ -33,6 +33,7 @@ BOARD_LANES = _columns_module.LANES
 COLUMN = {**_columns_module.ROLE, **{lane["key"]: lane["name"] for lane in BOARD_LANES}}
 BOARD_NAMES_JSON = json.dumps(COLUMN, separators=(",", ":"))
 BOARD_DOING_JSON = json.dumps(_columns_module.DOING)
+BOARD_REVIEW_JSON = json.dumps(_columns_module.CODE_REVIEW)
 BOARD_COLORS_JSON = json.dumps({c["name"]: c["color"] for c in [*BOARD_COLUMNS, *BOARD_LANES]}, separators=(",", ":"))
 BOARD_FLOW_JSON = json.dumps([column["name"] for column in BOARD_COLUMNS], separators=(",", ":"))
 
@@ -1648,12 +1649,15 @@ def _last_landing():
 
 def _gate_status():
     """The one line the gate wrapper leaves in $SG_STATE/gate-status, `<epoch> TAB <kind> TAB <pass|fail> TAB <sha>`, and for a
-    gate that ran the test battery a fifth field, its selection (`selected N files` or `all: <reason>`): the latest gate, its
-    result, the sha it ran at and that selection. None when the file is absent or is not that line."""
+    gate that ran the test battery a fifth field, its selection (`selected N files` or `all: <reason>`), and a sixth, the
+    scope it names (`delta` or `full`): the latest gate, its result, the sha it ran at, that selection and its scope. None
+    when the file is absent or is not that line."""
     f = _read(STATE / "gate-status").rstrip("\n").split("\t")
-    if len(f) not in (4, 5) or not f[0].isdigit() or not all(f[1:4]) or (len(f) == 5 and not f[4]): return None
+    if len(f) not in (4, 5, 6) or not f[0].isdigit() or not all(f[1:4]) or (len(f) >= 5 and not f[4]): return None
+    if len(f) == 6 and f[5] not in ("delta", "full"): return None
     line = {"kind": f[1], "result": f[2], "sha": f[3], "ts": float(f[0])}
-    if len(f) == 5: line["selection"] = f[4]
+    if len(f) >= 5: line["selection"] = f[4]
+    if len(f) == 6: line["scope"] = f[5]
     took, avg = _gate_times(f[1])
     if took is not None: line["took"], line["avg"] = took, avg
     return line
@@ -4222,8 +4226,8 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #board{position:relative;width:auto}
 #bhead{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}#bhead>label{display:inline-flex;align-items:center;gap:8px}#bhead label.hck{border:1px solid var(--line);border-radius:6px;padding:0 12px 0 10px;min-height:32px;background:var(--panel);cursor:pointer}#bhead label.hck input{margin:0;accent-color:var(--acc)}#bt:empty{display:none}
 #flowov{background:var(--panel);border:1px solid var(--line);border-radius:8px;display:flex;flex-direction:column}#flowov[hidden]{display:none}
-#flowb{padding:10px;font-size:var(--fs-min)}#flowb svg{width:100%;height:auto;display:block;margin:6px 0;user-select:none;touch-action:pan-y}#flowb .fnote,#flowb .fhead{color:var(--mute);margin:4px 0}#flowb .fhead b{color:var(--fg,inherit)}
-#flowb .flg{margin-right:10px;white-space:nowrap}.ltlg{display:flex;flex-wrap:wrap;gap:4px 18px;white-space:normal}.ltlg span{display:inline-flex;align-items:baseline;gap:6px;white-space:normal}.ltlg b{font-weight:600}.ltlg em{font-style:normal;color:var(--mute)}.ltlg i{display:inline-block;width:18px;height:6px;border-radius:3px}#flowb .flg i{display:inline-block;width:9px;height:9px;margin-right:4px;vertical-align:middle;border-radius:2px}
+#flowb{padding:10px;font-size:var(--fs-min)}#flowb svg{width:100%;height:auto;display:block;margin:6px 0;user-select:none;touch-action:pan-y}#flowb .fnote,#flowb .fhead{color:var(--mute);margin:4px 0}#flowb .fhead b{color:var(--fg,inherit)}#flowb .flstat{color:var(--mute);font-size:var(--fs-min);margin:6px 0 0}#flowb .ltgl{color:var(--mute);font-weight:600;margin-right:4px}
+#flowb .flg{margin-right:10px;white-space:nowrap}.ltlg{display:flex;flex-wrap:wrap;gap:4px 18px;white-space:normal}.ltlg span{display:inline-flex;align-items:baseline;gap:6px;white-space:nowrap}.ltlg b{font-weight:600}.ltlg em{font-style:normal;color:var(--mute)}.ltlg i{display:inline-block;width:18px;height:6px;border-radius:3px}#flowb .flg i{display:inline-block;width:9px;height:9px;margin-right:4px;vertical-align:middle;border-radius:2px}
 #bbody .ah{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);cursor:pointer;font-weight:600;position:sticky;top:34px;background:#1b212b;z-index:1}   /* the same gap as the docked header: `Todo0` is never a reading, in either rendering (#1809) */
 #bbody .ah .n{background:#2a303b;border-radius:9px;padding:0 8px;font-weight:400}
 #bbody .ah i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;background:var(--mute)}
@@ -4282,7 +4286,7 @@ body.tkopen #win{margin-right:420px}
 #tkb pre{white-space:pre-wrap;overflow-wrap:anywhere;font:var(--fs-min)/1.45 ui-monospace,Menlo,monospace;background:#12161c;border:1px solid var(--line);border-radius:6px;padding:8px 10px;margin:6px 0}
 #tkb h3{font-size:var(--fs-min);color:var(--mute);margin:14px 0 4px}#tkb .cm{border-left:3px solid var(--acc);padding-left:8px;margin:8px 0}
 #tkb .bar button{min-width:28px}#tkb .bar button:disabled{opacity:.35;cursor:default}#tkb .bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}#tkb a.gh{color:var(--acc);font-weight:700}
-#bbody .it{cursor:pointer}#bbody .bu{font:inherit;font-size:13px;margin-left:6px;padding:0 6px;border:1px solid currentColor;border-radius:4px;background:none;color:inherit;cursor:pointer}#bbody .bupanel{padding:6px 10px}#bbody .bupanel svg{width:100%;height:auto}#bbody .bunote{font-size:13px;opacity:.75}#bbody .bumarks{font-size:13px;opacity:.8;max-height:7em;overflow:auto;margin:4px 0 0;padding-left:16px}#bbody .it.hit{box-shadow:0 0 0 2px var(--warn)}#bbody .it.hl{box-shadow:0 0 0 2px var(--acc)}#bbody .it.dim{opacity:.35}#list .r.hlr{outline:2px solid var(--acc);outline-offset:-2px}.hlrel{color:var(--acc);font-size:var(--fs-min);margin-left:6px}.hlrel[hidden]{display:none}.ghl{color:var(--mute);margin-left:6px;display:inline-flex;align-items:center;opacity:.65;text-decoration:none}.ghl:hover,.ghl:focus-visible{opacity:1;color:var(--fg)}   /* the cards the sheet's Highlight related marks (#919) */
+#bbody .it{cursor:pointer}#bbody .bu{font:inherit;font-size:13px;margin-left:6px;padding:0 6px;border:1px solid currentColor;border-radius:4px;background:none;color:inherit;cursor:pointer}#bbody .it.hit{box-shadow:0 0 0 2px var(--warn)}#bbody .it.hl{box-shadow:0 0 0 2px var(--acc)}#bbody .it.dim{opacity:.35}#list .r.hlr{outline:2px solid var(--acc);outline-offset:-2px}.hlrel{color:var(--acc);font-size:var(--fs-min);margin-left:6px}.hlrel[hidden]{display:none}.ghl{color:var(--mute);margin-left:6px;display:inline-flex;align-items:center;opacity:.65;text-decoration:none}.ghl:hover,.ghl:focus-visible{opacity:1;color:var(--fg)}   /* the cards the sheet's Highlight related marks (#919) */
 #tkb h2{font:600 var(--fs-md)/1.35 -apple-system,system-ui,sans-serif;margin:4px 0 8px}
 #tkb .md{font:var(--fs-body)/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;color:#d8dde6;overflow-wrap:anywhere}
 #tkb .md>:first-child{margin-top:0}#tkb .md p{margin:.6em 0}#tkb .md h2,#tkb .md h3,#tkb .md h4,#tkb .md h5{font-weight:600;margin:1.3em 0 .4em;line-height:1.3;color:#eef1f6}
@@ -5086,7 +5090,7 @@ const flowCFD=c=>{const sel=`<label class=fhead>Range <select id=cfdr>${CFD_R.ma
     return `<rect x=${flowX(i,n)-cw/2} y=${flowP-10} width=${cw} height=${flowH-2*flowP+10} fill=transparent><title>${text}</title></rect>`;}).join("");
   return sel+`<svg viewBox="0 0 ${flowW} ${flowH}">${c.bands.map(polys).join("")}${c.bands.map(heldPolys).join("")}${cfdAxis(c)}${hover}</svg>`+
     `<p class=fnote>history from ${esc(c.start)} ${esc(c.zone)}</p>${coverNote(c.coverage)}${c.legacy?`<p class=fnote>${c.legacy} ${c.legacy===1?"day comes":"days come"} from before the kind, spec, wave and type history: they answer none of these</p>`:""}<p>${c.bands.map(b=>`<span class=flg><i style="background:${COLORS[b.name]||"#888"}"></i>${esc(b.name)}</span>`).join("")}</p><p class=fnote>A darker stripe at a band's base is that band's held cards.</p>`;};
-const EXREASON={not_planned:"closed as not planned",abandoned:"closed as abandoned",open:"still open",no_opened:"no opened date"};   // the cards the chart leaves out, in words (#921)
+const EXREASON={not_planned:"closed as not planned",abandoned:"closed as abandoned",open:"still open",no_opened:"no opened date",no_transition:"no transition into the chosen columns",not_read:"not yet read by the history pass"};   // the cards the chart leaves out, in words (#921)
 const LTS=ls.lt||{},LT_TYPES=[["spec","Specs"],["task","Tasks"],["bug","Bugs"]];   // the chart's own settings, restored from the page's storage (#985)
 let LT={tf:["1","2","3","7","14","30","all"].includes(LTS.tf)?LTS.tf:"30",log:LTS.log===true,ty:LT_TYPES.some(([k])=>k===LTS.ty)?LTS.ty:"task",pick:null,zc:null,zr:null,rng:null,tok:0,noclick:false,a:"",b:"",cols:[]};   // the control chart's timeframe, its scale, its type, the cluster listed under it, and a drag zoom: the hub's chart over zr=[from,to] (#900, #985)
 const saveLT=()=>{ls.lt={tf:LT.tf,log:LT.log,ty:LT.ty};save()};
@@ -5096,12 +5100,16 @@ const ltP=64;   // a duration label ("17h 36m") is wider than a count, and the o
 const ltX=x=>ltP+x*(flowW-2*ltP),ltY=y=>flowH-ltP-y*(flowH-2*ltP);
 const ltLine=(v,col,dash)=>v?`<line x1=${ltP} x2=${flowW-ltP} y1=${ltY(v.y)} y2=${ltY(v.y)} stroke="${col}" stroke-width=2${dash?` stroke-dasharray="${dash}"`:""}><title>${esc(v.label)} ${esc(v.text)}</title></line>`+`<text x=${flowW-ltP-9} y=${ltY(v.y)-4} text-anchor=end fill="${col}" style="font-size:var(--fs-min);font-weight:600">${esc(v.label)} ${esc(v.text)}</text>`:"";
 const ltChart=c=>{const n=c.dots.length,base=flowH-flowP,ink="#b8c0cf",mute="var(--mute)";
-  const ctl=`<p class=fhead><label>Timeframe <select id=ltr>${LT_TF.map(([k,v])=>`<option value=${k}${LT.tf===k?" selected":""}>${v}</option>`).join("")}</select></label> `+
-    `<label>Scale <select id=lts><option value=jira${LT.log?"":" selected"}>Jira scale</option><option value=log${LT.log?" selected":""}>Log scale</option></select></label> `+
-    `<label>Type <select id=lty>${LT_TYPES.map(([k,v])=>`<option value=${k}${LT.ty===k?" selected":""}>${v}</option>`).join("")}</select></label> `+
-    `<label>Start <select id=lta><option value="">Created</option>${LT.cols.map(k=>`<option${LT.a===k?" selected":""}>${esc(k)}</option>`).join("")}</select></label> `+
-    `<label>End <select id=ltb>${LT.cols.map(k=>{const v=k===COLNAME.issue_closed?"":k;return `<option value="${esc(v)}"${LT.b===v?" selected":""}>${esc(k)}</option>`}).join("")}</select></label> `+   // the span each dot measures, from the recorded transitions (#905)
-    `<button id=ltz${LT.zr?"":" disabled"} title="drag across the plot to zoom to those dates">Reset zoom</button></p>`;
+  const grp=(name,body)=>`<span class=ltgrp><b class=ltgl>${name}</b> ${body}</span>`,backTo=LT_TF.find(([k])=>k===LT.tf)[1];
+  const ctl=`<p class=fhead>`+
+    grp("Filters",`<label>Timeframe <select id=ltr>${LT_TF.map(([k,v])=>`<option value=${k}${LT.tf===k?" selected":""}>${v}</option>`).join("")}</select></label> `+
+      `<label>Type <select id=lty>${LT_TYPES.map(([k,v])=>`<option value=${k}${LT.ty===k?" selected":""}>${v}</option>`).join("")}</select></label>`)+" "+
+    grp("Measurement",`<label>Start <select id=lta><option value="">Created</option>${LT.cols.map(k=>`<option${LT.a===k?" selected":""}>${esc(k)}</option>`).join("")}</select></label> `+
+      `<label>End <select id=ltb>${LT.cols.map(k=>{const v=k===COLNAME.issue_closed?"":k;return `<option value="${esc(v)}"${LT.b===v?" selected":""}>${esc(k)}</option>`}).join("")}</select></label>`)+   // the span each dot measures, from the recorded transitions (#905)
+    " "+grp("Display",`<label>Scale <select id=lts><option value=jira${LT.log?"":" selected"}>Jira scale</option><option value=log${LT.log?" selected":""}>Log scale</option></select></label>`)+" "+
+    grp("View",`<button id=ltz${LT.zr?"":" disabled"} title="drag across the plot to zoom to those dates">Back to ${esc(backTo)}</button>`+
+      (c.fit?` <button id=ltfit data-f="${esc(c.fit.start)}" data-t="${esc(c.fit.end)}" title="zoom to the range the cards fill">Fit to data: ${esc(c.fit.text)}</button>`:""))+
+    `</p><p class=fnote>Set the controls in order: filters, then measurement, then display, then view.</p>`;
   LT.rng=c.range;
   const note=`<p class=fnote>${esc(c.text)}</p>`;
   if(!n)return ctl+note+"<p class=fnote>no closed card in this timeframe</p>";
@@ -5121,8 +5129,8 @@ const ltChart=c=>{const n=c.dots.length,base=flowH-flowP,ink="#b8c0cf",mute="var
   const pk=LT.pick!=null&&c.clusters[LT.pick]?c.clusters[LT.pick]:null;
   const rows=pk?`<table class=rt><thead><tr><th>Issue</th><th>Title</th><th>Elapsed</th><th>Closed</th></tr></thead><tbody>${pk.dots.map(d=>`<tr data-o=${d.n} style="cursor:pointer"><td>#${d.n}</td><td>${esc(d.title)}</td><td>${esc(d.text)}</td><td>${esc(d.closed)}</td></tr>`).join("")}</tbody></table>`:"";
   return ctl+S+legend+`<svg data-lt viewBox="0 0 ${flowW} ${flowH}">${axes}${ys}${xs}${band}${roll}${lines}${dots}</svg>`+note+rows;};
-const flowLead=l=>{const S=l.summary,ex=l.excluded.map(e=>`${e.count} ${esc(EXREASON[e.reason]||e.reason)}`).join(", ");
-  const head=`<p class=fhead>${esc(LT_TYPES.find(([k])=>k===l.type)[1].toLowerCase())} · <b>${esc(l.measure)}</b> · window ${l.window.size} ${esc(l.window.unit)} · excluded ${l.excluded_total}${ex?" ("+ex+")":""}</p>`;
+const flowLead=l=>{const S=l.summary,c=LT.zc,exc=c?Object.entries(c.excluded).map(([r,n])=>({reason:r,count:n})):l.excluded,total=c?c.excluded_total:l.excluded_total,ex=exc.map(e=>`${e.count} ${esc(EXREASON[e.reason]||e.reason)}`).join(", ");
+  const head=`<p class=fhead>${esc(LT_TYPES.find(([k])=>k===l.type)[1].toLowerCase())} · <b>${esc(l.measure)}</b> · window ${l.window.size} ${esc(l.window.unit)} · excluded ${total}${ex?" ("+ex+")":""}</p>`;
   LT.cols=l.columns||[];if(!S)return head+"<p class=fnote>no closed card yet</p>";
   return head+coverNote(l.coverage)+ltChart(LT.zc||l.control[LT.log?"log":"jira"][LT.tf]);};
 let BURN={s:null};   // the spec the burndown draws; null lets the hub name the first open spec (#1048)
@@ -5148,8 +5156,9 @@ const flowBurn=a=>{const b=a.burn,opts=a.specs.map(s=>`<option value=${s.n}${s.n
     `<p class=fnote>one point per whole read, from ${esc(b.start)} UTC; a gap is a day with no whole read</p>`;};
 const drawFlow=()=>{{const w=$("#flowb").clientWidth-20;flowW=w<600?600:w>1600?1600:(w|0)}const cfd=FLOWK==="cfd";
   const a=FLOWD[FLOWK];
-  $("#flowb").innerHTML=!a?"<p class=fnote>loading the chart from the hub</p>":(FLOWK==="burndown"?flowBurn(a):cfd?flowCFD(a.cfd.ranges[CF.r]):flowLead(a.lead))+`<p class=fnote>data read ${new Date(a.t*1000).toLocaleTimeString()}</p>`};
+  $("#flowb").innerHTML=!a?"<p class=fnote>loading the chart from the hub</p>":(FLOWK==="burndown"?flowBurn(a):cfd?flowCFD(a.cfd.ranges[CF.r]):flowLead(a.lead))+`<p class=flstat role=status>data read ${new Date(a.t*1000).toLocaleTimeString()}</p>`};
 const flowOpen=async k=>{FLOWK=k;$("#flowov").hidden=false;flowTabs();drawFlow();const want=()=>k==="burndown"?`spec=${BURN.s||""}`:barQuery(),q=want();try{const a=await (await fetch(`/api/chart/${k}?${q}`)).json();if(q!==want())return;FLOWD[k]=a;if(FLOWK===k)drawFlow()}catch(e){}};
+const openBurn=n=>{BURN.s=n;delete FLOWD.burndown;setTab("flow",{keep:true});flowOpen("burndown")};
 const ltQ=()=>`&scale=${LT.log?"log":"jira"}&a=${encodeURIComponent(LT.a)}&b=${encodeURIComponent(LT.b)}&${barQuery()}`,ltOwn=()=>LT.a!==""||LT.b!=="";   // a span other than created to closed is the hub's chart for it (#905); the bar's values filter it (#904)
 const ltZoom=async(f,t)=>{const tok=++LT.tok;try{const c=await (await fetch(`/api/leadtime?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}${ltQ()}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;LT.zr=[f,t];LT.pick=null;drawFlow()}catch(e){}};   // the hub recomputes the chart for the dragged range (#900)
 const ltGet=async()=>{const tok=++LT.tok;LT.zc=null;LT.pick=null;if(!ltOwn()){drawFlow();return}try{const c=await (await fetch(`/api/leadtime?tf=${LT.tf}${ltQ()}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;drawFlow()}catch(e){}};   // the timeframe's chart for the chosen span (#905)
@@ -5170,6 +5179,7 @@ $("#flowb").onchange=e=>{if(e.target.id==="cfdr"){CF.r=e.target.value;drawFlow()
   if(e.target.id==="lts"){LT.log=e.target.value==="log";saveLT();LT.pick=null;if(LT.zr){ltZoom(LT.zr[0],LT.zr[1]);return}if(ltOwn()){ltGet();return}drawFlow()}};
 $("#flowb").onclick=e=>{if(LT.noclick){LT.noclick=false;return}
   if(e.target.id==="ltz"){LT.zr=null;ltGet();return}
+  if(e.target.id==="ltfit"){ltZoom(e.target.dataset.f,e.target.dataset.t);return}
   const k=e.target.closest("circle[data-k]");if(k){LT.pick=+k.dataset.k;drawFlow();return}const r=e.target.closest("tr[data-o]");if(r)showIssue(+r.dataset.o,"__REPO__")};
 $("#bflow").onclick=()=>flowOpen("cfd");$("#bburn").onclick=()=>flowOpen("burndown");$("#blead").onclick=()=>flowOpen("lead");addEventListener("resize",()=>{if(!$("#flowov").hidden)drawFlow()});
 // flow-charts:end
@@ -5208,39 +5218,16 @@ const cards=(g,it,shown)=>{const GHI='<svg viewBox="0 0 16 16" width="13" height
 // collapsed one is accounted for by a line at the foot of the hidden: strip. Which columns those are is derived on
 // every render -- from the filtered count, the user's hidden set and the set the line's eye added -- and never
 // stored, so a card appearing brings the column back on its own and the last one leaving collapses it again (#1809).
-// A spec's burn-up (#1025): its panel opens from the spec lane's header. The hub answers the lines; the page draws them and counts nothing.
-const BU=window.BU||(window.BU={open:{},data:{},raw:{}});   // one store across the page's scopes: the handler and the lane render read the same (#1075)
-const buDay=t=>String(t||"").slice(0,10);
-function buChart(d){const s=d.series||{},days=s.days||[],pts=d.points||[];if(!days.length)return `<div class=bunote>${esc(s.reason||d.reason||"no whole board read in this spec's window yet")}</div>`;
- const W=600,H=190,P=34,g=s.guide,sc=s.scope||0,n0=days[0].n,n1=Math.max(days[days.length-1].n,g?g.to.n:0),span=Math.max(1,n1-n0),ymax=Math.max(1,sc,...days.map(p=>p.delivered));
- const X=n=>(P+(W-2*P)*(n-n0)/span).toFixed(1),Y=v=>(H-P-(H-2*P)*v/ymax).toFixed(1);
- const runs=[];for(const p of days){const r=runs[runs.length-1];if(r&&r[r.length-1].n===p.n-1)r.push(p);else runs.push([p])}
- const lines=runs.map(r=>`<polyline fill=none style="stroke:var(--ok)" stroke-width=2 points="${r.map(p=>X(p.n)+","+Y(p.delivered)).join(" ")}"/>`).join("");
- const gaps=(s.gaps||[]).map(q=>`<line x1="${X(q.n)}" x2="${X(q.n)}" y1="${Y(0)}" y2="${Y(ymax)}" style="stroke:var(--warn)" stroke-dasharray="1 3"><title>no whole read on day ${q.n}: a gap, never a zero</title></line>`).join("");
- const guide=g?`<line x1="${X(g.from.n)}" y1="${Y(g.from.delivered)}" x2="${X(g.to.n)}" y2="${Y(g.to.scope)}" style="stroke:var(--warn)" stroke-width=1.5 stroke-dasharray="4 3"/>`:"";
- const scope=`<line x1="${X(n0)}" x2="${X(n1)}" y1="${Y(sc)}" y2="${Y(sc)}" style="stroke:var(--acc)" stroke-width=2/><text x="${X(n1)}" y="${Y(sc)-4}" text-anchor=end>scope ${sc}</text>`;
- const axes=`<line x1=${P} x2=${P} y1=${P} y2=${H-P} stroke=currentColor /><line x1=${P} x2=${W-P} y1=${H-P} y2=${H-P} stroke=currentColor />`
-  +`<text x=${P} y=${H-P+14}>day ${n0}</text><text x=${W-P} y=${H-P+14} text-anchor=end>day ${n1}</text><text x=${W/2} y=${H-4} text-anchor=middle>day number (day ${n0} = first whole read)</text>`
-  +`<text x=${P-6} y=${Y(0)} text-anchor=end>0</text><text x=${P-6} y=${Y(ymax)} text-anchor=end>${ymax}</text><text x=10 y=${H/2} transform="rotate(-90 10 ${H/2})" text-anchor=middle>delivered (count)</text>`;
- const last=days[days.length-1],guideNote=g?`guide from day ${g.from.n} to day ${g.to.n} (${esc(g.to.day)}), pace ${g.pace==null?"n/a":g.pace.toFixed(2)} per day${g.source==="done"?" (every child is closed)":" at the trailing close rate"}`:`no guide: ${esc(s.guide_reason||"no pace")}`;
- const unreadNote=s.gaps&&s.gaps.length?` · no whole read on day ${s.gaps.map(q=>q.n).join(", ")}`:"";
- const log=pts.flatMap(p=>p.marks.map(m=>`<li>${esc(buDay(p.t))} ${esc(m.k)} #${m.n}</li>`)).slice(-30).join("");
- return `<svg viewBox="0 0 ${W} ${H}" role=img aria-label="burn-up of SPEC ${d.spec}: delivered count by day against the scope ${sc}">${axes}${gaps}${scope}${guide}${lines}</svg>`
-  +`<div class=bunote>delivered ${last.delivered} of scope ${sc} at day ${last.n} (${esc(last.day)}) · ${guideNote}${unreadNote}</div><ul class=bumarks>${log}</ul>`}
-const buPanel=n=>{const d=BU.data[n];return `<div class=bupanel data-bu-panel="${n}">${!d?`<div class=bunote>loading…</div>`:d.err?`<div class=bunote>${esc(d.err)}</div>`:buChart(d)}</div>`};
-async function buFetch(n){try{const d=await (await fetch("/api/chart/burnup?spec="+n)).json(),s=JSON.stringify(d);if(BU.raw[n]!==s){BU.raw[n]=s;BU.data[n]=d;pollBoard()}}catch(e){}}
-function buToggle(n){n=+n;BU.open[n]=!BU.open[n];if(BU.open[n]){delete BU.raw[n];buFetch(n)}else delete BU.data[n];pollBoard()}
-window.buToggle=buToggle;   // the board's click handler sits in another scope of the served page: it reaches the toggle here (#1075)
 const laneHtml=m=>{const ccount=c=>m.lanes.reduce((s,l)=>s+(l.counts[c]||0),0),pct=l=>l.total?Math.round(l.closed/l.total*100):0;
+  share=x=>l=>l.total?Math.round((x||0)/l.total*100):0;   // a share of the lane bar, drawn after the closed share: the held green of a claimed card, then the review's own colour (owner, 2026-11-02)
  if(!m.lanes.length)return `<div class=lempty>${f?"No card matches this search.":"No card on the board."}</div>`;
  let h=`<div class=lgrid style="--vc:${Math.max(1,m.vc.length)}">`+m.vc.map(c=>`<div class=lcolh style="--cc:${colOf(c,CN)}"><span>${esc(c)}</span><b>${ccount(c)}</b>${eye({name:c})}</div>`).join("");
  for(const l of m.lanes){const cl=l.collapsed,bugs=l.kind==="bugs",lc=bugs?"var(--bad)":l.num!=null?specColor(SLOTS,l.num):SPEC_GREY,   // a spec lane and a wave lane of a spec take its card colour (#917, #980)
    lid=l.kind==="s"?"SPEC "+l.num:bugs?"Loop bugs":l.title,ltt=l.kind==="s"?l.title:bugs?"defects of the loop itself: they halt dispatch, never a landing (ADR-0146)":l.kind==="none"?"bugs and single tickets":"";   // the lane reads as the mock: a coloured id, then its title or its subtitle (#889)
   h+=`<section class="lane${cl?" coll":""}${l.kind==="bugs"?" alarm":""}${l.done?" done":""}" data-lane="${esc(l.id)}" style="--lc:${lc}"><header class=lh role=button tabindex=0 aria-expanded="${!cl}" data-lane="${esc(l.id)}"><span class=tw>${cl?"&#9656;":"&#9662;"}</span>`
     +`<span class="lid${l.kind==="sw"?" sw":""}">${l.kind==="sw"?`<span class=sid>${esc(l.sid)}</span> · ${esc(l.wl)}`:esc(lid)}</span>`+(ltt?`<span class="ltt${l.kind==="s"?"":" subt"}">${esc(ltt)}</span>`:"")
-    +(l.kind==="s"||l.kind==="none"?`<span class=bar title="${l.closed} of ${l.total} closed${l.doing?`, ${l.doing} doing`:""}"><i style="width:${pct(l)}%"></i>${l.doing?`<i class=dn style="left:${pct(l)}%;width:${l.total?Math.round(l.doing/l.total*100):0}%"></i>`:""}</span><span class=pc>${l.closed}/${l.total}</span>`+(l.st?`<span class=lst>${esc(l.st)}</span>`:"")+(l.kind==="s"?`<button class=bu data-bu="${l.num}" title="burn-up of SPEC ${l.num}">burn-up</button><a class=ghl target=_blank rel=noopener title="open SPEC ${l.num} on GitHub" aria-label="open SPEC ${l.num} on GitHub" href="https://github.com/${esc(l.r||"__REPO__")}/issues/${l.num}"><svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg></a>`:""):"")
+    +(l.kind==="s"||l.kind==="none"?`<span class=bar title="${l.closed} of ${l.total} closed${l.doing?`, ${l.doing} doing`:""}${l.review?`, ${l.review} in review`:""}"><i style="width:${pct(l)}%"></i>${l.doing?`<i class=dn style="left:${pct(l)}%;width:${share(l.doing)(l)}%"></i>`:""}${l.review?`<i class=rv style="left:${pct(l)+(l.doing?share(l.doing)(l):0)}%;width:${share(l.review)(l)}%"></i>`:""}</span><span class=pc>${l.closed}/${l.total}</span>`+(l.st?`<span class=lst>${esc(l.st)}</span>`:"")+(l.kind==="s"?`<button class=bu data-bu="${l.num}" title="burnup of SPEC ${l.num}">burnup</button><a class=ghl target=_blank rel=noopener title="open SPEC ${l.num} on GitHub" aria-label="open SPEC ${l.num} on GitHub" href="https://github.com/${esc(l.r||"__REPO__")}/issues/${l.num}"><svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg></a>`:""):"")
     +`<span class=sum>${cl?m.cols.filter(c=>l.counts[c]).map(c=>`<span>${esc(c)} <b>${l.counts[c]}</b></span>`).join(""):""}</span></header>`;
-  if(!cl&&l.kind==="s"&&BU.open[l.num])h+=buPanel(l.num);
   if(!cl)for(const c of m.vc){const key=l.id+"|"+c,v=cellView(l.cells[c],!!(bo.cx||{})[key]);h+=`<div class=cell data-lane="${esc(l.id)}" data-col="${esc(c)}">${cards({name:c},v.shown,v.shown)}${v.more?`<button class=more data-cell="${esc(key)}" title="show every card of this cell">+${v.more} more</button>`:""}</div>`}
   h+="</section>"}
  return h+"</div>"};
@@ -5260,13 +5247,13 @@ const fmtN=n=>n>=1000?n.toLocaleString("en-US"):""+n;   // "688" is one token; o
 const hidchip=g=>{const c=colOf(g.name,CN),ring=!Object.hasOwn(COLORS,g.name);return `<span class=chip data-eye="${esc(g.name)}" data-col="${esc(g.name)}" title="${esc(g.name+" — "+fmtN(g.n))}"><span class=lbl>${esc(g.name)}</span><b${ring?` style="color:${c}"`:""}>${fmtN(g.n)}</b></span>`};
 const endLines=all.filter(g=>g.end).map(g=>`<span class=hidline><span>${esc(g.name)}</span><b>${fmtN(g.n)}</b></span>`).join("");   // a closed status is a text total: no eye, no show action (#969)
 const html=vis.map(one).join("")+(bottom&&(hid.size||autos.length||endLines)?`<div class=hidbar>${all.filter(g=>!g.end&&hid.has(g.name)).map(hidchip).join("")}${hid.size&&autos.length?'<div class=hidsep></div>':""}${autos.map(g=>`<span class=hidline style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><span>${esc(g.name)}</span><b>${badge(g)}</b>${eye(g,true)}</span>`).join("")}${endLines}</div>`:"");   // one quiet line per column hidden only because it is empty, behind a divider (#1809)
-const model=bo.lmode==="none"?null:buildBoard(all.filter(g=>!isPR(g.name)),{mode:bo.lmode||"spec",fw:bo.fw||[],fs:bo.fs||[],fk:bo.fk||[],closed:COLNAME.issue_closed,doing:/*BOARD_DOING*/,sum:b.sum,hidden:hidCols(),lc:bo.lc||{},hideDone:!!bo.hideDone,search:!!f,text:x=>!f||String(x.n).includes(f)||x.t.toLowerCase().includes(f.toLowerCase())});   // the lanes read every row; the search and the filters only hide rows (#890)
+const model=bo.lmode==="none"?null:buildBoard(all.filter(g=>!isPR(g.name)),{mode:bo.lmode||"spec",fw:bo.fw||[],fs:bo.fs||[],fk:bo.fk||[],closed:COLNAME.issue_closed,doing:/*BOARD_DOING*/,review:/*BOARD_REVIEW*/,sum:b.sum,hidden:hidCols(),lc:bo.lc||{},hideDone:!!bo.hideDone,search:!!f,text:x=>!f||String(x.n).includes(f)||x.t.toLowerCase().includes(f.toLowerCase())});   // the lanes read every row; the search and the filters only hide rows (#890)
 const lanesHtml=model?laneHtml(model):null;lanesNow=model;$("#lhd").checked=!!bo.hideDone;
 $("#lmode").value=bo.lmode||"spec";$("#bbody").classList.toggle("lanes",!!model);
 $("#lhc").innerHTML=model&&model.hc.length?`<button class=hcpill id=lhcx title="columns with no card in an expanded lane: click to expand the lanes that hold their cards">+${model.hc.length} hidden: ${model.hc.map(x=>x.user?`<span class=hcu data-eye="${esc(x.name)}" title="show this column">${esc(x.name)} <b>${x.count}</b></span>`:esc(x.name)+" <b>"+x.count+"</b>").join(" · ")}</button>`:"";
 if(lanesHtml!==null){if($("#bbody").dataset.h!==lanesHtml){$("#bbody").dataset.h=lanesHtml;$("#bbody").innerHTML=lanesHtml;restore()}}
 else if($("#bbody").dataset.h!==html){$("#bbody").dataset.h=html;$("#bbody").innerHTML=html;restore()}   // same cards: leave the DOM alone, so a scroll in progress is never interrupted
-boardRows=all.flatMap(g=>g.items);paintHL();Object.keys(BU.open).forEach(n=>BU.open[n]&&buFetch(n));
+boardRows=all.flatMap(g=>g.items);paintHL();
 }catch(e){}finally{lim.busy=0}}
 // highlight:begin
 // The highlight follows the selection and is never stored: `hl` is {run: id} for a run, or {n, r, kind} for a card. Its
@@ -5375,7 +5362,7 @@ let lanesNow=null;   // the model the board last drew: the controls act on its l
 $("#lhd").onchange=e=>{bo.hideDone=e.target.checked;saveB();pollBoard()};
 const laneSet=v=>{bo.lc=bo.lc||{};for(const l of(lanesNow?lanesNow.lanes:[]))bo.lc[l.id]=v;saveB();pollBoard()};
 $("#lcall").onclick=()=>laneSet(true);$("#lexp").onclick=()=>laneSet(false);
-document.addEventListener("click",e=>{if(e.target.closest(".ghl"))return;const bu=e.target.closest("#bbody .bu");if(bu){window.buToggle(bu.dataset.bu);return}const h=e.target.closest("#bbody .lh");if(h){const id=h.dataset.lane,coll=h.closest(".lane").classList.contains("coll");bo.lc=bo.lc||{};laneToggle(id,coll);return}
+document.addEventListener("click",e=>{if(e.target.closest(".ghl"))return;const bu=e.target.closest("#bbody .bu");if(bu){openBurn(+bu.dataset.bu);return}const h=e.target.closest("#bbody .lh");if(h){const id=h.dataset.lane,coll=h.closest(".lane").classList.contains("coll");bo.lc=bo.lc||{};laneToggle(id,coll);return}
  const m=e.target.closest("#bbody .more");if(m){bo.cx=bo.cx||{};bo.cx[m.dataset.cell]=true;saveB();pollBoard();return}   // a more click opens its own cell only
  const p=e.target.closest("#lhcx");if(p&&lanesNow){const names=new Set(lanesNow.hc.map(x=>x.name));bo.lc=bo.lc||{};   // a hidden column's pill expands the lanes that hold its cards
   for(const l of lanesNow.lanes)if(l.collapsed&&Object.keys(l.counts).some(c=>names.has(c)))bo.lc[l.id]=false;saveB();pollBoard()}});
@@ -5407,7 +5394,7 @@ PAGE = PAGE.replace("/*RUN_SHEET_CSS*/", (pathlib.Path(__file__).resolve().paren
 # The strip paints one rule per category, keyed by the fact that sets the column: the name comes from the table.
 HID_CHIP_TOKENS = (("abandoned", "err"), ("dev_ci", "run"), ("unscheduled", "warn"), ("issue_closed", "ok"), ("pr_open", "pin"))
 PAGE = PAGE.replace("/*HID_CHIP_RULES*/", "\n".join('.hidbar .chip[data-col="%s"] b{color:var(--%s)}' % (COLUMN[fact], token) for fact, token in HID_CHIP_TOKENS))
-PAGE = PAGE.replace("/*BOARD_COLORS*/", BOARD_COLORS_JSON).replace("/*BOARD_FLOW*/", BOARD_FLOW_JSON).replace("/*BOARD_NAMES*/", BOARD_NAMES_JSON).replace("/*BOARD_DOING*/", BOARD_DOING_JSON).replace("/*HUB_REPO*/", json.dumps(REPO))
+PAGE = PAGE.replace("/*BOARD_COLORS*/", BOARD_COLORS_JSON).replace("/*BOARD_FLOW*/", BOARD_FLOW_JSON).replace("/*BOARD_NAMES*/", BOARD_NAMES_JSON).replace("/*BOARD_DOING*/", BOARD_DOING_JSON).replace("/*BOARD_REVIEW*/", BOARD_REVIEW_JSON).replace("/*HUB_REPO*/", json.dumps(REPO))
 PAGE = PAGE.replace("/*RUN_STATE_CSS*/", "".join(".b.%s{color:var(--%s);%s}" % (r["state"].replace(" ", "-"), r["color"], r["css"]) for r in RUN_STATES))
 
 
@@ -6241,6 +6228,7 @@ MOBILE_CSP = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src '
 
 GESTURE_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-gesture.js").read_text()
 MOVE_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-move.js").read_text()
+QUESTION_JS = (pathlib.Path(__file__).resolve().parent / "hub-question-card.js").read_text()
 RUN_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-run.js").read_text()
 # The card rules of the desktop board (#917): spec color and wave, one block of board-lanes.js, so the mobile page holds no
 # rule of its own and never the board's column names (ADR-0137).
@@ -6252,7 +6240,7 @@ INST_CSS = re.search(r"^/\* INST-CSS\{ \*/$.*?^/\* \}INST-CSS \*/$", PAGE, re.M 
 INST_JS = "\n".join([re.search(r"^const LOAD_ERR=.*$", PAGE, re.M).group(0),
                      *re.findall(r"^function ld(?:Num|Round|Cell|Cells)\(.*$", PAGE, re.M),
                      re.search(r"^// INST\{.*?^// \}INST$", PAGE, re.M | re.S).group(0)]).replace("__LOADERR__", str(LOAD_ERR_PCT)).replace("__REPO__", REPO)
-MOBILE_PAGE = (pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text().replace("<!--OVERLAY-->", overlay_tag(OVERLAY_HUB)).replace("<!--INST_CARD-->", INST_CARD).replace("/*INST_CSS*/", INST_CSS).replace("/*INST_JS*/", INST_JS).replace("/*SWITCHER_JS*/", SWITCHER_JS).replace("/*GESTURE*/", GESTURE_JS).replace("/*MOVE*/", MOVE_JS).replace("/*RUN*/", RUN_JS).replace("/*BOARD_FILTER*/", BOARD_FILTER_JS).replace("/*WEB_TOKENS*/", WEB_TOKENS).replace("/*CARD_RULES*/", CARD_RULES_JS)
+MOBILE_PAGE = (pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text().replace("<!--OVERLAY-->", overlay_tag(OVERLAY_HUB)).replace("<!--INST_CARD-->", INST_CARD).replace("/*INST_CSS*/", INST_CSS).replace("/*INST_JS*/", INST_JS).replace("/*SWITCHER_JS*/", SWITCHER_JS).replace("/*GESTURE*/", GESTURE_JS).replace("/*MOVE*/", MOVE_JS).replace("/*QUESTION*/", QUESTION_JS).replace("/*RUN*/", RUN_JS).replace("/*BOARD_FILTER*/", BOARD_FILTER_JS).replace("/*WEB_TOKENS*/", WEB_TOKENS).replace("/*CARD_RULES*/", CARD_RULES_JS)
 MOBILE_SHELL = ["/mobile/", "/mobile/manifest.webmanifest", "/mobile/icon.svg"]
 SW_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-sw.js").read_text().replace("/*SHELL*/[]", json.dumps(MOBILE_SHELL))
 MANIFEST_JSON = json.dumps({"id": "/mobile/", "name": f"Squad hub {REPO}", "short_name": "Hub", "start_url": "/mobile/", "scope": "/mobile/", "display": "standalone", "background_color": "#0f1115", "theme_color": "#0f1115", "icons": [{"src": "/mobile/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}]}).encode()
@@ -6271,11 +6259,17 @@ def mobile_refusal(reason):
     return ('<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Hub</title>'
             f'<style>{WEB_TOKENS}</style><body style="font:var(--fs-body) system-ui;margin:24px"><h1>The hub refused this login</h1><p>{html.escape(reason)}</p>').encode()
 
+HUB_STREAM_JS = (pathlib.Path(__file__).resolve().parent / "hub-stream.js").read_text()
+
+def stream_tag():
+    """The page's push stream: its path, then the script; the mux gives the path its profile prefix."""
+    return f'<script>window.SQUAD_HUB_STREAM="{hubstream.PATH}";\n{HUB_STREAM_JS}</script>'
+
 def served_page(login=""):
     """The page as the hub serves it, every placeholder substituted. The model-id shape replaces its quoted placeholder:
     json.dumps brings its own quotes, and a second pair is a syntax error that empties the page."""
     who = f"signed in as {html.escape(login)}" if login else ""
-    return PAGE.replace("__WHO__", who).replace("__REPO__", REPO).replace("__CAPS__", json.dumps(loop_caps())).replace("__LOADMS__", str(int(LOAD_SAMPLE_SECS * 1000))).replace("__LOADERR__", str(LOAD_ERR_PCT)).replace("<!--OVERLAY-->", overlay_tag(OVERLAY_HUB))
+    return PAGE.replace("__WHO__", who).replace("__REPO__", REPO).replace("__CAPS__", json.dumps(loop_caps())).replace("__LOADMS__", str(int(LOAD_SAMPLE_SECS * 1000))).replace("__LOADERR__", str(LOAD_ERR_PCT)).replace("<!--OVERLAY-->", overlay_tag(OVERLAY_HUB) + (stream_tag() if hubstream.enabled() else ""))
 
 
 def own_host(h):
@@ -6384,6 +6378,14 @@ def request_target(h):
     parts = h.requestline.split()
     return parts[1] if len(parts) > 1 and parts[1].startswith("//") else h.path
 
+VERSIONS = hubstream.Versions({"runs": lambda: run_list()})
+
+def stream_origin_ok(h, tailnet):
+    """A stream opens for no origin but this hub's own (loopback) or, on the tailnet, the tailnet's; an absent Origin is a non-browser reader."""
+    org = h.headers.get("Origin")
+    if org is None: return True
+    return org == f"https://{tailnet_block().get('host')}" if tailnet else own_origin(h)
+
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
     def refuse(self, reason, page=False):
@@ -6422,9 +6424,34 @@ class H(BaseHTTPRequestHandler):
                 self.wfile.write(chunk); self.wfile.flush()
         except (OSError, http.client.HTTPException): pass
         finally: up.close()
+    def stream(self, a):
+        """The page's push stream: every subject the reader does not hold yet, then a heartbeat while nothing changes."""
+        if not stream_origin_ok(self, a.tailnet): return self.refuse("forbidden origin")
+        held = hubstream.held_from(self.path.partition("?")[2])
+        self.protocol_version = "HTTP/1.1"   # the body is streamed, so its end is framed: chunked, then the close
+        self.send_response(200); self.send_header("Content-Type", hubstream.CTYPE); self.send_header("Cache-Control", "no-store")
+        self.send_header("Transfer-Encoding", "chunked"); self.send_header("Connection", "close"); self.end_headers()
+        self.close_connection = True
+        def chunk(data):
+            self.wfile.write(b"%x\r\n" % len(data) + data + b"\r\n")
+        quiet = time.monotonic()
+        try:
+            while True:
+                VERSIONS.refresh()
+                fresh = VERSIONS.newer(held)
+                for name, v in sorted(fresh.items()):
+                    chunk(hubstream.event(name, v)); held[name] = v
+                now = time.monotonic()
+                if fresh: quiet = now
+                elif now - quiet >= hubstream.HEARTBEAT_SECONDS:
+                    chunk(b": ping\n\n"); quiet = now
+                time.sleep(hubstream.TICK_SECONDS)
+        except OSError: return
+
     def do_GET(self):
         a = access(self, "GET")
         if not a.allowed: return self.refuse(a.reason, page=self.path.split("?", 1)[0] in ("/mobile", "/mobile/"))
+        if self.path.split("?", 1)[0] == hubstream.PATH and hubstream.enabled(): return self.stream(a)
         if request_target(self).startswith(DASH_PREFIXES): return self.dash("GET")
         if self.path.startswith(("/held/", "/ended/")):   # a run the childcc pass holds, or one that ended today: its dashboard (#689, #830)
             name = re.sub(r"[^\w-]", "", self.path.split("/", 2)[2].split("?")[0])

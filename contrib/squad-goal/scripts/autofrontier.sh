@@ -64,10 +64,12 @@ idle_noslot() {   # the pass has no run slot or no child room: every Todo card w
 # for its steps: the second pass exits 0 at once. Not re-entrant, so the re-entry carries its own marker.
 [ -n "${SG_SINGLE_AUTOFRONTIER:-}" ] || exec env SG_SINGLE_AUTOFRONTIER=1 bash "$here/single.sh" autofrontier bash "$here/autofrontier.sh" "$@"
 read -r free env room spend < <(cd "$SG_CHECKOUT" && python3 - "${SG_WORKFLOW:-dynamic}" "$SG_STATE/active-runs.txt" <<'PY'
-import json, os, re, sys, pathlib
+import json, os, sys, pathlib
 # The free slots come from the machine-wide ceiling caps.runs in squad/caps.py, the one resolution the engine enforces, lowered
-# by the project file of SG_CHECKOUT. The live count is the larger of the live runs of this repository and the live leases of
-# every repository. A missing caps block is a named failure: the pass stops and says so, never a default.
+# by the project file of SG_CHECKOUT. `C.free_runs` is the one counter of the runs that hold a slot: every live lease
+# machine-wide and every run the active list names whose last invocation has no final verdict (a run whose last verdict follows
+# its last start or resume is over, and its line stays listed for the readers that close its issues). A missing caps block is a
+# named failure: the pass stops and says so, never a default.
 sys.path.insert(0, os.environ.get("SG_SQUAD") or ".")
 from squad import caps as C
 from squad import workflows as W
@@ -75,7 +77,6 @@ try:
     ceil = C.ceiling(".")
 except Exception as e:
     print(f"squad.caps: {e}", file=sys.stderr); sys.exit(2)
-cap, leased = ceil.caps["runs"], ceil.occupancy()["runs"]   # the runs held machine-wide: the live leases of every repository
 held = 0   # the children the live runs of this repository already hold: the child ceilings below subtract these, and the run
            # slots never do -- seeding this with the leases counted every run twice and filled the ceiling on its own (#948)
 def find(o):
@@ -118,13 +119,11 @@ def budget_spend(o):   # the budget.spend.max of the first dispatch node: what O
     return None
 env = envelope(doc) if doc else None
 spend = budget_spend(doc) if doc else None
-live = 0
 for r in open(sys.argv[2]).read().split():
     f = pathlib.Path(r if r.startswith("/") else "runs/" + r) / "record.jsonl"
     if not f.exists(): continue
     t = f.read_text()
-    if '"event": "verdict"' in t: continue
-    live += 1
+    if C.final_verdict(t) is not None: continue
     for l in t.splitlines():
         if '"spawn_accepted"' in l:
             held += 1
@@ -135,7 +134,7 @@ run = doc.get("run") if isinstance(doc, dict) else None
 gmc = run.get("max_children") if isinstance(run, dict) else None
 limits = [x for x in ((gmc - held) if isinstance(gmc, int) else None, max(ceil.caps["children"] - held, 0)) if x is not None]
 dash = lambda x: x if x is not None else "-"
-print(max(cap - max(live, leased), 0), dash(env), min(limits) if limits else "-", dash(spend))
+print(C.free_runs(ceil, sys.argv[2], root="."), dash(env), min(limits) if limits else "-", dash(spend))
 PY
 )
 busy=$(sg_live_issues "$SG_STATE/active-runs.txt")

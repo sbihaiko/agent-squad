@@ -96,12 +96,34 @@ LOG_FLOOR_DAYS = 1 / 48       # the log axis starts at 30 minutes
 LOG_FLOOR_HOURS = 1 / 60      # no log of a span under one minute
 PLOT_W, PLOT_H = 728, 268     # the page's plot in pixels, for clusters: its 800 x 340 frame less 36 px margins
 DOT_PX = 9                    # dots closer than this many pixels merge into a numbered cluster
-REASON_TEXT = {"not_planned": "closed as not planned", "abandoned": "closed as abandoned", "open": "still open",
-               "no_opened": "no opened date",
-               NO_TRANSITION: "no transition into the chosen columns",
-               NOT_READ: "not yet read by the history pass"}
 LOG_TICKS = [1 / 24, 1, 7]           # days, drawn with the one duration format
 CUBE_TICKS = [1, 7, 30, 60]          # days, drawn with the one duration format
+SHORT_RANGE = timedelta(days=3)      # a view this short labels its x axis in hours, a longer one in days
+FIT_SHARE = 0.5                      # the cards cluster when the range they fill is at most half the view
+FIT_MIN_PAD = timedelta(hours=1)
+TIMEFRAME_SELECTS = "end transition"  # Timeframe keeps a card by the instant it entered the end column
+
+
+def _stamp(moment):
+    utc = moment.astimezone(UTC)
+    return f"{utc:%b} {utc.day} {utc:%H:%M}"
+
+
+def _axis_label(moment, span):
+    return f"{moment:%H:%M}" if span <= SHORT_RANGE.total_seconds() else f"{moment:%b} {moment.day}"
+
+
+def _fit(instants, start, end):
+    """The range the cards fill, padded, when they cluster; None when they spread or already fill the view."""
+    if not instants or end <= start:
+        return None
+    lo, hi = min(instants), max(instants)
+    pad = max((hi - lo) * 0.1, FIT_MIN_PAD)
+    fit_start, fit_end = max(start, lo - pad), min(end, hi + pad)
+    if fit_end - fit_start > FIT_SHARE * (end - start) or (fit_start, fit_end) == (start, end):
+        return None
+    return {"start": fit_start.isoformat(), "end": fit_end.isoformat(),
+            "text": f"{_stamp(fit_start)} to {_stamp(fit_end)} UTC"}
 
 
 def _window_size(count):
@@ -208,13 +230,13 @@ def control_chart(items, timeframe=None, log=False, now=None, start=None, end=No
     xticks = []
     for k in range(7):
         moment = start + timedelta(seconds=span * k / 6)
-        xticks.append({"x": k / 6, "text": f"{moment:%b} {moment.day}"})
-    total = sum(excluded.values())
-    reasons = ", ".join(REASON_TEXT.get(reason, reason) for reason in excluded)
+        xticks.append({"x": k / 6, "text": _axis_label(moment, span)})
     if zoom:
         scope = f"{start:%b} {start.day} to {end:%b} {end.day}"
     else:
         scope = f"last {timeframe * 24} hours" if timeframe and timeframe < 7 else f"last {timeframe} days" if timeframe else "all closed cards"
+    sample = f"{len(dots)} {'issue' if len(dots) == 1 else 'issues'} plotted"
+    text = f"{scope}, {measure}, {sample}; Timeframe selects by {TIMEFRAME_SELECTS}"
     return {
         "measure": measure,
         "scale": axis,
@@ -226,8 +248,9 @@ def control_chart(items, timeframe=None, log=False, now=None, start=None, end=No
         "ticks": [{"hours": hrs, "text": text, "y": y} for hrs, text, y in ticks],
         "xticks": xticks,
         "range": {"start": start.isoformat(), "end": end.isoformat()},
+        "fit": _fit([datetime.fromisoformat(row["c"]) for row in plotted], start, end),
         **summary,
         "excluded": excluded,
-        "excluded_total": total,
-        "text": f"{scope}, {total} excluded because {reasons}" if total else scope,
+        "excluded_total": sum(excluded.values()),
+        "text": text,
     }

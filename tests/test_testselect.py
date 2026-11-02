@@ -52,12 +52,12 @@ def tip(tmp_path, edits, extra=None):
     return repo
 
 
-def select(repo, base="main"):
+def select(repo, base="main", stage=None):
+    argv = [sys.executable, "-m", "squad.testselect", "--base", base, "--worktree", str(repo)]
+    if stage is not None:
+        argv += ["--stage", stage]
     env = {**os.environ, "PYTHONPATH": str(ROOT)}
-    done = subprocess.run(
-        [sys.executable, "-m", "squad.testselect", "--base", base, "--worktree", str(repo)],
-        cwd=ROOT, env=env, capture_output=True, text=True, check=True,
-    )
+    done = subprocess.run(argv, cwd=ROOT, env=env, capture_output=True, text=True, check=True)
     return done.stdout.splitlines()
 
 
@@ -146,6 +146,33 @@ def test_a_base_that_does_not_resolve_answers_all_never_an_empty_list(tmp_path):
     repo = tip(tmp_path, {"squad/alpha.py": "VALUE = 2\n"})
     lines = select(repo, base="no-such-ref")
     assert len(lines) == 1 and lines[0].startswith("all: ") and "no-such-ref" in lines[0]
+
+
+@pytest.mark.parametrize("stage", ["fast", "wave-entry", "wave-tip", "prepush"])
+def test_an_intermediate_stage_selects_the_delta_for_a_covered_change(tmp_path, stage):
+    """The stage that runs on every version of a tree names the delta: the test files the change reaches, never the battery."""
+    repo = tip(tmp_path, {"squad/alpha.py": "VALUE = 2\n"})
+    assert select(repo, stage=stage) == ["tests/test_alpha.py", "tests/test_beta.py"]
+
+
+@pytest.mark.parametrize("stage", ["landing", "promotion", "nightly"])
+def test_a_full_stage_runs_the_full_battery_whatever_the_delta_says(tmp_path, stage):
+    """The landing, the promotion proof and the nightly keep the battery: a covered change is no reason to narrow them."""
+    repo = tip(tmp_path, {"squad/alpha.py": "VALUE = 2\n"})
+    assert select(repo, stage=stage) == [f"all: {stage} runs the full battery"]
+
+
+def test_an_unknown_stage_falls_back_to_the_full_battery_and_never_narrows(tmp_path):
+    """A stage the selector does not know is full: a typo costs the battery, never a narrower gate (ADR-0018)."""
+    repo = tip(tmp_path, {"squad/alpha.py": "VALUE = 2\n"})
+    assert select(repo, stage="typo") == ["all: typo runs the full battery"]
+
+
+def test_an_uncovered_path_at_an_intermediate_stage_states_why_the_delta_refused(tmp_path):
+    """The delta cannot cover a path no test reaches: the answer is the full battery, and the line says the reason."""
+    repo = tip(tmp_path, {"docs/notes.md": "notes\n"})
+    lines = select(repo, stage="wave-entry")
+    assert len(lines) == 1 and lines[0].startswith("all: ") and "docs/notes.md" in lines[0]
 
 
 def test_no_change_selects_no_test(tmp_path):

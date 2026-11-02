@@ -155,13 +155,14 @@ PYTEST_OPTS='-p no:deepeval -o heavy_cap_seconds=20 -n 3 -m not heavy'
 printf 'tests/test_a.py\ntests/test_b.py\n' > "$T/select.out"
 out=$(selrun); rc=$?
 [ $rc = 0 ] && /usr/bin/grep -qx -- "-m pytest $PYTEST_OPTS tests/test_a.py tests/test_b.py" "$T/argv.log" && ok "the battery passes the selection to pytest, after the unchanged options" || ko "selection argv: rc $rc: '$(cat "$T/argv.log" 2>&1)' $out"
-IFS=$'\t' read -r _ kind res _ sel < "$SG_STATE/gate-status" 2>/dev/null
-[ "$kind $res $sel" = "fast pass selected 2 files" ] && ok "the status line states the selected file count" || ko "selection status: '$(cat "$SG_STATE/gate-status" 2>&1)'"
+/usr/bin/grep -q -- "squad.testselect --stage fast --base dev" "$T/argv.log" && ok "the fast gate asks the selector at the fast stage" || ko "fast stage: '$(cat "$T/argv.log" 2>&1)'"
+IFS=$'\t' read -r _ kind res _ sel scope < "$SG_STATE/gate-status" 2>/dev/null
+[ "$kind $res $sel $scope" = "fast pass selected 2 files delta" ] && ok "the status line states the selected file count and the delta scope" || ko "selection status: '$(cat "$SG_STATE/gate-status" 2>&1)'"
 echo "all: no test imports squad/x.py" > "$T/select.out"
 out=$(selrun); rc=$?
 [ $rc = 0 ] && /usr/bin/grep -qx -- "-m pytest $PYTEST_OPTS" "$T/argv.log" && ok "an all answer runs the whole battery" || ko "all argv: rc $rc: '$(cat "$T/argv.log" 2>&1)'"
-IFS=$'\t' read -r _ kind res _ sel < "$SG_STATE/gate-status" 2>/dev/null
-[ "$sel" = "all: no test imports squad/x.py" ] && ok "the status line states the all reason" || ko "all status: '$(cat "$SG_STATE/gate-status" 2>&1)'"
+IFS=$'\t' read -r _ kind res _ sel scope < "$SG_STATE/gate-status" 2>/dev/null
+[ "$sel $scope" = "all: no test imports squad/x.py full" ] && ok "the status line states the all reason and the full scope" || ko "all status: '$(cat "$SG_STATE/gate-status" 2>&1)'"
 : > "$T/select.out"
 out=$(selrun); rc=$?
 [ $rc = 0 ] && ! /usr/bin/grep -q -- "-m pytest" "$T/argv.log" && /usr/bin/grep -q -- "-m ruff check squad tests" "$T/argv.log" && /usr/bin/grep -q -- "-m mypy squad" "$T/argv.log" && ok "an empty selection runs no pytest and still runs ruff and mypy" || ko "empty selection: rc $rc: '$(cat "$T/argv.log" 2>&1)'"
@@ -170,6 +171,8 @@ printf 'tests/test_a.py\n' > "$T/select.out"
 out=$(selrun SG_TEST_SELECT=no); rc=$?
 [ $rc = 0 ] && /usr/bin/grep -qx -- "-m pytest $PYTEST_OPTS" "$T/argv.log" && ! /usr/bin/grep -q "squad.testselect" "$T/argv.log" && ok "SG_TEST_SELECT=no runs the whole battery without the selector" || ko "SG_TEST_SELECT=no: rc $rc: '$(cat "$T/argv.log" 2>&1)'"
 /usr/bin/grep -q "all: SG_TEST_SELECT=no" "$SG_FAST_LOG_DIR"/fast-gate-*.log && ok "SG_TEST_SELECT=no says so in the log" || ko "SG_TEST_SELECT=no log: '$(cat "$SG_FAST_LOG_DIR"/fast-gate-*.log 2>&1)'"
+IFS=$'\t' read -r _ kind res _ sel scope < "$SG_STATE/gate-status" 2>/dev/null
+[ "$sel $scope" = "all: SG_TEST_SELECT=no full" ] && ok "SG_TEST_SELECT=no names the full scope" || ko "SG_TEST_SELECT=no status: '$(cat "$SG_STATE/gate-status" 2>&1)'"
 printf 'tests/test_a.py\ntests/test_b.py\n' > "$T/select.out"
 out=$(selrun PY_FAIL=1); rc=$?
 [ "$(cat "$T/retry.log" 2>/dev/null)" = "tests/test_a.py::test_one" ] && ok "the serial retry reruns only the failed test names" || ko "retry argv: rc $rc: '$(cat "$T/retry.log" 2>&1)' $out"

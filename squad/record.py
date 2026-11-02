@@ -17,6 +17,8 @@ REQUIRED = {
     "run_start": ["run_id", "graph_name", "graph_hash", "engine_options", "root", "plan"],
     "call_start": ["node", "entry", "session", "pid", "limit", "started_at"],
     "gate_start": ["node", "entry", "item", "pid", "limit", "started_at"],   # #680: a gate began its check; the dashboard reads it as in flight until its outcome
+    "gate_result": ["node", "entry", "item", "sha", "dirt", "suite", "outcome", "source"],   # one gate stage's verdict for one tree and suite
+    "gate_reuse": ["node", "entry", "item", "sha", "suite", "source"],   # a gate stage reused an earlier green verdict of this run instead of running its suite again
     "progress": ["node", "entry", "item", "session", "messages", "context_tokens", "tool"],
     "compaction": ["node", "entry", "session", "trigger"],
     "sandbox_deny": ["node", "entry", "session", "tool", "reason"],   # a child's tool call the sandbox hook denied (squad/sandbox.py)

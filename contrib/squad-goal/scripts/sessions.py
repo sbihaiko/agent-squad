@@ -1,7 +1,7 @@
 """The Terminals list (#833): the one reader of the local session registry, the protected transcript reader and the one
 redaction step. The hub's routes call it; nothing else reads a session record, a token or a transcript.
 """
-import json, os, pathlib, re, stat, subprocess, sys, time
+import datetime, json, os, pathlib, re, stat, subprocess, sys, time
 
 ADDRESS = pathlib.Path(__file__).resolve().parent / "address.sh"
 SOCKET_DIRS = ("/tmp/cc-socks",)   # where Claude Code binds a session socket (docs/design/session-wire-protocol.md)
@@ -209,15 +209,24 @@ def permission_mode(cwd, sid, pid=None):
     no mode line in its transcript until its first turn is written, and the owner reads the hub from the web, where a held
     message has no approval to reach it (#1081)."""
     if SID.fullmatch(sid or "") is None: return ""
-    try: raw, _ = _read_under_home(["projects", re.sub(r"[^A-Za-z0-9]", "-", str(cwd)), f"{sid}.jsonl"], limit=TAIL_BYTES)
-    except OSError: raw = b""
+    path = ["projects", re.sub(r"[^A-Za-z0-9]", "-", str(cwd)), f"{sid}.jsonl"]
+    window = TAIL_BYTES
+    while True:
+        try: raw, start = _read_under_home(path, limit=window)
+        except OSError: raw, start = b"", 0
+        mode = _last_mode(raw)
+        if mode or not start or window >= MAX_TAIL_BYTES: return mode or argv_mode(pid)
+        window *= 2
+
+
+def _last_mode(raw):
     for piece in reversed(raw.split(b"\n")):
         if b'"permissionMode"' not in piece: continue
         try: obj = json.loads(piece)
         except ValueError: continue
         mode = obj.get("permissionMode")
         if isinstance(mode, str) and mode: return mode
-    return argv_mode(pid)
+    return ""
 
 
 ARGV_MODE = {"--dangerously-skip-permissions": "bypassPermissions", "--bypass-permissions": "bypassPermissions"}
@@ -278,10 +287,49 @@ def read_conversation(cwd, sid, secrets=(), before=None):
     return page
 
 
+def _epoch(stamp):
+    try: return datetime.datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+    except (AttributeError, ValueError): return None
+
+def _owner_turn_and_tokens(raw, start):
+    """The epoch of the newest owner turn in one byte window, and the output tokens of the messages written after it, one count
+    per message: a message is written as several lines that each repeat its usage. (None, None) when the window holds no turn."""
+    tokens = {}
+    for piece in reversed(raw.split(b"\n")[1 if start else 0:]):
+        if not piece: continue
+        try: obj = json.loads(piece)
+        except ValueError: continue
+        if not isinstance(obj, dict): continue
+        if any(role == "owner" for role, *_ in _turns_of(obj)): return _epoch(obj.get("timestamp", "")), sum(tokens.values())
+        msg = obj.get("message") or {}
+        out = (msg.get("usage") or {}).get("output_tokens") if obj.get("type") == "assistant" else None
+        if isinstance(out, int): tokens.setdefault(msg.get("id") or obj.get("uuid") or piece, out)
+    return None, None
+
+def read_activity(cwd, sid, status, secrets=(), now=None):
+    """The live activity of a session: its record status, the whole seconds since its owner's last turn, and the output tokens
+    its messages wrote since. Elapsed and tokens are None when the transcript holds no owner turn, never a guess."""
+    unknown = {"status": status, "elapsed": None, "tokens": None}
+    if SID.fullmatch(sid) is None: return unknown
+    path = ["projects", re.sub(r"[^A-Za-z0-9]", "-", cwd), f"{sid}.jsonl"]
+    window = TAIL_BYTES
+    while True:
+        try: raw, start = _read_under_home(path, limit=window)
+        except OSError as e: _log(f"hub: transcript of session {sid} unreadable: {type(e).__name__}", secrets); return unknown
+        since, tokens = _owner_turn_and_tokens(raw, start)
+        if since is not None or not start or window >= MAX_TAIL_BYTES: break
+        window *= 2
+    if since is None: return unknown
+    now = time.time() if now is None else now
+    return {"status": status, "elapsed": max(0, int(now - since)), "tokens": tokens}
+
 def conversation(profile, sid, before=None, profiles_of=profiles_of):
-    """One page of a live session's conversation when the session is this profile's; None for any other session."""
+    """One page of a live session's conversation with its live activity, when the session is this profile's; None otherwise."""
     for rec, secret in live_sessions(profile, profiles_of):
-        if rec["sessionId"] == sid: return read_conversation(rec["cwd"], sid, [secret], before)
+        if rec["sessionId"] != sid: continue
+        page = read_conversation(rec["cwd"], sid, [secret], before)
+        if page is None: return None
+        return {**page, "activity": read_activity(rec["cwd"], sid, rec["status"], [secret])}
     return None
 
 def live_sessions(profile, profiles_of=profiles_of):

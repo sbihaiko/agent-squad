@@ -28,8 +28,8 @@ A proof also has no upper bound. A suite that hangs holds the reserve until its 
    <bound>`, with one line in the promote log saying the tip is not tested.
 4. **An indeterminate tip is not a pass and not a fail.** It writes no gate status and no commit status. Delivery still
    outranks the proof: the tip is promoted with a marker that names what no test reached, and the nightly proves it and
-   settles the marker ([ADR-0164](0164-delivery-outranks-the-proof.md)). It is not marked in `promote-pass.tips`, so a
-   later pass retries the same tip.
+   settles the marker ([ADR-0164](0164-delivery-outranks-the-proof.md)). It is marked `promoted: bound-ended` in
+   `promote-pass.tips`, so no later pass spends a second suite on a shipped tip.
 5. **An indeterminate tip needs an assessment and a pending reminder.** The record names the tip and the bound. An agent
    assesses what the killed proof leaves unproven, opens one issue labelled `bug` that says the tip is not tested, and that
    issue is the reminder.
@@ -46,6 +46,6 @@ in one issue, so the next full proof or the nightly closes it.
 ## Guard
 
 `contrib/squad-goal/scripts/test-promote-pass.sh` guards rules 1 to 4: a held reserve lifts once the bound passes, with the
-proof still running; a proof past its deadline is killed, promotes nothing, writes `promote-indeterminate`, and does not mark
-the tip refused. Rules 5 and 6 are a draft: the assessment is an agent's act, and the hard bound is the same deadline the
-guard proves.
+proof still running; a proof past its deadline is killed, writes `promote-indeterminate`, and its tip is promoted with the
+bound-ended marker when the delta cannot carry it, or marked refused when the delta measured a red. Rules 5 and 6 are a
+draft: the assessment is an agent's act, and the hard bound is the same deadline the guard proves.

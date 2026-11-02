@@ -1,4 +1,4 @@
-"""The spec lane's burn-up (#1025): the hub answers one spec's lines from the history store, and the page opens it from the lane."""
+"""The spec lane's burn-up (#1025): the hub answers one spec's lines from the history store, and the lane opens its burndown (#1080)."""
 import datetime as dt
 import importlib.util
 import re
@@ -88,15 +88,11 @@ def test_the_burnup_answer_is_cached_until_the_store_changes(hub, store):
     assert hub.flow_burnup(SPEC)["points"][-1]["scope"] == 2
 
 
-def test_the_spec_lane_offers_the_burnup_and_the_page_fetches_it(hub):
+def test_the_spec_lane_offers_the_burnup_and_opens_the_throughput_burndown(hub):
+    """#1080: a lane's burn-up button opens the burndown the Throughput tab shows, never an inline burn-up panel."""
     assert re.search(r'class=bu data-bu="\$\{l\.num\}"', hub.PAGE)
-    assert 'fetch("/api/chart/burnup?spec="+n)' in hub.PAGE
-    assert "buToggle(bu.dataset.bu)" in hub.PAGE
-    # data-bu is a string and the lane asks for BU.open[l.num], a number: the toggle coerces, or the panel never opens (#1075)
-    assert "function buToggle(n){n=+n;" in hub.PAGE
-    # the handler that presses it sits in another scope of the served page, so the toggle is reached by name (#1075)
-    assert "window.buToggle=buToggle;" in hub.PAGE
-    assert "window.buToggle(bu.dataset.bu)" in hub.PAGE
+    assert "openBurn(+bu.dataset.bu)" in hub.PAGE
+    assert "buToggle" not in hub.PAGE and "/api/chart/burnup?spec=" not in hub.PAGE
 
 
 def test_a_spec_with_sub_issues_draws_both_lines_from_the_children_instants(hub, store, monkeypatch):
@@ -230,7 +226,3 @@ def test_without_a_whole_read_the_series_names_the_missing_read(hub, store, monk
     assert answer["series"]["reason"] == "no whole board read after the first ticket"
 
 
-def test_the_page_names_the_day_and_delivered_axes_and_the_scope_line(hub):
-    assert "day number (day ${n0} = first whole read)" in hub.PAGE
-    assert "delivered (count)" in hub.PAGE
-    assert "scope ${sc}" in hub.PAGE
