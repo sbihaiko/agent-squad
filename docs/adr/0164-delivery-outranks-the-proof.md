@@ -19,9 +19,10 @@ A gate attempt ends in one of three outcomes, and the evidence is what tells the
 
 ## Precedence
 
-- **A measured red wins.** A `fail` on a tree holds that tree until the defect is fixed, whatever a later attempt on
-  the same tree measures. A later pass never turns a red into a green; it is recorded beside the red, and the red is
-  released by name (ADR-0018).
+- **A measured red wins.** A `fail` on a tree holds that tree until the defect is fixed: a bound, a retry, a fallback,
+  a later unproven attempt and a pass of another scope never release it. Only a pass that covers the red's scope and reran
+  the checks that reported it releases it, and the record names which of the two released it — the green run on the same
+  tree, or the change on a descendant that fixed it (ADR-0018).
 - **An unfinished proof never holds delivery.** Past its bound (ADR-0163) the delta proof answers for the tip; past what
   the delta can carry, the tip is promoted with a marker that names the unproven part.
 - **A failed proof still holds delivery.** This decision never promotes a tip a test named.

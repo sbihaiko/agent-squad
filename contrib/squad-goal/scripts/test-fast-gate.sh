@@ -88,20 +88,24 @@ case \$c in
 esac
 exit 0
 CLS
-cg() { rm -f "$T/ran.log" "$T/cls.n" "$SG_STATE/gate-status"; (cd "$R" && SG_FAST_BASE=dev SG_FAST_CMD="bash $T/cls.sh" SG_FAST_RETRY_CMD="bash $T/retry.sh" bash "$d/fast-gate.sh" 2>&1); }
+# The class cases keep their own state: a red an earlier case measured stands for the tree (spec 1163, #1170), and an
+# inconclusive attempt on the same tree then ends fail. This block proves the inconclusive classes on a tree with no red.
+cst=$T/cls-state; mkdir -p "$cst"
+cg() { rm -f "$T/ran.log" "$T/cls.n" "$cst/gate-status"; (cd "$R" && SG_STATE="$cst" SG_FAST_BASE=dev SG_FAST_CMD="bash $T/cls.sh" SG_FAST_RETRY_CMD="bash $T/retry.sh" bash "$d/fast-gate.sh" 2>&1); }
 out=$(CLS=collection cg); rc=$?
 [ $rc = 1 ] && case "$(last "$out")" in "fast-gate: collection: "*"tests/test_c.py"*) true;; *) false;; esac && ok "a collection error names the collection class and its file" || ko "collection: rc $rc: '$(last "$out")'"
 [ "$(/usr/bin/grep -c '^battery' "$T/ran.log")" = 1 ] && ! /usr/bin/grep -q retry-cmd "$T/ran.log" && ok "a collection error is a defect: no retry" || ko "collection retried: '$(cat "$T/ran.log")'"
 out=$(CLS=errorid RETRY_FAIL=1 cg); rc=$?
 [ $rc = 1 ] && /usr/bin/grep -qx "retry-cmd tests/test_e.py::test_b" "$T/ran.log" && case "$(last "$out")" in "fast-gate: pytest: "*"tests/test_e.py::test_b"*) true;; *) false;; esac \
   && ok "a test that errors is a failed id: it is retried alone and named" || ko "error id: rc $rc: '$(last "$out")' '$(cat "$T/ran.log")'"
+cst=$T/cls-inconclusive; mkdir -p "$cst"   # a fresh tree record: the error-id red above must not answer for these attempts
 for c in saturation killed unknown; do
   out=$(CLS=$c cg); rc=$?; want=$c; [ $c = killed ] && want=saturation
   [ $rc = 4 ] && case "$(last "$out")" in "fast-gate: $want: "*inconclusive*) true;; *) false;; esac && ok "a $c red, twice, is inconclusive: the $want class and exit 4" || ko "$c: rc $rc: '$(last "$out")'"
   [ "$(/usr/bin/grep -c '^battery' "$T/ran.log")" = 2 ] && ok "a $c red runs the battery once more, and only once" || ko "$c retries: '$(cat "$T/ran.log")'"
   ! /usr/bin/grep -q 'test-foo.sh' "$T/ran.log" && ok "an inconclusive $c result runs no suite" || ko "$c ran suites: '$(cat "$T/ran.log")'"
   case "$out" in *"named no failed test"*) ko "$c is read as pytest: '$out'";; *) ok "a $c red is not read as one pytest cause";; esac
-  IFS=$'\t' read -r _ kind res _ < "$SG_STATE/gate-status" 2>/dev/null; [ "$kind $res" = "fast fail" ] && ok "an inconclusive $c result leaves no pass line" || ko "$c status: '$(cat "$SG_STATE/gate-status" 2>&1)'"
+  IFS=$'\t' read -r _ kind res _ < "$cst/gate-status" 2>/dev/null; [ "$kind $res" = "fast fail" ] && ok "an inconclusive $c result leaves no pass line" || ko "$c status: '$(cat "$cst/gate-status" 2>&1)'"
 done
 out=$(CLS=saturation CLS2=pass cg); rc=$?
 [ $rc = 0 ] && /usr/bin/grep -q 'test-foo.sh' "$T/ran.log" && case "$out" in *saturation*) true;; *) false;; esac && ok "an inconclusive red whose retry passes goes on to the suites and names the class" || ko "retry pass: rc $rc: '$out'"
@@ -331,8 +335,8 @@ out=$(fg); rc=$?
 vstub() {  # <name> <body>: a battery stub that logs one line per call, then runs <body>
   printf '#!/bin/bash\necho "battery" >> "%s/ran.log"\n%s\n' "$T" "$2" > "$T/$1.sh"
 }
-vfg() {  # <battery stub>: one fast gate on the current branch with that battery and no retry
-  rm -f "$T/ran.log" "$SG_STATE/gate-status"; (cd "$R" && SG_FAST_BASE=dev SG_FAST_CMD="bash $T/$1.sh" SG_FAST_RETRY_CMD="bash $T/retry.sh" bash "$d/fast-gate.sh" 2>&1)
+vfg() {  # <battery stub>: one fast gate on the current branch with that battery; RETRY names its retry command
+  rm -f "$T/ran.log" "$SG_STATE/gate-status"; (cd "$R" && SG_FAST_BASE=dev SG_FAST_CMD="bash $T/$1.sh" SG_FAST_RETRY_CMD="${RETRY:-bash $T/retry.sh}" bash "$d/fast-gate.sh" 2>&1)
 }
 vhist() { tail -n 1 "$SG_STATE/gate-history"; }
 vstub absent 'echo "/usr/bin/python3: No module named mypy"; exit 1'
@@ -370,9 +374,11 @@ out=$(cd "$R" && SG_FAST_BASE=no-such-ref SG_FAST_CMD="bash $T/clean.sh" bash "$
 
 # (#1174) The caller reads the gate's own word. GATE_OUTCOME_READ_FILE receives the outcome line gate.sh read inside the
 # lock, so the wave entry, the landing and the promotion decide on pass, fail or unproven and never on the exit code alone.
-# The command the gate runs never sees the variable, so a nested gate cannot overwrite the caller's copy.
-vfr() {  # <battery stub>: vfg with a caller-named outcome copy
-  rm -f "$T/ran.log" "$SG_STATE/gate-status" "$T/outcome"; (cd "$R" && SG_FAST_BASE=dev SG_FAST_CMD="bash $T/$1.sh" SG_FAST_RETRY_CMD="bash $T/retry.sh" GATE_OUTCOME_READ_FILE="$T/outcome" bash "$d/fast-gate.sh" 2>&1)
+# The command the gate runs never sees the variable, so a nested gate cannot overwrite the caller's copy. Each case keeps its
+# own state, because a measured red stands for its tree (#1170): a red one case records must not fold the next case's attempt.
+vfr() {  # <battery stub>: vfg with a caller-named outcome copy, on that case's own state
+  local vs=$T/vst-$1; rm -rf "$vs" "$T/ran.log" "$T/outcome"
+  (cd "$R" && SG_STATE="$vs" SG_FAST_BASE=dev SG_FAST_CMD="bash $T/$1.sh" SG_FAST_RETRY_CMD="bash $T/retry.sh" GATE_OUTCOME_READ_FILE="$T/outcome" bash "$d/fast-gate.sh" 2>&1)
 }
 out=$(vfr clean); rc=$?
 [ $rc = 0 ] && [ "$(cut -f1 "$T/outcome" 2>/dev/null)" = pass ] && ok "a pass entry gives the caller the word pass" || ko "read pass: rc $rc, '$(cat "$T/outcome" 2>/dev/null)'"
@@ -383,6 +389,34 @@ out=$(vfr absent); rc=$?
 printf '#!/bin/bash\necho "read=${GATE_OUTCOME_READ_FILE:-unset}" >> "%s/ran.log"\nexit 0\n' "$T" > "$T/leak.sh"
 out=$(vfr leak); rc=$?
 [ $rc = 0 ] && /usr/bin/grep -qx 'read=unset' "$T/ran.log" && ok "the command never sees the caller's outcome file" || ko "the caller's variable leaked into the command: '$(cat "$T/ran.log" 2>/dev/null)'"
+# (spec 1163, #1170, #1171) One deadline covers the battery and its retry, and a defect that was already reported survives
+# the kill. A battery that prints a failing test and then hangs ends fail; a retry that hangs never clears the battery's red;
+# and a battery that reports nothing and hangs is bounded and unproven, never a pass. Nothing of the killed tree survives.
+printf '#!/bin/bash\necho "retry-cmd $*" >> "%s/ran.log"\nsleep 2718\n' "$T" > "$T/retry-hang.sh"
+vstub hangfail 'echo "FAILED tests/test_h.py::test_hang - boom"; sleep 2718'
+s0=$(date +%s); out=$(SG_GATE_BOUND_SECONDS=2 vfg hangfail); rc=$?; el=$(( $(date +%s) - s0 ))
+[ $rc = 1 ] && [ "$el" -lt 20 ] && case "$(last "$out")" in "fast-gate: pytest: "*"tests/test_h.py::test_hang"*) true;; *) false;; esac \
+  && ok "a failing test followed by a hang at the deadline ends fail and names the defect (${el}s)" || ko "hang after a defect: rc $rc, last '$(last "$out")'"
+[ "$(vhist | cut -f8)" = fail ] && ok "the history records the deadline-bound attempt as fail, not bounded" || ko "hang history: '$(vhist)'"
+pgrep -f "sleep 2718" >/dev/null 2>&1 && ko "the battery's tree survived the deadline" || ok "the battery's tree is stopped at the deadline"
+
+vstub fastred 'echo "FAILED tests/test_r.py::test_r - boom"; exit 1'
+s0=$(date +%s); out=$(RETRY="bash $T/retry-hang.sh" SG_GATE_BOUND_SECONDS=3 vfg fastred); rc=$?; el=$(( $(date +%s) - s0 ))
+[ $rc = 1 ] && [ "$el" -lt 20 ] && /usr/bin/grep -qx "retry-cmd tests/test_r.py::test_r" "$T/ran.log" \
+  && ok "a retry shares the one budget: a retry that hangs leaves the gate red (${el}s)" || ko "retry budget: rc $rc in ${el}s: '$(cat "$T/ran.log")' '$(last "$out")'"
+[ "$(vhist | cut -f8)" = fail ] && ok "a retry that never answers records the red as fail" || ko "retry hang history: '$(vhist)'"
+pgrep -f "sleep 2718" >/dev/null 2>&1 && ko "the retry's tree survived the deadline" || ok "the retry's tree is stopped at the deadline"
+
+vstub silent 'sleep 2718'
+bs=$T/bounded-gate; mkdir -p "$bs"
+s0=$(date +%s); out=$(cd "$R" && SG_STATE="$bs" SG_FAST_BASE=dev SG_GATE_BOUND_SECONDS=2 SG_FAST_CMD="bash $T/silent.sh" SG_FAST_RETRY_CMD=false bash "$d/fast-gate.sh" 2>&1); rc=$?; el=$(( $(date +%s) - s0 ))
+bh=$(tail -n 1 "$bs/gate-history")
+[ $rc = 4 ] && [ "$el" -lt 20 ] && case "$(last "$out")" in *bounded*) true;; *) false;; esac \
+  && ok "a battery that reports nothing and hangs is bounded, never a pass (${el}s)" || ko "silent hang: rc $rc, last '$(last "$out")'"
+[ "$(printf '%s' "$bh" | cut -f8)" = unproven ] && case "$(printf '%s' "$bh" | cut -f9)" in bounded*) true;; *) false;; esac \
+  && ok "the bounded attempt is recorded as bounded and unproven" || ko "bounded history: '$bh'"
+pgrep -f "sleep 2718" >/dev/null 2>&1 && ko "the silent battery's tree survived the deadline" || ok "the silent battery's tree is stopped at the deadline"
 
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
+pkill -f "sleep 2718" 2>/dev/null   # a red run leaves the hang its case started
 rm -rf "$T"; exit $fail

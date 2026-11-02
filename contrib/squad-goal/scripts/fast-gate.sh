@@ -13,6 +13,10 @@
 # tool is absent (spec 1163). Exit 0 is pass and 1 is fail; 2 and 4 are unproven and hold landing. The verdict, one of pass, fail
 # or unproven with its reason and the checks that ran, goes to the history line through GATE_OUTCOME_FILE.
 # A pass is kept under its key (#955), so a second gate at the same key runs no battery; a red is never kept. SG_FAST_MEMO=0 turns it off.
+# One deadline covers the battery and its retry (#1171): gate.sh hands the clock down, and a direct run starts its own. Past it the
+# battery's tree is stopped and the log decides: a class it already named is the gate's answer, so a failing test printed before
+# the hang ends fail, and an attempt that reported nothing is bounded and unproven, never a pass. A retry spends the same clock,
+# and a retry the deadline stops never clears the red the battery named (#1170).
 here="$(cd "$(dirname "$0")" && pwd)"
 base=${SG_FAST_BASE:-origin/${SG_BASE:-dev}}
 # The base battery is one definition (base-battery.sh), the one branchland.sh's landing check and wave.sh's tip check run
@@ -97,11 +101,55 @@ gcd=$(git rev-parse --git-common-dir 2>/dev/null); [ -n "$gcd" ] && gcd=$(cd "$t
 # The name is the real repository, the tip and a pid: every child runs in ws/target-<child>, so a worktree basename collides
 # across runs, and two runs at one short sha would write this log at the same time (#945).
 log=$logdir/fast-gate-$(printf '%s' "${gcd:-$top}" | cksum | cut -d' ' -f1)-$(git rev-parse --short HEAD 2>/dev/null || echo x)-$$.log
+# (#1171) One clock covers the battery and its retry. gate.sh starts it when it takes the lock and hands the deadline down;
+# a gate run without that wrapper starts its own. Past the deadline the battery's whole tree is stopped, and the log it wrote
+# decides: a class it already named is the gate's answer (a red a check reported survives the kill), and an attempt that
+# reported nothing is bounded and unproven, never a pass.
+bound=${GATE_BOUND_SECONDS:-${SG_GATE_BOUND_SECONDS:-900}}; case $bound in ''|*[!0-9]*|0) bound=900;; esac
+deadline=${GATE_DEADLINE_EPOCH:-$(( $(date +%s) + bound ))}
+left() { local l=$(( deadline - $(date +%s) )); [ "$l" -lt 1 ] && l=1; echo "$l"; }
+tree_pids() {  # <pid>: the pid and every descendant it started, children first
+  local c; for c in $(pgrep -P "$1" 2>/dev/null); do tree_pids "$c"; done; printf '%s\n' "$1"
+}
+stop_tree() {  # <pid>: the tree as it stands now, TERM then KILL, so a child that ignores TERM still goes
+  local list x; list=$(mktemp "${TMPDIR:-/tmp}/fg-stop.XXXXXX" 2>/dev/null)
+  if [ -z "$list" ]; then kill -TERM "$1" 2>/dev/null; sleep 2; kill -KILL "$1" 2>/dev/null; return 0; fi
+  tree_pids "$1" > "$list"
+  while read -r x; do [ -n "$x" ] && kill -TERM "$x" 2>/dev/null; done < "$list"; sleep 2
+  while read -r x; do [ -n "$x" ] && kill -KILL "$x" 2>/dev/null; done < "$list"
+  rm -f "$list"
+}
+bounded() {  # <seconds> <command...>: 124 says the deadline stopped it and its whole tree; 0 or less runs with no bound
+  local b=$1 p w mark s rc; shift; s=$(date +%s)
+  if [ "$b" -le 0 ] 2>/dev/null; then "$@"; return $?; fi
+  mark=$(mktemp "${TMPDIR:-/tmp}/fg-bound.XXXXXX" 2>/dev/null) || { "$@"; return $?; }; rm -f "$mark"
+  "$@" & p=$!
+  ( sleep "$b"; kill -0 $$ 2>/dev/null || exit 0; [ $(( $(date +%s) - s )) -ge "$b" ] || exit 0; : > "$mark"
+    stop_tree "$p" ) >/dev/null 2>&1 & w=$!
+  wait "$p" 2>/dev/null; rc=$?
+  kill "$w" 2>/dev/null; wait "$w" 2>/dev/null
+  if [ -e "$mark" ]; then rm -f "$mark"; return 124; fi
+  rm -f "$mark"; return $rc
+}
 for try in 1 2; do
   lg=$log; [ $try = 1 ] || lg=${log%.log}-retry.log
-  bash -c "$fastcmd" > "$lg" 2>&1 && break
+  bounded "$(left)" bash -c "$fastcmd" > "$lg" 2>&1 && break
   rc=$?; tail -n 5 "$lg"
   c=$(classify "$lg" "$rc"); cls=${c%% *}; detail=${c#* }
+  if [ "$rc" = 124 ]; then
+    case $cls in
+      absent)
+        case $detail in ruff*) r=- n="ruff mypy pytest";; mypy*) r=ruff n="mypy pytest";; *) r="ruff mypy" n=pytest;; esac
+        verdict unproven "$detail" "$r" "$n"; echo "fast-gate: $cls: $detail; the battery passed its ${bound}s deadline ($lg)"; exit 4;;
+      lint|type|collection|pytest)
+        case $cls in lint) r=ruff n="mypy pytest";; type) r="ruff mypy" n=pytest;; *) r="ruff mypy pytest" n=-;; esac
+        verdict fail "$detail" "$r" "$n"
+        echo "fast-gate: $cls: $detail; the battery passed its ${bound}s deadline with the defect already reported ($lg)"; exit 1;;
+      *)
+        verdict unproven "bounded: the battery passed its ${bound}s deadline and named no defect" unknown unknown
+        echo "fast-gate: bounded: the battery passed its ${bound}s deadline and named no defect, so the gate does not pass ($lg)"; exit 4;;
+    esac
+  fi
   case $cls in
     absent)
       case $detail in ruff*) r=- n="ruff mypy pytest";; mypy*) r=ruff n="mypy pytest";; *) r="ruff mypy" n=pytest;; esac
@@ -111,10 +159,13 @@ for try in 1 2; do
       verdict unproven "$detail" unknown unknown
       echo "fast-gate: $cls: $detail; inconclusive twice, so the gate does not pass and the landing holds ($lg)"; exit 4;;
     pytest)
+      # The retry spends the same clock: a retry that outlives it never clears the red the battery named.
       # shellcheck disable=SC2086  # one word per test id; set -f keeps a parametrized id such as t[a.sh] from globbing
-      set -f; if bash -c "$retrycmd \"\$@\"" retry $(ids_of "$lg") >> "$lg" 2>&1; then set +f
+      set -f; bounded "$(left)" bash -c "$retrycmd \"\$@\"" retry $(ids_of "$lg") >> "$lg" 2>&1; rrc=$?; set +f
+      if [ $rrc = 0 ]; then
         echo "fast-gate: the base battery failed under load and its failed tests passed alone: saturation, not a defect ($lg)"; break; fi
       verdict fail "$detail" "ruff mypy pytest" -
+      [ $rrc = 124 ] && { echo "fast-gate: pytest: $detail; the retry outlived the ${bound}s deadline, so the red stands ($lg)"; exit 1; }
       echo "fast-gate: pytest: $detail, and they fail alone too ($lg)"; exit 1;;
     lint|type|collection)
       case $cls in lint) r=ruff n="mypy pytest";; type) r="ruff mypy" n=pytest;; *) r="ruff mypy pytest" n=-;; esac

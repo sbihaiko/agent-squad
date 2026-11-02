@@ -40,7 +40,7 @@ hn0=$(wc -l < "$H" 2>/dev/null | tr -d ' '); hn0=${hn0:-0}; cp "$H" "$T/h0" 2>/d
 (cd "$T/w" && SG_GATE_KIND=fast bash "$d/gate.sh" sh -c 'sleep 1; echo "selected 2 files" > "$GATE_SELECT_FILE"; echo delta > "$GATE_SCOPE_FILE"'); rc=$?
 IFS=$'\t' read -r fin kind res at start _ < <(tail -n 1 "$H"); sel=$(tail -n 1 "$H" | cut -f6); scope=$(tail -n 1 "$H" | cut -f7)
 [ $rc = 0 ] && [ "$kind" = fast ] && [ "$res" = pass ] && [ "$at" = "$sha" ] && ok "a finished gate appends one history line: kind, result and sha" || ko "history line: '$(tail -n 1 "$H" 2>&1)'"
-[ "$(tail -n 1 "$H" | tr -cd '\t' | wc -c | tr -d ' ')" = 11 ] && ok "the history line has twelve fields: the selection and scope, then the verdict and the slots" || ko "history fields: '$(tail -n 1 "$H")'"
+[ "$(tail -n 1 "$H" | tr -cd '\t' | wc -c | tr -d ' ')" = 12 ] && ok "the history line has thirteen fields: the selection and scope, the verdict, the slots, then how a red cleared" || ko "history fields: '$(tail -n 1 "$H")'"
 [ "$sel $scope" = "selected 2 files delta" ] && ok "the history line carries the gate's selection and its scope" || ko "history selection: '$sel' scope: '$scope'"
 IFS=$'\t' read -r _ kind res _ sel scope < "$S" 2>/dev/null
 [ "$sel $scope" = "selected 2 files delta" ] && ok "the status line carries the selection and the scope" || ko "status selection: '$(cat "$S" 2>&1)'"
@@ -48,7 +48,7 @@ case "$start" in ''|*[!0-9]*) ko "the history line carries no start epoch: '$sta
 cmp -s "$T/h0" <(head -n "$hn0" "$H") && [ "$(wc -l < "$H" | tr -d ' ')" = "$((hn0 + 1))" ] && ok "the history is append-only: earlier lines are untouched" || ko "history was rewritten"
 
 (cd "$T/w" && SG_GATE_KIND=full bash "$d/gate.sh" sh -c 'exit 7'); rc=$?
-[ "$(tail -n 1 "$H" | tr -cd '\t' | wc -c | tr -d ' ')" = 11 ] && [ "$(tail -n 1 "$H" | cut -f2,3)" = "$(printf 'full\tfail')" ] && ok "a gate with no selection writes an empty selection field" || ko "fail history: '$(tail -n 1 "$H")'"
+[ "$(tail -n 1 "$H" | tr -cd '\t' | wc -c | tr -d ' ')" = 12 ] && [ "$(tail -n 1 "$H" | cut -f2,3)" = "$(printf 'full\tfail')" ] && ok "a gate with no selection writes an empty selection field" || ko "fail history: '$(tail -n 1 "$H")'"
 
 # --- the verdict (spec 1163): the outcome, its one reason, the checks that ran and the ones that did not, and the slots ---
 (cd "$T/w" && SG_GATE_KIND=fast bash "$d/gate.sh" sh -c 'printf "unproven\tmypy is not installed\truff\tmypy pytest\n" > "$GATE_OUTCOME_FILE"; exit 4'); rc=$?
@@ -114,5 +114,126 @@ held=$(tail -n 2 "$H" | head -n 1); hfin=${held%%$'\t'*}; hstart=$(printf '%s' "
 [ "$((hfin - hstart))" -ge 2 ] && ok "the held gate's history line shows its run time" || ko "held gate duration: '$held'"
 case "$fin$start" in *[!0-9]*|'') ko "the queued gate has no history line: '$(tail -n 1 "$H" 2>&1)'";; *) [ "$((fin - start))" -lt 2 ] && ok "a gate that waited for the lock logs only its run time, not the wait" || ko "queued gate logged its wait: fin $fin start $start";; esac
 
+# --- a measured red survives (spec 1163, #1170): a timeout, a retry, a fallback, a later attempt of another scope and a
+# second inconclusive attempt never clear it. Only a covered pass on the same tree (green) or a pass on a descendant (fix)
+# clears it, and the red's record names which of the two did. A gate that names no check is no measured red: the simple
+# exit-code fails above never stand as one.
+RS=$T/red; mkdir -p "$RS"
+cat > "$T/red-delta.sh" <<'S'
+#!/bin/bash
+printf 'fail\tpytest tests/test_a.py::test_one\truff mypy pytest\t-\n' > "$GATE_OUTCOME_FILE"
+printf 'delta\n' > "$GATE_SCOPE_FILE"
+exit 1
+S
+cat > "$T/red-full.sh" <<'S'
+#!/bin/bash
+printf 'fail\tpytest tests/test_a.py::test_one\truff mypy pytest\t-\n' > "$GATE_OUTCOME_FILE"
+printf 'full\n' > "$GATE_SCOPE_FILE"
+exit 1
+S
+cat > "$T/green-delta.sh" <<'S'
+#!/bin/bash
+printf 'pass\t-\truff mypy pytest\t-\n' > "$GATE_OUTCOME_FILE"
+printf 'delta\n' > "$GATE_SCOPE_FILE"
+exit 0
+S
+cat > "$T/green-full.sh" <<'S'
+#!/bin/bash
+printf 'pass\t-\truff mypy pytest\t-\n' > "$GATE_OUTCOME_FILE"
+printf 'full\n' > "$GATE_SCOPE_FILE"
+exit 0
+S
+rrun() { (cd "$T/w" && SG_STATE="$RS" SG_REPO=owner/repo SG_GATE_KIND=fast bash "$d/gate.sh" bash "$T/$1.sh" 2>&1); }
+rh() { tail -n 1 "$RS/gate-history"; }
+rfile() {  # <sha>: the standing red record for that tree, empty when none
+  local f; for f in "$RS"/gate-reds/*; do [ -f "$f" ] || continue; IFS=$'\t' read -r _ _ s _ < "$f"; [ "$s" = "$1" ] && { printf '%s\n' "$f"; return; }; done
+}
+rsha=$(git -C "$T/w" rev-parse HEAD)
+out=$(rrun red-delta); rc=$?
+[ $rc = 1 ] && [ "$(rh | cut -f8)" = fail ] && [ -n "$(rfile "$rsha")" ] && [ "$(rh | cut -f13)" = red ] \
+  && ok "a measured red is recorded, and the history names it red" || ko "red record: rc $rc, '$(rh)'"
+IFS=$'\t' read -r _ _ _ rsc rch _ rcl _ < "$(rfile "$rsha")" 2>/dev/null
+[ "$rsc $rch $rcl" = "delta ruff mypy pytest -" ] \
+  && ok "the red record names its tree's scope, the checks that reported it and that it stands" || ko "red file: '$(cat "$(rfile "$rsha")" 2>&1)'"
+out=$(rrun red-delta); rc=$?
+[ $rc = 1 ] && [ "$(rh | cut -f8)" = fail ] && [ "$(rh | cut -f13)" = red ] && [ -n "$(rfile "$rsha")" ] \
+  && ok "a red followed by another red on the same tree stands" || ko "second red: rc $rc, '$(rh)'"
+# A second inconclusive attempt on the same tree ends fail, and its reason names the red that stands.
+printf '#!/bin/bash\nprintf "unproven\\tmypy is not installed\\truff\\tmypy pytest\\n" > "$GATE_OUTCOME_FILE"\nprintf "delta\\n" > "$GATE_SCOPE_FILE"\nexit 4\n' > "$T/unproven-delta.sh"
+out=$(rrun unproven-delta); rc=$?
+[ $rc = 1 ] && [ "$(rh | cut -f8)" = fail ] && case "$(rh | cut -f9)" in *"red stands"*) true;; *) false;; esac \
+  && [ "$(rh | cut -f13)" = "red-stands $rsha" ] \
+  && ok "a red followed by an unproven attempt on the same tree ends fail, and the record names the red" || ko "red over unproven: rc $rc, '$(rh)'"
+# A pass of another scope does not clear it: the red measured the full tree, and a delta pass covers only the delta.
+out=$(rrun red-full); rc=$?
+out=$(rrun green-delta); rc=$?
+[ $rc = 1 ] && [ "$(rh | cut -f8)" = fail ] && [ "$(rh | cut -f13)" = "red-stands $rsha" ] \
+  && ok "a pass of another scope never clears a red" || ko "other scope: rc $rc, '$(rh)'"
+# A covered pass on the same tree clears it as green, and the record names the run that cleared it.
+out=$(SCOPE=full rrun green-full); rc=$?
+fin=$(rh | cut -f1)
+[ $rc = 0 ] && [ "$(rh | cut -f8)" = pass ] && [ "$(rh | cut -f13)" = "cleared-green $rsha" ] \
+  && ok "a red cleared by a covered pass on the same tree ends pass, and the record names the green run" || ko "green clear: rc $rc, '$(rh)'"
+[ -z "$(rfile "$rsha")" ] && [ "$(rh | cut -f1)" = "$fin" ] && ok "a cleared red leaves no standing record, and the clearing stays on the history line" \
+  || ko "cleared red still stands: '$(cat "$(rfile "$rsha")" 2>&1)'"
+# A red cleared by a fix: the red tree is an ancestor of the passing tree, and the record names the change that cleared it.
+out=$(rrun red-delta); rc=$?
+$G -C "$T/w" commit -q --allow-empty -m "the fix"
+fixed=$(git -C "$T/w" rev-parse HEAD)
+out=$(rrun green-delta); rc=$?
+[ $rc = 0 ] && [ "$(rh | cut -f13)" = "cleared-fix $rsha..$fixed" ] \
+  && ok "a red cleared by a fix on a descendant names the change that cleared it" || ko "fix clear: rc $rc, '$(rh)'"
+[ -z "$(rfile "$rsha")" ] && ok "the fixed red leaves no standing record, and the history names the change that cleared it" \
+  || ko "fixed red still stands: '$(cat "$(rfile "$rsha")" 2>&1)'"
+
+# --- one deadline covers the whole attempt (#1171): the clock starts when the gate takes the lock, the gate's own tree is
+# stopped at the deadline, and the outcome is bounded unless a check already reported a defect or a red stands.
+DB=$T/deadline; mkdir -p "$DB"
+cat > "$T/defect-hang.sh" <<'S'
+#!/bin/bash
+printf 'fail\tpytest tests/test_h.py::test_hang\truff mypy pytest\t-\n' > "$GATE_OUTCOME_FILE"
+sleep 2718 &
+sleep 2718
+S
+cat > "$T/plain-hang.sh" <<'S'
+#!/bin/bash
+sleep 2718
+S
+# The case itself must end even when the code under test never does: a hard bound kills the gate it started, so a red run
+# reports FAIL lines instead of hanging the suite.
+bg() {  # <seconds> <out> <command...>: print the command's rc, 124 when the bound killed it
+  local b=$1 o=$2 p w rc; shift 2
+  "$@" > "$o" 2>&1 & p=$!
+  ( sleep "$b"; kill -TERM "$p" 2>/dev/null; sleep 1; kill -KILL "$p" 2>/dev/null ) >/dev/null 2>&1 & w=$!
+  wait "$p" 2>/dev/null; rc=$?
+  kill "$w" 2>/dev/null; wait "$w" 2>/dev/null
+  printf '%s\n' "$rc"
+}
+dst=$DB
+drun() { rc=$(bg 12 "$T/drun.out" env SG_STATE="$dst" SG_REPO=owner/repo SG_GATE_KIND=fast SG_GATE_BOUND_SECONDS=2 \
+  bash -c "cd '$T/w' && exec bash '$d/gate.sh' bash '$T/$1.sh'"); out=$(cat "$T/drun.out"); }
+s0=$(date +%s); drun defect-hang; el=$(( $(date +%s) - s0 ))
+[ "$el" -lt 20 ] && ok "the gate ends at its deadline instead of waiting for its tree (${el}s)" || ko "the deadline did not bound the gate (${el}s)"
+dh=$(tail -n 1 "$DB/gate-history")
+[ "$(printf '%s' "$dh" | cut -f8)" = fail ] && [ "$(printf '%s' "$dh" | cut -f9)" = "pytest tests/test_h.py::test_hang" ] \
+  && ok "a failing test followed by a hang at the deadline ends fail, with the defect's reason" || ko "defect at the deadline: rc $rc, '$dh'"
+pgrep -f "sleep 2718" >/dev/null 2>&1 && ko "a descendant process survived the deadline" || ok "no descendant process survives the deadline"
+# A red that stands is not cleared by a bounded attempt on the same tree: it ends fail, and the record says so.
+drun plain-hang
+bh=$(tail -n 1 "$DB/gate-history")
+case "$(printf '%s' "$bh" | cut -f13)" in red-stands*) bstand=1;; *) bstand=0;; esac
+[ $rc = 1 ] && [ "$(printf '%s' "$bh" | cut -f8)" = fail ] && [ $bstand = 1 ] \
+  && ok "a bounded attempt never clears a red: it ends fail" || ko "bounded over red: rc $rc, '$bh'"
+# With no red standing, the same bounded attempt is unproven and bounded, never a pass, and its exit is the unproven one.
+DB2=$T/deadline-plain; mkdir -p "$DB2"; dst=$DB2
+drun plain-hang
+bh=$(tail -n 1 "$DB2/gate-history")
+[ $rc = 4 ] && [ "$(printf '%s' "$bh" | cut -f8)" = unproven ] && case "$(printf '%s' "$bh" | cut -f9)" in bounded*) true;; *) false;; esac \
+  && ok "a bounded attempt is recorded as bounded, never as a pass, and exits unproven" || ko "bounded plain: rc $rc, '$bh'"
+IFS=$'\t' read -r _ _ bres _ < "$DB2/gate-status" 2>/dev/null
+[ "$bres" = fail ] && ok "a bounded attempt's status line is no pass" || ko "bounded status: '$(cat "$DB2/gate-status" 2>&1)'"
+pgrep -f "sleep 2718" >/dev/null 2>&1 && ko "a descendant process survived the second deadline" || ok "the second bounded attempt leaves no descendant"
+
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
+pkill -f "sleep 2718" 2>/dev/null   # a red run leaves the hang its case started
 rm -rf "$T"; exit $fail
