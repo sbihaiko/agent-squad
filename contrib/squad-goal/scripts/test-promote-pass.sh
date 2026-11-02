@@ -9,6 +9,9 @@ d=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); fail=0; ok() { echo "ok   $1";
 G="git -c user.email=a@b -c user.name=t"; R=$T/remote.git
 export SG_STATE=$T/st SG_PROMOTE_REMOTE=$R SG_REPO=x/emu GIT_TERMINAL_PROMPT=0 SG_GHREAD=true SG_PROMOTE_QUIET_SECONDS=0 SERIAL_POLL_SECONDS=0.2
 export SG_PROMOTE_LOAD_LIMIT=1000000   # the box the suite runs on is never idle: the load case below names its own bound
+# (#1192) The CI wait is disabled unless a case proves it: every fixture tip is seconds old, so the production default would
+# make every case wait for a CI that never comes. The wait's own cases name the bound they test.
+export SG_PROMOTE_CI_WAIT=0
 mkdir -p "$SG_STATE" "$T/bin"
 git init -q --bare "$R"; git init -q "$T/w"; W="$G -C $T/w"
 $W checkout -q -b main; $W commit -q --allow-empty -m base; $W remote add origin "$R"
@@ -258,8 +261,23 @@ shards "$tr" success success failure success; SG_GHREAD="$T/bin/ghread" pass; rc
 /usr/bin/grep "promote-pass: $tr" "$SG_STATE/promote.log" | /usr/bin/grep -q "full-proof shard 2" && ok "the refusal names the red shard" \
   || ko "red shard line: $(/usr/bin/grep "$tr" "$SG_STATE/promote.log")"
 
+# (#1192) A tip whose CI has not answered yet is measured by waiting, never by a local suite: the suite saturates the machine
+# for eleven minutes, and the loop's own runs then die at the takeover bound. Past SG_PROMOTE_CI_WAIT the suite answers, so a CI
+# that never reports never holds delivery.
+adv dev ci-pending; tp=$(tip dev); before=$(tip stg); n=$(runs)
+shards "$tp" success success running running; SG_PROMOTE_CI_WAIT=900 SG_GHREAD="$T/bin/ghread" pass; rc=$?
+[ $rc = 0 ] && [ "$(tip stg)" = "$before" ] && [ "$(runs)" = "$n" ] && ok "a tip whose CI is in flight runs no suite: the pass waits" \
+  || ko "CI in flight: rc $rc, stg $(tip stg), runs $(runs) was $n, out '$(cat "$T/out")'"
+/usr/bin/grep -q "promote-pass: $tp waiting for CI" "$SG_STATE/promote.log" && ok "the wait is one line, and names the tip" \
+  || ko "no wait line: $(/usr/bin/grep "$tp" "$SG_STATE/promote.log")"
+echo 0 > "$T/suite-rc"; before=$(tip stg); n=$(runs)
+SG_PROMOTE_CI_WAIT=0 SG_GHREAD="$T/bin/ghread" pass; rc=$?
+[ $rc = 0 ] && [ "$(tip stg)" = "$tp" ] && [ "$(runs)" = "$((n + 1))" ] && ok "past the CI wait bound the local suite answers" \
+  || ko "past the CI wait bound: rc $rc, stg $(tip stg), runs $(runs) was $n, out '$(cat "$T/out")'"
+
+# The suite is the fallback for a CI that cannot answer: a fixture that has waited past the bound still runs it.
 adv dev shard-unfinished; tu=$(tip dev); echo 0 > "$T/suite-rc"; before=$(tip stg); n=$(runs)
-shards "$tu" success success running timed_out; SG_GHREAD="$T/bin/ghread" pass; rc=$?
+shards "$tu" success success running timed_out; SG_PROMOTE_CI_WAIT=0 SG_GHREAD="$T/bin/ghread" pass; rc=$?
 [ $rc = 0 ] && [ "$(tip stg)" = "$tu" ] && [ "$(runs)" = "$((n + 1))" ] && ok "unfinished and timed-out shards hold nothing: the local suite answers" \
   || ko "unfinished shards: rc $rc, stg $(tip stg), runs $(runs) was $n"
 /usr/bin/grep -q "promote-pass: $tu promoted: the local full suite answered" "$SG_STATE/promote.log" && ok "the record names the local full suite as the proof" \
