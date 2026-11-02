@@ -128,7 +128,7 @@ def test_the_fixed_facts_share_one_width_list_and_the_bar_is_fixed():
 def test_a_wave_lane_name_spans_the_whole_header_and_is_never_clipped(page):
     out = _header_rule([LANE_WAVE])
     row1 = out["headers"][0]["rows"][0]
-    assert [c["k"] for c in row1] == ["id"] and row1[0]["full"] is True, row1
+    assert row1[0]["full"] is True and row1[1]["text"] == "", row1
     _, headers = _drawn_headers(page, [LANE_WAVE])
     assert "lf lf-id full" in headers[0], headers[0]
     assert "SPEC 1158</span> · Wave 2" in headers[0], headers[0]
@@ -170,5 +170,5 @@ def test_the_facts_row_wraps_on_a_narrow_lane_instead_of_clipping():
 
 def test_the_page_draws_every_header_from_the_rule_layer_on_one_grid(page):
     assert "laneHead(l," in page, "the header no longer takes its facts from the rule layer"
-    assert "--lh-cols:${laneHeadCols" in page or "--lh-cols:${laneHeadRowCols" in page, "the lanes do not share one grid template"
+    assert "--lh-cols:${laneHeadGrid}" in page, "the lanes do not share one grid template"
     assert "${cl?m.cols.filter" not in page, "the counts are still drawn only for a collapsed lane"

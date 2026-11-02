@@ -99,25 +99,30 @@ groups.forEach(g=>g.items.forEach(x=>{if(x.sp){if(!ends.has(g.name)&&!specs.has(
   return{cols,vc,hc,lanes:list};
 }
 
-// The lane header is a table read down the column (#1158): one track per fact, and every lane's header takes the same
-// track list, so two specs compare down the page. Every fact is always answered, so a lane with less keeps its column.
+// The lane header is a table read down the column (#1158). Row 1 holds the spec number and the title; row 2 holds the
+// progress bar, fraction, chip and GitHub mark on fixed widths; row 3 holds the counts on one line. Every lane takes the
+// same widths, so two specs compare down the page. A wave lane's name spans the whole header, so it is never clipped.
 const laneHeadCols=[{k:"id",w:"7em",al:"flex-end"},{k:"title",w:"minmax(0,1fr)",al:"flex-start"},{k:"bar",w:"120px",al:"flex-start"},
-  {k:"frac",w:"4em",al:"flex-end"},{k:"counts",w:"8.5em",al:"flex-end"},{k:"chip",w:"6.5em",al:"center"},{k:"gh",w:"16px",al:"flex-end"}];
+  {k:"frac",w:"4em",al:"flex-end"},{k:"chip",w:"6.5em",al:"center"},{k:"gh",w:"16px",al:"flex-end"},{k:"counts",w:"auto",al:"flex-end"}];
+const laneHeadRows=[["id","title"],["bar","frac","chip","gh"],["counts"]];
+const laneHeadGrid=laneHeadRows[0].map(k=>laneHeadCols.find(c=>c.k===k).w).join(" ");
 // v names the three counted columns: { todo, doing, review }. A zero count is an en dash, so its row still stands.
+// Every lane keeps its counts row: a collapsed lane's only summary, and a zero dash keeps the row from moving.
 function laneHead(l,v){
   const fact=k=>({...laneHeadCols.find(c=>c.k===k)});
   const counted=l.kind==="s"||l.kind==="none";
   const idText=l.kind==="s"?"SPEC "+l.num:l.kind==="bugs"?"Loop bugs":l.kind==="sw"?l.sid+" · "+l.wl:l.title;
   const titleText=l.kind==="s"?l.title:l.kind==="bugs"?"defects of the loop itself: they halt dispatch, never a landing (ADR-0146)":l.kind==="none"?"bugs and single tickets":"";
   const count=n=>l.counts[n]?String(l.counts[n]):"–";
-  return{cells:[
-    {...fact("id"),text:idText},
-    {...fact("title"),text:titleText},
-    {...fact("bar"),on:counted,closed:l.closed,total:l.total,doing:l.doing,review:l.review},
-    {...fact("frac"),text:counted?l.closed+"/"+l.total:""},
-    {...fact("counts"),rows:[v.todo,v.doing,v.review].map(n=>[n,count(n)])},
-    {...fact("chip"),text:l.st||""},
-    {...fact("gh"),on:l.kind==="s"}]};
+  const cell={
+    id:{...fact("id"),text:idText,full:l.kind==="sw"},
+    title:{...fact("title"),text:l.kind==="sw"?"":titleText},
+    bar:{...fact("bar"),on:counted,closed:l.closed,total:l.total,doing:l.doing,review:l.review},
+    frac:{...fact("frac"),text:counted?l.closed+"/"+l.total:""},
+    chip:{...fact("chip"),text:l.st||""},
+    gh:{...fact("gh"),on:l.kind==="s"},
+    counts:{...fact("counts"),items:[v.todo,v.doing,v.review].map(n=>[n,count(n)])}};
+  return{rows:laneHeadRows.map(r=>r.map(k=>cell[k]))};
 }
 
 // A saved state from a control the board no longer has is dropped on load (#899): the labels filter, the Specs mode,
