@@ -2,6 +2,7 @@
 redaction step. The hub's routes call it; nothing else reads a session record, a token or a transcript.
 """
 import datetime, json, os, pathlib, re, stat, subprocess, sys, time
+import session_card
 
 ADDRESS = pathlib.Path(__file__).resolve().parent / "address.sh"
 SOCKET_DIRS = ("/tmp/cc-socks",)   # where Claude Code binds a session socket (docs/design/session-wire-protocol.md)
@@ -331,6 +332,26 @@ def conversation(profile, sid, before=None, profiles_of=profiles_of):
         if page is None: return None
         return {**page, "activity": read_activity(rec["cwd"], sid, rec["status"], [secret])}
     return None
+
+def pending_card(profile, sid, profiles_of=profiles_of):
+    """The question card a live session of this profile raised and has not had answered, or None (#1093). A session blocked on
+    its question writes nothing after it, so the transcript's tail holds the card."""
+    for rec, secret in live_sessions(profile, profiles_of):
+        if rec["sessionId"] != sid: continue
+        return session_card.pending(_transcript_tail(rec["cwd"], sid), lambda s: redact(s, [secret]))
+    return None
+
+def _transcript_tail(cwd, sid):
+    path = ["projects", re.sub(r"[^A-Za-z0-9]", "-", cwd), f"{sid}.jsonl"]
+    try: raw, start = _read_under_home(path, limit=TAIL_BYTES)
+    except OSError as e: _log(f"hub: transcript of session {sid} unreadable: {type(e).__name__}"); return []
+    lines = []
+    for i, piece in enumerate(raw.split(b"\n")):
+        if i == 0 and start: continue
+        try: obj = json.loads(piece)
+        except ValueError: continue
+        if isinstance(obj, dict): lines.append(obj)
+    return lines
 
 def live_sessions(profile, profiles_of=profiles_of):
     """Each record that passes every check and belongs to this profile, with its token: the one membership rule for the routes."""

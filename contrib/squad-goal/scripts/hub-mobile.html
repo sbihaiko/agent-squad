@@ -340,7 +340,12 @@ function drawQuestionCard(doc, onSubmit) {
   el.tabIndex = 0;
   let state = cardStart(doc);
   const act = a => { state = cardStep(doc, state, a); paint(); };
-  const submit = () => { const r = cardSubmit(doc, state); state = r.state; if (r.ok) onSubmit(r.answers); paint(); };
+  const submit = () => {
+    const r = cardSubmit(doc, state);
+    state = r.state;
+    if (r.ok) Promise.resolve(onSubmit(r.answers, state.answers.slice())).then(outcome => { if (outcome === "refused") { state = cardUnsent(state); paint(); } });
+    paint();
+  };
   const paint = () => el.replaceChildren(...qcardNodes(cardView(doc, state), act, submit));
   el.addEventListener("keydown", e => {
     const a = questionKey(e);
@@ -1281,9 +1286,33 @@ async function loadConversation() {
     if (fresh.length) { el.append(...fresh.map(turnRow)); termLast = keys[keys.length - 1]; }
     if (atEnd) el.scrollTop = el.scrollHeight;
     $("termview-older").hidden = termCursor === null;
+    await loadCard();
     $("termview-msg").textContent = "";
   } catch (e) { if (sid === termSid) $("termview-msg").textContent = e.message; }
   finally { termBusy = false; }
+}
+// The question card the open session waits on (#1093) belongs to the session: the page draws the one the hub reads, so a
+// card still pending when the page closed is answerable when it comes back.
+let termCard = null;   // { id, el } of the drawn card
+function dropCard() { if (termCard) termCard.el.remove(); termCard = null; }
+async function loadCard() {
+  const sid = termSid;
+  const { card } = await call("/api/sessions/card?sid=" + encodeURIComponent(sid));
+  if (sid !== termSid) return;
+  if (termCard && (!card || termCard.id !== card.id)) dropCard();
+  if (card && !termCard) termCard = { id: card.id, el: drawQuestionCard({ questions: card.questions }, (answers, picks) => answerCard(sid, card.id, picks)) };
+}
+async function answerCard(sid, id, picks) {
+  const say = msg => { if (sid === termSid) $("termview-sent").textContent = msg; };
+  say("Sending");
+  try {
+    const r = await fetch("/api/sessions/card/answer", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sid, card_id: id, answers: picks }) });
+    if (!r.ok) throw new Error("Not sent: the hub refused the request.");
+    const res = await r.json();
+    const word = { sent: "Sent as a message from another session", uncertain: "Uncertain: the send was interrupted", refused: "Refused: the send failed" }[res.status] || "Uncertain: the send was interrupted";
+    say(word + (res.reason ? " (" + res.reason + ")" : ""));
+    return res.status === "refused" ? "refused" : "sent";
+  } catch (err) { say(err.message); return "refused"; }
 }
 async function loadOlder() {
   if (termBusy || !termOpen() || termCursor === null) return;
@@ -1301,7 +1330,7 @@ async function loadOlder() {
 }
 function openConversation(sid, name) {
   keepDraft();
-  termSid = sid; termCursor = null; termLast = null;
+  termSid = sid; termCursor = null; termLast = null; dropCard();
   $("termview-turns").replaceChildren();
   $("termview-name").textContent = name;
   $("termview-older").hidden = true;
@@ -1310,7 +1339,7 @@ function openConversation(sid, name) {
   $("termview").hidden = false;
   loadConversation();
 }
-function closeConversation() { keepDraft(); $("termview").hidden = true; termSid = null; $("termview-turns").replaceChildren(); }
+function closeConversation() { keepDraft(); $("termview").hidden = true; termSid = null; dropCard(); $("termview-turns").replaceChildren(); }
 $("sessions").onclick = e => { const b = e.target.closest(".runrow"); if (b) openConversation(b.dataset.sid, b.dataset.name); };
 $("termview-back").onclick = closeConversation;
 $("termview-older").onclick = loadOlder;

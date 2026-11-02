@@ -55,6 +55,7 @@ const checks = [
   ["a Submit with every question answered returns the answers", `cardSubmit(${T1}, cardStep(${T1}, cardStart(${T1}), {act:"pick",index:1})).answers`, '[{"header":"Scope","label":"Wide"}]'],
   ["a cancelled card is never submitted", `(() => { const r = cardSubmit(${T1}, cardStep(${T1}, cardStart(${T1}), "cancel")); return [r.ok, r.why]; })()`, '[false,"cancelled"]'],
   ["a tab names the question it opens", `cardStep(${T3}, cardStart(${T3}), {act:"goto", index:2}).q`, "2"],
+  ["a refused send reopens the card with its picks", `(() => { const s = cardUnsent(cardSubmit(${T1}, cardStep(${T1}, cardStart(${T1}), {act:"pick",index:1})).state); return [s.sent, s.answers[0]]; })()`, "[false,1]"],
 ];
 let bad = 0;
 for (const [label, expr, want] of checks) {

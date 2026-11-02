@@ -6,6 +6,7 @@ import json
 import os
 import platform
 import pty
+import re
 import secrets
 import signal
 import socket
@@ -23,13 +24,19 @@ SECRET = "supervisor.secret"
 PIDFILE = "supervisor.pid"
 LEDGER = "sessions.jsonl"
 CLIENTS = "clients.json"
+GRANTS = "grants.json"
 AUDIT = "supervisor-audit.log"
 LOG = "supervisor.log"
 WINDOW = 1 << 16
+JOB = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}(?:#[1-9][0-9]{0,8})?")
 
 
 class Refused(Exception):
     pass
+
+
+def valid_job(job: str) -> bool:
+    return JOB.fullmatch(job) is not None
 
 
 def socket_path(state: Path) -> Path:
@@ -66,6 +73,11 @@ def _alive(pid: int) -> bool:
     except PermissionError:
         return True
     return True
+
+
+def _live(record: dict) -> bool:
+    current = lstart(record["pid"])
+    return bool(current) and current == record["lstart"]
 
 
 class Gate:
@@ -136,8 +148,9 @@ class Supervisor:
         self.secret = secrets.token_hex(32)
         self.gate = Gate(state / CLIENTS, self.secret, os.geteuid())
         self.sessions: dict[str, Session] = {}
+        self.attached: set[tuple[str, str]] = set()
         self.lock = threading.RLock()
-        self._end_lost_sessions()
+        self._settle_records()
 
     def _ledger(self, event: dict) -> None:
         with (self.state / LEDGER).open("a") as ledger:
@@ -147,40 +160,73 @@ class Supervisor:
         with self.lock, (self.state / AUDIT).open("a") as audit:
             audit.write(json.dumps({"ts": time.time(), "op": op, **fields}) + "\n")
 
-    def _end_lost_sessions(self) -> None:
+    def _records(self) -> dict[str, dict]:
         path = self.state / LEDGER
+        records: dict[str, dict] = {}
         if not path.exists():
-            return
-        open_sids = {}
+            return records
         for line in path.read_text().splitlines():
             event = json.loads(line)
             if event["event"] == "start":
-                open_sids[event["session"]] = True
-            elif event["event"] == "end":
-                open_sids.pop(event["session"], None)
-        for sid in open_sids:
-            self._ledger({"event": "end", "session": sid, "reason": "lost"})
+                records[event["session"]] = {**event, "end": None}
+            elif event["event"] == "end" and event["session"] in records:
+                records[event["session"]]["end"] = event
+        return records
 
-    def _live_job(self, job: str) -> bool:
-        return any(s.job == job and not s.closed for s in self.sessions.values())
+    def _settle_records(self) -> None:
+        for sid, record in self._records().items():
+            if record["end"] is None and not _live(record):
+                self._ledger({"event": "end", "session": sid, "reason": "lost"})
 
-    def start(self, job: str, argv: list[str], cwd: str | None) -> str:
+    def _live_holder(self, job: str) -> dict | None:
+        for record in self._records().values():
+            if record["job"] == job and record["end"] is None and _live(record):
+                return record
+        return None
+
+    def _granted(self, live: str, new: str | None) -> bool:
+        path = self.state / GRANTS
+        if new is None or not path.exists():
+            return False
+        try:
+            grants = json.loads(path.read_text())
+        except ValueError:
+            return False
+        if not isinstance(grants, list):
+            return False
+        return any(isinstance(g, dict) and g.get("replaces") == live and g.get("with") == new for g in grants)
+
+    def _attach(self, sid: str, transport: str) -> None:
         with self.lock:
-            if self._live_job(job):
-                raise Refused(f"job {job} already has a live session")
+            if sid not in self.sessions or (sid, transport) in self.attached:
+                return
+            self.attached.add((sid, transport))
+            self._ledger({"event": "attach", "session": sid, "transport": transport})
+
+    def start(self, job: str, argv: list[str], cwd: str | None, session: str | None = None) -> str:
+        if not valid_job(job):
+            raise Refused(f"job name {job!r} is not valid")
+        with self.lock:
+            holder = self._live_holder(job)
+            if holder is not None and not self._granted(holder["session"], session):
+                raise Refused(f"job {job} already has live session {holder['session']}")
+            sid = session or uuid.uuid4().hex
+            if sid in self._records():
+                raise Refused(f"session {sid} is already recorded")
             master, slave = pty.openpty()
             try:
+                terminal = os.ttyname(slave)
                 proc = subprocess.Popen(argv, stdin=slave, stdout=slave, stderr=slave, cwd=cwd,
                                         start_new_session=True, close_fds=True)
             finally:
                 os.close(slave)
-            sid = uuid.uuid4().hex
-            session = Session(sid, job, proc, master)
-            self.sessions[sid] = session
+            running = Session(sid, job, proc, master)
+            self.sessions[sid] = running
             self._ledger({"event": "start", "session": sid, "job": job, "pid": proc.pid,
-                          "lstart": lstart(proc.pid), "argv": argv})
-            session.pump.start()
-        threading.Thread(target=self._reap, args=(session,), daemon=True).start()
+                          "lstart": lstart(proc.pid), "terminal": terminal, "cwd": cwd or os.getcwd(),
+                          "argv": argv})
+            running.pump.start()
+        threading.Thread(target=self._reap, args=(running,), daemon=True).start()
         return sid
 
     def _reap(self, session: Session) -> None:
@@ -230,17 +276,20 @@ class Supervisor:
             self._audit("refused", peer_pid=pid, peer_uid=uid, reason=reason)
             return {"ok": False, "reason": reason}
         try:
-            return {"ok": True, **self._op(request)}
+            return {"ok": True, **self._op(request, transport="unix")}
         except Refused as error:
             self._audit("refused", peer_pid=pid, peer_uid=uid, reason=str(error))
             return {"ok": False, "reason": str(error)}
 
-    def _op(self, request: dict) -> dict:
+    def _op(self, request: dict, transport: str) -> dict:
         op = request.get("op")
         if op == "ping":
             return {}
         if op == "start":
-            return {"session": self.start(request["job"], request["argv"], request.get("cwd"))}
+            return {"session": self.start(request["job"], request["argv"], request.get("cwd"),
+                                          request.get("session"))}
+        if op in ("read", "write", "stop"):
+            self._attach(request["session"], transport)
         if op == "read":
             return self.read(request["session"], int(request["offset"]))
         if op == "write":
