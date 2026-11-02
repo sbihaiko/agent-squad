@@ -31,9 +31,10 @@ printf '4270 passed, 25 skipped in 12.34s\n'; exit 0
 EOF
   chmod +x "$T/$m.sh"; done
 printf '#!/bin/bash\necho "$*" >> "%s/notify.log"\n' "$T" > "$T/notify.sh"; chmod +x "$T/notify.sh"
+printf '#!/bin/bash\necho "$*" >> "%s/board.log"\n' "$T" > "$T/board.sh"; chmod +x "$T/board.sh"
 export T
 # ng [VAR=val...]: one nightly run against the fixture, its own state, tree and remote
-ng() { env "$@" SG_STATE="$ST" SG_REPO=o/r SG_BASE=dev SG_NIGHTLY_REMOTE="$T/origin.git" SG_NIGHTLY_TREE="$T/tree" \
+ng() { env "$@" SG_STATE="$ST" SG_REPO=o/r SG_BASE=dev SG_OWNER=o SG_PROJECT=4 BOARD="$T/board.sh" SG_NIGHTLY_REMOTE="$T/origin.git" SG_NIGHTLY_TREE="$T/tree" \
   SG_NIGHTLY_PARALLEL="$T/parallel.sh" SG_NIGHTLY_SERIAL="$T/serial.sh" HEALTH_NOTIFY="$T/notify.sh" bash "$S/nightly.sh" 2>&1; }
 rec() { r_ts= r_res= r_sha= r_par= r_ser= r_ids=
   [ -f "$ST/nightly-result" ] && IFS=$'\t' read -r r_ts r_res r_sha r_par r_ser r_ids < "$ST/nightly-result"; }
@@ -240,10 +241,12 @@ IFS=$'\t' read -r _ st_t st_r < "$ST/promote-bound-settled" 2>/dev/null
 #     $SG_STATE/obligations, runs the named checks over the named tree, and writes one settlement line in
 #     $SG_STATE/obligation-settled. The stub checks log the tree and its HEAD, so credit and tree are read from the run.
 OBL=$ST/obligations; SET=$ST/obligation-settled
+obkey() { printf '%s\t%s\t%s' "$1" "$2" "$3" | cksum | cut -d' ' -f1; }   # the gate's own key for one obligation entry
 obwrite() {  # <repository> <sha> <base> <checks> <scope> <deadline>: the gate's own key for one obligation entry
   mkdir -p "$OBL"
-  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" "$6" > "$OBL/$(printf '%s\t%s\t%s' "$1" "$2" "$3" | cksum | cut -d' ' -f1)"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" "$6" > "$OBL/$(obkey "$1" "$2" "$3")"
 }
+proofmap() { mkdir -p "$ST/proof-card/$1"; : > "$ST/proof-card/$1/$2"; }   # wave.sh's card mapping: issue, obligation key
 cat > "$T/settle.sh" <<EOF
 #!/bin/bash
 echo "\$1 \$PWD \$(git rev-parse HEAD 2>/dev/null)" >> "$T/settle.log"
@@ -379,7 +382,6 @@ case $a in *OBLIGATION*unmeasured*"${newtip:0:7}"*) ok "the unmeasured obligatio
 #     a long-dead tree can never stop every dispatch.
 obclean
 mkdir -p "$SET"
-obkey() { printf '%s\t%s\t%s' "$1" "$2" "$3" | cksum | cut -d' ' -f1; }
 dead=$(( $(date +%s) - 90000 ))
 printf '%s\t%s\t%s\t%s\t%s\t%s\tred\t%s\n' "$dead" o/r "$sha" - full ruff "$dead@$sha" > "$SET/$(obkey o/r "$sha" -)"
 printf '%s\t%s\t%s\t%s\t%s\t%s\tred\t%s\n' "$(( $(date +%s) - 60 ))" o/r "$newtip" - full ruff "x@$newtip" > "$SET/$(obkey o/r "$newtip" -)"
@@ -401,7 +403,41 @@ o=$(env -u SG_CHECKOUT SG_STATE="$ST" bash -c '. "$0"; gh_dispatch_hold' "$S/ghc
   || ko "a current red did not hold: '$o'"
 rm -rf "$OBL" "$SET"
 
-# 21) (#1201) a mode that ends before pytest writes its summary did not fail: it never finished. The parallel mode below is
+# 21) (#1176) the settlement clears or holds the card fact of an unproven landing. wave.sh records the issue and the
+#     obligation key in $ST/proof-card/<issue>/<key>; a green settlement removes the key and, when no other obligation is
+#     open for the issue, clears the fact; a red settlement holds the card and names the defect. A settlement no card
+#     mapping names writes nothing.
+obclean; rm -rf "$ST/proof-card"; : > "$T/board.log"
+obwrite o/r "$newtip" "-" "ruff" delta "$(( $(date +%s) + 900 ))"; k=$(obkey o/r "$newtip" -)
+proofmap 7 "$k"
+out=$(ng "SG_SETTLE_RUFF=$T/settle.sh ruff"); rc=$?
+[ "$rc" = 0 ] && /usr/bin/grep -qx -- '--proof o 4 7 green' "$T/board.log" && [ ! -e "$ST/proof-card/7" ] \
+  && ok "a green settlement clears the card fact and its mapping" \
+  || ko "green clearance: rc $rc, board '$(cat "$T/board.log" 2>/dev/null)', mapping '$(/bin/ls "$ST/proof-card" 2>&1)'"
+
+obclean; rm -rf "$ST/proof-card"; : > "$T/board.log"
+obwrite o/r "$newtip" "-" "ruff" delta "$(( $(date +%s) + 900 ))"; proofmap 8 "$(obkey o/r "$newtip" -)"
+out=$(ng "SG_SETTLE_RUFF=$T/settle.sh ruff" FAIL_SETTLE=ruff); rc=$?
+[ "$rc" = 1 ] && /usr/bin/grep -qx -- '--proof o 4 8 red' "$T/board.log" && [ ! -e "$ST/proof-card/8" ] \
+  && ok "a red settlement holds the card and answers its mapping" \
+  || ko "red hold: rc $rc, board '$(cat "$T/board.log" 2>/dev/null)', mapping '$(/bin/ls "$ST/proof-card" 2>&1)'"
+
+obclean; rm -rf "$ST/proof-card"; : > "$T/board.log"
+obwrite o/r "$newtip" "-" "ruff" delta "$(( $(date +%s) + 900 ))"; k=$(obkey o/r "$newtip" -)
+proofmap 9 "$k"; proofmap 9 another-open-entry
+out=$(ng "SG_SETTLE_RUFF=$T/settle.sh ruff"); rc=$?
+[ "$rc" = 0 ] && [ -e "$ST/proof-card/9/another-open-entry" ] && [ ! -e "$ST/proof-card/9/$k" ] && [ ! -s "$T/board.log" ] \
+  && ok "a green settlement keeps the fact while another obligation of the issue is open" \
+  || ko "other open entry: rc $rc, mapping '$(/bin/ls "$ST/proof-card/9" 2>&1)', board '$(cat "$T/board.log" 2>/dev/null)'"
+
+obclean; rm -rf "$ST/proof-card"; : > "$T/board.log"
+obwrite o/r "$newtip" "-" "ruff" delta "$(( $(date +%s) + 900 ))"
+out=$(ng "SG_SETTLE_RUFF=$T/settle.sh ruff"); rc=$?
+[ "$rc" = 0 ] && [ ! -s "$T/board.log" ] && ok "a settlement no card mapping names writes no card fact" \
+  || ko "unmapped settlement: rc $rc, board '$(cat "$T/board.log" 2>/dev/null)'"
+rm -rf "$OBL" "$SET" "$ST/proof-card"
+
+# 22) (#1201) a mode that ends before pytest writes its summary did not fail: it never finished. The parallel mode below is
 #     what the nightly logs showed -- pytest's dots, then the workers' old-style hookwrapper warning at
 #     pytest_sessionfinish and no `... in Ns` line, the mode's process ended by signal 15 (143). Such a mode is bounded,
 #     never a red with an empty id list, and the alert names the mode, the signal and the cause instead of "no failing
@@ -427,7 +463,7 @@ rec
 /usr/bin/grep -qi "no failing test named" "$ST/alerts.log" 2>/dev/null && ko "the alert still reads 'no failing test named'" || ok "the alert never says 'no failing test named'"
 hold >/dev/null; [ $? = 1 ] && ok "a bounded record never holds dispatch" || ko "a bounded record held dispatch: $(hold)"
 
-# 22) (#1201) a mode that ends without a summary once is run once more: the end may be transient, and the retry's own
+# 23) (#1201) a mode that ends without a summary once is run once more: the end may be transient, and the retry's own
 #     summary is the reading. The first attempt's log is kept beside the second, never overwritten.
 cat > "$T/retry.sh" <<EOF
 #!/bin/bash
@@ -448,7 +484,7 @@ rec
 /usr/bin/grep -q "cannot send" "$ST/nightly-parallel.log.first" 2>/dev/null && ok "the first attempt's log is kept beside the second" || ko "the first attempt's log is gone: '$(/bin/ls "$ST" 2>&1)'"
 [ ! -e "$ST/alerts.log" ] && ok "a retry that finished raises no alert" || ko "a finished retry alerted: '$(cat "$ST/alerts.log" 2>&1)'"
 
-# 23) (#1201) a start killed before a mode result still leaves the one record, and it names the kill: the trap writes the
+# 24) (#1201) a start killed before a mode result still leaves the one record, and it names the kill: the trap writes the
 #     line with the modes it had, an alert names the signal, and no day marker is spent, so the next cycle tries again.
 cat > "$T/slow.sh" <<'SLEOF'
 #!/bin/bash
@@ -479,7 +515,7 @@ rec
 [ ! -e "$ST/locks/nightly" ] && ok "a killed start releases its lock" || ko "the lock outlived the killed start"
 rm -f "$ST/alerts.log" "$ST/nightly-result"
 
-# 24) (#1201) the two readings are told apart at the readers: a red record holds dispatch and names its ids, and a bounded
+# 25) (#1201) the two readings are told apart at the readers: a red record holds dispatch and names its ids, and a bounded
 #     one names no test and holds nothing. A bounded result over a red mode is still no reading.
 rm -f "$T/ran.log"; mark
 out=$(ng FAIL_parallel=1); rc=$?; rec

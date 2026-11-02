@@ -32,7 +32,9 @@
 # It also settles the proof obligations a gate left unproven (spec 1163): it runs the checks each record in
 # $SG_STATE/obligations names over the tree that record names, writes settled-green or settled-red in
 # $SG_STATE/obligation-settled, clears the record it answered, reports an overdue one by name, and a settled red holds the
-# tree it measured like any red (ghcall.sh). The result record, the red alert and the bound marker are written first, and
+# tree it measured like any red (ghcall.sh). The settlement also answers the card fact an unproven landing left (#1176):
+# wave.sh maps the issue to the obligation key under $SG_STATE/proof-card/<issue>/, and a green settlement clears the fact
+# while a red one holds the card. The result record, the red alert and the bound marker are written first, and
 # the obligations are settled after: a settlement that hangs or is stopped never holds back the record the hub and the
 # dispatch hold read. The settlement stops before the run's own serial hold and leaves every other record in place, each
 # reported by name. A settled red older than one nightly period, or at a tree that is no longer the tip, is pruned and
@@ -245,6 +247,25 @@ ruffcmd=${SG_SETTLE_RUFF:-"$py -m ruff check squad tests"}
 mypycmd=${SG_SETTLE_MYPY:-"$py -m mypy squad"}
 pycmd=${SG_SETTLE_PYTEST:-"$py -m pytest -p no:deepeval -p no:xdist"}
 ob_report() { printf '%s %s\n' "$(date '+%F %T')" "$1" >> "$st/alerts.log"; }
+# proof_card <obligation key> <green|red>: the card fact of an unproven landing (spec 1163, #1176). wave.sh maps the issue
+# to the obligation key under $st/proof-card/<issue>; this pass is the map's consumer. A green settlement clears the fact
+# when no other obligation of the issue is open; a red one holds the card by its `proof:red` marker. A refused card write
+# is reported by name, never silently dropped.
+proof_card() {
+  local k=$1 res=$2 d n out rc board=${BOARD:-$here/board.sh} word
+  for d in "$st"/proof-card/*; do
+    [ -d "$d" ] && [ -e "$d/$k" ] || continue
+    n=$(basename "$d"); rm -f "$d/$k"
+    if [ "$res" != red ] && [ -n "$(/bin/ls -A "$d" 2>/dev/null)" ]; then continue; fi   # another obligation is open
+    rmdir "$d" 2>/dev/null
+    if [ -z "${SG_OWNER:-}" ] || [ -z "${SG_PROJECT:-}" ]; then
+      ob_report "PROOF-CARD ${n}@${k}: no board is named (SG_OWNER, SG_PROJECT); the $res fact is not written"; continue
+    fi
+    word=$([ "$res" = red ] && printf red || printf green)
+    out=$("$board" --proof "$SG_OWNER" "$SG_PROJECT" "$n" "$word" 2>&1); rc=$?
+    [ "$rc" -eq 0 ] || ob_report "PROOF-CARD ${n}@${k}: the $word fact was not written: $(printf '%s\n' "$out" | tail -1)"
+  done
+}
 period=${SG_NIGHTLY_PERIOD_SECONDS:-86400}   # one nightly period: a settled red older than this is stale
 hold=${SERIAL_HOLD_SECONDS:-10800}; case $hold in ''|*[!0-9]*) hold=10800;; esac
 settle_by=$((nt0 + hold - hold / 10))   # stop settling before serial.sh stops this run at its hold (exit 75)
@@ -368,7 +389,12 @@ for f in "$odir"/*; do
     && printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$s_ts" "$orp" "$osh" "$oba" full "$want" "$ov" "$s_run" > "$sdir/$key.$$" \
     && mv -f "$sdir/$key.$$" "$sdir/$key"; then
     rm -f "$f"
-    [ "$ov" = red ] && { obred=1; ob_report "OBLIGATION settled-red: $name base $oba at $s_run:${odet# } failed"; }
+    if [ "$ov" = red ]; then
+      obred=1; ob_report "OBLIGATION settled-red: $name base $oba at $s_run:${odet# } failed"
+      proof_card "$key" red
+    else
+      proof_card "$key" green
+    fi
   else
     rm -f "$sdir/$key.$$" 2>/dev/null
     ob_report "OBLIGATION unsettled: $name: the settlement record could not be written; left in place"

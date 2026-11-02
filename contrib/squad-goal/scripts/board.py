@@ -4,6 +4,8 @@
        board.py --remove <owner> <project> <issue#>...   take the issues off the board; an issue with no card is skipped, never written (#500)
        board.py --run-fields <owner> <project> <issue#> <run> <run-started>
        board.py --clear-run <owner> <project> <issue#>
+       board.py --proof <owner> <project> <issue#> <unproven|green|red>   the card's proof fact: `unproven` while the
+         obligation is open, `proof:red` when a settlement measured a defect, neither on a green settlement or a proven landing (#1176)
        board.py --test-case <owner> <project> <issue#> <pass|fail> <merge-commit> [ended]   record a finished test pass as one `test case` item (#300)
 This is the board binding's command door (#236): the state it reads and writes is issue_state's, and this
 file holds the carrier's command line, never a second reach of its own. A field is set by sending its value
@@ -34,6 +36,10 @@ Doing-to-Todo unclaim, and the same return to Todo when the move names `SG_MOVE_
 undoes the column the loop itself set, and that unclaim reaches no other column (#1059). Every other backward move is refused:
 the card keeps its column and its issue gets the `rework` label, the refusal is logged to $SG_STATE/board-rejections.jsonl, and
 the exit is 3 (ADR-0143).
+The proof fact (#1176) is two labels on the issue: `unproven` while the proof obligation the gate wrote is open, and
+`proof:red` when the settlement measured a defect. A green settlement and a proven landing carry neither. The write is
+proven by the issue read that follows it, and a fact the read does not carry is a READ FAILURE, named and exiting
+non-zero, never a fact the card claims. A card already in the wanted state is not written again.
 Touches $SG_STATE/board-dirty so the hub refreshes within 2 s. Each move it proved is recorded in
 $SG_STATE/board-moves.json by that same step: one entry per item, the column it set, the instant and the dispatch context `SG_MOVE_BY` names (`owner` or `loop`, when set), replaced by a
 later move of the same item. The file is formed in a temp file beside it and renamed, so a reader sees the old record
@@ -43,8 +49,8 @@ test-case write records nothing."""
 import json, os, pathlib, sys, time
 from board_columns import refused_for_automated
 from issue_state import KindGap, NotCarried, ReadFailure, board_state
-args = sys.argv[1:]; add = args[:1] == ["--add"]; run_fields = args[:1] == ["--run-fields"]; clear_run = args[:1] == ["--clear-run"]; test_case = args[:1] == ["--test-case"]; remove = args[:1] == ["--remove"]
-args = args[1:] if add or run_fields or clear_run or test_case or remove else args
+args = sys.argv[1:]; add = args[:1] == ["--add"]; run_fields = args[:1] == ["--run-fields"]; clear_run = args[:1] == ["--clear-run"]; test_case = args[:1] == ["--test-case"]; remove = args[:1] == ["--remove"]; proof = args[:1] == ["--proof"]
+args = args[1:] if add or run_fields or clear_run or test_case or remove or proof else args
 owner, num = args[0], args[1]
 st = pathlib.Path(os.environ["SG_STATE"])
 state = board_state(owner=owner, project=num, kind=None)   # the move is asked for an owner the caller names, so the carrier says whether it is a user or an org (cached a month)
@@ -53,6 +59,23 @@ if test_case:
     try: item = state.record_pass(n, args[3], args[4], args[5] if len(args) > 5 else None)   # one item, then the read that proves it (#300)
     except (ValueError, KindGap, NotCarried, ReadFailure) as e: print(f"#{n}: {e}", file=sys.stderr); sys.exit(1)
     print(f"#{n} test case {item['result']} @ {item['commit']}"); (st / "board-dirty").touch(); sys.exit(0)
+if proof:   # the card's proof fact (#1176): a label write, proven by the issue read that follows it
+    n = int(args[2]); word = args[3]
+    if word not in ("unproven", "green", "red"): sys.exit(f"--proof: unknown word {word!r}: one of unproven, green, red")
+    want = {"unproven": {"unproven"}, "red": {"unproven", "proof:red"}, "green": set()}[word]
+    before = state.binding.issue_facts(n)
+    if before is None: print(f"#{n}: the issue read did not answer; no proof fact written", file=sys.stderr); sys.exit(1)
+    have = set(before[1]); add = [l for l in ("unproven", "proof:red") if l in want and l not in have]
+    drop = [l for l in ("unproven", "proof:red") if l not in want and l in have]
+    try:
+        if add: state.binding.api("-X", "POST", f"repos/{state.binding.repo}/issues/{n}/labels", "--input", "-", inp=json.dumps({"labels": add}))
+        for l in drop: state.binding.drop_label(n, l)
+    except RuntimeError as e: print(f"#{n}: {e}", file=sys.stderr); sys.exit(1)
+    after = state.binding.issue_facts(n)
+    held = {"unproven", "proof:red"} & set(after[1] if after else ())
+    if after is None or held != want:
+        print(f"#{n}: the issue does not carry the proof fact {word!r} after the write; a read failure, not a written fact", file=sys.stderr); sys.exit(1)
+    (st / "board-dirty").touch(); print(f"#{n} proof {word}"); sys.exit(0)
 if run_fields or clear_run:
     n = int(args[2])
     run = None if clear_run else args[3]; started = None if clear_run else (args[4] if len(args) > 4 else "")
