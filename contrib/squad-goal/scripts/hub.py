@@ -4572,15 +4572,15 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 #sbtn{display:none}
 @media (min-width:601px){
 #side{position:relative;padding:0;overflow:hidden;transition:width .16s ease-out}
-#sbody{width:280px;height:100%;overflow:auto;padding:44px 12px 12px;box-sizing:border-box;transition:transform .16s ease-out}
+#sbbody{width:280px;height:100%;overflow:auto;padding:44px 12px 12px;box-sizing:border-box;transition:transform .16s ease-out}
 #sbtn{display:flex;position:absolute;top:12px;right:4px;z-index:1;width:20px;height:32px;align-items:center;justify-content:center;padding:0;border:0;border-radius:0;background:none;color:var(--mute);cursor:pointer}
 #sbtn:hover{color:var(--fg)}#sbtn:focus-visible{outline:var(--focus-w) solid var(--focus);outline-offset:2px}
 #sbtn svg{width:12px;height:12px}
 html.sbshut #side{width:28px;transition-timing-function:ease-in}
-html.sbshut #sbody{transform:translateX(-100%);transition-timing-function:ease-in}
+html.sbshut #sbbody{transform:translateX(-100%);transition-timing-function:ease-in}
 html.sbshut #sbtn svg{transform:scaleX(-1)}
 }
-@media (prefers-reduced-motion: reduce){#side,#sbody{transition:none}}
+@media (prefers-reduced-motion: reduce){#side,#sbbody{transition:none}}
 /* }SIDEBAR-CSS */
 </style>
 <div id=who>__WHO__</div>
@@ -4594,7 +4594,7 @@ html.sbshut #sbtn svg{transform:scaleX(-1)}
 <script id=sideRule>function sideState(saved,wide){return saved==="shut"&&!!wide}function sideNext(saved,wide){return sideState(saved,wide)?"open":"shut"}</script>
 <div id=win>
 <script id=sbboot>try{if(sideState(JSON.parse(localStorage.hub||"{}").side,matchMedia("(min-width: 601px)").matches))document.documentElement.classList.add("sbshut")}catch(e){}</script>
-<aside id=side><button id=sbtn type=button aria-label="Collapse the Monitor bar" aria-controls=side aria-expanded=true title="Collapse the Monitor bar"><svg viewBox="0 0 12 12" aria-hidden=true focusable=false><path d="M8 2L4 6l4 4" fill=none stroke=currentColor stroke-width=1.6 stroke-linecap=round stroke-linejoin=round /></svg></button><div id=sbody>
+<aside id=side><button id=sbtn type=button aria-label="Collapse the Monitor bar" aria-controls=side aria-expanded=true title="Collapse the Monitor bar"><svg viewBox="0 0 12 12" aria-hidden=true focusable=false><path d="M8 2L4 6l4 4" fill=none stroke=currentColor stroke-width=1.6 stroke-linecap=round stroke-linejoin=round /></svg></button><div id=sbbody>
 <details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div class=ian id=ian></div><div id=ispec></div><div id=ilate></div></div></details>
 <details id=usage class=sp><summary>Usage</summary><div class=sb><div class="igs isub" id=isub title="subscriptions: the used share of the weekly window and the days to its reset"></div></div></details><details id=stats class=sp><summary>Spend<span class=sr id=stsr></span></summary><div class=sb><h4>Tokens <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Counted in tokens: in + out, the same count the ring draws."></span></h4><div class=tot id=tot></div><h4>Tokens over time <span class=row id=per></span></h4><div id=chart></div><h4>Model tokens · this month</h4><div class=m id=piet>in + out</div><div id=pie></div></div></details>
 <details id=lrd class=sp open><summary>Live runs<span class=sr id=lrs></span></summary><div class=sb id=lrun></div></details>
@@ -4635,7 +4635,7 @@ const HUB_REPO=/*HUB_REPO*/;
 let allRuns=[],runs=[],q=ls.q||"",per=ls.per||"day",src=ls.src||"both",N=1,pins=new Set(),slots=[],hl=null,boardRows=[],ENDED=[];   // ENDED: the rows of /api/ended (#984)
 const save=()=>localStorage.hub=JSON.stringify({...ls,pins:[...pins],q,per,src});
 // SIDEBAR{
-const sideBtn=$("#sbtn"),sideBody=$("#sbody"),sideWide=matchMedia("(min-width: 601px)");
+const sideBtn=$("#sbtn"),sideBody=$("#sbbody"),sideWide=matchMedia("(min-width: 601px)");
 function sidePaint(shut){const name=shut?"Open the Monitor bar":"Collapse the Monitor bar";document.documentElement.classList.toggle("sbshut",shut);sideBtn.setAttribute("aria-expanded",String(!shut));sideBtn.setAttribute("aria-label",name);sideBtn.title=name;sideBody.inert=shut}
 function sideShow(saved){sidePaint(sideState(saved,sideWide.matches))}
 sideBtn.addEventListener("click",()=>{ls.side=sideNext(ls.side,sideWide.matches);save();sideShow(ls.side)});
