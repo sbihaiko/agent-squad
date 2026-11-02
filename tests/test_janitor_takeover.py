@@ -1,9 +1,10 @@
-"""A run past thirty minutes is taken over, never restarted from the queue (ADR-0166).
+"""A run with no progress for thirty minutes is taken over, never restarted from the queue (ADR-0166).
 
 Rule C reaps a zombie run and frees its dispatch markers, so its issues go back to Todo and a fresh child starts the same
-work with none of the earlier context. Rule T ends a run with no verdict that is past the takeover bound and keeps its
-issues claimed: the dispatch marker stays, a `taken-<run>` marker names the issues a hand fix owes, and no card goes back
-to Todo.
+work with none of the earlier context. Rule T ends a run with no verdict whose record has not moved for the takeover bound
+and keeps its issues claimed: the dispatch marker stays, a `taken-<run>` marker names the issues a hand fix owes, and no
+card goes back to Todo. A run waiting for a gate slot records no progress but is not stuck: the gate queue is the machine's
+time, not the run's, so that wait never reaches the bound (#1191).
 
 These cases drive janitor.py end to end with the sandbox of test_janitor_card_done_base: a stub `gh`, a stub board.sh
 and a temp state dir. No case touches the network, the live loop state or the live board.
@@ -13,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import time
 from pathlib import Path
 
@@ -23,12 +25,17 @@ from tests.test_janitor_card_done_base import N, janitor, sandbox, writes
 RUN = "run-stacked"
 
 
-def live_run(tmp_path: Path, age: float) -> Path:
-    """One run with no verdict for #2030, started `age` seconds ago, its record fresh (so rule C reads it as live)."""
+def live_run(tmp_path: Path, age: float, moved: float | None = None) -> Path:
+    """One run with no verdict for #2030, started `age` seconds ago, its record fresh (so rule C reads it as live).
+    `moved` adds one progress event that many seconds ago: the record's last motion."""
     sandbox(tmp_path, "echo 0", live=True)
     run = tmp_path / "co/runs" / RUN
     now = time.time()
-    (run / "record.jsonl").write_text(json.dumps({"event": "run_start", "run_id": RUN, "ts": now - age}) + "\n")
+    events = [{"event": "run_start", "run_id": RUN, "ts": now - age}]
+    if moved is not None:
+        events.append({"event": "progress", "node": "route.router.1", "entry": 1, "item": None, "session": "s",
+                       "messages": 1, "context_tokens": 1, "tool": "Bash", "ts": now - moved})
+    (run / "record.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
     os.utime(run / "record.jsonl", (now, now))
     return run
 
@@ -55,3 +62,35 @@ def test_a_run_under_the_bound_is_untouched(tmp_path):
     assert RUN in (st / "active-runs.txt").read_text(), "a run under the bound left active-runs"
     assert not (st / "auto" / f"taken-{RUN}").exists(), "a run under the bound was taken over"
     assert (st / "auto" / f"disp-{N}").exists(), "the dispatch marker of a run under the bound went"
+
+
+@pytest.mark.heavy
+def test_a_run_that_moved_its_record_within_the_bound_is_untouched(tmp_path):
+    """#1191: the bound measures a run that stopped moving, never one that started long ago and is still working."""
+    live_run(tmp_path, 3300, moved=60)
+    janitor(tmp_path)
+    st = tmp_path / "st"
+    assert RUN in (st / "active-runs.txt").read_text(), "a run that moved its record a minute ago left active-runs"
+    assert not (st / "auto" / f"taken-{RUN}").exists(), "a run that moved its record was taken over"
+    assert (st / "auto" / f"disp-{N}").exists(), "the dispatch marker of a run that is working went"
+
+
+@pytest.mark.heavy
+def test_a_run_waiting_for_a_gate_slot_is_not_taken_over(tmp_path):
+    """#1191: a run waiting its turn in the machine-wide gate queue is not stuck. The child's own entry gate blocks on the
+    gate lock inside its worktree, so a gate process is alive in the run folder while the record holds still."""
+    run = live_run(tmp_path, 3300)
+    gate = run / "gate.sh"
+    gate.write_text("#!/bin/bash\nsleep 60\n")
+    gate.chmod(0o755)
+    waiter = subprocess.Popen(["bash", str(gate)], cwd=run.resolve())
+    try:
+        time.sleep(0.5)     # the pass reads the process table and the cwd of each process: give the waiter a cwd first
+        janitor(tmp_path)
+    finally:
+        waiter.kill()
+        waiter.wait()
+    st = tmp_path / "st"
+    assert RUN in (st / "active-runs.txt").read_text(), "a run waiting for a gate slot left active-runs"
+    assert not (st / "auto" / f"taken-{RUN}").exists(), "a run waiting for a gate slot was taken over"
+    assert (st / "auto" / f"disp-{N}").exists(), "the dispatch marker of a run waiting for a gate slot went"

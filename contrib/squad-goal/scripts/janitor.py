@@ -9,7 +9,7 @@
     dashboard serves, and kills the oldest one the pass cannot tie to a live run, down to the ceiling. A live run's own dashboard is never a
     victim, a dashboard another project started is not this pass's to count, and JANITOR_DRY=1 reports without killing.
  C  zombie run (no verdict, record.jsonl idle 20 min, no process inside its folder, last started call dead): drop it from active-runs.txt, write the killed verdict into its record (squad.killed), and free its dispatch markers and leases.
- T  taken-over run (no verdict, started over SG_TAKEOVER_SECONDS ago, default 1800): end it and keep its issues claimed (ADR-0166). The pass writes the killed
+ T  taken-over run (no verdict, its record has not moved for SG_TAKEOVER_SECONDS, default 1800, and no gate process is alive in its folder): end it and keep its issues claimed (ADR-0166). A run waiting its turn in the machine-wide gate queue is not stuck: that wait is no run time, so it never reaches the bound (#1191). The pass writes the killed
     verdict, kills every process inside the run folder and its dashboard, drops it from active-runs and writes auto/taken-<run>, which names the run and its issues.
     It never frees auto/disp-<n> or auto/bug-<n>, so no fresh child starts the same work with none of the context: a person or an agent takes it over.
     While the marker stands its issues are held, so rule Q never puts their cards back in Todo. The owner or the agent drops the marker after the hand fix.
@@ -207,6 +207,7 @@ def unpushed(f):   # #771: "<branch> <sha9> in <tree>" for each child tree of th
     return out
 def read(f):
     v = False; pidc = None; started_at = None; acc = set(); t = f / "record.jsonl"; ver = None; rs = []; landed = False; rid = f.name; rts = ""
+    lts = ""                        # the stamp of the record's last event: rule T reads the last progress, never the start (#1191)
     vts = None; vkey = ""; nv = 0   # the last verdict's time and its key (#692, #693): the rearm floor and rule O's read-once marker read them
     # The per-child evidence (#271): the children the run accepted, the issues each child's own accept line named, the
     # landing nodes that stand, and every node's own outcome. A run that asked for children landed through the child
@@ -220,6 +221,7 @@ def read(f):
         try: d = json.loads(l)
         except ValueError: d = {}
         ev = d.get("event")
+        if d.get("ts") is not None: lts = d["ts"]   # every event is progress: the record moved when this stamp was written
         if ev in ("spawn_requested", "spawn_accepted", "spawn_rejected"):
             spawned = True; decided = False
             if isinstance(d.get("ts"), (int, float)): spawn_ts = max(spawn_ts, float(d["ts"]))
@@ -274,7 +276,7 @@ def read(f):
         if stands and node is not None: land_nodes.add(str(node))
     kid_landed = {n for n in land_nodes if n in kids}   # the children whose own landing stands: the run's landing is theirs
     return {"verdict": v, "name": ver or "no verdict", "pid": pidc, "started_at": started_at, "acc": acc, "idle": now - t.stat().st_mtime,
-            "failed": ver == "failed", "reasons": rs, "landed": landed, "run_id": rid, "run_ts": rts, "vts": vts, "vkey": vkey,
+            "failed": ver == "failed", "reasons": rs, "landed": landed, "run_id": rid, "run_ts": rts, "last_ts": lts, "vts": vts, "vkey": vkey,
             "kid_issue": kid_issue, "kid_review": kid_review, "kid_landed": kid_landed, "kid_out": outs, "decided": decided, "spawn_ts": spawn_ts}
 def same_process(pidc, started_at):
     if pidc not in procs or not isinstance(started_at, (int, float)):
@@ -286,12 +288,16 @@ def mark_killed(f):
     env = {**os.environ, "PYTHONPATH": os.pathsep.join(x for x in (os.environ.get("SG_SQUAD"), os.environ.get("PYTHONPATH")) if x)}
     _run(["python3", "-m", "squad.killed", str(f)], env=env)
 TAKEOVER_SECONDS = float(os.environ.get("SG_TAKEOVER_SECONDS", "1800") or 1800)
-def run_age(i):   # T: seconds since run_start, or None when the record names no start the pass can read (an epoch, or an ISO UTC stamp)
-    t = i["run_ts"]
+GATE = re.compile(r"gate\.sh\b")   # a gate process (`gate.sh`, `fast-gate.sh`): a run inside one is doing work or waiting its turn, never stuck (#1191)
+def age_of(t):   # T: seconds since a record stamp, or None when the pass cannot read it (an epoch, or an ISO UTC stamp)
     try: return now - float(t)
-    except ValueError: pass
+    except (TypeError, ValueError): pass
     try: return now - calendar.timegm(time.strptime(t, "%Y-%m-%dT%H:%M:%SZ"))
-    except ValueError: return None
+    except (TypeError, ValueError): return None
+def progress_age(i):   # T: seconds since the run's own record last moved; a gate-queue wait records no progress, and rule T reads the gate (#1191)
+    return age_of(i["last_ts"])
+def run_age(i):   # T: the fallback when the record carries no readable event stamp: the age of its start
+    return age_of(i["run_ts"])
 def _now(): return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 def inside(f): return [q for q, c in cwd.items() if c == str(f) or c.startswith(str(f) + "/")]
 act = st / "active-runs.txt"; names = act.read_text().split() if act.exists() else []
@@ -393,10 +399,14 @@ for r in names:
     # "alive" for ever, its card in Doing and its active-runs line held (#745).
     hips = inside(f)
     alive = any(SESSION.search(procs.get(q, (0, ""))[1]) for q in hips)
-    age = run_age(i)
-    if age is not None and age > TAKEOVER_SECONDS:   # T: past the bound the run is ended and handed over, never requeued (ADR-0166)
+    # A gate process alive inside the run folder is the child's own entry gate waiting on the machine-wide gate lock, or
+    # holding it: either way the run is working or waiting its turn, so the bound does not apply (#1191, ADR-0166).
+    gate_wait = any(GATE.search(procs.get(q, (0, ""))[1]) for q in hips)
+    age = progress_age(i)
+    if age is None: age = run_age(i)
+    if age is not None and age > TAKEOVER_SECONDS and not gate_wait:   # T: past the bound with no progress the run is stuck; it is ended and handed over, never requeued (ADR-0166)
         nums = sorted(req_issues(f) | i["acc"], key=int)
-        msg = f"TAKEN-OVER run {n} ({int(age // 60)} min) ended by the takeover bound; its issues stay claimed for a hand fix"
+        msg = f"TAKEN-OVER run {n} ({int(age // 60)} min without progress) ended by the takeover bound; its issues stay claimed for a hand fix"
         say(msg)
         if not dry:
             open(st / "alerts.log", "a").write(f"{_now()} {msg}\n")
