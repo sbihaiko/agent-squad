@@ -23,3 +23,21 @@ sg_caps() {
   local root; root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd); [ -f "$root/squad/caps.py" ] || root=${SG_SQUAD:-}
   PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}" python3 -m squad.caps "$@"
 }
+
+# sg_gate_python: the interpreter that holds the suite's tools (#1086): SG_GATE_PY, else the checkout's venv, else the venv beside
+# the worktree's common git directory, else python3. A checkout with no venv must not fall back to a python3 that lacks mypy.
+sg_gate_python() {
+  local py common
+  if [ -n "${SG_GATE_PY:-}" ]; then echo "$SG_GATE_PY"; return; fi
+  if [ -n "${SG_CHECKOUT:-}" ]; then
+    py=$SG_CHECKOUT/.venv/bin/python; [ -x "$py" ] && { echo "$py"; return; }
+    common=$(git -C "$SG_CHECKOUT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+    [ -n "$common" ] && { py=$(dirname "$common")/.venv/bin/python; [ -x "$py" ] && { echo "$py"; return; }; }
+  fi
+  echo python3
+}
+
+# sg_missing_tool <python>: the first of ruff, mypy and pytest the interpreter lacks; prints nothing when it holds all three.
+sg_missing_tool() {
+  local t; for t in ruff mypy pytest; do "$1" -m "$t" --version >/dev/null 2>&1 || { echo "$t"; return; }; done
+}
