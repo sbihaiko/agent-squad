@@ -25,7 +25,8 @@ if [ -n "${SG_CHECKOUT:-}" ]; then
   else gap "SG_CHECKOUT $SG_CHECKOUT is no directory"; fi
 fi
 # Each gate, e2e and nightly command the profile names must resolve: its first word is a command, or a file run from the checkout.
-for v in SG_FAST_GATE_CMD SG_LOCAL_GATE_CMD SG_LOCAL_GATE_RERUN_CMD SG_PREPUSH_CMD SG_E2E_CMD SG_NIGHTLY_PARALLEL SG_NIGHTLY_SERIAL; do
+for v in SG_FAST_GATE_CMD SG_LOCAL_GATE_CMD SG_LOCAL_GATE_RERUN_CMD SG_PREPUSH_CMD SG_E2E_CMD SG_NIGHTLY_PARALLEL SG_NIGHTLY_SERIAL \
+  SG_SETTLE_RUFF SG_SETTLE_MYPY SG_SETTLE_PYTEST; do
   c=${!v:-}; [ -n "$c" ] || continue; w=${c%% *}
   case "$w" in */*) (cd "${SG_CHECKOUT:-.}" 2>/dev/null && [ -x "$w" ]) || gap "$v '$c': $w is no executable file in the checkout";;
     *) command -v "$w" >/dev/null 2>&1 || gap "$v '$c': $w is no command";; esac

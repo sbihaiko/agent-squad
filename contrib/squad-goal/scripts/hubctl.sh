@@ -1,18 +1,23 @@
 #!/bin/bash
 # usage: hubctl.sh [--restart] [port]   start the squad hub (hubmux.py: one process, one path per repository) on 127.0.0.1 if no hub
 # answers on the port (idempotent); prints the URL of the cwd's repository, http://127.0.0.1:<port>/<profile>. Opens no browser.
-# A port is proof of nothing by itself (#20): only an answer naming the squad hub on /api/hub is. A port held by anything
-# else is refused by name, and a hub that does not serve the cwd's profile (started before the profile existed) is reported.
-# --restart (publish-landing.sh, #31) stops the hub on the port first, only when it answers as the squad hub, then starts it from the
-# files now on disk; an open page sees the new /api/version and reloads itself. Anything else on the port is refused, never stopped.
+# A port is proof of nothing by itself (#20): only an answer naming the squad hub on /api/hub?identity=1 is. That query
+# answers from the hub's loaded profiles with no state read, so a loaded machine cannot time it out and make a real hub
+# read as foreign (#1202). A port held by anything else is refused by name, and a hub that does not serve the cwd's profile
+# (started before the profile existed) is reported.
+# --restart (publish-landing.sh, #31) stops the hub on the port first, only when it answers as the squad hub, and names the
+# pid it stopped, then starts it from the files now on disk; an open page sees the new /api/version and reloads itself.
+# Anything else on the port is refused, never stopped.
 # Each repository's hub state goes to <its checkout>/runs/.hub (self-gitignored).
 restart=; [ "${1:-}" = "--restart" ] && { restart=1; shift; }
 port="${1:-7700}"; here="$(cd "$(dirname "$0")" && pwd)"; url="http://127.0.0.1:$port"
 slug=$(bash "$here/address.sh" "${SG_PROFILE:-.}" 2>/dev/null | sed -n 's/^SG_PROFILE=//p')
-ask() { curl -s --max-time 3 "$url/api/hub"; }
+ask() { curl -s --max-time 3 "$url/api/hub?identity=1"; }
 a=$(ask); rc=$?
 if [ -n "$restart" ] && [ $rc = 0 ]; then case "$a" in *'"hub": "squad-hub"'*)
-  kill $(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null) 2>/dev/null
+  pid=$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null)
+  kill $pid 2>/dev/null
+  [ -n "$pid" ] && echo "hubctl: stopped the squad hub on port $port (pid $pid)" >&2
   for _ in $(seq 20); do sleep 0.5; ask >/dev/null; [ $? = 7 ] && break; done
   a=$(ask); rc=$?; [ $rc = 7 ] || { echo "hubctl: the hub on port $port did not stop" >&2; exit 1; };; esac; fi
 if [ $rc = 7 ]; then   # nothing listens: start the hub
