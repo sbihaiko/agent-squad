@@ -121,6 +121,7 @@ def test_tasks_header_has_flow_and_lead_time_buttons_and_keeps_its_controls(hub)
     assert [re.sub(r"<[^>]*>", "", x) for x in re.findall(r"<button[^>]*>.*?</button>", tabs)] == ["Runs", "Cumulative Flow Diagram", "Burn-Down", "Lead Time"]
     assert "id=flowv" not in hub.PAGE, "the View selector is gone: a chart is a tab"
     assert 'id=bburn' in tabs and 'flowOpen("burndown")' in hub.PAGE
+    assert 'flowOpen=async k=>{FLOWK=k;$("#flowov").hidden=false;flowTabs();' in hub.PAGE, "the lit tab follows the chart drawn"
     head = hub.PAGE[hub.PAGE.index("<div id=bhead>"):hub.PAGE.index("<div id=bcases>", hub.PAGE.index("<div id=bhead>"))]
     assert "<span id=bt class=m></span>" in head
     assert "id=bflow" not in head and "id=blead" not in head
