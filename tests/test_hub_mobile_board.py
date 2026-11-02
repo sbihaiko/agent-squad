@@ -24,7 +24,7 @@ GESTURE_JS = SCRIPTS / "hub-mobile-gesture.js"
 FILTER_JS = SCRIPTS / "board-filter.js"
 NODE = shutil.which("node")
 ROUTES = {"/api/status", "/api/hub", "/api/board", "/api/issue", "/api/subs", "/api/models", "/api/stats", "/api/runs", "/api/ended",
-          "/api/sessions", "/api/sessions/conversation", "/api/sessions/send", "/api/promote", "/api/loop",
+          "/api/sessions", "/api/sessions/card", "/api/sessions/card/answer", "/api/sessions/conversation", "/api/sessions/send", "/api/promote", "/api/loop",
           "/api/load", "/api/chart/burndown"}   # the owner's move is a write (#829); the Monitor reads the desktop card's route (#983); the Throughput screen reads the burndown (#1049)
 
 
@@ -165,16 +165,17 @@ def test_the_mobile_page_reads_only_the_existing_routes(hub):
     found = set(re.findall(r'"(/api/[^"?]*)', hub.MOBILE_PAGE))
     assert found <= ROUTES, f"the mobile page reads routes the hub does not serve: {sorted(found - ROUTES)}"
     writes = set(re.findall(r'fetch\("(/api/[^"?]*)"[^)]*method:', hub.MOBILE_PAGE))
-    assert writes == {"/api/loop", "/api/promote", "/api/sessions/send"}, f"the mobile page writes other routes: {sorted(writes)}"
-    # Four writes: the owner's move, the run screen's pause or resume, which posts the run's own control route through
-    # the hub's forward route (#831), the session composer's send (#834), and the loop switch (#923, ADR-0162). Each carries the word once: a route reached
+    assert writes == {"/api/loop", "/api/promote", "/api/sessions/send", "/api/sessions/card/answer"}, f"the mobile page writes other routes: {sorted(writes)}"
+    # Five writes: the owner's move, the run screen's pause or resume, which posts the run's own control route through
+    # the hub's forward route (#831), the session composer's send (#834), the loop switch (#923, ADR-0162), and the answer
+    # to a session's question card (#1093). Each carries the word once: a route reached
     # through a variable path, or a method set after the call's own `)`, carries it once too often, whatever the shape of
     # the call (#829).
     assert 'fetch(runURLs(id).control, { method: "POST"' in hub.MOBILE_PAGE, "the run screen's write is not the run's control route"
     # The session overlay (#898) rides on the page and posts its send route, and its screenshot route (#903), through the source the page names.
     overlay = hub.OVERLAY_JS.count("method:")
     assert overlay == 2 and 'fetch(s.src.api + "/send", { method: "POST"' in hub.OVERLAY_JS and 'fetch(s.src.api + "/screenshot?sid="' in hub.OVERLAY_JS
-    assert hub.MOBILE_PAGE.count("method:") == 4 + overlay, "the mobile page holds a fifth write, or a method outside the four fetches"
+    assert hub.MOBILE_PAGE.count("method:") == 5 + overlay, "the mobile page holds a sixth write, or a method outside the five fetches"
 
 
 def test_the_sheet_links_to_the_issue_on_github(hub):
