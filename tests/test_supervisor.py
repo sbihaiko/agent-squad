@@ -400,3 +400,58 @@ def test_hub_module_holds_no_pty_or_fork_on_the_job_path():
         assert token not in source, token
     popen_lines = [line.strip() for line in source.splitlines() if "Popen(" in line]
     assert popen_lines == ['pr = subprocess.Popen(["codex", "app-server"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)']
+
+
+TYPED = "SECRET-TYPED-TEXT"
+AUDIT_KEYS = {"ts", "event", "job", "session", "login", "transport", "client_id", "input_bytes"}
+
+
+def audit_lines(state):
+    path = state / "terminal-audit.log"
+    return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+
+def wait_for_audit(state, event, timeout=10.0):
+    deadline = time.time() + timeout
+    while not any(line["event"] == event for line in audit_lines(state)):
+        assert time.time() < deadline, f"no {event} line"
+        time.sleep(0.05)
+
+
+def test_each_of_the_six_events_writes_one_audit_line_and_no_input_text(state):
+    sv.ensure(state)
+    who = {"login": "ana@example.com", "client_id": "c1", "transport": "tailnet"}
+    session = sv.call(state, "start", job="p#30", **who)["session"]
+    sv.call(state, "read", session=session, offset=0, **who)
+    sv.call(state, "write", session=session, text=TYPED, **who)
+    sv.call(state, "detach", session=session, **who)
+    sv.call(state, "stop", session=session, **who)
+    wait_for_audit(state, "end")
+    lines = audit_lines(state)
+    assert [line["event"] for line in lines] == ["start", "attach", "write", "detach", "stop", "end"]
+    for line in lines:
+        assert set(line) == AUDIT_KEYS
+        assert line["job"] == "p#30" and line["session"] == session
+    typed = len(TYPED.encode())
+    assert [line["input_bytes"] for line in lines] == [0, 0, typed, typed, 0, 0]
+    for line in lines[:5]:
+        assert (line["login"], line["client_id"], line["transport"]) == ("ana@example.com", "c1", "tailnet")
+    assert TYPED not in (state / "terminal-audit.log").read_text()
+
+
+def test_a_refused_request_writes_one_refused_audit_line(state):
+    sv.ensure(state)
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.connect(str(sv.socket_path(state)))
+        client.sendall(json.dumps({"secret": "00" * 32, "op": "ping"}).encode() + b"\n")
+        client.makefile("rb").readline()
+    assert [line["event"] for line in audit_lines(state)] == ["refused"]
+
+
+def test_attach_op_writes_one_attach_line_and_a_second_attach_writes_none(state):
+    sv.ensure(state)
+    who = {"login": "ana@example.com", "client_id": "c2", "transport": "tailnet"}
+    session = sv.call(state, "start", job="p#31", **who)["session"]
+    sv.call(state, "attach", session=session, **who)
+    sv.call(state, "attach", session=session, **who)
+    assert [line["event"] for line in audit_lines(state)] == ["start", "attach"]

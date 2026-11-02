@@ -312,9 +312,9 @@ class _Handler(BaseHTTPRequestHandler):
         if self.command != "HEAD":
             self.wfile.write(body)
 
-    def _verdict(self, method):
-        """Whether this request may pass: the one access decision (squad/tailnet_access.py), made on every method."""
-        return tailnet_access.decide(host=(self.headers.get("Host") or "").lower(), origin=self.headers.get("Origin"), method=method,
+    def _verdict(self, action):
+        """Whether this request may pass: the one access decision (squad/tailnet_access.py), made on the action asked for."""
+        return tailnet_access.decide(host=(self.headers.get("Host") or "").lower(), origin=self.headers.get("Origin"), action=action,
                                      login=self.headers.get(tailnet_access.LOGIN_HEADER), port=self._run.port,
                                      tailnet_host=self._run.tailnet_host, allowed_logins=self._run.allowed_logins)
 
@@ -322,7 +322,7 @@ class _Handler(BaseHTTPRequestHandler):
         return (self.headers.get("Host") or "").lower() in (f"{LOOPBACK}:{self._run.port}", f"localhost:{self._run.port}")
 
     def do_GET(self):
-        verdict = self._verdict("GET")
+        verdict = self._verdict(tailnet_access.VIEW)
         if not verdict.allowed:
             return self._send(403, (verdict.reason + "\n").encode())
         path = self.path.split("?", 1)[0].split("#", 1)[0]
@@ -410,7 +410,7 @@ class _Handler(BaseHTTPRequestHandler):
         The page's own origin and a JSON content type are both required, so a form or a script on another site
         cannot send it; the Host check stops DNS rebinding. The body is small and validated before anything is written.
         """
-        verdict = self._verdict("POST")
+        verdict = self._verdict(tailnet_access.CONTROL)
         if not verdict.allowed:
             return self._send(403, (verdict.reason + "\n").encode())
         if self.path.split("?", 1)[0].split("#", 1)[0] != CONTROL_PATH:

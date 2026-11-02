@@ -153,6 +153,24 @@ def test_the_shipped_default_leaves_the_phone_send_off():
     assert "terminals_send: false" in text.split("tailnet:", 1)[1].split("\nwatch:", 1)[0]
 
 
+@pytest.mark.parametrize("key,env", [
+    ("terminals_read", "SQUAD_TAILNET_TERMINALS_READ"),
+    ("terminals_attach", "SQUAD_TAILNET_TERMINALS_ATTACH"),
+])
+def test_terminal_grants_take_true_or_false_name_their_key_and_env_otherwise(key, env):
+    P.validate({"tailnet": {key: True}})
+    P.validate({"tailnet": {key: False}})
+    with pytest.raises(OptionError, match=f"tailnet.{key}"):
+        P.validate({"tailnet": {key: "yes"}})
+    assert P.ENV_KEYS[f"tailnet.{key}"] == env
+
+
+@pytest.mark.parametrize("key", ["terminals_read", "terminals_attach"])
+def test_the_shipped_default_leaves_each_terminal_grant_off(key):
+    text = (pathlib.Path(__file__).resolve().parent.parent / "config" / "agent-defaults.yaml").read_text()
+    assert f"{key}: false" in text.split("tailnet:", 1)[1].split("\nwatch:", 1)[0]
+
+
 def test_loop_write_takes_true_or_false_and_names_its_key_otherwise():
     P.validate({"tailnet": {"loop_write": True}})
     P.validate({"tailnet": {"loop_write": False}})

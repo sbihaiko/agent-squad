@@ -247,7 +247,7 @@ def admitted(apps, h, method):
     seen, reasons = {}, []
     for slug, app in apps.items():
         if "mod" not in app: continue
-        v = app["mod"].access(h, method)
+        v = app["mod"].access(h, app["mod"].route_action(method, h.path))
         if v.allowed: seen[slug] = app
         else: reasons.append(v.reason)
     if seen: return seen, ""
