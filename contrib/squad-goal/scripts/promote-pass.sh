@@ -14,6 +14,10 @@
 # SG_PROMOTE_PROOF=local promote-stg.sh.
 # The tree is $SG_STATE/promote-tree (SG_PROMOTE_TREE), a plain clone, never a ~/wt-* worktree, so wtclean never removes it.
 # A red or missing proof: one marker and one line per tip in $SG_STATE/promote.log; the next tip is tried on a later pass.
+# One clock covers the whole attempt (#1171): from the proof lock, SG_PROMOTE_BOUND_SECONDS covers the suite, its retry and the
+# delta. SG_PROMOTE_FALLBACK_SECONDS is reserved for the delta before the suite starts and is never taken by the suite, and the
+# clock never restarts. Past the deadline every descendant is stopped, TERM then KILL. A defect a check reported before the
+# deadline is a fail the bound never turns into a pass (#1170); an attempt that reported nothing is recorded bounded.
 d=$(cd "$(dirname "$0")" && pwd)
 [ -n "${SG_STATE:-}" ] || { echo "promote-pass: SG_STATE is not set; the pass never reads the machine-wide default" >&2; exit 2; }
 state=$SG_STATE; export SG_STATE; mkdir -p "$state"; log=$state/promote.log; marks=$state/promote-pass.tips
@@ -36,6 +40,13 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   # ADR-0164: delivery outranks the proof. An unfinished proof never holds a landing; only a bound the delta cannot carry
   # reaches the indeterminate branch below, and that branch never promotes a tip a test named red.
   t0=$(date +%s); bound=${SG_PROMOTE_BOUND_SECONDS:-900}; keep=${SG_PROMOTE_FALLBACK_SECONDS:-240}
+  case $bound in ''|*[!0-9]*|0) bound=900;; esac
+  case $keep in ''|*[!0-9]*) keep=240;; esac
+  due=$(( t0 + bound ))   # one deadline for the whole attempt: the suite, its retry and the delta never restart the clock
+  # The delta's slice is taken from the one budget before the gate starts, so the gate can never spend it: the suite stops
+  # at due-keep, and the delta answers on what is left, which is its slice unless the suite ended early (ADR-0163, #1171).
+  echo "$(date -u +%FT%TZ) promote-pass: delta slice reserved: ${keep}s of the ${bound}s budget" >> "$log"
+  echo "promote-pass: the delta's ${keep}s slice of the ${bound}s budget is reserved"
   reserve_s=${SG_PROMOTE_RESERVE_SECONDS:-0}
   [ "$reserve_s" -gt 0 ] && { printf '%s %s\n' "$(date +%s)" "$$" > "$state/promote-reserve.$$" && mv "$state/promote-reserve.$$" "$state/promote-reserve"; }
   # The proof samples the load while it runs, not only at the start: a red taken with the box over its bound is no proof at all,
@@ -44,6 +55,26 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   samples=$state/promote-load.$$
   ( while :; do sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}' | tr -d '{}' >> "$samples"; sleep 10; done ) & mon=$!
   trap 'kill "$mon" 2>/dev/null; rm -f "$state/promote-reserve" "$samples"' EXIT INT TERM
+  # tree_pids <pid>: the pid and every descendant it started, children first.
+  tree_pids() { local p=$1 c; for c in $(pgrep -P "$p" 2>/dev/null); do tree_pids "$c"; done; printf '%s\n' "$p"; }
+  # stop_tree <pid>: stop the tree as it stands now, TERM then KILL, so a child that ignores TERM still goes. The list is
+  # taken before the first signal: a child the parent leaves behind is reparented and can no longer be found from the parent.
+  stop_tree() { local p=$1 list x
+    list=$(mktemp "${TMPDIR:-/tmp}/pp-stop.XXXXXX" 2>/dev/null)
+    if [ -z "$list" ]; then kill -TERM "$p" 2>/dev/null; sleep 1; kill -KILL "$p" 2>/dev/null; return 0; fi
+    tree_pids "$p" > "$list"
+    while read -r x; do [ -n "$x" ] && kill -TERM "$x" 2>/dev/null; done < "$list"; sleep 1
+    while read -r x; do [ -n "$x" ] && kill -KILL "$x" 2>/dev/null; done < "$list"
+    rm -f "$list"; }
+  # bounded <seconds> <cmd...>: runs the command and stops its whole tree past the bound; answers 124 when it stopped it.
+  bounded() { local b=$1 p s; shift; s=$(date +%s); "$@" & p=$!
+    while kill -0 "$p" 2>/dev/null; do
+      [ $(( $(date +%s) - s )) -ge "$b" ] && { stop_tree "$p"; wait "$p" 2>/dev/null; return 124; }
+      sleep 1
+    done
+    wait "$p"; }
+  # defected <log>: a check already reported a defect before the deadline, so the bound never turns it into a pass.
+  defected() { /usr/bin/grep -qE '^(FAILED|ERROR) |errors? during collection|^[^ ]+:[0-9]+: error: |^[A-Z][A-Z]*[0-9]+ ' "$1"; }
   [ "$(g rev-parse HEAD)" = "$tip" ] || { mark "$tip" "not promoted: the clean tree is not at the tip"; exit 1; }
   # ADR-0164 (#1051, #1062): the check job of ci.yml on the tip, plus every full-proof shard that file names, is the full
   # pass when all are green. The shard job is withdrawn while #1062 is open, so the names come from the file and a restored
@@ -96,7 +127,8 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   # ADR-0156: a full pass carries across a covered delta. When one is on record and the tip moved only by covered paths, the
   # delta proof runs instead of the full suite and the promotion reads its record. Any refusal (an uncovered path, a bound, no
   # full pass) or a held delta lock falls through to the full suite below: the cheaper proof is an optimization, never a weaker gate.
-  if bash "$d/delta-pass.sh" > "$state/delta-pass.log" 2>&1; then
+  dleft=$(( due - $(date +%s) )); [ "$dleft" -lt 1 ] && dleft=1
+  if bounded "$dleft" bash "$d/delta-pass.sh" > "$state/delta-pass.log" 2>&1; then
     o=$(SG_PROMOTE_PROOF=local bash "$d/promote-stg.sh" 2>&1); rc=$?
     [ $rc = 0 ] || { mark "$tip" "not promoted: $(printf '%s' "$o" | tail -1)"; exit 1; }
     mark "$tip" "promoted: the delta carried the full pass ($state/delta-pass.log)"; exit 0
@@ -116,16 +148,9 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   # ADR-0163 (owner, 2026-11-01): no proof runs past fifteen minutes. Past its reserve bound the reserve lifts and the loop
   # dispatches beside it; past its deadline the suite and every child it started are killed, and the delta proof answers for
   # the tip instead. What the delta does not cover is proven hot: by the nightly and by the running system.
-  kill_tree() { local p=$1 c; for c in $(pgrep -P "$p" 2>/dev/null); do kill_tree "$c"; done; kill "$p" 2>/dev/null; }
-  # bounded <seconds> <cmd...>: runs the command and kills its tree past the bound; answers 124 when it was killed.
-  bounded() { local b=$1 p s; shift; s=$(date +%s); "$@" & p=$!
-    while kill -0 "$p" 2>/dev/null; do
-      [ $(( $(date +%s) - s )) -ge "$b" ] && { kill_tree "$p"; wait "$p" 2>/dev/null; return 124; }
-      sleep 2
-    done
-    wait "$p"; }
-  # The suite is bounded at what the attempt has left once the fallback keeps its share, and the fallback at what is left then.
-  rbound=$reserve_s; dline=$(( bound - keep - ( $(date +%s) - t0 ) )); [ "$dline" -lt 5 ] && dline=5
+  # The suite is bounded at what the attempt has left once the delta's reserved slice is kept; the delta answers on what is
+  # left then. Neither bound is ever rounded up: the whole attempt stays inside the one budget.
+  rbound=$reserve_s; dline=$(( t0 + bound - keep - $(date +%s) )); [ "$dline" -lt 1 ] && dline=1
   s0=$(date +%s); (cd "$tree" && bash -c "$suite") > "$out" 2>&1 & spid=$!
   rc=0; relieved=
   while kill -0 "$spid" 2>/dev/null; do
@@ -134,17 +159,23 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
       relieved=1; rm -f "$state/promote-reserve"
       echo "$(date -u +%FT%TZ) promote-pass: $tip passed its ${rbound}s reserve bound: the reserve lifts, the loop works beside the proof" >> "$log"
     fi
-    [ "$el" -ge "$dline" ] && { rc=124; kill_tree "$spid"; break; }
+    [ "$el" -ge "$dline" ] && { rc=124; stop_tree "$spid"; break; }
     sleep 5
   done
   if [ "$rc" = 124 ]; then wait "$spid" 2>/dev/null; else wait "$spid"; rc=$?; fi
   if [ "$rc" = 124 ]; then
     kill "$mon" 2>/dev/null; wait "$mon" 2>/dev/null
+    # ADR-0164 (#1170): a defect a check reported before the deadline is a measured red, and the bound never turns it into
+    # a pass or a bounded attempt: it holds the tip exactly as a suite that ran to its summary would.
+    if defected "$out"; then
+      ids=$(/usr/bin/grep -E '^(FAILED|ERROR) ' "$out" | head -n 3 | tr '\n' ' ' | sed 's/ $//')
+      bash "$d/gate.sh" --status full fail "$tip"; mark "$tip" "not promoted: the full suite passed its ${dline}s bound with $([ -n "$ids" ] && echo "the defect $ids" || echo "a defect") already reported ($out)"; exit 1
+    fi
     # ADR-0163: the bound is not a verdict. The full suite is killed and the delta proof, which names the important part,
     # answers for the tip; the part it does not cover is proven hot, by the nightly and by the running system. Only a tip
     # the delta cannot carry stays indeterminate, and a later pass retries it.
     echo "$(date -u +%FT%TZ) promote-pass: $tip passed its ${dline}s bound: the full suite is killed and the delta proof answers" >> "$log"
-    left=$(( bound - ( $(date +%s) - t0 ) )); [ "$left" -lt 60 ] && left=60
+    left=$(( due - $(date +%s) )); [ "$left" -lt 1 ] && left=1
     if bounded "$left" bash "$d/delta-pass.sh" > "$state/delta-pass-over-bound.log" 2>&1; then
       o=$(SG_PROMOTE_PROOF=local bash "$d/promote-stg.sh" 2>&1); rcd=$?
       [ $rcd = 0 ] || { mark "$tip" "not promoted: $(printf '%s' "$o" | tail -1)"; exit 1; }

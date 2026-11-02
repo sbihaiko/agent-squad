@@ -7,7 +7,7 @@
 unset SG_SERIAL_HELD SERIAL_TRY SG_CHILD_SESSION
 d=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G="git -c user.email=a@b -c user.name=t"; R=$T/remote.git
-export SG_STATE=$T/st SG_PROMOTE_REMOTE=$R SG_REPO=x/emu GIT_TERMINAL_PROMPT=0 SG_GHREAD=true SG_PROMOTE_QUIET_SECONDS=0 SERIAL_POLL_SECONDS=0.2
+export SG_STATE=$T/st SQUAD_CAPS_DIR=$T/caps SG_PROMOTE_REMOTE=$R SG_REPO=x/emu GIT_TERMINAL_PROMPT=0 SG_GHREAD=true SG_PROMOTE_QUIET_SECONDS=0 SERIAL_POLL_SECONDS=0.2   # (#1171) a throwaway gate budget: the deadline cases run gate.sh
 export SG_PROMOTE_LOAD_LIMIT=1000000   # the box the suite runs on is never idle: the load case below names its own bound
 # (#1192) The CI wait is disabled unless a case proves it: every fixture tip is seconds old, so the production default would
 # make every case wait for a CI that never comes. The wait's own cases name the bound they test.
@@ -389,5 +389,58 @@ SG_PROMOTE_PROOF=local bash "$d/promote-stg.sh" > "$T/out12" 2>&1; rc=$?
 
 rm -f "$T/suite-rc" "$T"/checks-*
 
+# (#1171) One deadline covers the whole attempt, and the delta keeps a reserved slice of it. The clock starts at the proof
+# lock; the suite is bounded at what is left once the delta's slice is kept, the delta at what is left then, and the clock
+# never restarts. A delta that hangs past its slice is stopped and the attempt is bounded, never a pass; a delta that answers
+# inside its slice still promotes; and a defect the suite reported before the deadline holds the tip as a red.
+deltahold() {  # <seconds>: hold the delta proof's lock so the first delta attempt is skipped, never queued
+  SERIAL_HOLD_SECONDS="$1" bash "$d/serial.sh" full-proof-delta sleep "$1" 2>/dev/null & dh=$!
+}
+adead() {  # one bounded attempt: <suite> <bound> <fallback> <delta suite> <tip before the change is p0>
+  rm -f "$SG_STATE/gate-status-delta" "$SG_STATE/promote-indeterminate" "$SG_STATE/promote-bound"
+  local s0=$(date +%s)
+  SG_PROMOTE_SUITE="$1" SG_PROMOTE_BOUND_SECONDS="$2" SG_PROMOTE_FALLBACK_SECONDS="$3" SG_DELTA_SUITE="$4" SG_PROMOTE_RESERVE_SECONDS=0 \
+    bash "$d/promote-pass.sh" > "$T/outd" 2>&1; rc=$?
+  el=$(( $(date +%s) - s0 ))
+}
+# The gate uses the rest of the budget and the delta keeps its slice: the suite runs to its bound, the hanging delta gets
+# only its reserved slice, and the attempt is recorded bounded.
+adv dev deadline-a; ta=$(tip dev); p0=$(git -C "$R" rev-parse refs/heads/dev^); before=$(tip stg)
+printf '%s\tfull\tpass\t%s\n' "$(date +%s)" "$p0" > "$SG_STATE/gate-status-full"; echo 30 > "$T/suite-sleep"
+deltahold 3; adead "$T/suite" 7 3 "trap '' TERM; sleep 2718"; wait "$dh" 2>/dev/null
+[ "$el" -lt 18 ] && ok "gate plus delta cannot exceed one budget (${el}s for a 7s budget)" \
+  || ko "the attempt ran past its one budget: ${el}s, out '$(cat "$T/outd")'"
+/usr/bin/grep -q "the delta's 3s slice of the 7s budget is reserved" "$T/outd" \
+  && ok "the delta's slice is reserved before the gate starts" \
+  || ko "no reserved-slice line: '$(tail -n 3 "$T/outd")'"
+[ -e "$SG_STATE/promote-bound" ] && [ "$(tip stg)" = "$ta" ] && ok "a delta that outran its slice is bounded, and the tip ships as bounded" \
+  || ko "bounded attempt: stg $(tip stg), dev $ta, marker $([ -e "$SG_STATE/promote-bound" ] && echo yes || echo no)"
+pgrep -f "sleep 2718" >/dev/null 2>&1 && ko "the delta's tree survived the deadline" || ok "no descendant process survives the deadline"
+rm -f "$T/suite-sleep"
+# The delta answers inside its reserved slice even though the gate used the rest, and the attempt promotes.
+adv dev deadline-b; tb=$(tip dev); p0=$(git -C "$R" rev-parse refs/heads/dev^); before=$(tip stg)
+printf '%s\tfull\tpass\t%s\n' "$(date +%s)" "$p0" > "$SG_STATE/gate-status-full"; echo 30 > "$T/suite-sleep"
+deltahold 3; adead "$T/suite" 20 8 "sleep 2; true"; wait "$dh" 2>/dev/null
+[ "$el" -lt 28 ] && [ "$(tip stg)" = "$tb" ] && ok "the delta's slice is available even when the gate used the rest (${el}s)" \
+  || ko "delta slice: stg $(tip stg), dev $tb, ${el}s, out '$(cat "$T/outd")'"
+IFS=$'\t' read -r _ dk dres dP dT _ < "$SG_STATE/gate-status-delta" 2>/dev/null
+[ "$dk" = delta ] && [ "$dres" = pass ] && [ "$dT" = "$tb" ] && ok "the delta answered inside its slice and the record names its pass" \
+  || ko "delta record: '$(cat "$SG_STATE/gate-status-delta" 2>/dev/null)'"
+rm -f "$T/suite-sleep"
+# A bounded attempt with a defect the suite reported is a fail, never bounded: the tip is held and no bound marker written.
+adv dev deadline-red; tc=$(tip dev); p0=$(git -C "$R" rev-parse refs/heads/dev^); before=$(tip stg)
+printf '%s\tfull\tpass\t%s\n' "$(date +%s)" "$p0" > "$SG_STATE/gate-status-full"
+printf '#!/bin/bash\necho "FAILED tests/test_x.py::test_one - boom"\ntrap "" TERM\nsleep 2718\n' > "$T/defect-suite"
+deltahold 3; adead "$T/defect-suite" 4 1 true; wait "$dh" 2>/dev/null
+[ "$rc" != 0 ] && [ "$(tip stg)" = "$before" ] && [ "$el" -lt 15 ] && ok "a bounded attempt that reported a defect holds the tip (${el}s)" \
+  || ko "bounded defect: rc $rc, stg $(tip stg), ${el}s, out '$(cat "$T/outd")'"
+IFS=$'\t' read -r _ kind res dsha < "$SG_STATE/gate-status-full" 2>/dev/null
+[ "$kind $res $dsha" = "full fail $tc" ] && ok "a bounded attempt with a reported defect is recorded as fail" \
+  || ko "bounded defect record: '$kind $res $dsha'"
+[ ! -e "$SG_STATE/promote-indeterminate" ] && [ ! -e "$SG_STATE/promote-bound" ] && ok "a bounded attempt with a reported defect writes no bound marker" \
+  || ko "a red the bound ended was marked bounded"
+pgrep -f "sleep 2718" >/dev/null 2>&1 && ko "the defect suite's tree survived the deadline" || ok "the defect suite's tree is stopped at the deadline"
+
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
+pkill -KILL -f "sleep 2718" 2>/dev/null   # a red run leaves the hang its case started
 rm -rf "$T"; exit $fail

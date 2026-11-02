@@ -404,7 +404,8 @@ def test_a_control_chart_dot_carries_the_issue_title_and_its_close_date(hub, boa
 
 
 def test_the_control_chart_names_its_lines_and_controls_the_jira_way(hub):
-    for name in ("Rolling average (", "centered)", "Standard deviation", "Past month", "Log scale", "Timeframe"):
+    # Re-anchored by #1145: the rolling window is stated once, in the head line, so the line names no window size.
+    for name in ("Rolling average, centered", "Standard deviation", "Past month", "Log scale", "Timeframe"):
         assert name in hub.PAGE, f"the page names no {name!r}"
 
 
@@ -416,20 +417,46 @@ def test_the_legend_says_what_each_line_answers(hub):
     assert "ltV(c.p85)" in hub.PAGE and "ltV(c.median)" in hub.PAGE, "the legend carries no value beside its line"
 
 
-def _lt_chart(hub, tmp_path, name, chart, zr=None):
+def _lt_chart(hub, tmp_path, name, chart, zr=None, coverage=None):
     """The lead chart's markup for one control chart; `zr` is the drag zoom the page holds, or none."""
     zoom = f"LT.zr={json.dumps(zr)}" if zr else "LT.zr=null"
-    return _render(hub, tmp_path, name, f"({zoom},ltChart({json.dumps(chart)}))")
+    return _render(hub, tmp_path, name, f"({zoom},ltChart({json.dumps(chart)},{json.dumps(coverage)}))")
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-def test_the_controls_are_grouped_by_what_they_do_and_the_page_names_their_order(hub, board, tmp_path):
+def test_the_first_screen_carries_two_controls_and_the_rest_sit_behind_more(hub, board, tmp_path):
+    """#1145: Timeframe and Type are the only controls on the first screen. Measurement, Display and View, and the
+    coverage line, the plotted-cards note and the ordering sentence, sit behind one More disclosure."""
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
-    out = _lt_chart(hub, tmp_path, "lt-groups.js", _flow(hub)["lead"]["control"]["jira"]["all"])
-    order = ["Filters", "id=ltr", "id=lty", "Measurement", "id=lta", "id=ltb", "Display", "id=lts", "View", "id=ltz"]
-    marks = [out.index(mark) for mark in order]
-    assert marks == sorted(marks), f"the controls are not grouped in the order named: {order}"
-    assert "Set the controls in order: filters, then measurement, then display, then view." in out
+    lead = _flow(hub)["lead"]
+    out = _lt_chart(hub, tmp_path, "lt-two-controls.js", lead["control"]["jira"]["all"], coverage=lead["coverage"])
+    first, sep, rest = out.partition("<details class=ltmore>")
+    assert sep, "the first screen carries no More disclosure"
+    more = rest[:rest.index("</details>")]
+    assert "id=ltr" in first and "id=lty" in first, "Timeframe and Type are not on the first screen"
+    for later in ("id=lta", "id=ltb", "id=lts", "id=ltz"):
+        assert later not in first, f"the first screen still carries {later}"
+        assert later in more, f"More does not hold {later}"
+    order = ["Measurement", "id=lta", "id=ltb", "Display", "id=lts", "View", "id=ltz"]
+    marks = [more.index(mark) for mark in order]
+    assert marks == sorted(marks), f"the disclosure does not keep the shipped order: {order}"
+    assert "Set the controls in order: filters, then measurement, then display, then view." in more
+    assert "cards read" in more, "the coverage line does not sit behind More"
+    assert "issue plotted" in more and "issue plotted" not in first, "the plotted-cards note does not sit behind More"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_head_line_states_the_window_and_the_excluded_total_once(hub, board, tmp_path):
+    """#1145: the head line states the window once, and the exclusion reasons move into a hover on its one total."""
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z"), 2: _todo(2), 3: _todo(3)})
+    lead = hub.flow_lead(ty="task")["lead"]
+    out = _render(hub, tmp_path, "lt-head-excluded.js", f"flowLead({json.dumps(lead)})")
+    head = re.search(r"<p class=fhead>(.*?)</p>", out).group(1)
+    assert head.count("excluded") == 1, "the head line states the exclusion more than once"
+    assert "excluded 2" in head
+    assert re.search(r'title="[^"]*still open[^"]*"', head), "the reasons do not sit in a hover on the total"
+    assert "window 20 issues" in head
+    assert out.count("20 issues") == 1, "the rolling window is stated twice"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
@@ -493,7 +520,8 @@ def test_a_chosen_span_shows_its_own_exclusions_in_the_one_total(hub, board, tmp
     assert span["excluded_total"] == 1
     out = _render(hub, tmp_path, "lt-span-exclusion.js", f"(LT.zc={json.dumps(span)},flowLead({json.dumps(lead)}))")
     assert out.count("excluded") == 1, "the page shows the exclusion more than once"
-    assert "excluded 1 (1 no transition into the chosen columns)" in out, "the one total is the base lead, not the chosen span"
+    assert "excluded 1" in out, "the one total is the base lead, not the chosen span"
+    assert 'title="1 no transition into the chosen columns"' in out, "the reasons do not sit in the total's hover"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")

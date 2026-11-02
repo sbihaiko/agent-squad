@@ -282,7 +282,7 @@ def server(port, apps, on_new=None):
         def terminal_read(self, a): return self.profile.terminal_read(self, a)   # a hosted session's scrollback (ADR-0152 rule 9)
         def terminal_post(self, a, op, keys): return self.profile.terminal_post(self, a, op, keys)   # an attach, a detach or an input
         def terminal_call(self, a, op, **fields): return self.profile.terminal_call(self, a, op, **fields)
-        def send_screenshot(self, a): return self.profile.send_screenshot(self, a)   # the overlay's screenshot (#903)
+        def send_attach(self, a, kind=None): return self.profile.send_attach(self, a, kind)   # one attach route (#1151)
         def answer(self, code, out): return self.profile.answer(self, code, out)
         def loop_post(self, a): return self.profile.loop_post(self, a)   # the loop switch's write (#923)
 
