@@ -9,7 +9,9 @@
 # branch point adds no suite. A base that does not resolve fails the gate, never skips the suites. Each suite runs hermetic, as
 # shell-suites.sh runs it: no SG_* variable, its own HOME. The promotion gate is the full suite (promote-stg.sh), not this.
 # The gate runs under the machine-wide gate lock (gate.sh) and leaves the fast status line the hub reads. Exit 0 when all pass,
-# 1 on a defect, 2 when the base does not resolve, 4 when the battery is inconclusive twice (#699): 4 holds landing.
+# 1 on a defect, 2 when the base does not resolve, 4 when the verdict is unproven: the battery is inconclusive twice (#699) or a
+# tool is absent (spec 1163). Exit 0 is pass and 1 is fail; 2 and 4 are unproven and hold landing. The verdict, one of pass, fail
+# or unproven with its reason and the checks that ran, goes to the history line through GATE_OUTCOME_FILE.
 # A pass is kept under its key (#955), so a second gate at the same key runs no battery; a red is never kept. SG_FAST_MEMO=0 turns it off.
 here="$(cd "$(dirname "$0")" && pwd)"
 base=${SG_FAST_BASE:-origin/${SG_BASE:-dev}}
@@ -46,12 +48,18 @@ if [ -n "$memokey" ] && [ -r "$(memo_file "$memokey")" ]; then
   fi
 fi
 case ":${SG_SERIAL_HELD:-}:" in *":gate:"*) ;; *) SG_GATE_KIND=fast exec bash "$here/gate.sh" bash "$0" "$@";; esac
-mb=$(git merge-base HEAD "$base" 2>/dev/null) || { echo "fast-gate: base $base does not resolve: the changed scripts are unknown, so the gate does not pass"; exit 2; }
+# verdict <outcome> <reason> <ran> <not run>: the verdict the history line carries (spec 1163). gate.sh hands the file over and reads it
+# inside the lock; a field is never empty, so a dash stands for none.
+verdict() {
+  [ -z "${GATE_OUTCOME_FILE:-}" ] || printf '%s\t%s\t%s\t%s\n' "$1" "$(printf '%s' "$2" | tr '\t' ' ')" "$3" "$4" > "$GATE_OUTCOME_FILE"
+}
+mb=$(git merge-base HEAD "$base" 2>/dev/null) || { verdict unproven "base $base does not resolve, so the changed scripts are unknown" - "ruff mypy pytest"; echo "fast-gate: base $base does not resolve: the changed scripts are unknown, so the gate does not pass"; exit 2; }
 top=$(git rev-parse --show-toplevel) || exit 2
-# classify <log> <rc>: the failing class of a red battery (#699), one word, then its detail: lint (ruff's code and path, #670,
-# #671), type (mypy's line), collection (the files pytest could not collect), pytest (the failed or errored test ids),
-# saturation (a worker crashed, or a signal killed the battery) or unknown (none of these). A red that names no failed test
-# is never read as one cause: it is a lint, type or collection defect, or it is inconclusive.
+# classify <log> <rc>: the class of a red battery (#699), one word, then its detail: lint (ruff's code and path, #670, #671), type
+# (mypy's line), collection (the files pytest could not collect), pytest (the failed or errored test ids), absent (ruff, mypy or
+# pytest is not installed in the battery's interpreter, spec 1163), saturation (a worker crashed, or a signal killed the battery)
+# or unknown (none of these). A red that names no failed test is never read as one cause: it is a lint, type or collection
+# defect, or it is inconclusive.
 ids_of() { sed -n -e 's/^FAILED \([^ ]*\).*/\1/p' -e 's/^ERROR \([^ ]*::[^ ]*\).*/\1/p' "$1" | sort -u; }
 classify() {
   local log=$1 rc=$2 p f
@@ -63,6 +71,8 @@ classify() {
   if [ -n "$p" ] || /usr/bin/grep -qE 'errors? during collection' "$log"; then echo "collection pytest could not collect ${p:-its tests}"; return; fi
   p=$(ids_of "$log" | tr '\n' ' ' | sed 's/ $//')
   [ -n "$p" ] && { echo "pytest the base battery failed at $p"; return; }
+  p=$(/usr/bin/grep -oE 'No module named [^a-z]*(ruff|mypy|pytest)([^A-Za-z0-9_.]|$)' "$log" | head -n 1 | sed -E 's/.*named [^a-z]*([a-z]+).*/\1/')
+  [ -n "$p" ] && { echo "absent $p is absent from the battery's interpreter, so its check did not run"; return; }
   if [ "$rc" -ge 128 ] || /usr/bin/grep -qE 'node down|crashed worker|worker .*crashed|^Killed|MemoryError|Cannot allocate memory|Too many open files|Resource temporarily unavailable' "$log"; then
     echo "saturation the battery exited $rc with a crashed worker or a kill, and no test id"; return; fi
   echo "unknown the battery exited $rc and named no lint, type, collection or test failure"
@@ -84,15 +94,22 @@ for try in 1 2; do
   rc=$?; tail -n 5 "$lg"
   c=$(classify "$lg" "$rc"); cls=${c%% *}; detail=${c#* }
   case $cls in
+    absent)
+      case $detail in ruff*) r=- n="ruff mypy pytest";; mypy*) r=ruff n="mypy pytest";; *) r="ruff mypy" n=pytest;; esac
+      verdict unproven "$detail" "$r" "$n"; echo "fast-gate: $cls: $detail; not retried ($lg)"; exit 4;;
     saturation|unknown)
       [ $try = 1 ] && { echo "fast-gate: $cls: $detail; inconclusive, so the battery runs once more ($lg)"; continue; }
+      verdict unproven "$detail" unknown unknown
       echo "fast-gate: $cls: $detail; inconclusive twice, so the gate does not pass and the landing holds ($lg)"; exit 4;;
     pytest)
       # shellcheck disable=SC2086  # one word per test id; set -f keeps a parametrized id such as t[a.sh] from globbing
       set -f; if bash -c "$retrycmd \"\$@\"" retry $(ids_of "$lg") >> "$lg" 2>&1; then set +f
         echo "fast-gate: the base battery failed under load and its failed tests passed alone: saturation, not a defect ($lg)"; break; fi
+      verdict fail "$detail" "ruff mypy pytest" -
       echo "fast-gate: pytest: $detail, and they fail alone too ($lg)"; exit 1;;
-    *) echo "fast-gate: $cls: $detail ($lg)"; exit 1;;
+    lint|type|collection)
+      case $cls in lint) r=ruff n="mypy pytest";; type) r="ruff mypy" n=pytest;; *) r="ruff mypy pytest" n=-;; esac
+      verdict fail "$detail" "$r" "$n"; echo "fast-gate: $cls: $detail ($lg)"; exit 1;;
   esac
 done
 # (#885) The pytest tally and the code-quality reading print together; the pipe's status is tee's, so the reading never changes the exit.
@@ -108,12 +125,15 @@ for t in "$top"/contrib/squad-goal/scripts/test-*.sh; do [ -f "$t" ] || continue
   done
 done
 suites=$(printf '%s\n' $suites | sort -u)
-failed=""
+bran="ruff mypy pytest"; bnot=-
+/usr/bin/grep -q '^no pytest ran' "$lg" && { bran="ruff mypy"; bnot=pytest; }
+failed=""; ranS=""
 for n in $suites; do s=$top/contrib/squad-goal/scripts/test-$n.sh; [ -f "$s" ] || continue
-  echo "=== test-$n.sh"
+  echo "=== test-$n.sh"; ranS="$ranS test-$n.sh"
   hm=$(mktemp -d); if (cd "$top" && env $(compgen -e | grep '^SG_' | sed 's/^/-u /') HOME="$hm" bash "$s"); then echo "--- ok: test-$n.sh"
   else echo "--- FAILED: test-$n.sh"; failed="$failed test-$n.sh"; fi; rm -rf "$hm"; done
-[ -z "$failed" ] || { echo "fast-gate: FAILED:$failed"; exit 1; }
+[ -z "$failed" ] || { verdict fail "failed suite:$failed" "$bran$ranS" "$bnot"; echo "fast-gate: FAILED:$failed"; exit 1; }
+verdict pass - "$bran$ranS" "$bnot"
 # The verdict the child reads: an exit 0 is a pass, but the one line names it and the log the child may open, so a session that
 # saw a lock wait on stderr still knows the gate passed (#945).
 [ -z "$memokey" ] || memo_store "$memokey" "$lg"
