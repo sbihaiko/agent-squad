@@ -156,6 +156,23 @@ line41=$($G -E '^CHILD' "$MKLOG.body" | $G ' 41 ')
 case "$line41" in *"an earlier attempt failed the entry gate: the local gates failed: fast-gate: the base battery failed at ruff: tests/t.py:8:8 F401"*) ok "a redispatched issue carries its last gate failure on its CHILD line";; *) ko "the CHILD line for 41: '$line41' (pass: $r)";; esac
 case "$($G -E '^CHILD' "$MKLOG.body" | $G ' 42 ')" in *"earlier attempt"*) ko "an issue with no failed dispatch carries a failure line";; *) ok "an issue with no failed dispatch carries no failure line";; esac
 
+# G1 (#1198) A child's own fast gate is its LAST step, after the final edit and commit, so the tree it proved is the tree
+#     the child hands in. A child that cannot gate last says so, because the wave entry gate then runs its own battery.
+scene gatelast 24
+issues '[{"number":551,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
+r=$(run); body=$(cat "$MKLOG.body" 2>/dev/null)
+case "$body" in *'Your last step, after your final edit and commit, is the entry gate: run "bash contrib/squad-goal/scripts/fast-gate.sh"'*) ok "G1: the request makes the fast gate the child's last step, after the final edit and commit";; *) ko "G1: the brief does not make the fast gate the last step: '$($G 'entry gate' "$MKLOG.body")'";; esac
+case "$body" in *"make no edit and no commit"*) ok "G1: the request forbids an edit after the gate";; *) ko "G1: the request does not forbid an edit after the gate";; esac
+case "$body" in *"cannot make it your last step"*"say so"*"own battery"*) ok "G1: a child that cannot gate last says so, and the entry gate falls back to its own battery";; *) ko "G1: no fallback line: '$($G 'last step' "$MKLOG.body")'";; esac
+
+# G2 (#1198) A repository with no fast gate names none: a missing gate is not a failure, and the child runs none.
+scene gateless 24
+issues '[{"number":552,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
+export SG_FAST_GATE_CMD=
+r=$(run); unset SG_FAST_GATE_CMD; body=$(cat "$MKLOG.body" 2>/dev/null)
+case "$body" in *fast-gate.sh*) ko "G2: a repository with no fast gate still names fast-gate.sh";; *) ok "G2: no fast gate configured names no script";; esac
+case "$body" in *"No fast gate is configured"*"not a failure"*) ok "G2: the request says no fast gate is configured and that it is not a failure";; *) ko "G2: no no-fast-gate line: '$body'";; esac
+
 # 1a) A ticket whose blockers have all closed may carry only its wave label. The wave orders the
 #     frontier; it does not grant permission to start. A label-gated read leaves it invisible.
 scene wave-only

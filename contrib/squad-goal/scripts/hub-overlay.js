@@ -67,6 +67,8 @@ SQ.sendState = info => info && info.send ? { disabled: false, note: "" }
   : { disabled: true, note: (info && info.why) || `Sending is off. The owner sets ${SQ.SEND_SETTING} to send.` };
 SQ.supervisorLine = info => info && info.state === "refused"
   ? `The terminal supervisor is not running: ${String(info.why || "no reason was recorded").replace(/\.$/, "")}.` : "";
+// The sentence keeps its own row in the Terminal panel: the shared status line is written by every send and every poll (#1160).
+SQ.supervisorView = info => { const text = SQ.supervisorLine(info); return { hidden: !text, text }; };
 SQ.draft = ctx => {
   const list = v => (Array.isArray(v) ? v : v ? [v] : []).map(String).filter(Boolean);
   const lines = ["Page context", `Screen: ${ctx.screen || ""}`, `Route: ${ctx.route || ""}`];
@@ -167,6 +169,8 @@ html.sq-docked body{margin-right:var(--sq-dock)}
 #sq-ov-note:empty{display:none}
 #sq-ov-status{margin:0;padding:0 13px 8px;font-size:13px;color:#e6e8ee}
 #sq-ov-status:empty{display:none}
+#sq-ov-supervisor{margin:0;padding:0 13px 8px;font-size:13px;color:#f5b041}
+#sq-ov-supervisor[hidden]{display:none}
 #sq-ov-live{margin:0;padding:0 14px 6px;font-family:var(--sq-mono);font-size:var(--sq-fs);line-height:1.55;color:#b8c0cf;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
 #sq-ov-live[hidden]{display:none}
 .sq-ov-back{display:none}
@@ -193,6 +197,7 @@ html.sq-over .sq-ov-back{display:inline-flex;align-items:center;min-height:44px;
 <button type="button" id="sq-ov-close" aria-label="Close" title="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
 </header>
 <div id="sq-ov-pick" hidden></div>
+<p id="sq-ov-supervisor" role="alert" hidden></p>
 <div id="sq-ov-log" role="log" aria-live="polite" aria-label="Session conversation"></div>
 <p id="sq-ov-live" aria-live="off" hidden></p>
 <div id="sq-ov-form">
@@ -217,8 +222,8 @@ document.body.appendChild(document.createRange().createContextualFragment(SQ.MAR
 const $ = id => document.getElementById(id);
 const btn = $("sq-ov-btn"), ov = $("sq-ov"), title = $("sq-ov-title"), pick = $("sq-ov-pick"), log = $("sq-ov-log"),
       text = $("sq-ov-text"), sendBtn = $("sq-ov-send"), plus = $("sq-ov-plus"), menu = $("sq-ov-menu"), note = $("sq-ov-note"),
-      stat = $("sq-ov-status"), handle = $("sq-ov-handle"), dockBtn = $("sq-ov-dock"), undockBtn = $("sq-ov-undock"), lens = $("sq-ov-lens"),
-      live = $("sq-ov-live");
+      stat = $("sq-ov-status"), supLine = $("sq-ov-supervisor"), handle = $("sq-ov-handle"), dockBtn = $("sq-ov-dock"),
+      undockBtn = $("sq-ov-undock"), lens = $("sq-ov-lens"), live = $("sq-ov-live");
 const de = document.documentElement;
 let sessions = [], cur = null, rule = null, timer = 0, lastSig = "", liveAct = null, liveTick = 0;
 
@@ -247,6 +252,12 @@ function addLine(line) {
 
 // ---- the session
 function say(msg) { stat.textContent = msg || ""; }
+// The supervisor's absence gets its own row, so a status message never overwrites it and the panel states it once (#1160).
+function paintSupervisor(info) {
+  const view = SQ.supervisorView(info);
+  supLine.hidden = view.hidden;
+  supLine.textContent = view.text;
+}
 // The live line keeps its own row: the spinner turns about eight times a second from the last read, and a read sets the count (#1082).
 function setActivity(a) { liveAct = a ? { ...a, got: Date.now() } : null; paintLive(); }
 function paintLive(){
@@ -326,9 +337,7 @@ async function loadSessions() {
   try { kept = sessionStorage.getItem(STORE + "-sid") || ""; } catch (e) { kept = ""; }
   cur = (cur && found.find(s => s.sid === cur.sid && s.src.api === cur.src.api))
      || found.find(s => s.src.api + " " + s.sid === kept) || (found.length === 1 ? found[0] : null);
-  paintPick(); paintHead();
-  const line = SQ.supervisorLine(sup);
-  if (line) say(line);
+  paintPick(); paintHead(); paintSupervisor(sup);
   if (cur) loadConversation();
   else if (!found.length) empty("No session runs in this project's checkout. Start Claude Code there, then open this again.");
   else empty("Pick a session above.");

@@ -145,6 +145,15 @@ case "$body" in *"No prepush check is configured"*"not a failure"*) ok "3d the r
 # 3d-3 a profile that defines its prepush command: the request names it
 body=$(abody 'SG_PREPUSH_CMD=make prepush')
 case "$body" in *'run "make prepush" in that worktree'*) ok "3d the request names the profile's prepush command";; *) ko "3d the request lacks the profile's prepush command: '$body'";; esac
+# 3e (#1198) the fast gate is the child's last step, after the final edit and commit, so the tree it proved is the tree the
+# child hands in. A child that cannot gate last says so: the wave entry gate then runs its own battery. No gate, no script.
+body=$(abody SG_FAST_GATE_CMD=mygate)
+case "$body" in *'Your last step, after your final edit and commit, is the entry gate: run "mygate"'*) ok "3e the request makes the fast gate the child's last step";; *) ko "3e the brief does not make the fast gate the last step: '$body'";; esac
+case "$body" in *"make no edit and no commit"*) ok "3e the request forbids an edit after the gate";; *) ko "3e the request does not forbid an edit after the gate: '$body'";; esac
+case "$body" in *"cannot make it your last step"*"say so"*"own battery"*) ok "3e a child that cannot gate last says so, and the entry gate falls back to its own battery";; *) ko "3e no fallback line: '$body'";; esac
+body=$(abody SG_FAST_GATE_CMD=)
+case "$body" in *mygate*|*fast-gate.sh*) ko "3e a repository with no fast gate still names a script";; *) ok "3e no fast gate configured names no script";; esac
+case "$body" in *"No fast gate is configured"*"not a failure"*) ok "3e the request says no fast gate is configured and that it is not a failure";; *) ko "3e no no-fast-gate line: '$body'";; esac
 rm -rf "$T/st/auto"; mv "$T/auto.keep" "$T/st/auto"
 
 # 4) autofrontier never dispatches a debt issue (1400 has ready-for-agent + debt; 1401 is a real slice)
