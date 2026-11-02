@@ -77,23 +77,6 @@ def events_of(issue):
     return [e for e in map(_event, issue["timelineItems"]["nodes"]) if e]
 
 
-NOT_DELIVERED = ("not_planned", "duplicate")   # the close reasons the card view draws as Abandoned (#921)
-
-
-def child_events(child, spec, stored):
-    """The events a sub-issue of a spec adds to its stored timeline: it joins the spec and the board at its created instant,
-    and a closed one closes at its closed instant. A closed child whose timeline holds no Status takes Done, or Abandoned
-    when its close reason is not delivered (#1072)."""
-    created = child["created_at"]
-    events = [{"t": created, "type": "added"}, {"t": created, "type": "spec", "spec": spec}]
-    if child.get("closed_at"):
-        closed = child["closed_at"]
-        events.append({"t": closed, "type": "closed"})
-        if not any(e["type"] == "status" for e in stored):
-            events.append({"t": closed, "type": "status", "status": "Abandoned" if child.get("state_reason") in NOT_DELIVERED else "Done"})
-    return events
-
-
 def record_page(store, number, page, issue_updated, status_updated):
     """Merge one timeline page into the in-memory store: its events follow the stored ones, and its end cursor resumes the next read."""
     prev = store.get(number, {})
@@ -136,51 +119,8 @@ def intervals(events):
 
 
 ROLE = _columns.ROLE
-_EMPTY = {"on_board": False, "column": None, "hold": None, "spec": None}
-
-
 def _in_scope(s, spec):
     return bool(s["on_board"]) and s["spec"] == spec
-
-
-def _active(s, spec):
-    return _in_scope(s, spec) and s["column"] != ROLE["abandoned"]
-
-
-def _marks(prev, cur, spec):
-    was, now = _active(prev, spec), _active(cur, spec)
-    if now and not was:
-        return ["reopened" if _in_scope(prev, spec) else "added"]
-    if was and not now:
-        return ["cancelled" if _in_scope(cur, spec) else "removed"]
-    if not now:
-        return []
-    marks = []
-    if prev["column"] == ROLE["issue_closed"] and cur["column"] != ROLE["issue_closed"]: marks.append("reopened")
-    if cur["column"] == ROLE["unscheduled"] and prev["column"] not in (None, ROLE["unscheduled"], ROLE["issue_closed"]): marks.append("parked")
-    if cur["hold"] and not prev["hold"]: marks.append("held")
-    if prev["hold"] and not cur["hold"]: marks.append("released")
-    return marks
-
-
-def burnup(store, spec):
-    """A spec's burn-up (#1025): one point per instant its scope changes. Scope counts the cards whose spec is `spec`, on the
-    board and not cancelled; done counts those closed; held counts those under a hold. Each point carries the marks the instant
-    made, so a line may go down on a removal, a cancellation or a reopening."""
-    moments = sorted(((s["from"], n, s) for n, rec in store.items() for s in intervals(rec.get("events") or [])),
-                     key=lambda m: (m[0], m[1]))
-    state, points, last = {}, [], (0, 0, 0)
-    for t, group in itertools.groupby(moments, key=lambda m: m[0]):
-        marks = []
-        for _, n, s in group:
-            marks += [{"k": k, "n": n} for k in _marks(state.get(n, _EMPTY), s, spec)]
-            state[n] = s
-        active = [s for s in state.values() if _active(s, spec)]
-        counts = (len(active), sum(s["column"] == ROLE["issue_closed"] for s in active), sum(bool(s["hold"]) for s in active))
-        if marks or counts != last:
-            points.append({"t": t, "scope": counts[0], "done": counts[1], "held": counts[2], "marks": marks})
-            last = counts
-    return {"spec": spec, "points": points}
 
 
 def lead_span(runs, start=None, end=None, complete=True):

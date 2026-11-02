@@ -117,10 +117,9 @@ def _flow(hub):
 def test_tasks_header_has_flow_and_lead_time_buttons_and_keeps_its_controls(hub):
     # Re-anchored to the owner-approved mock (#889): Flow and Lead time sit on the Flow charts tab, not in the board's toolbar.
     tabs = hub.PAGE[hub.PAGE.index("<div class=rkt id=flowtabs>"):hub.PAGE.index("<div id=main>")]
-    # Re-anchored by the owner (2026-11-01): one tab per chart, so the burn-down never draws inside the flow diagram (#1080).
-    assert [re.sub(r"<[^>]*>", "", x) for x in re.findall(r"<button[^>]*>.*?</button>", tabs)] == ["Runs", "Cumulative Flow Diagram", "Burn-Down", "Lead Time"]
+    # Re-anchored by the owner (2026-11-02): the burn-down tab is gone, so the charts are the three the owner keeps.
+    assert [re.sub(r"<[^>]*>", "", x) for x in re.findall(r"<button[^>]*>.*?</button>", tabs)] == ["Runs", "Cumulative Flow Diagram", "Lead Time"]
     assert "id=flowv" not in hub.PAGE, "the View selector is gone: a chart is a tab"
-    assert 'id=bburn' in tabs and 'flowOpen("burndown")' in hub.PAGE
     assert 'flowOpen=async k=>{FLOWK=k;$("#flowov").hidden=false;flowTabs();' in hub.PAGE, "the lit tab follows the chart drawn"
     head = hub.PAGE[hub.PAGE.index("<div id=bhead>"):hub.PAGE.index("<div id=bcases>", hub.PAGE.index("<div id=bhead>"))]
     assert "<span id=bt class=m></span>" in head
