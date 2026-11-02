@@ -165,7 +165,7 @@ def test_stream_on_names_the_stream_in_the_phone_page(on):
 def test_quiet_stream_writes_a_heartbeat(on, monkeypatch):
     monkeypatch.setattr(_hubstream(), "HEARTBEAT_SECONDS", 0.3)
     s = _open(on["port"], "/alpha/api/stream")
-    assert b": ping" in _read_until(s, b": ping", budget=4.0)
+    assert b"event: ping" in _read_until(s, b"event: ping", budget=4.0)
     s.close()
 
 
@@ -198,8 +198,8 @@ def test_one_read_per_subject_per_tick_whatever_the_pages():
     assert len(reads) == 2
 
 
-def _turn(uid, text):
-    return {"id": uid, "role": "owner", "text": text, "at": "2026-11-02T00:00:00Z", "m": None}
+def _turn(uid, text, k=None):
+    return {"id": uid, "k": k or uid, "role": "owner", "text": text, "at": "2026-11-02T00:00:00Z", "m": None}
 
 
 def _one_page(turns):
@@ -258,9 +258,43 @@ def test_a_conversation_window_holds_each_turn_once_in_order():
     turns.append(_turn("t2", "two"))
     page = tr.refresh("sid-a", tick=2)
     assert page["turns"] == turns and page["end"] == tr.window("sid-a").end
-    lines = b'{"at":"2026-11-02T00:00:00Z","id":"t1","m":null,"role":"owner","text":"one"}\n'
-    lines += b'{"at":"2026-11-02T00:00:00Z","id":"t2","m":null,"role":"owner","text":"two"}\n'
+    lines = b'{"at":"2026-11-02T00:00:00Z","id":"t1","k":"t1","m":null,"role":"owner","text":"one"}\n'
+    lines += b'{"at":"2026-11-02T00:00:00Z","id":"t2","k":"t2","m":null,"role":"owner","text":"two"}\n'
     assert tr.window("sid-a").since(0) == (None, lines)
+
+
+def test_two_turns_sharing_a_message_id_are_both_kept():
+    hubstream = _hubstream()
+    turns = [_turn("a1", "first", k="0:0"), _turn("a1", "second", k="0:1")]
+    tr = hubstream.Transcripts(_one_page(turns))
+    tr.refresh("sid-a", tick=1)
+    data = tr.window("sid-a").since(0)[1]
+    assert data.count(b'"text":"first"') == 1 and data.count(b'"text":"second"') == 1
+
+
+def test_a_let_go_window_resumes_past_the_turns_it_already_sent(monkeypatch):
+    hubstream = _hubstream()
+    monkeypatch.setattr(hubstream, "WINDOWS_KEPT", 1)
+    pages = {"sid-a": [_turn("t1", "one")], "sid-b": []}
+    tr = hubstream.Transcripts(lambda sid: {"turns": list(pages[sid]), "next": None, "activity": {}})
+    tr.refresh("sid-a", tick=1)
+    held = tr.window("sid-a").end
+    tr.refresh("sid-b", tick=1)
+    pages["sid-a"].append(_turn("t2", "two"))
+    tr.refresh("sid-a", tick=2)
+    gap, data = tr.window("sid-a").since(held)
+    assert gap is None and b'"text":"two"' in data and b'"text":"one"' not in data
+
+
+def test_the_windows_stay_bounded_when_every_one_is_watched(monkeypatch):
+    hubstream = _hubstream()
+    monkeypatch.setattr(hubstream, "WINDOWS_KEPT", 1)
+    tr = hubstream.Transcripts(_one_page([_turn("t1", "one")]))
+    tr.watch("sid-a")
+    tr.refresh("sid-a", tick=1)
+    tr.watch("sid-b")
+    tr.refresh("sid-b", tick=1)
+    assert len(tr._windows) == 1
 
 
 def test_a_reader_from_another_epoch_gets_the_window_start_as_a_gap():
@@ -341,8 +375,8 @@ def test_a_reconnect_inside_the_window_replays_exactly_the_bytes_after_the_held_
     second = _event(_read_until(s, b'three\\"'), "conversation")
     s.close()
     assert first["lines"] + second["lines"] == (
-        '{"at":"2026-11-02T00:00:00Z","id":"t2","m":null,"role":"owner","text":"two"}\n'
-        '{"at":"2026-11-02T00:00:00Z","id":"t3","m":null,"role":"owner","text":"three"}\n')
+        '{"at":"2026-11-02T00:00:00Z","id":"t2","k":"t2","m":null,"role":"owner","text":"two"}\n'
+        '{"at":"2026-11-02T00:00:00Z","id":"t3","k":"t3","m":null,"role":"owner","text":"three"}\n')
 
 
 @pytest.mark.heavy

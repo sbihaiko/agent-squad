@@ -1280,12 +1280,12 @@ squadStream.on("sessions", applySessions);
 function readConversation(before) {
   return call("/api/sessions/conversation?sid=" + encodeURIComponent(termSid) + (before ? "&before=" + before : ""));
 }
-// Each turn is drawn once: the drawn ids are the record, so a poll, a push and an older page never repeat one.
+// Each turn is drawn once: the drawn keys are the record, so a poll, a push and an older page never repeat one.
 function drawTurns(turns) {
-  const fresh = turns.filter(t => !termDrawn.has(t.id));
+  const fresh = turns.filter(t => !termDrawn.has(t.k));
   if (!fresh.length) return;
   $("termview-turns").append(...fresh.map(turnRow));
-  for (const t of fresh) termDrawn.add(t.id);
+  for (const t of fresh) termDrawn.add(t.k);
 }
 async function loadConversation(force) {
   if (termBusy || !termOpen() || !termSid) return;
@@ -1316,6 +1316,7 @@ squadStream.on("gap", d => {
   if (d.sid !== termSid) return;
   $("termview-turns").replaceChildren();
   termDrawn.clear();
+  loadConversation(true);
 });
 // The question card the open session waits on (#1093) belongs to the session: the page draws the one the hub reads, so a
 // card still pending when the page closed is answerable when it comes back.
@@ -1347,8 +1348,9 @@ async function loadOlder() {
   try {
     const page = await readConversation(termCursor);
     if (sid !== termSid) return;
-    el.prepend(...page.turns.map(turnRow));
-    for (const t of page.turns) termDrawn.add(t.id);
+    const fresh = page.turns.filter(t => !termDrawn.has(t.k));
+    el.prepend(...fresh.map(turnRow));
+    for (const t of fresh) termDrawn.add(t.k);
     el.scrollTop += el.scrollHeight - before;
     termCursor = page.next;
     $("termview-older").hidden = termCursor === null;

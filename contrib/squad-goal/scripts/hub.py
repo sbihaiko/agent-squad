@@ -6540,15 +6540,15 @@ class H(BaseHTTPRequestHandler):
         held = hubstream.held_from(query)
         at = hubstream.conv_from(query)
         watched = list(at)
-        for sid in watched: TRANSCRIPTS.watch(sid)
-        self.protocol_version = "HTTP/1.1"   # the body is streamed, so its end is framed: chunked, then the close
-        self.send_response(200); self.send_header("Content-Type", hubstream.CTYPE); self.send_header("Cache-Control", "no-store")
-        self.send_header("Transfer-Encoding", "chunked"); self.send_header("Connection", "close"); self.end_headers()
-        self.close_connection = True
-        def chunk(data):
-            self.wfile.write(b"%x\r\n" % len(data) + data + b"\r\n")
-        quiet = time.monotonic()
         try:
+            for sid in watched: TRANSCRIPTS.watch(sid)
+            self.protocol_version = "HTTP/1.1"   # the body is streamed, so its end is framed: chunked, then the close
+            self.send_response(200); self.send_header("Content-Type", hubstream.CTYPE); self.send_header("Cache-Control", "no-store")
+            self.send_header("Transfer-Encoding", "chunked"); self.send_header("Connection", "close"); self.end_headers()
+            self.close_connection = True
+            def chunk(data):
+                self.wfile.write(b"%x\r\n" % len(data) + data + b"\r\n")
+            quiet = time.monotonic()
             while True:
                 tick = hubstream.tick()
                 VERSIONS.refresh(tick)
@@ -6563,7 +6563,7 @@ class H(BaseHTTPRequestHandler):
                 now = time.monotonic()
                 if sent: quiet = now
                 elif now - quiet >= hubstream.HEARTBEAT_SECONDS:
-                    chunk(b": ping\n\n"); quiet = now
+                    chunk(hubstream.frame("ping", {})); quiet = now
                 time.sleep(hubstream.TICK_SECONDS)
         except OSError: return
         finally:

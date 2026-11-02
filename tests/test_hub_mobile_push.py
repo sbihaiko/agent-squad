@@ -16,7 +16,7 @@ BOARD_TWO = {"t": 2, "err": None, "labels": [], "lc": {}, "cases": [], "flow": N
 EMIT = """
 const stream = () => __state.streams[__state.streams.length - 1];
 const emit = (name, d) => stream().handlers[name].forEach(fn => fn({ data: JSON.stringify(d) }));
-const turnLine = (uid, text) => JSON.stringify({ id: uid, role: "owner", text, at: "", m: null }) + "\\n";
+const turnLine = (uid, text, k) => JSON.stringify({ id: uid, k: k || uid, role: "owner", text, at: "", m: null }) + "\\n";
 """
 
 
@@ -87,6 +87,25 @@ def test_a_gap_clears_the_drawn_turns_and_the_window_redraws_from_its_start(hub,
     """.replace("%(sid)s", json.dumps(SID))
     out = run_page(page, driver, routes={"/api/sessions/conversation": [{"body": json.dumps(CONV_EMPTY)}]})
     assert out["drawn"] == ["ownersecond"], out["drawn"]
+
+
+def test_an_older_page_draws_only_the_turns_not_yet_drawn(hub, monkeypatch):  # noqa: F811
+    page = stream_page(hub, monkeypatch)
+    older = {"turns": [{"id": "t1", "k": "0:0", "role": "owner", "text": "first", "at": "", "m": None},
+                       {"id": "t0", "k": "-1:0", "role": "owner", "text": "old", "at": "", "m": None}],
+             "next": None, "activity": {}, "epoch": 9, "end": 0}
+    driver = EMIT + """
+      openConversation(%(sid)s, "Session one");
+      await __tick(5);
+      emit("conversation", { sid: %(sid)s, epoch: 9, at: 0, end: 1, lines: turnLine("t1", "first", "0:0") });
+      await __tick(5);
+      termCursor = 40;
+      await loadOlder();
+      await __tick(5);
+      return { drawn: $("termview-turns").children.map(el => el.textContent) };
+    """.replace("%(sid)s", json.dumps(SID))
+    out = run_page(page, driver, routes={"/api/sessions/conversation": [{"body": json.dumps(CONV_EMPTY)}, {"body": json.dumps(older)}]})
+    assert out["drawn"] == ["ownerold", "ownerfirst"], out["drawn"]
 
 
 def test_the_polls_stay_as_the_fallback_when_no_stream_is_live(hub):  # noqa: F811

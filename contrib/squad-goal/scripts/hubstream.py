@@ -147,8 +147,8 @@ class Transcripts:
         win = self._window(sid)
         seen = self._seen.setdefault(sid, set())
         for turn in page["turns"]:
-            if turn["id"] in seen: continue
-            seen.add(turn["id"])
+            if turn["k"] in seen: continue
+            seen.add(turn["k"])
             win.append((json.dumps(turn, sort_keys=True, separators=(",", ":")) + "\n").encode())
         return {**page, "epoch": self.epoch, "end": win.end}
 
@@ -160,12 +160,10 @@ class Transcripts:
         return win
 
     def _let_go(self):
-        for sid in self._windows:
-            if not self._watchers.get(sid, 0):
-                self._dead[sid] = self._windows.pop(sid).end
-                self._seen.pop(sid, None)
-                self._last.pop(sid, None)
-                return
+        unwatched = [sid for sid in self._windows if not self._watchers.get(sid, 0)]
+        sid = (unwatched or list(self._windows))[0]
+        self._dead[sid] = self._windows.pop(sid).end
+        self._last.pop(sid, None)
 
 
 def held_from(query):

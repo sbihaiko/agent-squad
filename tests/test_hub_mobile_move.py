@@ -54,7 +54,7 @@ class El {
   get textContent() { return this._text + this.children.map(c => c.textContent).join(""); }
   set textContent(v) { this.children = []; this._text = String(v); }
   append(...kids) { for (const k of kids) { if (k && k.tagName) { k.parentElement = this; this.children.push(k); } } }
-  prepend(...kids) { for (const k of kids) { if (k && k.tagName) { k.parentElement = this; this.children.unshift(k); } } }
+  prepend(...kids) { const ok = kids.filter(k => k && k.tagName); for (const k of ok) k.parentElement = this; this.children.unshift(...ok); }
   replaceChildren(...kids) { this.children = []; this._text = ""; this.append(...kids); }
   setAttribute(name, v) {
     if (name.startsWith("data-")) this.dataset[name.slice(5).replace(/-(\w)/g, (_, c) => c.toUpperCase())] = String(v);
