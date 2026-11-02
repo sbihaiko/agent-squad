@@ -9,8 +9,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"
-PINNED = "c10560aba624f76713860ac9286149e9d38dc84df1c43213a4b61ff39cefd114"
-SHIPPED = ["Backlog", "Todo", "Doing", "Code Review", "Code Complete", "Pushing", "Testing", "Closed", "Abandoned"]
+PINNED = "b5779ebebd070b8b508ce4b489f5cdc46a2a517191448bc5d5ff2ed499009d53"
+SHIPPED = ["Backlog", "Todo", "Doing", "Code Review", "Code Complete", "Closed", "Abandoned"]
 
 
 def _load(directory):
@@ -81,9 +81,11 @@ def test_the_pin_command_exits_one_on_a_mismatch(tmp_path):
     ({"review_wait": True, "run_live": True}, "Code Review", None),
     ({"review_wait": True, "wave_branch": True}, "Code Complete", None),
     ({"wave_branch": True}, "Code Complete", None),
-    ({"landing": True}, "Pushing", None),
-    ({"dev_ci": True}, "Testing", None),
+    ({"landing": True, "wave_branch": True}, "Code Complete", None),
+    ({"dev_ci": True, "wave_branch": True}, "Code Complete", None),
     ({"dev_ci": True, "closed": True}, "Closed", None),
+    ({"in_dev": True, "dev_ci": True}, "Closed", None),
+    ({"in_dev": True, "owner": True}, "Closed", "frozen:owner"),
     ({"closed": True}, "Closed", None),
     ({"abandoned": True}, "Abandoned", None),
     ({"owner": True}, "Backlog", "frozen:owner"),

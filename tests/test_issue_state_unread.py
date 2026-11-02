@@ -53,7 +53,7 @@ def test_unread_rescues_a_missing_card_that_its_node_id_resolves_in_todo():
 
 
 def test_unread_reads_no_node_for_a_card_the_board_read_carries():
-    binding = FakeBinding({"801": "Todo"}, nodes={"801": "Testing"})
+    binding = FakeBinding({"801": "Todo"}, nodes={"801": "Code Review"})
 
     issue_state.State(binding).unread([801])
 

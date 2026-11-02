@@ -80,7 +80,7 @@ echo run-missing >> "$T/st/active-runs.txt"; echo run-missing > "$T/st/auto/disp
 mk run-child 921; echo run-child > "$T/st/auto/disp-921"
 # I: the child #926 of spec #925 (in Code Complete) is in Doing under a live run
 mk run-child2 926; echo run-child2 > "$T/st/auto/disp-926"
-run() { SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$T/st" SG_FORK_DIR= SG_FORK_BASE= SG_TESTING=Testing SG_BOARD_VOCAB=shipped JANITOR_NOTIFY="$T/notify" python3 -I "$T/s/janitor.py" 2>&1; }
+run() { SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$T/st" SG_FORK_DIR= SG_FORK_BASE= SG_BOARD_VOCAB=shipped JANITOR_NOTIFY="$T/notify" python3 -I "$T/s/janitor.py" 2>&1; }
 bc() { cat "$T/board.calls" 2>/dev/null; }
 o=$(run)
 /usr/bin/grep -q '^o 4 Todo 911$' "$T/board.calls" 2>/dev/null && ok "A: a zombie run with no marker returns its card to Todo" || ko "A #911 card not back in Todo: $o $(bc)"

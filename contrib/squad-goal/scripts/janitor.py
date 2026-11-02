@@ -32,7 +32,7 @@
     Its issue goes back to the column the dispatch reads (Todo; the bug board's Doing -> To triage) and the fork/disp/bug markers are dropped, so the frontier builds it again (#1830). A marker whose commit is in the base, or whose change the base holds anyway, and a branch still ahead of the base (the close retries on its head) are left alone.
  H  board state against the issue's own history (its loop comments; the REST timeline carries no project-status events), at most once per 10 min:
     RED-LOOP #N     3+ "fork suite failed after merging" comments with no green fork close since: the loop is not converging, a person must look.
-    STATE-REGRESSION #N  the card is Todo/Blocked although the history says it reached Code Complete/Testing, or the card is Done while the issue is open; R repairs a Done card to the supported column.
+    STATE-REGRESSION #N  the card is Todo/Blocked although the history says it reached Code Complete, or the card is Done while the issue is open; R repairs a Done card to the supported column.
  R  every board card the passes above know of: its expected status is derived from the run's own truth and the evidence beside it, and only a mismatch is written (one card, one PATCH), with the reason named.
     A live run holds the issue (dispatch marker or accepted child) -> In Progress; an issue that is closed or whose work branch is in $SG_BASE -> Done, so work that landed on a parent branch (#127) and never reached the base is not Done;
     a landing is credited to the child that made it, never to every issue the run held (#271): an issue a child's own accept line names follows that child's own `land` event and its own outcome, so a child that
@@ -50,7 +50,7 @@
     With SG_BOARD_VOCAB=shipped every terminal entry carries its condition in one queued comment (#245): Closed names the branch in the landing line (or who closed it, when no branch names it); Abandoned names who decided and why (wontfix, closed as not planned or as a duplicate).
     A terminal write whose condition no read answers is not made (TERMINAL-NO-CONDITION), and a card settled in a terminal column with no tagged comment
     gets one, once (TERMINAL-BACKFILL, JANITOR_TERMINAL_BACKFILL per pass, default 5).
-    With SG_BOARD_VOCAB=shipped R is also the one producer of the board facts (board_facts.py, ADR-0145): a run's wave branch on the remote, the review of its tip, and the check runs of the dev tip give wave_branch, landing and dev_ci, and a work branch whose review waits gives review_wait; board_columns.column_for names the column (Code Complete, Pushing, Testing, Code Review, Doing).
+    With SG_BOARD_VOCAB=shipped R is also the one producer of the board facts (board_facts.py, ADR-0145): a run's wave branch on the remote, the review of its tip, and the check runs of the dev tip give wave_branch, landing and dev_ci (reported facts, no column), and a work branch whose review waits gives review_wait; board_columns.column_for names the column (Code Complete, Code Review, Doing).
     A child of an ended run whose code is done and that has not entered the run's open wave is in Code Review, and no live run or
     review moves a card back from a later column (#603, ADR-0143). No route is added: the branch read is the one work_branches makes, and the dev tip's CI is one door read a pass.
  M  the live skill copy ($SG_LIVE_DIR, else ~/.claude/skills/squad-goal): a file whose mtime changed, or that came or went, since the last pass while no
@@ -696,21 +696,26 @@ def door_read(route, q):   # one read through the door (gh_api, ADR-0277): (answ
     r, out = _run(["bash", "-c", '. "$0"; "$@"', str(pathlib.Path(__file__).parent / "ghcall.sh"), "gh_api", route, "-q", q])
     return r == 0, out.strip()
 CLOSER = '[.[] | select(.event == "closed") | .actor.login] | last // ""'   # who closed the issue last, from its events (a single-issue read through the door carries no closed_by)
+_wave_in_dev = {}   # issue -> (wave branch, its tip) of the wave whose landing in dev put its card in Closed, read by terminal_facts in the same pass
 def terminal_facts(n, col):   # the facts a terminal comment states (#245), or None when a read did not answer: nothing is claimed on a guess
     from urllib.parse import quote
     if col == "Closed":
         land = os.environ.get("SG_LAND_BRANCH") or "dev"
         landed = [b for b, g in work_branches().get(str(n), []) if g in ("behind", "identical")]   # the branch is the delivery (#358): no pull request is read
-        if not landed:
+        if landed:
+            branch = landed[0]
+            ok, sha = door_read(f"repos/{repo0}/branches/{quote(branch, safe='')}", '.commit.sha // ""')
+            if not ok: return None
+        elif str(n) in _wave_in_dev:
+            branch, sha = _wave_in_dev[str(n)]
+        else:
             ok, who = door_read(f"repos/{repo0}/issues/{n}/events?per_page=100", CLOSER)
             return {"base": land, "closed_by": who, "reason": issue_info(n)[1]} if ok else None   # the close reason: a not-planned close is never called completed (#517)
-        ok, sha = door_read(f"repos/{repo0}/branches/{quote(landed[0], safe='')}", '.commit.sha // ""')
-        if not ok: return None
         test = ""
         if sha:
             ok, test = door_read(f"repos/{repo0}/commits/{sha}/check-runs", '[.check_runs[] | .name + ": " + (.conclusion // .status)] | join(", ")')
             if not ok: return None
-        return {"base": land, "branch": landed[0], "sha": sha, "test": test}
+        return {"base": land, "branch": branch, "sha": sha, "test": test}
     state, reason, _ = issue_info(n)   # the pass's one issue read: state, reason and labels
     if "wontfix" in issue_labels(n):
         ok, who = door_read(f"repos/{repo0}/issues/{n}/events?per_page=100", '[.[] | select(.event == "labeled" and .label.name == "wontfix") | .actor.login] | last // ""')
@@ -758,7 +763,6 @@ def reconcile_board():
         sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # board_columns sits beside this script; -I keeps the script's directory off sys.path
         from board_columns import SHIPPED_NAME, FREEZE_LABEL, TERMINAL, TERMINAL_TAG, terminal_comment, column_for, past, CODE_REVIEW
     doing = "Doing" if shipped else "In Progress"
-    testing = set()   # issues whose wave is in dev while the CI of the dev tip runs: Done waits for the CI to end
     frozen = set()   # issues that carry the owner freeze this pass: shipped vocabulary only
     stopped = set()   # issues whose newest run stopped needs-human or failed: no stale branch or local landing moves them forward
     specs = set()   # a spec is never work, and its card is a fold over its sub-issues (ADR-0142): a commit subject, a branch or a landing that names it is its children's, so no work rule writes its card and the fold alone sets it (#665)
@@ -783,11 +787,13 @@ def reconcile_board():
         if old and old[0] >= rank: return
         expected[n] = (rank, status, why, run_id, run_ts)
         if status == "Todo" and "nothing landed" in why: no_landing.add(n)
-    def wave_column(n, f, i):   # the facts producer (ADR-0145): Pushing and Testing come from the run's wave branch, its approval and the CI of the dev tip, and the table names the column
+    def wave_column(n, f, i):   # a card whose wave is in dev is Closed; the push, the approval and the dev CI are reported facts, never a column (ADR-0145)
         if not shipped: return
         col, _ = column_for(wave_facts(n, {f.name, i["run_id"]}))
-        if col == "Pushing": set_expected(n, col, f"the wave of run {i['run_id']} is approved and its push to dev is pending", i["run_id"], i["run_ts"], 65)
-        elif col == "Testing": set_expected(n, col, f"the wave of run {i['run_id']} is in dev and the CI of the dev tip runs", i["run_id"], i["run_ts"], 70); testing.add(n)
+        if col == "Closed":
+            run = next(r for r in {f.name, i["run_id"]} if r in _wv)
+            _wave_in_dev[str(n)] = ("wave/" + run, _wv[run][0])
+            set_expected(n, col, f"the wave of run {i['run_id']} is in dev", i["run_id"], i["run_ts"], 80)
     def unheld(n, f, i):   # a live run holds the issue, but its spawn batch gave it no child (#480): nobody works it, so it is back in the queue and its dispatch marker goes. A marker written after the batch belongs to a newer dispatch and stays
         set_expected(n, os.environ.get("SG_TODO", "Todo"), f"run {i['run_id']} gave the issue no child (the router did not choose it, or the engine rejected its spawn)", i["run_id"], i["run_ts"], 20)
         for k in ("disp", "bug"):
@@ -972,8 +978,8 @@ def reconcile_board():
         if n not in specs and n not in stopped and branch_ahead_count(n) != "0":   # the branch's own state sets the column (#358): no pull request is read. A stopped run's branch is stale: it never lifts the Todo or Blocked its verdict set, and a branch that names a spec is its children's (#665)
             if shipped and review_waits(n): set_expected(n, column_for(wave_facts(n, ()) | {"review_wait": True})[0], "a work branch names the issue and the review of its tip waits", "", "", 50)   # ADR-0145: a child enters the wave only after its review approves, so a review that waits marks Doing
             else: set_expected(n, "Code Complete", "a work branch names the issue and is not in dev yet", "", "", 50)
-        if n not in specs and n not in testing and branch_in_dev_count(n) != "0" and cards(proj)[1].get(str(n), "") in ("Code Complete", "Pushing", "Testing"):   # a fresh branch is in dev too, so only a card that reached the wave path is delivered by it, and a spec's branch is its children's (#665)
-            set_expected(n, "Done", "its work branch is in dev", "", "", 80)
+        if n not in specs and branch_in_dev_count(n) != "0" and cards(proj)[1].get(str(n), "") == "Code Complete":   # a fresh branch is in dev too, so only a card that reached the wave is delivered by it, and a spec's branch is its children's (#665)
+            set_expected(n, "Closed" if shipped else "Done", "its work branch is in dev", "", "", 80)
     answered, have_all = cards(proj)
     if not answered: return   # no answer from the board: nothing is moved on a guess (a card that does not exist is an answer, and is created below)
     for n, (_, want, why) in sorted(held_owner.items(), key=lambda kv: int(kv[0])):   # frozen:owner holds the card: R names the write it held back, and writes nothing
@@ -1267,7 +1273,7 @@ if fd and fb:
             if holding(n): continue                          # a live run works it, or a wave still carries it: not ours to release
             if sh("gh", "api", f"repos/{repo0}/issues/{n}", "-q", ".state").strip() != "open": continue
             if pr_count(n) != "0": continue   # a work branch names it: the issue is past dispatch
-            if card_status(proj, n) not in ("In Progress", "Doing", "Code Review", "Code Complete", os.environ.get("SG_TESTING", "Testing")): continue   # only what the landing set: a card another step moved past it is never downgraded
+            if card_status(proj, n) not in ("In Progress", "Doing", "Code Review", "Code Complete"): continue   # only what the landing set: a card another step moved past it is never downgraded
             km = st / "auto" / f"janitor-unwound-{n}-{sha[:9]}"
             if km.exists(): continue
             marks = [mk.name] + [f"{k}-{n}" for k in ("disp", "bug") if (st / "auto" / f"{k}-{n}").exists()]
@@ -1323,7 +1329,7 @@ if hb.exists() and (not hm.exists() or now - hm.stat().st_mtime > 600):
         if stt in ("Todo", "Blocked") and reach:
             mk = st / "auto" / f"janitor-regress-{n}-{stt}"
             if not mk.exists():
-                say(f"STATE-REGRESSION #{n}: card is {stt} but its history reached Code Complete/Testing at {reach[-1]}")
+                say(f"STATE-REGRESSION #{n}: card is {stt} but its history reached Code Complete at {reach[-1]}")
                 if not dry: mk.touch()
 def frontier_idle():   # N (#744): a frontier that keeps Todo cards and starts none says so once past a bound
     """The streak autofrontier.sh leaves in $SG_STATE/frontier-idle: `<epoch> TAB FRONTIER idle: ...`. Past the bound, and

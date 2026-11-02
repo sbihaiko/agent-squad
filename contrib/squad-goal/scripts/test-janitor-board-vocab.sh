@@ -1,6 +1,6 @@
 #!/bin/bash
 # The reconciler writes the shipped vocabulary (ADR-0141): with SG_BOARD_VOCAB=shipped the janitor writes Backlog, Todo,
-# Doing, Code Review, Code Complete, Pushing, Testing, Closed and Abandoned, and never Blocked, In Progress, Done, Open Specs, Merging or Landing. An owner
+# Doing, Code Review, Code Complete, Closed and Abandoned, and never Blocked, In Progress, Done, Open Specs, Merging, Landing, Pushing or Testing. An owner
 # label is a freeze marker over the column the work reached (the frozen:owner label), never a column of its own, and a spec
 # opens in Backlog. Stubbed gh and board.sh; a temp state dir, so the live loop state and board are never read or written.
 # usage: bash test-janitor-board-vocab.sh [janitor.py]
@@ -18,11 +18,9 @@ expected = {
     "Doing": "A live run holds it; a spec whose child is live work is marked here",
     "Code Review": "The child's code is done; its review or a fix round holds it",
     "Code Complete": "A child is in the wave branch",
-    "Pushing": "The wave is approved and the push to dev is in progress",
-    "Testing": "CI runs on the dev tip",
     "Closed": "In dev",
 }
-if any(statuses.get(name) != fact for name, fact in expected.items()) or "Merging" in statuses or "Landing" in statuses or any("pull request" in fact.lower() for fact in statuses.values()):
+if any(statuses.get(name) != fact for name, fact in expected.items()) or any(name in statuses for name in ("Pushing", "Testing", "Merging", "Landing")) or len(statuses) != 7 or any("pull request" in fact.lower() for fact in statuses.values()):
     print("FAIL ADR-0145 board vocabulary", file=sys.stderr)
     sys.exit(1)
 PY
@@ -92,5 +90,5 @@ has '^STATUS o 4 Closed 2105$' && ok "a closed issue: Closed" || ko "#2105 not C
 has '^STATUS o 4 Abandoned 2106$' && ok "a wontfix issue: Abandoned" || ko "#2106 not Abandoned: $(bc)"
 ! has ' 2107$' && ok "a startable card already in Todo is not written" || ko "#2107 rewritten: $(bc)"
 ! has ' 2108$' && ok "a spec already in Backlog is not written" || ko "#2108 rewritten: $(bc)"
-! has 'Blocked\|In Progress\|Done\|Open Specs\|Merging\|Landing' && ok "no write names Blocked, In Progress, Done, Open Specs, Merging or Landing" || ko "an old option was written: $(bc)"
+! has 'Blocked\|In Progress\|Done\|Open Specs\|Merging\|Landing\|Pushing\|Testing' && ok "no write names Blocked, In Progress, Done, Open Specs, Merging, Landing, Pushing or Testing" || ko "an old option was written: $(bc)"
 [ "$fail" = 0 ] && echo "PASS" || { echo "FAILED"; exit 1; }

@@ -13,7 +13,7 @@ SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"
 COLUMNS_PY = SCRIPTS / "board_columns.py"
 HUB_PY = SCRIPTS / "hub.py"
 RECONCILE_PY = SCRIPTS / "reconcile.py"
-NAMES = ("No status", "Todo", "Open Specs", "In Progress", "Code Complete", "Testing", "Blocked", "Done",
+NAMES = ("No status", "Todo", "Open Specs", "In Progress", "Code Complete", "Blocked", "Done",
          "Open PRs")
 
 

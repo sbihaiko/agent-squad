@@ -145,11 +145,11 @@ def test_a_filter_change_recomputes_the_collapse_without_a_reload(hub):
 
 # ---- one colour per board column (#1793) -----------------------------------------------------------
 
-# The decision, not a starting point: the nine shipped statuses and the one open-PR lane (#247, #384, #440), each with
+# The decision, not a starting point: the seven shipped statuses and the one open-PR lane (#247, #384, #440), each with
 # the one colour the column header's dot, the card's left border and the hidden: strip's number all wear.
 NAMED = {
-    "Backlog": "#9aa4b1", "Todo": "#79b8ff", "Doing": "#e8d44d", "Code Review": "#fdba74", "Code Complete": "#f5b041", "Pushing": "#b087f9",
-    "Testing": "#f78fb3", "Closed": "#3ecf8e", "Abandoned": "#ff6b6b", "Open PRs": "#5aa9ff",
+    "Backlog": "#9aa4b1", "Todo": "#79b8ff", "Doing": "#e8d44d", "Code Review": "#fdba74", "Code Complete": "#f5b041",
+    "Closed": "#3ecf8e", "Abandoned": "#ff6b6b", "Open PRs": "#5aa9ff",
 }
 RING = ["#a3e635", "#d8b4fe", "#ff9ecd", "#7dd3fc"]   # reserved for the columns the Project gained later
 CHIP_BG = "#2a303b"        # the chip the numbers sit on: what every column colour is measured against
@@ -231,7 +231,7 @@ def test_no_column_colour_is_written_a_second_time_in_the_board_script(hub):
 def test_the_named_columns_carry_exactly_the_decided_colours(hub):
     got = _col(hub, "Object.fromEntries(Object.keys(COLORS).map(n=>[n,colOf(n,[])]))")
     assert got == NAMED, "the named columns and lane carry colours the table does not"
-    assert len(NAMED) == 10 and got["Open PRs"] == "#5aa9ff", "the open-PR lane is the live queue's own blue"
+    assert len(NAMED) == 8 and got["Open PRs"] == "#5aa9ff", "the open-PR lane is the live queue's own blue"
     assert _mute(hub) not in got.values(), "a muted column is a caption, not a column"
 
 
@@ -248,7 +248,7 @@ def test_a_user_column_takes_the_ring_colour_its_alphabetical_position_gives_it(
     assert _col(hub, f'colOf("Waiting on review",{json.dumps(cols)})') == RING[1]
     assert _col(hub, f'colOf("Stale",{json.dumps(list(reversed(cols)))})') == RING[0], \
         "the order the caller passes the columns in must not decide their colours"
-    assert _col(hub, f'colOf("Stale",{json.dumps(["Testing"] + cols)})') == RING[0], \
+    assert _col(hub, f'colOf("Stale",{json.dumps(["Doing"] + cols)})') == RING[0], \
         "a named column in the list is not a user column and takes no ring slot"
 
 
@@ -398,7 +398,6 @@ def test_counts_of_a_thousand_and_over_carry_a_thousands_separator(hub):
 # #1793 owns. Magnitude would light up the two archival piles (688, 522) and bury the Abandoned 2.
 HID_COL = {
     "Abandoned": "#ff6b6b",      # --err
-    "Testing": "#2dd4bf",        # --run
     "Backlog": "#f5b041",        # --warn
     "Closed": "#3ecf8e",         # --ok
 }
@@ -427,10 +426,10 @@ def test_every_number_is_painted_by_its_category_and_never_as_a_caption(hub):
 
 def test_a_category_is_not_a_magnitude(hub):
     """The closed pile is the biggest number on the board and must not be the loudest."""
-    counts = {"Testing": 688, "Closed": 522, "Abandoned": 2}
+    counts = {"Backlog": 688, "Closed": 522, "Abandoned": 2}
     loud = [_hid_rule(hub, c) for c in counts]
     assert len(set(loud)) == len(counts), "two categories share a colour, so the colour says nothing"
-    assert _hid_rule(hub, "Abandoned") != _hid_rule(hub, "Testing"), \
+    assert _hid_rule(hub, "Abandoned") != _hid_rule(hub, "Backlog"), \
         "the pile nobody is reading and the one that wants eyes wear the same colour"
     for c, n in counts.items():
         assert re.search(r"data-col", _chip(hub, c, n)), "the chip carries no data-col, so no rule can reach it"

@@ -70,7 +70,7 @@ def _derivation(hub):
 
 def _run_derivation(hub, *, kept=(), hidden=(), filled=(), bottom=True):
     """The page's own derivation, run by node over a stubbed board: every column `filled` does not name holds nothing."""
-    names = ["Todo", "Doing", "Testing", "Closed Issues"]
+    names = ["Todo", "Doing", "Code Review", "Closed Issues"]
     assert set(filled) <= set(names)
     stub = (f"const bo={json.dumps({'kept': list(kept)})},hid=new Set({json.dumps(list(hidden))}),"
             f"bottom={json.dumps(bottom)},all={json.dumps([{'name': n} for n in names])},"
@@ -99,7 +99,7 @@ def test_the_rotated_name_is_gone_with_the_strip(hub):
 def test_an_empty_visible_column_leaves_the_board_and_lands_on_the_strip(hub):
     d = _run_derivation(hub, filled=["Doing", "Closed Issues"])
     assert d["vis"] == ["Doing", "Closed Issues"], "the columns that have cards take the freed width"
-    assert d["autos"] == ["Todo", "Testing"], "each collapsed column is accounted for by one line"
+    assert d["autos"] == ["Todo", "Code Review"], "each collapsed column is accounted for by one line"
 
 
 def test_the_strip_is_derived_on_every_render_and_never_stored(hub):
@@ -114,29 +114,29 @@ def test_the_strip_is_derived_on_every_render_and_never_stored(hub):
 
 
 def test_a_column_the_user_hid_keeps_its_chip_and_gets_no_line(hub):
-    d = _run_derivation(hub, hidden=["Closed Issues"], filled=["Todo", "Doing", "Testing"])
-    assert d["vis"] == ["Todo", "Doing", "Testing"], "a column the user hid is not laid out at all"
+    d = _run_derivation(hub, hidden=["Closed Issues"], filled=["Todo", "Doing", "Code Review"])
+    assert d["vis"] == ["Todo", "Doing", "Code Review"], "a column the user hid is not laid out at all"
     assert "Closed Issues" not in d["autos"], "... and it is a chip, never one of the strip's lines"
 
 
 def test_the_lines_eye_keeps_the_column_shown_even_at_zero(hub):
-    board = dict(filled=["Todo", "Doing", "Closed Issues"])     # Testing is the column holding nothing
+    board = dict(filled=["Todo", "Doing", "Closed Issues"])     # Code Review is the column holding nothing
     without = _run_derivation(hub, **board)
-    with_kept = _run_derivation(hub, kept=["Testing"], **board)
-    assert without["vis"] == ["Todo", "Doing", "Closed Issues"] and without["autos"] == ["Testing"]
-    assert with_kept["vis"] == ["Todo", "Doing", "Testing", "Closed Issues"], \
+    with_kept = _run_derivation(hub, kept=["Code Review"], **board)
+    assert without["vis"] == ["Todo", "Doing", "Closed Issues"] and without["autos"] == ["Code Review"]
+    assert with_kept["vis"] == ["Todo", "Doing", "Code Review", "Closed Issues"], \
         "a column the user asked to keep comes back, header and all"
     assert with_kept["autos"] == [], "... and is never auto-hidden again"
 
 
 def test_a_card_appearing_returns_the_column_and_its_line_leaves(hub):
-    assert _run_derivation(hub, filled=["Todo", "Doing", "Testing", "Closed Issues"])["autos"] == []
+    assert _run_derivation(hub, filled=["Todo", "Doing", "Code Review", "Closed Issues"])["autos"] == []
 
 
 def test_the_non_docked_accordion_has_no_empty_state_at_all(hub):
     d = _run_derivation(hub, filled=["Doing"], bottom=False)
     assert d["autos"] == [], "the accordion lays out every column, empty or not"
-    assert d["vis"] == ["Todo", "Doing", "Testing", "Closed Issues"]
+    assert d["vis"] == ["Todo", "Doing", "Code Review", "Closed Issues"]
 
 
 # --- the strip's lines ------------------------------------------------------------------------------------------

@@ -22,7 +22,7 @@ jqf=""; prev=""; all="$*"
 for a in "$@"; do [ "$prev" = "--jq" ] && jqf="$a"; prev="$a"; done
 case "$all" in
   *graphql*) case "$all" in *PVTI_800*) echo '{"data":{"node":{"isArchived":false,"content":{"number":800},"fieldValueByName":{"name":"Todo"}}}}';; *) echo '{"data":{"node":null}}';; esac; exit 0;;
-  *"/fields"*) echo '[{"id":"F1","name":"Status","options":[{"id":"o1","name":"Todo"},{"id":"o2","name":"Testing"}]}]'; exit 0;;
+  *"/fields"*) echo '[{"id":"F1","name":"Status","options":[{"id":"o1","name":"Todo"},{"id":"o2","name":"Code Review"}]}]'; exit 0;;
   *"/issues/"*) case "$all" in
       *"/issues/801"*) echo '{"number":801,"state":"open","labels":[{"name":"bug"},{"name":"go"}]}'; exit 0;;
       *"/issues/803"*) echo '{"number":803,"state":"closed","labels":[{"name":"go"}]}'; exit 0;;

@@ -13,7 +13,6 @@ COLUMNS = (
     {"name": "Open Specs", "fact": "spec_open", "actor": "owner", "terminal": False, "order": 4, "flow": 2, "color": "#f78fb3"},
     {"name": "In Progress", "fact": "claimed", "actor": "agent", "terminal": False, "order": 0, "flow": 6, "color": "#e8d44d"},
     {"name": "Code Complete", "fact": "wave_branch", "actor": "tester", "terminal": False, "order": 1, "flow": 7, "color": "#b087f9"},
-    {"name": "Testing", "fact": "dev_ci", "actor": "tester", "terminal": False, "order": 2, "flow": 8, "color": "#2dd4bf"},
     {"name": "Blocked", "fact": "blocked", "actor": "owner", "terminal": False, "order": 5, "flow": 4, "color": "#ff6b6b"},
     {"name": "Done", "fact": "issue_closed", "actor": "none", "terminal": True, "order": 7, "flow": 9, "color": "#3ecf8e"},
     {"name": "Open PRs", "fact": "pr_open", "actor": "reviewer", "terminal": False, "order": 8, "flow": 0, "color": "#5aa9ff"},
@@ -23,11 +22,11 @@ BY_FACT = {column["fact"]: column["name"] for column in COLUMNS}
 
 # The shipped vocabulary (ADR-0141): a copy of the published board definition beside this file, pinned by hash, so an edit
 # by hand is refused and a change in the published file is reported by `board_pin.py`, never adopted silently.
-PIN_SHA256 = "c10560aba624f76713860ac9286149e9d38dc84df1c43213a4b61ff39cefd114"
+PIN_SHA256 = "b5779ebebd070b8b508ce4b489f5cdc46a2a517191448bc5d5ff2ed499009d53"
 PINNED_COPY = Path(__file__).resolve().parent / "board-definition.json"
 # What each old column is called in the shipped vocabulary. Blocked has no column: it is the owner freeze over the column
 # the work reached, so it maps to None and the reconciler writes the marker instead.
-SHIPPED_NAME = {"In Progress": "Doing", "Open Specs": "Backlog", "Done": "Closed", "Blocked": None, "Merging": "Pushing", "Landing": "Pushing"}
+SHIPPED_NAME = {"In Progress": "Doing", "Open Specs": "Backlog", "Done": "Closed", "Blocked": None, "Merging": "Code Complete", "Landing": "Code Complete"}
 FREEZE_LABEL = {"owner": "frozen:owner", "gated": "frozen:dependency"}
 CODE_REVIEW = "Code Review"   # the child's code is done, and its review or a fix round holds it (#603)
 
@@ -55,14 +54,13 @@ def column_for(facts):
     """(column, freeze label or None) the shipped table names for one open or closed issue's facts.
 
     The furthest the work reached sets the column; a freeze never moves it (the definition's own rule). Facts are booleans,
-    each missing one false: abandoned, closed, dev_ci, landing, wave_branch, run_live, spec, child_live (a spec whose
-    sub-issue is live work), owner (an owner label), gated (another item gates it), and review_wait (the child's code is
-    done and its review or a fix round holds it: Code Review, #603)."""
+    each missing one false: abandoned, closed, in_dev (the wave is in dev), wave_branch, run_live, spec, child_live (a spec whose sub-issue is live
+    work), owner (an owner label), gated (another item gates it), and review_wait (the child's code is done and its review
+    or a fix round holds it: Code Review, #603). The push, the approval and the dev CI are reported facts, never a column:
+    a card in the wave holds Code Complete until its wave is in dev, and then it is Closed."""
     freeze = FREEZE_LABEL["owner"] if facts.get("owner") else FREEZE_LABEL["gated"] if facts.get("gated") else None
     if facts.get("abandoned"): return "Abandoned", freeze
-    if facts.get("closed"): return "Closed", freeze
-    if facts.get("dev_ci"): return "Testing", freeze
-    if facts.get("landing"): return "Pushing", freeze
+    if facts.get("closed") or facts.get("in_dev"): return "Closed", freeze
     if facts.get("wave_branch"): return "Code Complete", freeze
     if facts.get("review_wait"): return CODE_REVIEW, freeze
     if facts.get("run_live") or facts.get("child_live"): return DOING, freeze
@@ -81,7 +79,7 @@ def column_for(facts):
 HEX = {"GRAY": "#9aa4b1", "BLUE": "#79b8ff", "YELLOW": "#e8d44d", "ORANGE": "#f5b041", "PURPLE": "#b087f9",
        "PINK": "#f78fb3", "GREEN": "#3ecf8e", "RED": "#ff6b6b"}
 LANES = ({"key": "pr_open", "name": "Open PRs", "color": "#5aa9ff", "tracking": True},)
-ROLE = {"issue_closed": "Closed", "abandoned": "Abandoned", "unscheduled": "Backlog", "issue_todo": "Todo", "dev_ci": "Testing"}
+ROLE = {"issue_closed": "Closed", "abandoned": "Abandoned", "unscheduled": "Backlog", "issue_todo": "Todo"}
 DOING = "Doing"   # the column a claimed card wears: the lane bar counts it as the amber share (owner, 2026-11-02)
 SPEC_LABEL = "spec"
 

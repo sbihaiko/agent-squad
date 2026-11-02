@@ -187,10 +187,10 @@ child "$R2" 66 g66b >/dev/null 2>&1; out=$(childcc)
 before=$(wtip "$R2"); out=$(childcc)
 [ "$(wtip "$R2")" = "$before" ] && ! printf '%s' "$out" | /usr/bin/grep -q "entered wave/$R2" && ok "L6: a child that entered is not entered again" || ko "L6: the entered child was entered again: '$out'"
 
-# 3c) The wave marker is the entry gate, not the card: a finished run whose card moved past Blocked (Testing) still has its
+# 3c) The wave marker is the entry gate, not the card: a finished run whose card moved past Blocked (Closed) still has its
 # child entered, because the child is not in the wave yet and the wave has not landed (#375 review).
 R3=run-20261014-000000-eee555
-echo 69 > "$T/issue"; echo Testing > "$T/card"
+echo 69 > "$T/issue"; echo Closed > "$T/card"
 launch "$R3" 69 >/dev/null 2>&1; child "$R3" 69 g69; verdict "$R3" 69
 out=$(childcc)
 [ "$(wtip "$R3")" = "$(child_head "$R3" 69)" ] && ok "L7: a finished run's child enters its wave whatever column its card is in" \

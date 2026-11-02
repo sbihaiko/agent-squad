@@ -221,7 +221,7 @@ def test_a_landed_child_waiting_for_its_open_wave_is_in_code_review(tmp_path):
 
 
 @pytest.mark.heavy
-@pytest.mark.parametrize("later", ["Code Complete", "Pushing", "Testing"])
+@pytest.mark.parametrize("later", ["Code Complete", "Closed"])
 def test_the_reconcile_never_moves_a_later_card_back_to_code_review(tmp_path, later):
     sandbox(tmp_path, "echo 0", landed=True, wave="open", card=later)
     janitor(tmp_path, **SHIPPED)

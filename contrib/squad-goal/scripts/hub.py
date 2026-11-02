@@ -896,7 +896,7 @@ def load_tick(sample=None):
 #   throughput (runs/hour, median, tks/s)     -> nowhere: `last progress` answers "is it moving?" without a rate that
 #                                                changes too fast to read
 #   per-column board counts                   -> the column headers directly above the footer
-#   the age of the oldest card in a column    -> the column header (`Testing (3) · 2h`), one number per column
+#   the age of the oldest card in a column    -> the column header (`Code Review (3) · 2h`), one number per column
 #   fork-ahead / branches waiting / last      -> a left-pane accordion; `fork-parked` already reaches the footer
 #   base-test duration                           through `health`, and the three reserved here take the fourth accordion
 #                                                when they arrive: the numbering here and the page's `ACC` are one list
@@ -5471,7 +5471,7 @@ PAGE = PAGE.replace("/*BOARD_LANES_CSS*/", (pathlib.Path(__file__).resolve().par
 PAGE = PAGE.replace("/*RUN_SHEET*/", (pathlib.Path(__file__).resolve().parent / "run-sheet.js").read_text())   # the run sheet's model (#984)
 PAGE = PAGE.replace("/*RUN_SHEET_CSS*/", (pathlib.Path(__file__).resolve().parent / "run-sheet.css").read_text())   # its look (#984)
 # The strip paints one rule per category, keyed by the fact that sets the column: the name comes from the table.
-HID_CHIP_TOKENS = (("abandoned", "err"), ("dev_ci", "run"), ("unscheduled", "warn"), ("issue_closed", "ok"), ("pr_open", "pin"))
+HID_CHIP_TOKENS = (("abandoned", "err"), ("unscheduled", "warn"), ("issue_closed", "ok"), ("pr_open", "pin"))
 PAGE = PAGE.replace("/*HID_CHIP_RULES*/", "\n".join('.hidbar .chip[data-col="%s"] b{color:var(--%s)}' % (COLUMN[fact], token) for fact, token in HID_CHIP_TOKENS))
 PAGE = PAGE.replace("/*BOARD_COLORS*/", BOARD_COLORS_JSON).replace("/*BOARD_FLOW*/", BOARD_FLOW_JSON).replace("/*BOARD_NAMES*/", BOARD_NAMES_JSON).replace("/*BOARD_DOING*/", BOARD_DOING_JSON).replace("/*BOARD_REVIEW*/", BOARD_REVIEW_JSON).replace("/*HUB_REPO*/", json.dumps(REPO))
 PAGE = PAGE.replace("/*RUN_STATE_CSS*/", "".join(".b.%s{color:var(--%s);%s}" % (r["state"].replace(" ", "-"), r["color"], r["css"]) for r in RUN_STATES))

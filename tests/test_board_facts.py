@@ -25,12 +25,13 @@ def test_a_child_in_the_wave_branch_is_code_complete():
     assert _column() == "Code Complete"
 
 
-def test_an_approved_wave_still_ahead_of_dev_is_pushing():
-    assert _column(approved=True) == "Pushing"
+def test_an_approved_wave_still_ahead_of_dev_is_code_complete():
+    assert _column(approved=True) == "Code Complete"
 
 
-def test_a_wave_in_dev_with_a_running_ci_is_testing():
-    assert _column(standing="behind", dev_running=True) == "Testing"
+def test_a_wave_in_dev_with_a_running_ci_is_closed_not_held_open():
+    assert _column(standing="behind", dev_running=True) == "Closed"
+    assert columns.column_for({"wave_branch": True, "in_dev": True}) == ("Closed", None)
 
 
 def test_a_wave_in_dev_with_no_running_ci_names_no_column_fact():
@@ -62,8 +63,13 @@ def _spec(*children):
 
 
 def test_a_spec_with_a_live_child_reads_doing():
-    for child in ("Doing", "Code Review", "Code Complete", "Pushing", "Testing"):
+    for child in ("Doing", "Code Review", "Code Complete"):
         assert columns.column_for(_spec(child))[0] == "Doing"
+
+
+def test_a_spec_whose_child_is_no_longer_a_column_reads_backlog():
+    for child in ("Pushing", "Testing"):
+        assert columns.column_for(_spec(child))[0] == "Backlog"
 
 
 def test_a_spec_with_no_live_child_reads_backlog():
@@ -87,6 +93,5 @@ def test_the_hub_legacy_table_names_no_pull_request_fact():
     names = {c["fact"] for c in columns.COLUMNS}
 
     assert "merged" not in names and "open_pr" not in names
-    assert set(columns.ROLE) == {"issue_closed", "abandoned", "unscheduled", "issue_todo", "dev_ci"}
-    assert columns.ROLE["dev_ci"] == "Testing"
-    assert columns.view_column("Testing", False)[0] == "Testing"
+    assert set(columns.ROLE) == {"issue_closed", "abandoned", "unscheduled", "issue_todo"}
+    assert "Testing" not in {s["name"] for s in columns.shipped_columns()}

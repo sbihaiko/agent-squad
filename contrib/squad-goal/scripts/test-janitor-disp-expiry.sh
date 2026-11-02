@@ -82,7 +82,7 @@ printf 'verdict pass (exit 0)\n' > "$T/st/frontier-ok.log"
 echo frontier-old > "$T/st/auto/disp-906"; touch -t 202001010000 "$T/st/auto/disp-906" "$T/st/frontier-old.log"
 echo frontier-ok > "$T/st/auto/disp-907"; touch -t 202001010000 "$T/st/auto/disp-907" "$T/st/frontier-ok.log"
 echo frontier-old > "$T/st/auto/disp-908"; touch -t 202001010000 "$T/st/auto/disp-908"
-run() { SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$T/st" SG_FORK_DIR= SG_FORK_BASE= SG_TESTING=Testing JANITOR_NOTIFY="$T/notify" python3 -I "$T/s/janitor.py" 2>&1; }
+run() { SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$T/st" SG_FORK_DIR= SG_FORK_BASE= JANITOR_NOTIFY="$T/notify" python3 -I "$T/s/janitor.py" 2>&1; }
 o=$(run)
 [ ! -e "$T/st/auto/disp-901" ] && ok "O: an ended run with no landed change drops its disp marker" || ko "O disp-901 kept (the frontier starves on it): $o"
 /usr/bin/grep -q '^o 4 Blocked 901$' "$T/board.calls" 2>/dev/null && ok "R: a needs-human run with nothing landed -> card Blocked (the owner is the next actor)" || ko "R #901 not Blocked: $(cat "$T/board.calls" 2>/dev/null)"
