@@ -4,6 +4,8 @@ The registry is the one source. The graph validator and the editor read it; a gr
 lists the ids it uses and they must match. A check reads artifacts and facts only. It never
 calls a model, and its thresholds never change at run time.
 """
+import hashlib
+import json
 import os
 import signal
 import subprocess
@@ -13,7 +15,7 @@ from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from pathlib import Path
 
-from squad import workcmd
+from squad import git, workcmd
 
 GATE_REGISTRY = {
     "spec-shape": [],
@@ -108,6 +110,71 @@ def held_out_tree_missing(c, tree):
     return workcmd.reads_history(c) and (tree is None or not Path(tree).is_dir())
 
 
+def suite_runs(params, inp):
+    """The (command, tree) pairs a suite gate would run, and whether the artifact that names them is a dispatch.
+
+    The one resolver `ac_verify` and the verdict memo share, so a memo's key states exactly what the gate runs. The first
+    artifact `commands_from` names that lists commands wins; no runs is no suite.
+    """
+    src = params["commands_from"]
+    for name in [src] if isinstance(src, str) else src:
+        art = inp.artifacts.get(name) or {}
+        # a dispatch names, for each command, the tree of the child that wrote it (#862); a dispatch with no ac_runs names none (#867)
+        runs = [tuple(r) for r in art["ac_runs"]] if "ac_runs" in art else [(c, None) for c in art.get("ac_commands", [])]
+        if runs:
+            return runs, ("ac_runs" in art or "ledger" in art)     # an older engine wrote a dispatch with no ac_runs (#867): still a dispatch
+    return [], False
+
+
+def suite_key(check_id, params, inp):
+    """The identity of the suite a gate stage would run, or None when the stage runs no suite: only a suite gate is memoed.
+
+    Two stages with one key run the same commands over the same trees, so one green verdict answers for both. Any doubt --
+    no git tree, or no commands -- is no key, and the stage runs its check.
+    """
+    if check_id != "ac-verify":
+        return None
+    runs, _dispatch = suite_runs(params, inp)
+    return json.dumps([list(r) for r in runs], separators=(",", ":")) if runs else None
+
+
+def tree_key(cwd):
+    """The tree a verdict is kept for: (its commit, a digest of its uncommitted state). None outside a git tree.
+
+    A pass over uncommitted work must never answer for the commit, so the digest is part of the key and is empty only
+    for a tree git reports clean at that commit.
+    """
+    sha = git.head(cwd)
+    if sha is None:
+        return None
+    status = git.run(["status", "--porcelain=v1", "-uall"], cwd).stdout or ""
+    diff = git.run(["diff", "HEAD"], cwd).stdout or ""
+    if not status.strip() and not diff.strip():
+        return sha, ""
+    parts = [status, diff]
+    for line in status.splitlines():     # an untracked file counts by its contents, not only by its name
+        if line.startswith("?? "):
+            f = Path(cwd) / line[3:]
+            try:
+                parts.append(f.read_text(errors="replace") if f.is_file() else "")
+            except OSError:
+                parts.append("<unreadable>")
+    return sha, hashlib.sha256("\0".join(parts).encode()).hexdigest()
+
+
+def green_verdict(events, sha, dirt, suite):
+    """The first green verdict this run recorded for one tree and one suite, or None.
+
+    `events` is this run's own record, so another run's verdict is never read. Only `pass` is a hit: a red never answers
+    for a later stage.
+    """
+    for ev in events:
+        if (ev.get("event") == "gate_result" and ev.get("outcome") == "pass"
+                and ev.get("sha") == sha and ev.get("dirt") == dirt and ev.get("suite") == suite):
+            return ev
+    return None
+
+
 def ac_verify(params, inp):
     """Run the acceptance commands that the named artifact lists, in the workspace. A command is code, not a model.
 
@@ -119,15 +186,7 @@ def ac_verify(params, inp):
     Routing (#862): a git-history command runs only in the tree its child wrote; every other command runs only in the target.
     No fallback: a red result is never replaced by another tree's green (ADR-0018).
     """
-    src = params["commands_from"]
-    runs, dispatch = [], False
-    for name in [src] if isinstance(src, str) else src:     # the first artifact that lists commands wins
-        art = inp.artifacts.get(name) or {}
-        # a dispatch names, for each command, the tree of the child that wrote it (#862); a dispatch with no ac_runs names none (#867)
-        dispatch = "ac_runs" in art or "ledger" in art     # an older engine wrote a dispatch with no ac_runs (#867): still a dispatch
-        runs = [tuple(r) for r in art["ac_runs"]] if "ac_runs" in art else [(c, None) for c in art.get("ac_commands", [])]
-        if runs:
-            break
+    runs, dispatch = suite_runs(params, inp)
     if not runs:
         return GateResult(False, ["no_ac_commands"])
     findings, evidence, counts = [], {}, {}
