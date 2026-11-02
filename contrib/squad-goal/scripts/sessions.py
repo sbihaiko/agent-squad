@@ -160,6 +160,7 @@ def _harness_only(text):
 
 def _turns_of(obj):
     kind, uid = obj.get("type"), str(obj.get("uuid") or "")
+    at = obj.get("timestamp") if isinstance(obj.get("timestamp"), str) else ""   # the clock the bubble shows, as WhatsApp does
     # A message the harness injects (a hook's feedback, a reminder) is stored as a user turn. It is not the owner typing:
     # the panel says System, so a bubble never puts words in the owner's mouth (owner, 2026-11-01).
     owner_role = "system" if obj.get("isMeta") is True else "owner"
@@ -171,8 +172,8 @@ def _turns_of(obj):
         text = p.get("text")
         if kind == "user" and p.get("type") == "text" and isinstance(text, str) and text:
             if _harness_only(text): continue   # the harness's own record, never a turn of the talk
-            out.append((owner_role, uid, text))
-        elif kind == "assistant" and p.get("type") == "text" and isinstance(text, str) and text: out.append(("answer", uid, text))
+            out.append((owner_role, uid, text, at))
+        elif kind == "assistant" and p.get("type") == "text" and isinstance(text, str) and text: out.append(("answer", uid, text, at))
         # A tool call is not a turn of the conversation: a working session answers with hundreds of them, and they filled
         # the page while the owner's and the AI's words never arrived (#1073). The terminal stays their record.
     return out
@@ -248,10 +249,10 @@ def read_conversation(cwd, sid, secrets=(), before=None):
         try: raw, start = _read_under_home(path, limit=window, end=before)
         except OSError as e: _log(f"hub: transcript of session {sid} unreadable: {type(e).__name__}", secrets); return None
         kept = _page_kept(raw, start)
-        said = sum(1 for _, found in kept for role, _, _ in found if role != "tool")
+        said = sum(1 for _, found in kept for role, *_ in found if role != "tool")
         if said >= PAGE_TURNS or not start or window >= MAX_TAIL_BYTES: break
         window *= 2
-    out = [{"id": uid, "role": role, "text": redact(text, secrets)} for _, found in kept for role, uid, text in found]
+    out = [{"id": uid, "role": role, "text": redact(text, secrets), "at": at} for _, found in kept for role, uid, text, at in found]
     cursor = kept[0][0] if kept else start
     page = {"turns": out, "next": cursor or None}
     if st:

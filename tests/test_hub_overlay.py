@@ -227,6 +227,17 @@ def test_the_feed_keeps_the_latest_turns_and_folds_the_older_ones():
     })()""")
     assert out == {"earlier": 8, "shown": "t8", "short": 0, "keep3": [17, 3]}, out
 
+def test_each_bubble_carries_its_clock_as_whatsapp_does():
+    """Owner, 2026-11-01: the bubble says when it was said. The turn's own transcript clock is drawn at the end of the last line
+    in the muted floor size, and no bubble carries a tick."""
+    js = OVERLAY.read_text()
+    assert "const CLOCK = " in js and 'hour: "numeric", minute: "2-digit"' in js
+    assert "const at = clock(t.at);" in js and 'tm.className = "sq-time"' in js
+    assert "tm.textContent = at;" in js                     # the clock alone: the owner asked for no tick
+    assert "\u2713" not in js and "\u2714" not in js
+    rule = js[js.index(".sq-time{"):js.index(".sq-time{") + 160]
+    assert "font-size:13px" in rule and "float:right" in rule, rule
+
 def test_the_reader_can_step_the_text_size_and_the_choice_outlives_the_page():
     """Owner, 2026-11-01: the feed needed its own size control. Two header buttons step one CSS variable, the page keeps the
     choice, and every text rule reads the variable so one step moves the whole talk."""

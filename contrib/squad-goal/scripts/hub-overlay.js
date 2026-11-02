@@ -103,6 +103,8 @@ html.sq-docked body{margin-right:var(--sq-dock)}
 .sq-fold summary::-webkit-details-marker{display:none}.sq-fold[open] summary{color:#8b949e}
 .sq-answer{margin:0 auto 10px 0;width:fit-content;max-width:100%;border:1px solid #26303c;border-radius:14px 14px 14px 4px;padding:8px 12px;background:#161c24}
 .sq-answer .sq-who{color:#8b949e;font-size:13px}
+/* The clock sits at the end of the last line, as WhatsApp draws it (owner, 2026-11-01); no tick, so the bubble says only the time. */
+.sq-time{float:right;margin:4px 0 0 10px;color:#8b949e;font-size:13px;line-height:1.55;white-space:nowrap;user-select:none}
 .sq-h{font-family:var(--sq-mono);font-weight:600;font-size:var(--sq-fs);color:#eef1f5;margin:1.55em 0 0}
 .sq-tbl{width:100%;border-collapse:collapse;margin:0 0 1.55em;font-size:var(--sq-fs)}
 .sq-tbl th,.sq-tbl td{border:1px solid #353d4b;padding:4px 8px;text-align:left;vertical-align:top}
@@ -384,6 +386,13 @@ function clamp(body, px) {
                       body.style.overflow = on ? "" : "hidden"; b.textContent = on ? "Show less" : "Show more"; };
   body.after(b);
 }
+const CLOCK = typeof Intl === "undefined" ? null
+  : new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
+function clock(iso) {
+  if (!iso || !CLOCK) return "";
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? "" : CLOCK.format(d);
+}
 function turnNode(t) {
   // A system turn folds to one line (owner, 2026-11-01): a reminder or a hook's note is worth one sentence, not a wall.
   const onlyImage = /^\s*\[Image: source: [^\]]+\]\s*$/.test(String(t.text || ""));
@@ -405,6 +414,13 @@ function turnNode(t) {
   const body = richText(t.text);
   if (who.textContent) d.append(who);
   d.append(body);
+  const at = clock(t.at);
+  if (at) {
+    const tm = document.createElement("span");
+    tm.className = "sq-time";
+    tm.textContent = at;
+    d.append(tm);
+  }
   clamp(body, CLAMP[role] || 116);
   return d;
 }
