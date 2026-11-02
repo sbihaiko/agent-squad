@@ -72,7 +72,7 @@ def test_a_run_dashboard_through_the_hub_gains_the_overlay(hub):
 
 def test_the_workflow_editor_carries_no_overlay():
     editor = (ROOT / "dashboard" / "agent-squad-run-dashboard.html").read_text()
-    assert "hub-overlay" not in editor and "Terminal - Claude CLI" not in editor
+    assert "hub-overlay" not in editor and "sq-ov-btn" not in editor
 
 
 def test_the_overlay_names_no_api_route_the_hub_would_rewrite():
@@ -86,7 +86,7 @@ def test_the_overlay_names_no_api_route_the_hub_would_rewrite():
 
 def test_the_button_is_a_red_lens_in_a_metal_ring_named_chat_with_the_ai():
     src = OVERLAY.read_text()
-    assert 'aria-label="Terminal - Claude CLI"' in src
+    assert 'aria-label="Terminal"' in src
     assert "radialGradient" in src and "sq-ov-lens" in src and "sq-ov-ring" in src
     button = re.search(r"<button id=\"sq-ov-btn\".*?</button>", src, re.S).group(0)
     assert "?" not in re.sub(r"<[^>]*>", "", button)
@@ -427,10 +427,10 @@ def test_the_live_line_reads_spinner_verb_elapsed_and_tokens():
 
 
 @pytest.mark.node_bound
-def test_the_live_line_moves_each_second_while_the_session_works():
-    moved, same_second = run_js("[SQ.liveText({status:'busy', elapsed:92, got:0, tokens:2400}, 1000),"
-                                " SQ.liveText({status:'busy', elapsed:92, got:0, tokens:2400}, 0)]")
-    assert moved == "⠙ Working · 1m 33s · ↓ 2.4k tokens" and moved != same_second
+def test_the_live_line_turns_about_eight_times_a_second_while_the_session_works():
+    moved, same_frame = run_js("[SQ.liveText({status:'busy', elapsed:92, got:0, tokens:2400}, 120),"
+                               " SQ.liveText({status:'busy', elapsed:92, got:0, tokens:2400}, 60)]")
+    assert moved == "⠙ Working · 1m 32s · ↓ 2.4k tokens" and moved.split()[0] != same_frame.split()[0]
 
 
 @pytest.mark.node_bound
@@ -467,9 +467,9 @@ def test_the_live_line_keeps_the_served_floors():
     assert (hi + 0.05) / (lo + 0.05) >= 4.5
 
 
-def test_the_live_line_repaints_each_second_and_leaves_the_status_row_to_one_off_messages():
+def test_the_live_line_repaints_eight_times_a_second_and_leaves_the_status_row_to_one_off_messages():
     dom = OVERLAY.read_text().split("// dom:begin", 1)[1]
-    assert "setInterval(paintLive, 1000)" in dom and "clearInterval(live" in dom
+    assert "setInterval(paintLive, 120)" in dom and "clearInterval(live" in dom
     paint = re.search(r"function paintLive\(\)\{.*?\n\}", dom, re.S).group(0)
     assert "stat" not in paint and "live.hidden = " in paint and "live.textContent" in paint
     assert 'function say(msg) { stat.textContent = msg || ""; }' in dom

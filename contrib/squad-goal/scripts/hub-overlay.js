@@ -76,7 +76,7 @@ SQ.draft = ctx => {
 };
 
 // The live activity line (#1082): busy or waiting shows a spinner, the verb, the time and the output tokens since the owner's
-// last turn; idle shows nothing. The spinner turns each second; a count the transcript does not show reads as a dash.
+// last turn; idle shows nothing. The spinner turns about eight times a second; a count the transcript does not show reads as a dash.
 SQ.SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 SQ.fmtElapsed = s => s == null ? "—" : s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${Math.floor(s / 3600)}h ${Math.floor(s % 3600 / 60)}m`;
 SQ.fmtTokens = n => n == null ? "—" : n < 1000 ? String(n) : `${(n / 1000).toFixed(1)}k`;
@@ -84,7 +84,7 @@ SQ.liveText = (a, now) => {
   if (!a || (a.status !== "busy" && a.status !== "waiting")) return "";
   const secs = a.elapsed == null ? null : a.elapsed + Math.floor((now - a.got) / 1000);
   const verb = a.status === "busy" ? "Working" : "Waiting for you";
-  return [`${SQ.SPIN[Math.floor(now / 1000) % SQ.SPIN.length]} ${verb}`, SQ.fmtElapsed(secs), `↓ ${SQ.fmtTokens(a.tokens)} tokens`].join(" · ");
+  return [`${SQ.SPIN[Math.floor(now / 120) % SQ.SPIN.length]} ${verb}`, SQ.fmtElapsed(secs), `↓ ${SQ.fmtTokens(a.tokens)} tokens`].join(" · ");
 };
 
 SQ.MARKUP = `<style>
@@ -170,7 +170,7 @@ html.sq-docked body{margin-right:var(--sq-dock)}
 .sq-ov-back{display:none}
 html.sq-over .sq-ov-back{display:inline-flex;align-items:center;min-height:44px;padding:3px 10px;border:1px solid #353d4b;border-radius:6px;background:none;color:inherit;cursor:pointer}
 </style>
-<button id="sq-ov-btn" type="button" aria-label="Terminal - Claude CLI" title="Terminal - Claude CLI" aria-haspopup="dialog" aria-expanded="false" aria-controls="sq-ov"><svg viewBox="0 0 64 64" aria-hidden="true" focusable="false"><defs>
+<button id="sq-ov-btn" type="button" aria-label="Terminal" title="Terminal" aria-haspopup="dialog" aria-expanded="false" aria-controls="sq-ov"><svg viewBox="0 0 64 64" aria-hidden="true" focusable="false"><defs>
 <radialGradient id="sq-ov-g-ring" cx="38%" cy="28%" r="80%"><stop offset="0" stop-color="#eef1f5"/><stop offset=".3" stop-color="#9aa1ab"/><stop offset=".65" stop-color="#40454d"/><stop offset="1" stop-color="#121417"/></radialGradient>
 <radialGradient id="sq-ov-g-lens" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#fff7dc"/><stop offset=".09" stop-color="#ffc640"/><stop offset=".26" stop-color="#ff3a10"/><stop offset=".58" stop-color="#a50000"/><stop offset="1" stop-color="#2a0000" stop-opacity="0"/></radialGradient>
 <clipPath id="sq-ov-clip"><circle cx="32" cy="32" r="21"/></clipPath></defs>
@@ -183,7 +183,7 @@ html.sq-over .sq-ov-back{display:inline-flex;align-items:center;min-height:44px;
 </svg></button>
 <div id="sq-ov" role="dialog" aria-labelledby="sq-ov-title" hidden>
 <div id="sq-ov-handle" role="separator" aria-orientation="vertical" aria-label="Resize the session panel" tabindex="0"></div>
-<header><h2 id="sq-ov-title">Terminal - Claude CLI</h2>
+<header><h2 id="sq-ov-title">Terminal</h2>
 <button type="button" class="sq-ov-dockctl sq-ov-fsb" id="sq-ov-fsdown" aria-label="Smaller text" title="Smaller text">A−</button>
 <button type="button" class="sq-ov-dockctl sq-ov-fsb" id="sq-ov-fsup" aria-label="Larger text" title="Larger text">A+</button>
 <button type="button" class="sq-ov-dockctl" id="sq-ov-dock" aria-label="Dock right" title="Dock right"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="13" y="5" width="7" height="14" fill="currentColor"/></svg></button>
@@ -245,7 +245,7 @@ function addLine(line) {
 
 // ---- the session
 function say(msg) { stat.textContent = msg || ""; }
-// The live line keeps its own row: the spinner turns each second from the last read, and a read sets the count (#1082).
+// The live line keeps its own row: the spinner turns about eight times a second from the last read, and a read sets the count (#1082).
 function setActivity(a) { liveAct = a ? { ...a, got: Date.now() } : null; paintLive(); }
 function paintLive(){
   const t = SQ.liveText(liveAct, Date.now());
@@ -277,7 +277,7 @@ function paintPick() {
   pick.replaceChildren(p, ...items);
 }
 function paintHead() {
-  title.textContent = "Terminal - Claude CLI";   // the title names the panel, not the session (owner, 2026-11-01)
+  title.textContent = "Terminal";   // the title names the panel, not the session (owner, 2026-11-01)
   syncSend();
 }
 // A read that fails says nothing about the sessions (owner, 2026-11-01): it used to blank the panel and drop the reader's
@@ -682,7 +682,7 @@ function openOverlay(){
   if (cur && watched === cur.sid && talk.length) paintTalk(true);   // turns the stream pushed while the panel was shut
   loadSessions();
   clearInterval(timer); timer = setInterval(loadConversation, SQ.POLL_MS);
-  clearInterval(liveTick); liveTick = setInterval(paintLive, 1000);
+  clearInterval(liveTick); liveTick = setInterval(paintLive, 120);
   text.focus();
 }
 function closeOverlay() {
