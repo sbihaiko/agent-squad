@@ -330,6 +330,14 @@ def server(port, apps, on_new=None):
     return ThreadingHTTPServer(("127.0.0.1", port), Mux)
 
 
+def supervise(app):
+    """Start the terminal supervisor a profile's terminal routes call (ADR-0152 rule 9). The hub's own start path records
+    the outcome, `up` or `refused` with the reason, so the panel states it; the hub serves its pages either way."""
+    m = app.get("mod")
+    if m is None: return
+    m.start_terminal_supervisor()
+
+
 if __name__ == "__main__":
     PORT = int(sys.argv[1]) if len(sys.argv) > 1 else LIVE_PORT
     apps = load_apps()
@@ -340,5 +348,10 @@ if __name__ == "__main__":
         if m is None: return
         for f in ("refresh_prs", "refresh_quota", "refresh_board", "refresh_history", "load_sampler"):
             threading.Thread(target=getattr(m, f), daemon=True).start()
-    for a in apps.values(): start(a)
-    server(PORT, apps, on_new=start).serve_forever()
+    def added(a):
+        threading.Thread(target=supervise, args=(a,), daemon=True).start()
+        start(a)
+    for a in apps.values():
+        threading.Thread(target=supervise, args=(a,), daemon=True).start()
+        start(a)
+    server(PORT, apps, on_new=added).serve_forever()
