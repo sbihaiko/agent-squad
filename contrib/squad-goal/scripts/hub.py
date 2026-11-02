@@ -4588,6 +4588,23 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 #inst .irw b{color:var(--fg);font-weight:600;font-variant-numeric:tabular-nums;text-align:right;min-width:0;overflow-wrap:anywhere}#inst .irw b.bad{color:var(--warn)}
 @media (prefers-reduced-motion: reduce){#inst .ig .gn{transition:none}}
 /* }INST-CSS */
+/* SIDEBAR-CSS{ */
+/* The Monitor bar folds away (#1159): one chevron at its leading edge slides the whole bar left on close and back right
+   on open, so the board takes the freed width. A shut bar leaves a 28 px rail at the left edge. The chevron is a child
+   of the bar, so it rides the leading edge and never crosses the board. */
+#sbtn{display:none}
+@media (min-width:601px){
+#side{position:relative;padding:0;overflow:hidden;transition:width .16s ease-out}
+#sbody{width:280px;height:100%;overflow:auto;padding:44px 12px 12px;box-sizing:border-box;transition:transform .16s ease-out}
+#sbtn{display:flex;position:absolute;top:12px;right:4px;z-index:1;width:20px;height:32px;align-items:center;justify-content:center;padding:0;border:0;border-radius:0;background:none;color:var(--mute);cursor:pointer}
+#sbtn:hover{color:var(--fg)}#sbtn:focus-visible{outline:var(--focus-w) solid var(--focus);outline-offset:2px}
+#sbtn svg{width:12px;height:12px}
+html.sbshut #side{width:28px;transition-timing-function:ease-in}
+html.sbshut #sbody{transform:translateX(-100%);transition-timing-function:ease-in}
+html.sbshut #sbtn svg{transform:scaleX(-1)}
+}
+@media (prefers-reduced-motion: reduce){#side,#sbody{transition:none}}
+/* }SIDEBAR-CSS */
 </style>
 <div id=who>__WHO__</div>
 <script>// One read per URL at a time (#917): a timer fires on a fixed beat whether or not its last read came back, and a slow route
@@ -4597,12 +4614,14 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
  const k=String(u);if(!live.has(k))live.set(k,f(u,o).finally(()=>live.delete(k)));return live.get(k).then(r=>r.clone())}})();</script>
 <header class=top><h1><button id=pj aria-haspopup=menu aria-expanded=false><span id=pjn></span> &#9662;</button></h1><div id=psw aria-label="Projects"></div><div class=tabs role=tablist><button data-t=board role=tab>Kanban</button><button data-t=flow role=tab>Throughput</button><button data-t=set role=tab>Settings</button></div><span class=spx></span>
 <span class=pill id=bread></span></header>
+<script id=sideRule>function sideState(saved,wide){return saved==="shut"&&!!wide}function sideNext(saved,wide){return sideState(saved,wide)?"open":"shut"}</script>
 <div id=win>
-<aside id=side>
+<script id=sbboot>try{if(sideState(JSON.parse(localStorage.hub||"{}").side,matchMedia("(min-width: 601px)").matches))document.documentElement.classList.add("sbshut")}catch(e){}</script>
+<aside id=side><button id=sbtn type=button aria-label="Collapse the Monitor bar" aria-controls=side aria-expanded=true title="Collapse the Monitor bar"><svg viewBox="0 0 12 12" aria-hidden=true focusable=false><path d="M8 2L4 6l4 4" fill=none stroke=currentColor stroke-width=1.6 stroke-linecap=round stroke-linejoin=round /></svg></button><div id=sbody>
 <details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div id=ispeed></div><div class=ian id=ian></div><div id=ispec></div><div id=ilate></div></div></details>
 <details id=usage class=sp><summary>Usage</summary><div class=sb><div class="igs isub" id=isub title="subscriptions: the used share of the weekly window and the days to its reset"></div></div></details><details id=stats class=sp><summary>Spend<span class=sr id=stsr></span></summary><div class=sb><h4>Tokens <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Counted in tokens: in + out, the same count the ring draws."></span></h4><div class=tot id=tot></div><h4>Tokens over time <span class=row id=per></span></h4><div id=chart></div><h4>Model tokens · this month</h4><div class=m id=piet>in + out</div><div id=pie></div></div></details>
 <details id=lrd class=sp open><summary>Live runs<span class=sr id=lrs></span></summary><div class=sb id=lrun></div></details>
-</aside>
+</div></aside>
 <main id=content>
 <section id=tab-board class="pane on" aria-label=Board>
 <div id=board><div id=bhead><label>Swimlanes <select id=lmode title="swimlanes: one lane per spec (Spec), per wave (Wave), or no lanes, today's board (None)"><option value=spec>Spec</option><option value=wave>Wave</option><option value=none>None</option></select></label> <details id=fw class=fsel><summary>Waves: all</summary><div class=fpop id=fwl></div></details> <details id=fs class=fsel><summary>Specs: all</summary><div class=fpop id=fsl></div></details> <details id=fk class=fsel><summary>Kinds: all</summary><div class=fpop id=fkl></div></details> <button id=lcall title="collapse every swimlane">Collapse all</button> <button id=lexp title="expand every swimlane">Expand all</button> <label class=hck title="hide the swimlanes whose every ticket is closed"><input type=checkbox id=lhd> Hide done lanes</label> <span id=lhc></span><span id=sse class=m hidden></span><span id=bt class=m></span> <span id=hlrel class=hlrel hidden></span></div><div id=bcases></div><div id=bbody></div></div>
@@ -4638,6 +4657,14 @@ const $=s=>document.querySelector(s),ls=JSON.parse(localStorage.hub||"{}");
 const HUB_REPO=/*HUB_REPO*/;
 let allRuns=[],runs=[],q=ls.q||"",per=ls.per||"day",src=ls.src||"both",N=1,pins=new Set(),slots=[],hl=null,boardRows=[],ENDED=[];   // ENDED: the rows of /api/ended (#984)
 const save=()=>localStorage.hub=JSON.stringify({...ls,pins:[...pins],q,per,src});
+// SIDEBAR{
+const sideBtn=$("#sbtn"),sideBody=$("#sbody"),sideWide=matchMedia("(min-width: 601px)");
+function sidePaint(shut){const name=shut?"Open the Monitor bar":"Collapse the Monitor bar";document.documentElement.classList.toggle("sbshut",shut);sideBtn.setAttribute("aria-expanded",String(!shut));sideBtn.setAttribute("aria-label",name);sideBtn.title=name;sideBody.inert=shut}
+function sideShow(saved){sidePaint(sideState(saved,sideWide.matches))}
+sideBtn.addEventListener("click",()=>{ls.side=sideNext(ls.side,sideWide.matches);save();sideShow(ls.side)});
+sideWide.addEventListener("change",()=>sideShow(ls.side));
+sideShow(ls.side);
+// }SIDEBAR
 const usd=v=>v==null?"—":v>=100?"$"+Math.round(v):"$"+v.toFixed(2);
 const usdc=v=>v==null?"—":"$"+(+v).toFixed(2);   // plan prices carry cents, so a month's cash total keeps them: usd would round $282.23 to $282
 const age=s=>s<90?s+"s":s<5400?Math.round(s/60)+"m":Math.round(s/3600)+"h";
