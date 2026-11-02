@@ -18,6 +18,10 @@
 # (HEALTH_NOTIFY overrides the notifier). The two mode logs stay in $SG_STATE/nightly-parallel.log and nightly-serial.log.
 # An open bound marker (promote-pass.sh writes $SG_STATE/promote-bound, ADR-0164) moves the run to the oldest marked tip that
 # $SG_STATE/promote-bound-settled does not name; the result then settles that tip there, pass or fail, and dev waits a day.
+# It also settles the proof obligations a gate left unproven (spec 1163): it runs the checks each record in
+# $SG_STATE/obligations names over the tree that record names, writes settled-green or settled-red in
+# $SG_STATE/obligation-settled, clears the record it answered, reports an overdue one by name, and a settled red holds the
+# tree it measured like any red (ghcall.sh).
 here="$(cd "$(dirname "$0")" && pwd)"; st=${SG_STATE:-/tmp/sg-state}
 mkdir -p "$st/auto" "$st/locks"
 day=$st/auto/nightly-$(date +%F)
@@ -73,7 +77,94 @@ ids=$("$py" -c 'import json,sys; print(json.dumps([l for l in sys.stdin.read().s
   || { rm -f "$failed"; echo "nightly: the failing ids could not be encoded" >&2; exit 1; }
 rm -f "$failed"
 res=pass; { [ "$pm" = pass ] && [ "$sm" = pass ]; } || res=fail
-printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" "$res" "$tip" "$pm" "$sm" "$ids" > "$st/nightly-result.$$" \
+# The proof obligations a gate left (spec 1163, gate.sh). An unproven entry writes one record:
+#   $st/obligations/<key>: `<repository> TAB <tree sha> TAB <base> TAB <checks that did not run> TAB <scope> TAB <deadline>`
+# The nightly settles it: it reads the record, runs the checks the record names over the tree the record names, and writes
+# one settlement line at $st/obligation-settled/<key>, the gate's own key:
+#   `<epoch> TAB <repository> TAB <tree sha> TAB <base> TAB <scope measured> TAB <checks measured> TAB <green|red> TAB <run>`
+# The scope measured is always `full`: the nightly never runs a cheaper scope (ADR-0018), so no delta selector call
+# appears here (tests/test_gate_scope.py). The run is `<nightly epoch>@<nightly tree sha>`, so a settlement names the run it was
+# measured in. A settlement clears the obligation it answers. A red settlement holds dispatch at the tree it measured, like
+# any red (ghcall.sh, gh_dispatch_hold); it is never credited to another tree. A record the nightly cannot read, whose
+# checks it cannot run, or whose tree it cannot fetch is reported by name and left in place: an obligation is never
+# dropped. A record past its deadline is reported by name before it is measured; a nightly is always past the gate's
+# fifteen-minute bound (ADR-0163), so the report marks it late and the measurement still answers it. The full suite this
+# run already made answers `pytest` at the tip it measured (ADR-0168): the nightly never runs that suite twice. A
+# settlement never turns a red into a green: a tree this run measured red is settled red whatever its named checks say.
+now=$(date +%s); run="$now@$tip"
+odir=$st/obligations; sdir=$st/obligation-settled; olog=$st/obligation-settle.log
+ruffcmd=${SG_SETTLE_RUFF:-"$py -m ruff check squad tests"}
+mypycmd=${SG_SETTLE_MYPY:-"$py -m mypy squad"}
+pycmd=${SG_SETTLE_PYTEST:-"$py -m pytest -p no:deepeval -p no:xdist"}
+ob_report() { printf '%s %s\n' "$(date '+%F %T')" "$1" >> "$st/alerts.log"; }
+cur=$tip; obred=
+for f in "$odir"/*; do
+  [ -f "$f" ] || continue
+  line=$(cat -- "$f" 2>/dev/null) || line=
+  nf=$(printf '%s' "$line" | awk -F'\t' '{print NF}')
+  if [ "$nf" != 6 ]; then
+    ob_report "OBLIGATION unreadable at $(basename "$f"): expected six fields, found ${nf:-0}; left in place"; continue
+  fi
+  IFS=$'\t' read -r orp osh oba och osc odl <<<"$line"
+  name="${orp:-?}@${osh:0:12}"
+  case $odl in
+    ''|*[!0-9]*) ob_report "OBLIGATION unreadable at $name: deadline '$odl' is not an epoch; left in place"; continue;;
+  esac
+  if [ "$odl" -lt "$now" ]; then
+    ob_report "OBLIGATION overdue: $name base $oba checks [$och] missed its deadline $(date -r "$odl" '+%F %T' 2>/dev/null || printf '%s' "$odl"); settling it now"
+  fi
+  case ${orp:--} in
+    -|"${SG_REPO:-}") ;;
+    *) ob_report "OBLIGATION unmeasured: $name belongs to $orp, not ${SG_REPO:--}; left in place"; continue;;
+  esac
+  want= bad=
+  case " $och " in *" all "*|*" unknown "*) want="ruff mypy pytest";; esac
+  if [ -z "$want" ]; then
+    for c in $och; do
+      case $c in ruff|mypy|pytest) want="$want $c";; -) ;; *) bad=$c;; esac
+    done
+    want=${want# }
+    [ -n "$want" ] || want="ruff mypy pytest"
+  fi
+  if [ -n "$bad" ]; then
+    ob_report "OBLIGATION unmeasured: $name names check '$bad', which the nightly cannot run; left in place"; continue
+  fi
+  tgreen=
+  if [ "$osh" = "$cur" ]; then
+    t=$tree
+    [ "$osh" = "$tip" ] && tgreen=$([ "$res" = pass ] && echo 1 || echo 0)
+  else
+    if ! g cat-file -e "$osh^{commit}" 2>/dev/null; then
+      g fetch -q origin "$osh" 2>/dev/null \
+        || { ob_report "OBLIGATION unmeasured: $name cannot be fetched from origin; left in place"; continue; }
+    fi
+    if ! g checkout -q -f --detach "$osh" || ! g clean -q -ffdx; then
+      ob_report "OBLIGATION unmeasured: $name could not be checked out in the nightly tree; left in place"; continue
+    fi
+    cur=$osh; t=$tree
+  fi
+  ov=green; odet=
+  for c in $want; do
+    if [ "$c" = pytest ] && [ -n "$tgreen" ]; then
+      [ "$tgreen" = 1 ] || { ov=red; odet="$odet pytest"; }
+      continue
+    fi
+    cmd=$ruffcmd; [ "$c" = mypy ] && cmd=$mypycmd; [ "$c" = pytest ] && cmd=$pycmd
+    ( cd "$t" && bash -c "$cmd" ) >> "$olog" 2>&1 || { ov=red; odet="$odet $c"; }
+  done
+  [ "$osh" = "$tip" ] && [ "$res" != pass ] && { ov=red; odet="$odet the full suite"; }
+  key=$(printf '%s\t%s\t%s' "$orp" "$osh" "$oba" | cksum | cut -d' ' -f1)
+  if mkdir -p "$sdir" 2>/dev/null \
+    && printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$now" "$orp" "$osh" "$oba" full "$want" "$ov" "$run" > "$sdir/$key.$$" \
+    && mv -f "$sdir/$key.$$" "$sdir/$key"; then
+    rm -f "$f"
+    [ "$ov" = red ] && { obred=1; ob_report "OBLIGATION settled-red: $name base $oba at $run:${odet# } failed"; }
+  else
+    rm -f "$sdir/$key.$$" 2>/dev/null
+    ob_report "OBLIGATION unsettled: $name: the settlement record could not be written; left in place"
+  fi
+done
+printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$now" "$res" "$tip" "$pm" "$sm" "$ids" > "$st/nightly-result.$$" \
   && mv -f "$st/nightly-result.$$" "$st/nightly-result" || { echo "nightly: the result record could not be written" >&2; exit 1; }
 if [ "$res" = fail ]; then
   if [ "$nfail" -gt 0 ]; then msg="NIGHTLY full suite red at ${tip:0:7}: $nfail failing test(s)"
@@ -84,5 +175,5 @@ if [ "$res" = fail ]; then
 fi
 [ -n "$bt" ] && printf '%s\t%s\t%s\n' "$(date +%s)" "$bt" "$res" >> "$st/promote-bound-settled"
 : > "$day"   # the run is spent for today, green or red
-[ "$res" = pass ] && exit 0
+[ "$res" = pass ] && [ -z "$obred" ] && exit 0   # a red settlement fails the run too: it measured a defect
 exit 1

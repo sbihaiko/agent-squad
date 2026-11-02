@@ -171,4 +171,87 @@ IFS=$'\t' read -r _ st_t st_r < "$ST/promote-bound-settled" 2>/dev/null
 [ "$rc $r_res $r_sha" = "1 fail $sha" ] && [ "$st_t $st_r" = "$sha fail" ] && ok "a red on the marked tip fails the record and settles the marker as red" \
   || ko "red marked tip: rc $rc, record '$r_res $r_sha', settled '$st_t $st_r'"
 
+# --- proof obligations (spec 1163, ADR-0153): the nightly settles what a gate could not prove. It reads each record in
+#     $SG_STATE/obligations, runs the named checks over the named tree, and writes one settlement line in
+#     $SG_STATE/obligation-settled. The stub checks log the tree and its HEAD, so credit and tree are read from the run.
+OBL=$ST/obligations; SET=$ST/obligation-settled
+obwrite() {  # <repository> <sha> <base> <checks> <scope> <deadline>: the gate's own key for one obligation entry
+  mkdir -p "$OBL"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" "$6" > "$OBL/$(printf '%s\t%s\t%s' "$1" "$2" "$3" | cksum | cut -d' ' -f1)"
+}
+cat > "$T/settle.sh" <<EOF
+#!/bin/bash
+echo "\$1 \$PWD \$(git rev-parse HEAD 2>/dev/null)" >> "$T/settle.log"
+case " \${FAIL_SETTLE:-} " in *" \$1 "*) exit 1;; esac
+exit 0
+EOF
+chmod +x "$T/settle.sh"
+obclean() { rm -rf "$OBL" "$SET"; rm -f "$T/settle.log" "$ST/alerts.log" "$ST/nightly-result"; mark; }
+sf() { [ -d "$SET" ] || return 1; /bin/ls "$SET"/* 2>/dev/null | head -n 1; }
+
+# 11) a green settlement clears the obligation and names the run; it credits the tree and the scope it measured, and the
+#     full suite the run already made answers pytest at the tip, so no second suite runs there.
+obclean
+obwrite o/r "$newtip" "-" "mypy pytest" delta "$(( $(date +%s) + 900 ))"
+out=$(ng "SG_SETTLE_MYPY=$T/settle.sh mypy" "SG_SETTLE_PYTEST=$T/settle.sh pytest"); rc=$?; rec
+f=$(sf); [ -n "$f" ] || f=/dev/null; IFS=$'\t' read -r s_ts s_repo s_sha s_base s_scope s_checks s_res s_run < "$f" 2>/dev/null
+[ "$rc" = 0 ] && ok "a green settlement lets the nightly exit 0" || ko "green settlement rc $rc: $out"
+[ -z "$(/bin/ls -A "$OBL" 2>/dev/null)" ] && ok "a green settlement clears the obligation" || ko "obligation left: $(/bin/ls "$OBL" 2>&1)"
+[ "$s_res" = green ] && ok "the settlement is green" || ko "settlement: '$(cat "$f" 2>&1)'"
+[ "$s_run" = "$(cut -f1 "$ST/nightly-result")@$newtip" ] && ok "the settlement names the run it was measured in" \
+  || ko "run: '$s_run' vs '$(cut -f1 "$ST/nightly-result")@$newtip'"
+[ "$s_sha $s_repo $s_scope" = "$newtip o/r full" ] && ok "the settlement credits the tree and the scope it measured" || ko "credit: '$s_sha $s_repo $s_scope'"
+/usr/bin/grep -qx "mypy $T/tree $newtip" "$T/settle.log" && ok "the named check ran over the tree the obligation names" || ko "settle log: '$(cat "$T/settle.log" 2>&1)'"
+/usr/bin/grep -q "^pytest " "$T/settle.log" 2>/dev/null && ko "pytest ran again at the tip the suite already measured" || ok "the suite already made answers pytest at the measured tip"
+
+# 12) a red settlement holds the tip like any red: the record names the checks that failed, the obligation is answered,
+#     the run alerts, and the dispatch hold reads the settlement.
+obclean
+obwrite o/r "$newtip" "-" "ruff" delta "$(( $(date +%s) + 900 ))"
+out=$(ng "SG_SETTLE_RUFF=$T/settle.sh ruff" FAIL_SETTLE=ruff); rc=$?; rec
+f=$(sf); [ -n "$f" ] || f=/dev/null; IFS=$'\t' read -r _ _ _ _ _ s_checks s_res s_run < "$f" 2>/dev/null
+[ "$rc" = 1 ] && ok "a red settlement fails the nightly" || ko "red settlement rc $rc: $out"
+[ "$s_res $s_checks" = "red ruff" ] && ok "the settlement is red and names the check that failed" || ko "settlement: '$(cat "$f" 2>&1)'"
+[ -z "$(/bin/ls -A "$OBL" 2>/dev/null)" ] && ok "a red settlement answers the obligation" || ko "obligation left: $(/bin/ls "$OBL" 2>&1)"
+/usr/bin/grep -q "OBLIGATION settled-red" "$ST/alerts.log" 2>/dev/null && ok "a red settlement alerts" || ko "alerts: '$(cat "$ST/alerts.log" 2>&1)'"
+o=$(hold); rc=$?
+if [ "$rc" = 0 ] && case "$o" in *"${newtip:0:7}"*) true;; *) false;; esac; then
+  ok "the dispatch hold stops a run on the tip a red settlement measured"
+else ko "hold rc $rc: '$o'"; fi
+case "$o" in *obligation*) ok "the hold names the obligation as its cause";; *) ko "hold cause: '$o'";; esac
+rm -rf "$SET"; hold >/dev/null; [ $? = 1 ] && ok "clearing the settled-red record releases the hold" || ko "the hold outlived the record"
+
+# 13) a settlement is credited to the tree it measured, never another: an obligation at an older sha is measured and
+#     settled there, the nightly record still names the tip, and the red holds no tip it did not measure.
+obclean
+obwrite o/r "$sha" "-" "ruff" delta "$(( $(date +%s) + 900 ))"
+out=$(ng "SG_SETTLE_RUFF=$T/settle.sh ruff" FAIL_SETTLE=ruff); rc=$?; rec
+f=$(sf); [ -n "$f" ] || f=/dev/null; IFS=$'\t' read -r _ _ s_sha s_base s_scope _ s_res _ < "$f" 2>/dev/null
+[ "$s_sha $s_scope $s_res" = "$sha full red" ] && [ "$r_sha" = "$newtip" ] \
+  && ok "the red credits the settled tree, and the nightly record still names the tip" \
+  || ko "credit: settled '$s_sha/$s_scope/$s_res', record '$r_sha', want '$sha/full/red' and '$newtip'"
+/usr/bin/grep -qx "ruff $T/tree $sha" "$T/settle.log" && ok "the check ran over the tree the obligation names, not the tip" \
+  || ko "settle log: '$(cat "$T/settle.log" 2>&1)'"
+hold >/dev/null; [ $? = 1 ] && ok "a red at another tree holds no tip" || ko "a red at another tree held the tip"
+
+# 14) an obligation past its deadline is reported by name, never dropped: the alert names its tree and checks, and the run
+#     still measures it, because a nightly is always past the gate's fifteen-minute bound (ADR-0163).
+obclean
+obwrite o/r "$newtip" "-" "mypy" delta "$(( $(date +%s) - 60 ))"
+out=$(ng "SG_SETTLE_MYPY=$T/settle.sh mypy"); rc=$?
+a=$(cat "$ST/alerts.log" 2>/dev/null)
+case $a in *OBLIGATION*overdue*"${newtip:0:7}"*mypy*) ok "an overdue obligation is reported by name, with its tree and checks";; *) ko "overdue report: '$a'";; esac
+/usr/bin/grep -qx "mypy $T/tree $newtip" "$T/settle.log" && ok "an overdue obligation is still measured, never dropped" \
+  || ko "settle log: '$(cat "$T/settle.log" 2>&1)'"
+
+# 15) a settlement never turns a red into a green: the full suite is red at the measured tip, so an obligation whose named
+#     check passes still settles red.
+obclean
+obwrite o/r "$newtip" "-" "ruff" delta "$(( $(date +%s) + 900 ))"
+out=$(ng "SG_SETTLE_RUFF=$T/settle.sh ruff" FAIL_parallel=1); rc=$?; rec
+f=$(sf); [ -n "$f" ] || f=/dev/null; IFS=$'\t' read -r _ _ _ _ _ _ s_res _ < "$f" 2>/dev/null
+[ "$r_res $s_res" = "fail red" ] && ok "a red suite is never settled green by a passing named check" \
+  || ko "record '$r_res', settlement '$s_res': $(cat "$f" 2>&1)"
+rm -rf "$OBL" "$SET"
+
 rm -rf "$T"; exit $fail
