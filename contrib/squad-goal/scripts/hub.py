@@ -5336,7 +5336,11 @@ setInterval(squadChartTick,5000);
 async function endedPoll(){try{const rows=await (await fetch("/api/ended")).json();ENDED=rows;drawMain();rows.slice(0,5).map(r=>`<div class=r data-rid="${esc(r.id)}" tabindex=0 role=button><div><span class="b ${r.state}">${esc(r.badge||r.state)}</span> <b>${esc(name(r))}</b><div class=m>${usd(r.spend)} \u00b7 ${age(r.age)} ago</div></div></div>`).join("")||"<div class=m>no run ended today</div>"}catch(e){}}
 endedPoll();setInterval(endedPoll,30000);
 setTab(location.hash==="#set"?"set":TABS[ls.tab]?ls.tab:"board");   // the phone menu links here with #set (#913)
-let ver=null;setInterval(async()=>{try{const v=(await (await fetch("/api/version")).json()).v;if(ver===null)ver=v;else if(v!==ver)location.reload()}catch(e){}},3000);
+// The open page follows the hub build that served it (#1114)
+const SERVED_BUILD=__BUILD__;let hubNote=null;
+function hubStale(msg){if(!msg){if(hubNote)hubNote.remove();hubNote=null;return}if(!hubNote){hubNote=document.createElement("div");hubNote.className="perr";document.body.append(hubNote)}hubNote.textContent=msg}
+setInterval(async()=>{try{const r=await fetch("/api/version");if(!r.ok)throw new Error(String(r.status));const v=(await r.json()).v;hubStale("");if(v!==SERVED_BUILD)location.reload()}catch(e){hubStale("the hub did not answer: this page may be out of date")}},3000);
+addEventListener("pageshow",e=>{if(e.persisted)location.reload()});
 </script>"""
 PAGE = PAGE.replace("/*WEB_TOKENS*/", WEB_TOKENS) + "\n<!--OVERLAY-->"
 SWITCHER_JS = (pathlib.Path(__file__).resolve().parent / "hub-switcher.js").read_text()   # the project switcher, both pages (#876)
@@ -6170,6 +6174,12 @@ def send_rule(a):
 IMAGE_SUFFIX = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp"}
 IMAGE_MAX = 12 * 1024 * 1024
 
+def screenshot_written(sid, cid):
+    """Where the overlay's screenshot is written, and the line that tells the session its path (#1118). One function owns both,
+    so the image route serves exactly the file the session is told about."""
+    path = STATE / "sessions" / sid / "images" / f"{cid}.png"
+    return path, f"[Image: source: {path}]"
+
 def image_payload(query):
     """One screenshot a transcript names, as (bytes, content type), or None. A transcript line names its image by the path
     the session wrote it under, so the route serves exactly that file and nothing a caller names freely: the path must sit in
@@ -6256,7 +6266,7 @@ def served_page(login=""):
     """The page as the hub serves it, every placeholder substituted. The model-id shape replaces its quoted placeholder:
     json.dumps brings its own quotes, and a second pair is a syntax error that empties the page."""
     who = f"signed in as {html.escape(login)}" if login else ""
-    return PAGE.replace("__WHO__", who).replace("__REPO__", REPO).replace("__CAPS__", json.dumps(loop_caps())).replace("__LOADMS__", str(int(LOAD_SAMPLE_SECS * 1000))).replace("__LOADERR__", str(LOAD_ERR_PCT)).replace("<!--OVERLAY-->", overlay_tag(OVERLAY_HUB) + (stream_tag() if hubstream.enabled() else ""))
+    return PAGE.replace("__WHO__", who).replace("__REPO__", REPO).replace("__CAPS__", json.dumps(loop_caps())).replace("__LOADMS__", str(int(LOAD_SAMPLE_SECS * 1000))).replace("__LOADERR__", str(LOAD_ERR_PCT)).replace("__BUILD__", str(BOOT)).replace("<!--OVERLAY-->", overlay_tag(OVERLAY_HUB) + (stream_tag() if hubstream.enabled() else ""))
 
 
 def own_host(h):
@@ -6562,8 +6572,8 @@ class H(BaseHTTPRequestHandler):
         session_write(self, a, raw, {"sid", "card_id", "answers"}, card_answer_payload)
 
     def send_screenshot(self, a):
-        """The overlay's screenshot (#903): a PNG of the page beneath it, written under the hub state folder, then the session
-        is told its path. The send's rule admits it, and the wire carries no image: the message is the path."""
+        """The overlay's screenshot (#903): a PNG of the page beneath it, written where the image route serves it, then the
+        session is told its path as an image marker. The send's rule admits it, and the wire carries no image: the message is the path."""
         length = self.headers.get("Content-Length") or "0"
         n = int(length) if length.isdigit() else 0
         raw = self.rfile.read(min(n, SCREENSHOT_MAX + 1))
@@ -6580,10 +6590,11 @@ class H(BaseHTTPRequestHandler):
         q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
         sid, cid = (q.get("sid") or [""])[0], (q.get("client_id") or [""])[0]
         if not sessions.SID.fullmatch(sid) or not session_send.CLIENT_ID.fullmatch(cid): return self.answer(400, {"err": "bad request"})
-        folder = STATE / "screenshots"; folder.mkdir(parents=True, exist_ok=True)
-        path = folder / f"{cid}.png"; part = folder / f"{cid}.png.part"
+        path, line = screenshot_written(sid, cid)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        part = path.with_name(path.name + ".part")
         part.write_bytes(raw); os.replace(part, path)
-        self.answer(200, session_send.send(PROFILE_NAME, sid, f"Screenshot: {path}", cid, profiles_of=profiles_of_cwd, root=STATE))
+        self.answer(200, session_send.send(PROFILE_NAME, sid, line, cid, profiles_of=profiles_of_cwd, root=STATE))
 
     def terminal_read(self, a):
         """A hosted session's scrollback, through the supervisor for this caller (ADR-0152 rule 9): the read grant on the tailnet."""

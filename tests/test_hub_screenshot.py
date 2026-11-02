@@ -9,6 +9,7 @@ import pathlib
 import shutil
 import subprocess
 import threading
+import urllib.parse
 from http.server import ThreadingHTTPServer
 
 import pytest
@@ -67,17 +68,34 @@ def post(port, path, body, ctype="image/png", origin=None):
     return r.status, data
 
 
+def written(state):
+    return state / "sessions" / SID / "images" / f"{CID}.png"
+
+
 def stored(state):
-    return sorted((state / "screenshots").glob("*")) if (state / "screenshots").exists() else []
+    return sorted((state / "sessions").rglob("*.png")) if (state / "sessions").exists() else []
 
 
-def test_a_png_is_written_under_the_state_folder_and_its_path_is_sent(served):
+def test_a_png_is_written_under_the_session_images_folder_and_its_path_is_sent(served):
     mod, state, port, sent = served
     status, _ = post(port, ROUTE, PNG)
-    f = state / "screenshots" / f"{CID}.png"
+    f = written(state)
     assert status == 200
     assert f.read_bytes() == PNG
-    assert sent == [(SID, f"Screenshot: {f}", CID)]
+    assert sent == [(SID, f"[Image: source: {f}]", CID)]
+
+
+def test_the_path_the_session_is_told_is_served_for_its_session_and_refused_for_another(served):
+    mod, state, port, sent = served
+    other = "0" * 8 + "-0000-0000-0000-" + "0" * 12
+    assert post(port, ROUTE, PNG)[0] == 200
+    (sid, line, cid), = sent
+    assert sid == SID and cid == CID
+    assert line.startswith("[Image: source: ") and line.endswith("]")
+    path = line[len("[Image: source: "):-1]
+    assert pathlib.Path(path).read_bytes() == PNG
+    assert mod.image_payload(urllib.parse.urlencode({"sid": SID, "p": path})) == (PNG, "image/png")
+    assert mod.image_payload(urllib.parse.urlencode({"sid": other, "p": path})) is None
 
 
 def test_a_non_png_is_refused_and_nothing_is_written(served):
@@ -98,7 +116,7 @@ def test_a_body_of_exactly_five_megabytes_is_admitted(served):
     mod, state, port, sent = served
     status, _ = post(port, ROUTE, PNG + b"\x00" * (FIVE_MB - len(PNG)))
     assert status == 200
-    assert (state / "screenshots" / f"{CID}.png").stat().st_size == FIVE_MB
+    assert written(state).stat().st_size == FIVE_MB
 
 
 def test_a_request_the_send_rule_refuses_is_refused(served, monkeypatch):
@@ -225,5 +243,5 @@ def test_the_mux_routes_the_screenshot_to_its_repositorys_hub(hub, monkeypatch):
         srv.shutdown()
         srv.server_close()
     assert status == 200
-    assert (state / "screenshots" / f"{CID}.png").read_bytes() == PNG
-    assert sent == [f"Screenshot: {state / 'screenshots' / (CID + '.png')}"]
+    assert written(state).read_bytes() == PNG
+    assert sent == [f"[Image: source: {written(state)}]"]
