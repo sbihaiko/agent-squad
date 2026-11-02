@@ -233,7 +233,8 @@ def test_the_reader_can_step_the_text_size_and_the_choice_outlives_the_page():
     src = pathlib.Path(__file__).resolve().parents[1] / "contrib/squad-goal/scripts/hub-overlay.js"
     js = src.read_text()
     assert 'id="sq-ov-fsdown"' in js and 'id="sq-ov-fsup"' in js
-    assert "--sq-fs:13px" in js
+    assert "--sq-fs:14px" in js          # the owner's default, one step up from the served floor
+    assert "FS_MIN = 13" in js           # A- never serves text under the floor
     assert js.index("--sq-fs") < js.index(".sq-txt{white-space:pre-wrap")
     assert "font-size:var(--sq-fs)" in js
     assert "localStorage.setItem(FS_KEY" in js and "localStorage.getItem(FS_KEY)" in js
@@ -316,7 +317,7 @@ def test_the_owner_turn_is_a_bubble_on_the_right_and_the_answer_one_on_the_left(
     own, ans = rule(".sq-owner"), rule(".sq-answer")
     assert "margin:0 0 10px auto" in own and "width:fit-content" in own and "max-width:86%" in own
     assert "border-radius:14px 14px 4px 14px" in own and "background:#12302a" in own
-    assert "margin:0 auto 10px 0" in ans and "width:fit-content" in ans and "max-width:92%" in ans
+    assert "margin:0 auto 10px 0" in ans and "width:fit-content" in ans and "max-width:100%" in ans
     assert "border-radius:14px 14px 14px 4px" in ans and "background:#161c24" in ans
     # a bubble carries no type of its own: the size, the family and the spacing stay the text's
     for body in (own, ans):
@@ -340,13 +341,14 @@ def test_an_image_the_owner_sent_joins_the_message_it_came_with():
     assert 'prev.role === "owner"' in body and "IMG_ONLY.test(String(prev.text" in body
     assert 'out[out.length - 1] = { ...prev, text:' in body
 
-def test_an_empty_session_list_blanks_the_panel_only_after_it_repeats():
-    """Owner, 2026-11-01: the terminal stopped and went back to "No session runs" with the panel still open. One answered
-    read that named no session was enough to wipe the talk; it must repeat first."""
+def test_an_empty_session_list_never_takes_away_the_talk():
+    """Owner, 2026-11-01: the panel went blank on "No session runs here" while it held a live talk. A list that answers
+    empty keeps what the panel shows and asks again; the empty screen belongs to a panel that never had a session."""
     js = OVERLAY.read_text()
     body = js[js.index("async function loadSessions() {"):js.index("// Only the structure that carries meaning")]
-    assert "const EMPTY_N = 3;" in js
-    guard = body.index("if (cur && !found.length && ++emptyN < EMPTY_N) {")
-    assert "retrySoon();" in body[guard:guard + 200]
+    guard = body.index("if (cur && !found.length) {")
+    assert "retrySoon();" in body[guard:guard + 160]
+    assert body[guard:guard + 160].count("return;") == 1
     for later in ("sessions = found", "cur = ", 'empty("No session runs'):
         assert guard < body.index(later), later
+    assert "EMPTY_N" not in js

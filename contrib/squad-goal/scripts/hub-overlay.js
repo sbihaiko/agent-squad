@@ -68,7 +68,7 @@ SQ.MARKUP = `<style>
 html.sq-docked #sq-ov-btn{display:none}
 html.sq-docked body{margin-right:var(--sq-dock)}
 #sq-ov-lens{will-change:transform}
-#sq-ov{position:fixed;z-index:1000;right:16px;bottom:calc(var(--sq-ov-bottom,16px) + 64px);width:min(440px,calc(100vw - 32px));height:min(640px,calc(100vh - 120px));display:flex;flex-direction:column;box-sizing:border-box;background:#11151c;color:#e6e8ee;border:1px solid #353d4b;border-radius:13px;box-shadow:0 18px 50px #000c;--sq-fs:13px;--sq-mono:ui-monospace,SFMono-Regular,SF Mono,Menlo,Consolas,monospace;font:14px/1.45 var(--sq-mono);text-align:left}
+#sq-ov{position:fixed;z-index:1000;right:16px;bottom:calc(var(--sq-ov-bottom,16px) + 64px);width:min(440px,calc(100vw - 32px));height:min(640px,calc(100vh - 120px));display:flex;flex-direction:column;box-sizing:border-box;background:#11151c;color:#e6e8ee;border:1px solid #353d4b;border-radius:13px;box-shadow:0 18px 50px #000c;--sq-fs:14px;--sq-mono:ui-monospace,SFMono-Regular,SF Mono,Menlo,Consolas,monospace;font:14px/1.55 var(--sq-mono);text-align:left}
 #sq-ov[hidden]{display:none}
 #sq-ov *{box-sizing:border-box}
 #sq-ov[data-mode=docked]{top:0;right:0;bottom:0;height:auto;width:var(--sq-dock);border-radius:0;border-width:0 0 0 1px;box-shadow:none}
@@ -93,32 +93,32 @@ html.sq-docked body{margin-right:var(--sq-dock)}
 #sq-ov-log{flex:1;min-height:0;overflow:auto;padding:13px 14px}
 #sq-ov-log .sq-empty{color:#b8c0cf}
 .sq-turn{margin:0 0 12px;padding:0;border-left:0;line-height:1.55;text-indent:0}
-.sq-who{display:block;font-family:var(--sq-mono);font-size:13px;line-height:1.2;color:#8b949e;margin-bottom:2px;letter-spacing:.02em}
-.sq-txt{white-space:pre-wrap;overflow-wrap:anywhere;font-family:var(--sq-mono);font-size:var(--sq-fs);color:#c9d1d9}
-.sq-p{margin:0 0 8px}.sq-p:last-child{margin-bottom:0}
+.sq-who{display:block;font-family:var(--sq-mono);font-size:13px;line-height:1.55;color:#8b949e;margin-bottom:2px;letter-spacing:.02em}
+.sq-txt{white-space:pre-wrap;overflow-wrap:anywhere;font-family:var(--sq-mono);font-size:var(--sq-fs);color:#e6e8ee}
+.sq-p{margin:0 0 1.55em}.sq-txt>:last-child{margin-bottom:0}
 .sq-owner{margin:0 0 10px auto;width:fit-content;max-width:86%;border:1px solid #2e6b4f;border-radius:14px 14px 4px 14px;padding:8px 12px;background:#12302a}
 .sq-owner .sq-who{color:#8b949e;font-size:13px}.sq-owner .sq-txt{color:#e6edf3}
 .sq-system .sq-who{color:#8b949e;font-size:13px}.sq-system .sq-txt{color:#8b949e;font-style:italic}
-.sq-fold{border-left:0;margin:0 0 8px}.sq-fold summary{font-size:13px;color:#8b949e;cursor:pointer;list-style:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sq-fold{border-left:0;margin:0 0 8px}.sq-fold summary{font-size:13px;color:#8b949e;cursor:pointer;list-style:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:flex;align-items:center}
 .sq-fold summary::-webkit-details-marker{display:none}.sq-fold[open] summary{color:#8b949e}
-.sq-answer{margin:0 auto 10px 0;width:fit-content;max-width:92%;border:1px solid #26303c;border-radius:14px 14px 14px 4px;padding:8px 12px;background:#161c24}
+.sq-answer{margin:0 auto 10px 0;width:fit-content;max-width:100%;border:1px solid #26303c;border-radius:14px 14px 14px 4px;padding:8px 12px;background:#161c24}
 .sq-answer .sq-who{color:#8b949e;font-size:13px}
-.sq-h{font-family:var(--sq-mono);font-weight:600;font-size:var(--sq-fs);color:#eef1f5;margin:6px 0 3px}
-.sq-tbl{width:100%;border-collapse:collapse;margin:6px 0;font-size:var(--sq-fs)}
-.sq-tbl th,.sq-tbl td{border:1px solid #2e6b4f;padding:4px 8px;text-align:left;vertical-align:top}
-.sq-tbl th{background:#101a16;color:#3ecf8e;font-weight:600}
-.sq-ul{margin:3px 0;padding-left:16px}.sq-ul li{margin:0 0 2px}.sq-ol{list-style:decimal}
-.sq-ic{font-family:var(--sq-mono);background:#1b212b;border:1px solid #2b3340;border-radius:4px;padding:0 4px;font-size:var(--sq-fs)}
-.sq-txt b{color:#ffffff;font-weight:650}.sq-txt i{color:#b6c0cc}
+.sq-h{font-family:var(--sq-mono);font-weight:600;font-size:var(--sq-fs);color:#eef1f5;margin:1.55em 0 0}
+.sq-tbl{width:100%;border-collapse:collapse;margin:0 0 1.55em;font-size:var(--sq-fs)}
+.sq-tbl th,.sq-tbl td{border:1px solid #353d4b;padding:4px 8px;text-align:left;vertical-align:top}
+.sq-tbl th{background:#101a16;color:#e6e8ee;font-weight:600}
+.sq-ul{margin:0 0 1.55em;padding-left:18px}.sq-ul li{margin:0}.sq-ol{list-style:decimal}
+.sq-ic{font-family:var(--sq-mono);color:#e6c07b;font-size:var(--sq-fs)}
+.sq-txt b{color:#ffffff;font-weight:650}.sq-txt i{color:inherit}
 .sq-txt a{color:#7aa2ff;text-decoration:underline}.sq-txt code{color:#e6c07b}
-.sq-code{margin:4px 0}.sq-code summary{font-size:13px;color:#7aa2ff;cursor:pointer;list-style:none}
-.sq-code pre{margin:3px 0 0;padding:5px 8px;background:#0d1117;border:1px solid #232a36;border-radius:6px;overflow:auto;font-family:ui-monospace,SFMono-Regular,monospace;font-size:var(--sq-fs);line-height:1.4;color:#b8c0cf;white-space:pre}
-.sq-img{display:block;margin:4px 0}.sq-img img{max-width:100%;max-height:180px;border:1px solid #232a36;border-radius:6px;display:block}
+.sq-code{margin:0 0 1.55em}.sq-code summary{font-size:13px;color:#7aa2ff;cursor:pointer;list-style:none;display:flex;align-items:center}
+.sq-code pre{margin:0 0 1.55em;padding:6px 9px;background:#0d1117;border:1px solid #232a36;border-radius:6px;overflow:auto;font-family:var(--sq-mono);font-size:var(--sq-fs);line-height:1.4;color:#b8c0cf;white-space:pre}
+.sq-img{display:block;margin:0 0 1.55em}.sq-img img{max-width:100%;max-height:180px;border:1px solid #232a36;border-radius:6px;display:block}
 .sq-onlyimg{max-width:min(86%,280px)}.sq-onlyimg .sq-img img{width:100%;max-height:220px;object-fit:contain}
-.sq-more{margin:1px 0 4px;padding:1px 0;border:0;background:none;color:#7aa2ff;font-size:13px;cursor:pointer}
-.sq-earlier{margin:0 0 6px}.sq-earlier summary{font-size:13px;color:#8b949e;cursor:pointer}
+.sq-more{margin:0 0 4px;padding:0;border:0;background:none;color:#7aa2ff;font-size:13px;cursor:pointer}
+.sq-earlier{margin:0 0 6px}.sq-earlier summary{font-size:13px;color:#8b949e;cursor:pointer;display:flex;align-items:center}
 .sq-tool{}.sq-tool .sq-who{color:#f5b041}
-.sq-tool .sq-txt{color:#9aa3b2;font-family:ui-monospace,SFMono-Regular,monospace;font-size:var(--sq-fs);line-height:1.35}
+.sq-tool .sq-txt{color:#9aa3b2;font-family:var(--sq-mono);font-size:var(--sq-fs);line-height:1.55}
 #sq-ov-form{position:relative;display:flex;align-items:flex-end;gap:6px;padding:8px;border-top:1px solid #353d4b}
 #sq-ov-plus{flex:none;width:44px;height:44px;border:1px solid #353d4b;border-radius:50%;background:#1c212b;color:#e6e8ee;font:22px/1 system-ui;cursor:pointer}
 #sq-ov-menu{position:absolute;left:8px;bottom:60px;z-index:2;display:flex;flex-direction:column;min-width:170px;padding:4px;background:#1c212b;border:1px solid #353d4b;border-radius:10px;box-shadow:0 10px 30px #000a}
@@ -126,7 +126,7 @@ html.sq-docked body{margin-right:var(--sq-dock)}
 #sq-ov-menu button{min-height:44px;padding:6px 10px;border:0;border-radius:6px;background:none;color:#e6e8ee;text-align:left;font:inherit;cursor:pointer}
 #sq-ov-menu button:hover{background:#2a3140}
 #sq-ov-menu button:focus-visible{background:#2a3140;outline:2px solid #7aa2ff;outline-offset:-2px}
-#sq-ov-text{flex:1;min-width:0;min-height:44px;max-height:200px;resize:none;padding:8px 10px;border:1px solid #353d4b;border-radius:10px;background:#0d1117;color:#e6e8ee;font:14px/1.4 system-ui,-apple-system,sans-serif}
+#sq-ov-text{flex:1;min-width:0;min-height:44px;max-height:200px;resize:none;padding:8px 10px;border:1px solid #353d4b;border-radius:10px;background:#0d1117;color:#e6e8ee;font-family:var(--sq-mono);font-size:var(--sq-fs);line-height:1.55;font:var(--sq-fs)/1.55 var(--sq-mono);font-ui,-apple-system,sans-serif}
 #sq-ov-text:disabled{opacity:.6}
 #sq-ov-send{flex:none;display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;padding:0;border:0;border-radius:50%;background:#7aa2ff;color:#0d1117;cursor:pointer}
 #sq-ov-send:disabled{opacity:.35;cursor:default}
@@ -243,8 +243,7 @@ function paintHead() {
 // A read that fails says nothing about the sessions (owner, 2026-11-01): it used to blank the panel and drop the reader's
 // session, so a reload that landed during a hub restart read as "no session runs here". The panel keeps what it shows and
 // asks again, and only a read that answered may say a session is gone.
-let retryT = 0, retryN = 0, missT = 0, emptyN = 0;
-const EMPTY_N = 3;   // an empty session list blanks the panel only after this many answers in a row
+let retryT = 0, retryN = 0, missT = 0;
 function retrySoon() {
   if (retryT || retryN >= 20) return;
   retryT = setTimeout(() => { retryT = 0; retryN++; loadSessions(); }, 1500);
@@ -270,14 +269,14 @@ async function loadSessions() {
     return;   // nothing is dropped on a read that did not answer
   }
   retryN = 0;
-  // An empty answer is not a verdict on the first sight either (owner, 2026-11-01): the registry scan can pass through a
-  // moment with no session, and one such answer used to wipe the talk the reader was reading (#1077). It must repeat.
-  if (cur && !found.length && ++emptyN < EMPTY_N) {
+  // An empty answer never takes away a talk the reader is reading (owner, 2026-11-01): the registry scan passes through
+  // moments with no session, and a restart makes them longer. The panel keeps what it shows and asks again; the empty
+  // screen belongs to a panel that never had a session (#1077).
+  if (cur && !found.length) {
     say("the session list came back empty · asking again");
     retrySoon();
     return;
   }
-  emptyN = 0;
   rule = rl;
   sessions = found;
   let kept = "";
@@ -553,8 +552,8 @@ function placeSheets() {
 }
 for (const el of document.querySelectorAll(SHEETS)) new MutationObserver(placeSheets).observe(el, { attributes: true, attributeFilter: ["class", "style", "hidden"] });
 // The text size is the reader's (owner, 2026-11-01): two buttons in the header step it, and the choice outlives the page.
-const FS_KEY = "sq-ov-fs", FS_MIN = 10, FS_MAX = 22, FS_STEP = 1;
-let fsNow = 13;
+const FS_KEY = "sq-ov-fs", FS_MIN = 13, FS_MAX = 22, FS_STEP = 1;   // 13 px is the served floor: the reader never shrinks below it
+let fsNow = 14;
 function fsSet(px) {
   fsNow = Math.min(FS_MAX, Math.max(FS_MIN, Math.round(px)));
   ov.style.setProperty("--sq-fs", fsNow + "px");
@@ -564,8 +563,8 @@ function fsSet(px) {
   try { localStorage.setItem(FS_KEY, String(fsNow)); } catch (e) {}
 }
 function fsInit() {
-  let v = 13;
-  try { v = Number(localStorage.getItem(FS_KEY)) || 13; } catch (e) {}
+  let v = 14;
+  try { v = Number(localStorage.getItem(FS_KEY)) || 14; } catch (e) {}
   fsSet(v);
   const down = $("sq-ov-fsdown"), up = $("sq-ov-fsup");
   if (down) down.onclick = () => fsSet(fsNow - FS_STEP);
