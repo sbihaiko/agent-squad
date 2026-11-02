@@ -38,7 +38,7 @@ def fingerprint(findings):
 
 def with_unanswered(seq, unanswered):
     """`seq` with the findings a fix round wrote no artifact for, repeated in place (#735). `unanswered[i]` is True when
-    the fix round that answered round `i` ended `artifact_missing`: the finding stands, so it is not a new one."""
+    the fix round that answered round `i` ended with no artifact: the finding stands, so it is not a new one."""
     out = []
     for i, value in enumerate(seq):
         out.append(value)
@@ -79,7 +79,10 @@ def coder(chain, seq, first=None):
     return at(chain, changes(seq), first)
 
 
+NO_ARTIFACT = ("artifact_missing", "child_ended_early", "session_end_unknown")    # session.missing_artifact_reason; a session_error:<subtype> is one too; artifact_missing is the reason of a record written before #1066
+
+
 def unanswered(outcome, reasons):
     """True when a fix round wrote no artifact: the finding it answered still stands. A `pass` wrote its artifact, and
-    any other failure (a deadline, a cancel, a check) is no reading of the finding."""
-    return outcome == "fail" and any(r == "artifact_missing" for r in reasons or ())
+    any other failure (a deadline, a cancel, a check, a cap) is no reading of the finding."""
+    return outcome == "fail" and any(r in NO_ARTIFACT or r.startswith("session_error:") for r in reasons or ())

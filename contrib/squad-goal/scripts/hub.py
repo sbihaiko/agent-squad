@@ -56,6 +56,11 @@ _PROFILE_ENV = {**os.environ, "SG_REPO": REPO, "SG_OWNER": OWNER, "SG_PROJECT": 
 if not REPO: sys.exit("hub: no SG_REPO (set SG_PROFILE to a profile address.sh knows)")
 CHECKOUT = PROF["SG_CHECKOUT"]
 PROJECTS, FORK_DIR = os.environ.get("SG_PROJECTS", ""), os.environ.get("SG_FORK_DIR", "")   # read once at import: the mux pins them per profile (#859)
+# The profile this hub was loaded under, read once. hubmux.py pins the profile environment around the hub's import
+# and restores the shell's after it, so a read at request time found no SG_PROFILE and every session route answered
+# empty through the mux (#1073). A request path reads this name, never the environment.
+PROFILE_NAME = os.environ.get("SG_PROFILE", "")
+PROFILES_DIR_AT_IMPORT = os.environ.get("SG_PROFILES_DIR", "")
 if not CHECKOUT: sys.exit("hub: no SG_CHECKOUT (the profile in force names no checkout)")
 def repos_from(primary, *others):
     """The repositories the board reads, named in ONE place and never guessed: the profile's SG_REPO, plus each
@@ -1176,7 +1181,7 @@ MODELS_LEDGER = "models-switch-ledger.jsonl"   # one line per model-level switch
 
 def profiles_dir():
     """The directory the profiles live in: SG_PROFILES_DIR when the runner exports it (env.sh does), else the seam's answer."""
-    d = os.environ.get("SG_PROFILES_DIR")
+    d = os.environ.get("SG_PROFILES_DIR") or PROFILES_DIR_AT_IMPORT
     if d: return pathlib.Path(d)
     try:
         r = subprocess.run(["bash", "-c", '. "$1/address.sh" >/dev/null 2>&1; sg_profiles_dir', "_", str(SCRIPTS)],
@@ -1187,7 +1192,7 @@ def profiles_dir():
 def profile_file():
     """The profile in force: the one file the token guard sources on every pass. None when no profile is in force, and a
     theme that cannot name the file reads nothing and writes nothing."""
-    slug, d = os.environ.get("SG_PROFILE", ""), profiles_dir()
+    slug, d = PROFILE_NAME, profiles_dir()
     return d / f"{slug}.sh" if slug and d is not None else None
 
 def profile_limits(path=None):
@@ -1376,7 +1381,7 @@ _SLACK_CHANNEL = re.compile(r"^#?[^\s#]{1,80}$")
 
 def slack_file():
     """The per-profile Slack settings beside the profile, or None when no profile is in force."""
-    slug, d = os.environ.get("SG_PROFILE", ""), profiles_dir()
+    slug, d = PROFILE_NAME, profiles_dir()
     return d / f"{slug}.slack.json" if slug and d is not None else None
 
 def slack_read(path):
@@ -2020,7 +2025,7 @@ def throughput_fact(now=None):
     pts = [p for p in cfd["points"] if p["throughput"] is not None]
     if not pts: return None
     today = pts[-1]["throughput"]; done = [p["throughput"] for p in pts[:-1]][-DAYS_SPEED:]
-    if not done: return {"today": today, "median": None, "min": None, "max": None, "trend": "flat", "days": []}
+    if not done: return {"today": today, "median": None, "min": None, "max": None, "trend": None, "days": []}
     med = st.median(done); recent = done[-3:]; avg = sum(recent) / len(recent)
     trend = "up" if med and avg > med * 1.2 else "down" if med and avg < med * 0.8 else "flat"
     return {"today": today, "median": med, "min": min(done), "max": max(done), "trend": trend, "days": done}
@@ -2377,25 +2382,26 @@ def stats(period, src="both"):
     b = {}; amt = (lambda r: r["spend"]) if src == "both" else (lambda r: r["sub"] if src == "sub" else r["api"])
     allr = [dict(r, spend=amt(r)) for r in all_runs()]
     calls = ledger_calls()   # review calls: they carry spend and tokens, never a run
+    def _tok(r):   # a run's tokens: in + out over every model it called, the count the token ring draws (#1073)
+        return sum(v["in"] + v["out"] for v in r["mod"].values())
     for r in allr:
-        k = time.strftime(fmt, time.localtime(r["t0"])); x = b.setdefault(k, {"t": k, "spend": 0.0, "runs": 0, "durs": []})
-        x["spend"] += r["spend"]; x["runs"] += 1
+        k = time.strftime(fmt, time.localtime(r["t0"])); x = b.setdefault(k, {"t": k, "spend": 0.0, "tokens": 0, "runs": 0, "durs": []})
+        x["spend"] += r["spend"]; x["tokens"] += _tok(r); x["runs"] += 1
         if r["done"]: x["durs"].append(r["dur"])
     for c in calls:
-        k = time.strftime(fmt, time.localtime(c["t0"])); x = b.setdefault(k, {"t": k, "spend": 0.0, "runs": 0, "durs": []})
-        x["spend"] += _billed(src, c["model"], c["spend"])
+        k = time.strftime(fmt, time.localtime(c["t0"])); x = b.setdefault(k, {"t": k, "spend": 0.0, "tokens": 0, "runs": 0, "durs": []})
+        x["spend"] += _billed(src, c["model"], c["spend"]); x["tokens"] += c["in"] + c["out"]
     ks = sorted(b)[-48:]
-    rows = [{"t": k, "spend": round(b[k]["spend"], 2), "runs": b[k]["runs"], "median_dur": round(st.median(b[k]["durs"]), 1) if b[k]["durs"] else None} for k in ks]
+    rows = [{"t": k, "spend": round(b[k]["spend"], 2), "tokens": int(b[k]["tokens"]), "runs": b[k]["runs"], "median_dur": round(st.median(b[k]["durs"]), 1) if b[k]["durs"] else None} for k in ks]
     now = time.localtime(); tot = {"today": 0.0, "month": 0.0, "all": 0.0, "unpriced": sum(1 for c in calls if c["unpriced"]),
-           "uncounted": sum(1 for c in calls if c["uncounted"])}
-    for r in allr:
-        lt = time.localtime(r["t0"]); tot["all"] += r["spend"]
-        if lt[:2] == now[:2]: tot["month"] += r["spend"]
-        if lt[:3] == now[:3]: tot["today"] += r["spend"]
-    for c in calls:
-        lt = time.localtime(c["t0"]); sp = _billed(src, c["model"], c["spend"]); tot["all"] += sp
-        if lt[:2] == now[:2]: tot["month"] += sp
-        if lt[:3] == now[:3]: tot["today"] += sp
+           "uncounted": sum(1 for c in calls if c["uncounted"]),
+           "tok_today": 0, "tok_month": 0, "tok_all": 0}
+    def _add(lt, spend, tokens):
+        tot["all"] += spend; tot["tok_all"] += tokens
+        if lt[:2] == now[:2]: tot["month"] += spend; tot["tok_month"] += tokens
+        if lt[:3] == now[:3]: tot["today"] += spend; tot["tok_today"] += tokens
+    for r in allr: _add(time.localtime(r["t0"]), r["spend"], _tok(r))
+    for c in calls: _add(time.localtime(c["t0"]), _billed(src, c["model"], c["spend"]), c["in"] + c["out"])
     mt = {}
     for r in allr:
         in_month = time.localtime(r["t0"])[:2] == now[:2]
@@ -2420,7 +2426,7 @@ def stats(period, src="both"):
         return box
     models = sorted(({**{k: v for k, v in x.items() if k not in ("src", "srcs")}, "spend": round(x["spend"], 2), "box": _box(x)} for x in mt.values()),
                     key=lambda x: -(x["in"] + x["out"]))
-    return {"buckets": rows, "totals": {k: round(v, 2) for k, v in tot.items()}, "models": models}
+    return {"buckets": rows, "totals": {**{k: round(v, 2) for k, v in tot.items() if not k.startswith("tok_")}, **{k: tot[k] for k in ("tok_today", "tok_month", "tok_all")}}, "models": models}
 
 def adapter_errors():
     """Every `adapter_error` run verdict of the run folders still on disk, counted by (model, backend, cause) (#698).
@@ -3454,8 +3460,12 @@ def chart(name, key, build):
     if hit and hit[0] == key: return hit[1]
     t = time.time()   # the instant the chart reads its data: a cached answer keeps it, however late it is served
     answer = {"t": t, **build()}
-    CHARTS[name] = (key, answer)
+    if not _read_failed(answer): CHARTS[name] = (key, answer)
     return answer
+
+def _read_failed(answer):
+    """True when a chart answer names a failed read, so the next request reads anew (#1072)."""
+    return "err" in answer or "err" in (answer.get("burn") or {})
 
 def _file_key(path):
     try: st = path.stat(); return (str(path), st.st_mtime_ns, st.st_size)
@@ -3527,11 +3537,46 @@ def flow_lead(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
     return chart("lead", (board_cache.get("t"), history_key(), tuple(fw), tuple(fs), tuple(fk), ty), lambda: _lead_payload(fw, fs, fk, ty))
 
 def flow_burnup(spec):
-    """One spec's burn-up for its swimlane (#1025); the cache holds it until the repository's history store changes."""
+    """One spec's burn-up for its swimlane (#1025); the cache holds it until the history store or the board read changes."""
     path = _hist.history_path(BOARD, REPO)
     try: stamp = path.stat().st_mtime_ns
     except OSError: stamp = None
-    return chart(f"burnup-{spec}", (str(path), stamp), lambda: _hist.burnup(_hist.load_store(path), spec))
+    return chart(f"burnup-{spec}", (str(path), stamp, board_cache.get("t")), lambda: _burnup_payload(spec, path))
+
+
+def _burnup_payload(spec, path):
+    store, err = _with_children(_hist.load_store(path), spec)
+    if err: return {"spec": spec, "points": [], "err": err}
+    answer = _hist.burnup(store, spec)
+    if not answer["points"]: answer["reason"] = _burndown.NO_CHILD
+    return answer
+
+
+def spec_children(spec):
+    """The spec's sub-issues on the platform relation the board and the spec card read, in this repository: (children, None),
+    or (None, the read's reason) when the relation did not answer. One read per board read serves both charts; a failed read
+    is never kept (#1072)."""
+    key = board_cache.get("t")
+    hit = CHARTS.get(f"children-{spec}")
+    if hit and hit[0] == key: return hit[1]
+    try: subs, err = sub_issues(spec, REPO)
+    except Exception as e: return None, f"sub-issues: {str(e)[:200] or 'the read did not answer'}"
+    if err: return None, err
+    answer = ([s for s in subs if isinstance(s, dict) and _repo_of(s.get("repository_url"), REPO) == REPO.lower()], None)
+    CHARTS[f"children-{spec}"] = (key, answer)
+    return answer
+
+
+def _with_children(store, spec):
+    """The history store with the spec's sub-issues added: each child keeps its store timeline and gains the events its created
+    and closed instants carry (#1072). (None, reason) when the relation did not answer."""
+    children, err = spec_children(spec)
+    if err: return None, err
+    merged = {n: {"events": list(rec.get("events") or [])} for n, rec in store.items()}
+    for child in children:
+        stored = (store.get(child["number"]) or {}).get("events") or []
+        merged.setdefault(child["number"], {"events": []})["events"] += _hist.child_events(child, spec, stored)
+    return merged, None
 
 
 HISTORY_EVERY = 60   # seconds between history passes; a pass reads only the timelines that are due (#1024)
@@ -3639,10 +3684,10 @@ def _burndown_payload(spec=None, today=None):
              if _flow.type_key(i) == "spec" and str(i["s"]).lower() != "closed"]
     spec = spec if spec is not None else (specs[0]["n"] if specs else None)
     if spec is None: return {"specs": specs, "spec": None, "burn": None}
-    store = _hist.load_store(_hist.history_path(BOARD, REPO))
+    store, err = _with_children(_hist.load_store(_hist.history_path(BOARD, REPO)), spec)
     reads = [s["t"] for s in _flow.samples(_flow.history_path(BOARD, REPO))]
-    series = _burndown.burndown(store, reads, spec)
-    burn = {**series, **_burndown.summary(series, today, forecast=None)}
+    series = _burndown.burndown(store, reads, spec) if err is None else {"spec": spec, "start": None, "points": [], "gaps": [], "reason": None}
+    burn = {**series, **_burndown.summary(series, today, forecast=None), **({"err": err} if err else {})}
     burn["ymax"] = max([1, *(p["remaining"] for p in series["points"]), *([burn["guide"]["from"]["remaining"]] if burn["guide"] else [])])
     end = max([today, *([dt.date.fromisoformat(burn["guide"]["to"]["day"])] if burn["guide"] else [])])
     first = dt.date.fromisoformat(series["start"]) if series["start"] else end
@@ -4137,6 +4182,10 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #src,#per{display:inline-flex;flex-wrap:nowrap;gap:2px;margin:0}#src button{padding:1px 5px;font-size:var(--fs-min)}#per button{padding:1px 3px;font-size:var(--fs-min)}
 .kr{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-auto-rows:min-content;column-gap:8px;row-gap:2px;align-items:baseline;padding:5px 0;border-bottom:1px solid var(--line);font-size:var(--fs-min);min-width:0}.kr:last-child{border:0}.kr .l{grid-row:1/3;min-width:0;font-size:var(--fs-min);line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.kr .l small{display:inline;color:var(--mute);font-size:var(--fs-min)}.kr b{grid-column:2;justify-self:end;font-size:var(--fs-body);font-weight:600;line-height:1}.kr b small{font-size:var(--fs-min);font-weight:400;color:var(--mute)}.kr b.m{color:var(--mute)}.kr b.w{color:var(--warn)}
 .kr .d{grid-column:2;justify-self:end;font-size:var(--fs-min);padding:0;white-space:nowrap;color:var(--mute)}.kr .d .good{color:#5fd38d}.kr .d .bad{color:#ff7b7b}
+#kpi h4{flex-wrap:wrap;white-space:normal}
+#kpi h4 .warnl{margin:0 0 0 auto;text-align:right;white-space:normal}
+#kpi .kr .l{grid-row:1;white-space:normal;overflow:visible;text-overflow:clip}
+#kpi .kr .d{grid-column:1/-1;grid-row:2;justify-self:start}
 .mtg{min-height:32px;min-width:32px;padding:2px 10px;border:1px solid var(--line);border-radius:6px;background:#10141a;color:var(--fg);font-size:var(--fs-min);cursor:pointer}.mtg.off{text-decoration:line-through;color:var(--mute)}.mt-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:4px 0}.mt-row .mn{flex:1 1 140px;min-width:0}.mdiff{border-top:1px dashed var(--line);margin-top:8px;padding-top:6px}.mtg:focus-visible{outline:2px solid #8ab4ff;outline-offset:2px}@media (max-width:600px){.mtg{min-height:44px;min-width:44px}}
 #mbody{padding:0}.mc{background:#10141a;border:1px solid var(--line);border-radius:8px;padding:10px;margin:6px 0 8px}.mc .mt{font-size:var(--fs-min);font-weight:600;color:var(--fg);margin:0 0 2px}.mc .mx{font-size:var(--fs-min);color:var(--mute);margin:0 0 8px;line-height:1.35}
 .mr{display:grid;grid-template-columns:22px minmax(0,1fr);align-items:center;gap:5px 8px;padding:7px 8px;border:1px solid var(--line);border-radius:6px;background:var(--panel);margin-bottom:5px;font-size:var(--fs-min)}.mr.p{border-color:#2f5d45;background:#13211b}.mr .rk{flex:none;width:22px;height:22px;border-radius:11px;background:#222a35;color:var(--mute);font-size:var(--fs-min);font-weight:600;display:flex;align-items:center;justify-content:center}.mr.p .rk{background:var(--ok);color:#0b1a12}
@@ -4159,7 +4208,8 @@ button.on{border-color:var(--acc);color:var(--acc)}
 .sub .dt{color:var(--mute);font-size:var(--fs-min);line-height:1.4}.sub .dt b{color:var(--fg);font-weight:600}.sub .warn{color:var(--warn);font-size:var(--fs-min)}
 .mb{margin-top:2px}.mb .lab{display:flex;justify-content:space-between;font-size:var(--fs-min);color:var(--mute);margin-bottom:3px}.mb .lab b{color:var(--fg);font-weight:600}.mb .tr{position:relative;height:9px;border-radius:5px;background:#1c222b;overflow:visible}.mb .fl{height:100%;border-radius:5px;background:#e0a23a}.mb .fl.good{background:#3ecf8e}.mb .fl.bad{background:#d9534f}.mb .fl.warnq{background:#5aa9ff}.mb .tk{position:absolute;top:-3px;bottom:-3px;width:2px;background:#d8dde6;border-radius:1px}.mb .sc2{display:flex;justify-content:space-between;font-size:var(--fs-min);color:var(--mute);margin-top:2px}
 .subx{color:var(--mute);font-size:var(--fs-min);line-height:1.45;margin:8px 0 4px}
-.pie{display:flex;flex-direction:column;gap:6px;align-items:stretch}.pie svg{flex:none;width:112px;height:112px;margin:0 auto}.pie .lg{flex:1;min-width:0;font-size:var(--fs-min)}.pie .lg div{display:flex;align-items:center;gap:6px;padding:2px 0}.pie .lg i{width:9px;height:9px;border-radius:2px;flex:none}.pie .ln{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pie .lg b{font-weight:600}.pie .lg .usd{color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap}.pie .lg div:focus-visible{outline:var(--focus-w) solid var(--focus);outline-offset:1px}.pie .lg div.hl{background:#1c222b}.pie .lg .lgx{display:block;padding:0 0 0 15px}.pie .lg summary{display:flex;align-items:center;gap:6px;padding:2px 0;cursor:pointer;list-style:none}.pie .lg summary::-webkit-details-marker{display:none}.sp #piet{font-size:var(--fs-min);margin:-4px 0 6px}.pie [data-k].hl{stroke:#d8dde6;stroke-width:2}.pie.dim [data-k]:not(.hl){opacity:.35}.warnl{margin-top:4px;font-size:var(--fs-min);color:var(--warn)}
+.pie{display:flex;flex-direction:column;gap:6px;align-items:stretch}.pie svg{flex:none;width:112px;height:112px;margin:0 auto}.pie .lg{flex:1;min-width:0;font-size:var(--fs-min)}.pie .lg div{display:flex;align-items:center;gap:6px;padding:2px 0}.pie .lg i{width:9px;height:9px;border-radius:2px;flex:none}.pie .ln{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pie .lg b{font-weight:600}.pie .lg .usd{color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap}
+.pie .lg .sh{color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap;text-align:right;min-width:3ch}.pie .lg div:focus-visible{outline:var(--focus-w) solid var(--focus);outline-offset:1px}.pie .lg div.hl{background:#1c222b}.pie .lg .lgx{display:block;padding:0 0 0 15px}.pie .lg summary{display:flex;align-items:center;gap:6px;padding:2px 0;cursor:pointer;list-style:none}.pie .lg summary::-webkit-details-marker{display:none}.sp #piet{font-size:var(--fs-min);margin:-4px 0 6px}.pie [data-k].hl{stroke:#d8dde6;stroke-width:2}.pie.dim [data-k]:not(.hl){opacity:.35}.warnl{margin-top:4px;font-size:var(--fs-min);color:var(--warn)}
 .up{color:var(--err)}.dn{color:var(--ok)}svg{display:block;width:100%}
 #main{flex:1;min-width:0;display:grid;gap:4px;padding:4px}
 .cell{display:flex;flex-direction:column;min-height:0;min-width:0}.cell small{color:var(--mute);padding:2px 4px;display:flex;justify-content:space-between}.cell .snap{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:12px;overflow:hidden;color:var(--mute);border:1px solid var(--line);background:#0f1115}.cell[tabindex]{cursor:pointer}.cell[tabindex]:hover .snap,.cell[tabindex]:focus-visible .snap{border-color:var(--acc);color:var(--fg,inherit)}
@@ -4316,7 +4366,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 @media (max-width:600px){body{height:auto}body.tkopen #win{margin-right:0}body.tkopen #board{width:auto}#win{display:block;overflow:visible}body.dockb #win{display:block;grid-template-columns:none;grid-template-rows:none}#side{width:auto;border-right:0;border-bottom:1px solid var(--line)}body.dockb #side{grid-row:auto;grid-column:auto}#main{min-height:50vh}body.dockb #main{grid-column:auto;grid-row:auto}#board{width:auto}body.dockb #board{grid-column:auto;grid-row:auto;height:60vh}#lbody input{width:92px}}
 /* The page frame of the mock (#889): the header with its tabs, and the sidebar cards. */
 /* The loop switch (#923): the strip's draining and starting states, Settings > Loop and Access, and the stop confirm. */
-#lopb .ls.draining,#lopb .ls.starting{color:var(--warn)}#iloop .ls,#lopb .ls{font-weight:600}#iloop .ls.on{color:var(--ok)}#iloop .ls.off{color:var(--warn)}#iloop .ls.draining,#iloop .ls.starting{color:var(--warn)}#iloop small{color:var(--mute)}#loopbtn{padding:2px 10px;font-size:var(--fs-min)}#loopbtn:disabled{opacity:.6;cursor:default}#lopb .ls.on{color:var(--ok)}#lopb .ls.off{color:var(--warn)}
+#lopb .ls.draining,#lopb .ls.starting{color:var(--warn)}#lopb .ls{font-weight:600}#loopbtn{padding:2px 10px;font-size:var(--fs-min)}#loopbtn:disabled{opacity:.6;cursor:default}#lopb .ls.on{color:var(--ok)}#lopb .ls.off{color:var(--warn)}
 #lopb .lnow{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#10141a;margin:6px 0}#lopb .lnow small{display:block;color:var(--mute)}#lopb .lnow button{margin-left:auto}
 #lopb .lwhy{color:var(--warn);margin:4px 0}#lopb .lerr{color:var(--err);margin:4px 0}#lopb ul.laud{list-style:none;margin:4px 0 0;padding:0}#lopb ul.laud li{padding:4px 0;border-bottom:1px solid var(--line)}#lopb ul.laud li:last-child{border:0}
 #accb .kr b{font-weight:500;font-size:var(--fs-min);line-height:1.3;text-align:right}#accb .ok{color:var(--ok)}#accb .no{color:var(--warn)}#accb p{color:var(--mute);margin:8px 0 0}
@@ -4337,7 +4387,7 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 #main .r{display:flex;gap:8px;align-items:baseline;padding:8px 10px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;background:var(--card);cursor:pointer}#main .r:hover,#main .r:focus-visible{border-color:var(--acc)}#main h3{font-size:var(--fs-min);text-transform:uppercase;letter-spacing:.06em;color:var(--mute);margin:12px 0 6px}
 #bhead select{min-height:32px;padding:4px 12px;font-size:var(--fs-body);border-radius:6px}#bhead label.hck input{width:18px;aspect-ratio:1;padding:0}
 #bbody .it>.hld{order:1;flex:0 0 auto;margin:0;font-size:var(--fs-min);font-weight:600;color:var(--s5);white-space:nowrap}#bbody .it>.hld::before{content:"\25CF";margin-right:4px;color:var(--s5)}
-#ispeed .spd{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:8px;background:var(--card)}#ispeed .spdh{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}#ispeed .spdt{font-size:var(--fs-min);font-weight:600}#ispeed .spdt.up{color:#3ecf8e}#ispeed .spdt.down{color:var(--err)}#ispeed .spdt.flat{color:var(--mute)}#ispeed .spr{position:relative;height:16px;border-radius:8px;background:linear-gradient(90deg,#2a3140,#3a4457)}#ispeed .spr i{position:absolute;top:0;bottom:0;width:2px;background:var(--mute)}#ispeed .spr .spmed{width:3px;background:#e0a23a}#ispeed .spr .spt{width:10px;height:10px;top:3px;border-radius:50%;background:#5aa9ff;margin-left:-5px;box-shadow:0 0 0 2px #0d1117}#ispeed .spr .spt.up{background:#3ecf8e}#ispeed .spr .spt.down{background:#d9534f}#ispeed .spl{display:flex;justify-content:space-between;font-size:var(--fs-min);color:var(--mute);margin-top:3px}#ispeed .spn{font-size:var(--fs-min);color:var(--mute);margin-top:4px}#ispeed .spn b{color:var(--fg);font-size:var(--fs-body)}#isub{display:grid;gap:2px;margin:0 0 10px}#isub .srow{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"n p" "b r";align-items:center;gap:3px 8px;padding:5px 0;font-size:var(--fs-min);border-bottom:1px solid var(--line)}#isub .srow:last-child{border-bottom:0}#isub .sn{grid-area:n;color:var(--fg);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#isub .sp2{grid-area:p;text-align:right;font-variant-numeric:tabular-nums;color:var(--fg);font-weight:600}#isub .sb2{grid-area:b;height:6px;border-radius:3px;background:var(--line);overflow:hidden}#isub .sb2 i{display:block;height:100%;border-radius:3px;background:var(--ok)}#isub .srow.warn .sb2 i{background:var(--warn)}#isub .srow.red .sb2 i{background:var(--err)}#isub .srow.na .sb2{background:repeating-linear-gradient(90deg,var(--line) 0 3px,transparent 3px 7px)}#isub .srow.na .sp2{color:var(--mute)}#isub .sr2{grid-area:r;text-align:right;color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap}
+#ispeed .spd{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:8px;background:var(--card)}#ispeed .spdh{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}#ispeed .spdt{font-size:var(--fs-min);font-weight:600}#ispeed .spdt.up{color:#3ecf8e}#ispeed .spdt.down{color:var(--err)}#ispeed .spdt.flat{color:var(--mute)}#ispeed .spdt.wait{color:var(--mute)}#ispeed .spr{position:relative;height:16px;border-radius:8px;background:linear-gradient(90deg,#2a3140,#3a4457)}#ispeed .spr i{position:absolute;top:0;bottom:0;width:2px;background:var(--mute)}#ispeed .spr .spmed{width:3px;background:#e0a23a}#ispeed .spr .spt{width:10px;height:10px;top:3px;border-radius:50%;background:#5aa9ff;margin-left:-5px;box-shadow:0 0 0 2px #0d1117}#ispeed .spr .spt.up{background:#3ecf8e}#ispeed .spr .spt.down{background:#d9534f}#ispeed .spl{display:flex;justify-content:space-between;font-size:var(--fs-min);color:var(--mute);margin-top:3px}#ispeed .spn{font-size:var(--fs-min);color:var(--mute);margin-top:4px}#ispeed .spn b{color:var(--fg);font-size:var(--fs-body)}#isub{display:grid;gap:2px;margin:0 0 10px}#isub .srow{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"n p" "b r";align-items:center;gap:3px 8px;padding:5px 0;font-size:var(--fs-min);border-bottom:1px solid var(--line)}#isub .srow:last-child{border-bottom:0}#isub .sn{grid-area:n;color:var(--fg);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#isub .sp2{grid-area:p;text-align:right;font-variant-numeric:tabular-nums;color:var(--fg);font-weight:600}#isub .sb2{grid-area:b;height:6px;border-radius:3px;background:var(--line);overflow:hidden}#isub .sb2 i{display:block;height:100%;border-radius:3px;background:var(--ok)}#isub .srow.warn .sb2 i{background:var(--warn)}#isub .srow.red .sb2 i{background:var(--err)}#isub .srow.na .sb2{background:repeating-linear-gradient(90deg,var(--line) 0 3px,transparent 3px 7px)}#isub .srow.na .sp2{color:var(--mute)}#isub .sr2{grid-area:r;text-align:right;color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap}
 #tab-set .sp .sb{padding:0 12px 12px}
 /* Settings (#913): a left theme list, one theme at a time, one Save bar; on the phone a select replaces the list and rows stack. */
 #tab-set .swrap{display:grid;grid-template-columns:200px minmax(0,1fr);gap:16px;max-width:1120px;align-items:start}#tab-set .spanels{min-width:0}
@@ -4382,8 +4432,8 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 <span class=pill id=bread></span></header>
 <div id=win>
 <aside id=side>
-<details id=stats class=sp><summary>Cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><div class="igs isub" id=isub title="subscriptions: the used share of the weekly window and the days to its reset"></div><h4>Spend <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Figures at API list prices (API-equivalent)."></span></h4><div class=tot id=tot></div><div class=m id=totnote></div><div class=irw id=burn><span>Tokens · 24 h</span><b></b></div><div class=cash id=cash></div><h4>Spend over time <span class=row id=per></span></h4><div id=chart></div><div id=kpi></div><div id=open></div><h4>Model tokens · this month</h4><div class=m id=piet>in + out</div><div id=pie></div></div></details>
-<details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div class=ian id=ian></div><div id=ispec></div><div id=iloop></div><div id=ispeed></div><div id=ilate></div></div></details>
+<details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div class=ian id=ian></div><div id=ispec></div><div id=ispeed></div><div id=ilate></div></div></details>
+<details id=usage class=sp><summary>Usage</summary><div class=sb><div class="igs isub" id=isub title="subscriptions: the used share of the weekly window and the days to its reset"></div></div></details><details id=stats class=sp><summary>Spend<span class=sr id=stsr></span></summary><div class=sb><h4>Tokens <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Counted in tokens: in + out, the same count the ring draws."></span></h4><div class=tot id=tot></div><h4>Tokens over time <span class=row id=per></span></h4><div id=chart></div><h4>Model tokens · this month</h4><div class=m id=piet>in + out</div><div id=pie></div></div></details>
 <details id=lrd class=sp open><summary>Live runs<span class=sr id=lrs></span></summary><div class=sb id=lrun></div></details>
 </aside>
 <main id=content>
@@ -4391,7 +4441,7 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 <div id=board><div id=bhead><label>Swimlanes <select id=lmode title="swimlanes: one lane per spec (Spec), per wave (Wave), or no lanes, today's board (None)"><option value=spec>Spec</option><option value=wave>Wave</option><option value=none>None</option></select></label> <details id=fw class=fsel><summary>Waves: all</summary><div class=fpop id=fwl></div></details> <details id=fs class=fsel><summary>Specs: all</summary><div class=fpop id=fsl></div></details> <details id=fk class=fsel><summary>Kinds: all</summary><div class=fpop id=fkl></div></details> <button id=lcall title="collapse every swimlane">Collapse all</button> <button id=lexp title="expand every swimlane">Expand all</button> <label class=hck title="hide the swimlanes whose every ticket is closed"><input type=checkbox id=lhd> Hide done lanes</label> <span id=lhc></span><span id=bt class=m></span> <span id=hlrel class=hlrel hidden></span></div><div id=bcases></div><div id=bbody></div></div>
 </section>
 <section id=tab-flow class=pane aria-label="Flow charts">
-<div class=rkt id=flowtabs><button id=bruns title="the live run dashboards">Runs</button><button id=bflow title="the development flow: the cards in each column over time, from the flow history (SPEC 111)">Cumulative Flow Diagram</button><button id=blead title="the lead time of the closed cards, opened to closed (SPEC 111)">Lead Time</button></div>
+<div class=rkt id=flowtabs><button id=bruns title="the live run dashboards">Runs</button><button id=bflow title="the development flow: the cards in each column over time, from the flow history (SPEC 111)">Cumulative Flow Diagram</button><button id=bburn title="the scope, the done and the held of one spec over time, from the flow history (#1025)">Burn-Down</button><button id=blead title="the lead time of the closed cards, opened to closed (SPEC 111)">Lead Time</button></div>
 <div id=main></div>
 <div id=flowov hidden><div id=flowb></div></div>
 </section>
@@ -4464,7 +4514,7 @@ function ldCells(d){return[["CPU","cpu"],["RAM","ram"],["GPU","gpu"]].map(p=>{co
 // serves: the three load numbers and the facts the sampler last read. Each figure is HTML text; the SVGs only draw and are
 // hidden from a screen reader. A tile's state is read off its fact, so the hub keeps deciding the tone and the text.
 // INST{
-function gaugeGeom(v){const f=ldNum(v),k=f!==null,p=k?f:0,a=Math.PI*p/100;return{known:k,col:k?`hsl(${Math.round(120*(1-p/100))} 65% 42%)`:"var(--line)",deg:Math.round(-90+1.8*p),x:Math.round((30-26*Math.cos(a))*10)/10,y:Math.round((32-26*Math.sin(a))*10)/10}}
+function gaugeGeom(v){const f=ldNum(v),k=f!==null,p=k?f:0,a=Math.PI*p/100;return{known:k,col:k?`hsl(${Math.round(120*(1-p/100))} 65% 42%)`:"none",deg:Math.round(-90+1.8*p),x:Math.round((30-26*Math.cos(a))*10)/10,y:Math.round((32-26*Math.sin(a))*10)/10}}
 function gaugeSvg(v){const g=gaugeGeom(v);return `<svg width=60 height=36 viewBox="0 0 60 36" aria-hidden="true" focusable="false"><path class=gt d="M4 32 A26 26 0 0 1 56 32"/><path class=gf stroke="${g.col}" d="M4 32 A26 26 0 0 1 ${g.x} ${g.y}"/><line class=gn x1=30 y1=32 x2=30 y2=10 style="transform:rotate(${g.deg}deg)"${g.known?"":" visibility=hidden"}/><circle class=gh0 cx=30 cy=32 r=2 /></svg>`}
 function subsGauges(d){const xs=(d||{}).subs||[];if(!xs.length)return"";
  // One bar per plan: how much of the weekly window is spent, and how long until it resets. The needle and the half-circle
@@ -4490,13 +4540,13 @@ function tileHtml(t){const v=t.href?esc(t.text).replace(/PR #\d+/,x=>`<a target=
 function instSum(facts){const t=instTiles(facts);return t.find(x=>x.k==="Loop").text+" · "+t.filter(x=>x.k!=="Loop"&&x.tone==="err").length+" fail"}
 function speedRow(sp){if(!sp)return `<div class="spd none"><b>Throughput</b><span class=spn>no history yet</span></div>`;
  const {today,median,min,max,trend}=sp,hi=Math.max(max||0,today||0,1),at=v=>Math.max(0,Math.min(100,100*(v||0)/hi));
- const tag=trend==="up"?["\u25B2","accelerating","up"]:trend==="down"?["\u25BC","slowing","down"]:["\u25AC","steady","flat"];
+ const tag=trend==="up"?["\u25B2","accelerating","up"]:trend==="down"?["\u25BC","slowing","down"]:trend==="flat"?["\u25AC","steady","flat"]:["\u25CB","first day","wait"];
  const mark=(v,cls,lbl)=>v==null?"":`<i class="${cls}" style="left:${at(v)}%" title="${lbl} ${v}"></i>`;
  return `<div class=spd><div class=spdh><b>Throughput</b><span class="spdt ${tag[2]}">${tag[0]} ${tag[1]}</span></div>`
-  +`<div class=spr role=img aria-label="cards closed per day: today ${today}, median ${median==null?"unknown":median}, minimum ${min==null?"unknown":min}, maximum ${max==null?"unknown":max}">`
+  +`<div class=spr role=img aria-label="cards closed today: ${today}, median ${median==null?"unknown":median}, minimum ${min==null?"unknown":min}, maximum ${max==null?"unknown":max}">`
   +mark(min,"spmin","minimum")+mark(median,"spmed","median")+mark(max,"spmax","maximum")+`<i class="spt ${tag[2]}" style="left:${at(today)}%" title="today ${today}"></i></div>`
   +`<div class=spl><span>min ${min==null?"?":min}</span><span>med ${median==null?"?":median}</span><span>max ${max==null?"?":max}</span></div>`
-  +`<div class=spn><b>${today==null?"?":today}</b> closed today \u00b7 cards per day</div></div>`}
+  +`<div class=spn><b>${today==null?"?":today}</b> cards closed today${trend==null?" \u00b7 no finished day to compare":""}</div></div>`}
 function instUsage(facts){const f=instFact(facts,"burn");if(!f||!f.text)return null;const p=String(f.text).split(" · ");return{tok:p[0].replace(/^tokens\s*/,""),calls:p.slice(1).join(" · ")}}
 function specBar(p){p=p||{};const st=p.state==="ok"||p.state==="info"?" "+p.state:"";   // the hub decides the count, the text and the state; the page only draws them
  const w=100*Math.max(0,Math.min(1,Number(p.frac)||0)),bar=p.bar?`<span class=pb role=progressbar aria-label="Open spec progress" aria-valuemin=0 aria-valuemax=${Number(p.total)||0} aria-valuenow=${Number(p.done)||0}><span class=pf style="width:${w}%"></span></span>`:"";
@@ -4552,13 +4602,26 @@ function selectNew(){const ids=allRuns.filter(r=>r.kind!=="childcc").map(r=>r.id
   if(!fresh.length)return;const id=fresh.sort((x,y)=>x.age-y.age)[0].id;
   if(N===1)pins.clear();else if(pins.size>=N)pins.delete([...pins][0]);pins.add(id);save()}   // a run starting moves the pins, never the accordions
 async function poll(){try{allRuns=await (await fetch("/api/runs")).json();selectNew();applyFilter();refresh()}catch(e){}}
-function bars(rows,W=280,H=40){if(!rows.length)return"";const mx=Math.max(...rows.map(r=>r.spend),0.01),bw=W/rows.length,pad=12,xl=t=>String(t).replace(/^\d{4}-/,"");
-  return `<svg viewBox="0 0 ${W} ${H+pad+14}">`
-    +`<line x1="0" y1="${pad}" x2="${W}" y2="${pad}" stroke="#3ecf8e" stroke-dasharray="3 2" stroke-width="1"/>`
-    +`<text x="${W}" y="${pad-3}" fill="#3ecf8e" style="font-size:var(--fs-min)" text-anchor="end">max ${usd(mx)}</text>`
-    +rows.map((r,i)=>`<rect x="${i*bw+1}" y="${pad+H-r.spend/mx*H}" width="${Math.max(bw-2,1)}" height="${r.spend/mx*H}" fill="${r.spend>=mx?"#3ecf8e":"#5aa9ff"}"><title>${xl(r.t)}: ${usd(r.spend)} · ${r.runs} runs</title></rect>`).join("")
-    +`<text x="0" y="${H+pad+12}" fill="#8a93a3" style="font-size:var(--fs-min)">${xl(rows[0].t)}</text>`
-    +`<text x="${W}" y="${H+pad+12}" fill="#8a93a3" style="font-size:var(--fs-min)" text-anchor="end">now</text></svg>`}
+function barChart(rows,W=280,H=64,L=44){const n=rows.length,vals=rows.map(r=>r.tokens).filter(v=>v!=null),mx=Math.max(...vals,1),bw=W/Math.max(n,1),base=12+H,xl=t=>String(t).replace(/^\d{4}-/,"");
+  const y=v=>base-v/mx*H,wd=Math.max(bw-2,1);
+  const bars=rows.map((r,i)=>{const x=L+i*bw+1,cx=x+wd/2,title=`${xl(r.t)}: ${r.tokens==null?"no read":tk(r.tokens)+" tokens"} \u00b7 ${r.runs} runs`;
+    if(r.tokens==null)return{kind:"missing",i,x,w:wd,cx,y:base,h:0,title};
+    if(r.tokens===0)return{kind:"zero",i,x,w:wd,cx,y:base-2,h:2,title};
+    return{kind:"bar",i,x,w:wd,cx,y:y(r.tokens),h:r.tokens/mx*H,top:r.tokens>=mx,title}});
+  const im=vals.length?rows.findIndex(r=>r.tokens===mx):-1,named=im>=0?bars[im]:null;
+  return{W,H,L,base,bars,ticks:[0,mx/2,mx].map(v=>({v,y:y(v),label:tk(v)})),
+    max:named?{bar:im,x:named.cx,y:named.y-4,anchor:named.cx>L+W*.75?"end":named.cx<L+W*.25?"start":"middle",text:"max "+tk(mx)}:null,
+    first:n?xl(rows[0].t):"",now:"now"}}
+function bars(rows){if(!rows.length)return"";const c=barChart(rows),{W,H,L,base}=c;   // tokens are the work: the chart never counts dollars
+  return `<svg viewBox="0 0 ${L+W} ${base+14}" role=img aria-label="tokens per interval">`
+    +c.ticks.map(t=>`<line x1="${L}" y1="${t.y}" x2="${L+W}" y2="${t.y}" stroke="#2a303b" stroke-dasharray="3 2"/><text x="${L-4}" y="${t.y+4}" fill="#8a93a3" style="font-size:var(--fs-min)" text-anchor="end">${t.label}</text>`).join("")
+    +c.bars.map(b=>b.kind==="missing"?`<line class=miss x1="${b.x}" y1="${base}" x2="${b.x+b.w}" y2="${base}" stroke="#8a93a3" stroke-dasharray="2 2"><title>${esc(b.title)}</title></line>`
+      :b.kind==="zero"?`<rect class=zero x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" style="fill:var(--mute)"><title>${esc(b.title)}</title></rect>`
+      :`<rect class=bar x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" fill="${b.top?"#3ecf8e":"#5aa9ff"}"><title>${esc(b.title)}</title></rect>`).join("")
+    +(c.max?`<text x="${c.max.x}" y="${c.max.y}" fill="#3ecf8e" style="font-size:var(--fs-min)" text-anchor="${c.max.anchor}">${c.max.text}</text>`:"")
+    +`<text x="${L}" y="${base+12}" fill="#8a93a3" style="font-size:var(--fs-min)">${c.first}</text><text x="${L+W}" y="${base+12}" fill="#8a93a3" style="font-size:var(--fs-min)" text-anchor="end">${c.now}</text></svg>`}
+function cmp(v,base,unit,lowerBetter=true){const d=Math.round((v-base)/base*100),good=lowerBetter?d<0:d>0,dir=d===0?"":lowerBetter?(d<0?"faster":"slower"):(d>0?"more":"fewer"),head=`was ${base}${unit?" "+unit:""}`,pct=d===0?"":`${Math.abs(d)}% ${dir}`;
+  return {text:pct?`${head} \u00b7 ${pct}`:head,head,pct,dir,good}}
 function kr(label,sub,v,unit,base,lowerBetter=true){if(v==null)return`<div class=kr><span class=l>${label}${sub?`<small>${sub}</small>`:""}</span><b>—</b></div>`;
   const u=unit?String(unit).trim():"";
   let chip="";if(base){const d=Math.round((v-base)/base*100),good=lowerBetter?d<0:d>0;
@@ -4781,7 +4844,7 @@ function pie(ms){
  const sl=keep.map(m=>({k:m.n,n:m.n,v:m.v,t:`${m.n} (${m.ids.join(", ")})${m.routes.length?" via "+m.routes.join(", "):""}: ${tk(m.v)} tokens`}));
  if(fold.length){const v=fold.reduce((a,m)=>a+m.v,0);sl.push({k:"other",n:`other · ${fold.length} models`,v,t:fold.map(m=>`${m.n}: ${tk(m.v)} tokens`).join("\n")})}
  const col=k=>k==="other"?"#8a93a3":PCOL[[...String(k)].reduce((h,c)=>(h*31+c.charCodeAt(0))>>>0,0)%PCOL.length];   // a model keeps its colour across renders: the colour follows its name, not its place in the list
- const dot=(k,n,v)=>`<i style="background:${col(k)}"></i><span class=ln>${esc(n)}</span><span class=usd>${tk(v)}</span>`;   // the rows are built outside the page template: a nested backtick there breaks the pie matcher in tests
+ const dot=(k,n,v)=>`<i style="background:${col(k)}"></i><span class=ln>${esc(n)}</span><span class=usd>${tk(v)}</span><span class=sh>${Math.round(v/tot*100)}%</span>`;   // the rows are built outside the page template: a nested backtick there breaks the pie matcher in tests
  const subRows=fold.map(m=>`<div>${dot(m.n,m.n,m.v)}</div>`).join("");   // built outside the legend template: a nested backtick there breaks the pie matcher in tests
  const legendRows=sl.map(x=>x.k==="other"
    ?`<details class=lgo data-k="other"><summary tabindex=0 title="${esc(x.t)}">${dot(x.k,x.n,x.v)}</summary><div class=lgx>${subRows}</div></details>`
@@ -4804,7 +4867,7 @@ const money=(a,c)=>{try{return new Intl.NumberFormat(undefined,{style:"currency"
 async function pollSubs(){try{const d=await (await fetch("/api/subs")).json(),ae=document.activeElement;if(ae&&ae.closest&&ae.closest("#subs")&&ae.tagName==="INPUT")return;
  const tot=Object.values(d.subs).reduce((a,v)=>a+(v.saved||0),0),any=Object.values(d.subs).some(v=>v.saved!=null);{const lims=Object.values(d.subs).filter(v=>{const aq=v.quota,aw=aq&&aq.windows&&aq.windows[0],pl=v.plan,q=aw?aw.pct:(pl&&pl.quota!=null?pl.quota:null);return q!=null&&q>=100});
  $("#subsr").textContent=lims.length?`${lims.length} at limit`:(any||d.api?"none at limit":"set plan prices")}   // the card says what needs a look; the prices stay in the cost card
- $("#cash").textContent="at API list prices (API-equivalent) · cash this month: "+(any||d.api?`plans ${usd(d.plans)} + API ${usd(d.api)} = ${usd(d.total)}`:"set plan prices");
+ const cashEl=$("#cash"); if(cashEl)cashEl.textContent="at API list prices (API-equivalent) · cash this month: "+(any||d.api?`plans ${usd(d.plans)} + API ${usd(d.api)} = ${usd(d.total)}`:"set plan prices");
  $("#subs").innerHTML=`<div class=subx>Per subscription: quota used, as each provider's CLI reports it. With no reading, the bar is the API-equivalent usage vs the plan price.</div><datalist id=curs>${["USD","BRL","EUR","GBP","ARS","MXN","CAD","JPY"].map(c=>`<option value=${c}>`).join("")}</datalist>`+Object.entries(d.subs).map(([k,v])=>{const ok=v.saved!=null,pl=v.plan,pr=d.presets[k],custom=pl&&pl.plan==="custom";
   const sel=`<select data-plan=${k} data-f=plan aria-label="${k} plan"><option value="" ${pl?"":"selected"}>choose a plan…</option>${Object.entries(pr).map(([i,p])=>`<option value=${i} ${pl&&pl.plan===i?"selected":""}>${esc(p.name)} · US$${p.usd}</option>`).join("")}<option value=custom ${custom?"selected":""}>Custom amount…</option></select>`;
   const cust=custom?`<span class=pr><span>amount</span><input data-plan=${k} data-f=amount type=number min=0 step=0.01 value="${pl.amount}" aria-label="${k} custom amount"> <input data-plan=${k} data-f=cur list=curs value="${esc(pl.currency)}" placeholder="BRL" aria-label="${k} currency" title="R$, U$, € or any 3-letter code"></span>`:"";
@@ -4821,26 +4884,18 @@ $("#subs").addEventListener("change",async e=>{const k=e.target.dataset.plan;if(
  else{const a=row.querySelector("[data-f=amount]"),c=row.querySelector("[data-f=cur]");c.value=curOf(c.value);body={plan:"custom",amount:+a.value||0,currency:c.value}}
  try{await fetch("/api/plans",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({[k]:body})})}catch(x){}pollSubs()});
 async function pollStats(){try{pollSubs();
-  const st=await (await fetch("/api/stats?period="+per+"&src="+src)).json(),sp=await (await fetch("/api/speed")).json();
+  const st=await (await fetch("/api/stats?period="+per+"&src="+src)).json();
   $("#per").innerHTML=["hour","day","month"].map(p=>`<button data-p=${p} class="${p===per?"on":""}">per ${p}</button>`).join("");
   $("#src").innerHTML=[["both","all"],["sub","plans"],["api","API"]].map(([v,l])=>`<button data-s=${v} class="${v===src?"on":""}">${l}</button>`).join("");
   document.querySelectorAll("#src button").forEach(b=>b.onclick=()=>{src=b.dataset.s;save();pollStats()});
   document.querySelectorAll("#per button").forEach(b=>b.onclick=()=>{per=b.dataset.p;save();pollStats()});
-  $("#stsr").textContent=usd(st.totals.today)+" today";
+  $("#stsr").textContent=tk(st.totals.tok_today)+" tokens today";
   $("#chart").innerHTML=bars(st.buckets);$("#pie").innerHTML=pie(st.models||[]);
-  const same=st.totals.all===st.totals.month;
-  $("#tot").innerHTML=`<div>today<b>${usd(st.totals.today)}</b></div><div>this month<b>${usd(st.totals.month)}</b></div><div>all time<b${same?" class=m":""}>${same?"= this month":usd(st.totals.all)}</b></div>`;
-  $("#totnote").innerHTML=(st.totals.unpriced||st.totals.uncounted)?`floor: ${st.totals.unpriced?st.totals.unpriced+" review call"+(st.totals.unpriced===1?" is":"s are")+" unpriced and count 0.0":""}${st.totals.unpriced&&st.totals.uncounted?"; ":""}${st.totals.uncounted?st.totals.uncounted+" with no usage count":""}. The total is a floor.`:"";
-  const b=sp.baseline,n=sp.pr.after.n,cut=b.cutoff.slice(5,16).replace("T"," ");
-  $("#kpi").innerHTML=`<h4>Speed <small>since ${cut} UTC · ${n} PR${n===1?"":"s"}</small></h4>`
-   +kr("Merge time",", median",sp.pr.after.median,"min",b.pr.median)
-   +kr("Merge time",", average",sp.pr.after.mean,"min",b.pr.mean)
-   +kr("Run time",", median today",sp.runs.today_median,"min",b.run_median)
-   +kr("Review rounds",", average",sp.rounds.mean,"",null)
-   +kr("Hung runs killed","",sp.kills.count,"",null)
-  +(n<10?`<div class=warnl>Provisional: only ${n} PR${n===1?"":"s"} so far; the comparison firms up at ~10.</div>`:"")+(sp.pr.stale?"<div class=warnl>PR data stale</div>":"");
-  $("#open").innerHTML=openRows(sp.pr.open);
-}catch(e){}}
+  const same=st.totals.tok_all===st.totals.tok_month;
+  $("#tot").innerHTML=`<div>today<b>${tk(st.totals.tok_today)}</b></div><div>this month<b>${tk(st.totals.tok_month)}</b></div><div>all time<b${same?" class=m":""}>${same?"= this month":tk(st.totals.tok_all)}</b></div>`;
+  // The Speed block and the open-branches list left the panel (owner, 2026-11-01): the panel leads with the throughput, the
+  // subscription gauges, the spend chart and the token ring. The PR speed figures stay on the hub's own reading, not here.
+}catch(e){console.warn("stats panel:",e)}}
 pollStats();setInterval(pollStats,30000);
 poll();setInterval(poll,3000);
 loadPoll();setInterval(loadPoll,LOAD_MS);   // the window owns the reading: one timer and one /api/load per tick; the countdown ticks in place between readings, and its node is aria-live=off, so no tick is announced
@@ -5007,8 +5062,8 @@ const cfdAxis=c=>{const n=c.days.length,base=flowH-flowP;   // every number and 
 const coverNote=v=>!v?"":`<p class=fnote>cards read ${v.read} of ${v.total}, ${v.complete} complete, last refresh ${v.last?esc(v.last):"never"}</p>`;
 let CF={r:"30"};   // the cumulative flow's range, 30 days at first (#901)
 const CFD_R=[["7","7 days"],["30","30 days"],["90","90 days"],["all","All"]];   // the cumulative flow's range views (#901)
-const flowViews=k=>`<label class=fhead>View <select id=flowv><option value=cfd${k==="cfd"?" selected":""}>Cumulative flow</option><option value=burndown${k==="burndown"?" selected":""}>Burndown</option></select></label>`;   // one Throughput tab, two charts (#1048)
-const flowCFD=c=>{const sel=`<label class=fhead>Range <select id=cfdr>${CFD_R.map(([k,v])=>`<option value=${k}${CF.r===k?" selected":""}>${v}</option>`).join("")}</select></label> ${flowViews("cfd")}`;
+
+const flowCFD=c=>{const sel=`<label class=fhead>Range <select id=cfdr>${CFD_R.map(([k,v])=>`<option value=${k}${CF.r===k?" selected":""}>${v}</option>`).join("")}</select></label>`;
   if(!c.days.length)return sel+"<p class=fnote>the flow history has no sample yet</p>";
   const n=c.days.length,cw=(flowW-2*flowP)/(n<2?1:n);
   const runs=b=>{const out=[];let cur=null;c.days.forEach((_,i)=>{if(b.upper[i]===null){cur=null;return}if(!cur){cur=[];out.push(cur)}cur.push(i)});return out};
@@ -5033,7 +5088,7 @@ const ltSpan=(r,a,b)=>{const t0=Date.parse(r.start),t1=Date.parse(r.end),at=f=>n
 const LT_TF=[["1","Past 24 hours"],["2","Past 48 hours"],["3","Past 72 hours"],["7","Past week"],["14","Past 2 weeks"],["30","Past month"],["all","All"]];
 const ltP=64;   // a duration label ("17h 36m") is wider than a count, and the old margin cut every tick to its tail (#Astra review)
 const ltX=x=>ltP+x*(flowW-2*ltP),ltY=y=>flowH-ltP-y*(flowH-2*ltP);
-const ltLine=(v,col,dash,name)=>v?`<line x1=${ltP} x2=${flowW-ltP} y1=${ltY(v.y)} y2=${ltY(v.y)} stroke="${col}" stroke-width=2${dash?` stroke-dasharray="${dash}"`:""}><title>${esc(name)} ${esc(v.text)}</title></line>`+`<text x=${flowW-ltP-2} y=${ltY(v.y)-4} text-anchor=end fill="${col}" style="font-size:var(--fs-min);font-weight:600">${esc(name)} ${esc(v.text)}</text>`:"";
+const ltLine=(v,col,dash)=>v?`<line x1=${ltP} x2=${flowW-ltP} y1=${ltY(v.y)} y2=${ltY(v.y)} stroke="${col}" stroke-width=2${dash?` stroke-dasharray="${dash}"`:""}><title>${esc(v.label)} ${esc(v.text)}</title></line>`+`<text x=${flowW-ltP-9} y=${ltY(v.y)-4} text-anchor=end fill="${col}" style="font-size:var(--fs-min);font-weight:600">${esc(v.label)} ${esc(v.text)}</text>`:"";
 const ltChart=c=>{const n=c.dots.length,base=flowH-flowP,ink="#b8c0cf",mute="var(--mute)";
   const ctl=`<p class=fhead><label>Timeframe <select id=ltr>${LT_TF.map(([k,v])=>`<option value=${k}${LT.tf===k?" selected":""}>${v}</option>`).join("")}</select></label> `+
     `<label>Scale <select id=lts><option value=jira${LT.log?"":" selected"}>Jira scale</option><option value=log${LT.log?" selected":""}>Log scale</option></select></label> `+
@@ -5045,17 +5100,18 @@ const ltChart=c=>{const n=c.dots.length,base=flowH-flowP,ink="#b8c0cf",mute="var
   const note=`<p class=fnote>${esc(c.text)}</p>`;
   if(!n)return ctl+note+"<p class=fnote>no closed card in this timeframe</p>";
   const up=c.dots.map(d=>`${ltX(d.x)},${ltY(d.rolling.y_high)}`),low=[...c.dots].reverse().map(d=>`${ltX(d.x)},${ltY(d.rolling.y_low)}`);
-  const band=`<polygon points="${[...up,...low].join(" ")}" fill="var(--s3)" fill-opacity=".16"><title>Standard deviation</title></polygon>`;
+  const banded=c.dots.every(d=>d.rolling.y_high!=null);
+  const band=banded?`<polygon points="${[...up,...low].join(" ")}" fill="var(--s3)" fill-opacity=".16"><title>Standard deviation</title></polygon>`:"";
   const roll=`<polyline fill=none stroke="var(--s3)" stroke-width=2 points="${c.dots.map(d=>`${ltX(d.x)},${ltY(d.rolling.y)}`).join(" ")}"><title>Rolling average (${c.window.size} issues, centered)</title></polyline>`;
   const ys=c.ticks.map(t=>`<line x1=${ltP-4} y1=${ltY(t.y)} x2=${ltP} y2=${ltY(t.y)} stroke=${mute}></line><text x=${ltP-7} y=${ltY(t.y)+4} text-anchor=end fill=${ink} style="font-size:var(--fs-min)">${esc(t.text)}</text>`).join("");
   const xs=c.xticks.map(t=>`<text x=${ltX(t.x)} y=${base+17} text-anchor=middle fill=${ink} style="font-size:var(--fs-min)">${esc(t.text)}</text>`).join("");
   const axes=`<line x1=${ltP} y1=${ltP-10} x2=${ltP} y2=${base} stroke=var(--line)></line><line x1=${ltP} y1=${base} x2=${flowW-ltP} y2=${base} stroke=var(--line)></line>`+
-    `<text x=${ltP-7} y=${ltP-16} text-anchor=end fill=${ink} style="font-size:var(--fs-min)">elapsed time${c.axis==="log"?" (log)":c.axis==="cube"?" (cube root)":""}</text>`;
-  const lines=ltLine(c.average,"var(--s6)","","Average")+ltLine(c.median,"var(--ok)","2 3","Median")+ltLine(c.p85,"var(--s5)","5 3","p85");
+    `<text x=${ltP-7} y=${ltP-16} text-anchor=end fill=${ink} style="font-size:var(--fs-min)">elapsed time (${c.scale==="cube"?"cube root":c.scale})</text>`;
+  const lines=ltLine(c.average,"var(--s6)","")+ltLine(c.median,"var(--ok)","2 3")+ltLine(c.p85,"var(--s5)","5 3");
   const dots=c.clusters.map((k,i)=>{const m=k.dots.length,title=m>1?`${m} issues`:`#${k.dots[0].n} ${esc(k.dots[0].title)}`;
     return `<circle data-k=${i} cx=${ltX(k.x)} cy=${ltY(k.y)} r=${m>1?6:4.5} fill="${m>1?"var(--bg)":"var(--s3)"}" stroke="var(--s3)" stroke-width=2${k.dots.some(d=>d.approx||d.unknown_first)?' stroke-dasharray="3 2"':""} style="cursor:pointer"><title>${esc(title)} · ${esc(k.dots[0].text)} · flowing ${esc(k.dots[0].flowing_text)} · held ${esc(k.dots[0].held_text)} · closed ${esc(k.dots[0].closed)}${k.dots.some(d=>d.approx)?" · start approximate":""}${k.dots.some(d=>d.unknown_first)?" · first interval unknown":""}</title></circle>`+(m>1?`<text x=${ltX(k.x)} y=${ltY(k.y)+4} fill="var(--s3)" style="font-size:var(--fs-min)" text-anchor=middle pointer-events=none>${m}</text>`:"")}).join("");
   const ltV=v=>v?esc(v.text):"?",S="";   // the numbers live in the legend, each beside what it answers: one line, never two copies of the same fact
-  const legend=`<p class="flg ltlg"><span><i style="background:var(--s3)"></i>Rolling average (${c.window.size} issues, centered)</span><span><i style="background:var(--s3);opacity:.3"></i>Standard deviation <em>the usual spread</em></span><span><i style="background:var(--s6)"></i>Average <b>${ltV(c.average)}</b> <em>one slow card lifts it</em></span><span><i style="background:var(--ok)"></i>Median <b>${ltV(c.median)}</b> <em>half the cards closed faster</em></span><span><i style="background:var(--s5)"></i>p85 <b>${ltV(c.p85)}</b> <em>85% of closed cards finished within this time</em></span></p>`;
+  const legend=`<p class="flg ltlg"><span><i style="background:var(--s3)"></i>Rolling average (${c.window.size} issues, centered)</span>${banded?`<span><i style="background:var(--s3);opacity:.3"></i>Standard deviation <em>the usual spread</em></span>`:""}<span><i style="background:var(--s6)"></i>${esc(c.average.label)} <b>${ltV(c.average)}</b> <em>one slow card lifts it</em></span><span><i style="background:var(--ok)"></i>${esc(c.median.label)} <b>${ltV(c.median)}</b> <em>half the cards closed faster</em></span><span><i style="background:var(--s5)"></i>${esc(c.p85.label)} <b>${ltV(c.p85)}</b> <em>85% of closed cards finished within this time</em></span></p>`;
   const pk=LT.pick!=null&&c.clusters[LT.pick]?c.clusters[LT.pick]:null;
   const rows=pk?`<table class=rt><thead><tr><th>Issue</th><th>Title</th><th>Elapsed</th><th>Closed</th></tr></thead><tbody>${pk.dots.map(d=>`<tr data-o=${d.n} style="cursor:pointer"><td>#${d.n}</td><td>${esc(d.title)}</td><td>${esc(d.text)}</td><td>${esc(d.closed)}</td></tr>`).join("")}</tbody></table>`:"";
   return ctl+S+legend+`<svg data-lt viewBox="0 0 ${flowW} ${flowH}">${axes}${ys}${xs}${band}${roll}${lines}${dots}</svg>`+note+rows;};
@@ -5065,7 +5121,7 @@ const flowLead=l=>{const S=l.summary,ex=l.excluded.map(e=>`${e.count} ${esc(EXRE
   return head+coverNote(l.coverage)+ltChart(LT.zc||l.control[LT.log?"log":"jira"][LT.tf]);};
 let BURN={s:null};   // the spec the burndown draws; null lets the hub name the first open spec (#1048)
 const flowBurn=a=>{const b=a.burn,opts=a.specs.map(s=>`<option value=${s.n}${s.n===a.spec?" selected":""}>#${s.n} ${esc(s.t)}</option>`).join("");
-  const sel=`<label class=fhead>Spec <select id=burns>${opts}</select></label> ${flowViews("burndown")}`;
+  const sel=`<label class=fhead>Spec <select id=burns>${opts}</select></label>`;
   if(!a.specs.length)return sel+"<p class=fnote>no open spec on the board</p>";
   if(!b)return sel;
   if(b.reason)return sel+`<p class=fnote>this spec reads as empty: ${esc(b.reason)}</p>`;
@@ -5087,7 +5143,7 @@ const flowBurn=a=>{const b=a.burn,opts=a.specs.map(s=>`<option value=${s.n}${s.n
 const drawFlow=()=>{{const w=$("#flowb").clientWidth-20;flowW=w<600?600:w>1600?1600:(w|0)}const cfd=FLOWK==="cfd";
   const a=FLOWD[FLOWK];
   $("#flowb").innerHTML=!a?"<p class=fnote>loading the chart from the hub</p>":(FLOWK==="burndown"?flowBurn(a):cfd?flowCFD(a.cfd.ranges[CF.r]):flowLead(a.lead))+`<p class=fnote>data read ${new Date(a.t*1000).toLocaleTimeString()}</p>`};
-const flowOpen=async k=>{FLOWK=k;$("#flowov").hidden=false;drawFlow();const want=()=>k==="burndown"?`spec=${BURN.s||""}`:barQuery(),q=want();try{const a=await (await fetch(`/api/chart/${k}?${q}`)).json();if(q!==want())return;FLOWD[k]=a;if(FLOWK===k)drawFlow()}catch(e){}};
+const flowOpen=async k=>{FLOWK=k;$("#flowov").hidden=false;flowTabs();drawFlow();const want=()=>k==="burndown"?`spec=${BURN.s||""}`:barQuery(),q=want();try{const a=await (await fetch(`/api/chart/${k}?${q}`)).json();if(q!==want())return;FLOWD[k]=a;if(FLOWK===k)drawFlow()}catch(e){}};
 const ltQ=()=>`&scale=${LT.log?"log":"jira"}&a=${encodeURIComponent(LT.a)}&b=${encodeURIComponent(LT.b)}&${barQuery()}`,ltOwn=()=>LT.a!==""||LT.b!=="";   // a span other than created to closed is the hub's chart for it (#905); the bar's values filter it (#904)
 const ltZoom=async(f,t)=>{const tok=++LT.tok;try{const c=await (await fetch(`/api/leadtime?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}${ltQ()}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;LT.zr=[f,t];LT.pick=null;drawFlow()}catch(e){}};   // the hub recomputes the chart for the dragged range (#900)
 const ltGet=async()=>{const tok=++LT.tok;LT.zc=null;LT.pick=null;if(!ltOwn()){drawFlow();return}try{const c=await (await fetch(`/api/leadtime?tf=${LT.tf}${ltQ()}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;drawFlow()}catch(e){}};   // the timeframe's chart for the chosen span (#905)
@@ -5102,7 +5158,6 @@ document.addEventListener("pointerup",()=>{const d=LTD;LTD=null;if(!d||!d.moved)
   const a=(ltLo(d.x0,d.x1)-flowP)/(flowW-2*flowP),b=(ltHi(d.x0,d.x1)-flowP)/(flowW-2*flowP);if(b-a<0.005||!LT.rng)return;const [f,t]=ltSpan(LT.rng,a,b);ltZoom(f,t)});
 $("#flowb").onchange=e=>{if(e.target.id==="cfdr"){CF.r=e.target.value;drawFlow();return}
   if(e.target.id==="burns"){BURN.s=+e.target.value;delete FLOWD.burndown;flowOpen("burndown");return}
-  if(e.target.id==="flowv"){flowOpen(e.target.value);return}
   if(e.target.id==="ltr"){LT.tf=e.target.value;saveLT();LT.zr=null;ltGet();return}
   if(e.target.id==="lty"){LT.ty=e.target.value;saveLT();barMoved();return}
   if(e.target.id==="lta"||e.target.id==="ltb"){LT[e.target.id==="lta"?"a":"b"]=e.target.value;LT.pick=null;if(LT.zr){ltZoom(LT.zr[0],LT.zr[1]);return}ltGet();return}
@@ -5110,7 +5165,7 @@ $("#flowb").onchange=e=>{if(e.target.id==="cfdr"){CF.r=e.target.value;drawFlow()
 $("#flowb").onclick=e=>{if(LT.noclick){LT.noclick=false;return}
   if(e.target.id==="ltz"){LT.zr=null;ltGet();return}
   const k=e.target.closest("circle[data-k]");if(k){LT.pick=+k.dataset.k;drawFlow();return}const r=e.target.closest("tr[data-o]");if(r)showIssue(+r.dataset.o,"__REPO__")};
-$("#bflow").onclick=()=>flowOpen("cfd");$("#blead").onclick=()=>flowOpen("lead");addEventListener("resize",()=>{if(!$("#flowov").hidden)drawFlow()});
+$("#bflow").onclick=()=>flowOpen("cfd");$("#bburn").onclick=()=>flowOpen("burndown");$("#blead").onclick=()=>flowOpen("lead");addEventListener("resize",()=>{if(!$("#flowov").hidden)drawFlow()});
 // flow-charts:end
 const barQuery=()=>["fw","fs","fk"].map(k=>`${k}=${encodeURIComponent((bo[k]||[]).join(","))}`).join("&")+`&ty=${LT.ty}`;   // the bar's Waves, Specs and Kinds and the chart's Type, read by both diagrams; the board filters on the page (#904, #985)
 let boardTag=null,boardBody=null;   // the board the page holds and its ETag: a 304 keeps it (#973)
@@ -5148,7 +5203,7 @@ const cards=(g,it,shown)=>{const GHI='<svg viewBox="0 0 16 16" width="13" height
 // every render -- from the filtered count, the user's hidden set and the set the line's eye added -- and never
 // stored, so a card appearing brings the column back on its own and the last one leaving collapses it again (#1809).
 // A spec's burn-up (#1025): its panel opens from the spec lane's header. The hub answers the lines; the page draws them and counts nothing.
-const BU={open:{},data:{},raw:{}};
+const BU=window.BU||(window.BU={open:{},data:{},raw:{}});   // one store across the page's scopes: the handler and the lane render read the same (#1075)
 const buDay=t=>String(t||"").slice(0,10);
 function buChart(d){const pts=d.points||[];if(!pts.length)return `<div class=bunote>no change in this spec's scope is recorded yet</div>`;
  const W=600,H=170,P=22,top=Math.max(1,...pts.map(p=>p.scope)),t0=Date.parse(pts[0].t),span=(Date.parse(pts[pts.length-1].t)-t0)||1;
@@ -5161,7 +5216,8 @@ function buChart(d){const pts=d.points||[];if(!pts.length)return `<div class=bun
   +`<div class=bunote>scope ${last.scope} · done ${last.done} · held ${last.held} (blue scope, green done, dashed amber held)</div><ul class=bumarks>${log}</ul>`}
 const buPanel=n=>{const d=BU.data[n];return `<div class=bupanel data-bu-panel="${n}">${!d?`<div class=bunote>loading…</div>`:d.err?`<div class=bunote>${esc(d.err)}</div>`:buChart(d)}</div>`};
 async function buFetch(n){try{const d=await (await fetch("/api/chart/burnup?spec="+n)).json(),s=JSON.stringify(d);if(BU.raw[n]!==s){BU.raw[n]=s;BU.data[n]=d;pollBoard()}}catch(e){}}
-function buToggle(n){BU.open[n]=!BU.open[n];if(BU.open[n]){delete BU.raw[n];buFetch(n)}else delete BU.data[n];pollBoard()}
+function buToggle(n){n=+n;BU.open[n]=!BU.open[n];if(BU.open[n]){delete BU.raw[n];buFetch(n)}else delete BU.data[n];pollBoard()}
+window.buToggle=buToggle;   // the board's click handler sits in another scope of the served page: it reaches the toggle here (#1075)
 const laneHtml=m=>{const ccount=c=>m.lanes.reduce((s,l)=>s+(l.counts[c]||0),0),pct=l=>l.total?Math.round(l.closed/l.total*100):0;
  if(!m.lanes.length)return `<div class=lempty>${f?"No card matches this search.":"No card on the board."}</div>`;
  let h=`<div class=lgrid style="--vc:${Math.max(1,m.vc.length)}">`+m.vc.map(c=>`<div class=lcolh style="--cc:${colOf(c,CN)}"><span>${esc(c)}</span><b>${ccount(c)}</b>${eye({name:c})}</div>`).join("");
@@ -5235,7 +5291,7 @@ function setTab(t,o){if(!TABS[t])t="board";TAB=t;ls.tab=t;save();
  drawMain()}
 document.querySelector(".tabs").addEventListener("click",e=>{const b=e.target.closest("button[data-t]");if(b)setTab(b.dataset.t)});
 $("#bruns").onclick=()=>{$("#flowov").hidden=true;flowTabs()};
-function flowTabs(){const h=$("#flowov").hidden,k=typeof FLOWK==="string"?FLOWK:"cfd";$("#bruns").classList.toggle("on",h);$("#bflow").classList.toggle("on",!h&&(k==="cfd"||k==="burndown"));$("#blead").classList.toggle("on",!h&&k==="lead")}
+function flowTabs(){const h=$("#flowov").hidden,k=typeof FLOWK==="string"?FLOWK:"cfd";$("#bruns").classList.toggle("on",h);$("#bflow").classList.toggle("on",!h&&k==="cfd");$("#bburn").classList.toggle("on",!h&&k==="burndown");$("#blead").classList.toggle("on",!h&&k==="lead")}
 $("#main").addEventListener("click",e=>{const r=e.target.closest(".r[data-rid]");if(r)openRun(r.dataset.rid)});   // a run row on the Runs tab opens the sheet (#984)
 $("#main").addEventListener("keydown",e=>{const r=e.target.closest(".r[data-rid]");if(r&&(e.key==="Enter"||e.key===" ")){e.preventDefault();openRun(r.dataset.rid)}});
 new MutationObserver(flowTabs).observe($("#flowov"),{attributes:true});
@@ -5256,7 +5312,6 @@ const loopTip=v=>!v.write?v.reason:v.state==="on"?"stop after the live runs and 
 const loopB=v=>`<button data-loop${v.write&&v.state!=="starting"?"":" disabled"} title="${esc(loopTip(v))}">${loopBtn(v)}</button>`;
 const loopAct=e=>e.failed?`${String(e.action||"")} failed: ${e.failed}`:e.action==="drain"?"stop after the live runs and gates finish":e.action==="stop-now"?`stop now${e.killed?` (killed ${(e.killed.runs||[]).length} runs, ${(e.killed.gates||[]).length} gates${e.survived?`; ${(e.survived.runs||[]).length+(e.survived.gates||[]).length} not ended`:""})`:""}`:String(e.action||"");
 const loopRun=r=>String(r).split("/").filter(Boolean).pop()||String(r);
-const loopCardHtml=v=>`<div class=irw id=loopst title="${esc(v.state+(v.who?` · changed by ${v.who} at ${loopWhen(v.when)}`:""))}"><span>Loop: <span class="ls ${esc(v.state)}">${esc(v.state)}</span>${loopBy(v)?` <small>${esc(loopBy(v))}</small>`:""}</span>${loopB(v).replace("<button ","<button id=loopbtn ")}</div>`;
 const loopSetHtml=v=>`<div class=lnow><span><span class="ls ${esc(v.state)}">Loop: ${esc(v.state)}</span><small>${v.who?`changed by ${esc(v.who)} at ${esc(loopWhen(v.when))}`:"no change from the hub yet"}${v.state==="draining"?` · ${v.live.runs.length+v.live.gates.length} live to finish`:""}</small></span>${loopB(v)}</div>`
  +(v.write?"":`<div class=lwhy>${esc(v.reason)}. The rule is in Access.</div>`)+(v.failed?`<div class=lerr role=alert>The last start failed: ${esc(v.failed)}</div>`:"")+(loopErr?`<div class=lerr role=alert>${esc(loopErr)}</div>`:"")
  +`<p class=m>A stop drains by default: no new dispatch, the live runs and gates finish, then the loop stops. Each change writes one line to the change log.</p>`
@@ -5274,10 +5329,11 @@ const accHtml=v=>{const a=v.access||{},yn=x=>x?"<span class=ok>allowed</span>":"
  +`<div class=kr><span class=l>Phone check</span><b><code>/agent-squad:start-mobile</code></b></div>`
  +`<p>Read here; the owner sets them in the project file or <code>.env</code> on the machine (ADR-0152, ADR-0162). A write the tailnet refuses still works from this machine.</p>`};
 // loop-switch:end
-function instLoopDraw(){const e=$("#iloop");if(!e||!loopV)return;const h=loopCardHtml(loopV);if(e.dataset.h!==h){e.dataset.h=h;e.innerHTML=h}}
+// The Monitor shows the loop state as one read-only line: the switch itself lives in the Loop panel, so one control
+// writes the switch and no second button carries the same id (ADR-0162).
 function loopDraw(){if(!loopV)return;const b=$("#lopb"),h=loopSetHtml(loopV);if(b.dataset.h!==h){b.dataset.h=h;b.innerHTML=h}
  const c=$("#accb"),ah=accHtml(loopV);if(c.dataset.h!==ah){c.dataset.h=ah;c.innerHTML=ah}
- $("#lopsr").textContent=`${loopV.state}${loopV.who?` · ${loopV.who} · ${loopWhen(loopV.when)}`:""}`;instLoopDraw()}
+ $("#lopsr").textContent=`${loopV.state}${loopV.who?` · ${loopV.who} · ${loopWhen(loopV.when)}`:""}`}
 async function loopPoll(){try{loopV=await (await fetch("/api/loop")).json();loopDraw()}catch(e){}}
 async function loopPost(body){loopErr="";try{const r=await fetch("/api/loop",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}),d=await r.json();if(!r.ok)loopErr=d.reason||d.err||"refused"}catch(e){loopErr="the hub did not answer"}
  await loopPoll();loopDraw()}
@@ -5306,7 +5362,7 @@ let lanesNow=null;   // the model the board last drew: the controls act on its l
 $("#lhd").onchange=e=>{bo.hideDone=e.target.checked;saveB();pollBoard()};
 const laneSet=v=>{bo.lc=bo.lc||{};for(const l of(lanesNow?lanesNow.lanes:[]))bo.lc[l.id]=v;saveB();pollBoard()};
 $("#lcall").onclick=()=>laneSet(true);$("#lexp").onclick=()=>laneSet(false);
-document.addEventListener("click",e=>{if(e.target.closest(".ghl"))return;const bu=e.target.closest("#bbody .bu");if(bu){buToggle(bu.dataset.bu);return}const h=e.target.closest("#bbody .lh");if(h){const id=h.dataset.lane,coll=h.closest(".lane").classList.contains("coll");bo.lc=bo.lc||{};laneToggle(id,coll);return}
+document.addEventListener("click",e=>{if(e.target.closest(".ghl"))return;const bu=e.target.closest("#bbody .bu");if(bu){window.buToggle(bu.dataset.bu);return}const h=e.target.closest("#bbody .lh");if(h){const id=h.dataset.lane,coll=h.closest(".lane").classList.contains("coll");bo.lc=bo.lc||{};laneToggle(id,coll);return}
  const m=e.target.closest("#bbody .more");if(m){bo.cx=bo.cx||{};bo.cx[m.dataset.cell]=true;saveB();pollBoard();return}   // a more click opens its own cell only
  const p=e.target.closest("#lhcx");if(p&&lanesNow){const names=new Set(lanesNow.hc.map(x=>x.name));bo.lc=bo.lc||{};   // a hidden column's pill expands the lanes that hold its cards
   for(const l of lanesNow.lanes)if(l.collapsed&&Object.keys(l.counts).some(c=>names.has(c)))bo.lc[l.id]=false;saveB();pollBoard()}});
@@ -6110,13 +6166,13 @@ profiles_of_cwd = sessions.profiles_of
 
 def sessions_payload():
     """What /api/sessions serves: this profile's live sessions, grouped by project (#833)."""
-    return sessions.list_sessions(os.environ.get("SG_PROFILE", ""), profiles_of=profiles_of_cwd)
+    return sessions.list_sessions(PROFILE_NAME, profiles_of=profiles_of_cwd)
 
 def conversation_payload(query):
     """What /api/sessions/conversation serves: one page of a live session of this profile, None when it is not one (#840)."""
     q = urllib.parse.parse_qs(query)
     before = (q.get("before") or [""])[0]
-    return sessions.conversation(os.environ.get("SG_PROFILE", ""), (q.get("sid") or [""])[0], int(before) if before.isdigit() else None,
+    return sessions.conversation(PROFILE_NAME, (q.get("sid") or [""])[0], int(before) if before.isdigit() else None,
                                  profiles_of=profiles_of_cwd)
 
 SCREENSHOT_MAX = 5 * 1024 * 1024   # the owner's grant (ADR-0024): a PNG of at most 5 MB
@@ -6128,10 +6184,29 @@ def send_rule(a):
     if tailnet_block().get("terminals_send") is True: return True, ""
     return False, f"Sending from the tailnet is off. The owner sets {SEND_SETTING} (tailnet.terminals_send) to send."
 
+IMAGE_SUFFIX = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp"}
+IMAGE_MAX = 12 * 1024 * 1024
+
+def image_payload(query):
+    """One screenshot a transcript names, as (bytes, content type), or None. A transcript line names its image by the path
+    the session wrote it under, so the route serves exactly that file and nothing a caller names freely: the path must sit in
+    an `images` directory, end in an image suffix, be a regular file, and stay inside the session's own project directory.
+    A thumbnail of the owner's screenshots reads better than the path, and the path is what the transcript keeps (#1073)."""
+    q = urllib.parse.parse_qs(query or ""); sid = (q.get("sid") or [""])[0]; raw = (q.get("p") or [""])[0]
+    if sessions.SID.fullmatch(sid) is None or not raw: return None
+    path = os.path.realpath(raw)
+    ct = IMAGE_SUFFIX.get(pathlib.Path(path).suffix.lower())
+    if not ct or "images" not in pathlib.Path(path).parts: return None
+    if sid not in path: return None
+    try:
+        if not os.path.isfile(path) or os.path.getsize(path) > IMAGE_MAX: return None
+        return pathlib.Path(path).read_bytes(), ct
+    except OSError: return None
+
 def project_payload(a):
     """What /api/sessions/project serves (#898): the sessions in this profile's checkout and the send rule for this request."""
     ok, why = send_rule(a)
-    return {"sessions": sessions.project_sessions(os.environ.get("SG_PROFILE", ""), CHECKOUT, profiles_of=profiles_of_cwd), "send": ok, "why": why}
+    return {"sessions": sessions.project_sessions(PROFILE_NAME, CHECKOUT, profiles_of=profiles_of_cwd), "send": ok, "why": why}
 
 # The session overlay (#898): one source, hub-overlay.js, on every page the hub serves. Each page names where its session
 # routes are: the hub and mobile pages a quoted path the mux gives the profile prefix, a run dashboard its own path up to
@@ -6380,7 +6455,7 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/status"): body, ct = json.dumps(status_payload()).encode(), "application/json"
         elif self.path.startswith("/api/sessions/send"):
             q = urllib.parse.parse_qs(self.path.partition("?")[2])
-            out = session_send.status(os.environ.get("SG_PROFILE", ""), (q.get("sid") or [""])[0], (q.get("client_id") or [""])[0], profiles_of=profiles_of_cwd, root=STATE)
+            out = session_send.status(PROFILE_NAME, (q.get("sid") or [""])[0], (q.get("client_id") or [""])[0], profiles_of=profiles_of_cwd, root=STATE)
             body, ct = json.dumps(out).encode(), "application/json"
         elif self.path.split("?", 1)[0] == "/api/loop": body, ct = json.dumps(loop_view(a)).encode(), "application/json"
         elif self.path.split("?", 1)[0] == "/api/sessions/project": body, ct = json.dumps(project_payload(a)).encode(), "application/json"
@@ -6388,6 +6463,11 @@ class H(BaseHTTPRequestHandler):
             page = conversation_payload(self.path.partition("?")[2])
             if page is None: return self.not_found()
             body, ct = json.dumps(page).encode(), "application/json"
+        elif self.path.startswith("/api/sessions/image"):
+            got = image_payload(self.path.partition("?")[2])
+            if got is None: return self.not_found()
+            self.send_response(200); self.send_header("Content-Type", got[1]); self.send_header("Cache-Control", "max-age=3600")
+            self.send_header("Content-Length", str(len(got[0]))); self.end_headers(); self.wfile.write(got[0]); return
         elif self.path.startswith("/api/sessions"): body, ct = json.dumps(sessions_payload()).encode(), "application/json"
         elif (asset := MOBILE_ASSETS.get(self.path.split("?", 1)[0])): body, ct = asset
         else: body, ct = served_page(a.login).encode(), "text/html; charset=utf-8"
@@ -6421,7 +6501,7 @@ class H(BaseHTTPRequestHandler):
         if not isinstance(body, dict) or set(body) != {"sid", "text", "client_id"}:
             out, code = {"err": "bad request"}, 400
         else:
-            out, code = session_send.send(os.environ.get("SG_PROFILE", ""), body["sid"], body["text"], body["client_id"], profiles_of=profiles_of_cwd, root=STATE), 200
+            out, code = session_send.send(PROFILE_NAME, body["sid"], body["text"], body["client_id"], profiles_of=profiles_of_cwd, root=STATE), 200
         data = json.dumps(out).encode(); self.send_response(code); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
 
     def send_screenshot(self, a):
@@ -6446,7 +6526,7 @@ class H(BaseHTTPRequestHandler):
         folder = STATE / "screenshots"; folder.mkdir(parents=True, exist_ok=True)
         path = folder / f"{cid}.png"; part = folder / f"{cid}.png.part"
         part.write_bytes(raw); os.replace(part, path)
-        self.answer(200, session_send.send(os.environ.get("SG_PROFILE", ""), sid, f"Screenshot: {path}", cid, profiles_of=profiles_of_cwd, root=STATE))
+        self.answer(200, session_send.send(PROFILE_NAME, sid, f"Screenshot: {path}", cid, profiles_of=profiles_of_cwd, root=STATE))
 
     def answer(self, code, out):
         data = json.dumps(out).encode(); self.send_response(code); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)

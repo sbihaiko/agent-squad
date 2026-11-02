@@ -1,7 +1,6 @@
 """The Throughput tab's burndown: the hub answers one open spec's series, and the page draws it with its gaps and guide (#1048)."""
 import importlib.util
 import json
-import re
 import shutil
 import subprocess
 import sys
@@ -55,6 +54,7 @@ def board(hub, tmp_path, monkeypatch):
     monkeypatch.setattr(hub, "board_cache", {"t": time.time(), "rt": None, "items": [], "prs": [], "cases": [],
                                              "errs": [], "lc": {}, "err": None})
     monkeypatch.setattr(hub, "CHARTS", {})
+    monkeypatch.setattr(hub, "sub_issues", lambda issue, repo: ([], None))
     return tmp_path
 
 
@@ -136,6 +136,28 @@ def test_a_spec_with_no_child_answers_its_reason(hub, board):
     assert burn["reason"] == "no child ticket"
 
 
+def _sub(number, created, closed=None):
+    return {"number": number, "created_at": created, "closed_at": closed, "state": "closed" if closed else "open",
+            "repository_url": "https://api.github.com/repos/x/y"}
+
+
+def test_a_spec_with_sub_issues_draws_the_burndown_from_their_instants(hub, board, monkeypatch):
+    children = [_sub(1064, _at(19), _at(21)), _sub(1065, _at(20), _at(22))]
+    monkeypatch.setattr(hub, "sub_issues", lambda issue, repo: (children, None))
+    _write_reads(hub, [], (19, 20, 21, 22))
+    burn = hub.flow_burn(1063)["burn"]
+    assert [(p["day"], p["remaining"], p["added"], p["closed"]) for p in burn["points"]] == [
+        ("2026-10-19", 1, 1, 0), ("2026-10-20", 2, 1, 0), ("2026-10-21", 1, 0, 1), ("2026-10-22", 0, 0, 1)]
+    assert burn["reason"] is None and "err" not in burn
+
+
+def test_a_failed_sub_issue_read_on_the_burndown_is_named_apart(hub, board, monkeypatch):
+    monkeypatch.setattr(hub, "sub_issues", lambda issue, repo: (None, "sub-issues: refused"))
+    burn = hub._burndown_payload(1063, today=TODAY)["burn"]
+    assert burn["points"] == [] and burn["err"] == "sub-issues: refused"
+    assert burn["reason"] != "no child ticket"
+
+
 def test_the_cache_reads_anew_when_the_history_changes_on_the_same_board_read(hub, board):
     _burn(hub, _items(hub), 1045)
     hub.CHARTS.clear()
@@ -155,17 +177,19 @@ def _page_url(hub):
     """The URL the page's Burndown view fetches, built by the page's own flowOpen."""
     assert NODE is not None, "node is a test dependency of the burndown page"
     lines = "\n".join(_page_block(hub, p) for p in ("let FLOWK=", "let flowW=", "const flowX=", "const flowY=",
-                                                    "const flowViews=", "const flowBurn=", "const drawFlow=", "const flowOpen="))
+                                                    "const flowBurn=", "const drawFlow=", "const flowOpen="))
     script = (f"const calls=[];globalThis.fetch=async u=>{{calls.push(u);return {{json:async()=>({{}})}}}};"
               "const el={hidden:true,clientWidth:800,innerHTML:''};const $=()=>el;const esc=t=>String(t);"
-              "const barQuery=()=>'';let BURN={s:null};\n"
+              "const barQuery=()=>'';let BURN={s:1045};const flowTabs=()=>{};\n"
               f"{lines}\nflowOpen(VIEW).then(()=>console.log(calls[0]));")
     return subprocess.run([NODE, "-e", script.replace("VIEW", json.dumps(_view_key(hub)))], capture_output=True, text=True,
                           timeout=30).stdout.strip()
 
 
 def _view_key(hub):
-    return re.search(r'value=(\w+)\$\{k==="\1"\?" selected":""\}>Burndown<', hub.PAGE)[1]
+    """The Burndown tab's own key: one tab per chart (#1080), opened by the tab itself."""
+    assert 'flowOpen("burndown")' in hub.PAGE
+    return "burndown"
 
 
 def _get(port, path):
@@ -188,8 +212,10 @@ def test_the_page_fetches_the_route_the_server_answers(hub, board):
     assert json.loads(body)["spec"] == 1045
 
 
-def test_the_burndown_is_a_view_of_the_throughput_tab(hub):
-    assert "id=flowv" in hub.PAGE, "the burndown is a view of the Throughput tab, never a fourth tab"
+def test_the_burndown_is_its_own_throughput_tab(hub):
+    """Owner, #1080: one tab per chart, so the burndown is never drawn inside the cumulative flow."""
+    assert 'id=bburn' in hub.PAGE and 'id=flowv' not in hub.PAGE
+    assert 'flowOpen("burndown")' in hub.PAGE, "the Burndown tab opens the burndown view"
 
 
 def _page_block(hub, prefix):
@@ -205,7 +231,7 @@ def _page_block(hub, prefix):
 
 def _draw(hub, payload):
     assert NODE is not None, "node is a test dependency of the burndown page"
-    lines = "\n".join(_page_block(hub, p) for p in ("let flowW=", "const flowX=", "const flowY=", "const flowViews=",
+    lines = "\n".join(_page_block(hub, p) for p in ("let flowW=", "const flowX=", "const flowY=",
                                                     "const flowBurn="))
     script = f"const esc=t=>String(t);\n{lines}\nconsole.log(flowBurn({json.dumps(payload)}));"
     result = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=30)
@@ -221,3 +247,35 @@ def test_the_page_draws_the_gap_the_guide_and_the_numbers(hub, board):
     assert "remaining 1 as of 2026-10-21" in out
     assert "closed this week 1" in out and "added this week 2" in out
     assert "guide to 2026-10-28" in out
+
+
+def test_a_child_on_both_the_store_and_the_relation_is_counted_once(hub, board, monkeypatch):
+    path = hub._hist.history_path(hub.BOARD, hub.REPO)
+    hub._hist.record_issue(path, 1064, OPENED, OPENED, [{"t": _at(19), "type": "spec", "spec": 1063}], True, _epoch(19))
+    monkeypatch.setattr(hub, "sub_issues", lambda issue, repo: ([_sub(1064, _at(19), _at(21)), _sub(1065, _at(20), _at(22))], None))
+    _write_reads(hub, [], (19, 20, 21, 22))
+    burn = hub.flow_burn(1063)["burn"]
+    assert [(p["day"], p["remaining"], p["added"], p["closed"]) for p in burn["points"]] == [
+        ("2026-10-19", 1, 1, 0), ("2026-10-20", 2, 1, 0), ("2026-10-21", 1, 0, 1), ("2026-10-22", 0, 0, 1)]
+
+
+def test_both_chart_routes_read_a_specs_children_once_per_board_read(hub, board, monkeypatch):
+    reads = []
+
+    def children(issue, repo):
+        reads.append(issue)
+        return [_sub(1064, _at(19), _at(21))], None
+
+    monkeypatch.setattr(hub, "sub_issues", children)
+    _write_reads(hub, [], (19, 20, 21))
+    hub.flow_burnup(1063)
+    hub.flow_burn(1063)
+    assert reads == [1063]
+
+
+def test_a_failed_sub_issue_read_is_not_kept_for_the_next_request(hub, board, monkeypatch):
+    monkeypatch.setattr(hub, "sub_issues", lambda issue, repo: (None, "sub-issues: refused"))
+    assert hub.flow_burnup(1063)["err"] == "sub-issues: refused"
+    monkeypatch.setattr(hub, "sub_issues", lambda issue, repo: ([_sub(1064, _at(19), _at(21))], None))
+    _write_reads(hub, [], (19, 20, 21))
+    assert hub.flow_burnup(1063)["points"] != []

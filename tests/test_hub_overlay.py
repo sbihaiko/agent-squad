@@ -70,7 +70,7 @@ def test_a_run_dashboard_through_the_hub_gains_the_overlay(hub):
 
 def test_the_workflow_editor_carries_no_overlay():
     editor = (ROOT / "dashboard" / "agent-squad-run-dashboard.html").read_text()
-    assert "hub-overlay" not in editor and "Chat with the AI" not in editor
+    assert "hub-overlay" not in editor and "Terminal - Claude CLI" not in editor
 
 
 def test_the_overlay_names_no_api_route_the_hub_would_rewrite():
@@ -84,7 +84,7 @@ def test_the_overlay_names_no_api_route_the_hub_would_rewrite():
 
 def test_the_button_is_a_red_lens_in_a_metal_ring_named_chat_with_the_ai():
     src = OVERLAY.read_text()
-    assert 'aria-label="Chat with the AI"' in src
+    assert 'aria-label="Terminal - Claude CLI"' in src
     assert "radialGradient" in src and "sq-ov-lens" in src and "sq-ov-ring" in src
     button = re.search(r"<button id=\"sq-ov-btn\".*?</button>", src, re.S).group(0)
     assert "?" not in re.sub(r"<[^>]*>", "", button)
@@ -168,12 +168,13 @@ def test_the_page_context_is_drafted_as_editable_text():
     assert len(run_js("SQ.draft({screen:'x'.repeat(9000),route:'/',selection:[],filters:[],errors:[]})")) <= 4000
 
 
-def test_opening_the_overlay_drafts_the_context_and_sends_nothing_by_itself():
+def test_opening_the_overlay_leaves_the_field_empty_and_sends_nothing():
+    """The page context is fetched on demand from the + menu: opening the panel never types for the owner (owner, 2026-11-01)."""
     src = OVERLAY.read_text()
     dom = src.split("// dom:begin")[1]
     open_fn = re.search(r"function openOverlay\(\)\{.*?\n\}", dom, re.S).group(0)
-    assert "draftContext()" in open_fn and "send(" not in open_fn
-    assert "window.squadPageContext" in src
+    assert "draftContext" not in dom and "send(" not in open_fn
+    assert "window.squadPageContext" in src and 'data-act="ctx"' in src
 
 
 # ---------------------------------------------------------------- the dock
@@ -214,3 +215,161 @@ def test_the_header_keeps_the_title_on_one_line_and_its_buttons_from_shrinking()
     assert re.search(r"#sq-ov header button\{[^}]*flex:none", src)
     for label in ("Dock right", "Undock", "Close"):
         assert f'aria-label="{label}"' in src
+
+
+def test_the_feed_keeps_the_latest_turns_and_folds_the_older_ones():
+    """The panel reads like the terminal: the last twelve turns stand, the older ones fold behind one line (owner, 2026-11-01)."""
+    out = run_js("""(() => {
+      const turns = Array.from({length: 20}, (_, i) => ({id: 't'+i, role: i % 2 ? 'answer' : 'owner', text: 'x'+i}));
+      const a = SQ.splitEarlier(turns), b = SQ.splitEarlier(turns.slice(0, 12)), c = SQ.splitEarlier(turns, 3);
+      return {earlier: a.earlier.length, shown: a.shown.map(t => t.id)[0], short: b.earlier.length,
+              keep3: [c.earlier.length, c.shown.length]};
+    })()""")
+    assert out == {"earlier": 8, "shown": "t8", "short": 0, "keep3": [17, 3]}, out
+
+def test_each_bubble_carries_its_clock_as_whatsapp_does():
+    """Owner, 2026-11-01: the bubble says when it was said. The turn's own transcript clock is drawn at the end of the last line
+    in the muted floor size, and no bubble carries a tick."""
+    js = OVERLAY.read_text()
+    assert "const CLOCK = " in js and 'hour: "numeric", minute: "2-digit"' in js
+    assert "const at = clock(t.at);" in js and 'tm.className = "sq-time"' in js
+    assert "tm.textContent = at;" in js                     # the clock alone: the owner asked for no tick
+    assert "\u2713" not in js and "\u2714" not in js
+    rule = js[js.index(".sq-time{"):js.index(".sq-time{") + 160]
+    assert "font-size:13px" in rule and "float:right" in rule, rule
+
+def test_the_reader_can_step_the_text_size_and_the_choice_outlives_the_page():
+    """Owner, 2026-11-01: the feed needed its own size control. Two header buttons step one CSS variable, the page keeps the
+    choice, and every text rule reads the variable so one step moves the whole talk."""
+    src = pathlib.Path(__file__).resolve().parents[1] / "contrib/squad-goal/scripts/hub-overlay.js"
+    js = src.read_text()
+    assert 'id="sq-ov-fsdown"' in js and 'id="sq-ov-fsup"' in js
+    assert "--sq-fs:14px" in js          # the owner's default, one step up from the served floor
+    assert "FS_MIN = 13" in js           # A- never serves text under the floor
+    assert js.index("--sq-fs") < js.index(".sq-txt{white-space:pre-wrap")
+    assert "font-size:var(--sq-fs)" in js
+    assert "localStorage.setItem(FS_KEY" in js and "localStorage.getItem(FS_KEY)" in js
+    assert "FS_MIN" in js and "FS_MAX" in js
+
+def test_the_talk_wears_the_terminal_font():
+    """Owner, 2026-11-01: the chat read in a UI face while the terminal beside it read in monospace. One stack serves both."""
+    js = (pathlib.Path(__file__).resolve().parents[1] / "contrib/squad-goal/scripts/hub-overlay.js").read_text()
+    assert "--sq-mono:ui-monospace" in js
+    body = js[js.index(".sq-txt{"):js.index(".sq-txt{") + 200]
+    assert "font-family:var(--sq-mono)" in body, body
+
+def test_the_talk_is_markdown_built_as_nodes_never_as_html():
+    """Owner, 2026-11-01: the talk must read as markdown. Bold, italic, inline code and a link are built from text nodes, so a
+    message that carries markup can never run as HTML."""
+    js = (pathlib.Path(__file__).resolve().parents[1] / "contrib/squad-goal/scripts/hub-overlay.js").read_text()
+    assert "function inline(el, text)" in js
+    assert "document.createTextNode" in js
+    for tag in ('"b"', '"i"', '"code"', '"a"'):
+        assert "document.createElement(" + tag + ")" in js, tag
+    assert "innerHTML" not in js[js.index("function inline(el, text)"):js.index("function richText(text)")]
+    body = js[js.index("function richText(text) {"):js.index("const CLAMP")]
+    assert body.count("inline(") >= 4, "a heading, a bullet, a numbered line and a paragraph all read markdown"
+    assert "document.createTextNode" in js
+
+def test_a_markdown_table_is_drawn_as_a_table():
+    """Owner, 2026-11-01: a table arrived as its own pipes and dashes. A header row, a dash row and the body become one table whose
+    cells are text nodes."""
+    js = (pathlib.Path(__file__).resolve().parents[1] / "contrib/squad-goal/scripts/hub-overlay.js").read_text()
+    assert "const TBL_ROW = " in js and "TBL_SEP = " in js
+    assert 'createElement("table")' in js and 'createElement("th")' in js and 'createElement("td")' in js
+    body = js[js.index("function richText(text) {"):js.index("const CLAMP")]
+    assert "TBL_ROW.test(raw) && TBL_SEP.test" in body
+    assert ".sq-tbl" in js
+
+def test_the_panel_comes_back_open_after_a_reload():
+    """Owner, 2026-11-01: the page reloads when the hub build changes and the terminal closed with it. The open state is kept
+    beside the session and the text size, and a reload reopens what was open."""
+    js = (pathlib.Path(__file__).resolve().parents[1] / "contrib/squad-goal/scripts/hub-overlay.js").read_text()
+    assert 'const OPEN_KEY = "sq-ov-open"' in js
+    assert "function wantOpen(on)" in js and "function wasOpen()" in js
+    assert "localStorage.setItem(OPEN_KEY, on ? \"1\" : \"0\")" in js
+    assert "if (wasOpen()) openOverlay();" in js
+    assert "wantOpen(true)" in js and "wantOpen(false)" in js
+
+def test_a_system_turn_folds_to_one_collapsible_line():
+    """Owner, 2026-11-01: reminders and hook notes took the whole feed. A system turn is a closed details whose summary is one
+    line, and opening it shows the text."""
+    js = (pathlib.Path(__file__).resolve().parents[1] / "contrib/squad-goal/scripts/hub-overlay.js").read_text()
+    body = js[js.index("function turnNode(t) {"):js.index("function feed(") if "function feed(" in js else len(js)]
+    assert 't.role === "system" || t.role === "tool"' in body
+    assert 'createElement("details")' in body and 'createElement("summary")' in body
+    assert ".sq-fold" in js and ".sq-fold summary" in js
+
+def test_a_read_that_fails_keeps_the_session_and_the_talk():
+    """Owner, 2026-11-01: the terminal sometimes zeroed to "No session runs in this project's checkout" after a reload. A
+    reload lands while the hub is restarting, so its reads fail; a read that did not answer may not drop the session, blank
+    the talk, or say a session is gone. Only a list read that answered may."""
+    js = OVERLAY.read_text()
+    body = js[js.index("async function loadSessions() {"):js.index("// Only the structure that carries meaning")]
+    assert "answered++" in body and "if (!answered) {" in body
+    assert "retrySoon();" in body and "return;" in body
+    # the early return sits before every write of the session state
+    guard = body.index("if (!answered) {")
+    for later in ("sessions = found", "cur = ", "empty(\"No session runs"):
+        assert guard < body.index(later), later
+    # a 404 on the conversation asks the list again; it never drops the session by itself
+    conv = js[js.index("async function loadConversation() {"):js.index("const uuid =")]
+    assert "cur = null" not in conv
+    assert "loadSessions()" in conv
+    assert "Date.now() - missT > 5000" in conv
+
+def test_the_owner_turn_is_a_bubble_on_the_right_and_the_answer_one_on_the_left():
+    """Owner, 2026-11-01: the talk reads faster with WhatsApp-style bubbles, and the fonts stay as they are."""
+    js = OVERLAY.read_text()
+    def rule(sel):
+        m = re.search(re.escape(sel) + r"\{([^}]*)\}", js)
+        assert m, sel
+        return m.group(1)
+    own, ans = rule(".sq-owner"), rule(".sq-answer")
+    assert "margin:0 0 10px auto" in own and "width:fit-content" in own and "max-width:86%" in own
+    assert "border-radius:14px 14px 4px 14px" in own and "background:#12302a" in own
+    assert "margin:0 auto 10px 0" in ans and "width:fit-content" in ans and "max-width:100%" in ans
+    assert "border-radius:14px 14px 14px 4px" in ans and "background:#161c24" in ans
+    # a bubble carries no type of its own: the size, the family and the spacing stay the text's
+    for body in (own, ans):
+        assert "font-size" not in body and "font-family" not in body and "line-height" not in body
+    assert ".sq-answer::before" not in js   # the marker was the old way to tell the two apart
+
+def test_a_screenshot_turn_sits_in_its_own_bubble():
+    """Owner, 2026-11-01: an image the owner sends is in the bubble like the text is."""
+    js = OVERLAY.read_text()
+    assert "const role = onlyImage ? \"owner\" : t.role;" in js and "sq-onlyimg" in js
+    assert ".sq-onlyimg{max-width:min(86%,280px)}" in js
+    assert ".sq-onlyimg .sq-img img{width:100%" in js
+
+def test_an_image_the_owner_sent_joins_the_message_it_came_with():
+    """Owner, 2026-11-01: the harness records an attached image as its own turn, so the picture drew as a second bubble under
+    the message. A turn that is only an image joins the owner turn just above it."""
+    js = OVERLAY.read_text()
+    assert "function stitch(turns)" in js and "said = stitch(shown)" in js
+    assert "stitch(earlier).map(turnNode)" in js
+    body = js[js.index("function stitch(turns) {"):js.index("function feed(turns) {")]
+    assert 'prev.role === "owner"' in body and "IMG_ONLY.test(String(prev.text" in body
+    assert 'out[out.length - 1] = { ...prev, text:' in body
+
+def test_an_empty_session_list_never_takes_away_the_talk():
+    """Owner, 2026-11-01: the panel went blank on "No session runs here" while it held a live talk. A list that answers
+    empty keeps what the panel shows and asks again; the empty screen belongs to a panel that never had a session."""
+    js = OVERLAY.read_text()
+    body = js[js.index("async function loadSessions() {"):js.index("// Only the structure that carries meaning")]
+    guard = body.index("if (cur && !found.length) {")
+    assert "retrySoon();" in body[guard:guard + 160]
+    assert body[guard:guard + 160].count("return;") == 1
+    for later in ("sessions = found", "cur = ", 'empty("No session runs'):
+        assert guard < body.index(later), later
+    assert "EMPTY_N" not in js
+
+def test_the_talk_is_read_again_the_moment_the_tab_is_looked_at():
+    """Owner, 2026-11-01: the panel updated only after a long wait when he worked in another window. A background tab
+    throttles timers to about once a minute, so the panel reads the talk again on focus and on coming back (#1079)."""
+    js = OVERLAY.read_text()
+    assert 'const reread = () => { if (!ov.hidden && !document.hidden) loadConversation(); };' in js
+    assert 'addEventListener("focus", reread);' in js
+    assert 'document.addEventListener("visibilitychange"' in js
+    assert js.count('addEventListener("focus", reread)') == 1   # registered once, never per open
+    assert 'console.warn("conversation:", e)' in js             # a failed poll says so; it never freezes in silence

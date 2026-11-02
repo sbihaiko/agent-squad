@@ -120,7 +120,8 @@ def _deliver(profile, sid, text, cid, profiles_of):
     token = _key_token(pid, sock)
     frames = (json.dumps({"type": "auth", "token": token}) + "\n"
               + json.dumps({"type": "user", "message": {"role": "user", "content": text},
-                            "from_name": FROM_NAME, "msg_id": cid, "priority": "next"}) + "\n").encode()
+                            "from_name": FROM_NAME, "msg_id": cid, "priority": "next",
+                            **({"from_mode": m} if (m := sessions.permission_mode(rec["cwd"], sid, pid)) else {})}) + "\n").encode()
     s = _open()
     s.settimeout(DEADLINE_S)
     try:

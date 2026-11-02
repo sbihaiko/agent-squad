@@ -12,7 +12,8 @@ delivery is a gate read as a target (ADR-0012), which is the defect this decisio
 The line is between an unfinished proof and a failed one:
 
 - **An unfinished proof never holds delivery.** Past its bound (ADR-0163) the delta proof answers for the tip; past what
-  the delta can carry, the tip is promoted with a marker that names the unproven part, and a later pass proves it.
+  the delta can carry, the tip is promoted with a marker that names the unproven part, and the nightly proves it and
+  settles the marker.
 - **A failed proof still holds delivery.** A red the proof actually measured is a defect (ADR-0018) and is fixed; this
   decision never promotes a tip a test named.
 - **The record carries the difference.** A promotion writes whether the full suite passed, whether the delta carried it,

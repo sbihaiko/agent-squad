@@ -8,13 +8,19 @@ SOCKET_DIRS = ("/tmp/cc-socks",)   # where Claude Code binds a session socket (d
 STATUSES = ("busy", "idle", "waiting")
 SID = re.compile(r"[A-Za-z0-9-]{1,64}")
 TAIL_BYTES = 256 * 1024
+MAX_TAIL_BYTES = 16 * 1024 * 1024   # a session's own lines can be megabytes: the window grows until it holds a page (#1073)
+PAGE_TURNS = 30                     # the text turns a page aims for; a tool line rides along and never fills the page
 TURN_LIMIT = 200
 PREVIEW_CHARS = 200
 UID = os.getuid()
 CREDENTIAL = re.compile(r"sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{16,}|Bearer\s+[A-Za-z0-9._~+/=-]+")
 _LOGGED = set()
 
-def claude_home(): return pathlib.Path.home() / ".claude"
+def claude_home():
+    """The Claude folder this process reads: HOME when the environment names one, else the user's. Python 3.12 caches
+    the `~` expansion, so a process that changes HOME still read the first one it saw (#1073)."""
+    h = os.environ.get("HOME")
+    return (pathlib.Path(h) if h else pathlib.Path.home()) / ".claude"
 
 def redact(text, secrets=()):
     for s in secrets:
@@ -133,29 +139,55 @@ def read_last_message(cwd, sid, secrets=()):
         if text.strip(): last = text.strip()
     return redact(last, secrets)[:PREVIEW_CHARS]
 
+HARNESS_TAGS = ("local-command-caveat", "command-name", "command-message", "command-args", "local-command-stdout",
+                "task-notification")
+_ONE_ENVELOPE = re.compile(r"\s*<(%s)\b.*?</\1>" % "|".join(HARNESS_TAGS), re.S | re.I)
+
+HARNESS_OPENER = "This session is being continued from a previous conversation"
+
+def _harness_only(text):
+    """True when the whole message is what the harness wrote into the transcript itself: a command's record, its output, a
+    background task's notification, or the summary a compact hands the next context. The owner typed none of it, so it is no
+    turn of the talk (owner, 2026-11-01)."""
+    if text.lstrip().startswith(HARNESS_OPENER): return True
+    if re.fullmatch(r"\s*/[A-Za-z][\w:-]*\s*", text): return True   # a bare slash command is the harness echoing the call
+    if "<system-reminder>" in text or "<tools-used-before-summary>" in text: return True
+    rest = text
+    while True:
+        m = _ONE_ENVELOPE.match(rest)
+        if m is None: return not rest.strip()
+        rest = rest[m.end():]
+
 def _turns_of(obj):
     kind, uid = obj.get("type"), str(obj.get("uuid") or "")
+    at = obj.get("timestamp") if isinstance(obj.get("timestamp"), str) else ""   # the clock the bubble shows, as WhatsApp does
+    # A message the harness injects (a hook's feedback, a reminder) is stored as a user turn. It is not the owner typing:
+    # the panel says System, so a bubble never puts words in the owner's mouth (owner, 2026-11-01).
+    owner_role = "system" if obj.get("isMeta") is True else "owner"
     content = (obj.get("message") or {}).get("content")
     if isinstance(content, str): content = [{"type": "text", "text": content}]
     out = []
     for p in content if isinstance(content, list) else []:
         if not isinstance(p, dict): continue
         text = p.get("text")
-        if kind == "user" and p.get("type") == "text" and isinstance(text, str) and text: out.append(("owner", uid, text))
-        elif kind == "assistant" and p.get("type") == "text" and isinstance(text, str) and text: out.append(("answer", uid, text))
-        elif kind == "assistant" and p.get("type") == "tool_use": out.append(("tool", uid, f"tool: {p.get('name', '')}"))
+        if kind == "user" and p.get("type") == "text" and isinstance(text, str) and text:
+            if _harness_only(text): continue   # the harness's own record, never a turn of the talk
+            out.append((owner_role, uid, text, at))
+        elif kind == "assistant" and p.get("type") == "text" and isinstance(text, str) and text: out.append(("answer", uid, text, at))
+        # A tool call is not a turn of the conversation: a working session answers with hundreds of them, and they filled
+        # the page while the owner's and the AI's words never arrived (#1073). The terminal stays their record.
     return out
 
-def read_conversation(cwd, sid, secrets=(), before=None):
-    """One page of the session's conversation, oldest first: the newest whole lines before the byte offset `before` (the end of
-    the transcript when None), within TURN_LIMIT turns and one TAIL_BYTES window. `next` is the offset of the older page."""
-    if SID.fullmatch(sid) is None: return None
-    try: raw, start = _read_under_home(["projects", re.sub(r"[^A-Za-z0-9]", "-", cwd), f"{sid}.jsonl"], limit=TAIL_BYTES, end=before)
-    except OSError as e: _log(f"hub: transcript of session {sid} unreadable: {type(e).__name__}", secrets); return None
+_PAGES = {}   # the last few pages, keyed by transcript size and mtime: the chat polls every few seconds
+BIG_LINE = 512 * 1024   # a line this long is a thinking block or a tool result: it carries no turn of its own (#1073)
+
+def _page_kept(raw, start):
+    """The newest whole lines of one byte window, oldest first, within TURN_LIMIT turns."""
     lines, at = [], start
     for i, piece in enumerate(raw.split(b"\n")):
         offset, at = at, at + len(piece) + 1
         if (i == 0 and start) or not piece: continue
+        if len(piece) > BIG_LINE and b'"type":"text"' not in piece and b'"type": "text"' not in piece: continue
         try: obj = json.loads(piece)
         except ValueError: continue
         if isinstance(obj, dict): lines.append((offset, _turns_of(obj)))
@@ -164,9 +196,82 @@ def read_conversation(cwd, sid, secrets=(), before=None):
         if kept and turns + len(found) > TURN_LIMIT: break
         kept.append((offset, found)); turns += len(found)
     kept.reverse()
-    out = [{"id": uid, "role": role, "text": redact(text, secrets)} for _, found in kept for role, uid, text in found]
+    return kept
+
+def permission_mode(cwd, sid, pid=None):
+    """The permission mode the session last recorded in its transcript, else the one its own process was started with, else "".
+    A sender that asserts the receiver's own mode is not held for approval: a hub that asserts none, into a session that
+    bypasses, is (`docs/design/session-wire-protocol.md`; owner, 2026-11-01). The fallback matters because a session holds
+    no mode line in its transcript until its first turn is written, and the owner reads the hub from the web, where a held
+    message has no approval to reach it (#1081)."""
+    if SID.fullmatch(sid or "") is None: return ""
+    try: raw, _ = _read_under_home(["projects", re.sub(r"[^A-Za-z0-9]", "-", str(cwd)), f"{sid}.jsonl"], limit=TAIL_BYTES)
+    except OSError: raw = b""
+    for piece in reversed(raw.split(b"\n")):
+        if b'"permissionMode"' not in piece: continue
+        try: obj = json.loads(piece)
+        except ValueError: continue
+        mode = obj.get("permissionMode")
+        if isinstance(mode, str) and mode: return mode
+    return argv_mode(pid)
+
+
+ARGV_MODE = {"--dangerously-skip-permissions": "bypassPermissions", "--bypass-permissions": "bypassPermissions"}
+
+
+def argv_of(pid):
+    """The argv the process was started with, or (). `/proc` first: it has no column width and no external tool, so a flag
+    past the `ps` column survives (a CI run cut a flag off and read the mode as empty); `ps -ww` answers elsewhere, wide."""
+    try:
+        raw = open(f"/proc/{int(pid)}/cmdline", "rb").read()
+        if raw: return [a.decode("utf-8", "replace") for a in raw.split(b"\0") if a]
+    except (OSError, ValueError):
+        pass
+    try:
+        out = subprocess.run(["ps", "-ww", "-p", str(int(pid)), "-o", "args="], capture_output=True, text=True,
+                             timeout=5).stdout
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return []
+    return out.split()
+
+
+def argv_mode(pid):
+    """The mode a live session's own argv names, or "". Read-only: one read of the process's argv, no signal, no write."""
+    argv = argv_of(pid)
+    for k, tok in enumerate(argv):
+        if tok in ARGV_MODE: return ARGV_MODE[tok]
+        if tok.startswith("--permission-mode="): return tok.split("=", 1)[1]
+        if tok == "--permission-mode" and k + 1 < len(argv): return argv[k + 1]
+    return ""
+
+def read_conversation(cwd, sid, secrets=(), before=None):
+    """One page of the session's conversation, oldest first: the newest whole lines before the byte offset `before` (the end of
+    the transcript when None), within TURN_LIMIT turns. The window starts at TAIL_BYTES and doubles until the page holds
+    PAGE_TURNS owner or answer turns (or MAX_TAIL_BYTES, or the start of the file): one transcript line can be megabytes, so
+    a fixed window answered a handful of tool lines and no conversation at all (#1073). `next` is the older page's offset."""
+    if SID.fullmatch(sid) is None: return None
+    path = ["projects", re.sub(r"[^A-Za-z0-9]", "-", cwd), f"{sid}.jsonl"]
+    full = claude_home().joinpath(*path)
+    try: st = full.stat()
+    except OSError: st = None
+    key = (str(full), st.st_size if st else -1, st.st_mtime_ns if st else -1, before)
+    if st and key in _PAGES: return _PAGES[key]   # the panel polls; a poll that meets no new byte re-reads nothing
+    window = TAIL_BYTES
+    while True:
+        try: raw, start = _read_under_home(path, limit=window, end=before)
+        except OSError as e: _log(f"hub: transcript of session {sid} unreadable: {type(e).__name__}", secrets); return None
+        kept = _page_kept(raw, start)
+        said = sum(1 for _, found in kept for role, *_ in found if role != "tool")
+        if said >= PAGE_TURNS or not start or window >= MAX_TAIL_BYTES: break
+        window *= 2
+    out = [{"id": uid, "role": role, "text": redact(text, secrets), "at": at} for _, found in kept for role, uid, text, at in found]
     cursor = kept[0][0] if kept else start
-    return {"turns": out, "next": cursor or None}
+    page = {"turns": out, "next": cursor or None}
+    if st:
+        _PAGES[key] = page
+        while len(_PAGES) > 8: _PAGES.pop(next(iter(_PAGES)))
+    return page
+
 
 def conversation(profile, sid, before=None, profiles_of=profiles_of):
     """One page of a live session's conversation when the session is this profile's; None for any other session."""

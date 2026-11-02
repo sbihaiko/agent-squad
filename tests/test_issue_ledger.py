@@ -4,6 +4,7 @@ issue_ledger.py is the only writer of $SG_STATE/state/<owner>__<repo>__<n>.json.
 the repository (ADR-0138), a missing file of a new issue reads as todo with 0 attempts, and a missing file beside the old
 requeues-N files holds the issue until `migrate` carries them in (ADR-0149 rule 4).
 """
+import importlib.util
 import json
 import os
 import subprocess
@@ -344,3 +345,29 @@ def test_replay_names_a_stored_review_stop_its_events_do_not_support(tmp_path):
     f.write_text(json.dumps(d))
     r = run(tmp_path, "replay", "a/b#70")
     assert r.returncode == 1 and "a/b#70" in r.stderr and "review.stopped" in r.stderr, (r.stdout, r.stderr)
+
+
+def import_ledger(name):
+    """The script as a module, imported now: the mux pins the profile env around the hub's import, so the import is where a
+    value read from the environment is true."""
+    spec = importlib.util.spec_from_file_location(name, SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_the_state_dir_survives_the_hub_restoring_the_shell_env(tmp_path, monkeypatch):
+    """The mux pins the profile's env around the hub's import and restores the shell's after it, so a module that reads
+    SG_STATE at request time must still answer: /api/load closed the connection with KeyError and the Monitor lost every
+    reading (#1073)."""
+    monkeypatch.setenv("SG_STATE", str(tmp_path))
+    mod = import_ledger("il_pinned")
+    monkeypatch.delenv("SG_STATE")
+    assert mod.state_dir() == tmp_path
+
+
+def test_a_state_dir_with_no_profile_is_refused_by_name(monkeypatch):
+    monkeypatch.delenv("SG_STATE", raising=False)
+    mod = import_ledger("il_unpinned")
+    with pytest.raises(RuntimeError, match="SG_STATE"):
+        mod.state_dir()

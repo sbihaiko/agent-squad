@@ -106,6 +106,43 @@ async def test_one_child_runs_as_its_skill_and_writes_the_three_events_and_the_a
     assert disp["elapsed"] is not None and disp["elapsed"] >= 0   # the dispatch node's own wall time, not only its children's
 
 
+CLEAN_END = {"subtype": "success", "is_error": False, "last": "I read the spec and stopped before the file was written"}
+
+
+@pytest.mark.anyio
+async def test_a_child_that_ends_early_names_its_end_on_the_record(tmp_path):    # #1066
+    eng = make(tmp_path, {"router": routed(req()), "route.router.1": {"output": None, "spend": 0.2, "turns": 120, "ended": CLEAN_END}})
+    v = await eng.run()
+    out = child_outs(tmp_path)["route.router.1"]
+    assert out["outcome"] == "fail" and out["reasons"] == ["child_ended_early"]
+    assert out["diagnostic"]["ended"]["last"] == CLEAN_END["last"] and out["turns"] == 120
+    assert "child_ended_early" in v.reasons and "artifact_missing" not in v.reasons
+
+
+@pytest.mark.anyio
+async def test_a_child_that_spends_its_whole_grant_and_ends_clean_is_artifact_missing(tmp_path):    # #1066
+    eng = make(tmp_path, {"router": routed(req()), "route.router.1": {"output": None, "spend": 1.0, "turns": 120, "ended": CLEAN_END}})
+    v = await eng.run()
+    assert child_outs(tmp_path)["route.router.1"]["reasons"] == ["artifact_missing"]
+    assert "artifact_missing" in v.reasons
+
+
+@pytest.mark.anyio
+async def test_a_child_that_errors_out_names_the_error_on_the_record(tmp_path):    # #1066
+    failed = {"subtype": "error_during_execution", "is_error": True, "last": "the tool call crashed"}
+    eng = make(tmp_path, {"router": routed(req()), "route.router.1": {"output": None, "spend": 0.2, "ended": failed}})
+    await eng.run()
+    assert child_outs(tmp_path)["route.router.1"]["reasons"] == ["session_error:error_during_execution"]
+
+
+@pytest.mark.anyio
+async def test_a_child_that_writes_its_artifact_carries_no_artifact_missing(tmp_path):    # #1066
+    eng = make(tmp_path, {"router": routed(req()), "route.router.1": CHILD})
+    v = await eng.run()
+    assert child_outs(tmp_path)["route.router.1"]["reasons"] == []
+    assert "artifact_missing" not in v.reasons
+
+
 @pytest.mark.anyio
 async def test_code_assigns_the_request_key_and_child_name_and_a_model_id_is_refused(tmp_path):
     eng = make(tmp_path, {"router": routed(req(id="child-99"), req(key=5, name="mine"), req("diagnosing-bugs")), "route.router.1": CHILD})

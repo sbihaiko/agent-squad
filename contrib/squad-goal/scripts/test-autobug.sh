@@ -396,7 +396,12 @@ echo "\$*" >> "$T/board.calls"
 case " \$* " in *" --add "*) echo "#1228 -> In Progress" ;; *) echo "#1228 not on the board" >&2; exit 1 ;; esac
 J
 printf '#!/bin/bash\necho %s/req.json\n' "$T" > "$T/s/mkreq.sh"
-printf 'import os\nopen(os.path.join("%s", "launched"), "w").close()\n' "$T" > "$T/s/launch.py"
+cat > "$T/s/launch.py" <<J
+import os
+try: seen = open(os.path.join("$T", "board.calls")).read()
+except OSError: seen = ""
+open(os.path.join("$T", "launched"), "w").write(seen)   # what the board held the instant the launch started
+J
 chmod +x "$T/s/board.sh" "$T/s/mkreq.sh" "$T/s/launch.py"
 : > "$T/filed"; : > "$T/st/cycle.log"
 cat > "$T/bin/gh" <<J
@@ -419,7 +424,13 @@ chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 export BOARD="$T/s/board.sh" SG_BUG_PROJECT=4 SG_BOARD_VOCAB=shipped   # both dispatch writes: the loop board and the bug board; SG_BUG_DOING unset, so the default writes
 r=$(bash "$T/s/autobug.sh" 2>&1); rc=$?
 [ "$rc" = 0 ] && ok "9 the dispatch whose cards the board does not carry finishes" || ko "9 the pass exited $rc: '$r'"
-case "$r" in *"AUTOBUG dispatched"*) ok "9 the dispatch still happens" ;; *) ko "9 no dispatch: '$r'";; esac
+# Re-anchored (#1021, ADR-0165): a card write that lands comes before the launch. The old anchor, "the dispatch happens",
+# said nothing about the order the run depends on.
+case "$r" in *"AUTOBUG dispatched"*) ok "9 a card write that lands is followed by the launch" ;; *) ko "9 no dispatch: '$r'";; esac
+[ -e "$T/launched" ] && ok "9 the launch ran" || ko "9 no launch"
+[ "$($G -c -- '--add o 4 Doing ' "$T/launched" 2>/dev/null)" = 1 ] \
+  && ok "9 the launch saw its own card write already on the board" \
+  || ko "9 the launch ran before the card write landed: $(cat "$T/launched" 2>/dev/null)"
 filed=$($G -c '^title=' "$T/filed")
 [ "$filed" = 0 ] && ok "9 the dispatch adds the missing card, it files no bug about it" \
   || ko "9 the dispatch filed $filed bug(s) about its own card move: $(cat "$T/filed")"

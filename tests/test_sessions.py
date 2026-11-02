@@ -302,13 +302,46 @@ def test_a_conversation_page_is_the_last_200_turns(home):
     assert page["next"] is not None
 
 
-def test_a_conversation_page_is_at_most_256_kb(home):
+def test_a_turn_carries_the_clock_its_bubble_shows(home):
+    """Owner, 2026-11-01: the bubble says when it was said, as WhatsApp does. The clock is the transcript's own timestamp, and a
+    line that names none reads empty rather than invented."""
+    mod = load_sessions()
+    cwd = home.path / "p1" / "app"
+    told = {"type": "user", "uuid": "u1", "timestamp": "2026-11-01T21:25:00.000Z",
+            "message": {"role": "user", "content": "hi"}}
+    said = {"type": "assistant", "uuid": "a1", "timestamp": "2026-11-01T21:26:03.000Z",
+            "message": {"role": "assistant", "content": [{"type": "text", "text": "hello"}]}}
+    write_transcript(home, cwd, "s1", [told, said, user("u2", "no clock")])
+    page = mod.read_conversation(str(cwd), "s1")
+    assert [(t["id"], t["at"]) for t in page["turns"]] == [
+        ("u1", "2026-11-01T21:25:00.000Z"), ("a1", "2026-11-01T21:26:03.000Z"), ("u2", "")]
+
+
+def test_a_conversation_page_grows_its_window_until_it_holds_the_conversation(home):
+    """A turn is not a byte count: the window doubles until the page holds the recent text turns (#1073)."""
     mod = load_sessions()
     cwd = home.path / "p1" / "app"
     write_transcript(home, cwd, "s1", [user(f"u{i}", "x" * 40000) for i in range(10)])
     page = mod.read_conversation(str(cwd), "s1")
-    assert [t["id"] for t in page["turns"]] == [f"u{i}" for i in range(4, 10)]
-    assert sum(len(t["text"]) for t in page["turns"]) <= 256 * 1024
+    assert [t["id"] for t in page["turns"]] == [f"u{i}" for i in range(10)]
+    assert page["next"] is None
+
+
+def test_huge_tool_lines_never_fill_the_page_instead_of_the_conversation(home):
+    """The live hub answered a chat with three `tool: Bash` lines and nothing else: the tail window fell inside one line
+    of a transcript whose tool results run to megabytes. The page carries the turns the owner reads (#1073)."""
+    mod = load_sessions()
+    cwd = home.path / "p1" / "app"
+    entries = []
+    for i in range(5):
+        entries.append(user(f"u{i}", f"turn {i}"))
+        entries.append({"type": "user", "uuid": f"r{i}", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": "x" * 300000}]}})
+        entries.append({"type": "assistant", "uuid": f"a{i}", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}}]}})
+    write_transcript(home, cwd, "s1", entries)
+    page = mod.read_conversation(str(cwd), "s1")
+    assert [t["text"] for t in page["turns"] if t["role"] == "owner"] == [f"turn {i}" for i in range(5)]
 
 
 def test_older_pages_come_on_request_without_a_gap_or_a_repeat(home):
@@ -322,7 +355,7 @@ def test_older_pages_come_on_request_without_a_gap_or_a_repeat(home):
     assert third["next"] is None
 
 
-def test_turns_carry_the_message_id_and_role_and_a_tool_call_is_one_line(home):
+def test_turns_carry_the_message_id_and_role_and_a_tool_call_is_no_turn(home):
     mod = load_sessions()
     cwd = home.path / "p1" / "app"
     write_transcript(home, cwd, "s1", [
@@ -333,7 +366,7 @@ def test_turns_carry_the_message_id_and_role_and_a_tool_call_is_one_line(home):
     ])
     page = mod.read_conversation(str(cwd), "s1")
     assert [(t["id"], t["role"], t["text"]) for t in page["turns"]] == [
-        ("u1", "owner", "list the files"), ("a1", "answer", "Running it."), ("a1", "tool", "tool: Bash")]
+        ("u1", "owner", "list the files"), ("a1", "answer", "Running it.")]
 
 
 def test_the_token_and_credential_shapes_are_in_no_turn_and_no_log(home, capfd):
@@ -414,7 +447,7 @@ def test_the_hub_mux_leaves_turn_text_and_message_ids_unchanged(home, serve):
     finally:
         httpd.shutdown()
         httpd.server_close()
-    assert status == 200 and json.loads(body)["turns"] == [{"id": "m-7", "role": "owner", "text": text}]
+    assert status == 200 and json.loads(body)["turns"] == [{"id": "m-7", "role": "owner", "text": text, "at": ""}]
 
 
 def test_a_turn_with_markup_is_returned_as_its_plain_text(home, serve):
@@ -425,7 +458,7 @@ def test_a_turn_with_markup_is_returned_as_its_plain_text(home, serve):
     srv = serve()
     status, body, head = fetch(srv.port, "/api/sessions/conversation?sid=s1", f"127.0.0.1:{srv.port}")
     assert status == 200 and head["content-type"].startswith("application/json")
-    assert json.loads(body)["turns"] == [{"id": "a1", "role": "answer", "text": markup}]
+    assert json.loads(body)["turns"] == [{"id": "a1", "role": "answer", "text": markup, "at": ""}]
 
 
 def test_the_mobile_page_sends_a_csp_that_loads_nothing_from_outside_the_hub(home, serve):
@@ -457,3 +490,70 @@ def test_without_the_variable_the_seam_still_reads_the_global_profiles(home, tmp
     subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
     subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", "git@github.com:owner/app.git"], check=True)
     assert mod.profiles_of(str(repo)) == ["p1"], "the seam answered nothing and the session would be hidden"
+
+
+def test_a_hook_injected_message_reads_system_and_never_as_the_owner(home):
+    """`isMeta` marks what the harness wrote: a hook's feedback stands in the transcript as a user turn, and the panel must
+    not put those words in the owner's mouth (owner, 2026-11-01)."""
+    mod = load_sessions()
+    cwd = home.path / "p1" / "app"
+    entries = [user("u1", "real words"),
+               {"type": "user", "uuid": "m1", "isMeta": True, "message": {"role": "user", "content": [
+                   {"type": "text", "text": "Stop hook feedback: the goal is not met"}]}}]
+    folder = mod.claude_home() / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(cwd))   # the module's own home, as it reads it
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "s1.jsonl").write_text("".join(json.dumps(e) + "\n" for e in entries))
+    page = mod.read_conversation(str(cwd), "s1")
+    assert [(t["id"], t["role"]) for t in page["turns"]] == [("u1", "owner"), ("m1", "system")]
+
+
+def test_a_command_record_and_a_task_notice_are_no_turn_of_the_talk(home):
+    """`/compact` and a background task write their own user turns with no `isMeta`: the owner read a command's markup and a
+    task's notification as words they typed (owner, 2026-11-01)."""
+    mod = load_sessions()
+    cwd = home.path / "p1" / "app"
+    entries = [user("u1", "real words"),
+               user("c1", "<command-name>/compact</command-name>\n            <command-message>compact</command-message>"),
+               user("c2", "<local-command-stdout>[2mCompacted (ctrl+o to see full summary)[22m</local-command-stdout>"),
+               user("t1", "<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n</task-notification>"),
+               user("u2", "a question after the compact")]
+    folder = mod.claude_home() / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(cwd))
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "s2.jsonl").write_text("".join(json.dumps(e) + "\n" for e in entries))
+    page = mod.read_conversation(str(cwd), "s2")
+    assert [t["role"] for t in page["turns"]] == ["owner", "owner"]   # the harness's own records are no turns
+
+
+def test_the_summary_a_compact_hands_the_next_context_is_no_turn(home):
+    """`/compact` writes its summary back as a user turn with no `isMeta`: the feed read the whole earlier conversation as if
+    the owner had typed it again (owner, 2026-11-01)."""
+    mod = load_sessions()
+    cwd = home.path / "p1" / "app"
+    entries = [user("u1", "real words"),
+               user("k1", "This session is being continued from a previous conversation that ran out of context.\n\n"
+                           "<system-reminder>\n<tools-used-before-summary>Bash</tools-used-before-summary>\n</system-reminder>"),
+               user("u2", "and then I asked this")]
+    folder = mod.claude_home() / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(cwd))
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "s3.jsonl").write_text("".join(json.dumps(e) + "\n" for e in entries))
+    page = mod.read_conversation(str(cwd), "s3")
+    assert [(t["id"], t["role"]) for t in page["turns"]] == [("u1", "owner"), ("u2", "owner")]
+
+
+def test_a_poll_that_meets_no_new_byte_reads_no_file_again(home):
+    """The chat polls every few seconds and this transcript runs to hundreds of megabytes: an unchanged file answers from
+    the page already built (owner, 2026-11-01)."""
+    mod = load_sessions()
+    cwd = home.path / "p1" / "app"
+    write_transcript(home, cwd, "s1", [user(f"u{i}", f"turn {i}") for i in range(30)])
+    calls = []
+    real = mod._read_under_home
+    mod._read_under_home = lambda parts, **kw: (calls.append(parts), real(parts, **kw))[1]
+    first = mod.read_conversation(str(cwd), "s1")
+    n = len(calls)
+    second = mod.read_conversation(str(cwd), "s1")
+    assert n > 0 and len(calls) == n and second == first
+    with open(home.projects / re.sub(r"[^A-Za-z0-9]", "-", str(cwd)) / "s1.jsonl", "a") as f:
+        f.write(json.dumps(user("u99", "a new turn")) + "\n")
+    third = mod.read_conversation(str(cwd), "s1")
+    assert len(calls) > n and third["turns"][-1]["text"] == "a new turn"

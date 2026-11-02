@@ -15,6 +15,9 @@ unset REV REV_BASE REV_SHA   # each case decides the review; an ambient one from
 # SERIAL_HOLD_SECONDS; serial.sh exports SG_SERIAL_HELD and reads SERIAL_POLL_SECONDS; a gate caller sets SG_GATE_KIND and
 # SG_GATE_STATUS. All of them go, beside REV.
 unset SG_SERIAL_HELD SG_GATE_STATUS SG_GATE_KIND SERIAL_WAIT_SECONDS SERIAL_HOLD_SECONDS SERIAL_POLL_SECONDS
+# The clones and the wave's rebase replay commits, and a rebase needs a committer. A runner has none set and cannot
+# auto-detect one, so the suite names its own identity and never reads the machine's (#1062).
+export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=a@b GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=a@b
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/co" "$T/bin"
 cp "$d/wave.sh" "$d/issue_ledger.py" "$d/ghread.py" "$d/wavepause.py" "$d/child_issues.py" "$d/address.sh" "$d/gate.sh" "$d/caps.sh" "$d/serial.sh" "$d/ghcall.sh" "$d/base-battery.sh" "$d/basecheck.sh" "$T/s/" 2>/dev/null
@@ -114,6 +117,9 @@ child 10 g10; r=$(GATES='test -f g10' en 10)
 # a gate the wave tip already passes, and every child went back to the queue (#514).
 child 14 g14 origin/dev; r=$(GATES='test -f g7 && test -f g14' en 14)
 [ "$(entered 14)" = yes ] && ok "C: the gates run on the child rebased on the wave tip" || ko "C: #14, cut from an old base, was gated on it: '$r'"
+# A rebase that stops with no unmerged file (a tracked change in the child's worktree) names git's own last line, never an empty tail (#1062).
+child 15 g15 origin/dev; echo dirty >> "$T/c15/g15"; r=$(en 15)
+case "$r" in *"WAVE REQUEUE #15: the rebase on $W conflicts: git said: "?*) ok "C: a rebase with no unmerged file names git's own last line";; *) ko "C: the refusal ends at the colon: '$r'";; esac
 # No gate command set: the entry is refused whole, so no child ever enters a wave ungated.
 before=$($O rev-parse $W); printf 'run-1\n' > "$T/st/auto/disp-13"; child 13 g13; r=$(GATES= en 13)
 [ "$($O rev-parse $W)" = "$before" ] && [ "$(entered 13)" = no ] && ok "C: no gates set: a child never enters a wave ungated" || ko "C: #13 entered ungated: '$r'"

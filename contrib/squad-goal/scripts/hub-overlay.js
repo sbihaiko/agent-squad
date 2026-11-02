@@ -8,6 +8,11 @@ const SQ = {};
 SQ.MIN_W = 360; SQ.MIN_BOARD = 480; SQ.MAX_FRAC = 0.7; SQ.STEP = 24; SQ.DEFAULT_W = 440; SQ.SHEET_W = 420; SQ.PHONE_W = 600;
 SQ.IDLE_MS = 3000; SQ.LENS_R = 5; SQ.REACH = 240; SQ.POLL_MS=3000; SQ.TEXT_MAX = 4000;
 SQ.SEND_SETTING = "SQUAD_TAILNET_TERMINALS_SEND";
+// The feed reads like a terminal: the latest turns stand, older ones fold into one line, and a long answer is clamped with
+// "Show more" (owner, 2026-11-01; the terminal reads clearer because it summarizes age and length, not because it says less).
+SQ.KEEP = 12;
+SQ.splitEarlier = (turns, keep = SQ.KEEP) => turns.length <= keep ? { earlier: [], shown: turns }
+  : { earlier: turns.slice(0, turns.length - keep), shown: turns.slice(turns.length - keep) };
 
 // The docked width: at least 360 px, at most 70% of the viewport, and the board keeps 480 px.
 SQ.clampWidth = (w, vw) => {
@@ -63,7 +68,7 @@ SQ.MARKUP = `<style>
 html.sq-docked #sq-ov-btn{display:none}
 html.sq-docked body{margin-right:var(--sq-dock)}
 #sq-ov-lens{will-change:transform}
-#sq-ov{position:fixed;z-index:1000;right:16px;bottom:calc(var(--sq-ov-bottom,16px) + 64px);width:min(440px,calc(100vw - 32px));height:min(640px,calc(100vh - 120px));display:flex;flex-direction:column;box-sizing:border-box;background:#11151c;color:#e6e8ee;border:1px solid #353d4b;border-radius:13px;box-shadow:0 18px 50px #000c;font:14px/1.45 system-ui,-apple-system,sans-serif;text-align:left}
+#sq-ov{position:fixed;z-index:1000;right:16px;bottom:calc(var(--sq-ov-bottom,16px) + 64px);width:min(440px,calc(100vw - 32px));height:min(640px,calc(100vh - 120px));display:flex;flex-direction:column;box-sizing:border-box;background:#11151c;color:#e6e8ee;border:1px solid #353d4b;border-radius:13px;box-shadow:0 18px 50px #000c;--sq-fs:14px;--sq-mono:ui-monospace,SFMono-Regular,SF Mono,Menlo,Consolas,monospace;font:14px/1.55 var(--sq-mono);text-align:left}
 #sq-ov[hidden]{display:none}
 #sq-ov *{box-sizing:border-box}
 #sq-ov[data-mode=docked]{top:0;right:0;bottom:0;height:auto;width:var(--sq-dock);border-radius:0;border-width:0 0 0 1px;box-shadow:none}
@@ -84,13 +89,38 @@ html.sq-docked body{margin-right:var(--sq-dock)}
 #sq-ov-pick p{margin:0 0 2px;width:100%;color:#b8c0cf;font-size:13px}
 #sq-ov-pick button{min-height:44px;padding:4px 10px;border:1px solid #353d4b;border-radius:8px;background:#1c212b;color:#e6e8ee;cursor:pointer;font:inherit;font-size:13px}
 #sq-ov-pick button[aria-pressed=true]{border-color:#7aa2ff}
+.sq-ov-fsb{font:600 13px/1 system-ui;min-width:44px;height:44px;padding:0 8px}   /* one control size for the desktop and the phone floor (owner, 2026-11-01) */
 #sq-ov-log{flex:1;min-height:0;overflow:auto;padding:13px 14px}
 #sq-ov-log .sq-empty{color:#b8c0cf}
-.sq-turn{margin:0 0 13px}
-.sq-who{display:block;font-size:13px;color:#b8c0cf;margin-bottom:2px}
-.sq-txt{white-space:pre-wrap;overflow-wrap:anywhere}
-.sq-owner .sq-txt{background:#1c2433;border-radius:8px;padding:6px 10px}
-.sq-tool .sq-txt{color:#b8c0cf;font:13px ui-monospace,SFMono-Regular,monospace}
+.sq-turn{margin:0 0 12px;padding:0;border-left:0;line-height:1.55;text-indent:0}
+.sq-who{display:block;font-family:var(--sq-mono);font-size:13px;line-height:1.55;color:#8b949e;margin-bottom:2px;letter-spacing:.02em}
+.sq-txt{white-space:pre-wrap;overflow-wrap:anywhere;font-family:var(--sq-mono);font-size:var(--sq-fs);color:#e6e8ee}
+.sq-p{margin:0 0 1.55em}.sq-txt>:last-child{margin-bottom:0}
+.sq-owner{margin:0 0 10px auto;width:fit-content;max-width:86%;border:1px solid #2e6b4f;border-radius:14px 14px 4px 14px;padding:8px 12px;background:#12302a}
+.sq-owner .sq-who{color:#8b949e;font-size:13px}.sq-owner .sq-txt{color:#e6edf3}
+.sq-system .sq-who{color:#8b949e;font-size:13px}.sq-system .sq-txt{color:#8b949e;font-style:italic}
+.sq-fold{border-left:0;margin:0 0 8px}.sq-fold summary{font-size:13px;color:#8b949e;cursor:pointer;list-style:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:flex;align-items:center}
+.sq-fold summary::-webkit-details-marker{display:none}.sq-fold[open] summary{color:#8b949e}
+.sq-answer{margin:0 auto 10px 0;width:fit-content;max-width:100%;border:1px solid #26303c;border-radius:14px 14px 14px 4px;padding:8px 12px;background:#161c24}
+.sq-answer .sq-who{color:#8b949e;font-size:13px}
+/* The clock sits at the end of the last line, as WhatsApp draws it (owner, 2026-11-01); no tick, so the bubble says only the time. */
+.sq-time{float:right;margin:4px 0 0 10px;color:#8b949e;font-size:13px;line-height:1.55;white-space:nowrap;user-select:none}
+.sq-h{font-family:var(--sq-mono);font-weight:600;font-size:var(--sq-fs);color:#eef1f5;margin:1.55em 0 0}
+.sq-tbl{width:100%;border-collapse:collapse;margin:0 0 1.55em;font-size:var(--sq-fs)}
+.sq-tbl th,.sq-tbl td{border:1px solid #353d4b;padding:4px 8px;text-align:left;vertical-align:top}
+.sq-tbl th{background:#101a16;color:#e6e8ee;font-weight:600}
+.sq-ul{margin:0 0 1.55em;padding-left:18px}.sq-ul li{margin:0}.sq-ol{list-style:decimal}
+.sq-ic{font-family:var(--sq-mono);color:#e6c07b;font-size:var(--sq-fs)}
+.sq-txt b{color:#ffffff;font-weight:650}.sq-txt i{color:inherit}
+.sq-txt a{color:#7aa2ff;text-decoration:underline}.sq-txt code{color:#e6c07b}
+.sq-code{margin:0 0 1.55em}.sq-code summary{font-size:13px;color:#7aa2ff;cursor:pointer;list-style:none;display:flex;align-items:center}
+.sq-code pre{margin:0 0 1.55em;padding:6px 9px;background:#0d1117;border:1px solid #232a36;border-radius:6px;overflow:auto;font-family:var(--sq-mono);font-size:var(--sq-fs);line-height:1.4;color:#b8c0cf;white-space:pre}
+.sq-img{display:block;margin:0 0 1.55em}.sq-img img{max-width:100%;max-height:180px;border:1px solid #232a36;border-radius:6px;display:block}
+.sq-onlyimg{max-width:min(86%,280px)}.sq-onlyimg .sq-img img{width:100%;max-height:220px;object-fit:contain}
+.sq-more{margin:0 0 4px;padding:0;border:0;background:none;color:#7aa2ff;font-size:13px;cursor:pointer}
+.sq-earlier{margin:0 0 6px}.sq-earlier summary{font-size:13px;color:#8b949e;cursor:pointer;display:flex;align-items:center}
+.sq-tool{}.sq-tool .sq-who{color:#f5b041}
+.sq-tool .sq-txt{color:#9aa3b2;font-family:var(--sq-mono);font-size:var(--sq-fs);line-height:1.55}
 #sq-ov-form{position:relative;display:flex;align-items:flex-end;gap:6px;padding:8px;border-top:1px solid #353d4b}
 #sq-ov-plus{flex:none;width:44px;height:44px;border:1px solid #353d4b;border-radius:50%;background:#1c212b;color:#e6e8ee;font:22px/1 system-ui;cursor:pointer}
 #sq-ov-menu{position:absolute;left:8px;bottom:60px;z-index:2;display:flex;flex-direction:column;min-width:170px;padding:4px;background:#1c212b;border:1px solid #353d4b;border-radius:10px;box-shadow:0 10px 30px #000a}
@@ -98,7 +128,7 @@ html.sq-docked body{margin-right:var(--sq-dock)}
 #sq-ov-menu button{min-height:44px;padding:6px 10px;border:0;border-radius:6px;background:none;color:#e6e8ee;text-align:left;font:inherit;cursor:pointer}
 #sq-ov-menu button:hover{background:#2a3140}
 #sq-ov-menu button:focus-visible{background:#2a3140;outline:2px solid #7aa2ff;outline-offset:-2px}
-#sq-ov-text{flex:1;min-width:0;min-height:44px;max-height:200px;resize:none;padding:8px 10px;border:1px solid #353d4b;border-radius:10px;background:#0d1117;color:#e6e8ee;font:14px/1.4 system-ui,-apple-system,sans-serif}
+#sq-ov-text{flex:1;min-width:0;min-height:44px;max-height:200px;resize:none;padding:8px 10px;border:1px solid #353d4b;border-radius:10px;background:#0d1117;color:#e6e8ee;font-family:var(--sq-mono);font-size:var(--sq-fs);line-height:1.55;font:var(--sq-fs)/1.55 var(--sq-mono);font-ui,-apple-system,sans-serif}
 #sq-ov-text:disabled{opacity:.6}
 #sq-ov-send{flex:none;display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;padding:0;border:0;border-radius:50%;background:#7aa2ff;color:#0d1117;cursor:pointer}
 #sq-ov-send:disabled{opacity:.35;cursor:default}
@@ -110,7 +140,7 @@ html.sq-docked body{margin-right:var(--sq-dock)}
 .sq-ov-back{display:none}
 html.sq-over .sq-ov-back{display:inline-flex;align-items:center;min-height:44px;padding:3px 10px;border:1px solid #353d4b;border-radius:6px;background:none;color:inherit;cursor:pointer}
 </style>
-<button id="sq-ov-btn" type="button" aria-label="Chat with the AI" title="Chat with the AI" aria-haspopup="dialog" aria-expanded="false" aria-controls="sq-ov"><svg viewBox="0 0 64 64" aria-hidden="true" focusable="false"><defs>
+<button id="sq-ov-btn" type="button" aria-label="Terminal - Claude CLI" title="Terminal - Claude CLI" aria-haspopup="dialog" aria-expanded="false" aria-controls="sq-ov"><svg viewBox="0 0 64 64" aria-hidden="true" focusable="false"><defs>
 <radialGradient id="sq-ov-g-ring" cx="38%" cy="28%" r="80%"><stop offset="0" stop-color="#eef1f5"/><stop offset=".3" stop-color="#9aa1ab"/><stop offset=".65" stop-color="#40454d"/><stop offset="1" stop-color="#121417"/></radialGradient>
 <radialGradient id="sq-ov-g-lens" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#fff7dc"/><stop offset=".09" stop-color="#ffc640"/><stop offset=".26" stop-color="#ff3a10"/><stop offset=".58" stop-color="#a50000"/><stop offset="1" stop-color="#2a0000" stop-opacity="0"/></radialGradient>
 <clipPath id="sq-ov-clip"><circle cx="32" cy="32" r="21"/></clipPath></defs>
@@ -123,7 +153,9 @@ html.sq-over .sq-ov-back{display:inline-flex;align-items:center;min-height:44px;
 </svg></button>
 <div id="sq-ov" role="dialog" aria-labelledby="sq-ov-title" hidden>
 <div id="sq-ov-handle" role="separator" aria-orientation="vertical" aria-label="Resize the session panel" tabindex="0"></div>
-<header><h2 id="sq-ov-title">Chat with the AI</h2>
+<header><h2 id="sq-ov-title">Terminal - Claude CLI</h2>
+<button type="button" class="sq-ov-dockctl sq-ov-fsb" id="sq-ov-fsdown" aria-label="Smaller text" title="Smaller text">A−</button>
+<button type="button" class="sq-ov-dockctl sq-ov-fsb" id="sq-ov-fsup" aria-label="Larger text" title="Larger text">A+</button>
 <button type="button" class="sq-ov-dockctl" id="sq-ov-dock" aria-label="Dock right" title="Dock right"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="13" y="5" width="7" height="14" fill="currentColor"/></svg></button>
 <button type="button" class="sq-ov-dockctl" id="sq-ov-undock" aria-label="Undock" title="Undock"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="8" width="13" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M11 4h9v9M20 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
 <button type="button" id="sq-ov-close" aria-label="Close" title="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
@@ -174,12 +206,6 @@ function defaultContext() {
            selection: sheets.slice(0, 6), filters: filters.slice(0, 12), errors: errors.slice(0, 8) };
 }
 if (typeof window.squadPageContext !== "function") window.squadPageContext = defaultContext;
-function draftContext() {
-  let ctx;
-  try { ctx = window.squadPageContext(); } catch (e) { ctx = defaultContext(); }
-  text.value = SQ.draft(ctx || defaultContext());
-  grow(); syncSend();
-}
 function addLine(line) {
   text.value = (text.value && !text.value.endsWith("\n") ? text.value + "\n" : text.value) + line + "\n";
   grow(); syncSend(); text.focus();
@@ -213,22 +239,47 @@ function paintPick() {
   pick.replaceChildren(p, ...items);
 }
 function paintHead() {
-  title.textContent = cur ? `Chat with the AI · ${cur.name || cur.sid.slice(0, 8)}` : "Chat with the AI";
+  title.textContent = "Terminal - Claude CLI";   // the title names the panel, not the session (owner, 2026-11-01)
   syncSend();
+}
+// A read that fails says nothing about the sessions (owner, 2026-11-01): it used to blank the panel and drop the reader's
+// session, so a reload that landed during a hub restart read as "no session runs here". The panel keeps what it shows and
+// asks again, and only a read that answered may say a session is gone.
+let retryT = 0, retryN = 0, missT = 0;
+function retrySoon() {
+  if (retryT || retryN >= 20) return;
+  retryT = setTimeout(() => { retryT = 0; retryN++; loadSessions(); }, 1500);
 }
 async function loadSessions() {
   let srcs = [];
   try { srcs = await window.SQUAD_OV_SOURCES(); } catch (e) { srcs = []; }
-  const found = []; rule = null;
+  const found = []; let rl = null, answered = 0;
   for (const src of srcs || []) {
     try {
       const r = await fetch(src.api + "/project", { cache: "no-store" });
       if (!r.ok) continue;
       const d = await r.json();
-      rule = rule || { send: d.send, why: d.why };
+      answered++;
+      rl = rl || { send: d.send, why: d.why };
       for (const s of d.sessions || []) found.push({ ...s, src, send: d.send, why: d.why });
     } catch (e) { /* that repository's hub did not answer: its sessions are left out */ }
   }
+  if (!answered) {
+    say("Reading the sessions…");
+    retrySoon();
+    if (!cur) empty("Reading the sessions…");
+    return;   // nothing is dropped on a read that did not answer
+  }
+  retryN = 0;
+  // An empty answer never takes away a talk the reader is reading (owner, 2026-11-01): the registry scan passes through
+  // moments with no session, and a restart makes them longer. The panel keeps what it shows and asks again; the empty
+  // screen belongs to a panel that never had a session (#1077).
+  if (cur && !found.length) {
+    say("the session list came back empty · asking again");
+    retrySoon();
+    return;
+  }
+  rule = rl;
   sessions = found;
   let kept = "";
   try { kept = sessionStorage.getItem(STORE + "-sid") || ""; } catch (e) { kept = ""; }
@@ -239,30 +290,187 @@ async function loadSessions() {
   else if (!found.length) empty("No session runs in this project's checkout. Start Claude Code there, then open this again.");
   else empty("Pick a session above.");
 }
+// Only the structure that carries meaning in a 400 px panel: headings, bullets, a fence. Everything else stays text.
+// A transcript names a screenshot by the path it was written to: the hub serves that file and the panel draws a thumbnail
+// (owner, 2026-11-01). "[Image #7]" alone names no file, so it stays text.
+const IMG_RE = /^\s*\[Image: source: ([^\]]+)\]\s*$/;
+function imageNode(path) {
+  const t = cur, a = document.createElement("a"), i = document.createElement("img");
+  a.className = "sq-img"; a.href = t.src.api + "/image?sid=" + encodeURIComponent(t.sid) + "&p=" + encodeURIComponent(path);
+  a.target = "_blank"; a.rel = "noopener";
+  i.loading = "lazy"; i.alt = "screenshot"; i.src = a.href;
+  i.onerror = () => { a.replaceWith(document.createTextNode("[Image: " + path + "]")); };
+  a.append(i);
+  return a;
+}
+// The talk is markdown (owner, 2026-11-01): bold, italic, inline code and a link, built as DOM nodes so the text is never
+// parsed as HTML. A fence, a heading and a list keep their block rules in richText.
+const INLINE_RE = /(\*\*[^*\n]+\*\*|`[^`\n]+`|\*[^*\n]+\*|\[[^\]\n]+\]\([^)\s]+\))/g;
+function inline(el, text) {
+  let last = 0, m;
+  INLINE_RE.lastIndex = 0;
+  while ((m = INLINE_RE.exec(text))) {
+    if (m.index > last) el.append(document.createTextNode(text.slice(last, m.index)));
+    const tok = m[0];
+    if (tok.startsWith("**")) { const b = document.createElement("b"); b.textContent = tok.slice(2, -2); el.append(b); }
+    else if (tok.startsWith("`")) { const c = document.createElement("code"); c.className = "sq-ic"; c.textContent = tok.slice(1, -1); el.append(c); }
+    else if (tok.startsWith("[")) {
+      const k = tok.indexOf("]("), a = document.createElement("a");
+      a.textContent = tok.slice(1, k); a.href = tok.slice(k + 2, -1); a.target = "_blank"; a.rel = "noopener"; el.append(a);
+    } else { const it = document.createElement("i"); it.textContent = tok.slice(1, -1); el.append(it); }
+    last = m.index + tok.length;
+  }
+  if (last < text.length) el.append(document.createTextNode(text.slice(last)));
+  return el;
+}
+// A markdown table (owner, 2026-11-01): a header row of pipes, a row of dashes, then the body. Built as a table element, so
+// every cell is text and a cell never carries markup of its own.
+const TBL_ROW = /^\s*\|(.+)\|\s*$/, TBL_SEP = /^\s*\|?\s*:?-{2,}[\s:|-]*$/;
+const tblCells = row => row.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map(c => c.trim());
+function tableNode(head, rows) {
+  const t = document.createElement("table"); t.className = "sq-tbl";
+  const hr = document.createElement("tr");
+  head.forEach(c => { const th = document.createElement("th"); inline(th, c); hr.append(th); });
+  const thead = document.createElement("thead"); thead.append(hr); t.append(thead);
+  const tb = document.createElement("tbody");
+  rows.forEach(r => { const tr = document.createElement("tr");
+    head.forEach((_, i) => { const td = document.createElement("td"); inline(td, r[i] == null ? "" : r[i]); tr.append(td); });
+    tb.append(tr); });
+  t.append(tb);
+  return t;
+}
+function richText(text) {
+  const box = document.createElement("div");
+  box.className = "sq-txt";
+  const lines = String(text || "").split("\n");
+  let buf = [], ul = null, ol_ = null, fence = null;
+  const para = () => { if (!buf.length) return; const p = document.createElement("div"); p.className = "sq-p";
+    buf.forEach((ln, i) => { if (i) p.append(document.createElement("br")); inline(p, ln); }); box.append(p); buf = []; };
+  const list = () => { if (ul) { box.append(ul); ul = null; } if (ol_) { box.append(ol_); ol_ = null; } };
+  const code = () => { if (!fence) return; const d = document.createElement("details"); d.className = "sq-code";
+    const s = document.createElement("summary"); s.textContent = "Code · " + fence.length + " line" + (fence.length === 1 ? "" : "s");
+    const pre = document.createElement("pre"); pre.textContent = fence.join("\n");
+    d.append(s, pre); if (fence.length <= 8) d.open = true; box.append(d); fence = null; };
+  for (let li_ = 0; li_ < lines.length; li_++) {
+    const raw = lines[li_];
+    if (TBL_ROW.test(raw) && TBL_SEP.test(lines[li_ + 1] || "")) {
+      para(); list();
+      const head = tblCells(raw), rows = [];
+      let k = li_ + 2;
+      while (k < lines.length && TBL_ROW.test(lines[k])) { rows.push(tblCells(lines[k])); k++; }
+      box.append(tableNode(head, rows)); li_ = k - 1; continue;
+    }
+    if (raw.trim().startsWith("```")) { if (fence) code(); else { para(); list(); fence = []; } continue; }
+    if (fence) { fence.push(raw); continue; }
+    const h = /^#{1,6}\s+(.*)$/.exec(raw);
+    if (h) { para(); list(); const d = document.createElement("div"); d.className = "sq-h"; inline(d, h[1]); box.append(d); continue; }
+    const li = /^\s*[-*]\s+(.*)$/.exec(raw);
+    if (li) { para(); if (!ul) { ul = document.createElement("ul"); ul.className = "sq-ul"; } const it = document.createElement("li"); inline(it, li[1]); ul.append(it); continue; }
+    const ol = /^\s*(\d+)[.)]\s+(.*)$/.exec(raw);
+    if (ol) { para(); if (!ol_) { ol_ = document.createElement("ol"); ol_.className = "sq-ul sq-ol"; } const it = document.createElement("li"); inline(it, ol[2]); ol_.append(it); continue; }
+    if (!raw.trim()) { para(); list(); continue; }
+    const img = IMG_RE.exec(raw);
+    if (img && cur && cur.src) { para(); list(); box.append(imageNode(img[1])); continue; }
+    list(); buf.push(raw);
+  }
+  if (fence) code();
+  para(); list();
+  return box;
+}
+const CLAMP = { owner: 60, answer: 116, tool: 60 };
+function clamp(body, px) {
+  if (body.scrollHeight <= px + 6) return;
+  body.style.maxHeight = px + "px"; body.style.overflow = "hidden";
+  const b = document.createElement("button"); b.type = "button"; b.className = "sq-more"; b.textContent = "Show more";
+  b.onclick = () => { const on = body.style.maxHeight !== ""; body.style.maxHeight = on ? "" : px + "px";
+                      body.style.overflow = on ? "" : "hidden"; b.textContent = on ? "Show less" : "Show more"; };
+  body.after(b);
+}
+const CLOCK = typeof Intl === "undefined" ? null
+  : new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
+function clock(iso) {
+  if (!iso || !CLOCK) return "";
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? "" : CLOCK.format(d);
+}
 function turnNode(t) {
-  const d = document.createElement("div"), who = document.createElement("span"), body = document.createElement("div");
-  d.className = "sq-turn sq-" + t.role;
-  who.className = "sq-who"; who.textContent = t.role === "owner" ? "You" : t.role === "tool" ? "Tool" : "AI";
-  body.className = "sq-txt"; body.textContent = t.text;
-  d.append(who, body);
+  // A system turn folds to one line (owner, 2026-11-01): a reminder or a hook's note is worth one sentence, not a wall.
+  const onlyImage = /^\s*\[Image: source: [^\]]+\]\s*$/.test(String(t.text || ""));
+  if ((t.role === "system" || t.role === "tool") && !onlyImage) {
+    const d = document.createElement("details"), sum = document.createElement("summary");
+    d.className = "sq-turn sq-" + t.role + " sq-fold";
+    const one = String(t.text || "").replace(/\s+/g, " ").trim();
+    sum.textContent = (t.role === "system" ? "system" : "tool") + " \u00b7 " + (one.length > 72 ? one.slice(0, 72) + "\u2026" : one);
+    d.append(sum, richText(t.text));
+    return d;
+  }
+  const d = document.createElement("div"), who = document.createElement("span");
+  // A screenshot is the owner's, whatever the harness calls the turn: it is a bubble of its own on the owner's side
+  // (owner, 2026-11-01).
+  const role = onlyImage ? "owner" : t.role;
+  d.className = "sq-turn sq-" + role + (onlyImage ? " sq-onlyimg" : "");
+  who.className = "sq-who";
+  who.textContent = !onlyImage && t.role === "owner" ? "\u203A you" : "";
+  const body = richText(t.text);
+  if (who.textContent) d.append(who);
+  d.append(body);
+  const at = clock(t.at);
+  if (at) {
+    const tm = document.createElement("span");
+    tm.className = "sq-time";
+    tm.textContent = at;
+    d.append(tm);
+  }
+  clamp(body, CLAMP[role] || 116);
   return d;
 }
+// An image the owner sent belongs to the message it came with (owner, 2026-11-01): the harness records it as a turn of its
+// own, so it would draw as a second bubble under the first. A turn that is only an image joins the owner turn just above it.
+const IMG_ONLY = /^\s*\[Image: source: [^\]\n]+\]\s*$/;
+function stitch(turns) {
+  const out = [];
+  for (const t of turns || []) {
+    const prev = out[out.length - 1], mine = IMG_ONLY.test(String(t.text || ""));
+    const join = mine && prev && (prev.role === "owner" || IMG_ONLY.test(String(prev.text || "")));
+    if (join) out[out.length - 1] = { ...prev, text: String(prev.text || "").replace(/\s+$/, "") + "\n" + String(t.text) };
+    else out.push(t);
+  }
+  return out;
+}
+function feed(turns) {
+  const { earlier, shown } = SQ.splitEarlier(turns), nodes = [], said = stitch(shown);
+  if (earlier.length) {
+    const d = document.createElement("details"); d.className = "sq-earlier";
+    const s = document.createElement("summary"); s.textContent = "Earlier activity · " + earlier.length + " turns";
+    d.append(s, ...stitch(earlier).map(turnNode)); nodes.push(d);
+  }
+  nodes.push(...said.map(turnNode));
+  return nodes;
+}
+// The feed stays at its newest line (owner, 2026-11-01): a scroll away from the end stops that, and the bottom is re-pinned
+// after the frame in which images and open blocks settle their height.
+let stick = true;
+function pinBottom() { log.scrollTop = log.scrollHeight; requestAnimationFrame(() => { log.scrollTop = log.scrollHeight; }); }
+log.addEventListener("scroll", () => { stick = log.scrollHeight - log.scrollTop - log.clientHeight < 48; });
+log.addEventListener("load", () => { if (stick) pinBottom(); }, true);   // an image lands after the paint
 async function loadConversation() {
   const s = cur;
   if (!s || ov.hidden) return;
   try {
     const r = await fetch(s.src.api + "/conversation?sid=" + encodeURIComponent(s.sid), { cache: "no-store" });
     if (cur !== s) return;
-    if (!r.ok) { if (r.status === 404) { cur = null; loadSessions(); } return; }
+    // A 404 is a question for the session list, never a verdict of its own: only the list read may drop the session, and
+    // one miss is asked about at most every five seconds (#1102, owner, 2026-11-01).
+    if (!r.ok) { if (r.status === 404 && Date.now() - missT > 5000) { missT = Date.now(); loadSessions(); } return; }
     const turns = (await r.json()).turns || [], last = turns[turns.length - 1];
     const sig = turns.length + ":" + (last ? last.id + ":" + last.text.length : "");
     if (sig === lastSig) return;
-    const atEnd = !lastSig || log.scrollHeight - log.scrollTop - log.clientHeight < 48;
+    const atEnd = !lastSig || stick;
     lastSig = sig;
     if (!turns.length) { empty("No turns yet."); lastSig = sig; return; }
-    log.replaceChildren(...turns.map(turnNode));
-    if (atEnd) log.scrollTop = log.scrollHeight;
-  } catch (e) { /* the next poll tries again */ }
+    log.replaceChildren(...feed(turns));
+    if (atEnd) pinBottom();   // the talk opens at its newest line, until the reader scrolls up (owner, 2026-11-01)
+  } catch (e) { console.warn("conversation:", e); }   // the next poll tries again; a swallowed failure froze the feed silently (#1079)
 }
 const uuid = () => (crypto.randomUUID ? crypto.randomUUID()
   : "10000000-1000-4000-8000-100000000000".replace(/[018]/g, c => (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)));
@@ -359,10 +567,33 @@ function placeSheets() {
   de.classList.toggle("sq-over", over);
 }
 for (const el of document.querySelectorAll(SHEETS)) new MutationObserver(placeSheets).observe(el, { attributes: true, attributeFilter: ["class", "style", "hidden"] });
+// The text size is the reader's (owner, 2026-11-01): two buttons in the header step it, and the choice outlives the page.
+const FS_KEY = "sq-ov-fs", FS_MIN = 13, FS_MAX = 22, FS_STEP = 1;   // 13 px is the served floor: the reader never shrinks below it
+let fsNow = 14;
+function fsSet(px) {
+  fsNow = Math.min(FS_MAX, Math.max(FS_MIN, Math.round(px)));
+  ov.style.setProperty("--sq-fs", fsNow + "px");
+  const down = $("sq-ov-fsdown"), up = $("sq-ov-fsup");
+  if (down) down.disabled = fsNow <= FS_MIN;
+  if (up) up.disabled = fsNow >= FS_MAX;
+  try { localStorage.setItem(FS_KEY, String(fsNow)); } catch (e) {}
+}
+function fsInit() {
+  let v = 14;
+  try { v = Number(localStorage.getItem(FS_KEY)) || 14; } catch (e) {}
+  fsSet(v);
+  const down = $("sq-ov-fsdown"), up = $("sq-ov-fsup");
+  if (down) down.onclick = () => fsSet(fsNow - FS_STEP);
+  if (up) up.onclick = () => fsSet(fsNow + FS_STEP);
+}
+const OPEN_KEY = "sq-ov-open";
+function wantOpen(on) { try { localStorage.setItem(OPEN_KEY, on ? "1" : "0"); } catch (e) {} }
+function wasOpen() { try { return localStorage.getItem(OPEN_KEY) === "1"; } catch (e) { return false; } }
 function openOverlay(){
-  ov.hidden = false; btn.setAttribute("aria-expanded", "true");
+  ov.hidden = false; btn.setAttribute("aria-expanded", "true"); wantOpen(true);
   applyLayout();
-  if (!text.value.trim()) draftContext();
+  // The field opens empty (owner, 2026-11-01): the page context is one click away in the + menu, never typed for you.
+  fsInit();
   loadSessions();
   clearInterval(timer); timer = setInterval(loadConversation, SQ.POLL_MS);
   text.focus();
@@ -370,6 +601,7 @@ function openOverlay(){
 function closeOverlay() {
   ov.hidden = true; btn.setAttribute("aria-expanded", "false"); setMenu(false);
   clearInterval(timer); timer = 0;
+  wantOpen(false);
   applyLayout(); btn.focus();
 }
 btn.addEventListener("click", () => (ov.hidden ? openOverlay() : closeOverlay()));
@@ -411,7 +643,14 @@ function frame(t) {
   if (!rest || tg.x || tg.y) kick(); else lastT = 0;
 }
 addEventListener("pointermove", e => { ptr = { x: e.clientX, y: e.clientY }; lastMove = performance.now(); kick(); }, { passive: true });
-document.addEventListener("visibilitychange", () => { lastT = 0; kick(); });
+// A background tab throttles timers to about once a minute, so a reader who works in another window waits (#1079):
+// the talk is read again the moment this one is looked at or focused. Registered once, never per open.
+const reread = () => { if (!ov.hidden && !document.hidden) loadConversation(); };
+document.addEventListener("visibilitychange", () => { lastT = 0; kick(); reread(); });
+addEventListener("focus", reread);
 if (reduced.addEventListener) reduced.addEventListener("change", kick);
 applyLayout(); syncSend();
+// A reload puts the panel back as it was left (owner, 2026-11-01): the page reloads when the hub build changes, and the
+// terminal closing on that reload loses the reader's place.
+if (wasOpen()) openOverlay();
 })();

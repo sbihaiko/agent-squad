@@ -90,7 +90,22 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
     [ $rc = 0 ] || { mark "$tip" "not promoted: $(printf '%s' "$o" | tail -1)"; exit 1; }
     mark "$tip" "promoted: the delta carried the full pass ($state/delta-pass.log)"; exit 0
   fi
-  py=${SG_GATE_PY:-${SG_CHECKOUT:+$SG_CHECKOUT/.venv/bin/python}}; [ -x "$py" ] || py=python3
+  # The interpreter is the one that holds the suite's own tools. A checkout with no venv of its own (a worktree beside the main
+  # one) must not fall back to a python3 without mypy: the suite then dies on a missing module and that reads as a red of the
+  # tip, which is a defect of the proof, not of the tip (ADR-0018). Look beside the worktree's common git directory, and refuse
+  # the pass outright when no interpreter holds mypy. The refusal writes no marker, so a later pass takes the same tip.
+  py=${SG_GATE_PY:-}
+  [ -n "$py" ] && { [ -x "$py" ] || { echo "promote-pass: SG_GATE_PY $py is not executable; nothing was proved" >&2; exit 2; }; }
+  if [ -z "$py" ] && [ -n "${SG_CHECKOUT:-}" ]; then
+    py=$SG_CHECKOUT/.venv/bin/python; [ -x "$py" ] || py=
+    if [ -z "$py" ]; then
+      common=$(git -C "$SG_CHECKOUT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+      [ -n "$common" ] && { py=$(dirname "$common")/.venv/bin/python; [ -x "$py" ] || py=; }
+    fi
+  fi
+  [ -n "$py" ] || py=python3
+  "$py" -c "import mypy" >/dev/null 2>&1 \
+    || { echo "promote-pass: $py holds no mypy, so the suite would answer a red of the tip that is a red of the proof; nothing was proved" >&2; exit 2; }
   suite=${SG_PROMOTE_SUITE:-"$py -m ruff check squad tests && $py -m mypy squad && $py -m pytest -p no:deepeval -n ${SG_PROMOTE_WORKERS:-$(sg_battery_workers)} && $py -m pytest -p no:deepeval -p no:xdist"}
   out=$state/promote-suite-${tip:0:12}.log
   cores2=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 1); lim2=${SG_PROMOTE_LOAD_LIMIT:-$cores2}

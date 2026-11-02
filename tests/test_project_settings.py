@@ -173,3 +173,9 @@ def test_the_defaults_checker_and_config_check_read_one_catalog():
     cfg = defaults.load()
     cfg["limits"]["max_stalls"] = 10 ** 9          # past the catalog's upper bound: the plugin file is held to the same range
     assert defaults.check(cfg) == ["limits.max_stalls"]
+
+
+def test_this_repository_overlay_raises_only_the_run_slot_cap_to_six():
+    overlay = yaml.safe_load((Path(__file__).resolve().parents[1] / "docs" / "squad" / "defaults.yaml").read_text())
+    assert overlay["caps"] == {"runs": 6}
+    assert overlay["limits"]["max_budget_usd"] == 30

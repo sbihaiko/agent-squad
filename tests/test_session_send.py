@@ -135,6 +135,44 @@ def test_one_message_on_the_wire_follows_the_protocol_fields(home, tmp_path):
     assert msg["from_name"] == "squad-hub" and msg["msg_id"] == CID and msg["priority"] == "next"
 
 
+def test_the_wire_asserts_the_mode_the_session_last_recorded(home, tmp_path):
+    """A send into a session that bypasses permissions is held for approval unless its sender asserts a mode
+    (`docs/design/session-wire-protocol.md`): the hub reads the mode the session wrote in its own transcript (owner, 2026-11-01)."""
+    send = load_send()
+    path = add_session(home, "s1", tmp_path / "app")
+    path.write_text(path.read_text() + json.dumps({"type": "user", "permissionMode": "bypassPermissions",
+                                                   "message": {"role": "user", "content": "hi"}}) + "\n")
+    send.send("p1", "s1", "hello there", CID, profiles_of=profile_p1, root=home.state)
+    assert inbox_of(home).frames[1]["from_mode"] == "bypassPermissions"
+
+
+def test_the_wire_falls_back_to_the_sessions_own_flags_when_the_transcript_has_no_mode(home, tmp_path):
+    """A session writes its mode line with its first turn, and the owner reads the hub from the web, where a held message
+    has no approval to reach it (#1081): the hub reads the mode the target process was started with."""
+    send = load_send()
+    proc = subprocess.Popen([sys.executable, "-c", "import time;time.sleep(30)", "--dangerously-skip-permissions"])
+    try:
+        add_session(home, "s1", tmp_path / "app", pid=proc.pid)
+        assert send.sessions.permission_mode(tmp_path / "app", "s1", proc.pid) == "bypassPermissions"
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_the_targets_argv_is_read_whole_past_a_truncating_ps_column(home, tmp_path):
+    """CI cut the target's flags at the `ps` column and read the mode as empty (2026-11-02): the reader takes the process's
+    argv whole, so a flag behind a long argument still answers."""
+    send = load_send()
+    proc = subprocess.Popen([sys.executable, "-c", "import time;time.sleep(30)", "x" * 300,
+                             "--dangerously-skip-permissions"])
+    try:
+        add_session(home, "s1", tmp_path / "app", pid=proc.pid)
+        assert send.sessions.permission_mode(tmp_path / "app", "s1", proc.pid) == "bypassPermissions"
+    finally:
+        proc.kill()
+        proc.wait()
+
+
 def test_two_concurrent_sends_with_one_id_send_once(home, tmp_path):
     send = load_send()
     add_session(home, "s1", tmp_path / "app")
@@ -513,3 +551,15 @@ def test_a_loop_switch_write_through_the_mux_gets_an_answer(home, tmp_path, hub)
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def test_the_project_route_names_the_profile_the_hub_was_loaded_under(home, tmp_path, hub, monkeypatch):
+    """hubmux.py pins the profile environment around the hub's import and restores the shell's after it, so a read of
+    SG_PROFILE at request time found nothing and the route answered no session through the mux (#1073). The hub keeps
+    the name it was loaded under."""
+    h = hub()
+    seen = []
+    h.mod.sessions.project_sessions = lambda profile, checkout, profiles_of=None: seen.append(profile) or []
+    monkeypatch.delenv("SG_PROFILE", raising=False)
+    h.mod.project_payload(SimpleNamespace(tailnet=False))
+    assert seen == ["p1"], seen

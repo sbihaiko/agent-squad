@@ -189,6 +189,7 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 #5aa9ff}
 <main>
 <section data-panel="monitor">
 <!--INST_CARD-->
+<div id=iloop></div>
 <div id=loop-box>
 <div id=loop><span id=loop-text>loading</span></div>
 <div id=loop-ctl>
@@ -411,8 +412,8 @@ const $ = s => document.querySelector(s), esc = s => escHTML(s);
 /*INST_JS*/
 return { instDraw };
 })();
-$("iloop").append($("loop-box"));   // the loop row of the card is this page's own control, which obeys the hub's actions
 // The card is the whole tab here: a tap on its title never folds it (the desktop's card still folds).
+$("iloop").append($("loop-box"));   // this page keeps the switch in its own card (owner, 2026-11-01)
 const instHead = $("inst").querySelector("summary");
 instHead.addEventListener("click", e => e.preventDefault());
 instHead.tabIndex = -1;

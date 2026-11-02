@@ -86,12 +86,13 @@ async def test_next_words_continue_drops_a_fail_and_exit_fail_ends_the_loop(tmp_
 async def test_every_entry_starts_a_fresh_session_and_the_artifact_decides_the_outcome(tmp_path):
     a = agent("a", output_key="x")
     d = doc([a, {"name": "l", "kind": "loop", "max": {"value": 3, "min": 1}, "children": ["a"]}], ["l"])
-    eng = run_engine(d, {"a": [{"output": {"nope": 1}, "spend": 0.1}, {"output": None, "spend": 0.1}, {"output": {"x": 1}, "spend": 0.1}]}, tmp_path)
+    ended = {"subtype": "success", "is_error": False, "last": "done"}
+    eng = run_engine(d, {"a": [{"output": {"nope": 1}, "spend": 0.1, "ended": ended}, {"output": None, "spend": 0.1, "ended": ended}, {"output": {"x": 1}, "spend": 0.1}]}, tmp_path)
     v = await eng.run()
     assert v.verdict == "completed"
     assert len({c.session_id for c in eng.adapter.calls}) == 3
     outs = [e for e in record.read(tmp_path / "record.jsonl") if e["event"] == "outcome" and e["node"] == "a"]
-    assert [e["reasons"] for e in outs] == [["artifact_missing"], ["artifact_missing"], []]
+    assert [e["reasons"] for e in outs] == [["child_ended_early"], ["child_ended_early"], []]
 
 
 async def test_a_needs_human_answer_without_the_output_key_is_still_needs_human(tmp_path):    # #158

@@ -63,6 +63,21 @@ def test_a_spec_whose_children_are_below_doing_keeps_the_owners_column(current):
     assert _load().fold(["Todo", "Backlog"], current) == (None, False)
 
 
+@pytest.mark.parametrize("owner", ["Todo", "Backlog"])
+def test_a_spec_the_fold_lifted_to_doing_returns_to_the_owners_column(owner):
+    """Doing only mirrors live children, and the fold is the spec card's only writer (#1034): once no child reaches Doing,
+    the card goes back to the column its owner gave it, undoing the loop's own write (ADR-0143)."""
+    assert _load().fold(["Todo", "Backlog"], "Doing", owner) == (owner, False)
+
+
+def test_the_return_to_the_owners_column_needs_a_card_in_doing_and_a_column_to_return_to():
+    fold = _load().fold
+    assert fold(["Todo"], "Todo", "Backlog") == (None, False), "a card below Doing keeps its column"
+    assert fold(["Todo"], "Doing", "") == (None, False), "with no owner column there is nothing to return to"
+    assert fold(["Todo"], "Doing", "Closed") == (None, False), "a terminal column is never a return"
+    assert fold(["In Progress", "Todo"], "Doing", "Todo") == ("Doing", False), "a live child holds it in Doing"
+
+
 @pytest.mark.parametrize("current", ["Closed", "Abandoned"])
 def test_a_terminal_spec_whose_child_reopens_to_todo_keeps_its_column_and_is_tagged(current):
     assert _load().fold(["Todo", "Abandoned"], current) == (current, True)
