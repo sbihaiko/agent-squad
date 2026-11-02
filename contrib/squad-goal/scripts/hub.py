@@ -4376,7 +4376,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 @media (max-width:600px){body{height:auto}body.tkopen #win{margin-right:0}body.tkopen #board{width:auto}#win{display:block;overflow:visible}body.dockb #win{display:block;grid-template-columns:none;grid-template-rows:none}#side{width:auto;border-right:0;border-bottom:1px solid var(--line)}body.dockb #side{grid-row:auto;grid-column:auto}#main{min-height:50vh}body.dockb #main{grid-column:auto;grid-row:auto}#board{width:auto}body.dockb #board{grid-column:auto;grid-row:auto;height:60vh}#lbody input{width:92px}}
 /* The page frame of the mock (#889): the header with its tabs, and the sidebar cards. */
 /* The loop switch (#923): the strip's draining and starting states, Settings > Loop and Access, and the stop confirm. */
-#lopb .ls.draining,#lopb .ls.starting{color:var(--warn)}#lopb .ls{font-weight:600}#loopbtn{padding:2px 10px;font-size:var(--fs-min)}#loopbtn:disabled{opacity:.6;cursor:default}#lopb .ls.on{color:var(--ok)}#lopb .ls.off{color:var(--warn)}
+#lopb .ls.draining,#lopb .ls.starting{color:var(--warn)}#lopb .ls{font-weight:600}#lopb .lsw{position:relative;flex:none;width:46px;height:26px;padding:0;border:0;border-radius:13px;background:#3a414c;cursor:pointer;transition:background .15s}#lopb .lsw[aria-checked=true]{background:var(--ok)}#lopb .lsw i{position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;transition:transform .15s}#lopb .lsw[aria-checked=true] i{transform:translateX(20px)}#lopb .lsw:disabled{opacity:.6;cursor:default}#lopb .lsw:focus-visible{outline:2px solid var(--acc);outline-offset:2px}#lopb .ls.on{color:var(--ok)}#lopb .ls.off{color:var(--warn)}
 #lopb .lnow{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#10141a;margin:6px 0}#lopb .lnow small{display:block;color:var(--mute)}#lopb .lnow button{margin-left:auto}
 #lopb .lwhy{color:var(--warn);margin:4px 0}#lopb .lerr{color:var(--err);margin:4px 0}#lopb ul.laud{list-style:none;margin:4px 0 0;padding:0}#lopb ul.laud li{padding:4px 0;border-bottom:1px solid var(--line)}#lopb ul.laud li:last-child{border:0}
 #accb .kr b{font-weight:500;font-size:var(--fs-min);line-height:1.3;text-align:right}#accb .ok{color:var(--ok)}#accb .no{color:var(--warn)}#accb p{color:var(--mute);margin:8px 0 0}
@@ -4442,7 +4442,7 @@ header.top .pill{font-size:var(--fs-min);color:var(--mute)}
 <span class=pill id=bread></span></header>
 <div id=win>
 <aside id=side>
-<details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div class=ian id=ian></div><div id=ispec></div><div id=ispeed></div><div id=ilate></div></div></details>
+<details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div id=ispeed></div><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div class=ian id=ian></div><div id=ispec></div><div id=ilate></div></div></details>
 <details id=usage class=sp><summary>Usage</summary><div class=sb><div class="igs isub" id=isub title="subscriptions: the used share of the weekly window and the days to its reset"></div></div></details><details id=stats class=sp><summary>Spend<span class=sr id=stsr></span></summary><div class=sb><h4>Tokens <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Counted in tokens: in + out, the same count the ring draws."></span></h4><div class=tot id=tot></div><h4>Tokens over time <span class=row id=per></span></h4><div id=chart></div><h4>Model tokens · this month</h4><div class=m id=piet>in + out</div><div id=pie></div></div></details>
 <details id=lrd class=sp open><summary>Live runs<span class=sr id=lrs></span></summary><div class=sb id=lrun></div></details>
 </aside>
@@ -4540,14 +4540,12 @@ function subsGauges(d){const xs=(d||{}).subs||[];if(!xs.length)return"";
 function instGauges(d){return ldCells(d).map(c=>`<div class="ig${c.red?" ldred":""}">${gaugeSvg((d||{})[c.k.toLowerCase()])}<span class=gv><b>${c.k}</b> ${esc(c.t)}</span></div>`).join("")}
 const instFact=(facts,k)=>(facts||[]).find(f=>f&&f.key===k);
 function instTile(k,f,lead){if(!f)return{k,text:"no reading",tone:"neutral"};const p=(f.parts||[])[0]||{},t=String(f.text||"").replace(lead,"").trim()||"?";return{k,text:t,tone:p.tone==="ok"||p.tone==="err"?p.tone:"neutral",tip:f.tip||null,detail:f.detail||null,times:p.times||null}}
-function instTiles(facts){const lp=instFact(facts,"loop"),on=lp?/:ON$/.test(lp.text):null;
- return[instTile("Gate",instFact(facts,"gate"),/^gate\s*/),
-  {k:"Loop",text:on===null?"?":on?"ON":"OFF",tone:on===null?"neutral":on?"ok":"err"}]}
+function instTiles(facts){return[instTile("Gate",instFact(facts,"gate"),/^gate\s*/)]}
 const iq=t=>esc(t).replace(/"/g,"&quot;");
 function tileHtml(t){const v=t.href?esc(t.text).replace(/PR #\d+/,x=>`<a target=_blank rel=noopener href="${iq(t.href)}">${x}</a>`):esc(t.text),
  d=(t.detail||[]).length?`<details><summary>${t.detail.length} failed</summary><ul>${t.detail.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></details>`:"";
  return `<div class="at ${t.tone}"${t.tip?` title="${iq(t.tip)}"`:""}><span class=ah><span class=dot aria-hidden="true"></span>${esc(t.k)}</span><span class=av>${v}</span>${t.times?`<span class=atm>${esc(t.times)}</span>`:""}${d}</div>`}
-function instSum(facts){const t=instTiles(facts);return t.find(x=>x.k==="Loop").text+" · "+t.filter(x=>x.k!=="Loop"&&x.tone==="err").length+" fail"}
+function instSum(facts){return instTiles(facts).filter(x=>x.tone==="err").length+" fail"}
 function speedRow(sp){if(!sp)return `<div class="spd none"><b>Throughput</b><span class=spn>no history yet</span></div>`;
  const {today,median,min,max,trend}=sp,hi=Math.max(max||0,today||0,1),at=v=>Math.max(0,Math.min(100,100*(v||0)/hi));
  const tag=trend==="up"?["\u25B2","accelerating","up"]:trend==="down"?["\u25BC","slowing","down"]:trend==="flat"?["\u25AC","steady","flat"]:["\u25CB","first day","wait"];
@@ -5310,14 +5308,13 @@ setInterval(()=>{const b=$("#bread");if(!b)return;b.textContent=lastRead?`board 
 let loopV=null,loopErr="";
 const loopWhen=s=>{const m=String(s||"").match(/^(\d{4}-\d\d-\d\d)T(\d\d:\d\d)/);return m?m[1]+" "+m[2]:String(s||"")};
 const loopBy=v=>v.who?`${v.who} · ${loopWhen(v.when)}`:"";
-const loopBtn=v=>({on:"Stop…",draining:"Stop now…",starting:"Starting…"})[v.state]||"Start loop";
-const loopTip=v=>!v.write?v.reason:v.state==="on"?"stop after the live runs and gates finish, or now":v.state==="draining"?"stop now: kills what is still live":v.state==="starting"?"the loop is starting":"start the loop (watchd)";
-const loopB=v=>`<button data-loop${v.write&&v.state!=="starting"?"":" disabled"} title="${esc(loopTip(v))}">${loopBtn(v)}</button>`;
+const loopTip=v=>!v.write?v.reason:v.state==="on"?"turn off: stop after the live runs and gates finish, or now":v.state==="draining"?"turn on: keep the loop running; turn off again to stop now":v.state==="starting"?"the loop is starting":"turn on: start the loop (watchd)";
+const loopSw=v=>`<button type=button role=switch aria-label="Loop" aria-checked="${v.state!=="off"}" data-loop${v.write&&v.state!=="starting"?"":" disabled"} class=lsw title="${esc(loopTip(v))}"><i aria-hidden="true"></i></button>`;
 const loopAct=e=>e.failed?`${String(e.action||"")} failed: ${e.failed}`:e.action==="drain"?"stop after the live runs and gates finish":e.action==="stop-now"?`stop now${e.killed?` (killed ${(e.killed.runs||[]).length} runs, ${(e.killed.gates||[]).length} gates${e.survived?`; ${(e.survived.runs||[]).length+(e.survived.gates||[]).length} not ended`:""})`:""}`:String(e.action||"");
 const loopRun=r=>String(r).split("/").filter(Boolean).pop()||String(r);
-const loopSetHtml=v=>`<div class=lnow><span><span class="ls ${esc(v.state)}">Loop: ${esc(v.state)}</span><small>${v.who?`changed by ${esc(v.who)} at ${esc(loopWhen(v.when))}`:"no change from the hub yet"}${v.state==="draining"?` · ${v.live.runs.length+v.live.gates.length} live to finish`:""}</small></span>${loopB(v)}</div>`
+const loopSetHtml=v=>`<div class=lnow>${loopSw(v)}<span><span class="ls ${esc(v.state)}">Loop ${esc(v.state)}</span><small>${v.who?`changed by ${esc(v.who)} at ${esc(loopWhen(v.when))}`:"no change from the hub yet"}${v.state==="draining"?` · ${v.live.runs.length+v.live.gates.length} live to finish`:""}</small></span></div>`
  +(v.write?"":`<div class=lwhy>${esc(v.reason)}. The rule is in Access.</div>`)+(v.failed?`<div class=lerr role=alert>The last start failed: ${esc(v.failed)}</div>`:"")+(loopErr?`<div class=lerr role=alert>${esc(loopErr)}</div>`:"")
- +`<p class=m>A stop drains by default: no new dispatch, the live runs and gates finish, then the loop stops. Each change writes one line to the change log.</p>`
+ +`<p class=m>Turning it off drains: no new dispatch, the live runs and gates finish, then the loop stops. Each change writes one line to the change log.</p>`
  +`<h4>Changes</h4><ul class=laud>${v.log.length?v.log.map(e=>`<li><b>${esc(loopWhen(e.at))}</b> · ${esc(e.who)} (${esc(e.from)}) · ${esc(loopAct(e))}</li>`).join(""):"<li class=m>no change yet</li>"}</ul>`;
 const loopConfirmHtml=v=>{const r=v.live.runs,g=v.live.gates,drain=v.state==="on";
  return `<b>Stop the loop?</b><p class=m>Live now: ${r.length} run${r.length===1?"":"s"}, ${g.length} gate${g.length===1?"":"s"}.</p>`
@@ -5335,8 +5332,7 @@ const accHtml=v=>{const a=v.access||{},yn=x=>x?"<span class=ok>allowed</span>":"
 // The Monitor shows the loop state as one read-only line: the switch itself lives in the Loop panel, so one control
 // writes the switch and no second button carries the same id (ADR-0162).
 function loopDraw(){if(!loopV)return;const b=$("#lopb"),h=loopSetHtml(loopV);if(b.dataset.h!==h){b.dataset.h=h;b.innerHTML=h}
- const c=$("#accb"),ah=accHtml(loopV);if(c.dataset.h!==ah){c.dataset.h=ah;c.innerHTML=ah}
- $("#lopsr").textContent=`${loopV.state}${loopV.who?` · ${loopV.who} · ${loopWhen(loopV.when)}`:""}`}
+ const c=$("#accb"),ah=accHtml(loopV);if(c.dataset.h!==ah){c.dataset.h=ah;c.innerHTML=ah}}
 async function loopPoll(){try{loopV=await (await fetch("/api/loop")).json();loopDraw()}catch(e){}}
 async function loopPost(body){loopErr="";try{const r=await fetch("/api/loop",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}),d=await r.json();if(!r.ok)loopErr=d.reason||d.err||"refused"}catch(e){loopErr="the hub did not answer"}
  await loopPoll();loopDraw()}
