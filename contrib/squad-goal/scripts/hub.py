@@ -2217,15 +2217,21 @@ def _start_dashboard(folder):
     if p.returncode != 0: raise RuntimeError((p.stderr or "").strip().splitlines()[-1:] or "exit " + str(p.returncode))
     return int(p.stdout.split()[-1])
 
+UNREADABLE_TIP = "the record read empty on this poll: the figures are from the last read that had an event"
+READ_FIGURES = {}   # run folder -> (the last scan that had an event, the record's write time then)
+
 def run_row(d, port, ps_lines):
     """One run folder's row of the list and its load-attribution entry (None while the record is empty). `port` is its
     dashboard server's, or "" when it has none."""
     p = pathlib.Path(d) / "record.jsonl"
     r = scan(p)
-    if r is None:
+    unreadable = r is None or r["t0"] is None
+    if unreadable and d not in READ_FIGURES:
         b = badge_of("starting")
         return {"id": os.path.basename(d), "port": port, "state": "starting", "badge": b["text"], "tip": b["title"], "label": "run " + os.path.basename(d)[-6:], "issues": [], "age": 0, "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": 0, "spend": 0, "dur": 0, "kind": "code", "live": True, "running": True, "agents": 0}, None
-    age = time.time() - p.stat().st_mtime; st = state_of(r, age)
+    if unreadable: r, written = READ_FIGURES[d]
+    else: written = p.stat().st_mtime; READ_FIGURES[d] = (r, written)
+    age = time.time() - written; st = state_of(r, age)
     try: request = (pathlib.Path(d) / "request.txt").read_text(errors="replace")
     except OSError: request = None
     gone = run_gone(r, age, ps_lines, d, request)   # killed: no verdict will come, so it is not live whatever its age
@@ -2235,6 +2241,7 @@ def run_row(d, port, ps_lines):
     b = badge_of(st, r)
     if gone: b = gone_badge(b)
     rank = run_rank(st, live=not gone)
+    if unreadable: st, b = "unreadable", {**badge_of("unreadable"), "title": UNREADABLE_TIP}
     t1 = r["t1"] or time.time()
     return {"id": os.path.basename(d), "port": port, "state": st, "badge": b["text"], "tip": b["title"], "label": r.get("label"), "issues": r["issues"], "issue_src": r.get("issue_src"), "issue_why": r.get("issue_why"), "age": int(age), "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": rank, "spend": r["spend"], "dur": round((t1 - (r["t0"] or t1)) / 60, 1), "kind": r.get("kind", "code"), "fix": r.get("fix"), "stack": r.get("stack"), "bug": r.get("bug"), "merge": r.get("merge"), "titles": {i: TITLE.get(int(i), "") for i in r["issues"]}, "live": not gone, "running": r["verdict"] is None and not gone, "agents": 0 if gone else r.get("agents") or 0, "share": r.get("share")}, {"id": os.path.basename(d), "dir": d, "wts": r.get("wts") or []}   # the row, and what the load attribution needs and nothing else
 
@@ -4119,6 +4126,7 @@ RUN_STATES = [
     {"state": "handled", "label": "Needs-human run, landed in the fork", "color": "ok", "css": ""},
     {"state": "running", "label": "Run in progress", "color": "run", "css": ""},
     {"state": "starting", "label": "Run starting", "color": "run", "css": "border-style:dotted"},
+    {"state": "unreadable", "label": "Record could not be read on the last poll", "color": "warn", "css": "border-style:dotted"},
     {"state": "stalled", "label": "Run stalled", "color": "wait", "css": "border-style:dashed"},
     {"state": "no verdict yet", "label": "No verdict yet", "color": "none", "css": ""},
 ]
@@ -4557,7 +4565,7 @@ function drawList(){
   if(openGroups===null){const first=GROUPS.find(g=>by[g[0]]);openGroups=new Set(first?[first[0]]:[]);saveGroups()}   // nothing stored yet: the first filled group opens once
   const filled=GROUPS;   // the whole age ladder stays visible, so a band that holds no run still draws its header, and an open group that emptied keeps its header and shows no rows
   const ccRow=r=>{const h=r.held&&runs.some(x=>x.id===r.held)?r.held:null;return `<div class="r cc ${h&&shown.has(h)?"show":""}"${h?` data-id="${esc(h)}" title="open ${esc(h)}"`:""}><div><span class="b ${r.state}"${r.tip?` title="${esc(r.tip)}"`:""}>${esc(r.badge)}</span> <b>${esc(r.label)}</b>${r.sub?`<div class=st title="${esc(r.sub)}">${esc(r.sub)}</div>`:""}${(r.lines||[]).map(l=>`<div class=st>${esc(l)}</div>`).join("")}${r.live?`<div class=m>age ${age(r.age)}</div>`:""}</div></div>`};
-  const row=r=>r.kind==="childcc"?ccRow(r):`<div class="r ${shown.has(r.id)?"show":""}" data-id="${r.id}"><div>${r.kind==="test"?`<span class=kd title="GUI test run">🧪</span>`:""}<span class="b ${r.state}"${r.tip?` title="${esc(r.tip)}"`:""}>${esc(r.badge||r.state)}</span> <b title="${esc(labelTip(r))}">${esc(name(r))}</b>${loadMark(r)}${!(r.issues||[]).length&&r.issue_why&&!r.fix&&!r.url?`<div class=st>${esc(labelTip(r))}</div>`:""}${sub(r)?`<div class=st title="${esc(sub(r))}">${esc(sub(r))}</div>`:""}<div class=m>${r.share?`<span class="sh${r.share.pct===100?" done":""}" title="the newest gate that counted ran ${r.share.total} tests, ${r.share.passed} passed">${r.share.passed}/${r.share.total} · ${r.share.pct}%</span> · `:""}${usd(r.spend)} · ${Math.round(r.dur)}m · ${age(r.age)} ago · ${r.id.slice(-6)} · :${r.port}</div></div><span class=pn title="shown in the panel">${pins.has(r.id)?"●":"○"}</span></div>`;
+  const row=r=>r.kind==="childcc"?ccRow(r):`<div class="r ${shown.has(r.id)?"show":""}" data-id="${r.id}"><div>${r.kind==="test"?`<span class=kd title="GUI test run">🧪</span>`:""}<span class="b ${r.state}"${r.tip?` title="${esc(r.tip)}"`:""}>${esc(r.badge||r.state)}</span> <b title="${esc(labelTip(r))}">${esc(name(r))}</b>${loadMark(r)}${!(r.issues||[]).length&&r.issue_why&&!r.fix&&!r.url?`<div class=st>${esc(labelTip(r))}</div>`:""}${sub(r)?`<div class=st title="${esc(sub(r))}">${esc(sub(r))}</div>`:""}<div class=m>${r.share?`<span class="sh${r.share.pct===100?" done":""}" title="the newest gate that counted ran ${r.share.total} tests, ${r.share.passed} passed">${r.share.passed}/${r.share.total} · ${r.share.pct}%</span> · `:""}${usd(r.spend)} · ${Math.round(r.dur)}m · last write ${age(r.age)} ago · ${r.id.slice(-6)} · :${r.port}</div></div><span class=pn title="shown in the panel">${pins.has(r.id)?"●":"○"}</span></div>`;
   {const live=runs.filter(r=>r.rank===0);$("#lrun").innerHTML=live.map(row).join("")||"<div class=m>no live runs</div>";$("#lrs").textContent=live.length?`${live.length} \u00b7 ${live.filter(r=>r.state==="running").length} running`:"none"}   // the sidebar card: the runs that are live now, the same rows as the history
   $("#list").innerHTML=filled.map(([k,t])=>{const rows=by[k]||[],h=groupHeader(k,rows);return `<div class="gh ${openGroups.has(k)?"op":""}" data-g="${k}" tabindex=0>${t}<span class=sr title="${esc(h.title)}">${h.text}</span></div>${openGroups.has(k)?rows.map(row).join(""):""}`}).join("")||"<div class=m style=padding:10px>no live dashboards</div>";
   document.querySelectorAll(".gh").forEach(e=>e.onclick=()=>{const k=e.dataset.g;   // the header is the only writer: a click toggles this group and nothing else
@@ -4567,7 +4575,7 @@ function drawList(){
 }
 // The Runs chart tab lists the live runs and the runs ended today; a row opens the run sheet, never an embedded dashboard (#984).
 function drawMain(){if(typeof TAB==="string"&&TAB!=="flow")return;
-  const row=r=>`<div class=r data-rid="${esc(r.id)}" tabindex=0 role=button><span class="b ${esc(r.state)}">${esc(r.badge||r.state)}</span><b>${esc(name(r))}</b><span class=m>${usd(r.spend)} \u00b7 ${age(r.age)} ago</span></div>`;
+  const row=r=>`<div class=r data-rid="${esc(r.id)}" tabindex=0 role=button><span class="b ${esc(r.state)}">${esc(r.badge||r.state)}</span><b>${esc(name(r))}</b><span class=m>${usd(r.spend)} \u00b7 last write ${age(r.age)} ago</span></div>`;
   const live=runs.filter(r=>r.rank===0||r.running),ids=new Set(live.map(r=>r.id)),ended=ENDED.filter(r=>!ids.has(r.id));
   $("#main").innerHTML=(live.length?"<h3>Live</h3>"+live.map(row).join(""):"")+(ended.length?"<h3>Ended today</h3>"+ended.map(row).join(""):"")||"<div class=m>no run is live and none ended today</div>"}
 function refresh(){plan();drawList();paintHL();drawMain();rkFollow()}
@@ -5333,7 +5341,7 @@ pollBoard();setInterval(pollBoard,5000);
 function squadChartTick(){if(!window.squadStreamLive&&FLOWK&&!$("#flowov").hidden)flowOpen(FLOWK)}   // with no live stream the open chart is re-read on the board tick
 setInterval(squadChartTick,5000);
 // Last ended: the runs that ended today, read from the hub (#889)
-async function endedPoll(){try{const rows=await (await fetch("/api/ended")).json();ENDED=rows;drawMain();rows.slice(0,5).map(r=>`<div class=r data-rid="${esc(r.id)}" tabindex=0 role=button><div><span class="b ${r.state}">${esc(r.badge||r.state)}</span> <b>${esc(name(r))}</b><div class=m>${usd(r.spend)} \u00b7 ${age(r.age)} ago</div></div></div>`).join("")||"<div class=m>no run ended today</div>"}catch(e){}}
+async function endedPoll(){try{const rows=await (await fetch("/api/ended")).json();ENDED=rows;drawMain();rows.slice(0,5).map(r=>`<div class=r data-rid="${esc(r.id)}" tabindex=0 role=button><div><span class="b ${r.state}">${esc(r.badge||r.state)}</span> <b>${esc(name(r))}</b><div class=m>${usd(r.spend)} \u00b7 last write ${age(r.age)} ago</div></div></div>`).join("")||"<div class=m>no run ended today</div>"}catch(e){}}
 endedPoll();setInterval(endedPoll,30000);
 setTab(location.hash==="#set"?"set":TABS[ls.tab]?ls.tab:"board");   // the phone menu links here with #set (#913)
 // The open page follows the hub build that served it (#1114)
