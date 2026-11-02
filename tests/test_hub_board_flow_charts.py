@@ -545,6 +545,69 @@ def test_the_control_chart_draws_one_mark_per_cluster_on_the_date_axis(hub, boar
     assert "2 issues" in result.stdout
 
 
+def _drawn_lead_svg(hub, board, tmp_path):
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z"), 2: _done(2, "2026-10-09T09:00:00Z")})
+    lead = hub.flow_lead()["lead"]
+    block = _flow_block(hub).split("const drawFlow")[0]
+    drawing = "\n".join([
+        "const COLORS={},COLNAME={issue_closed:'Closed'};", "const esc=s=>String(s);", "const ls={};", block,
+        f"process.stdout.write(flowLead({json.dumps(lead)}));",
+    ])
+    path = tmp_path / "flow-lead-axis.js"
+    path.write_text(drawing)
+    result = subprocess.run(["node", str(path)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
+def _svg_attr(attrs, name):
+    m = re.search(rf"(?:^|\s){name}=(\S+)", attrs)
+    return m.group(1) if m else None
+
+
+def _svg_texts(svg):
+    return [(attrs, body) for attrs, body in re.findall(r"<text ([^>]*)>([^<]*)</text>", svg)]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_lead_time_axis_title_is_drawn_from_the_plot_left_edge(hub, board, tmp_path, monkeypatch):
+    class Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None): return cls(2026, 10, 10, tzinfo=tz)
+    monkeypatch.setattr(hub, "dt", types.SimpleNamespace(**{**vars(hub.dt), "datetime": Frozen}))
+    svg = _drawn_lead_svg(hub, board, tmp_path)
+    left = next(re.search(r"x1=(\S+)", line).group(1)
+                for line in re.findall(r"<line [^>]*>", svg)
+                if re.search(r"x1=(\S+) y1=\S+ x2=\1 ", line))
+    titles = [(attrs, body) for attrs, body in _svg_texts(svg) if "elapsed time" in body]
+    assert len(titles) == 1
+    attrs, body = titles[0]
+    assert body == "elapsed time (linear)", "the full axis title is drawn"
+    assert _svg_attr(attrs, "x") == left, "the title starts at the plot's left edge"
+    assert _svg_attr(attrs, "text-anchor") == "start"
+    assert 0 < float(_svg_attr(attrs, "y")) < float(re.search(r'viewBox="0 0 \S+ (\S+)"', svg).group(1))
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_moving_the_axis_title_leaves_the_other_chart_text_in_place(hub, board, tmp_path, monkeypatch):
+    class Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None): return cls(2026, 10, 10, tzinfo=tz)
+    monkeypatch.setattr(hub, "dt", types.SimpleNamespace(**{**vars(hub.dt), "datetime": Frozen}))
+    svg = _drawn_lead_svg(hub, board, tmp_path)
+    others = [(attrs, body) for attrs, body in _svg_texts(svg) if "elapsed time" not in body]
+    tick_labels = [(attrs, body) for attrs, body in others if _svg_attr(attrs, "x") == "57"]
+    assert len(tick_labels) == 6, "the six y ticks keep their place beside the axis"
+    assert all(_svg_attr(attrs, "text-anchor") == "end" for attrs, _ in tick_labels)
+    x_labels = [(attrs, body) for attrs, body in others if _svg_attr(attrs, "text-anchor") == "middle"]
+    assert len(x_labels) == 7, "the seven x ticks keep their place under the axis"
+    base = float(re.search(r"<line x1=\S+ y1=(\S+) x2=\S+ y2=\1 stroke=var\(--line\)>", svg).group(1))
+    assert {float(_svg_attr(attrs, "y")) for attrs, _ in x_labels} == {base + 17}
+    summary = [(attrs, body) for attrs, body in others if body.startswith(("Average", "Median", "p85"))]
+    assert len(summary) == 3, "each summary line names itself"
+    assert all(_svg_attr(attrs, "text-anchor") == "end" for attrs, _ in summary), "the summary labels keep their right edge"
+
+
 # SPEC 889 #901: the cumulative flow has a range selector and a hover that names each band's count for the day.
 CFD_RANGE_KEYS = ["7", "30", "90", "all"]
 
