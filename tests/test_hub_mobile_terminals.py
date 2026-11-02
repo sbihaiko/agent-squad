@@ -42,6 +42,14 @@ def test_the_open_conversation_polls_its_read_route():
     assert 'every("terminals", loadConversation' in js, "the conversation polls while its panel is shown (#1004)"
 
 
+def test_the_open_conversation_refreshes_the_moment_the_tab_is_visible_again():
+    """#1079: every() skips ticks while the page is hidden, so the return to a visible tab reads the conversation at once."""
+    js = terminals_js()
+    listener = next(row for row in js.splitlines() if "visibilitychange" in row)
+    assert 'document.visibilityState === "visible"' in listener and "loadConversation()" in listener, listener
+    assert 'every("terminals", loadConversation, 3000);' in js
+
+
 def test_older_turns_come_on_request_with_a_cursor():
     assert 'id="termview-older"' in page()
     assert "before=" in terminals_js()

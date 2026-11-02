@@ -393,6 +393,14 @@ def test_an_empty_session_list_never_takes_away_the_talk():
         assert guard < body.index(later), later
     assert "EMPTY_N" not in js
 
+def test_a_poll_that_answers_with_an_error_or_fails_to_render_says_so():
+    """#1079: an error answer and a render that throws both reach the console; neither freezes the feed in silence."""
+    js = OVERLAY.read_text()
+    body = js[js.index("async function loadConversation() {"):js.index("const uuid =")]
+    refusal = body[body.index("if (!r.ok)"):body.index("const turns")]
+    assert 'console.warn("conversation:"' in refusal, refusal
+    assert body.index("try {") < body.index("log.replaceChildren(") < body.index('console.warn("conversation:", e)')
+
 def test_the_talk_is_read_again_the_moment_the_tab_is_looked_at():
     """Owner, 2026-11-01: the panel updated only after a long wait when he worked in another window. A background tab
     throttles timers to about once a minute, so the panel reads the talk again on focus and on coming back (#1079)."""
