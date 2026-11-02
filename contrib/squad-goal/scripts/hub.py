@@ -5336,7 +5336,11 @@ setInterval(squadChartTick,5000);
 async function endedPoll(){try{const rows=await (await fetch("/api/ended")).json();ENDED=rows;drawMain();rows.slice(0,5).map(r=>`<div class=r data-rid="${esc(r.id)}" tabindex=0 role=button><div><span class="b ${r.state}">${esc(r.badge||r.state)}</span> <b>${esc(name(r))}</b><div class=m>${usd(r.spend)} \u00b7 ${age(r.age)} ago</div></div></div>`).join("")||"<div class=m>no run ended today</div>"}catch(e){}}
 endedPoll();setInterval(endedPoll,30000);
 setTab(location.hash==="#set"?"set":TABS[ls.tab]?ls.tab:"board");   // the phone menu links here with #set (#913)
-let ver=null;setInterval(async()=>{try{const v=(await (await fetch("/api/version")).json()).v;if(ver===null)ver=v;else if(v!==ver)location.reload()}catch(e){}},3000);
+// The open page follows the hub build that served it (#1114)
+const SERVED_BUILD=__BUILD__;let hubNote=null;
+function hubStale(msg){if(!msg){if(hubNote)hubNote.remove();hubNote=null;return}if(!hubNote){hubNote=document.createElement("div");hubNote.className="perr";document.body.append(hubNote)}hubNote.textContent=msg}
+setInterval(async()=>{try{const r=await fetch("/api/version");if(!r.ok)throw new Error(String(r.status));const v=(await r.json()).v;hubStale("");if(v!==SERVED_BUILD)location.reload()}catch(e){hubStale("the hub did not answer: this page may be out of date")}},3000);
+addEventListener("pageshow",e=>{if(e.persisted)location.reload()});
 </script>"""
 PAGE = PAGE.replace("/*WEB_TOKENS*/", WEB_TOKENS) + "\n<!--OVERLAY-->"
 SWITCHER_JS = (pathlib.Path(__file__).resolve().parent / "hub-switcher.js").read_text()   # the project switcher, both pages (#876)
@@ -6262,7 +6266,7 @@ def served_page(login=""):
     """The page as the hub serves it, every placeholder substituted. The model-id shape replaces its quoted placeholder:
     json.dumps brings its own quotes, and a second pair is a syntax error that empties the page."""
     who = f"signed in as {html.escape(login)}" if login else ""
-    return PAGE.replace("__WHO__", who).replace("__REPO__", REPO).replace("__CAPS__", json.dumps(loop_caps())).replace("__LOADMS__", str(int(LOAD_SAMPLE_SECS * 1000))).replace("__LOADERR__", str(LOAD_ERR_PCT)).replace("<!--OVERLAY-->", overlay_tag(OVERLAY_HUB) + (stream_tag() if hubstream.enabled() else ""))
+    return PAGE.replace("__WHO__", who).replace("__REPO__", REPO).replace("__CAPS__", json.dumps(loop_caps())).replace("__LOADMS__", str(int(LOAD_SAMPLE_SECS * 1000))).replace("__LOADERR__", str(LOAD_ERR_PCT)).replace("__BUILD__", str(BOOT)).replace("<!--OVERLAY-->", overlay_tag(OVERLAY_HUB) + (stream_tag() if hubstream.enabled() else ""))
 
 
 def own_host(h):
