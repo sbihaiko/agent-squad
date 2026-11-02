@@ -56,9 +56,18 @@ def _strip_comments(text):
 
 
 def _literals(html, tokens=None):
-    """Every colour literal in one served surface, with the token block and every comment removed."""
+    """Every colour literal in one served surface, with the token block and every comment removed.
+
+    A colour sits in a CSS declaration body, in a style attribute, or in a quoted string (a script or an SVG attribute).
+    A hex in a selector is an element id, not a colour, and is never counted.
+    """
     text = html.replace((tokens or TOKENS_FILE.read_text()).strip(), "")
-    return HEX.findall(_strip_comments(text))
+    text = re.sub(r"\$\(\"#[^\"]+\"\)", "", text)   # a selector that names an element, not a colour
+    text = re.sub(r"(?:querySelector(?:All)?|getElementById)\(\"#[^\"]+\"\)", "", text)
+    css = "\n".join(re.findall(r"<style[^>]*>(.*?)</style>", text, flags=re.S))
+    css = re.sub(r"[^{}]+(?=\{)", "", _strip_comments(css))   # drop selector text, keep the declaration bodies
+    quoted = "\n".join(m.group(0) for m in re.finditer(r"\"[^\"]*\"|'[^']*'", _strip_comments(text)))
+    return HEX.findall(css + "\n" + quoted)
 
 
 def _literals_by_surface(surfaces=None):
