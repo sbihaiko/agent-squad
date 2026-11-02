@@ -80,6 +80,7 @@ test-hub-state-default.sh 0.20
 test-hub-test-panel.sh 0.09
 test-hubmux-check-board.sh 0.81
 test-hubmux-live.sh 0.12
+test-hubstream.sh 8.84
 test-issue-ledger.sh 2.21
 test-janitor-board-facts.sh 1.24
 test-janitor-board-reconcile.sh 4.71
