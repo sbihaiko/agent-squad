@@ -7,7 +7,8 @@
 #  (C) a spec #920 whose child #921 is in Doing under a live run is not lifted into Doing;
 #  (D) a live run's card #913 is left alone;
 #  (E) an owner-frozen zombie card #914 keeps its column;
-#  (F) a second pass writes no card again, and no reoffer marker is left behind.
+#  (F) a second pass writes no card again, and no reoffer marker is left behind;
+#  (G) a spec #922 that sits in Doing with no live child goes back to its Backlog column (ADR-0143 derivation correction).
 # Stubbed gh and board; a temp state dir, so the live loop state and board are never read or written.
 # usage: bash test-janitor-reoffer.sh [janitor.py]
 for v in $(env | /usr/bin/grep -o '^SG_[A-Za-z0-9_]*'); do unset "$v"; done
@@ -15,7 +16,7 @@ src=${1:-$(dirname "$0")/janitor.py}; here="$(cd "$(dirname "$src")" && pwd)"; T
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/s/janitor.py"
 cp "$here/issue_state.py" "$here/board_columns.py" "$here/board-definition.json" "$here/issue_ledger.py" "$here/spec_fold.py" "$here/board_facts.py" "$here/refusal.sh" "$here/address.sh" "$here/refusal-names.sh" "$here/ghcall.sh" "$here/ghread.py" "$here/ghthrottle.py" "$T/s/"
-printf '911\tDoing\n912\tTodo\n913\tDoing\n914\tDoing\n915\tDoing\n920\tBacklog\n921\tDoing\n' > "$T/cards.tsv"
+printf '911\tDoing\n912\tTodo\n913\tDoing\n914\tDoing\n915\tDoing\n920\tBacklog\n921\tDoing\n922\tDoing\n' > "$T/cards.tsv"
 cat > "$T/s/board.sh" <<'B'
 #!/bin/bash
 echo "$*" >> "CARDDIR/board.calls"
@@ -44,10 +45,10 @@ case "$a" in
   *graphql*)
     printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":['
     sep=""
-    for n in 911 912 913 914 915 920 921; do
+    for n in 911 912 913 914 915 920 921 922; do
       labs='{"nodes":[{"name":"ready-for-agent"}]}'
       [ "$n" = 914 ] && labs='{"nodes":[{"name":"frozen:owner"}]}'
-      [ "$n" = 920 ] && labs='{"nodes":[{"name":"spec"}]}'
+      [ "$n" = 920 ] || [ "$n" = 922 ] && labs='{"nodes":[{"name":"spec"}]}'
       subs='{"nodes":[]}'
       [ "$n" = 920 ] && subs='{"nodes":[{"number":921}]}'
       printf '%s{"number":%s,"title":"Issue %s","body":"","state":"OPEN","labels":%s,"subIssuesSummary":{"total":0,"completed":0},"subIssues":%s,"comments":{"nodes":[]}}' "$sep" "$n" "$n" "$labs" "$subs"; sep=,
@@ -75,6 +76,7 @@ o=$(run)
 /usr/bin/grep -q '^o 4 Todo 911$' "$T/board.calls" 2>/dev/null && ok "A: a zombie run with no marker returns its card to Todo" || ko "A #911 card not back in Todo: $o $(bc)"
 [ "$(/usr/bin/grep -c '^o 4 [A-Za-z ]* 911$' "$T/board.calls" 2>/dev/null)" = 1 ] && ok "A: the zombie's card is written once" || ko "A #911 written more than once: $(bc)"
 /usr/bin/grep -q '^o 4 Doing 920$' "$T/board.calls" 2>/dev/null && ko "C spec #920 lifted into Doing: $(bc)" || ok "C: a spec card is never lifted into Doing"
+/usr/bin/grep -q '^o 4 Backlog 922$' "$T/board.calls" 2>/dev/null && ok "G: a spec card in Doing with no live child returns to Backlog" || ko "G spec #922 not returned to Backlog: $(bc) $o"
 /usr/bin/grep -q '^o 4 [A-Za-z ]* 913$' "$T/board.calls" 2>/dev/null && ko "D live run #913 card written: $(bc)" || ok "D: a live run's card is left alone"
 /usr/bin/grep -q '^o 4 [A-Za-z ]* 914$' "$T/board.calls" 2>/dev/null && ko "E owner-frozen #914 card written: $(bc)" || ok "E: an owner-frozen card keeps its column"
 o2=$(run)

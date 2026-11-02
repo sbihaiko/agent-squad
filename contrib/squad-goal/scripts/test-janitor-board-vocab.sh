@@ -54,7 +54,7 @@ case "$a" in
     printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":['
     sep=""; for n in 2101 2102 2103 2104 2106 2107 2108 2109 2110; do
       kids='[]'; case $n in
-        2109) labs='{"nodes":[{"name":"spec"}]}'; kids='[{"number":2110},{"number":2107}]';;   # a spec with a child in Doing folds to Doing
+        2109) labs='{"nodes":[{"name":"spec"}]}'; kids='[{"number":2110},{"number":2107}]';;   # a spec with a child in Doing stays below Doing (ADR-0142)
         2102|2108) labs='{"nodes":[{"name":"spec"}]}';;
         2103|2104) labs='{"nodes":[{"name":"needs-owner"}]}';;
         2106) labs='{"nodes":[{"name":"wontfix"}]}';;
@@ -81,8 +81,8 @@ bc() { cat "$T/board.calls" 2>/dev/null; }
 has() { /usr/bin/grep -q "$1" "$T/board.calls" 2>/dev/null; }
 has '^STATUS o 4 Doing 2101$' && ok "a live run holds the card: Doing" || ko "#2101 not Doing: $(bc) $o"
 has '^RUN o 4 2101 run-live ' && ok "the Run fields are written while the card is Doing" || ko "#2101 Run fields missing: $(bc)"
-has '^ADD o 4 Doing 2109$' && ok "a spec with a child in Doing folds to Doing" || ko "#2109 not Doing: $(bc)"
-! has '^RUN o 4 2109 ' && ok "a spec folded to Doing gets no Run fields: no run holds it" || ko "#2109 Run written: $(bc)"
+has '^ADD o 4 Backlog 2109$' && ok "a spec with a child in Doing is added in Backlog, never Doing (ADR-0142)" || ko "#2109 not Backlog: $(bc)"
+! has '^RUN o 4 2109 ' && ok "a spec gets no Run fields: no run holds it" || ko "#2109 Run written: $(bc)"
 ! has ' 2102$' && ok "a spec in Todo with no child past it keeps the owner's column (#550)" || ko "#2102 moved: $(bc)"
 ! has ' 2103$' && ok "an owner-label card keeps its column: the freeze is a label, never a move back (#550)" || ko "#2103 moved: $(bc)"
 ! has ' 2104$' && ok "a run that delivered nothing writes no column over the card the dispatch left, and the freeze stands" || ko "#2104 rewritten: $(bc)"
