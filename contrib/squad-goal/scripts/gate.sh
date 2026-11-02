@@ -21,14 +21,19 @@
 # The sha is the HEAD the gate ran at, read from the working directory. The lock lives in $SG_STATE/locks/gate. With SG_STATE
 # unset it is the one machine-wide /tmp/sg-state, never a TMPDIR path: TMPDIR is per user on macOS, so two users or a launchd
 # job would resolve two lock directories and run two gates together.
-# A gate takes SG_GATE_WORKERS gate slots (#566) of the machine-wide budget (caps.gates, squad/caps.py) BEFORE it takes the lock, in
-# one locked step, so the lock holder never spends its hold deadline waiting for slots. It takes all it asks for when they are free,
-# else the free slots when they number two or more (#734), so a third gate runs with 2 to 4 workers instead of giving up; fewer than
-# two free is no take, so a gate never holds part of its slots while it waits for the rest. SQUAD_GATE_WORKERS is the count the gate
-# actually took, and the battery's pytest runs with it. Slots are re-entrant as the lock is: a gate inside a gate holder
-# (SG_SERIAL_HELD names gate) takes none and keeps the holder's SQUAD_GATE_WORKERS. A project file that lowers
-# caps.gates below SG_GATE_WORKERS gives the gate min(workers, ceiling) slots, never a wait for slots that cannot exist. Try mode (SERIAL_TRY) skips a full budget at once (73); a wait is
-# bound by SERIAL_WAIT_SECONDS and by the call deadline of a run (SG_CALL_DEADLINE_SECONDS), says so on one line, and ends in 75.
+# The lock and the budget are taken in one order: the lock first, the slots second (#1166). A gate queued behind another gate holds
+# no slot while it waits. Inside the lock it takes SG_GATE_WORKERS gate slots (#566) of the machine-wide budget (caps.gates,
+# squad/caps.py) in one locked step: all it asks for when they are free, else the free slots when they number two or more (#734),
+# so a third gate runs with 2 to 4 workers instead of giving up; fewer than two free is no take, so a gate never holds part of its
+# slots while it waits for the rest. The take is one try, never a wait: a gate that cannot take its slots gives the lock back at
+# once and exits 73, so no gate queues behind a budget it cannot use and no resource is held while the other is awaited.
+# SQUAD_GATE_WORKERS is the count the gate actually took, and the battery's pytest runs with it. Slots are re-entrant as the lock
+# is: a gate inside a gate holder (SG_SERIAL_HELD names gate) takes none and keeps the holder's SQUAD_GATE_WORKERS. A project file
+# that lowers caps.gates below SG_GATE_WORKERS gives the gate min(workers, ceiling) slots, never a wait for slots that cannot exist.
+# Every exit path gives both back: serial.sh releases the lock, and the lock holder's EXIT trap releases its slots. A process that
+# dies holding either loses it to the next caller: a lock whose holder is gone is reaped by serial.sh, and a lease whose pid is
+# gone is reclaimed by the next count (squad/caps.py). Try mode (SERIAL_TRY) skips a held lock at once (73); a lock wait is bound
+# by SERIAL_WAIT_SECONDS and by the call deadline of a run (SG_CALL_DEADLINE_SECONDS), says so on one line, and ends in 75.
 # `gate.sh --status <kind> <pass|fail> <sha>` writes status for a gate whose sha is not the working directory's HEAD: a command
 # that calls it sets SG_GATE_STATUS=self, so the gate does not overwrite it with the HEAD it was started in. Each line is written
 # by a temp file and a mv, so no reader sees half of it. SG_STATE unset: /tmp/sg-state, never TMPDIR.
@@ -100,6 +105,18 @@ gate_history() {  # <kind> <result> <sha> <start epoch> <selection> <scope> <out
 }
 case "${1:-}" in
   --status) [ $# = 4 ] || { echo "usage: gate.sh --status <kind> <pass|fail> <sha>" >&2; exit 2; }; status "$2" "$3" "$4"; exit 0;;
+  --inner)  # inside the lock: take the slots, then run the gate. The take is one try, never a wait: a gate that cannot take its
+            # slots exits 73 at once with none, and serial.sh releases the lock on that exit, so it holds neither resource while
+            # it waits for the other. Every later exit path runs the EXIT trap and gives the slots back.
+    shift
+    . "$here/caps.sh"
+    # The lease names the lock holder, this process's parent: a waiter that reaps the lock holder past its deadline then also
+    # frees the lease, so a stopped run never leaves a child's gate holding slots (ADR-0051).
+    SQUAD_GATE_WORKERS=$(sg_caps take gates "gate-$$" --count "${SG_GATE_WORKERS:-6}" --pid "${PPID:-$$}" --target "$PWD" --try) || exit $?
+    export SQUAD_GATE_WORKERS
+    trap 'exit 143' TERM; trap 'exit 130' INT   # a stop past the hold deadline still runs the EXIT trap below
+    trap 'sg_caps release gates "gate-$$"' EXIT
+    bash "$here/gate.sh" --run "$@"; exit $?;;
   --run)    # inside the lock: run the command, then write the line. A command the holder stops at its deadline (TERM) is a fail.
     shift; export GATE_SELECT_FILE GATE_SCOPE_FILE GATE_OUTCOME_FILE GATE_BASE_FILE
     GATE_SELECT_FILE=$(mktemp "${TMPDIR:-/tmp}/gate-select.XXXXXX" 2>/dev/null) || GATE_SELECT_FILE=
@@ -130,9 +147,7 @@ case "${1:-}" in
 esac
 [ $# -gt 0 ] || { echo "usage: gate.sh <command...>   (lock in \$SG_STATE/locks/gate; SG_STATE unset: /tmp/sg-state, never TMPDIR)" >&2; exit 2; }
 export SERIAL_WAIT_SECONDS=${SERIAL_WAIT_SECONDS:-86400} SERIAL_HOLD_SECONDS=${SERIAL_HOLD_SECONDS:-7200}
-case ":${SG_SERIAL_HELD:-}:" in *":gate:"*) ;; *)
-  . "$here/caps.sh"; w=$SERIAL_WAIT_SECONDS
-  [ "${SG_CALL_DEADLINE_SECONDS:-0}" -gt 0 ] 2>/dev/null && [ "$SG_CALL_DEADLINE_SECONDS" -lt "$w" ] && w=$SG_CALL_DEADLINE_SECONDS
-  SQUAD_GATE_WORKERS=$(sg_caps take gates "gate-$$" --count "${SG_GATE_WORKERS:-6}" --pid $$ --target "$PWD" --wait "$w" ${SERIAL_TRY:+--try}) || exit $?
-  export SQUAD_GATE_WORKERS;; esac
-exec bash "$here/serial.sh" gate bash "$here/gate.sh" --run "$@"   # exec: the lock holder is this process, and --run writes the line inside the lock
+case ":${SG_SERIAL_HELD:-}:" in
+  *":gate:"*) exec bash "$here/gate.sh" --run "$@" ;;   # inside a gate holder: no slots of its own, it keeps the holder's count
+esac
+exec bash "$here/serial.sh" gate bash "$here/gate.sh" --inner "$@"   # exec: the lock holder is this process, and --inner takes the slots inside it

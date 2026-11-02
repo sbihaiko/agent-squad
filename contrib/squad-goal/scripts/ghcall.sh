@@ -144,21 +144,39 @@ gh_land_stop() {
 # holds: the loop is never blocked on a file it cannot trust.
 # The nightly full suite decides the same way (#704): a red record at $SG_STATE/nightly-result (nightly.sh) holds delivery
 # until one green run replaces it, because a base whose full suite is red starts work on a defect the loop already found.
-# A missing or unreadable record never holds, by the same rule as above.
+# A bounded record is an attempt the suite never finished: the tip is unproven, never red, so it holds nothing and the pass
+# names the stopped leg on one line, once per record (#1183, ADR-0164). A missing or unreadable record never holds, by the
+# same rule.
 # The promotion proof reserves the machine it measures (#739): promote-pass.sh writes $SG_STATE/promote-reserve while it
 # holds the gate lock, and a dispatch pass starts nothing while a marker younger than SERIAL_HOLD_SECONDS stands, so the
 # suite is not measured against the next wave landing. A marker past that bound is a proof that died and never holds.
 
-# sg_nightly_red   A nightly result record's failing ids when the record is a readable RED one, nothing otherwise. The
-# record is one line, `<epoch> TAB <pass|fail> TAB <sha> TAB <parallel> TAB <serial> TAB <ids>` (nightly.sh, #704), where
-# `<ids>` is ONE JSON array of strings, `[]` when none: a pytest node id may carry a space, so the ids are never split at
-# whitespace. A line the loop cannot trust is no reading and holds nothing (ADR-0153): not six fields, a time that is not
-# a number, an empty sha, a result or a mode outside pass|fail, ids that are not one array of strings, or a result that
-# contradicts the modes. The record is read whole: a file that carries anything after its one line is not that record
-# either, because a first line alone never proves the file whole. The hub drops the same lines, so the two readers never
-# disagree about which record they are looking at.
-sg_nightly_red() {
-  local rec nf ts res sha par ser ids
+# sg_nightly_mode   A nightly record's mode field: `pass`, `fail`, `fail:signal-<n>` for a red leg a signal also stopped,
+# or `bounded:<signal|exit>-<n>` for a leg that ended without naming a failing test (#1183). Anything else is a value the
+# loop cannot trust.
+sg_nightly_mode() {
+  case "$1" in pass|fail) return 0;; esac
+  case "$1" in fail:signal-[0-9]*|bounded:signal-[0-9]*|bounded:exit-[0-9]*) ;; *) return 1;; esac
+  case "${1##*-}" in ''|*[!0-9]*) return 1;; esac   # the number after signal- or exit-, and nothing else
+  return 0
+}
+# sg_nightly_red   A mode a failing test made red: `fail`, or `fail:signal-<n>` when a signal also stopped that leg. A red
+# holds delivery whatever else stopped it; the tag only carries the stop reason.
+sg_nightly_red() { case "$1" in fail|fail:signal-[0-9]*) return 0;; esac; return 1; }
+
+# sg_nightly_state   What a nightly result record says about delivery. The record is one line, `<epoch> TAB
+# <pass|fail|bounded> TAB <sha> TAB <parallel> TAB <serial> TAB <ids>` (nightly.sh, #704, #1183), where `<ids>` is ONE JSON
+# array of strings, `[]` when none: a pytest node id may carry a space, so the ids are never split at whitespace. A line the
+# loop cannot trust is no reading and holds nothing (ADR-0153): not six fields, a time that is not a number, an empty sha,
+# a result or a mode outside the three (a red leg a signal also stopped is `fail:signal-<n>`, still a red), ids that are not
+# one array of strings, or a result that contradicts the modes. The record is read whole: a file that carries anything after
+# its one line is not that record either, because a first line alone never proves the file whole. A bounded result names no
+# failing test, because the leg that was stopped measured none: a bounded record that carries an id is no reading. The hub
+# drops the same lines, so the two readers never disagree about which record they are looking at. Answers 0 and prints the
+# failing ids when the record is RED; 2 and prints the two legs when it is BOUNDED, an attempt the suite never finished, so
+# it holds nothing (ADR-0164); 1 when there is no reading.
+sg_nightly_state() {
+  local rec nf ts res sha par ser ids ids_read
   [ -r "$1" ] || return 1
   rec=$(cat -- "$1" 2>/dev/null; printf x) || return 1   # `x` keeps the trailing newlines a substitution would strip
   rec=${rec%x}; rec=${rec%$'\n'}                          # the one line may end in a newline, and nothing else follows
@@ -169,18 +187,28 @@ sg_nightly_red() {
   par=$(printf '%s\n' "$rec" | cut -f4); ser=$(printf '%s\n' "$rec" | cut -f5); ids=$(printf '%s\n' "$rec" | cut -f6)
   case "$ts" in ''|*[!0-9]*) return 1;; esac
   [ -n "$sha" ] || return 1
-  case "$par" in pass|fail) ;; *) return 1;; esac
-  case "$ser" in pass|fail) ;; *) return 1;; esac
-  case "$res:$par:$ser" in
-    fail:fail:pass|fail:pass:fail|fail:fail:fail) ;;   # a red result names at least one red mode, and nothing else
-    *) return 1;;                                      # a pass, or a result its modes contradict
+  sg_nightly_mode "$par" || return 1
+  sg_nightly_mode "$ser" || return 1
+  # The result follows its modes: pass only when both finished green, fail when a leg named tests, and bounded when a leg
+  # was stopped and none was red. A result its modes contradict is no reading.
+  case "$res" in
+    pass) [ "$par" = pass ] && [ "$ser" = pass ] || return 1;;
+    fail) { sg_nightly_red "$par" || sg_nightly_red "$ser"; } || return 1;;
+    bounded) { ! sg_nightly_red "$par" && ! sg_nightly_red "$ser"; } || return 1
+             { [ "$par" != pass ] || [ "$ser" != pass ]; } || return 1;;
+    *) return 1;;
   esac
   # The ids are one JSON array of strings, read as that array and never as words: a node id may carry a space.
-  printf '%s' "$ids" | python3 -c 'import json,sys
+  ids_read=$(printf '%s' "$ids" | python3 -c 'import json,sys
 try: v=json.load(sys.stdin)
 except Exception: sys.exit(1)
 if type(v) is not list or not all(type(x) is str for x in v): sys.exit(1)
-print(", ".join(v) if v else "no test named")' 2>/dev/null || return 1
+print(", ".join(v) if v else "")' 2>/dev/null) || return 1
+  if [ "$res" = fail ]; then printf '%s\n' "${ids_read:-no test named}"; return 0; fi
+  # A bounded leg measured nothing, so it names no failing test. An id here contradicts the mode, and it is no reading.
+  [ -z "$ids_read" ] || return 1
+  printf 'parallel %s, serial %s\n' "$par" "$ser"
+  return 2
 }
 
 # sg_obligation_red <dir>   The settled-red proof obligations (nightly.sh, spec 1163), one line per settled entry in
@@ -207,7 +235,8 @@ sg_obligation_red() {
 }
 
 gh_dispatch_hold() {
-  local m=${SG_DISPATCH_MAX_WAITING:-} f="${SG_STATE:?gh_dispatch_hold: no state directory}/childcc-waiting" n t line nids r ts o osha ochecks orun
+  local m=${SG_DISPATCH_MAX_WAITING:-} f="${SG_STATE:?gh_dispatch_hold: no state directory}/childcc-waiting" n t line nids nrc r ts o osha ochecks orun
+  local rsha rmt key seen
   # The promotion proof reserves the machine it measures (#739): promote-pass.sh writes $SG_STATE/promote-reserve while it
   # holds the gate lock, and it removes the file on exit, INT and TERM. A marker older than the lock's own bound is a proof
   # that died, and it never holds, by the same rule as the other guards here.
@@ -243,7 +272,22 @@ gh_dispatch_hold() {
       printf '%s\n' "$line"; printf '%s\n' "$line" >> "$SG_STATE/cycle.log"; return 0
     done <<< "$o"
   fi
-  if nids=$(sg_nightly_red "$SG_STATE/nightly-result"); then
+  nids=$(sg_nightly_state "$SG_STATE/nightly-result"); nrc=$?
+  if [ "$nrc" = 2 ]; then
+    # (#1183, ADR-0164) The suite never finished: it names no failing test, so the tip is unproven and never red. One line
+    # says which leg was stopped and how, and the pass goes on. The line is said once per record -- keyed by the sha and the
+    # record's own time -- because a bounded record stands until the next nightly, and one line per poll would bury
+    # cycle.log with the same sentence all day.
+    rsha=$(cut -f3 "$SG_STATE/nightly-result" 2>/dev/null)
+    rmt=$(date -r "$SG_STATE/nightly-result" +%s 2>/dev/null) || rmt=
+    key="$rsha ${rmt:-no-time}"; seen="$SG_STATE/nightly-bounded-noted"
+    [ "$(cat -- "$seen" 2>/dev/null)" = "$key" ] && return 1
+    if printf '%s\n' "$key" > "$seen.$$" 2>/dev/null; then mv -f "$seen.$$" "$seen" 2>/dev/null || rm -f "$seen.$$"; fi
+    line="$(date -u '+%F %T') DISPATCH NOTE: the nightly full suite at ${rsha:0:7} was stopped before it measured anything (${nids}); the tip is unproven, not red, so the pass goes on"
+    printf '%s\n' "$line"; printf '%s\n' "$line" >> "$SG_STATE/cycle.log"
+    return 1
+  fi
+  if [ "$nrc" = 0 ]; then
     # (#747) The record is red for the sha it ran at, not for whatever the tip became. A tip the nightly has not seen is
     # unproven, not red: one line names both shas and the pass delivers, and the next nightly proves the new tip. Each
     # landing carries its own local gate, and the promotion still needs its full proof. A tip the pass cannot read holds.

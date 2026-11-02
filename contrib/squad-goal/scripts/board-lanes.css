@@ -1,6 +1,6 @@
 /* The swimlanes (#890, #891), drawn as the owner-approved mock (#889): one grid per board. Each lane is a header across the grid and one cell per drawn column. */
 body.dockb #bbody.lanes{display:block;overflow:visible}
-#bbody .lgrid{display:grid;grid-template-columns:repeat(var(--vc,1),minmax(170px,1fr));align-content:start;--sep:#353d4b}
+#bbody .lgrid{display:grid;grid-template-columns:repeat(var(--vc,1),minmax(170px,1fr));align-content:start;--sep:var(--line)}
 #bbody .lcolh{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:8px;padding:8px 12px 10px;min-height:40px;background:var(--bg);border-bottom:2px solid var(--sep);font-size:var(--fs-body);font-weight:600;color:var(--fg)}
 #bbody .lcolh b{background:var(--panel);color:var(--mute);border:1px solid var(--line);border-radius:10px;padding:0 8px;line-height:20px;font-size:var(--fs-min);font-weight:600}
 #bbody .lane{display:contents}
@@ -30,12 +30,12 @@ body.dockb #bbody.lanes{display:block;overflow:visible}
 #bbody .lh .lh-counts{grid-column:2;display:flex;justify-content:flex-end;min-width:0;font-size:var(--fs-min);color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap}
 #bbody .lh .lh-counts .lf{flex:none}
 #bbody .lh .lh-counts b{color:var(--fg);font-weight:600;font-variant-numeric:tabular-nums}
-#bbody .lane.alarm .lh .lid{color:var(--bad)}
+#bbody .lane.alarm .lh .lid{color:var(--err)}
 #bbody .cell{min-width:0;min-height:48px;display:flex;flex-direction:column;gap:8px;padding:8px;background:#121519;border-right:1px solid var(--sep);border-bottom:1px solid var(--line)}
 #bbody .cell:last-of-type{border-right:0}
 #bbody .cell .it{margin:0}
-#bbody .bugc{display:inline-block;border-radius:10px;padding:0 8px;line-height:20px;border:1px solid #7a3a46;background:#3a1d2440;color:var(--bad);font-size:var(--fs-min);font-weight:600}
-#bbody .bugc.loop{border-color:#7a3a46;color:var(--bad)}
+#bbody .bugc{display:inline-block;border-radius:10px;padding:0 8px;line-height:20px;border:1px solid #7a3a46;background:#3a1d2440;color:var(--err);font-size:var(--fs-min);font-weight:600}
+#bbody .bugc.loop{border-color:#7a3a46;color:var(--err)}
 #bbody .lempty{padding:24px;color:var(--mute);font-size:var(--fs-body)}
 #lhc:empty{display:none}
 #lhc{margin-left:auto}
@@ -66,5 +66,5 @@ body.dockb #bbody.lanes{display:block;overflow:visible}
 #bbody .lcolh .eye{cursor:pointer;opacity:.6}
 #bbody .lcolh .eye:hover{opacity:1}
 @media (prefers-reduced-motion: reduce){#bbody .lload{animation:none;opacity:1}#bbody .lload i{display:none}}
-#bbody .lane.alarm .lh{border-top:3px solid var(--bad);border-radius:8px 8px 0 0;background:color-mix(in srgb,var(--bad) 9%,var(--panel))}
-#bbody .lane.alarm.coll .lh{border:1px solid var(--line);border-top:3px solid var(--bad);background:color-mix(in srgb,var(--bad) 9%,var(--panel))}
+#bbody .lane.alarm .lh{border-top:3px solid var(--err);border-radius:8px 8px 0 0;background:color-mix(in srgb,var(--err) 9%,var(--panel))}
+#bbody .lane.alarm.coll .lh{border:1px solid var(--line);border-top:3px solid var(--err);background:color-mix(in srgb,var(--err) 9%,var(--panel))}

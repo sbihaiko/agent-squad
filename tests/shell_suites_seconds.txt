@@ -129,7 +129,7 @@ test-live-guard.sh 7.00
 test-merge-audit.sh 1.32
 test-mkreq.sh 6.64
 test-model-recover.sh 0.72
-test-nightly.sh 4.46
+test-nightly.sh 21.23
 test-pass-deadline.sh 15.65
 test-prepush.sh 1.28
 test-profile-check.sh 1.16
