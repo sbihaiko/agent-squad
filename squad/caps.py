@@ -16,9 +16,13 @@ they number two or more, so a third gate runs with fewer workers instead of givi
 a gate never holds part of its slots while it waits for the rest. Bash takes and releases through `python3 -m squad.caps take|release`; the try mode skips at once (exit 73), as
 `SERIAL_TRY` does for serial.sh, and a wait that outlives its bound exits 75. A count above the ceiling is lowered to it.
 
-The loop's free run slots are one count (`free_runs`, `Ceiling.run_holders`): the live leases of every repository, and the runs
-the loop's active list names, less a run whose record carries a final verdict. A finished run frees its slot at once, and its
-folder and record stay listed for the readers that close its issues; the counter is a reader and never rewrites the list.
+The loop's free run slots are one count (`free_runs`, `Ceiling.run_holders`): every live lease machine-wide, and every run the
+loop's active list names whose last invocation has no final verdict, each run once. A finished run frees its slot at once, and
+its folder and record stay listed for the readers that close its issues; the counter is a reader and never rewrites the list.
+The reading is ADR-0105's, the one the dashboard, `wave.sh` and `wtclean.sh` use: a verdict before a later `run_start` or
+`resume` is history, and the run is live again.
+This is the dispatcher's side (ADR-0166): the engine's admission still counts raw leases, and the dispatcher never shows more
+free slots than that admission holds.
 
 Guard: `tests/test_machine_caps.py`.
 """
@@ -38,7 +42,36 @@ from squad.options import OptionError
 
 KINDS = ("runs", "children", "gates", "reviews")
 SKIPPED, EXPIRED = 73, 75   # the exits serial.sh uses for a try-mode skip and for a wait that ran out
-VERDICT = re.compile(r'"event"\s*:\s*"verdict"')   # the record's final verdict, whichever spacing its writer used
+LAUNCH_GRACE = 300   # a listed run with no record holds its slot only through its launch window: the janitor drops it after this bound (rule J)
+
+
+def final_verdict(text):
+    """The record's final verdict: the last `verdict` event after the last `run_start` or `resume`, read as the dashboard,
+    `wave.sh` and `wtclean.sh` read it (ADR-0105). Return the event, or None when the last invocation has no verdict yet.
+    A verdict before a later start is history: a resumed run is live again and holds its slot."""
+    last = None
+    for line in text.splitlines():
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(ev, dict):
+            continue
+        kind = ev.get("event")
+        if kind in ("run_start", "resume"):
+            last = None
+        elif kind == "verdict":
+            last = ev
+    return last
+
+
+def _in_launch_window(folder, now):
+    """True while a listed run with no record is still starting: its `request.txt` (the clock the janitor's rule-J bound and
+    `launch.py` read) is younger than `LAUNCH_GRACE`. No request means the launch never began, so it holds no slot."""
+    try:
+        return now - (folder / "request.txt").stat().st_mtime <= LAUNCH_GRACE
+    except OSError:
+        return False
 
 
 class CapsError(OptionError):
@@ -173,13 +206,18 @@ class Ceiling:
     def waiting(self):
         return self.occupancy()["waiting"]
 
-    def run_holders(self, active_runs, root="."):
+    def run_holders(self, active_runs, root=".", now=None):
         """The runs that hold a slot of `caps.runs`, each named once: every live lease machine-wide, and every run the loop's
-        active list names whose record carries no final verdict. A listed run with a verdict is over: it holds no slot, though
-        its folder and record stay listed for the readers that close its issues (the janitor and childcc read the same file).
-        A lease whose holder resolves to a listed finished run is one the engine has not released yet; it holds no slot either.
-        A listed run with no readable record still holds its slot: a live run keeps it until its verdict exists.
+        active list names whose last invocation has no final verdict. A run whose last verdict follows its last `run_start`
+        or `resume` is over: it holds no slot, though its folder and record stay listed for the readers that close its issues
+        (the janitor and childcc read the same file). A listed entry with no readable record holds its slot through its launch
+        window only: past `LAUNCH_GRACE` the janitor drops a launch that never started, so it never pins a slot, and a listed
+        folder that is gone holds no slot at all.
+        A live lease always counts, even when its run is finished: the engine's admission counts raw leases, and a dispatcher
+        that freed a lingering lease would start a run the engine refuses (ADR-0166). The engine releases its lease before it
+        writes the verdict, so a finished run normally holds none.
         `root` resolves a relative entry, as autofrontier.sh and autobug.sh do (`$SG_CHECKOUT/runs/<name>`)."""
+        now = time.time() if now is None else now
         try:
             rows = Path(active_runs).read_text().split()
         except OSError:
@@ -188,20 +226,25 @@ class Ceiling:
         for r in rows:
             folder = Path(r) if r.startswith("/") else Path(root) / "runs" / r
             listed[folder.name] = folder
-        finished = set()
+        over = set()   # a listed run that holds no slot
         for name, folder in listed.items():
             try:
-                if VERDICT.search((folder / "record.jsonl").read_text()):
-                    finished.add(name)
+                text = (folder / "record.jsonl").read_text()
             except OSError:
-                continue   # no record yet: the run is in its launch window, so it still holds its slot
+                if not _in_launch_window(folder, now):
+                    over.add(name)   # no record and past the launch window: the janitor drops it, so it holds no slot
+                continue
+            if final_verdict(text) is not None:
+                over.add(name)
+        with self._lock():   # a writer holds this lock while it writes a lease, so a lease mid-write is never read as absent
+            leases = self._live("runs")
         holders = []
-        for lease in self._live("runs"):
+        for lease in leases:
             holder = lease.get("holder")
-            if holder not in finished and holder not in holders:
+            if holder not in holders:
                 holders.append(holder)
         for name in listed:
-            if name not in finished and name not in holders:
+            if name not in over and name not in holders:
                 holders.append(name)
         return holders
 
@@ -289,7 +332,8 @@ class Ceiling:
 
 def free_runs(c, active_runs, root="."):
     """The free slots of `caps.runs`: the ceiling less the runs that hold one (`Ceiling.run_holders`), never below zero.
-    This is the one counter the loop's dispatchers read, so a run with a final verdict frees its slot there and nowhere else."""
+    This is the one counter the loop's dispatchers read, so a run whose last invocation ended frees its slot there and
+    nowhere else. The ceiling never widens: the slot is freed, the cap stays."""
     return max(c.caps["runs"] - len(c.run_holders(active_runs, root)), 0)
 
 

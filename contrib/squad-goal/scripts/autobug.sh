@@ -190,9 +190,9 @@ read -r free < <(cd "$SG_CHECKOUT" && python3 - "$SG_STATE/active-runs.txt" <<'P
 import os, sys
 # The free slots come from the machine-wide ceiling caps.runs in squad/caps.py, the one resolution the engine enforces, lowered
 # by the project file of SG_CHECKOUT. `C.free_runs` is the one counter of the runs that hold a slot: every live lease
-# machine-wide and every run the active list names, less a run whose record carries a final verdict (that run is over, and its
-# line stays listed for the readers that close its issues). A missing caps block is a named failure: the pass stops and says
-# so, never a default.
+# machine-wide and every run the active list names whose last invocation has no final verdict (a run whose last verdict follows
+# its last start or resume is over, and its line stays listed for the readers that close its issues). A missing caps block is a
+# named failure: the pass stops and says so, never a default.
 sys.path.insert(0, os.environ.get("SG_SQUAD") or ".")
 from squad import caps as C
 try:
