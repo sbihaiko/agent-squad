@@ -103,8 +103,8 @@
   #hint { grid-column:1; justify-self:start; color:var(--mute); font-size:var(--fs-min); white-space:nowrap; flex:0 0 auto; }
   .card { cursor:move; }
   .card rect { fill:var(--card); stroke:var(--line); stroke-width:1.2; }
-  .card:hover rect { stroke:var(--acc); }
-  .card.sel rect { stroke:var(--acc); fill:var(--raise); stroke-width:2; }
+  .card:hover rect { stroke:var(--edge); }
+  .card.sel rect { stroke:var(--edge); fill:var(--raise); stroke-width:2; }
   .card.err rect { stroke:var(--err); }
   .card text { pointer-events:none; font:var(--fs-min) var(--font-mono); }
   .card .nm { fill:var(--fg); font-size:var(--fs-min); font-weight:600; }
@@ -134,7 +134,7 @@
   .card.o-deadline rect, .card.o-needs-human rect { stroke:var(--warn); fill:var(--tint-warn); }
   .card.o-not-run rect { stroke:var(--mute); stroke-dasharray:2 4; }
   .card.o-started rect { stroke:var(--acc); stroke-dasharray:4 3; }
-  .card.sel rect { stroke:var(--acc); stroke-width:2; }
+  .card.sel rect { stroke:var(--edge); stroke-width:2; }
   .runbox { background:var(--inset); border:1px solid var(--line); border-radius:4px; padding:8px; font:var(--fs-min)/1.6 var(--font-mono); }
   .runbox b { color:var(--fg); }
   .state-completed { color:var(--ok); } .state-none { color:var(--none); } .state-running { color:var(--acc); } .state-stalled { color:var(--warn); font-weight:600; }
@@ -145,7 +145,7 @@
   .group-card.s-deadline > rect, .group-card.s-needs-human > rect { stroke:var(--warn); } .group-card.s-running > rect { stroke:var(--run); stroke-width:3.5; }
   .group-card.s-passed .gl { fill:var(--ok); } .group-card.s-failed .gl { fill:var(--err); } .group-card.s-running .gl { fill:var(--run); }
   .group-card.s-deadline .gl, .group-card.s-needs-human .gl { fill:var(--warn); }
-  .group-card.sel > rect { stroke:var(--acc); stroke-width:2.5; }
+  .group-card.sel > rect { stroke:var(--edge); stroke-width:2.5; }
   .chip-sw { display:inline-block; border:1px solid var(--line); border-radius:999px; padding:0 8px; font-size:var(--fs-min); font-weight:600; }
   .chip-sw.v-ok { border-color:var(--ok); color:var(--ok); } .chip-sw.v-bad { border-color:var(--err); color:var(--err); }
   .chip-sw.v-wait { border-color:var(--wait); color:var(--wait); } .chip-sw.v-none { border-color:var(--none); color:var(--none); }
