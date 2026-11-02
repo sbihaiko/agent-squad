@@ -6,6 +6,8 @@
     "hub-refusal": 0,
     "hub-test-log": 0,
     "hubmux-root": 0,
+    "board-lanes": 0,
+    "run-sheet": 0,
     "dashboard": 0
   },
   "total": 0,

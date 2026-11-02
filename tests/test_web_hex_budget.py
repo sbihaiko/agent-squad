@@ -59,6 +59,9 @@ def _surfaces():
         "hub-refusal": hub.mobile_refusal("reason").decode(),
         "hub-test-log": hub.test_log_page({"issue": 1, "state": "done", "rc": 0, "dir": "d", "cmd": "c"}, "log").decode(),
         "hubmux-root": mux.root_page({}, "squad hub").decode(),
+        # The stylesheets the hub inlines. They are scanned as they are served inside its page (#1185).
+        "board-lanes": "<style>" + (SCRIPTS / "board-lanes.css").read_text() + "</style>",
+        "run-sheet": "<style>" + (SCRIPTS / "run-sheet.css").read_text() + "</style>",
         "dashboard": DASHBOARD.read_text(),
     }
 
@@ -142,12 +145,29 @@ def test_the_literal_count_may_only_fall(surfaces, budget):
     assert sum(found.values()) <= budget["total"], f"{sum(found.values())} literals, recorded total {budget['total']}"
 
 
-def test_the_guard_catches_a_new_literal_on_each_surface():
-    """The scanner is not vacuous: a new hex on any of the three surfaces is found and named."""
+def test_the_guard_catches_a_new_literal_on_each_surface(surfaces):
+    """The scanner is not vacuous: a new hex on any guarded surface is found and named."""
     tokens = TOKENS_FILE.read_text()
-    for name in ("hub", "hub-mobile", "dashboard"):
-        html = f"<style>:root{{--x:#123456}}</style><body>{tokens}"   # a literal beside the module
-        assert "#123456" in _literals(html, tokens), name
+    for name in LITERAL_SURFACES:
+        poisoned = surfaces[name] + "<style>.poison{color:#123456}</style>"   # a literal beside the module
+        assert "#123456" in _literals(poisoned, tokens), name
+
+
+# --- The hub's stylesheets (SPEC 1181, #1185) ---
+HUB_STYLESHEETS = ("board-lanes", "run-sheet")
+
+
+def test_the_guard_names_the_hub_stylesheets(surfaces):
+    """The two stylesheets the hub inlines are their own guarded surfaces (#1185)."""
+    for name in HUB_STYLESHEETS:
+        assert name in surfaces, f"the guard does not read {name}.css"
+        assert name in LITERAL_SURFACES, f"{name}.css is not a guarded surface"
+
+
+def test_the_hub_stylesheets_read_roles(surfaces):
+    """The board lanes and the run sheet draw with the roles the token file names (#1185)."""
+    for name in HUB_STYLESHEETS:
+        assert "var(--" in surfaces[name], f"{name}.css reads no role"
 
 
 def test_the_dashboard_writes_no_palette_of_its_own():
@@ -178,12 +198,16 @@ def test_the_hub_and_the_dashboard_render_the_same_card_ink_and_accent(surfaces)
 # Every colour a surface draws with is a role in the one module. The phone reads the same roles at its own density, and
 # no surface fetches an asset from outside itself.
 PALETTE_SURFACES = ("hub", "hub-mobile", "hubmux-root", "hub-refusal", "hub-test-log", "dashboard")
+# A stylesheet the hub inlines: it reads the one module from the page that carries it, so it holds no palette of its own.
+# The literal guard reads it as its own surface, so a colour typed here cannot pass (#1185).
+INLINE_SURFACES = ("board-lanes", "run-sheet")
+LITERAL_SURFACES = (*PALETTE_SURFACES, *INLINE_SURFACES)
 
 
 def test_no_surface_carries_a_colour_literal(surfaces):
     """A colour outside the token module is a second palette, wherever it is typed."""
     found = {name: sorted(set(values)) for name, values in _literals_by_surface(surfaces).items()
-             if name in PALETTE_SURFACES and values}
+             if name in LITERAL_SURFACES and values}
     assert not found, f"a surface still carries a colour literal: {found}"
 
 
