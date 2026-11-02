@@ -5204,7 +5204,7 @@ const cards=(g,it,shown)=>{const GHI='<svg viewBox="0 0 16 16" width="13" height
 // every render -- from the filtered count, the user's hidden set and the set the line's eye added -- and never
 // stored, so a card appearing brings the column back on its own and the last one leaving collapses it again (#1809).
 // A spec's burn-up (#1025): its panel opens from the spec lane's header. The hub answers the lines; the page draws them and counts nothing.
-const BU={open:{},data:{},raw:{}};
+const BU=window.BU||(window.BU={open:{},data:{},raw:{}});   // one store across the page's scopes: the handler and the lane render read the same (#1075)
 const buDay=t=>String(t||"").slice(0,10);
 function buChart(d){const pts=d.points||[];if(!pts.length)return `<div class=bunote>no change in this spec's scope is recorded yet</div>`;
  const W=600,H=170,P=22,top=Math.max(1,...pts.map(p=>p.scope)),t0=Date.parse(pts[0].t),span=(Date.parse(pts[pts.length-1].t)-t0)||1;
