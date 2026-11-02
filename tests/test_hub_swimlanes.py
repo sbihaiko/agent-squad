@@ -117,7 +117,11 @@ def test_page_draws_the_doing_share_after_the_closed_share(hub):
     bar = page[page.index("class=bar title="):page.index("class=bar title=") + 400]
     assert "i class=dn" in bar and "left:${pct(l)}%" in bar, bar
     css = (SCRIPTS / "board-lanes.css").read_text()
-    assert "#bbody .lh .bar i.dn{background:var(--warn)}" in css
+    rule = css[css.index("#bbody .lh .bar i.dn{"):]
+    rule = rule[:rule.index("}")]
+    assert "background:var(--warn)" in rule, rule
+    # A claimed card is not concrete work yet, so its share reads through the lane bar instead of painting over it.
+    assert "opacity:" in rule and "opacity:1" not in rule, rule
 
 
 def test_page_inlines_the_lane_rule(hub):
