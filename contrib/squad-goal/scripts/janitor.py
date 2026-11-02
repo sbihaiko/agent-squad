@@ -873,10 +873,10 @@ def reconcile_board():
             if not dry: m.unlink(missing_ok=True)
             continue
         if not cs or x in expected or holding(x) or base_landed(x, {run}) or run_landed(x, {run}): continue
-        say(f"STALE-CARD #{x}: card In Progress behind run {run}, which ended without a verdict and landed nothing; card -> {os.environ.get('SG_TODO', 'Todo')}, so the next cycle dispatches the issue again")
+        say(f"STALE-CARD #{x}: card {doing} behind run {run}, which ended without a verdict and landed nothing; card -> {os.environ.get('SG_TODO', 'Todo')}, so the next cycle dispatches the issue again")
         if not dry:
             (st / "cq" / f"{CQ}#{x}-stalecard-{os.getpid()}.md").write_text(
-                f"Its card was In Progress behind run {run}, which ended without a verdict and landed nothing. The card is back in {os.environ.get('SG_TODO', 'Todo')}, so the next cycle dispatches the issue again.\n")
+                f"Its card was {doing} behind run {run}, which ended without a verdict and landed nothing. The card is back in {os.environ.get('SG_TODO', 'Todo')}, so the next cycle dispatches the issue again.\n")
         set_expected(x, os.environ.get("SG_TODO", "Todo"), f"run {run} ended without a verdict (no process, or its folder is gone) with nothing landed", run, "", 20)
     for m in sorted((st / "auto").glob("disp-*")):
         holder = marker_text(m)
@@ -914,9 +914,10 @@ def reconcile_board():
                 # A parent's column is a fold over its sub-issues' cards (spec_fold.py): the relation came with the one read above and
                 # the cards are read once per pass, so the fold adds no call. A parent that is not a spec takes the Doing lift only
                 # (#942): the spec vocabulary's Closed and Abandoned are never written to it.
-                spec_owner = "Backlog"   # ADR-0142: the floor column a spec is created in; the fold never names Todo for one
-                col, reverted = spec_fold.fold([have_cards.get(k, "") for k in _kids.get(n, [])], have_cards.get(n, ""), spec_owner if is_spec else os.environ.get("SG_TODO", "Todo"))
-                if is_spec and col == spec_fold.DOING: col = spec_owner if have_cards.get(n, "") == spec_fold.DOING else None   # a spec never enters Doing (ADR-0142 rule 5)
+                kid_cols = [have_cards.get(k, "") for k in _kids.get(n, [])]
+                spec_owner = os.environ.get("SG_TODO", "Todo") if any(c not in ("", "Backlog") for c in kid_cols) else "Backlog"   # ADR-0142: a ticket past Backlog means the owner started the spec; with none, the floor column
+                col, reverted = spec_fold.fold(kid_cols, have_cards.get(n, ""), spec_owner if is_spec else os.environ.get("SG_TODO", "Todo"))
+                if is_spec and col == spec_fold.DOING: col = spec_owner if have_cards.get(n, "") in spec_fold.WORK else None   # a spec never enters Doing (ADR-0142 rule 5); a work column returns to the owner's
                 if col and (is_spec or col == spec_fold.DOING): set_expected(n, col, ("spec" if is_spec else "parent") + " folds over its sub-issues" + (": a child reopened, the card keeps its column" if reverted else ""), rank=15)   # forward only: below Doing the fold writes nothing, and the spec keeps the owner's column (#550)
             if is_spec:
                 # The owner starts a spec by moving its card to Todo, and its children follow it there (#589): a child in Backlog,
@@ -945,11 +946,16 @@ def reconcile_board():
                     if not dry and spec_fold.TAG not in olabels[n]: _run(["bash", "-c", '. "$0"; "$@"', str(pathlib.Path(__file__).parent / "ghcall.sh"), "gh_send", "-X", "POST", f"repos/{repo0}/issues/{n}/labels", "-f", f"labels[]={spec_fold.TAG}"])
             # A Doing card that no run holds and no marker claims is left alone (#1034): a card a person placed and a stuck one
             # look the same, so only the owner moves it (ADR-0143 rule 1). The pass names it once and writes nothing.
-            if not is_spec and have_cards.get(n, "") == spec_fold.DOING and not holding(n) and not (st / "auto" / f"disp-{n}").exists() and not (st / "auto" / f"bug-{n}").exists():
-                mk = st / "auto" / f"janitor-doing-norun-{n}"
-                if not mk.exists():
-                    say(f"DOING-NO-RUN #{n}: a card sits in Doing with no live run and no marker; the janitor leaves it and the owner moves it")
-                    if not dry: mk.touch()
+            if not is_spec and have_cards.get(n, "") == doing and not holding(n) and not (st / "auto" / f"disp-{n}").exists() and not (st / "auto" / f"bug-{n}").exists():
+                wave = next((l for l in olabels[n] if l.startswith("wave:")), None)
+                if wave and not base_landed(n, set()) and branch_ahead_count(n) == "0" and not owner_frozen(n):   # the one-time recovery (#1034): a wave card a run left in Doing has no other way back
+                    say(f"STALE-CARD #{n}: card {doing} with {wave}, no live run, no marker and nothing landed; card -> {os.environ.get('SG_TODO', 'Todo')}, so the next cycle dispatches the issue again")
+                    set_expected(n, os.environ.get("SG_TODO", "Todo"), f"card in {doing} with {wave}, no live run, no marker and nothing landed", rank=20)
+                else:
+                    mk = st / "auto" / f"janitor-doing-norun-{n}"
+                    if not mk.exists():
+                        say(f"DOING-NO-RUN #{n}: a card sits in Doing with no live run and no marker; the janitor leaves it and the owner moves it")
+                        if not dry: mk.touch()
             if olabels[n] & {"needs-owner", "needs-ratification"}:
                 set_expected(n, "Blocked", "issue is blocked by owner label", rank=100)
     for n in sorted(set(expected) | (set(olabels) if oans else set()), key=int):   # every open issue, as when the floor named each one: a rule below can still move a card forward
