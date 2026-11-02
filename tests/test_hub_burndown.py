@@ -1,7 +1,6 @@
 """The Throughput tab's burndown: the hub answers one open spec's series, and the page draws it with its gaps and guide (#1048)."""
 import importlib.util
 import json
-import re
 import shutil
 import subprocess
 import sys
