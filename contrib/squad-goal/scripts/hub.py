@@ -3908,20 +3908,28 @@ def promote(issue):
     if err: return {"err": err}
     return {"ok": True, "issue": issue, "to": PROMOTE_TO, "moved": [c["n"] for c in cards]}
 
-def write_cards(cards):
-    """The one write of a card set: the seam moves every card in one call, in the order given, so a spec's card lands before
-    its tickets (ADR-0142). Returns the refusal, or None when the cards moved and the cache follows them."""
+MOVED_LINE = re.compile(r"^#(\d+) -> ", re.M)   # board.py prints `#<n> -> <Status>` for each card it proved moved (or already carried)
+def send_cards(cards):
+    """The one writer call of a card set, answered as `(proved, reason)`. `proved` names the card numbers the writer printed as
+    moved: every card on a clean answer, and on a failure only those it printed, so a failure part way names what moved. The
+    reason is None on a clean answer."""
     try: r = promote_write([c["n"] for c in cards], add=any(not c.get("i") for c in cards))   # no item id: the row came from the open-issue read (#815)
     except subprocess.TimeoutExpired as e:
         # board.py may have moved some of the cards before the writer ran out of time. The cache is not written over a move
         # it cannot prove; the board-dirty flag asks the next pass to read the columns as they now stand (#838).
         try: (STATE / "board-dirty").touch()
         except OSError: pass
-        return f"the writer did not answer in {int(e.timeout)} s: the move may be partial, and the board is read again"
-    except Exception as e: return str(e)[:200] or "the writer did not answer"
-    if r.returncode:
-        lines = (r.stderr or r.stdout or f"exit {r.returncode}").strip().splitlines()
-        return (next((l for l in lines if l.startswith("#")), lines[0] if lines else "") or "the writer refused")[:300]
+        out = e.stdout.decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
+        return [int(n) for n in MOVED_LINE.findall(out)], f"the writer did not answer in {int(e.timeout)} s: the move may be partial, and the board is read again"
+    except Exception as e: return [], str(e)[:200] or "the writer did not answer"
+    if r.returncode == 0: return [c["n"] for c in cards], None
+    lines = (r.stderr or r.stdout or f"exit {r.returncode}").strip().splitlines()
+    return [int(n) for n in MOVED_LINE.findall(r.stdout or "")], (next((l for l in lines if l.startswith("#")), lines[0] if lines else "") or "the writer refused")[:300]
+def write_cards(cards):
+    """The one write of a card set: the seam moves every card in one call, in the order given, so a spec's card lands before
+    its tickets (ADR-0142). Returns the refusal, or None when the cards moved and the cache follows them."""
+    _, err = send_cards(cards)
+    if err: return err
     for c in cards: c["st"] = PROMOTE_TO   # the cache follows the write, so the next refresh shows the move without a GitHub read after it
     save_board()
     return None
@@ -3947,38 +3955,77 @@ def promote_batch_plan():
         for ticket in tickets: add(ticket)
     for card in starts: add(card)
     return ordered, None
-def spec_batch_plan(number):
-    """What one spec's start would move, read only (#1126): the spec's card first, then its open Backlog tickets in board
-    order, each card once. The open tickets past Backlog are named as skipped. Returns `(plan, None)` or `(None, reason)`."""
-    if isinstance(number, bool) or not isinstance(number, int) or number <= 0: return None, "spec: a number"
+def spec_batch_cards(number):
+    """The cards one spec's start moves (#1126): the spec's card first, then its open Backlog tickets in board order, each card
+    once. A spec already in Todo has started, so only its Backlog tickets move. The open tickets past Backlog are named as
+    skipped. Returns `(cards, skipped, None)` or `(None, None, reason)`."""
+    if isinstance(number, bool) or not isinstance(number, int) or number <= 0: return None, None, "spec: a number"
     items = board_cache.get("items") or []
     item = next((i for i in items if i.get("n") == number), None)
-    if item is None: return None, "not on the board"
-    if str(item.get("s") or "").lower() == "closed": return None, f"the spec #{number} is closed: nothing to start"
+    if item is None: return None, None, "not on the board"
+    if str(item.get("s") or "").lower() == "closed": return None, None, f"the spec #{number} is closed: nothing to start"
     st = drawn_column(item, read_moves() if overlay_on() else {}, pending_window())["st"]
     col, _ = _columns_module.view_column(st, False, item.get("l"))
-    if col != COLUMN["unscheduled"]: return None, f"the spec #{number} is in {col}, not {COLUMN['unscheduled']}: only a Backlog spec starts"
-    if _columns_module.SPEC_LABEL not in (item.get("l") or []): return None, f"#{number} is not a spec"
+    started = col == PROMOTE_TO
+    if not started and col != COLUMN["unscheduled"]: return None, None, f"the spec #{number} is in {col}, not {COLUMN['unscheduled']}: only a Backlog spec starts"
+    if _columns_module.SPEC_LABEL not in (item.get("l") or []): return None, None, f"#{number} is not a spec"
     tickets, skipped, err = spec_tickets(number, item)
-    if err: return None, err
-    if not tickets and not skipped: return None, f"the spec #{number} has no open ticket: nothing to start"
+    if err: return None, None, err
+    if not started and not tickets and not skipped: return None, None, f"the spec #{number} has no open ticket: nothing to start"
     order = {id(c): k for k, c in enumerate(items)}
     cards, seen = [], set()
-    for card in [item, *sorted(tickets, key=lambda c: order[id(c)])]:
+    for card in ([] if started else [item]) + sorted(tickets, key=lambda c: order[id(c)]):
         if card["n"] not in seen:
             seen.add(card["n"])
             cards.append(card)
-    skipped = list(dict.fromkeys(skipped))
-    return {"count": len(cards), "issues": [c["n"] for c in cards], "skipped": skipped}, None
+    return cards, list(dict.fromkeys(skipped)), None
+def write_spec_batch(cards):
+    """The writer call of one spec's batch (#1127): the cards it proved moved, in card order, and the refusal or None. The
+    cache follows only the cards the writer proved, so a write that fails part way leaves the rest in Backlog."""
+    proved, err = send_cards(cards)
+    moved = [c for c in cards if c["n"] in proved]
+    for c in moved: c["st"] = PROMOTE_TO
+    if moved: save_board()
+    return [c["n"] for c in moved], err
+def promote_spec_batch(body, who):
+    """One spec's batch (#1127, plan #1126). With no `confirm` the answer is the plan and nothing moves. With `confirm` equal to
+    the count the plan answers now, one write moves the plan's cards, the spec's card first, through the writer the single
+    move uses. A count that changed is refused and nothing moves. Every request that carries `confirm` writes one audit line,
+    whatever its outcome, and a write that fails part way names the cards that moved and those that did not."""
+    spec = body["spec"]
+    cards, skipped, err = spec_batch_cards(spec)
+    if "confirm" not in body:
+        return {"err": err} if err else {"count": len(cards), "issues": [c["n"] for c in cards], "skipped": skipped}
+    issues = [c["n"] for c in cards] if err is None else []
+    def audit(outcome, moved=(), reason=None):
+        record = {"at": dt.datetime.now().astimezone().isoformat(timespec="seconds"), "who": who, "action": "promote-spec-batch",
+                  "scope": spec, "count": len(issues), "issues": issues, "moved": list(moved), "outcome": outcome}
+        if reason: record["err"] = reason
+        with BATCH_AUDIT.open("a") as f: f.write(json.dumps(record) + "\n")
+    if err:
+        audit("refused", reason=err)
+        return {"err": err}
+    confirm = body["confirm"]
+    if type(confirm) is not int or confirm != len(cards):
+        reason = f"the batch is {len(cards)} cards now, not {confirm}: read it again"
+        audit("refused", reason=reason)
+        return {"err": reason, "count": len(cards)}
+    if not cards:
+        reason = f"the spec #{spec} has no card in Backlog to start"
+        audit("refused", reason=reason)
+        return {"err": reason, "count": 0}
+    moved, err = write_spec_batch(cards)
+    if err is None:
+        audit("moved", moved)
+        return {"ok": True, "count": len(cards), "moved": moved}
+    audit("partial" if moved else "failed", moved, err)
+    return {"err": err, "count": len(cards), "moved": moved, "unmoved": [c["n"] for c in cards if c["n"] not in moved]}
 def promote_batch(body, who):
     """The owner's batch move (#1098). With no `confirm`, the hub answers the count it would move and the numbers, and nothing
     moves. With `confirm` equal to that count, one write moves every card of the plan, and the hub records the count and who
     asked. A count that changed since the owner read it is refused, so the owner confirms the number that moves. With a
-    `spec` the answer is that one spec's plan (#1126) and nothing is written: a spec's batch has no write yet."""
-    if "spec" in body:
-        if "confirm" in body: return {"err": "a spec's batch is read only: nothing is written here"}
-        plan, err = spec_batch_plan(body["spec"])
-        return {"err": err} if err else plan
+    `spec` the batch is that one spec's (#1127)."""
+    if "spec" in body: return promote_spec_batch(body, who)
     cards, err = promote_batch_plan()
     if err: return {"err": err}
     issues = [c["n"] for c in cards]
