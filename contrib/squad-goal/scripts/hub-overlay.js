@@ -16,6 +16,17 @@ SQ.buildStep = (seen, v) => ({ seen: seen === null ? v : seen, reload: seen !== 
 SQ.KEEP = 12;
 SQ.splitEarlier = (turns, keep = SQ.KEEP) => turns.length <= keep ? { earlier: [], shown: turns }
   : { earlier: turns.slice(0, turns.length - keep), shown: turns.slice(turns.length - keep) };
+// The push stream sends the turns as lines, one JSON object each; a turn already drawn is never drawn again.
+SQ.streamTurns = text => String(text || "").split("\n").filter(Boolean).map(line => JSON.parse(line));
+SQ.mergeTurns = (drawn, incoming) => {
+  const seen = new Set(drawn.map(t => t.k)), out = drawn.slice();
+  for (const t of incoming) if (!seen.has(t.k)) { seen.add(t.k); out.push(t); }
+  return out;
+};
+// The talk comes from the stream only while the stream is live and this session is the one it watches; else the poll reads it.
+SQ.feedFrom = (live, watching) => live && watching ? "push" : "poll";
+// A repaint that lands above the newest line keeps the line the reader reads where it was on the screen.
+SQ.viewAfter = (before, after, scrollTop) => before == null || after == null ? scrollTop : scrollTop + (after - before);
 
 // The docked width: at least 360 px, at most 70% of the viewport, and the board keeps 480 px.
 SQ.clampWidth = (w, vw) => {
@@ -476,7 +487,7 @@ function feed(turns) {
     const s = document.createElement("summary"); s.textContent = "Earlier activity · " + earlier.length + " turns";
     d.append(s, ...stitch(earlier).map(turnNode)); nodes.push(d);
   }
-  nodes.push(...said.map(turnNode));
+  nodes.push(...said.map(t => { const n = turnNode(t); if (t.k) n.dataset.k = t.k; return n; }));
   return nodes;
 }
 // The feed stays at its newest line (owner, 2026-11-01): a scroll away from the end stops that, and the bottom is re-pinned
@@ -485,6 +496,42 @@ let stick = true;
 function pinBottom() { log.scrollTop = log.scrollHeight; requestAnimationFrame(() => { log.scrollTop = log.scrollHeight; }); }
 log.addEventListener("scroll", () => { stick = log.scrollHeight - log.scrollTop - log.clientHeight < 48; });
 log.addEventListener("load", () => { if (stick) pinBottom(); }, true);   // an image lands after the paint
+// The turns on the screen. With the push stream on, the first read names the session's offset, and each pushed turn merges
+// into these turns as it arrives; the poll only merges what the stream has not sent (SPEC 1085, #1097).
+let talk = [], watched = null, hooked = false;
+const sigOf = list => { const last = list[list.length - 1]; return list.length + ":" + (last ? last.id + ":" + last.text.length : ""); };
+function repaint(pin) {
+  const edge = () => log.getBoundingClientRect().top;
+  const top = pin ? null : [...log.children].find(e => e.dataset.k && e.getBoundingClientRect().bottom > edge());
+  const key = top ? top.dataset.k : null, was = top ? top.getBoundingClientRect().top : null;
+  log.replaceChildren(...feed(talk));
+  if (pin) return pinBottom();
+  const again = key == null ? null : [...log.children].find(e => e.dataset.k === key);
+  log.scrollTop = SQ.viewAfter(was, again ? again.getBoundingClientRect().top : null, log.scrollTop);
+}
+function paintTalk(pin) {
+  if (talk.length) repaint(pin); else empty("No turns yet.");
+  lastSig = sigOf(talk);
+}
+function watchTalk(s, epoch, end) {
+  if (watched && watched !== s.sid) window.squadStream.unwatch(watched);
+  watched = s.sid; talk = [];
+  window.squadStream.watch(s.sid, epoch, end);
+}
+function hookStream() {
+  if (hooked || !window.squadStream) return;
+  hooked = true;
+  window.squadStream.on("conversation", d => {
+    if (!cur || d.sid !== cur.sid || d.sid !== watched) return;
+    talk = SQ.mergeTurns(talk, SQ.streamTurns(d.lines));
+    if (!ov.hidden) paintTalk(stick);
+  });
+  window.squadStream.on("gap", d => {
+    if (!cur || d.sid !== cur.sid || d.sid !== watched) return;
+    talk = [];
+    if (!ov.hidden) paintTalk(true);
+  });
+}
 async function loadConversation() {
   const s = cur;
   if (!s || ov.hidden) return;
@@ -498,15 +545,16 @@ async function loadConversation() {
       if (r.status === 404 && Date.now() - missT > 5000) { missT = Date.now(); loadSessions(); }
       return;
     }
-    const page = await r.json(), turns = page.turns || [], last = turns[turns.length - 1];
+    const page = await r.json(), turns = page.turns || [];
     setActivity(page.activity);
-    const sig = turns.length + ":" + (last ? last.id + ":" + last.text.length : "");
+    hookStream();
+    const streamOn = !!window.squadStream, fresh = streamOn && watched !== s.sid;
+    if (fresh) watchTalk(s, page.epoch, page.end);
+    talk = streamOn ? SQ.mergeTurns(talk, turns) : turns;
+    if (!fresh && SQ.feedFrom(streamOn && window.squadStream.live(), watched === s.sid) === "push") return;
+    const sig = sigOf(talk);
     if (sig === lastSig) return;
-    const atEnd = !lastSig || stick;
-    lastSig = sig;
-    if (!turns.length) { empty("No turns yet."); lastSig = sig; return; }
-    log.replaceChildren(...feed(turns));
-    if (atEnd) pinBottom();   // the talk opens at its newest line, until the reader scrolls up (owner, 2026-11-01)
+    paintTalk(!lastSig || stick);   // the talk opens at its newest line, until the reader scrolls up (owner, 2026-11-01)
   } catch (e) { console.warn("conversation:", e); }   // the next poll tries again; a swallowed failure froze the feed silently (#1079)
 }
 const uuid = () => (crypto.randomUUID ? crypto.randomUUID()
@@ -631,6 +679,7 @@ function openOverlay(){
   applyLayout();
   // The field opens empty (owner, 2026-11-01): the page context is one click away in the + menu, never typed for you.
   fsInit();
+  if (cur && watched === cur.sid && talk.length) paintTalk(true);   // turns the stream pushed while the panel was shut
   loadSessions();
   clearInterval(timer); timer = setInterval(loadConversation, SQ.POLL_MS);
   clearInterval(liveTick); liveTick = setInterval(paintLive, 1000);
