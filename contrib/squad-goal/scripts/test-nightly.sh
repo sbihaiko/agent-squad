@@ -254,4 +254,85 @@ f=$(sf); [ -n "$f" ] || f=/dev/null; IFS=$'\t' read -r _ _ _ _ _ _ s_res _ < "$f
   || ko "record '$r_res', settlement '$s_res': $(cat "$f" 2>&1)"
 rm -rf "$OBL" "$SET"
 
+# 16) a settlement never turns a red into a green: the same entry is settled red, then a later nightly measures a passing
+#     check at the same tree and base. The red stands, the run fails, and the tip stays held (ADR-0153, the same rule as its
+#     own record: one green run replaces it only through the full suite, never through a narrower check).
+obclean
+obwrite o/r "$newtip" "-" "ruff" delta "$(( $(date +%s) + 900 ))"
+out=$(ng "SG_SETTLE_RUFF=$T/settle.sh ruff" FAIL_SETTLE=ruff); rc=$?
+k=$(basename "$(sf)")
+obwrite o/r "$newtip" "-" "ruff" delta "$(( $(date +%s) + 900 ))"; mark
+out=$(ng "SG_SETTLE_RUFF=$T/settle.sh ruff"); rc=$?
+IFS=$'\t' read -r _ _ _ _ _ _ s_res _ < "$SET/$k" 2>/dev/null
+[ "$rc" = 1 ] && [ "$s_res" = red ] && ok "a later passing measurement never turns a settled red green" \
+  || ko "re-settle rc $rc, settlement '$s_res': $(cat "$SET/$k" 2>&1)"
+hold >/dev/null; [ $? = 0 ] && ok "the red still holds the tip after the passing re-measurement" || ko "a later green released the red"
+
+# 17) the nightly result is written before the first obligation is measured: a settlement check that hangs is stopped at the
+#     serial hold, and the record the hub and the dispatch hold read is already there (ADR-0153). The record on main was
+#     written as soon as both modes finished, and a settlement never delays it.
+obclean
+printf '#!/bin/bash\nsleep 60\n' > "$T/hang.sh"; chmod +x "$T/hang.sh"
+obwrite o/r "$newtip" "-" "ruff" delta "$(( $(date +%s) + 900 ))"
+out=$(ng SERIAL_HOLD_SECONDS=6 "SG_SETTLE_RUFF=$T/hang.sh ruff"); rc=$?
+rec
+[ "$r_res $r_sha" = "pass $newtip" ] && ok "the nightly result is written before the first settlement runs" \
+  || ko "record after a hung settlement: '$r_res $r_sha' (rc $rc: $(printf '%s' "$out" | tail -n 1))"
+[ -n "$(/bin/ls -A "$OBL" 2>/dev/null)" ] && ok "the obligation a hang left unmeasured stays in place" \
+  || ko "the hung obligation was dropped"
+
+# 18) a tip obligation is answered by the suite the run already made, whichever tree a record before it measured: no second
+#     full suite runs at the tip (ADR-0168). The older tree is measured where it names, and credited there.
+obclean
+obwrite o/r "$sha" "-" "ruff" delta "$(( $(date +%s) + 900 ))"
+obwrite o/r "$newtip" "-" "pytest" delta "$(( $(date +%s) + 900 ))"
+out=$(ng "SG_SETTLE_RUFF=$T/settle.sh ruff" "SG_SETTLE_PYTEST=$T/settle.sh pytest"); rc=$?
+[ "$rc" = 0 ] && ok "both obligations settle green" || ko "two obligations rc $rc: $out"
+[ "$(/bin/ls -A "$SET" 2>/dev/null | /usr/bin/grep -c .)" = 2 ] && ok "each obligation wrote its own settlement" \
+  || ko "settlements: '$(/bin/ls "$SET" 2>&1)'"
+/usr/bin/grep -qx "ruff $T/tree $sha" "$T/settle.log" && ok "the older tree is measured where it names" \
+  || ko "settle log: '$(cat "$T/settle.log" 2>&1)'"
+/usr/bin/grep -q "^pytest " "$T/settle.log" 2>/dev/null && ko "the full suite ran at the tip a second time" \
+  || ok "the suite already made answers pytest at the tip after an older tree"
+
+# 19) a default settlement command is the fast gate's battery over this repository's layout. A tree the nightly measures for
+#     another project holds no `squad/` or `tests/`, so its default check measures nothing: the obligation is reported by name
+#     and left in place, never settled red for a path that is not there (ADR-0138).
+obclean
+obwrite o/r "$newtip" "-" "ruff mypy" delta "$(( $(date +%s) + 900 ))"
+out=$(ng); rc=$?
+[ "$rc" = 0 ] && ok "a default check that cannot measure does not fail the run" || ko "unmeasured default rc $rc: $out"
+[ -n "$(/bin/ls -A "$OBL" 2>/dev/null)" ] && ok "the obligation a default check cannot measure stays in place" \
+  || ko "the obligation was dropped"
+if [ ! -d "$SET" ] || [ -z "$(/bin/ls -A "$SET" 2>/dev/null)" ]; then ok "no settlement is written for a check that did not measure"
+else ko "settlement: '$(/bin/ls "$SET" 2>&1)'"; fi
+a=$(cat "$ST/alerts.log" 2>/dev/null)
+case $a in *OBLIGATION*unmeasured*"${newtip:0:7}"*) ok "the unmeasured obligation is reported by name";; *) ko "report: '$a'";; esac
+
+# 20) old settled-red records never collect: one whose tree is no longer the tip, or older than one nightly period, is pruned
+#     and reported by name. A pass that cannot read the tip holds only for a red from this period, so a red from weeks ago at
+#     a long-dead tree can never stop every dispatch.
+obclean
+mkdir -p "$SET"
+obkey() { printf '%s\t%s\t%s' "$1" "$2" "$3" | cksum | cut -d' ' -f1; }
+dead=$(( $(date +%s) - 90000 ))
+printf '%s\t%s\t%s\t%s\t%s\t%s\tred\t%s\n' "$dead" o/r "$sha" - full ruff "$dead@$sha" > "$SET/$(obkey o/r "$sha" -)"
+printf '%s\t%s\t%s\t%s\t%s\t%s\tred\t%s\n' "$(( $(date +%s) - 60 ))" o/r "$newtip" - full ruff "x@$newtip" > "$SET/$(obkey o/r "$newtip" -)"
+out=$(ng); rc=$?
+[ "$rc" = 0 ] && ok "a pruned red does not fail the nightly" || ko "prune run rc $rc: $out"
+[ -f "$SET/$(obkey o/r "$sha" -)" ] && ko "the red at a tree that is not the tip was not pruned" \
+  || ok "the red at a tree that is not the tip is pruned"
+[ -f "$SET/$(obkey o/r "$newtip" -)" ] && ok "the red at the tip from this period is kept" \
+  || ko "the red at the tip was pruned"
+a=$(cat "$ST/alerts.log" 2>/dev/null)
+case $a in *OBLIGATION*pruned*"${sha:0:7}"*) ok "a prune is reported by name";; *) ko "prune report: '$a'";; esac
+printf '%s\t%s\t%s\t%s\t%s\t%s\tred\t%s\n' "$dead" o/r "$newtip" - full ruff "$dead@$newtip" > "$SET/$(obkey o/r "$newtip" -)"
+o=$(env -u SG_CHECKOUT SG_STATE="$ST" bash -c '. "$0"; gh_dispatch_hold' "$S/ghcall.sh"); rc=$?
+[ "$rc" = 1 ] && ok "a pass that cannot read the tip holds nothing for a red older than one nightly period" \
+  || ko "an old red held a pass with no tip: '$o'"
+printf '%s\t%s\t%s\t%s\t%s\t%s\tred\t%s\n' "$(date +%s)" o/r "$newtip" - full ruff "y@$newtip" > "$SET/$(obkey o/r "$newtip" -)"
+o=$(env -u SG_CHECKOUT SG_STATE="$ST" bash -c '. "$0"; gh_dispatch_hold' "$S/ghcall.sh"); rc=$?
+[ "$rc" = 0 ] && ok "a pass that cannot read the tip still holds for a red from this period" \
+  || ko "a current red did not hold: '$o'"
+
 rm -rf "$T"; exit $fail

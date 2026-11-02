@@ -185,9 +185,10 @@ print(", ".join(v) if v else "no test named")' 2>/dev/null || return 1
 
 # sg_obligation_red <dir>   The settled-red proof obligations (nightly.sh, spec 1163), one line per settled entry in
 # `<epoch> TAB <repository> TAB <tree sha> TAB <base> TAB <scope> TAB <checks> TAB <green|red> TAB <run>`. It prints
-# `<sha> TAB <checks> TAB <run>` for every readable red record and returns 0 when it printed at least one; a green or an
-# unreadable record holds nothing (ADR-0153, the same rule sg_nightly_red applies to its record). The caller compares the
-# sha with the tip: a red is credited to the tree it measured, never to another (ADR-0163).
+# `<epoch> TAB <sha> TAB <checks> TAB <run>` for every readable red record and returns 0 when it printed at least one; a
+# green or an unreadable record holds nothing (ADR-0153, the same rule sg_nightly_red applies to its record). The caller
+# compares the sha with the tip: a red is credited to the tree it measured, never to another (ADR-0163). The epoch lets a
+# pass that cannot read the tip hold only for a red from this nightly period.
 sg_obligation_red() {
   local dir=$1 f line nf ts repo sha base scope checks res run n=0
   [ -d "$dir" ] || return 1
@@ -200,7 +201,7 @@ sg_obligation_red() {
     IFS=$'\t' read -r ts repo sha base scope checks res run <<<"$line"
     case "$ts" in ''|*[!0-9]*) continue;; esac
     [ -n "$sha" ] && [ "$res" = red ] || continue
-    printf '%s\t%s\t%s\n' "$sha" "$checks" "${run:--}"; n=1
+    printf '%s\t%s\t%s\t%s\n' "$ts" "$sha" "$checks" "${run:--}"; n=1
   done
   [ "$n" = 1 ]
 }
@@ -222,16 +223,22 @@ gh_dispatch_hold() {
     esac
   fi
   # (spec 1163) A settled-red proof obligation holds the tip it measured, like any red: the nightly settled a defect at
-  # that tree. A red credited to another tree holds nothing, by the same rule as a stale nightly record (#747).
+  # that tree. A red credited to another tree holds nothing, by the same rule as a stale nightly record (#747). A pass that
+  # cannot read the tip holds only for a red from this nightly period: a red from weeks ago at a long-dead tree never stops
+  # every dispatch, and the nightly prunes it by name (SG_NIGHTLY_PERIOD_SECONDS, one day by default).
   if o=$(sg_obligation_red "$SG_STATE/obligation-settled"); then
     tip=
     if [ -n "${SG_CHECKOUT:-}" ]; then
       tip=$(/usr/bin/git -C "$SG_CHECKOUT" rev-parse --verify -q origin/dev 2>/dev/null) \
         || tip=$(/usr/bin/git -C "$SG_CHECKOUT" rev-parse --verify -q HEAD 2>/dev/null) || tip=
     fi
-    while IFS=$'\t' read -r osha ochecks orun; do
+    while IFS=$'\t' read -r ots osha ochecks orun; do
       [ -n "$osha" ] || continue
-      [ -n "$tip" ] && [ "${osha:0:12}" != "${tip:0:12}" ] && continue
+      if [ -n "$tip" ]; then
+        [ "${osha:0:12}" != "${tip:0:12}" ] && continue
+      elif [ $(( $(date +%s) - ots )) -gt "${SG_NIGHTLY_PERIOD_SECONDS:-86400}" ]; then
+        continue
+      fi
       line="$(date -u '+%F %T') DISPATCH HOLD: a red proof obligation at ${osha:0:12} (${ochecks:-no check named}, run ${orun:--}) measured a defect; no new run at that tree"
       printf '%s\n' "$line"; printf '%s\n' "$line" >> "$SG_STATE/cycle.log"; return 0
     done <<< "$o"

@@ -24,6 +24,11 @@
 # nightly.sh: the full suite once a day, one command per mode, run in the nightly tree. Unset: pytest, and a pytest that collects
 # no test (exit 5) counts as no suite, not red (#758). A repository without a Python suite names its own, e.g. `make clean all`.
 # : "${SG_NIGHTLY_PARALLEL:=make test}"; : "${SG_NIGHTLY_SERIAL:=make test}"
+# The checks the nightly settles a proof obligation with (spec 1163). Unset: the fast gate's battery over this repository's
+# layout (ruff and mypy over `squad`/`tests`, then the full serial pytest), and a tree that does not hold those paths has
+# nothing measured: its obligation is reported unmeasured, never settled red. Another layout names its own here.
+# : "${SG_SETTLE_RUFF:=make lint}"; : "${SG_SETTLE_MYPY:=make typecheck}"; : "${SG_SETTLE_PYTEST:=make test}"
+# : "${SG_NIGHTLY_PERIOD_SECONDS:=86400}"   # how long a settled red from a pass that cannot read the tip still holds (one day)
 # : "${SG_SQUAD:=$HOME/src/agent-squad}"   # unset: the installed agent-squad plugin
 : "${SG_AUTO_BUGFIX:=yes}"           # autobug.sh dispatches open bug issues automatically (no = off)
 : "${SG_BUG_LABEL:=bug}"
