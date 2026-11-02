@@ -99,6 +99,27 @@ groups.forEach(g=>g.items.forEach(x=>{if(x.sp){if(!ends.has(g.name)&&!specs.has(
   return{cols,vc,hc,lanes:list};
 }
 
+// The lane header is a table read down the column (#1158): one track per fact, and every lane's header takes the same
+// track list, so two specs compare down the page. Every fact is always answered, so a lane with less keeps its column.
+const laneHeadCols=[{k:"id",w:"7em",al:"flex-end"},{k:"title",w:"minmax(0,1fr)",al:"flex-start"},{k:"bar",w:"120px",al:"flex-start"},
+  {k:"frac",w:"4em",al:"flex-end"},{k:"counts",w:"8.5em",al:"flex-end"},{k:"chip",w:"6.5em",al:"center"},{k:"gh",w:"16px",al:"flex-end"}];
+// v names the three counted columns: { todo, doing, review }. A zero count is an en dash, so its row still stands.
+function laneHead(l,v){
+  const fact=k=>({...laneHeadCols.find(c=>c.k===k)});
+  const counted=l.kind==="s"||l.kind==="none";
+  const idText=l.kind==="s"?"SPEC "+l.num:l.kind==="bugs"?"Loop bugs":l.kind==="sw"?l.sid+" · "+l.wl:l.title;
+  const titleText=l.kind==="s"?l.title:l.kind==="bugs"?"defects of the loop itself: they halt dispatch, never a landing (ADR-0146)":l.kind==="none"?"bugs and single tickets":"";
+  const count=n=>l.counts[n]?String(l.counts[n]):"–";
+  return{cells:[
+    {...fact("id"),text:idText},
+    {...fact("title"),text:titleText},
+    {...fact("bar"),on:counted,closed:l.closed,total:l.total,doing:l.doing,review:l.review},
+    {...fact("frac"),text:counted?l.closed+"/"+l.total:""},
+    {...fact("counts"),rows:[v.todo,v.doing,v.review].map(n=>[n,count(n)])},
+    {...fact("chip"),text:l.st||""},
+    {...fact("gh"),on:l.kind==="s"}]};
+}
+
 // A saved state from a control the board no longer has is dropped on load (#899): the labels filter, the Specs mode,
 // maximize, collapse and the pip. The kept keys (the filters, the lanes, the view) stay as they are.
 function dropRemoved(bo){for(const k of["labels","label","specs","max","off","pip"])delete bo[k];if(bo.fw)bo.fw=bo.fw.filter(k=>String(k).includes("/"));return bo}   // a Waves key is spec/wave now; a bare wave key is from before (#980)
