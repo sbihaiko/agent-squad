@@ -6229,8 +6229,8 @@ def conversation_payload(query):
     newest page is the window's read: its `end` is the offset the push stream resumes from."""
     q = urllib.parse.parse_qs(query)
     sid, before = (q.get("sid") or [""])[0], (q.get("before") or [""])[0]
-    if before.isdigit(): return sessions.conversation(PROFILE_NAME, sid, int(before), profiles_of=profiles_of_cwd)
-    return TRANSCRIPTS.refresh(sid, hubstream.tick())
+    if not before.isdigit() and hubstream.enabled(): return TRANSCRIPTS.refresh(sid, hubstream.tick())
+    return sessions.conversation(PROFILE_NAME, sid, int(before) if before.isdigit() else None, profiles_of=profiles_of_cwd)
 
 def card_payload(query):
     """What /api/sessions/card serves: the question card a live session of this profile is waiting on, or None (#1093)."""
@@ -6539,6 +6539,7 @@ class H(BaseHTTPRequestHandler):
         query = self.path.partition("?")[2]
         held = hubstream.held_from(query)
         at = hubstream.conv_from(query)
+        want = hubstream.want_from(query)
         watched = list(at)
         try:
             for sid in watched: TRANSCRIPTS.watch(sid)
@@ -6554,7 +6555,7 @@ class H(BaseHTTPRequestHandler):
                 VERSIONS.refresh(tick)
                 sent = False
                 for name, (v, body) in sorted(VERSIONS.fresh(held).items()):
-                    chunk(hubstream.event(name, v, None if name == "runs" else body)); held[name] = v; sent = True
+                    chunk(hubstream.event(name, v, body if name in want else None)); held[name] = v; sent = True
                 for sid in watched:
                     TRANSCRIPTS.refresh(sid, tick)
                     events, epoch, offset = TRANSCRIPTS.pull(sid, *at[sid])

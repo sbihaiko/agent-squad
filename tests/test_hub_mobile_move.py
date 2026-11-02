@@ -168,6 +168,7 @@ const boot = {
   },
 };
 const timers = {};
+const intervals = [];
 let timerSeq = 0;
 const RealDate = Date;
 class FakeDate extends RealDate {
@@ -190,9 +191,10 @@ const box = {
   Option: class { constructor(text, value) { this.text = text; this.value = value; } },
   setTimeout: (fn, ms) => { const id = ++timerSeq; timers[id] = { fn, ms }; return id; },
   clearTimeout: id => { delete timers[id]; },
-  setInterval: () => 0,
+  setInterval: (fn, ms) => { intervals.push({ fn, ms }); return 0; },
   clearInterval: () => {},
   __timers: timers,
+  __intervals: intervals,
   __fire: () => { const ids = Object.keys(timers); for (const id of ids) { const t = timers[id]; delete timers[id]; t.fn(); } return ids.length; },
   __tick: ms => new Promise(r => hostSetTimeout(r, ms || 0)),
   addEventListener: (t, fn) => { (docListeners[t] = docListeners[t] || []).push(fn); },

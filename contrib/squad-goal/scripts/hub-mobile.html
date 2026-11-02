@@ -832,7 +832,7 @@ function applyBoard(b) {
   refresh();
   freshNow = new Set();
 }
-squadStream.on("board", applyBoard);
+squadStream.on("board", b => { try { applyBoard(b); } catch (e) { $("bmsg").textContent = e.message; } });
 every("board", () => { if (!squadStream.live()) loadBoard(); }, 10000);
 
 $("bsp").onclick = () => { bo.specs = (specMode() + 1) % 3; saveB(); refresh(); };
@@ -1301,7 +1301,6 @@ async function loadConversation(force) {
     if (atEnd) el.scrollTop = el.scrollHeight;
     if (force) squadStream.watch(sid, page.epoch, page.end);
     $("termview-older").hidden = termCursor === null;
-    await loadCard();
     $("termview-msg").textContent = "";
   } catch (e) { if (sid === termSid) $("termview-msg").textContent = e.message; }
   finally { termBusy = false; }
@@ -1328,6 +1327,11 @@ async function loadCard() {
   if (sid !== termSid) return;
   if (termCard && (!card || termCard.id !== card.id)) dropCard();
   if (card && !termCard) termCard = { id: card.id, el: drawQuestionCard({ questions: card.questions }, (answers, picks) => answerCard(sid, card.id, picks)) };
+}
+async function pollCard() {
+  const sid = termSid;
+  if (!termOpen() || !sid) return;
+  try { await loadCard(); } catch (e) { if (sid === termSid) $("termview-msg").textContent = e.message; }
 }
 async function answerCard(sid, id, picks) {
   const say = msg => { if (sid === termSid) $("termview-sent").textContent = msg; };
@@ -1367,6 +1371,7 @@ function openConversation(sid, name) {
   showDraft();
   $("termview").hidden = false;
   loadConversation(true);
+  pollCard();
 }
 function closeConversation() {
   keepDraft(); $("termview").hidden = true;
@@ -1378,6 +1383,7 @@ $("termview-back").onclick = closeConversation;
 $("termview-older").onclick = loadOlder;
 $("termview-turns").onscroll = () => { if ($("termview-turns").scrollTop < 40) loadOlder(); };
 every("terminals", loadConversation, 3000);
+every("terminals", pollCard, 3000);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") loadConversation(); });
 $("termview-send").onclick = async () => {
   const text = $("termview-text").value.trim(), sid = termSid;

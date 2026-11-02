@@ -105,8 +105,8 @@ class Transcripts:
         self._keep = keep
         self.epoch = epoch if epoch is not None else time.time_ns()
         self._windows = {}
-        self._dead = {}     # the end of a window let go, so its successor starts past every offset a reader may hold
-        self._seen = {}
+        self._floor = 0     # past every window let go, so a successor starts past every offset a reader may hold
+        self._last_turn = {}   # sid -> the key of the last turn its window appended; a turn after it is new
         self._last = {}     # sid -> (tick, the page that tick read)
         self._watchers = {}
         self._lock = threading.Lock()
@@ -115,7 +115,10 @@ class Transcripts:
         with self._lock: self._watchers[sid] = self._watchers.get(sid, 0) + 1
 
     def unwatch(self, sid):
-        with self._lock: self._watchers[sid] = self._watchers.get(sid, 1) - 1
+        with self._lock:
+            n = self._watchers.get(sid, 0) - 1
+            if n > 0: self._watchers[sid] = n
+            else: self._watchers.pop(sid, None)
 
     def refresh(self, sid, tick):
         with self._lock:
@@ -145,24 +148,25 @@ class Transcripts:
 
     def _append(self, sid, page):
         win = self._window(sid)
-        seen = self._seen.setdefault(sid, set())
-        for turn in page["turns"]:
-            if turn["k"] in seen: continue
-            seen.add(turn["k"])
+        turns = page["turns"]
+        keys = [turn["k"] for turn in turns]
+        last = self._last_turn.get(sid)
+        for turn in turns[keys.index(last) + 1 if last in keys else 0:]:
             win.append((json.dumps(turn, sort_keys=True, separators=(",", ":")) + "\n").encode())
+        if turns: self._last_turn[sid] = turns[-1]["k"]
         return {**page, "epoch": self.epoch, "end": win.end}
 
     def _window(self, sid):
         win = self._windows.get(sid)
         if win is None:
             if len(self._windows) >= WINDOWS_KEPT: self._let_go()
-            win = self._windows[sid] = Window(self._keep, self._dead.pop(sid, 0))
+            win = self._windows[sid] = Window(self._keep, self._floor)
         return win
 
     def _let_go(self):
         unwatched = [sid for sid in self._windows if not self._watchers.get(sid, 0)]
         sid = (unwatched or list(self._windows))[0]
-        self._dead[sid] = self._windows.pop(sid).end
+        self._floor = max(self._floor, self._windows.pop(sid).end)
         self._last.pop(sid, None)
 
 
@@ -185,3 +189,8 @@ def conv_from(query):
         if SID_RE.fullmatch(sid) and epoch.isdigit() and off.isdigit():
             out[sid] = (int(epoch), int(off))
     return out
+
+
+def want_from(query):
+    """The subjects whose payload a reader names, from `want=name,...`; a subject it does not name is pushed as its version."""
+    return set(urllib.parse.parse_qs(query).get("want", [""])[0].split(",")) - {""}

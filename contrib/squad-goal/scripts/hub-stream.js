@@ -5,7 +5,8 @@
 (() => {
   if (!window.EventSource || !window.SQUAD_HUB_STREAM) return;
   const SUBJECTS = ["runs", "cfd", "lead", "board", "sessions", "conversation", "gap", "ping"];
-  const held = {}, conv = {}, listeners = {};
+  const CONVERSATION = ["conversation", "gap"];
+  const held = {}, conv = {}, listeners = {}, wanted = new Set();
   let es = null, lastAt = 0, lost = false;
   const url = () => {
     const parts = [];
@@ -13,9 +14,10 @@
     if (h.length) parts.push(`held=${h.join(",")}`);
     const c = Object.entries(conv).map(([sid, o]) => `${sid}:${o.epoch}:${o.offset}`);
     if (c.length) parts.push(`conv=${c.join(",")}`);
+    if (wanted.size) parts.push(`want=${[...wanted].join(",")}`);
     return parts.length ? `${window.SQUAD_HUB_STREAM}?${parts.join("&")}` : window.SQUAD_HUB_STREAM;
   };
-  const emit = (name, data) => { for (const fn of listeners[name] || []) fn(data); };
+  const emit = (name, data) => { for (const fn of listeners[name] || []) { try { fn(data); } catch (e) { console.error(e); } } };
   const onEvent = (name, d) => {
     lastAt = Date.now();
     if (name === "ping") return;
@@ -56,7 +58,10 @@
   };
   const reopen = () => { if (es) es.close(); open(); };
   window.squadStream = {
-    on(name, fn) { (listeners[name] = listeners[name] || []).push(fn); },
+    on(name, fn) {
+      (listeners[name] = listeners[name] || []).push(fn);
+      if (!CONVERSATION.includes(name) && !wanted.has(name)) { wanted.add(name); delete held[name]; reopen(); }
+    },
     watch(sid, epoch, offset) { conv[sid] = { epoch, offset }; reopen(); },
     unwatch(sid) { if (sid in conv) { delete conv[sid]; reopen(); } },
     live: () => es !== null && Date.now() - lastAt < 20000,

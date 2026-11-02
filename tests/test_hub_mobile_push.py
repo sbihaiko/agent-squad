@@ -136,3 +136,47 @@ def test_the_polls_stay_as_the_fallback_when_no_stream_is_live(hub):  # noqa: F8
     out = run_page(page, driver, routes={"/api/sessions/conversation": [{"body": json.dumps(CONV_EMPTY)}]})
     assert out["streams"] == 0
     assert out["reads"] == 1
+
+
+CARD = {"id": "card-1", "questions": [{"header": "Pick", "body": "Which one?", "options": [{"label": "a", "description": ""}]}]}
+
+
+def test_a_card_that_appears_after_open_draws_while_the_stream_is_live(hub, monkeypatch):  # noqa: F811
+    page = stream_page(hub, monkeypatch)
+    driver = EMIT + """
+      openConversation(%(sid)s, "Session one");
+      await __tick(5);
+      emit("ping", {});
+      document.querySelector('[data-panel="terminals"]').hidden = false;
+      for (const t of __intervals) if (t.ms === 3000) t.fn();
+      await __tick(5);
+      return { live: squadStream.live(), card: termCard && termCard.id, opened: stream().url };
+    """.replace("%(sid)s", json.dumps(SID))
+    routes = {"/api/sessions/conversation": [{"body": json.dumps(CONV_EMPTY)}],
+              "/api/sessions/card": [{"body": json.dumps({"card": None})}, {"body": json.dumps({"card": CARD})}]}
+    out = run_page(page, driver, routes=routes)
+    assert out["live"] is True
+    assert out["card"] == "card-1", out
+
+
+def test_a_board_that_is_not_ready_names_itself_and_the_other_listeners_still_run(hub, monkeypatch):  # noqa: F811
+    page = stream_page(hub, monkeypatch)
+    driver = EMIT + """
+      squadStream.on("board", () => { __state.later = true; });
+      emit("board", { v: 6, data: { t: 3, err: "board not ready" } });
+      await __tick(5);
+      return { msg: $("bmsg").textContent, later: __state.later === true };
+    """
+    out = run_page(page, driver)
+    assert out["msg"] == "The board is not ready.", out
+    assert out["later"] is True
+
+
+def test_the_stream_names_the_board_and_the_session_list_it_wants(hub, monkeypatch):  # noqa: F811
+    page = stream_page(hub, monkeypatch)
+    driver = EMIT + """
+      await __tick(5);
+      return { url: stream().url };
+    """
+    out = run_page(page, driver)
+    assert out["url"].endswith("want=board,sessions"), out["url"]

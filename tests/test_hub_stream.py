@@ -102,8 +102,11 @@ def test_stream_answers_and_stays_open(on):
     assert got.startswith(b"HTTP/1.1 200") and b"text/event-stream" in got
     assert b"event: runs" in got
     s.settimeout(1.5)
-    with pytest.raises(TimeoutError):
-        s.recv(1)   # a closed stream would answer b"" at once; an open one says nothing
+    while True:   # the rest of the first tick, then quiet: a closed stream would answer b"" at once
+        try:
+            assert s.recv(65536) != b""
+        except TimeoutError:
+            break
     s.close()
 
 
@@ -340,7 +343,7 @@ def test_a_board_and_a_session_list_are_pushed_with_their_payload(on, monkeypatc
     monkeypatch.setattr(mod, "board_served", lambda: (json.dumps({"groups": [{"name": "Backlog", "items": []}]}).encode(), None))
     monkeypatch.setattr(mod, "sessions_payload", lambda: {"groups": [{"project": "p", "sessions": [{"sid": SID}]}]})
     mod.VERSIONS.refresh()   # the stream reads a subject once a tick; the patched readers take this read
-    s = _open(on["port"], "/alpha/api/stream")
+    s = _open(on["port"], "/alpha/api/stream?want=board,sessions")
     buf = _read_until(s, b"event: sessions")
     s.close()
     assert _event(buf, "board")["data"] == {"groups": [{"name": "Backlog", "items": []}]}
@@ -394,3 +397,50 @@ def test_a_reconnect_from_a_dropped_offset_gets_the_window_start_and_a_named_gap
     assert gap == {"subject": "conversation", "sid": SID, "epoch": conversations["mod"].TRANSCRIPTS.epoch, "start": gap["start"]}
     assert gap["start"] > 0 and pushed["at"] == gap["start"]
     assert "turn 5" in pushed["lines"] and '"turn 0"' not in pushed["lines"]
+
+
+def test_a_subject_no_reader_names_is_pushed_with_its_version_only(on, monkeypatch):
+    mod = on["mod"]
+    monkeypatch.setattr(mod, "board_served", lambda: (json.dumps({"groups": []}).encode(), None))
+    monkeypatch.setattr(mod, "sessions_payload", lambda: {"groups": []})
+    mod.VERSIONS.refresh()
+    s = _open(on["port"], "/alpha/api/stream")
+    buf = _read_until(s, b"event: sessions")
+    s.close()
+    assert set(_event_raw(buf, "board")) == {"v"}
+    assert set(_event_raw(buf, "sessions")) == {"v"}
+
+
+def _event_raw(buf, name):
+    i = buf.index(f"event: {name}\n".encode())
+    j = buf.index(b"data: ", i) + len(b"data: ")
+    return json.loads(buf[j:buf.index(b"\n", j)])
+
+
+def test_a_poll_with_the_stream_off_reads_the_session_and_keeps_no_window(on, monkeypatch):
+    monkeypatch.delenv("SQUAD_HUB_STREAM", raising=False)
+    mod = on["mod"]
+    page = {"turns": [_turn("t1", "one")], "next": None, "activity": {}}
+    monkeypatch.setattr(mod.sessions, "conversation", lambda *a, **k: page)
+    tr = _hubstream().Transcripts(lambda sid: pytest.fail("no stream reader: the window is not read"))
+    monkeypatch.setattr(mod, "TRANSCRIPTS", tr)
+    assert mod.conversation_payload(f"sid={SID}") == page
+    assert tr._windows == {}
+
+
+def test_a_watcher_with_no_reader_left_is_forgotten():
+    tr = _hubstream().Transcripts(_one_page([]))
+    tr.watch("sid-a")
+    tr.unwatch("sid-a")
+    assert "sid-a" not in tr._watchers
+
+
+def test_a_window_keeps_one_key_per_conversation_whatever_the_turns_its_pages_hold():
+    hubstream = _hubstream()
+    turns = []
+    tr = hubstream.Transcripts(lambda sid: {"turns": list(turns[-3:]), "next": None, "activity": {}})
+    for n in range(50):
+        turns.append(_turn(f"t{n}", f"turn {n}"))
+        tr.refresh("sid-a", tick=n)
+    assert tr._last_turn == {"sid-a": "t49"}
+    assert tr.window("sid-a").since(0)[1].count(b"\n") == 50
