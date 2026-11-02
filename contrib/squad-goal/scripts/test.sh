@@ -1,7 +1,7 @@
 #!/bin/bash
 # usage: test.sh <issue> [-C <dir>] -- <command...>   A coordinator test pass (post-merge e2e, a gate suite) the hub can show.
 # Writes $SG_STATE/tests/<id>.json (running -> completed|failed) and <id>.log; the hub lists it as "test #<issue>" with the
-# log as its panel. $TEST_ID fixes the id up front (the caller can name the log even if this script is killed). Moves the card to Testing at the start; queues the result on the issue. Exits with the command's code.
+# log as its panel. $TEST_ID fixes the id up front (the caller can name the log even if this script is killed). Queues the result on the issue. Exits with the command's code.
 # A pass has a deadline (TEST_DEADLINE, default 7200 s): a gate can hang -- one worker that spins in a subprocess loop never
 # returns -- and a pass with no bound then sits at state=running for ever, keeps the machine busy and holds every lock its tree
 # took. The command runs in a process group of its own (monitor mode: the lock holder is a grandchild of this shell), so the
@@ -18,7 +18,6 @@ open(p,"w").write(json.dumps(d))' "$j" "$@"; }
 kw() { python3 -c 'import json,sys,time;p=sys.argv[1];d=json.load(open(p));d.update(state="failed",rc=143,reason="killed/deadline",deadline=int(sys.argv[2]),t1=time.time())
 open(p,"w").write(json.dumps(d))' "$j" "$dl"; }
 w start "$iss" "$*" "$dir"
-$BOARD $SG_OWNER $SG_PROJECT Testing $iss >/dev/null 2>&1
 set -m
 (cd "$dir" && "$@") > "$log" 2>&1 & job=$!
 set +m

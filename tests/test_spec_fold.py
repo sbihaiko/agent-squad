@@ -27,7 +27,7 @@ CASES = [
     (["In Progress"], "Doing"),
     (["Code Complete", "Todo"], "Doing"),
     (["Code Review", "Todo"], "Doing"),   # a child whose review holds it is past Doing (#603)
-    (["Testing", "Done"], "Doing"),
+    (["Code Review", "Done"], "Doing"),
     (["Done", "In Progress"], "Doing"),
     (["Done"], "Closed"),
     (["Done", "Done"], "Closed"),
@@ -37,9 +37,10 @@ CASES = [
     (["Abandoned", "Abandoned"], "Abandoned"),
     (["Abandoned", "Todo"], None),
     (["Abandoned", "In Progress"], "Doing"),
-    (["Landing", "Todo"], "Doing"),
-    (["Merging", "Todo"], "Doing"),   # the live board's name for the column before the Pushing rename (#548)
-    (["Pushing", "Todo"], "Doing"),
+    (["Landing", "Todo"], None),
+    (["Merging", "Todo"], None),
+    (["Pushing", "Todo"], None),
+    (["Testing", "Todo"], None),
     (["Closed", "Closed", "Todo"], "Doing"),   # a delivered child is past Doing: the spec's work is under way
     (["Done", "Todo"], "Doing"),
     (["Closed", "Abandoned", "Backlog"], "Doing"),

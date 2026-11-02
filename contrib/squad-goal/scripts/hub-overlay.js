@@ -65,6 +65,8 @@ SQ.composerKey = (key, shift, composing) => key !== "Enter" || composing ? "none
 SQ.canSend = (text, allowed) => !!allowed && String(text || "").trim() !== "";
 SQ.sendState = info => info && info.send ? { disabled: false, note: "" }
   : { disabled: true, note: (info && info.why) || `Sending is off. The owner sets ${SQ.SEND_SETTING} to send.` };
+SQ.supervisorLine = info => info && info.state === "refused"
+  ? `The terminal supervisor is not running: ${String(info.why || "no reason was recorded").replace(/\.$/, "")}.` : "";
 SQ.draft = ctx => {
   const list = v => (Array.isArray(v) ? v : v ? [v] : []).map(String).filter(Boolean);
   const lines = ["Page context", `Screen: ${ctx.screen || ""}`, `Route: ${ctx.route || ""}`];
@@ -291,7 +293,7 @@ function retrySoon() {
 async function loadSessions() {
   let srcs = [];
   try { srcs = await window.SQUAD_OV_SOURCES(); } catch (e) { srcs = []; }
-  const found = []; let rl = null, answered = 0;
+  const found = []; let rl = null, sup = null, answered = 0;
   for (const src of srcs || []) {
     try {
       const r = await fetch(src.api + "/project", { cache: "no-store" });
@@ -299,6 +301,7 @@ async function loadSessions() {
       const d = await r.json();
       answered++;
       rl = rl || { send: d.send, why: d.why };
+      sup = sup || d.supervisor || null;
       for (const s of d.sessions || []) found.push({ ...s, src, send: d.send, why: d.why });
     } catch (e) { /* that repository's hub did not answer: its sessions are left out */ }
   }
@@ -324,6 +327,8 @@ async function loadSessions() {
   cur = (cur && found.find(s => s.sid === cur.sid && s.src.api === cur.src.api))
      || found.find(s => s.src.api + " " + s.sid === kept) || (found.length === 1 ? found[0] : null);
   paintPick(); paintHead();
+  const line = SQ.supervisorLine(sup);
+  if (line) say(line);
   if (cur) loadConversation();
   else if (!found.length) empty("No session runs in this project's checkout. Start Claude Code there, then open this again.");
   else empty("Pick a session above.");
@@ -331,7 +336,7 @@ async function loadSessions() {
 // Only the structure that carries meaning in a 400 px panel: headings, bullets, a fence. Everything else stays text.
 // A transcript names a screenshot by the path it was written to: the hub serves that file and the panel draws a thumbnail
 // (owner, 2026-11-01). "[Image #7]" alone names no file, so it stays text.
-const IMG_RE = /^\s*\[Image: source: ([^\]]+)\]\s*$/;
+const IMG_RE = /^\s*\[Image: source: ([^\]\n]+)\](?:\s.*)?$/;
 function imageNode(path) {
   const t = cur, a = document.createElement("a"), i = document.createElement("img");
   a.className = "sq-img"; a.href = t.src.api + "/image?sid=" + encodeURIComponent(t.sid) + "&p=" + encodeURIComponent(path);
@@ -433,7 +438,7 @@ function clock(iso) {
 }
 function turnNode(t) {
   // A system turn folds to one line (owner, 2026-11-01): a reminder or a hook's note is worth one sentence, not a wall.
-  const onlyImage = /^\s*\[Image: source: [^\]]+\]\s*$/.test(String(t.text || ""));
+  const onlyImage = IMG_RE.test(String(t.text || ""));
   if ((t.role === "system" || t.role === "tool") && !onlyImage) {
     const d = document.createElement("details"), sum = document.createElement("summary");
     d.className = "sq-turn sq-" + t.role + " sq-fold";
@@ -469,12 +474,11 @@ function turnNode(t) {
 }
 // An image the owner sent belongs to the message it came with (owner, 2026-11-01): the harness records it as a turn of its
 // own, so it would draw as a second bubble under the first. A turn that is only an image joins the owner turn just above it.
-const IMG_ONLY = /^\s*\[Image: source: [^\]\n]+\]\s*$/;
 function stitch(turns) {
   const out = [];
   for (const t of turns || []) {
-    const prev = out[out.length - 1], mine = IMG_ONLY.test(String(t.text || ""));
-    const join = mine && prev && (prev.role === "owner" || IMG_ONLY.test(String(prev.text || "")));
+    const prev = out[out.length - 1], mine = IMG_RE.test(String(t.text || ""));
+    const join = mine && prev && (prev.role === "owner" || IMG_RE.test(String(prev.text || "")));
     if (join) out[out.length - 1] = { ...prev, text: String(prev.text || "").replace(/\s+$/, "") + "\n" + String(t.text) };
     else out.push(t);
   }

@@ -58,4 +58,8 @@ case "$r" in READY*) ok "#1810: the entry's closed blocker state decides";; *) k
 printf '{"number":1811,"body":"Work.","blocked_by":[1797],"blocked_by_read":true,"blockers":[{"number":1797,"state":"open"}]}' > "$T/e1811.json"
 r=$(SG_STACK_ISSUE=$T/e1811.json run 1811)
 case "$r" in *"WAIT blocker #1797 is open: its work is not in main yet"*) ok "#1811: an open blocker in the entry gates dispatch";; *) ko "#1811 did not WAIT on #1797: '$r'";; esac
+printf '{"number":1812,"body":"Work.","blocked_by":[1813],"blocked_by_read":true,"blockers":[{"number":1813,"state":"open"}]}' > "$T/e1812.json"
+echo '{"items":[{"n":1813,"st":"Testing","s":"open"}]}' > "$T/co/runs/.hub/hub-board.json"
+r=$(SG_STACK_ISSUE=$T/e1812.json run 1812)
+case "$r" in *"WAIT blocker #1813 is open"*) ok "#1812: a blocker in no column the board carries gates dispatch";; *) ko "#1812 read the removed column as a satisfied blocker: '$r'";; esac
 rm -rf "$T"; exit $fail

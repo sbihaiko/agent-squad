@@ -385,15 +385,58 @@ def _lane_header(hub, lane):
     import re
     page = hub.PAGE
     body = re.search(r"const laneHtml=m=>\{.*?\n return h\+\"</div>\"\};", page, re.S).group(0)
-    stubs = ('const esc=s=>String(s),colOf=()=>"",CN={},eye=()=>"",SLOTS=new Map(),cards=()=>"",bo={},f="";')
+    stubs = ('const esc=s=>String(s),colOf=()=>"",CN={},eye=()=>"",SLOTS=new Map(),cards=()=>"",bo={},f="",'
+             'BOARD_VOCAB={todo:"Todo",doing:"Doing",review:"Code Review"};')
     model = {"lanes": [dict(lane, collapsed=True, counts={}, cells={})], "vc": [], "cols": []}
     return _node(stubs + body + f"console.log(JSON.stringify(laneHtml({json.dumps(model)})));")
 
 
 def test_the_no_spec_lane_draws_the_spec_bar(hub):
     html = _lane_header(hub, {"id": "none", "kind": "none", "title": "No spec", "closed": 3, "total": 4})
-    assert '<span class=bar title="3 of 4 closed"><i style="width:75%"></i></span><span class=pc>3/4</span>' in html
+    assert '<span class="lf lf-bar" style="width:120px;justify-content:flex-start"><span class=bar title="3 of 4 closed"><i style="width:75%"></i></span></span>' in html
+    assert '<span class=pc>3/4</span>' in html
     spec = _lane_header(hub, {"id": "s9", "kind": "s", "num": 9, "title": "t", "closed": 1, "total": 2})
     assert "<span class=pc>1/2</span>" in spec
     bugs = _lane_header(hub, {"id": "bugs", "kind": "bugs", "title": "Loop bugs", "closed": 0, "total": 1})
     assert "class=bar" not in bugs
+
+
+# ---- spec lanes read closest to delivery first, No spec last (#1157) ----
+
+def _order_groups():
+    return [
+        {"name": "Backlog", "end": False, "items": [
+            _row(20, "Backlog", [], sp=True), _row(201, "Backlog", [], pa=20), _row(202, "Backlog", [], pa=20)]},
+        {"name": "Todo", "end": False, "items": [
+            _row(30, "Todo", [], sp=True), _row(301, "Todo", [], pa=30), _row(302, "Todo", [], pa=30),
+            _row(303, "Todo", [], pa=30), _row(304, "Todo", [], pa=30),
+            _row(40, "Todo", [], sp=True), _row(900, "Todo", [])]},
+        {"name": "Doing", "end": False, "items": [_row(305, "Doing", [], pa=30)]},
+        {"name": "Closed", "end": True, "items": [_row(403, "Closed", [], pa=40), _row(404, "Closed", [], pa=40)]},
+    ]
+
+
+def test_spec_lanes_read_closest_to_delivery_first_with_no_spec_last():
+    """A finished spec (all tickets closed) leads, a started spec follows, an unstarted spec comes after, No spec is last."""
+    groups = _order_groups()
+    model = _build(groups, sum={})
+    assert [ln["id"] for ln in model["lanes"]] == ["s40", "s30", "s20", "none"]
+
+
+def test_started_specs_tie_break_by_tickets_in_flight_then_number():
+    groups = [
+        {"name": "Todo", "end": False, "items": [
+            _row(81, "Todo", [], sp=True), _row(62, "Todo", [], sp=True),
+            _row(75, "Todo", [], sp=True), _row(63, "Todo", [], sp=True),
+            _row(752, "Todo", [], pa=75), _row(634, "Todo", [], pa=63)]},
+        {"name": "Doing", "end": False, "items": [
+            _row(812, "Doing", [], pa=81), _row(622, "Doing", [], pa=62),
+            _row(632, "Doing", [], pa=63), _row(633, "Doing", [], pa=63)]},
+        {"name": "Closed", "end": True, "items": [
+            _row(811, "Closed", [], pa=81), _row(621, "Closed", [], pa=62), _row(751, "Closed", [], pa=75),
+            _row(631, "Closed", [], pa=63)]},
+    ]
+    model = _build(groups, sum={})
+    assert [ln["id"] for ln in model["lanes"]] == ["s62", "s81", "s75", "s63"]
+    flipped = [{**g, "items": list(reversed(g["items"]))} for g in reversed(groups)]
+    assert [ln["id"] for ln in _build(flipped, sum={})["lanes"]] == ["s62", "s81", "s75", "s63"], "the order moves with the payload's row order"

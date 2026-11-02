@@ -60,6 +60,7 @@ test-ghspend.sh 6.27
 test-health.sh 73.93
 test-heartbeat.sh 0.86
 test-hub-adapter-errors.sh 0.14
+test-hub-attachment.sh 0.61
 test-hub-caps.sh 0.41
 test-hub-ci.sh 0.08
 test-hub-demote.sh 0.07
@@ -160,6 +161,7 @@ test-stack.sh 1.17
 test-state-isolation.sh 1.45
 test-state-split.sh 1.75
 test-tdd-red.sh 2.54
+test-test.sh 0.10
 test-throughput.sh 1.04
 test-todo-unread.sh 0.53
 test-token-guard.sh 2.43

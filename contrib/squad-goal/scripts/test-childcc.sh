@@ -41,7 +41,7 @@ run_def refs c "Every commit message carries the line \`Refs #1493\` on its own 
 run_def cluster c "CHILD — GitHub issue(s) 5201, 5202, 5203 (work in the worktree the run gives you)." pass
 printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}}' > "$T/issues-open.json"
 export SG_SQUAD=$(cd "$(dirname "$src")/../../.." && pwd) SQUAD_CAPS_DIR=$T/caps   # a review takes a review slot (caps.reviews): a throwaway budget, this repository's squad.caps
-export GH_LOG=$T/gh.log GH_ISSUES_OPEN=$T/issues-open.json; export GH_STATE_FAIL=$T/gh.statefail SG_STATE=$T/st SG_REPO=x/y SG_OWNER=x SG_PROJECT=4 PATH="$T/bin:$PATH" GH_NUMS="2:Todo 3:Testing 4:In_Progress 5101:Todo"
+export GH_LOG=$T/gh.log GH_ISSUES_OPEN=$T/issues-open.json; export GH_STATE_FAIL=$T/gh.statefail SG_STATE=$T/st SG_REPO=x/y SG_OWNER=x SG_PROJECT=4 PATH="$T/bin:$PATH" GH_NUMS="2:Todo 3:Closed 4:In_Progress 5101:Todo"
 cp "$T/childcc.py" "$T/childcc.py.run"; sed -i.bak "s#^board = .*#board = '$T/board.sh'#" "$T/childcc.py.run"
 out=$(cd "$T/co" && python3 "$T/childcc.py.run" 2>&1)
 echo "$out" | tail -20 >&2
@@ -49,7 +49,7 @@ m=$(cat "$T/moves" 2>/dev/null)
 echo "$m" | /usr/bin/grep -q ' 1$' && ok "live pass: moved" || ko "live pass not moved"
 echo "$m" | /usr/bin/grep -q ' 2$' && ok "finished run, card Todo: backfilled" || ko "Todo card not backfilled"
 echo "$m" | /usr/bin/grep -q ' 4$' && ok "finished run, card In Progress: backfilled" || ko "In Progress card not backfilled"
-echo "$m" | /usr/bin/grep -q ' 3$' && ko "card past Code Complete was moved" || ok "finished run, card Testing: left alone"
+echo "$m" | /usr/bin/grep -q ' 3$' && ko "card past Code Complete was moved" || ok "finished run, card Closed: left alone"
 echo "$m" | /usr/bin/grep -q ' 1487$' && ok "GitHub issue N (no hash): moved" || ko "GitHub issue N (no hash) not moved"
 ls "$T/st/cq"/*#1487-cc-*.md >/dev/null 2>&1 && ok "GitHub issue N (no hash): comment queued" || ko "GitHub issue N (no hash): no comment"
 echo "$m" | /usr/bin/grep -q ' 1491$' && ok "GitHub issues N: moved" || ko "GitHub issues N not moved"

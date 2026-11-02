@@ -33,7 +33,7 @@ def test_state_seam_reads_what_its_binding_carries():
 def test_state_seam_rejects_a_write_the_following_read_does_not_carry():
     binding = FakeBinding("Todo")
 
-    with pytest.raises(issue_state.NotCarried, match="issue 236.*Testing.*Todo"):
-        issue_state.State(binding).write(236, "Testing")
+    with pytest.raises(issue_state.NotCarried, match="issue 236.*Code Review.*Todo"):
+        issue_state.State(binding).write(236, "Code Review")
 
-    assert binding.writes == [(236, "Testing")]
+    assert binding.writes == [(236, "Code Review")]

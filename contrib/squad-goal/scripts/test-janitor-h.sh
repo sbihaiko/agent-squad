@@ -12,7 +12,7 @@ c() { printf '{"created_at":"2026-10-10T01:00:00Z","body":"%s"}' "$1"; }   # one
 case "$*" in
   *issues/1201/comments*) echo "[$(c "$red"),$(c "$red"),$(c "$red")]";;
   *issues/1204/comments*) echo "[$(c "$red"),$(c "$red"),$(c "Fork half merged: gui/x at abc into local/next as def, fork suite green (test pass t)."),$(c "$red")]";;
-  *issues/1202/comments*|*issues/1205/comments*) echo "[$(c "Child c finished: pass. Card -> Code Complete (Testing starts later).")]";;
+  *issues/1202/comments*|*issues/1205/comments*) echo "[$(c "Child c finished: pass. Card -> Code Complete .")]";;
   *) echo "[]";;
 esac
 J

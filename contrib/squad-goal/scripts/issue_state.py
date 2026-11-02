@@ -12,7 +12,7 @@ The seam answers two questions and only these:
     state = board_state()               # the binding this repository is configured with (SG_OWNER, SG_PROJECT, SG_REPO)
     state.read(236)                     # the state issue 236 carries, "" when it carries none
     state.read_all()                    # every card, one read: {236: "Todo", ...}
-    state.write(236, "Testing")         # proven by the read that follows; returns the state the issue then carries
+    state.write(236, "Code Review")         # proven by the read that follows; returns the state the issue then carries
     state.holder(236)                   # the run that holds issue 236: {"run": id, "started": time}, None when none does
     state.holders()                     # every holder, one read: {"236": {"run": ..., "started": ...}}
     state.hold(236, run, started)       # name the run on the issue, proven by the read that follows

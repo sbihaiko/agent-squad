@@ -52,20 +52,6 @@
       "terminal": false
     },
     {
-      "name": "Pushing",
-      "color": "PURPLE",
-      "fact": "The wave is approved and the push to dev is in progress",
-      "actor": "The landing",
-      "terminal": false
-    },
-    {
-      "name": "Testing",
-      "color": "PINK",
-      "fact": "CI runs on the dev tip",
-      "actor": "The pass",
-      "terminal": false
-    },
-    {
       "name": "Closed",
       "color": "GREEN",
       "fact": "In dev",

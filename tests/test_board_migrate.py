@@ -68,8 +68,8 @@ def test_a_card_closed_as_not_planned_moves_to_abandoned(mig):
 def test_merging_and_landing_take_their_shipped_name_pushing(mig):
     plan = mig.plan(ITEMS)
 
-    assert _move(plan, 9)["new"] == "Pushing"
-    assert _move(plan, 10)["new"] == "Pushing"
+    assert _move(plan, 9)["new"] == "Code Complete"
+    assert _move(plan, 10)["new"] == "Code Complete"
 
 
 def test_a_card_on_a_shipped_column_is_never_moved(mig):
@@ -111,8 +111,8 @@ def test_the_dry_run_prints_every_move_and_removal_and_writes_nothing(tmp_path):
     assert "dry run: nothing is written" in out
     assert "MOVE #1 Open Specs -> Backlog +spec" in out
     assert "MOVE #3 Blocked -> Code Complete +frozen:owner" in out
-    assert "MOVE #9 Merging -> Pushing" in out
-    assert "MOVE #10 Landing -> Pushing" in out
+    assert "MOVE #9 Merging -> Code Complete" in out
+    assert "MOVE #10 Landing -> Code Complete" in out
     assert out.count("MOVE #") == 8
     assert all(f"REMOVE option {o}" in out for o in OLD)
     assert sorted(p.name for p in tmp_path.iterdir()) == sorted(before + ["items.json"])

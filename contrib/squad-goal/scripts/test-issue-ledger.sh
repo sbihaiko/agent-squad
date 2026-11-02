@@ -17,8 +17,11 @@ L fail 'x/y#7' r1 "" x >/dev/null; [ ! -e "$T/st/auto" ] && ok "the old requeue 
 # run and keeps its cause; a duplicate changes nothing; a delivered run is terminal; `keep` leaves a cause already recorded.
 W() { L read 'x/y#9' wave | python3 -c 'import json,sys; r=json.load(sys.stdin).get(sys.argv[1]) or {}; print(r.get("state",""), r.get("cause",""))' "$1"; }
 [ "$(L wave 'x/y#9' run-a held 'no review yet')" = recorded ] && [ "$(W run-a)" = "held no review yet" ] && ok "a wave hold is a ledger fact with its cause" || ko "hold: '$(L read 'x/y#9')'"
-F=$T/st/state/x__y__9.json; before=$(cksum < "$F"); sleep 1
-[ "$(L wave 'x/y#9' run-a held 'no review yet')" = duplicate ] && [ "$(cksum < "$F")" = "$before" ] && ok "a duplicate event changes nothing" || ko "duplicate: '$(cat "$F")'"
+E() { L read "$1" episodes | python3 -c 'import json,sys; e=json.load(sys.stdin); print(len(e), e[-1]["count"] if e else 0)'; }
+[ "$(L wave 'x/y#9' run-a held 'no review yet')" = observed ] && [ "$(E 'x/y#9')" = "1 2" ] && [ "$(W run-a)" = "held no review yet" ] \
+  && ok "a repeated hold is one episode: its count rises, its fact stays" || ko "repeat hold: '$(E 'x/y#9')' '$(W run-a)'"
+for i in $(seq 40); do L wave 'x/e#1' run-h stuck 'gate lock held by pid 9' >/dev/null; done
+[ "$(E 'x/e#1')" = "1 40" ] && ok "forty polls of one stuck child are one episode counted forty" || ko "forty polls: '$(E 'x/e#1')'"
 [ "$(L wave 'x/y#9' run-a refused 'the local gates failed: red')" = recorded ] && [ "$(W run-a)" = "refused the local gates failed: red" ] && ok "a later event of the run replaces its fact" || ko "refuse: '$(W run-a)'"
 [ "$(L wave 'x/y#9' run-a refused 'the wave reached its age cap' keep)" = kept ] && [ "$(W run-a)" = "refused the local gates failed: red" ] && ok "keep leaves the cause an attempt recorded" || ko "keep: '$(W run-a)'"
 L wave 'x/y#9' run-b entered 'entered wave/run-b' >/dev/null; L wave 'x/y#9' run-b delivered 'landed in dev as abc' >/dev/null

@@ -13,7 +13,7 @@ A pass whose prompt names no issue is logged once (CHILDCC UNMAPPED <run> <child
 The runs the pass works are its arguments, else every live run: watch.sh's completion of a finished run hands it that one run, so the children that run finished are in its wave before that same step lands the wave (#375 review).
 Live runs move at once; a run that already has its verdict (tiny and fork-only runs go pass -> verdict in under 1 s, so they are never seen live) is backfilled once,
 but only when the card is still in Todo/In Progress/Blocked, never past Code Complete; a run with a wave not yet landed is not backfilled by card but by its wave marker, so a child that has not entered still enters. The once-marker is written when the child entered or needs no entry, never after a refused entry: the next pass tries it again. Once per child (marker auto/cc-<run>-<child>); only an open issue moves; queues a comment with the child's first reason.
-Testing starts later (merge + e2e, or a test.sh pass), so Code Complete never overrides a later column: an issue already
+Closed comes later (the wave lands in dev), so Code Complete never overrides a later column: an issue already
 past it is left alone because the marker is written the first time the child is seen passing.
 One pass works at most SG_CHILDCC_BUDGET pending children (1 by default, #590): a review and the gates take 2 to 15 min a
 child, and a pass that worked every child held the childcc lock, and every landing behind it, for 14 to 25 min. A child is
@@ -427,7 +427,7 @@ for key, r, child, why, n, finished, d, lwhy, ok, own, rnd in pending[k0:] + pen
         for sib in every_issue(d, n):
             subprocess.run([board, owner, proj, "Code Complete", str(sib)], capture_output=True)
             print(f"CODE COMPLETE #{sib} ({name} {child})", flush=True)
-    (st / "cq" / f"{CQ}#{n}-cc-{mk.name}.md").write_text(f"Child {child} of squad run {name} finished: pass. Cards -> Code Complete: {', '.join('#' + str(x) for x in every_issue(d, n))} (Testing starts with the merge/e2e or the fork suite). {why[:600]}\n")
+    (st / "cq" / f"{CQ}#{n}-cc-{mk.name}.md").write_text(f"Child {child} of squad run {name} finished: pass. Cards -> Code Complete: {', '.join('#' + str(x) for x in every_issue(d, n))} (Closed follows when the wave lands in dev). {why[:600]}\n")
 # The round holds the children worked since the last complete pass. A pass is complete when every child it left had its turn
 # in the round: a child that fails on every pass then still lets the landing go on, as one pass over every child did. A held
 # child is never in `visited` (#620): it holds the landing until its hold is requeued or its wave reaches its age cap.

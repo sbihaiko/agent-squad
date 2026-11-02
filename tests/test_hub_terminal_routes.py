@@ -4,6 +4,8 @@ and a loopback caller needs no grant. The supervisor is a fake here: what the te
 import importlib.util
 import json
 import pathlib
+import shutil
+import subprocess
 import sys
 import threading
 from http.client import HTTPConnection
@@ -15,6 +17,7 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib/squad-goal/scripts"
 HUB_PY = SCRIPTS / "hub.py"
+OVERLAY_JS = (SCRIPTS / "hub-overlay.js").read_text()
 sys.path.insert(0, str(SCRIPTS))
 
 TAILNET = "hub.tail1234.ts.net"
@@ -27,15 +30,22 @@ class FakeSupervisor:
     class Refused(Exception):
         pass
 
-    def __init__(self):
+    def __init__(self, ensure_error=None):
         self.calls = []
+        self.ensures = []
+        self.ensure_error = ensure_error
+
+    def ensure(self, state, timeout=10.0):
+        self.ensures.append(state)
+        if self.ensure_error is not None:
+            raise self.ensure_error
 
     def call(self, state, op, **fields):
         self.calls.append((op, fields))
         return {"ok": True, "data": "", "offset": 0, "gap": False}
 
 
-def load_hub(monkeypatch, tmp_path, grants=(), allow=(ANA,)):
+def load_hub(monkeypatch, tmp_path, grants=(), allow=(ANA,), ensure_error=None):
     checkout = tmp_path / "checkout"
     (checkout / "docs" / "squad").mkdir(parents=True)
     lines = ["tailnet:", f"  host: {TAILNET}", f"  allow: {json.dumps(list(allow))}"] + [f"  {g}: true" for g in grants]
@@ -48,11 +58,11 @@ def load_hub(monkeypatch, tmp_path, grants=(), allow=(ANA,)):
     spec.loader.exec_module(mod)
     mod.run_list = lambda: []
     mod.loop_caps = lambda: None
-    fake = FakeSupervisor()
+    fake = FakeSupervisor(ensure_error=ensure_error)
     mod.terminal_supervisor = lambda: fake
     srv = ThreadingHTTPServer(("127.0.0.1", 0), mod.H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
-    return SimpleNamespace(port=srv.server_port, fake=fake, server=srv)
+    return SimpleNamespace(port=srv.server_port, fake=fake, server=srv, mod=mod)
 
 
 @pytest.fixture
@@ -171,3 +181,49 @@ def test_loopback_terminal_post_without_an_origin_is_refused(hub, path, body):
     status, _ = request(h.port, "POST", path, body, host=f"127.0.0.1:{h.port}", login=None, origin=None)
     assert status == 403
     assert h.fake.calls == []
+
+
+def test_hub_start_brings_the_terminal_supervisor_up_and_records_it(hub):
+    h = hub()
+    h.mod.start_terminal_supervisor()
+    assert h.fake.ensures == [h.mod.STATE]
+    assert h.mod.TERMINAL == {"state": "up", "why": ""}
+
+
+@pytest.mark.parametrize("error", [RuntimeError("supervisor did not answer in /tmp/state"), OSError("spawn refused")])
+def test_refused_supervisor_start_keeps_its_reason_and_the_hub_keeps_serving(hub, capsys, error):
+    h = hub(ensure_error=error)
+    h.mod.start_terminal_supervisor()
+    assert h.mod.TERMINAL == {"state": "refused", "why": str(error)}
+    assert str(error) in capsys.readouterr().err
+
+
+def test_refused_supervisor_start_reaches_the_panel_on_the_project_route_and_the_hub_serves(hub, monkeypatch):
+    h = hub(ensure_error=RuntimeError("supervisor did not answer in /tmp/state"))
+    monkeypatch.setattr(h.mod.sessions, "project_sessions", lambda profile, checkout, profiles_of=None: [])
+    h.mod.start_terminal_supervisor()
+    status, body = request(h.port, "GET", "/api/sessions/project", host=f"127.0.0.1:{h.port}", login=None, origin=None)
+    assert status == 200
+    assert json.loads(body)["supervisor"] == {"state": "refused", "why": "supervisor did not answer in /tmp/state"}
+
+
+NODE = shutil.which("node")
+
+
+def supervisor_line(info):
+    script = f"{OVERLAY_JS}\nconst SQ=module.exports;\nconsole.log(JSON.stringify(SQ.supervisorLine({json.dumps(info)})));"
+    p = subprocess.run([NODE, "-"], input=script, capture_output=True, text=True, timeout=30)
+    assert p.returncode == 0, p.stderr
+    return json.loads(p.stdout)
+
+
+@pytest.mark.node_bound
+def test_panel_names_a_refused_supervisor_in_one_sentence():
+    line = supervisor_line({"state": "refused", "why": "supervisor did not answer in /tmp/state"})
+    assert line == "The terminal supervisor is not running: supervisor did not answer in /tmp/state."
+
+
+@pytest.mark.node_bound
+@pytest.mark.parametrize("info", [{"state": "up", "why": ""}, {"state": "starting", "why": ""}, None])
+def test_panel_says_nothing_about_a_supervisor_that_is_up_or_starting(info):
+    assert supervisor_line(info) == ""

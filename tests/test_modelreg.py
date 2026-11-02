@@ -77,10 +77,29 @@ def test_haiku_has_an_id_and_the_three_short_names_are_aliases(reg):
 
 
 def test_retired_history_ids_have_an_entry_a_label_and_a_price(reg):
-    for mid in ("grok-4.5", "grok-4.6", "gpt-6-astra", "gpt-5.6-sol-fast", "gpt-5.5"):   # gpt-6.1-sol answers on codex, so it is live (#686)
+    for mid in ("grok-4.5", "grok-4.6", "gpt-5.6-sol-fast", "gpt-5.5"):   # gpt-6.1-sol answers on codex, so it is live (#686)
         e = _entry(reg, mid)
         assert e.retired is True, mid
         assert e.label and e.display_price, mid
+
+
+def test_a_served_model_is_selectable_and_a_withdrawn_one_may_stay_retired(reg, tmp_path):
+    """#1164: the codex subscription still serves GPT-6 Astra, so its entry is live and its chain row is eligible.
+    Only an entry the provider has withdrawn may stay retired with no route."""
+    e = _entry(reg, "gpt-6-astra")
+    assert e.retired is False
+    assert e.routes["cli"]["auth"] == "subscription"
+    assert "gpt-6-astra" in mr.invocation("gpt-6-astra", "cli", reg=reg).argv
+    row = mr.chain({"coding_models": ["gpt-6-astra"]}, "coding", reg).entries[0]
+    assert row.known and row.route and row.subscription == "gpt"
+    assert mr.eligible(row, shared=tmp_path, hour=12).ok is True
+
+    withdrawn = _good("gpt-withdrawn", "gpt", "gpt", {})
+    withdrawn["retired"] = True
+    wreg = mr.load(_write_registry(tmp_path / "registry.json", [withdrawn]))
+    assert wreg.dropped == []
+    assert wreg.entries["gpt-withdrawn"].retired is True
+    assert mr.chain({"coding_models": ["gpt-withdrawn"]}, "coding", wreg).entries[0].route is None
 
 
 def test_fast_gateway_ids_are_gateway_only(reg):

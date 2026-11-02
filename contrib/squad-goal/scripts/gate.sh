@@ -25,10 +25,14 @@
 # that calls it sets SG_GATE_STATUS=self, so the gate does not overwrite it with the HEAD it was started in. Each line is written
 # by a temp file and a mv, so no reader sees half of it. SG_STATE unset: /tmp/sg-state, never TMPDIR.
 # Each finished gate also appends one line to $SG_STATE/gate-history: `<finish epoch> TAB <kind> TAB <result> TAB <sha> TAB <start epoch>
-# TAB <selection> [TAB <scope>]`, the selection empty when the gate ran no battery, and the scope (`delta` or `full`) present
-# only when the battery named one. The duration is finish minus start, and start is read inside the
-# lock, after the wait: it is the gate's run time, never its queue time. A gate that sets SG_GATE_STATUS=self writes no history line,
-# as it writes no status line. The file only grows: the throughput report reads it, and nothing rewrites it.
+# TAB <selection> TAB <scope> TAB <outcome> TAB <reason> TAB <ran> TAB <not run> TAB <slots>`. The selection and the scope are empty
+# when the gate ran no battery or names none. The outcome is pass, fail or unproven (spec 1163): the gate's own verdict, written by
+# the command to GATE_OUTCOME_FILE as `<outcome> TAB <reason> TAB <ran> TAB <not run>`; with none, pass or fail by the exit code,
+# and a gate stopped before any check answered is unproven. The result stays pass or fail, as the hub reads it. The reason is one
+# line, `-` when none; ran and not run list the checks, `-` when none; slots is the count of gate slots the gate took. The duration
+# is finish minus start, and start is read inside the lock, after the wait: it is the gate's run time, never its queue time. A gate
+# that sets SG_GATE_STATUS=self writes no history line, as it writes no status line. The file only grows: the throughput report
+# reads it, and nothing rewrites it.
 here="$(cd "$(dirname "$0")" && pwd)"; st=${SG_STATE:-/tmp/sg-state}
 write_status() {  # <path> <line>
   printf '%s\n' "$2" > "$1.$$" && mv -f "$1.$$" "$1"
@@ -44,29 +48,34 @@ status() {  # <kind> <result> <sha> [<test selection>] [<test scope>]
 append_line() {  # <path> <line>: one short write at the end of the file, never a rewrite
   printf '%s\n' "$2" >> "$1"
 }
-gate_history() {  # <kind> <result> <sha> <start epoch> [<test selection>] [<test scope>]
+gate_history() {  # <kind> <result> <sha> <start epoch> <selection> <scope> <outcome> <reason> <ran> <not run> <slots>
   mkdir -p "$st" 2>/dev/null || return 0
-  printf -v line '%s\t%s\t%s\t%s\t%s\t%s' "$(date +%s)" "$1" "$2" "$3" "$4" "${5:-}"
-  [ -z "${6:-}" ] || line="$line"$'\t'"$6"
+  printf -v line '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "$(date +%s)" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" "${11}"
   append_line "$st/gate-history" "$line"
 }
 case "${1:-}" in
   --status) [ $# = 4 ] || { echo "usage: gate.sh --status <kind> <pass|fail> <sha>" >&2; exit 2; }; status "$2" "$3" "$4"; exit 0;;
   --run)    # inside the lock: run the command, then write the line. A command the holder stops at its deadline (TERM) is a fail.
-    shift; export GATE_SELECT_FILE GATE_SCOPE_FILE
+    shift; export GATE_SELECT_FILE GATE_SCOPE_FILE GATE_OUTCOME_FILE
     GATE_SELECT_FILE=$(mktemp "${TMPDIR:-/tmp}/gate-select.XXXXXX" 2>/dev/null) || GATE_SELECT_FILE=
     GATE_SCOPE_FILE=$(mktemp "${TMPDIR:-/tmp}/gate-scope.XXXXXX" 2>/dev/null) || GATE_SCOPE_FILE=
+    GATE_OUTCOME_FILE=$(mktemp "${TMPDIR:-/tmp}/gate-outcome.XXXXXX" 2>/dev/null) || GATE_OUTCOME_FILE=
     start=$(date +%s)
-    note() {
+    note() {  # <result> <outcome if the command wrote none> <reason if none>
       if [ "${SG_GATE_STATUS:-}" != self ]; then
         sha=$(git rev-parse HEAD 2>/dev/null); sel=$(cat "$GATE_SELECT_FILE" 2>/dev/null); scope=$(cat "$GATE_SCOPE_FILE" 2>/dev/null)
-        status "${SG_GATE_KIND:-gate}" "$1" "$sha" "$sel" "$scope"; gate_history "${SG_GATE_KIND:-gate}" "$1" "$sha" "$start" "$sel" "$scope"
+        oc= rs= ran= notran=
+        [ -z "$GATE_OUTCOME_FILE" ] || IFS=$'\t' read -r oc rs ran notran < "$GATE_OUTCOME_FILE" 2>/dev/null
+        [ -n "$oc" ] || { oc=$2; rs=$3; ran=-; notran=-; }
+        status "${SG_GATE_KIND:-gate}" "$1" "$sha" "$sel" "$scope"
+        gate_history "${SG_GATE_KIND:-gate}" "$1" "$sha" "$start" "$sel" "$scope" "$oc" "$rs" "${ran:--}" "${notran:--}" "${SQUAD_GATE_WORKERS:-0}"
       fi
       [ -z "$GATE_SELECT_FILE" ] || rm -f "$GATE_SELECT_FILE"
       [ -z "$GATE_SCOPE_FILE" ] || rm -f "$GATE_SCOPE_FILE"
+      [ -z "$GATE_OUTCOME_FILE" ] || rm -f "$GATE_OUTCOME_FILE"
     }
-    trap 'note fail; exit 143' TERM
-    "$@"; rc=$?; if [ $rc = 0 ]; then note pass; else note fail; fi; exit $rc;;
+    trap 'note fail unproven "the gate was stopped before any check answered"; exit 143' TERM
+    "$@"; rc=$?; if [ $rc = 0 ]; then note pass pass -; else note fail fail "exit $rc"; fi; exit $rc;;
 esac
 [ $# -gt 0 ] || { echo "usage: gate.sh <command...>   (lock in \$SG_STATE/locks/gate; SG_STATE unset: /tmp/sg-state, never TMPDIR)" >&2; exit 2; }
 export SERIAL_WAIT_SECONDS=${SERIAL_WAIT_SECONDS:-86400} SERIAL_HOLD_SECONDS=${SERIAL_HOLD_SECONDS:-7200}

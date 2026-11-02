@@ -199,7 +199,7 @@ bc() { cat "$T/board.calls" 2>/dev/null; }
 # #382 replaced #307's rule: no pull request is read, and a work branch whose tip is in the landing branch is the delivery. #2004's
 # card reached Code Complete and its branch is in dev, so the card goes to Done, as test-janitor-branch-state.sh pins for the shipped board.
 /usr/bin/grep -q '^STATUS o 4 Done 2004$' "$T/board.calls" 2>/dev/null && ok "a work branch in dev moves a Code Complete card to Done" || ko "#2004 not Done: $(bc)"
-! /usr/bin/grep -q '^STATUS o 4 Testing 2004$' "$T/board.calls" 2>/dev/null && ok "a merged pull request moves no card to Testing" || ko "#2004 moved to Testing over a pull request"
+! /usr/bin/grep -q '^STATUS o 4 Closed 2004$' "$T/board.calls" 2>/dev/null && ok "a merged pull request moves no card to Closed" || ko "#2004 moved to Closed over a pull request"
 # #127: a PR that names the issue but was merged into its parent branch carries the work nowhere, so the card stops at
 # Code Complete -- Done over a merge the base never took is the false delivery #125 showed.
 /usr/bin/grep -q '^ADD o 4 Code Complete 2018$' "$T/board.calls" 2>/dev/null && ok "a merge into a parent branch leaves the card at Code Complete" || ko "#2018 left the dispatch column: $(bc)"

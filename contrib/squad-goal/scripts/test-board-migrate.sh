@@ -18,8 +18,8 @@ out=$(python3 "$T/s/board_migrate.py" --plan "$T/all.json" 2>&1); rc=$?
 for o in Blocked "In Progress" Done "Open Specs" Merging Landing; do echo "$out" | grep -q "^REMOVE option $o" && ok "removal listed: $o" || ko "removal missing: $o"; done
 echo "$out" | grep -q '^MOVE #1 Open Specs -> Backlog +spec' && ok "Open Specs -> Backlog with the spec label" || ko "open specs: $out"
 echo "$out" | grep -q '^MOVE #3 Blocked -> Code Complete +frozen:owner' && ok "Blocked -> the column reached, owner marker" || ko "blocked: $out"
-echo "$out" | grep -q '^MOVE #8 Merging -> Pushing' && ok "Merging -> Pushing" || ko "merging: $out"
-echo "$out" | grep -q '^MOVE #9 Landing -> Pushing' && ok "Landing -> Pushing" || ko "landing: $out"
+echo "$out" | grep -q '^MOVE #8 Merging -> Code Complete' && ok "Merging -> Code Complete" || ko "merging: $out"
+echo "$out" | grep -q '^MOVE #9 Landing -> Code Complete' && ok "Landing -> Code Complete" || ko "landing: $out"
 [ "$(ls "$T" | sort)" = "$before" ] && ok "the dry run wrote nothing" || ko "the dry run wrote a file"
 err=$(python3 "$T/s/board_migrate.py" --check "$T/all.json" 2>&1 >/dev/null); rc=$?
 [ $rc = 3 ] && ok "removal refused while a card carries an old option" || ko "check exit $rc"

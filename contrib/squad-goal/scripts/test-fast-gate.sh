@@ -303,5 +303,38 @@ $G -C "$R" add -A; $G -C "$R" commit -q -m unrelated
 out=$(fg); rc=$?
 /usr/bin/grep -q "test-hub-caps.sh" "$T/ran.log" 2>/dev/null && ko "an unlisted module ran the fixture suite" || ok "a module the mirror statement does not name runs no fixture suite"
 
+# (spec 1163) The verdict: the history line carries the outcome, one reason, the checks that ran and the ones that did not. A tool
+# that is absent is unproven and names the tool, with no retry; a present check that reports a defect is fail; a clean battery passes.
+vstub() {  # <name> <body>: a battery stub that logs one line per call, then runs <body>
+  printf '#!/bin/bash\necho "battery" >> "%s/ran.log"\n%s\n' "$T" "$2" > "$T/$1.sh"
+}
+vfg() {  # <battery stub>: one fast gate on the current branch with that battery and no retry
+  rm -f "$T/ran.log" "$SG_STATE/gate-status"; (cd "$R" && SG_FAST_BASE=dev SG_FAST_CMD="bash $T/$1.sh" SG_FAST_RETRY_CMD="bash $T/retry.sh" bash "$d/fast-gate.sh" 2>&1)
+}
+vhist() { tail -n 1 "$SG_STATE/gate-history"; }
+vstub absent 'echo "/usr/bin/python3: No module named mypy"; exit 1'
+out=$(vfg absent); rc=$?
+[ $rc = 4 ] && case "$(last "$out")" in "fast-gate: absent: mypy "*) true;; *) false;; esac \
+  && ok "an absent type checker exits 4 and names mypy on its last line" || ko "absent mypy: rc $rc: '$(last "$out")'"
+[ "$(/usr/bin/grep -c '^battery' "$T/ran.log")" = 1 ] && ok "an absent tool is not retried" || ko "absent tool retried: '$(cat "$T/ran.log")'"
+[ "$(vhist | cut -f8-11)" = "$(printf 'unproven\tmypy is absent from the battery'"'"'s interpreter, so its check did not run\truff\tmypy pytest')" ] \
+  && ok "the history line says unproven, names mypy as the reason, and lists ruff as run and mypy and pytest as not run" || ko "absent history: '$(vhist)'"
+
+vstub typed 'echo "squad/x.py:12: error: bad type"; exit 1'
+out=$(vfg typed); rc=$?
+[ $rc = 1 ] && [ "$(vhist | cut -f8)" = fail ] && [ "$(vhist | cut -f10)" = "ruff mypy" ] && ok "a type checker that reports an error is a fail, with ruff and mypy as run" || ko "type fail: rc $rc: '$(vhist)'"
+
+vstub collected 'echo "ERROR collecting tests/test_c.py"; exit 2'
+out=$(vfg collected); rc=$?
+[ $rc = 1 ] && [ "$(vhist | cut -f8)" = fail ] && [ "$(vhist | cut -f10)" = "ruff mypy pytest" ] && ok "a collection error is a fail, with every check run" || ko "collection fail: rc $rc: '$(vhist)'"
+
+vstub clean 'exit 0'
+out=$(vfg clean); rc=$?
+[ $rc = 0 ] && [ "$(vhist | cut -f8-11)" = "$(printf 'pass\t-\truff mypy pytest\t-')" ] && ok "a clean battery passes, with every check run and none not run" || ko "clean pass: rc $rc: '$(vhist)'"
+
+out=$(cd "$R" && SG_FAST_BASE=no-such-ref SG_FAST_CMD="bash $T/clean.sh" bash "$d/fast-gate.sh" 2>&1); rc=$?
+[ $rc = 2 ] && [ "$(vhist | cut -f8)" = unproven ] && case "$(vhist | cut -f9)" in *"does not resolve"*) true;; *) false;; esac \
+  && ok "an unresolved base is unproven: it exits 2 and the reason says the base does not resolve" || ko "unresolved base verdict: rc $rc: '$(vhist)'"
+
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 rm -rf "$T"; exit $fail

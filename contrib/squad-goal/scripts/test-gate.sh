@@ -36,9 +36,9 @@ IFS=$'\t' read -r _ kind res at < "$F" 2>/dev/null
 H=$SG_STATE/gate-history
 hn0=$(wc -l < "$H" 2>/dev/null | tr -d ' '); hn0=${hn0:-0}; cp "$H" "$T/h0" 2>/dev/null || : > "$T/h0"
 (cd "$T/w" && SG_GATE_KIND=fast bash "$d/gate.sh" sh -c 'sleep 1; echo "selected 2 files" > "$GATE_SELECT_FILE"; echo delta > "$GATE_SCOPE_FILE"'); rc=$?
-IFS=$'\t' read -r fin kind res at start sel scope < <(tail -n 1 "$H")
+IFS=$'\t' read -r fin kind res at start _ < <(tail -n 1 "$H"); sel=$(tail -n 1 "$H" | cut -f6); scope=$(tail -n 1 "$H" | cut -f7)
 [ $rc = 0 ] && [ "$kind" = fast ] && [ "$res" = pass ] && [ "$at" = "$sha" ] && ok "a finished gate appends one history line: kind, result and sha" || ko "history line: '$(tail -n 1 "$H" 2>&1)'"
-[ "$(tail -n 1 "$H" | tr -cd '\t' | wc -c | tr -d ' ')" = 6 ] && ok "the history line has seven fields, the scope beside the selection" || ko "history fields: '$(tail -n 1 "$H")'"
+[ "$(tail -n 1 "$H" | tr -cd '\t' | wc -c | tr -d ' ')" = 11 ] && ok "the history line has twelve fields: the selection and scope, then the verdict and the slots" || ko "history fields: '$(tail -n 1 "$H")'"
 [ "$sel $scope" = "selected 2 files delta" ] && ok "the history line carries the gate's selection and its scope" || ko "history selection: '$sel' scope: '$scope'"
 IFS=$'\t' read -r _ kind res _ sel scope < "$S" 2>/dev/null
 [ "$sel $scope" = "selected 2 files delta" ] && ok "the status line carries the selection and the scope" || ko "status selection: '$(cat "$S" 2>&1)'"
@@ -46,7 +46,18 @@ case "$start" in ''|*[!0-9]*) ko "the history line carries no start epoch: '$sta
 cmp -s "$T/h0" <(head -n "$hn0" "$H") && [ "$(wc -l < "$H" | tr -d ' ')" = "$((hn0 + 1))" ] && ok "the history is append-only: earlier lines are untouched" || ko "history was rewritten"
 
 (cd "$T/w" && SG_GATE_KIND=full bash "$d/gate.sh" sh -c 'exit 7'); rc=$?
-[ "$(tail -n 1 "$H" | tr -cd '\t' | wc -c | tr -d ' ')" = 5 ] && [ "$(tail -n 1 "$H" | cut -f2,3)" = "$(printf 'full\tfail')" ] && ok "a gate with no selection writes an empty selection field" || ko "fail history: '$(tail -n 1 "$H")'"
+[ "$(tail -n 1 "$H" | tr -cd '\t' | wc -c | tr -d ' ')" = 11 ] && [ "$(tail -n 1 "$H" | cut -f2,3)" = "$(printf 'full\tfail')" ] && ok "a gate with no selection writes an empty selection field" || ko "fail history: '$(tail -n 1 "$H")'"
+
+# --- the verdict (spec 1163): the outcome, its one reason, the checks that ran and the ones that did not, and the slots ---
+(cd "$T/w" && SG_GATE_KIND=fast bash "$d/gate.sh" sh -c 'printf "unproven\tmypy is not installed\truff\tmypy pytest\n" > "$GATE_OUTCOME_FILE"; exit 4'); rc=$?
+vl=$(tail -n 1 "$H")
+[ $rc = 4 ] && [ "$(printf '%s' "$vl" | cut -f3)" = fail ] && [ "$(printf '%s' "$vl" | cut -f8-11)" = "$(printf 'unproven\tmypy is not installed\truff\tmypy pytest')" ] \
+  && ok "a gate that reports an unproven verdict writes its outcome, reason, ran and not-run checks, and its exit code is 4" || ko "unproven verdict: rc $rc: '$vl'"
+case "$(printf '%s' "$vl" | cut -f12)" in ''|*[!0-9]*) ko "the history line carries no slots: '$vl'";; *) ok "the history line carries the slots the gate took";; esac
+(cd "$T/w" && SG_GATE_KIND=fast bash "$d/gate.sh" true)
+[ "$(tail -n 1 "$H" | cut -f8-11)" = "$(printf 'pass\t-\t-\t-')" ] && ok "a gate with no outcome file writes pass, and dashes for the reason and the checks" || ko "pass verdict: '$(tail -n 1 "$H")'"
+(cd "$T/w" && SG_GATE_KIND=fast bash "$d/gate.sh" sh -c 'exit 7')
+[ "$(tail -n 1 "$H" | cut -f8-11)" = "$(printf 'fail\texit 7\t-\t-')" ] && ok "a gate with no outcome file that fails writes fail and its exit code as the reason" || ko "fail verdict: '$(tail -n 1 "$H")'"
 
 # The second gate waits for the first (a 3 s hold). Its duration is the run time, not the wait: the history shows the hold, and not the queue.
 (cd "$T/w" && SG_GATE_KIND=fast bash "$d/gate.sh" sh -c 'sleep 3') & hold=$!

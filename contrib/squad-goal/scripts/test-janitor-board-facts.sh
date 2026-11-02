@@ -27,6 +27,8 @@ case "$a" in
   *search/issues*) echo 0;;
   *projectsV2/4/fields*) echo FID4;;
   *projectsV2/4/items*) for n in 2301 2302 2303 2305 2306; do printf '%s\tTodo\thttps://api.github.com/repos/x/y\n' "$n"; done;;
+  *branches/wave%2Frun-wt*) echo shaWT;;
+  *commits/shaWT/check-runs*) echo '{"check_runs":[{"name":"test","conclusion":"success"}]}';;
   *repos/x/y/branches*) printf 'wave/run-wl shaWL\nwave/run-wc shaWC\nwave/run-wt shaWT\nfix/2305-x shaF5\nfix/2306-x shaF6\n';;
   *compare/dev...shaWT*|*compare/dev...shaF*) :;;
   *--include*commits/dev/check-runs*) echo '{"check_runs":[{"name":"test","status":"in_progress"}]}';;
@@ -54,9 +56,9 @@ printf 'VERDICT: APPROVE\n' > "$T/st/review-fix_2305-x.md"; printf 'old\n' > "$T
 o=$(SG_BOARD_VOCAB=shipped SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=dev SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1)
 bc() { cat "$T/board.calls" 2>/dev/null; }
 has() { /usr/bin/grep -q "$1" "$T/board.calls" 2>/dev/null; }
-has '^STATUS o 4 Pushing 2301$' && ok "an approved wave ahead of dev: its child's card is Pushing" || ko "#2301 not Pushing: $(bc) $o"
+has '^STATUS o 4 Code Complete 2301$' && ok "an approved wave ahead of dev: its child's card is Code Complete" || ko "#2301 not Code Complete: $(bc) $o"
 has '^STATUS o 4 Code Complete 2302$' && ok "a wave ahead of dev with no approval: Code Complete" || ko "#2302 not Code Complete: $(bc)"
-has '^STATUS o 4 Testing 2303$' && ok "a wave in dev while the dev tip's CI runs: Testing" || ko "#2303 not Testing: $(bc) $o"
+has '^STATUS o 4 Closed 2303$' && ok "a wave in dev while the dev tip's CI runs: Closed, the CI holds nothing open" || ko "#2303 not Closed: $(bc) $o"
 has '^STATUS o 4 Code Review 2305$' && ok "a work branch whose review waits: Code Review (#603)" || ko "#2305 not Code Review: $(bc)"
 has '^STATUS o 4 Code Complete 2306$' && ok "a work branch with no review yet keeps Code Complete" || ko "#2306 lost Code Complete: $(bc)"
 /usr/bin/grep -q 'commits/dev/check-runs' "$T/gh.calls" && ok "the dev tip's CI is read once through the door" || ko "no check-runs read"

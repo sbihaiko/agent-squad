@@ -27,7 +27,7 @@ def run_js(src, expr):
 GROUPS = json.dumps([
     {"name": "Backlog", "n": 0, "items": []},
     {"name": "Todo", "n": 2, "items": [{"n": 1}, {"n": 2}]},
-    {"name": "Testing", "n": 0, "items": []},
+    {"name": "Code Review", "n": 0, "items": []},
     {"name": "Done", "n": 1, "items": [{"n": 3}]},
 ])
 
@@ -56,13 +56,13 @@ def test_the_filter_on_keeps_only_the_columns_that_hold_a_card():
 @pytest.mark.node_bound
 def test_the_filter_on_names_each_hidden_empty_column_with_its_zero_count():
     out = run_js(GESTURE_JS.read_text(), f"carouselColumns({GROUPS}, [0, 2, 0, 1], true)")
-    assert out["hidden"] == [{"name": "Backlog", "count": 0}, {"name": "Testing", "count": 0}]
+    assert out["hidden"] == [{"name": "Backlog", "count": 0}, {"name": "Code Review", "count": 0}]
 
 
 @pytest.mark.node_bound
 def test_the_filter_off_keeps_every_column_and_names_none():
     out = run_js(GESTURE_JS.read_text(), f"carouselColumns({GROUPS}, [0, 2, 0, 1], false)")
-    assert [g["name"] for g in out["shown"]] == ["Backlog", "Todo", "Testing", "Done"]
+    assert [g["name"] for g in out["shown"]] == ["Backlog", "Todo", "Code Review", "Done"]
     assert out["hidden"] == []
 
 

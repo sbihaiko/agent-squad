@@ -115,5 +115,24 @@ guard "$r" "main..work"
 if [ "$rc" = 0 ]; then ok "a range whose base moved passes on its own red"; else ko "a range whose base moved passes on its own red (rc=$rc): $out"; fi
 case "$out" in *test-base-side.sh*) ko "a base-side test is not the range's: $out";; *) ok "a base-side test is not the range's";; esac
 
+# --- a range that touches no code and no test is not a defect fix: the guard names the exemption and passes
+r=$(mk docs-only)
+mkdir -p "$r/docs"; printf '# A decision\n' > "$r/docs/decision.md"; add "$r" -m "Write the decision"
+b=$($G -C "$r" rev-parse HEAD~1); guard "$r" "$b..HEAD"
+if [ "$rc" = 0 ]; then ok "a range that changes documents only passes"; else ko "a range that changes documents only passes (rc=$rc): $out"; fi
+case "$out" in *"TDD-RED N/A"*docs/decision.md*) ok "the pass names the documents it exempts";; *) ko "the pass names the documents it exempts: $out";; esac
+
+# --- the same exemption never covers code: a script with no test is refused exactly as before
+r=$(mk code-only)
+printf '#!/bin/bash\necho v2\n' > "$r/lib.sh"; add "$r" -m "Change the lib with no test"
+b=$($G -C "$r" rev-parse HEAD~1); guard "$r" "$b..HEAD"
+if [ "$rc" = 1 ]; then ok "a range that changes code only is still refused"; else ko "a range that changes code only is still refused (rc=$rc): $out"; fi
+
+# --- a document beside a changed script is not a document-only range
+r=$(mk docs-and-code)
+printf '# A decision\n' > "$r/decision.md"; printf '#!/bin/bash\necho v2\n' > "$r/lib.sh"; add "$r" -m "Write the decision and change the lib"
+b=$($G -C "$r" rev-parse HEAD~1); guard "$r" "$b..HEAD"
+if [ "$rc" = 1 ]; then ok "a document beside code does not exempt the code"; else ko "a document beside code does not exempt the code (rc=$rc): $out"; fi
+
 [ "$fail" = 0 ] && echo "test-check-tdd-red: all cases pass"
 exit "$fail"

@@ -364,7 +364,7 @@ def test_an_image_the_owner_sent_joins_the_message_it_came_with():
     assert "function stitch(turns)" in js and "said = stitch(shown)" in js
     assert "stitch(earlier).map(turnNode)" in js
     body = js[js.index("function stitch(turns) {"):js.index("function feed(turns) {")]
-    assert 'prev.role === "owner"' in body and "IMG_ONLY.test(String(prev.text" in body
+    assert 'prev.role === "owner"' in body and "IMG_RE.test(String(prev.text" in body
     assert 'out[out.length - 1] = { ...prev, text:' in body
 
 @pytest.mark.node_bound
