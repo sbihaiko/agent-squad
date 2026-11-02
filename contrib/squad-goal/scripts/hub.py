@@ -2030,10 +2030,17 @@ def throughput_fact(now=None):
     pts = [p for p in cfd["points"] if p["throughput"] is not None]
     if not pts: return None
     today = pts[-1]["throughput"]; done = [p["throughput"] for p in pts[:-1]][-DAYS_SPEED:]
-    if not done: return {"today": today, "median": None, "min": None, "max": None, "trend": None, "days": []}
+    # (#1193) The figure is only as fresh as the store behind it, and a frozen store once read as a slowdown. The fact carries
+    # the stamp of the newest record it counted, so a reader can see the age of the number instead of trusting it.
+    newest = max((r.get("t") or 0 for r in store.values()), default=0)
+    now_ts = now.timestamp() if hasattr(now, "timestamp") else (time.time() if now is None else now)
+    age = now_ts - newest if newest else None
+    if not done: return {"today": today, "median": None, "min": None, "max": None, "trend": None, "days": [],
+                         "as_of": newest or None, "age_secs": age}
     med = st.median(done); recent = done[-3:]; avg = sum(recent) / len(recent)
     trend = "up" if med and avg > med * 1.2 else "down" if med and avg < med * 0.8 else "flat"
-    return {"today": today, "median": med, "min": min(done), "max": max(done), "trend": trend, "days": done}
+    return {"today": today, "median": med, "min": min(done), "max": max(done), "trend": trend, "days": done,
+            "as_of": newest or None, "age_secs": age}
 
 def subs_gauges(now=None):
     """Each subscription's weekly window for the Monitor: its used share and when it resets, or why there is no reading.
@@ -3632,7 +3639,19 @@ def history_pass(read_issue=None, read_search=None, now=None):
         for n in _history_due(store, items):
             if not _read_timeline(n, store.get(n), keys[n], read_issue, path, recs, now): return
         if _hist.search_due(recs, now):
-            _hist.record_search(path, read_search(), now)
+            found = read_search()
+            _hist.record_search(path, found, now)
+            # #1193: the search names every number the repository holds, and the board cache does not. A card the board read
+            # missed -- the window in which the frontier logged "the board read carries no card for it" -- still has a
+            # timeline, and that timeline carries the closed event the throughput counts. So a number the search returned
+            # and the store holds no complete record of is due in this pass. The points budget bounds the sweep as it bounds
+            # a pass, and a partial record resumes from its cursor.
+            if found:
+                stored, on_board = _hist.load_store(path), {i["n"] for i in items}
+                for n in found:
+                    rec = stored.get(n)
+                    if n in on_board or (rec or {}).get("complete"): continue
+                    if not _read_timeline(n, rec, None, read_issue, path, recs, now): return
     finally:
         _hist.compact(path, now)
 
