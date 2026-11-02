@@ -9,6 +9,10 @@
     dashboard serves, and kills the oldest one the pass cannot tie to a live run, down to the ceiling. A live run's own dashboard is never a
     victim, a dashboard another project started is not this pass's to count, and JANITOR_DRY=1 reports without killing.
  C  zombie run (no verdict, record.jsonl idle 20 min, no process inside its folder, last started call dead): drop it from active-runs.txt, write the killed verdict into its record (squad.killed), and free its dispatch markers and leases.
+ T  taken-over run (no verdict, started over SG_TAKEOVER_SECONDS ago, default 1800): end it and keep its issues claimed (ADR-0166). The pass writes the killed
+    verdict, kills every process inside the run folder and its dashboard, drops it from active-runs and writes auto/taken-<run>, which names the run and its issues.
+    It never frees auto/disp-<n> or auto/bug-<n>, so no fresh child starts the same work with none of the context: a person or an agent takes it over.
+    While the marker stands its issues are held, so rule Q never puts their cards back in Todo. The owner or the agent drops the marker after the hand fix.
  D  two live runs that accepted the same issue: report once (never kills).
  E  auto/disp-<n> older than 30 min whose dispatching request log says `verdict failed`: drop it so the frontier can dispatch the issue again.
  F  an open issue named "(#N)" in the subject of a fork commit older than 30 min, with no open work branch naming it: report FIXED-NOT-CLOSED once (never closes: closing needs evidence).
@@ -59,7 +63,7 @@
     notice. It repeats at most once per bound, it never dispatches, and a pass that dispatches drops the file, so the next idle
     starts the clock again. A dry pass raises no alert and writes no bound.
 Every open issue of the repository carries a card, whether or not a run names it (#92): the pass reads the repository's open-issue list once through the door (gh_aggregate, the throttle) and adds the ones the board does not carry, in the dispatch column, or in Blocked when the issue carries needs-owner or needs-ratification, so an issue created while the loop runs is never left with no status."""
-import json, os, pathlib, re, signal, subprocess, sys, tempfile, time, urllib.parse
+import calendar, json, os, pathlib, re, signal, subprocess, sys, tempfile, time, urllib.parse
 st = pathlib.Path(os.environ["SG_STATE"]); co = pathlib.Path(os.environ["SG_CHECKOUT"]).resolve(); dry = bool(os.environ.get("JANITOR_DRY")); now = time.time()
 CQ = os.environ["SG_REPO"].replace("/", "__")   # a queued comment is named <owner>__<repo>#<n>-<tag>.md: cqflush.sh posts it to the repository it names
 acts = []
@@ -277,6 +281,14 @@ def mark_killed(f):
     """C: the zombie gets the killed verdict in its own record (squad.killed, the one writer), so the hub shows it ended. A record it cannot write stays as it is."""
     env = {**os.environ, "PYTHONPATH": os.pathsep.join(x for x in (os.environ.get("SG_SQUAD"), os.environ.get("PYTHONPATH")) if x)}
     _run(["python3", "-m", "squad.killed", str(f)], env=env)
+TAKEOVER_SECONDS = float(os.environ.get("SG_TAKEOVER_SECONDS", "1800") or 1800)
+def run_age(i):   # T: seconds since run_start, or None when the record names no start the pass can read (an epoch, or an ISO UTC stamp)
+    t = i["run_ts"]
+    try: return now - float(t)
+    except ValueError: pass
+    try: return now - calendar.timegm(time.strptime(t, "%Y-%m-%dT%H:%M:%SZ"))
+    except ValueError: return None
+def _now(): return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 def inside(f): return [q for q, c in cwd.items() if c == str(f) or c.startswith(str(f) + "/")]
 act = st / "active-runs.txt"; names = act.read_text().split() if act.exists() else []
 repo0 = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
@@ -332,6 +344,9 @@ def ccdefer_owner(fname):   # the run a `ccdefer-<run>-<child>` marker belongs t
     return next((m for m in sorted({pathlib.Path(x).name for x in names}, key=len, reverse=True) if fname.startswith(f"ccdefer-{m}-")), None)
 
 
+for p in (st / "auto").glob("taken-*") if (st / "auto").is_dir() else []:   # T: a taken-over run's issues stay held until the hand fix drops the marker
+    for l in (marker_text(p) or "").splitlines():
+        if l.startswith("issues "): held |= set(l.split()[1:])
 for r in names:
     f = folder(r)
     if not f.exists():   # a child worktree can take its run folder with it; no missing folder owns an issue
@@ -374,6 +389,21 @@ for r in names:
     # "alive" for ever, its card in Doing and its active-runs line held (#745).
     hips = inside(f)
     alive = any(SESSION.search(procs.get(q, (0, ""))[1]) for q in hips)
+    age = run_age(i)
+    if age is not None and age > TAKEOVER_SECONDS:   # T: past the bound the run is ended and handed over, never requeued (ADR-0166)
+        nums = sorted(req_issues(f) | i["acc"], key=int)
+        msg = f"TAKEN-OVER run {n} ({int(age // 60)} min) ended by the takeover bound; its issues stay claimed for a hand fix"
+        say(msg)
+        if not dry:
+            open(st / "alerts.log", "a").write(f"{_now()} {msg}\n")
+            mark_killed(f)
+            (st / "auto").mkdir(exist_ok=True)
+            (st / "auto" / f"taken-{n}").write_text(f"run {i['run_id']}\nissues {' '.join(nums)}\n")
+        held |= set(nums)
+        for q in hips: kill(q, f"taken-over run {n}")
+        for q, (_, c) in procs.items():
+            if "dashboard_server" in c and str(f) in c: kill(q, f"dashboard of taken-over run {n}")
+        continue
     if not alive and i["idle"] > 1200 and not (i["pid"] and same_process(i["pid"], i["started_at"])):
         say(f"zombie run {n} (no verdict, idle {int(i['idle'] // 60)} min, no process) dropped from active-runs")
         if not dry: mark_killed(f)

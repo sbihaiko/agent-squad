@@ -3,6 +3,7 @@
 # Before #865 the pass named both and killed neither ("not killed"), so two sessions worked one issue for as long as both stood.
 # A dry run kills nothing. Stubbed gh and board; a temp state dir; live runs are sleepers whose cwd sits in their run folder.
 # usage: bash test-janitor-dup.sh [janitor.py]
+export SG_TAKEOVER_SECONDS=1000000000000   # these runs test other rules; their fixed start stamps are past the takeover bound (ADR-0166)
 d=$(cd "$(dirname "$0")" && pwd); repo=$(cd "$d/../../.." && pwd); src=${1:-$d/janitor.py}; T=$(mktemp -d); fail=0
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/s/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"; cp "$(dirname "$src")/board_columns.py" "$(dirname "$src")/board-definition.json" "$T/s/"

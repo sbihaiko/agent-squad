@@ -78,6 +78,7 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 - **A file batch is capped at two tickets by default, and the cap splits without dropping a ticket** ([ADR-0158](docs/adr/0158-a-file-batch-is-capped.md)). Guard: `contrib/squad-goal/scripts/test-cluster.sh`.
 - **A call has a deadline; a stuck agent is found without a caller** ([ADR-0051](docs/adr/0051-call-deadline-and-stuck-agent.md)). Guard: `tests/test_deadlines.py`, `tests/test_monitor.py`.
 - **A wedged run is killed, not merely logged** ([ADR-0051](docs/adr/0051-call-deadline-and-stuck-agent.md)). Guard: `tests/test_heartbeat.py`.
+- **A run past thirty minutes is taken over, never requeued: it is ended and its issues stay claimed** ([ADR-0166](docs/adr/0166-a-run-past-thirty-minutes-is-taken-over.md)). Guard: `tests/test_janitor_takeover.py`.
 - **A call or a loop stops on failed attempts that do not change, never on total turns or entries** ([ADR-0134](docs/adr/0134-stall-cap-counts-failures-without-evolution.md)). Guard: `tests/test_stall.py`, `tests/test_engine_skeleton.py`, `tests/test_sdk_adapter.py`.
 - **A not-startable marker names the build that wrote it; another build re-arms it** ([ADR-0159](docs/adr/0159-a-not-startable-marker-names-its-build.md)). Guard: `tests/test_not_startable_build.py`.
 - **A model omitted from a chain is investigated and recovered; only a real answer on its lane clears the streak** ([ADR-0160](docs/adr/0160-a-model-omitted-is-investigated-and-recovered.md)). Guard: `contrib/squad-goal/scripts/test-model-recover.sh`.
