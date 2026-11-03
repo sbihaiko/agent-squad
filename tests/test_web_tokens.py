@@ -325,7 +325,7 @@ SHARED_ROLES = {
     "--code-ink": "#e6c07b",
     "--on-tint": "#e6edf3",
     "--highlight": "#fff",
-    "--s1-faint": "#7aa2ff55",
+    "--s1-faint": "#14b8c055",
     "--scrim": "#000a",
     "--shadow-soft": "#0008",
     "--shadow-float": "#000b",
@@ -352,10 +352,10 @@ CHART_ROLES = {
     "--chart-none": "#b79cf6",
     "--chart-run": "#2dd4bf",
     "--chart-drop": "#c678dd",
-    "--chart-series-1": "#7aa2ff",
-    "--chart-series-2": "#c792ea",
-    "--chart-series-3": "#5fd3c4",
-    "--chart-series-4": "#f2c14e",
+    "--chart-series-1": "#14b8c0",
+    "--chart-series-2": "#d88cd0",
+    "--chart-series-3": "#2cbcd8",
+    "--chart-series-4": "#b99126",
     "--chart-series-5": "#ff8a5c",
     "--chart-series-6": "#9ccc65",
     "--chart-series-7": "#f48fb1",
@@ -475,9 +475,9 @@ def test_the_token_file_wins_over_the_overlay(tokens):
     """Where the overlay drew a different value, the palette keeps its own; the overlay follows it in #1188."""
     assert tokens["--fg"] == "#e6e8ee", "the overlay's #d8dde6 must not replace --fg"
     assert tokens["--mute"] == "#8a93a3", "the overlay's #b8c0cf is --ink-soft, never --mute"
-    assert tokens["--acc"] == "#5aa9ff", "the overlay's #7aa2ff is --s1, never --acc"
+    assert tokens["--acc"] == "#5aa9ff", "the overlay's accent must not replace --acc"
     assert tokens["--ok"] == "#3ecf8e", "the overlay's #5fd38d must not replace --ok"
-    assert tokens["--warn"] == "#f5b041", "the overlay's #f2c14e must not replace --warn"
+    assert tokens["--warn"] == "#f5b041", "the overlay's yellow must not replace --warn"
 
 
 # --- Meaningful non-text (SPEC 1123, #1133) ---
