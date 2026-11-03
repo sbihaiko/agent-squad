@@ -220,4 +220,41 @@ run_cycle 1
   && ok "the second cycle waits on the pass its marker names" || ko "no wait line for run-12: '$(/usr/bin/grep 'run-12' "$T/watch.out")'"
 rm -f "$T/nosettle"; cp "$T/wave.stub" "$S/wave.sh"
 
+# 13) (#1290) a landing whose lock is held by a live holder says which fact it waits on: the holder's pid and the instant it
+# took the lock, never "the landing failed". The landing runs no second pass beside the holder, and it lands once the holder ends.
+run run-13 pass; printf 'wave/run-13\n' > "$ST/auto/wave-run-13"; printf '%s\n' "$T/run-13" > "$ST/active-runs.txt"
+/bin/sleep 60 & wh=$!; mkdir -p "$ST/locks/single-wland"; echo "$wh" > "$ST/locks/single-wland/pid"; touch -t 202001010000 "$ST/locks/single-wland/pid"
+run_cycle 1
+[ -z "$(/usr/bin/grep -E '^wave land run-13' "$STEPS")" ] && ok "a landing waits while its lock is held" || ko "a landing ran beside the holder: '$(cat "$STEPS")'"
+/usr/bin/grep -E 'WATCH: run-13 waits' "$T/watch.out" | /usr/bin/grep -q "held by pid $wh" \
+  && ok "the wait line names the landing's holder" || ko "no holder named: '$(/usr/bin/grep 'run-13' "$T/watch.out")'"
+/usr/bin/grep -E 'WATCH: run-13 waits' "$T/watch.out" | /usr/bin/grep -q 'held since 2020-01-01' \
+  && ok "the wait line names the instant the lock was taken" || ko "no held-since instant: '$(/usr/bin/grep 'run-13' "$T/watch.out")'"
+/usr/bin/grep -E 'WATCH: run-13 waits' "$T/watch.out" | /usr/bin/grep -q 'landing failed' \
+  && ko "a held landing reads as a failure: '$(/usr/bin/grep 'run-13' "$T/watch.out")'" || ok "a held landing does not read as a failure"
+/usr/bin/grep -q "run-13" "$ST/watch-seen.txt" 2>/dev/null && ko "a held landing marked the run seen" || ok "a held landing leaves the run unread"
+kill "$wh" 2>/dev/null; wait "$wh" 2>/dev/null; rm -rf "$ST/locks/single-wland"
+run_cycle 1
+[ "$(/usr/bin/grep -cxE 'wave land run-13 /.*/run-13' "$STEPS")" = 1 ] && ok "the landing runs once the holder is gone" \
+  || ko "run-13 not landed after the holder ended: '$(cat "$STEPS")'"
+
+# 14) (#1290) a landing that failed names its own reason, never a lock: the two facts no longer share one sentence.
+cp "$S/wave.sh" "$T/wave.stub2"
+cat > "$S/wave.sh" <<EOS
+#!/bin/bash
+echo "wave \$*" >> "$STEPS"
+[ -e "$T/plainfail" ] || exit 0
+echo "WAVE-ERROR the push of wave/\$2 was refused by the base"
+exit 1
+EOS
+chmod +x "$S/wave.sh"
+run run-14 pass; printf 'wave/run-14\n' > "$ST/auto/wave-run-14"; printf '%s\n' "$T/run-14" > "$ST/active-runs.txt"
+: > "$T/plainfail"; run_cycle 1
+l=$(/usr/bin/grep -E 'WATCH: run-14 waits' "$T/watch.out")
+printf '%s' "$l" | /usr/bin/grep -q 'its landing failed' && ok "a failed landing says it failed" || ko "no failure word: '$l'"
+printf '%s' "$l" | /usr/bin/grep -q 'the push of wave/run-14 was refused by the base' \
+  && ok "the wait line carries the failure's own reason" || ko "no failure reason: '$l'"
+printf '%s' "$l" | /usr/bin/grep -q 'held since' && ko "a failed landing blamed a held lock: '$l'" || ok "a failed landing names no lock"
+rm -f "$T/plainfail"; cp "$T/wave.stub2" "$S/wave.sh"
+
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }

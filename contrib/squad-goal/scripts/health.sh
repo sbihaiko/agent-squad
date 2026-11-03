@@ -223,6 +223,17 @@ wd=; [ -s "$SG_STATE/watchd.pid" ] && wd=$(cat "$SG_STATE/watchd.pid"); held=
 # health.json shape (#1294, asserted in test-health.sh): `causes` holds one entry per alert, so a repeating failure with two groups
 # over the count is listed twice and the length of the list counts the groups. `briefs` is keyed by cause name, so it carries the
 # ghspend causes only; a group's reason and count live in its alert line and its marker, not here.
+# A landing lock held past the landing's own bounds is stuck, not queued (#1290): a wland pass waits up to SERIAL_WAIT_SECONDS
+# (900 s) for the gate lock, then the gate is bounded at SG_GATE_BOUND_SECONDS (900 s), so a live holder past their sum has
+# outlived both and a person is told, once. A wait inside those bounds is normal and stays quiet. The lock's pid mtime is the
+# instant the holder took it, so a new holder restarts the clock and only the same live holder can outlast the sum.
+lkd="$SG_STATE/locks/single-wland"; lhp=$(cat "$lkd/pid" 2>/dev/null)
+if [ -n "$lhp" ] && kill -0 "$lhp" 2>/dev/null && [ "$(/bin/ps -o stat= -p "$lhp" 2>/dev/null | cut -c1)" != Z ]; then
+  lw=${SERIAL_WAIT_SECONDS:-900}; case $lw in ''|*[!0-9]*) lw=900;; esac
+  lb=${SG_GATE_BOUND_SECONDS:-${SG_PROMOTE_BOUND_SECONDS:-900}}; case $lb in ''|*[!0-9]*|0) lb=900;; esac
+  ls=$(mtime "$lkd/pid"); la=$(( now - ls ))
+  [ "$ls" -gt 0 ] && [ "$la" -gt $(( lw + lb )) ] && add landing-held "the landing lock has been held by pid $lhp since $(date -r "$ls" '+%F %T' 2>/dev/null || date -d "@$ls" '+%F %T' 2>/dev/null || printf '%s' "$ls") (${la}s, past the ${lw}s gate wait plus the ${lb}s gate bound): the landing is stuck, not queued"
+fi
 { printf '{"ts":%s,"ok":%s,"runs":%s,"inprogress":%s,"causes":[' "$now" "$([ ${#causes[@]} = 0 ] && echo true || echo false)" "$slots" "$nboard"; for i in "${!causes[@]}"; do [ $i = 0 ] || printf ','; printf '"%s"' "${causes[$i]}"; done; printf '],"briefs":{'; bn=0; for i in "${!causes[@]}"; do [ -n "${briefs[$i]}" ] || continue; [ $bn = 0 ] || printf ','; bn=1; printf '"%s":"%s"' "${causes[$i]}" "${briefs[$i]}"; done; printf '}}\n'; } > "$SG_STATE/health.json"
 notify=${HEALTH_NOTIFY:-/usr/bin/osascript}
 # The marker is written after the pass, not inside it: one cause may arrive as several lines (a repeating failure names one per

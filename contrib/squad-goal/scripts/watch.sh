@@ -25,8 +25,9 @@ echo $$ > "$wlock/pid"; trap 'rm -rf "$wlock"' EXIT; trap 'rm -rf "$wlock"; exit
 # reported verdicts / stalls persist across restarts ($W); a first start (no file) records current verdicts silently
 W="$SG_STATE/watch-seen.txt"; boot=0; [ -e "$W" ] || { boot=1; : > "$W"; }
 seen=" $(sed -n 's/^seen //p' "$W" | tr '\n' ' ')"; stalled=" $(sed -n 's/^stall //p' "$W" | tr '\n' ' ')"
-# tm <cmd...>: runs a step and appends "HH:MM:SS <step> <secs>s" to $SG_STATE/cycle.log when it took 5 s or more (where the 90 s cycle goes)
-tm() { orphaned && exit 0; local s=$(date +%s); "$@"; local e=$(( $(date +%s) - s )); [ "$e" -ge 5 ] && echo "$(date +%T) ${1##*/} ${e}s" >> "$SG_STATE/cycle.log"; return 0; }
+# tm <cmd...>: runs a step and appends "HH:MM:SS <step> <secs>s" to $SG_STATE/cycle.log when it took 5 s or more (where the 90 s cycle goes).
+# The step's own exit code comes back unchanged, so a caller tells a held lock (single.sh exits 76, #1290) from a step that failed.
+tm() { orphaned && exit 0; local s=$(date +%s) r; "$@"; r=$?; local e=$(( $(date +%s) - s )); [ "$e" -ge 5 ] && echo "$(date +%T) ${1##*/} ${e}s" >> "$SG_STATE/cycle.log"; return $r; }
 # verdicts: the runs of active-runs.txt whose record carries a verdict, one a line. The closing wait reads local files only (#569).
 verdicts() { local r f; for r in $(cat "$SG_STATE/active-runs.txt"); do case "$r" in /*) f=$r/record.jsonl;; *) f=runs/$r/record.jsonl;; esac
   grep -q '"event": *"verdict"' "$f" 2>/dev/null && echo "$r"; done | sort; }
@@ -72,15 +73,20 @@ land_wave() {   # <run>: 0 the wave is done (landed), 1 the pass that enters its
     # empty, so a marker the pass wrote could name no process and the single flight would never fire. The pass removes it when
     # it ends; a cycle that finds it names a dead pid removes it and reads the wave.
     (
-      wout=$(tm bash "${wme%/*}/single.sh" wland sh -c 'bash "$1" land "$2" "$3" && : > "$4"' landwave "${wme%/*}/wave.sh" "${run##*/}" "$run" "$ran" 2>&1)
+      wout=$(tm bash "${wme%/*}/single.sh" wland sh -c 'bash "$1" land "$2" "$3" && : > "$4"' landwave "${wme%/*}/wave.sh" "${run##*/}" "$run" "$ran" 2>&1); wrc=$?
       [ -n "$wout" ] && printf '%s\n' "$wout"
       rm -f "$pass"
       if [ ! -e "$ran" ]; then
         c=$(printf '%s\n' "$wout" | /usr/bin/grep '^WAVE CONFLICT ' | tail -1)
         if [ -n "$c" ]; then echo "WATCH: ${run##*/} waits: its wave did not land, a rebase conflict (${c#WAVE CONFLICT }); the wave is retired, not retried"
+        elif [ "$wrc" = 76 ]; then
+          # The landing lock is held by a live holder: name that holder and the instant it took the lock, never a failure (#1290).
+          h=$(cat "$SG_STATE/locks/single-wland/pid" 2>/dev/null); c=$(mtime "$SG_STATE/locks/single-wland/pid")
+          echo "WATCH: ${run##*/} waits: its landing is held by pid ${h:-none}, held since $( [ "${c:-0}" -gt 0 ] && { date -r "$c" '+%F %T' 2>/dev/null || date -d "@$c" '+%F %T' 2>/dev/null || echo "$c"; } || echo 'an unreadable instant'), so it lands on a later cycle"
         else
-          h=$(cat "$SG_STATE/locks/single-wland/pid" 2>/dev/null)
-          echo "WATCH: ${run##*/} waits: its wave did not land (the landing lock is held by pid ${h:-none}, or the landing failed), so it lands on a later cycle"
+          # The landing ran and failed: name its own reason, the last line the landing wrote, never a lock (#1290).
+          c=$(printf '%s\n' "$wout" | /usr/bin/grep -E '^(WAVE|STUCK)' | tail -1)
+          echo "WATCH: ${run##*/} waits: its landing failed${c:+ ($c)}${c:- (no line of its own; its output is in this log)}, so it lands on a later cycle"
         fi
       fi
       rm -f "$lk" ) &

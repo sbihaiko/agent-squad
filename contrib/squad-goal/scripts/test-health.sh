@@ -302,4 +302,15 @@ kill $sp 2>/dev/null; wait $sp 2>/dev/null; rm -f "$T/co/docs/squad/defaults.yam
 printf 'caps:\n  runs: 2\n' > "$T/co/docs/squad/defaults.yaml"; rm -f "$T/st/auto/health-no-free-slot"
 o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -q 'no-free-slot' && ko "a free ceiling named a holder: $o" || ok "a free ceiling names no holder"
 rm -f "$T/co/docs/squad/defaults.yaml"
+# ---- #1290: a landing held past its own gate wait plus the gate bound is a named failure; a wait inside them stays quiet ----
+mkdir -p "$T/st/locks/single-wland"; /bin/sleep 60 & lh=$!; echo "$lh" > "$T/st/locks/single-wland/pid"
+o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -q 'landing-held' && ko "a fresh landing wait alerted: $o" || ok "a landing wait inside its bounds stays quiet"
+touch -t 202001010000 "$T/st/locks/single-wland/pid"
+o=$(bash "$T/s/health.sh")
+printf '%s' "$o" | /usr/bin/grep -qF "HEALTH landing-held: the landing lock has been held by pid $lh since 2020-01-01 00:00:00" \
+  && ok "a holder past the gate wait plus the gate bound alerts, naming the pid and the instant" || ko "no landing-held cause: $o"
+/usr/bin/grep -q 'HEALTH landing-held:' "$T/st/alerts.log" && ok "alerts.log carries it" || ko "alerts.log: $(cat "$T/st/alerts.log" 2>/dev/null)"
+o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -q 'HEALTH landing-held:' && ko "the same held landing alerted twice" || ok "the same held landing alerts once"
+kill "$lh" 2>/dev/null; wait "$lh" 2>/dev/null; rm -rf "$T/st/locks/single-wland"
+o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -q 'HEALTH landing-held cleared' && ok "a released landing clears the cause" || ko "not cleared: $o"
 kill $wp $fp 2>/dev/null; rm -rf "$T" "$P"; exit $fail
