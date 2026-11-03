@@ -40,20 +40,20 @@ def test_the_repository_models_json_is_v2(doc):
 
 
 def test_the_resolver_reads_every_repository_chain(doc):
-    assert [e.raw for e in modelreg.chain(doc, "coding").entries][0] == "kimi-k3"
+    assert [e.raw for e in modelreg.chain(doc, "coding").entries][0] == "claude-kimi-for-coding"
     assert [e.raw for e in modelreg.chain(doc, "review").entries][0] == "gpt-5.6-terra"
     assert modelreg.chain(doc, "vision").entries
-    assert [e.raw for e in modelreg.chain(doc, "router").entries] == ["claude-gpt-5.6-terra", "claude-sonnet-5-5",
-                                                                     "claude-opus-5-5"]
+    assert [e.raw for e in modelreg.chain(doc, "router").entries] == ["gpt-6-luna", "claude-gpt-5.6-terra",
+                                                                     "claude-sonnet-5-5"]
 
 
 def test_the_panel_reads_the_repository_chains_under_the_v1_keys(hub, doc):
     view = hub.v1_view(doc)
-    assert view["coding_models"][0] == "kimi-k3"
+    assert view["coding_models"][0] == "claude-kimi-for-coding"
     assert view["review_models"] == ["gpt-5.6-terra", "claude:claude-opus-5-5"]
     assert view["hours"]["review_models"] == {"claude:claude-opus-5-5": "19-07"}
     assert view["efforts"]["vision_models"] == {"gemini-3.8-flash-low": "low"}
-    assert view["router_models"] == ["claude-gpt-5.6-terra", "claude-sonnet-5-5", "claude-opus-5-5"]
+    assert view["router_models"] == ["gpt-6-luna", "claude-gpt-5.6-terra", "claude-sonnet-5-5"]
     assert "schema_version" not in view and "chains" not in view
 
 
@@ -111,7 +111,7 @@ def test_a_section_the_save_omits_keeps_the_settings_the_file_holds(hub, monkeyp
     assert "err" not in out, out
     saved = json.loads(tmp.read_text())
     assert [(e["id"], e.get("hrs"), e.get("effort"), e.get("on")) for e in saved["chains"]["coding"]] == [
-        ("kimi-k3", None, None, None), ("gpt-5.6-terra", None, None, None),
+        ("kimi-for-coding", None, "low", None), ("gpt-5.6-terra", None, None, None),
         ("claude-sonnet-5-5", "19-07", None, None), ("grok-4.7", None, None, None)]
     assert [(e["id"], e.get("effort")) for e in saved["chains"]["vision"] if e.get("effort")] == [("gemini-3.8-flash", "low")]
 

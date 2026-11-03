@@ -288,10 +288,10 @@ def test_invocation_keeps_todays_wire_string(raw, use, wire, reg):
 PINNED_CHAINS = {
     # The week the Anthropic weekly reserve closed (Claude 93 %, Gemini out): Kimi and Grok lead, and every Claude
     # entry sits behind them inside its own hours window, so a spent subscription is skipped rather than attempted.
-    "coding": ["kimi-k3", "claude-gpt-5.6-terra", "claude-sonnet-5-5", "claude-grok-4.7"],   # no model that takes no tools (ADR-0147)
+    "coding": ["claude-kimi-for-coding", "claude-gpt-5.6-terra", "claude-sonnet-5-5", "claude-grok-4.7"],   # no model that takes no tools (ADR-0147)
     "review": ["gpt-5.6-terra", "claude:claude-opus-5-5"],
     "vision": ["gpt-5.6-luna", "gpt-5.6-terra", "claude-nemotron-super", "gemini-3.8-flash-low"],
-    "router": ["claude-gpt-5.6-terra", "claude-sonnet-5-5", "claude-opus-5-5"],
+    "router": ["gpt-6-luna", "claude-gpt-5.6-terra", "claude-sonnet-5-5"],   # Luna returns the dispatch JSON clean and fast
     "editorial": ["ps5-qwen-coder", "claude-haiku-5-5"],
 }
 
