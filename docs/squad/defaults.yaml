@@ -1,11 +1,12 @@
 # The project settings for this repository (squad/project_settings.py): only the keys the owner changed.
-# The owner keeps the run-slot cap at six: the ceiling was never the bottleneck. A finished run stays in the live list until its
-# issue closes, so the slots that starved dispatch were held by runs that had already ended. Three waves live at once on this
-# 16 GB machine, and the gate lock still runs one gate at a time.
+# Owner ruling 2026-11-03, after the token review: three runs and twelve children live at once, never six and twenty. Each live
+# run re-reads its whole context on every turn, so concurrency multiplies the cache read; three runs keep the machine full and
+# the gate lock still runs one gate at a time.
 # The ceiling bounds every child's grant, and the owner granted a child cap up to 30 USD: a lower ceiling refuses the
 # dispatch node's own grant with spend_over_ceiling.
 caps:
-  runs: 6
+  runs: 3
+  children: 12
   gates: 6                          # one gate at a time on this 8-core machine: at twelve slots three gates held the machine
                                     # between them, each waited for the lock while keeping its slots, and the queue outlived
                                     # the takeover bound (#1191, #1192)
