@@ -26,7 +26,10 @@ from pathlib import Path
 ROUTES = ("cli", "gateway", "direct")
 AUTHS = ("subscription", "api_key", "unverified")
 V1_CHAINS = {"coding": "coding_models", "review": "review_models",
-             "vision": "vision_models", "router": "router_models"}
+             "vision": "vision_models", "router": "router_models",
+             # Editorial text: a commit message, a pull-request body, a status summary. Short, serial, and never on a
+             # gate's path, so it may take a small local model first (owner, 2026-11-03).
+             "editorial": "editorial_models"}
 DEFAULT_RESERVE_PERCENT = 10
 # A cache read costs this share of the input rate where a model's display_price names no cache_read. It is the Anthropic
 # ratio. The hub's stats price cache reads with it (#791). The token guard does not read it: its cache-read weight is

@@ -15,6 +15,9 @@ ROOT = Path(__file__).resolve().parent.parent
 REGISTRY = ROOT / "config/models.registry.json"
 HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
 
+# A Qwen that is not a coder model carries its size alone ("Qwen 3.5 9B"): the local PS5 model is a general instruct
+# model, and calling it "Coder" would name a tier it does not have. The scheme's intent is family, version and tier,
+# and the size is the tier a Qwen carries.
 SCHEME = re.compile(
     r"^(?:Claude (?:Opus|Sonnet|Haiku|Fable) \d+(?:\.\d+)?"
     r"|GPT-\d+(?:\.\d+)?(?: [A-Z][a-z]+)?"
@@ -24,7 +27,7 @@ SCHEME = re.compile(
     r"|Grok \d+(?:\.\d+)?"
     r"|Kimi K\d+(?:\.\d+)?(?: Preview)?"
     r"|NVIDIA Nemotron \d+(?:\.\d+)? (?:Nano|Super)"
-    r"|Qwen \d+(?:\.\d+)? Coder \d+B)"
+    r"|Qwen \d+(?:\.\d+)? (?:Coder )?\d+B)"
     r"(?: [a-z][a-z-]*)?$")
 
 

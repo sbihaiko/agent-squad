@@ -3,19 +3,18 @@
   "chains": {
     "coding": [
       {
-        "id": "claude-sonnet-5-5",
-        "route": "gateway",
-        "hrs": "19-07"
-      },
-      {
-        "id": "claude-sonnet-4-6",
-        "route": "gateway",
-        "hrs": "19-07"
+        "id": "kimi-k3",
+        "route": "gateway"
       },
       {
         "id": "gpt-5.6-terra",
         "raw": "claude-gpt-5.6-terra",
         "route": "gateway"
+      },
+      {
+        "id": "claude-sonnet-5-5",
+        "route": "gateway",
+        "hrs": "19-07"
       },
       {
         "id": "grok-4.7",
@@ -25,16 +24,14 @@
     ],
     "review": [
       {
+        "id": "gpt-5.6-terra",
+        "route": "gateway"
+      },
+      {
         "id": "claude-opus-5-5",
         "raw": "claude:claude-opus-5-5",
         "route": "cli",
         "hrs": "19-07"
-      },
-      {
-        "id": "gemini-3.8-flash",
-        "raw": "gemini-3.8-flash-medium",
-        "route": "cli",
-        "effort": "medium"
       }
     ],
     "vision": [
@@ -47,6 +44,11 @@
         "route": "cli"
       },
       {
+        "id": "nemotron-super",
+        "raw": "claude-nemotron-super",
+        "route": "gateway"
+      },
+      {
         "id": "gemini-3.8-flash",
         "raw": "gemini-3.8-flash-low",
         "route": "cli",
@@ -55,7 +57,28 @@
     ],
     "router": [
       {
+        "id": "gpt-5.6-terra",
+        "raw": "claude-gpt-5.6-terra",
+        "route": "gateway"
+      },
+      {
+        "id": "claude-sonnet-5-5",
+        "route": "gateway",
+        "hrs": "19-07"
+      },
+      {
         "id": "claude-opus-5-5",
+        "route": "gateway"
+      }
+    ],
+    "editorial": [
+      {
+        "id": "ps5-qwen-coder",
+        "route": "gateway",
+        "effort": "low"
+      },
+      {
+        "id": "claude-haiku-5-5",
         "route": "gateway"
       }
     ]
