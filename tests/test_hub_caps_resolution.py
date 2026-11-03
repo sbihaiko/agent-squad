@@ -113,10 +113,13 @@ def test_a_concurrent_import_never_breaks_the_resolution(hub):
     t.start()
     try:
         workers = [threading.Thread(target=resolve) for _ in range(4)]
-        for w in workers: w.start()
-        for w in workers: w.join()
+        for w in workers:
+            w.start()
+        for w in workers:
+            w.join()
     finally:
-        stop.set(); t.join()
+        stop.set()
+        t.join()
     assert not failures, failures
 
 
