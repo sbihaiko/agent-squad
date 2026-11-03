@@ -164,6 +164,45 @@ printf '%s' "$o" | /usr/bin/grep -qF "runs-repeating-failure: 3 run(s) ended fai
 /usr/bin/grep -q 'alpha_bad' "$T/bodies/20" 2>/dev/null && /usr/bin/grep -q 'beta_bad' "$T/bodies/21" 2>/dev/null && ok "#1294 each marker names its own reason" || ko "#1294 marker bodies: $(cat "$T/bodies/20" "$T/bodies/21" 2>/dev/null)"
 /usr/bin/grep -q 'beta_bad' "$T/bodies/20" 2>/dev/null && ko "#1294 the second group's table leaked into the first group's marker" || ok "#1294 no other group's table in the first marker"
 /usr/bin/grep -q 'alpha_bad' "$T/bodies/21" 2>/dev/null && ko "#1294 the first group's table leaked into the second group's marker" || ok "#1294 no other group's table in the second marker"
+# #1294 review: the alert is keyed per group (cause plus reason), so a second group that reaches the count on a LATER pass,
+# while the first still persists, alerts, writes its alerts.log line and notifies; a persisting group does not alert again
+reset; rm -f "$T"/st/auto/notstartable-* "$T"/st/auto/health-runs-repeating-failure*; : > "$T/comments.calls"; rc; : > "$T/st/alerts.log"
+rep p1 40 alpha_late; rep p2 40 alpha_late; rep p3 40 alpha_late
+bash "$T/s/health.sh" >/dev/null
+nb=$(notif)
+rep q1 41 beta_late; rep q2 41 beta_late; rep q3 41 beta_late
+o=$(bash "$T/s/health.sh")
+printf '%s' "$o" | /usr/bin/grep -qF "HEALTH runs-repeating-failure: 3 run(s) ended failed with the same reason 'beta_late'" && ok "a second group reaching the count on a later pass is reported" || ko "later group silent: $o"
+[ "$(/usr/bin/grep -c 'beta_late' "$T/st/alerts.log" 2>/dev/null)" = 1 ] && ok "the later group writes its alerts.log line" || ko "later group alerts.log: $(cat "$T/st/alerts.log" 2>/dev/null)"
+[ "$(notif)" -gt "$nb" ] && ok "the later group notifies" || ko "no notification for the later group"
+o=$(bash "$T/s/health.sh"); echo "$o" | /usr/bin/grep -q 'runs-repeating-failure' && ko "persisting groups alerted again: $o" || ok "persisting groups do not alert again"
+# #1294 review: a machine reason with a tab or a newline is flattened in the group key, so the TSV keeps its four fields
+reset; rm -f "$T"/st/auto/notstartable-* "$T"/st/auto/health-runs-repeating-failure*; : > "$T/comments.calls"; rc
+rep f1 50 'x\ty\nz'; rep f2 50 'x\ty\nz'; rep f3 50 'x\ty\nz'
+o=$(bash "$T/s/health.sh")
+printf '%s' "$o" | /usr/bin/grep -qF "HEALTH runs-repeating-failure: 3 run(s) ended failed with the same reason 'x y z'" && ok "a reason with a tab and a newline is one flattened group" || ko "flattening: $o"
+[ -e "$T/st/auto/notstartable-50-x-y-z" ] && ok "the flattened reason marks its issue" || ko "no marker for the flattened reason: $(/bin/ls "$T/st/auto" | tr '\n' ' ')"
+/usr/bin/grep -q 'issues/50/comments' "$T/comments.calls" 2>/dev/null && ok "the flattened group comments on its issue" || ko "no comment on #50: $(cat "$T/comments.calls" 2>/dev/null)"
+# #1294 review: an empty machine reason keys as "?", so the TSV does not collapse its empty field
+reset; rm -f "$T"/st/auto/notstartable-* "$T"/st/auto/health-runs-repeating-failure*; : > "$T/comments.calls"; rc
+rep e1 51 ''; rep e2 51 ''; rep e3 51 ''
+o=$(bash "$T/s/health.sh")
+printf '%s' "$o" | /usr/bin/grep -qF "HEALTH runs-repeating-failure: 3 run(s) ended failed with the same reason '?'" && ok "an empty machine reason is keyed as ?" || ko "empty reason: $o"
+[ -e "$T/st/auto/notstartable-51-" ] && ko "an empty reason made an empty marker key" || ok "an empty reason makes no empty marker key"
+# #1294 review: a group whose runs named no issue has no issue to comment on or mark: no "-" issue, no "notstartable---" marker
+reset; rm -f "$T"/st/auto/notstartable-* "$T"/st/auto/health-runs-repeating-failure*; : > "$T/comments.calls"; rc
+rep n1 "" no_issue_reason; rep n2 "" no_issue_reason; rep n3 "" no_issue_reason
+o=$(bash "$T/s/health.sh")
+printf '%s' "$o" | /usr/bin/grep -qF "same reason 'no_issue_reason'" && ok "a group with no issue still reports" || ko "no-issue group not reported: $o"
+/usr/bin/grep -q 'issues/-/' "$T/comments.calls" 2>/dev/null && ko "a comment went to issues/-" || ok "a group with no issue posts no comment"
+[ -n "$(/usr/bin/find "$T/st/auto" -name 'notstartable---*' 2>/dev/null)" ] && ko "a marker was claimed for -" || ok "a group with no issue claims no marker"
+# #1294 review: health.json lists one causes entry per group (its count of groups), and briefs stay keyed by cause name, so a
+# repeating failure never carries a brief of its own
+reset; rm -f "$T"/st/auto/notstartable-* "$T"/st/auto/health-runs-repeating-failure*; : > "$T/comments.calls"; rc
+rep h1 60 shape_a; rep h2 60 shape_a; rep h3 60 shape_a; rep h4 61 shape_b; rep h5 61 shape_b; rep h6 61 shape_b
+bash "$T/s/health.sh" >/dev/null
+[ "$(jq '[.causes[]|select(.=="runs-repeating-failure")]|length' "$T/st/health.json")" = 2 ] && ok "health.json has one causes entry per group" || ko "health.json groups: $(cat "$T/st/health.json")"
+jq -e '.briefs | has("runs-repeating-failure") | not' "$T/st/health.json" >/dev/null && ok "health.json carries no brief for a repeating failure" || ko "health.json brief: $(cat "$T/st/health.json")"
 # #1292: a post GitHub refuses drops the claim, so the next pass tries again
 reset; rm -f "$T"/st/auto/notstartable-* "$T/st/auto/health-runs-repeating-failure" "$T/post.ok"; : > "$T/comments.calls"
 { echo '#!/bin/bash'; printf 'case "$*" in *comments*) [ -e %s/post.ok ] || exit 1; echo "$*" >> %s/comments.calls;; */labels*) echo "$*" >> %s/labels.calls;; esac\nexit 0\n' "$T" "$T" "$T"; } > "$T/bin/gh"; chmod +x "$T/bin/gh"
