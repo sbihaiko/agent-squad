@@ -10,7 +10,11 @@ for v in $(compgen -e | /usr/bin/grep '^SG_'); do unset "$v"; done
 d=$(dirname "$0"); src=${1:-$d/nightly.sh}; T=$(mktemp -d); S=$T/scripts; ST=$T/st; fail=0
 mkdir -p "$S" "$ST"; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G="git -c user.email=a@b -c user.name=t"
-cp "$d/serial.sh" "$d/ghcall.sh" "$d/ghread.py" "$d/ghthrottle.py" "$S/" 2>/dev/null
+cp "$d/serial.sh" "$d/ghcall.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/live-check.sh" "$S/" 2>/dev/null
+sq=$(cd "$d/../../.." && pwd)   # the repository the live check reads its module from
+# The live check the nightly runs last (spec 1163, #1178) reads the live state and samples for an hour. In this suite it
+# samples once and reads the fixture's folders, so no case waits an hour and no case reads the owner's live state.
+export SG_SQUAD="$sq" SQUAD_CAPS_DIR="$T/caps" SG_LIVE_CHECK_WINDOW_SECONDS=0
 [ -f "$src" ] && cp "$src" "$S/nightly.sh"
 # The remote: one bare repository with one commit on dev. The nightly clones it into its own tree and runs there.
 git init -q -b dev "$T/src"; $G -C "$T/src" commit -q --allow-empty -m one
@@ -40,6 +44,9 @@ rec() { r_ts= r_res= r_sha= r_par= r_ser= r_ids=
   [ -f "$ST/nightly-result" ] && IFS=$'\t' read -r r_ts r_res r_sha r_par r_ser r_ids < "$ST/nightly-result"; }
 hold() { ( export SG_STATE="$ST" SG_CHECKOUT="$T/src"; . "$S/ghcall.sh"; gh_dispatch_hold ); }   # the dispatch hold both dispatch passes read (ghcall.sh)
 mark() { rm -f "$ST/auto/nightly-$(date +%F)"; }
+# The live check starts detached, so it may still sample when ng returns. lc_wait waits for its record and the release of its
+# own lock, so a case that reads the result never reads a stale or half-written state.
+lc_wait() { local i=0; while [ $i -lt 400 ] && { [ ! -e "$ST/live-check-result" ] || [ -d "$ST/locks/live-check" ]; }; do sleep 0.05; i=$((i+1)); done; }
 # json_ids <field>: 0 when the field is ONE JSON array of strings, the one encoding both readers parse (#704)
 json_ids() { printf '%s' "$1" | python3 -c 'import json,sys
 try: v=json.load(sys.stdin)
@@ -47,6 +54,7 @@ except Exception: sys.exit(1)
 sys.exit(0 if type(v) is list and all(type(x) is str for x in v) else 1)'; }
 
 # 1) both modes run once, in the nightly tree, and the record says pass with the sha and both modes
+rm -f "$ST/live-check-result"
 out=$(ng); rc=$?
 [ $rc = 0 ] && ok "a green nightly exits 0" || ko "green nightly rc $rc: $out"
 [ "$(cat "$T/ran.log" 2>/dev/null)" = "parallel $T/tree
@@ -55,7 +63,12 @@ rec
 [ "$r_res $r_sha $r_par $r_ser $r_ids" = "pass $sha pass pass []" ] && ok "the record is pass, the tip sha, both modes green and no failing test" || ko "record: '$r_res $r_sha $r_par $r_ser $r_ids'"
 [ -e "$ST/auto/nightly-$(date +%F)" ] && ok "the run leaves its once-a-day marker" || ko "no day marker after a run"
 [ ! -d "$ST/locks/nightly" ] && ok "the nightly lock is released when the run ends" || ko "the nightly lock stayed behind"
+lc_wait   # the check is detached: wait for its own record before reading it
 [ ! -e "$ST/alerts.log" ] && ok "a green nightly raises no alert" || ko "a green nightly alerted: $(cat "$ST/alerts.log")"
+# The live check (spec 1163, #1178): the night ends by reading the live state, and its own record is what it leaves.
+[ "$(cut -f2 "$ST/live-check-result" 2>/dev/null)" = pass ] \
+  && ok "the nightly runs the live check, and a clean state passes it" || ko "live check: '$(cat "$ST/live-check-result" 2>&1)'"
+[ ! -e "$ST/alerts.log" ] && ok "a clean live check raises no alert of its own" || ko "the live check alerted on a clean state: $(cat "$ST/alerts.log")"
 
 # 2) a red parallel mode fails the record, names its failing tests, and still runs the serial mode: the record carries both
 rm -f "$T/ran.log" "$ST/alerts.log"; mark
@@ -528,5 +541,18 @@ case "$o" in *bounded*) ok "the pass says the nightly was stopped and names the 
 bad_rec "$(date +%s)\tpass\t$sha\tpass\tbounded:signal-15\t[]\n" && ok "a pass over a bounded mode is no reading" || ko "a pass over a bounded mode held dispatch"
 bad_rec "$(date +%s)\tbounded\t$sha\tfail\tpass\t[]\n" && ok "a bounded result over a red mode is no reading" || ko "a bounded result over a red mode held dispatch"
 rm -f "$ST/nightly-result"
+
+# 26) (ADR-0163, ADR-0164, #1178) the live check must hold no delivery: it samples for an hour, and a held nightly lock
+#     refuses every promotion tick. The nightly starts it detached, so its body exits and serial.sh frees locks/nightly while
+#     the check still samples under its own lock alone.
+mark; rm -f "$ST/live-check-result" "$ST/alerts.log"
+out=$(ng SG_LIVE_CHECK_WINDOW_SECONDS=2 SG_LIVE_CHECK_INTERVAL_SECONDS=0.1); rc=$?
+[ "$rc" = 0 ] && ok "a nightly that starts the live check still exits 0" || ko "detached live check rc $rc: $out"
+i=0; while [ $i -lt 200 ] && [ ! -d "$ST/locks/live-check" ]; do sleep 0.05; i=$((i+1)); done
+[ -d "$ST/locks/live-check" ] && ok "the live check samples after the nightly body returns" \
+  || ko "the live check did not sample after the nightly returned: '$(/bin/ls "$ST/locks" 2>&1)'"
+[ ! -d "$ST/locks/nightly" ] && ok "the nightly lock is released while the live check still samples" \
+  || ko "the nightly lock is held for the live check's window, so it holds delivery"
+lc_wait   # let the detached check finish before the suite ends
 
 rm -rf "$T"; exit $fail

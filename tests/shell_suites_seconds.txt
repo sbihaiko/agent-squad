@@ -55,10 +55,10 @@ test-fastloop-pid.sh 0.05
 test-gate-lock.sh 14.58
 test-gate.sh 0.56
 test-gh-pass-bounded.sh 3.40
-test-hand-gate.sh 1.86
 test-ghcache.sh 2.83
 test-ghcall-refusal.sh 0.41
 test-ghspend.sh 6.27
+test-hand-gate.sh 1.86
 test-health.sh 73.93
 test-heartbeat.sh 0.86
 test-hub-adapter-errors.sh 0.14
@@ -126,11 +126,12 @@ test-land-target.sh 0.12
 test-launch-run-target.sh 1.98
 test-launch-target.sh 3.55
 test-launch.sh 6.08
+test-live-check.sh 7.32
 test-live-guard.sh 7.00
 test-merge-audit.sh 1.32
 test-mkreq.sh 6.64
 test-model-recover.sh 0.72
-test-nightly.sh 21.23
+test-nightly.sh 27.75
 test-pass-deadline.sh 15.65
 test-prepush.sh 1.28
 test-profile-check.sh 1.16

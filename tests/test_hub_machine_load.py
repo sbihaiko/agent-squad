@@ -844,6 +844,18 @@ def test_each_subscription_answers_its_weekly_share_and_days_to_reset(hub, monke
     assert rows["grok"]["pct"] == 40.0
 
 
+def test_a_provider_with_no_weekly_window_shows_its_monthly_share(hub, monkeypatch):
+    """Kimi Code Plus reports a 5 h window and a monthly one and no weekly. The gauge shows the monthly share (the
+    owner's choice), never the window that merely resets last."""
+    now = 1_000_000.0
+    monkeypatch.setattr(hub, "quota", {
+        "kimi": {"asof": now - 60, "windows": [
+            {"label": "5 h", "pct": 62.2, "resets": now + 4 * 3600},
+            {"label": "month", "pct": 7.7, "resets": now + 30 * 86400}]}})
+    rows = {r["key"]: r for r in hub.subs_gauges(now)}
+    assert rows["kimi"]["pct"] == 7.7 and rows["kimi"]["window"] == "month"
+
+
 def test_a_subscription_with_no_reading_says_why_and_carries_no_share(hub, monkeypatch):
     monkeypatch.setattr(hub, "quota", {"claude": {"asof": 0, "err": "login expired"}})
     rows = {r["key"]: r for r in hub.subs_gauges(1_000_000.0)}

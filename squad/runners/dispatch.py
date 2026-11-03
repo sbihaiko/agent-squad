@@ -92,6 +92,16 @@ class Dispatch:
     def accepted(self, parent, pentry):
         return [e["child"] for e in self.e.record.events if e["event"] == "spawn_accepted" and e["parent"] == parent and e["parent_entry"] == pentry]
 
+    def chain_effort(self, raw):
+        """The effort the panel names for the chain entry this request runs on (SPEC 750): a request that names no
+        effort runs at its own entry's effort, never at the model's own default. A request that names a model no chain
+        entry holds, or a kind with no entry effort, leaves the engine's own default to answer."""
+        kind, chains = raw.get("kind"), self.e.kind_chains.get(raw.get("kind")) or []
+        if not chains:
+            return None
+        model = raw.get("model")
+        return (self.e.kind_efforts.get(kind) or {}).get(model if model in chains else chains[0])
+
     def decide(self, disp, req_ev, pentry, depth, parent_tools, spend_left, time_left):
         """Validate one request against the envelope. Write `spawn_accepted` or `spawn_rejected`. Code assigns the identity."""
         key, parent, raw = req_ev["pos"], req_ev["parent"], req_ev["requested"]
@@ -100,10 +110,10 @@ class Dispatch:
             return self.e.record.append("spawn_rejected", **base, reason="request_malformed")
         if len(self.accepted(parent, pentry)) >= disp["max_children"]:
             return self.e.record.append("spawn_rejected", **base, reason="max_children_over")
-        # The engine's own default effort (the configuration's `options.effort`) is what a child that names none runs at:
-        # an adapter with no such option leaves the allow list's first entry to lead, as before.
+        # The request's own effort wins; a request that names none runs at its chain entry's effort (the panel draws
+        # one effort per row), and only a kind with no entry effort falls to the engine's default (`options.effort`).
         req, errs = envelope.validate_request(disp, raw, depth, parent_tools, min(spend_left, self.e.budget.available()), time_left, self.e.vendor,
-                                            default_effort=getattr(self.e.adapter, "extra_options", {}).get("effort"),
+                                            default_effort=self.chain_effort(raw) or getattr(self.e.adapter, "extra_options", {}).get("effort"),
                                             ceiling=self.e.limits.get("max_budget_usd"))
         if not errs:
             errs += self.resolve_after(req, parent, pentry, req_ev)

@@ -2174,7 +2174,11 @@ def subs_gauges(now=None):
         if not ws:
             row.update({"pct": None, "resets": None, "why": (q or {}).get("err") or "no reading"})
         else:
-            w = next((x for x in ws if str(x.get("label", "")).lower().startswith("weekly")), max(ws, key=lambda x: x.get("resets") or 0))
+            # The plan's own weekly window leads; a plan that reports no weekly one (Kimi Code Plus) shows its monthly
+            # share (the owner's choice); anything else shows the fullest window, never the one that merely resets last.
+            w = (next((x for x in ws if str(x.get("label", "")).lower().startswith("weekly")), None)
+                 or next((x for x in ws if "month" in str(x.get("label", "")).lower()), None)
+                 or max(ws, key=lambda x: x.get("pct") or 0))
             row.update({"pct": w.get("pct"), "resets": w.get("resets"), "window": w.get("label")})
         out.append(row)
     return out
@@ -5950,12 +5954,29 @@ def refresh_quota_once():
                 r.setdefault("asof", time.time()); quota[k] = r
                 if r.get("windows"): note_week(k, r)
         except Exception as e: quota.setdefault(k, {"windows": []})["err"] = str(e)[:120]
-    try: QUOTA.write_text(json.dumps(quota))
-    except OSError: pass
+    quota_write()
+QUOTA_LOCK = threading.Lock()
+def quota_write():
+    """Persist the readings. One lock, so the Kimi pass and the full pass never drop each other's entry."""
+    with QUOTA_LOCK:
+        try: QUOTA.write_text(json.dumps(quota))
+        except OSError: pass
 def refresh_quota():
     """Every 20 min, one refresh_quota_once pass (the age of the last good value is shown on the row)."""
     while True:
         refresh_quota_once(); time.sleep(1200)
+KIMI_REFRESH_SECONDS = 120   # the 5 h window moves by the minute while a child codes; the full pass is dear
+def refresh_kimi_quota():
+    """Every two minutes, the Kimi reading alone: the full pass spawns a model call for another provider, and this one
+    is a single HTTPS GET, so the row the owner watches while the chain codes stays current."""
+    while True:
+        try:
+            r = q_kimi()
+            if r:
+                r.setdefault("asof", time.time()); quota["kimi"] = r
+                if r.get("windows"): note_week("kimi", r)
+        except Exception as e: quota.setdefault("kimi", {"windows": []})["err"] = str(e)[:120]
+        quota_write(); time.sleep(KIMI_REFRESH_SECONDS)
 QUOTA_MAX_AGE = 3 * 3600   # a probe repolls every 20 min; a reading older than this stopped tracking the account
 def quota_row(k, now=None):
     """What the cost panel and the footer show for provider k: the CLI's own reading, or the reason there is no reading.
@@ -7373,5 +7394,5 @@ if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 7700
     refresh_runs()
     warm()   # the sessions read costs seconds on a large profile, so it starts with the hub, never with the first page (#1217)
-    threading.Thread(target=start_terminal_supervisor, daemon=True).start(); threading.Thread(target=refresh_prs, daemon=True).start(); threading.Thread(target=refresh_quota, daemon=True).start(); threading.Thread(target=watch_self, daemon=True).start(); threading.Thread(target=refresh_board, daemon=True).start(); threading.Thread(target=refresh_history, daemon=True).start(); threading.Thread(target=refresh_fast, daemon=True).start();threading.Thread(target=load_sampler, daemon=True).start(); threading.Thread(target=watch_runs, daemon=True).start()
+    threading.Thread(target=start_terminal_supervisor, daemon=True).start(); threading.Thread(target=refresh_prs, daemon=True).start(); threading.Thread(target=refresh_quota, daemon=True).start(); threading.Thread(target=refresh_kimi_quota, daemon=True).start(); threading.Thread(target=watch_self, daemon=True).start(); threading.Thread(target=refresh_board, daemon=True).start(); threading.Thread(target=refresh_history, daemon=True).start(); threading.Thread(target=refresh_fast, daemon=True).start();threading.Thread(target=load_sampler, daemon=True).start(); threading.Thread(target=watch_runs, daemon=True).start()
     ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()

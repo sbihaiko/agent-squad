@@ -189,9 +189,9 @@ def kind_chains(models_path, now=None):
 def kind_efforts(models_path):
     """`{kind: {spelling: effort}}` for the entries that name one (SPEC 750).
 
-    The panel draws one row per entry with its effort, so a chain's effort is the entry's, never the node's. Only the
-    router reads it today: a child's effort is the request's, which the router chose. Recorded beside the chains in
-    `run_start`, so a resume reads the same map."""
+    The panel draws one row per entry with its effort, so a chain's effort is the entry's, never the node's. The router
+    reads it, and a child request that names no effort runs at its own entry's effort (a request that names one wins).
+    Recorded beside the chains in `run_start`, so a resume reads the same map."""
     out = {}
     for kind in KINDS:
         try:

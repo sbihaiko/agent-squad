@@ -10,6 +10,10 @@ mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null ||
 # does not inherit the mode, so a lock it takes inside waits as usual.
 # SERIAL_WAIT_SECONDS (default 1800) bounds the wait, and a waiter prints one line naming its holder before it waits, so a gate
 # held up by another gate says so instead of reading as a hang; the command's exit code is passed through (75 when the wait ran out).
+# A waiter also records that it is queued, in `$SG_STATE/locks/waiting/<lock>-<pid>`: one line, `<epoch> TAB <lock> TAB <pid>`,
+# written when the wait begins and removed when the lock is taken or the waiter exits. It is the only reading of "queued for
+# the lock" the live check has (spec 1163): a slot waiter whose every slot holder sits in that queue is a child starved by a
+# queued slot holder, and the check reports it. Guard: test-serial.sh, test-live-check.sh.
 #
 # A gate that outlives its run is found without a caller (ADR-0051). The holder records the deadline it keeps (SERIAL_HOLD_SECONDS,
 # else the run's own SG_CALL_DEADLINE_SECONDS, else 1800) and its command name beside its pid, stops its own command at that
@@ -41,6 +45,7 @@ reap() { echo "serial: reaping stale lock $n: holder pid $1 is dead, lock age $(
 # The incarnation of a pid: its start time, which GNU ps and BSD ps both print. The token is only ever read back against the pid
 # it was written for, so one stable form of it is enough: the fields are squeezed to one space apiece.
 inc_of() { $ps_ -o lstart= -p "$1" 2>/dev/null | awk '{$1=$1};1'; }
+wmark="$st/locks/waiting/$n-$$"; trap 'rm -f "$wmark"' EXIT   # the queue marker: only while this process waits
 until mkdir "$L" 2>/dev/null; do
   h=$(cat "$L/pid" 2>/dev/null); hi=$(cat "$L/inc" 2>/dev/null | awk '{$1=$1};1')
   if [ -n "$h" ] && ! alive "$h"; then reap "$h"; continue; fi
@@ -61,12 +66,13 @@ until mkdir "$L" 2>/dev/null; do
   # One line, the first time this process has to wait, naming what it waits for: a gate that waits for another gate has to say so
   # once -- silence reads as a hang. `said` keeps it to one line however long the wait runs.
   [ -n "${SERIAL_TRY:-}" ] && { echo "serial: lock $n held by pid ${h:-?}: skipped, not queued (SERIAL_TRY)" >&2; exit 73; }
-  [ $said = 1 ] || { echo "serial: waiting for lock $n held by pid ${h:-?}" >&2; said=1; }
+  [ $said = 1 ] || { echo "serial: waiting for lock $n held by pid ${h:-?}" >&2; said=1
+                     mkdir -p "$st/locks/waiting"; printf '%s\t%s\t%s\n' "$(date +%s)" "$n" "$$" > "$wmark"; }
   [ $(( $(date +%s) - t0 )) -gt "$w" ] && { echo "serial: waited ${w}s for lock $n held by pid ${h:-?}" >&2; exit 75; }
   sleep "${SERIAL_POLL_SECONDS:-3}"; done
 hpid=$$; due=$(( $(date +%s) + hold ))
 echo "$hpid" > "$L/pid"; printf '%s\n' "$cmdn" > "$L/cmd"; echo "$due" > "$L/due"; inc_of "$hpid" > "$L/inc"
-unset SERIAL_TRY; export SG_SERIAL_HELD="${SG_SERIAL_HELD:+$SG_SERIAL_HELD:}$n"; trap 'rm -rf "$L"' EXIT INT TERM
+rm -f "$wmark"; unset SERIAL_TRY; export SG_SERIAL_HELD="${SG_SERIAL_HELD:+$SG_SERIAL_HELD:}$n"; trap 'rm -rf "$L"; rm -f "$wmark"' EXIT INT TERM
 # The deadline reaches the command itself: past it the holder stops the command's whole process tree and releases the lock
 # (exit 75). Without this the cap lives only in the waiter's head, where an orphaned holder can never read it.
 set -m   # each background job leads its own process group, so the watchdog stops the command and its children together
