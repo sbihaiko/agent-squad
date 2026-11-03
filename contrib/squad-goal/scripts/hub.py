@@ -123,7 +123,7 @@ live = {}                                          # unfinished runs: {path: (mt
 
 # Billing source of a call, from the model on its outcome: Claude (sonnet/opus/fable/haiku), Grok and GPT run on the owner's subscriptions;
 # every other model (deepseek, gemini…) and any call that names no model is pay-per-use API.
-SUBSCRIPTION = re.compile(r"^(claude-)?(sonnet|opus|fable|haiku|grok|gpt|gemini)\b")
+SUBSCRIPTION = re.compile(r"^(claude-)?(sonnet|opus|fable|haiku|grok|gpt|gemini|kimi)\b")
 
 # The SDK prices every model it does not know at Claude rates (a DeepSeek run showed ~$410 where the platform bills a few dollars), so calls to
 # gateway models are re-priced from their tokens. USD per 1M tokens: (cache hit, cache miss, output); first match wins. Short-context tier (an
@@ -5687,13 +5687,14 @@ PAGE = PAGE.replace("/*RING_BASELINE*/", "%g" % (_leadtime.RING_BASELINE_EM * _l
 
 
 PLANS = pathlib.Path(__file__).resolve().parent / "plans.json"
-SUBS = ("claude", "grok", "gpt", "gemini")
-SUB_ACR = dict(zip(SUBS, ("CL", "GK", "GPT", "GEM")))   # the footer's token for each subscription (#1839): 2-3 letters, spelled here and nowhere else
+SUBS = ("claude", "grok", "gpt", "gemini", "kimi")
+SUB_ACR = dict(zip(SUBS, ("CL", "GK", "GPT", "GEM", "KIMI")))   # the footer's token for each subscription (#1839): 2-3 letters, spelled here and nowhere else
 def provider(m):
     m = m or ""
     if re.search(r"grok", m): return "grok"
     if re.search(r"gpt", m): return "gpt"
     if re.search(r"gemini", m): return "gemini"
+    if re.search(r"kimi", m): return "kimi"
     if re.match(r"^(claude-)?(sonnet|opus|fable|haiku)\b", m): return "claude"
     return None
 # Monthly list prices in USD, as published (they differ by country: pick "Custom amount" to enter what you really pay, in any currency).
@@ -5702,6 +5703,7 @@ PRESETS = {
     "gpt": {"plus": ("Plus", 20), "pro": ("Pro", 200), "business": ("Business seat", 30)},
     "grok": {"super": ("SuperGrok", 30), "heavy": ("SuperGrok Heavy", 300)},
     "gemini": {"plus": ("AI Plus", 7.99), "pro": ("AI Pro", 19.99), "ultra": ("AI Ultra", 249.99)},
+    "kimi": {"code": ("Kimi Code", 19)},
 }
 RATES = HUBDIR / "hub-rates.json"
 def rate(cur):
@@ -5930,7 +5932,7 @@ def quota_row(k, now=None):
     if r.get("err"): return {"unavailable": True, "err": r["err"], "asof": r.get("asof"), "plan": r.get("plan")}
     return None
 
-BRANDS = {"claude": "Claude", "grok": "Grok", "gpt": "ChatGPT", "gemini": "Google"}
+BRANDS = {"claude": "Claude", "grok": "Grok", "gpt": "ChatGPT", "gemini": "Google", "kimi": "Kimi"}
 def sub_name(k, plan, detected):
     """The card name comes from the account: the plan the probe detected, else the plan chosen in the card, else the provider."""
     name = detected or (PRESETS[k].get(plan["plan"], (None,))[0] if plan else None)

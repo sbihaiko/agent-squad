@@ -17,7 +17,7 @@ import zoneinfo
 from datetime import datetime, timedelta
 
 # The account-wide quota a model answers to, exactly as mkreq.sh and launch.py read it.
-MARKERS = (("gpt-", "codex-limited"), ("gemini-", "agy-limited"))
+MARKERS = (("gpt-", "codex-limited"), ("gemini-", "agy-limited"), ("kimi-", "kimi-limited"))
 _RESET = re.compile(r"\bresets?\s+(?:at\s+)?(\d{1,2}):(\d{2})\s*([ap]m)?\b", re.IGNORECASE)
 _ZONE = re.compile(r"\(([A-Za-z][A-Za-z0-9_+-]*(?:/[A-Za-z0-9_+/-]+)?)\)")
 
