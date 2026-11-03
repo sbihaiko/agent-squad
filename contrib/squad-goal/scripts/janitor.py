@@ -382,7 +382,13 @@ for r in names:
             continue
         if i["idle"] > 180:
             for q in inside(f):
-                if "dashboard_server" not in procs.get(q, (0, ""))[1] and not own_pass(q): kill(q, f"leftover of finished run {n}")
+                c = procs.get(q, (0, ""))[1]
+                # Another run's own session is never a leftover of this one: childfix.sh starts a fix run with its target
+                # inside the folder of the run it fixes, and rule A killed that engine while it still waited at the run cap
+                # -- a state that names no pid, so no reap could prove it dead and its slot stayed counted (#1270). This
+                # run's own session is still a leftover, so the pid its record names stays killable, as rule 433 has it.
+                if SESSION.search(c) and q != i["pid"]: continue
+                if "dashboard_server" not in c and not own_pass(q): kill(q, f"leftover of finished run {n}")
         if i["idle"] > 3600:
             for q, (_, c) in procs.items():
                 if "dashboard_server" in c and str(f) in c: kill(q, f"dashboard of finished run {n}")
