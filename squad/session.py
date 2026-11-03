@@ -116,15 +116,38 @@ def adapter_diagnostic(err, message=None):
     return d
 
 
+STALL_LINE = "the call stopped at its stall cap"
+
+
+def answered_nothing(out):
+    """True when an entry answered nothing and another entry of the chain may serve the same step.
+
+    Two ways to answer nothing, and the chain moves on from both. The provider refused to serve (an outage, not a defect
+    of the work). Or the call stopped at its own stall cap with no artifact: the model kept retrying one failing step
+    without changing the failure, so the node would end on the first entry while a second stood untried (#1236).
+    A cap that still produced an artifact is an answer, not this: the cap ends the node through its artifact (ADR-0105),
+    so the chain never retries it on another entry. A clean result and a deadline are not this either: a clean result is
+    an answer, and a deadline is the node's own bound, which the chain never spends twice."""
+    if out.kind == "adapter_error":
+        return provider_error(out.error)
+    if out.kind != "result" or getattr(out.result, "stop_reason", None) != "stall_cap":
+        return False
+    return not isinstance(getattr(out.result, "output", None), dict)
+
+
 async def run_chain(chain, call):
-    """Call one entry of a model chain at a time while the provider refuses to serve. `call(model, first)` runs one attempt
-    and returns `(outcome, who)`. Return the last outcome, every entry that refused with its error, and the last `who`."""
+    """Call one entry of a model chain at a time while the entry answers nothing. `call(model, first)` runs one attempt and
+    returns `(outcome, who)`. Return the last outcome, every entry that answered nothing with its reason, and the last
+    `who`."""
     tried, out, who = [], None, None
     for i, model in enumerate(chain):
         out, who = await call(model, i == 0)
-        if out.kind != "adapter_error" or not provider_error(out.error):
+        if not answered_nothing(out):
             break
-        tried.append((model, str(out.error)))
+        stalled = out.kind == "result"
+        if stalled and i == len(chain) - 1:
+            break       # a stall on the last entry keeps its own cap reason, so a one-entry chain reads as it always did
+        tried.append((model, STALL_LINE if stalled else str(out.error)))
     return out, tried, who
 
 
