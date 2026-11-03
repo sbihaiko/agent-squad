@@ -585,7 +585,7 @@ def test_status_names_the_build_this_hub_loaded(home, tmp_path, hub):
         assert build[key]["sha256"] == hashlib.sha256((SCRIPTS / name).read_bytes()).hexdigest()[:12]
         assert isinstance(build[key]["mtime"], str) and build[key]["mtime"]
     started = datetime.datetime.fromisoformat(build["started"])
-    assert started.tzinfo is not None and started <= datetime.datetime.now(datetime.timezone.utc)
+    assert started.tzinfo is not None and started <= datetime.datetime.now(datetime.UTC)
 
 
 # ---------------------------------------------------------------- the session overlay (#898): the loopback send rule (ADR-0152 rule 9)
