@@ -172,11 +172,14 @@ def test_the_mobile_page_reads_only_the_existing_routes(hub):
     # through a variable path, or a method set after the call's own `)`, carries it once too often, whatever the shape of
     # the call (#829).
     assert 'fetch(runURLs(id).control, { method: "POST"' in hub.MOBILE_PAGE, "the run screen's write is not the run's control route"
-    # The session overlay (#898) rides on the page and posts three routes through the source the page names: its send route,
-    # its screenshot route (#903), and the one attach route a staged file takes (#1154). Each carries the word once.
+    # The session overlay (#898) rides on the page and posts six routes through the source the page names: its send route,
+    # its screenshot route (#903), the one attach route a staged file takes (#1154), and its hosted terminal's attach,
+    # input and start routes (#1216). Each carries the word once.
     overlay = hub.OVERLAY_JS.count("method:")
-    assert overlay == 3 and 'fetch(s.src.api + "/send", { method: "POST"' in hub.OVERLAY_JS and 'fetch(s.src.api + "/screenshot?sid="' in hub.OVERLAY_JS
+    assert overlay == 6 and 'fetch(s.src.api + "/send", { method: "POST"' in hub.OVERLAY_JS and 'fetch(s.src.api + "/screenshot?sid="' in hub.OVERLAY_JS
     assert 'fetch(s.src.api + "/attach?" + q, { method: "POST"' in hub.OVERLAY_JS, "the overlay's attach write is not the one attach route"
+    assert '"/terminals/attach", { method: "POST"' in hub.OVERLAY_JS and '"/terminals/write", { method: "POST"' in hub.OVERLAY_JS
+    assert '"/terminals/start", { method: "POST"' in hub.OVERLAY_JS
     assert hub.MOBILE_PAGE.count("method:") == 5 + overlay, "the mobile page holds a sixth write, or a method outside the five fetches"
 
 

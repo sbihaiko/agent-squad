@@ -281,6 +281,7 @@ def server(port, apps, on_new=None):
         def answer_card(self, a): return self.profile.answer_card(self, a)   # the owner's answer to a session's question card (#1093)
         def terminal_read(self, a): return self.profile.terminal_read(self, a)   # a hosted session's scrollback (ADR-0152 rule 9)
         def terminal_post(self, a, op, keys): return self.profile.terminal_post(self, a, op, keys)   # an attach, a detach or an input
+        def terminal_start(self, a): return self.profile.terminal_start(self, a)   # a session the supervisor starts (#1216)
         def terminal_call(self, a, op, **fields): return self.profile.terminal_call(self, a, op, **fields)
         def send_attach(self, a, kind=None): return self.profile.send_attach(self, a, kind)   # one attach route (#1151)
         def answer(self, code, out): return self.profile.answer(self, code, out)

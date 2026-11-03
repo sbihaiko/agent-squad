@@ -77,6 +77,12 @@ SQ.supervisorLine = info => info && info.state === "refused"
   ? `The terminal supervisor is not running: ${String(info.why || "no reason was recorded").replace(/\.$/, "")}.` : "";
 // The sentence keeps its own row in the Terminal panel: the shared status line is written by every send and every poll (#1160).
 SQ.supervisorView = info => { const text = SQ.supervisorLine(info); return { hidden: !text, text }; };
+// A session the supervisor hosts takes terminal input, and its own list is the one source (#1216): only then does the
+// composer type into the terminal, and a panel that shows no hosted session offers the start the supervisor can honor.
+SQ.isHosted = (hosted, sid) => !!sid && Array.isArray(hosted) && hosted.indexOf(sid) >= 0;
+SQ.startOffered = (info, hosted, sid) => !!(info && info.state === "up") && !SQ.isHosted(hosted, sid);
+SQ.composerRoute = hosted => hosted ? "write" : "send";
+SQ.sentLine = route => route === "write" ? "Sent to the terminal." : SQ.SENT_INBOX;
 SQ.draft = ctx => {
   const list = v => (Array.isArray(v) ? v : v ? [v] : []).map(String).filter(Boolean);
   const lines = ["Page context", `Screen: ${ctx.screen || ""}`, `Route: ${ctx.route || ""}`];
@@ -188,6 +194,10 @@ html.sq-docked body{margin-right:var(--sq-dock)}
 #sq-ov-status:empty{display:none}
 #sq-ov-supervisor{margin:0;padding:0 13px 8px;font-size:13px;color:var(--warn)}
 #sq-ov-supervisor[hidden]{display:none}
+#sq-ov-startrow{margin:0;padding:0 13px 8px}
+#sq-ov-startrow[hidden]{display:none}
+#sq-ov-start{width:100%;min-height:44px;padding:6px 12px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--fg);font:inherit;cursor:pointer}
+#sq-ov-start:hover{background:var(--raise)}
 #sq-ov-live{margin:0;padding:0 14px 6px;font-family:var(--sq-mono);font-size:var(--sq-fs);line-height:1.55;color:var(--ink-soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
 #sq-ov-live[hidden]{display:none}
 .sq-ov-back{display:none}
@@ -215,6 +225,7 @@ html.sq-over .sq-ov-back{display:inline-flex;align-items:center;min-height:44px;
 </header>
 <div id="sq-ov-pick" hidden></div>
 <p id="sq-ov-supervisor" role="alert" hidden></p>
+<div id="sq-ov-startrow" hidden><button type="button" id="sq-ov-start">Start a session</button></div>
 <div id="sq-ov-log" role="log" aria-live="polite" aria-label="Session conversation"></div>
 <p id="sq-ov-live" aria-live="off" hidden></p>
 <div id="sq-ov-form">
@@ -230,6 +241,7 @@ html.sq-over .sq-ov-back{display:inline-flex;align-items:center;min-height:44px;
 <p id="sq-ov-note"></p>
 </div>`;
 
+SQ.SENT_INBOX = "Sent: the session's inbox accepted the message.";
 if (typeof module !== "undefined" && module.exports) module.exports = SQ;
 // dom:begin
 if (typeof document === "undefined" || !document.body || !document.createRange || window.__sqOverlay) return;   // no DOM: the rules only
@@ -245,10 +257,14 @@ const btn = $("sq-ov-btn"), ov = $("sq-ov"), title = $("sq-ov-title"), pick = $(
       stat = $("sq-ov-status"), supLine = $("sq-ov-supervisor"), handle = $("sq-ov-handle"), dockBtn = $("sq-ov-dock"),
       undockBtn = $("sq-ov-undock"), lens = $("sq-ov-lens"), live = $("sq-ov-live"),
       form = $("sq-ov-form"), chip = $("sq-ov-attach"), chipImg = $("sq-ov-attach-img"),
-      chipName = $("sq-ov-attach-name"), chipX = $("sq-ov-attach-x");
+      chipName = $("sq-ov-attach-name"), chipX = $("sq-ov-attach-x"),
+      startRow = $("sq-ov-startrow"), startBtn = $("sq-ov-start");
 const de = document.documentElement;
 let sessions = [], cur = null, rule = null, timer = 0, lastSig = "", liveAct = null, liveTick = 0;
 let attach = null, sending = false;   // the one staged file and the send in flight (#1154)
+// The supervisor's state, the sessions it hosts, and the job and checkout a start names (#1216). The hosted talk keeps its
+// own read offset and one client id, so each poll appends only the output that arrived since the last one.
+let supNow = null, hosted = [], startInfo = null, termCid = "", termSid = "", termOffset = 0, termNode = null;
 
 // ---- the page context: each page exposes one function; a page without its own gets this one
 const shown = e => !!(e && (e.offsetWidth || e.offsetHeight || e.getClientRects().length)) && !e.closest("#sq-ov");
@@ -277,9 +293,15 @@ function addLine(line) {
 function say(msg) { stat.textContent = msg || ""; }
 // The supervisor's absence gets its own row, so a status message never overwrites it and the panel states it once (#1160).
 function paintSupervisor(info) {
+  supNow = info || null;
   const view = SQ.supervisorView(info);
   supLine.hidden = view.hidden;
   supLine.textContent = view.text;
+  paintStart();
+}
+// The start is offered only while the supervisor is up and the panel shows no session it hosts (#1216).
+function paintStart() {
+  startRow.hidden = !SQ.startOffered(supNow, hosted, cur && cur.sid);
 }
 // The live line keeps its own row: the spinner turns about eight times a second from the last read, and a read sets the count (#1082).
 function setActivity(a) { liveAct = a ? { ...a, got: Date.now() } : null; paintLive(); }
@@ -288,9 +310,9 @@ function paintLive(){
   live.hidden = !t; live.textContent = t;
 }
 function syncSend() {
-  const st = SQ.sendState(cur || rule);
+  const st = SQ.sendState(cur || rule), held = !!(cur && cur.hosted);
   text.disabled = !!(rule || cur) && st.disabled;
-  note.textContent = st.disabled && (rule || cur) ? st.note : NOTE;
+  note.textContent = st.disabled && (rule || cur) ? st.note : held ? "It goes to the terminal as typed input." : NOTE;
   sendBtn.disabled = !cur || SQ.sendLocked(text.value, cur.send, attach, sending);
 }
 function empty(msg) {
@@ -307,14 +329,14 @@ function paintPick() {
     b.textContent = [s.src.label, s.name || s.sid.slice(0, 8), s.status].filter(Boolean).join(" · ");
     b.setAttribute("aria-pressed", String(!!cur && cur.sid === s.sid && cur.src.api === s.src.api));
     b.onclick = () => { cur = s; try { sessionStorage.setItem(STORE + "-sid", s.src.api + " " + s.sid); } catch (e) { /* keep it for this view */ }
-                        lastSig = ""; paintPick(); paintHead(); loadConversation(); };
+                        lastSig = ""; paintPick(); paintHead(); readPanel(); };
     return b;
   });
   pick.replaceChildren(p, ...items);
 }
 function paintHead() {
   title.textContent = "Terminal";   // the title names the panel, not the session (owner, 2026-11-01)
-  syncSend();
+  syncSend(); paintStart();
 }
 // A read that fails says nothing about the sessions (owner, 2026-11-01): it used to blank the panel and drop the reader's
 // session, so a reload that landed during a hub restart read as "no session runs here". The panel keeps what it shows and
@@ -327,7 +349,7 @@ function retrySoon() {
 async function loadSessions() {
   let srcs = [];
   try { srcs = await window.SQUAD_OV_SOURCES(); } catch (e) { srcs = []; }
-  const found = []; let rl = null, sup = null, answered = 0;
+  const found = [], hostedRows = []; let rl = null, info = null, start = null, answered = 0;
   for (const src of srcs || []) {
     try {
       const r = await fetch(src.api + "/project", { cache: "no-store" });
@@ -335,7 +357,11 @@ async function loadSessions() {
       const d = await r.json();
       answered++;
       rl = rl || { send: d.send, why: d.why };
-      sup = sup || d.supervisor || null;
+      info = info || d.supervisor || null;
+      if (!start && d.start && typeof d.start.job === "string" && typeof d.start.cwd === "string")
+        start = { api: src.api, label: src.label, job: d.start.job, cwd: d.start.cwd, send: d.send, why: d.why };
+      for (const sid of d.hosted || []) if (typeof sid === "string")
+        hostedRows.push({ sid, name: "Hosted session", status: "hosted", hosted: true, src, send: d.send, why: d.why });
       for (const s of d.sessions || []) found.push({ ...s, src, send: d.send, why: d.why });
     } catch (e) { /* that repository's hub did not answer: its sessions are left out */ }
   }
@@ -348,21 +374,24 @@ async function loadSessions() {
   retryN = 0;
   // One empty answer never takes away a talk the reader is reading (owner, 2026-11-01): the registry scan passes through
   // moments with no session. Only a repeated empty answer may blank it.
-  emptyN = found.length ? 0 : emptyN + 1;
-  if (cur && !found.length && emptyN < 3) {
+  const all = [...found, ...hostedRows];
+  emptyN = all.length ? 0 : emptyN + 1;
+  if (cur && !all.length && emptyN < 3) {
     say("the session list came back empty · asking again");
     retrySoon();
     return;
   }
   rule = rl;
-  sessions = found;
+  sessions = all;
+  hosted = hostedRows.map(row => row.sid);
+  if (start) startInfo = start;
   let kept = "";
   try { kept = sessionStorage.getItem(STORE + "-sid") || ""; } catch (e) { kept = ""; }
-  cur = (cur && found.find(s => s.sid === cur.sid && s.src.api === cur.src.api))
-     || found.find(s => s.src.api + " " + s.sid === kept) || (found.length === 1 ? found[0] : null);
-  paintPick(); paintHead(); paintSupervisor(sup);
-  if (cur) loadConversation();
-  else if (!found.length) empty("No session runs in this project's checkout. Start Claude Code there, then open this again.");
+  cur = (cur && all.find(s => s.sid === cur.sid && s.src.api === cur.src.api))
+     || all.find(s => s.src.api + " " + s.sid === kept) || (all.length === 1 ? all[0] : null);
+  paintPick(); paintHead(); paintSupervisor(info);
+  if (cur) readPanel();
+  else if (!all.length) empty("No session runs in this project's checkout. Start Claude Code there, then open this again.");
   else empty("Pick a session above.");
 }
 // Only the structure that carries meaning in a 400 px panel: headings, bullets, a fence. Everything else stays text.
@@ -548,6 +577,7 @@ function repaint(pin) {
   log.scrollTop = SQ.viewAfter(was, again ? again.getBoundingClientRect().top : null, log.scrollTop);
 }
 function paintTalk(pin) {
+  termNode = null; termSid = ""; termOffset = 0;   // a conversation replaces the terminal: a later hosted read starts over
   if (talk.length) repaint(pin); else empty("No turns yet.");
   lastSig = sigOf(talk);
 }
@@ -597,15 +627,78 @@ async function loadConversation() {
 }
 const uuid = () => (crypto.randomUUID ? crypto.randomUUID()
   : "10000000-1000-4000-8000-100000000000".replace(/[018]/g, c => (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)));
+const termClient = () => termCid || (termCid = uuid());
+// The panel reads the talk of a live session, or the scrollback of a session the supervisor hosts (#1216).
+function readPanel() { if (cur && cur.hosted) pollTerminal(); else loadConversation(); }
+function clearTerm() { log.replaceChildren(); termNode = null; lastSig = ""; stick = true; }
+function appendTerm(data) {
+  if (!termNode) { termNode = document.createElement("div"); termNode.className = "sq-txt"; log.append(termNode); }
+  termNode.append(document.createTextNode(data));
+  if (stick) pinBottom();
+}
+// The hosted terminal's scrollback: each read names its offset, so a poll appends only the output that arrived since the
+// last one. A refusal names its reason once; a session the daemon no longer holds takes the panel back to the list.
+async function pollTerminal() {
+  const s = cur;
+  if (!s || ov.hidden) return;
+  if (termSid !== s.sid) { termSid = s.sid; termOffset = 0; clearTerm(); }
+  try {
+    const r = await fetch(s.src.api + "/terminals/read?sid=" + encodeURIComponent(s.sid) + "&client_id=" + termClient() + "&offset=" + termOffset, { cache: "no-store" });
+    if (cur !== s) return;
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      say("Refused" + (d.err ? ": " + d.err : ": the hub did not read the terminal."));
+      if (r.status === 403 && String(d.err || "").includes("not started by this daemon")) loadSessions();
+      return;
+    }
+    if (typeof d.data === "string" && d.data) appendTerm(d.data);
+    if (typeof d.offset === "number") termOffset = d.offset;
+  } catch (e) { console.warn("terminal:", e); }
+}
+async function attachTerminal(s) {
+  try {
+    const r = await fetch(s.src.api + "/terminals/attach", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sid: s.sid, client_id: termClient() }) });
+    if (r.ok) return;
+    const d = await r.json().catch(() => ({}));
+    say("Refused" + (d.err ? ": " + d.err : ": the hub did not attach the terminal."));
+  } catch (e) { say("Uncertain: no answer from the hub."); }
+}
+// One start the supervisor can honor, then the new session's scrollback in this panel (#1216).
+async function startSession() {
+  if (!startInfo) { say("Refused: the hub named no profile to start a session for."); return; }
+  startBtn.disabled = true; say("Starting a session");
+  try {
+    const r = await fetch(startInfo.api + "/terminals/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ job: startInfo.job, cwd: startInfo.cwd, client_id: termClient() }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || typeof d.session !== "string") {
+      say("Refused" + (d.err ? ": " + d.err : ": the hub did not start a session."));
+      return;
+    }
+    const s = { sid: d.session, name: "Hosted session", status: "hosted", hosted: true, src: startInfo, send: startInfo.send, why: startInfo.why };
+    cur = s;
+    if (!SQ.isHosted(hosted, s.sid)) hosted.push(s.sid);
+    try { sessionStorage.setItem(STORE + "-sid", s.src.api + " " + s.sid); } catch (e) { /* keep it for this view */ }
+    lastSig = ""; paintPick(); paintHead();
+    await attachTerminal(s);
+    say("Reading the terminal.");
+    readPanel();
+  } catch (e) { say("Uncertain: no answer from the hub."); }
+  finally { startBtn.disabled = false; }
+}
+startBtn.addEventListener("click", startSession);
 async function send() {
   const s = cur, body = text.value, file = attach;
   if (!s || SQ.sendLocked(body, s.send, file, sending)) return;
+  const route = SQ.composerRoute(!!s.hosted);
+  if (route === "write" && file) { say("A hosted terminal takes text only: remove the file first."); return; }
   const cid = uuid();   // one client message id for the one send
   sending = true; syncSend();
   say(file ? "Sending the message and the file" : "Sending");
   try {
     let r;
-    if (file) {
+    if (route === "write") {
+      r = await fetch(s.src.api + "/terminals/write", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sid: s.sid, text: body + "\n", client_id: termClient() }) });
+    } else if (file) {
       // One request carries the words and the file, so the hub sends one message under one client message id (#1154).
       // The page never decides the type: the hub sniffs the bytes of whatever this is.
       const q = "kind=image&sid=" + encodeURIComponent(s.sid) + "&client_id=" + encodeURIComponent(cid) + "&text=" + encodeURIComponent(body);
@@ -614,14 +707,19 @@ async function send() {
       r = await fetch(s.src.api + "/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sid: s.sid, text: body, client_id: cid }) });
     }
     const d = await r.json().catch(() => ({}));
-    const st = r.ok ? d.status : "refused";
-    if (st === "sent") { text.value = ""; grow(); if (file) clearAttach(); }
-    if (file && st !== "sent") clearAttach();   // a refused file clears its chip; the words stay for another try
-    say(st === "sent" ? (file ? "Sent: the session's inbox accepted the message and the file." : "Sent: the session's inbox accepted the message.")
-      : st === "refused" ? "Refused" + (d.reason || d.err ? ": " + (d.reason || d.err) : ": the hub did not send it.")
-      : "Uncertain: the send was interrupted.");
+    if (route === "write") {
+      say(r.ok ? SQ.sentLine("write") : "Refused" + (d.err ? ": " + d.err : ": the hub did not write to the terminal."));
+      if (r.ok) { text.value = ""; grow(); }
+    } else {
+      const st = r.ok ? d.status : "refused";
+      if (st === "sent") { text.value = ""; grow(); if (file) clearAttach(); }
+      if (file && st !== "sent") clearAttach();   // a refused file clears its chip; the words stay for another try
+      say(st === "sent" ? (file ? "Sent: the session's inbox accepted the message and the file." : SQ.sentLine("send"))
+        : st === "refused" ? "Refused" + (d.reason || d.err ? ": " + (d.reason || d.err) : ": the hub did not send it.")
+        : "Uncertain: the send was interrupted.");
+    }
   } catch (e) { say("Uncertain: no answer from the hub."); }
-  sending = false; syncSend(); loadConversation();
+  sending = false; syncSend(); readPanel();
 }
 
 // ---- the composer
@@ -704,7 +802,7 @@ async function screenshot() {
     const st = r.ok ? d.status : "refused";
     say(st === "sent" ? "Attached: the session's inbox accepted the screenshot." : st === "refused" ? "Refused" + (d.reason || d.err ? ": " + (d.reason || d.err) : ": the hub did not attach it.") : "Uncertain: the attach was interrupted.");
   } catch (e) { say("Uncertain: no answer from the hub."); }
-  loadConversation();
+  readPanel();
 }
 
 // ---- open, close, dock
@@ -771,7 +869,7 @@ function openOverlay(){
   fsInit();
   if (cur && watched === cur.sid && talk.length) paintTalk(true);   // turns the stream pushed while the panel was shut
   loadSessions();
-  clearInterval(timer); timer = setInterval(loadConversation, SQ.POLL_MS);
+  clearInterval(timer); timer = setInterval(readPanel, SQ.POLL_MS);
   clearInterval(liveTick); liveTick = setInterval(paintLive, 120);
   text.focus();
 }
@@ -823,7 +921,7 @@ function frame(t) {
 addEventListener("pointermove", e => { ptr = { x: e.clientX, y: e.clientY }; lastMove = performance.now(); kick(); }, { passive: true });
 // A background tab throttles timers to about once a minute, so a reader who works in another window waits (#1079):
 // the talk is read again the moment this one is looked at or focused. Registered once, never per open.
-const reread = () => { if (!ov.hidden && !document.hidden) loadConversation(); };
+const reread = () => { if (!ov.hidden && !document.hidden) readPanel(); };
 document.addEventListener("visibilitychange", () => { lastT = 0; kick(); reread(); });
 addEventListener("focus", reread);
 if (reduced.addEventListener) reduced.addEventListener("change", kick);

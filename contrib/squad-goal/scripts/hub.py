@@ -6521,9 +6521,12 @@ def image_payload(query):
     except OSError: return None
 
 def project_payload(a):
-    """What /api/sessions/project serves (#898): the sessions in this profile's checkout and the send rule for this request."""
+    """What /api/sessions/project serves (#898): the sessions in this profile's checkout and the send rule for this request.
+    It also names the sessions the supervisor hosts, so the panel types into a terminal only there, and the job and checkout
+    a start names (#1216)."""
     ok, why = send_rule(a)
-    return {"sessions": sessions.project_sessions(PROFILE_NAME, CHECKOUT, profiles_of=profiles_of_cwd), "send": ok, "why": why, "supervisor": dict(TERMINAL)}
+    return {"sessions": sessions.project_sessions(PROFILE_NAME, CHECKOUT, profiles_of=profiles_of_cwd), "send": ok, "why": why,
+            "supervisor": dict(TERMINAL), "hosted": hosted_sessions(), "start": {"job": PROFILE_NAME, "cwd": CHECKOUT}}
 
 # The session overlay (#898): one source, hub-overlay.js, on every page the hub serves. Each page names where its session
 # routes are: the hub and mobile pages a quoted path the mux gives the profile prefix, a run dashboard its own path up to
@@ -6655,7 +6658,8 @@ class Access(NamedTuple):
 
 LOGIN_HEADER = "Tailscale-User-Login"   # the seam's name, for a hub with no seam: a request that carries it is never loopback
 TERMINAL_GRANTS = ("terminals_read", "terminals_attach", "terminals_send")
-TERMINAL_SENDS = ("/api/sessions/send", "/api/sessions/card/answer", "/api/sessions/screenshot", "/api/sessions/attach", "/api/terminals/write")
+TERMINAL_SENDS = ("/api/sessions/send", "/api/sessions/card/answer", "/api/sessions/screenshot", "/api/sessions/attach",
+                  "/api/terminals/write", "/api/terminals/start")
 TERMINAL_ATTACH = ("/api/terminals/attach", "/api/terminals/detach")
 TERMINAL_OPS = {"/api/terminals/attach": ("attach", {"sid", "client_id"}), "/api/terminals/detach": ("detach", {"sid", "client_id"}),
                 "/api/terminals/write": ("write", {"sid", "text", "client_id"})}
@@ -6687,6 +6691,21 @@ def start_terminal_supervisor():
         except Exception as e:
             TERMINAL.update(state="refused", why=str(e))
     print(f"terminal supervisor: {TERMINAL['state']}" + (f": {TERMINAL['why']}" if TERMINAL["why"] else ""), file=sys.stderr, flush=True)
+
+def hosted_sessions():
+    """The session ids the terminal supervisor hosts in this profile's checkout (#1216). The supervisor's own list is the one
+    source, so a session that ended is never offered as a terminal. A supervisor that is not up, or that does not answer,
+    hosts none."""
+    if TERMINAL.get("state") != "up": return []
+    try:
+        out = terminal_supervisor().call(STATE, "list")
+    except Exception:   # a daemon that is gone, refused or built without the op: the panel offers a start instead
+        return []
+    home = os.path.realpath(CHECKOUT) if CHECKOUT else ""
+    rows = out.get("sessions") if isinstance(out, dict) else None
+    return [row["sid"] for row in rows or []
+            if isinstance(row, dict) and isinstance(row.get("sid"), str) and home
+            and os.path.realpath(str(row.get("cwd") or "")) == home]
 
 def access(h, action):
     """The one rule for every route: the loopback Host as own_host has always answered it, a tailnet request through the seam.
@@ -6997,6 +7016,21 @@ class H(BaseHTTPRequestHandler):
         if not isinstance(body["text"], str): return self.answer(400, {"err": "bad request"})
         self.terminal_call(a, op, session=sid, text=body["text"], client_id=cid)
 
+    def terminal_start(self, a):
+        """Start a session the supervisor hosts, in the profile's checkout, and answer its session id (#1216). A JSON body
+        with exactly job, cwd and client_id, under the send rule the other terminal writes keep; the supervisor refuses an
+        invalid job, and its refusal answers the 403."""
+        length = self.headers.get("Content-Length") or "0"
+        raw = self.rfile.read(min(int(length), 1 << 20)) if length.isdigit() else b""
+        if not a.allowed: return self.refuse(a.reason)
+        if not (a.tailnet or own_origin(self)) or "json" not in (self.headers.get("Content-Type") or ""): return self.refuse("forbidden")
+        try: body = json.loads(raw)
+        except ValueError: body = None
+        if not isinstance(body, dict) or set(body) != {"job", "cwd", "client_id"}: return self.answer(400, {"err": "bad request"})
+        if not isinstance(body["job"], str) or not isinstance(body["cwd"], str) or \
+           not session_send.CLIENT_ID.fullmatch(str(body["client_id"])): return self.answer(400, {"err": "bad request"})
+        self.terminal_call(a, "start", job=body["job"], cwd=body["cwd"], client_id=str(body["client_id"]))
+
     def terminal_call(self, a, op, **fields):
         """One op on the supervisor for this caller: the login it acts for and the transport it came by. A refusal is a 403.
         A daemon that is not running is started again once and the call retried; a start that refuses answers 503 with its reason."""
@@ -7029,6 +7063,7 @@ class H(BaseHTTPRequestHandler):
         if self.path.split("?", 1)[0] == "/api/sessions/card/answer": return self.answer_card(a)
         if self.path.split("?", 1)[0] == "/api/sessions/attach": return self.send_attach(a)
         if self.path.split("?", 1)[0] == "/api/sessions/screenshot": return self.send_attach(a, "screenshot")
+        if self.path.split("?", 1)[0] == "/api/terminals/start": return self.terminal_start(a)
         if self.path.split("?", 1)[0] in TERMINAL_OPS: return self.terminal_post(a, *TERMINAL_OPS[self.path.split("?", 1)[0]])
         if self.path.split("?", 1)[0] == "/api/loop": return self.loop_post(a)
         ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote", "/api/limits", "/api/slack") and (a.tailnet or own_origin(self)) and "json" in (self.headers.get("Content-Type") or "")
