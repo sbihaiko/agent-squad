@@ -386,7 +386,7 @@ Move the board card on the same event:
 scripts/board.sh <owner> <project> "<Status>" <n…>
 ```
 
-The columns are the shipped set (`SG_BOARD_VOCAB=shipped`): Backlog, Todo, Doing, Code Review, Code Complete, Closed, Abandoned. `Done` is not one of them, and `Blocked` is not a column either: a freeze is a badge over the column the work reached (ADR-0143 rule 4).
+The columns are the shipped set (`SG_BOARD_VOCAB=shipped`): Backlog, Todo, Doing, Code Review, Code Complete, Gating, Closed, Abandoned. Gating holds a card whose gate or proof waits for a slot or runs for the wave; a red or unproven attempt is a marker, never a move, and the card's Gate Tries number counts the attempts. `Done` is not one of them, and `Blocked` is not a column either: a freeze is a badge over the column the work reached (ADR-0143 rule 4).
 
 - `childcc.py` moves Doing → Code Review when a child passes.
 - `janitor.py` rule R is the one producer of the derived columns, from the run's record: Todo after a failed run, Blocked after `needs-human`, Code Complete after a pass with nothing landed.

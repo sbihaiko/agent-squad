@@ -5437,7 +5437,7 @@ function restore(){document.querySelectorAll("#bbody .sc").forEach(e=>{e.scrollT
 // One colour per board column, resolved here and nowhere else: the header's dot, the card's --cc border and the
 // hidden: strip's number all call colOf(name, columnNames). The nine named columns are the board's own — the eight
 // shipped statuses plus the one open-PR lane — and the flow reads left to right: grey (not started), yellow (being
-// coded), violet (built), teal (verified), green (finished), amber for the pile nobody has triaged, red for the one
+// coded), violet (built), pink (gating), green (finished), amber for the pile nobody has triaged, red for the one
 // colour that means look here, and blue for the open-PR lane. Any other name is a Status option the Project gained
 // later — a user column — and takes the next colour of the reserved ring, by its alphabetical position among those user
 // columns. The name always stands beside the colour (column header, chip label), so the colour is a second cue and never
@@ -5445,7 +5445,7 @@ function restore(){document.querySelectorAll("#bbody .sc").forEach(e=>{e.scrollT
 const COLORS=/*BOARD_COLORS*/;
 const COLNAME=/*BOARD_NAMES*/;const BOARD_VOCAB={todo:COLNAME.issue_todo,doing:/*BOARD_DOING*/,review:/*BOARD_REVIEW*/};   // the columns' names by the fact that sets them: the board's script holds no column name of its own
 const hidCols=()=>bo.hidden??[];
-const RING=["var(--chart-series-6)","var(--chart-series-2)","var(--chart-series-7)","var(--chart-series-3)"];   // reserved for the columns the user creates, and never one of the named columns
+const RING=["var(--chart-series-6)","var(--chart-series-2)","var(--chart-series-4)","var(--chart-series-3)"];   // reserved for the columns the user creates, and never one of the named columns
 const colOf=(n,names)=>{const u=(names||[]).filter(x=>!Object.hasOwn(COLORS,x)).sort(),i=u.indexOf(n);return COLORS[n]||RING[(i<0?0:i)%RING.length]};
 const caseRows=cs=>(cs||[]).map(c=>{const ag=Math.max(0,Math.round((Date.now()-Date.parse(c.ended))/1000)),a=ag<3600?Math.max(1,Math.round(ag/60))+"m":ag<172800?Math.round(ag/3600)+"h":Math.round(ag/86400)+"d";return `<div class="tcrow ${c.result==="fail"?"fail":"pass"}" data-key="test case:${c.issue}@${esc(c.commit)}"><span class=tr>${esc(c.result)}</span><span class=id>#${c.issue}</span><span class=ta>${a}</span><code class=tm>${esc(c.commit)}</code></div>`}).join("");   // one row for each test case item, in the model's order: a strip beside the axis, never a column, and the pane reads no cache of its own
 // flow-charts:

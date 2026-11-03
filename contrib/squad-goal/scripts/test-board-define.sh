@@ -10,14 +10,15 @@
 src=${1:-$(dirname "$0")/board_define.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/st"; cp "$src" "$T/board_define.py"; cp "$(dirname "$src")/issue_state.py" "$T/issue_state.py"; for f in board_migrate.py board_columns.py board-definition.json; do cp "$(dirname "$src")/$f" "$T/$f"; done
 cat > "$T/board.json" <<'J'
-{"fieldNames": {"statuses": "Status", "kinds": "Kind", "freeze": "Freeze", "outcomes": "Outcome"},
+{"fieldNames": {"statuses": "Status", "kinds": "Kind", "freeze": "Freeze", "outcomes": "Outcome", "gateTries": "Gate Tries"},
  "statuses": [{"name": "Backlog", "color": "GRAY", "fact": "Open, not in the schedule"},
               {"name": "Todo", "color": "BLUE", "fact": "Startable"},
               {"name": "Doing", "color": "YELLOW", "fact": "A live run holds it"},
               {"name": "Closed", "color": "GREEN", "fact": "Merged and closed"}],
  "kinds": [{"name": "Bug", "color": "RED", "fact": "A defect"}, {"name": "Task", "color": "BLUE", "fact": "Work"}],
  "freeze": [{"name": "Owner", "color": "ORANGE", "fact": "frozen:owner"}],
- "outcomes": [{"name": "Merged", "color": "GREEN", "fact": "In main"}, {"name": "Reverted", "color": "ORANGE", "fact": "Taken back"}]}
+ "outcomes": [{"name": "Merged", "color": "GREEN", "fact": "In main"}, {"name": "Reverted", "color": "ORANGE", "fact": "Taken back"}],
+ "gateTries": {"type": "number"}}
 J
 # the board today: a Status field with two options the definition does not name, a Freeze field missing one option it does
 # not need, and the Run text field without its Run started twin: both are the binding's holder fields, which the
@@ -56,6 +57,7 @@ for line in "drift Status: missing Backlog" "drift Status: missing Doing" "drift
             "drift Status: not in the definition Blocked" "drift Status: not in the definition Done" \
             "drift Kind: field missing" "drift Outcome: field missing" \
             "plan Status: add Backlog, Doing, Closed" "plan Kind: create Bug, Task" "plan Outcome: create Merged, Reverted" \
+            "drift Gate Tries: field missing" "plan Gate Tries: create number field" \
             "drift Run started: field missing" "plan Run started: create text field" \
             "dry run: nothing written"; do
   grep -qxF "$line" <<<"$o" && ok "names: $line" || ko "missing line '$line' in: $o"
@@ -83,15 +85,16 @@ assert opts[1] == {"id": "o_todo", "name": "Todo", "color": "GRAY", "description
 assert opts[0] == {"name": "Backlog", "color": "GRAY", "description": "Open, not in the schedule"}, opts[0]
 assert opts[4] == {"id": "o_block", "name": "Blocked", "color": "RED", "description": ""}, opts[4]
 P
-python3 - "$T/graphql.in" <<'P' && ok "--apply creates Kind and Outcome with the definition's options and Run started as text, and touches Freeze and Run not at all" || ko "create payload: $(cat "$T/graphql.in")"
+python3 - "$T/graphql.in" <<'P' && ok "--apply creates Kind and Outcome with the definition's options, Run started as text and Gate Tries as a number, and touches Freeze and Run not at all" || ko "create payload: $(cat "$T/graphql.in")"
 import json, sys
 calls = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
 made = {c["variables"]["input"]["name"]: c["variables"]["input"] for c in calls if "createProjectV2Field" in c["query"]}
-assert sorted(made) == ["Kind", "Outcome", "Run started"], made
+assert sorted(made) == ["Gate Tries", "Kind", "Outcome", "Run started"], made
 assert [o["name"] for o in made["Kind"]["singleSelectOptions"]] == ["Bug", "Task"]
 assert made["Outcome"]["dataType"] == "SINGLE_SELECT"
+assert made["Gate Tries"] == {"projectId": "P_1", "dataType": "NUMBER", "name": "Gate Tries"}, made["Gate Tries"]
 assert made["Run started"] == {"projectId": "P_1", "dataType": "TEXT", "name": "Run started"}, made["Run started"]
-assert len(calls) == 4, calls
+assert len(calls) == 5, calls
 assert not any("F_FREEZE" in json.dumps(c) for c in calls)
 P
 grep -qE 'ItemFieldValue|items' "$T/gh.calls" "$T/graphql.in" && ko "--apply writes an item: $(cat "$T/gh.calls")" || ok "--apply moves no card"
@@ -104,6 +107,7 @@ fs = [{"id": 2, "node_id": "F_STATUS", "name": "Status", "data_type": "single_se
 for i, (f, names) in enumerate([("Kind", ["Bug", "Task"]), ("Freeze", ["Owner"]), ("Outcome", ["Merged", "Reverted"])]):
     fs.append({"id": 10 + i, "node_id": "F_" + f, "name": f, "data_type": "single_select", "options": [{"id": f + n, "name": {"raw": n}, "color": "GRAY", "description": {"raw": ""}} for n in names]})
 fs += [{"id": 20 + i, "node_id": "F_T%d" % i, "name": n, "data_type": "text"} for i, n in enumerate(["Run", "Run started"])]
+fs.append({"id": 30, "node_id": "F_GT", "name": "Gate Tries", "data_type": "number"})
 json.dump(fs, open(sys.argv[1], "w"))
 P
 rm -f "$T/graphql.in"; o=$(run --check --apply o 4 2>&1); rc=$?
@@ -118,5 +122,20 @@ mkdir -p "$T/rbin"; printf '#!/bin/bash\necho "gh: API rate limit exceeded" >&2;
 o=$(PATH="$T/rbin:$PATH" SG_STATE="$T/st2" SG_BOARD_READ_BACKOFF=0 python3 "$T/board_define.py" --definition "$T/board.json" --check o 4 2>&1); rc=$?
 [ "$rc" -ge 2 ] && [ "$(printf '%s\n' "$o" | wc -l | tr -d ' ')" = 1 ] && grep -q "rate limit exceeded" <<<"$o" && ! grep -q Traceback <<<"$o" \
   && ok "a refused read is one line, not a traceback" || ko "refused read: exit $rc: $o"
+
+# The shipped definition itself: eight columns with Gating between Code Complete and Closed, its own colour, the actor and
+# the rule that an attempt never moves a card, and the Gate Tries number field (spec #1218).
+python3 - "$(cd "$(dirname "$src")" && pwd)/board-definition.json" <<'P' && ok "the shipped definition names eight columns, Gating between Code Complete and Closed, and Gate Tries" || ko "shipped definition: $(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print([s["name"] for s in d["statuses"]], d["fieldNames"], d.get("gateTries"))' "$(cd "$(dirname "$src")" && pwd)/board-definition.json" 2>&1)"
+import json, sys
+d = json.load(open(sys.argv[1])); names = [s["name"] for s in d["statuses"]]
+assert len(names) == 8, names
+assert names.index("Code Complete") + 1 == names.index("Gating") == names.index("Closed") - 1, names
+g = d["statuses"][names.index("Gating")]
+assert g["color"] == "PINK" and [s["color"] for s in d["statuses"]].count("PINK") == 1, g
+assert g["fact"] == "A gate or proof waits for a slot or runs for the wave; a red or unproven attempt is a marker, not a move", g
+assert g["actor"] == "The gate" and g["terminal"] is False, g
+assert "An attempt is a marker, not a move: the card leaves Gating only forward." in d["rules"], d["rules"]
+assert d["fieldNames"]["gateTries"] == "Gate Tries" and d["gateTries"] == {"type": "number"}, d["fieldNames"]
+P
 
 rm -rf "$T"; [ "$fail" -eq 0 ] && echo "TDD GREEN: board_define" || exit 1

@@ -15,7 +15,7 @@ before=$(ls "$T" | sort)
 out=$(python3 "$T/s/board_migrate.py" --plan "$T/all.json" 2>&1); rc=$?
 [ $rc = 0 ] && ok "dry run exits 0" || ko "dry run exits $rc"
 [ "$(echo "$out" | grep -c '^MOVE #')" = 7 ] && ok "every move is listed" || ko "moves: $out"
-for o in Blocked "In Progress" Done "Open Specs" Merging Landing; do echo "$out" | grep -q "^REMOVE option $o" && ok "removal listed: $o" || ko "removal missing: $o"; done
+for o in Blocked "In Progress" Done "Open Specs" Merging Landing Testing Pushing; do echo "$out" | grep -q "^REMOVE option $o" && ok "removal listed: $o" || ko "removal missing: $o"; done
 echo "$out" | grep -q '^MOVE #1 Open Specs -> Backlog +spec' && ok "Open Specs -> Backlog with the spec label" || ko "open specs: $out"
 echo "$out" | grep -q '^MOVE #3 Blocked -> Code Complete +frozen:owner' && ok "Blocked -> the column reached, owner marker" || ko "blocked: $out"
 echo "$out" | grep -q '^MOVE #8 Merging -> Code Complete' && ok "Merging -> Code Complete" || ko "merging: $out"
@@ -25,4 +25,12 @@ err=$(python3 "$T/s/board_migrate.py" --check "$T/all.json" 2>&1 >/dev/null); rc
 [ $rc = 3 ] && ok "removal refused while a card carries an old option" || ko "check exit $rc"
 echo "$err" | grep -q 'Blocked: 2' && echo "$err" | grep -q 'Done: 1' && ok "the refusal names the counts" || ko "counts: $err"
 python3 "$T/s/board_migrate.py" --check "$T/clean.json" >/dev/null 2>&1 && ok "a clean board is not refused" || ko "clean board refused"
+# Testing and Pushing are retired with no column to take their cards: the plan moves none and refuses their removal by name.
+echo '[{"n":11,"st":"Testing","s":"OPEN","l":[]},{"n":12,"st":"Pushing","s":"OPEN","l":[]}]' > "$T/retired.json"
+out=$(python3 "$T/s/board_migrate.py" --plan "$T/retired.json" 2>&1)
+! echo "$out" | grep -q '^MOVE ' && ok "a card on a retired option is never moved" || ko "a retired option was moved: $out"
+echo "$out" | grep -q '^REFUSE option Testing: 1 card(s) left' && ok "the plan refuses the Testing removal, naming the count" || ko "Testing refusal: $out"
+echo "$out" | grep -q '^REFUSE option Pushing: 1 card(s) left' && ok "the plan refuses the Pushing removal, naming the count" || ko "Pushing refusal: $out"
+err=$(python3 "$T/s/board_migrate.py" --check "$T/retired.json" 2>&1 >/dev/null); rc=$?
+[ $rc = 3 ] && echo "$err" | grep -q 'Testing: 1' && echo "$err" | grep -q 'Pushing: 1' && ok "the check refuses a retired option with its count" || ko "retired check exit $rc: $err"
 rm -rf "$T"; exit $fail

@@ -68,6 +68,20 @@ def test_every_shipped_column_is_reachable_on_the_board(table, hub):
         "the script reads a name by its role: a role naming no column or lane is a name it cannot draw"
 
 
+def test_gating_reaches_the_lane_order_the_legend_the_phone_and_the_cfd_bands(table, hub, monkeypatch):
+    """Every surface takes its order from the definition (spec #1218): the lane, the flow legend, the phone's served board
+    and the cumulative flow bands all carry Gating between Code Complete and Closed, and no page names it itself."""
+    names = [c["name"] for c in table.view_columns()]
+    assert names.index("Code Complete") + 1 == names.index("Gating") == names.index("Closed") - 1, names
+    assert hub.ORDER == names, "the lane order leaves Gating out"
+    assert hub.FLOW_BANDS == names, "the CFD bands leave Gating out"
+    flow = json.loads(re.search(r"FLOW=(\[[^;]*?\]),", hub.PAGE).group(1))
+    assert flow == names, "the flow legend leaves Gating out"
+    monkeypatch.setattr(hub, "board_cache", {"t": 1.0, "items": [], "prs": [], "err": None, "errs": []})
+    assert [g["name"] for g in hub.board()["groups"]] == names, "the board the phone reads leaves Gating out"
+    assert '"Gating"' not in hub.MOBILE_PAGE and "'Gating'" not in hub.MOBILE_PAGE, "the phone page names a column itself"
+
+
 def test_the_hub_vocabulary_is_the_table(table, hub):
     assert hub.BOARD_COLUMNS == table.view_columns(), "the hub holds a vocabulary of its own"
     colours = json.loads(re.search(r"const COLORS=(\{.*?\});", hub.PAGE).group(1))

@@ -75,6 +75,8 @@ An ADR holds a decision and its reason. It is not a ledger: no dates, counts, st
 | [0168](0168-a-gate-stage-reuses-a-green-verdict.md) | A gate stage reuses a green verdict for its tree and its suite: the suite is what the stage runs, never the id of its check; the tree is its commit and a digest of its uncommitted state, read from `porcelain -z`; and the reuse is a recorded `gate_reuse` event, never a silent skip |
 | [0169](0169-a-gate-runs-the-test-scope-its-stage-names.md) | A gate runs the test scope its stage names: an intermediate stage runs the delta the change reaches, the landing gate, the promotion proof and the nightly run the full battery, an unknown stage is full, a delta that cannot cover the change falls back to the full battery with its reason, and the record states the scope |
 
+| [0170](0170-the-gate-is-a-column-and-an-attempt-count-is-a-board-fact.md) | The gate is a column between Code Complete and Closed, and its attempt count is one number field: a red or unproven attempt is a marker, never a move, the definition, the pinned copy and the hash move in one step, and a retired option goes only when no card carries it |
+
 ## Adding an ADR
 
 Take the next free number. Rewrite an ADR in place when a decision changes; never append an amendment. A rule with no named guard test is a draft ([ADR-0018](0018-failing-gate-is-a-defect.md)). Add one line to `CLAUDE.md` Design rules with the guard.

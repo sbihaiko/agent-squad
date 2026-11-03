@@ -63,7 +63,7 @@ def _spec(*children):
 
 
 def test_a_spec_with_a_ticket_in_flight_reads_todo():
-    for child in ("Todo", "In Progress", "Doing", "Code Review", "Code Complete"):
+    for child in ("Todo", "In Progress", "Doing", "Code Review", "Code Complete", "Gating"):
         assert columns.column_for(_spec(child))[0] == "Todo"
 
 
@@ -86,6 +86,7 @@ def test_an_open_work_issue_with_no_spec_label_still_reads_todo():
 def test_the_child_live_fact_marks_a_ticket_in_flight():
     assert facts.spec_facts(["Todo", "Closed", "Abandoned"]) == {"child_live": True}
     assert facts.spec_facts(["Code Complete"]) == {"child_live": True}
+    assert facts.spec_facts(["Gating"]) == {"child_live": True}
     assert facts.spec_facts(["Code Review", "Todo"]) == {"child_live": True}
     assert facts.spec_facts(["Backlog", "Closed"]) == {"child_live": False}
 

@@ -6,7 +6,8 @@ carries and the definition does not name, a field the board lacks, and a holder 
 Then it prints the expand plan.
 Expand never removes: the options go in the definition's order, a missing one where the definition puts it, every option already there keeps its id, name,
 colour and description, so no card loses the value it carries, and no item is written, so no card moves. A missing field
-is created with the definition's options; a missing text field is created empty (#487). An option the definition does not name stays, reported as drift; dropping it
+is created with the definition's options; a missing typed field (a text field the holder write reads, or the Gate Tries
+count) is created with its type and no value (#487, spec #1218). An option the definition does not name stays, reported as drift; dropping it
 is the definition's applier's, which refuses a column cards still carry.
 With no --apply the run is a dry run: one read, no write. --check exits 1 when the board drifts. --apply is a live write
 on the board and waits for the owner's grant (ADR-0024). The definition is read from its path, never kept here (ADR-0141).
@@ -26,12 +27,18 @@ def text(v):
     return v.get("raw", "") if isinstance(v, dict) else (v or "")
 
 
+def scalars(definition):
+    """[(field name, type)] for each field the definition names without options: its entry is the field's type, so the
+    applier creates it with that type (the Gate Tries count is a number, the holder fields are text)."""
+    return [(name, definition[key]["type"]) for key, name in definition["fieldNames"].items() if key not in GROUPS]
+
+
 def snapshot(fields):
     """{field name: {"id": node id, "options": [{id, name, color, description}]}} for the single-select fields, and
-    {field name: {"id": node id, "options": None}} for the text fields."""
+    {field name: {"id": node id, "options": None}} for the typed fields (text and number)."""
     out = {}
     for f in fields:
-        if f.get("data_type") == "text": out[f["name"]] = {"id": f.get("node_id") or f.get("id"), "options": None}
+        if f.get("data_type") in ("text", "number"): out[f["name"]] = {"id": f.get("node_id") or f.get("id"), "options": None}
         if f.get("data_type") != "single_select": continue
         out[f["name"]] = {"id": f.get("node_id") or f.get("id"), "options": [
             {"id": o["id"], "name": text(o["name"]), "color": o.get("color", "GRAY"), "description": text(o.get("description"))}
@@ -41,7 +48,7 @@ def snapshot(fields):
 
 def diff(definition, board):
     """[(field name, entries, board field or None, missing names, extra names)] for each field the definition names.
-    A text field has no entries (None) and no options to miss."""
+    A text field has no entries (None) and no options to miss; a typed field carries its type as its entries."""
     out = []
     for key in GROUPS:
         name, entries = definition["fieldNames"][key], definition[key]
@@ -50,6 +57,7 @@ def diff(definition, board):
         missing = [e["name"] for e in entries if e["name"] not in have]
         extra = [n for n in have if n not in {e["name"] for e in entries}]
         out.append((name, entries, field, missing, extra))
+    out += [(name, kind, board.get(name), [], []) for name, kind in scalars(definition)]
     out += [(name, None, board.get(name), [], []) for name in HOLDER_FIELDS]
     return out
 
@@ -65,6 +73,7 @@ def report(rows):
         lines += [f"drift {name}: missing {n}" for n in missing] + [f"drift {name}: not in the definition {n}" for n in extra]
     for name, entries, field, missing, extra in rows:
         if field is None and entries is None: lines.append(f"plan {name}: create text field")
+        elif field is None and isinstance(entries, str): lines.append(f"plan {name}: create {entries} field")
         elif field is None: lines.append(f"plan {name}: create " + ", ".join(e["name"] for e in entries))
         elif missing: lines.append(f"plan {name}: add " + ", ".join(missing))
     return lines
@@ -79,6 +88,9 @@ def expand(binding, project_id, rows):
         if field is None and entries is None:
             graphql("mutation($input: CreateProjectV2FieldInput!) { createProjectV2Field(input: $input) { projectV2Field { ... on ProjectV2Field { id } } } }",
                     {"input": {"projectId": project_id, "dataType": "TEXT", "name": name}})
+        elif field is None and isinstance(entries, str):
+            graphql("mutation($input: CreateProjectV2FieldInput!) { createProjectV2Field(input: $input) { projectV2Field { ... on ProjectV2Field { id } } } }",
+                    {"input": {"projectId": project_id, "dataType": entries.upper(), "name": name}})
         elif field is None:
             graphql("mutation($input: CreateProjectV2FieldInput!) { createProjectV2Field(input: $input) { projectV2Field { ... on ProjectV2SingleSelectField { id } } } }",
                     {"input": {"projectId": project_id, "dataType": "SINGLE_SELECT", "name": name, "singleSelectOptions": [option(e) for e in entries]}})

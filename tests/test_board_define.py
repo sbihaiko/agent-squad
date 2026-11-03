@@ -47,6 +47,53 @@ def test_drift_names_each_difference_by_name():
     ]
 
 
+NUMBER_DEFINITION = {
+    **DEFINITION,
+    "fieldNames": {**DEFINITION["fieldNames"], "gateTries": "Gate Tries"},
+    "gateTries": {"type": "number"},
+}
+
+
+def test_a_number_field_the_definition_names_is_reported_and_planned():
+    """The board carries the attempt count as a number, so the applier creates one with that type, never a text field."""
+    lines = board_define.report(board_define.diff(NUMBER_DEFINITION, board_define.snapshot(FIELDS)))
+    assert "drift Gate Tries: field missing" in lines
+    assert "plan Gate Tries: create number field" in lines
+
+
+def test_a_number_field_the_board_carries_is_not_reported():
+    fields = FIELDS + [{"node_id": "F_GT", "name": "Gate Tries", "data_type": "number"}]
+    lines = board_define.report(board_define.diff(NUMBER_DEFINITION, board_define.snapshot(fields)))
+    assert not [line for line in lines if "Gate Tries" in line], lines
+
+
+class Capture:
+    """A binding that records every mutation body, so the created field's type is read from the write itself."""
+
+    base = "/users/o/projectsV2/4"
+
+    def __init__(self, fields):
+        self.fields = fields
+        self.bodies = []
+
+    def api(self, *a, inp=None, timeout=None):
+        if a[0].endswith("/fields?per_page=100"):
+            return json.dumps(self.fields)
+        if inp:
+            self.bodies.append(json.loads(inp))
+        return "{}"
+
+
+def test_apply_creates_the_number_field_with_its_type(tmp_path, monkeypatch):
+    binding = Capture(FIELDS)
+    path = tmp_path / "board.json"
+    path.write_text(json.dumps(NUMBER_DEFINITION))
+    monkeypatch.setattr(board_define, "board_state", lambda **kw: type("S", (), {"binding": binding})())
+    assert board_define.main(["--definition", str(path), "--apply", "o", "4"]) == 0
+    inputs = [body["variables"]["input"] for body in binding.bodies if "createProjectV2Field" in body["query"]]
+    assert {i["name"]: i.get("dataType") for i in inputs}["Gate Tries"] == "NUMBER", inputs
+
+
 class Binding:
     base = "/users/o/projectsV2/4"
 
