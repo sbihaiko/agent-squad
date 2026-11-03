@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Squad hub: one browser page that lists every live run dashboard (agent-squad dashboard_server processes) and embeds them.
 usage: hub.py [port]   default 7700, loopback only. Read-only: it discovers servers via ps/lsof and reads record.jsonl."""
-import datetime as dt, glob, hashlib, html, importlib.util, itertools, json, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, pathlib, urllib.parse, urllib.request
+import datetime as dt, glob, hashlib, html, importlib.util, itertools, json, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, types, pathlib, urllib.parse, urllib.request
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
 import agyquota, board_lag, chainhealth, ghread, ghthrottle, hubstream, issue_ledger, modelreg, models_chains, provkey, session_card, session_send, sessions   # the chains and the one registry resolve a model (ADR-0147); ghread is the one GitHub door (ADR-0277); the ledger is the one source of a hold (#1173)
 from issue_state import board_state, KINDS, TEST_CASE_TITLE, _utc
@@ -591,7 +591,14 @@ def squad_roots(sg_squad, sg_checkout, checkout, here):
         if r and r not in out: out.append(r)
     return out
 
-_SQUAD_LOCK = threading.Lock()   # one resolution at a time: the hub serves on threads, and a purge another thread imports into is a crash (#1215)
+def _process_lock():
+    """The one resolution lock this interpreter holds: hubmux.py loads hub.py once per profile into one process, so a
+    module-level Lock leaves one lock per profile and none between them, and two instances purge and import the same
+    `sys.modules` at once (#1215). The lock lives in a module object no `load_squad` purge touches, and `setdefault`
+    makes its creation one answer for every instance that asks."""
+    fresh = types.ModuleType("hub_process_lock"); fresh.LOCK = threading.Lock()
+    return sys.modules.setdefault("hub_process_lock", fresh).LOCK
+_SQUAD_LOCK = _process_lock()   # one resolution at a time across every profile: a purge another thread imports into is a crash
 
 def _squad_names():
     """The `squad` keys `sys.modules` held at one instant. A plain copy is atomic under the GIL; reading the live dict while
