@@ -39,6 +39,10 @@
 # dispatch hold read. The settlement stops before the run's own serial hold and leaves every other record in place, each
 # reported by name. A settled red older than one nightly period, or at a tree that is no longer the tip, is pruned and
 # reported, so old reds never collect.
+# It starts the live check last (spec 1163, #1178): the queue's invariants read from the live state, over one hour, in its
+# own lock and with its own record. It starts the check detached: this body exits at once, serial.sh frees the `nightly`
+# lock, and the check samples alone. The check never changes this run's result or its record, and it holds no dispatch
+# (ADR-0163, ADR-0164): an hour of `locks/nightly` would refuse every promotion tick, so the check never keeps that lock.
 here="$(cd "$(dirname "$0")" && pwd)"; st=${SG_STATE:-/tmp/sg-state}
 mkdir -p "$st/auto" "$st/locks"
 day=$st/auto/nightly-$(date +%F)
@@ -401,5 +405,12 @@ for f in "$odir"/*; do
   fi
 done
 : > "$day"   # the run is spent for today, green or red
+# The live check (spec 1163, #1178): the queue's invariants against the live state, over its own hour, once the night's
+# record and its settlements are written. It is started detached, so this body returns and serial.sh frees `locks/nightly`
+# at once: serial.sh runs this script, so a check awaited here would keep the nightly lock for its whole hour and refuse
+# every promotion tick (ADR-0163, ADR-0164). It takes its own lock in try mode and writes its own record; SG_SERIAL_HELD is
+# dropped because this script no longer holds `nightly` once it returns. Its exit never reaches this run's result: a
+# finding raises its own alert, and nohup keeps the check alive after this shell is gone.
+env -u SG_SERIAL_HELD nohup bash "$here/live-check.sh" >/dev/null 2>&1 &
 [ "$res" = pass ] && [ -z "$obred" ] && exit 0   # a red settlement fails the run too: it measured a defect
 exit 1

@@ -38,6 +38,17 @@ out=$(SERIAL_WAIT_SECONDS=4 bash "$src" gui true 2>&1); rc=$?
 [ "$rc" = 75 ] && ok "wait budget exhausted: exit 75" || ko "no timeout exit (got $rc)"
 printf '%s\n' "$out" | /usr/bin/grep -qx "serial: waited 4s for lock gui held by pid $$" && ok "the give-up names the lock, the budget and the holder" || ko "give-up text: $out"
 [ "$(printf '%s\n' "$out" | /usr/bin/grep -c "^serial: waiting for lock gui held by pid $$")" = 1 ] && ok "the waiter prints one wait line, naming the holder" || ko "wait lines: $out"
+# (spec 1163) A waiter records that it is queued, in $SG_STATE/locks/waiting/<lock>-<pid>: `<epoch> TAB <lock> TAB <pid>`. The
+# live check reads that marker to tell a child starved by a queued slot holder from a child that waits its turn (#1178). The
+# marker exists only while the wait lasts: the waiter removes it when it gives up, and the lock holder's own trap removes it too.
+SERIAL_WAIT_SECONDS=3 SERIAL_POLL_SECONDS=0.2 bash "$src" gui sh -c 'echo ran' >"$T/wmark.out" 2>"$T/wmark.err" & wp=$!
+for i in $(seq 1 30); do [ -e "$SG_STATE/locks/waiting/gui-$wp" ] && break; sleep 0.1; done
+mark=$(cat "$SG_STATE/locks/waiting/gui-$wp" 2>/dev/null)
+[ "$(printf '%s' "$mark" | cut -f2,3)" = "gui	$wp" ] && [ "$(printf '%s' "$mark" | cut -f1)" -gt 0 ] 2>/dev/null \
+  && ok "a waiter records that it is queued for the lock, with the lock, its pid and the epoch it began" || ko "queue marker: '$mark'"
+wait "$wp"; wrc=$?
+[ "$wrc" = 75 ] && [ ! -e "$SG_STATE/locks/waiting/gui-$wp" ] && ok "the queue marker is gone once the wait gives up" || ko "queue marker after exit $wrc: '$(/bin/ls "$SG_STATE/locks/waiting" 2>&1)'"
+[ "$(cat "$SG_STATE/locks/gui/pid" 2>/dev/null)" = "$$" ] && ok "the live holder is untouched by the queue marker" || ko "the queue marker touched the lock"
 [ "$(SG_SERIAL_HELD=gui SERIAL_WAIT_SECONDS=4 bash "$src" gui sh -c 'echo inner')" = inner ] && ok "a command inside the holder runs without waiting" || ko "re-entry did not run inside the holder"
 # (#459) Try mode: SERIAL_TRY=1 skips a held lock at once with exit 73 and one line, never queues; a free lock runs the command,
 # and the command does not inherit the mode, so a lock it takes inside waits as usual.
