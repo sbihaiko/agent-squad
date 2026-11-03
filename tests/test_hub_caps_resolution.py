@@ -84,6 +84,7 @@ def test_a_refused_root_leaves_the_callers_own_package_as_it_was(hub, tmp_path):
         assert sys.modules.get(m) is mod, m
 
 
+@pytest.mark.heavy
 def test_a_concurrent_import_never_breaks_the_resolution(hub):
     """The hub serves on threads, so `load_squad` purges and reads `sys.modules` while another thread imports.
 

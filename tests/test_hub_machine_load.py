@@ -394,7 +394,7 @@ def test_the_facts_follow_the_load_cells_in_this_order(hub):
     reset = time.mktime((2026, 10, 11, 14, 20, 0, 0, 0, -1))                 # the reset the marker names: the subs block carries it
     items = hub.foot_items(_src(quota={"codex": None, "agy": reset}), NOW)
     assert [i["key"] for i in items] == ["landing", "subs"]
-    assert hub.foot_line(items) == "landed PR #73 2h ago · CL ? · GK ? · GPT ? · GEM ?"
+    assert hub.foot_line(items) == "landed PR #73 2h ago · CL ? · GK ? · GPT ? · GEM ? · KIMI ?"
     assert [i["bad"] for i in items] == [False] * 2
 
 
@@ -450,10 +450,10 @@ def test_a_quota_marker_counts_only_while_the_time_it_names_is_ahead(hub):
 
 def test_one_unreadable_source_shows_a_question_mark_and_leaves_the_rest_intact(hub):
     line = hub.foot_line(hub.foot_items(_src(landing=None), NOW))
-    assert line == "landed ? · CL ? · GK ? · GPT ? · GEM ?"
+    assert line == "landed ? · CL ? · GK ? · GPT ? · GEM ? · KIMI ?"
     # a source this reading does not carry at all draws no block of its own, and the landing still says `?`
     assert hub.foot_line(hub.foot_items({"quota": {"codex": "?", "agy": None}}, NOW)) \
-        == "landed ? · CL ? · GK ? · GPT ? · GEM ?"
+        == "landed ? · CL ? · GK ? · GPT ? · GEM ? · KIMI ?"
 
 
 def test_the_facts_are_read_from_the_files_the_loop_already_writes(hub, tmp_path, monkeypatch):
@@ -472,7 +472,7 @@ def test_the_facts_are_read_from_the_files_the_loop_already_writes(hub, tmp_path
     monkeypatch.setattr(hub, "STATE", tmp_path / "nothing-here")               # a state dir with none of these files
     monkeypatch.setattr(hub, "SHARED", tmp_path / "nothing-here")              # and a shared dir with no limit marker
     assert hub.foot_line(hub.foot_items(hub.foot_sources(now), now)) \
-        == "landed ? · queue empty · CL ? · GK ? · GPT ? · GEM ? · Loop:OFF"   # no watchd.pid: the loop is off (#554); the ledger has no open hold: an empty queue is a reading (#1173)
+        == "landed ? · queue empty · CL ? · GK ? · GPT ? · GEM ? · KIMI ? · Loop:OFF"   # no watchd.pid: the loop is off (#554); the ledger has no open hold: an empty queue is a reading (#1173)
 
 
 def _iso(ts):
@@ -657,9 +657,9 @@ def test_each_subscription_token_is_painted_by_its_own_consumption_not_the_block
                      "gpt": {"probe": {"windows": [{"pct": hub.FOOT_ERR_PCT, "resets": None}]}, "quota": None},
                      "gemini": {"probe": None, "quota": None}})
     parts = _subs_parts(hub, src)
-    assert [p["text"] for p in parts] == ["CL 20% 1.0h", "GK 80% ?", "GPT 95% ?", "GEM ?"]
-    assert [p.get("tip") for p in parts] == ["resets in 1h 0m", None, None, None]
-    assert [p["tone"] for p in parts] == ["ok", "warn", "err", hub.FOOT_NEUTRAL]
+    assert [p["text"] for p in parts] == ["CL 20% 1.0h", "GK 80% ?", "GPT 95% ?", "GEM ?", "KIMI ?"]
+    assert [p.get("tip") for p in parts] == ["resets in 1h 0m", None, None, None, None]
+    assert [p["tone"] for p in parts] == ["ok", "warn", "err", hub.FOOT_NEUTRAL, hub.FOOT_NEUTRAL]
 
 
 def test_subscription_reset_span_shows_on_every_tone_in_decimal_days(hub):
@@ -721,7 +721,7 @@ def test_a_bad_value_still_reads_as_bad_over_its_blocks_own_colour(hub):
 
 def test_the_line_still_reads_the_same_tokens_in_the_same_order(hub):
     items = hub.foot_items(_src(quota={"codex": None, "agy": None}), NOW)
-    assert hub.foot_line(items) == "landed PR #73 2h ago · CL ? · GK ? · GPT ? · GEM ?"
+    assert hub.foot_line(items) == "landed PR #73 2h ago · CL ? · GK ? · GPT ? · GEM ? · KIMI ?"
     assert all(" · ".join(p["text"] for p in i["parts"]) == i["text"] for i in items)   # a block's parts ARE its text
 
 
