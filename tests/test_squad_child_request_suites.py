@@ -62,6 +62,14 @@ def test_a_child_request_names_the_suites_it_runs_and_the_full_gate_as_the_loops
     assert lines == [SUITES_LINE], f"the request carries one SUITES line: {lines}"
 
 
+def test_the_checklist_names_a_resolved_interpreter_and_never_a_shell_variable():
+    """#1243: the ac-verify shell has no SG_CHECKOUT, so `$SG_CHECKOUT/.venv/bin/python` runs as `/.venv/bin/python` and
+    exits 127. The checklist names the path sg_gate_python prints, written out in full."""
+    item = (SCRIPTS / "req-checklist.txt").read_text().split("(14)", 1)[1]
+    assert "sg_gate_python" in item, "the checklist does not name the one resolver"
+    assert "$SG_CHECKOUT/" not in item, "the checklist still names a shell variable as the interpreter"
+
+
 def test_a_fork_only_child_request_carries_the_same_line(tmp_path):
     # The fork-only route appends its own checklist; the line that says what a child runs is not a property of the route.
     assert SUITES_LINE in _mkreq(tmp_path, "fork", FORK_BODY)
