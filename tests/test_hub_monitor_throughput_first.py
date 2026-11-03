@@ -67,12 +67,12 @@ LOOP_VIEW = {"state": "on", "who": "owner", "when": "2026-11-02T09:00:00-03:00",
 def test_the_monitor_tiles_carry_no_loop_state(hub):
     page = hub.PAGE
     tiles = _run(page, "instTiles([]).map(t=>t.k)", _monitor_blocks(page))
-    assert tiles == ["Gate"]
+    assert tiles == []   # no Monitor tile (#1260)
 
 
 def test_the_monitor_heading_counts_failures_and_names_no_loop(hub):
     page = hub.PAGE
-    assert _run(page, "instSum([])", _monitor_blocks(page)) == "0 fail"
+    assert _run(page, "instSum([])", _monitor_blocks(page)) == ""   # no tile, no count (#1260)
 
 
 def test_the_loop_state_renders_once_in_its_panel(hub):
@@ -146,7 +146,7 @@ def test_the_monitor_carries_no_queue_tile(hub):
     page = hub.PAGE
     facts = [{"key": "queue", "text": "queue 5 held", "tone": "wait"}]
     tiles = _run(page, f"instTiles({json.dumps(facts)}).map(t=>t.k)", _monitor_blocks(page))
-    assert tiles == ["Gate"], tiles
+    assert tiles == []   # no Monitor tile (#1260), tiles
 
 def test_a_reader_learns_the_throughput_and_its_direction_in_one_row(hub):
     page = hub.PAGE
