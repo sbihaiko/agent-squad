@@ -94,7 +94,7 @@ def lead_time(items, window=20):
 JIRA_CUBE_DAYS = 30           # Jira's y scale: linear under this many days, cube root from it
 LOG_FLOOR_DAYS = 1 / 48       # the log axis starts at 30 minutes
 LOG_FLOOR_HOURS = 1 / 60      # no log of a span under one minute
-PLOT_W, PLOT_H = 728, 268     # the page's plot in pixels, for clusters: its 800 x 340 frame less 36 px margins
+PLOT_WIDTH, PLOT_HEIGHT = 672, 212  # the lead chart's usable frame: the 800 x 340 page frame less its 64 px margins
 DOT_PX = 9                    # dots closer than this many pixels merge into a numbered cluster
 LOG_TICKS = [1 / 24, 1, 7]           # days, drawn with the one duration format
 CUBE_TICKS = [1, 7, 30, 60]          # days, drawn with the one duration format
@@ -230,7 +230,7 @@ def control_chart(items, timeframe=None, log=False, now=None, start=None, end=No
     clusters = []
     for dot in dots:
         for cluster in clusters:
-            if math.hypot((cluster["x"] - dot["x"]) * PLOT_W, (cluster["y"] - dot["y"]) * PLOT_H) < DOT_PX:
+            if math.hypot((cluster["x"] - dot["x"]) * PLOT_WIDTH, (cluster["y"] - dot["y"]) * PLOT_HEIGHT) < DOT_PX:
                 cluster["dots"].append(dot)
                 break
         else:
@@ -255,6 +255,7 @@ def control_chart(items, timeframe=None, log=False, now=None, start=None, end=No
     sample = f"{len(dots)} {'issue' if len(dots) == 1 else 'issues'} plotted"
     text = f"{scope}, {measure}, {sample}; Timeframe selects by {TIMEFRAME_SELECTS}"
     return {
+        "plot_frame": {"width": PLOT_WIDTH, "height": PLOT_HEIGHT},
         "measure": measure,
         "scale": axis,
         "axis": axis,

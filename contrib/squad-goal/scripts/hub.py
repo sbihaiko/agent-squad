@@ -3763,7 +3763,8 @@ def _lead_payload(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
     control = {scale: {key: _leadtime.control_chart(rows, timeframe=days, log=scale == "log", now=now)
                        for key, days in LEAD_TIMEFRAMES} for scale in ("jira", "log")}   # the Jira-style control chart (#900)
     coverage = _coverage_payload(_hist.load_store(_hist.history_path(BOARD, REPO)))
-    return {"lead": {"measure": lead["measure"], "type": ty, "window": lead["window"],
+    return {"plot_frame": {"width": _leadtime.PLOT_WIDTH, "height": _leadtime.PLOT_HEIGHT},
+          "lead": {"measure": lead["measure"], "type": ty, "window": lead["window"],
                      "excluded": [{"reason": r, "count": c} for r, c in lead["excluded"].items()],
                      "excluded_total": sum(lead["excluded"].values()), "series": lead["series"], "summary": lead["summary"],
                      "control": control, "columns": ORDER, "coverage": coverage}}
@@ -5440,9 +5441,9 @@ const saveLT=()=>{ls.lt={tf:LT.tf,log:LT.log,ty:LT.ty};save()};
 const ltSpan=(r,a,b)=>{const t0=Date.parse(r.start),t1=Date.parse(r.end),at=f=>new Date(t0+f*(t1-t0)).toISOString();return [at(a<0?0:a),at(b>1?1:b)]};   // plot fractions to the dates they name (#900)
 const LT_TF=[["1","Past 24 hours"],["2","Past 48 hours"],["3","Past 72 hours"],["7","Past week"],["14","Past 2 weeks"],["30","Past month"],["all","All"]];
 const ltP=64;   // a duration label ("17h 36m") is wider than a count, and the old margin cut every tick to its tail (#Astra review)
-const ltX=x=>ltP+x*(flowW-2*ltP),ltY=y=>flowH-ltP-y*(flowH-2*ltP);
-const ltLine=(v,col,dash)=>v?`<line x1=${ltP} x2=${flowW-ltP} y1=${ltY(v.y)} y2=${ltY(v.y)} stroke="${col}" stroke-width=2${dash?` stroke-dasharray="${dash}"`:""}><title>${esc(v.label)} ${esc(v.text)}</title></line>`:"";   // the value lives in the legend, never over the newest dots (#1146)
-const ltChart=(c,cov)=>{const n=c.dots.length,base=flowH-flowP,ink="var(--chart-ink)",mute="var(--chart-axis)";
+let LT_FRAME;const ltX=x=>ltP+x*LT_FRAME.width,ltY=y=>ltP+LT_FRAME.height-y*LT_FRAME.height;
+const ltLine=(v,col,dash)=>v?`<line x1=${ltP} x2=${ltP+LT_FRAME.width} y1=${ltY(v.y)} y2=${ltY(v.y)} stroke="${col}" stroke-width=2${dash?` stroke-dasharray="${dash}"`:""}><title>${esc(v.label)} ${esc(v.text)}</title></line>`:"";   // the value lives in the legend, never over the newest dots (#1146)
+const ltChart=(c,cov)=>{LT_FRAME=c.plot_frame;const n=c.dots.length,base=ltP+LT_FRAME.height,ink="var(--chart-ink)",mute="var(--chart-axis)";
   const grp=(name,body)=>`<span class=ltgrp><b class=ltgl>${name}</b> ${body}</span>`,backTo=LT_TF.find(([k])=>k===LT.tf)[1];
   const ctl=`<p class=fhead>`+
       `<label>Timeframe <select id=ltr>${LT_TF.map(([k,v])=>`<option value=${k}${LT.tf===k?" selected":""}>${v}</option>`).join("")}</select></label> `+
@@ -5464,7 +5465,7 @@ const ltChart=(c,cov)=>{const n=c.dots.length,base=flowH-flowP,ink="var(--chart-
   const roll=`<polyline fill=none stroke="var(--chart-bar)" stroke-width=2 points="${c.dots.map(d=>`${ltX(d.x)},${ltY(d.rolling.y)}`).join(" ")}"><title>Rolling average, centered</title></polyline>`;   // the trend keeps its chart accent (#1146)
   const ys=c.ticks.map(t=>`<line x1=${ltP-4} y1=${ltY(t.y)} x2=${ltP} y2=${ltY(t.y)} stroke=${mute}></line><text x=${ltP-7} y=${ltY(t.y)+4} text-anchor=end fill=${ink}>${esc(t.text)}</text>`).join("");
   const xs=c.xticks.map(t=>`<text x=${ltX(t.x)} y=${base+17} text-anchor=middle fill=${ink}>${esc(t.text)}</text>`).join("");
-  const axes=`<line x1=${ltP} y1=${ltP-10} x2=${ltP} y2=${base} stroke=var(--chart-grid)></line><line x1=${ltP} y1=${base} x2=${flowW-ltP} y2=${base} stroke=var(--chart-grid)></line>`+
+  const axes=`<line x1=${ltP} y1=${ltP-10} x2=${ltP} y2=${base} stroke=var(--chart-grid)></line><line x1=${ltP} y1=${base} x2=${ltP+LT_FRAME.width} y2=${base} stroke=var(--chart-grid)></line>`+
     `<text x=${ltP} y=${ltP-16} text-anchor=start fill=${ink}>elapsed time (${c.scale==="cube"?"cube root":c.scale})</text>`;
   const lines=ltLine(c.average,"var(--chart-series-8)","")+ltLine(c.median,"var(--chart-ok)","2 3")+ltLine(c.p85,"var(--chart-series-5)","5 3");
   const dots=c.clusters.map((k,i)=>{const m=k.dots.length,title=m>1?`${m} issues`:`#${k.dots[0].n} ${esc(k.dots[0].title)}`;   // the hub sizes the ring for its count (#1146)
@@ -5473,7 +5474,7 @@ const ltChart=(c,cov)=>{const n=c.dots.length,base=flowH-flowP,ink="var(--chart-
   const legend=`<p class="flg ltlg"><span><i style="background:var(--chart-bar)"></i>Rolling average, centered</span>${banded?`<span><i style="background:var(--chart-series-3);opacity:.28"></i>Standard deviation <em>the usual spread</em></span>`:""}<span><i style="background:var(--chart-series-8)"></i>${esc(c.average.label)} <b>${ltV(c.average)}</b> <em>one slow card lifts it</em></span><span><i style="background:var(--chart-ok)"></i>${esc(c.median.label)} <b>${ltV(c.median)}</b> <em>half the cards closed faster</em></span><span><i style="background:var(--chart-series-5)"></i>${esc(c.p85.label)} <b>${ltV(c.p85)}</b> <em>85% of closed cards finished within this time</em></span></p>`;   // each entry paints the mark it names (#1146)
   const pk=LT.pick!=null&&c.clusters[LT.pick]?c.clusters[LT.pick]:null;
   const rows=pk?`<table class=mtab><thead><tr><th>Issue</th><th>Title</th><th>Elapsed</th><th>Closed</th></tr></thead><tbody>${pk.dots.map(d=>`<tr data-o=${d.n} style="cursor:pointer"><td>#${d.n}</td><td>${esc(d.title)}</td><td>${esc(d.text)}</td><td>${esc(d.closed)}</td></tr>`).join("")}</tbody></table>`:"";   // the page's one table rule (#1146)
-  return ctl+S+legend+`<svg data-lt viewBox="0 0 ${flowW} ${flowH}">${axes}${ys}${xs}${band}${roll}${lines}${dots}</svg>`+rows;};
+  return ctl+S+legend+`<svg data-lt viewBox="0 0 ${LT_FRAME.width+2*ltP} ${LT_FRAME.height+2*ltP}">${axes}${ys}${xs}${band}${roll}${lines}${dots}</svg>`+rows;};
 const flowLead=l=>{const S=l.summary,c=LT.zc,exc=c?Object.entries(c.excluded).map(([r,n])=>({reason:r,count:n})):l.excluded,total=c?c.excluded_total:l.excluded_total,ex=exc.map(e=>`${e.count} ${esc(EXREASON[e.reason]||e.reason)}`).join(", ");
   const head=`<p class=fhead>${esc(LT_TYPES.find(([k])=>k===l.type)[1].toLowerCase())} · <b>${esc(l.measure)}</b> · window ${l.window.size} ${esc(l.window.unit)} · <span${ex?` title="${esc(ex)}"`:""}>excluded ${total}</span></p>`;   // the reasons are a hover on the one total (#1145)
   LT.cols=l.columns||[];if(!S)return head+"<p class=fnote>no closed card yet</p>";
@@ -5485,15 +5486,15 @@ const flowOpen=async k=>{FLOWK=k;$("#flowov").hidden=false;flowTabs();drawFlow()
 const ltQ=()=>`&scale=${LT.log?"log":"jira"}&a=${encodeURIComponent(LT.a)}&b=${encodeURIComponent(LT.b)}&${barQuery("lead")}`,ltOwn=()=>LT.a!==""||LT.b!=="";   // a span other than created to closed is the hub's chart for it (#905); the bar's values filter it (#904)
 const ltZoom=async(f,t)=>{const tok=++LT.tok;try{const c=await (await fetch(`/api/leadtime?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}${ltQ()}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;LT.zr=[f,t];LT.pick=null;drawFlow()}catch(e){}};   // the hub recomputes the chart for the dragged range (#900)
 const ltGet=async()=>{const tok=++LT.tok;LT.zc=null;LT.pick=null;if(!ltOwn()){drawFlow();return}try{const c=await (await fetch(`/api/leadtime?tf=${LT.tf}${ltQ()}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;drawFlow()}catch(e){}};   // the timeframe's chart for the chosen span (#905)
-const ltPx=(e,s)=>{const r=s.getBoundingClientRect();return (e.clientX-r.left)/r.width*flowW};
-const ltClamp=x=>x<flowP?flowP:x>flowW-flowP?flowW-flowP:x,ltLo=(p,q)=>p<q?p:q,ltHi=(p,q)=>p<q?q:p;
+const ltPx=(e,s)=>{const r=s.getBoundingClientRect();return (e.clientX-r.left)/r.width*(LT_FRAME.width+2*ltP)};
+const ltClamp=x=>x<ltP?ltP:x>ltP+LT_FRAME.width?ltP+LT_FRAME.width:x,ltLo=(p,q)=>p<q?p:q,ltHi=(p,q)=>p<q?q:p;
 let LTD=null;   // the drag across a control chart's plot in progress (#900)
 $("#flowb").onpointerdown=e=>{const s=e.target.closest("svg[data-lt]");LT.noclick=false;if(!s||e.button!==0||!LT.rng)return;const x=ltClamp(ltPx(e,s));LTD={s,x0:x,x1:x,moved:false}};
 document.addEventListener("pointermove",e=>{if(!LTD)return;const x1=ltClamp(ltPx(e,LTD.s));LTD.x1=x1;const dx=x1-LTD.x0;if(!LTD.moved&&dx*dx<36)return;LTD.moved=true;
-  let sel=LTD.s.querySelector("rect.ltsel");if(!sel){sel=document.createElementNS("http://www.w3.org/2000/svg","rect");sel.setAttribute("class","ltsel");sel.setAttribute("y",flowP-10);sel.setAttribute("height",flowH-2*flowP+10);sel.setAttribute("fill","var(--chart-series-3)");sel.setAttribute("fill-opacity",".18");sel.setAttribute("pointer-events","none");LTD.s.appendChild(sel)}
+  let sel=LTD.s.querySelector("rect.ltsel");if(!sel){sel=document.createElementNS("http://www.w3.org/2000/svg","rect");sel.setAttribute("class","ltsel");sel.setAttribute("y",ltP-10);sel.setAttribute("height",LT_FRAME.height+10);sel.setAttribute("fill","var(--chart-series-3)");sel.setAttribute("fill-opacity",".18");sel.setAttribute("pointer-events","none");LTD.s.appendChild(sel)}
   sel.setAttribute("x",ltLo(LTD.x0,x1));sel.setAttribute("width",dx<0?-dx:dx)});
 document.addEventListener("pointerup",()=>{const d=LTD;LTD=null;if(!d||!d.moved)return;d.s.querySelector("rect.ltsel")?.remove();LT.noclick=true;
-  const a=(ltLo(d.x0,d.x1)-flowP)/(flowW-2*flowP),b=(ltHi(d.x0,d.x1)-flowP)/(flowW-2*flowP);if(b-a<0.005||!LT.rng)return;const [f,t]=ltSpan(LT.rng,a,b);ltZoom(f,t)});
+  const a=(ltLo(d.x0,d.x1)-ltP)/LT_FRAME.width,b=(ltHi(d.x0,d.x1)-ltP)/LT_FRAME.width;if(b-a<0.005||!LT.rng)return;const [f,t]=ltSpan(LT.rng,a,b);ltZoom(f,t)});
 $("#flowb").onchange=e=>{if(e.target.id==="cfdr"){CF.r=e.target.value;drawFlow();return}
   if(e.target.id==="ltr"){LT.tf=e.target.value;saveLT();LT.zr=null;ltGet();return}
   if(e.target.id==="lty"){LT.ty=e.target.value;saveLT();barMoved();return}
