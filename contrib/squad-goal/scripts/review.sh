@@ -236,14 +236,12 @@ cap() { capraw "$@" <&0 & local pid=$! n=0   # <&0: a background job would other
     [ $((n % 5)) = 0 ] || continue
     [ "$(curhead 2>/dev/null || echo $head)" = "$head" ] || { touch "$p.superseded"; kill -TERM -$pid 2>/dev/null; pkill -P $pid 2>/dev/null; break; }; done
   wait $pid 2>/dev/null; }
-# hours: a model whose window in models.json's `hours` does not contain the current local hour is skipped
-# (empty window = always; "22-07" wraps midnight, start inclusive, end exclusive). Set from the hub's models panel.
-row_of() { awk -F'\t' -v m="$1" -v c="$2" '$2==m{print $c; exit}' <<<"$rrows"; }   # one review row: 2 raw, 4 effort, 5 hrs, 6 timeout_s, 7 on
+# hours: a model whose `hrs` window in models.json does not hold the current moment is skipped (empty window = always;
+# "22-07" local wraps midnight, start inclusive, end exclusive; "sat-sun 00-24 UTC" names days and UTC). The resolver
+# reads the window (modelreg.in_window) and its tsv says 1 or 0 in column 8. Set from the hub's models panel.
+row_of() { awk -F'\t' -v m="$1" -v c="$2" '$2==m{print $c; exit}' <<<"$rrows"; }   # one review row: 2 raw, 4 effort, 5 hrs, 6 timeout_s, 7 on, 8 inside its window
 effort_of() { local e; e=$(row_of "$1" 4); echo "${e:-medium}"; }
-hours_ok() { local w h a b; w=$(row_of "$2" 5)
-  [ -n "$w" ] || return 0
-  h=$((10#$(date +%H))); a=$((10#${w%%-*})); b=$((10#${w##*-}))
-  if [ "$a" -le "$b" ]; then { [ "$h" -ge "$a" ] && [ "$h" -lt "$b" ]; } else { [ "$h" -ge "$a" ] || [ "$h" -lt "$b" ]; }; fi; }
+hours_ok() { [ "$(row_of "$2" 8)" != 0 ]; }
 # A model the hub's models panel switched off (#1819) is skipped exactly like one outside its window, and the two are one
 # predicate wherever a consumer only has to decide whether the model may run.
 off_ok() { [ "$(row_of "$2" 7)" != 0 ]; }

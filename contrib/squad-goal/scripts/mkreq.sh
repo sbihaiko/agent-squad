@@ -4,7 +4,7 @@ set -e
 # The model this request names is the first coding_models entry that may run now -- not switched off in the hub's models
 # panel, and inside its `hours` window, an absent window always matching -- the same rule launch.py enforces: naming entry
 # [0] blindly would ask for a model the hours gate is about to refuse, or quietly use an Anthropic model during the day.
-mjson="$(cd "$(dirname "$0")" && pwd)/models.json"; hh=$((10#$(date +%H)))
+mjson="$(cd "$(dirname "$0")" && pwd)/models.json"
 # A model the panel switched off (#1819) is skipped exactly like one outside its window: the request never names it.
 # A model whose subscription is spent (#508) is skipped too: a future codex-limited marker closes a gpt- model, agy-limited a
 # gemini one -- the markers review.sh honors. A refused child otherwise lands nothing until the window resets.
@@ -13,12 +13,11 @@ mjson="$(cd "$(dirname "$0")" && pwd)/models.json"; hh=$((10#$(date +%H)))
 keyless() { case $1 in *qwen*) python3 "$(dirname "$0")/provkey.py" "$1";; *) return 1;; esac; }
 spent() { local f; keyless "$1" && return 0; case $1 in *gpt-*) f=codex-limited;; *gemini-*) f=agy-limited;; *) return 1;; esac
   [ -s "${SG_SHARED:-/nonexistent}/$f" ] && [ "$(date +%s)" -lt "$(cat "$SG_SHARED/$f")" ]; }
-rows=$(python3 "$(dirname "$0")/modelreg.py" chain coding --models "$mjson" --tsv | awk -F'\t' '{print $2, ($5 == "" ? "-" : $5), $7}')   # raw spelling, hrs window ("-" = always), on
+# The resolver reads the window (modelreg.in_window: "HH-HH" local, or days, ranges and UTC), never this script.
+rows=$(python3 "$(dirname "$0")/modelreg.py" chain coding --models "$mjson" --tsv | awk -F'\t' '{print $2, $8, $7}')   # raw spelling, inside its window now (1/0), on
 mayrun() { [ "$3" = 1 ] || return 1
   spent "$1" && return 1
-  [ "$2" != - ] || return 0
-  local a=$((10#${2%%-*})) b=$((10#${2##*-}))
-  if [ "$a" -le "$b" ]; then [ "$hh" -ge "$a" ] && [ "$hh" -lt "$b" ]; else [ "$hh" -ge "$a" ] || [ "$hh" -lt "$b" ]; fi; }
+  [ "$2" = 1 ]; }
 cm=""; fb=""
 while read -r m w on; do mayrun "$m" "$w" "$on" || continue
   if [ -z "$cm" ]; then cm=$m; elif [ -z "$fb" ]; then fb=$m; fi; done <<<"$rows"

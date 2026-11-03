@@ -28,11 +28,10 @@ def _chain(name):   # one chain's entries, read through the resolver: a v1 or a 
     return modelreg.chain(mdoc, name.removesuffix("_models")).entries
 def _row(chain, mid):
     return next((e for e in _chain(chain) if e.raw == mid), None)
-def _in_hours(chain, mid):   # mirrors hub.py's in_hours: the model's own window, local hour, "" = always
+def _in_hours(chain, mid):   # mirrors hub.py's in_hours: the model's own window, read by the resolver's grammar, "" = always
     row = _row(chain, mid); w = row.hrs if row else None
-    if not isinstance(w, str) or not re.match(r"^([01]\d|2[0-3])-([01]\d|2[0-3])$", w) or w[:2] == w[3:]: return True
-    h = time.localtime().tm_hour; a, b = int(w[:2]), int(w[3:])
-    return a <= h < b if a <= b else (h >= a or h < b)
+    if not isinstance(w, str) or not modelreg.window_valid(w): return True
+    return modelreg.in_window(w, time.time())
 def _spent(mid):   # #508: the subscription is spent until the marker's time (codex-limited for gpt-, agy-limited for gemini-), as mkreq.sh reads it
     if provkey.closed(mid): return True   # #482: no key is a provider that never answers, so it is closed like a spent one
     f = "codex-limited" if "gpt-" in mid else "agy-limited" if "gemini-" in mid else None

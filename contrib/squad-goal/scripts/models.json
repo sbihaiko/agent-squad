@@ -60,7 +60,7 @@
       }
     ]
   },
-  "_doc": "Role-based model chains for squad-goal. First healthy, quota-eligible entry wins. A dispatch envelope names kinds, and each kind takes the chain of its name here (SPEC 750); `router` names the models the router agent runs on, in rank order. An entry carries its `id`, the `raw` spelling when it differs, its `route`, and its `effort`, `hrs` window and `on` switch. A review id routes through the registry (config/models.registry.json): its route and its tools capability pick the runner, never the spelling. `hrs` is a local window \"HH-HH\" (start inclusive, end exclusive, wraps midnight; absent = always), and a model outside its window is skipped.",
+  "_doc": "Role-based model chains for squad-goal. First healthy, quota-eligible entry wins. A dispatch envelope names kinds, and each kind takes the chain of its name here (SPEC 750); `router` names the models the router agent runs on, in rank order. An entry carries its `id`, the `raw` spelling when it differs, its `route`, and its `effort`, `hrs` window and `on` switch. A review id routes through the registry (config/models.registry.json): its route and its tools capability pick the runner, never the spelling. `hrs` is a local window \"HH-HH\" (start inclusive, end exclusive, wraps midnight; absent = always), or clauses joined by \";\", each with optional days, ranges joined by \",\" and an optional UTC suffix (DeepSeek off-peak: \"mon-fri 00-01,04-06,10-24 UTC; sat-sun 00-24 UTC\"); the grammar is modelreg.in_window. A model outside its window is skipped.",
   "stall_timeout_minutes": 15,
   "review_stall_minutes": 60,
   "model_retry_budget": 2,

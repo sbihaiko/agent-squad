@@ -1,5 +1,4 @@
 """The context a runner sees: the run's record, budget, facts, artifacts, workspace paths, and two calls back into the engine."""
-import time
 
 from squad import node_commit
 
@@ -60,8 +59,9 @@ class RunCtx:
         """The registry this run resolves model spellings through: a call states its chain in these ids (SPEC 1035)."""
         return self._e._registry()
 
-    def local_hour(self):
-        return time.localtime(self._e.wall()).tm_hour
+    def now(self):
+        """The run's wall moment, a timestamp: an hours window reads its weekday and its UTC hour from it."""
+        return self._e.wall()
 
     def is_dispatch_entry(self, name):
         return name in self._e.entry_of

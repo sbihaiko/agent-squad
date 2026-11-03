@@ -10,7 +10,6 @@ import json
 import os
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 from squad import caps, envelope, git, modelreg, node_commit, record, workflows
@@ -135,8 +134,7 @@ def router_overlay(graph, models_path, now=None):
         raise OptionError(f"models {models_path}: {exc}") from exc
     if not entries:
         return {}
-    hour = time.localtime(now).tm_hour
-    why = {e.id: ev.reason for e in entries if not (ev := modelreg.eligible(e, now=now, hour=hour)).ok}
+    why = {e.id: ev.reason for e in entries if not (ev := modelreg.eligible(e, now=now)).ok}
     closed = set(why)
     if not closed:
         return {}
@@ -175,13 +173,12 @@ def kind_chains(models_path, now=None):
     with no model. A spelling is the one the chain stores. The result is recorded in `run_start` and read at dispatch, so
     the clock cannot move it across a resume."""
     out = {}
-    hour = time.localtime(now).tm_hour
     for kind in KINDS:
         try:
             entries = modelreg.chain(models_path, kind).entries
         except (OSError, ValueError) as exc:
             raise OptionError(f"models {models_path}: {exc}") from exc
-        open_ = [e.raw for e in entries if modelreg.eligible(e, now=now, hour=hour).ok]
+        open_ = [e.raw for e in entries if modelreg.eligible(e, now=now).ok]
         out[kind] = open_ or [e.raw for e in entries]
     return out
 

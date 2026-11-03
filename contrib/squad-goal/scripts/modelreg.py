@@ -10,6 +10,7 @@ is the loud door: a JSON parse error is a named failure, and one bad entry is dr
 entries still load.
 """
 import argparse
+import calendar
 import difflib
 import functools
 import hashlib
@@ -523,12 +524,78 @@ def chain(models_json, name, reg=None):
 
 # --- eligible, quota, mark_limited, display_price ---------------------------------------------------------
 
-def _in_window(window, hour):
-    try:
-        start, end = int(window[:2]), int(window[3:5])
-    except (ValueError, IndexError):
+# A chain entry's hours window. This module owns the grammar, and every reader reads it here:
+#   window := clause (";" clause)*
+#   clause := [days] range ("," range)* ["UTC"]
+#   days   := day ["-" day] ("," day ["-" day])*      day: mon tue wed thu fri sat sun; a range may wrap the week
+#   range  := HH "-" HH                               start 00-23 inclusive, end 00-24 exclusive, wraps midnight
+# A clause reads its days and hours in local time, or in UTC with the suffix. The window is open when one clause holds
+# the moment. A window that does not parse closes nothing. Example, DeepSeek off-peak:
+#   "mon-fri 00-01,04-06,10-24 UTC; sat-sun 00-24 UTC"
+DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+_DAY = r"(?:mon|tue|wed|thu|fri|sat|sun)"
+_DAYSET = re.compile(rf"^{_DAY}(?:-{_DAY})?(?:,{_DAY}(?:-{_DAY})?)*$")
+_RANGES = re.compile(r"^(?:[01]\d|2[0-3])-(?:[01]\d|2[0-4])(?:,(?:[01]\d|2[0-3])-(?:[01]\d|2[0-4]))*$")
+
+
+def _days(text):
+    out = set()
+    for item in text.split(","):
+        a, _, b = item.partition("-")
+        i, j = DAYS.index(a), DAYS.index(b or a)
+        out.update(DAYS[(i + k) % 7] for k in range((j - i) % 7 + 1))
+    return frozenset(DAYS.index(d) for d in out)
+
+
+@functools.lru_cache(maxsize=256)
+def _clauses(window):
+    """((weekdays or None, ((start, end), ...), utc), ...) for a window, or None when it does not parse."""
+    if not isinstance(window, str):
+        return None
+    out = []
+    for clause in window.lower().split(";"):
+        words = re.sub(r"\s*([,-])\s*", r"\1", clause.strip()).split()
+        utc = bool(words) and words[-1] == "utc"
+        words = words[:-1] if utc else words
+        days = None
+        if len(words) == 2 and _DAYSET.match(words[0]):
+            days, words = _days(words[0]), words[1:]
+        if len(words) != 1 or not _RANGES.match(words[0]):
+            return None
+        out.append((days, tuple((int(r[:2]), int(r[3:5])) for r in words[0].split(",")), utc))
+    return tuple(out)
+
+
+def window_valid(window):
+    """True when `window` parses and no range of it is empty ("07-07"): a window a writer may store."""
+    parsed = _clauses(window)
+    return parsed is not None and all(a != b for _, ranges, _ in parsed for a, b in ranges)
+
+
+def _moment(at):
+    """A timestamp for `at`: a timestamp, a struct_time (local, or UTC from gmtime) or a datetime (naive is local)."""
+    if isinstance(at, time.struct_time):
+        return calendar.timegm(at) - at.tm_gmtoff if at.tm_gmtoff is not None else time.mktime(at)
+    if hasattr(at, "timestamp"):
+        return at.timestamp()
+    return float(at)
+
+
+def in_window(window, at):
+    """True when the moment `at` is inside `window` (the grammar above). A window that does not parse closes nothing."""
+    parsed = _clauses(window)
+    if parsed is None:
         return True
-    return start <= hour < end if start <= end else (hour >= start or hour < end)
+    ts = _moment(at)
+    local, utc = time.localtime(ts), time.gmtime(ts)
+    for days, ranges, in_utc in parsed:
+        t = utc if in_utc else local
+        if days is not None and t.tm_wday not in days:
+            continue
+        h = t.tm_hour
+        if any(a <= h < b if a <= b else (h >= a or h < b) for a, b in ranges):
+            return True
+    return False
 
 
 def _marker_state(sub, shared, now, reg):
@@ -630,8 +697,10 @@ def eligible(entry, shared=None, now=None, hour=None, reg=None):
     if not entry.on:
         return Eligibility(False, "off", None)
     now = time.time() if now is None else now
-    hour = time.localtime(now).tm_hour if hour is None else hour
-    if entry.hrs and not _in_window(entry.hrs, hour):
+    at, lt = now, time.localtime(now)
+    if hour is not None:   # a caller that names the local hour moves `now` to it, on the same local day
+        at = time.mktime((*lt[:3], hour, *lt[4:8], -1))
+    if entry.hrs and not in_window(entry.hrs, at):
         return Eligibility(False, f"outside its window {entry.hrs}", None)
     reg = reg or default_registry()
     if entry.legacy_codex:
@@ -1045,10 +1114,12 @@ def main(argv=None):
         rows = chain(ns.models or _default_models_path(), ns.name, reg).entries
         if ns.eligible:
             rows = [e for e in rows if eligible(e, shared=ns.shared, now=ns.now, reg=reg).ok]
-        if ns.tsv:
+        if ns.tsv:   # column 8: 1 when the entry's hours window holds `--now` (default: the clock), read by the shell callers
+            at = time.time() if ns.now is None else ns.now
             for e in rows:
                 print("\t".join([e.id, e.raw, e.route or "", e.effort or "", e.hrs or "",
-                                 "" if e.timeout_s is None else str(e.timeout_s), "1" if e.on else "0"]))
+                                 "" if e.timeout_s is None else str(e.timeout_s), "1" if e.on else "0",
+                                 "1" if not e.hrs or in_window(e.hrs, at) else "0"]))
         else:
             for e in rows:
                 print(e.id)
