@@ -75,7 +75,7 @@ $("m-run").addEventListener("click", () => setMode(false, true));
 $("m-edit").addEventListener("click", () => setMode(true, true));
 function inEdit() { return document.body.classList.contains("edit"); }
 
-var VERDICT_CLASS = { completed: "v-ok", failed: "v-bad", "needs-human": "v-human", running: "v-live", stalled: "v-wait", "no verdict yet": "v-none" };
+var VERDICT_CLASS = Object.fromEntries(core.RUN_STATES.filter((x) => x.cls).map((x) => [x.state, x.cls]));
 function renderChrome() {
   if (!modePicked && inEdit() !== !S.events) setMode(!S.events);
   const st = S.stats, v = st && st.verdict, chip = $("vchip");
@@ -87,6 +87,8 @@ function renderChrome() {
     const words = core.STATE_TEXT[st.state] || st.state;   // the sidebar badges the same run with these words, from the one state table
     chip.textContent = past ? `replay · ${words}` : (v ? `${words} · exit ${v.exit_code}` : words);
     chip.className = VERDICT_CLASS[st.state] || "v-bad";
+    const row = core.RUN_STATES.find((x) => x.state === st.state);
+    chip.dataset.mk = (row && row.mark) || "none";
     chip.title = v && v.reasons.length ? core.causeSummary(v.reasons) : "The run's verdict. Click to open the details.";
   }
   // A record cut at a bad line shows its valid prefix under a banner that names the line. The banner takes height from the map.

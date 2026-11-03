@@ -163,6 +163,8 @@ issues '[{"number":551,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
 r=$(run); body=$(cat "$MKLOG.body" 2>/dev/null)
 case "$body" in *'Your last step, after your final edit and commit, is the entry gate: run "bash contrib/squad-goal/scripts/fast-gate.sh"'*) ok "G1: the request makes the fast gate the child's last step, after the final edit and commit";; *) ko "G1: the brief does not make the fast gate the last step: '$($G 'entry gate' "$MKLOG.body")'";; esac
 case "$body" in *"make no edit and no commit"*) ok "G1: the request forbids an edit after the gate";; *) ko "G1: the request does not forbid an edit after the gate";; esac
+case "$body" in *"If the gate fails, fix what it names and run the gate again"*) ok "G1: a red gate is repaired and re-run, so a child never hands in a red tree";; *) ko "G1: the brief forbids repairing a red gate";; esac
+case "$body" in *"Once the gate passes, make no edit and no commit"*) ok "G1: the no-edit rule binds to a passing gate";; *) ko "G1: the no-edit rule is not bound to a passing gate";; esac
 case "$body" in *"cannot make it your last step"*"say so"*"own battery"*) ok "G1: a child that cannot gate last says so, and the entry gate falls back to its own battery";; *) ko "G1: no fallback line: '$($G 'last step' "$MKLOG.body")'";; esac
 
 # G2 (#1198) A repository with no fast gate names none: a missing gate is not a failure, and the child runs none.

@@ -683,6 +683,54 @@ def test_a_tinted_chip_inks_on_tint(surfaces):
         assert ink == "var(--on-tint)", f"{selector} inks {ink!r}, not onTint"
 
 
+def test_shared_visual_rhythm_and_surface_borders(surfaces, tokens):
+    expected = {
+        "--space-1": "4px", "--space-2": "8px", "--space-3": "12px", "--space-4": "16px",
+        "--space-6": "24px", "--radius-sm": "4px", "--radius-md": "6px", "--radius-lg": "8px",
+        "--radius-xl": "14px", "--radius-full": "9999px", "--border-thin": "1px",
+        "--border-medium": "2px", "--border-thick": "3px", "--row-h": "32px", "--chip-h": "20px",
+        "--card-gap-x": "10px", "--card-gap-y": "8px", "--row-h-phone": "44px",
+        "--card-gap-x-phone": "12px", "--card-gap-y-phone": "10px", "--page-gutter-phone": "12px",
+    }
+    assert {name: tokens.get(name) for name in expected} == expected
+    assert tokens.get("--cols-phone") == "1"
+    for name, html in surfaces.items():
+        css = _served_css(html)
+        for _, body in _blocks(css):
+            decls = dict(_decls(body))
+            for prop in ("border-radius", "border-top-left-radius", "border-top-right-radius",
+                         "border-bottom-left-radius", "border-bottom-right-radius"):
+                for raw in decls.get(prop, "").split():
+                    assert _radius_allowed(raw, tokens), f"{name}: unsupported radius {raw}"
+            for prop, value in _decls(body):
+                if prop in {"stroke", "stroke-width"}:
+                    continue
+                assert not re.search(r"(?<![\w.-])1\.5px(?![\w.-])", value), f"{name}: 1.5px outside drawing stroke: {prop}: {value}"
+                if prop in {"border", "border-top", "border-right", "border-bottom", "border-left", "border-width",
+                            "border-top-width", "border-right-width", "border-bottom-width", "border-left-width"}:
+                    sizes = re.findall(r"(\d+(?:\.\d+)?)px", _resolve(value, tokens))
+                    assert all(float(size) in {1, 2, 3} for size in sizes), f"{name}: unsupported {prop} width {value}"
+
+
+def _radius_allowed(raw, tokens):
+    value = _px(_resolve(raw, tokens))
+    return raw == "0" or (value is not None and value in {4, 6, 8, 14, 9999})
+
+
+def _non_stroke_15px(css):
+    return [f"{selector}: {prop}: {value}" for selector, body in _blocks(_strip_comments(css))
+            for prop, value in _decls(body)
+            if re.search(r"(?<![\w.-])1\.5px(?![\w.-])", value) and prop not in {"stroke", "stroke-width"}]
+
+
+def test_the_rhythm_guard_rejects_out_of_scale_values():
+    assert _non_stroke_15px("svg path { stroke-width: 1.5px }") == []
+    assert _non_stroke_15px("button { border: 1.5px solid }") == ["button: border: 1.5px solid"]
+    assert not _radius_allowed("10px", {})
+    assert _radius_allowed("var(--radius-md)", {"--radius-md": "6px"})
+    assert all(not _non_stroke_15px(_served_css(html)) for html in _surfaces().values())
+
+
 def test_the_surviving_hand_tuned_fill_states_its_purpose():
     comment = TOKENS_FILE.read_text().split(":root{")[0]
     assert re.search(r"--tint-ok[^.]*approved", comment, re.S), "--tint-ok names no purpose"

@@ -217,6 +217,6 @@ def test_the_counter_wears_the_age_pill_treatment_of_a_pr_card(hub):
     css = hub.PAGE[hub.PAGE.index("<style>"): hub.PAGE.index("</style>")]
     rule = re.search(r"#bbody \.age,#bbody \.tsk\{([^}]*)\}", css)
     assert rule, "the counter does not share the age pill's rule, so it would not read as the PR card's footer pill"
-    for part in ("border-radius:9px", "color:var(--mute)", "border:1px solid var(--line)", "font-variant-numeric:tabular-nums"):
+    for part in ("border-radius:var(--radius-lg)", "color:var(--mute)", "border:1px solid var(--line)", "font-variant-numeric:tabular-nums"):
         assert part in rule.group(1), f"the shared pill rule lost {part}: {rule.group(1)}"
     assert re.search(r"#bbody \.it \.ft\{[^}]*justify-content:flex-end", css), "the footer no longer pushes its pills to the right"

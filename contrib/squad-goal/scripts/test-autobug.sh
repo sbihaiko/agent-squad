@@ -151,6 +151,10 @@ body=$(abody SG_FAST_GATE_CMD=mygate)
 case "$body" in *'Your last step, after your final edit and commit, is the entry gate: run "mygate"'*) ok "3e the request makes the fast gate the child's last step";; *) ko "3e the brief does not make the fast gate the last step: '$body'";; esac
 case "$body" in *"make no edit and no commit"*) ok "3e the request forbids an edit after the gate";; *) ko "3e the request does not forbid an edit after the gate: '$body'";; esac
 case "$body" in *"cannot make it your last step"*"say so"*"own battery"*) ok "3e a child that cannot gate last says so, and the entry gate falls back to its own battery";; *) ko "3e no fallback line: '$body'";; esac
+# 3f (#1198) a red gate is fixed and the gate is re-run, as many times as it takes; the no-edit rule binds only after a
+# pass. Before this, a run read "after it, make no edit" as "do not repair a red gate" and ended dead.
+case "$body" in *'If the gate fails, fix what it names and run the gate again'*) ok "3f a red gate is repaired and the gate is re-run";; *) ko "3f a red gate is not repaired and re-run: '$body'";; esac
+case "$body" in *'Once the gate passes, make no edit and no commit'*) ok "3f the brief keeps the no-edit-after-a-pass rule";; *) ko "3f a pass still allows an edit: '$body'";; esac
 body=$(abody SG_FAST_GATE_CMD=)
 case "$body" in *mygate*|*fast-gate.sh*) ko "3e a repository with no fast gate still names a script";; *) ok "3e no fast gate configured names no script";; esac
 case "$body" in *"No fast gate is configured"*"not a failure"*) ok "3e the request says no fast gate is configured and that it is not a failure";; *) ko "3e no no-fast-gate line: '$body'";; esac

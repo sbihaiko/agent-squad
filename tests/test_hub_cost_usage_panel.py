@@ -185,7 +185,7 @@ const out={html, texts};
     html = out["html"]
     assert "max 14.3M" in html
     assert re.search(r'stroke-dasharray', html)
-    assert re.search(r'fill="(?:var\(--ok\)|#3ecf8e)"', html)
+    assert re.search(r'fill="var\(--chart-ok\)"', html)
     assert out["texts"] and out["texts"][-1].endswith("now")
     for t in out["texts"]:
         assert not re.search(r"\b\d{4}\b", t), t
@@ -213,7 +213,7 @@ const out={zero:c.bars[0],missing:c.bars[1],top:c.bars[2],html:bars(rows)};
     assert zero["kind"] != missing["kind"]
     assert 2 <= zero["h"] < top["h"], "a zero day needs a visible minimum-height mark"
     assert missing["h"] == 0
-    assert re.search(r'<rect class=zero [^>]*style="fill:var\(--mute\)"', html), html
+    assert re.search(r'<rect class=zero [^>]*style="fill:var\(--chart-axis\)"', html), html
     assert re.search(r'<line class=miss ', html), html
 
 

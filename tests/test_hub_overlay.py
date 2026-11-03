@@ -505,9 +505,9 @@ def test_the_owner_turn_is_a_bubble_on_the_right_and_the_answer_one_on_the_left(
         return m.group(1)
     own, ans = rule(".sq-owner"), rule(".sq-answer")
     assert "margin:0 0 10px auto" in own and "width:fit-content" in own and "max-width:86%" in own
-    assert "border-radius:14px 14px 4px 14px" in own and "background:var(--tint-ok)" in own
+    assert "border-radius:var(--radius-xl) var(--radius-xl) var(--radius-sm) var(--radius-xl)" in own and "background:var(--tint-ok)" in own
     assert "margin:0 auto 10px 0" in ans and "width:fit-content" in ans and "max-width:100%" in ans
-    assert "border-radius:14px 14px 14px 4px" in ans and "background:var(--bubble)" in ans
+    assert "border-radius:var(--radius-xl) var(--radius-xl) var(--radius-xl) var(--radius-sm)" in ans and "background:var(--bubble)" in ans
     # a bubble carries no type of its own: the size, the family and the spacing stay the text's
     for body in (own, ans):
         assert "font-size" not in body and "font-family" not in body and "line-height" not in body

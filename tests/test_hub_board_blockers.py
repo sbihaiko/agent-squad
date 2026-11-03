@@ -163,9 +163,16 @@ def _board_js(hub):
 
 def _token(hub, name):
     """The hex behind one of the custom properties the page reads from the shared token block."""
-    m = re.search(rf"\{name}:(#[0-9a-f]{{6}})", _css(hub))
-    assert m, f"{name} is not declared by the page"
-    return m.group(1)
+    tokens = dict(re.findall(r"--([\w-]+):([^;}]+)", _css(hub)))
+    value, seen = tokens[name.removeprefix("--")], set()
+    while match := re.fullmatch(r"var\(--([\w-]+)\)", value):
+        ref = match.group(1)
+        assert ref not in seen, f"a token cycle at --{ref}"
+        seen.add(ref)
+        assert ref in tokens, f"--{ref} is not declared by the page"
+        value = tokens[ref]
+    assert re.fullmatch(r"#[0-9a-f]{6}", value), f"--{name} does not resolve to a hex colour: {value}"
+    return value
 
 
 def _resolved(hub, value):

@@ -82,8 +82,10 @@ def test_the_board_columns_are_the_shipped_statuses_in_order_with_their_colours(
     flow = json.loads(re.search(r"FLOW=(\[[^;]*?\]),", hub.PAGE).group(1))
     assert flow == shipped, "the page's flow is not the definition's order"
     colours = json.loads(re.search(r"const COLORS=(\{.*?\});", hub.PAGE).group(1))
+    assert list(colours) == shipped + [lane["name"] for lane in table.LANES]
     for column in table.view_columns():
-        assert colours[column["name"]] == column["color"], f"{column['name']} wears a colour the table does not give it"
+        assert re.fullmatch(r"var\(--chart-[\w-]+\)", colours[column["name"]]), \
+            f"{column['name']} copies a palette value instead of reading a chart role"
 
 
 @pytest.mark.parametrize("item,column,freeze", CARDS, ids=[f"#{c[0]['n']}-{c[1]}" for c in CARDS])

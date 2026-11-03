@@ -65,8 +65,10 @@ def test_every_core_module_is_bundled_once_and_the_runner_and_page_share_the_bun
     files = sorted(p.name for p in CORE_DIR.glob("*.js"))
     assert sorted(CORE_ORDER) == files and len(set(CORE_ORDER)) == len(CORE_ORDER), "CORE_ORDER and dashboard/core/ differ"
     bundle = core_bundle()
-    for f in files:
-        assert bundle.count((CORE_DIR / f).read_text().replace("</script", "<\\/script")) == 1, f
+    table = json.dumps(json.loads((ROOT / "contrib" / "squad-goal" / "scripts" / "run-states.json").read_text()), ensure_ascii=False)
+    for f in files:      # the run-state table is one injected value, so a source that names it is compared with it filled
+        want = (CORE_DIR / f).read_text().replace("/*RUN_STATE_TABLE*/", table).replace("</script", "<\\/script")
+        assert bundle.count(want) == 1, f
     page = OUT.read_text()
     assert page.count(bundle) == 1 and "/*CORE*/" not in page
     assert run_node([{"op": "hash", "text": "{}"}])[0] == hashlib.sha256(b"{}").hexdigest()   # the runner evaluates this bundle

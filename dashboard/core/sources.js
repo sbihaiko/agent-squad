@@ -28,22 +28,9 @@ function sourcesModule({ STATES }) {
     { cls: "sel", label: "Selected", group: "interaction" },
     { cls: "drop", label: "Target of the link you drag", group: "interaction" },
   ];
-  // One run-state vocabulary: the top-bar verdict chip, its legend and the hub's run badges (contrib/squad-goal/scripts/hub.py RUN_STATES) name and
-  // paint a state alike; a Python test holds the two tables equal. `color` is a palette variable; `css` is the extra style of the pill, as the hub's table carries
-  // it; `text` is what both surfaces print in the pill; a `hub_only` state is one the hub derives, so the chip never shows it.
-  const RUN_STATES = [
-    { state: "completed", cls: "v-ok", text: "completed", label: "Run completed", color: "ok", css: "" },
-    { state: "verified", cls: null, text: "verified", label: "Failed or unverified run, verified by hand", color: "ok", css: "font-style:italic", hub_only: true },
-    { state: "unverified", cls: null, text: "unverified", label: "Work landed, the final gate had no command", color: "ok", css: "border-style:dashed", hub_only: true },
-    { state: "failed", cls: "v-bad", text: "failed", label: "Run failed", color: "err", css: "" },
-    { state: "needs-human", cls: "v-human", text: "ended · needs a decision", label: "Run needs a person", color: "warn", css: "" },
-    { state: "handled", cls: null, text: "ended · handled (landed in fork)", label: "Needs-human run, landed in the fork", color: "ok", css: "", hub_only: true },
-    { state: "running", cls: "v-live", text: "running", label: "Run in progress", color: "run", css: "" },
-    { state: "starting", cls: null, text: "starting", label: "Run starting", color: "run", css: "border-style:dotted", hub_only: true },
-    { state: "unreadable", cls: null, text: "unreadable", label: "Record could not be read on the last poll", color: "warn", css: "border-style:dotted", hub_only: true },
-    { state: "stalled", cls: "v-wait", text: "stalled", label: "Run stalled", color: "wait", css: "border-style:dashed" },
-    { state: "no verdict yet", cls: "v-none", text: "no verdict yet", label: "No verdict yet", color: "none", css: "" },
-  ];
+  // The hub serves and the dashboard embeds the same run-state table from contrib/squad-goal/scripts/run-states.json. Every page draws these rows;
+  // `hub_only` names states the hub derives rather than the run record carrying them.
+  const RUN_STATES = /*RUN_STATE_TABLE*/;
   // What a pill prints for a state, on any surface: the hub badges a run with the same words. The run header chip and the legend read this one map.
   const STATE_TEXT = Object.fromEntries(RUN_STATES.map((x) => [x.state, x.text]));
   // The top-bar verdict chip, one row per class it paints (a guard holds this list to the page's CSS and to the chip's class map).

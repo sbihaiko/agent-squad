@@ -22,7 +22,8 @@ base=${SG_FAST_BASE:-origin/${SG_BASE:-dev}}
 # The base battery is one definition (base-battery.sh), the one branchland.sh's landing check and wave.sh's tip check run
 # over the same fast gate. Its pytest takes a bounded worker count, SG_GATE_WORKERS, never `auto`.
 . "$here/base-battery.sh"
-py=${SG_GATE_PY:-$SG_CHECKOUT/.venv/bin/python}; [ -x "$py" ] || py=python3
+. "$here/caps.sh"   # sg_gate_python: the one interpreter lookup (#1086), never a second copy of it here
+py=$(sg_gate_python)
 fastcmd=${SG_FAST_CMD:-"$(sg_base_battery "$py" "$base" fast)"}
 retrycmd=${SG_FAST_RETRY_CMD:-"$py -m pytest -p no:deepeval -p no:xdist -o heavy_cap_seconds=20"}
 # The memo key names what the suite reads: the tree's content (HEAD's tree object, never its commit), its uncommitted state,

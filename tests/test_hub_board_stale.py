@@ -7,6 +7,7 @@ which the page already shows for a failed board read). A gap inside the bound is
 """
 import importlib.util
 import os
+import re
 import tempfile
 from pathlib import Path
 
@@ -126,3 +127,41 @@ def test_the_profile_cache_is_the_one_the_seam_names(hub, monkeypatch):
     monkeypatch.setenv("SG_STATE_BASE", str(Path(tempfile.mkdtemp())))
     own = hub.profile_board_cache()
     assert own == Path(os.environ["SG_STATE_BASE"]) / "_boards" / f"{hub.OWNER}_{hub.PROJECT_NO}" / "hub-board.json"
+
+
+# Staleness has one form on every surface (#1137): one caption with a number and a unit, on one line per page in mute,
+# which turns warn and reads "(stale)" past the hub's threshold. The hub decides the threshold (the payload's one error
+# key, proved above); a page maps no fact of its own. Stale content is dimmed and desaturated in one way.
+
+def test_the_hub_page_names_staleness_on_one_mute_line_that_turns_warn(hub):
+    css = hub.PAGE.split("<style>")[1].split("</style>")[0]
+    assert re.search(r"#bread\{[^}]*color:var\(--mute\)", css)
+    assert re.search(r"#bread\.stale\{[^}]*color:var\(--warn\)", css)
+    dim = re.search(r"#bbody\.stale\{([^}]*)\}", css)
+    assert dim and "opacity" in dim.group(1) and "filter" in dim.group(1), "stale content is dimmed and desaturated in one way"
+    page = hub.PAGE.split("<script>")[-1]
+    assert 'classList.toggle("stale",readStale)' in page
+    assert '(b.err?"(stale) ":"")' not in page, "one staleness line per page: the board head carries no second stale marker"
+
+
+def test_the_phone_page_names_staleness_on_one_mute_line_that_turns_warn(hub):
+    mobile = hub.MOBILE_PAGE.decode() if isinstance(hub.MOBILE_PAGE, bytes) else hub.MOBILE_PAGE
+    css = mobile.split("<style>")[1].split("</style>")[0]
+    assert re.search(r"#bread\{[^}]*color:var\(--mute\)", css)
+    assert re.search(r"#bread\.stale\{[^}]*color:var\(--warn\)", css)
+    dim = re.search(r"#cards\.stale\{([^}]*)\}", css)
+    assert dim and "opacity" in dim.group(1) and "filter" in dim.group(1), "stale content is dimmed and desaturated in one way"
+    assert re.search(r'board read \$\{[^}]*\} s ago', mobile)
+    assert 'classList.toggle("stale",boardStale)' in mobile
+    assert 'b.err ? "(stale)"' not in mobile, "one staleness line per page: the message line keeps errors only"
+
+
+def test_the_dashboard_names_staleness_on_one_mute_line_that_turns_warn(hub):
+    from tests.dashboard_helpers import PAGE_SRC
+    src = PAGE_SRC()
+    assert 'stale ? " (stale)"' in src
+    assert "No new event for over" not in src, "one staleness line per page: the stalled note is not a second line"
+    css = src.split("<style>")[1].split("</style>")[0]
+    assert re.search(r"\.note\.stale\{[^}]*color:var\(--warn\)", css)
+    dim = re.search(r"\.runbox\.stale\{([^}]*)\}", css)
+    assert dim and "opacity" in dim.group(1) and "filter" in dim.group(1), "stale content is dimmed and desaturated in one way"

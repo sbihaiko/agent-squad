@@ -53,7 +53,7 @@ def test_the_renderer_draws_only_what_the_rule_module_answers(hub):
 def test_the_card_uses_the_chat_surface_tokens_and_the_phone_floor(hub):
     rule = re.search(r"\.qcard\{[^}]*\}", hub.MOBILE_PAGE)
     assert rule, "the card has no style of its own in the chat surface"
-    for token in ("var(--panel)", "var(--line)", "var(--fs-body)", "border-radius:8px"):
+    for token in ("var(--panel)", "var(--line)", "var(--fs-body)", "border-radius:var(--radius-lg)"):
         assert token in rule.group(0), f"the card does not use {token}: the chat turn's surface is the shared one"
     assert re.search(r"\.qcard button\{[^}]*min-height:44px", hub.MOBILE_PAGE), "a card control is under the 44 px floor"
 
