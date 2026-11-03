@@ -129,7 +129,9 @@ def test_a_ps_with_a_non_zero_exit_is_a_read_failure(monkeypatch):
 def test_the_live_process_reading_names_this_process_with_its_command():
     procs = RL.read_processes()
     me = procs[os.getpid()]
-    assert me.start is not None and me.start <= time.time() and "python" in me.cmd.lower()
+    # The command is whatever ps shows: an xdist worker on Linux renames itself ("[pytest-xdist running] ..."), so the
+    # reading must name this process with a command, never one that holds a given word.
+    assert me.start is not None and me.start <= time.time() and me.cmd.strip()
 
 
 def test_the_ps_parser_reads_pid_start_and_command():
