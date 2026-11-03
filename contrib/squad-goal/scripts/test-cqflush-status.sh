@@ -63,13 +63,13 @@ out=$(flush); [ "$(ncom)" = 2 ] && $G -q 'closed after' "$T/c/2" && ! $G -q 'mer
 put 'x__alpha#7-note.md' 'plain'
 out=$(flush); [ "$(ncom)" = 3 ] && ok "an unmarked comment is still posted" || ko "unmarked: $(cat "$T/ghlog") / $out"
 
-# 7. a re-arm (#673, issue_ledger.py rearm) queues <n>-unstart~<tag>.md: every SQUAD-NOT-STARTABLE comment of the issue goes,
+# 7. a re-arm (#673, issue_ledger.py rearm) queues <n>-unstart~<tag>.md: the label goes first, then every SQUAD-NOT-STARTABLE comment (#1297),
 #    and so does the frozen:not-startable label the marker wrote (#1297), because the label alone keeps both dispatchers
 #    skipping. No other comment goes. A second one with nothing left to remove tolerates the 404 the label answers.
 printf 'SQUAD-NOT-STARTABLE: 3 failed dispatches\n' > "$T/c/8"; printf 'a plain note\n' > "$T/c/9"
 mkdir -p "$LAB"; printf 'bug\nfrozen:not-startable\n' > "$LAB/7"; : > "$T/ghlog"
 put 'x__alpha#7-unstart~rearm1.md' 'SQUAD-NOT-STARTABLE:'
-out=$(flush); [ ! -e "$T/c/8" ] && [ -e "$T/c/9" ] && [ "$(cat "$T/ghlog")" = "$(printf 'DELETE 8\nDELETE labels/7/frozen:not-startable')" ] \
+out=$(flush); [ ! -e "$T/c/8" ] && [ -e "$T/c/9" ] && [ "$(cat "$T/ghlog")" = "$(printf 'DELETE labels/7/frozen:not-startable\nDELETE 8')" ] \
   && [ "$(cat "$LAB/7")" = "bug" ] && [ -f "$B/alpha/cq/x__alpha#7-unstart~rearm1.md.done" ] \
   && case "$out" in *"removed 1 comment(s), label frozen:not-startable removed"*) true;; *) false;; esac \
   && ok "a re-arm removes the SQUAD-NOT-STARTABLE comment and the label, and no other comment" || ko "unstart: $(cat "$T/ghlog") / $out / $(ls "$T/c") / label '$(cat "$LAB/7" 2>/dev/null)'"
