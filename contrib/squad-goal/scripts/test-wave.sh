@@ -768,22 +768,43 @@ done
 # AA (spec 1163, #1174): an unproven outcome admits with its obligation. At the entry the child enters and the run's entry
 # record carries the obligation; at the tip the wave lands on the same word and no child is blamed. A measured red still
 # refuses (case C) -- only a word the gate wrote can admit.
-start2 run-50 >/dev/null; child 500 g500 "origin/wave/run-50"; REV_BASE=wave/run-50 rev 500; : > "$T/board.log"; rm -rf "$T/st/obligations"
+start2 run-50 >/dev/null; child 500 g500 "origin/wave/run-50"; REV_BASE=wave/run-50 rev 500; : > "$T/board.log"; rm -rf "$T/st/obligations" "$T/st/proof-card"
 r=$(cd "$T/c500" && SG_WAVE_GATES='printf "unproven\tsaturation: the battery crashed twice\tunknown\truff\n" > "$GATE_OUTCOME_FILE"; exit 4' bash "$T/s/wave.sh" enter run-50 500 2>&1); rc=$?
 [ $rc = 0 ] && $O cat-file -e wave/run-50:g500 2>/dev/null && ok "AA: an unproven entry gate admits the child" || ko "AA: entry exit $rc: '$r'"
 case "$(wfact 500 run-50)" in "entered "*unproven*obligation*) ok "AA: the entry fact carries the obligation in the run's record";; *) ko "AA: entry fact '$(wfact 500 run-50)'";; esac
 obf=$(obl_for "$($G -C "$T/c500" rev-parse HEAD)"); [ -n "$obf" ] && [ "$(cut -f4 "$obf")" = ruff ] && ok "AA: the obligation record names the check that did not run" || ko "AA: obligation '$(cat "$T/st/obligations"/* 2>/dev/null)'"
 /usr/bin/grep -qx 'o 3 Code Complete 500' "$T/board.log" && ok "AA: an unproven entry moves the card to Code Complete" || ko "AA: card: $(cat "$T/board.log" 2>/dev/null)"
+# AD (#1176): the card carries the fact of the unproven entry while the obligation is open, and the entry records which
+# obligation the settlement answers.
+/usr/bin/grep -qx -- '--proof o 3 500 unproven' "$T/board.log" && ok "AD: the unproven entry puts the fact on the card" || ko "AD: no proof fact: $(cat "$T/board.log" 2>/dev/null)"
+[ -n "$(/bin/ls -A "$T/st/proof-card/500" 2>/dev/null)" ] && ok "AD: the issue maps to the obligation the settlement answers" || ko "AD: no proof-card mapping: $(/bin/ls -A "$T/st/proof-card" 2>&1)"
+# AF (#1176): the fact stays while the obligation is open. A later entry on a passing gate proves the new tree, not the tree
+# the obligation names, so only the settlement answers it; the entry neither clears the card nor the mapping.
+(cd "$T/c500" && echo fix > g500fix && $G add g500fix && $G -c user.email=a@b -c user.name=t commit -q -m "fix 500 (Refs #500)") \
+  && REV_BASE=wave/run-50 rev 500
+: > "$T/board.log"
+r=$(cd "$T/c500" && SG_WAVE_GATES=true bash "$T/s/wave.sh" enter run-50 500 2>&1); rc=$?
+[ $rc = 0 ] && [ -n "$(/bin/ls -A "$T/st/proof-card/500" 2>/dev/null)" ] && [ -z "$(/usr/bin/grep -- '--proof' "$T/board.log" 2>/dev/null)" ] \
+  && ok "AF: a later pass entry keeps the fact while the obligation is open" \
+  || ko "AF: rc $rc, board '$(cat "$T/board.log" 2>/dev/null)', mapping '$(/bin/ls -A "$T/st/proof-card/500" 2>&1)'"
 # AC: a pass entry carries no obligation: the run's entry record names none, and no obligation record names its tree.
-start2 run-52 >/dev/null; child 520 g520 "origin/wave/run-52"; REV_BASE=wave/run-52 rev 520; rm -rf "$T/st/obligations"
+start2 run-52 >/dev/null; child 520 g520 "origin/wave/run-52"; REV_BASE=wave/run-52 rev 520; rm -rf "$T/st/obligations" "$T/st/proof-card"; : > "$T/board.log"
 r=$(cd "$T/c520" && SG_WAVE_GATES=true bash "$T/s/wave.sh" enter run-52 520 2>&1); rc=$?
 case "$(wfact 520 run-52)" in *obligation*) ko "AC: a pass entry's fact carries an obligation: '$(wfact 520 run-52)'";; *) ok "AC: a pass entry's fact carries no obligation";; esac
 [ $rc = 0 ] && [ -z "$(obl_for "$($G -C "$T/c520" rev-parse HEAD)")" ] && ok "AC: a pass entry writes no obligation record" || ko "AC: pass obligation '$(cat "$T/st/obligations"/* 2>/dev/null)'"
-start2 run-51 >/dev/null; child 510 g510 "origin/wave/run-51"; en2 run-51 510 >/dev/null; : > "$T/board.log"; rm -rf "$T/st/obligations"
-r=$(SG_WAVE_TIP_GATES='printf "unproven\tsaturation: the battery crashed twice\tunknown\truff\n" > "$GATE_OUTCOME_FILE"; exit 4' SG_WAVE_CHILD_GATES='exit 1' land2 run-51 2>&1); rc=$?
+[ -z "$(/usr/bin/grep -- '--proof' "$T/board.log" 2>/dev/null)" ] && [ ! -e "$T/st/proof-card/520" ] && ok "AC: a proven entry never carries the fact" || ko "AC: a proven entry carried the fact: $(cat "$T/board.log" 2>/dev/null)"
+# AE (#1176): a wave whose tip check is unproven lands, and every issue it delivers carries the fact of the tip's
+# obligation. The tip gate goes through gate.sh, so the obligation record exists for the settlement to answer.
+printf '#!/bin/bash\nprintf "unproven\\tsaturation: the battery crashed twice\\tunknown\\truff\\n" > "$GATE_OUTCOME_FILE"\nexit 4\n' > "$T/unproven-tip.sh"
+start2 run-51 >/dev/null; child 510 g510 "origin/wave/run-51"; en2 run-51 510 >/dev/null; : > "$T/board.log"; : > "$T/st/gate-history"; rm -rf "$T/st/obligations" "$T/st/proof-card"
+r=$(SG_WAVE_TIP_GATES="bash '$T/s/gate.sh' bash '$T/unproven-tip.sh'" SG_WAVE_CHILD_GATES='exit 1' land2 run-51 2>&1); rc=$?
 [ $rc = 0 ] && $O cat-file -e dev:g510 2>/dev/null && case "$r" in *unproven*) true;; *) false;; esac && ok "AA: an unproven tip check lands the wave and says so" || ko "AA: tip exit $rc: '$r'"
 case "$r" in *"WAVE CHECK RED"*|*REQUEUE*) ko "AA: an unproven tip check blamed a child: '$r'";; *) ok "AA: an unproven tip check blames no child";; esac
 [ -z "$(tries 510 run-51)" ] && ok "AA: an unproven tip check counts no landing try" || ko "AA: tries $(tries 510 run-51)"
+/usr/bin/grep -qx -- '--proof o 3 510 unproven' "$T/board.log" && ok "AE: an unproven tip landing puts the fact on the delivered card" || ko "AE: no proof fact on the tip landing: $(cat "$T/board.log" 2>/dev/null)"
+[ -n "$(/bin/ls -A "$T/st/proof-card/510" 2>/dev/null)" ] && ok "AE: the delivered issue maps to the tip's obligation" || ko "AE: no proof-card mapping: $(/bin/ls -A "$T/st/proof-card" 2>&1)"
+[ "$(awk -F'\t' -v s="$($O rev-parse dev)" '$4 == s && $8 == "unproven"' "$T/st/gate-history" 2>/dev/null | wc -l | tr -d ' ')" = 1 ] \
+  && ok "AE: the gate record names the tip's unproven outcome at the landed sha" || ko "AE: gate history: '$(cat "$T/st/gate-history" 2>&1)'"
 
 # The ledger replaced the auto/excluded-<run>-<n> marker (ADR-0149 rule 6): no case leaves one.
 [ -z "$(/bin/ls "$T/st/auto" | /usr/bin/grep '^excluded-')" ] && ok "no excluded- marker is written" || ko "excluded markers: $(/bin/ls "$T/st/auto" | /usr/bin/grep '^excluded-' | tr '\n' ' ')"

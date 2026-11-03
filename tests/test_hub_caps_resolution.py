@@ -84,6 +84,45 @@ def test_a_refused_root_leaves_the_callers_own_package_as_it_was(hub, tmp_path):
         assert sys.modules.get(m) is mod, m
 
 
+def test_a_concurrent_import_never_breaks_the_resolution(hub):
+    """The hub serves on threads, so `load_squad` purges and reads `sys.modules` while another thread imports.
+
+    A `sys.modules` iterated while a key is added raises "dictionary changed size during iteration". The live hub read
+    that as "the terminal supervisor is not running: No module named 'squad.supervisor'", and the terminal stayed shut.
+    The resolution takes its snapshots and holds one lock, so a concurrent import never reaches it.
+    """
+    import threading
+
+    stop = threading.Event()
+    failures, rounds = [], 100
+
+    def churn():
+        while not stop.is_set():
+            importlib.import_module("squad.caps")   # a second thread adds keys while the resolution reads them
+
+    def resolve():
+        for _ in range(rounds):
+            try:
+                caps, _ = hub.load_squad([str(ROOT)])
+                assert pathlib.Path(caps.__file__).resolve().is_relative_to(ROOT.resolve())
+            except Exception as e:   # noqa: BLE001 - the point is that nothing but a refusal may come out
+                failures.append(e)
+                return
+
+    t = threading.Thread(target=churn, daemon=True)
+    t.start()
+    try:
+        workers = [threading.Thread(target=resolve) for _ in range(4)]
+        for w in workers:
+            w.start()
+        for w in workers:
+            w.join()
+    finally:
+        stop.set()
+        t.join()
+    assert not failures, failures
+
+
 def test_an_answering_root_leaves_the_callers_own_package_as_it_was(hub):
     import sys
 

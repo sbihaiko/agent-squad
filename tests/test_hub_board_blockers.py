@@ -148,10 +148,10 @@ def test_a_filter_change_recomputes_the_collapse_without_a_reload(hub):
 # The decision, not a starting point: the seven shipped statuses and the one open-PR lane (#247, #384, #440), each with
 # the one colour the column header's dot, the card's left border and the hidden: strip's number all wear.
 NAMED = {
-    "Backlog": "#9aa4b1", "Todo": "#79b8ff", "Doing": "#e8d44d", "Code Review": "#fdba74", "Code Complete": "#f5b041",
+    "Backlog": "#90a4ae", "Todo": "#7aa2ff", "Doing": "#e8d44d", "Code Review": "#ff8a5c", "Code Complete": "#f5b041",
     "Closed": "#3ecf8e", "Abandoned": "#ff6b6b", "Open PRs": "#5aa9ff",
 }
-RING = ["#a3e635", "#d8b4fe", "#ff9ecd", "#7dd3fc"]   # reserved for the columns the Project gained later
+RING = ["#9ccc65", "#c792ea", "#f48fb1", "#5fd3c4"]   # reserved for the columns the Project gained later
 CHIP_BG = "#2a303b"        # the chip the numbers sit on: what every column colour is measured against
 
 
@@ -161,24 +161,36 @@ def _board_js(hub):
     return page[page.index("const COLORS="): page.index("}catch(e){}finally{lim.busy=0}}")]
 
 
-def _col(hub, expr):
-    """An expression evaluated against the page's own colour table, run by node."""
-    src = "\n".join(re.search(rf"^const {n}=.*$", hub.PAGE, re.M).group(0) for n in ("COLORS", "RING", "colOf"))
-    out = subprocess.run(["node", "-"], input=src + f"\nconsole.log(JSON.stringify({expr}))",
-                         capture_output=True, text=True, timeout=60)
-    assert out.returncode == 0, out.stderr
-    return json.loads(out.stdout)
-
-
-def _mute(hub):
-    return re.search(r"--mute:(#[0-9a-f]{6})", _css(hub)).group(1)
-
-
 def _token(hub, name):
     """The hex behind one of the custom properties the page reads from the shared token block."""
     m = re.search(rf"\{name}:(#[0-9a-f]{{6}})", _css(hub))
     assert m, f"{name} is not declared by the page"
     return m.group(1)
+
+
+def _resolved(hub, value):
+    """One value the page names as a role, resolved against the token block; a list or map resolves item by item."""
+    if isinstance(value, str):
+        m = re.fullmatch(r"var\((--[\w-]+)\)", value)
+        return _token(hub, m.group(1)) if m else value
+    if isinstance(value, list):
+        return [_resolved(hub, v) for v in value]
+    if isinstance(value, dict):
+        return {k: _resolved(hub, v) for k, v in value.items()}
+    return value
+
+
+def _col(hub, expr):
+    """An expression evaluated against the page's own colour table, run by node, then resolved to the token's value."""
+    src = "\n".join(re.search(rf"^const {n}=.*$", hub.PAGE, re.M).group(0) for n in ("COLORS", "RING", "colOf"))
+    out = subprocess.run(["node", "-"], input=src + f"\nconsole.log(JSON.stringify({expr}))",
+                         capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    return _resolved(hub, json.loads(out.stdout))
+
+
+def _mute(hub):
+    return re.search(r"--mute:(#[0-9a-f]{6})", _css(hub)).group(1)
 
 
 def _lum(hexv):
@@ -224,8 +236,12 @@ def test_the_pr_columns_wear_their_own_colour_not_the_run_token(hub):
 
 def test_no_column_colour_is_written_a_second_time_in_the_board_script(hub):
     board = _board_js(hub)
-    for value in list(NAMED.values()) + RING:
-        assert board.count(value) == 1, f"{value} appears {board.count(value)} times in the board's script"
+    table = json.loads(re.search(r"const COLORS=(.*?);", board).group(1))
+    ring = json.loads(re.search(r"const RING=(\[.*?\]);", board).group(1))
+    assert len(set(table.values())) == len(table), "two columns share a colour"
+    assert not set(ring) & set(table.values()), "a ring colour is a named column's colour"
+    assert not re.search(r"(?<!&)#[0-9a-fA-F]{3,8}\b", re.sub(r"//[^\n]*", "", board)), \
+        "a colour literal survives in the board's script: the map no longer names it"
 
 
 def test_the_named_columns_carry_exactly_the_decided_colours(hub):
@@ -277,7 +293,8 @@ def test_the_number_is_the_readable_thing_on_the_chip(hub):
     """#1792 supersedes the caption's AA rule: the name is a 10px caption in --mute, and the number
     is the one thing the chip has to make readable. The colours the numbers wear are measured below."""
     chip = _rule(hub, ".hidbar .chip")
-    assert "background:" + CHIP_BG in chip, "the measurement's background is not the chip's own"
+    assert _token(hub, "--line") == CHIP_BG, "the chip's background role changed: re-measure it"
+    assert "background:var(--line)" in chip, "the measurement's background is not the chip's own"
     assert _ratio(_token(hub, "--fg"), CHIP_BG) >= 4.5, "the chip's names are under AA on the chip"
     for name in ("--err", "--run", "--warn", "--ok", "--acc"):
         assert _ratio(_token(hub, name), CHIP_BG) >= 4.5, f"a number in {name} is under AA on the chip"
@@ -438,7 +455,9 @@ def test_a_category_is_not_a_magnitude(hub):
 def test_a_column_the_map_does_not_name_keeps_the_colour_its_header_dot_wears(hub):
     names = ["Stale", "Waiting on review"]
     assert _col(hub, f'colOf("Stale",{json.dumps(names)})') == RING[0]
-    assert f'style="color:{RING[0]}"' in _chip(hub, "Stale", 5, names), \
+    chip = _chip(hub, "Stale", 5, names)
+    inline = re.search(r'style="color:([^"]+)"', chip)
+    assert inline and _resolved(hub, inline.group(1)) == RING[0], \
         "a user column's number must take the ring colour, which only colOf can give it"
     assert "color:" not in _chip(hub, "Abandoned", 2), \
         "a category with a rule of its own must not also carry an inline colour: that is the second copy"

@@ -280,7 +280,8 @@ def test_a_failure_reason_is_at_least_12_px_and_light_on_the_dark_red_card():
     body = _rule(css, ".card .bd-c")
     size_var = re.search(r"font-size:var\((--[\w-]+)\)", body).group(1)
     assert int(re.search(rf"{size_var}:(\d+)px", css).group(1)) >= 13
-    fg = re.search(r"fill:#([0-9a-f]{6})", body).group(1)
+    role = re.search(r"fill:var\((--[\w-]+)\)", body).group(1)
+    fg = re.search(rf"{role}:#([0-9a-f]{{6}})", css).group(1)
     assert min(int(fg[i:i + 2], 16) for i in (0, 2, 4)) >= 0xa0   # light on every channel
 
 

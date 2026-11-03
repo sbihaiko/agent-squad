@@ -368,6 +368,10 @@ class Supervisor:
             raise Refused(f"transport {caller.transport!r} is not known")
         if op == "ping":
             return {}
+        if op == "list":
+            with self.lock:
+                return {"sessions": [{"sid": session.sid, "job": session.job, "cwd": session.cwd}
+                                     for session in self.sessions.values() if not session.closed]}
         if op == "start":
             return {"session": self.start(request["job"], request.get("cwd"), request.get("session"), caller)}
         if op in ("attach", "read", "write"):

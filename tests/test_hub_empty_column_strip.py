@@ -192,9 +192,13 @@ def test_the_line_is_quieter_than_a_chip_and_wears_the_columns_own_colour(hub):
     assert _prop(line, "background") in (None, "none"), "the line carries no chip fill"
     assert _prop(line, "border-left") == "2px solid var(--cc,var(--mute))", \
         "the 2px tick is the column's own colour, the value the header's dot carries (#1793)"
-    chip_colour, line_colour = _prop(chip, "color"), _prop(line, "color")
-    if line_colour == "var(--mute)":
-        line_colour = re.search(r"--mute:(#[0-9a-f]{6})", (ROOT_SCRIPTS / "web-tokens.css").read_text()).group(1)
+    tokens = (ROOT_SCRIPTS / "web-tokens.css").read_text()
+
+    def resolve(value):
+        m = re.fullmatch(r"var\((--[\w-]+)\)", value or "")
+        return re.search(rf"{m.group(1)}:(#[0-9a-f]{{6}})", tokens).group(1) if m else value
+
+    chip_colour, line_colour = resolve(_prop(chip, "color")), resolve(_prop(line, "color"))
     assert re.fullmatch(r"#[0-9a-f]{6}", chip_colour or "") and re.fullmatch(r"#[0-9a-f]{6}", line_colour or ""), \
         f"both kinds name a colour: chip {chip_colour!r}, line {line_colour!r}"
     assert _lum(line_colour) < _lum(chip_colour), \

@@ -35,7 +35,9 @@ def hub(tmp_path_factory):
     (base / "alpha").mkdir(parents=True)
     (prof / "alpha.sh").write_text(
         f': "${{SG_REPO:=x/alpha}}"; : "${{SG_OWNER:=x}}"; : "${{SG_PROJECT:=3}}"; : "${{SG_CHECKOUT:={t}/co-alpha}}"\n')
-    env = {"SG_PROFILES_DIR": str(prof), "SG_STATE_BASE": str(base)}
+    home = t / "home"
+    home.mkdir()   # the session subject reads HOME: a profile that read the owner's 3000 folders spent 12 s on it, and the suite paid it on every test
+    env = {"SG_PROFILES_DIR": str(prof), "SG_STATE_BASE": str(base), "HOME": str(home)}
     before = {k: os.environ.get(k) for k in env}
     os.environ.update(env)
     spec = importlib.util.spec_from_file_location("hubmux_stream_under_test", SCRIPTS / "hubmux.py")
@@ -101,7 +103,7 @@ def test_stream_answers_and_stays_open(on):
     got = _read_until(s, b"event: runs")
     assert got.startswith(b"HTTP/1.1 200") and b"text/event-stream" in got
     assert b"event: runs" in got
-    s.settimeout(1.5)
+    s.settimeout(0.3)   # the wait is how long the test listens for silence, not what it expects: a closed stream answers b"" at once
     while True:   # the rest of the first tick, then quiet: a closed stream would answer b"" at once
         try:
             assert s.recv(65536) != b""
@@ -162,6 +164,22 @@ def test_stream_on_names_the_stream_in_the_page(on):
 def test_stream_on_names_the_stream_in_the_phone_page(on):
     with urllib.request.urlopen(f"http://127.0.0.1:{on['port']}/alpha/mobile", timeout=5) as r:
         assert b'window.SQUAD_HUB_STREAM="/alpha/api/stream"' in r.read()
+
+
+def test_a_slow_subject_read_never_holds_the_heartbeat(on, monkeypatch):
+    """The owner's page froze: one read of the `sessions` subject took 12 s on a machine holding 3000 session folders.
+
+    The stream's own thread did that read, so neither an event nor a heartbeat reached the page for 12 s. The subjects
+    are read on their own thread, and the stream only sends what changed.
+    """
+    hubstream = _hubstream()
+    monkeypatch.setattr(hubstream, "HEARTBEAT_SECONDS", 0.3)
+    monkeypatch.setitem(on["mod"].VERSIONS._subjects, "sessions", lambda: time.sleep(5) or [])
+    s = _open(on["port"], "/alpha/api/stream")
+    started = time.monotonic()
+    assert b"event: ping" in _read_until(s, b"event: ping", budget=2.5)
+    assert time.monotonic() - started < 2.5
+    s.close()
 
 
 @pytest.mark.heavy

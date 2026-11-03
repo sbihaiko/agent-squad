@@ -36,11 +36,14 @@ def test_an_unknown_kind_gets_a_glyph_and_its_own_class_never_a_crash():
 
 
 def test_every_node_kind_has_its_own_color_in_the_stylesheet():
+    tokens = re.search(r":root\{([^}]*)\}", PAGE_SRC()).group(1)
     colors = {}
     for k in graph.KINDS:
-        m = re.search(rf"\.card\.k-{k}\s+\.kc\s*\{{\s*fill:\s*(#[0-9a-fA-F]{{3,6}})", CSS)
-        assert m, f"page.css has no chip color for kind {k}"
-        colors[k] = m.group(1).lower()
+        m = re.search(rf"\.card\.k-{k}\s+\.kc\s*\{{\s*fill:\s*var\((--[\w-]+)\)", CSS)
+        assert m, f"page.css has no chip role for kind {k}"
+        hexv = re.search(rf"{m.group(1)}:(#[0-9a-fA-F]{{3,6}})", tokens)
+        assert hexv, f"kind {k} reads {m.group(1)}, which is not a colour role"
+        colors[k] = hexv.group(1).lower()
     assert len(set(colors.values())) == len(graph.KINDS), f"two kinds share a color: {colors}"
 
 

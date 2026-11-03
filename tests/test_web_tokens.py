@@ -330,6 +330,7 @@ SHARED_ROLES = {
     "--shadow-soft": "#0008",
     "--shadow-float": "#000b",
     "--shadow-deep": "#000c",
+    "--edge": "#667085",   # the meaningful non-text boundary (#1133)
 }
 
 # The chart family: a chart carries no literal of its own. A structural role reads the palette; a mark the palette does not
@@ -477,3 +478,76 @@ def test_the_token_file_wins_over_the_overlay(tokens):
     assert tokens["--acc"] == "#5aa9ff", "the overlay's #7aa2ff is --s1, never --acc"
     assert tokens["--ok"] == "#3ecf8e", "the overlay's #5fd38d must not replace --ok"
     assert tokens["--warn"] == "#f5b041", "the overlay's #f2c14e must not replace --warn"
+
+
+# --- Meaningful non-text (SPEC 1123, #1133) ---
+# A boundary, a mark or a control that carries meaning is visible at 3:1 on both surfaces. `line` stays a decorative rule
+# and may sit low. A card keeps `line` at rest and takes `edge` on hover and on selection.
+NON_TEXT_MIN = 3.0
+# A state mark is a tone drawn as a border, a dot or a glyph: a card's outcome and the run-state pill.
+STATE_MARK_ROLES = ["--ok", "--err", "--warn", "--wait", "--run", "--none", "--mute", "--acc"]
+# A chart mark draws a value: a series, a bar, a needle or a status band. A grid line, a track and an underlay band are
+# decoration and stay out of this class.
+CHART_MARK_ROLES = [f"--chart-series-{i}" for i in range(1, 9)] + [
+    "--chart-series-extra", "--chart-series-other", "--chart-series-fallback",
+    "--chart-bar", "--chart-bar-max", "--chart-needle",
+    "--chart-ok", "--chart-warn", "--chart-err", "--chart-none", "--chart-run", "--chart-drop",
+]
+
+def _rules(css, selector):
+    """Every declaration body the stylesheet gives `selector`: a selector may repeat, and the last one wins."""
+    bodies = [dict(_decls(body)) for sel, body in _blocks(css) if selector in [p.strip() for p in sel.split(",")]]
+    assert bodies, f"the stylesheet has no rule for {selector}"
+    return bodies
+
+
+def _rule(css, selector):
+    return _rules(css, selector)[-1]
+
+
+def test_the_edge_role_has_a_stated_purpose():
+    """A new colour is a role with a sentence that says what it carries (#1133)."""
+    comment = TOKENS_FILE.read_text().split(":root{")[0]
+    assert "edge" in comment, "the token module never names the edge role"
+    assert re.search(r"edge[^.]*3:1", comment, re.S), "the edge role does not state its 3:1 purpose"
+
+
+def test_meaningful_non_text_meets_three_to_one(tokens):
+    """`edge`, a state mark, a chart mark and the focus ring: 3:1 on panel and card (#1133)."""
+    for role in ["--edge", *STATE_MARK_ROLES, *CHART_MARK_ROLES, "--focus"]:
+        for bg_role in ("--panel", "--card"):
+            ratio = _contrast(_role_value(tokens, role), _role_value(tokens, bg_role))
+            assert ratio >= NON_TEXT_MIN, f"{role} on {bg_role} is {ratio:.2f}:1, under {NON_TEXT_MIN}:1"
+
+
+def test_a_card_keeps_line_at_rest_and_takes_edge_on_hover_and_selection():
+    """The resting border is decoration; the hover and the selection are the card meaning `edge` carries (#1133)."""
+    css = (ROOT / "dashboard/page.css").read_text()
+    assert _rule(css, ".card rect")["stroke"] == "var(--line)", "a card's resting border is `line`"
+    for selector in (".card:hover rect", ".card.sel rect"):
+        for body in _rules(css, selector):
+            assert body["stroke"] == "var(--edge)", f"{selector} reads {body['stroke']}, not the edge role"
+    for body in _rules(css, ".group-card.sel > rect"):
+        assert body["stroke"] == "var(--edge)", "a selected group card reads the edge role"
+
+
+def test_a_dialog_border_reads_the_edge_role(surfaces):
+    """A dialog separates from the page by its panel step and an `edge` border (#1133)."""
+    css = _served_css(surfaces["hub"])
+    for selector in ("#ldg", "#sdlg"):
+        border = _rule(css, selector).get("border", "")
+        assert "var(--edge)" in border, f"{selector} reads {border!r}, not the edge role"
+
+
+def test_the_switch_track_reads_the_edge_role(surfaces, tokens):
+    """The off track is the one control mark a switch carries; the on track is `ok` (#1133)."""
+    css = _served_css(surfaces["hub"])
+    off = _rule(css, "#lopb .lsw").get("background")
+    on = _rule(css, "#lopb .lsw[aria-checked=true]").get("background")
+    assert off == "var(--edge)", "the switch's off track is not the edge role"
+    assert on == "var(--ok)", "the switch's on track is not `ok`"
+    for role in (off, on):
+        value = _role_value(tokens, re.fullmatch(r"var\((--[\w-]+)\)", role).group(1))
+        for bg_role in ("--panel", "--card"):
+            ratio = _contrast(value, _role_value(tokens, bg_role))
+            assert ratio >= NON_TEXT_MIN, f"the switch track {role} on {bg_role} is {ratio:.2f}:1"

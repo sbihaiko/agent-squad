@@ -273,6 +273,21 @@ board_write() {   # <column> <issue>: a refused card write is named, so the card
   return 0
 }
 
+# proof_card <issue> <obligation path|"">: the card's proof fact (#1176, spec 1163). An unproven entry records the
+# obligation key under $SG_STATE/proof-card/<issue>/ and puts `unproven` on the card, so the nightly settlement can
+# answer it. An entry that proved its work answers no obligation, so it writes nothing: a later pass proves the new
+# tree, never the tree the open obligation names, and only the settlement clears the fact.
+# The fact is written by the entry and by the wave landing here, and the nightly consumes the map; gate.sh stays the
+# obligation's one writer, and a refused card write is named, never dropped.
+proof_card() {
+  local n=$1 ob=$2 d=$SG_STATE/proof-card/$1 out rc
+  [ -n "$ob" ] || return 0
+  mkdir -p "$d" 2>/dev/null && : > "$d/$(basename "$ob")"
+  out=$("$BOARD" --proof "$SG_OWNER" "$SG_PROJECT" "$n" unproven 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || printf 'WAVE-BOARD #%s proof refused: %s\n' "$n" "$(printf '%s\n' "$out" | /usr/bin/grep -v '^issue_state\.py: items read ' | tail -1)"
+  return 0
+}
+
 freeze_owner() {   # <issue>: the freeze is a marker over the column reached, never a column of its own.
   local n=$1 out rc
   out=$(gh_send -X POST "repos/$SG_REPO/issues/$n/labels" -f "labels[]=frozen:owner" 2>&1); rc=$?
@@ -577,6 +592,7 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
     sha=$($G rev-parse HEAD)
     if $G push -q origin "HEAD:refs/heads/$w" 2>/dev/null; then
       board_write "Code Complete" "$iss"   # a refused write is named, never dropped (#593)
+      proof_card "$iss" "$obl"   # an unproven entry carries its fact on the card until the settlement answers it (#1176)
       # The run's entry record is the ledger's entered fact (#467, ADR-0149): the janitor's Code Complete reads it, never the
       # run's own land. An unproven entry carries its obligation there, so the job that settles it is attached to the run that
       # admitted the child (spec 1163, #1174). A pass carries none; gate.sh is the obligation's one writer.
@@ -756,14 +772,17 @@ stuck() {
   return 1
 }
 
-# deliver <run> <wave> <sha> <issues>: the closes of what a landed wave carries, each with its comment, ledger row and card.
+# deliver <run> <wave> <sha> <issues> [<tip obligation>]: the closes of what a landed wave carries, each with its comment,
+# ledger row and card. A wave whose tip check was unproven carries that obligation's fact on every issue it delivers
+# (#1176); an issue whose own entry was unproven already carries it, and the settlement answers either.
 # An issue that does not close stays owed (#475): its ledger fact is `owed`, with the wave and the sha (ADR-0149), the run
 # keeps its wave marker, and the pass exits 1, so the run is not read as done and the next landing pass tries the close again.
 deliver() {
-  local run=$1 w=$2 sha=$3 issues=$4 n owed="" out
+  local run=$1 w=$2 sha=$3 issues=$4 tipob=${5:-} n owed="" out
   export SG_GH_PASS=wave
   local col=Done; [ "${SG_BOARD_VOCAB:-}" = shipped ] && col=Closed
   for n in $issues; do
+    [ -z "$tipob" ] || proof_card "$n" "$tipob"   # the landing itself was unproven: the card carries its obligation
     # The landing is the issue's `landed` fact (ADR-0149, #695): rule R reads it instead of the run's land heads. It is
     # written before the close, because the work is in the base whether or not the API accepts the close.
     out=$(ledger landed "$n" "$run" run "$sha" 2>&1) || echo "WAVE-LEDGER #$n refused: $out"
@@ -886,7 +905,7 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
   # entered, so a base that moved under the wave is rebased onto now, before the one push. A push the remote refuses -- the
   # base moved once more between this rebase and the push -- repeats from the fetch: the moved base is fetched, the wave is
   # rebased on it, and the push goes again (ADR-0145 rule 2). One repeat, as the entry does.
-  local out sha try=1 issues n anyref=0 files rc ob
+  local out sha try=1 issues n anyref=0 files rc ob tipobl=""
   while :; do
     out=$(sc rebase "origin/$base" 2>&1) || { files=$(sc diff --name-only --diff-filter=U | sort -u | tr '\n' ' ')
       sc rebase --abort >/dev/null 2>&1
@@ -967,7 +986,8 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
     red=$(sg_base_red "$base") && { echo "WAVE WAIT $w: $red"; rm -rf "$S"; return 1; }
     wave_check "$S" "$w"; rc=$?
     [ $rc = 3 ] && { echo "WAVE WAIT $w: the gate lock or the gate slots are held by another gate, so the tip's check did not run; the wave lands on a later pass"; rm -rf "$S"; return 1; }
-    [ $rc = 5 ] && { ob=$(obligation_of "$(sc rev-parse HEAD)"); echo "WAVE $w: the tip's check is unproven: the wave lands with its obligation${ob:+ $(basename "$ob")}${ob:- (none: the tip check wrote no obligation record)}"; }
+    tipobl=
+    [ $rc = 5 ] && { ob=$(obligation_of "$(sc rev-parse HEAD)"); tipobl=$ob; echo "WAVE $w: the tip's check is unproven: the wave lands with its obligation${ob:+ $(basename "$ob")}${ob:- (none: the tip check wrote no obligation record)}"; }
     { [ $rc = 0 ] || [ $rc = 5 ]; } || { stuck "$run" "$w" "$S" "the check at the tip of $w is red and no child's own suite names the cause"; rm -rf "$S"; return 1; }
     sha=$(sc rev-parse HEAD)
     # The issues the wave delivers, read here, after the rebase, from what is ahead of the base: a commit the base already holds
@@ -1052,7 +1072,7 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
       echo "WAVE-NOTE $w: no commit names an issue (no Refs), and no issue of run $run has an entered child it did not requeue, so the landing closes nothing"
     fi
   fi
-  deliver "$run" "$w" "$sha" "$issues" || return 1
+  deliver "$run" "$w" "$sha" "$issues" "$tipobl" || return 1
   [ -n "$fb" ] && for n in $issues; do rm -f "$SG_STATE/auto/disp-$n"; done
   local named=""; for n in $issues; do named="${named:+$named, }#$n"; done
   echo "WAVE $w $sha landed in $base (${named:-no issue named: the wave carries no Refs})"

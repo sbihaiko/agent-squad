@@ -62,13 +62,27 @@ SQ.motionOn = (reduced, hidden) => !reduced && !hidden;
 // The session and the composer.
 SQ.pickNeeded = list => list.length > 1;
 SQ.composerKey = (key, shift, composing) => key !== "Enter" || composing ? "none" : shift ? "newline" : "send";
-SQ.canSend = (text, allowed) => !!allowed && String(text || "").trim() !== "";
+// An attachment (#1154): the composer stages one file, shows it as one chip, and sends the text and the file under one
+// client message id. One file per message: a paste or a drop that brings several keeps the first. While the file is
+// being read, or a send is in flight, the button stays disabled.
+SQ.IMG_RE = /^\s*\[Image: source: ([^\]\n]+)\](?:\s.*)?$/;
+SQ.attached = text => SQ.IMG_RE.test(String(text || "").split("\n", 1)[0]);
+SQ.oneFile = list => (list && list[0]) || null;
+SQ.canSend = (text, allowed, attach) => !!allowed && (!!attach || String(text || "").trim() !== "");
+SQ.sendLocked = (text, allowed, attach, sending) =>
+  !!sending || !!(attach && !attach.ready) || !SQ.canSend(text, allowed, !!(attach && attach.ready));
 SQ.sendState = info => info && info.send ? { disabled: false, note: "" }
   : { disabled: true, note: (info && info.why) || `Sending is off. The owner sets ${SQ.SEND_SETTING} to send.` };
 SQ.supervisorLine = info => info && info.state === "refused"
   ? `The terminal supervisor is not running: ${String(info.why || "no reason was recorded").replace(/\.$/, "")}.` : "";
 // The sentence keeps its own row in the Terminal panel: the shared status line is written by every send and every poll (#1160).
 SQ.supervisorView = info => { const text = SQ.supervisorLine(info); return { hidden: !text, text }; };
+// A session the supervisor hosts takes terminal input, and its own list is the one source (#1216): only then does the
+// composer type into the terminal, and a panel that shows no hosted session offers the start the supervisor can honor.
+SQ.isHosted = (hosted, sid) => !!sid && Array.isArray(hosted) && hosted.indexOf(sid) >= 0;
+SQ.startOffered = (info, hosted, sid) => !!(info && info.state === "up") && !SQ.isHosted(hosted, sid);
+SQ.composerRoute = hosted => hosted ? "write" : "send";
+SQ.sentLine = route => route === "write" ? "Sent to the terminal." : SQ.SENT_INBOX;
 SQ.draft = ctx => {
   const list = v => (Array.isArray(v) ? v : v ? [v] : []).map(String).filter(Boolean);
   const lines = ["Page context", `Screen: ${ctx.screen || ""}`, `Route: ${ctx.route || ""}`];
@@ -92,100 +106,113 @@ SQ.liveText = (a, now) => {
 };
 
 SQ.MARKUP = `<style>
-#sq-ov-btn{position:fixed;right:16px;bottom:var(--sq-ov-bottom,16px);z-index:999;width:52px;height:52px;padding:0;border:0;border-radius:50%;background:none;cursor:pointer;filter:drop-shadow(0 4px 10px #000b)}
+#sq-ov-btn{position:fixed;right:16px;bottom:var(--sq-ov-bottom,16px);z-index:999;width:52px;height:52px;padding:0;border:0;border-radius:50%;background:none;cursor:pointer;filter:drop-shadow(0 4px 10px var(--shadow-float))}
 #sq-ov-btn svg{display:block;width:100%;height:100%}
-#sq-ov-btn:focus-visible{outline:2px solid #7aa2ff;outline-offset:3px}
+#sq-ov-btn:focus-visible{outline:2px solid var(--s1);outline-offset:3px}
 html.sq-docked #sq-ov-btn{display:none}
 html.sq-docked body{margin-right:var(--sq-dock)}
 #sq-ov-lens{will-change:transform}
-#sq-ov{position:fixed;z-index:1000;right:16px;bottom:calc(var(--sq-ov-bottom,16px) + 64px);width:min(440px,calc(100vw - 32px));height:min(640px,calc(100vh - 120px));display:flex;flex-direction:column;box-sizing:border-box;background:#11151c;color:#e6e8ee;border:1px solid #353d4b;border-radius:13px;box-shadow:0 18px 50px #000c;--sq-fs:14px;--sq-mono:ui-monospace,SFMono-Regular,SF Mono,Menlo,Consolas,monospace;font:14px/1.55 var(--sq-mono);text-align:left}
+#sq-ov{position:fixed;z-index:1000;right:16px;bottom:calc(var(--sq-ov-bottom,16px) + 64px);width:min(440px,calc(100vw - 32px));height:min(640px,calc(100vh - 120px));display:flex;flex-direction:column;box-sizing:border-box;background:var(--float);color:var(--fg);border:1px solid var(--line-strong);border-radius:13px;box-shadow:0 18px 50px var(--shadow-deep);--sq-fs:14px;--sq-mono:ui-monospace,SFMono-Regular,SF Mono,Menlo,Consolas,monospace;font:14px/1.55 var(--sq-mono);text-align:left}
 #sq-ov[hidden]{display:none}
 #sq-ov *{box-sizing:border-box}
 #sq-ov[data-mode=docked]{top:0;right:0;bottom:0;height:auto;width:var(--sq-dock);border-radius:0;border-width:0 0 0 1px;box-shadow:none}
 #sq-ov[data-mode=phone]{top:0;right:0;bottom:0;left:0;width:auto;height:auto;border:0;border-radius:0;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
-#sq-ov header{display:flex;align-items:center;gap:2px;min-width:0;padding:6px 6px 6px 14px;border-bottom:1px solid #353d4b}
+#sq-ov header{display:flex;align-items:center;gap:2px;min-width:0;padding:6px 6px 6px 14px;border-bottom:1px solid var(--line-strong)}
 #sq-ov-title{flex:1;min-width:0;margin:0;font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#sq-ov header button{flex:none;display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;padding:0;border:0;border-radius:8px;background:none;color:#b8c0cf;cursor:pointer}
-#sq-ov header button:hover{background:#1c212b;color:#e6e8ee}
+#sq-ov header button{flex:none;display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;padding:0;border:0;border-radius:8px;background:none;color:var(--ink-soft);cursor:pointer}
+#sq-ov header button:hover{background:var(--card);color:var(--fg)}
 #sq-ov header button:disabled{opacity:.35;cursor:default;background:none}
 #sq-ov header svg{width:18px;height:18px}
 #sq-ov[data-mode=phone] .sq-ov-dockctl{display:none}
 #sq-ov-handle{position:absolute;left:-5px;top:0;bottom:0;width:10px;cursor:ew-resize;display:none;touch-action:none}
 #sq-ov[data-mode=docked] #sq-ov-handle{display:block}
-#sq-ov-handle:hover{background:#7aa2ff55}
-#sq-ov-handle:focus-visible{background:#7aa2ff55;outline:2px solid #7aa2ff;outline-offset:-2px}
-#sq-ov-pick{display:flex;flex-wrap:wrap;gap:6px;padding:8px 14px;border-bottom:1px solid #353d4b}
+#sq-ov-handle:hover{background:var(--s1-faint)}
+#sq-ov-handle:focus-visible{background:var(--s1-faint);outline:2px solid var(--s1);outline-offset:-2px}
+#sq-ov-pick{display:flex;flex-wrap:wrap;gap:6px;padding:8px 14px;border-bottom:1px solid var(--line-strong)}
 #sq-ov-pick[hidden]{display:none}
-#sq-ov-pick p{margin:0 0 2px;width:100%;color:#b8c0cf;font-size:13px}
-#sq-ov-pick button{min-height:44px;padding:4px 10px;border:1px solid #353d4b;border-radius:8px;background:#1c212b;color:#e6e8ee;cursor:pointer;font:inherit;font-size:13px}
-#sq-ov-pick button[aria-pressed=true]{border-color:#7aa2ff}
+#sq-ov-pick p{margin:0 0 2px;width:100%;color:var(--ink-soft);font-size:13px}
+#sq-ov-pick button{min-height:44px;padding:4px 10px;border:1px solid var(--line-strong);border-radius:8px;background:var(--card);color:var(--fg);cursor:pointer;font:inherit;font-size:13px}
+#sq-ov-pick button[aria-pressed=true]{border-color:var(--s1)}
 .sq-ov-fsb{font:600 13px/1 system-ui;min-width:44px;height:44px;padding:0 8px}   /* one control size for the desktop and the phone floor (owner, 2026-11-01) */
 #sq-ov-log{flex:1;min-height:0;overflow:auto;padding:13px 14px}
-#sq-ov-log .sq-empty{color:#b8c0cf}
+#sq-ov-log .sq-empty{color:var(--ink-soft)}
 .sq-turn{margin:0 0 12px;padding:0;border-left:0;line-height:1.55;text-indent:0}
-.sq-who{display:block;font-family:var(--sq-mono);font-size:13px;line-height:1.55;color:#8b949e;margin-bottom:2px;letter-spacing:.02em}
-.sq-txt{white-space:pre-wrap;overflow-wrap:anywhere;font-family:var(--sq-mono);font-size:var(--sq-fs);color:#e6e8ee}
+.sq-who{display:block;font-family:var(--sq-mono);font-size:13px;line-height:1.55;color:var(--ink-muted);margin-bottom:2px;letter-spacing:.02em}
+.sq-txt{white-space:pre-wrap;overflow-wrap:anywhere;font-family:var(--sq-mono);font-size:var(--sq-fs);color:var(--fg)}
 .sq-p{margin:0 0 1.55em}.sq-txt>:last-child{margin-bottom:0}
-.sq-owner{margin:0 0 10px auto;width:fit-content;max-width:86%;border:1px solid #2e6b4f;border-radius:14px 14px 4px 14px;padding:8px 12px;background:#12302a}
-.sq-owner .sq-who{color:#8b949e;font-size:13px}.sq-owner .sq-txt{color:#e6edf3}
-.sq-system .sq-who{color:#8b949e;font-size:13px}.sq-system .sq-txt{color:#8b949e;font-style:italic}
-.sq-fold{border-left:0;margin:0 0 8px}.sq-fold summary{font-size:13px;color:#8b949e;cursor:pointer;list-style:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:flex;align-items:center}
-.sq-fold summary::-webkit-details-marker{display:none}.sq-fold[open] summary{color:#8b949e}
-.sq-answer{margin:0 auto 10px 0;width:fit-content;max-width:100%;border:1px solid #26303c;border-radius:14px 14px 14px 4px;padding:8px 12px;background:#161c24}
-.sq-answer .sq-who{color:#8b949e;font-size:13px}
+.sq-owner{margin:0 0 10px auto;width:fit-content;max-width:86%;border:1px solid var(--tint-ok-line);border-radius:14px 14px 4px 14px;padding:8px 12px;background:var(--tint-ok)}
+.sq-owner .sq-who{color:var(--ink-muted);font-size:13px}.sq-owner .sq-txt{color:var(--on-tint)}
+.sq-system .sq-who{color:var(--ink-muted);font-size:13px}.sq-system .sq-txt{color:var(--ink-muted);font-style:italic}
+.sq-fold{border-left:0;margin:0 0 8px}.sq-fold summary{font-size:13px;color:var(--ink-muted);cursor:pointer;list-style:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:flex;align-items:center}
+.sq-fold summary::-webkit-details-marker{display:none}.sq-fold[open] summary{color:var(--ink-muted)}
+.sq-answer{margin:0 auto 10px 0;width:fit-content;max-width:100%;border:1px solid var(--bubble-line);border-radius:14px 14px 14px 4px;padding:8px 12px;background:var(--bubble)}
+.sq-answer .sq-who{color:var(--ink-muted);font-size:13px}
 /* One header line per bubble: the owner's label at the left, the clock at the right corner, as WhatsApp draws it (owner,
    2026-11-01). Floated alone, the clock hung above the bubble and pushed the first line down (#1099). No tick. */
 .sq-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin:0 0 3px}
-.sq-time{margin-left:auto;color:#8b949e;font-size:13px;line-height:1.4;white-space:nowrap;user-select:none}
-.sq-h{font-family:var(--sq-mono);font-weight:600;font-size:var(--sq-fs);color:#eef1f5;margin:1.55em 0 0}
+.sq-time{margin-left:auto;color:var(--ink-muted);font-size:13px;line-height:1.4;white-space:nowrap;user-select:none}
+.sq-h{font-family:var(--sq-mono);font-weight:600;font-size:var(--sq-fs);color:var(--ink-strong);margin:1.55em 0 0}
 .sq-tbl{width:100%;border-collapse:collapse;margin:0 0 1.55em;font-size:var(--sq-fs)}
-.sq-tbl th,.sq-tbl td{border:1px solid #353d4b;padding:4px 8px;text-align:left;vertical-align:top}
-.sq-tbl th{background:#101a16;color:#e6e8ee;font-weight:600}
+.sq-tbl th,.sq-tbl td{border:1px solid var(--line-strong);padding:4px 8px;text-align:left;vertical-align:top}
+.sq-tbl th{background:var(--table-head);color:var(--fg);font-weight:600}
 .sq-ul{margin:0 0 1.55em;padding-left:18px}.sq-ul li{margin:0}.sq-ol{list-style:decimal}
-.sq-ic{font-family:var(--sq-mono);color:#e6c07b;font-size:var(--sq-fs)}
-.sq-txt b{color:#ffffff;font-weight:650}.sq-txt i{color:inherit}
-.sq-txt a{color:#7aa2ff;text-decoration:underline}.sq-txt code{color:#e6c07b}
-.sq-code{margin:0 0 1.55em}.sq-code summary{font-size:13px;color:#7aa2ff;cursor:pointer;list-style:none;display:flex;align-items:center}
-.sq-code pre{margin:0 0 1.55em;padding:6px 9px;background:#0d1117;border:1px solid #232a36;border-radius:6px;overflow:auto;font-family:var(--sq-mono);font-size:var(--sq-fs);line-height:1.4;color:#b8c0cf;white-space:pre}
-.sq-img{display:block;margin:0 0 1.55em}.sq-img img{max-width:100%;max-height:180px;border:1px solid #232a36;border-radius:6px;display:block}
+.sq-ic{font-family:var(--sq-mono);color:var(--code-ink);font-size:var(--sq-fs)}
+.sq-txt b{color:var(--highlight);font-weight:650}.sq-txt i{color:inherit}
+.sq-txt a{color:var(--s1);text-decoration:underline}.sq-txt code{color:var(--code-ink)}
+.sq-code{margin:0 0 1.55em}.sq-code summary{font-size:13px;color:var(--s1);cursor:pointer;list-style:none;display:flex;align-items:center}
+.sq-code pre{margin:0 0 1.55em;padding:6px 9px;background:var(--well);border:1px solid var(--well-line);border-radius:6px;overflow:auto;font-family:var(--sq-mono);font-size:var(--sq-fs);line-height:1.4;color:var(--ink-soft);white-space:pre}
+.sq-img{display:block;margin:0 0 1.55em}.sq-img img{max-width:100%;max-height:180px;border:1px solid var(--well-line);border-radius:6px;display:block}
 .sq-onlyimg{max-width:min(86%,280px)}.sq-onlyimg .sq-img img{width:100%;max-height:220px;object-fit:contain}
-.sq-more{margin:0 0 4px;padding:0;border:0;background:none;color:#7aa2ff;font-size:13px;cursor:pointer}
-.sq-earlier{margin:0 0 6px}.sq-earlier summary{font-size:13px;color:#8b949e;cursor:pointer;display:flex;align-items:center}
+.sq-more{margin:0 0 4px;padding:0;border:0;background:none;color:var(--s1);font-size:13px;cursor:pointer}
+.sq-earlier{margin:0 0 6px}.sq-earlier summary{font-size:13px;color:var(--ink-muted);cursor:pointer;display:flex;align-items:center}
 .sq-tool{}.sq-tool .sq-who{color:var(--warn)}
-.sq-tool .sq-txt{color:#9aa3b2;font-family:var(--sq-mono);font-size:var(--sq-fs);line-height:1.55}
-#sq-ov-form{position:relative;display:flex;align-items:flex-end;gap:6px;padding:8px;border-top:1px solid #353d4b}
-#sq-ov-plus{flex:none;width:44px;height:44px;border:1px solid #353d4b;border-radius:50%;background:#1c212b;color:#e6e8ee;font:22px/1 system-ui;cursor:pointer}
-#sq-ov-menu{position:absolute;left:8px;bottom:60px;z-index:2;display:flex;flex-direction:column;min-width:170px;padding:4px;background:#1c212b;border:1px solid #353d4b;border-radius:10px;box-shadow:0 10px 30px #000a}
+.sq-tool .sq-txt{color:var(--ink-tool);font-family:var(--sq-mono);font-size:var(--sq-fs);line-height:1.55}
+#sq-ov-form{position:relative;display:flex;flex-direction:column;border-top:1px solid var(--line-strong)}
+#sq-ov-row{display:flex;align-items:flex-end;gap:6px;padding:8px}
+/* One staged file (#1154): a thumbnail, its name and one Remove. The chip sits above the controls, as the wireframe draws it. */
+#sq-ov-attach{display:flex;align-items:center;gap:8px;padding:8px 14px 0}
+#sq-ov-attach[hidden]{display:none}
+#sq-ov-attach img{flex:none;width:44px;height:44px;object-fit:cover;border:1px solid var(--line);border-radius:6px;background:var(--input)}
+#sq-ov-attach-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;color:var(--fg)}
+#sq-ov-attach-x{flex:none;width:44px;height:44px;padding:0;border:0;border-radius:8px;background:none;color:var(--mute);font:20px/1 system-ui;cursor:pointer}
+#sq-ov-attach-x:hover{background:var(--card);color:var(--fg)}
+#sq-ov-form.sq-drop{outline:2px dashed var(--acc);outline-offset:-4px}
+#sq-ov-plus{flex:none;width:44px;height:44px;border:1px solid var(--line-strong);border-radius:50%;background:var(--card);color:var(--fg);font:22px/1 system-ui;cursor:pointer}
+#sq-ov-menu{position:absolute;left:8px;bottom:60px;z-index:2;display:flex;flex-direction:column;min-width:170px;padding:4px;background:var(--card);border:1px solid var(--line-strong);border-radius:10px;box-shadow:0 10px 30px var(--scrim)}
 #sq-ov-menu[hidden]{display:none}
-#sq-ov-menu button{min-height:44px;padding:6px 10px;border:0;border-radius:6px;background:none;color:#e6e8ee;text-align:left;font:inherit;cursor:pointer}
-#sq-ov-menu button:hover{background:#2a3140}
-#sq-ov-menu button:focus-visible{background:#2a3140;outline:2px solid #7aa2ff;outline-offset:-2px}
-#sq-ov-text{flex:1;min-width:0;min-height:44px;max-height:200px;resize:none;padding:8px 10px;border:1px solid #353d4b;border-radius:10px;background:#0d1117;color:#e6e8ee;font-family:var(--sq-mono);font-size:var(--sq-fs);line-height:1.55;font:var(--sq-fs)/1.55 var(--sq-mono);font-ui,-apple-system,sans-serif}
+#sq-ov-menu button{min-height:44px;padding:6px 10px;border:0;border-radius:6px;background:none;color:var(--fg);text-align:left;font:inherit;cursor:pointer}
+#sq-ov-menu button:hover{background:var(--raise)}
+#sq-ov-menu button:focus-visible{background:var(--raise);outline:2px solid var(--s1);outline-offset:-2px}
+#sq-ov-text{flex:1;min-width:0;min-height:44px;max-height:200px;resize:none;padding:8px 10px;border:1px solid var(--line-strong);border-radius:10px;background:var(--well);color:var(--fg);font-family:var(--sq-mono);font-size:var(--sq-fs);line-height:1.55;font:var(--sq-fs)/1.55 var(--sq-mono);font-ui,-apple-system,sans-serif}
 #sq-ov-text:disabled{opacity:.6}
-#sq-ov-send{flex:none;display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;padding:0;border:0;border-radius:50%;background:#7aa2ff;color:#0d1117;cursor:pointer}
+#sq-ov-send{flex:none;display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;padding:0;border:0;border-radius:50%;background:var(--s1);color:var(--well);cursor:pointer}
 #sq-ov-send:disabled{opacity:.35;cursor:default}
 #sq-ov-send svg{width:20px;height:20px}
-#sq-ov-note{margin:0;padding:0 13px 8px;font-size:13px;color:#b8c0cf}
+#sq-ov-note{margin:0;padding:0 13px 8px;font-size:13px;color:var(--ink-soft)}
 #sq-ov-note:empty{display:none}
-#sq-ov-status{margin:0;padding:0 13px 8px;font-size:13px;color:#e6e8ee}
+#sq-ov-status{margin:0;padding:0 13px 8px;font-size:13px;color:var(--fg)}
 #sq-ov-status:empty{display:none}
 #sq-ov-supervisor{margin:0;padding:0 13px 8px;font-size:13px;color:var(--warn)}
 #sq-ov-supervisor[hidden]{display:none}
-#sq-ov-live{margin:0;padding:0 14px 6px;font-family:var(--sq-mono);font-size:var(--sq-fs);line-height:1.55;color:#b8c0cf;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
+#sq-ov-startrow{margin:0;padding:0 13px 8px}
+#sq-ov-startrow[hidden]{display:none}
+#sq-ov-start{width:100%;min-height:44px;padding:6px 12px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--fg);font:inherit;cursor:pointer}
+#sq-ov-start:hover{background:var(--raise)}
+#sq-ov-live{margin:0;padding:0 14px 6px;font-family:var(--sq-mono);font-size:var(--sq-fs);line-height:1.55;color:var(--ink-soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
 #sq-ov-live[hidden]{display:none}
 .sq-ov-back{display:none}
-html.sq-over .sq-ov-back{display:inline-flex;align-items:center;min-height:44px;padding:3px 10px;border:1px solid #353d4b;border-radius:6px;background:none;color:inherit;cursor:pointer}
+html.sq-over .sq-ov-back{display:inline-flex;align-items:center;min-height:44px;padding:3px 10px;border:1px solid var(--line-strong);border-radius:6px;background:none;color:inherit;cursor:pointer}
 </style>
 <button id="sq-ov-btn" type="button" aria-label="Terminal" title="Terminal" aria-haspopup="dialog" aria-expanded="false" aria-controls="sq-ov"><svg viewBox="0 0 64 64" aria-hidden="true" focusable="false"><defs>
-<radialGradient id="sq-ov-g-ring" cx="38%" cy="28%" r="80%"><stop offset="0" stop-color="#eef1f5"/><stop offset=".3" stop-color="#9aa1ab"/><stop offset=".65" stop-color="#40454d"/><stop offset="1" stop-color="#121417"/></radialGradient>
-<radialGradient id="sq-ov-g-lens" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#fff7dc"/><stop offset=".09" stop-color="#ffc640"/><stop offset=".26" stop-color="#ff3a10"/><stop offset=".58" stop-color="#a50000"/><stop offset="1" stop-color="#2a0000" stop-opacity="0"/></radialGradient>
+<radialGradient id="sq-ov-g-ring" cx="38%" cy="28%" r="80%"><stop offset="0" stop-color="var(--ink-strong)"/><stop offset=".3" stop-color="var(--ink-soft)"/><stop offset=".65" stop-color="var(--line-strong)"/><stop offset="1" stop-color="var(--bg)"/></radialGradient>
+<radialGradient id="sq-ov-g-lens" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="var(--highlight)"/><stop offset=".09" stop-color="var(--warn)"/><stop offset=".26" stop-color="var(--err)"/><stop offset=".58" stop-color="var(--icon-lens-deep)"/><stop offset="1" stop-color="var(--icon-lens-edge)" stop-opacity="0"/></radialGradient>
 <clipPath id="sq-ov-clip"><circle cx="32" cy="32" r="21"/></clipPath></defs>
 <circle class="sq-ov-ring" cx="32" cy="32" r="31" fill="url(#sq-ov-g-ring)"/>
-<circle cx="32" cy="32" r="26.5" fill="none" stroke="#0a0b0d" stroke-width="2"/>
-<circle cx="32" cy="32" r="24.5" fill="#060607"/>
-<circle cx="32" cy="32" r="21" fill="#1f0000"/>
+<circle cx="32" cy="32" r="26.5" fill="none" stroke="var(--bg)" stroke-width="2"/>
+<circle cx="32" cy="32" r="24.5" fill="var(--bg)"/>
+<circle cx="32" cy="32" r="21" fill="var(--icon-socket)"/>
 <g clip-path="url(#sq-ov-clip)"><g id="sq-ov-lens"><circle cx="32" cy="32" r="17" fill="url(#sq-ov-g-lens)"/></g></g>
-<ellipse cx="25" cy="23" rx="6.5" ry="3" fill="#ffffff" opacity=".2" transform="rotate(-32 25 23)"/>
+<ellipse cx="25" cy="23" rx="6.5" ry="3" fill="var(--highlight)" opacity=".2" transform="rotate(-32 25 23)"/>
 </svg></button>
 <div id="sq-ov" role="dialog" aria-labelledby="sq-ov-title" hidden>
 <div id="sq-ov-handle" role="separator" aria-orientation="vertical" aria-label="Resize the session panel" tabindex="0"></div>
@@ -198,18 +225,23 @@ html.sq-over .sq-ov-back{display:inline-flex;align-items:center;min-height:44px;
 </header>
 <div id="sq-ov-pick" hidden></div>
 <p id="sq-ov-supervisor" role="alert" hidden></p>
+<div id="sq-ov-startrow" hidden><button type="button" id="sq-ov-start">Start a session</button></div>
 <div id="sq-ov-log" role="log" aria-live="polite" aria-label="Session conversation"></div>
 <p id="sq-ov-live" aria-live="off" hidden></p>
 <div id="sq-ov-form">
+<div id="sq-ov-attach" role="group" aria-label="Attachment" hidden><img id="sq-ov-attach-img" alt=""><span id="sq-ov-attach-name"></span><button type="button" id="sq-ov-attach-x" aria-label="Remove the attachment" title="Remove the attachment">×</button></div>
+<div id="sq-ov-row">
 <button type="button" id="sq-ov-plus" aria-label="Add to the message" aria-haspopup="menu" aria-expanded="false" aria-controls="sq-ov-menu">+</button>
 <div id="sq-ov-menu" role="menu" hidden><button type="button" role="menuitem" data-act="shot">Attach screenshot</button><button type="button" role="menuitem" data-act="ctx">Page context</button></div>
-<textarea id="sq-ov-text" rows="1" maxlength="4000" aria-label="Message to the session" placeholder="Message the session"></textarea>
+<textarea id="sq-ov-text" rows="1" maxlength="4000" aria-label="Message to the session" placeholder="Message the session · paste or drop an image"></textarea>
 <button id="sq-ov-send" type="button" aria-label="Send" title="Send" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+</div>
 </div>
 <p id="sq-ov-status" role="status"></p>
 <p id="sq-ov-note"></p>
 </div>`;
 
+SQ.SENT_INBOX = "Sent: the session's inbox accepted the message.";
 if (typeof module !== "undefined" && module.exports) module.exports = SQ;
 // dom:begin
 if (typeof document === "undefined" || !document.body || !document.createRange || window.__sqOverlay) return;   // no DOM: the rules only
@@ -223,9 +255,16 @@ const $ = id => document.getElementById(id);
 const btn = $("sq-ov-btn"), ov = $("sq-ov"), title = $("sq-ov-title"), pick = $("sq-ov-pick"), log = $("sq-ov-log"),
       text = $("sq-ov-text"), sendBtn = $("sq-ov-send"), plus = $("sq-ov-plus"), menu = $("sq-ov-menu"), note = $("sq-ov-note"),
       stat = $("sq-ov-status"), supLine = $("sq-ov-supervisor"), handle = $("sq-ov-handle"), dockBtn = $("sq-ov-dock"),
-      undockBtn = $("sq-ov-undock"), lens = $("sq-ov-lens"), live = $("sq-ov-live");
+      undockBtn = $("sq-ov-undock"), lens = $("sq-ov-lens"), live = $("sq-ov-live"),
+      form = $("sq-ov-form"), chip = $("sq-ov-attach"), chipImg = $("sq-ov-attach-img"),
+      chipName = $("sq-ov-attach-name"), chipX = $("sq-ov-attach-x"),
+      startRow = $("sq-ov-startrow"), startBtn = $("sq-ov-start");
 const de = document.documentElement;
 let sessions = [], cur = null, rule = null, timer = 0, lastSig = "", liveAct = null, liveTick = 0;
+let attach = null, sending = false;   // the one staged file and the send in flight (#1154)
+// The supervisor's state, the sessions it hosts, and the job and checkout a start names (#1216). The hosted talk keeps its
+// own read offset and one client id, so each poll appends only the output that arrived since the last one.
+let supNow = null, hosted = [], startInfo = null, termCid = "", termSid = "", termOffset = 0, termNode = null;
 
 // ---- the page context: each page exposes one function; a page without its own gets this one
 const shown = e => !!(e && (e.offsetWidth || e.offsetHeight || e.getClientRects().length)) && !e.closest("#sq-ov");
@@ -254,9 +293,15 @@ function addLine(line) {
 function say(msg) { stat.textContent = msg || ""; }
 // The supervisor's absence gets its own row, so a status message never overwrites it and the panel states it once (#1160).
 function paintSupervisor(info) {
+  supNow = info || null;
   const view = SQ.supervisorView(info);
   supLine.hidden = view.hidden;
   supLine.textContent = view.text;
+  paintStart();
+}
+// The start is offered only while the supervisor is up and the panel shows no session it hosts (#1216).
+function paintStart() {
+  startRow.hidden = !SQ.startOffered(supNow, hosted, cur && cur.sid);
 }
 // The live line keeps its own row: the spinner turns about eight times a second from the last read, and a read sets the count (#1082).
 function setActivity(a) { liveAct = a ? { ...a, got: Date.now() } : null; paintLive(); }
@@ -265,10 +310,10 @@ function paintLive(){
   live.hidden = !t; live.textContent = t;
 }
 function syncSend() {
-  const st = SQ.sendState(cur || rule);
+  const st = SQ.sendState(cur || rule), held = !!(cur && cur.hosted);
   text.disabled = !!(rule || cur) && st.disabled;
-  note.textContent = st.disabled && (rule || cur) ? st.note : NOTE;
-  sendBtn.disabled = !(cur && SQ.canSend(text.value, cur.send));
+  note.textContent = st.disabled && (rule || cur) ? st.note : held ? "It goes to the terminal as typed input." : NOTE;
+  sendBtn.disabled = !cur || SQ.sendLocked(text.value, cur.send, attach, sending);
 }
 function empty(msg) {
   const p = document.createElement("p"); p.className = "sq-empty"; p.textContent = msg;
@@ -284,14 +329,14 @@ function paintPick() {
     b.textContent = [s.src.label, s.name || s.sid.slice(0, 8), s.status].filter(Boolean).join(" · ");
     b.setAttribute("aria-pressed", String(!!cur && cur.sid === s.sid && cur.src.api === s.src.api));
     b.onclick = () => { cur = s; try { sessionStorage.setItem(STORE + "-sid", s.src.api + " " + s.sid); } catch (e) { /* keep it for this view */ }
-                        lastSig = ""; paintPick(); paintHead(); loadConversation(); };
+                        lastSig = ""; paintPick(); paintHead(); readPanel(); };
     return b;
   });
   pick.replaceChildren(p, ...items);
 }
 function paintHead() {
   title.textContent = "Terminal";   // the title names the panel, not the session (owner, 2026-11-01)
-  syncSend();
+  syncSend(); paintStart();
 }
 // A read that fails says nothing about the sessions (owner, 2026-11-01): it used to blank the panel and drop the reader's
 // session, so a reload that landed during a hub restart read as "no session runs here". The panel keeps what it shows and
@@ -304,7 +349,7 @@ function retrySoon() {
 async function loadSessions() {
   let srcs = [];
   try { srcs = await window.SQUAD_OV_SOURCES(); } catch (e) { srcs = []; }
-  const found = []; let rl = null, sup = null, answered = 0;
+  const found = [], hostedRows = []; let rl = null, info = null, start = null, answered = 0;
   for (const src of srcs || []) {
     try {
       const r = await fetch(src.api + "/project", { cache: "no-store" });
@@ -312,7 +357,11 @@ async function loadSessions() {
       const d = await r.json();
       answered++;
       rl = rl || { send: d.send, why: d.why };
-      sup = sup || d.supervisor || null;
+      info = info || d.supervisor || null;
+      if (!start && d.start && typeof d.start.job === "string" && typeof d.start.cwd === "string")
+        start = { api: src.api, label: src.label, job: d.start.job, cwd: d.start.cwd, send: d.send, why: d.why };
+      for (const sid of d.hosted || []) if (typeof sid === "string")
+        hostedRows.push({ sid, name: "Hosted session", status: "hosted", hosted: true, src, send: d.send, why: d.why });
       for (const s of d.sessions || []) found.push({ ...s, src, send: d.send, why: d.why });
     } catch (e) { /* that repository's hub did not answer: its sessions are left out */ }
   }
@@ -325,27 +374,30 @@ async function loadSessions() {
   retryN = 0;
   // One empty answer never takes away a talk the reader is reading (owner, 2026-11-01): the registry scan passes through
   // moments with no session. Only a repeated empty answer may blank it.
-  emptyN = found.length ? 0 : emptyN + 1;
-  if (cur && !found.length && emptyN < 3) {
+  const all = [...found, ...hostedRows];
+  emptyN = all.length ? 0 : emptyN + 1;
+  if (cur && !all.length && emptyN < 3) {
     say("the session list came back empty · asking again");
     retrySoon();
     return;
   }
   rule = rl;
-  sessions = found;
+  sessions = all;
+  hosted = hostedRows.map(row => row.sid);
+  if (start) startInfo = start;
   let kept = "";
   try { kept = sessionStorage.getItem(STORE + "-sid") || ""; } catch (e) { kept = ""; }
-  cur = (cur && found.find(s => s.sid === cur.sid && s.src.api === cur.src.api))
-     || found.find(s => s.src.api + " " + s.sid === kept) || (found.length === 1 ? found[0] : null);
-  paintPick(); paintHead(); paintSupervisor(sup);
-  if (cur) loadConversation();
-  else if (!found.length) empty("No session runs in this project's checkout. Start Claude Code there, then open this again.");
+  cur = (cur && all.find(s => s.sid === cur.sid && s.src.api === cur.src.api))
+     || all.find(s => s.src.api + " " + s.sid === kept) || (all.length === 1 ? all[0] : null);
+  paintPick(); paintHead(); paintSupervisor(info);
+  if (cur) readPanel();
+  else if (!all.length) empty("No session runs in this project's checkout. Start Claude Code there, then open this again.");
   else empty("Pick a session above.");
 }
 // Only the structure that carries meaning in a 400 px panel: headings, bullets, a fence. Everything else stays text.
 // A transcript names a screenshot by the path it was written to: the hub serves that file and the panel draws a thumbnail
 // (owner, 2026-11-01). "[Image #7]" alone names no file, so it stays text.
-const IMG_RE = /^\s*\[Image: source: ([^\]\n]+)\](?:\s.*)?$/;
+const IMG_RE = SQ.IMG_RE;
 function imageNode(path) {
   const t = cur, a = document.createElement("a"), i = document.createElement("img");
   a.className = "sq-img"; a.href = t.src.api + "/image?sid=" + encodeURIComponent(t.sid) + "&p=" + encodeURIComponent(path);
@@ -447,8 +499,10 @@ function clock(iso) {
 }
 function turnNode(t) {
   // A system turn folds to one line (owner, 2026-11-01): a reminder or a hook's note is worth one sentence, not a wall.
+  // A message that opens with the image marker is the owner's attachment, with or without words after it (#1154).
   const onlyImage = IMG_RE.test(String(t.text || ""));
-  if ((t.role === "system" || t.role === "tool") && !onlyImage) {
+  const attached = onlyImage || SQ.attached(String(t.text || ""));
+  if ((t.role === "system" || t.role === "tool") && !attached) {
     const d = document.createElement("details"), sum = document.createElement("summary");
     d.className = "sq-turn sq-" + t.role + " sq-fold";
     const one = String(t.text || "").replace(/\s+/g, " ").trim();
@@ -459,11 +513,11 @@ function turnNode(t) {
   const d = document.createElement("div"), who = document.createElement("span"), head = document.createElement("div");
   // A screenshot is the owner's, whatever the harness calls the turn: it is a bubble of its own on the owner's side
   // (owner, 2026-11-01).
-  const role = onlyImage ? "owner" : t.role;
+  const role = attached ? "owner" : t.role;
   d.className = "sq-turn sq-" + role + (onlyImage ? " sq-onlyimg" : "");
   who.className = "sq-who";
   // The owner's bubble says "you"; the answer's says the model that wrote it, as the transcript names it (owner, 2026-11-02).
-  who.textContent = onlyImage ? "" : t.role === "owner" ? "\u203A you" : String(t.m || "");
+  who.textContent = onlyImage ? "" : attached || t.role === "owner" ? "\u203A you" : String(t.m || "");
   const body = richText(t.text);
   // The clock rides the bubble's own header line, at the right corner, level with the owner's label: floated alone it hung
   // above the bubble and pushed its first line down (owner, 2026-11-02, #1099).
@@ -523,6 +577,7 @@ function repaint(pin) {
   log.scrollTop = SQ.viewAfter(was, again ? again.getBoundingClientRect().top : null, log.scrollTop);
 }
 function paintTalk(pin) {
+  termNode = null; termSid = ""; termOffset = 0;   // a conversation replaces the terminal: a later hosted read starts over
   if (talk.length) repaint(pin); else empty("No turns yet.");
   lastSig = sigOf(talk);
 }
@@ -572,18 +627,99 @@ async function loadConversation() {
 }
 const uuid = () => (crypto.randomUUID ? crypto.randomUUID()
   : "10000000-1000-4000-8000-100000000000".replace(/[018]/g, c => (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)));
-async function send() {
-  const s = cur, body = text.value;
-  if (!s || !SQ.canSend(body, s.send)) return;
-  sendBtn.disabled = true; say("Sending");
+const termClient = () => termCid || (termCid = uuid());
+// The panel reads the talk of a live session, or the scrollback of a session the supervisor hosts (#1216).
+function readPanel() { if (cur && cur.hosted) pollTerminal(); else loadConversation(); }
+function clearTerm() { log.replaceChildren(); termNode = null; lastSig = ""; stick = true; }
+function appendTerm(data) {
+  if (!termNode) { termNode = document.createElement("div"); termNode.className = "sq-txt"; log.append(termNode); }
+  termNode.append(document.createTextNode(data));
+  if (stick) pinBottom();
+}
+// The hosted terminal's scrollback: each read names its offset, so a poll appends only the output that arrived since the
+// last one. A refusal names its reason once; a session the daemon no longer holds takes the panel back to the list.
+async function pollTerminal() {
+  const s = cur;
+  if (!s || ov.hidden) return;
+  if (termSid !== s.sid) { termSid = s.sid; termOffset = 0; clearTerm(); }
   try {
-    const r = await fetch(s.src.api + "/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sid: s.sid, text: body, client_id: uuid() }) });
+    const r = await fetch(s.src.api + "/terminals/read?sid=" + encodeURIComponent(s.sid) + "&client_id=" + termClient() + "&offset=" + termOffset, { cache: "no-store" });
+    if (cur !== s) return;
     const d = await r.json().catch(() => ({}));
-    const st = r.ok ? d.status : "refused";
-    say(st === "sent" ? "Sent: the session's inbox accepted the message." : st === "refused" ? "Refused" + (d.reason ? ": " + d.reason : ": the hub did not send it.") : "Uncertain: the send was interrupted.");
-    if (st === "sent") { text.value = ""; grow(); }
+    if (!r.ok) {
+      say("Refused" + (d.err ? ": " + d.err : ": the hub did not read the terminal."));
+      if (r.status === 403 && String(d.err || "").includes("not started by this daemon")) loadSessions();
+      return;
+    }
+    if (typeof d.data === "string" && d.data) appendTerm(d.data);
+    if (typeof d.offset === "number") termOffset = d.offset;
+  } catch (e) { console.warn("terminal:", e); }
+}
+async function attachTerminal(s) {
+  try {
+    const r = await fetch(s.src.api + "/terminals/attach", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sid: s.sid, client_id: termClient() }) });
+    if (r.ok) return;
+    const d = await r.json().catch(() => ({}));
+    say("Refused" + (d.err ? ": " + d.err : ": the hub did not attach the terminal."));
   } catch (e) { say("Uncertain: no answer from the hub."); }
-  syncSend(); loadConversation();
+}
+// One start the supervisor can honor, then the new session's scrollback in this panel (#1216).
+async function startSession() {
+  if (!startInfo) { say("Refused: the hub named no profile to start a session for."); return; }
+  startBtn.disabled = true; say("Starting a session");
+  try {
+    const r = await fetch(startInfo.api + "/terminals/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ job: startInfo.job, cwd: startInfo.cwd, client_id: termClient() }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || typeof d.session !== "string") {
+      say("Refused" + (d.err ? ": " + d.err : ": the hub did not start a session."));
+      return;
+    }
+    const s = { sid: d.session, name: "Hosted session", status: "hosted", hosted: true, src: startInfo, send: startInfo.send, why: startInfo.why };
+    cur = s;
+    if (!SQ.isHosted(hosted, s.sid)) hosted.push(s.sid);
+    try { sessionStorage.setItem(STORE + "-sid", s.src.api + " " + s.sid); } catch (e) { /* keep it for this view */ }
+    lastSig = ""; paintPick(); paintHead();
+    await attachTerminal(s);
+    say("Reading the terminal.");
+    readPanel();
+  } catch (e) { say("Uncertain: no answer from the hub."); }
+  finally { startBtn.disabled = false; }
+}
+startBtn.addEventListener("click", startSession);
+async function send() {
+  const s = cur, body = text.value, file = attach;
+  if (!s || SQ.sendLocked(body, s.send, file, sending)) return;
+  const route = SQ.composerRoute(!!s.hosted);
+  if (route === "write" && file) { say("A hosted terminal takes text only: remove the file first."); return; }
+  const cid = uuid();   // one client message id for the one send
+  sending = true; syncSend();
+  say(file ? "Sending the message and the file" : "Sending");
+  try {
+    let r;
+    if (route === "write") {
+      r = await fetch(s.src.api + "/terminals/write", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sid: s.sid, text: body + "\n", client_id: termClient() }) });
+    } else if (file) {
+      // One request carries the words and the file, so the hub sends one message under one client message id (#1154).
+      // The page never decides the type: the hub sniffs the bytes of whatever this is.
+      const q = "kind=image&sid=" + encodeURIComponent(s.sid) + "&client_id=" + encodeURIComponent(cid) + "&text=" + encodeURIComponent(body);
+      r = await fetch(s.src.api + "/attach?" + q, { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: file.bytes });
+    } else {
+      r = await fetch(s.src.api + "/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sid: s.sid, text: body, client_id: cid }) });
+    }
+    const d = await r.json().catch(() => ({}));
+    if (route === "write") {
+      say(r.ok ? SQ.sentLine("write") : "Refused" + (d.err ? ": " + d.err : ": the hub did not write to the terminal."));
+      if (r.ok) { text.value = ""; grow(); }
+    } else {
+      const st = r.ok ? d.status : "refused";
+      if (st === "sent") { text.value = ""; grow(); if (file) clearAttach(); }
+      if (file && st !== "sent") clearAttach();   // a refused file clears its chip; the words stay for another try
+      say(st === "sent" ? (file ? "Sent: the session's inbox accepted the message and the file." : SQ.sentLine("send"))
+        : st === "refused" ? "Refused" + (d.reason || d.err ? ": " + (d.reason || d.err) : ": the hub did not send it.")
+        : "Uncertain: the send was interrupted.");
+    }
+  } catch (e) { say("Uncertain: no answer from the hub."); }
+  sending = false; syncSend(); readPanel();
 }
 
 // ---- the composer
@@ -593,6 +729,45 @@ text.addEventListener("keydown", e => {
   if (SQ.composerKey(e.key, e.shiftKey, e.isComposing) === "send") { e.preventDefault(); send(); }
 });
 sendBtn.addEventListener("click", send);
+// The staged file (#1154): one file, one chip, one Remove. It is read here and reaches the session only on the send, so a
+// wrong file is removed before anything is written. A read in flight holds the button; Remove clears the chip at once.
+function paintAttach() {
+  chip.hidden = !attach;
+  if (!attach) { chipImg.removeAttribute("src"); chipImg.alt = ""; chipName.textContent = ""; chip.dataset.ready = "false"; syncSend(); return; }
+  chipImg.src = attach.url; chipImg.alt = attach.name;
+  chipName.textContent = attach.ready ? attach.name : "Reading " + attach.name + "…";
+  chip.dataset.ready = attach.ready ? "true" : "false";
+  syncSend();
+}
+function clearAttach() {
+  if (attach && attach.url) URL.revokeObjectURL(attach.url);
+  attach = null; paintAttach();
+}
+async function stage(file) {
+  if (!file) return;   // a text paste or a drop with no file stays what it was
+  clearAttach();       // one file per message: a second paste or drop replaces the first
+  attach = { file, name: String(file.name || "image"), url: URL.createObjectURL(file), bytes: null, ready: false };
+  paintAttach();
+  let bytes = null;
+  try { bytes = await file.arrayBuffer(); } catch (e) { bytes = null; }
+  if (!attach || attach.file !== file) return;   // removed or replaced while it was read
+  if (!bytes) { say("No attachment: the file could not be read."); clearAttach(); return; }
+  attach.bytes = bytes; attach.ready = true;
+  paintAttach();
+}
+text.addEventListener("paste", e => {
+  const file = SQ.oneFile(e.clipboardData && e.clipboardData.files);
+  if (!file) return;
+  e.preventDefault();
+  stage(file);
+});
+form.addEventListener("dragover", e => { e.preventDefault(); form.classList.add("sq-drop"); });
+form.addEventListener("dragleave", () => form.classList.remove("sq-drop"));
+form.addEventListener("drop", e => {
+  e.preventDefault(); form.classList.remove("sq-drop");
+  stage(SQ.oneFile(e.dataTransfer && e.dataTransfer.files));
+});
+chipX.addEventListener("click", () => { say(""); clearAttach(); text.focus(); });
 function setMenu(open) { menu.hidden = !open; plus.setAttribute("aria-expanded", String(open)); if (open) menu.querySelector("button").focus(); }
 plus.addEventListener("click", () => setMenu(menu.hidden));
 menu.addEventListener("click", e => {
@@ -627,7 +802,7 @@ async function screenshot() {
     const st = r.ok ? d.status : "refused";
     say(st === "sent" ? "Attached: the session's inbox accepted the screenshot." : st === "refused" ? "Refused" + (d.reason || d.err ? ": " + (d.reason || d.err) : ": the hub did not attach it.") : "Uncertain: the attach was interrupted.");
   } catch (e) { say("Uncertain: no answer from the hub."); }
-  loadConversation();
+  readPanel();
 }
 
 // ---- open, close, dock
@@ -694,7 +869,7 @@ function openOverlay(){
   fsInit();
   if (cur && watched === cur.sid && talk.length) paintTalk(true);   // turns the stream pushed while the panel was shut
   loadSessions();
-  clearInterval(timer); timer = setInterval(loadConversation, SQ.POLL_MS);
+  clearInterval(timer); timer = setInterval(readPanel, SQ.POLL_MS);
   clearInterval(liveTick); liveTick = setInterval(paintLive, 120);
   text.focus();
 }
@@ -746,7 +921,7 @@ function frame(t) {
 addEventListener("pointermove", e => { ptr = { x: e.clientX, y: e.clientY }; lastMove = performance.now(); kick(); }, { passive: true });
 // A background tab throttles timers to about once a minute, so a reader who works in another window waits (#1079):
 // the talk is read again the moment this one is looked at or focused. Registered once, never per open.
-const reread = () => { if (!ov.hidden && !document.hidden) loadConversation(); };
+const reread = () => { if (!ov.hidden && !document.hidden) readPanel(); };
 document.addEventListener("visibilitychange", () => { lastT = 0; kick(); reread(); });
 addEventListener("focus", reread);
 if (reduced.addEventListener) reduced.addEventListener("change", kick);
@@ -766,7 +941,7 @@ let build = null;
     } catch (e) { /* the hub did not answer: the page keeps what it shows */ }
   }, SQ.POLL_MS);
 })();
-applyLayout(); syncSend();
+applyLayout(); paintAttach();
 // A reload puts the panel back as it was left (owner, 2026-11-01): the page reloads when the hub build changes, and the
 // terminal closing on that reload loses the reader's place.
 if (wasOpen()) openOverlay();

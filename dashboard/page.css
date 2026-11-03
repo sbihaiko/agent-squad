@@ -4,14 +4,14 @@
   /* The side panel is a drawer docked to the right edge, under the top bar: it takes its own column of the screen, so the diagram stays whole.
      --side-w is its live width (the sheet's height under 900px), and --side-min/--side-max the travel the grip clamps to. The page measures both. */
   body { --side-w:420px; --side-min:320px; --side-max:calc(100vw - 520px); }
-  #left { position:fixed; top:37px; right:0; bottom:0; left:auto; width:var(--side-w,420px); max-height:none; transform:none; border-radius:0; border:0; border-left:1px solid var(--line); box-shadow:-8px 0 32px #0008; z-index:7; padding:8px 16px 16px; overflow:auto; background:var(--panel); }
+  #left { position:fixed; top:37px; right:0; bottom:0; left:auto; width:var(--side-w,420px); max-height:none; transform:none; border-radius:0; border:0; border-left:1px solid var(--line); box-shadow:-8px 0 32px var(--shadow-soft); z-index:7; padding:8px 16px 16px; overflow:auto; background:var(--panel); }
   /* The grip is an 8px strip on either side of the drawer's edge: #side-grip inside, #left::before outside over the map. Both start a drag. */
   #side-grip { position:fixed; top:37px; bottom:0; right:calc(var(--side-w,420px) - 8px); width:8px; cursor:col-resize; }
   #side-grip:focus-visible { outline:1px solid var(--acc); outline-offset:-1px; }
   #left::before { content:""; position:fixed; top:37px; bottom:0; right:var(--side-w,420px); width:8px; z-index:7; cursor:col-resize; }
   #graph { grid-column:1; grid-row:2; }
   .tools { display:flex; flex-wrap:wrap; gap:6px; }
-  button, label.btn, textarea, select, input[type=text], input:not([type]) { background:#0c0e12; color:var(--fg); border:1px solid var(--line); border-radius:4px; padding:4px 8px; font:var(--fs-min) var(--font-mono); }
+  button, label.btn, textarea, select, input[type=text], input:not([type]) { background:var(--inset); color:var(--fg); border:1px solid var(--line); border-radius:4px; padding:4px 8px; font:var(--fs-min) var(--font-mono); }
   button, label.btn { cursor:pointer; }
   /* A file label wraps a hidden input; it takes the same tap height as a button only as a flex box, since min-height has no
      effect on an inline one. */
@@ -21,9 +21,9 @@
   button:hover, label.btn:hover { border-color:var(--acc); }
   button:disabled { opacity:.4; cursor:default; border-color:var(--line); }
   #addbar { margin-top:8px; align-items:center; }
-  #menu { position:fixed; z-index:10; background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:4px; display:none; flex-direction:column; min-width:150px; box-shadow:0 6px 20px #0008; }
+  #menu { position:fixed; z-index:10; background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:4px; display:none; flex-direction:column; min-width:150px; box-shadow:0 6px 20px var(--shadow-soft); }
   #menu button { text-align:left; border:0; background:none; }
-  #menu button:hover { background:#182a40; }
+  #menu button:hover { background:var(--raise); }
   #menu .sep { color:var(--mute); font-size:var(--fs-min); padding:4px 8px 2px; text-transform:uppercase; letter-spacing:.06em; }
   input[type=file] { display:none; }
   #chiprow { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:0 0 8px; font-size:var(--fs-min); color:var(--mute); }
@@ -50,7 +50,7 @@
   #review textarea { min-height:64px; font:var(--fs-min)/1.5 var(--font-mono); }
   #review .opts { display:grid; grid-template-columns:auto 1fr; gap:4px 8px; align-items:center; }
   #review button.lnk { background:none; border:0; color:var(--acc); padding:0; text-align:left; cursor:pointer; font:inherit; }
-  .ro { background:#0c0e12; border:1px dashed var(--line); border-radius:4px; padding:6px 8px; font:var(--fs-min)/1.5 var(--font-mono); word-break:break-word; }
+  .ro { background:var(--inset); border:1px dashed var(--line); border-radius:4px; padding:6px 8px; font:var(--fs-min)/1.5 var(--font-mono); word-break:break-word; }
   ul.errs { margin:0; padding-left:18px; color:var(--err); }
   .note { color:var(--mute); font-size:var(--fs-min); }
   .msg-bad { color:var(--err); }
@@ -63,7 +63,7 @@
   .state-retry { margin-left:6px; }
   #graph { display:flex; flex-direction:column; min-width:0; min-height:0; }
   #mapbox { position:relative; flex:1; min-width:0; min-height:0; }
-  #recbad { flex:none; padding:6px 14px; background:#2a2212; border-bottom:2px solid var(--warn); color:var(--warn); font-size:var(--fs-min); font-weight:600; }
+  #recbad { flex:none; padding:6px 14px; background:var(--tint-warn); border-bottom:2px solid var(--warn); color:var(--warn); font-size:var(--fs-min); font-weight:600; }
   #recbad[hidden] { display:none; }
   #totals { display:none; flex:none; align-items:center; gap:4px 22px; flex-wrap:wrap; padding:6px 14px; background:var(--panel); border-top:1px solid var(--line); font-size:var(--fs-min); color:var(--mute); }
   #totals.on { display:flex; }
@@ -77,7 +77,7 @@
   #progress .cell { display:inline-flex; align-items:baseline; gap:6px; cursor:help; }
   #progress .cell b { color:var(--fg); font:600 var(--fs-min) var(--font-mono); }
   #progress .past { color:var(--warn); }
-  svg#map { position:absolute; inset:0; width:100%; height:100%; background:#0c0e12; cursor:grab; touch-action:none; user-select:none; }
+  svg#map { position:absolute; inset:0; width:100%; height:100%; background:var(--inset); cursor:grab; touch-action:none; user-select:none; }
   svg#map.panning { cursor:grabbing; }
   #view { position:absolute; top:12px; right:12px; display:flex; gap:6px; align-items:center; }
   body:not(.noside) #view { right:calc(var(--side-w) + 12px); }   /* the zoom buttons sit just left of the open drawer */
@@ -87,7 +87,7 @@
   #replay { display:none; align-items:center; gap:4px; flex:0 1 auto; min-width:0; grid-column:2; justify-self:center; padding:2px 0 0; border-top:1px solid var(--line); pointer-events:auto; }
   #replay input[type=range] { flex:0 1 150px; width:150px; min-width:24px; accent-color:var(--acc); }
   #replay button { flex:none; height:var(--ctl-h); padding:0 3px; background:none; border:0; border-radius:3px; color:var(--mute); font:var(--fs-min) var(--font-mono); cursor:pointer; }
-  #replay button:hover:not(:disabled) { background:#2e3846; color:var(--fg); }
+  #replay button:hover:not(:disabled) { background:var(--hover); color:var(--fg); }
   #replay button:disabled { opacity:.35; cursor:default; }
   #replay button, #r-pos { white-space:nowrap; }
   #r-pos { flex:none; color:var(--mute); font:var(--fs-min) var(--font-mono); text-align:right; }
@@ -102,9 +102,9 @@
   body:not(.noside) #footer { right:calc(var(--side-w) + 12px); }
   #hint { grid-column:1; justify-self:start; color:var(--mute); font-size:var(--fs-min); white-space:nowrap; flex:0 0 auto; }
   .card { cursor:move; }
-  .card rect { fill:var(--card); stroke:#3a4250; stroke-width:1.2; }
-  .card:hover rect { stroke:var(--acc); }
-  .card.sel rect { stroke:var(--acc); fill:#182a40; stroke-width:2; }
+  .card rect { fill:var(--card); stroke:var(--line); stroke-width:1.2; }
+  .card:hover rect { stroke:var(--edge); }
+  .card.sel rect { stroke:var(--edge); fill:var(--raise); stroke-width:2; }
   .card.err rect { stroke:var(--err); }
   .card text { pointer-events:none; font:var(--fs-min) var(--font-mono); }
   .card .nm { fill:var(--fg); font-size:var(--fs-min); font-weight:600; }
@@ -112,40 +112,40 @@
   .card .bd-e { fill:var(--err); font-size:var(--fs-min); }
   .card .bd-o { fill:var(--warn); font-size:var(--fs-min); }
   .card .st { fill:var(--mute); font-size:var(--fs-min); }
-  .card .bd-c { fill:#ffb8b8; font-size:var(--fs-min); font-weight:600; }   /* a failure reason: 12 px, light on the dark red card */
+  .card .bd-c { fill:var(--err-strong); font-size:var(--fs-min); font-weight:600; }   /* a failure reason: 12 px, light on the dark red card */
   .card .rw { fill:var(--ok); font-size:var(--fs-min); font-weight:600; }   /* a redo that passed, or a later attempt */
   .card.child.superseded > g { opacity:.72; }   /* a failed attempt a later one replaced: still failed, only quieter */
   .card .gl { fill:var(--mute); font:bold var(--fs-body) sans-serif; pointer-events:none; }   /* the state glyph: status is never hue alone */
 /* The kind icon (#914): one color per kind, a glyph in the chip. The chip carries no stroke of its own, even when the card is selected. */
 .card .kc { stroke:none; fill:var(--mute); }
-.card .ki { fill:#0d1117; font:bold 13px sans-serif; pointer-events:none; }
-.card.k-agent .kc { fill:#7aa2f7; } .card.k-gate .kc { fill:#bb9af7; } .card.k-action .kc { fill:#73daca; }
-.card.k-wait .kc { fill:#ff9e64; } .card.k-loop .kc { fill:#7dcfff; } .card.k-each .kc { fill:#c0caf5; }
-.card.k-dispatch .kc { fill:#e0af68; }
+.card .ki { fill:var(--well); font:bold 13px sans-serif; pointer-events:none; }
+.card.k-agent .kc { fill:var(--s1); } .card.k-gate .kc { fill:var(--s2); } .card.k-action .kc { fill:var(--s3); }
+.card.k-wait .kc { fill:var(--s5); } .card.k-loop .kc { fill:var(--s6); } .card.k-each .kc { fill:var(--s7); }
+.card.k-dispatch .kc { fill:var(--s8); }
 /* The model line (#914): its own row, a little smaller than the other card text, so a typical name fits without a cut. */
 .card .kd.model { font-size:var(--fs-min,13px); }
-  pre.ev { margin:4px 0 8px; padding:6px; background:#07090c; border:1px solid var(--line); border-radius:4px; font:var(--fs-min)/1.4 var(--font-mono); white-space:pre-wrap; word-break:break-all; max-height:200px; overflow:auto; color:#e8b9b9; }
+  pre.ev { margin:4px 0 8px; padding:6px; background:var(--bg); border:1px solid var(--line); border-radius:4px; font:var(--fs-min)/1.4 var(--font-mono); white-space:pre-wrap; word-break:break-all; max-height:200px; overflow:auto; color:var(--err-strong); }
   .cause { margin-top:6px; } .cause b.bad { color:var(--err); }
   #edges g.edge.child { pointer-events:none; }
   #edges g.edge.child line.ln { stroke-dasharray:4 3; }
-  .card.o-pass rect { stroke:var(--ok); fill:#12261d; }
-  .card.o-fail rect { stroke:var(--err); fill:#341a1d; stroke-width:1.8; }
+  .card.o-pass rect { stroke:var(--ok); fill:var(--tint-ok); }
+  .card.o-fail rect { stroke:var(--err); fill:var(--tint-err); stroke-width:1.8; }
   .card.o-fail .gl { fill:var(--err); } .card.o-pass .gl { fill:var(--ok); } .card.o-deadline .gl, .card.o-needs-human .gl { fill:var(--warn); } .card.o-started .gl { fill:var(--acc); } .card.running .gl { fill:var(--run); }
-  .card.o-deadline rect, .card.o-needs-human rect { stroke:var(--warn); fill:#2a2212; }
+  .card.o-deadline rect, .card.o-needs-human rect { stroke:var(--warn); fill:var(--tint-warn); }
   .card.o-not-run rect { stroke:var(--mute); stroke-dasharray:2 4; }
   .card.o-started rect { stroke:var(--acc); stroke-dasharray:4 3; }
-  .card.sel rect { stroke:var(--acc); stroke-width:2; }
-  .runbox { background:#0c0e12; border:1px solid var(--line); border-radius:4px; padding:8px; font:var(--fs-min)/1.6 var(--font-mono); }
+  .card.sel rect { stroke:var(--edge); stroke-width:2; }
+  .runbox { background:var(--inset); border:1px solid var(--line); border-radius:4px; padding:8px; font:var(--fs-min)/1.6 var(--font-mono); }
   .runbox b { color:var(--fg); }
   .state-completed { color:var(--ok); } .state-none { color:var(--none); } .state-running { color:var(--acc); } .state-stalled { color:var(--warn); font-weight:600; }
-  .card.running rect { stroke:var(--run); stroke-width:3.5; fill:#0f262a; }   /* running: a thick teal outline and the ▶ glyph; nothing moves, so prefers-reduced-motion has nothing to switch off */
+  .card.running rect { stroke:var(--run); stroke-width:3.5; fill:var(--tint-run); }   /* running: a thick teal outline and the ▶ glyph; nothing moves, so prefers-reduced-motion has nothing to switch off */
   /* The group card: one square per child; the fill and the glyph both show the outcome. Selectors avoid `.card.<x> rect`, which the legend guard reads as a card color. */
   .group-card { cursor:pointer; }
   .group-card.s-passed > rect { stroke:var(--ok); } .group-card.s-failed > rect { stroke:var(--err); stroke-width:1.8; }
   .group-card.s-deadline > rect, .group-card.s-needs-human > rect { stroke:var(--warn); } .group-card.s-running > rect { stroke:var(--run); stroke-width:3.5; }
   .group-card.s-passed .gl { fill:var(--ok); } .group-card.s-failed .gl { fill:var(--err); } .group-card.s-running .gl { fill:var(--run); }
   .group-card.s-deadline .gl, .group-card.s-needs-human .gl { fill:var(--warn); }
-  .group-card.sel > rect { stroke:var(--acc); stroke-width:2.5; }
+  .group-card.sel > rect { stroke:var(--edge); stroke-width:2.5; }
   .chip-sw { display:inline-block; border:1px solid var(--line); border-radius:999px; padding:0 8px; font-size:var(--fs-min); font-weight:600; }
   .chip-sw.v-ok { border-color:var(--ok); color:var(--ok); } .chip-sw.v-bad { border-color:var(--err); color:var(--err); }
   .chip-sw.v-wait { border-color:var(--wait); color:var(--wait); } .chip-sw.v-none { border-color:var(--none); color:var(--none); }
@@ -157,39 +157,39 @@
   .b.failed { color:var(--err); } .b.needs-human { color:var(--warn); } .b.handled { color:var(--ok); }
   .b.running { color:var(--run); } .b.starting { color:var(--run); border-style:dotted; } .b.unreadable { color:var(--warn); border-style:dotted; } .b.stalled { color:var(--wait); border-style:dashed; }
   .b.no-verdict-yet { color:var(--none); }
-  .card:focus { outline:var(--focus-w) solid var(--focus); } .card:focus-visible > rect { stroke:#fff; stroke-width:2.5; }   /* the keyboard ring: a white outline, like a hovered square */
+  .card:focus { outline:var(--focus-w) solid var(--focus); } .card:focus-visible > rect { stroke:var(--highlight); stroke-width:2.5; }   /* the keyboard ring: a white outline, like a hovered square */
   .group-card .sq { cursor:pointer; }
-  .group-card .sq rect { fill:#1a1f27; stroke:#556; stroke-width:1.2; }
-  .group-card .sq text { font:bold var(--fs-min) sans-serif; fill:#8b97a8; }
-  .group-card .sq.s-passed rect { fill:#12261d; stroke:var(--ok); } .group-card .sq.s-passed text { fill:var(--ok); }
-  .group-card .sq.s-failed rect { fill:#2a1517; stroke:var(--err); } .group-card .sq.s-failed text { fill:var(--err); }
-  .group-card .sq.s-deadline rect, .group-card .sq.s-needs-human rect { fill:#2a2212; stroke:var(--warn); } .group-card .sq.s-deadline text, .group-card .sq.s-needs-human text { fill:var(--warn); }
-  .group-card .sq.s-running rect { fill:#12263d; stroke:var(--run); } .group-card .sq.s-running text { fill:var(--run); }
+  .group-card .sq rect { fill:var(--inset); stroke:var(--line); stroke-width:1.2; }
+  .group-card .sq text { font:bold var(--fs-min) sans-serif; fill:var(--mute); }
+  .group-card .sq.s-passed rect { fill:var(--tint-ok); stroke:var(--ok); } .group-card .sq.s-passed text { fill:var(--ok); }
+  .group-card .sq.s-failed rect { fill:var(--tint-err); stroke:var(--err); } .group-card .sq.s-failed text { fill:var(--err); }
+  .group-card .sq.s-deadline rect, .group-card .sq.s-needs-human rect { fill:var(--tint-warn); stroke:var(--warn); } .group-card .sq.s-deadline text, .group-card .sq.s-needs-human text { fill:var(--warn); }
+  .group-card .sq.s-running rect { fill:var(--tint-acc); stroke:var(--run); } .group-card .sq.s-running text { fill:var(--run); }
   .group-card .sq.s-started rect { stroke:var(--acc); stroke-dasharray:3 2; }
   .group-card .sq.sup rect { stroke-dasharray:3 2; }   /* a failed child a later attempt replaced */
-  .group-card .sq:hover rect { stroke:#fff; }
-  .group-card .sq:focus { outline:var(--focus-w) solid var(--focus); } .group-card g.sq.sq rect.fr { fill:none; stroke:none; } .group-card g.sq.sq:focus-visible rect.fr { stroke:#fff; stroke-width:2; }   /* the keyboard ring: an outer white ring, so a focused selected square still differs from a selected one */
-  .group-card .sq.sel rect { stroke:#fff; stroke-width:2.5; }
+  .group-card .sq:hover rect { stroke:var(--highlight); }
+  .group-card .sq:focus { outline:var(--focus-w) solid var(--focus); } .group-card g.sq.sq rect.fr { fill:none; stroke:none; } .group-card g.sq.sq:focus-visible rect.fr { stroke:var(--highlight); stroke-width:2; }   /* the keyboard ring: an outer white ring, so a focused selected square still differs from a selected one */
+  .group-card .sq.sel rect { stroke:var(--highlight); stroke-width:2.5; }
   table.roster { width:100%; border-collapse:collapse; font:var(--fs-min) var(--font-mono); }
   table.roster th { text-align:left; color:var(--mute); padding:2px 4px; font-weight:400; }
   table.roster td { padding:2px 4px; border-top:1px solid var(--line); white-space:nowrap; max-width:110px; overflow:hidden; text-overflow:ellipsis; }
   table.roster tr[data-child] { cursor:pointer; }
-  table.roster tr[data-child]:hover { background:#1e2836; }
-  table.roster tr.sel { background:#182a40; outline:1px solid var(--acc); }
+  table.roster tr[data-child]:hover { background:var(--hover); }
+  table.roster tr.sel { background:var(--raise); outline:1px solid var(--acc); }
   table.roster .m { font-weight:bold; }
   table.roster tr.s-passed .m { color:var(--ok); } table.roster tr.s-failed .m { color:var(--err); }
   table.roster tr.s-deadline .m, table.roster tr.s-needs-human .m { color:var(--warn); } table.roster tr.s-running .m { color:var(--run); }
   table.tl { width:100%; border-collapse:collapse; font:var(--fs-min) var(--font-mono); }
   table.tl td { padding:1px 4px; border-bottom:1px solid var(--line); color:var(--mute); }
-  #edges line.ln { stroke:#4a5568; stroke-width:1.3; }
+  #edges line.ln { stroke:var(--line-strong); stroke-width:1.3; }
   #edges line.hit { stroke:transparent; stroke-width:12; cursor:pointer; }
   #edges g.edge:hover line.ln { stroke:var(--acc); }
   #edges g.edge.sel line.ln { stroke:var(--acc); stroke-width:2.4; }
-  .port { fill:var(--bg); stroke:#6b7686; stroke-width:1.4; cursor:crosshair; }
+  .port { fill:var(--bg); stroke:var(--line-strong); stroke-width:1.4; cursor:crosshair; }
   .port:hover, .card.drop .port.in { fill:var(--drop); stroke:var(--drop); }
-  .card.drop rect { stroke:var(--drop); stroke-width:2; fill:#2a1f33; }
+  .card.drop rect { stroke:var(--drop); stroke-width:2; fill:var(--tint-drop); }
   #rubber { stroke:var(--acc); stroke-width:1.6; stroke-dasharray:5 4; pointer-events:none; }
-  #edges marker path { fill:#4a5568; }
+  #edges marker path { fill:var(--line-strong); }
   /* The legend is a strip on the map's right edge, under the zoom controls: always expanded; the graph keeps the remaining width. */
   #legend { position:absolute; right:12px; top:52px; z-index:4; box-sizing:border-box; width:220px; max-height:calc(100% - 52px - var(--legend-bottom, 40px)); overflow:auto; overscroll-behavior:contain; pointer-events:auto; background:var(--panel); border:1px solid var(--line); border-radius:6px; color:var(--mute); font-size:var(--fs-min); }
   #legend-list { display:flex; flex-direction:column; padding:4px 6px; }
@@ -202,7 +202,7 @@
   /* A run-state row carries a full pill, too wide to sit beside its words: the pill takes the row and the description goes under it. */
   .lg { display:inline-flex; align-items:center; gap:5px; }
   #legend .card, #help .card { cursor:default; }
-  #help { position:fixed; inset:0; z-index:20; background:#000a; display:flex; align-items:center; justify-content:center; }
+  #help { position:fixed; inset:0; z-index:20; background:var(--scrim); display:flex; align-items:center; justify-content:center; }
   #help[hidden] { display:none; }
   #help .box { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:8px 18px 14px; max-width:720px; max-height:86vh; overflow:auto; }
   #help h2 { font-size:var(--fs-min); text-transform:uppercase; letter-spacing:.06em; color:var(--mute); margin:14px 0 6px; }
@@ -228,15 +228,15 @@
   #modesw button { border-radius:0; }
   #modesw button:first-child { border-radius:4px 0 0 4px; }
   #modesw button:last-child { border-radius:0 4px 4px 0; margin-left:-1px; }
-  #modesw button.on { background:#182a40; border-color:var(--acc); }
+  #modesw button.on { background:var(--raise); border-color:var(--acc); }
   body:not(.edit) .edit-only { display:none !important; }
   #fmenu { position:relative; }
-  #fmenu summary { list-style:none; cursor:pointer; background:#0c0e12; border:1px solid var(--line); border-radius:4px; padding:4px 8px; font:var(--fs-min) var(--font-mono); }
+  #fmenu summary { list-style:none; cursor:pointer; background:var(--inset); border:1px solid var(--line); border-radius:4px; padding:4px 8px; font:var(--fs-min) var(--font-mono); }
   #fmenu summary::-webkit-details-marker { display:none; }
   #fmenu[open] summary { border-color:var(--acc); }
-  #fmenu .drop { position:absolute; right:0; top:calc(100% + 4px); z-index:12; display:flex; flex-direction:column; gap:2px; min-width:230px; background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:4px; box-shadow:0 6px 20px #0008; }
+  #fmenu .drop { position:absolute; right:0; top:calc(100% + 4px); z-index:12; display:flex; flex-direction:column; gap:2px; min-width:230px; background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:4px; box-shadow:0 6px 20px var(--shadow-soft); }
   #fmenu .drop button, #fmenu .drop label.btn { text-align:left; border:0; background:none; }
-  #fmenu .drop button:hover, #fmenu .drop label.btn:hover { background:#182a40; }
+  #fmenu .drop button:hover, #fmenu .drop label.btn:hover { background:var(--raise); }
   #fmenu .drop .sep { color:var(--mute); font-size:var(--fs-min); padding:4px 8px 0; }
   #fmenu .drop .note { padding:2px 8px; }
   #addbar { position:absolute; bottom:34px; left:12px; z-index:3; background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:6px; max-width:calc(100% - 244px); }
@@ -253,14 +253,14 @@
 #scriptview[hidden] { display: none; }
 .script-diagram { font: var(--fs-min) sans-serif; }
 .script-diagram .batch-name { font-weight: 600; font-size: var(--fs-body); fill: currentColor; }
-.script-diagram .step rect { fill: #eef3fb; stroke: #4a6fa5; stroke-width: 1.5; }
-.script-diagram .step.manual rect { fill: #fff6e0; stroke: #b7791f; stroke-dasharray: 6 4; }
-.script-diagram .step.sensitive rect { stroke: #b03030; stroke-width: 2.5; }
-.script-diagram .step-id { font-weight: 600; fill: #222; }
-.script-diagram .step-text { fill: #222; }
-.script-diagram .step-tags { fill: #555; font-size: var(--fs-min); }
-.script-diagram .flow { stroke: #777; stroke-width: 1.5; fill: none; }
-.script-diagram marker path { fill: #777; }
+.script-diagram .step rect { fill: var(--ink-strong); stroke: var(--s1); stroke-width: 1.5; }
+.script-diagram .step.manual rect { fill: var(--highlight); stroke: var(--warn); stroke-dasharray: 6 4; }
+.script-diagram .step.sensitive rect { stroke: var(--err); stroke-width: 2.5; }
+.script-diagram .step-id { font-weight: 600; fill: var(--bg); }
+.script-diagram .step-text { fill: var(--bg); }
+.script-diagram .step-tags { fill: var(--mute); font-size: var(--fs-min); }
+.script-diagram .flow { stroke: var(--mute); stroke-width: 1.5; fill: none; }
+.script-diagram marker path { fill: var(--mute); }
 
 /* A window under 1024px starts with a narrower drawer; --side-max stays 520px short of the viewport, so 504px of travel at 1024. */
 @media (max-width: 1024px) { body { --side-w:360px; } }

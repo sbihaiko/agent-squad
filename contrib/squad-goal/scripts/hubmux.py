@@ -146,7 +146,7 @@ CSS = ("*{box-sizing:border-box}"
        "ul{list-style:none;padding:0;margin:14px 0 0;display:grid;gap:8px}"
        "li{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:11px 14px;"
        "display:flex;align-items:center;gap:10px;flex-wrap:wrap;transition:border-color .12s}"
-       "li:hover{border-color:#3b4454}li:focus-within{border-color:var(--acc)}"
+       "li:hover{border-color:var(--line-strong)}li:focus-within{border-color:var(--acc)}"
        ".dot{width:8px;height:8px;border-radius:50%;background:var(--mute);flex:none}"
        ".dot.on{background:var(--ok);box-shadow:0 0 0 3px rgb(62 207 142 / .16)}"
        ".dot.bad{background:var(--err);box-shadow:0 0 0 3px rgb(255 107 107 / .16)}"
@@ -281,6 +281,7 @@ def server(port, apps, on_new=None):
         def answer_card(self, a): return self.profile.answer_card(self, a)   # the owner's answer to a session's question card (#1093)
         def terminal_read(self, a): return self.profile.terminal_read(self, a)   # a hosted session's scrollback (ADR-0152 rule 9)
         def terminal_post(self, a, op, keys): return self.profile.terminal_post(self, a, op, keys)   # an attach, a detach or an input
+        def terminal_start(self, a): return self.profile.terminal_start(self, a)   # a session the supervisor starts (#1216)
         def terminal_call(self, a, op, **fields): return self.profile.terminal_call(self, a, op, **fields)
         def send_attach(self, a, kind=None): return self.profile.send_attach(self, a, kind)   # one attach route (#1151)
         def answer(self, code, out): return self.profile.answer(self, code, out)

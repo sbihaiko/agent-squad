@@ -503,11 +503,13 @@ def test_the_page_draws_the_pending_mark_only_on_a_pending_row(hub):
     warn = re.search(r"--warn:(#[0-9a-fA-F]{6})", root)
     assert warn, f"the page defines no --warn, so the pending mark has no colour: {root}"
     mark = next(line for line in mod.PAGE.splitlines() if line.startswith("#bbody .it .pnd"))
-    ink = re.search(r"color:(#[0-9a-fA-F]{6})", mark)
-    assert ink, f"the mark names no ink colour: {mark}"
+    ink = re.search(r"color:var\((--[\w-]+)\)", mark)
+    assert ink, f"the mark names no ink role: {mark}"
+    ink_hex = re.search(rf"{ink.group(1)}:(#[0-9a-fA-F]{{6}})", root)
+    assert ink_hex, f"the mark's ink role {ink.group(1)} is not in the token block"
     assert "background:var(--warn)" in mark and "font-weight:700" in mark, f"the mark does not read at a glance: {mark}"
-    ratio = _contrast(ink[1], warn[1])
-    assert ratio >= 4.5, f"the pending mark's {ink[1]} on {warn[1]} reads {ratio:.1f}:1, under the AA floor for its small text"
+    ratio = _contrast(ink_hex[1], warn[1])
+    assert ratio >= 4.5, f"the pending mark's {ink_hex[1]} on {warn[1]} reads {ratio:.1f}:1, under the AA floor for its small text"
 
 
 def test_the_board_pass_reads_the_item_id_the_record_is_keyed_by(hub, monkeypatch):
