@@ -13,18 +13,28 @@ mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null ||
 # A comment named <n>-status~<tag>.md or <n>-delivery~<tag>.md is the one loop comment of that kind on its issue (#328): the body gets a hidden
 # marker on its first line, the comment that holds the marker is edited (PATCH) when its body differs, nothing is written when it is the
 # same, and a comment is posted only when none holds the marker. Any other name is posted as a new comment. Sets $1.did to what it did.
-# A comment named <n>-unstart~<tag>.md is a removal, never a post (#673, issue_ledger.py rearm): every comment of the issue whose
-# body starts SQUAD-NOT-STARTABLE: is deleted, and no other. The body of the queued file is not read.
+# A comment named <n>-unstart~<tag>.md is a removal, never a post (#673, issue_ledger.py rearm; #1297): every comment of the issue
+# whose body starts SQUAD-NOT-STARTABLE: is deleted, and so is the frozen:not-startable label the marker wrote, because the label
+# alone keeps both dispatchers skipping with no evidence left on the issue. A 404 on the label is an issue that never carried it.
+# No other comment goes. The body of the queued file is not read.
 # A comment named <n>-terminal-closed-<pid>.md is the janitor's Closed comment (#777): the issue state is read again first. An issue
 # open again drops it (.dropped, a DROPPED line); an unread state keeps it queued for a retry.
-cq_unstart() { local repo=$1 n=$2 file=$3 pg page ids=() id k=0
+cq_unstart() { local repo=$1 n=$2 file=$3 pg page ids=() id k=0 lab=frozen:not-startable lo lrc lw=absent
   for pg in 1 2 3 4 5 6 7 8 9 10; do
     page=$(gh_api "repos/$repo/issues/$n/comments?per_page=100&page=$pg") || return 1
     while read -r id; do [ -n "$id" ] && ids+=("$id"); done < <(printf '%s' "$page" | jq -r '.[]|select((.body//"")|startswith("SQUAD-NOT-STARTABLE:"))|.id' 2>/dev/null)
     [ "$(printf '%s' "$page" | jq 'length' 2>/dev/null)" = 100 ] || break
   done
   for id in ${ids[@]+"${ids[@]}"}; do gh_send --method DELETE "repos/$repo/issues/comments/$id" >/dev/null 2>&1 || return 1; k=$((k + 1)); done
-  echo "removed $k" > "$file.did"; }
+  # The label is the half a dispatcher reads first (#1297): the label goes with the marker, or the issue sits skipped with no
+  # evidence on it. A 404 is an issue that never carried the label, so it is the same outcome, not a failure.
+  lo=$(gh_send --method DELETE "repos/$repo/issues/$n/labels/$lab" 2>&1); lrc=$?
+  case "$lrc" in
+    0) lw=removed;;
+    2) case "$lo" in *"GitHub refused: Not Found"*|*"GitHub refused: Label does not exist"*) ;; *) return 1;; esac;;
+    *) return 1;;
+  esac
+  echo "removed $k comment(s), label $lab $lw" > "$file.did"; }
 cq_send() { local repo=$1 n=$2 b=$3 file=$4 t mk cid
   t=${b#*#}; t=${t#*-}; case "$t" in status~*) mk=status;; delivery~*) mk=delivery;; unstart~*) cq_unstart "$repo" "$n" "$file"; return;; esac
   if [ -z "${mk:-}" ]; then gh_send "repos/$repo/issues/$n/comments" -F body=@"$file" >/dev/null 2>&1 && echo posted > "$file.did"; return; fi
