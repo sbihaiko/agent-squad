@@ -40,10 +40,11 @@ reader for was its own drift.
 6. **A restart is the owner's.** `watchd.sh start` records the sha the drivers start on in
    `$SG_STATE/driver.sha`. A later publish to another sha is named once per publish as a pending restart.
    The pass never starts or stops a process.
-7. **Live `models.json` is owner config, read and never compared.** The pass does not compare it with
-   the repository copy each cycle. It names a change of its digest once as a hand edit, then stays silent
-   until the digest changes. A stray `.bak-*` copy in the live `scripts/` is listed once as clutter and
-   is never removed.
+7. **Live `models.json` is owner config.** A hand-run publish and the hub compare repository and live chains,
+   reporting each differing head or order and naming both chains. The publish never writes live `models.json`.
+   The per-cycle `live-guard` pass, including its publish and check calls, does not compare chains. It names a
+   change of the live file's digest once as a hand edit, then stays silent until the digest changes. A stray
+   `.bak-*` copy in live `scripts/` is listed once as clutter and is never removed.
 8. **The pass never fails the cycle.** A drift, and a publish that could not land, are reported and the
    pass exits 0: the cycle's other steps keep their beat, and a source tree the publish cannot resolve
    is a defect of that tree, named every cycle until the tree drops it.

@@ -3,7 +3,7 @@
 usage: hub.py [port]   default 7700, loopback only. Read-only: it discovers servers via ps/lsof and reads record.jsonl."""
 import datetime as dt, glob, hashlib, html, importlib.util, itertools, json, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, pathlib, urllib.parse, urllib.request
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
-import agyquota, board_lag, chainhealth, ghread, ghthrottle, hubstream, issue_ledger, modelreg, provkey, session_card, session_send, sessions   # the chains and the one registry resolve a model (ADR-0147); ghread is the one GitHub door (ADR-0277); the ledger is the one source of a hold (#1173)
+import agyquota, board_lag, chainhealth, ghread, ghthrottle, hubstream, issue_ledger, modelreg, models_chains, provkey, session_card, session_send, sessions   # the chains and the one registry resolve a model (ADR-0147); ghread is the one GitHub door (ADR-0277); the ledger is the one source of a hold (#1173)
 from issue_state import board_state, KINDS, TEST_CASE_TITLE, _utc
 import http.client
 import zoneinfo
@@ -2572,6 +2572,28 @@ def _billed(src, model, spend):
     if src == "both": return spend
     return spend if bool(SUBSCRIPTION.match(model)) == (src == "sub") else 0.0
 
+PACE_WINDOW_H = 24
+
+def spend_pace(runs, calls, now, src="both", window_h=PACE_WINDOW_H):
+    """The Spend box's two readings (#1251), computed here so the page only prints them. A finished run counts at the hour it
+    ended, a review call at the hour it started. The window is the last `window_h` one-hour slots back from `now`; a slot with
+    no run and no call is an idle hour, kept out of the median (never a zero). last60 sums what ended in the last 60 minutes.
+    `unpriced` counts the window's calls the price table cannot price: they carry 0.0 and are named, never hidden."""
+    slots, unpriced = {}, 0
+    def _slot(t):
+        age = now - t
+        return int(age // 3600) if 0 <= age < window_h * 3600 else None
+    for r in runs:
+        k = _slot(r.get("t1", r["t0"])) if r.get("done") else None
+        if k is not None: slots[k] = slots.get(k, 0.0) + r["spend"]
+    for c in calls:
+        k = _slot(c["t0"])
+        if k is None: continue
+        slots[k] = slots.get(k, 0.0) + _billed(src, c["model"], c["spend"]); unpriced += bool(c["unpriced"])
+    last60 = sum(r["spend"] for r in runs if r.get("done") and 0 <= now - r.get("t1", r["t0"]) < 3600) + sum(_billed(src, c["model"], c["spend"]) for c in calls if 0 <= now - c["t0"] < 3600)
+    return {"window_hours": window_h, "active_hours": len(slots), "idle_hours": window_h - len(slots),
+            "median_hour": round(st.median(slots.values()), 2) if slots else None, "last60": round(last60, 2), "unpriced": unpriced}
+
 def stats(period, src="both"):
     fmt = {"hour": "%Y-%m-%d %H:00", "day": "%Y-%m-%d", "month": "%Y-%m"}[period]
     b = {}; amt = (lambda r: r["spend"]) if src == "both" else (lambda r: r["sub"] if src == "sub" else r["api"])
@@ -2621,7 +2643,8 @@ def stats(period, src="both"):
         return box
     models = sorted(({**{k: v for k, v in x.items() if k not in ("src", "srcs")}, "spend": round(x["spend"], 2), "box": _box(x)} for x in mt.values()),
                     key=lambda x: -(x["in"] + x["out"]))
-    return {"buckets": rows, "totals": {**{k: round(v, 2) for k, v in tot.items() if not k.startswith("tok_")}, **{k: tot[k] for k in ("tok_today", "tok_month", "tok_all")}}, "models": models}
+    pace = spend_pace(allr, calls, time.time(), src)
+    return {"buckets": rows, "pace": pace, "totals": {**{k: round(v, 2) for k, v in tot.items() if not k.startswith("tok_")}, **{k: tot[k] for k in ("tok_today", "tok_month", "tok_all")}}, "models": models}
 
 def adapter_errors():
     """Every `adapter_error` run verdict of the run folders still on disk, counted by (model, backend, cause) (#698).
@@ -4739,7 +4762,7 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 /* Monitor (#983): calm flight instruments in the sidebar. Three gauges, three annunciator tiles, two rows. No motion
    but the needle's own short move, and none at all under reduced motion. */
 #inst .igs{display:flex;justify-content:space-between;gap:4px;margin:2px 0 8px}#inst .ig{display:flex;flex-direction:column;align-items:center;flex:1;min-width:0}
-#inst .ig svg{display:block}#inst .ig .gt{fill:none;stroke:var(--line);stroke-width:3;stroke-linecap:round}#inst .ig .gf{fill:none;stroke-width:3;stroke-linecap:round}
+#inst .ig svg{display:block}#inst .ig .gt{fill:none;stroke:var(--line);stroke-width:3;stroke-linecap:round}#inst .ig .gm{stroke:var(--mute);stroke-width:1;stroke-linecap:round}#inst .ig .gf{fill:none;stroke-width:3;stroke-linecap:round}
 #inst .ig .gn{stroke:var(--fg);stroke-width:1.5;stroke-linecap:round;transform-origin:30px 32px;transition:transform var(--motion-duration-long) var(--motion-entry-easing)}#inst .ig .gh0{fill:var(--fg)}
 #inst .ig.ldred .gf,#inst.warn .ig.ldred .gf,#inst .ig.ldred .gn{stroke:var(--err)}
 #inst .gv{font-size:var(--fs-caption);color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap}#inst .gv b{color:var(--fg);font-weight:600}#inst.warn .gv b{color:var(--warn)}#inst .ig.ldred .gv b{color:var(--err)}
@@ -4889,8 +4912,10 @@ function ldCells(d){return[["CPU","cpu"],["RAM","ram"],["GPU","gpu"]].map(p=>{co
 // serves: the three load numbers and the facts the sampler last read. Each figure is HTML text; the SVGs only draw and are
 // hidden from a screen reader. A tile's state is read off its fact, so the hub keeps deciding the tone and the text.
 // INST{
-function gaugeGeom(v){const f=ldNum(v),k=f!==null,p=k?f:0,a=Math.PI*p/100;return{known:k,col:k?`hsl(${Math.round(120*(1-p/100))} 65% 42%)`:"none",deg:Math.round(-90+1.8*p),x:Math.round((30-26*Math.cos(a))*10)/10,y:Math.round((32-26*Math.sin(a))*10)/10}}
-function gaugeSvg(v){const g=gaugeGeom(v);return `<svg width=60 height=36 viewBox="0 0 60 36" aria-hidden="true" focusable="false"><path class=gt d="M4 32 A26 26 0 0 1 56 32"/><path class=gf stroke="${g.col}" d="M4 32 A26 26 0 0 1 ${g.x} ${g.y}"/><line class=gn x1=30 y1=32 x2=30 y2=10 style="transform:rotate(${g.deg}deg)"${g.known?"":" visibility=hidden"}/><circle class=gh0 cx=30 cy=32 r=2 /></svg>`}
+function gaugeGeom(v){const f=ldNum(v),k=f!==null,p=k?f:0,a=Math.PI*p/100;return{known:k,deg:Math.round(-90+1.8*p),x:Math.round((30-26*Math.cos(a))*10)/10,y:Math.round((32-26*Math.sin(a))*10)/10}}   // the shipped scale: a half circle swept 0 to 100, never re-scaled (#1141)
+const gaugeMark=p=>{const a=Math.PI*p/100;return [30-23*Math.cos(a),32-23*Math.sin(a),30-18*Math.cos(a),32-18*Math.sin(a)].map(n=>Math.round(n*10)/10)};   // a mark sits inside the arc, so it never covers the sweep's tone (#1141)
+function gaugeSvg(v,id){const g=gaugeGeom(v),gid=`g-${id||"load"}`;   // one grid: the track is line, the sweep runs ok through warn to err, the needle is fg (SPEC 1123 #1141)
+ return `<svg width=60 height=36 viewBox="0 0 60 36" aria-hidden="true" focusable="false"><defs><linearGradient id=${gid} x1=4 y1=0 x2=56 y2=0 gradientUnits=userSpaceOnUse><stop offset=0 stop-color="var(--ok)"/><stop offset=.5 stop-color="var(--warn)"/><stop offset=1 stop-color="var(--err)"/></linearGradient></defs><path class=gt d="M4 32 A26 26 0 0 1 56 32"/>${[0,25,50,75,100].map(p=>{const [x1,y1,x2,y2]=gaugeMark(p);return `<line class=gm x1=${x1} y1=${y1} x2=${x2} y2=${y2}/>`}).join("")}<path class=gf stroke="${g.known?`url(#${gid})`:"none"}" d="M4 32 A26 26 0 0 1 ${g.x} ${g.y}"/><line class=gn x1=30 y1=32 x2=30 y2=10 style="transform:rotate(${g.deg}deg)"${g.known?"":" visibility=hidden"}/><circle class=gh0 cx=30 cy=32 r=2 /></svg>`}
 function subsGauges(d){const xs=(d||{}).subs||[];if(!xs.length)return"";
  // One bar per plan: how much of the weekly window is spent, and how long until it resets. The needle and the half-circle
  // are gone with the #inst/#isub scope bug that painted them black (#Astra, 2026-11-01): a bar reads at a glance where a
@@ -4902,7 +4927,7 @@ function subsGauges(d){const xs=(d||{}).subs||[];if(!xs.length)return"";
     `<span class=sn>${esc(s.label)}</span><b class=sp2>${p===null?"?":fpct(p)+"%"}</b>`+
     `<span class=sb2><i style="width:${p===null?0:Math.max(0,Math.min(100,p))}%"></i></span>`+
     `<small class=sr2>${esc(reset(s))}</small></div>`}).join("")}
-function instGauges(d){return ldCells(d).map(c=>`<div class="ig${c.red?" ldred":""}">${gaugeSvg((d||{})[c.k.toLowerCase()])}<span class=gv><b>${c.k}</b> ${esc(c.t)}</span></div>`).join("")}
+function instGauges(d){return ldCells(d).map(c=>`<div class="ig${c.red?" ldred":""}">${gaugeSvg((d||{})[c.k.toLowerCase()],c.k)}<span class=gv><b>${c.k}</b> ${esc(c.t)}</span></div>`).join("")}
 const instFact=(facts,k)=>(facts||[]).find(f=>f&&f.key===k);
 function instTile(k,f,lead){if(!f)return{k,text:"no reading",tone:"neutral"};const p=(f.parts||[])[0]||{},t=String(f.text||"").replace(lead,"").trim()||"?";return{k,text:t,tone:p.tone==="ok"||p.tone==="err"?p.tone:"neutral",tip:f.tip||null,detail:f.detail||null,times:p.times||null}}
 function instTiles(facts){return[instTile("Gate",instFact(facts,"gate"),/^gate\s*/)]}   // the Monitor carries the gate and no queue tile (owner)
@@ -4930,7 +4955,7 @@ function instDraw(d){const c=$("#inst");if(!c)return;const facts=(d||{}).facts||
  const gs=$("#igs");if(gs&&!gs.children.length)gs.innerHTML=instGauges(d);
  else if(gs)ldCells(d).forEach((x,i)=>{const n=gs.children[i],g=gaugeGeom((d||{})[x.k.toLowerCase()]);if(!n)return;n.classList.toggle("ldred",x.red);
   const ln=n.querySelector(".gn"),f=n.querySelector(".gf"),v=n.querySelector(".gv");
-  if(ln){ln.style.transform=`rotate(${g.deg}deg)`;ln.setAttribute("visibility",g.known?"visible":"hidden")}if(f){f.setAttribute("d",`M4 32 A26 26 0 0 1 ${g.x} ${g.y}`);f.setAttribute("stroke",g.col)}if(v)v.innerHTML=`<b>${x.k}</b> ${esc(x.t)}`});
+  if(ln){ln.style.transform=`rotate(${g.deg}deg)`;ln.setAttribute("visibility",g.known?"visible":"hidden")}if(f){f.setAttribute("d",`M4 32 A26 26 0 0 1 ${g.x} ${g.y}`);f.setAttribute("stroke",g.known?`url(#g-${x.k})`:"none")}if(v)v.innerHTML=`<b>${x.k}</b> ${esc(x.t)}`});
  instSet("ian",instTiles(facts).map(tileHtml).join(""));instSet("isub",subsGauges(d||{}));instSet("ispec",specBar((d||{}).specs));instSet("ispeed",speedRow((d||{}).speed));
  const u=instUsage(facts);instSet("burn",u?`<span>Tokens · 24 h</span><b class=bad>${esc(u.tok)}</b>`:"<span>Tokens · 24 h</span><b>no reading</b>");
  const s=$("#instsr");if(s)s.textContent=instSum(facts);
@@ -4986,12 +5011,13 @@ function barChart(rows,W=280,H=64,L=44){const n=rows.length,vals=rows.map(r=>r.t
     first:n?xl(rows[0].t):"",now:"now"}}
 function bars(rows){if(!rows.length)return"";const c=barChart(rows),{W,H,L,base}=c;   // tokens are the work: the chart never counts dollars
   return `<svg viewBox="0 0 ${L+W} ${base+14}" role=img aria-label="tokens per interval">`
-    +c.ticks.map(t=>`<line x1="${L}" y1="${t.y}" x2="${L+W}" y2="${t.y}" stroke="var(--chart-grid)" stroke-dasharray="3 2"/><text x="${L-4}" y="${t.y+4}" fill="var(--chart-axis)" style="font-size:var(--fs-caption)" text-anchor="end">${t.label}</text>`).join("")
+    +`<text x="${L}" y="10" fill="var(--chart-axis)" style="font-size:var(--fs-body)">tokens</text>`   // the family's title treatment: inside the plot, at the left edge, at body size (#1141)
+    +c.ticks.map(t=>`<line x1="${L}" y1="${t.y}" x2="${L+W}" y2="${t.y}" stroke="var(--chart-grid)" stroke-dasharray="3 2"/><text x="${L-4}" y="${t.y+4}" fill="var(--chart-axis)" style="font-size:var(--fs-body)" text-anchor="end">${t.label}</text>`).join("")
     +c.bars.map(b=>b.kind==="missing"?`<line class=miss x1="${b.x}" y1="${base}" x2="${b.x+b.w}" y2="${base}" stroke="var(--chart-axis)" stroke-dasharray="2 2"><title>${esc(b.title)}</title></line>`
       :b.kind==="zero"?`<rect class=zero x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" style="fill:var(--chart-axis)"><title>${esc(b.title)}</title></rect>`
       :`<rect class=bar x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" fill="${b.top?"var(--chart-bar-max)":"var(--chart-bar)"}"><title>${esc(b.title)}</title></rect>`).join("")
-    +(c.max?`<text x="${c.max.x}" y="${c.max.y}" fill="var(--chart-ok)" style="font-size:var(--fs-caption)" text-anchor="${c.max.anchor}">${c.max.text}</text>`:"")
-    +`<text x="${L}" y="${base+12}" fill="var(--chart-axis)" style="font-size:var(--fs-caption)">${c.first}</text><text x="${L+W}" y="${base+12}" fill="var(--chart-axis)" style="font-size:var(--fs-caption)" text-anchor="end">${c.now}</text></svg>`}
+    +(c.max?`<text x="${c.max.x}" y="${c.max.y}" fill="var(--chart-ok)" style="font-size:var(--fs-body)" text-anchor="${c.max.anchor}">${c.max.text}</text>`:"")
+    +`<text x="${L}" y="${base+12}" fill="var(--chart-axis)" style="font-size:var(--fs-body)">${c.first}</text><text x="${L+W}" y="${base+12}" fill="var(--chart-axis)" style="font-size:var(--fs-body)" text-anchor="end">${c.now}</text></svg>`}
 function cmp(v,base,unit,lowerBetter=true){const d=Math.round((v-base)/base*100),good=lowerBetter?d<0:d>0,dir=d===0?"":lowerBetter?(d<0?"faster":"slower"):(d>0?"more":"fewer"),head=`was ${base}${unit?" "+unit:""}`,pct=d===0?"":`${Math.abs(d)}% ${dir}`;
   return {text:pct?`${head} \u00b7 ${pct}`:head,head,pct,dir,good}}
 function kr(label,sub,v,unit,base,lowerBetter=true){if(v==null)return`<div class=kr><span class=l>${label}${sub?`<small>${sub}</small>`:""}</span><b>—</b></div>`;
@@ -5049,7 +5075,8 @@ function mdlRender(){const b=$("#mbody");if(!mdl){b.innerHTML="<span class=m>Loa
  {const lc=mdl.last_coding||(mdl.coding_models||[])[0]||"",x=lc?mdlBox("coding_models",lc):MBOX0;$("#mdsr").textContent=x.llm?`${x.llm} · ${lc}`:lc}   // the model the last run coded with, not the chain's head
 
  const ch=mdl.chain||{},chOut=ch.out||[],chHit=(m)=>chOut.find(o=>o.until_text&&o.model.split(':').pop()===String(m).split(':').pop()),chTag=(m)=>{const o=chHit(m);return o?`<span class=bk title="${esc(o.reason)}">${esc(o.reason)}, resets ${esc(o.until_text)}</span>`:''},chBan=ch.banner?`<div class="mx err" role=alert>${esc(ch.banner)}</div>`:(ch.notice?`<div class=mx>${esc(ch.notice)}</div>`:"");
- b.innerHTML=chBan+`<p class="note lead">Which models work, in what order, in which hours: a chain is tried top to bottom, and the first model that is on, inside its hours and under its limit does the work.</p>`
+ const rd=mdl.repo_diff||[],rdBan=rd.length?`<div class="mx err" role=status><b>The repository chains differ from the live ones.</b> Run models-apply.sh to apply them.${rd.map(d=>`<div class=mx>${esc(MLAB[d.chain+"_models"]||d.chain)}: repository ${esc(d.repo.join(", "))} · live ${esc(d.live.join(", "))}</div>`).join("")}</div>`:"";
+ b.innerHTML=chBan+rdBan+`<p class="note lead">Which models work, in what order, in which hours: a chain is tried top to bottom, and the first model that is on, inside its hours and under its limit does the work.</p>`
  +`<datalist id=hrp>${HRP.map(v=>`<option value="${v}">`).join("")}</datalist>`+mdlTable()+`<h3>Chains</h3>`
  +Object.keys(MLAB).map(k=>`<div class=mc><div class=mt>${MLAB[k]}</div><div class=mx>${MDESC[k]}</div>`+mdl[k].map((m,i)=>{const ef=mdlEff(k,m),hr=mdlHrs(k,m),x=mdlBox(k,m),cof=mdlOff(k,m),mof=mdlOffM(m),o=(mdl.outside&&mdl.outside[k]||{})[m],st=((mdl.models||[]).find(z=>z.id===m)||{}).state;
   const rmk=mdlRmd(k,m),live=mdl[k].filter(z=>!mdlRmd(k,z)).length;
@@ -5259,7 +5286,8 @@ async function pollStats(){try{pollSubs();
   const st=await (await fetch("/api/stats?period="+per+"&src="+src)).json();
   $("#per").innerHTML=["hour","day","month"].map(p=>`<button data-p=${p} class="${p===per?"on":""}">per ${p}</button>`).join("");
   document.querySelectorAll("#per button").forEach(b=>b.onclick=()=>{per=b.dataset.p;save();pollStats()});
-  $("#stsr").textContent=tk(st.totals.tok_today)+" tokens today";
+  {const p=st.pace,u=n=>n==null?"no runs":"$"+n.toFixed(2);   // the hub computed the readings; the page prints them
+   $("#stsr").textContent=`${u(p.median_hour)}/h median, ${p.active_hours} of ${p.window_hours} h with runs (last ${p.window_hours} h) · ${u(p.last60)} last 60 min`+(p.unpriced?` · ${p.unpriced} unpriced call${p.unpriced>1?"s":""}`:"")+` · ${tk(st.totals.tok_today)} tokens today`}
   $("#chart").innerHTML=bars(st.buckets);$("#pie").innerHTML=pie(st.models||[]);
   // The Speed block and the open-branches list left the panel (owner, 2026-11-01): the panel leads with the throughput, the
   // subscription gauges, the spend chart and the token ring. The PR speed figures stay on the hub's own reading, not here.
@@ -5422,12 +5450,12 @@ const flowHeight=h=>{const v=(h*0.55)|0;return v<flowHMin?flowHMin:v>flowHMax?fl
 const flowX=(i,n)=>n<2?flowP:flowP+i*(flowW-2*flowP)/(n-1);
 const flowY=(v,max)=>max?flowH-flowP-v*(flowH-2*flowP)/max:flowH-flowP;
 const flowAxis=(max,unit)=>`<line x1=${flowP} y1=${flowH-flowP} x2=${flowW-flowP} y2=${flowH-flowP} stroke=var(--chart-grid)></line><text x=${flowP-6} y=${flowY(max,max)+4} text-anchor=end fill=var(--chart-axis)>${max} ${unit}</text>`;
-const cfdAxis=c=>{const n=c.days.length,base=flowH-flowP;   // every number and date arrives from the hub; the page places a mark and a label for each (#896), its words in the lead view's ink (#1149)
-  const ys=c.yticks.map(v=>{const y=flowY(v,c.ymax);return `<line x1=${flowP-4} y1=${y} x2=${flowP} y2=${y} stroke=var(--chart-axis)></line><text x=${flowP-7} y=${y+4} text-anchor=end fill=var(--chart-ink)>${v}</text>`}).join("");
-  const xs=c.xticks.map(t=>{const x=flowX(t.i,n);return `<line x1=${x} y1=${base} x2=${x} y2=${base+4} stroke=var(--chart-axis)></line><text x=${x} y=${base+17} text-anchor=middle fill=var(--chart-ink)>${esc(t.day)}</text>`}).join("");
+const cfdAxis=c=>{const n=c.days.length,base=flowH-flowP;   // every number and date arrives from the hub; the page places a mark and a label for each (#896), one axis style in mute at the box size with the title inside the plot (#1141)
+  const ys=c.yticks.map(v=>{const y=flowY(v,c.ymax);return `<line x1=${flowP-4} y1=${y} x2=${flowP} y2=${y} stroke=var(--chart-axis)></line><text x=${flowP-7} y=${y+4} text-anchor=end fill=var(--chart-axis)>${v}</text>`}).join("");
+  const xs=c.xticks.map(t=>{const x=flowX(t.i,n);return `<line x1=${x} y1=${base} x2=${x} y2=${base+4} stroke=var(--chart-axis)></line><text x=${x} y=${base+17} text-anchor=middle fill=var(--chart-axis)>${esc(t.day)}</text>`}).join("");
   return `<line x1=${flowP} y1=${flowP-10} x2=${flowP} y2=${base} stroke=var(--chart-grid)></line><line x1=${flowP} y1=${base} x2=${flowW-flowP} y2=${base} stroke=var(--chart-grid)></line>${ys}${xs}`+
-    `<text x=4 y=${flowP-16} text-anchor=start fill=var(--chart-ink)>cards</text>`+
-    `<text x=${flowW-flowP} y=${base+31} text-anchor=end fill=var(--chart-ink)>day (${esc(c.zone)})</text>`;};
+    `<text x=${flowP} y=${flowP+12} text-anchor=start fill=var(--chart-axis)>cards</text>`+
+    `<text x=${flowW-flowP} y=${base+31} text-anchor=end fill=var(--chart-axis)>day (${esc(c.zone)})</text>`;};
 const coverNote=v=>!v?"":`<p class=fnote>cards read ${v.read} of ${v.total}, ${v.complete} complete, last refresh ${v.last?esc(v.last):"never"}</p>`;
 let CF={r:"30"};   // the cumulative flow's range, 30 days at first (#901)
 const CFD_R=[["7","7 days"],["30","30 days"],["90","90 days"],["all","All"]];   // the cumulative flow's range views (#901)
@@ -5468,7 +5496,7 @@ const ltP=64;   // a duration label ("17h 36m") is wider than a count, and the o
 let LT_FRAME;const ltX=x=>ltP+x*LT_FRAME.width,ltY=y=>ltP+LT_FRAME.height-y*LT_FRAME.height;
 const ltLine=(v,col,dash)=>v&&v.y!=null?`<line x1=${ltP} x2=${ltP+LT_FRAME.width} y1=${ltY(v.y)} y2=${ltY(v.y)} stroke="${col}" stroke-width=2${dash?` stroke-dasharray="${dash}"`:""}><title>${esc(v.label)} ${esc(v.text)}</title></line>`:"";   // the value lives in the legend, never over the newest dots (#1146)
 const ltKM=c=>c.survival?`<p class="fnote ltkm">${esc(c.survival.text)} · ${esc(c.wip.text)}</p>`:"";   // the hub's survival reading and work in progress, in its words (#1250)
-const ltChart=(c,cov)=>{LT_FRAME=c.plot_frame;const n=c.dots.length,base=ltP+LT_FRAME.height,ink="var(--chart-ink)",mute="var(--chart-axis)";
+const ltChart=(c,cov)=>{LT_FRAME=c.plot_frame;const n=c.dots.length,base=ltP+LT_FRAME.height,ink="var(--chart-axis)",mute="var(--chart-axis)";   // one axis style: tick text and the title in mute, never a mark's ink (#1141)
   const grp=(name,body)=>`<span class=ltgrp><b class=ltgl>${name}</b> ${body}</span>`,backTo=LT_TF.find(([k])=>k===LT.tf)[1];
   const ctl=`<p class=fhead>`+
       `<label>Timeframe <select id=ltr>${LT_TF.map(([k,v])=>`<option value=${k}${LT.tf===k?" selected":""}>${v}</option>`).join("")}</select></label> `+
@@ -5491,7 +5519,7 @@ const ltChart=(c,cov)=>{LT_FRAME=c.plot_frame;const n=c.dots.length,base=ltP+LT_
   const ys=c.ticks.map(t=>`<line x1=${ltP-4} y1=${ltY(t.y)} x2=${ltP} y2=${ltY(t.y)} stroke=${mute}></line><text x=${ltP-7} y=${ltY(t.y)+4} text-anchor=end fill=${ink}>${esc(t.text)}</text>`).join("");
   const xs=c.xticks.map(t=>`<text x=${ltX(t.x)} y=${base+17} text-anchor=middle fill=${ink}>${esc(t.text)}</text>`).join("");
   const axes=`<line x1=${ltP} y1=${ltP-10} x2=${ltP} y2=${base} stroke=var(--chart-grid)></line><line x1=${ltP} y1=${base} x2=${ltP+LT_FRAME.width} y2=${base} stroke=var(--chart-grid)></line>`+
-    `<text x=${ltP} y=${ltP-16} text-anchor=start fill=${ink}>elapsed time (${c.scale==="cube"?"cube root":c.scale})</text>`;
+    `<text x=${ltP} y=${ltP+12} text-anchor=start fill=${ink}>elapsed time (${c.scale==="cube"?"cube root":c.scale})</text>`;   // the title sits inside the plot, at the left edge (#1141)
   const lines=ltLine(c.average,"var(--chart-series-8)","")+ltLine(c.median,"var(--chart-ok)","2 3")+ltLine(c.p85,"var(--chart-series-5)","5 3");
   const dots=c.clusters.map((k,i)=>{const m=k.dots.length,title=m>1?`${m} issues`:`#${k.dots[0].n} ${esc(k.dots[0].title)}`;   // the hub sizes the ring for its count (#1146)
     return `<circle data-k=${i} cx=${ltX(k.x)} cy=${ltY(k.y)} r=${k.r} fill="${m>1?"var(--chart-bg)":"var(--chart-ink)"}" stroke="var(--chart-ink)" stroke-width=2${k.dots.some(d=>d.approx||d.unknown_first)?' stroke-dasharray="3 2"':""} style="cursor:pointer"><title>${esc(title)} · ${esc(k.dots[0].text)} · flowing ${esc(k.dots[0].flowing_text)} · held ${esc(k.dots[0].held_text)} · closed ${esc(k.dots[0].closed)}${k.dots.some(d=>d.approx)?" · start approximate":""}${k.dots.some(d=>d.unknown_first)?" · first interval unknown":""}</title></circle>`+(m>1?`<text x=${ltX(k.x)} y=${ltY(k.y)+/*RING_BASELINE*/} fill="var(--chart-ink)" text-anchor=middle pointer-events=none>${m}</text>`:"")}).join("");
@@ -6156,7 +6184,7 @@ def v1_view(d):
     view["hours"] = {k: {e.raw: e.hrs for e in rows[k] if e.hrs} for k in CHAINS}
     view["efforts"] = {k: {e.raw: e.effort for e in rows[k] if e.effort} for k in CHAINS}
     return view
-READONLY = ("known", "router_known", "suggest", "version", "labels", "boxes", "last_coding", "chain", "models", "outside")   # fields models_get() adds for the panel: posted back, never stored
+READONLY = ("known", "router_known", "suggest", "version", "labels", "boxes", "repo_diff", "last_coding", "chain", "models", "outside")   # fields models_get() adds for the panel: posted back, never stored
 # One model-id shape, in one place (#221): a bare id, and the context suffix the gateway serves beside it
 # (`claude-deepseek-v4-flash[1m]`). The save validates with MODEL_ID and the page's Add box tests the same source,
 # substituted when the page is served, so a second spelling cannot refuse an id the save takes -- the shape without the
@@ -6412,6 +6440,14 @@ def model_rows(d, states):
 def not_switched_off(suggestions, off):
     """The add list never offers a model switched off at model level (SPEC 889 #920): it keeps its place in the chains."""
     return [s for s in suggestions if modelreg.normalize(s["id"]).id not in off]
+def repo_chain_diff():
+    """The chains where the repository copy of models.json differs from the one this hub reads: [{chain, repo, live}] (#1261).
+    The page prints it and computes nothing (ADR-0137). Empty when the repository copy is missing or is the file itself."""
+    repo = pathlib.Path(CHECKOUT) / "contrib" / "squad-goal" / "scripts" / "models.json"
+    try:
+        if not repo.is_file() or repo.resolve() == MODELS.resolve(): return []
+    except OSError: return []
+    return models_chains.diff_files(repo, MODELS)
 def models_get():
     """The four chains as the panel reads them: bare ids, so one model is one row in every chain and in the box.
 
@@ -6429,7 +6465,7 @@ def models_get():
             "models": rows,
             "outside": {k: {bare_id(m): model_hours(d, k, m) for m in d.get(k, []) if model_hours(d, k, m) and not in_hours(d, k, m)} for k in CHAINS},
             "known": known, "last_coding": last_coding_model(),
-            "router_known": rknown, "version": models_version(),
+            "router_known": rknown, "version": models_version(), "repo_diff": repo_chain_diff(),
             # The router's add box offers what the gateway serves, never the other CLIs' ids (#225): the router row is a
             # chain like the other three, so its own catalogue answers for it (#687).
             "suggest": {**{k: not_switched_off(model_suggestions(usable(known, k.removesuffix("_models"))), off) for k in CHAINS if k != ROUTER_CHAIN},

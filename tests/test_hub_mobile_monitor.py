@@ -68,7 +68,7 @@ def test_the_monitor_draws_gauges_tiles_and_the_spec_bar(hub):
                ispec: h("ispec"), sum: document.getElementById("instsr").textContent };
     """, routes=_routes(hub))
     assert out["shown"], "the Monitor is the default for a new visitor"
-    assert out["igs"].count("<svg") == 3 and 'stroke="hsl(' in out["igs"] and "ldred" in out["igs"]
+    assert out["igs"].count("<svg") == 3 and 'stroke="url(#g-' in out["igs"] and "ldred" in out["igs"]
     for k in ("Gate", "fast fail", "took 2m07s · avg 2m49s"):
         assert k in out["ian"], k
     assert "Landed" not in out["ian"], "the owner removed the Landed tile (2026-11-01)"

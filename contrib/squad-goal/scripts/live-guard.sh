@@ -96,15 +96,15 @@ if git -C "$SG_CHECKOUT" rev-parse --git-dir >/dev/null 2>&1; then
   [ -n "$key" ] && [ "$(cat "$kf" 2>/dev/null)" = "$key" ] && exit 0    # nothing the pass reads changed: no check, no publish, no write
 fi
 
-diff=$(bash "$here/publish-live.sh" --check "$repo" "$live")
+diff=$(bash "$here/publish-live.sh" --check --no-compare "$repo" "$live")
 if [ -n "$diff" ]; then
   echo "LIVE-GUARD the live skill differs from the repository copy: $(printf '%s' "$diff" | tr '\n' ' ')"
-  out=$(bash "$here/publish-live.sh" "$repo" "$live" 2>&1); rc=$?
+  out=$(bash "$here/publish-live.sh" --no-compare "$repo" "$live" 2>&1); rc=$?
   [ -n "${SG_STATE:-}" ] && mkdir -p "$SG_STATE" && touch "$SG_STATE/live-publish.stamp"   # the janitor's rule M reads this change as the publish's own (#659)
   [ -n "$out" ] && printf '%s\n' "$out" | sed 's/^/LIVE-GUARD /'
   [ "$rc" = 0 ] || echo "LIVE-GUARD the publish exited $rc"
   [ "$rc" = 0 ] && [ -s "$live/PUBLISHED" ] && echo "LIVE-GUARD published $(cut -c1-8 "$live/PUBLISHED")"
-  left=$(bash "$here/publish-live.sh" --check "$repo" "$live")
+  left=$(bash "$here/publish-live.sh" --check --no-compare "$repo" "$live")
   if [ -n "$left" ]; then
     echo "LIVE-GUARD the publish could not resolve: $(printf '%s' "$left" | tr '\n' ' ')"   # named every cycle: the key is not kept
     exit 0

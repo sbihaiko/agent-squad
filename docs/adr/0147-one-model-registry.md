@@ -22,7 +22,7 @@ The engine records the graph document and hashes it, so a run must not change th
 8. **The graph hash covers the raw document.** The engine never rewrites a graph before `canon_hash`, so an in-flight run resumes and `--expect-graph-hash` keeps its meaning. Resolution is recorded at run start and applied only when the run opts in.
 9. **A bad entry is isolated.** `load` validates each entry alone: a bad entry is dropped and named by `check`, and the other entries still work. A JSON parse error is a loud, named failure.
 10. **Prefix parsing has one home.** Code that parses a model id by prefix lives only in files that carry the header `modelreg: seam-clean`; the seam test scans the shipped scripts and the dashboard for a prefix operation or a `[1m]` literal in code.
-11. **Machine config is never touched by `live-guard`.** The live files change only by the owner's command or by the hub ([ADR-0140](0140-the-live-copy-follows-in-the-cycle.md)). The live migration is an atomic owner write, and the live guard keeps its behavior.
+11. **Machine config is never written by `live-guard`.** A hand-run publish and the hub may report chain differences as defined in [ADR-0140](0140-the-live-copy-follows-in-the-cycle.md); the per-cycle pass does not compare chains. Live files change only by the owner's command or an authorized hub write. An explicit apply copies repository chains into the live file atomically and keeps a backup.
 
 ## Consequences
 

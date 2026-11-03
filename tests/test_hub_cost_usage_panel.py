@@ -245,6 +245,30 @@ const out={n:c.bars.length,kinds:[...new Set(c.bars.map(b=>b.kind))],ws:c.bars.m
     assert out["html"].count("<rect class=bar ") == 30
 
 
+def test_the_cost_chart_takes_the_chart_family_axis_and_title():
+    """SPEC 1123 #1141: the cost chart shares the family's grid in `line`, axis text in `mute` at body size, and a title
+    inside the plot at the left edge."""
+    out = _chart("""
+const rows=[{t:'2026-10-09',tokens:2000,runs:1},{t:'2026-10-10',tokens:14280000,runs:2},{t:'2026-10-11',tokens:5000,runs:1}];
+const c=barChart(rows);
+const out={html:bars(rows),L:c.L,base:c.base};
+""")
+    html, left, base = out["html"], out["L"], out["base"]
+    grid = [ln for ln in re.findall(r"<line [^>]*>", html) if 'stroke="var(--chart-grid)"' in ln]
+    assert len(grid) == 3 and all("stroke-width" not in ln for ln in grid), "the grid is not one line stroke"
+    texts = re.findall(r"<text ([^>]*)>([^<]*)</text>", html)
+    assert texts, "the cost chart draws no text"
+    for attrs, body in texts:
+        assert 'style="font-size:var(--fs-body)"' in attrs, f"{body!r} is not at body size"
+        if not body.startswith("max "):
+            assert 'fill="var(--chart-axis)"' in attrs, f"{body!r} is not axis text in mute"
+    title = [(attrs, body) for attrs, body in texts if body == "tokens"]
+    assert len(title) == 1, "the plot draws no title of its own"
+    assert f'x="{left}"' in title[0][0], "the title does not start at the plot's left edge"
+    assert float(re.search(r'y="(\d+)"', title[0][0]).group(1)) < base, "the title is not inside the plot"
+    assert "stroke-dasharray" in html and "var(--fs-caption)" not in html, "the chart is not the family's"
+
+
 def test_the_cost_panel_draws_no_implementation_small_print():
     assert "id=totnote" not in _stats()
     assert '$("#totnote")' not in SRC
