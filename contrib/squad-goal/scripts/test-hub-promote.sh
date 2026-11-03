@@ -21,6 +21,7 @@ hub.ghread.read = lambda route, transport=None: hub.ghread.Read(kind=hub.ghread.
 def run(item, issue=None, specs=()):
     calls.clear(); hub.board_cache["items"] = [item]
     got = hub.promote(item["n"] if issue is None else issue)
+    hub.wait_for_moves()   # the writer answers in the background (#1300): the call is read after it
     return got, list(calls)
 card = {"n": 7, "i": 123, "s": "open", "st": "Backlog", "l": [], "t": "t"}
 loose = {"n": 8, "s": "open", "st": None, "l": [], "t": "t"}          # an open issue the board read never carried: no item id
@@ -36,7 +37,7 @@ check("a card that holds a Project item moves with the plain write", got.get("ok
 got, c = run(loose)
 check("a card the board read never carried is added and moved", got.get("ok") and c == [([8], True)], (got, c))
 got, c = run(spec)
-check("a spec with no ticket moves alone", got.get("ok") and got.get("moved") == [9] and c == [([9], True)], (got, c))
+check("a spec with no ticket moves alone", got.get("ok") and got.get("pending") == [9] and c == [([9], True)], (got, c))
 subs["answer"] = None
 got, c = run(spec)
 check("a spec whose ticket read fails moves nothing", "err" in got and c == [], (got, c))
@@ -45,7 +46,7 @@ subs["answer"] = []
 got, c = run(ticket)
 check("a ticket of a spec is refused before any write", "err" in got and "spec" in got["err"] and c == [], (got, c))
 got, c = run(subspec)
-check("a spec that a spec holds still moves", got.get("ok") and got.get("moved") == [13] and c == [([13], True)], (got, c))
+check("a spec that a spec holds still moves", got.get("ok") and got.get("pending") == [13] and c == [([13], True)], (got, c))
 hub.board_cache = {**hub.board_cache, "items": [ticket, dict(card, st="Backlog")]}   # the write above moved `card`; a fresh row is the board's own
 rows = {i["n"]: i for g in hub.board()["groups"] for i in g["items"]}
 check("the board marks no ticket promotable and names the column the move goes to",
@@ -69,16 +70,18 @@ def batch(confirm):
     hub.board_cache["items"] = [dict(batch_spec), dict(batch_ticket)]
     subs["answer"] = [{"number": 31, "state": "open", "labels": []}]
     calls.clear()
-    return hub.promote_batch({"batch": True, "spec": 30, "confirm": confirm}, "owner")
+    got = hub.promote_batch({"batch": True, "spec": 30, "confirm": confirm}, "owner")
+    hub.wait_for_moves()
+    return got
 hub.promote_write = lambda issues, add=False: calls.append((issues, add)) or rc(0, "", "")
 got = batch(2)
-check("a confirmed spec batch moves the spec and its ticket in one write", got == {"ok": True, "count": 2, "moved": [30, 31]} and calls == [([30, 31], False)], (got, calls))
+check("a confirmed spec batch moves the spec and its ticket in one write", got == {"ok": True, "count": 2, "pending": [30, 31]} and calls == [([30, 31], False)], (got, calls))
 got = batch(5)
 check("a spec batch with a changed count moves nothing", got.get("count") == 2 and "err" in got and calls == [], (got, calls))
 hub.promote_write = lambda issues, add=False: calls.append((issues, add)) or rc(1, "#30 -> Todo\n", "#31: refused\n")
 got = batch(2)
 check("a spec batch that fails part way names the cards that moved and those that did not",
-      got.get("moved") == [30] and got.get("unmoved") == [31] and "err" in got, (got, calls))
+      got.get("pending") == [30, 31] and "refused" in hub.MOVE_REFUSED.get(31, "") and 30 not in hub.MOVE_REFUSED, (got, calls))
 lines = [json.loads(x) for x in hub.BATCH_AUDIT.read_text().splitlines()]
 check("each confirmed spec batch writes one audit line with its outcome",
       [x["outcome"] for x in lines] == ["moved", "refused", "partial"] and all(x["scope"] == 30 for x in lines), lines)

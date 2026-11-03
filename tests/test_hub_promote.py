@@ -26,6 +26,7 @@ import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
+HUB = {}   # the hub under test, while its fixture runs: `post` reads the board only after a background write has answered (#1300)
 GHREAD_PY = ROOT / "contrib/squad-goal/scripts/ghread.py"
 
 BACKLOG = {"n": 7, "i": 101, "t": "a ticket", "s": "OPEN", "st": "Backlog", "l": ["enhancement"]}
@@ -49,9 +50,12 @@ def hub(monkeypatch, tmp_path):
     spec.loader.exec_module(mod)
     mod.board_cache = {"t": 1, "items": [dict(BACKLOG), dict(TODO), dict(SPEC)], "prs": [], "err": None,
                        "lc": {}, "errs": [], "cases": []}
+    HUB["mod"] = mod
     srv = ThreadingHTTPServer(("127.0.0.1", 0), mod.H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     yield mod, srv.server_port
+    HUB.pop("mod", None)
+    mod.wait_for_moves()
     srv.shutdown()
     srv.server_close()
 
@@ -65,6 +69,8 @@ def post(port, body, *, host=None, origin=None, content_type="application/json",
     r = c.getresponse()
     data = json.loads(r.read() or b"{}")
     c.close()
+    if HUB.get("mod") is not None:   # the writer answers in the background: the board is read after it
+        HUB["mod"].wait_for_moves()
     return r.status, data
 
 
@@ -219,7 +225,7 @@ def test_a_spec_with_no_ticket_moves_alone(hub, monkeypatch):
     calls = []
     mod.promote_write = writer(calls)
     status, out = post(port, {"issue": 9})
-    assert status == 200 and out == {"ok": True, "issue": 9, "to": "Todo", "moved": [9]}, out
+    assert status == 200 and out == {"ok": True, "issue": 9, "to": "Todo", "pending": [9]}, out
     assert calls == [([9], False)], calls
     assert routes and routes[0].startswith("repos/x/y/issues/9/sub_issues"), routes
     assert next(i for i in mod.board_cache["items"] if i["n"] == 9)["st"] == "Todo"
@@ -234,7 +240,7 @@ def test_a_spec_moves_with_its_backlog_tickets_in_one_write(hub, monkeypatch):
     calls = []
     mod.promote_write = writer(calls)
     status, out = post(port, {"issue": 9})
-    assert status == 200 and out == {"ok": True, "issue": 9, "to": "Todo", "moved": [9, 20, 21]}, out
+    assert status == 200 and out == {"ok": True, "issue": 9, "to": "Todo", "pending": [9, 20, 21]}, out
     assert calls == [([9, 20, 21], False)], calls
     groups = {g["name"]: [i["n"] for i in g["items"]] for g in mod.board()["groups"]}
     assert {9, 20, 21} <= set(groups["Todo"]) and not {9, 20, 21} & set(groups["Backlog"]), groups
@@ -268,7 +274,7 @@ def test_a_reopened_card_keeps_its_repository_so_its_spec_moves_its_tickets(hub,
     mod.promote_write = writer(calls)
     status, out = post(port, {"issue": 9})
     assert routes and routes[0].startswith("repos/x/y/issues/9/sub_issues"), routes
-    assert status == 200 and out.get("moved") == [9, 20], out
+    assert status == 200 and out.get("pending") == [9, 20], out
 
 
 def test_a_ticket_without_an_item_id_is_added_with_the_spec(hub, monkeypatch):
@@ -278,7 +284,7 @@ def test_a_ticket_without_an_item_id_is_added_with_the_spec(hub, monkeypatch):
     calls = []
     mod.promote_write = writer(calls)
     status, out = post(port, {"issue": 9})
-    assert status == 200 and out.get("moved") == [9, 22], out
+    assert status == 200 and out.get("pending") == [9, 22], out
     assert calls == [([9, 22], True)], calls
 
 
@@ -291,7 +297,7 @@ def test_a_closed_ticket_or_one_outside_backlog_keeps_its_column(hub, monkeypatc
     calls = []
     mod.promote_write = writer(calls)
     status, out = post(port, {"issue": 9})
-    assert status == 200 and out.get("moved") == [9], out
+    assert status == 200 and out.get("pending") == [9], out
     assert calls == [([9], False)], calls
     items = {i["n"]: i["st"] for i in mod.board_cache["items"]}
     assert items[20] == "Backlog" and items[21] == "Doing", items
@@ -305,7 +311,7 @@ def test_a_ticket_that_is_itself_a_spec_keeps_its_column(hub, monkeypatch):
     calls = []
     mod.promote_write = writer(calls)
     status, out = post(port, {"issue": 9})
-    assert status == 200 and out.get("moved") == [9], out
+    assert status == 200 and out.get("pending") == [9], out
     assert calls == [([9], False)], calls
 
 
@@ -321,7 +327,7 @@ def test_a_ticket_with_an_owner_label_keeps_its_column(hub, monkeypatch):
     calls = []
     mod.promote_write = writer(calls)
     status, out = post(port, {"issue": 9})
-    assert status == 200 and out.get("moved") == [9], out
+    assert status == 200 and out.get("pending") == [9], out
     assert calls == [([9], False)], calls
     items = {i["n"]: i["st"] for i in mod.board_cache["items"]}
     assert items[20] == items[21] == items[22] == "Backlog", items
@@ -343,7 +349,7 @@ def test_a_spec_reads_every_page_of_its_sub_issues(hub, monkeypatch):
     calls = []
     mod.promote_write = writer(calls)
     status, out = post(port, {"issue": 9})
-    assert status == 200 and out.get("moved") == [9, 20], out
+    assert status == 200 and out.get("pending") == [9, 20], out
     assert calls == [([9, 20], False)], calls
     assert len(routes) == 2 and "page=2" in routes[1], routes
 
@@ -359,7 +365,7 @@ def test_a_sub_issue_of_another_repository_is_not_a_card_of_this_board(hub, monk
     calls = []
     mod.promote_write = writer(calls)
     status, out = post(port, {"issue": 9})
-    assert status == 200 and out.get("moved") == [9, 21], out
+    assert status == 200 and out.get("pending") == [9, 21], out
     assert calls == [([9, 21], False)], calls
     items = {i["n"]: i["st"] for i in mod.board_cache["items"]}
     assert items[20] == "Backlog" and items[21] == "Todo", items
@@ -397,7 +403,8 @@ def test_a_writer_timeout_names_a_partial_move_and_asks_for_a_read(hub, monkeypa
 
     mod.promote_write = timed_out
     status, out = post(port, {"issue": 9})
-    assert status == 400 and "may be partial" in out.get("err", ""), out
+    assert status == 200 and out.get("ok") is True and out.get("pending") == [9, 20], out   # the page is not held for the writer
+    assert "may be partial" in rows_by_number(mod)[9].get("mr", ""), rows_by_number(mod)[9]
     assert (tmp_path / "board-dirty").exists(), "the next board pass is not asked to read the moved cards"
     assert next(i for i in mod.board_cache["items"] if i["n"] == 20)["st"] == "Backlog"
 
@@ -421,7 +428,8 @@ def test_a_refused_write_is_the_reason_the_card_shows(hub):
     calls = []
     mod.promote_write = writer(calls, rc=1, err="#7: the board carries no 'Todo' on it after 3 reads; a read failure\n")
     status, out = post(port, {"issue": 7})
-    assert status == 400 and "read failure" in out.get("err", ""), out
+    assert status == 200 and out.get("ok") is True, out   # the answer is at once; the refusal lands on the card (#1300)
+    assert "read failure" in rows_by_number(mod)[7].get("mr", ""), rows_by_number(mod)[7]
     assert next(i for i in mod.board_cache["items"] if i["n"] == 7)["st"] == "Backlog"
 
 
@@ -625,7 +633,7 @@ def test_the_batch_moves_every_backlog_card_in_one_write_with_the_spec_first(hub
     calls = []
     mod.promote_write = writer(calls)
     status, out = post(port, {"batch": True, "confirm": 3}, path="/api/promote")
-    assert status == 200 and out == {"ok": True, "count": 3, "moved": [9, 20, 7]}, out
+    assert status == 200 and out == {"ok": True, "count": 3, "pending": [9, 20, 7]}, out
     assert calls == [([9, 20, 7], False)], calls
     groups = {g["name"]: [i["n"] for i in g["items"]] for g in mod.board()["groups"]}
     assert {7, 9, 20} <= set(groups["Todo"]) and not {7, 9, 20} & set(groups["Backlog"]), groups
@@ -797,7 +805,7 @@ def test_a_confirmed_spec_batch_moves_its_cards_in_one_write_with_the_spec_first
     calls = []
     mod.promote_write = writer(calls)
     status, out = post(port, {"batch": True, "spec": 9, "confirm": 3}, path="/api/promote")
-    assert status == 200 and out == {"ok": True, "count": 3, "moved": [9, 20, 21]}, out
+    assert status == 200 and out == {"ok": True, "count": 3, "pending": [9, 20, 21]}, out
     assert calls == [([9, 20, 21], False)], calls
     assert [column_of(mod, n) for n in (9, 20, 21)] == ["Todo", "Todo", "Todo"]
 
@@ -818,8 +826,9 @@ def test_a_spec_batch_that_fails_part_way_names_the_cards_that_moved_and_those_t
     calls = []
     mod.promote_write = partial_writer(calls, moved={9, 20}, err="#21: the board carries no 'Todo' on it after 3 reads\n")
     status, out = post(port, {"batch": True, "spec": 9, "confirm": 3}, path="/api/promote")
-    assert status == 400 and out.get("moved") == [9, 20] and out.get("unmoved") == [21] and "read" in out.get("err", ""), out
+    assert status == 200 and out.get("pending") == [9, 20, 21], out
     assert [column_of(mod, n) for n in (9, 20, 21)] == ["Todo", "Todo", "Backlog"]
+    assert "read" in rows_by_number(mod)[21].get("mr", ""), rows_by_number(mod)[21]
     assert [json.loads(x)["outcome"] for x in mod.BATCH_AUDIT.read_text().splitlines()] == ["partial"]
 
 
@@ -944,7 +953,7 @@ def test_a_successful_start_repaints_the_board_and_states_the_count(hub):
     mod, _ = hub
     page = mod.PAGE
     confirm = page.split('closest("#spdlg .spgo")', 1)[1].split("document.addEventListener", 1)[0]
-    assert "pollBoard()" in confirm and "d.moved.length" in confirm, confirm
+    assert "pollBoard()" in confirm and "d.pending.length" in confirm, confirm
     assert "#spnote" in page, "the success count does not survive the repaint"
 
 

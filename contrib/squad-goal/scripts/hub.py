@@ -3969,6 +3969,14 @@ def drawn_column(i, moves, window):
             "recorded": recorded, "entry": entry}
 
 
+def flight_draw(i):
+    """The draw of a card whose write is in flight: the column the write goes to, marked pending until the writer answers
+    (#1300). The freeze is the column's, as a pending move's is (ADR-0144)."""
+    closed = str(i["s"]).lower() == "closed"
+    return {"st": PROMOTE_TO, "fz": _columns_module.view_column(PROMOTE_TO, closed, i.get("l"), i.get("cr"))[1], "state": "pending",
+            "recorded": PROMOTE_TO, "entry": None}
+
+
 def spec_plan_parents(items):
     """The spec numbers whose batch plan holds a ticket: an open sub-issue the board cache holds that is no spec and no held
     ticket (#1128). The board draws its start control from this cache fact, so a render never reads the sub-issues."""
@@ -3982,13 +3990,16 @@ def board(moves=None):
     by, tally, drawn = {}, {}, []
     planned = spec_plan_parents(board_cache["items"])
     ends = {COLUMN["issue_closed"], COLUMN["abandoned"]}   # history by role: a closed status is never a column on any page (#969)
+    flying, refused = flight_snapshot()   # the writes in flight draw in Todo, pending; a refusal names its reason on its card (#1300)
+    flying = set(flying)
     for i in board_cache["items"]:
-        d = drawn_column(i, moves, window)   # the one overlay rule the promote route asks too (#829)
+        d = flight_draw(i) if i["n"] in flying else drawn_column(i, moves, window)   # the one overlay rule the promote route asks too (#829)
         st, fz = d["st"], d["fz"]
         if d["state"] == "agree": agreed.add(str(i["i"]))
         elif d["state"] == "expired": expired[str(i["i"])] = (i["n"], d["recorded"], st, has_context(d["entry"]))
         row = {"n": i["n"], "t": i["t"], "c": i.get("c"), "l": i.get("l") or []}
         if d["state"] == "pending": row["pd"] = True   # the mark the page draws; the rule lives here, never in the view (ADR-0137)
+        if i["n"] in refused and i["n"] not in flying: row["mr"] = refused[i["n"]]   # the writer's reason, on the card until the owner moves it again (#1300)
         if fz: row["fz"] = fz
         if _columns_module.SPEC_LABEL in row["l"]: row["sp"] = True   # a spec is an issue with the spec label: the Specs filter reads this
         if isinstance(i.get("pa"), int): row["pa"] = i["pa"]   # the parent spec the read carried (#829): the swimlane groups by it, with no read of its own (#890)
@@ -4075,7 +4086,7 @@ def board_served():
     """The served board body and its ETag, built once per change (#973). The key is the cache, the pending-move record and the
     overlay settings after which the board is a pure function; an error answer is never kept. Returns (body, etag or None)."""
     moves = read_moves() if overlay_on() else {}
-    key = hashlib.sha256(json.dumps([board_cache, moves, overlay_on(), pending_window(), board_stale()], sort_keys=True, default=str).encode()).hexdigest()
+    key = hashlib.sha256(json.dumps([board_cache, moves, overlay_on(), pending_window(), board_stale(), flight_snapshot()], sort_keys=True, default=str).encode()).hexdigest()
     if _served_board.get("key") == key: return _served_board["body"], _served_board["etag"]
     try: body = json.dumps(board(moves)).encode()   # every card: the page filters the board by the bar (#899)
     except ValueError as e: return json.dumps({"error": str(e)}).encode(), None
@@ -4123,6 +4134,9 @@ def promote_write(issues, add=False):
     with no SG_STATE, and board.py reads the key to find its caches (#1750)."""
     nums = issues if isinstance(issues, list) else [issues]
     env = {**os.environ, "SG_STATE": str(STATE), "SG_MOVE_BY": "owner"}   # the owner's arrow names its dispatch context (#861)
+    # The item ids the hub already holds go to the writer, so a move reads no whole-project list for an id (#1300).
+    env["SG_BOARD_ITEM_HINTS"] = json.dumps({str(i["n"]): i["i"] for i in board_cache.get("items") or []
+                                             if i.get("n") in nums and i.get("i") and (i.get("r") or REPO).lower() == REPO.lower()})   # this repository's cards only (the seam's own filter)
     argv = ["bash", str(pathlib.Path(__file__).resolve().parent / "board.sh")]
     if add: argv.append("--add")
     # board.py settles each card it moves (SG_BOARD_SETTLE_SECONDS per card), so the budget is the base plus one settle for
@@ -4173,7 +4187,7 @@ def spec_tickets(issue, item):
         if not isinstance(sub, dict): continue
         c = cards.get((repo.lower(), sub.get("number")))
         if c is None or _repo_of(sub.get("repository_url"), repo) != repo.lower(): continue
-        if closed(sub.get("state")) or closed(c.get("s")): continue
+        if closed(sub.get("state")) or closed(c.get("s")) or in_flight(c["n"]): continue   # a ticket already in flight is moving, not Backlog (#1300)
         labels = {*(c.get("l") or []), *(x.get("name") for x in sub.get("labels") or [] if isinstance(x, dict))}
         if _columns_module.SPEC_LABEL in labels or labels & set(TICKET_HOLD_LABELS): continue
         if _columns_module.view_column(c.get("st"), False, c.get("l"))[0] != COLUMN["unscheduled"]:
@@ -4194,6 +4208,7 @@ def promote(issue):
     item = next((i for i in board_cache.get("items") or [] if i.get("n") == issue), None)
     if item is None: return {"err": "not on the board"}
     if str(item.get("s") or "").lower() == "closed": return {"err": "the issue is closed: a closed card keeps its column"}
+    if in_flight(issue): return {"err": "the card is already moving to Todo: the writer has not answered yet"}
     # The column the board draws, a proved move's overlay included: the same function the board route asks, so the rule
     # reads one column in both routes and a card drawn as moved is never written again (#829).
     st = drawn_column(item, read_moves() if overlay_on() else {}, pending_window())["st"]
@@ -4205,9 +4220,60 @@ def promote(issue):
         tickets, _, err = spec_tickets(issue, item)
         if err: return {"err": err}
     cards = [item, *tickets]
-    err = write_cards(cards)
-    if err: return {"err": err}
-    return {"ok": True, "issue": issue, "to": PROMOTE_TO, "moved": [c["n"] for c in cards]}
+    start_write(cards)
+    return {"ok": True, "issue": issue, "to": PROMOTE_TO, "pending": [c["n"] for c in cards]}
+
+# The writes the hub has sent and not yet had answered (#1300). A card in flight draws in Todo with a pending mark, and a
+# refusal the writer gave stays on its card until the owner moves it again. Both live in this process and reset on a restart,
+# which is the one thing a restart may lose: the board read draws the card where GitHub holds it.
+MOVE_FLIGHT = {}           # card number -> the column its write goes to, from the moment the route answers until the writer does
+MOVE_REFUSED = {}          # card number -> the reason the writer refused its last move
+MOVE_LOCK = threading.Lock()
+MOVE_THREADS = []          # the background writes this process started; wait_for_moves joins them
+def in_flight(n):
+    """Whether a write for card `n` is sent and not yet answered: the owner's move is not offered again meanwhile (#1300)."""
+    with MOVE_LOCK: return n in MOVE_FLIGHT
+def flight_snapshot():
+    """The cards in flight (sorted) and the refusals the page draws, read together under one lock."""
+    with MOVE_LOCK: return sorted(MOVE_FLIGHT), dict(MOVE_REFUSED)
+def wait_for_moves(timeout=30.0):
+    """Join every background write this process started. The suite calls it to read the board once the writer has answered."""
+    with MOVE_LOCK: threads = list(MOVE_THREADS)
+    for t in threads: t.join(timeout)
+def start_write(cards, after=None):
+    """Send one card set to the writer in the background and return at once (#1300). Each card is in flight until the writer
+    answers, and the board draws it in Todo with a pending mark meanwhile. `after(moved, reason)` runs once the answer is
+    known; the page never waits for it. A proved card moves in the cache, and a refused one keeps its column and its reason."""
+    with MOVE_LOCK:
+        for c in cards: MOVE_FLIGHT[c["n"]] = PROMOTE_TO; MOVE_REFUSED.pop(c["n"], None)
+        MOVE_THREADS[:] = [t for t in MOVE_THREADS if t.is_alive()]
+        t = threading.Thread(target=_settle_write, args=(cards, after), daemon=True, name=f"board-move-{cards[0]['n']}")
+        MOVE_THREADS.append(t)
+    t.start()
+def _settle_write(cards, after):
+    """The writer's answer for one card set, in the background. The flight ends whatever the answer, so a failure here can never
+    leave a card drawn pending for good."""
+    moved, reason = [], "the writer did not answer"
+    try:
+        proved, reason = send_cards(cards)
+        moved = [c["n"] for c in cards if c["n"] in proved]
+        if moved:
+            with _board_lock:
+                for i in board_cache.get("items") or []:
+                    if i.get("n") in moved: i["st"] = PROMOTE_TO   # the cache follows the proof, whichever list object the pass holds now
+                for c in cards:
+                    if c["n"] in moved: c["st"] = PROMOTE_TO
+            save_board()
+    except Exception as e:
+        reason = str(e)[:200] or reason
+    finally:
+        with MOVE_LOCK:
+            for c in cards:
+                MOVE_FLIGHT.pop(c["n"], None)
+                if c["n"] not in moved and reason: MOVE_REFUSED[c["n"]] = reason
+    if after:
+        try: after(moved, reason if len(moved) < len(cards) else None)
+        except Exception as e: print(f"hub: a board move's record failed: {e}", file=sys.stderr)
 
 MOVED_LINE = re.compile(r"^#(\d+) -> ", re.M)   # board.py prints `#<n> -> <Status>` for each card it proved moved (or already carried)
 def send_cards(cards):
@@ -4221,20 +4287,11 @@ def send_cards(cards):
         try: (STATE / "board-dirty").touch()
         except OSError: pass
         out = e.stdout.decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
-        return [int(n) for n in MOVED_LINE.findall(out)], f"the writer did not answer in {int(e.timeout)} s: the move may be partial, and the board is read again"
+        return [int(n) for n in MOVED_LINE.findall(out)], f"the writer had not answered after {int(e.timeout)} s: the move may be partial, and the board is read again"
     except Exception as e: return [], str(e)[:200] or "the writer did not answer"
     if r.returncode == 0: return [c["n"] for c in cards], None
     lines = (r.stderr or r.stdout or f"exit {r.returncode}").strip().splitlines()
     return [int(n) for n in MOVED_LINE.findall(r.stdout or "")], (next((l for l in lines if l.startswith("#")), lines[0] if lines else "") or "the writer refused")[:300]
-def write_cards(cards):
-    """The one write of a card set: the seam moves every card in one call, in the order given, so a spec's card lands before
-    its tickets (ADR-0142). Returns the refusal, or None when the cards moved and the cache follows them."""
-    _, err = send_cards(cards)
-    if err: return err
-    for c in cards: c["st"] = PROMOTE_TO   # the cache follows the write, so the next refresh shows the move without a GitHub read after it
-    save_board()
-    return None
-
 BATCH_AUDIT = STATE / "board-batch.jsonl"   # one line per batch write the owner asked for: the count, the cards and who asked (#1098)
 def promote_batch_plan():
     """The cards the batch moves, in write order, or the refusal. Every card the owner's move would start goes in, a spec
@@ -4242,7 +4299,7 @@ def promote_batch_plan():
     A card reached twice moves once."""
     moves = read_moves() if overlay_on() else {}
     window = pending_window()
-    starts = [i for i in board_cache.get("items") or [] if promotable({**i, "st": drawn_column(i, moves, window)["st"]})]
+    starts = [i for i in board_cache.get("items") or [] if not in_flight(i["n"]) and promotable({**i, "st": drawn_column(i, moves, window)["st"]})]
     specs = [i for i in starts if _columns_module.SPEC_LABEL in (i.get("l") or [])]
     ordered, seen = [], set()
     def add(card):
@@ -4265,6 +4322,7 @@ def spec_batch_cards(number):
     item = next((i for i in items if i.get("n") == number), None)
     if item is None: return None, None, "not on the board"
     if str(item.get("s") or "").lower() == "closed": return None, None, f"the spec #{number} is closed: nothing to start"
+    if in_flight(number): return None, None, f"the spec #{number} is already moving to Todo: the writer has not answered yet"
     st = drawn_column(item, read_moves() if overlay_on() else {}, pending_window())["st"]
     col, _ = _columns_module.view_column(st, False, item.get("l"))
     started = col == PROMOTE_TO
@@ -4280,19 +4338,12 @@ def spec_batch_cards(number):
             seen.add(card["n"])
             cards.append(card)
     return cards, list(dict.fromkeys(skipped)), None
-def write_spec_batch(cards):
-    """The writer call of one spec's batch (#1127): the cards it proved moved, in card order, and the refusal or None. The
-    cache follows only the cards the writer proved, so a write that fails part way leaves the rest in Backlog."""
-    proved, err = send_cards(cards)
-    moved = [c for c in cards if c["n"] in proved]
-    for c in moved: c["st"] = PROMOTE_TO
-    if moved: save_board()
-    return [c["n"] for c in moved], err
 def promote_spec_batch(body, who):
     """One spec's batch (#1127, plan #1126). With no `confirm` the answer is the plan and nothing moves. With `confirm` equal to
     the count the plan answers now, one write moves the plan's cards, the spec's card first, through the writer the single
-    move uses. A count that changed is refused and nothing moves. Every request that carries `confirm` writes one audit line,
-    whatever its outcome, and a write that fails part way names the cards that moved and those that did not."""
+    move uses, and the answer comes back at once with the cards in flight (#1300). A count that changed is refused and nothing
+    moves. Every request that carries `confirm` writes one audit line once the writer has answered, whatever the outcome, and a
+    write that fails part way names the cards that moved and those that did not."""
     spec = body["spec"]
     cards, skipped, err = spec_batch_cards(spec)
     if "confirm" not in body:
@@ -4315,12 +4366,11 @@ def promote_spec_batch(body, who):
         reason = f"the spec #{spec} has no card in Backlog to start"
         audit("refused", reason=reason)
         return {"err": reason, "count": 0}
-    moved, err = write_spec_batch(cards)
-    if err is None:
-        audit("moved", moved)
-        return {"ok": True, "count": len(cards), "moved": moved}
-    audit("partial" if moved else "failed", moved, err)
-    return {"err": err, "count": len(cards), "moved": moved, "unmoved": [c["n"] for c in cards if c["n"] not in moved]}
+    def done(moved, reason):
+        audit("moved" if reason is None else ("partial" if moved else "failed"), moved, reason)
+    start_write(cards, done)
+    return {"ok": True, "count": len(cards), "pending": issues}
+
 def promote_batch(body, who):
     """The owner's batch move (#1098). With no `confirm`, the hub answers the count it would move and the numbers, and nothing
     moves. With `confirm` equal to that count, one write moves every card of the plan, and the hub records the count and who
@@ -4333,13 +4383,13 @@ def promote_batch(body, who):
     if "confirm" not in body: return {"count": len(issues), "issues": issues}
     if not cards: return {"err": "no card is in Backlog"}
     if type(body["confirm"]) is not int or body["confirm"] != len(cards): return {"err": f"the batch is {len(cards)} cards now, not {body['confirm']}: read it again"}
-    err = write_cards(cards)
-    record = {"at": dt.datetime.now().astimezone().isoformat(timespec="seconds"), "who": who, "action": "promote-batch",
-              "count": len(cards), "issues": issues, "ok": err is None}
-    if err: record["err"] = err
-    with BATCH_AUDIT.open("a") as f: f.write(json.dumps(record) + "\n")
-    if err: return {"err": err}
-    return {"ok": True, "count": len(cards), "moved": issues}
+    def done(moved, reason):   # the record is written once the writer has answered, never before it (#1300)
+        record = {"at": dt.datetime.now().astimezone().isoformat(timespec="seconds"), "who": who, "action": "promote-batch",
+                  "count": len(cards), "issues": issues, "ok": reason is None}
+        if reason: record["err"] = reason
+        with BATCH_AUDIT.open("a") as f: f.write(json.dumps(record) + "\n")
+    start_write(cards, done)
+    return {"ok": True, "count": len(cards), "pending": issues}
 
 _issue_cache = {}
 def gh_json(path, timeout=30):
@@ -5610,7 +5660,7 @@ const ageC=o=>{const h=(Date.now()-Date.parse(o))/3600000;return h>=24?"old":h>=
 setInterval(()=>document.querySelectorAll("#bbody .age").forEach(e=>{e.textContent=age(e.dataset.o);e.className="age "+ageC(e.dataset.o)}),30000);
 const gcls=c=>c.v==="?"?"unk":c.v==="debt"?"debt":c.v.startsWith("OK")?"ok":(c.v.startsWith("CHG")||c.v.startsWith("BLK"))?"bad":"";
 const gstrip=s=>{const age=Math.round(Date.now()/1000-s.at),old=age>s.max;return `<div class="gstrip${old?" old":""}" title="${esc(old?`these facts are ${age} s old: the strip greys out past 180 s, so nothing here is being claimed as fresh`:"R review · C CI · T threads · B base · H labels and holds")}">`+s.cells.map(c=>`<span class="gc ${gcls(c)}" title="${esc(c.tip||"")}">${c.k}<b>${esc(c.v)}</b></span>`).join("")+`</div>`};
-const cards=(g,it,shown)=>{const GHI='<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>';return shown.map(x=>{const pr=x.kind==="pr";return `<div class=it data-n="${x.n}" data-r="${esc(x.r||"__REPO__")}"${pr?" data-pr":""} data-col="${encodeURIComponent(g.name==null?"":String(g.name))}" data-pm="${x.pm&&!pr?1:""}" data-b="${encodeURIComponent(JSON.stringify(x.b||[]))}" data-bl="${encodeURIComponent(JSON.stringify(x.bl||[]))}" data-ho="${encodeURIComponent(x.ho==null?"":String(x.ho))}" data-hr="${encodeURIComponent(x.hr==null?"":String(x.hr))}" data-prf="${encodeURIComponent(JSON.stringify(x.prf||[]))}" style="--cc:${colOf(g.name,CN)};--lc:${specColor(SLOTS,cardSpec(x))}${tint(x)}"><a class="id ghl" target=_blank rel=noopener title="open ${pr?"pull request":"issue"} #${x.n} on GitHub" aria-label="open ${pr?"pull request":"issue"} #${x.n} on GitHub" href="https://github.com/${esc(x.r||"__REPO__")}/${pr?"pull":"issues"}/${x.n}">#${x.n} ${GHI}</a>${x.kind!=="pr"&&x.pa!=null&&!x.sp?`<span class=lchip data-k=spec title="spec #${x.pa}">${x.pa}</span>`:""}${waveChip(x)}${(x.l||[]).includes("loop-bug")?'<span class="bugc loop">loop-bug</span>':(x.l||[]).includes("bug")?'<span class="bugc">bug</span>':""}${x.rt?`<span class=rpo title="the repository this card belongs to: ${esc(x.r)}">${esc(x.rt)}</span>`:""}${x.pb?`<span class="pbg ${x.pb.replace(" ","-")}">${esc(x.pb)}</span>`:""}${x.rollup?`<span class="cir ${esc(x.rollup)}" title="CI states on the head${(x.ci||[]).length?": "+esc((x.ci||[]).join(", ")):""}">CI ${esc(x.rollup)}</span>`:""}${x.fz?`<span class=fz title="a freeze is a marker, never a move: the card keeps its column">${esc(x.fz)}</span>`:""}${x.pd?`<span class=pnd title="pending: the board door proved this move and the board read has not carried it yet">pending</span>`:""}${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(String(x.t).replace(/^\s*\[SPEC(?:\s*#?\d+)?\]\s*/i,""))}</span>${x.pm&&!pr?`<button class=pmp data-n="${x.n}" title="move this card to ${esc(x.pmt)}: the owner's go signal (ADR-0142)">→ ${esc(x.pmt)}</button>`:""}${x.sb?`<button class=spb data-n="${x.n}" title="plan this spec's batch: the hub names the count and the cards first, and nothing moves until you confirm">Start this spec</button>`:""}${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.ho?`<span class=hld title="${esc(x.ho)}">running</span>`:""}${(x.cl||[]).length?`<div class=clos title="the issues this pull request closes">closes ${x.cl.map(n=>`<a target=_blank rel=noopener href="https://github.com/${esc(x.r||"__REPO__")}/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${(x.o||x.sc||x.by)?`<div class=ft>${x.sc?`<span class=tsk title="sub-issues closed / total: ${esc(x.sc)}">${esc(x.sc)}</span>`:""}${x.o?`<span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span>`:""}${x.by?`<span class=au title="opened by ${esc(x.by)}">${esc(x.by)}</span>`:""}</div>`:""}</div>`}).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"")};
+const cards=(g,it,shown)=>{const GHI='<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>';return shown.map(x=>{const pr=x.kind==="pr";return `<div class=it data-n="${x.n}" data-r="${esc(x.r||"__REPO__")}"${pr?" data-pr":""} data-col="${encodeURIComponent(g.name==null?"":String(g.name))}" data-pm="${x.pm&&!pr?1:""}" data-b="${encodeURIComponent(JSON.stringify(x.b||[]))}" data-bl="${encodeURIComponent(JSON.stringify(x.bl||[]))}" data-ho="${encodeURIComponent(x.ho==null?"":String(x.ho))}" data-hr="${encodeURIComponent(x.hr==null?"":String(x.hr))}" data-prf="${encodeURIComponent(JSON.stringify(x.prf||[]))}" style="--cc:${colOf(g.name,CN)};--lc:${specColor(SLOTS,cardSpec(x))}${tint(x)}"><a class="id ghl" target=_blank rel=noopener title="open ${pr?"pull request":"issue"} #${x.n} on GitHub" aria-label="open ${pr?"pull request":"issue"} #${x.n} on GitHub" href="https://github.com/${esc(x.r||"__REPO__")}/${pr?"pull":"issues"}/${x.n}">#${x.n} ${GHI}</a>${x.kind!=="pr"&&x.pa!=null&&!x.sp?`<span class=lchip data-k=spec title="spec #${x.pa}">${x.pa}</span>`:""}${waveChip(x)}${(x.l||[]).includes("loop-bug")?'<span class="bugc loop">loop-bug</span>':(x.l||[]).includes("bug")?'<span class="bugc">bug</span>':""}${x.rt?`<span class=rpo title="the repository this card belongs to: ${esc(x.r)}">${esc(x.rt)}</span>`:""}${x.pb?`<span class="pbg ${x.pb.replace(" ","-")}">${esc(x.pb)}</span>`:""}${x.rollup?`<span class="cir ${esc(x.rollup)}" title="CI states on the head${(x.ci||[]).length?": "+esc((x.ci||[]).join(", ")):""}">CI ${esc(x.rollup)}</span>`:""}${x.fz?`<span class=fz title="a freeze is a marker, never a move: the card keeps its column">${esc(x.fz)}</span>`:""}${x.pd?`<span class=pnd title="pending: the move to Todo is sent and the writer has not answered yet, or the board read has not carried a proved move">pending</span>`:""}${x.mr?`<div class=perr title="the writer refused this move">${esc(x.mr)}</div>`:""}${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(String(x.t).replace(/^\s*\[SPEC(?:\s*#?\d+)?\]\s*/i,""))}</span>${x.pm&&!pr?`<button class=pmp data-n="${x.n}" title="move this card to ${esc(x.pmt)}: the owner's go signal (ADR-0142)">→ ${esc(x.pmt)}</button>`:""}${x.sb?`<button class=spb data-n="${x.n}" title="plan this spec's batch: the hub names the count and the cards first, and nothing moves until you confirm">Start this spec</button>`:""}${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.ho?`<span class=hld title="${esc(x.ho)}">running</span>`:""}${(x.cl||[]).length?`<div class=clos title="the issues this pull request closes">closes ${x.cl.map(n=>`<a target=_blank rel=noopener href="https://github.com/${esc(x.r||"__REPO__")}/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${(x.o||x.sc||x.by)?`<div class=ft>${x.sc?`<span class=tsk title="sub-issues closed / total: ${esc(x.sc)}">${esc(x.sc)}</span>`:""}${x.o?`<span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span>`:""}${x.by?`<span class=au title="opened by ${esc(x.by)}">${esc(x.by)}</span>`:""}</div>`:""}</div>`}).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"")};
 // A visible column holding no cards is not drawn at all: the columns that do have cards take the width, and the
 // collapsed one is accounted for by a line at the foot of the hidden: strip. Which columns those are is derived on
 // every render -- from the filtered count, the user's hidden set and the set the line's eye added -- and never
@@ -5768,7 +5818,7 @@ pickFilter("fwl","fw");pickFilter("fsl","fs");pickFilter("fkl","fk");
 document.addEventListener("click",async e=>{const b=e.target.closest("#bbody .pmp");if(!b)return;e.preventDefault();e.stopPropagation();const n=+b.dataset.n,card=b.closest(".it");b.disabled=true;
 try{const r=await fetch("/api/promote",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({issue:n})}),d=await r.json();
  if(d.err){card.insertAdjacentHTML("beforeend",`<div class=perr>${esc(d.err)}</div>`);b.disabled=false}
- else{b.textContent="moved to Todo ✓";pollBoard()}}catch(x){card.insertAdjacentHTML("beforeend","<div class=perr>the hub did not answer</div>");b.disabled=false}});
+ else{b.textContent="sent to Todo";pollBoard()}}catch(x){card.insertAdjacentHTML("beforeend","<div class=perr>the hub did not answer</div>");b.disabled=false}});
 // The batch move (#1098): the hub names how many cards it would move, the owner confirms that count, and one write moves them.
 const batchPost=body=>fetch("/api/promote",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({batch:true,...body})}).then(r=>r.json());
 document.addEventListener("click",async e=>{const b=e.target.closest("#bbody .bmv");if(!b)return;e.preventDefault();e.stopPropagation();
@@ -5795,7 +5845,7 @@ document.addEventListener("click",async e=>{const g=e.target.closest("#spdlg .sp
  const dlg=specPanel(),n=+dlg.dataset.n;g.disabled=true;
  try{const d=await specPost({spec:n,confirm:+g.dataset.count});
   if(d.err){dlg.innerHTML=`<div class=perr>${esc(d.err)}</div><button class=spx type=button>Close</button>`;return}
-  dlg.remove();specNote(`Started spec #${n}: ${d.moved.length} card${d.moved.length===1?"":"s"} moved to Todo.`);pollBoard()
+  dlg.remove();specNote(`Started spec #${n}: ${d.pending.length} card${d.pending.length===1?"":"s"} sent to Todo; the writer confirms in the background.`);pollBoard()
  }catch(x){dlg.innerHTML="<div class=perr>the hub did not answer</div><button class=spx type=button>Close</button>"}});
 document.addEventListener("click",e=>{if(e.target.closest("#spdlg .spx"))$("#spdlg").remove()});
 document.addEventListener("click",e=>{for(const d of["#fw","#fs"])if($(d)&&!e.target.closest(d))$(d).open=false});
