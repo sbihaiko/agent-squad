@@ -554,6 +554,26 @@ def squad_roots(sg_squad, sg_checkout, checkout, here):
         if r and r not in out: out.append(r)
     return out
 
+_SQUAD_LOCK = threading.Lock()   # one resolution at a time: the hub serves on threads, and a purge another thread imports into is a crash (#1215)
+
+def _squad_names():
+    """The `squad` keys `sys.modules` held at one instant. A plain copy is atomic under the GIL; reading the live dict while
+    a second thread imports a module raises "dictionary changed size during iteration", and the live hub reported that as
+    "the terminal supervisor is not running"."""
+    return [m for m in sys.modules.copy() if m == "squad" or m.startswith("squad.")]
+
+def _held_squad(roots, names):
+    """The modules this process already holds, when the first of them lives under one of the asked roots: the answer needs
+    no purge, so no other thread's import is disturbed. An empty answer sends the caller to the resolving path."""
+    try:
+        mods = tuple(importlib.import_module("squad." + n) for n in names)
+    except Exception:
+        return ()
+    here = getattr(mods[0], "__file__", None)
+    if not here: return ()
+    if any(r and pathlib.Path(here).resolve().is_relative_to(pathlib.Path(r).resolve()) for r in roots): return (mods,)
+    return ()
+
 def load_squad(roots, names=("caps", "run_caps")):
     """The `squad` modules `names` (default `squad.caps` and `squad.run_caps`) from the first root that holds the package, and only from that root: a package that
     some other entry of this machine's path happens to hold answers for no root (#452). A root that fails leaves nothing
@@ -563,26 +583,29 @@ def load_squad(roots, names=("caps", "run_caps")):
     table gains none (#453). This module is read by a longer-lived interpreter too -- a suite that imports it into its own
     process -- and a purge that stayed there parted every class that process already held, so a raise it expected was a
     different class from the one it caught."""
-    err = ModuleNotFoundError("no squad package in: " + ", ".join(roots))
-    ambient = {m: mod for m, mod in sys.modules.items() if m == "squad" or m.startswith("squad.")}
-    for m in ambient: del sys.modules[m]
-    try:
-        for root in roots:
-            added = not (sys.path and sys.path[0] == root)   # the asked root goes first, else a squad earlier on sys.path answers for it
-            if added: sys.path.insert(0, root)
-            try:
-                mods = [importlib.import_module("squad." + n) for n in names]
-                here = getattr(mods[0], "__file__", None)   # the first module the import found: it must live under the root that was asked
-                if here and pathlib.Path(here).resolve().is_relative_to(pathlib.Path(root).resolve()): return tuple(mods)
-                err = ModuleNotFoundError(f"{root} holds no squad package (the one imported is {here})")
-            except Exception as e:
-                err = e
-            for m in [m for m in sys.modules if m == "squad" or m.startswith("squad.")]: del sys.modules[m]
-            if added: sys.path.remove(root)
-        raise err
-    finally:
-        for m in [m for m in sys.modules if m == "squad" or m.startswith("squad.")]: del sys.modules[m]
-        sys.modules.update(ambient)
+    with _SQUAD_LOCK:
+        for mods in _held_squad(roots, names):
+            return mods
+        err = ModuleNotFoundError("no squad package in: " + ", ".join(roots))
+        ambient = {m: sys.modules[m] for m in _squad_names() if m in sys.modules}
+        for m in _squad_names(): sys.modules.pop(m, None)
+        try:
+            for root in roots:
+                added = not (sys.path and sys.path[0] == root)   # the asked root goes first, else a squad earlier on sys.path answers for it
+                if added: sys.path.insert(0, root)
+                try:
+                    mods = [importlib.import_module("squad." + n) for n in names]
+                    here = getattr(mods[0], "__file__", None)   # the first module the import found: it must live under the root that was asked
+                    if here and pathlib.Path(here).resolve().is_relative_to(pathlib.Path(root).resolve()): return tuple(mods)
+                    err = ModuleNotFoundError(f"{root} holds no squad package (the one imported is {here})")
+                except Exception as e:
+                    err = e
+                for m in _squad_names(): sys.modules.pop(m, None)
+                if added: sys.path.remove(root)
+            raise err
+        finally:
+            for m in _squad_names(): sys.modules.pop(m, None)
+            sys.modules.update(ambient)
 
 CAPS_LOGGED = set()
 def log_once(line, seen=CAPS_LOGGED, out=None):
