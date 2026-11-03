@@ -80,7 +80,8 @@ def column_for(facts):
 HEX = {"GRAY": "var(--s8)", "BLUE": "var(--s1)", "YELLOW": "var(--wait)", "ORANGE": "var(--warn)",
        "PURPLE": "var(--none)", "PINK": "var(--s7)", "GREEN": "var(--ok)", "RED": "var(--err)"}
 LANES = ({"key": "pr_open", "name": "Open PRs", "color": "var(--acc)", "tracking": True},)
-ROLE = {"issue_closed": "Closed", "abandoned": "Abandoned", "unscheduled": "Backlog", "issue_todo": "Todo"}
+ROLE = {"issue_closed": "Closed", "abandoned": "Abandoned", "unscheduled": "Backlog", "issue_todo": "Todo",
+        "gating": "Gating"}
 DOING = "Doing"   # the column a claimed card wears: the lane bar counts it as the amber share (owner, 2026-11-02)
 SPEC_LABEL = "spec"
 

@@ -458,3 +458,78 @@ def test_a_cluster_serves_the_radius_that_holds_its_count(lt):
 
 def test_the_ring_radius_grows_with_its_count(lt):
     assert lt.count_box_radius(9) < lt.count_box_radius(99) < lt.count_box_radius(999)
+
+
+# SPEC 1218 #1256: the chart breaks a card's life into its columns and reports the gate's share.
+def _gated(n, hours, columns, gate):
+    return {**_card(n, hours), "columns": columns, "gate": gate}
+
+
+def test_the_stack_splits_a_row_into_its_column_hours(lt):
+    row = _gated(1, 10.0, {"Doing": 4.0, "Gating": 2.0, "Closed": 4.0}, 2.0)
+
+    stack = lt.lead_time([row])["series"][0]["stack"]
+
+    assert {band["column"]: band["hours"] for band in stack} == {"Doing": 4.0, "Gating": 2.0, "Closed": 4.0}
+    assert sum(band["hours"] for band in stack) == pytest.approx(row["hours"]), \
+        "the column totals disagree with the measure beside them"
+    assert next(band for band in stack if band["column"] == "Gating")["text"] == "2h"
+
+
+def test_a_plain_row_stacks_its_whole_measure_in_its_own_column(lt):
+    stack = lt.lead_time([_card(1, 5)])["series"][0]["stack"]
+
+    assert [(band["column"], band["hours"]) for band in stack] == [("Done", 5.0)], "a plain row invents no band"
+
+
+def test_gate_time_reads_the_gating_hours_and_a_card_that_never_gated_adds_none(lt):
+    items = [_gated(1, 10.0, {"Doing": 6.0, "Gating": 4.0}, 4.0), _gated(2, 8.0, {"Doing": 8.0}, 0.0)]
+
+    summary = lt.lead_time(items)["summary"]
+
+    assert summary["gate"] == {"hours": 4.0, "text": "4h"}
+
+
+def test_a_card_that_never_gated_draws_no_gating_band(lt):
+    stack = lt.lead_time([_gated(1, 8.0, {"Doing": 8.0}, 0.0)])["series"][0]["stack"]
+
+    assert "Gating" not in [band["column"] for band in stack]
+
+
+def test_the_existing_measure_is_unchanged_for_a_fixture_with_no_gating_interval(lt):
+    items = [_gated(n, float(n), {"Closed": float(n)}, 0.0) for n in range(1, 11)]
+
+    result = lt.lead_time(items)
+
+    assert result["summary"]["average"]["hours"] == 5.5
+    assert result["summary"]["median"]["hours"] == 5, "the Kaplan-Meier median over 1h..10h falls to one half at 5h"
+    assert result["summary"]["minimum"]["hours"] == 1.0
+    assert result["summary"]["maximum"]["hours"] == 10.0
+    assert result["summary"]["p85"]["hours"] == 9.0
+    assert result["summary"]["gate"]["hours"] == 0.0
+
+
+def test_the_control_chart_dot_carries_its_stack_and_the_chart_and_gate_time_agree(lt):
+    row = {"n": 1, "t": "card 1", "o": _iso(NOW - timedelta(hours=10)), "c": _iso(NOW), "column": "Closed",
+           "hours": 10.0, "flowing": 8.0, "held": 2.0, "approx": False, "unknown_first": False,
+           "columns": {"Doing": 6.0, "Gating": 3.0, "Closed": 1.0}, "gate": 3.0}
+
+    chart = _chart(lt, [row])
+    dot = chart["dots"][0]
+
+    assert sum(band["hours"] for band in dot["stack"]) == pytest.approx(dot["hours"])
+    assert dot["gate_hours"] == 3.0 and dot["gate_text"] == "3h"
+    assert chart["gate"]["hours"] == 3.0
+    assert chart["gate"]["text"] == "3h"
+    assert chart["gate"]["label"] == "Gate time"
+
+
+def test_the_control_chart_keeps_a_never_gated_card_out_of_gate_time(lt):
+    never = {"n": 2, "t": "card 2", "o": _iso(NOW - timedelta(hours=4)), "c": _iso(NOW), "column": "Closed",
+             "hours": 4.0, "flowing": 4.0, "held": 0.0, "approx": False, "unknown_first": False,
+             "columns": {"Doing": 4.0}, "gate": 0.0}
+
+    chart = _chart(lt, [never])
+
+    assert chart["gate"]["hours"] == 0.0
+    assert [band["column"] for band in chart["dots"][0]["stack"]] == ["Doing"]

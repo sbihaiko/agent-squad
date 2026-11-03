@@ -593,7 +593,7 @@ def test_the_legend_marks_each_entry_once_and_keeps_the_band_entry_whole(hub, bo
     out = _lt_chart(hub, tmp_path, "lt-legend.js", _flow(hub)["lead"]["control"]["jira"]["all"])
     legend = re.search(r'<p class="flg ltlg">(.*?)</p>', out).group(1)
     entries = re.findall(r"<span>(.*?)</span>", legend)
-    assert len(entries) == 5, entries
+    assert len(entries) == 6, entries   # re-anchored (#1256): gate time is a sixth entry, once
     assert all(entry.count("<i") == 1 for entry in entries), "an entry has no marker or two"
     band = next(entry for entry in entries if "Standard deviation" in entry)
     assert "<i" in band, "the band's label is split from its marker"
@@ -1159,3 +1159,70 @@ def test_the_lead_chart_states_its_coverage_and_marks_approximate_and_unknown_st
     out = _render(hub, tmp_path, "flow-lead-approx.js", f"flowLead({json.dumps(lead)})")
     assert re.search(r'<circle[^>]*stroke-dasharray="3 2"', out), "an approximate start is dashed"
     assert "start approximate" in out
+
+
+# SPEC 1218 #1256: the lead chart breaks each card's life into its columns, and reports gate time.
+def test_the_lead_chart_gives_a_gating_interval_its_own_band(hub, board):
+    gated = [{"t": OPENED, "type": "added"}, {"t": OPENED, "type": "status", "status": "Todo"},
+             {"t": "2026-10-01T15:00:00Z", "type": "status", "status": "Gating"},
+             {"t": "2026-10-02T09:00:00Z", "type": "status", "status": "Closed"},
+             {"t": "2026-10-02T09:00:00Z", "type": "closed"}]
+    item = _card(1, st="Closed", s="CLOSED", c="2026-10-02T09:00:00Z")
+    _seed(hub, {1: (item, gated), 2: _done(2, "2026-10-03T09:00:00Z")})
+
+    lead = _flow(hub)["lead"]
+    row = next(s for s in lead["series"] if s["n"] == 1)
+    plain = next(s for s in lead["series"] if s["n"] == 2)
+
+    assert {band["column"]: band["hours"] for band in row["stack"]} == {"Todo": 6.0, "Gating": 18.0}
+    assert sum(band["hours"] for band in row["stack"]) == pytest.approx(row["hours"]), \
+        "the stack disagrees with the measure beside it"
+    assert row["gate_hours"] == pytest.approx(18.0)
+    assert "Gating" not in [band["column"] for band in plain["stack"]], "a card that never gated draws no band"
+    assert plain["gate_hours"] == 0.0
+
+    chart = lead["control"]["jira"]["all"]
+    assert sum(band["hours"] for dot in chart["dots"] for band in dot["stack"] if band["column"] == "Gating") == \
+        pytest.approx(chart["gate"]["hours"]), "gate time is not the Gating band's total"
+    assert chart["gate"]["hours"] == pytest.approx(18.0)
+    assert chart["gate"]["text"] == "18h"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_chart_draws_the_stack_and_gate_time_in_the_boards_palette_roles(hub, tmp_path):
+    gated = [{"t": OPENED, "type": "added"}, {"t": OPENED, "type": "status", "status": "Todo"},
+             {"t": "2026-10-01T15:00:00Z", "type": "status", "status": "Gating"},
+             {"t": "2026-10-02T09:00:00Z", "type": "status", "status": "Closed"},
+             {"t": "2026-10-02T09:00:00Z", "type": "closed"}]
+    board_path = hub._hist.history_path(hub.BOARD, hub.REPO)
+    item = _card(1, st="Closed", s="CLOSED", c="2026-10-02T09:00:00Z")
+    hub._hist.record_issue(board_path, 1, OPENED, OPENED, gated, True, now=time.time(), keys=hub.bar_keys(item))
+    hub.board_cache["items"] = [item]
+    chart = hub.flow_lead(ty=None)["lead"]["control"]["jira"]["all"]
+
+    block = _flow_block(hub).split("const drawFlow")[0]
+    drawing = "\n".join([
+        f"const COLORS={hub.BOARD_COLORS_JSON},COLNAME={hub.BOARD_NAMES_JSON};", "const esc=s=>String(s);",
+        "const ls={};", block, 'LT.tf="all";LT.log=false;',
+        f"process.stdout.write(flowLead({json.dumps(hub.flow_lead(ty=None)['lead'])}));",
+    ])
+    path = tmp_path / "lt-stack-roles.js"
+    path.write_text(drawing)
+    result = subprocess.run(["node", str(path)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    out = result.stdout
+
+    roles = json.loads(hub.BOARD_COLORS_JSON)
+    bands = re.findall(r"<rect [^>]*>.*?</rect>", out)
+    gating = next(band for band in bands if "Gating" in band)
+    todo = next(band for band in bands if "Todo" in band)
+    assert _paint(gating, "fill") == roles["Gating"], "the Gating band does not take the column's palette role"
+    assert _paint(todo, "fill") == roles["Todo"], "the Todo band does not take the column's palette role"
+    assert all(re.fullmatch(r"var\(--chart-[\w-]+\)", _paint(band, "fill") or "") for band in bands), \
+        "a band paints a colour outside the chart roles"
+    tokens = _tokens()
+    legend = re.search(r'<p class="flg ltlg">(.*?)</p>', out).group(1)
+    entry = next(e for e in re.findall(r"<span>(.*?)</span>", legend) if "Gate time" in e)
+    swatch = re.search(r'<i style="background:([^;"]+)', entry).group(1)
+    assert _resolved(swatch, tokens) == _resolved(roles["Gating"], tokens), "gate time does not take the Gating role"
+    assert f"<b>{chart['gate']['text']}</b>" in entry, "the legend does not carry gate time"

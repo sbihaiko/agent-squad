@@ -280,3 +280,57 @@ def test_lead_span_marks_an_approximate_boundary_inside_the_window():
         (11, 0, "closed", {}),
     ))
     assert bh.lead_span(runs, start="Todo")["approx"] is True
+
+
+# SPEC 1218 #1256: the lead-time chart breaks a card's life into its columns, and counts the gate's share.
+def test_a_gating_interval_opens_and_closes_with_its_instants():
+    runs = bh.intervals(_timeline(
+        (10, 0, "added", {}),
+        (10, 1, "status", {"status": "Todo"}),
+        (11, 0, "status", {"status": "Gating"}),
+        (11, 45, "status", {"status": "Closed"}),
+        (11, 45, "closed", {}),
+    ))
+
+    gating = next(run for run in runs if run["column"] == "Gating")
+
+    assert (gating["from"], gating["to"]) == ("2026-10-01T11:00:00Z", "2026-10-01T11:45:00Z")
+    obs = bh.lead_observation(runs, start="Todo")
+    assert obs["columns"]["Gating"] == pytest.approx(0.75)
+    assert obs["gate"] == pytest.approx(0.75)
+
+
+def test_two_gating_stretches_separated_by_a_freeze_sum_to_both():
+    runs = bh.intervals(_timeline(
+        (10, 0, "added", {}),
+        (10, 1, "status", {"status": "Todo"}),
+        (11, 0, "status", {"status": "Gating"}),
+        (11, 15, "label", {"name": "frozen:owner"}),
+        (11, 45, "unlabel", {"name": "frozen:owner"}),
+        (12, 0, "status", {"status": "Closed"}),
+        (12, 0, "closed", {}),
+    ))
+
+    gating = [run for run in runs if run["column"] == "Gating"]
+    assert len(gating) > 1, "the freeze ends the interval without changing the column"
+
+    obs = bh.lead_observation(runs, start="Todo")
+    stretches = [s for s in obs["stretches"] if s["column"] == "Gating"]
+    assert len(stretches) == 1, "contiguous runs of one column are one stretch"
+    assert stretches[0]["hours"] == pytest.approx(1.0), "the freeze inside Gating is still gate time"
+    assert obs["gate"] == pytest.approx(1.0)
+
+
+def test_a_card_that_never_gated_has_no_gating_hours():
+    runs = bh.intervals(_timeline(
+        (10, 0, "added", {}),
+        (10, 1, "status", {"status": "Todo"}),
+        (11, 0, "status", {"status": "Code Complete"}),
+        (12, 0, "status", {"status": "Closed"}),
+        (12, 0, "closed", {}),
+    ))
+
+    obs = bh.lead_observation(runs, start="Todo")
+
+    assert "Gating" not in obs["columns"]
+    assert obs["gate"] == 0.0
