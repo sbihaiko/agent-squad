@@ -599,9 +599,9 @@ def test_stopping_the_chip_on_a_zoomed_control_chart_reads_it_once(hub, board):
     q_bug, q_all = _bar(fk="bug"), _bar()
     f, t = "2026-10-02T00:00:00.000Z", "2026-10-09T00:00:00.000Z"
     span = "&scale=jira&a=&b="
-    enc = lambda v: urllib.parse.quote(v, safe="")
-    zoom_bug = f"/api/leadtime?from={enc(f)}&to={enc(t)}{span}&{q_bug}"
-    zoom_all = f"/api/leadtime?from={enc(f)}&to={enc(t)}{span}&{q_all}"
+    from_q, to_q = urllib.parse.quote(f, safe=""), urllib.parse.quote(t, safe="")
+    zoom_bug = f"/api/leadtime?from={from_q}&to={to_q}{span}&{q_bug}"
+    zoom_all = f"/api/leadtime?from={from_q}&to={to_q}{span}&{q_all}"
     answers = {f"/api/chart/lead?{q_bug}": hub.flow_lead(*hub.board_filters(q_bug)),
                zoom_bug: {"dots": []}, zoom_all: {"dots": []}}
     out = _page_harness(hub, answers, f"""
