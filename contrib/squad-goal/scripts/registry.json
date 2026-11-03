@@ -34,7 +34,7 @@
       "spend_only": true
     },
     "kimi": {
-      "label": "Kimi Code (monthly $19 plan)",
+      "label": "Kimi Code Plus",
       "provider": "kimi",
       "marker": "kimi-limited",
       "quota_probe": "kimi"
@@ -1499,11 +1499,18 @@
         "claude-kimi-k3"
       ],
       "retired": false,
-      "gateway_only": true
+      "gateway_only": true,
+      "display_price": {
+        "input": null,
+        "cache_read": null,
+        "output": null,
+        "currency": "USD",
+        "per": "mtok"
+      }
     },
     {
       "id": "kimi-for-coding",
-      "label": "Kimi K2.8 Preview (for coding)",
+      "label": "Kimi K2.8 Preview",
       "provider": "kimi",
       "subscription": "kimi",
       "efforts": [
@@ -1530,7 +1537,14 @@
         "claude-kimi-for-coding"
       ],
       "retired": false,
-      "gateway_only": true
+      "gateway_only": true,
+      "display_price": {
+        "input": null,
+        "cache_read": null,
+        "output": null,
+        "currency": "USD",
+        "per": "mtok"
+      }
     }
   ]
 }

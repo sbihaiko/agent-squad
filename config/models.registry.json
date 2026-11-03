@@ -34,7 +34,7 @@
       "spend_only": true
     },
     "kimi": {
-      "label": "Kimi Code (monthly $19 plan)",
+      "label": "Kimi Code Plus",
       "provider": "kimi",
       "marker": "kimi-limited",
       "quota_probe": "kimi"
