@@ -2278,7 +2278,7 @@ def status_payload():
             "spend_today": stats("day")["totals"]["today"],
             "open_bugs": sum(1 for i in items if str(i.get("s")).upper() == "OPEN" and "bug" in (i.get("l") or [])),
             "warnings": [{"text": f["text"], "tip": f.get("tip")} for f in (LOAD_STATE.get("facts") or []) if f.get("bad")],
-            "load": load_payload()}
+            "load": load_payload(), "build": HUB_BUILD}
 
 def worst_alert():
     """This project's worst alert as text: the first bad foot fact, in the order the line reads them; "" when none (#876)."""
@@ -7571,6 +7571,18 @@ class H(BaseHTTPRequestHandler):
 
 SELF = pathlib.Path(__file__).resolve(); LOADED = SELF.stat().st_mtime_ns
 BOOT = time.time_ns()   # the page's version is this process, not this file: a restart for a changed hubmux.py, run-sheet.js or address.sh leaves hub.py's mtime alone, and the open page must still reload
+def _build_fact(path):
+    """One source file's build fact as this process loaded it: its short SHA-256 and its mtime (#1298)."""
+    p = pathlib.Path(path)
+    return {"sha256": hashlib.sha256(p.read_bytes()).hexdigest()[:12],
+            "mtime": dt.datetime.fromtimestamp(p.stat().st_mtime).astimezone().isoformat(timespec="seconds")}
+
+# The build a send answers to: the files the hub imported and this process's start, read once at load. A process that predates
+# an edit reports the old hashes here, so a stale process is settled from the status route, not from a guess (#1298).
+HUB_BUILD = {"hub": _build_fact(SELF), "session_send": _build_fact(SELF.parent / "session_send.py"),
+             "sessions": _build_fact(SELF.parent / "sessions.py"),
+             "started": dt.datetime.fromtimestamp(BOOT / 1e9).astimezone().isoformat(timespec="seconds")}
+
 def watch_self():
     """Re-exec when this file changes on disk, so an edit goes live without anyone restarting the hub; open pages reload on the new /api/version."""
     while True:
