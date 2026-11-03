@@ -30,7 +30,9 @@ Status yet, the read is repeated within SG_BOARD_SETTLE_SECONDS (default 60) bef
 read still shows on its old Status after an accepted write is the same lag, and is read the same way (#434); the settle
 only reads, so a card another writer moved meanwhile is never moved back. A card that carried another Status before the write is
 read for at most SG_BOARD_OLD_SETTLE_SECONDS (default 10) of that bound: a write it never carries is likelier lost than late (#438).
-A move to the Status the card already carries is skipped: one read of the board, no PATCH, no proving read (#327).
+A move to the Status the card already carries is skipped: one read of the card, no PATCH, no proving read (#327). The card's read is its
+item's node read, one call (#1300); the whole-board read answers only when that read does not, and SG_BOARD_ITEM_HINTS (JSON, issue -> item id)
+lets the hub name the item so the move reads no whole-project list for the id.
 A writer that is not the owner's door (`SG_MOVE_BY` is not `owner`) never moves a card back along the axis, except the loop's own
 Doing-to-Todo unclaim, and the same return to Todo when the move names `SG_MOVE_REASON=no-landing`: a run that landed nothing
 undoes the column the loop itself set, and that unclaim reaches no other column (#1059). Every other backward move is refused:
@@ -98,13 +100,13 @@ status, nums = args[2], [int(x) for x in args[3:]]
 F = state.binding.status_field()
 if status not in F["opt"]: (st / f"rest-fields-{owner}-{num}.json").unlink(missing_ok=True); F = state.binding.status_field()
 if status not in F["opt"]: sys.exit(f"no Status option {status!r}")
-try: carried, tries = state.read_all(), max(1, state.binding.attempts - 1)   # one read of the board for the whole move: a card that already carries the Status is not written (#327). It is one of the reads SG_BOARD_READ_ATTEMPTS bounds, so a write has one attempt fewer
-except (RuntimeError, ValueError): carried, tries = {}, state.binding.attempts   # a board that does not answer the read is written on, never blocked by it
-rc = 0; proved = []; transitions = []; refusals = []
+tries = max(1, state.binding.attempts - 1)   # a write has one attempt fewer than the bound: the compare is one of the reads SG_BOARD_READ_ATTEMPTS bounds (#327)
+rc = 0; proved = []; transitions = []; refusals = []   # one card, one node read: no whole-board read answers the compare or the proof (#1300)
 automated = os.environ.get("SG_MOVE_BY") != "owner"   # any writer that is not the owner's door is automated (ADR-0143)
 for n in nums:
-    if carried.get(str(n)) == status: print(f"#{n} -> {status} (already carried, not written)"); continue   # no PATCH and no proving read: the read above is the proof
-    have = carried.get(str(n)) or None
+    try: have = state.read_one(n) or None   # the compare: the card's own read, and no PATCH when it already carries the Status (#327)
+    except (RuntimeError, ValueError): have = None   # a board that does not answer the read is written on, never blocked by it
+    if have == status: print(f"#{n} -> {status} (already carried, not written)"); continue
     if automated and refused_for_automated(have, status, os.environ.get("SG_MOVE_REASON")):   # a move back along the axis: the card keeps its column and carries rework (ADR-0143)
         refusals.append({"issue": n, "from": have, "to": status, "by": os.environ.get("SG_MOVE_BY") or None, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
         print(f"#{n}: refused, an automated writer moves {have!r} back to {status!r}; the card keeps {have!r} and carries rework", file=sys.stderr)
@@ -133,14 +135,14 @@ for n in nums:
         def probe(n=n):
             global reads
             reads += 1
-            try: return state.read(n) == status
+            try: return state.read_one(n) == status
             except (RuntimeError, ValueError): return False
-        old = carried.get(str(n)) not in (None, "", status)   # the card carried another Status before the write: a write it never carries is more likely lost than late, so its settle is capped (#438)
+        old = have not in (None, status)   # the card carried another Status before the write: a write it never carries is more likely lost than late, so its settle is capped (#438)
         cap = float(os.environ.get("SG_BOARD_OLD_SETTLE_SECONDS", "10")) if old else None
         written = bool(state.binding.settle(probe, tries, cap))
     if written:
         if refused: print(f"#{n}: {refused}; the card carries {status} and the read proves the write", file=sys.stderr)   # the note, never the verdict
-        print(f"#{n} -> {status}"); proved.append((iid, status)); transitions.append({"issue": n, "item": iid, "from": carried.get(str(n)) or None, "to": status})
+        print(f"#{n} -> {status}"); proved.append((iid, status)); transitions.append({"issue": n, "item": iid, "from": have, "to": status})
     else:
         state.binding.items_map.pop(str(n), None); state.binding._save_items()   # a card whose write is unproven is never cached as written
         print(f"#{n}: the board carries no {status!r} on it after {reads} reads" + (f" ({refused})" if refused else "") + "; a read failure, not a written card", file=sys.stderr); rc = 1
