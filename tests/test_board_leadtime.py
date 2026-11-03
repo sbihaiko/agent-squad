@@ -533,3 +533,31 @@ def test_the_control_chart_keeps_a_never_gated_card_out_of_gate_time(lt):
 
     assert chart["gate"]["hours"] == 0.0
     assert [band["column"] for band in chart["dots"][0]["stack"]] == ["Doing"]
+
+
+def test_a_row_with_empty_columns_stacks_its_whole_measure_in_its_own_column(lt):
+    row = _gated(1, 5.0, {}, 0.0)
+
+    stack = lt.lead_time([row])["series"][0]["stack"]
+
+    assert [(band["column"], band["hours"]) for band in stack] == [("Done", 5.0)], \
+        "empty columns falls back to the row's own column like no columns at all"
+
+
+def test_gate_time_in_the_summary_covers_every_delivered_card_and_the_chart_only_its_plotted(lt):
+    older = {"n": 1, "t": "card 1", "o": _iso(NOW - timedelta(days=20)), "c": _iso(NOW - timedelta(days=19)),
+             "column": "Closed", "hours": 8.0, "flowing": 8.0, "held": 0.0, "approx": False, "unknown_first": False,
+             "columns": {"Doing": 8.0}, "gate": 0.0}
+    recent = {"n": 2, "t": "card 2", "o": _iso(NOW - timedelta(hours=10)), "c": _iso(NOW), "column": "Closed",
+              "hours": 4.0, "flowing": 4.0, "held": 0.0, "approx": False, "unknown_first": False,
+              "columns": {"Doing": 4.0}, "gate": 0.0}
+    gated = {"n": 3, "t": "card 3", "o": _iso(NOW - timedelta(hours=12)), "c": _iso(NOW), "column": "Closed",
+             "hours": 6.0, "flowing": 6.0, "held": 0.0, "approx": False, "unknown_first": False,
+             "columns": {"Doing": 3.0, "Gating": 3.0}, "gate": 3.0}
+
+    summary = lt.lead_time([older, recent, gated])["summary"]["gate"]["hours"]
+    chart = _chart(lt, [older, recent, gated], timeframe=7)["gate"]["hours"]
+
+    assert summary == 3.0, "the summary's gate time covers every delivered card, like its average"
+    assert chart == 3.0, "the chart's gate time covers the plotted cards only, like its average"
+    assert chart <= summary

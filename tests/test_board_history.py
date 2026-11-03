@@ -334,3 +334,42 @@ def test_a_card_that_never_gated_has_no_gating_hours():
 
     assert "Gating" not in obs["columns"]
     assert obs["gate"] == 0.0
+
+
+def test_the_columns_total_equals_the_measure_for_a_card_that_held_elsewhere_before_the_start():
+    runs = bh.intervals(_timeline(
+        (9, 0, "added", {}),
+        (9, 30, "status", {"status": "Doing"}),
+        (10, 0, "status", {"status": "Todo"}),
+        (11, 0, "status", {"status": "Gating"}),
+        (12, 0, "status", {"status": "Closed"}),
+        (12, 0, "closed", {}),
+    ))
+
+    obs = bh.lead_observation(runs, start="Todo")
+
+    assert sum(obs["columns"].values()) == pytest.approx(obs["flowing"] + obs["held"]), \
+        "the stack and the measure beside it total the same hours"
+    assert "Doing" not in obs["columns"], "the time before the start column is no band"
+    assert obs["columns"]["Gating"] == pytest.approx(1.0)
+
+
+def test_a_parked_run_with_a_hold_is_a_backlog_band_with_its_held_hours():
+    runs = bh.intervals(_timeline(
+        (10, 0, "added", {}),
+        (10, 1, "status", {"status": "Todo"}),
+        (11, 0, "status", {"status": "Backlog"}),
+        (11, 0, "label", {"name": "frozen:owner"}),
+        (12, 0, "unlabel", {"name": "frozen:owner"}),
+        (12, 30, "status", {"status": "Todo"}),
+        (13, 30, "status", {"status": "Closed"}),
+        (13, 30, "closed", {}),
+    ))
+
+    obs = bh.lead_observation(runs, start="Todo")
+
+    assert obs["columns"]["Backlog"] == pytest.approx(1.0), "a parked run with a hold is a band in its column"
+    assert obs["held"] == pytest.approx(1.0), "the measure counts the parked hold as held time"
+    assert sum(obs["columns"].values()) == pytest.approx(obs["flowing"] + obs["held"])
+    names = [column["name"] for column in bh._columns.view_columns()]
+    assert "Backlog" in names, "every band's column is a board column with a palette role"

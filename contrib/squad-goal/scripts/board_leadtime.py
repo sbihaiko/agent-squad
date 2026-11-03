@@ -77,9 +77,11 @@ GATE_LABEL = "Gate time"
 
 def _bands(row):
     """The row's stacked bands, longest first: the hours it spent in each column, as the history store recorded them, or
-    its whole measured time in its own column for a plain row (#1256). A column with no hours draws no band."""
+    its whole measured time in its own column for a plain row (#1256). An empty `columns` maps is a plain row too: the
+    row stacks its whole measure in its own column, so a card with hours never draws no stack. A column with no hours
+    draws no band."""
     columns = row.get("columns")
-    pairs = columns.items() if columns is not None else [(row["column"], _hours(row))]
+    pairs = columns.items() if columns else [(row["column"], _hours(row))]
     return sorted(({"column": column, "hours": hours, "text": _duration(hours)}
                    for column, hours in pairs if hours > 0), key=lambda band: (-band["hours"], band["column"]))
 
@@ -127,6 +129,8 @@ def lead_time(items, window=20, now=None, measure=MEASURE):
             "minimum": _value(min(hours)),
             "maximum": _value(max(hours)),
             "p85": _value(_p85(hours)),
+            # Gate time here covers every delivered card, like the average, the minimum and the p85 below and above it;
+            # `control_chart`'s gate covers the cards its timeframe plots, like that chart's own average (#1256).
             "gate": _value(sum(_gate(row) for row in delivered)),
         }
     return {
@@ -312,7 +316,7 @@ def control_chart(items, timeframe=None, log=False, now=None, start=None, end=No
         "xticks": xticks,
         "range": {"start": start.isoformat(), "end": end.isoformat()},
         "gate": {"hours": sum(_gate(row) for row in plotted), "text": _duration(sum(_gate(row) for row in plotted)),
-                 "label": GATE_LABEL},
+                 "label": GATE_LABEL},   # the plotted cards only, like this chart's average and p85
         "fit": _fit([utc(row["c"]) for row in plotted], start, end),
         **summary,
         "survival": km,
