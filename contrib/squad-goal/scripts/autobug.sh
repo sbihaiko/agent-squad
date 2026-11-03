@@ -182,7 +182,13 @@ ab_resume() {   # the pending events of earlier passes: a Doing event launches i
 # One pass at a time (#1514): a pass starting inside another one's pick sees every issue unmarked and dispatches the
 # same bugs again, overwriting the first pass's markers. single.sh <stage> around the whole pass, as fastloop.sh does
 # for its steps: the second pass exits 0 at once. Not re-entrant, so the re-entry carries its own marker.
-[ -n "${SG_SINGLE_AUTOBUG:-}" ] || exec env SG_SINGLE_AUTOBUG=1 bash "$here/single.sh" autobug bash "$here/autobug.sh" "$@"
+# The held code of single.sh (76, #1290) is the landing's signal, read by wave callers only: a dispatcher's skipped pass is no
+# failure, so this seam maps it back to 0 and no dispatcher exits 76 (autobug.sh itself never does).
+if [ -z "${SG_SINGLE_AUTOBUG:-}" ]; then
+  SG_SINGLE_AUTOBUG=1 bash "$here/single.sh" autobug bash "$here/autobug.sh" "$@"; rc=$?
+  [ "$rc" = 76 ] && rc=0
+  exit $rc
+fi
 lab=${SG_BUG_LABEL:-bug}; skip=${SG_BUG_SKIP_LABELS:-needs-owner,no-auto,wontfix,question}
 # The frozen labels autofrontier.sh skips too (#530) are a floor, never a default (#537): a profile sets its own
 # SG_BUG_SKIP_LABELS and env.sh exports it, so a default here never applied and a frozen:dependency issue was dispatched.

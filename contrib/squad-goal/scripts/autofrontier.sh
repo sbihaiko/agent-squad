@@ -62,7 +62,13 @@ idle_noslot() {   # the pass has no run slot or no child room: every Todo card w
 # One pass at a time (#1514): a pass starting inside another one's pick sees every issue unmarked and dispatches the
 # same issues again, overwriting the first pass's markers. single.sh <stage> around the whole pass, as fastloop.sh does
 # for its steps: the second pass exits 0 at once. Not re-entrant, so the re-entry carries its own marker.
-[ -n "${SG_SINGLE_AUTOFRONTIER:-}" ] || exec env SG_SINGLE_AUTOFRONTIER=1 bash "$here/single.sh" autofrontier bash "$here/autofrontier.sh" "$@"
+# The held code of single.sh (76, #1290) is the landing's signal, read by wave callers only: a dispatcher's skipped pass is no
+# failure, so this seam maps it back to 0 and no dispatcher exits 76 (autofrontier.sh itself never does).
+if [ -z "${SG_SINGLE_AUTOFRONTIER:-}" ]; then
+  SG_SINGLE_AUTOFRONTIER=1 bash "$here/single.sh" autofrontier bash "$here/autofrontier.sh" "$@"; rc=$?
+  [ "$rc" = 76 ] && rc=0
+  exit $rc
+fi
 read -r free env room spend < <(cd "$SG_CHECKOUT" && python3 - "${SG_WORKFLOW:-dynamic}" "$SG_STATE/active-runs.txt" <<'PY'
 import json, os, sys, pathlib
 # The free slots come from the machine-wide ceiling caps.runs in squad/caps.py, the one resolution the engine enforces, lowered
