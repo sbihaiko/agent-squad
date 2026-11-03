@@ -13,6 +13,11 @@ ADR-0100 fixes the vocabulary. This record fixes how the engine runs one node on
 - The session store mirrors transcripts only, best-effort. File state needs git.
 - A background subagent yields a second `ResultMessage` whose `origin.kind` is `task-notification`.
 - The SDK concurrency limit caps subagents inside one session, not concurrent `query()` subprocesses.
+- Google's Elephant-Goldfish Model (`github.com/google/elephant-goldfish-model`, Apache 2.0, not an officially supported Google product) names the two halves this record assumes.
+  The **elephant** is one long, context-rich session that explores the problem and drafts the specification, and writes no code.
+  The **goldfish** is a fresh subagent with no memory of that conversation: it reads the document and the source material it names, and hunts for missing assumptions, unclear requirements and implementation risk.
+  The method requires fresh subagent contexts for a goldfish review and stops the review when the agent cannot make them, and it states that a review does not replace tests or human judgment.
+  The goldfish half is item 1 of this decision. The elephant half is the run's dispatch and the spec a child reads (ADR-0113, ADR-0142). The blind review is the one ADR-0151 fixes.
 
 ## Decision
 
