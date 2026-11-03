@@ -38,6 +38,7 @@ from pathlib import Path
 
 from squad import defaults as D
 from squad import project_settings as P
+from squad import run_liveness as RL
 from squad.options import OptionError
 
 KINDS = ("runs", "children", "gates", "reviews")
@@ -47,22 +48,10 @@ LAUNCH_GRACE = 300   # a listed run with no record holds its slot only through i
 
 def final_verdict(text):
     """The record's final verdict: the last `verdict` event after the last `run_start` or `resume`, read as the dashboard,
-    `wave.sh` and `wtclean.sh` read it (ADR-0105). Return the event, or None when the last invocation has no verdict yet.
-    A verdict before a later start is history: a resumed run is live again and holds its slot."""
-    last = None
-    for line in text.splitlines():
-        try:
-            ev = json.loads(line)
-        except ValueError:
-            continue
-        if not isinstance(ev, dict):
-            continue
-        kind = ev.get("event")
-        if kind in ("run_start", "resume"):
-            last = None
-        elif kind == "verdict":
-            last = ev
-    return last
+    `wave.sh` and `wtclean.sh` read it (ADR-0105), through the one reader (`squad/run_liveness.py`). Return the event, or None
+    when the last invocation has no verdict yet. A verdict before a later start is history: a resumed run is live again and
+    holds its slot."""
+    return RL.verdict(RL.invocation(text))
 
 
 def _in_launch_window(folder, now):
@@ -140,21 +129,21 @@ def started_at(pids):
 
 
 def alive(pid, since=None, started=None):
-    """True while the process `pid` lives; `since` adds the pid-reuse rule: a process that started after the lease was
-    written is a different process than the one it names, so the lease is dead. `started` is the answer to `started_at`
-    when the caller already holds it, one call for many pids; None asks the system for this one pid."""
+    """True while the process `pid` lives; `since` adds the pid-reuse rule, the one rule every liveness reader uses
+    (`run_liveness.same_process`): a process that started after the lease was written is a different process than the one
+    it names, so the lease is dead. `started` is the answer to `started_at` when the caller already holds it, one call for
+    many pids; None asks the system for this one pid."""
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
         return True
-    if not isinstance(since, (int, float)):
+    if not isinstance(since, (int, float)) or isinstance(since, bool):
         return True
     if started is None:
         started = started_at([pid])
-    began = started.get(pid)
-    return began is None or began <= since
+    return RL.same_process(started.get(pid), since)
 
 
 def _name(holder):

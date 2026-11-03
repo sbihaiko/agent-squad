@@ -377,7 +377,7 @@ def scan(p):
     if h and "v18" in h and h.get("rec") == [st.st_mtime_ns, st.st_size]: return h   # v10 added the worktree paths a run works in (the load attribution reads them); v11 reads the run issue from request.txt; v12 reads every issue of a dispatch request's CHILD lines; v13 reads the test share a gate counted; v14 reads the card's label from the dispatch form too; v15 splits a run sub/api on the canonical model id (#791, #793); v16 counts a child's tokens from its transcript when no outcome reached the record (#796); v17 counts a fix round's messages after its last outcome, follows a reader to its writer, and drops a shared folder (#802); v18 keeps the record's write time and size, so a record that grew after its verdict (a resume) is read again, and reads the last invocation's verdict only (#1229)
     c = live.get(p)
     if c and c[0] == st.st_mtime and c[1] == st.st_size and c[3] == child_stamp(p, *c[4]): return c[2]
-    spend = sub = api = 0.0; mod = {}; t0 = t1 = ver = None; reasons = []; land = False; issues = set(); ntok = 0; kind = "code"; fix = None; stack = None; bug = False; merge = False; head = None; rc = None; share = None; pid = pid_at = None
+    spend = sub = api = 0.0; mod = {}; t0 = t1 = ver = None; reasons = []; land = False; issues = set(); ntok = 0; kind = "code"; fix = None; stack = None; bug = False; merge = False; head = None; rc = None; share = None
     rid = pathlib.Path(p).parent.name   # the run folder, read before the loop: the share below rebinds a local of its own, never `p`
     accepted, done_kids, wts, defs, outs = set(), set(), set(), {}, {}
     try: req_issues = request_issues((pathlib.Path(p).parent / "request.txt").read_text(errors="replace")); has_req = True
@@ -425,9 +425,6 @@ def scan(p):
                     np = sum(x.get("passed", 0) for x in d["counts"].values() if isinstance(x, dict))
                     n = sum(x.get("total", 0) for x in d["counts"].values() if isinstance(x, dict))
                     if n: share = {"passed": np, "total": n, "pct": round(100 * np / n)}
-            if e in ("run_start", "resume"): pid = pid_at = None   # a pid from before a start or a resume is another invocation's process
-            elif e in ("call_start", "gate_start") and isinstance(d.get("pid"), int) and not isinstance(d.get("pid"), bool) and d["pid"] > 1:
-                pid, pid_at = d["pid"], d.get("started_at") if isinstance(d.get("started_at"), (int, float)) else ts   # the engine's own pid (session.py, dispatch.py)
             if e == "run_start":
                 k = d.get("kind") or (d.get("engine_options") or {}).get("kind") or (d.get("defaults") or {}).get("kind")   # absent today: every run is code
                 if k in ("test", "gui-test"): kind = "test"
@@ -436,7 +433,10 @@ def scan(p):
                 h = (d.get("effect") or {}).get("head") if isinstance(d.get("effect"), dict) else None
                 if h: head = h
     # Only the last verdict after the last start or resume is final: a run resumed after a verdict is live again (ADR-0167, #1229).
-    fin = next((e for e in reversed(loop_invocation(text)) if e.get("event") == "verdict"), None)
+    # The run's own process is the engine pid the last call of that invocation names; a pid from before it is another
+    # invocation's (#1226). Both come from the one reader, squad/run_liveness.py (#1228).
+    RL = liveness(); last = RL.invocation(text)
+    fin = RL.verdict(last); pid, pid_at = RL.engine_process(last) or (None, None)
     if fin: ver, reasons, t1, rc = fin.get("verdict"), fin.get("reasons") or [], fin.get("ts"), fin.get("exit_code")
     # A child's transcript holds the tokens its record lacks: all of them when no outcome reached the record (killed, or running), and
     # the messages after its last outcome when it has one, so a fix round killed before its own outcome counts (#796, #802). Each
@@ -555,26 +555,25 @@ def run_gone(r, age, procs):
     pid = r.get("pid")
     if not pid: return age >= RUN_LAUNCH_GRACE
     if pid not in procs: return True
-    began, at = procs[pid], r.get("pid_at")
-    return began is not None and isinstance(at, (int, float)) and began > at + 1   # lstart has whole seconds
+    try: return not liveness().same_process(procs[pid], r.get("pid_at"))   # the one pid identity rule (squad/run_liveness.py)
+    except Exception as e:
+        log_once(f"hub: the run liveness reader is unavailable, no run is called gone: {type(e).__name__}: {' '.join(str(e).split())}")
+        return False
 
-PS_LSTART = "%a %b %d %H:%M:%S %Y"
 def proc_starts(text):
-    """The process reading of one `ps -axo pid=,lstart=` (LC_ALL=C): {pid: start epoch, or None where the start does not parse}.
-    Rule layer: no I/O."""
-    procs = {}
-    for l in text.splitlines():
-        f = l.split(None, 1)
-        if len(f) < 2 or not f[0].isdigit(): continue
-        try: procs[int(f[0])] = time.mktime(time.strptime(" ".join(f[1].split()), PS_LSTART))
-        except ValueError: procs[int(f[0])] = None
-    return procs
+    """The process reading of one `ps` (LC_ALL=C, pid and lstart first): {pid: start epoch, or None where the start does not
+    parse}, parsed by the one reader (squad/run_liveness.py parse_ps)."""
+    return {pid: p.start for pid, p in liveness().parse_ps(text).items()}
 
 def read_procs():
-    """The process reading the run list judges liveness on (`proc_starts`): every pid with its start, from one `ps`."""
-    try: out = subprocess.run(["/bin/ps", "-axo", "pid=,lstart="], capture_output=True, text=True, timeout=30, env={**os.environ, "LC_ALL": "C"}).stdout
-    except (OSError, subprocess.SubprocessError): out = ""
-    return proc_starts(out)
+    """The process reading the run list judges liveness on: every pid with its start, from one `ps`. A read that fails is
+    no evidence, logged once: the run list then calls no run gone (`run_gone` on an empty reading), never a guessed answer."""
+    try:
+        RL = liveness()
+        return {pid: p.start for pid, p in RL.read_processes().items()}
+    except Exception as e:
+        log_once(f"hub: the process reading failed, no run is called gone on it: {type(e).__name__}: {' '.join(str(e).split())}")
+        return {}
 
 def gone_badge(b):
     """The badge of a run that is gone: the state stays (`stalled`), the text says why it is not live."""
@@ -641,6 +640,11 @@ def load_squad(roots, names=("caps", "run_caps")):
         finally:
             for m in _squad_names(): sys.modules.pop(m, None)
             sys.modules.update(ambient)
+
+def liveness():
+    """squad/run_liveness.py, the one reader of a run's liveness, from the roots the hub resolves every squad module from."""
+    (RL,) = load_squad(squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__), ("run_liveness",))
+    return RL
 
 CAPS_LOGGED = set()
 def log_once(line, seen=CAPS_LOGGED, out=None):
@@ -1906,55 +1910,51 @@ def loop_alive():
     except (ValueError, IndexError): return False
     return _pid_alive(pid)
 
-LOOP_RUN_CMD = os.environ.get("SG_RUN_CMD_RE") or r"[s]quad start( |$)"   # a squad run's command, as heartbeat.sh reads it
+LOOP_RUN_CMD = os.environ.get("SG_RUN_CMD_RE") or r"[s]quad start( |$)"   # a squad run's command, as heartbeat.sh reads it (squad/run_liveness.py RUN_CMD)
 LOOP_LAUNCH_S = 60 * float(os.environ.get("HB_DEAD_IDLE_MIN") or 1)   # a record with no call_start that moved this recently is a launch, not a death
 
 def loop_record(run):
-    return pathlib.Path(run) / "record.jsonl" if run.startswith("/") else pathlib.Path(CHECKOUT) / "runs" / run / "record.jsonl"
+    return liveness().record_path(run, CHECKOUT)
 
-def loop_invocation(text):
-    """The events of a record's last invocation: those after its last `run_start` or `resume`, or all of them when it has
-    none. Only the last verdict of this slice is final: a verdict before a later start is history (ADR-0167, squad/caps.py
-    final_verdict)."""
-    events = []
-    for raw in text.splitlines():
-        try: e = json.loads(raw)
-        except ValueError: continue
-        if not isinstance(e, dict): continue
-        if e.get("event") in ("run_start", "resume"): events = []
-        events.append(e)
-    return events
+def _loop_procs(RL, rows):
+    """The process snapshot the loop switch reads: a fresh one when `rows` is None, a snapshot given as is, and a list of
+    (pid, ppid, command) rows as a snapshot with no start, so each pid answers by itself."""
+    if rows is None: return RL.read_processes
+    if isinstance(rows, dict): return rows
+    return {pid: RL.Proc(None, cmd) for pid, _, cmd in rows}
 
 def loop_run_pid(run, rows=None):
-    """The pid of a live run's own process: the last call_start or gate_start of its last invocation, while that pid is alive as
-    a squad run (its command matches SG_RUN_CMD_RE) and is not this hub. A reused pid that names any other process is never a
-    run's, and a pid from before a resume is the old invocation's. A run is started in its own session (start_new_session), so
-    the supervisor's group stop never reaches it."""
-    for e in reversed(loop_invocation(_read(loop_record(run)))):
-        if e.get("event") in ("call_start", "gate_start") and isinstance(e.get("pid"), int):
-            pid = e["pid"]
-            if pid <= 1 or pid == os.getpid(): return None
-            cmd = next((c for p, _, c in (_ps_rows() if rows is None else rows) if p == pid), "")
-            return pid if re.search(LOOP_RUN_CMD, cmd) else None
-    return None
+    """The pid of a live run's own process, by the one reader (squad/run_liveness.py run_pid): the engine pid of the last
+    call_start or gate_start of its last invocation, while it runs as a squad run (SG_RUN_CMD_RE), did not start after the
+    call named it, and is not this hub. None when a read fails: stop-now then ends nothing it cannot name. A run is started
+    in its own session (start_new_session), so the supervisor's group stop never reaches it."""
+    try:
+        RL = liveness(); procs = _loop_procs(RL, rows)
+        return RL.run_pid(RL.invocation(RL.read_text(loop_record(run))), procs() if callable(procs) else procs, LOOP_RUN_CMD, os.getpid())
+    except Exception as e:
+        log_once(f"hub: the run reader failed for {run}, stop-now ends no process of it: {type(e).__name__}: {' '.join(str(e).split())}")
+        return None
 
 def loop_run_live(run, rows=None, now=None):
-    """A run is live while its last invocation has no verdict and its process runs: the last call_start pid of that invocation
-    is a live squad run, or, before its first call, its record moved within the launch window. A run that died with no verdict
-    (a crash, a kill) is not live, and a run resumed after a verdict is live again (ADR-0167)."""
-    f = loop_record(run); events = loop_invocation(_read(f))
-    if any(e.get("event") == "verdict" for e in events): return False
-    if any(e.get("event") in ("call_start", "gate_start") for e in events): return loop_run_pid(run, rows) is not None
-    try: return (time.time() if now is None else now) - f.stat().st_mtime < LOOP_LAUNCH_S
-    except OSError: return False
+    """A run is live while its last invocation has no verdict and its engine process runs, or, before its first call, its
+    record moved within the launch window: the one reader (squad/run_liveness.py run_live_at). A run resumed after a verdict
+    is live again (ADR-0167). Raises the reader's ReadError when a read fails."""
+    RL = liveness()
+    return RL.run_live_at(run, CHECKOUT, _loop_procs(RL, rows), time.time() if now is None else now, LOOP_LAUNCH_S, LOOP_RUN_CMD, os.getpid())
 
 def loop_live():
     """The live runs (an active-runs line whose run still runs, `loop_run_live`) and the held gate (the gate lock's pid file
-    naming a live pid): what a stop kills, and what a drain waits for."""
-    rows = _ps_rows()
-    runs = [r for r in (x.strip() for x in _read(STATE / "active-runs.txt").splitlines()) if r and loop_run_live(r, rows)]
+    naming a live pid): what a stop kills, and what a drain waits for. A read that fails is named in `unknown`, never read as
+    no run."""
     gate = _read(STATE / "locks" / "gate" / "pid").strip()
     gates = [f"gate pid {gate}"] if gate.isdigit() and _pid_alive(int(gate)) else []
+    try:
+        RL = liveness()
+        runs = RL.live_runs(STATE / "active-runs.txt", CHECKOUT, RL.read_processes, time.time(), LOOP_LAUNCH_S, LOOP_RUN_CMD, os.getpid())
+    except Exception as e:
+        why = f"{type(e).__name__}: {' '.join(str(e).split())}"
+        log_once(f"hub: the live runs are unknown: {why}")
+        return {"runs": [], "gates": gates, "unknown": why}
     return {"runs": runs, "gates": gates}
 
 def loop_audit_add(who, frm, action, killed=None, **extra):

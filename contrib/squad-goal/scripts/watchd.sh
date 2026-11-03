@@ -14,18 +14,45 @@ record_sha() { k=$(dirname "$(dirname "$me")"); ds=$(cut -d' ' -f1 "$k/PUBLISHED
   if [ -n "$ds" ]; then printf '%s\n' "$ds" > "$SG_STATE/driver.sha.$$" && mv "$SG_STATE/driver.sha.$$" "$SG_STATE/driver.sha"; else rm -f "$SG_STATE/driver.sha"; fi; }
 # The live work a drain waits for: a run in active-runs.txt that still runs, or a gate whose lock pid is alive (#923).
 drain_busy() {
-  local g v
-  # A live run is the hub's one rule (hub.py loop_live, loop_run_live): only the events after a record's last run_start or
-  # resume count (ADR-0167), so a verdict there is final and a verdict before it is history; the run's pid is the last
-  # call_start or gate_start of that invocation, live as a squad run; before its first call, the record moved within the
-  # launch window. A run that died with no verdict never holds the drain (#1228). A reader that fails holds the drain and
-  # says so in the watch log: a drain that waits is safe, and one that stops under a live run is not.
+  local g v rc e f k n r s root
+  # A live run is the one reader's rule (squad/run_liveness.py, which the hub reads too): only the events after a record's
+  # last run_start or resume count (ADR-0167); the run's engine pid is the last call_start or gate_start of that invocation,
+  # live as a squad run that did not start after the call named it; before its first call, the record moved within the
+  # launch window. A run that died with no verdict never holds the drain (#1228).
+  # The reader runs from the first root that holds it: this script's repository, SG_SQUAD, then SG_CHECKOUT. It is bounded
+  # (SG_DRAIN_READ_S), and its answer counts only on exit 0 with exactly `live` or `idle` on stdout; its stderr goes to a
+  # file, never into the answer. Any other result is unknown, and unknown holds the drain: a drain that waits is safe, one
+  # that stops under a live run is not. Each distinct failure is one watch.log line; SG_DRAIN_ALERT_AFTER failures in a row
+  # are one alerts.log line; drain_pause backs off while they last.
   [ -s "$SG_STATE/active-runs.txt" ] && {
-    v=$(python3 -c 'import importlib.util as u,sys; s=u.spec_from_file_location("hub",sys.argv[1]); h=u.module_from_spec(s); s.loader.exec_module(h); print("live" if h.loop_live()["runs"] else "idle")' "$(dirname "$me")/hub.py" 2>&1 | tail -1)
-    [ "$v" = idle ] || { [ "$v" = live ] || printf '%s drain: the run reader failed, the drain waits: %s\n' "$(date '+%F %T')" "$v" >> "$L"; return 0; }; }
+    root=; for r in "$(cd "$(dirname "$me")/../../.." 2>/dev/null && pwd)" "${SG_SQUAD:-}" "${SG_CHECKOUT:-}"; do
+      [ -n "$r" ] && [ -f "$r/squad/run_liveness.py" ] && { root=$r; break; }; done
+    e="$SG_STATE/drain-reader.err"; f="$SG_STATE/drain-reader.fail"
+    if [ -n "$root" ]; then
+      v=$(cd "$root" && perl -e 'alarm shift; exec @ARGV' "${SG_DRAIN_READ_S:-30}" python3 -m squad.run_liveness drain "$SG_STATE/active-runs.txt" "${SG_CHECKOUT:-}" 2>"$e"); rc=$?
+    else v=; rc=127; printf 'no squad/run_liveness.py in this repository, SG_SQUAD or SG_CHECKOUT\n' > "$e"; fi
+    if [ "$rc" = 0 ] && { [ "$v" = live ] || [ "$v" = idle ]; }; then
+      [ -e "$f" ] && { printf '%s drain: the run reader answers again after %s failed reads\n' "$(date '+%F %T')" "$(head -n 1 "$f")" >> "$L"; rm -f "$f"; }
+      [ "$v" = live ] && return 0
+    else
+      case $rc in 0) k="exit 0 with no answer: $(printf '%s' "$v" | head -c 80 | tr '\n' ' ')";; 142) k="no answer in ${SG_DRAIN_READ_S:-30}s";; *) k="exit $rc: $(tail -n 1 "$e" 2>/dev/null | cut -c1-300)";; esac
+      n=$(head -n 1 "$f" 2>/dev/null); case $n in ''|*[!0-9]*) n=0;; esac; n=$((n + 1))
+      s=$(tail -n +2 "$f" 2>/dev/null)
+      printf '%s\n' "$s" | grep -qxF -- "$k" || { printf '%s drain: the run reader failed, the drain waits: %s\n' "$(date '+%F %T')" "$k" >> "$L"; s=${s:+$s$'\n'}$k; }
+      printf '%s\n%s\n' "$n" "$s" > "$f.$$" && mv "$f.$$" "$f"
+      [ "$n" = "${SG_DRAIN_ALERT_AFTER:-12}" ] && printf '%s DRAIN the run reader failed %s reads in a row, the drain holds the loop up: %s\n' "$(date '+%F %T')" "$n" "$k" >> "$SG_STATE/alerts.log"
+      return 0
+    fi; }
   g=$(cat "$SG_STATE/locks/gate/pid" 2>/dev/null)
   [ -n "$g" ] && kill -0 "$g" 2>/dev/null && [ "$(/bin/ps -o stat= -p "$g" 2>/dev/null | cut -c1)" != Z ] && return 0
   return 1
+}
+# The wait before the next drain read: SG_DRAIN_POLL, doubled for each failed read in a row, at most SG_DRAIN_BACKOFF_MAX.
+drain_pause() {
+  local p=${SG_DRAIN_POLL:-5} n m=${SG_DRAIN_BACKOFF_MAX:-60}
+  n=$(head -n 1 "$SG_STATE/drain-reader.fail" 2>/dev/null); case $n in ''|*[!0-9]*) n=0;; esac
+  case $p in ''|*[!0-9]*) echo "$p"; return;; esac
+  [ "$n" -gt 6 ] && n=6; p=$((p << n)); [ "$p" -gt "$m" ] && p=$m; echo "$p"
 }
 case "${1:-status}" in
   start) alive && { echo "watchd already running pid=$pid"; exit 0; }
@@ -94,7 +121,8 @@ case "${1:-status}" in
     mkdir -p "$SG_STATE/auto"; [ -e "$SG_STATE/auto/off" ] || { : > "$SG_STATE/auto/drain-pause"; : > "$SG_STATE/auto/off"; }; : > "$SG_STATE/auto/drain"
     python3 -I -c 'import subprocess,sys;subprocess.Popen(["bash",sys.argv[1],"drain-wait"],start_new_session=True,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)' "$me"
     echo "watchd draining pid=$pid";;
-  drain-wait) while alive && drain_busy; do sleep "${SG_DRAIN_POLL:-5}"; done
+  drain-wait) rm -f "$SG_STATE/drain-reader.fail"   # a failure streak is one drain's own
+    while alive && drain_busy; do sleep "$(drain_pause)"; done
     alive && bash "$me" stop >/dev/null; rm -f "$SG_STATE/auto/drain";;
   status) alive && echo "watchd running pid=$pid" || echo "watchd not running";;
 esac
