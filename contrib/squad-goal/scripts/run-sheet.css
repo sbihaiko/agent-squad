@@ -5,8 +5,8 @@
 #rk>header .sp{flex:1}
 #rk>footer{display:flex;gap:8px;padding:10px 12px;border-top:1px solid var(--line);flex-wrap:wrap}
 #rk>footer button,#rk>footer a{min-height:32px}
-#rk a.btn{display:inline-flex;align-items:center;padding:3px 12px;border:1px solid var(--line);border-radius:6px;color:var(--fg);text-decoration:none}
-#rk .chip{border-radius:9px;padding:0 7px;font-size:var(--fs-caption);font-weight:600;border:1px solid var(--line);color:var(--mute)}
+#rk a.btn{display:inline-flex;align-items:center;padding:3px 12px;border:1px solid var(--line);border-radius:var(--radius-md);color:var(--fg);text-decoration:none}
+#rk .chip{border-radius:var(--radius-lg);padding:0 7px;font-size:var(--fs-caption);font-weight:600;border:1px solid var(--line);color:var(--mute)}
 #rk .chip.live{border-color:var(--run);color:var(--run)}
 #rkchips{display:flex;gap:6px;flex:1 1 auto;min-width:0;align-items:center}
 #rkchips .chip{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
@@ -18,20 +18,20 @@
 #rk .sec{font-size:var(--fs-caption);text-transform:uppercase;letter-spacing:.06em;color:var(--mute);margin:14px 0 6px}
 #rk .rkt{margin:10px 0 12px}
 #rk .rkn{display:flex;gap:6px;flex-wrap:wrap}
-#rk .gn{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card);font-size:var(--fs-caption);cursor:pointer}
-#rk .gn i{width:8px;height:8px;border-radius:50%;background:var(--c,var(--mute))}
+#rk .gn{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border:1px solid var(--line);border-radius:var(--radius-lg);background:var(--card);font-size:var(--fs-caption);cursor:pointer}
+#rk .gn i{width:8px;height:8px;border-radius:var(--radius-full);background:var(--c,var(--mute))}
 #rk .gn.gate{border-style:dashed}#rk .gn:hover,#rk .gn:focus-visible{border-color:var(--acc)}
 #rk .n-done{--c:var(--ok)}#rk .n-run{--c:var(--run)}#rk .n-fail{--c:var(--err)}#rk .n-pend{--c:var(--mute)}
-#rk .mt2{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+#rk .mt2{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:var(--radius-lg);overflow:hidden}
 #rk .mrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 10px;padding:8px 10px;border-bottom:1px solid var(--line);cursor:pointer}
 #rk .mrow small{grid-column:1/-1;color:var(--mute);font-size:var(--fs-caption)}#rk .mrow .r{text-align:right;font-variant-numeric:tabular-nums}
 #rk .mrow:hover,#rk .mrow:focus-visible{background:var(--bubble)}#rk .mrow.tot{cursor:default;background:var(--card);border-bottom:0}
 #rk .trf{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;font-size:var(--fs-caption);color:var(--mute)}#rk .trf select{min-height:32px}#rk .trf .m{margin-left:auto}
-#rk .trl{border:1px solid var(--line);border-radius:8px;overflow:hidden}
+#rk .trl{border:1px solid var(--line);border-radius:var(--radius-lg);overflow:hidden}
 #rk .te{display:grid;grid-template-columns:46px minmax(0,1fr) auto auto;gap:3px 10px;align-items:baseline;padding:7px 10px;border-bottom:1px solid var(--line)}#rk .te:last-child{border-bottom:0}
 #rk .te .tt,#rk .te .tn,#rk .te .tm,#rk .te .tv{color:var(--mute);font-size:var(--fs-caption);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #rk .te .tx{grid-column:1/-1;min-width:0;overflow-wrap:anywhere}
 #rk .te.error{background:var(--tint-err)}
-#rk .lv{display:inline-block;white-space:nowrap;font-size:var(--fs-caption);font-weight:600;letter-spacing:.04em;text-transform:uppercase;padding:0 6px;line-height:18px;border-radius:9px;margin-right:6px;border:1px solid var(--line);color:var(--mute)}
+#rk .lv{display:inline-block;white-space:nowrap;font-size:var(--fs-caption);font-weight:600;letter-spacing:.04em;text-transform:uppercase;padding:0 6px;line-height:18px;border-radius:var(--radius-lg);margin-right:6px;border:1px solid var(--line);color:var(--mute)}
 #rk .lv.gate,#rk .lv.warn{color:var(--warn);border-color:var(--tint-warn-line)}#rk .lv.error{color:var(--err);border-color:var(--tint-err-line)}
 @media (max-width:600px){#rk{left:0;width:auto}}
