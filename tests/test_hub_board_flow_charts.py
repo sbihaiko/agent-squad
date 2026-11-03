@@ -425,8 +425,12 @@ def _lt_chart(hub, tmp_path, name, chart, zr=None, coverage=None):
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_the_first_screen_carries_two_controls_and_the_rest_sit_behind_more(hub, board, tmp_path):
-    """#1145: Timeframe and Type are the only controls on the first screen. Measurement, Display and View, and the
-    coverage line, the plotted-cards note and the ordering sentence, sit behind one More disclosure."""
+    """#1145: Timeframe and Type are the only controls on the first screen. Measurement and Display, and the coverage
+    line, the plotted-cards note and the ordering sentence, sit behind one More disclosure.
+
+    Re-anchored by line (#1147): the zoom control is a chip drawn only while a zoom is active, so it is absent from the
+    default screen and the View group appears after Display only in a zoomed view.
+    """
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
     lead = _flow(hub)["lead"]
     out = _lt_chart(hub, tmp_path, "lt-two-controls.js", lead["control"]["jira"]["all"], coverage=lead["coverage"])
@@ -434,12 +438,21 @@ def test_the_first_screen_carries_two_controls_and_the_rest_sit_behind_more(hub,
     assert sep, "the first screen carries no More disclosure"
     more = rest[:rest.index("</details>")]
     assert "id=ltr" in first and "id=lty" in first, "Timeframe and Type are not on the first screen"
-    for later in ("id=lta", "id=ltb", "id=lts", "id=ltz"):
+    for later in ("id=lta", "id=ltb", "id=lts"):
         assert later not in first, f"the first screen still carries {later}"
         assert later in more, f"More does not hold {later}"
-    order = ["Measurement", "id=lta", "id=ltb", "Display", "id=lts", "View", "id=ltz"]
+    assert "id=ltz" not in out, "the zoom chip is drawn only while a zoom is active"
+    order = ["Measurement", "id=lta", "id=ltb", "Display", "id=lts"]
     marks = [more.index(mark) for mark in order]
     assert marks == sorted(marks), f"the disclosure does not keep the shipped order: {order}"
+    zoomed = _lt_chart(hub, tmp_path, "lt-two-controls-zoom.js", lead["control"]["jira"]["all"],
+                       zr=["2026-10-01T00:00:00+00:00", "2026-10-03T00:00:00+00:00"], coverage=lead["coverage"])
+    zfirst, _, zrest = zoomed.partition("<details class=ltmore>")
+    assert "id=ltz" not in zfirst, "the zoom chip is never on the first screen"
+    zmore = zrest[:zrest.index("</details>")]
+    order = ["Display", "id=lts", "View", "id=ltz"]
+    marks = [zmore.index(mark) for mark in order]
+    assert marks == sorted(marks), f"the zoomed disclosure does not keep the shipped order: {order}"
     assert "Set the controls in order: filters, then measurement, then display, then view." in more
     assert "cards read" in more, "the coverage line does not sit behind More"
     assert "issue plotted" in more and "issue plotted" not in first, "the plotted-cards note does not sit behind More"
@@ -460,13 +473,21 @@ def test_the_head_line_states_the_window_and_the_excluded_total_once(hub, board,
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-def test_the_zoom_button_names_the_view_it_returns_to_and_is_disabled_in_it(hub, board, tmp_path):
+def test_the_zoom_chip_names_the_range_and_is_drawn_only_while_zoomed(hub, board, tmp_path):
+    """#1147: one chip, absent on the default screen; while zoomed it names the view it returns to and clears the zoom.
+
+    Re-anchored by line: the old guard asserted a disabled button on the default screen; the chip now replaces it, and
+    the "Back to ..." wording lives in the chip.
+    """
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
     chart = _flow(hub)["lead"]["control"]["jira"]["all"]
     home = _lt_chart(hub, tmp_path, "lt-zoom-home.js", chart)
     zoomed = _lt_chart(hub, tmp_path, "lt-zoom-held.js", chart, zr=["2026-10-01T00:00:00+00:00", "2026-10-03T00:00:00+00:00"])
-    assert re.search(r"<button id=ltz disabled[^>]*>Back to All</button>", home), "the zoom button is live in the view it names"
-    assert re.search(r'<button id=ltz title="[^"]*">Back to All</button>', zoomed), "the zoom button is disabled while zoomed"
+    assert "id=ltz" not in home, "the zoom control is absent on the default screen"
+    assert "disabled" not in home, "no disabled button sits on the default screen"
+    assert re.search(r"<span class=fchip id=ltz>Back to All <button id=ltzc[^>]*>Clear</button></span>", zoomed), \
+        "the chip names the view it returns to and carries its clear action"
+    assert len(re.findall(r"id=ltz\b", zoomed)) == 1, "the zoom is one chip, never two controls"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
@@ -474,6 +495,16 @@ def test_a_clustered_view_offers_a_fit_button_that_names_its_range(hub, board, t
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
     out = _lt_chart(hub, tmp_path, "lt-fit.js", _flow(hub)["lead"]["control"]["jira"]["all"])
     assert "Fit to data: Oct 2 09:00 to Oct 2 10:00 UTC" in out
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_fit_button_appears_only_when_there_is_a_span_to_fit(hub, board, tmp_path):
+    """#1147: Fit sits beside the zoom control only when the cards have a span to fit."""
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z"), 2: _done(2, "2026-10-29T09:00:00Z")})
+    chart = _flow(hub)["lead"]["control"]["jira"]["all"]
+    assert chart["fit"] is None, "the spread cards fill the whole view: there is no span to fit"
+    out = _lt_chart(hub, tmp_path, "lt-no-fit.js", chart)
+    assert "id=ltfit" not in out, "Fit is drawn with no span to fit"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")

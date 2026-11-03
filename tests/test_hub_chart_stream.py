@@ -81,7 +81,7 @@ def test_a_chart_subject_rises_only_when_its_own_input_changes(hub, board):
 
 
 def _chart_harness(hub, drive, onchange=""):
-    lines = ["const barQuery", "const flowOpen", "const ltQ", "const ltZoom", "const ltGet", "const barMoved",
+    lines = ["let FLOWFF=", "const barQuery", "const flowOpen", "const ltQ", "const ltZoom", "const ltGet", "const barMoved",
              "const pickFilter", "const saveLT", "function squadChart(", "function squadStreamLost(",
              "function squadStreamBack(", "pollBoard();setInterval(pollBoard", "function squadChartTick(", "setInterval(squadChartTick"]
     page = [next(line for line in hub.PAGE.splitlines() if line.startswith(p)) for p in lines]
