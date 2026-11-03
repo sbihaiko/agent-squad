@@ -68,3 +68,36 @@ def test_the_shared_directory_is_the_seam_one_and_never_the_state(runner, monkey
     hub = load_hub("hub_shared_seam")
     assert hub.SHARED == home / ".cache" / "squad-goal" / "_shared", hub.SHARED
     assert hub.QUOTA == hub.SHARED / "hub-quota.json"
+
+
+def _profile(tmp_path, monkeypatch, checkout, slug="acme"):
+    """A profiles directory that holds one profile, `slug`, whose checkout is `checkout`."""
+    profiles = tmp_path / "profiles"
+    profiles.mkdir()
+    (profiles / f"{slug}.sh").write_text(f': "${{SG_REPO:=x/y}}"\n: "${{SG_OWNER:=x}}"\n: "${{SG_PROJECT:=4}}"\n: "${{SG_CHECKOUT:={checkout}}}"\n')
+    monkeypatch.setenv("SG_PROFILES_DIR", str(profiles))
+    return slug
+
+
+def test_with_no_sg_state_the_hub_reads_the_state_of_the_profile_in_force(runner, monkeypatch, tmp_path):
+    """#1226: the fallback named the legacy directory, sg_state_base (~/.cache/squad-goal), which holds an old
+    active-runs.txt the loop no longer writes. The loop reads the profile's own directory, sg_state_dir <profile>."""
+    home, checkout = runner
+    slug = _profile(tmp_path, monkeypatch, checkout)
+    monkeypatch.setenv("SG_PROFILE", slug)
+    hub = load_hub("hub_state_profile")
+    assert hub.STATE == home / ".cache" / "squad-goal" / slug, hub.STATE
+
+
+def test_with_no_profile_set_the_hub_reads_the_state_of_the_profile_of_its_checkout(runner, monkeypatch, tmp_path):
+    home, checkout = runner
+    slug = _profile(tmp_path, monkeypatch, checkout)
+    hub = load_hub("hub_state_checkout")
+    assert hub.STATE == home / ".cache" / "squad-goal" / slug, hub.STATE
+
+
+def test_the_hub_never_reads_the_legacy_state_directory(runner):
+    """No profile resolves: the hub still never reads the machine base, where the legacy active-runs.txt lies."""
+    home, _ = runner
+    hub = load_hub("hub_state_no_legacy")
+    assert hub.STATE != home / ".cache" / "squad-goal", hub.STATE

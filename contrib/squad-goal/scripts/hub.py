@@ -88,15 +88,22 @@ def board_seam():
         _board_state = board_state(OWNER, PROJECT_NO, REPO, env=_PROFILE_ENV, state_dir=HUBDIR, run=lambda a, **kw: subprocess.run(a, **kw))
     return _board_state
 HOME = pathlib.Path.home()
+NO_PROFILE_STATE = "_no-profile"   # the state name of a hub no profile resolves for: it holds no loop file, so the hub reads nothing
 def state_dir():
-    """$SG_STATE when the runner exports it, else the state directory the seam (address.sh) names, `sg_state_base`, for the
-    machine -- the shape single.sh and mkreq.sh already use. Only the seam spells the machine state directory, so a runner
-    that exports no SG_STATE reads a state directory under its own home instead of dying with KeyError at import; the loop,
-    which exports SG_STATE, keeps the directory it always had."""
+    """$SG_STATE when the runner exports it, else the state directory of the profile the loop runs, as the seam (address.sh)
+    names it: `sg_state_dir <profile>`, for SG_PROFILE, else for the profile whose checkout is SG_CHECKOUT. The machine base,
+    `sg_state_base`, is never read: it is the legacy directory, and an old active-runs.txt there named runs long dead (#1226).
+    A runner that no profile resolves for reads `sg_state_dir _no-profile` under its own home, which holds no loop file,
+    instead of dying with KeyError at import (#135); the loop, which exports SG_STATE, keeps the directory it always had."""
     st = os.environ.get("SG_STATE")
     if st: return st
     here = pathlib.Path(__file__).resolve().parent
-    p = subprocess.run(["bash", "-c", '. "$1/address.sh" 2>/dev/null; sg_state_base', "_", str(here)], capture_output=True, text=True, timeout=30)
+    for who in (os.environ.get("SG_PROFILE"), CHECKOUT):
+        if not who: continue
+        p = subprocess.run(["bash", str(here / "address.sh"), who], capture_output=True, text=True, timeout=30)
+        ctx = {k: v for k, _, v in (ln.partition("=") for ln in shlex.split(p.stdout))} if p.returncode == 0 else {}
+        if ctx.get("SG_STATE"): return ctx["SG_STATE"]
+    p = subprocess.run(["bash", "-c", '. "$1/address.sh" 2>/dev/null; sg_state_dir "$2"', "_", str(here), NO_PROFILE_STATE], capture_output=True, text=True, timeout=30)
     st = p.stdout.strip()
     if not st: sys.exit("hub: no state directory (export SG_STATE, or repair the seam, address.sh)")
     return st
@@ -369,7 +376,7 @@ def scan(p):
     except OSError: return None
     c = live.get(p)
     if c and c[0] == st.st_mtime and c[1] == st.st_size and c[3] == child_stamp(p, *c[4]): return c[2]
-    spend = sub = api = 0.0; mod = {}; t0 = t1 = ver = None; reasons = []; land = False; issues = set(); ntok = 0; kind = "code"; fix = None; stack = None; bug = False; merge = False; head = None; rc = None; share = None
+    spend = sub = api = 0.0; mod = {}; t0 = t1 = ver = None; reasons = []; land = False; issues = set(); ntok = 0; kind = "code"; fix = None; stack = None; bug = False; merge = False; head = None; rc = None; share = None; pid = pid_at = None
     rid = pathlib.Path(p).parent.name   # the run folder, read before the loop: the share below rebinds a local of its own, never `p`
     accepted, done_kids, wts, defs, outs = set(), set(), set(), {}, {}
     try: req_issues = request_issues((pathlib.Path(p).parent / "request.txt").read_text(errors="replace")); has_req = True
@@ -416,7 +423,10 @@ def scan(p):
                     np = sum(x.get("passed", 0) for x in d["counts"].values() if isinstance(x, dict))
                     n = sum(x.get("total", 0) for x in d["counts"].values() if isinstance(x, dict))
                     if n: share = {"passed": np, "total": n, "pct": round(100 * np / n)}
-            elif e == "run_start":
+            if e in ("run_start", "resume"): pid = pid_at = None   # a pid from before a start or a resume is another invocation's process
+            elif e in ("call_start", "gate_start") and isinstance(d.get("pid"), int) and not isinstance(d.get("pid"), bool) and d["pid"] > 1:
+                pid, pid_at = d["pid"], d.get("started_at") if isinstance(d.get("started_at"), (int, float)) else ts   # the engine's own pid (session.py, dispatch.py)
+            if e == "run_start":
                 k = d.get("kind") or (d.get("engine_options") or {}).get("kind") or (d.get("defaults") or {}).get("kind")   # absent today: every run is code
                 if k in ("test", "gui-test"): kind = "test"
             elif e == "land":
@@ -439,7 +449,7 @@ def scan(p):
             else: api += v["spend"]
     if has_req: src, why, issues = ("request", None, req_issues) if req_issues else (None, "request-no-issue", set())   # the request is the truth; the transcript never overrides it
     else: src, why = ("transcript" if issues else None), "request-missing"
-    r = {"spend": round(spend, 4), "sub": round(sub, 4), "api": round(api, 4), "mod": mod, "v8": 1, "v9": 1, "v10": 1, "v11": 1, "v12": 1, "v13": 1, "v14": 1, "v15": 1, "v16": 1, "v17": 1, "t0": t0, "t1": t1, "verdict": ver, "reasons": reasons, "land": land, "issues": sorted(issues, key=int), "issue_src": src, "issue_why": why, "kind": kind, "fix": fix, "stack": stack, "bug": bug, "merge": merge, "head": head, "exit_code": rc, "agents": len(accepted - done_kids), "wts": sorted(wts), "share": share}
+    r = {"spend": round(spend, 4), "sub": round(sub, 4), "api": round(api, 4), "mod": mod, "v8": 1, "v9": 1, "v10": 1, "v11": 1, "v12": 1, "v13": 1, "v14": 1, "v15": 1, "v16": 1, "v17": 1, "t0": t0, "t1": t1, "verdict": ver, "reasons": reasons, "land": land, "issues": sorted(issues, key=int), "issue_src": src, "issue_why": why, "kind": kind, "fix": fix, "stack": stack, "bug": bug, "merge": merge, "head": head, "exit_code": rc, "agents": len(accepted - done_kids), "wts": sorted(wts), "share": share, "pid": pid, "pid_at": pid_at}
     r["id"] = rid   # the run folder: the label a run with no issue falls back on
     r["label"] = run_label(r)               # the card's name is computed here, so the page renders a value and holds no rule (ADR-0137)
     if ver is not None:
@@ -525,21 +535,41 @@ def group_of(r):
     return "1h" if h <= 1 else "2h" if h <= 2 else "4h" if h <= 4 else "8h" if h <= 8 else "24h" if h <= 24 else "d"
 
 STALL_SECS = 1800   # state_of: a run with no verdict and no event for this long reads `stalled`
-SQUAD_START = re.compile(r"squad start(?: |$)")
-def run_gone(r, age, ps_lines, folder, request=None):
-    """True when a run with no verdict has been silent past the stall limit and no process of its own is left: it was killed
-    (a restart, a crash) and will never write a verdict, so it is not live however old its record. A process is the run's own when
-    its argv names the run folder or a worktree the record named, or when it is a `squad start` that carries the run's request (its
-    first line; a run with no request.txt cannot be told apart, so any `squad start` keeps it). The run's dashboard server never counts.
+RUN_LAUNCH_GRACE = 300   # a run with no call yet is a launch this long after its last write; squad/caps.py LAUNCH_GRACE, the janitor's rule-J bound
+def run_gone(r, age, procs):
+    """True when a run with no verdict has no process of its own: it was killed (a restart, a crash) and will never write a
+    verdict, so it is not live, however young its record (#1226). The run's own process is the pid of its last `call_start` or
+    `gate_start` after its last `run_start` or `resume` (r["pid"], the engine's os.getpid()); it counts while `procs`, the
+    process reading {pid: start epoch or None}, names it, and a process that started after that call (r["pid_at"]) holds a
+    reused pid and is not the run's. A process that only names the run folder (its dashboard server, a shell in its worktree)
+    never counts. A run with no call yet is a launch: live while its record moved within RUN_LAUNCH_GRACE, which a run that
+    waits for a slot keeps, since it writes `ceiling_wait` every minute. A run that waits for a gate slot after a call keeps
+    its process. An empty reading is no evidence: nothing is called gone on it.
     Rule layer: no hub state, no I/O."""
-    if r["verdict"] is not None or age < STALL_SECS: return False
-    paths = [x for x in [str(folder), *(r.get("wts") or [])] if x]
-    first = next((l.strip() for l in (request or "").splitlines() if l.strip()), "")[:80]
-    for l in ps_lines:
-        if "dashboard_server" in l: continue
-        if any(x in l for x in paths): return False
-        if SQUAD_START.search(l) and (not first or first in l): return False
-    return True
+    if r["verdict"] is not None or not procs: return False
+    pid = r.get("pid")
+    if not pid: return age >= RUN_LAUNCH_GRACE
+    if pid not in procs: return True
+    began, at = procs[pid], r.get("pid_at")
+    return began is not None and isinstance(at, (int, float)) and began > at + 1   # lstart has whole seconds
+
+PS_LSTART = "%a %b %d %H:%M:%S %Y"
+def proc_starts(text):
+    """The process reading of one `ps -axo pid=,lstart=` (LC_ALL=C): {pid: start epoch, or None where the start does not parse}.
+    Rule layer: no I/O."""
+    procs = {}
+    for l in text.splitlines():
+        f = l.split(None, 1)
+        if len(f) < 2 or not f[0].isdigit(): continue
+        try: procs[int(f[0])] = time.mktime(time.strptime(" ".join(f[1].split()), PS_LSTART))
+        except ValueError: procs[int(f[0])] = None
+    return procs
+
+def read_procs():
+    """The process reading the run list judges liveness on (`proc_starts`): every pid with its start, from one `ps`."""
+    try: out = subprocess.run(["/bin/ps", "-axo", "pid=,lstart="], capture_output=True, text=True, timeout=30, env={**os.environ, "LC_ALL": "C"}).stdout
+    except (OSError, subprocess.SubprocessError): out = ""
+    return proc_starts(out)
 
 def gone_badge(b):
     """The badge of a run that is gone: the state stays (`stalled`), the text says why it is not live."""
@@ -626,10 +656,22 @@ def loop_caps():
         co = os.environ.get("SG_CHECKOUT") or CHECKOUT   # the profile's checkout is the fallback, never the process cwd
         c = C.ceiling(co)
         per_run = RC.read(co, [r.get("dir") for r in list(LOAD_RUNS) if r.get("dir")])
-        return {"runs": c.caps["runs"], "children": c.caps["children"], "waiting": c.waiting(), "per_run": per_run}
+        return {"runs": c.caps["runs"], "children": c.caps["children"], "waiting": caps_waiting(C, c.folder), "per_run": per_run}
     except Exception as e:
         log_once(f"hub: loop_caps unavailable, the footer shows plain counts: {type(e).__name__}: {' '.join(str(e).split())} (roots tried: {', '.join(roots)})")
         return None
+
+def caps_waiting(C, folder):
+    """The live waits for a slot, each {ceiling, holder}, read and never written: the hub observes the ceiling (ADR-0162). The
+    caps module's own count (`Ceiling.waiting`) removes the lease of every dead holder as it counts, which is a write, so the
+    hub reads the wait marks itself and asks `C.alive` about their pids, one `ps` for all of them (`C.started_at`)."""
+    marks = []
+    for p in sorted((pathlib.Path(folder) / "waiting").glob("*.json")):
+        try: m = json.loads(p.read_text())
+        except (OSError, ValueError): continue
+        if isinstance(m, dict): marks.append(m)
+    started = C.started_at([m.get("pid", -1) for m in marks])
+    return [{"ceiling": m.get("ceiling"), "holder": m.get("holder")} for m in marks if C.alive(m.get("pid", -1), m.get("since"), started)]
 
 def waiting_txt(caps):
     """What waits for a slot, named: ` · waiting: <holder> (caps.runs)`. Empty when nothing waits."""
@@ -1865,14 +1907,26 @@ LOOP_LAUNCH_S = 60 * float(os.environ.get("HB_DEAD_IDLE_MIN") or 1)   # a record
 def loop_record(run):
     return pathlib.Path(run) / "record.jsonl" if run.startswith("/") else pathlib.Path(CHECKOUT) / "runs" / run / "record.jsonl"
 
-def loop_run_pid(run, rows=None):
-    """The pid of a live run's own process: its record's last call_start, while that pid is alive as a squad run (its command
-    matches SG_RUN_CMD_RE) and is not this hub. A reused pid that names any other process is never a run's. A run is started
-    in its own session (start_new_session), so the supervisor's group stop never reaches it."""
-    for raw in reversed(_read(loop_record(run)).splitlines()):
+def loop_invocation(text):
+    """The events of a record's last invocation: those after its last `run_start` or `resume`, or all of them when it has
+    none. Only the last verdict of this slice is final: a verdict before a later start is history (ADR-0167, squad/caps.py
+    final_verdict)."""
+    events = []
+    for raw in text.splitlines():
         try: e = json.loads(raw)
         except ValueError: continue
-        if e.get("event") == "call_start" and isinstance(e.get("pid"), int):
+        if not isinstance(e, dict): continue
+        if e.get("event") in ("run_start", "resume"): events = []
+        events.append(e)
+    return events
+
+def loop_run_pid(run, rows=None):
+    """The pid of a live run's own process: the last call_start or gate_start of its last invocation, while that pid is alive as
+    a squad run (its command matches SG_RUN_CMD_RE) and is not this hub. A reused pid that names any other process is never a
+    run's, and a pid from before a resume is the old invocation's. A run is started in its own session (start_new_session), so
+    the supervisor's group stop never reaches it."""
+    for e in reversed(loop_invocation(_read(loop_record(run)))):
+        if e.get("event") in ("call_start", "gate_start") and isinstance(e.get("pid"), int):
             pid = e["pid"]
             if pid <= 1 or pid == os.getpid(): return None
             cmd = next((c for p, _, c in (_ps_rows() if rows is None else rows) if p == pid), "")
@@ -1880,11 +1934,12 @@ def loop_run_pid(run, rows=None):
     return None
 
 def loop_run_live(run, rows=None, now=None):
-    """A run is live while it has no verdict and its process runs: the last call_start pid is a live squad run, or, before its
-    first call, its record moved within the launch window. A run that died with no verdict (a crash, a kill) is not live."""
-    f = loop_record(run); text = _read(f)
-    if re.search(r'"event":\s*"verdict"', text): return False
-    if re.search(r'"event":\s*"call_start"', text): return loop_run_pid(run, rows) is not None
+    """A run is live while its last invocation has no verdict and its process runs: the last call_start pid of that invocation
+    is a live squad run, or, before its first call, its record moved within the launch window. A run that died with no verdict
+    (a crash, a kill) is not live, and a run resumed after a verdict is live again (ADR-0167)."""
+    f = loop_record(run); events = loop_invocation(_read(f))
+    if any(e.get("event") == "verdict" for e in events): return False
+    if any(e.get("event") in ("call_start", "gate_start") for e in events): return loop_run_pid(run, rows) is not None
     try: return (time.time() if now is None else now) - f.stat().st_mtime < LOOP_LAUNCH_S
     except OSError: return False
 
@@ -2341,9 +2396,9 @@ def _start_dashboard(folder):
 UNREADABLE_TIP = "the record read empty on this poll: the figures are from the last read that had an event"
 READ_FIGURES = {}   # run folder -> (the last scan that had an event, the record's write time then)
 
-def run_row(d, port, ps_lines):
+def run_row(d, port, procs):
     """One run folder's row of the list and its load-attribution entry (None while the record is empty). `port` is its
-    dashboard server's, or "" when it has none."""
+    dashboard server's, or "" when it has none. `procs` is the process reading (`read_procs`), or empty when there is none."""
     p = pathlib.Path(d) / "record.jsonl"
     r = scan(p)
     unreadable = r is None or r["t0"] is None
@@ -2353,9 +2408,7 @@ def run_row(d, port, ps_lines):
     if unreadable: r, written = READ_FIGURES[d]
     else: written = p.stat().st_mtime; READ_FIGURES[d] = (r, written)
     age = time.time() - written; st = state_of(r, age)
-    try: request = (pathlib.Path(d) / "request.txt").read_text(errors="replace")
-    except OSError: request = None
-    gone = run_gone(r, age, ps_lines, d, request)   # killed: no verdict will come, so it is not live whatever its age
+    gone = run_gone(r, age, procs if isinstance(procs, dict) else {})   # killed: no verdict will come, so it is not live whatever its age
     st = demoted(st, r, {i["n"] for i in board_cache.get("items", []) if i.get("s") == "closed"})
     merged = {p["n"] for p in board_cache.get("landed", []) if p.get("m")}
     st = handled_of(st, {**r, "merged": r.get("fix") in merged or any(int(n) in merged for n in r["issues"])})
@@ -2370,6 +2423,7 @@ def runs():
     _titles()
     out = []; load_rows = []
     ps_lines = sh("/bin/ps", "-axwwo", "pid=,command=").splitlines()
+    procs = read_procs()
     own = own_roots()
     for l in ps_lines:
         m = re.match(r"\s*(\d+)\s+\S+\s+-m\s+squad\.dashboard_server\s+(\S+)", l)   # any interpreter: macOS runs the server as `.../MacOS/Python` (#1751)
@@ -2380,14 +2434,14 @@ def runs():
         if not pathlib.Path(d).exists(): continue
         if pathlib.Path(d).parent not in own: continue   # another profile's dashboard: the ps scan sees the whole machine
         if re.search(r"/pytest-\d+/|/pytest-of-", d): continue   # dashboards started by agent-squad's own test suite are fixtures, not runs   # a dashboard server outliving its run folder (worktree removed) must not break the list
-        row, load = run_row(d, port.group(1) or port.group(2), ps_lines)
+        row, load = run_row(d, port.group(1) or port.group(2), procs)
         out.append(row)
         if load: load_rows.append(load)
     listed = {r["id"] for r in out}
     for name in held_runs():   # a run the childcc pass holds, orphaned from active-runs, has no dashboard server: it is listed all the same (#689)
         folder = None if name in listed else held_folder(name)
         if not folder or not (pathlib.Path(folder) / "record.jsonl").is_file(): continue
-        row, load = run_row(folder, "", ps_lines)
+        row, load = run_row(folder, "", procs)
         out.append({**row, "url": "/held/" + name, "held": True})
         if load: load_rows.append(load)
     for f in sorted((STATE / "tests").glob("test-*.json")):   # coordinator test passes (test.sh)
