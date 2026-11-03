@@ -1,6 +1,6 @@
 #!/bin/bash
 # A card in Doing whose run ends without a verdict must come back to Todo, or the frontier never offers its issue again (ADR-0143).
-# Rule C drops a zombie run and rule O drops a missing run's dispatch marker; neither left a card a path back, so it sat in Doing.
+# Rule C reaps a zombie run and rule O drops a missing run's dispatch marker; neither left a card a path back, so it sat in Doing.
 # A spec's card is a fold over its children and never enters Doing (ADR-0142).
 #  (A) a zombie run (no verdict, idle, no process) that held #911 with no marker: its card goes back to Todo in the same pass;
 #  (B) a dispatch marker of a run whose folder is gone (rule O) leaves #915 in Todo on the next pass, under its reoffer marker;

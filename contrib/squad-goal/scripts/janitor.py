@@ -8,7 +8,8 @@
     grows with nothing bounding it (41 were alive after the freeze of 2026-10-13). S counts every dashboard this loop started, whatever the
     dashboard serves, and kills the oldest one the pass cannot tie to a live run, down to the ceiling. A live run's own dashboard is never a
     victim, a dashboard another project started is not this pass's to count, and JANITOR_DRY=1 reports without killing.
- C  zombie run (no verdict, record.jsonl idle 20 min, no process inside its folder, last started call dead): drop it from active-runs.txt, write the killed verdict into its record (squad.killed), and free its dispatch markers and leases.
+ C  zombie run (no verdict, record.jsonl idle 20 min, no process inside its folder, last started call dead): write the killed verdict into its record (squad.killed), and free its dispatch markers and leases.
+    Its active-runs.txt line stays, as squad/reap.py keeps it (#1230): the readers of a finished run need it, and wtclean.sh rule A alone drops it.
  T  taken-over run (no verdict, its record has not moved for SG_TAKEOVER_SECONDS, default 1800, and no gate process is alive in its folder): end it and keep its issues claimed (ADR-0166). A run waiting its turn in the machine-wide gate queue is not stuck: that wait is no run time, so it never reaches the bound (#1191). The pass writes the killed
     verdict, kills every process inside the run folder and its dashboard, drops it from active-runs and writes auto/taken-<run>, which names the run and its issues.
     It never frees auto/disp-<n> or auto/bug-<n>, so no fresh child starts the same work with none of the context: a person or an agent takes it over.
@@ -25,7 +26,7 @@
     (a failed run -> Todo, a needs-human run -> Blocked). On the bug board, auto/bug-<n> -> To triage, but only from the column the dispatch set ($SG_BUG_DOING), so a card another step moved past it is never downgraded. Once per run; the comment carries the run id and the verdict's reasons.
     Each such run, marker or not (needs-human aside), is one failed dispatch of the issue, counted once by `wave.sh fail` (#609): at SG_REQUEUE_CAP with no new commit in the base the issue is frozen for the owner. A loop-caused one (the run's own review verdict decides, #621) counts only toward SG_LOOP_REQUEUE_CAP.
  Q  a card still In Progress behind its auto/disp-<n> (or auto/bug-<n>) marker, 10 min old, that no run works: not a live run, not a run in its launch window, not a run that landed, no open work branch naming the issue, no fork-<n>-<sha9> marker.
-    Rules E and O read a run's verdict, so a run that ended without one (rule C drops a zombie from active-runs) or that left active-runs by any other road freed nothing: the card sat In Progress, autofrontier.sh skipped the issue,
+    Rules E and O read a run's verdict, so a run that ended without one or that left active-runs by any other road freed nothing: the card sat In Progress, autofrontier.sh skipped the issue,
     and health.sh reported runs-board-drift for hours. Rule Q reads the state, never the run's history: the card goes back to Todo (the bug card to To triage), the marker is dropped, one comment is queued. A refused read touches nothing.
     A marker behind a card already back in Todo (the bug card in To triage), with the same "no run, no work branch" answer, is dropped with no board write (#771): a failed run that left active-runs before rule O released it kept its issue claimed for good.
  P  a `fork-<n>-<sha9>` marker whose commit left the fork base while the base no longer carries its change and the branch has nothing ahead to merge: an unwound landing (a hand revert, a branch reset, a base rebuilt under it).
@@ -328,6 +329,7 @@ def owns(f, i, p):   # a dispatch marker names the request that wrote it (or its
     try: return (st / "req" / f"{c}.txt").read_bytes() == (f / "request.txt").read_bytes()
     except OSError: return False
 pending = []   # markers of a reaped run, dropped after rule Q has read them
+reaped = set()   # C: the active-runs lines of the zombies this pass reaped; they stay in the file (#1230)
 def free_reaped(f, i):
     """C: a reaped run frees its leases now, and its dispatch markers after rule Q. Rule Q reads a marker to find the card a
     dead run left In Progress and puts that card back (#62): a marker dropped here, before the read, left the card In
@@ -419,7 +421,10 @@ for r in names:
             if "dashboard_server" in c and str(f) in c: kill(q, f"dashboard of taken-over run {n}")
         continue
     if not alive and i["idle"] > 1200 and not (i["pid"] and same_process(i["pid"], i["started_at"])):
-        say(f"zombie run {n} (no verdict, idle {int(i['idle'] // 60)} min, no process) dropped from active-runs")
+        # Its active-runs line stays, as the health pass's reap keeps it (#1230, ADR-0149): a listed run whose record carries
+        # a verdict is what watch.sh lands, childcc enters into its wave and rules O and R release and rank, and the verdict
+        # frees its slot (caps.run_holders). wtclean.sh rule A is the one writer that drops a finished line.
+        say(f"zombie run {n} (no verdict, idle {int(i['idle'] // 60)} min, no process) gets the killed verdict; its active-runs line stays")
         if not dry:
             mark_killed(f)
             for x in req_issues(f) | i["acc"]: (st / "auto" / f"reoffer-{x}").write_text(n + "\n")   # the card's way back, read by the board pass (#1034)
@@ -429,9 +434,10 @@ for r in names:
             kill(q, f"leftover of zombie run {n}")
         for q, (_, c) in procs.items():
             if "dashboard_server" in c and str(f) in c: kill(q, f"dashboard of zombie run {n}")
-        continue
+        reaped.add(r); continue   # the line stays in the file; this pass's card rules read the reoffer marker, not the run
     held |= req_issues(f) | i["acc"]; keep.append(r); live[n] = i; livef[n] = f
-if not dry and keep != names: act.write_text("\n".join(keep) + "\n")
+lines = [r for r in names if r in reaped or r in keep]
+if not dry and lines != names: act.write_text("\n".join(lines) + "\n")
 # S: the counted ceiling beside the per-run reap. B, J and C each kill the dashboard of one run the pass knows about, so when any of
 # them stops working for any other reason -- a run that left active-runs.txt, a record the pass cannot read -- nothing bounds the
 # count and the dashboards of finished runs accumulate (the freeze of 2026-10-13 left 41 alive). This reads the process table the

@@ -1,9 +1,9 @@
 #!/bin/bash
 # Rule Q: a card In Progress behind a dispatch marker, with no run working the issue, is released -- however the run ended.
-# Rules E and O read a run's verdict. A run that ends with no verdict (rule C drops a zombie from active-runs) or that left
+# Rules E and O read a run's verdict. A run that ends with no verdict or that left
 # active-runs by any other road never reaches either rule, so its card stays In Progress behind its auto/disp-<n> marker,
 # autofrontier.sh skips the issue, and health.sh reports runs-board-drift for hours.
-#  (A) a zombie run (no verdict, idle, no process) that C drops this pass: card -> Todo, marker dropped, comment queued;
+#  (A) a zombie run (no verdict, idle, no process) that C reaps this pass: card -> Todo, marker dropped, comment queued;
 #  (B) a marker whose run is in no list at all: same;
 #  (C) a bug marker: the loop card goes to Todo and the bug card to To triage;
 #  (D) a live run works the issue: card and marker stay;
@@ -23,6 +23,7 @@
 # Stubbed gh/board; a temp state dir, so the live watch.log, markers and board are never read or written.
 # usage: bash test-janitor-stale-card.sh [janitor.py]
 for v in $(env | /usr/bin/grep -o '^SG_[A-Za-z0-9_]*'); do unset "$v"; done
+export SG_TAKEOVER_SECONDS=1000000000000   # these runs test other rules; their fixed record stamps are past the takeover bound (ADR-0166)
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/s/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"; cp "$(dirname "$src")/board_columns.py" "$(dirname "$src")/board-definition.json" "$(dirname "$src")/board_facts.py" "$T/s/"
 printf '#!/bin/bash\necho "$*" >> %s/board.calls\n' "$T" > "$T/s/board.sh"
