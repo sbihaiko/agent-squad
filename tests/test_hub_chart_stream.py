@@ -81,8 +81,10 @@ def test_a_chart_subject_rises_only_when_its_own_input_changes(hub, board):
 
 
 def _chart_harness(hub, drive, onchange=""):
-    lines = ["let FLOWFF=", "const barQuery", "const flowOpen", "const ltQ", "const ltZoom", "const ltGet", "const barMoved",
-             "const pickFilter", "const saveLT", "function squadChart(", "function squadStreamLost(",
+    # Re-anchored (#1247): the chart's settings are no longer stored, so there is no saveLT line; the LT_TYPES line
+    # carries LT_START, the start the payload measures from, which ltOwn reads.
+    lines = ["const LT_TYPES=", "let FLOWFF=", "const barQuery", "const flowOpen", "const ltQ", "const ltZoom", "const ltGet",
+             "const barMoved", "const pickFilter", "function squadChart(", "function squadStreamLost(",
              "function squadStreamBack(", "pollBoard();setInterval(pollBoard", "function squadChartTick(", "setInterval(squadChartTick"]
     page = [next(line for line in hub.PAGE.splitlines() if line.startswith(p)) for p in lines]
     stubs = """
@@ -93,7 +95,7 @@ const EL={"#flowov":el(),"#fwl":el(),"#fsl":el(),"#fkl":el(),"#sse":el(),"#flowb
 const $=s=>EL[s];
 globalThis.setInterval=(f,ms)=>{INTERVALS.push(f)};
 globalThis.fetch=async url=>{FETCHED.push(url);return {json:async()=>({t:1,cfd:{ranges:[]}})}};
-let bo={},FLOWK=null,FLOWD={},LT={tf:"30",log:false,ty:"task",pick:null,zc:null,zr:null,tok:0,a:"",b:""};
+let bo={},FLOWK=null,FLOWD={},LT={tf:"30",log:false,ty:"task",pick:null,zc:null,zr:null,tok:0,a:"Todo",b:""};
 const ls={},save=()=>{},saveB=()=>{},pollBoard=()=>POLLED.push(1);
 const drawFlow=()=>{},flowTabs=()=>{},poll=()=>RUNS.push(1);
 const settle=()=>new Promise(r=>setTimeout(r,0));

@@ -65,7 +65,7 @@ def test_abandoned_open_and_no_opened_rows_give_no_dot_and_count_each_reason(lt)
     result = lt.lead_time(items)
 
     assert [dot["n"] for dot in result["series"]] == [1]
-    assert result["excluded"] == {"abandoned": 1, "open": 2, "no_opened": 1}
+    assert result["excluded"] == {"abandoned": 1, "no_opened": 1}  # re-anchored (#1250): an open card is censored in the survival reading, never an exclusion
 
 
 def test_a_card_closed_as_not_planned_is_no_dot_and_is_counted_not_planned(lt):
@@ -122,7 +122,7 @@ def test_summary_reports_average_median_minimum_maximum_and_p85_of_the_dots(lt):
     summary = lt.lead_time(items)["summary"]
 
     assert summary["average"]["hours"] == 5.5
-    assert summary["median"]["hours"] == 5.5
+    assert summary["median"]["hours"] == 5, "re-anchored (#1250): the Kaplan-Meier curve over 1h..10h falls to one half at 5h"
     assert summary["minimum"]["hours"] == 1.0
     assert summary["maximum"]["hours"] == 10.0
     assert summary["p85"]["hours"] == 9.0
@@ -155,7 +155,8 @@ def test_result_names_the_window_in_issues_and_the_measure(lt):
 def test_result_is_json_serializable(lt):
     items = [_card(1, 5), _open(2)]
 
-    assert json.loads(json.dumps(lt.lead_time(items)))["excluded"] == {"open": 1}
+    result = json.loads(json.dumps(lt.lead_time(items)))
+    assert result["excluded"] == {} and result["excluded_cards"] == {}  # re-anchored (#1250): an open card is censored in the survival reading, never an exclusion
 
 
 def test_no_dots_gives_an_empty_series_and_no_summary_numbers(lt):
@@ -165,7 +166,7 @@ def test_no_dots_gives_an_empty_series_and_no_summary_numbers(lt):
 
     assert result["series"] == []
     assert result["summary"] is None
-    assert result["excluded"] == {"abandoned": 1, "open": 1}
+    assert result["excluded"] == {"abandoned": 1}  # re-anchored (#1250): an open card is censored in the survival reading, never an exclusion
 
 
 def test_empty_input_gives_an_empty_series_and_no_summary(lt):
@@ -298,7 +299,7 @@ def test_the_window_text_names_the_days_and_the_plotted_sample(lt):
     result = _chart(lt, items, timeframe=30)
 
     assert result["text"] == "last 30 days, on board -> closed, 1 issue plotted; Timeframe selects by end transition"
-    assert result["excluded_total"] == 2
+    assert result["excluded_total"] == 1  # re-anchored (#1250): an open card is censored in the survival reading, never an exclusion
 
 
 def test_the_average_median_and_p85_carry_values_and_positions(lt):
@@ -307,7 +308,7 @@ def test_the_average_median_and_p85_carry_values_and_positions(lt):
     result = _chart(lt, items)
 
     assert result["average"]["hours"] == 5.5
-    assert result["median"]["hours"] == 5.5
+    assert result["median"]["hours"] == 5, "re-anchored (#1250): the Kaplan-Meier curve over 1h..10h falls to one half at 5h"
     assert result["p85"]["hours"] == 9.0
     assert 0.0 <= result["p85"]["y"] <= 1.0
     assert result["p85"]["text"] == "9h"
@@ -318,8 +319,9 @@ def test_no_closed_card_gives_no_dots_and_no_lines(lt):
 
     assert result["dots"] == []
     assert result["average"] is None
+    assert result["median"]["hours"] is None and result["median"]["y"] is None, "no line for a median that is not estimable"
     assert result["text"] == "all closed cards, on board -> closed, 0 issues plotted; Timeframe selects by end transition"
-    assert result["excluded_total"] == 1
+    assert result["excluded_total"] == 0  # re-anchored (#1250): an open card is censored in the survival reading, never an exclusion
 
 
 # SPEC 889 #900: a drag across the plot zooms to a date range. The hub recomputes the chart for that range.

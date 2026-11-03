@@ -279,16 +279,18 @@ def _page_line(hub, prefix):
 def _page_harness(hub, answers, drive, onchange=""):
     """The page's own bar and chart lines, run in node over stub elements. `fetch` answers from `answers`, keyed by URL,
     with the hub's own route payloads; the script `drive` acts on the page and prints JSON."""
-    lines = [_page_line(hub, p) for p in ("let FLOWFF=", "const barQuery=", "const flowOpen=", "const ltQ=", "const ltZoom=",
-                                          "const ltGet=", "const flowDetach=", "const barMoved=", "const pickFilter=",
-                                          "const saveLT=")]
+    # Re-anchored (#1247): the chart's settings are no longer stored, so there is no saveLT line; the LT_TYPES line
+    # carries LT_START, the start the payload measures from, which ltOwn reads.
+    lines = [_page_line(hub, p) for p in ("const LT_TYPES=", "let FLOWFF=", "const barQuery=", "const flowOpen=", "const ltQ=",
+                                          "const ltZoom=", "const ltGet=", "const flowDetach=", "const barMoved=",
+                                          "const pickFilter=")]
     stubs = f"""
 const ANSWERS={json.dumps(answers)},FETCHED=[],DRAWN=[],SAVED=[],POLLED=[];
 const el=()=>({{hidden:true,handlers:{{}},addEventListener(t,f){{this.handlers[t]=f}}}});
 const EL={{"#flowov":el(),"#fwl":el(),"#fsl":el(),"#fkl":el()}};
 const $=s=>EL[s];
 const fetch=async url=>{{FETCHED.push(url);if(!(url in ANSWERS))throw new Error("no answer for "+url);return {{json:async()=>ANSWERS[url]}}}};
-let bo={{}},FLOWK=null,FLOWD={{}},LT={{tf:"30",log:false,ty:"task",pick:null,zc:null,zr:null,tok:0,a:"",b:""}};
+let bo={{}},FLOWK=null,FLOWD={{}},LT={{tf:"30",log:false,ty:"task",pick:null,zc:null,zr:null,tok:0,a:"Todo",b:""}};
 const ls={{}},save=()=>SAVED.push(JSON.stringify(ls.lt));
 EL["#flowb"]=el();
 const drawFlow=()=>DRAWN.push(JSON.parse(JSON.stringify(FLOWD[FLOWK]||null)));
@@ -330,12 +332,12 @@ def test_a_spec_clear_redraws_the_open_control_chart_and_its_chosen_span(hub, bo
     _seed(hub, [_item(hub, 1, closed, pa=5, closed_at="2026-10-02T15:00:00Z"),
                 _item(hub, 2, closed, closed_at="2026-10-03T15:00:00Z")])
     q5, qall = _bar(fs="5"), _bar()
-    span = "&scale=jira&a=Todo&b="
+    span = "&scale=jira&a=Doing&b="   # re-anchored (#1247): Todo is the payload's own start, so the chosen span is Doing
     answers = {f"/api/chart/lead?{q5}": hub.flow_lead(*hub.board_filters(q5)),
                f"/api/chart/lead?{qall}": hub.flow_lead(*hub.board_filters(qall)),
                f"/api/leadtime?tf=30{span}&{qall}": {"dots": [{"n": 1}, {"n": 2}]}}
     out = _page_harness(hub, answers, """
-bo.fs=["5"];pickFilter("fsl","fs");LT.a="Todo";
+bo.fs=["5"];pickFilter("fsl","fs");LT.a="Doing";
 await flowOpen("lead");await settle();
 EL["#fsl"].handlers.click({target:{closest:s=>s==="[data-clear]"},preventDefault(){}});await settle();await settle();
 console.log(JSON.stringify({fetched:FETCHED,fs:bo.fs,zc:LT.zc,lead:FLOWD.lead}));""")
@@ -441,14 +443,16 @@ def test_each_statistic_is_computed_over_the_selected_type_only(hub, board):
     tasks = hub.flow_lead(ty="task")["lead"]
     assert tasks["summary"]["average"]["text"] == "2d" and tasks["summary"]["median"]["text"] == "2d"
     assert tasks["summary"]["p85"]["text"] == "3d"
-    assert tasks["excluded_total"] == 1 and tasks["excluded"] == [{"reason": "open", "count": 1}]
+    # Re-anchored (#1250): the open task is censored in the survival reading, never an exclusion.
+    assert tasks["excluded_total"] == 0 and tasks["excluded"] == []
     control = hub.flow_lead(ty="task")["lead"]["control"]["jira"]["all"]
     assert control["average"]["text"] == "2d" and control["p85"]["text"] == "3d"
     assert control["dots"][0]["rolling"]["hours"] == 48, "the rolling mean is over the three tasks, not the bugs"
     assert control["dots"][0]["rolling"]["low"] == pytest.approx(48 - 384 ** 0.5), "the sigma band is over the three tasks"
     assert control["dots"][0]["rolling"]["high"] == pytest.approx(48 + 384 ** 0.5)
     bugs = hub.flow_lead(ty="bug")["lead"]
-    assert bugs["summary"]["average"]["text"] == "1h 30m" and bugs["summary"]["median"]["text"] == "1h 30m"
+    # Re-anchored (#1250): the median is Kaplan-Meier: the curve over 1h and 2h falls to one half at 1h.
+    assert bugs["summary"]["average"]["text"] == "1h 30m" and bugs["summary"]["median"]["text"] == "1h"
     assert bugs["summary"]["p85"]["text"] == "2h" and bugs["excluded_total"] == 0
     specs = hub.flow_lead(ty="spec")["lead"]
     assert specs["summary"]["average"]["text"] == "10d" and specs["summary"]["p85"]["text"] == "10d"
@@ -483,7 +487,7 @@ def test_the_header_names_the_type_the_chart_holds(hub, board):
                         f"process.stdout.write(flowLead({json.dumps(lead)}));"])
     result = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr
-    assert "tasks · <b>on board -> closed</b> · window 20 issues" in result.stdout
+    assert "tasks · <b>Todo -> closed</b> · window 20 issues" in result.stdout, "the view measures from Todo (#1247)"
 
 
 def test_the_type_control_sits_beside_timeframe_and_scale(hub):
@@ -503,10 +507,12 @@ def test_the_type_and_the_chart_settings_are_restored_on_load(hub):
         assert result.returncode == 0, result.stderr
         return json.loads(result.stdout)
 
-    assert restored({"lt": {"ty": "bug", "tf": "3", "log": True}}) == {"ty": "bug", "tf": "3", "log": True}
-    assert restored({"lt": {"tf": "90"}})["tf"] == "30", "a retired preset falls back to the month, never to a missing chart"
-    assert restored({}) == {"ty": "task", "tf": "30", "log": False}
-    assert restored({"lt": {"ty": "pr"}})["ty"] == "task"
+    # Re-anchored (#1247): a fresh page opens on the four defaults, whatever an older visit stored; a choice lasts the visit.
+    defaults = {"ty": "bug", "tf": "2", "log": True}
+    assert restored({"lt": {"ty": "task", "tf": "3", "log": False}}) == defaults
+    assert restored({"lt": {"tf": "90"}})["tf"] == "2", "a retired preset never reaches the page"
+    assert restored({}) == defaults
+    assert restored({"lt": {"ty": "pr"}})["ty"] == "bug"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
@@ -520,7 +526,7 @@ EL["#flowb"].onchange({target:{id:"lty",value:"bug"}});await settle();await sett
 console.log(JSON.stringify({fetched:FETCHED,ty:LT.ty,saved:SAVED,drawn:DRAWN[DRAWN.length-1]}));""", onchange=onchange)
     assert out["fetched"] == [f"/api/chart/lead?{_bar()}", f"/api/chart/lead?{_bar(ty='bug')}"]
     assert out["ty"] == "bug"
-    assert json.loads(out["saved"][-1])["ty"] == "bug", "the choice is saved with the other chart settings"
+    assert out["saved"] == [], "the choice stays for the visit and is never stored (#1247)"
     assert out["drawn"]["lead"]["type"] == "bug"
 
 
@@ -598,7 +604,7 @@ def test_stopping_the_chip_on_a_zoomed_control_chart_reads_it_once(hub, board):
     _seed(hub, [_item(hub, 1, backlog), _item(hub, 2, backlog, labels=["bug"])])
     q_bug, q_all = _bar(fk="bug"), _bar()
     f, t = "2026-10-02T00:00:00.000Z", "2026-10-09T00:00:00.000Z"
-    span = "&scale=jira&a=&b="
+    span = "&scale=jira&a=Todo&b="   # re-anchored (#1247): the view starts at Todo
     from_q, to_q = urllib.parse.quote(f, safe=""), urllib.parse.quote(t, safe="")
     zoom_bug = f"/api/leadtime?from={from_q}&to={to_q}{span}&{q_bug}"
     zoom_all = f"/api/leadtime?from={from_q}&to={to_q}{span}&{q_all}"

@@ -168,14 +168,14 @@ def test_lead_time_summary_measure_window_and_excluded_count(hub, board):
         4: _todo(4),
     })
     lead = _flow(hub)["lead"]
-    assert lead["measure"] == "on board -> closed"
+    assert lead["measure"] == "Todo -> closed", "re-anchored (#1247): the view measures from Todo"
     assert lead["window"] == {"size": 20, "unit": "issues"}
     assert lead["summary"]["average"]["text"] == "1d 10h"
     assert lead["summary"]["median"]["text"] == "1d"
     assert lead["summary"]["minimum"]["text"] == "6h"
     assert lead["summary"]["maximum"]["text"] == "3d"
-    assert lead["excluded"] == [{"reason": "open", "count": 1}]
-    assert lead["excluded_total"] == 1
+    assert lead["excluded"] == []  # re-anchored (#1250): an open card is censored, never an exclusion
+    assert lead["excluded_total"] == 0
 
 
 def test_a_card_closed_as_not_planned_is_no_delivery_and_the_chart_names_it(hub, board):
@@ -297,7 +297,7 @@ def test_drawn_cfd_and_lead_time_equal_what_board_cfd_and_board_leadtime_return(
             assert band["upper"][i] - band["lower"][i] == point["bands"][band["name"]]
 
     assert flow["lead"]["summary"]["average"]["hours"] == 6.0
-    assert flow["lead"]["excluded"] == [{"reason": "open", "count": 1}]
+    assert flow["lead"]["excluded"] == []  # re-anchored (#1250): an open card is censored, never an exclusion
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
@@ -438,7 +438,7 @@ def test_the_control_chart_names_its_lines_and_controls_the_jira_way(hub):
 def test_the_legend_says_what_each_line_answers(hub):
     """Owner, 2026-11-01: a reader asks what p85 means; the legend answers it in place, never by a second line of numbers."""
     for reading in ("85% of closed cards finished within this time", "one slow card lifts it",
-                    "half the cards closed faster", "the usual spread"):
+                    "half the cards that arrived finish within this time", "the usual spread"):   # re-anchored (#1250): Kaplan-Meier
         assert reading in hub.PAGE, f"the legend does not say {reading!r}"
     assert "ltV(c.p85)" in hub.PAGE and "ltV(c.median)" in hub.PAGE, "the legend carries no value beside its line"
 
@@ -486,14 +486,19 @@ def test_the_first_screen_carries_two_controls_and_the_rest_sit_behind_more(hub,
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_the_head_line_states_the_window_and_the_excluded_total_once(hub, board, tmp_path):
-    """#1145: the head line states the window once, and the exclusion reasons move into a hover on its one total."""
-    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z"), 2: _todo(2), 3: _todo(3)})
+    """#1145: the head line states the window once, and the exclusion reasons move into a hover on its one total.
+
+    Re-anchored (#1248): the one total moved from the head line to sit beside the percentile, and its hover names the
+    cards; an open card is censored, never excluded (#1250), so a card closed as not planned carries the exclusion."""
+    item, events = _done(2, "2026-10-03T09:00:00Z")
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z"), 2: ({**item, "cr": "not_planned"}, events), 3: _todo(3)})
     lead = hub.flow_lead(ty="task")["lead"]
     out = _render(hub, tmp_path, "lt-head-excluded.js", f"flowLead({json.dumps(lead)})")
     head = re.search(r"<p class=fhead>(.*?)</p>", out).group(1)
-    assert head.count("excluded") == 1, "the head line states the exclusion more than once"
-    assert "excluded 2" in head
-    assert re.search(r'title="[^"]*still open[^"]*"', head), "the reasons do not sit in a hover on the total"
+    assert "excluded" not in head, "the head line still states the exclusion"
+    assert out.count("excluded") == 1, "the page states the exclusion more than once"
+    p85 = next(e for e in re.findall(r"<span>(.*?)</span>", re.search(r'<p class="flg ltlg">(.*?)</p>', out).group(1)) if "p85" in e)
+    assert re.search(r'title="1 closed as not planned: #2"[^>]*>excluded 1<', p85), "the total and its named cards sit beside p85"
     assert "window 20 issues" in head
     assert out.count("20 issues") == 1, "the rolling window is stated twice"
 
@@ -538,7 +543,7 @@ def test_one_exclusion_total_is_shown_and_the_plotted_sample_is_stated(hub, boar
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z"), 2: _todo(2), 3: _todo(3)})
     lead = hub.flow_lead(ty="task")["lead"]
     chart = lead["control"]["jira"]["all"]
-    assert chart["excluded_total"] == sum(chart["excluded"].values()) == 2, "the total is the rows the chart counted"
+    assert chart["excluded_total"] == sum(chart["excluded"].values()) == 0, "the total is the rows the chart counted"  # re-anchored (#1250): an open card is censored, never an exclusion
     out = _render(hub, tmp_path, "lt-exclusion.js", f"flowLead({json.dumps(lead)})")
     assert out.count("excluded") == 1, "the page shows the exclusion more than once"
     assert "1 issue plotted" in out
@@ -578,7 +583,8 @@ def test_a_chosen_span_shows_its_own_exclusions_in_the_one_total(hub, board, tmp
     out = _render(hub, tmp_path, "lt-span-exclusion.js", f"(LT.zc={json.dumps(span)},flowLead({json.dumps(lead)}))")
     assert out.count("excluded") == 1, "the page shows the exclusion more than once"
     assert "excluded 1" in out, "the one total is the base lead, not the chosen span"
-    assert 'title="1 no transition into the chosen columns"' in out, "the reasons do not sit in the total's hover"
+    # Re-anchored (#1248): card 2 never entered Doing, so it is named as a missing start, with its number.
+    assert 'title="1 never entered the start column: #2"' in out, "the reasons do not sit in the total's hover"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
@@ -635,7 +641,7 @@ def test_no_statistic_is_drawn_inside_the_plot_and_the_legend_carries_each_one(h
     legend = re.search(r'<p class="flg ltlg">(.*?)</p>', out).group(1)
     entries = re.findall(r"<span>(.*?)</span>", legend)
     for label, key, reading in (("Average", "average", "one slow card lifts it"),
-                                ("Median", "median", "half the cards closed faster"),
+                                ("Median", "median", "half the cards that arrived finish within this time"),   # re-anchored (#1250)
                                 ("p85", "p85", "85% of closed cards finished within this time")):
         entry = next(e for e in entries if label in re.sub(r"<[^>]+>", "", e))
         assert f"<b>{chart[key]['text']}</b>" in entry, f"the legend does not carry {label}'s value"
@@ -766,6 +772,7 @@ def test_the_control_chart_draws_one_mark_per_cluster_on_the_date_axis(hub, boar
     block = _flow_block(hub).split("const drawFlow")[0]
     drawing = "\n".join([
         "const COLORS={},COLNAME={issue_closed:'Closed'};", "const esc=s=>String(s);", "const ls={};", block,
+        'LT.tf="30";LT.log=false;',   # re-anchored (#1247): the visit's choice, the month on the Jira scale, set by hand
         f"process.stdout.write(flowLead({json.dumps(lead)}));",
     ])
     path = tmp_path / "flow-control.js"
@@ -784,6 +791,7 @@ def _drawn_lead_svg(hub, board, tmp_path):
     block = _flow_block(hub).split("const drawFlow")[0]
     drawing = "\n".join([
         "const COLORS={},COLNAME={issue_closed:'Closed'};", "const esc=s=>String(s);", "const ls={};", block,
+        'LT.tf="30";LT.log=false;',   # re-anchored (#1247): the visit's choice, the month on the Jira scale, set by hand
         f"process.stdout.write(flowLead({json.dumps(lead)}));",
     ])
     path = tmp_path / "flow-lead-axis.js"
@@ -1075,8 +1083,11 @@ def test_a_live_run_click_never_leaves_the_tab_the_user_is_on(hub):
 
 
 def _render(hub, tmp_path, name, expression, block=None):
-    drawing = "\n".join(["const COLORS={},COLNAME={};", "const esc=s=>String(s);", "const ls={lt:{tf:\"all\"}};",
-                         block or _flow_block(hub).split("const drawFlow")[0], f"process.stdout.write({expression});"])
+    # Re-anchored (#1247): the page no longer restores a stored choice, so the harness sets the visit's choice itself: the
+    # All timeframe on the Jira scale, the view these drawings were written against.
+    drawing = "\n".join(["const COLORS={},COLNAME={};", "const esc=s=>String(s);", "const ls={};",
+                         block or _flow_block(hub).split("const drawFlow")[0], 'LT.tf="all";LT.log=false;',
+                         f"process.stdout.write({expression});"])
     path = tmp_path / name
     path.write_text(drawing)
     result = subprocess.run(["node", str(path)], capture_output=True, text=True)
