@@ -853,7 +853,14 @@ function fsSet(index) {
 }
 function fsInit() {
   let v = 1;
-  try { v = FS_ROLES.indexOf(localStorage.getItem(FS_KEY)); } catch (e) {}
+  try {
+    const saved = localStorage.getItem(FS_KEY);
+    v = FS_ROLES.indexOf(saved);
+    if (v < 0 && /^\d+(?:px)?$/.test(saved || "")) {
+      const sizes = [13, 15, 16, 17, 21], legacy = Number.parseInt(saved, 10);
+      v = sizes.reduce((best, size, i) => Math.abs(size - legacy) < Math.abs(sizes[best] - legacy) ? i : best, 0);
+    }
+  } catch (e) {}
   fsSet(v < 0 ? 1 : v);
   const down = $("sq-ov-fsdown"), up = $("sq-ov-fsup");
   if (down) down.onclick = () => fsSet(fsNow - 1);

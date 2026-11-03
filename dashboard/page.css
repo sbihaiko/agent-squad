@@ -107,7 +107,10 @@
   .card.sel rect { stroke:var(--edge); fill:var(--raise); stroke-width:2; }
   .card.err rect { stroke:var(--err); }
   .card text { pointer-events:none; font:var(--fs-caption) var(--font-ui); }
-  .card .nm { fill:var(--fg); font-size:var(--fs-caption); font-weight:600; }
+  .card .nm { fill:var(--fg); font-size:var(--fs-caption); font-weight:600; font-family:var(--font-mono); }
+  .card .kd { font-family:var(--font-ui); }
+  .card .bd-e, .card .bd-o, .card .st, .card .bd-c, .card .rw { font-family:var(--font-mono); }
+  .card, .group-card { font-variant-numeric:tabular-nums; }
   .card .kd { fill:var(--mute); font-size:var(--fs-caption); }
   .card .bd-e { fill:var(--err); font-size:var(--fs-caption); }
   .card .bd-o { fill:var(--warn); font-size:var(--fs-caption); }
@@ -306,3 +309,5 @@ body.card-mode #card { display: block; }
 #card .crow.s-running, #card .crow.s-started { color: var(--run); }
 #card .crow.s-queued { color: var(--mute); }
 #card .cnote { color: var(--mute); line-height: 1.4; }
+
+.card text { font-variant-numeric:tabular-nums; }

@@ -339,6 +339,34 @@ def test_hub_overlay_uses_shared_typography_roles():
     assert "font:var(--fs-body)/1.55 var(--font-ui)" in css
 
 
+def test_overlay_migrates_saved_pixel_sizes_to_nearest_role():
+    overlay = (SCRIPTS / "hub-overlay.js").read_text()
+    assert "Number.parseInt(saved, 10)" in overlay, "legacy pixel sizes are not parsed"
+    assert "const sizes = [13, 15, 16, 17, 21]" in overlay, "legacy sizes have no supported-role mapping"
+    assert "FS_ROLES.indexOf(saved)" in overlay, "saved role names are not read"
+
+
+def test_identifiers_keep_mono_and_numeric_rows_keep_tabular_figures(surfaces):
+    token_css = TOKENS_FILE.read_text()
+    assert ".kr" in token_css and ".runrow" in token_css
+    phone = (SCRIPTS / "hub-mobile.html").read_text()
+    for selector in (".cid", ".runid", ".shb"):
+        assert selector in phone and "var(--font-mono)" in phone, f"phone identifier {selector} is not monospace"
+    assert "font-variant-numeric:tabular-nums" in token_css
+    dashboard = (ROOT / "dashboard/page.css").read_text()
+    assert "font-family:var(--font-mono)" in dashboard and ".card .nm" in dashboard, \
+        "dashboard node identifiers are not monospace"
+
+
+def test_effective_bold_elements_use_six_hundred(surfaces):
+    phone = (SCRIPTS / "hub-mobile.html").read_text()
+    assert "b,strong,th,h1,h2,h3,h4,h5,h6{font-weight:600}" in TOKENS_FILE.read_text()
+    assert "runid" in phone and "font:600 var(--fs-body) var(--font-mono)" in phone
+    dashboard = (ROOT / "dashboard/page.css").read_text()
+    assert "b,strong,th,h1,h2,h3,h4,h5,h6{font-weight:600}" in TOKENS_FILE.read_text()
+    assert ".card .nm" in dashboard and "font-weight:600" in dashboard
+
+
 # --- The shared palette and the chart roles (SPEC 1181, #1184) ---
 # The roles every surface already draws with, and the literal each one replaces. This ticket only names them in the token
 # file; a surface reads a role later, in its own batch. `--highlight` carries #fff, which #ffffff writes long.

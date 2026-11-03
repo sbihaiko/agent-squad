@@ -55,7 +55,7 @@ h2{font-size:var(--fs-heading);margin:6px 0 10px}
 #lfl label{font-size:var(--fs-body);display:flex;align-items:center;gap:6px;min-height:44px}
 #cards{touch-action:pan-y;min-height:50vh;display:flex;flex-direction:column;gap:8px}
 .card{display:block;width:100%;text-align:left;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-top:3px solid var(--lc,var(--mute));border-radius:8px;padding:10px 12px;font:var(--fs-body) system-ui,sans-serif;min-height:44px}
-.card .cid{display:block;color:var(--mute);font-size:var(--fs-caption);margin-bottom:2px}
+.card .cid{display:block;color:var(--mute);font:var(--fs-caption) var(--font-mono);margin-bottom:2px}.shb{font-family:var(--font-mono)}
 .card .lchip{display:inline-block;margin-left:6px;padding:0 6px;border:1px solid var(--line);border-radius:9px;font-size:var(--fs-caption);color:var(--mute)}
 .card .lchip[data-k=spec]{color:var(--lc,var(--mute));border-color:var(--lc,var(--line))}   /* the spec in its color; the wave is text, never a shade (#917) */
 .empty{color:var(--mute);text-align:center;padding:24px 0}
@@ -183,6 +183,7 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
 .lout>div{min-height:0;overflow:hidden;display:flex;flex-direction:column;gap:8px}
 @keyframes lout{from{grid-template-rows:1fr;opacity:1;margin-top:0}}
 @media (prefers-reduced-motion: reduce){.card.cin,.lout,#sheet,#sheet[hidden],#psheet,#psheet[hidden]{animation:none;transition:none}}
+input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--font-mono)}.runrow,.tile{font-variant-numeric:tabular-nums}
 </style>
 <header>
 <button id="profile" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="psheet"><b id="pswn">projects</b> <span id="pswm"></span></button>
@@ -1102,6 +1103,7 @@ function runRow(r, url) {
   b.type = "button"; b.className = "runrow"; b.dataset.url = url; b.dataset.name = r.label || r.id;
   b.dataset.id = r.id || "";
   name.textContent = r.label || r.id;
+  name.className = "runid";
   meta.className = "mut";
   meta.textContent = [r.badge, "age " + ago(r.age || 0), money(r.spend)].join(" · ");
   b.append(name, meta);
