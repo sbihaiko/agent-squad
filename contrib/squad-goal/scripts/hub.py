@@ -2598,6 +2598,51 @@ def delivery():
     return out
 
 BOARD = pathlib.Path(os.environ.get("SG_BOARD_CACHE") or HUBDIR / "hub-board.json"); BOARD.parent.mkdir(parents=True, exist_ok=True)
+_PROFILE_BOARD = None   # the profile's own board cache, resolved once (#1219); "" when the seam names none
+def profile_board_cache():
+    """The board cache the profile's own environment names (#1219): SG_BOARD_CACHE when the environment sets it (hubmux
+    pins it for the live hub), else the seam's `sg_board_cache` for this hub's owner and project. A hub started before
+    that pin still finds the live cache here, without reading GitHub or another repository's state."""
+    global _PROFILE_BOARD
+    if _PROFILE_BOARD is None:
+        path = os.environ.get("SG_BOARD_CACHE")
+        if not path:
+            try:
+                p = subprocess.run(["bash", "-c", '. "$1/address.sh" 2>/dev/null; sg_board_cache "$2" "$3"', "_",
+                                    str(pathlib.Path(__file__).resolve().parent), OWNER, PROJECT_NO],
+                                   capture_output=True, text=True, timeout=30)
+                path = p.stdout.strip()
+            except (OSError, subprocess.SubprocessError):
+                path = ""
+        _PROFILE_BOARD = path or ""
+    return pathlib.Path(_PROFILE_BOARD) if _PROFILE_BOARD else None
+
+BOARD_STALE_DEFAULT = 600.0   # seconds the hub's cache may trail the profile's own before the page names it (#1219)
+_BOARD_STALE_WARNED = set()
+def board_stale_bound():
+    """SG_HUB_BOARD_STALE_SECONDS: the gap past which a hub names its board cache as stale (#1219). A value that is not a
+    non-negative number is the default, and one stderr line names it: a setting the hub ignored never passes silently."""
+    raw = os.environ.get("SG_HUB_BOARD_STALE_SECONDS")
+    if not raw: return BOARD_STALE_DEFAULT
+    try: bound = float(raw)
+    except ValueError: bound = None
+    if bound is None or bound < 0:
+        if raw not in _BOARD_STALE_WARNED:
+            _BOARD_STALE_WARNED.add(raw)
+            print(f"hub: SG_HUB_BOARD_STALE_SECONDS={raw!r} is not a non-negative number: the stale bound is "
+                  f"{BOARD_STALE_DEFAULT:g} s", file=sys.stderr)
+        return BOARD_STALE_DEFAULT
+    return bound
+def board_stale():
+    """A message when this hub reads a board cache older than the profile's own, else None (#1219). The page shows it in
+    the payload's one error key, as it shows a failed board read. Nothing to say when the two are one file, when either is
+    absent, or when the gap is inside SG_HUB_BOARD_STALE_SECONDS."""
+    own = profile_board_cache()
+    if own is None or own.resolve() == BOARD.resolve(): return None
+    try: gap = own.stat().st_mtime - BOARD.stat().st_mtime
+    except OSError: return None
+    if gap <= board_stale_bound(): return None
+    return f"board cache is stale: {BOARD} is older than the profile's own {own}"
 BOARD_READ = 2   # the version of the items read that wrote the cached rows: a cache that names another is read again (#921); version 2 carries each row's database id, the fast read's join key
 try: board_cache = json.loads(BOARD.read_text())
 except Exception: board_cache = {"t": 0, "items": [], "prs": [], "err": None}
@@ -3897,7 +3942,7 @@ def board(moves=None):
         dropped = drop_moves(agreed | set(expired))   # agreement settles an entry; the window settles one no read ever agreed with (#651)
         for item, (n, recorded, read, context) in expired.items():
             if dropped and item in dropped: report_expired(n, item, recorded, read, window, context)   # only a drop that really happened is reported, so a retry never repeats a line
-    return {"t": board_cache["t"], "err": board_cache["err"], "parts": board_cache.get("parts", {}), "prs": lane, "groups": groups, "cases": cases, "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {}), "sum": dict(board_summary(drawn), none=nospec_count(board_cache["items"], moves, window))}   # the No spec lane's bar (owner)
+    return {"t": board_cache["t"], "err": board_cache["err"] or board_stale(), "parts": board_cache.get("parts", {}), "prs": lane, "groups": groups, "cases": cases, "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {}), "sum": dict(board_summary(drawn), none=nospec_count(board_cache["items"], moves, window))}   # the No spec lane's bar (owner)
 
 def strip_instant(strip, t):
     """The strip with its time-dependent `age` and `old` replaced by `at`, the poll's own instant: an unchanged board keeps its
@@ -3911,7 +3956,7 @@ def board_served():
     """The served board body and its ETag, built once per change (#973). The key is the cache, the pending-move record and the
     overlay settings after which the board is a pure function; an error answer is never kept. Returns (body, etag or None)."""
     moves = read_moves() if overlay_on() else {}
-    key = hashlib.sha256(json.dumps([board_cache, moves, overlay_on(), pending_window()], sort_keys=True, default=str).encode()).hexdigest()
+    key = hashlib.sha256(json.dumps([board_cache, moves, overlay_on(), pending_window(), board_stale()], sort_keys=True, default=str).encode()).hexdigest()
     if _served_board.get("key") == key: return _served_board["body"], _served_board["etag"]
     try: body = json.dumps(board(moves)).encode()   # every card: the page filters the board by the bar (#899)
     except ValueError as e: return json.dumps({"error": str(e)}).encode(), None
