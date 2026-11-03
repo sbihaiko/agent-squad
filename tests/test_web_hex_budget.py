@@ -1,13 +1,9 @@
-"""One palette: no colour literal outside the token module (SPEC 1123, #1132).
+"""One palette: no colour literal outside the token module or named formulas.
 
-The hub, the phone page and the dashboard inline ``web-tokens.css``; every colour they draw resolves to a role in that
-module. The palette fold is not finished, so this guard is a ratchet: the literals that still exist are recorded with the
-reason each is not a role yet, and the count may only fall. A literal the budget does not name is a new hex and fails,
-whether it was typed on the hub, on the phone page or on the dashboard. A hex in the module itself is a role and is not
-counted. The checks read the served text; no browser runs.
+The guard reads every served surface. The token module owns the palette and names the only formula carve-outs; a new
+literal elsewhere fails. The checks read served text; no browser runs.
 """
 import importlib.util
-import json
 import os
 import re
 import sys
@@ -19,7 +15,6 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib/squad-goal/scripts"
 TOKENS_FILE = SCRIPTS / "web-tokens.css"
-BUDGET_FILE = SCRIPTS / "web-hex-budget.json"
 DASHBOARD = ROOT / "dashboard/agent-squad-run-dashboard.html"
 DASHBOARD_SOURCES = [ROOT / "dashboard/page.html", ROOT / "dashboard/page.css",
                      *(ROOT / "dashboard/page").glob("*.js"), *(ROOT / "dashboard/core").glob("*.js")]
@@ -27,6 +22,12 @@ PALETTE_ROLES = ("bg", "panel", "card", "input", "fg", "mute", "acc", "ok", "war
 
 # A hex with a word boundary, never an HTML numeric entity (&#9662;): the sign of a colour, not of a glyph.
 HEX = re.compile(r"(?<!&)#[0-9a-fA-F]{3,8}\b")
+LITERAL_CARVEOUTS = {
+    "image": ("url(", r"url(\s*)\("),
+    "third-party embed": ("<iframe", r"(<\/?)iframe\b"),
+    "computed blend": ("color-mix(", r"color-mix(\s*)\("),
+}
+BUDGET_FILE = SCRIPTS / "web-hex-budget.json"
 
 
 def _load(name, path):
@@ -75,17 +76,29 @@ def _strip_comments(text):
     return text
 
 
-def _literals(html, tokens=None):
-    """Every colour literal in one served surface, with the token block and every comment removed.
+def _token_module(tokens=None):
+    token_text = tokens or TOKENS_FILE.read_text()
+    return re.sub(r"/\*\s*literal-carveout\b.*?\*/", "", token_text, flags=re.S).strip()
 
-    A colour sits in a CSS declaration body, in a style attribute, or in a quoted string (a script or an SVG attribute).
-    A hex in a selector is an element id, not a colour, and is never counted.
-    """
-    text = html.replace((tokens or TOKENS_FILE.read_text()).strip(), "")
-    text = re.sub(r"\$\(\"#[^\"]+\"\)", "", text)   # a selector that names an element, not a colour
+
+def _literals(html):
+    """Every uncarved colour literal in one served surface."""
+    token_text = TOKENS_FILE.read_text()
+    text = html.replace(_token_module(token_text), "")
+    text = re.sub(r"/\*\s*literal-carveout\b.*?\*/", "", text, flags=re.S)
+    for name, (_, token_pattern) in LITERAL_CARVEOUTS.items():
+        if re.search(rf"/\*\s*literal-carveout\s+{re.escape(name)}\s*:", token_text):
+            replacement = {"image": "image-formula", "third-party embed": "embed",
+                           "computed blend": "blend-formula"}[name]
+            def replace_token(match, name=name, replacement=replacement):
+                if name == "third-party embed":
+                    return match.group(1) + replacement
+                return replacement + match.group(1) + "("
+            text = re.sub(token_pattern, replace_token, text, flags=re.I)
+    text = re.sub(r"\$\(\"#[^\"]+\"\)", "", text)
     text = re.sub(r"(?:querySelector(?:All)?|getElementById)\(\"#[^\"]+\"\)", "", text)
     css = "\n".join(re.findall(r"<style[^>]*>(.*?)</style>", text, flags=re.S))
-    css = re.sub(r"[^{}]+(?=\{)", "", _strip_comments(css))   # drop selector text, keep the declaration bodies
+    css = re.sub(r"[^{}]+(?=\{)", "", _strip_comments(css))
     quoted = "\n".join(m.group(0) for m in re.finditer(r"\"[^\"]*\"|'[^']*'", _strip_comments(text)))
     scripts = "\n".join(re.findall(r"<script[^>]*>(.*?)</script>", text, flags=re.S))
     scripts = re.sub(r"(?:querySelector(?:All)?|getElementById)\([\"'][^\"']*[\"']\)", "", scripts)
@@ -94,8 +107,7 @@ def _literals(html, tokens=None):
 
 
 def _literals_by_surface(surfaces=None):
-    tokens = TOKENS_FILE.read_text()
-    return {name: _literals(html, tokens) for name, html in (surfaces or _surfaces()).items()}
+    return {name: _literals(html) for name, html in (surfaces or _surfaces()).items()}
 
 
 def _hub_javascript_literals(html):
@@ -141,8 +153,9 @@ def test_the_guard_rejects_a_literal_in_both_hub_sides(surfaces):
     assert "#123456" in _literals(js_poison), "the hub JavaScript literal escaped the guard"
 
 
-def _budget():
-    return json.loads(BUDGET_FILE.read_text())
+@pytest.fixture(scope="module")
+def surfaces():
+    return _surfaces()
 
 
 def _blocks(css):
@@ -151,7 +164,7 @@ def _blocks(css):
 
 def _root_overrides(html, tokens):
     """The palette roles a surface redefines outside the shared module: a second palette, not a read of the one."""
-    text = _strip_comments(html.replace(tokens.strip(), ""))
+    text = _strip_comments(html.replace(_token_module(tokens), ""))
     css_blocks = re.findall(r"<style[^>]*>(.*?)</style>", text, flags=re.S) or [text]
     out = []
     for css in css_blocks:
@@ -164,41 +177,36 @@ def _root_overrides(html, tokens):
     return out
 
 
-@pytest.fixture(scope="module")
-def surfaces():
-    return _surfaces()
+def test_the_guard_rejects_a_new_literal_on_every_surface_and_allows_named_formulas(surfaces):
+    assert set(surfaces) == set(LITERAL_SURFACES), "every served surface is explicitly covered"
+    for name, surface in surfaces.items():
+        poisoned = surface.replace("</style>", ".poison{color:#123456}</style>", 1) if "</style>" in surface else surface + '<style>.poison{color:#123456}</style>'
+        found = _literals_by_surface({name: poisoned})[name]
+        assert "#123456" in found, f"{name}: scanner did not see injected literal"
+        assert not _literals_by_surface({name: surface})[name], f"{name}: existing literal"
+
+    formulas = (
+        '<style>.image{background-image:url("image.svg")}</style>',
+        '<iframe src="https://example.test/embed"></iframe>',
+        '<style>.blend{color:color-mix(in srgb, var(--fg), var(--bg))}</style>',
+    )
+    for name, example in zip(LITERAL_CARVEOUTS, formulas, strict=True):
+        tokens = TOKENS_FILE.read_text()
+        assert f"literal-carveout {name}:" in tokens
+        assert not _literals(example), f"named {name} formula is not allowed"
+    assert _literals('<style>.blend{color:color-mix(in srgb, var(--fg), var(--bg)); outline-color:#123456}</style>')
+    assert _literals('<style>.image{background:url(#123456)}</style>')
+    assert _literals('<iframe style="color:#123456"></iframe>')
 
 
-@pytest.fixture(scope="module")
-def budget():
-    return _budget()
+def test_the_completed_literal_budget_ledger_is_absent():
+    assert not BUDGET_FILE.exists()
 
 
-def test_every_literal_that_survives_carries_the_reason_it_is_not_a_role(budget):
-    for literal, reason in budget["literals"].items():
-        assert isinstance(reason, str) and reason.strip(), f"{literal} carries no reason"
-
-
-def test_no_literal_outside_the_token_module_is_new(surfaces, budget):
-    known = set(budget["literals"])
-    new = {name: sorted(set(found) - known) for name, found in _literals_by_surface(surfaces).items()}
-    new = {name: values for name, values in new.items() if values}
-    assert not new, f"a hex outside the token module is not a role yet: {new}"
-
-
-def test_the_literal_count_may_only_fall(surfaces, budget):
-    found = {name: len(values) for name, values in _literals_by_surface(surfaces).items()}
-    over = {name: (found[name], record) for name, record in budget["surfaces"].items() if found[name] > record}
-    assert not over, f"a surface carries more literals than its recorded count: {over}"
-    assert sum(found.values()) <= budget["total"], f"{sum(found.values())} literals, recorded total {budget['total']}"
-
-
-def test_the_guard_catches_a_new_literal_on_each_surface(surfaces):
-    """The scanner is not vacuous: a new hex on any guarded surface is found and named."""
-    tokens = TOKENS_FILE.read_text()
-    for name in LITERAL_SURFACES:
-        poisoned = surfaces[name] + "<style>.poison{color:#123456}</style>"   # a literal beside the module
-        assert "#123456" in _literals(poisoned, tokens), name
+def test_the_guard_scans_exactly_every_named_surface(surfaces):
+    found = _literals_by_surface(surfaces)
+    assert set(found) == set(LITERAL_SURFACES)
+    assert all(not values for values in found.values()), found
 
 
 # --- The hub's stylesheets (SPEC 1181, #1185) ---
@@ -223,7 +231,7 @@ def test_the_overlay_is_a_guarded_surface(surfaces):
     """The overlay is its own guarded surface: no literal, and it draws with the roles (#1188)."""
     assert "hub-overlay" in surfaces, "the guard does not read the overlay"
     assert "hub-overlay" in LITERAL_SURFACES, "the overlay is not a guarded surface"
-    assert not _literals(surfaces["hub-overlay"], TOKENS_FILE.read_text()), "the overlay carries a colour literal"
+    assert not _literals(surfaces["hub-overlay"]), "the overlay carries a colour literal"
     assert "var(--" in surfaces["hub-overlay"], "the overlay reads no role"
 
 
@@ -236,7 +244,7 @@ def test_the_hub_and_the_dashboard_read_the_one_module(surfaces):
     """The two surfaces inline the same module, and neither overrides a palette role beside it."""
     tokens = TOKENS_FILE.read_text()
     for name in ("hub", "dashboard"):
-        assert tokens.strip() in surfaces[name], f"{name} does not carry the token module"
+        assert _token_module(tokens) in surfaces[name], f"{name} does not carry the token module"
         assert not _root_overrides(surfaces[name], tokens), f"{name} overrides a palette role beside the module"
 
 
@@ -262,10 +270,10 @@ LITERAL_SURFACES = (*PALETTE_SURFACES, *INLINE_SURFACES)
 
 
 def test_no_surface_carries_a_colour_literal(surfaces):
-    """A colour outside the token module is a second palette, wherever it is typed."""
-    found = {name: sorted(set(values)) for name, values in _literals_by_surface(surfaces).items()
-             if name in LITERAL_SURFACES and values}
-    assert not found, f"a surface still carries a colour literal: {found}"
+    """Every named served surface is clear outside the named formulas."""
+    found = _literals_by_surface(surfaces)
+    assert set(found) == set(LITERAL_SURFACES)
+    assert not {name: sorted(set(values)) for name, values in found.items() if values}, found
 
 
 def test_the_phone_corrects_the_misspelt_token(surfaces):
@@ -278,7 +286,7 @@ def test_no_surface_declares_a_palette_of_its_own(surfaces):
     """Every surface inlines the one module and redefines no palette role beside it."""
     tokens = TOKENS_FILE.read_text()
     for name in PALETTE_SURFACES:
-        assert tokens.strip() in surfaces[name], f"{name} does not carry the token module"
+        assert _token_module(tokens) in surfaces[name], f"{name} does not carry the token module"
         assert not _root_overrides(surfaces[name], tokens), f"{name} defines a palette of its own"
 
 

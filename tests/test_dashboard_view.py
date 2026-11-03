@@ -57,7 +57,7 @@ def test_the_dashboard_has_a_dark_theme_a_side_panel_drawer_and_a_graph_area_tha
     # the reference palette is one module now (#1132): the page inlines it and draws the roles, never a copy of its own
     tokens = (ROOT / "contrib/squad-goal/scripts/web-tokens.css").read_text()
     assert "--bg:#0f1115" in tokens and "--panel:#161a21" in tokens and "--acc:#5aa9ff" in tokens
-    assert tokens.strip() in page
+    assert re.sub(r"/\*\s*literal-carveout\b.*?\*/\s*", "", tokens, flags=re.S).strip() in page
     assert "background:var(--bg)" in page and "var(--panel)" in page and "var(--acc)" in page
     assert re.search(r"#left \{[^}]*position:fixed[^}]*top:37px[^}]*right:0[^}]*width:var\(--side-w,420px\)", page) and re.search(r"grid-template-columns:\s*1fr;", page)   # the panel is a drawer at the right edge, the graph keeps the width
     assert "agent-squad-run-dashboard" in page and "graph editor" not in page
