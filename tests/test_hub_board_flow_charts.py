@@ -865,8 +865,85 @@ def test_each_range_serves_wip_and_throughput_per_day_from_board_cfd(hub, board)
     view = _flow(hub)["cfd"]["ranges"]["all"]
     direct = cfd_mod.cfd(_intervals(hub), hub.ORDER, zone="UTC", now=datetime.now(UTC))
 
-    assert view["wip"] == [p["wip"] for p in direct["points"]]
-    assert view["throughput"] == [p["throughput"] for p in direct["points"]], "the first day has no throughput"
+    # #1149: the per-day reading is one record per day, never a series the page indexes.
+    assert "wip" not in view and "throughput" not in view, "the payload still serves a per-day series for the page to index"
+    assert [r["day"] for r in view["reads"]] == view["days"]
+    assert [r["wip"] for r in view["reads"]] == [p["wip"] for p in direct["points"]]
+    assert [r["throughput"] for r in view["reads"]] == [p["throughput"] for p in direct["points"]], "the first day has no throughput"
+    assert view["reads"][0]["counts"] == [{"name": b["name"], "count": b["count"][0]} for b in view["bands"]]
+
+
+def test_each_range_serves_the_last_days_wip_and_throughput(hub, board):
+    """#1149: the hub chooses the last day and serves its WIP and throughput; the page prints them."""
+    cfd_mod = _load("board_cfd_last_check", SCRIPTS / "board_cfd.py")
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z"), 2: _todo(2)})
+
+    cfd = _flow(hub)["cfd"]
+    last = cfd_mod.cfd(_intervals(hub), hub.ORDER, zone="UTC", now=datetime.now(UTC))["points"][-1]
+    for key, view in cfd["ranges"].items():
+        assert view["last"] == {"day": last["day"], "wip": last["wip"], "throughput": last["throughput"]}, key
+
+
+def test_an_empty_history_serves_no_last_day(hub, board):
+    _seed(hub, {})
+    view = _flow(hub)["cfd"]["ranges"]["7"]
+    assert view["last"] is None and view["reads"] == []
+
+
+def _trapped(view):
+    """A node expression for `view` whose per-day series throw when read: a render that reads one fails (#1149)."""
+    trap = '{get(){throw new Error("the page read a per-day series")}}'
+    return ("(()=>{const v=" + json.dumps(view) + ";"
+            f'for(const b of v.bands)Object.defineProperty(b,"count",{trap});'
+            f'Object.defineProperty(v,"wip",{trap});Object.defineProperty(v,"throughput",{trap});'
+            "return flowCFD(v)})()")
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_flow_page_prints_the_served_last_day_and_reads_no_series(hub, board, tmp_path):
+    """#1149: the page prints the hub's last-day WIP and throughput, and draws with every per-day series booby-trapped."""
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z"), 2: _todo(2)})
+    view = _flow(hub)["cfd"]["ranges"]["all"]
+    view["last"] = {"day": view["last"]["day"], "wip": 417, "throughput": 23}   # values no series holds: the page prints, never derives
+    out = _render(hub, tmp_path, "flow-cfd-last.js", _trapped(view))
+    notes = re.findall(r"<p class=fnote>(.*?)</p>", out)
+    assert len(notes) == 1, f"the flow view carries more than one line of notes: {notes}"
+    assert "WIP <b>417</b>" in notes[0] and "throughput <b>23</b>" in notes[0], notes[0]
+    assert view["last"]["day"] in notes[0], "the line names the day the hub chose"
+    titles = [t for t in re.findall(r"<title>([^<]*)</title>", out) if t.startswith("2026-10-02")]
+    assert titles and f"WIP {view['reads'][1]['wip']}" in titles[0], "the day hover reads the hub's record for that day"
+    view["last"] = {"day": view["last"]["day"], "wip": 0, "throughput": None}
+    assert "throughput <b>none</b>" in _render(hub, tmp_path, "flow-cfd-none.js", _trapped(view))
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_flow_legend_comes_before_its_one_line_of_notes(hub, board, tmp_path):
+    """#1149, re-anchors the notes under the plot: the legend first, then one notes line that holds the history start, the
+    coverage and the held stripe; nothing follows it."""
+    _stack(hub)
+    out = _render(hub, tmp_path, "flow-cfd-order.js", f"flowCFD({json.dumps(_flow(hub)['cfd']['ranges']['all'])})")
+    after = out.split("</svg>", 1)[1]
+    legend = re.match(r"<p>(<span class=flg>.*?)</p>", after)
+    assert legend, f"the legend does not follow the plot: {after[:120]}"
+    rest = after[legend.end():]
+    note = re.fullmatch(r"<p class=fnote>(.*?)</p>", rest)
+    assert note, f"the legend is not followed by exactly one notes line: {rest}"
+    for words in ("history from ", "cards read ", "darker stripe"):
+        assert words in note.group(1), f"the notes line lost {words!r}"
+    assert "<p class=fnote>" not in out.split("<svg", 1)[0], "a note sits above the plot"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_flow_text_takes_the_lead_views_size_and_ink(hub, board, tmp_path):
+    """#1149: the flow's SVG text inherits the box size and paints the lead view's ink."""
+    _stack(hub)
+    cfd = _render(hub, tmp_path, "flow-cfd-ink.js", f"flowCFD({json.dumps(_flow(hub)['cfd']['ranges']['all'])})")
+    lead = _lt_chart(hub, tmp_path, "lt-ink.js", _flow(hub)["lead"]["control"]["jira"]["all"])
+    def fills(markup):
+        texts = re.findall(r"<text [^>]*>", markup)
+        assert texts and all("font-size" not in t for t in texts), "an SVG text sets its own size"
+        return {re.search(r'fill="?([^" >]+)', t).group(1) for t in texts}
+    assert fills(cfd) == fills(lead) == {"var(--chart-ink)"}, (fills(cfd), fills(lead))
 
 
 def test_each_band_serves_its_count_per_day(hub, board):
