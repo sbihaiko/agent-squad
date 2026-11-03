@@ -218,4 +218,19 @@ kill -0 $up 2>/dev/null && ok "the unrelated process keeps running (the pass kil
 cmp -s "$T/st/active-runs.txt" "$T/act.bak" && ok "the active-runs lines are kept" || ko "active-runs changed: $(cat "$T/st/active-runs.txt")"
 n2=$(bash "$T/s/health.sh" | /usr/bin/grep -c REAPED); [ "$n2" = 0 ] && ok "a run with its final verdict is not marked twice" || ko "marked again: $n2"
 kill $lp $up 2>/dev/null; wait $lp $up 2>/dev/null
+# ---- #1270: a pass that reads no free run slot names the holder that has had no live lease and no live process for five minutes ----
+# The run names a pid that lives, so the reap leaves it alone; the ceiling is one run (the project file lowers it) and it is
+# taken, so the pass reads no free slot and must say which run holds it.
+reset; : > "$T/st/active-runs.txt"; rm -rf "$T/co/runs" "$T/st/auto/health-no-free-slot"; mkdir -p "$T/co/runs" "$T/co/docs/squad"
+printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"
+sleep 300 & sp=$!; rrun run-noshow start "call:$sp:$(( $(date +%s) ))"
+o=$(bash "$T/s/health.sh")
+printf '%s' "$o" | /usr/bin/grep -qF 'HEALTH no-free-slot: NO-SLOT run-noshow: caps.runs has no free slot and this run has had no live lease and no live process for' && ok "a full ceiling names the run that has had no lease and no process for five minutes" || ko "the stale holder was not named: $o"
+[ -e "$T/st/auto/health-no-free-slot" ] && ok "the named holder alerts once" || ko "no alert marker for the named holder"
+o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -q 'HEALTH no-free-slot' && ko "the same holder alerted twice: $o" || ok "the same holder does not alert twice"
+kill $sp 2>/dev/null; wait $sp 2>/dev/null; rm -f "$T/co/docs/squad/defaults.yaml"
+# a free slot names nobody
+printf 'caps:\n  runs: 2\n' > "$T/co/docs/squad/defaults.yaml"; rm -f "$T/st/auto/health-no-free-slot"
+o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -q 'no-free-slot' && ko "a free ceiling named a holder: $o" || ok "a free ceiling names no holder"
+rm -f "$T/co/docs/squad/defaults.yaml"
 kill $wp $fp 2>/dev/null; rm -rf "$T" "$P"; exit $fail

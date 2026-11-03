@@ -554,8 +554,9 @@ OLD = 1_000_000.0   # a wall time long before this machine started any process: 
 
 
 def reap_run(tmp_path, name, *calls, request_age=3600, record_age=3600):
-    """A run folder listed in active-runs.txt. Each of `calls` is "start", "resume", "verdict", or a (pid, started_at) pair: a
-    `call_start` the engine process `pid` wrote. The request and the record are old unless an age says otherwise."""
+    """A run folder listed in active-runs.txt. Each of `calls` is "start", "resume", "verdict", "ceiling_wait", or a
+    (pid, started_at) pair: a `call_start` the engine process `pid` wrote. The request and the record are old unless an age
+    says otherwise."""
     st = tmp_path / "st"
     st.mkdir(parents=True, exist_ok=True)
     folder = tmp_path / "runs" / name
@@ -567,6 +568,8 @@ def reap_run(tmp_path, name, *calls, request_age=3600, record_age=3600):
             r.append("resume", run_id=name, graph_hash="h", frontier=[], invoker="cli", engine_options={}, preflight={})
         elif c == "verdict":
             r.append("verdict", verdict="pass", exit_code=0, reasons=[], remains=[], folded=[])
+        elif c == "ceiling_wait":
+            r.append("ceiling_wait", ceiling="caps.runs", cap=3, live=3, holder=name)
         else:
             r.append("call_start", node="main", entry=1, session="s", pid=c[0], limit=None, started_at=c[1])
     (folder / "request.txt").write_text("the request\n")
@@ -617,9 +620,10 @@ def test_reap_never_kills_a_resumed_run_whose_new_process_lives(tmp_path):
 
 
 def test_reap_never_kills_a_resumed_run_that_has_named_no_process_yet(tmp_path):
-    """The dead pid before the resume is the earlier invocation's: it proves nothing about the resumed one."""
+    """The dead pid before the resume is the earlier invocation's: it proves nothing about the resumed one, and a resume that
+    moved its record a minute ago is still starting (#1270's five-minute absence bound is what proves a pid-less run dead)."""
     c = caps.Ceiling(FOUR, tmp_path / "leases")
-    run = reap_run(tmp_path, "run-resuming", "start", (dead_pid(), time.time() - 7200), "verdict", "resume")
+    run = reap_run(tmp_path, "run-resuming", "start", (dead_pid(), time.time() - 7200), "verdict", "resume", record_age=200)
     assert reap_pass(tmp_path, c) == []
     assert last_event(run)["event"] == "resume"
 
@@ -681,3 +685,88 @@ def test_reap_dry_names_the_run_and_writes_nothing(tmp_path):
     run = reap_run(tmp_path, "run-dead", "start", (dead_pid(), time.time() - 7200))
     assert reap_pass(tmp_path, c, dry=True) == ["run-dead"]
     assert last_event(run)["event"] == "call_start"
+
+
+# ---- #1270: a run that named no process, and whose engine died while it waited at the cap ----
+def test_reap_gives_a_run_that_named_no_process_its_killed_verdict_past_five_minutes(tmp_path):
+    """A run that waited at `caps.runs` records only `ceiling_wait`, so it names no pid, and the reap could never prove it dead:
+    its slot stayed counted for 35 minutes while nothing dispatched. A record that has not moved for five minutes, with no
+    process inside its folder, is proof of death without a named pid."""
+    c = caps.Ceiling({**FOUR, "runs": 1}, tmp_path / "leases")
+    run = reap_run(tmp_path, "run-waiting", "start", "ceiling_wait", record_age=400)
+    act = tmp_path / "st" / "active-runs.txt"
+    assert caps.free_runs(c, act) == 0
+    assert reap_pass(tmp_path, c) == ["run-waiting"]
+    ev = last_event(run)
+    assert ev["event"] == "verdict" and ev["reasons"] == ["killed/no-process"]
+    assert caps.free_runs(c, act) == 1                     # the slot is free in the same pass
+
+
+def test_reap_leaves_a_run_that_named_no_process_while_its_record_is_young(tmp_path):
+    """The five-minute bound is the proof: a run that has not named a process yet may still be starting, and a record that moved
+    inside the bound is no evidence of a dead run."""
+    c = caps.Ceiling({**FOUR, "runs": 1}, tmp_path / "leases")
+    run = reap_run(tmp_path, "run-waiting", "start", "ceiling_wait", record_age=200)
+    assert reap_pass(tmp_path, c) == []
+    assert last_event(run)["event"] == "ceiling_wait"
+
+
+def test_reap_leaves_a_run_that_named_no_process_and_has_a_live_session_in_its_folder(tmp_path):
+    """A run waiting at the cap is alive when its own session works inside its folder, whatever its pid-less record says."""
+    c = caps.Ceiling(FOUR, tmp_path / "leases")
+    run = reap_run(tmp_path, "run-waiting", "start", "ceiling_wait", record_age=400)
+    procs = [(os.getpid(), str(run / "ws"), "python3 -m squad start run-waiting")]
+    assert reap_pass(tmp_path, c, procs) == []
+    assert last_event(run)["event"] == "ceiling_wait"
+
+
+def test_reap_leaves_a_run_that_named_no_process_but_holds_a_live_lease(tmp_path):
+    c = caps.Ceiling(FOUR, tmp_path / "leases")
+    run = reap_run(tmp_path, "run-waiting", "start", "ceiling_wait", record_age=400)
+    assert c.try_take("children", "run-waiting:child-1", pid=os.getpid())
+    assert reap_pass(tmp_path, c) == []
+    assert last_event(run)["event"] == "ceiling_wait"
+
+
+# ---- #1270: a full ceiling names the holder that has had no lease and no process for five minutes ----
+def stale_slots(tmp_path, c, procs=(), bound=None):
+    from squad import reap
+    act = tmp_path / "st" / "active-runs.txt"
+    kw = {} if bound is None else {"bound": bound}
+    return reap.stale_slot_holders(act, str(tmp_path), ceiling=c, procs=list(procs), now=time.time(), **kw)
+
+
+def test_a_full_ceiling_names_a_holder_that_has_had_no_lease_and_no_process_for_five_minutes(tmp_path):
+    """A pass that reads no free slot must say which run holds it when that run has had no live lease and no live process for
+    five minutes: the owner sees the cause, not just the count."""
+    c = caps.Ceiling({**FOUR, "runs": 1}, tmp_path / "leases")
+    reap_run(tmp_path, "run-idle", "start", "ceiling_wait", record_age=400)
+    out = stale_slots(tmp_path, c)
+    assert [name for name, _ in out] == ["run-idle"]
+    assert out[0][1] >= 300
+
+
+def test_a_free_slot_names_no_holder(tmp_path):
+    c = caps.Ceiling({**FOUR, "runs": 2}, tmp_path / "leases")
+    reap_run(tmp_path, "run-idle", "start", "ceiling_wait", record_age=400)
+    assert stale_slots(tmp_path, c) == []
+
+
+def test_a_holder_inside_the_five_minute_bound_is_not_named(tmp_path):
+    c = caps.Ceiling({**FOUR, "runs": 1}, tmp_path / "leases")
+    reap_run(tmp_path, "run-young", "start", "ceiling_wait", record_age=200)
+    assert stale_slots(tmp_path, c) == []
+
+
+def test_a_holder_with_a_live_process_in_its_folder_is_not_named(tmp_path):
+    c = caps.Ceiling({**FOUR, "runs": 1}, tmp_path / "leases")
+    run = reap_run(tmp_path, "run-live", "start", "ceiling_wait", record_age=400)
+    procs = [(os.getpid(), str(run / "ws"), "python3 -m squad start run-live")]
+    assert stale_slots(tmp_path, c, procs) == []
+
+
+def test_a_holder_with_a_live_lease_is_not_named(tmp_path):
+    c = caps.Ceiling({**FOUR, "runs": 1}, tmp_path / "leases")
+    reap_run(tmp_path, "run-leased", "start", "ceiling_wait", record_age=400)
+    assert c.try_take("children", "run-leased:child-1", pid=os.getpid())
+    assert stale_slots(tmp_path, c) == []
