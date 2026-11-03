@@ -16,6 +16,12 @@ add() { causes+=("$1"); detail+=("$2"); briefs+=("${3:-}"); }
 alive "$SG_STATE/watchd.pid" 'watchd.sh run' || add watchd-down "watchd is not running: no merges, dispatch or cleanup until it is restarted (watchd.sh start)"
 alive "$SG_STATE/fastloop.pid" 'fastloop.sh' || add fastloop-down "fastloop (autopilot every SG_FAST_INTERVAL s) is not running"
 c="$SG_STATE/cycle.log"; [ -e "$c" ] && [ $((now - $(mtime "$c"))) -gt 360 ] && alive "$SG_STATE/watchd.pid" 'watchd.sh run' && add watch-stalled "cycle.log silent for $(( (now - $(mtime "$c")) / 60 )) min while watchd is up"
+# #1226: this pass runs while the loop is stopped too, so it frees what a dead run holds (squad/reap.py): the caps reclaim of dead
+# leases, and the killed verdict (squad.killed) for a listed run whose own process is proven dead. It keeps the active-runs lines,
+# kills nothing, and leaves a live run, a launch and a gate wait alone. The module is the one beside this script, else SG_SQUAD.
+rroot=$(cd "$(dirname "$0")/../../.." && pwd); [ -f "$rroot/squad/reap.py" ] || rroot=${SG_SQUAD:-}
+while IFS= read -r l; do [ -n "$l" ] || continue; echo "$l"; [ -n "${HEALTH_DRY:-}" ] || echo "$(date '+%F %T') $l" >> "$SG_STATE/alerts.log"
+done < <(PYTHONPATH="$rroot${PYTHONPATH:+:$PYTHONPATH}" python3 -m squad.reap "$SG_STATE/active-runs.txt" "$SG_CHECKOUT" ${HEALTH_DRY:+--dry} 2>/dev/null)
 nv=0; for r in $(cat "$SG_STATE/active-runs.txt" 2>/dev/null); do f=$r; [ "${r#/}" = "$r" ] && f="$SG_CHECKOUT/runs/$r"
   [ -e "$f/record.jsonl" ] || { [ -e "$f/request.txt" ] && [ $((now - $(mtime "$f/request.txt"))) -gt 300 ] && nv=$((nv+1)); }; done
 [ $nv -gt 0 ] && add never-started-runs "$nv run(s) with no record.jsonl after 5 min (the squad refused to start)"

@@ -29,5 +29,9 @@ out=$(probe "$T/st" ""); rc=$?
 [ "$rc" = 0 ] && ok "an exported SG_STATE exits 0" || ko "exit code $rc"
 
 out=$(probe "" "$T/base")
-[ "$out" = "$T/base" ] && ok "with no SG_STATE the seam's own input (SG_STATE_BASE) names the directory" || ko "SG_STATE_BASE: got '$out'"
+# #1226: with no profile the hub reads a directory under the seam's base, never the base itself, where the legacy
+# active-runs.txt of a pre-profile loop still sits.
+case "$out" in "$T/base/"?*) ok "with no SG_STATE the seam's own input (SG_STATE_BASE) names the parent directory";;
+  *) ko "SG_STATE_BASE: got '$out', wanted a directory under $T/base";; esac
+[ "$out" != "$T/base" ] && ok "with no profile the hub never reads the legacy base itself" || ko "STATE is the legacy base"
 exit $fail

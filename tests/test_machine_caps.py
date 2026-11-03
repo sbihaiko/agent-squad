@@ -547,3 +547,137 @@ def test_a_review_in_childcc_takes_a_review_slot_and_gives_it_back(tmp_path):
     r = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, env=env, cwd=co, timeout=60)
     assert (tmp_path / "reviews").read_text() == "reviewed\n", r.stdout + r.stderr
     assert json.loads(cli(tmp_path).stdout)["occupancy"]["reviews"] == 0
+
+
+# ---- #1226: while the loop is stopped, the health pass frees what a dead run holds (squad/reap.py) ----
+OLD = 1_000_000.0   # a wall time long before this machine started any process: a pid named with it is a reused pid
+
+
+def reap_run(tmp_path, name, *calls, request_age=3600, record_age=3600):
+    """A run folder listed in active-runs.txt. Each of `calls` is "start", "resume", "verdict", or a (pid, started_at) pair: a
+    `call_start` the engine process `pid` wrote. The request and the record are old unless an age says otherwise."""
+    st = tmp_path / "st"
+    st.mkdir(parents=True, exist_ok=True)
+    folder = tmp_path / "runs" / name
+    r = record.Record(folder / "record.jsonl")
+    for c in calls:
+        if c == "start":
+            r.append("run_start", run_id=name, graph_name="g", graph_hash="h", engine_options={}, root="main", plan=["main"])
+        elif c == "resume":
+            r.append("resume", run_id=name, graph_hash="h", frontier=[], invoker="cli", engine_options={}, preflight={})
+        elif c == "verdict":
+            r.append("verdict", verdict="pass", exit_code=0, reasons=[], remains=[], folded=[])
+        else:
+            r.append("call_start", node="main", entry=1, session="s", pid=c[0], limit=None, started_at=c[1])
+    (folder / "request.txt").write_text("the request\n")
+    now = time.time()
+    os.utime(folder / "request.txt", (now - request_age, now - request_age))
+    os.utime(folder / "record.jsonl", (now - record_age, now - record_age))
+    with open(st / "active-runs.txt", "a") as f:
+        f.write(f"{folder}\n")
+    return folder
+
+
+def last_event(folder):
+    return read(folder / "record.jsonl")[-1]
+
+
+def reap_pass(tmp_path, c, procs=(), dry=False):
+    from squad import reap
+    return reap.reap(tmp_path / "st" / "active-runs.txt", tmp_path, ceiling=c, procs=list(procs), dry=dry)
+
+
+def test_reap_frees_dead_gate_leases_while_the_loop_is_stopped(tmp_path):
+    c = caps.Ceiling(FOUR, tmp_path / "leases")
+    assert c.try_take_many("gates", "child-dead", 3, pid=dead_pid())
+    assert c.try_take("gates", "child-live", pid=os.getpid())
+    reap_pass(tmp_path, c)
+    assert sorted(p.name for p in (tmp_path / "leases" / "gates").glob("*.json")) == ["child-live.json"]
+
+
+def test_reap_gives_a_dead_unfinished_run_its_killed_verdict_and_keeps_its_line(tmp_path):
+    c = caps.Ceiling(FOUR, tmp_path / "leases")
+    run = reap_run(tmp_path, "run-dead", "start", (dead_pid(), time.time() - 7200))
+    act = tmp_path / "st" / "active-runs.txt"
+    before = act.read_text()
+    assert caps.free_runs(caps.Ceiling({**FOUR, "runs": 1}, tmp_path / "leases"), act) == 0
+    assert reap_pass(tmp_path, c) == ["run-dead"]
+    ev = last_event(run)
+    assert ev["event"] == "verdict" and ev["verdict"] == "failed" and ev["reasons"] == ["killed/no-process"]
+    assert act.read_text() == before                       # landing and issue reconciliation still read the line
+    assert caps.free_runs(caps.Ceiling({**FOUR, "runs": 1}, tmp_path / "leases"), act) == 1
+    assert reap_pass(tmp_path, c) == []                     # a run that holds its final verdict is not marked twice
+
+
+def test_reap_never_kills_a_resumed_run_whose_new_process_lives(tmp_path):
+    c = caps.Ceiling(FOUR, tmp_path / "leases")
+    run = reap_run(tmp_path, "run-resumed", "start", (dead_pid(), time.time() - 7200), "verdict", "resume", (os.getpid(), time.time()))
+    assert reap_pass(tmp_path, c) == []
+    assert last_event(run)["event"] == "call_start"
+
+
+def test_reap_never_kills_a_resumed_run_that_has_named_no_process_yet(tmp_path):
+    """The dead pid before the resume is the earlier invocation's: it proves nothing about the resumed one."""
+    c = caps.Ceiling(FOUR, tmp_path / "leases")
+    run = reap_run(tmp_path, "run-resuming", "start", (dead_pid(), time.time() - 7200), "verdict", "resume")
+    assert reap_pass(tmp_path, c) == []
+    assert last_event(run)["event"] == "resume"
+
+
+def test_reap_leaves_a_live_run_alone(tmp_path):
+    c = caps.Ceiling(FOUR, tmp_path / "leases")
+    run = reap_run(tmp_path, "run-live", "start", (os.getpid(), time.time()))
+    assert reap_pass(tmp_path, c) == []
+    assert last_event(run)["event"] == "call_start"
+
+
+def test_reap_takes_a_reused_pid_as_no_proof_of_life(tmp_path):
+    """A process that started after the run named its pid is another process: the run is dead, and the unrelated process is
+    left running (reap kills nothing)."""
+    c = caps.Ceiling(FOUR, tmp_path / "leases")
+    run = reap_run(tmp_path, "run-reused", "start", (os.getpid(), OLD))
+    assert reap_pass(tmp_path, c) == ["run-reused"]
+    assert last_event(run)["reasons"] == ["killed/no-process"]
+    os.kill(os.getpid(), 0)                                 # this process, the one that reused the pid, still lives
+
+
+def test_reap_leaves_a_run_inside_its_launch_grace_or_with_a_fresh_record(tmp_path):
+    c = caps.Ceiling(FOUR, tmp_path / "leases")
+    young = reap_run(tmp_path, "run-young", "start", (dead_pid(), time.time() - 60), request_age=10)
+    fresh = reap_run(tmp_path, "run-fresh", "start", (dead_pid(), time.time() - 60), record_age=5)
+    assert reap_pass(tmp_path, c) == []
+    assert last_event(young)["event"] == last_event(fresh)["event"] == "call_start"
+
+
+def test_reap_leaves_a_run_waiting_for_a_gate_slot(tmp_path):
+    """The engine is gone, but a gate process inside the run's folder still waits for its slot, or holds it."""
+    c = caps.Ceiling(FOUR, tmp_path / "leases")
+    run = reap_run(tmp_path, "run-gate", "start", (dead_pid(), time.time() - 7200))
+    procs = [(os.getpid(), str(run / "wt"), "bash /x/contrib/squad-goal/scripts/gate.sh full")]
+    assert reap_pass(tmp_path, c, procs) == []
+    assert last_event(run)["event"] == "call_start"
+
+
+def test_reap_leaves_a_run_that_holds_a_live_lease(tmp_path):
+    c = caps.Ceiling(FOUR, tmp_path / "leases")
+    run = reap_run(tmp_path, "run-leased", "start", (dead_pid(), time.time() - 7200))
+    assert c.try_take("children", "run-leased:child-1", pid=os.getpid())
+    assert reap_pass(tmp_path, c) == []
+    assert last_event(run)["event"] == "call_start"
+
+
+def test_reap_reads_a_missing_list_or_record_as_absence(tmp_path):
+    c = caps.Ceiling(FOUR, tmp_path / "leases")
+    assert reap_pass(tmp_path, c) == []
+    (tmp_path / "st").mkdir()
+    gone = tmp_path / "runs" / "run-gone"
+    (tmp_path / "st" / "active-runs.txt").write_text(f"{gone}\n")
+    assert reap_pass(tmp_path, c) == []
+    assert not gone.exists()
+
+
+def test_reap_dry_names_the_run_and_writes_nothing(tmp_path):
+    c = caps.Ceiling(FOUR, tmp_path / "leases")
+    run = reap_run(tmp_path, "run-dead", "start", (dead_pid(), time.time() - 7200))
+    assert reap_pass(tmp_path, c, dry=True) == ["run-dead"]
+    assert last_event(run)["event"] == "call_start"

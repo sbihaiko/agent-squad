@@ -12,7 +12,8 @@ export SG_WATCH_CMD_RE="$T/s/watch\.sh\$"   # ...and so do the live loops of thi
 mkdir -p "$HOME" "$T/s" "$T/st/auto" "$T/co" "$T/bin"; cp "$src" "$T/s/health.sh"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"; cp "$(dirname "$src")/ghcall.sh" "$T/s/ghcall.sh"; cp "$(dirname "$src")/workbranches.sh" "$T/s/workbranches.sh"
 # hermetic: health.sh counts watch.sh with a real pgrep, so the default pattern would count the host's own live loop (a duplicate there is a third cause)
 export SG_WATCH_CMD_RE="$T/s/watch\.sh\$"
-printf 'export SG_STATE=%s SG_CHECKOUT=%s SG_REPO=x/y SG_OWNER=o SG_PROJECT=7 SG_GHREAD=%s\n' "$T/st" "$T/co" "$T/bin/rd" > "$T/s/env.sh"
+export SQUAD_CAPS_DIR="$T/caps"   # hermetic: the reap step (#1226) reclaims leases here, never in the machine's caps folder
+printf 'export SG_STATE=%s SG_CHECKOUT=%s SG_REPO=x/y SG_OWNER=o SG_PROJECT=7 SG_GHREAD=%s SG_SQUAD=%s\n' "$T/st" "$T/co" "$T/bin/rd" "$(cd "$(dirname "$src")/../../.." && pwd)" > "$T/s/env.sh"
 # the door's reader, stubbed: the open-issue list one page at a time, from $T/pages/<n>.json (a page past the last is an empty list)
 mkdir -p "$T/pages"; cat > "$T/bin/rd" <<'RD'
 #!/bin/bash
@@ -155,4 +156,38 @@ kill $wf 2>/dev/null; /usr/bin/pkill -P $wf 2>/dev/null; wait $wf 2>/dev/null
 $G -C "$P" rev-parse -q --verify refs/heads/gui/7 >/dev/null && ok "the unreadable-base case holds its parked branch" || ko "no gui/7 branch, so the unreadable-base case proves nothing"
 o=$(SG_FORK_DIR="$P" SG_FORK_BASE=no-such-base SG_FORK_BRANCH='gui/%n' SG_WATCH_CMD_RE="$T/s/watch\.sh$" bash "$T/s/health.sh" 2>&1)
 printf '%s' "$o" | /usr/bin/grep -q 'integer expression expected' && ko "an unreadable fork base leaks a shell error: $o" || ok "an unreadable fork base counts as zero parked"
+# ---- #1226: the loop is stopped, and this pass frees what a dead run holds (squad/reap.py) ----
+kill $wp $fp 2>/dev/null; wait $wp $fp 2>/dev/null; rm -f "$T/st/watchd.pid" "$T/st/fastloop.pid"   # the loop is stopped
+reset; rm -rf "$T/caps"; bash -c 'exit 0' & dp=$!; wait $dp   # a pid whose process is gone
+sleep 300 & lp=$!; sleep 300 & up=$!   # lp: a live run's engine; up: an unrelated process that reuses a dead run's pid
+mkdir -p "$T/caps/gates"; printf '{"holder": "child-dead", "pid": %s, "since": 1}\n' "$dp" > "$T/caps/gates/child-dead.slot0.json"
+printf '{"holder": "child-live", "pid": %s, "since": %s}\n' "$lp" "$(date +%s)" > "$T/caps/gates/child-live.json"
+# rrun <name> <event>...: a listed run whose record holds the events, each `start`, `resume`, `verdict` or `call:<pid>:<started_at>`
+rrun() { local n=$1 d="$T/co/runs/$1"; shift; mkdir -p "$d"; : > "$d/record.jsonl"; local p=0 e
+  for e in "$@"; do p=$((p+1)); case "$e" in
+    start) printf '{"event": "run_start", "ts": 1, "pos": %s, "run_id": "%s", "graph_name": "g", "graph_hash": "h", "engine_options": {}, "root": "main", "plan": ["main"]}\n' $p "$n";;
+    resume) printf '{"event": "resume", "ts": 1, "pos": %s, "run_id": "%s", "graph_hash": "h", "frontier": [], "invoker": "cli", "engine_options": {}, "preflight": {}}\n' $p "$n";;
+    verdict) printf '{"event": "verdict", "ts": 1, "pos": %s, "verdict": "pass", "exit_code": 0, "reasons": [], "remains": [], "folded": []}\n' $p;;
+    call:*) e=${e#call:}; printf '{"event": "call_start", "ts": 1, "pos": %s, "node": "main", "entry": 1, "session": "s", "pid": %s, "limit": null, "started_at": %s}\n' $p "${e%%:*}" "${e#*:}";;
+  esac; done >> "$d/record.jsonl"
+  echo x > "$d/request.txt"; touch -t 202001010000 "$d/request.txt" "$d/record.jsonl"; echo "$n" >> "$T/st/active-runs.txt"; }
+lastev() { tail -1 "$T/co/runs/$1/record.jsonl"; }
+now0=$(date +%s)
+rrun run-dead start "call:$dp:$((now0-7200))"
+rrun run-resumed start "call:$dp:$((now0-7200))" verdict resume "call:$lp:$now0"
+rrun run-live start "call:$lp:$now0"
+rrun run-reused start "call:$up:1000000"
+cp "$T/st/active-runs.txt" "$T/act.bak"
+o=$(bash "$T/s/health.sh")
+[ -e "$T/caps/gates/child-dead.slot0.json" ] && ko "loop stopped: a dead gate lease survived the pass" || ok "loop stopped: the pass frees a dead gate lease"
+[ -e "$T/caps/gates/child-live.json" ] && ok "a live gate lease stays" || ko "a live gate lease was freed"
+lastev run-dead | /usr/bin/grep -q '"killed/no-process"' && ok "a dead unfinished run gets the killed verdict" || ko "dead run not marked: $(lastev run-dead) / $o"
+printf '%s' "$o" | /usr/bin/grep -q 'REAPED run-dead' && ok "the pass names the run it marked" || ko "no REAPED line: $o"
+lastev run-resumed | /usr/bin/grep -q '"call_start"' && ok "a resumed run whose new process lives is not killed" || ko "resumed run marked: $(lastev run-resumed)"
+lastev run-live | /usr/bin/grep -q '"call_start"' && ok "a live run is untouched" || ko "live run marked: $(lastev run-live)"
+lastev run-reused | /usr/bin/grep -q '"killed/no-process"' && ok "a process reusing the pid is not taken as the run" || ko "reused pid read as the run: $(lastev run-reused)"
+kill -0 $up 2>/dev/null && ok "the unrelated process keeps running (the pass kills nothing)" || ko "the unrelated process was killed"
+cmp -s "$T/st/active-runs.txt" "$T/act.bak" && ok "the active-runs lines are kept" || ko "active-runs changed: $(cat "$T/st/active-runs.txt")"
+n2=$(bash "$T/s/health.sh" | /usr/bin/grep -c REAPED); [ "$n2" = 0 ] && ok "a run with its final verdict is not marked twice" || ko "marked again: $n2"
+kill $lp $up 2>/dev/null; wait $lp $up 2>/dev/null
 kill $wp $fp 2>/dev/null; rm -rf "$T" "$P"; exit $fail
