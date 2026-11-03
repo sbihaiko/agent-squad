@@ -66,6 +66,35 @@ def test_an_uncovered_path_falls_back_to_the_full_battery_and_the_record_says_wh
     assert "tests/test_" not in pytest_line(argv)
 
 
+def test_an_empty_selection_runs_no_pytest_and_logs_why(tmp_path):
+    """(#1249) A delta that selects no test runs no pytest, and the battery's log line names the selector's reason, so the
+    fast gate can record the attempt as unproven with that reason, never as a pass."""
+    repo = tip(tmp_path, {})
+    log = tmp_path / "argv-fast.log"
+    py = tmp_path / "py-fast"
+    py.write_text(
+        "#!/bin/bash\n"
+        f'echo "$*" >> "{log}"\n'
+        "case \"$*\" in\n"
+        "  *squad.testselect*)\n"
+        "    here=$PWD; shift 2; cd \"$SG_SCOPE_ROOT\" || exit 1\n"
+        f'    exec "{sys.executable}" -m squad.testselect --worktree "$here" "$@" ;;\n'
+        "esac\n"
+        "exit 0\n"
+    )
+    py.chmod(0o755)
+    sel = tmp_path / "select-fast"
+    env = {**os.environ, "PYTHONPATH": str(ROOT), "SG_SCOPE_ROOT": str(ROOT), "GATE_SELECT_FILE": str(sel)}
+    env.pop("SG_TEST_SELECT", None)
+    env.pop("SG_GATE_STAGE", None)
+    cmd = f'. "{BASE_BATTERY}"; sg_battery_run "{py}" main 2 yes fast'
+    done = subprocess.run(["bash", "-c", cmd], cwd=repo, env=env, capture_output=True, text=True)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert sel.read_text().strip() == "selected 0 files"
+    assert "-m pytest" not in log.read_text()
+    assert "no pytest ran: the selection is empty: the tip changes no file against main" in done.stdout.splitlines()
+
+
 @pytest.mark.parametrize("stage", ["landing", "promotion", "nightly"])
 def test_a_full_stage_runs_the_full_battery_whatever_the_delta_says(tmp_path, stage):
     """(c) The landing, the promotion proof and the nightly keep the battery: a covered change narrows nothing."""

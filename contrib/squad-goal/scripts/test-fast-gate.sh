@@ -167,10 +167,35 @@ out=$(selrun); rc=$?
 [ $rc = 0 ] && /usr/bin/grep -qx -- "-m pytest $PYTEST_OPTS" "$T/argv.log" && ok "an all answer runs the whole battery" || ko "all argv: rc $rc: '$(cat "$T/argv.log" 2>&1)'"
 IFS=$'\t' read -r _ kind res _ sel scope < "$SG_STATE/gate-status" 2>/dev/null
 [ "$sel $scope" = "all: no test imports squad/x.py full" ] && ok "the status line states the all reason and the full scope" || ko "all status: '$(cat "$SG_STATE/gate-status" 2>&1)'"
+# (#1249) A gate that runs no test never records a pass. An empty selection is unproven (exit 4), its reason is the one the
+# selector gave, the verdict line names it, and the history keeps it apart from a suite that passed: outcome unproven, pytest
+# in the not-run list. A selector that answers nothing at all is unproven too, with a reason that says it named no file.
+echo "none: the tip changes no file against dev" > "$T/select.out"
+rm -f "$SG_STATE/gate-history"
+out=$(selrun); rc=$?
+[ $rc = 4 ] && ! /usr/bin/grep -q -- "-m pytest" "$T/argv.log" && /usr/bin/grep -q -- "-m ruff check squad tests" "$T/argv.log" && /usr/bin/grep -q -- "-m mypy squad" "$T/argv.log" && ok "an empty selection runs no pytest, still runs ruff and mypy, and exits unproven" || ko "empty selection: rc $rc: '$(cat "$T/argv.log" 2>&1)' $out"
+/usr/bin/grep -q "selected 0 files" "$SG_FAST_LOG_DIR"/fast-gate-*.log && ok "an empty selection logs that it ran none" || ko "empty selection log: '$(cat "$SG_FAST_LOG_DIR"/fast-gate-*.log 2>&1)'"
+case "$(last "$out")" in "fast-gate: unproven: no pytest ran: the selection is empty: the tip changes no file against dev"*) ok "the verdict line says unproven and names why nothing was selected";; *) ko "empty verdict line: '$(last "$out")'";; esac
+IFS=$'\t' read -r _ kind res _ sel scope < "$SG_STATE/gate-status" 2>/dev/null
+[ "$kind $res $sel" = "fast fail selected 0 files" ] && ok "an empty selection never leaves a pass on the status line" || ko "empty status: '$(cat "$SG_STATE/gate-status" 2>&1)'"
+IFS=$'\t' read -r _ hk hres _ _ hsel _ hoc hrs hran hnot _ < "$SG_STATE/gate-history" 2>/dev/null
+[ "$hres $hoc $hnot" = "fail unproven pytest" ] && [ "$hran" = "ruff mypy" ] && [ "$hrs" = "no pytest ran: the selection is empty: the tip changes no file against dev" ] \
+  && ok "the history records a suite that never ran as unproven, apart from a pass" || ko "empty history: '$(cat "$SG_STATE/gate-history" 2>&1)'"
 : > "$T/select.out"
 out=$(selrun); rc=$?
-[ $rc = 0 ] && ! /usr/bin/grep -q -- "-m pytest" "$T/argv.log" && /usr/bin/grep -q -- "-m ruff check squad tests" "$T/argv.log" && /usr/bin/grep -q -- "-m mypy squad" "$T/argv.log" && ok "an empty selection runs no pytest and still runs ruff and mypy" || ko "empty selection: rc $rc: '$(cat "$T/argv.log" 2>&1)'"
-/usr/bin/grep -q "selected 0 files" "$SG_FAST_LOG_DIR"/fast-gate-*.log && ok "an empty selection logs that it ran none" || ko "empty selection log: '$(cat "$SG_FAST_LOG_DIR"/fast-gate-*.log 2>&1)'"
+[ $rc = 4 ] && case "$(last "$out")" in "fast-gate: unproven: no pytest ran: the selection is empty: the selector named no test file"*) true;; *) false;; esac \
+  && ok "a selector that answers nothing is unproven with its own reason" || ko "bare empty selection: rc $rc: '$(last "$out")'"
+IFS=$'\t' read -r _ kind res _ < "$SG_STATE/gate-status" 2>/dev/null
+[ "$res" = fail ] && ok "a bare empty selection leaves no pass either" || ko "bare empty status: '$(cat "$SG_STATE/gate-status" 2>&1)'"
+# A red shell suite still wins over the empty selection: a measured defect is fail, never unproven.
+echo "none: the tip changes no file against dev" > "$T/select.out"
+$G -C "$R" checkout -q gui/py
+# The green case runs first, with no standing red: a red a suite measured stands for its tree, so a later attempt is fail (gate.sh).
+rm -rf "$SG_STATE/gate-reds" "$T/ran.log"; out=$(selrun); rc=$?
+[ $rc = 4 ] && /usr/bin/grep -q "test-foo.sh" "$T/ran.log" 2>/dev/null && ok "a green suite beside an empty selection still leaves the gate unproven" || ko "empty plus green suite: rc $rc: $out"
+out=$(SUITE_FAIL=test-foo.sh selrun); rc=$?
+[ $rc = 1 ] && case "$out" in *test-foo.sh*) true;; *) false;; esac && ok "a red suite beside an empty selection fails the gate" || ko "empty plus red suite: rc $rc: $out"
+$G -C "$R" checkout -q dev
 printf 'tests/test_a.py\n' > "$T/select.out"
 out=$(selrun SG_TEST_SELECT=no); rc=$?
 [ $rc = 0 ] && /usr/bin/grep -qx -- "-m pytest $PYTEST_OPTS" "$T/argv.log" && ! /usr/bin/grep -q "squad.testselect" "$T/argv.log" && ok "SG_TEST_SELECT=no runs the whole battery without the selector" || ko "SG_TEST_SELECT=no: rc $rc: '$(cat "$T/argv.log" 2>&1)'"

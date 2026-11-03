@@ -1,4 +1,5 @@
-"""Name the test files a change reaches, by imports and by the paths tests name; answer `all` with a reason when neither can say."""
+"""Name the test files a change reaches, by imports and by the paths tests name; answer `all` with a reason when neither can
+say, and `none` with a reason when the change reaches no test."""
 import argparse
 import ast
 import subprocess
@@ -23,6 +24,14 @@ class _All(Exception):
 
 def _all(reason):
     raise _All(reason)
+
+
+class _None(Exception):
+    pass
+
+
+def _none(reason):
+    raise _None(reason)
 
 
 def _git(root, *args):
@@ -130,12 +139,21 @@ def _answer(root, base):
     merge_base = _git(root, "merge-base", base, "HEAD")
     if merge_base.returncode:
         _all(f"no merge-base between {base} and HEAD")
+    # The delta is the committed diff; a change the tree carries outside it cannot be placed, so it never selects nothing
+    # for that change: the answer is the full battery, naming the files (#1249).
+    dirt = _git(root, "status", "--porcelain", "-z", "--no-renames")
+    if dirt.returncode:
+        _all("the tree's uncommitted state cannot be read")
+    loose = sorted({entry[3:] for entry in dirt.stdout.split("\0") if len(entry) > 3})
+    if loose:
+        shown = " ".join(loose[:5]) + (f" and {len(loose) - 5} more" if len(loose) > 5 else "")
+        _all(f"the tree carries uncommitted changes the delta cannot place: {shown}")
     diff = _git(root, "diff", "-z", "--name-only", "--no-renames", merge_base.stdout.strip(), "HEAD")
     if diff.returncode:
         _all(f"the diff against {base} failed")
     changed = [p for p in diff.stdout.split("\0") if p]
     if not changed:
-        return []
+        _none(f"the tip changes no file against {base}")
 
     inert = _inert(root)
     live = []
@@ -150,7 +168,7 @@ def _answer(root, base):
         if rel not in inert:
             live.append(rel)
     if not live:
-        return []
+        _none(f"every changed file is inert: {' '.join(changed)}")
 
     rels = sorted(
         path.relative_to(root).as_posix()
@@ -183,7 +201,10 @@ def _answer(root, base):
         if not hits:
             _all(f"{rel} is reached by no test: no import, no path literal, not inert")
         selected |= hits
-    return sorted(rel for rel in selected if (root / rel).exists())   # pytest cannot run a path the tip deleted
+    present = sorted(rel for rel in selected if (root / rel).exists())   # pytest cannot run a path the tip deleted
+    if not present:
+        _all(f"every test the change reaches is deleted at the tip: {' '.join(sorted(selected))}")
+    return present
 
 
 def main(argv=None):
@@ -203,6 +224,10 @@ def main(argv=None):
             print(path)
     except _All as reason:
         print(f"all: {reason}")
+    except _None as reason:
+        # The delta selects no test. The one line says why, so the gate records the attempt as unproven with that reason,
+        # never as a pass (#1249).
+        print(f"none: {reason}")
     return 0
 
 
