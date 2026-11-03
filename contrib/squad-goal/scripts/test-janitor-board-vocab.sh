@@ -18,9 +18,10 @@ expected = {
     "Doing": "A live run holds it; a spec whose child is live work is marked here",
     "Code Review": "The child's code is done; its review or a fix round holds it",
     "Code Complete": "A child is in the wave branch",
+    "Gating": "A gate or proof waits for a slot or runs for the wave; a red or unproven attempt is a marker, not a move",
     "Closed": "In dev",
 }
-if any(statuses.get(name) != fact for name, fact in expected.items()) or any(name in statuses for name in ("Pushing", "Testing", "Merging", "Landing")) or len(statuses) != 7 or any("pull request" in fact.lower() for fact in statuses.values()):
+if any(statuses.get(name) != fact for name, fact in expected.items()) or any(name in statuses for name in ("Pushing", "Testing", "Merging", "Landing")) or len(statuses) != 8 or any("pull request" in fact.lower() for fact in statuses.values()):
     print("FAIL ADR-0145 board vocabulary", file=sys.stderr)
     sys.exit(1)
 PY

@@ -6,7 +6,7 @@ no client, so the same inputs always give the same facts. The table decides the 
 IN_DEV = ("behind", "identical")   # a compare standing: the branch tip is in the landing branch
 AHEAD = ("ahead", "diverged")     # a compare standing: the branch holds commits the landing branch lacks
 APPROVED = "VERDICT: APPROVE"
-LIVE_WORK = ("Todo", "In Progress", "Doing", "Code Review", "Code Complete")   # a child card in Todo or beyond, before done
+LIVE_WORK = ("Todo", "In Progress", "Doing", "Code Review", "Code Complete", "Gating")   # a child card in Todo or beyond, before done
 
 
 def review_state(verdict_text, sha_text, tip):

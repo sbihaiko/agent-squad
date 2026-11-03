@@ -9,7 +9,9 @@ import pytest
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "contrib" / "squad-goal" / "scripts"
 SCRIPT = SCRIPTS / "board_migrate.py"
-OLD = ("Blocked", "In Progress", "Done", "Open Specs", "Merging", "Landing")
+MOVED = ("Blocked", "In Progress", "Done", "Open Specs", "Merging", "Landing")
+RETIRED = ("Testing", "Pushing")   # the definition no longer names them, and no column replaces them
+OLD = MOVED + RETIRED
 ITEMS = [
     {"n": 1, "st": "Open Specs", "s": "OPEN", "l": []},
     {"n": 2, "st": "Open Specs", "s": "OPEN", "l": ["spec"]},
@@ -96,6 +98,22 @@ def test_removal_is_allowed_once_no_card_carries_an_old_option(mig):
     assert mig.carried([i for i in ITEMS if i["st"] not in OLD]) == {}
 
 
+def test_a_retired_option_is_never_moved_and_its_removal_is_refused(mig):
+    """Testing and Pushing are retired: no column replaces them, so a card still on one blocks the removal by name."""
+    items = [{"n": 30, "st": "Testing", "s": "OPEN", "l": []},
+             {"n": 31, "st": "Pushing", "s": "OPEN", "l": []},
+             {"n": 32, "st": "Todo", "s": "OPEN", "l": []}]
+
+    plan = mig.plan(items)
+
+    assert plan["moves"] == [], "a card on a retired option is moved by the migration"
+    assert {r["option"]: r["remaining"] for r in plan["removals"]}["Testing"] == 1
+    assert {r["option"]: r["remaining"] for r in plan["removals"]}["Pushing"] == 1
+    counts = mig.carried(items)
+    assert counts == {"Testing": 1, "Pushing": 1}
+    assert "Testing: 1" in mig.refusal(counts) and "Pushing: 1" in mig.refusal(counts)
+
+
 def _run(tmp_path, *args, items=ITEMS):
     f = tmp_path / "items.json"
     f.write_text(json.dumps(items))
@@ -115,6 +133,7 @@ def test_the_dry_run_prints_every_move_and_removal_and_writes_nothing(tmp_path):
     assert "MOVE #10 Landing -> Code Complete" in out
     assert out.count("MOVE #") == 8
     assert all(f"REMOVE option {o}" in out for o in OLD)
+    assert "REMOVE option Testing" in out and "REMOVE option Pushing" in out
     assert sorted(p.name for p in tmp_path.iterdir()) == sorted(before + ["items.json"])
 
 
@@ -123,6 +142,14 @@ def test_the_check_refuses_with_counts_and_exit_code(tmp_path):
 
     assert r.returncode == 3
     assert "Blocked: 2" in r.stderr and "Done: 1" in r.stderr
+
+
+def test_the_check_refuses_a_retired_option_with_its_count(tmp_path):
+    r = _run(tmp_path, "--check", items=[{"n": 30, "st": "Testing", "s": "OPEN", "l": []},
+                                         {"n": 31, "st": "Pushing", "s": "OPEN", "l": []}])
+
+    assert r.returncode == 3
+    assert "Testing: 1" in r.stderr and "Pushing: 1" in r.stderr
 
 
 def test_the_check_passes_when_no_card_carries_an_old_option(tmp_path):

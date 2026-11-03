@@ -428,7 +428,8 @@ def test_started_specs_tie_break_by_tickets_in_flight_then_number():
         {"name": "Todo", "end": False, "items": [
             _row(81, "Todo", [], sp=True), _row(62, "Todo", [], sp=True),
             _row(75, "Todo", [], sp=True), _row(63, "Todo", [], sp=True),
-            _row(752, "Todo", [], pa=75), _row(634, "Todo", [], pa=63)]},
+            _row(634, "Todo", [], pa=63)]},
+        {"name": "Backlog", "end": False, "items": [_row(752, "Backlog", [], pa=75)]},   # not in flight: Todo is (#1254)
         {"name": "Doing", "end": False, "items": [
             _row(812, "Doing", [], pa=81), _row(622, "Doing", [], pa=62),
             _row(632, "Doing", [], pa=63), _row(633, "Doing", [], pa=63)]},

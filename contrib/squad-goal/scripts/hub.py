@@ -4492,8 +4492,15 @@ def run_state_css(r):
     state = r["state"].replace(" ", "-")
     rule = f".b.{state}{{color:var(--{r['color']});{r['css']}}}"
     return rule + (f'.b.{state}::before{{content:"{MARK_GLYPHS[r["mark"]]} "}}' if r["mark"] != "none" else "")
+# The chip the state table paints, shared by the desktop badge and the phone's run row (#1142): one base, then one rule
+# per state. A waiting pass is no state of the table, and the outcome classes stand beside it (#598).
+RUN_STATE_BASE_CSS = """.b{display:inline-block;padding:0 6px;border-radius:var(--radius-lg);font-size:var(--fs-caption);border:1px solid}
+.b.waiting{color:var(--wait);border-style:dashed}
+.landed,.pass,.ok{color:var(--ok)}"""
 
 WEB_TOKENS = (pathlib.Path(__file__).resolve().parent / "web-tokens.css").read_text()
+# The installed app's colours are the token file's values: a manifest is no stylesheet, so it reads no variable (#1142).
+BG_COLOR = re.search(r"--bg:\s*([^;]+);", WEB_TOKENS).group(1).strip()
 PAGE = r"""<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Hub</title>
 <script>if(matchMedia("(max-width: 600px)").matches&&localStorage.getItem("squad-view")!=="desktop")location.replace(location.pathname.replace(/\/?$/,"/")+"mobile")</script>
 <style>
@@ -4513,9 +4520,7 @@ button.on{border-color:var(--acc);color:var(--acc)}
 .r .sh{color:var(--warn);font-variant-numeric:tabular-nums}.r .sh.done{color:var(--ok)}
 .r.show{background:var(--raise);box-shadow:inset 3px 0 0 var(--acc)}.r.pinned .pn{color:var(--acc)}
 .pn{color:var(--mute);flex:none}.gh.op{color:var(--fg)}.gh+.r{border-top:0}
-.b{display:inline-block;padding:0 6px;border-radius:var(--radius-lg);font-size:var(--fs-caption);border:1px solid}
-.b.waiting{color:var(--wait);border-style:dashed}   /* the childcc pass after it ended: no state of RUN_STATES says a pass that waits (#598) */
-.landed,.pass,.ok{color:var(--ok)}
+/*RUN_STATE_BASE_CSS*/
 /*RUN_STATE_CSS*/
 #bread{color:var(--mute)}#bread.stale{color:var(--warn)}#bbody.stale{opacity:.45;filter:grayscale(1)}
 .m{color:var(--mute);font-size:var(--fs-caption);margin-top:2px}
@@ -4915,7 +4920,7 @@ function ldCells(d){return[["CPU","cpu"],["RAM","ram"],["GPU","gpu"]].map(p=>{co
 function gaugeGeom(v){const f=ldNum(v),k=f!==null,p=k?f:0,a=Math.PI*p/100;return{known:k,deg:Math.round(-90+1.8*p),x:Math.round((30-26*Math.cos(a))*10)/10,y:Math.round((32-26*Math.sin(a))*10)/10}}   // the shipped scale: a half circle swept 0 to 100, never re-scaled (#1141)
 const gaugeMark=p=>{const a=Math.PI*p/100;return [30-23*Math.cos(a),32-23*Math.sin(a),30-18*Math.cos(a),32-18*Math.sin(a)].map(n=>Math.round(n*10)/10)};   // a mark sits inside the arc, so it never covers the sweep's tone (#1141)
 function gaugeSvg(v,id){const g=gaugeGeom(v),gid=`g-${id||"load"}`;   // one grid: the track is line, the sweep runs ok through warn to err, the needle is fg (SPEC 1123 #1141)
- return `<svg width=60 height=36 viewBox="0 0 60 36" aria-hidden="true" focusable="false"><defs><linearGradient id=${gid} x1=4 y1=0 x2=56 y2=0 gradientUnits=userSpaceOnUse><stop offset=0 stop-color="var(--ok)"/><stop offset=.5 stop-color="var(--warn)"/><stop offset=1 stop-color="var(--err)"/></linearGradient></defs><path class=gt d="M4 32 A26 26 0 0 1 56 32"/>${[0,25,50,75,100].map(p=>{const [x1,y1,x2,y2]=gaugeMark(p);return `<line class=gm x1=${x1} y1=${y1} x2=${x2} y2=${y2}/>`}).join("")}<path class=gf stroke="${g.known?`url(#${gid})`:"none"}" d="M4 32 A26 26 0 0 1 ${g.x} ${g.y}"/><line class=gn x1=30 y1=32 x2=30 y2=10 style="transform:rotate(${g.deg}deg)"${g.known?"":" visibility=hidden"}/><circle class=gh0 cx=30 cy=32 r=2 /></svg>`}
+ return `<svg width=60 height=36 viewBox="0 0 60 36" aria-hidden="true" focusable="false"><defs><linearGradient id=${gid} x1=4 y1=0 x2=56 y2=0 gradientUnits=userSpaceOnUse><stop offset=0 stop-color="var(--ok)"/><stop offset=.5 stop-color="var(--warn)"/><stop offset=1 stop-color="var(--err)"/></linearGradient></defs><path class=gt d="M4 32 A26 26 0 0 1 56 32"/>${[0,25,50,75,100].map(p=>{const [x1,y1,x2,y2]=gaugeMark(p);return `<line class=gm x1=${x1} y1=${y1} x2=${x2} y2=${y2} />`}).join("")}<path class=gf stroke="${g.known?`url(#${gid})`:"none"}" d="M4 32 A26 26 0 0 1 ${g.x} ${g.y}"/><line class=gn x1=30 y1=32 x2=30 y2=10 style="transform:rotate(${g.deg}deg)"${g.known?"":" visibility=hidden"}/><circle class=gh0 cx=30 cy=32 r=2 /></svg>`}
 function subsGauges(d){const xs=(d||{}).subs||[];if(!xs.length)return"";
  // One bar per plan: how much of the weekly window is spent, and how long until it resets. The needle and the half-circle
  // are gone with the #inst/#isub scope bug that painted them black (#Astra, 2026-11-01): a bar reads at a glance where a
@@ -5069,7 +5074,7 @@ function mdlRoute(x,dflt){return x.registered===false?`<span class=ur>unregister
    The chain row's old switch is read only: a file that holds it shows "off (chain)" and the panel writes none. */
 function mdlOffM(m){return !!(mdl.model_off&&mdl.model_off[m])}
 function mdlChip(st){return st==="on"?"":`<span class="stc${String(st).startsWith("off")?" off":" lim"}">${esc(String(st).startsWith("off")?"off":st)}</span>`}   // a state chip shows only at limit or off (#913)
-function mdlTable(){const rows=mdl.models||[];return `<h3>Models</h3><p class=m>On or off, for every chain. An off model leaves the add lists; a chain that still lists it keeps the row, struck through, and skips it.</p><table class=mtab><thead><tr><th>Model</th><th>Subscription</th><th>State</th><th>On</th></tr></thead><tbody>`+rows.map(r=>{const of=mdlOffM(r.id),x=mdlBox("known",r.id);return`<tr class="${of?"off":""}"><td class=mn title="${esc(r.id)} · ${esc(x.text)}">${mdlName(x,r.id)}</td><td>${mdlSub(r)}</td><td>${mdlChip(of?"off (model)":r.state)}</td><td><button class="mtg${of?" off":""}" data-mt="${esc(r.id)}" aria-pressed="${!of}" aria-label="${esc(r.id)} on" title="${of?"off (model): press to switch it on in every chain":"on: press to switch it off in every chain"}">${of?"off":"on"}</button></td></tr>`}).join("")+`</tbody></table>`}
+function mdlTable(){const rows=mdl.models||[];return `<h3>Models</h3><p class=m>On or off, for every chain. An off model leaves the add lists; a chain that still lists it keeps the row, struck through, and skips it.</p><table class=mtab><thead><tr><th>Model</th><th>Subscription</th><th>State</th><th>On</th></tr></thead><tbody>`+rows.map(r=>{const of=mdlOffM(r.id),x=mdlBox("known",r.id);return`<tr class="${of?"off":""}"><td class=mn title="${esc(r.id)} · ${esc(x.text)}">${r.label?esc(r.label):mdlName(x,r.id)}</td><td>${mdlSub(r)}</td><td>${mdlChip(of?"off (model)":r.state)}</td><td><button class="mtg${of?" off":""}" data-mt="${esc(r.id)}" aria-pressed="${!of}" aria-label="${esc(r.id)} on" title="${of?"off (model): press to switch it on in every chain":"on: press to switch it off in every chain"}">${of?"off":"on"}</button></td></tr>`}).join("")+`</tbody></table>`}
 const MHELP=`<details class=hlp><summary>How it works</summary><ul><li><b>Order</b>: ↑ ↓ move a model; ✕ marks it for removal: the row stays, struck through, until Save, and ↺ keeps it; "+ add a model…" puts one back.</li><li><b>Off</b> is set once per model and applies in every chain. An off model is skipped where a chain still lists it (the row stays, struck through, and ✕ still removes it) and is not offered in "+ add a model…". Switching it on restores every row.</li><li><b>Hours</b> are set per chain row: <code>HH-HH</code> local, may wrap midnight (<code>22-07</code>); empty means always. A row may also name days and UTC, clauses joined by <code>;</code>: <code>mon-fri 00-01,04-06,10-24 UTC; sat-sun 00-24 UTC</code> is DeepSeek off-peak. Outside its hours the row is skipped like off, and the next row runs.</li><li><b>Effort</b> is low to max, per chain row; medium is the default.</li><li><b>Save</b>, at the foot of Settings, shows the change (- before, + after) and writes only when you confirm.</li></ul></details>`;
 function mdlRender(){const b=$("#mbody");if(!mdl){b.innerHTML="<span class=m>Loading the data.</span>";return}
  {const lc=mdl.last_coding||(mdl.coding_models||[])[0]||"",x=lc?mdlBox("coding_models",lc):MBOX0;$("#mdsr").textContent=x.llm?`${x.llm} · ${lc}`:lc}   // the model the last run coded with, not the chain's head
@@ -5432,7 +5437,7 @@ function restore(){document.querySelectorAll("#bbody .sc").forEach(e=>{e.scrollT
 // One colour per board column, resolved here and nowhere else: the header's dot, the card's --cc border and the
 // hidden: strip's number all call colOf(name, columnNames). The nine named columns are the board's own — the eight
 // shipped statuses plus the one open-PR lane — and the flow reads left to right: grey (not started), yellow (being
-// coded), violet (built), teal (verified), green (finished), amber for the pile nobody has triaged, red for the one
+// coded), violet (built), pink (gating), green (finished), amber for the pile nobody has triaged, red for the one
 // colour that means look here, and blue for the open-PR lane. Any other name is a Status option the Project gained
 // later — a user column — and takes the next colour of the reserved ring, by its alphabetical position among those user
 // columns. The name always stands beside the colour (column header, chip label), so the colour is a second cue and never
@@ -5440,7 +5445,7 @@ function restore(){document.querySelectorAll("#bbody .sc").forEach(e=>{e.scrollT
 const COLORS=/*BOARD_COLORS*/;
 const COLNAME=/*BOARD_NAMES*/;const BOARD_VOCAB={todo:COLNAME.issue_todo,doing:/*BOARD_DOING*/,review:/*BOARD_REVIEW*/};   // the columns' names by the fact that sets them: the board's script holds no column name of its own
 const hidCols=()=>bo.hidden??[];
-const RING=["var(--chart-series-6)","var(--chart-series-2)","var(--chart-series-7)","var(--chart-series-3)"];   // reserved for the columns the user creates, and never one of the named columns
+const RING=["var(--chart-series-6)","var(--chart-series-2)","var(--chart-series-4)","var(--chart-series-3)"];   // reserved for the columns the user creates, and never one of the named columns
 const colOf=(n,names)=>{const u=(names||[]).filter(x=>!Object.hasOwn(COLORS,x)).sort(),i=u.indexOf(n);return COLORS[n]||RING[(i<0?0:i)%RING.length]};
 const caseRows=cs=>(cs||[]).map(c=>{const ag=Math.max(0,Math.round((Date.now()-Date.parse(c.ended))/1000)),a=ag<3600?Math.max(1,Math.round(ag/60))+"m":ag<172800?Math.round(ag/3600)+"h":Math.round(ag/86400)+"d";return `<div class="tcrow ${c.result==="fail"?"fail":"pass"}" data-key="test case:${c.issue}@${esc(c.commit)}"><span class=tr>${esc(c.result)}</span><span class=id>#${c.issue}</span><span class=ta>${a}</span><code class=tm>${esc(c.commit)}</code></div>`}).join("");   // one row for each test case item, in the model's order: a strip beside the axis, never a column, and the pane reads no cache of its own
 // flow-charts:
@@ -5806,7 +5811,7 @@ PAGE = PAGE.replace("/*RUN_SHEET_CSS*/", (pathlib.Path(__file__).resolve().paren
 HID_CHIP_TOKENS = (("abandoned", "err"), ("unscheduled", "warn"), ("issue_closed", "ok"), ("pr_open", "pin"))
 PAGE = PAGE.replace("/*HID_CHIP_RULES*/", "\n".join('.hidbar .chip[data-col="%s"] b{color:var(--%s)}' % (COLUMN[fact], token) for fact, token in HID_CHIP_TOKENS))
 PAGE = PAGE.replace("/*BOARD_COLORS*/", BOARD_COLORS_JSON).replace("/*BOARD_FLOW*/", BOARD_FLOW_JSON).replace("/*BOARD_NAMES*/", BOARD_NAMES_JSON).replace("/*BOARD_DOING*/", BOARD_DOING_JSON).replace("/*BOARD_REVIEW*/", BOARD_REVIEW_JSON).replace("/*HUB_REPO*/", json.dumps(REPO))
-PAGE = PAGE.replace("/*RUN_STATE_CSS*/", "".join(run_state_css(r) for r in RUN_STATES))
+PAGE = PAGE.replace("/*RUN_STATE_BASE_CSS*/", RUN_STATE_BASE_CSS).replace("/*RUN_STATE_CSS*/", "".join(run_state_css(r) for r in RUN_STATES))
 # The cluster count's baseline, from the one size the ring is measured against: the page and the hub read one constant (#1146).
 PAGE = PAGE.replace("/*LT_START*/", LEAD_START)
 PAGE = PAGE.replace("/*RING_BASELINE*/", "%g" % (_leadtime.RING_BASELINE_EM * _leadtime.RING_TEXT_PX))
@@ -6423,19 +6428,36 @@ def model_status(raw, states):
             "quota": {"spent": bool(q["limited"]), "reason": q["reason"], "until": q["until"],
                       "until_text": time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(q["until"])) if q["until"] else None}}
 def model_rows(d, states):
-    """The models table (SPEC 889 #920): one row per model across the four chains, with its subscription and quota and
-    its state. A model switched off at model level reads "off (model)"; a chain row the file still holds off reads
-    "off (chain)"; a spent subscription reads "at limit"; otherwise "on". The table holds no hours (#913)."""
-    ids = list(dict.fromkeys(bare_id(m) for k in CHAINS for m in d.get(k, [])))
+    """The models table (SPEC 889 #920): one row per (model, route) across the four chains, with its subscription and
+    quota and its state. A model switched off at model level reads "off (model)"; a chain row the file still holds off
+    reads "off (chain)"; a spent subscription reads "at limit"; otherwise "on". The table holds no hours (#913).
+
+    The route is the one the chain row draws (model_box, ADR-0137): `claude-sonnet-5-5` in coding_models runs on the
+    gateway while `claude:claude-sonnet-5-5` in review_models runs through the claude CLI, so those are two rows.
+    Each row carries the label it draws (#1264): a model on one route shows the plain registry label, but two rows of
+    one model would read the same, so every row of that model shows the label beside its route
+    (`DeepSeek V4.1 Flash · gateway`, `… · claude CLI`); a label that still repeats takes the row's id."""
+    entry = {}   # the first chain entry that makes each (bare id, route) row, kept for its box
+    for k in CHAINS:
+        for m in d.get(k, []): entry.setdefault((bare_id(m), model_box(m, k)["route"]), (k, m))
     chain_off_ids = {bare_id(m) for k in CHAINS for m in d.get(k, []) if chain_off(d, k, m)}
     off = model_off_ids(d)
-    rows = []
-    for b in ids:
+    rows, groups = [], {}
+    for (b, route), (chain, raw) in entry.items():
         st = model_status(b, states)
         is_off = modelreg.normalize(b).id in off
         spent = bool(st["quota"] and st["quota"]["spent"])
         state = "off (model)" if is_off else "off (chain)" if b in chain_off_ids else "at limit" if spent else "on"
-        rows.append({"id": b, "off": is_off, "state": state, **st})
+        box = model_box(raw, chain)
+        row = {"id": b, "off": is_off, "state": state, **st, "label": box["llm"] or b, "route": box["route"]}
+        rows.append(row)
+        groups.setdefault(modelreg.normalize(raw).id, []).append(row)
+    for group in groups.values():
+        if len(group) > 1:
+            for r in group: r["label"] = f"{r['label']} · {r['route']}" if r["route"] else r["label"]
+            labels = [r["label"] for r in group]
+            for r in group:
+                if labels.count(r["label"]) > 1: r["label"] = f"{r['label']} ({r['id']})"
     return rows
 def not_switched_off(suggestions, off):
     """The add list never offers a model switched off at model level (SPEC 889 #920): it keeps its place in the chains."""
@@ -6991,10 +7013,10 @@ def mobile_photo(page):
                 .replace(MOBILE_SEND, MOBILE_PHOTO_ROW)
                 .replace("// terminals:end", MOBILE_PHOTO_JS + "// terminals:end"))
 
-MOBILE_PAGE = mobile_photo((pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text().replace("<!--OVERLAY-->", overlay_tag(OVERLAY_HUB)).replace("<!--INST_CARD-->", INST_CARD).replace("/*INST_CSS*/", INST_CSS).replace("/*INST_JS*/", INST_JS).replace("/*SWITCHER_JS*/", SWITCHER_JS).replace("/*GESTURE*/", GESTURE_JS).replace("/*MOVE*/", MOVE_JS).replace("/*QUESTION*/", QUESTION_JS).replace("/*RUN*/", RUN_JS).replace("/*BOARD_FILTER*/", BOARD_FILTER_JS).replace("/*WEB_TOKENS*/", WEB_TOKENS).replace("/*CARD_RULES*/", CARD_RULES_JS))
+MOBILE_PAGE = mobile_photo((pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text().replace("<!--OVERLAY-->", overlay_tag(OVERLAY_HUB)).replace("<!--INST_CARD-->", INST_CARD).replace("/*INST_CSS*/", INST_CSS).replace("/*INST_JS*/", INST_JS).replace("/*SWITCHER_JS*/", SWITCHER_JS).replace("/*GESTURE*/", GESTURE_JS).replace("/*MOVE*/", MOVE_JS).replace("/*QUESTION*/", QUESTION_JS).replace("/*RUN*/", RUN_JS).replace("/*BOARD_FILTER*/", BOARD_FILTER_JS).replace("/*WEB_TOKENS*/", WEB_TOKENS).replace("/*CARD_RULES*/", CARD_RULES_JS).replace("/*RUN_STATE_BASE_CSS*/", RUN_STATE_BASE_CSS).replace("/*RUN_STATE_CSS*/", "".join(run_state_css(r) for r in RUN_STATES)))
 MOBILE_SHELL = ["/mobile/", "/mobile/manifest.webmanifest", "/mobile/icon.svg"]
 SW_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-sw.js").read_text().replace("/*SHELL*/[]", json.dumps(MOBILE_SHELL))
-MANIFEST_JSON = json.dumps({"id": "/mobile/", "name": f"Squad hub {REPO}", "short_name": "Hub", "start_url": "/mobile/", "scope": "/mobile/", "display": "standalone", "background_color": "var(--bg)", "theme_color": "var(--bg)", "icons": [{"src": "/mobile/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}]}).encode()
+MANIFEST_JSON = json.dumps({"id": "/mobile/", "name": f"Squad hub {REPO}", "short_name": "Hub", "start_url": "/mobile/", "scope": "/mobile/", "display": "standalone", "background_color": BG_COLOR, "theme_color": BG_COLOR, "icons": [{"src": "/mobile/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}]}).encode()
 MOBILE_ICON = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192"><rect width="192" height="192" rx="36" fill="var(--bg)"/><circle cx="96" cy="96" r="52" fill="var(--chart-ok)"/></svg>'
 MOBILE_ASSETS = {"/mobile/manifest.webmanifest": (MANIFEST_JSON, "application/manifest+json"), "/mobile/icon.svg": (MOBILE_ICON, "image/svg+xml"),
                  "/mobile/sw.js": (SW_JS.encode(), "text/javascript; charset=utf-8")}

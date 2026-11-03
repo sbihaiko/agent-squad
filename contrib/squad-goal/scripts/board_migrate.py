@@ -4,6 +4,9 @@
 usage: board_migrate.py --plan  <items.json>   a dry run: every card move and every option removal; nothing is written
        board_migrate.py --check <items.json>   exit 3, with the counts, while a card carries an old option
 
+A moved option has a shipped column that takes its cards. A retired option (Testing, Pushing) has none: its cards are never
+moved, and a card still on one refuses the removal by name, so no card loses the value it carries.
+
 The items are the list the board cache holds: n (issue), st (Status option), s (state), l (labels), cr (the close reason), and optionally facts
 (what board_columns.column_for reads, to place a Blocked card where its work reached). The target of every move comes from
 board_columns, never from a table here. This script has no write mode: the applier lives with the board definition (ADR-0141).
@@ -13,7 +16,9 @@ import sys
 
 from board_columns import FREEZE_LABEL, SHIPPED_NAME, SPEC_LABEL, column_for, view_column
 
-OLD_OPTIONS = tuple(SHIPPED_NAME)
+MOVED_OPTIONS = tuple(SHIPPED_NAME)   # an old option with a shipped column to take its cards
+RETIRED_OPTIONS = ("Testing", "Pushing")   # the definition no longer names them, and no column takes their cards
+OLD_OPTIONS = MOVED_OPTIONS + RETIRED_OPTIONS
 REFUSED = 3
 
 
@@ -41,7 +46,7 @@ def plan(items):
     once the moves are made. A card on a shipped column is never moved."""
     moves = []
     for item in items:
-        if item.get("st") in OLD_OPTIONS:
+        if item.get("st") in MOVED_OPTIONS:
             column, add = _target(item)
             moves.append({"card": item["n"], "old": item["st"], "new": column, "add_labels": add})
     moved = {m["card"] for m in moves}

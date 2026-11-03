@@ -1,9 +1,12 @@
 // Gesture rules of the mobile Board tab. Pure: no DOM and no network. The hub inlines this text into hub-mobile.html.
 const GESTURE_OWNERS = ["sheet", "card", "header", "gap"];
 const SWIPE_MIN = 40;
+// The thumb zone is the bottom 40% of the viewport: a dismissal and the one write start there, where the thumb reaches (#1142).
+const THUMB_TOP = 0.6;
+const inThumbZone = (y, h) => h > 0 && y >= h * THUMB_TOP;
 const gestureOwner = roles => roles.find(r => GESTURE_OWNERS.includes(r)) || "none";
 // A swipe that starts in a nested scroller or a control of the sheet (`nested`) is that element's, never a card step (#1007).
-const gestureAct = ({ owner, dx, dy, atTop, nested }) => {
+const gestureAct = ({ owner, dx, dy, atTop, nested, thumb }) => {
   const ax = Math.abs(dx), ay = Math.abs(dy);
   if (Math.max(ax, ay) < SWIPE_MIN) return null;
   if (ax > ay) {
@@ -11,7 +14,7 @@ const gestureAct = ({ owner, dx, dy, atTop, nested }) => {
     if (owner === "sheet" && dx < 0 && !nested) return { act: "card", step: 1 };
     return null;
   }
-  return owner === "sheet" && dy > 0 && atTop ? { act: "close" } : null;
+  return owner === "sheet" && dy > 0 && atTop && thumb ? { act: "close" } : null;
 };
 const moveIndex = (i, count, step) => count ? Math.min(count - 1, Math.max(0, i + step)) : 0;
 const afterGesture = (v, g) => {
@@ -47,9 +50,9 @@ const anchorView = (v, cols, id) => {
   return far >= 0 ? { ...v, col: far, card: at(cols[far]) } : { ...v, sheet: false };
 };
 const EDGE_PX = 24, PULL_MIN = 60;
-const runsGesture = ({ x0, dx, dy, atTop }) => {
+const runsGesture = ({ x0, dx, dy, atTop, thumb }) => {
   const ax = Math.abs(dx), ay = Math.abs(dy);
-  if (x0 <= EDGE_PX && dx >= SWIPE_MIN && ax > ay) return { act: "back" };
+  if (x0 <= EDGE_PX && dx >= SWIPE_MIN && ax > ay) return thumb ? { act: "back" } : null;
   if (atTop && dy >= PULL_MIN && ay > ax) return { act: "refresh" };
   return null;
 };

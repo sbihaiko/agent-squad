@@ -1,5 +1,7 @@
 """The column table reads its columns from a copy of the shipped definition, pinned by hash (ADR-0141)."""
+import hashlib
 import importlib.util
+import json
 import shutil
 import subprocess
 import sys
@@ -9,8 +11,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"
-PINNED = "b5779ebebd070b8b508ce4b489f5cdc46a2a517191448bc5d5ff2ed499009d53"
-SHIPPED = ["Backlog", "Todo", "Doing", "Code Review", "Code Complete", "Closed", "Abandoned"]
+PINNED = "bd9743eb561aaffd4327db9e7417b165bc6608a65934bf343a53103687a5ebd5"
+SHIPPED = ["Backlog", "Todo", "Doing", "Code Review", "Code Complete", "Gating", "Closed", "Abandoned"]
 
 
 def _load(directory):
@@ -25,10 +27,40 @@ def columns():
     return _load(SCRIPTS)
 
 
-def test_the_pinned_copy_names_the_nine_shipped_columns_in_order(columns):
+def test_the_pinned_copy_names_the_eight_shipped_columns_in_order(columns):
     assert columns.PIN_SHA256 == PINNED
     assert [c["name"] for c in columns.shipped_columns()] == SHIPPED
     assert [c["name"] for c in columns.shipped_columns() if c["terminal"]] == ["Closed", "Abandoned"]
+
+
+def test_gating_sits_between_code_complete_and_closed_with_its_fact_and_actor(columns):
+    """A gate or a proof holds the card (spec #1218): the column waits between the wave branch and dev."""
+    by = {c["name"]: c for c in columns.shipped_columns()}
+    names = list(by)
+    assert names.index("Code Complete") + 1 == names.index("Gating") == names.index("Closed") - 1
+    assert by["Gating"]["fact"] == "A gate or proof waits for a slot or runs for the wave; a red or unproven attempt is a marker, not a move"
+    assert by["Gating"]["actor"] == "The gate" and not by["Gating"]["terminal"]
+
+
+def test_gating_takes_a_colour_no_other_status_uses(columns):
+    statuses = json.loads((SCRIPTS / "board-definition.json").read_text())["statuses"]
+    colours = [s["color"] for s in statuses]
+
+    assert {s["name"]: s["color"] for s in statuses}["Gating"] == "PINK"
+    assert colours.count("PINK") == 1, "another status wears the Gating colour"
+
+
+def test_the_rules_block_says_an_attempt_is_a_marker_not_a_move(columns):
+    rules = json.loads((SCRIPTS / "board-definition.json").read_text())["rules"]
+
+    assert "An attempt is a marker, not a move: the card leaves Gating only forward." in rules
+
+
+def test_the_definition_names_the_gate_tries_number_field(columns):
+    definition = json.loads((SCRIPTS / "board-definition.json").read_text())
+
+    assert definition["fieldNames"]["gateTries"] == "Gate Tries"
+    assert definition["gateTries"] == {"type": "number"}
 
 
 def test_code_review_sits_between_doing_and_code_complete_with_its_fact_and_actor(columns):
@@ -39,6 +71,31 @@ def test_code_review_sits_between_doing_and_code_complete_with_its_fact_and_acto
     assert by["Code Review"]["fact"] == "The child's code is done; its review or a fix round holds it"
     assert by["Code Review"]["actor"] == "The review" and not by["Code Review"]["terminal"]
     assert "review" not in by["Doing"]["fact"].lower()
+
+
+def test_the_hash_the_pinned_copy_and_the_published_copy_are_one_step_apart(columns):
+    """The hash and the copy move in one step: neither answers for a definition the other does not carry, and a published
+    copy that still lacks Gating is reported against the pinned copy rather than adopted."""
+    pinned = (SCRIPTS / "board-definition.json").read_text()
+
+    assert columns.PIN_SHA256 == hashlib.sha256(pinned.encode()).hexdigest()
+    assert columns.pin_drift(pinned) == []
+    behind = json.loads(pinned)
+    behind["statuses"] = [s for s in behind["statuses"] if s["name"] != "Gating"]
+    report = columns.pin_drift(json.dumps(behind))
+    assert len(report) == 1 and "published definition differs from the pinned copy" in report[0]
+
+
+def test_a_pinned_copy_one_step_behind_its_hash_is_refused(tmp_path):
+    for name in ("board_columns.py", "board-definition.json"):
+        shutil.copy(SCRIPTS / name, tmp_path / name)
+    path = tmp_path / "board-definition.json"
+    behind = json.loads(path.read_text())
+    behind["statuses"] = [s for s in behind["statuses"] if s["name"] != "Gating"]
+    path.write_text(json.dumps(behind))
+
+    with pytest.raises(ValueError, match="pinned copy"):
+        _load(tmp_path).shipped_columns()
 
 
 def test_an_edited_pinned_copy_is_refused(tmp_path):
