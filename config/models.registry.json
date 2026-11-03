@@ -32,6 +32,12 @@
       "provider": "deepseek",
       "marker": null,
       "spend_only": true
+    },
+    "kimi": {
+      "label": "Kimi Code Plus",
+      "provider": "kimi",
+      "marker": "kimi-limited",
+      "quota_probe": "kimi"
     }
   },
   "models": [
@@ -1462,6 +1468,83 @@
       ],
       "retired": false,
       "gateway_only": false
+    },
+    {
+      "id": "kimi-k3",
+      "label": "Kimi K3",
+      "provider": "kimi",
+      "subscription": "kimi",
+      "efforts": [
+        "low",
+        "high",
+        "max"
+      ],
+      "routes": {
+        "gateway": {
+          "auth": "unverified",
+          "model": "claude-kimi-k3",
+          "served": [
+            "claude-kimi-k3"
+          ]
+        }
+      },
+      "capabilities": {
+        "tools": true,
+        "review_tools": true,
+        "thinking_off": true,
+        "vision": false,
+        "context": 1048576
+      },
+      "aliases": [
+        "claude-kimi-k3"
+      ],
+      "retired": false,
+      "gateway_only": true,
+      "display_price": {
+        "input": null,
+        "cache_read": null,
+        "output": null,
+        "currency": "USD",
+        "per": "mtok"
+      }
+    },
+    {
+      "id": "kimi-for-coding",
+      "label": "Kimi K2.8 Preview",
+      "provider": "kimi",
+      "subscription": "kimi",
+      "efforts": [
+        "low",
+        "high",
+        "max"
+      ],
+      "routes": {
+        "gateway": {
+          "auth": "unverified",
+          "model": "claude-kimi-for-coding",
+          "served": [
+            "claude-kimi-for-coding"
+          ]
+        }
+      },
+      "capabilities": {
+        "tools": true,
+        "thinking_off": true,
+        "vision": false,
+        "context": 1048576
+      },
+      "aliases": [
+        "claude-kimi-for-coding"
+      ],
+      "retired": false,
+      "gateway_only": true,
+      "display_price": {
+        "input": null,
+        "cache_read": null,
+        "output": null,
+        "currency": "USD",
+        "per": "mtok"
+      }
     }
   ]
 }

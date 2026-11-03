@@ -123,7 +123,7 @@ live = {}                                          # unfinished runs: {path: (mt
 
 # Billing source of a call, from the model on its outcome: Claude (sonnet/opus/fable/haiku), Grok and GPT run on the owner's subscriptions;
 # every other model (deepseek, gemini…) and any call that names no model is pay-per-use API.
-SUBSCRIPTION = re.compile(r"^(claude-)?(sonnet|opus|fable|haiku|grok|gpt|gemini)\b")
+SUBSCRIPTION = re.compile(r"^(claude-)?(sonnet|opus|fable|haiku|grok|gpt|gemini|kimi)\b")
 
 # The SDK prices every model it does not know at Claude rates (a DeepSeek run showed ~$410 where the platform bills a few dollars), so calls to
 # gateway models are re-priced from their tokens. USD per 1M tokens: (cache hit, cache miss, output); first match wins. Short-context tier (an
@@ -5687,13 +5687,14 @@ PAGE = PAGE.replace("/*RING_BASELINE*/", "%g" % (_leadtime.RING_BASELINE_EM * _l
 
 
 PLANS = pathlib.Path(__file__).resolve().parent / "plans.json"
-SUBS = ("claude", "grok", "gpt", "gemini")
-SUB_ACR = dict(zip(SUBS, ("CL", "GK", "GPT", "GEM")))   # the footer's token for each subscription (#1839): 2-3 letters, spelled here and nowhere else
+SUBS = ("claude", "grok", "gpt", "gemini", "kimi")
+SUB_ACR = dict(zip(SUBS, ("CL", "GK", "GPT", "GEM", "KIMI")))   # the footer's token for each subscription (#1839): 2-3 letters, spelled here and nowhere else
 def provider(m):
     m = m or ""
     if re.search(r"grok", m): return "grok"
     if re.search(r"gpt", m): return "gpt"
     if re.search(r"gemini", m): return "gemini"
+    if re.search(r"kimi", m): return "kimi"
     if re.match(r"^(claude-)?(sonnet|opus|fable|haiku)\b", m): return "claude"
     return None
 # Monthly list prices in USD, as published (they differ by country: pick "Custom amount" to enter what you really pay, in any currency).
@@ -5702,6 +5703,7 @@ PRESETS = {
     "gpt": {"plus": ("Plus", 20), "pro": ("Pro", 200), "business": ("Business seat", 30)},
     "grok": {"super": ("SuperGrok", 30), "heavy": ("SuperGrok Heavy", 300)},
     "gemini": {"plus": ("AI Plus", 7.99), "pro": ("AI Pro", 19.99), "ultra": ("AI Ultra", 249.99)},
+    "kimi": {"code": ("Kimi Code", 19)},
 }
 RATES = HUBDIR / "hub-rates.json"
 def rate(cur):
@@ -5893,7 +5895,51 @@ def week_value(k, usd, days, mstart):
     for e in weeks[k].values():
         if e["end"] - 7 * 86400 >= mstart or e["end"] > time.time(): tot += e["pct"] / 100 * usd * 7 / days
     return round(tot, 2)
-QUOTA_PROBES = {"claude": q_claude, "gpt": q_codex, "grok": q_grok, "gemini": q_agy}
+KIMI_AUTH = HOME / ".config/claude-code-proxy/kimi/auth.json"   # the bridge's own token, refreshed on every kimi call
+KIMI_CLI_AUTH = HOME / ".kimi-code/credentials/kimi-code.json"  # the CLI's store, refreshed by the CLI itself
+KIMI_USAGES = "https://api.kimi.com/coding/v1/usages"
+def kimi_token(now=None):
+    """The freshest unexpired Kimi access token, read from the bridge's store and the CLI's. A probe reads a credential
+    and never writes one: the bridge refreshes its own on the next kimi call."""
+    now = time.time() if now is None else now
+    live = []
+    for path, key, exp in ((KIMI_AUTH, "access", "expires"), (KIMI_CLI_AUTH, "access_token", "expires_at")):
+        try: d = json.loads(path.read_text())
+        except Exception: continue
+        tok, until = d.get(key), d.get(exp)
+        if not isinstance(tok, str) or not tok or not isinstance(until, (int, float)): continue
+        until = until / 1000 if until > 1e12 else until   # the bridge keeps milliseconds, the CLI seconds
+        if until > now: live.append((until, tok))
+    return max(live)[1] if live else None
+def ca_context():
+    """The TLS context for an HTTPS read. A python.org build ships no CA bundle of its own, and this probe's whole job
+    is one HTTPS GET, so the system bundle is read first and the default store second."""
+    import ssl
+    for cafile in (os.environ.get("SSL_CERT_FILE"), "/etc/ssl/cert.pem", "/opt/homebrew/etc/ca-certificates/cert.pem"):
+        try:
+            if cafile and pathlib.Path(cafile).exists(): return ssl.create_default_context(cafile=cafile)
+        except (OSError, ssl.SSLError): continue
+    return ssl.create_default_context()
+def kimi_usages(tok):
+    """The one HTTP read the probe makes: the subscription's own usage document."""
+    req = urllib.request.Request(KIMI_USAGES, headers={"authorization": f"Bearer {tok}"})
+    with urllib.request.urlopen(req, timeout=15, context=ca_context()) as r: return json.loads(r.read().decode("utf8", "replace"))
+def q_kimi():
+    """`GET /coding/v1/usages` answers the 5 h window and the month's share as used ratios. An absent or expired token
+    reads as no reading with its reason, never as a guess."""
+    tok = kimi_token()
+    if not tok: return {"windows": [], "unavailable": True, "err": "no live Kimi token: the bridge refreshes it on the next kimi call"}
+    d = kimi_usages(tok)
+    u = d.get("usages") or {}
+    ws = []
+    for key, label in (("limit_5h", "5 h"), ("limit_month_total", "month")):
+        x = u.get(key) or {}
+        if x.get("used_ratio") is None: continue
+        t = x.get("reset_time")
+        ws.append({"label": label, "pct": round(float(x["used_ratio"]) * 100, 1),
+                   "resets": dt.datetime.fromisoformat(t.replace("Z", "+00:00")).timestamp() if t else None})
+    return {"windows": ws} if ws else None
+QUOTA_PROBES = {"claude": q_claude, "gpt": q_codex, "grok": q_grok, "gemini": q_agy, "kimi": q_kimi}
 def refresh_quota_once():
     """One pass: ask each CLI for its quota. A probe that answers with no windows replaces the row outright, so a
     reading that stopped tracking reality cannot pass as current; a probe that raises keeps the last good value."""
@@ -5930,7 +5976,7 @@ def quota_row(k, now=None):
     if r.get("err"): return {"unavailable": True, "err": r["err"], "asof": r.get("asof"), "plan": r.get("plan")}
     return None
 
-BRANDS = {"claude": "Claude", "grok": "Grok", "gpt": "ChatGPT", "gemini": "Google"}
+BRANDS = {"claude": "Claude", "grok": "Grok", "gpt": "ChatGPT", "gemini": "Google", "kimi": "Kimi"}
 def sub_name(k, plan, detected):
     """The card name comes from the account: the plan the probe detected, else the plan chosen in the card, else the provider."""
     name = detected or (PRESETS[k].get(plan["plan"], (None,))[0] if plan else None)
