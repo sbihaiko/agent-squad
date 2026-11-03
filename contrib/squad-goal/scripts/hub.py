@@ -6407,9 +6407,64 @@ def _models_set(new):
 
 profiles_of_cwd = sessions.profiles_of
 
+SESSIONS_REFRESH_SECONDS = 30.0   # one read of the live sessions answers every caller until this passes (#1217)
+SESSIONS_WAIT_SECONDS = 1.0   # a cold route waits at most this for the first scan, then answers what it has
+SESSIONS_CACHE = {"at": None, "body": None}   # the last read of the live sessions, and when it landed
+_SESSIONS_LOCK = threading.Lock()   # the cache, for the instant it is read or written
+_SESSIONS_READ = threading.Lock()   # one scan of the session folders at a time
+_SESSIONS_REFRESH = {"thread": None}   # the one background scan a stale cache starts
+_SESSIONS_REFRESH_LOCK = threading.Lock()   # its check-and-start, so racing callers never start two scans
+
+def sessions_read():
+    """One read of this profile's live sessions, stored for every caller until the refresh interval passes. Only one scan
+    runs at a time, and a failed scan keeps the last answer, so no caller ever pays the folders twice (#833, #1217)."""
+    with _SESSIONS_READ:
+        with _SESSIONS_LOCK:
+            at, body = SESSIONS_CACHE["at"], SESSIONS_CACHE["body"]
+        if body is not None and at is not None and time.monotonic() - at < SESSIONS_REFRESH_SECONDS:
+            return body   # the caller that held the read lock just scanned them
+        try: body = sessions.list_sessions(PROFILE_NAME, profiles_of=profiles_of_cwd)
+        except Exception: return body   # a failed scan keeps the last answer: the next interval retries
+        with _SESSIONS_LOCK:
+            SESSIONS_CACHE.update(at=time.monotonic(), body=body)
+        return body
+
+def sessions_refresh_soon():
+    """Start the one background scan a stale cache needs: a caller takes the last answer at once, never the scan's 12 s
+    (ADR-0164, #1217). The check and the start are one step under their own lock, so racing callers start one scan."""
+    with _SESSIONS_REFRESH_LOCK:
+        t = _SESSIONS_REFRESH.get("thread")
+        if t is not None and t.is_alive(): return
+        t = _SESSIONS_REFRESH["thread"] = threading.Thread(target=sessions_read, daemon=True, name="hub-sessions-read")
+        t.start()
+
+def sessions_cached():
+    """(when it was read, the read) of this profile's live sessions, or (None, None) before the first read lands."""
+    with _SESSIONS_LOCK:
+        return SESSIONS_CACHE["at"], SESSIONS_CACHE["body"]
+
+def sessions_subject():
+    """The push stream's `sessions` subject: the cached read at once, never the scan. None until the first read lands, so
+    a cold hub sends no sessions event rather than paint an empty list; a stale cache starts its one scan (#1217)."""
+    at, body = sessions_cached()
+    if body is None or at is None or time.monotonic() - at >= SESSIONS_REFRESH_SECONDS: sessions_refresh_soon()
+    return body
+
 def sessions_payload():
-    """What /api/sessions serves: this profile's live sessions, grouped by project (#833)."""
-    return sessions.list_sessions(PROFILE_NAME, profiles_of=profiles_of_cwd)
+    """What /api/sessions serves: this profile's live sessions, grouped by project (#833), from the cached read. The
+    folders are scanned once a refresh interval, never once a tick and never once a request: one scan took 12 s on a
+    profile holding 3000 of them, and a request that paid it every time was stale before it painted (ADR-0164, #1217).
+    A cold cache waits a bounded moment for the one scan already running, then answers what it has, never the scan."""
+    at, body = sessions_cached()
+    if body is None:
+        sessions_refresh_soon()
+        deadline = time.monotonic() + SESSIONS_WAIT_SECONDS
+        while body is None and time.monotonic() < deadline:   # the first scan is the first answer, but never a 12 s wait
+            time.sleep(0.01)
+            at, body = sessions_cached()
+    elif at is None or time.monotonic() - at >= SESSIONS_REFRESH_SECONDS:
+        sessions_refresh_soon()
+    return body if body is not None else {"waiting": 0, "groups": []}   # a failed first scan answers no sessions, never null
 
 def conversation_payload(query):
     """What /api/sessions/conversation serves: one page of a live session of this profile, None when it is not one (#840). The
@@ -6866,27 +6921,42 @@ def request_target(h):
     return parts[1] if len(parts) > 1 and parts[1].startswith("//") else h.path
 
 CHART_INPUTS = {"cfd": lambda: history_key(), "lead": lambda: (board_cache.get("t"), history_key())}
-VERSIONS = hubstream.Versions({"runs": lambda: run_list(), "board": lambda: json.loads(board_served()[0]), "sessions": lambda: sessions_payload(), **CHART_INPUTS})
+VERSIONS = hubstream.Versions({"runs": lambda: run_list(), "board": lambda: json.loads(board_served()[0]), "sessions": lambda: sessions_subject(), **CHART_INPUTS})
 TRANSCRIPTS = hubstream.Transcripts(lambda sid: sessions.conversation(PROFILE_NAME, sid, None, profiles_of=profiles_of_cwd))
 
 _TICKERS = {}
+_TICKERS_LOCK = threading.Lock()   # the reader threads are started once, however many pages ask (#1217)
+
+def _ticker(name):
+    """One subject's reader thread, alive or started here. The caller holds _TICKERS_LOCK, so two pages opening together
+    find one reader and never start two reads of the same subject."""
+    t = _TICKERS.get(name)
+    if t is not None and t.is_alive(): return t
+    def run(n=name):
+        while True:
+            try: VERSIONS.refresh_one(n)   # read at once, so a page that just opened is never a tick behind
+            except Exception: pass   # a failed read keeps the last version: the next tick retries and the panel never dies
+            # a subject with no answer yet is asked again quickly: its first read may land mid-tick, and the page waits
+            time.sleep(hubstream.TICK_SECONDS if VERSIONS.newer({}).get(n) else hubstream.FIRST_POLL_SECONDS)
+    t = _TICKERS[name] = threading.Thread(target=run, daemon=True, name=f"hub-subject-{name}")
+    t.start()
+    return t
+
 def versions_ticker():
     """One thread per subject reads it; a stream only sends what changed.
 
     A read of the `sessions` subject took 12 s on a machine holding 3000 session folders, and a stream that did that read
     itself sent neither an event nor a heartbeat for 12 s: the page looked frozen (ADR-0164, the owner's hub). One thread
-    per subject keeps a slow read from delaying the others."""
-    for name in list(VERSIONS._subjects):
-        t = _TICKERS.get(name)
-        if t is not None and t.is_alive(): continue
-        def run(n=name):
-            while True:
-                try: VERSIONS.refresh_one(n)   # read at once, so a page that just opened is never a tick behind
-                except Exception: pass   # a failed read keeps the last version: the next tick retries and the panel never dies
-                time.sleep(hubstream.TICK_SECONDS)
-        _TICKERS[name] = threading.Thread(target=run, daemon=True, name=f"hub-subject-{name}")
-        _TICKERS[name].start()
-    return _TICKERS
+    per subject keeps a slow read from delaying the others, and a stream never reads a subject in its own thread."""
+    with _TICKERS_LOCK:
+        for name in VERSIONS.names(): _ticker(name)
+        return dict(_TICKERS)
+
+def warm():
+    """Start the hub's slowest reader with the hub, before it serves a page: the session folders cost seconds, and a page
+    opened after a start finds that scan already running. The other subjects read in well under a tick, so the first
+    stream starts them, never a page's wait (#1217)."""
+    with _TICKERS_LOCK: _ticker("sessions")
 
 def stream_origin_ok(h, tailnet):
     """A stream opens for no origin but this hub's own (loopback) or, on the tailnet, the tailnet's; an absent Origin is a non-browser reader."""
@@ -6949,7 +7019,7 @@ class H(BaseHTTPRequestHandler):
             self.close_connection = True
             def chunk(data):
                 self.wfile.write(b"%x\r\n" % len(data) + data + b"\r\n")
-            quiet = time.monotonic()
+            opened, quiet, painted = time.monotonic(), time.monotonic(), False
             while True:
                 tick = hubstream.tick()
                 versions_ticker()
@@ -6962,10 +7032,12 @@ class H(BaseHTTPRequestHandler):
                     for name, obj in events: chunk(hubstream.frame(name, obj)); sent = True
                     at[sid] = (epoch, offset)
                 now = time.monotonic()
-                if sent: quiet = now
+                if sent: quiet, painted = now, True
                 elif now - quiet >= hubstream.HEARTBEAT_SECONDS:
                     chunk(hubstream.frame("ping", {})); quiet = now
-                time.sleep(hubstream.TICK_SECONDS if held else 0.02)   # the first event is drawn at once: the readers publish within a tick
+                # a page not painted yet takes the first reader that answers, never the end of a whole tick
+                fast = not painted and now - opened < hubstream.FIRST_EVENT_SECONDS
+                time.sleep(hubstream.FIRST_POLL_SECONDS if fast else hubstream.TICK_SECONDS)
         except OSError: return
         finally:
             for sid in watched: TRANSCRIPTS.unwatch(sid)
@@ -7209,5 +7281,6 @@ def watch_self():
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 7700
     refresh_runs()
+    warm()   # the sessions read costs seconds on a large profile, so it starts with the hub, never with the first page (#1217)
     threading.Thread(target=start_terminal_supervisor, daemon=True).start(); threading.Thread(target=refresh_prs, daemon=True).start(); threading.Thread(target=refresh_quota, daemon=True).start(); threading.Thread(target=watch_self, daemon=True).start(); threading.Thread(target=refresh_board, daemon=True).start(); threading.Thread(target=refresh_history, daemon=True).start(); threading.Thread(target=refresh_fast, daemon=True).start();threading.Thread(target=load_sampler, daemon=True).start(); threading.Thread(target=watch_runs, daemon=True).start()
     ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
