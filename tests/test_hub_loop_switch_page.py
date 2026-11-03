@@ -273,3 +273,38 @@ def test_the_switch_runs_watchd_for_its_own_profile_not_the_hub_cwd(monkeypatch,
     assert seen["argv"][-1] == "start"
     assert seen["env"]["SG_PROFILE"] == "pinned" and seen["env"]["SG_STATE"] == str(state)
     assert seen["cwd"] == str(tmp_path)
+
+
+def _switch_rules(src):
+    """Every CSS rule that styles the loop switch, as (selector list, body), read from the page's one style block."""
+    css = src.split("<style>", 1)[1].split("</style>", 1)[0]
+    out = []
+    for block, body in re.findall(r"([^{}]+)\{([^{}]*)\}", css):
+        sels = [s.strip() for s in block.split(",")]
+        if any(re.search(r"\.ls(w)?\b", s) for s in sels):
+            out.append((sels, body))
+    return out
+
+
+def test_the_monitor_switch_is_styled_where_the_monitor_draws_it():
+    """#1071 moved the switch into the Monitor and left its styles scoped to the Settings panel, so the Monitor drew a
+    bare button: a white box with a loose dot (#1234). Every rule that styles #lopb's switch must name #iloop's too, or
+    the two panels drift apart the moment one of them changes."""
+    src = page()
+    assert "id=iloop" in src.split("<details id=inst", 1)[1].split("</details>", 1)[0]
+    rules = _switch_rules(src)
+    assert rules, "the page styles the loop switch"
+    orphans = []
+    for sels, _ in rules:
+        for sel in sels:
+            if sel.startswith("#lopb ") and "#iloop " + sel[len("#lopb "):] not in sels:
+                orphans.append(sel)
+    assert not orphans, f"a switch style reaches only the Settings panel: {orphans}"
+    assert any("#iloop .lsw" in sels for sels, _ in rules), "the Monitor's switch is styled"
+
+
+def test_the_settings_panel_keeps_its_own_row_box():
+    """The Monitor's compact row never leaks into Settings > Loop, which keeps the inset box."""
+    src = page()
+    assert re.search(r"#lopb \.lnow\{[^}]*border:1px solid", src), "the Settings row keeps its box"
+    assert re.search(r"#iloop \.lnow\{[^}]*border:0", src), "the Monitor row carries no box"

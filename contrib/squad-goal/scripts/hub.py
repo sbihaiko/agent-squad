@@ -4673,9 +4673,23 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
    screen the 300 px sidebar and the board column are what a reader has to scroll sideways to reach. */
 @media (max-width:600px){body{height:auto}body.tkopen #win{margin-right:0}body.tkopen #board{width:auto}#win{display:block;overflow:visible}body.dockb #win{display:block;grid-template-columns:none;grid-template-rows:none}#side{width:auto;border-right:0;border-bottom:1px solid var(--line)}body.dockb #side{grid-row:auto;grid-column:auto}#main{min-height:50vh}body.dockb #main{grid-column:auto;grid-row:auto}#board{width:auto}body.dockb #board{grid-column:auto;grid-row:auto;height:60vh}#lbody input{width:92px}}
 /* The page frame of the mock (#889): the header with its tabs, and the sidebar cards. */
-/* The loop switch (#923): the strip's draining and starting states, Settings > Loop and Access, and the stop confirm. */
-#lopb .ls.draining,#lopb .ls.starting{color:var(--warn)}#lopb .ls{font-weight:600}#lopb .lsw{position:relative;flex:none;width:52px;height:32px;padding:0;border:0;border-radius:16px;background:var(--edge);cursor:pointer;transition:background .15s}#lopb .lsw[aria-checked=true]{background:var(--ok)}#lopb .lsw i{position:absolute;top:3px;left:3px;width:26px;height:26px;border-radius:50%;background:var(--highlight);transition:transform .15s}#lopb .lsw[aria-checked=true] i{transform:translateX(20px)}#lopb .lsw:disabled{opacity:.6;cursor:default}#lopb .lsw:focus-visible{outline:2px solid var(--acc);outline-offset:2px}#lopb .ls.on{color:var(--ok)}#lopb .ls.off{color:var(--warn)}
+/* The loop switch (#923): the strip's draining and starting states, Settings > Loop and Access, and the stop confirm.
+   The switch is one control wherever the loop view draws it: #1071 moved it into the Monitor, and styles scoped to the
+   Settings panel alone left the Monitor drawing a bare button (#1234). Each switch rule names both places, so the two
+   panels cannot drift apart again. Settings keeps the inset row; the Monitor gives it a compact shape below. */
+#lopb .ls.draining,#lopb .ls.starting,#iloop .ls.draining,#iloop .ls.starting{color:var(--warn)}
+#lopb .ls,#iloop .ls{font-weight:600}
+#lopb .lsw,#iloop .lsw{position:relative;flex:none;width:52px;height:32px;padding:0;border:0;border-radius:16px;background:var(--edge);cursor:pointer;transition:background .15s}
+#lopb .lsw[aria-checked=true],#iloop .lsw[aria-checked=true]{background:var(--ok)}
+#lopb .lsw i,#iloop .lsw i{position:absolute;top:3px;left:3px;width:26px;height:26px;border-radius:50%;background:var(--highlight);transition:transform .15s}
+#lopb .lsw[aria-checked=true] i,#iloop .lsw[aria-checked=true] i{transform:translateX(20px)}
+#lopb .lsw:disabled,#iloop .lsw:disabled{opacity:.6;cursor:default}
+#lopb .lsw:focus-visible,#iloop .lsw:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+#lopb .ls.on,#iloop .ls.on{color:var(--ok)}#lopb .ls.off,#iloop .ls.off{color:var(--warn)}
 #lopb .lnow{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--inset);margin:6px 0}#lopb .lnow small{display:block;color:var(--mute)}#lopb .lnow button{margin-left:auto}
+/* The Monitor's row is a flight instrument, not a settings block: no inset box, a tight gap, and the note under the row. */
+#iloop .lnow{gap:8px;padding:0;margin:0 0 8px;border:0;border-radius:0;background:none}
+#iloop .lerr{color:var(--err);font-size:var(--fs-min);margin:4px 0 0}#iloop .lwhy{color:var(--warn);font-size:var(--fs-min);margin:4px 0 0}
 #lopb .lwhy{color:var(--warn);margin:4px 0}#lopb .lerr{color:var(--err);margin:4px 0}#lopb ul.laud{list-style:none;margin:4px 0 0;padding:0}#lopb ul.laud li{padding:4px 0;border-bottom:1px solid var(--line)}#lopb ul.laud li:last-child{border:0}
 #accb .kr b{font-weight:500;font-size:var(--fs-min);line-height:1.3;text-align:right}#accb .ok{color:var(--ok)}#accb .no{color:var(--warn)}#accb p{color:var(--mute);margin:8px 0 0}
 #ldg{background:var(--panel);color:var(--fg);border:1px solid var(--edge);border-radius:10px;padding:16px;width:min(520px,92vw)}#ldg::backdrop{background:var(--scrim)}#ldg .lrad{display:flex;gap:8px;align-items:flex-start;padding:8px 0;cursor:pointer}#ldg .lrad small{display:block;color:var(--mute)}#ldg ul{margin:4px 0 0;padding-left:18px}#ldg .lact{display:flex;gap:6px;margin-top:10px}
