@@ -54,7 +54,9 @@ from squad.options import OptionError
 IDLE_S = 120   # a record that moved this recently belongs to a process that may still be starting or resuming
 NO_PID_IDLE_S = 300   # a run that named no process is proven dead by a record this still: no process worked in its folder for five min
 STALE_SLOT_S = 300    # a holder with no live lease and no live process this long is named when the ceiling has no free slot
-LIVE_PROC = re.compile(r"gate\.sh\b|_bundled/claude|/claude\b|\bclaude-code\b|squad\.cli|-m squad\b|[s]quad (start|resume)( |$)")
+# A run's process: its engine (`squad start` or `squad resume`), a gate or a session. A dashboard server is none of them (#1270).
+# janitor.py carries a copy of this pattern (`LIVE`); test_machine_caps.py holds the two equal.
+LIVE_PROC = re.compile(r"gate\.sh\b|_bundled/claude|/claude\b|\bclaude-code\b|squad\.cli|-m squad(?!\.dashboard_server)\b|[s]quad (start|resume)( |$)")
 
 
 def _procs():
@@ -150,8 +152,9 @@ def reap(active_runs, checkout, ceiling=None, procs=None, dry=False, now=None, s
 def stale_slot_holders(active_runs, checkout, ceiling=None, procs=None, now=None, bound=STALE_SLOT_S):
     """The listed runs that hold a `caps.runs` slot while no slot is free, and that have had no live lease and no live process
     for `bound` seconds: [(run name, seconds since its record moved)], in the list's order. A ceiling with a free slot names
-    nobody, and a run whose record moved inside the bound is still alive work. A run that holds a live lease, or a gate or
-    session process in its folder, is not named: it lives. The pass kills nothing and writes nothing (#1270).
+    nobody, and a run whose record moved inside the bound is still alive work. A run that holds a live lease, a live engine
+    the record names (`same_process`, the rule `reap` reads), or a gate or session process in its folder, is not named: it
+    lives. The pass kills nothing and writes nothing (#1270).
 
     `ceiling` and `procs` (a list of (pid, cwd, command)) are injectable; None resolves the ceiling of `checkout` and reads
     the machine. An unreadable process table names nobody: the answer is unknown, never "no process"."""
@@ -169,12 +172,17 @@ def stale_slot_holders(active_runs, checkout, ceiling=None, procs=None, now=None
         folder = Path(r) if r.startswith("/") else Path(checkout) / "runs" / r
         if folder.name not in holders:
             continue   # a finished run, a launch past its window, or a folder gone: it holds no slot
+        rec = folder / "record.jsonl"
         try:
-            age = now - (folder / "record.jsonl").stat().st_mtime
+            text, moved = rec.read_text(), rec.stat().st_mtime
         except OSError:
             continue
+        age = now - moved
         if age < bound:
             continue
+        proc = RL.engine_process(RL.invocation(text))
+        if proc is not None and C.alive(proc[0], proc[1]):
+            continue   # the engine the record names lives: the run is alive, whatever its folder holds (#1270)
         waiting.append((folder, age))
     if not waiting:
         return []
