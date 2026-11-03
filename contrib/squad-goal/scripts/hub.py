@@ -3657,7 +3657,8 @@ def lead_rows(a=None, b=None, now=None):
     column intervals in the history store, from its FIRST entry into `a` to its last entry into `b` (#1024, #1248). A closed
     card the store has not read is not_read, one that never entered `a` is no_start, and one with no entry into `b` is
     no_transition. Each read card carries its observation `obs` for the survival reading: an open card is observed to
-    `now`, censored (#1250). The row's bar keys filter it (#904)."""
+    `now`, censored (#1250). A delivered row also carries `columns`, the hours it spent in each column, and `gate`, its
+    Gating hours, for the chart's stack (#1256). The row's bar keys filter it (#904)."""
     store = _hist.load_store(_hist.history_path(BOARD, REPO))
     now = now or dt.datetime.now(dt.UTC)
     rows = []
@@ -3676,12 +3677,14 @@ def lead_rows(a=None, b=None, now=None):
         row = {"n": i["n"], "column": _columns_module.view_column(i["st"], closed, i.get("l"), i.get("cr"))[0], "reason": reason,
                "c": i.get("c") if closed else None, "o": i.get("o"), "t": i.get("t", ""), **bar_keys(i),
                "hours": 0.0, "flowing": 0.0, "held": 0.0, "approx": False, "unknown_first": False,
+               "columns": None, "gate": 0.0,
                "obs": None if obs is None else {"start_lo": obs["start_lo"], "start_hi": obs["start_hi"],
                                                 "hours": obs["flowing"] + obs["held"], "censored": obs["censored"],
                                                 "unknown_start": obs["unknown_first"]}}
         if span:
             row.update(c=span["end"], o=span["start"], hours=span["flowing"] + span["held"], flowing=span["flowing"],
-                       held=span["held"], approx=span["approx"], unknown_first=span["unknown_first"])
+                       held=span["held"], approx=span["approx"], unknown_first=span["unknown_first"],
+                       columns=span["columns"], gate=span["gate"])
         rows.append(row)
     return rows
 
@@ -5489,6 +5492,8 @@ const flowCFD=c=>{const sel=`<label class=fhead>Range <select id=cfdr>${CFD_R.ma
 const EXREASON={not_planned:"closed as not planned",abandoned:"closed as abandoned",open:"still open",no_opened:"no opened date",no_transition:"no transition into the chosen columns",no_start:"never entered the start column",not_read:"not yet read by the history pass"};   // the cards the chart leaves out, in words (#921, #1248)
 const ltEx=(exc,cards,total)=>{const named=exc.map(e=>`${e.count} ${EXREASON[e.reason]||e.reason}`+((cards||{})[e.reason]?.length?": "+cards[e.reason].map(n=>"#"+n).join(", "):"")).join("; ");return `<em class=ltex${named?` title="${esc(named)}"`:""}>excluded ${total}</em>`};   // the one exclusion total, its reasons and cards named in its hover (#1145, #1248)
 const ltExOf=c=>ltEx(Object.entries(c.excluded||{}).map(([r,n])=>({reason:r,count:n})),c.excluded_cards,c.excluded_total);
+const ltGateRole=()=>COLORS[COLNAME.gating]||"var(--chart-series-other)";   // gate time keeps the Gating column's palette role (#1256)
+const gateEntry=c=>c.gate?`<span><i style="background:${ltGateRole()}"></i>${esc(c.gate.label)} <b>${esc(c.gate.text)}</b> <em>the proof's time inside this window</em></span>`:"";   // the gate's share of the card's life, beside the lead-time numbers (#1256)
 const LT_TYPES=[["spec","Specs"],["task","Tasks"],["bug","Bugs"]],LT_START="/*LT_START*/";   // the start the hub's payload measures from (#1247)
 let LT={tf:"2",log:true,ty:"bug",pick:null,zc:null,zr:null,rng:null,tok:0,noclick:false,a:LT_START,b:"",cols:[]};   // a fresh page opens on 48 hours, Bugs, Todo and Log scale; a choice stays for the visit and is never stored (#1247); the cluster listed under the chart, and a drag zoom: the hub's chart over zr=[from,to] (#900, #985)
 let FLOWFF={};   // the charts that stopped following the Board tab's Waves, Specs and Kinds; the Board tab keeps its own filter (#1147)
@@ -5526,13 +5531,14 @@ const ltChart=(c,cov)=>{LT_FRAME=c.plot_frame;const n=c.dots.length,base=ltP+LT_
   const axes=`<line x1=${ltP} y1=${ltP-10} x2=${ltP} y2=${base} stroke=var(--chart-grid)></line><line x1=${ltP} y1=${base} x2=${ltP+LT_FRAME.width} y2=${base} stroke=var(--chart-grid)></line>`+
     `<text x=${ltP} y=${ltP+12} text-anchor=start fill=${ink}>elapsed time (${c.scale==="cube"?"cube root":c.scale})</text>`;   // the title sits inside the plot, at the left edge (#1141)
   const lines=ltLine(c.average,"var(--chart-series-8)","")+ltLine(c.median,"var(--chart-ok)","2 3")+ltLine(c.p85,"var(--chart-series-5)","5 3");
+  const bandCol=k=>COLORS[k]||"var(--chart-series-other)",stack=c.dots.map(d=>(d.stack||[]).map(b=>`<rect x=${ltX(d.x)-3} y=${ltY(b.y)} width=6 height=${ltY(b.y0)-ltY(b.y)} fill="${bandCol(b.column)}"><title>${esc(b.column)} ${esc(b.text)}</title></rect>`).join("")).join("");   // the hub places each band's two edges; the page draws them in the column's palette role (#1256)
   const dots=c.clusters.map((k,i)=>{const m=k.dots.length,title=m>1?`${m} issues`:`#${k.dots[0].n} ${esc(k.dots[0].title)}`;   // the hub sizes the ring for its count (#1146)
     return `<circle data-k=${i} cx=${ltX(k.x)} cy=${ltY(k.y)} r=${k.r} fill="${m>1?"var(--chart-bg)":"var(--chart-ink)"}" stroke="var(--chart-ink)" stroke-width=2${k.dots.some(d=>d.approx||d.unknown_first)?' stroke-dasharray="3 2"':""} style="cursor:pointer"><title>${esc(title)} · ${esc(k.dots[0].text)} · flowing ${esc(k.dots[0].flowing_text)} · held ${esc(k.dots[0].held_text)} · closed ${esc(k.dots[0].closed)}${k.dots.some(d=>d.approx)?" · start approximate":""}${k.dots.some(d=>d.unknown_first)?" · first interval unknown":""}</title></circle>`+(m>1?`<text x=${ltX(k.x)} y=${ltY(k.y)+/*RING_BASELINE*/} fill="var(--chart-ink)" text-anchor=middle pointer-events=none>${m}</text>`:"")}).join("");
   const ltV=v=>v?esc(v.text):"?",S="";   // the numbers live in the legend, each beside what it answers: one line, never two copies of the same fact
-  const legend=`<p class="flg ltlg"><span><i style="background:var(--chart-bar)"></i>Rolling average, centered</span>${banded?`<span><i style="background:var(--chart-series-3);opacity:.28"></i>Standard deviation <em>the usual spread</em></span>`:""}<span><i style="background:var(--chart-series-8)"></i>${esc(c.average.label)} <b>${ltV(c.average)}</b> <em>one slow card lifts it</em></span><span><i style="background:var(--chart-ok)"></i>${esc(c.median.label)} <b>${ltV(c.median)}</b> <em>${esc(c.median.ci_text||"")}</em> <em>half the cards that arrived finish within this time</em></span><span><i style="background:var(--chart-series-5)"></i>${esc(c.p85.label)} <b>${ltV(c.p85)}</b> <em>85% of closed cards finished within this time</em> ${ltExOf(c)}</span></p>`+ltKM(c);   // each entry paints the mark it names (#1146); the median is the Kaplan-Meier one, the exclusions sit beside the percentile (#1248, #1250)
+  const legend=`<p class="flg ltlg"><span><i style="background:var(--chart-bar)"></i>Rolling average, centered</span>${banded?`<span><i style="background:var(--chart-series-3);opacity:.28"></i>Standard deviation <em>the usual spread</em></span>`:""}<span><i style="background:var(--chart-series-8)"></i>${esc(c.average.label)} <b>${ltV(c.average)}</b> <em>one slow card lifts it</em></span><span><i style="background:var(--chart-ok)"></i>${esc(c.median.label)} <b>${ltV(c.median)}</b> <em>${esc(c.median.ci_text||"")}</em> <em>half the cards that arrived finish within this time</em></span><span><i style="background:var(--chart-series-5)"></i>${esc(c.p85.label)} <b>${ltV(c.p85)}</b> <em>85% of closed cards finished within this time</em> ${ltExOf(c)}</span>${gateEntry(c)}</p>`+ltKM(c);   // each entry paints the mark it names (#1146); the median is the Kaplan-Meier one, the exclusions sit beside the percentile (#1248, #1250); gate time keeps the Gating column's role (#1256)
   const pk=LT.pick!=null&&c.clusters[LT.pick]?c.clusters[LT.pick]:null;
   const rows=pk?`<table class=mtab><thead><tr><th>Issue</th><th>Title</th><th>Elapsed</th><th>Closed</th></tr></thead><tbody>${pk.dots.map(d=>`<tr data-o=${d.n} style="cursor:pointer"><td>#${d.n}</td><td>${esc(d.title)}</td><td>${esc(d.text)}</td><td>${esc(d.closed)}</td></tr>`).join("")}</tbody></table>`:"";   // the page's one table rule (#1146)
-  return ctl+S+legend+`<svg data-lt viewBox="0 0 ${LT_FRAME.width+2*ltP} ${LT_FRAME.height+2*ltP}">${axes}${ys}${xs}${band}${roll}${lines}${dots}</svg>`+rows;};
+  return ctl+S+legend+`<svg data-lt viewBox="0 0 ${LT_FRAME.width+2*ltP} ${LT_FRAME.height+2*ltP}">${axes}${ys}${xs}${band}${roll}${lines}${stack}${dots}</svg>`+rows;};
 const flowLead=l=>{const S=l.summary,c=LT.zc;
   const head=`<p class=fhead>${esc((LT_TYPES.find(([k])=>k===l.type)||[0,"all cards"])[1].toLowerCase())} · <b>${esc((c||l).measure)}</b> · window ${l.window.size} ${esc(l.window.unit)}</p>`;   // the one exclusion total sits beside the percentile (#1248)
   LT.cols=l.columns||[];if(!S)return head+`<p class=fnote>no closed card yet · ${c?ltExOf(c):ltEx(l.excluded,l.excluded_cards,l.excluded_total)}</p>`;

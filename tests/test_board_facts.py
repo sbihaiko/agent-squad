@@ -106,5 +106,5 @@ def test_the_hub_legacy_table_names_no_pull_request_fact():
     names = {c["fact"] for c in columns.COLUMNS}
 
     assert "merged" not in names and "open_pr" not in names
-    assert set(columns.ROLE) == {"issue_closed", "abandoned", "unscheduled", "issue_todo"}
+    assert set(columns.ROLE) == {"issue_closed", "abandoned", "unscheduled", "issue_todo", "gating"}   # re-anchored (#1256): Gating has a role
     assert "Testing" not in {s["name"] for s in columns.shipped_columns()}

@@ -72,6 +72,37 @@ def _value(hours):
     return {"hours": hours, "text": _duration(hours)}
 
 
+GATE_LABEL = "Gate time"
+
+
+def _bands(row):
+    """The row's stacked bands, longest first: the hours it spent in each column, as the history store recorded them, or
+    its whole measured time in its own column for a plain row (#1256). An empty `columns` maps is a plain row too: the
+    row stacks its whole measure in its own column, so a card with hours never draws no stack. A column with no hours
+    draws no band."""
+    columns = row.get("columns")
+    pairs = columns.items() if columns else [(row["column"], _hours(row))]
+    return sorted(({"column": column, "hours": hours, "text": _duration(hours)}
+                   for column, hours in pairs if hours > 0), key=lambda band: (-band["hours"], band["column"]))
+
+
+def _gate(row):
+    return row.get("gate", 0.0)
+
+
+def _stack_fields(row, position=None):
+    """The row's stack, its gate hours and duration. With an axis `position`, each band carries the two edges the page
+    draws: `y0` at its foot and `y` at its head, in the same normalized space as the dot (SPEC 1218)."""
+    stack, acc = [], 0.0
+    for band in _bands(row):
+        band = dict(band)
+        if position is not None:
+            band.update(y0=position(acc), y=position(acc + band["hours"]))
+        acc += band["hours"]
+        stack.append(band)
+    return {"stack": stack, "gate_hours": _gate(row), "gate_text": _duration(_gate(row))}
+
+
 def _p85(hours):
     ordered = sorted(hours)
     return ordered[math.ceil(85 * len(ordered) / 100) - 1]
@@ -88,7 +119,7 @@ def lead_time(items, window=20, now=None, measure=MEASURE):
         span = hours[max(0, i - window + 1) : i + 1]
         series.append({"n": row["n"], "closed": row["c"], "hours": hours[i], "rolling_hours": statistics.fmean(span),
                        "flowing_hours": row["flowing"], "held_hours": row["held"],
-                       "approx": row["approx"], "unknown_first": row["unknown_first"]})
+                       "approx": row["approx"], "unknown_first": row["unknown_first"], **_stack_fields(row)})
     summary = None
     if hours:
         km = survival(items, now=now)
@@ -98,6 +129,9 @@ def lead_time(items, window=20, now=None, measure=MEASURE):
             "minimum": _value(min(hours)),
             "maximum": _value(max(hours)),
             "p85": _value(_p85(hours)),
+            # Gate time here covers every delivered card, like the average, the minimum and the p85 below and above it;
+            # `control_chart`'s gate covers the cards its timeframe plots, like that chart's own average (#1256).
+            "gate": _value(sum(_gate(row) for row in delivered)),
         }
     return {
         "measure": measure,
@@ -234,7 +268,7 @@ def control_chart(items, timeframe=None, log=False, now=None, start=None, end=No
                      "text": _duration(hrs), "flowing": flowing, "held": held,
                      "flowing_text": _duration(flowing), "held_text": _duration(held),
                      "approx": row.get("approx", False), "unknown_first": row.get("unknown_first", False),
-                     "x": x, "y": position(hrs),
+                     **_stack_fields(row, position), "x": x, "y": position(hrs),
                      "rolling": {"hours": mean, "low": low, "high": high, "text": _duration(mean),
                                  "low_text": _duration(low), "high_text": _duration(high),
                                  "y": position(mean), "y_low": position(low), "y_high": position(high)}})
@@ -281,6 +315,8 @@ def control_chart(items, timeframe=None, log=False, now=None, start=None, end=No
         "ticks": [{"hours": hrs, "text": text, "y": y} for hrs, text, y in ticks],
         "xticks": xticks,
         "range": {"start": start.isoformat(), "end": end.isoformat()},
+        "gate": {"hours": sum(_gate(row) for row in plotted), "text": _duration(sum(_gate(row) for row in plotted)),
+                 "label": GATE_LABEL},   # the plotted cards only, like this chart's average and p85
         "fit": _fit([utc(row["c"]) for row in plotted], start, end),
         **summary,
         "survival": km,

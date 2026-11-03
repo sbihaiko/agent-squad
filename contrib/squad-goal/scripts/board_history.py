@@ -134,6 +134,31 @@ def _in_scope(s, spec):
 
 
 TERMINAL = (_columns.ROLE["issue_closed"], _columns.ROLE["abandoned"])
+GATING = _columns.ROLE["gating"]
+
+
+def column_stretches(runs, lo, hi):
+    """Each stretch one card spends in one column inside `lo`..`hi`, in order, as `{"column", "hours"}`. Contiguous runs
+    that name the same column are one stretch: a freeze or a spec change ends an interval without changing the column
+    (SPEC 1218). A run off the board, or parked with no hold, is no stretch at all, and it breaks the contiguity: the
+    card was not in a column then. A parked run with a hold is a stretch in its own column (Backlog): the measure counts
+    it as held time, so the stack keeps it and its band names a real board column with a palette role (#1256)."""
+    out, joined = [], False
+    for r in runs:
+        if not r["on_board"] or (r["column"] in (None, PARKED) and r["hold"] is None):
+            joined = False
+            continue
+        a, b = max(_instant(r["from"]), lo), min(_instant(r["to"]) if r["to"] else hi, hi)
+        if b <= a:
+            joined = False
+            continue
+        hours = (b - a).total_seconds() / 3600
+        if joined and out[-1]["column"] == r["column"]:
+            out[-1]["hours"] += hours
+        else:
+            out.append({"column": r["column"], "hours": hours})
+        joined = True
+    return out
 
 
 def lead_observation(runs, start=None, end=None, complete=True, now=None):
@@ -143,7 +168,11 @@ def lead_observation(runs, start=None, end=None, complete=True, now=None):
     is given. None `start` is the card's first time on the board; None `end` is Closed. Backlog with no hold is the
     parked time: it counts in neither. `start_lo`..`start_hi` is the interval the start is known in: one instant for a
     recorded move, two when a search set the boundary. `unknown_first` marks a card whose column was set before its add,
-    or a timeline not yet read whole: its start is not in the store."""
+    or a timeline not yet read whole: its start is not in the store. `stretches` is the time the card spent in each
+    column inside the window, and `columns` sums it by column for the chart's stack; `gate` is the Gating share (#1256).
+    Both the measure and the stack walk the same slice, `runs[k:]` from the first entry into `start`, clamped to
+    `lo`..`hi`: the card's time before the start column and after the end transition is in neither, so the stack's
+    total always equals `flowing` + `held`."""
     end = end or _columns.ROLE["issue_closed"]
     k = next((i for i, r in enumerate(runs) if (r["on_board"] if start is None else r["column"] == start)), None)
     if k is None:
@@ -160,7 +189,7 @@ def lead_observation(runs, start=None, end=None, complete=True, now=None):
     else:
         hi = _instant(closed["from"])
     flowing = held = 0.0
-    for r in runs:
+    for r in runs[k:]:
         if not r["on_board"] or (r["column"] in (None, PARKED) and r["hold"] is None):
             continue
         a, b = max(_instant(r["from"]), lo), min(_instant(r["to"]) if r["to"] else hi, hi)
@@ -169,7 +198,12 @@ def lead_observation(runs, start=None, end=None, complete=True, now=None):
         if r["hold"]: held += (b - a).total_seconds() / 3600
         else: flowing += (b - a).total_seconds() / 3600
     start_lo = runs[k - 1]["from"] if entered["approx"] and k > 0 else entered["from"]
+    stretches = column_stretches(runs[k:], lo, hi)
+    columns = {}
+    for s in stretches:
+        columns[s["column"]] = columns.get(s["column"], 0.0) + s["hours"]
     return {"start": entered["from"], "end": None if censored else closed["from"], "flowing": flowing, "held": held,
+            "stretches": stretches, "columns": columns, "gate": columns.get(GATING, 0.0),
             "approx": any(r["approx"] and lo < _instant(r["from"]) <= hi for r in runs),
             "unknown_first": not complete or bool(next((r["unknown"] for r in runs if r["on_board"]), False)),
             "censored": censored, "start_lo": start_lo, "start_hi": entered["from"]}
