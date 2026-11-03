@@ -280,7 +280,7 @@ build_body() { local c fg
     # that cannot gate last says so, and the entry gate runs its own battery as before.
     fg=${SG_FAST_GATE_CMD-bash contrib/squad-goal/scripts/fast-gate.sh}   # the profile's entry gate, or none
     if [ -n "$fg" ]; then
-      echo "Your last step, after your final edit and commit, is the entry gate: run \"$fg\" in that worktree, and it must exit 0. After it, make no edit and no commit: a pass on the tree you hand in is what the wave entry gate reuses. If you cannot make it your last step, say so in your report: the entry gate then runs its own battery."
+      echo "Your last step, after your final edit and commit, is the entry gate: run \"$fg\" in that worktree, and it must exit 0. If the gate fails, fix what it names and run the gate again, as many times as you need. Once the gate passes, make no edit and no commit: a pass on the tree you hand in is what the wave entry gate reuses. If you cannot make it your last step, say so in your report: the entry gate then runs its own battery."
     else
       echo "No fast gate is configured for this repository, so the child runs none: a missing gate is not a failure, and the targeted checks are the evidence; name that in the report."
     fi

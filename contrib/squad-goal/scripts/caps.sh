@@ -26,14 +26,14 @@ sg_caps() {
 
 # sg_gate_python: the interpreter that holds the suite's tools (#1086): SG_GATE_PY, else the checkout's venv, else the venv beside
 # the worktree's common git directory, else python3. A checkout with no venv must not fall back to a python3 that lacks mypy.
+# A caller with no SG_CHECKOUT reads its own tree through git, so a hand gate run from a linked worktree still finds the venv.
 sg_gate_python() {
-  local py common
+  local py common root
   if [ -n "${SG_GATE_PY:-}" ]; then echo "$SG_GATE_PY"; return; fi
-  if [ -n "${SG_CHECKOUT:-}" ]; then
-    py=$SG_CHECKOUT/.venv/bin/python; [ -x "$py" ] && { echo "$py"; return; }
-    common=$(git -C "$SG_CHECKOUT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
-    [ -n "$common" ] && { py=$(dirname "$common")/.venv/bin/python; [ -x "$py" ] && { echo "$py"; return; }; }
-  fi
+  root=${SG_CHECKOUT:-.}
+  py=$root/.venv/bin/python; [ -x "$py" ] && { echo "$py"; return; }
+  common=$(git -C "$root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+  if [ -n "$common" ]; then py=$(dirname "$common")/.venv/bin/python; [ -x "$py" ] && { echo "$py"; return; }; fi
   echo python3
 }
 

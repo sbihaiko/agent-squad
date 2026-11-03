@@ -417,6 +417,41 @@ bh=$(tail -n 1 "$bs/gate-history")
   && ok "the bounded attempt is recorded as bounded and unproven" || ko "bounded history: '$bh'"
 pgrep -f "sleep 2718" >/dev/null 2>&1 && ko "the silent battery's tree survived the deadline" || ok "the silent battery's tree is stopped at the deadline"
 
+# (#1086) The gate's interpreter is sg_gate_python's answer (caps.sh): SG_GATE_PY, else the checkout's venv, else the venv
+# beside the worktree's common git directory, else python3. The gate calls it for the code-quality reading, so a stub in the
+# venv logs the exact interpreter the gate used. A checkout with no venv of its own must reach the venv beside it, never a
+# python3 that lacks mypy: the old hand-rolled lookup sent a child's worktree there, and its gate ended absent.
+ps=$T/interp; mkdir -p "$ps"
+pycase() {  # <checkout>: one passing gate whose quality reading runs through the interpreter <checkout> resolves
+  rm -f "$T/co-py.log"
+  (cd "$R" && env -u SG_GATE_PY SG_CHECKOUT="$1" SG_STATE="$ps" SG_FAST_BASE=dev SG_FAST_CMD="bash $T/base.sh" SG_FAST_RETRY_CMD=false bash "$d/fast-gate.sh" 2>&1)
+}
+co=$T/co-venv; mkdir -p "$co/.venv/bin"
+printf '#!/bin/bash\necho "$0 $*" >> "%s"\nexit 0\n' "$T/co-py.log" > "$co/.venv/bin/python"; chmod +x "$co/.venv/bin/python"
+out=$(pycase "$co"); rc=$?
+/usr/bin/grep -qF "$co/.venv/bin/python " "$T/co-py.log" && /usr/bin/grep -q "quality-reading.py" "$T/co-py.log" \
+  && ok "the gate runs through sg_gate_python: the checkout's own venv answers" || ko "checkout venv: rc $rc, log '$(cat "$T/co-py.log" 2>/dev/null)' $out"
+# No venv in the checkout itself, and a venv beside its common git directory: sg_gate_python answers that one, not python3.
+$G -C "$R" worktree add -q "$T/wt-novenv" -b wt-novenv
+mkdir -p "$R/.venv/bin"
+printf '#!/bin/bash\necho "$0 $*" >> "%s"\nexit 0\n' "$T/co-py.log" > "$R/.venv/bin/python"; chmod +x "$R/.venv/bin/python"
+out=$(pycase "$T/wt-novenv"); rc=$?
+/usr/bin/grep -qF "$R/.venv/bin/python " "$T/co-py.log" && /usr/bin/grep -q "quality-reading.py" "$T/co-py.log" \
+  && ok "a checkout with no venv of its own reaches sg_gate_python's answer: the venv beside its common git directory, never python3" \
+  || ko "worktree venv: rc $rc, log '$(cat "$T/co-py.log" 2>/dev/null)' $out"
+# No SG_CHECKOUT at all, as a hand gate started in the fix's worktree has none: sg_gate_python reads the caller's own tree
+# through git, so it still reaches the venv beside the common git directory, never a python3 that lacks mypy.
+pycase_nc() {  # <dir>: one passing gate run from <dir> with neither SG_GATE_PY nor SG_CHECKOUT
+  rm -f "$T/co-py.log"
+  (cd "$1" && env -u SG_GATE_PY -u SG_CHECKOUT SG_STATE="$ps" SG_FAST_BASE=dev SG_FAST_CMD="bash $T/base.sh" SG_FAST_RETRY_CMD=false bash "$d/fast-gate.sh" 2>&1)
+}
+out=$(pycase_nc "$T/wt-novenv"); rc=$?
+/usr/bin/grep -qF "$R/.venv/bin/python " "$T/co-py.log" && /usr/bin/grep -q "quality-reading.py" "$T/co-py.log" \
+  && ok "a gate with no SG_CHECKOUT reads its own tree through git and reaches the venv beside the common git directory" \
+  || ko "no SG_CHECKOUT: rc $rc, log '$(cat "$T/co-py.log" 2>/dev/null)' $out"
+/usr/bin/grep -q 'sg_gate_python' "$d/fast-gate.sh" && ok "fast-gate names sg_gate_python" || ko "fast-gate keeps its own interpreter lookup"
+/usr/bin/grep -q 'py=python3' "$d/fast-gate.sh" && ko "fast-gate keeps a hand-rolled interpreter fallback" || ok "fast-gate keeps no hand-rolled interpreter fallback"
+
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 pkill -f "sleep 2718" 2>/dev/null   # a red run leaves the hang its case started
 rm -rf "$T"; exit $fail
