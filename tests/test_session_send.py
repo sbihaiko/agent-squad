@@ -2,6 +2,8 @@
 in this process stands for the session; its peer pid is this process, so the recorded pid is os.getpid(). Every test runs in a
 temporary HOME: no real session, no network.
 """
+import datetime
+import hashlib
 import importlib.util
 import json
 import os
@@ -30,6 +32,7 @@ TAILNET = "hub.tail1234.ts.net"
 ANA = "ana@example.com"
 EVE = "eve@example.com"
 CID = "3f1c9e2a-7b44-4d8e-9a1f-0c2b6d5e8f10"
+CID2 = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
 
 
 def load_send():
@@ -113,13 +116,23 @@ def add_session(home, sid, cwd, pid=None, hang=False, name="build", status="busy
     folder = home.projects / re.sub(r"[^A-Za-z0-9]", "-", str(cwd))
     folder.mkdir(parents=True, exist_ok=True)
     line = {"type": "user", "message": {"role": "user", "content": "hi"}}
-    if mode: line["permissionMode"] = mode
+    if mode:
+        line["permissionMode"] = mode
     (folder / f"{sid}.jsonl").write_text(json.dumps(line) + "\n")
     return folder / f"{sid}.jsonl"
 
 
 def inbox_of(home):
     return home.inboxes[-1]
+
+
+def mode_file(home, sid="s1"):
+    return home.state / "session-sends" / "p1" / "modes" / f"{sid}.json"
+
+
+def write_mode_record(home, body, sid="s1"):
+    mode_file(home, sid).parent.mkdir(parents=True, exist_ok=True)
+    mode_file(home, sid).write_text(json.dumps(body))
 
 
 def profile_p1(cwd):
@@ -227,6 +240,87 @@ def test_a_send_with_no_readable_mode_is_refused_and_writes_nothing(home, tmp_pa
     assert out["status"] == "refused"
     assert "permission mode" in out["reason"]
     assert inbox_of(home).conns == 0
+
+
+def test_a_refused_fresh_session_names_the_owners_next_step(home, tmp_path, monkeypatch):
+    """A session with no mode line yet and a title-masked argv gives the web owner a way out in the reason: one send from the
+    terminal writes the mode line, or the session starts with the title rewrite off so the argv keeps its flag (#1298)."""
+    send = load_send()
+    add_session(home, "s1", tmp_path / "app", mode=None)
+    monkeypatch.setattr(send.sessions, "argv_mode", lambda pid: "")
+    out = send.send("p1", "s1", "hello", CID, profiles_of=profile_p1, root=home.state)
+    assert out["status"] == "refused"
+    assert "send once from its terminal" in out["reason"]
+    assert "CLAUDE_CODE_DISABLE_TERMINAL_TITLE" in out["reason"]
+    assert inbox_of(home).conns == 0
+
+
+def test_the_live_mode_wins_over_the_mode_the_hub_recorded_before(home, tmp_path):
+    """A session cycled from bypass to plan with shift+tab is asserted as plan: the recorded mode answers only when the live read
+    answers nothing, and a live answer refreshes the record (#1298)."""
+    send = load_send()
+    path = add_session(home, "s1", tmp_path / "app")
+    assert send.send("p1", "s1", "first", CID, profiles_of=profile_p1, root=home.state)["status"] == "sent"
+    path.write_text(json.dumps({"type": "user", "permissionMode": "plan", "message": {"role": "user", "content": "hi"}}) + "\n")
+    assert send.send("p1", "s1", "second", CID2, profiles_of=profile_p1, root=home.state)["status"] == "sent"
+    user_frames = [f for f in inbox_of(home).frames if f.get("type") == "user"]
+    assert [f["from_mode"] for f in user_frames] == ["bypassPermissions", "plan"]
+    assert json.loads(mode_file(home).read_text())["permissionMode"] == "plan"
+
+
+def test_a_resumed_session_without_the_bypass_flag_is_asserted_with_the_mode_its_process_names(home, tmp_path, monkeypatch):
+    """A `claude --resume` started without the bypass flag, against a record that says bypass, is asserted as the mode its own
+    process names: the record never overrides a live answer (#1298)."""
+    send = load_send()
+    proc = subprocess.Popen([sys.executable, "-c", "import time;time.sleep(30)", "--permission-mode", "default"])
+    try:
+        add_session(home, "s1", tmp_path / "app", pid=proc.pid, mode=None)
+        write_mode_record(home, {"permissionMode": "bypassPermissions", "cwd": str(tmp_path / "app"), "pid": proc.pid,
+                                 "startedAt": start_of(proc.pid) * 1000 + 296})
+        monkeypatch.setattr(send, "peer_pid", lambda s: proc.pid)
+        assert send.send("p1", "s1", "hello", CID, profiles_of=profile_p1, root=home.state)["status"] == "sent"
+        assert inbox_of(home).frames[1]["from_mode"] == "default"
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+@pytest.mark.parametrize("field, stale", [("pid", 1), ("startedAt", 1)])
+def test_a_record_of_another_session_instance_is_dropped_not_answered(home, tmp_path, monkeypatch, field, stale):
+    """A record whose pid or start differs from the live registry record belongs to another instance of the id: it is dropped,
+    so a send with no live answer is refused rather than asserted with that instance's mode (#1298)."""
+    send = load_send()
+    add_session(home, "s1", tmp_path / "app", mode=None)
+    monkeypatch.setattr(send.sessions, "argv_mode", lambda pid: "")
+    record = {"permissionMode": "bypassPermissions", "cwd": str(tmp_path / "app"), "pid": os.getpid(),
+              "startedAt": start_of(os.getpid()) * 1000 + 296}
+    record[field] = stale
+    write_mode_record(home, record)
+    out = send.send("p1", "s1", "hello", CID, profiles_of=profile_p1, root=home.state)
+    assert out["status"] == "refused"
+    assert inbox_of(home).conns == 0
+    assert not mode_file(home).exists()
+
+
+def test_a_live_answer_replaces_a_record_of_another_instance(home, tmp_path):
+    send = load_send()
+    add_session(home, "s1", tmp_path / "app")
+    write_mode_record(home, {"permissionMode": "plan", "cwd": str(tmp_path / "app"), "pid": 1, "startedAt": 1})
+    assert send.send("p1", "s1", "hello", CID, profiles_of=profile_p1, root=home.state)["status"] == "sent"
+    assert inbox_of(home).frames[1]["from_mode"] == "bypassPermissions"
+    record = json.loads(mode_file(home).read_text())
+    assert record["permissionMode"] == "bypassPermissions" and record["pid"] == os.getpid()
+
+
+def test_a_mode_record_of_a_session_nobody_saw_for_a_day_is_purged_with_the_sends(home, tmp_path):
+    send = load_send()
+    add_session(home, "s1", tmp_path / "app")
+    gone = home.state / "session-sends" / "p1" / "modes" / "gone.json"
+    write_mode_record(home, {"permissionMode": "plan", "cwd": "/x", "pid": 1, "startedAt": 1}, sid="gone")
+    old = time.time() - 25 * 3600
+    os.utime(gone, (old, old))
+    assert send.send("p1", "s1", "hello", CID, profiles_of=profile_p1, root=home.state)["status"] == "sent"
+    assert not gone.exists()
 
 
 def test_two_concurrent_sends_with_one_id_send_once(home, tmp_path):
@@ -479,6 +573,19 @@ def test_the_status_route_reads_sent_for_a_sent_message(home, tmp_path, hub):
     r = conn.getresponse()
     assert r.status == 200 and json.loads(r.read())["status"] == "sent"
     conn.close()
+
+
+def test_status_names_the_build_this_hub_loaded(home, tmp_path, hub):
+    """A stale process explains a send that behaves like old code: the status route names the short SHA-256 and the mtime of the
+    hub, session_send.py and sessions.py as this process loaded them, and when the hub started (#1298)."""
+    status, out = get_json(hub().port, "/api/status")
+    assert status == 200
+    build = out["build"]
+    for key, name in (("hub", "hub.py"), ("session_send", "session_send.py"), ("sessions", "sessions.py")):
+        assert build[key]["sha256"] == hashlib.sha256((SCRIPTS / name).read_bytes()).hexdigest()[:12]
+        assert isinstance(build[key]["mtime"], str) and build[key]["mtime"]
+    started = datetime.datetime.fromisoformat(build["started"])
+    assert started.tzinfo is not None and started <= datetime.datetime.now(datetime.timezone.utc)
 
 
 # ---------------------------------------------------------------- the session overlay (#898): the loopback send rule (ADR-0152 rule 9)
