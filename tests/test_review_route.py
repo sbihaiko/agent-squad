@@ -116,16 +116,14 @@ def test_review_sh_reads_no_review_no_tools_list():
 
 
 def test_the_repo_review_chain_is_the_one_the_owner_ruled(reg):
-    """The review chain leads with Terra and keeps Opus inside her hours window.
+    """The review chain leads with DeepSeek V4.1 Flash, the cheapest model, inside its hours window.
 
     The fixture under `tests/fixtures/modelreg/live.models.json` is a captured old live shape, kept for the migration
     tests; the live file itself is published from this repository, so the pin lives here and not against that
-    capture. The owner's ruling for the week: the Anthropic weekly sits above its reserve and the Gemini weekly is
-    spent, so a chain led by either of them would resolve to nothing."""
+    capture. The owner's ruling of 2026-11-03: DeepSeek first, Opus behind it, then Gemini and Sol."""
     repo = modelreg.chain(json.loads(MODELS.read_text()), "review", reg).entries
-    assert [e.id for e in repo] == ["gpt-5.6-terra", "claude-opus-5-5"]
-    assert [e.effort for e in repo] == [None, None]
-    assert repo[-1].hrs == "19-07", "the Claude entry keeps its window and sits behind the one that can run"
+    assert [e.id for e in repo] == ["deepseek-flash", "claude-opus-5-5", "gemini-3.8-flash", "gpt-6.1-sol"]
+    assert repo[0].hrs, "DeepSeek keeps its hours window, so the chain falls through outside it"
 
 
 @pytest.mark.parametrize("raw", ["gpt-6.1-sol", "gpt-6.1-sol-fast", "gpt-5.6-terra-fast", "gpt-5.6-luna-fast"])

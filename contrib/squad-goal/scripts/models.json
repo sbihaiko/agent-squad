@@ -9,50 +9,66 @@
         "effort": "low"
       },
       {
-        "id": "gpt-5.6-terra",
-        "raw": "claude-gpt-5.6-terra",
-        "route": "gateway"
-      },
-      {
-        "id": "claude-sonnet-5-5",
+        "id": "deepseek-flash",
+        "raw": "claude-deepseek-flash[1m]",
         "route": "gateway",
-        "hrs": "19-07"
+        "ctx": "1m",
+        "effort": "low",
+        "hrs": "mon-fri 00-01,04-06,10-24 UTC; sat-sun 00-24 UTC"
       },
       {
-        "id": "grok-4.7",
-        "raw": "claude-grok-4.7",
-        "route": "gateway"
-      }
-    ],
-    "review": [
-      {
-        "id": "gpt-5.6-terra",
+        "id": "claude-haiku-5-5",
         "route": "gateway"
       },
       {
-        "id": "claude-opus-5-5",
-        "raw": "claude:claude-opus-5-5",
-        "route": "cli",
-        "hrs": "19-07"
-      }
-    ],
-    "vision": [
-      {
-        "id": "gpt-5.6-luna",
-        "route": "cli"
-      },
-      {
-        "id": "gpt-5.6-terra",
-        "route": "cli"
+        "id": "gpt-6-luna",
+        "route": "gateway"
       },
       {
         "id": "nemotron-super",
         "raw": "claude-nemotron-super",
         "route": "gateway"
+      }
+    ],
+    "review": [
+      {
+        "id": "deepseek-flash",
+        "raw": "claude:claude-deepseek-flash",
+        "route": "cli",
+        "ctx": "1m",
+        "hrs": "mon-fri 00-01,04-06,10-24 UTC; sat-sun 00-24 UTC"
+      },
+      {
+        "id": "claude-opus-5-5",
+        "raw": "claude:claude-opus-5-5",
+        "route": "cli"
       },
       {
         "id": "gemini-3.8-flash",
-        "raw": "gemini-3.8-flash-low",
+        "raw": "gemini-3.8-flash-medium",
+        "route": "cli"
+      },
+      {
+        "id": "gpt-6.1-sol",
+        "route": "cli"
+      }
+    ],
+    "vision": [
+      {
+        "id": "deepseek-flash",
+        "raw": "claude-deepseek-flash[1m]",
+        "route": "gateway",
+        "ctx": "1m",
+        "effort": "low",
+        "hrs": "mon-fri 00-01,04-06,10-24 UTC; sat-sun 00-24 UTC"
+      },
+      {
+        "id": "grok-4.7",
+        "route": "cli",
+        "effort": "low"
+      },
+      {
+        "id": "gpt-5.6-luna",
         "route": "cli",
         "effort": "low"
       }
@@ -63,14 +79,13 @@
         "route": "gateway"
       },
       {
-        "id": "gpt-5.6-terra",
-        "raw": "claude-gpt-5.6-terra",
+        "id": "grok-4.5",
+        "raw": "claude-grok-4.5",
         "route": "gateway"
       },
       {
-        "id": "claude-sonnet-5-5",
-        "route": "gateway",
-        "hrs": "19-07"
+        "id": "claude-haiku-5-5",
+        "route": "gateway"
       }
     ],
     "editorial": [

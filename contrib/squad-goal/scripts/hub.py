@@ -6607,7 +6607,9 @@ def _models_set(new):
         if mo: d["model_off"] = mo
         else: d.pop("model_off", None)
     chains = {k.removesuffix("_models"): _v2_chain(k, posted.get(k), d, eff, hrs) for k in CHAINS}
-    modelreg.write_chains(MODELS, chains, d)
+    # A chain the panel does not draw (editorial) is the file's own: a Save keeps it as it stands.
+    kept = {k: v for k, v in (d.get("chains") or {}).items() if isinstance(d.get("chains"), dict) and k not in chains}
+    modelreg.write_chains(MODELS, {**chains, **kept}, d)
     models_record(changes)
     return models_get()
 
