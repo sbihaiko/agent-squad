@@ -240,6 +240,10 @@ class Children:
                 bad.append(dep)
         return bad
 
+    def retried(self, name, entry):
+        """The callback that puts one transport retry on the record before its fresh call: a measured fact, never a new run (#1293)."""
+        return lambda m, out: self.e.record.append("model_retried", node=name, entry=entry, model=m, error=str(out.error)[:session.CHAIN_LINE])
+
     async def session(self, ctx, name, entry=1, review=None, coder=None, repeated=False):
         """One child entry: its worktree, the metered call in `squad/session.py`, then its checks and its spawn lift.
         Entry 1 cuts the worktree; a fix entry (2, 3, ...) works in it again with the review that asked for it, led by
@@ -259,12 +263,9 @@ class Children:
         chain = session.model_chain(models, first, spent, hours, at, km or e.options.get("model_order") or [])
         for m, why in session.hours_skipped(models, first, spent, hours, at):    # an entry left out of its window is on the record
             e.record.append("model_skipped", node=name, entry=entry, model=m, reason=why)
-        def on_retry(m, out):    # the one retry after a transport failure is a measured fact on the record (#1293)
-            e.record.append("model_retried", node=name, entry=entry, model=m, error=str(out.error)[:session.CHAIN_LINE])
-
         out, tried, model = await session.run_chain(
             chain, lambda m, first: self.attempt(name, d, ws, dl, m, slot, first and entry == 1, entry, review, repeated, chain=chain),
-            on_retry=on_retry)
+            on_retry=self.retried(name, entry))
         for m, err in tried:    # every refusal is on the record, exhausted chain or not (#494)
             e.record.append("model_refused", node=name, entry=entry, model=m, error=err[:session.CHAIN_LINE])
             limits.write(m, err)    # a refusal that names its reset closes that account until then (#572)

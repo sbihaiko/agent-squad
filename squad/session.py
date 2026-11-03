@@ -146,7 +146,7 @@ def transport_error(out):
     return out.kind == "adapter_error" and is_transport(str(out.error))
 
 
-async def run_chain(chain, call, *, on_retry=None, backoff=TRANSPORT_BACKOFF, sleep=anyio.sleep):
+async def run_chain(chain, call, *, on_retry=None, backoff=None, sleep=None):
     """Call one entry of a model chain at a time while the entry answers nothing. `call(model, first)` runs one attempt and
     returns `(outcome, who)`. Return the last outcome, every entry that answered nothing with its reason, and the last
     `who`.
@@ -155,12 +155,14 @@ async def run_chain(chain, call, *, on_retry=None, backoff=TRANSPORT_BACKOFF, sl
     record. Each call is its own metered call, so the retry counts the node's budget and the run's spend and never starts
     a new run. A retry that fails again is an entry that could not serve, so the chain goes on to its next entry."""
     tried, out, who = [], None, None
+    wait = anyio.sleep if sleep is None else sleep
+    pause = TRANSPORT_BACKOFF if backoff is None else backoff    # read per call, so a test may shorten the module's value
     for i, model in enumerate(chain):
         out, who = await call(model, i == 0)
         if transport_error(out):
             if on_retry is not None:
                 on_retry(model, out)
-            await sleep(backoff)
+            await wait(pause)
             out, who = await call(model, False)
             if transport_error(out):    # the retry hit the transport too: this entry never served
                 tried.append((model, str(out.error)))

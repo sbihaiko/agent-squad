@@ -40,8 +40,9 @@ _PROTOCOL_WORDS = ("protocol", "malformed", "parse error", "parseerror", "invali
                    "json decode", "unexpected end", "framing", "transport", "ceiling", "stream ended",
                    "no resultmessage", "bad request", "content-length")
 # A transport that did not deliver is not a model that refused to serve (#1293): the gateway went down for two minutes
-# and every chain entry read `unknown`. The words are the ones the CLI and the socket layer write, and they are read
-# before every other rule because `refused` in `Connection refused` would otherwise read as a refusal.
+# and every chain entry read `unknown`. The words are the ones the CLI and the socket layer write. A quota or a tool
+# refusal beside them is the provider's own answer and wins (`_settled_refusal`), and the transport's own `refused`
+# is taken out before the refusal words are read, so `Connection refused` never reads as a refusal.
 _TRANSPORT_WORDS = ("connection refused", "connection reset", "econnrefused", "econnreset")
 _STATUS = re.compile(r"\b(\d{3})\b")
 _STATUS_CAUSE = {"400": "protocol", "401": "auth", "402": "quota", "403": "auth", "408": "timeout",
@@ -72,11 +73,22 @@ def _status_cause(text: str) -> str | None:
     return None
 
 
+def _settled_refusal(low: str) -> bool:
+    """True when the text names a quota, or a tool the hook refused. Read with the transport's own words taken out, so
+    the `refused` of `Connection refused` is never a tool refusal."""
+    rest = low
+    for w in _TRANSPORT_WORDS:
+        rest = rest.replace(w, " ")
+    if any(w in rest for w in _QUOTA_WORDS):
+        return True
+    return any(w in rest for w in _TOOL_WORDS) and any(w in rest for w in _REFUSAL_WORDS)
+
+
 def is_transport(text: str | None) -> bool:
     """True when the diagnostic is the transport not delivering (a refused or reset connection), which clears in
-    seconds. The model never refused to serve, so this is never a refusal or an auth failure."""
+    seconds. A quota or a tool refusal named beside it is the provider's answer, so it is never this."""
     low = (text or "").lower()
-    return any(w in low for w in _TRANSPORT_WORDS)
+    return any(w in low for w in _TRANSPORT_WORDS) and not _settled_refusal(low)
 
 
 def cause(text: str | None) -> str:
