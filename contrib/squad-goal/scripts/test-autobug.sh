@@ -261,7 +261,7 @@ case "\$*" in
   *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$T/issues.json" ;;
   *"issue(number:"*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issue\(number: [0-9]+' | /usr/bin/grep -oE '[0-9]+' | head -1); jq -c --arg k "i\$n" --argjson n "\$n" '{data:{repository:{(\$k): (.[]|select(.number==\$n)|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}})}}}' "$T/issues.json" | { if /usr/bin/grep -qx "\$n" "$T/closed" 2>/dev/null; then sed 's/"state":"OPEN"/"state":"CLOSED"/'; else cat; fi } ;;
   *pulls?state=open*) echo "[]" ;;
-  *"issues?state=open"*labels=bug*) echo '[{"number":1228,"title":"Core: null deref","body":"step a.py","state":"open","labels":[{"name":"bug"},{"name":"ready-for-agent"}]}]' ;;
+  *"issues?state=open"*labels=bug*) jq '[.[]|{number,title,body,state:"open",labels:[(.labels//[])[]|{name:(if type=="string" then . else .name end)}]}]' "$T/issues.json" ;;
   *"issues?state=open"*) echo "[]" ;;
   *issues/*/comments*) echo '$cj' ;;
   *issues/*) printf '{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z"}\n' ;;
@@ -277,6 +277,23 @@ $G -q "AUTOBUG would dispatch" <<<"$r" && ko "7 a held issue was dispatched anyw
 held ''
 r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
 $G -q "AUTOBUG would dispatch.*\[1228\]" <<<"$r" && ok "7 the same candidate dispatches once the marker is gone" || ko "7 the fixture dispatches nothing even unmarked: '$r'"
+# 7b) (#1297) a frozen:not-startable label holds an issue only while its marker holds: beside a marker another build wrote, the
+# issue is a candidate; beside the current build's marker it is not. The label is never read alone past the marker's build.
+git -C "$T/co" init -q 2>/dev/null; git -C "$T/co" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base 2>/dev/null
+cur=$(git -C "$T/co" rev-parse --short=12 HEAD)
+cat > "$T/issues.json" <<'JSON'
+[{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent","frozen:not-startable"]}]
+JSON
+held 'SQUAD-NOT-STARTABLE: build=000000000000 3 run(s) ended failed.'
+r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+$G -q "AUTOBUG would dispatch.*\[1228\]" <<<"$r" && ok "7b a label beside another build's marker dispatches the bug" || ko "7b a label beside another build's marker held the bug: '$r'"
+held "SQUAD-NOT-STARTABLE: build=$cur 3 run(s) ended failed."
+r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+$G -q "AUTOBUG would dispatch" <<<"$r" && ko "7b a label beside the current build's marker dispatched: '$r'" || ok "7b a label beside the current build's marker still holds the bug"
+cat > "$T/issues.json" <<'JSON'
+[{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]}]
+JSON
+held ''   # back to the unmarked issue the cases after 7b read
 
 # 8) (#145) a write the loop cannot prove is a defect the loop files. The card move at the end of this pass threw its
 # output away, so a refused write looked like a moved card. The pass that hit the refusal asks the filer itself, in that

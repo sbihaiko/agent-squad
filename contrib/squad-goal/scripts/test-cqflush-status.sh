@@ -17,6 +17,7 @@ case "$all" in
   *per_page*) for f in "$C"/*; do [ -e "$f" ] && jq -Rs --arg id "$(basename "$f")" '{id: ($id|tonumber), body: .}' < "$f"; done | jq -s . ; exit 0;;
   *"--method DELETE"*issues/comments/*) id=${all##*issues/comments/}; id=${id%% *}; rm -f "$C/$id"; echo "DELETE $id" >> "$GHLOG";;
   *"--method DELETE"*issues/*/labels/*) n=$(printf '%s' "$all" | sed -n 's#.*issues/\([0-9]*\)/labels/.*#\1#p'); lab=${all##*/labels/}; lab=${lab%% *}
+    [ -n "${REFUSE_LABEL:-}" ] && { printf '{"message":"Resource not accessible by integration","status":"403"}'; exit 1; }
     if [ -f "$LAB/$n" ] && /usr/bin/grep -qxF "$lab" "$LAB/$n"; then
       /usr/bin/grep -vxF "$lab" "$LAB/$n" > "$LAB/$n.new" || true; mv -f "$LAB/$n.new" "$LAB/$n"; echo "DELETE labels/$n/$lab" >> "$GHLOG"
     else printf '{"message":"Not Found","status":"404"}'; exit 1; fi;;
@@ -77,4 +78,15 @@ put 'x__alpha#7-unstart~rearm2.md' 'SQUAD-NOT-STARTABLE:'
 out=$(flush); [ ! -s "$T/ghlog" ] && [ -f "$B/alpha/cq/x__alpha#7-unstart~rearm2.md.done" ] \
   && case "$out" in *"removed 0 comment(s), label frozen:not-startable absent"*) true;; *) false;; esac \
   && ok "a re-arm with nothing to remove tolerates the 404 and sends no other write" || ko "unstart again: $(cat "$T/ghlog") / $out"
+# 8. (#1297) a label the API refuses (403, a secondary limit) is not a 404: the comments stay and the file stays queued, so the
+#    next pass removes both. The label goes first, so a refusal leaves the marker, the evidence, where it was.
+printf 'SQUAD-NOT-STARTABLE: 3 failed dispatches\n' > "$T/c/10"; : > "$T/ghlog"; printf 'bug\nfrozen:not-startable\n' > "$LAB/7"
+put 'x__alpha#7-unstart~rearm3.md' 'SQUAD-NOT-STARTABLE:'
+export REFUSE_LABEL=1; out=$(flush); unset REFUSE_LABEL
+q=$B/alpha/cq/x__alpha#7-unstart~rearm3.md
+[ -e "$T/c/10" ] && [ ! -s "$T/ghlog" ] && [ -f "$q" ] && [ ! -e "$q.dead" ] && [ ! -e "$q.done" ] && [ "$(cat "$q.tries" 2>/dev/null)" = 1 ] \
+  && ok "a refused label keeps the comment and the file queued for a retry" || ko "refused label: $(cat "$T/ghlog") / $out / comments $(ls "$T/c") / queue $(ls "$B/alpha/cq")"
+out=$(flush)
+[ ! -e "$T/c/10" ] && [ -f "$q.done" ] && [ "$(cat "$LAB/7")" = bug ] \
+  && ok "the retry removes the comment and the label" || ko "retry: $(cat "$T/ghlog") / $out / comments $(ls "$T/c") / label '$(cat "$LAB/7")'"
 rm -rf "$T"; exit $fail

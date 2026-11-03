@@ -28,6 +28,9 @@ case "$p" in
   */pulls?state=open*)    f=$GH_OPEN;;
   */pulls?state=closed*)  f=$GH_CLOSED;;
   */issues?state=open*)   f=$GH_ISSUES; [ -n "$GH_FRONTIER_ONLY" ] && [[ "$p" == *"labels=frontier"* ]] && f=$GH_FRONTIER;;
+  */issues/*/comments*)   # the comments of one fixture issue, in the list read's shape (#1297): the per-issue marker read runs for a labelled issue
+    n=$(printf '%s' "$p" | sed -n 's#.*/issues/\([0-9]*\)/comments.*#\1#p')
+    jq -c --argjson n "$n" '[.[]|select(.number==$n)][0].comments // [] | map({body:.})' "$GH_ISSUES" > "$GH_ISSUES.comments.json"; f=$GH_ISSUES.comments.json;;
   */issues/*)             f=$GH_ISSUE1; [ -f "$GH_ISSUEDIR/${p##*/}.json" ] && f=$GH_ISSUEDIR/${p##*/}.json;;   # one fixture per issue when a case wrote it
   *) exit 1;;
 esac
@@ -38,7 +41,7 @@ printf '#!/bin/bash\necho READY\n' > "$T/scripts/stack.sh"; chmod +x "$T/scripts
 # The dispatchers share one claim namespace and one read of the live requests (startability.sh, #428), so the stand-in
 # carries the real file's own reads and fakes only what this suite fixes by hand.
 cp "$(dirname "$src")/startability.sh" "$T/scripts/startability-real.sh"; cp "$(dirname "$src")/issue_ledger.py" "$T/scripts/"
-printf '#!/bin/bash\n. "$(dirname "$0")/startability-real.sh"\nsg_fork_only() { return 1; }\nsg_not_startable() { return 1; }\nsg_fork_preamble() { :; }\nsg_fork_branch() { echo "gui/$1"; }\nsg_fork_branch_pattern() { echo "gui/%%n"; }\nsg_issue_worktree_note() { :; }\n' > "$T/scripts/startability.sh"
+printf '#!/bin/bash\n. "$(dirname "$0")/startability-real.sh"\nsg_fork_only() { return 1; }\nsg_fork_preamble() { :; }\nsg_fork_branch() { echo "gui/$1"; }\nsg_fork_branch_pattern() { echo "gui/%%n"; }\nsg_issue_worktree_note() { :; }\n' > "$T/scripts/startability.sh"
 # mkreq.sh appends the body it was handed (one pass may build several requests, #728) and prints a request path (or refuses when MK_REFUSE is set); launch.py only counts
 printf '#!/bin/bash\n[ -n "$MK_REFUSE" ] && { echo "refusing: stub" >&2; exit 1; }\n[ "$1" = --paths ] && exec bash "$(dirname "$0")/mkreq-real.sh" "$@"\n[ -n "$MK_REAL" ] && { bash "$(dirname "$0")/mkreq-real.sh" "$@" || exit 1; echo x >> "$MKLOG"; cat "$2" >> "$MKLOG.body"; exit 0; }\necho x >> "$MKLOG"; cat "$2" >> "$MKLOG.body"; echo "$HOME/req.txt"\n' > "$T/scripts/mkreq.sh"
 printf 'import os,sys\nopen(os.environ["LAUNCHLOG"], "a").write("launch\\n")\nif os.environ.get("LAUNCH_REFUSE"): print("refused: the first coding model x is not in the router envelope", file=sys.stderr); sys.exit(1)\n' > "$T/scripts/launch.py"
@@ -298,6 +301,16 @@ r=$(run)
 [ "$(marked 51)" = 0 ] && case "$r" in *"FRONTIER skip #51: SQUAD-NOT-STARTABLE"*) true;; *) false;; esac && ok "an entry whose comments carry the marker is skipped" || ko "the marked #51 was not skipped from the list: '$r'"
 [ "$(marked 52)" = 1 ] && ok "an entry without the marker goes out" || ko "#52 did not go out: '$r'"
 $G -qx 'b' "$MKLOG.body" && ok "the request pastes the body from the list" || ko "the request has no body from the list: '$(cat "$MKLOG.body")'"
+
+# LB (#1297): the label is a hold only while its marker holds. A label beside a marker another build wrote does not hold the issue
+#    (the marker re-arms it); a label beside the current build's marker holds it. The build is the checkout's HEAD.
+scene labelbuild
+git -C "$d/co" init -q && git -C "$d/co" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
+cur=$(git -C "$d/co" rev-parse --short=12 HEAD)
+issues "[{\"number\":55,\"title\":\"a\",\"body\":\"b\",\"labels\":[{\"name\":\"wave:01\"},{\"name\":\"frozen:not-startable\"}],\"comments\":[\"SQUAD-NOT-STARTABLE: build=000000000000 3 runs failed\"]},{\"number\":56,\"title\":\"a\",\"body\":\"b\",\"labels\":[{\"name\":\"wave:01\"},{\"name\":\"frozen:not-startable\"}],\"comments\":[\"SQUAD-NOT-STARTABLE: build=$cur 3 runs failed\"]}]"
+r=$(run)
+[ "$(marked 55)" = 1 ] && ok "LB: a label beside another build's marker goes out" || ko "LB: #55 held by its label beside another build's marker: '$r'"
+[ "$(marked 56)" = 0 ] && ok "LB: a label beside the current build's marker still holds" || ko "LB: #56 went out beside the current build's marker: '$r'"
 
 # Y: the frozen:not-startable label is the visible marker: an issue that carries it is skipped as the comment is, with no comment on it.
 scene frozennotstartable

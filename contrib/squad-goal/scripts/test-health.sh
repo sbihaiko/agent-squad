@@ -108,7 +108,7 @@ printf '%s' "$o" | /usr/bin/grep -qF 'HEALTH runs-board-drift: 2 live run(s)' &&
 cmp -s "$T/st/auto/drift-prev" "$T/prev.bak" && ok "HEALTH_DRY leaves drift-prev alone" || ok "HEALTH_DRY leaves no stale drift-prev"
 # ---- #1858: a failure that repeats unchanged is a defect in the loop, and two loops are not twice the loop ----
 rep() { mkdir -p "$T/co/runs/$1"; printf '{"ts":1,"event": "spawn_accepted", "text": "GitHub issue #%s"}\n{"ts":2,"event": "verdict", "verdict": "failed", "reasons": ["%s", "why %s"]}\n' "${2:-}" "$3" "$3" > "$T/co/runs/$1/record.jsonl"; }
-rc() { { echo '#!/bin/bash'; printf 'case "$*" in *comments*) echo "$*" >> %s/comments.calls;; */labels*) echo "$*" >> %s/labels.calls;; esac\nexit 0\n' "$T" "$T"; } > "$T/bin/gh"; chmod +x "$T/bin/gh"; }
+rc() { { echo '#!/bin/bash'; printf 'for a; do case "$a" in body=@*) cp "${a#body=@}" %s/comment.body 2>/dev/null;; esac; done\ncase "$*" in *comments*) echo "$*" >> %s/comments.calls;; */labels*) echo "$*" >> %s/labels.calls;; esac\nexit 0\n' "$T" "$T" "$T"; } > "$T/bin/gh"; chmod +x "$T/bin/gh"; }
 rg() { { echo '#!/bin/bash'; printf '#!/bin/bash\nsleep 60\n' > "$T/s/watch.sh"; } > /dev/null; }
 reset; : > "$T/st/active-runs.txt"; rm -rf "$T/co/runs" "$T/st/auto/health-runs-repeating-failure"; mkdir -p "$T/co/runs"; rc
 o=$(bash "$T/s/health.sh"); echo "$o" | /usr/bin/grep -q 'runs-repeating-failure' && ko "one failed run alerted: $o" || ok "one failed run is not a repetition"
@@ -118,6 +118,9 @@ rep r3 10 no_such_issue; o=$(bash "$T/s/health.sh")
 printf '%s' "$o" | /usr/bin/grep -qF "HEALTH runs-repeating-failure: 3 run(s) ended failed with the same reason 'no_such_issue'" && ok "the third identical failure alerts, naming the reason and the count" || ko "repeat: $o"
 /usr/bin/grep -q 'issues/10/comments' "$T/comments.calls" 2>/dev/null && ok "the report is written on the issue the runs were on" || ko "no comment on #10: $(cat "$T/comments.calls" 2>/dev/null)"
 /usr/bin/grep -qF 'labels[]=frozen:not-startable' "$T/labels.calls" 2>/dev/null && /usr/bin/grep -q 'issues/10/labels' "$T/labels.calls" && ok "the marker carries the frozen:not-startable label on the same issue" || ko "no frozen:not-startable label on #10: $(cat "$T/labels.calls" 2>/dev/null)"
+# (#1297) the marker tells the owner what re-arms it: the comment and the label go together, because the label alone holds an issue
+# whose marker names no build, and removing the comment alone leaves the label holding it.
+/usr/bin/grep -qF 'remove this comment and the frozen:not-startable label' "$T/comment.body" 2>/dev/null && ok "the marker names the comment and the frozen:not-startable label as the re-arm" || ko "the marker's re-arm line: $(tail -n 2 "$T/comment.body" 2>/dev/null)"
 bash "$T/s/health.sh" >/dev/null; n2=$(/usr/bin/grep -c 'issues/10/comments' "$T/comments.calls" 2>/dev/null); [ "${n2:-0}" = 1 ] && ok "the same repetition comments once" || ko "commented $n2 time(s)"
 # #1292: the reason is the marker's file name, and a reason with a path separator named a directory that does not exist,
 # so the guard never held and every pass posted the marker again
