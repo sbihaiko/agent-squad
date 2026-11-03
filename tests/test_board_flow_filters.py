@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.parse
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -278,8 +279,9 @@ def _page_line(hub, prefix):
 def _page_harness(hub, answers, drive, onchange=""):
     """The page's own bar and chart lines, run in node over stub elements. `fetch` answers from `answers`, keyed by URL,
     with the hub's own route payloads; the script `drive` acts on the page and prints JSON."""
-    lines = [_page_line(hub, p) for p in ("const barQuery=", "const flowOpen=", "const ltQ=", "const ltZoom=", "const ltGet=",
-                                          "const barMoved=", "const pickFilter=", "const saveLT=")]
+    lines = [_page_line(hub, p) for p in ("let FLOWFF=", "const barQuery=", "const flowOpen=", "const ltQ=", "const ltZoom=",
+                                          "const ltGet=", "const flowDetach=", "const barMoved=", "const pickFilter=",
+                                          "const saveLT=")]
     stubs = f"""
 const ANSWERS={json.dumps(answers)},FETCHED=[],DRAWN=[],SAVED=[],POLLED=[];
 const el=()=>({{hidden:true,handlers:{{}},addEventListener(t,f){{this.handlers[t]=f}}}});
@@ -520,3 +522,126 @@ console.log(JSON.stringify({fetched:FETCHED,ty:LT.ty,saved:SAVED,drawn:DRAWN[DRA
     assert out["ty"] == "bug"
     assert json.loads(out["saved"][-1])["ty"] == "bug", "the choice is saved with the other chart settings"
     assert out["drawn"]["lead"]["type"] == "bug"
+
+
+# -- the Board filter chip: one chip names the filter and stops one chart following it (#1147) --------------------------
+
+def _chip_render(hub, fw=(), fs=(), fk=(), stopped=False):
+    """The chip's markup, rendered by the page's own function."""
+    block = _flow_block(hub).split("const drawFlow")[0]
+    esc = _page_line(hub, "const esc=")
+    script = "\n".join(["const COLORS={},COLNAME={};", esc, "const ls={};", block,
+                        f"process.stdout.write(flowFilterChip({json.dumps(list(fw))},{json.dumps(list(fs))},"
+                        f"{json.dumps(list(fk))},{str(stopped).lower()}));"])
+    if shutil.which("node") is None:
+        pytest.skip("node is not installed")
+    result = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_board_filter_chip_appears_exactly_when_the_filter_is_set(hub):
+    """#1147: the chip is drawn exactly when Waves, Specs or Kinds is non-empty, and it names each one that is set."""
+    assert _chip_render(hub) == "", "an empty Board filter draws no chip"
+    chip = _chip_render(hub, fw=["5/4"], fs=["2"], fk=["bug"])
+    assert chip.count("id=ffchip") == 1, "one chip names the filter"
+    for name in ("Waves: 5/4", "Specs: 2", "Kinds: bug"):
+        assert name in chip, f"the chip does not name {name!r}"
+    assert "id=ffx" in chip and "Stop following" in chip, "the chip carries its one action"
+    assert _chip_render(hub, fk=["bug"]).count("Waves:") == 0, "an unset filter is not named"
+    markup = _chip_render(hub, fk=["<b>&"])
+    assert "<b>" not in markup and "&lt;b&gt;" in markup, "a filter name is escaped into the chip"
+
+
+def test_the_board_filter_chip_is_drawn_once_with_the_chart_tabs(hub):
+    """#1147: one chip element above the chart area, once, for both charts, never inside one chart's head."""
+    page = hub.PAGE
+    assert page.count("id=flowchips") == 1, "one chip element, once, for both charts"
+    assert page.index("<div class=rkt id=flowtabs>") < page.index("id=flowchips") < page.index("<div id=flowov"), \
+        "the chip does not sit above the chart area with the chart tabs"
+    assert "flowFilterChip(" in _page_line(hub, "function flowTabs("), "the chip is not drawn with the chart tabs"
+    for chart in ("const flowCFD=", "const ltChart=", "const flowLead="):
+        assert "ffchip" not in _page_line(hub, chart), "a chart draws its own copy of the filter chip"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_chip_stops_this_chart_following_and_leaves_the_board_filter_alone(hub, board):
+    """#1147: the chip's one action stops the open chart following the Board filter and writes no Board state."""
+    backlog = hub.COLUMN["issue_todo"]
+    items = [_item(hub, 1, backlog), _item(hub, 2, backlog, labels=["bug"])]
+    _seed(hub, items)
+    q_all, q_bug = _bar(), _bar(fk="bug")
+    answers = {f"/api/chart/cfd?{q_all}": hub.flow_cfd(*hub.board_filters(q_all)),
+               f"/api/chart/cfd?{q_bug}": hub.flow_cfd(*hub.board_filters(q_bug)),
+               f"/api/chart/lead?{q_all}": hub.flow_lead(*hub.board_filters(q_all)),
+               f"/api/chart/lead?{q_bug}": hub.flow_lead(*hub.board_filters(q_bug))}
+    out = _page_harness(hub, answers, """
+bo.fk=["bug"];
+await flowOpen("cfd");await settle();
+flowDetach();await settle();await settle();
+await flowOpen("lead");await settle();
+console.log(JSON.stringify({fetched:FETCHED,bo,ff:FLOWFF}));""")
+    assert out["fetched"] == [f"/api/chart/cfd?{q_bug}", f"/api/chart/cfd?{q_all}", f"/api/chart/lead?{q_bug}"], \
+        "the stopped chart reads again without the filter, and the other chart still follows it"
+    assert out["bo"]["fk"] == ["bug"], "the Board tab's own filter is untouched"
+    assert out["ff"] == {"cfd": True}, "only the chart the action named stopped following the filter"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_stopping_the_chip_on_a_zoomed_control_chart_reads_it_once(hub, board):
+    """#1147: the chip's one action reloads the zoomed control chart once, on the route without the Board filter.
+
+    The chart is zoomed, so the action follows the zoom route rather than the timeframe route; two reads would race
+    and draw whichever answer lands last."""
+    backlog = hub.COLUMN["issue_todo"]
+    _seed(hub, [_item(hub, 1, backlog), _item(hub, 2, backlog, labels=["bug"])])
+    q_bug, q_all = _bar(fk="bug"), _bar()
+    f, t = "2026-10-02T00:00:00.000Z", "2026-10-09T00:00:00.000Z"
+    span = "&scale=jira&a=&b="
+    from_q, to_q = urllib.parse.quote(f, safe=""), urllib.parse.quote(t, safe="")
+    zoom_bug = f"/api/leadtime?from={from_q}&to={to_q}{span}&{q_bug}"
+    zoom_all = f"/api/leadtime?from={from_q}&to={to_q}{span}&{q_all}"
+    answers = {f"/api/chart/lead?{q_bug}": hub.flow_lead(*hub.board_filters(q_bug)),
+               zoom_bug: {"dots": []}, zoom_all: {"dots": []}}
+    out = _page_harness(hub, answers, f"""
+bo.fk=["bug"];
+await flowOpen("lead");await settle();
+await ltZoom({json.dumps(f)},{json.dumps(t)});await settle();
+FETCHED.length=0;
+flowDetach();await settle();await settle();
+console.log(JSON.stringify({{fetched:FETCHED,ff:FLOWFF,bo}}));""")
+    assert out["fetched"] == [zoom_all], "the zoomed control chart reloads once, without the Board filter"
+    assert out["ff"] == {"lead": True}, "the control chart stopped following the filter"
+    assert out["bo"]["fk"] == ["bug"], "the Board tab's own filter is untouched"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_new_board_filter_makes_the_chart_follow_it_again(hub, board):
+    """#1147: a new Board filter is a new instruction, so a chart that stopped following reads with it again."""
+    backlog = hub.COLUMN["issue_todo"]
+    _seed(hub, [_item(hub, 1, backlog), _item(hub, 2, backlog, labels=["bug"])])
+    q_all, q_bug = _bar(), _bar(fk="bug")
+    answers = {f"/api/chart/cfd?{q}": hub.flow_cfd(*hub.board_filters(q)) for q in (q_all, q_bug)}
+    out = _page_harness(hub, answers, """
+bo.fk=["bug"];pickFilter("fkl","fk");
+await flowOpen("cfd");await settle();
+flowDetach();await settle();await settle();
+EL["#fkl"].handlers.change({target:{value:"bug",checked:false}});await settle();await settle();
+console.log(JSON.stringify({ff:FLOWFF,fetched:FETCHED,bo}));""")
+    assert out["ff"] == {}, "a new Board filter makes the chart follow it again"
+    assert out["fetched"][-1] == f"/api/chart/cfd?{q_all}", "the chart reads the new filter's route"
+    assert out["bo"]["fk"] == [], "the board keeps the new filter"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_cumulative_flow_route_carries_the_chart_type(hub, board):
+    """#1147, #985: the Type is one setting read by both charts; the CFD payload filters by it, so its route sends it."""
+    backlog = hub.COLUMN["issue_todo"]
+    _seed(hub, [_item(hub, 1, backlog), _item(hub, 2, backlog, labels=["bug"])])
+    q = _bar(ty="bug")
+    answers = {f"/api/chart/cfd?{q}": hub.flow_cfd(*hub.board_filters(q))}
+    out = _page_harness(hub, answers, """
+LT.ty="bug";await flowOpen("cfd");await settle();
+console.log(JSON.stringify({fetched:FETCHED}));""")
+    assert out["fetched"] == [f"/api/chart/cfd?{q}"], "the cumulative flow route carries the Type it filters by"
