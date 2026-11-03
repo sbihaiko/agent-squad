@@ -162,3 +162,30 @@ async def test_a_transport_failure_never_retries_a_message_over_the_ceiling():
     out, tried, _ = await session.run_chain(["a", "b"], call, backoff=0)
     assert seen == ["a"], "a ceiling ends the walk exactly as it did"
     assert out.kind == "adapter_error" and tried == []
+
+
+async def test_a_quota_that_a_dropped_connection_sits_beside_is_not_retried_on_the_same_entry():
+    """#1293: the provider answered (quota), so the entry is not a transport blip. It moves on at once, with no second call."""
+    seen = []
+    err = RuntimeError("API Error: 429 rate limit exceeded; connection reset by peer (exit code: 1)")
+
+    async def call(model, first):
+        seen.append(model)
+        return session.CallOutcome("adapter_error", error=err), {"model": model}
+
+    out, tried, _ = await session.run_chain(["a", "b"], call, backoff=0)
+    assert seen == ["a", "b"], "no fresh call on the same entry: the quota is the provider's answer"
+    assert [m for m, _ in tried] == ["a", "b"] and out.kind == "adapter_error"
+
+
+async def test_a_tool_server_that_refused_the_connection_is_still_a_transport_failure():
+    """A tool word beside a refused connection is not a tool refusal: the connection is what did not deliver."""
+    seen = []
+
+    async def call(model, first):
+        seen.append((model, first))
+        err = RuntimeError("the tool server stopped: Connection refused (ECONNREFUSED) (exit code: 1)")
+        return (session.CallOutcome("adapter_error", error=err) if len(seen) == 1 else outcome("result")), {"model": model}
+
+    out, tried, _ = await session.run_chain(["a"], call, backoff=0)
+    assert seen == [("a", True), ("a", False)] and out.kind == "result" and tried == []

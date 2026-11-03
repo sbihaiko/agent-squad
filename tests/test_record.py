@@ -195,3 +195,47 @@ def test_one_outcome_event_per_node_exit_holds_the_fold_fields(tmp_path):
     r.append("run_start", **START)
     ev = r.append("outcome", **{**OUTCOME, "reasons": ["loop_max_exhausted"]})
     assert ev["reasons"] == ["loop_max_exhausted"] and ev["entry"] == 1 and ev["pos"] == 2
+
+
+RETRIED = dict(node="router", entry=1, model="claude-opus-5-5", error="API Error: Connection refused (ECONNREFUSED)")
+
+
+def test_a_model_retried_event_is_registered_and_written_before_the_retry(tmp_path):
+    """#1293: a transport failure is retried once and the retry is on the record. The kind must be registered, or the
+    append raises before the retry and the run dies on its own bookkeeping."""
+    assert record.REQUIRED["model_retried"] == ["node", "entry", "model", "error"]
+    r = record.Record(tmp_path / "r.jsonl")
+    r.append("run_start", **START)
+    assert r.append("model_retried", **RETRIED)["pos"] == 2
+    assert record.read(r.path)[1]["event"] == "model_retried"
+    with pytest.raises(record.RecordError, match="lacks model"):
+        r.append("model_retried", **{k: v for k, v in RETRIED.items() if k != "model"})
+
+
+def test_every_kind_squad_writes_to_the_record_is_registered():
+    """The reverse of test_two_flows: every literal kind a squad module appends to a record, or hands to the adapter's sink
+    (which the engine binds to Record.append), is in REQUIRED. A kind passed in a variable is the sink's forwarding, and
+    each sink caller names its kind as a literal, so this scan sees it."""
+    import ast
+    root = DESIGN.parent.parent / "squad"
+    written = {}
+    for path in sorted(root.rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(), filename=str(path))):
+            if not (isinstance(node, ast.Call) and node.args and isinstance(node.args[0], ast.Constant)
+                    and isinstance(node.args[0].value, str)):
+                continue
+            fn = node.func
+            if isinstance(fn, ast.Attribute) and fn.attr == "sink" or isinstance(fn, ast.Name) and fn.id == "sink":
+                writes = True
+            elif isinstance(fn, ast.Attribute) and fn.attr == "append":
+                recv = fn.value
+                name = recv.id if isinstance(recv, ast.Name) else recv.attr if isinstance(recv, ast.Attribute) else None
+                writes = name in ("record", "rec", "r")
+            else:
+                writes = False
+            if writes:
+                written.setdefault(node.args[0].value, f"{path.relative_to(DESIGN.parent.parent)}:{node.lineno}")
+    assert {"call_start", "outcome", "verdict", "model_retried", "model_refused", "progress", "sandbox_deny",
+            "compaction"} <= set(written), "the scan must see the kinds the engine writes, or it guards nothing"
+    unregistered = {k: where for k, where in written.items() if k not in record.REQUIRED}
+    assert unregistered == {}, f"a kind is written but not registered in record.REQUIRED: {unregistered}"
