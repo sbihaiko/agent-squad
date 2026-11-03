@@ -152,24 +152,26 @@ sg_ledger_held() {
 # leaves a `SQUAD-NOT-STARTABLE:` line among its comments, and every dispatch path reads that line before it starts -- so the loop
 # cannot feed itself the same input again. health.sh writes it; autobug.sh and autofrontier.sh read it, once per candidate that got
 # past their cheap filters. Absent the marker, a comments read costs one request and changes nothing.
+# sg_not_startable <issue> [label]: 0 when the issue holds. The marker holds when it names this build or names none; a marker
+# another build wrote holds nothing (ADR-0159, rule 3). The frozen:not-startable label (label=1, read by the caller) holds too, but
+# only while no marker re-arms it: beside another build's marker it holds nothing, and with no marker at all it keeps its stop (rule 4).
 sg_not_startable() {
-  local out rc cur
+  local out rc cur lab=${2:-}
   out=$(gh_api "repos/$SG_REPO/issues/$1/comments?per_page=100" -q '.[].body'); rc=$?
   # A refused read is not "no marker": it is no answer at all, and the caller's own guards still apply (#1855). Reading the
   # refusal as a negative here would be the same defect the wrapper in autobug.sh exists to stop.
   [ "$rc" -eq 0 ] || return 1
   cur=$(sg_loop_build 2>/dev/null) || cur=""
-  # A marker names the build that wrote it (owner answer B2): the same build keeps the stop, another build re-arms it,
-  # and a marker that names none, or a build that cannot be read, keeps the stop because neither proves anything.
-  printf '%s\n' "$out" | awk -v cur="$cur" '
+  printf '%s\n' "$out" | awk -v cur="$cur" -v lab="$lab" '
     /^SQUAD-NOT-STARTABLE:/ {
+      seen = 1
       if (match($0, /build=[0-9a-f]+/)) {
         b = substr($0, RSTART + 6, RLENGTH - 6)
         if (cur != "" && b != cur) next      # written by another build: re-armed
       }
-      found = 1; exit
+      held = 1; exit
     }
-    END { exit(found ? 0 : 1) }'
+    END { if (held || (lab != "" && !seen)) exit 0; exit 1 }'
 }
 # A ticket whose acceptance commands name a repository path the repository does not hold is not dispatched (#729): the run
 # would spend its budget and end failed on a command that cannot pass (run-20261021-043520-76754d named three scripts that did

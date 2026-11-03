@@ -208,7 +208,7 @@ while [ $i -lt ${#cands[@]} ]; do
   # commit a decision he has not made. The same holds for an issue that waits on the owner, one closed as not-work, and
   # one waiting on an answer. The bug label is skipped here too: autobug.sh owns those.
   # A run parent rolls a run's children up and is never work (#340).
-  skip=; bad=; for s in "${SG_BUG_LABEL:-bug}" debt run-parent frozen:owner frozen:dependency frozen:not-startable ${SG_FRONTIER_SKIP_LABELS//,/ }; do case ",$labels," in *",$s,"*) skip=1; bad=$s;; esac; done
+  skip=; bad=; for s in "${SG_BUG_LABEL:-bug}" debt run-parent frozen:owner frozen:dependency ${SG_FRONTIER_SKIP_LABELS//,/ }; do case ",$labels," in *",$s,"*) skip=1; bad=$s;; esac; done
   [ -n "$skip" ] && { [ -z "$card" ] || why_card "$n" "skip label" "$bad"; continue; }
   case ",$labels," in *",$SG_FRONTIER_LABEL,"*) ;; *) [ -z "$card" ] || why_card "$n" "no go label"; continue;; esac   # no go label, no dispatch (#485)
   case "$todo" in *" $n "*) ;; *) continue;; esac   # the card is not in Todo: the owner has not started it (#550)
@@ -217,7 +217,12 @@ while [ $i -lt ${#cands[@]} ]; do
   jq -c --argjson n "$n" '[.[]|select(.number==$n)][0] // empty' "$F/issues.json" > "$F/issue-$n.json" 2>/dev/null
   # The list's entry decides; only an entry that carried no comments costs the comments read.
   ns=$(jq -r 'if .not_startable == null then "unread" else .not_startable end' "$F/issue-$n.json" 2>/dev/null)
-  { [ "$ns" = true ] || { [ "$ns" != false ] && sg_not_startable "$n"; }; } && { why_card "$n" "not startable" "SQUAD-NOT-STARTABLE among its comments"; echo "FRONTIER skip #$n: SQUAD-NOT-STARTABLE among its comments (a failure the loop already repeated)"; continue; }
+  # The frozen:not-startable label holds only while no marker re-arms it: the marker's build decides (ADR-0159), so the label is read
+  # with the marker and never alone past it. A list entry that says the marker holds needs no read; one that says it does not still
+  # needs one when the label is there, to tell a marker of another build from no marker at all.
+  flab=; case ",$labels," in *",frozen:not-startable,"*) flab=1;; esac
+  hold=; if [ "$ns" = true ]; then hold=1; elif [ "$ns" != false ] || [ -n "$flab" ]; then sg_not_startable "$n" "$flab" && hold=1; fi
+  [ -n "$hold" ] && { why_card "$n" "not startable" "SQUAD-NOT-STARTABLE (its marker, or its label with no marker to re-arm it)"; echo "FRONTIER skip #$n: SQUAD-NOT-STARTABLE (its marker, or its frozen:not-startable label with no marker to re-arm it) holds it"; continue; }
   h=$(sg_ledger_held "$n") && { why_card "$n" held "a corrupt ledger holds it"; echo "FRONTIER skip #$n: $h"; continue; }   # a corrupt ledger holds its issue (ADR-0149)
   sg_ac_refused "$n" "$F/issue-$n.json" FRONTIER && { why_card "$n" "ac paths" "an acceptance command names a missing path"; continue; }   # an acceptance command on a missing script (#729)
   stack_out=$(SG_STACK_ISSUE="$F/issue-$n.json" "$here/stack.sh" "$n" 2>&1)
