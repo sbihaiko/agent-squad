@@ -67,6 +67,16 @@ def test_a_number_field_the_board_carries_is_not_reported():
     assert not [line for line in lines if "Gate Tries" in line], lines
 
 
+def test_a_holder_field_the_definition_types_is_planned_once():
+    """scalars() and HOLDER_FIELDS name their fields apart. A holder field typed in the definition is created as text by
+    the holder row, so the scalars list must not also name it: two plan lines would be a double create in --apply."""
+    definition = {**DEFINITION, "fieldNames": {**DEFINITION["fieldNames"], "run": "Run"}, "run": {"type": "text"}}
+    rows = board_define.diff(definition, board_define.snapshot(FIELDS))
+
+    assert [name for name, *_ in rows].count("Run") == 1, rows
+    assert board_define.report(rows).count("plan Run: create text field") == 1, board_define.report(rows)
+
+
 class Capture:
     """A binding that records every mutation body, so the created field's type is read from the write itself."""
 

@@ -28,9 +28,11 @@ def text(v):
 
 
 def scalars(definition):
-    """[(field name, type)] for each field the definition names without options: its entry is the field's type, so the
-    applier creates it with that type (the Gate Tries count is a number, the holder fields are text)."""
-    return [(name, definition[key]["type"]) for key, name in definition["fieldNames"].items() if key not in GROUPS]
+    """[(field name, type)] for each typed field the definition names: its entry is the field's type, so the applier
+    creates it with that type (the Gate Tries count is a number). A holder field is created as text by its own row, so a
+    definition that also types one never names it twice: the two sets stay disjoint."""
+    return [(name, definition[key]["type"]) for key, name in definition["fieldNames"].items()
+            if key not in GROUPS and name not in HOLDER_FIELDS]
 
 
 def snapshot(fields):

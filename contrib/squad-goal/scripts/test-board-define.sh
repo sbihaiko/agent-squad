@@ -125,7 +125,9 @@ o=$(PATH="$T/rbin:$PATH" SG_STATE="$T/st2" SG_BOARD_READ_BACKOFF=0 python3 "$T/b
 
 # The shipped definition itself: eight columns with Gating between Code Complete and Closed, its own colour, the actor and
 # the rule that an attempt never moves a card, and the Gate Tries number field (spec #1218).
-python3 - "$(cd "$(dirname "$src")" && pwd)/board-definition.json" <<'P' && ok "the shipped definition names eight columns, Gating between Code Complete and Closed, and Gate Tries" || ko "shipped definition: $(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print([s["name"] for s in d["statuses"]], d["fieldNames"], d.get("gateTries"))' "$(cd "$(dirname "$src")" && pwd)/board-definition.json" 2>&1)"
+def="$(cd "$(dirname "$src")" && pwd)/board-definition.json"
+if [ ! -f "$def" ]; then ko "shipped definition: $def is missing"
+elif o=$(python3 - "$def" 2>&1 <<'P'
 import json, sys
 d = json.load(open(sys.argv[1])); names = [s["name"] for s in d["statuses"]]
 assert len(names) == 8, names
@@ -137,5 +139,7 @@ assert g["actor"] == "The gate" and g["terminal"] is False, g
 assert "An attempt is a marker, not a move: the card leaves Gating only forward." in d["rules"], d["rules"]
 assert d["fieldNames"]["gateTries"] == "Gate Tries" and d["gateTries"] == {"type": "number"}, d["fieldNames"]
 P
+); then ok "the shipped definition names eight columns, Gating between Code Complete and Closed, and Gate Tries"
+else ko "shipped definition: $(printf '%s\n' "$o" | tail -n 1)"; fi
 
 rm -rf "$T"; [ "$fail" -eq 0 ] && echo "TDD GREEN: board_define" || exit 1

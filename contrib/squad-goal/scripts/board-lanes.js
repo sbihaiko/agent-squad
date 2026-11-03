@@ -55,7 +55,7 @@ const cardSpec=x=>x.sp?x.n:x.pa;   // a spec card wears its own color
 // The wave chip (#917): text that names the card's wave, never a shade; a card with no wave shows none.
 const waveChip=x=>{const w=laneWaveOf(x);return w===null?"":`<span class=lchip data-k=wave title="wave ${w}">W${w}</span>`};
 // </card-rules>
-const SPEC_IN_FLIGHT=["Doing","Code Review","Code Complete","Gating","Pushing","Testing"];   // a ticket past dispatch and before done (board_facts.py LIVE_WORK)
+const SPEC_IN_FLIGHT=["Todo","In Progress","Doing","Code Review","Code Complete","Gating"];   // a ticket in flight, identical to board_facts.py LIVE_WORK
 // groups: the issue columns in board order, each { name, items }. o: { mode: "spec"|"wave", fw, fs, fk, text, lc, hideDone,
 // closed, hidden }. `text` is the search predicate; progress counts every row, so a search or a filter never moves a bar.
 // Returns { cols, vc, hc, lanes }: vc are the columns drawn, hc the hidden ones with their counts, lanes the shown lanes in order.

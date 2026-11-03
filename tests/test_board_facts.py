@@ -1,8 +1,11 @@
 """The board facts have one runtime producer, and the column table reads them (ADR-0145)."""
 import importlib.util
+import json
+import re
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "contrib" / "squad-goal" / "scripts"
+LANES_JS = SCRIPTS / "board-lanes.js"
 
 
 def _module(name):
@@ -89,6 +92,14 @@ def test_the_child_live_fact_marks_a_ticket_in_flight():
     assert facts.spec_facts(["Gating"]) == {"child_live": True}
     assert facts.spec_facts(["Code Review", "Todo"]) == {"child_live": True}
     assert facts.spec_facts(["Backlog", "Closed"]) == {"child_live": False}
+
+
+def test_the_page_counts_the_same_columns_in_flight_as_the_facts():
+    """The lane counts a spec's in-flight children by a list copied from LIVE_WORK (board-lanes.js). A member in one list
+    and not the other makes the page and the facts read the same card differently (#1254)."""
+    found = re.search(r"const SPEC_IN_FLIGHT=(\[[^\]]*\]);", LANES_JS.read_text())
+    assert found, "board-lanes.js holds no SPEC_IN_FLIGHT list"
+    assert json.loads(found.group(1)) == list(facts.LIVE_WORK), "the page counts a different set of columns in flight"
 
 
 def test_the_hub_legacy_table_names_no_pull_request_fact():

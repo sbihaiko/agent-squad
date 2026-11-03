@@ -290,6 +290,14 @@ def test_a_column_added_later_leaves_the_ones_already_there_alone(hub):
     assert now == was, "a column added later restyled the ones already there"
 
 
+def test_a_ring_colour_never_matches_a_named_column_colour(hub):
+    """Gating took the ring's pink, so that slot moved to amber (#1254). A named column that later lands on a ring colour
+    would restyle a user column silently: this guard names the collision where it happens."""
+    ring, named = _col(hub, "RING"), _col(hub, "Object.values(COLORS)")
+
+    assert not set(ring) & set(named), "a ring colour is a named column's colour"
+
+
 def test_every_column_colour_reaches_aa_against_the_chip(hub):
     colours = _col(hub, "Object.values(COLORS)") + _col(hub, "RING")
     for c in colours:

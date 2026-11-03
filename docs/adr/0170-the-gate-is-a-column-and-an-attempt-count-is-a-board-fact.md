@@ -46,6 +46,10 @@ carries.
   vocabulary without a second writer.
 - A published definition that lags the pinned copy is reported by the pin command rather than adopted,
   and the published copy itself moves by the operator's publish, never by this repository's suite.
+- Gating took the pink the ring had reserved for a user column, so the ring's third slot moved to amber
+  (`--chart-series-4`). A user column that lands in that slot wears a different colour than it did
+  before; this line names the recolour as a decision, and a guard refuses a ring colour that equals a
+  named column colour, so a future column colour cannot collide with one silently.
 
 ## Guard
 
@@ -54,4 +58,6 @@ field, and the one-step pin. `tests/test_board_columns.py` holds the lane order,
 board and the flow bands. `tests/test_board_define.py` and `contrib/squad-goal/scripts/test-board-define.sh`
 hold the applier's number field. `tests/test_board_migrate.py` and
 `contrib/squad-goal/scripts/test-board-migrate.sh` hold a retired option's refusal. `tests/test_board_facts.py`
-holds a ticket in Gating as a ticket in flight.
+holds a ticket in Gating as a ticket in flight, and the page's in-flight list as the facts' own list.
+`tests/test_hub_board_blockers.py` holds the column colours and refuses a ring colour that a named column
+also wears.
