@@ -5074,7 +5074,7 @@ function mdlRoute(x,dflt){return x.registered===false?`<span class=ur>unregister
    The chain row's old switch is read only: a file that holds it shows "off (chain)" and the panel writes none. */
 function mdlOffM(m){return !!(mdl.model_off&&mdl.model_off[m])}
 function mdlChip(st){return st==="on"?"":`<span class="stc${String(st).startsWith("off")?" off":" lim"}">${esc(String(st).startsWith("off")?"off":st)}</span>`}   // a state chip shows only at limit or off (#913)
-function mdlTable(){const rows=mdl.models||[];return `<h3>Models</h3><p class=m>On or off, for every chain. An off model leaves the add lists; a chain that still lists it keeps the row, struck through, and skips it.</p><table class=mtab><thead><tr><th>Model</th><th>Subscription</th><th>State</th><th>On</th></tr></thead><tbody>`+rows.map(r=>{const of=mdlOffM(r.id),x=mdlBox("known",r.id);return`<tr class="${of?"off":""}"><td class=mn title="${esc(r.id)} · ${esc(x.text)}">${esc(r.label||mdlName(x,r.id))}</td><td>${mdlSub(r)}</td><td>${mdlChip(of?"off (model)":r.state)}</td><td><button class="mtg${of?" off":""}" data-mt="${esc(r.id)}" aria-pressed="${!of}" aria-label="${esc(r.id)} on" title="${of?"off (model): press to switch it on in every chain":"on: press to switch it off in every chain"}">${of?"off":"on"}</button></td></tr>`}).join("")+`</tbody></table>`}
+function mdlTable(){const rows=mdl.models||[];return `<h3>Models</h3><p class=m>On or off, for every chain. An off model leaves the add lists; a chain that still lists it keeps the row, struck through, and skips it.</p><table class=mtab><thead><tr><th>Model</th><th>Subscription</th><th>State</th><th>On</th></tr></thead><tbody>`+rows.map(r=>{const of=mdlOffM(r.id),x=mdlBox("known",r.id);return`<tr class="${of?"off":""}"><td class=mn title="${esc(r.id)} · ${esc(x.text)}">${r.label?esc(r.label):mdlName(x,r.id)}</td><td>${mdlSub(r)}</td><td>${mdlChip(of?"off (model)":r.state)}</td><td><button class="mtg${of?" off":""}" data-mt="${esc(r.id)}" aria-pressed="${!of}" aria-label="${esc(r.id)} on" title="${of?"off (model): press to switch it on in every chain":"on: press to switch it off in every chain"}">${of?"off":"on"}</button></td></tr>`}).join("")+`</tbody></table>`}
 const MHELP=`<details class=hlp><summary>How it works</summary><ul><li><b>Order</b>: ↑ ↓ move a model; ✕ marks it for removal: the row stays, struck through, until Save, and ↺ keeps it; "+ add a model…" puts one back.</li><li><b>Off</b> is set once per model and applies in every chain. An off model is skipped where a chain still lists it (the row stays, struck through, and ✕ still removes it) and is not offered in "+ add a model…". Switching it on restores every row.</li><li><b>Hours</b> are set per chain row: <code>HH-HH</code> local, may wrap midnight (<code>22-07</code>); empty means always. A row may also name days and UTC, clauses joined by <code>;</code>: <code>mon-fri 00-01,04-06,10-24 UTC; sat-sun 00-24 UTC</code> is DeepSeek off-peak. Outside its hours the row is skipped like off, and the next row runs.</li><li><b>Effort</b> is low to max, per chain row; medium is the default.</li><li><b>Save</b>, at the foot of Settings, shows the change (- before, + after) and writes only when you confirm.</li></ul></details>`;
 function mdlRender(){const b=$("#mbody");if(!mdl){b.innerHTML="<span class=m>Loading the data.</span>";return}
  {const lc=mdl.last_coding||(mdl.coding_models||[])[0]||"",x=lc?mdlBox("coding_models",lc):MBOX0;$("#mdsr").textContent=x.llm?`${x.llm} · ${lc}`:lc}   // the model the last run coded with, not the chain's head
@@ -6428,30 +6428,30 @@ def model_status(raw, states):
             "quota": {"spent": bool(q["limited"]), "reason": q["reason"], "until": q["until"],
                       "until_text": time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(q["until"])) if q["until"] else None}}
 def model_rows(d, states):
-    """The models table (SPEC 889 #920): one row per model across the four chains, with its subscription and quota and
-    its state. A model switched off at model level reads "off (model)"; a chain row the file still holds off reads
-    "off (chain)"; a spent subscription reads "at limit"; otherwise "on". The table holds no hours (#913).
+    """The models table (SPEC 889 #920): one row per (model, route) across the four chains, with its subscription and
+    quota and its state. A model switched off at model level reads "off (model)"; a chain row the file still holds off
+    reads "off (chain)"; a spent subscription reads "at limit"; otherwise "on". The table holds no hours (#913).
 
-    Each row carries the label it draws (#1264): one spelling of a model shows the plain registry label, but two
-    spellings of one model on two routes would read the same, so every row of that model shows the label beside its
-    route (`DeepSeek V4.1 Flash · gateway`, `… · claude CLI`); a label that still repeats takes the row's id."""
-    ids = list(dict.fromkeys(bare_id(m) for k in CHAINS for m in d.get(k, [])))
-    entry = {}   # the first chain entry that makes each row, kept for its spelling and route (model_box)
+    The route is the one the chain row draws (model_box, ADR-0137): `claude-sonnet-5-5` in coding_models runs on the
+    gateway while `claude:claude-sonnet-5-5` in review_models runs through the claude CLI, so those are two rows.
+    Each row carries the label it draws (#1264): a model on one route shows the plain registry label, but two rows of
+    one model would read the same, so every row of that model shows the label beside its route
+    (`DeepSeek V4.1 Flash · gateway`, `… · claude CLI`); a label that still repeats takes the row's id."""
+    entry = {}   # the first chain entry that makes each (bare id, route) row, kept for its box
     for k in CHAINS:
-        for m in d.get(k, []): entry.setdefault(bare_id(m), (k, m))
+        for m in d.get(k, []): entry.setdefault((bare_id(m), model_box(m, k)["route"]), (k, m))
     chain_off_ids = {bare_id(m) for k in CHAINS for m in d.get(k, []) if chain_off(d, k, m)}
     off = model_off_ids(d)
     rows, groups = [], {}
-    for b in ids:
+    for (b, route), (chain, raw) in entry.items():
         st = model_status(b, states)
         is_off = modelreg.normalize(b).id in off
         spent = bool(st["quota"] and st["quota"]["spent"])
         state = "off (model)" if is_off else "off (chain)" if b in chain_off_ids else "at limit" if spent else "on"
-        chain, raw = entry[b]
         box = model_box(raw, chain)
         row = {"id": b, "off": is_off, "state": state, **st, "label": box["llm"] or b, "route": box["route"]}
         rows.append(row)
-        groups.setdefault(modelreg.normalize(entry[b][1]).id, []).append(row)
+        groups.setdefault(modelreg.normalize(raw).id, []).append(row)
     for group in groups.values():
         if len(group) > 1:
             for r in group: r["label"] = f"{r['label']} · {r['route']}" if r["route"] else r["label"]
