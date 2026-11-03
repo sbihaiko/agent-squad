@@ -121,6 +121,12 @@ def test_the_instruments_lead_the_monitor_and_throughput_follows(hub):
     assert monitor.index("id=ispeed") < monitor.index("id=ispec")
 
 
+def test_the_loop_switch_closes_the_monitor_card(hub):
+    """The owner put the switch at the bottom of the Monitor: every instrument and the Specs tile sit above it."""
+    monitor = _section(hub.PAGE, "inst")
+    assert monitor.index("id=iloop") > monitor.index("id=ispec"), "the loop switch is not the last row of the Monitor"
+
+
 def test_the_throughput_row_sits_above_every_cost_and_subscription_section(hub):
     page = hub.PAGE
     after = page.index("id=ispeed")

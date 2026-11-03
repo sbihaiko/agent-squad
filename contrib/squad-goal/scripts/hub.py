@@ -4744,8 +4744,9 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #inst .lsw[aria-checked=true] i{transform:translateX(20px)}
 #inst .lsw:disabled{opacity:.6;cursor:default}#inst .lsw:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
 #inst .ls.on{color:var(--ok)}#inst .ls.off{color:var(--warn)}
-/* The Monitor's row is a flight instrument, not a settings block: no inset box, a tight gap, and the note under the row. */
-#inst .lnow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:0;margin:0 0 8px;border:0;border-radius:0;background:none}
+/* The Monitor's row is a flight instrument, not a settings block: no inset box, a tight gap, and the note under the row.
+   The row closes the card (owner): a hairline separates the switch from the instruments above it. */
+#inst .lnow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 0 0;margin:8px 0 0;border:0;border-top:1px solid var(--line);border-radius:0;background:none}
 #inst .lnow small{display:block;color:var(--mute)}#inst .lnow button{margin-left:auto}
 #inst .lerr{color:var(--err);font-size:var(--fs-caption);margin:4px 0 0}#inst .lwhy{color:var(--warn);font-size:var(--fs-caption);margin:4px 0 0}
 /* }INST-CSS */
@@ -4779,7 +4780,7 @@ html.sbshut #sbtn svg{transform:scaleX(-1)}
 <div id=win>
 <script id=sbboot>try{if(sideState(JSON.parse(localStorage.hub||"{}").side,matchMedia("(min-width: 601px)").matches))document.documentElement.classList.add("sbshut")}catch(e){}</script>
 <aside id=side><button id=sbtn type=button aria-label="Collapse the Monitor bar" aria-controls=side aria-expanded=true title="Collapse the Monitor bar"><svg viewBox="0 0 12 12" aria-hidden=true focusable=false><path d="M8 2L4 6l4 4" fill=none stroke=currentColor stroke-width=1.6 stroke-linecap=round stroke-linejoin=round /></svg></button><div id=sbbody>
-<details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div id=iloop></div><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div id=ispeed></div><div class=ian id=ian></div><div id=ispec></div></div></details>
+<details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div id=ispeed></div><div class=ian id=ian></div><div id=ispec></div><div id=iloop></div></div></details>
 <details id=usage class=sp><summary>Usage</summary><div class=sb><div class="igs isub" id=isub title="subscriptions: the used share of the weekly window and the days to its reset"></div></div></details><details id=stats class=sp><summary>Spend<span class=sr id=stsr></span></summary><div class=sb><h4>Tokens over time <span class=row id=per></span></h4><div id=chart></div><h4>Model tokens · this month</h4><div class=m id=piet>in + out</div><div id=pie></div></div></details>
 <details id=lrd class=sp open><summary>Live runs<span class=sr id=lrs></span></summary><div class=sb id=lrun></div></details>
 </div></aside>
