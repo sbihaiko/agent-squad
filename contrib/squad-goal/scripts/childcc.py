@@ -204,14 +204,12 @@ def last_turn(fx):   # the child's last turn of the fix run `fx` names: why it s
     return ""
 TAKEOVER_SECONDS = int(os.environ.get("SG_TAKEOVER_SECONDS", "1800"))   # the bound the janitor takes a run over at (ADR-0166)
 FIX_BUDGET_SECONDS = int(os.environ.get("SG_FIX_BUDGET_SECONDS", "810"))   # a fix run (about 450 s) and the review that reads it (about 360 s)
-def run_age(rd, now=None):
-    """The seconds since the run folder's own name says it started (`run-YYYYMMDD-HHMMSS-xxxxxx`), or None when the name
-    carries no time: the start is the name's, so this reads the one fact a live run always leaves behind."""
-    m = re.match(r"run-(\d{8})-(\d{6})", rd.name)
-    if not m: return None
-    try: started = time.mktime(time.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S"))
-    except (ValueError, OverflowError): return None
-    return (time.time() if now is None else now) - started
+def work_age(rd):
+    """The seconds since the run's record last moved, or None when the record cannot be read. This is the age the takeover
+    bound measures (ADR-0166: the bound measures work, never the wall clock since the start), and the janitor reads the same
+    one, so the two cannot disagree about how much time a run has left."""
+    try: return time.time() - (rd / "record.jsonl").stat().st_mtime
+    except OSError: return None
 def fix_round(rd, child, n, wt, fx, out):
     """A review here asked for CHANGES (#636). The first time, or when the findings changed after a fix run, one fix run
     starts in the child's worktree and the child is held: (False, line, True). Findings that a fix run left as they were
@@ -228,14 +226,14 @@ def fix_round(rd, child, n, wt, fx, out):
         subprocess.run(["bash", wave, "requeue", str(n), why], capture_output=True, env={**os.environ, "SG_REQUEUE_RUN": rd.name})   # the run is the key of the count (#609)
         record_requeue(rd.name, n, head_of(wt))   # the head the child was requeued on, so the pass waits for a new one (ADR-0149)
         return False, out + f"\nCHILD FIX REQUEUE #{n}: {why}", True
-    age = run_age(rd)
+    age = work_age(rd)
     if age is not None and TAKEOVER_SECONDS - age < FIX_BUDGET_SECONDS:
         # A fix started now dies with the run (ADR-0166): the fix needs FIX_BUDGET_SECONDS and the run has less. The child
-        # stays held with the findings on record, and no second run is spent on work the bound kills half done.
-        left = int(TAKEOVER_SECONDS - age)
+        # stays held with the findings on record, and no second run is spent on work the bound kills half done. The cause
+        # names no number: a deferral keys on it, and a clock in it would make every pass a new cause.
         HOLDS.add(f"{rd.name} {child}")
-        return False, out + (f"\nCHILD FIX SKIPPED #{n} ({rd.name} {child}): no run time left for a fix and its review "
-                             f"({left} s of {TAKEOVER_SECONDS} s left, {FIX_BUDGET_SECONDS} s needed)"), True
+        return False, out + (f"\nCHILD FIX SKIPPED #{n} ({rd.name} {child}): the run is near its takeover bound, so a fix "
+                             f"and its review would outlive it"), True
     f = subprocess.run(["bash", childfix, rd.name, str(n)], cwd=str(wt), capture_output=True, text=True)
     lines = f.stdout.strip().splitlines()
     HOLDS.add(f"{rd.name} {child}")

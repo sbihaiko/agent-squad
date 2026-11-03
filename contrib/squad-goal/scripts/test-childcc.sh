@@ -348,6 +348,7 @@ printf '**VERDICT: CHANGES**\n- [Blocking] a.py:3 the guard is missing\n' > "$T/
 printf '**VERDICT: CHANGES**\n- [Blocking] d.py:1 the guard is missing\n' > "$T/verdict-6102"
 export GH_NUMS="$GH_NUMS 6102:Doing"
 rrun run-20200101-000000-oldfix 6102 pass '' none
+touch -t 202001010000 "$T/co/runs/run-20200101-000000-oldfix/record.jsonl"   # the record last moved years ago: the age the takeover bound reads
 : > "$T/fix.calls"; : > "$WAVE_CALLS"
 out=$(fixpass run-20200101-000000-oldfix 6102); rc=$?
 [ ! -s "$T/fix.calls" ] && ok "a fix round with no run time left starts no fix run" || ko "a doomed fix started: $(cat "$T/fix.calls")"
