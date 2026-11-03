@@ -349,9 +349,11 @@ def test_overlay_migrates_saved_pixel_sizes_to_nearest_role():
 def test_identifiers_keep_mono_and_numeric_rows_keep_tabular_figures(surfaces):
     token_css = TOKENS_FILE.read_text()
     assert ".kr" in token_css and ".runrow" in token_css
-    phone = (SCRIPTS / "hub-mobile.html").read_text()
-    for selector in (".cid", ".runid", ".shb"):
-        assert selector in phone and "var(--font-mono)" in phone, f"phone identifier {selector} is not monospace"
+    phone_css = _served_css(surfaces["hub-mobile"])
+    for selector in (".card .cid", ".runid", ".shb", "#sh-set button"):
+        decls = _rule(phone_css, selector)
+        font = " ".join(decls.get(key, "") for key in ("font", "font-family"))
+        assert "var(--font-mono)" in font, f"phone identifier {selector} is not monospace"
     assert "font-variant-numeric:tabular-nums" in token_css
     dashboard = (ROOT / "dashboard/page.css").read_text()
     assert "font-family:var(--font-mono)" in dashboard and ".card .nm" in dashboard, \
