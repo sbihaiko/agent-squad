@@ -15,6 +15,9 @@ from tests.test_dashboard_layout import _page_css, _rules
 
 VIEWPORT = re.compile(r"<meta\s+name=[\"']viewport[\"']\s+content=[\"']([^\"']+)[\"']", re.I)
 WIDTH_QUERY = re.compile(r"\(\s*(max|min)-width\s*:\s*(\d+)px\s*\)")
+# A user-preference query says nothing about the width, and the page is laid out for a reader with no preference set, so
+# its rules do not apply here (#1140). Every other feature query still fails loudly: the page queries widths and this.
+PREFERENCE_QUERY = re.compile(r"\(\s*prefers-[\w-]+\s*:\s*[\w-]+\s*\)")
 
 
 def _applies(media, width):
@@ -22,6 +25,8 @@ def _applies(media, width):
     if not media:
         return True
     for part in media.split(" and "):
+        if PREFERENCE_QUERY.fullmatch(part.strip()):
+            return False
         m = WIDTH_QUERY.fullmatch(part.strip())
         assert m, f"the layout test models width queries only: {media!r}"
         bound = int(m.group(2))
