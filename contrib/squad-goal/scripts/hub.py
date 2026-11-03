@@ -2581,25 +2581,30 @@ def _billed(src, model, spend):
 
 PACE_WINDOW_H = 24
 
-def spend_pace(runs, calls, now, src="both", window_h=PACE_WINDOW_H):
-    """The Spend box's two readings (#1251), computed here so the page only prints them. A finished run counts at the hour it
-    ended, a review call at the hour it started. The window is the last `window_h` one-hour slots back from `now`; a slot with
-    no run and no call is an idle hour, kept out of the median (never a zero). last60 sums what ended in the last 60 minutes.
-    `unpriced` counts the window's calls the price table cannot price: they carry 0.0 and are named, never hidden."""
+def spend_pace(runs, calls, now, window_h=PACE_WINDOW_H):
+    """The Spend box's two readings (#1251), in tokens (#1267), computed here so the page only prints them. The models run
+    on subscriptions, so the summary counts tokens, never dollars: a run's tokens are its in + out over every model, a
+    call's its in + out, whatever the billing source. A finished run counts at the hour it ended, a review call at the hour
+    it started. The window is the last `window_h` one-hour slots back from `now`; a slot with no run and no call is an idle
+    hour, kept out of the median (never a zero). last60_tokens sums what ended or started in the last 60 minutes.
+    `unpriced` counts the window's calls the price table cannot price: their dollars are 0.0 and they are named, never
+    hidden."""
+    def _tok(r):   # a run's tokens, as the token ring counts them (#1073)
+        return sum(v["in"] + v["out"] for v in r["mod"].values())
     slots, unpriced = {}, 0
     def _slot(t):
         age = now - t
         return int(age // 3600) if 0 <= age < window_h * 3600 else None
     for r in runs:
         k = _slot(r.get("t1", r["t0"])) if r.get("done") else None
-        if k is not None: slots[k] = slots.get(k, 0.0) + r["spend"]
+        if k is not None: slots[k] = slots.get(k, 0) + _tok(r)
     for c in calls:
         k = _slot(c["t0"])
         if k is None: continue
-        slots[k] = slots.get(k, 0.0) + _billed(src, c["model"], c["spend"]); unpriced += bool(c["unpriced"])
-    last60 = sum(r["spend"] for r in runs if r.get("done") and 0 <= now - r.get("t1", r["t0"]) < 3600) + sum(_billed(src, c["model"], c["spend"]) for c in calls if 0 <= now - c["t0"] < 3600)
+        slots[k] = slots.get(k, 0) + c["in"] + c["out"]; unpriced += bool(c["unpriced"])
+    last60 = sum(_tok(r) for r in runs if r.get("done") and 0 <= now - r.get("t1", r["t0"]) < 3600) + sum(c["in"] + c["out"] for c in calls if 0 <= now - c["t0"] < 3600)
     return {"window_hours": window_h, "active_hours": len(slots), "idle_hours": window_h - len(slots),
-            "median_hour": round(st.median(slots.values()), 2) if slots else None, "last60": round(last60, 2), "unpriced": unpriced}
+            "median_tokens": int(round(st.median(slots.values()))) if slots else None, "last60_tokens": int(last60), "unpriced": unpriced}
 
 def stats(period, src="both"):
     fmt = {"hour": "%Y-%m-%d %H:00", "day": "%Y-%m-%d", "month": "%Y-%m"}[period]
@@ -2650,7 +2655,7 @@ def stats(period, src="both"):
         return box
     models = sorted(({**{k: v for k, v in x.items() if k not in ("src", "srcs")}, "spend": round(x["spend"], 2), "box": _box(x)} for x in mt.values()),
                     key=lambda x: -(x["in"] + x["out"]))
-    pace = spend_pace(allr, calls, time.time(), src)
+    pace = spend_pace(allr, calls, time.time())
     return {"buckets": rows, "pace": pace, "totals": {**{k: round(v, 2) for k, v in tot.items() if not k.startswith("tok_")}, **{k: tot[k] for k in ("tok_today", "tok_month", "tok_all")}}, "models": models}
 
 def adapter_errors():
@@ -5351,8 +5356,8 @@ async function pollStats(){try{pollSubs();
   const st=await (await fetch("/api/stats?period="+per+"&src="+src)).json();
   $("#per").innerHTML=["hour","day","month"].map(p=>`<button data-p=${p} class="${p===per?"on":""}">per ${p}</button>`).join("");
   document.querySelectorAll("#per button").forEach(b=>b.onclick=()=>{per=b.dataset.p;save();pollStats()});
-  {const p=st.pace,u=n=>n==null?"no runs":"$"+n.toFixed(2);   // the hub computed the readings; the page prints them
-   $("#stsr").textContent=`${u(p.median_hour)}/h median, ${p.active_hours} of ${p.window_hours} h with runs (last ${p.window_hours} h) · ${u(p.last60)} last 60 min`+(p.unpriced?` · ${p.unpriced} unpriced call${p.unpriced>1?"s":""}`:"")+` · ${tk(st.totals.tok_today)} tokens today`}
+  {const p=st.pace,u=n=>n==null?"no runs":tk(n);   // the hub computed the readings; the page prints them in tokens (#1267)
+   $("#stsr").textContent=`${u(p.median_tokens)} tokens/h median, ${p.active_hours} of ${p.window_hours} h with runs (last ${p.window_hours} h) · ${u(p.last60_tokens)} tokens last 60 min`+(p.unpriced?` · ${p.unpriced} unpriced call${p.unpriced>1?"s":""}`:"")+` · ${tk(st.totals.tok_today)} tokens today`}
   $("#chart").innerHTML=bars(st.buckets);$("#pie").innerHTML=pie(st.models||[]);
   // The Speed block and the open-branches list left the panel (owner, 2026-11-01): the panel leads with the throughput, the
   // subscription gauges, the spend chart and the token ring. The PR speed figures stay on the hub's own reading, not here.
