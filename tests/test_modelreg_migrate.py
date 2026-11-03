@@ -59,7 +59,7 @@ def test_compatible_review_takes_any_route_and_vision_needs_vision(reg):
 
 
 def test_compatible_refuses_a_retired_or_an_unknown_id(reg):
-    ok, reason = mr.compatible("grok-4.5", "review", reg=reg)
+    ok, reason = mr.compatible("grok-4.6", "review", reg=reg)
     assert ok is False and reason == "retired"
     ok, reason = mr.compatible("no-such-model", "review", reg=reg)
     assert ok is False and "unknown" in reason
@@ -113,7 +113,7 @@ def test_migrate_drops_every_incompatible_entry_and_names_the_reason(tmp_path, r
     assert "gateway" in dropped[("coding", "gemini-3.8-flash-high")]
     assert ("coding", "claude-deepseek-flash[1m]") not in dropped   # #683: it uses tools
     assert dropped[("vision", "deepseek-v4-flash")] == "no vision capability"
-    assert dropped[("vision", "grok-4.5")] == "retired"
+    assert dropped[("vision", "grok-4.6")] == "retired"
 
 
 def test_the_migrated_file_reads_through_chain(tmp_path, reg):
@@ -142,7 +142,7 @@ def test_migrate_drops_a_retired_entry_on_the_live_shape(tmp_path, reg):
     _, result = _migrate(tmp_path, LIVE, reg=reg)
     dropped = {(d["chain"], d["raw"]): d["reason"] for d in result["dropped"]}
     assert dropped[("review", "grok-4.6")] == "retired"
-    assert dropped[("vision", "grok-4.5")] == "retired"
+    assert dropped[("vision", "grok-4.6")] == "retired"
     assert ("coding", "claude-deepseek-flash[1m]") not in dropped   # #683: it uses tools
 
 

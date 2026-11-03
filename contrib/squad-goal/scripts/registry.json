@@ -1063,7 +1063,7 @@
       "aliases": [
         "claude-grok-4.5"
       ],
-      "retired": true,
+      "retired": false,
       "gateway_only": false
     },
     {

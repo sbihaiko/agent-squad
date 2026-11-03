@@ -77,7 +77,7 @@ def test_haiku_has_an_id_and_the_three_short_names_are_aliases(reg):
 
 
 def test_retired_history_ids_have_an_entry_a_label_and_a_price(reg):
-    for mid in ("grok-4.5", "grok-4.6", "gpt-5.6-sol-fast", "gpt-5.5"):   # gpt-6.1-sol answers on codex, so it is live (#686)
+    for mid in ("grok-4.6", "gpt-5.6-sol-fast", "gpt-5.5"):   # gpt-6.1-sol (#686) and grok-4.5 answer, so they are live
         e = _entry(reg, mid)
         assert e.retired is True, mid
         assert e.label and e.display_price, mid
@@ -648,3 +648,10 @@ def test_write_chains_with_no_doc_and_no_file_writes_the_chains(tmp_path):
     out = json.loads(path.read_text())
     assert set(out) == {"schema_version", "chains"}, out
     assert [e["id"] for e in out["chains"]["coding"]] == ["grok-4.7"], out
+
+
+def test_grok_4_5_is_live_and_runs_the_router_on_the_gateway():
+    """Grok 4.5 passed the router contract 3 of 3 on the gateway, so the registry keeps it live, and the hub panel shows it."""
+    ok, reason = mr.compatible("claude-grok-4.5", "router")
+    assert (ok, reason) == (True, None)
+    assert mr.model("claude-grok-4.5").retired is False

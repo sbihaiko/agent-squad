@@ -143,10 +143,10 @@ def test_switching_every_entry_of_a_chain_off_is_allowed(hub, models):
     assert [e["id"] for e in saved] == ["gemini-3.8-flash", "claude-opus-5-5", "grok-4.5"]   # order untouched
     assert all(e.get("on") is not False for e in saved)                                      # the chain holds no switch
     assert set(json.loads(models.read_text())["model_off"]) == {modelreg.normalize(m).id for m in ("gemini-3.8-flash-high", "claude-opus-5-5", "grok-4.5")}
-    assert out["model_off"] == {"gemini-3.8-flash": True, "claude-opus-5-5": True}   # the rows the panel draws
+    assert out["model_off"] == {"gemini-3.8-flash": True, "claude-opus-5-5": True, "grok-4.5": True}   # the rows the panel draws
     # the panel draws only the entries a reviewer can run, so the retired grok row is hidden from it, not deleted; the
     # `-high` row reads medium in the panel (this v1 file carries no effort for it), so its suffix goes with the Save
-    assert out["review_models"] == ["gemini-3.8-flash", "claude-opus-5-5"]
+    assert out["review_models"] == ["gemini-3.8-flash", "claude-opus-5-5", "grok-4.5"]
 
 
 
