@@ -183,6 +183,26 @@ async def test_a_request_naming_an_effort_over_the_allow_is_accepted_at_the_allo
 
 
 @pytest.mark.anyio
+async def test_a_child_that_names_no_effort_runs_at_its_chain_entrys_effort(tmp_path):
+    """The panel draws one effort per row (SPEC 750): a request that names no effort runs at its own chain entry's
+    effort, never at the engine's default, so a chain row the owner set to low runs the child at low."""
+    r = req()
+    r.pop("effort")
+    eng = make(tmp_path, {"router": routed(r), "route.router.1": CHILD}, kind_efforts={"coding": {MODEL: "low"}})
+    await eng.run()
+    assert [e["definition"]["effort"] for e in ev(tmp_path, "spawn_accepted")] == ["low"]
+
+
+@pytest.mark.anyio
+async def test_a_named_effort_still_wins_over_the_chain_entrys(tmp_path):
+    """The chain's effort is a default, never a cap: a request that names one keeps it."""
+    eng = make(tmp_path, {"router": routed(req(effort="medium")), "route.router.1": CHILD},
+               kind_efforts={"coding": {MODEL: "low"}})
+    await eng.run()
+    assert [e["definition"]["effort"] for e in ev(tmp_path, "spawn_accepted")] == ["medium"]
+
+
+@pytest.mark.anyio
 async def test_zero_accepted_children_fold_to_fail_no_dispatch(tmp_path):
     eng = make(tmp_path, {"router": routed()})
     v = await eng.run()
