@@ -132,10 +132,10 @@ def test_the_fill_has_a_reduced_motion_rule(hub):
 
 
 def test_the_bar_sits_below_the_tiles_and_above_the_load_lines(hub):
-    """The Monitor carries the one loop switch and no late-writes row (owner): the switch leads, then the tiles and the specs."""
+    """The Monitor carries the one loop switch and no late-writes row (owner): the instruments lead, the switch closes the card."""
     page = hub.PAGE
     assert "id=iloop" in page and "id=ilate" not in page
-    assert page.index("id=iloop") < page.index("id=igs") < page.index("id=ian") < page.index("id=ispec")
+    assert page.index("id=igs") < page.index("id=ian") < page.index("id=ispec") < page.index("id=iloop")
 
 
 # ---- the No spec group: bugs and single tickets (owner) ----
