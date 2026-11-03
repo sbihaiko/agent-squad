@@ -202,6 +202,16 @@ def last_turn(fx):   # the child's last turn of the fix run `fx` names: why it s
         last = diag.get("ended", {}).get("last") if isinstance(diag, dict) and isinstance(diag.get("ended"), dict) else None
         if last: return " ".join(str(last).split())[:300]
     return ""
+TAKEOVER_SECONDS = int(os.environ.get("SG_TAKEOVER_SECONDS", "1800"))   # the bound the janitor takes a run over at (ADR-0166)
+FIX_BUDGET_SECONDS = int(os.environ.get("SG_FIX_BUDGET_SECONDS", "810"))   # a fix run (about 450 s) and the review that reads it (about 360 s)
+def run_age(rd, now=None):
+    """The seconds since the run folder's own name says it started (`run-YYYYMMDD-HHMMSS-xxxxxx`), or None when the name
+    carries no time: the start is the name's, so this reads the one fact a live run always leaves behind."""
+    m = re.match(r"run-(\d{8})-(\d{6})", rd.name)
+    if not m: return None
+    try: started = time.mktime(time.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S"))
+    except (ValueError, OverflowError): return None
+    return (time.time() if now is None else now) - started
 def fix_round(rd, child, n, wt, fx, out):
     """A review here asked for CHANGES (#636). The first time, or when the findings changed after a fix run, one fix run
     starts in the child's worktree and the child is held: (False, line, True). Findings that a fix run left as they were
@@ -218,6 +228,14 @@ def fix_round(rd, child, n, wt, fx, out):
         subprocess.run(["bash", wave, "requeue", str(n), why], capture_output=True, env={**os.environ, "SG_REQUEUE_RUN": rd.name})   # the run is the key of the count (#609)
         record_requeue(rd.name, n, head_of(wt))   # the head the child was requeued on, so the pass waits for a new one (ADR-0149)
         return False, out + f"\nCHILD FIX REQUEUE #{n}: {why}", True
+    age = run_age(rd)
+    if age is not None and TAKEOVER_SECONDS - age < FIX_BUDGET_SECONDS:
+        # A fix started now dies with the run (ADR-0166): the fix needs FIX_BUDGET_SECONDS and the run has less. The child
+        # stays held with the findings on record, and no second run is spent on work the bound kills half done.
+        left = int(TAKEOVER_SECONDS - age)
+        HOLDS.add(f"{rd.name} {child}")
+        return False, out + (f"\nCHILD FIX SKIPPED #{n} ({rd.name} {child}): no run time left for a fix and its review "
+                             f"({left} s of {TAKEOVER_SECONDS} s left, {FIX_BUDGET_SECONDS} s needed)"), True
     f = subprocess.run(["bash", childfix, rd.name, str(n)], cwd=str(wt), capture_output=True, text=True)
     lines = f.stdout.strip().splitlines()
     HOLDS.add(f"{rd.name} {child}")
