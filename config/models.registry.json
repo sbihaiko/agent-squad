@@ -38,6 +38,12 @@
       "provider": "kimi",
       "marker": "kimi-limited",
       "quota_probe": "kimi"
+    },
+    "nvidia": {
+      "label": "NVIDIA NIM (free)",
+      "provider": "nvidia",
+      "marker": "nvidia-limited",
+      "quota_probe": "nvidia"
     }
   },
   "models": [
@@ -1545,6 +1551,82 @@
         "currency": "USD",
         "per": "mtok"
       }
+    },
+    {
+      "id": "nemotron-nano",
+      "label": "Nemotron 3 Nano",
+      "provider": "nvidia",
+      "efforts": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "routes": {
+        "gateway": {
+          "auth": "unverified",
+          "model": "claude-nemotron-nano",
+          "served": [
+            "claude-nemotron-nano"
+          ]
+        }
+      },
+      "capabilities": {
+        "tools": true,
+        "thinking_off": false,
+        "vision": false,
+        "context": 131072
+      },
+      "aliases": [
+        "claude-nemotron-nano"
+      ],
+      "retired": false,
+      "gateway_only": true,
+      "display_price": {
+        "input": null,
+        "cache_read": null,
+        "output": null,
+        "currency": "USD",
+        "per": "mtok"
+      },
+      "subscription": "nvidia"
+    },
+    {
+      "id": "nemotron-super",
+      "label": "Nemotron 3.5 Super",
+      "provider": "nvidia",
+      "efforts": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "routes": {
+        "gateway": {
+          "auth": "unverified",
+          "model": "claude-nemotron-super",
+          "served": [
+            "claude-nemotron-super"
+          ]
+        }
+      },
+      "capabilities": {
+        "tools": true,
+        "thinking_off": false,
+        "vision": true,
+        "context": 131072
+      },
+      "aliases": [
+        "claude-nemotron-super"
+      ],
+      "retired": false,
+      "gateway_only": true,
+      "display_price": {
+        "input": null,
+        "cache_read": null,
+        "output": null,
+        "currency": "USD",
+        "per": "mtok"
+      },
+      "subscription": "nvidia"
     }
   ]
 }

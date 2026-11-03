@@ -5939,7 +5939,11 @@ def q_kimi():
         ws.append({"label": label, "pct": round(float(x["used_ratio"]) * 100, 1),
                    "resets": dt.datetime.fromisoformat(t.replace("Z", "+00:00")).timestamp() if t else None})
     return {"windows": ws} if ws else None
-QUOTA_PROBES = {"claude": q_claude, "gpt": q_codex, "grok": q_grok, "gemini": q_agy, "kimi": q_kimi}
+def q_nvidia():
+    """NVIDIA NIM's free tier publishes no quota endpoint: the plan is a rate limit (about 40 requests a minute), never a
+    monthly share, so the row says so rather than drawing a guess."""
+    return {"windows": [], "unavailable": True, "err": "free tier: a per-minute rate limit, no monthly reading"}
+QUOTA_PROBES = {"claude": q_claude, "gpt": q_codex, "grok": q_grok, "gemini": q_agy, "kimi": q_kimi, "nvidia": q_nvidia}
 def refresh_quota_once():
     """One pass: ask each CLI for its quota. A probe that answers with no windows replaces the row outright, so a
     reading that stopped tracking reality cannot pass as current; a probe that raises keeps the last good value."""
