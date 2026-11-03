@@ -72,20 +72,20 @@ def _css(page):
 
 
 def test_a_new_card_fades_in_with_ease_out(hub):  # noqa: F811
-    assert "ease-out" in _rule(_css(hub.MOBILE_PAGE), ".card.cin")
+    assert "var(--motion-entry-easing)" in _rule(_css(hub.MOBILE_PAGE), ".card.cin")
 
 
 def test_a_lane_that_shuts_eases_out_with_ease_in(hub):  # noqa: F811
-    assert "ease-in" in _rule(_css(hub.MOBILE_PAGE), ".lout").replace("ease-in-out", "")
+    assert "animation:lout var(--motion-duration-exit) var(--motion-exit-easing)" in _css(hub.MOBILE_PAGE)
 
 
 @pytest.mark.parametrize("sheet", ["#sheet", "#psheet"])
 def test_a_sheet_slides_in_with_ease_out_and_out_with_ease_in(hub, sheet):  # noqa: F811
     css = _css(hub.MOBILE_PAGE)
     shown = re.search(re.escape(sheet) + r"\{(position:fixed[^}]*)\}", css)
-    assert shown and "ease-out" in shown.group(1), f"{sheet} does not slide in with ease-out"
+    assert shown and "var(--motion-entry-easing)" in shown.group(1), f"{sheet} does not slide in with ease-out"
     shut = _rule(css, sheet + "[hidden]")
-    assert "ease-in" in shut and "allow-discrete" in shut, shut
+    assert "var(--motion-exit-easing)" in shut and "allow-discrete" in shut, shut
 
 
 def test_reduced_motion_turns_every_animation_off(hub):  # noqa: F811
@@ -107,6 +107,18 @@ def _two_columns(*extra):
     b["groups"][1]["items"] = [{"n": 9, "t": "ticket 9", "l": []}]
     b["groups"][1]["n"] = 1
     return b
+
+
+@pytest.mark.node_bound
+def test_reduced_motion_keeps_folded_cards_out_of_the_exit_clone(hub):  # noqa: F811
+    out = run_page(hub.MOBILE_PAGE, """
+      globalThis.matchMedia = () => ({ matches: true });
+      await loadBoard();
+      $("cards").onclick({ target: $("cards").querySelector(".lane-h") });
+      return { outs: $("cards").querySelectorAll(".lout").length,
+               cards: $("cards").querySelectorAll('[data-role="card"]').length };
+    """, board=[_board(7, 8)])
+    assert out == {"outs": 0, "cards": 0}, out
 
 
 @pytest.mark.node_bound

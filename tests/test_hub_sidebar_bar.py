@@ -118,8 +118,8 @@ def test_the_bar_stays_at_the_left_and_slides_left_when_shut(page):
     assert re.search(r"#side\{[^}]*position:relative", css)
     assert re.search(r"#side\{[^}]*overflow:hidden", css)  # the body is clipped, never a second column
     assert re.search(r"html\.sbshut #side\{[^}]*width:28px", css)
-    assert re.search(r"#sbbody\{[^}]*transition:transform[^;}]*ease-out", css)
-    assert re.search(r"html\.sbshut #sbbody\{[^}]*translateX\(-100%\)[^}]*ease-in", css)
+    assert re.search(r"#sbbody\{[^}]*transition:transform var\(--motion-duration-enter\) var\(--motion-entry-easing\)", css)
+    assert re.search(r"html\.sbshut #sbbody\{[^}]*translateX\(-100%\)[^}]*var\(--motion-exit-easing\)", css)
     assert re.search(r"#sbtn\{[^}]*right:4px", css)        # on the bar's leading edge
     assert "html.sbshut #sbtn{" not in css                 # the chevron never moves on its own
 
@@ -129,19 +129,21 @@ def test_the_board_takes_the_freed_width(page):
     assert "#content{flex:1;min-width:0;overflow:auto}" in page
 
 
-def test_the_slide_takes_150_to_200_ms_eased_out_on_open_and_in_on_close(page):
+def test_the_slide_uses_shared_entry_and_exit_motion_tokens(page):
     css = _css(page)
-    durations = [float(v) * (1000 if u == "s" else 1) for v, u in re.findall(r"transition\s*:[^;}]*?(\d*\.?\d+)(ms|s)\b", css)]
-    assert durations and all(150 <= d <= 200 for d in durations), durations
-    assert re.search(r"#side\{[^}]*transition:width[^;}]*ease-out", css)
-    assert re.search(r"#sbbody\{[^}]*transition:transform[^;}]*ease-out", css)
-    assert re.search(r"html\.sbshut #side\{[^}]*ease-in", css)
-    assert re.search(r"html\.sbshut #sbbody\{[^}]*ease-in", css)
+    tokens = TOKENS.read_text()
+    assert "--motion-duration-enter:200ms" in tokens and "--motion-duration-exit:150ms" in tokens
+    assert re.search(r"#side\{[^}]*transition:width var\(--motion-duration-enter\) var\(--motion-entry-easing\)", css)
+    assert re.search(r"#sbbody\{[^}]*transition:transform var\(--motion-duration-enter\) var\(--motion-entry-easing\)", css)
+    assert re.search(r"html\.sbshut #side\{[^}]*var\(--motion-exit-easing\)", css)
+    assert re.search(r"html\.sbshut #sbbody\{[^}]*var\(--motion-exit-easing\)", css)
 
 
 def test_reduced_motion_shows_and_hides_the_bar_with_no_slide(page):
     css = _css(page)
-    assert "@media (prefers-reduced-motion: reduce){#side,#sbbody{transition:none}}" in css
+    reduced = next(line for line in TOKENS.read_text().splitlines()
+                   if line.startswith("@media (prefers-reduced-motion: reduce)"))
+    assert "#side" in reduced and "#sbbody" in reduced
     animated = {s.strip() for s in re.findall(r"([^{}]+)\{[^{}]*\btransition\s*:(?!\s*none)", css)}
     assert animated == {"#side", "#sbbody"}, animated
 

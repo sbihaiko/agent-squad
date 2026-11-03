@@ -4504,7 +4504,7 @@ button.on{border-color:var(--acc);color:var(--acc)}
 .msave .st{flex:1 1 100%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--mute)}.msave .st.err{color:var(--err)}.msave .st .dot{display:inline-block;width:8px;height:8px;border-radius:var(--radius-sm);background:var(--warn);margin-right:5px;vertical-align:middle}.msave .st.okm{color:var(--ok)}.sub{display:flex;flex-direction:column;gap:6px;margin:8px 0;padding:8px 10px;background:var(--inset);border:1px solid var(--line);border-radius:var(--radius-lg);font-size:var(--fs-caption)}
 .sub .hd{display:flex;align-items:center;gap:6px;margin-bottom:2px}.sub .nm{font-weight:600;font-size:var(--fs-caption);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sub .sv{font-weight:600;font-size:var(--fs-body)}.sub .sv.good{color:var(--ok)}.sub .sv.bad{color:var(--err)}.sub .sv.none{color:var(--mute);font-size:var(--fs-caption);font-weight:400}
 .sub .qw{display:flex;flex-direction:column;gap:3px}.sub .ql{display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-size:var(--fs-caption);color:var(--mute)}.sub .ql b{color:var(--fg);font-weight:600;font-size:var(--fs-caption)}.sub .ql .rst{white-space:nowrap;font-size:var(--fs-caption)}
-.sub .qw.sm .ql{font-size:var(--fs-caption)}.sub .qw.sm .ql b{font-size:var(--fs-caption);color:var(--ink-soft)}.sub .qw .tr{position:relative;height:8px;border-radius:var(--radius-sm);background:var(--card)}.sub .qw.sm .tr{height:4px;border-radius:var(--radius-sm)}.sub .qw .fl{height:100%;border-radius:var(--radius-sm);transition:width .3s}
+.sub .qw.sm .ql{font-size:var(--fs-caption)}.sub .qw.sm .ql b{font-size:var(--fs-caption);color:var(--ink-soft)}.sub .qw .tr{position:relative;height:8px;border-radius:var(--radius-sm);background:var(--card)}.sub .qw.sm .tr{height:4px;border-radius:var(--radius-sm)}.sub .qw .fl{height:100%;border-radius:var(--radius-sm);transition:width var(--motion-duration-long) var(--motion-entry-easing)}
 .sub .fl.lv-ok{background:var(--mute)}.sub .fl.lv-warn{background:var(--warn)}.sub .fl.lv-err{background:var(--err)}.sub .fl.lv-est{background:var(--acc)}.sub .qw .tk{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--fg);border-radius:var(--radius-sm)}
 .sub .fr{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:-1px}.sub .fs{color:var(--mute);font-size:var(--fs-caption);margin-left:auto}.sub .chip{display:inline-block;padding:0 7px;border-radius:var(--radius-lg);font-size:var(--fs-caption);font-weight:600;line-height:16px}.sub .chip.err{background:var(--tint-err);color:var(--err);border:1px solid var(--tint-err-line)}
 .sub .xx{padding:1px 7px;border-radius:var(--radius-lg);background:var(--tint-ok);color:var(--ok);font-size:var(--fs-caption);margin-left:5px}.sub .xx.bad{background:var(--tint-err);color:var(--err)}
@@ -4526,7 +4526,7 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #bbody .ah{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);cursor:pointer;font-weight:600;position:sticky;top:34px;background:var(--card);z-index:1}   /* the same gap as the docked header: `Todo0` is never a reading, in either rendering (#1809) */
 #bbody .ah .n{background:var(--line);border-radius:var(--radius-lg);padding:0 8px;font-weight:400}
 #bbody .ah i{display:inline-block;width:8px;height:8px;border-radius:var(--radius-full);margin-right:7px;background:var(--mute)}
-#bbody .it{margin:6px 0;padding:var(--card-gap-y) var(--card-gap-x);border:1px solid var(--line-strong);border-top:3px solid var(--lc,var(--mute));border-radius:var(--radius-lg);background:var(--card);line-height:1.4;font-size:var(--fs-caption);white-space:normal;overflow-wrap:anywhere;display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;transition:border-color .15s}
+#bbody .it{margin:6px 0;padding:var(--card-gap-y) var(--card-gap-x);border:1px solid var(--line-strong);border-top:3px solid var(--lc,var(--mute));border-radius:var(--radius-lg);background:var(--card);line-height:1.4;font-size:var(--fs-caption);white-space:normal;overflow-wrap:anywhere;display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;transition:border-color var(--motion-duration-short) var(--motion-entry-easing)}
 #bbody .it .ft{display:flex;justify-content:flex-end;gap:6px;margin-top:6px}#bbody .age,#bbody .tsk{display:inline-block;padding:0 6px;border-radius:var(--radius-lg);font-size:var(--fs-caption);font-variant-numeric:tabular-nums;color:var(--mute);border:1px solid var(--line)}#bbody .age.warm{color:var(--on-tint);background:color-mix(in srgb,var(--warn) var(--tint-alpha),var(--card));border-color:var(--tint-warn-line)}#bbody .age.old{color:var(--on-tint);background:color-mix(in srgb,var(--err) var(--tint-alpha),var(--card));border-color:var(--tint-err-line)}
 #bbody .pbg{display:inline-block;margin-left:6px;padding:0 7px;border-radius:var(--radius-lg);font-size:var(--fs-caption);font-weight:600;border:1px solid}#bbody .pbg.conflict,#bbody .pbg.checks-red{color:var(--on-tint);background:color-mix(in srgb,var(--err) var(--tint-alpha),var(--card));border-color:var(--tint-err-line)}#bbody .pbg.green{color:var(--on-tint);background:color-mix(in srgb,var(--ok) var(--tint-alpha),var(--card));border-color:var(--tint-ok-line)}#bbody .pbg.approved{color:var(--ok);border-color:var(--ok);background:var(--tint-ok)}   /* the lane badge (#247) */
 #bbody .fz{display:inline-block;margin-left:6px;padding:0 6px;border-radius:var(--radius-lg);font-size:var(--fs-caption);color:var(--warn);border:1px dashed var(--warn)}   /* the freeze marker: the card keeps its column */
@@ -4674,9 +4674,9 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
    The Monitor's copy is in the block the phone serves; these keep the Settings panel's own row and change log, and the
    test fails when the switch rules of the two places drift apart (#1234). */
 #lopb .ls.draining,#lopb .ls.starting{color:var(--warn)}#lopb .ls{font-weight:600}
-#lopb .lsw{position:relative;flex:none;width:52px;height:32px;padding:0;border:0;border-radius:var(--radius-xl);background:var(--edge);cursor:pointer;transition:background .15s}
+#lopb .lsw{position:relative;flex:none;width:52px;height:32px;padding:0;border:0;border-radius:var(--radius-xl);background:var(--edge);cursor:pointer;transition:background var(--motion-duration-short) var(--motion-entry-easing)}
 #lopb .lsw[aria-checked=true]{background:var(--ok)}
-#lopb .lsw i{position:absolute;top:3px;left:3px;width:26px;height:26px;border-radius:var(--radius-full);background:var(--highlight);transition:transform .15s}
+#lopb .lsw i{position:absolute;top:3px;left:3px;width:26px;height:26px;border-radius:var(--radius-full);background:var(--highlight);transition:transform var(--motion-duration-short) var(--motion-entry-easing)}
 #lopb .lsw[aria-checked=true] i{transform:translateX(20px)}
 #lopb .lsw:disabled{opacity:.6;cursor:default}#lopb .lsw:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
 #lopb .ls.on{color:var(--ok)}#lopb .ls.off{color:var(--warn)}
@@ -4720,7 +4720,7 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
    but the needle's own short move, and none at all under reduced motion. */
 #inst .igs{display:flex;justify-content:space-between;gap:4px;margin:2px 0 8px}#inst .ig{display:flex;flex-direction:column;align-items:center;flex:1;min-width:0}
 #inst .ig svg{display:block}#inst .ig .gt{fill:none;stroke:var(--line);stroke-width:3;stroke-linecap:round}#inst .ig .gf{fill:none;stroke-width:3;stroke-linecap:round}
-#inst .ig .gn{stroke:var(--fg);stroke-width:1.5;stroke-linecap:round;transform-origin:30px 32px;transition:transform .4s ease-out}#inst .ig .gh0{fill:var(--fg)}
+#inst .ig .gn{stroke:var(--fg);stroke-width:1.5;stroke-linecap:round;transform-origin:30px 32px;transition:transform var(--motion-duration-long) var(--motion-entry-easing)}#inst .ig .gh0{fill:var(--fg)}
 #inst .ig.ldred .gf,#inst.warn .ig.ldred .gf,#inst .ig.ldred .gn{stroke:var(--err)}
 #inst .gv{font-size:var(--fs-caption);color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap}#inst .gv b{color:var(--fg);font-weight:600}#inst.warn .gv b{color:var(--warn)}#inst .ig.ldred .gv b{color:var(--err)}
 #inst .ian{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px}#inst .ian .at:first-child{grid-column:1/-1}#inst .atm{display:block;color:var(--mute);font-variant-numeric:tabular-nums}
@@ -4729,18 +4729,17 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #inst .at.ok .dot{background:var(--ok)}#inst .at.err .dot{background:var(--err)}#inst .at.info .dot{background:var(--acc)}
 #inst .at .av{display:block;color:var(--fg);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}#inst .at.err .av{color:var(--err)}#inst .at a{color:var(--acc);text-decoration:none}#inst .at a:hover{text-decoration:underline}
 #inst .at details>summary{cursor:pointer;color:var(--mute)}#inst .at details>ul{margin:4px 0 0;padding:0 0 0 14px;color:var(--mute);overflow-wrap:anywhere}
-#ispec{margin-bottom:8px}#inst .at .so{margin-left:auto;font-weight:400;color:var(--mute);font-variant-numeric:tabular-nums}#inst .pb{display:block;height:6px;margin:5px 0 2px;border-radius:var(--radius-sm);background:var(--line);overflow:hidden}#inst .pf{display:block;height:100%;border-radius:var(--radius-sm);background:var(--acc);transition:width .4s ease-out}#inst .at.ok .pf{background:var(--ok)}@media (prefers-reduced-motion: reduce){#inst .pf{transition:none}}
+#ispec{margin-bottom:8px}#inst .at .so{margin-left:auto;font-weight:400;color:var(--mute);font-variant-numeric:tabular-nums}#inst .pb{display:block;height:6px;margin:5px 0 2px;border-radius:var(--radius-sm);background:var(--line);overflow:hidden}#inst .pf{display:block;height:100%;border-radius:var(--radius-sm);background:var(--acc);transition:width var(--motion-duration-long) var(--motion-entry-easing)}#inst .at.ok .pf{background:var(--ok)}
 #inst .irw{display:flex;justify-content:space-between;align-items:baseline;gap:8px;padding:3px 0;border-top:1px solid var(--line);font-size:var(--fs-caption);color:var(--mute)}
 #inst .irw b{color:var(--fg);font-weight:600;font-variant-numeric:tabular-nums;text-align:right;min-width:0;overflow-wrap:anywhere}#inst .irw b.bad{color:var(--warn)}
-@media (prefers-reduced-motion: reduce){#inst .ig .gn{transition:none}}
 /* The Monitor's loop switch (#923, #1234): the phone serves this block alone, so the switch is styled here and not only
    in the sidebar block. #1071 moved the switch into the Monitor and left its styles beside the Settings panel, so the
    desktop drew a bare button and the phone drew one with no styles at all. #lopb carries the same rules beside it, and
    the test fails when the two lists drift apart. */
 #inst .ls.draining,#inst .ls.starting{color:var(--warn)}#inst .ls{font-weight:600}
-#inst .lsw{position:relative;flex:none;width:52px;height:32px;padding:0;border:0;border-radius:var(--radius-xl);background:var(--edge);cursor:pointer;transition:background .15s}
+#inst .lsw{position:relative;flex:none;width:52px;height:32px;padding:0;border:0;border-radius:var(--radius-xl);background:var(--edge);cursor:pointer;transition:background var(--motion-duration-short) var(--motion-entry-easing)}
 #inst .lsw[aria-checked=true]{background:var(--ok)}
-#inst .lsw i{position:absolute;top:3px;left:3px;width:26px;height:26px;border-radius:var(--radius-full);background:var(--highlight);transition:transform .15s}
+#inst .lsw i{position:absolute;top:3px;left:3px;width:26px;height:26px;border-radius:var(--radius-full);background:var(--highlight);transition:transform var(--motion-duration-short) var(--motion-entry-easing)}
 #inst .lsw[aria-checked=true] i{transform:translateX(20px)}
 #inst .lsw:disabled{opacity:.6;cursor:default}#inst .lsw:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
 #inst .ls.on{color:var(--ok)}#inst .ls.off{color:var(--warn)}
@@ -4756,16 +4755,15 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
    of the bar, so it rides the leading edge and never crosses the board. */
 #sbtn{display:none}
 @media (min-width:601px){
-#side{position:relative;padding:0;overflow:hidden;display:flex;flex-direction:column;box-sizing:border-box;transition:width .16s ease-out}
-#sbbody{flex:1 1 auto;min-height:0;width:100%;overflow:auto;padding:34px 12px 12px;box-sizing:border-box;transition:transform .16s ease-out}
+#side{position:relative;padding:0;overflow:hidden;display:flex;flex-direction:column;box-sizing:border-box;transition:width var(--motion-duration-enter) var(--motion-entry-easing)}
+#sbbody{flex:1 1 auto;min-height:0;width:100%;overflow:auto;padding:34px 12px 12px;box-sizing:border-box;transition:transform var(--motion-duration-enter) var(--motion-entry-easing)}
 #sbtn{display:flex;position:absolute;top:12px;right:4px;z-index:1;width:20px;height:32px;align-items:center;justify-content:center;padding:0;border:0;border-radius:0;background:none;color:var(--mute);cursor:pointer}
 #sbtn:hover{color:var(--fg)}#sbtn:focus-visible{outline:var(--focus-w) solid var(--focus);outline-offset:2px}
 #sbtn svg{width:12px;height:12px}
-html.sbshut #side{width:28px;transition-timing-function:ease-in}
-html.sbshut #sbbody{transform:translateX(-100%);transition-timing-function:ease-in}
+html.sbshut #side{width:28px;transition-timing-function:var(--motion-exit-easing)}
+html.sbshut #sbbody{transform:translateX(-100%);transition-timing-function:var(--motion-exit-easing)}
 html.sbshut #sbtn svg{transform:scaleX(-1)}
 }
-@media (prefers-reduced-motion: reduce){#side,#sbbody{transition:none}}
 /* }SIDEBAR-CSS */
 </style>
 <div id=who>__WHO__</div>
@@ -5027,7 +5025,7 @@ function mdlOffM(m){return !!(mdl.model_off&&mdl.model_off[m])}
 function mdlChip(st){return st==="on"?"":`<span class="stc${String(st).startsWith("off")?" off":" lim"}">${esc(String(st).startsWith("off")?"off":st)}</span>`}   // a state chip shows only at limit or off (#913)
 function mdlTable(){const rows=mdl.models||[];return `<h3>Models</h3><p class=m>On or off, for every chain. An off model leaves the add lists; a chain that still lists it keeps the row, struck through, and skips it.</p><table class=mtab><thead><tr><th>Model</th><th>Subscription</th><th>State</th><th>On</th></tr></thead><tbody>`+rows.map(r=>{const of=mdlOffM(r.id),x=mdlBox("known",r.id);return`<tr class="${of?"off":""}"><td class=mn title="${esc(r.id)} · ${esc(x.text)}">${mdlName(x,r.id)}</td><td>${mdlSub(r)}</td><td>${mdlChip(of?"off (model)":r.state)}</td><td><button class="mtg${of?" off":""}" data-mt="${esc(r.id)}" aria-pressed="${!of}" aria-label="${esc(r.id)} on" title="${of?"off (model): press to switch it on in every chain":"on: press to switch it off in every chain"}">${of?"off":"on"}</button></td></tr>`}).join("")+`</tbody></table>`}
 const MHELP=`<details class=hlp><summary>How it works</summary><ul><li><b>Order</b>: ↑ ↓ move a model; ✕ marks it for removal: the row stays, struck through, until Save, and ↺ keeps it; "+ add a model…" puts one back.</li><li><b>Off</b> is set once per model and applies in every chain. An off model is skipped where a chain still lists it (the row stays, struck through, and ✕ still removes it) and is not offered in "+ add a model…". Switching it on restores every row.</li><li><b>Hours</b> are set per chain row: <code>HH-HH</code> local, may wrap midnight (<code>22-07</code>); empty means always. A row may also name days and UTC, clauses joined by <code>;</code>: <code>mon-fri 00-01,04-06,10-24 UTC; sat-sun 00-24 UTC</code> is DeepSeek off-peak. Outside its hours the row is skipped like off, and the next row runs.</li><li><b>Effort</b> is low to max, per chain row; medium is the default.</li><li><b>Save</b>, at the foot of Settings, shows the change (- before, + after) and writes only when you confirm.</li></ul></details>`;
-function mdlRender(){const b=$("#mbody");if(!mdl){b.innerHTML="<span class=m>loading…</span>";return}
+function mdlRender(){const b=$("#mbody");if(!mdl){b.innerHTML="<span class=m>Loading the data.</span>";return}
  {const lc=mdl.last_coding||(mdl.coding_models||[])[0]||"",x=lc?mdlBox("coding_models",lc):MBOX0;$("#mdsr").textContent=x.llm?`${x.llm} · ${lc}`:lc}   // the model the last run coded with, not the chain's head
 
  const ch=mdl.chain||{},chOut=ch.out||[],chHit=(m)=>chOut.find(o=>o.until_text&&o.model.split(':').pop()===String(m).split(':').pop()),chTag=(m)=>{const o=chHit(m);return o?`<span class=bk title="${esc(o.reason)}">${esc(o.reason)}, resets ${esc(o.until_text)}</span>`:''},chBan=ch.banner?`<div class="mx err" role=alert>${esc(ch.banner)}</div>`:(ch.notice?`<div class=mx>${esc(ch.notice)}</div>`:"");
@@ -5058,7 +5056,7 @@ $("#mbody").addEventListener("click",e=>{const t=e.target.closest("button");if(!
 let limS=null,limMsg="",limDiff=null,limPend=null;   // limPend holds the typed settings while the diff asks for a confirm
 const limN=v=>v==null?"—":tk(v);
 const limVals=()=>limPend||{guard:($("#limg")||{}).value||"",cap:($("#limc")||{}).value||"",factor:($("#limf")||{}).value||""};
-function limRender(){const b=$("#lbody");if(!b)return;if(!limS){b.innerHTML="<span class=m>loading…</span>";return}
+function limRender(){const b=$("#lbody");if(!b)return;if(!limS){b.innerHTML="<span class=m>Loading the data.</span>";return}
  const s=limS,v=limPend||s;const sr=$("#limsr");if(sr)sr.textContent=s.guard==="off"?"off":s.paused?"paused":"on";
  let h=`<div class=kr><span class=l>token guard</span><select id=limg aria-label="token guard"><option value=on${v.guard==="on"?" selected":""}>on</option><option value=off${v.guard==="off"?" selected":""}>off</option></select></div>`
  +`<div class=kr><span class=l>daily token cap</span><input id=limc type=number min=1 step=1 inputmode=numeric value="${v.cap}" aria-label="daily token cap"></div>`
@@ -5099,7 +5097,7 @@ const slPerson=(p,i)=>`<div class=slc role=row><span class=c1 role=cell><b>${esc
  +`<span role=cell data-l="role"><select data-sl="pp:${i}:role" aria-label="${slA(p.name)}: role">${slOpts(Object.keys(SL_ROLE),p.role)}</select></span>`
  +`<span class=c1 role=cell data-l="the agent">${esc(SL_ROLE[p.role])}</span>`
  +`<span class=swc role=cell><button data-slrm="pp:${i}" aria-label="remove ${slA(p.name)}">Remove</button></span></div>`;
-function slRender(){const b=$("#sbody");if(!b)return;if(!slS){b.innerHTML="<span class=m>loading…</span>";return}
+function slRender(){const b=$("#sbody");if(!b)return;if(!slS){b.innerHTML="<span class=m>Loading the data.</span>";return}
  const d=slDraft,sr=$("#slksr");if(sr)sr.textContent=slS.connection;
  let h=`<div class=kr><span class=l>connection</span><b class="${slS.connection==="connected"?"ok":"w"}">${esc(slS.connection)}</b></div>`
  +`<p class=m>Posts through your own account by the Claude Slack connector. No token is stored here.</p>`
@@ -5306,7 +5304,7 @@ async function showIssue(n,r,el){cur=+n;irepo=r||"__REPO__";hl={n:+n,r:irepo,kin
  // A card a run holds steps through that run's cards; any other card steps through its column (the selection the board shows).
  if(el){const c=cardOf(el),set=c.hr?boardCards().filter(x=>(x.dataset.hr||"")===c.hr):[...el.closest(".sc").querySelectorAll(".it[data-n]")];nav=set.map(x=>[+x.dataset.n,x.dataset.r||"__REPO__"])}
  if(!nav.length)nav=[[cur,irepo]];
- tsheet.classList.add("on");document.body.classList.add("tkopen");$("#tkb").innerHTML="<span class=m>loading #"+n+"…</span>";
+ tsheet.classList.add("on");document.body.classList.add("tkopen");$("#tkb").innerHTML="<span class=m>Loading issue #"+n+".</span>";
 try{const d=await (await fetch("/api/issue?n="+n+(r?"&r="+encodeURIComponent(r):""))).json();if(d.err){$("#tkb").textContent=d.err;return}
 const c=cardOf(el)||cardOf(boardCards().find(x=>+x.dataset.n===+n&&(x.dataset.r||"__REPO__")===irepo))||{n:+n,r:irepo,col:"",pm:false,b:[],bl:[],ho:"",hr:"",prf:[]};
 const wave=(d.labels||[]).map(l=>(String(l).match(/^wave:(\d+)$/)||[])[1]).filter(Boolean)[0];
@@ -5343,7 +5341,7 @@ const rkRow=id=>allRuns.find(r=>r.id===id)||ENDED.find(r=>r.id===id)||null;
 const rkLive=r=>!!r&&(r.rank===0||!!r.running);
 function rkPaint(force){if(!RK||!RK.row)return;const m=rkModel(RK.row,RK.rec||[]),c=m.chips;   // force: the person acted; a poll paints only what changed
  const ch=$("#rkchips"),chips=`<span class="chip ${c.state==="live"?"live":""}">${c.state==="live"?"&#9679; live":"ended"}</span><span class=chip title="${esc(c.id)}">${esc(c.id)}</span><span class=chip>${esc(c.cost)} · ${esc(c.el)}</span>`;if(ch.innerHTML!==chips)ch.innerHTML=chips;
- rkRender($("#rkb"),RK.rec?rkHtml(m,RK.tab,RK.f):`<h2>${esc(m.label||m.id)}</h2><p class=m>${RK.err?esc(RK.err):"loading the record…"}</p>`,document,force);
+ rkRender($("#rkb"),RK.rec?rkHtml(m,RK.tab,RK.f):`<h2>${esc(m.label||m.id)}</h2><p class=m>${RK.err?esc(RK.err):"Loading the record."}</p>`,document,force);
  $("#rkgh").href=rkLive(RK.row)&&RK.row.port?"/dash/"+encodeURIComponent(RK.id)+"/":"/ended/"+encodeURIComponent(RK.id);
  const p=$("#rkpause");p.textContent=rkLive(RK.row)?(RK.paused?"Resume run":"Pause run"):"Open its record";
  p.title=RK.note||(rkLive(RK.row)?(RK.paused?"a pause is requested: the run holds at its next node boundary (ADR-0128)":"request a pause: the run holds at its next node boundary (ADR-0128)"):"the full run dashboard, with the record and its replay")}
@@ -5482,7 +5480,7 @@ const flowLead=l=>{const S=l.summary,c=LT.zc,exc=c?Object.entries(c.excluded).ma
   return head+ltChart(LT.zc||l.control[LT.log?"log":"jira"][LT.tf],l.coverage);};
 const drawFlow=()=>{{const w=$("#flowb").clientWidth-20;flowW=w<600?600:w>1600?1600:(w|0);flowH=flowHeight(window.innerHeight)}const cfd=FLOWK==="cfd";
   const a=FLOWD[FLOWK];
-  $("#flowb").innerHTML=!a?"<p class=fnote>loading the chart from the hub</p>":(cfd?flowCFD(a.cfd.ranges[CF.r]):flowLead(a.lead))+`<p class=flstat role=status>data read ${new Date(a.t*1000).toLocaleTimeString()}</p>`};
+  $("#flowb").innerHTML=!a?"<p class=fnote>Loading the chart from the hub.</p>":(cfd?flowCFD(a.cfd.ranges[CF.r]):flowLead(a.lead))+`<p class=flstat role=status>data read ${new Date(a.t*1000).toLocaleTimeString()}</p>`};
 const flowOpen=async k=>{FLOWK=k;$("#flowov").hidden=false;flowTabs();drawFlow();const want=()=>barQuery(k),q=want();try{const a=await (await fetch(`/api/chart/${k}?${q}`)).json();if(q!==want())return;FLOWD[k]=a;if(FLOWK===k)drawFlow()}catch(e){}};
 const ltQ=()=>`&scale=${LT.log?"log":"jira"}&a=${encodeURIComponent(LT.a)}&b=${encodeURIComponent(LT.b)}&${barQuery("lead")}`,ltOwn=()=>LT.a!==""||LT.b!=="";   // a span other than created to closed is the hub's chart for it (#905); the bar's values filter it (#904)
 const ltZoom=async(f,t)=>{const tok=++LT.tok;try{const c=await (await fetch(`/api/leadtime?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}${ltQ()}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;LT.zr=[f,t];LT.pick=null;drawFlow()}catch(e){}};   // the hub recomputes the chart for the dragged range (#900)
@@ -5677,18 +5675,11 @@ setInterval(loopPoll,5000);loopPoll();
 /*BOARD_LANES*/
 $("#lmode").onchange=e=>{bo.lmode=e.target.value;saveB();pollBoard()};
 // The swimlanes' state (#891): collapse and open state live in `bo`, so the device keeps them across a reload.
-// A lane opens and closes with an eased height (Web Animations on its cells; the lane itself is display:contents). Closing
-// runs first and the board redraws after it; opening shows a loading mark in the lane until the read redraws it, then grows.
-const LANE_MS=matchMedia("(prefers-reduced-motion: reduce)").matches?0:220;
-const laneCells=id=>[...document.querySelectorAll(`#bbody .cell[data-lane="${CSS.escape(id)}"]`)];
-const laneGrow=(id,dir)=>Promise.all(laneCells(id).map(c=>{const hh=c.scrollHeight;c.style.overflow="hidden";
- const a=c.animate(dir>0?[{height:"0px",opacity:0},{height:hh+"px",opacity:1}]:[{height:hh+"px",opacity:1},{height:"0px",opacity:0}],{duration:LANE_MS,easing:"ease-in-out",fill:dir>0?"none":"forwards"});
- return a.finished.then(()=>{if(dir>0)c.style.overflow=""}).catch(()=>{})}));
 async function laneToggle(id,open){
- if(!open){await laneGrow(id,-1);bo.lc[id]=true;saveB();await pollBoard();return}
+ if(!open){bo.lc[id]=true;saveB();await pollBoard();return}
  const s=document.querySelector(`#bbody .lane[data-lane="${CSS.escape(id)}"]`);
- if(s&&!s.querySelector(".lload"))s.querySelector(".lh").insertAdjacentHTML("afterend",`<div class=lload role=status aria-live=polite><i></i><span>loading…</span></div>`);
- bo.lc[id]=false;saveB();await pollBoard();laneGrow(id,1)}
+ if(s&&!s.querySelector(".lload"))s.querySelector(".lh").insertAdjacentHTML("afterend",`<div class=lload role=status aria-live=polite>Loading the lane contents.</div>`);
+ bo.lc[id]=false;saveB();await pollBoard()}
 let lanesNow=null;   // the model the board last drew: the controls act on its lanes and its hidden columns
 $("#lhd").onchange=e=>{bo.hideDone=e.target.checked;saveB();pollBoard()};
 const laneSet=v=>{bo.lc=bo.lc||{};for(const l of(lanesNow?lanesNow.lanes:[]))bo.lc[l.id]=v;saveB();pollBoard()};

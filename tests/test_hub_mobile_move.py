@@ -146,7 +146,7 @@ const boot = {
     const name = String(path).split("?")[0];            // a route named here answers as the hub would; a write is recorded
     if (!(opts && opts.method === "POST")) boot.__state.gets[name] = (boot.__state.gets[name] || 0) + 1;
     if (boot.__state.routes[name]) {
-      if (opts && opts.method === "POST") boot.__state.posts.push({ path: name, opts });
+      if (opts && opts.method === "POST") boot.__state.posts.push({ path: name, url: String(path), opts });   // the raw URL keeps the query a write carries (#1155)
       const q = boot.__state.routes[name];
       const row = q.length > 1 ? q.shift() : q[0];
       return reply(row.body, row.status || 200, row.ct || "application/json");

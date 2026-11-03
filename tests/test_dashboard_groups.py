@@ -271,7 +271,7 @@ def test_a_running_card_has_a_thick_teal_outline_and_nothing_animates_without_th
     css = PAGE_SRC().split("<style>")[1].split("</style>")[0]
     body = _rule(css, ".card.running rect")
     assert "var(--run)" in body and float(re.search(r"stroke-width:([\d.]+)", body).group(1)) >= 3
-    outside = re.sub(r"@media \(prefers-reduced-motion: no-preference\)\s*\{.*?\}\s*\}", "", css, flags=re.S)
+    outside = re.sub(r"@media \(prefers-reduced-motion: [\w-]+\)\s*\{.*?\}\s*\}", "", css, flags=re.S)
     assert "animation" not in outside and "@keyframes" not in outside
 
 

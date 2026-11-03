@@ -128,7 +128,10 @@ def test_the_page_draws_the_tile(hub):
 
 
 def test_the_fill_has_a_reduced_motion_rule(hub):
-    assert re.search(r"@media \(prefers-reduced-motion: reduce\)\{#inst \.pf\{transition:none\}\}", hub.PAGE)
+    """#1140: the fill's partial block folded into the one shared block, which names it; no partial block survives."""
+    blocks = re.findall(r"@media \(prefers-reduced-motion: reduce\)\{(.*?)\}\}", hub.PAGE, re.S)
+    assert len(blocks) == 1, "the page carries the one shared reduced-motion block"
+    assert "#inst .pf" in blocks[0].split("{", 1)[0], "the shared block does not name the progress fill"
 
 
 def test_the_bar_sits_below_the_tiles_and_above_the_load_lines(hub):
