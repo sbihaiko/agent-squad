@@ -736,6 +736,16 @@ def test_the_rhythm_guard_rejects_out_of_scale_values():
     assert all(not _non_stroke_15px(_served_css(html)) for html in _surfaces().values())
 
 
+def test_motion_entry_and_discrete_sheet_exit_use_their_own_timing(surfaces):
+    css = _strip_comments(_served_css(surfaces["hubmux-root"]))
+    item = next(body for selector, body in _blocks(css) if selector == "li")
+    assert "var(--motion-duration-short) var(--motion-entry-easing)" in item
+
+    mobile = _strip_comments(_served_css(surfaces["hub-mobile"]))
+    hidden_sheet = next(body for selector, body in _blocks(mobile) if selector == "#sheet[hidden]")
+    assert re.search(r"display\s+0s\s+allow-discrete", hidden_sheet)
+
+
 def test_motion_tokens_and_one_reduced_motion_block_cover_every_surface(surfaces):
     token_css = _strip_comments(TOKENS_FILE.read_text())
     tokens = _vars(token_css)
@@ -750,6 +760,17 @@ def test_motion_tokens_and_one_reduced_motion_block_cover_every_surface(surfaces
         assert uncovered in body, f"reduced motion misses the newly covered transition {uncovered}"
     for name, html in surfaces.items():
         css = _strip_comments(_served_css(html))
+        token = TOKENS_FILE.read_text().strip()
+        served = _served_css(html)
+        assert token in served, f"{name}: the shared token module is not served"
+        token_end = served.index(token) + len(token)
+        local_css = _strip_comments(served[token_end:])
+        reduced_selectors = set(re.findall(r"([^{}]+)\{[^{}]*(?:transition|animation)[^{}]*\}", body))
+        for selector, declarations in _blocks(local_css):
+            if re.search(r"(?:animation(?:-[\w-]+)?|transition(?:-[\w-]+)?)\s*:", declarations):
+                normalized = selector.strip()
+                assert normalized not in reduced_selectors, \
+                    f"{name}: surface CSS redeclares motion for {normalized} after shared tokens"
         assert len(re.findall(r"@media\s*\(prefers-reduced-motion:\s*reduce\)", css)) == 1, \
             f"{name}: the reduced-motion block is not the one shared token rule"
         assert "infinite" not in css.lower(), f"{name}: a motion effect repeats forever"
