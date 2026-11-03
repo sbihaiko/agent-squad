@@ -626,21 +626,21 @@ def test_each_mark_takes_its_own_role_and_the_legend_states_it(hub, board, tmp_p
     band = re.search(r"<polygon [^>]*>", out).group(0)
     average = re.search(r"<line [^>]*><title>Average [^<]*</title>", out).group(0)
     ring = re.search(r"<circle [^>]*>", out).group(0)
-    ink = _resolved("var(--ink-soft)", tokens)
+    ink = _resolved("var(--chart-ink)", tokens)
     trail_col = _resolved(_paint(trail, "stroke"), tokens)
     band_col = _resolved(_paint(band, "fill"), tokens)
     average_col = _resolved(_paint(average, "stroke"), tokens)
-    assert _resolved(_paint(ring, "stroke"), tokens) == ink, "a dot or ring is not the neutral ink"
-    assert trail_col == _resolved("var(--acc)", tokens), "the trend line does not take the accent"
-    assert band_col == _resolved("var(--s3)", tokens), "the band does not keep its own fill"
-    assert average_col == _resolved("var(--s8)", tokens), "the average line does not take the palette grey"
+    assert _resolved(_paint(ring, "stroke"), tokens) == ink, "a dot or ring is not the neutral chart ink"
+    assert trail_col == _resolved("var(--chart-bar)", tokens), "the trend line does not take the chart accent"
+    assert band_col == _resolved("var(--chart-series-3)", tokens), "the band does not keep its own chart fill"
+    assert average_col == _resolved("var(--chart-series-8)", tokens), "the average line does not take the chart grey"
     assert float(_paint(band, "fill-opacity")) > 0.16, "the band is no stronger than before"
     assert len({ink, trail_col, band_col, average_col}) == 4, "two marks share one role"
     legend = re.search(r'<p class="flg ltlg">(.*?)</p>', out).group(1)
     swatches = re.findall(r'<i style="background:([^;"]+)', legend)
     assert [_resolved(v, tokens) for v in swatches[:4]] == [
-        _resolved("var(--acc)", tokens), _resolved("var(--s3)", tokens),
-        _resolved("var(--s8)", tokens), _resolved("var(--ok)", tokens)], "the legend paint differs from its mark"
+        _resolved("var(--chart-bar)", tokens), _resolved("var(--chart-series-3)", tokens),
+        _resolved("var(--chart-series-8)", tokens), _resolved("var(--chart-ok)", tokens)], "the legend paint differs from its mark"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
@@ -808,7 +808,7 @@ def test_moving_the_axis_title_leaves_the_other_chart_text_in_place(hub, board, 
     assert all(_svg_attr(attrs, "text-anchor") == "end" for attrs, _ in tick_labels)
     x_labels = [(attrs, body) for attrs, body in others if _svg_attr(attrs, "text-anchor") == "middle"]
     assert len(x_labels) == 7, "the seven x ticks keep their place under the axis"
-    base = float(re.search(r"<line x1=\S+ y1=(\S+) x2=\S+ y2=\1 stroke=var\(--line\)>", svg).group(1))
+    base = float(re.search(r"<line x1=\S+ y1=(\S+) x2=\S+ y2=\1 stroke=var\(--chart-grid\)>", svg).group(1))
     assert {float(_svg_attr(attrs, "y")) for attrs, _ in x_labels} == {base + 17}
     summary = [(attrs, body) for attrs, body in _svg_texts(svg) if body.startswith(("Average", "Median", "p85"))]
     assert summary == [], "a summary label is still drawn inside the plot"

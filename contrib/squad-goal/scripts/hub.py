@@ -32,7 +32,8 @@ COLUMN = {**_columns_module.ROLE, **{lane["key"]: lane["name"] for lane in BOARD
 BOARD_NAMES_JSON = json.dumps(COLUMN, separators=(",", ":"))
 BOARD_DOING_JSON = json.dumps(_columns_module.DOING)
 BOARD_REVIEW_JSON = json.dumps(_columns_module.CODE_REVIEW)
-BOARD_COLORS_JSON = json.dumps({c["name"]: c["color"] for c in [*BOARD_COLUMNS, *BOARD_LANES]}, separators=(",", ":"))
+BOARD_CHART_ROLES = {**{f"var(--s{i})": f"--chart-series-{i}" for i in range(1, 9)}, "var(--wait)": "--chart-wait", "var(--acc)": "--chart-bar", "var(--ok)": "--chart-ok", "var(--warn)": "--chart-warn", "var(--err)": "--chart-err", "var(--none)": "--chart-none", "var(--run)": "--chart-run", "var(--drop)": "--chart-drop", "var(--mute)": "--chart-series-other"}
+BOARD_COLORS_JSON = json.dumps({c["name"]: f"var({BOARD_CHART_ROLES.get(c['color'], '--chart-series-fallback')})" for c in [*BOARD_COLUMNS, *BOARD_LANES]}, separators=(",", ":"))
 BOARD_FLOW_JSON = json.dumps([column["name"] for column in BOARD_COLUMNS], separators=(",", ":"))
 
 def sh(*a): return subprocess.run(a, capture_output=True, text=True).stdout
@@ -4966,12 +4967,12 @@ function barChart(rows,W=280,H=64,L=44){const n=rows.length,vals=rows.map(r=>r.t
     first:n?xl(rows[0].t):"",now:"now"}}
 function bars(rows){if(!rows.length)return"";const c=barChart(rows),{W,H,L,base}=c;   // tokens are the work: the chart never counts dollars
   return `<svg viewBox="0 0 ${L+W} ${base+14}" role=img aria-label="tokens per interval">`
-    +c.ticks.map(t=>`<line x1="${L}" y1="${t.y}" x2="${L+W}" y2="${t.y}" stroke="var(--line)" stroke-dasharray="3 2"/><text x="${L-4}" y="${t.y+4}" fill="var(--mute)" style="font-size:var(--fs-caption)" text-anchor="end">${t.label}</text>`).join("")
-    +c.bars.map(b=>b.kind==="missing"?`<line class=miss x1="${b.x}" y1="${base}" x2="${b.x+b.w}" y2="${base}" stroke="var(--mute)" stroke-dasharray="2 2"><title>${esc(b.title)}</title></line>`
-      :b.kind==="zero"?`<rect class=zero x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" style="fill:var(--mute)"><title>${esc(b.title)}</title></rect>`
-      :`<rect class=bar x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" fill="${b.top?"var(--ok)":"var(--acc)"}"><title>${esc(b.title)}</title></rect>`).join("")
-    +(c.max?`<text x="${c.max.x}" y="${c.max.y}" fill="var(--ok)" style="font-size:var(--fs-caption)" text-anchor="${c.max.anchor}">${c.max.text}</text>`:"")
-    +`<text x="${L}" y="${base+12}" fill="var(--mute)" style="font-size:var(--fs-caption)">${c.first}</text><text x="${L+W}" y="${base+12}" fill="var(--mute)" style="font-size:var(--fs-caption)" text-anchor="end">${c.now}</text></svg>`}
+    +c.ticks.map(t=>`<line x1="${L}" y1="${t.y}" x2="${L+W}" y2="${t.y}" stroke="var(--chart-grid)" stroke-dasharray="3 2"/><text x="${L-4}" y="${t.y+4}" fill="var(--chart-axis)" style="font-size:var(--fs-caption)" text-anchor="end">${t.label}</text>`).join("")
+    +c.bars.map(b=>b.kind==="missing"?`<line class=miss x1="${b.x}" y1="${base}" x2="${b.x+b.w}" y2="${base}" stroke="var(--chart-axis)" stroke-dasharray="2 2"><title>${esc(b.title)}</title></line>`
+      :b.kind==="zero"?`<rect class=zero x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" style="fill:var(--chart-axis)"><title>${esc(b.title)}</title></rect>`
+      :`<rect class=bar x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" fill="${b.top?"var(--chart-bar-max)":"var(--chart-bar)"}"><title>${esc(b.title)}</title></rect>`).join("")
+    +(c.max?`<text x="${c.max.x}" y="${c.max.y}" fill="var(--chart-ok)" style="font-size:var(--fs-caption)" text-anchor="${c.max.anchor}">${c.max.text}</text>`:"")
+    +`<text x="${L}" y="${base+12}" fill="var(--chart-axis)" style="font-size:var(--fs-caption)">${c.first}</text><text x="${L+W}" y="${base+12}" fill="var(--chart-axis)" style="font-size:var(--fs-caption)" text-anchor="end">${c.now}</text></svg>`}
 function cmp(v,base,unit,lowerBetter=true){const d=Math.round((v-base)/base*100),good=lowerBetter?d<0:d>0,dir=d===0?"":lowerBetter?(d<0?"faster":"slower"):(d>0?"more":"fewer"),head=`was ${base}${unit?" "+unit:""}`,pct=d===0?"":`${Math.abs(d)}% ${dir}`;
   return {text:pct?`${head} \u00b7 ${pct}`:head,head,pct,dir,good}}
 function kr(label,sub,v,unit,base,lowerBetter=true){if(v==null)return`<div class=kr><span class=l>${label}${sub?`<small>${sub}</small>`:""}</span><b>—</b></div>`;
@@ -5178,7 +5179,7 @@ const saveAcc=()=>{ls.acc=[...openAcc];save()};
 ACC.forEach(i=>{const e=$("#"+i);if(!e)return;e.open=openAcc.has(i);e.addEventListener("toggle",()=>{if(e.open)openAcc.add(i);else openAcc.delete(i);saveAcc();if(i==="mdl"&&e.open){mdlLoad()}else if(i==="lim"&&e.open){limLoad()}else if(i==="slk"&&e.open){slLoad()}})});mdlLoad();
 if(openAcc.has("lim"))limLoad();
 if(openAcc.has("slk"))slLoad();
-const PCOL=["var(--acc)","var(--ok)","var(--warn)","#b79cf6","#2dd4bf","var(--err)","#c678dd","#e5c07b","var(--mute)"],tk=n=>n>=1e9?(n/1e9).toFixed(2)+"B":n>=1e6?(n/1e6).toFixed(1)+"M":n>=1e3?(n/1e3).toFixed(0)+"K":""+n;
+const PCOL=["var(--chart-series-1)","var(--chart-series-2)","var(--chart-series-3)","var(--chart-series-4)","var(--chart-series-5)","var(--chart-series-6)","var(--chart-series-7)","var(--chart-series-8)","var(--chart-series-other)"],tk=n=>n>=1e9?(n/1e9).toFixed(2)+"B":n>=1e6?(n/1e6).toFixed(1)+"M":n>=1e3?(n/1e3).toFixed(0)+"K":""+n;
 const TOP=3;
 function pie(ms){
  // One slice per model NAME, never per spelling: one model answers under several (deepseek-flash, deepseek-flash[1m],
@@ -5195,14 +5196,14 @@ function pie(ms){
  const tot=rows.reduce((a,m)=>a+m.v,0),keep=rows.slice(0,TOP),fold=rows.slice(TOP);
  const sl=keep.map(m=>({k:m.n,n:m.n,v:m.v,t:`${m.n} (${m.ids.join(", ")})${m.routes.length?" via "+m.routes.join(", "):""}: ${tk(m.v)} tokens`}));
  if(fold.length){const v=fold.reduce((a,m)=>a+m.v,0);sl.push({k:"other",n:`other · ${fold.length} models`,v,t:fold.map(m=>`${m.n}: ${tk(m.v)} tokens`).join("\n")})}
- const col=k=>k==="other"?"var(--mute)":PCOL[[...String(k)].reduce((h,c)=>(h*31+c.charCodeAt(0))>>>0,0)%PCOL.length];   // a model keeps its colour across renders: the colour follows its name, not its place in the list
+ const col=k=>k==="other"?"var(--chart-series-other)":PCOL[[...String(k)].reduce((h,c)=>(h*31+c.charCodeAt(0))>>>0,0)%PCOL.length];   // a model keeps its colour across renders: the colour follows its name, not its place in the list
  const dot=(k,n,v)=>`<i style="background:${col(k)}"></i><span class=ln>${esc(n)}</span><span class=usd>${tk(v)}</span><span class=sh>${Math.round(v/tot*100)}%</span>`;   // the rows are built outside the page template: a nested backtick there breaks the pie matcher in tests
  const subRows=fold.map(m=>`<div>${dot(m.n,m.n,m.v)}</div>`).join("");   // built outside the legend template: a nested backtick there breaks the pie matcher in tests
  const legendRows=sl.map(x=>x.k==="other"
    ?`<details class=lgo data-k="other"><summary tabindex=0 title="${esc(x.t)}">${dot(x.k,x.n,x.v)}</summary><div class=lgx>${subRows}</div></details>`
    :`<div tabindex=0 data-k="${esc(x.k)}" title="${esc(x.t)}">${dot(x.k,x.n,x.v)}</div>`).join("");
- let a0=-Math.PI/2;const R=52,C=60,arc=sl.map((x,i)=>{const a1=a0+x.v/tot*2*Math.PI,big=a1-a0>Math.PI?1:0,p=sl.length===1?`<circle cx=${C} cy=${C} r=${R} data-k="${esc(x.k)}" fill="${col(x.k)}"><title>${esc(x.t)}</title></circle>`:`<path d="M${C} ${C}L${C+R*Math.cos(a0)} ${C+R*Math.sin(a0)}A${R} ${R} 0 ${big} 1 ${C+R*Math.cos(a1)} ${C+R*Math.sin(a1)}Z" data-k="${esc(x.k)}" fill="${col(x.k)}" stroke="#161a21" stroke-width=1><title>${esc(x.t)}</title></path>`;a0=a1;return p}).join("");
- return `<div class=pie><svg viewBox="0 0 120 120" width=112 height=112>${arc}<circle cx=${C} cy=${C} r=26 fill="#161a21"/><text x=${C} y=${C-1} text-anchor=middle fill="var(--fg)" style="font-size:var(--fs-caption)" font-weight=600>${tk(tot)}</text><text x=${C} y=${C+12} text-anchor=middle fill="var(--mute)" style="font-size:var(--fs-caption)">tokens · month</text></svg><div class=lg>${legendRows}</div></div>`}
+ let a0=-Math.PI/2;const R=52,C=60,arc=sl.map((x,i)=>{const a1=a0+x.v/tot*2*Math.PI,big=a1-a0>Math.PI?1:0,p=sl.length===1?`<circle cx=${C} cy=${C} r=${R} data-k="${esc(x.k)}" fill="${col(x.k)}"><title>${esc(x.t)}</title></circle>`:`<path d="M${C} ${C}L${C+R*Math.cos(a0)} ${C+R*Math.sin(a0)}A${R} ${R} 0 ${big} 1 ${C+R*Math.cos(a1)} ${C+R*Math.sin(a1)}Z" data-k="${esc(x.k)}" fill="${col(x.k)}" stroke="var(--chart-bg)" stroke-width=1><title>${esc(x.t)}</title></path>`;a0=a1;return p}).join("");
+ return `<div class=pie><svg viewBox="0 0 120 120" width=112 height=112>${arc}<circle cx=${C} cy=${C} r=26 fill="var(--chart-bg)"/><text x=${C} y=${C-1} text-anchor=middle fill="var(--fg)" style="font-size:var(--fs-caption)" font-weight=600>${tk(tot)}</text><text x=${C} y=${C+12} text-anchor=middle fill="var(--mute)" style="font-size:var(--fs-caption)">tokens · month</text></svg><div class=lg>${legendRows}</div></div>`}
 function hlPie(k){document.querySelectorAll("#pie [data-k]").forEach(el=>el.classList.toggle("hl",!!k&&el.dataset.k===k));document.querySelector("#pie .pie")?.classList.toggle("dim",!!k)}
 $("#pie").addEventListener("mouseover",e=>{const el=e.target.closest("[data-k]");hlPie(el?el.dataset.k:"")});
 $("#pie").addEventListener("mouseout",e=>{if(!$("#pie").contains(e.relatedTarget))hlPie("")});
@@ -5392,7 +5393,7 @@ function restore(){document.querySelectorAll("#bbody .sc").forEach(e=>{e.scrollT
 const COLORS=/*BOARD_COLORS*/;
 const COLNAME=/*BOARD_NAMES*/;const BOARD_VOCAB={todo:COLNAME.issue_todo,doing:/*BOARD_DOING*/,review:/*BOARD_REVIEW*/};   // the columns' names by the fact that sets them: the board's script holds no column name of its own
 const hidCols=()=>bo.hidden??[];
-const RING=["var(--s6)","var(--s2)","var(--s7)","var(--s3)"];   // reserved for the columns the user creates, and never one of the named columns
+const RING=["var(--chart-series-6)","var(--chart-series-2)","var(--chart-series-7)","var(--chart-series-3)"];   // reserved for the columns the user creates, and never one of the named columns
 const colOf=(n,names)=>{const u=(names||[]).filter(x=>!Object.hasOwn(COLORS,x)).sort(),i=u.indexOf(n);return COLORS[n]||RING[(i<0?0:i)%RING.length]};
 const caseRows=cs=>(cs||[]).map(c=>{const ag=Math.max(0,Math.round((Date.now()-Date.parse(c.ended))/1000)),a=ag<3600?Math.max(1,Math.round(ag/60))+"m":ag<172800?Math.round(ag/3600)+"h":Math.round(ag/86400)+"d";return `<div class="tcrow ${c.result==="fail"?"fail":"pass"}" data-key="test case:${c.issue}@${esc(c.commit)}"><span class=tr>${esc(c.result)}</span><span class=id>#${c.issue}</span><span class=ta>${a}</span><code class=tm>${esc(c.commit)}</code></div>`}).join("");   // one row for each test case item, in the model's order: a strip beside the axis, never a column, and the pane reads no cache of its own
 // flow-charts:
@@ -5401,13 +5402,13 @@ let flowW=800,flowH=340;const flowP=36,flowHMin=340,flowHMax=720;   // both foll
 const flowHeight=h=>{const v=(h*0.55)|0;return v<flowHMin?flowHMin:v>flowHMax?flowHMax:v};   // the plot height is layout, never a series (#1144)
 const flowX=(i,n)=>n<2?flowP:flowP+i*(flowW-2*flowP)/(n-1);
 const flowY=(v,max)=>max?flowH-flowP-v*(flowH-2*flowP)/max:flowH-flowP;
-const flowAxis=(max,unit)=>`<line x1=${flowP} y1=${flowH-flowP} x2=${flowW-flowP} y2=${flowH-flowP} stroke=var(--line)></line><text x=${flowP-6} y=${flowY(max,max)+4} text-anchor=end fill=var(--mute)>${max} ${unit}</text>`;
+const flowAxis=(max,unit)=>`<line x1=${flowP} y1=${flowH-flowP} x2=${flowW-flowP} y2=${flowH-flowP} stroke=var(--chart-grid)></line><text x=${flowP-6} y=${flowY(max,max)+4} text-anchor=end fill=var(--chart-axis)>${max} ${unit}</text>`;
 const cfdAxis=c=>{const n=c.days.length,base=flowH-flowP;   // every number and date arrives from the hub; the page places a mark and a label for each (#896)
-  const ys=c.yticks.map(v=>{const y=flowY(v,c.ymax);return `<line x1=${flowP-4} y1=${y} x2=${flowP} y2=${y} stroke=var(--mute)></line><text x=${flowP-7} y=${y+4} text-anchor=end fill=var(--mute)>${v}</text>`}).join("");
-  const xs=c.xticks.map(t=>{const x=flowX(t.i,n);return `<line x1=${x} y1=${base} x2=${x} y2=${base+4} stroke=var(--mute)></line><text x=${x} y=${base+17} text-anchor=middle fill=var(--mute)>${esc(t.day)}</text>`}).join("");
-  return `<line x1=${flowP} y1=${flowP-10} x2=${flowP} y2=${base} stroke=var(--line)></line><line x1=${flowP} y1=${base} x2=${flowW-flowP} y2=${base} stroke=var(--line)></line>${ys}${xs}`+
-    `<text x=4 y=${flowP-16} text-anchor=start fill=var(--mute)>cards</text>`+
-    `<text x=${flowW-flowP} y=${base+31} text-anchor=end fill=var(--mute)>day (${esc(c.zone)})</text>`;};
+  const ys=c.yticks.map(v=>{const y=flowY(v,c.ymax);return `<line x1=${flowP-4} y1=${y} x2=${flowP} y2=${y} stroke=var(--chart-axis)></line><text x=${flowP-7} y=${y+4} text-anchor=end fill=var(--chart-axis)>${v}</text>`}).join("");
+  const xs=c.xticks.map(t=>{const x=flowX(t.i,n);return `<line x1=${x} y1=${base} x2=${x} y2=${base+4} stroke=var(--chart-axis)></line><text x=${x} y=${base+17} text-anchor=middle fill=var(--chart-axis)>${esc(t.day)}</text>`}).join("");
+  return `<line x1=${flowP} y1=${flowP-10} x2=${flowP} y2=${base} stroke=var(--chart-grid)></line><line x1=${flowP} y1=${base} x2=${flowW-flowP} y2=${base} stroke=var(--chart-grid)></line>${ys}${xs}`+
+    `<text x=4 y=${flowP-16} text-anchor=start fill=var(--chart-axis)>cards</text>`+
+    `<text x=${flowW-flowP} y=${base+31} text-anchor=end fill=var(--chart-axis)>day (${esc(c.zone)})</text>`;};
 const coverNote=v=>!v?"":`<p class=fnote>cards read ${v.read} of ${v.total}, ${v.complete} complete, last refresh ${v.last?esc(v.last):"never"}</p>`;
 let CF={r:"30"};   // the cumulative flow's range, 30 days at first (#901)
 const CFD_R=[["7","7 days"],["30","30 days"],["90","90 days"],["all","All"]];   // the cumulative flow's range views (#901)
@@ -5442,7 +5443,7 @@ const LT_TF=[["1","Past 24 hours"],["2","Past 48 hours"],["3","Past 72 hours"],[
 const ltP=64;   // a duration label ("17h 36m") is wider than a count, and the old margin cut every tick to its tail (#Astra review)
 const ltX=x=>ltP+x*(flowW-2*ltP),ltY=y=>flowH-ltP-y*(flowH-2*ltP);
 const ltLine=(v,col,dash)=>v?`<line x1=${ltP} x2=${flowW-ltP} y1=${ltY(v.y)} y2=${ltY(v.y)} stroke="${col}" stroke-width=2${dash?` stroke-dasharray="${dash}"`:""}><title>${esc(v.label)} ${esc(v.text)}</title></line>`:"";   // the value lives in the legend, never over the newest dots (#1146)
-const ltChart=(c,cov)=>{const n=c.dots.length,base=flowH-flowP,ink="var(--ink-soft)",mute="var(--mute)";
+const ltChart=(c,cov)=>{const n=c.dots.length,base=flowH-flowP,ink="var(--chart-ink)",mute="var(--chart-axis)";
   const grp=(name,body)=>`<span class=ltgrp><b class=ltgl>${name}</b> ${body}</span>`,backTo=LT_TF.find(([k])=>k===LT.tf)[1];
   const ctl=`<p class=fhead>`+
       `<label>Timeframe <select id=ltr>${LT_TF.map(([k,v])=>`<option value=${k}${LT.tf===k?" selected":""}>${v}</option>`).join("")}</select></label> `+
@@ -5460,17 +5461,17 @@ const ltChart=(c,cov)=>{const n=c.dots.length,base=flowH-flowP,ink="var(--ink-so
   if(!n)return ctl+"<p class=fnote>no closed card in this timeframe</p>";
   const up=c.dots.map(d=>`${ltX(d.x)},${ltY(d.rolling.y_high)}`),low=[...c.dots].reverse().map(d=>`${ltX(d.x)},${ltY(d.rolling.y_low)}`);
   const banded=c.dots.every(d=>d.rolling.y_high!=null);
-  const band=banded?`<polygon points="${[...up,...low].join(" ")}" fill="var(--s3)" fill-opacity=".28"><title>Standard deviation</title></polygon>`:"";   // the band keeps its own fill, stronger (#1146)
-  const roll=`<polyline fill=none stroke="var(--acc)" stroke-width=2 points="${c.dots.map(d=>`${ltX(d.x)},${ltY(d.rolling.y)}`).join(" ")}"><title>Rolling average, centered</title></polyline>`;   // the trend keeps the accent (#1146)
+  const band=banded?`<polygon points="${[...up,...low].join(" ")}" fill="var(--chart-series-3)" fill-opacity=".28"><title>Standard deviation</title></polygon>`:"";   // the band keeps its own fill, stronger (#1146)
+  const roll=`<polyline fill=none stroke="var(--chart-bar)" stroke-width=2 points="${c.dots.map(d=>`${ltX(d.x)},${ltY(d.rolling.y)}`).join(" ")}"><title>Rolling average, centered</title></polyline>`;   // the trend keeps its chart accent (#1146)
   const ys=c.ticks.map(t=>`<line x1=${ltP-4} y1=${ltY(t.y)} x2=${ltP} y2=${ltY(t.y)} stroke=${mute}></line><text x=${ltP-7} y=${ltY(t.y)+4} text-anchor=end fill=${ink}>${esc(t.text)}</text>`).join("");
   const xs=c.xticks.map(t=>`<text x=${ltX(t.x)} y=${base+17} text-anchor=middle fill=${ink}>${esc(t.text)}</text>`).join("");
-  const axes=`<line x1=${ltP} y1=${ltP-10} x2=${ltP} y2=${base} stroke=var(--line)></line><line x1=${ltP} y1=${base} x2=${flowW-ltP} y2=${base} stroke=var(--line)></line>`+
+  const axes=`<line x1=${ltP} y1=${ltP-10} x2=${ltP} y2=${base} stroke=var(--chart-grid)></line><line x1=${ltP} y1=${base} x2=${flowW-ltP} y2=${base} stroke=var(--chart-grid)></line>`+
     `<text x=${ltP} y=${ltP-16} text-anchor=start fill=${ink}>elapsed time (${c.scale==="cube"?"cube root":c.scale})</text>`;
-  const lines=ltLine(c.average,"var(--s8)","")+ltLine(c.median,"var(--ok)","2 3")+ltLine(c.p85,"var(--s5)","5 3");   // the average takes the palette grey (#1146)
+  const lines=ltLine(c.average,"var(--chart-series-8)","")+ltLine(c.median,"var(--chart-ok)","2 3")+ltLine(c.p85,"var(--chart-series-5)","5 3");
   const dots=c.clusters.map((k,i)=>{const m=k.dots.length,title=m>1?`${m} issues`:`#${k.dots[0].n} ${esc(k.dots[0].title)}`;   // the hub sizes the ring for its count (#1146)
-    return `<circle data-k=${i} cx=${ltX(k.x)} cy=${ltY(k.y)} r=${k.r} fill="${m>1?"var(--bg)":"var(--ink-soft)"}" stroke="var(--ink-soft)" stroke-width=2${k.dots.some(d=>d.approx||d.unknown_first)?' stroke-dasharray="3 2"':""} style="cursor:pointer"><title>${esc(title)} · ${esc(k.dots[0].text)} · flowing ${esc(k.dots[0].flowing_text)} · held ${esc(k.dots[0].held_text)} · closed ${esc(k.dots[0].closed)}${k.dots.some(d=>d.approx)?" · start approximate":""}${k.dots.some(d=>d.unknown_first)?" · first interval unknown":""}</title></circle>`+(m>1?`<text x=${ltX(k.x)} y=${ltY(k.y)+/*RING_BASELINE*/} fill="var(--ink-soft)" text-anchor=middle pointer-events=none>${m}</text>`:"")}).join("");
+    return `<circle data-k=${i} cx=${ltX(k.x)} cy=${ltY(k.y)} r=${k.r} fill="${m>1?"var(--chart-bg)":"var(--chart-ink)"}" stroke="var(--chart-ink)" stroke-width=2${k.dots.some(d=>d.approx||d.unknown_first)?' stroke-dasharray="3 2"':""} style="cursor:pointer"><title>${esc(title)} · ${esc(k.dots[0].text)} · flowing ${esc(k.dots[0].flowing_text)} · held ${esc(k.dots[0].held_text)} · closed ${esc(k.dots[0].closed)}${k.dots.some(d=>d.approx)?" · start approximate":""}${k.dots.some(d=>d.unknown_first)?" · first interval unknown":""}</title></circle>`+(m>1?`<text x=${ltX(k.x)} y=${ltY(k.y)+/*RING_BASELINE*/} fill="var(--chart-ink)" text-anchor=middle pointer-events=none>${m}</text>`:"")}).join("");
   const ltV=v=>v?esc(v.text):"?",S="";   // the numbers live in the legend, each beside what it answers: one line, never two copies of the same fact
-  const legend=`<p class="flg ltlg"><span><i style="background:var(--acc)"></i>Rolling average, centered</span>${banded?`<span><i style="background:var(--s3);opacity:.28"></i>Standard deviation <em>the usual spread</em></span>`:""}<span><i style="background:var(--s8)"></i>${esc(c.average.label)} <b>${ltV(c.average)}</b> <em>one slow card lifts it</em></span><span><i style="background:var(--ok)"></i>${esc(c.median.label)} <b>${ltV(c.median)}</b> <em>half the cards closed faster</em></span><span><i style="background:var(--s5)"></i>${esc(c.p85.label)} <b>${ltV(c.p85)}</b> <em>85% of closed cards finished within this time</em></span></p>`;   // each entry paints the mark it names (#1146)
+  const legend=`<p class="flg ltlg"><span><i style="background:var(--chart-bar)"></i>Rolling average, centered</span>${banded?`<span><i style="background:var(--chart-series-3);opacity:.28"></i>Standard deviation <em>the usual spread</em></span>`:""}<span><i style="background:var(--chart-series-8)"></i>${esc(c.average.label)} <b>${ltV(c.average)}</b> <em>one slow card lifts it</em></span><span><i style="background:var(--chart-ok)"></i>${esc(c.median.label)} <b>${ltV(c.median)}</b> <em>half the cards closed faster</em></span><span><i style="background:var(--chart-series-5)"></i>${esc(c.p85.label)} <b>${ltV(c.p85)}</b> <em>85% of closed cards finished within this time</em></span></p>`;   // each entry paints the mark it names (#1146)
   const pk=LT.pick!=null&&c.clusters[LT.pick]?c.clusters[LT.pick]:null;
   const rows=pk?`<table class=mtab><thead><tr><th>Issue</th><th>Title</th><th>Elapsed</th><th>Closed</th></tr></thead><tbody>${pk.dots.map(d=>`<tr data-o=${d.n} style="cursor:pointer"><td>#${d.n}</td><td>${esc(d.title)}</td><td>${esc(d.text)}</td><td>${esc(d.closed)}</td></tr>`).join("")}</tbody></table>`:"";   // the page's one table rule (#1146)
   return ctl+S+legend+`<svg data-lt viewBox="0 0 ${flowW} ${flowH}">${axes}${ys}${xs}${band}${roll}${lines}${dots}</svg>`+rows;};
@@ -5490,7 +5491,7 @@ const ltClamp=x=>x<flowP?flowP:x>flowW-flowP?flowW-flowP:x,ltLo=(p,q)=>p<q?p:q,l
 let LTD=null;   // the drag across a control chart's plot in progress (#900)
 $("#flowb").onpointerdown=e=>{const s=e.target.closest("svg[data-lt]");LT.noclick=false;if(!s||e.button!==0||!LT.rng)return;const x=ltClamp(ltPx(e,s));LTD={s,x0:x,x1:x,moved:false}};
 document.addEventListener("pointermove",e=>{if(!LTD)return;const x1=ltClamp(ltPx(e,LTD.s));LTD.x1=x1;const dx=x1-LTD.x0;if(!LTD.moved&&dx*dx<36)return;LTD.moved=true;
-  let sel=LTD.s.querySelector("rect.ltsel");if(!sel){sel=document.createElementNS("http://www.w3.org/2000/svg","rect");sel.setAttribute("class","ltsel");sel.setAttribute("y",flowP-10);sel.setAttribute("height",flowH-2*flowP+10);sel.setAttribute("fill","var(--s3)");sel.setAttribute("fill-opacity",".18");sel.setAttribute("pointer-events","none");LTD.s.appendChild(sel)}
+  let sel=LTD.s.querySelector("rect.ltsel");if(!sel){sel=document.createElementNS("http://www.w3.org/2000/svg","rect");sel.setAttribute("class","ltsel");sel.setAttribute("y",flowP-10);sel.setAttribute("height",flowH-2*flowP+10);sel.setAttribute("fill","var(--chart-series-3)");sel.setAttribute("fill-opacity",".18");sel.setAttribute("pointer-events","none");LTD.s.appendChild(sel)}
   sel.setAttribute("x",ltLo(LTD.x0,x1));sel.setAttribute("width",dx<0?-dx:dx)});
 document.addEventListener("pointerup",()=>{const d=LTD;LTD=null;if(!d||!d.moved)return;d.s.querySelector("rect.ltsel")?.remove();LT.noclick=true;
   const a=(ltLo(d.x0,d.x1)-flowP)/(flowW-2*flowP),b=(ltHi(d.x0,d.x1)-flowP)/(flowW-2*flowP);if(b-a<0.005||!LT.rng)return;const [f,t]=ltSpan(LT.rng,a,b);ltZoom(f,t)});
@@ -5530,8 +5531,8 @@ fillBar("fwl",wOpts.map(o=>o.key),k=>wOpts.find(o=>o.key===k).label,fw,"Waves");
 fillBar("fsl",sOpts,s=>s==="none"?"No spec":"#"+s+(specTitle.get(s)?" "+specTitle.get(s):""),fs,"Specs",s=>specColor(SLOTS,s==="none"?null:s));   // the spec filter is the legend (#917)
 fillBar("fkl",KIND_OPTIONS.map(o=>o[0]),k=>KIND_OPTIONS.find(o=>o[0]===k)[1],fk,"Kinds");
 const hid=new Set(hidCols()),bottom=true,eye=(g,off=hid.has(g.name))=>`<span class=eye data-eye="${esc(g.name)}" title="${off?"show":"hide"} this column"><svg viewBox="0 0 24 24" width=14 height=14 fill=none stroke=currentColor stroke-width=2 stroke-linecap=round stroke-linejoin=round><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx=12 cy=12 r=3 />${off?'<path d="M3 3l18 18"/>':""}</svg></span>`;
-const LC=b.lc||{},rgb=h=>[0,2,4].map(i=>parseInt(h.slice(i,i+2),16)),mix=(a,t)=>a.map((v,i)=>Math.round(v*t+[28,34,44][i]*(1-t))),   // label color blended into the card's #1c222c
-tint=x=>{const cs=(x.l||[]).map(l=>LC[l]).filter(c=>/^[0-9a-f]{6}$/.test(c||"")).map(rgb);if(!cs.length)return"";const avg=[0,1,2].map(i=>cs.reduce((s,c)=>s+c[i],0)/cs.length);return`;--bg:rgb(${mix(avg,.10)});--bgh:rgb(${mix(avg,.16)})`},
+const LC=b.lc||{},rgb=h=>[0,2,4].map(i=>parseInt(h.slice(i,i+2),16)),
+tint=x=>{const cs=(x.l||[]).map(l=>LC[l]).filter(c=>/^[0-9a-f]{6}$/.test(c||"")).map(rgb);if(!cs.length)return"";const avg=[0,1,2].map(i=>cs.reduce((s,c)=>s+c[i],0)/cs.length);return`;--bg:color-mix(in srgb,var(--card) 90%,rgb(${avg}));--bgh:color-mix(in srgb,var(--card) 84%,rgb(${avg}))`},
 lbc=l=>/^[0-9a-f]{6}$/.test(LC[l]||"")?` style="--lb:rgba(${rgb(LC[l])},.30)"`:"";
 const age=o=>{let m=Math.max(0,Math.floor((Date.now()-Date.parse(o))/60000));const d=Math.floor(m/1440),h=Math.floor(m%1440/60);m%=60;return "⏱ "+(d?d+"d "+h+"h":h?h+"h "+String(m).padStart(2,"0")+"m":m+"m")};
 const ageC=o=>{const h=(Date.now()-Date.parse(o))/3600000;return h>=24?"old":h>=4?"warm":""};
@@ -6936,7 +6937,7 @@ MOBILE_PAGE = mobile_photo((pathlib.Path(__file__).resolve().parent / "hub-mobil
 MOBILE_SHELL = ["/mobile/", "/mobile/manifest.webmanifest", "/mobile/icon.svg"]
 SW_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-sw.js").read_text().replace("/*SHELL*/[]", json.dumps(MOBILE_SHELL))
 MANIFEST_JSON = json.dumps({"id": "/mobile/", "name": f"Squad hub {REPO}", "short_name": "Hub", "start_url": "/mobile/", "scope": "/mobile/", "display": "standalone", "background_color": "var(--bg)", "theme_color": "var(--bg)", "icons": [{"src": "/mobile/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}]}).encode()
-MOBILE_ICON = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192"><rect width="192" height="192" rx="36" fill="var(--bg)"/><circle cx="96" cy="96" r="52" fill="var(--ok)"/></svg>'
+MOBILE_ICON = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192"><rect width="192" height="192" rx="36" fill="var(--bg)"/><circle cx="96" cy="96" r="52" fill="var(--chart-ok)"/></svg>'
 MOBILE_ASSETS = {"/mobile/manifest.webmanifest": (MANIFEST_JSON, "application/manifest+json"), "/mobile/icon.svg": (MOBILE_ICON, "image/svg+xml"),
                  "/mobile/sw.js": (SW_JS.encode(), "text/javascript; charset=utf-8")}
 

@@ -70,10 +70,11 @@ def test_every_shipped_column_is_reachable_on_the_board(table, hub):
 
 def test_the_hub_vocabulary_is_the_table(table, hub):
     assert hub.BOARD_COLUMNS == table.view_columns(), "the hub holds a vocabulary of its own"
-    # The table names a role, and the page reads it; the anchor is the table's own name and role, never a copy of a value.
     colours = json.loads(re.search(r"const COLORS=(\{.*?\});", hub.PAGE).group(1))
-    assert list(colours.items()) == [(c["name"], c["color"]) for c in [*table.view_columns(), *table.LANES]], \
-        "the page's colour map is not the table's, so a column wears a colour of its own"
+    names = [c["name"] for c in [*table.view_columns(), *table.LANES]]
+    assert list(colours) == names, "the chart's column roles are not in the table's order"
+    assert all(re.fullmatch(r"var\(--chart-[\w-]+\)", colours[name]) for name in names), \
+        "the column chart copies a palette value instead of reading a chart role"
 
 
 def test_a_card_closed_as_not_planned_draws_abandoned_whatever_its_status(table):

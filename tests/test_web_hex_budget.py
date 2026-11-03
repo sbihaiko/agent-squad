@@ -87,12 +87,58 @@ def _literals(html, tokens=None):
     css = "\n".join(re.findall(r"<style[^>]*>(.*?)</style>", text, flags=re.S))
     css = re.sub(r"[^{}]+(?=\{)", "", _strip_comments(css))   # drop selector text, keep the declaration bodies
     quoted = "\n".join(m.group(0) for m in re.finditer(r"\"[^\"]*\"|'[^']*'", _strip_comments(text)))
-    return HEX.findall(css + "\n" + quoted)
+    scripts = "\n".join(re.findall(r"<script[^>]*>(.*?)</script>", text, flags=re.S))
+    scripts = re.sub(r"(?:querySelector(?:All)?|getElementById)\([\"'][^\"']*[\"']\)", "", scripts)
+    scripts = re.sub(r"\$\([\"'][^\"']*[\"']\)", "", scripts)
+    return HEX.findall(css + "\n" + quoted + "\n" + _strip_comments(scripts))
 
 
 def _literals_by_surface(surfaces=None):
     tokens = TOKENS_FILE.read_text()
     return {name: _literals(html, tokens) for name, html in (surfaces or _surfaces()).items()}
+
+
+def _hub_javascript_literals(html):
+    scripts = "\n".join(re.findall(r"<script[^>]*>(.*?)</script>", html, flags=re.S))
+    scripts = re.sub(r"(?:querySelector(?:All)?|getElementById)\([\"'][^\"']*[\"']\)", "", scripts)
+    scripts = re.sub(r"\$\([\"'][^\"']*[\"']\)", "", scripts)
+    return HEX.findall(_strip_comments(scripts))
+
+
+def test_hub_javascript_has_no_colour_literals(surfaces):
+    assert not _hub_javascript_literals(surfaces["hub"]), "hub JavaScript carries a colour literal"
+
+
+def test_the_guard_catches_a_colour_literal_in_hub_javascript(surfaces):
+    poisoned = surfaces["hub"].replace("</script>", 'const poison = "#123456";</script>', 1)
+    assert "#123456" in _hub_javascript_literals(poisoned)
+
+
+def test_hub_charts_read_chart_roles(surfaces):
+    scripts = "\n".join(re.findall(r"<script[^>]*>(.*?)</script>", surfaces["hub"], flags=re.S))
+    regions = (
+        ("function bars(", "function cmp(", ("--chart-grid", "--chart-axis", "--chart-bar", "--chart-bar-max")),
+        ("const PCOL", "function hlPie(", ("--chart-series-1", "--chart-series-other", "--chart-bg")),
+        ("const flowAxis", "const cfdAxis", ("--chart-grid", "--chart-axis")),
+        ("const ltChart", "const flowLead", ("--chart-series-3", "--chart-series-8", "--chart-ok", "--chart-series-5")),
+    )
+    for start, end, roles in regions:
+        region = scripts.split(start, 1)[1].split(end, 1)[0]
+        for role in roles:
+            assert f"var({role})" in region, f"{start} does not read {role}"
+
+    bar = regions[0]
+    bar_script = scripts.split(bar[0], 1)[1].split(bar[1], 1)[0]
+    value = re.search(r"--chart-bar\s*:\s*([^;}]+)", TOKENS_FILE.read_text()).group(1)
+    assert value not in bar_script, "the bar chart copies the role value instead of reading its role"
+
+
+def test_the_guard_rejects_a_literal_in_both_hub_sides(surfaces):
+    hub = surfaces["hub"]
+    css_poison = hub.replace("</style>", ".poison{color:#123456}</style>", 1)
+    js_poison = hub.replace("</script>", 'const poison = "#123456";</script>', 1)
+    assert "#123456" in _literals(css_poison), "the hub CSS literal escaped the guard"
+    assert "#123456" in _literals(js_poison), "the hub JavaScript literal escaped the guard"
 
 
 def _budget():
