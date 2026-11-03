@@ -11,6 +11,7 @@ import re
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -30,6 +31,9 @@ EVE = "eve@example.com"
 
 
 def load_sessions():
+    # sessions imports its siblings, so the file runs alone too (#1269)
+    if str(SCRIPTS) not in sys.path:
+        sys.path.insert(0, str(SCRIPTS))
     spec = importlib.util.spec_from_file_location("sessions_under_test", SCRIPTS / "sessions.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -623,3 +627,17 @@ def test_no_owner_turn_leaves_elapsed_and_tokens_unknown(home, tmp_path):
     write_transcript(home, cwd, "s1", [reply("a0", "2026-11-01T10:00:05.000Z", "m1", 40, text="hi")])
     activity = load_sessions().conversation("p1", "s1", profiles_of=lambda c: ["p1"])["activity"]
     assert activity == {"status": "busy", "elapsed": None, "tokens": None}
+
+
+def test_background_session_claimed_late_by_its_spare_process_is_listed(home, tmp_path):
+    """A background job runs in a pre-spawned spare process, which starts long before the session claims it (#1269)."""
+    body = add_session(home, os.getpid(), "s1", tmp_path / "app", kind="bg")
+    (home.sessions / f"{os.getpid()}.json").write_text(json.dumps({**body, "startedAt": body["startedAt"] + 10_000_000}))
+    out = load_sessions().list_sessions("p1", profiles_of=lambda c: ["p1"])
+    assert [s["sid"] for g in out["groups"] for s in g["sessions"]] == ["s1"]
+
+
+def test_background_session_older_than_its_process_is_a_reused_pid(home, tmp_path):
+    body = add_session(home, os.getpid(), "s1", tmp_path / "app", kind="bg")
+    (home.sessions / f"{os.getpid()}.json").write_text(json.dumps({**body, "startedAt": body["startedAt"] - 100_000}))
+    assert load_sessions().list_sessions("p1", profiles_of=lambda c: ["p1"])["groups"] == []

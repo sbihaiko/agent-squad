@@ -101,11 +101,13 @@ def _proc_start(pid):
     try: return int(time.mktime(time.strptime(" ".join(out.split()), "%a %b %d %H:%M:%S %Y")))
     except ValueError: return None
 
-def _alive_since(pid, started):
+def _alive_since(pid, started, kind=None):
     try: os.kill(pid, 0)
     except OSError: return False
     start = _proc_start(pid)
-    return start is not None and 0 <= started // 1000 - start <= 30   # startedAt (ms) is written a few seconds after the process starts
+    if start is None: return False
+    if kind == "bg": return started // 1000 >= start   # a background job claims a spare process started long before it (#1269); a reused pid starts after the record
+    return 0 <= started // 1000 - start <= 30   # startedAt (ms) is written a few seconds after the process starts
 
 def profiles_dir():
     """The profiles the address seam reads: SG_PROFILES_DIR when the runner exports it, else the global skill's own, so a
@@ -357,7 +359,7 @@ def live_sessions(profile, profiles_of=profiles_of):
     """Each record that passes every check and belongs to this profile, with its token: the one membership rule for the routes."""
     for rec in _records():
         sid, pid, cwd = rec["sessionId"], rec["pid"], rec["cwd"]
-        if not _socket_ok(rec["socket"]) or not _alive_since(pid, rec["startedAt"]): continue
+        if not _socket_ok(rec["socket"]) or not _alive_since(pid, rec["startedAt"], rec.get("kind")): continue
         found = profiles_of(cwd)
         if found != [profile]:
             if len(found) > 1: _log(f"hub: session {sid} matches profiles {', '.join(found)}, listed in none", once=True)
