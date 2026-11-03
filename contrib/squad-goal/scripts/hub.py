@@ -5928,7 +5928,9 @@ def q_kimi():
     """`GET /coding/v1/usages` answers the 5 h window and the month's share as used ratios. An absent or expired token
     reads as no reading with its reason, never as a guess."""
     tok = kimi_token()
-    if not tok: return {"windows": [], "unavailable": True, "err": "no live Kimi token: the bridge refreshes it on the next kimi call"}
+    # `keep`: the token lives fifteen minutes and only a kimi call refreshes it, so this is no new reading, never one
+    # that stopped tracking the account; quota_store keeps the last good windows, and quota_row still ages them out.
+    if not tok: return {"windows": [], "unavailable": True, "keep": True, "err": "no live Kimi token: the bridge refreshes it on the next kimi call"}
     d = kimi_usages(tok)
     u = d.get("usages") or {}
     ws = []
@@ -5944,16 +5946,26 @@ def q_nvidia():
     monthly share, so the row says so rather than drawing a guess."""
     return {"windows": [], "unavailable": True, "err": "free tier: a per-minute rate limit, no monthly reading"}
 QUOTA_PROBES = {"claude": q_claude, "gpt": q_codex, "grok": q_grok, "gemini": q_agy, "kimi": q_kimi, "nvidia": q_nvidia}
+def quota_store(k, fn):
+    """Run probe fn and store its answer for k. An answer with no windows replaces the row outright, so a reading that
+    stopped tracking reality cannot pass as current, unless it says `keep` (no new reading, e.g. an expired token):
+    then the last good windows stay with their own asof, and the answer's reason rides along. A probe that raises keeps
+    the last good value."""
+    try:
+        r = fn()
+        if not r: return
+        old = quota.get(k) or {}
+        if r.get("keep") and not r.get("windows") and old.get("windows"):
+            old["err"] = r.get("err")
+            return
+        r.pop("keep", None)
+        r.setdefault("asof", time.time())
+        quota[k] = r
+        if r.get("windows"): note_week(k, r)
+    except Exception as e: quota.setdefault(k, {"windows": []})["err"] = str(e)[:120]
 def refresh_quota_once():
-    """One pass: ask each CLI for its quota. A probe that answers with no windows replaces the row outright, so a
-    reading that stopped tracking reality cannot pass as current; a probe that raises keeps the last good value."""
-    for k, fn in QUOTA_PROBES.items():
-        try:
-            r = fn()
-            if r:
-                r.setdefault("asof", time.time()); quota[k] = r
-                if r.get("windows"): note_week(k, r)
-        except Exception as e: quota.setdefault(k, {"windows": []})["err"] = str(e)[:120]
+    """One pass: ask each CLI for its quota (quota_store), then persist every row."""
+    for k, fn in QUOTA_PROBES.items(): quota_store(k, fn)
     quota_write()
 QUOTA_LOCK = threading.Lock()
 def quota_write():
@@ -5970,13 +5982,11 @@ def refresh_kimi_quota():
     """Every two minutes, the Kimi reading alone: the full pass spawns a model call for another provider, and this one
     is a single HTTPS GET, so the row the owner watches while the chain codes stays current."""
     while True:
-        try:
-            r = q_kimi()
-            if r:
-                r.setdefault("asof", time.time()); quota["kimi"] = r
-                if r.get("windows"): note_week("kimi", r)
-        except Exception as e: quota.setdefault("kimi", {"windows": []})["err"] = str(e)[:120]
-        quota_write(); time.sleep(KIMI_REFRESH_SECONDS)
+        kimi_pass_once(); time.sleep(KIMI_REFRESH_SECONDS)
+def kimi_pass_once():
+    """One Kimi pass: the same store rule as the full pass, then persist."""
+    quota_store("kimi", QUOTA_PROBES.get("kimi", q_kimi))
+    quota_write()
 QUOTA_MAX_AGE = 3 * 3600   # a probe repolls every 20 min; a reading older than this stopped tracking the account
 def quota_row(k, now=None):
     """What the cost panel and the footer show for provider k: the CLI's own reading, or the reason there is no reading.

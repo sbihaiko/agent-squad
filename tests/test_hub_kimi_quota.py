@@ -102,3 +102,45 @@ def test_the_https_read_takes_a_tls_context(hub):
 def test_kimi_is_one_of_the_probed_subscriptions(hub):
     assert set(hub.SUBS) <= set(hub.QUOTA_PROBES)
     assert hub.QUOTA_PROBES["kimi"] is hub.q_kimi
+
+
+def _good_reading(age):
+    return {"windows": [{"label": "5 h", "pct": 41.0, "resets": time.time() + 3600}], "asof": time.time() - age}
+
+
+def _kimi_row(hub):
+    return next(g for g in hub.subs_gauges() if g["key"] == "kimi")
+
+
+@pytest.mark.parametrize("one_pass", ["refresh_quota_once", "kimi_pass_once"])
+def test_an_expired_token_keeps_the_last_kimi_reading(hub, monkeypatch, one_pass):
+    """The bridge's access token lives fifteen minutes and only a kimi call refreshes it, so between calls the probe
+    finds no live token. That is no new reading, never a reading that stopped tracking the account: the row keeps the
+    last good windows (quota_row still ages them out) and names why it did not move."""
+    _store(hub, monkeypatch, bridge={"access": "gone", "expires": 1})
+    monkeypatch.setattr(hub, "quota", {"kimi": _good_reading(600)})
+    monkeypatch.setattr(hub, "QUOTA", Path(tempfile.mkdtemp()) / "hub-quota.json")
+    monkeypatch.setattr(hub, "QUOTA_PROBES", {"kimi": hub.q_kimi, "nvidia": hub.q_nvidia})
+    monkeypatch.setattr(hub, "note_week", lambda k, r: None)
+    getattr(hub, one_pass)()
+    row = _kimi_row(hub)
+    assert row["pct"] == 41.0 and row["window"] == "5 h"
+    kept = json.loads(hub.QUOTA.read_text())["kimi"]
+    assert [w["pct"] for w in kept["windows"]] == [41.0] and "token" in kept["err"]
+
+
+def test_an_expired_token_with_no_last_reading_says_why(hub, monkeypatch):
+    _store(hub, monkeypatch)
+    monkeypatch.setattr(hub, "quota", {})
+    monkeypatch.setattr(hub, "QUOTA", Path(tempfile.mkdtemp()) / "hub-quota.json")
+    hub.kimi_pass_once()
+    row = _kimi_row(hub)
+    assert row["pct"] is None and "token" in row["why"]
+
+
+def test_a_kept_reading_still_ages_out(hub, monkeypatch):
+    _store(hub, monkeypatch)
+    monkeypatch.setattr(hub, "quota", {"kimi": _good_reading(hub.QUOTA_MAX_AGE + 60)})
+    monkeypatch.setattr(hub, "QUOTA", Path(tempfile.mkdtemp()) / "hub-quota.json")
+    hub.kimi_pass_once()
+    assert _kimi_row(hub)["pct"] is None
