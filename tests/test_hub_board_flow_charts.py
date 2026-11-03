@@ -380,6 +380,32 @@ def test_every_band_drawn_has_a_legend_entry_in_the_hub_order(hub, board, tmp_pa
 TIMEFRAME_KEYS = ["1", "2", "3", "7", "14", "30", "all"]   # the owner replaced the 3- and 6-month presets with 24, 48 and 72 hours (2026-11-01)
 
 
+def test_the_lead_chart_shares_its_plot_frame_with_hub_clustering_and_page(hub, board):
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
+
+    payload = hub.flow_lead()
+    lead = payload["lead"]
+    chart = lead["control"]["jira"]["all"]
+
+    assert payload["plot_frame"] == {"width": 672, "height": 212}
+    assert chart["plot_frame"] == payload["plot_frame"]
+    assert "flowW-2*ltP" not in _flow_block(hub), "the page selects its own plot frame"
+    assert "flowH-2*ltP" not in _flow_block(hub), "the page selects its own plot frame"
+    assert "clusters=" not in _flow_block(hub), "the page computes clusters"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_lead_page_draws_the_plot_frame_supplied_by_the_hub(hub, board, tmp_path):
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
+    chart = _flow(hub)["lead"]["control"]["jira"]["all"]
+    chart["plot_frame"] = {"width": 700, "height": 240}
+
+    out = _lt_chart(hub, tmp_path, "lt-supplied-frame.js", chart)
+
+    assert 'viewBox="0 0 828 368"' in out
+    assert '<line x1=64 y1=304 x2=764 y2=304' in out
+
+
 def test_the_control_chart_is_served_for_every_timeframe_and_both_scales(hub, board):
     hub.board_cache["items"] = [_card(1, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-02T09:00:00Z")]
 

@@ -272,6 +272,16 @@ def test_the_date_axis_places_the_range_end_at_the_right_edge(lt):
     assert xs[2] == pytest.approx(0.5), "a card closed 5 of 10 days ago sits in the middle"
 
 
+def test_cards_clear_at_the_shared_plot_frame_stay_in_separate_clusters(lt):
+    result = _chart(lt, [_closed(1, 5), _closed(2, 5.4)])
+
+    assert result["plot_frame"] == {"width": 672, "height": 212}
+    assert sorted(len(cluster["dots"]) for cluster in result["clusters"]) == [1, 1]
+    first, second = result["dots"]
+    assert math.hypot((first["x"] - second["x"]) * result["plot_frame"]["width"],
+                      (first["y"] - second["y"]) * result["plot_frame"]["height"]) > lt.DOT_PX
+
+
 def test_dots_closer_than_one_dot_merge_into_a_numbered_cluster(lt):
     items = [_closed(1, 5, days_ago=2), _closed(2, 5, days_ago=2), _closed(3, 90, days_ago=2)]
 
