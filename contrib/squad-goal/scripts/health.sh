@@ -167,7 +167,7 @@ if [ -n "$rr" ]; then
     # every pass posts the marker again (#1292). The key is the reason made path-safe; two reasons that encode alike are
     # one marker by design, and the marker line still names the raw reason.
     kf=$(printf '%s' "$rkey" | tr -c 'A-Za-z0-9._-' '-'); cm="$A/notstartable-$n-$kf"; [ -e "$cm" ] && continue
-    printf 'SQUAD-NOT-STARTABLE: build=%s %s run(s) ended failed with the same reason `%s` in the last %s min.\n\n%s\n\nA dispatch on this issue reads this line before it starts and starts nothing while it is here. A later build re-arms it; remove this comment (or fix the cause) to re-arm it sooner.\n' \
+    printf 'SQUAD-NOT-STARTABLE: build=%s %s run(s) ended failed with the same reason `%s` in the last %s min.\n\n%s\n\nA dispatch on this issue reads this line before it starts and starts nothing while it is here. A later build re-arms it on its own. To re-arm it sooner, remove this comment and the frozen:not-startable label, or fix the cause.\n' \
       "$(sg_loop_build)" "$nrr" "$rkey" "${SG_HEALTH_REPEAT_MINUTES:-120}" "$rwhy" > "$A/.cm$$"
     # The marker is claimed before the post, so a pass interrupted between the two posts nothing twice; a post GitHub
     # refuses drops the claim, so the next pass tries again. An existing path-safe marker keeps its name, so a marker
