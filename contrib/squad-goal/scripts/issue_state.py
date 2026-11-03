@@ -492,17 +492,10 @@ class BoardBinding:
         (self.st / self._known_file).write_text(json.dumps(known))
 
     def node_status(self, issue):
-        """The Status of the card a known node id names, read by node(id:) -- a route the items list does not share (#800).
-        None when no id is known for the issue, or the node read is refused or names another issue."""
-        iid = self.known_ids().get(str(issue))
-        if not iid: return None
-        query = ('query($id: ID!) { node(id: $id) { ... on ProjectV2Item { isArchived content { ... on Issue { number } } '
-                 'fieldValueByName(name: "Status") { ... on ProjectV2ItemFieldSingleSelectValue { name } } } } }')
-        try: d = json.loads(self.api("graphql", "-f", f"query={query}", "-F", f"id={iid}"))
-        except (RuntimeError, ValueError): return None
-        node = ((d or {}).get("data") or {}).get("node") or {}
-        if str((node.get("content") or {}).get("number", "")) != str(issue) or node.get("isArchived"): return None
-        return ((node.get("fieldValueByName") or {}).get("name")) or None
+        """The Status of the card a known node id names, read by the one-item REST route (#1300, #1303). None when no id is
+        known for the issue, or the read is refused, unparsable, archived, or names another issue, or the card carries no
+        Status; the caller then falls back to the whole-board read."""
+        return self.node_state(issue) or None
 
     def item_id(self, n, add_missing=False):
         """The one reader every caller uses (move, --add, --run-fields, --clear-run). A miss re-reads the
@@ -538,17 +531,19 @@ class BoardBinding:
         return None   # a read that never carried it, and nothing was written for it here: genuinely absent
 
     def node_state(self, issue):
-        """The Status one card carries, read by its item's node id in one call (#1300). None when no id is known for the card, or
-        the read is refused or names another issue; "" when the card carries no Status."""
+        """The Status one card carries, read by the one-item REST route in one call (#1300, #1303). None when no id is known
+        for the card, or the read is refused, unparsable or names another issue; "" when the card carries no Status. The
+        loop reads GitHub over REST only: the GraphQL quota is shared with every `gh` subcommand."""
         iid = self.item_hints.get(str(issue)) or self.known_ids().get(str(issue))
         if not iid: return None
-        query = ('query($id: ID!) { node(id: $id) { ... on ProjectV2Item { isArchived content { ... on Issue { number } } '
-                 'fieldValueByName(name: "Status") { ... on ProjectV2ItemFieldSingleSelectValue { name } } } } }')
-        try: d = json.loads(self.api("graphql", "-f", f"query={query}", "-F", f"id={iid}"))
+        try: d = json.loads(self.api(f"{self.base}/items/{iid}"))
         except (RuntimeError, ValueError): return None
-        node = ((d or {}).get("data") or {}).get("node")
-        if not isinstance(node, dict) or str((node.get("content") or {}).get("number", "")) != str(issue) or node.get("isArchived"): return None
-        return (node.get("fieldValueByName") or {}).get("name") or ""
+        if not isinstance(d, dict) or str((d.get("content") or {}).get("number", "")) != str(issue) or d.get("isArchived"): return None
+        for f in d.get("fields") or []:
+            if not isinstance(f, dict) or f.get("name") != "Status": continue
+            v = f.get("value")
+            return (v.get("name") if isinstance(v, dict) else v) or ""
+        return ""
 
     def read_all(self):
         """Every card the carrier answers, in ONE read: {issue: state}, a card with no Status absent.
