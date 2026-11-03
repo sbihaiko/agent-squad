@@ -1,5 +1,6 @@
 """One run-state vocabulary: the hub's run badges and the run dashboard's verdict chip and legend name and paint a state alike (#1408)."""
 import importlib.util
+import json
 import os
 import re
 import tempfile
@@ -14,6 +15,10 @@ HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
 # The verdict values a record can carry, plus the two the surfaces add: the hub's `starting`/`verified`/`unverified`, the dashboard's no-verdict.
 RECORD_VERDICTS = ["completed", "failed", "needs-human"]
 PALETTE = {"ok": "#3ecf8e", "err": "#ff6b6b", "warn": "#f5b041", "run": "#2dd4bf", "none": "#b79cf6", "wait": "#e8d44d"}
+# The four marks of the one state table: a filled dot, a hollow dot, a bar, or none. A texture is not a mark:
+# dotted against dashed reads as one texture, so a border style never names a difference (#1137).
+MARKS = ("filled", "hollow", "bar", "none")
+MARK_GLYPHS = {"filled": "●", "hollow": "○", "bar": "▌", "none": ""}
 
 
 @pytest.fixture(scope="module")
@@ -33,18 +38,44 @@ def dash_states():
     return run_node([{"op": "legend"}])[0]["states"]
 
 
-def test_hub_and_dashboard_share_one_state_table_with_one_label_and_one_colour_per_state(hub):
-    hub_rows = {r["state"]: (r["label"], r["color"], r["css"]) for r in hub.RUN_STATES}
-    dash_rows = {r["state"]: (r["label"], r["color"], r["css"]) for r in dash_states()}
+def test_hub_and_dashboard_consume_the_served_state_table(hub):
+    table = json.loads((ROOT / "config" / "run-states.json").read_text())
+    assert hub.RUN_STATES == table
+    assert dash_states() == table
+
+
+def test_each_served_row_names_state_tone_mark_and_word(hub):
+    rows = json.loads((ROOT / "config" / "run-states.json").read_text())
+    assert all({"state", "tone", "mark", "word"} <= row.keys() for row in rows)
+    assert all(row["tone"] == row["color"] and row["word"] == row["text"] for row in rows)
+
+
+def test_hub_and_dashboard_share_one_state_table_with_one_label_tone_and_mark_per_state(hub):
+    hub_rows = {r["state"]: (r["label"], r["color"], r["css"], r["mark"]) for r in hub.RUN_STATES}
+    dash_rows = {r["state"]: (r["label"], r["color"], r["css"], r["mark"]) for r in dash_states()}
     assert hub_rows == dash_rows
     assert len({r["state"] for r in hub.RUN_STATES}) == len(hub.RUN_STATES)
     assert {r["color"] for r in hub.RUN_STATES} <= set(PALETTE)
 
 
+def test_every_row_names_one_of_the_four_marks_and_no_tone_shares_a_mark(hub):
+    """The mark differs within a tone at chip size: no two rows of one tone share a mark, and every mark is one of the
+    four named shapes. The glyphs are geometric shapes — a filled dot, a hollow dot, a bar — never a border texture."""
+    for rows in (hub.RUN_STATES, dash_states()):
+        for r in rows:
+            assert r["mark"] in MARKS, r["state"]
+        for tone in {r["color"] for r in rows}:
+            marks = [r["mark"] for r in rows if r["color"] == tone]
+            assert len(marks) == len(set(marks)), (tone, marks)
+    assert set(MARK_GLYPHS) == set(MARKS)
+    assert len({g for g in MARK_GLYPHS.values() if g}) == 3, "the three drawn marks are pairwise distinct shapes"
+
+
 def test_every_state_the_hub_can_show_is_in_the_table(hub):
     states = {r["state"] for r in hub.RUN_STATES}
     assert {"completed", "verified", "unverified", "failed", "needs-human", "running", "starting", "stalled"} <= states
-    assert hub.state_of({"verdict": None, "reasons": [], "land": False}, 99999) == "stalled"   # one name for stale/stalled
+    assert hub.state_of({"verdict": None, "reasons": [], "land": False}, 99999) == "stalled"   # a silent run is the stalled state
+    assert "stale" not in states   # "(stale)" is the page's one caption, never a state row (#1137)
     for v in RECORD_VERDICTS:
         assert hub.state_of({"verdict": v, "reasons": [], "land": False}, 0) in states
 
@@ -69,10 +100,14 @@ def test_the_hub_completed_badge_is_green_and_verified_is_a_distinct_legend_name
 def test_no_record_verdict_falls_through_to_the_failure_style_on_the_dashboard():
     src = PAGE_SRC()
     chips = {r["state"]: r["cls"] for r in dash_states() if not r.get("hub_only")}
-    mapped = {k.strip(): v for k, v in re.findall(r'"?([a-z -]+)"?: "(v-[a-z]+)"', src.split("var VERDICT_CLASS")[1].split("function renderChrome")[0])}
     for v in RECORD_VERDICTS + ["running", "stalled", "no verdict yet"]:
-        assert v in chips and mapped.get(v) == chips[v], v
-    assert mapped["needs-human"] != "v-bad" and mapped["completed"] != "v-bad"
+        assert v in chips, v
+    assert "Object.fromEntries(core.RUN_STATES" in src   # the class map is derived from the one table: the page maps no state fact of its own
+    assert '{ completed: "v-ok"' not in src
+    panel = (ROOT / "dashboard" / "page" / "panel.js").read_text()
+    assert 'core.RUN_STATES.find((row) => row.state === st.state)' in panel
+    assert '{ completed: "state-completed"' not in panel
+    assert chips["needs-human"] != "v-bad" and chips["completed"] != "v-bad"   # a record verdict never falls through to the failure style
     assert {r["label"] for r in dash_states() if r["state"] == "needs-human"} == {"Run needs a person"}
     painted = dict(re.findall(r"#vchip\.(v-[a-z]+) \{ border-color:var\(--([a-z]+)\)", src))
     color = {r["state"]: r["color"] for r in dash_states()}
@@ -109,3 +144,36 @@ def test_the_page_paints_every_state_pill_the_way_the_hub_paints_its_badge(hub):
         for prop in (p for p in r["css"].split(";") if p):
             assert prop in body, (r["state"], prop)
     assert "core.STATE_TEXT[st.state]" in src   # the run header chip takes its words from the one table
+
+
+def test_the_hub_badge_draws_its_row_mark_before_the_word(hub):
+    """Every hub badge carries its row's mark at chip size: a filled dot, a hollow dot or a bar drawn before the word;
+    `none` draws nothing. The mark is a shape, never a border texture."""
+    css = hub.PAGE.split("<style>")[1].split("</style>")[0]
+    for r in hub.RUN_STATES:
+        state = r["state"].replace(" ", "-")
+        m = re.search(rf"\.b\.{re.escape(state)}::before\s*\{{([^}}]*)\}}", css)
+        if r["mark"] == "none":
+            assert not m, r["state"]
+        else:
+            assert m and f'content:"{MARK_GLYPHS[r["mark"]]} "' in m.group(1), r["state"]
+
+
+def test_the_phone_run_row_draws_the_tone_and_mark_the_served_row_names(hub):
+    """The phone maps no state fact of its own: the served row names the tone and the mark of its state, and the page
+    paints what the row names — one CSS rule per palette tone, one per mark, no state-keyed map in the page code."""
+    src = Path(hub.__file__).read_text()
+    assert '"mark": b["mark"]' in src and '"tone": b["color"]' in src   # every served run row carries its state's tone and mark
+    mobile = hub.MOBILE_PAGE.decode() if isinstance(hub.MOBILE_PAGE, bytes) else hub.MOBILE_PAGE
+    for tone in PALETTE:
+        assert re.search(rf"\.runrow\[data-tone={tone}\] ", mobile), tone
+    for mark in ("filled", "hollow", "bar"):
+        assert re.search(rf"\.runrow\[data-mk={mark}\] ", mobile), mark
+    assert "dataset.tone" in mobile and "dataset.mk" in mobile
+
+
+def test_the_dashboard_chip_draws_its_row_mark_and_reads_the_class_from_the_table(hub):
+    src = PAGE_SRC()
+    for mark in ("filled", "hollow", "bar"):
+        assert re.search(rf"#vchip\[data-mk={mark}\]::before", src), mark
+    assert 'chip.dataset.mk = (row && row.mark) || "none"' in src

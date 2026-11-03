@@ -170,16 +170,17 @@ function wireControl(side) {
 
 function renderRunPanel() {
   const st = S.stats, f = core.fmt, v = st.verdict;
-  const cls = { completed: "state-completed", running: "state-running", stalled: "state-stalled", "no verdict yet": "state-none" }[st.state] || "msg-bad";
+  const cls = core.RUN_STATES.find((row) => row.state === st.state)?.cls || "msg-bad";
   const rp = S.replay, past = rp && !rp.at_end;
   const state = past ? `<span class="state-none">replay at event ${rp.cursor} of ${rp.last}</span> <span class="note">(${esc(st.state)})</span>` : `<span class="${cls}">${esc(st.state)}</span>`;
   const unres = rp && rp.unresolved.length ? `<br>unresolved children: ${rp.unresolved.map((c) => `<b>${esc(c.child)}</b> <span class="note">(${esc(c.parent === null ? "?" : c.parent)}, accepted at ${c.pos})</span>`).join(", ")}` : "";
   const lv = st.live, flight = lv ? lv.in_progress : [];
-  const liveLines = !lv || v ? "" : `<br>last event <b>${f.seconds(lv.since_last)}</b> ago${flight.length ? "<br>in progress: " + flight.map((c) => `<b>${esc(c.node)}</b> ${f.seconds(c.since)}`).join(", ") : ""}${st.state === "stalled" ? `<br><span class="note">No new event for over ${f.seconds(lv.stall_after)}. A quiet gate command can look like this.</span>` : ""}`;
+  const stale = st.state === "stalled";   // a silent run is the stalled state; the one staleness line names it
+  const liveLines = !lv || v ? "" : `<br><span class="note${stale ? " stale" : ""}">last event <b>${f.seconds(lv.since_last)}</b> ago${stale ? " (stale)" : ""}</span>${flight.length ? "<br>in progress: " + flight.map((c) => `<b>${esc(c.node)}</b> ${f.seconds(c.since)}`).join(", ") : ""}`;
   const head = `run ${esc(st.run_id)} \u00b7 graph ${esc(st.graph_name)}<br>state: ${state}${v ? ` (exit ${esc(v.exit_code)}${v.reasons.length ? ", " + esc(core.causeSummary(v.reasons)) + " (see Failures)" : ""})` : ""}${liveLines}${unres}`;
   if (!st.totals) {
     const rows = st.timeline.map((t) => `<tr><td>${f.seconds(t.at)}</td><td>${esc(t.event)}</td><td>${esc(t.node === null ? "" : t.node)}</td><td>${esc(t.outcome === null ? "" : t.outcome)}</td></tr>`).join("");
-    return `<h2>Run</h2><div class="runbox">${head}<br><span class="note">Timeline and verdict only: ${S.doc ? "the record's graph hash differs from the loaded graph's" : "no graph is loaded"}.</span></div><h2>Timeline</h2><table class="tl">${rows}</table>`;
+    return `<h2>Run</h2><div class="runbox${stale ? " stale" : ""}">${head}<br><span class="note">Timeline and verdict only: ${S.doc ? "the record's graph hash differs from the loaded graph's" : "no graph is loaded"}.</span></div><h2>Timeline</h2><table class="tl">${rows}</table>`;
   }
   const t = st.totals, e = st.engine;
   const agents = nodesOf().filter((n) => st.nodes[n.name] && st.nodes[n.name].harness).map((n) => {
@@ -190,7 +191,7 @@ function renderRunPanel() {
   const skillsLine = e.skills === null ? "unrecorded" : e.skills.length ? e.skills.map((k) => `<span title="${esc(k.name)} ${esc(k.hash)}">${esc(k.name)} ${esc(String(k.hash).slice(0, 8))}</span>`).join(", ") : "none";
   const commit = e.skills_commit === null ? "unrecorded" : `<span title="${esc(e.skills_commit)}">${esc(String(e.skills_commit).slice(0, 8))}</span>`;
   const list = (x) => x === null ? f.count(null) : esc(x.join(", "));
-  return `<h2>Run</h2><div class="runbox">${head}<br>time <b>${f.seconds(t.wall)}</b> \u00b7 cost <b>${f.usd(t.spend)}</b> of ${t.cap === null ? f.count(null) : "$" + t.cap} (${f.pct(t.cap_pct)}) \u00b7 turns <b>${f.count(t.turns)}</b><br>tokens <b>${f.tokens(t.tokens_in)}</b> in \u00b7 <b>${f.tokens(t.tokens_out)}</b> out \u00b7 <b>${f.rate(t.tps)}</b></div>${failuresHtml(st.causes)}
+  return `<h2>Run</h2><div class="runbox${stale ? " stale" : ""}">${head}<br>time <b>${f.seconds(t.wall)}</b> \u00b7 cost <b>${f.usd(t.spend)}</b> of ${t.cap === null ? f.count(null) : "$" + t.cap} (${f.pct(t.cap_pct)}) \u00b7 turns <b>${f.count(t.turns)}</b><br>tokens <b>${f.tokens(t.tokens_in)}</b> in \u00b7 <b>${f.tokens(t.tokens_out)}</b> out \u00b7 <b>${f.rate(t.tps)}</b></div>${failuresHtml(st.causes)}
 <h2>Harness</h2><div class="ro">${agents.length ? agents.join("<br>") : "no agent node ran"}<br><span class="note">Engine: permission ${esc(e.permission_mode === null ? f.count(null) : e.permission_mode)} \u00b7 sources ${list(e.setting_sources)} \u00b7 blocked tools ${list(e.disallowed_tools)} \u00b7 max output ${f.count(e.max_output_tokens)} \u00b7 context ${f.count(e.context_tokens)} \u00b7 auth ${esc(e.auth === null ? f.count(null) : e.auth)}<br>Skills: ${skillsLine} \u00b7 vendor commit ${commit}</span></div>`;
 }
 

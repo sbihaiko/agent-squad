@@ -524,14 +524,16 @@ def handled_of(st, r, checkout=None):
 def badge_of(st, r=None):
     """Hub run-list badge: a needs-human run never prints `exit N`; that lives on the tooltip."""
     r = r or {}
-    color = next((x["color"] for x in RUN_STATES if x["state"] == st), "warn")
+    row = next((x for x in RUN_STATES if x["state"] == st), None)
+    color = row["color"] if row else "warn"
+    mark = row["mark"] if row else "none"
     if st == "handled": text = "ended · handled (landed in fork)"
     elif st == "needs-human": text = "ended · needs a decision"
     else: text = st
     rc = r.get("exit_code")
     if rc is None and st in ("needs-human", "handled"): rc = 10
     title = f"exit {rc}" if rc is not None and st in ("needs-human", "handled") else ""
-    return {"text": text, "color": color, "title": title, "state": st}
+    return {"text": text, "color": color, "mark": mark, "title": title, "state": st}
 LIVE_STATES = ("running", "starting", "stalled")
 def group_of(r):
     """RUNNING holds a live process (running/starting/stalled). An ended run, needs-human included, goes to an age bucket."""
@@ -2409,7 +2411,7 @@ def run_row(d, port, procs):
     unreadable = r is None or r["t0"] is None
     if unreadable and d not in READ_FIGURES:
         b = badge_of("starting")
-        return {"id": os.path.basename(d), "port": port, "state": "starting", "badge": b["text"], "tip": b["title"], "label": "run " + os.path.basename(d)[-6:], "issues": [], "age": 0, "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": 0, "spend": 0, "dur": 0, "kind": "code", "live": True, "running": True, "agents": 0}, None
+        return {"id": os.path.basename(d), "port": port, "state": "starting", "badge": b["text"], "tip": b["title"], "tone": b["color"], "mark": b["mark"], "label": "run " + os.path.basename(d)[-6:], "issues": [], "age": 0, "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": 0, "spend": 0, "dur": 0, "kind": "code", "live": True, "running": True, "agents": 0}, None
     if unreadable: r, written = READ_FIGURES[d]
     else: written = p.stat().st_mtime; READ_FIGURES[d] = (r, written)
     age = time.time() - written; st = state_of(r, age)
@@ -2422,7 +2424,7 @@ def run_row(d, port, procs):
     rank = run_rank(st, live=not gone)
     if unreadable: st, b = "unreadable", {**badge_of("unreadable"), "title": UNREADABLE_TIP}
     t1 = r["t1"] or time.time()
-    return {"id": os.path.basename(d), "port": port, "state": st, "badge": b["text"], "tip": b["title"], "label": r.get("label"), "issues": r["issues"], "issue_src": r.get("issue_src"), "issue_why": r.get("issue_why"), "age": int(age), "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": rank, "spend": r["spend"], "dur": round((t1 - (r["t0"] or t1)) / 60, 1), "kind": r.get("kind", "code"), "fix": r.get("fix"), "stack": r.get("stack"), "bug": r.get("bug"), "merge": r.get("merge"), "titles": {i: TITLE.get(int(i), "") for i in r["issues"]}, "live": not gone, "running": r["verdict"] is None and not gone, "agents": 0 if gone else r.get("agents") or 0, "share": r.get("share")}, {"id": os.path.basename(d), "dir": d, "wts": r.get("wts") or []}   # the row, and what the load attribution needs and nothing else
+    return {"id": os.path.basename(d), "port": port, "state": st, "badge": b["text"], "tip": b["title"], "tone": b["color"], "mark": b["mark"], "label": r.get("label"), "issues": r["issues"], "issue_src": r.get("issue_src"), "issue_why": r.get("issue_why"), "age": int(age), "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": rank, "spend": r["spend"], "dur": round((t1 - (r["t0"] or t1)) / 60, 1), "kind": r.get("kind", "code"), "fix": r.get("fix"), "stack": r.get("stack"), "bug": r.get("bug"), "merge": r.get("merge"), "titles": {i: TITLE.get(int(i), "") for i in r["issues"]}, "live": not gone, "running": r["verdict"] is None and not gone, "agents": 0 if gone else r.get("agents") or 0, "share": r.get("share")}, {"id": os.path.basename(d), "dir": d, "wts": r.get("wts") or []}   # the row, and what the load attribution needs and nothing else
 
 def runs():
     _titles()
@@ -4438,21 +4440,14 @@ def speed():
             "runs": {"today_median": round(st.median(today), 1) if today else None, "all_median": round(st.median(done), 1) if done else None},
             "rounds": {"prs": len(rounds), "mean": round(st.mean(rounds), 2) if rounds else None}, "kills": {"count": len(kills), "last": max(kills) if kills else None}}
 
-# One run-state vocabulary for the hub's run badges. The run dashboard's RUN_STATES (dashboard/core/sources.js) names and paints the
-# same states alike; tests/test_run_state_vocabulary.py holds the two tables equal. `color` is a palette variable of :root; `css` is extra style.
-RUN_STATES = [
-    {"state": "completed", "label": "Run completed", "color": "ok", "css": ""},
-    {"state": "verified", "label": "Failed or unverified run, verified by hand", "color": "ok", "css": "font-style:italic"},
-    {"state": "unverified", "label": "Work landed, the final gate had no command", "color": "ok", "css": "border-style:dashed"},
-    {"state": "failed", "label": "Run failed", "color": "err", "css": ""},
-    {"state": "needs-human", "label": "Run needs a person", "color": "warn", "css": ""},
-    {"state": "handled", "label": "Needs-human run, landed in the fork", "color": "ok", "css": ""},
-    {"state": "running", "label": "Run in progress", "color": "run", "css": ""},
-    {"state": "starting", "label": "Run starting", "color": "run", "css": "border-style:dotted"},
-    {"state": "unreadable", "label": "Record could not be read on the last poll", "color": "warn", "css": "border-style:dotted"},
-    {"state": "stalled", "label": "Run stalled", "color": "wait", "css": "border-style:dashed"},
-    {"state": "no verdict yet", "label": "No verdict yet", "color": "none", "css": ""},
-]
+# The state table is shared with the dashboard build and the phone reads its badge fields from the hub's run payload.
+# `mark` is one of the four chip-size shapes; a border texture is never a mark (#1137).
+RUN_STATES = json.loads((pathlib.Path(__file__).resolve().parents[3] / "config" / "run-states.json").read_text())
+MARK_GLYPHS = {"filled": "●", "hollow": "○", "bar": "▌", "none": ""}   # the four marks of the one state table, drawn before the word
+def run_state_css(r):
+    state = r["state"].replace(" ", "-")
+    rule = f".b.{state}{{color:var(--{r['color']});{r['css']}}}"
+    return rule + (f'.b.{state}::before{{content:"{MARK_GLYPHS[r["mark"]]} "}}' if r["mark"] != "none" else "")
 
 WEB_TOKENS = (pathlib.Path(__file__).resolve().parent / "web-tokens.css").read_text()
 PAGE = r"""<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Hub</title>
@@ -4478,6 +4473,7 @@ button.on{border-color:var(--acc);color:var(--acc)}
 .b.waiting{color:var(--wait);border-style:dashed}   /* the childcc pass after it ended: no state of RUN_STATES says a pass that waits (#598) */
 .landed,.pass,.ok{color:var(--ok)}
 /*RUN_STATE_CSS*/
+#bread{color:var(--mute)}#bread.stale{color:var(--warn)}#bbody.stale{opacity:.45;filter:grayscale(1)}
 .m{color:var(--mute);font-size:var(--fs-caption);margin-top:2px}
 #q{width:100%;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:3px 6px;font:inherit;margin-top:6px}
 .sp:is(details){border:1px solid var(--line);border-radius:8px;margin-bottom:10px;background:var(--panel);font-size:var(--fs-caption)}.sp>summary{list-style:none;display:flex;align-items:center;gap:6px;min-height:36px;padding:8px 10px;font-size:var(--fs-body);font-weight:600;color:var(--fg);cursor:pointer;user-select:none}.gh{list-style:none;display:flex;align-items:center;gap:6px;height:34px;padding:0 10px;font-size:var(--fs-caption);font-weight:600;color:var(--fg);cursor:pointer;user-select:none;background:var(--inset);border-top:1px solid var(--line)}
@@ -5518,7 +5514,7 @@ async function pollBoard(){lim.busy=1;try{const r=await fetch("/api/board",board
 all=[b.prs,...b.groups.sort((x,y)=>{const i=n=>{const k=FLOW.indexOf(n);return k<0?FLOW.length:k};return i(x.name)-i(y.name)})],f=q.trim().replace(/^#/,"");
 if(bo.open===undefined||!all.some(g=>g.name===bo.open))bo.open=(all.find(g=>g.n&&!g.end&&!isPR(g.name))||all[2]).name;
 const CN=all.map(g=>g.name);   // every column of this board: what colOf reads the user columns out of, never a colour of its own
-lastRead=Date.now();readStale=!!b.err;$("#bcases").innerHTML=caseRows(b.cases);$("#bt").textContent=(b.err?"(stale) ":"")+["status","structure","prs"].map(k=>{const p=(b.parts||{})[k];return k+" "+(p&&p.t?Math.round(Date.now()/1000-p.t)+"s":"never")+(p&&p.err?" !":"")}).join(" · ");
+lastRead=Date.now();readStale=!!b.err;$("#bcases").innerHTML=caseRows(b.cases);$("#bt").textContent=["status","structure","prs"].map(k=>{const p=(b.parts||{})[k];return k+" "+(p&&p.t?Math.round(Date.now()/1000-p.t)+"s":"never")+(p&&p.err?" !":"")}).join(" · ");
 const fw=bo.fw||[],fk=bo.fk||[],boardGroups=all.filter(g=>!isPR(g.name)),allRows=boardGroups.filter(g=>!g.end).flatMap(g=>g.items),specTitle=new Map();   // the filter bar: the waves, specs and kinds the open cards hold (#899, #904, #969)
 allRows.forEach(x=>{if(x.sp)specTitle.set(String(x.n),x.t)});
 const wOpts=waveOptions(allRows),sOpts=specOptions(boardGroups,b.sum),SLOTS=specSlots(sOpts.filter(s=>s!=="none"));   // a finished spec is no option (#981); one color per spec option on the board (#917)
@@ -5634,7 +5630,7 @@ new MutationObserver(flowTabs).observe($("#flowov"),{attributes:true});
  const pj=$("#pj"),psw=$("#psw");pj.onclick=e=>{e.stopPropagation();const on=!psw.classList.contains("on");psw.classList.toggle("on",on);pj.setAttribute("aria-expanded",on)};
  document.addEventListener("click",e=>{if(!e.target.closest("#psw")&&psw.classList.contains("on")){psw.classList.remove("on");pj.setAttribute("aria-expanded","false")}})}
 // "board read N s ago": the stamp of the last board answer
-setInterval(()=>{const b=$("#bread");if(!b)return;b.textContent=lastRead?`board read ${Math.max(0,Math.round((Date.now()-lastRead)/1000))} s ago${readStale?" (stale)":""}`:""},1000);
+setInterval(()=>{const b=$("#bread");if(!b)return;b.classList.toggle("stale",readStale);$("#bbody").classList.toggle("stale",readStale);b.textContent=lastRead?`board read ${Math.max(0,Math.round((Date.now()-lastRead)/1000))} s ago${readStale?" (stale)":""}`:""},1000);
 // loop-switch:start
 // The loop switch (#923, ADR-0162): /api/loop is the one read and the one write. The strip and Settings > Loop draw one view;
 // a start posts at once, a stop opens the confirm, which drains by default and lists every live run and gate a stop-now kills.
@@ -5763,7 +5759,7 @@ PAGE = PAGE.replace("/*RUN_SHEET_CSS*/", (pathlib.Path(__file__).resolve().paren
 HID_CHIP_TOKENS = (("abandoned", "err"), ("unscheduled", "warn"), ("issue_closed", "ok"), ("pr_open", "pin"))
 PAGE = PAGE.replace("/*HID_CHIP_RULES*/", "\n".join('.hidbar .chip[data-col="%s"] b{color:var(--%s)}' % (COLUMN[fact], token) for fact, token in HID_CHIP_TOKENS))
 PAGE = PAGE.replace("/*BOARD_COLORS*/", BOARD_COLORS_JSON).replace("/*BOARD_FLOW*/", BOARD_FLOW_JSON).replace("/*BOARD_NAMES*/", BOARD_NAMES_JSON).replace("/*BOARD_DOING*/", BOARD_DOING_JSON).replace("/*BOARD_REVIEW*/", BOARD_REVIEW_JSON).replace("/*HUB_REPO*/", json.dumps(REPO))
-PAGE = PAGE.replace("/*RUN_STATE_CSS*/", "".join(".b.%s{color:var(--%s);%s}" % (r["state"].replace(" ", "-"), r["color"], r["css"]) for r in RUN_STATES))
+PAGE = PAGE.replace("/*RUN_STATE_CSS*/", "".join(run_state_css(r) for r in RUN_STATES))
 # The cluster count's baseline, from the one size the ring is measured against: the page and the hub read one constant (#1146).
 PAGE = PAGE.replace("/*RING_BASELINE*/", "%g" % (_leadtime.RING_BASELINE_EM * _leadtime.RING_TEXT_PX))
 

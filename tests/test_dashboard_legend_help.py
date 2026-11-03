@@ -63,14 +63,16 @@ def test_the_verdict_chip_legend_lists_exactly_the_chip_classes_the_css_paints_a
     chips = run_node([{"op": "legend"}])[0]["chips"]
     listed = [row["cls"] for row in chips]
     painted = set(re.findall(r"#vchip\.(v-[a-z]+)", PAGE_SRC()))
-    mapped = set(re.findall(r'"(v-[a-z]+)"', PAGE_SRC().split("var VERDICT_CLASS")[1].split("function renderChrome")[0])) | {"v-bad"}
+    mapped = {r["cls"] for r in run_node([{"op": "legend"}])[0]["states"] if r["cls"]} | {"v-bad"}
+    assert "core.RUN_STATES" in PAGE_SRC().split("var VERDICT_CLASS")[1].split("function renderChrome")[0]   # the class map derives from the one table
     assert set(listed) == painted == mapped and len(set(listed)) == len(listed)
     assert all(row["label"].strip() for row in chips)
 
 
 def test_no_verdict_yet_has_its_own_color_apart_from_the_amber_of_a_deadline_or_a_stall():
     src = PAGE_SRC()
-    assert '"no verdict yet": "v-none"' in src
+    states = run_node([{"op": "legend"}])[0]["states"]
+    assert {r["cls"] for r in states if r["state"] == "no verdict yet"} == {"v-none"}
     color = dict(re.findall(r"#vchip\.(v-[a-z]+) \{ border-color:var\((--[a-z]+)\)", src))
     assert color["v-none"] != color["v-wait"] and color["v-none"] not in {color[c] for c in color if c != "v-none"}
     assert "--none" in src.split(".state-none")[1][:60]

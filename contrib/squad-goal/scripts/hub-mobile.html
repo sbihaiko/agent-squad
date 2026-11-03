@@ -123,6 +123,9 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
 .runlist{display:grid;gap:8px}
 .runrow{display:block;width:100%;text-align:left;min-height:44px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:10px 12px;font:var(--fs-body) system-ui,sans-serif}
 .runrow .mut{color:var(--mute);font-size:var(--fs-caption);margin-top:2px}
+.runrow[data-tone=ok] b{color:var(--ok)} .runrow[data-tone=err] b{color:var(--err)} .runrow[data-tone=warn] b{color:var(--warn)} .runrow[data-tone=run] b{color:var(--run)} .runrow[data-tone=wait] b{color:var(--wait)} .runrow[data-tone=none] b{color:var(--none)}
+.runrow[data-mk=filled] b::before{content:"● "} .runrow[data-mk=hollow] b::before{content:"○ "} .runrow[data-mk=bar] b::before{content:"▌ "}
+#bread{color:var(--mute);font-size:var(--fs-min);margin:0 0 6px} #bread.stale{color:var(--warn)} #cards.stale{opacity:.45;filter:grayscale(1)}
 #runview{position:fixed;inset:0;z-index:30;background:var(--bg);display:flex;flex-direction:column}
 #runview[hidden]{display:none}
 #runview-head{display:flex;align-items:center;gap:8px;height:calc(52px + env(safe-area-inset-top));padding:env(safe-area-inset-top) 12px 0;background:var(--panel);border-bottom:1px solid var(--line)}
@@ -236,6 +239,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <p id="empty-cols" hidden></p>
 <div id="cards" data-role="gap"></div>
 <div id="undo" role="status" hidden><span id="undo-text"></span><button id="undo-btn" type="button" hidden>Undo</button></div>
+<p id="bread"></p>
 <p id="bmsg"></p>
 </section>
 <section data-panel="runs" hidden>
@@ -798,9 +802,16 @@ async function loadBoard(fresh) {
   try { applyBoard(await call("/api/board", fresh)); }
   catch (e) { $("bmsg").textContent = e.message; }
 }
+let boardRead = 0, boardStale = false;
+setInterval(() => {
+  $("bread").textContent = boardRead ? `board read ${Math.max(0, Math.round((Date.now() - boardRead) / 1000))} s ago${boardStale ? " (stale)" : ""}` : "";
+  $("bread").classList.toggle("stale",boardStale);
+  $("cards").classList.toggle("stale",boardStale);
+}, 1000);
 // A board read or a pushed board draws the same way: the payload is the board, whichever route carried it.
 function applyBoard(b) {
   if (!b.groups) throw new Error(b.error || "The board is not ready.");
+  boardRead = Date.now(); boardStale = !!b.err;
   // The open sheet keeps its issue and column by identity, never by index (#1005).
   const open = view.sheet && !offBoard && shown[view.card];
   const id = open ? { name: (carouselColumns(((board && board.groups) || []), ((board && board.groups) || []).map(g => columnCards(g).length), bo.hideEmpty !== false).shown[view.col] || {}).name, key: cardKey(open) } : null;
@@ -815,7 +826,7 @@ function applyBoard(b) {
   seenCards = new Set([...(seenCards || []), ...keys]);
   // A refusal stays on its card while the card keeps the column it was refused in; a read the move reached clears it.
   for (const n of Object.keys(reasons)) if (rowColumn(+n) !== reasons[n].col) delete reasons[n];
-  $("bmsg").textContent = b.err ? "(stale)" : "";
+  $("bmsg").textContent = "";
   refresh();
   freshNow = new Set();
 }
@@ -1102,6 +1113,7 @@ function runRow(r, url) {
   const b = document.createElement("button"), name = document.createElement("b"), meta = document.createElement("div");
   b.type = "button"; b.className = "runrow"; b.dataset.url = url; b.dataset.name = r.label || r.id;
   b.dataset.id = r.id || "";
+  b.dataset.tone = r.tone || ""; b.dataset.mk = r.mark || "none";
   name.textContent = r.label || r.id;
   name.className = "runid";
   meta.className = "mut";

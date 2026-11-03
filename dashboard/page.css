@@ -139,6 +139,7 @@
   .card.sel rect { stroke:var(--edge); stroke-width:2; }
   .runbox { background:var(--inset); border:1px solid var(--line); border-radius:4px; padding:8px; font:var(--fs-caption)/1.6 var(--font-mono); }
   .runbox b { color:var(--fg); }
+  .note.stale{color:var(--warn)} .runbox.stale{opacity:.45;filter:grayscale(1)}
   .state-completed { color:var(--ok); } .state-none { color:var(--none); } .state-running { color:var(--acc); } .state-stalled { color:var(--warn); font-weight:600; }
   .card.running rect { stroke:var(--run); stroke-width:3.5; fill:var(--tint-run); }   /* running: a thick teal outline and the ▶ glyph; nothing moves, so prefers-reduced-motion has nothing to switch off */
   /* The group card: one square per child; the fill and the glyph both show the outcome. Selectors avoid `.card.<x> rect`, which the legend guard reads as a card color. */
@@ -226,6 +227,7 @@
   #vchip.v-none { border-color:var(--none); color:var(--none); }
   #vchip.v-live { border-color:var(--run); color:var(--run); }
   #vchip.v-human { border-color:var(--warn); color:var(--warn); }
+  #vchip[data-mk=filled]::before{content:"● "} #vchip[data-mk=hollow]::before{content:"○ "} #vchip[data-mk=bar]::before{content:"▌ "}
   #modesw { display:flex; }
   #modesw button { border-radius:0; }
   #modesw button:first-child { border-radius:4px 0 0 4px; }
