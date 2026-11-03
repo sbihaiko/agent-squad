@@ -212,6 +212,8 @@ squad/node_commit.py	tests/test_node_commit.py
 squad/outcomes.py	tests/test_outcomes.py
 squad/premise_check.py	tests/test_premise_check.py
 squad/project_settings.py	tests/test_project_settings.py
+squad/reap.py	tests/test_machine_caps.py
+squad/reap.py	contrib/squad-goal/scripts/test-health.sh
 squad/record.py	tests/test_record.py
 squad/report.py	tests/test_report.py
 squad/review_streak.py	tests/test_review_streak.py
