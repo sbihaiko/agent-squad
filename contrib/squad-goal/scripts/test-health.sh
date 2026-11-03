@@ -119,6 +119,31 @@ printf '%s' "$o" | /usr/bin/grep -qF "HEALTH runs-repeating-failure: 3 run(s) en
 /usr/bin/grep -q 'issues/10/comments' "$T/comments.calls" 2>/dev/null && ok "the report is written on the issue the runs were on" || ko "no comment on #10: $(cat "$T/comments.calls" 2>/dev/null)"
 /usr/bin/grep -qF 'labels[]=frozen:not-startable' "$T/labels.calls" 2>/dev/null && /usr/bin/grep -q 'issues/10/labels' "$T/labels.calls" && ok "the marker carries the frozen:not-startable label on the same issue" || ko "no frozen:not-startable label on #10: $(cat "$T/labels.calls" 2>/dev/null)"
 bash "$T/s/health.sh" >/dev/null; n2=$(/usr/bin/grep -c 'issues/10/comments' "$T/comments.calls" 2>/dev/null); [ "${n2:-0}" = 1 ] && ok "the same repetition comments once" || ko "commented $n2 time(s)"
+# #1292: the reason is the marker's file name, and a reason with a path separator named a directory that does not exist,
+# so the guard never held and every pass posted the marker again
+reset; rm -f "$T"/st/auto/notstartable-*; rm -f "$T/st/auto/health-runs-repeating-failure"; : > "$T/comments.calls"
+rep s1 12 killed/no-process; rep s2 12 killed/no-process; rep s3 12 killed/no-process
+o=$(bash "$T/s/health.sh")
+printf '%s' "$o" | /usr/bin/grep -qF "same reason 'killed/no-process'" && ok "#1292 a reason with a slash is reported" || ko "#1292 no report: $o"
+[ -e "$T/st/auto/notstartable-12-killed-no-process" ] && ok "#1292 the marker's name is path-safe" || ko "#1292 no marker file: $(ls "$T/st/auto" | tr '\n' ' ')"
+n1=$(/usr/bin/grep -c 'issues/12/comments' "$T/comments.calls" 2>/dev/null); bash "$T/s/health.sh" >/dev/null
+n2=$(/usr/bin/grep -c 'issues/12/comments' "$T/comments.calls" 2>/dev/null)
+[ "${n1:-0}" = 1 ] && [ "${n2:-0}" = 1 ] && ok "#1292 a slash reason comments once and the next pass adds none" || ko "#1292 commented ${n1:-0} then ${n2:-0} time(s)"
+# #1292: a marker written before the path-safe rule keeps its name, so it still dedupes
+reset; rm -f "$T"/st/auto/notstartable-* "$T/st/auto/health-runs-repeating-failure"; : > "$T/comments.calls"; rc
+: > "$T/st/auto/notstartable-13-no_such_issue"
+rep l1 13 no_such_issue; rep l2 13 no_such_issue; rep l3 13 no_such_issue
+bash "$T/s/health.sh" >/dev/null; nl=$(/usr/bin/grep -c 'issues/13/comments' "$T/comments.calls" 2>/dev/null || true)
+[ "${nl:-0}" = 0 ] && ok "#1292 a legacy path-safe marker still dedupes" || ko "#1292 the legacy marker was reposted ${nl:-0} time(s)"
+# #1292: a post GitHub refuses drops the claim, so the next pass tries again
+reset; rm -f "$T"/st/auto/notstartable-* "$T/st/auto/health-runs-repeating-failure" "$T/post.ok"; : > "$T/comments.calls"
+{ echo '#!/bin/bash'; printf 'case "$*" in *comments*) [ -e %s/post.ok ] || exit 1; echo "$*" >> %s/comments.calls;; */labels*) echo "$*" >> %s/labels.calls;; esac\nexit 0\n' "$T" "$T" "$T"; } > "$T/bin/gh"; chmod +x "$T/bin/gh"
+rep t1 13 a_real_reason; rep t2 13 a_real_reason; rep t3 13 a_real_reason
+bash "$T/s/health.sh" >/dev/null
+[ -e "$T/st/auto/notstartable-13-a_real_reason" ] && ko "#1292 a refused post kept the claim" || ok "#1292 a refused post drops the claim, so the next pass retries"
+: > "$T/post.ok"; bash "$T/s/health.sh" >/dev/null
+[ -e "$T/st/auto/notstartable-13-a_real_reason" ] && ok "#1292 the retried post claims its marker once" || ko "#1292 the retry did not claim the marker"
+rc
 rep r4 10 a_different_reason; o=$(bash "$T/s/health.sh"); echo "$o" | /usr/bin/grep -q 'runs-repeating-failure cleared' && ok "a different reason breaks the streak -> cleared" || ok "the streak re-arms only when the group drops below the count"
 # #585: a run keeps its folder in its own worktree (#580) or in a fork route's child tree; the repetition reads those runs too
 reset; rm -rf "$T/st/auto/health-runs-repeating-failure"; : > "$T/comments.calls"

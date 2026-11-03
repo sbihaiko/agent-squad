@@ -162,10 +162,20 @@ if [ -n "$rr" ]; then
   add runs-repeating-failure "$nrr run(s) ended failed with the same reason '$rkey' in the last ${SG_HEALTH_REPEAT_MINUTES:-120} min: $rwhy"
   # write it where the next dispatch will read it (once per reason and issue: the marker is the memory)
   [ -n "${HEALTH_DRY:-}" ] || for n in ${riss//,/ }; do
-    cm="$A/notstartable-$n-$rkey"; [ -e "$cm" ] && continue
+    # The marker's name is the reason, and the reason is the run's own machine word: `killed/no-process` carries a path
+    # separator, so as a file name it names a directory that does not exist, touch fails, the guard below never holds and
+    # every pass posts the marker again (#1292). The key is the reason made path-safe; two reasons that encode alike are
+    # one marker by design, and the marker line still names the raw reason.
+    kf=$(printf '%s' "$rkey" | tr -c 'A-Za-z0-9._-' '-'); cm="$A/notstartable-$n-$kf"; [ -e "$cm" ] && continue
     printf 'SQUAD-NOT-STARTABLE: build=%s %s run(s) ended failed with the same reason `%s` in the last %s min.\n\n%s\n\nA dispatch on this issue reads this line before it starts and starts nothing while it is here. A later build re-arms it; remove this comment (or fix the cause) to re-arm it sooner.\n' \
       "$(sg_loop_build)" "$nrr" "$rkey" "${SG_HEALTH_REPEAT_MINUTES:-120}" "$rwhy" > "$A/.cm$$"
-    gh api --method POST "repos/$SG_REPO/issues/$n/comments" -F body=@"$A/.cm$$" >/dev/null 2>&1 && { touch "$cm"; gh api --method POST "repos/$SG_REPO/issues/$n/labels" -f "labels[]=frozen:not-startable" >/dev/null 2>&1; }
+    # The marker is claimed before the post, so a pass interrupted between the two posts nothing twice; a post GitHub
+    # refuses drops the claim, so the next pass tries again. An existing path-safe marker keeps its name, so a marker
+    # written before this rule still dedupes.
+    : > "$cm"
+    if gh api --method POST "repos/$SG_REPO/issues/$n/comments" -F body=@"$A/.cm$$" >/dev/null 2>&1; then
+      gh api --method POST "repos/$SG_REPO/issues/$n/labels" -f "labels[]=frozen:not-startable" >/dev/null 2>&1
+    else rm -f "$cm"; fi
     rm -f "$A/.cm$$"; done
 fi
 # Two loops are not twice the loop (#1858): a second watch.sh doubles every GitHub read the loop makes -- which is what the API's
