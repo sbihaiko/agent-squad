@@ -4739,7 +4739,7 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 /* Monitor (#983): calm flight instruments in the sidebar. Three gauges, three annunciator tiles, two rows. No motion
    but the needle's own short move, and none at all under reduced motion. */
 #inst .igs{display:flex;justify-content:space-between;gap:4px;margin:2px 0 8px}#inst .ig{display:flex;flex-direction:column;align-items:center;flex:1;min-width:0}
-#inst .ig svg{display:block}#inst .ig .gt{fill:none;stroke:var(--line);stroke-width:3;stroke-linecap:round}#inst .ig .gf{fill:none;stroke-width:3;stroke-linecap:round}
+#inst .ig svg{display:block}#inst .ig .gt{fill:none;stroke:var(--line);stroke-width:3;stroke-linecap:round}#inst .ig .gm{stroke:var(--mute);stroke-width:1;stroke-linecap:round}#inst .ig .gf{fill:none;stroke-width:3;stroke-linecap:round}
 #inst .ig .gn{stroke:var(--fg);stroke-width:1.5;stroke-linecap:round;transform-origin:30px 32px;transition:transform var(--motion-duration-long) var(--motion-entry-easing)}#inst .ig .gh0{fill:var(--fg)}
 #inst .ig.ldred .gf,#inst.warn .ig.ldred .gf,#inst .ig.ldred .gn{stroke:var(--err)}
 #inst .gv{font-size:var(--fs-caption);color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap}#inst .gv b{color:var(--fg);font-weight:600}#inst.warn .gv b{color:var(--warn)}#inst .ig.ldred .gv b{color:var(--err)}
@@ -4889,8 +4889,10 @@ function ldCells(d){return[["CPU","cpu"],["RAM","ram"],["GPU","gpu"]].map(p=>{co
 // serves: the three load numbers and the facts the sampler last read. Each figure is HTML text; the SVGs only draw and are
 // hidden from a screen reader. A tile's state is read off its fact, so the hub keeps deciding the tone and the text.
 // INST{
-function gaugeGeom(v){const f=ldNum(v),k=f!==null,p=k?f:0,a=Math.PI*p/100;return{known:k,col:k?`hsl(${Math.round(120*(1-p/100))} 65% 42%)`:"none",deg:Math.round(-90+1.8*p),x:Math.round((30-26*Math.cos(a))*10)/10,y:Math.round((32-26*Math.sin(a))*10)/10}}
-function gaugeSvg(v){const g=gaugeGeom(v);return `<svg width=60 height=36 viewBox="0 0 60 36" aria-hidden="true" focusable="false"><path class=gt d="M4 32 A26 26 0 0 1 56 32"/><path class=gf stroke="${g.col}" d="M4 32 A26 26 0 0 1 ${g.x} ${g.y}"/><line class=gn x1=30 y1=32 x2=30 y2=10 style="transform:rotate(${g.deg}deg)"${g.known?"":" visibility=hidden"}/><circle class=gh0 cx=30 cy=32 r=2 /></svg>`}
+function gaugeGeom(v){const f=ldNum(v),k=f!==null,p=k?f:0,a=Math.PI*p/100;return{known:k,deg:Math.round(-90+1.8*p),x:Math.round((30-26*Math.cos(a))*10)/10,y:Math.round((32-26*Math.sin(a))*10)/10}}   // the shipped scale: a half circle swept 0 to 100, never re-scaled (#1141)
+const gaugeMark=p=>{const a=Math.PI*p/100;return [30-23*Math.cos(a),32-23*Math.sin(a),30-18*Math.cos(a),32-18*Math.sin(a)].map(n=>Math.round(n*10)/10)};   // a mark sits inside the arc, so it never covers the sweep's tone (#1141)
+function gaugeSvg(v,id){const g=gaugeGeom(v),gid=`g-${id||"load"}`;   // one grid: the track is line, the sweep runs ok through warn to err, the needle is fg (SPEC 1123 #1141)
+ return `<svg width=60 height=36 viewBox="0 0 60 36" aria-hidden="true" focusable="false"><defs><linearGradient id=${gid} x1=4 y1=0 x2=56 y2=0 gradientUnits=userSpaceOnUse><stop offset=0 stop-color="var(--ok)"/><stop offset=.5 stop-color="var(--warn)"/><stop offset=1 stop-color="var(--err)"/></linearGradient></defs><path class=gt d="M4 32 A26 26 0 0 1 56 32"/>${[0,25,50,75,100].map(p=>{const [x1,y1,x2,y2]=gaugeMark(p);return `<line class=gm x1=${x1} y1=${y1} x2=${x2} y2=${y2}/>`}).join("")}<path class=gf stroke="${g.known?`url(#${gid})`:"none"}" d="M4 32 A26 26 0 0 1 ${g.x} ${g.y}"/><line class=gn x1=30 y1=32 x2=30 y2=10 style="transform:rotate(${g.deg}deg)"${g.known?"":" visibility=hidden"}/><circle class=gh0 cx=30 cy=32 r=2 /></svg>`}
 function subsGauges(d){const xs=(d||{}).subs||[];if(!xs.length)return"";
  // One bar per plan: how much of the weekly window is spent, and how long until it resets. The needle and the half-circle
  // are gone with the #inst/#isub scope bug that painted them black (#Astra, 2026-11-01): a bar reads at a glance where a
@@ -4902,7 +4904,7 @@ function subsGauges(d){const xs=(d||{}).subs||[];if(!xs.length)return"";
     `<span class=sn>${esc(s.label)}</span><b class=sp2>${p===null?"?":fpct(p)+"%"}</b>`+
     `<span class=sb2><i style="width:${p===null?0:Math.max(0,Math.min(100,p))}%"></i></span>`+
     `<small class=sr2>${esc(reset(s))}</small></div>`}).join("")}
-function instGauges(d){return ldCells(d).map(c=>`<div class="ig${c.red?" ldred":""}">${gaugeSvg((d||{})[c.k.toLowerCase()])}<span class=gv><b>${c.k}</b> ${esc(c.t)}</span></div>`).join("")}
+function instGauges(d){return ldCells(d).map(c=>`<div class="ig${c.red?" ldred":""}">${gaugeSvg((d||{})[c.k.toLowerCase()],c.k)}<span class=gv><b>${c.k}</b> ${esc(c.t)}</span></div>`).join("")}
 const instFact=(facts,k)=>(facts||[]).find(f=>f&&f.key===k);
 function instTile(k,f,lead){if(!f)return{k,text:"no reading",tone:"neutral"};const p=(f.parts||[])[0]||{},t=String(f.text||"").replace(lead,"").trim()||"?";return{k,text:t,tone:p.tone==="ok"||p.tone==="err"?p.tone:"neutral",tip:f.tip||null,detail:f.detail||null,times:p.times||null}}
 function instTiles(facts){return[instTile("Gate",instFact(facts,"gate"),/^gate\s*/)]}   // the Monitor carries the gate and no queue tile (owner)
@@ -4930,7 +4932,7 @@ function instDraw(d){const c=$("#inst");if(!c)return;const facts=(d||{}).facts||
  const gs=$("#igs");if(gs&&!gs.children.length)gs.innerHTML=instGauges(d);
  else if(gs)ldCells(d).forEach((x,i)=>{const n=gs.children[i],g=gaugeGeom((d||{})[x.k.toLowerCase()]);if(!n)return;n.classList.toggle("ldred",x.red);
   const ln=n.querySelector(".gn"),f=n.querySelector(".gf"),v=n.querySelector(".gv");
-  if(ln){ln.style.transform=`rotate(${g.deg}deg)`;ln.setAttribute("visibility",g.known?"visible":"hidden")}if(f){f.setAttribute("d",`M4 32 A26 26 0 0 1 ${g.x} ${g.y}`);f.setAttribute("stroke",g.col)}if(v)v.innerHTML=`<b>${x.k}</b> ${esc(x.t)}`});
+  if(ln){ln.style.transform=`rotate(${g.deg}deg)`;ln.setAttribute("visibility",g.known?"visible":"hidden")}if(f){f.setAttribute("d",`M4 32 A26 26 0 0 1 ${g.x} ${g.y}`);f.setAttribute("stroke",g.known?`url(#g-${x.k})`:"none")}if(v)v.innerHTML=`<b>${x.k}</b> ${esc(x.t)}`});
  instSet("ian",instTiles(facts).map(tileHtml).join(""));instSet("isub",subsGauges(d||{}));instSet("ispec",specBar((d||{}).specs));instSet("ispeed",speedRow((d||{}).speed));
  const u=instUsage(facts);instSet("burn",u?`<span>Tokens · 24 h</span><b class=bad>${esc(u.tok)}</b>`:"<span>Tokens · 24 h</span><b>no reading</b>");
  const s=$("#instsr");if(s)s.textContent=instSum(facts);
@@ -4986,12 +4988,13 @@ function barChart(rows,W=280,H=64,L=44){const n=rows.length,vals=rows.map(r=>r.t
     first:n?xl(rows[0].t):"",now:"now"}}
 function bars(rows){if(!rows.length)return"";const c=barChart(rows),{W,H,L,base}=c;   // tokens are the work: the chart never counts dollars
   return `<svg viewBox="0 0 ${L+W} ${base+14}" role=img aria-label="tokens per interval">`
-    +c.ticks.map(t=>`<line x1="${L}" y1="${t.y}" x2="${L+W}" y2="${t.y}" stroke="var(--chart-grid)" stroke-dasharray="3 2"/><text x="${L-4}" y="${t.y+4}" fill="var(--chart-axis)" style="font-size:var(--fs-caption)" text-anchor="end">${t.label}</text>`).join("")
+    +`<text x="${L}" y="10" fill="var(--chart-axis)" style="font-size:var(--fs-body)">tokens</text>`   // the family's title treatment: inside the plot, at the left edge, at body size (#1141)
+    +c.ticks.map(t=>`<line x1="${L}" y1="${t.y}" x2="${L+W}" y2="${t.y}" stroke="var(--chart-grid)" stroke-dasharray="3 2"/><text x="${L-4}" y="${t.y+4}" fill="var(--chart-axis)" style="font-size:var(--fs-body)" text-anchor="end">${t.label}</text>`).join("")
     +c.bars.map(b=>b.kind==="missing"?`<line class=miss x1="${b.x}" y1="${base}" x2="${b.x+b.w}" y2="${base}" stroke="var(--chart-axis)" stroke-dasharray="2 2"><title>${esc(b.title)}</title></line>`
       :b.kind==="zero"?`<rect class=zero x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" style="fill:var(--chart-axis)"><title>${esc(b.title)}</title></rect>`
       :`<rect class=bar x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" fill="${b.top?"var(--chart-bar-max)":"var(--chart-bar)"}"><title>${esc(b.title)}</title></rect>`).join("")
-    +(c.max?`<text x="${c.max.x}" y="${c.max.y}" fill="var(--chart-ok)" style="font-size:var(--fs-caption)" text-anchor="${c.max.anchor}">${c.max.text}</text>`:"")
-    +`<text x="${L}" y="${base+12}" fill="var(--chart-axis)" style="font-size:var(--fs-caption)">${c.first}</text><text x="${L+W}" y="${base+12}" fill="var(--chart-axis)" style="font-size:var(--fs-caption)" text-anchor="end">${c.now}</text></svg>`}
+    +(c.max?`<text x="${c.max.x}" y="${c.max.y}" fill="var(--chart-ok)" style="font-size:var(--fs-body)" text-anchor="${c.max.anchor}">${c.max.text}</text>`:"")
+    +`<text x="${L}" y="${base+12}" fill="var(--chart-axis)" style="font-size:var(--fs-body)">${c.first}</text><text x="${L+W}" y="${base+12}" fill="var(--chart-axis)" style="font-size:var(--fs-body)" text-anchor="end">${c.now}</text></svg>`}
 function cmp(v,base,unit,lowerBetter=true){const d=Math.round((v-base)/base*100),good=lowerBetter?d<0:d>0,dir=d===0?"":lowerBetter?(d<0?"faster":"slower"):(d>0?"more":"fewer"),head=`was ${base}${unit?" "+unit:""}`,pct=d===0?"":`${Math.abs(d)}% ${dir}`;
   return {text:pct?`${head} \u00b7 ${pct}`:head,head,pct,dir,good}}
 function kr(label,sub,v,unit,base,lowerBetter=true){if(v==null)return`<div class=kr><span class=l>${label}${sub?`<small>${sub}</small>`:""}</span><b>—</b></div>`;
@@ -5422,12 +5425,12 @@ const flowHeight=h=>{const v=(h*0.55)|0;return v<flowHMin?flowHMin:v>flowHMax?fl
 const flowX=(i,n)=>n<2?flowP:flowP+i*(flowW-2*flowP)/(n-1);
 const flowY=(v,max)=>max?flowH-flowP-v*(flowH-2*flowP)/max:flowH-flowP;
 const flowAxis=(max,unit)=>`<line x1=${flowP} y1=${flowH-flowP} x2=${flowW-flowP} y2=${flowH-flowP} stroke=var(--chart-grid)></line><text x=${flowP-6} y=${flowY(max,max)+4} text-anchor=end fill=var(--chart-axis)>${max} ${unit}</text>`;
-const cfdAxis=c=>{const n=c.days.length,base=flowH-flowP;   // every number and date arrives from the hub; the page places a mark and a label for each (#896), its words in the lead view's ink (#1149)
-  const ys=c.yticks.map(v=>{const y=flowY(v,c.ymax);return `<line x1=${flowP-4} y1=${y} x2=${flowP} y2=${y} stroke=var(--chart-axis)></line><text x=${flowP-7} y=${y+4} text-anchor=end fill=var(--chart-ink)>${v}</text>`}).join("");
-  const xs=c.xticks.map(t=>{const x=flowX(t.i,n);return `<line x1=${x} y1=${base} x2=${x} y2=${base+4} stroke=var(--chart-axis)></line><text x=${x} y=${base+17} text-anchor=middle fill=var(--chart-ink)>${esc(t.day)}</text>`}).join("");
+const cfdAxis=c=>{const n=c.days.length,base=flowH-flowP;   // every number and date arrives from the hub; the page places a mark and a label for each (#896), one axis style in mute at the box size with the title inside the plot (#1141)
+  const ys=c.yticks.map(v=>{const y=flowY(v,c.ymax);return `<line x1=${flowP-4} y1=${y} x2=${flowP} y2=${y} stroke=var(--chart-axis)></line><text x=${flowP-7} y=${y+4} text-anchor=end fill=var(--chart-axis)>${v}</text>`}).join("");
+  const xs=c.xticks.map(t=>{const x=flowX(t.i,n);return `<line x1=${x} y1=${base} x2=${x} y2=${base+4} stroke=var(--chart-axis)></line><text x=${x} y=${base+17} text-anchor=middle fill=var(--chart-axis)>${esc(t.day)}</text>`}).join("");
   return `<line x1=${flowP} y1=${flowP-10} x2=${flowP} y2=${base} stroke=var(--chart-grid)></line><line x1=${flowP} y1=${base} x2=${flowW-flowP} y2=${base} stroke=var(--chart-grid)></line>${ys}${xs}`+
-    `<text x=4 y=${flowP-16} text-anchor=start fill=var(--chart-ink)>cards</text>`+
-    `<text x=${flowW-flowP} y=${base+31} text-anchor=end fill=var(--chart-ink)>day (${esc(c.zone)})</text>`;};
+    `<text x=${flowP} y=${flowP+12} text-anchor=start fill=var(--chart-axis)>cards</text>`+
+    `<text x=${flowW-flowP} y=${base+31} text-anchor=end fill=var(--chart-axis)>day (${esc(c.zone)})</text>`;};
 const coverNote=v=>!v?"":`<p class=fnote>cards read ${v.read} of ${v.total}, ${v.complete} complete, last refresh ${v.last?esc(v.last):"never"}</p>`;
 let CF={r:"30"};   // the cumulative flow's range, 30 days at first (#901)
 const CFD_R=[["7","7 days"],["30","30 days"],["90","90 days"],["all","All"]];   // the cumulative flow's range views (#901)
@@ -5468,7 +5471,7 @@ const ltP=64;   // a duration label ("17h 36m") is wider than a count, and the o
 let LT_FRAME;const ltX=x=>ltP+x*LT_FRAME.width,ltY=y=>ltP+LT_FRAME.height-y*LT_FRAME.height;
 const ltLine=(v,col,dash)=>v&&v.y!=null?`<line x1=${ltP} x2=${ltP+LT_FRAME.width} y1=${ltY(v.y)} y2=${ltY(v.y)} stroke="${col}" stroke-width=2${dash?` stroke-dasharray="${dash}"`:""}><title>${esc(v.label)} ${esc(v.text)}</title></line>`:"";   // the value lives in the legend, never over the newest dots (#1146)
 const ltKM=c=>c.survival?`<p class="fnote ltkm">${esc(c.survival.text)} · ${esc(c.wip.text)}</p>`:"";   // the hub's survival reading and work in progress, in its words (#1250)
-const ltChart=(c,cov)=>{LT_FRAME=c.plot_frame;const n=c.dots.length,base=ltP+LT_FRAME.height,ink="var(--chart-ink)",mute="var(--chart-axis)";
+const ltChart=(c,cov)=>{LT_FRAME=c.plot_frame;const n=c.dots.length,base=ltP+LT_FRAME.height,ink="var(--chart-axis)",mute="var(--chart-axis)";   // one axis style: tick text and the title in mute, never a mark's ink (#1141)
   const grp=(name,body)=>`<span class=ltgrp><b class=ltgl>${name}</b> ${body}</span>`,backTo=LT_TF.find(([k])=>k===LT.tf)[1];
   const ctl=`<p class=fhead>`+
       `<label>Timeframe <select id=ltr>${LT_TF.map(([k,v])=>`<option value=${k}${LT.tf===k?" selected":""}>${v}</option>`).join("")}</select></label> `+
@@ -5491,7 +5494,7 @@ const ltChart=(c,cov)=>{LT_FRAME=c.plot_frame;const n=c.dots.length,base=ltP+LT_
   const ys=c.ticks.map(t=>`<line x1=${ltP-4} y1=${ltY(t.y)} x2=${ltP} y2=${ltY(t.y)} stroke=${mute}></line><text x=${ltP-7} y=${ltY(t.y)+4} text-anchor=end fill=${ink}>${esc(t.text)}</text>`).join("");
   const xs=c.xticks.map(t=>`<text x=${ltX(t.x)} y=${base+17} text-anchor=middle fill=${ink}>${esc(t.text)}</text>`).join("");
   const axes=`<line x1=${ltP} y1=${ltP-10} x2=${ltP} y2=${base} stroke=var(--chart-grid)></line><line x1=${ltP} y1=${base} x2=${ltP+LT_FRAME.width} y2=${base} stroke=var(--chart-grid)></line>`+
-    `<text x=${ltP} y=${ltP-16} text-anchor=start fill=${ink}>elapsed time (${c.scale==="cube"?"cube root":c.scale})</text>`;
+    `<text x=${ltP} y=${ltP+12} text-anchor=start fill=${ink}>elapsed time (${c.scale==="cube"?"cube root":c.scale})</text>`;   // the title sits inside the plot, at the left edge (#1141)
   const lines=ltLine(c.average,"var(--chart-series-8)","")+ltLine(c.median,"var(--chart-ok)","2 3")+ltLine(c.p85,"var(--chart-series-5)","5 3");
   const dots=c.clusters.map((k,i)=>{const m=k.dots.length,title=m>1?`${m} issues`:`#${k.dots[0].n} ${esc(k.dots[0].title)}`;   // the hub sizes the ring for its count (#1146)
     return `<circle data-k=${i} cx=${ltX(k.x)} cy=${ltY(k.y)} r=${k.r} fill="${m>1?"var(--chart-bg)":"var(--chart-ink)"}" stroke="var(--chart-ink)" stroke-width=2${k.dots.some(d=>d.approx||d.unknown_first)?' stroke-dasharray="3 2"':""} style="cursor:pointer"><title>${esc(title)} · ${esc(k.dots[0].text)} · flowing ${esc(k.dots[0].flowing_text)} · held ${esc(k.dots[0].held_text)} · closed ${esc(k.dots[0].closed)}${k.dots.some(d=>d.approx)?" · start approximate":""}${k.dots.some(d=>d.unknown_first)?" · first interval unknown":""}</title></circle>`+(m>1?`<text x=${ltX(k.x)} y=${ltY(k.y)+/*RING_BASELINE*/} fill="var(--chart-ink)" text-anchor=middle pointer-events=none>${m}</text>`:"")}).join("");

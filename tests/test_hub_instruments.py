@@ -76,12 +76,30 @@ def test_a_missing_reading_draws_no_needle_and_a_high_one_is_clamped(hub):
     assert over["deg"] == 90 and over["known"] is True
 
 
-def test_a_gauge_fill_runs_from_green_to_red_with_its_reading(hub):
-    """The owner: the gauge arc takes the quota bars' scale, green when idle and red at the top."""
-    g = _run(hub, "[0,50,100,null].map(gaugeGeom).map(x=>x.col)")
-    assert g == ["hsl(120 65% 42%)", "hsl(60 65% 42%)", "hsl(0 65% 42%)", "none"]
+def test_a_gauge_sweep_runs_from_ok_through_warn_to_err(hub):
+    """SPEC 1123 #1141: the sweep is one gradient drawn from the state tones, the reading moves only its end, and the
+    shipped scale marks stay on every gauge, so the gauge reads as a scale and not as three lights."""
+    reads = _run(hub, "[0,50,100].map(v=>gaugeSvg(v,'CPU'))")
+    stops, arcs, marks = [], [], []
+    for svg in reads:
+        grad = re.search(r"<linearGradient [^>]*>(.*?)</linearGradient>", svg)
+        assert grad, "the gauge draws no gradient sweep"
+        stops.append(re.findall(r'<stop offset=(\S+) stop-color="var\((--[\w-]+)\)"', grad.group(1)))
+        arcs.append(re.search(r"<path class=gf [^>]*>", svg).group(0))
+        marks.append(re.findall(r"<line class=gm ", svg))
+    assert stops[0] == [("0", "--ok"), (".5", "--warn"), ("1", "--err")], \
+        "the sweep does not run from ok through warn to err"
+    assert stops[0] == stops[1] == stops[2], "the sweep changes with the reading instead of staying one scale"
+    assert all('stroke="url(#g-CPU)"' in arc for arc in arcs), "the value arc does not take the gradient"
+    assert [len(m) for m in marks] == [5, 5, 5], "the shipped scale marks are not kept"
     html = _run(hub, 'instGauges({cpu:0,ram:100,gpu:null})')
-    assert 'stroke="hsl(120 65% 42%)"' in html and 'stroke="hsl(0 65% 42%)"' in html
+    assert 'stroke="none"' in html, "a missing reading draws no value arc"
+    assert html.count("<linearGradient") == 3, html
+    assert len(set(re.findall(r"<linearGradient id=(\S+)", html))) == 3, "two gauges share one gradient id"
+    assert html.count("<line class=gm ") == 15, "a gauge lost its scale marks"
+    rules = {s: d.replace(" ", "") for sels, d in _rules(hub.INST_CSS) for s in sels}
+    assert "stroke:var(--mute)" in rules.get("#inst .ig .gm", ""), "a scale mark is not the muted axis ink"
+    assert "stroke:var(--fg)" in rules.get("#inst .ig .gn", ""), "the needle is not fg"
 
 
 def test_the_gauge_svg_is_hidden_from_a_screen_reader_and_the_value_is_text(hub):

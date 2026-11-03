@@ -942,16 +942,52 @@ def test_the_flow_legend_comes_before_its_one_line_of_notes(hub, board, tmp_path
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-def test_the_flow_text_takes_the_lead_views_size_and_ink(hub, board, tmp_path):
-    """#1149: the flow's SVG text inherits the box size and paints the lead view's ink."""
-    _stack(hub)
+def test_the_chart_axis_text_takes_the_page_size_and_the_muted_ink(hub, board, tmp_path):
+    """SPEC 1123 #1141 re-anchors #1149's ink: a chart's axis text inherits the box size and takes `mute`, so the flow
+    and the lead-time views paint one axis style."""
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
     cfd = _render(hub, tmp_path, "flow-cfd-ink.js", f"flowCFD({json.dumps(_flow(hub)['cfd']['ranges']['all'])})")
     lead = _lt_chart(hub, tmp_path, "lt-ink.js", _flow(hub)["lead"]["control"]["jira"]["all"])
     def fills(markup):
         texts = re.findall(r"<text [^>]*>", markup)
         assert texts and all("font-size" not in t for t in texts), "an SVG text sets its own size"
         return {re.search(r'fill="?([^" >]+)', t).group(1) for t in texts}
-    assert fills(cfd) == fills(lead) == {"var(--chart-ink)"}, (fills(cfd), fills(lead))
+    assert fills(cfd) == fills(lead) == {"var(--chart-axis)"}, (fills(cfd), fills(lead))
+    assert _resolved("var(--chart-axis)", _tokens()) == _resolved("var(--mute)", _tokens()), "axis text is not mute"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_chart_family_draws_one_grid_axis_and_title_treatment(hub, board, tmp_path, monkeypatch):
+    """SPEC 1123 #1141: the flow chart and the lead-time plot share the grid and frame in `line`, axis text in `mute` at
+    body size, and a title inside the plot at the left edge."""
+    class Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None): return cls(2026, 10, 10, tzinfo=tz)
+    monkeypatch.setattr(hub, "dt", types.SimpleNamespace(**{**vars(hub.dt), "datetime": Frozen}))
+    tokens = _tokens()
+    lead = _drawn_lead_svg(hub, board, tmp_path)
+    _stack(hub)
+    cfd = _render(hub, tmp_path, "flow-family.js", f"flowCFD({json.dumps(_flow(hub)['cfd']['ranges']['all'])})")
+    assert _resolved("var(--chart-grid)", tokens) == _resolved("var(--line)", tokens), "the grid is not line"
+    assert "#flowb" in hub.PAGE and "font-size:var(--fs-body)" in re.search(r"#flowb\{[^}]*\}", hub.PAGE).group(0)
+    for name, svg, title in (("flow", cfd, "cards"), ("lead", lead, "elapsed time")):
+        texts = re.findall(r"<text ([^>]*)>([^<]*)</text>", svg)
+        assert texts, name
+        assert all("font-size" not in attrs for attrs, _ in texts), f"{name} text sets its own size"
+        assert {re.search(r'fill="?([^" >]+)', " " + attrs).group(1) for attrs, _ in texts} == {"var(--chart-axis)"}, \
+            f"{name} axis text does not take mute"
+        grid = [ln for ln in re.findall(r"<line [^>]*>", svg) if "stroke=var(--chart-grid)" in ln]
+        vert = next(ln for ln in grid if re.search(r"x1=(\S+) y1=\S+ x2=\1 ", ln))
+        horiz = next(ln for ln in grid if re.search(r"y1=(\S+) .*y2=\1", ln))
+        left, frame_top = re.search(r"x1=(\S+) y1=(\S+)", vert).groups()
+        frame_base = re.search(r"y1=(\S+)", horiz).group(1)
+        found = [(attrs, body) for attrs, body in texts if body.startswith(title)]
+        assert len(found) == 1, f"{name} draws no single {title!r} title"
+        attrs, _ = found[0]
+        assert _svg_attr(attrs, "x") == left, f"{name} title does not start at the plot's left edge"
+        assert _svg_attr(attrs, "text-anchor") == "start"
+        assert float(frame_top) < float(_svg_attr(attrs, "y")) < float(frame_base), \
+            f"{name} title does not sit inside the plot"
 
 
 def test_each_band_serves_its_count_per_day(hub, board):
