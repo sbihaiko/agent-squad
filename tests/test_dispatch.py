@@ -799,7 +799,7 @@ def test_the_dynamic_seed_router_carries_its_role_text_and_the_raised_budget(): 
     root = Path(__file__).resolve().parent.parent
     r = _seed_router()
     assert r.get("instructions") == (root / "prompts" / "router.md").read_text().strip()
-    assert r["budget"] == {"stalls": {"min": 2, "max": 5}, "spend": {"min": 0.05, "max": 8}} and r["deadline"] == 1200
+    assert r["budget"] == {"stalls": {"min": 2, "max": 5}, "spend": {"min": 0.05, "max": 3}} and r["deadline"] == 1200
 
 
 def test_the_dynamic_seed_allows_only_skills_the_plugin_ships():
