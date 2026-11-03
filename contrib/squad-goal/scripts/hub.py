@@ -6711,6 +6711,11 @@ _SESSIONS_READ = threading.Lock()   # one scan of the session folders at a time
 _SESSIONS_REFRESH = {"thread": None}   # the one background scan a stale cache starts
 _SESSIONS_REFRESH_LOCK = threading.Lock()   # its check-and-start, so racing callers never start two scans
 
+def note_session_mode(rec):
+    """Record the mode of a session the hub sees, once (#1298): a send reads this durable record when the transcript
+    tail and the argv answer nothing, and refuses rather than write a frame the web owner cannot approve."""
+    session_send.remember_mode(PROFILE_NAME, rec, root=STATE)
+
 def sessions_read():
     """One read of this profile's live sessions, stored for every caller until the refresh interval passes. Only one scan
     runs at a time, and a failed scan keeps the last answer, so no caller ever pays the folders twice (#833, #1217)."""
@@ -6719,7 +6724,7 @@ def sessions_read():
             at, body = SESSIONS_CACHE["at"], SESSIONS_CACHE["body"]
         if body is not None and at is not None and time.monotonic() - at < SESSIONS_REFRESH_SECONDS:
             return body   # the caller that held the read lock just scanned them
-        try: body = sessions.list_sessions(PROFILE_NAME, profiles_of=profiles_of_cwd)
+        try: body = sessions.list_sessions(PROFILE_NAME, profiles_of=profiles_of_cwd, seen=note_session_mode)
         except Exception: return body   # a failed scan keeps the last answer: the next interval retries
         with _SESSIONS_LOCK:
             SESSIONS_CACHE.update(at=time.monotonic(), body=body)

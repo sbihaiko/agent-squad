@@ -63,6 +63,59 @@ def _stored(path):
     return body if isinstance(body, dict) else {"state": "reserved"}
 
 
+def _modes(root, profile):
+    return _dir(root, profile) / "modes"
+
+
+def _mode_file(root, profile, sid):
+    return _modes(root, profile) / f"{sid}.json"
+
+
+def remembered_mode(profile, sid, root=None):
+    """The permission mode the hub wrote the first time it saw this session, or "" (#1298). The durable session record
+    answers when the live read cannot: a transcript tail that no longer holds the mode line, and an interactive session
+    whose title rewrite hides its argv flag. `root` is the hub's state folder; with none there is no record to read."""
+    if root is None or not isinstance(sid, str) or sessions.SID.fullmatch(sid) is None:
+        return ""
+    try:
+        body = json.loads(_mode_file(root, profile, sid).read_text())
+    except (OSError, ValueError):
+        return ""
+    mode = body.get("permissionMode") if isinstance(body, dict) else None
+    return mode if isinstance(mode, str) else ""
+
+
+def remember_mode(profile, rec, root=None):
+    """Write the mode the session was started with into the hub's durable session record, once, and answer it (#1298).
+    A frame with no mode is held for an approval the web owner cannot give, so the hub records the mode when it first
+    sees the session, while a transcript or an argv read can still answer. An unreadable mode stays unrecorded: it is
+    never a guess, and the send refuses instead."""
+    if root is None or not isinstance(rec, dict):
+        return ""
+    sid = rec.get("sessionId")
+    if not isinstance(sid, str) or sessions.SID.fullmatch(sid) is None:
+        return ""
+    mode = remembered_mode(profile, sid, root)
+    if mode:
+        return mode
+    mode = sessions.permission_mode(rec.get("cwd", ""), sid, rec.get("pid"))
+    if not mode:
+        return ""
+    d = _modes(root, profile)
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        fd = os.open(_mode_file(root, profile, sid), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        return remembered_mode(profile, sid, root) or mode
+    except OSError:
+        return mode
+    with os.fdopen(fd, "w") as f:
+        json.dump({"permissionMode": mode, "cwd": rec.get("cwd", "")}, f)
+        f.flush()
+        os.fsync(f.fileno())
+    return mode
+
+
 def _purge(d):
     if not d.is_dir():
         return
@@ -120,16 +173,18 @@ def live_session(profile, sid, profiles_of=sessions.profiles_of):
     return None
 
 
-def _deliver(profile, sid, text, cid, profiles_of):
+def _deliver(profile, sid, text, cid, profiles_of, root=None):
     rec = live_session(profile, sid, profiles_of)
     if rec is None:
         raise Refused("no live session of this profile has that id")
     pid, sock = int(rec["pid"]), rec["socket"]
+    mode = remembered_mode(profile, sid, root) or remember_mode(profile, rec, root)
+    if not mode:
+        raise Refused("the session's permission mode is unknown, so a message would be held for an approval the web owner cannot give")
     token = _key_token(pid, sock)
     frames = (json.dumps({"type": "auth", "token": token}) + "\n"
               + json.dumps({"type": "user", "message": {"role": "user", "content": text},
-                            "from_name": FROM_NAME, "msg_id": cid, "priority": "next",
-                            **({"from_mode": m} if (m := sessions.permission_mode(rec["cwd"], sid, pid)) else {})}) + "\n").encode()
+                            "from_name": FROM_NAME, "msg_id": cid, "priority": "next", "from_mode": mode}) + "\n").encode()
     s = _open()
     s.settimeout(DEADLINE_S)
     try:
@@ -167,7 +222,7 @@ def send(profile, sid, text, cid, profiles_of=sessions.profiles_of, root=None):
         return {"status": "refused", "reason": "the send could not be recorded"}
     state, reason, cwd = "sent", "", ""
     try:
-        cwd = _deliver(profile, sid, text, cid, profiles_of)
+        cwd = _deliver(profile, sid, text, cid, profiles_of, root)
     except Refused as exc:
         state, reason = "refused", str(exc)
     except Uncertain as exc:

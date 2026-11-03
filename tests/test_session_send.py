@@ -98,7 +98,9 @@ def home(monkeypatch):
     shutil.rmtree(root, ignore_errors=True)
 
 
-def add_session(home, sid, cwd, pid=None, hang=False, name="build", status="busy"):
+def add_session(home, sid, cwd, pid=None, hang=False, name="build", status="busy", mode="bypassPermissions"):
+    """One live session whose transcript records `mode`; `mode=None` leaves the transcript without a mode line, so only
+    the argv fallback can answer, as an interactive session whose title rewrite hides it cannot."""
     pid = pid or os.getpid()
     sock = home.sockets / f"{sid}.sock"
     home.inboxes.append(Inbox(sock, hang=hang))
@@ -110,7 +112,9 @@ def add_session(home, sid, cwd, pid=None, hang=False, name="build", status="busy
     key.chmod(0o600)
     folder = home.projects / re.sub(r"[^A-Za-z0-9]", "-", str(cwd))
     folder.mkdir(parents=True, exist_ok=True)
-    (folder / f"{sid}.jsonl").write_text(json.dumps({"type": "user", "message": {"role": "user", "content": "hi"}}) + "\n")
+    line = {"type": "user", "message": {"role": "user", "content": "hi"}}
+    if mode: line["permissionMode"] = mode
+    (folder / f"{sid}.jsonl").write_text(json.dumps(line) + "\n")
     return folder / f"{sid}.jsonl"
 
 
@@ -130,7 +134,7 @@ def test_one_message_on_the_wire_follows_the_protocol_fields(home, tmp_path):
     assert out["status"] == "sent"
     assert box.frames[0] == {"type": "auth", "token": KEY}
     msg = box.frames[1]
-    assert set(msg) == {"type", "message", "from_name", "msg_id", "priority"}
+    assert set(msg) == {"type", "message", "from_name", "msg_id", "priority", "from_mode"}
     assert msg["type"] == "user" and msg["message"] == {"role": "user", "content": "hello there"}
     assert msg["from_name"] == "squad-hub" and msg["msg_id"] == CID and msg["priority"] == "next"
 
@@ -152,7 +156,7 @@ def test_the_wire_falls_back_to_the_sessions_own_flags_when_the_transcript_has_n
     send = load_send()
     proc = subprocess.Popen([sys.executable, "-c", "import time;time.sleep(30)", "--dangerously-skip-permissions"])
     try:
-        add_session(home, "s1", tmp_path / "app", pid=proc.pid)
+        add_session(home, "s1", tmp_path / "app", pid=proc.pid, mode=None)
         assert send.sessions.permission_mode(tmp_path / "app", "s1", proc.pid) == "bypassPermissions"
     finally:
         proc.kill()
@@ -166,7 +170,7 @@ def test_the_targets_argv_is_read_whole_past_a_truncating_ps_column(home, tmp_pa
     proc = subprocess.Popen([sys.executable, "-c", "import time;time.sleep(30)", "x" * 300,
                              "--dangerously-skip-permissions"])
     try:
-        add_session(home, "s1", tmp_path / "app", pid=proc.pid)
+        add_session(home, "s1", tmp_path / "app", pid=proc.pid, mode=None)
         assert send.sessions.permission_mode(tmp_path / "app", "s1", proc.pid) == "bypassPermissions"
     finally:
         proc.kill()
@@ -189,13 +193,40 @@ def test_a_session_with_no_mode_line_gets_the_flag_in_its_frame(home, tmp_path, 
     send = load_send()
     proc = subprocess.Popen([sys.executable, "-c", "import time;time.sleep(30)", "--dangerously-skip-permissions"])
     try:
-        add_session(home, "s1", tmp_path / "app", pid=proc.pid)
+        add_session(home, "s1", tmp_path / "app", pid=proc.pid, mode=None)
         monkeypatch.setattr(send, "peer_pid", lambda s: proc.pid)
         assert send.send("p1", "s1", "hello there", CID, profiles_of=profile_p1, root=home.state)["status"] == "sent"
         assert inbox_of(home).frames[1]["from_mode"] == "bypassPermissions"
     finally:
         proc.kill()
         proc.wait()
+
+
+def test_a_send_reads_the_mode_the_hub_recorded_when_it_first_saw_the_session(home, tmp_path, monkeypatch, hub):
+    """The hub writes the session's own mode to its durable session record the first time it sees the session, so a
+    transcript tail that no longer holds the mode line and a rewritten argv cannot empty the frame (#1298). A frame
+    with no mode is held for an approval the web owner cannot give."""
+    send = load_send()
+    path = add_session(home, "s1", home.path / "p1" / "app")
+    h = hub()
+    h.mod.sessions_read()                                     # the hub sees the session while its mode is readable
+    path.write_text(json.dumps({"type": "user", "message": {"role": "user", "content": "hi"}}) + "\n")
+    monkeypatch.setattr(send.sessions, "argv_mode", lambda pid: "")   # the title rewrite hides the argv flag
+    out = send.send("p1", "s1", "hello there", CID, profiles_of=profile_p1, root=home.state)
+    assert out["status"] == "sent"
+    assert inbox_of(home).frames[1]["from_mode"] == "bypassPermissions"
+
+
+def test_a_send_with_no_readable_mode_is_refused_and_writes_nothing(home, tmp_path, monkeypatch):
+    """An unreadable mode is no licence to send: a frame with no mode is held for an approval the web owner cannot give,
+    so the hub refuses the send with a reason the panel shows (#1298)."""
+    send = load_send()
+    add_session(home, "s1", tmp_path / "app", mode=None)
+    monkeypatch.setattr(send.sessions, "argv_mode", lambda pid: "")
+    out = send.send("p1", "s1", "hello", CID, profiles_of=profile_p1, root=home.state)
+    assert out["status"] == "refused"
+    assert "permission mode" in out["reason"]
+    assert inbox_of(home).conns == 0
 
 
 def test_two_concurrent_sends_with_one_id_send_once(home, tmp_path):

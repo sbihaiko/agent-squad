@@ -51,9 +51,13 @@ The session queues the text as a meta user turn. The transcript (`~/.claude/proj
 
 ## Permission mode and holds
 
-The receiver can hold a peer message for its user's approval. Hold causes: a `crossSessionInbound: "hold"` setting (explicit, managed, repo), `mode-mismatch` (the sender asserts another permission class), and `no-mode-asserted` (the sender asserts no mode while the receiver bypasses permissions). A held message waits for approval; it can expire, be refused or be dropped. A hub that sends to a session in `bypassPermissions` must expect a hold unless it asserts a matching `from_mode`. The probe target ran in auto mode with no `from_mode`, and nothing was held.
+The receiver can hold a peer message for its user's approval. Hold causes: a `crossSessionInbound: "hold"` setting (explicit, managed, repo), `mode-mismatch` (the sender asserts another permission class), and `no-mode-asserted` (the sender asserts no mode while the receiver bypasses permissions). A held message waits for approval; it can expire, be refused or be dropped. The web owner has no terminal to approve a hold, so the hub never sends a frame that can be held: every frame it writes carries a `from_mode` equal to the receiver's own mode.
 
-The hub reads the receiver's mode in this order: the last `permissionMode` line of its transcript, searched back through the file; then the mode its argv names. The argv read is not reliable for an interactive session. Claude Code sets its process title to `claude` on the interactive path (unless `CLAUDE_CODE_DISABLE_TERMINAL_TITLE` is set), and on macOS a title change replaces the argv that `ps -ww -o args=` shows, so a flag given at start is no longer visible. A session with no transcript mode line and a replaced title has no readable mode, and the hub sends no `from_mode`.
+The hub reads the receiver's mode in this order: the last `permissionMode` line of its transcript, searched back through the file; then the mode its argv names. The first time the hub sees a live session, it writes that answer to its own durable session record, `$SG_STATE/session-sends/<profile>/modes/<sessionId>.json`, once; every later send reads the record. The argv read alone is not reliable for an interactive session. Claude Code sets its process title to `claude` on the interactive path (unless `CLAUDE_CODE_DISABLE_TERMINAL_TITLE` is set), and on macOS a title change replaces the argv that `ps -ww -o args=` shows, so a flag given at start may no longer be visible. A transcript tail can also grow past the mode line. The record keeps the mode through both, and a send it answers is never held.
+
+When the hub has no recorded mode and the live read answers nothing, the mode is unknown. The hub then refuses the send with that reason, which the panel shows, instead of writing a frame the receiver would hold.
+
+The probe target ran in auto mode with no `from_mode`, and nothing was held.
 
 ## Auth on macOS
 
