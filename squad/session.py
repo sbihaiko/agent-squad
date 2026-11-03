@@ -13,6 +13,7 @@ import anyio
 
 from squad import modelreg
 from squad.adapter import AdapterError, MessageOverCeiling
+from squad.adapter_classes import is_transport
 from squad.budget import measured_tokens
 
 # A reason the model writes about itself is a claim, not an engine fact: the contract tells a child to answer `out_of_budget` when it
@@ -135,13 +136,35 @@ def answered_nothing(out):
     return not isinstance(getattr(out.result, "output", None), dict)
 
 
-async def run_chain(chain, call):
+TRANSPORT_BACKOFF = 2.0      # seconds one entry waits before its one retry after a transport failure (#1293)
+
+
+def transport_error(out):
+    """True when the call failed because the transport did not deliver, not because the model refused to serve. A
+    connection refused or reset clears in seconds, so the entry is worth one fresh call; a message past the reader's
+    ceiling is not this, and neither is a provider's refusal."""
+    return out.kind == "adapter_error" and is_transport(str(out.error))
+
+
+async def run_chain(chain, call, *, on_retry=None, backoff=TRANSPORT_BACKOFF, sleep=anyio.sleep):
     """Call one entry of a model chain at a time while the entry answers nothing. `call(model, first)` runs one attempt and
     returns `(outcome, who)`. Return the last outcome, every entry that answered nothing with its reason, and the last
-    `who`."""
+    `who`.
+
+    One entry that fails on the transport gets one second call after `backoff`, and `on_retry(model, out)` puts it on the
+    record. Each call is its own metered call, so the retry counts the node's budget and the run's spend and never starts
+    a new run. A retry that fails again is an entry that could not serve, so the chain goes on to its next entry."""
     tried, out, who = [], None, None
     for i, model in enumerate(chain):
         out, who = await call(model, i == 0)
+        if transport_error(out):
+            if on_retry is not None:
+                on_retry(model, out)
+            await sleep(backoff)
+            out, who = await call(model, False)
+            if transport_error(out):    # the retry hit the transport too: this entry never served
+                tried.append((model, str(out.error)))
+                continue
         if not answered_nothing(out):
             break
         stalled = out.kind == "result"

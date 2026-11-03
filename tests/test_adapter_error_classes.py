@@ -26,6 +26,10 @@ UNAUTHORIZED = "ResultError: Claude Code returned an error result: API Error: 40
 NO_ACCESS = ("ResultError: Claude Code returned an error result: There's an issue with the selected model "
              "(gemini-3.8-flash-high). It may not exist or you may not have access (exit code: 1)")
 TIMEOUT = "TimeoutError: the request timed out after 600 s"
+CONNECTION_REFUSED = ("ResultError: Claude Code returned an error result: API Error: Connection refused\n"
+                      "— a firewall or proxy may be blocking it (ECONNREFUSED) (exit code: 1)")
+CONNECTION_RESET = ("ResultError: Claude Code returned an error result: Connection reset by peer "
+                    "(ECONNRESET) (exit code: 1)")
 TOOL_DENIED = "ResultError: Claude Code returned an error result: the tool call was denied by the permission hook"
 PROTOCOL = "ResultError: the response was malformed: invalid JSON frame (exit code: 1)"
 UNPLACED = "ProcessError: Command failed with exit code 1 (exit code: 1)\nError output: Check stderr output for details"
@@ -89,6 +93,8 @@ def record(tmp_path, name, events):
     (UNAUTHORIZED, "auth"),
     (NO_ACCESS, "auth"),
     (TIMEOUT, "timeout"),
+    (CONNECTION_REFUSED, "protocol"),
+    (CONNECTION_RESET, "protocol"),
     (TOOL_DENIED, "tool_refusal"),
     (PROTOCOL, "protocol"),
     (UNPLACED, "unknown"),

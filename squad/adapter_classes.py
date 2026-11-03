@@ -39,6 +39,10 @@ _AUTH_WORDS = ("unauthor", "unauthenticated", "authentication", "forbidden", "pe
 _PROTOCOL_WORDS = ("protocol", "malformed", "parse error", "parseerror", "invalid response", "invalid json",
                    "json decode", "unexpected end", "framing", "transport", "ceiling", "stream ended",
                    "no resultmessage", "bad request", "content-length")
+# A transport that did not deliver is not a model that refused to serve (#1293): the gateway went down for two minutes
+# and every chain entry read `unknown`. The words are the ones the CLI and the socket layer write, and they are read
+# before every other rule because `refused` in `Connection refused` would otherwise read as a refusal.
+_TRANSPORT_WORDS = ("connection refused", "connection reset", "econnrefused", "econnreset")
 _STATUS = re.compile(r"\b(\d{3})\b")
 _STATUS_CAUSE = {"400": "protocol", "401": "auth", "402": "quota", "403": "auth", "408": "timeout",
                  "422": "protocol", "429": "quota"}
@@ -68,9 +72,18 @@ def _status_cause(text: str) -> str | None:
     return None
 
 
+def is_transport(text: str | None) -> bool:
+    """True when the diagnostic is the transport not delivering (a refused or reset connection), which clears in
+    seconds. The model never refused to serve, so this is never a refusal or an auth failure."""
+    low = (text or "").lower()
+    return any(w in low for w in _TRANSPORT_WORDS)
+
+
 def cause(text: str | None) -> str:
     """The cause one diagnostic text names, from the closed set `CAUSES`. An empty or unmatched text is `unknown`."""
     low = (text or "").lower()
+    if is_transport(low):
+        return "protocol"
     if any(w in low for w in _QUOTA_WORDS):
         return "quota"
     if any(w in low for w in _TIMEOUT_WORDS):

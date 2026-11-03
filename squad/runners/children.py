@@ -259,7 +259,12 @@ class Children:
         chain = session.model_chain(models, first, spent, hours, at, km or e.options.get("model_order") or [])
         for m, why in session.hours_skipped(models, first, spent, hours, at):    # an entry left out of its window is on the record
             e.record.append("model_skipped", node=name, entry=entry, model=m, reason=why)
-        out, tried, model = await session.run_chain(chain, lambda m, first: self.attempt(name, d, ws, dl, m, slot, first and entry == 1, entry, review, repeated, chain=chain))
+        def on_retry(m, out):    # the one retry after a transport failure is a measured fact on the record (#1293)
+            e.record.append("model_retried", node=name, entry=entry, model=m, error=str(out.error)[:session.CHAIN_LINE])
+
+        out, tried, model = await session.run_chain(
+            chain, lambda m, first: self.attempt(name, d, ws, dl, m, slot, first and entry == 1, entry, review, repeated, chain=chain),
+            on_retry=on_retry)
         for m, err in tried:    # every refusal is on the record, exhausted chain or not (#494)
             e.record.append("model_refused", node=name, entry=entry, model=m, error=err[:session.CHAIN_LINE])
             limits.write(m, err)    # a refusal that names its reset closes that account until then (#572)

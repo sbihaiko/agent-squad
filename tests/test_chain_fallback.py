@@ -91,3 +91,74 @@ async def test_a_deadline_still_ends_the_node():
 
     await session.run_chain(["a", "b"], call)
     assert seen == ["a"]
+
+
+# --- a transport failure gets one retry on the same entry (#1293) ---------------------------------------------------
+
+TRANSPORT = "ResultError: Claude Code returned an error result: API Error: Connection refused (ECONNREFUSED) (exit code: 1)"
+
+
+def transport_out():
+    """A call that failed because the transport did not deliver: the model never refused to serve."""
+    return session.CallOutcome("adapter_error", error=RuntimeError(TRANSPORT))
+
+
+async def test_a_transport_failure_gets_one_retry_on_the_same_entry():
+    seen = []
+
+    async def call(model, first):
+        seen.append((model, first))
+        return (transport_out() if len(seen) == 1 else outcome("result")), {"model": model}
+
+    out, tried, who = await session.run_chain(["a", "b"], call, backoff=0)
+    assert seen == [("a", True), ("a", False)], "the failed entry is called again, not the next one"
+    assert out.kind == "result" and tried == []
+    assert who == {"model": "a"}
+
+
+async def test_a_chain_whose_entries_all_hit_the_transport_ends_adapter_error_after_the_backoff():
+    seen, slept = [], []
+
+    async def call(model, first):
+        seen.append(model)
+        return transport_out(), {"model": model}
+
+    async def sleep(seconds):
+        slept.append(seconds)
+
+    out, tried, _ = await session.run_chain(["a", "b"], call, backoff=1.5, sleep=sleep)
+    assert seen == ["a", "a", "b", "b"], "one retry per entry, and every entry is tried"
+    assert [m for m, _ in tried] == ["a", "b"]
+    assert session.exhausted(["a", "b"], tried)
+    assert out.kind == "adapter_error"
+    assert slept == [1.5, 1.5]
+
+
+async def test_the_retry_is_reported_for_the_record():
+    retried = []
+
+    async def call(model, first):
+        return (transport_out() if not retried else outcome("result")), {"model": model}
+
+    def on_retry(model, out):
+        retried.append(model)
+
+    out, tried, _ = await session.run_chain(["a"], call, backoff=0, on_retry=on_retry)
+    assert retried == ["a"], "the retry is on the record once"
+    assert out.kind == "result" and tried == []
+
+
+async def test_a_transport_failure_never_retries_a_message_over_the_ceiling():
+    """A ceiling is a fact about the transport's frame, not a blip: the engine never makes a fresh call silently."""
+    from squad.adapter import MessageOverCeiling
+
+    seen = []
+
+    async def call(model, first):
+        seen.append(model)
+        err = MessageOverCeiling("the transport's reader stopped at its 1000-byte JSON ceiling", 1000, 2000)
+        return session.CallOutcome("adapter_error", error=err), {"model": model}
+
+    out, tried, _ = await session.run_chain(["a", "b"], call, backoff=0)
+    assert seen == ["a"], "a ceiling ends the walk exactly as it did"
+    assert out.kind == "adapter_error" and tried == []
