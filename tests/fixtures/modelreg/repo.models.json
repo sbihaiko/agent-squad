@@ -21,7 +21,7 @@
     "grok-4.6",
     "gpt-5.6-terra",
     "gemini-3.8-flash-low",
-    "deepseek-v4-flash"
+    "deepseek-v4-pro"
   ],
   "review_timeout_seconds": 360,
   "review_delta_max_lines": 3000,

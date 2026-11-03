@@ -1419,7 +1419,7 @@
         "tools": true,
         "review_tools": false,
         "thinking_off": true,
-        "vision": false,
+        "vision": true,
         "context": 131072
       },
       "display_price": {

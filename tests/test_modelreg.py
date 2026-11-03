@@ -655,3 +655,9 @@ def test_grok_4_5_is_live_and_runs_the_router_on_the_gateway():
     ok, reason = mr.compatible("claude-grok-4.5", "router")
     assert (ok, reason) == (True, None)
     assert mr.model("claude-grok-4.5").retired is False
+
+
+def test_deepseek_flash_sees_images_and_runs_the_vision_chain():
+    """DeepSeek V4.1 Flash read a test image 3 of 3 through the gateway, served by DeepSeek itself, so vision keeps it."""
+    assert mr.compatible("deepseek-flash", "vision") == (True, None)
+    assert mr.compatible("claude-deepseek-flash[1m]", "vision") == (True, None)
