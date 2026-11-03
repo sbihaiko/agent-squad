@@ -4442,7 +4442,7 @@ def speed():
 
 # The state table is shared with the dashboard build and the phone reads its badge fields from the hub's run payload.
 # `mark` is one of the four chip-size shapes; a border texture is never a mark (#1137).
-RUN_STATES = json.loads((pathlib.Path(__file__).resolve().parents[3] / "config" / "run-states.json").read_text())
+RUN_STATES = json.loads((pathlib.Path(__file__).resolve().parent / "run-states.json").read_text())   # beside the reader, so the live copy reads it too (ADR-0141)
 MARK_GLYPHS = {"filled": "●", "hollow": "○", "bar": "▌", "none": ""}   # the four marks of the one state table, drawn before the word
 def run_state_css(r):
     state = r["state"].replace(" ", "-")

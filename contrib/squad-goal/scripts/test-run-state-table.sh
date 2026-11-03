@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${SG_CHECKOUT:?set SG_CHECKOUT to the checkout containing .venv}"
-"$SG_CHECKOUT/.venv/bin/python" - <<'PY'
+d="$(cd "$(dirname "$0")" && pwd)"
+python3 - "$d" <<'PY'
 import json
+import sys
 from pathlib import Path
 
-root = Path.cwd()
-rows = json.loads((root / "config/run-states.json").read_text())
+rows = json.loads((Path(sys.argv[1]) / "run-states.json").read_text())
 assert all({"state", "tone", "mark", "word"} <= row.keys() for row in rows)
 assert len({row["state"] for row in rows}) == len(rows)
 for tone in {row["tone"] for row in rows}:

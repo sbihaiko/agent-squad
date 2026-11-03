@@ -102,7 +102,7 @@ def core_bundle():
     """The one script text of the dashboard core: every file of dashboard/core/ in CORE_ORDER, `</script` escaped.
     The page inlines it and the node runner evaluates it, so the two cannot differ."""
     text = '"use strict";\n' + "".join((CORE_DIR / f).read_text() + "\n" for f in CORE_ORDER)
-    states = json.loads((ROOT / "config" / "run-states.json").read_text())
+    states = json.loads((ROOT / "contrib" / "squad-goal" / "scripts" / "run-states.json").read_text())
     text = text.replace("/*RUN_STATE_TABLE*/", json.dumps(states, ensure_ascii=False))
     return text.replace("</script", "<\\/script")
 

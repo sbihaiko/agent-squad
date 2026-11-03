@@ -28,7 +28,7 @@ function sourcesModule({ STATES }) {
     { cls: "sel", label: "Selected", group: "interaction" },
     { cls: "drop", label: "Target of the link you drag", group: "interaction" },
   ];
-  // The hub serves and the dashboard embeds the same run-state table from config/run-states.json. Every page draws these rows;
+  // The hub serves and the dashboard embeds the same run-state table from contrib/squad-goal/scripts/run-states.json. Every page draws these rows;
   // `hub_only` names states the hub derives rather than the run record carrying them.
   const RUN_STATES = /*RUN_STATE_TABLE*/;
   // What a pill prints for a state, on any surface: the hub badges a run with the same words. The run header chip and the legend read this one map.

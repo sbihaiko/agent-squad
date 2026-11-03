@@ -39,13 +39,13 @@ def dash_states():
 
 
 def test_hub_and_dashboard_consume_the_served_state_table(hub):
-    table = json.loads((ROOT / "config" / "run-states.json").read_text())
+    table = json.loads((ROOT / "contrib" / "squad-goal" / "scripts" / "run-states.json").read_text())
     assert hub.RUN_STATES == table
     assert dash_states() == table
 
 
 def test_each_served_row_names_state_tone_mark_and_word(hub):
-    rows = json.loads((ROOT / "config" / "run-states.json").read_text())
+    rows = json.loads((ROOT / "contrib" / "squad-goal" / "scripts" / "run-states.json").read_text())
     assert all({"state", "tone", "mark", "word"} <= row.keys() for row in rows)
     assert all(row["tone"] == row["color"] and row["word"] == row["text"] for row in rows)
 
