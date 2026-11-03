@@ -156,7 +156,9 @@ def test_the_card_reads_the_one_load_route_and_stays_calm(hub):
     page = hub.PAGE
     assert page.count('fetch("/api/load")') == 1 and page.count("setInterval(loadPoll") == 1
     assert "instDraw(d)" in page
-    assert re.search(r"prefers-reduced-motion:\s*reduce\)\s*\{[^}]*#inst", page)
+    reduced = next(line for line in (ROOT / "contrib/squad-goal/scripts/web-tokens.css").read_text().splitlines()
+                   if line.startswith("@media (prefers-reduced-motion: reduce)"))
+    assert "#inst" in reduced
     assert 'aria-live="off"' in page or "aria-live=off" in page
     assert "@keyframes" not in page[page.index("// INST{"):page.index("// }INST")]
 

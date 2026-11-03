@@ -89,11 +89,13 @@ def test_the_column_header_and_the_hidden_pill_toggle_a_column():
     assert 'data-eye="${esc(x.name)}"' in src, "a hidden column in the pill cannot be shown again"
 
 
-def test_a_lane_opens_and_closes_eased_and_shows_a_loading_mark():
+def test_a_lane_waits_with_a_sentence_and_no_spinner_or_looping_animation():
     src, css = HUB_PY.read_text(), LANES_CSS.read_text()
-    assert "easing:\"ease-in-out\"" in src, "the lane height is not eased"
-    assert "class=lload" in src, "a lane waiting on the read shows no loading mark"
-    assert "@keyframes lspin" in css and "prefers-reduced-motion" in css
+    assert "Loading the lane contents." in src
+    assert "<i></i><span>loading…</span>" not in src
+    assert "@keyframes" not in css and "animation:" not in css
+    assert "lspin" not in css and "lload i" not in css
+    assert "matchMedia(\"(prefers-reduced-motion: reduce)\")" not in src
 
 
 def test_a_read_in_flight_is_shared_so_slow_routes_never_fill_the_connections():

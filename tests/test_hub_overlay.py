@@ -588,15 +588,16 @@ def test_the_paragraph_gap_is_one_line_box_at_the_smallest_and_largest_size():
 # ---------------------------------------------------------------- the live activity line (#1082)
 
 @pytest.mark.node_bound
-def test_the_live_line_reads_spinner_verb_elapsed_and_tokens():
-    assert run_js("SQ.liveText({status:'busy', elapsed:92, got:0, tokens:2400}, 0)") == "⠋ Working · 1m 32s · ↓ 2.4k tokens"
+def test_the_live_line_names_its_state_as_a_sentence_with_elapsed_time_and_tokens():
+    assert run_js("SQ.liveText({status:'busy', elapsed:92, got:0, tokens:2400}, 0)") == "Working. · 1m 32s · ↓ 2.4k tokens"
 
 
 @pytest.mark.node_bound
-def test_the_live_line_turns_about_eight_times_a_second_while_the_session_works():
-    moved, same_frame = run_js("[SQ.liveText({status:'busy', elapsed:92, got:0, tokens:2400}, 120),"
-                               " SQ.liveText({status:'busy', elapsed:92, got:0, tokens:2400}, 60)]")
-    assert moved == "⠙ Working · 1m 32s · ↓ 2.4k tokens" and moved.split()[0] != same_frame.split()[0]
+def test_the_live_line_does_not_tick_or_render_a_spinner():
+    first, second = run_js("[SQ.liveText({status:'busy', elapsed:92, got:0, tokens:2400}, 120),"
+                           " SQ.liveText({status:'busy', elapsed:92, got:0, tokens:2400}, 60)]")
+    assert first == second == "Working. · 1m 32s · ↓ 2.4k tokens"
+    assert "SQ.SPIN" not in OVERLAY.read_text()
 
 
 @pytest.mark.node_bound
@@ -604,8 +605,8 @@ def test_the_live_line_is_empty_when_idle_and_dashes_what_is_unknown():
     idle, waiting, unknown = run_js("[SQ.liveText({status:'idle', elapsed:5, got:0, tokens:9}, 0),"
                                     " SQ.liveText({status:'waiting', elapsed:5, got:0, tokens:9}, 0),"
                                     " SQ.liveText({status:'busy', elapsed:null, got:0, tokens:null}, 0)]")
-    assert idle == "" and waiting.endswith("Waiting for you · 5s · ↓ 9 tokens")
-    assert unknown == "⠋ Working · — · ↓ — tokens"
+    assert idle == "" and waiting.endswith("Waiting for you. · 5s · ↓ 9 tokens")
+    assert unknown == "Working. · — · ↓ — tokens"
 
 
 def test_the_live_line_keeps_its_own_row_between_the_talk_and_the_composer():

@@ -6,8 +6,8 @@ header{display:flex;gap:8px;align-items:center;padding:8px 12px;border-bottom:1p
 /* The project switcher (#876): the header names the project; a tap opens the list in a sheet, rows 44 px tall. */
 #profile{flex:1;min-width:0;min-height:44px;display:flex;align-items:center;gap:8px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 10px;font-size:var(--fs-body);text-align:left}
 #pswm{color:var(--mute);font-size:var(--fs-caption);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
-#psheet{position:fixed;left:0;right:0;bottom:0;max-height:70vh;max-height:70dvh;overflow:auto;background:var(--panel);border-top:1px solid var(--line);border-radius:var(--radius-xl) var(--radius-xl) 0 0;padding:10px 14px calc(14px + env(safe-area-inset-bottom));z-index:25;translate:0 0;transition:translate .22s ease-out}
-#psheet[hidden]{display:none;translate:0 100%;pointer-events:none;transition:translate .16s ease-in,display .16s ease-in allow-discrete}
+#psheet{position:fixed;left:0;right:0;bottom:0;max-height:70vh;max-height:70dvh;overflow:auto;background:var(--panel);border-top:1px solid var(--line);border-radius:var(--radius-xl) var(--radius-xl) 0 0;padding:10px 14px calc(14px + env(safe-area-inset-bottom));z-index:25;translate:0 0;transition:translate var(--motion-duration-enter) var(--motion-entry-easing)}
+#psheet[hidden]{display:none;translate:0 100%;pointer-events:none;transition:translate var(--motion-duration-exit) var(--motion-exit-easing),display var(--motion-duration-exit) var(--motion-exit-easing) allow-discrete}
 #pswl a{display:flex;flex-direction:column;justify-content:center;min-height:44px;padding:6px 0;border-bottom:1px solid var(--line);color:var(--fg);text-decoration:none;font-size:var(--fs-body)}
 #pswl a[aria-current=page]{color:var(--acc)}
 #pswl .repo,#pswl .psw-m{color:var(--mute);font-size:var(--fs-caption)}
@@ -65,8 +65,8 @@ h2{font-size:var(--fs-heading);margin:6px 0 10px}
 .lane-h .ltt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg)}
 .lane-h .pc{color:var(--mute);font-size:var(--fs-caption)}
 /* The ticket sheet takes about 60% of the screen (#919), so the card it names stays visible above it. */
-#sheet{position:fixed;left:0;right:0;bottom:0;height:60vh;max-height:60vh;height:60dvh;max-height:60dvh;overflow:auto;overscroll-behavior:contain;touch-action:pan-y;background:var(--panel);border-top:1px solid var(--line);border-radius:var(--radius-xl) var(--radius-xl) 0 0;padding:10px 14px calc(68px + env(safe-area-inset-bottom));z-index:20;translate:0 0;transition:translate .22s ease-out}
-#sheet[hidden]{display:none;translate:0 100%;pointer-events:none;transition:translate .16s ease-in,display .16s ease-in allow-discrete}
+#sheet{position:fixed;left:0;right:0;bottom:0;height:60vh;max-height:60vh;height:60dvh;max-height:60dvh;overflow:auto;overscroll-behavior:contain;touch-action:pan-y;background:var(--panel);border-top:1px solid var(--line);border-radius:var(--radius-xl) var(--radius-xl) 0 0;padding:10px 14px calc(68px + env(safe-area-inset-bottom));z-index:20;translate:0 0;transition:translate var(--motion-duration-enter) var(--motion-entry-easing)}
+#sheet[hidden]{display:none;translate:0 100%;pointer-events:none;transition:translate var(--motion-duration-exit) var(--motion-exit-easing),display var(--motion-duration-exit) var(--motion-exit-easing) allow-discrete}
 .grab{width:40px;height:4px;border-radius:var(--radius-sm);background:var(--line);margin:0 auto 10px}
 #sh-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px}
 #sh-head button,#sh-next{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-body)}
@@ -180,12 +180,11 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
    nothing waits on it. A sheet slides up from the bottom edge and back down. A card the last render did not draw fades in;
    a lane that shuts folds its cards away; reduced motion turns all of it off. */
 @starting-style{#sheet:not([hidden]),#psheet:not([hidden]){translate:0 100%}}
-.card.cin{animation:cin .2s ease-out}
+.card.cin{animation:cin var(--motion-duration-enter) var(--motion-entry-easing)}
 @keyframes cin{from{opacity:0;translate:0 6px}}
-.lout{display:grid;grid-template-rows:0fr;opacity:0;margin-top:-8px;pointer-events:none;animation:lout .16s ease-in}
+.lout{display:grid;grid-template-rows:0fr;opacity:0;margin-top:-8px;pointer-events:none;animation:lout var(--motion-duration-exit) var(--motion-exit-easing)}
 .lout>div{min-height:0;overflow:hidden;display:flex;flex-direction:column;gap:8px}
 @keyframes lout{from{grid-template-rows:1fr;opacity:1;margin-top:0}}
-@media (prefers-reduced-motion: reduce){.card.cin,.lout,#sheet,#sheet[hidden],#psheet,#psheet[hidden]{animation:none;transition:none}}
 input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--font-mono)}.runrow,.tile{font-variant-numeric:tabular-nums}
 </style>
 <header>
@@ -203,7 +202,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <!--INST_CARD-->
 <div id=iloop></div>
 <div id=loop-box>
-<div id=loop><span id=loop-text>loading</span></div>
+<div id=loop><span id=loop-text>Loading the loop status.</span></div>
 <div id=loop-ctl>
 <button id=loop-start type=button>Start</button>
 <button id=loop-drain type=button>Drain and stop</button>
