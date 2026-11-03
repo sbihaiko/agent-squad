@@ -159,29 +159,34 @@ for p in recs:
     g["why"] = g["why"] or (rs[1] if len(rs) > 1 else "")
 for k, g in sorted(groups.items(), key=lambda kv: -kv[1]["n"]):
     if g["n"] >= need:
-        print("%d\t%s\t%s\t%s" % (g["n"], k, ",".join(g["iss"]) or "-", g["why"][:220].replace("\t", " ")))
+        # one line per group: every field is flattened to its own line, so a free text newline never reads as another group
+        print("%d\t%s\t%s\t%s" % (g["n"], k, ",".join(g["iss"]) or "-", g["why"][:220].replace("\t", " ").replace("\n", " ").replace("\r", " ")))
 PY
 )
 if [ -n "$rr" ]; then
-  nrr=${rr%%$'\t'*}; rest=${rr#*$'\t'}; rkey=${rest%%$'\t'*}; rest=${rest#*$'\t'}; riss=${rest%%$'\t'*}; rwhy=${rest#*$'\t'}
-  add runs-repeating-failure "$nrr run(s) ended failed with the same reason '$rkey' in the last ${SG_HEALTH_REPEAT_MINUTES:-120} min: $rwhy"
-  # write it where the next dispatch will read it (once per reason and issue: the marker is the memory)
-  [ -n "${HEALTH_DRY:-}" ] || for n in ${riss//,/ }; do
-    # The marker's name is the reason, and the reason is the run's own machine word: `killed/no-process` carries a path
-    # separator, so as a file name it names a directory that does not exist, touch fails, the guard below never holds and
-    # every pass posts the marker again (#1292). The key is the reason made path-safe; two reasons that encode alike are
-    # one marker by design, and the marker line still names the raw reason.
-    kf=$(printf '%s' "$rkey" | tr -c 'A-Za-z0-9._-' '-'); cm="$A/notstartable-$n-$kf"; [ -e "$cm" ] && continue
-    printf 'SQUAD-NOT-STARTABLE: build=%s %s run(s) ended failed with the same reason `%s` in the last %s min.\n\n%s\n\nA dispatch on this issue reads this line before it starts and starts nothing while it is here. A later build re-arms it on its own. To re-arm it sooner, remove this comment and the frozen:not-startable label, or fix the cause.\n' \
-      "$(sg_loop_build)" "$nrr" "$rkey" "${SG_HEALTH_REPEAT_MINUTES:-120}" "$rwhy" > "$A/.cm$$"
-    # The marker is claimed before the post, so a pass interrupted between the two posts nothing twice; a post GitHub
-    # refuses drops the claim, so the next pass tries again. An existing path-safe marker keeps its name, so a marker
-    # written before this rule still dedupes.
-    : > "$cm"
-    if gh api --method POST "repos/$SG_REPO/issues/$n/comments" -F body=@"$A/.cm$$" >/dev/null 2>&1; then
-      gh api --method POST "repos/$SG_REPO/issues/$n/labels" -f "labels[]=frozen:not-startable" >/dev/null 2>&1
-    else rm -f "$cm"; fi
-    rm -f "$A/.cm$$"; done
+  # The helper answers one line per group, and every group at or over the count is its own cause and marks its own issues
+  # (#1294). Reading only the first line folded the rest into its free text and left their issues unmarked.
+  while IFS=$'\t' read -r nrr rkey riss rwhy; do
+    [ -n "$nrr" ] || continue
+    add runs-repeating-failure "$nrr run(s) ended failed with the same reason '$rkey' in the last ${SG_HEALTH_REPEAT_MINUTES:-120} min: $rwhy"
+    # write it where the next dispatch will read it (once per reason and issue: the marker is the memory)
+    [ -n "${HEALTH_DRY:-}" ] || for n in ${riss//,/ }; do
+      # The marker's name is the reason, and the reason is the run's own machine word: `killed/no-process` carries a path
+      # separator, so as a file name it names a directory that does not exist, touch fails, the guard below never holds and
+      # every pass posts the marker again (#1292). The key is the reason made path-safe; two reasons that encode alike are
+      # one marker by design, and the marker line still names the raw reason.
+      kf=$(printf '%s' "$rkey" | tr -c 'A-Za-z0-9._-' '-'); cm="$A/notstartable-$n-$kf"; [ -e "$cm" ] && continue
+      printf 'SQUAD-NOT-STARTABLE: build=%s %s run(s) ended failed with the same reason `%s` in the last %s min.\n\n%s\n\nA dispatch on this issue reads this line before it starts and starts nothing while it is here. A later build re-arms it on its own. To re-arm it sooner, remove this comment and the frozen:not-startable label, or fix the cause.\n' \
+        "$(sg_loop_build)" "$nrr" "$rkey" "${SG_HEALTH_REPEAT_MINUTES:-120}" "$rwhy" > "$A/.cm$$"
+      # The marker is claimed before the post, so a pass interrupted between the two posts nothing twice; a post GitHub
+      # refuses drops the claim, so the next pass tries again. An existing path-safe marker keeps its name, so a marker
+      # written before this rule still dedupes.
+      : > "$cm"
+      if gh api --method POST "repos/$SG_REPO/issues/$n/comments" -F body=@"$A/.cm$$" >/dev/null 2>&1; then
+        gh api --method POST "repos/$SG_REPO/issues/$n/labels" -f "labels[]=frozen:not-startable" >/dev/null 2>&1
+      else rm -f "$cm"; fi
+      rm -f "$A/.cm$$"; done
+  done <<< "$rr"
 fi
 # Two loops are not twice the loop (#1858): a second watch.sh doubles every GitHub read the loop makes -- which is what the API's
 # abuse limit costs -- and a second loop is invisible from inside the first. watchd runs exactly one; anything else is an orphan.
@@ -202,9 +207,13 @@ wd=; [ -s "$SG_STATE/watchd.pid" ] && wd=$(cat "$SG_STATE/watchd.pid"); held=
 [ "$nw" -gt 1 ] && add loops-duplicated "$nw watch.sh process(es) alive (pids $wl; watchd pid ${wd:-none} holds ${held:-none}): watchd runs exactly one, and a second copy doubles every GitHub read the loop makes (the API answers with its abuse limit)"
 { printf '{"ts":%s,"ok":%s,"runs":%s,"inprogress":%s,"causes":[' "$now" "$([ ${#causes[@]} = 0 ] && echo true || echo false)" "$slots" "$nboard"; for i in "${!causes[@]}"; do [ $i = 0 ] || printf ','; printf '"%s"' "${causes[$i]}"; done; printf '],"briefs":{'; bn=0; for i in "${!causes[@]}"; do [ -n "${briefs[$i]}" ] || continue; [ $bn = 0 ] || printf ','; bn=1; printf '"%s":"%s"' "${causes[$i]}" "${briefs[$i]}"; done; printf '}}\n'; } > "$SG_STATE/health.json"
 notify=${HEALTH_NOTIFY:-/usr/bin/osascript}
-for i in "${!causes[@]}"; do m="$A/health-${causes[$i]}"
-  if [ ! -e "$m" ]; then msg="HEALTH ${causes[$i]}: ${detail[$i]}"; echo "$msg"
-    [ -n "${HEALTH_DRY:-}" ] || { touch "$m"; echo "$(date '+%F %T') $msg" >> "$SG_STATE/alerts.log"; "$notify" -e "display notification \"${msg//\"/\'}\" with title \"squad-goal\"" >/dev/null 2>&1; }; fi
+# The marker is written after the pass, not inside it: one cause may arrive as several lines (a repeating failure names one per
+# group, #1294), and every one of them must reach the alert readers on the pass it appears. The marker still holds the cause
+# across passes, so an unchanged cause alerts once.
+for i in "${!causes[@]}"; do m="$A/health-${causes[$i]}"; [ -e "$m" ] && continue
+  msg="HEALTH ${causes[$i]}: ${detail[$i]}"; echo "$msg"
+  [ -n "${HEALTH_DRY:-}" ] || { echo "$(date '+%F %T') $msg" >> "$SG_STATE/alerts.log"; "$notify" -e "display notification \"${msg//\"/\'}\" with title \"squad-goal\"" >/dev/null 2>&1; }
 done
+[ -n "${HEALTH_DRY:-}" ] || for i in "${!causes[@]}"; do touch "$A/health-${causes[$i]}"; done
 for m in "$A"/health-*; do [ -e "$m" ] || continue; k=${m##*/health-}; case " ${causes[*]} " in *" $k "*) ;; *) [ -n "${HEALTH_DRY:-}" ] || { rm -f "$m"; echo "HEALTH $k cleared"; };; esac; done
 exit 0

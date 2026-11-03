@@ -138,6 +138,32 @@ reset; rm -f "$T"/st/auto/notstartable-* "$T/st/auto/health-runs-repeating-failu
 rep l1 13 no_such_issue; rep l2 13 no_such_issue; rep l3 13 no_such_issue
 bash "$T/s/health.sh" >/dev/null; nl=$(/usr/bin/grep -c 'issues/13/comments' "$T/comments.calls" 2>/dev/null || true)
 [ "${nl:-0}" = 0 ] && ok "#1292 a legacy path-safe marker still dedupes" || ko "#1292 the legacy marker was reposted ${nl:-0} time(s)"
+# #1294: every reason group at or over the count reports and marks its own issues; a later group never folds into an earlier
+# group's free text. The helper prints one line per group, so the shell must read the whole answer, not its first line.
+reset; rm -f "$T"/st/auto/notstartable-* "$T/st/auto/health-runs-repeating-failure"; : > "$T/comments.calls"; rm -rf "$T/bodies"; mkdir -p "$T/bodies"
+cat > "$T/bin/gh" <<GH1294
+#!/bin/bash
+case "\$*" in
+  *comments*)
+    echo "\$*" >> "$T/comments.calls"
+    for a in "\$@"; do case "\$a" in body=@*) cp "\${a#body=@}" "$T/bodies/\$(printf '%s' "\$*" | sed -n 's#.*issues/\([0-9]*\)/comments.*#\1#p')";; esac; done;;
+  */labels*) echo "\$*" >> "$T/labels.calls";;
+esac
+exit 0
+GH1294
+chmod +x "$T/bin/gh"
+rep a1 20 alpha_bad; rep a2 20 alpha_bad; rep a3 20 alpha_bad; rep a4 20 alpha_bad
+rep b1 21 beta_bad; rep b2 21 beta_bad; rep b3 21 beta_bad
+o=$(bash "$T/s/health.sh")
+printf '%s' "$o" | /usr/bin/grep -qF "runs-repeating-failure: 4 run(s) ended failed with the same reason 'alpha_bad'" && ok "#1294 the first group reports its own reason and count" || ko "#1294 alpha: $o"
+printf '%s' "$o" | /usr/bin/grep -qF "runs-repeating-failure: 3 run(s) ended failed with the same reason 'beta_bad'" && ok "#1294 the second group reports its own reason and count" || ko "#1294 beta: $o"
+[ "$(jq '[.causes[]|select(.=="runs-repeating-failure")]|length' "$T/st/health.json")" = 2 ] && ok "#1294 health.json carries one cause entry per group" || ko "#1294 health.json: $(cat "$T/st/health.json")"
+[ -e "$T/st/auto/notstartable-20-alpha_bad" ] && ok "#1294 the first group marks its issue" || ko "#1294 no marker on #20: $(/bin/ls "$T/st/auto" | tr '\n' ' ')"
+[ -e "$T/st/auto/notstartable-21-beta_bad" ] && ok "#1294 the second group marks its own issue" || ko "#1294 no marker on #21: $(/bin/ls "$T/st/auto" | tr '\n' ' ')"
+/usr/bin/grep -q 'issues/20/comments' "$T/comments.calls" && /usr/bin/grep -q 'issues/21/comments' "$T/comments.calls" && ok "#1294 each group comments on its own issue" || ko "#1294 comments: $(cat "$T/comments.calls" 2>/dev/null)"
+/usr/bin/grep -q 'alpha_bad' "$T/bodies/20" 2>/dev/null && /usr/bin/grep -q 'beta_bad' "$T/bodies/21" 2>/dev/null && ok "#1294 each marker names its own reason" || ko "#1294 marker bodies: $(cat "$T/bodies/20" "$T/bodies/21" 2>/dev/null)"
+/usr/bin/grep -q 'beta_bad' "$T/bodies/20" 2>/dev/null && ko "#1294 the second group's table leaked into the first group's marker" || ok "#1294 no other group's table in the first marker"
+/usr/bin/grep -q 'alpha_bad' "$T/bodies/21" 2>/dev/null && ko "#1294 the first group's table leaked into the second group's marker" || ok "#1294 no other group's table in the second marker"
 # #1292: a post GitHub refuses drops the claim, so the next pass tries again
 reset; rm -f "$T"/st/auto/notstartable-* "$T/st/auto/health-runs-repeating-failure" "$T/post.ok"; : > "$T/comments.calls"
 { echo '#!/bin/bash'; printf 'case "$*" in *comments*) [ -e %s/post.ok ] || exit 1; echo "$*" >> %s/comments.calls;; */labels*) echo "$*" >> %s/labels.calls;; esac\nexit 0\n' "$T" "$T" "$T"; } > "$T/bin/gh"; chmod +x "$T/bin/gh"
