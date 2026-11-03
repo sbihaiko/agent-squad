@@ -109,14 +109,13 @@
   .card text { pointer-events:none; font:var(--fs-caption) var(--font-ui); }
   .card .nm { fill:var(--fg); font-size:var(--fs-caption); font-weight:600; font-family:var(--font-mono); }
   .card .kd { font-family:var(--font-ui); }
-  .card .bd-e, .card .bd-o, .card .st, .card .bd-c, .card .rw { font-family:var(--font-mono); }
   .card, .group-card { font-variant-numeric:tabular-nums; }
   .card .kd { fill:var(--mute); font-size:var(--fs-caption); }
-  .card .bd-e { fill:var(--err); font-size:var(--fs-caption); }
-  .card .bd-o { fill:var(--warn); font-size:var(--fs-caption); }
-  .card .st { fill:var(--mute); font-size:var(--fs-caption); }
-  .card .bd-c { fill:var(--err-strong); font-size:var(--fs-caption); font-weight:600; }   /* a failure reason: 12 px, light on the dark red card */
-  .card .rw { fill:var(--ok); font-size:var(--fs-caption); font-weight:600; }   /* a redo that passed, or a later attempt */
+  .card .bd-e { fill:var(--err); font-size:var(--fs-caption); font-family:var(--font-mono); }
+  .card .bd-o { fill:var(--warn); font-size:var(--fs-caption); font-family:var(--font-mono); }
+  .card .st { fill:var(--mute); font-size:var(--fs-caption); font-family:var(--font-mono); }
+  .card .bd-c { fill:var(--err-strong); font-size:var(--fs-caption); font-weight:600; font-family:var(--font-mono); }   /* a failure reason: 12 px, light on the dark red card */
+  .card .rw { fill:var(--ok); font-size:var(--fs-caption); font-weight:600; font-family:var(--font-mono); }   /* a redo that passed, or a later attempt */
   .card.child.superseded > g { opacity:.72; }   /* a failed attempt a later one replaced: still failed, only quieter */
   .card .gl { fill:var(--mute); font:600 var(--fs-body) sans-serif; pointer-events:none; }   /* the state glyph: status is never hue alone */
 /* The kind icon (#914): one color per kind, a glyph in the chip. The chip carries no stroke of its own, even when the card is selected. */
