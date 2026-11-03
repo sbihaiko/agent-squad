@@ -6436,6 +6436,7 @@ def models_record(changes):
     state, who and when. Whole lines, appended; a Save that flips nothing writes nothing."""
     if not changes: return
     who, at = os.environ.get("SG_OWNER") or "owner", time.strftime("%Y-%m-%d %H:%M:%S")
+    STATE.mkdir(parents=True, exist_ok=True)   # a state directory the hub has not written yet: the first flip makes it
     with open(STATE / MODELS_LEDGER, "a", encoding="utf-8") as f:
         f.write("".join(json.dumps({"at": at, "model": m, "state": st, "who": who}, ensure_ascii=False) + "\n" for m, st in changes))
 
