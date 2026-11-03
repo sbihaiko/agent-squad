@@ -3620,6 +3620,7 @@ def _x_ticks(days):
 
 CFD_RANGES = [("7", 7), ("30", 30), ("90", 90), ("all", None)]   # the cumulative flow's range views, in days (#901)
 LEAD_TIMEFRAMES = [("1", 1), ("2", 2), ("3", 3), ("7", 7), ("14", 14), ("30", 30), ("all", None)]   # the control chart presets (#900); the three short ones count hours on the page (owner, 2026-11-01)
+LEAD_START = COLUMN["issue_todo"]   # the Lead Time view opens measured from Todo (#1247): the payload the page reads carries it
 
 
 def bar_keys(i):
@@ -3628,23 +3629,33 @@ def bar_keys(i):
             "type": _flow.type_key(i)}
 
 
-def lead_rows(a=None, b=None):
-    """The closed-card rows the lead-time arithmetic reads, one per board item (#900). A row's hours are the flowing and held
-    time of its column intervals in the history store, from its first entry into `a` to its last entry into `b` (#1024). A
-    closed card the store has not read is not_read, and one with no such span is no_transition; the row's bar keys filter it (#904)."""
+def lead_rows(a=None, b=None, now=None):
+    """The rows the lead-time arithmetic reads, one per board item (#900). A row's hours are the flowing and held time of its
+    column intervals in the history store, from its FIRST entry into `a` to its last entry into `b` (#1024, #1248). A closed
+    card the store has not read is not_read, one that never entered `a` is no_start, and one with no entry into `b` is
+    no_transition. Each read card carries its observation `obs` for the survival reading: an open card is observed to
+    `now`, censored (#1250). The row's bar keys filter it (#904)."""
     store = _hist.load_store(_hist.history_path(BOARD, REPO))
+    now = now or dt.datetime.now(dt.UTC)
     rows = []
     for i in board_cache["items"]:
         closed = str(i["s"]).lower() == "closed"
         read = store.get(i["n"])
-        span = _hist.lead_span(_hist.intervals(read["events"]), start=a, end=b, complete=read["complete"]) if closed and read else None
+        runs = _hist.intervals(read["events"]) if read else []
+        obs = _hist.lead_observation(runs, start=a, end=b, complete=read["complete"], now=None if closed else now) if read else None
+        span = obs if closed and obs and not obs["censored"] else None
         if _columns_module.not_planned(i.get("cr")): reason = _leadtime.NOT_DELIVERED
         elif closed and read is None: reason = _leadtime.NOT_READ
-        elif closed and span is None: reason = _leadtime.NO_TRANSITION
+        elif closed and span is None:
+            entered = any((r["on_board"] if a is None else r["column"] == a) for r in runs)
+            reason = _leadtime.NO_TRANSITION if entered else _leadtime.NO_START
         else: reason = None
         row = {"n": i["n"], "column": _columns_module.view_column(i["st"], closed, i.get("l"), i.get("cr"))[0], "reason": reason,
                "c": i.get("c") if closed else None, "o": i.get("o"), "t": i.get("t", ""), **bar_keys(i),
-               "hours": 0.0, "flowing": 0.0, "held": 0.0, "approx": False, "unknown_first": False}
+               "hours": 0.0, "flowing": 0.0, "held": 0.0, "approx": False, "unknown_first": False,
+               "obs": None if obs is None else {"start_lo": obs["start_lo"], "start_hi": obs["start_hi"],
+                                                "hours": obs["flowing"] + obs["held"], "censored": obs["censored"],
+                                                "unknown_start": obs["unknown_first"]}}
         if span:
             row.update(c=span["end"], o=span["start"], hours=span["flowing"] + span["held"], flowing=span["flowing"],
                        held=span["held"], approx=span["approx"], unknown_first=span["unknown_first"])
@@ -3678,19 +3689,20 @@ def lead_zoom(query):
     if any(c is not None and c not in ORDER for c in (a, b)): return {"error": "bad column: a and b name a board column"}
     log = q.get("scale", ["jira"])[0] == "log"
     fw, fs, fk, ty = board_filters(query)
-    rows = [r for r in lead_rows(a, b) if _in_bar(r, fw, fs, fk, ty)]
+    now = dt.datetime.now(dt.UTC)
+    rows = [r for r in lead_rows(a, b, now) if _in_bar(r, fw, fs, fk, ty)]
     measure = f"{a or 'opened'} -> {b or 'closed'}"
     if "from" not in q and "to" not in q and "tf" in q:
         days = dict(LEAD_TIMEFRAMES).get(q["tf"][0], 0)
         if days == 0: return {"error": "bad timeframe"}
-        return _leadtime.control_chart(rows, timeframe=days, log=log, now=dt.datetime.now(dt.UTC), measure=measure)
+        return _leadtime.control_chart(rows, timeframe=days, log=log, now=now, measure=measure)
     try:
         start, end = (dt.datetime.fromisoformat(q[k][0]) for k in ("from", "to"))
     except (KeyError, IndexError, ValueError):
         return {"error": "bad range: from and to are ISO datetimes"}
     start, end = (m if m.tzinfo else m.replace(tzinfo=dt.UTC) for m in (start, end))
     if end <= start: return {"error": "bad range: to is not after from"}
-    return _leadtime.control_chart(rows, log=log, now=dt.datetime.now(dt.UTC), start=start, end=end, measure=measure)
+    return _leadtime.control_chart(rows, log=log, now=now, start=start, end=end, measure=measure)
 
 
 CHARTS = {}   # each chart route's last answer, with the key of the inputs it read (#971)
@@ -3760,17 +3772,19 @@ def _cfd_payload(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
 
 
 def _lead_payload(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
-    """The lead-time numbers over the closed cards of the board read, computed here; the page draws them and computes none.
-    The bar's values `fw`, `fs` and `fk` filter the rows (#904)."""
-    rows = [r for r in lead_rows() if _in_bar(r, fw, fs, fk, ty)]
-    lead = _leadtime.lead_time(rows)
+    """The lead-time numbers of the board read, measured from LEAD_START, the view's default start (#1247), computed here;
+    the page draws them and computes none. The bar's values `fw`, `fs` and `fk` filter the rows (#904)."""
     now = dt.datetime.now(dt.UTC)
-    control = {scale: {key: _leadtime.control_chart(rows, timeframe=days, log=scale == "log", now=now)
+    rows = [r for r in lead_rows(LEAD_START, None, now) if _in_bar(r, fw, fs, fk, ty)]
+    measure = f"{LEAD_START} -> closed"
+    lead = _leadtime.lead_time(rows, now=now, measure=measure)
+    control = {scale: {key: _leadtime.control_chart(rows, timeframe=days, log=scale == "log", now=now, measure=measure)
                        for key, days in LEAD_TIMEFRAMES} for scale in ("jira", "log")}   # the Jira-style control chart (#900)
     coverage = _coverage_payload(_hist.load_store(_hist.history_path(BOARD, REPO)))
     return {"plot_frame": {"width": _leadtime.PLOT_WIDTH, "height": _leadtime.PLOT_HEIGHT},
-          "lead": {"measure": lead["measure"], "type": ty, "window": lead["window"],
+          "lead": {"measure": lead["measure"], "type": ty, "window": lead["window"], "start": LEAD_START,
                      "excluded": [{"reason": r, "count": c} for r, c in lead["excluded"].items()],
+                     "excluded_cards": lead["excluded_cards"],
                      "excluded_total": sum(lead["excluded"].values()), "series": lead["series"], "summary": lead["summary"],
                      "control": control, "columns": ORDER, "coverage": coverage}}
 
@@ -5439,19 +5453,21 @@ const flowCFD=c=>{const sel=`<label class=fhead>Range <select id=cfdr>${CFD_R.ma
     (c.legacy?` · ${fig(c.legacy)} ${c.legacy===1?"day comes":"days come"} from before the kind, spec, wave and type history: they answer none of these`:"")+
     ` · a darker stripe at a band's base is its held cards`;
   return sel+`<svg viewBox="0 0 ${flowW} ${flowH}">${c.bands.map(polys).join("")}${c.bands.map(heldPolys).join("")}${cfdAxis(c)}${hover}</svg>`+legend+`<p class=fnote>${notes}</p>`;};   // the legend, then one line of notes (#1149)
-const EXREASON={not_planned:"closed as not planned",abandoned:"closed as abandoned",open:"still open",no_opened:"no opened date",no_transition:"no transition into the chosen columns",not_read:"not yet read by the history pass"};   // the cards the chart leaves out, in words (#921)
-const LTS=ls.lt||{},LT_TYPES=[["spec","Specs"],["task","Tasks"],["bug","Bugs"]];   // the chart's own settings, restored from the page's storage (#985)
-let LT={tf:["1","2","3","7","14","30","all"].includes(LTS.tf)?LTS.tf:"30",log:LTS.log===true,ty:LT_TYPES.some(([k])=>k===LTS.ty)?LTS.ty:"task",pick:null,zc:null,zr:null,rng:null,tok:0,noclick:false,a:"",b:"",cols:[]};   // the control chart's timeframe, its scale, its type, the cluster listed under it, and a drag zoom: the hub's chart over zr=[from,to] (#900, #985)
+const EXREASON={not_planned:"closed as not planned",abandoned:"closed as abandoned",open:"still open",no_opened:"no opened date",no_transition:"no transition into the chosen columns",no_start:"never entered the start column",not_read:"not yet read by the history pass"};   // the cards the chart leaves out, in words (#921, #1248)
+const ltEx=(exc,cards,total)=>{const named=exc.map(e=>`${e.count} ${EXREASON[e.reason]||e.reason}`+((cards||{})[e.reason]?.length?": "+cards[e.reason].map(n=>"#"+n).join(", "):"")).join("; ");return `<em class=ltex${named?` title="${esc(named)}"`:""}>excluded ${total}</em>`};   // the one exclusion total, its reasons and cards named in its hover (#1145, #1248)
+const ltExOf=c=>ltEx(Object.entries(c.excluded||{}).map(([r,n])=>({reason:r,count:n})),c.excluded_cards,c.excluded_total);
+const LT_TYPES=[["spec","Specs"],["task","Tasks"],["bug","Bugs"]],LT_START="/*LT_START*/";   // the start the hub's payload measures from (#1247)
+let LT={tf:"2",log:true,ty:"bug",pick:null,zc:null,zr:null,rng:null,tok:0,noclick:false,a:LT_START,b:"",cols:[]};   // a fresh page opens on 48 hours, Bugs, Todo and Log scale; a choice stays for the visit and is never stored (#1247); the cluster listed under the chart, and a drag zoom: the hub's chart over zr=[from,to] (#900, #985)
 let FLOWFF={};   // the charts that stopped following the Board tab's Waves, Specs and Kinds; the Board tab keeps its own filter (#1147)
 const flowFilterNames=(fw,fs,fk)=>[["Waves",fw],["Specs",fs],["Kinds",fk]].filter(([,v])=>v.length).map(([n,v])=>`${n}: ${v.map(esc).join(", ")}`).join(" · ");
 const flowFilterChip=(fw,fs,fk,stopped)=>{const names=flowFilterNames(fw,fs,fk);if(!names)return "";return `<span class=fchip id=ffchip>Board filter · ${names} `+(stopped?"· this chart no longer follows it":`<button id=ffx type=button title="stop this chart following the Board tab's filter; the Board tab keeps its own">Stop following</button>`)+`</span>`};   // one chip names the Board filter; its one action stops this chart following it, never the Board tab (#1147)
 const flowDetach=()=>{if(!FLOWK)return;FLOWFF[FLOWK]=true;flowTabs();if(FLOWK==="lead"&&LT.zr)ltZoom(LT.zr[0],LT.zr[1]);else flowOpen(FLOWK)};   // the one action: this chart reads again, once, on its own route without the bar's values (#1147)
-const saveLT=()=>{ls.lt={tf:LT.tf,log:LT.log,ty:LT.ty};save()};
 const ltSpan=(r,a,b)=>{const t0=Date.parse(r.start),t1=Date.parse(r.end),at=f=>new Date(t0+f*(t1-t0)).toISOString();return [at(a<0?0:a),at(b>1?1:b)]};   // plot fractions to the dates they name (#900)
 const LT_TF=[["1","Past 24 hours"],["2","Past 48 hours"],["3","Past 72 hours"],["7","Past week"],["14","Past 2 weeks"],["30","Past month"],["all","All"]];
 const ltP=64;   // a duration label ("17h 36m") is wider than a count, and the old margin cut every tick to its tail (#Astra review)
 let LT_FRAME;const ltX=x=>ltP+x*LT_FRAME.width,ltY=y=>ltP+LT_FRAME.height-y*LT_FRAME.height;
-const ltLine=(v,col,dash)=>v?`<line x1=${ltP} x2=${ltP+LT_FRAME.width} y1=${ltY(v.y)} y2=${ltY(v.y)} stroke="${col}" stroke-width=2${dash?` stroke-dasharray="${dash}"`:""}><title>${esc(v.label)} ${esc(v.text)}</title></line>`:"";   // the value lives in the legend, never over the newest dots (#1146)
+const ltLine=(v,col,dash)=>v&&v.y!=null?`<line x1=${ltP} x2=${ltP+LT_FRAME.width} y1=${ltY(v.y)} y2=${ltY(v.y)} stroke="${col}" stroke-width=2${dash?` stroke-dasharray="${dash}"`:""}><title>${esc(v.label)} ${esc(v.text)}</title></line>`:"";   // the value lives in the legend, never over the newest dots (#1146)
+const ltKM=c=>c.survival?`<p class="fnote ltkm">${esc(c.survival.text)} · ${esc(c.wip.text)}</p>`:"";   // the hub's survival reading and work in progress, in its words (#1250)
 const ltChart=(c,cov)=>{LT_FRAME=c.plot_frame;const n=c.dots.length,base=ltP+LT_FRAME.height,ink="var(--chart-ink)",mute="var(--chart-axis)";
   const grp=(name,body)=>`<span class=ltgrp><b class=ltgl>${name}</b> ${body}</span>`,backTo=LT_TF.find(([k])=>k===LT.tf)[1];
   const ctl=`<p class=fhead>`+
@@ -5467,7 +5483,7 @@ const ltChart=(c,cov)=>{LT_FRAME=c.plot_frame;const n=c.dots.length,base=ltP+LT_
     `<p class=fnote>Set the controls in order: filters, then measurement, then display, then view.</p>`+
     `<p class=fnote>${esc(c.text)}</p>${coverNote(cov)}</details>`;   // the coverage, plotted-cards and ordering notes stay behind More (#1145)
   LT.rng=c.range;
-  if(!n)return ctl+"<p class=fnote>no closed card in this timeframe</p>";
+  if(!n)return ctl+`<p class=fnote>no closed card in this timeframe · ${ltExOf(c)}</p>`+ltKM(c);
   const up=c.dots.map(d=>`${ltX(d.x)},${ltY(d.rolling.y_high)}`),low=[...c.dots].reverse().map(d=>`${ltX(d.x)},${ltY(d.rolling.y_low)}`);
   const banded=c.dots.every(d=>d.rolling.y_high!=null);
   const band=banded?`<polygon points="${[...up,...low].join(" ")}" fill="var(--chart-series-3)" fill-opacity=".28"><title>Standard deviation</title></polygon>`:"";   // the band keeps its own fill, stronger (#1146)
@@ -5480,19 +5496,19 @@ const ltChart=(c,cov)=>{LT_FRAME=c.plot_frame;const n=c.dots.length,base=ltP+LT_
   const dots=c.clusters.map((k,i)=>{const m=k.dots.length,title=m>1?`${m} issues`:`#${k.dots[0].n} ${esc(k.dots[0].title)}`;   // the hub sizes the ring for its count (#1146)
     return `<circle data-k=${i} cx=${ltX(k.x)} cy=${ltY(k.y)} r=${k.r} fill="${m>1?"var(--chart-bg)":"var(--chart-ink)"}" stroke="var(--chart-ink)" stroke-width=2${k.dots.some(d=>d.approx||d.unknown_first)?' stroke-dasharray="3 2"':""} style="cursor:pointer"><title>${esc(title)} · ${esc(k.dots[0].text)} · flowing ${esc(k.dots[0].flowing_text)} · held ${esc(k.dots[0].held_text)} · closed ${esc(k.dots[0].closed)}${k.dots.some(d=>d.approx)?" · start approximate":""}${k.dots.some(d=>d.unknown_first)?" · first interval unknown":""}</title></circle>`+(m>1?`<text x=${ltX(k.x)} y=${ltY(k.y)+/*RING_BASELINE*/} fill="var(--chart-ink)" text-anchor=middle pointer-events=none>${m}</text>`:"")}).join("");
   const ltV=v=>v?esc(v.text):"?",S="";   // the numbers live in the legend, each beside what it answers: one line, never two copies of the same fact
-  const legend=`<p class="flg ltlg"><span><i style="background:var(--chart-bar)"></i>Rolling average, centered</span>${banded?`<span><i style="background:var(--chart-series-3);opacity:.28"></i>Standard deviation <em>the usual spread</em></span>`:""}<span><i style="background:var(--chart-series-8)"></i>${esc(c.average.label)} <b>${ltV(c.average)}</b> <em>one slow card lifts it</em></span><span><i style="background:var(--chart-ok)"></i>${esc(c.median.label)} <b>${ltV(c.median)}</b> <em>half the cards closed faster</em></span><span><i style="background:var(--chart-series-5)"></i>${esc(c.p85.label)} <b>${ltV(c.p85)}</b> <em>85% of closed cards finished within this time</em></span></p>`;   // each entry paints the mark it names (#1146)
+  const legend=`<p class="flg ltlg"><span><i style="background:var(--chart-bar)"></i>Rolling average, centered</span>${banded?`<span><i style="background:var(--chart-series-3);opacity:.28"></i>Standard deviation <em>the usual spread</em></span>`:""}<span><i style="background:var(--chart-series-8)"></i>${esc(c.average.label)} <b>${ltV(c.average)}</b> <em>one slow card lifts it</em></span><span><i style="background:var(--chart-ok)"></i>${esc(c.median.label)} <b>${ltV(c.median)}</b> <em>${esc(c.median.ci_text||"")}</em> <em>half the cards that arrived finish within this time</em></span><span><i style="background:var(--chart-series-5)"></i>${esc(c.p85.label)} <b>${ltV(c.p85)}</b> <em>85% of closed cards finished within this time</em> ${ltExOf(c)}</span></p>`+ltKM(c);   // each entry paints the mark it names (#1146); the median is the Kaplan-Meier one, the exclusions sit beside the percentile (#1248, #1250)
   const pk=LT.pick!=null&&c.clusters[LT.pick]?c.clusters[LT.pick]:null;
   const rows=pk?`<table class=mtab><thead><tr><th>Issue</th><th>Title</th><th>Elapsed</th><th>Closed</th></tr></thead><tbody>${pk.dots.map(d=>`<tr data-o=${d.n} style="cursor:pointer"><td>#${d.n}</td><td>${esc(d.title)}</td><td>${esc(d.text)}</td><td>${esc(d.closed)}</td></tr>`).join("")}</tbody></table>`:"";   // the page's one table rule (#1146)
   return ctl+S+legend+`<svg data-lt viewBox="0 0 ${LT_FRAME.width+2*ltP} ${LT_FRAME.height+2*ltP}">${axes}${ys}${xs}${band}${roll}${lines}${dots}</svg>`+rows;};
-const flowLead=l=>{const S=l.summary,c=LT.zc,exc=c?Object.entries(c.excluded).map(([r,n])=>({reason:r,count:n})):l.excluded,total=c?c.excluded_total:l.excluded_total,ex=exc.map(e=>`${e.count} ${esc(EXREASON[e.reason]||e.reason)}`).join(", ");
-  const head=`<p class=fhead>${esc(LT_TYPES.find(([k])=>k===l.type)[1].toLowerCase())} · <b>${esc(l.measure)}</b> · window ${l.window.size} ${esc(l.window.unit)} · <span${ex?` title="${esc(ex)}"`:""}>excluded ${total}</span></p>`;   // the reasons are a hover on the one total (#1145)
-  LT.cols=l.columns||[];if(!S)return head+"<p class=fnote>no closed card yet</p>";
+const flowLead=l=>{const S=l.summary,c=LT.zc;
+  const head=`<p class=fhead>${esc((LT_TYPES.find(([k])=>k===l.type)||[0,"all cards"])[1].toLowerCase())} · <b>${esc((c||l).measure)}</b> · window ${l.window.size} ${esc(l.window.unit)}</p>`;   // the one exclusion total sits beside the percentile (#1248)
+  LT.cols=l.columns||[];if(!S)return head+`<p class=fnote>no closed card yet · ${c?ltExOf(c):ltEx(l.excluded,l.excluded_cards,l.excluded_total)}</p>`;
   return head+ltChart(LT.zc||l.control[LT.log?"log":"jira"][LT.tf],l.coverage);};
 const drawFlow=()=>{{const w=$("#flowb").clientWidth-20;flowW=w<600?600:w>1600?1600:(w|0);flowH=flowHeight(window.innerHeight)}const cfd=FLOWK==="cfd";
   const a=FLOWD[FLOWK];
   $("#flowb").innerHTML=!a?"<p class=fnote>Loading the chart from the hub.</p>":(cfd?flowCFD(a.cfd.ranges[CF.r]):flowLead(a.lead))+`<p class=flstat role=status>data read ${new Date(a.t*1000).toLocaleTimeString()}</p>`};
 const flowOpen=async k=>{FLOWK=k;$("#flowov").hidden=false;flowTabs();drawFlow();const want=()=>barQuery(k),q=want();try{const a=await (await fetch(`/api/chart/${k}?${q}`)).json();if(q!==want())return;FLOWD[k]=a;if(FLOWK===k)drawFlow()}catch(e){}};
-const ltQ=()=>`&scale=${LT.log?"log":"jira"}&a=${encodeURIComponent(LT.a)}&b=${encodeURIComponent(LT.b)}&${barQuery("lead")}`,ltOwn=()=>LT.a!==""||LT.b!=="";   // a span other than created to closed is the hub's chart for it (#905); the bar's values filter it (#904)
+const ltQ=()=>`&scale=${LT.log?"log":"jira"}&a=${encodeURIComponent(LT.a)}&b=${encodeURIComponent(LT.b)}&${barQuery("lead")}`,ltOwn=()=>LT.a!==LT_START||LT.b!=="";   // a span other than the payload's, Todo to closed, is the hub's chart for it (#905, #1247); the bar's values filter it (#904)
 const ltZoom=async(f,t)=>{const tok=++LT.tok;try{const c=await (await fetch(`/api/leadtime?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}${ltQ()}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;LT.zr=[f,t];LT.pick=null;drawFlow()}catch(e){}};   // the hub recomputes the chart for the dragged range (#900)
 const ltGet=async()=>{const tok=++LT.tok;LT.zc=null;LT.pick=null;if(!ltOwn()){drawFlow();return}try{const c=await (await fetch(`/api/leadtime?tf=${LT.tf}${ltQ()}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;drawFlow()}catch(e){}};   // the timeframe's chart for the chosen span (#905)
 const ltPx=(e,s)=>{const r=s.getBoundingClientRect();return (e.clientX-r.left)/r.width*(LT_FRAME.width+2*ltP)};
@@ -5505,10 +5521,10 @@ document.addEventListener("pointermove",e=>{if(!LTD)return;const x1=ltClamp(ltPx
 document.addEventListener("pointerup",()=>{const d=LTD;LTD=null;if(!d||!d.moved)return;d.s.querySelector("rect.ltsel")?.remove();LT.noclick=true;
   const a=(ltLo(d.x0,d.x1)-ltP)/LT_FRAME.width,b=(ltHi(d.x0,d.x1)-ltP)/LT_FRAME.width;if(b-a<0.005||!LT.rng)return;const [f,t]=ltSpan(LT.rng,a,b);ltZoom(f,t)});
 $("#flowb").onchange=e=>{if(e.target.id==="cfdr"){CF.r=e.target.value;drawFlow();return}
-  if(e.target.id==="ltr"){LT.tf=e.target.value;saveLT();LT.zr=null;ltGet();return}
-  if(e.target.id==="lty"){LT.ty=e.target.value;saveLT();barMoved();return}
+  if(e.target.id==="ltr"){LT.tf=e.target.value;LT.zr=null;ltGet();return}
+  if(e.target.id==="lty"){LT.ty=e.target.value;barMoved();return}
   if(e.target.id==="lta"||e.target.id==="ltb"){LT[e.target.id==="lta"?"a":"b"]=e.target.value;LT.pick=null;if(LT.zr){ltZoom(LT.zr[0],LT.zr[1]);return}ltGet();return}
-  if(e.target.id==="lts"){LT.log=e.target.value==="log";saveLT();LT.pick=null;if(LT.zr){ltZoom(LT.zr[0],LT.zr[1]);return}if(ltOwn()){ltGet();return}drawFlow()}};
+  if(e.target.id==="lts"){LT.log=e.target.value==="log";LT.pick=null;if(LT.zr){ltZoom(LT.zr[0],LT.zr[1]);return}if(ltOwn()){ltGet();return}drawFlow()}};
 $("#flowb").onclick=e=>{if(LT.noclick){LT.noclick=false;return}
   if(e.target.id==="ltzc"){LT.zr=null;ltGet();return}
   if(e.target.id==="ltfit"){ltZoom(e.target.dataset.f,e.target.dataset.t);return}
@@ -5764,6 +5780,7 @@ PAGE = PAGE.replace("/*HID_CHIP_RULES*/", "\n".join('.hidbar .chip[data-col="%s"
 PAGE = PAGE.replace("/*BOARD_COLORS*/", BOARD_COLORS_JSON).replace("/*BOARD_FLOW*/", BOARD_FLOW_JSON).replace("/*BOARD_NAMES*/", BOARD_NAMES_JSON).replace("/*BOARD_DOING*/", BOARD_DOING_JSON).replace("/*BOARD_REVIEW*/", BOARD_REVIEW_JSON).replace("/*HUB_REPO*/", json.dumps(REPO))
 PAGE = PAGE.replace("/*RUN_STATE_CSS*/", "".join(run_state_css(r) for r in RUN_STATES))
 # The cluster count's baseline, from the one size the ring is measured against: the page and the hub read one constant (#1146).
+PAGE = PAGE.replace("/*LT_START*/", LEAD_START)
 PAGE = PAGE.replace("/*RING_BASELINE*/", "%g" % (_leadtime.RING_BASELINE_EM * _leadtime.RING_TEXT_PX))
 
 
@@ -6607,7 +6624,9 @@ def _models_set(new):
         if mo: d["model_off"] = mo
         else: d.pop("model_off", None)
     chains = {k.removesuffix("_models"): _v2_chain(k, posted.get(k), d, eff, hrs) for k in CHAINS}
-    modelreg.write_chains(MODELS, chains, d)
+    # A chain the panel does not draw (editorial) is the file's own: a Save keeps it as it stands.
+    kept = {k: v for k, v in (d.get("chains") or {}).items() if isinstance(d.get("chains"), dict) and k not in chains}
+    modelreg.write_chains(MODELS, {**chains, **kept}, d)
     models_record(changes)
     return models_get()
 

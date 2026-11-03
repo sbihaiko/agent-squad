@@ -99,13 +99,23 @@ def _apply(state, e):
     elif kind == "spec": state["spec"] = e["spec"]
 
 
+def _key(e):
+    """The identity of one recorded event: a move seen twice in one poll, or read again on a re-read, is one move."""
+    return (e.get("t"), e.get("type"), e.get("status"), e.get("name"), e.get("spec"))
+
+
 def intervals(events):
     """Each run of one state between events: its column, hold and spec, and whether the card is on the board. Equal
-    neighbours merge, and the last run is open (to None)."""
-    state = {"status": "", "closed": False, "labels": set(), "spec": None, "on_board": False}
-    out = []
-    for _, e in sorted(enumerate(events), key=lambda p: (p[1]["t"], p[0])):
+    neighbours merge, and the last run is open (to None). Events sort by their UTC instant, and a repeated event counts once.
+    A run is `unknown` when the card took its column strictly before its add: the instant it took the column is not here."""
+    state = {"status": "", "status_t": None, "closed": False, "labels": set(), "spec": None, "on_board": False}
+    out, seen = [], set()
+    for _, e in sorted(enumerate(events), key=lambda p: (_instant(p[1]["t"]), p[0])):
+        if _key(e) in seen:
+            continue
+        seen.add(_key(e))
         _apply(state, e)
+        if e["type"] == "status": state["status_t"] = _instant(e["t"])
         column, hold = None, None
         if state["on_board"] and state["status"]:
             column, hold = view_column(state["status"], state["closed"], sorted(state["labels"]), None)
@@ -114,7 +124,7 @@ def intervals(events):
             continue
         if out: out[-1]["to"] = e["t"]
         out.append({"from": e["t"], "to": None, **snap, "approx": e["type"] == "gone",
-                    "unknown": e["type"] == "added" and bool(state["status"])})
+                    "unknown": e["type"] == "added" and bool(state["status"]) and state["status_t"] < _instant(e["t"])})
     return out
 
 
@@ -123,20 +133,32 @@ def _in_scope(s, spec):
     return bool(s["on_board"]) and s["spec"] == spec
 
 
-def lead_span(runs, start=None, end=None, complete=True):
-    """The flowing and held hours from a card's first entry into `start` to its last entry into `end`, or None when it has
-    no entry into `start` or no entry into `end`. None `start` is the card's first time on the board; None `end` is Closed.
-    Backlog with no hold is the parked time: it counts in neither. `unknown_first` marks a card whose column was set before
-    its add, so the instant it took that column is not in the store, or a timeline not yet read whole. `approx` marks a
-    boundary inside the window that a search set (the card's absence was found, not read)."""
+TERMINAL = (_columns.ROLE["issue_closed"], _columns.ROLE["abandoned"])
+
+
+def lead_observation(runs, start=None, end=None, complete=True, now=None):
+    """One card's lead observation: the flowing and held hours from its FIRST entry into `start` (a return there never
+    restarts the clock) to its last entry into `end`, or to `now` while it is still open (censored). None when the card
+    never entered `start`, or when it left the board or closed without an entry into `end`, or when it is open and no `now`
+    is given. None `start` is the card's first time on the board; None `end` is Closed. Backlog with no hold is the
+    parked time: it counts in neither. `start_lo`..`start_hi` is the interval the start is known in: one instant for a
+    recorded move, two when a search set the boundary. `unknown_first` marks a card whose column was set before its add,
+    or a timeline not yet read whole: its start is not in the store."""
     end = end or _columns.ROLE["issue_closed"]
-    entered = next((r for r in runs if (r["on_board"] if start is None else r["column"] == start)), None)
+    k = next((i for i, r in enumerate(runs) if (r["on_board"] if start is None else r["column"] == start)), None)
+    if k is None:
+        return None
+    entered = runs[k]
+    lo = _instant(entered["from"])
     closed = next((r for r in reversed(runs) if r["column"] == end), None)
-    if entered is None or closed is None:
-        return None
-    lo, hi = _instant(entered["from"]), _instant(closed["from"])
-    if hi < lo:
-        return None
+    censored = closed is None or _instant(closed["from"]) < lo
+    if censored:
+        last = runs[-1]
+        if now is None or not last["on_board"] or last["column"] in TERMINAL:
+            return None
+        hi = _instant(now) if isinstance(now, str) else now.astimezone(UTC)
+    else:
+        hi = _instant(closed["from"])
     flowing = held = 0.0
     for r in runs:
         if not r["on_board"] or (r["column"] in (None, PARKED) and r["hold"] is None):
@@ -146,13 +168,26 @@ def lead_span(runs, start=None, end=None, complete=True):
             continue
         if r["hold"]: held += (b - a).total_seconds() / 3600
         else: flowing += (b - a).total_seconds() / 3600
-    return {"start": entered["from"], "end": closed["from"], "flowing": flowing, "held": held,
+    start_lo = runs[k - 1]["from"] if entered["approx"] and k > 0 else entered["from"]
+    return {"start": entered["from"], "end": None if censored else closed["from"], "flowing": flowing, "held": held,
             "approx": any(r["approx"] and lo < _instant(r["from"]) <= hi for r in runs),
-            "unknown_first": not complete or bool(next((r["unknown"] for r in runs if r["on_board"]), False))}
+            "unknown_first": not complete or bool(next((r["unknown"] for r in runs if r["on_board"]), False)),
+            "censored": censored, "start_lo": start_lo, "start_hi": entered["from"]}
+
+
+def lead_span(runs, start=None, end=None, complete=True):
+    """The closed span of `lead_observation`: from a card's first entry into `start` to its last entry into `end`, or None
+    when it has no entry into `start` or no entry into `end` after it."""
+    obs = lead_observation(runs, start=start, end=end, complete=complete)
+    if obs is None:
+        return None
+    return {k: obs[k] for k in ("start", "end", "flowing", "held", "approx", "unknown_first")}
 
 
 def _instant(text):
-    return datetime.fromisoformat(text)
+    """One recorded timestamp as a UTC instant: a zoneless record is UTC, an offset is converted (#1250)."""
+    moment = datetime.fromisoformat(text)
+    return moment.replace(tzinfo=UTC) if moment.tzinfo is None else moment.astimezone(UTC)
 
 
 def _iso(epoch):

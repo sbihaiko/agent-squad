@@ -14,11 +14,14 @@ ROOT = Path(__file__).resolve().parent.parent
 MODELS = ROOT / "contrib/squad-goal/scripts/models.json"
 HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
 V1_KEYS = ("coding_models", "review_models", "vision_models", "router_models")
+# A frozen v2 file for the reader and writer tests: the repository file follows the owner's chain choices, so a
+# behavior test reads this shape and never the chains of the week.
+SHAPE = ROOT / "tests/fixtures/models.v2.shape.json"
 
 
 @pytest.fixture(scope="module")
 def doc():
-    return json.loads(MODELS.read_text())
+    return json.loads(SHAPE.read_text())
 
 
 @pytest.fixture(scope="module")
@@ -33,7 +36,8 @@ def hub():
     return mod
 
 
-def test_the_repository_models_json_is_v2(doc):
+def test_the_repository_models_json_is_v2():
+    doc = json.loads(MODELS.read_text())
     assert doc["schema_version"] == 2
     assert set(doc["chains"]) == {"coding", "review", "vision", "router", "editorial"}
     assert not [k for k in V1_KEYS if k in doc]
@@ -66,7 +70,7 @@ def test_the_panel_saves_over_a_v2_file(hub, monkeypatch):
     """SPEC 750: the repository file is v2, so the panel writes it. The v1 refusal is gone, not re-worded: a Save of a
     v2 file writes the chains through the repository's own writer."""
     tmp = Path(tempfile.mkdtemp()) / "models.json"
-    shutil.copy(MODELS, tmp)
+    shutil.copy(SHAPE, tmp)
     monkeypatch.setattr(hub, "MODELS", tmp)
     out = hub.models_set({**hub.models_get(), "coding_models": ["claude-sonnet-5-5"]})
     assert "err" not in out, out
@@ -74,17 +78,17 @@ def test_the_panel_saves_over_a_v2_file(hub, monkeypatch):
 
 
 def test_a_save_writes_schema_2_and_keeps_all_four_chains(hub, monkeypatch):
-    """The panel's Save writes `{"schema_version": 2, "chains": {...}}`: the four chains it draws, and every top-level
-    key the file carries beside them."""
+    """The panel's Save writes `{"schema_version": 2, "chains": {...}}`: the four chains it draws, the editorial chain it
+    does not draw, and every top-level key the file carries beside them."""
     tmp = Path(tempfile.mkdtemp()) / "models.json"
-    shutil.copy(MODELS, tmp)
+    shutil.copy(SHAPE, tmp)
     before = json.loads(tmp.read_text())
     monkeypatch.setattr(hub, "MODELS", tmp)
     out = hub.models_set({**hub.models_get(), "router_models": ["claude-opus-5-5"]})
     assert "err" not in out, out
     saved = json.loads(tmp.read_text())
     assert saved["schema_version"] == 2
-    assert list(saved["chains"]) == ["coding", "review", "vision", "router"]
+    assert list(saved["chains"]) == ["coding", "review", "vision", "router", "editorial"]   # the undrawn chain stays
     assert [e["id"] for e in saved["chains"]["router"]] == ["claude-opus-5-5"]
     def rows(d):
         return [(e.id, e.raw, e.route, e.effort, e.hrs, e.on) for e in modelreg.chain(d, "review").entries]
@@ -96,7 +100,7 @@ def test_a_save_writes_schema_2_and_keeps_all_four_chains(hub, monkeypatch):
 def _copy(hub, monkeypatch):
     """The repository file, copied into a temp folder the Save may write."""
     tmp = Path(tempfile.mkdtemp()) / "models.json"
-    shutil.copy(MODELS, tmp)
+    shutil.copy(SHAPE, tmp)
     monkeypatch.setattr(hub, "MODELS", tmp)
     return tmp
 

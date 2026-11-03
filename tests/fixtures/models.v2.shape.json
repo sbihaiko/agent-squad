@@ -1,0 +1,99 @@
+{
+  "schema_version": 2,
+  "chains": {
+    "coding": [
+      {
+        "id": "kimi-for-coding",
+        "raw": "claude-kimi-for-coding",
+        "route": "gateway",
+        "effort": "low"
+      },
+      {
+        "id": "gpt-5.6-terra",
+        "raw": "claude-gpt-5.6-terra",
+        "route": "gateway"
+      },
+      {
+        "id": "claude-sonnet-5-5",
+        "route": "gateway",
+        "hrs": "19-07"
+      },
+      {
+        "id": "grok-4.7",
+        "raw": "claude-grok-4.7",
+        "route": "gateway"
+      }
+    ],
+    "review": [
+      {
+        "id": "gpt-5.6-terra",
+        "route": "gateway"
+      },
+      {
+        "id": "claude-opus-5-5",
+        "raw": "claude:claude-opus-5-5",
+        "route": "cli",
+        "hrs": "19-07"
+      }
+    ],
+    "vision": [
+      {
+        "id": "gpt-5.6-luna",
+        "route": "cli"
+      },
+      {
+        "id": "gpt-5.6-terra",
+        "route": "cli"
+      },
+      {
+        "id": "nemotron-super",
+        "raw": "claude-nemotron-super",
+        "route": "gateway"
+      },
+      {
+        "id": "gemini-3.8-flash",
+        "raw": "gemini-3.8-flash-low",
+        "route": "cli",
+        "effort": "low"
+      }
+    ],
+    "router": [
+      {
+        "id": "gpt-6-luna",
+        "route": "gateway"
+      },
+      {
+        "id": "gpt-5.6-terra",
+        "raw": "claude-gpt-5.6-terra",
+        "route": "gateway"
+      },
+      {
+        "id": "claude-sonnet-5-5",
+        "route": "gateway",
+        "hrs": "19-07"
+      }
+    ],
+    "editorial": [
+      {
+        "id": "ps5-qwen-coder",
+        "route": "gateway",
+        "effort": "low"
+      },
+      {
+        "id": "claude-haiku-5-5",
+        "route": "gateway"
+      }
+    ]
+  },
+  "_doc": "Role-based model chains for squad-goal. First healthy, quota-eligible entry wins. A dispatch envelope names kinds, and each kind takes the chain of its name here (SPEC 750); `router` names the models the router agent runs on, in rank order. An entry carries its `id`, the `raw` spelling when it differs, its `route`, and its `effort`, `hrs` window and `on` switch. A review id routes through the registry (config/models.registry.json): its route and its tools capability pick the runner, never the spelling. `hrs` is a local window \"HH-HH\" (start inclusive, end exclusive, wraps midnight; absent = always), or clauses joined by \";\", each with optional days, ranges joined by \",\" and an optional UTC suffix (DeepSeek off-peak: \"mon-fri 00-01,04-06,10-24 UTC; sat-sun 00-24 UTC\"); the grammar is modelreg.in_window. A model outside its window is skipped.",
+  "stall_timeout_minutes": 15,
+  "review_stall_minutes": 60,
+  "model_retry_budget": 2,
+  "anthropic_weekly_reserve_percent": 10,
+  "anthropic_models": [],
+  "review_timeout_seconds": 360,
+  "review_delta_max_lines": 3000,
+  "_review_max_lines": "Line cap of a saved review (#1777): the checklist shape of revformat.py, verdict line, headings and bullets together. review.sh puts it in the prompt and rejects an answer over it as a MODEL_FORMAT failure; retune it here, never in the prompt.",
+  "review_max_lines": 60,
+  "review_order": "config"
+}

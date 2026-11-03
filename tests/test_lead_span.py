@@ -75,7 +75,7 @@ def test_a_card_with_no_start_transition_is_excluded_and_counted(hub, board):  #
     })
     chart = hub.lead_zoom("tf=all&a=Doing")
     assert [d["n"] for d in chart["dots"]] == [1]
-    assert chart["excluded"] == {"no_transition": 1}
+    assert chart["excluded"] == {"no_start": 1}, "re-anchored (#1248): a card that never entered the start is named so"
 
 
 def test_start_todo_on_the_hub_plots_a_card_born_in_todo(hub, board):  # noqa: F811

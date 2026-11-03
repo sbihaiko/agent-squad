@@ -286,12 +286,12 @@ def test_invocation_keeps_todays_wire_string(raw, use, wire, reg):
 # The role chains this repository ships. A registry landing changes no caller, so a chain entry moves only in its
 # own landing with its own test; this pin makes an accidental rewrite of models.json fail here.
 PINNED_CHAINS = {
-    # The week the Anthropic weekly reserve closed (Claude 93 %, Gemini out): Kimi and Grok lead, and every Claude
-    # entry sits behind them inside its own hours window, so a spent subscription is skipped rather than attempted.
-    "coding": ["claude-kimi-for-coding", "claude-gpt-5.6-terra", "claude-sonnet-5-5", "claude-grok-4.7"],   # no model that takes no tools (ADR-0147)
-    "review": ["gpt-5.6-terra", "claude:claude-opus-5-5"],
-    "vision": ["gpt-5.6-luna", "gpt-5.6-terra", "claude-nemotron-super", "gemini-3.8-flash-low"],
-    "router": ["gpt-6-luna", "claude-gpt-5.6-terra", "claude-sonnet-5-5"],   # Luna returns the dispatch JSON clean and fast
+    # The owner's chains of 2026-11-03: DeepSeek, the cheapest model, sits second in coding, heads review and
+    # heads vision; Luna heads the router, with Grok 4.5 behind it (3 of 3 on the router contract).
+    "coding": ["claude-kimi-for-coding", "claude-deepseek-flash[1m]", "claude-haiku-5-5", "gpt-6-luna", "claude-nemotron-super"],   # no model that takes no tools (ADR-0147)
+    "review": ["claude:claude-deepseek-flash", "claude:claude-opus-5-5", "gemini-3.8-flash-medium", "gpt-6.1-sol"],
+    "vision": ["claude-deepseek-flash[1m]", "grok-4.7", "gpt-5.6-luna"],
+    "router": ["gpt-6-luna", "claude-grok-4.5", "claude-haiku-5-5"],
     "editorial": ["ps5-qwen-coder", "claude-haiku-5-5"],
 }
 

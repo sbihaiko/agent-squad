@@ -197,7 +197,7 @@ def hub(monkeypatch, tmp_path):
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     tmp = tmp_path / "models.json"
-    tmp.write_text((SCRIPTS / "models.json").read_text())
+    tmp.write_text((Path(__file__).resolve().parent / "fixtures/models.v2.shape.json").read_text())   # a frozen shape: the repo file follows the chains of the week
     monkeypatch.setattr(mod, "MODELS", tmp)
     return mod, tmp
 

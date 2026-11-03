@@ -12,18 +12,26 @@ NOT_DELIVERED = "not_planned"
 
 
 NO_TRANSITION = "no_transition"
+NO_START = "no_start"   # the card never entered the start column (#1248)
 NOT_READ = "not_read"
+OPEN = "open"           # an open card is no dot, and no exclusion either: the survival reading holds it censored (#1250)
+
+
+def utc(text):
+    """One recorded timestamp as a UTC instant: a zoneless record is UTC, an offset is converted (#1250)."""
+    moment = datetime.fromisoformat(text)
+    return moment.replace(tzinfo=UTC) if moment.tzinfo is None else moment.astimezone(UTC)
 
 
 def _exclusion(row):
-    if row.get("reason") in (NO_TRANSITION, NOT_READ):
+    if row.get("reason") in (NO_TRANSITION, NO_START, NOT_READ):
         return row["reason"]
     if row.get("reason") == NOT_DELIVERED:
         return "not_planned"
     if row["column"] == ABANDONED:
         return "abandoned"
     if row["c"] is None:
-        return "open"
+        return OPEN
     if not row["o"]:
         return "no_opened"
     return None
@@ -31,6 +39,22 @@ def _exclusion(row):
 
 def _hours(row):
     return row["hours"]
+
+
+def _split(items):
+    """The rows the chart plots, closed and delivered, and the cards it leaves out, by reason. An open card is neither."""
+    excluded, cards, delivered = {}, {}, []
+    for row in items:
+        reason = _exclusion(row)
+        if reason == OPEN:
+            continue
+        if reason:
+            excluded[reason] = excluded.get(reason, 0) + 1
+            cards.setdefault(reason, []).append(row["n"])
+        else:
+            delivered.append(row)
+    delivered.sort(key=lambda row: (utc(row["c"]), row["n"]))
+    return delivered, excluded, {r: sorted(ns) for r, ns in cards.items()}
 
 
 def _duration(hours):
@@ -53,16 +77,10 @@ def _p85(hours):
     return ordered[math.ceil(85 * len(ordered) / 100) - 1]
 
 
-def lead_time(items, window=20):
-    excluded = {}
-    delivered = []
-    for row in items:
-        reason = _exclusion(row)
-        if reason:
-            excluded[reason] = excluded.get(reason, 0) + 1
-        else:
-            delivered.append(row)
-    delivered.sort(key=lambda row: (datetime.fromisoformat(row["c"]), row["n"]))
+def lead_time(items, window=20, now=None, measure=MEASURE):
+    """The closed cards' series and summary. The summary's median is the Kaplan-Meier median over every card that
+    started (#1250); the average, minimum, maximum and p85 are over the closed cards."""
+    delivered, excluded, excluded_cards = _split(items)
 
     hours = [_hours(row) for row in delivered]
     series = []
@@ -73,18 +91,20 @@ def lead_time(items, window=20):
                        "approx": row["approx"], "unknown_first": row["unknown_first"]})
     summary = None
     if hours:
+        km = survival(items, now=now)
         summary = {
             "average": _value(statistics.fmean(hours)),
-            "median": _value(statistics.median(hours)),
+            "median": km["median"] or {"hours": None, "text": NOT_ESTIMABLE},
             "minimum": _value(min(hours)),
             "maximum": _value(max(hours)),
             "p85": _value(_p85(hours)),
         }
     return {
-        "measure": MEASURE,
+        "measure": measure,
         "unit": "hours",
         "window": {"size": window, "unit": "issues"},
         "excluded": excluded,
+        "excluded_cards": excluded_cards,
         "series": series,
         "summary": summary,
     }
@@ -172,22 +192,14 @@ def control_chart(items, timeframe=None, log=False, now=None, start=None, end=No
     """The chart over a timeframe in days, or over an explicit zoom range `start`..`end` (#900). A zoom names its dates."""
     now = now or datetime.now(UTC)
     zoom = start is not None
-    excluded = {}
-    delivered = []
-    for row in items:
-        reason = _exclusion(row)
-        if reason:
-            excluded[reason] = excluded.get(reason, 0) + 1
-        else:
-            delivered.append(row)
-    delivered.sort(key=lambda row: (datetime.fromisoformat(row["c"]), row["n"]))
+    delivered, excluded, excluded_cards = _split(items)
     end = end or now
     if start is None and timeframe:
         start = end - timedelta(days=timeframe)
-    plotted = [row for row in delivered if (start is None or datetime.fromisoformat(row["c"]) >= start)
-               and datetime.fromisoformat(row["c"]) <= end]
+    plotted = [row for row in delivered if (start is None or utc(row["c"]) >= start) and utc(row["c"]) <= end]
+    km = survival(items, start=start, end=end, now=now)
     if start is None and plotted:
-        start = datetime.fromisoformat(plotted[0]["c"])
+        start = utc(plotted[0]["c"])
     if start is None:
         start = end
     span = (end - start).total_seconds()
@@ -215,7 +227,7 @@ def control_chart(items, timeframe=None, log=False, now=None, start=None, end=No
 
     dots = []
     for row, hrs, (mean, low, high) in zip(plotted, hours, rolling, strict=True):
-        closed = datetime.fromisoformat(row["c"])
+        closed = utc(row["c"])
         x = _clamp((closed - start).total_seconds() / span) if span > 0 else 1.0
         flowing, held = row.get("flowing", hrs), row.get("held", 0.0)
         dots.append({"n": row["n"], "title": row.get("t", ""), "closed": closed.date().isoformat(), "hours": hrs,
@@ -241,8 +253,11 @@ def control_chart(items, timeframe=None, log=False, now=None, start=None, end=No
     def line(hrs, label):
         return None if hrs is None else {"hours": hrs, "text": _duration(hrs), "y": position(hrs), "label": label}
 
+    median = line(km["median"]["hours"], "Median") if km["median"] else \
+        {"hours": None, "text": NOT_ESTIMABLE, "y": None, "label": "Median"}
+    median.update(estimable=km["estimable"], ci=km["ci"], ci_text=km["ci_text"])   # the Kaplan-Meier median (#1250)
     summary = {"average": line(statistics.fmean(hours), "Average") if hours else None,
-               "median": line(statistics.median(hours), "Median") if hours else None,
+               "median": median,
                "p85": line(_p85(hours), "p85") if hours else None}
     xticks = []
     for k in range(7):
@@ -266,9 +281,121 @@ def control_chart(items, timeframe=None, log=False, now=None, start=None, end=No
         "ticks": [{"hours": hrs, "text": text, "y": y} for hrs, text, y in ticks],
         "xticks": xticks,
         "range": {"start": start.isoformat(), "end": end.isoformat()},
-        "fit": _fit([datetime.fromisoformat(row["c"]) for row in plotted], start, end),
+        "fit": _fit([utc(row["c"]) for row in plotted], start, end),
         **summary,
+        "survival": km,
+        "wip": wip(items),
         "excluded": excluded,
+        "excluded_cards": excluded_cards,
         "excluded_total": sum(excluded.values()),
         "text": text,
     }
+
+
+# #1250: the Kaplan-Meier median over the arrival cohort. A card whose start falls inside the window enters the risk set;
+# a card still open enters it censored at the reading instant. The median is the first time the curve falls to or below
+# one half; its 95 % interval is where the log-log Greenwood band crosses one half.
+Z95 = 1.959963984540054
+NOT_ESTIMABLE = "not estimable"
+EXCLUDED_FROM_COHORT = (NOT_DELIVERED, "abandoned", NOT_READ, NO_TRANSITION, NO_START)
+
+
+def _observation(row):
+    """The row's observation: the hub's `obs`, or for a closed delivered row with no `obs`, its own start and hours.
+    An open row with no `obs` has no start that can be read, so it is not observed: it is never timed from another field."""
+    if row.get("obs"):
+        return row["obs"]
+    if _exclusion(row) is None:
+        return {"start_lo": row["o"], "start_hi": row["o"], "hours": row["hours"], "censored": False,
+                "unknown_start": False}
+    return None
+
+
+def _km_curve(observations):
+    """[(t, S, lower, upper)] at each distinct event time, from (hours, finished) pairs, in one sweep. At a tie, a finish
+    comes before a censoring: a card censored at t is still at risk at t."""
+    curve, s, v = [], 1.0, 0.0
+    ordered = sorted(observations, key=lambda o: (o[0], not o[1]))
+    n, i = len(ordered), 0
+    while i < len(ordered):
+        t, d, c = ordered[i][0], 0, 0
+        while i < len(ordered) and ordered[i][0] == t:
+            d, c, i = d + ordered[i][1], c + (not ordered[i][1]), i + 1
+        if d:
+            s *= 1 - d / n
+            if s <= 0:
+                curve.append((t, 0.0, 0.0, 0.0))
+                break
+            v += d / (n * (n - d))
+            se = math.sqrt(v) / abs(math.log(s))
+            curve.append((t, s, s ** math.exp(Z95 * se), s ** math.exp(-Z95 * se)))
+        n -= d + c
+    return curve
+
+
+def _crossing(curve, index):
+    return next((point[0] for point in curve if point[index] <= 0.5), None)
+
+
+def _day(moment):
+    return f"{moment:%b} {moment.day}"
+
+
+def survival(items, start=None, end=None, now=None):
+    """The Kaplan-Meier reading over the cards whose start falls in `start`..`end` (all starts when `start` is None)."""
+    now = now or datetime.now(UTC)
+    cohort, unknown, intervals = [], [], 0
+    for row in items:
+        if row.get("reason") in EXCLUDED_FROM_COHORT or row.get("column") == ABANDONED:
+            continue
+        obs = _observation(row)
+        if obs is None:
+            continue
+        late = utc(obs["start_hi"])
+        if (start is not None and late < start) or (end is not None and late > end):
+            continue
+        if obs.get("unknown_start"):
+            unknown.append(row["n"])
+            continue
+        early = obs["hours"] + (late - utc(obs["start_lo"])).total_seconds() / 3600
+        intervals += early != obs["hours"]
+        cohort.append((late, obs["hours"], early, not obs["censored"]))
+    curve = _km_curve([(h, done) for _, h, _, done in cohort])
+    median = _crossing(curve, 1)
+    low, high = _crossing(curve, 2), _crossing(curve, 3)
+    median_range = None
+    if intervals:
+        late_median = _crossing(_km_curve([(e, done) for _, _, e, done in cohort]), 1)
+        if late_median != median:
+            median_range = {"low": _value(median) if median is not None else None,
+                            "high": _value(late_median) if late_median is not None else None}
+    censored = sum(1 for *_, done in cohort if not done)
+    first = start or min((s for s, *_ in cohort), default=None)
+    last = end or now
+    value = _value(median) if median is not None else None
+    ci = {"level": 0.95, "low": _value(low) if low is not None else None, "high": _value(high) if high is not None else None}
+    ci_text = f"95% CI {ci['low']['text'] if ci['low'] else '?'} to {ci['high']['text'] if ci['high'] else NOT_ESTIMABLE}"
+    head = f"Kaplan-Meier median {value['text']} ({ci_text})" if value else \
+        f"Kaplan-Meier median {NOT_ESTIMABLE}: " + ("the curve never falls to one half" if cohort else "no card arrived")
+    arrived = f"{len(cohort)} {'card' if len(cohort) == 1 else 'cards'} arrived" + \
+        (f" {_day(first)} to {_day(last)}" if first else "")
+    parts = [head, f"{arrived}, {censored} still open (censored)"]
+    if unknown:
+        parts.append(f"{len(unknown)} unknown start")
+    if median_range:
+        bounds = (median_range["low"], median_range["high"])
+        parts.append("a start read between two polls moves the median: " +
+                     " to ".join(v["text"] if v else NOT_ESTIMABLE for v in bounds))
+    return {"method": "kaplan-meier", "estimable": median is not None, "median": value, "ci": ci, "ci_text": ci_text,
+            "median_range": median_range, "cohort": len(cohort), "events": len(cohort) - censored, "censored": censored,
+            "cohort_start": first.date().isoformat() if first else None, "cohort_end": last.date().isoformat(),
+            "unknown_start": {"count": len(unknown), "cards": sorted(unknown)}, "interval_starts": intervals,
+            "text": " · ".join(parts)}
+
+
+def wip(items):
+    """The work in progress: the open cards with a known start, and the age of the oldest, in the lead measure."""
+    ages = [obs["hours"] for row in items if (obs := row.get("obs")) and obs["censored"] and not obs.get("unknown_start")]
+    oldest = _value(max(ages)) if ages else None
+    return {"count": len(ages), "oldest": oldest,
+            "text": f"WIP {len(ages)} waiting" + (f", oldest {oldest['text']}" if oldest else "")}
