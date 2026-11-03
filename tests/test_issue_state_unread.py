@@ -62,8 +62,8 @@ def test_unread_reads_no_node_for_a_card_the_board_read_carries():
 
 def test_node_status_reads_the_status_of_the_item_its_known_id_names(tmp_path):
     calls = []
-    answer = {"data": {"node": {"isArchived": False, "content": {"number": 800},
-                                "fieldValueByName": {"name": "Todo"}}}}
+    answer = {"isArchived": False, "content": {"number": 800},
+              "fields": [{"name": "Status", "value": {"name": "Todo"}}]}
 
     def run(args, **kw):
         calls.append(args)
@@ -74,6 +74,7 @@ def test_node_status_reads_the_status_of_the_item_its_known_id_names(tmp_path):
 
     assert b.node_status(800) == "Todo"
     assert any("PVTI_x" in " ".join(a) for a in calls)
+    assert not any("graphql" in a for c in calls for a in c), "the loop reads GitHub over REST only (#1303)"
 
 
 def test_node_status_without_a_known_id_makes_no_call(tmp_path):
