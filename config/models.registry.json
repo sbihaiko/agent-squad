@@ -1571,7 +1571,8 @@
           "auth": "unverified",
           "model": "claude-nemotron-nano",
           "served": [
-            "claude-nemotron-nano"
+            "claude-nemotron-nano",
+            "nemotron-nano"
           ]
         }
       },
@@ -1582,7 +1583,8 @@
         "context": 131072
       },
       "aliases": [
-        "claude-nemotron-nano"
+        "claude-nemotron-nano",
+        "nemotron-nano"
       ],
       "retired": false,
       "gateway_only": true,
@@ -1597,7 +1599,7 @@
     },
     {
       "id": "ps5-qwen-coder",
-      "label": "Qwen 2.5 Coder 14B",
+      "label": "Qwen 3.5 9B",
       "provider": "ps5",
       "efforts": [
         "low"
@@ -1607,7 +1609,8 @@
           "auth": "unverified",
           "model": "claude-ps5-qwen-coder",
           "served": [
-            "claude-ps5-qwen-coder"
+            "claude-ps5-qwen-coder",
+            "ps5-qwen-coder"
           ]
         }
       },
@@ -1618,7 +1621,8 @@
         "context": 32768
       },
       "aliases": [
-        "claude-ps5-qwen-coder"
+        "claude-ps5-qwen-coder",
+        "ps5-qwen-coder"
       ],
       "retired": false,
       "gateway_only": true,
@@ -1645,7 +1649,8 @@
           "auth": "unverified",
           "model": "claude-nemotron-super",
           "served": [
-            "claude-nemotron-super"
+            "claude-nemotron-super",
+            "nemotron-super"
           ]
         }
       },
@@ -1656,7 +1661,8 @@
         "context": 131072
       },
       "aliases": [
-        "claude-nemotron-super"
+        "claude-nemotron-super",
+        "nemotron-super"
       ],
       "retired": false,
       "gateway_only": true,

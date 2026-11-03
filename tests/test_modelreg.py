@@ -286,9 +286,13 @@ def test_invocation_keeps_todays_wire_string(raw, use, wire, reg):
 # The role chains this repository ships. A registry landing changes no caller, so a chain entry moves only in its
 # own landing with its own test; this pin makes an accidental rewrite of models.json fail here.
 PINNED_CHAINS = {
-    "coding": ["claude-sonnet-5-5", "claude-sonnet-4-6", "claude-gpt-5.6-terra", "claude-grok-4.7"],   # no model that takes no tools (ADR-0147)
-    "review": ["claude:claude-opus-5-5", "gemini-3.8-flash-medium"],
-    "vision": ["gpt-5.6-luna", "gpt-5.6-terra", "gemini-3.8-flash-low"],
+    # The week the Anthropic weekly reserve closed (Claude 93 %, Gemini out): Kimi and Grok lead, and every Claude
+    # entry sits behind them inside its own hours window, so a spent subscription is skipped rather than attempted.
+    "coding": ["claude-kimi-for-coding", "claude-gpt-5.6-terra", "claude-sonnet-5-5", "claude-grok-4.7"],   # no model that takes no tools (ADR-0147)
+    "review": ["gpt-5.6-terra", "claude:claude-opus-5-5"],
+    "vision": ["gpt-5.6-luna", "gpt-5.6-terra", "claude-nemotron-super", "gemini-3.8-flash-low"],
+    "router": ["gpt-6-luna", "claude-gpt-5.6-terra", "claude-sonnet-5-5"],   # Luna returns the dispatch JSON clean and fast
+    "editorial": ["ps5-qwen-coder", "claude-haiku-5-5"],
 }
 
 
@@ -314,6 +318,38 @@ def test_every_repo_spelling_is_known_and_pinned(reg):
         assert raws == pinned, f"{name} moved: {raws}"
         for raw in raws:
             assert mr.normalize(raw, reg).known, f"{raw} is not in the registry"
+
+
+def test_the_editorial_chain_leads_with_the_local_ps5_and_takes_the_spelling_the_gateway_serves(reg):
+    """Editorial text -- a commit message, a pull-request body, a status summary -- is short, serial and never on a
+    gate's path, so it takes the owner's local PS5 first and wakes no subscription. The head is the PS5 model on the
+    bare `ps5-qwen-coder` spelling, which the runner gateway answers; the `claude-` prefixed spelling it also
+    answers stays served, so no caller breaks."""
+    mdoc = json.loads(MODELS.read_text())
+    entries = mr.chain(mdoc, "editorial", reg).entries
+    assert entries[0].id == "ps5-qwen-coder", [e.id for e in entries]
+    assert entries[0].route == "gateway", entries[0].route
+    assert entries[0].raw == "ps5-qwen-coder", entries[0].raw
+    assert "ps5-qwen-coder" in reg.entries["ps5-qwen-coder"].routes["gateway"]["served"]
+    assert entries[0].effort == "low", "a local model on a 9B head takes low effort"
+    fallback = entries[1]
+    assert fallback.id == "claude-haiku-5-5" and fallback.route == "gateway", (fallback.id, fallback.route)
+
+
+def test_a_local_gateway_route_serves_both_spellings_of_its_model(reg):
+    """The runner's gateway answers a model under its `claude-` prefixed name and under its bare name (probed
+    2026-11-03 on the runner gateway: both `claude-ps5-qwen-coder` and `ps5-qwen-coder` return a completion), and the
+    bare one is the name the local model server itself uses. Both are served, so a caller may spell either, and
+    `_wire` sends the spelling it was given."""
+    local = {"ps5-qwen-coder": "claude-ps5-qwen-coder", "nemotron-nano": "claude-nemotron-nano",
+             "nemotron-super": "claude-nemotron-super"}
+    for mid, prefixed in local.items():
+        route = reg.entries[mid].routes["gateway"]
+        assert route["served"] == [prefixed, mid], (mid, route)
+        assert route["model"] == prefixed, (mid, route)
+        assert mr._wire(route, mid) == mid, mid
+        assert mr._wire(route, prefixed) == prefixed, mid
+        assert mr.normalize(prefixed, reg).id == mid, mid
 
 
 # --- chain: v1, v2, mixed ----------------------------------------------------------------------------------

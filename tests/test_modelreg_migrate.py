@@ -72,7 +72,7 @@ def test_migrate_writes_an_explicit_route_and_folds_the_settings(tmp_path, reg):
     assert result["changed"] is True
     doc = _doc(path)
     assert doc["schema_version"] == 2
-    assert set(doc["chains"]) == {"coding", "review", "vision", "router"}
+    assert set(doc["chains"]) == {"coding", "review", "vision", "router", "editorial"}
 
     coding = _by_raw(doc["chains"]["coding"])
     assert list(coding) == ["claude-gpt-5.6-terra", "claude-deepseek-flash[1m]", "claude-sonnet-5-5"]   # #683
