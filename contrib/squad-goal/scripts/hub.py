@@ -4771,7 +4771,7 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #inst .ig .gn{stroke:var(--fg);stroke-width:1.5;stroke-linecap:round;transform-origin:30px 32px;transition:transform var(--motion-duration-long) var(--motion-entry-easing)}#inst .ig .gh0{fill:var(--fg)}
 #inst .ig.ldred .gf,#inst.warn .ig.ldred .gf,#inst .ig.ldred .gn{stroke:var(--err)}
 #inst .gv{font-size:var(--fs-caption);color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap}#inst .gv b{color:var(--fg);font-weight:600}#inst.warn .gv b{color:var(--warn)}#inst .ig.ldred .gv b{color:var(--err)}
-#inst .ian{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px}#inst .ian .at:first-child{grid-column:1/-1}#inst .atm{display:block;color:var(--mute);font-variant-numeric:tabular-nums}
+#inst .ian{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px}#inst .ian:empty{display:none}#inst .ian .at:first-child{grid-column:1/-1}#inst .atm{display:block;color:var(--mute);font-variant-numeric:tabular-nums}
 #inst .at{background:var(--inset);border:1px solid var(--line);border-radius:var(--radius-md);padding:5px 7px;min-width:0;font-size:var(--fs-caption)}
 #inst .at .ah{display:flex;align-items:center;gap:6px;color:var(--mute);font-weight:600}#inst .at .dot{width:7px;height:7px;border-radius:var(--radius-full);flex:none;background:var(--mute)}
 #inst .at.ok .dot{background:var(--ok)}#inst .at.err .dot{background:var(--err)}#inst .at.info .dot{background:var(--acc)}
@@ -4935,12 +4935,12 @@ function subsGauges(d){const xs=(d||{}).subs||[];if(!xs.length)return"";
 function instGauges(d){return ldCells(d).map(c=>`<div class="ig${c.red?" ldred":""}">${gaugeSvg((d||{})[c.k.toLowerCase()],c.k)}<span class=gv><b>${c.k}</b> ${esc(c.t)}</span></div>`).join("")}
 const instFact=(facts,k)=>(facts||[]).find(f=>f&&f.key===k);
 function instTile(k,f,lead){if(!f)return{k,text:"no reading",tone:"neutral"};const p=(f.parts||[])[0]||{},t=String(f.text||"").replace(lead,"").trim()||"?";return{k,text:t,tone:p.tone==="ok"||p.tone==="err"?p.tone:"neutral",tip:f.tip||null,detail:f.detail||null,times:p.times||null}}
-function instTiles(facts){return[instTile("Gate",instFact(facts,"gate"),/^gate\s*/)]}   // the Monitor carries the gate and no queue tile (owner)
+function instTiles(facts){return[]}   // the Monitor draws no tile: the owner removed the Gate tile (#1260); the gate fact stays in the footer
 const iq=t=>esc(t).replace(/"/g,"&quot;");
 function tileHtml(t){const v=t.href?esc(t.text).replace(/PR #\d+/,x=>`<a target=_blank rel=noopener href="${iq(t.href)}">${x}</a>`):esc(t.text),
  d=(t.detail||[]).length?`<details><summary>${t.detail.length} failed</summary><ul>${t.detail.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></details>`:"";
  return `<div class="at ${t.tone}"${t.tip?` title="${iq(t.tip)}"`:""}><span class=ah><span class=dot aria-hidden="true"></span>${esc(t.k)}</span><span class=av>${v}</span>${t.times?`<span class=atm>${esc(t.times)}</span>`:""}${d}</div>`}
-function instSum(facts){return instTiles(facts).filter(x=>x.tone==="err").length+" fail"}
+function instSum(facts){const n=instTiles(facts).filter(x=>x.tone==="err").length;return n?n+" fail":""}   // no tile, so no count; a red gate stays in the footer (#1260)
 function speedRow(sp){if(!sp)return `<div class="spd none"><b>Throughput</b><span class=spn>no history yet</span></div>`;
  const {today,median,min,max,trend}=sp,hi=Math.max(max||0,today||0,1),at=v=>Math.max(0,Math.min(100,100*(v||0)/hi));
  const tag=trend==="up"?["\u25B2","accelerating","up"]:trend==="down"?["\u25BC","slowing","down"]:trend==="flat"?["\u25AC","steady","flat"]:["\u25CB","first day","wait"];
