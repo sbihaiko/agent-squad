@@ -40,8 +40,9 @@ def test_a_sheet_sizes_to_the_dynamic_viewport(selector):
 
 
 def test_the_terminal_textarea_never_triggers_the_ios_focus_zoom():
-    m = re.search(r"font-size:(\d+)px", _decls("#termview-text"))
-    assert m and int(m.group(1)) >= 16, "the terminal textarea is under 16 px"
+    declarations = _decls("#termview-text")
+    assert "font-size:var(--fs-field)" in declarations, "the terminal textarea does not use the field token"
+    assert "--fs-field:16px" in (PAGE.parent / "web-tokens.css").read_text(), "the field token is under 16 px"
 
 
 def test_the_desktop_link_is_a_44_px_target():
