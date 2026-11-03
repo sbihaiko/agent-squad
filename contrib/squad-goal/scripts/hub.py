@@ -6831,7 +6831,7 @@ class H(BaseHTTPRequestHandler):
                 if sent: quiet = now
                 elif now - quiet >= hubstream.HEARTBEAT_SECONDS:
                     chunk(hubstream.frame("ping", {})); quiet = now
-                time.sleep(hubstream.TICK_SECONDS)
+                time.sleep(hubstream.TICK_SECONDS if held else 0.02)   # the first event is drawn at once: the readers publish within a tick
         except OSError: return
         finally:
             for sid in watched: TRANSCRIPTS.unwatch(sid)
