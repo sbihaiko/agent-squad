@@ -22,6 +22,11 @@ c="$SG_STATE/cycle.log"; [ -e "$c" ] && [ $((now - $(mtime "$c"))) -gt 360 ] && 
 rroot=$(cd "$(dirname "$0")/../../.." && pwd); [ -f "$rroot/squad/reap.py" ] || rroot=${SG_SQUAD:-}
 while IFS= read -r l; do [ -n "$l" ] || continue; echo "$l"; [ -n "${HEALTH_DRY:-}" ] || echo "$(date '+%F %T') $l" >> "$SG_STATE/alerts.log"
 done < <(PYTHONPATH="$rroot${PYTHONPATH:+:$PYTHONPATH}" python3 -m squad.reap "$SG_STATE/active-runs.txt" "$SG_CHECKOUT" ${HEALTH_DRY:+--dry} 2>/dev/null)
+# #1270: a pass that reads no free run slot names the holder that has had no live lease and no live process for five minutes. A
+# count alone leaves the owner guessing which run blocks dispatch, and the reap above leaves a run whose proof of death it
+# cannot read. The ceiling is this checkout's (`caps.run_holders`), one line per holder.
+slots=$(PYTHONPATH="$rroot${PYTHONPATH:+:$PYTHONPATH}" python3 -m squad.reap --slots "$SG_STATE/active-runs.txt" "$SG_CHECKOUT" 2>/dev/null | paste -sd';' - | sed 's/;/; /g')
+[ -n "${slots// /}" ] && add no-free-slot "$slots"
 nv=0; for r in $(cat "$SG_STATE/active-runs.txt" 2>/dev/null); do f=$r; [ "${r#/}" = "$r" ] && f="$SG_CHECKOUT/runs/$r"
   [ -e "$f/record.jsonl" ] || { [ -e "$f/request.txt" ] && [ $((now - $(mtime "$f/request.txt"))) -gt 300 ] && nv=$((nv+1)); }; done
 [ $nv -gt 0 ] && add never-started-runs "$nv run(s) with no record.jsonl after 5 min (the squad refused to start)"
