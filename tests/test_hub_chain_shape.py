@@ -21,7 +21,7 @@ V2 = {"schema_version": 2, "chains": {
                {"id": "no-such-model-9", "route": "gateway"}],
     "review": [{"id": "claude-opus-5-5", "route": "cli"}, {"id": "gemini-3.8-flash", "route": "cli"},
                {"id": "grok-4.7", "route": "cli"}],
-    "vision": [{"id": "gpt-5.6-luna", "route": "cli"}, {"id": "deepseek-flash", "route": "gateway"},
+    "vision": [{"id": "gpt-5.6-luna", "route": "cli"}, {"id": "deepseek-v4-pro", "route": "gateway"},
                {"id": "grok-4.7", "route": "gateway"}],
     "router": [{"id": "grok-4.7", "route": "gateway"}, {"id": "gpt-5.5", "route": "gateway"}]}}
 
@@ -80,7 +80,7 @@ def test_a_chain_drops_a_registered_entry_it_cannot_run_and_keeps_an_unregistere
     got = hub.models_get()
     assert got["coding_models"] == ["grok-4.7", "no-such-model-9"]          # gemini is a cli route only: no gateway
     assert got["review_models"] == ["claude-opus-5-5", "gemini-3.8-flash", "grok-4.7"]
-    assert got["vision_models"] == ["gpt-5.6-luna", "grok-4.7"]           # deepseek takes no image input
+    assert got["vision_models"] == ["gpt-5.6-luna", "grok-4.7"]           # deepseek-v4-pro takes no image input
 
 
 def test_a_chain_drops_a_retired_router_entry(hub):
@@ -97,7 +97,7 @@ def test_each_dropdown_offers_only_the_models_its_chain_can_use(hub):
     coding, review, vision = (registry_ids(c) for c in ("coding_models", "review_models", "vision_models"))
     assert "gemini-3.8-flash" not in coding and "grok-4.7" in coding
     assert "deepseek-flash" in review and "gemini-3.8-flash" in review
-    assert "deepseek-flash" not in vision and "gpt-oss-120b" not in vision
+    assert "deepseek-flash" in vision and "gpt-oss-120b" not in vision
     assert "gpt-5.6-luna" in vision
     router = {s["id"] for s in got["suggest"]["router_models"]}
     assert "gpt-5.6-terra" in router and "gpt-5.5" not in router   # the gateway's catalogue, a retired id left out

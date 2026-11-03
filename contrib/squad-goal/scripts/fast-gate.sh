@@ -9,8 +9,8 @@
 # branch point adds no suite. A base that does not resolve fails the gate, never skips the suites. Each suite runs hermetic, as
 # shell-suites.sh runs it: no SG_* variable, its own HOME. The promotion gate is the full suite (promote-stg.sh), not this.
 # The gate runs under the machine-wide gate lock (gate.sh) and leaves the fast status line the hub reads. Exit 0 when all pass,
-# 1 on a defect, 2 when the base does not resolve, 4 when the verdict is unproven: the battery is inconclusive twice (#699) or a
-# tool is absent (spec 1163). Exit 0 is pass and 1 is fail; 2 and 4 are unproven and hold landing. The verdict, one of pass, fail
+# 1 on a defect, 2 when the base does not resolve, 4 when the verdict is unproven: the battery is inconclusive twice (#699), a
+# tool is absent (spec 1163), or the delta selected no test, so no pytest ran (#1249). Exit 0 is pass and 1 is fail; 2 and 4 are unproven and hold landing. The verdict, one of pass, fail
 # or unproven with its reason and the checks that ran, goes to the history line through GATE_OUTCOME_FILE.
 # A pass is kept under its key (#955), so a second gate at the same key runs no battery; a red is never kept. SG_FAST_MEMO=0 turns it off.
 # One deadline covers the battery and its retry (#1171): gate.sh hands the clock down, and a direct run starts its own. Past it the
@@ -187,13 +187,20 @@ for t in "$top"/contrib/squad-goal/scripts/test-*.sh; do [ -f "$t" ] || continue
 done
 suites=$(printf '%s\n' $suites | sort -u)
 bran="ruff mypy pytest"; bnot=-
-/usr/bin/grep -q '^no pytest ran' "$lg" && { bran="ruff mypy"; bnot=pytest; }
+# (#1249) A battery whose selection was empty ran no pytest, so it proves nothing: the line it logged names why.
+empty=$(/usr/bin/grep -m 1 '^no pytest ran' "$lg")
+[ -z "$empty" ] || { bran="ruff mypy"; bnot=pytest; }
 failed=""; ranS=""
 for n in $suites; do s=$top/contrib/squad-goal/scripts/test-$n.sh; [ -f "$s" ] || continue
   echo "=== test-$n.sh"; ranS="$ranS test-$n.sh"
   hm=$(mktemp -d); if (cd "$top" && env $(compgen -e | grep '^SG_' | sed 's/^/-u /') HOME="$hm" bash "$s"); then echo "--- ok: test-$n.sh"
   else echo "--- FAILED: test-$n.sh"; failed="$failed test-$n.sh"; fi; rm -rf "$hm"; done
 [ -z "$failed" ] || { verdict fail "failed suite:$failed" "$bran$ranS" "$bnot"; echo "fast-gate: FAILED:$failed"; exit 1; }
+# A gate that ran no test is never a pass: the empty selection is unproven, with the selector's reason, and is never kept.
+if [ -n "$empty" ]; then
+  verdict unproven "$empty" "$bran$ranS" "$bnot"
+  echo "fast-gate: unproven: $empty; the gate does not pass ($lg)"; exit 4
+fi
 verdict pass - "$bran$ranS" "$bnot"
 # The verdict the child reads: an exit 0 is a pass, but the one line names it and the log the child may open, so a session that
 # saw a lock wait on stderr still knows the gate passed (#945).

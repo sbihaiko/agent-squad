@@ -71,10 +71,35 @@ def test_a_changed_test_file_selects_itself(tmp_path):
     assert select(repo) == ["tests/test_gamma.py"]
 
 
-def test_a_deleted_test_file_selects_nothing_because_pytest_cannot_run_a_missing_path(tmp_path):
-    """A path absent at the tip made the gate's pytest collect nothing (exit 5), so the gate was inconclusive and held."""
+def none_reason(lines):
+    """The reason of a `none:` answer: the delta selects no test, and the line says why (#1249). None when it is not one."""
+    return lines[0].removeprefix("none: ") if len(lines) == 1 and lines[0].startswith("none: ") else None
+
+
+def test_a_deleted_test_file_answers_all_because_pytest_cannot_run_a_missing_path(tmp_path):
+    """A path absent at the tip made the gate's pytest collect nothing (exit 5). An empty selection proves nothing (#1249),
+    so a delta whose every test the tip deleted falls through to the full battery and names the deleted path."""
     repo = tip(tmp_path, {"tests/test_gamma.py": None})
-    assert select(repo) == []
+    lines = select(repo)
+    assert len(lines) == 1 and lines[0].startswith("all: ") and "tests/test_gamma.py" in lines[0]
+
+
+@pytest.mark.parametrize("dirt", ["tracked", "untracked"])
+def test_an_uncommitted_change_answers_all_and_names_the_files(tmp_path, dirt):
+    """(#1249) The selector reads the committed diff, so a change the tree carries outside it cannot be placed. It never
+    selects nothing for it: the answer is the full battery, and the line names the uncommitted files."""
+    repo = tip(tmp_path, {})
+    path = "squad/alpha.py" if dirt == "tracked" else "squad/stray.py"
+    (repo / path).write_text("VALUE = 9\n")
+    lines = select(repo)
+    assert len(lines) == 1 and lines[0].startswith("all: ") and "uncommitted" in lines[0] and path in lines[0], lines
+
+
+def test_an_uncommitted_change_beside_a_covered_commit_still_answers_all(tmp_path):
+    repo = tip(tmp_path, {"squad/alpha.py": "VALUE = 2\n"})
+    (repo / "squad/gamma.py").write_text("VALUE = 4\n")
+    lines = select(repo)
+    assert len(lines) == 1 and lines[0].startswith("all: ") and "squad/gamma.py" in lines[0], lines
 
 
 def test_a_deleted_squad_module_selects_the_tests_that_still_import_it(tmp_path):
@@ -175,9 +200,9 @@ def test_an_uncovered_path_at_an_intermediate_stage_states_why_the_delta_refused
     assert len(lines) == 1 and lines[0].startswith("all: ") and "docs/notes.md" in lines[0]
 
 
-def test_no_change_selects_no_test(tmp_path):
+def test_no_change_selects_no_test_and_says_why(tmp_path):
     repo = tip(tmp_path, {})
-    assert select(repo) == []
+    assert none_reason(select(repo)) == "the tip changes no file against main"
 
 
 @pytest.mark.parametrize("changed, named", [
@@ -230,14 +255,14 @@ INERT_PATH = "docs/agents/triage-labels.md"
 
 def test_a_changed_inert_path_selects_nothing(tmp_path):
     repo = tip(tmp_path, {INERT_PATH: "changed\n"}, extra={INERT_PATH: "old\n", INERT: f"{INERT_PATH}\n"})
-    assert select(repo) == []
+    assert none_reason(select(repo)) == f"every changed file is inert: {INERT_PATH}"
 
 
 def test_a_changed_path_on_the_shipped_inert_list_selects_nothing(tmp_path):
     shipped = (ROOT / INERT).read_text()
     path = next(line for line in shipped.splitlines() if line and not line.startswith("#"))
     repo = tip(tmp_path, {path: "changed\n"}, extra={path: "old\n", INERT: shipped})
-    assert select(repo) == []
+    assert none_reason(select(repo)) == f"every changed file is inert: {path}"
 
 
 def test_an_inert_change_adds_nothing_to_the_tests_a_mapped_change_selects(tmp_path):

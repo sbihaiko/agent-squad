@@ -3746,10 +3746,15 @@ def _cfd_payload(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
             return {"name": name, "lower": lower, "upper": cut(values(name, 1)),
                     "count": [extents[d][name][1] - extents[d][name][0] for d in window], "held": held,
                     "held_upper": [lo + h for lo, h in zip(lower, held, strict=True)]}
+        def read(d):
+            """One day's reading, whole: the page prints it on that day's hover and indexes no series for it (#1149)."""
+            return {"day": d, "counts": [{"name": n, "count": extents[d][n][1] - extents[d][n][0]} for n in FLOW_BANDS],
+                    "wip": points[d]["wip"], "throughput": points[d]["throughput"]}
+        last = window[-1] if window else None   # the hub chooses the last day; the page prints its two figures (#1149)
         return {"start": dt.datetime.fromtimestamp(cfd["start"], dt.UTC).date().isoformat() if cfd["start"] is not None else None,
                 "days": window, "ymax": ticks[-1], "yticks": ticks, "xticks": _x_ticks(window), "coverage": coverage, "zone": zone,
-                "wip": [points[d]["wip"] for d in window],
-                "throughput": [points[d]["throughput"] for d in window],
+                "reads": [read(d) for d in window],
+                "last": None if last is None else {"day": last, "wip": points[last]["wip"], "throughput": points[last]["throughput"]},
                 "bands": [band(n) for n in FLOW_BANDS]}
     return {"cfd": {**view(None), "zone": zone, "ranges": {key: view(width) for key, width in CFD_RANGES}}}
 
@@ -5403,12 +5408,12 @@ const flowHeight=h=>{const v=(h*0.55)|0;return v<flowHMin?flowHMin:v>flowHMax?fl
 const flowX=(i,n)=>n<2?flowP:flowP+i*(flowW-2*flowP)/(n-1);
 const flowY=(v,max)=>max?flowH-flowP-v*(flowH-2*flowP)/max:flowH-flowP;
 const flowAxis=(max,unit)=>`<line x1=${flowP} y1=${flowH-flowP} x2=${flowW-flowP} y2=${flowH-flowP} stroke=var(--chart-grid)></line><text x=${flowP-6} y=${flowY(max,max)+4} text-anchor=end fill=var(--chart-axis)>${max} ${unit}</text>`;
-const cfdAxis=c=>{const n=c.days.length,base=flowH-flowP;   // every number and date arrives from the hub; the page places a mark and a label for each (#896)
-  const ys=c.yticks.map(v=>{const y=flowY(v,c.ymax);return `<line x1=${flowP-4} y1=${y} x2=${flowP} y2=${y} stroke=var(--chart-axis)></line><text x=${flowP-7} y=${y+4} text-anchor=end fill=var(--chart-axis)>${v}</text>`}).join("");
-  const xs=c.xticks.map(t=>{const x=flowX(t.i,n);return `<line x1=${x} y1=${base} x2=${x} y2=${base+4} stroke=var(--chart-axis)></line><text x=${x} y=${base+17} text-anchor=middle fill=var(--chart-axis)>${esc(t.day)}</text>`}).join("");
+const cfdAxis=c=>{const n=c.days.length,base=flowH-flowP;   // every number and date arrives from the hub; the page places a mark and a label for each (#896), its words in the lead view's ink (#1149)
+  const ys=c.yticks.map(v=>{const y=flowY(v,c.ymax);return `<line x1=${flowP-4} y1=${y} x2=${flowP} y2=${y} stroke=var(--chart-axis)></line><text x=${flowP-7} y=${y+4} text-anchor=end fill=var(--chart-ink)>${v}</text>`}).join("");
+  const xs=c.xticks.map(t=>{const x=flowX(t.i,n);return `<line x1=${x} y1=${base} x2=${x} y2=${base+4} stroke=var(--chart-axis)></line><text x=${x} y=${base+17} text-anchor=middle fill=var(--chart-ink)>${esc(t.day)}</text>`}).join("");
   return `<line x1=${flowP} y1=${flowP-10} x2=${flowP} y2=${base} stroke=var(--chart-grid)></line><line x1=${flowP} y1=${base} x2=${flowW-flowP} y2=${base} stroke=var(--chart-grid)></line>${ys}${xs}`+
-    `<text x=4 y=${flowP-16} text-anchor=start fill=var(--chart-axis)>cards</text>`+
-    `<text x=${flowW-flowP} y=${base+31} text-anchor=end fill=var(--chart-axis)>day (${esc(c.zone)})</text>`;};
+    `<text x=4 y=${flowP-16} text-anchor=start fill=var(--chart-ink)>cards</text>`+
+    `<text x=${flowW-flowP} y=${base+31} text-anchor=end fill=var(--chart-ink)>day (${esc(c.zone)})</text>`;};
 const coverNote=v=>!v?"":`<p class=fnote>cards read ${v.read} of ${v.total}, ${v.complete} complete, last refresh ${v.last?esc(v.last):"never"}</p>`;
 let CF={r:"30"};   // the cumulative flow's range, 30 days at first (#901)
 const CFD_R=[["7","7 days"],["30","30 days"],["90","90 days"],["all","All"]];   // the cumulative flow's range views (#901)
@@ -5424,12 +5429,16 @@ const flowCFD=c=>{const sel=`<label class=fhead>Range <select id=cfdr>${CFD_R.ma
   const polys=b=>runs(b).map(run=>`<polygon points="${band(b,run)}" fill="${COLORS[b.name]}" fill-opacity=".85"><title>${esc(b.name)}</title></polygon>`).join("");
   const heldBand=b=>({name:b.name,lower:b.lower,upper:b.held_upper});
   const heldPolys=b=>b.held&&b.held.some(v=>v>0)?runs(heldBand(b)).map(run=>`<polygon points="${band(heldBand(b),run)}" fill="var(--chart-held)" fill-opacity=".45"><title>${esc(b.name)} held</title></polygon>`).join(""):"";
-  const hover=c.days.map((d,i)=>{const gap=c.bands.length&&c.bands[0].upper[i]===null;   // a day's counts, WIP and throughput, on hover (#901)
-    const parts=c.bands.map(b=>`${esc(b.name)} ${(b.count||[])[i]}`).join(", "),tp=c.throughput?c.throughput[i]:null;
-    const text=gap?`${esc(d)}: no whole read this day`:`${esc(d)}: ${parts} · WIP ${(c.wip||[])[i]} · throughput ${tp===null?"none":tp}`;
-    return `<rect x=${flowX(i,n)-cw/2} y=${flowP-10} width=${cw} height=${flowH-2*flowP+10} fill=transparent><title>${text}</title></rect>`;}).join("");
-  return sel+`<svg viewBox="0 0 ${flowW} ${flowH}">${c.bands.map(polys).join("")}${c.bands.map(heldPolys).join("")}${cfdAxis(c)}${hover}</svg>`+
-    `<p class=fnote>history from ${esc(c.start)} ${esc(c.zone)}</p>${coverNote(c.coverage)}${c.legacy?`<p class=fnote>${c.legacy} ${c.legacy===1?"day comes":"days come"} from before the kind, spec, wave and type history: they answer none of these</p>`:""}<p>${c.bands.map(b=>`<span class=flg><i style="background:${COLORS[b.name]}"></i>${esc(b.name)}</span>`).join("")}</p><p class=fnote>A darker stripe at a band's base is that band's held cards.</p>`;};
+  const fig=v=>v===null||v===undefined?"none":esc(String(v));
+  const hover=(c.reads||[]).map((r,i)=>{const parts=r.counts.map(k=>`${esc(k.name)} ${fig(k.count)}`).join(", ");   // a day's counts, WIP and throughput, on hover: the hub's record for the day, never a series index (#901, #1149)
+    return `<rect x=${flowX(i,n)-cw/2} y=${flowP-10} width=${cw} height=${flowH-2*flowP+10} fill=transparent><title>${esc(r.day)}: ${parts} · WIP ${fig(r.wip)} · throughput ${fig(r.throughput)}</title></rect>`;}).join("");
+  const legend=`<p>${c.bands.map(b=>`<span class=flg><i style="background:${COLORS[b.name]}"></i>${esc(b.name)}</span>`).join("")}</p>`;
+  const L=c.last,v=c.coverage;   // the hub chose the last day and counted its WIP and throughput; the page prints them (#1149)
+  const notes=(L?`${esc(L.day)}: WIP <b>${fig(L.wip)}</b>, throughput <b>${fig(L.throughput)}</b> · `:"")+`history from ${esc(c.start)} ${esc(c.zone)}`+
+    (v?` · cards read ${fig(v.read)} of ${fig(v.total)}, ${fig(v.complete)} complete, last refresh ${v.last?esc(v.last):"never"}`:"")+
+    (c.legacy?` · ${fig(c.legacy)} ${c.legacy===1?"day comes":"days come"} from before the kind, spec, wave and type history: they answer none of these`:"")+
+    ` · a darker stripe at a band's base is its held cards`;
+  return sel+`<svg viewBox="0 0 ${flowW} ${flowH}">${c.bands.map(polys).join("")}${c.bands.map(heldPolys).join("")}${cfdAxis(c)}${hover}</svg>`+legend+`<p class=fnote>${notes}</p>`;};   // the legend, then one line of notes (#1149)
 const EXREASON={not_planned:"closed as not planned",abandoned:"closed as abandoned",open:"still open",no_opened:"no opened date",no_transition:"no transition into the chosen columns",not_read:"not yet read by the history pass"};   // the cards the chart leaves out, in words (#921)
 const LTS=ls.lt||{},LT_TYPES=[["spec","Specs"],["task","Tasks"],["bug","Bugs"]];   // the chart's own settings, restored from the page's storage (#985)
 let LT={tf:["1","2","3","7","14","30","all"].includes(LTS.tf)?LTS.tf:"30",log:LTS.log===true,ty:LT_TYPES.some(([k])=>k===LTS.ty)?LTS.ty:"task",pick:null,zc:null,zr:null,rng:null,tok:0,noclick:false,a:"",b:"",cols:[]};   // the control chart's timeframe, its scale, its type, the cluster listed under it, and a drag zoom: the hub's chart over zr=[from,to] (#900, #985)

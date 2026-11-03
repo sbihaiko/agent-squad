@@ -16,20 +16,23 @@
 
 # sg_battery_run <python> <base> <workers> <yes|no> <stage>: ruff and mypy on the whole tree, then pytest over the files that
 # squad/testselect.py answers for <base> at <stage>; `no` runs pytest over the whole tree. A stage the selector does not know
-# as a delta stage answers `all`, so the whole tree runs too. An empty selection runs no pytest. The line it logs, and writes
+# as a delta stage answers `all`, so the whole tree runs too. An empty selection (`none: <reason>`, or no line) runs no pytest
+# and logs `no pytest ran: the selection is empty: <reason>`, which the fast gate records as unproven (#1249). The line it logs, and writes
 # to $GATE_SELECT_FILE when a gate set one, says `selected N files` or `all: <reason>`; $GATE_SCOPE_FILE says `delta` or
 # `full`, the scope that line names. A delta the selector cannot cover answers `all` with its reason, so the full battery
 # runs and the record says why the delta refused: a cheaper scope never narrows a gate (ADR-0018).
 sg_battery_run() {
-  local py=$1 base=$2 workers=$3 files line stage=${5:-fast} scope
+  local py=$1 base=$2 workers=$3 files line stage=${5:-fast} scope why="the selector named no test file"
   "$py" -m ruff check squad tests && "$py" -m mypy squad || return
   if [ "$4" = yes ]; then files=$("$py" -m squad.testselect --stage "$stage" --base "$base") || files="all: the selector failed"
   else files="all: SG_TEST_SELECT=no"; fi
+  case $files in none:*) why=${files#none: }; files=;; esac
   case $files in all:*) line=$files; scope=full;; *) line="selected $(printf '%s\n' "$files" | /usr/bin/grep -c .) files"; scope=delta;; esac
   echo "$line"
   [ -z "${GATE_SELECT_FILE:-}" ] || echo "$line" > "$GATE_SELECT_FILE"
   [ -z "${GATE_SCOPE_FILE:-}" ] || echo "$scope" > "$GATE_SCOPE_FILE"
-  [ "$line" != "selected 0 files" ] || { echo "no pytest ran: the selection is empty"; return 0; }
+  # (#1249) No pytest ran, so nothing is proven: the line names why, and fast-gate.sh reads it as an unproven verdict.
+  [ "$line" != "selected 0 files" ] || { echo "no pytest ran: the selection is empty: $why"; return 0; }
   case $line in all:*) set -- ;; *) set -f; set -- $files; set +f ;; esac
   "$py" -m pytest -p no:deepeval -o heavy_cap_seconds=20 -n "${SQUAD_GATE_WORKERS:-$workers}" -m 'not heavy' "$@"
 }

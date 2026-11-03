@@ -1063,7 +1063,7 @@
       "aliases": [
         "claude-grok-4.5"
       ],
-      "retired": true,
+      "retired": false,
       "gateway_only": false
     },
     {
@@ -1419,7 +1419,7 @@
         "tools": true,
         "review_tools": false,
         "thinking_off": true,
-        "vision": false,
+        "vision": true,
         "context": 131072
       },
       "display_price": {
