@@ -551,3 +551,70 @@ def test_the_switch_track_reads_the_edge_role(surfaces, tokens):
         for bg_role in ("--panel", "--card"):
             ratio = _contrast(value, _role_value(tokens, bg_role))
             assert ratio >= NON_TEXT_MIN, f"the switch track {role} on {bg_role} is {ratio:.2f}:1"
+
+
+# --- Tints and the ink drawn on them (SPEC 1123, #1136) ---
+# A tinted chip draws its tone at the one published opacity over card, and its text is onTint (`--on-tint`).
+TINT_TONES = ["--ok", "--warn", "--err", "--run", "--acc"]
+TINTED_FILLS = {
+    "#bbody .pbg.green": "--ok",
+    "#bbody .pbg.conflict": "--err",
+    "#bbody .pbg.checks-red": "--err",
+    "#bbody .prs .it .cir.pass": "--ok",
+    "#bbody .prs .it .cir.fail": "--err",
+    "#bbody .prs .it .cir.pending": "--run",
+    "#bbody .age.warm": "--warn",
+    "#bbody .age.old": "--err",
+    "#bbody .gc.ok": "--ok",
+    "#bbody .gc.warn": "--warn",
+    "#bbody .gc.bad": "--err",
+    "#bbody .gc.debt": "--acc",
+}
+TINT_INK_SELECTORS = [s if not s.startswith("#bbody .gc.") else f"{s} b" for s in TINTED_FILLS]
+
+
+def _tint_alpha(tokens):
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)%", tokens["--tint-alpha"].strip())
+    assert m, f"--tint-alpha is not a percentage: {tokens['--tint-alpha']}"
+    return float(m.group(1)) / 100
+
+
+def _blend(fg, bg, alpha):
+    """The colour a tone at `alpha` draws over `bg`, composited per channel as a browser does for color-mix."""
+    f, b = (_long_hex(c)[1:7] for c in (fg, bg))
+    return "#" + "".join(f"{round(alpha * int(f[i:i + 2], 16) + (1 - alpha) * int(b[i:i + 2], 16)):02x}" for i in (0, 2, 4))
+
+
+def test_the_tint_opacity_is_a_token(tokens):
+    assert "--tint-alpha" in tokens, "the tint opacity is not a role in the token file"
+    assert 0 < _tint_alpha(tokens) <= 0.3
+
+
+def test_on_tint_meets_four_point_five_on_every_computed_tint(tokens):
+    alpha = _tint_alpha(tokens)
+    on_tint = _role_value(tokens, "--on-tint")
+    for tone in TINT_TONES:
+        for bg_role in ("--panel", "--card"):
+            fill = _blend(_role_value(tokens, tone), _role_value(tokens, bg_role), alpha)
+            ratio = _contrast(on_tint, fill)
+            assert ratio >= CONTRAST_MIN, f"--on-tint on {tone} at {alpha:.0%} over {bg_role} is {ratio:.2f}:1"
+
+
+def test_a_tinted_chip_fills_with_its_tone_at_the_published_opacity(surfaces):
+    css = _served_css(surfaces["hub"])
+    for selector, tone in TINTED_FILLS.items():
+        fill = _rule(css, selector).get("background")
+        want = f"color-mix(in srgb,var({tone}) var(--tint-alpha),var(--card))"
+        assert fill == want, f"{selector} fills {fill!r}, not {want}"
+
+
+def test_a_tinted_chip_inks_on_tint(surfaces):
+    css = _served_css(surfaces["hub"])
+    for selector in TINT_INK_SELECTORS:
+        ink = _rule(css, selector).get("color")
+        assert ink == "var(--on-tint)", f"{selector} inks {ink!r}, not onTint"
+
+
+def test_the_surviving_hand_tuned_fill_states_its_purpose():
+    comment = TOKENS_FILE.read_text().split(":root{")[0]
+    assert re.search(r"--tint-ok[^.]*approved", comment, re.S), "--tint-ok names no purpose"
