@@ -72,6 +72,17 @@ out=$(pass)
 [ "$(printf '%s\n' "$out" | /usr/bin/grep -c 'changed by hand')" = 1 ] && ok "the next hand edit is named once" || ko "the next hand edit: $out"
 rm -f "$repo/scripts/models.json"; printf '{"models": "mine"}\n' > "$live/scripts/models.json"; pass >/dev/null
 
+# --- a pass that forces a real publish still compares no chain (#1261) -------------------------------------
+# The first cycle above is quiet; here a shipped file changes, so the pass publishes, and the repository chains differ.
+cp "$d/models_chains.py" "$S/models_chains.py"
+printf '{"schema_version":2,"chains":{"router":[{"id":"new"}]}}\n' > "$repo/scripts/models.json"
+printf '{"schema_version":2,"chains":{"router":[{"id":"old"}]}}\n' > "$live/scripts/models.json"; pass >/dev/null   # the hand edit is named here
+printf 'skill v9\n' > "$repo/SKILL.md"
+out=$(pass)
+case "$out" in *"copy SKILL.md"*) ok "the changed file is published in the pass";; *) ko "no publish happened: $out";; esac
+case "$out" in *router*|*"head"*|*" new"*) ko "a publish in the pass compared chains: $out";; *) ok "a publish in the pass compares no chain";; esac
+rm -f "$repo/scripts/models.json"; printf '{"models": "mine"}\n' > "$live/scripts/models.json"; pass >/dev/null
+
 # --- a stray .bak-* copy in live scripts/ is clutter, listed once (#700) -------------------------------------
 printf 'old\n' > "$live/scripts/hub.py.bak-1"
 out=$(pass)

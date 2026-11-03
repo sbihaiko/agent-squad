@@ -3,7 +3,7 @@
 usage: hub.py [port]   default 7700, loopback only. Read-only: it discovers servers via ps/lsof and reads record.jsonl."""
 import datetime as dt, glob, hashlib, html, importlib.util, itertools, json, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, pathlib, urllib.parse, urllib.request
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
-import agyquota, board_lag, chainhealth, ghread, ghthrottle, hubstream, issue_ledger, modelreg, provkey, session_card, session_send, sessions   # the chains and the one registry resolve a model (ADR-0147); ghread is the one GitHub door (ADR-0277); the ledger is the one source of a hold (#1173)
+import agyquota, board_lag, chainhealth, ghread, ghthrottle, hubstream, issue_ledger, modelreg, models_chains, provkey, session_card, session_send, sessions   # the chains and the one registry resolve a model (ADR-0147); ghread is the one GitHub door (ADR-0277); the ledger is the one source of a hold (#1173)
 from issue_state import board_state, KINDS, TEST_CASE_TITLE, _utc
 import http.client
 import zoneinfo
@@ -5075,7 +5075,8 @@ function mdlRender(){const b=$("#mbody");if(!mdl){b.innerHTML="<span class=m>Loa
  {const lc=mdl.last_coding||(mdl.coding_models||[])[0]||"",x=lc?mdlBox("coding_models",lc):MBOX0;$("#mdsr").textContent=x.llm?`${x.llm} · ${lc}`:lc}   // the model the last run coded with, not the chain's head
 
  const ch=mdl.chain||{},chOut=ch.out||[],chHit=(m)=>chOut.find(o=>o.until_text&&o.model.split(':').pop()===String(m).split(':').pop()),chTag=(m)=>{const o=chHit(m);return o?`<span class=bk title="${esc(o.reason)}">${esc(o.reason)}, resets ${esc(o.until_text)}</span>`:''},chBan=ch.banner?`<div class="mx err" role=alert>${esc(ch.banner)}</div>`:(ch.notice?`<div class=mx>${esc(ch.notice)}</div>`:"");
- b.innerHTML=chBan+`<p class="note lead">Which models work, in what order, in which hours: a chain is tried top to bottom, and the first model that is on, inside its hours and under its limit does the work.</p>`
+ const rd=mdl.repo_diff||[],rdBan=rd.length?`<div class="mx err" role=status><b>The repository chains differ from the live ones.</b> Run models-apply.sh to apply them.${rd.map(d=>`<div class=mx>${esc(MLAB[d.chain+"_models"]||d.chain)}: repository ${esc(d.repo.join(", "))} · live ${esc(d.live.join(", "))}</div>`).join("")}</div>`:"";
+ b.innerHTML=chBan+rdBan+`<p class="note lead">Which models work, in what order, in which hours: a chain is tried top to bottom, and the first model that is on, inside its hours and under its limit does the work.</p>`
  +`<datalist id=hrp>${HRP.map(v=>`<option value="${v}">`).join("")}</datalist>`+mdlTable()+`<h3>Chains</h3>`
  +Object.keys(MLAB).map(k=>`<div class=mc><div class=mt>${MLAB[k]}</div><div class=mx>${MDESC[k]}</div>`+mdl[k].map((m,i)=>{const ef=mdlEff(k,m),hr=mdlHrs(k,m),x=mdlBox(k,m),cof=mdlOff(k,m),mof=mdlOffM(m),o=(mdl.outside&&mdl.outside[k]||{})[m],st=((mdl.models||[]).find(z=>z.id===m)||{}).state;
   const rmk=mdlRmd(k,m),live=mdl[k].filter(z=>!mdlRmd(k,z)).length;
@@ -6183,7 +6184,7 @@ def v1_view(d):
     view["hours"] = {k: {e.raw: e.hrs for e in rows[k] if e.hrs} for k in CHAINS}
     view["efforts"] = {k: {e.raw: e.effort for e in rows[k] if e.effort} for k in CHAINS}
     return view
-READONLY = ("known", "router_known", "suggest", "version", "labels", "boxes", "last_coding", "chain", "models", "outside")   # fields models_get() adds for the panel: posted back, never stored
+READONLY = ("known", "router_known", "suggest", "version", "labels", "boxes", "repo_diff", "last_coding", "chain", "models", "outside")   # fields models_get() adds for the panel: posted back, never stored
 # One model-id shape, in one place (#221): a bare id, and the context suffix the gateway serves beside it
 # (`claude-deepseek-v4-flash[1m]`). The save validates with MODEL_ID and the page's Add box tests the same source,
 # substituted when the page is served, so a second spelling cannot refuse an id the save takes -- the shape without the
@@ -6439,6 +6440,14 @@ def model_rows(d, states):
 def not_switched_off(suggestions, off):
     """The add list never offers a model switched off at model level (SPEC 889 #920): it keeps its place in the chains."""
     return [s for s in suggestions if modelreg.normalize(s["id"]).id not in off]
+def repo_chain_diff():
+    """The chains where the repository copy of models.json differs from the one this hub reads: [{chain, repo, live}] (#1261).
+    The page prints it and computes nothing (ADR-0137). Empty when the repository copy is missing or is the file itself."""
+    repo = pathlib.Path(CHECKOUT) / "contrib" / "squad-goal" / "scripts" / "models.json"
+    try:
+        if not repo.is_file() or repo.resolve() == MODELS.resolve(): return []
+    except OSError: return []
+    return models_chains.diff_files(repo, MODELS)
 def models_get():
     """The four chains as the panel reads them: bare ids, so one model is one row in every chain and in the box.
 
@@ -6456,7 +6465,7 @@ def models_get():
             "models": rows,
             "outside": {k: {bare_id(m): model_hours(d, k, m) for m in d.get(k, []) if model_hours(d, k, m) and not in_hours(d, k, m)} for k in CHAINS},
             "known": known, "last_coding": last_coding_model(),
-            "router_known": rknown, "version": models_version(),
+            "router_known": rknown, "version": models_version(), "repo_diff": repo_chain_diff(),
             # The router's add box offers what the gateway serves, never the other CLIs' ids (#225): the router row is a
             # chain like the other three, so its own catalogue answers for it (#687).
             "suggest": {**{k: not_switched_off(model_suggestions(usable(known, k.removesuffix("_models"))), off) for k in CHAINS if k != ROUTER_CHAIN},

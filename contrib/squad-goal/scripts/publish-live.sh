@@ -1,5 +1,5 @@
 #!/bin/bash
-# usage: publish-live.sh [--check] [<src>] [<dest>]   Publishes this repository's contrib/squad-goal into the live skill
+# usage: publish-live.sh [--check] [--no-compare] [<src>] [<dest>]   Publishes this repository's contrib/squad-goal into the live skill
 # (~/.claude/skills/squad-goal) as an explicit FILE LIST, never a mirror: the live copy holds machine config (models.json,
 # per-repo profiles under scripts/profiles/, and $SG_STATE), so the step copies the files the repository ships and drops
 # the names it retired, and removes nothing else. It never removes the destination and never touches a file it did not name.
@@ -11,6 +11,9 @@
 # A publish refuses (exit 3, nothing written, one line naming both commits) when the source HEAD is not in the history of
 # $SG_SQUAD's HEAD, the repository the live scripts import squad from (#605). SG_SQUAD unset or the source repo: no check.
 # A publish refuses (exit 3, nothing written, one line naming the tree) when the source is a linked worktree (#658).
+# A publish prints one `publish-live: chain <name> differs` line per chain whose head or order differs between the
+# repository and the live scripts/models.json, naming both chains, and never writes the live file (#1261, ADR-0140).
+# --no-compare is the explicit mode live-guard's per-cycle pass uses: it compares nothing. models-apply.sh is the one writer.
 # A publish writes $dest/PUBLISHED (`<sha> <utc>`, atomic): the tested sha, the source HEAD (#700). --check prints
 # `publish <sha>` while PUBLISHED is missing or names another sha. A publish with a failed copy writes no PUBLISHED. A source with no git has no sha and no PUBLISHED.
 # A publish closes every issue named by a `Closes #n` trailer in the commits it makes live -- the previously published sha
@@ -49,8 +52,8 @@ test-janitor-kmn.sh"
 # A data file the landing deleted travels the same way, at the top of the skill, not under scripts/.
 RETIRED_DATA="ci-baseline.txt"
 set -uo pipefail
-check=""; args=()
-for a in "$@"; do case "$a" in --check) check=1;; *) args+=("$a");; esac; done
+check=""; nocompare=""; args=()
+for a in "$@"; do case "$a" in --check) check=1;; --no-compare) nocompare=1;; *) args+=("$a");; esac; done
 here="$(cd "$(dirname "$0")" && pwd)"
 src=${args[0]:-$(cd "$here/.." && pwd)}
 [ -d "$src/scripts" ] || src="${SG_SQUAD:-$here/../..}/contrib/squad-goal"   # run from the live copy: the repository is SG_SQUAD
@@ -169,4 +172,7 @@ if [ -n "$sha" ] && [ "$prev" != "$sha" ]; then
   fi
 fi
 [ -n "$check" ] && exit $rc
+if [ -z "$nocompare" ] && [ -f "$here/models_chains.py" ]; then   # report only: the live models.json is never written here
+  python3 "$here/models_chains.py" diff "$src/scripts/models.json" "$dest/scripts/models.json" 2>/dev/null | sed 's/^/publish-live: /'
+fi
 echo "publish-live: $(shipped | wc -l | tr -d ' ') file(s) published to $dest, retired names dropped by name"

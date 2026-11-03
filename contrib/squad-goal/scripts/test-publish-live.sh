@@ -225,4 +225,20 @@ out=$(env -u SG_SQUAD bash "$src" --check "$lw/contrib/squad-goal" "$live2" 2>&1
 [ "$rc" = 1 ] && printf '%s\n' "$out" | /usr/bin/grep -qx 'copy SKILL.md' && [ "$before" = "$(snap "$live2")" ] \
   && ok "--check from a linked worktree still reports and writes nothing" || ko "--check from a linked worktree (rc $rc): $out"
 
+# --- a hand-run publish reports a chain whose head or order differs, and never writes live models.json (#1261) ----
+cr="$T/chain/repo/contrib/squad-goal"; cl="$T/chain/live"; mkdir -p "$cr/scripts" "$cl/scripts"
+chains() { printf '{"schema_version":2,"chains":{"router":[{"id":"%s"},{"id":"z"}],"coding":[{"id":"a"}]}}\n' "$1"; }
+chains head-new > "$cr/scripts/models.json"; chains head-old > "$cl/scripts/models.json"; printf 'k\n' > "$cr/SKILL.md"; cp "$cr/SKILL.md" "$cl/SKILL.md"
+before=$(cat "$cl/scripts/models.json")
+out=$(env -u SG_SQUAD bash "$src" "$cr" "$cl" 2>&1)
+printf '%s\n' "$out" | /usr/bin/grep -E 'router' | /usr/bin/grep -q 'head-new' && printf '%s\n' "$out" | /usr/bin/grep -E 'router' | /usr/bin/grep -q 'head-old' \
+  && ok "a differing router head is one line naming both chains" || ko "no chain line: $out"
+[ "$(printf '%s\n' "$out" | /usr/bin/grep -c 'coding')" = 0 ] && ok "a chain that matches is not named" || ko "coding named: $out"
+[ "$before" = "$(cat "$cl/scripts/models.json")" ] && ok "the publish never writes live models.json" || ko "live models.json was written"
+out=$(env -u SG_SQUAD bash "$src" --no-compare "$cr" "$cl" 2>&1)
+case "$out" in *head-*) ko "--no-compare still compared: $out";; *) ok "--no-compare compares nothing";; esac
+chains head-new > "$cl/scripts/models.json"
+out=$(env -u SG_SQUAD bash "$src" "$cr" "$cl" 2>&1)
+case "$out" in *head-*) ko "identical chains printed: $out";; *) ok "identical chains print nothing";; esac
+
 rm -rf "$T"; [ $fail = 0 ] && echo "test-publish-live: all checks green" || { echo "test-publish-live: failed"; exit 1; }
