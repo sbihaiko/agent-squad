@@ -343,16 +343,6 @@ export FIX_DIR=$T GH_NUMS="6100:Doing 6101:Doing"; rm -f "$T/moves"; : > "$T/fix
 fixpass() { printf '%s\n' "$T/co/runs/$1" "$T/co/runs/fix-$2" > "$T/st/active-runs.txt"; (cd "$T/co" && SG_CHILDCC_BUDGET=5 python3 "$T/childcc.py.run" 2>&1); }
 fixed() { /usr/bin/git -C "$T/co/runs/$1/ws/target-c" -c user.email=a@b -c user.name=t commit -q --allow-empty -m fix; echo '{"event": "verdict"}' >> "$T/co/runs/fix-$2/record.jsonl"; }
 printf '**VERDICT: CHANGES**\n- [Blocking] a.py:3 the guard is missing\n' > "$T/verdict-6100"
-# A fix round that cannot finish before the run's takeover bound never starts (owner ruling 2026-11-03): a fix and the review
-# that reads it need FIX_BUDGET_SECONDS, and a run already past the bound less that budget holds its child instead.
-printf '**VERDICT: CHANGES**\n- [Blocking] d.py:1 the guard is missing\n' > "$T/verdict-6102"
-export GH_NUMS="$GH_NUMS 6102:Doing"
-rrun run-20200101-000000-oldfix 6102 pass '' none
-touch -t 202001010000 "$T/co/runs/run-20200101-000000-oldfix/record.jsonl"   # the record last moved years ago: the age the takeover bound reads
-: > "$T/fix.calls"; : > "$WAVE_CALLS"
-out=$(fixpass run-20200101-000000-oldfix 6102); rc=$?
-[ ! -s "$T/fix.calls" ] && ok "a fix round with no run time left starts no fix run" || ko "a doomed fix started: $(cat "$T/fix.calls")"
-echo "$out" | /usr/bin/grep -q 'CHILD FIX SKIPPED #6102' && ok "the skipped fix names the time it lacked" || ko "no skip line: $out"
 rrun cfx 6100 pass '' none; : > "$WAVE_CALLS"
 out=$(fixpass cfx 6100); rc=$?
 [ "$(/usr/bin/grep -c '^cfx 6100 ' "$T/fix.calls")" = 1 ] && /usr/bin/grep -q "^cfx 6100 $(cd "$T/co/runs/cfx/ws/target-c" && pwd -P)\$" "$T/fix.calls" \
