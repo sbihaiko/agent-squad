@@ -90,12 +90,12 @@ def test_an_interrupted_drag_leaves_the_card_in_place_and_unarmed(hub, event):  
     out = run_page(hub.MOBILE_PAGE, """
       await loadBoard();
       const card = $("cards").querySelector('[data-role="card"][data-n="7"]');
-      __dispatch("touchstart", { target: card, touches: [{ clientX: 0, clientY: 0 }] });
-      __dispatch("touchmove", { touches: [{ clientX: 100, clientY: 1 }] });
+      __dispatch("touchstart", { target: card, touches: [{ clientX: 0, clientY: 700 }] });
+      __dispatch("touchmove", { touches: [{ clientX: 100, clientY: 700 }] });
       const mid = { t: card.style.transform, armed: card.classList.contains("armed") };
-      __dispatch(__ARG__, { touches: [], changedTouches: [{ clientX: 100, clientY: 1 }] });
+      __dispatch(__ARG__, { touches: [], changedTouches: [{ clientX: 100, clientY: 700 }] });
       const after = { t: card.style.transform || "", armed: card.classList.contains("armed"), touch: touch === null ? null : "held" };
-      __dispatch("touchend", { changedTouches: [{ clientX: 100, clientY: 1 }] });
+      __dispatch("touchend", { changedTouches: [{ clientX: 100, clientY: 700 }] });
       return { mid, after, pending: pending && pending.n };
     """.replace("__ARG__", json.dumps(event)))
     assert out["mid"]["armed"] and out["mid"]["t"], f"the drag never armed the card: {out}"

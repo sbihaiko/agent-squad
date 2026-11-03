@@ -185,6 +185,7 @@ const box = {
   isNaN, encodeURIComponent, decodeURIComponent, Boolean, Symbol, TypeError,
   fetch: boot.fetch, EventSource: FakeEventSource,
   scrollY: 0,
+  innerHeight: 800,   // one phone screen: the thumb zone is its bottom 40% (#1142)
   scrollTo: (_x, y) => { box.scrollY = y; },
   __skip: ms => { boot.__skew += ms; return boot.__skew; },
   __state: boot.__state,
@@ -416,9 +417,9 @@ def test_a_mid_drag_board_read_never_stages_a_different_card(hub):
     out = run_page(hub.MOBILE_PAGE, """
       await loadBoard();
       const card = $("cards").querySelector('[data-role="card"][data-n="7"]');
-      __dispatch("touchstart", { target: card, touches: [{ clientX: 0, clientY: 0 }] });
+      __dispatch("touchstart", { target: card, touches: [{ clientX: 0, clientY: 700 }] });
       await loadBoard();
-      __dispatch("touchend", { changedTouches: [{ clientX: 100, clientY: 1 }] });
+      __dispatch("touchend", { changedTouches: [{ clientX: 100, clientY: 700 }] });
       return { pending: pending && pending.n };
     """, board=[first, second])
     assert out["pending"] == 7, out

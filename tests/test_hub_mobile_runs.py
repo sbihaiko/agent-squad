@@ -38,9 +38,10 @@ def runs_panel():
 
 @pytest.mark.skipif(NODE is None, reason="node is needed for the gesture rules")
 @pytest.mark.parametrize("g, act", [
-    ({"x0": 10, "dx": 80, "dy": 4, "atTop": False}, "back"),
-    ({"x0": 24, "dx": 60, "dy": -10, "atTop": True}, "back"),
-    ({"x0": 100, "dx": 80, "dy": 4, "atTop": False}, None),
+    ({"x0": 10, "dx": 80, "dy": 4, "atTop": False, "thumb": True}, "back"),
+    ({"x0": 24, "dx": 60, "dy": -10, "atTop": True, "thumb": True}, "back"),
+    ({"x0": 10, "dx": 80, "dy": 4, "atTop": False, "thumb": False}, None),   # a back starts where the thumb is (#1142)
+    ({"x0": 100, "dx": 80, "dy": 4, "atTop": False, "thumb": True}, None),
     ({"x0": 10, "dx": 30, "dy": 2, "atTop": False}, None),
     ({"x0": 10, "dx": 40, "dy": 90, "atTop": False}, None),
     ({"x0": 100, "dx": 0, "dy": 90, "atTop": True}, "refresh"),

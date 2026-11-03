@@ -1,12 +1,16 @@
 <!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Hub</title><link rel=manifest href="/mobile/manifest.webmanifest"><link rel=icon href="/mobile/icon.svg"><meta name=theme-color><meta name=apple-mobile-web-app-capable content=yes>
 <style>
 /*WEB_TOKENS*/
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:var(--fs-body) system-ui,sans-serif;min-height:100vh}
-header{display:flex;gap:8px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--line)}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:var(--fs-body) system-ui,sans-serif;min-height:100dvh}
+/* Every fixed edge clears the notch and the home indicator (#1142): the top inset on the header, both side insets in
+   landscape, and the bottom inset on anything that touches the bottom of the screen. */
+header{display:flex;gap:8px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--line);padding-top:calc(8px + env(safe-area-inset-top));padding-left:calc(12px + env(safe-area-inset-left));padding-right:calc(12px + env(safe-area-inset-right))}
 /* The project switcher (#876): the header names the project; a tap opens the list in a sheet, rows 44 px tall. */
 #profile{flex:1;min-width:0;min-height:44px;display:flex;align-items:center;gap:8px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 10px;font-size:var(--fs-body);text-align:left}
 #pswm{color:var(--mute);font-size:var(--fs-caption);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
-#psheet{position:fixed;left:0;right:0;bottom:0;max-height:70vh;max-height:70dvh;overflow:auto;background:var(--panel);border-top:1px solid var(--line);border-radius:var(--radius-xl) var(--radius-xl) 0 0;padding:10px 14px calc(14px + env(safe-area-inset-bottom));z-index:25;translate:0 0;transition:translate var(--motion-duration-enter) var(--motion-entry-easing)}
+#psheet{position:fixed;left:0;right:0;bottom:0;max-height:70vh;max-height:70dvh;display:flex;flex-direction:column;overflow:hidden;background:var(--panel);border-top:1px solid var(--line);border-radius:var(--radius-xl) var(--radius-xl) 0 0;padding:10px 14px calc(14px + env(safe-area-inset-bottom));padding-left:calc(14px + env(safe-area-inset-left));padding-right:calc(14px + env(safe-area-inset-right));z-index:25;translate:0 0;transition:translate var(--motion-duration-enter) var(--motion-entry-easing)}
+#psw-content{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain}
+#psw-footer{flex:none;margin-top:8px}
 /* Keep display discrete and immediate; only translate uses the exit duration. */
 #psheet[hidden]{display:none;translate:0 100%;pointer-events:none;transition:translate var(--motion-duration-exit) var(--motion-exit-easing),display 0s allow-discrete}
 #pswl a{display:flex;flex-direction:column;justify-content:center;min-height:44px;padding:6px 0;border-bottom:1px solid var(--line);color:var(--fg);text-decoration:none;font-size:var(--fs-body)}
@@ -54,10 +58,10 @@ h2{font-size:var(--fs-heading);margin:6px 0 10px}
 #lf{position:relative}
 #lfl{position:absolute;z-index:5;top:44px;left:0;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-md);padding:8px;display:grid;gap:4px;min-width:200px;max-height:60vh;overflow:auto}
 #lfl label{font-size:var(--fs-body);display:flex;align-items:center;gap:6px;min-height:44px}
-#cards{touch-action:pan-y;min-height:50vh;display:flex;flex-direction:column;gap:var(--card-gap-y-phone)}
+#cards{touch-action:pan-y;min-height:50vh;display:flex;flex-direction:column;gap:var(--card-gap-y)}
 .card{display:block;width:100%;text-align:left;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-top:3px solid var(--lc,var(--mute));border-radius:var(--radius-lg);padding:var(--card-gap-y-phone) var(--card-gap-x-phone);font:var(--fs-body) system-ui,sans-serif;min-height:44px}
 .card .cid{display:block;color:var(--mute);font:var(--fs-caption) var(--font-mono);margin-bottom:2px}.shb{font-family:var(--font-mono)}
-.card .lchip{display:inline-block;margin-left:6px;padding:0 6px;border:1px solid var(--line);border-radius:var(--radius-lg);font-size:var(--fs-caption);color:var(--mute)}
+.card .lchip{margin-left:6px}
 .card .lchip[data-k=spec]{color:var(--lc,var(--mute));border-color:var(--lc,var(--line))}   /* the spec in its color; the wave is text, never a shade (#917) */
 .empty{color:var(--mute);text-align:center;padding:24px 0}
 .lane-h{display:flex;align-items:center;gap:8px;min-height:44px;padding:0 4px;color:var(--mute);font-size:var(--fs-body);cursor:pointer;border-bottom:1px solid var(--line)}
@@ -66,7 +70,12 @@ h2{font-size:var(--fs-heading);margin:6px 0 10px}
 .lane-h .ltt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg)}
 .lane-h .pc{color:var(--mute);font-size:var(--fs-caption)}
 /* The ticket sheet takes about 60% of the screen (#919), so the card it names stays visible above it. */
-#sheet{position:fixed;left:0;right:0;bottom:0;height:60vh;max-height:60vh;height:60dvh;max-height:60dvh;overflow:auto;overscroll-behavior:contain;touch-action:pan-y;background:var(--panel);border-top:1px solid var(--line);border-radius:var(--radius-xl) var(--radius-xl) 0 0;padding:10px 14px calc(68px + env(safe-area-inset-bottom));z-index:20;translate:0 0;transition:translate var(--motion-duration-enter) var(--motion-entry-easing)}
+#sheet{position:fixed;left:0;right:0;bottom:0;height:60vh;max-height:60vh;height:60dvh;max-height:60dvh;display:flex;flex-direction:column;overflow:hidden;overscroll-behavior:contain;background:var(--panel);border-top:1px solid var(--line);border-radius:var(--radius-xl) var(--radius-xl) 0 0;padding:10px 14px calc(56px + env(safe-area-inset-bottom));padding-left:calc(14px + env(safe-area-inset-left));padding-right:calc(14px + env(safe-area-inset-right));z-index:20;translate:0 0;transition:translate var(--motion-duration-enter) var(--motion-entry-easing)}
+/* The sheet's content scrolls; its close and its move stay at the bottom edge of the sheet, above the tab bar and in
+   the thumb zone (#1142). The 56 px bottom padding clears the tab bar the sheet sits behind. */
+#sheet-content{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;touch-action:pan-y}
+#sheet-actions{flex:none;display:flex;align-items:center;gap:8px;margin-top:8px}
+#sheet-actions button{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-body)}
 #sheet[hidden]{display:none;translate:0 100%;pointer-events:none;transition:translate var(--motion-duration-exit) var(--motion-exit-easing),display 0s allow-discrete}
 .grab{width:40px;height:4px;border-radius:var(--radius-sm);background:var(--line);margin:0 auto 10px}
 #sh-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px}
@@ -81,7 +90,7 @@ h2{font-size:var(--fs-heading);margin:6px 0 10px}
 #sh-set button.on{border-color:var(--acc);color:var(--acc)}
 #sh-title{font-size:var(--fs-body);margin:6px 0}
 #sh-chips{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px}
-#sh-chips .chip{padding:2px 8px;border:1px solid var(--line);border-radius:var(--radius-lg);font-size:var(--fs-caption);color:var(--mute)}
+#sh-chips .chip,.card .lchip{display:inline-flex;align-items:center;min-height:var(--chip-h);padding:0 8px;border:1px solid var(--line);border-radius:var(--radius-lg);font-size:var(--fs-caption);color:var(--mute)}
 #sh-chips .chip.spec{border-color:var(--acc);color:var(--acc)}
 #sh-chips .chip.wave{color:var(--fg)}
 #sh-meta{margin:4px 0 10px}
@@ -101,12 +110,12 @@ h2{font-size:var(--fs-heading);margin:6px 0 10px}
 #sh-last{margin:10px 0}
 #sh-last h3{font-size:var(--fs-body);margin:12px 0 4px;padding-top:8px;border-top:1px solid var(--line)}
 #sh-last .mut{color:var(--mute);font-size:var(--fs-caption);margin:0 0 6px}
-#sh-todo{width:100%;min-height:44px;margin-top:8px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);font-size:var(--fs-body)}
+#sh-todo{flex:1;width:100%;min-height:44px;margin:0;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);font-size:var(--fs-body)}
 #sh-todo[hidden]{display:none}
-nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:var(--panel);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom)}
+nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:var(--panel);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom);padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right)}
 nav button{flex:1;min-height:56px;white-space:nowrap;background:none;border:0;color:var(--mute);font:var(--fs-caption) system-ui;padding:6px 0}
 nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc)}
-#reconnect{position:fixed;inset:0;z-index:5;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px;text-align:center}
+#reconnect{position:fixed;inset:0;z-index:5;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:calc(24px + env(safe-area-inset-top)) calc(24px + env(safe-area-inset-right)) calc(24px + env(safe-area-inset-bottom)) calc(24px + env(safe-area-inset-left));text-align:center}
 #reconnect[hidden]{display:none}
 #reconnect button{min-height:44px;min-width:120px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);font-size:var(--fs-body)}
 #more-menu{display:grid;gap:8px}
@@ -119,20 +128,30 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
 #cchart svg{width:100%;height:auto;display:block}
 .row{padding:10px 4px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
 .row .mut{color:var(--mute);font-size:var(--fs-caption)}
+/* A More screen fills the screen, scrolls its content and keeps its Back at the bottom edge, in the thumb zone (#1142). */
+[data-screen]{position:fixed;inset:0;z-index:30;display:flex;flex-direction:column;overflow:hidden;background:var(--bg)}
+[data-screen][hidden]{display:none}
+#cost-content{flex:1;min-height:0;overflow:auto;padding:12px var(--page-gutter-phone);padding-top:calc(12px + env(safe-area-inset-top));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
+#cost-actions{flex:none;border-top:1px solid var(--line);padding:8px var(--page-gutter-phone) calc(8px + env(safe-area-inset-bottom));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
 [data-screen] .msg{color:var(--err)}
 .sub{font-size:var(--fs-body);color:var(--mute);margin:14px 0 6px}
 .runlist{display:grid;gap:8px}
 .runrow{display:block;width:100%;text-align:left;min-height:44px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-lg);padding:10px 12px;font:var(--fs-body) system-ui,sans-serif}
 .runrow .mut{color:var(--mute);font-size:var(--fs-caption);margin-top:2px}
-.runrow[data-tone=ok] b{color:var(--ok)} .runrow[data-tone=err] b{color:var(--err)} .runrow[data-tone=warn] b{color:var(--warn)} .runrow[data-tone=run] b{color:var(--run)} .runrow[data-tone=wait] b{color:var(--wait)} .runrow[data-tone=none] b{color:var(--none)}
-.runrow[data-mk=filled] b::before{content:"● "} .runrow[data-mk=hollow] b::before{content:"○ "} .runrow[data-mk=bar] b::before{content:"▌ "}
-#bread{color:var(--mute);font-size:var(--fs-min);margin:0 0 6px} #bread.stale{color:var(--warn)} #cards.stale{opacity:.45;filter:grayscale(1)}
+/* The run row draws the shared state chip: the served word in the state's tone, behind its shared mark (#1142). */
+.runrow .run-line{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
+.runrow .run-state{flex:none}
+/*RUN_STATE_BASE_CSS*/
+/*RUN_STATE_CSS*/
+#bread{color:var(--mute);font-size:var(--fs-caption);margin:0 0 6px} #bread.stale{color:var(--warn)} #cards.stale{opacity:.45;filter:grayscale(1)}
 #runview{position:fixed;inset:0;z-index:30;background:var(--bg);display:flex;flex-direction:column}
 #runview[hidden]{display:none}
-#runview-head{display:flex;align-items:center;gap:8px;height:calc(52px + env(safe-area-inset-top));padding:env(safe-area-inset-top) 12px 0;background:var(--panel);border-bottom:1px solid var(--line)}
-#runview-head button{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px}
+#runview-head{display:flex;align-items:center;gap:8px;height:calc(52px + env(safe-area-inset-top));padding:env(safe-area-inset-top) 12px 0;padding-left:calc(12px + env(safe-area-inset-left));padding-right:calc(12px + env(safe-area-inset-right));background:var(--panel);border-bottom:1px solid var(--line)}
+/* The run view's back and control sit at the bottom edge of the screen, in the thumb zone (#1142). */
+#runview-actions{flex:none;display:flex;align-items:center;flex-wrap:wrap;gap:6px 8px;background:var(--panel);border-top:1px solid var(--line);padding:6px 12px calc(6px + env(safe-area-inset-bottom));padding-left:calc(12px + env(safe-area-inset-left));padding-right:calc(12px + env(safe-area-inset-right))}
+#runview-actions button{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px}
 #runview-name{font-size:var(--fs-body);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
-#runctl{display:flex;align-items:center;flex-wrap:wrap;gap:6px 8px;padding:6px 12px;background:var(--panel);border-bottom:1px solid var(--line)}
+#runctl{display:flex;flex:1;align-items:center;flex-wrap:wrap;gap:6px 8px}
 #runctl button{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px}
 #runctl button[hidden]{display:none}
 #runctl-limits{flex:1 1 100%;margin:0;color:var(--mute);font-size:var(--fs-caption)}
@@ -142,9 +161,11 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
 #runframe{position:absolute;inset:0;width:100%;height:100%;border:0}
 #termview{position:fixed;inset:0;z-index:30;background:var(--bg);display:flex;flex-direction:column}
 #termview[hidden]{display:none}
-#termview-head{display:flex;align-items:center;gap:8px;height:calc(52px + env(safe-area-inset-top));padding:env(safe-area-inset-top) 12px 0;background:var(--panel);border-bottom:1px solid var(--line)}
-#termview-head button,#termview-older,#termview-send{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px}
-#termview-compose{display:grid;gap:6px;padding:8px 12px calc(8px + env(safe-area-inset-bottom));border-top:1px solid var(--line)}
+#termview-head{display:flex;align-items:center;gap:8px;height:calc(52px + env(safe-area-inset-top));padding:env(safe-area-inset-top) 12px 0;padding-left:calc(12px + env(safe-area-inset-left));padding-right:calc(12px + env(safe-area-inset-right));background:var(--panel);border-bottom:1px solid var(--line)}
+#termview-back,#termview-older,#termview-send{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px}
+/* The terminal's back sits in its composer, at the bottom edge and in the thumb zone, by the Send it stands beside (#1142). */
+#termview-compose{display:grid;gap:6px;padding:8px 12px calc(8px + env(safe-area-inset-bottom));padding-left:calc(12px + env(safe-area-inset-left));padding-right:calc(12px + env(safe-area-inset-right));border-top:1px solid var(--line)}
+#termview-back{justify-self:start}
 #termview-text{min-height:44px;font:inherit;font-size:var(--fs-field);background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:8px}
 #termview-name{font-size:var(--fs-body);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #termview-older{margin:8px 12px 0}
@@ -172,7 +193,7 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
 .card .cmv{display:none;color:var(--ok);font-size:var(--fs-caption);margin-top:4px}
 .card.armed .cmv{display:block}
 .card .creason{display:block;color:var(--err);font-size:var(--fs-caption);margin-top:4px}
-#undo{position:fixed;left:12px;right:12px;bottom:calc(64px + env(safe-area-inset-bottom));z-index:25;display:flex;gap:8px;align-items:center;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-lg);padding:10px 12px}
+#undo{position:fixed;left:calc(12px + env(safe-area-inset-left));right:calc(12px + env(safe-area-inset-right));bottom:calc(64px + env(safe-area-inset-bottom));z-index:25;display:flex;gap:8px;align-items:center;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-lg);padding:10px 12px}
 #undo[hidden]{display:none}
 #undo-text{flex:1;font-size:var(--fs-body)}
 #undo button{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-body)}
@@ -193,9 +214,9 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <a id="to-desktop" href="#">Desktop page</a>
 </header>
 <div id="psheet" role="dialog" aria-label="Projects" hidden>
-<div class="grab"></div>
-<div id="pswl"></div>
-<button id="pswx" type="button">Close</button>
+<div id="psw-content"><div class="grab"></div>
+<div id="pswl"></div></div>
+<div id="psw-footer"><button id="pswx" type="button">Close</button></div>
 </div>
 <div id="reconnect" hidden><p>The hub does not answer. Check Tailscale and that the machine is awake.</p><button id="retry" type="button">Try again</button></div>
 <main>
@@ -263,8 +284,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <a class="more-link" href="./#set">Settings</a>
 </div>
 <article data-screen="cost" data-src="/api/stats" hidden>
-<button data-back type="button">Back</button>
-<h2>Cost and usage</h2>
+<div id="cost-content"><h2>Cost and usage</h2>
 <div id="periods">
 <button data-period="hour" type="button">Per hour</button>
 <button data-period="day" type="button">Per day</button>
@@ -272,27 +292,29 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 </div>
 <div id="cchart"></div>
 <div class="list"></div>
-<p class="msg"></p>
+<p class="msg"></p></div>
+<div id="cost-actions"><button data-back type="button">Back</button></div>
 </article>
 </section>
 </main>
 <div id="sheet" data-role="sheet" role="dialog" aria-labelledby="sh-title" hidden>
-<div class="grab"></div>
-<div id="sh-head"><span id="sh-pos"></span><a id="sh-link" target="_blank" rel="noopener">Open on GitHub</a><button id="sh-close" type="button">Close</button></div>
+<div id="sheet-content"><div class="grab"></div>
+<div id="sh-head"><span id="sh-pos"></span><a id="sh-link" target="_blank" rel="noopener">Open on GitHub</a></div>
 <div id="sh-nav"><button id="sh-prev" type="button" aria-label="Previous card">&#8249;</button><span id="sh-set"></span><button id="sh-next" type="button" aria-label="Next card">&#8250;</button></div>
 <h2 id="sh-title"></h2>
 <div id="sh-chips"></div>
 <div id="sh-meta"></div>
 <div id="sh-body"></div>
-<div id="sh-last"></div>
-<button id="sh-todo" type="button" hidden></button>
+<div id="sh-last"></div></div>
+<div id="sheet-actions"><button id="sh-close" type="button">Close</button><button id="sh-todo" type="button" hidden></button></div>
 </div>
 <section id="termview" hidden>
-<div id="termview-head"><button id="termview-back" type="button">Back</button><span id="termview-name"></span></div>
+<div id="termview-head"><span id="termview-name"></span></div>
 <button id="termview-older" type="button" hidden>Older turns</button>
 <div id="termview-turns"></div>
 <p id="termview-msg" class="msg"></p>
 <div id="termview-compose">
+<button id="termview-back" type="button">Back</button>
 <p class="mut" id="termview-note">Your message arrives as a message from another session, not as your typed input or approval.</p>
 <textarea id="termview-text" maxlength="4000" rows="3" aria-label="Message to this session"></textarea>
 <button id="termview-send" type="button">Send</button>
@@ -300,9 +322,9 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 </div>
 </section>
 <section id="runview" hidden>
-<div id="runview-head"><button id="runview-back" type="button">Back</button><span id="runview-name"></span></div>
-<div id="runctl"><button id="runctl-btn" type="button" hidden></button><p id="runctl-limits"></p><p id="runctl-msg" class="msg"></p></div>
+<div id="runview-head"><span id="runview-name"></span></div>
 <div id="runbody"><iframe id="runframe" title="Run dashboard"></iframe><div id="edge" data-role="edge"></div></div>
+<div id="runview-actions"><button id="runview-back" type="button">Back</button><div id="runctl"><button id="runctl-btn" type="button" hidden></button><p id="runctl-limits"></p><p id="runctl-msg" class="msg"></p></div></div>
 </section>
 <nav>
 <button data-tab="monitor">Monitor</button>
@@ -767,7 +789,7 @@ function renderSheet() {
   // Board-derived metadata is redrawn on every pass, with the issue detail the last read gave (#1005).
   if (key === issueKey) { $("sh-chips").innerHTML = sheetChips(x); $("sh-meta").innerHTML = sheetMeta(x, issueD); return; }
   issueKey = key; issueD = null;
-  $("sheet").scrollTop = 0;
+  $("sheet-content").scrollTop = 0;
   $("sh-title").textContent = "#" + x.n + " " + x.t;
   $("sh-chips").innerHTML = sheetChips(x);
   $("sh-meta").innerHTML = sheetMeta(x, null);
@@ -988,8 +1010,9 @@ document.addEventListener("touchstart", e => {
   const owner = gestureOwner(rolesOf(e.target));
   if (owner === "none") { touch = null; return; }
   const p = e.touches[0], card = e.target.closest ? e.target.closest(".card") : null;
-  touch = { owner, x: p.clientX, y: p.clientY, atTop: $("sheet").scrollTop === 0, nested: owner === "sheet" && nestedIn(e.target, $("sheet")),
-            card: card && card.closest("#cards") ? card : null, pm: !!(card && card.dataset.pm === "1" && card.closest("#cards")) };
+  const thumb = inThumbZone(p.clientY, window.innerHeight);   // a dismissal and the one write start where the thumb is (#1142)
+  touch = { owner, x: p.clientX, y: p.clientY, thumb, atTop: $("sheet-content").scrollTop === 0, nested: owner === "sheet" && nestedIn(e.target, $("sheet")),
+            card: card && card.closest("#cards") ? card : null, pm: !!(thumb && card && card.dataset.pm === "1" && card.closest("#cards")) };
   suppressClick = false;
 }, { passive: true });
 document.addEventListener("touchmove", e => {
@@ -1004,7 +1027,7 @@ document.addEventListener("touchend", e => {
   if (!touch) return;
   const p = e.changedTouches[0], t = endGesture(), dx = p.clientX - t.x, dy = p.clientY - t.y;
   if (t.card && Math.abs(dx) > 10) suppressClick = true;
-  const g = gestureAct({ owner: t.owner, dx, dy, atTop: t.atTop, nested: t.nested });
+  const g = gestureAct({ owner: t.owner, dx, dy, atTop: t.atTop, nested: t.nested, thumb: t.thumb });
   if (g) { step(g); return; }
   const mv = moveDrag({ promotable: t.pm, dx, dy });
   // The released card is resolved by its number against the board as it now stands: a 10 s read can reorder the column
@@ -1110,15 +1133,21 @@ every("more", loadMore, 10000);
 const runsShown = () => !document.querySelector('[data-panel="runs"]').hidden;
 const ago = s => s < 3600 ? Math.floor(s / 60) + " min" : (s / 3600).toFixed(1) + " h";
 function runRow(r, url) {
-  const b = document.createElement("button"), name = document.createElement("b"), meta = document.createElement("div");
+  const b = document.createElement("button"), line = document.createElement("div"), name = document.createElement("b"),
+        state = document.createElement("span"), meta = document.createElement("div");
   b.type = "button"; b.className = "runrow"; b.dataset.url = url; b.dataset.name = r.label || r.id;
   b.dataset.id = r.id || "";
-  b.dataset.tone = r.tone || ""; b.dataset.mk = r.mark || "none";
+  // The state is the shared chip: the served word in the state's own class, so the one state table paints its tone and mark (#1142).
+  line.className = "run-line";
   name.textContent = r.label || r.id;
   name.className = "runid";
+  state.className = "run-state b " + String(r.state || "").replace(/ /g, "-");
+  state.textContent = r.badge;
+  if (r.tip) state.title = r.tip;
+  line.append(name, state);
   meta.className = "mut";
-  meta.textContent = [r.badge, "age " + ago(r.age || 0), money(r.spend)].join(" · ");
-  b.append(name, meta);
+  meta.textContent = ["age " + ago(r.age || 0), money(r.spend)].join(" · ");
+  b.append(line, meta);
   return b;
 }
 async function loadRuns() {
@@ -1169,11 +1198,11 @@ for (const id of ["runs-live", "runs-ended"]) $(id).onclick = e => { const b = e
 $("runview-back").onclick = closeRun;
 $("runctl-btn").onclick = sendRunControl;
 let rtouch = null;
-document.addEventListener("touchstart", e => { const p = e.touches[0]; rtouch = { x0: p.clientX, y0: p.clientY, atTop: window.scrollY === 0 }; }, { passive: true });
+document.addEventListener("touchstart", e => { const p = e.touches[0]; rtouch = { x0: p.clientX, y0: p.clientY, thumb: inThumbZone(p.clientY, window.innerHeight), atTop: window.scrollY === 0 }; }, { passive: true });
 document.addEventListener("touchend", e => {
   if (!rtouch) return;
   const p = e.changedTouches[0];
-  const g = runsGesture({ x0: rtouch.x0, dx: p.clientX - rtouch.x0, dy: p.clientY - rtouch.y0, atTop: rtouch.atTop });
+  const g = runsGesture({ x0: rtouch.x0, dx: p.clientX - rtouch.x0, dy: p.clientY - rtouch.y0, atTop: rtouch.atTop, thumb: rtouch.thumb });
   rtouch = null;
   if (g && g.act === "back" && !$("runview").hidden) closeRun();
   if (g && g.act === "refresh" && runsShown() && $("runview").hidden) loadRuns();

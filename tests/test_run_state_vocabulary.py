@@ -159,17 +159,17 @@ def test_the_hub_badge_draws_its_row_mark_before_the_word(hub):
             assert m and f'content:"{MARK_GLYPHS[r["mark"]]} "' in m.group(1), r["state"]
 
 
-def test_the_phone_run_row_draws_the_tone_and_mark_the_served_row_names(hub):
-    """The phone maps no state fact of its own: the served row names the tone and the mark of its state, and the page
-    paints what the row names — one CSS rule per palette tone, one per mark, no state-keyed map in the page code."""
+def test_the_phone_run_row_draws_the_shared_state_word_and_mark(hub):
+    """The phone maps no state fact of its own: the served row names its state, and the page paints it with the one
+    state table's chip — the same rule the dashboard badge uses — so a state reads alike on every surface (#1142)."""
     src = Path(hub.__file__).read_text()
     assert '"mark": b["mark"]' in src and '"tone": b["color"]' in src   # every served run row carries its state's tone and mark
     mobile = hub.MOBILE_PAGE.decode() if isinstance(hub.MOBILE_PAGE, bytes) else hub.MOBILE_PAGE
-    for tone in PALETTE:
-        assert re.search(rf"\.runrow\[data-tone={tone}\] ", mobile), tone
-    for mark in ("filled", "hollow", "bar"):
-        assert re.search(rf"\.runrow\[data-mk={mark}\] ", mobile), mark
-    assert "dataset.tone" in mobile and "dataset.mk" in mobile
+    for r in hub.RUN_STATES:
+        assert hub.run_state_css(r) in mobile, r["state"]   # the shared chip rule reaches the phone
+    assert 'className = "run-state b " + String(r.state || "").replace(/ /g, "-")' in mobile
+    assert "state.textContent = r.badge" in mobile
+    assert "dataset.tone" not in mobile and "dataset.mk" not in mobile, "the phone keeps a second paint table of its own"
 
 
 def test_the_dashboard_chip_draws_its_row_mark_and_reads_the_class_from_the_table(hub):

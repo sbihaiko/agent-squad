@@ -4492,8 +4492,15 @@ def run_state_css(r):
     state = r["state"].replace(" ", "-")
     rule = f".b.{state}{{color:var(--{r['color']});{r['css']}}}"
     return rule + (f'.b.{state}::before{{content:"{MARK_GLYPHS[r["mark"]]} "}}' if r["mark"] != "none" else "")
+# The chip the state table paints, shared by the desktop badge and the phone's run row (#1142): one base, then one rule
+# per state. A waiting pass is no state of the table, and the outcome classes stand beside it (#598).
+RUN_STATE_BASE_CSS = """.b{display:inline-block;padding:0 6px;border-radius:var(--radius-lg);font-size:var(--fs-caption);border:1px solid}
+.b.waiting{color:var(--wait);border-style:dashed}
+.landed,.pass,.ok{color:var(--ok)}"""
 
 WEB_TOKENS = (pathlib.Path(__file__).resolve().parent / "web-tokens.css").read_text()
+# The installed app's colours are the token file's values: a manifest is no stylesheet, so it reads no variable (#1142).
+BG_COLOR = re.search(r"--bg:\s*([^;]+);", WEB_TOKENS).group(1).strip()
 PAGE = r"""<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Hub</title>
 <script>if(matchMedia("(max-width: 600px)").matches&&localStorage.getItem("squad-view")!=="desktop")location.replace(location.pathname.replace(/\/?$/,"/")+"mobile")</script>
 <style>
@@ -4513,9 +4520,7 @@ button.on{border-color:var(--acc);color:var(--acc)}
 .r .sh{color:var(--warn);font-variant-numeric:tabular-nums}.r .sh.done{color:var(--ok)}
 .r.show{background:var(--raise);box-shadow:inset 3px 0 0 var(--acc)}.r.pinned .pn{color:var(--acc)}
 .pn{color:var(--mute);flex:none}.gh.op{color:var(--fg)}.gh+.r{border-top:0}
-.b{display:inline-block;padding:0 6px;border-radius:var(--radius-lg);font-size:var(--fs-caption);border:1px solid}
-.b.waiting{color:var(--wait);border-style:dashed}   /* the childcc pass after it ended: no state of RUN_STATES says a pass that waits (#598) */
-.landed,.pass,.ok{color:var(--ok)}
+/*RUN_STATE_BASE_CSS*/
 /*RUN_STATE_CSS*/
 #bread{color:var(--mute)}#bread.stale{color:var(--warn)}#bbody.stale{opacity:.45;filter:grayscale(1)}
 .m{color:var(--mute);font-size:var(--fs-caption);margin-top:2px}
@@ -5806,7 +5811,7 @@ PAGE = PAGE.replace("/*RUN_SHEET_CSS*/", (pathlib.Path(__file__).resolve().paren
 HID_CHIP_TOKENS = (("abandoned", "err"), ("unscheduled", "warn"), ("issue_closed", "ok"), ("pr_open", "pin"))
 PAGE = PAGE.replace("/*HID_CHIP_RULES*/", "\n".join('.hidbar .chip[data-col="%s"] b{color:var(--%s)}' % (COLUMN[fact], token) for fact, token in HID_CHIP_TOKENS))
 PAGE = PAGE.replace("/*BOARD_COLORS*/", BOARD_COLORS_JSON).replace("/*BOARD_FLOW*/", BOARD_FLOW_JSON).replace("/*BOARD_NAMES*/", BOARD_NAMES_JSON).replace("/*BOARD_DOING*/", BOARD_DOING_JSON).replace("/*BOARD_REVIEW*/", BOARD_REVIEW_JSON).replace("/*HUB_REPO*/", json.dumps(REPO))
-PAGE = PAGE.replace("/*RUN_STATE_CSS*/", "".join(run_state_css(r) for r in RUN_STATES))
+PAGE = PAGE.replace("/*RUN_STATE_BASE_CSS*/", RUN_STATE_BASE_CSS).replace("/*RUN_STATE_CSS*/", "".join(run_state_css(r) for r in RUN_STATES))
 # The cluster count's baseline, from the one size the ring is measured against: the page and the hub read one constant (#1146).
 PAGE = PAGE.replace("/*LT_START*/", LEAD_START)
 PAGE = PAGE.replace("/*RING_BASELINE*/", "%g" % (_leadtime.RING_BASELINE_EM * _leadtime.RING_TEXT_PX))
@@ -6991,10 +6996,10 @@ def mobile_photo(page):
                 .replace(MOBILE_SEND, MOBILE_PHOTO_ROW)
                 .replace("// terminals:end", MOBILE_PHOTO_JS + "// terminals:end"))
 
-MOBILE_PAGE = mobile_photo((pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text().replace("<!--OVERLAY-->", overlay_tag(OVERLAY_HUB)).replace("<!--INST_CARD-->", INST_CARD).replace("/*INST_CSS*/", INST_CSS).replace("/*INST_JS*/", INST_JS).replace("/*SWITCHER_JS*/", SWITCHER_JS).replace("/*GESTURE*/", GESTURE_JS).replace("/*MOVE*/", MOVE_JS).replace("/*QUESTION*/", QUESTION_JS).replace("/*RUN*/", RUN_JS).replace("/*BOARD_FILTER*/", BOARD_FILTER_JS).replace("/*WEB_TOKENS*/", WEB_TOKENS).replace("/*CARD_RULES*/", CARD_RULES_JS))
+MOBILE_PAGE = mobile_photo((pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text().replace("<!--OVERLAY-->", overlay_tag(OVERLAY_HUB)).replace("<!--INST_CARD-->", INST_CARD).replace("/*INST_CSS*/", INST_CSS).replace("/*INST_JS*/", INST_JS).replace("/*SWITCHER_JS*/", SWITCHER_JS).replace("/*GESTURE*/", GESTURE_JS).replace("/*MOVE*/", MOVE_JS).replace("/*QUESTION*/", QUESTION_JS).replace("/*RUN*/", RUN_JS).replace("/*BOARD_FILTER*/", BOARD_FILTER_JS).replace("/*WEB_TOKENS*/", WEB_TOKENS).replace("/*CARD_RULES*/", CARD_RULES_JS).replace("/*RUN_STATE_BASE_CSS*/", RUN_STATE_BASE_CSS).replace("/*RUN_STATE_CSS*/", "".join(run_state_css(r) for r in RUN_STATES)))
 MOBILE_SHELL = ["/mobile/", "/mobile/manifest.webmanifest", "/mobile/icon.svg"]
 SW_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-sw.js").read_text().replace("/*SHELL*/[]", json.dumps(MOBILE_SHELL))
-MANIFEST_JSON = json.dumps({"id": "/mobile/", "name": f"Squad hub {REPO}", "short_name": "Hub", "start_url": "/mobile/", "scope": "/mobile/", "display": "standalone", "background_color": "var(--bg)", "theme_color": "var(--bg)", "icons": [{"src": "/mobile/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}]}).encode()
+MANIFEST_JSON = json.dumps({"id": "/mobile/", "name": f"Squad hub {REPO}", "short_name": "Hub", "start_url": "/mobile/", "scope": "/mobile/", "display": "standalone", "background_color": BG_COLOR, "theme_color": BG_COLOR, "icons": [{"src": "/mobile/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}]}).encode()
 MOBILE_ICON = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192"><rect width="192" height="192" rx="36" fill="var(--bg)"/><circle cx="96" cy="96" r="52" fill="var(--chart-ok)"/></svg>'
 MOBILE_ASSETS = {"/mobile/manifest.webmanifest": (MANIFEST_JSON, "application/manifest+json"), "/mobile/icon.svg": (MOBILE_ICON, "image/svg+xml"),
                  "/mobile/sw.js": (SW_JS.encode(), "text/javascript; charset=utf-8")}
