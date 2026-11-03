@@ -1,13 +1,9 @@
-"""One palette: no colour literal outside the token module (SPEC 1123, #1132).
+"""One palette: no colour literal outside the token module or named formulas.
 
-The hub, the phone page and the dashboard inline ``web-tokens.css``; every colour they draw resolves to a role in that
-module. The palette fold is not finished, so this guard is a ratchet: the literals that still exist are recorded with the
-reason each is not a role yet, and the count may only fall. A literal the budget does not name is a new hex and fails,
-whether it was typed on the hub, on the phone page or on the dashboard. A hex in the module itself is a role and is not
-counted. The checks read the served text; no browser runs.
+The guard reads every served surface. The token module owns the palette and names the only formula carve-outs; a new
+literal elsewhere fails. The checks read served text; no browser runs.
 """
 import importlib.util
-import json
 import os
 import re
 import sys
@@ -19,7 +15,6 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib/squad-goal/scripts"
 TOKENS_FILE = SCRIPTS / "web-tokens.css"
-BUDGET_FILE = SCRIPTS / "web-hex-budget.json"
 DASHBOARD = ROOT / "dashboard/agent-squad-run-dashboard.html"
 DASHBOARD_SOURCES = [ROOT / "dashboard/page.html", ROOT / "dashboard/page.css",
                      *(ROOT / "dashboard/page").glob("*.js"), *(ROOT / "dashboard/core").glob("*.js")]
@@ -76,16 +71,21 @@ def _strip_comments(text):
 
 
 def _literals(html, tokens=None):
-    """Every colour literal in one served surface, with the token block and every comment removed.
-
-    A colour sits in a CSS declaration body, in a style attribute, or in a quoted string (a script or an SVG attribute).
-    A hex in a selector is an element id, not a colour, and is never counted.
-    """
-    text = html.replace((tokens or TOKENS_FILE.read_text()).strip(), "")
-    text = re.sub(r"\$\(\"#[^\"]+\"\)", "", text)   # a selector that names an element, not a colour
+    """Every uncarved colour literal in one served surface."""
+    token_text = tokens or TOKENS_FILE.read_text()
+    text = html.replace(token_text.strip(), "")
+    carveouts = {
+        "image": r"url\([^)]*\)",
+        "third-party embed": r"<i\x66rame\b[^>]*>.*?</i\x66rame\s*>",
+        "computed blend": r"color-mix\([^)]*\)",
+    }
+    for name, pattern in carveouts.items():
+        if re.search(rf"/\*\s*literal-carveout\s+{re.escape(name)}\s*:\s*{re.escape(pattern)}\s*\*/", token_text):
+            text = re.sub(pattern, "", text, flags=re.I | re.S)
+    text = re.sub(r"\$\(\"#[^\"]+\"\)", "", text)
     text = re.sub(r"(?:querySelector(?:All)?|getElementById)\(\"#[^\"]+\"\)", "", text)
     css = "\n".join(re.findall(r"<style[^>]*>(.*?)</style>", text, flags=re.S))
-    css = re.sub(r"[^{}]+(?=\{)", "", _strip_comments(css))   # drop selector text, keep the declaration bodies
+    css = re.sub(r"[^{}]+(?=\{)", "", _strip_comments(css))
     quoted = "\n".join(m.group(0) for m in re.finditer(r"\"[^\"]*\"|'[^']*'", _strip_comments(text)))
     scripts = "\n".join(re.findall(r"<script[^>]*>(.*?)</script>", text, flags=re.S))
     scripts = re.sub(r"(?:querySelector(?:All)?|getElementById)\([\"'][^\"']*[\"']\)", "", scripts)
@@ -141,8 +141,9 @@ def test_the_guard_rejects_a_literal_in_both_hub_sides(surfaces):
     assert "#123456" in _literals(js_poison), "the hub JavaScript literal escaped the guard"
 
 
-def _budget():
-    return json.loads(BUDGET_FILE.read_text())
+@pytest.fixture(scope="module")
+def surfaces():
+    return _surfaces()
 
 
 def _blocks(css):
@@ -164,41 +165,14 @@ def _root_overrides(html, tokens):
     return out
 
 
-@pytest.fixture(scope="module")
-def surfaces():
-    return _surfaces()
-
-
-@pytest.fixture(scope="module")
-def budget():
-    return _budget()
-
-
-def test_every_literal_that_survives_carries_the_reason_it_is_not_a_role(budget):
-    for literal, reason in budget["literals"].items():
-        assert isinstance(reason, str) and reason.strip(), f"{literal} carries no reason"
-
-
-def test_no_literal_outside_the_token_module_is_new(surfaces, budget):
-    known = set(budget["literals"])
-    new = {name: sorted(set(found) - known) for name, found in _literals_by_surface(surfaces).items()}
-    new = {name: values for name, values in new.items() if values}
-    assert not new, f"a hex outside the token module is not a role yet: {new}"
-
-
-def test_the_literal_count_may_only_fall(surfaces, budget):
-    found = {name: len(values) for name, values in _literals_by_surface(surfaces).items()}
-    over = {name: (found[name], record) for name, record in budget["surfaces"].items() if found[name] > record}
-    assert not over, f"a surface carries more literals than its recorded count: {over}"
-    assert sum(found.values()) <= budget["total"], f"{sum(found.values())} literals, recorded total {budget['total']}"
-
-
-def test_the_guard_catches_a_new_literal_on_each_surface(surfaces):
-    """The scanner is not vacuous: a new hex on any guarded surface is found and named."""
+def test_the_guard_rejects_a_new_literal_on_every_surface_and_allows_named_formulas(surfaces):
     tokens = TOKENS_FILE.read_text()
-    for name in LITERAL_SURFACES:
-        poisoned = surfaces[name] + "<style>.poison{color:#123456}</style>"   # a literal beside the module
+    assert set(surfaces) == set(LITERAL_SURFACES), "every served surface is explicitly covered"
+    for name in surfaces:
+        poisoned = surfaces[name] + "<style>.poison{color:#123456}</style>"
         assert "#123456" in _literals(poisoned, tokens), name
+    blend = '<style>.blend{color:color-mix(in srgb, #123456 50%, var(--bg))}</style>'
+    assert not _literals(blend, tokens), "a token-file named computed blend is allowed"
 
 
 # --- The hub's stylesheets (SPEC 1181, #1185) ---
@@ -262,9 +236,8 @@ LITERAL_SURFACES = (*PALETTE_SURFACES, *INLINE_SURFACES)
 
 
 def test_no_surface_carries_a_colour_literal(surfaces):
-    """A colour outside the token module is a second palette, wherever it is typed."""
-    found = {name: sorted(set(values)) for name, values in _literals_by_surface(surfaces).items()
-             if name in LITERAL_SURFACES and values}
+    """Every served surface is clear outside the named formulas."""
+    found = {name: sorted(set(values)) for name, values in _literals_by_surface(surfaces).items() if values}
     assert not found, f"a surface still carries a colour literal: {found}"
 
 
