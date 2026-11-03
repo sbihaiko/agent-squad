@@ -44,6 +44,11 @@
       "provider": "nvidia",
       "marker": "nvidia-limited",
       "quota_probe": "nvidia"
+    },
+    "ps5": {
+      "label": "PS5 on the LAN (free)",
+      "provider": "ps5",
+      "marker": null
     }
   },
   "models": [
@@ -1589,6 +1594,42 @@
         "per": "mtok"
       },
       "subscription": "nvidia"
+    },
+    {
+      "id": "ps5-qwen-coder",
+      "label": "Qwen 2.5 Coder 14B",
+      "provider": "ps5",
+      "efforts": [
+        "low"
+      ],
+      "routes": {
+        "gateway": {
+          "auth": "unverified",
+          "model": "claude-ps5-qwen-coder",
+          "served": [
+            "claude-ps5-qwen-coder"
+          ]
+        }
+      },
+      "capabilities": {
+        "tools": true,
+        "thinking_off": true,
+        "vision": false,
+        "context": 32768
+      },
+      "aliases": [
+        "claude-ps5-qwen-coder"
+      ],
+      "retired": false,
+      "gateway_only": true,
+      "display_price": {
+        "input": null,
+        "cache_read": null,
+        "output": null,
+        "currency": "USD",
+        "per": "mtok"
+      },
+      "subscription": "ps5"
     },
     {
       "id": "nemotron-super",
