@@ -33,7 +33,7 @@ options:
   verbatim_prompts: false           # true turns off @path and slash-command expansion
 
 limits:                             # every session gets all three caps (G5)
-  max_stalls: 5                      # PROVISIONAL (ADR-0012, ADR-0018): a first guess. It counts failed attempts at one step (a Bash command, a file) with the same failure each time; a changed failure or a success restarts it. Total turns are never capped: spend and the deadline bound a call
+  max_stalls: 2                      # PROVISIONAL (ADR-0012, ADR-0018): a first guess. It counts failed attempts at one step (a Bash command, a file) with the same failure each time; a changed failure or a success restarts it. Total turns are never capped: spend and the deadline bound a call. Owner ruling 2026-11-03: the floor of the range, so a retry loop over one failing step ends early
   max_budget_usd: 2.0               # includes subagent spend; checked after a response, so spend can pass it
   max_output_tokens: 32000          # per response; passed as env CLAUDE_CODE_MAX_OUTPUT_TOKENS. Probed: a longer response ends the call (error after a result); the engine records node_output_cap (docs/research/limits-probe.md)
   context_tokens: 200000            # context size; an agent cannot call /compact (a CLI built-in), so the CLI compacts at this size; passed as env CLAUDE_CODE_AUTO_COMPACT_WINDOW. Probed: it sets the window; auto-compact fires 33000 below it; values under 100000 clamp up (the checker refuses them)
