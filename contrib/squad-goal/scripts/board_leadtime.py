@@ -103,6 +103,22 @@ FIT_SHARE = 0.5                      # the cards cluster when the range they fil
 FIT_MIN_PAD = timedelta(hours=1)
 TIMEFRAME_SELECTS = "end transition"  # Timeframe keeps a card by the instant it entered the end column
 
+# A cluster ring holds its count at the size the page draws it (#1146). The count inherits the chart box's
+# --fs-body; these measure that text box, so the ring and the page agree on one size and one baseline.
+RING_TEXT_PX = 15        # --fs-body in web-tokens.css: the size the count inherits from the chart box
+AVG_GLYPH_EM = 0.6       # a digit's advance at the page's UI font, in em
+LINE_EM = 1.0            # one line's height at that size, in em
+RING_AIR_PX = 3          # air between the count's box and the ring
+RING_BASELINE_EM = 0.35  # the count's baseline below its centre, in em: the page substitutes this
+DOT_RADIUS_PX = 4.5      # a single dot's radius, the floor a ring never falls under
+
+
+def count_box_radius(count):
+    """The ring radius that holds `count`'s text box at the page body size, with air; a dot's radius is the floor."""
+    box_w = len(str(count)) * AVG_GLYPH_EM * RING_TEXT_PX
+    box_h = LINE_EM * RING_TEXT_PX
+    return max(DOT_RADIUS_PX, math.hypot(box_w, box_h) / 2 + RING_AIR_PX)
+
 
 def _stamp(moment):
     utc = moment.astimezone(UTC)
@@ -197,7 +213,6 @@ def control_chart(items, timeframe=None, log=False, now=None, start=None, end=No
             return _clamp(h / top)
         ticks = [(top * k / 5, _duration(top * k / 5), position(top * k / 5)) for k in range(6)]
 
-    banded = len(hours) > 1
     dots = []
     for row, hrs, (mean, low, high) in zip(plotted, hours, rolling, strict=True):
         closed = datetime.fromisoformat(row["c"])
@@ -220,6 +235,8 @@ def control_chart(items, timeframe=None, log=False, now=None, start=None, end=No
                 break
         else:
             clusters.append({"x": dot["x"], "y": dot["y"], "dots": [dot]})
+    for cluster in clusters:   # a lone dot keeps the plain radius; a ring is sized for the count it holds (#1146)
+        cluster["r"] = DOT_RADIUS_PX if len(cluster["dots"]) == 1 else count_box_radius(len(cluster["dots"]))
 
     def line(hrs, label):
         return None if hrs is None else {"hours": hrs, "text": _duration(hrs), "y": position(hrs), "label": label}

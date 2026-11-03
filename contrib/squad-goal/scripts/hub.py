@@ -2598,6 +2598,51 @@ def delivery():
     return out
 
 BOARD = pathlib.Path(os.environ.get("SG_BOARD_CACHE") or HUBDIR / "hub-board.json"); BOARD.parent.mkdir(parents=True, exist_ok=True)
+_PROFILE_BOARD = None   # the profile's own board cache, resolved once (#1219); "" when the seam names none
+def profile_board_cache():
+    """The board cache the profile's own environment names (#1219): SG_BOARD_CACHE when the environment sets it (hubmux
+    pins it for the live hub), else the seam's `sg_board_cache` for this hub's owner and project. A hub started before
+    that pin still finds the live cache here, without reading GitHub or another repository's state."""
+    global _PROFILE_BOARD
+    if _PROFILE_BOARD is None:
+        path = os.environ.get("SG_BOARD_CACHE")
+        if not path:
+            try:
+                p = subprocess.run(["bash", "-c", '. "$1/address.sh" 2>/dev/null; sg_board_cache "$2" "$3"', "_",
+                                    str(pathlib.Path(__file__).resolve().parent), OWNER, PROJECT_NO],
+                                   capture_output=True, text=True, timeout=30)
+                path = p.stdout.strip()
+            except (OSError, subprocess.SubprocessError):
+                path = ""
+        _PROFILE_BOARD = path or ""
+    return pathlib.Path(_PROFILE_BOARD) if _PROFILE_BOARD else None
+
+BOARD_STALE_DEFAULT = 600.0   # seconds the hub's cache may trail the profile's own before the page names it (#1219)
+_BOARD_STALE_WARNED = set()
+def board_stale_bound():
+    """SG_HUB_BOARD_STALE_SECONDS: the gap past which a hub names its board cache as stale (#1219). A value that is not a
+    non-negative number is the default, and one stderr line names it: a setting the hub ignored never passes silently."""
+    raw = os.environ.get("SG_HUB_BOARD_STALE_SECONDS")
+    if not raw: return BOARD_STALE_DEFAULT
+    try: bound = float(raw)
+    except ValueError: bound = None
+    if bound is None or bound < 0:
+        if raw not in _BOARD_STALE_WARNED:
+            _BOARD_STALE_WARNED.add(raw)
+            print(f"hub: SG_HUB_BOARD_STALE_SECONDS={raw!r} is not a non-negative number: the stale bound is "
+                  f"{BOARD_STALE_DEFAULT:g} s", file=sys.stderr)
+        return BOARD_STALE_DEFAULT
+    return bound
+def board_stale():
+    """A message when this hub reads a board cache older than the profile's own, else None (#1219). The page shows it in
+    the payload's one error key, as it shows a failed board read. Nothing to say when the two are one file, when either is
+    absent, or when the gap is inside SG_HUB_BOARD_STALE_SECONDS."""
+    own = profile_board_cache()
+    if own is None or own.resolve() == BOARD.resolve(): return None
+    try: gap = own.stat().st_mtime - BOARD.stat().st_mtime
+    except OSError: return None
+    if gap <= board_stale_bound(): return None
+    return f"board cache is stale: {BOARD} is older than the profile's own {own}"
 BOARD_READ = 2   # the version of the items read that wrote the cached rows: a cache that names another is read again (#921); version 2 carries each row's database id, the fast read's join key
 try: board_cache = json.loads(BOARD.read_text())
 except Exception: board_cache = {"t": 0, "items": [], "prs": [], "err": None}
@@ -3897,7 +3942,7 @@ def board(moves=None):
         dropped = drop_moves(agreed | set(expired))   # agreement settles an entry; the window settles one no read ever agreed with (#651)
         for item, (n, recorded, read, context) in expired.items():
             if dropped and item in dropped: report_expired(n, item, recorded, read, window, context)   # only a drop that really happened is reported, so a retry never repeats a line
-    return {"t": board_cache["t"], "err": board_cache["err"], "parts": board_cache.get("parts", {}), "prs": lane, "groups": groups, "cases": cases, "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {}), "sum": dict(board_summary(drawn), none=nospec_count(board_cache["items"], moves, window))}   # the No spec lane's bar (owner)
+    return {"t": board_cache["t"], "err": board_cache["err"] or board_stale(), "parts": board_cache.get("parts", {}), "prs": lane, "groups": groups, "cases": cases, "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {}), "sum": dict(board_summary(drawn), none=nospec_count(board_cache["items"], moves, window))}   # the No spec lane's bar (owner)
 
 def strip_instant(strip, t):
     """The strip with its time-dependent `age` and `old` replaced by `at`, the poll's own instant: an unchanged board keeps its
@@ -3911,7 +3956,7 @@ def board_served():
     """The served board body and its ETag, built once per change (#973). The key is the cache, the pending-move record and the
     overlay settings after which the board is a pure function; an error answer is never kept. Returns (body, etag or None)."""
     moves = read_moves() if overlay_on() else {}
-    key = hashlib.sha256(json.dumps([board_cache, moves, overlay_on(), pending_window()], sort_keys=True, default=str).encode()).hexdigest()
+    key = hashlib.sha256(json.dumps([board_cache, moves, overlay_on(), pending_window(), board_stale()], sort_keys=True, default=str).encode()).hexdigest()
     if _served_board.get("key") == key: return _served_board["body"], _served_board["etag"]
     try: body = json.dumps(board(moves)).encode()   # every card: the page filters the board by the bar (#899)
     except ValueError as e: return json.dumps({"error": str(e)}).encode(), None
@@ -4422,8 +4467,8 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #bbody .ah .n{background:var(--line);border-radius:9px;padding:0 8px;font-weight:400}
 #bbody .ah i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;background:var(--mute)}
 #bbody .it{margin:6px 0;padding:8px 10px 9px;border:1px solid var(--line-strong);border-top:3px solid var(--lc,var(--mute));border-radius:8px;background:var(--card);line-height:1.4;font-size:var(--fs-min);white-space:normal;overflow-wrap:anywhere;display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;transition:border-color .15s}
-#bbody .it .ft{display:flex;justify-content:flex-end;gap:6px;margin-top:6px}#bbody .age,#bbody .tsk{display:inline-block;padding:0 6px;border-radius:9px;font-size:var(--fs-min);font-variant-numeric:tabular-nums;color:var(--mute);border:1px solid var(--line)}#bbody .age.warm{color:var(--warn);border-color:var(--tint-warn-line)}#bbody .age.old{color:var(--err);border-color:var(--tint-err-line)}
-#bbody .pbg{display:inline-block;margin-left:6px;padding:0 7px;border-radius:9px;font-size:var(--fs-min);font-weight:700;border:1px solid}#bbody .pbg.conflict,#bbody .pbg.checks-red{color:var(--err);border-color:var(--tint-err-line)}#bbody .pbg.green{color:var(--ok);border-color:var(--tint-ok-line)}#bbody .pbg.approved{color:var(--ok);border-color:var(--ok);background:var(--tint-ok)}   /* the lane badge (#247) */
+#bbody .it .ft{display:flex;justify-content:flex-end;gap:6px;margin-top:6px}#bbody .age,#bbody .tsk{display:inline-block;padding:0 6px;border-radius:9px;font-size:var(--fs-min);font-variant-numeric:tabular-nums;color:var(--mute);border:1px solid var(--line)}#bbody .age.warm{color:var(--on-tint);background:color-mix(in srgb,var(--warn) var(--tint-alpha),var(--card));border-color:var(--tint-warn-line)}#bbody .age.old{color:var(--on-tint);background:color-mix(in srgb,var(--err) var(--tint-alpha),var(--card));border-color:var(--tint-err-line)}
+#bbody .pbg{display:inline-block;margin-left:6px;padding:0 7px;border-radius:9px;font-size:var(--fs-min);font-weight:700;border:1px solid}#bbody .pbg.conflict,#bbody .pbg.checks-red{color:var(--on-tint);background:color-mix(in srgb,var(--err) var(--tint-alpha),var(--card));border-color:var(--tint-err-line)}#bbody .pbg.green{color:var(--on-tint);background:color-mix(in srgb,var(--ok) var(--tint-alpha),var(--card));border-color:var(--tint-ok-line)}#bbody .pbg.approved{color:var(--ok);border-color:var(--ok);background:var(--tint-ok)}   /* the lane badge (#247) */
 #bbody .fz{display:inline-block;margin-left:6px;padding:0 6px;border-radius:9px;font-size:var(--fs-min);color:var(--warn);border:1px dashed var(--warn)}   /* the freeze marker: the card keeps its column */
 #bbody .it .pnd{display:inline-block;margin-left:6px;padding:0 6px;border-radius:9px;font-size:var(--fs-min);font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--on-tone);background:var(--warn);border:1px solid var(--warn)}   /* the proved move the board read has not carried yet (#650) */
    /* the two modes that leave the specs out of the way, or ask for them: the one that draws every card is the resting colour (#456) */
@@ -4435,8 +4480,8 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #bbody .gstrip.old{opacity:.45;filter:grayscale(1)}
 #bbody .gc{border:1px solid var(--line);border-radius:7px;padding:0 5px;white-space:nowrap;background:var(--inset)}
 #bbody .gc b{color:var(--fg);font-weight:600;margin-left:3px}
-#bbody .gc.ok b{color:var(--ok)}#bbody .gc.warn b{color:var(--warn)}#bbody .gc.bad b{color:var(--err)}
-#bbody .gc.debt b{color:var(--acc)}#bbody .gc.unk{border-color:var(--tint-warn-line)}#bbody .gc.unk b{color:var(--warn)}
+#bbody .gc.ok{background:color-mix(in srgb,var(--ok) var(--tint-alpha),var(--card))}#bbody .gc.warn{background:color-mix(in srgb,var(--warn) var(--tint-alpha),var(--card))}#bbody .gc.bad{background:color-mix(in srgb,var(--err) var(--tint-alpha),var(--card))}#bbody .gc.ok b,#bbody .gc.warn b,#bbody .gc.bad b{color:var(--on-tint)}
+#bbody .gc.debt{background:color-mix(in srgb,var(--acc) var(--tint-alpha),var(--card))}#bbody .gc.debt b{color:var(--on-tint)}#bbody .gc.unk{border-color:var(--tint-warn-line)}#bbody .gc.unk b{color:var(--warn)}
 #bbody .it:hover{border-color:var(--edge);border-top-color:var(--lc,var(--mute))}
 #bbody .it .id.ghl{padding:0 2px;opacity:.55}.it .id.ghl:hover{opacity:1;color:var(--acc)}.it .id{order:1;margin:0 0 0 auto;background:none;border:0;border-radius:0;padding:0;color:var(--mute);font-size:var(--fs-min);font-weight:400;font-variant-numeric:tabular-nums;white-space:nowrap;text-decoration:none}
 
@@ -4446,7 +4491,7 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #bbody .it .pmp{display:inline-block;margin-top:4px;font:inherit;font-size:var(--fs-min);padding:0 7px;border-radius:9px;cursor:pointer;color:var(--acc);background:var(--inset);border:1px solid var(--line)}#bbody .it .pmp:hover{border-color:var(--acc)}#bbody .it .pmp:disabled{opacity:.5;cursor:default}#bbody .bmv{display:inline-block;margin-left:8px;min-height:32px;padding:0 10px;font:inherit;font-size:var(--fs-min);border-radius:9px;cursor:pointer;color:var(--acc);background:var(--inset);border:1px solid var(--line)}#bbody .bmv:disabled{opacity:.5;cursor:default}#bbody .it .spb{display:inline-block;margin-top:4px;margin-left:6px;font:inherit;font-size:var(--fs-min);padding:0 7px;border-radius:9px;cursor:pointer;color:var(--acc);background:var(--inset);border:1px solid var(--line)}#bbody .it .spb:hover{border-color:var(--acc)}#spdlg{margin:6px 0;padding:8px 10px;border-radius:6px;border:1px solid var(--acc);background:var(--inset);font-size:var(--fs-body)}#spdlg button{margin:6px 6px 0 0;min-height:32px;padding:0 10px;font:inherit;font-size:var(--fs-min);border-radius:9px;cursor:pointer;color:var(--acc);background:var(--inset);border:1px solid var(--line)}#spnote{margin:4px 0;font-size:var(--fs-min);color:var(--ok)}   /* the owner's move, on a Backlog card only (#560) */
 #bbody .it .prr{display:block;margin-top:2px;font-size:var(--fs-min);color:var(--mute);max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #bbody .it .blk{display:block;margin-top:4px;font-size:var(--fs-min);color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}#bbody .it .blk a{color:var(--acc);text-decoration:none}
-#bbody .prs .it .cir{display:inline-block;margin-left:6px;font-size:var(--fs-min);letter-spacing:.04em;text-transform:uppercase;color:var(--cc);border:1px solid color-mix(in srgb,var(--cc) 45%,transparent);border-radius:999px;padding:0 5px;white-space:nowrap}   /* the pull request's own CI rollup (#440) */
+#bbody .prs .it .cir{display:inline-block;margin-left:6px;font-size:var(--fs-min);letter-spacing:.04em;text-transform:uppercase;color:var(--cc);border:1px solid color-mix(in srgb,var(--cc) 45%,transparent);border-radius:999px;padding:0 5px;white-space:nowrap}   /* the pull request's own CI rollup (#440) */#bbody .prs .it .cir.pass{color:var(--on-tint);background:color-mix(in srgb,var(--ok) var(--tint-alpha),var(--card));border-color:var(--tint-ok-line)}#bbody .prs .it .cir.fail{color:var(--on-tint);background:color-mix(in srgb,var(--err) var(--tint-alpha),var(--card));border-color:var(--tint-err-line)}#bbody .prs .it .cir.pending{color:var(--on-tint);background:color-mix(in srgb,var(--run) var(--tint-alpha),var(--card));border-color:var(--tint-run-line)}
 #bbody .prs .it .au{color:var(--mute);font-size:var(--fs-min)}   /* the author the pull request was opened by (#440) */
 #bbody .prs .it .clos{display:block;margin-top:2px;font-size:var(--fs-min);color:var(--mute)}#bbody .prs .it .clos a{color:var(--acc);text-decoration:none}   /* the issues the pull request closes (#440) */
 #bbody .it.m{border-style:dashed;text-align:center;background:none;box-shadow:none}
@@ -5318,7 +5363,7 @@ const ltSpan=(r,a,b)=>{const t0=Date.parse(r.start),t1=Date.parse(r.end),at=f=>n
 const LT_TF=[["1","Past 24 hours"],["2","Past 48 hours"],["3","Past 72 hours"],["7","Past week"],["14","Past 2 weeks"],["30","Past month"],["all","All"]];
 const ltP=64;   // a duration label ("17h 36m") is wider than a count, and the old margin cut every tick to its tail (#Astra review)
 const ltX=x=>ltP+x*(flowW-2*ltP),ltY=y=>flowH-ltP-y*(flowH-2*ltP);
-const ltLine=(v,col,dash)=>v?`<line x1=${ltP} x2=${flowW-ltP} y1=${ltY(v.y)} y2=${ltY(v.y)} stroke="${col}" stroke-width=2${dash?` stroke-dasharray="${dash}"`:""}><title>${esc(v.label)} ${esc(v.text)}</title></line>`+`<text x=${flowW-ltP-9} y=${ltY(v.y)-4} text-anchor=end fill="${col}" style="font-weight:600">${esc(v.label)} ${esc(v.text)}</text>`:"";
+const ltLine=(v,col,dash)=>v?`<line x1=${ltP} x2=${flowW-ltP} y1=${ltY(v.y)} y2=${ltY(v.y)} stroke="${col}" stroke-width=2${dash?` stroke-dasharray="${dash}"`:""}><title>${esc(v.label)} ${esc(v.text)}</title></line>`:"";   // the value lives in the legend, never over the newest dots (#1146)
 const ltChart=(c,cov)=>{const n=c.dots.length,base=flowH-flowP,ink="var(--ink-soft)",mute="var(--mute)";
   const grp=(name,body)=>`<span class=ltgrp><b class=ltgl>${name}</b> ${body}</span>`,backTo=LT_TF.find(([k])=>k===LT.tf)[1];
   const ctl=`<p class=fhead>`+
@@ -5337,19 +5382,19 @@ const ltChart=(c,cov)=>{const n=c.dots.length,base=flowH-flowP,ink="var(--ink-so
   if(!n)return ctl+"<p class=fnote>no closed card in this timeframe</p>";
   const up=c.dots.map(d=>`${ltX(d.x)},${ltY(d.rolling.y_high)}`),low=[...c.dots].reverse().map(d=>`${ltX(d.x)},${ltY(d.rolling.y_low)}`);
   const banded=c.dots.every(d=>d.rolling.y_high!=null);
-  const band=banded?`<polygon points="${[...up,...low].join(" ")}" fill="var(--s3)" fill-opacity=".16"><title>Standard deviation</title></polygon>`:"";
-  const roll=`<polyline fill=none stroke="var(--s3)" stroke-width=2 points="${c.dots.map(d=>`${ltX(d.x)},${ltY(d.rolling.y)}`).join(" ")}"><title>Rolling average, centered</title></polyline>`;
+  const band=banded?`<polygon points="${[...up,...low].join(" ")}" fill="var(--s3)" fill-opacity=".28"><title>Standard deviation</title></polygon>`:"";   // the band keeps its own fill, stronger (#1146)
+  const roll=`<polyline fill=none stroke="var(--acc)" stroke-width=2 points="${c.dots.map(d=>`${ltX(d.x)},${ltY(d.rolling.y)}`).join(" ")}"><title>Rolling average, centered</title></polyline>`;   // the trend keeps the accent (#1146)
   const ys=c.ticks.map(t=>`<line x1=${ltP-4} y1=${ltY(t.y)} x2=${ltP} y2=${ltY(t.y)} stroke=${mute}></line><text x=${ltP-7} y=${ltY(t.y)+4} text-anchor=end fill=${ink}>${esc(t.text)}</text>`).join("");
   const xs=c.xticks.map(t=>`<text x=${ltX(t.x)} y=${base+17} text-anchor=middle fill=${ink}>${esc(t.text)}</text>`).join("");
   const axes=`<line x1=${ltP} y1=${ltP-10} x2=${ltP} y2=${base} stroke=var(--line)></line><line x1=${ltP} y1=${base} x2=${flowW-ltP} y2=${base} stroke=var(--line)></line>`+
     `<text x=${ltP} y=${ltP-16} text-anchor=start fill=${ink}>elapsed time (${c.scale==="cube"?"cube root":c.scale})</text>`;
-  const lines=ltLine(c.average,"var(--s6)","")+ltLine(c.median,"var(--ok)","2 3")+ltLine(c.p85,"var(--s5)","5 3");
-  const dots=c.clusters.map((k,i)=>{const m=k.dots.length,title=m>1?`${m} issues`:`#${k.dots[0].n} ${esc(k.dots[0].title)}`;
-    return `<circle data-k=${i} cx=${ltX(k.x)} cy=${ltY(k.y)} r=${m>1?6:4.5} fill="${m>1?"var(--bg)":"var(--s3)"}" stroke="var(--s3)" stroke-width=2${k.dots.some(d=>d.approx||d.unknown_first)?' stroke-dasharray="3 2"':""} style="cursor:pointer"><title>${esc(title)} · ${esc(k.dots[0].text)} · flowing ${esc(k.dots[0].flowing_text)} · held ${esc(k.dots[0].held_text)} · closed ${esc(k.dots[0].closed)}${k.dots.some(d=>d.approx)?" · start approximate":""}${k.dots.some(d=>d.unknown_first)?" · first interval unknown":""}</title></circle>`+(m>1?`<text x=${ltX(k.x)} y=${ltY(k.y)+4} fill="var(--s3)" text-anchor=middle pointer-events=none>${m}</text>`:"")}).join("");
+  const lines=ltLine(c.average,"var(--s8)","")+ltLine(c.median,"var(--ok)","2 3")+ltLine(c.p85,"var(--s5)","5 3");   // the average takes the palette grey (#1146)
+  const dots=c.clusters.map((k,i)=>{const m=k.dots.length,title=m>1?`${m} issues`:`#${k.dots[0].n} ${esc(k.dots[0].title)}`;   // the hub sizes the ring for its count (#1146)
+    return `<circle data-k=${i} cx=${ltX(k.x)} cy=${ltY(k.y)} r=${k.r} fill="${m>1?"var(--bg)":"var(--ink-soft)"}" stroke="var(--ink-soft)" stroke-width=2${k.dots.some(d=>d.approx||d.unknown_first)?' stroke-dasharray="3 2"':""} style="cursor:pointer"><title>${esc(title)} · ${esc(k.dots[0].text)} · flowing ${esc(k.dots[0].flowing_text)} · held ${esc(k.dots[0].held_text)} · closed ${esc(k.dots[0].closed)}${k.dots.some(d=>d.approx)?" · start approximate":""}${k.dots.some(d=>d.unknown_first)?" · first interval unknown":""}</title></circle>`+(m>1?`<text x=${ltX(k.x)} y=${ltY(k.y)+/*RING_BASELINE*/} fill="var(--ink-soft)" text-anchor=middle pointer-events=none>${m}</text>`:"")}).join("");
   const ltV=v=>v?esc(v.text):"?",S="";   // the numbers live in the legend, each beside what it answers: one line, never two copies of the same fact
-  const legend=`<p class="flg ltlg"><span><i style="background:var(--s3)"></i>Rolling average, centered</span>${banded?`<span><i style="background:var(--s3);opacity:.3"></i>Standard deviation <em>the usual spread</em></span>`:""}<span><i style="background:var(--s6)"></i>${esc(c.average.label)} <b>${ltV(c.average)}</b> <em>one slow card lifts it</em></span><span><i style="background:var(--ok)"></i>${esc(c.median.label)} <b>${ltV(c.median)}</b> <em>half the cards closed faster</em></span><span><i style="background:var(--s5)"></i>${esc(c.p85.label)} <b>${ltV(c.p85)}</b> <em>85% of closed cards finished within this time</em></span></p>`;
+  const legend=`<p class="flg ltlg"><span><i style="background:var(--acc)"></i>Rolling average, centered</span>${banded?`<span><i style="background:var(--s3);opacity:.28"></i>Standard deviation <em>the usual spread</em></span>`:""}<span><i style="background:var(--s8)"></i>${esc(c.average.label)} <b>${ltV(c.average)}</b> <em>one slow card lifts it</em></span><span><i style="background:var(--ok)"></i>${esc(c.median.label)} <b>${ltV(c.median)}</b> <em>half the cards closed faster</em></span><span><i style="background:var(--s5)"></i>${esc(c.p85.label)} <b>${ltV(c.p85)}</b> <em>85% of closed cards finished within this time</em></span></p>`;   // each entry paints the mark it names (#1146)
   const pk=LT.pick!=null&&c.clusters[LT.pick]?c.clusters[LT.pick]:null;
-  const rows=pk?`<table class=rt><thead><tr><th>Issue</th><th>Title</th><th>Elapsed</th><th>Closed</th></tr></thead><tbody>${pk.dots.map(d=>`<tr data-o=${d.n} style="cursor:pointer"><td>#${d.n}</td><td>${esc(d.title)}</td><td>${esc(d.text)}</td><td>${esc(d.closed)}</td></tr>`).join("")}</tbody></table>`:"";
+  const rows=pk?`<table class=mtab><thead><tr><th>Issue</th><th>Title</th><th>Elapsed</th><th>Closed</th></tr></thead><tbody>${pk.dots.map(d=>`<tr data-o=${d.n} style="cursor:pointer"><td>#${d.n}</td><td>${esc(d.title)}</td><td>${esc(d.text)}</td><td>${esc(d.closed)}</td></tr>`).join("")}</tbody></table>`:"";   // the page's one table rule (#1146)
   return ctl+S+legend+`<svg data-lt viewBox="0 0 ${flowW} ${flowH}">${axes}${ys}${xs}${band}${roll}${lines}${dots}</svg>`+rows;};
 const flowLead=l=>{const S=l.summary,c=LT.zc,exc=c?Object.entries(c.excluded).map(([r,n])=>({reason:r,count:n})):l.excluded,total=c?c.excluded_total:l.excluded_total,ex=exc.map(e=>`${e.count} ${esc(EXREASON[e.reason]||e.reason)}`).join(", ");
   const head=`<p class=fhead>${esc(LT_TYPES.find(([k])=>k===l.type)[1].toLowerCase())} · <b>${esc(l.measure)}</b> · window ${l.window.size} ${esc(l.window.unit)} · <span${ex?` title="${esc(ex)}"`:""}>excluded ${total}</span></p>`;   // the reasons are a hover on the one total (#1145)
@@ -5637,6 +5682,8 @@ HID_CHIP_TOKENS = (("abandoned", "err"), ("unscheduled", "warn"), ("issue_closed
 PAGE = PAGE.replace("/*HID_CHIP_RULES*/", "\n".join('.hidbar .chip[data-col="%s"] b{color:var(--%s)}' % (COLUMN[fact], token) for fact, token in HID_CHIP_TOKENS))
 PAGE = PAGE.replace("/*BOARD_COLORS*/", BOARD_COLORS_JSON).replace("/*BOARD_FLOW*/", BOARD_FLOW_JSON).replace("/*BOARD_NAMES*/", BOARD_NAMES_JSON).replace("/*BOARD_DOING*/", BOARD_DOING_JSON).replace("/*BOARD_REVIEW*/", BOARD_REVIEW_JSON).replace("/*HUB_REPO*/", json.dumps(REPO))
 PAGE = PAGE.replace("/*RUN_STATE_CSS*/", "".join(".b.%s{color:var(--%s);%s}" % (r["state"].replace(" ", "-"), r["color"], r["css"]) for r in RUN_STATES))
+# The cluster count's baseline, from the one size the ring is measured against: the page and the hub read one constant (#1146).
+PAGE = PAGE.replace("/*RING_BASELINE*/", "%g" % (_leadtime.RING_BASELINE_EM * _leadtime.RING_TEXT_PX))
 
 
 PLANS = pathlib.Path(__file__).resolve().parent / "plans.json"
@@ -6405,9 +6452,64 @@ def _models_set(new):
 
 profiles_of_cwd = sessions.profiles_of
 
+SESSIONS_REFRESH_SECONDS = 30.0   # one read of the live sessions answers every caller until this passes (#1217)
+SESSIONS_WAIT_SECONDS = 1.0   # a cold route waits at most this for the first scan, then answers what it has
+SESSIONS_CACHE = {"at": None, "body": None}   # the last read of the live sessions, and when it landed
+_SESSIONS_LOCK = threading.Lock()   # the cache, for the instant it is read or written
+_SESSIONS_READ = threading.Lock()   # one scan of the session folders at a time
+_SESSIONS_REFRESH = {"thread": None}   # the one background scan a stale cache starts
+_SESSIONS_REFRESH_LOCK = threading.Lock()   # its check-and-start, so racing callers never start two scans
+
+def sessions_read():
+    """One read of this profile's live sessions, stored for every caller until the refresh interval passes. Only one scan
+    runs at a time, and a failed scan keeps the last answer, so no caller ever pays the folders twice (#833, #1217)."""
+    with _SESSIONS_READ:
+        with _SESSIONS_LOCK:
+            at, body = SESSIONS_CACHE["at"], SESSIONS_CACHE["body"]
+        if body is not None and at is not None and time.monotonic() - at < SESSIONS_REFRESH_SECONDS:
+            return body   # the caller that held the read lock just scanned them
+        try: body = sessions.list_sessions(PROFILE_NAME, profiles_of=profiles_of_cwd)
+        except Exception: return body   # a failed scan keeps the last answer: the next interval retries
+        with _SESSIONS_LOCK:
+            SESSIONS_CACHE.update(at=time.monotonic(), body=body)
+        return body
+
+def sessions_refresh_soon():
+    """Start the one background scan a stale cache needs: a caller takes the last answer at once, never the scan's 12 s
+    (ADR-0164, #1217). The check and the start are one step under their own lock, so racing callers start one scan."""
+    with _SESSIONS_REFRESH_LOCK:
+        t = _SESSIONS_REFRESH.get("thread")
+        if t is not None and t.is_alive(): return
+        t = _SESSIONS_REFRESH["thread"] = threading.Thread(target=sessions_read, daemon=True, name="hub-sessions-read")
+        t.start()
+
+def sessions_cached():
+    """(when it was read, the read) of this profile's live sessions, or (None, None) before the first read lands."""
+    with _SESSIONS_LOCK:
+        return SESSIONS_CACHE["at"], SESSIONS_CACHE["body"]
+
+def sessions_subject():
+    """The push stream's `sessions` subject: the cached read at once, never the scan. None until the first read lands, so
+    a cold hub sends no sessions event rather than paint an empty list; a stale cache starts its one scan (#1217)."""
+    at, body = sessions_cached()
+    if body is None or at is None or time.monotonic() - at >= SESSIONS_REFRESH_SECONDS: sessions_refresh_soon()
+    return body
+
 def sessions_payload():
-    """What /api/sessions serves: this profile's live sessions, grouped by project (#833)."""
-    return sessions.list_sessions(PROFILE_NAME, profiles_of=profiles_of_cwd)
+    """What /api/sessions serves: this profile's live sessions, grouped by project (#833), from the cached read. The
+    folders are scanned once a refresh interval, never once a tick and never once a request: one scan took 12 s on a
+    profile holding 3000 of them, and a request that paid it every time was stale before it painted (ADR-0164, #1217).
+    A cold cache waits a bounded moment for the one scan already running, then answers what it has, never the scan."""
+    at, body = sessions_cached()
+    if body is None:
+        sessions_refresh_soon()
+        deadline = time.monotonic() + SESSIONS_WAIT_SECONDS
+        while body is None and time.monotonic() < deadline:   # the first scan is the first answer, but never a 12 s wait
+            time.sleep(0.01)
+            at, body = sessions_cached()
+    elif at is None or time.monotonic() - at >= SESSIONS_REFRESH_SECONDS:
+        sessions_refresh_soon()
+    return body if body is not None else {"waiting": 0, "groups": []}   # a failed first scan answers no sessions, never null
 
 def conversation_payload(query):
     """What /api/sessions/conversation serves: one page of a live session of this profile, None when it is not one (#840). The
@@ -6550,7 +6652,9 @@ def with_overlay(body, dash=False):
     i = body.rfind(b"</body>")
     return body[:i] + tag + body[i:] if i >= 0 else body + tag
 
-MOBILE_CSP = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self'"
+# The phone's content-security line (#1155): `blob:` admits the one preview a picked photo draws, a URL the page itself
+# holds; the page loads no image from another origin.
+MOBILE_CSP = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' blob:"
 
 GESTURE_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-gesture.js").read_text()
 MOVE_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-move.js").read_text()
@@ -6566,7 +6670,112 @@ INST_CSS = re.search(r"^/\* INST-CSS\{ \*/$.*?^/\* \}INST-CSS \*/$", PAGE, re.M 
 INST_JS = "\n".join([re.search(r"^const LOAD_ERR=.*$", PAGE, re.M).group(0),
                      *re.findall(r"^function ld(?:Num|Round|Cell|Cells)\(.*$", PAGE, re.M),
                      re.search(r"^// INST\{.*?^// \}INST$", PAGE, re.M | re.S).group(0)]).replace("__LOADERR__", str(LOAD_ERR_PCT)).replace("__REPO__", REPO)
-MOBILE_PAGE = (pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text().replace("<!--OVERLAY-->", overlay_tag(OVERLAY_HUB)).replace("<!--INST_CARD-->", INST_CARD).replace("/*INST_CSS*/", INST_CSS).replace("/*INST_JS*/", INST_JS).replace("/*SWITCHER_JS*/", SWITCHER_JS).replace("/*GESTURE*/", GESTURE_JS).replace("/*MOVE*/", MOVE_JS).replace("/*QUESTION*/", QUESTION_JS).replace("/*RUN*/", RUN_JS).replace("/*BOARD_FILTER*/", BOARD_FILTER_JS).replace("/*WEB_TOKENS*/", WEB_TOKENS).replace("/*CARD_RULES*/", CARD_RULES_JS)
+
+# The phone's one photo (#1155): the composer's image input, its chip and its send. The input accepts images and names
+# no capture, so the picker offers the camera and the library; the chip previews a blob the page owns; the send takes the
+# overlay's one attach route with the words in the same message. The page's own text send and 4000-character cap stay.
+MOBILE_PHOTO_CSS = """
+#termview-row{display:flex;align-items:center;gap:8px}
+#termview-photo{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 12px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;cursor:pointer}
+/* The one image input (#1155) sits out of the flow, so its label opens the picker with the camera and the library. */
+#termview-file{position:absolute;width:1px;padding:0;border:0;overflow:hidden;clip-path:inset(50%)}
+#termview-attach{display:flex;align-items:center;gap:8px}
+#termview-attach[hidden]{display:none}
+#termview-attach img{flex:none;width:44px;height:44px;object-fit:cover;background:var(--input);border:1px solid var(--line);border-radius:6px}
+#termview-attach-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg)}
+#termview-attach-x{flex:none;min-width:44px;min-height:44px;padding:0;background:none;color:var(--mute);border:0;font:20px/1 system-ui}
+"""
+MOBILE_PHOTO_MARKUP = (f"<style>{MOBILE_PHOTO_CSS}</style>\n"
+                       '<div id="termview-attach" role="group" aria-label="Photo" hidden><img id="termview-attach-img" alt="">'
+                       '<span id="termview-attach-name"></span><button id="termview-attach-x" type="button" '
+                       'aria-label="Remove the photo" title="Remove the photo">×</button></div>\n')
+MOBILE_PHOTO_ROW = ('<div id="termview-row"><label id="termview-photo" for="termview-file">Photo</label>'
+                    '<input id="termview-file" type="file" accept="image/*" aria-label="Take or choose a photo">'
+                    '<button id="termview-send" type="button">Send</button></div>')
+MOBILE_TEXTAREA = '<textarea id="termview-text" maxlength="4000" rows="3" aria-label="Message to this session"></textarea>'
+MOBILE_SEND = '<button id="termview-send" type="button">Send</button>'
+MOBILE_PHOTO_JS = """
+// The phone's photo composer (#1155): one image input offers the camera and the library, one chip previews the picked
+// image from a blob this page owns, and the send takes the overlay's one attach route with the words in the same
+// message. A plain message keeps the page's own send (#834), and the text cap stays the textarea's 4000 characters.
+const PHOTO_TEXT_CAP = 4000;   // the phone's one text cap (#1006): a bigger text file is a file, not a message
+function photoDraft(sid) { const d = sid ? termDraft(sid) : null; if (d && d.photo === undefined) d.photo = null; return d; }
+// The chip belongs to the open session, so every paint names its session and leaves the DOM alone once another is open.
+function photoPaint(sid) {
+  if (sid !== termSid) return;
+  const d = photoDraft(sid), p = d && d.photo;
+  $("termview-attach").hidden = !p;
+  if (!p) { $("termview-attach-img").removeAttribute("src"); $("termview-attach-img").alt = ""; $("termview-attach-name").textContent = ""; return; }
+  $("termview-attach-img").src = p.url; $("termview-attach-img").alt = p.name;
+  $("termview-attach-name").textContent = p.ready ? p.name : "Reading " + p.name + "…";
+}
+function photoSync(sid) {
+  if (sid !== termSid) return;
+  const d = photoDraft(sid);
+  $("termview-send").disabled = !d || d.pending || !!(d.photo && !d.photo.ready);
+}
+function photoClear(sid) {
+  const d = photoDraft(sid);
+  if (d && d.photo) { if (d.photo.url) URL.revokeObjectURL(d.photo.url); d.photo = null; }
+  photoPaint(sid); photoSync(sid);
+}
+function photoSay(sid, msg) { const d = photoDraft(sid); if (!d) return; d.sent = msg; if (sid === termSid) $("termview-sent").textContent = msg; }
+async function photoStage(file) {
+  const sid = termSid, d = photoDraft(sid);
+  if (!file || !d) return;   // the composer takes one image, and only for the open session
+  photoClear(sid);           // one photo per message: a second pick replaces the first
+  const p = { name: String(file.name || "photo"), url: URL.createObjectURL(file), bytes: null, ready: false };
+  d.photo = p; photoPaint(sid); photoSync(sid);
+  let bytes = null;
+  try { bytes = await file.arrayBuffer(); } catch (e) { bytes = null; }
+  if (d.photo !== p) return;   // removed or replaced while it was read
+  if (!bytes) { photoSay(sid, "No photo: the file could not be read."); photoClear(sid); return; }
+  p.bytes = bytes; p.ready = true; photoPaint(sid); photoSync(sid);
+}
+$("termview-file").addEventListener("change", e => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = "";   // the same photo picked again is a new change
+  if (file) photoStage(file);
+});
+$("termview-attach-x").onclick = () => { if (termSid) photoClear(termSid); };
+// Every draft switch paints the open session's own chip, and the send waits while a read is in flight.
+const photoShowDraft = showDraft;
+showDraft = () => { photoShowDraft(); photoPaint(termSid); photoSync(termSid); };
+// A photo's send takes the overlay's one attach route (#1154), so the phone adds no second upload path (#1155). The
+// words ride in the same message under one client id, and the hub keeps the send's cap on the whole message.
+const photoSendText = $("termview-send").onclick;
+$("termview-send").onclick = async () => {
+  const sid = termSid, d = photoDraft(sid), photo = d && d.photo && d.photo.ready ? d.photo : null;
+  if (!photo) return photoSendText();
+  if (d.pending) return;
+  const text = $("termview-text").value.trim().slice(0, PHOTO_TEXT_CAP);
+  if (d.cidText !== text || d.cidPhoto !== photo) { d.cid = crypto.randomUUID(); d.cidText = text; d.cidPhoto = photo; }
+  d.pending = true; if (sid === termSid) photoSync(sid);
+  photoSay(sid, "Sending");
+  try {
+    const q = "kind=image&sid=" + encodeURIComponent(sid) + "&client_id=" + encodeURIComponent(d.cid) + "&text=" + encodeURIComponent(text);
+    const r = await fetch("/api/sessions/attach?" + q, { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: photo.bytes });
+    if (!r.ok) throw new Error("Not sent: the hub refused the request.");
+    const res = await r.json();
+    const word = { sent: "Sent: the session's inbox accepted the message and the photo", uncertain: "Uncertain: the send was interrupted", refused: "Refused: the send failed" }[res.status] || "Uncertain: the send was interrupted";
+    photoSay(sid, word + (res.reason ? " (" + res.reason + ")" : ""));
+    if (res.status === "sent" || res.status === "refused") { d.cid = null; d.cidText = null; d.cidPhoto = null; }
+    // A sent photo is answered and leaves. An uncertain send or a failed request is no answer, so the photo stays with
+    // its request id and the retry repeats the same message the hub answers once.
+    if (res.status === "sent") { d.text = ""; if (sid === termSid) $("termview-text").value = ""; photoClear(sid); }
+  } catch (err) { photoSay(sid, err.message); }
+  finally { d.pending = false; if (sid === termSid) photoSync(sid); }
+};
+"""
+
+def mobile_photo(page):
+    """The served phone page with the one photo composer (#1155): the chip before the textarea, the label and the input
+    beside Send, and the script at the end of the terminals block, where the page's own send is already assigned."""
+    return (page.replace(MOBILE_TEXTAREA, MOBILE_PHOTO_MARKUP + MOBILE_TEXTAREA)
+                .replace(MOBILE_SEND, MOBILE_PHOTO_ROW)
+                .replace("// terminals:end", MOBILE_PHOTO_JS + "// terminals:end"))
+
+MOBILE_PAGE = mobile_photo((pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text().replace("<!--OVERLAY-->", overlay_tag(OVERLAY_HUB)).replace("<!--INST_CARD-->", INST_CARD).replace("/*INST_CSS*/", INST_CSS).replace("/*INST_JS*/", INST_JS).replace("/*SWITCHER_JS*/", SWITCHER_JS).replace("/*GESTURE*/", GESTURE_JS).replace("/*MOVE*/", MOVE_JS).replace("/*QUESTION*/", QUESTION_JS).replace("/*RUN*/", RUN_JS).replace("/*BOARD_FILTER*/", BOARD_FILTER_JS).replace("/*WEB_TOKENS*/", WEB_TOKENS).replace("/*CARD_RULES*/", CARD_RULES_JS))
 MOBILE_SHELL = ["/mobile/", "/mobile/manifest.webmanifest", "/mobile/icon.svg"]
 SW_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-sw.js").read_text().replace("/*SHELL*/[]", json.dumps(MOBILE_SHELL))
 MANIFEST_JSON = json.dumps({"id": "/mobile/", "name": f"Squad hub {REPO}", "short_name": "Hub", "start_url": "/mobile/", "scope": "/mobile/", "display": "standalone", "background_color": "var(--bg)", "theme_color": "var(--bg)", "icons": [{"src": "/mobile/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}]}).encode()
@@ -6757,27 +6966,42 @@ def request_target(h):
     return parts[1] if len(parts) > 1 and parts[1].startswith("//") else h.path
 
 CHART_INPUTS = {"cfd": lambda: history_key(), "lead": lambda: (board_cache.get("t"), history_key())}
-VERSIONS = hubstream.Versions({"runs": lambda: run_list(), "board": lambda: json.loads(board_served()[0]), "sessions": lambda: sessions_payload(), **CHART_INPUTS})
+VERSIONS = hubstream.Versions({"runs": lambda: run_list(), "board": lambda: json.loads(board_served()[0]), "sessions": lambda: sessions_subject(), **CHART_INPUTS})
 TRANSCRIPTS = hubstream.Transcripts(lambda sid: sessions.conversation(PROFILE_NAME, sid, None, profiles_of=profiles_of_cwd))
 
 _TICKERS = {}
+_TICKERS_LOCK = threading.Lock()   # the reader threads are started once, however many pages ask (#1217)
+
+def _ticker(name):
+    """One subject's reader thread, alive or started here. The caller holds _TICKERS_LOCK, so two pages opening together
+    find one reader and never start two reads of the same subject."""
+    t = _TICKERS.get(name)
+    if t is not None and t.is_alive(): return t
+    def run(n=name):
+        while True:
+            try: VERSIONS.refresh_one(n)   # read at once, so a page that just opened is never a tick behind
+            except Exception: pass   # a failed read keeps the last version: the next tick retries and the panel never dies
+            # a subject with no answer yet is asked again quickly: its first read may land mid-tick, and the page waits
+            time.sleep(hubstream.TICK_SECONDS if VERSIONS.newer({}).get(n) else hubstream.FIRST_POLL_SECONDS)
+    t = _TICKERS[name] = threading.Thread(target=run, daemon=True, name=f"hub-subject-{name}")
+    t.start()
+    return t
+
 def versions_ticker():
     """One thread per subject reads it; a stream only sends what changed.
 
     A read of the `sessions` subject took 12 s on a machine holding 3000 session folders, and a stream that did that read
     itself sent neither an event nor a heartbeat for 12 s: the page looked frozen (ADR-0164, the owner's hub). One thread
-    per subject keeps a slow read from delaying the others."""
-    for name in list(VERSIONS._subjects):
-        t = _TICKERS.get(name)
-        if t is not None and t.is_alive(): continue
-        def run(n=name):
-            while True:
-                try: VERSIONS.refresh_one(n)   # read at once, so a page that just opened is never a tick behind
-                except Exception: pass   # a failed read keeps the last version: the next tick retries and the panel never dies
-                time.sleep(hubstream.TICK_SECONDS)
-        _TICKERS[name] = threading.Thread(target=run, daemon=True, name=f"hub-subject-{name}")
-        _TICKERS[name].start()
-    return _TICKERS
+    per subject keeps a slow read from delaying the others, and a stream never reads a subject in its own thread."""
+    with _TICKERS_LOCK:
+        for name in VERSIONS.names(): _ticker(name)
+        return dict(_TICKERS)
+
+def warm():
+    """Start the hub's slowest reader with the hub, before it serves a page: the session folders cost seconds, and a page
+    opened after a start finds that scan already running. The other subjects read in well under a tick, so the first
+    stream starts them, never a page's wait (#1217)."""
+    with _TICKERS_LOCK: _ticker("sessions")
 
 def stream_origin_ok(h, tailnet):
     """A stream opens for no origin but this hub's own (loopback) or, on the tailnet, the tailnet's; an absent Origin is a non-browser reader."""
@@ -6840,7 +7064,7 @@ class H(BaseHTTPRequestHandler):
             self.close_connection = True
             def chunk(data):
                 self.wfile.write(b"%x\r\n" % len(data) + data + b"\r\n")
-            quiet = time.monotonic()
+            opened, quiet, painted = time.monotonic(), time.monotonic(), False
             while True:
                 tick = hubstream.tick()
                 versions_ticker()
@@ -6853,10 +7077,12 @@ class H(BaseHTTPRequestHandler):
                     for name, obj in events: chunk(hubstream.frame(name, obj)); sent = True
                     at[sid] = (epoch, offset)
                 now = time.monotonic()
-                if sent: quiet = now
+                if sent: quiet, painted = now, True
                 elif now - quiet >= hubstream.HEARTBEAT_SECONDS:
                     chunk(hubstream.frame("ping", {})); quiet = now
-                time.sleep(hubstream.TICK_SECONDS if held else 0.02)   # the first event is drawn at once: the readers publish within a tick
+                # a page not painted yet takes the first reader that answers, never the end of a whole tick
+                fast = not painted and now - opened < hubstream.FIRST_EVENT_SECONDS
+                time.sleep(hubstream.FIRST_POLL_SECONDS if fast else hubstream.TICK_SECONDS)
         except OSError: return
         finally:
             for sid in watched: TRANSCRIPTS.unwatch(sid)
@@ -7100,5 +7326,6 @@ def watch_self():
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 7700
     refresh_runs()
+    warm()   # the sessions read costs seconds on a large profile, so it starts with the hub, never with the first page (#1217)
     threading.Thread(target=start_terminal_supervisor, daemon=True).start(); threading.Thread(target=refresh_prs, daemon=True).start(); threading.Thread(target=refresh_quota, daemon=True).start(); threading.Thread(target=watch_self, daemon=True).start(); threading.Thread(target=refresh_board, daemon=True).start(); threading.Thread(target=refresh_history, daemon=True).start(); threading.Thread(target=refresh_fast, daemon=True).start();threading.Thread(target=load_sampler, daemon=True).start(); threading.Thread(target=watch_runs, daemon=True).start()
     ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()

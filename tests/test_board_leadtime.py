@@ -423,3 +423,26 @@ def test_a_fit_range_labels_its_axis_in_hours(lt):
     zoomed = _chart(lt, items, start=datetime.fromisoformat(fit["start"]), end=datetime.fromisoformat(fit["end"]))
 
     assert [tick["text"] for tick in zoomed["xticks"]] == ["18:00", "18:40", "19:20", "20:00", "20:40", "21:20", "22:00"]
+
+
+# SPEC 1116 #1146: a cluster ring is sized for the count it holds at the page body size.
+def test_a_single_dot_keeps_the_plain_dot_radius(lt):
+    clusters = _chart(lt, [_closed(1, 5, days_ago=2)])["clusters"]
+
+    assert [c["r"] for c in clusters] == [lt.DOT_RADIUS_PX], "a lone dot takes no ring"
+
+
+def test_a_cluster_serves_the_radius_that_holds_its_count(lt):
+    items = [_closed(n, 5, days_ago=2) for n in range(1, 13)]
+
+    clusters = _chart(lt, items)["clusters"]
+
+    assert len(clusters) == 1 and len(clusters[0]["dots"]) == 12
+    radius = clusters[0]["r"]
+    box_w, box_h = len("12") * lt.AVG_GLYPH_EM * lt.RING_TEXT_PX, lt.LINE_EM * lt.RING_TEXT_PX
+    assert 2 * radius >= math.hypot(box_w, box_h), f"the ring {radius} does not hold its count's box"
+    assert radius > lt.DOT_RADIUS_PX
+
+
+def test_the_ring_radius_grows_with_its_count(lt):
+    assert lt.count_box_radius(9) < lt.count_box_radius(99) < lt.count_box_radius(999)

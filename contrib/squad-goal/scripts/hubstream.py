@@ -21,6 +21,8 @@ PATH = "/api/stream"
 CTYPE = "text/event-stream; charset=utf-8"
 HEARTBEAT_SECONDS = 15.0    # a quiet stream writes this often, so a peer that left is found
 TICK_SECONDS = 1.0          # how often the subjects are read
+FIRST_POLL_SECONDS = 0.02   # how often a page that holds nothing looks for its first event
+FIRST_EVENT_SECONDS = 1.0   # how long it looks that fast: a reader publishes the first event well within this
 WINDOW_BYTES = 1 << 20      # the bytes a conversation window keeps; an older offset is a gap
 WINDOWS_KEPT = 8            # the conversation windows held at once; an unwatched one is let go first
 SID_RE = re.compile(r"[A-Za-z0-9-]{1,64}")
@@ -52,20 +54,25 @@ class Versions:
         self._read_at = None
         self._lock = threading.Lock()
 
+    def names(self):
+        return list(self._subjects)
+
     def refresh(self, tick=None):
-        """Read every subject, then publish what changed. A read holds no lock: one of them took 12 s on the owner's
-        machine, and a stream that waited for it sent nothing for that long."""
+        """Every subject in turn, in the calling thread: a test seam, never the stream. A stream sends what its readers
+        already hold, so one slow read cannot hold a page's first event."""
         if tick is not None:
             with self._lock:
                 if tick == self._read_at: return
                 self._read_at = tick
-        for name in list(self._subjects):
+        for name in self.names():
             self.refresh_one(name)
 
     def refresh_one(self, name):
-        """Read one subject and publish it if it changed. Each subject has its own reader, so a 12 s read of `sessions`
-        never delays the `runs` event the page is waiting on."""
+        """Read one subject outside the lock and publish it when its content changed. Each subject has its own reader, so
+        a slow read of `sessions` never delays the `runs` event the page is waiting on. A read that answers None has no
+        answer yet and publishes nothing, so a cold subject never paints an empty value."""
         content = self._subjects[name]()
+        if content is None: return
         digest = hashlib.sha1(json.dumps(content, sort_keys=True, default=str).encode()).hexdigest()
         with self._lock:
             if name not in self._version or digest != self._digest[name]:

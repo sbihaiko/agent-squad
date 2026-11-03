@@ -174,6 +174,7 @@ def test_a_slow_subject_read_never_holds_the_heartbeat(on, monkeypatch):
     """
     hubstream = _hubstream()
     monkeypatch.setattr(hubstream, "HEARTBEAT_SECONDS", 0.3)
+    monkeypatch.setattr(hubstream, "TICK_SECONDS", 0.2)   # the heartbeat is checked once a tick: a fast tick keeps the test fast
     monkeypatch.setitem(on["mod"].VERSIONS._subjects, "sessions", lambda: time.sleep(5) or [])
     s = _open(on["port"], "/alpha/api/stream")
     started = time.monotonic()
@@ -217,6 +218,107 @@ def test_one_read_per_subject_per_tick_whatever_the_pages():
     assert len(reads) == 1
     v.refresh(tick=8)
     assert len(reads) == 2
+
+
+def _fresh_hub(tmp_path, monkeypatch):
+    """A hub.py of its own: its own versions, cache and readers, so a cache test never races a ticker another test started."""
+    for k, v in (("SG_REPO", "x/alpha"), ("SG_OWNER", "x"), ("SG_PROJECT", "4"), ("SG_PROFILE", "alpha"),
+                 ("SG_CHECKOUT", str(tmp_path / "co")), ("SG_STATE", str(tmp_path / "state")),
+                 ("SG_HUB_DIR", str(tmp_path / "hub")), ("HOME", str(tmp_path / "home"))):
+        monkeypatch.setenv(k, v)
+    (tmp_path / "home").mkdir(exist_ok=True)
+    spec = importlib.util.spec_from_file_location(f"hub_cache_{tmp_path.name}", SCRIPTS / "hub.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+SCANNED = {"waiting": 1, "groups": [{"project": "p", "sessions": []}]}
+
+
+def test_the_sessions_route_pays_the_scan_once_an_interval(tmp_path, monkeypatch):
+    """The folders are scanned once a refresh interval, never once a request: the cold read is the first answer, and
+    every request inside the interval answers it at once (ADR-0164, #1217)."""
+    mod = _fresh_hub(tmp_path, monkeypatch)
+    reads = []
+
+    def slow(*a, **k):
+        reads.append(time.monotonic())
+        time.sleep(0.2)   # a scan of every session folder is slow: it took 12 s on the live profile
+        return SCANNED
+
+    monkeypatch.setattr(mod.sessions, "list_sessions", slow)
+    monkeypatch.setattr(mod, "SESSIONS_REFRESH_SECONDS", 30.0)
+    assert mod.sessions_payload() == SCANNED, "the one scan is the first answer"
+    started = time.monotonic()
+    for _ in range(5):   # five requests inside the interval
+        assert mod.sessions_payload() == SCANNED
+    assert time.monotonic() - started < 0.1, "a warm cache answers at once, never the scan"
+    assert len(reads) == 1, "the refresh interval holds: one scan answers every request of it"
+
+
+def test_the_sessions_subject_is_read_once_an_interval_not_once_a_tick(tmp_path, monkeypatch):
+    """The stream's sessions subject is answered from the same cached read: five ticks pay one scan of the folders, and a
+    subject with no answer yet publishes nothing, so a cold page never waits for one (#1217)."""
+    mod = _fresh_hub(tmp_path, monkeypatch)
+    reads = []
+
+    def slow(*a, **k):
+        reads.append(1)
+        time.sleep(0.3)
+        return SCANNED
+
+    monkeypatch.setattr(mod.sessions, "list_sessions", slow)
+    monkeypatch.setattr(mod, "SESSIONS_REFRESH_SECONDS", 30.0)
+    versions = _hubstream().Versions({"sessions": mod.sessions_subject})
+    for _ in range(5):   # five ticks of the sessions subject's own reader
+        versions.refresh_one("sessions")
+        time.sleep(0.02)
+    assert versions.newer({}) == {}, "a subject with no answer yet publishes no version"
+    deadline = time.monotonic() + 2.0
+    while "sessions" not in versions.newer({}) and time.monotonic() < deadline:   # the one scan lands and publishes
+        time.sleep(0.01)
+        versions.refresh_one("sessions")
+    assert versions.newer({}).get("sessions"), "the first read reaches the page"
+    assert len(reads) == 1, "five ticks pay one scan of the session folders, not five"
+
+
+def test_a_subject_with_no_answer_yet_publishes_nothing():
+    hubstream = _hubstream()
+    v = hubstream.Versions({"sessions": lambda: None})
+    v.refresh_one("sessions")
+    assert v.newer({}) == {}, "None is no answer yet, never a version the page paints"
+
+
+def test_the_stream_never_reads_a_subject_in_its_own_thread(on, monkeypatch):
+    """A stream sends only what its readers already hold: a subject read inside the stream's thread holds the page's
+    first event for the whole read, 12 s for the session folders (ADR-0164, #1217)."""
+    read = []
+    monkeypatch.setattr(_hubstream().Versions, "refresh", lambda *a, **k: read.append(1))
+    s = _open(on["port"], "/alpha/api/stream")
+    buf = _read_until(s, b"event: ", budget=2.0)
+    s.close()
+    assert b"event: " in buf and not read, "the stream read the subjects itself instead of its readers"
+
+
+def test_a_slow_sessions_read_never_delays_the_streams_first_event(on, monkeypatch):
+    """A profile whose sessions read takes seconds still paints at once: the stream sends from the versions its readers
+    hold, and no request pays the scan of the session folders (ADR-0164, #1217)."""
+    mod = on["mod"]
+
+    def slow(*a, **k):
+        time.sleep(3.0)
+        return {"waiting": 0, "groups": []}
+
+    monkeypatch.setattr(mod.sessions, "list_sessions", slow)
+    if hasattr(mod, "SESSIONS_CACHE"):
+        mod.SESSIONS_CACHE.update(at=None, body=None)   # a cold cache: the stream must not wait for the scan
+    opened = time.monotonic()
+    s = _open(on["port"], "/alpha/api/stream")
+    buf = _read_until(s, b"event: ", budget=1.0)
+    waited = time.monotonic() - opened
+    s.close()
+    assert b"event: " in buf, f"no event within one second: the stream waited {waited:.2f} s"
 
 
 def _turn(uid, text, k=None):
@@ -359,7 +461,7 @@ def _page_of(port, sid):
 def test_a_board_and_a_session_list_are_pushed_with_their_payload(on, monkeypatch):
     mod = on["mod"]
     monkeypatch.setattr(mod, "board_served", lambda: (json.dumps({"groups": [{"name": "Backlog", "items": []}]}).encode(), None))
-    monkeypatch.setattr(mod, "sessions_payload", lambda: {"groups": [{"project": "p", "sessions": [{"sid": SID}]}]})
+    monkeypatch.setattr(mod, "sessions_subject", lambda: {"groups": [{"project": "p", "sessions": [{"sid": SID}]}]})
     mod.VERSIONS.refresh()   # the stream reads a subject once a tick; the patched readers take this read
     s = _open(on["port"], "/alpha/api/stream?want=board,sessions")
     buf = _read_until(s, b"event: sessions")
@@ -420,7 +522,7 @@ def test_a_reconnect_from_a_dropped_offset_gets_the_window_start_and_a_named_gap
 def test_a_subject_no_reader_names_is_pushed_with_its_version_only(on, monkeypatch):
     mod = on["mod"]
     monkeypatch.setattr(mod, "board_served", lambda: (json.dumps({"groups": []}).encode(), None))
-    monkeypatch.setattr(mod, "sessions_payload", lambda: {"groups": []})
+    monkeypatch.setattr(mod, "sessions_subject", lambda: {"groups": []})
     mod.VERSIONS.refresh()
     s = _open(on["port"], "/alpha/api/stream")
     buf = _read_until(s, b"event: sessions")
