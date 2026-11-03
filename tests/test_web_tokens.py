@@ -759,12 +759,14 @@ def test_motion_tokens_and_one_reduced_motion_block_cover_every_surface(surfaces
     for uncovered in (".sub .qw .fl", "#bbody .it", "li"):
         assert uncovered in body, f"reduced motion misses the newly covered transition {uncovered}"
     for name, html in surfaces.items():
-        css = _strip_comments(_served_css(html))
-        token = TOKENS_FILE.read_text().strip()
-        served = _served_css(html)
+        served = _strip_comments(_served_css(html))
+        css = served
+        # The needle is the declarations, never the comments: a surface carries its own comment head (the dashboard's
+        # page opens on its own note), and a comment difference says nothing about the tokens served.
+        token = _strip_comments(TOKENS_FILE.read_text()).strip()
         assert token in served, f"{name}: the shared token module is not served"
         token_end = served.index(token) + len(token)
-        local_css = _strip_comments(served[token_end:])
+        local_css = served[token_end:]
         reduced_selectors = set(re.findall(r"([^{}]+)\{[^{}]*(?:transition|animation)[^{}]*\}", body))
         for selector, declarations in _blocks(local_css):
             if re.search(r"(?:animation(?:-[\w-]+)?|transition(?:-[\w-]+)?)\s*:", declarations):
