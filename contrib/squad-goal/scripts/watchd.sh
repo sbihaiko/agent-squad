@@ -14,17 +14,15 @@ record_sha() { k=$(dirname "$(dirname "$me")"); ds=$(cut -d' ' -f1 "$k/PUBLISHED
   if [ -n "$ds" ]; then printf '%s\n' "$ds" > "$SG_STATE/driver.sha.$$" && mv "$SG_STATE/driver.sha.$$" "$SG_STATE/driver.sha"; else rm -f "$SG_STATE/driver.sha"; fi; }
 # The live work a drain waits for: a run in active-runs.txt that still runs, or a gate whose lock pid is alive (#923).
 drain_busy() {
-  local r f g p
-  while IFS= read -r r; do
-    [ -n "$r" ] || continue
-    case "$r" in /*) f="$r/record.jsonl";; *) f="$SG_CHECKOUT/runs/$r/record.jsonl";; esac
-    grep -Eq '"event": ?"verdict"' "$f" 2>/dev/null && continue
-    # The hub's rule (loop_run_live): live while the last call_start pid runs as a squad run, or, before the first call, while
-    # the record moved within the launch window. A run that died with no verdict never holds the drain.
-    p=$(grep -E '"event": ?"call_start"' "$f" 2>/dev/null | tail -1 | sed -nE 's/.*"pid": ?([0-9]+).*/\1/p')
-    if [ -n "$p" ]; then /bin/ps -p "$p" -ww -o command= 2>/dev/null | grep -qE "${SG_RUN_CMD_RE:-[s]quad start( |\$)}" && return 0
-    else [ -n "$(find "$f" -mmin -"${HB_DEAD_IDLE_MIN:-1}" 2>/dev/null)" ] && return 0; fi
-  done < "$SG_STATE/active-runs.txt" 2>/dev/null
+  local g v
+  # A live run is the hub's one rule (hub.py loop_live, loop_run_live): only the events after a record's last run_start or
+  # resume count (ADR-0167), so a verdict there is final and a verdict before it is history; the run's pid is the last
+  # call_start or gate_start of that invocation, live as a squad run; before its first call, the record moved within the
+  # launch window. A run that died with no verdict never holds the drain (#1228). A reader that fails holds the drain and
+  # says so in the watch log: a drain that waits is safe, and one that stops under a live run is not.
+  [ -s "$SG_STATE/active-runs.txt" ] && {
+    v=$(python3 -c 'import importlib.util as u,sys; s=u.spec_from_file_location("hub",sys.argv[1]); h=u.module_from_spec(s); s.loader.exec_module(h); print("live" if h.loop_live()["runs"] else "idle")' "$(dirname "$me")/hub.py" 2>&1 | tail -1)
+    [ "$v" = idle ] || { [ "$v" = live ] || printf '%s drain: the run reader failed, the drain waits: %s\n' "$(date '+%F %T')" "$v" >> "$L"; return 0; }; }
   g=$(cat "$SG_STATE/locks/gate/pid" 2>/dev/null)
   [ -n "$g" ] && kill -0 "$g" 2>/dev/null && [ "$(/bin/ps -o stat= -p "$g" 2>/dev/null | cut -c1)" != Z ] && return 0
   return 1
