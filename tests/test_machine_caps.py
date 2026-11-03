@@ -770,3 +770,43 @@ def test_a_holder_with_a_live_lease_is_not_named(tmp_path):
     reap_run(tmp_path, "run-leased", "start", "ceiling_wait", record_age=400)
     assert c.try_take("children", "run-leased:child-1", pid=os.getpid())
     assert stale_slots(tmp_path, c) == []
+
+
+# ---- #1270 (review): the holder the pass names is never a run whose named engine lives ----
+def test_a_holder_whose_named_engine_is_alive_is_never_printed(tmp_path):
+    """`--slots` read a run whose record names a live engine as "no live process" when the engine's cwd sat outside the run
+    folder. The named pid is the run's own process: while it lives (same_process), the run is not named."""
+    c = caps.Ceiling({**FOUR, "runs": 1}, tmp_path / "leases")
+    reap_run(tmp_path, "run-named", "start", (os.getpid(), time.time()), record_age=400)
+    assert stale_slots(tmp_path, c, procs=[]) == []
+
+
+def test_a_holder_whose_named_engine_is_dead_is_still_named(tmp_path):
+    c = caps.Ceiling({**FOUR, "runs": 1}, tmp_path / "leases")
+    reap_run(tmp_path, "run-gone", "start", (dead_pid(), time.time() - 7200), record_age=400)
+    assert [name for name, _ in stale_slots(tmp_path, c, procs=[])] == ["run-gone"]
+
+
+def test_a_dashboard_server_in_the_folder_is_no_live_process_for_the_pass(tmp_path):
+    """LIVE_PROC reads the engine, a gate and a session. `python3 -m squad.dashboard_server` is none of them, so a dashboard
+    left inside an idle pid-less run does not keep the run alive, and the reap gives it the killed verdict."""
+    from squad import reap
+    c = caps.Ceiling(FOUR, tmp_path / "leases")
+    run = reap_run(tmp_path, "run-dash", "start", "ceiling_wait", record_age=400)
+    dash = [(os.getpid(), str(run), "python3 -c import time -m squad.dashboard_server " + str(run) + " --idle 7200")]
+    assert reap.LIVE_PROC.search(dash[0][2]) is None
+    assert reap_pass(tmp_path, c, dash) == ["run-dash"]
+
+
+def test_a_squad_start_engine_in_the_folder_is_a_live_process(tmp_path):
+    from squad import reap
+    cmd = "/Users/x/agent-squad/.venv/bin/python3 /Users/x/agent-squad/.venv/bin/squad start --workflow default"
+    assert reap.LIVE_PROC.search(cmd)
+
+
+def test_the_janitor_zombie_and_fix_run_rules_read_the_same_live_pattern_as_reap():
+    """The janitor runs as a bare script (no `squad` package beside it), so it carries the pattern as a copy. A copy that
+    drifts from squad/reap.py LIVE_PROC would read a process one way in the health pass and another in the janitor."""
+    from squad import reap
+    src = (Path(__file__).resolve().parents[1] / "contrib/squad-goal/scripts/janitor.py").read_text()
+    assert f'LIVE = re.compile(r"{reap.LIVE_PROC.pattern}")' in src

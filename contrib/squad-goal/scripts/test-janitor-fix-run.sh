@@ -5,7 +5,9 @@
 # for 35 minutes. A run's own session is never a leftover of another run; a stray process in the same folder still is.
 # usage: bash test-janitor-fix-run.sh [janitor.py]
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/s" "$T/st/auto" "$T/co/runs/run-done/ws/worktrees_child-route.router.1" "$T/bin"
+mkdir -p "$T/s" "$T/st/auto" "$T/co/runs/run-done/ws/worktrees_child-route.router.1" "$T/bin" "$T/.venv/bin"
+# the engine of a fix run, shaped as the squad entry point is: a python3 script that runs as `squad start <run>` (#1270)
+printf '#!/usr/bin/env python3\nimport time\ntime.sleep(60)\n' > "$T/.venv/bin/squad"; chmod +x "$T/.venv/bin/squad"
 cp "$src" "$T/s/janitor.py"; here=$(dirname "$src")
 cp "$here/issue_state.py" "$here/issue_ledger.py" "$here/board_columns.py" "$here/board-definition.json" "$T/s/"
 f="$T/co/runs/run-done"; wt="$f/ws/worktrees_child-route.router.1"
@@ -13,8 +15,8 @@ printf 'CHILD — GitHub issue #70 (bug; one PR):\n' > "$f/request.txt"
 printf '%s\n' '{"event": "run_start", "run_id": "r", "graph_name": "g", "graph_hash": "h", "engine_options": {}, "root": "main", "plan": ["main"], "pos": 1, "ts": 1}' \
   '{"event": "verdict", "verdict": "passed", "exit_code": 0, "reasons": []}' > "$f/record.jsonl"
 touch -t 202001010000 "$f/record.jsonl"; echo run-done > "$T/st/active-runs.txt"
-# the live fix run's session: a process named like a run's session, working inside the finished run's folder
-( cd "$wt" && exec -a "$T/bin/claude" sleep 60 ) & fix=$!
+# the live fix run's engine: `squad start <run>` (the .venv entry point), working inside the finished run's folder
+( cd "$wt" && exec python3 "$T/.venv/bin/squad" start run-fix ) & fix=$!
 # a stray process in the same folder: rule A still kills it
 ( cd "$wt" && exec sleep 60 ) & stray=$!
 sleep 2
