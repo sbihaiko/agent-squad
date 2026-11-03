@@ -91,7 +91,7 @@ def test_a_concurrent_import_never_breaks_the_resolution(hub):
     that as "the terminal supervisor is not running: No module named 'squad.supervisor'", and the terminal stayed shut.
     The resolution takes its snapshots and holds one lock, so a concurrent import never reaches it.
     """
-    import sys, threading
+    import threading
 
     stop = threading.Event()
     failures, rounds = [], 100
