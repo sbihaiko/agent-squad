@@ -5312,7 +5312,7 @@ let LT={tf:["1","2","3","7","14","30","all"].includes(LTS.tf)?LTS.tf:"30",log:LT
 let FLOWFF={};   // the charts that stopped following the Board tab's Waves, Specs and Kinds; the Board tab keeps its own filter (#1147)
 const flowFilterNames=(fw,fs,fk)=>[["Waves",fw],["Specs",fs],["Kinds",fk]].filter(([,v])=>v.length).map(([n,v])=>`${n}: ${v.map(esc).join(", ")}`).join(" · ");
 const flowFilterChip=(fw,fs,fk,stopped)=>{const names=flowFilterNames(fw,fs,fk);if(!names)return "";return `<span class=fchip id=ffchip>Board filter · ${names} `+(stopped?"· this chart no longer follows it":`<button id=ffx type=button title="stop this chart following the Board tab's filter; the Board tab keeps its own">Stop following</button>`)+`</span>`};   // one chip names the Board filter; its one action stops this chart following it, never the Board tab (#1147)
-const flowDetach=()=>{if(!FLOWK)return;FLOWFF[FLOWK]=true;flowTabs();flowOpen(FLOWK);if(FLOWK==="lead"&&LT.zr)ltZoom(LT.zr[0],LT.zr[1])};   // the one action: this chart reads again without the bar's values (#1147)
+const flowDetach=()=>{if(!FLOWK)return;FLOWFF[FLOWK]=true;flowTabs();if(FLOWK==="lead"&&LT.zr)ltZoom(LT.zr[0],LT.zr[1]);else flowOpen(FLOWK)};   // the one action: this chart reads again, once, on its own route without the bar's values (#1147)
 const saveLT=()=>{ls.lt={tf:LT.tf,log:LT.log,ty:LT.ty};save()};
 const ltSpan=(r,a,b)=>{const t0=Date.parse(r.start),t1=Date.parse(r.end),at=f=>new Date(t0+f*(t1-t0)).toISOString();return [at(a<0?0:a),at(b>1?1:b)]};   // plot fractions to the dates they name (#900)
 const LT_TF=[["1","Past 24 hours"],["2","Past 48 hours"],["3","Past 72 hours"],["7","Past week"],["14","Past 2 weeks"],["30","Past month"],["all","All"]];
@@ -5385,7 +5385,7 @@ function squadChart(k){if(FLOWK===k&&!$("#flowov").hidden)flowOpen(k)}   // a pu
 function squadStreamLost(){$("#sse").hidden=false;$("#sse").textContent="live stream lost: retrying; the page keeps what it drew"}
 function squadStreamBack(){$("#sse").hidden=true;poll();pollBoard();if(FLOWK&&!$("#flowov").hidden)flowOpen(FLOWK)}   // one read each of the runs, the board and the open chart
 // flow-charts:end
-const barQuery=k=>["fw","fs","fk"].map(n=>`${n}=${encodeURIComponent((FLOWFF[k]?[]:(bo[n]||[])).join(","))}`).join("&")+`&ty=${LT.ty}`;   // the bar's Waves, Specs and Kinds and the chart's Type, read by both diagrams; a chart that stopped following the Board filter sends no bar value (#904, #985, #1147)
+const barQuery=k=>["fw","fs","fk"].map(n=>`${n}=${encodeURIComponent((FLOWFF[k]?[]:(bo[n]||[])).join(","))}`).join("&")+`&ty=${LT.ty}`;   // the bar's Waves, Specs and Kinds and the chart's Type; the CFD payload filters by the Type too, so both routes send it, and a chart that stopped following the Board filter sends no bar value (#904, #985, #1147)
 let boardTag=null,boardBody=null;   // the board the page holds and its ETag: a 304 keeps it (#973)
 async function pollBoard(){lim.busy=1;try{const r=await fetch("/api/board",boardTag?{headers:{"If-None-Match":boardTag}}:{});let b;if(r.status===304&&boardBody)b=boardBody;else{b=await r.json();if(b.groups){boardTag=r.headers.get("ETag");boardBody=b}}const FLOW=/*BOARD_FLOW*/,   // development flow, left to right
 all=[b.prs,...b.groups.sort((x,y)=>{const i=n=>{const k=FLOW.indexOf(n);return k<0?FLOW.length:k};return i(x.name)-i(y.name)})],f=q.trim().replace(/^#/,"");
