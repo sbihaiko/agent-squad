@@ -4981,7 +4981,7 @@ function mdlOut(){const o=JSON.parse(JSON.stringify(mdl));for(const k of Object.
 function mdlChanged(){return !!mdl&&mdlDiffLines(JSON.parse(mdlSrv),mdlOut(),MLAB).length>0}
 function mdlEff(k,m){return (mdl.efforts&&mdl.efforts[k]&&mdl.efforts[k][m])||""}
 function mdlSetEff(k,m,v){mdl.efforts=mdl.efforts||{};mdl.efforts[k]=mdl.efforts[k]||{};if(EFF.includes(v)&&v!=="medium")mdl.efforts[k][m]=v;else delete mdl.efforts[k][m]}
-const HRP=["22-07","07-22","20-08","18-06"],HRX=/^([01]\d|2[0-3])-([01]\d|2[0-3])$/;
+const HRP=["22-07","07-22","20-08","18-06","mon-fri 00-01,04-06,10-24 UTC; sat-sun 00-24 UTC"],HRD="(mon|tue|wed|thu|fri|sat|sun)",HRR="([01]\\d|2[0-3])\\s*-\\s*([01]\\d|2[0-4])",HRC=`((${HRD}(\\s*-\\s*${HRD})?(\\s*,\\s*${HRD}(\\s*-\\s*${HRD})?)*)\\s+)?${HRR}(\\s*,\\s*${HRR})*(\\s+utc)?`,HRX=new RegExp(`^\\s*${HRC}(\\s*;\\s*${HRC})*\\s*$`,"i");
 function mdlHrs(k,m){return (mdl.hours&&mdl.hours[k]&&mdl.hours[k][m])||""}
 function mdlSetHrs(k,m,v){v=(v||"").trim();mdl.hours=mdl.hours||{};mdl.hours[k]=mdl.hours[k]||{};if(HRX.test(v)&&v.slice(0,2)!==v.slice(3))mdl.hours[k][m]=v;else delete mdl.hours[k][m]}
 /* The chain row's old switch (#1819) is read only now: a file that holds it shows "off (chain)" (SPEC 889 #920). */
@@ -5000,7 +5000,7 @@ function mdlRoute(x,dflt){return x.registered===false?`<span class=ur>unregister
 function mdlOffM(m){return !!(mdl.model_off&&mdl.model_off[m])}
 function mdlChip(st){return st==="on"?"":`<span class="stc${String(st).startsWith("off")?" off":" lim"}">${esc(String(st).startsWith("off")?"off":st)}</span>`}   // a state chip shows only at limit or off (#913)
 function mdlTable(){const rows=mdl.models||[];return `<h3>Models</h3><p class=m>On or off, for every chain. An off model leaves the add lists; a chain that still lists it keeps the row, struck through, and skips it.</p><table class=mtab><thead><tr><th>Model</th><th>Subscription</th><th>State</th><th>On</th></tr></thead><tbody>`+rows.map(r=>{const of=mdlOffM(r.id),x=mdlBox("known",r.id);return`<tr class="${of?"off":""}"><td class=mn title="${esc(r.id)} · ${esc(x.text)}">${mdlName(x,r.id)}</td><td>${mdlSub(r)}</td><td>${mdlChip(of?"off (model)":r.state)}</td><td><button class="mtg${of?" off":""}" data-mt="${esc(r.id)}" aria-pressed="${!of}" aria-label="${esc(r.id)} on" title="${of?"off (model): press to switch it on in every chain":"on: press to switch it off in every chain"}">${of?"off":"on"}</button></td></tr>`}).join("")+`</tbody></table>`}
-const MHELP=`<details class=hlp><summary>How it works</summary><ul><li><b>Order</b>: ↑ ↓ move a model; ✕ marks it for removal: the row stays, struck through, until Save, and ↺ keeps it; "+ add a model…" puts one back.</li><li><b>Off</b> is set once per model and applies in every chain. An off model is skipped where a chain still lists it (the row stays, struck through, and ✕ still removes it) and is not offered in "+ add a model…". Switching it on restores every row.</li><li><b>Hours</b> are set per chain row: <code>HH-HH</code> local, may wrap midnight (<code>22-07</code>); empty means always. Outside its hours the row is skipped like off, and the next row runs.</li><li><b>Effort</b> is low to max, per chain row; medium is the default.</li><li><b>Save</b>, at the foot of Settings, shows the change (- before, + after) and writes only when you confirm.</li></ul></details>`;
+const MHELP=`<details class=hlp><summary>How it works</summary><ul><li><b>Order</b>: ↑ ↓ move a model; ✕ marks it for removal: the row stays, struck through, until Save, and ↺ keeps it; "+ add a model…" puts one back.</li><li><b>Off</b> is set once per model and applies in every chain. An off model is skipped where a chain still lists it (the row stays, struck through, and ✕ still removes it) and is not offered in "+ add a model…". Switching it on restores every row.</li><li><b>Hours</b> are set per chain row: <code>HH-HH</code> local, may wrap midnight (<code>22-07</code>); empty means always. A row may also name days and UTC, clauses joined by <code>;</code>: <code>mon-fri 00-01,04-06,10-24 UTC; sat-sun 00-24 UTC</code> is DeepSeek off-peak. Outside its hours the row is skipped like off, and the next row runs.</li><li><b>Effort</b> is low to max, per chain row; medium is the default.</li><li><b>Save</b>, at the foot of Settings, shows the change (- before, + after) and writes only when you confirm.</li></ul></details>`;
 function mdlRender(){const b=$("#mbody");if(!mdl){b.innerHTML="<span class=m>loading…</span>";return}
  {const lc=mdl.last_coding||(mdl.coding_models||[])[0]||"",x=lc?mdlBox("coding_models",lc):MBOX0;$("#mdsr").textContent=x.llm?`${x.llm} · ${lc}`:lc}   // the model the last run coded with, not the chain's head
 
@@ -5009,7 +5009,7 @@ function mdlRender(){const b=$("#mbody");if(!mdl){b.innerHTML="<span class=m>loa
  +`<datalist id=hrp>${HRP.map(v=>`<option value="${v}">`).join("")}</datalist>`+mdlTable()+`<h3>Chains</h3>`
  +Object.keys(MLAB).map(k=>`<div class=mc><div class=mt>${MLAB[k]}</div><div class=mx>${MDESC[k]}</div>`+mdl[k].map((m,i)=>{const ef=mdlEff(k,m),hr=mdlHrs(k,m),x=mdlBox(k,m),cof=mdlOff(k,m),mof=mdlOffM(m),o=(mdl.outside&&mdl.outside[k]||{})[m],st=((mdl.models||[]).find(z=>z.id===m)||{}).state;
   const rmk=mdlRmd(k,m),live=mdl[k].filter(z=>!mdlRmd(k,z)).length;
-  return`<div class="mr${cof||mof?" off":""}${rmk?" rmk":""}" data-row="${k}|${esc(m)}"><span class=rk>${i+1}</span><span class=mn title="${esc(m)} · ${esc(x.text)}">${mdlName(x,m)}</span><span class=ct><span class=pv title="${esc(x.text)}">${mdlRoute(x,"")}${mdlSub(x)}</span>${mof?`<span class="stc off">off (model)</span>`:cof?`<span class="stc off">off (chain)</span>`:""}${st==="at limit"?`<span class="stc lim">at limit</span>`:""}${k==="review_models"?chTag(m):""}${o?`<span class=bk title="this row runs only inside its hours">outside hours ${esc(o)}</span>`:""}<label class=el>effort <select class="ef${ef?" set":""}" data-ef="${k}|${esc(m)}" aria-label="${esc(m)}: effort" title="effort for this model (medium is the default)">${EFF.map(e=>`<option value="${e==="medium"?"":e}"${(ef||"medium")===e?" selected":""}>${e}</option>`).join("")}</select></label><label class=el>hours <input class="hr${hr?" set":""}" list=hrp data-hr="${k}|${esc(m)}" value="${esc(hr)}" placeholder="always" aria-label="${esc(m)}: hours" title="local hours this model may run (HH-HH, wraps midnight; empty = always)"></label><span class=mb><button data-mv="${k}|${i}|-1" ${i?"":"disabled"} aria-label="move up" title="move up">↑</button><button data-mv="${k}|${i}|1" ${i<mdl[k].length-1?"":"disabled"} aria-label="move down" title="move down">↓</button><button class=x data-rm="${k}|${i}" ${rmk||live>1?"":"disabled"} aria-label="${rmk?"undo remove":"remove"} ${esc(m)}" title="${rmk?"keep this model in the chain":"remove from chain on Save"}">${rmk?"↺":"✕"}</button></span></span></div>`}).join("")
+  return`<div class="mr${cof||mof?" off":""}${rmk?" rmk":""}" data-row="${k}|${esc(m)}"><span class=rk>${i+1}</span><span class=mn title="${esc(m)} · ${esc(x.text)}">${mdlName(x,m)}</span><span class=ct><span class=pv title="${esc(x.text)}">${mdlRoute(x,"")}${mdlSub(x)}</span>${mof?`<span class="stc off">off (model)</span>`:cof?`<span class="stc off">off (chain)</span>`:""}${st==="at limit"?`<span class="stc lim">at limit</span>`:""}${k==="review_models"?chTag(m):""}${o?`<span class=bk title="this row runs only inside its hours">outside hours ${esc(o)}</span>`:""}<label class=el>effort <select class="ef${ef?" set":""}" data-ef="${k}|${esc(m)}" aria-label="${esc(m)}: effort" title="effort for this model (medium is the default)">${EFF.map(e=>`<option value="${e==="medium"?"":e}"${(ef||"medium")===e?" selected":""}>${e}</option>`).join("")}</select></label><label class=el>hours <input class="hr${hr?" set":""}" list=hrp data-hr="${k}|${esc(m)}" value="${esc(hr)}" placeholder="always" aria-label="${esc(m)}: hours" title="hours this model may run (HH-HH local, wraps midnight; or days, ranges and UTC; empty = always)"></label><span class=mb><button data-mv="${k}|${i}|-1" ${i?"":"disabled"} aria-label="move up" title="move up">↑</button><button data-mv="${k}|${i}|1" ${i<mdl[k].length-1?"":"disabled"} aria-label="move down" title="move down">↓</button><button class=x data-rm="${k}|${i}" ${rmk||live>1?"":"disabled"} aria-label="${rmk?"undo remove":"remove"} ${esc(m)}" title="${rmk?"keep this model in the chain":"remove from chain on Save"}">${rmk?"↺":"✕"}</button></span></span></div>`}).join("")
   +`<div class=madd><select data-add="${k}" aria-label="${MLAB[k]}: add a model"><option value="">+ add a model…</option>${addOpts((mdl.suggest||{})[k],mdl[k],mdlOffM).map(s=>`<option value="${esc(s.id)}">${esc(s.text)}</option>`).join("")}</select></div></div>`).join("")
   +MHELP+(mdlMsg?`<div class="mx${mdlMsg.startsWith("!")?" err":""}" role=status>${esc(mdlMsg.replace(/^!/,""))}</div>`:"");
  if(typeof setBar==="function")setBar()}
@@ -5017,7 +5017,7 @@ async function mdlLoad(){try{mdl=await (await fetch("/api/models")).json();mdlSr
 /* One write route for both places (SPEC 889 #920): a chip flips at once; the table stages its switch until Save. */
 async function mdlPost(body){const r=await fetch("/api/models",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});return r.json()}
 $("#mbody").addEventListener("change",e=>{const t=e.target;if(!mdl)return;mdlMsg="";if(t.dataset.ef){const[k,m]=t.dataset.ef.split("|");mdlSetEff(k,m,t.value)}
- else if(t.dataset.hr){const[k,m]=t.dataset.hr.split("|"),v=t.value.trim();if(v&&!HRX.test(v))mdlMsg="!hours are HH-HH, for example 22-07";mdlSetHrs(k,m,v)}
+ else if(t.dataset.hr){const[k,m]=t.dataset.hr.split("|"),v=t.value.trim();if(v&&!HRX.test(v))mdlMsg="!hours are HH-HH, for example 22-07, or days, ranges and UTC: sat-sun 00-24 UTC";mdlSetHrs(k,m,v)}
  else if(t.dataset.add){const k=t.dataset.add,v=t.value;if(v&&!mdl[k].includes(v)&&!mdlOffM(v))mdl[k].push(v)}
  else return;mdlRender()});
 $("#mbody").addEventListener("click",e=>{const t=e.target.closest("button");if(!t||!mdl)return;mdlMsg="";
@@ -6286,20 +6286,21 @@ def known_models(d):
     except Exception: pass
     return sorted({bare_id(ALIAS.sub(r"\1-", m)) for m in runnable_models(out) if MODEL_ID.match(m) and not provkey.closed(m)})   # no key, never offered (#482)
 EFFORTS = ("low", "medium", "high", "max")
-# local hours a model may run, "HH-HH", start inclusive, end exclusive, wrapping midnight (22-07). Absent = always.
+# the hours a model may run: "HH-HH" local, start inclusive, end exclusive, wrapping midnight (22-07), or clauses with
+# days and a UTC suffix ("mon-fri 00-01,04-06,10-24 UTC; sat-sun 00-24 UTC"). Absent = always. The grammar is the
+# resolver's (modelreg.in_window); HOURS is the one-range form a Save body has always been allowed to post.
 HOURS = re.compile(r"^([01]\d|2[0-3])-([01]\d|2[0-3])$")
 def model_hours(d, chain, mid):
     """The window for one model, or "" when it may always run."""
     h = d.get("hours") if isinstance(d.get("hours"), dict) else {}
     hk = h.get(chain) if isinstance(h.get(chain), dict) else {}
     v = hk.get(mid)
-    return v if isinstance(v, str) and HOURS.match(v) and v[:2] != v[3:] and mid in d.get(chain, []) else ""
+    return v if isinstance(v, str) and modelreg.window_valid(v) and mid in d.get(chain, []) else ""
 def in_hours(d, chain, mid, when=None):
-    """True when the model may run at `when` (default: now), local hour, and its own window is a rotation."""
+    """True when the model may run at `when` (a datetime; default: now) inside its own window."""
     w = model_hours(d, chain, mid)
     if not w: return True
-    h = (when or dt.datetime.now()).hour; a, b = int(w[:2]), int(w[3:])
-    return a <= h < b if a <= b else (h >= a or h < b)
+    return modelreg.in_window(w, when or time.time())
 def model_off_ids(d):
     """The models switched off at model level (SPEC 889 #920): normalized ids from models.json's top-level `model_off`.
     The one registry reads the same key (modelreg.chain), so the hub and every consumer agree on the spelling."""
@@ -6477,7 +6478,7 @@ def _entry(k, mid, prev, effort, window):
         if prev.timeout_s is not None: out["timeout_s"] = prev.timeout_s
         if prev.no_tools: out["no_tools"] = True
     if effort and effort != "medium": out["effort"] = effort
-    if isinstance(window, str) and HOURS.match(window) and window[:2] != window[3:]: out["hrs"] = window
+    if isinstance(window, str) and modelreg.window_valid(window): out["hrs"] = window
     if prev is not None and not prev.on: out["on"] = False   # honored, never written: a row the file already holds off
     return out
 
@@ -6556,7 +6557,8 @@ def _models_set(new):
     # of a model no longer in its chain goes with the row, never refuses the Save. A bad value of a kept row still refuses,
     # and the sentence names the row and the rule, so a caller learns what to send.
     for name, sec, rule, ok in (("efforts", eff, "must name one of low|medium|high|max", lambda v: v in EFFORTS),
-                                ("hours", hrs, "must be an HH-HH window (00-23)", lambda v: isinstance(v, str) and HOURS.match(v))):
+                                ("hours", hrs, "must be an hours window: HH-HH (00-23), or days, ranges and UTC as in modelreg.py",
+                                 lambda v: isinstance(v, str) and (HOURS.match(v) or modelreg.window_valid(v)))):
         if sec is _ABSENT: continue
         if not isinstance(sec, dict) or set(sec) - set(CHAINS): return {"err": f"{name}: unknown chain"}
         for k, rows in sec.items():

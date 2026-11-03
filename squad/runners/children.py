@@ -4,7 +4,6 @@
 writing child, the `checks` gates, and the lift of a child's own spawns. The metered call is `squad/session.py`.
 The engine holds one `Children` and keeps no child state.
 """
-import time
 from types import SimpleNamespace
 
 import anyio
@@ -251,14 +250,14 @@ class Children:
         # A child answers on the envelope's `allow.models`, led by the model its request names. A provider that refuses
         # to serve is an outage, not a defect of the work, so the chain moves on; the worktree is cut once and kept.
         # A requeued issue starts its first entry where the issue ledger says its last attempt stopped (ADR-0151 rule 2).
-        spent, hours, hour = e.options.get("spent_models") or [], e.options.get("model_hours") or {}, time.localtime(e.wall()).tm_hour
+        spent, hours, at = e.options.get("spent_models") or [], e.options.get("model_hours") or {}, e.wall()
         first = coder or (e.dispatch.moved(ctx.node, d) if entry == 1 else d["model"])
         # A child of a kind falls back along its own kind's chain (SPEC 750). The chain is read from this entry's node,
         # so the router overlay still closes a model the run may not use (SPEC 505).
         km = (ctx.node["allow"].get("kind_models") or {}).get(d.get("kind")) if d.get("kind") else None
         models = km or ctx.node["allow"]["models"]
-        chain = session.model_chain(models, first, spent, hours, hour, km or e.options.get("model_order") or [])
-        for m, why in session.hours_skipped(models, first, spent, hours, hour):    # an entry left out of its window is on the record
+        chain = session.model_chain(models, first, spent, hours, at, km or e.options.get("model_order") or [])
+        for m, why in session.hours_skipped(models, first, spent, hours, at):    # an entry left out of its window is on the record
             e.record.append("model_skipped", node=name, entry=entry, model=m, reason=why)
         out, tried, model = await session.run_chain(chain, lambda m, first: self.attempt(name, d, ws, dl, m, slot, first and entry == 1, entry, review, repeated, chain=chain))
         for m, err in tried:    # every refusal is on the record, exhausted chain or not (#494)

@@ -53,42 +53,36 @@ def provider_error(err):
     return bool(PROVIDER_STATUS.search(text)) and any(m in text for m in PROVIDER_MARKERS)
 
 
-def in_window(window, hour):
-    """True when local `hour` is inside a "HH-HH" window: start inclusive, end exclusive, wrapping midnight. A window that does
-    not parse closes nothing, as the launcher reads it."""
-    try:
-        a, b = int(window[:2]), int(window[3:5])
-    except (TypeError, ValueError):
-        return True
-    return a <= hour < b if a <= b else (hour >= a or hour < b)
+in_window = modelreg.in_window    # one grammar for a chain entry's hours window, owned by the resolver (ADR-0147)
 
 
-def hours_closed(hours, hour):
-    """{model: window} of the models whose `hours` window excludes the local `hour`: the launcher's rule, read again at each call."""
-    return {m: w for m, w in (hours or {}).items() if hour is not None and not in_window(w, hour)}
+def hours_closed(hours, at):
+    """{model: window} of the models whose `hours` window excludes the moment `at` (a timestamp or a struct_time): the
+    launcher's rule, read again at each call. No moment closes nothing."""
+    return {m: w for m, w in (hours or {}).items() if at is not None and not in_window(w, at)}
 
 
-def model_chain(models, first, spent=(), hours=None, hour=None, order=()):
+def model_chain(models, first, spent=(), hours=None, at=None, order=()):
     """The models one entry may answer on, in order: the pick this call starts with leads the envelope's `allow.models`.
     The rest follow `order`, the models.json coding chain the launcher read: the launch picks by that order, so a fallback
     reads the same one (#617). An entry the order does not name keeps its allow-list place behind the named ones and no
     entry is dropped. A `spent` id (the engine option the launcher fills from the shared quota markers) is left out: its
-    subscription refuses at once, after a wait. So is a model whose `hours` window excludes the local `hour`. When every
+    subscription refuses at once, after a wait. So is a model whose `hours` window excludes the moment `at`. When every
     entry is closed the whole chain stays, so a marker that is wrong never leaves no model."""
     rest = [m for m in (models or []) if m and m != first]
     rank = {m: i for i, m in enumerate(order or [])}
     if rank:
         rest.sort(key=lambda m: rank.get(m, len(rank)))     # stable: an unnamed entry keeps its place, behind the named ones
     chain = [first] + rest
-    shut = hours_closed(hours, hour)
+    shut = hours_closed(hours, at)
     return [m for m in chain if m not in spent and m not in shut] or chain
 
 
-def hours_skipped(models, first, spent=(), hours=None, hour=None):
+def hours_skipped(models, first, spent=(), hours=None, at=None):
     """[(model, reason)] the chain left out for its hours window; empty when `model_chain` kept every entry for want of another."""
     chain = [first] + [m for m in (models or []) if m and m != first]
-    shut = hours_closed(hours, hour)
-    kept = model_chain(models, first, spent, hours, hour)
+    shut = hours_closed(hours, at)
+    kept = model_chain(models, first, spent, hours, at)
     return [(m, f"outside_hours:{shut[m]}") for m in chain if m in shut and m not in kept]
 
 

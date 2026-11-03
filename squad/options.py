@@ -40,7 +40,7 @@ def resolve(graph, options):
     if "spent_models" in opts and not (isinstance(opts["spent_models"], list) and all(isinstance(m, str) and m for m in opts["spent_models"])):
         raise OptionError("spent_models must be a list of model ids")
     if "model_hours" in opts and not (isinstance(opts["model_hours"], dict) and all(isinstance(m, str) and m and isinstance(w, str) for m, w in opts["model_hours"].items())):
-        raise OptionError("model_hours must map a model id to an HH-HH window")
+        raise OptionError("model_hours must map a model id to an hours window (\"HH-HH\", or the day and UTC grammar of squad/modelreg.py)")
     if "model_order" in opts and not (isinstance(opts["model_order"], list) and all(isinstance(m, str) and m for m in opts["model_order"])):
         raise OptionError("model_order must be a list of model ids")
     if "keep_children" in opts and not isinstance(opts["keep_children"], bool):

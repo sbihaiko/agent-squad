@@ -90,12 +90,12 @@ class AgentRunner:
         dispatch = ctx.is_dispatch_entry(node["name"])
         models = ctx.limits(node["name"]).get("models", []) if dispatch else []
         rchain = ctx.router_chain() if dispatch else []
-        hour = ctx.local_hour()
+        at = ctx.now()
         if rchain:
             models = rchain
             eff = {**eff, "model": rchain[0], **({"effort": e} if (e := ctx.router_effort()) else {})}
-        chain = session.model_chain(models, eff["model"], ctx.spent_models, ctx.model_hours, hour, rchain or ctx.model_order)
-        for m, why in session.hours_skipped(models, eff["model"], ctx.spent_models, ctx.model_hours, hour):
+        chain = session.model_chain(models, eff["model"], ctx.spent_models, ctx.model_hours, at, rchain or ctx.model_order)
+        for m, why in session.hours_skipped(models, eff["model"], ctx.spent_models, ctx.model_hours, at):
             ctx.record.append("model_skipped", node=node["name"], entry=entry, model=m, reason=why)
         return eff, chain
 

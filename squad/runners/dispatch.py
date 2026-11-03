@@ -9,7 +9,6 @@ import os
 import pathlib
 import re
 import subprocess
-import time
 
 import anyio
 
@@ -362,7 +361,7 @@ class Dispatch:
         e = self.e
         spent, hours = e.options.get("spent_models") or [], e.options.get("model_hours") or {}
         km = (node["allow"].get("kind_models") or {}).get(d.get("kind")) if d.get("kind") else None
-        chain = session.model_chain(km or node["allow"]["models"], d["model"], spent, hours, time.localtime(e.wall()).tm_hour,
+        chain = session.model_chain(km or node["allow"]["models"], d["model"], spent, hours, e.wall(),
                                     km or e.options.get("model_order") or [])
         upto_entry = upto_entry if upto_entry is not None else self.last_round(name)
         moves = review_streak.changes(self.findings_seq(name, self.last_round(name), upto_entry))
@@ -376,7 +375,7 @@ class Dispatch:
         e = self.e
         spent, hours = e.options.get("spent_models") or [], e.options.get("model_hours") or {}
         km = (node["allow"].get("kind_models") or {}).get(d.get("kind")) if d.get("kind") else None
-        chain = session.model_chain(km or node["allow"]["models"], d["model"], spent, hours, time.localtime(e.wall()).tm_hour,
+        chain = session.model_chain(km or node["allow"]["models"], d["model"], spent, hours, e.wall(),
                                     km or e.options.get("model_order") or [])
         return review_streak.at(chain, self.ledger_moves(d)) or d["model"]
 

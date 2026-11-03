@@ -168,7 +168,7 @@ async def test_a_fallback_outside_its_hours_is_skipped_with_a_reason_and_the_nex
 
 
 def test_model_chain_keeps_a_model_inside_its_hours():
-    assert model_chain(CHAIN, PICK, hours={CHAIN[1]: "07-19"}, hour=10) == CHILD_CHAIN
+    assert model_chain(CHAIN, PICK, hours={CHAIN[1]: "07-19"}, at=time.mktime((2026, 10, 19, 10, 0, 0, 0, 0, -1))) == CHILD_CHAIN   # 10h local
 
 
 # The launcher picks the coding model by the models.json coding_models order; the in-run fallback follows the graph

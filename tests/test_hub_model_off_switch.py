@@ -254,10 +254,13 @@ def test_mkreq_skips_a_coding_model_switched_off(tmp_path):
 def test_mkreq_still_leaves_an_in_window_model_alone(tmp_path):
     models = tmp_path / "models.json"
     models.write_text(json.dumps(MODELS_DOC))
+    rows = _shipped(MKREQ.read_text(), "rows=$(python3")
     fn = _fn(MKREQ.read_text(), "mayrun() {")
     hh = int(subprocess.run(["date", "+%H"], capture_output=True, text=True).stdout)
-    inwin, window = ("claude-sonnet-5-5", "19-07") if not 7 <= hh < 19 else ("claude-deepseek-v4-flash", "-")
-    out = _bash(f'mjson={models}; hh={hh}; spent() {{ return 1; }}\n{fn}\nif mayrun "$1" "$2" 1; then echo yes; else echo no; fi', [inwin, window])
+    inwin = "claude-sonnet-5-5" if not 7 <= hh < 19 else "claude-deepseek-v4-flash"    # sonnet's window is 19-07
+    # the resolver reads the window and the row carries its answer (1/0), so mayrun reads the row, never the window
+    out = _bash(f'mjson={models}; spent() {{ return 1; }}\n{rows}\n{fn}\n'
+                'while read -r m w on; do [ "$m" = "$1" ] || continue; if mayrun "$m" "$w" "$on"; then echo yes; else echo no; fi; done <<<"$rows"', [inwin])
     assert out == "yes"
 
 

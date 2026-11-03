@@ -9,14 +9,12 @@ req="$run/request.txt"; [ -s "$req" ] || { echo "consult: no request.txt in ${ru
 # The model the consult asks is the first coding model that may run now: one the hub's models panel switched off (#1819),
 # or one outside its `hours` window, is skipped exactly as mkreq.sh and launch.py skip it, so the consult never wakes a
 # model the owner took out of the chain. Every entry skipped names no model at all -- there is nobody to consult.
-mjson="$here/models.json"; hh=$((10#$(date +%H)))
-rows=$(python3 "$here/modelreg.py" chain coding --models "$mjson" --tsv | awk -F'\t' '{print $2, ($5 == "" ? "-" : $5), $7}')   # raw spelling, hrs window ("-" = always), on
-pick() { local m w a b on
-  while read -r m w on; do
-    [ "$on" = 1 ] || continue
-    if [ "$w" != - ]; then a=$((10#${w%%-*})); b=$((10#${w##*-}))
-      if [ "$a" -le "$b" ]; then { [ "$hh" -ge "$a" ] && [ "$hh" -lt "$b" ]; } || continue
-      else { [ "$hh" -ge "$a" ] || [ "$hh" -lt "$b" ]; } || continue; fi; fi
+# The resolver reads the window (modelreg.in_window: "HH-HH" local, or days, ranges and UTC), never this script.
+mjson="$here/models.json"
+rows=$(python3 "$here/modelreg.py" chain coding --models "$mjson" --tsv | awk -F'\t' '{print $2, $8, $7}')   # raw spelling, inside its window now (1/0), on
+pick() { local m open on
+  while read -r m open on; do
+    [ "$on" = 1 ] && [ "$open" = 1 ] || continue
     printf '%s' "$m"; return 0
   done <<<"$rows"; }
 model=$(pick)

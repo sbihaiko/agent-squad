@@ -51,10 +51,10 @@ def _marker(shared, name, now):
     except (OSError, ValueError): return None
     return t if t > now else None
 
-def _in_window(w, h):
-    try: a, b = int(w[:2]), int(w[3:5])
-    except ValueError: return True
-    return a <= h < b if a <= b else (h >= a or h < b)
+def _in_window(w, now, hour):
+    """The resolver's one window grammar (ADR-0147), read at `now`; a named `hour` moves `now` to it on the same local day."""
+    lt = time.localtime(now)
+    return _resolver().in_window(w, now if hour is None else time.mktime((*lt[:3], hour, *lt[4:8], -1)))
 
 def _clock(t): return time.strftime("%H:%M", time.localtime(t))
 
@@ -89,7 +89,7 @@ def _v1_why(cfg, key, m, shared, now, hour):
     if guard and m in (cfg.get("anthropic_models") or []): return "weekly quota guard", None
     if ((cfg.get("off") or {}).get(key) or {}).get(m): return "switched off", None
     w = ((cfg.get("hours") or {}).get(key) or {}).get(m)
-    if w and not _in_window(w, hour): return f"outside its window {w}", None
+    if w and not _in_window(w, now, hour): return f"outside its window {w}", None
     tw, tu = _timeout_why(shared, m, now)
     if tw: return tw, tu
     return None, None
@@ -157,7 +157,6 @@ def chain_state(cfg, key="review_models", shared=".", now=None, hour=None):
     doc = cfg if isinstance(cfg, dict) else json.loads(pathlib.Path(cfg).read_text())
     name = key.removesuffix("_models")
     now = time.time() if now is None else now
-    hour = time.localtime(now).tm_hour if hour is None else hour
     if "chains" in doc:
         return _registry_state(doc, name, shared, now, hour) | {"key": key}
     chain = list(doc.get(key) or [])
