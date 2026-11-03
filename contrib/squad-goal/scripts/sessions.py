@@ -357,6 +357,7 @@ def _transcript_tail(cwd, sid):
 
 def live_sessions(profile, profiles_of=profiles_of):
     """Each record that passes every check and belongs to this profile, with its token: the one membership rule for the routes."""
+    alive = []
     for rec in _records():
         sid, pid, cwd = rec["sessionId"], rec["pid"], rec["cwd"]
         if not _socket_ok(rec["socket"]) or not _alive_since(pid, rec["startedAt"], rec.get("kind")): continue
@@ -364,7 +365,13 @@ def live_sessions(profile, profiles_of=profiles_of):
         if found != [profile]:
             if len(found) > 1: _log(f"hub: session {sid} matches profiles {', '.join(found)}, listed in none", once=True)
             continue
-        yield rec, _secret(sid)
+        alive.append(rec)
+    alive_sids = {rec["sessionId"] for rec in alive}
+    for rec in alive:
+        parked = rec.get("parkedJobId")
+        if isinstance(parked, str) and parked in alive_sids:
+            continue   # a front that parked its work in a live job is an empty shell (#1269)
+        yield rec, _secret(rec["sessionId"])
 
 def list_sessions(profile, profiles_of=profiles_of):
     """This profile's live sessions: each record that passes every check, grouped by project, waiting sessions first."""

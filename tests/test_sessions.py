@@ -641,3 +641,27 @@ def test_background_session_older_than_its_process_is_a_reused_pid(home, tmp_pat
     body = add_session(home, os.getpid(), "s1", tmp_path / "app", kind="bg")
     (home.sessions / f"{os.getpid()}.json").write_text(json.dumps({**body, "startedAt": body["startedAt"] - 100_000}))
     assert load_sessions().list_sessions("p1", profiles_of=lambda c: ["p1"])["groups"] == []
+
+
+def test_parked_front_does_not_hide_the_job_it_parked_into(home, tmp_path):
+    """A front that ran /resume parked its work in a background job (#1269): the panel opens the job, not the empty front."""
+    cwd = tmp_path / "app"
+    add_session(home, os.getpid(), "front1", cwd, name="front", parkedJobId="job1")
+    add_session(home, os.getppid(), "job1", cwd, name="job", kind="bg")
+    out = load_sessions().list_sessions("p1", profiles_of=lambda c: ["p1"])
+    assert [s["sid"] for g in out["groups"] for s in g["sessions"]] == ["job1"]
+
+
+def test_parked_front_stays_when_its_job_is_gone(home, tmp_path):
+    cwd = tmp_path / "app"
+    add_session(home, os.getpid(), "front1", cwd, name="front", parkedJobId="job-gone")
+    out = load_sessions().list_sessions("p1", profiles_of=lambda c: ["p1"])
+    assert [s["sid"] for g in out["groups"] for s in g["sessions"]] == ["front1"]
+
+
+def test_project_sessions_open_the_job_not_the_parked_front(home, tmp_path):
+    cwd = tmp_path / "app"
+    add_session(home, os.getpid(), "front1", cwd, name="front", parkedJobId="job1")
+    add_session(home, os.getppid(), "job1", cwd, name="job", kind="bg")
+    out = load_sessions().project_sessions("p1", cwd, profiles_of=lambda c: ["p1"])
+    assert [s["sid"] for s in out] == ["job1"]
