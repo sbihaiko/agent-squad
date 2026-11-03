@@ -275,9 +275,14 @@ def test_the_switch_runs_watchd_for_its_own_profile_not_the_hub_cwd(monkeypatch,
     assert seen["cwd"] == str(tmp_path)
 
 
+def _inst_block(src):
+    """The Monitor's CSS block: the phone serves this block alone, so a Monitor style outside it never reaches the phone."""
+    return src.split("/* INST-CSS{ */", 1)[1].split("/* }INST-CSS */", 1)[0]
+
+
 def _switch_rules(src):
     """Every CSS rule that styles the loop switch, as (selector list, body), read from the page's one style block."""
-    css = src.split("<style>", 1)[1].split("</style>", 1)[0]
+    css = re.sub(r"/\*.*?\*/", "", src.split("<style>", 1)[1].split("</style>", 1)[0], flags=re.S)
     out = []
     for block, body in re.findall(r"([^{}]+)\{([^{}]*)\}", css):
         sels = [s.strip() for s in block.split(",")]
@@ -294,17 +299,25 @@ def test_the_monitor_switch_is_styled_where_the_monitor_draws_it():
     assert "id=iloop" in src.split("<details id=inst", 1)[1].split("</details>", 1)[0]
     rules = _switch_rules(src)
     assert rules, "the page styles the loop switch"
-    orphans = []
-    for sels, _ in rules:
+    inst = _inst_block(src)
+    everywhere = {s for sels, _ in rules for s in sels}
+    orphans, missing = [], []
+    for sels, body in rules:
         for sel in sels:
-            if sel.startswith("#lopb ") and "#iloop " + sel[len("#lopb "):] not in sels:
+            if not sel.startswith("#lopb ") or "laud" in sel:   # the change log belongs to the Settings panel alone
+                continue
+            twin = "#inst " + sel[len("#lopb "):]
+            if twin not in everywhere:
                 orphans.append(sel)
+            elif body.strip() not in inst:
+                missing.append(twin)
     assert not orphans, f"a switch style reaches only the Settings panel: {orphans}"
-    assert any("#iloop .lsw" in sels for sels, _ in rules), "the Monitor's switch is styled"
+    assert not missing, f"a switch style sits outside the block the phone serves: {missing}"
+    assert any("#inst .lsw" in sels for sels, _ in rules), "the Monitor's switch is styled"
 
 
 def test_the_settings_panel_keeps_its_own_row_box():
     """The Monitor's compact row never leaks into Settings > Loop, which keeps the inset box."""
     src = page()
     assert re.search(r"#lopb \.lnow\{[^}]*border:1px solid", src), "the Settings row keeps its box"
-    assert re.search(r"#iloop \.lnow\{[^}]*border:0", src), "the Monitor row carries no box"
+    assert re.search(r"#inst \.lnow\{[^}]*border:0", src), "the Monitor row carries no box"
