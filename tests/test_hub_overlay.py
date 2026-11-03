@@ -488,7 +488,7 @@ def test_a_read_that_fails_keeps_the_session_and_the_talk():
     assert "retrySoon();" in body and "return;" in body
     # the early return sits before every write of the session state
     guard = body.index("if (!answered) {")
-    for later in ("sessions = found", "cur = ", "empty(\"No session runs"):
+    for later in ("sessions = all", "cur = ", "empty(\"No session runs"):   # `all` is the list read plus the hosted rows (#1216)
         assert guard < body.index(later), later
     # a 404 on the conversation asks the list again; it never drops the session by itself
     conv = js[js.index("async function loadConversation() {"):js.index("const uuid =")]
@@ -554,12 +554,12 @@ def test_an_empty_session_list_blanks_the_talk_only_when_the_emptiness_repeats()
     blank it, and any answer with a session resets the count."""
     js = OVERLAY.read_text()
     body = js[js.index("async function loadSessions() {"):js.index("// Only the structure that carries meaning")]
-    count = body.index("emptyN = found.length ? 0 : emptyN + 1;")
-    guard = body.index("if (cur && !found.length && emptyN < 3) {")
+    count = body.index("emptyN = all.length ? 0 : emptyN + 1;")   # `all` counts a hosted session too (#1216)
+    guard = body.index("if (cur && !all.length && emptyN < 3) {")
     assert count < guard
     assert "retrySoon();" in body[guard:guard + 160]
     assert body[guard:guard + 160].count("return;") == 1
-    for later in ("sessions = found", "cur = ", 'empty("No session runs'):
+    for later in ("sessions = all", "cur = ", 'empty("No session runs'):
         assert guard < body.index(later), later
 
 def test_a_poll_that_answers_with_an_error_or_fails_to_render_says_so():
@@ -574,7 +574,8 @@ def test_the_talk_is_read_again_the_moment_the_tab_is_looked_at():
     """Owner, 2026-11-01: the panel updated only after a long wait when he worked in another window. A background tab
     throttles timers to about once a minute, so the panel reads the talk again on focus and on coming back (#1079)."""
     js = OVERLAY.read_text()
-    assert 'const reread = () => { if (!ov.hidden && !document.hidden) loadConversation(); };' in js
+    # the reread goes through the panel's dispatch, so a hosted session re-reads its terminal and any other its talk (#1216)
+    assert 'const reread = () => { if (!ov.hidden && !document.hidden) readPanel(); };' in js
     assert 'addEventListener("focus", reread);' in js
     assert 'document.addEventListener("visibilitychange"' in js
     assert js.count('addEventListener("focus", reread)') == 1   # registered once, never per open
