@@ -8,7 +8,7 @@ trap 'bash "$T/watchd.sh" stop >/dev/null 2>&1; kill -9 "$sup" "$gp" 2>/dev/null
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 unset "${!SG_@}"; export SG_STATE="$T/st" SG_PROFILE= HOME="$T/home"; mkdir -p "$SG_STATE" "$HOME" "$T/runs/r1" "$SG_STATE/locks/gate"
 cp "$d/watchd.sh" "$T/watchd.sh"
-python3 - "$T/watchd.sh" "$SG_STATE" <<'PY'
+python3 - "$T/watchd.sh" "$SG_STATE" "$d" <<'PY'
 import pathlib,sys
 f,st=sys.argv[1],sys.argv[2]
 p=pathlib.Path(f); t=p.read_text()
@@ -16,8 +16,11 @@ t=t.replace('. "$(dirname "$0")/env.sh"','SG_STATE="%s"; SG_PROFILE='%st,1)
 t=t.replace('"$(dirname "$me")/watch.sh"','"%s/watch.sh"'%f.rsplit("/",1)[0])
 t=t.replace('"$(dirname "$me")/fastloop.sh"','"%s/fastloop.sh"'%f.rsplit("/",1)[0])
 t=t.replace('"$(dirname "$me")/cqflush.sh"','"%s/cqflush.sh"'%f.rsplit("/",1)[0])
+t=t.replace('"$(dirname "$me")/hub.py"','"%s/hub.py"'%sys.argv[3])   # the one reader of a run's last invocation, beside its modules
 p.write_text(t)
 PY
+# The hub reads the run's record (ADR-0167): it needs the profile a loop exports, as env.sh does.
+export SG_REPO=x/y SG_OWNER=x SG_PROJECT=4 SG_CHECKOUT="$T" SG_HUB_DIR="$T/hub" SG_SHARED="$T/shared"
 printf '#!/bin/bash\nsleep 300\n' > "$T/watch.sh"; printf '#!/bin/bash\nsleep 300\n' > "$T/fastloop.sh"; printf '#!/bin/bash\nsleep 300\n' > "$T/cqflush.sh"
 chmod +x "$T/watch.sh" "$T/fastloop.sh" "$T/cqflush.sh" "$T/watchd.sh"
 alive_sup() { [ -n "$sup" ] && kill -0 "$sup" 2>/dev/null; }
@@ -59,6 +62,25 @@ for _ in $(seq 1 20); do ! alive_sup && break; sleep 1; done
 if alive_sup; then ko "a zombie gate lock held the drain"; else ok "a zombie gate lock does not hold the drain"; fi
 kill -9 "$zpar" 2>/dev/null; wait "$zpar" 2>/dev/null; rm -f "$SG_STATE/locks/gate/pid"
 bash "$T/watchd.sh" stop >/dev/null
+# (#1228) Only the last invocation of a record counts (ADR-0167): the events after its last run_start or resume. A verdict
+# there is final, a verdict before it is history, and the run's pid is the last call_start or gate_start of that invocation.
+# drain_busy is read out of the real watchd copy and run alone, on one active run at a time.
+busy() { ( eval "$(sed -n '/^drain_busy() {/,/^}/p' "$T/watchd.sh")"; me="$T/watchd.sh"; drain_busy ); }
+sq() { python3 -c "import subprocess;print(subprocess.Popen(['python3','-c','import time;time.sleep(300)','squad','start'],start_new_session=True,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).pid)"; }
+old() { python3 -c 'import os,sys,time; t=time.time()-600; os.utime(sys.argv[1],(t,t))' "$1"; }
+ev() { printf '{"event": "%s"%s}\n' "$1" "${2:+, \"pid\": $2}"; }
+q1=$(sq); q2=$(sq); mkdir -p "$T/runs/r2"; R2="$T/runs/r2/record.jsonl"; echo "$T/runs/r2" > "$SG_STATE/active-runs.txt"; rm -f "$SG_STATE/locks/gate/pid"
+{ ev run_start; ev call_start 999999; ev verdict; ev resume; ev call_start "$q1"; } > "$R2"; old "$R2"
+busy && ok "a run resumed after a verdict holds the drain while its new pid lives" || ko "a verdict before the resume read as final: the drain ends under a live run"
+{ ev run_start; ev call_start 999999; ev resume; ev gate_start "$q2"; } > "$R2"; old "$R2"
+busy && ok "a gate_start pid of the last invocation holds the drain" || ko "a run waiting on its gate after a resume did not hold the drain"
+{ ev run_start; ev call_start "$q1"; ev resume; ev call_start "$q2"; ev verdict; } > "$R2"; old "$R2"
+busy && ko "a verdict after the last resume did not read as final" || ok "a verdict after the last resume is final"
+{ ev run_start; ev call_start "$q1"; ev resume; } > "$R2"; old "$R2"
+busy && ko "a pid from before the resume held the drain" || ok "a pid from before the resume is ignored"
+sed 's|"[^"]*/hub.py"|"'"$T"'/nohub/hub.py"|' "$T/watchd.sh" > "$T/watchd-nohub.sh"; L="$T/nohub.log"
+( eval "$(sed -n '/^drain_busy() {/,/^}/p' "$T/watchd-nohub.sh")"; drain_busy ) && /usr/bin/grep -q "run reader failed" "$L" && ok "a run reader that fails holds the drain and logs it" || ko "a failed run reader let the drain end, or logged nothing"
+kill -9 "$q1" "$q2" 2>/dev/null; : > "$SG_STATE/active-runs.txt"
 # The hub's switch over the real watchd (#923 review 2): stop-now with two live runs, a start with a third, then a drain. The
 # runs stop-now killed get their verdict at once, so the drain waits on the third run only; a run that then dies with no
 # verdict does not hold the drain either. A start that failed in the hub is not shown after a later start from the terminal.

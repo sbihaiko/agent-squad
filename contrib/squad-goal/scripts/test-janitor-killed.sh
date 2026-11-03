@@ -1,6 +1,6 @@
 #!/bin/bash
-# Rule C: a zombie run (no verdict, record idle, no process inside its folder, no live call) is dropped from active-runs.txt, and it gets the killed
-# verdict in its own record (squad.killed, the one writer). Without it the run read `stalled` in the hub for ever and held a footer slot.
+# Rule C: a zombie run (no verdict, record idle, no process inside its folder, no live call) gets the killed verdict in its own
+# record (squad.killed, the one writer), and its active-runs.txt line stays, as squad/reap.py keeps it (#1230): wtclean.sh rule A drops it. Without it the run read `stalled` in the hub for ever and held a footer slot.
 # A dry run writes nothing. Stubbed gh and board; a temp state dir. usage: bash test-janitor-killed.sh [janitor.py]
 export SG_TAKEOVER_SECONDS=1000000000000   # these runs test other rules; their fixed start stamps are past the takeover bound (ADR-0166)
 d=$(cd "$(dirname "$0")" && pwd); repo=$(cd "$d/../../.." && pwd); src=${1:-$d/janitor.py}; T=$(mktemp -d); trap 'rm -rf "$T"' EXIT; fail=0
@@ -14,7 +14,7 @@ last() { tail -1 "$T/co/runs/$1/record.jsonl"; }
 mk run-zombie 1001
 o=$(pass env JANITOR_DRY=1); echo "$o" | /usr/bin/grep -q 'zombie run run-zombie' && ok "a dry run reports the zombie" || ko "dry run: $o"
 last run-zombie | /usr/bin/grep -q '"event": "verdict"' && ko "a dry run wrote a verdict" || ok "a dry run writes no verdict"
-o=$(pass env); /usr/bin/grep -q 'run-zombie' "$T/st/active-runs.txt" && ko "the zombie stays in active-runs: $o" || ok "the zombie is dropped from active-runs"
+o=$(pass env); /usr/bin/grep -qx 'run-zombie' "$T/st/active-runs.txt" && ok "the zombie keeps its active-runs line (#1230)" || ko "the zombie lost its active-runs line: $o"
 last run-zombie | /usr/bin/grep -q '"verdict": "failed".*"reasons": \["killed/no-process"\]' && ok "the zombie's record ends in the killed verdict" || ko "no killed verdict: $(last run-zombie)"
 # #745: a helper the session left behind (uv, caffeinate -- any process with a cwd inside the run folder) is not a live run.
 # The run's own session is; a helper is reaped with the zombie, or it keeps the run "alive" for ever.
@@ -22,7 +22,7 @@ mk run-helper 1002
 ( cd "$T/co/runs/run-helper" && exec sleep 60 ) & hp=$!
 sleep 0.3
 o=$(pass env)
-/usr/bin/grep -q 'run-helper' "$T/st/active-runs.txt" && ko "a leftover helper keeps the run alive: $o" || ok "a leftover helper does not keep a zombie alive"
+last run-helper | /usr/bin/grep -q '"reasons": \["killed/no-process"\]' && ok "a leftover helper does not keep a zombie alive" || ko "a leftover helper keeps the run alive: $o"
 st=$(ps -o state= -p "$hp" 2>/dev/null | tr -d ' ')   # a killed child is a zombie until the shell reaps it, so the state decides
 case "$st" in Z*|"") ok "the zombie's leftover helper is killed with it";; *) ko "the zombie's leftover helper survives the pass (state $st)";; esac
 wait "$hp" 2>/dev/null
