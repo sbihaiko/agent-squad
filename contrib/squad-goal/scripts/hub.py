@@ -371,9 +371,10 @@ def child_transcript_usage(record, kid, definition=None, defs=None, cutoff=None)
 def scan(p):
     """Parse one record.jsonl into fields. Finished runs come from `hist`, unfinished ones are cached by (mtime, size)."""
     p = str(p)
-    if p in hist and "v17" in hist[p]: return hist[p]   # v10 added the worktree paths a run works in (the load attribution reads them); v11 reads the run issue from request.txt; v12 reads every issue of a dispatch request's CHILD lines; v13 reads the test share a gate counted; v14 reads the card's label from the dispatch form too; v15 splits a run sub/api on the canonical model id (#791, #793); v16 counts a child's tokens from its transcript when no outcome reached the record (#796); v17 counts a fix round's messages after its last outcome, follows a reader to its writer, and drops a shared folder (#802)
     try: st = os.stat(p)
-    except OSError: return None
+    except OSError: return hist[p] if p in hist and "v18" in hist[p] else None
+    h = hist.get(p)
+    if h and "v18" in h and h.get("rec") == [st.st_mtime_ns, st.st_size]: return h   # v10 added the worktree paths a run works in (the load attribution reads them); v11 reads the run issue from request.txt; v12 reads every issue of a dispatch request's CHILD lines; v13 reads the test share a gate counted; v14 reads the card's label from the dispatch form too; v15 splits a run sub/api on the canonical model id (#791, #793); v16 counts a child's tokens from its transcript when no outcome reached the record (#796); v17 counts a fix round's messages after its last outcome, follows a reader to its writer, and drops a shared folder (#802); v18 keeps the record's write time and size, so a record that grew after its verdict (a resume) is read again, and reads the last invocation's verdict only (#1229)
     c = live.get(p)
     if c and c[0] == st.st_mtime and c[1] == st.st_size and c[3] == child_stamp(p, *c[4]): return c[2]
     spend = sub = api = 0.0; mod = {}; t0 = t1 = ver = None; reasons = []; land = False; issues = set(); ntok = 0; kind = "code"; fix = None; stack = None; bug = False; merge = False; head = None; rc = None; share = None; pid = pid_at = None
@@ -382,7 +383,8 @@ def scan(p):
     try: req_issues = request_issues((pathlib.Path(p).parent / "request.txt").read_text(errors="replace")); has_req = True
     except OSError: req_issues = set(); has_req = False
     with open(p) as f:
-        for i, l in enumerate(f):
+        text = f.read()   # one read: the loop below and the invocation slice share it
+        for i, l in enumerate(text.splitlines(keepends=True)):
             if i < 200: issues.update(ref_issues(l))   # the fallback when request.txt is missing: a reference quoted in the transcript is not the run's own issue
             if i < 200 and fix is None:
                 fm = re.search(r"FIX RUN[^#]{0,120}?PR #(\d+)", l)
@@ -433,7 +435,9 @@ def scan(p):
                 if d.get("outcome") == "pass": land = True
                 h = (d.get("effect") or {}).get("head") if isinstance(d.get("effect"), dict) else None
                 if h: head = h
-            elif e == "verdict": ver, reasons, t1, rc = d.get("verdict"), d.get("reasons") or [], ts, d.get("exit_code")
+    # Only the last verdict after the last start or resume is final: a run resumed after a verdict is live again (ADR-0167, #1229).
+    fin = next((e for e in reversed(loop_invocation(text)) if e.get("event") == "verdict"), None)
+    if fin: ver, reasons, t1, rc = fin.get("verdict"), fin.get("reasons") or [], fin.get("ts"), fin.get("exit_code")
     # A child's transcript holds the tokens its record lacks: all of them when no outcome reached the record (killed, or running), and
     # the messages after its last outcome when it has one, so a fix round killed before its own outcome counts (#796, #802). Each
     # transcript folder is read once, and a folder two working directories name is no child's alone (#802).
@@ -449,15 +453,16 @@ def scan(p):
             else: api += v["spend"]
     if has_req: src, why, issues = ("request", None, req_issues) if req_issues else (None, "request-no-issue", set())   # the request is the truth; the transcript never overrides it
     else: src, why = ("transcript" if issues else None), "request-missing"
-    r = {"spend": round(spend, 4), "sub": round(sub, 4), "api": round(api, 4), "mod": mod, "v8": 1, "v9": 1, "v10": 1, "v11": 1, "v12": 1, "v13": 1, "v14": 1, "v15": 1, "v16": 1, "v17": 1, "t0": t0, "t1": t1, "verdict": ver, "reasons": reasons, "land": land, "issues": sorted(issues, key=int), "issue_src": src, "issue_why": why, "kind": kind, "fix": fix, "stack": stack, "bug": bug, "merge": merge, "head": head, "exit_code": rc, "agents": len(accepted - done_kids), "wts": sorted(wts), "share": share, "pid": pid, "pid_at": pid_at}
+    r = {"spend": round(spend, 4), "sub": round(sub, 4), "api": round(api, 4), "mod": mod, "v8": 1, "v9": 1, "v10": 1, "v11": 1, "v12": 1, "v13": 1, "v14": 1, "v15": 1, "v16": 1, "v17": 1, "v18": 1, "rec": [st.st_mtime_ns, st.st_size], "t0": t0, "t1": t1, "verdict": ver, "reasons": reasons, "land": land, "issues": sorted(issues, key=int), "issue_src": src, "issue_why": why, "kind": kind, "fix": fix, "stack": stack, "bug": bug, "merge": merge, "head": head, "exit_code": rc, "agents": len(accepted - done_kids), "wts": sorted(wts), "share": share, "pid": pid, "pid_at": pid_at}
     r["id"] = rid   # the run folder: the label a run with no issue falls back on
     r["label"] = run_label(r)               # the card's name is computed here, so the page renders a value and holds no rule (ADR-0137)
-    if ver is not None:
-        hist[p] = r
+    if ver is not None or p in hist:   # a finished run is cached; a cached run that resumed leaves the cache
+        if ver is not None: hist[p] = r
+        else: hist.pop(p)
         with LOCK:
             try: HIST.write_text(json.dumps(hist))
             except OSError: pass
-    else: live[p] = (st.st_mtime, st.st_size, r, stamp, (kids, defs))
+    if ver is None: live[p] = (st.st_mtime, st.st_size, r, stamp, (kids, defs))
     return r
 
 def state_of(r, age):

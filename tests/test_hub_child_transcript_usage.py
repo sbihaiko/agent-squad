@@ -153,14 +153,15 @@ def test_the_day_stats_show_the_aborted_child_model(hub, layout, monkeypatch):
 
 
 def test_a_finished_run_cached_under_v16_is_scanned_again(hub, layout):
-    """#802: the scan cache marker is v17, so a finished run cached under v16 is read again, with its fix rounds and shared folders."""
+    """#802, #1229: the scan cache marker is v18, so a finished run cached under v16 is read again, with its fix rounds and shared folders."""
     run_dir, _ = layout
     rec = _record(run_dir, SPAWN)
     stale = {"v16": 1, "sentinel": True}
     hub.hist[str(rec)] = stale
     got = hub.scan(rec)
     assert got is not stale and "sentinel" not in got, got
-    fresh = {"v17": 1, "sentinel": True}
+    st = rec.stat()
+    fresh = {"v18": 1, "rec": [st.st_mtime_ns, st.st_size], "sentinel": True}
     hub.hist[str(rec)] = fresh
     assert hub.scan(rec) is fresh
 
