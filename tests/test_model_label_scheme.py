@@ -1,8 +1,8 @@
 """Every model reads by one uniform name, and the hub panel row shows that name, not the raw id (#687).
 
 The owner found mixed labels: "Opus 5.5" beside "Claude Haiku 5.5", "DeepSeek V4.1 Flash (tools)", and a raw id
-truncated to "cl..." beside each label. The scheme: `<Family> <version> <tier>`, one of seven families (Claude, GPT,
-Gemini, DeepSeek, Grok, Kimi, NVIDIA), no parentheses, and at most one trailing lowercase variant word ("fast", "no-tools", "legacy").
+truncated to "cl..." beside each label. The scheme: `<Family> <version> <tier>`, one of eight families (Claude, GPT,
+Gemini, DeepSeek, Grok, Kimi, NVIDIA, Qwen), no parentheses, and at most one trailing lowercase variant word ("fast", "no-tools", "legacy").
 The label lives in the one registry (ADR-0147); the panel row renders it and keeps the id in its tooltip.
 """
 import json
@@ -23,7 +23,8 @@ SCHEME = re.compile(
     r"|DeepSeek V\d+(?:\.\d+)? (?:Flash|Pro)"
     r"|Grok \d+(?:\.\d+)?"
     r"|Kimi K\d+(?:\.\d+)?(?: Preview)?"
-    r"|NVIDIA Nemotron \d+(?:\.\d+)? (?:Nano|Super))"
+    r"|NVIDIA Nemotron \d+(?:\.\d+)? (?:Nano|Super)"
+    r"|Qwen \d+(?:\.\d+)? Coder \d+B)"
     r"(?: [a-z][a-z-]*)?$")
 
 

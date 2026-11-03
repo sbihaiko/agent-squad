@@ -13,7 +13,8 @@ The step does two things and writes through their existing owners only (ADR-0149
   issue reconciliation read it, and the slot counter frees the slot from the verdict.
 
 Proof of death: the last invocation (after the last `run_start` or `resume`) names its engine process in a `call_start` or a
-`gate_start` (`pid`, `started_at`), and `caps.alive` with the pid-reuse rule says that process is gone. A process that
+`gate_start` (`pid`, `started_at`), read by the one reader (`squad/run_liveness.py`), and `caps.alive` with the pid-reuse
+rule (`run_liveness.same_process`) says that process is gone. A process that
 started after the run named the pid is a different process, so it is no proof of life. An invocation that named no process
 is not proven dead.
 
@@ -26,7 +27,6 @@ A missing list or record means absence, never a finished run.
 
 usage: python3 -m squad.reap <active-runs.txt> <checkout> [--dry]
 """
-import json
 import os
 import re
 import subprocess
@@ -37,35 +37,10 @@ from pathlib import Path
 from squad import caps as C
 from squad import killed as K
 from squad import record
+from squad import run_liveness as RL
 
 IDLE_S = 120   # a record that moved this recently belongs to a process that may still be starting or resuming
 LIVE_PROC = re.compile(r"gate\.sh\b|_bundled/claude|/claude\b|\bclaude-code\b|squad\.cli|-m squad\b|[s]quad (start|resume)( |$)")
-
-
-def last_invocation(text):
-    """The events after the last `run_start` or `resume`, the start itself first. Unreadable lines are skipped."""
-    out = []
-    for line in text.splitlines():
-        try:
-            ev = json.loads(line)
-        except ValueError:
-            continue
-        if not isinstance(ev, dict):
-            continue
-        if ev.get("event") in ("run_start", "resume"):
-            out = []
-        out.append(ev)
-    return out
-
-
-def engine_process(events):
-    """(pid, started_at) of the process the invocation last named, from its `call_start` or `gate_start`; None when none."""
-    for ev in reversed(events):
-        if ev.get("event") in ("call_start", "gate_start"):
-            pid = ev.get("pid")
-            if isinstance(pid, int) and not isinstance(pid, bool) and pid > 1:
-                return pid, ev.get("started_at")
-    return None
 
 
 def _procs():
@@ -122,8 +97,8 @@ def reap(active_runs, checkout, ceiling=None, procs=None, dry=False, now=None, s
             continue   # no record: the launch window or the janitor decides, never this step
         if C.final_verdict(text) is not None or C._in_launch_window(folder, now) or now - moved < IDLE_S:
             continue
-        events = last_invocation(text)
-        proc = engine_process(events)
+        events = RL.invocation(text)
+        proc = RL.engine_process(events)
         if proc is None or C.alive(proc[0], proc[1]):
             continue
         name = next((e.get("run_id") for e in events if e.get("event") in ("run_start", "resume") and e.get("run_id")), None) or folder.name

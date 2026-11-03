@@ -102,6 +102,7 @@ contrib/squad-goal/scripts/watch.sh	contrib/squad-goal/scripts/test-watch-single
 contrib/squad-goal/scripts/watchd.sh	contrib/squad-goal/scripts/test-watchd-driver-sha.sh
 contrib/squad-goal/scripts/watchd.sh	contrib/squad-goal/scripts/test-watchd-lock.sh
 contrib/squad-goal/scripts/watchd.sh	contrib/squad-goal/scripts/test-watchd-token-stop.sh
+contrib/squad-goal/scripts/watchd.sh	contrib/squad-goal/scripts/test-watchd-drain.sh
 contrib/squad-goal/scripts/watchtail.sh	contrib/squad-goal/scripts/test-watchtail.sh
 contrib/squad-goal/scripts/wave.sh	contrib/squad-goal/scripts/test-wave.sh
 contrib/squad-goal/scripts/wave.sh	contrib/squad-goal/scripts/test-wave-lifecycle.sh
@@ -131,6 +132,7 @@ contrib/squad-goal/scripts/hub.py	contrib/squad-goal/scripts/test-hub-ci.sh
 contrib/squad-goal/scripts/hub.py	contrib/squad-goal/scripts/test-hub-demote.sh
 contrib/squad-goal/scripts/hub.py	contrib/squad-goal/scripts/test-hub-ended.sh
 contrib/squad-goal/scripts/hub.py	contrib/squad-goal/scripts/test-hub-killed.sh
+contrib/squad-goal/scripts/hub.py	contrib/squad-goal/scripts/test-hub-loop-switch.sh
 contrib/squad-goal/scripts/hub.py	contrib/squad-goal/scripts/test-hub-metrics.sh
 contrib/squad-goal/scripts/hub.py	contrib/squad-goal/scripts/test-hub-mobile-move.sh
 contrib/squad-goal/scripts/hub.py	contrib/squad-goal/scripts/test-hub-mobile-run.sh
@@ -218,6 +220,13 @@ squad/record.py	tests/test_record.py
 squad/report.py	tests/test_report.py
 squad/review_streak.py	tests/test_review_streak.py
 squad/run_caps.py	tests/test_run_caps.py
+squad/run_liveness.py	tests/test_run_liveness.py
+squad/run_liveness.py	tests/test_hub_run_liveness.py
+squad/run_liveness.py	tests/test_machine_caps.py
+squad/run_liveness.py	contrib/squad-goal/scripts/test-watchd-drain.sh
+squad/run_liveness.py	contrib/squad-goal/scripts/test-health.sh
+squad/run_liveness.py	contrib/squad-goal/scripts/test-hub-loop-switch.sh
+squad/run_liveness.py	contrib/squad-goal/scripts/test-hub-killed.sh
 squad/runs.py	tests/test_runs.py
 squad/sandbox.py	tests/test_sandbox.py
 squad/scaffold.py	tests/test_scaffold.py

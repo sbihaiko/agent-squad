@@ -8,14 +8,14 @@ src=$(cd "$(dirname "${1:-$0}")" && pwd)/$(basename "${1:-hub.py}"); [ -n "$1" ]
 T=$(mktemp -d); fail=0
 export SG_REPO=x/y SG_OWNER=x SG_PROJECT=4 SG_CHECKOUT="$T" SG_HUB_DIR="$T/hub" SG_STATE="$T/st"
 out=$(python3 - <<'PY' 2>&1
-import datetime as dt, importlib.util, json, os, pathlib, subprocess
+import datetime as dt, importlib.util, json, os, pathlib, subprocess, time
 spec = importlib.util.spec_from_file_location("hub", os.environ["HUB_SRC"]); hub = importlib.util.module_from_spec(spec); spec.loader.exec_module(hub)
 STATE = pathlib.Path(os.environ["SG_STATE"]); STATE.mkdir(parents=True, exist_ok=True)
 import sys; sys.path.insert(0, str(pathlib.Path(os.environ["HUB_SRC"]).resolve().parents[3])); from squad import record as R
 def real_record(d, pid):   # a record as a run writes it: run_start, then call_start with the run process pid
     f = pathlib.Path(d) / "record.jsonl"; f.unlink(missing_ok=True); r = R.Record(f)
     r.append("run_start", run_id="r", graph_name="g", graph_hash="h", engine_options={}, root=".", plan=[])
-    r.append("call_start", node="n", entry=1, session="s", pid=pid, limit=None, started_at=0)
+    r.append("call_start", node="n", entry=1, session="s", pid=pid, limit=None, started_at=time.time())   # the engine names its pid after it started
 calls = []
 def watchd(*args):   # the marks watchd.sh leaves: a drain pauses dispatch and marks it, a stop clears the mark
     calls.append(list(args))

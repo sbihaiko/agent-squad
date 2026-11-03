@@ -16,11 +16,11 @@ t=t.replace('. "$(dirname "$0")/env.sh"','SG_STATE="%s"; SG_PROFILE='%st,1)
 t=t.replace('"$(dirname "$me")/watch.sh"','"%s/watch.sh"'%f.rsplit("/",1)[0])
 t=t.replace('"$(dirname "$me")/fastloop.sh"','"%s/fastloop.sh"'%f.rsplit("/",1)[0])
 t=t.replace('"$(dirname "$me")/cqflush.sh"','"%s/cqflush.sh"'%f.rsplit("/",1)[0])
-t=t.replace('"$(dirname "$me")/hub.py"','"%s/hub.py"'%sys.argv[3])   # the one reader of a run's last invocation, beside its modules
 p.write_text(t)
 PY
-# The hub reads the run's record (ADR-0167): it needs the profile a loop exports, as env.sh does.
-export SG_REPO=x/y SG_OWNER=x SG_PROJECT=4 SG_CHECKOUT="$T" SG_HUB_DIR="$T/hub" SG_SHARED="$T/shared"
+# The drain reads a run through squad/run_liveness.py (ADR-0167), found in SG_SQUAD as a live copy finds it; the hub part
+# below needs the profile a loop exports, as env.sh does.
+export SG_REPO=x/y SG_OWNER=x SG_PROJECT=4 SG_CHECKOUT="$T" SG_HUB_DIR="$T/hub" SG_SHARED="$T/shared" SG_SQUAD="$(cd "$d/../../.." && pwd)"
 printf '#!/bin/bash\nsleep 300\n' > "$T/watch.sh"; printf '#!/bin/bash\nsleep 300\n' > "$T/fastloop.sh"; printf '#!/bin/bash\nsleep 300\n' > "$T/cqflush.sh"
 chmod +x "$T/watch.sh" "$T/fastloop.sh" "$T/cqflush.sh" "$T/watchd.sh"
 alive_sup() { [ -n "$sup" ] && kill -0 "$sup" 2>/dev/null; }
@@ -78,9 +78,46 @@ busy && ok "a gate_start pid of the last invocation holds the drain" || ko "a ru
 busy && ko "a verdict after the last resume did not read as final" || ok "a verdict after the last resume is final"
 { ev run_start; ev call_start "$q1"; ev resume; } > "$R2"; old "$R2"
 busy && ko "a pid from before the resume held the drain" || ok "a pid from before the resume is ignored"
-sed 's|"[^"]*/hub.py"|"'"$T"'/nohub/hub.py"|' "$T/watchd.sh" > "$T/watchd-nohub.sh"; L="$T/nohub.log"
-( eval "$(sed -n '/^drain_busy() {/,/^}/p' "$T/watchd-nohub.sh")"; drain_busy ) && /usr/bin/grep -q "run reader failed" "$L" && ok "a run reader that fails holds the drain and logs it" || ko "a failed run reader let the drain end, or logged nothing"
-kill -9 "$q1" "$q2" 2>/dev/null; : > "$SG_STATE/active-runs.txt"
+kill -9 "$q1" "$q2" 2>/dev/null
+# (#1228 review) A read that fails is unknown, and an unknown holds the drain: never "idle" on a failed read. The drain takes an
+# answer only on exit 0 with the exact token on stdout; stderr goes to a file, never into the answer. Each read is bounded, a
+# distinct error is one watch.log line, and a streak of failures is one alerts.log line.
+mkdir -p "$T/stub/squad"; : > "$T/stub/squad/__init__.py"
+cat > "$T/stub/squad/run_liveness.py" <<'STUB'
+import os, sys, time
+m = os.environ.get("STUB", "")
+if m.startswith("noise"): print("Traceback (most recent call last):\nwarning: idle live", file=sys.stderr)
+if m == "fail": print("run_liveness: unknown: cannot read the record: [Errno 13] Permission denied", file=sys.stderr); sys.exit(3)
+if m == "rc": print("idle"); sys.exit(1)
+if m == "junk": print("idle and more")
+if m == "hang": time.sleep(30)
+if m in ("noise-idle", "idle"): print("idle")
+if m == "noise-live": print("live")
+STUB
+WL="$T/stub.log"; AL="$SG_STATE/alerts.log"; rm -f "$AL" "$SG_STATE/drain-reader.fail"; R3="$T/runs/r3"; mkdir -p "$R3"; echo "$R3" > "$SG_STATE/active-runs.txt"
+sb() { ( eval "$(sed -n '/^drain_busy() {/,/^}/p' "$T/watchd.sh")"; me="$T/watchd.sh"; L="$WL"; SG_SQUAD="$T/stub" STUB="$1" SG_DRAIN_READ_S=1 SG_DRAIN_ALERT_AFTER=3 drain_busy ); }
+n_wl() { /usr/bin/grep -c "run reader failed" "$WL" 2>/dev/null || true; }
+sb noise-idle && ko "stderr noise changed an idle answer: the drain held" || ok "stderr noise does not change an idle answer"
+sb noise-live && ok "stderr noise does not change a live answer" || ko "stderr noise changed a live answer: the drain ended"
+sb fail && ok "a read failure holds the drain" || ko "a read failure ended the drain"
+[ "$(n_wl)" = 1 ] && /usr/bin/grep -q "Permission denied" "$WL" && ok "a read failure is one watch.log line naming its cause" || ko "a read failure logged $(n_wl) lines: $(cat "$WL" 2>/dev/null)"
+sb fail; [ "$(n_wl)" = 1 ] && ok "the same failure again writes no second line" || ko "a repeated failure logged $(n_wl) lines"
+[ -s "$AL" ] && ko "two failures already raised the alert" || ok "a short failure streak raises no alert"
+sb rc && ok "a non-zero exit holds the drain, whatever stdout says" || ko "a non-zero exit with an idle token ended the drain"
+[ "$(/usr/bin/grep -c "DRAIN" "$AL" 2>/dev/null)" = 1 ] && ok "a streak of failed reads raises one alerts.log line" || ko "the failure streak raised $(/usr/bin/grep -c DRAIN "$AL" 2>/dev/null) alerts"
+sb junk && ok "exit 0 with no exact token holds the drain" || ko "exit 0 with a malformed answer ended the drain"
+[ "$(/usr/bin/grep -c "DRAIN" "$AL")" = 1 ] && ok "the alert is raised once per streak" || ko "the alert repeated in one streak"
+s=$(date +%s); sb hang && ok "a read that hangs holds the drain" || ko "a hung read ended the drain"
+[ $(( $(date +%s) - s )) -lt 10 ] && ok "a hung read is bounded" || ko "a hung read was not bounded"
+[ "$(n_wl)" = 4 ] && ok "each distinct failure is one watch.log line" || ko "four distinct failures logged $(n_wl) lines"
+sb idle; [ ! -e "$SG_STATE/drain-reader.fail" ] && ok "an answer ends the failure streak" || ko "an answer left the failure streak"
+sb fail; [ "$(n_wl)" = 5 ] && ok "a failure after an answer is logged again" || ko "a failure after an answer logged $(n_wl) lines in all"
+pz() { ( eval "$(sed -n '/^drain_pause() {/,/^}/p' "$T/watchd.sh")"; SG_DRAIN_POLL=$1 drain_pause ); }
+printf '3\nx\n' > "$SG_STATE/drain-reader.fail"; a=$(pz 1); printf '10\nx\n' > "$SG_STATE/drain-reader.fail"; b=$(pz 5); rm -f "$SG_STATE/drain-reader.fail"; c=$(pz 5)
+[ "$a $b $c" = "8 60 5" ] && ok "failed reads back the poll off, to a bound, and an answer restores it" || ko "the drain pause read $a $b $c, not 8 60 5"
+rm -f "$SG_STATE/drain-reader.fail"; : > "$WL"
+( eval "$(sed -n '/^drain_busy() {/,/^}/p' "$T/watchd.sh")"; me="$T/watchd.sh"; L="$WL"; SG_SQUAD="$T/nosquad" drain_busy ) && /usr/bin/grep -q "run reader failed" "$WL" && ok "no reader to run holds the drain and logs it" || ko "a missing run reader let the drain end, or logged nothing"
+rm -f "$SG_STATE/drain-reader.fail" "$AL"; : > "$SG_STATE/active-runs.txt"
 # The hub's switch over the real watchd (#923 review 2): stop-now with two live runs, a start with a third, then a drain. The
 # runs stop-now killed get their verdict at once, so the drain waits on the third run only; a run that then dies with no
 # verdict does not hold the drain either. A start that failed in the hub is not shown after a later start from the terminal.
@@ -108,7 +145,7 @@ def run(name):   # a detached squad run, as autofrontier leaves one: its record 
     pid = int(out.stdout); f = T / "runs" / name; f.mkdir(parents=True, exist_ok=True)
     r = R.Record(f / "record.jsonl")
     r.append("run_start", run_id=name, graph_name="g", graph_hash="h", engine_options={}, root=".", plan=[])
-    r.append("call_start", node="n", entry=1, session="s", pid=pid, limit=None, started_at=0)
+    r.append("call_start", node="n", entry=1, session="s", pid=pid, limit=None, started_at=time.time())   # the engine names its pid after it started
     with (ST / "active-runs.txt").open("a") as a: a.write(f"{f}\n")
     PIDS.append(pid); return f, pid
 PIDS = []
