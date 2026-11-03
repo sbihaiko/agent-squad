@@ -313,4 +313,14 @@ printf '%s' "$o" | /usr/bin/grep -qF "HEALTH landing-held: the landing lock has 
 o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -q 'HEALTH landing-held:' && ko "the same held landing alerted twice" || ok "the same held landing alerts once"
 kill "$lh" 2>/dev/null; wait "$lh" 2>/dev/null; rm -rf "$T/st/locks/single-wland"
 o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -q 'HEALTH landing-held cleared' && ok "a released landing clears the cause" || ko "not cleared: $o"
+# ---- #1290: a landing that runs more than one gate round (a red tip, a child that leaves, the tip again) is progressing: its last
+# round's start is the clock, not the landing's start. The held instant still names when the lock was taken.
+mkdir -p "$T/st/locks/single-wland"; /bin/sleep 60 & lh=$!; echo "$lh" > "$T/st/locks/single-wland/pid"; touch -t 202001010000 "$T/st/locks/single-wland/pid"
+touch "$T/st/locks/single-wland/round"
+o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -q 'landing-held' && ko "a landing in a fresh gate round alerted: $o" || ok "a landing past its bounds whose gate round just started stays quiet"
+touch -t 202001010000 "$T/st/locks/single-wland/round"
+o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -qF "HEALTH landing-held: the landing lock has been held by pid $lh since 2020-01-01 00:00:00" \
+  && ok "a landing whose last gate round is past the bounds alerts, naming the held instant" || ko "a stale gate round did not alert: $o"
+kill "$lh" 2>/dev/null; wait "$lh" 2>/dev/null; rm -rf "$T/st/locks/single-wland"
+o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -q 'HEALTH landing-held cleared' && ok "the round-progress landing clears its cause" || ko "round-progress cause not cleared: $o"
 kill $wp $fp 2>/dev/null; rm -rf "$T" "$P"; exit $fail
