@@ -5318,7 +5318,7 @@ const ltSpan=(r,a,b)=>{const t0=Date.parse(r.start),t1=Date.parse(r.end),at=f=>n
 const LT_TF=[["1","Past 24 hours"],["2","Past 48 hours"],["3","Past 72 hours"],["7","Past week"],["14","Past 2 weeks"],["30","Past month"],["all","All"]];
 const ltP=64;   // a duration label ("17h 36m") is wider than a count, and the old margin cut every tick to its tail (#Astra review)
 const ltX=x=>ltP+x*(flowW-2*ltP),ltY=y=>flowH-ltP-y*(flowH-2*ltP);
-const ltLine=(v,col,dash)=>v?`<line x1=${ltP} x2=${flowW-ltP} y1=${ltY(v.y)} y2=${ltY(v.y)} stroke="${col}" stroke-width=2${dash?` stroke-dasharray="${dash}"`:""}><title>${esc(v.label)} ${esc(v.text)}</title></line>`+`<text x=${flowW-ltP-9} y=${ltY(v.y)-4} text-anchor=end fill="${col}" style="font-weight:600">${esc(v.label)} ${esc(v.text)}</text>`:"";
+const ltLine=(v,col,dash)=>v?`<line x1=${ltP} x2=${flowW-ltP} y1=${ltY(v.y)} y2=${ltY(v.y)} stroke="${col}" stroke-width=2${dash?` stroke-dasharray="${dash}"`:""}><title>${esc(v.label)} ${esc(v.text)}</title></line>`:"";   // the value lives in the legend, never over the newest dots (#1146)
 const ltChart=(c,cov)=>{const n=c.dots.length,base=flowH-flowP,ink="var(--ink-soft)",mute="var(--mute)";
   const grp=(name,body)=>`<span class=ltgrp><b class=ltgl>${name}</b> ${body}</span>`,backTo=LT_TF.find(([k])=>k===LT.tf)[1];
   const ctl=`<p class=fhead>`+
@@ -5337,19 +5337,19 @@ const ltChart=(c,cov)=>{const n=c.dots.length,base=flowH-flowP,ink="var(--ink-so
   if(!n)return ctl+"<p class=fnote>no closed card in this timeframe</p>";
   const up=c.dots.map(d=>`${ltX(d.x)},${ltY(d.rolling.y_high)}`),low=[...c.dots].reverse().map(d=>`${ltX(d.x)},${ltY(d.rolling.y_low)}`);
   const banded=c.dots.every(d=>d.rolling.y_high!=null);
-  const band=banded?`<polygon points="${[...up,...low].join(" ")}" fill="var(--s3)" fill-opacity=".16"><title>Standard deviation</title></polygon>`:"";
-  const roll=`<polyline fill=none stroke="var(--s3)" stroke-width=2 points="${c.dots.map(d=>`${ltX(d.x)},${ltY(d.rolling.y)}`).join(" ")}"><title>Rolling average, centered</title></polyline>`;
+  const band=banded?`<polygon points="${[...up,...low].join(" ")}" fill="var(--s3)" fill-opacity=".28"><title>Standard deviation</title></polygon>`:"";   // the band keeps its own fill, stronger (#1146)
+  const roll=`<polyline fill=none stroke="var(--acc)" stroke-width=2 points="${c.dots.map(d=>`${ltX(d.x)},${ltY(d.rolling.y)}`).join(" ")}"><title>Rolling average, centered</title></polyline>`;   // the trend keeps the accent (#1146)
   const ys=c.ticks.map(t=>`<line x1=${ltP-4} y1=${ltY(t.y)} x2=${ltP} y2=${ltY(t.y)} stroke=${mute}></line><text x=${ltP-7} y=${ltY(t.y)+4} text-anchor=end fill=${ink}>${esc(t.text)}</text>`).join("");
   const xs=c.xticks.map(t=>`<text x=${ltX(t.x)} y=${base+17} text-anchor=middle fill=${ink}>${esc(t.text)}</text>`).join("");
   const axes=`<line x1=${ltP} y1=${ltP-10} x2=${ltP} y2=${base} stroke=var(--line)></line><line x1=${ltP} y1=${base} x2=${flowW-ltP} y2=${base} stroke=var(--line)></line>`+
     `<text x=${ltP} y=${ltP-16} text-anchor=start fill=${ink}>elapsed time (${c.scale==="cube"?"cube root":c.scale})</text>`;
-  const lines=ltLine(c.average,"var(--s6)","")+ltLine(c.median,"var(--ok)","2 3")+ltLine(c.p85,"var(--s5)","5 3");
-  const dots=c.clusters.map((k,i)=>{const m=k.dots.length,title=m>1?`${m} issues`:`#${k.dots[0].n} ${esc(k.dots[0].title)}`;
-    return `<circle data-k=${i} cx=${ltX(k.x)} cy=${ltY(k.y)} r=${m>1?6:4.5} fill="${m>1?"var(--bg)":"var(--s3)"}" stroke="var(--s3)" stroke-width=2${k.dots.some(d=>d.approx||d.unknown_first)?' stroke-dasharray="3 2"':""} style="cursor:pointer"><title>${esc(title)} · ${esc(k.dots[0].text)} · flowing ${esc(k.dots[0].flowing_text)} · held ${esc(k.dots[0].held_text)} · closed ${esc(k.dots[0].closed)}${k.dots.some(d=>d.approx)?" · start approximate":""}${k.dots.some(d=>d.unknown_first)?" · first interval unknown":""}</title></circle>`+(m>1?`<text x=${ltX(k.x)} y=${ltY(k.y)+4} fill="var(--s3)" text-anchor=middle pointer-events=none>${m}</text>`:"")}).join("");
+  const lines=ltLine(c.average,"var(--s8)","")+ltLine(c.median,"var(--ok)","2 3")+ltLine(c.p85,"var(--s5)","5 3");   // the average takes the palette grey (#1146)
+  const dots=c.clusters.map((k,i)=>{const m=k.dots.length,title=m>1?`${m} issues`:`#${k.dots[0].n} ${esc(k.dots[0].title)}`;   // the hub sizes the ring for its count (#1146)
+    return `<circle data-k=${i} cx=${ltX(k.x)} cy=${ltY(k.y)} r=${k.r} fill="${m>1?"var(--bg)":"var(--ink-soft)"}" stroke="var(--ink-soft)" stroke-width=2${k.dots.some(d=>d.approx||d.unknown_first)?' stroke-dasharray="3 2"':""} style="cursor:pointer"><title>${esc(title)} · ${esc(k.dots[0].text)} · flowing ${esc(k.dots[0].flowing_text)} · held ${esc(k.dots[0].held_text)} · closed ${esc(k.dots[0].closed)}${k.dots.some(d=>d.approx)?" · start approximate":""}${k.dots.some(d=>d.unknown_first)?" · first interval unknown":""}</title></circle>`+(m>1?`<text x=${ltX(k.x)} y=${ltY(k.y)+/*RING_BASELINE*/} fill="var(--ink-soft)" text-anchor=middle pointer-events=none>${m}</text>`:"")}).join("");
   const ltV=v=>v?esc(v.text):"?",S="";   // the numbers live in the legend, each beside what it answers: one line, never two copies of the same fact
-  const legend=`<p class="flg ltlg"><span><i style="background:var(--s3)"></i>Rolling average, centered</span>${banded?`<span><i style="background:var(--s3);opacity:.3"></i>Standard deviation <em>the usual spread</em></span>`:""}<span><i style="background:var(--s6)"></i>${esc(c.average.label)} <b>${ltV(c.average)}</b> <em>one slow card lifts it</em></span><span><i style="background:var(--ok)"></i>${esc(c.median.label)} <b>${ltV(c.median)}</b> <em>half the cards closed faster</em></span><span><i style="background:var(--s5)"></i>${esc(c.p85.label)} <b>${ltV(c.p85)}</b> <em>85% of closed cards finished within this time</em></span></p>`;
+  const legend=`<p class="flg ltlg"><span><i style="background:var(--acc)"></i>Rolling average, centered</span>${banded?`<span><i style="background:var(--s3);opacity:.28"></i>Standard deviation <em>the usual spread</em></span>`:""}<span><i style="background:var(--s8)"></i>${esc(c.average.label)} <b>${ltV(c.average)}</b> <em>one slow card lifts it</em></span><span><i style="background:var(--ok)"></i>${esc(c.median.label)} <b>${ltV(c.median)}</b> <em>half the cards closed faster</em></span><span><i style="background:var(--s5)"></i>${esc(c.p85.label)} <b>${ltV(c.p85)}</b> <em>85% of closed cards finished within this time</em></span></p>`;   // each entry paints the mark it names (#1146)
   const pk=LT.pick!=null&&c.clusters[LT.pick]?c.clusters[LT.pick]:null;
-  const rows=pk?`<table class=rt><thead><tr><th>Issue</th><th>Title</th><th>Elapsed</th><th>Closed</th></tr></thead><tbody>${pk.dots.map(d=>`<tr data-o=${d.n} style="cursor:pointer"><td>#${d.n}</td><td>${esc(d.title)}</td><td>${esc(d.text)}</td><td>${esc(d.closed)}</td></tr>`).join("")}</tbody></table>`:"";
+  const rows=pk?`<table class=mtab><thead><tr><th>Issue</th><th>Title</th><th>Elapsed</th><th>Closed</th></tr></thead><tbody>${pk.dots.map(d=>`<tr data-o=${d.n} style="cursor:pointer"><td>#${d.n}</td><td>${esc(d.title)}</td><td>${esc(d.text)}</td><td>${esc(d.closed)}</td></tr>`).join("")}</tbody></table>`:"";   // the page's one table rule (#1146)
   return ctl+S+legend+`<svg data-lt viewBox="0 0 ${flowW} ${flowH}">${axes}${ys}${xs}${band}${roll}${lines}${dots}</svg>`+rows;};
 const flowLead=l=>{const S=l.summary,c=LT.zc,exc=c?Object.entries(c.excluded).map(([r,n])=>({reason:r,count:n})):l.excluded,total=c?c.excluded_total:l.excluded_total,ex=exc.map(e=>`${e.count} ${esc(EXREASON[e.reason]||e.reason)}`).join(", ");
   const head=`<p class=fhead>${esc(LT_TYPES.find(([k])=>k===l.type)[1].toLowerCase())} · <b>${esc(l.measure)}</b> · window ${l.window.size} ${esc(l.window.unit)} · <span${ex?` title="${esc(ex)}"`:""}>excluded ${total}</span></p>`;   // the reasons are a hover on the one total (#1145)
@@ -5637,6 +5637,8 @@ HID_CHIP_TOKENS = (("abandoned", "err"), ("unscheduled", "warn"), ("issue_closed
 PAGE = PAGE.replace("/*HID_CHIP_RULES*/", "\n".join('.hidbar .chip[data-col="%s"] b{color:var(--%s)}' % (COLUMN[fact], token) for fact, token in HID_CHIP_TOKENS))
 PAGE = PAGE.replace("/*BOARD_COLORS*/", BOARD_COLORS_JSON).replace("/*BOARD_FLOW*/", BOARD_FLOW_JSON).replace("/*BOARD_NAMES*/", BOARD_NAMES_JSON).replace("/*BOARD_DOING*/", BOARD_DOING_JSON).replace("/*BOARD_REVIEW*/", BOARD_REVIEW_JSON).replace("/*HUB_REPO*/", json.dumps(REPO))
 PAGE = PAGE.replace("/*RUN_STATE_CSS*/", "".join(".b.%s{color:var(--%s);%s}" % (r["state"].replace(" ", "-"), r["color"], r["css"]) for r in RUN_STATES))
+# The cluster count's baseline, from the one size the ring is measured against: the page and the hub read one constant (#1146).
+PAGE = PAGE.replace("/*RING_BASELINE*/", "%g" % (_leadtime.RING_BASELINE_EM * _leadtime.RING_TEXT_PX))
 
 
 PLANS = pathlib.Path(__file__).resolve().parent / "plans.json"

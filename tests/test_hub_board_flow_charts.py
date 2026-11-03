@@ -571,6 +571,114 @@ def test_a_legend_entry_stays_on_one_line(hub):
     assert re.search(r"\.ltlg span\{[^}]*white-space:nowrap", hub.PAGE), "a legend entry may wrap across lines"
 
 
+# SPEC 1116 #1146: no statistic is drawn inside the plot, and each mark takes its own role.
+STYLESHEET = SCRIPTS / "web-tokens.css"
+
+
+def _tokens():
+    root = re.search(r":root\{(.*?)\}", STYLESHEET.read_text(), re.S).group(1)
+    return dict(re.findall(r"--([\w-]+):([^;}]+)", root))
+
+
+def _resolved(value, tokens):
+    """Follow var() chains to the literal colour a role paints; a cycle is a failure."""
+    seen = set()
+    while True:
+        m = re.fullmatch(r"var\(--([\w-]+)\)", value.strip())
+        if not m:
+            return value.strip()
+        assert m.group(1) not in seen, f"a token cycle at --{m.group(1)}"
+        seen.add(m.group(1))
+        value = tokens[m.group(1)]
+
+
+def _paint(tag, name):
+    m = re.search(rf'(?:^|\s){re.escape(name)}=(?:"([^"]*)"|\'([^\']*)\'|(\S+))', tag)
+    return next((v for v in m.groups() if v is not None), None) if m else None
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_no_statistic_is_drawn_inside_the_plot_and_the_legend_carries_each_one(hub, board, tmp_path):
+    _seed(hub, {n: _done(n, "2026-10-02T09:00:00Z") for n in range(1, 4)})
+    chart = hub.flow_lead()["lead"]["control"]["jira"]["all"]
+    out = _lt_chart(hub, tmp_path, "lt-no-stat-in-plot.js", chart)
+    plot = re.search(r"<svg [^>]*data-lt[^>]*>(.*?)</svg>", out, re.S).group(1)
+    labels = [body for _, body in _svg_texts(plot)]
+    assert not [b for b in labels if b.startswith(("Average", "Median", "p85"))], \
+        f"a statistic is drawn inside the plot: {labels}"
+    legend = re.search(r'<p class="flg ltlg">(.*?)</p>', out).group(1)
+    entries = re.findall(r"<span>(.*?)</span>", legend)
+    for label, key, reading in (("Average", "average", "one slow card lifts it"),
+                                ("Median", "median", "half the cards closed faster"),
+                                ("p85", "p85", "85% of closed cards finished within this time")):
+        entry = next(e for e in entries if label in re.sub(r"<[^>]+>", "", e))
+        assert f"<b>{chart[key]['text']}</b>" in entry, f"the legend does not carry {label}'s value"
+        assert reading in entry, f"the legend does not explain {label}"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_each_mark_takes_its_own_role_and_the_legend_states_it(hub, board, tmp_path):
+    _seed(hub, {n: _done(n, "2026-10-02T09:00:00Z") for n in (1, 2)})
+    chart = hub.flow_lead()["lead"]["control"]["jira"]["all"]
+    out = _lt_chart(hub, tmp_path, "lt-roles.js", chart)
+    tokens = _tokens()
+    trail = re.search(r"<polyline [^>]*>", out).group(0)
+    band = re.search(r"<polygon [^>]*>", out).group(0)
+    average = re.search(r"<line [^>]*><title>Average [^<]*</title>", out).group(0)
+    ring = re.search(r"<circle [^>]*>", out).group(0)
+    ink = _resolved("var(--ink-soft)", tokens)
+    trail_col = _resolved(_paint(trail, "stroke"), tokens)
+    band_col = _resolved(_paint(band, "fill"), tokens)
+    average_col = _resolved(_paint(average, "stroke"), tokens)
+    assert _resolved(_paint(ring, "stroke"), tokens) == ink, "a dot or ring is not the neutral ink"
+    assert trail_col == _resolved("var(--acc)", tokens), "the trend line does not take the accent"
+    assert band_col == _resolved("var(--s3)", tokens), "the band does not keep its own fill"
+    assert average_col == _resolved("var(--s8)", tokens), "the average line does not take the palette grey"
+    assert float(_paint(band, "fill-opacity")) > 0.16, "the band is no stronger than before"
+    assert len({ink, trail_col, band_col, average_col}) == 4, "two marks share one role"
+    legend = re.search(r'<p class="flg ltlg">(.*?)</p>', out).group(1)
+    swatches = re.findall(r'<i style="background:([^;"]+)', legend)
+    assert [_resolved(v, tokens) for v in swatches[:4]] == [
+        _resolved("var(--acc)", tokens), _resolved("var(--s3)", tokens),
+        _resolved("var(--s8)", tokens), _resolved("var(--ok)", tokens)], "the legend paint differs from its mark"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_cluster_ring_holds_its_count_at_the_page_size(hub, board, tmp_path):
+    lt = _load("board_leadtime_ring", SCRIPTS / "board_leadtime.py")
+    _seed(hub, {n: _done(n, "2026-10-02T09:00:00Z") for n in range(1, 13)})
+    chart = hub.flow_lead()["lead"]["control"]["jira"]["all"]
+    assert len(chart["clusters"]) == 1 and len(chart["clusters"][0]["dots"]) == 12
+    out = _lt_chart(hub, tmp_path, "lt-ring.js", chart)
+    circle = re.search(r"<circle [^>]*>", out).group(0)
+    radius = float(_svg_attr(circle, "r"))
+    fs = float(re.search(r"--fs-body:(\d+)px", STYLESHEET.read_text()).group(1))
+    assert fs == lt.RING_TEXT_PX, "the ring geometry and the page body size have drifted apart"
+    box_w, box_h = len("12") * lt.AVG_GLYPH_EM * fs, lt.LINE_EM * fs
+    assert 2 * radius >= (box_w ** 2 + box_h ** 2) ** 0.5, "the ring does not hold the count's box"
+    count = re.search(r"<text ([^>]*)>12</text>", out)
+    assert count, "the cluster ring draws no count"
+    attrs = count.group(1)
+    assert "font-size" not in attrs, "the count sets a size of its own instead of inheriting the box"
+    assert float(_svg_attr(attrs, "y")) - float(_svg_attr(circle, "cy")) == pytest.approx(lt.RING_BASELINE_EM * fs)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_cluster_table_takes_the_page_table_rule(hub, board, tmp_path):
+    _seed(hub, {n: _done(n, "2026-10-02T09:00:00Z") for n in (1, 2)})
+    chart = hub.flow_lead()["lead"]["control"]["jira"]["all"]
+    out = _render(hub, tmp_path, "lt-cluster-table.js", f"(LT.pick=0,ltChart({json.dumps(chart)},null))")
+    table = re.search(r"<table class=([^>]+)>", out)
+    assert table, "the cluster table is not drawn"
+    classes = table.group(1).split()
+    models = re.search(r"<table class=(\w+)><thead><tr><th>Model</th>", hub.PAGE)
+    assert models, "the page has no Models table"
+    shared = models.group(1)
+    assert shared in classes, f"the cluster table does not take the Models table's rule: {classes}"
+    rule = re.search(rf"\.{re.escape(shared)}\{{([^}}]*)\}}", hub.PAGE)
+    assert rule and "border-collapse:collapse" in rule.group(1), "the shared table rule does not style a table"
+
+
 def test_every_word_in_the_chart_box_takes_the_page_body_size(hub):
     """#1144: the chart box is one body-size block; nothing in it is set at the page minimum."""
     box = re.search(r"#flowb\{[^}]*\}", hub.PAGE)
@@ -702,9 +810,8 @@ def test_moving_the_axis_title_leaves_the_other_chart_text_in_place(hub, board, 
     assert len(x_labels) == 7, "the seven x ticks keep their place under the axis"
     base = float(re.search(r"<line x1=\S+ y1=(\S+) x2=\S+ y2=\1 stroke=var\(--line\)>", svg).group(1))
     assert {float(_svg_attr(attrs, "y")) for attrs, _ in x_labels} == {base + 17}
-    summary = [(attrs, body) for attrs, body in others if body.startswith(("Average", "Median", "p85"))]
-    assert len(summary) == 3, "each summary line names itself"
-    assert all(_svg_attr(attrs, "text-anchor") == "end" for attrs, _ in summary), "the summary labels keep their right edge"
+    summary = [(attrs, body) for attrs, body in _svg_texts(svg) if body.startswith(("Average", "Median", "p85"))]
+    assert summary == [], "a summary label is still drawn inside the plot"
 
 
 # SPEC 889 #901: the cumulative flow has a range selector and a hover that names each band's count for the day.
