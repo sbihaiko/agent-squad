@@ -164,6 +164,22 @@ def test_stream_on_names_the_stream_in_the_phone_page(on):
         assert b'window.SQUAD_HUB_STREAM="/alpha/api/stream"' in r.read()
 
 
+def test_a_slow_subject_read_never_holds_the_heartbeat(on, monkeypatch):
+    """The owner's page froze: one read of the `sessions` subject took 12 s on a machine holding 3000 session folders.
+
+    The stream's own thread did that read, so neither an event nor a heartbeat reached the page for 12 s. The subjects
+    are read on their own thread, and the stream only sends what changed.
+    """
+    hubstream = _hubstream()
+    monkeypatch.setattr(hubstream, "HEARTBEAT_SECONDS", 0.3)
+    monkeypatch.setitem(on["mod"].VERSIONS._subjects, "sessions", lambda: time.sleep(5) or [])
+    s = _open(on["port"], "/alpha/api/stream")
+    started = time.monotonic()
+    assert b"event: ping" in _read_until(s, b"event: ping", budget=2.5)
+    assert time.monotonic() - started < 2.5
+    s.close()
+
+
 @pytest.mark.heavy
 def test_quiet_stream_writes_a_heartbeat(on, monkeypatch):
     monkeypatch.setattr(_hubstream(), "HEARTBEAT_SECONDS", 0.3)

@@ -6735,6 +6735,25 @@ CHART_INPUTS = {"cfd": lambda: history_key(), "lead": lambda: (board_cache.get("
 VERSIONS = hubstream.Versions({"runs": lambda: run_list(), "board": lambda: json.loads(board_served()[0]), "sessions": lambda: sessions_payload(), **CHART_INPUTS})
 TRANSCRIPTS = hubstream.Transcripts(lambda sid: sessions.conversation(PROFILE_NAME, sid, None, profiles_of=profiles_of_cwd))
 
+_TICKERS = {}
+def versions_ticker():
+    """One thread per subject reads it; a stream only sends what changed.
+
+    A read of the `sessions` subject took 12 s on a machine holding 3000 session folders, and a stream that did that read
+    itself sent neither an event nor a heartbeat for 12 s: the page looked frozen (ADR-0164, the owner's hub). One thread
+    per subject keeps a slow read from delaying the others."""
+    for name in list(VERSIONS._subjects):
+        t = _TICKERS.get(name)
+        if t is not None and t.is_alive(): continue
+        def run(n=name):
+            while True:
+                try: VERSIONS.refresh_one(n)   # read at once, so a page that just opened is never a tick behind
+                except Exception: pass   # a failed read keeps the last version: the next tick retries and the panel never dies
+                time.sleep(hubstream.TICK_SECONDS)
+        _TICKERS[name] = threading.Thread(target=run, daemon=True, name=f"hub-subject-{name}")
+        _TICKERS[name].start()
+    return _TICKERS
+
 def stream_origin_ok(h, tailnet):
     """A stream opens for no origin but this hub's own (loopback) or, on the tailnet, the tailnet's; an absent Origin is a non-browser reader."""
     org = h.headers.get("Origin")
@@ -6799,7 +6818,7 @@ class H(BaseHTTPRequestHandler):
             quiet = time.monotonic()
             while True:
                 tick = hubstream.tick()
-                VERSIONS.refresh(tick)
+                versions_ticker()
                 sent = False
                 for name, (v, body) in sorted(VERSIONS.fresh(held).items()):
                     chunk(hubstream.event(name, v, body if name in want else None)); held[name] = v; sent = True

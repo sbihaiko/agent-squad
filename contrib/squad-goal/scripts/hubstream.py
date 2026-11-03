@@ -53,17 +53,25 @@ class Versions:
         self._lock = threading.Lock()
 
     def refresh(self, tick=None):
-        with self._lock:
-            if tick is not None:
+        """Read every subject, then publish what changed. A read holds no lock: one of them took 12 s on the owner's
+        machine, and a stream that waited for it sent nothing for that long."""
+        if tick is not None:
+            with self._lock:
                 if tick == self._read_at: return
                 self._read_at = tick
-            for name, read in self._subjects.items():
-                content = read()
-                digest = hashlib.sha1(json.dumps(content, sort_keys=True, default=str).encode()).hexdigest()
-                if name not in self._version or digest != self._digest[name]:
-                    self._version[name] = max(self._version.get(name, 0) + 1, time.time_ns())
-                    self._digest[name] = digest
-                    self._body[name] = content
+        for name in list(self._subjects):
+            self.refresh_one(name)
+
+    def refresh_one(self, name):
+        """Read one subject and publish it if it changed. Each subject has its own reader, so a 12 s read of `sessions`
+        never delays the `runs` event the page is waiting on."""
+        content = self._subjects[name]()
+        digest = hashlib.sha1(json.dumps(content, sort_keys=True, default=str).encode()).hexdigest()
+        with self._lock:
+            if name not in self._version or digest != self._digest[name]:
+                self._version[name] = max(self._version.get(name, 0) + 1, time.time_ns())
+                self._digest[name] = digest
+                self._body[name] = content
 
     def newer(self, held):
         with self._lock:
