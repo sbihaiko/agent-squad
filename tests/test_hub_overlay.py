@@ -407,7 +407,7 @@ def test_each_bubble_carries_its_clock_in_its_header_line():
     head_rule = js[js.index(".sq-head{"):js.index(".sq-head{") + 140]
     assert "display:flex" in head_rule and "justify-content:space-between" in head_rule, head_rule
     rule = js[js.index(".sq-time{"):js.index(".sq-time{") + 160]
-    assert "font-size:13px" in rule and "float" not in rule, rule
+    assert "font-size:var(--fs-caption)" in rule and "float" not in rule, rule
 
 def test_the_answer_bubble_names_the_model_that_wrote_it():
     """Owner, 2026-11-02: where the owner's bubble says "you", the answer's says the model the harness recorded on the turn."""
@@ -422,19 +422,19 @@ def test_the_reader_can_step_the_text_size_and_the_choice_outlives_the_page():
     src = pathlib.Path(__file__).resolve().parents[1] / "contrib/squad-goal/scripts/hub-overlay.js"
     js = src.read_text()
     assert 'id="sq-ov-fsdown"' in js and 'id="sq-ov-fsup"' in js
-    assert "--sq-fs:14px" in js          # the owner's default, one step up from the served floor
-    assert "FS_MIN = 13" in js           # A- never serves text under the floor
-    assert js.index("--sq-fs") < js.index(".sq-txt{white-space:pre-wrap")
-    assert "font-size:var(--sq-fs)" in js
+    assert "font:var(--fs-body)/1.55 var(--font-ui)" in js
+    assert 'FS_ROLES = ["caption", "body", "field", "heading", "display"]' in js
+    assert "ov.style.fontSize = `var(--fs-${FS_ROLES[fsNow]})`" in js
     assert "localStorage.setItem(FS_KEY" in js and "localStorage.getItem(FS_KEY)" in js
-    assert "FS_MIN" in js and "FS_MAX" in js
 
 def test_the_talk_wears_the_terminal_font():
     """Owner, 2026-11-01: the chat read in a UI face while the terminal beside it read in monospace. One stack serves both."""
     js = (pathlib.Path(__file__).resolve().parents[1] / "contrib/squad-goal/scripts/hub-overlay.js").read_text()
-    assert "--sq-mono:ui-monospace" in js
-    body = js[js.index(".sq-txt{"):js.index(".sq-txt{") + 200]
-    assert "font-family:var(--sq-mono)" in body, body
+    assert "var(--font-mono)" in js
+    tokens = (SCRIPTS / "web-tokens.css").read_text()
+    assert "--font-mono:ui-monospace,SFMono-Regular,Menlo,monospace" in tokens
+    body = js[js.index(".sq-txt{"):js.index(".sq-txt{") + 220]
+    assert "font-family:var(--font-ui)" in body, body
 
 def test_the_talk_is_markdown_built_as_nodes_never_as_html():
     """Owner, 2026-11-01: the talk must read as markdown. Bold, italic, inline code and a link are built from text nodes, so a
@@ -632,7 +632,8 @@ def _token(name):
 def test_the_live_line_keeps_the_served_floors():
     src = OVERLAY.read_text()
     rule = re.search(r"#sq-ov-live\{[^}]*\}", src).group(0)
-    assert "font-size:var(--sq-fs)" in rule and "--sq-fs:14px" in src and "FS_MIN = 13" in src
+    assert "font-family:var(--font-mono)" in rule and "font:var(--fs-body)/1.55 var(--font-ui)" in src
+    assert 'FS_ROLES = ["caption", "body", "field", "heading", "display"]' in src
     fg = _token(re.search(r"color:var\((--[\w-]+)\)", rule).group(1))
     bg = _token(re.search(r"#sq-ov\{[^}]*background:var\((--[\w-]+)\)", src).group(1))
     hi, lo = sorted([_relative_luminance(fg), _relative_luminance(bg)], reverse=True)

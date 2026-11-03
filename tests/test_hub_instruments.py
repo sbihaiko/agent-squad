@@ -179,7 +179,7 @@ def test_every_card_selector_names_the_card_once(hub):
 def test_a_red_cell_draws_its_needle_and_its_value_red(hub):
     rules = _rules(hub.INST_CSS)
     assert any("#inst .ig.ldred .gn" in sels and "stroke:var(--err)" in d.replace(" ", "") for sels, d in rules), "the overload needle is red"
-    assert any("#inst .gv" in sels and "font-size:var(--fs-min)" in d for sels, d in rules), "the gauge value is small text"
+    assert any("#inst .gv" in sels and "font-size:var(--fs-caption)" in d for sels, d in rules), "the gauge value is small text"
 
 
 def _spec(sel):

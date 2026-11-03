@@ -4,12 +4,12 @@
 d=$(cd "$(dirname "$0")" && pwd); js=${1:-$d/hub-overlay.js}
 src=$(cat "$js")
 gap=$(printf '%s\n' "$src" | grep -o '\.sq-p{margin:0 0 [0-9.]*\(em\|px\)}' | grep -o '[0-9.]*\(em\|px\)' | head -1)
-lh=$(printf '%s\n' "$src" | grep -o '#sq-ov{[^}]*font:[0-9.]*px/[0-9.]*' | grep -o '/[0-9.]*$' | tr -d /)
+lh=$(printf '%s\n' "$src" | grep -o '#sq-ov{[^}]*font:var(--fs-body)/[0-9.]*' | grep -o '/[0-9.]*$' | tr -d /)
 fail=0
 if [ -z "$gap" ] || [ -z "$lh" ]; then
   echo "FAIL paragraph gap or line height not found in $js (gap='$gap' line-height='$lh')"; exit 1
 fi
-for px in 10 22; do
+for px in 13 21; do
   want=$(awk -v l="$lh" -v s="$px" 'BEGIN{printf "%.2f", l*s}')
   got=$(awk -v g="$gap" -v s="$px" 'BEGIN{ if (g ~ /em$/) { sub(/em$/, "", g); printf "%.2f", g*s } else { sub(/px$/, "", g); printf "%.2f", g } }')
   if [ "$got" = "$want" ]; then

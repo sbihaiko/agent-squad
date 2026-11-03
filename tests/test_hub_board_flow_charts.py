@@ -684,7 +684,7 @@ def test_every_word_in_the_chart_box_takes_the_page_body_size(hub):
     box = re.search(r"#flowb\{[^}]*\}", hub.PAGE)
     assert box, "the chart box has no rule"
     assert "font-size:var(--fs-body)" in box.group(0), "the chart box does not take the page's body size"
-    assert "var(--fs-min)" not in _flow_block(hub), "a chart label is still set at the page minimum"
+    assert "var(--fs-caption)" not in _flow_block(hub), "a chart label is still set at the page minimum"
     stat = re.search(r"#flowb \.flstat\{[^}]*\}", hub.PAGE)
     assert stat and "font-size" not in stat.group(0), "the chart status line sets its own size"
 

@@ -382,13 +382,13 @@ def test_the_strip_width_is_pinned_in_both_directions_and_never_scrolls(hub):
 
 def test_the_name_is_the_caption_and_the_number_is_never_the_clipped_one(hub):
     lbl, num = _rule(hub, ".hidbar .chip .lbl"), _rule(hub, ".hidbar .chip b")
-    assert "font-size:var(--fs-min)" in lbl and "line-height:16px" in lbl, "the name is not the 13px floor with a 16px line"
+    assert "font-size:var(--fs-caption)" in lbl and "line-height:16px" in lbl, "the name is not the 13px floor with a 16px line"
     assert "color:var(--fg)" in lbl, "the name wears the text colour, which clears AA on the chip"
     assert "text-overflow:ellipsis" in lbl and "white-space:nowrap" in lbl, \
         "a long name ellipsizes; it never wraps and never shrinks the font"
     assert "flex:0 1 auto" in lbl and "flex:none" in num, \
         "the name shrinks first and is clipped away; the number is never the element that gets cut"
-    assert "font-size:var(--fs-xl)" in num and "line-height:20px" in num and "font-weight:700" in num, \
+    assert "font-size:var(--fs-display)" in num and "line-height:20px" in num and "font-weight:600" in num, \
         "the number is the one big thing in the strip"
     assert "font-variant-numeric:tabular-nums" in num, "two counts in a stack must line up"
 

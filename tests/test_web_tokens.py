@@ -301,6 +301,44 @@ def test_the_phone_media_block_sets_the_phone_target(tokens):
     assert heights and min(h for h in heights if h is not None) >= PHONE_CONTROL_PX
 
 
+# --- Typography roles across the hub, phone and dashboard (#1138) ---
+
+def test_typography_sizes_are_the_five_shared_roles(surfaces, tokens):
+    expected = {"--fs-caption": "13px", "--fs-body": "15px", "--fs-field": "16px",
+                "--fs-heading": "17px", "--fs-display": "21px"}
+    assert {role: tokens.get(role) for role in expected} == expected
+    assert {_role for _role in tokens if _role.startswith("--fs-")} == set(expected)
+    for name, html in surfaces.items():
+        css = _served_css(html)
+        for raw in re.findall(r"font-size\s*:\s*([^;}]+)", css):
+            assert "var(--fs-" in raw, f"{name} has a non-token font-size: {raw.strip()}"
+        for weight in re.findall(r"font-weight\s*:\s*([^;}]+)", css):
+            assert weight.strip() in {"400", "600"}, f"{name} uses font weight {weight.strip()}"
+    assert tokens["--font-mono"] == "ui-monospace,SFMono-Regular,Menlo,monospace"
+    assert "table,.row,.r,.tot,.tile,.mrow,.runrow,.cell,.hidbar,#totals,#progress,.card,.group-card" in _served_css(surfaces["hub"])
+
+
+def test_phone_text_fields_use_field_size(surfaces, tokens):
+    css = _served_css(surfaces["hub-mobile"])
+    rules = _blocks(css)
+    text_fields = [(sel, dict(_decls(body))) for sel, body in rules
+                   if re.search(r"(?:^|[,\s])(?:input|textarea)(?:[,\s:#.]|$)", sel)]
+    assert text_fields, "the phone has no text-field rules"
+    for selector, decls in text_fields:
+        font = decls.get("font-size", decls.get("font", ""))
+        if font:
+            assert _size(font, tokens) == 16, f"{selector} resolves to {font!r}, not 16px"
+
+
+def test_hub_overlay_uses_shared_typography_roles():
+    overlay = (SCRIPTS / "hub-overlay.js").read_text()
+    css = "\n".join(re.findall(r"<style[^>]*>(.*?)</style>", overlay, flags=re.S))
+    assert "var(--font-mono)" in css and "var(--sq-mono)" not in css
+    assert not re.search(r"font-size\s*:\s*\d", css), "the overlay has a literal font size"
+    assert not re.search(r"font-weight\s*:\s*(?!400\b|600\b)[^;}]+", css), "the overlay uses an unsupported font weight"
+    assert "font:var(--fs-body)/1.55 var(--font-ui)" in css
+
+
 # --- The shared palette and the chart roles (SPEC 1181, #1184) ---
 # The roles every surface already draws with, and the literal each one replaces. This ticket only names them in the token
 # file; a surface reads a role later, in its own batch. `--highlight` carries #fff, which #ffffff writes long.
