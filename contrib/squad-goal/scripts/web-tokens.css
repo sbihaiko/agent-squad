@@ -1,6 +1,6 @@
-/* literal-carveout image: url\([^)]*\) */
-/* literal-carveout third-party embed: <i\x66rame\b[^>]*>.*?</i\x66rame\s*> */
-/* literal-carveout computed blend: color-mix\([^)]*\) */
+/* literal-carveout image: url() image formulas are allowed; hex literals inside remain visible to the guard. */
+/* literal-carveout third-party embed: iframe elements are allowed; inline colors remain visible to the guard. */
+/* literal-carveout computed blend: color-mix() formulas are allowed; hex literals inside remain visible to the guard. */
 /* --edge is the meaningful non-text boundary, at 3:1 on panel and card: a card border on hover and on selection, a
    dialog border, a state mark, a chart mark, the focus ring and a switch track.
    --line is a decorative rule and may sit lower; a card keeps --line at rest.

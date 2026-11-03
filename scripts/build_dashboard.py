@@ -8,6 +8,7 @@ Run: python3 scripts/build_dashboard.py [--home]
 """
 import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -115,6 +116,11 @@ WEB_TOKENS_CSS = ROOT / "contrib" / "squad-goal" / "scripts" / "web-tokens.css"
 PAGE_HTML = DASH / "page.html"
 
 
+def web_tokens_css():
+    """Inline token rules without the guard's token-file-only carve-out declarations."""
+    return re.sub(r"/\*\s*literal-carveout\b.*?\*/\s*", "", WEB_TOKENS_CSS.read_text(), flags=re.S)
+
+
 def page_bundle():
     """The one page script: every file of dashboard/page/ in PAGE_ORDER, `</script` escaped. One scope, as the old inline script had."""
     text = '"use strict";\n' + "".join((PAGE_DIR / f).read_text() + "\n" for f in PAGE_ORDER)
@@ -128,7 +134,7 @@ def page_sources():
 
 def page_template():
     """The page with its CSS and script filled in, and the four data placeholders left. What the page tests read."""
-    return PAGE_HTML.read_text().replace("/*CSS*/", WEB_TOKENS_CSS.read_text() + PAGE_CSS.read_text()).replace("/*PAGE*/", page_bundle())
+    return PAGE_HTML.read_text().replace("/*CSS*/", web_tokens_css() + PAGE_CSS.read_text()).replace("/*PAGE*/", page_bundle())
 
 
 def _inline(obj):
@@ -139,7 +145,7 @@ def build(home=False):
     html = PAGE_HTML.read_text()
     example = json.loads((DESIGN / "five-phases.graph.json").read_text())
     core = core_bundle()
-    for key, value in (("/*ENGINE*/", _inline(engine_data())), ("/*EXAMPLE*/", _inline(example)), ("/*SERVED*/", _inline(served_lists(home))), ("/*CORE*/", core), ("/*CSS*/", WEB_TOKENS_CSS.read_text() + PAGE_CSS.read_text()), ("/*PAGE*/", page_bundle())):
+    for key, value in (("/*ENGINE*/", _inline(engine_data())), ("/*EXAMPLE*/", _inline(example)), ("/*SERVED*/", _inline(served_lists(home))), ("/*CORE*/", core), ("/*CSS*/", web_tokens_css() + PAGE_CSS.read_text()), ("/*PAGE*/", page_bundle())):
         assert html.count(key) == 1, key
         html = html.replace(key, value)
     return html

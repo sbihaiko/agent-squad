@@ -21,6 +21,11 @@ SCRIPTS = ROOT / "contrib/squad-goal/scripts"
 TOKENS_FILE = SCRIPTS / "web-tokens.css"
 DASHBOARD = ROOT / "dashboard/agent-squad-run-dashboard.html"
 
+
+def _token_module():
+    return re.sub(r"/\*\s*literal-carveout\b.*?\*/\s*", "", TOKENS_FILE.read_text(), flags=re.S).strip()
+
+
 FLOOR_PX = 13
 BODY_PX = 15
 CONTRAST_MIN = 4.5
@@ -183,7 +188,7 @@ def test_the_tokens_block_is_one_file():
 
 
 def test_every_surface_links_the_one_tokens_block(surfaces):
-    block = TOKENS_FILE.read_text().strip()
+    block = _token_module()
     for name, html in surfaces.items():
         assert block in html, f"{name} does not carry the token block"
 
@@ -449,7 +454,7 @@ def _surface_colours(html):
     The scan is the hex guard's (tests/test_web_hex_budget.py): a colour sits in a declaration body, a style attribute or a
     quoted string, and a hex in a selector is an element id.
     """
-    text = html.replace(TOKENS_FILE.read_text().strip(), "")
+    text = html.replace(_token_module(), "")
     css = "\n".join(re.findall(r"<style[^>]*>(.*?)</style>", text, flags=re.S))
     css = re.sub(r"[^{}]+(?=\{)", "", _strip_all_comments(css))
     quoted = "\n".join(m.group(0) for m in re.finditer(r"\"[^\"]*\"|'[^']*'", _strip_all_comments(text)))
@@ -532,7 +537,7 @@ def test_the_chart_family_reads_the_palette(tokens):
 
 def test_a_surface_reads_the_token_file_not_a_copy_of_its_value(surfaces):
     """The token block is inlined verbatim, and no surface declares a shared role beside it."""
-    block = TOKENS_FILE.read_text().strip()
+    block = _token_module()
     for name in ("hub", "hub-mobile", "dashboard"):
         assert block in surfaces[name], f"{name} does not carry the token block"
         for role in (*SHARED_ROLES, *CHART_ROLES):
