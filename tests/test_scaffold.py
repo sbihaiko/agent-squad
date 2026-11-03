@@ -28,7 +28,9 @@ def test_a_read_only_role_gets_no_write_tool_and_the_actor_does():
 
 def test_caps_come_from_the_limits_block_and_the_name_can_differ_from_the_role():
     n = scaffold.agent_node(CFG, "actor", "actor_2")
-    assert n["name"] == "actor_2" and n["budget"] == {"stalls": {"min": 1, "max": 5}, "spend": {"min": 0.05, "max": 2.0}} and n["deadline"] == 600
+    # The caps are read from the limits block, so the default may move without a red here (ADR-0018).
+    assert n["name"] == "actor_2" and n["budget"] == {"stalls": {"min": 1, "max": CFG["limits"]["max_stalls"]},
+                                                      "spend": {"min": 0.05, "max": CFG["limits"]["max_budget_usd"]}} and n["deadline"] == 600
 
 
 def test_the_graph_hash_covers_the_copied_values_so_a_later_defaults_edit_changes_no_graph():

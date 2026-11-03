@@ -4701,7 +4701,7 @@ html.sbshut #sbtn svg{transform:scaleX(-1)}
 <script id=sbboot>try{if(sideState(JSON.parse(localStorage.hub||"{}").side,matchMedia("(min-width: 601px)").matches))document.documentElement.classList.add("sbshut")}catch(e){}</script>
 <aside id=side><button id=sbtn type=button aria-label="Collapse the Monitor bar" aria-controls=side aria-expanded=true title="Collapse the Monitor bar"><svg viewBox="0 0 12 12" aria-hidden=true focusable=false><path d="M8 2L4 6l4 4" fill=none stroke=currentColor stroke-width=1.6 stroke-linecap=round stroke-linejoin=round /></svg></button><div id=sbbody>
 <details id=inst class=sp open><summary>Monitor<span class=sr id=instsr></span></summary><div class=sb id=ibody><div id=iloop></div><div class=igs id=igs title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"></div><div id=ispeed></div><div class=ian id=ian></div><div id=ispec></div></div></details>
-<details id=usage class=sp><summary>Usage</summary><div class=sb><div class="igs isub" id=isub title="subscriptions: the used share of the weekly window and the days to its reset"></div></div></details><details id=stats class=sp><summary>Spend<span class=sr id=stsr></span></summary><div class=sb><h4>Tokens <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Counted in tokens: in + out, the same count the ring draws."></span></h4><div class=tot id=tot></div><h4>Tokens over time <span class=row id=per></span></h4><div id=chart></div><h4>Model tokens · this month</h4><div class=m id=piet>in + out</div><div id=pie></div></div></details>
+<details id=usage class=sp><summary>Usage</summary><div class=sb><div class="igs isub" id=isub title="subscriptions: the used share of the weekly window and the days to its reset"></div></div></details><details id=stats class=sp><summary>Spend<span class=sr id=stsr></span></summary><div class=sb><h4>Tokens over time <span class=row id=per></span></h4><div id=chart></div><h4>Model tokens · this month</h4><div class=m id=piet>in + out</div><div id=pie></div></div></details>
 <details id=lrd class=sp open><summary>Live runs<span class=sr id=lrs></span></summary><div class=sb id=lrun></div></details>
 </div></aside>
 <main id=content>
@@ -5160,13 +5160,9 @@ $("#subs").addEventListener("change",async e=>{const k=e.target.dataset.plan;if(
 async function pollStats(){try{pollSubs();
   const st=await (await fetch("/api/stats?period="+per+"&src="+src)).json();
   $("#per").innerHTML=["hour","day","month"].map(p=>`<button data-p=${p} class="${p===per?"on":""}">per ${p}</button>`).join("");
-  $("#src").innerHTML=[["both","all"],["sub","plans"],["api","API"]].map(([v,l])=>`<button data-s=${v} class="${v===src?"on":""}">${l}</button>`).join("");
-  document.querySelectorAll("#src button").forEach(b=>b.onclick=()=>{src=b.dataset.s;save();pollStats()});
   document.querySelectorAll("#per button").forEach(b=>b.onclick=()=>{per=b.dataset.p;save();pollStats()});
   $("#stsr").textContent=tk(st.totals.tok_today)+" tokens today";
   $("#chart").innerHTML=bars(st.buckets);$("#pie").innerHTML=pie(st.models||[]);
-  const same=st.totals.tok_all===st.totals.tok_month;
-  $("#tot").innerHTML=`<div>today<b>${tk(st.totals.tok_today)}</b></div><div>this month<b>${tk(st.totals.tok_month)}</b></div><div>all time<b${same?" class=m":""}>${same?"= this month":tk(st.totals.tok_all)}</b></div>`;
   // The Speed block and the open-branches list left the panel (owner, 2026-11-01): the panel leads with the throughput, the
   // subscription gauges, the spend chart and the token ring. The PR speed figures stay on the hub's own reading, not here.
 }catch(e){console.warn("stats panel:",e)}}
@@ -5943,7 +5939,11 @@ def q_kimi():
         ws.append({"label": label, "pct": round(float(x["used_ratio"]) * 100, 1),
                    "resets": dt.datetime.fromisoformat(t.replace("Z", "+00:00")).timestamp() if t else None})
     return {"windows": ws} if ws else None
-QUOTA_PROBES = {"claude": q_claude, "gpt": q_codex, "grok": q_grok, "gemini": q_agy, "kimi": q_kimi}
+def q_nvidia():
+    """NVIDIA NIM's free tier publishes no quota endpoint: the plan is a rate limit (about 40 requests a minute), never a
+    monthly share, so the row says so rather than drawing a guess."""
+    return {"windows": [], "unavailable": True, "err": "free tier: a per-minute rate limit, no monthly reading"}
+QUOTA_PROBES = {"claude": q_claude, "gpt": q_codex, "grok": q_grok, "gemini": q_agy, "kimi": q_kimi, "nvidia": q_nvidia}
 def refresh_quota_once():
     """One pass: ask each CLI for its quota. A probe that answers with no windows replaces the row outright, so a
     reading that stopped tracking reality cannot pass as current; a probe that raises keeps the last good value."""
