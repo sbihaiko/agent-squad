@@ -132,10 +132,11 @@ def test_cost_and_usage_is_two_panels_usage_and_spend():
     assert "Cost &amp; usage" not in SRC and "cost &amp; speed" not in SRC and "cost & speed" not in SRC
 
 
-def test_no_tot3_tile_grid():
+def test_the_tokens_heading_toggle_and_tiles_are_gone():
+    """Owner, 2026-11-03: the Tokens heading, its all/plans/API toggle and the three tiles leave the Spend panel."""
     html = _stats()
-    assert "id=tot3" not in html and "class=tot3" not in html
-    assert re.search(r"<div class=tot id=tot>", html)
+    for gone in ("id=tot3", "class=tot3", "id=tot>", "id=src"):
+        assert gone not in html, gone
 
 
 def test_section_order_is_gauges_in_usage_and_tiles_chart_tokens_in_spend():
@@ -144,7 +145,7 @@ def test_section_order_is_gauges_in_usage_and_tiles_chart_tokens_in_spend():
     use, spend = _usage(), _stats()
     assert use.find("id=isub") >= 0
     assert use.find("id=pie") < 0 and use.find("id=piet") < 0
-    pos = [spend.find("id=tot"), spend.find("Tokens over time"), spend.find("id=chart"), spend.find("Model tokens · this month"), spend.find("id=pie")]
+    pos = [spend.find("Tokens over time"), spend.find("id=chart"), spend.find("Model tokens · this month"), spend.find("id=pie")]
     assert all(p >= 0 for p in pos), pos
     assert pos == sorted(pos), pos
     for gone in ("id=kpi", "id=open", "id=cash", "id=totnote"):
@@ -152,12 +153,8 @@ def test_section_order_is_gauges_in_usage_and_tiles_chart_tokens_in_spend():
 
 
 
-def test_src_toggle_reads_all_plans_api():
-    html = _render(
-        'const src="both";\n',
-        _stmt('$("#src").innerHTML='),
-    )
-    assert re.findall(r">([^<>]+)</button>", html) == ["all", "plans", "API"]
+def test_the_poll_writes_no_tiles_and_no_source_toggle():
+    assert "#tot" not in POLL and "#src" not in POLL
 
 
 def test_per_toggle_reads_per_hour_day_month():
@@ -171,29 +168,11 @@ def test_per_toggle_reads_per_hour_day_month():
     assert re.search(r'data-p=day class="on"', html)
 
 
-def test_tot_tiles_read_today_this_month_all_time_in_tokens():
-    """Owner, 2026-11-01: everything on the spend panel counts tokens, never dollars."""
-    html = _render("const st={totals:{tok_today:20670,tok_month:612000,tok_all:1234000}};\nconst same=st.totals.tok_all===st.totals.tok_month;\n",
-                   _stmt('$("#tot").innerHTML='))
-    assert re.findall(r"<div>([^<]+)<b", html) == ["today", "this month", "all time"]
-    assert re.findall(r"<b[^>]*>([^<]+)</b>", html) == ["21K", "612K", "1.2M"]
-
-
-def test_tot_all_time_equal_to_month_reads_this_month():
-    html = _render("const st={totals:{tok_today:1500,tok_month:612000,tok_all:612000}};\nconst same=st.totals.tok_all===st.totals.tok_month;\n",
-                   _stmt('$("#tot").innerHTML='))
-    tiles = re.findall(r"<div>[^<]+<b([^>]*)>([^<]+)</b></div>", html)
-    assert tiles[-1] == (" class=m", "= this month"), tiles
-    assert tiles[1] == ("", "612K")
-    rule = re.search(r"\.tot b\.m\{([^}]*)\}", SRC)
-    assert rule and "color:var(--mute)" in rule.group(1), rule
-    assert "font-size:15px" not in rule.group(1)  # "= this month" is text, not a value: it must fit the tile
 
 
 def test_tokens_read_plain_then_k_then_m_and_b():
-    html = _render("const st={totals:{tok_today:999,tok_month:1000,tok_all:2500000000}};\nconst same=false;\n",
-                   _stmt('$("#tot").innerHTML='))
-    assert re.findall(r"<b[^>]*>([^<]+)</b>", html) == ["999", "1K", "2.50B"]
+    out = _node(_prelude() + "\nconsole.log([tk(999),tk(1000),tk(2500000000)].join(' '));")
+    assert out.split() == ["999", "1K", "2.50B"]
 
 
 def test_chart_has_max_rule_ok_bar_now_and_no_year():
