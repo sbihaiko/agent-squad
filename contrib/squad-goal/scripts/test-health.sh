@@ -9,7 +9,7 @@ pg checkout -q -b gui/7 local/next; echo 7 > "$P/g"; pg add g; pg commit -q -m w
 export SG_FORK_DIR="$P" SG_FORK_BASE=local/next SG_FORK_BRANCH='gui/%n' SG_FORK_ORPHAN_MINUTES=0
 unset "${!SG_@}"; export HOME="$T/home"   # hermetic: whatever the caller exports (the live loop's SG_*) stops here
 export SG_WATCH_CMD_RE="$T/s/watch\.sh\$"   # ...and so do the live loops of this machine: health.sh counts watch.sh processes by command line, so without this a second real loop adds a loops-duplicated alert to every count below
-mkdir -p "$HOME" "$T/s" "$T/st/auto" "$T/co" "$T/bin"; cp "$src" "$T/s/health.sh"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"; cp "$(dirname "$src")/ghcall.sh" "$T/s/ghcall.sh"; cp "$(dirname "$src")/workbranches.sh" "$T/s/workbranches.sh"; cp "$(dirname "$src")/startability.sh" "$T/s/startability.sh"
+mkdir -p "$HOME" "$T/s" "$T/st/auto" "$T/co" "$T/bin"; cp "$src" "$T/s/health.sh"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"; cp "$(dirname "$src")/ghcall.sh" "$T/s/ghcall.sh"; cp "$(dirname "$src")/workbranches.sh" "$T/s/workbranches.sh"; cp "$(dirname "$src")/startability.sh" "$T/s/startability.sh"; cp "$(dirname "$src")/board_columns.py" "$(dirname "$src")/board-definition.json" "$T/s/"   # the claimed column's name (#1342)
 # hermetic: health.sh counts watch.sh with a real pgrep, so the default pattern would count the host's own live loop (a duplicate there is a third cause)
 export SG_WATCH_CMD_RE="$T/s/watch\.sh\$"
 export SQUAD_CAPS_DIR="$T/caps"   # hermetic: the reap step (#1226) reclaims leases here, never in the machine's caps folder
@@ -98,6 +98,14 @@ echo "$o" | /usr/bin/grep -q 'runs-board-drift' && ko "a run in its launch windo
 /usr/bin/grep -q '"runs":1,"inprogress":1' "$T/st/health.json" && ok "the launch window still reports the pair" || ko "pair: $(cat "$T/st/health.json")"
 touch -t 202001010000 "$T/co/runs/run-y/request.txt"; bash "$T/s/health.sh" >/dev/null; o=$(bash "$T/s/health.sh")
 printf '%s' "$o" | /usr/bin/grep -qF 'HEALTH runs-board-drift: 0 live run(s), 1 card(s) In Progress; cards with no live run: #10; live runs with no In Progress card: -' && ok "a card with nobody on it is named" || ko "dead run: $o"
+# #1342: this repository's claimed column is Doing, not In Progress. A live run on a Doing card is no drift; a Doing card with no
+# live run is drift on the second pass, and the alert names the column it read.
+reset; bd; printf '10\tDoing\n' > "$T/board.tsv"; liverun run-a 10
+bash "$T/s/health.sh" >/dev/null; o=$(bash "$T/s/health.sh")
+echo "$o" | /usr/bin/grep -q 'runs-board-drift' && ko "a live run on a Doing card alerted: $o" || ok "a live run on a Doing card raises no drift"
+reset; bd; printf '10\tDoing\n' > "$T/board.tsv"
+bash "$T/s/health.sh" >/dev/null; o=$(bash "$T/s/health.sh")
+printf '%s' "$o" | /usr/bin/grep -qF 'HEALTH runs-board-drift: 0 live run(s), 1 card(s) Doing; cards with no live run: #10; live runs with no Doing card: -' && ok "a Doing card with no live run raises drift, naming Doing" || ko "Doing card with no live run: $o"
 # a card In Progress that still holds its dispatch marker, with no run on it (a run that stopped without a verdict): the cause names that
 # subset, so the reader sees which cards the janitor releases (rule Q) and which need a person
 reset; bd; printf '10\tIn Progress\n25\tIn Progress\n26\tIn Progress\n' > "$T/board.tsv"; liverun run-a 10; echo run-gone > "$T/st/auto/disp-25"
