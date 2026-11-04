@@ -58,8 +58,8 @@ def test_choosing_doing_to_closed_changes_the_dots_to_that_span(hub, board):  # 
         2: (_card(2, st="Closed", s="CLOSED", c="2026-10-06T00:00:00Z"),
             _life("2026-10-01T00:00:00Z", ("2026-10-06T00:00:00Z", "Closed"))),
     })
-    full = hub.lead_zoom("tf=all&scale=jira")
-    doing = hub.lead_zoom(f"tf=all&scale=jira&a=Doing&b={hub.COLUMN['issue_closed']}")
+    full = hub.lead_zoom("tf=all")
+    doing = hub.lead_zoom(f"tf=all&a=Doing&b={hub.COLUMN['issue_closed']}")
     assert [(d["n"], d["hours"]) for d in full["dots"]] == [(1, 96.0), (2, 120.0)]
     assert [(d["n"], d["hours"]) for d in doing["dots"]] == [(1, 24.0)]
     assert doing["excluded_total"] == 1
@@ -81,7 +81,7 @@ def test_a_card_with_no_start_transition_is_excluded_and_counted(hub, board):  #
 def test_start_todo_on_the_hub_plots_a_card_born_in_todo(hub, board):  # noqa: F811
     _seed(hub, {1: (_card(1, st="Closed", s="CLOSED", c="2026-10-05T00:00:00Z"),
                     _life("2026-10-01T00:00:00Z", ("2026-10-02T00:00:00Z", "Doing"), ("2026-10-05T00:00:00Z", "Closed")))})
-    todo = hub.lead_zoom("tf=all&scale=jira&a=Todo")
+    todo = hub.lead_zoom("tf=all&a=Todo")
     assert [(d["n"], d["hours"]) for d in todo["dots"]] == [(1, 96.0)]
     assert todo["excluded_total"] == 0
 

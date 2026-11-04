@@ -144,17 +144,13 @@ def lead_time(items, window=20, now=None, measure=MEASURE):
     }
 
 
-# SPEC 889 #900: the Jira-style control chart. The hub serves every number and position; the page draws marks only.
-JIRA_CUBE_DAYS = 30           # Jira's y scale: linear under this many days, cube root from it
+# SPEC 889 #900: the control chart. The hub serves every number and position; the page draws marks only.
+# SPEC 1327 #1355: the y axis is always log, with round ticks (#1334); the chart takes no scale option.
 LOG_FLOOR_DAYS = 1 / 48       # the log axis starts at 30 minutes
 LOG_FLOOR_HOURS = 1 / 60      # no log of a span under one minute
 PLOT_WIDTH, PLOT_HEIGHT = 672, 212  # the lead chart's usable frame: the 800 x 340 page frame less its 64 px margins
 DOT_PX = 9                    # dots closer than this many pixels merge into a numbered cluster
 LOG_TICKS = [1 / 24, 1, 7]           # days, drawn with the one duration format
-CUBE_TICKS = [1, 7, 30, 60]          # days, drawn with the one duration format
-# SPEC 1327 #1334: a linear view labels its y axis on one regular interval from this round-duration ladder, as minutes,
-# with 4 to 6 ticks. The ladder under 30 days covers every linear view.
-LINEAR_TICKS = (5, 10, 15, 30, 60, 120, 180, 240, 360, 720, 1440, 2880, 4320, 7200, 10080, 20160, 43200)
 SHORT_RANGE = timedelta(days=3)      # a view this short labels its x axis in hours, a longer one in days
 FIT_SHARE = 0.5                      # the cards cluster when the range they fill is at most half the view
 FIT_MIN_PAD = timedelta(hours=1)
@@ -196,20 +192,6 @@ def _window_size(count):
 
 def _clamp(v):
     return min(1.0, max(0.0, v))
-
-
-def _linear_ticks(max_hours):
-    """The y axis of a linear view: 0 to a round top at one interval from LINEAR_TICKS, 4 to 6 ticks (#1334).
-    When no ladder entry yields 3 to 5 intervals, the longest step still reaches the ceiling on as many as it takes."""
-    ceiling = max(max_hours, 0.0)
-    for minutes in LINEAR_TICKS:
-        size = minutes / 60
-        count = math.ceil(ceiling / size) if ceiling else 0
-        if 3 <= count <= 5:
-            return size * count, [(size * k, _duration(size * k)) for k in range(count + 1)]
-    size = LINEAR_TICKS[-1] / 60
-    count = max(1, math.ceil(ceiling / size))
-    return size * count, [(size * k, _duration(size * k)) for k in range(count + 1)]
 
 
 def _day_span(first, last):
@@ -277,27 +259,24 @@ def _range_text(start, end):
     return f"{start:%b} {start.day} to {end:%b} {end.day} UTC"
 
 
-def _rolling(hours, log):
-    """Centered mean and one sigma per dot, in hours. Linear: mean of hours. Log: geometric mean, sigma in log space."""
+def _rolling(hours):
+    """Centered geometric mean and one sigma in log space per dot, in hours: the chart's one axis is log."""
     size = _window_size(len(hours))
     half = (size - 1) // 2
     out = []
     for i in range(len(hours)):
         span = hours[max(0, i - half) : i + half + 1]
-        if log:
-            logs = [math.log(max(h, LOG_FLOOR_HOURS)) for h in span]
-            mean, sigma = statistics.fmean(logs), statistics.pstdev(logs)
-            out.append((math.exp(mean), math.exp(mean - sigma), math.exp(mean + sigma)))
-        else:
-            mean, sigma = statistics.fmean(span), statistics.pstdev(span)
-            out.append((mean, max(mean - sigma, 0.0), mean + sigma))
+        logs = [math.log(max(h, LOG_FLOOR_HOURS)) for h in span]
+        mean, sigma = statistics.fmean(logs), statistics.pstdev(logs)
+        out.append((math.exp(mean), math.exp(mean - sigma), math.exp(mean + sigma)))
     return out, size
 
 
-def control_chart(items, timeframe=None, log=False, now=None, start=None, end=None, measure=MEASURE, plot=None):
+def control_chart(items, timeframe=None, now=None, start=None, end=None, measure=MEASURE, plot=None):
     """The chart over a timeframe in days, or over an explicit zoom range `start`..`end` (#900). A zoom names its dates.
-    The caller names the plot frame `plot` (its width and height in pixels); the clusters recompute from that frame and
-    the same screen-space rule on every call, so a zoom or a resize redraws the marks its view holds (#1331)."""
+    The y axis is always log (#1355). The caller names the plot frame `plot` (its width and height in pixels); the
+    clusters recompute from that frame and the same screen-space rule on every call, so a zoom or a resize redraws the
+    marks its view holds (#1331)."""
     now = now or datetime.now(UTC)
     zoom = start is not None
     plot_frame = {"width": plot["width"], "height": plot["height"]} if plot else \
@@ -315,28 +294,16 @@ def control_chart(items, timeframe=None, log=False, now=None, start=None, end=No
     span = (end - start).total_seconds()
 
     hours = [_hours(row) for row in plotted]
-    rolling, size = _rolling(hours, log)
+    rolling, size = _rolling(hours)
     fit = _fit([utc(row["c"]) for row in plotted], start, end)
     fit_start, fit_end = (datetime.fromisoformat(fit[k]) for k in ("start", "end")) if fit else (None, None)
     fit_span = (fit_end - fit_start).total_seconds() if fit else 0
     days_max = max([*hours, *(high for _, _, high in rolling)], default=0) / 24
-    axis = "log" if log else ("cube" if days_max >= JIRA_CUBE_DAYS else "linear")
-    if axis == "log":
-        top = max(60.0, math.ceil(days_max))
-        def position(h):
-            return _clamp((math.log10(max(h / 24, LOG_FLOOR_DAYS)) - math.log10(LOG_FLOOR_DAYS))
-                          / (math.log10(top) - math.log10(LOG_FLOOR_DAYS)))
-        ticks = [(days * 24, _duration(days * 24), position(days * 24)) for days in LOG_TICKS]
-    elif axis == "cube":
-        top = float(math.ceil(max(days_max, 1) ** (1 / 3) * 1.05) ** 3)
-        def position(h):
-            return _clamp(max(h / 24, 0) ** (1 / 3) / top ** (1 / 3))
-        ticks = [(days * 24, _duration(days * 24), position(days * 24)) for days in CUBE_TICKS if days <= top]
-    else:
-        top, ladder = _linear_ticks(max(hours + [high for _, _, high in rolling], default=0))
-        def position(h):
-            return _clamp(h / top)
-        ticks = [(hrs, text, position(hrs)) for hrs, text in ladder]
+    top = max(60.0, math.ceil(days_max))
+    def position(h):
+        return _clamp((math.log10(max(h / 24, LOG_FLOOR_DAYS)) - math.log10(LOG_FLOOR_DAYS))
+                      / (math.log10(top) - math.log10(LOG_FLOOR_DAYS)))
+    ticks = [(days * 24, _duration(days * 24), position(days * 24)) for days in LOG_TICKS]
 
     dots = []
     for row, hrs, (mean, low, high) in zip(plotted, hours, rolling, strict=True):
@@ -388,8 +355,7 @@ def control_chart(items, timeframe=None, log=False, now=None, start=None, end=No
     return {
         "plot_frame": plot_frame,
         "measure": measure,
-        "scale": axis,
-        "axis": axis,
+        "axis": "log",
         "timeframe": timeframe,
         "window": {"size": size, "unit": "issues", "centered": True},
         "dots": dots,

@@ -3787,14 +3787,13 @@ def _lead_plot(query=None):
 
 
 def lead_zoom(query):
-    """The control chart over a dragged range (`from` and `to`, ISO datetimes) or a timeframe preset (`tf`), `scale` jira
-    or log (#900), measured from the start column `a` to the end column `b` (#905). No `a` is the card's opened instant;
-    no `b`, or the closed column, is its closed instant. The bar's values in the query filter its rows (#904)."""
+    """The control chart over a dragged range (`from` and `to`, ISO datetimes) or a timeframe preset (`tf`), measured
+    from the start column `a` to the end column `b` (#905); the y axis is always log (#1355). No `a` is the card's opened
+    instant; no `b`, or the closed column, is its closed instant. The bar's values in the query filter its rows (#904)."""
     q = urllib.parse.parse_qs(query)
     a, b = (q.get(k, [""])[0] or None for k in ("a", "b"))
     if b == COLUMN["issue_closed"]: b = None
     if any(c is not None and c not in ORDER for c in (a, b)): return {"error": "bad column: a and b name a board column"}
-    log = q.get("scale", ["jira"])[0] == "log"
     fw, fs, fk, ty = board_filters(query)
     now = dt.datetime.now(dt.UTC)
     rows = [r for r in lead_rows(a, b, now) if _in_bar(r, fw, fs, fk, ty)]
@@ -3802,14 +3801,14 @@ def lead_zoom(query):
     if "from" not in q and "to" not in q and "tf" in q:
         days = dict(LEAD_TIMEFRAMES).get(q["tf"][0], 0)
         if days == 0: return {"error": "bad timeframe"}
-        return _leadtime.control_chart(rows, timeframe=days, log=log, now=now, measure=measure, plot=_lead_plot(q))
+        return _leadtime.control_chart(rows, timeframe=days, now=now, measure=measure, plot=_lead_plot(q))
     try:
         start, end = (dt.datetime.fromisoformat(q[k][0]) for k in ("from", "to"))
     except (KeyError, IndexError, ValueError):
         return {"error": "bad range: from and to are ISO datetimes"}
     start, end = (m if m.tzinfo else m.replace(tzinfo=dt.UTC) for m in (start, end))
     if end <= start: return {"error": "bad range: to is not after from"}
-    return _leadtime.control_chart(rows, log=log, now=now, start=start, end=end, measure=measure, plot=_lead_plot(q))
+    return _leadtime.control_chart(rows, now=now, start=start, end=end, measure=measure, plot=_lead_plot(q))
 
 
 CHARTS = {}   # each chart route's last answer, with the key of the inputs it read (#971)
@@ -3886,9 +3885,8 @@ def _lead_payload(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
     measure = f"{LEAD_START} -> closed"
     lead = _leadtime.lead_time(rows, now=now, measure=measure)
     plot = _lead_plot()
-    control = {scale: {key: _leadtime.control_chart(rows, timeframe=days, log=scale == "log", now=now, measure=measure,
-                                                    plot=plot)
-                       for key, days in LEAD_TIMEFRAMES} for scale in ("jira", "log")}   # the Jira-style control chart (#900)
+    control = {key: _leadtime.control_chart(rows, timeframe=days, now=now, measure=measure, plot=plot)
+               for key, days in LEAD_TIMEFRAMES}   # the control chart, one per timeframe, always on the log axis (#900, #1355)
     coverage = _coverage_payload(_hist.load_store(_hist.history_path(BOARD, REPO)))
     return {"plot_frame": plot,
           "lead": {"measure": lead["measure"], "type": ty, "window": lead["window"], "start": LEAD_START,
@@ -5717,14 +5715,14 @@ const ltEx=(exc,cards,total)=>{const named=exc.map(e=>`${e.count} ${EXREASON[e.r
 const ltExOf=c=>ltEx(Object.entries(c.excluded||{}).map(([r,n])=>({reason:r,count:n})),c.excluded_cards,c.excluded_total);
 const ltGateRole=()=>COLORS[COLNAME.gating]||"var(--chart-series-other)";   // gate time keeps the Gating column's palette role (#1256)
 const LT_TYPES=[["spec","Specs"],["task","Tasks"],["bug","Bugs"]],LT_START="/*LT_START*/";   // the start the hub's payload measures from (#1247)
-let LT={tf:"2",log:true,ty:"bug",pick:null,zc:null,zr:null,rng:null,tok:0,noclick:false,a:LT_START,b:"",cols:[],band:false,md:false,p85:false,win:"full"};   // a fresh page opens on 48 hours, Bugs, Todo and Log scale; the chart's Start and End restore from their own key when the lead chart opens (#1275), while the timeframe, the Type and the scale stay the visit's choice (#1247); the cluster listed under the chart, and a drag zoom: the hub's chart over zr=[from,to] (#900, #985); the deviation band hides until the display asks for it (#1304); only the average reference shows at first, and the median and p85 are toggles (#1332)
+let LT={tf:"2",ty:"bug",pick:null,zc:null,zr:null,rng:null,tok:0,noclick:false,a:LT_START,b:"",cols:[],band:false,md:false,p85:false,win:"full"};   // a fresh page opens on 48 hours, Bugs and Todo; the chart's Start and End restore from their own key when the lead chart opens (#1275), while the timeframe and the Type stay the visit's choice (#1247); the y axis is always log (#1355); the cluster listed under the chart, and a drag zoom: the hub's chart over zr=[from,to] (#900, #985); the deviation band hides until the display asks for it (#1304); only the average reference shows at first, and the median and p85 are toggles (#1332)
 let FLOWFF={};   // the charts that stopped following the Board tab's Waves, Specs and Kinds; the Board tab keeps its own filter (#1147)
 const flowFilterNames=(fw,fs,fk)=>[["Waves",fw],["Specs",fs],["Kinds",fk]].filter(([,v])=>v.length).map(([n,v])=>`${n}: ${v.map(esc).join(", ")}`).join(" · ");
 const flowFilterChip=(fw,fs,fk,stopped)=>{const names=flowFilterNames(fw,fs,fk);if(!names)return "";return `<span class=fchip id=ffchip>Board filter · ${names} `+(stopped?"· this chart no longer follows it":`<button id=ffx type=button title="stop this chart following the Board tab's filter; the Board tab keeps its own">Stop following</button>`)+`</span>`};   // one chip names the Board filter; its one action stops this chart following it, never the Board tab (#1147)
 const flowDetach=()=>{if(!FLOWK)return;FLOWFF[FLOWK]=true;flowTabs();if(FLOWK==="lead"&&LT.zr)ltZoom(LT.zr[0],LT.zr[1]);else flowOpen(FLOWK)};   // the one action: this chart reads again, once, on its own route without the bar's values (#1147)
 const ltSpan=(r,a,b)=>{const t0=Date.parse(r.start),t1=Date.parse(r.end),at=f=>new Date(t0+f*(t1-t0)).toISOString();return [at(a<0?0:a),at(b>1?1:b)]};   // plot fractions to the dates they name (#900)
 const LT_TF=[["1","Past 24 hours"],["2","Past 48 hours"],["3","Past 72 hours"],["7","Past week"],["14","Past 2 weeks"],["30","Past month"],["all","All"]];
-const CHART_KEY="squad-chart",chartRange=()=>{try{const s=JSON.parse(localStorage.getItem(CHART_KEY)||"{}")||{},r={};if(typeof s.a==="string")r.a=s.a;if(typeof s.b==="string")r.b=s.b;return r}catch(e){return {}}},chartSave=()=>{try{localStorage.setItem(CHART_KEY,JSON.stringify({a:LT.a,b:LT.b}))}catch(e){}};let CHART_R=chartRange();   // the chart key owns the Start and End only, apart from the Board filter's record under "hub" (#1275); the timeframe, the Type and the scale stay the visit's choice (#1247); the stored range waits here and reaches LT only when the lead chart opens, so the Board tab reads the payload's own start
+const CHART_KEY="squad-chart",chartRange=()=>{try{const s=JSON.parse(localStorage.getItem(CHART_KEY)||"{}")||{},r={};if(typeof s.a==="string")r.a=s.a;if(typeof s.b==="string")r.b=s.b;return r}catch(e){return {}}},chartSave=()=>{try{localStorage.setItem(CHART_KEY,JSON.stringify({a:LT.a,b:LT.b}))}catch(e){}};let CHART_R=chartRange();   // the chart key owns the Start and End only, apart from the Board filter's record under "hub" (#1275); the timeframe and the Type stay the visit's choice (#1247); the stored range waits here and reaches LT only when the lead chart opens, so the Board tab reads the payload's own start
 const ltP=64;   // a duration label ("17h 36m") is wider than a count, and the old margin cut every tick to its tail (#Astra review)
 const ltGap=16;   // the least vertical space between two gutter tag baselines, one body line (#1332)
 const ltTextW=s=>9*String(s).length;   // a tag's estimated painted width at the body size: a loose nine units per character, so the gutter holds the longest tag (#1332)
@@ -5753,8 +5751,7 @@ const ltChart=(c,cov)=>{LT_FRAME=c.plot_frame;const n=c.dots.length,base=ltP+LT_
   const ctl=`<p class=fhead>`+
       `<label>Timeframe <select id=ltr>${LT_TF.map(([k,v])=>`<option value=${k}${LT.tf===k?" selected":""}>${v}</option>`).join("")}</select></label> `+
       `<label>Type <select id=lty>${LT_TYPES.map(([k,v])=>`<option value=${k}${LT.ty===k?" selected":""}>${v}</option>`).join("")}</select></label> `+
-      `<label>Scale <select id=lts><option value=jira${LT.log?"":" selected"}>Linear scale</option><option value=log${LT.log?" selected":""}>Log scale</option></select></label> `+   // the scale sits beside the filters, where the reading starts (#1332)
-      `<span class=ltgrp><b class=ltgl>Lines</b> <label><input type=checkbox id=ltmd${LT.md?" checked":""}> Median</label> <label><input type=checkbox id=ltp85${LT.p85?" checked":""}> p85</label></span>`+   // the average line is the default; the median and p85 are one toggle each (#1332)
+      `<span class=ltgrp><b class=ltgl>Lines</b> <label><input type=checkbox id=ltmd${LT.md?" checked":""}> Median</label> <label><input type=checkbox id=ltp85${LT.p85?" checked":""}> p85</label></span>`+   // the average line is the default; the median and p85 are one toggle each (#1332); the chart draws no Scale control, its axis is always log (#1355)
     `</p>`+
     `<details class=ltmore><summary>More</summary>`+
     grp("Measurement",`<label>Start <select id=lta><option value="">Created</option>${LT.cols.map(k=>`<option${LT.a===k?" selected":""}>${esc(k)}</option>`).join("")}</select></label> `+
@@ -5773,7 +5770,7 @@ const ltChart=(c,cov)=>{LT_FRAME=c.plot_frame;const n=c.dots.length,base=ltP+LT_
   const ys=c.ticks.map(t=>`<line x1=${ltP-4} y1=${ltY(t.y)} x2=${ltP} y2=${ltY(t.y)} stroke=${mute}></line><text x=${ltP-7} y=${ltY(t.y)+4} text-anchor=end fill=${ink}>${esc(t.text)}</text>`).join("");
   const xs=c.xticks.map(t=>`<text x=${ltX(t.x)} y=${base+17} text-anchor=middle fill=${ink}>${esc(t.text)}</text>`).join("");
   const axes=`<line x1=${ltP} y1=${ltP-10} x2=${ltP} y2=${base} stroke=var(--chart-grid)></line><line x1=${ltP} y1=${base} x2=${ltP+LT_FRAME.width} y2=${base} stroke=var(--chart-grid)></line>`+
-    `<text x=${ltP} y=${ltP-26} text-anchor=start fill=${ink}>Lead time (${c.scale==="cube"?"cube root":c.scale})</text>`+   // the y axis is titled above it, outside the plot (#1332)
+    `<text x=${ltP} y=${ltP-26} text-anchor=start fill=${ink}>Lead time (log)</text>`+   // the y axis is titled above it, outside the plot, always log (#1332, #1355)
     `<text x=${ltP} y=${base+31} text-anchor=start fill=${ink}>Closed date</text>`;   // the x axis is titled below it (#1332)
   const lines=ltLine(c.average,"var(--chart-series-8)","")+(LT.md?ltLine(c.median,"var(--chart-ok)","6 3"):"")+(LT.p85?ltLine(c.p85,"var(--chart-series-5)","1 3"):"");   // the average shows at first; the median and p85 are toggles, each with its own 1px pattern, a long dash and a dot (#1332)
   const tags=ltGutter([ltTag(c.average,"var(--chart-series-8)",""),LT.md?ltTag(c.median,"var(--chart-ok)","6 3"):null,LT.p85?ltTag(c.p85,"var(--chart-series-5)","1 3"):null].filter(Boolean),ltP,LT_FRAME.height,ltGap);
@@ -5789,7 +5786,7 @@ const ltChart=(c,cov)=>{LT_FRAME=c.plot_frame;const n=c.dots.length,base=ltP+LT_
   const pk=LT.pick!=null&&c.clusters[LT.pick]?c.clusters[LT.pick]:null;
   const rows=pk?`<table class=mtab><thead><tr><th>Issue</th><th>Title</th><th>Elapsed</th><th>Closed</th></tr></thead><tbody>${pk.dots.map(d=>`<tr data-o=${d.n} style="cursor:pointer"><td>#${d.n}</td><td>${esc(d.title)}</td><td>${esc(d.text)}</td><td>${esc(d.closed)}</td></tr>`).join("")}</tbody></table>`:"";   // the page's one table rule (#1146)
   return ctl+legend+`<svg data-lt viewBox="0 0 ${ltP+LT_FRAME.width+gut} ${LT_FRAME.height+2*ltP}">${axes}${ys}${xs}${band}${roll}${lines}${dots}${gutter}</svg>`+rows;};   // the layout reserves the right gutter for the reference tags (#1332)
-const flowLead=l=>{const c=LT.zc||(l.control?l.control[LT.log?"log":"jira"][LT.tf]:null);
+const flowLead=l=>{const c=LT.zc||(l.control?l.control[LT.tf]:null);
   const head=`<p class=fhead>${esc((LT_TYPES.find(([k])=>k===l.type)||[0,"all cards"])[1].toLowerCase())} · <b>${esc(c?c.measure:l.measure)}</b> · window ${l.window.size} ${esc(l.window.unit)}</p>`+
     (c&&c.summary?`<p class=fhead>min <b>${ltV(c.summary.minimum)}</b> · max <b>${ltV(c.summary.maximum)}</b> · ${esc(c.summary.plotted_text)} · ${ltExOf(c)}</p>`:"");   // the header is two rows: the view, then the summary it states (#1334)
   LT.cols=l.columns||[];if(!c)return head+`<p class=fnote>no closed card yet · ${ltEx(l.excluded,l.excluded_cards,l.excluded_total)}</p>`;
@@ -5798,7 +5795,7 @@ const drawFlow=()=>{{const w=$("#flowb").clientWidth-20;flowW=w<600?600:w>1600?1
   const a=FLOWD[FLOWK];
   $("#flowb").innerHTML=!a?"<p class=fnote>Loading the chart from the hub.</p>":(cfd?flowCFD(a.cfd.ranges[CF.r]):flowLead(a.lead))+`<p class=flstat role=status>data read ${new Date(a.t*1000).toLocaleTimeString()}</p>`};
 const flowOpen=async k=>{FLOWK=k;$("#flowov").hidden=false;flowTabs();drawFlow();const want=()=>barQuery(k),q=want();try{const a=await (await fetch(`/api/chart/${k}?${q}`)).json();if(q!==want())return;FLOWD[k]=a;if(FLOWK===k)drawFlow()}catch(e){}if(k==="lead"){if(CHART_R){Object.assign(LT,CHART_R);CHART_R=null}if(FLOWK===k&&ltOwn())ltGet()}};   // the control chart reads the span its own key restored, and the stored range reaches LT only here, never on the Board tab (#1275)
-const ltQ=()=>`&scale=${LT.log?"log":"jira"}&a=${encodeURIComponent(LT.a)}&b=${encodeURIComponent(LT.b)}&${barQuery("lead")}`,ltOwn=()=>LT.a!==LT_START||LT.b!=="";   // a span other than the payload's, Todo to closed, is the hub's chart for it (#905, #1247); the bar's values filter it (#904)
+const ltQ=()=>`&a=${encodeURIComponent(LT.a)}&b=${encodeURIComponent(LT.b)}&${barQuery("lead")}`,ltOwn=()=>LT.a!==LT_START||LT.b!=="";   // a span other than the payload's, Todo to closed, is the hub's chart for it (#905, #1247); the bar's values filter it (#904); the axis is always log, so the route takes no scale (#1355)
 const ltZoom=async(f,t)=>{const tok=++LT.tok;try{const c=await (await fetch(`/api/leadtime?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}${ltQ()}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;LT.zr=[f,t];LT.pick=null;drawFlow()}catch(e){}};   // the hub recomputes the chart for the dragged range (#900)
 const ltGet=async()=>{const tok=++LT.tok;LT.zc=null;LT.pick=null;if(!ltOwn()){drawFlow();return}try{const c=await (await fetch(`/api/leadtime?tf=${LT.tf}${ltQ()}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;drawFlow()}catch(e){}};   // the timeframe's chart for the chosen span (#905)
 const ltResize=async()=>{const s=$("#flowb svg[data-lt]");if(!s)return;const r=s.getBoundingClientRect(),v=s.viewBox.baseVal,pw=LT_FRAME.width*r.width/v.width,ph=LT_FRAME.height*r.height/v.height,tok=++LT.tok;try{const c=await (await fetch(`/api/leadtime?${LT.zr?`from=${encodeURIComponent(LT.zr[0])}&to=${encodeURIComponent(LT.zr[1])}`:`tf=${LT.tf}`}${ltQ()}&pw=${pw}&ph=${ph}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;drawFlow()}catch(e){}};   // a resize re-clusters the marks in the rendered plot size, by the hub's one rule (#1331)
@@ -5815,7 +5812,6 @@ $("#flowb").onchange=e=>{if(e.target.id==="cfdr"){CF.r=e.target.value;drawFlow()
   if(e.target.id==="ltr"){LT.tf=e.target.value;LT.zr=null;ltGet();return}   // the timeframe is this visit's choice, never stored (#1247)
   if(e.target.id==="lty"){LT.ty=e.target.value;barMoved();return}
   if(e.target.id==="lta"||e.target.id==="ltb"){LT[e.target.id==="lta"?"a":"b"]=e.target.value;chartSave();LT.pick=null;if(LT.zr){ltZoom(LT.zr[0],LT.zr[1]);return}ltGet();return}
-  if(e.target.id==="lts"){LT.log=e.target.value==="log";LT.pick=null;if(LT.zr){ltZoom(LT.zr[0],LT.zr[1]);return}if(ltOwn()){ltGet();return}drawFlow()}
   if(e.target.id==="ltbd"){LT.band=e.target.checked;drawFlow();return}   // the band redraws what the plot already holds, never a new read (#1304)
   if(e.target.id==="ltmd"){LT.md=e.target.checked;drawFlow();return}   // a reference toggle redraws the held payload, never a new read (#1332)
   if(e.target.id==="ltp85"){LT.p85=e.target.checked;drawFlow();return}};
