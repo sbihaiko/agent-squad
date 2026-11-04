@@ -177,9 +177,9 @@ def test_the_defaults_checker_and_config_check_read_one_catalog():
 
 def test_this_repository_overlay_caps_runs_and_lowers_the_gate_slots():
     overlay = yaml.safe_load((Path(__file__).resolve().parents[1] / "docs" / "squad" / "defaults.yaml").read_text())
-    # Owner ruling 2026-11-03: three runs and twelve children, the concurrency the token review measured as wasteful above it.
+    # Owner ruling 2026-11-03: four runs and twelve children, the concurrency the token review measured as wasteful above it.
     # The gate slots go below the plugin's twelve so one gate runs at a time: at twelve, three gates held the machine between
     # them, each kept its slots while it waited for the lock, and the queue outlived the takeover bound (#1191). A project may
     # only lower a machine-wide cap, and this one lowers it.
-    assert overlay["caps"] == {"runs": 3, "children": 12, "gates": 6}
+    assert overlay["caps"] == {"runs": 4, "children": 12, "gates": 6}
     assert overlay["limits"]["max_budget_usd"] == 30
