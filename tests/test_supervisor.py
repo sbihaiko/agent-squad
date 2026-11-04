@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import shutil
 import signal
 import socket
@@ -150,6 +151,87 @@ def test_hosted_session_answers_a_line_through_attach(state):
     session = hosted(state, "echo-1")
     sv.call(state, "write", session=session, text="hello\n")
     wait_for_text(state, session, "echo:hello")
+
+
+# A stand-in SDK that answers each prompt with the loop it ran on and the version-probe switch it read, so a test reads a
+# hosted session's loop and its environment from the session itself. No spend.
+HOST_PROBE_SDK = '''
+import asyncio
+import os
+from dataclasses import dataclass, field
+
+
+@dataclass
+class TextBlock:
+    text: str
+
+
+@dataclass
+class AssistantMessage:
+    content: list
+    model: str = "stub"
+    error: object = None
+
+
+class ClaudeAgentOptions:
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+
+
+@dataclass
+class HookMatcher:
+    matcher: object = None
+    hooks: list = field(default_factory=list)
+    timeout: object = None
+
+
+async def query(*, prompt, options):
+    skip = os.environ.get("CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK", "unset")
+    yield AssistantMessage(content=[TextBlock(text=f"{prompt} loop={id(asyncio.get_running_loop())} skip={skip}")])
+'''
+
+
+def host_probe(state, tmp_path, monkeypatch, sdk_text, job):
+    """A hosted session on the real adapter, whose SDK is `sdk_text`: the loop and the environment come from the session."""
+    folder = tmp_path / "probe-sdk"
+    folder.mkdir()
+    (folder / "claude_agent_sdk.py").write_text(sdk_text)
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join([str(folder), str(ROOT)]))
+    supervisor = sv.Supervisor(state)
+    return supervisor, supervisor.start(job, str(tmp_path))
+
+
+def read_until(supervisor, sid, needle, timeout=10.0):
+    deadline = time.time() + timeout
+    data = ""
+    while time.time() < deadline:
+        data = supervisor.read(sid, 0)["data"]
+        if needle in data:
+            return data
+        time.sleep(0.05)
+    raise AssertionError(f"{needle!r} not seen; output was {data!r}")
+
+
+def test_a_hosted_session_serves_every_prompt_on_one_event_loop(state, tmp_path, monkeypatch):
+    """#1320: the hosted process made a new event loop per prompt, so an SDK child of one prompt outlived the loop that
+    watched it, and a later prompt's child read as reaped behind the SDK (`Unknown child process pid N, will report
+    returncode 255`). One loop serves every prompt of the session."""
+    supervisor, sid = host_probe(state, tmp_path, monkeypatch, HOST_PROBE_SDK, "p#50")
+    loops = []
+    for prompt in ("first", "second"):
+        supervisor.write(sid, prompt + "\n", sv.Caller())
+        found = re.search(rf"{prompt} loop=(\d+)", read_until(supervisor, sid, f"{prompt} loop="))
+        loops.append(found.group(1))
+    assert loops[0] == loops[1], f"each prompt ran on its own loop: {loops}"
+
+
+def test_the_sdk_version_probe_is_switched_off_in_a_hosted_session(state, tmp_path, monkeypatch):
+    """#1320: the SDK spawns and reaps a `claude -v` child before every prompt, a second child the hosted session never
+    asked for and one more `waitpid` on the CLI family. The hosted environment switches the probe off; the session owns
+    one child, its CLI."""
+    supervisor, sid = host_probe(state, tmp_path, monkeypatch, HOST_PROBE_SDK, "p#51")
+    supervisor.write(sid, "first\n", sv.Caller())
+    assert "skip=1" in read_until(supervisor, sid, "first loop=")
 
 
 def test_hook_of_the_adapter_refuses_a_tool_call_in_a_hosted_session(state, tmp_path):
