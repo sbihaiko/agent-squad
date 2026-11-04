@@ -3,7 +3,7 @@
 # Live pass moves at once; a finished run is backfilled only when the card is Todo/In Progress/Blocked, never past Code Complete.
 unset SG_BOARD_VOCAB   # the old-vocabulary case needs it unset; a caller that exports it must not turn the suite red
 src=${1:-$(dirname "$0")/childcc.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/bin" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/childcc.py"; cp "$(dirname "$src")/issue_ledger.py" "$(dirname "$src")/issue_state.py" "$(dirname "$src")/child_issues.py" "$(dirname "$src")/ghread.py" "$(dirname "$src")/revformat.py" "$T/"
+mkdir -p "$T/bin" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/childcc.py"; cp "$(dirname "$src")/issue_ledger.py" "$(dirname "$src")/issue_state.py" "$(dirname "$src")/child_issues.py" "$(dirname "$src")/ghread.py" "$(dirname "$src")/revformat.py" "$(dirname "$src")/board_columns.py" "$T/"
 printf '#!/bin/bash\necho "$@" >> %s/moves\n' "$T" > "$T/board.sh"; chmod +x "$T/board.sh"
 cat > "$T/bin/gh" <<'GH'
 #!/bin/bash
@@ -41,7 +41,7 @@ run_def refs c "Every commit message carries the line \`Refs #1493\` on its own 
 run_def cluster c "CHILD — GitHub issue(s) 5201, 5202, 5203 (work in the worktree the run gives you)." pass
 printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}}' > "$T/issues-open.json"
 export SG_SQUAD=$(cd "$(dirname "$src")/../../.." && pwd) SQUAD_CAPS_DIR=$T/caps   # a review takes a review slot (caps.reviews): a throwaway budget, this repository's squad.caps
-export GH_LOG=$T/gh.log GH_ISSUES_OPEN=$T/issues-open.json; export GH_STATE_FAIL=$T/gh.statefail SG_STATE=$T/st SG_REPO=x/y SG_OWNER=x SG_PROJECT=4 PATH="$T/bin:$PATH" GH_NUMS="2:Todo 3:Closed 4:In_Progress 5101:Todo"
+export GH_LOG=$T/gh.log GH_ISSUES_OPEN=$T/issues-open.json; export GH_STATE_FAIL=$T/gh.statefail SG_STATE=$T/st SG_REPO=x/y SG_OWNER=x SG_PROJECT=4 PATH="$T/bin:$PATH" GH_NUMS="2:Todo 3:Closed 4:In_Progress 5101:Todo 5104:Code_Complete 5105:Doing"
 cp "$T/childcc.py" "$T/childcc.py.run"; sed -i.bak "s#^board = .*#board = '$T/board.sh'#" "$T/childcc.py.run"
 out=$(cd "$T/co" && python3 "$T/childcc.py.run" 2>&1)
 echo "$out" | tail -20 >&2
@@ -103,6 +103,17 @@ run cut 5102 n; printf 'CHILD - GitHub issue #5102\n' > "$T/co/runs/cut/request.
 out=$(pass cut)
 grep -q ' 5102$' "$T/moves" 2>/dev/null && ko "a child of a run with no wave reads Code Complete: $out" || ok "a child of a run with no wave is not moved to Code Complete"
 echo "$out" | /usr/bin/grep -q 'WAVE-SALVAGE #5102' && ok "a child of a run with no wave is named on a salvage line" || ko "no salvage line for the child: $out"
+# A finished run that cut no wave (#1349): its child's commits reach no remote branch, so the child is not marked done and
+# skipped. It is requeued with the reason, and its issue goes back to the queue. A claimed card ("Doing") is backfilled as
+# "In Progress" is, never named past the backfill.
+run nw 5104 v; wtree nw; : > "$WAVE_CALLS"; rm -f "$T/moves"
+out=$(pass nw)
+echo "$out" | /usr/bin/grep -q 'CHILD NO-WAVE REQUEUE #5104' && ok "a finished child of a run with no wave is requeued" || ko "no-wave child not requeued: $out"
+grep -q '^requeue 5104 ' "$WAVE_CALLS" && ok "the no-wave child is requeued through wave.sh" || ko "no requeue call: $(cat "$WAVE_CALLS")"
+echo "$out" | /usr/bin/grep -q 'CHILDCC SKIP #5104' && ko "a no-wave child is skipped silently: $out" || ok "a no-wave child is not skipped"
+run dg 5105 v; wtree dg; : > "$WAVE_CALLS"
+out=$(pass dg)
+echo "$out" | /usr/bin/grep -q 'past the backfill' && ko "a Doing card with no wave is named past the backfill: $out" || ok "a Doing card with no wave is backfilled, not skipped"
 # A failed read of the issue's state (rate limit, refusal, network) is no answer (#848): childcc wrote the permanent done
 # marker on it and said nothing, so the run's wave refused the child on every cycle. The read that fails writes no marker,
 # logs the reason, and leaves the child (exit 3) until the read works, when the child enters.
