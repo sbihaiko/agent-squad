@@ -649,3 +649,10 @@ def test_the_live_line_repaints_eight_times_a_second_and_leaves_the_status_row_t
     assert 'function say(msg) { stat.textContent = msg || ""; }' in dom
     conv = dom[dom.index("async function loadConversation() {"):dom.index("const uuid =")]
     assert "setActivity(" in conv and conv.index("setActivity(") < conv.index("if (sig === lastSig) return;")
+
+
+def test_an_ended_terminal_read_names_the_end_and_offers_a_new_start():
+    """#1318: the panel says the session ended, with its return code, instead of a live `Working` line."""
+    assert run_js('SQ.endedLine({ended: true, returncode: 1})') == "Ended (rc 1). Start a new session."
+    assert run_js('SQ.endedLine({ended: false, data: "x"})') == ""
+    assert "SQ.endedLine(d)" in OVERLAY.read_text()
