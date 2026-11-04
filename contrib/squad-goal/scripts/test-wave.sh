@@ -30,7 +30,7 @@ export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR=$T/caps   # a gate tak
   printf '. %s/address.sh\n' "$T/s"
 } > "$T/s/env.sh"
 # The seam notes each items read on stderr (issue_state.py); the stub does too, so a write that worked is never read as refused (#526).
-printf '#!/bin/bash\necho "$*" >> "%s/board.log"\necho "issue_state.py: items read 3; project total: none on the REST items route" >&2\n' "$T" > "$T/board.sh"; chmod +x "$T/board.sh"
+printf '#!/bin/bash\necho "$*" >> "%s/board.log"\necho "${SG_MOVE_REASON:-none} $*" >> "%s/board-reason.log"\necho "issue_state.py: items read 3; project total: none on the REST items route" >&2\n' "$T" "$T" > "$T/board.sh"; chmod +x "$T/board.sh"
 $G init -q -b dev "$T/co"; (cd "$T/co" && echo x > f && $G add f && $G -c user.email=a@b -c user.name=t commit -q -m init)
 $G clone -q --bare "$T/co" "$T/origin.git"; O="$G -C $T/origin.git"; W=wave/run-1
 # Every ref a push writes is logged by the remote itself (<old> <new> <ref>, one line per ref): the landing pass pushes
@@ -398,6 +398,7 @@ case "$r1" in "WAVE CONFLICT $W7: the rebase on dev conflicts at "*"; #70 requeu
 [ $rc1 = 1 ] && ok "K: the conflicting landing does not land (exit 1)" || ko "K: exit $rc1"
 [ -e "$T/st/auto/wave-run-7" ] && ko "K: the wave marker is kept, so the loop retries the landing" || ok "K: the wave marker goes, so the loop stops retrying"
 /usr/bin/grep -qx "o 3 Todo 70" "$T/board.log" && ok "K: #70 is back in Todo" || ko "K: #70 not in Todo: '$(cat "$T/board.log")'"
+/usr/bin/grep -qx "no-landing o 3 Todo 70" "$T/board-reason.log" && ok "K: #70 moves back to Todo as no-landing (#1340)" || ko "K: #70 move reason: '$(cat "$T/board-reason.log")'"
 case "$(wfact 70 run-7)" in "refused the rebase on dev conflicts at"*) ok "K: the conflict is a fact in the issue's ledger";; *) ko "K: ledger fact of #70: '$(wfact 70 run-7)'";; esac
 $O rev-parse -q --verify "refs/heads/$W7" >/dev/null && ok "K: the wave branch keeps the work" || ko "K: the wave branch is gone"
 [ "$($O rev-parse dev)" = "$before" ] && ok "K: dev is not moved by a conflicting landing" || ko "K: dev moved"
@@ -656,7 +657,7 @@ r=$(cd "$T/c310" && SG_WAVE_GATES=true bash "$T/s/wave.sh" enter run-14 310 2>&1
 case "$r" in *"WAVE-BOARD #310 Code Complete refused:"*) ok "T: the refused entry card write is named";; *) ko "T: the refused write is silent: '$r'";; esac
 case "$r" in *"board refused: the project is locked"*) ok "T: the refusal names the board's own error";; *) ko "T: the board error is not named: '$r'";; esac
 /usr/bin/grep -qx 'o 3 Code Complete 310' "$T/board-refuse.log" && ok "T: the entry still attempted the Code Complete write" || ko "T: no Code Complete write was attempted"
-printf '#!/bin/bash\necho "$*" >> "%s/board.log"\necho "issue_state.py: items read 3; project total: none on the REST items route" >&2\n' "$T" > "$T/board.sh"
+printf '#!/bin/bash\necho "$*" >> "%s/board.log"\necho "${SG_MOVE_REASON:-none} $*" >> "%s/board-reason.log"\necho "issue_state.py: items read 3; project total: none on the REST items route" >&2\n' "$T" "$T" > "$T/board.sh"
 chmod +x "$T/board.sh"
 # A write that worked names no refusal: the seam's read note is not an error.
 r=$(cd "$T/c310" && SG_WAVE_GATES=true bash "$T/s/wave.sh" enter run-14 310 2>&1); rc=$?
@@ -860,6 +861,16 @@ r=$(cd "$T/co" && SG_WAVE_LAND_TRIES=1 bash "$T/s/wave.sh" land run-15 "$RD" 2>&
 [ -z "$(tries 151 run-15)" ] && ok "S776: no landing try is counted for #151" || ko "S776: tries of #151: $(tries 151 run-15)"
 [ "$(printf '%s\n' "$r" | /usr/bin/grep -c 'WAVE-NOTE.*#151.*outside.*dispatch')" = 1 ] && ok "S776: the outside Refs is named in one log line" || ko "S776: no single WAVE-NOTE for #151: '$r'"
 awk -F '\t' '$2 == "run-15" && $3 == "151"' "$T/st/wave-outside.tsv" 2>/dev/null | /usr/bin/grep -q . && ok "S776: the outside Refs is recorded in wave-outside.tsv" || ko "S776: no wave-outside.tsv row: '$(cat "$T/st/wave-outside.tsv" 2>&1)'"
+
+# S777 (#1340): a landing whose push to the base is refused twice takes the stuck path: its issue goes back to Todo as
+# no-landing (board.py refuses any other automated backward move from Code Complete). The origin refuses every push to dev.
+W1340=wave/run-1340; start2 run-1340 >/dev/null; child 1340 g1340 "origin/$W1340"; en2 run-1340 1340 >/dev/null
+cp "$T/origin.git/hooks/pre-receive" "$T/pre-receive.keep"; printf '#!/bin/bash\necho "refused by the test remote" >&2\nexit 1\n' > "$T/origin.git/hooks/pre-receive"
+: > "$T/gh.log"; : > "$T/board.log"; : > "$T/board-reason.log"; rm -f "$T/st/cq/"*1340*
+r=$(SG_WAVE_LAND_TRIES=1 land2 run-1340); rc=$?
+cp "$T/pre-receive.keep" "$T/origin.git/hooks/pre-receive"
+case "$r" in *"WAVE-ERROR the push of wave/run-1340 to dev was refused"*) true;; *) false;; esac && [ $rc = 1 ] && ok "S777: a push refused twice takes the stuck path" || ko "S777: exit $rc: '$r'"
+/usr/bin/grep -qx "no-landing o 3 Todo 1340" "$T/board-reason.log" && ok "S777: the stuck path moves #1340 back to Todo as no-landing (#1340)" || ko "S777: #1340 move reason: '$(cat "$T/board-reason.log")', board '$(cat "$T/board.log")'"
 
 # (#646) The wave tip's check is the base battery over origin/$SG_BASE, and its pytest runs over the selection. The check's command
 # is built from the shared definition and run in a clone of the remote, as wave.sh runs it; a stub python logs each call's argv.

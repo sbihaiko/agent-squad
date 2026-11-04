@@ -82,6 +82,16 @@ def test_gating_reaches_the_lane_order_the_legend_the_phone_and_the_cfd_bands(ta
     assert '"Gating"' not in hub.MOBILE_PAGE and "'Gating'" not in hub.MOBILE_PAGE, "the phone page names a column itself"
 
 
+def test_a_card_that_reached_gating_leaves_it_only_forward(table):
+    """#1257: a red or unproven attempt is a marker, not a move (ADR-0170). Gating sits between Code
+    Complete and Closed on the shipped axis, so a write back to Code Complete is past and refused,
+    and a card that left Gating forward never re-enters it for the same wave."""
+    assert table.past("Gating", "Code Complete"), "a write back from Gating is not past"
+    assert table.refused_for_automated("Gating", "Code Complete")
+    assert not table.past("Gating", "Closed"), "the one forward move out of Gating reads as past"
+    assert table.past("Closed", "Gating"), "a re-entry into Gating after the wave landed is past"
+
+
 def test_the_hub_vocabulary_is_the_table(table, hub):
     assert hub.BOARD_COLUMNS == table.view_columns(), "the hub holds a vocabulary of its own"
     colours = json.loads(re.search(r"const COLORS=(\{.*?\});", hub.PAGE).group(1))

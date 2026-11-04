@@ -16,14 +16,16 @@ def review_state(verdict_text, sha_text, tip):
     return "approved" if sha_text.strip() == tip and APPROVED in first else "waiting"
 
 
-def issue_facts(*, entered, standing, approved, dev_running, review_waits, run_live=False):
+def issue_facts(*, entered, standing, approved, dev_running, review_waits, run_live=False, gating=False):
     """The facts of one issue. `entered`: its child is in the run's wave branch. `standing`: that branch against the landing
     branch. `approved`: the review of the wave tip approved it. `dev_running`: a check on the landing branch tip has not ended.
-    `review_waits`: a review of its work branch was read and does not approve the tip."""
+    `review_waits`: a review of its work branch was read and does not approve the tip. `gating`: a gate is live for the wave,
+    or the wave's last attempt ended without a pass and none was made since (#1257, read from the attempt journal by the
+    caller, so a restart answers the same)."""
     ahead = bool(entered) and standing in AHEAD
     return {"wave_branch": ahead, "landing": ahead and bool(approved), "in_dev": bool(entered) and standing in IN_DEV,
             "dev_ci": bool(entered) and standing in IN_DEV and bool(dev_running),
-            "review_wait": bool(review_waits), "run_live": bool(run_live)}
+            "review_wait": bool(review_waits), "run_live": bool(run_live), "gating": bool(gating)}
 
 
 def spec_facts(children):

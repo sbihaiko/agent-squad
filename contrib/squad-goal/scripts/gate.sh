@@ -252,7 +252,7 @@ case "${1:-}" in
         # replay under a new process, answers as the record itself and never appends twice. SG_GATE_AID names a
         # chain of gates that is one attempt (a landing's retry chain): the first record answers for the chain.
         gaok=1
-        if [ -n "${SG_GATE_CARD:-}" ]; then
+        if [ -n "${SG_GATE_CARD:-}" ] || [ -n "${SG_GATE_WAVE:-}" ]; then
           gaj=${SG_GATE_JOURNAL:-}
           if [ -z "$gaj" ] && [ -n "${SG_BOARD_CACHE:-}" ]; then
             gaj=$(python3 "$here/gate_attempts.py" journal "$SG_BOARD_CACHE" "${SG_REPO:-$(repo_name)}" 2>/dev/null) || gaj=
@@ -260,13 +260,14 @@ case "${1:-}" in
           if [ -n "$gaj" ]; then
             # A failed append is named on stderr, never swallowed: the gate's verdict stands, and the journal
             # step is loud so a gate that journaled nothing is visible on the record it printed.
-            if ! garec=$(python3 "$here/gate_attempts.py" record "$gaj" "$SG_GATE_CARD" "$sha" "$FOC" "${SG_GATE_AID:-}" "$fin" 2>&1); then
-              echo "gate: WARNING: the attempt of card $SG_GATE_CARD at ${sha:0:9} was not journaled: $garec" >&2; gaok=
+            if ! garec=$(python3 "$here/gate_attempts.py" record "$gaj" "${SG_GATE_CARD:-0}" "$sha" "$FOC" "${SG_GATE_AID:-}" "$fin" "${SG_GATE_WAVE:-}" 2>&1); then
+              echo "gate: WARNING: the attempt of card ${SG_GATE_CARD:-0} at ${sha:0:9} was not journaled: $garec" >&2; gaok=
             fi
             # The journal is the source and the card's Gate Tries is its projection (#1255, ADR-0170): the count
             # is replayed from the whole journal, so a crash between the append and the field write answers one
             # count on the next projection. A projection that fails is named, never dropped silently.
-            if ! gat=$(python3 "$here/gate_attempts.py" count "$gaj" "$SG_GATE_CARD" 2>&1); then
+            if [ -z "${SG_GATE_CARD:-}" ]; then :
+            elif ! gat=$(python3 "$here/gate_attempts.py" count "$gaj" "$SG_GATE_CARD" 2>&1); then
               echo "gate: WARNING: the Gate Tries count of card $SG_GATE_CARD did not replay: $gat" >&2; gaok=
             elif [ -n "${SG_STATE:-}" ] && [ -n "${SG_OWNER:-}" ] && [ -n "${SG_PROJECT:-}" ]; then
               if ! gaw=$(python3 "$here/board.py" --gate-tries "$SG_OWNER" "$SG_PROJECT" "$SG_GATE_CARD" "$gat" 2>&1); then
@@ -328,8 +329,15 @@ esac
 [ $# -gt 0 ] || { echo "usage: gate.sh <command...>   (lock in \$SG_STATE/locks/gate; SG_STATE unset: /tmp/sg-state, never TMPDIR)" >&2; exit 2; }
 # The lock's hold is the attempt bound plus a backstop: the gate's own clock stops its tree first and writes the outcome,
 # and a holder that wedges past that loses the lock to the next gate (serial.sh).
+wave_wait=${SERIAL_WAIT_SECONDS:-1800}
 export SERIAL_WAIT_SECONDS=${SERIAL_WAIT_SECONDS:-86400} SERIAL_HOLD_SECONDS=${SERIAL_HOLD_SECONDS:-$(( $(gate_bound) + 300 ))}
 case ":${SG_SERIAL_HELD:-}:" in
   *":gate:"*) exec bash "$here/gate.sh" --run "$@" ;;   # inside a gate holder: no slots of its own, it keeps the holder's count
 esac
+# A wave's gate is live from the request, queued or running (#1257): the marker names this process, which exec keeps as the
+# lock waiter and then the holder, so a dead pid is a gate that is gone. Its limit is the attempt bound plus the lock wait.
+if [ -n "${SG_GATE_WAVE:-}" ]; then
+  mkdir -p "$st" 2>/dev/null && printf '%s %s %s\n' "$$" "$(date +%s)" "$(( $(gate_bound) + wave_wait ))" > "$st/gate-wave-$SG_GATE_WAVE.$$.live.$$" 2>/dev/null \
+    && mv -f "$st/gate-wave-$SG_GATE_WAVE.$$.live.$$" "$st/gate-wave-$SG_GATE_WAVE.$$.live" 2>/dev/null
+fi
 exec bash "$here/serial.sh" gate bash "$here/gate.sh" --inner "$@"   # exec: the lock holder is this process, and --inner takes the slots inside it
