@@ -1,7 +1,7 @@
 """The Monitor's live-runs card is a bounded glance that opens the Runs tab (#1276).
 
 The card keeps its place under the Monitor and stops being a second full list: it states the whole live count and the
-oldest live run's age, draws at most three rows, and carries one control that switches the page to the Runs tab. A row
+oldest live run's age, draws at most four rows, and carries one control that switches the page to the Runs tab. A row
 keeps its `data-id`, so the page's own row handler still opens the run sheet. The served page's own code runs under node
 over a fixture view; the words are read back as the owner sees them.
 """
@@ -69,19 +69,19 @@ def test_the_card_states_the_whole_count_and_the_oldest_age(page):
     assert out["head"] == "5 live · oldest 2h", "the card states the whole truth, even with the rows capped"
 
 
-def test_the_card_draws_at_most_three_rows_oldest_first(page):
+def test_the_card_draws_at_most_four_rows_oldest_first(page):
     out = _card(page, LIVE)
     ids = re.findall(r'data-id="([^"]+)"', out["html"])
-    # a hand-worked answer, never the card's own sort rule: a=7200 s, e=5400 s, d=1800 s are the three oldest of LIVE
-    assert ids == ["run-20261103-1010a0-aaaa", "run-20261103-1010e0-aaaa", "run-20261103-1010d0-aaaa"], \
-        "at most three rows, the oldest first"
-    assert out["html"].count('class="r"') == 3
+    # a hand-worked answer, never the card's own sort rule: a=7200 s, e=5400 s, d=1800 s, c=600 s are the four oldest of LIVE
+    assert ids == ["run-20261103-1010a0-aaaa", "run-20261103-1010e0-aaaa", "run-20261103-1010d0-aaaa", "run-20261103-1010c0-aaaa"], \
+        "at most four rows, the oldest first"
+    assert out["html"].count('class="r"') == 4
 
 
 def test_the_count_is_not_the_row_count_when_rows_are_capped(page):
     out = _card(page, LIVE)
     assert out["head"].startswith("5 live"), "the count keeps stating the whole truth"
-    assert out["html"].count('class="r"') == 3
+    assert out["html"].count('class="r"') == 4
 
 
 def test_the_card_carries_one_control_that_switches_to_the_runs_tab(page):

@@ -5170,7 +5170,7 @@ const groupOf=r=>{if(r.rank===0)return"running";const h=r.age/3600;return h<=1?"
 // The Monitor's live-runs card (#1276): a bounded glance, never a second full list. Its summary states the whole truth --
 // the live count and the oldest live run's age -- even when the rows are capped. It draws at most LIVE_ROWS rows, oldest
 // first, and one control that opens the Runs tab. Each row is the history's own row, so it still opens the run sheet.
-const LIVE_ROWS=3;
+const LIVE_ROWS=4;
 function liveCard(live,row){const n=live.length,oldest=live.reduce((m,r)=>r.age>m?r.age:m,0);   // a reduce, never a spread: the live list is unbounded
  const shown=live.slice().sort((a,b)=>b.age-a.age).slice(0,LIVE_ROWS);
  const head=n?`${n} live · oldest ${age(oldest)}`:"none";   // the count is every live run, never the rows drawn
