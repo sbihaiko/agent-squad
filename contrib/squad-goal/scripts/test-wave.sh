@@ -421,6 +421,34 @@ cat "$T"/st/cq/*71-* 2>/dev/null | /usr/bin/grep -q cf2 && ok "KC: the child's n
 case "$rk10" in *"WAVE REQUEUE #71"*) ko "KC: the repeated conflict requeued #71 again: '$rk10'";; *) ok "KC: the repeated conflict does not requeue #71";; esac
 [ "$(/usr/bin/grep -c 'labels\[\]=bug' "$T/gh.log")" = 1 ] && ok "KC: the repeated conflict files one bug" || ko "KC: $(/usr/bin/grep -c 'labels\[\]=bug' "$T/gh.log") bugs filed"
 
+# KR (#1343): the base moves with every landing, so the conflict key is the conflicting paths, not the base sha. The same path
+# conflicting again at a new base is a repeat (one loop bug, no requeue); a different path is a first again (a requeue).
+start2 run-kr1 >/dev/null; start2 run-kr2 >/dev/null
+child 74 cfr origin/dev; en2 run-kr1 74 >/dev/null
+child 74 cfr origin/dev; en2 run-kr2 74 >/dev/null
+rm -rf "$T/w5"; $G clone -q "$T/origin.git" "$T/w5" 2>/dev/null
+(cd "$T/w5" && $G checkout -q dev && echo dev1 > cfr && $G add cfr && $G -c user.email=a@b -c user.name=t commit -q -m "dev moves cfr" && $G push -q origin HEAD:dev)
+: > "$T/gh.log"; rm -f "$T"/st/cq/*74-*
+kr1=$(land2 run-kr1)
+(cd "$T/w5" && echo dev2 > cfr && $G add cfr && $G -c user.email=a@b -c user.name=t commit -q -m "dev moves cfr again" && $G push -q origin HEAD:dev)
+kr2=$(land2 run-kr2)
+case "$kr1" in *"WAVE REQUEUE #74"*) ok "KR: the first conflict of #74 re-dispatches it";; *) ko "KR: no requeue of #74: '$kr1'";; esac
+case "$kr2" in *"WAVE REQUEUE #74"*) ko "KR: the second conflict on the same path at a new base requeued #74: '$kr2'";; *) ok "KR: the second conflict on the same path at a new base does not requeue #74";; esac
+case "$kr2" in *"WAVE-BUG #74"*) ok "KR: the second conflict on the same path files one loop bug";; *) ko "KR: no loop bug for #74: '$kr2'";; esac
+[ "$(/usr/bin/grep -c 'labels\[\]=bug' "$T/gh.log")" = 1 ] && ok "KR: one bug issue is filed" || ko "KR: $(/usr/bin/grep -c 'labels\[\]=bug' "$T/gh.log") bugs filed"
+
+start2 run-kd1 >/dev/null; start2 run-kd2 >/dev/null
+child 75 cfd origin/dev; en2 run-kd1 75 >/dev/null
+child 75 cfe origin/dev; en2 run-kd2 75 >/dev/null
+rm -rf "$T/w6"; $G clone -q "$T/origin.git" "$T/w6" 2>/dev/null
+(cd "$T/w6" && $G checkout -q dev && echo dev1 > cfd && $G add cfd && $G -c user.email=a@b -c user.name=t commit -q -m "dev moves cfd" && $G push -q origin HEAD:dev)
+: > "$T/gh.log"; rm -f "$T"/st/cq/*75-*
+kd1=$(land2 run-kd1)
+(cd "$T/w6" && echo dev1 > cfe && $G add cfe && $G -c user.email=a@b -c user.name=t commit -q -m "dev adds cfe" && $G push -q origin HEAD:dev)
+kd2=$(land2 run-kd2)
+case "$kd1" in *"WAVE REQUEUE #75"*) ok "KR: a conflict on one path requeues #75";; *) ko "KR: no requeue of #75 on cfd: '$kd1'";; esac
+case "$kd2" in *"WAVE REQUEUE #75"*) ok "KR: a conflict on a different path at a new base is a first again";; *) ko "KR: a different path did not requeue #75: '$kd2'";; esac
+
 # K3 (#844): the requeue cap bounds a conflict that keeps coming back: at SG_LOOP_REQUEUE_CAP the issue goes to the owner, as any
 # requeue does (requeue, loop_stop). A second wave of #73 conflicts with dev moved again after its entry.
 W44=wave/run-44; start2 run-44 >/dev/null; child 73 cf "origin/$W44"; en2 run-44 73 >/dev/null
