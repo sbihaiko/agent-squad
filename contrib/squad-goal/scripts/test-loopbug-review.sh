@@ -40,25 +40,33 @@ else ko "1c loop_defect tail is not the review chain: ${tail_ids[*]:-none} vs ${
   && ok "1d deepseek-flash is reachable in loop_defect and never first" || ko "1d deepseek-flash is first or missing in loop_defect"
 
 # --- 2) review.sh takes the chain by label ------------------------------------------------------------------------------
-cat > "$T/bin/gh" <<'J'
+# The reads of a review go through SG_GHREAD, which the door calls with the route alone and reads as REST (ghread.py would
+# answer an issue with GraphQL, which this stub does not model). `gh` answers only the raw diff read.
+cat > "$T/bin/ghrest" <<'J'
 #!/bin/bash
-printf '%s\n' "gh $*" >> "${GHLOG:-/dev/null}"
-case "$*" in
-  *Accept*compare*) printf 'diff --git a/f b/f\n+x\n';;
-  *compare*) printf '{"status":"ahead","files":[{"filename":"contrib/squad-goal/scripts/a.sh"}]}\n';;
+echo "$1" >> "${GHLOG:-/dev/null}"
+case "$1" in
   *commits/*) echo '{"sha":"aaa111"}';;
+  *compare*) printf '{"status":"ahead","files":[{"filename":"contrib/squad-goal/scripts/a.sh"}]}\n';;
   *issues/*)
     if [ -n "${GH_LABELS_BAD:-}" ]; then echo '{"number":8,"title":"the issue","body":"the acceptance criteria","labels":"not-a-list"}'
     else printf '{"number":8,"title":"the issue","body":"the acceptance criteria","labels":[%s]}\n' "${LB_LABELS:-}"; fi;;
-  *) echo "stub";;
+  *) echo "stub"; exit 1;;
+esac
+J
+cat > "$T/bin/gh" <<'J'
+#!/bin/bash
+case "$*" in
+  *Accept*compare*) printf 'diff --git a/contrib/squad-goal/scripts/a.sh b/contrib/squad-goal/scripts/a.sh\n+x\n';;
+  *) for a in "$@"; do case "$a" in repos/*) exec "$(dirname "$0")/ghrest" "$a";; esac; done; echo stub; exit 1;;
 esac
 J
 cat > "$T/bin/claude" <<'J'
 #!/bin/bash
 cat > /dev/null; echo "$*" >> "${CLAUDE_ARGS:-/dev/null}"; echo "VERDICT: APPROVE"
 J
-chmod +x "$T/bin/gh" "$T/bin/claude"
-export PATH="$T/bin:$PATH" GHLOG="$T/gh.log" CLAUDE_ARGS="$T/claude.args"
+chmod +x "$T/bin/gh" "$T/bin/ghrest" "$T/bin/claude"
+export PATH="$T/bin:$PATH" GHLOG="$T/gh.log" CLAUDE_ARGS="$T/claude.args" SG_GHREAD="$T/bin/ghrest"
 pick() { rm -f "$T/st/review-"*.model "$T/claude.args" "$T/st/review-"*.md "$T/st/review-"*.sha; LB_LABELS="$1" GH_LABELS_BAD="$2" bash "$T/s/review.sh" --branch fix/8-x 8 >/dev/null 2>"$T/err"; }
 pick '{"name":"loop-bug"}' ''
 [ "$(cat "$T/st/review-fix_8-x.model" 2>/dev/null)" = claude-fable-5-1 ] \

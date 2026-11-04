@@ -263,3 +263,13 @@ contrib/squad-goal/scripts/hub-mobile.html	contrib/squad-goal/scripts/test-hub-m
 *.md	tests/test_setup.py
 contrib/squad-goal/scripts/test-*.sh	SELF
 tests/*.txt	tests/test_tooling.py
+contrib/squad-goal/scripts/loopbug.sh	contrib/squad-goal/scripts/test-loopbug-review.sh
+contrib/squad-goal/scripts/review.sh	contrib/squad-goal/scripts/test-loopbug-review.sh
+contrib/squad-goal/scripts/autobug.sh	contrib/squad-goal/scripts/test-loopbug-review.sh
+contrib/squad-goal/scripts/models.json	contrib/squad-goal/scripts/test-loopbug-review.sh
+contrib/squad-goal/scripts/modelreg.py	contrib/squad-goal/scripts/test-loopbug-review.sh
+contrib/squad-goal/scripts/test-loopbug-review.sh	contrib/squad-goal/scripts/test-loopbug-review.sh
+contrib/squad-goal/scripts/test-dispatch-hold-wave.sh	contrib/squad-goal/scripts/test-dispatch-hold-wave.sh
+contrib/squad-goal/scripts/test-dispatch-mutex.sh	contrib/squad-goal/scripts/test-dispatch-mutex.sh
+contrib/squad-goal/scripts/test-dispatch-worktree-reuse.sh	contrib/squad-goal/scripts/test-dispatch-worktree-reuse.sh
+contrib/squad-goal/scripts/test-token-ledger.sh	contrib/squad-goal/scripts/test-token-ledger.sh

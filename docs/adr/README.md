@@ -76,6 +76,7 @@ An ADR holds a decision and its reason. It is not a ledger: no dates, counts, st
 | [0169](0169-a-gate-runs-the-test-scope-its-stage-names.md) | A gate runs the test scope its stage names: an intermediate stage runs the delta the change reaches, the landing gate, the promotion proof and the nightly run the full battery, an unknown stage is full, a delta that cannot cover the change falls back to the full battery with its reason, and the record states the scope |
 
 | [0170](0170-the-gate-is-a-column-and-an-attempt-count-is-a-board-fact.md) | The gate is a column between Code Complete and Closed, and its attempt count is one number field: a red or unproven attempt is a marker, never a move, the definition, the pinned copy and the hash move in one step, and a retired option goes only when no card carries it |
+| [0171](0171-a-loop-defect-is-reviewed-by-fable-or-astra.md) | A loop defect is reviewed by Fable or Astra before it is built: its chain starts with Fable, then Astra, and the review chain follows; a `loop-bug` label selects it; autobug builds a loop-bug only after an approving plan review of its current body |
 
 ## Adding an ADR
 

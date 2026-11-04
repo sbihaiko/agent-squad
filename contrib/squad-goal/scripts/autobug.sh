@@ -9,7 +9,7 @@
 # start (#852): a dispatch that never happened must not mark the issue done, and its card goes back to Todo. The janitor frees it for a run that never starts (no record.jsonl, rule J, at
 # most twice) or that ends with a failed verdict and nothing landed (janitor rule O, which also puts the cards back). SG_AUTO_BUGFIX=no turns it off.
 # The card write comes before the launch: a dispatch is a pending ledger event until its write lands (#1021, ADR-0165).
-. "$(dirname "$0")/env.sh"; . "$(dirname "$0")/startability.sh"; . "$(dirname "$0")/refusal-names.sh"; . "$(dirname "$0")/workbranches.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
+. "$(dirname "$0")/env.sh"; . "$(dirname "$0")/startability.sh"; . "$(dirname "$0")/refusal-names.sh"; . "$(dirname "$0")/workbranches.sh"; . "$(dirname "$0")/loopbug.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
 export SG_GH_PASS=autobug   # the pass that spends the GitHub calls below, named in the call log (ADR-0277)
 export SG_FILE_PASS="autobug-$$-$(date +%s)"   # the filings of THIS pass share one ceiling (#140): a fresh pass is never held by the ledger of one that ended
 # The read door is ghcall.sh (gh_api, sourced by startability.sh): three outcomes, never mixed -- 0 = the answer in stdout,
@@ -297,6 +297,12 @@ for sel in "$lab" debt; do
     case "$pendset" in *" $n "*) echo "AUTOBUG skip #$n: its card write is pending (ADR-0165)"; continue;; esac
     s=0; for k in ${skip//,/ }; do case ",$labels," in *",$k,"*) s=1;; esac; done; [ $s = 1 ] && continue
     case ",$labels," in *",$go,"*) ;; *) continue;; esac; case "$todo" in *" $n "*) ;; *) continue;; esac   # no go label, or the card is not in Todo: not started
+    # ADR-0171 (#1358): a loop defect is built only after a plan review approved its current body. The body is read now, so an
+    # edit since the review makes the review stale and it is asked again. One line names the reason, and the issue waits.
+    if lb_is_loop_bug "$labels"; then
+      lbb=$(gh_api "repos/$SG_REPO/issues/$n" -q '.body // ""') || { echo "AUTOBUG skip #$n: loop-bug, its body is not readable, so its plan review cannot be checked"; continue; }
+      lbv=$(lb_plan_verdict "$SG_STATE" "$SG_REPO" "$n" "$(lb_body_hash "$lbb")") || { echo "AUTOBUG skip #$n: loop-bug, no approving plan review of its current body ($lbv); review.sh --plan $SG_REPO $n"; continue; }
+    fi
     # ... and an issue the loop itself marked not startable is not a candidate either: a repeated identical failure is a
     # signal the loop already wrote on the issue, and dispatching it again feeds the loop the same input (#1858). The read
     # is one request per candidate that got this far, and it is a refusal-safe read like every other one here.

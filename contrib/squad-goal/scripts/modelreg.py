@@ -27,6 +27,8 @@ ROUTES = ("cli", "gateway", "direct")
 AUTHS = ("subscription", "api_key", "unverified")
 V1_CHAINS = {"coding": "coding_models", "review": "review_models",
              "vision": "vision_models", "router": "router_models",
+             # A loop defect (ADR-0171): Fable or Astra first, then the review chain. Its one reader is the chain reader below.
+             "loop_defect": "loop_defect_models",
              # Editorial text: a commit message, a pull-request body, a status summary. Short, serial, and never on a
              # gate's path, so it may take a small local model first (owner, 2026-11-03).
              "editorial": "editorial_models"}
@@ -812,7 +814,7 @@ def compatible(mid, chain_name, reg=None):
             return (False, "no gateway route")
         if not entry.capabilities.get("tools"):
             return (False, "gateway model takes no tools")
-    elif canon == "review":
+    elif canon in ("review", "loop_defect"):
         if not any(name in entry.routes for name in ("cli", "direct", "gateway")):
             return (False, "no cli, direct or gateway route")
     elif canon == "vision":
