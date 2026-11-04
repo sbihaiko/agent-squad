@@ -172,6 +172,61 @@ def test_the_communication_settings_keep_their_rows_and_their_tables_apart(hub):
     assert "#dev" in settings and "Ana" in settings
 
 
+# ---------------------------------------------------------------- Communication states each role once (#1284)
+
+def _sl_theme(hub, people, connection="connected"):
+    """The Communication theme as the page draws it, with the people a reader would see."""
+    view = dict(hub.SLACK_DEFAULT, connection=connection, people=people)
+    body = (_comm_slices(hub.PAGE) + f"\nslS={json.dumps(view)};slDraft=slClone(slS);slRender();"
+            "console.log(JSON.stringify({body:STORE['#sbody'].innerHTML,"
+            "chip:STORE['#slksr'].textContent,nav:STORE['#slknav'].textContent}))")
+    return json.loads(_node(body))
+
+
+def test_the_communication_legend_states_each_role_once_and_no_person_row_repeats_it(hub):
+    """A role's behavior is a legend above the People table, once for the theme. Two people of one role do not double it,
+    and no person row carries the behavior text: the row holds the name, the role select and Remove (#1284)."""
+    roles = json.loads(_node(_comm_slices(hub.PAGE) + "\nconsole.log(JSON.stringify(SL_ROLE))"))
+    assert sorted(roles) == ["Colleague", "Manager"], "the theme names an unexpected role"
+    out = _sl_theme(hub, [{"name": "Ana", "role": "Manager"}, {"name": "Bo", "role": "Manager"}])
+    body = out["body"]
+    for role, text in roles.items():
+        assert body.count(text) == 1, f"{role}'s behavior appears {body.count(text)} times, not once"
+    start = body.index("</p>", body.index("<h4>People</h4>"))   # after the legend paragraph
+    people = body[start:body.index("<h4>Templates</h4>")]
+    for text in roles.values():
+        assert text not in people, "a person row repeats a role's behavior"
+    assert people.count('data-sl="pp:') == 2, "the person rows lost their role select"
+
+
+def test_the_connection_fact_is_a_now_tile_with_a_tone_and_not_an_editable_row(hub):
+    out = _sl_theme(hub, [])
+    now, settings = _blocks(out["body"])
+    assert re.search(r'<div class="tile ok"><span class=tk>Connection</span><span class=tv>connected</span>', now), now
+    assert "connection" not in settings.lower(), "the connection fact is still a settings row"
+    warn = _sl_theme(hub, [], connection="not connected")
+    assert re.search(r'<div class="tile warn"><span class=tk>Connection</span>', _blocks(warn["body"])[0])
+
+
+def test_the_owner_inbox_switches_carry_the_owner_inbox_name(hub):
+    settings = _blocks(_sl_theme(hub, [])["body"])[1]
+    assert "<h4>Owner inbox</h4>" in settings
+    assert "Optional" not in settings, "the old Optional heading stayed"
+
+
+def test_the_communication_chip_states_the_connection_and_the_people_count_in_the_nav_line(hub):
+    """The theme's chip is a status: it reads the connection and how many people the agent answers, and the nav's small
+    line carries the same text (#1284)."""
+    cases = [([{"name": "Ana", "role": "Manager"}, {"name": "Bo", "role": "Colleague"}], "connected",
+              "connected · 2 people"),
+             ([{"name": "Ana", "role": "Manager"}], "connected", "connected · 1 person"),
+             ([], "not connected", "not connected · 0 people")]
+    for people, connection, want in cases:
+        out = _sl_theme(hub, people, connection=connection)
+        assert out["chip"] == want, out["chip"]
+        assert out["nav"] == out["chip"], "the nav line disagrees with the summary chip"
+
+
 # ---------------------------------------------------------------- the Save bar and the dialog
 
 def _set_bar(hub):

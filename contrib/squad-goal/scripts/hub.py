@@ -5393,7 +5393,7 @@ const slPerson=(p,i)=>`<div class=slc role=row><span class=c1 role=cell><b>${esc
  +`<span class=swc role=cell><button data-slrm="pp:${i}" aria-label="remove ${slA(p.name)}">Remove</button></span></div>`;
 const slLegend=()=>Object.keys(SL_ROLE).map(k=>`<b>${esc(k)}</b>: ${esc(SL_ROLE[k])}`).join("; ")+".";   // each role stated once, never per row
 function slRender(){const b=$("#sbody");if(!b)return;if(!slS){b.innerHTML="<span class=m>Loading the data.</span>";return}
- const d=slDraft;setChip("slk",slS.connection);
+ const d=slDraft,np=slS.people.length;setChip("slk",`${slS.connection} · ${np} ${np===1?"person":"people"}`);   // a status: the connection and how many people the agent answers (#1284)
  let h=setNow("slk",[setTile("Connection",slS.connection,slS.connection==="connected"?"ok":"warn")],`Posts through your own account by the Claude Slack connector. No token is stored here.`)
  +setSettings("slk",[
  setRow("prefix",`<input data-sl=prefix value="${slA(d.prefix)}" maxlength=40 aria-label="prefix">`),
