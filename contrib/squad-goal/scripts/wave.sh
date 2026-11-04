@@ -727,7 +727,29 @@ netfail() {
   echo "WAVE-NETWORK $1: $l; it lands on a later cycle"
 }
 
-# stuck <run> <wave> <clone> <why>: a landing that failed on a cause a repeat does not change. The attempts are ledger facts
+# run_holds_slot <run folder>: the run is listed in active-runs.txt and its last verdict follows its last start or resume (ADR-0167).
+run_holds_slot() {
+  local n=${1##*/} l
+  while read -r l; do
+    [ "${l##*/}" = "$n" ] || continue
+    if awk '/"event": *"(run_start|resume)"/{v=""} /"event": *"verdict"/{v=$0} END{exit (v == "")}' "$1/record.jsonl" 2>/dev/null; then return 1; fi
+    return 0
+  done < "$SG_STATE/active-runs.txt" 2>/dev/null
+  return 1
+}
+
+# absent_wave <run> <wave> <clone> <run folder> <fetch output> (#1310): a wave branch that is not on the remote was never pushed,
+# so no later cycle can land it. The landing names that cause. A run that holds no slot stops at once; a live run counts the try.
+# Returns 1 when the fetch failed for another cause.
+absent_wave() {
+  local run=$1 w=$2 S=$3 rd=$4 fo=$5 now=""
+  printf '%s\n' "$fo" | /usr/bin/grep -q "couldn't find remote ref" || return 1
+  run_holds_slot "$rd" || now=1
+  stuck "$run" "$w" "$S" "$w is not on $remote: the run never pushed it, so there is no branch to land (the run cuts it from $base at its start)" "$now"
+  return 0
+}
+
+# stuck <run> <wave> <clone> <why> [now]: a landing that failed on a cause a repeat does not change. The attempts are ledger facts
 # (ADR-0149): each issue the wave carries (its `Refs #N` ahead of the base) or the run was dispatched for (`run_issues` of the
 # caller's run folder $rd) counts the try in its ledger (`issue_ledger.py landtry`), and the run's count is the largest. At
 # SG_WAVE_LAND_TRIES (default 3) the pass stops retrying: each issue the wave carries gets the label frozen:owner, its card
@@ -737,7 +759,7 @@ netfail() {
 # WAVE-LOOP-CAUSED and counts no try, the wave stays, and the normal cap handles the issue. Returns 1 either way: the
 # landing did not happen.
 stuck() {
-  local run=$1 w=$2 S=$3 why=$4 t=0 k n named="" all
+  local run=$1 w=$2 S=$3 why=$4 now=${5:-} t=0 k n named="" all held
   if loop_caused "$why"; then
     for n in $(refs_of "$S" "origin/$base..origin/$w"); do
       wave_fact "$run" "$n" stuck "$why; loop-caused, not counted"
@@ -762,7 +784,8 @@ stuck() {
     [ "$k" -gt "$t" ] 2>/dev/null && t=$k
   done
   [ -n "${all// /}" ] || { t=${SG_WAVE_LAND_TRIES:-3}; echo "WAVE-NOTE $w names no issue (no Refs ahead of $base, no run record): no ledger counts its tries"; }
-  [ "$t" -ge "${SG_WAVE_LAND_TRIES:-3}" ] || return 1
+  [ -n "$now" ] || [ "$t" -ge "${SG_WAVE_LAND_TRIES:-3}" ] || return 1
+  case "$why" in "$w is not on"*) held="$w is not on the remote";; *) held="$w stays on the remote";; esac
   export SG_GH_PASS=wave
   for n in $refs; do
     gh_send -X POST "repos/$SG_REPO/issues/$n/labels" -f "labels[]=frozen:owner" >/dev/null 2>&1
@@ -771,8 +794,8 @@ stuck() {
     printf 'Needs the owner: the landing of %s in %s failed %s times and stopped (%s). The work stays on %s. Refs #%s\n' "$w" "$base" "$t" "$why" "$w" "$n" > "$(sg_cq_file "$n-wavestuck$$.md")"
   done
   rm -f "$SG_STATE/auto/wave-$run" "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run"
-  if [ -n "${all// /}" ]; then echo "WAVE NEEDS-HUMAN $w: the landing failed $t times; the run's wave marker is cleared and $w stays on the remote"
-  else echo "WAVE NEEDS-HUMAN $w: the landing failed and the wave names no issue; the run's wave marker is cleared and $w stays on the remote"; fi
+  if [ -n "${all// /}" ]; then echo "WAVE NEEDS-HUMAN $w: the landing failed $t times; the run's wave marker is cleared and $held"
+  else echo "WAVE NEEDS-HUMAN $w: the landing failed and the wave names no issue; the run's wave marker is cleared and $held"; fi
   return 1
 }
 
@@ -903,7 +926,7 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
   fo=$(sc fetch -q origin "+refs/heads/$base:refs/remotes/origin/$base" 2>&1) || {
     netfail "the fetch of $base from $remote" "$fo" || stuck "$run" "$w" "$S" "$base is not on $remote"; rm -rf "$S"; return 2; }
   fo=$(sc fetch -q origin "+refs/heads/$w:refs/remotes/origin/$w" 2>&1) || {
-    netfail "the fetch of $w from $remote" "$fo" || stuck "$run" "$w" "$S" "$w is not on $remote (the run cuts it from $base at its start)"; rm -rf "$S"; return 2; }
+    netfail "the fetch of $w from $remote" "$fo" || absent_wave "$run" "$w" "$S" "$rd" "$fo" || stuck "$run" "$w" "$S" "the fetch of $w from $remote failed"; rm -rf "$S"; return 2; }
   sc checkout -q -B land "origin/$w" 2>/dev/null || { stuck "$run" "$w" "$S" "the checkout of $w failed"; rm -rf "$S"; return 2; }
   # The rebase on the base happens here and nowhere else (ADR-0145 rule 14): between entries the tip moves only by a child that
   # entered, so a base that moved under the wave is rebased onto now, before the one push. A push the remote refuses -- the
