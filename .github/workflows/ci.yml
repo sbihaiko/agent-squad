@@ -4,22 +4,25 @@ on:
   pull_request:
     branches: ["stg"]
 
-# CI runs on one pull request only: dev to stg, the pass the owner promotes through. No branch push starts a run; a work
-# branch is proven by the local fast gate, and the landing by the promotion proof. A pull request from any other branch
-# starts none, because the job's own condition refuses it.
-# One commit starts one check job, which runs both supported Pythons in order (#149).
-# A matrix on the check job split one commit into two jobs that waited behind each other for two runners, and a check no
-# runner picks up answers nothing.
+# CI runs the fast tier on one pull request only: dev to stg, the pass the owner promotes through. No branch push starts a run;
+# a work branch is proven by the local fast gate, and a landing by the promotion proof. A pull request from any other branch
+# starts none, because each job's own condition refuses it.
+# The fast tier is three jobs (ruff, mypy, fast-battery), each on Python 3.13, with no `needs:` between them, so they run in
+# parallel and the pull request reports in the time of the slowest one. The fast-battery job carries one explicit GUI e2e
+# run beside the battery: the battery's `-m "not heavy"` leaves that file's `heavy` tests out, and they ran on every
+# promotion before this tier existed. The host-bound tests are deselected by name there (ADR-0139).
+# Why no matrix: a matrix over one job split a commit into legs that waited behind each other for runners (#149), and a check
+# no runner picks up answers nothing. The three jobs are separate, each with its own check-run name, which the promotion pass
+# reads from this file. Whether three runners start at once is measured by the first real dev-to-stg run, not assumed here.
 # The group names the commit, so no queue holds a pull request behind another and GitHub cancels none.
 # A group shared by one branch's pushes cannot say that: GitHub queues the group's pending runs and cancels the runs
 # past the queue's cap, which is one pending run by default and 100 with `queue: max` (GitHub Actions workflow syntax,
 # `concurrency.queue`). A burst of pushes to one pull request cancels its run there. A group that names the commit holds
 # one run and nothing pending, so no cap applies and a pull request keeps its run.
-# No job outlives the twenty minutes it gives itself (#128). The gate is the fast battery, `-m "not heavy"`.
-# The full-proof shards (#1051) are withdrawn while #1062 is open: four shards landed and were never green on a runner, so
-# they held every promotion and shipped nothing. The check job is the proof until the heavy tests they run are hermetic; the
-# shards come back with their guard (tests/test_tooling.py) and promote-pass.sh reads their names from this file, so a
-# restored matrix is picked up with no second change.
+# No job outlives the twenty minutes it gives itself (#128). The fast-battery job runs `-m "not heavy"`.
+# The full-proof shards (#1051) are withdrawn while #1062 is open: they were never green on a runner, so they held every
+# promotion and shipped nothing. When the heavy tests they run are hermetic, they return with their guard
+# (tests/test_tooling.py); promote-pass.sh reads their names from this file, so a restored matrix needs no second change.
 concurrency:
   group: ci-${{ github.head_ref }}-${{ github.sha }}
   cancel-in-progress: false
@@ -28,31 +31,52 @@ permissions:
   contents: read
 
 jobs:
-  check:
+  ruff:
+    name: ruff
     if: github.head_ref == 'dev'   # the one pass that carries dev to stg
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - name: Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-      - run: python3 -m pip install -e '.[dev]'
-      - run: ruff check squad tests
-      - run: mypy squad
-      - run: python3 -m pytest -n auto -m "not heavy"
+      - uses: actions/checkout@v5
       - name: Python 3.13
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.13"
           cache: pip
       - run: python3 -m pip install -e '.[dev]'
       - run: ruff check squad tests
+
+  mypy:
+    name: mypy
+    if: github.head_ref == 'dev'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python3 -m pip install -e '.[dev]'
       - run: mypy squad
+
+  fast-battery:
+    name: fast-battery
+    if: github.head_ref == 'dev'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python3 -m pip install -e '.[dev]'
       - run: python3 -m pytest -n auto -m "not heavy"
       - name: GUI test squad e2e suite
-        # No MesenAI checkout is on the runner: the host-bound tests are deselected (ADR-0139) and their removal is
-        # reported by name. The host-free tests in the file still run. The gate steps above keep their own commands.
+        # The battery above leaves out the file's `heavy` tests, and these ran on every promotion before the fast tier.
+        # No MesenAI checkout is on the runner: the host-bound tests are deselected by name (ADR-0139), and the step
+        # names the file so a missing checkout is reported rather than silently collected by the tree walk.
         run: python3 -m pytest tests/test_gui_test_e2e.py -q

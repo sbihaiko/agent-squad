@@ -19,6 +19,24 @@
 # clock never restarts. Past the deadline every descendant is stopped, TERM then KILL. A defect a check reported before the
 # deadline is a fail the bound never turns into a pass (#1170); an attempt that reported nothing is recorded bounded.
 d=$(cd "$(dirname "$0")" && pwd)
+# ci_job_names <workflow file>: the check-run name of every job under jobs:, one per line. The reader stays inside the
+# jobs: block (a line at column zero ends it), so a step's `name:`, a `with: name:` or any other four-space `name:`
+# outside a job never becomes a check run whose absence would hold every tip forever (ADR-0164, #1322). Only a job that
+# names itself is read: the shard names are read apart, from the matrix the same file carries. A file that names no job
+# answers nothing, and its caller reads that as pending, never as a vacuous pass.
+ci_job_names() {
+  awk '
+    /^jobs:[[:space:]]*$/ { injobs = 1; next }
+    /^[^[:space:]#]/ { injobs = 0 }
+    !injobs { next }
+    /^  [A-Za-z0-9_.-]+:[[:space:]]*$/ { job = 1 }
+    /^    name:[[:space:]]+/ { if (!job) next; v = $0; sub(/^    name:[[:space:]]+/, "", v); print v }
+  ' "$1" 2>/dev/null
+}
+if [ "${1:-}" = --ci-job-names ]; then   # the check names a workflow's job block produces, printed one per line
+  [ -n "${2:-}" ] || { echo "promote-pass: --ci-job-names needs a workflow file" >&2; exit 2; }
+  ci_job_names "$2"; exit 0
+fi
 [ -n "${SG_STATE:-}" ] || { echo "promote-pass: SG_STATE is not set; the pass never reads the machine-wide default" >&2; exit 2; }
 state=$SG_STATE; export SG_STATE; mkdir -p "$state"; log=$state/promote.log; marks=$state/promote-pass.tips
 tree=${SG_PROMOTE_TREE:-$state/promote-tree}; remote=${SG_PROMOTE_REMOTE:-https://github.com/$SG_REPO.git}; ctx=squad/full-proof
@@ -91,8 +109,14 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
     st=$(gh_get "repos/$SG_REPO/commits/$1/statuses" | jq -r --arg c "$ctx" '[.[] | select(.context == $c)][0].state // empty' 2>/dev/null)
     [ "$st" = success ] || { echo "the commit status $ctx did not read back as success (${st:-missing})"; return 1; }
   }
+  # The check names are read here, in this shell, not inside ci_verdict's command substitution: the record below names
+  # the same list the verdict demanded.
+  ci_names=()
+  while IFS= read -r n; do [ -n "$n" ] && ci_names+=("$n"); done < <(ci_job_names "$ci_file")
   ci_verdict() {  # <tip>: pass, "fail <job>" for a red job, or pending
-    local cr n st c v=pass sh names=("check")
+    local cr n st c v=pass sh names=()
+    [ "${#ci_names[@]}" -gt 0 ] || { echo pending; return; }   # a workflow that names no job proves nothing
+    names=("${ci_names[@]}")
     for sh in $shard_list; do names+=("full-proof shard $sh"); done   # none while the shard job is withdrawn (#1062)
     cr=$(gh_api "repos/$SG_REPO/commits/$1/check-runs?per_page=100&filter=latest") || { echo pending; return; }
     printf '%s' "$cr" | jq -e '.check_runs | type == "array"' >/dev/null 2>&1 || { echo pending; return; }
@@ -107,7 +131,10 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   case "$v" in
     pass)
       bash "$d/gate.sh" --status full pass "$tip"
-      why=$(full_status "$tip" "$([ -n "$shard_list" ] && echo "full suite, both modes, four CI shards and the check job" || echo "CI check job, both Pythons, the fast battery (#1062: the shards are withdrawn)")") || { mark "$tip" "not promoted: $why"; exit 1; }
+      # The record names the jobs just read from the workflow, never a hand-written copy of them: a renamed or extended
+      # fast tier is recorded as it is, so the record never lies about what carried the pass (#1322).
+      ci_jobs=$(printf '%s, ' "${ci_names[@]}"); ci_jobs=${ci_jobs%, }
+      why=$(full_status "$tip" "$([ -n "$shard_list" ] && echo "full suite, both modes, the CI shards and the fast tier: $ci_jobs" || echo "CI fast tier: $ci_jobs (#1062: the shards are withdrawn)")") || { mark "$tip" "not promoted: $why"; exit 1; }
       o=$(SG_PROMOTE_PROOF=local bash "$d/promote-stg.sh" 2>&1); rc=$?
       [ $rc = 0 ] || { mark "$tip" "not promoted: $(printf '%s' "$o" | tail -1)"; exit 1; }
       mark "$tip" "promoted: the CI shards carried the full pass"; exit 0;;

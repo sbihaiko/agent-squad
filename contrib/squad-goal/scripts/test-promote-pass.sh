@@ -218,7 +218,7 @@ SG_PROMOTE_RESERVE_SECONDS=600 bash "$d/promote-pass.sh" > "$T/out5" 2>&1; rc=$?
 export CHECKS_DIR=$T
 # The shard names come from a workflow file; this fixture names four, so the shard cases keep proving the matrix the
 # repository's own ci.yml no longer carries while #1062 holds it withdrawn (a case below proves the withdrawn shape).
-printf 'jobs:\n  full-proof:\n    strategy:\n      matrix:\n        shard: [0, 1, 2, 3]\n' > "$T/ci-shards.yml"
+printf 'jobs:\n  ruff:\n    name: ruff\n  mypy:\n    name: mypy\n  fast-battery:\n    name: fast-battery\n  full-proof:\n    strategy:\n      matrix:\n        shard: [0, 1, 2, 3]\n' > "$T/ci-shards.yml"
 export SG_CI_WORKFLOW="$T/ci-shards.yml"
 cat > "$T/bin/ghread" <<'EOF'
 #!/bin/bash
@@ -229,8 +229,8 @@ esac
 EOF
 chmod +x "$T/bin/ghread"
 shards() {  # <sha> <state of shard 0> ... <state of shard 3>: a conclusion, "running" (unfinished) or "none" (missing)
-  # CHECK_CONCLUSION names the conclusion of the check job of the same commit (default success; none: the job is missing).
-  local s=$1 k=0 out="" c ck=${CHECK_CONCLUSION:-success}; shift
+  # CHECK_CONCLUSION names the conclusion of every fast-tier job of the same commit (default success; none: the jobs are missing).
+  local s=$1 k=0 out="" c j ck=${CHECK_CONCLUSION:-success}; shift
   for c in "$@"; do
     case "$c" in
       none) ;;
@@ -239,7 +239,9 @@ shards() {  # <sha> <state of shard 0> ... <state of shard 3>: a conclusion, "ru
     esac
     k=$((k + 1))
   done
-  [ "$ck" = none ] || out="{\"name\":\"check\",\"status\":\"completed\",\"conclusion\":\"$ck\"},$out"
+  if [ "$ck" != none ]; then
+    for j in ${CHECK_JOBS:-ruff mypy fast-battery}; do out="{\"name\":\"$j\",\"status\":\"completed\",\"conclusion\":\"$ck\"},$out"; done
+  fi
   echo "{\"check_runs\":[${out%,}]}" > "$T/checks-$s"
 }
 adv dev shards-green; tg=$(tip dev); rm -f "$T/suite-rc"; n=$(runs)
@@ -285,7 +287,7 @@ shards "$tu" success success running timed_out; SG_PROMOTE_CI_WAIT=0 SG_GHREAD="
 
 # #1062: the shard job is withdrawn, so a workflow file that names no shard is the check job alone, and a green check
 # promotes the tip. The record says which proof carried it, so a reader never guesses.
-printf 'jobs:\n  check:\n    runs-on: ubuntu-latest\n' > "$T/ci-no-shards.yml"
+printf 'jobs:\n  ruff:\n    name: ruff\n  mypy:\n    name: mypy\n  fast-battery:\n    name: fast-battery\n' > "$T/ci-no-shards.yml"
 adv dev check-alone; ta=$(tip dev); n=$(runs)
 shards "$ta" none none none none; SG_CI_WORKFLOW="$T/ci-no-shards.yml" SG_GHREAD="$T/bin/ghread" pass; rc=$?
 [ $rc = 0 ] && [ "$(tip stg)" = "$ta" ] && ok "with no shard named, a green check job promotes the tip (#1062)" \
@@ -300,8 +302,35 @@ adv dev check-red; tc=$(tip dev); before=$(tip stg); n=$(runs)
 CHECK_CONCLUSION=failure shards "$tc" success success success success; SG_GHREAD="$T/bin/ghread" pass; rc=$?
 [ $rc != 0 ] && [ "$(tip stg)" = "$before" ] && [ "$(runs)" = "$n" ] && ok "a red check job holds the tip and runs no suite" \
   || ko "red check: rc $rc, stg $(tip stg), runs $(runs) was $n"
-/usr/bin/grep "promote-pass: $tc" "$SG_STATE/promote.log" | /usr/bin/grep -q "CI check is red" && ok "the refusal names the red check job" \
+/usr/bin/grep "promote-pass: $tc" "$SG_STATE/promote.log" | /usr/bin/grep -q "CI ruff is red" && ok "the refusal names the red check job" \
   || ko "red check line: $(/usr/bin/grep "$tc" "$SG_STATE/promote.log")"
+
+# #1322: one red fast-tier job holds the tip even when the other two are green, and the refusal names that job.
+adv dev mypy-red; tm=$(tip dev); before=$(tip stg); n=$(runs)
+shards "$tm" success success success success
+sed 's/"name":"mypy","status":"completed","conclusion":"success"/"name":"mypy","status":"completed","conclusion":"failure"/' "$T/checks-$tm" > "$T/checks-$tm.x" && mv "$T/checks-$tm.x" "$T/checks-$tm"
+SG_GHREAD="$T/bin/ghread" pass; rc=$?
+[ $rc != 0 ] && [ "$(tip stg)" = "$before" ] && [ "$(runs)" = "$n" ] && ok "a red mypy job holds the tip and runs no suite" \
+  || ko "red mypy: rc $rc, stg $(tip stg), runs $(runs) was $n"
+/usr/bin/grep "promote-pass: $tm" "$SG_STATE/promote.log" | /usr/bin/grep -q "CI mypy is red" && ok "the refusal names the red mypy job" \
+  || ko "red mypy line: $(/usr/bin/grep "$tm" "$SG_STATE/promote.log")"
+
+# #1322: the check names are read from the job block alone. A step name, a `with:` key, a four-space name: before jobs:, or a
+# job-shaped key after the block is not a check run: the answer is exactly the workflow's job names, at their own indent.
+printf 'env:\n    name: not-a-job\njobs:\n  ruff:\n    name: ruff\n    steps:\n      - name: Ruff\n      - uses: actions/setup-python@v5\n        with:\n          name: step-with\n  mypy:\n    name: mypy\n  fast-battery:\n    name: fast-battery\nnot-a-job:\n  name: outside-jobs\n' > "$T/ci-step-names.yml"
+out=$(bash "$d/promote-pass.sh" --ci-job-names "$T/ci-step-names.yml" 2>&1)
+[ "$out" = $'ruff\nmypy\nfast-battery' ] && ok "the check names come from the job block, never a step, with: key or a name: outside it (#1322)" \
+  || ko "job names: '$out'"
+
+# #1322: the promotion record names the jobs the pass read, so a renamed job set is recorded as it is, never a stale literal.
+printf 'jobs:\n  lint:\n    name: lint\n  types:\n    name: types\n  battery:\n    name: battery\n' > "$T/ci-renamed.yml"
+adv dev renamed; tx=$(tip dev)
+CHECK_JOBS="lint types battery" shards "$tx" none none none none
+SG_CI_WORKFLOW="$T/ci-renamed.yml" SG_GHREAD="$T/bin/ghread" pass; rc=$?
+[ $rc = 0 ] && [ "$(tip stg)" = "$tx" ] && ok "a renamed fast tier promotes on its own check names (#1322)" \
+  || ko "renamed tier: rc $rc, stg $(tip stg), out '$(cat "$T/out")'"
+/usr/bin/grep -q -- "description=CI fast tier: lint, types, battery " "$T/gh.log" && ok "the full-proof status names the jobs the pass read, never a literal" \
+  || ko "status description: $(/usr/bin/grep "statuses/$tx" "$T/gh.log")"
 
 # A tip inside the quiet window opens the dev-to-stg pull request, so its four shards start before the proof reads them.
 adv dev shard-open; to=$(tip dev); n=$(runs); : > "$T/gh.log"
