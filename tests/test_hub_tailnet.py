@@ -131,7 +131,9 @@ def test_tailnet_get_without_an_allowed_login_is_refused_naming_no_list(serve, l
 def test_tailnet_get_with_an_allowed_login_is_answered(serve):
     s = serve()
     status, text = request(s.port, "GET", "/api/runs", host=TAILNET, login=ANA)
-    assert status == 200 and json.loads(text) == []
+    data = json.loads(text)
+    assert status == 200 and data["runs"] == []
+    assert [g["key"] for g in data["groups"]] == ["running", "1h", "2h", "4h", "8h", "24h", "d"]   # the answer carries the history groups
 
 
 @pytest.mark.parametrize("route, body", [("/api/models", {}), ("/api/plans", {}), ("/api/promote", {"issue": 5})])

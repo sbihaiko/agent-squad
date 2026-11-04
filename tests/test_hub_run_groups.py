@@ -2,7 +2,6 @@
 import importlib.util
 import json
 import os
-import re
 import shutil
 import subprocess
 import tempfile
@@ -63,9 +62,8 @@ def test_ended_run_lands_in_the_age_bucket(hub):
 
 
 def test_run_list_age_ladder_has_six_bands(hub):
-    m = re.search(r"const GROUPS=\[(.*?)\];", hub.PAGE)
-    assert m, "GROUPS missing"
-    assert re.findall(r'\["([^"]*)","([^"]*)"\]', m.group(1))[1:] == [
+    """The ladder is the hub's own rule now (#1277): six age bands after the WORKERS group."""
+    assert list(hub.RUN_GROUPS[1:]) == [
         ("1h", "≤ 1 h"),
         ("2h", "1–2 h"),
         ("4h", "2–4 h"),
@@ -76,11 +74,30 @@ def test_run_list_age_ladder_has_six_bands(hub):
 
 
 def test_run_list_group_header_reads_workers_not_open(hub):
-    m = re.search(r"const GROUPS=(\[[^\]]+\])", hub.PAGE)
-    assert m, "GROUPS missing"
-    groups = m.group(1)
-    assert '["running","WORKERS"]' in groups
-    assert "OPEN" not in groups and '["open"' not in groups
+    assert hub.RUN_GROUPS[0] == ("running", "WORKERS")
+    assert not any(k == "open" or label == "OPEN" for k, label in hub.RUN_GROUPS)
+
+
+def test_the_answer_carries_one_entry_per_group_with_its_text_title_and_emptiness(hub):
+    """The hub builds each group's header and marks a band empty, so the page draws what it is given (#1277)."""
+    rows = [
+        {"state": "running", "live": True, "spend": 1.0, "agents": 1},
+        {"state": "completed", "live": False, "age": 600, "spend": 2.5, "agents": 0},
+    ]
+    groups = hub.run_groups(rows, {"runs": 6, "children": 20})
+    assert [g["key"] for g in groups] == ["running", "1h", "2h", "4h", "8h", "24h", "d"]
+    assert groups[0] == {"key": "running", "label": "WORKERS", "text": "RUNS 1/6 · AGENTS 1/20", "title": "$1.00", "empty": False}
+    assert groups[1] == {"key": "1h", "label": "≤ 1 h", "text": "1 · $2.50", "title": "$2.50", "empty": False}
+    assert [g["empty"] for g in groups[2:]] == [True] * 5
+
+
+def test_a_changed_cap_shows_after_one_answer(hub, monkeypatch):
+    """The caps are read on every answer, not substituted at page load (#1277)."""
+    monkeypatch.setattr(hub, "run_list", lambda: [LIVE])
+    monkeypatch.setattr(hub, "loop_caps", lambda: {"runs": 6, "children": 20})
+    assert hub.runs_answer()["groups"][0]["text"] == "RUNS 1/6 · AGENTS 1/20"
+    monkeypatch.setattr(hub, "loop_caps", lambda: {"runs": 3, "children": 10})
+    assert hub.runs_answer()["groups"][0]["text"] == "RUNS 1/3 · AGENTS 1/10"
 
 
 # --- the page's own code, run in node: the list and the three sections are read off the DOM ---
@@ -121,21 +138,18 @@ def _slice(src, start, end):
 
 
 def _pieces():
-    header = _fn(SRC, "groupHeader")
-    state = SRC[SRC.index(header) + len(header) : SRC.index("function drawList(")]
-    assert "openGroup" in state, "the open state does not live beside groupHeader any more"
+    state = SRC[SRC.index("// The open groups belong") : SRC.index("function drawList(")]
+    assert "openGroup" in state, "the open state does not live beside drawList any more"
     acc = SRC[SRC.index("const ACC=") :]
     acc = acc[: acc.index("mdlLoad();") + len("mdlLoad();")]
     return [
         _decl(SRC, "usd"),
         _decl(SRC, "age"),
         _decl(SRC, "esc"),
-        _decl(SRC, "GROUPS"),
         _decl(SRC, "save"),
         _decl(SRC, "label"),
         _decl(SRC, "labelTip"),
         _decl(SRC, "sub"),
-        _fn(SRC, "groupHeader"),
         _fn(SRC, "loadMark"),
         _fn(SRC, "plan"),
         state,
@@ -180,12 +194,12 @@ function boot(){
   const ls = JSON.parse(localStorage.hub || "{}");
   let allRuns = [], runs = [], N = 1, pins = new Set(), slots = [], known = null;
   let q = ls.q || "", per = ls.per || "day", src = ls.src || "both";
-  const CAPS = null;
+  let GROUPS = [];   // the answer's group entries, as /api/runs carries them (#1277)
   function refresh(){ plan(); drawList(); }
 @@PIECES@@
   function drain(){ let n = 0; while (Q.length) { if (++n > 100) throw new Error("toggle storm"); Q.shift().fire("toggle"); } }
   return {
-    runs: (rows) => { allRuns = rows; runs = rows; },
+    runs: (rows, groups) => { allRuns = rows; runs = rows; GROUPS = groups || []; },
     draw: () => drawList(),
     poll: () => { selectNew(); refresh(); },
     click: (k) => { const g = GHS.find((x) => x.k === k); if (!g) throw new Error("no group header " + k); g.onclick(); },
@@ -222,11 +236,11 @@ HOUR_2_GONE = _run_row("3", 1, 40000)   # the same run, now 11 h old: the 2h buc
 FRESH = _run_row("4", 0, 2)             # a run that just appeared
 
 
-def _js(rows, body):
-    return f"const R={json.dumps(rows)};" + body
+def _js(rows, body, groups=None):
+    return f"const R={json.dumps(rows)};const G={json.dumps(groups or [])};" + body
 
 
-def test_page_group_rule_matches_python_edges():
+def test_page_group_rule_matches_python_edges(hub):
     rows = [
         _run_row("a", 1, 3600, id="edge-1h", spend=0.01),
         _run_row("b", 1, 3601, id="edge-2h", spend=0.02),
@@ -243,83 +257,90 @@ def test_page_group_rule_matches_python_edges():
         _run_row("m", 1, 30 * 3600, id="edge-30h", spend=0.13),
     ]
     out = _run(_js(rows, """
-      const a = boot(); a.runs(R); a.draw();
+      const a = boot(); a.runs(R,G); a.draw();
       for (const k of ["2h", "4h", "8h", "24h", "d"]) a.click(k);
       return { rows: a.groupRows() };
-    """))
+    """, hub.run_groups(rows)))
     assert {k: out["rows"][k] for k in ["1h", "2h", "4h", "8h", "24h", "d"]} == {"1h": 1, "2h": 2, "4h": 2, "8h": 3, "24h": 3, "d": 2}
 
 
-def test_empty_age_bands_render_with_zero_spend():
+def test_empty_age_bands_fold_into_one_muted_line(hub):
+    """Six bands of 0 · $0.00 never push the live rows down: the hub marks them empty and the page folds them (#1277)."""
     out = _run(_js([HOUR_1], """
-      const a = boot(); a.runs(R); a.draw();
+      const a = boot(); a.runs(R,G); a.draw();
       return { rows: a.groupRows(), html: a.listHtml() };
-    """))
-    assert list(out["rows"]) == ["running", "1h", "2h", "4h", "8h", "24h", "d"]
-    assert out["html"].count('0 · $0.00') == 5
+    """, hub.run_groups([HOUR_1])))
+    assert list(out["rows"]) == ["running", "1h"], "only the filled bands draw a header"
+    assert "0 · $0.00" not in out["html"], "an empty band still draws a zero row"
+    assert "no runs in 1–2 h · 2–4 h · 4–8 h · 8–24 h · 24 h+ (days)" in out["html"], "the empty bands are named once"
 
 
-def test_first_filled_age_band_opens_when_nothing_is_stored():
+def test_first_filled_age_band_opens_when_nothing_is_stored(hub):
     out = _run(_js([HOUR_2], """
-      const a = boot(); a.runs(R); a.draw();
+      const a = boot(); a.runs(R,G); a.draw();
       return { open: a.openGroups() };
-    """))
+    """, hub.run_groups([HOUR_2])))
     assert out["open"] == ["2h"]
 
 
-def test_a_group_header_click_toggles_it_both_ways():
-    out = _run(_js([LIVE, HOUR_1, HOUR_2], """
-      const a = boot(); a.runs(R); a.draw();
+def test_a_group_header_click_toggles_it_both_ways(hub):
+    rows = [LIVE, HOUR_1, HOUR_2]
+    out = _run(_js(rows, """
+      const a = boot(); a.runs(R,G); a.draw();
       const start = a.openGroups();
       a.click("running"); const closed = a.openGroups();
       a.click("running"); const reopened = a.openGroups();
       return { start, closed, reopened };
-    """))
+    """, hub.run_groups(rows)))
     assert out["start"] == ["running"], "the first draw opens the newest group once"
     assert out["closed"] == [], "clicking an open header closes it"
     assert out["reopened"] == ["running"], "clicking a closed header opens it"
 
 
-def test_two_run_groups_can_stay_open_at_once():
-    out = _run(_js([LIVE, HOUR_1, HOUR_2], """
-      const a = boot(); a.runs(R); a.draw();
+def test_two_run_groups_can_stay_open_at_once(hub):
+    rows = [LIVE, HOUR_1, HOUR_2]
+    out = _run(_js(rows, """
+      const a = boot(); a.runs(R,G); a.draw();
       a.click("1h"); a.click("2h");
       return { open: a.openGroups() };
-    """))
+    """, hub.run_groups(rows)))
     assert set(out["open"]) == {"running", "1h", "2h"}, "any number of groups stay open"
 
 
-def test_a_run_leaving_its_bucket_leaves_the_open_groups_alone():
-    out = _run(_js([LIVE, HOUR_1, HOUR_2], f"""
-      const a = boot(); a.runs(R); a.draw();
+def test_a_run_leaving_its_bucket_leaves_the_open_groups_alone(hub):
+    start, later = [LIVE, HOUR_1, HOUR_2], [LIVE, HOUR_1, HOUR_2_GONE]
+    out = _run(_js(start, f"""
+      const a = boot(); a.runs(R,G); a.draw();
       a.click("2h"); const before = a.openGroups();
-      a.runs({json.dumps([LIVE, HOUR_1, HOUR_2_GONE])}); a.poll();   // the 2h run aged out of the bucket
-      return {{ before, after: a.openGroups(), rows: a.groupRows() }};
-    """))
+      a.runs({json.dumps(later)},{json.dumps(hub.run_groups(later))}); a.poll();   // the 2h run aged out of the bucket
+      return {{ before, after: a.store().groups, html: a.listHtml() }};
+    """, hub.run_groups(start)))
     assert set(out["before"]) == {"running", "2h"}
-    assert out["after"] == out["before"], "a bucket change never moves the open groups"
-    assert out["rows"]["2h"] == 0, "an open group that emptied stays open and empty"
+    assert set(out["after"]) == set(out["before"]), "a bucket change never moves the open groups"
+    assert "· 2–4 h ·" in out["html"] and 'data-g="2h"' not in out["html"], "a band that emptied folds into the muted line"
 
 
-def test_a_run_appearing_does_not_move_the_open_groups():
-    out = _run(_js([LIVE, HOUR_1], f"""
-      const a = boot(); a.runs(R); a.draw(); a.poll();
+def test_a_run_appearing_does_not_move_the_open_groups(hub):
+    start, later = [LIVE, HOUR_1], [LIVE, HOUR_1, FRESH]
+    out = _run(_js(start, f"""
+      const a = boot(); a.runs(R,G); a.draw(); a.poll();
       a.click("1h"); const before = a.openGroups();
-      a.runs(R.concat([{json.dumps(FRESH)}])); a.poll();   // a new run starts: the list must not re-pick
+      a.runs({json.dumps(later)},{json.dumps(hub.run_groups(later))}); a.poll();   // a new run starts: the list must not re-pick
       return {{ before, after: a.openGroups() }};
-    """))
+    """, hub.run_groups(start)))
     assert set(out["before"]) == {"running", "1h"}
     assert out["after"] == out["before"], "a run appearing never moves the open groups"
 
 
-def test_the_open_groups_survive_a_reload():
-    out = _run(_js([LIVE, HOUR_1, HOUR_2], """
-      const a = boot(); a.runs(R); a.draw();
+def test_the_open_groups_survive_a_reload(hub):
+    rows = [LIVE, HOUR_1, HOUR_2]
+    out = _run(_js(rows, """
+      const a = boot(); a.runs(R,G); a.draw();
       a.click("1h"); a.click("running");          // the user closes the group the first draw opened
       const stored = a.store();
-      const b = boot(); b.runs(R); b.draw();      // a reload: a fresh page over the same storage
+      const b = boot(); b.runs(R,G); b.draw();    // a reload: a fresh page over the same storage
       return { stored, restored: b.openGroups() };
-    """))
+    """, hub.run_groups(rows)))
     assert out["stored"].get("groups") == ["1h"], "the open set is stored beside the pins"
     assert out["restored"] == ["1h"], "a reload restores exactly the set the user left"
 
@@ -418,11 +439,25 @@ def test_run_label_leads_with_the_action_then_the_issues(hub):
     assert hub.run_label({"id": "run-20261013-000013-777777", "issues": [], "kind": "code"}) == "run 777777"
 
 
-def test_the_list_renders_the_label_the_hub_computed():
+def test_the_list_renders_the_label_the_hub_computed(hub):
     """The page renders the label it is given; it never rebuilds one from the issues or the kind (ADR-0137)."""
     row = _run_row("1", 0, 10, id="run-20261013-000010-444444", label="dispatch #31, #25", issues=["31", "25"], kind="code")
     out = _run(_js([row], """
-      const a = boot(); a.runs(R); a.draw();
+      const a = boot(); a.runs(R,G); a.draw();
       return { html: a.listHtml() };
-    """))
+    """, hub.run_groups([row])))
     assert "dispatch #31, #25" in out["html"]
+
+
+def test_the_headers_come_from_the_answer_and_the_page_builds_none(hub):
+    """The page draws the text and title the hub sent, and it holds no header rule and no substituted caps (#1277)."""
+    rows = [LIVE, HOUR_1]
+    groups = hub.run_groups(rows, {"runs": 6, "children": 20})
+    out = _run(_js(rows, """
+      const a = boot(); a.runs(R,G); a.draw();
+      return { html: a.listHtml() };
+    """, groups))
+    running = next(g for g in groups if g["key"] == "running")
+    assert running["text"] in out["html"] and f'title="{running["title"]}"' in out["html"]
+    assert "function groupHeader(" not in hub.PAGE, "the page builds a group header again"
+    assert "const CAPS=" not in hub.PAGE and "__CAPS__" not in hub.PAGE, "the caps are substituted into the page again"

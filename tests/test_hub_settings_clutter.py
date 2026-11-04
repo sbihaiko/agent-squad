@@ -1,7 +1,8 @@
 """The hub's first screen carries no configuration accordion and no History tab.
 
-Configuration lives on the Settings tab: the subscription plans and the run history are panels there, and the sidebar
-keeps only what a reader watches. The tab bar keeps Kanban, Runs, Flow and Settings.
+Configuration lives on the Settings tab: the subscription plans are a panel there, and the sidebar keeps only what a
+reader watches. The run history is the bottom of the Runs tab, never a block of the Settings Loop theme (#1277). The tab
+bar keeps Kanban, Runs, Flow and Settings.
 """
 import importlib.util
 import re
@@ -52,19 +53,22 @@ def test_the_tab_bar_holds_no_history_tab(hub):
     assert "id=tab-hist" not in hub.PAGE, "the History pane is back"
 
 
-def test_the_settings_tab_holds_the_plans_and_the_run_history(hub):
+def test_the_settings_tab_holds_the_plans_and_no_run_history(hub):
+    """Re-anchored (#1277): the run history left the Settings Loop theme for the Runs tab. The plans stay here."""
     pane = _settings_pane(hub.PAGE)
     assert "id=subs" in pane, "the subscription plans are not on the Settings tab"
-    assert "id=list" in pane, "the run history is not on the Settings tab"
+    assert "id=list" not in pane, "the run history is back on the Settings tab"
+    assert "Run history" not in pane, "the Loop theme carries a run history block again"
 
 
-def test_the_history_lives_in_the_settings_loop_theme_and_has_no_panel_of_its_own(hub):
-    """Owner, 2026-11-01: Last ended left the sidebar; the run history is a block of the Loop theme."""
+def test_the_history_lives_at_the_bottom_of_the_runs_tab(hub):
+    """Owner, 2026-11-01: Last ended left the sidebar. #1277: the run history is the bottom of the Runs tab."""
     side = hub.PAGE[hub.PAGE.index("<aside id=side>"):hub.PAGE.index("</aside>")]
     assert "Last ended" not in side, "the Last ended card is back on the first screen"
     assert "#ended" not in hub.PAGE and "#enall" not in hub.PAGE, "a script still writes the removed panel"
-    assert re.search(r'<details id=lop[^>]*>.*?id=histb.*?<h4>Run history</h4>', hub.PAGE, re.S), \
-        "the run history is not in the Loop theme"
+    assert re.search(r'<details id=lop[^>]*>.*?id=histb', hub.PAGE, re.S) is None, "the run history is back in the Loop theme"
+    pane = hub.PAGE[hub.PAGE.index("id=tab-runs"):hub.PAGE.index("</section>", hub.PAGE.index("id=tab-runs"))]
+    assert pane.index("id=main") < pane.index("id=list"), "the run history is not at the bottom of the Runs tab"
 
 
 def test_the_models_renderer_writes_no_sidebar_card(hub):

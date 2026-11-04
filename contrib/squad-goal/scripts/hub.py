@@ -704,8 +704,8 @@ def usd_txt(v):
 
 def group_header(kind, rows, caps):
     """RUNNING shows occupancy against the machine-wide ceiling, runs then agents, and names what waits; other groups keep
-    count · cost. Spend is the tooltip."""
-    n = len(rows)
+    count · cost. Spend is the tooltip. The childcc pass is a worker, never a run: it is drawn in its own row and never counted."""
+    n = len([r for r in rows if r.get("kind") != "childcc"])
     spend = sum((r.get("spend") or 0) for r in rows)
     agents = sum((r.get("agents") or 0) for r in rows)
     title = usd_txt(spend)
@@ -716,6 +716,22 @@ def group_header(kind, rows, caps):
             return {"text": f"RUNS {n}/{caps['runs']} · AGENTS {agents}/{caps['children']}{waiting_txt(caps)}", "title": title}
         return {"text": f"{n} · {agents}", "title": title}
     return {"text": f"{n} · {title}", "title": title}
+
+RUN_GROUPS = (("running", "WORKERS"), ("1h", "≤ 1 h"), ("2h", "1–2 h"), ("4h", "2–4 h"),
+              ("8h", "4–8 h"), ("24h", "8–24 h"), ("d", "24 h+ (days)"))
+
+def run_groups(rows, caps=None):
+    """The run history's groups, in ladder order: each key, its label, the header text and title built by group_header, and
+    `empty` marking a band that holds no run. The page draws what it is given, so the worktree ladder and its wording live here
+    alone (#1277)."""
+    by = {k: [] for k, _ in RUN_GROUPS}
+    for r in rows: by[group_of(r)].append(r)
+    out = []
+    for k, label in RUN_GROUPS:
+        held = by[k]
+        h = group_header(k, held, caps)
+        out.append({"key": k, "label": label, "text": h["text"], "title": h["title"], "empty": not held})
+    return out
 def run_rank(st, live=True):
     return 0 if live and st in LIVE_STATES else 1
 
@@ -2516,6 +2532,12 @@ def run_list():
     """The displayed list, with its fixed poll as a fallback for a missed watch event."""
     if time.monotonic() - RUN_LIST_AT >= RUN_POLL_SECS: refresh_runs()
     with RUN_LIST_LOCK: return list(RUN_LIST)
+
+def runs_answer():
+    """The runs answer: the rows the page draws and one entry per history group, its header built here (#1277). The caps are
+    read on every answer, so a changed ceiling shows after one poll and the page substitutes none at serve time."""
+    rows = run_list()
+    return {"runs": rows, "groups": run_groups(rows, loop_caps())}
 
 def watch_runs(stop=None):
     """Watch the known runs directories without a platform-specific dependency; the API poll remains the fallback.
@@ -4945,7 +4967,7 @@ html.sbshut #sbtn svg{transform:scaleX(-1)}
 <section id=tab-board class="pane on" aria-label=Board>
 <div id=board><div id=bhead><label>Swimlanes <select id=lmode title="swimlanes: one lane per spec (Spec), per wave (Wave), or no lanes, today's board (None)"><option value=spec>Spec</option><option value=wave>Wave</option><option value=none>None</option></select></label> <details id=fw class=fsel><summary>Waves: all</summary><div class=fpop id=fwl></div></details> <details id=fs class=fsel><summary>Specs: all</summary><div class=fpop id=fsl></div></details> <details id=fk class=fsel><summary>Kinds: all</summary><div class=fpop id=fkl></div></details> <button id=lcall title="collapse every swimlane">Collapse all</button> <button id=lexp title="expand every swimlane">Expand all</button> <label class=hck title="hide the swimlanes whose every ticket is closed"><input type=checkbox id=lhd> Hide done lanes</label> <span id=lhc></span><span id=sse class=m hidden></span><span id=bt class=m></span> <span id=hlrel class=hlrel hidden></span></div><div id=bcases></div><div id=bbody></div></div>
 </section>
-<section id=tab-runs class=pane aria-label=Runs><div id=main></div></section>
+<section id=tab-runs class=pane aria-label=Runs><div id=main></div><div id=list></div></section>
 <section id=tab-flow class=pane aria-label="Flow charts">
 <div class=rkt id=flowtabs><button id=bflow title="the development flow: the cards in each column over time, from the flow history (SPEC 111)">Cumulative Flow Diagram</button><button id=blead title="the lead time of the closed cards, opened to closed (SPEC 111)">Lead Time</button></div>
 <div id=flowchips></div>
@@ -4953,13 +4975,13 @@ html.sbshut #sbtn svg{transform:scaleX(-1)}
 </section>
 <dialog id=ldg aria-label="Stop the loop"><form method=dialog id=ldgb></form></dialog>
 <section id=tab-set class=pane aria-label=Settings><h2>Settings</h2>
-<div class=swrap><nav class=snav aria-label="Settings themes"><button data-sp=lim>Spend &amp; limits<small>token guard and cap</small></button><button data-sp=sub>Subscriptions<small>plan prices and quota</small></button><button data-sp=mdl>Models &amp; chains<small>who does the work, when</small></button><button data-sp=slk>Communication<small>Slack, for this profile</small></button><button data-sp=lop>Loop<small>start, stop, history</small></button><button data-sp=acc>Access<small>tailnet and phone</small></button></nav>
+<div class=swrap><nav class=snav aria-label="Settings themes"><button data-sp=lim>Spend &amp; limits<small>token guard and cap</small></button><button data-sp=sub>Subscriptions<small>plan prices and quota</small></button><button data-sp=mdl>Models &amp; chains<small>who does the work, when</small></button><button data-sp=slk>Communication<small>Slack, for this profile</small></button><button data-sp=lop>Loop<small>start, stop</small></button><button data-sp=acc>Access<small>tailnet and phone</small></button></nav>
 <div class=spanels><label class=ssel>Theme <select id=ssel aria-label="Settings theme"><option value=lim>Spend &amp; limits</option><option value=sub>Subscriptions</option><option value=mdl>Models &amp; chains</option><option value=slk>Communication</option><option value=lop>Loop</option><option value=acc>Access</option></select></label>
 <details id=lim class=sp data-sp=lim open><summary>Spend &amp; limits<span class=sr id=limsr></span></summary><div class=sb id=lbody></div></details>
 <details id=sub class=sp data-sp=sub><summary>Subscriptions<span class=sr id=subsr></span></summary><div class=sb><div id=subs></div></div></details>
 <details id=mdl class=sp data-sp=mdl open><summary>Models &amp; chains<span class=sr id=mdsr></span></summary><div class=sb id=mbody></div></details>
 <details id=slk class=sp data-sp=slk><summary>Communication<span class=sr id=slksr></span></summary><div class=sb id=sbody></div></details>
-<details id=lop class=sp data-sp=lop open><summary>Loop<span class=sr id=lopsr>start, stop, history</span></summary><div class=sb id=lopb></div><div class=sb id=histb><h4>Run history</h4><div id=list></div></div></details>
+<details id=lop class=sp data-sp=lop open><summary>Loop<span class=sr id=lopsr>start, stop</span></summary><div class=sb id=lopb></div></details>
 <details id=acc class=sp data-sp=acc open><summary>Access<span class=sr>tailnet and phone</span></summary><div class=sb><div id=accb></div><div class=kr><span class=l>This device</span><a id=mobile-link href="#">mobile view</a></div><script>document.getElementById("mobile-link").href=location.pathname.replace(/\/?$/,"/")+"mobile"</script></div></details>
 </div></div>
 <div class=sbar id=sbar><button id=ssave>Save…</button><button id=sdisc>Discard changes</button><span id=schg>No change</span></div>
@@ -5010,8 +5032,7 @@ function plan(){ // which runs fill the N slots: pinned first, then most recentl
   top.forEach(id=>{if(!next.includes(id)){const j=next.indexOf(null);if(j>=0)next[j]=id}});
   slots=next.filter(Boolean);
 }
-const GROUPS=[["running","WORKERS"],["1h","≤ 1 h"],["2h","1–2 h"],["4h","2–4 h"],["8h","4–8 h"],["24h","8–24 h"],["d","24 h+ (days)"]];
-const CAPS=__CAPS__;
+let GROUPS=[];   // the run history's groups, exactly as /api/runs answers them: key, label, text, title and empty (#1277)
 const LOAD_MS=Number("__LOADMS__")||5000;   // the sampler's cadence, substituted when the page is served; the fallback keeps a slice of this script evaluable on its own
 function loadMark(r){return r.cpu?`<span class=load title="this run owns ${r.cpu}% of this machine's CPU right now">cpu ${r.cpu}%</span>`:""}   // the card answers "because of whom?"; the strip answers "is it saturated?"
 // The strip's cells (#1816). One line of text could not carry a per-attribute colour, so the page builds the three cells
@@ -5078,11 +5099,10 @@ function instDraw(d){const c=$("#inst");if(!c)return;const facts=(d||{}).facts||
 }
 // }INST
 async function loadPoll(){try{const d=await (await fetch("/api/load")).json();instDraw(d)}catch(e){}}
-function groupHeader(k,rows){const n=rows.filter(r=>r.kind!=="childcc").length,spend=rows.reduce((a,r)=>a+r.spend,0),agents=rows.reduce((a,r)=>a+(r.agents||0),0);let title=usd(spend);let text=n+" · "+title;if(k==="running"&&CAPS&&CAPS.per_run&&CAPS.per_run.label)title+=" · "+CAPS.per_run.label;if(k==="running")text=(CAPS&&CAPS.runs&&CAPS.children)?`RUNS ${n}/${CAPS.runs} · AGENTS ${agents}/${CAPS.children}`+((CAPS.waiting||[]).length?" · waiting: "+CAPS.waiting.map(w=>`${w.holder} (${w.ceiling})`).join(", "):""):`${n} · ${agents}`;return {text,title}}
 // The open groups belong to the user: a click on a header toggles that one group, any number stay open, and the set is stored
 // beside the pins. `null` means nothing is stored yet — the first draw opens the first filled group once, and only then, so a
-// run appearing, ending or moving to another age bucket can never move what the user opened.
-let openGroups=Array.isArray(ls.groups)?new Set(ls.groups.filter(k=>GROUPS.some(g=>g[0]===k))):null;
+// run appearing, ending or moving to another age bucket can never move what the user opened. The keys are the answer's own.
+let openGroups=Array.isArray(ls.groups)?new Set(ls.groups):null;
 const saveGroups=()=>{ls.groups=[...openGroups];save()};
 // runs of one issue share the issue label ("#1281"), and today three runs can carry it at once: the list and the panel header
 // then read the same twice. Disambiguate only the labels that repeat, with the run's start time (run-YYYYMMDD-HHMMSS-xxxx).
@@ -5100,12 +5120,13 @@ function liveCard(live,row){const n=live.length,oldest=live.reduce((m,r)=>r.age>
  return{head,html:(shown.map(row).join("")||"<div class=m>no live runs</div>")+more}}
 function drawList(){
   const shown=new Set(slots),by={};allRuns.filter(r=>r.kind==="childcc").concat(runs).forEach(r=>(by[groupOf(r)]=by[groupOf(r)]||[]).push(r));
-  if(openGroups===null){const first=GROUPS.find(g=>by[g[0]]);openGroups=new Set(first?[first[0]]:[]);saveGroups()}   // nothing stored yet: the first filled group opens once
-  const filled=GROUPS;   // the whole age ladder stays visible, so a band that holds no run still draws its header, and an open group that emptied keeps its header and shows no rows
+  if(openGroups===null){const first=GROUPS.find(g=>by[g.key]);openGroups=new Set(first?[first.key]:[]);saveGroups()}   // nothing stored yet: the first filled group opens once
   const ccRow=r=>{const h=r.held&&runs.some(x=>x.id===r.held)?r.held:null;return `<div class="r cc ${h&&shown.has(h)?"show":""}"${h?` data-id="${esc(h)}" title="open ${esc(h)}"`:""}><div><span class="b ${r.state}"${r.tip?` title="${esc(r.tip)}"`:""}>${esc(r.badge)}</span> <b>${esc(r.label)}</b>${r.sub?`<div class=st title="${esc(r.sub)}">${esc(r.sub)}</div>`:""}${(r.lines||[]).map(l=>`<div class=st>${esc(l)}</div>`).join("")}${r.live?`<div class=m>age ${age(r.age)}</div>`:""}</div></div>`};
   const row=r=>r.kind==="childcc"?ccRow(r):`<div class="r ${shown.has(r.id)?"show":""}" data-id="${r.id}"><div>${r.kind==="test"?`<span class=kd title="GUI test run">🧪</span>`:""}<span class="b ${r.state}"${r.tip?` title="${esc(r.tip)}"`:""}>${esc(r.badge||r.state)}</span> <b title="${esc(labelTip(r))}">${esc(name(r))}</b>${loadMark(r)}${!(r.issues||[]).length&&r.issue_why&&!r.fix&&!r.url?`<div class=st>${esc(labelTip(r))}</div>`:""}${sub(r)?`<div class=st title="${esc(sub(r))}">${esc(sub(r))}</div>`:""}<div class=m>${r.share?`<span class="sh${r.share.pct===100?" done":""}" title="the newest gate that counted ran ${r.share.total} tests, ${r.share.passed} passed">${r.share.passed}/${r.share.total} · ${r.share.pct}%</span> · `:""}${usd(r.spend)} · ${Math.round(r.dur)}m · last write ${age(r.age)} ago · ${r.id.slice(-6)} · :${r.port}</div></div><span class=pn title="shown in the panel">${pins.has(r.id)?"●":"○"}</span></div>`;
   {const live=runs.filter(r=>r.rank===0),c=liveCard(live,row);$("#lrun").innerHTML=c.html;$("#lrs").textContent=c.head}   // the sidebar card: a bounded glance of the runs that are live now (#1276)
-  $("#list").innerHTML=filled.map(([k,t])=>{const rows=by[k]||[],h=groupHeader(k,rows);return `<div class="gh ${openGroups.has(k)?"op":""}" data-g="${k}" tabindex=0>${t}<span class=sr title="${esc(h.title)}">${h.text}</span></div>${openGroups.has(k)?rows.map(row).join(""):""}`}).join("")||"<div class=m style=padding:10px>no live dashboards</div>";
+  const head=g=>{const rows=by[g.key]||[];return `<div class="gh ${openGroups.has(g.key)?"op":""}" data-g="${g.key}" tabindex=0>${esc(g.label)}<span class=sr title="${esc(g.title)}">${esc(g.text)}</span></div>`+(openGroups.has(g.key)?rows.map(row).join(""):"")};
+  const bands=GROUPS.filter(g=>g.key!=="running"),empty=bands.filter(g=>g.empty),drawn=GROUPS.filter(g=>g.key==="running"||!g.empty);   // a band that holds no run folds into one muted line, so six rows of 0 · $0.00 never push the live rows down (#1277)
+  $("#list").innerHTML=(drawn.map(head).join("")+(empty.length?`<div class=m>no runs in ${empty.map(g=>esc(g.label)).join(" · ")}</div>`:""))||"<div class=m style=padding:10px>no live dashboards</div>";
   document.querySelectorAll(".gh").forEach(e=>e.onclick=()=>{const k=e.dataset.g;   // the header is the only writer: a click toggles this group and nothing else
     if(openGroups.has(k))openGroups.delete(k);else openGroups.add(k);saveGroups();drawList()});
   document.querySelectorAll("#list .r[data-id]").forEach(e=>e.onclick=()=>{const id=e.dataset.id;   // the childcc row carries the id of the run it holds, never its own (#598, #689); the card's rows open through the #lrun handler below (#1276)
@@ -5123,7 +5144,7 @@ function selectNew(){const ids=allRuns.filter(r=>r.kind!=="childcc").map(r=>r.id
   const fresh=allRuns.filter(r=>r.kind!=="childcc"&&!known.has(r.id)&&r.rank===0);ids.forEach(i=>known.add(i));
   if(!fresh.length)return;const id=fresh.sort((x,y)=>x.age-y.age)[0].id;
   if(N===1)pins.clear();else if(pins.size>=N)pins.delete([...pins][0]);pins.add(id);save()}   // a run starting moves the pins, never the accordions
-async function poll(){try{allRuns=await (await fetch("/api/runs")).json();selectNew();applyFilter();refresh()}catch(e){}}
+async function poll(){try{const d=await (await fetch("/api/runs")).json();allRuns=d.runs||[];GROUPS=d.groups||[];selectNew();applyFilter();refresh()}catch(e){}}
 function barChart(rows,W=280,H=64,L=44){const n=rows.length,vals=rows.map(r=>r.tokens).filter(v=>v!=null),mx=Math.max(...vals,1),bw=W/Math.max(n,1),base=12+H,xl=t=>String(t).replace(/^\d{4}-/,"");
   const y=v=>base-v/mx*H,wd=Math.max(bw-2,1);
   const bars=rows.map((r,i)=>{const x=L+i*bw+1,cx=x+wd/2,title=`${xl(r.t)}: ${r.tokens==null?"no read":tk(r.tokens)+" tokens"} \u00b7 ${r.runs} runs`;
@@ -5852,8 +5873,8 @@ const accHtml=v=>{const a=v.access||{},yn=x=>x?"<span class=ok>allowed</span>":"
  +`<div class=kr><span class=l>Phone check</span><b><code>/agent-squad:start-mobile</code></b></div>`
  +`<p>Read here; the owner sets them in the project file or <code>.env</code> on the machine (ADR-0152, ADR-0162). A write the tailnet refuses still works from this machine.</p>`};
 // loop-switch:end
-// One switch, in the Monitor where the owner looks (owner, from #1071's cleanup): the Loop panel keeps the change log
-// and the run history, and no second button carries the same id (ADR-0162).
+// One switch, in the Monitor where the owner looks (owner, from #1071's cleanup): the Loop panel keeps the change log,
+// and no second button carries the same id (ADR-0162). The run history left for the bottom of the Runs tab (#1277).
 function loopDraw(){if(!loopV)return;const a=$("#iloop"),h=loopSetHtml(loopV);if(a.dataset.h!==h){a.dataset.h=h;a.innerHTML=h}
  const b=$("#lopb"),lg=loopLogHtml(loopV);if(b.dataset.h!==lg){b.dataset.h=lg;b.innerHTML=lg}
  const c=$("#accb"),ah=accHtml(loopV);if(c.dataset.h!==ah){c.dataset.h=ah;c.innerHTML=ah}}
@@ -7185,7 +7206,7 @@ def served_page(login=""):
     """The page as the hub serves it, every placeholder substituted. The model-id shape replaces its quoted placeholder:
     json.dumps brings its own quotes, and a second pair is a syntax error that empties the page."""
     who = f"signed in as {html.escape(login)}" if login else ""
-    return PAGE.replace("__WHO__", who).replace("__REPO__", REPO).replace("__CAPS__", json.dumps(loop_caps())).replace("__LOADMS__", str(int(LOAD_SAMPLE_SECS * 1000))).replace("__LOADERR__", str(LOAD_ERR_PCT)).replace("__BUILD__", str(BOOT)).replace("<!--OVERLAY-->", overlay_tag(OVERLAY_HUB) + (stream_tag() if hubstream.enabled() else ""))
+    return PAGE.replace("__WHO__", who).replace("__REPO__", REPO).replace("__LOADMS__", str(int(LOAD_SAMPLE_SECS * 1000))).replace("__LOADERR__", str(LOAD_ERR_PCT)).replace("__BUILD__", str(BOOT)).replace("<!--OVERLAY-->", overlay_tag(OVERLAY_HUB) + (stream_tag() if hubstream.enabled() else ""))
 
 
 def own_host(h):
@@ -7492,7 +7513,7 @@ class H(BaseHTTPRequestHandler):
             try: lg = (T / (n + ".log")).read_text(errors="replace")[-60000:]
             except Exception: lg = "(no output yet)" if d.get("state") == "running" else "no such test"   # test.sh makes the log after the json
             body, ct = test_log_page(d, lg), "text/html; charset=utf-8"
-        elif self.path.startswith("/api/runs"): body, ct = json.dumps(run_list()).encode(), "application/json"
+        elif self.path.startswith("/api/runs"): body, ct = json.dumps(runs_answer()).encode(), "application/json"
         elif self.path.startswith("/api/adapter-errors"): body, ct = json.dumps(adapter_errors()).encode(), "application/json"
         elif self.path.startswith("/api/delivery"): body, ct = json.dumps(delivery()).encode(), "application/json"
         elif self.path.startswith("/api/ended"): body, ct = json.dumps(ended_today()).encode(), "application/json"

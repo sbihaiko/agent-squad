@@ -171,7 +171,7 @@ const document={querySelectorAll:s=>{if(s===".gh")return [];
   return [...HTML.list.matchAll(/<div class="r [^"]*"[^>]*data-id="([^"]+)"/g)].map(m=>{const e={dataset:{id:m[1]}};
     Object.defineProperty(e,"onclick",{set:f=>{CLICK[m[1]]=f}});return e})}};
 const esc=s=>String(s),age=s=>s+"s",usd=v=>"$"+v,name=r=>r.id,labelTip=r=>"",loadMark=r=>"",sub=r=>"";
-const GROUPS=[["running","WORKERS"]],groupOf=r=>"running",groupHeader=()=>({text:"",title:""});
+const GROUPS=[{key:"running",label:"WORKERS",text:"",title:"",empty:false}],groupOf=r=>"running";
 let openGroups=new Set(["running"]);const saveGroups=()=>{},save=()=>{};
 let N=1,focus=null,slots=[],pins=new Set(),allRuns=__RUNS__,runs=allRuns.filter(r=>r.kind!=="childcc");
 const refresh=()=>{};

@@ -43,9 +43,8 @@ def _bhead(hub):
 
 
 def _groups(hub):
-    m = re.search(r"const GROUPS=\[(.*?)\];", hub.PAGE)
-    assert m, "GROUPS missing"
-    return re.findall(r'\["([^"]*)","([^"]*)"\]', m.group(1))
+    """The ladder is the hub's own rule (#1277): the page draws the labels the answer carries."""
+    return list(hub.RUN_GROUPS)
 
 
 # --- the board pane's title ---
@@ -103,7 +102,9 @@ def test_the_running_pill_keeps_its_occupancy_and_its_tooltip(hub):
 
 
 def test_the_group_header_still_carries_the_tooltip(hub):
-    assert 'title="${esc(h.title)}"' in hub.PAGE
+    """The answer carries the title; the page puts it on the header it draws (#1277)."""
+    assert 'title="${esc(g.title)}"' in hub.PAGE
+    assert hub.run_groups([{"state": "completed", "live": False, "age": 600, "spend": 2.5}], None)[1]["title"] == "$2.50"
 
 
 # --- the rest of the page's text ---
