@@ -88,7 +88,7 @@ def test_a_loopback_get_reads_the_view_with_the_access_rules(hub):
     assert v["actions"] == ["start"]
 
 
-@pytest.mark.parametrize("state,actions", [("off", ["start"]), ("on", ["drain", "stop-now"]), ("draining", ["stop-now"]), ("starting", [])])
+@pytest.mark.parametrize("state,actions", [("off", ["start"]), ("on", ["drain", "stop-now"]), ("draining", ["start", "stop-now"]), ("starting", [])])
 def test_the_view_names_the_actions_each_state_allows(hub, monkeypatch, state, actions):
     """The rule that picks the live buttons is the hub's, so the phone page holds no state rule (ADR-0137)."""
     mod, port, _, _, _ = hub
