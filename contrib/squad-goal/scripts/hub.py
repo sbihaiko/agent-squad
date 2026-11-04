@@ -4689,7 +4689,7 @@ button.on{border-color:var(--acc);color:var(--acc)}
 /* The share a gate counted (#80): how much of the suite passed, so a red gate still shows the work it got to. The full
    share reads as good, a partial one as in progress; a run no gate counted carries no chip at all, never a 0%. */
 .r .sh{color:var(--warn);font-variant-numeric:tabular-nums}.r .sh.done{color:var(--ok)}
-.r .dot{width:7px;height:7px;border-radius:50%;background:var(--run);flex:none;display:inline-block}
+.r .dot{width:7px;height:7px;border-radius:var(--radius-full);background:var(--run);flex:none;display:inline-block}
 .r .slot{margin-left:auto;flex:none;font-size:var(--fs-caption);color:var(--mute);white-space:nowrap;font-variant-numeric:tabular-nums}
 .r .slot.quiet,.r .slot.wait{color:var(--warn)}
 .r .slot.need{color:var(--err)}
