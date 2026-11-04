@@ -158,12 +158,12 @@ FIT_MIN_PAD = timedelta(hours=1)
 TIMEFRAME_SELECTS = "end transition"  # Timeframe keeps a card by the instant it entered the end column
 
 # A cluster ring holds its count at the size the page draws it (#1146). The count inherits the chart box's
-# --fs-body; these measure that text box, so the ring and the page agree on one size and one baseline.
+# --fs-body; these measure that text box, so the ring and the page agree on one size. The count itself sits clear
+# above the ring on a leader line (#1304), so no baseline is substituted into the page.
 RING_TEXT_PX = 15        # --fs-body in web-tokens.css: the size the count inherits from the chart box
 AVG_GLYPH_EM = 0.6       # a digit's advance at the page's UI font, in em
 LINE_EM = 1.0            # one line's height at that size, in em
 RING_AIR_PX = 3          # air between the count's box and the ring
-RING_BASELINE_EM = 0.35  # the count's baseline below its centre, in em: the page substitutes this
 DOT_RADIUS_PX = 4.5      # a single dot's radius, the floor a ring never falls under
 
 

@@ -227,7 +227,7 @@ def test_the_legend_carries_the_km_median_its_interval_the_cohort_wip_and_the_ex
                 4: (_card(4, st="Closed", s="CLOSED", c=t(3)), never)})
     chart = hub.flow_lead(ty=None)["lead"]["control"]["log"]["2"]
     out = _lt_chart(hub, tmp_path, "lt-km.js", chart)
-    legend = re.search(r'<p class="flg ltlg">(.*?)</p>', out).group(1)
+    legend = "".join(re.findall(r'<p class="flg ltlg">(.*?)</p>', out))
     assert "not estimable" in legend, "a curve that never reaches one half reads not estimable"
     assert chart["survival"]["text"] in out and chart["wip"]["text"] in out
     assert out.count("excluded") == 1 and re.search(r'title="1 never entered the start column: #4"[^>]*>excluded 1<', out), \
