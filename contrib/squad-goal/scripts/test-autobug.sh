@@ -817,6 +817,22 @@ todo 1228
 r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
 case "$r" in *"AUTOBUG would dispatch"*"[1228]"*) ok "17 closing the issue resumes dispatch with no other action";; *) ko "17 dispatch did not resume: '$r'";; esac
 
+# 17b) (ADR-0146 decision 2) an open `loop-bug:infra` names a defect in the loop's infrastructure. The label outlives a
+# restart, so the bug pass stops with it open and resumes when it closes, exactly as it does for the dispatch path.
+cat > "$T/issues.json" <<'JSON'
+[{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]},
+ {"number":1374,"title":"A fix run proves in the target","body":"step loop.py","created_at":"2026-11-04T19:00:00Z","labels":["bug","loop-bug:infra"]}]
+JSON
+: > "$T/st/cycle.log"; rm -f "$T/launched"
+r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+case "$r" in *"LOOP STOP: #1374 is a loop defect; the fix lands outside the loop"*) ok "17b an infrastructure loop defect stops the bug pass";; *) ko "17b the stop is not named: '$r'";; esac
+$G -q "AUTOBUG would dispatch" <<<"$r" && ko "17b the stopped pass dispatched: '$r'" || ok "17b the stopped pass dispatches nothing"
+cat > "$T/issues.json" <<'JSON'
+[{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]}]
+JSON
+r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+case "$r" in *"AUTOBUG would dispatch"*"[1228]"*) ok "17b closing the issue resumes dispatch";; *) ko "17b dispatch did not resume: '$r'";; esac
+
 # 18) (#556) a selected issue is read once a pass. The validation read and the cluster read used to be two fetches of
 # the same issue, and each fetch paid a Python startup plus a gh call. The stub records the plain issue routes it
 # answers: the pass asks for the issue one time, and the number it validated is the JSON the cluster receives.

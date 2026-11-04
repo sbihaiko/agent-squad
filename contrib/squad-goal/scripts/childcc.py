@@ -109,12 +109,7 @@ def loop_defect():
     except Exception:
         return None
     if not r.is_answer or not isinstance(r.answer, list): return None
-    for i in r.answer:
-        names = [l.get("name") if isinstance(l, dict) else l for l in (i.get("labels") or [])]
-        if "loop-bug:dispatch" in names or "loop-bug:landing" in names:   # only a defect in the dispatch or landing path stops (#641, B1)
-            try: return int(i["number"])
-            except (KeyError, TypeError, ValueError): return None
-    return None
+    return ghread.loop_stop(r.answer)   # one list for every reader: dispatch, landing and infrastructure (#641, ADR-0146)
 STOP = loop_defect()   # the loop cannot deliver its own fix: no review, fix run or entry starts while one is open (#596, ADR-0146)
 def child_worktree(rd, child, d):   # the tree a child worked in, by the engine's own rule (squad/runners/children.py, Children.workspace)
     ws = d.get("workspace") if isinstance(d, dict) else None

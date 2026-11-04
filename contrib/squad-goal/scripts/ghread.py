@@ -101,6 +101,24 @@ DONE = "done"
 REFUSED = "refused"
 FAILED = "failed"
 
+# The labels that mark a defect in the loop's own machinery (ADR-0146): a defect in the dispatch path, in the landing path,
+# or in the loop's infrastructure. One list for every reader, so a fourth label cannot reach one and miss the other (#641
+# updated the dispatch reader and missed this one). `ghcall.sh` asks the same three by name in its jq, because it is bash and
+# cannot import this; `test-childcc.sh`, `test-autobug.sh` and `test-autofrontier-one-run.sh` hold the two readers to the
+# same three labels, so a fourth cannot reach one reader and miss the other.
+LOOP_STOP_LABELS = ("loop-bug:dispatch", "loop-bug:landing", "loop-bug:infra")
+
+def loop_stop(issues):
+    """The first open issue that marks a defect in the loop's own machinery, or None. A bare `loop-bug` names a defect the
+    loop works beside, so it is not in the list and stops nothing (owner answer B1)."""
+    for i in issues or []:
+        if not isinstance(i, dict): continue
+        names = [l.get("name") if isinstance(l, dict) else l for l in (i.get("labels") or [])]
+        if any(n in LOOP_STOP_LABELS for n in names):
+            try: return int(i["number"])
+            except (KeyError, TypeError, ValueError): return None
+    return None
+
 # GitHub names its request id inside the message body when it refuses ("... include the request ID <id> ...") and in the
 # X-GitHub-Request-Id response header. Both are GitHub's own words; the caller's log must carry one of them.
 _REQUEST_ID_IN_MESSAGE = re.compile(r"request ID ([0-9A-Fa-f:]{6,})")
