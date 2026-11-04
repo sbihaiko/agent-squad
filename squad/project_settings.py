@@ -40,6 +40,7 @@ CATALOG = {
     "limits.max_output_tokens": ("int", 1, 1000000, "tokens", "output tokens of one response"),
     "limits.context_tokens": ("int", MIN_CONTEXT, 10000000, "tokens", "context size before compaction"),
     "limits.deadline_seconds": ("num", 1, 31536000, "seconds", "wall clock of one call"),
+    "limits.no_progress_seconds": ("num", 1, 31536000, "seconds", "silence of one call's upstream before its entry ends and the chain moves on"),
     "run.deadline": ("num", 1, 31536000, "seconds", "wall clock of the run"),
     "run.max_parallel": ("int", 1, 1000, "calls", "parallel calls"),
     "run.spend_cap": ("num", 0.01, 1000000, "USD", "spend of the run"),
@@ -63,7 +64,8 @@ REQUIRED = {"options.effort", "options.permission_mode", "limits.max_stalls", "l
             "limits.deadline_seconds", "run.max_parallel", "run.spend_cap"}
 ROLE_KEYS = {k.split(".", 1)[1] for k in CATALOG if k.startswith("options.")}
 # The keys that reach a call: a request carries the two token limits, and each cap is a ceiling a node can only narrow.
-CALL = ("limits.max_output_tokens", "limits.context_tokens", "limits.max_stalls", "limits.max_budget_usd", "limits.deadline_seconds")
+CALL = ("limits.max_output_tokens", "limits.context_tokens", "limits.max_stalls", "limits.max_budget_usd", "limits.deadline_seconds",
+        "limits.no_progress_seconds")
 
 
 # The tailnet block is personal (a machine name, a login), so it lives in the project's gitignored `.env`, never in the tracked file.

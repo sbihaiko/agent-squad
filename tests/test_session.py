@@ -121,3 +121,59 @@ def test_the_cap_reason_map():
     assert session.cap_reason("spend_cap", 1.0, 2.0) == "run_spend_cap"
     assert session.cap_reason("spend_cap", 2.0, 2.0) == "node_spend_cap"
     assert session.cap_reason(None, 1.0) is None
+
+
+# --- the no-progress window of one entry (#1289): the upstream sent nothing, so the entry ends and the chain moves on ---
+class Beating:
+    """An adapter that keeps its call alive: it beats the pulse `beats` times, `gap` seconds apart, then answers."""
+
+    def __init__(self, beats, gap, result):
+        self.beats, self.gap, self.result = beats, gap, result
+
+    async def call(self, req):
+        for _ in range(self.beats):
+            await anyio.sleep(self.gap)
+            req.pulse.beat()
+        return self.result
+
+
+class OpenTool:
+    """An adapter whose tool runs longer than the window: the tool's own time is not the upstream's silence."""
+
+    async def call(self, req):
+        req.pulse.tool_started("t1")
+        await anyio.sleep(0.2)
+        req.pulse.tool_done("t1")
+        return CallResult({}, 0.5)
+
+
+@pytest.mark.anyio
+async def test_a_silent_entry_ends_as_no_progress_at_its_window_and_settles_unmeasured():
+    out, b, settled, _ = await go(Fake(hang=True), deadline=5.0, no_progress=0.05)
+    assert out.kind == "no_progress" and out.window == 0.05 and out.error is None
+    assert settled == [None] and b.unmeasured == 2.0 and b.reserved == 0
+
+
+@pytest.mark.anyio
+async def test_a_call_that_keeps_beating_runs_past_its_window_and_completes():
+    out, b, settled, _ = await go(Beating(beats=8, gap=0.02, result=CallResult({}, 0.5)), deadline=5.0, no_progress=0.1)
+    assert out.kind == "result" and settled == [0.5]
+
+
+@pytest.mark.anyio
+async def test_the_node_deadline_wins_when_it_passes_before_the_window():
+    out, b, settled, _ = await go(Fake(hang=True), deadline=0.05, no_progress=5.0)
+    assert out.kind == "deadline" and settled == [None]
+
+
+@pytest.mark.anyio
+async def test_a_tool_that_is_running_is_not_silence():
+    out, _, settled, _ = await go(OpenTool(), deadline=5.0, no_progress=0.05)
+    assert out.kind == "result" and settled == [0.5]
+
+
+@pytest.mark.anyio
+async def test_the_window_is_read_from_the_last_beat_not_the_call_start():
+    """Beats every 0.03 s against a 0.1 s window: the call is never silent for the whole window, so it runs to its answer."""
+    out, _, _, _ = await go(Beating(beats=10, gap=0.03, result=CallResult({}, 0.1)), deadline=5.0, no_progress=0.1)
+    assert out.kind == "result"

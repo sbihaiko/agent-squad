@@ -7,12 +7,12 @@ and outcome fields; it gets back what stopped the call.
 import math
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import anyio
 
 from squad import modelreg
-from squad.adapter import AdapterError, MessageOverCeiling
+from squad.adapter import AdapterError, MessageOverCeiling, Pulse
 from squad.adapter_classes import is_transport
 from squad.budget import measured_tokens
 
@@ -118,6 +118,14 @@ def adapter_diagnostic(err, message=None):
 
 
 STALL_LINE = "the call stopped at its stall cap"
+# The silence one entry may keep before its call ends (#1289): an upstream that sends nothing for this long is hung, and the
+# chain moves on to its next entry. A call with a tool open is not silent (the pulse). A project may set limits.no_progress_seconds.
+NO_PROGRESS_SECONDS = 300.0
+
+
+def no_progress_line(window):
+    """The one line a silent entry carries on the record: the window it kept silent for."""
+    return f"no_progress: no message for {window:g} s"
 
 
 def answered_nothing(out):
@@ -126,9 +134,12 @@ def answered_nothing(out):
     Two ways to answer nothing, and the chain moves on from both. The provider refused to serve (an outage, not a defect
     of the work). Or the call stopped at its own stall cap with no artifact: the model kept retrying one failing step
     without changing the failure, so the node would end on the first entry while a second stood untried (#1236).
+    Or the upstream sent nothing for the no-progress window (#1289): a hung entry ends, and the next one answers.
     A cap that still produced an artifact is an answer, not this: the cap ends the node through its artifact (ADR-0105),
     so the chain never retries it on another entry. A clean result and a deadline are not this either: a clean result is
     an answer, and a deadline is the node's own bound, which the chain never spends twice."""
+    if out.kind == "no_progress":
+        return True
     if out.kind == "adapter_error":
         return provider_error(out.error)
     if out.kind != "result" or getattr(out.result, "stop_reason", None) != "stall_cap":
@@ -146,14 +157,47 @@ def transport_error(out):
     return out.kind == "adapter_error" and is_transport(str(out.error))
 
 
-async def run_chain(chain, call, *, on_retry=None, backoff=None, sleep=None):
+def entry_reason(out):
+    """The line an entry that answered nothing carries on the record: its silence, its stall cap, or its own error."""
+    if out.kind == "no_progress":
+        return no_progress_line(out.window)
+    return STALL_LINE if out.kind == "result" else str(out.error)
+
+
+class ChainLog:
+    """The chain's events on the record, one writer for the agent node and the dispatch child: a transport retry as it
+    happens (#1293), a silent entry as it ends (#1289), and every other refusal when the walk ends (#494). `refuse(model, error)`
+    sees each refusal the walk left, so a refusal that names its reset closes that account (#572)."""
+
+    def __init__(self, record, node, entry, refuse=None):
+        self.record, self.node, self.entry, self.silent, self.refuse = record, node, entry, set(), refuse
+
+    def retried(self, model, out):
+        self.record.append("model_retried", node=self.node, entry=self.entry, model=model, error=str(out.error)[:CHAIN_LINE])
+
+    def silent_entry(self, model, out):
+        self.silent.add(model)
+        self.record.append("model_refused", node=self.node, entry=self.entry, model=model, error=entry_reason(out)[:CHAIN_LINE])
+
+    def close(self, tried):
+        """Every refusal the walk left is on the record, exhausted chain or not; a silent entry already is."""
+        for m, err in tried:
+            if m not in self.silent:
+                self.record.append("model_refused", node=self.node, entry=self.entry, model=m, error=err[:CHAIN_LINE])
+            if self.refuse is not None:
+                self.refuse(m, err)
+
+
+async def run_chain(chain, call, *, on_retry=None, on_silent=None, backoff=None, sleep=None):
     """Call one entry of a model chain at a time while the entry answers nothing. `call(model, first)` runs one attempt and
     returns `(outcome, who)`. Return the last outcome, every entry that answered nothing with its reason, and the last
     `who`.
 
     One entry that fails on the transport gets one second call after `backoff`, and `on_retry(model, out)` puts it on the
     record. Each call is its own metered call, so the retry counts the node's budget and the run's spend and never starts
-    a new run. A retry that fails again is an entry that could not serve, so the chain goes on to its next entry."""
+    a new run. A retry that fails again is an entry that could not serve, so the chain goes on to its next entry. A silent
+    entry (`no_progress`) is not retried: its window already waited, so the chain moves on at once, and `on_silent(model, out)`
+    puts that end on the record as it happens, before the next entry starts (#1289)."""
     tried, out, who = [], None, None
     wait = anyio.sleep if sleep is None else sleep
     pause = TRANSPORT_BACKOFF if backoff is None else backoff    # read per call, so a test may shorten the module's value
@@ -169,10 +213,12 @@ async def run_chain(chain, call, *, on_retry=None, backoff=None, sleep=None):
                 continue
         if not answered_nothing(out):
             break
+        if out.kind == "no_progress" and on_silent is not None:
+            on_silent(model, out)
         stalled = out.kind == "result"
         if stalled and i == len(chain) - 1:
             break       # a stall on the last entry keeps its own cap reason, so a one-entry chain reads as it always did
-        tried.append((model, STALL_LINE if stalled else str(out.error)))
+        tried.append((model, entry_reason(out)))
     return out, tried, who
 
 
@@ -198,17 +244,35 @@ def cap_reason(stop_reason, granted, spend_max=None):
 
 @dataclass
 class CallOutcome:
-    """kind: no_funds | expired | prepare_failed | result | deadline | adapter_error. A cancel raises, after the settle."""
+    """kind: no_funds | expired | prepare_failed | result | deadline | no_progress | adapter_error. A cancel raises, after the settle.
+    `window` is the no-progress window a `no_progress` call kept silent for."""
     kind: str
     res: object = None
     result: object = None
     error: Exception | None = None
     elapsed: float = 0.0
     reasons: list = field(default_factory=list)
+    window: float | None = None
+
+
+async def _ends_before_silence(done, pulse, window):
+    """True when the call ends (`done`) before the upstream has been silent for `window` seconds; False when it has been
+    silent that long with no tool open. The pulse is read every tenth of the window, so silence is seen within that step."""
+    if window is None or math.isinf(window):
+        await done.wait()
+        return True
+    step = max(min(1.0, window / 10), 0.001)
+    while not done.is_set():
+        with anyio.move_on_after(step):
+            await done.wait()
+        quiet = pulse.silent_for()
+        if not done.is_set() and quiet is not None and quiet >= window:
+            return False
+    return True
 
 
 async def run_call(source, deadline, make_request, *, chain, adapter, record, budget, clock, wall,
-                   registry=None, prepare=None, on_deadline=None, on_cancel=None):
+                   registry=None, prepare=None, on_deadline=None, on_cancel=None, no_progress=NO_PROGRESS_SECONDS):
     """Reserve from `source()`, run the call, settle once. `make_request(res)` builds the CallRequest.
 
     `chain` is the ordered models this call may answer on, already led by its pick and with the spent and hours-closed
@@ -217,6 +281,8 @@ async def run_call(source, deadline, make_request, *, chain, adapter, record, bu
     the registry those ids resolve through; None is the committed one.
     `prepare(res)` may refuse with a list of reasons before the call starts; the grant is released.
     `on_deadline(res, elapsed)` and `on_cancel(res, elapsed)` write the caller's event after the settle.
+    `no_progress` is the silence, in seconds, one call may keep: the adapter beats the pulse on each message it reads, and a
+    call with no beat for that long ends as `no_progress` (#1289). The node deadline is checked first and still wins.
     """
     res = source()
     if res is None:
@@ -229,8 +295,9 @@ async def run_call(source, deadline, make_request, *, chain, adapter, record, bu
         if why:
             budget.release(res)
             return CallOutcome("prepare_failed", res, reasons=list(why))
-    req = make_request(res)
-    t0, box, hit = clock(), {}, []
+    pulse = Pulse()
+    req = replace(make_request(res), pulse=pulse)
+    t0, box, hit, silent = clock(), {}, [], []
     done = anyio.Event()
     ids = modelreg.chain_ids(chain, registry)
     record.append("call_start", node=req.node, entry=req.entry, item=req.item, session=req.session_id,
@@ -248,13 +315,18 @@ async def run_call(source, deadline, make_request, *, chain, adapter, record, bu
     try:
         async with anyio.create_task_group() as tg:
             tg.start_soon(runner)
+            ended = True
             with anyio.move_on_after(deadline) as scope:
-                await done.wait()
+                ended = await _ends_before_silence(done, pulse, no_progress)
             if scope.cancelled_caught and not done.is_set():
                 budget.settle(res, None)
                 hit.append(clock() - t0)
                 if on_deadline:
                     on_deadline(res, hit[0])
+                tg.cancel_scope.cancel()
+            elif not ended:
+                budget.settle(res, None)
+                silent.append(clock() - t0)
                 tg.cancel_scope.cancel()
     except anyio.get_cancelled_exc_class():
         with anyio.CancelScope(shield=True):
@@ -264,6 +336,8 @@ async def run_call(source, deadline, make_request, *, chain, adapter, record, bu
         raise
     if hit:
         return CallOutcome("deadline", res, elapsed=hit[0])
+    if silent:
+        return CallOutcome("no_progress", res, elapsed=silent[0], window=no_progress)
     elapsed = clock() - t0
     if "err" in box:
         if getattr(box["err"], "served", True):     # the work it did before the refusal is spent; no data leaves the grant whole

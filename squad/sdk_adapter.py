@@ -334,6 +334,8 @@ class SdkAdapter:
         try:
             async for m in stream:
                 kind = type(m).__name__
+                if req.pulse is not None:      # every message the call reads is a sign of life for the no-progress window (#1289)
+                    req.pulse.beat()
                 if kind == "AssistantMessage":
                     # A spent subscription answers with a synthetic message that carries an error (#507): the model served
                     # nothing, so it does not make the call served, and the grant goes back.
@@ -342,8 +344,14 @@ class SdkAdapter:
                     for b in getattr(m, "content", None) or []:
                         if type(b).__name__ == "ToolUseBlock":
                             watch.use(getattr(b, "id", None), getattr(b, "name", None), getattr(b, "input", None))
+                            if req.pulse is not None:      # a tool that runs is not silence: its own time is the node deadline's
+                                req.pulse.tool_started(getattr(b, "id", None))
                     continue
                 if kind == "UserMessage":
+                    if req.pulse is not None:
+                        for b in m.content if isinstance(getattr(m, "content", None), list) else []:
+                            if type(b).__name__ == "ToolResultBlock":
+                                req.pulse.tool_done(getattr(b, "tool_use_id", None))
                     if _stalled(watch, m):
                         break
                     continue

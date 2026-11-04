@@ -240,10 +240,6 @@ class Children:
                 bad.append(dep)
         return bad
 
-    def retried(self, name, entry):
-        """The callback that puts one transport retry on the record before its fresh call: a measured fact, never a new run (#1293)."""
-        return lambda m, out: self.e.record.append("model_retried", node=name, entry=entry, model=m, error=str(out.error)[:session.CHAIN_LINE])
-
     async def session(self, ctx, name, entry=1, review=None, coder=None, repeated=False):
         """One child entry: its worktree, the metered call in `squad/session.py`, then its checks and its spawn lift.
         Entry 1 cuts the worktree; a fix entry (2, 3, ...) works in it again with the review that asked for it, led by
@@ -251,6 +247,7 @@ class Children:
         finding repeated (#882)."""
         e, d, slot = self.e, self.e.dispatch.children[name]["definition"], {}
         dl, ws = min(d["deadline"] * e.scale, ctx.dl_at - e.clock()), str(self.workspace(name, d))
+        ends = e.clock() + dl      # the child's deadline bounds the whole chain, not each entry of it (#1289)
         # A child answers on the envelope's `allow.models`, led by the model its request names. A provider that refuses
         # to serve is an outage, not a defect of the work, so the chain moves on; the worktree is cut once and kept.
         # A requeued issue starts its first entry where the issue ledger says its last attempt stopped (ADR-0151 rule 2).
@@ -263,19 +260,19 @@ class Children:
         chain = session.model_chain(models, first, spent, hours, at, km or e.options.get("model_order") or [])
         for m, why in session.hours_skipped(models, first, spent, hours, at):    # an entry left out of its window is on the record
             e.record.append("model_skipped", node=name, entry=entry, model=m, reason=why)
+        log = session.ChainLog(e.record, name, entry, limits.write)
         out, tried, model = await session.run_chain(
-            chain, lambda m, first: self.attempt(name, d, ws, dl, m, slot, first and entry == 1, entry, review, repeated, chain=chain),
-            on_retry=self.retried(name, entry))
-        for m, err in tried:    # every refusal is on the record, exhausted chain or not (#494)
-            e.record.append("model_refused", node=name, entry=entry, model=m, error=err[:session.CHAIN_LINE])
-            limits.write(m, err)    # a refusal that names its reset closes that account until then (#572)
+            chain, lambda m, first: self.attempt(name, d, ws, ends, m, slot, first and entry == 1, entry, review, repeated, chain=chain),
+            on_retry=log.retried, on_silent=log.silent_entry)
+        log.close(tried)
         if out.kind == "deadline":
             return slot["ev"]
         return self.close(ctx, name, d, ws, out, model, session.chain_message(tried) if session.exhausted(chain, tried) else None, entry)
 
-    async def attempt(self, name, d, ws, dl, model, slot, first, entry=1, review=None, repeated=False, chain=()):
+    async def attempt(self, name, d, ws, ends, model, slot, first, entry=1, review=None, repeated=False, chain=()):
         """One model's call for one child: the worktree is cut for the first attempt, and a later entry reuses it."""
         e = self.e
+        dl = max(0.0, ends - e.clock())      # what is left of the child's deadline (#1289)
 
         def hit_deadline(res, el):
             slot.update(ev=self.outcome(name, "deadline", ["deadline"], None, {"cap": res.amount, "elapsed": el}, entry))
@@ -288,7 +285,7 @@ class Children:
             dl, lambda res: self.request(name, d, res, ws, dl, model, entry, review, repeated), adapter=e.adapter, chain=chain, registry=e._registry(),
             record=e.record, budget=e.budget, clock=e.clock,
             wall=e.wall, prepare=(lambda res: self.prepare(name, d, dl)) if first else None,
-            on_deadline=hit_deadline, on_cancel=cancelled)
+            on_deadline=hit_deadline, on_cancel=cancelled, no_progress=e.no_progress_window())
         return out, model
 
     async def prepare(self, name, d, dl):
@@ -311,7 +308,7 @@ class Children:
             return self.outcome(name, "deadline", ["deadline", "run_deadline"], None, {}, entry)
         if out.kind == "prepare_failed":
             return self.outcome(name, "fail", out.reasons, None, {}, entry)
-        if out.kind == "adapter_error":
+        if out.kind in ("adapter_error", "no_progress"):      # a silent entry that ended the chain names its window in the message (#1289)
             return self.outcome(name, "fail", session.adapter_reason(out.error), None,
                                 {"model": model, "effort": d["effort"],   # the chain entry it tried: a child has no node-level model
                                  "cap": out.res.amount, "elapsed": out.elapsed,

@@ -77,6 +77,32 @@ def test_node_status_reads_the_status_of_the_item_its_known_id_names(tmp_path):
     assert not any("graphql" in a for c in calls for a in c), "the loop reads GitHub over REST only (#1303)"
 
 
+def test_the_one_card_read_asks_for_the_status_field_by_id(tmp_path):
+    """#1305: the one-item route answers the title alone unless the Status field is asked for by id, exactly as the
+    paginated read does. A read that does not ask names no status, so every write that landed reads as a read
+    failure and its proof never comes -- the dispatch whose card write is pending then waits for good."""
+    calls = []
+
+    def run(args, **kw):
+        calls.append(args)
+        path = " ".join(args)
+        if "/fields?per_page=" in path:
+            return SimpleNamespace(returncode=0, stderr="", stdout=json.dumps(
+                [{"name": "Status", "id": "F_STATUS", "options": [{"name": {"raw": "Todo"}, "id": "O1"}]}]))
+        return SimpleNamespace(returncode=0, stderr="", stdout=json.dumps(
+            {"isArchived": False, "content": {"number": 800},
+             "fields": [{"name": "Status", "value": {"name": {"raw": "Todo", "html": "Todo"}}}]}))   # the route's own shape
+
+    b = issue_state.BoardBinding("owner", 7, "owner/ariel", run=run, env={"SG_STATE": str(tmp_path)}, state_dir=str(tmp_path))
+    (tmp_path / b._known_file).write_text(json.dumps({"800": "PVTI_x"}))
+
+    assert b.node_status(800) == "Todo"
+    item_calls = [a for a in calls if any("PVTI_x" in x for x in a)]
+    assert item_calls, calls
+    assert any(any("fields[]=F_STATUS" in x for x in a) for a in item_calls), \
+        f"the one-card read asks for the Status field by id: {item_calls}"
+
+
 def test_node_status_without_a_known_id_makes_no_call(tmp_path):
     calls = []
 

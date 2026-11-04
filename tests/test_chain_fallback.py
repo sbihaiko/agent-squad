@@ -189,3 +189,32 @@ async def test_a_tool_server_that_refused_the_connection_is_still_a_transport_fa
 
     out, tried, _ = await session.run_chain(["a"], call, backoff=0)
     assert seen == [("a", True), ("a", False)] and out.kind == "result" and tried == []
+
+
+# --- a silent entry (#1289): the upstream sent nothing for the no-progress window, so the chain moves on at once ---
+def silent(window):
+    return session.CallOutcome("no_progress", elapsed=window, window=window)
+
+
+async def test_a_silent_entry_hands_the_step_to_the_next_entry_without_a_retry():
+    seen = []
+
+    async def call(model, first):
+        seen.append(model)
+        return (silent(0.1) if model == "a" else outcome("result")), {"model": model}
+
+    out, tried, who = await session.run_chain(["a", "b"], call, backoff=0)
+    assert seen == ["a", "b"], "a silent entry is ended, not called again on the same entry"
+    assert out.kind == "result" and [m for m, _ in tried] == ["a"]
+    assert "no_progress" in tried[0][1] and "0.1" in tried[0][1]
+    assert who == {"model": "b"}
+
+
+async def test_a_silent_last_entry_exhausts_the_chain_and_names_the_window():
+    async def call(model, first):
+        return silent(0.1), {"model": model}
+
+    out, tried, _ = await session.run_chain(["a", "b"], call, backoff=0)
+    assert out.kind == "no_progress" and out.error is None
+    assert session.exhausted(["a", "b"], tried)
+    assert session.chain_message(tried).startswith("every model in the chain failed: a (no_progress")

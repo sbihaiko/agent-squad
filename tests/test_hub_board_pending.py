@@ -1,11 +1,19 @@
-"""The hub draws a proved move at once, marked pending, until the board read agrees (#650).
+"""The hub draws a proved move at once, marked pending, until the writer proves it or the board read agrees (#650, #1300).
 
 The board door records each move it proved in `$SG_STATE/board-moves.json`, keyed by the item, with the column it
 set and the instant (#649). The board the hub serves applies that record on top of the list read: a card a list read
 began before the move holds is drawn in the recorded column and wears a pending mark. A move the door proved with a
 dispatch context (`by`: `owner` or `loop`) keeps that mark against a list read that began after the move and holds
 another column. A move with no context stands aside for such a read at once. The column counts are taken after the
-overlay. A move is agreed only by a list read that began in a later whole second than the move and carries the
+overlay.
+
+A move the hub sent to the writer clears its mark at the writer's proof (#1300): when the writer prints `#<n> ->
+<Status>` for the card and the record holds that move for the card's item, the mark goes at once, before any list read.
+The entry stays as the column's guard, so a lagging read that holds the old column does not return the card to it.
+The proof covers the single arrow, the batch and a spec's start alike. A move no hub writer answered (a loop move, or
+a record the hub did not see proved, such as one left by a restart) keeps its mark until a read agrees.
+
+A move is agreed only by a list read that began in a later whole second than the move and carries the
 recorded column for that item; then the hub drops the entry and the mark goes with no flicker. A read that began
 before or in the move's own second says nothing about it, so the mark stays until a later read agrees. The hub
 writes the record only to drop an entry the read agrees with: a disagreeing entry and every other entry stay, a
@@ -287,8 +295,9 @@ def test_a_loop_move_keeps_its_mark_against_a_read_begun_after_it(served):
 
 
 def test_an_owner_promote_keeps_its_mark_against_a_read_begun_after_it(served):
-    """The owner's arrow carries its dispatch context too: its move stays drawn as pending against a read that began
-    after the move and holds another column."""
+    """The owner's arrow carries its dispatch context too: a record the hub holds with no writer answer this process
+    (here, one a restart left) stays drawn as pending against a read that began after the move and holds another
+    column. The arrow the hub sent clears at the writer's proof instead (#1300), see the tests below."""
     mod, state, port = served
     read_at = now() - 10
     lagging(mod, [card(7, "Backlog")], read_at)
@@ -297,6 +306,91 @@ def test_an_owner_promote_keeps_its_mark_against_a_read_begun_after_it(served):
     assert [p[0] for p in placed] == ["Todo"] and placed[0][1].get("pd") is True, \
         f"an owner promote lost its pending mark to a lagging read: {placed}"
     assert "ITEM7" in recorded(state), "an owner promote no read has agreed with was dropped before its window"
+
+
+def writer_proving(mod, state, column, by="owner"):
+    """A writer that proves every card it is sent, as board.py does: it records each move in the board record under the
+    card's item id, then prints the `#<n> -> <Status>` line the hub reads as the proof (#1300)."""
+    def run(issues, add=False):
+        moves = recorded(state) if (state / "board-moves.json").exists() else {}
+        for n in issues:
+            moves[f"ITEM{n}"] = {"column": column, "at": at(now()), "by": by}
+        record(state, moves)
+        return subprocess.CompletedProcess(["board.sh"], 0, "".join(f"#{n} -> {column}\n" for n in issues), "")
+    return run
+
+
+def test_a_writer_proof_clears_the_pending_mark_before_any_list_read(served):
+    """The arrow the hub sent: once the writer proves the move, the card is drawn in Todo with no mark, and no list read
+    has run since the proof. The entry stays as the column's guard."""
+    mod, state, port = served
+    lagging(mod, [card(7, "Backlog")], now() - 10)
+    mod.promote_write = writer_proving(mod, state, "Todo")
+    assert mod.promote(7).get("ok") is True
+    mod.wait_for_moves()
+    placed = where(get_board(port), 7)
+    assert [p[0] for p in placed] == ["Todo"], f"the proved move is not drawn in Todo: {placed}"
+    assert "pd" not in placed[0][1], "the writer's proof left the pending mark on the card until a list read"
+    assert "ITEM7" in recorded(state), "the proof dropped the entry: a lagging read could then return the card to Backlog"
+
+
+def test_a_lagging_read_after_the_writer_proof_keeps_the_card_in_todo_without_a_mark(served):
+    """The next list read began after the proof and still holds Backlog: the proved column stands and no mark returns."""
+    mod, state, port = served
+    lagging(mod, [card(7, "Backlog")], now() - 10)
+    mod.promote_write = writer_proving(mod, state, "Todo")
+    mod.promote(7)
+    mod.wait_for_moves()
+    lagging(mod, [card(7, "Backlog")], int(now()) + 3)
+    placed = where(get_board(port), 7)
+    assert [p[0] for p in placed] == ["Todo"], f"a lagging read returned the proved card to its old column: {placed}"
+    assert "pd" not in placed[0][1], f"a lagging read brought the pending mark back: {placed}"
+    assert "ITEM7" in recorded(state), "the entry a lagging read has not agreed with was dropped"
+
+
+def test_a_printed_proof_the_record_does_not_confirm_keeps_the_mark(served):
+    """The writer prints the card as moved, but the board record holds no such move for it: the proof is not confirmed,
+    so the mark stays until a read agrees, as before (#1300)."""
+    mod, state, port = served
+    lagging(mod, [card(7, "Backlog")], now() - 10)
+    record(state, {"ITEM7": {"column": "Doing", "at": at(now() - 60), "by": "owner"}})
+
+    def prints_todo_without_recording(issues, add=False):
+        return subprocess.CompletedProcess(["board.sh"], 0, "".join(f"#{n} -> Todo\n" for n in issues), "")
+
+    mod.promote_write = prints_todo_without_recording
+    mod.start_write([mod.board_cache["items"][0]])
+    mod.wait_for_moves()
+    placed = where(get_board(port), 7)
+    assert placed and placed[0][1].get("pd") is True, f"a proof the record does not confirm lost its mark: {placed}"
+    assert "ITEM7" in recorded(state), "the record entry the proof did not confirm was dropped"
+
+
+def test_a_batch_writer_proof_clears_the_mark_of_every_card_it_moved(served):
+    """The batch move takes the same path: every card the writer proves loses its mark at the proof."""
+    mod, state, port = served
+    lagging(mod, [card(7, "Backlog"), card(8, "Backlog")], now() - 10)
+    mod.promote_write = writer_proving(mod, state, "Todo")
+    out = mod.promote_batch({"confirm": 2}, "owner")
+    assert out.get("ok") is True and out.get("count") == 2, out
+    mod.wait_for_moves()
+    board = get_board(port)
+    for n in (7, 8):
+        placed = where(board, n)
+        assert [p[0] for p in placed] == ["Todo"] and "pd" not in placed[0][1], f"the batch card #{n} kept its mark: {placed}"
+
+
+def test_a_spec_start_writer_proof_clears_the_mark_of_the_spec(served, monkeypatch):
+    """A spec's start takes the same path: the spec's card loses its mark at the writer's proof. Its tickets are read
+    from the sub-issue read, which this test stubs with no ticket, so the spec moves alone."""
+    mod, state, port = served
+    monkeypatch.setattr(mod, "spec_tickets", lambda number, item: ([], [], None))
+    lagging(mod, [card(9, "Backlog", l=["spec"])], now() - 10)
+    mod.promote_write = writer_proving(mod, state, "Todo")
+    assert mod.promote(9).get("ok") is True
+    mod.wait_for_moves()
+    placed = where(get_board(port), 9)
+    assert [p[0] for p in placed] == ["Todo"] and "pd" not in placed[0][1], f"the spec kept its mark after the proof: {placed}"
 
 
 def test_a_move_the_door_writes_during_the_pass_is_never_lost(served, monkeypatch):
