@@ -338,14 +338,15 @@ stop() {
 # cause, so the janitor's "unknown" counts as the issue's own), an adapter error, a merge conflict with a sibling (the rebase on the wave tip), a disk stop, a review chain that
 # wrote no ruling (every model failed, or a hold with no verdict), a red base battery no child's own suite names (#663), a
 # run that completed with nothing landed, a prerequisite the loop could not resolve (no profile, a sandbox denial), and a
-# network failure. The caller's kind wins over the text: the janitor reads the run's own review verdict (`own`: CHANGES or
+# network failure, and a finished run that cut no wave (#1349). The caller's kind wins over the text: the janitor reads the run's own review verdict (`own`: CHANGES or
 # BLOCKED on the diff), which a reason like "review_held" hides.
 loop_caused() {
   case "${2:-}" in own) return 1;; loop) return 0;; esac
   case "$1" in *"the gate lock is held"*|*"the gate slots"*"are full"*|*"reached its age cap"*|*adapter_error*|*merge_conflict*|*"the rebase on "*" conflicts"*|*"DISK STOP"*|*"No space left"*|\
     *"every review model failed"*|*"head moved during the review"*|*"with no verdict"*|\
     *"no child's own suite names the cause"*|*"is inconclusive, so the wave does not land"*|*"completed"*"nothing landed"*|*"no profile"*|*"sandbox"*"denied"*|\
-    *"Could not resolve host"*|*"Failed to connect"*|*"Connection timed out"*|*"Operation timed out"*|*"Network is unreachable"*) return 0;; esac
+    *"Could not resolve host"*|*"Failed to connect"*|*"Connection timed out"*|*"Operation timed out"*|*"Network is unreachable"*|\
+    *"run cut no wave"*) return 0;; esac
   return 1
 }
 

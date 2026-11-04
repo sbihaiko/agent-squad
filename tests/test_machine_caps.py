@@ -498,7 +498,7 @@ def childcc_fixture(tmp_path):
     scripts = tmp_path / "scripts"
     scripts.mkdir()
     src = ROOT / "contrib" / "squad-goal" / "scripts"
-    for f in ("childcc.py", "issue_state.py", "child_issues.py", "issue_ledger.py"):
+    for f in ("childcc.py", "issue_state.py", "child_issues.py", "issue_ledger.py", "board_columns.py", "board-definition.json"):
         (scripts / f).write_text((src / f).read_text())
     (scripts / "board.sh").write_text("#!/bin/bash\nexit 0\n")
     (scripts / "childreview.sh").write_text(f"#!/bin/bash\necho reviewed >> {tmp_path}/reviews\n")
