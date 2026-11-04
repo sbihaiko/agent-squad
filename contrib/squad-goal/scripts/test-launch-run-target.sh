@@ -11,6 +11,8 @@ mkdir -p "$T/bin" "$T/s" "$T/st" "$T/squad"
 cp "$src" "$T/s/launch.py"; cp "$(dirname "$src")/router_envelope.py" "$(dirname "$src")/provkey.py" "$(dirname "$src")/modelreg.py" "$(dirname "$src")/registry.json" "$T/s/"
 printf '{"coding_models":["test-model"],"hours":{}}\n' > "$T/s/models.json"
 printf 'print("hub")\n' > "$T/s/hub.py"
+# The stub build names the one engine option a fix run needs (#1374), so the launcher's probe of it is exercised.
+mkdir -p "$T/squad/squad"; printf 'OTHER = ("fix_run",)\n' > "$T/squad/squad/options.py"
 printf '#!/bin/bash\necho "note: wave stub $*"\n' > "$T/s/wave.sh"
 cat > "$T/bin/caffeinate" <<'C'
 #!/bin/bash
@@ -87,6 +89,13 @@ $G -C "$kept" merge-base --is-ancestor "$kh" HEAD && [ "$($G -C "$kept" symbolic
 $G -C "$kept" merge-base --is-ancestor "$(cat "$rd/child-head" 2>/dev/null || echo none)" HEAD 2>/dev/null \
   && ok "the fix run's commits land on the kept branch" || ko "the fix run's child did not land on the kept branch"
 [ "$(snap)" = "$before" ] && ok "a fix run leaves the owner's checkout unchanged" || ko "a fix run changed the owner's checkout"
+# A build that cannot prove the fix-run mark refuses the round by name (#1374): an unmarked run proves its final gate in the
+# target and reports a false red on a branch fix, and branchfixpass.sh would retry the same branch with no ADR-0134 stop.
+mkdir -p "$T/oldsquad/squad"; printf 'OTHER = ("keep_children",)\n' > "$T/oldsquad/squad/options.py"
+: > "$T/targets"; o=$(cd "$co" && SG_RUN_TARGET="$kept" SG_STATE="$T/st" SG_CHECKOUT="$co" SG_BASE=dev SG_SQUAD="$T/oldsquad" SG_ALLOW_MODEL=1 python3 -I "$T/s/launch.py" "$T/repl.txt" 2>&1); rc=$?
+case "$o" in *fix_run*) namesit=1;; *) namesit=;; esac
+[ $rc -ne 0 ] && [ ! -s "$T/targets" ] && [ -n "$namesit" ] && ok "a build with no fix_run option refuses the fix round by name" \
+  || ko "a build with no fix_run option started or refused without naming it: $o"
 : > "$T/targets"; o=$(cd "$co" && SG_RUN_TARGET="$co" SG_STATE="$T/st" SG_CHECKOUT="$co" SG_BASE=dev SG_SQUAD="$T/squad" SG_ALLOW_MODEL=1 python3 -I "$T/s/launch.py" "$T/repl.txt" 2>&1); rc=$?
 [ $rc -ne 0 ] && [ ! -s "$T/targets" ] && ok "a run target that is the owner's checkout refuses the start" || ko "SG_RUN_TARGET=checkout started a run: $o"
 : > "$T/targets"; o=$(cd "$co" && SG_RUN_TARGET="$T/nowhere" SG_STATE="$T/st" SG_CHECKOUT="$co" SG_BASE=dev SG_SQUAD="$T/squad" SG_ALLOW_MODEL=1 python3 -I "$T/s/launch.py" "$T/repl.txt" 2>&1); rc=$?

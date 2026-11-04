@@ -12,6 +12,9 @@ if not os.environ.get("SG_SQUAD"):   # env.sh not sourced (SG_PROFILE alone sele
     out = subprocess.run(["bash", "-c", f'. "{here}/env.sh" >/dev/null && env'], capture_output=True, text=True).stdout
     os.environ.update(dict(l.split("=", 1) for l in out.splitlines() if l.startswith("SG_") and "=" in l))
 squad = os.environ.get("SG_SQUAD") or json.load(open(os.path.expanduser("~/.claude/plugins/installed_plugins.json")))["plugins"]["agent-squad@agent-squad"][0]["installPath"]
+def _names_option(name):   # a probe of the build that starts, never this launcher: SG_SQUAD or the installed plugin can be older than this tree
+    try: return name in (pathlib.Path(squad) / "squad" / "options.py").read_text()
+    except OSError: return False
 state = pathlib.Path(os.environ["SG_STATE"])
 state.mkdir(parents=True, exist_ok=True); (state / "cq").mkdir(exist_ok=True)
 req_file = pathlib.Path(sys.argv[1]).resolve(); cwd = pathlib.Path.cwd().resolve(); runs = cwd / "runs"
@@ -302,6 +305,14 @@ if _clash:
 checkout = os.environ.get("SG_CHECKOUT") or str(cwd)
 land = _landing_base(checkout)   # before any tree is made: a fetch that fails refuses the start (#580)
 named = os.environ.get("SG_RUN_TARGET")
+# A fix run repairs a work branch (#1374): its child's commits are on that branch, never in the target, so the final gate
+# proves every acceptance command in the child's tree. The engine option records that promise, so a build that names no
+# `fix_run` option refuses the round here, by name: an unmarked run proves its gate in the target and reports a false red,
+# and branchfixpass.sh would retry the same branch forever without the ADR-0134 stop.
+fix_run = bool(named or os.environ.get("SG_FIX_RUN"))
+if fix_run and not _names_option("fix_run"):
+    sys.exit(f"refused: the squad build at {squad} names no fix_run engine option, so this fix run cannot be marked "
+             "and its final gate would prove in the target (#1374). Publish a build that records fix_run first.")
 target = _named_target(checkout, named) if named else _issue_worktree(issues[0], land) if len(issues) == 1 else None
 if len(issues) > 1 and not named: print(f"note: the request names {issues}: one run has one target, so this run gets {FALLBACK}", file=sys.stderr)
 if named:
@@ -342,14 +353,10 @@ order = [m for m in cm if isinstance(m, str) and m]
 # A run that cuts a wave keeps its landed children after its verdict (#477, ADR-0106): the wave entry reads each child's
 # worktree then, so the run starts with the engine option --keep-children, which it records at its start. The hold is the
 # run's wave, never the target's shape. A squad that has no such option refuses the flag, so it goes only to one that names it.
-def _keeps_children():
-    try: return "keep_children" in (pathlib.Path(squad) / "squad" / "options.py").read_text()
-    except OSError: return False
-keep = ["--keep-children"] if _issue_child_request(req_text) and _keeps_children() else []
-# A fix run repairs a work branch (#1374): its child's commits are on that branch, never in the target, so the final gate
-# proves every acceptance command in the child's tree. The mark is `SG_RUN_TARGET` (a run on the kept worktree, childfix.sh)
-# or `SG_FIX_RUN` (a round on a pushed branch, branchfixpass.sh). It is recorded at run start, so a resume reads it again.
-fix = ["--fix-run"] if (named or os.environ.get("SG_FIX_RUN")) else []
+keep = ["--keep-children"] if _issue_child_request(req_text) and _names_option("keep_children") else []
+# The fix mark is `SG_RUN_TARGET` (a run on the kept worktree, childfix.sh) or `SG_FIX_RUN` (a round on a pushed branch,
+# branchfixpass.sh). It is recorded at run start, so a resume reads it again; the build was probed for it above.
+fix = ["--fix-run"] if fix_run else []
 proc = subprocess.Popen(["caffeinate", "-dimsu", "uv", "run", "--project", squad, "--extra", "sdk", "squad", "start"] + (["--workflow", os.environ["SG_WORKFLOW"]] if os.environ.get("SG_WORKFLOW") else []) + keep + fix + [
                         "--models", str(here / "models.json"), "--target", str(target)] + (["--runs-dir", str(runs)] if named else []) + (["--spent-models", ",".join(spent)] if spent else [])+ (["--model-hours", ",".join(f"{m}={w}" for m, w in hours.items())] if hours else []) + (["--model-order", ",".join(order)] if order else []) + [req_text],
                         stdout=open(log, "w"), stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True,

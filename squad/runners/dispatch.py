@@ -53,7 +53,8 @@ class Dispatch:
             self.landed[ev["node"]] = ev
 
     def child_tree(self, name):
-        """The tree a child wrote, as a string, or None when the child was never accepted: a git-history command reads it (#862)."""
+        """The tree a child wrote, as a string, or None when the child was never accepted: a history command and every command
+        of a fix run read it (#862, #1374)."""
         acc = self.children.get(name)
         return str(self.e.runs.workspace(name, acc["definition"])) if acc else None
 
