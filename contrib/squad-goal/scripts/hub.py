@@ -4930,7 +4930,7 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #main .r{display:flex;gap:8px;align-items:baseline;padding:8px 10px;border:1px solid var(--line);border-radius:var(--radius-lg);margin-bottom:8px;background:var(--card);cursor:pointer}#main .r:hover,#main .r:focus-visible{border-color:var(--acc)}#main h3{font-size:var(--fs-caption);text-transform:uppercase;letter-spacing:.06em;color:var(--mute);margin:12px 0 6px}
 #bhead select{min-height:32px;padding:4px 12px;font-size:var(--fs-body);border-radius:var(--radius-md)}#bhead label.hck input{width:18px;aspect-ratio:1;padding:0}
 #bbody .it>.hld{order:1;flex:0 0 auto;margin:0;font-size:var(--fs-caption);font-weight:600;color:var(--s5);white-space:nowrap}#bbody .it>.hld::before{content:"\25CF";margin-right:4px;color:var(--s5)}
-#ispeed .spd{border:1px solid var(--line);border-radius:var(--radius-lg);padding:8px 10px;margin-bottom:8px;background:var(--card)}#ispeed .spdh{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}#ispeed .spdt{font-size:var(--fs-caption);font-weight:600}#ispeed .spdt.up{color:var(--ok)}#ispeed .spdt.down{color:var(--err)}#ispeed .spdt.flat{color:var(--mute)}#ispeed .spdt.wait{color:var(--mute)}#ispeed .spr{position:relative;height:16px;border-radius:var(--radius-lg);background:linear-gradient(90deg,var(--raise),var(--raise-2))}#ispeed .spr i{position:absolute;top:0;bottom:0;width:2px;background:var(--mute)}#ispeed .spr .spmed{width:3px;background:var(--warn-strong)}#ispeed .spr .spt{width:10px;height:10px;top:3px;border-radius:var(--radius-full);background:var(--acc);margin-left:-5px;box-shadow:0 0 0 2px var(--well)}#ispeed .spr .spt.up{background:var(--ok)}#ispeed .spr .spt.down{background:var(--err-deep)}#ispeed .spl{display:flex;justify-content:space-between;font-size:var(--fs-caption);color:var(--mute);margin-top:3px}#ispeed .spn{font-size:var(--fs-caption);color:var(--mute);margin-top:4px}#ispeed .spn b{color:var(--fg);font-size:var(--fs-body)}#isub{display:grid;grid-template-columns:minmax(0,1fr);gap:2px;margin:0 0 10px}#isub .srow{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"n p" "b r";align-items:center;gap:3px 8px;padding:5px 0;font-size:var(--fs-caption);border-bottom:1px solid var(--line)}#isub .srow:last-child{border-bottom:0}#isub .sn{grid-area:n;color:var(--fg);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#isub .sp2{grid-area:p;text-align:right;font-variant-numeric:tabular-nums;color:var(--fg);font-weight:600}#isub .sb2{grid-area:b;height:6px;border-radius:var(--radius-sm);background:var(--line);overflow:hidden}#isub .sb2 i{display:block;height:100%;border-radius:var(--radius-sm);background:var(--ok)}#isub .srow.warn .sb2 i{background:var(--warn)}#isub .srow.red .sb2 i{background:var(--err)}#isub .srow.na .sb2{background:repeating-linear-gradient(90deg,var(--line) 0 3px,transparent 3px 7px)}#isub .srow.na .sp2{color:var(--mute)}#isub .srow.na{grid-template-areas:"n p" "b b" "r r"}#isub .srow.na .sr2{white-space:normal;text-align:left;overflow-wrap:anywhere}#isub .sr2{grid-area:r;text-align:right;color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap}
+#ispeed .spd{border:1px solid var(--line);border-radius:var(--radius-lg);padding:8px 10px;margin-bottom:8px;background:var(--card)}#ispeed .spdh{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}#ispeed .spdt{font-size:var(--fs-caption);font-weight:600}#ispeed .spdt.up{color:var(--ok)}#ispeed .spdt.down{color:var(--err)}#ispeed .spdt.flat{color:var(--mute)}#ispeed .spdt.wait{color:var(--mute)}#ispeed .spr{position:relative;height:16px;border-radius:var(--radius-lg);background:linear-gradient(90deg,var(--raise),var(--raise-2))}#ispeed .spr i{position:absolute;top:0;bottom:0;width:2px;background:var(--mute)}#ispeed .spr .spmed{width:3px;background:var(--warn-strong)}#ispeed .spr .spt{width:10px;height:10px;top:3px;border-radius:var(--radius-full);background:var(--acc);margin-left:-5px;box-shadow:0 0 0 2px var(--well)}#ispeed .spr .spt.up{background:var(--ok)}#ispeed .spr .spt.down{background:var(--err-deep)}#ispeed .spl{display:flex;justify-content:space-between;font-size:var(--fs-caption);color:var(--mute);margin-top:3px}#ispeed .spn{font-size:var(--fs-caption);color:var(--mute);margin-top:4px}#ispeed .spn b{color:var(--fg);font-size:var(--fs-body)}.isub{display:grid;grid-template-columns:minmax(0,1fr);gap:2px;margin:0 0 10px}.isub .srow{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"n p" "b r";align-items:center;gap:3px 8px;padding:5px 0;font-size:var(--fs-caption);border-bottom:1px solid var(--line)}.isub .srow:last-child{border-bottom:0}.isub .sn{grid-area:n;color:var(--fg);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.isub .sp2{grid-area:p;text-align:right;font-variant-numeric:tabular-nums;color:var(--fg);font-weight:600}.isub .sb2{grid-area:b;height:6px;border-radius:var(--radius-sm);background:var(--line);overflow:hidden}.isub .sb2 i{display:block;height:100%;border-radius:var(--radius-sm);background:var(--ok)}.isub .srow.warn .sb2 i{background:var(--warn)}.isub .srow.red .sb2 i{background:var(--err)}.isub .srow.na .sb2{background:repeating-linear-gradient(90deg,var(--line) 0 3px,transparent 3px 7px)}.isub .srow.na .sp2{color:var(--mute)}.isub .srow.na{grid-template-areas:"n p" "b b" "r r"}.isub .srow.na .sr2{white-space:normal;text-align:left;overflow-wrap:anywhere}.isub .sr2{grid-area:r;text-align:right;color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap}
 #tab-set .sp .sb{padding:0 12px 12px}
 /* Settings (#913): a left theme list, one theme at a time, one Save bar; on the phone a select replaces the list and rows stack. */
 #tab-set .swrap{display:grid;grid-template-columns:200px minmax(0,1fr);gap:16px;max-width:1120px;align-items:start}#tab-set .spanels{min-width:0}
@@ -5127,6 +5127,8 @@ function gaugeSvg(v,id){const g=gaugeGeom(v),gid=`g-${id||"load"}`;   // one gri
 function subsGauges(d){const xs=(d||{}).subs||[];if(!xs.length)return"";
  // One bar per plan: how much of the weekly window is spent, and how long until it resets. The needle and the half-circle
  // are gone with the #inst/#isub scope bug that painted them black (#Astra, 2026-11-01): a bar reads at a glance where a
+ // dial needed a caption, and four of them stack at 380 px. The bar and its text are shared by the sidebar card and the
+ // Subscriptions theme, which draws the same row from the same answer (#1281).
  // dial needed a caption, and four of them stack at 380 px.
  const reset=s=>{if(!s.resets)return esc(s.why||"no reading");const d=(s.resets-Date.now()/1000)/86400;
    return d<=0?"resets now":d>=1?`resets in ${d.toFixed(1)} d`:`resets in ${Math.max(1,Math.round(d*24))} h`};
@@ -5435,18 +5437,19 @@ $("#sbody").addEventListener("click",e=>{const b=e.target.closest("button");if(!
    the diff of every theme with a change, each line naming its theme, and writes only after the confirm. Loop and
    Access have no Save: the bar hides there. */
 const STH={lop:"Loop",lim:"Spend & limits",sub:"Subscriptions",mdl:"Models & chains",slk:"Communication",acc:"Access"};
-const SET_SAVE=["lim","mdl","slk"];   // the themes the one Save writes; Loop and Access stage no file here
-const SET_LIVE=["sub"];   // Subscriptions writes each change at once, so the bar names no staged diff there
+const SET_SAVE=["lim","mdl","slk","sub"];   // the themes the one Save writes; Loop and Access stage no file here
 let sTheme=STH[ls.sth]?ls.sth:"lop",sPend=null;   // Loop first: the question the owner asks most
+let subS=null,subDraft=null,subData=null,subSrv="",subMsg="";   // the plans: the saved answer, the staged draft, and the last read (#1281)
 const limDirty=()=>{if(!limS||!$("#limc"))return false;const v=limVals();return String(v.guard)!==String(limS.guard)||String(v.cap)!==String(limS.cap)||String(v.factor)!==String(limS.factor)};
 const mdlDirty=()=>mdlChanged();
-const setDirty=()=>[["lim",limDirty()],["mdl",mdlDirty()],["slk",slDirty()]].filter(x=>x[1]).map(x=>x[0]);
+const subDirty=()=>!!subDraft&&subSrv!==JSON.stringify(subDraft);   // Subscriptions stages each change: the Save asks the hub for a diff (#1281)
+const setDirty=()=>[["lim",limDirty()],["mdl",mdlDirty()],["slk",slDirty()],["sub",subDirty()]].filter(x=>x[1]).map(x=>x[0]);
 /* The Save bar is always visible (#1278): a read-only theme reads "nothing to save here" with both buttons disabled,
    never a bar that disappears and leaves the reader guessing whether anything was lost. */
 function setBar(){const bar=$("#sbar");if(!bar)return;const d=setDirty(),ro=RO||!SET_SAVE.includes(sTheme);bar.hidden=false;
  bar.classList.toggle("dirty",d.length>0&&!ro);
  $("#ssave").disabled=ro||!d.length;$("#sdisc").disabled=ro||!d.length;
- $("#schg").textContent=RO?RO_WHY:SET_LIVE.includes(sTheme)?"Subscriptions: each change saves at once":!SET_SAVE.includes(sTheme)?"nothing to save here":d.length?"Unsaved: "+d.map(k=>STH[k]).join(", "):`${STH[sTheme]}: no change`}
+ $("#schg").textContent=RO?RO_WHY:!SET_SAVE.includes(sTheme)?"nothing to save here":d.length?"Unsaved: "+d.map(k=>STH[k]).join(", "):`${STH[sTheme]}: no change`}
 function setTheme(sp){if(!STH[sp])sp="lop";sTheme=sp;ls.sth=sp;save();
  document.querySelectorAll("#tab-set details.sp").forEach(e=>{const on=e.dataset.sp===sp;e.classList.toggle("on",on);
   if(on&&!e.open)e.open=true;else if(!on&&e.open)e.open=false});   // one theme shows at a time (#1278)
@@ -5462,6 +5465,7 @@ $("#ssave").onclick=async()=>{const d=setDirty(),groups=[];sPend=d;
  if(d.includes("mdl"))groups.push({file:(mdl&&mdl.file)||"(the project files)",lines:mdlDiffLines(JSON.parse(mdlSrv),mdlOut(),MLAB)});
  if(d.includes("lim")){const v=limVals();limPend={guard:v.guard,cap:v.cap,factor:v.factor};groups.push(await setAskOne("/api/limits",limPend,"Spend & limits",(limS&&limS.file)||"(the profile file)"))}
  if(d.includes("slk"))groups.push(await setAskOne("/api/slack",slDraft,"Communication",(slS&&slS.file)||"(the settings file)"));
+ if(d.includes("sub"))groups.push(await setAskOne("/api/plans",subPayload(),"Subscriptions",(subData&&subData.file)||"(the plans file)"));
  const bad=groups.some(g=>g.lines.some(l=>l.startsWith("!"))),any=groups.some(g=>g.lines.length);
  $("#sdpre").textContent=diffByFile(groups)||"No change to save.";$("#sdok").disabled=!any||bad;$("#sdlg").showModal()};
 $("#sdno").onclick=()=>{sPend=null;limPend=null;$("#sdlg").close()};
@@ -5469,13 +5473,15 @@ $("#sdok").onclick=async()=>{const d=sPend||[];sPend=null;$("#sdlg").close();
  if(d.includes("mdl")){try{const r=await mdlPost(mdlOut());if(r.err)mdlMsg="!"+r.err;else{mdl=r;mdlSrv=JSON.stringify(r);mdlRmk={};mdlMsg="saved · new runs use it"}}catch(x){mdlMsg="!save failed"}mdlRender()}
  if(d.includes("lim"))await limPost(true);
  if(d.includes("slk"))await slPost(true);
- setBar();barSay([mdlMsg,limMsg,slMsg])};
+ if(d.includes("sub")){const r=await subPost(true);subMsg=r.err?"!"+r.err:"saved";subRender()}
+ setBar();barSay([mdlMsg,limMsg,slMsg,subMsg])};
 // The verdict of a save belongs where the Save button is: the panel's own line sits at the end of a long scrolling
 // column, so a refusal read there as "nothing happened" (owner, 2026-11-01).
 const barSay=ms=>{const b=$("#schg");if(!b)return;const say=ms.filter(Boolean);if(!say.length)return;
  const bad=say.some(m=>m.startsWith("!"));b.textContent=say.map(m=>m.replace(/^!/,"")).join(" · ");
  b.classList.toggle("err",bad);b.classList.toggle("ok",!bad)};
-$("#sdisc").onclick=()=>{if(mdl){mdl=JSON.parse(mdlSrv);mdlRmk={};mdlMsg="";mdlRender()}if(limS){limPend=null;limMsg="";limRender()}if(slS){slDraft=slClone(slS);slMsg="";slRender()}setBar()};
+$("#sdisc").onclick=()=>{if(mdl){mdl=JSON.parse(mdlSrv);mdlRmk={};mdlMsg="";mdlRender()}if(limS){limPend=null;limMsg="";limRender()}if(slS){slDraft=slClone(slS);slMsg="";slRender()}
+ if(subS){subDraft=subClone(subS);subSrv=JSON.stringify(subS);subMsg="";subRender()}setBar()};
 /* accordions: each of the five answers its own header and leaves the others alone; the open set is stored like the pins */
 const ACC=["stats","mdl","lim","slk"];   // only the cards the page carries: a name with no element used to kill the whole script (#1032)
 let openAcc=new Set(Array.isArray(ls.acc)?ls.acc.filter(i=>ACC.includes(i)):[]);   // the old single-id string is ignored, not trusted, and not fatal
@@ -5524,29 +5530,42 @@ const qbar=(label,pct,resets,sm,tip)=>{const left=resets?resets-Date.now()/1000:
  return `<div class="qw${sm?" sm":""}"><div class=ql><span>${esc(label)} <b>${fpct(pct)}%</b></span><span class=rst>${esc(when)}${resets?" · "+esc(moment(resets)):""}</span></div><div class=tr title="${esc(tip)}"><div class="fl ${lvl(pct)}" style="width:${Math.min(pct,100)}%;background:${qcol(pct)}"></div></div></div>`};
 const autoq=a=>{const QT="Quota used, read from the provider's own CLI. 100% = quota exhausted.",aged=a.asof?span(Date.now()/1000-a.asof)+" ago":"";if(a.unavailable)return `<div class=fr><span class="chip err">unavailable</span><span class=fs title="${esc(a.err)}">${esc(a.err)}</span>${a.asof?`<span class=fs>· last probed ${aged}</span>`:""}</div>`;return a.windows.map((w,i)=>qbar(w.label,w.pct,w.resets,i>0,QT)).join("")+`<div class=fr>${a.reached?`<span class="chip err">limit reached</span>`:""}<span class=fs>CLI · ${aged}</span></div>`};
 const CUR={"R$":"BRL","U$":"USD","US$":"USD","$":"USD","€":"EUR","£":"GBP","¥":"JPY"},curOf=v=>{v=v.trim().toUpperCase();return CUR[v]||v};
-async function pollSubs(){try{const d=await (await fetch("/api/subs")).json(),ae=document.activeElement;if(ae&&ae.closest&&ae.closest("#subs")&&ae.tagName==="INPUT")return;
- const tot=Object.values(d.subs).reduce((a,v)=>a+(v.saved||0),0),any=Object.values(d.subs).some(v=>v.saved!=null);
- const lims=Object.values(d.subs).filter(v=>{const aq=v.quota,aw=aq&&aq.windows&&aq.windows[0],pl=v.plan,q=aw?aw.pct:(pl&&pl.quota!=null?pl.quota:null);return q!=null&&q>=100});
+const subClone=v=>JSON.parse(JSON.stringify(v));
+const subPayload=()=>{const out={};   // only what changed, so a quota the owner typed alone travels as a quota, never as a plan rewrite
+ for(const[k,o]of Object.entries(subDraft||{})){const a=subS?subS[k]:null;if(JSON.stringify(o)===JSON.stringify(a))continue;
+  out[k]=o&&a&&o.plan===a.plan&&o.amount===a.amount&&o.currency===a.currency?{quota:o.quota??null,qwin:o.qwin??null}:o}
+ return out};
+function subRender(d){d=d||subData;if(!d||!$("#subs"))return;
+ const lims=(d.gauges||[]).filter(g=>typeof g.pct==="number"&&g.pct>=100),any=Object.values(d.subs).some(v=>v.saved!=null);
  setChip("sub",lims.length?`${lims.length} at limit`:(any||d.api?"all under limit":"no plan chosen"))   // the chip says what needs a look; the prices stay in the settings block
  $("#subnow").innerHTML=setNow("sub",[
   setTile("At limit",`${lims.length}`,lims.length?"err":"ok"),
   setTile("Cash this month",any||d.api?usd(d.total):"no plan chosen","neutral"),
-  setTile("Month passed",Math.round((d.frac||0)*100)+"%","neutral")]);
- $("#subs").innerHTML=setSettings("sub",[`<div class=subx>Per subscription: quota used, as each provider's CLI reports it. With no reading, the bar is the API-equivalent usage vs the plan price.</div><datalist id=curs>${["USD","BRL","EUR","GBP","ARS","MXN","CAD","JPY"].map(c=>`<option value=${c}>`).join("")}</datalist>`+Object.entries(d.subs).map(([k,v])=>{const ok=v.saved!=null,pl=v.plan,pr=d.presets[k],custom=pl&&pl.plan==="custom";
+  setTile("Month passed",Math.round((d.frac||0)*100)+"%","neutral"),
+  setTile("Plans file",d.file||"?","neutral","The one file Save writes: one JSON entry per subscription.")]);   // the theme says where it writes (#1281)
+ $("#subs").innerHTML=setSettings("sub",[`<div class=subx>Per subscription: quota used, as each provider's CLI reports it. With no reading, the bar is the API-equivalent usage vs the plan price.</div><datalist id=curs>${["USD","BRL","EUR","GBP","ARS","MXN","CAD","JPY"].map(c=>`<option value=${c}>`).join("")}</datalist>`+Object.entries(d.subs).map(([k,v])=>{const pl=(subDraft||{})[k],ok=pl!=null,pr=d.presets[k],custom=pl&&pl.plan==="custom";
   const sel=`<select data-plan=${k} data-f=plan aria-label="${k} plan"><option value="" ${pl?"":"selected"}>choose a plan…</option>${Object.entries(pr).map(([i,p])=>`<option value=${i} ${pl&&pl.plan===i?"selected":""}>${esc(p.name)} · US$${p.usd}</option>`).join("")}<option value=custom ${custom?"selected":""}>Custom amount…</option></select>`;
   const cust=custom?`<span class=pr><span>amount</span><input data-plan=${k} data-f=amount type=number min=0 step=0.01 value="${pl.amount}" aria-label="${k} custom amount"> <input data-plan=${k} data-f=cur list=curs value="${esc(pl.currency)}" placeholder="BRL" aria-label="${k} currency" title="R$, U$, € or any 3-letter code"></span>`:"";
   const note=v.noRate?`<span class=warn>no exchange rate for ${esc(pl.currency)} right now</span>`:(pl&&pl.currency!=="USD"&&v.usd!=null?`<span class=dt>≈ <b>US$${v.usd}</b> / month · ${(+v.rate).toFixed(2)} ${esc(pl.currency)} per US$</span>`:"");
-  const est=pl&&v.usd?v.eq/v.usd*100:null,aq=v.quota,aw=aq&&aq.windows&&aq.windows[0],q=aw?aw.pct:(pl&&pl.quota!=null?pl.quota:null),win=aw?aw.label:(pl&&pl.qwin||""),pct=q!=null?q:est,today=d.frac*100,cls=q!=null?"warnq":(ok?(v.saved>=0?"good":"bad"):"");
-  const MT="Fill: API-equivalent used by squad runs ÷ monthly plan price (partial: other uses of the plan are not seen). 100% = plan paid off. Tick: how much of the month has passed.";
-  const bar=aw||(aq&&aq.unavailable)?autoq(aq):q!=null?qbar(win||"quota used",q,null,false,"Quota % entered by hand. 100% = quota exhausted."):pct!=null?`<div class=qw><div class=ql><span>used <b>${fpct(pct)}%</b> of plan value</span><span class=rst>month ${Math.round(today)}%${pct>=100?" · paid off ✓":""}</span></div><div class=tr title="${MT}"><div class="fl ${ok?(v.saved>=0?"lv-ok":"lv-err"):"lv-est"}" style="width:${Math.min(pct,100)}%"></div><div class=tk style="left:${Math.min(today,100)}%"></div></div></div>`:"";
-  const man=aw||!pl?"":`<div class=pr><span>quota used</span><input data-plan=${k} data-f=quota type=number min=0 max=100 step=1 value="${q??""}" placeholder="%" aria-label="${k} quota used" style="width:60px"><input data-plan=${k} data-f=qwin value="${esc(win)}" placeholder="window, e.g. weekly · all models" aria-label="${k} quota window"maxlength=40 style="flex:1;min-width:0"></div>`;
-  return `<div class=sub><div class=hd><span class=nm>${esc(v.name)}</span>${ok?"":`<span class="sv none">choose a plan</span>`}</div><div class=pr>${sel}</div>${cust}${note}${bar}${man}</div>`}).join("")])}catch(e){console.error(e)}}
-$("#subs").addEventListener("change",async e=>{const k=e.target.dataset.plan;if(!k)return;const row=e.target.closest(".sub");let body;
- const f=e.target.dataset.f,pick=row.querySelector("[data-f=plan]").value;
- if(f==="quota"||f==="qwin"){const x=row.querySelector("[data-f=quota]").value,w=row.querySelector("[data-f=qwin]").value.trim();body={quota:x===""?null:+x,qwin:w||null}}
- else if(f==="plan"){body=pick===""?null:pick==="custom"?{plan:"custom",amount:0,currency:"USD"}:{plan:pick}}
- else{const a=row.querySelector("[data-f=amount]"),c=row.querySelector("[data-f=cur]");c.value=curOf(c.value);body={plan:"custom",amount:+a.value||0,currency:c.value}}
- try{await fetch("/api/plans",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({[k]:body})})}catch(x){}pollSubs()});
+  const gauge=(d.gauges||[]).find(g=>g.key===k),bar=gauge?`<div class=isub>${subsGauges({subs:[gauge]})}</div>`:"";   // the sidebar usage card's own bar and text, from the same answer (#1281)
+  const win=pl&&pl.qwin||"",man=!pl||(v.quota&&v.quota.windows&&v.quota.windows.length)?""   // the hand-entered quota stays a settings row
+   :`<div class=pr><span>quota used</span><input data-plan=${k} data-f=quota type=number min=0 max=100 step=1 value="${pl.quota??""}" placeholder="%" aria-label="${k} quota used" style="width:60px"><input data-plan=${k} data-f=qwin value="${esc(win)}" placeholder="window, e.g. weekly · all models" aria-label="${k} quota window"maxlength=40 style="flex:1;min-width:0"></div>`;
+  return `<div class=sub><div class=hd><span class=nm>${esc(v.name)}</span>${ok?"":`<span class="sv none">choose a plan</span>`}</div><div class=pr>${sel}</div>${cust}${note}${bar}${man}</div>`}).join("")]);
+ setBar()}   // a staged change arms the one Save at once, never on the next poll (#1281)
+async function subPost(confirm){const r=await (await fetch("/api/plans",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...subPayload(),confirm:!!confirm})})).json();
+ if(confirm&&!r.err){subDraft=null;subSrv="";await pollSubs()}   // the written answer is the new baseline, so the bar clears
+ return r}
+async function pollSubs(){try{const d=await (await fetch("/api/subs")).json(),ae=document.activeElement;
+ if(ae&&ae.closest&&ae.closest("#subs")&&ae.tagName==="INPUT")return;   // a field being typed is never repainted
+ subData=d;const saved={};for(const[k,v]of Object.entries(d.subs))saved[k]=v.plan||null;
+ if(!subDirty()){subS=saved;subSrv=JSON.stringify(saved);subDraft=subClone(saved)}   // a staged draft is the reader's: a poll never overwrites it (#1281)
+ subRender(d)}catch(e){console.error(e)}}
+$("#subs").addEventListener("change",e=>{const k=e.target.dataset.plan;if(!k||!subDraft)return;const row=e.target.closest(".sub");
+ const f=e.target.dataset.f,pick=row.querySelector("[data-f=plan]").value;let v;
+ if(f==="quota"||f==="qwin"){const x=row.querySelector("[data-f=quota]").value,w=row.querySelector("[data-f=qwin]").value.trim();v={...(subDraft[k]||{plan:"custom",amount:0,currency:"USD"}),quota:x===""?null:+x,qwin:w||null}}
+ else if(f==="plan"){v=pick===""?null:pick==="custom"?{plan:"custom",amount:0,currency:"USD"}:{plan:pick}}
+ else{const a=row.querySelector("[data-f=amount]"),c=row.querySelector("[data-f=cur]");c.value=curOf(c.value);v={plan:"custom",amount:+a.value||0,currency:c.value}}
+ subDraft[k]=v;subMsg="";subRender()});   // a change stages; the one Save asks for the diff and writes on confirm (#1281)
 async function pollStats(){try{pollSubs();
   const st=await (await fetch("/api/stats?period="+per+"&src="+src)).json();
   $("#per").innerHTML=["hour","day","month"].map(p=>`<button data-p=${p} class="${p===per?"on":""}">per ${p}</button>`).join("");
@@ -6197,24 +6216,44 @@ def plans_get():
         if isinstance(v, (int, float)) and not isinstance(v, bool): v = {"plan": "custom", "amount": v, "currency": "USD"}   # the first format: a bare USD number
         out[k] = v if isinstance(v, dict) else None
     return out
+def plan_label(k, v):
+    """What one plan reads as in a diff line: its preset name and price, its custom amount and currency, or no plan,
+    plus the hand-entered quota when the owner set one."""
+    if not v: return "no plan"
+    p = v.get("plan")
+    if p == "custom": base = f"{v.get('amount')} {v.get('currency')} a month"
+    else:
+        n = PRESETS.get(k, {}).get(p)
+        base = f"{n[0]} · US${n[1]}" if n else str(p)
+    return base + (f" · quota {v['quota']}%" if v.get("quota") is not None else "")
+def plans_diff(old, new):
+    """The diff a Save shows before it writes: one line per changed plan, in the order the theme reads them."""
+    return [f"Subscriptions · {sub_name(k, new.get(k), None)}: {plan_label(k, old.get(k))} -> {plan_label(k, new.get(k))}"
+            for k in SUBS if old.get(k) != new.get(k)]
 def plans_set(new):
-    """One subscription = a preset plan, or a custom monthly amount in any 3-letter currency; null clears it. Atomic write."""
-    if not isinstance(new, dict) or set(new) - set(SUBS): return {"err": "unknown subscription"}
-    d = plans_get()
+    """One subscription = a preset plan, or a custom monthly amount in any 3-letter currency; null clears it. Atomic write.
+    With `confirm` not true it answers the diff of every changed plan and writes nothing, which is what Save shows first."""
+    if not isinstance(new, dict) or set(new) - set(SUBS) - {"confirm"}: return {"err": "unknown subscription"}
+    confirm = new.get("confirm") is True
+    d = plans_get(); out = dict(d)
     for k, v in new.items():
-        if v is None: d[k] = None; continue
+        if k == "confirm": continue
+        if v is None: out[k] = None; continue
         if not isinstance(v, dict): return {"err": f"{k}: bad plan"}
         if "plan" not in v:   # only the quota the owner reads off the provider's usage page changes
             q, w = v.get("quota"), v.get("qwin")
-            if not d.get(k) or not v or not set(v) <= {"quota", "qwin"} or (q is not None and (isinstance(q, bool) or not isinstance(q, (int, float)) or not 0 <= q <= 100)) or (w is not None and not (isinstance(w, str) and len(w) <= 40)): return {"err": f"{k}: set a plan first; quota is 0-100, the window label up to 40 characters"}
-            d[k] = {**d[k], **{x: v[x] for x in ("quota", "qwin") if x in v}}; continue
-        plan = v.get("plan"); keep = {x: d[k][x] for x in ("quota", "qwin") if d.get(k) and d[k].get(x) is not None}
-        if plan in PRESETS[k]: d[k] = {"plan": plan, "amount": PRESETS[k][plan][1], "currency": "USD", **keep}; continue
+            if not out.get(k) or not v or not set(v) <= {"quota", "qwin"} or (q is not None and (isinstance(q, bool) or not isinstance(q, (int, float)) or not 0 <= q <= 100)) or (w is not None and not (isinstance(w, str) and len(w) <= 40)): return {"err": f"{k}: set a plan first; quota is 0-100, the window label up to 40 characters"}
+            out[k] = {**out[k], **{x: v[x] for x in ("quota", "qwin") if x in v}}; continue
+        plan = v.get("plan"); keep = {x: out[k][x] for x in ("quota", "qwin") if out.get(k) and out[k].get(x) is not None}
+        if plan in PRESETS[k]: out[k] = {"plan": plan, "amount": PRESETS[k][plan][1], "currency": "USD", **keep}; continue
         amt, cur = v.get("amount"), str(v.get("currency") or "").upper()
         if plan != "custom" or isinstance(amt, bool) or not isinstance(amt, (int, float)) or not 0 <= amt <= 1e7 or not re.fullmatch(r"[A-Z]{3}", cur): return {"err": f"{k}: need a plan, or an amount and a 3-letter currency"}
-        d[k] = {"plan": "custom", "amount": amt, "currency": cur, **keep}
-    tmp = PLANS.with_suffix(".tmp"); tmp.write_text(json.dumps(d, indent=2) + "\n"); os.replace(tmp, PLANS)
-    return d
+        out[k] = {"plan": "custom", "amount": amt, "currency": cur, **keep}
+    diff = plans_diff(d, out)
+    if not confirm: return {"diff": diff}
+    if diff:
+        tmp = PLANS.with_suffix(".tmp"); tmp.write_text(json.dumps(out, indent=2) + "\n"); os.replace(tmp, PLANS)
+    return {"diff": diff, "plans": out}
 # ---- quota read from each provider's own CLI, so nobody has to type it. Every window is {label, pct, resets (epoch)}.
 QUOTA = SHARED / "hub-quota.json"
 try: quota = json.loads(QUOTA.read_text())
@@ -7727,7 +7766,8 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/chart/lead"): body, ct = json.dumps(flow_lead(*board_filters(self.path.partition("?")[2]))).encode(), "application/json"
         elif self.path.startswith("/api/leadtime"): body, ct = json.dumps(lead_zoom(self.path.partition("?")[2])).encode(), "application/json"   # the control chart over a dragged range (#900)
         elif self.path.startswith("/api/version"): body, ct = json.dumps({"v": BOOT}).encode(), "application/json"
-        elif self.path.startswith("/api/subs"): body, ct = json.dumps({**subs_month(), "presets": {k: {i: {"name": n, "usd": p} for i, (n, p) in v.items()} for k, v in PRESETS.items()}}).encode(), "application/json"
+        elif self.path.startswith("/api/subs"): body, ct = json.dumps({**subs_month(), "presets": {k: {i: {"name": n, "usd": p} for i, (n, p) in v.items()} for k, v in PRESETS.items()},
+                                                                    "gauges": subs_gauges(), "file": str(PLANS)}).encode(), "application/json"   # the theme draws the sidebar card's own rows, and names its file (#1281)
         elif self.path.startswith("/api/models"): body, ct = json.dumps(models_get()).encode(), "application/json"
         elif self.path.startswith("/api/limits"): body, ct = json.dumps(limits_read()).encode(), "application/json"   # Settings > Spend & limits (#926)
         elif self.path.startswith("/api/slack"): body, ct = json.dumps(slack_view(slack_file())).encode(), "application/json"   # Settings > Communication (#924)

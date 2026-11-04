@@ -408,8 +408,10 @@ globalThis.location = { hash: "" };
 """
 
 _POST = """
-const PAYLOAD = { frac: 0.34, plans: 255, api: 28, total: 283,
+const PAYLOAD = { frac: 0.34, plans: 255, api: 28, total: 283, file: "/p/plans.json",
   presets: { grok: { g1: { name: "SuperGrok", usd: 30 } }, claude: { c1: { name: "Max 20x", usd: 200 } } },
+  gauges: [ { key: "grok", label: "Grok", pct: null, resets: null, why: "cli probe failed" },
+            { key: "claude", label: "Claude Max 20x", pct: 77, resets: 1792807174, window: "weekly" } ],
   subs: {
     grok:  { name: "SuperGrok", saved: null, usd: null, rate: 1, noRate: false, eq: 0, plan: null,
              quota: { unavailable: true, err: "cli probe failed", asof: 1 } },
@@ -425,13 +427,15 @@ pollSubs().then(() => console.log("RESULT" + JSON.stringify(
 
 def _subs_slice():
     """The page slice holding pollSubs and every helper it reaches, plus the `esc` defined after it and the Now/Settings
-    builders the panel draws through (#1278). The shell's own boot runs here, so `save` and the read-only flag are stubbed."""
+    builders the panel draws through (#1278). The shell's own boot runs here, so `save` and the read-only flag are stubbed.
+    The quota rows come from the sidebar card's own `subsGauges` (#1281), so its helpers travel too."""
     i = SRC.index("const usd=v=>")
     j = SRC.index("async function pollStats(")
     esc = SRC[SRC.index("const esc=t=>"):]
     sett = SRC[SRC.index("// SETT{"): SRC.index("// }SETT")]
-    return (SRC[i:j].replace("__CAPS__", "{}") + "\n" + esc[: esc.index("\n")] + "\n" + sett
-            + "\nfunction save(){}\n")
+    gauges = SRC[SRC.index("function subsGauges(d)"): SRC.index("function instGauges(d)")]
+    return (gauges + "\n" + SRC[i:j].replace("__CAPS__", "{}") + "\n"
+            + esc[: esc.index("\n")] + "\n" + sett + "\nfunction save(){}\n")   # iq and fpct travel in the page slice
 
 
 def test_a_quota_probe_with_no_windows_still_renders_the_subscriptions_panel():
@@ -440,7 +444,7 @@ def test_a_quota_probe_with_no_windows_still_renders_the_subscriptions_panel():
     totals while `#subs` stayed empty: the group opened onto nothing and read as broken."""
     out = json.loads(_node(_PRE + _subs_slice() + _POST).split("RESULT")[-1])
     assert not out["err"], out["err"]
-    assert "SuperGrok" in out["subs"] and "unavailable" in out["subs"], out["subs"][:300]
+    assert "SuperGrok" in out["subs"] and "cli probe failed" in out["subs"], out["subs"][:300]   # re-anchored (#1281): the card's own row, not a local chip
     assert "Claude Max 20x" in out["subs"] and "Claude Team" not in out["subs"], out["subs"][:300]   # the name comes from the row (#511)
     assert "77%" in out["subs"], out["subs"][:300]
 
@@ -451,7 +455,7 @@ def test_the_now_block_is_read_only_and_the_settings_block_keeps_the_plans():
     out = json.loads(_node(_PRE + _subs_slice() + post).split("RESULT")[-1])
     assert not out["err"], out["err"]
     now, settings = out["now"], out["subs"]
-    assert re.findall(r"<span class=tk>(.*?)</span>", now) == ["At limit", "Cash this month", "Month passed"], now
+    assert re.findall(r"<span class=tk>(.*?)</span>", now) == ["At limit", "Cash this month", "Month passed", "Plans file"], now   # re-anchored (#1281): the theme names its file
     for ctl in ("<input", "<select", "<textarea", "<button"):
         assert ctl not in now, f"the Subscriptions Now block carries {ctl}"
     assert settings.count("<select data-plan=") == 2 and "data-f=plan" in settings, settings[:300]
@@ -478,11 +482,11 @@ const out={html:subsGauges(d)};
 
 
 def test_a_gauge_fill_token_is_not_its_track_token_on_any_returned_state():
-    track = re.search(r"#isub \.sb2\{[^}]*?background:(var\(--[\w-]+\))", SRC).group(1)
+    track = re.search(r"\.isub \.sb2\{[^}]*?background:(var\(--[\w-]+\))", SRC).group(1)
     fills = {
-        "ok": re.search(r"#isub \.sb2 i\{[^}]*?background:(var\(--[\w-]+\))", SRC).group(1),
-        "warn": re.search(r"#isub \.srow\.warn \.sb2 i\{[^}]*?background:(var\(--[\w-]+\))", SRC).group(1),
-        "red": re.search(r"#isub \.srow\.red \.sb2 i\{[^}]*?background:(var\(--[\w-]+\))", SRC).group(1),
+        "ok": re.search(r"\.isub \.sb2 i\{[^}]*?background:(var\(--[\w-]+\))", SRC).group(1),
+        "warn": re.search(r"\.isub \.srow\.warn \.sb2 i\{[^}]*?background:(var\(--[\w-]+\))", SRC).group(1),
+        "red": re.search(r"\.isub \.srow\.red \.sb2 i\{[^}]*?background:(var\(--[\w-]+\))", SRC).group(1),
     }
     html = _gauge_js("""
 const now=Date.now()/1000+86400;

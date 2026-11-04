@@ -196,12 +196,12 @@ def test_the_save_bar_never_hides_and_a_read_only_theme_says_so(hub):
         assert out[theme]["disabled"] is True, f"{theme}: Save was armed with nothing to write"
     for theme in ("lop", "acc"):
         assert out[theme]["text"] == "nothing to save here", f"{theme}: {out[theme]['text']!r}"
-    # Subscriptions edits write at once, so the bar never claims the theme is read-only (#1278).
-    assert out["sub"]["text"] == "Subscriptions: each change saves at once", out["sub"]["text"]
+    # re-anchored (#1281): Subscriptions stages its edits like every other writable theme, so its bar reads as no change.
+    assert out["sub"]["text"] == "Subscriptions: no change", out["sub"]["text"]
     assert out["lim"]["text"] == "Spend & limits: no change" and out["mdl"]["text"] == "Models & chains: no change"
     assert out["ro"]["hidden"] is False and out["ro"]["disabled"] is True
     assert out["ro"]["text"] == "Read-only over the tailnet"
-    assert 'const SET_SAVE=["lim","mdl","slk"]' in hub.PAGE
+    assert 'const SET_SAVE=["lim","mdl","slk","sub"]' in hub.PAGE
 
 
 def test_every_input_in_settings_takes_the_body_size_and_the_page_control_height(hub):
