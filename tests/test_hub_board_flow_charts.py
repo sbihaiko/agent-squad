@@ -466,8 +466,8 @@ def test_the_lead_page_draws_the_plot_frame_supplied_by_the_hub(hub, board, tmp_
 
     out = _lt_chart(hub, tmp_path, "lt-supplied-frame.js", chart)
 
-    # Re-anchored (#1332): the layout reserves a right gutter for the reference tags, outside the plot.
-    assert 'viewBox="0 0 896 368"' in out
+    # Re-anchored (#1332): the layout reserves a right gutter sized to the longest reference tag, outside the plot.
+    assert re.search(r'viewBox="0 0 \d+ 368"', out), "the viewBox does not carry the supplied frame's height"
     assert '<line x1=64 y1=304 x2=764 y2=304' in out
 
 
@@ -694,15 +694,17 @@ def test_the_legend_splits_series_from_summary_and_the_band_stays_hidden_until_a
     band hides by default and appears with its legend entry only when the display asks for it.
 
     Re-anchored by #1332: the series legend names every mark the plot draws — the card, the cluster and the rolling
-    mean with its window size — and the band carries its own name, "Rolling spread ±1 SD".
+    mean — and the band carries its own name, "Rolling spread ±1 SD"; the head line is the one place that states the
+    window, so the legend never restates it from a second field.
     """
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z"), 2: _done(2, "2026-10-03T09:00:00Z")})
     chart = _flow(hub)["lead"]["control"]["jira"]["all"]
     out = _lt_chart(hub, tmp_path, "lt-legend.js", chart)
     series, summary = re.findall(r'<p class="flg ltlg">(.*?)</p>', out)
     entries = re.findall(r"<span>(.*?)</span>", series)
-    assert [re.sub(r"<[^>]+>", "", e) for e in entries] == [
-        "Card", "Cluster", f"Rolling mean ({chart['window']['size']} {chart['window']['unit']})"], entries
+    assert [re.sub(r"<[^>]+>", "", e) for e in entries] == ["Card", "Cluster", "Rolling mean"], entries
+    assert str(chart["window"]["size"]) not in re.sub(r"<[^>]+>", "", series), \
+        "the series legend restates the window the head line already names"
     assert "Rolling spread ±1 SD" not in series, "the band names itself while it hides"
     assert all(entry.count("<i") == 1 for entry in entries), "an entry has no marker or two"
     for label in ("Average", "Median", "p85"):
@@ -741,7 +743,7 @@ def _resolved(value, tokens):
 
 
 def _paint(tag, name):
-    m = re.search(rf'(?:^|\s){re.escape(name)}=(?:"([^"]*)"|\'([^\']*)\'|(\S+))', tag)
+    m = re.search(rf'(?:^|\s){re.escape(name)}=(?:"([^"]*)"|\'([^\']*)\'|([^\s>]+))', tag)
     return next((v for v in m.groups() if v is not None), None) if m else None
 
 
@@ -814,6 +816,13 @@ def test_each_mark_takes_its_own_role_and_the_legend_states_it(hub, board, tmp_p
         "the hollow and filled swatches resolve to one paint, so grayscale cannot tell a card from a cluster"
 
 
+def _lead_chart_css(page):
+    """Every style rule that paints a lead-chart element: a #flowb subtree, an .lt* class, or the chart svg."""
+    css = "".join(re.findall(r"<style>(.*?)</style>", page, re.S))
+    rules = re.findall(r"([^{}]+)\{([^{}]*)\}", css)
+    return "".join(body for sel, body in rules if re.search(r"#flowb|\.lt\w|svg\[data-lt\]", sel))
+
+
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_every_chart_token_the_lead_chart_paints_is_declared(hub, board, tmp_path):
     """#1332: no colour literal is in the chart code, and every role the lead chart names is a hub web token."""
@@ -821,7 +830,9 @@ def test_every_chart_token_the_lead_chart_paints_is_declared(hub, board, tmp_pat
     chart = hub.flow_lead()["lead"]["control"]["jira"]["all"]
     out = _render(hub, tmp_path, "lt-tokens.js",
                   f"(LT.band=true,LT.md=true,LT.p85=true,ltChart({json.dumps(chart)},null))")
-    css = "".join(re.findall(r"#flowb[^{}]*\{[^}]*\}|\.ltlg i\.[\w]+\{[^}]*\}", hub.PAGE))
+    css = _lead_chart_css(hub.PAGE)
+    for declaration in ("touch-action:pan-y", "repeating-linear-gradient", "cursor:pointer"):
+        assert declaration in css, f"the lead-chart rule body {declaration!r} was not collected"
     tokens = _tokens()
     for value in set(re.findall(r"var\(--chart-[\w-]+\)", out + css)):
         name = re.fullmatch(r"var\(--([\w-]+)\)", value).group(1)
@@ -852,16 +863,16 @@ def test_only_the_average_line_shows_by_default_and_the_three_patterns_differ(hu
     on = _render(hub, tmp_path, "lt-reference-on.js", f"(LT.md=true,LT.p85=true,ltChart({json.dumps(chart)},null))")
     shown = refs(on)
     assert set(shown) == {"Average", "Median", "p85"}, "a toggle does not draw its reference line"
+    painted = {}
+    for name, tag in shown.items():
+        width = _paint(tag, "stroke-width")
+        assert width is not None, f"the {name} reference line drops its stroke-width"
+        painted[name] = (width, _paint(tag, "stroke-dasharray"))
+    assert painted["Average"] == ("1", None), f"the average reference is not one solid 1px line: {painted['Average']}"
+    assert painted["Median"] == ("1", "6 3"), f"the median reference is not one long-dash 1px line: {painted['Median']}"
+    assert painted["p85"] == ("1", "1 3"), f"the p85 reference is not one dotted 1px line: {painted['p85']}"
+    assert len(set(painted.values())) == 3, f"two references paint alike, so grayscale cannot tell them apart: {painted}"
     width = lambda tag: re.search(r"stroke-width=([^\s>]+)", tag).group(1)   # noqa: E731
-    assert all(width(tag) == "1" for tag in shown.values()), "a reference line is not 1px"
-    patterns = {name: (re.search(r'stroke-dasharray="([^"]*)"', tag) or [None, "solid"])[1]
-                for name, tag in shown.items()}
-    assert len(set(patterns.values())) == 3, f"the reference patterns are not distinct: {patterns}"
-    assert patterns["Average"] == "solid"
-    median_on = float(patterns["Median"].split()[0])          # the dash; the gap is the second number
-    p85_on = float(patterns["p85"].split()[0])                # the dot
-    assert median_on >= 6 and p85_on <= 1.5, \
-        f"the dashed and dotted lines read alike at 1px: {patterns}"
     roll = re.search(r"<polyline [^>]*>", on).group(0)
     assert width(roll) == "3", "the rolling mean is not the stronger 3px line"
 
@@ -889,41 +900,52 @@ def test_the_drag_maps_the_pointer_through_the_plot_and_never_attributes_the_gut
     """#1332: the reserved right gutter sits outside the plot, so the drag reads the pointer in SVG user units and clamps
     it to the plot's own edges; a drag to the plot's right edge lands on that edge, and the zoom stays wired."""
     page = hub.PAGE
-    # The viewBox is the page's own: plot left margin plus frame width plus the reserved gutter, so a wider gutter
-    # changes the rendered scale this test reads instead of leaving it pinned to a stale constant.
-    lt_g = int(re.search(r"const ltG=(\d+);", page).group(1))
-    vb_width, left, right = 64 + 700 + lt_g, 64, 64 + 700
-    block = f"const ltP=64,LT_FRAME={{width:700}},ltG={lt_g};let LT={{}};" + \
+    # The layout values are the page's own: the left margin and the plot frame the chart payload supplies, and the
+    # viewBox the rendered chart draws, so a layout change moves this test with it instead of leaving it pinned.
+    lt_p = int(re.search(r"const ltP=(\d+);", page).group(1))
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
+    chart = _flow(hub)["lead"]["control"]["jira"]["all"]
+    vb_width = int(re.search(r'viewBox="0 0 (\d+) ', _lt_chart(hub, tmp_path, "lt-pointer-frame.js", chart)).group(1))
+    left, right = lt_p, lt_p + chart["plot_frame"]["width"]
+    assert vb_width > right, "the viewBox reserves no gutter past the plot for the drag to ignore"
+    block = f"const ltP={lt_p},LT_FRAME={{width:{chart['plot_frame']['width']}}};let LT={{}};" + \
         page[page.index("const ltPx"):page.index('$("#flowb").onpointerdown')]
     svg = (f"{{getBoundingClientRect:()=>({{left:0,width:{2 * vb_width}}}),"
            f"viewBox:{{baseVal:{{width:{vb_width}}}}}}}")
+    unlaid = "{getBoundingClientRect:()=>({left:0,width:0}),viewBox:{baseVal:{width:0}}}"
     out = _render(hub, tmp_path, "lt-pointer.js",
-                  f"JSON.stringify([0,{vb_width // 2},{vb_width - 128},"
-                  f"{2 * right},{2 * vb_width}].map(px=>ltClamp(ltPx({{clientX:px}},{svg}))))",
+                  f"JSON.stringify([[0,{vb_width // 2},{vb_width - 128},{2 * right},{2 * vb_width}]"
+                  f".map(px=>ltClamp(ltPx({{clientX:px}},{svg}))),[ltPx({{clientX:100}},{unlaid})]])",
                   block=block)
-    assert json.loads(out) == [left, vb_width // 4, (vb_width - 128) // 2, right, right], \
+    mapped, unlaid_x = json.loads(out)
+    assert mapped == pytest.approx([left, vb_width / 4, (vb_width - 128) / 2, right, right]), \
         "a drag does not land on the user-space x it points at, or the reserved gutter bends it"
+    assert unlaid_x == [None], "an svg with no laid-out width still names an x, so the drag collapses to the left edge"
     drag = page[page.index('$("#flowb").onpointerdown'):page.index('$("#flowb").onchange')]
     assert "ltPx(e,s)" in drag and "ltZoom(" in drag, "the drag-to-zoom is no longer wired"
+    assert drag.count("if(p==null)return") >= 2, "a pointer handler maps a null x, so an unlaid-out svg still drags"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_the_right_gutter_tags_never_overlap_when_the_values_are_close(hub, board, tmp_path):
-    """#1332: the reference tags sit in the reserved right gutter, outside the plot, and are moved apart by one body
-    line so no tag covers another — on one value, on values a few pixels apart, and on a block that runs past the floor."""
+    """#1332: the reference tags sit in the reserved right gutter, outside the plot, and their baselines are moved apart
+    by one body line so no tag covers another — on one value, on values a few pixels apart, and on a block that runs past
+    the floor. A frame too short for the block spreads the tags evenly across it instead of overlapping them."""
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
     chart = hub.flow_lead()["lead"]["control"]["jira"]["all"]
     assert len({chart[k]["text"] for k in ("average", "median", "p85")}) == 1, "the fixture does not put the values on one"
-    frame, gap = chart["plot_frame"], 16
-    right, bottom = 64 + frame["width"], 64 + frame["height"]
+    lt_p = int(re.search(r"const ltP=(\d+);", hub.PAGE).group(1))
+    gap = int(re.search(r"const ltGap=(\d+);", hub.PAGE).group(1))
+    frame, bottom = chart["plot_frame"], lt_p + chart["plot_frame"]["height"]
 
-    def tags_for(chart_in, name):
+    def tags_for(chart_in, name, frame_in=None):
+        frame_in = frame_in or chart_in["plot_frame"]
         out = _render(hub, tmp_path, name, f"(LT.md=true,LT.p85=true,ltChart({json.dumps(chart_in)},null))")
         plot = re.search(r"<svg [^>]*data-lt[^>]*>(.*?)</svg>", out, re.S).group(1)
         tags = re.findall(r"<text class=lttg [^>]*x=(\S+) y=(\S+) ", plot)
         assert len(tags) == 3, "the gutter does not carry one tag per drawn reference"
-        assert all(float(x) > right for x, _ in tags), "a tag sits inside the plot"
-        return sorted(float(y) for _, y in tags)   # the tag's baseline, four units under its centre
+        assert all(float(x) > lt_p + frame_in["width"] for x, _ in tags), "a tag sits inside the plot"
+        return sorted(float(y) for _, y in tags)   # the baseline each tag paints its text on
 
     def apart(chart_in, shift, name):
         c = json.loads(json.dumps(chart_in))
@@ -943,9 +965,39 @@ def test_the_right_gutter_tags_never_overlap_when_the_values_are_close(hub, boar
     heights = tags_for(low, "lt-gutter-floor.js")
     assert all(b - a >= gap for a, b in zip(heights, heights[1:], strict=False)), \
         f"the block that runs past the floor overlaps: {heights}"
-    assert heights[0] >= 64 + gap / 2 and heights[-1] <= bottom - gap / 2 + 4, \
-        f"the block that slides up still leaves the plot's height: {heights}"
-    assert heights[-1] >= bottom - gap / 2, f"the block sits above the plot's floor instead of at it: {heights}"
+    assert heights[0] >= lt_p, f"the block that slides up leaves the plot's top: {heights}"
+    assert heights[-1] == pytest.approx(bottom), f"the block sits above the plot's floor instead of at it: {heights}"
+
+    for h, step in ((30, 30 / 2), (48, gap)):   # 30 is shorter than the block's two gaps; 48 just holds it
+        near = json.loads(json.dumps(chart))
+        near["plot_frame"] = {"width": frame["width"], "height": h}
+        for key, shift in (("average", 0), ("median", 2), ("p85", 4)):
+            near[key]["y"] = shift / h
+        heights = tags_for(near, f"lt-gutter-frame-{h}.js", near["plot_frame"])
+        assert heights[0] >= lt_p and heights[-1] <= lt_p + h + 1e-9, \
+            f"a tag leaves a {h}-unit frame: {heights}"
+        assert all(b - a == pytest.approx(step) for a, b in zip(heights, heights[1:], strict=False)), \
+            f"a {h}-unit frame does not space its tags at {step}: {heights}"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_gutter_is_sized_from_the_longest_reference_tag(hub, board, tmp_path):
+    """#1332: the reserved gutter and the viewBox are sized from the longest tag, so a long value such as
+    "Median 1w 2d 3h" stays inside the drawing instead of running past the viewBox's right edge."""
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
+    chart = json.loads(json.dumps(hub.flow_lead()["lead"]["control"]["jira"]["all"]))
+    for key in ("average", "median", "p85"):
+        chart[key]["text"] = "1w 2d 3h"
+    out = _render(hub, tmp_path, "lt-gutter-width.js", f"(LT.md=true,LT.p85=true,ltChart({json.dumps(chart)},null))")
+    vb = int(re.search(r'viewBox="0 0 (\d+) ', out).group(1))
+    plot = re.search(r"<svg [^>]*data-lt[^>]*>(.*?)</svg>", out, re.S).group(1)
+    tags = [(attrs, body) for attrs, body in _svg_texts(plot) if _has_class(attrs, "lttg")]
+    assert len(tags) == 3, "the gutter does not carry one tag per drawn reference"
+    right = int(re.search(r"const ltP=(\d+);", hub.PAGE).group(1)) + chart["plot_frame"]["width"]
+    for attrs, body in tags:
+        end = float(_svg_attr(attrs, "x")) + 8.5 * len(body)   # a loose estimate for one body-size glyph
+        assert end <= vb, f"the tag {body!r} runs past the viewBox at {end} of {vb}"
+        assert float(_svg_attr(attrs, "x")) > right, "a tag sits inside the plot"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
