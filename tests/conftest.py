@@ -1,6 +1,8 @@
+import atexit
 import os
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -116,10 +118,29 @@ def _real_git_first_on_path():
         shutil.rmtree(link_dir, ignore_errors=True)
 
 
+ORIGINAL_SG_STATE = os.environ.get("SG_STATE")   # the inherited value, read before any test runs (#1328)
+# At import, before any module or module-scoped fixture reads it: a gate under the live loop inherits the loop's SG_STATE and
+# SG_GH_PASS, and a module that captured either at import would write the live api.log. Each process (each xdist worker too)
+# gets its own session dir, and no test starts with a loop's pass name.
+_SESSION_STATE = tempfile.mkdtemp(prefix="squad-session-state-")
+atexit.register(shutil.rmtree, _SESSION_STATE, ignore_errors=True)
+os.environ["SG_STATE"] = _SESSION_STATE
+os.environ.pop("SG_GH_PASS", None)
+
+
+@pytest.fixture(autouse=True)
+def _own_state_dir(monkeypatch, tmp_path_factory):
+    """No test writes to the SG_STATE the suite inherited: a gate under the live loop inherits the loop's api.log and
+    cooldown (#1328). Each test gets its own dir and no pass name; a test that sets or deletes either itself runs after this and wins."""
+    monkeypatch.setenv("SG_STATE", str(tmp_path_factory.mktemp("state")))
+    monkeypatch.delenv("SG_GH_PASS", raising=False)
+
+
 def gui_tests_off():
     """True while the GUI test switch is off (scripts/gui-tests.sh off). The two markers are the switch's own: the one under
-    $SG_STATE is the visible idiom, the home one survives a suite that inherits the machine's SG_STATE and cleans it."""
-    return (Path(os.environ.get("SG_STATE", Path.home() / ".cache" / "squad-goal")) / "auto" / "gui-tests-off").exists() \
+    the inherited $SG_STATE is the visible idiom, the home one survives a suite that inherits the machine's SG_STATE and cleans it."""
+    state = Path(ORIGINAL_SG_STATE) if ORIGINAL_SG_STATE is not None else Path.home() / ".cache" / "squad-goal"
+    return (state / "auto" / "gui-tests-off").exists() \
         or (Path.home() / ".squad-gui-tests-off").exists()
 
 

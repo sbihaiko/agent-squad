@@ -54,11 +54,11 @@ reset
 SG_GH_PASS=autobug $RD repos/o/r/issues/7 >/dev/null
 tail -1 "$LOG" | grep -Eq " GraphQL repos/o/r/issues/7 miss answer autobug$" && ok "ghread.py, the unthrottled door, logs its read (one issue is one GraphQL query, #256)" || bad "ghread: $(tail -1 "$LOG" 2>/dev/null)"
 SG_GH_PASS=autobug $RD --method PATCH repos/o/r/issues/7 -f state=closed >/dev/null
-tail -1 "$LOG" | grep -Eq " REST repos/o/r/issues/7 miss done autobug$" && ok "a write through ghread.py logs, and names the outcome done" || bad "write: $(tail -1 "$LOG")"
+tail -1 "$LOG" | grep -Eq " REST repos/o/r/issues/7 write done autobug$" && ok "a write through ghread.py logs, and names the outcome done" || bad "write: $(tail -1 "$LOG")"
 (. "$T/s/ghcall.sh"; SG_GH_PASS=frontier gh_get -H "Accept: application/vnd.github.diff" repos/o/r/pulls/7 >/dev/null)
 tail -1 "$LOG" | grep -Eq " REST repos/o/r/pulls/7 miss answer frontier$" && ok "gh_get logs the route, not the header" || bad "gh_get: $(tail -1 "$LOG")"
 (. "$T/s/ghcall.sh"; SG_GH_PASS=board gh_send --method POST repos/o/r/issues/7/comments -f body=x >/dev/null)
-tail -1 "$LOG" | grep -Eq " REST repos/o/r/issues/7/comments miss done board$" && ok "gh_send logs the write" || bad "gh_send: $(tail -1 "$LOG")"
+tail -1 "$LOG" | grep -Eq " REST repos/o/r/issues/7/comments write done board$" && ok "gh_send logs the write" || bad "gh_send: $(tail -1 "$LOG")"
 $RD repos/o/r/issues/8 >/dev/null
 tail -1 "$LOG" | grep -Eq " unattributed$" && ok "a caller that names no pass is unattributed" || bad "no pass: $(tail -1 "$LOG")"
 touch "$T/ratelimited"; SG_GH_PASS=board $RD repos/o/r/issues/9 >/dev/null

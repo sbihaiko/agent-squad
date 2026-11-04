@@ -431,7 +431,7 @@ case "$r4" in *"WAVE NEEDS-HUMAN #73"*) ok "K3: at the requeue cap the conflicti
 # K2 (#477): a landing that exits 2 -- the wave branch is gone, the base is gone, or the checkout failed -- is a landing
 # that failed, so it counts toward the same cap. Below the cap the marker stays and the next cycle tries again; at the cap
 # the marker and the wave start go, so no wave-<run> hold outlives a landing that can never happen.
-mkdir -p "$T/st/auto" "$T/co/runs/run-gone"; echo wave/run-gone > "$T/st/auto/wave-run-gone"; date +%s > "$T/st/auto/wave-start-run-gone"
+mkdir -p "$T/st/auto" "$T/co/runs/run-gone"; echo wave/run-gone > "$T/st/auto/wave-run-gone"; date +%s > "$T/st/auto/wave-start-run-gone"; echo "$T/co/runs/run-gone" >> "$T/st/active-runs.txt"
 printf '%s\n' '{"event": "spawn_accepted", "child": "a", "definition": {"prompt": "GitHub issue #95 work"}}' > "$T/co/runs/run-gone/record.jsonl"
 r1=$(land2 run-gone); rc1=$?; r2=$(land2 run-gone); rc2=$?
 [ "$(tries 95 run-gone)" = 2 ] && [ ! -e "$T/st/auto/wland-tries-run-gone" ] && ok "K2: each try is counted in the ledger of the run's issue, with no wland-tries- marker" || ko "K2: tries '$(tries 95 run-gone)', $(/bin/ls "$T/st/auto")"
@@ -444,6 +444,21 @@ case "$r3" in *"WAVE NEEDS-HUMAN wave/run-gone"*) ok "K2: the cleared hold is na
 echo wave/run-none > "$T/st/auto/wave-run-none"; r=$(land2 run-none); rc=$?
 [ $rc = 2 ] && [ ! -e "$T/st/auto/wave-run-none" ] && case "$r" in *"WAVE NEEDS-HUMAN wave/run-none"*"names no issue"*) true;; *) false;; esac \
   && ok "K2b: a wave with no issue clears its hold at its first failed landing" || ko "K2b: exit $rc, $(/bin/ls "$T/st/auto" | /usr/bin/grep run-none): '$r'"
+
+# AB (#1310): a wave branch absent on the remote was never pushed. The landing names that cause and never claims the branch
+# stays on the remote. A run that holds no slot (ended, dropped from active-runs.txt) stops waiting at once: its markers go.
+mkdir -p "$T/co/runs/run-abs"; printf '%s\n' '{"event": "spawn_accepted", "child": "a", "definition": {"prompt": "GitHub issue #96 work"}}' '{"event": "run_start"}' '{"event": "verdict", "verdict": "failed"}' > "$T/co/runs/run-abs/record.jsonl"
+echo wave/run-abs > "$T/st/auto/wave-run-abs"; date +%s > "$T/st/auto/wave-start-run-abs"
+ra=$(land2 run-abs); rca=$?
+case "$ra" in *"stays on the remote"*) ko "AB: an absent wave branch is said to stay on the remote: '$ra'";; *) ok "AB: no claim that an absent wave branch stays on the remote";; esac
+case "$ra" in *"wave/run-abs is not on "*"the run never pushed it"*) ok "AB: the absent wave branch is named as the cause";; *) ko "AB: the cause is not named: '$ra'";; esac
+[ $rca = 2 ] && [ ! -e "$T/st/auto/wave-run-abs" ] && [ ! -e "$T/st/auto/wave-start-run-abs" ] && ok "AB: a run with no slot stops waiting at once" || ko "AB: exit $rca, markers kept for a run with no slot: '$ra'"
+# AB2: a run that still holds its slot keeps the absent wave on its count: one try, the marker stays for the next cycle.
+mkdir -p "$T/co/runs/run-abl"; printf '%s\n' '{"event": "spawn_accepted", "child": "a", "definition": {"prompt": "GitHub issue #97 work"}}' '{"event": "run_start"}' > "$T/co/runs/run-abl/record.jsonl"; echo "$T/co/runs/run-abl" >> "$T/st/active-runs.txt"
+echo wave/run-abl > "$T/st/auto/wave-run-abl"; date +%s > "$T/st/auto/wave-start-run-abl"
+rl=$(land2 run-abl); rcl=$?
+[ $rcl = 2 ] && [ -e "$T/st/auto/wave-run-abl" ] && ok "AB2: a run that holds its slot keeps its absent wave for the next cycle" || ko "AB2: exit $rcl: '$rl'"
+case "$rl" in *"stays on the remote"*) ko "AB2: an absent wave branch is said to stay on the remote: '$rl'";; *) ok "AB2: a live run's absent wave is not said to stay on the remote";; esac
 
 # K3 (#656): a fetch that fails on a network error (DNS, connect, timeout) is no landing that failed for good: the next
 # cycle can land. It counts no try, freezes nothing, prints one WAVE-NETWORK line and exits 2. The remote is reached through

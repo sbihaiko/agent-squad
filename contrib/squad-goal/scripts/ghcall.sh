@@ -39,10 +39,10 @@ ghcall_here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # _gh_refused <body>: 0 when the body is GitHub's own refusal shape: a REST message beside a status, or a GraphQL `errors[]`
 # list with no `data` (a rate limit comes back that way, with gh exit 0 or 1). Any body that is not JSON, or is JSON without
 # either shape, is not a refusal -- `jq -e` exits non-zero for both.
-# _gh_log <outcome> <gh api args…>: one call-log line for a call this file makes itself. The route is the one argument that is
-# neither a flag nor the value of one; the transport is REST, or GraphQL for the `graphql` route.
-_gh_log() {
-  local outcome=$1 route="" a transport=REST; shift
+# _gh_log_as <cache> <outcome> <gh api args…>: one call-log line for a call this file makes itself. The route is the one argument
+# that is neither a flag nor the value of one; the transport is REST, or GraphQL for the `graphql` route. A write logs cache `write`.
+_gh_log_as() {
+  local cache=$1 outcome=$2 route="" a transport=REST; shift 2
   while [ $# -gt 0 ]; do
     case "$1" in
       -H|--header|-X|--method|-f|--raw-field|-F|--field|-q|--jq|--input|--cache|-t|--template|--hostname) shift 2;;
@@ -52,8 +52,9 @@ _gh_log() {
   done
   [ -n "$route" ] || return 0
   [ "$route" = graphql ] && transport=GraphQL
-  $SG_GHREAD --log "$transport" "$route" miss "$outcome" >/dev/null 2>&1 || true
+  $SG_GHREAD --log "$transport" "$route" "$cache" "$outcome" >/dev/null 2>&1 || true
 }
+_gh_log() { _gh_log_as miss "$@"; }   # a read: the snapshot answers it or it is a miss
 
 # _gh_child_merge <gh args…>: 0 when a child session asks to merge a PR, by `pr merge` or by `PUT .../pulls/N/merge`. A child
 # session is a call the engine started (`SG_CHILD_SESSION`, exported by the call environment): the loop merges, so the door
@@ -442,11 +443,11 @@ gh_send() {
     esac
   done
   local o rc
-  if _gh_child_merge "${args[@]}"; then _gh_log refused "${args[@]}"; _gh_child_merge_line; return 2; fi
+  if _gh_child_merge "${args[@]}"; then _gh_log_as write refused "${args[@]}"; _gh_child_merge_line; return 2; fi
   o=$(gh api "${args[@]}" 2>/dev/null); rc=$?
-  if _gh_refused "$o"; then _gh_log refused "${args[@]}"; _gh_refusal_line "$o"; return 2; fi
-  if [ "$rc" -ne 0 ]; then _gh_log failed "${args[@]}"; printf 'failed: the write reached no verdict (gh exited %s)\n' "$rc"; return 1; fi
-  _gh_log done "${args[@]}"
+  if _gh_refused "$o"; then _gh_log_as write refused "${args[@]}"; _gh_refusal_line "$o"; return 2; fi
+  if [ "$rc" -ne 0 ]; then _gh_log_as write failed "${args[@]}"; printf 'failed: the write reached no verdict (gh exited %s)\n' "$rc"; return 1; fi
+  _gh_log_as write done "${args[@]}"
   if [ -n "$q" ]; then printf '%s' "$o" | jq -r "$q" || return 1; else printf '%s' "$o"; fi
   return 0
 }

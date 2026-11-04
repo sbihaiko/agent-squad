@@ -59,8 +59,9 @@ module every door carries (see `log_call`):
     2025-10-09T08:53:20Z REST repos/o/r/labels miss answer landing
 
 * transport: `REST`, or `GraphQL` for an aggregate route.
-* cache: `hit` when the snapshot answered it, `miss` for every read that went to GitHub, snapshottable or not (`ghspend.py`
-  leaves the routes that gate a write out of the miss rate).
+* cache: `hit` when the snapshot answered it, `miss` for every read that went to GitHub, snapshottable or not, and `write` for
+  every call that changes GitHub, whatever its outcome (`ghspend.py` reads a miss rate over `hit` and `miss` only, so a write is never
+  a snapshot miss, #1328).
 * outcome: `answer`, `refused` (GitHub refused it), `failed` (no verdict), `done` (a write GitHub took) or `cooling` (the shared
   cooldown held the call back and no request was sent).
 * pass: the pass that spent the call -- `frontier`, `landing`, `autobug` or `board` -- from `SG_GH_PASS`, which each pass script
@@ -72,7 +73,7 @@ rotated once at `LOG_MAX_BYTES` so it cannot grow without bound. This module log
 process); a library caller -- the throttle -- logs its own calls, because only it knows a snapshot answered them, and
 `graphql_read` logs its own read.
 
-    python3 ghread.py --log <REST|GraphQL> <route> <hit|miss> <outcome>    # one line, for a shell door that has no Python of its own
+    python3 ghread.py --log <REST|GraphQL> <route> <hit|miss|write> <outcome>    # one line, for a shell door that has no Python of its own
 
 Scope (ADR-0277): this is the outcome contract, the transports behind it and the call log. The token bucket, the shared
 `$SG_STATE` cooldown and the per-resource response cache are `ghthrottle.py`, and the health causes read from the log and the
@@ -747,6 +748,7 @@ LOG_FILE = "api.log"
 LOG_MAX_BYTES = 2_000_000  # one rotation: days of a healthy loop, and far more than any health window reads
 UNATTRIBUTED = "unattributed"
 HIT, MISS, COOLING = "hit", "miss", "cooling"
+WRITE = "write"   # a call that changes GitHub: not a read, so never a snapshot miss, whatever its outcome (#1328)
 _PASS = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 _LOG_TS = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -822,8 +824,8 @@ def main(argv: list[str]) -> int:
     name = argv[0] if argv else "ghread.py"
     args = argv[1:]
     if args and args[0] == "--log":
-        if len(args) != 5 or args[3] not in (HIT, MISS):
-            sys.stderr.write(f"usage: {name} --log <REST|GraphQL> <route> <hit|miss> <outcome>\n")
+        if len(args) != 5 or args[3] not in (HIT, MISS, WRITE):
+            sys.stderr.write(f"usage: {name} --log <REST|GraphQL> <route> <hit|miss|write> <outcome>\n")
             return _USAGE
         log_call(None, args[2], args[3], args[4], transport=args[1])
         return 0
@@ -834,7 +836,7 @@ def main(argv: list[str]) -> int:
             return _USAGE
         route, method, fields = parsed
         outw = write(route, method=method, fields=fields)
-        log_call(None, route, MISS, outw.kind, transport="REST")   # a write is a REST request, whatever a read of its route uses (#393)
+        log_call(None, route, WRITE, outw.kind, transport="REST")   # a write is a REST request, whatever a read of its route uses (#393)
         if outw.is_done:
             sys.stdout.write(outw.body)
             return 0
