@@ -533,16 +533,24 @@ class BoardBinding:
     def node_state(self, issue):
         """The Status one card carries, read by the one-item REST route in one call (#1300, #1303). None when no id is known
         for the card, or the read is refused, unparsable or names another issue; "" when the card carries no Status. The
-        loop reads GitHub over REST only: the GraphQL quota is shared with every `gh` subcommand."""
+        loop reads GitHub over REST only: the GraphQL quota is shared with every `gh` subcommand.
+
+        The Status field is asked for by id, as the paginated read asks it: a single-select value rides in the answer only
+        when its field is named, and without `fields[]` the route answers the title alone (#1305)."""
         iid = self.item_hints.get(str(issue)) or self.known_ids().get(str(issue))
         if not iid: return None
-        try: d = json.loads(self.api(f"{self.base}/items/{iid}"))
+        try: fid = self.status_field().get("id") or ""
+        except Exception: fid = ""   # a carrier that cannot name the field still gets the read; it answers no Status
+        q = f"?fields[]={fid}" if fid else ""
+        try: d = json.loads(self.api(f"{self.base}/items/{iid}{q}"))
         except (RuntimeError, ValueError): return None
         if not isinstance(d, dict) or str((d.get("content") or {}).get("number", "")) != str(issue) or d.get("isArchived"): return None
         for f in d.get("fields") or []:
             if not isinstance(f, dict) or f.get("name") != "Status": continue
             v = f.get("value")
-            return (v.get("name") if isinstance(v, dict) else v) or ""
+            name = v.get("name") if isinstance(v, dict) else v       # the route answers {name:{raw,html}}; a stub a name
+            if isinstance(name, dict): name = name.get("raw") or name.get("html")
+            return self.state_name(name) if name else ""
         return ""
 
     def read_all(self):

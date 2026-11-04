@@ -91,7 +91,7 @@ def test_the_one_card_read_asks_for_the_status_field_by_id(tmp_path):
                 [{"name": "Status", "id": "F_STATUS", "options": [{"name": {"raw": "Todo"}, "id": "O1"}]}]))
         return SimpleNamespace(returncode=0, stderr="", stdout=json.dumps(
             {"isArchived": False, "content": {"number": 800},
-             "fields": [{"name": "Status", "value": {"name": "Todo"}}]}))
+             "fields": [{"name": "Status", "value": {"name": {"raw": "Todo", "html": "Todo"}}}]}))   # the route's own shape
 
     b = issue_state.BoardBinding("owner", 7, "owner/ariel", run=run, env={"SG_STATE": str(tmp_path)}, state_dir=str(tmp_path))
     (tmp_path / b._known_file).write_text(json.dumps({"800": "PVTI_x"}))
