@@ -888,51 +888,111 @@ def test_the_monitor_draws_a_labelled_bar_and_a_reset_per_subscription(hub):
 THROUGHPUT_NOW = dt.datetime(2026, 10, 20, 23, 0, tzinfo=dt.UTC)
 
 
-def _closing_store(hub, tmp_path, monkeypatch, closed_per_day):
-    """A history store whose cards close so each day ends with the given closed total, the last day being today (#1024)."""
+def _stamp(epoch):
+    return dt.datetime.fromtimestamp(epoch, dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _speed_store(hub, tmp_path, monkeypatch, counts, now=THROUGHPUT_NOW, slot_secs=4 * 3600, store_now=0, name="board"):
+    """A history store whose six rolling slots hold the given closes, oldest slot first and the window last.
+    Each close lands inside its slot, never on a boundary; `store_now` stamps the read."""
     monkeypatch.setenv("TZ", "UTC")
-    monkeypatch.setattr(hub, "BOARD", tmp_path / "board.json")
+    monkeypatch.delenv("SG_SPEED_WINDOW_SECS", raising=False)
+    (tmp_path / name).mkdir(parents=True, exist_ok=True)   # one store per name: the history file is named after the board's folder
+    monkeypatch.setattr(hub, "BOARD", tmp_path / name / "board.json")
     monkeypatch.setattr(hub, "REPO", "x/y")
+    monkeypatch.setattr(hub, "board_cache", {"t": 0, "items": []})
     path = hub._hist.history_path(hub.BOARD, hub.REPO)
-    first = THROUGHPUT_NOW.date() - dt.timedelta(days=len(closed_per_day) - 1)
-    def stamp(day, hour):
-        return dt.datetime.combine(day, dt.time(hour), tzinfo=dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-    for n in range(closed_per_day[-1]):
-        day = next(i for i, total in enumerate(closed_per_day) if total > n)
-        events = [{"t": stamp(first, 0), "type": "added"}, {"t": stamp(first, 0), "type": "status", "status": "Todo"},
-                  {"t": stamp(first + dt.timedelta(days=day), 12), "type": "closed"}]
-        hub._hist.record_issue(path, n + 1, stamp(first, 0), stamp(first, 0), events, True, 0)
+    now_ts, number = now.timestamp(), 0
+    for i, count in enumerate(counts):
+        k = len(counts) - i - 1   # the slot's distance back from now, the window being 0
+        start = now_ts - (k + 1) * slot_secs
+        for j in range(count):
+            stamp = _stamp(start + slot_secs * (j + 1) / (count + 1))
+            number += 1
+            hub._hist.record_issue(path, number, stamp, stamp,
+                                   [{"t": stamp, "type": "added"}, {"t": stamp, "type": "closed"}], True, store_now)
     return path
 
 
-def test_the_speed_row_compares_today_with_the_finished_days(hub, tmp_path, monkeypatch):
-    """Today is partial, so it is never part of the median it is judged against."""
-    days = [0, 2, 6, 10, 14, 16]
-    _closing_store(hub, tmp_path, monkeypatch, days)
-    got = hub.throughput_fact(now=THROUGHPUT_NOW)
-    done = [days[i + 1] - days[i] for i in range(len(days) - 1)]
-    assert got["today"] == done[-1], "the newest day is partial and is the one judged"
-    assert got["median"] == 4 and got["min"] == 2 and got["max"] == 4, (got, done)
+def test_the_speed_window_is_the_last_four_hours_never_the_calendar_day(hub, tmp_path, monkeypatch):
+    """The same pattern laid around two clocks twelve hours apart reads the same window figure."""
+    morning = dt.datetime(2026, 10, 20, 9, 0, tzinfo=dt.UTC)
+    _speed_store(hub, tmp_path, monkeypatch, [0, 0, 0, 0, 0, 6], now=morning, name="morning")
+    assert hub.throughput_fact(now=morning)["window"] == 6
+    _speed_store(hub, tmp_path, monkeypatch, [0, 0, 0, 0, 0, 6], now=THROUGHPUT_NOW, name="night")
+    assert hub.throughput_fact(now=THROUGHPUT_NOW)["window"] == 6
 
 
-def test_the_speed_fact_carries_the_age_of_the_store_it_counted(hub, tmp_path, monkeypatch):
-    """#1193: a frozen store read as a slowdown. The fact names the newest record it counted, so the reader sees the age."""
-    _closing_store(hub, tmp_path, monkeypatch, [0, 2, 6, 10, 14, 16])
+def test_a_close_leaves_the_window_once_the_clock_passes_it(hub, tmp_path, monkeypatch):
+    _speed_store(hub, tmp_path, monkeypatch, [0, 0, 0, 0, 0, 3])
+    assert hub.throughput_fact(now=THROUGHPUT_NOW)["window"] == 3
+    later = THROUGHPUT_NOW + dt.timedelta(hours=4, minutes=1)
+    assert hub.throughput_fact(now=later)["window"] == 0, "a close out of the window still counted"
+
+
+def test_the_speed_fact_reports_six_slots_one_median_and_the_bar_maximum(hub, tmp_path, monkeypatch):
+    """Five available finished slots of 4, 9, 21, 6 and 12 closes with 10 in the window: the median is 9, the bar's
+    maximum is 21, and the window is never part of the median it is judged against."""
+    _speed_store(hub, tmp_path, monkeypatch, [4, 9, 21, 6, 12, 10])
     got = hub.throughput_fact(now=THROUGHPUT_NOW)
-    assert got["as_of"] is None, "the fixture records carry no stamp of their own"
-    monkeypatch.setattr(hub.time, "time", lambda: THROUGHPUT_NOW.timestamp())
+    assert got["window_secs"] == 4 * 3600
+    assert len(got["slots"]) == 6, "the fact does not carry the six rolling slots"
+    assert got["slots"][-1]["n"] == 10 and got["slots"][-1]["finished"] is False, "the newest slot is the window"
+    assert got["available"] == [4, 9, 21, 6, 12], "an availability flag is missing from the slots"
+    assert got["window"] == 10 and got["median"] == 9 and got["min"] == 4 and got["max"] == 21, got
+    assert got["trend"] == "flat", "10 against a median of 9 sits between both thresholds"
+
+
+def test_an_unavailable_slot_enters_neither_the_median_nor_the_maximum(hub, tmp_path, monkeypatch):
+    """The earliest close of the two sources is nine hours old: only the two slots ending after it are available."""
+    _speed_store(hub, tmp_path, monkeypatch, [0, 0, 0, 1, 2, 0])
+    got = hub.throughput_fact(now=THROUGHPUT_NOW)
+    assert got["available"] == [1, 2], (got, "the slots ending before the earliest close must be unavailable")
+    assert got["median"] == 1.5 and got["max"] == 2 and got["min"] == 1, got
+    assert got["trend"] == "down", "a zero window against a positive median reads slowing, not first day"
+
+
+def test_a_zero_median_reads_accelerating_for_a_positive_window_and_steady_for_zero(hub, tmp_path, monkeypatch):
+    """A zero median makes the ratio meaningless: a window above zero is accelerating, a window of zero is steady."""
+    _speed_store(hub, tmp_path, monkeypatch, [0, 0, 0, 0, 0, 3], name="positive")
+    old = _stamp(THROUGHPUT_NOW.timestamp() - 30 * 3600)   # one close behind every slot keeps them available
     path = hub._hist.history_path(hub.BOARD, hub.REPO)
-    hub._hist.record_issue(path, 99, "2026-10-20T22:00:00Z", "2026-10-20T22:00:00Z", [], True,
-                           THROUGHPUT_NOW.timestamp() - 600)
-    got = hub.throughput_fact(now=THROUGHPUT_NOW)
-    assert got["as_of"] == int(THROUGHPUT_NOW.timestamp()) - 600 and got["age_secs"] == 600, got
-
-
-def test_a_speeding_board_reads_up_and_a_slowing_one_reads_down(hub, tmp_path, monkeypatch):
-    _closing_store(hub, tmp_path, monkeypatch, [0, 1, 2, 3, 4, 5, 8, 12, 16])
+    hub._hist.record_issue(path, 99, old, old, [{"t": old, "type": "closed"}], True, 0)
     assert hub.throughput_fact(now=THROUGHPUT_NOW)["trend"] == "up"
-    _closing_store(hub, tmp_path, monkeypatch, [0, 9, 18, 27, 36, 45, 46, 47, 48])
-    assert hub.throughput_fact(now=THROUGHPUT_NOW)["trend"] == "down"
+    _speed_store(hub, tmp_path, monkeypatch, [0, 0, 0, 0, 0, 0], name="zero")
+    path = hub._hist.history_path(hub.BOARD, hub.REPO)
+    hub._hist.record_issue(path, 99, old, old, [{"t": old, "type": "closed"}], True, 0)
+    assert hub.throughput_fact(now=THROUGHPUT_NOW)["trend"] == "flat"
+
+
+def test_the_bar_maximum_is_never_below_the_window_figure(hub, tmp_path, monkeypatch):
+    """A record window fills the bar, so the maximum follows the window above the busiest finished slot."""
+    _speed_store(hub, tmp_path, monkeypatch, [1, 1, 1, 1, 1, 30])
+    got = hub.throughput_fact(now=THROUGHPUT_NOW)
+    assert got["max"] == 30, "the bar's maximum fell below the window it draws"
+    assert got["trend"] == "up"
+
+
+def test_the_speed_age_is_the_oldest_of_the_two_sources(hub, tmp_path, monkeypatch):
+    """#1193: a fresh history stamp must never suppress a stalled board cache, so the fact carries the older read."""
+    now_ts = THROUGHPUT_NOW.timestamp()
+    _speed_store(hub, tmp_path, monkeypatch, [0, 0, 0, 0, 0, 2], store_now=now_ts - 7200)
+    monkeypatch.setattr(hub, "board_cache", {"t": now_ts - 3600,
+                                             "items": [{"n": 9, "s": "closed", "c": "2026-10-20T17:00:00Z"}]})
+    got = hub.throughput_fact(now=THROUGHPUT_NOW)
+    assert got["as_of"] == now_ts - 7200 and got["age_secs"] == 7200, (got, "the newer cache hid the stalled store")
+    monkeypatch.setattr(hub, "board_cache", {"t": now_ts, "items": [{"n": 9, "s": "closed", "c": "2026-10-20T17:00:00Z"}]})
+    assert hub.throughput_fact(now=THROUGHPUT_NOW)["age_secs"] == 7200, "a fresh cache hid the stalled store"
+
+
+def test_the_speed_window_follows_the_environment_override(hub, tmp_path, monkeypatch):
+    """SG_SPEED_WINDOW_SECS moves the window and the slots without a code change."""
+    _speed_store(hub, tmp_path, monkeypatch, [0, 0, 0, 0, 0, 4], slot_secs=3600)
+    monkeypatch.setenv("SG_SPEED_WINDOW_SECS", "3600")
+    got = hub.throughput_fact(now=THROUGHPUT_NOW)
+    assert got["window_secs"] == 3600 and got["window"] == 4, got
+    assert got["slots"][-1]["end"] - got["slots"][-1]["start"] == 3600
+    assert len(got["slots"]) == 6
 
 
 def _speed_text(hub, sp):
@@ -947,23 +1007,21 @@ def _speed_text(hub, sp):
     return re.sub(r"<[^>]+>", " ", out.stdout)
 
 
-def test_the_throughput_row_with_one_day_names_the_wait_and_draws_no_trend(hub, tmp_path, monkeypatch):
-    """One day is one number: the row names the wait for a finished day and draws no trend word."""
-    _closing_store(hub, tmp_path, monkeypatch, [0, 5])
-    text = _speed_text(hub, hub.throughput_fact(now=THROUGHPUT_NOW))
+def test_the_throughput_row_with_no_finished_slot_names_the_wait_and_draws_no_trend(hub):
+    """No finished slot to compare with: the row names the wait for one and draws no trend word."""
+    text = _speed_text(hub, {"window": 5, "today": 5, "median": None, "min": None, "max": 5, "trend": None})
     assert "steady" not in text and "accelerating" not in text and "slowing" not in text, text
     assert "first day" in text, text
     assert re.search(r"5\s+cards closed today", text), text
 
 
-def test_the_throughput_row_with_several_days_names_the_trend_it_compared(hub, tmp_path, monkeypatch):
-    """The trend word follows the finished days compared, and the unit says what the number is."""
-    _closing_store(hub, tmp_path, monkeypatch, [0, 1, 2, 3, 4, 5, 8, 12, 16])
-    up = _speed_text(hub, hub.throughput_fact(now=THROUGHPUT_NOW))
+def test_the_throughput_row_names_the_trend_it_compared(hub):
+    """The trend word follows the median the screen draws, and the unit says what the number is."""
+    up = _speed_text(hub, {"window": 10, "today": 10, "median": 9, "min": 4, "max": 21, "trend": "up"})
     assert "accelerating" in up and "first day" not in up, up
     assert "cards closed today" in up and "per day" not in up, up
-    _closing_store(hub, tmp_path, monkeypatch, [0, 9, 18, 27, 36, 45, 46, 47, 48])
-    assert "slowing" in _speed_text(hub, hub.throughput_fact(now=THROUGHPUT_NOW))
+    down = _speed_text(hub, {"window": 2, "today": 2, "median": 9, "min": 4, "max": 21, "trend": "down"})
+    assert "slowing" in down, down
 
 
 def test_no_history_reads_no_speed_and_the_page_draws_no_fake_zero(hub):
@@ -971,14 +1029,13 @@ def test_no_history_reads_no_speed_and_the_page_draws_no_fake_zero(hub):
     assert "no history yet" in hub.PAGE
 
 
-def test_todays_count_follows_the_board_cache_not_a_quiet_history_store(hub):
-    """#1193, owner: a store that stops moving must not freeze the number. A card the cache shows closed today counts."""
-    import datetime as dt
+def test_the_window_count_follows_the_board_cache_not_a_quiet_history_store(hub):
+    """#1193, owner: a store that stops moving must not freeze the number. A card the cache shows closed counts."""
     now = dt.datetime(2026, 11, 2, 18, 0, tzinfo=dt.UTC).timestamp()
     items = [{"n": 1, "s": "closed", "c": "2026-11-02T17:00:00Z"},
              {"n": 2, "s": "closed", "c": "2026-11-01T23:00:00Z"},
              {"n": 3, "s": "open"},
              {"n": 4, "s": "closed"}]
-    assert hub.closed_today(items, now) == 1
-    assert hub.closed_today([], now) is None
+    assert hub.closed_since(items, now, 4 * 3600) == 1
+    assert hub.closed_since([], now, 4 * 3600) is None
 

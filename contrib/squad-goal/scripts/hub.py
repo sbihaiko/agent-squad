@@ -2242,46 +2242,86 @@ def spec_progress(items, moves=None, window=None, now=None):
     pct = done * 100 // total
     return dict(out, pct=pct, frac=done / total, value=f"{done}/{total} · {pct}%", state="ok" if done == total else "info", bar=True)
 
-DAYS_SPEED = 14   # the finished days the throughput row compares today with (two weeks)
+SPEED_SLOTS = 6                 # the rolling slots the window is compared with, the window itself being the newest
+SPEED_WINDOW_SECS = 4 * 3600    # the window's first value; SG_SPEED_WINDOW_SECS moves it without a code change
 
-def closed_today(items, now_ts):
-    """How many cards the board cache shows closed since local midnight, or None when it holds no card. A closed card names
-    its own close stamp (`c`), so the count never waits for a timeline read."""
+def speed_window_secs():
+    """The window in seconds: the constant, or SG_SPEED_WINDOW_SECS when it names a positive whole number. Read at call
+    time, so a changed setting moves the next fact and needs no restart."""
+    try: v = int(os.environ.get("SG_SPEED_WINDOW_SECS") or 0)
+    except ValueError: return SPEED_WINDOW_SECS
+    return v if v > 0 else SPEED_WINDOW_SECS
+
+def _close_instant(value):
+    """One close stamp as an epoch, or None when the record carries no readable stamp."""
+    try: return dt.datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError): return None
+
+def close_stamps(store, items=None):
+    """Every close stamp the two sources carry: the history store's `closed` events and the board cache's `c` stamps."""
+    out = []
+    for rec in store.values():
+        for e in rec.get("events") or []:
+            if e.get("type") != "closed": continue
+            ts = _close_instant(e.get("t"))
+            if ts is not None: out.append(ts)
+    for i in items or []:
+        if i.get("s") != "closed": continue
+        ts = _close_instant(i.get("c"))
+        if ts is not None: out.append(ts)
+    return out
+
+def closed_since(items, now_ts, window_secs):
+    """How many cards the board cache shows closed inside the window, or None when it holds no card. A closed card names
+    its own close stamp (`c`), so the window never waits for a timeline read (#1193)."""
     if not items: return None
-    midnight = dt.datetime.fromtimestamp(now_ts, zoneinfo.ZoneInfo(day_zone())).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-    out = 0
+    since, out = now_ts - window_secs, 0
     for i in items:
         if i.get("s") != "closed": continue
-        c = str(i.get("c") or "")
-        if not c: continue
-        try: when = dt.datetime.fromisoformat(c.replace("Z", "+00:00")).timestamp()
-        except ValueError: continue
-        if when >= midnight: out += 1
+        ts = _close_instant(i.get("c"))
+        if ts is not None and since <= ts <= now_ts: out += 1
     return out
 
 def throughput_fact(now=None):
-    """How fast the board is closing cards: the closed count per local day from the history store, the newest day partial.
-    `done` holds the finished days' figures, so today is compared with them and never with itself."""
+    """How fast the board is closing cards over the last window: its close count, the six rolling slots it is compared
+    with (the newest is the window), which finished slots are available, one median and the bar maximum over those, the
+    trend word and the age of the oldest source read. The window is the last four hours back from the sampler's clock,
+    never a calendar day.
+
+    A finished slot is unavailable when it ends before the earliest close stamp of the two sources; it enters neither the
+    median nor the maximum. A slot with no close inside an available span is a measured zero. The window's own figure
+    comes from the board cache, as the daily figure did, and falls back to the store when the hub holds no cache."""
     store = _hist.load_store(_hist.history_path(BOARD, REPO))
-    cfd = _cfd.cfd([_hist.intervals(rec.get("events") or []) for rec in store.values()], ORDER, zone=day_zone(), now=now)
-    pts = [p for p in cfd["points"] if p["throughput"] is not None]
-    if not pts: return None
-    today = pts[-1]["throughput"]; done = [p["throughput"] for p in pts[:-1]][-DAYS_SPEED:]
-    # (#1193, owner) The store moves only when a timeline is read, so a quiet board froze the number while cards kept closing.
-    # Today's figure comes from the board cache the hub keeps fresh on its own; the finished days still come from the store.
+    items = board_cache.get("items") or []
+    if not store and not items: return None
     now_ts = now.timestamp() if hasattr(now, "timestamp") else (time.time() if now is None else now)
-    live_today = closed_today(board_cache.get("items") or [], now_ts)
-    if live_today is not None: today = live_today
-    # The fact carries the stamp of what it counted, so a reader sees the age of the number instead of trusting it.
-    newest = max((r.get("t") or 0 for r in store.values()), default=0)
-    if live_today is not None: newest = max(newest, board_cache.get("t") or 0)
-    age = now_ts - newest if newest else None
-    if not done: return {"today": today, "median": None, "min": None, "max": None, "trend": None, "days": [],
-                         "as_of": newest or None, "age_secs": age}
-    med = st.median(done); recent = done[-3:]; avg = sum(recent) / len(recent)
-    trend = "up" if med and avg > med * 1.2 else "down" if med and avg < med * 0.8 else "flat"
-    return {"today": today, "median": med, "min": min(done), "max": max(done), "trend": trend, "days": done,
-            "as_of": newest or None, "age_secs": age}
+    w = speed_window_secs()
+    stamps = close_stamps(store, items)
+    earliest = min(stamps) if stamps else None
+    window_n = closed_since(items, now_ts, w)
+    if window_n is None: window_n = sum(1 for ts in stamps if now_ts - w <= ts <= now_ts)
+    slots = []
+    for k in range(SPEED_SLOTS - 1, -1, -1):   # oldest first, the newest slot being the window
+        end, start = now_ts - k * w, now_ts - (k + 1) * w
+        if not k:
+            slots.append({"start": start, "end": end, "n": window_n, "finished": False, "available": None})
+            continue
+        slots.append({"start": start, "end": end, "n": sum(1 for ts in stamps if start <= ts < end),
+                      "finished": True, "available": earliest is not None and end >= earliest})
+    avail = [s["n"] for s in slots if s["finished"] and s["available"]]
+    median = round(st.median(avail), 1) if avail else None
+    if median is None: trend = None
+    elif median > 0: trend = "up" if window_n > median * 1.2 else "down" if window_n < median * 0.8 else "flat"
+    else: trend = "up" if window_n > 0 else "flat"   # a ratio at a zero median has no meaning
+    # One age for the two sources, the older of them: a fresh history stamp never hides a stalled board cache. The store
+    # moves only when a timeline is read, and the cache is the one the loop keeps fresh on its own (#1193).
+    reads = ([max((r.get("t") or 0 for r in store.values()), default=0)] if store else []) + \
+            ([board_cache.get("t") or 0] if items else [])
+    oldest = min((r for r in reads if r), default=0) or None
+    return {"window_secs": w, "window": window_n, "today": window_n,   # `today` is the key the page draws until #1363 moves the card
+            "slots": slots, "available": avail, "median": median, "min": min(avail) if avail else None,
+            "max": max(avail + [window_n]), "trend": trend,
+            "as_of": oldest, "age_secs": now_ts - oldest if oldest else None}
 
 def subs_gauges(now=None):
     """Each subscription's weekly window for the Monitor: its used share and when it resets, or why there is no reading.
