@@ -274,8 +274,9 @@ def test_the_zoom_url_the_page_builds_is_the_route_it_reads(hub):  # noqa: F811
         return datetime.fromisoformat(asked[key][0].replace("Z", "+00:00"))
 
     frm, to = moment("from"), moment("to")
-    assert abs(((to - frm) - 2 * (end - start)).total_seconds()) < 0.001, (asked, url)   # the window doubles
-    assert abs(((frm - start) + (to - end)).total_seconds()) < 0.001, (asked, url)   # around the same middle
+    # Date truncates each endpoint to its 1ms resolution, so each comparison may carry up to 1ms of rounding.
+    assert abs(((to - frm) - 2 * (end - start)).total_seconds()) <= 0.002, (asked, url)   # the window doubles
+    assert abs(((frm - start) + (to - end)).total_seconds()) <= 0.002, (asked, url)   # around the same middle
     assert asked["scale"] == ["log"] and asked["a"] == [hub.LEAD_START], (asked, url)
     answer = hub.lead_zoom(urllib.parse.urlsplit(url).query)   # the exact query the page sends, through the route's gate
     assert "error" not in answer, answer
