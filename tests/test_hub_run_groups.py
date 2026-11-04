@@ -92,6 +92,19 @@ def test_the_answer_carries_one_entry_per_group_with_its_text_title_and_emptines
     assert [g["empty"] for g in groups[2:]] == [True] * 5
 
 
+def test_the_answer_names_each_rows_band_and_leaves_the_bare_array_alone(hub, monkeypatch):
+    """The phone places a row in its group from the answer's own `band` (#1337): it never rebuilds the ladder. The rows are
+    copies, so the bare /api/runs array is never given a page's field."""
+    live = dict(LIVE)
+    ended = dict(HOUR_2)
+    cc = {"id": "childcc", "kind": "childcc", "state": "waiting", "live": False, "rank": 0, "age": 4000, "spend": 0, "agents": 0}
+    monkeypatch.setattr(hub, "run_list", lambda: [live, ended, cc])
+    monkeypatch.setattr(hub, "loop_caps", lambda: {"runs": 6, "children": 20})
+    rows = hub.runs_answer()["runs"]
+    assert [r["band"] for r in rows] == ["running", "2h", "running"], "a band and the pass's own WORKERS group"
+    assert "band" not in live and "band" not in ended, "the bare array's rows were written by the page's answer"
+
+
 def test_a_changed_cap_shows_after_one_answer(hub, monkeypatch):
     """The caps are read on every answer, not substituted at page load (#1277)."""
     monkeypatch.setattr(hub, "run_list", lambda: [LIVE])

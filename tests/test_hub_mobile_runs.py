@@ -1,5 +1,9 @@
 """The mobile Runs tab (#830): live runs first, then today's ended runs, a full-screen run view, an edge swipe back and a pull
-down refresh. The gesture rules run under node alone, with no DOM and no server."""
+down refresh. The gesture rules run under node alone, with no DOM and no server.
+
+The run history at the bottom of the tab (#1337) draws the groups the opted-in answer carries, as the desktop tab does
+(#1277): the page boots under node over the stub DOM of the move tests, and the words are read back as the owner sees them.
+"""
 import json
 import pathlib
 import re
@@ -7,6 +11,9 @@ import shutil
 import subprocess
 
 import pytest
+
+import tests.test_hub_mobile_move as move
+from tests.test_hub_mobile_move import hub  # noqa: F401  (hub is a fixture)
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib/squad-goal/scripts"
@@ -64,9 +71,10 @@ def test_live_runs_are_listed_before_the_ended_runs():
     assert live > 0 and ended > live
 
 
-def test_the_runs_tab_reads_the_run_list_for_live_runs_and_the_ended_route_for_today():
+def test_the_runs_tab_reads_the_opted_in_run_list_and_the_ended_route_for_today():
+    """The history groups ride the query the desktop tab asks (#1277, #1337); the ended route is the same read as ever."""
     script = page()
-    assert '"/api/runs"' in script
+    assert '"/api/runs?groups=1"' in script
     assert '"/api/ended"' in script
 
 
@@ -82,3 +90,60 @@ def test_the_run_view_holds_an_edge_strip_that_takes_the_back_swipe():
 
 def test_the_runs_code_holds_no_run_state_rule():
     assert not re.search(r"\.state\s*[!=]==?", page())
+
+
+# --- the run history at the bottom of the tab (#1337): the phone draws the groups the opted-in answer carries ---
+
+LIVE_ROW = {"id": "run-20261104-101010-aaaa", "label": "implement #7", "state": "running", "badge": "running",
+            "rank": 0, "live": True, "age": 12, "spend": 1.25, "agents": 2, "kind": "code", "running": True}
+HOUR_ROW = {"id": "run-20261104-090000-bbbb", "label": "fix #9", "state": "completed", "badge": "done",
+            "rank": 1, "live": False, "age": 2500, "spend": 3.4, "agents": 0, "kind": "code", "running": False}
+TWO_HOUR_ROW = dict(HOUR_ROW, id="run-20261104-080000-cccc", label="fix #11", age=4000, spend=0.5)
+CAPS = {"runs": 6, "children": 20}
+
+DRIVER = """
+  show("runs"); await loadRuns();
+  const h = $("runs-history"), ghs = h.querySelectorAll(".gh");
+  return { hidden: h.hidden, head: $("runs-history-h").hidden, text: h.textContent,
+           keys: ghs.map(e => e.dataset.g),
+           span: ghs[0] ? ghs[0].querySelector(".sr").textContent : null,
+           title: ghs[0] ? ghs[0].getAttribute("title") : null,
+           live: $("runs-live").textContent };
+"""
+
+
+@pytest.mark.node_bound
+def test_the_phone_draws_the_workers_header_with_its_occupancy(hub):  # noqa: F811
+    """The phone reads the answer's own group entries: the WORKERS label, the text the hub built and its spend tooltip."""
+    rows = [dict(LIVE_ROW, band="running"), dict(HOUR_ROW, band="1h")]
+    answer = {"runs": rows, "groups": hub.run_groups([LIVE_ROW, HOUR_ROW], CAPS)}
+    out = move.run_page(hub.MOBILE_PAGE, DRIVER,
+                        routes={"/api/runs": [{"body": json.dumps(answer)}], "/api/ended": [{"body": "[]"}]})
+    assert not out["hidden"] and not out["head"], "the run history is drawn at the bottom of the tab"
+    assert out["keys"] == ["running", "1h"], "a filled band draws its header, in the answer's ladder order"
+    assert "WORKERS" in out["text"]
+    assert out["span"] == "RUNS 1/6 · AGENTS 2/20", "the occupancy the hub built is not on the WORKERS header"
+    assert out["title"] == "$1.25", "the header carries the group's spend as its tooltip"
+    assert "implement #7" in out["live"], "Live still lists the run it always did"
+
+
+@pytest.mark.node_bound
+def test_the_phone_folds_the_empty_age_bands_into_one_muted_line(hub):  # noqa: F811
+    """Six bands of 0 · $0.00 never push the rows down: the hub marks a band empty and the phone folds it (#1277)."""
+    rows = [dict(TWO_HOUR_ROW, band="2h")]
+    answer = {"runs": rows, "groups": hub.run_groups([TWO_HOUR_ROW], CAPS)}
+    out = move.run_page(hub.MOBILE_PAGE, DRIVER,
+                        routes={"/api/runs": [{"body": json.dumps(answer)}], "/api/ended": [{"body": "[]"}]})
+    assert out["keys"] == ["running", "2h"], "an empty band draws no header"
+    assert "0 · $0.00" not in out["text"], "an empty band still draws a zero row"
+    assert "no runs in ≤ 1 h · 2–4 h · 4–8 h · 8–24 h · 24 h+ (days)" in out["text"], "the empty bands are named once"
+
+
+@pytest.mark.node_bound
+def test_an_old_hub_array_keeps_the_list_and_draws_no_history(hub):  # noqa: F811
+    """A hub older than the page ignores the query and answers the bare array: the list still reads (#1277)."""
+    out = move.run_page(hub.MOBILE_PAGE, DRIVER,
+                        routes={"/api/runs": [{"body": json.dumps([LIVE_ROW])}], "/api/ended": [{"body": "[]"}]})
+    assert "implement #7" in out["live"], "an old hub's array is read as the runs, never as an object with no `runs`"
+    assert out["hidden"] and out["head"], "the history stays honestly empty instead of showing a stale group"
+    assert re.search(r"\[hidden\]\.hist\{display:none\}", page()), "the grid's own display rule outranks hidden"
