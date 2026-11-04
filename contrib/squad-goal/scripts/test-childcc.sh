@@ -41,7 +41,7 @@ run_def refs c "Every commit message carries the line \`Refs #1493\` on its own 
 run_def cluster c "CHILD — GitHub issue(s) 5201, 5202, 5203 (work in the worktree the run gives you)." pass
 printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}}' > "$T/issues-open.json"
 export SG_SQUAD=$(cd "$(dirname "$src")/../../.." && pwd) SQUAD_CAPS_DIR=$T/caps   # a review takes a review slot (caps.reviews): a throwaway budget, this repository's squad.caps
-export GH_LOG=$T/gh.log GH_ISSUES_OPEN=$T/issues-open.json; export GH_STATE_FAIL=$T/gh.statefail SG_STATE=$T/st SG_REPO=x/y SG_OWNER=x SG_PROJECT=4 PATH="$T/bin:$PATH" GH_NUMS="2:Todo 3:Closed 4:In_Progress 5101:Todo 5104:Code_Complete 5105:Doing"
+export GH_LOG=$T/gh.log GH_ISSUES_OPEN=$T/issues-open.json; export GH_STATE_FAIL=$T/gh.statefail SG_STATE=$T/st SG_REPO=x/y SG_OWNER=x SG_PROJECT=4 PATH="$T/bin:$PATH" GH_NUMS="2:Todo 3:Closed 4:In_Progress 5101:Todo 5104:Code_Complete 5105:Doing 5106:Doing 5107:Doing"
 cp "$T/childcc.py" "$T/childcc.py.run"; sed -i.bak "s#^board = .*#board = '$T/board.sh'#" "$T/childcc.py.run"
 out=$(cd "$T/co" && python3 "$T/childcc.py.run" 2>&1)
 echo "$out" | tail -20 >&2
@@ -103,17 +103,42 @@ run cut 5102 n; printf 'CHILD - GitHub issue #5102\n' > "$T/co/runs/cut/request.
 out=$(pass cut)
 grep -q ' 5102$' "$T/moves" 2>/dev/null && ko "a child of a run with no wave reads Code Complete: $out" || ok "a child of a run with no wave is not moved to Code Complete"
 echo "$out" | /usr/bin/grep -q 'WAVE-SALVAGE #5102' && ok "a child of a run with no wave is named on a salvage line" || ko "no salvage line for the child: $out"
-# A finished run that cut no wave (#1349): its child's commits reach no remote branch, so the child is not marked done and
-# skipped. It is requeued with the reason, and its issue goes back to the queue. A claimed card ("Doing") is backfilled as
-# "In Progress" is, never named past the backfill.
-run nw 5104 v; wtree nw; : > "$WAVE_CALLS"; rm -f "$T/moves"
-out=$(pass nw)
-echo "$out" | /usr/bin/grep -q 'CHILD NO-WAVE REQUEUE #5104' && ok "a finished child of a run with no wave is requeued" || ko "no-wave child not requeued: $out"
-grep -q '^requeue 5104 ' "$WAVE_CALLS" && ok "the no-wave child is requeued through wave.sh" || ko "no requeue call: $(cat "$WAVE_CALLS")"
-echo "$out" | /usr/bin/grep -q 'CHILDCC SKIP #5104' && ko "a no-wave child is skipped silently: $out" || ok "a no-wave child is not skipped"
-run dg 5105 v; wtree dg; : > "$WAVE_CALLS"
-out=$(pass dg)
-echo "$out" | /usr/bin/grep -q 'past the backfill' && ko "a Doing card with no wave is named past the backfill: $out" || ok "a Doing card with no wave is backfilled, not skipped"
+# A finished run that cut no wave (#1349): its child's commits reach no remote branch, so they are salvaged: the child's HEAD is
+# pushed to fix/<n>-salvage-<run> on its origin, for review and landing, whatever the card says. A child with nothing past
+# origin/dev is requeued with the reason. A failed push leaves no marker, so the next pass tries it again.
+mk_origin() { # run [ahead]: the run's child worktree gets a bare origin whose dev names its HEAD; one more commit when ahead is 1
+  local w="$T/co/runs/$1/ws/target-c" o="$T/origin-$1.git"
+  /usr/bin/git init -q --bare "$o"; /usr/bin/git -C "$w" remote add origin "$o"
+  /usr/bin/git -C "$w" push -q origin HEAD:refs/heads/dev
+  [ "${2:-1}" = 1 ] && /usr/bin/git -C "$w" -c user.email=a@b -c user.name=t commit -q --allow-empty -m "child work"; }
+salv_branch() { /usr/bin/git -C "$T/origin-$1.git" rev-parse --verify -q "refs/heads/fix/$2-salvage-$1" >/dev/null && echo yes || echo no; }
+for sp in "nw 5104" "dg 5105"; do set -- $sp   # a Code Complete card and a Doing card, both finished with no wave
+  run $1 $2 v; mkdir -p "$T/co/runs/$1"; printf 'CHILD — GitHub issue(s) %s (work in the worktree the run gives you)\n' "$2" > "$T/co/runs/$1/request.txt"
+  wtree $1; mk_origin $1; : > "$WAVE_CALLS"; rm -f "$T/moves"
+  out=$(pass $1)
+  sha=$(/usr/bin/git -C "$T/co/runs/$1/ws/target-c" rev-parse HEAD)
+  [ "$(salv_branch $1 $2)" = yes ] && [ "$(/usr/bin/git -C "$T/origin-$1.git" rev-parse "refs/heads/fix/$2-salvage-$1")" = "$sha" ] \
+    && ok "a finished no-wave child (#$2) is pushed to its salvage branch" || ko "no salvage branch for #$2: $out"
+  echo "$out" | /usr/bin/grep -q "CHILD NO-WAVE SALVAGE #$2 ($1 c): pushed ${sha:0:9} to fix/$2-salvage-$1" && ok "the salvage line names the sha and the branch (#$2)" || ko "no salvage line for #$2: $out"
+  [ -e "$T/st/auto/cc-$1-c" ] && ok "a salvaged child gets its marker (#$2)" || ko "no marker after the salvage (#$2)"
+  [ ! -s "$WAVE_CALLS" ] && ok "a salvaged child is not entered or requeued (#$2)" || ko "wave calls for a salvaged child: $(cat "$WAVE_CALLS")"
+  [ -e "$T/moves" ] && grep -q " $2\$" "$T/moves" && ko "a salvaged child moved its card (#$2)" || ok "a salvaged child moves no card (#$2)"
+done
+# A push that fails is no marker and no requeue: the child is tried again on the next pass (#1349).
+run pf 5106 v; mkdir -p "$T/co/runs/pf"; printf 'CHILD — GitHub issue(s) 5106 (work in the worktree the run gives you)\n' > "$T/co/runs/pf/request.txt"
+wtree pf; mk_origin pf; /usr/bin/git -C "$T/co/runs/pf/ws/target-c" remote set-url origin "$T/gone-pf.git"; : > "$WAVE_CALLS"
+out=$(pass pf)
+echo "$out" | /usr/bin/grep -q "CHILD NO-WAVE SALVAGE FAILED #5106" && ok "a failed salvage push is named" || ko "failed push not named: $out"
+[ ! -e "$T/st/auto/cc-pf-c" ] && ok "a failed salvage push writes no done marker" || ko "marker after a failed push"
+! /usr/bin/grep -q '^requeue 5106' "$WAVE_CALLS" && ok "a failed salvage push is not requeued" || ko "requeued on a failed push: $(cat "$WAVE_CALLS")"
+# A no-wave child with nothing past origin/dev has nothing to salvage: it is requeued with the reason, and the requeue is
+# loop-caused (wave.sh loop_caused), so it does not count toward the issue's cap.
+run nq 5107 v; mkdir -p "$T/co/runs/nq"; printf 'CHILD — GitHub issue(s) 5107 (work in the worktree the run gives you)\n' > "$T/co/runs/nq/request.txt"
+wtree nq; mk_origin nq 0; : > "$WAVE_CALLS"
+out=$(pass nq)
+echo "$out" | /usr/bin/grep -q 'CHILD NO-WAVE REQUEUE #5107' && ok "a no-wave child with nothing to salvage is requeued" || ko "nothing-to-salvage child not requeued: $out"
+grep -q '^requeue 5107 .*cut no wave' "$WAVE_CALLS" && ok "the requeue names the no-wave cause" || ko "no requeue call: $(cat "$WAVE_CALLS")"
+[ -e "$T/st/auto/cc-nq-c" ] && ok "a requeued no-wave child gets its marker" || ko "no marker after the requeue"
 # A failed read of the issue's state (rate limit, refusal, network) is no answer (#848): childcc wrote the permanent done
 # marker on it and said nothing, so the run's wave refused the child on every cycle. The read that fails writes no marker,
 # logs the reason, and leaves the child (exit 3) until the read works, when the child enters.
