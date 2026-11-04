@@ -655,3 +655,22 @@ def test_the_range_carries_its_printed_text(lt):
 
     assert result["range"]["text"] == "Oct 31 to Nov 30 UTC"
     assert zoomed["range"]["text"] == "Nov 27 00:00 to Nov 28 00:00 UTC"
+
+
+# Re-anchored (#1334): the ladder's long-duration branches are asserted, not only its 2h step.
+def test_a_long_linear_view_reaches_its_ceiling_on_a_round_step(lt):
+    chart = _chart(lt, [_closed(1, 650)])
+
+    assert chart["axis"] == "linear"
+    tick_hours = [tick["hours"] for tick in chart["ticks"]]
+    assert 4 <= len(tick_hours) <= 6, f"a linear view serves 4 to 6 y ticks: {tick_hours}"
+    steps = {round(b - a, 9) for a, b in zip(tick_hours, tick_hours[1:], strict=False)}
+    assert steps == {168.0}, f"a 27-day view does not fall on the 7-day step: {tick_hours}"
+    assert tick_hours[-1] >= 650.0, "the last tick does not reach the data's ceiling"
+
+
+def test_the_range_text_names_both_years_when_the_view_crosses_one(lt):
+    chart = _chart(lt, [_closed(1, 5)], start=datetime(2026, 12, 30, tzinfo=UTC),
+                   end=datetime(2027, 1, 3, tzinfo=UTC))
+
+    assert chart["range"]["text"] == "Dec 30, 2026 to Jan 3, 2027 UTC"

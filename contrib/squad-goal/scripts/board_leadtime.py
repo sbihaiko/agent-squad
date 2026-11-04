@@ -209,16 +209,17 @@ def _clamp(v):
 
 
 def _linear_ticks(max_hours):
-    """The y axis of a linear view: 0 to the round top at one interval from LINEAR_TICKS, 4 to 6 ticks (#1334)."""
+    """The y axis of a linear view: 0 to a round top at one interval from LINEAR_TICKS, 4 to 6 ticks (#1334).
+    When no ladder entry yields 3 to 5 intervals, the longest step still reaches the ceiling on as many as it takes."""
     ceiling = max(max_hours, 0.0)
-    step, count = 5 / 60, 3
     for minutes in LINEAR_TICKS:
         size = minutes / 60
-        ticks = math.ceil(ceiling / size) if ceiling else 0
-        if 3 <= ticks <= 5:
-            step, count = size, ticks
-            break
-    return step * count, [(step * k, _duration(step * k)) for k in range(count + 1)]
+        count = math.ceil(ceiling / size) if ceiling else 0
+        if 3 <= count <= 5:
+            return size * count, [(size * k, _duration(size * k)) for k in range(count + 1)]
+    size = LINEAR_TICKS[-1] / 60
+    count = max(1, math.ceil(ceiling / size))
+    return size * count, [(size * k, _duration(size * k)) for k in range(count + 1)]
 
 
 def _clusters(dots, axis="x"):
@@ -247,9 +248,12 @@ def _band(dots, axis="x"):
 
 
 def _range_text(start, end):
-    """The printed range: the hour and minute of a short view, the two dates of a long one (#1334)."""
+    """The printed range: the hour and minute of a short view, the two dates of a long one (#1334); a range that
+    crosses a year names both years, so no end reads as the same year as the other."""
     if (end - start) <= SHORT_RANGE:
         return f"{_stamp(start)} to {_stamp(end)} UTC"
+    if start.year != end.year:
+        return f"{start:%b} {start.day}, {start.year} to {end:%b} {end.day}, {end.year} UTC"
     return f"{start:%b} {start.day} to {end:%b} {end.day} UTC"
 
 

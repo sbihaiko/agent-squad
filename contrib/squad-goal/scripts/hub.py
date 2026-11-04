@@ -5623,9 +5623,13 @@ let LT_FRAME;const ltX=x=>ltP+x*LT_FRAME.width,ltY=y=>ltP+LT_FRAME.height-y*LT_F
 const ltLine=(v,col,dash)=>v&&v.y!=null?`<line x1=${ltP} x2=${ltP+LT_FRAME.width} y1=${ltY(v.y)} y2=${ltY(v.y)} stroke="${col}" stroke-width=2${dash?` stroke-dasharray="${dash}"`:""}><title>${esc(v.label)} ${esc(v.text)}</title></line><text x=${ltP+LT_FRAME.width-3} y=${ltY(v.y)-5} text-anchor=end fill="${col}">${esc(v.label)} ${esc(v.text)}</text>`:"";   // the line labels itself at its right end, in its own colour (#1304)
 const ltKM=c=>c.survival?`<p class="fnote ltkm">${esc(c.survival.text)} · ${esc(c.wip.text)}${c.gate?` · ${esc(c.gate.label)} ${esc(c.gate.text)}`:""}</p>`:"";   // the hub's survival reading, work in progress and gate time as one text metric, in its words (#1250, #1304)
 const ltV=v=>v?esc(v.text):"?";   // a summary value's text, or a question mark where it is not estimable
+const LT_MONTHS=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const ltDay=s=>{const d=new Date(s);return `${LT_MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}`};
+const ltStamp=s=>{const d=new Date(s);return `${ltDay(s)} ${String(d.getUTCHours()).padStart(2,"0")}:${String(d.getUTCMinutes()).padStart(2,"0")}`};
+const ltRangeText=r=>{if(!r)return "";if(r.text)return r.text;const a=Date.parse(r.start),b=Date.parse(r.end);if(!(a<b))return "";return b-a<=3*864e5?`${ltStamp(r.start)} to ${ltStamp(r.end)} UTC`:`${ltDay(r.start)} to ${ltDay(r.end)} UTC`};   // a payload's own text, or the range its ends name (#1334)
 const ltChart=(c,cov)=>{LT_FRAME=c.plot_frame;const n=c.dots.length,base=ltP+LT_FRAME.height,ink="var(--chart-axis)",mute="var(--chart-axis)";   // one axis style: tick text and the title in mute, never a mark's ink (#1141)
   const grp=(name,body)=>`<span class=ltgrp><b class=ltgl>${name}</b> ${body}</span>`,backTo=LT_TF.find(([k])=>k===LT.tf)[1];
-  const fitMode=LT.win==="fit"&&!!c.fit,printed=fitMode?c.fit.text:c.range.text;   // the range control switches what this one payload holds (#1334)
+  const fitMode=LT.win==="fit"&&!!c.fit,printed=fitMode?ltRangeText(c.fit):ltRangeText(c.range);   // the range control switches what this one payload holds (#1334)
   const ctl=`<p class=fhead>`+
       `<label>Timeframe <select id=ltr>${LT_TF.map(([k,v])=>`<option value=${k}${LT.tf===k?" selected":""}>${v}</option>`).join("")}</select></label> `+
       `<label>Type <select id=lty>${LT_TYPES.map(([k,v])=>`<option value=${k}${LT.ty===k?" selected":""}>${v}</option>`).join("")}</select></label>`+
@@ -5640,7 +5644,8 @@ const ltChart=(c,cov)=>{LT_FRAME=c.plot_frame;const n=c.dots.length,base=ltP+LT_
     `<p class=fnote>${esc(c.text)}</p>${coverNote(cov)}</details>`;   // the coverage, plotted-cards and ordering notes stay behind More (#1145)
   LT.rng=c.range;
   if(!n)return ctl+`<p class=fnote>no closed card in this timeframe · ${ltExOf(c)}</p>`+ltKM(c);
-  const bp=LT.band?(fitMode&&c.band&&c.band.fit?c.band.fit.polygon:c.band&&c.band.polygon):null,eX=d=>fitMode&&d.xf!=null?d.xf:d.x;
+  const eX=d=>fitMode&&d.xf!=null?d.xf:d.x;   // the x source of every mark in this view (#1334)
+  const bp=!LT.band||!c.band?null:(fitMode&&c.band.fit&&c.dots.every(d=>d.xf!=null)?c.band.fit.polygon:[...c.dots.map(d=>({x:eX(d),y:d.rolling.y_high})),...c.dots.slice().reverse().map(d=>({x:eX(d),y:d.rolling.y_low}))]);   // the band takes the same x as the marks, per dot, never the fit polygon over a mixed payload (#1334)
   const band=bp?`<polygon points="${bp.map(p=>`${ltX(p.x)},${ltY(p.y)}`).join(" ")}" fill="var(--chart-series-3)" fill-opacity=".28"><title>Standard deviation</title></polygon>`:"";   // the band hides by default; when asked for, it is the hub's polygon (#1304, #1334)
   const roll=`<polyline fill=none stroke="var(--chart-bar)" stroke-width=2 points="${c.dots.map(d=>`${ltX(eX(d))},${ltY(d.rolling.y)}`).join(" ")}"><title>Rolling mean</title></polyline>`;   // the trend keeps its chart accent (#1146)
   const ys=c.ticks.map(t=>`<line x1=${ltP-4} y1=${ltY(t.y)} x2=${ltP} y2=${ltY(t.y)} stroke=${mute}></line><text x=${ltP-7} y=${ltY(t.y)+4} text-anchor=end fill=${ink}>${esc(t.text)}</text>`).join("");
@@ -5657,11 +5662,11 @@ const ltChart=(c,cov)=>{LT_FRAME=c.plot_frame;const n=c.dots.length,base=ltP+LT_
   const pk=LT.pick!=null&&c.clusters[LT.pick]?c.clusters[LT.pick]:null;
   const rows=pk?`<table class=mtab><thead><tr><th>Issue</th><th>Title</th><th>Elapsed</th><th>Closed</th></tr></thead><tbody>${pk.dots.map(d=>`<tr data-o=${d.n} style="cursor:pointer"><td>#${d.n}</td><td>${esc(d.title)}</td><td>${esc(d.text)}</td><td>${esc(d.closed)}</td></tr>`).join("")}</tbody></table>`:"";   // the page's one table rule (#1146)
   return ctl+legend+`<svg data-lt viewBox="0 0 ${LT_FRAME.width+2*ltP} ${LT_FRAME.height+2*ltP}">${axes}${ys}${xs}${band}${roll}${lines}${stack}${dots}</svg>`+rows;};
-const flowLead=l=>{const S=l.summary,c=LT.zc||(l.control?l.control[LT.log?"log":"jira"][LT.tf]:null);
+const flowLead=l=>{const c=LT.zc||(l.control?l.control[LT.log?"log":"jira"][LT.tf]:null);
   const head=`<p class=fhead>${esc((LT_TYPES.find(([k])=>k===l.type)||[0,"all cards"])[1].toLowerCase())} · <b>${esc(c?c.measure:l.measure)}</b> · window ${l.window.size} ${esc(l.window.unit)}</p>`+
     (c&&c.summary?`<p class=fhead>min <b>${ltV(c.summary.minimum)}</b> · max <b>${ltV(c.summary.maximum)}</b> · ${esc(c.summary.plotted_text)} · ${ltExOf(c)}</p>`:"");   // the header is two rows: the view, then the summary it states (#1334)
-  LT.cols=l.columns||[];if(!S||!c)return head+`<p class=fnote>no closed card yet · ${c?ltExOf(c):ltEx(l.excluded,l.excluded_cards,l.excluded_total)}</p>`;
-  return head+ltChart(c,l.coverage);};
+  LT.cols=l.columns||[];if(!c)return head+`<p class=fnote>no closed card yet · ${ltEx(l.excluded,l.excluded_cards,l.excluded_total)}</p>`;
+  return head+ltChart(c,l.coverage);};   // the chart actually drawn decides emptiness: an empty timeframe never hides a zoom that holds cards (#1334)
 const drawFlow=()=>{{const w=$("#flowb").clientWidth-20;flowW=w<600?600:w>1600?1600:(w|0);flowH=flowHeight(window.innerHeight)}const cfd=FLOWK==="cfd";
   const a=FLOWD[FLOWK];
   $("#flowb").innerHTML=!a?"<p class=fnote>Loading the chart from the hub.</p>":(cfd?flowCFD(a.cfd.ranges[CF.r]):flowLead(a.lead))+`<p class=flstat role=status>data read ${new Date(a.t*1000).toLocaleTimeString()}</p>`};

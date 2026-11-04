@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import time
 import types
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -1327,3 +1327,56 @@ def test_fit_data_and_full_window_switch_the_x_range_from_the_one_payload(hub, b
     assert 'LT.win="fit"' in fit_line
     full_line = next(line for line in hub.PAGE.splitlines() if 'e.target.id==="ltfull"' in line)
     assert 'LT.win="full"' in full_line
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_zoom_with_cards_draws_when_the_timeframe_holds_none(hub, board, tmp_path):
+    """#1334: the chart actually drawn decides emptiness, so a drag zoom with dots draws over an empty timeframe."""
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
+    lead = hub.flow_lead(ty="task")["lead"]
+    zoom = lead["control"]["jira"]["all"]
+    lead["control"]["jira"]["all"] = {**zoom, "dots": [], "clusters": []}
+    lead["summary"] = None
+
+    out = _render(hub, tmp_path, "lt-zoom-empty-timeframe.js",
+                  f"(LT.zc={json.dumps(zoom)},flowLead({json.dumps(lead)}))")
+
+    assert "<circle" in out, "the zoom chart's dots are not drawn over an empty timeframe"
+    assert "no closed card yet" not in out, "the empty timeframe hides the zoom chart it did not draw"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_view_chip_prints_the_range_when_a_payload_carries_no_text(hub, board, tmp_path):
+    """#1334: the printed range comes from the range's ends when a payload carries no ready-made text."""
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
+    chart = _flow(hub)["lead"]["control"]["jira"]["all"]
+    chart["range"] = {"start": "2026-10-01T00:00:00+00:00", "end": "2026-10-05T00:00:00+00:00"}
+
+    out = _render(hub, tmp_path, "lt-range-derived.js", f"ltChart({json.dumps(chart)},null)")
+
+    assert "Oct 1 to Oct 5 UTC" in out, "the chip prints no range for a payload without range.text"
+    assert "undefined" not in re.sub(r"<title>.*?</title>", "", out), "the printed range is undefined"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_fit_band_lines_up_with_the_marks_when_one_dot_has_no_fit_position(hub, board, tmp_path):
+    """#1334: the drawn band takes the same x source as the marks; a dot without xf keeps the window x."""
+    now = datetime.now(UTC)
+    rows = [{"n": n, "t": f"card {n}", "o": (now - timedelta(hours=hours + 8)).isoformat(),
+             "c": (now - timedelta(hours=hours)).isoformat(), "column": "Done", "hours": 8.0,
+             "flowing": 8.0, "held": 0.0, "approx": False, "unknown_first": False}
+            for n, hours in enumerate([5, 4, 3], start=1)]
+    chart = hub._leadtime.control_chart(rows, timeframe=30, now=now)
+    assert chart["fit"] is not None, "the fixture does not cluster into a fit range"
+    chart["dots"][0].pop("xf", None)
+
+    out = _render(hub, tmp_path, "lt-band-fit-mixed.js",
+                  f'(LT.band=true,LT.win="fit",ltChart({json.dumps(chart)},null))')
+
+    plot = re.search(r"<svg [^>]*data-lt[^>]*>(.*?)</svg>", out, re.S).group(1)
+    polygon = re.search(r'<polygon points="([^"]*)"', plot)
+    band_x = [float(p.split(",")[0]) for p in polygon.group(1).split()][:len(chart["dots"])]
+    roll = re.search(r'<polyline [^>]*points="([^"]*)"', plot)
+    roll_x = [float(p.split(",")[0]) for p in roll.group(1).split()]
+    assert band_x == pytest.approx(roll_x), \
+        "the fit band is drawn from a different x source than the marks it bounds"
