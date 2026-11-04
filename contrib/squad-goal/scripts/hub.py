@@ -7227,17 +7227,24 @@ class Access(NamedTuple):
 LOGIN_HEADER = "Tailscale-User-Login"   # the seam's name, for a hub with no seam: a request that carries it is never loopback
 TERMINAL_GRANTS = ("terminals_read", "terminals_attach", "terminals_send")
 TERMINAL_SENDS = ("/api/sessions/send", "/api/sessions/card/answer", "/api/sessions/screenshot", "/api/sessions/attach",
-                  "/api/terminals/write", "/api/terminals/start", "/api/sessions/terminals/start")
-# The panel composes the start from the sessions base the overlay names (`startInfo.api + "/terminals/start"`), so the start
-# is served under both names: the sessions one the page posts (#1307), and the one the older callers keep.
-START_ROUTES = ("/api/terminals/start", "/api/sessions/terminals/start")
+                  "/api/terminals/write", "/api/terminals/start")
 TERMINAL_ATTACH = ("/api/terminals/attach", "/api/terminals/detach")
 TERMINAL_OPS = {"/api/terminals/attach": ("attach", {"sid", "client_id"}), "/api/terminals/detach": ("detach", {"sid", "client_id"}),
                 "/api/terminals/write": ("write", {"sid", "text", "client_id"})}
+SESSIONS_TERMINALS = "/api/sessions/terminals/"
+
+def route_path(path):
+    """The route a request names, its query dropped. The panel composes every terminal call from the sessions base the overlay
+    names (`startInfo.api + "/terminals/<op>"`), so `/api/sessions/terminals/<op>` is the terminal route `/api/terminals/<op>`:
+    one seam for every op and for the access action, so the path the page calls and the route the hub serves never drift op by
+    op (#1307, #1311)."""
+    path = path.split("?", 1)[0]
+    return "/api/terminals/" + path[len(SESSIONS_TERMINALS):] if path.startswith(SESSIONS_TERMINALS) else path
+
 def route_action(method, path):
     """What a request asks for, the access seam's action (ADR-0152 rule 9): a terminal read, an attach or detach, a send to a session, or a control write.
     The seam decides on the action; a method only names which routes can write."""
-    path = path.split("?", 1)[0]
+    path = route_path(path)
     if method == "GET":
         return "read" if path == "/api/terminals/read" else "view"
     if path in TERMINAL_ATTACH: return "attach"
@@ -7447,7 +7454,7 @@ class H(BaseHTTPRequestHandler):
         a = access(self, route_action("GET", self.path))
         if not a.allowed: return self.refuse(a.reason, page=self.path.split("?", 1)[0] in ("/mobile", "/mobile/"))
         if self.path.split("?", 1)[0] == hubstream.PATH and hubstream.enabled(): return self.stream(a)
-        if self.path.split("?", 1)[0] == "/api/terminals/read": return self.terminal_read(a)
+        if route_path(self.path) == "/api/terminals/read": return self.terminal_read(a)
         if request_target(self).startswith(DASH_PREFIXES): return self.dash("GET")
         if self.path.startswith(("/held/", "/ended/")):   # a run the childcc pass holds, or one that ended today: its dashboard (#689, #830)
             name = re.sub(r"[^\w-]", "", self.path.split("/", 2)[2].split("?")[0])
@@ -7655,8 +7662,8 @@ class H(BaseHTTPRequestHandler):
         if self.path.split("?", 1)[0] == "/api/sessions/card/answer": return self.answer_card(a)
         if self.path.split("?", 1)[0] == "/api/sessions/attach": return self.send_attach(a)
         if self.path.split("?", 1)[0] == "/api/sessions/screenshot": return self.send_attach(a, "screenshot")
-        if self.path.split("?", 1)[0] in START_ROUTES: return self.terminal_start(a)
-        if self.path.split("?", 1)[0] in TERMINAL_OPS: return self.terminal_post(a, *TERMINAL_OPS[self.path.split("?", 1)[0]])
+        if route_path(self.path) == "/api/terminals/start": return self.terminal_start(a)
+        if route_path(self.path) in TERMINAL_OPS: return self.terminal_post(a, *TERMINAL_OPS[route_path(self.path)])
         if self.path.split("?", 1)[0] == "/api/loop": return self.loop_post(a)
         ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote", "/api/limits", "/api/slack") and (a.tailnet or own_origin(self)) and "json" in (self.headers.get("Content-Type") or "")
         try:

@@ -233,3 +233,35 @@ def test_a_supervisor_answer_the_hub_cannot_read_is_a_503_with_its_reason(hub):
     status, body = loopback_post(h.port, "/api/terminals/start", {"job": JOB, "cwd": str(h.checkout), "client_id": CID})
     assert status == 503, (status, body)
     assert "could not read" in body
+
+
+@pytest.mark.parametrize("op, body", [
+    ("attach", {"sid": SID, "client_id": CID}),
+    ("detach", {"sid": SID, "client_id": CID}),
+    ("write", {"sid": SID, "text": "ls\n", "client_id": CID}),
+])
+def test_every_terminal_write_the_panel_posts_reaches_its_supervisor_op(hub, op, body):
+    """#1311: the panel composes every terminal call from the sessions base (`startInfo.api + "/terminals/<op>"`), and #1307
+    served only the start under it. The attach then answered 400 forbidden, so a started session never attached."""
+    h = hub()
+    status, text = loopback_post(h.port, f"/api/sessions/terminals/{op}", body)
+    assert status == 200, (status, text)
+    assert any(name == op for name, _ in h.fake.calls), h.fake.calls
+
+
+def test_the_terminal_read_the_panel_polls_reaches_the_supervisor_not_the_sessions_list(hub):
+    """#1311: GET /api/sessions/terminals/read fell into the sessions handler, which answered the sessions list with a 200,
+    so the panel read the wrong shape and never painted the terminal."""
+    h = hub()
+    status, text = request(h.port, "GET", f"/api/sessions/terminals/read?sid={SID}&client_id={CID}&offset=0")
+    assert status == 200, (status, text)
+    assert any(name == "read" for name, _ in h.fake.calls), h.fake.calls
+    assert "groups" not in json.loads(text), text
+
+
+@pytest.mark.parametrize("method, op", [("GET", "read"), ("POST", "attach"), ("POST", "detach"), ("POST", "write"), ("POST", "start")])
+def test_the_sessions_based_terminal_path_asks_the_access_seam_for_the_same_action(hub, method, op):
+    """#1311: the access seam (ADR-0152 rule 9) decides on the action, so the path the panel calls must name the action its
+    terminal route names, or a tailnet grant would read the panel's call as another action."""
+    h = hub()
+    assert h.mod.route_action(method, f"/api/sessions/terminals/{op}") == h.mod.route_action(method, f"/api/terminals/{op}")
