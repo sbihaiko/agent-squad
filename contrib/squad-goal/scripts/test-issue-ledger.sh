@@ -37,13 +37,13 @@ L rearm 'x/y#9' >/dev/null
 # #1301 a rearm clears the issue's notstartable claims, so a later failure with the same reason is marked again: the claim is
 # health.sh's memory that the marker was posted, and the rearm queues the marker's removal. health.sh serves the profile's
 # primary repository and names a claim by a bare issue number, so only that repository's rearm may clear, and only that issue's.
-mkdir -p "$T/st/auto"; : > "$T/st/auto/notstartable-9-some_reason"; : > "$T/st/auto/notstartable-10-other_issue"
-L rearm 'x/y#9' >/dev/null
-{ [ ! -e "$T/st/auto/notstartable-9-some_reason" ] && [ -e "$T/st/auto/notstartable-10-other_issue" ]; } \
+mkdir -p "$T/st/auto"; : > "$T/st/auto/notstartable-31-some_reason"; : > "$T/st/auto/notstartable-32-other_issue"
+L rearm 'x/y#31' >/dev/null
+{ [ ! -e "$T/st/auto/notstartable-31-some_reason" ] && [ -e "$T/st/auto/notstartable-32-other_issue" ]; } \
   && ok "#1301 a rearm clears the issue's notstartable claims, not another issue's" \
   || ko "#1301 rearm claims: $(/bin/ls "$T/st/auto" | tr '\n' ' ')"
-: > "$T/st/auto/notstartable-11-y_reason"; L rearm 'x/z#11' >/dev/null
-[ -e "$T/st/auto/notstartable-11-y_reason" ] \
+: > "$T/st/auto/notstartable-33-y_reason"; L rearm 'x/w#33' >/dev/null
+[ -e "$T/st/auto/notstartable-33-y_reason" ] \
   && ok "#1301 a rearm of another repository's issue touches no bare-number claim" \
   || ko "#1301 foreign rearm cleared a claim: $(/bin/ls "$T/st/auto" | tr '\n' ' ')"
 # The entry of a child is a ledger fact that a later event of its run keeps (ADR-0149): the wave marker readers ask the ledger
