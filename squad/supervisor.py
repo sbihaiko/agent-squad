@@ -348,17 +348,22 @@ class Supervisor:
             self._line("stop", sid, caller, self.attachments.get((sid, caller.transport, caller.client_id), 0))
 
     def dispatch(self, request: dict, sock: socket.socket) -> dict:
-        pid, uid = peer_cred(sock)
-        reason = self.gate.admit(presented=str(request.get("secret", "")), peer_pid=pid, peer_uid=uid,
-                                 peer_lstart=lstart(pid))
-        if reason is not None:
-            terminal_audit.refused(self.state, reason=reason, peer_pid=pid, peer_uid=uid)
-            return {"ok": False, "reason": reason}
+        pid, uid = 0, 0
         try:
+            pid, uid = peer_cred(sock)
+            reason = self.gate.admit(presented=str(request.get("secret", "")), peer_pid=pid, peer_uid=uid,
+                                     peer_lstart=lstart(pid))
+            if reason is not None:
+                terminal_audit.refused(self.state, reason=reason, peer_pid=pid, peer_uid=uid)
+                return {"ok": False, "reason": reason}
             return {"ok": True, **self._op(request)}
         except Refused as error:
             terminal_audit.refused(self.state, reason=str(error), peer_pid=pid, peer_uid=uid)
             return {"ok": False, "reason": str(error)}
+        except Exception as error:  # noqa: BLE001 - any exception the handler does not catch closes the socket with no answer, and the caller then reads a dead line (#1308)
+            reason = f"the supervisor could not do {request.get('op')!r}: {type(error).__name__}: {error}"
+            terminal_audit.refused(self.state, reason=reason, peer_pid=pid, peer_uid=uid)
+            return {"ok": False, "reason": reason}
 
     def _op(self, request: dict) -> dict:
         op = request.get("op")
@@ -438,7 +443,11 @@ def call(state: Path, op: str, **fields: object) -> dict:
         client.settimeout(30)
         client.connect(str(socket_path(state)))
         client.sendall(json.dumps({"secret": secret, "op": op, **fields}).encode() + b"\n")
-        reply = json.loads(client.makefile("rb").readline())
+        line = client.makefile("rb").readline()
+        try:
+            reply = json.loads(line)
+        except ValueError:   # a dead socket is a refusal, never a decode error in the caller (#1308)
+            raise Refused(f"the supervisor answered nothing to op {op!r}") from None
     if not reply["ok"]:
         raise Refused(reply["reason"])
     return reply

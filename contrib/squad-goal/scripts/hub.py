@@ -7227,7 +7227,10 @@ class Access(NamedTuple):
 LOGIN_HEADER = "Tailscale-User-Login"   # the seam's name, for a hub with no seam: a request that carries it is never loopback
 TERMINAL_GRANTS = ("terminals_read", "terminals_attach", "terminals_send")
 TERMINAL_SENDS = ("/api/sessions/send", "/api/sessions/card/answer", "/api/sessions/screenshot", "/api/sessions/attach",
-                  "/api/terminals/write", "/api/terminals/start")
+                  "/api/terminals/write", "/api/terminals/start", "/api/sessions/terminals/start")
+# The panel composes the start from the sessions base the overlay names (`startInfo.api + "/terminals/start"`), so the start
+# is served under both names: the sessions one the page posts (#1307), and the one the older callers keep.
+START_ROUTES = ("/api/terminals/start", "/api/sessions/terminals/start")
 TERMINAL_ATTACH = ("/api/terminals/attach", "/api/terminals/detach")
 TERMINAL_OPS = {"/api/terminals/attach": ("attach", {"sid", "client_id"}), "/api/terminals/detach": ("detach", {"sid", "client_id"}),
                 "/api/terminals/write": ("write", {"sid", "text", "client_id"})}
@@ -7621,12 +7624,16 @@ class H(BaseHTTPRequestHandler):
         A daemon that is not running is started again once and the call retried; a start that refuses answers 503 with its reason."""
         sv = terminal_supervisor()
         def call(): return sv.call(STATE, op, login=a.login, transport="tailnet" if a.tailnet else "loopback", **fields)
+        def unreadable(e):   # an answer the hub cannot parse used to raise out of the handler, so the browser got no status (#1308)
+            return self.answer(503, {"err": f"the terminal supervisor answered what the hub could not read: {e}"})
         try: out = call()
         except sv.Refused as e: return self.answer(403, {"err": str(e)})
+        except ValueError as e: return unreadable(e)
         except OSError:
             start_terminal_supervisor()
             try: out = call()
             except sv.Refused as e: return self.answer(403, {"err": str(e)})
+            except ValueError as e: return unreadable(e)
             except OSError:
                 why = TERMINAL["why"] or "no reason was recorded"
                 return self.answer(503, {"err": f"the terminal supervisor is not running: {why}"})
@@ -7648,7 +7655,7 @@ class H(BaseHTTPRequestHandler):
         if self.path.split("?", 1)[0] == "/api/sessions/card/answer": return self.answer_card(a)
         if self.path.split("?", 1)[0] == "/api/sessions/attach": return self.send_attach(a)
         if self.path.split("?", 1)[0] == "/api/sessions/screenshot": return self.send_attach(a, "screenshot")
-        if self.path.split("?", 1)[0] == "/api/terminals/start": return self.terminal_start(a)
+        if self.path.split("?", 1)[0] in START_ROUTES: return self.terminal_start(a)
         if self.path.split("?", 1)[0] in TERMINAL_OPS: return self.terminal_post(a, *TERMINAL_OPS[self.path.split("?", 1)[0]])
         if self.path.split("?", 1)[0] == "/api/loop": return self.loop_post(a)
         ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote", "/api/limits", "/api/slack") and (a.tailnet or own_origin(self)) and "json" in (self.headers.get("Content-Type") or "")
