@@ -207,3 +207,29 @@ def test_the_panel_carries_the_start_button_and_the_terminal_writes():
     assert 'id="sq-ov-start"' in OVERLAY_JS and "Start a session" in OVERLAY_JS
     for name in ("start", "attach", "write", "read"):
         assert f'"/terminals/{name}' in OVERLAY_JS, name
+
+
+def test_the_route_the_panel_posts_reaches_the_start(hub):
+    """#1307: the panel composes startInfo.api + "/terminals/start", and startInfo.api is the sessions base the overlay names
+    (/api/sessions), so the page posts /api/sessions/terminals/start. While only /api/terminals/start was served, that path
+    fell through to the unknown-route answer and the button read "Refused: forbidden" without any supervisor call."""
+    h = hub()
+    status, body = loopback_post(h.port, "/api/sessions/terminals/start",
+                                 {"job": JOB, "cwd": str(h.checkout), "client_id": CID})
+    assert status == 200, body
+    assert json.loads(body)["session"] == SID
+    assert any(op == "start" for op, _ in h.fake.calls), h.fake.calls
+
+
+def test_a_supervisor_answer_the_hub_cannot_read_is_a_503_with_its_reason(hub):
+    """#1308: an answer the hub cannot parse raised JSONDecodeError out of the request handler, so the browser got no status.
+    The caller reads a 503 that names the failure instead."""
+    h = hub()
+
+    def boom(state, op, **fields):
+        raise ValueError("Expecting value: line 1 column 1 (char 0)")
+
+    h.fake.call = boom
+    status, body = loopback_post(h.port, "/api/terminals/start", {"job": JOB, "cwd": str(h.checkout), "client_id": CID})
+    assert status == 503, (status, body)
+    assert "could not read" in body

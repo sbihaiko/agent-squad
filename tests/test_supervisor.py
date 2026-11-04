@@ -498,3 +498,29 @@ def test_attach_op_writes_one_attach_line_and_a_second_attach_writes_none(state)
     sv.call(state, "attach", session=session, **who)
     sv.call(state, "attach", session=session, **who)
     assert [line["event"] for line in audit_lines(state)] == ["start", "attach"]
+
+
+def test_a_start_whose_process_cannot_spawn_answers_a_refusal_not_a_dead_socket(tmp_path, monkeypatch):
+    """#1308: an exception `dispatch` does not expect -- the live shape was `Popen('')` raising FileNotFoundError -- escaped
+    the handler thread, which closed the socket with no answer. The caller then read an empty line and `call` raised
+    JSONDecodeError inside the hub's request handler, so the browser got no status at all. The supervisor answers a refusal
+    that names the failure instead."""
+    import threading
+    state = tmp_path / "state"
+    state.mkdir()
+    sup = sv.Supervisor(state)
+    srv = sv._Server(str(sv.socket_path(state)), sup)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        (state / sv.SECRET).write_text(sup.secret, encoding="utf-8")
+
+        def boom(*a, **k):
+            raise FileNotFoundError(2, "No such file or directory", "")
+
+        monkeypatch.setattr(sv.subprocess, "Popen", boom)
+        with pytest.raises(sv.Refused) as err:
+            sv.call(state, "start", job="e2e", cwd=str(tmp_path), client_id="c1")
+        assert "could not do 'start'" in str(err.value), str(err.value)
+    finally:
+        srv.shutdown()
+        srv.server_close()
