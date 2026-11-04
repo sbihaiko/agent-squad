@@ -200,6 +200,20 @@ case "$r" in *"BRANCHLAND CONFLICT gui/7-x"*g*"${devsha:0:7}"*) ok "a conflict: 
 [ ! -e "$T/gate.log" ] && [ "$($O rev-parse dev)" = "$devsha" ] && [ "$($O rev-parse gui/7-x)" = "$tip" ] && ok "a conflict: no gate runs, nothing lands, the branch is untouched" || ko "a conflict ran the gate or moved a ref"
 /usr/bin/grep -qh "BRANCHLAND CONFLICT gui/7-x" "$T/st/cq/"x__y#7-status~* 2>/dev/null && /usr/bin/grep -qh "${devsha:0:7}" "$T/st/cq/"x__y#7-status~* && ok "a conflict: the one status line is on the issue" || ko "conflict: no status line: $(cat "$T/st/cq/"* 2>&1)"
 [ "$($G -C "$T/co" worktree list | wc -l | tr -d ' ')" = 1 ] && [ -z "$($G -C "$T/co" status --porcelain)" ] && ok "a conflict leaves no worktree and no residue" || ko "conflict residue: $($G -C "$T/co" worktree list) $($G -C "$T/co" status --porcelain)"
+# DEBT (#1344): a rebase round comes from the kept marker the wave writes, never from a branch name. A hand-made fix/*-rebase-* branch
+# that conflicts with dev keeps its own APPROVE; a branch with the kept marker gets the one CHANGES round.
+hand8() { (cd "$T/w" && $G checkout -q dev && echo other > g && $G add g && $G -c user.email=a@b -c user.name=t commit -q -m "dev g" && $G push -q origin dev 2>/dev/null \
+  && $G checkout -q -b fix/8-rebase-hand origin/main && echo mine > g && $G add g && $G -c user.email=a@b -c user.name=t commit -q -m "hand (Refs #8)" && $G push -q origin fix/8-rebase-hand 2>/dev/null); }
+reset; hand8; hs=$($O rev-parse fix/8-rebase-hand); rm -f "$T/st/auto/kept-fix_8-rebase-hand"
+printf 'VERDICT: APPROVE\n' > "$T/st/review-fix_8-rebase-hand.md"; printf '%s\n' "$hs" > "$T/st/review-fix_8-rebase-hand.sha"
+r=$(OPEN=8 SG_LOCAL_GATE_CMD="$GATE_OK" CHECKS='{"check_runs":[]}' bl)
+case "$r" in *"BRANCHLAND CONFLICT fix/8-rebase-hand"*) ok "a hand-made rebase-named branch conflicts with dev";; *) ko "no conflict line for the hand-made branch: '$r'";; esac
+head -1 "$T/st/review-fix_8-rebase-hand.md" | /usr/bin/grep -q APPROVE && ok "a hand-made rebase-named branch keeps its own review" || ko "a CHANGES review was fabricated: '$(head -1 "$T/st/review-fix_8-rebase-hand.md")'"
+reset; hand8; hs=$($O rev-parse fix/8-rebase-hand); printf 'origin/dev\n' > "$T/st/auto/kept-fix_8-rebase-hand"
+printf 'VERDICT: APPROVE\n' > "$T/st/review-fix_8-rebase-hand.md"; printf '%s\n' "$hs" > "$T/st/review-fix_8-rebase-hand.sha"
+r=$(OPEN=8 SG_LOCAL_GATE_CMD="$GATE_OK" CHECKS='{"check_runs":[]}' bl)
+head -1 "$T/st/review-fix_8-rebase-hand.md" | /usr/bin/grep -q CHANGES && ok "a kept rebase branch gets its one CHANGES round" || ko "a kept rebase branch got no round: '$(head -1 "$T/st/review-fix_8-rebase-hand.md")' '$r'"
+
 # A failed gate leaves no worktree and no staged residue, even when the gate staged files.
 reset; r=$(SG_LOCAL_GATE_CMD="echo a > staged1; /usr/bin/git add staged1; echo 'mypy: 1 error'; exit 1" SG_LOCAL_GATE_RERUN_CMD="exit 1" CHECKS='{"check_runs":[]}' bl)
 [ "$($G -C "$T/co" worktree list | wc -l | tr -d ' ')" = 1 ] && [ -z "$($G -C "$T/co" status --porcelain)" ] && [ -z "$($G -C "$T/co" diff --cached --name-only)" ] && ok "a failed gate leaves no worktree and nothing staged" || ko "gate residue: $($G -C "$T/co" worktree list)"

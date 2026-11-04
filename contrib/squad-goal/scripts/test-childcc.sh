@@ -74,6 +74,7 @@ echo "$*" >> "$WAVE_CALLS"
 [ -e "$WAVE_FAIL" ] && { echo "WAVE REQUEUE #$3: the local gates failed: x"; exit 1; }
 [ "$3" = 5300 ] && { echo "WAVE HOLD #$3: no review yet"; exit 1; }   # a held child: no requeue, so every pass tries it again
 [ "$3" = 5600 ] && { echo "WAVE STOP #$3: requeued 3 times, so it is not dispatched again: x"; exit 1; }   # the requeue cap stopped it
+[ "$3" = 5400 ] && { echo "WAVE HOLD #$3: the rebase on wave/kpt conflicts: a.txt; its commits are kept on fix/5400-rebase-kpt for one rebase round, not requeued"; exit 1; }   # a child kept on a rebase round (#1344)
 echo "WAVE gui/$3 entered (#$3)"
 W
 export WAVE_CALLS=$T/wave.calls WAVE_FAIL=$T/wave.fail WAVE_GATE_HOLD=$T/wave.gatehold WAVE_REQUEUE_FAIL=$T/wave.requeuefail WAVE_REQUEUE_ERR=$T/wave.requeueerr WAVE_NEEDS_HUMAN=$T/wave.needshuman; : > "$WAVE_CALLS"
@@ -213,6 +214,11 @@ pass fair >/dev/null; rc=$?
 run2 cap 5300 5301; : > "$WAVE_CALLS"; : > "$WAVE_CALLS.expired-cap"
 pass cap >/dev/null; pass cap >/dev/null; rc=$?
 [ "$rc" = 0 ] && ok "a held child of an expired wave does not keep it from landing" || ko "expired wave with a held child: exit $rc"
+# (#1344) A child kept on a rebase round is no deadline: its commits wait for the round, so it is never requeued or counted, however
+# many passes it waits. Its sibling still enters.
+run2 kpt 5400 5401; : > "$WAVE_CALLS"
+for p in 1 2 3 4 5 6 7 8; do pass kpt >/dev/null; done
+! /usr/bin/grep -q '^requeue 5400' "$WAVE_CALLS" && [ ! -e "$T/st/auto/dwait-kpt-a" ] && [ "$(ent kpt 5401)" = 1 ] && ok "a child kept on a rebase round is never requeued or counted" || ko "a kept child was requeued or counted: $(cat "$WAVE_CALLS") $(cat "$T/st/auto/dwait-kpt-a" 2>/dev/null)"
 # a child whose requeue holds it on an unchanged head costs no work: its sibling is worked in the same pass
 run2 sup 5400 5401; : > "$WAVE_CALLS"; lqset 5400 sup "$(/usr/bin/git -C "$T/co/runs/sup/ws/target-a" rev-parse HEAD)"
 pass sup >/dev/null; rc=$?
