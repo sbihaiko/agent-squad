@@ -249,8 +249,11 @@ def run_hold(rd, child, n, d, ok, rnd):
     if now != head: return f"its run approved {head[:9]}, and the child stands at {now[:9] or 'no head'}: a new commit needs a new review"
     return ""
 def machine_hold(cause):   # a machine-wide hold clears by itself, so it never counts toward a deferral deadline and never requeues (#931, #567)
+    # A child kept on a rebase round waits for its own commits to be rebased, not for the machine: no deadline requeues it,
+    # and no failed dispatch is counted against it (#1344).
     return any(s in cause for s in ("the gate lock is held", "the gate slots (caps.gates) are full",
-                                    "the local gates were inconclusive", "no review slot this pass"))
+                                    "the local gates were inconclusive", "no review slot this pass",
+                                    "for one rebase round, not requeued"))
 def moved_tip(rd, child, d, rnd):   # the tip a review read, when the child stands past it (#808); False when no head was read or the tip is not there
     head = str((rnd or {}).get("head") or "")
     return bool(head) and head_of(child_worktree(rd, child, d)) not in ("", head)

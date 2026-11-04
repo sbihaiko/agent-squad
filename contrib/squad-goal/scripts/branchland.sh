@@ -72,9 +72,10 @@ localgate() { local br=$1 sha=$2 i=$3 wt out rc base gaid
     printf 'Status update — BRANCHLAND CONFLICT %s: %s conflicts with %s %s (rebase of %s). The branch does not land until it is rebased.\n' "$br" "$files" "$land" "${base:-?}" "${sha:0:9}" > "$(sg_cq_status "$i" "branchland$$")"
     # A rebase branch kept by a wave conflict (#1344) gets one rebase round: a CHANGES verdict on its tip, which branchfixpass.sh
     # dispatches as a fix run on the same branch. Its review is read at this tip only, so the review pass does not replace it.
-    case "$br" in fix/*-rebase-*) rbk=$(printf '%s' "$br" | tr / _)
-      printf 'VERDICT: CHANGES\n\n## Blocking\n- The rebase on %s conflicts in %s. Rebase this branch on origin/%s, resolve the conflict in each file, keep the work, and push.\n' \
-        "$land" "$files" "$land" > "$SG_STATE/review-$rbk.md"; printf '%s\n' "$sha" > "$SG_STATE/review-$rbk.sha"; rm -f "$SG_STATE/review-$rbk.base";; esac
+    rbk=$(printf '%s' "$br" | tr / _)
+    if [ -s "$SG_STATE/auto/kept-$rbk" ]; then rbref=$(head -1 "$SG_STATE/auto/kept-$rbk")
+      printf 'VERDICT: CHANGES\n\n## Blocking\n- The rebase on %s conflicts in %s. Rebase this branch on %s, resolve the conflict in each file, keep the work, and push.\n' \
+        "$land" "$files" "$rbref" > "$SG_STATE/review-$rbk.md"; printf '%s\n' "$sha" > "$SG_STATE/review-$rbk.sha"; rm -f "$SG_STATE/review-$rbk.base"; fi
     say conflict "$br" "$sha" "conflict$base" "$files conflicts with $land ${base:-?} (rebase of ${sha:0:9})"; return 1; }
   # The gate runs under the machine-wide gate lock (#392): a second gate waits, and its one wait line is passed on. The lock
   # reads SG_STATE, so gate.sh runs in the loop env and only the gate command inside it drops the SG_* variables.

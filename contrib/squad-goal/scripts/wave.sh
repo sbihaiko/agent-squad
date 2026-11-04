@@ -556,12 +556,22 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
   # keep_conflict <files>: a rebase conflict with the wave tip keeps the child's own commits (#1344). The rebase is aborted, so HEAD
   # is the reviewed commits: they go to fix/<n>-rebase-<run> on the remote, and a CHANGES verdict on that branch asks one rebase
   # round (branchfixpass.sh). The child is held, never requeued: its worktree is not reset and no fresh build is dispatched.
-  keep_conflict() { local kb=fix/$iss-rebase-$run kkey=fix_$iss-rebase-$run
-    if ! $G push -q origin "HEAD:refs/heads/$kb" >/dev/null 2>&1; then
-      hold "the rebase on $w conflicts: $1; its commits could not be kept on $kb (the push failed): the child stays held"; return 1; fi
+  keep_conflict() { local kb=fix/$iss-rebase-$run kkey=fix_$iss-rebase-$run khead rhead
+    khead=$($G rev-parse HEAD)
+    # A later pass enters the same child again on the same head, or on a round that already pushed on top of it: a branch that
+    # already holds this commit is the kept state, never a failure, so the push's refusal is read against the remote, not its exit code.
+    $G push -q origin "HEAD:refs/heads/$kb" >/dev/null 2>&1
+    $G fetch -q origin "+refs/heads/$kb:refs/remotes/origin/$kb" 2>/dev/null
+    rhead=$($G rev-parse -q --verify "refs/remotes/origin/$kb" 2>/dev/null)
+    { [ -n "$rhead" ] && $G merge-base --is-ancestor "$khead" "$rhead" 2>/dev/null; } || {
+      hold "the rebase on $w conflicts: $1; its commits could not be kept on $kb (the push failed): the child stays held"; return 1; }
+    # The review names the head it was written for, read after the push, and the ref the round rebases on: the wave tip it
+    # actually conflicted with, never dev, which the held child keeps the wave from reaching (#1344).
+    khead=$rhead
+    printf 'origin/%s\n' "$w" > "$SG_STATE/auto/kept-$kkey"
     printf 'VERDICT: CHANGES\n\n## Blocking\n- The rebase on %s conflicts in %s. Rebase this branch on origin/%s, resolve the conflict in each file, keep the work, and push.\n' \
-      "$w" "$1" "$base" > "$SG_STATE/review-$kkey.md"
-    printf '%s\n' "$rsha" > "$SG_STATE/review-$kkey.sha"; rm -f "$SG_STATE/review-$kkey.base"
+      "$w" "$1" "$w" > "$SG_STATE/review-$kkey.md"
+    printf '%s\n' "$khead" > "$SG_STATE/review-$kkey.sha"; rm -f "$SG_STATE/review-$kkey.base"
     hold "the rebase on $w conflicts: $1; its commits are kept on $kb for one rebase round, not requeued"; return 1
   }
   rebase_on_tip() {

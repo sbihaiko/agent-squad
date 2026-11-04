@@ -47,11 +47,21 @@ if s and v and s.get("target") and s.get("target_branch"): print(s["target"], s[
   head=$(/usr/bin/git -C "$tg" rev-parse -q --verify "refs/heads/$tb^{commit}" 2>/dev/null) \
     && /usr/bin/git -C "$tg" fetch -q "$remote" "refs/heads/$br" 2>/dev/null || { echo "BRANCHFIX PUSH $br: the head of run $run is not readable; the next pass retries"; continue; }
   old=$(/usr/bin/git -C "$tg" rev-parse FETCH_HEAD)
+  ff=
   for c in $ch "$head"; do
     c=$(/usr/bin/git -C "$tg" rev-parse -q --verify "$c^{commit}" 2>/dev/null) || continue
-    [ "$c" != "$old" ] && /usr/bin/git -C "$tg" merge-base --is-ancestor "$old" "$c" && { head=$c; break; }
+    [ "$c" = "$old" ] && continue
+    [ -n "$ff" ] || ff=$c
+    /usr/bin/git -C "$tg" merge-base --is-ancestor "$old" "$c" && { head=$c; break; }
   done
+  # A kept rebase round (#1344) rewrites its own branch, so its head is never a fast-forward of the reviewed tip and the
+  # ordinary rule would drop it. The kept marker names the ref the round rebased on; its head is the branch's new first head.
+  kept="$SG_STATE/auto/kept-$(printf '%s' "$br" | tr / _)"; [ -s "$kept" ] && [ -n "$ff" ] && head=$ff
   if [ "$old" = "$head" ]; then echo "BRANCHFIX PUSH $br: run $run left no new commit"
+  elif [ -s "$kept" ] && ! /usr/bin/git -C "$tg" merge-base --is-ancestor "$old" "$head"; then
+    if /usr/bin/git -C "$tg" push -q --force-with-lease="refs/heads/$br:$old" "$remote" "$head:refs/heads/$br" 2>/dev/null
+    then echo "BRANCHFIX PUSH $br: ${old:0:9} -> ${head:0:9} (rebase round, run $run)"
+    else echo "BRANCHFIX PUSH $br: the push of run $run was refused; the next pass retries"; continue; fi
   elif ! /usr/bin/git -C "$tg" merge-base --is-ancestor "$old" "$head"; then echo "BRANCHFIX PUSH $br: the head of run $run is no fast-forward of the branch, so it is not pushed"
   elif /usr/bin/git -C "$tg" push -q "$remote" "$head:refs/heads/$br" 2>/dev/null; then echo "BRANCHFIX PUSH $br: ${old:0:9} -> ${head:0:9} (run $run)"
   else echo "BRANCHFIX PUSH $br: the push of run $run was refused; the next pass retries"; continue; fi
