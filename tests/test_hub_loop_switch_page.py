@@ -3,7 +3,8 @@
 The route is tested over HTTP here, not only as functions: a loopback start writes one audit line, a cross-site write is
 refused, and a tailnet write is refused with its reason unless `tailnet.loop_write` is on. The page's renderers are run in
 node: the Monitor card and the Loop theme show the state, who changed it and when; the stop confirm lists every live run and gate;
-the Access theme holds the tailnet rule. The Loop theme has no Save.
+the Access theme holds the tailnet rule. The Loop theme has no Save. Its first line states the state, its three Now tiles carry
+the live counts, the health and the last change, and the health values come from the loop answer (#1280).
 """
 import http.client
 import importlib.util
@@ -192,11 +193,86 @@ def run_js(expr):
 VIEW = {"state": "on", "who": "owner", "when": "2026-10-31T16:02:00-03:00", "write": True, "reason": "", "tailnet": False,
         "access": {"loop_write": False, "terminals_send": False},
         "live": {"runs": ["/x/runs/run-20261031-1", "run-20261031-2"], "gates": ["gate pid 4242"]},
+        "health": {"live_runs": 2, "live_gates": 1, "cycle_age": 45, "starting_left": None},
         "log": [{"at": "2026-10-31T16:02:00-03:00", "who": "owner", "from": "loopback", "action": "start"}]}
 
 
 def js_view(**over):
     return json.dumps({**VIEW, **over})
+
+
+def test_the_loop_answer_carries_the_four_health_keys(hub):
+    """The loop answer carries the health object, so the phone and the desktop draw one health view from one read (#1280)."""
+    _, port, _, _, _ = hub
+    _, v = ask(port, "GET")
+    assert {"cycle_age", "starting_left", "live_runs", "live_gates"} <= set(v["health"]), v["health"]
+
+
+def test_the_theme_opens_on_its_state_line():
+    """The theme's first line states on, off, draining or starting, before any other fact (#1280)."""
+    for state in ("on", "off", "draining", "starting"):
+        out = run_js(f"loopLogHtml({js_view(state=state)})")
+        m = re.match(r'<div class="lstate (\w+)">Loop \w+</div>', out)
+        assert m and m.group(1) == state, out[:140]
+
+
+def test_the_live_tile_states_the_run_and_gate_counts_in_every_state():
+    """A stop never touches work the owner could not see: the counts show in every state, not only while draining (#1280)."""
+    for state in ("on", "off", "draining", "starting"):
+        out = run_js(f"loopLogHtml({js_view(state=state)})")
+        assert "2 runs · 1 gate" in out, f"{state}: {out}"
+
+
+def test_the_last_change_tile_names_the_action_who_from_and_when():
+    out = run_js(f"loopLogHtml({js_view()})")
+    assert "start · owner · loopback · 2026-10-31 16:02" in out, out
+    empty = run_js(f"loopLogHtml({js_view(log=[], who='', when='')})")
+    assert "none recorded" in empty, empty
+
+
+def test_the_health_tile_reads_the_hubs_values_and_formats_only_the_span():
+    """The hub hands the cycle age and the seconds left; the page writes the span and names the state (ADR-0137, #1280)."""
+    age = run_js(f"loopLogHtml({js_view()})")
+    assert re.search(r'class="tile ok".*?cycle 45s ago', age, re.S), age
+    assert "late" not in age and "in 45s" not in age, "the page computed a value the hub did not hand it"
+    starting = run_js(f"loopLogHtml({js_view(health={'live_runs': 2, 'live_gates': 1, 'cycle_age': 45, 'starting_left': 62})})")
+    assert re.search(r'class="tile warn".*?starting, 62s left', starting, re.S), starting
+    failed = run_js(f"loopLogHtml({js_view(state='off', failed='watchd did not start')})")
+    assert re.search(r'class="tile err".*?last start failed: watchd did not start', failed, re.S), failed
+
+
+def test_the_starting_switch_states_the_seconds_left():
+    """A disabled switch is never a mystery: the seconds left in the starting window sit by it (#1280)."""
+    out = run_js(f"loopSetHtml({js_view(state='starting', health={'live_runs': 2, 'live_gates': 1, 'cycle_age': None, 'starting_left': 62})})")
+    assert "Loop starting · 62s left" in out and " disabled" in out, out
+
+
+def test_a_failed_start_offers_try_again_and_it_posts_a_start():
+    out = run_js(f"loopSetHtml({js_view(state='off', failed='watchd did not start')})")
+    assert re.search(r"<div class=lerr role=alert>The last start failed: watchd did not start", out), out
+    assert re.search(r"<button[^>]*data-loop[^>]*>Try again</button>", out), out
+    assert re.search(r'loopV\.state==="off"\)\{loopPost\(\{action:"start"\}\)', page()), "the retry does not post a start"
+
+
+def test_the_drain_rule_is_stated_once_in_the_confirm_dialog():
+    """The paragraph above the switch leaves, and the tooltip names the action only: the rule lives in the confirm (#1280)."""
+    assert run_js(f"loopTip({js_view(state='on')})") == "turn off"
+    assert run_js(f"loopTip({js_view(state='draining')})") == "turn off"
+    assert run_js(f"loopTip({js_view(state='off')})") == "turn on"
+    for rendered in (run_js(f"loopLogHtml({js_view()})"), run_js(f"loopSetHtml({js_view()})")):
+        assert "after the live runs and gates finish" not in rendered and "No new dispatch" not in rendered, rendered
+    assert "No new dispatch" in run_js(f"loopConfirmHtml({js_view()})")
+
+
+def test_the_rule_in_access_is_a_link_that_opens_the_access_theme():
+    out = run_js(f"loopSetHtml({js_view(write=False, reason='read-only from the tailnet')})")
+    assert re.search(r'<a href="#set" data-sp=acc>Access</a>', out), out
+
+
+def test_changes_is_a_disclosure_closed_by_default_with_its_count():
+    out = run_js(f"loopLogHtml({js_view()})")
+    assert re.search(r"<details class=aud><summary>Changes <span class=m>1</span></summary>", out), out
+    assert "<details class=aud open" not in out
 
 
 def test_the_monitor_carries_the_one_loop_switch_and_no_loop_tile():

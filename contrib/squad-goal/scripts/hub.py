@@ -2027,21 +2027,19 @@ def loop_started_after(at):
     except (ValueError, IndexError): return False
 
 def loop_health(live, now=None):
-    """The Loop theme's Now tiles (#1278): how many runs and gates are live, how long until the watch cycle's next beat,
-    and how long a pending start has left. Each value is a fact one reader already measures; a missing cycle is None,
-    never zero, so the tile says "no cycle yet" instead of "0s"."""
+    """The Loop theme's Now tiles (#1280): how many runs and gates are live, how old the last watch cycle is, and how
+    long a pending start has left. Each value is a fact one reader already measures; a missing cycle is None, never zero,
+    so the tile says "no cycle yet" instead of "0s"."""
     now = time.time() if now is None else now
     cyc = _cycle_state(now)
-    left = None
-    if cyc and cyc["secs"]:
-        left = int(round(cyc["end"] + cyc["secs"][-1] - now))
+    age = max(0, int(round(now - cyc["end"]))) if cyc else None
     starting = None
     try:
-        age = now - LOOP_STARTING.stat().st_mtime
-        if age < LOOP_START_WINDOW: starting = int(LOOP_START_WINDOW - age)
+        since = now - LOOP_STARTING.stat().st_mtime
+        if since < LOOP_START_WINDOW: starting = int(LOOP_START_WINDOW - since)
     except OSError: pass
     return {"live_runs": len(live.get("runs") or []), "live_gates": len(live.get("gates") or []),
-            "cycle_left": left, "starting_left": starting, "unknown": live.get("unknown", "")}
+            "cycle_age": age, "starting_left": starting, "unknown": live.get("unknown", "")}
 
 def loop_view(a):
     last = (loop_audit_last(1) or [{}])[-1]
@@ -2050,7 +2048,7 @@ def loop_view(a):
     state = loop_state(last)
     live = loop_live()
     return {"state": state, "actions": list(LOOP_STATE_ACTIONS.get(state, [])) if write else [], "who": last.get("who", ""), "when": last.get("at", ""), "live": live,
-            "health": loop_health(live),   # the Loop theme's Now tiles (#1278)
+            "health": loop_health(live),   # the Loop theme's Now tiles (#1280)
             "failed": last.get("failed", "") if state == "off" and not loop_started_after(last.get("at", "")) else "",
             "log": loop_audit_last(20)[::-1], "write": write, "reason": "" if write else LOOP_READ_ONLY,
             "tailnet": a.tailnet, "access": {"loop_write": tn.get("loop_write") is True, "terminals_send": tn.get("terminals_send") is True}}   # Settings > Access reads the tailnet rule here
@@ -4956,6 +4954,8 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #tab-set .setrow .sl{min-width:0;font-size:var(--fs-body);color:var(--fg)}
 #tab-set .setrow .sc{justify-self:end;min-width:0;max-width:100%}
 #tab-set .setrow .sc small{color:var(--mute);font-size:var(--fs-caption)}
+#tab-set .lstate{font-weight:600;font-size:var(--fs-body);margin:0 0 6px}
+#tab-set .lstate.on{color:var(--ok)}#tab-set .lstate.off,#tab-set .lstate.draining,#tab-set .lstate.starting{color:var(--warn)}
 #tab-set input,#tab-set select{font-size:var(--fs-body);height:var(--ctl-h)}
 #tab-set textarea{font-size:var(--fs-body);min-height:var(--ctl-h)}
 #tab-set .ro{color:var(--warn);background:var(--tint-warn);border:1px solid var(--tint-warn-line);border-radius:var(--radius-md);padding:6px 10px;margin:0 0 10px;max-width:1120px}#tab-set .ro[hidden]{display:none}
@@ -6022,20 +6022,25 @@ function roAll(root){if(!root||!root.querySelectorAll)return;for(const el of roo
 function roWatch(root){roAll(root);if(typeof MutationObserver!=="undefined"&&root)new MutationObserver(()=>roAll(root)).observe(root,{subtree:true,childList:true})}
 // }SETT
 const loopBy=v=>v.who?`${v.who} · ${moment(v.when)}`:"";
-const loopTip=v=>!v.write?v.reason:v.state==="on"?"turn off: stop after the live runs and gates finish, or now":v.state==="draining"?"turn on: keep the loop running; turn off again to stop now":v.state==="starting"?"the loop is starting":"turn on: start the loop (watchd)";
-const loopSw=v=>`<button type=button role=switch aria-label="Loop" aria-checked="${v.state!=="off"}" data-loop${v.write&&v.state!=="starting"?"":" disabled"} class=lsw title="${esc(loopTip(v))}"><i aria-hidden="true"></i></button>`;
+const loopLast=v=>{const e=(v.log||[])[0];return e?[e.action,e.who,e.from,moment(e.at)].filter(Boolean).join(" · "):loopBy(v)||"none recorded"};
+const loopTip=v=>!v.write?v.reason:v.state==="on"||v.state==="draining"?"turn off":v.state==="off"?"turn on":"";
+const loopSw=v=>`<button type=button role=switch aria-label="Loop" aria-checked="${v.state!=="off"}" data-loop${v.write&&v.state!=="starting"?"":" disabled"} class=lsw${loopTip(v)?` title="${esc(loopTip(v))}"`:""}><i aria-hidden="true"></i></button>`;
 const loopAct=e=>e.failed?`${String(e.action||"")} failed: ${e.failed}`:e.action==="drain"?"stop after the live runs and gates finish":e.action==="stop-now"?`stop now${e.killed?` (killed ${(e.killed.runs||[]).length} runs, ${(e.killed.gates||[]).length} gates${e.survived?`; ${(e.survived.runs||[]).length+(e.survived.gates||[]).length} not ended`:""})`:""}`:String(e.action||"");
 const loopRun=r=>String(r).split("/").filter(Boolean).pop()||String(r);
-const loopSetHtml=v=>`<div class=lnow>${loopSw(v)}<span class="ls ${esc(v.state)}">Loop ${esc(v.state)}</span></div>`
- +(v.write?"":`<div class=lwhy>${esc(v.reason)}. The rule is in Access.</div>`)+(v.failed?`<div class=lerr role=alert>The last start failed: ${esc(v.failed)}</div>`:"")+(loopErr?`<div class=lerr role=alert>${esc(loopErr)}</div>`:"");
+const loopStateLine=v=>`<div class="lstate ${esc(v.state)}">Loop ${esc(v.state)}</div>`;   // the theme's first line, the state before any other fact (#1280)
+const loopSetHtml=v=>{const h=v.health||{},left=v.state==="starting"&&h.starting_left!=null?` · ${span(h.starting_left)} left`:"";
+ return `<div class=lnow>${loopSw(v)}<span class="ls ${esc(v.state)}">Loop ${esc(v.state)}${left}</span></div>`
+ +(v.write?"":`<div class=lwhy>${esc(v.reason)}. The rule is in <a href="#set" data-sp=acc>Access</a>.</div>`)
+ +(v.failed?`<div class=lerr role=alert>The last start failed: ${esc(v.failed)} <button type=button data-loop${v.write?"":" disabled"}>Try again</button></div>`:"")
+ +(loopErr?`<div class=lerr role=alert>${esc(loopErr)}</div>`:"")};
 const loopLogHtml=v=>{const live=v.live||{},h=v.health||{};
  const runs=h.live_runs!=null?h.live_runs:(live.runs||[]).length,gates=h.live_gates!=null?h.live_gates:(live.gates||[]).length;
- const cyc=h.cycle_left==null?"no cycle yet":(h.cycle_left>=0?`in ${span(h.cycle_left)}`:`${span(-h.cycle_left)} late`);
+ const health=h.starting_left!=null?[`starting, ${span(h.starting_left)} left`,"warn"]:v.failed?[`last start failed: ${v.failed}`,"err"]:h.cycle_age!=null?[`cycle ${span(h.cycle_age)} ago`,"ok"]:["no cycle yet","neutral"];
  const now=setNow("lop",[
   setTile("Live",`${runs} run${runs===1?"":"s"} · ${gates} gate${gates===1?"":"s"}`,"neutral"),
-  setTile("Health",h.starting_left!=null?`starting · ${span(h.starting_left)} left`:cyc,h.starting_left!=null||(h.cycle_left!=null&&h.cycle_left<0)?"warn":"neutral"),
-  setTile("Last change",loopBy(v)||"none recorded","neutral")]);
- return now+setSettings("lop",[],`The switch is in the Monitor. The rule for a write over the tailnet is in <a href="#set" data-sp=acc>Access</a>.`)
+  setTile("Health",health[0],health[1]),
+  setTile("Last change",loopLast(v),"neutral")]);
+ return loopStateLine(v)+now+setSettings("lop",[],`The switch is in the Monitor. The rule for a write over the tailnet is in <a href="#set" data-sp=acc>Access</a>.`)
  +`<details class=aud><summary>Changes <span class=m>${(v.log||[]).length}</span></summary><h4>Changes</h4><ul class=laud>${v.log.length?v.log.map(e=>`<li><b>${esc(moment(e.at))}</b> · ${esc(e.who)} (${esc(e.from)}) · ${esc(loopAct(e))}</li>`).join(""):"<li class=m>no change yet</li>"}</ul></details>`};
 const loopConfirmHtml=v=>{const r=v.live.runs,g=v.live.gates,drain=v.state==="on";
  return `<b>Stop the loop?</b><p class=m>Live now: ${r.length} run${r.length===1?"":"s"}, ${g.length} gate${g.length===1?"":"s"}.</p>`

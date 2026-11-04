@@ -63,7 +63,7 @@ def _run(page, expr):
 
 LOOP_VIEW = {"state": "on", "who": "owner", "when": "2026-11-02T09:00:00-03:00", "tailnet": False,
              "access": {"loop_write": False, "terminals_send": False},
-             "health": {"live_runs": 2, "live_gates": 0, "cycle_left": 45, "starting_left": None},
+             "health": {"live_runs": 2, "live_gates": 0, "cycle_age": 45, "starting_left": None},
              "live": {"runs": [], "gates": []}, "log": []}
 
 
@@ -114,17 +114,17 @@ def test_the_loop_theme_draws_now_tiles_and_no_input(hub):
     assert "Settings" in settings and "Monitor" in settings, settings
 
 
-def test_the_loop_health_reads_the_cycle_beat_and_says_none_when_it_has_none(hub):
-    """The Now tiles' `cycle_left` is a fact of the cycle log: the next beat is the last cycle's own length away. A log
-    with no cycle is None, never zero, so the tile says "no cycle yet" (#1278)."""
+def test_the_loop_health_reads_the_last_cycles_age_and_says_none_when_it_has_none(hub):
+    """The Now tiles' `cycle_age` is a fact of the cycle log: seconds since the last cycle's own line. A log with no cycle
+    is None, never zero, so the tile says "no cycle yet" (#1280, SPEC 1117)."""
     log = hub.STATE / "cycle.log"
     log.unlink(missing_ok=True)
-    assert hub.loop_health({}, now=1_700_000_000.0)["cycle_left"] is None
+    assert hub.loop_health({}, now=1_700_000_000.0)["cycle_age"] is None
     now = time.time()
-    log.write_text(time.strftime("%H:%M:%S", time.localtime(now)) + " CYCLE 30s\n")
+    log.write_text(time.strftime("%H:%M:%S", time.localtime(now - 90)) + " CYCLE 30s\n")
     health = hub.loop_health({"runs": ["a", "b"], "gates": []}, now=now)
     assert health["live_runs"] == 2 and health["live_gates"] == 0
-    assert 25 <= health["cycle_left"] <= 31, health["cycle_left"]
+    assert 88 <= health["cycle_age"] <= 92, health["cycle_age"]
     log.unlink()
 
 
