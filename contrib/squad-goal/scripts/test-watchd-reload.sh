@@ -13,6 +13,7 @@ registry() { printf '{"plugins":{"agent-squad@agent-squad":[{"installPath":"%s"}
 registry "$old"
 . "$d/driver-tree.sh"; trap 'bash "$S/watchd.sh" stop >/dev/null 2>&1; kill "$(cat "$st/live.pid" 2>/dev/null)" 2>/dev/null; driver_tree_kill "$T"; rm -rf "$T"' EXIT
 cp "$d/watchd.sh" "$S/watchd.sh"
+printf 'gh_aggregate() { return 1; }\n' > "$S/ghcall.sh"   # offline: the start's loop-bug read has no answer
 cat > "$S/env.sh" <<EOF
 SG_STATE=$st; SG_PROFILE=
 if [ -z "\${SG_SQUAD:-}" ]; then SG_SQUAD=\$(python3 -I -c "import json,os;print(json.load(open(os.path.expanduser('~/.claude/plugins/installed_plugins.json')))['plugins']['agent-squad@agent-squad'][0]['installPath'])"); fi

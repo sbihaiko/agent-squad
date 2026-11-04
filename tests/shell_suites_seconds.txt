@@ -186,6 +186,7 @@ test-watchd-drain.sh 33.05
 test-watchd-driver-sha.sh 2.30
 test-watchd-lock.sh 4.15
 test-watchd-reload.sh 3.37
+test-watchd-start.sh 6.67
 test-watchd-supervisor.sh 2.68
 test-watchd-token-stop.sh 6.28
 test-watchtail.sh 4.17

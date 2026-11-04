@@ -516,11 +516,12 @@ def test_the_legend_carries_short_names_and_values_never_prose(hub):
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_the_legend_has_no_prose_sentences_and_reference_lines_carry_end_labels(hub, board, tmp_path):
-    """#1304: the chart answers "how long do bugs take" without a prose legend; the standard-deviation band hides by
-    default; a cluster is one dot, with no count text in the plot (#1331).
+    """#1304: the chart answers "how long do bugs take" without a prose legend; a cluster is one dot, with no count text
+    in the plot (#1331).
 
     Re-anchored by #1332: a reference no longer labels itself inside the plot; its value sits in the reserved right
-    gutter, outside the plot's right edge."""
+    gutter, outside the plot's right edge. Re-anchored by #1353: the ±1 SD band draws by default, so the plot carries
+    its polygon before the reader asks for it."""
     _seed(hub, {n: _done(n, "2026-10-02T09:00:00Z") for n in range(1, 13)})
     chart = hub.flow_lead()["lead"]["control"]["all"]
     out = _lt_chart(hub, tmp_path, "lt-readable.js", chart)
@@ -535,7 +536,7 @@ def test_the_legend_has_no_prose_sentences_and_reference_lines_carry_end_labels(
     assert not [body for attrs, body in _svg_texts(plot)
                 if body.startswith(("Average ", "Median ", "p85 ")) and not _has_class(attrs, "lttg")], \
         "a reference still labels itself inside the plot"
-    assert "<polygon" not in plot, "the standard-deviation band draws by default"
+    assert "<polygon" in plot, "the standard-deviation band does not draw by default"
     assert not re.search(r"<text[^>]*>\s*\d+\s*</text>", plot), "the plot still draws a count"
     circle = re.search(r"<circle [^>]*>", plot).group(0)
     assert float(_svg_attr(circle, "r")) == chart["clusters"][0]["r"], "the dot does not take the payload's fixed radius"
@@ -699,23 +700,22 @@ def test_a_chosen_span_shows_its_own_exclusions_in_the_one_total(hub, board, tmp
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-def test_the_legend_splits_series_from_summary_and_the_band_stays_hidden_until_asked(hub, board, tmp_path):
-    """#1304: the series legend names only the drawn marks; statistics sit in one summary row; the standard-deviation
-    band hides by default and appears with its legend entry only when the display asks for it.
+def test_the_legend_splits_series_from_summary_and_the_band_shows_until_hidden(hub, board, tmp_path):
+    """#1304: the series legend names only the drawn marks; statistics sit in one summary row.
 
     Re-anchored by #1332: the series legend names every mark the plot draws — the card, the cluster and the rolling
     mean — and the band carries its own name, "Rolling spread ±1 SD"; the head line is the one place that states the
-    window, so the legend never restates it from a second field.
+    window, so the legend never restates it from a second field. Re-anchored by #1353: the band draws by default, so
+    its entry is in the first drawing; the display may still ask for it, and the entry follows the drawn mark.
     """
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z"), 2: _done(2, "2026-10-03T09:00:00Z")})
     chart = _flow(hub)["lead"]["control"]["all"]
     out = _lt_chart(hub, tmp_path, "lt-legend.js", chart)
     series, summary = re.findall(r'<p class="flg ltlg">(.*?)</p>', out)
     entries = re.findall(r"<span>(.*?)</span>", series)
-    assert [re.sub(r"<[^>]+>", "", e) for e in entries] == ["Card", "Cluster", "Rolling mean"], entries
+    assert [re.sub(r"<[^>]+>", "", e) for e in entries] == ["Card", "Cluster", "Rolling mean", "Rolling spread ±1 SD"], entries
     assert str(chart["window"]["size"]) not in re.sub(r"<[^>]+>", "", series), \
         "the series legend restates the window the head line already names"
-    assert "Rolling spread ±1 SD" not in series, "the band names itself while it hides"
     assert all(entry.count("<i") == 1 for entry in entries), "an entry has no marker or two"
     for label in ("Average", "Median", "p85"):
         assert label in re.sub(r"<[^>]+>", "", summary), f"the summary row names no {label}"
@@ -725,6 +725,27 @@ def test_the_legend_splits_series_from_summary_and_the_band_stays_hidden_until_a
     series_on = re.findall(r'<p class="flg ltlg">(.*?)</p>', on)[0]
     band = next((e for e in re.findall(r"<span>(.*?)</span>", series_on) if "Rolling spread ±1 SD" in e), None)
     assert band and band.count("<i") == 1, "the band's label is split from its marker"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_band_shows_by_default_and_holds_the_readers_choice_across_redraws(hub, board, tmp_path):
+    """#1353, SPEC 1327: the ±1 SD band is on when the page loads, carries its legend entry "Rolling spread ±1 SD", and
+    the Band box starts checked; a reader who unchecks it keeps the band off on the next redraw."""
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z"), 2: _done(2, "2026-10-03T09:00:00Z")})
+    chart = _flow(hub)["lead"]["control"]["all"]
+    out = _lt_chart(hub, tmp_path, "lt-band-default.js", chart)
+    plot = re.search(r"<svg [^>]*data-lt[^>]*>(.*?)</svg>", out, re.S).group(1)
+    assert "<polygon" in plot, "the standard-deviation band does not draw by default"
+    series = re.findall(r'<p class="flg ltlg">(.*?)</p>', out)[0]
+    assert "Rolling spread ±1 SD" in re.sub(r"<[^>]+>", "", series), \
+        "the series legend does not name the band it draws"
+    assert "id=ltbd checked" in out, "the Band checkbox does not start checked"
+    redraw = _render(hub, tmp_path, "lt-band-redraw.js",
+                     f"(LT.band=false,ltChart({json.dumps(chart)},null)+ltChart({json.dumps(chart)},null))")
+    plots = re.findall(r"<svg [^>]*data-lt[^>]*>(.*?)</svg>", redraw, re.S)
+    assert len(plots) == 2, "the harness drew no second chart"
+    assert all("<polygon" not in p for p in plots), "the band returns after the reader unchecked it"
+    assert "id=ltbd checked" not in redraw, "the Band checkbox forgets the reader's choice on a redraw"
 
 
 def test_a_legend_entry_stays_on_one_line(hub):
@@ -787,7 +808,8 @@ def test_each_reference_line_labels_itself_at_its_end_and_the_summary_row_carrie
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_each_mark_takes_its_own_role_and_the_legend_states_it(hub, board, tmp_path):
-    """Re-anchored by #1304: the band hides by default, so the role check draws it by asking for it."""
+    """Re-anchored by #1304: the role check draws the band by asking for it. Re-anchored by #1353: it also draws by
+    default, and the state names it so this check reads the same markup either way."""
     _seed(hub, {n: _done(n, "2026-10-02T09:00:00Z") for n in (1, 2)})
     chart = hub.flow_lead()["lead"]["control"]["all"]
     out = _render(hub, tmp_path, "lt-roles.js", f"(LT.band=true,ltChart({json.dumps(chart)},null))")

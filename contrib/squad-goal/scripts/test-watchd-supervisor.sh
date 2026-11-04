@@ -8,6 +8,7 @@ ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 unset "${!SG_@}"; export HOME="$T/home"; mkdir -p "$HOME"
 st=$T/st; S=$T/skill/scripts; mkdir -p "$st" "$S"
 cp "$d/watchd.sh" "$S/watchd.sh"
+printf 'gh_aggregate() { return 1; }\n' > "$S/ghcall.sh"   # offline: the start's loop-bug read has no answer
 printf 'SG_STATE=%s; SG_PROFILE=; SG_SQUAD=%s\nexport SG_STATE SG_PROFILE SG_SQUAD\n' "$st" "$T/skill" > "$S/env.sh"
 printf '#!/bin/bash\necho "watch" >> "$SG_STATE/lanes.log"\nmkdir -p "$SG_STATE/locks/watch"; echo $$ > "$SG_STATE/locks/watch/pid"\nwhile :; do sleep 0.5; done\n' > "$S/watch.sh"
 printf '#!/bin/bash\necho $$ > "$SG_STATE/fastloop.pid"\nwhile :; do sleep 0.5; done\n' > "$S/fastloop.sh"

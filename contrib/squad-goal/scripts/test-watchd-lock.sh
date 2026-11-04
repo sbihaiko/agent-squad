@@ -13,6 +13,8 @@ import pathlib,sys
 f,st=sys.argv[1],sys.argv[2]
 p=pathlib.Path(f); t=p.read_text()
 t=t.replace('. "$(dirname "$0")/env.sh"','SG_STATE="%s"; SG_PROFILE='%st,1)
+t=t.replace('. "$(dirname "$0")/ghcall.sh"   # the one seam the start\'s loop-bug read goes through (ADR-0146)',
+            'gh_aggregate() { return 1; }')
 p.write_text(t)
 PY
 printf '#!/bin/bash\necho "cycle ran" >> "$SG_STATE/watch.log"\nsleep 60\n' > "$T/watch.sh"
