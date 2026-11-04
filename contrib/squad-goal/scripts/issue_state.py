@@ -732,13 +732,17 @@ class BoardBinding:
     def issue_facts(self, issue):
         """(state, label names) of one issue, read from the issue itself, or None when the read did not answer. Never
         cached: this is the read a naming decision keeps its premise on, so a list read at another time, or another
-        repository's card on a shared board, cannot answer for the issue (#1031)."""
+        repository's card on a shared board, cannot answer for the issue (#1031).
+        An answer whose labels are not label objects is no answer either: read as an empty list it would deny the
+        issue its own labels, and that denial is a premise nothing settled (ADR-0155, #1364)."""
         try:
             d = json.loads(self.api(f"repos/{self.repo}/issues/{issue}"))
         except (RuntimeError, OSError, subprocess.SubprocessError, ValueError, TypeError):   # a refused call, a hung one, a body that is not JSON
             return None
         if not isinstance(d, dict) or str(d.get("number", "")) != str(issue): return None
-        return str(d.get("state") or "").lower(), [l["name"] for l in d.get("labels") or [] if isinstance(l, dict)]
+        labels = d.get("labels")
+        if not isinstance(labels, list) or not all(isinstance(l, dict) and isinstance(l.get("name"), str) for l in labels): return None
+        return str(d.get("state") or "").lower(), [l["name"] for l in labels]
 
     def milestone(self, title, due=None):
         """The number of the one milestone titled `title`: found when it exists (open or closed), created when it does not.

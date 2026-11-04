@@ -277,6 +277,15 @@ def test_issue_facts_is_none_when_the_read_does_not_answer(tmp_path):
     assert hung.issue_facts(801) is None
 
 
+def test_issue_facts_is_none_for_a_label_list_it_cannot_read(tmp_path):
+    """An answer whose labels are not label objects settles nothing (ADR-0155): the naming rule must not read an
+    answer it cannot interpret as the issue denying its go label (#1364)."""
+    body = json.dumps({"number": 801, "state": "open", "labels": ["bug", "go"]})
+    assert _binding(tmp_path, (0, body, "")).issue_facts(801) is None
+    bare = json.dumps({"number": 801, "state": "open"})
+    assert _binding(tmp_path / "b", (0, bare, "")).issue_facts(801) is None, "no label list at all is unreadable too"
+
+
 def test_issue_facts_is_none_for_an_answer_about_another_issue(tmp_path):
     body = json.dumps({"number": 999, "state": "open", "labels": [{"name": "go"}]})
     assert _binding(tmp_path, (0, body, "")).issue_facts(801) is None

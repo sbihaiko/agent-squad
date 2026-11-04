@@ -42,7 +42,7 @@ case "\$*" in
   *projectsV2/4/items*) if [ -n "\${CARDS_TODO:-}" ]; then printf '536\tTodo\n537\tTodo\n600\tTodo\n601\tTodo\n'; else printf '536\tCode Complete\n537\tCode Complete\n'; fi ;;   # the dispatchers read every card in Todo (#550): the hold, not the column, is under test
   *"issues/"*comments*) echo "[]" ;;
   *"issues/"*"-q"*) echo open ;;
-  *issues/*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issues/[0-9]+' | cut -d/ -f2); python3 -c 'import json,sys;print(json.dumps([i for i in json.load(open("$T/issues.json")) if i["number"]==int(sys.argv[1])][0]))' "\$n" ;;
+  *issues/*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issues/[0-9]+' | cut -d/ -f2); jq -c --argjson n "\$n" 'map(select(.number==\$n))[0] | .state="open" | .labels=[.labels[]? | if type=="object" then . else {name:.} end]' "$T/issues.json" ;;   # the REST single-issue read: state and labels as objects, as GitHub answers it (#1031)
   *) echo "" ;;
 esac
 J
