@@ -5093,10 +5093,10 @@ const groupOf=r=>{if(r.rank===0)return"running";const h=r.age/3600;return h<=1?"
 // the live count and the oldest live run's age -- even when the rows are capped. It draws at most LIVE_ROWS rows, oldest
 // first, and one control that opens the Runs tab. Each row is the history's own row, so it still opens the run sheet.
 const LIVE_ROWS=3;
-function liveCard(live,row){const n=live.length,oldest=n?Math.max(...live.map(r=>r.age)):0;
+function liveCard(live,row){const n=live.length,oldest=live.reduce((m,r)=>r.age>m?r.age:m,0);   // a reduce, never a spread: the live list is unbounded
  const shown=live.slice().sort((a,b)=>b.age-a.age).slice(0,LIVE_ROWS);
  const head=n?`${n} live · oldest ${age(oldest)}`:"none";   // the count is every live run, never the rows drawn
- const more=n?`<button id=lrmore type=button data-t=runs title="open the Runs tab: the one full list of runs">All runs →</button>`:"";
+ const more=n?`<button id=lrmore type=button data-t=runs title="open the Runs tab: the one full list of runs">All runs →</button>`:"";   // the card's way to the full list, drawn only while it has live runs to show
  return{head,html:(shown.map(row).join("")||"<div class=m>no live runs</div>")+more}}
 function drawList(){
   const shown=new Set(slots),by={};allRuns.filter(r=>r.kind==="childcc").concat(runs).forEach(r=>(by[groupOf(r)]=by[groupOf(r)]||[]).push(r));
@@ -5108,7 +5108,7 @@ function drawList(){
   $("#list").innerHTML=filled.map(([k,t])=>{const rows=by[k]||[],h=groupHeader(k,rows);return `<div class="gh ${openGroups.has(k)?"op":""}" data-g="${k}" tabindex=0>${t}<span class=sr title="${esc(h.title)}">${h.text}</span></div>${openGroups.has(k)?rows.map(row).join(""):""}`}).join("")||"<div class=m style=padding:10px>no live dashboards</div>";
   document.querySelectorAll(".gh").forEach(e=>e.onclick=()=>{const k=e.dataset.g;   // the header is the only writer: a click toggles this group and nothing else
     if(openGroups.has(k))openGroups.delete(k);else openGroups.add(k);saveGroups();drawList()});
-  document.querySelectorAll(".r[data-id]").forEach(e=>e.onclick=()=>{const id=e.dataset.id;   // the childcc row carries the id of the run it holds, never its own (#598, #689)
+  document.querySelectorAll("#list .r[data-id]").forEach(e=>e.onclick=()=>{const id=e.dataset.id;   // the childcc row carries the id of the run it holds, never its own (#598, #689); the card's rows open through the #lrun handler below (#1276)
     hl={run:id};paintHL();openRun(id)});   // a run opens in the side sheet (#984)
 }
 // The Runs tab lists the live runs and the runs ended today; a row opens the run sheet, never an embedded dashboard (#984).
@@ -5807,6 +5807,8 @@ function setTab(t,o){if(!TABS[t])t="board";TAB=t;ls.tab=t;save();
 function tabClick(e){const b=e.target.closest("button[data-t]");if(b)setTab(b.dataset.t)}   // one control names its tab by data-t; the bar and the live-runs card share the handler (#1276)
 document.querySelector(".tabs").addEventListener("click",tabClick);
 $("#lrun").addEventListener("click",tabClick);   // the live-runs card's control opens the Runs tab (#1276)
+$("#lrun").addEventListener("click",e=>{const r=e.target.closest(".r[data-id]");if(!r)return;const id=r.dataset.id;hl={run:id};paintHL();openRun(id)});   // a card row opens the run sheet, exactly as the list's row does (#1276)
+$("#lrun").addEventListener("keydown",e=>{const r=e.target.closest(".r[data-id]");if(r&&(e.key==="Enter"||e.key===" ")){e.preventDefault();const id=r.dataset.id;hl={run:id};paintHL();openRun(id)}});   // the card row answers the keyboard too (#1276)
 function flowTabs(){const h=$("#flowov").hidden,k=typeof FLOWK==="string"?FLOWK:"cfd";$("#bflow").classList.toggle("on",!h&&k==="cfd");$("#blead").classList.toggle("on",!h&&k==="lead");const c=h?"":flowFilterChip(bo.fw||[],bo.fs||[],bo.fk||[],!!FLOWFF[k]),x=$("#flowchips");if(x&&x.dataset.h!==c){x.dataset.h=c;x.innerHTML=c}}   // the one Board filter chip, drawn with the chart tabs for both charts (#1147)
 $("#main").addEventListener("click",e=>{const r=e.target.closest(".r[data-rid]");if(r)openRun(r.dataset.rid)});   // a run row on the Runs tab opens the sheet (#984)
 $("#main").addEventListener("keydown",e=>{const r=e.target.closest(".r[data-rid]");if(r&&(e.key==="Enter"||e.key===" ")){e.preventDefault();openRun(r.dataset.rid)}});

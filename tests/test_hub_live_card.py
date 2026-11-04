@@ -72,7 +72,9 @@ def test_the_card_states_the_whole_count_and_the_oldest_age(page):
 def test_the_card_draws_at_most_three_rows_oldest_first(page):
     out = _card(page, LIVE)
     ids = re.findall(r'data-id="([^"]+)"', out["html"])
-    assert ids == [r["id"] for r in sorted(LIVE, key=lambda r: -r["age"])[:3]], "at most three rows, the oldest first"
+    # a hand-worked answer, never the card's own sort rule: a=7200 s, e=5400 s, d=1800 s are the three oldest of LIVE
+    assert ids == ["run-20261103-1010a0-aaaa", "run-20261103-1010e0-aaaa", "run-20261103-1010d0-aaaa"], \
+        "at most three rows, the oldest first"
     assert out["html"].count('class="r"') == 3
 
 
@@ -109,8 +111,29 @@ def test_the_card_says_none_and_draws_no_control_when_nothing_is_live(page):
     assert "id=lrmore" not in out["html"]
 
 
-def test_a_capped_row_keeps_the_id_the_page_opens_the_sheet_with(page):
+def test_a_card_row_opens_the_run_sheet(page):
+    if NODE is None:
+        pytest.skip("node is required")
     out = _card(page, LIVE)
-    assert re.findall(r'data-id="([^"]+)"', out["html"]), "a row must carry the id the page opens"
-    draw = page[page.index("function drawList("):page.index("function refresh(")]
-    assert '.r[data-id]' in draw and "openRun(id)" in draw, "a row must still open the run sheet"
+    ids = re.findall(r'data-id="([^"]+)"', out["html"])
+    assert ids, "the card drew no row to click"
+    handlers = "\n".join(line for line in page.splitlines() if line.strip().startswith('$("#lrun").addEventListener('))
+    src = "\n".join([
+        "const L={};",
+        'const $=s=>({addEventListener:(k,f)=>{(L[s+" "+k]=L[s+" "+k]||[]).push(f)},set innerHTML(v){},set textContent(v){}});',
+        "function tabClick(){}",
+        "let hl=null;const paintHL=()=>{};let opened=[];function openRun(id){opened.push(id)}",
+        handlers,   # the page's own listeners on the card, bound here against a stub DOM
+        "const row={dataset:{id:" + json.dumps(ids[0]) + "}};",
+        'const ev={key:"Enter",target:{closest:s=>s===".r[data-id]"?row:null},preventDefault(){}};',
+        '(L["#lrun click"]||[]).forEach(f=>f(ev));(L["#lrun keydown"]||[]).forEach(f=>f(ev));',
+        'const miss={key:"Enter",target:{closest:()=>null},preventDefault(){}};',
+        '(L["#lrun click"]||[]).forEach(f=>f(miss));(L["#lrun keydown"]||[]).forEach(f=>f(miss));',
+        "console.log(JSON.stringify({opened,hl}));",
+    ])
+    p = subprocess.run([NODE, "-"], input=src, capture_output=True, text=True, timeout=30)
+    assert p.returncode == 0, p.stderr
+    got = json.loads(p.stdout)
+    assert got["opened"] == [ids[0], ids[0]], "a card row opens the run sheet, by click and by the keyboard"
+    assert got["hl"] == {"run": ids[0]}, "the opened run is highlighted, as the list's row does"
+
