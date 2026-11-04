@@ -1,46 +1,62 @@
 #!/bin/bash
 # A card move is sent only when its value changes: `board.py <owner> <project> "<Status>" <issue#>...` (and `--add`) reads the card,
 # and a card that already carries the Status is not written -- no PATCH, no proving read, exit 0 (#327). The card's own read is its
-# one-item REST route when an id is known, and the whole-board read only when it is not (#1300, #1303). A card in another
-# column, or a card the board does not carry yet, is still written and proven by the read that follows. A board that does not
-# answer the read writes on, so a read that fails never blocks a move. Every read and every write is counted against a stubbed gh.
+# one-item REST route when an id is known, and the whole-board read only when it is not (#1300, #1303). A hinted move to the column
+# the card already holds is settled by that one card read, so it takes no proving read either (#1329). A card in another column, or
+# a card the board does not carry yet, is still written and proven by the read that follows. A board that does not answer the read
+# writes on, so a read that fails never blocks a move.
+# Every read and every write is counted against a stubbed gh. The stub answers the exact calls the seam sends: the one-item route is
+# `/projectsV2/<n>/items/<item id>?fields[]=<field id>` and its answer is `{isArchived, content.number, fields[].name/value.name.raw}`,
+# and the item id -> issue map lives in `item-map`, the one table the item list, the card read and the PATCH all take from. An id the
+# table does not name, a GraphQL call and any other unrecognized call are stub errors, never a guessed answer.
 # A move the door proves is recorded beside the refresh flag, in `board-moves.json`: one entry per item, the column
 # it set and the instant, replaced by a later move of the same item. A move the door cannot prove and a skipped move
 # write no entry. The record is written to a temp file in the state directory and renamed, so a reader sees the old
 # file or the new one, never a part-written one.
-# Stubbed gh; a temp state dir, so the live board and the loop's cache are never read or written.
+# Stubbed gh; a temp state dir, so the live board and the loop's cache are never read or written. The suite hands a board move no
+# dispatch context of its own: a gate the live loop runs exports SG_MOVE_BY=loop (#861), and the suite asserts that a move with no
+# context records none (#864, #1329).
 # usage: bash test-board-move-unchanged.sh [board.py]
 src=${1:-$(dirname "$0")/board.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/st"; cp "$src" "$T/s-board.py"; cp "$(dirname "$src")/issue_state.py" "$T/issue_state.py"; cp "$(dirname "$src")/board_columns.py" "$(dirname "$src")/board-definition.json" "$T/"
 printf '2001\tTodo\n2002\tDoing\n2003\tTodo\n' > "$T/cards.tsv"
+# item id -> issue, the fixture's board: 2003's item id is a bare number, as the REST items route answered it
+printf 'ITEM2001\t2001\nITEM2002\t2002\n3003\t2003\n' > "$T/item-map"
 cat > "$T/bin/gh" <<'J'
 #!/bin/bash
 a="$*"; echo "$a" >> "TMPDIR/gh.calls"
 case "$a" in *"--input -"*) cat > "TMPDIR/patch.in";; esac
+item() {   # the issue the fixture's item-map binds to this item id; an id the map does not name is a stub error, never a guess
+  iss=$(/usr/bin/awk -F'\t' -v i="$1" '$1==i{print $2; exit}' "TMPDIR/item-map")
+  [ -n "$iss" ] && { echo "$iss"; return 0; }
+  echo "stub: no item-map entry for item id '$1' in: $a" >&2; return 1
+}
 case "$a" in
-  *"items/"*"fields[]"*)   # the card's own read: the one-item REST route (not `items?per_page`), the compare and the proof of one move (#1300, #1303)
+  *"/items/"*"fields[]"*)   # the card's own read: the one-item REST route, `/projectsV2/<n>/items/<item id>?fields[]=<field id>` (#1300, #1303)
     [ -e "TMPDIR/board-down" ] && { echo "API rate limit exceeded" >&2; exit 1; }
-    echo node >> "TMPDIR/nodes"; n=${a##*items/}; n=${n%%\?*}; n=${n#ITEM}; [ "$n" = 3003 ] && n=2003
-    st=$(/usr/bin/grep "^$n	" "TMPDIR/cards.tsv" | cut -f2)
-    printf '{"isArchived":false,"content":{"number":%s},"fields":[{"name":"Status","value":{"name":{"raw":"%s"}}}]}\n' "$n" "$st";;
-  *"-X PATCH"*items/*)
+    echo node >> "TMPDIR/nodes"
+    n=${a##*/items/}; n=${n%%/*}; n=${n%%\?*}; iss=$(item "$n") || exit 1
+    st=$(/usr/bin/grep "^$iss	" "TMPDIR/cards.tsv" | cut -f2)
+    printf '{"isArchived":false,"content":{"number":%s},"fields":[{"name":"Status","value":{"name":{"raw":"%s"}}}]}\n' "$iss" "$st";;
+  *"-X PATCH"*"/items/"*)
     echo PATCH >> "TMPDIR/patches"
     [ -e "TMPDIR/drop" ] && { echo '{"id":"ITEM"}'; exit 0; }   # a write answered ok and never landed
-    n=${a#*items/}; n=${n%% *}; n=${n#ITEM}; [ "$n" = 3003 ] && n=2003   # 2003's item id is a bare number, as the REST route answers
+    n=${a##*/items/}; n=${n%% *}; n=${n%%/*}; iss=$(item "$n") || exit 1
     opt=$(python3 -c 'import json;print(json.load(open("TMPDIR/patch.in"))["fields"][0]["value"])')
     name=Todo; [ "$opt" = O_DOING ] && name=Doing
-    /usr/bin/grep -v "^$n	" "TMPDIR/cards.tsv" > "TMPDIR/cards.new"; printf '%s\t%s\n' "$n" "$name" >> "TMPDIR/cards.new"; mv "TMPDIR/cards.new" "TMPDIR/cards.tsv"
+    /usr/bin/grep -v "^$iss	" "TMPDIR/cards.tsv" > "TMPDIR/cards.new"; printf '%s\t%s\n' "$iss" "$name" >> "TMPDIR/cards.new"; mv "TMPDIR/cards.new" "TMPDIR/cards.tsv"
     echo '{"id":"ITEM"}';;
   *users/o*) echo '{"type":"Organization"}';;
   *fields?per_page=100*) echo '[{"id":"F_STATUS","name":"Status","options":[{"id":"O_TODO","name":{"raw":"Todo"}},{"id":"O_DOING","name":{"raw":"Doing"}}]}]';;
   *'fields[]=F_STATUS'*) [ -e "TMPDIR/board-down" ] && { echo "API rate limit exceeded" >&2; exit 1; }
     echo read >> "TMPDIR/reads"; while IFS=$'\t' read -r n s; do printf '%s\t%s\thttps://api.github.com/repos/x/y\n' "$n" "$s"; done < "TMPDIR/cards.tsv";;
-  *items?per_page=100*) printf '[2001,"ITEM2001","https://api.github.com/repos/x/y"]\n[2002,"ITEM2002","https://api.github.com/repos/x/y"]\n[2003,3003,"https://api.github.com/repos/x/y"]\n';;
-  *) echo '{"message":"not found"}' >&2; exit 1;;
+  *items?per_page=100*) while IFS=$'\t' read -r iid iss; do printf '[%s,"%s","https://api.github.com/repos/x/y"]\n' "$iss" "$iid"; done < "TMPDIR/item-map";;
+  *graphql*) echo "stub: the seam sent a GraphQL call, and the loop reads over REST only: $a" >&2; exit 1;;   # a regression is red, never a silent missing count
+  *) echo "stub: unrecognized call: $a" >&2; exit 1;;
 esac
 J
 sed -i.bak "s|TMPDIR|$T|g" "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
-run() { SG_STATE="$T/st" SG_REPO=x/y SG_BOARD_READ_BACKOFF=0 python3 "$T/s-board.py" "$@"; }
+run() { env -u SG_CHECKOUT SG_MOVE_BY="${RUN_MOVE_BY-}" SG_STATE="$T/st" SG_REPO=x/y SG_BOARD_READ_BACKOFF=0 python3 "$T/s-board.py" "$@"; }   # a context the suite names itself: none is inherited from the gate that runs this suite (#861, #864, #1329)
 patches() { [ -e "$T/patches" ] && wc -l < "$T/patches" | tr -d ' ' || echo 0; }
 reads() { [ -e "$T/reads" ] && wc -l < "$T/reads" | tr -d ' ' || echo 0; }
 nodes() { [ -e "$T/nodes" ] && wc -l < "$T/nodes" | tr -d ' ' || echo 0; }
@@ -72,7 +88,7 @@ r=$(rec)
 [ "$rc" -eq 0 ] && [ "$(entries)" = 1 ] && case "$r" in "ITEM2001 Doing "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z) ok "a proved move writes one entry with the item, the column and the instant";; *) ko "entry: $r";; esac || ko "proved move: exit $rc, entries $(entries): $o"
 [ -e "$T/st/board-dirty" ] && ok "the proved move touches the refresh flag in the same step" || ko "board-dirty not touched by a proved move"
 rm -f "$T/st/board-moves.json"
-o=$(SG_MOVE_BY=loop run o 4 Todo 2001 2>&1); rc=$?   # a move a loop script makes names its dispatch context
+o=$(RUN_MOVE_BY=loop run o 4 Todo 2001 2>&1); rc=$?   # a move a loop script makes names its dispatch context
 [ "$rc" -eq 0 ] && grep -q '"by": "loop"' "$T/st/board-moves.json" && ok "a move made with a dispatch context records it in the entry" || ko "a loop move records no dispatch context: exit $rc, record $(rec): $o"
 rm -f "$T/st/board-moves.json"
 o=$(run o 4 Doing 2001 2>&1); rc=$?   # no context named: the entry carries no `by`
