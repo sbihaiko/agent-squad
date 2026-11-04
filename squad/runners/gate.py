@@ -13,7 +13,7 @@ class GateRunner:
         ctx.record.append("gate_start", node=node["name"], entry=entry, item=sc.item, pid=os.getpid(),
                           limit=node.get("deadline"), started_at=ctx.wall())
         inp = GateInput(ctx.artifacts.view(sc.item), {n: f.value for (n, it), f in ctx.facts.values.items() if it in (None, sc.item)},
-                        str(ctx.workspace_path(None, sc.item)))
+                        str(ctx.workspace_path(None, sc.item)), fix_run=ctx.fix_run)
         key, tree, hit = gates.memo(node["check"], node["params"], inp, inp.cwd, ctx.record.events)
         if hit is not None:
             # A stage of this run already proved this tree and suite: reuse that verdict, and say so. A silent skip is the

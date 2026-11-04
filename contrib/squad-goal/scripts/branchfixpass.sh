@@ -124,7 +124,9 @@ while read -r sha br i; do
   # A refusal is no dispatch (#812): launch.py exits non-zero when it refuses the start, so the pass says launch.py's own last
   # line instead of swallowing it, writes no fix marker and lets the next pass retry the tip.
   lf=$(mktemp)
-  if ! (cd "$SG_CHECKOUT" && python3 "$here/launch.py" "$req") >"$lf" 2>&1; then
+  # A fix round repairs the work branch, and its child commits on that branch, never in the target: SG_FIX_RUN marks the run so
+  # the final gate proves every acceptance command in the child's tree (#1374).
+  if ! (cd "$SG_CHECKOUT" && SG_FIX_RUN=1 python3 "$here/launch.py" "$req") >"$lf" 2>&1; then
     echo "BRANCHFIX $br @ $s9 refused by launch.py: $(tail -1 "$lf"); the next pass retries" >&2; rm -f "$lf"; continue
   fi
   run=$(/usr/bin/grep -E '^run-[A-Za-z0-9._-]+$' "$lf" | tail -1); rm -f "$lf"

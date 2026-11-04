@@ -5,7 +5,7 @@ from pathlib import Path
 
 import yaml
 
-from squad import defaults, skillpath
+from squad import defaults
 
 ROOT = Path(__file__).resolve().parent.parent
 spec = importlib.util.spec_from_file_location("build_vendor_skills", ROOT / "scripts" / "build_vendor_skills.py")
@@ -71,17 +71,16 @@ def test_check_reports_a_source_that_changed_and_a_copy_edited_by_hand(tmp_path)
 
 
 def test_the_to_tickets_skill_states_the_spec_prefix_rule():
-    """A child of a spec carries the spec's number first in its title, and the vendored copy carries the same lines."""
+    """A child of a spec carries the spec's number first in its title, and the vendored copy states it.
+
+    The vendored copy is the one the loop reads, and it is the repository's: the personal copy under `~` follows the
+    upstream release and is not ours to hold to this rule, so `squad.skillpath --check` reports that drift to the owner
+    instead of a red suite here (ADR-0139)."""
     markers = ("[SPEC <n>] <title>", "the first words of its title",
                "never replaces the parent relation", "carries no prefix")
     vendored = (VENDOR / "skills" / "to-tickets" / "SKILL.md").read_text()
     for m in markers:
         assert m in vendored, f"the vendored to-tickets skill does not state: {m}"
-    personal = next((h for h in skillpath.resolve_all("to-tickets") if h.kind == "personal"), None)
-    if personal:                                   # the source copy, when this machine has one
-        source = personal.path.read_text()
-        for m in markers:
-            assert m in source, f"the personal to-tickets skill does not state: {m}"
 
 
 def test_the_publish_skills_add_the_triage_label_only_after_the_status_reads_back():

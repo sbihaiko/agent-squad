@@ -173,6 +173,36 @@ async def test_loop_exhaustion_still_records_elapsed_on_its_failing_exit(tmp_pat
     assert work["outcome"] == "fail" and work["elapsed"] is not None and work["elapsed"] >= 0
 
 
+async def test_a_fix_run_marked_at_start_proves_its_gate_commands_in_the_child_tree(tmp_path):
+    """#1374: the gate reads the mark `run_start` recorded, never a hand-built GateInput. The mark alone routes the command:
+    the same graph without it proves the command in the target."""
+    cmd = "printf ran > proof.txt"
+
+    def flow():
+        d = doc([agent("actor", output_key="dispatch"),
+                 {"name": "gate", "kind": "gate", "check": "ac-verify", "params": {"commands_from": "actor"}}], ["actor", "gate"])
+        d["gates"].append({"id": "ac-verify", "params": ["commands_from"]})
+        return d
+
+    child = tmp_path / "child"; child.mkdir()
+    out = {"dispatch": "c1", "ac_commands": [cmd], "ac_runs": [[cmd, str(child)]]}
+    eng = Engine(from_doc(flow()), ScriptedAdapter({"actor": {"output": out, "spend": 0.1}}), tmp_path / "run",
+                 target=make_repo(tmp_path / "target"), options={"fix_run": True})
+    v = await eng.run()
+    assert v.verdict == "completed"
+    assert (child / "proof.txt").read_text() == "ran", "a fix run's gate command did not run in the child tree"
+    assert not (tmp_path / "target" / "proof.txt").exists(), "a fix run's gate command ran in the target"
+
+    target2 = make_repo(tmp_path / "target2")
+    child2 = tmp_path / "child2"; child2.mkdir()
+    out2 = {"dispatch": "c1", "ac_commands": [cmd], "ac_runs": [[cmd, str(child2)]]}
+    eng2 = Engine(from_doc(flow()), ScriptedAdapter({"actor": {"output": out2, "spend": 0.1}}), tmp_path / "run2", target=target2)
+    v2 = await eng2.run()
+    assert v2.verdict == "completed"
+    assert (target2 / "proof.txt").read_text() == "ran", "a run that is not a fix run did not prove in the target"
+    assert not (child2 / "proof.txt").exists(), "a run that is not a fix run proved in the child's tree"
+
+
 def test_a_childs_own_out_of_budget_claim_is_not_recorded_as_a_cap():    # #169: no cap fired at $0.36 of $1.50; the model wrote the reason itself
     from squad import session
     res = type("R", (), {"output": {"status": "fail", "reasons": ["out_of_budget"]}})()

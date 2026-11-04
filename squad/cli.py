@@ -37,7 +37,7 @@ def model_hours_arg(text):
 
 def _opts(a):
     m = {"stop_after": a.stop_after, "spend_cap": a.spend_cap, "deadline": a.deadline, "max_parallel": a.max_parallel, "tier_pin": a.tier_pin,
-         "expect_graph_hash": a.expect_graph_hash, "keep_children": a.keep_children or None,
+         "expect_graph_hash": a.expect_graph_hash, "keep_children": a.keep_children or None, "fix_run": a.fix_run or None,
          "spent_models": a.spent_models.split(",") if a.spent_models is not None else None,
          "model_hours": model_hours_arg(a.model_hours) if a.model_hours is not None else None,
          "model_order": a.model_order.split(",") if a.model_order is not None else None}
@@ -161,6 +161,8 @@ def parser():
         s.add_argument("--model-order", help="comma-separated model ids in the order the launcher read them (models.json coding_models): an in-run fallback follows it after its pick")
         s.add_argument("--keep-children", action="store_true",
                        help="keep every landed child's worktree and branch after the verdict: a later pass reads them (the loop's wave entry)")
+        s.add_argument("--fix-run", action="store_true",
+                       help="the run repairs a work branch, so its acceptance commands prove in the tree its child wrote, never in the target (#1374)")
         s.add_argument("--expect-graph-hash", help="refuse the run unless the loaded graph has this sha256 (exit 2, no record written)")
     return p
 

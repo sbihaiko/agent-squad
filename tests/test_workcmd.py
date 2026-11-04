@@ -67,7 +67,7 @@ def test_the_gate_command_sees_the_project_python(tmp_path, monkeypatch):
 
 
 def survey_all(tmp_path, cmds):
-    e = SimpleNamespace(target=str(tmp_path), artifacts={"c1": {"ac_commands": cmds}})
+    e = SimpleNamespace(target=str(tmp_path), fix_run=False, artifacts={"c1": {"ac_commands": cmds}})
     d = Dispatch(e)
     d.landed = {"c1": {}}
     return asyncio.run(d.ac_survey())
@@ -89,7 +89,7 @@ def landing(tmp_path, cmds):
     repo.mkdir()
     git.run(["init", "-q"], repo, check=True)
     git.run(["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base"], repo, check=True)
-    d = Dispatch(SimpleNamespace(target=str(repo), scale=1, artifacts={"c1": {"ac_commands": cmds}}))
+    d = Dispatch(SimpleNamespace(target=str(repo), scale=1, fix_run=False, artifacts={"c1": {"ac_commands": cmds}}))
     d.ac_before = {"c1": True}
     return asyncio.run(d.landing_check("c1", git.head(repo)))
 

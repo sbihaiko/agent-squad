@@ -4,7 +4,7 @@ An option may name nodes and may lower a run-block value. It never sets a node's
 """
 LOWER = {"spend_cap": "spend_cap", "deadline": "deadline", "max_parallel": "max_parallel"}
 NODE_OPTIONS = ("stop_after",)
-OTHER = ("tier_pin", "expect_graph_hash", "spent_models", "model_hours", "model_order", "keep_children")
+OTHER = ("tier_pin", "expect_graph_hash", "spent_models", "model_hours", "model_order", "keep_children", "fix_run")
 TIERS = ("trivial", "medium", "large")
 
 
@@ -45,6 +45,8 @@ def resolve(graph, options):
         raise OptionError("model_order must be a list of model ids")
     if "keep_children" in opts and not isinstance(opts["keep_children"], bool):
         raise OptionError("keep_children must be true or false")
+    if "fix_run" in opts and not isinstance(opts["fix_run"], bool):
+        raise OptionError("fix_run must be true or false")
     if "expect_graph_hash" in opts and opts["expect_graph_hash"] != graph.hash:
         raise OptionError(f"graph hash mismatch: expected {opts['expect_graph_hash']}, the loaded graph is {graph.hash}. Nothing ran")
     return opts, cfg

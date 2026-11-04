@@ -53,14 +53,16 @@ class Dispatch:
             self.landed[ev["node"]] = ev
 
     def child_tree(self, name):
-        """The tree a child wrote, as a string, or None when the child was never accepted: a git-history command reads it (#862)."""
+        """The tree a child wrote, as a string, or None when the child was never accepted: a history command and every command
+        of a fix run read it (#862, #1374)."""
         acc = self.children.get(name)
         return str(self.e.runs.workspace(name, acc["definition"])) if acc else None
 
     def payload(self, name):
         """The held-out commands of every child that passed, in all waves (a later wave re-runs the earlier ones).
         `runs` is the source: one [command, tree] pair per command. A git-history command names the tree its child wrote, so it
-        reads that tree and never the target's merge (#862); any other command names none and runs in the target. The tree is
+        reads that tree and never the target's merge (#862); every command of a fix run names it too, because the fix is on the
+        work branch and the target is cut from the base (#1374); any other command names none and runs in the target. The tree is
         recorded even if it is gone now: the gate reports that as `child_tree_missing`, never as a silent run in the target."""
         ledger = self.ledger(name)
         runs = []
@@ -68,7 +70,7 @@ class Dispatch:
             out = self.e.artifacts.get(row["child"], None)
             tree = self.child_tree(row["child"])
             for c in session.ac_commands(out)[0] if row["outcome"] == "pass" else []:
-                run = [c, tree if workcmd.reads_history(c) else None]
+                run = [c, tree if (self.e.fix_run or workcmd.reads_history(c)) else None]
                 if run not in runs:
                     runs.append(run)
         return ledger, list(dict.fromkeys(c for c, _ in runs)), runs     # ac_commands derives from runs, for the readers that list them
@@ -517,8 +519,8 @@ class Dispatch:
         return rows
 
     async def ac_survey(self, extra=None):
-        """Run the held-out commands of every landed child: a history command in its child's tree, the rest in the target (#862).
-        Use `workcmd`, the policy of the gate.
+        """Run the held-out commands of every landed child: a history command in its child's tree, and every command of a fix
+        run there too, the rest in the target (#862, #1374). Use `workcmd`, the policy of the gate.
         Return ({child: all its commands passed}, {child: {"ac_failed:<command>": output tail or timeout note}}).
         The evidence holds every failing command of a child."""
         got, evidence = {}, {}
@@ -526,10 +528,10 @@ class Dispatch:
             got[name] = True
             tree = self.child_tree(name)
             for c in cmds:
-                if gates.held_out_tree_missing(c, tree):     # #862: a history command reads its child's tree, never the merged target
+                if gates.held_out_tree_missing(c, tree, self.e.fix_run):     # #862, #1374: a held-out command reads its child's tree
                     r = workcmd.CmdResult(False, f"child worktree not found: {tree}" if tree else "no child worktree recorded")
                 else:
-                    where = tree if workcmd.reads_history(c) else self.e.target
+                    where = tree if (self.e.fix_run or workcmd.reads_history(c)) else self.e.target
                     r = await anyio.to_thread.run_sync(lambda c=c, w=where: workcmd.run(c, w))
                 if not r.ok:
                     got[name] = False

@@ -63,7 +63,7 @@ def _run(page, expr):
 
 LOOP_VIEW = {"state": "on", "who": "owner", "when": "2026-11-02T09:00:00-03:00", "tailnet": False,
              "access": {"loop_write": False, "terminals_send": False},
-             "health": {"live_runs": 2, "live_gates": 0, "cycle_left": 45, "starting_left": None},
+             "health": {"live_runs": 2, "live_gates": 0, "cycle_age": 45, "starting_left": None},
              "live": {"runs": [], "gates": []}, "log": []}
 
 
@@ -114,17 +114,17 @@ def test_the_loop_theme_draws_now_tiles_and_no_input(hub):
     assert "Settings" in settings and "Monitor" in settings, settings
 
 
-def test_the_loop_health_reads_the_cycle_beat_and_says_none_when_it_has_none(hub):
-    """The Now tiles' `cycle_left` is a fact of the cycle log: the next beat is the last cycle's own length away. A log
-    with no cycle is None, never zero, so the tile says "no cycle yet" (#1278)."""
+def test_the_loop_health_reads_the_last_cycles_age_and_says_none_when_it_has_none(hub):
+    """The Now tiles' `cycle_age` is a fact of the cycle log: seconds since the last cycle's own line. A log with no cycle
+    is None, never zero, so the tile says "no cycle yet" (#1280, SPEC 1117)."""
     log = hub.STATE / "cycle.log"
     log.unlink(missing_ok=True)
-    assert hub.loop_health({}, now=1_700_000_000.0)["cycle_left"] is None
+    assert hub.loop_health({}, now=1_700_000_000.0)["cycle_age"] is None
     now = time.time()
-    log.write_text(time.strftime("%H:%M:%S", time.localtime(now)) + " CYCLE 30s\n")
+    log.write_text(time.strftime("%H:%M:%S", time.localtime(now - 90)) + " CYCLE 30s\n")
     health = hub.loop_health({"runs": ["a", "b"], "gates": []}, now=now)
     assert health["live_runs"] == 2 and health["live_gates"] == 0
-    assert 25 <= health["cycle_left"] <= 31, health["cycle_left"]
+    assert 85 <= health["cycle_age"] <= 95, health["cycle_age"]
     log.unlink()
 
 
@@ -196,12 +196,12 @@ def test_the_save_bar_never_hides_and_a_read_only_theme_says_so(hub):
         assert out[theme]["disabled"] is True, f"{theme}: Save was armed with nothing to write"
     for theme in ("lop", "acc"):
         assert out[theme]["text"] == "nothing to save here", f"{theme}: {out[theme]['text']!r}"
-    # Subscriptions edits write at once, so the bar never claims the theme is read-only (#1278).
-    assert out["sub"]["text"] == "Subscriptions: each change saves at once", out["sub"]["text"]
+    # re-anchored (#1281): Subscriptions stages its edits like every other writable theme, so its bar reads as no change.
+    assert out["sub"]["text"] == "Subscriptions: no change", out["sub"]["text"]
     assert out["lim"]["text"] == "Spend & limits: no change" and out["mdl"]["text"] == "Models & chains: no change"
     assert out["ro"]["hidden"] is False and out["ro"]["disabled"] is True
     assert out["ro"]["text"] == "Read-only over the tailnet"
-    assert 'const SET_SAVE=["lim","mdl","slk"]' in hub.PAGE
+    assert 'const SET_SAVE=["lim","mdl","slk","sub"]' in hub.PAGE
 
 
 def test_every_input_in_settings_takes_the_body_size_and_the_page_control_height(hub):

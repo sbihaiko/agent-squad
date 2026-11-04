@@ -321,6 +321,15 @@ class Engine:
         else:
             self.options.pop(CHAIN_ORDER, None)
 
+    @property
+    def fix_run(self):
+        """True when this run repairs a work branch (#1374): the engine option `fix_run` recorded at run start.
+
+        The record, not the live options, so a resume reads the answer the start recorded (ADR-0106). A fix run's child commits
+        on the work branch, never in the target cut from the base, so its acceptance commands prove in the child's tree."""
+        start = self.record.events[0] if self.record.events else {}
+        return bool((start.get("engine_options") or {}).get("fix_run"))
+
     def _target_branch(self):
         """The branch the target stands on at run start, or None (no git, a detached HEAD): a resume refuses a target on another branch."""
         if not self.has_git:
