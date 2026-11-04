@@ -8,6 +8,7 @@ unset "${!SG_@}"; export HOME="$T/home"; mkdir -p "$HOME"
 K=$T/skill; S=$K/scripts; st=$T/st; mkdir -p "$S" "$st"
 . "$d/driver-tree.sh"; trap 'bash "$S/watchd.sh" stop >/dev/null 2>&1; driver_tree_kill "$T"; rm -rf "$T"' EXIT
 cp "$d/watchd.sh" "$S/watchd.sh"; printf 'SG_STATE=%s; SG_PROFILE=\n' "$st" > "$S/env.sh"
+printf 'gh_aggregate() { return 1; }\n' > "$S/ghcall.sh"   # offline: the start's loop-bug read has no answer
 for f in watch fastloop cqflush; do printf '#!/bin/bash\nsleep 30\n' > "$S/$f.sh"; done
 sha=0123456789abcdef0123456789abcdef01234567
 printf '%s 2026-10-21T00:00:00Z\n' "$sha" > "$K/PUBLISHED"

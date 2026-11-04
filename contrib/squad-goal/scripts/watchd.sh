@@ -3,6 +3,7 @@
 # Keeps watch.sh (the 90 s cycle), fastloop.sh (childcc every SG_FAST_INTERVAL s) and cqflush.sh (the comment queue) alive without a Monitor task: a supervisor in its own session restarts them if they die.
 # Events go to $SG_STATE/watch.log (read them with watchtail.sh); pid in $SG_STATE/watchd.pid.
 . "$(dirname "$0")/env.sh"; P="$SG_STATE/watchd.pid"; L="$SG_STATE/watch.log"; me="$(cd "$(dirname "$0")" && pwd)/watchd.sh"
+. "$(dirname "$0")/ghcall.sh"   # the one seam the start's loop-bug read goes through (ADR-0146)
 # The slot is the one fact a supervisor holds (#932): watchd.pid is what a reader looks at, and watchd.lock/pid is what a
 # second `run` is refused by. alive() reads the slot, so a pid file a dying duplicate removed no longer reads as "not running".
 # A live supervisor is a `watchd.sh run` of any copy of the skill: the repository's scripts and the live ones are two paths
@@ -63,9 +64,25 @@ drain_pause() {
 # A start during a drain cancels it (#1316): the waiter ends, and the pause the drain set lifts with its marker.
 drain_cancel() { w=$(cat "$SG_STATE/auto/drain-waiter" 2>/dev/null); [ -n "$w" ] && kill -TERM "$w" 2>/dev/null
   rm -f "$SG_STATE/auto/drain" "$SG_STATE/auto/drain-waiter"; [ -e "$SG_STATE/auto/drain-pause" ] && rm -f "$SG_STATE/auto/off" "$SG_STATE/auto/drain-pause"; }
+# loop_bug_open   The owner's rule: the loop is never restarted while a loop-bug issue is open, Backlog included (#1386,
+# ADR-0146). The three halt labels stop the passes; a bare `loop-bug` stops nothing there, and no label stops a start. So
+# the start itself reads the open issues, once, through the one seam. Returns 0 and prints the number when one is open,
+# 1 when none is, and 2 when the read failed: a read that proves nothing refuses nothing (ADR-0146 decision 6).
+loop_bug_open() {
+  local j n
+  j=$(gh_aggregate "repos/$SG_REPO/issues?state=open") || return 2
+  n=$(printf '%s' "$j" | jq -r '[.[]|select(any(.labels[]?; ((.name? // .) as $l | $l == "loop-bug" or ($l | startswith("loop-bug:")))))][0].number // empty' 2>/dev/null) || return 2
+  [ -n "$n" ] || return 1
+  printf '%s\n' "$n"
+}
 case "${1:-status}" in
   start) alive && { drain_cancel; echo "watchd already running pid=$pid"; exit 0; }
     o=$(orphans); [ -n "$o" ] && { printf 'watchd start refused: orphaned lanes still run, their supervisor is gone: %s\n' "$(printf '%s\n' "$o" | awk '{ printf "%s%s pid %s", (NR > 1 ? ", " : ""), $2, $1 }')" >&2; exit 1; }
+    lb=$(loop_bug_open); lb_rc=$?
+    case $lb_rc in
+      0) printf 'watchd start refused: #%s is a loop defect; the fix lands outside the loop and its publish closes it (ADR-0146)\n' "$lb" >&2; exit 1;;
+      2) echo "watchd start: the open issues could not be read, so the loop-bug check did not run" >&2;;
+    esac
     [ -f "$L" ] && [ "$(wc -c < "$L")" -gt 5000000 ] && mv "$L" "$L.old"
     rm -f "$SG_STATE/token-guard.since" "$SG_STATE/token-over" "$SG_STATE/token-pause"   # a start is a relight: the token guard measures afresh, never an old burn (#515)
     # A drain's pause is the drain's own (#923): a start lifts it, from the hub or the terminal, so the loop never reads on
