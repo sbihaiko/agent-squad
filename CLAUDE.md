@@ -57,7 +57,7 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 ### Run engine
 
 - **Run truth lives in one module; the exit code is a function of one verdict** ([ADR-0019](docs/adr/0019-run-truth-in-one-module.md)). Guard: none yet.
-- **Only `loop-bug:dispatch` and `loop-bug:landing` halt dispatch; a bare `loop-bug` halts nothing** ([ADR-0146](docs/adr/0146-a-loop-defect-is-fixed-outside-the-loop.md)). Guard: `test-autobug.sh`, `test-autofrontier-one-run.sh`, `test-childcc.sh`, `test-watch-land.sh`.
+- **`loop-bug:dispatch`, `loop-bug:landing` and `loop-bug:infra` halt dispatch; a bare `loop-bug` halts nothing** ([ADR-0146](docs/adr/0146-a-loop-defect-is-fixed-outside-the-loop.md)). Guard: `test-autobug.sh`, `test-autofrontier-one-run.sh`, `test-childcc.sh`, `test-watch-land.sh`.
 - **A loop defect is reviewed by Fable or Astra first; a loop-bug is built only after an approving plan review of its current body** ([ADR-0171](docs/adr/0171-a-loop-defect-is-reviewed-by-fable-or-astra.md)). Guard: `contrib/squad-goal/scripts/test-loopbug-review.sh`, `test-autobug.sh`.
 - **Needs-human is not success and has its own exit code; its card keeps its column, marked frozen:owner** ([ADR-0029](docs/adr/0029-needs-human-exit-code.md)). Guard: `tests/test_verdict.py`, `tests/test_resume.py`, `tests/test_cli.py`, `contrib/squad-goal/scripts/test-janitor-disp-expiry.sh`.
 - **An interruptible write is atomic** ([ADR-0030](docs/adr/0030-atomic-writes.md)). Guard: `tests/test_record.py`.

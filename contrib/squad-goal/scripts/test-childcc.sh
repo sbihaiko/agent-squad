@@ -270,9 +270,19 @@ rc=0; out=$(pass lbin) || rc=$?
 sed 's/"name":"loop-bug:dispatch"/"name":"loop-bug:landing"/' "$T/issues-open.json" > "$T/issues-open.json.l" && mv "$T/issues-open.json.l" "$T/issues-open.json"
 rc=0; out=$(pass lb) || rc=$?
 [ "$(ent lb 5600)" = 0 ] && echo "$out" | /usr/bin/grep -q "LOOP STOP: #596" && ok "a loop-bug:landing issue stops the entry too" || ko "loop-bug:landing did not stop the entry: $(cat "$WAVE_CALLS")"
+# `loop-bug:infra` names the loop's infrastructure, so the same one list stops the entry (ADR-0146).
+sed 's/"name":"loop-bug:landing"/"name":"loop-bug:infra"/' "$T/issues-open.json" > "$T/issues-open.json.i" && mv "$T/issues-open.json.i" "$T/issues-open.json"
+rc=0; out=$(pass lb) || rc=$?
+[ "$(ent lb 5600)" = 0 ] && echo "$out" | /usr/bin/grep -q "LOOP STOP: #596" && ok "a loop-bug:infra issue stops the entry too" || ko "loop-bug:infra did not stop the entry: $(cat "$WAVE_CALLS")"
 printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}}' > "$T/issues-open.json"
 out=$(pass lb)
 [ "$(ent lb 5600)" = 1 ] && ok "closing the issue resumes the entry with no other action" || ko "entry did not resume: $(cat "$WAVE_CALLS")"
+# A bare `loop-bug` names a defect the loop works beside, so it stops nothing (owner answer B1).
+cat > "$T/issues-open.json" <<'JSON'
+{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":597,"title":"A defect beside the path","body":"","state":"OPEN","labels":{"nodes":[{"name":"loop-bug"}]},"blockedBy":{"nodes":[]},"comments":{"nodes":[]}}]}}}}
+JSON
+out=$(pass lb)
+echo "$out" | /usr/bin/grep -q "LOOP STOP" && ko "a bare loop-bug stopped the pass: $out" || ok "a bare loop-bug stops nothing"
 
 # Code Review (#603): with the shipped vocabulary, childcc moves a Doing card to Code Review when it starts the review of a
 # child and when it defers a child that waits for review, through board.sh, once per child. A card past Code Review (Code

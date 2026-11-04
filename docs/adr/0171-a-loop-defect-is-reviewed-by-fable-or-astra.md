@@ -10,7 +10,7 @@ A defect in the loop's own machinery was reviewed by the general review chain, w
 Fable and Astra were not in that chain at all, so the defect that most needs the strongest judgment got the weakest one.
 
 A bare `loop-bug` also reached the build with no review of its proposed fix. [ADR-0146](0146-a-loop-defect-is-fixed-outside-the-loop.md)
-halts dispatch for `loop-bug:dispatch` and `loop-bug:landing` only. A bare `loop-bug` halts nothing, so the loop built it
+halts dispatch for `loop-bug:dispatch`, `loop-bug:landing` and `loop-bug:infra` only. A bare `loop-bug` halts nothing, so the loop built it
 like any other bug.
 
 ## Decision

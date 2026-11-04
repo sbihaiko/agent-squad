@@ -382,6 +382,17 @@ r=$(run)
 [ "$(lines "$LAUNCHLOG")" = 0 ] && [ "$(marked 93)" = 0 ] && ok "Y1: a loop-bug:landing issue halts the frontier pass" || ko "Y1: the pass launched with a landing loop defect open: '$r'"
 case "$r" in *"LOOP STOP: #641 is a loop defect; the fix lands outside the loop"*) ok "Y1: the stop names the issue";; *) ko "Y1: the stop is not named: '$r'";; esac
 
+# Y1b (ADR-0146 decision 2): `loop-bug:infra` names a defect in the loop's infrastructure. The label is the switch that
+# outlives a restart, so the frontier pass dispatches nothing while it is open, and resumes when it closes.
+scene loopbuginfra
+issues '[{"number":94,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":1374,"title":"A fix run proves in the target","body":"b","labels":[{"name":"loop-bug:infra"}]}]'
+r=$(run)
+[ "$(lines "$LAUNCHLOG")" = 0 ] && [ "$(marked 94)" = 0 ] && ok "Y1b: a loop-bug:infra issue halts the frontier pass" || ko "Y1b: the pass launched with an infrastructure loop defect open: '$r'"
+case "$r" in *"LOOP STOP: #1374 is a loop defect; the fix lands outside the loop"*) ok "Y1b: the stop names the issue";; *) ko "Y1b: the stop is not named: '$r'";; esac
+issues '[{"number":94,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
+r=$(run)
+[ "$(marked 94)" = 1 ] && ok "Y1b: closing the issue resumes dispatch" || ko "Y1b: dispatch did not resume: '$r'"
+
 # Y2 (#615): under SG_MIN_FREE_GB GiB free on the volume of $SG_STATE or of $TMPDIR, the frontier pass dispatches nothing
 # and names the volume in the loop log; at or over the floor it dispatches as before.
 scene diskstop

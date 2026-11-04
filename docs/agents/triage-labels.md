@@ -16,4 +16,4 @@ The loop also reads these labels; no triage step adds them:
 | --- | --- |
 | `needs-owner` | The owner acts next. No dispatch pass takes the issue; janitor rule R adds `frozen:owner` over its column. |
 | `frozen:owner` | The owner freeze. The card keeps the column the work reached; only the owner removes the label. |
-| `loop-bug` | A defect in the loop itself (ADR-0146). Only a person adds it. While one is open, every dispatch pass dispatches nothing. |
+| `loop-bug` | A defect in the loop itself (ADR-0146). Only a person adds it. A bare `loop-bug` halts nothing; the defect that stops dispatch carries `loop-bug:dispatch`, `loop-bug:landing` or `loop-bug:infra`, and while one of those is open every dispatch pass dispatches nothing. |
