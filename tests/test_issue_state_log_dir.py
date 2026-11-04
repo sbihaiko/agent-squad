@@ -13,6 +13,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 SCRIPTS = Path(__file__).parents[1] / "contrib" / "squad-goal" / "scripts"
 SCRIPT = SCRIPTS / "issue_state.py"
 SPEC = importlib.util.spec_from_file_location("issue_state_log_dir", SCRIPT)
@@ -56,3 +58,25 @@ def test_a_seam_write_is_one_done_line_and_no_snapshot_miss(tmp_path, monkeypatc
     assert len(lines) == 25                                  # one line per spent call (ADR-0277)
     assert all(line.endswith(" done unattributed") for line in lines)   # no SG_GH_PASS: the spend is unattributed
     assert ghspend._miss_rate(loop_state, time.time()) is None   # a write GitHub took is not a snapshot miss
+
+
+def test_a_failed_seam_write_is_no_snapshot_miss_whatever_its_outcome(tmp_path, monkeypatch):
+    """A write that never reached a verdict is still a write: its line is `failed`, and the miss rate leaves it out (#1328)."""
+    import ghread
+    loop_state = tmp_path / "live-loop"
+    loop_state.mkdir()
+    monkeypatch.setenv("SG_STATE", str(loop_state))
+    monkeypatch.delenv("SG_GH_PASS", raising=False)
+
+    def failing(cmd, input=None, **kw):
+        return subprocess.CompletedProcess(cmd, 1, "", "gh: connection reset")
+
+    state = issue_state.board_state("o", "4", "x/y", kind="users", state_dir=tmp_path / "test-seam", run=failing,
+                                    env={"SG_BOARD_READ_BACKOFF": "0"})
+    for n in range(25):
+        with pytest.raises(RuntimeError):
+            state.binding.api("-X", "POST", "repos/x/y/milestones", "--input", "-", inp=json.dumps({"title": f"m{n}"}))
+
+    calls = [ghread.parse_call(line) for line in (loop_state / "api.log").read_text().splitlines()]
+    assert [c.outcome for c in calls] == ["failed"] * 25     # one line per spent call, labelled as it ended
+    assert ghspend._miss_rate(loop_state, time.time()) is None
