@@ -510,7 +510,7 @@ def all_runs():
 TITLE = {}   # issue number -> short title, refreshed from the board cache (no extra API calls)
 def _titles():
     for it in board_cache.get("items", []):
-        t = re.sub(r"^GUI test squad( pilot)?: ", "", it.get("t") or ""); TITLE[it["n"]] = t[:60] + ("…" if len(t) > 60 else "")
+        t = re.sub(r"^GUI test squad( pilot)?: ", "", it.get("t") or ""); TITLE[it["n"]] = t   # the whole title: a row clamps it in CSS, and a truncated string cannot be widened back
 def demoted(st, r, closed):
     """A failed / unverified / needs-human run whose every issue was closed afterwards (verified by hand, evidence on the issue) is no longer open business."""
     if st in ("failed", "unverified", "needs-human") and r["issues"] and all(int(n) in closed for n in r["issues"]) and (r["land"] or st == "needs-human"): return "verified"
@@ -4705,7 +4705,7 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #q{width:100%;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-sm);padding:3px 6px;font:inherit;margin-top:6px}
 .sp:is(details){border:1px solid var(--line);border-radius:var(--radius-lg);margin-bottom:10px;background:var(--panel);font-size:var(--fs-caption)}.sp>summary{list-style:none;display:flex;align-items:center;gap:6px;min-height:36px;padding:8px 10px;font-size:var(--fs-body);font-weight:600;color:var(--fg);cursor:pointer;user-select:none}.gh{list-style:none;display:flex;align-items:center;gap:6px;height:34px;padding:0 10px;font-size:var(--fs-caption);font-weight:600;color:var(--fg);cursor:pointer;user-select:none;background:var(--inset);border-top:1px solid var(--line)}
 .sp>summary::-webkit-details-marker{display:none}.sp>summary::before,.gh::before{content:"▸";flex:none;width:10px;color:var(--mute);font-weight:400}.sp[open]>summary::before,.gh.op::before{content:"▾"}.sp>summary:hover,.gh:hover{background:var(--bubble)}.sp>summary:focus-visible,.gh:focus-visible{box-shadow:inset 0 0 0 1px var(--acc)}
-.sp>summary .sr,.gh .sr{margin-left:auto;font-weight:400;color:var(--mute);font-size:var(--fs-caption);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}.sp .sb{padding:4px 10px 10px}
+.sp>summary .sr,.gh .sr{margin-left:auto;font-weight:400;color:var(--mute);font-size:var(--fs-caption);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}#lrd>summary{white-space:nowrap}#lrd>summary .sr{max-width:62%}.sp .sb{padding:4px 10px 10px}
 .sp h4{display:flex;align-items:baseline;justify-content:space-between;gap:4px;margin:10px 0 6px;font-size:var(--fs-caption);color:var(--fg);font-weight:600;white-space:nowrap}.sp h4 small{font-weight:400;color:var(--mute);font-size:var(--fs-caption);white-space:nowrap}
 .tot{display:grid;grid-template-columns:repeat(3,1fr);gap:4px}.tot div{background:var(--inset);border:1px solid var(--line);border-radius:var(--radius-md);padding:4px 6px;font-size:var(--fs-caption);color:var(--mute)}.tot b{display:block;font-size:var(--fs-body);color:var(--fg);font-weight:600}.tot b.m{color:var(--mute);font-size:var(--fs-caption);line-height:1.5}
 .tot .cash,.cash{grid-column:1/-1;background:none;border:0;padding:0;margin:2px 0 0;font-size:var(--fs-caption);color:var(--mute);line-height:1.35}
