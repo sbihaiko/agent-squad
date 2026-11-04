@@ -95,7 +95,8 @@ def test_the_run_history_is_the_bottom_of_the_runs_pane(hub):
 def test_the_groups_come_from_the_answer_and_no_caps_are_substituted(hub):
     """The hub builds each header and marks empty bands; the page's own rule and the served caps constant are gone (#1277)."""
     src = hub.PAGE
-    assert "GROUPS=d.groups||[]" in src, "the page does not take the groups the runs answer carries"
+    assert 'fetch("/api/runs?groups=1")' in src, "the page does not ask for the answer that carries the groups"
+    assert "GROUPS=Array.isArray(d)?[]:d.groups||[]" in src, "the page does not take the groups the answer carries"
     assert "GROUPS=d.runs||[]" not in src
     assert "function groupHeader(" not in src, "the page builds a group header again"
     assert "const CAPS=" not in src and "__CAPS__" not in src, "the caps are substituted into the page again"

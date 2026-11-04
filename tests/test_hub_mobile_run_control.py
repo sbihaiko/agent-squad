@@ -34,7 +34,7 @@ ASKED = {"whole": True, "nodes": [], "released": []}
 def routes(info=None, control=None, reply=None):
     """The forward route's answers, keyed by the exact path the phone asks."""
     return {
-        "/api/runs": [{"body": json.dumps({"runs": [LIVE], "groups": []}), "status": 200}],
+        "/api/runs": [{"body": json.dumps([LIVE]), "status": 200}],
         "/api/ended": [{"body": json.dumps([]), "status": 200}],
         f"/dash/{RUN}/run/info.json": [{"body": json.dumps({"ended": False} if info is None else info), "status": 200}],
         f"/dash/{RUN}/run/control.json": [{"body": json.dumps(OPEN if control is None else control), "status": 200}],

@@ -723,9 +723,11 @@ RUN_GROUPS = (("running", "WORKERS"), ("1h", "≤ 1 h"), ("2h", "1–2 h"), ("4h
 def run_groups(rows, caps=None):
     """The run history's groups, in ladder order: each key, its label, the header text and title built by group_header, and
     `empty` marking a band that holds no run. The page draws what it is given, so the worktree ladder and its wording live here
-    alone (#1277)."""
+    alone (#1277). The rows are run_list's, each carrying `state`, `live`, `rank` and `age` (run_row, childcc_row, the test
+    row and the held row alike). The childcc pass is a worker, never a run: it lands in WORKERS and never in an age band, and
+    group_header never counts it."""
     by = {k: [] for k, _ in RUN_GROUPS}
-    for r in rows: by[group_of(r)].append(r)
+    for r in rows: by["running" if r.get("kind") == "childcc" else group_of(r)].append(r)
     out = []
     for k, label in RUN_GROUPS:
         held = by[k]
@@ -2534,8 +2536,10 @@ def run_list():
     with RUN_LIST_LOCK: return list(RUN_LIST)
 
 def runs_answer():
-    """The runs answer: the rows the page draws and one entry per history group, its header built here (#1277). The caps are
-    read on every answer, so a changed ceiling shows after one poll and the page substitutes none at serve time."""
+    """The opted-in runs answer (`/api/runs?groups=1`): the rows the page draws and one entry per history group, its header
+    built here (#1277). The bare route keeps its array, so a script, a phone forward or any other client that reads it is
+    untouched. The caps are read on every answer, so a changed ceiling shows after one poll and the page substitutes none at
+    serve time."""
     rows = run_list()
     return {"runs": rows, "groups": run_groups(rows, loop_caps())}
 
@@ -5125,7 +5129,7 @@ function drawList(){
   const row=r=>r.kind==="childcc"?ccRow(r):`<div class="r ${shown.has(r.id)?"show":""}" data-id="${r.id}"><div>${r.kind==="test"?`<span class=kd title="GUI test run">🧪</span>`:""}<span class="b ${r.state}"${r.tip?` title="${esc(r.tip)}"`:""}>${esc(r.badge||r.state)}</span> <b title="${esc(labelTip(r))}">${esc(name(r))}</b>${loadMark(r)}${!(r.issues||[]).length&&r.issue_why&&!r.fix&&!r.url?`<div class=st>${esc(labelTip(r))}</div>`:""}${sub(r)?`<div class=st title="${esc(sub(r))}">${esc(sub(r))}</div>`:""}<div class=m>${r.share?`<span class="sh${r.share.pct===100?" done":""}" title="the newest gate that counted ran ${r.share.total} tests, ${r.share.passed} passed">${r.share.passed}/${r.share.total} · ${r.share.pct}%</span> · `:""}${usd(r.spend)} · ${Math.round(r.dur)}m · last write ${age(r.age)} ago · ${r.id.slice(-6)} · :${r.port}</div></div><span class=pn title="shown in the panel">${pins.has(r.id)?"●":"○"}</span></div>`;
   {const live=runs.filter(r=>r.rank===0),c=liveCard(live,row);$("#lrun").innerHTML=c.html;$("#lrs").textContent=c.head}   // the sidebar card: a bounded glance of the runs that are live now (#1276)
   const head=g=>{const rows=by[g.key]||[];return `<div class="gh ${openGroups.has(g.key)?"op":""}" data-g="${g.key}" tabindex=0>${esc(g.label)}<span class=sr title="${esc(g.title)}">${esc(g.text)}</span></div>`+(openGroups.has(g.key)?rows.map(row).join(""):"")};
-  const bands=GROUPS.filter(g=>g.key!=="running"),empty=bands.filter(g=>g.empty),drawn=GROUPS.filter(g=>g.key==="running"||!g.empty);   // a band that holds no run folds into one muted line, so six rows of 0 · $0.00 never push the live rows down (#1277)
+  const bands=GROUPS.filter(g=>g.key!=="running"),empty=bands.filter(g=>g.empty&&!openGroups.has(g.key)),drawn=GROUPS.filter(g=>g.key==="running"||!g.empty||openGroups.has(g.key));   // a band that holds no run folds into one muted line, so six rows of 0 · $0.00 never push the live rows down; a band the user opened keeps its header when it empties, so its open set stays theirs and in sight (#1277)
   $("#list").innerHTML=(drawn.map(head).join("")+(empty.length?`<div class=m>no runs in ${empty.map(g=>esc(g.label)).join(" · ")}</div>`:""))||"<div class=m style=padding:10px>no live dashboards</div>";
   document.querySelectorAll(".gh").forEach(e=>e.onclick=()=>{const k=e.dataset.g;   // the header is the only writer: a click toggles this group and nothing else
     if(openGroups.has(k))openGroups.delete(k);else openGroups.add(k);saveGroups();drawList()});
@@ -5144,7 +5148,7 @@ function selectNew(){const ids=allRuns.filter(r=>r.kind!=="childcc").map(r=>r.id
   const fresh=allRuns.filter(r=>r.kind!=="childcc"&&!known.has(r.id)&&r.rank===0);ids.forEach(i=>known.add(i));
   if(!fresh.length)return;const id=fresh.sort((x,y)=>x.age-y.age)[0].id;
   if(N===1)pins.clear();else if(pins.size>=N)pins.delete([...pins][0]);pins.add(id);save()}   // a run starting moves the pins, never the accordions
-async function poll(){try{const d=await (await fetch("/api/runs")).json();allRuns=d.runs||[];GROUPS=d.groups||[];selectNew();applyFilter();refresh()}catch(e){}}
+async function poll(){try{const d=await (await fetch("/api/runs?groups=1")).json();allRuns=Array.isArray(d)?d:d.runs||[];GROUPS=Array.isArray(d)?[]:d.groups||[];selectNew();applyFilter();refresh()}catch(e){}}   // a hub older than the page ignores the query and answers the bare array: the runs still read, and the history stays honestly empty (#1277)
 function barChart(rows,W=280,H=64,L=44){const n=rows.length,vals=rows.map(r=>r.tokens).filter(v=>v!=null),mx=Math.max(...vals,1),bw=W/Math.max(n,1),base=12+H,xl=t=>String(t).replace(/^\d{4}-/,"");
   const y=v=>base-v/mx*H,wd=Math.max(bw-2,1);
   const bars=rows.map((r,i)=>{const x=L+i*bw+1,cx=x+wd/2,title=`${xl(r.t)}: ${r.tokens==null?"no read":tk(r.tokens)+" tokens"} \u00b7 ${r.runs} runs`;
@@ -7513,7 +7517,8 @@ class H(BaseHTTPRequestHandler):
             try: lg = (T / (n + ".log")).read_text(errors="replace")[-60000:]
             except Exception: lg = "(no output yet)" if d.get("state") == "running" else "no such test"   # test.sh makes the log after the json
             body, ct = test_log_page(d, lg), "text/html; charset=utf-8"
-        elif self.path.startswith("/api/runs"): body, ct = json.dumps(runs_answer()).encode(), "application/json"
+        elif self.path.startswith("/api/runs"):   # the bare route keeps its array; `?groups=1` asks for the history groups too (#1277)
+            body, ct = json.dumps(runs_answer() if re.search(r"[?&]groups=1\b", self.path) else run_list()).encode(), "application/json"
         elif self.path.startswith("/api/adapter-errors"): body, ct = json.dumps(adapter_errors()).encode(), "application/json"
         elif self.path.startswith("/api/delivery"): body, ct = json.dumps(delivery()).encode(), "application/json"
         elif self.path.startswith("/api/ended"): body, ct = json.dumps(ended_today()).encode(), "application/json"

@@ -2,13 +2,18 @@
 import importlib.util
 import json
 import os
+import sys
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
+sys.path.insert(0, str(ROOT / "tests"))
+
+from test_hub_run_groups import _js, _run  # noqa: E402  the page's own drawList, run in node over the answer
 
 
 @pytest.fixture(scope="module")
@@ -111,7 +116,27 @@ def test_the_runs_answer_binds_the_header_tooltip_to_the_group_spend(hub):
     h = hub.run_groups(rows, {"runs": 10, "children": 20})[0]
     assert h["text"] == "RUNS 3/10 · AGENTS 9/20"
     assert h["title"] == "$6.60"                                                # spend in the tooltip, occupancy as the text
-    assert 'title="${esc(g.title)}"' in hub.PAGE
+
+
+def test_the_page_paints_the_text_and_the_title_the_answer_carries(hub):
+    """The served page, run in node: it draws the header the hub built, never one of its own (#1277)."""
+    rows = [{"id": f"run-20261011-1010{n}0-abcd", "state": "running", "live": True, "rank": 0, "age": 10,
+             "spend": s, "agents": 3, "dur": 1, "port": 1234} for n, s in enumerate((1.1, 2.2, 3.3))]
+    groups = hub.run_groups(rows, {"runs": 10, "children": 20})
+    out = _run(_js(rows, "const a=boot();a.runs(R,G);a.draw();return {html:a.listHtml()};", groups))
+    assert '<span class=sr title="$6.60">RUNS 3/10 · AGENTS 9/20</span>' in out["html"]
+
+
+def test_the_real_run_list_row_carries_the_fields_the_group_rule_reads(hub, tmp_path):
+    """The rows run_groups classifies are run_list's own: every one carries `state`, `live`, `rank` and `age` (#1277)."""
+    folder = tmp_path / "runs" / "run-real"
+    folder.mkdir(parents=True)
+    (folder / "record.jsonl").write_text(json.dumps({"ts": time.time() - 600, "event": "run_start", "pos": 1}) + "\n")
+    row, _ = hub.run_row(str(folder), "4321", [])
+    assert row["state"] in hub.LIVE_STATES and row["live"] is True and isinstance(row["age"], int)
+    groups = hub.run_groups([row], {"runs": 6, "children": 20})
+    assert [g["key"] for g in groups if not g["empty"]] == ["running"]   # a live row lands in WORKERS, never an age band
+    assert groups[0]["text"] == "RUNS 1/6 · AGENTS 0/20" and groups[0]["title"] == "$0.00"
 
 
 def test_the_runs_answer_carries_the_occupancy_header_with_the_graphs_caps(hub):

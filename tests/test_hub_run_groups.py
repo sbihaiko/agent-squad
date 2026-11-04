@@ -105,6 +105,8 @@ def test_a_changed_cap_shows_after_one_answer(hub, monkeypatch):
 
 def _fn(src, name):
     i = src.index(f"function {name}(")
+    if src[max(0, i - 6) : i] == "async ":
+        i -= 6   # an async function's declaration starts six characters earlier
     j = src.index("{", i)
     depth = 0
     for k in range(j, len(src)):
@@ -155,6 +157,8 @@ def _pieces():
         state,
         _fn(SRC, "drawList"),
         _fn(SRC, "selectNew"),
+        _fn(SRC, "applyFilter"),
+        _fn(SRC, "poll"),
         acc,
     ]
 
@@ -194,7 +198,9 @@ function boot(){
   const ls = JSON.parse(localStorage.hub || "{}");
   let allRuns = [], runs = [], N = 1, pins = new Set(), slots = [], known = null;
   let q = ls.q || "", per = ls.per || "day", src = ls.src || "both";
-  let GROUPS = [];   // the answer's group entries, as /api/runs carries them (#1277)
+  let GROUPS = [];   // the answer's group entries, as the runs answer carries them (#1277)
+  let FETCH = {}, FETCHED = [];   // what each poll's fetch answers, and the exact url it asked
+  async function fetch(u){ FETCHED.push(u); return { json: async () => FETCH[u] }; }
   function refresh(){ plan(); drawList(); }
 @@PIECES@@
   function drain(){ let n = 0; while (Q.length) { if (++n > 100) throw new Error("toggle storm"); Q.shift().fire("toggle"); } }
@@ -202,6 +208,10 @@ function boot(){
     runs: (rows, groups) => { allRuns = rows; runs = rows; GROUPS = groups || []; },
     draw: () => drawList(),
     poll: () => { selectNew(); refresh(); },
+    wire: () => poll(),   // the page's own poll, over the fetch answers setFetch gave
+    setFetch: (o) => { FETCH = o },
+    fetched: () => FETCHED,
+    count: () => allRuns.length,
     click: (k) => { const g = GHS.find((x) => x.k === k); if (!g) throw new Error("no group header " + k); g.onclick(); },
     openGroups: () => GHS.filter((g) => g.op).map((g) => g.k),
     groupRows: () => { const o = {}; GHS.forEach((g) => (o[g.k] = g.rows)); return o; },
@@ -218,6 +228,15 @@ function boot(){
 def _run(js):
     assert NODE, "node is not installed: the hub page's own drawList is run here"
     script = _DOM + "\nconsole.log(JSON.stringify((()=>{" + js + "})()));"
+    p = subprocess.run([NODE, "-"], input=script, capture_output=True, text=True, timeout=30)
+    assert p.returncode == 0, p.stderr or p.stdout
+    return json.loads(p.stdout)
+
+
+def _run_async(js):
+    """As _run, for a page function that answers a promise: the poll reads its fetch before it draws."""
+    assert NODE, "node is not installed: the hub page's own poll is run here"
+    script = _DOM + "\n(async()=>{const o=await (async()=>{" + js + "})();console.log(JSON.stringify(o))})();"
     p = subprocess.run([NODE, "-"], input=script, capture_output=True, text=True, timeout=30)
     assert p.returncode == 0, p.stderr or p.stdout
     return json.loads(p.stdout)
@@ -313,11 +332,39 @@ def test_a_run_leaving_its_bucket_leaves_the_open_groups_alone(hub):
       const a = boot(); a.runs(R,G); a.draw();
       a.click("2h"); const before = a.openGroups();
       a.runs({json.dumps(later)},{json.dumps(hub.run_groups(later))}); a.poll();   // the 2h run aged out of the bucket
-      return {{ before, after: a.store().groups, html: a.listHtml() }};
+      return {{ before, after: a.store().groups, html: a.listHtml(), rows: a.groupRows() }};
     """, hub.run_groups(start)))
     assert set(out["before"]) == {"running", "2h"}
     assert set(out["after"]) == set(out["before"]), "a bucket change never moves the open groups"
-    assert "· 2–4 h ·" in out["html"] and 'data-g="2h"' not in out["html"], "a band that emptied folds into the muted line"
+    assert 'data-g="2h"' in out["html"] and out["rows"]["2h"] == 0, "a band the user opened keeps its header, with no rows"
+    muted = out["html"][out["html"].index("<div class=m>no runs in "):]
+    assert "1–2 h" not in muted, "the opened band is not named in the muted line"
+    assert "no runs in 2–4 h · 4–8 h · 24 h+ (days)" in muted, "the bands nobody opened fold into the muted line"
+
+
+def test_a_waiting_childcc_pass_is_drawn_in_workers_and_never_counted(hub):
+    """The pass is a worker, never a run: it never fills an age band, and the header never counts it (#1277)."""
+    cc = {"id": "childcc", "kind": "childcc", "state": "waiting", "live": False, "rank": 0, "age": 4000, "spend": 0, "agents": 0}
+    groups = hub.run_groups([LIVE, cc], {"runs": 6, "children": 20})
+    assert [g["key"] for g in groups if not g["empty"]] == ["running"], "the pass leaves every age band empty"
+    assert groups[0]["text"] == "RUNS 1/6 · AGENTS 1/20", "the pass is drawn in WORKERS, never counted"
+
+
+def test_the_poll_answers_both_wire_shapes_without_blanking_the_list(hub):
+    """A hub older than the page ignores the query and answers the bare array: the live list still reads (#1277)."""
+    rows = [LIVE, HOUR_1]
+    out = _run_async(f"""
+      const a = boot();
+      const page = {{runs: {json.dumps(rows)}, groups: {json.dumps(hub.run_groups(rows))}}};
+      a.setFetch({{"/api/runs?groups=1": page}}); await a.wire();
+      const shape = a.listHtml();
+      a.setFetch({{"/api/runs?groups=1": {json.dumps(rows)}}}); await a.wire();   // the old hub's array
+      return {{ shape, array: a.listHtml(), fetched: a.fetched(), count: a.count() }};
+    """)
+    assert set(out["fetched"]) == {"/api/runs?groups=1"}, "the page asks for the answer that carries the groups"
+    assert f'data-id="{LIVE["id"]}"' in out["shape"], "the opted-in answer draws the live run"
+    assert out["count"] == 2, "an old hub's array is read as the runs, never as an object with no `runs`"
+    assert "no live dashboards" in out["array"], "an old hub leaves the history honestly empty, never stale"
 
 
 def test_a_run_appearing_does_not_move_the_open_groups(hub):

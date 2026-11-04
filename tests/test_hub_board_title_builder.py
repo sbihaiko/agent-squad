@@ -8,6 +8,7 @@ import importlib.util
 import json
 import os
 import re
+import sys
 import tempfile
 from pathlib import Path
 
@@ -15,6 +16,9 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
+sys.path.insert(0, str(ROOT / "tests"))
+
+from test_hub_run_groups import _js, _run  # noqa: E402  the page's own drawList, run in node over the answer
 
 
 @pytest.fixture(scope="module")
@@ -43,8 +47,8 @@ def _bhead(hub):
 
 
 def _groups(hub):
-    """The ladder is the hub's own rule (#1277): the page draws the labels the answer carries."""
-    return list(hub.RUN_GROUPS)
+    """The ladder is the hub's own rule, read from the answer the page draws (#1277)."""
+    return [(g["key"], g["label"]) for g in hub.run_groups([], None)]
 
 
 # --- the board pane's title ---
@@ -102,9 +106,13 @@ def test_the_running_pill_keeps_its_occupancy_and_its_tooltip(hub):
 
 
 def test_the_group_header_still_carries_the_tooltip(hub):
-    """The answer carries the title; the page puts it on the header it draws (#1277)."""
-    assert 'title="${esc(g.title)}"' in hub.PAGE
-    assert hub.run_groups([{"state": "completed", "live": False, "age": 600, "spend": 2.5}], None)[1]["title"] == "$2.50"
+    """The answer carries the title, and the served page paints it on the header it draws (#1277)."""
+    rows = [{"id": "run-20261011-101010-abcd", "state": "completed", "live": False, "rank": 1, "age": 600,
+             "spend": 2.5, "agents": 0, "dur": 1, "port": 1234}]
+    groups = hub.run_groups(rows, None)
+    assert next(g for g in groups if g["key"] == "1h")["title"] == "$2.50"
+    out = _run(_js(rows, "const a=boot();a.runs(R,G);a.draw();return {html:a.listHtml()};", groups))
+    assert '<span class=sr title="$2.50">1 · $2.50</span>' in out["html"]
 
 
 # --- the rest of the page's text ---
