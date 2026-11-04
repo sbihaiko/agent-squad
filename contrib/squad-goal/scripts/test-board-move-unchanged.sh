@@ -1,8 +1,9 @@
 #!/bin/bash
-# A card move is sent only when its value changes: `board.py <owner> <project> "<Status>" <issue#>...` (and `--add`) reads the board
-# once, and a card that already carries the Status is not written -- no PATCH, no proving read, exit 0 (#327). A card in another
+# A card move is sent only when its value changes: `board.py <owner> <project> "<Status>" <issue#>...` (and `--add`) reads the card,
+# and a card that already carries the Status is not written -- no PATCH, no proving read, exit 0 (#327). The card's own read is its
+# one-item REST route when an id is known, and the whole-board read only when it is not (#1300, #1303). A card in another
 # column, or a card the board does not carry yet, is still written and proven by the read that follows. A board that does not
-# answer the read writes on, so a read that fails never blocks a move. Every write is counted against a stubbed gh.
+# answer the read writes on, so a read that fails never blocks a move. Every read and every write is counted against a stubbed gh.
 # A move the door proves is recorded beside the refresh flag, in `board-moves.json`: one entry per item, the column
 # it set and the instant, replaced by a later move of the same item. A move the door cannot prove and a skipped move
 # write no entry. The record is written to a temp file in the state directory and renamed, so a reader sees the old
@@ -17,11 +18,11 @@ cat > "$T/bin/gh" <<'J'
 a="$*"; echo "$a" >> "TMPDIR/gh.calls"
 case "$a" in *"--input -"*) cat > "TMPDIR/patch.in";; esac
 case "$a" in
-  *graphql*)   # the card's own node read: the compare and the proof of one move read the card, never the whole board (#1300)
+  *"items/"*"fields[]"*)   # the card's own read: the one-item REST route (not `items?per_page`), the compare and the proof of one move (#1300, #1303)
     [ -e "TMPDIR/board-down" ] && { echo "API rate limit exceeded" >&2; exit 1; }
-    echo node >> "TMPDIR/nodes"; id=${a##*id=}; id=${id%% *}; case "$id" in ITEM*) n=${id#ITEM};; *) n=2003;; esac
+    echo node >> "TMPDIR/nodes"; n=${a##*items/}; n=${n%%\?*}; n=${n#ITEM}; [ "$n" = 3003 ] && n=2003
     st=$(/usr/bin/grep "^$n	" "TMPDIR/cards.tsv" | cut -f2)
-    printf '{"data":{"node":{"isArchived":false,"content":{"number":%s},"fieldValueByName":{"name":"%s"}}}}\n' "$n" "$st";;
+    printf '{"isArchived":false,"content":{"number":%s},"fields":[{"name":"Status","value":{"name":{"raw":"%s"}}}]}\n' "$n" "$st";;
   *"-X PATCH"*items/*)
     echo PATCH >> "TMPDIR/patches"
     [ -e "TMPDIR/drop" ] && { echo '{"id":"ITEM"}'; exit 0; }   # a write answered ok and never landed
@@ -42,6 +43,7 @@ sed -i.bak "s|TMPDIR|$T|g" "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bi
 run() { SG_STATE="$T/st" SG_REPO=x/y SG_BOARD_READ_BACKOFF=0 python3 "$T/s-board.py" "$@"; }
 patches() { [ -e "$T/patches" ] && wc -l < "$T/patches" | tr -d ' ' || echo 0; }
 reads() { [ -e "$T/reads" ] && wc -l < "$T/reads" | tr -d ' ' || echo 0; }
+nodes() { [ -e "$T/nodes" ] && wc -l < "$T/nodes" | tr -d ' ' || echo 0; }
 o=$(run o 4 Todo 2001 2>&1); rc=$?
 [ "$rc" -eq 0 ] && [ "$(patches)" = 0 ] && ok "a move to the column the card already holds sends no PATCH" || ko "same-column move: exit $rc, $(patches) PATCH: $o"
 [ "$(reads)" = 1 ] && ok "the skipped move costs one read of the board, and no proving read" || ko "reads for a skipped move: $(reads)"
@@ -117,5 +119,12 @@ export SG_BOARD_ITEM_HINTS='{"2002":"ITEM2002"}'; o=$(run o 4 Todo 2002 2>&1); r
 [ "$rc" -eq 0 ] && grep -q '^2002	Todo' "$T/cards.tsv" && ok "a hinted move writes the card and the card carries the Status" || ko "hinted move: exit $rc $o"
 [ "$(reads)" = 0 ] && ok "a hinted move sends no whole-board read" || ko "whole-board reads for a hinted move: $(reads)"
 n=$(/usr/bin/grep -c 'items?per_page' "$T/gh.calls" 2>/dev/null); [ "${n:-0}" = 0 ] && ok "a hinted move reads no whole-project item list for its id" || ko "item list reads: ${n:-0}"
-[ "$(wc -l < "$T/nodes" | tr -d ' ')" -ge 2 ] && ok "the compare and the proof are node reads of the card" || ko "node reads: $(wc -l < "$T/nodes" 2>/dev/null)"
+[ "$(nodes)" -ge 2 ] && ok "the compare and the proof are node reads of the card" || ko "node reads: $(nodes)"
+# A hinted move to the column the card already holds (#1329): the card's own read settles it, so no PATCH, no proving read,
+# and no whole-board read either -- the hub named the item, so nothing has to look the card up.
+printf '2001\tTodo\n2002\tDoing\n2003\tTodo\n' > "$T/cards.tsv"; rm -f "$T/reads" "$T/nodes" "$T/gh.calls" "$T/patches"
+export SG_BOARD_ITEM_HINTS='{"2002":"ITEM2002"}'; o=$(run o 4 Doing 2002 2>&1); rc=$?; unset SG_BOARD_ITEM_HINTS
+[ "$rc" -eq 0 ] && [ "$(patches)" = 0 ] && ok "a hinted move to the column the card already holds sends no PATCH" || ko "hinted same-column move: exit $rc, $(patches) PATCH: $o"
+[ "$(reads)" = 0 ] && ok "a hinted move to the held column sends no whole-board read" || ko "whole-board reads for a hinted same-column move: $(reads)"
+[ "$(nodes)" = 1 ] && ok "the held column is settled by the card's own node read, and no proving read follows" || ko "node reads for a hinted same-column move: $(nodes)"
 rm -rf "$T"; exit $fail
