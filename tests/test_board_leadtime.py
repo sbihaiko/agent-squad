@@ -214,48 +214,38 @@ def test_the_rolling_mean_is_centered_on_each_dot_and_shrinks_at_the_ends(lt):
     result = _chart(lt, [_closed(n, n) for n in range(1, 10)])   # hours 1..9, window 5
 
     means = [dot["rolling"]["hours"] for dot in result["dots"]]
-    assert means[0] == 2.0, "the first dot averages the dots it has: 1, 2, 3"
-    assert means[4] == 5.0, "the middle dot averages 3 to 7"
-    assert means[8] == 8.0, "the last dot averages 7, 8, 9"
+    # The chart's one axis is log, so the rolling mean is the geometric mean of the window: cube root of 1·2·3 and of
+    # 7·8·9 at the ends, the fifth root of 3·4·5·6·7 in the middle.
+    assert means[0] == pytest.approx(1.8171205928321397, rel=1e-9)
+    assert means[4] == pytest.approx(4.789388953186989, rel=1e-9)
+    assert means[8] == pytest.approx(7.958114415792785, rel=1e-9)
 
 
-def test_the_linear_band_is_one_sigma_and_its_lower_edge_stays_at_zero(lt):
+def test_the_band_is_one_sigma_in_log_space_around_the_geometric_mean(lt):
     result = _chart(lt, [_closed(n, h) for n, h in enumerate([2, 4, 6, 8, 10], start=1)])
 
     centre = result["dots"][2]["rolling"]
-    assert centre["hours"] == 6.0
-    assert centre["low"] == pytest.approx(6 - 8 ** 0.5, abs=1e-9)
-    assert centre["high"] == pytest.approx(6 + 8 ** 0.5, abs=1e-9)
-
-    low_edge = _chart(lt, [_closed(n, 1) for n in range(1, 7)] + [_closed(7, 100)])["dots"][5]["rolling"]
-    assert low_edge["low"] == 0.0, "a band never falls below zero hours"
+    assert centre["hours"] == pytest.approx(5.210342169394703, rel=1e-9)
+    assert centre["low"] == pytest.approx(2.951249402510582, rel=1e-9)
+    assert centre["high"] == pytest.approx(9.19870258985181, rel=1e-9)
 
 
-def test_the_log_band_is_one_sigma_in_log_space_around_the_geometric_mean(lt):
-    result = _chart(lt, [_closed(n, h) for n, h in enumerate([2, 4, 6, 8, 10], start=1)], log=True)
+def test_the_y_axis_is_always_log_with_round_ticks(lt):
+    """#1355: the chart takes no scale option; every view draws the log axis with its round ticks (#1334)."""
+    small = _chart(lt, [_closed(1, 3), _closed(2, 30 * 24)])
+    long = _chart(lt, [_closed(1, 29 * 24), _closed(2, 5)])
+    month = _chart(lt, [_closed(1, 30 * 24), _closed(2, 5)])
 
-    centre = result["dots"][2]["rolling"]
-    logs = [math.log(h) for h in [2, 4, 6, 8, 10]]
-    mean = sum(logs) / 5
-    sigma = (sum((v - mean) ** 2 for v in logs) / 5) ** 0.5
-    assert centre["hours"] == pytest.approx(math.exp(mean), rel=1e-9)
-    assert centre["low"] == pytest.approx(math.exp(mean - sigma), rel=1e-9)
-    assert centre["high"] == pytest.approx(math.exp(mean + sigma), rel=1e-9)
-
-
-def test_the_scale_is_linear_under_thirty_days_and_cube_root_from_thirty(lt):
-    under = _chart(lt, [_closed(1, 29 * 24), _closed(2, 5)])
-    at = _chart(lt, [_closed(1, 30 * 24), _closed(2, 5)])
-
-    assert under["axis"] == "linear"
-    assert at["axis"] == "cube"
-
-
-def test_the_log_scale_ticks_name_an_hour_a_day_and_a_week(lt):
-    result = _chart(lt, [_closed(1, 3), _closed(2, 30 * 24)], log=True)
-
-    assert result["axis"] == "log"
-    assert [tick["text"] for tick in result["ticks"]] == ["1h", "1d", "7d"]
+    assert small["axis"] == long["axis"] == month["axis"] == "log"
+    for view, name in ((small, "small"), (long, "long"), (month, "month")):
+        assert [tick["text"] for tick in view["ticks"]] == ["1h", "1d", "7d"], \
+            f"the {name} view does not label the three round log ticks"
+        assert [tick["hours"] for tick in view["ticks"]] == [1, 24, 168], \
+            f"the {name} view's ticks are not one hour, one day and one week"
+    for view, name in ((long, "long"), (month, "month")):
+        week = next(tick["y"] for tick in view["ticks"] if tick["text"] == "7d")
+        top = max(dot["y"] for dot in view["dots"])
+        assert week < top < 1.0, f"the {name} view's axis does not carry its month-long card above the week tick"
 
 
 def test_a_timeframe_keeps_only_the_cards_closed_inside_it(lt):
@@ -274,7 +264,8 @@ def test_the_date_axis_places_the_range_end_at_the_right_edge(lt):
 
 
 def test_cards_clear_at_the_shared_plot_frame_stay_in_separate_clusters(lt):
-    result = _chart(lt, [_closed(1, 5), _closed(2, 5.4)])
+    # Re-anchored (#1355): the one axis is log, so the worked example is a pair whose screen gap clears the dot.
+    result = _chart(lt, [_closed(1, 5), _closed(2, 8)])
 
     assert result["plot_frame"] == {"width": 672, "height": 212}
     assert sorted(len(cluster["dots"]) for cluster in result["clusters"]) == [1, 1]
@@ -512,7 +503,8 @@ def _frame_gap(result, first, second):
 
 
 def test_clusters_follow_the_caller_plot_size(lt):
-    items = [_closed(1, 5), _closed(2, 5.4)]
+    # Re-anchored (#1355): on the log axis this pair clears the dot in the full frame and merges in the shorter one.
+    items = [_closed(1, 5), _closed(2, 8)]
     full = {"width": 672, "height": 212}
 
     drawn_apart = _chart(lt, items, plot=full)
@@ -626,32 +618,7 @@ def test_gate_time_in_the_summary_covers_every_delivered_card_and_the_chart_only
     assert chart <= summary
 
 
-# SPEC 1327 #1334: round-interval linear y ticks, an explicit band polygon and an expanded summary.
-LINEAR_LADDER_HOURS = {5 / 60, 10 / 60, 0.25, 0.5, 1, 2, 3, 4, 6, 12, 24, 48, 72, 120, 168,
-                       240, 336, 720}
-
-
-def test_linear_ticks_fall_on_one_round_interval_with_four_to_six_ticks(lt):
-    chart = _chart(lt, [_closed(n, h) for n, h in enumerate([2, 4, 6, 8, 10], start=1)])
-
-    assert chart["axis"] == "linear"
-    tick_hours = [tick["hours"] for tick in chart["ticks"]]
-    assert 4 <= len(tick_hours) <= 6, f"a linear view serves 4 to 6 y ticks: {tick_hours}"
-    steps = {round(b - a, 9) for a, b in zip(tick_hours, tick_hours[1:], strict=False)}
-    assert len(steps) == 1, f"the y ticks do not fall on one interval: {tick_hours}"
-    step = steps.pop()
-    assert step in LINEAR_LADDER_HOURS, f"the interval {step}h is not a round duration"
-    assert tick_hours[0] == 0.0 and tick_hours[-1] >= 10.0, "the axis starts at zero and reaches the data"
-    assert [tick["text"] for tick in chart["ticks"]] == ["0m", "2h", "4h", "6h", "8h", "10h"]
-
-
-def test_the_cube_scale_keeps_its_own_tick_ladder(lt):
-    chart = _chart(lt, [_closed(1, 30 * 24), _closed(2, 5)])
-
-    assert chart["axis"] == "cube"
-    assert [tick["text"] for tick in chart["ticks"]] == ["1d", "7d", "30d", "60d"]
-
-
+# SPEC 1327 #1334: an explicit band polygon and an expanded summary.
 def test_the_band_is_a_polygon_along_each_dots_rolling_high_and_low(lt):
     chart = _chart(lt, [_closed(n, h) for n, h in enumerate([2, 4, 6, 8, 10], start=1)])
 
@@ -716,18 +683,6 @@ def test_the_range_carries_its_printed_text(lt):
 
     assert result["range"]["text"] == "Oct 31 to Nov 30 UTC"
     assert zoomed["range"]["text"] == "Nov 27 00:00 to Nov 28 00:00 UTC"
-
-
-# Re-anchored (#1334): the ladder's long-duration branches are asserted, not only its 2h step.
-def test_a_long_linear_view_reaches_its_ceiling_on_a_round_step(lt):
-    chart = _chart(lt, [_closed(1, 650)])
-
-    assert chart["axis"] == "linear"
-    tick_hours = [tick["hours"] for tick in chart["ticks"]]
-    assert 4 <= len(tick_hours) <= 6, f"a linear view serves 4 to 6 y ticks: {tick_hours}"
-    steps = {round(b - a, 9) for a, b in zip(tick_hours, tick_hours[1:], strict=False)}
-    assert steps == {168.0}, f"a 27-day view does not fall on the 7-day step: {tick_hours}"
-    assert tick_hours[-1] >= 650.0, "the last tick does not reach the data's ceiling"
 
 
 def test_the_range_text_names_both_years_when_the_view_crosses_one(lt):

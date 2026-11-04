@@ -449,7 +449,7 @@ def test_the_lead_chart_shares_its_plot_frame_with_hub_clustering_and_page(hub, 
 
     payload = hub.flow_lead()
     lead = payload["lead"]
-    chart = lead["control"]["jira"]["all"]
+    chart = lead["control"]["all"]
 
     assert payload["plot_frame"] == {"width": 672, "height": 212}
     assert chart["plot_frame"] == payload["plot_frame"]
@@ -461,7 +461,7 @@ def test_the_lead_chart_shares_its_plot_frame_with_hub_clustering_and_page(hub, 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_the_lead_page_draws_the_plot_frame_supplied_by_the_hub(hub, board, tmp_path):
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
-    chart = _flow(hub)["lead"]["control"]["jira"]["all"]
+    chart = _flow(hub)["lead"]["control"]["all"]
     chart["plot_frame"] = {"width": 700, "height": 240}
 
     out = _lt_chart(hub, tmp_path, "lt-supplied-frame.js", chart)
@@ -471,33 +471,39 @@ def test_the_lead_page_draws_the_plot_frame_supplied_by_the_hub(hub, board, tmp_
     assert '<line x1=64 y1=304 x2=764 y2=304' in out
 
 
-def test_the_control_chart_is_served_for_every_timeframe_and_both_scales(hub, board):
+def test_the_control_chart_is_served_for_every_timeframe_on_the_log_axis(hub, board):
     hub.board_cache["items"] = [_card(1, st=hub.COLUMN["issue_closed"], s="CLOSED", c="2026-10-02T09:00:00Z")]
 
     control = _flow(hub)["lead"]["control"]
 
-    assert set(control) == {"jira", "log"}
-    for scale in control.values():
-        assert list(scale) == TIMEFRAME_KEYS
-    assert control["log"]["all"]["axis"] == "log"
-    assert control["jira"]["all"]["axis"] == "linear"
+    assert list(control) == TIMEFRAME_KEYS, "the payload takes no scale: one chart per timeframe"
+    assert all(chart["axis"] == "log" for chart in control.values()), "a view is served on any axis but log"
 
 
 def test_a_control_chart_dot_carries_the_issue_title_and_its_close_date(hub, board):
     item, events = _done(7, "2026-10-02T09:00:00Z")
     _seed(hub, {7: ({**item, "t": "ship the chart"}, events)})
 
-    dot = _flow(hub)["lead"]["control"]["jira"]["all"]["dots"][0]
+    dot = _flow(hub)["lead"]["control"]["all"]["dots"][0]
 
     assert dot["n"] == 7
     assert dot["title"] == "ship the chart"
     assert dot["closed"] == "2026-10-02"
 
 
-def test_the_control_chart_names_its_lines_and_controls_the_jira_way(hub):
-    # Re-anchored by #1145: the rolling window is stated once, in the head line, so the line names no window size.
-    for name in ("Rolling mean", "Rolling spread ±1 SD", "Past month", "Log scale", "Timeframe"):
+def test_the_control_chart_names_its_lines_and_offers_no_scale_control(hub):
+    # Re-anchored by #1355: the lead chart always draws a log axis, so the page carries no Scale control, no stored
+    # log-scale flag and no scale value in the route's query, and its change handler has no scale branch. A hidden or
+    # renamed scale switch would have to keep one of these four to work, and each is asserted absent.
+    for name in ("Rolling mean", "Rolling spread ±1 SD", "Past month", "Timeframe"):
         assert name in hub.PAGE, f"the page names no {name!r}"
+    assert "id=lts" not in hub.PAGE and ">Scale <" not in hub.PAGE and "Log scale" not in hub.PAGE, \
+        "the page still offers a Scale control"
+    assert "LT.log" not in hub.PAGE, "the page still reads a stored log-scale flag"
+    ltq = next(line for line in hub.PAGE.splitlines() if line.startswith("const ltQ="))
+    assert "scale=" not in ltq, "the lead chart's query still carries a scale value"
+    change = hub.PAGE[hub.PAGE.index('$("#flowb").onchange'):hub.PAGE.index('$("#flowb").onclick')]
+    assert "lts" not in change and "scale" not in change, "the lead chart's onchange still has a scale branch"
 
 
 def test_the_legend_carries_short_names_and_values_never_prose(hub):
@@ -516,7 +522,7 @@ def test_the_legend_has_no_prose_sentences_and_reference_lines_carry_end_labels(
     Re-anchored by #1332: a reference no longer labels itself inside the plot; its value sits in the reserved right
     gutter, outside the plot's right edge."""
     _seed(hub, {n: _done(n, "2026-10-02T09:00:00Z") for n in range(1, 13)})
-    chart = hub.flow_lead()["lead"]["control"]["jira"]["all"]
+    chart = hub.flow_lead()["lead"]["control"]["all"]
     out = _lt_chart(hub, tmp_path, "lt-readable.js", chart)
     for legend in re.findall(r'<p class="flg ltlg">(.*?)</p>', out):
         assert "<em>" not in legend, "the legend still carries a prose sentence"
@@ -542,23 +548,27 @@ def _lt_chart(hub, tmp_path, name, chart, zr=None, coverage=None):
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-def test_the_first_screen_carries_two_controls_and_the_rest_sit_behind_more(hub, board, tmp_path):
-    """#1145: Timeframe and Type are the only controls on the first screen. Measurement and Display, and the coverage
-    line, the plotted-cards note and the ordering sentence, sit behind one More disclosure.
+def test_the_first_screen_carries_the_filters_and_toggles_and_the_rest_sit_behind_more(hub, board, tmp_path):
+    """#1145: the Timeframe and Type selects and the Median and p85 toggles are the controls on the first screen.
+    Measurement and Display, and the coverage line, the plotted-cards note and the ordering sentence, sit behind one
+    More disclosure. #1355: the chart always draws a log axis, so no Scale control renders on either screen.
 
     Re-anchored by line (#1147): the zoom control is a chip drawn only while a zoom is active, so it is absent from the
     default screen and the View group appears after Display only in a zoomed view.
     """
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
     lead = _flow(hub)["lead"]
-    out = _lt_chart(hub, tmp_path, "lt-two-controls.js", lead["control"]["jira"]["all"], coverage=lead["coverage"])
+    out = _lt_chart(hub, tmp_path, "lt-two-controls.js", lead["control"]["all"], coverage=lead["coverage"])
     first, sep, rest = out.partition("<details class=ltmore>")
     assert sep, "the first screen carries no More disclosure"
     more = rest[:rest.index("</details>")]
-    # Re-anchored (#1332): the scale control and the two reference toggles sit beside the filters, where the reading
-    # starts; the measurement and the band stay behind More.
-    for shown in ("id=ltr", "id=lty", "id=lts", "id=ltmd", "id=ltp85"):
+    # Re-anchored (#1332): the two reference toggles sit beside the filters, where the reading starts; the measurement
+    # and the band stay behind More. Re-anchored by #1355: the chart always draws a log axis, so the first screen carries
+    # ltr, lty, ltmd and ltp85 and no Scale control.
+    for shown in ("id=ltr", "id=lty", "id=ltmd", "id=ltp85"):
         assert shown in first, f"{shown} is not on the first screen"
+    assert "id=lts" not in out, "a Scale control renders"
+    assert ">Scale <" not in out, "a Scale control renders"
     for later in ("id=lta", "id=ltb", "id=ltbd"):
         assert later not in first, f"the first screen still carries {later}"
         assert later in more, f"More does not hold {later}"
@@ -566,7 +576,7 @@ def test_the_first_screen_carries_two_controls_and_the_rest_sit_behind_more(hub,
     order = ["Measurement", "id=lta", "id=ltb", "Display", "id=ltbd"]
     marks = [more.index(mark) for mark in order]
     assert marks == sorted(marks), f"the disclosure does not keep the shipped order: {order}"
-    zoomed = _lt_chart(hub, tmp_path, "lt-two-controls-zoom.js", lead["control"]["jira"]["all"],
+    zoomed = _lt_chart(hub, tmp_path, "lt-two-controls-zoom.js", lead["control"]["all"],
                        zr=["2026-10-01T00:00:00+00:00", "2026-10-03T00:00:00+00:00"], coverage=lead["coverage"])
     zfirst, _, zrest = zoomed.partition("<details class=ltmore>")
     assert "id=ltz" not in zfirst, "the zoom chip is never on the first screen"
@@ -608,7 +618,7 @@ def test_the_zoom_chip_names_the_range_and_is_drawn_only_while_zoomed(hub, board
     the "Back to ..." wording lives in the chip.
     """
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
-    chart = _flow(hub)["lead"]["control"]["jira"]["all"]
+    chart = _flow(hub)["lead"]["control"]["all"]
     home = _lt_chart(hub, tmp_path, "lt-zoom-home.js", chart)
     zoomed = _lt_chart(hub, tmp_path, "lt-zoom-held.js", chart, zr=["2026-10-01T00:00:00+00:00", "2026-10-03T00:00:00+00:00"])
     assert "id=ltz" not in home, "the zoom control is absent on the default screen"
@@ -622,7 +632,7 @@ def test_the_zoom_chip_names_the_range_and_is_drawn_only_while_zoomed(hub, board
 def test_a_clustered_view_offers_a_range_control_that_prints_its_range(hub, board, tmp_path):
     # Re-anchored (#1334): the Fit button became the Fit data / Full window range control, printing the range it shows.
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
-    chart = _flow(hub)["lead"]["control"]["jira"]["all"]
+    chart = _flow(hub)["lead"]["control"]["all"]
     out = _lt_chart(hub, tmp_path, "lt-fit.js", chart)
     assert re.search(r"<span class=fchip id=ltrng><button id=ltfit[^>]*>Fit data</button>"
                      r"<button id=ltfull[^>]*>Full window</button> " + re.escape(chart["range"]["text"]) + "</span>", out), \
@@ -633,7 +643,7 @@ def test_a_clustered_view_offers_a_range_control_that_prints_its_range(hub, boar
 def test_the_fit_button_appears_only_when_there_is_a_span_to_fit(hub, board, tmp_path):
     """#1147: Fit sits beside the zoom control only when the cards have a span to fit."""
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z"), 2: _done(2, "2026-10-29T09:00:00Z")})
-    chart = _flow(hub)["lead"]["control"]["jira"]["all"]
+    chart = _flow(hub)["lead"]["control"]["all"]
     assert chart["fit"] is None, "the spread cards fill the whole view: there is no span to fit"
     out = _lt_chart(hub, tmp_path, "lt-no-fit.js", chart)
     assert "id=ltfit" not in out, "Fit is drawn with no span to fit"
@@ -643,7 +653,7 @@ def test_the_fit_button_appears_only_when_there_is_a_span_to_fit(hub, board, tmp
 def test_one_exclusion_total_is_shown_and_the_plotted_sample_is_stated(hub, board, tmp_path):
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z"), 2: _todo(2), 3: _todo(3)})
     lead = hub.flow_lead(ty="task")["lead"]
-    chart = lead["control"]["jira"]["all"]
+    chart = lead["control"]["all"]
     assert chart["excluded_total"] == sum(chart["excluded"].values()) == 0, "the total is the rows the chart counted"  # re-anchored (#1250): an open card is censored, never an exclusion
     out = _render(hub, tmp_path, "lt-exclusion.js", f"flowLead({json.dumps(lead)})")
     assert out.count("excluded") == 1, "the page shows the exclusion more than once"
@@ -679,7 +689,7 @@ def test_a_chosen_span_shows_its_own_exclusions_in_the_one_total(hub, board, tmp
         2: _done(2, "2026-10-03T09:00:00Z"),
     })
     lead = hub.flow_lead(ty="task")["lead"]
-    span = hub.lead_zoom("tf=all&scale=jira&a=Doing")
+    span = hub.lead_zoom("tf=all&a=Doing")
     assert span["excluded_total"] == 1
     out = _render(hub, tmp_path, "lt-span-exclusion.js", f"(LT.zc={json.dumps(span)},flowLead({json.dumps(lead)}))")
     assert out.count("excluded") == 1, "the page shows the exclusion more than once"
@@ -698,7 +708,7 @@ def test_the_legend_splits_series_from_summary_and_the_band_stays_hidden_until_a
     window, so the legend never restates it from a second field.
     """
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z"), 2: _done(2, "2026-10-03T09:00:00Z")})
-    chart = _flow(hub)["lead"]["control"]["jira"]["all"]
+    chart = _flow(hub)["lead"]["control"]["all"]
     out = _lt_chart(hub, tmp_path, "lt-legend.js", chart)
     series, summary = re.findall(r'<p class="flg ltlg">(.*?)</p>', out)
     entries = re.findall(r"<span>(.*?)</span>", series)
@@ -752,7 +762,7 @@ def test_each_reference_line_labels_itself_at_its_end_and_the_summary_row_carrie
     """Re-anchored by #1304: a reference carries its value, and the summary row repeats each value once; the value never
     sits over the dots. Re-anchored by #1332: the value sits in the reserved right gutter, outside the plot."""
     _seed(hub, {n: _done(n, "2026-10-02T09:00:00Z") for n in range(1, 4)})
-    chart = hub.flow_lead()["lead"]["control"]["jira"]["all"]
+    chart = hub.flow_lead()["lead"]["control"]["all"]
     out = _render(hub, tmp_path, "lt-no-stat-in-plot.js", f"(LT.md=true,LT.p85=true,ltChart({json.dumps(chart)},null))")
     plot = re.search(r"<svg [^>]*data-lt[^>]*>(.*?)</svg>", out, re.S).group(1)
     right = 64 + chart["plot_frame"]["width"]
@@ -779,7 +789,7 @@ def test_each_reference_line_labels_itself_at_its_end_and_the_summary_row_carrie
 def test_each_mark_takes_its_own_role_and_the_legend_states_it(hub, board, tmp_path):
     """Re-anchored by #1304: the band hides by default, so the role check draws it by asking for it."""
     _seed(hub, {n: _done(n, "2026-10-02T09:00:00Z") for n in (1, 2)})
-    chart = hub.flow_lead()["lead"]["control"]["jira"]["all"]
+    chart = hub.flow_lead()["lead"]["control"]["all"]
     out = _render(hub, tmp_path, "lt-roles.js", f"(LT.band=true,ltChart({json.dumps(chart)},null))")
     tokens = _tokens()
     trail = re.search(r"<polyline [^>]*>", out).group(0)
@@ -827,7 +837,7 @@ def _lead_chart_css(page):
 def test_every_chart_token_the_lead_chart_paints_is_declared(hub, board, tmp_path):
     """#1332: no colour literal is in the chart code, and every role the lead chart names is a hub web token."""
     _seed(hub, {n: _done(n, "2026-10-02T09:00:00Z") for n in range(1, 4)})
-    chart = hub.flow_lead()["lead"]["control"]["jira"]["all"]
+    chart = hub.flow_lead()["lead"]["control"]["all"]
     out = _render(hub, tmp_path, "lt-tokens.js",
                   f"(LT.band=true,LT.md=true,LT.p85=true,ltChart({json.dumps(chart)},null))")
     css = _lead_chart_css(hub.PAGE)
@@ -846,7 +856,7 @@ def test_only_the_average_line_shows_by_default_and_the_three_patterns_differ(hu
     carry distinct patterns (solid, dashed, dotted), and the rolling mean is the stronger 3px line."""
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z"), 2: _done(2, "2026-10-03T09:00:00Z"),
                 3: _done(3, "2026-10-05T09:00:00Z")})
-    chart = hub.flow_lead()["lead"]["control"]["jira"]["all"]
+    chart = hub.flow_lead()["lead"]["control"]["all"]
 
     def refs(markup):
         return {re.search(r"<title>(\w+) ", tag).group(1): tag
@@ -881,11 +891,11 @@ def test_only_the_average_line_shows_by_default_and_the_three_patterns_differ(hu
 def test_the_chart_titles_both_axes_outside_the_plot(hub, board, tmp_path):
     """#1332: "Lead time" sits above the y axis with its scale named, and "Closed date" sits below the x axis."""
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
-    chart = hub.flow_lead()["lead"]["control"]["jira"]["all"]
+    chart = hub.flow_lead()["lead"]["control"]["all"]
     out = _lt_chart(hub, tmp_path, "lt-axis-titles.js", chart)
     plot = re.search(r"<svg [^>]*data-lt[^>]*>(.*?)</svg>", out, re.S).group(1)
     texts = _svg_texts(plot)
-    y_title = next(attrs for attrs, body in texts if body == "Lead time (linear)")
+    y_title = next(attrs for attrs, body in texts if body == "Lead time (log)")
     x_title = next(attrs for attrs, body in texts if body == "Closed date")
     frame_top = float(re.search(r"<line x1=\S+ y1=(\S+)", plot).group(1))
     base = float(re.search(r'<line x1=\S+ y1=(\S+) x2=\S+ y2=\1 stroke=var\(--chart-grid\)>', plot).group(1))
@@ -904,7 +914,7 @@ def test_the_drag_maps_the_pointer_through_the_plot_and_never_attributes_the_gut
     # viewBox the rendered chart draws, so a layout change moves this test with it instead of leaving it pinned.
     lt_p = int(re.search(r"const ltP=(\d+);", page).group(1))
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
-    chart = _flow(hub)["lead"]["control"]["jira"]["all"]
+    chart = _flow(hub)["lead"]["control"]["all"]
     vb_width = int(re.search(r'viewBox="0 0 (\d+) ', _lt_chart(hub, tmp_path, "lt-pointer-frame.js", chart)).group(1))
     left, right = lt_p, lt_p + chart["plot_frame"]["width"]
     assert vb_width > right, "the viewBox reserves no gutter past the plot for the drag to ignore"
@@ -932,7 +942,7 @@ def test_the_right_gutter_tags_never_overlap_when_the_values_are_close(hub, boar
     by one body line so no tag covers another — on one value, on values a few pixels apart, and on a block that runs past
     the floor. A frame too short for the block spreads the tags evenly across it instead of overlapping them."""
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
-    chart = hub.flow_lead()["lead"]["control"]["jira"]["all"]
+    chart = hub.flow_lead()["lead"]["control"]["all"]
     assert len({chart[k]["text"] for k in ("average", "median", "p85")}) == 1, "the fixture does not put the values on one"
     lt_p = int(re.search(r"const ltP=(\d+);", hub.PAGE).group(1))
     gap = int(re.search(r"const ltGap=(\d+);", hub.PAGE).group(1))
@@ -985,7 +995,7 @@ def test_the_gutter_is_sized_from_the_longest_reference_tag(hub, board, tmp_path
     """#1332: the reserved gutter and the viewBox are sized from the longest tag, so a long value such as
     "Median 1w 2d 3h" stays inside the drawing instead of running past the viewBox's right edge."""
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
-    chart = json.loads(json.dumps(hub.flow_lead()["lead"]["control"]["jira"]["all"]))
+    chart = json.loads(json.dumps(hub.flow_lead()["lead"]["control"]["all"]))
     for key in ("average", "median", "p85"):
         chart[key]["text"] = "1w 2d 3h"
     out = _render(hub, tmp_path, "lt-gutter-width.js", f"(LT.md=true,LT.p85=true,ltChart({json.dumps(chart)},null))")
@@ -1007,7 +1017,7 @@ def test_a_lone_card_draws_a_hollow_dot_and_a_cluster_draws_one_filled_dot(hub, 
     lt = _load("board_leadtime_dots", SCRIPTS / "board_leadtime.py")
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z"), 2: _done(2, "2026-10-09T09:00:00Z"),
                 3: _done(3, "2026-10-09T09:00:00Z")})
-    chart = hub.flow_lead()["lead"]["control"]["jira"]["all"]
+    chart = hub.flow_lead()["lead"]["control"]["all"]
     assert sorted(c["count"] for c in chart["clusters"]) == [1, 2]
     out = _lt_chart(hub, tmp_path, "lt-dots.js", chart)
     plot = re.search(r"<svg [^>]*data-lt[^>]*>(.*?)</svg>", out, re.S).group(1)
@@ -1033,7 +1043,7 @@ def test_the_dot_tooltip_names_the_mark_its_lead_its_dates_and_the_stage_strip(h
              {"t": "2026-10-02T09:00:00Z", "type": "closed"}]
     item = _card(1, st="Closed", s="CLOSED", c="2026-10-02T09:00:00Z")
     _seed(hub, {1: (item, gated), 2: _done(2, "2026-10-02T09:00:00Z")})
-    chart = hub.flow_lead(ty=None)["lead"]["control"]["jira"]["all"]
+    chart = hub.flow_lead(ty=None)["lead"]["control"]["all"]
     cluster = chart["clusters"][0]
     assert cluster["count"] == 2 and cluster["cards"] == [1, 2]
     assert cluster["closed"]["text"] == "Oct 2"
@@ -1064,7 +1074,7 @@ def test_the_zoom_recomputes_the_clusters_from_the_same_rule(hub, board):
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_the_cluster_table_takes_the_page_table_rule(hub, board, tmp_path):
     _seed(hub, {n: _done(n, "2026-10-02T09:00:00Z") for n in (1, 2)})
-    chart = hub.flow_lead()["lead"]["control"]["jira"]["all"]
+    chart = hub.flow_lead()["lead"]["control"]["all"]
     out = _render(hub, tmp_path, "lt-cluster-table.js", f"(LT.pick=0,ltChart({json.dumps(chart)},null))")
     table = re.search(r"<table class=([^>]+)>", out)
     assert table, "the cluster table is not drawn"
@@ -1091,7 +1101,7 @@ def test_every_word_in_the_chart_box_takes_the_page_body_size(hub):
 def test_the_chart_svg_text_sets_no_size_of_its_own_and_inherits_the_box(hub, board, tmp_path):
     """#1144: the SVG's ticks and axis title take the box size, never a size of their own."""
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
-    out = _lt_chart(hub, tmp_path, "lt-body-size.js", _flow(hub)["lead"]["control"]["jira"]["all"])
+    out = _lt_chart(hub, tmp_path, "lt-body-size.js", _flow(hub)["lead"]["control"]["all"])
     texts = re.findall(r"<text [^>]*>", out)
     assert texts, "the chart draws no text"
     assert all("font-size" not in text for text in texts), "an SVG text sets its own size instead of inheriting the box's"
@@ -1138,7 +1148,7 @@ def test_the_control_chart_draws_one_mark_per_cluster_on_the_date_axis(hub, boar
     block = _flow_block(hub).split("const drawFlow")[0]
     drawing = "\n".join([
         "const COLORS={},COLNAME={issue_closed:'Closed'};", "const esc=s=>String(s);", "const ls={};", block,
-        'LT.tf="30";LT.log=false;',   # re-anchored (#1247): the visit's choice, the month on the Jira scale, set by hand
+        'LT.tf="30";',   # re-anchored (#1247): the visit's choice, the month view, set by hand
         f"process.stdout.write(flowLead({json.dumps(lead)}));",
     ])
     path = tmp_path / "flow-control.js"
@@ -1146,7 +1156,7 @@ def test_the_control_chart_draws_one_mark_per_cluster_on_the_date_axis(hub, boar
     result = subprocess.run(["node", str(path)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     circles = re.findall(r"<circle [^>]*>", result.stdout)
-    clusters = lead["control"]["jira"]["all"]["clusters"]
+    clusters = lead["control"]["all"]["clusters"]
     assert len(circles) == len(clusters) == 2, "cards 1 and 2 share a close: one cluster; card 3 is its own mark"
     assert "2 issues" in result.stdout
 
@@ -1157,7 +1167,7 @@ def _drawn_lead_svg(hub, board, tmp_path):
     block = _flow_block(hub).split("const drawFlow")[0]
     drawing = "\n".join([
         "const COLORS={},COLNAME={issue_closed:'Closed'};", "const esc=s=>String(s);", "const ls={};", block,
-        'LT.tf="30";LT.log=false;',   # re-anchored (#1247): the visit's choice, the month on the Jira scale, set by hand
+        'LT.tf="30";',   # re-anchored (#1247): the visit's choice, the month view, set by hand
         f"process.stdout.write(flowLead({json.dumps(lead)}));",
     ])
     path = tmp_path / "flow-lead-axis.js"
@@ -1196,7 +1206,7 @@ def test_the_lead_time_axis_title_is_drawn_from_the_plot_left_edge(hub, board, t
     assert len(titles) == 1
     attrs, body = titles[0]
     # Re-anchored (#1332): the y axis is titled above it, outside the plot, with its scale named.
-    assert body == "Lead time (linear)", "the full axis title is drawn"
+    assert body == "Lead time (log)", "the full axis title is drawn"
     assert _svg_attr(attrs, "x") == left, "the title starts at the plot's left edge"
     assert _svg_attr(attrs, "text-anchor") == "start"
     frame_top = float(re.search(r"<line x1=\S+ y1=(\S+)", svg).group(1))
@@ -1212,9 +1222,9 @@ def test_moving_the_axis_title_leaves_the_other_chart_text_in_place(hub, board, 
     svg = _drawn_lead_svg(hub, board, tmp_path)
     others = [(attrs, body) for attrs, body in _svg_texts(svg) if not body.startswith(("Lead time", "Closed date"))]
     tick_labels = [(attrs, body) for attrs, body in others if _svg_attr(attrs, "x") == "57"]
-    # Re-anchored (#1334): the round linear ladder serves five ticks for this spread, not a fixed six.
-    assert len(tick_labels) == 5, "the round y ticks keep their place beside the axis"
-    assert [body for _, body in tick_labels] == ["0m", "2d", "4d", "6d", "8d"]
+    # Re-anchored (#1355): the y axis is always log, so its three round ticks name an hour, a day and a week.
+    assert len(tick_labels) == 3, "the log y ticks keep their place beside the axis"
+    assert [body for _, body in tick_labels] == ["1h", "1d", "7d"]
     assert all(_svg_attr(attrs, "text-anchor") == "end" for attrs, _ in tick_labels)
     x_labels = [(attrs, body) for attrs, body in others if _svg_attr(attrs, "text-anchor") == "middle"]
     assert len(x_labels) == 7, "the seven x ticks keep their place under the axis"
@@ -1327,7 +1337,7 @@ def test_the_chart_axis_text_takes_the_page_size_and_the_muted_ink(hub, board, t
     and the lead-time views paint one axis style."""
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
     cfd = _render(hub, tmp_path, "flow-cfd-ink.js", f"flowCFD({json.dumps(_flow(hub)['cfd']['ranges']['all'])})")
-    lead = _lt_chart(hub, tmp_path, "lt-ink.js", _flow(hub)["lead"]["control"]["jira"]["all"])
+    lead = _lt_chart(hub, tmp_path, "lt-ink.js", _flow(hub)["lead"]["control"]["all"])
     def axis_texts(markup):
         """#1304: reference end labels and cluster counts are annotations in their mark's colour, not axis text."""
         return [(a, b) for a, b in re.findall(r"<text ([^>]*)>([^<]*)</text>", markup)
@@ -1416,10 +1426,10 @@ def test_the_cfd_names_a_range_selector_and_a_day_hover_with_counts(hub, board, 
 def test_the_leadtime_route_recomputes_the_chart_for_a_dragged_range(hub, board):
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z"), 2: _done(2, "2026-10-09T09:00:00Z")})
 
-    chart = hub.lead_zoom("from=2026-10-05T00:00:00.000Z&to=2026-10-12T00:00:00.000Z&scale=log")
+    chart = hub.lead_zoom("from=2026-10-05T00:00:00.000Z&to=2026-10-12T00:00:00.000Z")
 
     assert [dot["n"] for dot in chart["dots"]] == [2]
-    assert chart["scale"] == "log"
+    assert chart["axis"] == "log"
     assert chart["range"]["start"].startswith("2026-10-05")
 
 
@@ -1510,9 +1520,9 @@ def test_a_live_run_click_never_leaves_the_tab_the_user_is_on(hub):
 
 def _render(hub, tmp_path, name, expression, block=None):
     # Re-anchored (#1247): the page no longer restores a stored choice, so the harness sets the visit's choice itself: the
-    # All timeframe on the Jira scale, the view these drawings were written against.
+    # All timeframe on the log axis, the view these drawings were written against.
     drawing = "\n".join(["const COLORS={},COLNAME={};", "const esc=s=>String(s);", "const ls={};",
-                         block or _flow_block(hub).split("const drawFlow")[0], 'LT.tf="all";LT.log=false;',
+                         block or _flow_block(hub).split("const drawFlow")[0], 'LT.tf="all";',
                          f"process.stdout.write({expression});"])
     path = tmp_path / name
     path.write_text(drawing)
@@ -1539,7 +1549,7 @@ def test_the_lead_chart_states_its_coverage_and_marks_approximate_and_unknown_st
     """#1024 (3): an approximate or unknown-first card is drawn dashed, and the chart states its coverage."""
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
     lead = hub.flow_lead(ty="task")["lead"]
-    dot = lead["control"]["jira"]["all"]["clusters"][0]["dots"][0]
+    dot = lead["control"]["all"]["clusters"][0]["dots"][0]
     assert {"flowing", "held", "approx", "unknown_first"} <= set(dot), dot
     assert abs(dot["flowing"] + dot["held"] - dot["hours"]) < 1e-9, "flowing and held make the card's whole time"
     out = _render(hub, tmp_path, "flow-lead-coverage.js", f"flowLead({json.dumps(lead)})")
@@ -1571,7 +1581,7 @@ def test_the_lead_chart_gives_a_gating_interval_its_own_band(hub, board):
     assert "Gating" not in [band["column"] for band in plain["stack"]], "a card that never gated draws no band"
     assert plain["gate_hours"] == 0.0
 
-    chart = lead["control"]["jira"]["all"]
+    chart = lead["control"]["all"]
     assert sum(band["hours"] for dot in chart["dots"] for band in dot["stack"] if band["column"] == "Gating") == \
         pytest.approx(chart["gate"]["hours"]), "gate time is not the Gating band's total"
     assert chart["gate"]["hours"] == pytest.approx(18.0)
@@ -1589,12 +1599,12 @@ def test_the_stack_lives_in_the_dot_tooltip_and_gate_time_stays_a_text_metric(hu
     item = _card(1, st="Closed", s="CLOSED", c="2026-10-02T09:00:00Z")
     hub._hist.record_issue(board_path, 1, OPENED, OPENED, gated, True, now=time.time(), keys=hub.bar_keys(item))
     hub.board_cache["items"] = [item]
-    chart = hub.flow_lead(ty=None)["lead"]["control"]["jira"]["all"]
+    chart = hub.flow_lead(ty=None)["lead"]["control"]["all"]
 
     block = _flow_block(hub).split("const drawFlow")[0]
     drawing = "\n".join([
         f"const COLORS={hub.BOARD_COLORS_JSON},COLNAME={hub.BOARD_NAMES_JSON};", "const esc=s=>String(s);",
-        "const ls={};", block, 'LT.tf="all";LT.log=false;',
+        "const ls={};", block, 'LT.tf="all";',
         f"process.stdout.write(flowLead({json.dumps(hub.flow_lead(ty=None)['lead'])}));",
     ])
     path = tmp_path / "lt-stack-roles.js"
@@ -1636,7 +1646,7 @@ def test_the_header_states_the_summary_in_two_rows(hub, board, tmp_path):
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_fit_data_and_full_window_switch_the_x_range_from_the_one_payload(hub, board, tmp_path):
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
-    chart = _flow(hub)["lead"]["control"]["jira"]["all"]
+    chart = _flow(hub)["lead"]["control"]["all"]
 
     full = _lt_chart(hub, tmp_path, "lt-range-full.js", chart)
     assert "id=ltfit" in full and "id=ltfull" in full, "the range control names both ranges"
@@ -1661,8 +1671,8 @@ def test_a_zoom_with_cards_draws_when_the_timeframe_holds_none(hub, board, tmp_p
     """#1334: the chart actually drawn decides emptiness, so a drag zoom with dots draws over an empty timeframe."""
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
     lead = hub.flow_lead(ty="task")["lead"]
-    zoom = lead["control"]["jira"]["all"]
-    lead["control"]["jira"]["all"] = {**zoom, "dots": [], "clusters": []}
+    zoom = lead["control"]["all"]
+    lead["control"]["all"] = {**zoom, "dots": [], "clusters": []}
     lead["summary"] = None
 
     out = _render(hub, tmp_path, "lt-zoom-empty-timeframe.js",
@@ -1676,7 +1686,7 @@ def test_a_zoom_with_cards_draws_when_the_timeframe_holds_none(hub, board, tmp_p
 def test_the_view_chip_prints_the_range_when_a_payload_carries_no_text(hub, board, tmp_path):
     """#1334: the printed range comes from the range's ends when a payload carries no ready-made text."""
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
-    chart = _flow(hub)["lead"]["control"]["jira"]["all"]
+    chart = _flow(hub)["lead"]["control"]["all"]
     chart["range"] = {"start": "2026-10-01T00:00:00+00:00", "end": "2026-10-05T00:00:00+00:00"}
 
     out = _render(hub, tmp_path, "lt-range-derived.js", f"ltChart({json.dumps(chart)},null)")

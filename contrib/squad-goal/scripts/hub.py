@@ -378,6 +378,7 @@ def scan(p):
     if h and "v18" in h and h.get("rec") == [st.st_mtime_ns, st.st_size]: return h   # v10 added the worktree paths a run works in (the load attribution reads them); v11 reads the run issue from request.txt; v12 reads every issue of a dispatch request's CHILD lines; v13 reads the test share a gate counted; v14 reads the card's label from the dispatch form too; v15 splits a run sub/api on the canonical model id (#791, #793); v16 counts a child's tokens from its transcript when no outcome reached the record (#796); v17 counts a fix round's messages after its last outcome, follows a reader to its writer, and drops a shared folder (#802); v18 keeps the record's write time and size, so a record that grew after its verdict (a resume) is read again, and reads the last invocation's verdict only (#1229)
     c = live.get(p)
     if c and c[0] == st.st_mtime and c[1] == st.st_size and c[3] == child_stamp(p, *c[4]): return c[2]
+    node = None
     spend = sub = api = 0.0; mod = {}; t0 = t1 = ver = None; reasons = []; land = False; issues = set(); ntok = 0; kind = "code"; fix = None; stack = None; bug = False; merge = False; head = None; rc = None; share = None
     rid = pathlib.Path(p).parent.name   # the run folder, read before the loop: the share below rebinds a local of its own, never `p`
     accepted, done_kids, wts, defs, outs = set(), set(), set(), {}, {}
@@ -403,6 +404,7 @@ def scan(p):
             try: d = json.loads(l)
             except Exception: continue
             ts = d.get("ts"); e = d.get("event")
+            node = d.get("node") or node   # the last event that names a node is the run's current stage; the record already carries it
             if ts and t0 is None: t0 = ts
             if e == "spawn_accepted" and d.get("child"):
                 accepted.add(d["child"]); defs[d["child"]] = d.get("definition") if isinstance(d.get("definition"), dict) else None   # the definition names the child's workspace (#796)
@@ -454,7 +456,7 @@ def scan(p):
             else: api += v["spend"]
     if has_req: src, why, issues = ("request", None, req_issues) if req_issues else (None, "request-no-issue", set())   # the request is the truth; the transcript never overrides it
     else: src, why = ("transcript" if issues else None), "request-missing"
-    r = {"spend": round(spend, 4), "sub": round(sub, 4), "api": round(api, 4), "mod": mod, "v8": 1, "v9": 1, "v10": 1, "v11": 1, "v12": 1, "v13": 1, "v14": 1, "v15": 1, "v16": 1, "v17": 1, "v18": 1, "rec": [st.st_mtime_ns, st.st_size], "t0": t0, "t1": t1, "verdict": ver, "reasons": reasons, "land": land, "issues": sorted(issues, key=int), "issue_src": src, "issue_why": why, "kind": kind, "fix": fix, "stack": stack, "bug": bug, "merge": merge, "head": head, "exit_code": rc, "agents": len(accepted - done_kids), "wts": sorted(wts), "share": share, "pid": pid, "pid_at": pid_at}
+    r = {"spend": round(spend, 4), "sub": round(sub, 4), "api": round(api, 4), "mod": mod, "v8": 1, "v9": 1, "v10": 1, "v11": 1, "v12": 1, "v13": 1, "v14": 1, "v15": 1, "v16": 1, "v17": 1, "v18": 1, "rec": [st.st_mtime_ns, st.st_size], "t0": t0, "t1": t1, "verdict": ver, "reasons": reasons, "land": land, "issues": sorted(issues, key=int), "issue_src": src, "issue_why": why, "kind": kind, "fix": fix, "stack": stack, "bug": bug, "merge": merge, "head": head, "exit_code": rc, "agents": len(accepted - done_kids), "wts": sorted(wts), "share": share, "pid": pid, "pid_at": pid_at, "node": node}
     r["id"] = rid   # the run folder: the label a run with no issue falls back on
     r["label"] = run_label(r)               # the card's name is computed here, so the page renders a value and holds no rule (ADR-0137)
     if ver is not None or p in hist:   # a finished run is cached; a cached run that resumed leaves the cache
@@ -2471,7 +2473,7 @@ def run_row(d, port, procs):
     rank = run_rank(st, live=not gone)
     if unreadable: st, b = "unreadable", {**badge_of("unreadable"), "title": UNREADABLE_TIP}
     t1 = r["t1"] or time.time()
-    return {"id": os.path.basename(d), "port": port, "state": st, "badge": b["text"], "tip": b["title"], "tone": b["color"], "mark": b["mark"], "label": r.get("label"), "issues": r["issues"], "issue_src": r.get("issue_src"), "issue_why": r.get("issue_why"), "age": int(age), "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": rank, "spend": r["spend"], "dur": round((t1 - (r["t0"] or t1)) / 60, 1), "kind": r.get("kind", "code"), "fix": r.get("fix"), "stack": r.get("stack"), "bug": r.get("bug"), "merge": r.get("merge"), "titles": {i: TITLE.get(int(i), "") for i in r["issues"]}, "live": not gone, "running": r["verdict"] is None and not gone, "agents": 0 if gone else r.get("agents") or 0, "share": r.get("share")}, {"id": os.path.basename(d), "dir": d, "wts": r.get("wts") or []}   # the row, and what the load attribution needs and nothing else
+    return {"id": os.path.basename(d), "port": port, "state": st, "badge": b["text"], "tip": b["title"], "tone": b["color"], "mark": b["mark"], "label": r.get("label"), "issues": r["issues"], "issue_src": r.get("issue_src"), "issue_why": r.get("issue_why"), "age": int(age), "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": rank, "spend": r["spend"], "dur": round((t1 - (r["t0"] or t1)) / 60, 1), "kind": r.get("kind", "code"), "fix": r.get("fix"), "stack": r.get("stack"), "bug": r.get("bug"), "merge": r.get("merge"), "titles": {i: TITLE.get(int(i), "") for i in r["issues"]}, "live": not gone, "running": r["verdict"] is None and not gone, "agents": 0 if gone else r.get("agents") or 0, "share": r.get("share"), "stage": r.get("node")}, {"id": os.path.basename(d), "dir": d, "wts": r.get("wts") or []}   # the row, and what the load attribution needs and nothing else
 
 def runs():
     _titles()
@@ -3787,14 +3789,15 @@ def _lead_plot(query=None):
 
 
 def lead_zoom(query):
-    """The control chart over a dragged range (`from` and `to`, ISO datetimes) or a timeframe preset (`tf`), `scale` jira
-    or log (#900), measured from the start column `a` to the end column `b` (#905). No `a` is the card's opened instant;
-    no `b`, or the closed column, is its closed instant. The bar's values in the query filter its rows (#904)."""
+    """The control chart over a dragged range (`from` and `to`, ISO datetimes) or a timeframe preset (`tf`), measured
+    from the start column `a` to the end column `b` (#905); the y axis is always log (#1355). An old `scale` value in the
+    query changes nothing: the route takes no scale option and serves the log axis (#1355). No `a` is the card's opened
+    instant; no `b`, or the closed column, is its closed instant. The bar's values in the query filter its rows (#904)."""
     q = urllib.parse.parse_qs(query)
+    q.pop("scale", None)   # #1355: an old bookmark's `scale=jira` is a documented no-op; every chart is log, and no `scale` key stays in the payload
     a, b = (q.get(k, [""])[0] or None for k in ("a", "b"))
     if b == COLUMN["issue_closed"]: b = None
     if any(c is not None and c not in ORDER for c in (a, b)): return {"error": "bad column: a and b name a board column"}
-    log = q.get("scale", ["jira"])[0] == "log"
     fw, fs, fk, ty = board_filters(query)
     now = dt.datetime.now(dt.UTC)
     rows = [r for r in lead_rows(a, b, now) if _in_bar(r, fw, fs, fk, ty)]
@@ -3802,14 +3805,14 @@ def lead_zoom(query):
     if "from" not in q and "to" not in q and "tf" in q:
         days = dict(LEAD_TIMEFRAMES).get(q["tf"][0], 0)
         if days == 0: return {"error": "bad timeframe"}
-        return _leadtime.control_chart(rows, timeframe=days, log=log, now=now, measure=measure, plot=_lead_plot(q))
+        return _leadtime.control_chart(rows, timeframe=days, now=now, measure=measure, plot=_lead_plot(q))
     try:
         start, end = (dt.datetime.fromisoformat(q[k][0]) for k in ("from", "to"))
     except (KeyError, IndexError, ValueError):
         return {"error": "bad range: from and to are ISO datetimes"}
     start, end = (m if m.tzinfo else m.replace(tzinfo=dt.UTC) for m in (start, end))
     if end <= start: return {"error": "bad range: to is not after from"}
-    return _leadtime.control_chart(rows, log=log, now=now, start=start, end=end, measure=measure, plot=_lead_plot(q))
+    return _leadtime.control_chart(rows, now=now, start=start, end=end, measure=measure, plot=_lead_plot(q))
 
 
 CHARTS = {}   # each chart route's last answer, with the key of the inputs it read (#971)
@@ -3886,9 +3889,8 @@ def _lead_payload(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
     measure = f"{LEAD_START} -> closed"
     lead = _leadtime.lead_time(rows, now=now, measure=measure)
     plot = _lead_plot()
-    control = {scale: {key: _leadtime.control_chart(rows, timeframe=days, log=scale == "log", now=now, measure=measure,
-                                                    plot=plot)
-                       for key, days in LEAD_TIMEFRAMES} for scale in ("jira", "log")}   # the Jira-style control chart (#900)
+    control = {key: _leadtime.control_chart(rows, timeframe=days, now=now, measure=measure, plot=plot)
+               for key, days in LEAD_TIMEFRAMES}   # the control chart, one per timeframe, always on the log axis (#900, #1355)
     coverage = _coverage_payload(_hist.load_store(_hist.history_path(BOARD, REPO)))
     return {"plot_frame": plot,
           "lead": {"measure": lead["measure"], "type": ty, "window": lead["window"], "start": LEAD_START,
@@ -4687,6 +4689,13 @@ button.on{border-color:var(--acc);color:var(--acc)}
 /* The share a gate counted (#80): how much of the suite passed, so a red gate still shows the work it got to. The full
    share reads as good, a partial one as in progress; a run no gate counted carries no chip at all, never a 0%. */
 .r .sh{color:var(--warn);font-variant-numeric:tabular-nums}.r .sh.done{color:var(--ok)}
+.r .dot{width:7px;height:7px;border-radius:var(--radius-full);background:var(--run);flex:none;display:inline-block}
+.r .slot{margin-left:auto;flex:none;font-size:var(--fs-caption);color:var(--mute);white-space:nowrap;font-variant-numeric:tabular-nums}
+.r .slot.quiet,.r .slot.wait{color:var(--warn)}
+.r .slot.need{color:var(--err)}
+.r .dot.quiet,.r .dot.wait{background:var(--warn)}
+.r .dot.need{background:var(--err)}
+.r .stg{color:var(--mute);font-size:var(--fs-caption);white-space:nowrap;flex:none}
 .r.show{background:var(--raise);box-shadow:inset 3px 0 0 var(--acc)}.r.pinned .pn{color:var(--acc)}
 .pn{color:var(--mute);flex:none}.gh.op{color:var(--fg)}.gh+.r{border-top:0}
 /*RUN_STATE_BASE_CSS*/
@@ -4911,7 +4920,10 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #tab-runs #main{min-height:60vh}
 #side .sp .sb{padding:0 10px 10px}#side .sp>summary::before{content:"\25B8";color:var(--mute);width:10px}#side .sp[open]>summary::before{content:"\25BE"}
 #side .sp>summary .sr{font-size:var(--fs-caption)}
-#lrun .r{border:1px solid var(--line);border-radius:var(--radius-lg);margin-bottom:8px;background:var(--card);min-width:0;overflow:hidden}#lrun .r>div{min-width:0;flex:1}#lrun .r .st,#lrun .r .m{white-space:normal;overflow-wrap:anywhere;max-width:none}#lrun .r:last-child
+#lrun .r{border:1px solid var(--line);border-radius:var(--radius-lg);margin-bottom:8px;background:var(--card);min-width:0;overflow:hidden;display:block;position:relative;padding:7px 22px 8px 10px}#lrun .r>div{min-width:0}#lrun .r.quiet{box-shadow:inset 2px 0 0 var(--warn)}#lrun .r.quiet.show{box-shadow:inset 3px 0 0 var(--acc),inset 5px 0 0 var(--warn)}   /* the panel's own run keeps its accent bar beside the amber one */
+#lrun .r1{display:flex;align-items:center;gap:6px;min-width:0}#lrun .r1 b{flex:0 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#lrun .r2{margin-top:1px;color:var(--ink-body);font-size:var(--fs-caption);display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+#lrun .r .pn{position:absolute;top:6px;right:7px;opacity:0;pointer-events:none}#lrun .r:hover .pn,#lrun .r:focus-visible .pn{opacity:1}#lrun .r .st,#lrun .r .m{white-space:normal;overflow-wrap:anywhere;max-width:none}#lrun .r:last-child{margin-bottom:0}
 #lrmore{display:block;width:100%;margin:2px 0 0;text-align:center}
 #flowb svg{max-width:none}#tab-set details.sp{max-width:1120px}#list{max-width:900px}
 /*BOARD_LANES_CSS*/
@@ -5169,19 +5181,37 @@ const name=r=>{const l=label(r);return runs.filter(x=>label(x)===l).length>1&&sh
 const groupOf=r=>{if(r.rank===0)return"running";const h=r.age/3600;return h<=1?"1h":h<=2?"2h":h<=4?"4h":h<=8?"8h":h<=24?"24h":"d"};
 // The Monitor's live-runs card (#1276): a bounded glance, never a second full list. Its summary states the whole truth --
 // the live count and the oldest live run's age -- even when the rows are capped. It draws at most LIVE_ROWS rows, oldest
-// first, and one control that opens the Runs tab. Each row is the history's own row, so it still opens the run sheet.
-const LIVE_ROWS=3;
-function liveCard(live,row){const n=live.length,oldest=live.reduce((m,r)=>r.age>m?r.age:m,0);   // a reduce, never a spread: the live list is unbounded
- const shown=live.slice().sort((a,b)=>b.age-a.age).slice(0,LIVE_ROWS);
- const head=n?`${n} live · oldest ${age(oldest)}`:"none";   // the count is every live run, never the rows drawn
+// first, and one control that opens the Runs tab. Each row is two lines -- the label and its stage, then the issue title -- and
+// keeps its `data-id`, so the card's own handler still opens the run sheet. Its liveness slot says whether the run is moving.
+const LIVE_ROWS=4;
+const LIVE_QUIET=300;   // a running run that has not written for five minutes reads `quiet`, never a fresh age
+function liveCard(live,shown){const n=live.length,oldest=live.reduce((m,r)=>r.age>m?r.age:m,0),total=live.reduce((s,r)=>s+(+r.spend||0),0);   // a reduce, never a spread: the live list is unbounded
+ const drawn=live.slice().sort((a,b)=>b.age-a.age).slice(0,LIVE_ROWS);
+ const head=n?`${n} live · $${total.toFixed(2)} · oldest ${age(oldest)}`:"none";   // the count and the spend are every live run, never the rows drawn
  const more=n?`<button id=lrmore type=button data-t=runs title="open the Runs tab: the one full list of runs">All runs →</button>`:"";   // the card's way to the full list, drawn only while it has live runs to show
- return{head,html:(shown.map(row).join("")||"<div class=m>no live runs</div>")+more}}
+ return{head,html:(drawn.map(r=>liveRow(r,shown)).join("")||"<div class=m>no live runs</div>")+more}}
+// The liveness slot answers one question: is this run moving? `quiet` is a run that stopped writing, `no record` a run whose
+// record cannot be read, `starting` a run that has not written yet; otherwise the number is how long since its last write.
+// The dot mirrors it. A run that is not live (a verdict, needs-human, waiting) is never in this card: it reads in the Runs tab.
+function liveSlot(r){
+ if(r.state==="unreadable")return{k:"wait",text:"no record"};   // an unreadable record is not a fresh one: it says so, never "0s ago"
+ if(r.state==="starting")return{k:"wait",text:"starting"};
+ if(r.age>=LIVE_QUIET)return{k:"quiet",text:"quiet "+Math.round(r.age/60)+"m"};
+ return{k:"",text:age(r.age)+" ago"}}
+// The issue title is one line; a spec's `[SPEC <n>] ` prefix is the spec's name, not the ticket's, so it is stripped here.
+const liveTitle=r=>{const t=sub(r)||"";return t.replace(/^\[SPEC \d+\] /,"")};
+function liveRow(r,shown){
+ const s=liveSlot(r),on=shown&&(shown.has?shown.has(r.id):shown.includes(r.id))?` show`:"",t=liveTitle(r);
+ const dot=`<i class="dot${s.k?" "+s.k:""}"></i>`,stg=r.stage?`<span class=stg title="the node the run is at">· ${esc(r.stage)}</span>`:"";
+ const lab=`<b title="${iq(labelTip(r))}">${esc(name(r))}</b>`,slot=`<span class="slot${s.k?" "+s.k:""}">${esc(s.text)}</span>`;
+ return `<div class="r${on}${s.k?" "+s.k:""}" data-id="${esc(r.id)}" tabindex=0 role=button><div class=r1>${dot}${lab}${stg}${loadMark(r)}${slot}</div>${t?`<div class=r2 title="${iq(t)}">${esc(t)}</div>`:""}<span class=pn title="shown in the panel">${pins.has(r.id)?"●":"○"}</span></div>`
+}
 function drawList(){
   const shown=new Set(slots),by={};allRuns.filter(r=>r.kind==="childcc").concat(runs).forEach(r=>(by[groupOf(r)]=by[groupOf(r)]||[]).push(r));
   if(openGroups===null){const first=GROUPS.find(g=>by[g.key]);openGroups=new Set(first?[first.key]:[]);saveGroups()}   // nothing stored yet: the first filled group opens once
-  const ccRow=r=>{const h=r.held&&runs.some(x=>x.id===r.held)?r.held:null;return `<div class="r cc ${h&&shown.has(h)?"show":""}"${h?` data-id="${esc(h)}" title="open ${esc(h)}"`:""}><div><span class="b ${r.state}"${r.tip?` title="${esc(r.tip)}"`:""}>${esc(r.badge)}</span> <b>${esc(r.label)}</b>${r.sub?`<div class=st title="${esc(r.sub)}">${esc(r.sub)}</div>`:""}${(r.lines||[]).map(l=>`<div class=st>${esc(l)}</div>`).join("")}${r.live?`<div class=m>age ${age(r.age)}</div>`:""}</div></div>`};
-  const row=r=>r.kind==="childcc"?ccRow(r):`<div class="r ${shown.has(r.id)?"show":""}" data-id="${r.id}"><div>${r.kind==="test"?`<span class=kd title="GUI test run">🧪</span>`:""}<span class="b ${r.state}"${r.tip?` title="${esc(r.tip)}"`:""}>${esc(r.badge||r.state)}</span> <b title="${esc(labelTip(r))}">${esc(name(r))}</b>${loadMark(r)}${!(r.issues||[]).length&&r.issue_why&&!r.fix&&!r.url?`<div class=st>${esc(labelTip(r))}</div>`:""}${sub(r)?`<div class=st title="${esc(sub(r))}">${esc(sub(r))}</div>`:""}<div class=m>${r.share?`<span class="sh${r.share.pct===100?" done":""}" title="the newest gate that counted ran ${r.share.total} tests, ${r.share.passed} passed">${r.share.passed}/${r.share.total} · ${r.share.pct}%</span> · `:""}${usd(r.spend)} · ${Math.round(r.dur)}m · last write ${age(r.age)} ago · ${r.id.slice(-6)} · :${r.port}</div></div><span class=pn title="shown in the panel">${pins.has(r.id)?"●":"○"}</span></div>`;
-  {const live=runs.filter(r=>r.rank===0),c=liveCard(live,row);$("#lrun").innerHTML=c.html;$("#lrs").textContent=c.head}   // the sidebar card: a bounded glance of the runs that are live now (#1276)
+  const ccRow=r=>{const h=r.held&&runs.some(x=>x.id===r.held)?r.held:null;return `<div class="r cc ${h&&shown.has(h)?"show":""}"${h?` data-id="${esc(h)}" title="open ${esc(h)}"`:""}><div><span class="b ${r.state}"${r.tip?` title="${esc(r.tip)}"`:""}>${esc(r.badge)}</span> <b>${esc(r.label)}</b>${r.sub?`<div class=st title="${iq(r.sub)}">${esc(r.sub)}</div>`:""}${(r.lines||[]).map(l=>`<div class=st>${esc(l)}</div>`).join("")}${r.live?`<div class=m>age ${age(r.age)}</div>`:""}</div></div>`};
+  const row=r=>r.kind==="childcc"?ccRow(r):`<div class="r ${shown.has(r.id)?"show":""}" data-id="${r.id}"><div>${r.kind==="test"?`<span class=kd title="GUI test run">🧪</span>`:""}<span class="b ${r.state}"${r.tip?` title="${esc(r.tip)}"`:""}>${esc(r.badge||r.state)}</span> <b title="${iq(labelTip(r))}">${esc(name(r))}</b>${loadMark(r)}${!(r.issues||[]).length&&r.issue_why&&!r.fix&&!r.url?`<div class=st>${esc(labelTip(r))}</div>`:""}${sub(r)?`<div class=st title="${iq(sub(r))}">${esc(sub(r))}</div>`:""}<div class=m>${r.share?`<span class="sh${r.share.pct===100?" done":""}" title="the newest gate that counted ran ${r.share.total} tests, ${r.share.passed} passed">${r.share.passed}/${r.share.total} · ${r.share.pct}%</span> · `:""}${usd(r.spend)} · ${Math.round(r.dur)}m · last write ${age(r.age)} ago · ${r.id.slice(-6)} · :${r.port}</div></div><span class=pn title="shown in the panel">${pins.has(r.id)?"●":"○"}</span></div>`;
+  {const live=runs.filter(r=>r.rank===0),c=liveCard(live,shown);$("#lrun").innerHTML=c.html;$("#lrs").textContent=c.head}   // the sidebar card: a bounded glance of the runs that are live now (#1276)
   const head=g=>{const rows=by[g.key]||[];return `<div class="gh ${openGroups.has(g.key)?"op":""}" data-g="${g.key}" tabindex=0>${esc(g.label)}<span class=sr title="${esc(g.title)}">${esc(g.text)}</span></div>`+(openGroups.has(g.key)?rows.map(row).join(""):"")};
   const bands=GROUPS.filter(g=>g.key!=="running"),empty=bands.filter(g=>g.empty&&!openGroups.has(g.key)),drawn=GROUPS.filter(g=>g.key==="running"||!g.empty||openGroups.has(g.key));   // a band that holds no run folds into one muted line, so six rows of 0 · $0.00 never push the live rows down; a band the user opened keeps its header when it empties, so its open set stays theirs and in sight (#1277)
   $("#list").innerHTML=(drawn.map(head).join("")+(empty.length?`<div class=m>no runs in ${empty.map(g=>esc(g.label)).join(" · ")}</div>`:""))||"<div class=m style=padding:10px>no live dashboards</div>";
@@ -5717,14 +5747,14 @@ const ltEx=(exc,cards,total)=>{const named=exc.map(e=>`${e.count} ${EXREASON[e.r
 const ltExOf=c=>ltEx(Object.entries(c.excluded||{}).map(([r,n])=>({reason:r,count:n})),c.excluded_cards,c.excluded_total);
 const ltGateRole=()=>COLORS[COLNAME.gating]||"var(--chart-series-other)";   // gate time keeps the Gating column's palette role (#1256)
 const LT_TYPES=[["spec","Specs"],["task","Tasks"],["bug","Bugs"]],LT_START="/*LT_START*/";   // the start the hub's payload measures from (#1247)
-let LT={tf:"2",log:true,ty:"bug",pick:null,zc:null,zr:null,rng:null,tok:0,noclick:false,a:LT_START,b:"",cols:[],band:false,md:false,p85:false,win:"full"};   // a fresh page opens on 48 hours, Bugs, Todo and Log scale; the chart's Start and End restore from their own key when the lead chart opens (#1275), while the timeframe, the Type and the scale stay the visit's choice (#1247); the cluster listed under the chart, and a drag zoom: the hub's chart over zr=[from,to] (#900, #985); the deviation band hides until the display asks for it (#1304); only the average reference shows at first, and the median and p85 are toggles (#1332)
+let LT={tf:"2",ty:"bug",pick:null,zc:null,zr:null,rng:null,tok:0,noclick:false,a:LT_START,b:"",cols:[],band:false,md:false,p85:false,win:"full"};   // a fresh page opens on 48 hours, Bugs and Todo; the chart's Start and End restore from their own key when the lead chart opens (#1275), while the timeframe and the Type stay the visit's choice (#1247); the y axis is always log (#1355); the cluster listed under the chart, and a drag zoom: the hub's chart over zr=[from,to] (#900, #985); the deviation band hides until the display asks for it (#1304); only the average reference shows at first, and the median and p85 are toggles (#1332)
 let FLOWFF={};   // the charts that stopped following the Board tab's Waves, Specs and Kinds; the Board tab keeps its own filter (#1147)
 const flowFilterNames=(fw,fs,fk)=>[["Waves",fw],["Specs",fs],["Kinds",fk]].filter(([,v])=>v.length).map(([n,v])=>`${n}: ${v.map(esc).join(", ")}`).join(" · ");
 const flowFilterChip=(fw,fs,fk,stopped)=>{const names=flowFilterNames(fw,fs,fk);if(!names)return "";return `<span class=fchip id=ffchip>Board filter · ${names} `+(stopped?"· this chart no longer follows it":`<button id=ffx type=button title="stop this chart following the Board tab's filter; the Board tab keeps its own">Stop following</button>`)+`</span>`};   // one chip names the Board filter; its one action stops this chart following it, never the Board tab (#1147)
 const flowDetach=()=>{if(!FLOWK)return;FLOWFF[FLOWK]=true;flowTabs();if(FLOWK==="lead"&&LT.zr)ltZoom(LT.zr[0],LT.zr[1]);else flowOpen(FLOWK)};   // the one action: this chart reads again, once, on its own route without the bar's values (#1147)
 const ltSpan=(r,a,b)=>{const t0=Date.parse(r.start),t1=Date.parse(r.end),at=f=>new Date(t0+f*(t1-t0)).toISOString();return [at(a<0?0:a),at(b>1?1:b)]};   // plot fractions to the dates they name (#900)
 const LT_TF=[["1","Past 24 hours"],["2","Past 48 hours"],["3","Past 72 hours"],["7","Past week"],["14","Past 2 weeks"],["30","Past month"],["all","All"]];
-const CHART_KEY="squad-chart",chartRange=()=>{try{const s=JSON.parse(localStorage.getItem(CHART_KEY)||"{}")||{},r={};if(typeof s.a==="string")r.a=s.a;if(typeof s.b==="string")r.b=s.b;return r}catch(e){return {}}},chartSave=()=>{try{localStorage.setItem(CHART_KEY,JSON.stringify({a:LT.a,b:LT.b}))}catch(e){}};let CHART_R=chartRange();   // the chart key owns the Start and End only, apart from the Board filter's record under "hub" (#1275); the timeframe, the Type and the scale stay the visit's choice (#1247); the stored range waits here and reaches LT only when the lead chart opens, so the Board tab reads the payload's own start
+const CHART_KEY="squad-chart",chartRange=()=>{try{const s=JSON.parse(localStorage.getItem(CHART_KEY)||"{}")||{},r={};if(typeof s.a==="string")r.a=s.a;if(typeof s.b==="string")r.b=s.b;return r}catch(e){return {}}},chartSave=()=>{try{localStorage.setItem(CHART_KEY,JSON.stringify({a:LT.a,b:LT.b}))}catch(e){}};let CHART_R=chartRange();   // the chart key owns the Start and End only, apart from the Board filter's record under "hub" (#1275); the timeframe and the Type stay the visit's choice (#1247); the stored range waits here and reaches LT only when the lead chart opens, so the Board tab reads the payload's own start
 const ltP=64;   // a duration label ("17h 36m") is wider than a count, and the old margin cut every tick to its tail (#Astra review)
 const ltGap=16;   // the least vertical space between two gutter tag baselines, one body line (#1332)
 const ltTextW=s=>9*String(s).length;   // a tag's estimated painted width at the body size: a loose nine units per character, so the gutter holds the longest tag (#1332)
@@ -5753,8 +5783,7 @@ const ltChart=(c,cov)=>{LT_FRAME=c.plot_frame;const n=c.dots.length,base=ltP+LT_
   const ctl=`<p class=fhead>`+
       `<label>Timeframe <select id=ltr>${LT_TF.map(([k,v])=>`<option value=${k}${LT.tf===k?" selected":""}>${v}</option>`).join("")}</select></label> `+
       `<label>Type <select id=lty>${LT_TYPES.map(([k,v])=>`<option value=${k}${LT.ty===k?" selected":""}>${v}</option>`).join("")}</select></label> `+
-      `<label>Scale <select id=lts><option value=jira${LT.log?"":" selected"}>Linear scale</option><option value=log${LT.log?" selected":""}>Log scale</option></select></label> `+   // the scale sits beside the filters, where the reading starts (#1332)
-      `<span class=ltgrp><b class=ltgl>Lines</b> <label><input type=checkbox id=ltmd${LT.md?" checked":""}> Median</label> <label><input type=checkbox id=ltp85${LT.p85?" checked":""}> p85</label></span>`+   // the average line is the default; the median and p85 are one toggle each (#1332)
+      `<span class=ltgrp><b class=ltgl>Lines</b> <label><input type=checkbox id=ltmd${LT.md?" checked":""}> Median</label> <label><input type=checkbox id=ltp85${LT.p85?" checked":""}> p85</label></span>`+   // the average line is the default; the median and p85 are one toggle each (#1332); the chart draws no Scale control, its axis is always log (#1355)
     `</p>`+
     `<details class=ltmore><summary>More</summary>`+
     grp("Measurement",`<label>Start <select id=lta><option value="">Created</option>${LT.cols.map(k=>`<option${LT.a===k?" selected":""}>${esc(k)}</option>`).join("")}</select></label> `+
@@ -5773,7 +5802,7 @@ const ltChart=(c,cov)=>{LT_FRAME=c.plot_frame;const n=c.dots.length,base=ltP+LT_
   const ys=c.ticks.map(t=>`<line x1=${ltP-4} y1=${ltY(t.y)} x2=${ltP} y2=${ltY(t.y)} stroke=${mute}></line><text x=${ltP-7} y=${ltY(t.y)+4} text-anchor=end fill=${ink}>${esc(t.text)}</text>`).join("");
   const xs=c.xticks.map(t=>`<text x=${ltX(t.x)} y=${base+17} text-anchor=middle fill=${ink}>${esc(t.text)}</text>`).join("");
   const axes=`<line x1=${ltP} y1=${ltP-10} x2=${ltP} y2=${base} stroke=var(--chart-grid)></line><line x1=${ltP} y1=${base} x2=${ltP+LT_FRAME.width} y2=${base} stroke=var(--chart-grid)></line>`+
-    `<text x=${ltP} y=${ltP-26} text-anchor=start fill=${ink}>Lead time (${c.scale==="cube"?"cube root":c.scale})</text>`+   // the y axis is titled above it, outside the plot (#1332)
+    `<text x=${ltP} y=${ltP-26} text-anchor=start fill=${ink}>Lead time (log)</text>`+   // the y axis is titled above it, outside the plot, always log (#1332, #1355)
     `<text x=${ltP} y=${base+31} text-anchor=start fill=${ink}>Closed date</text>`;   // the x axis is titled below it (#1332)
   const lines=ltLine(c.average,"var(--chart-series-8)","")+(LT.md?ltLine(c.median,"var(--chart-ok)","6 3"):"")+(LT.p85?ltLine(c.p85,"var(--chart-series-5)","1 3"):"");   // the average shows at first; the median and p85 are toggles, each with its own 1px pattern, a long dash and a dot (#1332)
   const tags=ltGutter([ltTag(c.average,"var(--chart-series-8)",""),LT.md?ltTag(c.median,"var(--chart-ok)","6 3"):null,LT.p85?ltTag(c.p85,"var(--chart-series-5)","1 3"):null].filter(Boolean),ltP,LT_FRAME.height,ltGap);
@@ -5789,7 +5818,7 @@ const ltChart=(c,cov)=>{LT_FRAME=c.plot_frame;const n=c.dots.length,base=ltP+LT_
   const pk=LT.pick!=null&&c.clusters[LT.pick]?c.clusters[LT.pick]:null;
   const rows=pk?`<table class=mtab><thead><tr><th>Issue</th><th>Title</th><th>Elapsed</th><th>Closed</th></tr></thead><tbody>${pk.dots.map(d=>`<tr data-o=${d.n} style="cursor:pointer"><td>#${d.n}</td><td>${esc(d.title)}</td><td>${esc(d.text)}</td><td>${esc(d.closed)}</td></tr>`).join("")}</tbody></table>`:"";   // the page's one table rule (#1146)
   return ctl+legend+`<svg data-lt viewBox="0 0 ${ltP+LT_FRAME.width+gut} ${LT_FRAME.height+2*ltP}">${axes}${ys}${xs}${band}${roll}${lines}${dots}${gutter}</svg>`+rows;};   // the layout reserves the right gutter for the reference tags (#1332)
-const flowLead=l=>{const c=LT.zc||(l.control?l.control[LT.log?"log":"jira"][LT.tf]:null);
+const flowLead=l=>{const c=LT.zc||(l.control?l.control[LT.tf]:null);
   const head=`<p class=fhead>${esc((LT_TYPES.find(([k])=>k===l.type)||[0,"all cards"])[1].toLowerCase())} · <b>${esc(c?c.measure:l.measure)}</b> · window ${l.window.size} ${esc(l.window.unit)}</p>`+
     (c&&c.summary?`<p class=fhead>min <b>${ltV(c.summary.minimum)}</b> · max <b>${ltV(c.summary.maximum)}</b> · ${esc(c.summary.plotted_text)} · ${ltExOf(c)}</p>`:"");   // the header is two rows: the view, then the summary it states (#1334)
   LT.cols=l.columns||[];if(!c)return head+`<p class=fnote>no closed card yet · ${ltEx(l.excluded,l.excluded_cards,l.excluded_total)}</p>`;
@@ -5798,7 +5827,7 @@ const drawFlow=()=>{{const w=$("#flowb").clientWidth-20;flowW=w<600?600:w>1600?1
   const a=FLOWD[FLOWK];
   $("#flowb").innerHTML=!a?"<p class=fnote>Loading the chart from the hub.</p>":(cfd?flowCFD(a.cfd.ranges[CF.r]):flowLead(a.lead))+`<p class=flstat role=status>data read ${new Date(a.t*1000).toLocaleTimeString()}</p>`};
 const flowOpen=async k=>{FLOWK=k;$("#flowov").hidden=false;flowTabs();drawFlow();const want=()=>barQuery(k),q=want();try{const a=await (await fetch(`/api/chart/${k}?${q}`)).json();if(q!==want())return;FLOWD[k]=a;if(FLOWK===k)drawFlow()}catch(e){}if(k==="lead"){if(CHART_R){Object.assign(LT,CHART_R);CHART_R=null}if(FLOWK===k&&ltOwn())ltGet()}};   // the control chart reads the span its own key restored, and the stored range reaches LT only here, never on the Board tab (#1275)
-const ltQ=()=>`&scale=${LT.log?"log":"jira"}&a=${encodeURIComponent(LT.a)}&b=${encodeURIComponent(LT.b)}&${barQuery("lead")}`,ltOwn=()=>LT.a!==LT_START||LT.b!=="";   // a span other than the payload's, Todo to closed, is the hub's chart for it (#905, #1247); the bar's values filter it (#904)
+const ltQ=()=>`&a=${encodeURIComponent(LT.a)}&b=${encodeURIComponent(LT.b)}&${barQuery("lead")}`,ltOwn=()=>LT.a!==LT_START||LT.b!=="";   // a span other than the payload's, Todo to closed, is the hub's chart for it (#905, #1247); the bar's values filter it (#904); the axis is always log, so the route takes no scale (#1355)
 const ltZoom=async(f,t)=>{const tok=++LT.tok;try{const c=await (await fetch(`/api/leadtime?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}${ltQ()}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;LT.zr=[f,t];LT.pick=null;drawFlow()}catch(e){}};   // the hub recomputes the chart for the dragged range (#900)
 const ltGet=async()=>{const tok=++LT.tok;LT.zc=null;LT.pick=null;if(!ltOwn()){drawFlow();return}try{const c=await (await fetch(`/api/leadtime?tf=${LT.tf}${ltQ()}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;drawFlow()}catch(e){}};   // the timeframe's chart for the chosen span (#905)
 const ltResize=async()=>{const s=$("#flowb svg[data-lt]");if(!s)return;const r=s.getBoundingClientRect(),v=s.viewBox.baseVal,pw=LT_FRAME.width*r.width/v.width,ph=LT_FRAME.height*r.height/v.height,tok=++LT.tok;try{const c=await (await fetch(`/api/leadtime?${LT.zr?`from=${encodeURIComponent(LT.zr[0])}&to=${encodeURIComponent(LT.zr[1])}`:`tf=${LT.tf}`}${ltQ()}&pw=${pw}&ph=${ph}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;drawFlow()}catch(e){}};   // a resize re-clusters the marks in the rendered plot size, by the hub's one rule (#1331)
@@ -5815,7 +5844,6 @@ $("#flowb").onchange=e=>{if(e.target.id==="cfdr"){CF.r=e.target.value;drawFlow()
   if(e.target.id==="ltr"){LT.tf=e.target.value;LT.zr=null;ltGet();return}   // the timeframe is this visit's choice, never stored (#1247)
   if(e.target.id==="lty"){LT.ty=e.target.value;barMoved();return}
   if(e.target.id==="lta"||e.target.id==="ltb"){LT[e.target.id==="lta"?"a":"b"]=e.target.value;chartSave();LT.pick=null;if(LT.zr){ltZoom(LT.zr[0],LT.zr[1]);return}ltGet();return}
-  if(e.target.id==="lts"){LT.log=e.target.value==="log";LT.pick=null;if(LT.zr){ltZoom(LT.zr[0],LT.zr[1]);return}if(ltOwn()){ltGet();return}drawFlow()}
   if(e.target.id==="ltbd"){LT.band=e.target.checked;drawFlow();return}   // the band redraws what the plot already holds, never a new read (#1304)
   if(e.target.id==="ltmd"){LT.md=e.target.checked;drawFlow();return}   // a reference toggle redraws the held payload, never a new read (#1332)
   if(e.target.id==="ltp85"){LT.p85=e.target.checked;drawFlow();return}};

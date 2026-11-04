@@ -158,6 +158,7 @@ def _pieces():
         _decl(SRC, "usd"),
         _decl(SRC, "age"),
         _decl(SRC, "esc"),
+        _decl(SRC, "iq"),
         _decl(SRC, "save"),
         _decl(SRC, "label"),
         _decl(SRC, "labelTip"),

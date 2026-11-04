@@ -287,12 +287,14 @@ def test_invocation_keeps_todays_wire_string(raw, use, wire, reg):
 # own landing with its own test; this pin makes an accidental rewrite of models.json fail here.
 PINNED_CHAINS = {
     # The owner's chains: DeepSeek, the cheapest model, heads coding (the order the live copy runs), review and
-    # vision; Luna heads the router, with Grok 4.5 behind it (3 of 3 on the router contract).
-    "coding": ["claude-deepseek-flash[1m]", "claude-kimi-for-coding", "claude-haiku-5-5", "gpt-6-luna", "claude-nemotron-super"],   # no model that takes no tools (ADR-0147)
-    "review": ["claude:claude-deepseek-flash", "claude:claude-opus-5-5", "gemini-3.8-flash-medium", "gpt-6.1-sol"],
+    # vision; Luna heads the router, with Grok 4.5 behind it (3 of 3 on the router contract). Grok 4.7 covers the
+    # window DeepSeek closes in coding, and in review it preempts Opus inside that window: a cost trade, not a
+    # quality one, and every grok entry names its effort because unset means high and a timeout.
+    "coding": ["claude-deepseek-flash[1m]", "claude-kimi-for-coding", "claude-haiku-5-5", "grok-4.7", "gpt-6-luna", "claude-nemotron-super"],   # no model that takes no tools (ADR-0147)
+    "review": ["claude:claude-deepseek-flash", "grok-4.7", "claude:claude-opus-5-5", "gemini-3.8-flash-medium", "gpt-6.1-sol"],
     "vision": ["claude-deepseek-flash[1m]", "grok-4.7", "gpt-5.6-luna"],
     "router": ["gpt-6-luna", "claude-grok-4.5", "claude-haiku-5-5"],
-    "editorial": ["ps5-qwen-coder", "claude-haiku-5-5"],
+    "editorial": ["ps5-qwen-coder", "grok-4.5", "claude-haiku-5-5"],
 }
 
 
@@ -324,7 +326,9 @@ def test_the_editorial_chain_leads_with_the_local_ps5_and_takes_the_spelling_the
     """Editorial text -- a commit message, a pull-request body, a status summary -- is short, serial and never on a
     gate's path, so it takes the owner's local PS5 first and wakes no subscription. The head is the PS5 model on the
     bare `ps5-qwen-coder` spelling, which the runner gateway answers; the `claude-` prefixed spelling it also
-    answers stays served, so no caller breaks."""
+    answers stays served, so no caller breaks. Behind it sits Grok 4.5 on its idle subscription, which fits the
+    shape of this work: short, format-bound, and checked mechanically. Effort is named low: unset, grok reasons at
+    its high default for a two-line summary."""
     mdoc = json.loads(MODELS.read_text())
     entries = mr.chain(mdoc, "editorial", reg).entries
     assert entries[0].id == "ps5-qwen-coder", [e.id for e in entries]
@@ -333,7 +337,19 @@ def test_the_editorial_chain_leads_with_the_local_ps5_and_takes_the_spelling_the
     assert "ps5-qwen-coder" in reg.entries["ps5-qwen-coder"].routes["gateway"]["served"]
     assert entries[0].effort == "low", "a local model on a 9B head takes low effort"
     fallback = entries[1]
-    assert fallback.id == "claude-haiku-5-5" and fallback.route == "gateway", (fallback.id, fallback.route)
+    assert fallback.id == "grok-4.5" and fallback.route == "gateway", (fallback.id, fallback.route)
+    assert fallback.effort == "low", "grok always reasons, so its effort is named"
+    assert entries[2].id == "claude-haiku-5-5" and entries[2].route == "gateway", (entries[2].id, entries[2].route)
+
+
+def test_every_grok_entry_names_its_reasoning_effort(reg):
+    """Grok always reasons, its default effort is high, and no setting disables the reasoning. An entry that named no
+    effort made every review reason for minutes and die on the timeout, so the chains that ship name the effort on
+    every grok entry names low, so a later reorder cannot quietly drop it."""
+    mdoc = json.loads(MODELS.read_text())
+    wrong = [(name, e.get("id"), e.get("effort")) for name, chain in mdoc["chains"].items() for e in chain
+             if str(e.get("id", "")).startswith("grok") and e.get("effort") != "low"]
+    assert wrong == [], f"a grok entry does not name low effort: {wrong}"
 
 
 def test_a_local_gateway_route_serves_both_spellings_of_its_model(reg):

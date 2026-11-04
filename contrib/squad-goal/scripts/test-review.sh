@@ -276,6 +276,11 @@ out=$(cd "$W" && bash "$T/s/review.sh" --worktree main 9 2>/dev/null); rc=$?
 /usr/bin/grep -q -- '--permission-mode plan' "$GROK_ARGS" \
   && ko "13 the grok review runs in plan mode, which headless grok auto-denies: $(cat "$GROK_ARGS")" \
   || ok "13 the grok review does not run in plan mode"
+# 13b) grok always reasons and defaults to high effort: a review that names no effort runs minutes long and times
+# out (#1848). The chain entry's effort is passed, and an entry that names none gets medium.
+/usr/bin/grep -q -- '--reasoning-effort medium' "$GROK_ARGS" \
+  && ok "13b the grok review passes the chain's reasoning effort (medium by default)" \
+  || ko "13b the grok review passes no reasoning effort, so grok runs at its slow high default: $(cat "$GROK_ARGS")"
 unset GROK_ARGS
 printf '#!/bin/bash\necho "$*" >> "$AGY_ARGS"; echo "VERDICT: APPROVE"\n' > "$T/bin/agy"; chmod +x "$T/bin/agy"
 printf '{"review_models":["gemini-3.8-flash-medium"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
@@ -678,4 +683,24 @@ out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>"$T/e21"); rc=$?
 n=$( [ -f "$T/rcalls" ] && wc -l < "$T/rcalls" | tr -d ' ' || echo 0 )   # a zero budget calls no model, so the file is never written
 [ "$n" = 0 ] && ! /usr/bin/grep -q 'integer expression expected' "$T/e21" && ok "27c a configured budget of 0 stays 0, the fallback does not fire" || ko "26c zero budget: calls='$n' rc=$rc"
 
+# 24b) grok files a real defect as Debt in most runs (measured on a planted diff). Its debt-only CHANGES must keep its
+# verdict: the downgrade of #653 would turn that habit into an approval and the fix round would never run.
+printf '#!/bin/bash\ncat > /dev/null; printf %s\n' "'VERDICT: CHANGES\n## Debt\n- b.cs:2 — naming — nobody can tell what it names — rename it\n'" > "$T/bin/grok"
+chmod +x "$T/bin/grok"
+printf '{"review_models":["grok-4.7"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/prompt".*
+out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+l1=$(head -1 "$T/st/review-fix_1-x.md" 2>/dev/null)
+[ $rc = 0 ] && [ "$l1" = "VERDICT: CHANGES" ] && /usr/bin/grep -q '^- b.cs:2 — ' "$T/st/review-fix_1-x.md" \
+  && ok "24b a grok debt-only CHANGES keeps its verdict, so the fix round runs" \
+  || ko "24b grok debt-only was saved as '$l1' (rc=$rc)"
+# 13c) a v2 chain entry that names its effort is what the call gets, not effort_of's default.
+printf '{"schema_version":2,"chains":{"review":[{"id":"grok-4.7","route":"cli","effort":"low"}]},"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+printf '#!/bin/bash\necho "$*" >> "$GROK_ARGS"; printf %s\n' "'VERDICT: APPROVE\n'" > "$T/bin/grok"; chmod +x "$T/bin/grok"
+export GROK_ARGS="$T/grok-args"; : > "$GROK_ARGS"; rm -f "$T/st/review-fix_1-x".*
+out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+/usr/bin/grep -q -- '--reasoning-effort low' "$GROK_ARGS" \
+  && ok "13c the grok review takes the chain entry's own effort" \
+  || ko "13c the grok review ignored the entry's effort: $(cat "$GROK_ARGS")"
+unset GROK_ARGS
 rm -rf "$T"; exit $fail

@@ -172,7 +172,7 @@ def test_the_hub_serves_the_lead_view_from_todo_with_open_cards_censored(hub, bo
                 3: (_card(3, st="Closed", s="CLOSED", c=t(1)), _life(t(5), (t(4), "Doing"), (t(2), "Todo"), (t(1), "Closed")))})
     lead = hub.flow_lead(ty=None)["lead"]
     assert lead["start"] == hub.COLUMN["issue_todo"], "the payload measures from the default start, Todo"
-    chart = lead["control"]["log"]["2"]
+    chart = lead["control"]["2"]
     assert [d["n"] for d in chart["dots"]] == [1, 3], "an open card is never a dot"
     assert chart["survival"]["cohort"] == 3 and chart["survival"]["censored"] == 1
     assert chart["median"]["hours"] == pytest.approx(4.0, abs=0.01), "card 3 starts at its first Todo arrival, 4h"
@@ -192,14 +192,14 @@ def _page_line(hub, prefix):  # noqa: F811
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-def test_the_view_opens_on_48_hours_bugs_todo_and_log_scale_on_a_fresh_page(hub):  # noqa: F811
+def test_the_view_opens_on_48_hours_bugs_and_todo_on_a_fresh_page(hub):  # noqa: F811
     block = _flow_block(hub).split("const drawFlow")[0]
     for stored in ({}, {"lt": {"ty": "task", "tf": "30", "log": False}}):
         out = _node("\n".join([f"const ls={json.dumps(stored)};", "const esc=s=>String(s);", block,
                                _page_line(hub, "const ltQ="),
-                               "process.stdout.write(JSON.stringify({tf:LT.tf,ty:LT.ty,a:LT.a,log:LT.log,own:ltOwn()}));"]))
-        assert json.loads(out) == {"tf": "2", "ty": "bug", "a": "Todo", "log": True, "own": False}, \
-            "a fresh page opens on the four defaults, whatever an older visit stored"
+                               "process.stdout.write(JSON.stringify({tf:LT.tf,ty:LT.ty,a:LT.a,own:ltOwn()}));"]))
+        assert json.loads(out) == {"tf": "2", "ty": "bug", "a": "Todo", "own": False}, \
+            "a fresh page opens on its defaults, whatever an older visit stored"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
@@ -211,12 +211,12 @@ def test_a_chart_range_is_stored_under_its_own_key_and_never_in_the_board_record
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_the_chart_key_carries_the_range_only(hub):  # noqa: F811
-    """#1275, #1247: the key owns the Start and End; the timeframe, the Type and the scale stay the visit's choice."""
+    """#1275, #1247: the key owns the Start and End; the timeframe and the Type stay the visit's choice."""
     body = re.search(r"chartSave=\(\)=>\{try\{localStorage\.setItem\(CHART_KEY,JSON\.stringify\((\{.*?\})\)\)\}catch",
                      _page_line(hub, "const CHART_KEY="))
     assert body and body.group(1) == "{a:LT.a,b:LT.b}", "the chart key carries the Start and End only"
     onchange = re.search(r'\$\("#flowb"\)\.onchange=.*?(?=\$\("#flowb"\)\.onclick=)', hub.PAGE, re.S).group(0)
-    for ctl in ("ltr", "lty", "lts"):
+    for ctl in ("ltr", "lty"):
         line = next(row for row in onchange.splitlines() if f'"{ctl}"' in row)
         assert "chartSave" not in line and "ls." not in line, f"the {ctl} control writes no storage (#1247)"
     assert "chartSave" not in _page_line(hub, "const ltGet=") and "ls." not in _page_line(hub, "const ltGet="), \
@@ -225,7 +225,7 @@ def test_the_chart_key_carries_the_range_only(hub):  # noqa: F811
 
 def test_the_default_window_is_in_the_one_read_the_page_makes(hub, board):  # noqa: F811
     lead = hub.flow_lead(ty="bug")["lead"]
-    assert "2" in lead["control"]["log"], "the default window is not in the payload the page already reads"
+    assert "2" in lead["control"], "the default window is not in the payload the page already reads"
     assert lead["start"] == "Todo"
 
 
@@ -241,10 +241,10 @@ def test_the_legend_carries_the_km_median_its_interval_the_cohort_wip_and_the_ex
                 3: (_card(3, st="Todo", s="OPEN"), _life(t(40))),
                 4: (_card(4, st="Closed", s="CLOSED", c=t(3)), never)})
     lead = hub.flow_lead(ty=None)["lead"]
-    chart = lead["control"]["log"]["2"]
+    chart = lead["control"]["2"]
     # Re-anchored (#1334): the one exclusion total moved from the percentile line to the header's summary row, so the
     # whole lead view is drawn, not the chart alone.
-    out = _render(hub, tmp_path, "lt-km.js", f'(LT.tf="2",LT.log=true,flowLead({json.dumps(lead)}))')
+    out = _render(hub, tmp_path, "lt-km.js", f'(LT.tf="2",flowLead({json.dumps(lead)}))')
     legend = "".join(re.findall(r'<p class="flg ltlg">(.*?)</p>', out))
     assert "not estimable" in legend, "a curve that never reaches one half reads not estimable"
     assert chart["survival"]["text"] in out and chart["wip"]["text"] in out

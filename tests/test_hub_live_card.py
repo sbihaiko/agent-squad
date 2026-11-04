@@ -1,9 +1,10 @@
 """The Monitor's live-runs card is a bounded glance that opens the Runs tab (#1276).
 
-The card keeps its place under the Monitor and stops being a second full list: it states the whole live count and the
-oldest live run's age, draws at most three rows, and carries one control that switches the page to the Runs tab. A row
-keeps its `data-id`, so the page's own row handler still opens the run sheet. The served page's own code runs under node
-over a fixture view; the words are read back as the owner sees them.
+The card keeps its place under the Monitor and stops being a second full list: its header states the whole live count, the
+live spend and the oldest live run's age; it draws at most four rows, oldest first, and carries one control that switches
+the page to the Runs tab. A row is two lines -- a state dot with the label and the current stage, then the issue title --
+and it keeps its `data-id`, so the page's own row handler still opens the run sheet. The served page's own code runs under
+node over a fixture view; the words are read back as the owner sees them.
 """
 import importlib.util
 import json
@@ -19,7 +20,8 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
 NODE = shutil.which("node")
-HELPERS = (r"^const age=s=>[^\n]*", r"^const LIVE_ROWS=\d+;")
+HELPERS = (r"^const age=s=>[^\n]*", r"^const iq=t=>[^\n]*", r"^function loadMark\(r\)\{[^\n]*",
+           r"^const LIVE_ROWS=\d+;", r"^const LIVE_QUIET=\d+;")
 
 
 @pytest.fixture(scope="module")
@@ -45,43 +47,80 @@ def _card(page, runs):
     if NODE is None:
         pytest.skip("node is required")
     helpers, card = _pieces(page)
-    prelude = 'const row=r=>`<div class="r" data-id="${r.id}"><b>${r.label}</b></div>`;'
-    body = "console.log(JSON.stringify(liveCard(" + json.dumps(runs) + ",row)));"
+    prelude = ('const esc=s=>String(s==null?"":s);const sub=r=>{const v=Object.values(r.titles||{});return v.length?v[0]:""};'
+               'const name=r=>r.label||r.id;const labelTip=r=>"";const pins=new Set();')
+    body = "console.log(JSON.stringify(liveCard(" + json.dumps(runs) + ")));"
     src = "\n".join([helpers, prelude, card, body])
     p = subprocess.run([NODE, "-"], input=src, capture_output=True, text=True, timeout=30)
     assert p.returncode == 0, p.stderr
     return json.loads(p.stdout)
 
 
-def _run(age, tag):
-    return {"id": f"run-20261103-1010{tag}0-aaaa", "label": f"gui-{tag}", "age": age, "rank": 0}
+def _run(age, tag, spend=0.0, title=""):
+    r = {"id": f"run-20261103-1010{tag}0-aaaa", "label": f"gui-{tag}", "age": age, "rank": 0, "spend": spend}
+    if title:
+        r["issues"] = ["1"]
+        r["titles"] = {"1": title}
+    return r
 
 
-LIVE = [_run(7200, "a"), _run(60, "b"), _run(600, "c"), _run(1800, "d"), _run(5400, "e")]
+LIVE = [_run(7200, "a", 1.5, "[SPEC 1311] Show four live runs on the Monitor card"), _run(60, "b", 0.25), _run(600, "c", 0.0),
+        _run(1800, "d", 2.75), _run(5400, "e", 1.0)]
 
 
 def _visible(html):
     return re.sub(r"\s+", " ", re.sub(r"<[^>]*>", " ", html)).strip()
 
 
-def test_the_card_states_the_whole_count_and_the_oldest_age(page):
+def test_the_card_states_the_whole_count_the_spend_and_the_oldest_age(page):
     out = _card(page, LIVE)
-    assert out["head"] == "5 live · oldest 2h", "the card states the whole truth, even with the rows capped"
+    assert out["head"] == "5 live · $5.50 · oldest 2h", "the header states the whole truth, even with the rows capped"
 
 
-def test_the_card_draws_at_most_three_rows_oldest_first(page):
+def test_the_card_draws_at_most_four_rows_oldest_first(page):
     out = _card(page, LIVE)
     ids = re.findall(r'data-id="([^"]+)"', out["html"])
-    # a hand-worked answer, never the card's own sort rule: a=7200 s, e=5400 s, d=1800 s are the three oldest of LIVE
-    assert ids == ["run-20261103-1010a0-aaaa", "run-20261103-1010e0-aaaa", "run-20261103-1010d0-aaaa"], \
-        "at most three rows, the oldest first"
-    assert out["html"].count('class="r"') == 3
+    # a hand-worked answer, never the card's own sort rule: a=7200 s, e=5400 s, d=1800 s, c=600 s are the four oldest of LIVE
+    assert ids == ["run-20261103-1010a0-aaaa", "run-20261103-1010e0-aaaa", "run-20261103-1010d0-aaaa", "run-20261103-1010c0-aaaa"], \
+        "at most four rows, the oldest first"
+    assert out["html"].count("data-id=") == 4
 
 
 def test_the_count_is_not_the_row_count_when_rows_are_capped(page):
     out = _card(page, LIVE)
     assert out["head"].startswith("5 live"), "the count keeps stating the whole truth"
-    assert out["html"].count('class="r"') == 3
+    assert out["html"].count("data-id=") == 4
+
+
+def test_a_row_reads_the_dot_the_label_the_stage_and_the_bare_title(page):
+    runs = [{"id": "run-20261103-101012-aaaa", "label": "implement #1282", "age": 12, "rank": 0, "state": "running",
+             "stage": "implement", "issues": ["1282"], "titles": {"1282": "[SPEC 1311] Build the thing"}}]
+    out = _card(page, runs)
+    body = out["html"]
+    assert '<i class="dot"></i>' in body, "a row opens with a state dot, never the state word"
+    assert "implement #1282" in body
+    assert "· implement" in body, "the run's current node reads as its stage"
+    assert "Build the thing" in body
+    assert "SPEC 1311" not in body, "the spec prefix is stripped from the ticket's title"
+    assert ">12s ago<" in body, "a writing run says how long since its last write"
+    assert "running" not in _visible(body), "the state word left the row"
+
+
+def test_a_quiet_run_reads_quiet_with_an_amber_dot_and_rule(page):
+    out = _card(page, [{"id": "run-q", "label": "gui-q", "age": 900, "rank": 0, "state": "running"}])
+    assert "quiet 15m" in _visible(out["html"])
+    assert 'class="r quiet"' in out["html"], "a quiet run marks its row's left edge"
+    assert 'class="dot quiet"' in out["html"]
+
+
+def test_an_unreadable_record_reads_no_record_and_never_a_fresh_age(page):
+    # The card keeps only the runs that are live now (rank 0), and an unreadable record keeps its figures from the last read:
+    # it must say so, or a run that cannot be read looks exactly like one that is writing (#1816's own rule, applied here).
+    out = _card(page, [{"id": "run-u", "label": "gui-u", "age": 0, "rank": 0, "state": "unreadable"}])
+    body = _visible(out["html"])
+    assert "no record" in body
+    assert "0s ago" not in body, "an unreadable record never reads as a fresh write"
+    assert 'class="dot wait"' in out["html"]
 
 
 def test_the_card_carries_one_control_that_switches_to_the_runs_tab(page):
@@ -136,4 +175,3 @@ def test_a_card_row_opens_the_run_sheet(page):
     got = json.loads(p.stdout)
     assert got["opened"] == [ids[0], ids[0]], "a card row opens the run sheet, by click and by the keyboard"
     assert got["hl"] == {"run": ids[0]}, "the opened run is highlighted, as the list's row does"
-

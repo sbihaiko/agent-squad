@@ -7,8 +7,10 @@ bar's values in their query and answer from the history store's column intervals
 """
 import importlib.util
 import json
+import math
 import re
 import shutil
+import statistics
 import subprocess
 import sys
 import time
@@ -232,7 +234,7 @@ def test_the_control_chart_takes_the_same_filters(hub, board):
     _seed(hub, items)
 
     def dots(query):
-        return sorted(d["n"] for d in hub.flow_lead(*hub.board_filters(query))["lead"]["control"]["jira"]["all"]["dots"])
+        return sorted(d["n"] for d in hub.flow_lead(*hub.board_filters(query))["lead"]["control"]["all"]["dots"])
 
     assert dots("") == [1], "the default type is tasks"
     assert dots("fs=5") == [1]
@@ -352,7 +354,7 @@ def test_a_spec_clear_redraws_the_open_control_chart_and_its_chosen_span(hub, bo
     _seed(hub, [_item(hub, 1, closed, pa=5, closed_at="2026-10-02T15:00:00Z"),
                 _item(hub, 2, closed, closed_at="2026-10-03T15:00:00Z")])
     q5, qall = _bar(fs="5"), _bar()
-    span = "&scale=jira&a=Doing&b="   # re-anchored (#1247): Todo is the payload's own start, so the chosen span is Doing
+    span = "&a=Doing&b="   # re-anchored (#1247): Todo is the payload's own start, so the chosen span is Doing
     answers = {f"/api/chart/lead?{q5}": hub.flow_lead(*hub.board_filters(q5)),
                f"/api/chart/lead?{qall}": hub.flow_lead(*hub.board_filters(qall)),
                f"/api/leadtime?tf=30{span}&{qall}": {"dots": [{"n": 1}, {"n": 2}]}}
@@ -360,7 +362,6 @@ def test_a_spec_clear_redraws_the_open_control_chart_and_its_chosen_span(hub, bo
 bo.fs=["5"];pickFilter("fsl","fs");
 EL["#flowb"].onchange({target:{id:"lty",value:"task"}});
 EL["#flowb"].onchange({target:{id:"ltr",value:"30"}});
-EL["#flowb"].onchange({target:{id:"lts",value:"jira"}});
 LT.a="Doing";
 await flowOpen("lead");await settle();
 EL["#fsl"].handlers.click({target:{closest:s=>s==="[data-clear]"},preventDefault(){}});await settle();await settle();
@@ -368,7 +369,7 @@ console.log(JSON.stringify({fetched:FETCHED,fs:bo.fs,zc:LT.zc,lead:FLOWD.lead}))
     assert out["fs"] == []
     assert f"/api/chart/lead?{qall}" in out["fetched"], "the clear reads the control chart anew"
     assert f"/api/leadtime?tf=30{span}&{qall}" in out["fetched"], "a chosen span is read anew with the bar's values"
-    assert sorted(d["n"] for d in out["lead"]["lead"]["control"]["jira"]["all"]["dots"]) == [1, 2]
+    assert sorted(d["n"] for d in out["lead"]["lead"]["control"]["all"]["dots"]) == [1, 2]
     assert out["zc"] == {"dots": [{"n": 1}, {"n": 2}]}
 
 
@@ -460,7 +461,7 @@ def _dots(chart):
 def test_each_type_selects_only_its_issues_in_the_control_chart(hub, board):
     _seed(hub, _typed_items(hub))
     for ty, expected in (("task", [1, 2, 3]), ("bug", [5, 6]), ("spec", [7])):
-        assert _dots(hub.flow_lead(ty=ty)["lead"]["control"]["jira"]["all"]) == expected, ty
+        assert _dots(hub.flow_lead(ty=ty)["lead"]["control"]["all"]) == expected, ty
 
 
 def test_each_statistic_is_computed_over_the_selected_type_only(hub, board):
@@ -470,11 +471,17 @@ def test_each_statistic_is_computed_over_the_selected_type_only(hub, board):
     assert tasks["summary"]["p85"]["text"] == "3d"
     # Re-anchored (#1250): the open task is censored in the survival reading, never an exclusion.
     assert tasks["excluded_total"] == 0 and tasks["excluded"] == []
-    control = hub.flow_lead(ty="task")["lead"]["control"]["jira"]["all"]
+    control = hub.flow_lead(ty="task")["lead"]["control"]["all"]
     assert control["average"]["text"] == "2d" and control["p85"]["text"] == "3d"
-    assert control["dots"][0]["rolling"]["hours"] == 48, "the rolling mean is over the three tasks, not the bugs"
-    assert control["dots"][0]["rolling"]["low"] == pytest.approx(48 - 384 ** 0.5), "the sigma band is over the three tasks"
-    assert control["dots"][0]["rolling"]["high"] == pytest.approx(48 + 384 ** 0.5)
+    # Re-anchored (#1355): the one axis is log, so the rolling mean is the geometric mean of 24 h, 48 h and 72 h, with
+    # one sigma taken in log space, derived here from those three hours rather than from the code's own formula.
+    tasks_hours = [24.0, 48.0, 72.0]
+    logs = [math.log(h) for h in tasks_hours]
+    centre, sigma = statistics.fmean(logs), statistics.pstdev(logs)
+    rolling = control["dots"][0]["rolling"]
+    assert rolling["hours"] == pytest.approx(math.exp(centre)), "the rolling mean is over the three tasks, not the bugs"
+    assert rolling["low"] == pytest.approx(math.exp(centre - sigma)), "the sigma band is over the three tasks"
+    assert rolling["high"] == pytest.approx(math.exp(centre + sigma))
     bugs = hub.flow_lead(ty="bug")["lead"]
     # Re-anchored (#1250): the median is Kaplan-Meier: the curve over 1h and 2h falls to one half at 1h.
     assert bugs["summary"]["average"]["text"] == "1h 30m" and bugs["summary"]["median"]["text"] == "1h"
@@ -515,9 +522,11 @@ def test_the_header_names_the_type_the_chart_holds(hub, board):
     assert "tasks · <b>Todo -> closed</b> · window 20 issues" in result.stdout, "the view measures from Todo (#1247)"
 
 
-def test_the_type_control_sits_beside_timeframe_and_scale(hub):
+def test_the_type_control_sits_beside_the_timeframe(hub):
     page = hub.PAGE
-    assert page.index("<select id=ltr>") < page.index("<select id=lty>") < page.index("<select id=lts>"), "Type groups with Timeframe; Scale is display"
+    assert page.index("<select id=ltr>") < page.index("<select id=lty>"), "Type groups with Timeframe"
+    assert "id=lts" not in page and ">Scale <" not in page, \
+        "a Scale control renders: the lead chart is always log (#1355)"
     assert '[["spec","Specs"],["task","Tasks"],["bug","Bugs"]]' in page
 
 
@@ -530,12 +539,12 @@ def test_a_stored_chart_range_waits_for_the_lead_chart_and_the_type_is_never_sto
     def loaded(stored):
         stub = 'const localStorage={getItem:k=>k==="squad-chart"?' + json.dumps(json.dumps(stored)) + ':null,setItem(){}};'
         script = "\n".join([stub, "const esc=s=>String(s);", block, _page_line(hub, "const ltQ="),
-                            "process.stdout.write(JSON.stringify({ty:LT.ty,tf:LT.tf,a:LT.a,b:LT.b,log:LT.log,own:ltOwn()}));"])
+                            "process.stdout.write(JSON.stringify({ty:LT.ty,tf:LT.tf,a:LT.a,b:LT.b,own:ltOwn()}));"])
         result = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=30)
         assert result.returncode == 0, result.stderr
         return json.loads(result.stdout)
 
-    fresh = {"ty": "bug", "tf": "2", "a": "Todo", "b": "", "log": True, "own": False}
+    fresh = {"ty": "bug", "tf": "2", "a": "Todo", "b": "", "own": False}
     for stored in ({"tf": "30", "a": "Doing", "b": "Closed"}, {"ty": "task", "tf": "3", "a": "Doing"}, {}):
         assert loaded(stored) == fresh, "a stored chart range never reaches the Board tab's shared state"
 
@@ -567,7 +576,7 @@ const pre=snap();"""
     assert first["pre"]["cards"] == [2]
     assert first["pre"]["own"] is False and first["pre"]["a"] == "Todo", "the board opens on the payload's own start"
 
-    answers = {f"/api/leadtime?tf=30&scale=log&a=Doing&b=&{_bar(ty='bug')}": {"dots": []}}
+    answers = {f"/api/leadtime?tf=30&a=Doing&b=&{_bar(ty='bug')}": {"dots": []}}
     second = _page_harness(hub, answers, 'EL["#flowb"].onchange({target:{id:"ltr",value:"30"}});'
                            'EL["#flowb"].onchange({target:{id:"lta",value:"Doing"}});await settle();' + observe + report,
                            onchange=onchange, store=first["store"])
@@ -577,7 +586,7 @@ const pre=snap();"""
     assert json.loads(second["store"]["squad-chart"]) == {"a": "Doing", "b": ""}, \
         "the chart key carries the range only; the timeframe stays the visit's choice (#1247)"
 
-    span = f"/api/leadtime?tf=2&scale=log&a=Doing&b=&{_bar(fk='bug', ty='bug')}"
+    span = f"/api/leadtime?tf=2&a=Doing&b=&{_bar(fk='bug', ty='bug')}"
     answers = {f"/api/chart/lead?{_bar(fk='bug', ty='bug')}": {"lead": {}, "t": 1}, span: {"dots": []}}
     third = _page_harness(hub, answers, observe + 'await flowOpen("lead");await settle();' + report,
                           onchange=onchange, store=second["store"])
@@ -683,7 +692,7 @@ def test_stopping_the_chip_on_a_zoomed_control_chart_reads_it_once(hub, board):
     _seed(hub, [_item(hub, 1, backlog), _item(hub, 2, backlog, labels=["bug"])])
     q_bug, q_all = _bar(fk="bug", ty="bug"), _bar(ty="bug")
     f, t = "2026-10-02T00:00:00.000Z", "2026-10-09T00:00:00.000Z"
-    span = "&scale=log&a=Todo&b="   # re-anchored (#1247): the view starts at Todo, on the fresh page's Log scale
+    span = "&a=Todo&b="   # re-anchored (#1247): the view starts at Todo, as the payload measures
     from_q, to_q = urllib.parse.quote(f, safe=""), urllib.parse.quote(t, safe="")
     zoom_bug = f"/api/leadtime?from={from_q}&to={to_q}{span}&{q_bug}"
     zoom_all = f"/api/leadtime?from={from_q}&to={to_q}{span}&{q_all}"
