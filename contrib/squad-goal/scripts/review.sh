@@ -390,7 +390,10 @@ for m in $chain; do fmt=0; timed_out=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9
         else
           cap claude -p --output-format json --strict-mcp-config --model "$wire" --effort "$([ -n "$lane" ] && echo low || effort_of "$m")" --tools Read Grep Glob Bash --allowedTools "Bash(git show:*)" "Bash(git log:*)" "Bash(git diff:*)" --disallowedTools Skill Edit Write NotebookEdit WebFetch "${schemaargs[@]}" < $p > "$o" 2>"$e"
         fi;;
-      cli:grok) (cd "$SG_CHECKOUT" && cap grok -m "$wire" --prompt-file "$p" --output-format plain --permission-mode dontAsk --disable-web-search) > "$o" 2>"$e";;
+      # grok's reasoning effort defaults to high and cannot be disabled; unset, a review ran minutes long and timed out (479-623 s
+      # medians, #1848). The call takes the chain entry's effort, and the fast lane takes low as the claude leg does; an entry
+      # that names none falls to effort_of's default, so a shipped entry always names one (tests/test_modelreg.py pins it).
+      cli:grok) (cd "$SG_CHECKOUT" && cap grok -m "$wire" --reasoning-effort "$([ -n "$lane" ] && echo low || effort_of "$m")" --prompt-file "$p" --output-format plain --permission-mode dontAsk --disable-web-search) > "$o" 2>"$e";;
       cli:agy) (cd "$SG_CHECKOUT" && cap agy --model "$wire" --mode plan --dangerously-skip-permissions --print-timeout 1800s -p "$(cat "$p")") > "$o" 2>"$e";;   # Antigravity CLI: its ids carry the effort (gemini-3.8-flash-high); the gemini CLI refuses this account. plan mode auto-denies a tool headless, so the call approves its own tools
       cli:codex) cap codex exec -m "$wire" -c service_tier=fast -c model_reasoning_effort=medium -s read-only \
            --ephemeral --skip-git-repo-check -C "$SG_CHECKOUT" "${outschema[@]}" -o "$o" - < $p > "$e" 2>&1;;
@@ -469,7 +472,9 @@ for m in $chain; do fmt=0; timed_out=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9
     fi
     # #653: a CHANGES with no Blocking finding and at least one Debt finding is an approval (revformat.py --summary, the one
     # predicate), so it is saved as APPROVE: wave.sh, childcc and the fix round read line 1, and they must read it so too.
-    if [ $rc = 0 ] && [ "$(head -1 "$o" 2>/dev/null)" = "VERDICT: CHANGES" ] \
+    # A grok reviewer is exempt: measured on a planted diff it files a real defect as Debt in most runs (#1848), so its
+    # debt-only CHANGES keeps its verdict and the fix round runs -- the downgrade would turn that habit into an approval.
+    if [ $rc = 0 ] && [ "$(head -1 "$o" 2>/dev/null)" = "VERDICT: CHANGES" ] && [ "$runner" != grok ] \
        && python3 "$(dirname "$0")/revformat.py" --summary "$o" 2>/dev/null | /usr/bin/grep -qE '^blocking=0 debt=[1-9]'; then
       { echo "VERDICT: APPROVE (the model wrote CHANGES with only Debt findings)"; tail -n +2 "$o"; } > "$o.v" && mv -f "$o.v" "$o"
     fi

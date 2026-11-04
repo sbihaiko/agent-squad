@@ -115,14 +115,16 @@ def test_review_sh_reads_no_review_no_tools_list():
     assert "review_no_tools" not in json.loads(MODELS.read_text())
 
 
-def test_the_repo_review_chain_is_the_one_the_owner_ruled(reg):
+def test_the_repo_review_chain_is_the_one_this_repository_runs(reg):
     """The review chain leads with DeepSeek V4.1 Flash, the cheapest model, inside its hours window.
 
     The fixture under `tests/fixtures/modelreg/live.models.json` is a captured old live shape, kept for the migration
     tests; the live file itself is published from this repository, so the pin lives here and not against that
-    capture. The owner's ruling of 2026-11-03: DeepSeek first, Opus behind it, then Gemini and Sol."""
+    capture. DeepSeek first; Grok 4.7 behind it, which preempts Opus for the hours DeepSeek closes: a cost trade,
+    not a quality one, and the reason the entry names low. Grok always reasons and its default effort is high, so
+    an entry that named none would reason for minutes and outlive the timeout. Then Opus, Gemini and Sol."""
     repo = modelreg.chain(json.loads(MODELS.read_text()), "review", reg).entries
-    assert [e.id for e in repo] == ["deepseek-flash", "claude-opus-5-5", "gemini-3.8-flash", "gpt-6.1-sol"]
+    assert [e.id for e in repo] == ["deepseek-flash", "grok-4.7", "claude-opus-5-5", "gemini-3.8-flash", "gpt-6.1-sol"]
     assert repo[0].hrs, "DeepSeek keeps its hours window, so the chain falls through outside it"
 
 
