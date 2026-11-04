@@ -59,6 +59,12 @@ tall = lt.control_chart([card(1, closed, 5), card(2, closed, 8)], timeframe=30, 
 check("the caller's plot size recomputes the clusters from the same rule",
       [c["count"] for c in small["clusters"]] == [1, 1] and [c["count"] for c in tall["clusters"]] == [2],
       ([c["count"] for c in small["clusters"]], [c["count"] for c in tall["clusters"]]))
+# #1355: the one axis is log, so the fixed-radius rule holds in both directions on it: a nearby pair merges, and the
+# (5, 8) pair above still splits. A dense pair that re-split on log, or a far pair that re-merged, fails one of the two.
+near = lt.control_chart([card(1, closed, 5), card(2, closed, 5.4)], timeframe=30, now=now,
+                        plot={"width": 672, "height": 212})
+check("a pair closer than one dot on the log axis merges", [c["count"] for c in near["clusters"]] == [2],
+      [c["count"] for c in near["clusters"]])
 
 out = render(chart, "lt-dots.js")
 circles = re.findall(r"<circle [^>]*>", out)

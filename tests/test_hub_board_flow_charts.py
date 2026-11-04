@@ -492,11 +492,18 @@ def test_a_control_chart_dot_carries_the_issue_title_and_its_close_date(hub, boa
 
 
 def test_the_control_chart_names_its_lines_and_offers_no_scale_control(hub):
-    # Re-anchored by #1355: the lead chart always draws a log axis, so the page carries no Scale control.
+    # Re-anchored by #1355: the lead chart always draws a log axis, so the page carries no Scale control, no stored
+    # log-scale flag and no scale value in the route's query, and its change handler has no scale branch. A hidden or
+    # renamed scale switch would have to keep one of these four to work, and each is asserted absent.
     for name in ("Rolling mean", "Rolling spread ±1 SD", "Past month", "Timeframe"):
         assert name in hub.PAGE, f"the page names no {name!r}"
     assert "id=lts" not in hub.PAGE and ">Scale <" not in hub.PAGE and "Log scale" not in hub.PAGE, \
         "the page still offers a Scale control"
+    assert "LT.log" not in hub.PAGE, "the page still reads a stored log-scale flag"
+    ltq = next(line for line in hub.PAGE.splitlines() if line.startswith("const ltQ="))
+    assert "scale=" not in ltq, "the lead chart's query still carries a scale value"
+    change = hub.PAGE[hub.PAGE.index('$("#flowb").onchange'):hub.PAGE.index('$("#flowb").onclick')]
+    assert "lts" not in change and "scale" not in change, "the lead chart's onchange still has a scale branch"
 
 
 def test_the_legend_carries_short_names_and_values_never_prose(hub):
@@ -541,9 +548,10 @@ def _lt_chart(hub, tmp_path, name, chart, zr=None, coverage=None):
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-def test_the_first_screen_carries_two_controls_and_the_rest_sit_behind_more(hub, board, tmp_path):
-    """#1145: Timeframe and Type are the only controls on the first screen. Measurement and Display, and the coverage
-    line, the plotted-cards note and the ordering sentence, sit behind one More disclosure.
+def test_the_first_screen_carries_the_filters_and_toggles_and_the_rest_sit_behind_more(hub, board, tmp_path):
+    """#1145: the Timeframe and Type selects and the Median and p85 toggles are the controls on the first screen.
+    Measurement and Display, and the coverage line, the plotted-cards note and the ordering sentence, sit behind one
+    More disclosure. #1355: the chart always draws a log axis, so no Scale control renders on either screen.
 
     Re-anchored by line (#1147): the zoom control is a chip drawn only while a zoom is active, so it is absent from the
     default screen and the View group appears after Display only in a zoomed view.
@@ -555,7 +563,8 @@ def test_the_first_screen_carries_two_controls_and_the_rest_sit_behind_more(hub,
     assert sep, "the first screen carries no More disclosure"
     more = rest[:rest.index("</details>")]
     # Re-anchored (#1332): the two reference toggles sit beside the filters, where the reading starts; the measurement
-    # and the band stay behind More. Re-anchored by #1355: the chart always draws a log axis, so no Scale control renders.
+    # and the band stay behind More. Re-anchored by #1355: the chart always draws a log axis, so the first screen carries
+    # ltr, lty, ltmd and ltp85 and no Scale control.
     for shown in ("id=ltr", "id=lty", "id=ltmd", "id=ltp85"):
         assert shown in first, f"{shown} is not on the first screen"
     assert "id=lts" not in out, "a Scale control renders"

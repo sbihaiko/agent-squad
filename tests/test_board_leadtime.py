@@ -237,7 +237,15 @@ def test_the_y_axis_is_always_log_with_round_ticks(lt):
     month = _chart(lt, [_closed(1, 30 * 24), _closed(2, 5)])
 
     assert small["axis"] == long["axis"] == month["axis"] == "log"
-    assert [tick["text"] for tick in small["ticks"]] == ["1h", "1d", "7d"]
+    for view, name in ((small, "small"), (long, "long"), (month, "month")):
+        assert [tick["text"] for tick in view["ticks"]] == ["1h", "1d", "7d"], \
+            f"the {name} view does not label the three round log ticks"
+        assert [tick["hours"] for tick in view["ticks"]] == [1, 24, 168], \
+            f"the {name} view's ticks are not one hour, one day and one week"
+    for view, name in ((long, "long"), (month, "month")):
+        week = next(tick["y"] for tick in view["ticks"] if tick["text"] == "7d")
+        top = max(dot["y"] for dot in view["dots"])
+        assert week < top < 1.0, f"the {name} view's axis does not carry its month-long card above the week tick"
 
 
 def test_a_timeframe_keeps_only_the_cards_closed_inside_it(lt):

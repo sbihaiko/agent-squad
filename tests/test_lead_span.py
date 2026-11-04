@@ -90,6 +90,20 @@ def test_the_route_refuses_an_unknown_column(hub, board):  # noqa: F811
     assert "error" in hub.lead_zoom("tf=all&a=Nowhere")
 
 
+def test_an_old_scale_value_is_ignored_and_the_chart_stays_log(hub, board):  # noqa: F811
+    """#1355: the payload takes no linear-scale option. An old `scale=jira` link answers the same log chart, and no
+    `scale` key stays in the payload, so a caller cannot read a linear mode back."""
+    _seed(hub, {1: (_card(1, st="Closed", s="CLOSED", c="2026-10-05T00:00:00Z"),
+                    _life("2026-10-01T00:00:00Z", ("2026-10-05T00:00:00Z", "Closed")))})
+    span = "from=2026-10-01T00:00:00Z&to=2026-11-01T00:00:00Z"
+    plain = hub.lead_zoom(span)
+    old = hub.lead_zoom(span + "&scale=jira")
+
+    assert old == plain, "an old scale value changed the chart"
+    assert "scale" not in old, "the payload still names a scale option"
+    assert old["axis"] == "log", "a linear-scale request was not ignored"
+
+
 def test_the_page_offers_start_and_end_selectors_and_sends_them(hub):  # noqa: F811
     assert "id=lta" in hub.PAGE and "id=ltb" in hub.PAGE
     assert "&a=" in hub.PAGE and "&b=" in hub.PAGE

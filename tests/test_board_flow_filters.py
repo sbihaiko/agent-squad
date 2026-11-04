@@ -7,8 +7,10 @@ bar's values in their query and answer from the history store's column intervals
 """
 import importlib.util
 import json
+import math
 import re
 import shutil
+import statistics
 import subprocess
 import sys
 import time
@@ -471,11 +473,15 @@ def test_each_statistic_is_computed_over_the_selected_type_only(hub, board):
     assert tasks["excluded_total"] == 0 and tasks["excluded"] == []
     control = hub.flow_lead(ty="task")["lead"]["control"]["all"]
     assert control["average"]["text"] == "2d" and control["p85"]["text"] == "3d"
-    # Re-anchored (#1355): the one axis is log, so the rolling mean is the geometric mean of 24 h, 48 h and 72 h.
-    assert control["dots"][0]["rolling"]["hours"] == pytest.approx(43.61089422797135), \
-        "the rolling mean is over the three tasks, not the bugs"
-    assert control["dots"][0]["rolling"]["low"] == pytest.approx(27.70751412733315), "the sigma band is over the three tasks"
-    assert control["dots"][0]["rolling"]["high"] == pytest.approx(68.6423937789169)
+    # Re-anchored (#1355): the one axis is log, so the rolling mean is the geometric mean of 24 h, 48 h and 72 h, with
+    # one sigma taken in log space, derived here from those three hours rather than from the code's own formula.
+    tasks_hours = [24.0, 48.0, 72.0]
+    logs = [math.log(h) for h in tasks_hours]
+    centre, sigma = statistics.fmean(logs), statistics.pstdev(logs)
+    rolling = control["dots"][0]["rolling"]
+    assert rolling["hours"] == pytest.approx(math.exp(centre)), "the rolling mean is over the three tasks, not the bugs"
+    assert rolling["low"] == pytest.approx(math.exp(centre - sigma)), "the sigma band is over the three tasks"
+    assert rolling["high"] == pytest.approx(math.exp(centre + sigma))
     bugs = hub.flow_lead(ty="bug")["lead"]
     # Re-anchored (#1250): the median is Kaplan-Meier: the curve over 1h and 2h falls to one half at 1h.
     assert bugs["summary"]["average"]["text"] == "1h 30m" and bugs["summary"]["median"]["text"] == "1h"
@@ -516,10 +522,11 @@ def test_the_header_names_the_type_the_chart_holds(hub, board):
     assert "tasks · <b>Todo -> closed</b> · window 20 issues" in result.stdout, "the view measures from Todo (#1247)"
 
 
-def test_the_type_control_sits_beside_timeframe_and_scale(hub):
+def test_the_type_control_sits_beside_the_timeframe(hub):
     page = hub.PAGE
     assert page.index("<select id=ltr>") < page.index("<select id=lty>"), "Type groups with Timeframe"
-    assert "id=lts" not in page, "a Scale control renders: the lead chart is always log (#1355)"
+    assert "id=lts" not in page and ">Scale <" not in page, \
+        "a Scale control renders: the lead chart is always log (#1355)"
     assert '[["spec","Specs"],["task","Tasks"],["bug","Bugs"]]' in page
 
 

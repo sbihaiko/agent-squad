@@ -3788,9 +3788,11 @@ def _lead_plot(query=None):
 
 def lead_zoom(query):
     """The control chart over a dragged range (`from` and `to`, ISO datetimes) or a timeframe preset (`tf`), measured
-    from the start column `a` to the end column `b` (#905); the y axis is always log (#1355). No `a` is the card's opened
+    from the start column `a` to the end column `b` (#905); the y axis is always log (#1355). An old `scale` value in the
+    query changes nothing: the route takes no scale option and serves the log axis (#1355). No `a` is the card's opened
     instant; no `b`, or the closed column, is its closed instant. The bar's values in the query filter its rows (#904)."""
     q = urllib.parse.parse_qs(query)
+    q.pop("scale", None)   # #1355: an old bookmark's `scale=jira` is a documented no-op; every chart is log, and no `scale` key stays in the payload
     a, b = (q.get(k, [""])[0] or None for k in ("a", "b"))
     if b == COLUMN["issue_closed"]: b = None
     if any(c is not None and c not in ORDER for c in (a, b)): return {"error": "bad column: a and b name a board column"}
