@@ -1993,7 +1993,7 @@ def loop_state(last, now=None):
     except OSError: pass
     return "off"
 
-LOOP_STATE_ACTIONS = {"off": ["start"], "on": ["drain", "stop-now"], "draining": ["stop-now"], "starting": []}   # the hub's rule, so no page holds one
+LOOP_STATE_ACTIONS = {"off": ["start"], "on": ["drain", "stop-now"], "draining": ["start", "stop-now"], "starting": []}   # the hub's rule, so no page holds one
 
 LOOP_STARTED = STATE / "watchd.started"   # every watchd start stamps it with its epoch second, from the hub or the terminal
 
