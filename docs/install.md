@@ -151,6 +151,12 @@ uv run ruff check squad tests && uv run mypy squad
 bash contrib/squad-goal/scripts/shell-suites.sh   # the loop's own suites
 ```
 
+To rehearse a CI runner that holds no MesenAI checkout and no node binary, set `SQUAD_CI_RUNNER=1`. The run deselects each fixture-bound test and prints its id and reason; with the switch unset and the fixtures present, nothing is deselected.
+
+```bash
+SQUAD_CI_RUNNER=1 uv run --extra dev pytest -p no:xdist
+```
+
 CI runs the first four on Python 3.11 and 3.13 on a landing, a push to `dev`, `stg` or `main`, and on no work-branch
 push and no pull request (`docs/adr/0145-a-work-branch-lands-in-dev-by-fast-forward.md`); a work branch is proven by the
 local gate above. A red check is a defect of the change, never of the check.

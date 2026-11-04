@@ -69,7 +69,7 @@ def _mesenai():
     return Path(root)
 
 
-@pytest.mark.host_bound
+@pytest.mark.host_bound(reason="needs the MesenAI checkout to render the pilot script live (MESENAI_REPO)")
 def test_reverse_drift_committed_markdown_equals_live_render():
     docs = _mesenai() / "docs" / "validation" / "process"
     pilots = sorted(docs.glob("*.gui-test.json"))
@@ -80,7 +80,7 @@ def test_reverse_drift_committed_markdown_equals_live_render():
         assert render(d) == p.with_suffix(".md").read_text(encoding="utf-8"), p.name
 
 
-@pytest.mark.host_bound
+@pytest.mark.host_bound(reason="needs the MesenAI checkout at its pinned commit to compare the vendored renderer (MESENAI_REPO)")
 def test_reverse_drift_vendored_renderer_equals_fork_file_at_pinned_commit():
     vendored = _mesenai() / "scripts" / "vendor" / "agent_squad" / "gui_test_render.py"
     text = vendored.read_text(encoding="utf-8")
@@ -145,7 +145,7 @@ def test_diagram_refuses_an_unknown_format():
     assert "unknown format" in _diagram({"format": "gui-test/9"})["error"]
 
 
-@pytest.mark.host_bound
+@pytest.mark.host_bound(reason="needs the MesenAI pilot script to open as a diagram (MESENAI_REPO)")
 def test_pilot_script_opens_as_a_diagram_and_every_node_shows_its_text():
     docs = _mesenai() / "docs" / "validation" / "process"
     pilots = sorted(docs.glob("*.gui-test.json"))
@@ -629,7 +629,7 @@ def _env_path(name, what):
 
 
 @pytest.mark.slow(reason="starts the real emulator three times (one process per batch) and waits on its window")
-@pytest.mark.host_bound
+@pytest.mark.host_bound(reason="needs the MesenAI checkout and its emulator to run the pilot steps (MESENAI_REPO)")
 def test_three_pilot_steps_run_on_the_real_emulator_with_no_pad_attached(tmp_path):
     app = _env_path("MESENAI_APP", "the built emulator launcher, e.g. <repo>/bin/osx-arm64/Release/Mesen (a build of main with the test hook)")
     assert app.is_file(), f"MESENAI_APP {app} is not a file"
@@ -662,7 +662,7 @@ def test_a_headless_tree_that_is_the_binarys_checkout_is_refused_and_a_separate_
 
 
 @pytest.mark.slow(reason="runs dotnet test on the headless suite, which builds the UI first")
-@pytest.mark.host_bound
+@pytest.mark.host_bound(reason="needs the MesenAI emulator hook to drive the Home over the socket (MESENAI_REPO)")
 def test_hook_e2e_case_of_1182_drives_the_home_over_the_socket():
     """#1182's GuiTestHook_e2e_a_runner_drives_the_Home_over_the_socket, run for real: one case passed, none skipped."""
     from squad.gui_test_headless import SharedTree, headless_repo
@@ -1462,7 +1462,7 @@ def test_1200_the_validator_needs_a_positive_integer_bound():
         validate(d)
 
 
-@pytest.mark.host_bound
+@pytest.mark.host_bound(reason="needs the MesenAI pilot dialogs to sweep the trap (MESENAI_REPO)")
 def test_1200_the_pilot_dialogs_no_trap_sweep_is_one_nav_sweep_step():
     root = _mesenai()
     d = json.loads((root / "docs/validation/process/play-pad-only.gui-test.json").read_text())
@@ -1653,7 +1653,7 @@ def _run_pilot_on_the_real_app(tmp_path, short_work, ids):
 
 
 @pytest.mark.slow(reason="starts the real emulator twice (one process per batch) and waits on its window")
-@pytest.mark.host_bound
+@pytest.mark.host_bound(reason="needs the MesenAI adapter and its emulator to capture each pilot step (MESENAI_REPO)")
 def test_three_pilot_steps_are_executed_through_the_mesenai_adapter_with_a_capture_each(tmp_path, short_work):
     results, nodes = _run_pilot_on_the_real_app(tmp_path, short_work, THREE_PILOT_STEPS)
     assert [(n["id"], n["status"], n["verdict"]) for n in nodes] == [(i, "executed", "passed") for i in THREE_PILOT_RUN], nodes
@@ -1700,7 +1700,7 @@ class _Shot:
 
 
 @pytest.mark.slow(reason="runs dotnet test on the headless suite, which builds the UI first")
-@pytest.mark.host_bound
+@pytest.mark.host_bound(reason="needs the MesenAI emulator hook for the e2e case (MESENAI_REPO)")
 def test_the_hook_e2e_case_passes_exactly_one_and_skips_none():
     """scripts/gui_test/run_headless_e2e.py: the skip=green trap closed, the verdict read off the summary line.
 
@@ -1717,7 +1717,7 @@ def test_the_hook_e2e_case_passes_exactly_one_and_skips_none():
     assert HEADLESS_CASE.split(".")[1] in out or "Passed!" in out
 
 
-@pytest.mark.host_bound
+@pytest.mark.host_bound(reason="needs the MesenAI ROM fixture to check its SHA-1 (MESENAI_REPO)")
 def test_a_missing_rom_fixture_or_a_wrong_sha1_fails_clearly(tmp_path, short_work):
     root = _mesenai_root()
     adapter = _adapter_class(root)(binary=str(_need("MESEN_GUI_BINARY", "the built Mesen launcher")), workdir=short_work)
@@ -2281,7 +2281,7 @@ HOME_BATCH_MANUAL = set()
 HOME_BATCH_MAY_FAIL = {"home.open-library"}
 
 
-@pytest.mark.host_bound
+@pytest.mark.host_bound(reason="needs the MesenAI pilot batches on the emulator (MESENAI_REPO)")
 def test_1222_a_batch_with_no_setup_keeps_the_session_of_the_batch_before_it():
     """The runner opens one process per batch (ADR-0272 item 6), so the pilot's launch -> home continuation stays one batch."""
     d = _pilot_for_the_real_app(HOME_BATCH_IDS)
@@ -2292,7 +2292,7 @@ def test_1222_a_batch_with_no_setup_keeps_the_session_of_the_batch_before_it():
 
 
 @pytest.mark.slow(reason="starts the real emulator once per batch of the pilot's Home batch and drives it over the hook")
-@pytest.mark.host_bound
+@pytest.mark.host_bound(reason="needs the MesenAI native core to run the Home batch (MESENAI_REPO)")
 def test_1222_the_pilot_home_batch_runs_through_the_command_against_the_native_core(tmp_path, short_work, clean_app_start):
     """AC 4: the committed pilot's Home batch, through the command, on the built application."""
     root = _mesenai_root()
@@ -2349,7 +2349,7 @@ def _pilot_1223():
                        / "play-pad-only.gui-test.json").read_text(encoding="utf-8"))
 
 
-@pytest.mark.host_bound
+@pytest.mark.host_bound(reason="needs the committed MesenAI pilot script to plan its cases (MESENAI_REPO)")
 def test_1223_the_plan_covers_every_committed_pilot_step_and_labels_none_of_them_ready_for_agent():
     from squad import to_test_scenario as tts
     d = _pilot_1223()
@@ -2366,7 +2366,7 @@ def test_1223_the_plan_covers_every_committed_pilot_step_and_labels_none_of_them
     assert plan["manual"] and plan["goals"] == []
 
 
-@pytest.mark.host_bound
+@pytest.mark.host_bound(reason="needs the MesenAI pilot script to publish twice (MESENAI_REPO)")
 def test_1223_publishing_the_pilot_twice_updates_and_never_duplicates_a_case():
     from squad import to_test_scenario as tts
     d = _pilot_1223()
@@ -3024,7 +3024,7 @@ def test_1249_a_comment_that_cannot_be_posted_still_reports_the_run(tmp_path):
     detail = report_failures_detail(d, results, board.store, board.file_bug, tmp_path / "a.json", **board.doors)
     assert detail["existing"] is False and len(board.issues) == 2 and board.comments == []
     assert "comment" in detail["lookup_failed"] and board.issues[0]["url"] in detail["lookup_failed"]
-@pytest.mark.host_bound
+@pytest.mark.host_bound(reason="needs the MesenAI pilot script to narrow to the pad adapter (MESENAI_REPO)")
 def test_1242_the_pilot_script_narrows_to_what_the_pad_adapter_accepts_without_losing_a_step():
     """The whole committed pilot script against a target that advertises less than `mesen-gui` does: the pilot as
     committed is refused before launch (item 6) - dozens of its steps observe `ui.focused`, which this target has no
@@ -3066,7 +3066,7 @@ def test_1242_the_pilot_script_narrows_to_what_the_pad_adapter_accepts_without_l
     assert report["reusable"] is True and report["stale"] == []
 
 
-@pytest.mark.host_bound
+@pytest.mark.host_bound(reason="needs the MesenAI pilot script and its content hashes (MESENAI_REPO)")
 def test_1242_a_script_with_its_content_hashes_stripped_is_refused_as_stale_not_for_gaps(tmp_path):
     """The narrowing's other half, pinned without leaning on the committed pilot being un-converted: the same script
     with every step's `content_hash` removed still covers every case and orphans no step - so `reusable` is what the
@@ -3241,7 +3241,7 @@ def _nodes(plan):
     return len(plan["areas"]) + sum(len(area["containers"]) for area in plan["areas"])
 
 
-@pytest.mark.host_bound
+@pytest.mark.host_bound(reason="needs the committed MesenAI pilot to publish its parent (MESENAI_REPO)")
 def test_1225_the_committed_pilot_publishes_its_parent_and_links_every_case_natively(tmp_path):
     from squad import to_test_scenario as tts
 
@@ -3265,7 +3265,7 @@ def test_1225_the_committed_pilot_publishes_its_parent_and_links_every_case_nati
     _assert_en_us_with_no_attribution([kw["body"] for kw in gh.of("create_issue")])
 
 
-@pytest.mark.host_bound
+@pytest.mark.host_bound(reason="needs the committed MesenAI pilot to resume an interrupted publish (MESENAI_REPO)")
 def test_1225_an_interrupted_pilot_publish_resumes_from_the_map_and_a_second_publish_updates(tmp_path):
     from squad import to_test_scenario as tts
 
@@ -3297,7 +3297,7 @@ def test_1225_an_interrupted_pilot_publish_resumes_from_the_map_and_a_second_pub
 
 # --- to_test_scenario close-out (#1227): the pilot publishes through the command, within GitHub's sub-issue cap ----
 
-@pytest.mark.host_bound
+@pytest.mark.host_bound(reason="needs the committed MesenAI pilot to publish per batch (MESENAI_REPO)")
 def test_1227_the_pilot_publishes_per_batch_and_per_case_as_a_tree_within_the_sub_issue_cap(tmp_path):
     import shutil
 
@@ -3357,7 +3357,7 @@ def _pilot_1286():
     return _pilot_1223()
 
 
-@pytest.mark.host_bound
+@pytest.mark.host_bound(reason="needs the committed MesenAI pilot script to list its automated ids (MESENAI_REPO)")
 def test_1286_the_expected_automated_ids_follow_the_script_not_a_frozen_list():
     """#1399: the fork reads the pilot from MesenAI's checkout, so a MesenAI-only change (a case added in #1203) must not
     redden the fork base. The expectation is the script's own non-manual cases, so flipping one case's mode moves it."""
@@ -3378,7 +3378,7 @@ def _home_1286(tmp_path):
     return run_scenario({**d, "batches": [batch]}, PILOT_ADAPTERS, out_root=tmp_path)
 
 
-@pytest.mark.host_bound
+@pytest.mark.host_bound(reason="needs the MesenAI Home batch on a fresh profile (MESENAI_REPO)")
 def test_1286_the_home_keeps_its_ring_on_a_fresh_profile_so_the_hold_cases_run(tmp_path):
     """A fresh settings profile has no play history and no favorites, so the Home holds Open a ROM alone and a D-pad
     press stays on it - which is what the four `home.focus-holds-*` cases and the real emulator say (#1137, and the
@@ -3390,7 +3390,7 @@ def test_1286_the_home_keeps_its_ring_on_a_fresh_profile_so_the_hold_cases_run(t
     assert [by_id[i] for i in HOLDS_1286] == ["passed"] * 4, by_id
 
 
-@pytest.mark.host_bound
+@pytest.mark.host_bound(reason="needs the MesenAI Home batch to run end to end (MESENAI_REPO)")
 def test_1286_the_committed_home_batch_runs_end_to_end_on_the_roster(tmp_path):
     out = _home_1286(tmp_path)
     by_id = {r["id"]: r["verdict"] for r in out["rows"]}
@@ -3399,7 +3399,7 @@ def test_1286_the_committed_home_batch_runs_end_to_end_on_the_roster(tmp_path):
     assert [by_id[i] for i in home] == ["passed"] * len(home), by_id
 
 
-@pytest.mark.host_bound
+@pytest.mark.host_bound(reason="needs the committed MesenAI pilot script to check its batch wiring (MESENAI_REPO)")
 def test_1286_every_batch_of_the_committed_pilot_is_wired_to_an_adapter():
     """No batch of the committed script is left without a target, and the roster's `manual` claim holds: a batch it
     calls manual-only has no automated case the adapter would have to answer."""
@@ -3412,7 +3412,7 @@ def test_1286_every_batch_of_the_committed_pilot_is_wired_to_an_adapter():
             assert modes == {"manual"}, f"batch {batch['id']} is on a launch-only adapter and has an automated case"
 
 
-@pytest.mark.host_bound
+@pytest.mark.host_bound(reason="needs the committed MesenAI pilot script to give every case a verdict (MESENAI_REPO)")
 def test_1286_every_case_of_the_committed_pilot_gets_a_verdict_and_the_automated_ones_pass(tmp_path):
     """The whole scenario in one call: every case of the committed script, in script order, none dropped and none
     added; the automated cases (Mode != manual) pass on the roster and every other case is `pending` for a person."""
@@ -3431,7 +3431,7 @@ def test_1286_every_case_of_the_committed_pilot_gets_a_verdict_and_the_automated
     assert out["summary"]["pending"] == total - len(automated)
 
 
-@pytest.mark.host_bound
+@pytest.mark.host_bound(reason="needs the committed MesenAI pilot script to name the case that blocks it (MESENAI_REPO)")
 def test_1286_a_case_names_the_case_that_blocks_it():
     """The Blocked-by column of the scenario's case issues: a step waits for its batch's last setup step."""
     rows = {c["id"]: c for c in scenario_cases(_pilot_1286())}
