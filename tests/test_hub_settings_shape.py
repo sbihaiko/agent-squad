@@ -79,14 +79,17 @@ def test_one_moment_one_span_one_money_function_and_no_old_writer(hub):
     for gone in ("rstText", "loopWhen", "usdc"):
         assert not re.search(rf"(function|const) {gone}\b", page), f"{gone} still formats a reading"
     assert not re.search(r"^function (ago|rel)\(", page, re.M), "a third relative-time writer is back"
+    assert not re.search(r"(function|const) money\b", page), "a second money writer is back"
+    assert "Intl.NumberFormat" not in page, "a second currency formatter is back"
 
 
 def test_a_moment_keeps_its_wall_clock_and_a_span_reads_in_days_hours_or_minutes(hub):
     out = _run(hub.PAGE, "[moment('2026-11-02T09:05:00-03:00'),moment(1730590000),span(388800),span(1200),"
-                         "moment('not a date the hub knows'),moment('')]")
+                         "moment('not a date the hub knows'),moment(''),span(NaN),span(null),span(-5)]")
     assert out[0] == "2026-11-02 09:05" and re.fullmatch(r"\d{4}-\d\d-\d\d \d\d:\d\d", out[1]), out
     assert out[2:4] == ["4d 12h", "20m"]
-    assert out[4:] == ["not a date the hub knows", "?"], "a value the hub hands is shown, never replaced by ?"
+    assert out[4:6] == ["not a date the hub knows", "?"], "a value the hub hands is shown, never replaced by ?"
+    assert out[6:] == ["?", "?", "?"], "a span the hub cannot read is '?', never a zero reading"
 
 
 def test_the_money_function_reads_cents_under_a_hundred_and_whole_dollars_over(hub):
@@ -265,20 +268,95 @@ def test_a_loop_poll_writes_one_chip_text_to_the_nav_line_and_the_summary(hub):
     assert json.loads(_node(body)) == ["on · 2 runs", "on · 2 runs"]
 
 
-# ---------------------------------------------------------------- a tailnet reader
+# ---------------------------------------------------------------- a page that may not write
 
-def test_a_tailnet_page_is_read_only_and_states_the_reason(hub):
-    page = hub.served_page("me", True)
-    assert 'const RO=("true"==="true")' in page
-    assert "Read-only over the tailnet" in page
-    assert re.search(r"<p class=ro id=ro hidden></p>", page)
-    assert 'roWatch($("#tab-set"))' in page, "a control on the Settings tab escaped the read-only pass"
-    assert 'roWatch($("#iloop"))' in page, "the Loop monitor switch stayed live on a read-only view"
-    assert "roAll(root)" in page and 'querySelectorAll("input,select,textarea,button,a[href]")' in page, \
-        "the 'mobile view' link stays followable on a read-only view"
+def test_the_read_only_flag_follows_the_hubs_write_rule(hub):
+    """The server lets an allowed login write the settings routes whatever its Host (do_POST), so an allowed page is
+    writeable. The page never applies a stricter rule than the hub; only a request the hub refuses to write is read-only."""
+    allowed = hub.served_page("me", True)
+    assert 'const RO=("false"==="true")' in allowed, "an allowed page was drawn read-only"
+    assert "Read-only over the tailnet" not in allowed
+    refused = hub.served_page("me", False)
+    assert 'const RO=("true"==="true")' in refused
+    assert "Read-only over the tailnet" in refused
+    assert re.search(r"<p class=ro id=ro hidden></p>", refused)
+
+
+def test_the_read_only_pass_leaves_the_theme_navigation_live(hub):
+    """Browsing the six themes is reading, not writing: a read-only page still opens every panel. Only real controls are
+    disabled, and the 'mobile view' link goes with them."""
+    page = hub.PAGE
+    src = page[page.index("function roAll("):page.index("function roWatch(")]
+    body = """
+function el(tag,inside){return {tagName:tag.toUpperCase(),disabled:false,style:{},setAttribute(){},
+  closest:s=>inside.includes(s)?{}:null}}
+const nav=el("button",[".snav"]), sel=el("select",["#ssel"]), input=el("input",[]), link=el("a",[]);
+roAll({querySelectorAll:()=>[nav,sel,input,link]});
+console.log(JSON.stringify({nav:nav.disabled,sel:sel.disabled,input:input.disabled,link:link.disabled}));"""
+    out = json.loads(_node(src + body))
+    assert out == {"nav": False, "sel": False, "input": True, "link": True}, out
+
+
+def test_the_loop_switch_follows_the_hubs_write_rule_not_the_page_flag(hub):
+    """The grant is the hub's to decide: `loopSw` disables the switch on `write`, never on the page-wide flag, and the
+    read-only pass never touches the Monitor's switch (#1278)."""
+    out = _run(hub.PAGE, '[loopSw({state:"on",write:true,reason:""}),loopSw({state:"on",write:false,reason:"read-only"})]')
+    assert " disabled" not in out[0], "a granted tailnet write was disabled"
+    assert " disabled" in out[1], "a refused write stayed live"
+    assert 'roWatch($("#iloop"))' not in hub.PAGE, "the read-only pass overrode the loop grant"
 
 
 def test_a_loopback_page_is_not_read_only(hub):
-    page = hub.served_page("me", False)
+    page = hub.served_page("me", True)
     assert 'const RO=("false"==="true")' in page
     assert "Read-only over the tailnet" not in page
+
+
+# ---------------------------------------------------------------- one boot load per panel
+
+def _boot_loads(hub, stored):
+    """The page's own accordion boot, run in node: each panel opened at boot loads its data once and no panel loads twice."""
+    page = hub.PAGE
+    sth = page[page.index("const STH="):page.index("function setTheme(")]
+    theme = page[page.index("function setTheme("):page.index('$(".snav")')]
+    acc = page[page.index("const ACC="):page.index("if(RO){")]
+    boot = page[page.index("setTheme(sTheme);"):page.index("const PCOL=")]
+    harness = """
+const Q=[];
+class El{
+ constructor(id){this.id=id;this._o=false;this.dataset={};this.classList={toggle(){}};this.value="";this.disabled=false;}
+ get open(){return this._o;}
+ set open(v){v=!!v;if(v===this._o)return;this._o=v;if(this.bound)Q.push(this);}
+ addEventListener(t,f){(this.L=this.L||{});(this.L[t]=this.L[t]||[]).push(f);this.bound=true;}
+ fire(t){(this.L&&this.L[t]||[]).forEach(f=>f({target:this}));}
+}
+const DETAILS=["lop","lim","sub","mdl","slk","acc"].map(sp=>{const e=new El(sp);e.dataset.sp=sp;return e});
+const NAV=DETAILS.map(e=>new El(e.dataset.sp));
+const ELS={};DETAILS.forEach(e=>ELS[e.id]=e);
+const $=s=>{const id=String(s).replace(/^#/,"");return ELS[id]||(ELS[id]=new El(id));};
+const document={querySelectorAll:s=>s==="#tab-set details.sp"?DETAILS:s===".snav button"?NAV:[]};
+const RO=false,RO_WHY="";
+let mdln=0,limn=0,slkn=0;
+function mdlLoad(){mdln++;}function limLoad(){limn++;}function slLoad(){slkn++;}
+const mdlChanged=()=>false,slDirty=()=>false;
+let mdl=null,limS=null,slS=null,slDraft=null;
+const ls=__STORED__,save=()=>{};
+"""
+    tail = """
+function drain(){let n=0;while(Q.length){if(++n>100)throw new Error("toggle storm");Q.shift().fire("toggle");}}
+drain();console.log(JSON.stringify({mdl:mdln,lim:limn,slk:slkn}));"""
+    src = "\n".join([harness.replace("__STORED__", json.dumps(stored)), sth, theme, acc, boot, tail])
+    return json.loads(_node(src))
+
+
+def test_an_opened_panel_loads_its_data_once_at_boot(hub):
+    """A panel opened at boot loads through its own toggle, once. The models panel answers on boot while it is closed (its
+    chip needs the count), and skips that boot load when the toggle already fetched it (#1278)."""
+    cases = {
+        "mdl": ({"sth": "mdl"}, {"mdl": 1, "lim": 0, "slk": 0}),
+        "lim": ({"sth": "lim"}, {"mdl": 1, "lim": 1, "slk": 0}),
+        "slk": ({"sth": "slk"}, {"mdl": 1, "lim": 0, "slk": 1}),
+        "closed": ({"sth": "lop"}, {"mdl": 1, "lim": 0, "slk": 0}),
+    }
+    for name, (stored, want) in cases.items():
+        assert _boot_loads(hub, stored) == want, f"{name}: {stored}"

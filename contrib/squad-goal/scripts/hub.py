@@ -5446,13 +5446,14 @@ $("#sdisc").onclick=()=>{if(mdl){mdl=JSON.parse(mdlSrv);mdlRmk={};mdlMsg="";mdlR
 const ACC=["stats","mdl","lim","slk"];   // only the cards the page carries: a name with no element used to kill the whole script (#1032)
 let openAcc=new Set(Array.isArray(ls.acc)?ls.acc.filter(i=>ACC.includes(i)):[]);   // the old single-id string is ignored, not trusted, and not fatal
 const saveAcc=()=>{ls.acc=[...openAcc];save()};
-ACC.forEach(i=>{const e=$("#"+i);if(!e)return;e.open=openAcc.has(i);e.addEventListener("toggle",()=>{if(e.open)openAcc.add(i);else openAcc.delete(i);saveAcc();
- if(i==="mdl"&&e.open){mdlLoad()}else if(i==="lim"&&e.open){limLoad()}else if(i==="slk"&&e.open){slLoad()}})});
-/* A tailnet reader gets the same page with every control disabled and the reason stated (#1278); the observer keeps a
-   render from re-enabling what it drew after the first pass. */
-if(RO){const ro=$("#ro");if(ro){ro.hidden=false;ro.textContent=RO_WHY}roWatch($("#tab-set"));roWatch($("#iloop"))}
+ACC.forEach(i=>{const e=$("#"+i);if(!e)return;e.addEventListener("toggle",()=>{if(e.open)openAcc.add(i);else openAcc.delete(i);saveAcc();
+ if(i==="mdl"&&e.open){mdlLoad()}else if(i==="lim"&&e.open){limLoad()}else if(i==="slk"&&e.open){slLoad()}});
+ if(openAcc.has(i))e.open=true});   // a panel stored open loads through its own toggle, once (#1278)
+/* A refused write gets every control disabled and the reason stated (#1278); the observer keeps a render from re-enabling
+   what it drew after the first pass. The loop switch is the hub's to gate: it follows the `write` field, never this flag. */
+if(RO){const ro=$("#ro");if(ro){ro.hidden=false;ro.textContent=RO_WHY}roWatch($("#tab-set"))}
 setTheme(sTheme);
-mdlLoad();if(openAcc.has("lim"))limLoad();if(openAcc.has("slk"))slLoad();   // the panels answer on boot too, not only on a toggle: a theme opened at boot never fires one (#1278)
+if(!$("#mdl").open)mdlLoad();   // the models panel answers on boot while it is closed; an open panel already loaded (#1278)
 const PCOL=["var(--chart-series-1)","var(--chart-series-2)","var(--chart-series-3)","var(--chart-series-4)","var(--chart-series-5)","var(--chart-series-6)","var(--chart-series-7)","var(--chart-series-8)","var(--chart-series-other)"],tk=n=>n>=1e9?(n/1e9).toFixed(2)+"B":n>=1e6?(n/1e6).toFixed(1)+"M":n>=1e3?(n/1e3).toFixed(0)+"K":""+n;
 const TOP=3;
 function pie(ms){
@@ -5489,7 +5490,6 @@ const qbar=(label,pct,resets,sm,tip)=>{const left=resets?resets-Date.now()/1000:
  return `<div class="qw${sm?" sm":""}"><div class=ql><span>${esc(label)} <b>${fpct(pct)}%</b></span><span class=rst>${esc(when)}${resets?" · "+esc(moment(resets)):""}</span></div><div class=tr title="${esc(tip)}"><div class="fl ${lvl(pct)}" style="width:${Math.min(pct,100)}%;background:${qcol(pct)}"></div></div></div>`};
 const autoq=a=>{const QT="Quota used, read from the provider's own CLI. 100% = quota exhausted.",aged=a.asof?span(Date.now()/1000-a.asof)+" ago":"";if(a.unavailable)return `<div class=fr><span class="chip err">unavailable</span><span class=fs title="${esc(a.err)}">${esc(a.err)}</span>${a.asof?`<span class=fs>· last probed ${aged}</span>`:""}</div>`;return a.windows.map((w,i)=>qbar(w.label,w.pct,w.resets,i>0,QT)).join("")+`<div class=fr>${a.reached?`<span class="chip err">limit reached</span>`:""}<span class=fs>CLI · ${aged}</span></div>`};
 const CUR={"R$":"BRL","U$":"USD","US$":"USD","$":"USD","€":"EUR","£":"GBP","¥":"JPY"},curOf=v=>{v=v.trim().toUpperCase();return CUR[v]||v};
-const money=(a,c)=>{try{return new Intl.NumberFormat(undefined,{style:"currency",currency:c}).format(a)}catch(e){return a+" "+c}};
 async function pollSubs(){try{const d=await (await fetch("/api/subs")).json(),ae=document.activeElement;if(ae&&ae.closest&&ae.closest("#subs")&&ae.tagName==="INPUT")return;
  const tot=Object.values(d.subs).reduce((a,v)=>a+(v.saved||0),0),any=Object.values(d.subs).some(v=>v.saved!=null);
  const lims=Object.values(d.subs).filter(v=>{const aq=v.quota,aw=aq&&aq.windows&&aq.windows[0],pl=v.plan,q=aw?aw.pct:(pl&&pl.quota!=null?pl.quota:null);return q!=null&&q>=100});
@@ -5974,7 +5974,8 @@ const SETT_TONES=["ok","warn","err","neutral"];   // the tones the hub names: FO
 function moment(t){const s=String(t??"").replace(" ","T"),m=s.match(/^(\d{4}-\d\d-\d\d)T(\d\d:\d\d)/);if(m)return m[1]+" "+m[2];
  if(typeof t==="number"||/^\d+(\.\d+)?$/.test(s)){const n=typeof t==="number"?t:+s,d=new Date(n*1000),p=x=>String(x).padStart(2,"0");if(isNaN(d))return "?";return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`}
  return s?String(t):"?"}   // a value the hub hands in another shape is shown as it came, never replaced by "?"
-function span(s){const x=Math.max(0,Math.round(Number(s)||0));if(x<90)return x+"s";const d=Math.floor(x/86400),h=Math.floor(x%86400/3600),m=Math.floor(x%3600/60);return d?`${d}d ${h}h`:h?`${h}h ${m}m`:`${m}m`}
+function span(s){const n=Number(s);if(s===null||s===undefined||s===""||!Number.isFinite(n)||n<0)return "?";   // a bad reading is never zero
+ const x=Math.round(n);if(x<90)return x+"s";const d=Math.floor(x/86400),h=Math.floor(x%86400/3600),m=Math.floor(x%3600/60);return d?`${d}d ${h}h`:h?`${h}h ${m}m`:`${m}m`}
 function setTile(k,v,tone,tip){const t=SETT_TONES.includes(tone)?tone:"neutral";return `<div class="tile ${t}"${tip?` title="${esc(tip)}"`:""}><span class=tk>${esc(k)}</span><span class=tv>${esc(v)}</span></div>`}
 function setNow(theme,tiles,note){return `<div class=setblk data-blk=now data-theme="${esc(theme)}"><h3 class=blkh>Now</h3><div class=now>${tiles.filter(Boolean).join("")}</div>${note?`<p class=note>${note}</p>`:""}</div>`}
 function setRow(label,control,tip){return `<div class=setrow${tip?` title="${esc(tip)}"`:""}><span class=sl>${esc(label)}</span><span class=sc>${control}</span></div>`}
@@ -5982,8 +5983,11 @@ function setSettings(theme,rows,note){return `<div class=setblk data-blk=setting
 function setChip(theme,text){const sr=$("#"+theme+"sr");if(sr)sr.textContent=text;const nv=$("#"+theme+"nav");if(nv)nv.textContent=text}
 /* The Save dialog groups its lines by the file the hub names, so one confirm covers several files without doubt. */
 function diffByFile(groups){const out=[];for(const g of groups||[]){if(!g||!(g.lines||[]).length)continue;out.push(g.file||"(the project files)");for(const l of g.lines)out.push("  "+l)}return out.join("\n")}
-/* A read-only view disables every control under its roots, an anchor included, and adds any control a render writes later. */
-function roAll(root){if(!root||!root.querySelectorAll)return;for(const el of root.querySelectorAll("input,select,textarea,button,a[href]")){el.disabled=true;if(el.tagName==="A"){el.setAttribute("aria-disabled","true");el.style.pointerEvents="none";el.tabIndex=-1}}}
+/* A read-only view disables every control under its roots, an anchor included, and adds any control a render writes later.
+   The theme navigation is reading, not writing: the nav buttons and the phone select stay live so every panel opens. */
+function roAll(root){if(!root||!root.querySelectorAll)return;for(const el of root.querySelectorAll("input,select,textarea,button,a[href]")){
+ if(el.closest&&(el.closest(".snav")||el.closest("#ssel")))continue;
+ el.disabled=true;if(el.tagName==="A"){el.setAttribute("aria-disabled","true");el.style.pointerEvents="none";el.tabIndex=-1}}}
 function roWatch(root){roAll(root);if(typeof MutationObserver!=="undefined"&&root)new MutationObserver(()=>roAll(root)).observe(root,{subtree:true,childList:true})}
 // }SETT
 const loopBy=v=>v.who?`${v.who} · ${moment(v.when)}`:"";
@@ -7350,17 +7354,18 @@ def mobile_html():
     stream = f'window.SQUAD_HUB_STREAM="{hubstream.PATH}";\n{HUB_STREAM_JS}' if hubstream.enabled() else ""
     return MOBILE_PAGE.replace("/*STREAM*/", stream).encode()
 
-RO_TAILNET = ("Read-only over the tailnet: this view shows the hub's settings, and a write needs the owner's grant "
+RO_TAILNET = ("Read-only over the tailnet: this view may not write, and a write needs the owner's grant "
               "(ADR-0152, ADR-0162). Open the hub on the machine to change a value.")
 
-def served_page(login="", tailnet=False):
+def served_page(login="", allowed=True):
     """The page as the hub serves it, every placeholder substituted. The model-id shape replaces its quoted placeholder:
-    json.dumps brings its own quotes, and a second pair is a syntax error that empties the page. A tailnet reader gets the
-    read-only flag and its reason (#1278): the page disables every control and states why."""
+    json.dumps brings its own quotes, and a second pair is a syntax error that empties the page. The read-only flag follows
+    the hub's own write rule: a request the server refuses to write gets the flag and its reason. An allowed login, loopback
+    or tailnet, writes the settings routes, so its page stays live (#1278)."""
     who = f"signed in as {html.escape(login)}" if login else ""
     return (PAGE.replace("__WHO__", who).replace("__REPO__", REPO).replace("__LOADMS__", str(int(LOAD_SAMPLE_SECS * 1000)))
             .replace("__LOADERR__", str(LOAD_ERR_PCT)).replace("__BUILD__", str(BOOT))
-            .replace("__READONLY__", "true" if tailnet else "false").replace("__ROWHY__", RO_TAILNET if tailnet else "")
+            .replace("__READONLY__", "false" if allowed else "true").replace("__ROWHY__", "" if allowed else RO_TAILNET)
             .replace("<!--OVERLAY-->", overlay_tag(OVERLAY_HUB) + (stream_tag() if hubstream.enabled() else "")))
 
 
@@ -7712,7 +7717,7 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/sessions"): body, ct = json.dumps(sessions_payload()).encode(), "application/json"
         elif self.path.split("?", 1)[0] in ("/mobile", "/mobile/"): body, ct = mobile_html(), "text/html; charset=utf-8"
         elif (asset := MOBILE_ASSETS.get(self.path.split("?", 1)[0])): body, ct = asset
-        else: body, ct = served_page(a.login, a.tailnet).encode(), "text/html; charset=utf-8"
+        else: body, ct = served_page(a.login, a.allowed).encode(), "text/html; charset=utf-8"
         self.send_response(200); self.send_header("Content-Type", ct); self.send_header("Cache-Control", "no-store")
         if self.path.startswith("/api/board") and getattr(self, "board_etag", None): self.send_header("ETag", self.board_etag)
         if self.path.split("?", 1)[0] in ("/mobile", "/mobile/"): self.send_header("Content-Security-Policy", MOBILE_CSP)
