@@ -490,7 +490,7 @@ requeue() {   # <issue> <why> [cap]: the child never entered, so its issue goes 
     echo "WAVE STOP #$n: $h, so the age cap does not put it back in the queue: $why"; return 0
   fi
   rm -f "$SG_STATE/auto/disp-$n" "$SG_STATE/auto/bug-$n"
-  board_write "${SG_TODO:-Todo}" "$n"
+  SG_MOVE_REASON=no-landing board_write "${SG_TODO:-Todo}" "$n"   # a requeue landed nothing: the card leaves Code Complete as a no-landing move (#1340)
   f=$(sg_cq_file "$n-wave$$.md" 2>/dev/null) && printf '%s\n' "$why" > "$f"
   echo "WAVE REQUEUE #$n: $why"
 }
@@ -799,7 +799,7 @@ stuck() {
   export SG_GH_PASS=wave
   for n in $refs; do
     gh_send -X POST "repos/$SG_REPO/issues/$n/labels" -f "labels[]=frozen:owner" >/dev/null 2>&1
-    board_write "${SG_TODO:-Todo}" "$n"   # nothing landed, so the card leaves Code Complete (#657); frozen:owner holds it out of the frontier
+    SG_MOVE_REASON=no-landing board_write "${SG_TODO:-Todo}" "$n"   # nothing landed, so the card leaves Code Complete (#657, #1340); frozen:owner holds it out of the frontier
     mkdir -p "$SG_STATE/cq"
     printf 'Needs the owner: the landing of %s in %s failed %s times and stopped (%s). The work stays on %s. Refs #%s\n' "$w" "$base" "$t" "$why" "$w" "$n" > "$(sg_cq_file "$n-wavestuck$$.md")"
   done
