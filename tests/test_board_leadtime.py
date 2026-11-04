@@ -477,15 +477,38 @@ def test_the_cluster_radius_never_grows_with_its_count(lt):
     assert few == many == lt.CLUSTER_RADIUS_PX, "the fixed radius holds whatever the count"
 
 
-def test_a_card_past_p85_never_merges_into_a_cluster(lt):
-    items = [_closed(n, 5, days_ago=2) for n in range(1, 13)] + [_closed(99, 400, days_ago=2)]
+def test_a_card_past_p85_never_merges_into_a_cluster_seeded_first(lt):
+    # the outlier (10.2h) closes first and sits one step over p85 (10h), within DOT_PX of the cards at p85 on the plot
+    # frame; without the closed-seed rule its cluster would take the seven cards at 10h
+    items = [_closed(1, 10.2, days_ago=2)] + [_closed(n, 10, days_ago=2) for n in range(2, 9)]
 
-    clusters = _chart(lt, items)["clusters"]
+    result = _chart(lt, items)
+    clusters = result["clusters"]
 
-    lone = next(c for c in clusters if c["count"] == 1)
-    assert lone["cards"] == [99], "the outlier stays a lone dot, however close its close"
-    assert all(99 not in c["cards"] for c in clusters if c["count"] > 1)
-    assert next(c for c in clusters if c["count"] > 1)["count"] == 12
+    assert sorted(c["count"] for c in clusters) == [1, 7]
+    assert next(c for c in clusters if 1 in c["cards"])["count"] == 1, "the outlier stays a lone dot, however close its close"
+    assert next(c for c in clusters if c["count"] == 7)["cards"] == [2, 3, 4, 5, 6, 7, 8]
+    assert _frame_gap(result, 1, 2) < lt.DOT_PX, "the outlier sits within the merge distance of a card at p85"
+
+
+def test_a_card_past_p85_never_merges_into_a_cluster_seeded_last(lt):
+    # the same cards in the other order: the cards at p85 close first and merge, then the outlier closes last and stays lone
+    items = [_closed(n, 10, days_ago=2) for n in range(1, 8)] + [_closed(8, 10.2, days_ago=2)]
+
+    result = _chart(lt, items)
+    clusters = result["clusters"]
+
+    assert sorted(c["count"] for c in clusters) == [1, 7]
+    assert next(c for c in clusters if c["count"] == 7)["cards"] == [1, 2, 3, 4, 5, 6, 7]
+    assert next(c for c in clusters if 8 in c["cards"])["count"] == 1
+    assert _frame_gap(result, 8, 1) < lt.DOT_PX, "the outlier sits within the merge distance of a card at p85"
+
+
+def _frame_gap(result, first, second):
+    dots = {d["n"]: d for d in result["dots"]}
+    frame = result["plot_frame"]
+    return math.hypot((dots[first]["x"] - dots[second]["x"]) * frame["width"],
+                      (dots[first]["y"] - dots[second]["y"]) * frame["height"])
 
 
 def test_clusters_follow_the_caller_plot_size(lt):

@@ -3755,10 +3755,14 @@ def _in_bar(row, fw, fs, fk=(), ty=None):
             and (ty is None or row["type"] == ty))
 
 
-def _lead_plot():
-    """The plot frame the lead chart clusters in: the hub names it, the page draws it, and every view recomputes its
-    clusters from this one size and the screen-space rule (#1331)."""
-    return {"width": _leadtime.PLOT_WIDTH, "height": _leadtime.PLOT_HEIGHT}
+def _lead_plot(query=None):
+    """The plot frame the lead chart clusters in: the page names its rendered plot size in pixels (`pw` x `ph`) on a
+    resize, and the default frame serves the first draw. Every view recomputes its clusters from this one size (#1331)."""
+    default = {"width": _leadtime.PLOT_WIDTH, "height": _leadtime.PLOT_HEIGHT}
+    if not query or "pw" not in query or "ph" not in query: return default
+    try: width, height = round(float(query["pw"][0])), round(float(query["ph"][0]))
+    except (ValueError, OverflowError): return default
+    return {"width": width, "height": height} if 100 <= width <= 4000 and 60 <= height <= 4000 else default
 
 
 def lead_zoom(query):
@@ -3777,14 +3781,14 @@ def lead_zoom(query):
     if "from" not in q and "to" not in q and "tf" in q:
         days = dict(LEAD_TIMEFRAMES).get(q["tf"][0], 0)
         if days == 0: return {"error": "bad timeframe"}
-        return _leadtime.control_chart(rows, timeframe=days, log=log, now=now, measure=measure, plot=_lead_plot())
+        return _leadtime.control_chart(rows, timeframe=days, log=log, now=now, measure=measure, plot=_lead_plot(q))
     try:
         start, end = (dt.datetime.fromisoformat(q[k][0]) for k in ("from", "to"))
     except (KeyError, IndexError, ValueError):
         return {"error": "bad range: from and to are ISO datetimes"}
     start, end = (m if m.tzinfo else m.replace(tzinfo=dt.UTC) for m in (start, end))
     if end <= start: return {"error": "bad range: to is not after from"}
-    return _leadtime.control_chart(rows, log=log, now=now, start=start, end=end, measure=measure, plot=_lead_plot())
+    return _leadtime.control_chart(rows, log=log, now=now, start=start, end=end, measure=measure, plot=_lead_plot(q))
 
 
 CHARTS = {}   # each chart route's last answer, with the key of the inputs it read (#971)
@@ -5686,7 +5690,7 @@ const ltChart=(c,cov)=>{LT_FRAME=c.plot_frame;const n=c.dots.length,base=ltP+LT_
   const axes=`<line x1=${ltP} y1=${ltP-10} x2=${ltP} y2=${base} stroke=var(--chart-grid)></line><line x1=${ltP} y1=${base} x2=${ltP+LT_FRAME.width} y2=${base} stroke=var(--chart-grid)></line>`+
     `<text x=${ltP} y=${ltP+12} text-anchor=start fill=${ink}>elapsed time (${c.scale==="cube"?"cube root":c.scale})</text>`;   // the title sits inside the plot, at the left edge (#1141)
   const lines=ltLine(c.average,"var(--chart-series-8)","")+ltLine(c.median,"var(--chart-ok)","2 3")+ltLine(c.p85,"var(--chart-series-5)","5 3");
-  const clus=fitMode&&c.clusters_fit?c.clusters_fit:c.clusters,dots=clus.map((k,i)=>{const m=k.count,title=m>1?`${m} issues`:`#${k.dots[0].n} ${k.dots[0].title}`;   // a lone card is one hollow dot; a cluster is one outlined filled dot of the payload's one fixed radius (#1331)
+  const clus=fitMode&&c.clusters_fit?c.clusters_fit:c.clusters,dots=clus.map((k,i)=>{const m=k.count,shown=k.cards.slice(0,5).map(n=>"#"+n).join(", ")+(m>5?` +${m-5} more`:""),title=m>1?`${m} issues: ${shown}`:`#${k.dots[0].n} ${k.dots[0].title}`;   // a lone card is one hollow dot; a cluster is one outlined filled dot of the payload's one fixed radius (#1331)
     const cx=ltX(k.x),cy=ltY(k.y),strip=k.dots.map(d=>d.stack.map(b=>`${b.column} ${b.text}`).join(", ")).join(" · ");   // the tooltip's stage strip: each dot's column stack, no stacked bar in the plot (#1331)
     return `<circle data-k=${i} cx=${cx} cy=${cy} r=${k.r} fill="${m>1?"var(--chart-ink)":"var(--chart-bg)"}" stroke="var(--chart-ink)" stroke-width=2${k.dots.some(d=>d.approx||d.unknown_first)?' stroke-dasharray="3 2"':""} style="cursor:pointer"><title>${esc(title)} · lead ${esc(k.lead.text)} · closed ${esc(k.closed.text)}${strip?` · ${esc(strip)}`:""}${k.dots.some(d=>d.approx)?" · start approximate":""}${k.dots.some(d=>d.unknown_first)?" · first interval unknown":""}</title></circle>`}).join("");   // the tooltip names the card or the cluster, the lead time, the closed dates and the stage strip; the plot draws no count and no bar (#1331)
   const legend=`<p class="flg ltlg"><span><i style="background:var(--chart-bar)"></i>Rolling mean</span>${LT.band&&bp?`<span><i style="background:var(--chart-series-3);opacity:.28"></i>Standard deviation</span>`:""}</p>`+   // the series legend names only the marks the plot draws (#1304)
@@ -5706,6 +5710,7 @@ const flowOpen=async k=>{FLOWK=k;$("#flowov").hidden=false;flowTabs();drawFlow()
 const ltQ=()=>`&scale=${LT.log?"log":"jira"}&a=${encodeURIComponent(LT.a)}&b=${encodeURIComponent(LT.b)}&${barQuery("lead")}`,ltOwn=()=>LT.a!==LT_START||LT.b!=="";   // a span other than the payload's, Todo to closed, is the hub's chart for it (#905, #1247); the bar's values filter it (#904)
 const ltZoom=async(f,t)=>{const tok=++LT.tok;try{const c=await (await fetch(`/api/leadtime?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}${ltQ()}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;LT.zr=[f,t];LT.pick=null;drawFlow()}catch(e){}};   // the hub recomputes the chart for the dragged range (#900)
 const ltGet=async()=>{const tok=++LT.tok;LT.zc=null;LT.pick=null;if(!ltOwn()){drawFlow();return}try{const c=await (await fetch(`/api/leadtime?tf=${LT.tf}${ltQ()}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;drawFlow()}catch(e){}};   // the timeframe's chart for the chosen span (#905)
+const ltResize=async()=>{const s=$("#flowb svg[data-lt]");if(!s)return;const r=s.getBoundingClientRect(),v=s.viewBox.baseVal,pw=LT_FRAME.width*r.width/v.width,ph=LT_FRAME.height*r.height/v.height,tok=++LT.tok;try{const c=await (await fetch(`/api/leadtime?${LT.zr?`from=${encodeURIComponent(LT.zr[0])}&to=${encodeURIComponent(LT.zr[1])}`:`tf=${LT.tf}`}${ltQ()}&pw=${pw}&ph=${ph}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;drawFlow()}catch(e){}};   // a resize re-clusters the marks in the rendered plot size, by the hub's one rule (#1331)
 const ltPx=(e,s)=>{const r=s.getBoundingClientRect();return (e.clientX-r.left)/r.width*(LT_FRAME.width+2*ltP)};
 const ltClamp=x=>x<ltP?ltP:x>ltP+LT_FRAME.width?ltP+LT_FRAME.width:x,ltLo=(p,q)=>p<q?p:q,ltHi=(p,q)=>p<q?q:p;
 let LTD=null;   // the drag across a control chart's plot in progress (#900)
@@ -5726,7 +5731,7 @@ $("#flowb").onclick=e=>{if(LT.noclick){LT.noclick=false;return}
   if(e.target.id==="ltfit"){LT.win="fit";drawFlow();return}
   if(e.target.id==="ltfull"){LT.win="full";drawFlow();return}   // the range control redraws the held payload, never a second read (#1334)
   const k=e.target.closest("circle[data-k]");if(k){LT.pick=+k.dataset.k;drawFlow();return}const r=e.target.closest("tr[data-o]");if(r)showIssue(+r.dataset.o,"__REPO__")};
-$("#bflow").onclick=()=>flowOpen("cfd");$("#blead").onclick=()=>flowOpen("lead");$("#flowchips").onclick=e=>{if(e.target.id==="ffx")flowDetach()};addEventListener("resize",()=>{if(!$("#flowov").hidden)drawFlow()});
+$("#bflow").onclick=()=>flowOpen("cfd");$("#blead").onclick=()=>flowOpen("lead");$("#flowchips").onclick=e=>{if(e.target.id==="ffx")flowDetach()};addEventListener("resize",()=>{if(!$("#flowov").hidden){drawFlow();if(FLOWK==="lead")ltResize()}});
 function squadChart(k){if(FLOWK===k&&!$("#flowov").hidden)flowOpen(k)}   // a pushed version redraws only the chart it names
 function squadStreamLost(){$("#sse").hidden=false;$("#sse").textContent="live stream lost: retrying; the page keeps what it drew"}
 function squadStreamBack(){$("#sse").hidden=true;poll();pollBoard();if(FLOWK&&!$("#flowov").hidden)flowOpen(FLOWK)}   // one read each of the runs, the board and the open chart

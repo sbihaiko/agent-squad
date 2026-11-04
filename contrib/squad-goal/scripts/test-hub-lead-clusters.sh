@@ -34,19 +34,23 @@ def render(chart, name):
 
 def check(name, ok, got): print(("ok   " if ok else "FAIL ") + name + ("" if ok else f": got {got}"))
 
-# three cards closed together, one far outlier past p85
+# seven cards at p85 (10h) and one outlier one step over it (10.2h), within DOT_PX on the plot frame
 closed = now - timedelta(days=2)
-chart = lt.control_chart([card(1, closed, 5), card(2, closed, 5.2), card(3, closed, 5.1),
-                          card(9, closed, 300)], timeframe=30, now=now)
+spread = [card(n, closed, 10) for n in range(1, 8)]
+chart = lt.control_chart([card(9, closed, 10.2)] + spread, timeframe=30, now=now)
 counts = sorted(c["count"] for c in chart["clusters"])
-check("three close cards merge and the p85 outlier stays lone", counts == [1, 3], counts)
-cluster = next(c for c in chart["clusters"] if c["count"] == 3)
+check("the cards at p85 merge and the outlier that closes first stays lone", counts == [1, 7], counts)
+late = lt.control_chart(spread + [card(9, closed, 10.2)], timeframe=30, now=now)
+counts = sorted(c["count"] for c in late["clusters"])
+check("the outlier that closes last stays lone too", counts == [1, 7], counts)
+chart = late
+cluster = next(c for c in chart["clusters"] if c["count"] == 7)
 check("a cluster serves the one fixed radius", cluster["r"] == lt.CLUSTER_RADIUS_PX, cluster["r"])
-check("a cluster serves its count and its cards", cluster["count"] == 3 and cluster["cards"] == [1, 2, 3],
+check("a cluster serves its count and its cards", cluster["count"] == 7 and cluster["cards"] == [1, 2, 3, 4, 5, 6, 7],
       (cluster["count"], cluster["cards"]))
 check("a cluster serves its date range and its lead-time range",
-      cluster["closed"]["start"] == closed.date().isoformat() and cluster["lead"]["min"]["hours"] == 5.0
-      and cluster["lead"]["max"]["hours"] == 5.2, (cluster["closed"], cluster["lead"]))
+      cluster["closed"]["start"] == closed.date().isoformat() and cluster["lead"]["min"]["hours"] == 10.0
+      and cluster["lead"]["max"]["hours"] == 10.0, (cluster["closed"], cluster["lead"]))
 small = lt.control_chart([card(1, closed, 5), card(2, closed, 5.4)], timeframe=30, now=now,
                          plot={"width": 672, "height": 212})
 tall = lt.control_chart([card(1, closed, 5), card(2, closed, 5.4)], timeframe=30, now=now,
@@ -64,8 +68,14 @@ check("a lone card draws a hollow dot", hollow is not None and 'stroke="var(--ch
 check("a cluster draws one outlined filled dot", filled is not None and 'stroke="var(--chart-ink)"' in filled, circles)
 check("the plot draws no stacked bar and no count text", "<rect" not in out and not re.search(r"<text[^>]*>\s*\d+\s*</text>", out), out[:200])
 title = re.search(r"<circle[^>]*><title>([^<]*)</title>", out).group(1)
-check("the tooltip names the cluster, the lead range and the closed date",
-      title.startswith("3 issues · lead 5h to 5h 12m · closed ") and "Done" in title, title)
+check("the tooltip names the cluster, its cards, the lead range and the closed date",
+      title.startswith("7 issues: #1, #2, #3, #4, #5 +2 more · lead 10h · closed ") and "Done" in title, title)
+hub_spec = importlib.util.spec_from_file_location("hub_lead", os.environ["HUB_SRC"])
+hub = importlib.util.module_from_spec(hub_spec); hub_spec.loader.exec_module(hub)
+check("a resize names the rendered plot size, and a bad size falls back to the default frame",
+      hub._lead_plot({"pw": ["500"], "ph": ["106"]}) == {"width": 500, "height": 106}
+      and hub._lead_plot({"pw": ["x"], "ph": ["106"]}) == hub._lead_plot(),
+      (hub._lead_plot({"pw": ["500"], "ph": ["106"]}), hub._lead_plot()))
 PY
 )
 echo "$out"; case "$out" in *FAIL*|*Error*|*Traceback*) fail=1;; esac

@@ -228,19 +228,23 @@ def _hour_span(lo, hi):
 def _clusters(dots, width, height, axis="x", limit=None):
     """The dots merged into clusters by the screen-space rule in the caller's plot frame: two marks closer than DOT_PX
     share one cluster (#1146), recomputed for every view from the frame the caller names (#1331). A card past `limit`,
-    the p85 of the plotted hours, never merges: an outlier stays a lone dot. Every cluster serves its fixed radius, its
+    the p85 of the plotted hours, never merges, and the cluster it seeds stays closed to every later card: an outlier
+    stays a lone dot whatever order the dots arrive in. Every cluster serves its fixed radius, its
     count, its cards, its closed-date range and its lead-time range."""
     clusters = []
     for dot in dots:
         home = None
         if limit is None or dot["hours"] <= limit:
             for cluster in clusters:
-                if math.hypot((cluster["x"] - dot[axis]) * width,
-                              (cluster["y"] - dot["y"]) * height) < DOT_PX:
+                if cluster["open"] and math.hypot((cluster["x"] - dot[axis]) * width,
+                                                  (cluster["y"] - dot["y"]) * height) < DOT_PX:
                     home = cluster
                     break
         if home is None:
-            clusters.append({"x": dot[axis], "y": dot["y"], "dots": [dot]})
+            # a cluster an outlier seeds is closed: no later card ever merges into it, so a card past p85 stays a lone
+            # dot however close its close, in every order the dots arrive (#1331)
+            clusters.append({"x": dot[axis], "y": dot["y"], "dots": [dot],
+                             "open": limit is None or dot["hours"] <= limit})
         else:
             home["dots"].append(dot)
     for cluster in clusters:
@@ -251,6 +255,7 @@ def _clusters(dots, width, height, axis="x", limit=None):
                                         max(member["closed"] for member in members)),
                        lead=_hour_span(min(member["hours"] for member in members),
                                        max(member["hours"] for member in members)))
+        del cluster["open"]
     return clusters
 
 

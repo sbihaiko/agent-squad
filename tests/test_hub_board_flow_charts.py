@@ -752,7 +752,7 @@ def test_the_dot_tooltip_names_the_mark_its_lead_its_dates_and_the_stage_strip(h
 
     out = _lt_chart(hub, tmp_path, "lt-tooltip.js", chart)
     title = re.search(r"<circle[^>]*><title>([^<]*)</title>", out).group(1)
-    assert title.startswith("2 issues · lead "), title
+    assert title.startswith("2 issues: #1, #2 · lead "), title
     assert "closed Oct 2" in title
     assert "Gating 18h" in title and "Todo 6h" in title, "the stage strip names each dot's column hours"
 
