@@ -10,7 +10,7 @@ import anyio
 import pytest
 
 from squad import sdk_adapter
-from squad.adapter import AdapterError, CallRequest
+from squad.adapter import AdapterError, CallRequest, Pulse
 from squad.sdk_adapter import SdkAdapter, extract_json
 
 pytestmark = pytest.mark.anyio
@@ -31,6 +31,7 @@ class ResultMessage:
 @dataclass
 class ToolUseBlock:
     name: str
+    id: str | None = None
 
 
 @dataclass
@@ -393,3 +394,34 @@ async def test_a_served_spelling_keeps_its_wire_string(tmp_path):
                    registry=registry_file(tmp_path, ["wire-sonnet", "sonnet-y"]), resolve=True)
     await a.call(request(model="sonnet-y"))
     assert seen[0][1].kw["model"] == "sonnet-y"
+
+
+# --- the pulse (#1289): every message beats it, and a tool that runs is not a silent upstream ---
+@dataclass
+class ToolResultBlock:
+    tool_use_id: str
+    content: str = "ok"
+    is_error: bool = False
+
+
+@dataclass
+class UserMessage:
+    content: list
+
+
+async def test_every_message_beats_the_pulse_and_a_running_tool_is_not_silence():
+    pulse = Pulse()
+    seen = {}
+
+    async def query(*, prompt, options):
+        yield turn(ToolUseBlock("Bash", id="t1"))
+        seen["open"] = pulse.silent_for()
+        yield UserMessage([ToolResultBlock("t1")])
+        seen["closed"] = pulse.silent_for()
+        yield ResultMessage(result="{}")
+
+    a = SdkAdapter(query=query, options_cls=Options)
+    r = await a.call(request(pulse=pulse))
+    assert seen["open"] is None, "a tool that has not returned is never silence"
+    assert seen["closed"] is not None and pulse.beats == 3
+    assert r.output == {}
