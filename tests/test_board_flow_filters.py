@@ -276,25 +276,40 @@ def _page_line(hub, prefix):
     return next(line for line in hub.PAGE.splitlines() if line.startswith(prefix))
 
 
-def _page_harness(hub, answers, drive, onchange=""):
+def _page_harness(hub, answers, drive, onchange="", store=None):
     """The page's own bar and chart lines, run in node over stub elements. `fetch` answers from `answers`, keyed by URL,
-    with the hub's own route payloads; the script `drive` acts on the page and prints JSON."""
-    # Re-anchored (#1247): the chart's settings are no longer stored, so there is no saveLT line; the LT_TYPES line
-    # carries LT_START, the start the payload measures from, which ltOwn reads.
-    lines = [_page_line(hub, p) for p in ("const LT_TYPES=", "let FLOWFF=", "const barQuery=", "const flowOpen=", "const ltQ=",
-                                          "const ltZoom=", "const ltGet=", "const flowDetach=", "const barMoved=",
-                                          "const pickFilter=")]
+    with the hub's own route payloads; the script `drive` acts on the page and prints JSON. `store` seeds the page's
+    localStorage: the page's own save and saveB lines run, so a test reads the key each write reaches (#1275)."""
+    # Re-anchored (#1247, #1275): the LT_TYPES line carries LT_START, the start the payload measures from, which ltOwn
+    # reads; the chart range restores from its own key, apart from the Board filter's record under "hub".
+    keyed = store is not None
+    head = ["const LT_TYPES=", "let LT="] if keyed else ["const LT_TYPES="]
+    tail = ["const LT_TF=", "const CHART_KEY="] if keyed else []
+    lines = [_page_line(hub, p) for p in head + ["let FLOWFF=", "const barQuery=", "const flowOpen=", "const ltQ=",
+                                                  "const ltZoom=", "const ltGet=", "const flowDetach=", "const barMoved=",
+                                                  "const pickFilter="] + tail]
+    lt_stub = "" if keyed else ',LT={tf:"30",log:false,ty:"task",pick:null,zc:null,zr:null,tok:0,a:"Todo",b:""}'
+    # The two write paths are the page's own lines, never a look-alike: a regression that folded the chart range into
+    # the Board record would show here (#1275).
+    save = ('const save=()=>localStorage.hub=JSON.stringify({...ls,pins:[...pins],q,per,src});'
+            if keyed else "const save=()=>SAVED.push(JSON.stringify(ls.lt));")
+    board = ('const bo=ls.bo||{},saveB=()=>{ls.bo=bo;localStorage.hub=JSON.stringify({...ls,pins:[...pins],q,per,bo})};'
+             if keyed else "let bo={};const saveB=()=>SAVED.push(JSON.stringify(bo));")
     stubs = f"""
 const ANSWERS={json.dumps(answers)},FETCHED=[],DRAWN=[],SAVED=[],POLLED=[];
 const el=()=>({{hidden:true,handlers:{{}},addEventListener(t,f){{this.handlers[t]=f}}}});
 const EL={{"#flowov":el(),"#fwl":el(),"#fsl":el(),"#fkl":el()}};
 const $=s=>EL[s];
 const fetch=async url=>{{FETCHED.push(url);if(!(url in ANSWERS))throw new Error("no answer for "+url);return {{json:async()=>ANSWERS[url]}}}};
-let bo={{}},FLOWK=null,FLOWD={{}},LT={{tf:"30",log:false,ty:"task",pick:null,zc:null,zr:null,tok:0,a:"Todo",b:""}};
-const ls={{}},save=()=>SAVED.push(JSON.stringify(ls.lt));
+const STORE={json.dumps(store or {})};
+const localStorage=new Proxy({{}},{{get:(t,k)=>k==="getItem"?n=>n in STORE?STORE[n]:null:k==="setItem"?(n,v)=>{{STORE[n]=String(v)}}:STORE[k],set:(t,k,v)=>{{STORE[k]=String(v);return true}}}});
+const ls=JSON.parse(localStorage.hub||"{{}}"),pins=new Set(),q="",per="day",src="";
+let FLOWK=null,FLOWD={{{lt_stub}}};
+{save}
+{board}
 EL["#flowb"]=el();
 const drawFlow=()=>DRAWN.push(JSON.parse(JSON.stringify(FLOWD[FLOWK]||null)));
-const saveB=()=>SAVED.push(JSON.stringify(bo)),pollBoard=()=>POLLED.push(1);
+const pollBoard=()=>POLLED.push(1);
 const flowTabs=()=>{{}};   // the tab strip is not what this harness drives (#1080)
 
 const settle=()=>new Promise(r=>setTimeout(r,0));
@@ -497,22 +512,55 @@ def test_the_type_control_sits_beside_timeframe_and_scale(hub):
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-def test_the_type_and_the_chart_settings_are_restored_on_load(hub):
+def test_the_chart_range_is_restored_on_load_and_the_type_is_not(hub):
+    """#1275: the chart range restores from its own key; the Type and the scale stay the visit's choice (#1247)."""
     block = _flow_block(hub).split("const drawFlow")[0]
 
     def restored(stored):
-        script = "\n".join([f"const ls={json.dumps(stored)};", "const esc=s=>String(s);", block,
-                            "process.stdout.write(JSON.stringify({ty:LT.ty,tf:LT.tf,log:LT.log}));"])
+        stub = 'const localStorage={getItem:k=>k==="squad-chart"?' + json.dumps(json.dumps(stored)) + ':null,setItem(){}};'
+        script = "\n".join([stub, "const esc=s=>String(s);", block,
+                            "process.stdout.write(JSON.stringify({ty:LT.ty,tf:LT.tf,a:LT.a,b:LT.b,log:LT.log}));"])
         result = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=30)
         assert result.returncode == 0, result.stderr
         return json.loads(result.stdout)
 
-    # Re-anchored (#1247): a fresh page opens on the four defaults, whatever an older visit stored; a choice lasts the visit.
-    defaults = {"ty": "bug", "tf": "2", "log": True}
-    assert restored({"lt": {"ty": "task", "tf": "3", "log": False}}) == defaults
-    assert restored({"lt": {"tf": "90"}})["tf"] == "2", "a retired preset never reaches the page"
-    assert restored({}) == defaults
-    assert restored({"lt": {"ty": "pr"}})["ty"] == "bug"
+    assert restored({"tf": "30", "a": "Doing", "b": "Closed"}) == \
+        {"ty": "bug", "tf": "30", "a": "Doing", "b": "Closed", "log": True}, "the chart range restores from its key"
+    assert restored({"tf": "90", "a": "Doing"})["tf"] == "2", "a retired preset never reaches the page"
+    assert restored({"ty": "task", "tf": "3"})["ty"] == "bug", "the Type is not stored"
+    assert restored({})["tf"] == "2"
+
+
+def test_the_board_write_path_never_names_the_chart_key(hub):
+    """#1275: the Board record's three write lines name no chart key and no chart range."""
+    for prefix in ("const $=s=>document.querySelector(s),ls=", "const save=", "const bo=ls.bo||{},saveB="):
+        line = _page_line(hub, prefix)
+        assert "CHART_KEY" not in line and "squad-chart" not in line and "LT." not in line, \
+            f"{prefix!r} writes the Board record, never the chart's"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_reload_restores_the_board_filter_and_the_chart_range_apart(hub, board):
+    """#1275: the Board filter and the chart range each keep their own key; a reload restores each untouched by the other."""
+    backlog = hub.COLUMN["issue_todo"]
+    _seed(hub, [_item(hub, 1, backlog), _item(hub, 2, backlog, labels=["bug"])])
+    onchange = re.search(r'\$\("#flowb"\)\.onchange=.*?(?=\$\("#flowb"\)\.onclick=)', hub.PAGE, re.S).group(0)
+    report = "console.log(JSON.stringify({bo,tf:LT.tf,a:LT.a,b:LT.b,store:STORE}));"
+    first = _page_harness(hub, {}, 'pickFilter("fkl","fk");EL["#fkl"].handlers.change({target:{value:"bug",checked:true}});'
+                          + report, onchange=onchange, store={})
+    assert set(first["store"]) == {"hub"}, "a Board filter writes only the Board key"
+
+    answers = {f"/api/leadtime?tf=30&scale=jira&a=Doing&b=&{_bar(ty='bug')}": {"dots": []}}
+    second = _page_harness(hub, answers, 'EL["#flowb"].onchange({target:{id:"ltr",value:"30"}});'
+                           'EL["#flowb"].onchange({target:{id:"lta",value:"Doing"}});await settle();' + report,
+                           onchange=onchange, store=first["store"])
+    assert second["bo"] == first["bo"] == {"fk": ["bug"]}, "a chart range never touches the Board filter"
+    assert second["store"]["hub"] == first["store"]["hub"], "a chart range leaves the Board key as it was"
+    assert set(second["store"]) == {"hub", "squad-chart"}
+
+    third = _page_harness(hub, {}, report, onchange=onchange, store=second["store"])
+    assert third["bo"] == {"fk": ["bug"]}, "the Board filter survives the reload untouched"
+    assert (third["tf"], third["a"]) == ("30", "Doing"), "the chart range is restored on reload"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")

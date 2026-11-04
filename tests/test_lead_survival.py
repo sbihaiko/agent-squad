@@ -203,9 +203,11 @@ def test_the_view_opens_on_48_hours_bugs_todo_and_log_scale_on_a_fresh_page(hub)
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-def test_a_choice_stays_for_the_visit_and_is_never_stored(hub):  # noqa: F811
-    assert "saveLT" not in hub.PAGE and "ls.lt=" not in hub.PAGE, "a choice outlives the visit"
-    assert re.search(r'id==="ltr"\)\{LT\.tf=e\.target\.value', hub.PAGE), "a Timeframe choice is not kept for the visit"
+def test_a_chart_range_is_stored_under_its_own_key_and_never_in_the_board_record(hub):  # noqa: F811
+    assert "saveLT" not in hub.PAGE and "ls.lt=" not in hub.PAGE, "the chart range is not in the Board record"
+    assert re.search(r'id==="ltr"\)\{LT\.tf=e\.target\.value;chartSave\(\)', hub.PAGE), "a Timeframe choice is not kept"
+    assert re.search(r'LT\[e\.target\.id==="lta"\?"a":"b"\]=e\.target\.value;chartSave\(\)', hub.PAGE), \
+        "a Start or End choice is not kept"
 
 
 def test_the_default_window_is_in_the_one_read_the_page_makes(hub, board):  # noqa: F811
