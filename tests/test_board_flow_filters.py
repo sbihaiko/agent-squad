@@ -304,7 +304,7 @@ const fetch=async url=>{{FETCHED.push(url);if(!(url in ANSWERS))throw new Error(
 const STORE={json.dumps(store or {})};
 const localStorage=new Proxy({{}},{{get:(t,k)=>k==="getItem"?n=>n in STORE?STORE[n]:null:k==="setItem"?(n,v)=>{{STORE[n]=String(v)}}:STORE[k],set:(t,k,v)=>{{STORE[k]=String(v);return true}}}});
 const ls=JSON.parse(localStorage.hub||"{{}}"),pins=new Set(),q="",per="day",src="";
-let FLOWK=null,FLOWD={{{lt_stub}}};
+let FLOWK=null,FLOWD={{}}{lt_stub};
 {save}
 {board}
 EL["#flowb"]=el();
@@ -545,12 +545,12 @@ def test_a_reload_restores_the_board_filter_and_the_chart_range_apart(hub, board
     backlog = hub.COLUMN["issue_todo"]
     _seed(hub, [_item(hub, 1, backlog), _item(hub, 2, backlog, labels=["bug"])])
     onchange = re.search(r'\$\("#flowb"\)\.onchange=.*?(?=\$\("#flowb"\)\.onclick=)', hub.PAGE, re.S).group(0)
-    report = "console.log(JSON.stringify({bo,tf:LT.tf,a:LT.a,b:LT.b,store:STORE}));"
+    report = "console.log(JSON.stringify({bo,tf:LT.tf,a:LT.a,b:LT.b,store:STORE,fetched:FETCHED}));"
     first = _page_harness(hub, {}, 'pickFilter("fkl","fk");EL["#fkl"].handlers.change({target:{value:"bug",checked:true}});'
                           + report, onchange=onchange, store={})
     assert set(first["store"]) == {"hub"}, "a Board filter writes only the Board key"
 
-    answers = {f"/api/leadtime?tf=30&scale=jira&a=Doing&b=&{_bar(ty='bug')}": {"dots": []}}
+    answers = {f"/api/leadtime?tf=30&scale=log&a=Doing&b=&{_bar(ty='bug')}": {"dots": []}}
     second = _page_harness(hub, answers, 'EL["#flowb"].onchange({target:{id:"ltr",value:"30"}});'
                            'EL["#flowb"].onchange({target:{id:"lta",value:"Doing"}});await settle();' + report,
                            onchange=onchange, store=first["store"])
@@ -558,9 +558,13 @@ def test_a_reload_restores_the_board_filter_and_the_chart_range_apart(hub, board
     assert second["store"]["hub"] == first["store"]["hub"], "a chart range leaves the Board key as it was"
     assert set(second["store"]) == {"hub", "squad-chart"}
 
-    third = _page_harness(hub, {}, report, onchange=onchange, store=second["store"])
+    span = f"/api/leadtime?tf=30&scale=log&a=Doing&b=&{_bar(fk='bug', ty='bug')}"
+    answers = {f"/api/chart/lead?{_bar(fk='bug', ty='bug')}": {"lead": {}, "t": 1}, span: {"dots": []}}
+    third = _page_harness(hub, answers, 'await flowOpen("lead");await settle();' + report,
+                          onchange=onchange, store=second["store"])
     assert third["bo"] == {"fk": ["bug"]}, "the Board filter survives the reload untouched"
     assert (third["tf"], third["a"]) == ("30", "Doing"), "the chart range is restored on reload"
+    assert span in third["fetched"], "the restored range is what the opened chart reads"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
