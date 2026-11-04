@@ -34,7 +34,22 @@ TRANSPORTS = ("unix", "loopback", "tailnet")
 LOG = "supervisor.log"
 TRANSCRIPTS = "transcripts"
 WINDOW = 1 << 16
-HOSTED_ARGV = [sys.executable, "-m", "squad.sdk_adapter", "host"]
+SDK_MODULE = "claude_agent_sdk"
+
+
+def hosted_argv(root: Path = ROOT) -> list[str]:
+    """The hosted session's argv: the repository venv's python when there is one, since that interpreter carries the SDK
+    and the supervisor's own may not (#1317); else the supervisor's own."""
+    venv = root / ".venv" / "bin" / "python"
+    return [str(venv) if venv.exists() else sys.executable, "-m", "squad.sdk_adapter", "host"]
+
+
+def sdk_check(argv: list[str], env: dict[str, str]) -> None:
+    """Refuse a start whose interpreter cannot import the SDK, naming both, instead of a session that never answers."""
+    probe = subprocess.run([argv[0], "-c", f"import {SDK_MODULE}"], env=env, capture_output=True, text=True, timeout=30)
+    if probe.returncode != 0:
+        tail = (probe.stderr.strip().splitlines() or ["no output"])[-1]
+        raise Refused(f"the hosted interpreter {argv[0]} cannot import {SDK_MODULE}: {tail}")
 SUP_DIR = "SQUAD_SUPERVISOR_DIR"   # the folder that holds the socket; a test points it at a temporary dir
 SUP_CMD = "SQUAD_SUPERVISOR_CMD"   # the start command, {state} replaced; a test can substitute a refused start
 DEFAULT_START = [sys.executable, "-m", "squad.supervisor", "serve"]
@@ -271,10 +286,12 @@ class Supervisor:
                 raise Refused(f"session {sid} is already recorded")
             (self.state / TRANSCRIPTS).mkdir(mode=0o700, exist_ok=True)
             env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(ROOT), os.environ.get("PYTHONPATH", "")])}
+            argv = hosted_argv()
+            sdk_check(argv, env)
             master, slave = pty.openpty()
             try:
                 terminal = os.ttyname(slave)
-                proc = subprocess.Popen(HOSTED_ARGV, stdin=slave, stdout=slave, stderr=slave, cwd=cwd, env=env,
+                proc = subprocess.Popen(argv, stdin=slave, stdout=slave, stderr=slave, cwd=cwd, env=env,
                                         start_new_session=True, close_fds=True)
             finally:
                 os.close(slave)
@@ -282,7 +299,7 @@ class Supervisor:
             self.sessions[sid] = running
             self._ledger({"event": "start", "session": sid, "job": job, "pid": proc.pid,
                           "lstart": lstart(proc.pid), "terminal": terminal, "cwd": running.cwd,
-                          "argv": HOSTED_ARGV})
+                          "argv": argv})
             self._line("start", sid, caller)
             running.pump.start()
         threading.Thread(target=self._reap, args=(running,), daemon=True).start()

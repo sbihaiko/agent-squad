@@ -337,3 +337,19 @@ def test_a_closed_issue_whose_card_is_gone_is_never_alerted_on_any_pass(tmp_path
 
     assert not (tmp_path / "alerts.log").exists()
     assert "NOTE\t800\tclosed" in capsys.readouterr().out
+
+
+def test_an_add_with_no_repository_refuses_and_names_its_cause(tmp_path):
+    """#1315: `item_id(n, add_missing=True)` ran the add only when a repository was set, so with none it wrote nothing and
+    board.py printed "not on the board" -- a fact that was false, for a write that never ran. The add refuses instead, and
+    the refusal names the missing SG_REPO."""
+    def run(args, **kw):
+        return SimpleNamespace(returncode=0, stderr="", stdout="")   # the items read, one --jq line per card: no card at all
+
+    b = issue_state.BoardBinding("owner", 7, "", run=run, env={"SG_STATE": str(tmp_path)}, state_dir=str(tmp_path))
+    try:
+        b.item_id(800, add_missing=True)
+    except RuntimeError as e:
+        assert "SG_REPO" in str(e), str(e)
+    else:
+        raise AssertionError("an add with no repository wrote nothing and refused nothing")

@@ -963,3 +963,20 @@ def test_the_phone_page_gains_no_start_control():
         assert "Start this spec" not in text and "spb" not in text and "{spec:" not in text, name
 
 
+
+
+def test_the_writer_call_carries_the_repository_the_hub_resolved(hub, monkeypatch):
+    """#1315: hubctl starts the hub with no SG_REPO, and the add of an issue with no card runs only with a repository, so the
+    owner's arrow answered "not on the board" and the card never reached the board. The writer call carries the repository
+    the hub resolved, as it carries the state directory (#1750)."""
+    mod, _ = hub
+    monkeypatch.delenv("SG_REPO", raising=False)
+    kw = {}
+
+    def fake(cmd, **options):
+        kw.update(options)
+        return subprocess.CompletedProcess(cmd, 0, "#7 -> Todo\n", "")
+
+    monkeypatch.setattr(mod.subprocess, "run", fake)
+    mod.promote_write(7, add=True)
+    assert (kw.get("env") or {}).get("SG_REPO") == mod.REPO, kw
