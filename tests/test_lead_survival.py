@@ -216,7 +216,7 @@ def test_the_default_window_is_in_the_one_read_the_page_makes(hub, board):  # no
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_the_legend_carries_the_km_median_its_interval_the_cohort_wip_and_the_exclusions(hub, board, tmp_path):  # noqa: F811
-    from tests.test_hub_board_flow_charts import _lt_chart
+    from tests.test_hub_board_flow_charts import _render
     now = datetime.now(UTC)
     t = lambda h: (now - timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: E731
     never = [{"t": t(20), "type": "added"}, {"t": t(20), "type": "status", "status": "Doing"},
@@ -225,8 +225,11 @@ def test_the_legend_carries_the_km_median_its_interval_the_cohort_wip_and_the_ex
                 2: (_card(2, st="Todo", s="OPEN"), _life(t(30))),
                 3: (_card(3, st="Todo", s="OPEN"), _life(t(40))),
                 4: (_card(4, st="Closed", s="CLOSED", c=t(3)), never)})
-    chart = hub.flow_lead(ty=None)["lead"]["control"]["log"]["2"]
-    out = _lt_chart(hub, tmp_path, "lt-km.js", chart)
+    lead = hub.flow_lead(ty=None)["lead"]
+    chart = lead["control"]["log"]["2"]
+    # Re-anchored (#1334): the one exclusion total moved from the percentile line to the header's summary row, so the
+    # whole lead view is drawn, not the chart alone.
+    out = _render(hub, tmp_path, "lt-km.js", f'(LT.tf="2",LT.log=true,flowLead({json.dumps(lead)}))')
     legend = "".join(re.findall(r'<p class="flg ltlg">(.*?)</p>', out))
     assert "not estimable" in legend, "a curve that never reaches one half reads not estimable"
     assert chart["survival"]["text"] in out and chart["wip"]["text"] in out

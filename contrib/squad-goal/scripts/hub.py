@@ -5611,7 +5611,7 @@ const ltEx=(exc,cards,total)=>{const named=exc.map(e=>`${e.count} ${EXREASON[e.r
 const ltExOf=c=>ltEx(Object.entries(c.excluded||{}).map(([r,n])=>({reason:r,count:n})),c.excluded_cards,c.excluded_total);
 const ltGateRole=()=>COLORS[COLNAME.gating]||"var(--chart-series-other)";   // gate time keeps the Gating column's palette role (#1256)
 const LT_TYPES=[["spec","Specs"],["task","Tasks"],["bug","Bugs"]],LT_START="/*LT_START*/";   // the start the hub's payload measures from (#1247)
-let LT={tf:"2",log:true,ty:"bug",pick:null,zc:null,zr:null,rng:null,tok:0,noclick:false,a:LT_START,b:"",cols:[],band:false};   // a fresh page opens on 48 hours, Bugs, Todo and Log scale; a choice stays for the visit and is never stored (#1247); the cluster listed under the chart, and a drag zoom: the hub's chart over zr=[from,to] (#900, #985); the deviation band hides until the display asks for it (#1304)
+let LT={tf:"2",log:true,ty:"bug",pick:null,zc:null,zr:null,rng:null,tok:0,noclick:false,a:LT_START,b:"",cols:[],band:false,win:"full"};   // a fresh page opens on 48 hours, Bugs, Todo and Log scale; a choice stays for the visit and is never stored (#1247); the cluster listed under the chart, and a drag zoom: the hub's chart over zr=[from,to] (#900, #985); the deviation band hides until the display asks for it (#1304)
 let FLOWFF={};   // the charts that stopped following the Board tab's Waves, Specs and Kinds; the Board tab keeps its own filter (#1147)
 const flowFilterNames=(fw,fs,fk)=>[["Waves",fw],["Specs",fs],["Kinds",fk]].filter(([,v])=>v.length).map(([n,v])=>`${n}: ${v.map(esc).join(", ")}`).join(" · ");
 const flowFilterChip=(fw,fs,fk,stopped)=>{const names=flowFilterNames(fw,fs,fk);if(!names)return "";return `<span class=fchip id=ffchip>Board filter · ${names} `+(stopped?"· this chart no longer follows it":`<button id=ffx type=button title="stop this chart following the Board tab's filter; the Board tab keeps its own">Stop following</button>`)+`</span>`};   // one chip names the Board filter; its one action stops this chart following it, never the Board tab (#1147)
@@ -5622,8 +5622,10 @@ const ltP=64;   // a duration label ("17h 36m") is wider than a count, and the o
 let LT_FRAME;const ltX=x=>ltP+x*LT_FRAME.width,ltY=y=>ltP+LT_FRAME.height-y*LT_FRAME.height;
 const ltLine=(v,col,dash)=>v&&v.y!=null?`<line x1=${ltP} x2=${ltP+LT_FRAME.width} y1=${ltY(v.y)} y2=${ltY(v.y)} stroke="${col}" stroke-width=2${dash?` stroke-dasharray="${dash}"`:""}><title>${esc(v.label)} ${esc(v.text)}</title></line><text x=${ltP+LT_FRAME.width-3} y=${ltY(v.y)-5} text-anchor=end fill="${col}">${esc(v.label)} ${esc(v.text)}</text>`:"";   // the line labels itself at its right end, in its own colour (#1304)
 const ltKM=c=>c.survival?`<p class="fnote ltkm">${esc(c.survival.text)} · ${esc(c.wip.text)}${c.gate?` · ${esc(c.gate.label)} ${esc(c.gate.text)}`:""}</p>`:"";   // the hub's survival reading, work in progress and gate time as one text metric, in its words (#1250, #1304)
+const ltV=v=>v?esc(v.text):"?";   // a summary value's text, or a question mark where it is not estimable
 const ltChart=(c,cov)=>{LT_FRAME=c.plot_frame;const n=c.dots.length,base=ltP+LT_FRAME.height,ink="var(--chart-axis)",mute="var(--chart-axis)";   // one axis style: tick text and the title in mute, never a mark's ink (#1141)
   const grp=(name,body)=>`<span class=ltgrp><b class=ltgl>${name}</b> ${body}</span>`,backTo=LT_TF.find(([k])=>k===LT.tf)[1];
+  const fitMode=LT.win==="fit"&&!!c.fit,printed=fitMode?c.fit.text:c.range.text;   // the range control switches what this one payload holds (#1334)
   const ctl=`<p class=fhead>`+
       `<label>Timeframe <select id=ltr>${LT_TF.map(([k,v])=>`<option value=${k}${LT.tf===k?" selected":""}>${v}</option>`).join("")}</select></label> `+
       `<label>Type <select id=lty>${LT_TYPES.map(([k,v])=>`<option value=${k}${LT.ty===k?" selected":""}>${v}</option>`).join("")}</select></label>`+
@@ -5633,34 +5635,33 @@ const ltChart=(c,cov)=>{LT_FRAME=c.plot_frame;const n=c.dots.length,base=ltP+LT_
       `<label>End <select id=ltb>${LT.cols.map(k=>{const v=k===COLNAME.issue_closed?"":k;return `<option value="${esc(v)}"${LT.b===v?" selected":""}>${esc(k)}</option>`}).join("")}</select></label>`)+   // the span each dot measures, from the recorded transitions (#905)
     " "+grp("Display",`<label>Scale <select id=lts><option value=jira${LT.log?"":" selected"}>Jira scale</option><option value=log${LT.log?" selected":""}>Log scale</option></select></label> <label>Band <input type=checkbox id=ltbd${LT.band?" checked":""}></label>`)+" "+
     ((LT.zr||c.fit)?grp("View",(LT.zr?`<span class=fchip id=ltz>Back to ${esc(backTo)} <button id=ltzc type=button title="clear the zoom">Clear</button></span> `:"")+
-      (c.fit?`<button id=ltfit data-f="${esc(c.fit.start)}" data-t="${esc(c.fit.end)}" title="zoom to the range the cards fill">Fit to data: ${esc(c.fit.text)}</button>`:""))+" ":"")+   // one chip while zoomed, Fit beside it when the cards have a span to fit; no disabled button on the default screen (#1147)
+      (c.fit?`<span class=fchip id=ltrng><button id=ltfit type=button>Fit data</button><button id=ltfull type=button>Full window</button> ${esc(printed)}</span>`:""))+" ":"")+   // one chip while zoomed; the range control switches x from the held payload and prints the range (#1147, #1334)
     `<p class=fnote>Set the controls in order: filters, then measurement, then display, then view.</p>`+
     `<p class=fnote>${esc(c.text)}</p>${coverNote(cov)}</details>`;   // the coverage, plotted-cards and ordering notes stay behind More (#1145)
   LT.rng=c.range;
   if(!n)return ctl+`<p class=fnote>no closed card in this timeframe · ${ltExOf(c)}</p>`+ltKM(c);
-  const up=c.dots.map(d=>`${ltX(d.x)},${ltY(d.rolling.y_high)}`),low=[...c.dots].reverse().map(d=>`${ltX(d.x)},${ltY(d.rolling.y_low)}`);
-  const banded=c.dots.every(d=>d.rolling.y_high!=null);
-  const band=(LT.band&&banded)?`<polygon points="${[...up,...low].join(" ")}" fill="var(--chart-series-3)" fill-opacity=".28"><title>Standard deviation</title></polygon>`:"";   // the band hides by default; the display asks for it (#1304)
-  const roll=`<polyline fill=none stroke="var(--chart-bar)" stroke-width=2 points="${c.dots.map(d=>`${ltX(d.x)},${ltY(d.rolling.y)}`).join(" ")}"><title>Rolling mean</title></polyline>`;   // the trend keeps its chart accent (#1146)
+  const bp=LT.band?(fitMode&&c.band&&c.band.fit?c.band.fit.polygon:c.band&&c.band.polygon):null,eX=d=>fitMode&&d.xf!=null?d.xf:d.x;
+  const band=bp?`<polygon points="${bp.map(p=>`${ltX(p.x)},${ltY(p.y)}`).join(" ")}" fill="var(--chart-series-3)" fill-opacity=".28"><title>Standard deviation</title></polygon>`:"";   // the band hides by default; when asked for, it is the hub's polygon (#1304, #1334)
+  const roll=`<polyline fill=none stroke="var(--chart-bar)" stroke-width=2 points="${c.dots.map(d=>`${ltX(eX(d))},${ltY(d.rolling.y)}`).join(" ")}"><title>Rolling mean</title></polyline>`;   // the trend keeps its chart accent (#1146)
   const ys=c.ticks.map(t=>`<line x1=${ltP-4} y1=${ltY(t.y)} x2=${ltP} y2=${ltY(t.y)} stroke=${mute}></line><text x=${ltP-7} y=${ltY(t.y)+4} text-anchor=end fill=${ink}>${esc(t.text)}</text>`).join("");
   const xs=c.xticks.map(t=>`<text x=${ltX(t.x)} y=${base+17} text-anchor=middle fill=${ink}>${esc(t.text)}</text>`).join("");
   const axes=`<line x1=${ltP} y1=${ltP-10} x2=${ltP} y2=${base} stroke=var(--chart-grid)></line><line x1=${ltP} y1=${base} x2=${ltP+LT_FRAME.width} y2=${base} stroke=var(--chart-grid)></line>`+
     `<text x=${ltP} y=${ltP+12} text-anchor=start fill=${ink}>elapsed time (${c.scale==="cube"?"cube root":c.scale})</text>`;   // the title sits inside the plot, at the left edge (#1141)
   const lines=ltLine(c.average,"var(--chart-series-8)","")+ltLine(c.median,"var(--chart-ok)","2 3")+ltLine(c.p85,"var(--chart-series-5)","5 3");
   const bandCol=k=>COLORS[k]||"var(--chart-series-other)",stack=c.dots.map(d=>(d.stack||[]).map(b=>`<rect x=${ltX(d.x)-3} y=${ltY(b.y)} width=6 height=${ltY(b.y0)-ltY(b.y)} fill="${bandCol(b.column)}"><title>${esc(b.column)} ${esc(b.text)}</title></rect>`).join("")).join("");   // the hub places each band's two edges; the page draws them in the column's palette role (#1256)
-  const dots=c.clusters.map((k,i)=>{const m=k.dots.length,title=m>1?`${m} issues`:`#${k.dots[0].n} ${esc(k.dots[0].title)}`;   // the hub sizes the ring for its count (#1146)
+  const clus=fitMode&&c.clusters_fit?c.clusters_fit:c.clusters,dots=clus.map((k,i)=>{const m=k.dots.length,title=m>1?`${m} issues`:`#${k.dots[0].n} ${esc(k.dots[0].title)}`;   // the hub sizes the ring for its count, and serves the fit view's own rings (#1146, #1334)
     const cx=ltX(k.x),cy=ltY(k.y);
     return `<circle data-k=${i} cx=${cx} cy=${cy} r=${k.r} fill="${m>1?"var(--chart-bg)":"var(--chart-ink)"}" stroke="var(--chart-ink)" stroke-width=2${k.dots.some(d=>d.approx||d.unknown_first)?' stroke-dasharray="3 2"':""} style="cursor:pointer"><title>${esc(title)} · ${esc(k.dots[0].text)} · flowing ${esc(k.dots[0].flowing_text)} · held ${esc(k.dots[0].held_text)} · closed ${esc(k.dots[0].closed)}${k.dots.some(d=>d.approx)?" · start approximate":""}${k.dots.some(d=>d.unknown_first)?" · first interval unknown":""}</title></circle>`+(m>1?`<line x1=${cx} y1=${cy-k.r} x2=${cx} y2=${cy-k.r-5} stroke="var(--chart-ink)" stroke-width=1 pointer-events=none></line><text x=${cx} y=${cy-k.r-9} fill="var(--chart-ink)" text-anchor=middle pointer-events=none stroke="var(--chart-bg)" stroke-width=3 style="paint-order:stroke">${m}</text>`:"")}).join("");   // a count sits clear above its ring on a leader line, never hidden inside it (#1304)
-  const ltV=v=>v?esc(v.text):"?",S="";   // the numbers live beside the names they answer: one summary row, never two copies of the same fact
-  const legend=`<p class="flg ltlg"><span><i style="background:var(--chart-bar)"></i>Rolling mean</span>${LT.band&&banded?`<span><i style="background:var(--chart-series-3);opacity:.28"></i>Standard deviation</span>`:""}</p>`+   // the series legend names only the marks the plot draws (#1304)
-    `<p class="flg ltlg"><span><i style="background:var(--chart-series-8)"></i>${esc(c.average.label)} <b>${ltV(c.average)}</b></span><span><i style="background:var(--chart-ok)"></i>${esc(c.median.label)} <b>${ltV(c.median)}</b>${c.median.ci_text?` ${esc(c.median.ci_text)}`:""}</span><span><i style="background:var(--chart-series-5)"></i>${esc(c.p85.label)} <b>${ltV(c.p85)}</b> ${ltExOf(c)}</span></p>`+ltKM(c);   // one summary row carries each statistic beside its value, the Kaplan-Meier interval with the median and the exclusion total beside the percentile (#1248, #1250); every line also labels itself at its end (#1304)
+  const legend=`<p class="flg ltlg"><span><i style="background:var(--chart-bar)"></i>Rolling mean</span>${LT.band&&bp?`<span><i style="background:var(--chart-series-3);opacity:.28"></i>Standard deviation</span>`:""}</p>`+   // the series legend names only the marks the plot draws (#1304)
+    `<p class="flg ltlg"><span><i style="background:var(--chart-series-8)"></i>${esc(c.average.label)} <b>${ltV(c.average)}</b></span><span><i style="background:var(--chart-ok)"></i>${esc(c.median.label)} <b>${ltV(c.median)}</b>${c.median.ci_text?` ${esc(c.median.ci_text)}`:""}</span><span><i style="background:var(--chart-series-5)"></i>${esc(c.p85.label)} <b>${ltV(c.p85)}</b></span></p>`+ltKM(c);   // one summary row carries each statistic beside its value; the one exclusion total sits in the header (#1248, #1250, #1334); every line also labels itself at its end (#1304)
   const pk=LT.pick!=null&&c.clusters[LT.pick]?c.clusters[LT.pick]:null;
   const rows=pk?`<table class=mtab><thead><tr><th>Issue</th><th>Title</th><th>Elapsed</th><th>Closed</th></tr></thead><tbody>${pk.dots.map(d=>`<tr data-o=${d.n} style="cursor:pointer"><td>#${d.n}</td><td>${esc(d.title)}</td><td>${esc(d.text)}</td><td>${esc(d.closed)}</td></tr>`).join("")}</tbody></table>`:"";   // the page's one table rule (#1146)
-  return ctl+S+legend+`<svg data-lt viewBox="0 0 ${LT_FRAME.width+2*ltP} ${LT_FRAME.height+2*ltP}">${axes}${ys}${xs}${band}${roll}${lines}${stack}${dots}</svg>`+rows;};
-const flowLead=l=>{const S=l.summary,c=LT.zc;
-  const head=`<p class=fhead>${esc((LT_TYPES.find(([k])=>k===l.type)||[0,"all cards"])[1].toLowerCase())} · <b>${esc((c||l).measure)}</b> · window ${l.window.size} ${esc(l.window.unit)}</p>`;   // the one exclusion total sits beside the percentile (#1248)
-  LT.cols=l.columns||[];if(!S)return head+`<p class=fnote>no closed card yet · ${c?ltExOf(c):ltEx(l.excluded,l.excluded_cards,l.excluded_total)}</p>`;
-  return head+ltChart(LT.zc||l.control[LT.log?"log":"jira"][LT.tf],l.coverage);};
+  return ctl+legend+`<svg data-lt viewBox="0 0 ${LT_FRAME.width+2*ltP} ${LT_FRAME.height+2*ltP}">${axes}${ys}${xs}${band}${roll}${lines}${stack}${dots}</svg>`+rows;};
+const flowLead=l=>{const S=l.summary,c=LT.zc||(l.control?l.control[LT.log?"log":"jira"][LT.tf]:null);
+  const head=`<p class=fhead>${esc((LT_TYPES.find(([k])=>k===l.type)||[0,"all cards"])[1].toLowerCase())} · <b>${esc(c?c.measure:l.measure)}</b> · window ${l.window.size} ${esc(l.window.unit)}</p>`+
+    (c&&c.summary?`<p class=fhead>min <b>${ltV(c.summary.minimum)}</b> · max <b>${ltV(c.summary.maximum)}</b> · ${esc(c.summary.plotted_text)} · ${ltExOf(c)}</p>`:"");   // the header is two rows: the view, then the summary it states (#1334)
+  LT.cols=l.columns||[];if(!S||!c)return head+`<p class=fnote>no closed card yet · ${c?ltExOf(c):ltEx(l.excluded,l.excluded_cards,l.excluded_total)}</p>`;
+  return head+ltChart(c,l.coverage);};
 const drawFlow=()=>{{const w=$("#flowb").clientWidth-20;flowW=w<600?600:w>1600?1600:(w|0);flowH=flowHeight(window.innerHeight)}const cfd=FLOWK==="cfd";
   const a=FLOWD[FLOWK];
   $("#flowb").innerHTML=!a?"<p class=fnote>Loading the chart from the hub.</p>":(cfd?flowCFD(a.cfd.ranges[CF.r]):flowLead(a.lead))+`<p class=flstat role=status>data read ${new Date(a.t*1000).toLocaleTimeString()}</p>`};
@@ -5685,7 +5686,8 @@ $("#flowb").onchange=e=>{if(e.target.id==="cfdr"){CF.r=e.target.value;drawFlow()
   if(e.target.id==="ltbd"){LT.band=e.target.checked;drawFlow();return}};   // the band redraws what the plot already holds, never a new read (#1304)
 $("#flowb").onclick=e=>{if(LT.noclick){LT.noclick=false;return}
   if(e.target.id==="ltzc"){LT.zr=null;ltGet();return}
-  if(e.target.id==="ltfit"){ltZoom(e.target.dataset.f,e.target.dataset.t);return}
+  if(e.target.id==="ltfit"){LT.win="fit";drawFlow();return}
+  if(e.target.id==="ltfull"){LT.win="full";drawFlow();return}   // the range control redraws the held payload, never a second read (#1334)
   const k=e.target.closest("circle[data-k]");if(k){LT.pick=+k.dataset.k;drawFlow();return}const r=e.target.closest("tr[data-o]");if(r)showIssue(+r.dataset.o,"__REPO__")};
 $("#bflow").onclick=()=>flowOpen("cfd");$("#blead").onclick=()=>flowOpen("lead");$("#flowchips").onclick=e=>{if(e.target.id==="ffx")flowDetach()};addEventListener("resize",()=>{if(!$("#flowov").hidden)drawFlow()});
 function squadChart(k){if(FLOWK===k&&!$("#flowov").hidden)flowOpen(k)}   // a pushed version redraws only the chart it names

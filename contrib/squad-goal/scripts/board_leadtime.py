@@ -152,6 +152,9 @@ PLOT_WIDTH, PLOT_HEIGHT = 672, 212  # the lead chart's usable frame: the 800 x 3
 DOT_PX = 9                    # dots closer than this many pixels merge into a numbered cluster
 LOG_TICKS = [1 / 24, 1, 7]           # days, drawn with the one duration format
 CUBE_TICKS = [1, 7, 30, 60]          # days, drawn with the one duration format
+# SPEC 1327 #1334: a linear view labels its y axis on one regular interval from this round-duration ladder, as minutes,
+# with 4 to 6 ticks. The ladder under 30 days covers every linear view.
+LINEAR_TICKS = (5, 10, 15, 30, 60, 120, 180, 240, 360, 720, 1440, 2880, 4320, 7200, 10080, 20160, 43200)
 SHORT_RANGE = timedelta(days=3)      # a view this short labels its x axis in hours, a longer one in days
 FIT_SHARE = 0.5                      # the cards cluster when the range they fill is at most half the view
 FIT_MIN_PAD = timedelta(hours=1)
@@ -205,6 +208,51 @@ def _clamp(v):
     return min(1.0, max(0.0, v))
 
 
+def _linear_ticks(max_hours):
+    """The y axis of a linear view: 0 to the round top at one interval from LINEAR_TICKS, 4 to 6 ticks (#1334)."""
+    ceiling = max(max_hours, 0.0)
+    step, count = 5 / 60, 3
+    for minutes in LINEAR_TICKS:
+        size = minutes / 60
+        ticks = math.ceil(ceiling / size) if ceiling else 0
+        if 3 <= ticks <= 5:
+            step, count = size, ticks
+            break
+    return step * count, [(step * k, _duration(step * k)) for k in range(count + 1)]
+
+
+def _clusters(dots, axis="x"):
+    """The dots merged into rings: two marks closer than DOT_PX in the plot frame share one cluster (#1146). In a fit
+    view the same dots merge at their fit position, so the page draws the rings that view holds (#1334)."""
+    clusters = []
+    for dot in dots:
+        for cluster in clusters:
+            if math.hypot((cluster["x"] - dot[axis]) * PLOT_WIDTH,
+                          (cluster["y"] - dot["y"]) * PLOT_HEIGHT) < DOT_PX:
+                cluster["dots"].append(dot)
+                break
+        else:
+            clusters.append({"x": dot[axis], "y": dot["y"], "dots": [dot]})
+    for cluster in clusters:   # a lone dot keeps the plain radius; a ring is sized for the count it holds (#1146)
+        cluster["r"] = DOT_RADIUS_PX if len(cluster["dots"]) == 1 else count_box_radius(len(cluster["dots"]))
+    return clusters
+
+
+def _band(dots, axis="x"):
+    """The rolling spread as one explicit polygon: each dot's high edge left to right, then its low edge back again,
+    never under zero and bounded by the first and last observation (#1334)."""
+    high = [{"x": d[axis], "y": d["rolling"]["y_high"], "hours": d["rolling"]["high"]} for d in dots]
+    low = [{"x": d[axis], "y": d["rolling"]["y_low"], "hours": d["rolling"]["low"]} for d in dots]
+    return {"low": low, "high": high, "polygon": high + low[::-1]}
+
+
+def _range_text(start, end):
+    """The printed range: the hour and minute of a short view, the two dates of a long one (#1334)."""
+    if (end - start) <= SHORT_RANGE:
+        return f"{_stamp(start)} to {_stamp(end)} UTC"
+    return f"{start:%b} {start.day} to {end:%b} {end.day} UTC"
+
+
 def _rolling(hours, log):
     """Centered mean and one sigma per dot, in hours. Linear: mean of hours. Log: geometric mean, sigma in log space."""
     size = _window_size(len(hours))
@@ -240,6 +288,9 @@ def control_chart(items, timeframe=None, log=False, now=None, start=None, end=No
 
     hours = [_hours(row) for row in plotted]
     rolling, size = _rolling(hours, log)
+    fit = _fit([utc(row["c"]) for row in plotted], start, end)
+    fit_start, fit_end = (datetime.fromisoformat(fit[k]) for k in ("start", "end")) if fit else (None, None)
+    fit_span = (fit_end - fit_start).total_seconds() if fit else 0
     days_max = max([*hours, *(high for _, _, high in rolling)], default=0) / 24
     axis = "log" if log else ("cube" if days_max >= JIRA_CUBE_DAYS else "linear")
     if axis == "log":
@@ -254,35 +305,32 @@ def control_chart(items, timeframe=None, log=False, now=None, start=None, end=No
             return _clamp(max(h / 24, 0) ** (1 / 3) / top ** (1 / 3))
         ticks = [(days * 24, _duration(days * 24), position(days * 24)) for days in CUBE_TICKS if days <= top]
     else:
-        top = float(max(1, math.ceil(max(hours + [high for _, _, high in rolling], default=0) * 1.1)))
+        top, ladder = _linear_ticks(max(hours + [high for _, _, high in rolling], default=0))
         def position(h):
             return _clamp(h / top)
-        ticks = [(top * k / 5, _duration(top * k / 5), position(top * k / 5)) for k in range(6)]
+        ticks = [(hrs, text, position(hrs)) for hrs, text in ladder]
 
     dots = []
     for row, hrs, (mean, low, high) in zip(plotted, hours, rolling, strict=True):
         closed = utc(row["c"])
         x = _clamp((closed - start).total_seconds() / span) if span > 0 else 1.0
         flowing, held = row.get("flowing", hrs), row.get("held", 0.0)
-        dots.append({"n": row["n"], "title": row.get("t", ""), "closed": closed.date().isoformat(), "hours": hrs,
-                     "text": _duration(hrs), "flowing": flowing, "held": held,
-                     "flowing_text": _duration(flowing), "held_text": _duration(held),
-                     "approx": row.get("approx", False), "unknown_first": row.get("unknown_first", False),
-                     **_stack_fields(row, position), "x": x, "y": position(hrs),
-                     "rolling": {"hours": mean, "low": low, "high": high, "text": _duration(mean),
-                                 "low_text": _duration(low), "high_text": _duration(high),
-                                 "y": position(mean), "y_low": position(low), "y_high": position(high)}})
+        dot = {"n": row["n"], "title": row.get("t", ""), "closed": closed.date().isoformat(), "hours": hrs,
+               "text": _duration(hrs), "flowing": flowing, "held": held,
+               "flowing_text": _duration(flowing), "held_text": _duration(held),
+               "approx": row.get("approx", False), "unknown_first": row.get("unknown_first", False),
+               **_stack_fields(row, position), "x": x, "y": position(hrs),
+               "rolling": {"hours": mean, "low": low, "high": high, "text": _duration(mean),
+                           "low_text": _duration(low), "high_text": _duration(high),
+                           "y": position(mean), "y_low": position(low), "y_high": position(high)}}
+        if fit:   # the fit range's own position for the same dot, so the page switches range from this one payload (#1334)
+            dot["xf"] = _clamp((closed - fit_start).total_seconds() / fit_span) if fit_span > 0 else 1.0
+        dots.append(dot)
 
-    clusters = []
-    for dot in dots:
-        for cluster in clusters:
-            if math.hypot((cluster["x"] - dot["x"]) * PLOT_WIDTH, (cluster["y"] - dot["y"]) * PLOT_HEIGHT) < DOT_PX:
-                cluster["dots"].append(dot)
-                break
-        else:
-            clusters.append({"x": dot["x"], "y": dot["y"], "dots": [dot]})
-    for cluster in clusters:   # a lone dot keeps the plain radius; a ring is sized for the count it holds (#1146)
-        cluster["r"] = DOT_RADIUS_PX if len(cluster["dots"]) == 1 else count_box_radius(len(cluster["dots"]))
+    clusters = _clusters(dots)
+    band = _band(dots) if dots else None
+    if fit and band:
+        band["fit"] = _band(dots, "xf")
 
     def line(hrs, label):
         return None if hrs is None else {"hours": hrs, "text": _duration(hrs), "y": position(hrs), "label": label}
@@ -290,9 +338,15 @@ def control_chart(items, timeframe=None, log=False, now=None, start=None, end=No
     median = line(km["median"]["hours"], "Median") if km["median"] else \
         {"hours": None, "text": NOT_ESTIMABLE, "y": None, "label": "Median"}
     median.update(estimable=km["estimable"], ci=km["ci"], ci_text=km["ci_text"])   # the Kaplan-Meier median (#1250)
+    excluded_total = sum(excluded.values())
     summary = {"average": line(statistics.fmean(hours), "Average") if hours else None,
                "median": median,
-               "p85": line(_p85(hours), "p85") if hours else None}
+               "p85": line(_p85(hours), "p85") if hours else None,
+               "minimum": line(min(hours), "Minimum") if hours else None,   # the expanded summary (#1334)
+               "maximum": line(max(hours), "Maximum") if hours else None,
+               "plotted": len(dots),
+               "plotted_text": f"{len(dots)} {'issue' if len(dots) == 1 else 'issues'} plotted",
+               "excluded": excluded_total}
     xticks = []
     for k in range(7):
         moment = start + timedelta(seconds=span * k / 6)
@@ -301,8 +355,7 @@ def control_chart(items, timeframe=None, log=False, now=None, start=None, end=No
         scope = f"{start:%b} {start.day} to {end:%b} {end.day}"
     else:
         scope = f"last {timeframe * 24} hours" if timeframe and timeframe < 7 else f"last {timeframe} days" if timeframe else "all closed cards"
-    sample = f"{len(dots)} {'issue' if len(dots) == 1 else 'issues'} plotted"
-    text = f"{scope}, {measure}, {sample}; Timeframe selects by {TIMEFRAME_SELECTS}"
+    text = f"{scope}, {measure}, {summary['plotted_text']}; Timeframe selects by {TIMEFRAME_SELECTS}"
     return {
         "plot_frame": {"width": PLOT_WIDTH, "height": PLOT_HEIGHT},
         "measure": measure,
@@ -312,18 +365,23 @@ def control_chart(items, timeframe=None, log=False, now=None, start=None, end=No
         "window": {"size": size, "unit": "issues", "centered": True},
         "dots": dots,
         "clusters": clusters,
+        **({"clusters_fit": _clusters(dots, "xf")} if fit else {}),
+        "band": band,
         "ticks": [{"hours": hrs, "text": text, "y": y} for hrs, text, y in ticks],
         "xticks": xticks,
-        "range": {"start": start.isoformat(), "end": end.isoformat()},
+        "range": {"start": start.isoformat(), "end": end.isoformat(), "text": _range_text(start, end)},
         "gate": {"hours": sum(_gate(row) for row in plotted), "text": _duration(sum(_gate(row) for row in plotted)),
                  "label": GATE_LABEL},   # the plotted cards only, like this chart's average and p85
-        "fit": _fit([utc(row["c"]) for row in plotted], start, end),
-        **summary,
+        "fit": fit,
+        "average": summary["average"],   # the reference lines stay at the top level the page reads them from
+        "median": median,
+        "p85": summary["p85"],
+        "summary": summary,
         "survival": km,
         "wip": wip(items),
         "excluded": excluded,
         "excluded_cards": excluded_cards,
-        "excluded_total": sum(excluded.values()),
+        "excluded_total": excluded_total,
         "text": text,
     }
 

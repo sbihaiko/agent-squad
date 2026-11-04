@@ -523,8 +523,10 @@ def test_the_head_line_states_the_window_and_the_excluded_total_once(hub, board,
     head = re.search(r"<p class=fhead>(.*?)</p>", out).group(1)
     assert "excluded" not in head, "the head line still states the exclusion"
     assert out.count("excluded") == 1, "the page states the exclusion more than once"
-    p85 = next(e for e in re.findall(r"<span>(.*?)</span>", "".join(re.findall(r'<p class="flg ltlg">(.*?)</p>', out))) if "p85" in e)
-    assert re.search(r'title="1 closed as not planned: #2"[^>]*>excluded 1<', p85), "the total and its named cards sit beside p85"
+    # Re-anchored (#1334): the one exclusion total sits in the header's summary row, not beside p85.
+    summary_row = re.findall(r"<p class=fhead>(.*?)</p>", out)[1]
+    assert re.search(r'title="1 closed as not planned: #2"[^>]*>excluded 1<', summary_row), \
+        "the one total and its named cards sit in the header's summary row"
     assert "window 20 issues" in head
     assert out.count("20 issues") == 1, "the rolling window is stated twice"
 
@@ -548,10 +550,14 @@ def test_the_zoom_chip_names_the_range_and_is_drawn_only_while_zoomed(hub, board
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-def test_a_clustered_view_offers_a_fit_button_that_names_its_range(hub, board, tmp_path):
+def test_a_clustered_view_offers_a_range_control_that_prints_its_range(hub, board, tmp_path):
+    # Re-anchored (#1334): the Fit button became the Fit data / Full window range control, printing the range it shows.
     _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
-    out = _lt_chart(hub, tmp_path, "lt-fit.js", _flow(hub)["lead"]["control"]["jira"]["all"])
-    assert "Fit to data: Oct 2 09:00 to Oct 2 10:00 UTC" in out
+    chart = _flow(hub)["lead"]["control"]["jira"]["all"]
+    out = _lt_chart(hub, tmp_path, "lt-fit.js", chart)
+    assert re.search(r"<span class=fchip id=ltrng><button id=ltfit[^>]*>Fit data</button>"
+                     r"<button id=ltfull[^>]*>Full window</button> " + re.escape(chart["range"]["text"]) + "</span>", out), \
+        "the range control does not name both ranges and print the one it shows"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
@@ -882,7 +888,9 @@ def test_moving_the_axis_title_leaves_the_other_chart_text_in_place(hub, board, 
     svg = _drawn_lead_svg(hub, board, tmp_path)
     others = [(attrs, body) for attrs, body in _svg_texts(svg) if "elapsed time" not in body]
     tick_labels = [(attrs, body) for attrs, body in others if _svg_attr(attrs, "x") == "57"]
-    assert len(tick_labels) == 6, "the six y ticks keep their place beside the axis"
+    # Re-anchored (#1334): the round linear ladder serves five ticks for this spread, not a fixed six.
+    assert len(tick_labels) == 5, "the round y ticks keep their place beside the axis"
+    assert [body for _, body in tick_labels] == ["0m", "2d", "4d", "6d", "8d"]
     assert all(_svg_attr(attrs, "text-anchor") == "end" for attrs, _ in tick_labels)
     x_labels = [(attrs, body) for attrs, body in others if _svg_attr(attrs, "text-anchor") == "middle"]
     assert len(x_labels) == 7, "the seven x ticks keep their place under the axis"
@@ -1276,3 +1284,46 @@ def test_the_chart_draws_the_stack_and_gate_time_in_the_boards_palette_roles(hub
         "gate time is not a legend entry: zero has no counterpart on a log axis (#1304)"
     note = re.search(r'<p class="fnote ltkm">(.*?)</p>', out).group(1)
     assert f"Gate time {chart['gate']['text']}" in note, "gate time is not a text metric beside the survival reading"
+
+
+# SPEC 1327 #1334: the header states the summary in two rows, and the range control switches x from the one payload.
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_header_states_the_summary_in_two_rows(hub, board, tmp_path):
+    item, events = _done(3, "2026-10-04T09:00:00Z")
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z"), 2: _done(2, "2026-10-03T09:00:00Z"),
+                3: ({**item, "cr": "not_planned"}, events)})
+    lead = hub.flow_lead(ty="task")["lead"]
+    out = _render(hub, tmp_path, "lt-two-row-head.js", f"flowLead({json.dumps(lead)})")
+
+    header = out.split("<p class=fhead><label>Timeframe")[0]   # the header rows, before the control row
+    rows = re.findall(r"<p class=fhead>(.*?)</p>", header)
+    assert len(rows) == 2, f"the header is not two rows: {rows}"
+    first, second = rows
+    assert "window 20 issues" in first, "the first row names the window"
+    assert "min <b>1d</b>" in second and "max <b>2d</b>" in second, "the second row states the summary"
+    assert "2 issues plotted" in second, "the second row states the plotted count"
+    assert re.search(r'title="1 closed as not planned: #3"[^>]*>excluded 1<', second), \
+        "the second row carries the one exclusion total"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_fit_data_and_full_window_switch_the_x_range_from_the_one_payload(hub, board, tmp_path):
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z")})
+    chart = _flow(hub)["lead"]["control"]["jira"]["all"]
+
+    full = _lt_chart(hub, tmp_path, "lt-range-full.js", chart)
+    assert "id=ltfit" in full and "id=ltfull" in full, "the range control names both ranges"
+    assert chart["range"]["text"] in full, "the full window range is not printed"
+
+    fitted = _render(hub, tmp_path, "lt-range-fit.js", f'(LT.win="fit",ltChart({json.dumps(chart)},null))')
+    assert chart["fit"]["text"] in fitted, "the fit range is not printed"
+    assert chart["range"]["text"] not in fitted
+
+    for control in ("ltfit", "ltfull"):
+        handler = next(line for line in hub.PAGE.splitlines() if f'e.target.id==="{control}"' in line)
+        assert "ltZoom" not in handler and "fetch(" not in handler, \
+            f"the {control} control makes a second request instead of redrawing the held payload"
+    fit_line = next(line for line in hub.PAGE.splitlines() if 'e.target.id==="ltfit"' in line)
+    assert 'LT.win="fit"' in fit_line
+    full_line = next(line for line in hub.PAGE.splitlines() if 'e.target.id==="ltfull"' in line)
+    assert 'LT.win="full"' in full_line
