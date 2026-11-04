@@ -347,7 +347,8 @@ def test_the_chart_reports_the_range_it_plots(lt):
     start, end = NOW - timedelta(days=10), NOW
     result = _chart(lt, [_closed(1, 5, days_ago=1)], start=start, end=end)
 
-    assert result["range"] == {"start": _iso(start), "end": _iso(end)}
+    assert result["range"] == {"start": _iso(start), "end": _iso(end), "text": "Nov 20 to Nov 30 UTC"}, \
+        "re-anchored (#1334): the range carries the text the page prints"
 
 
 def test_a_zoom_range_names_its_dates_in_the_window_text(lt):
@@ -362,7 +363,8 @@ def test_a_zoom_range_with_no_card_keeps_its_range_and_no_dots(lt):
     result = _chart(lt, [_closed(1, 5, days_ago=20)], start=start, end=end)
 
     assert result["dots"] == []
-    assert result["range"] == {"start": _iso(start), "end": _iso(end)}
+    assert result["range"] == {"start": _iso(start), "end": _iso(end), "text": "Nov 27 00:00 to Nov 28 00:00 UTC"}, \
+        "re-anchored (#1334): the range carries the text the page prints"
 
 
 def test_a_dot_is_the_flowing_and_held_hours_so_the_parked_time_is_out(lt):
@@ -561,3 +563,114 @@ def test_gate_time_in_the_summary_covers_every_delivered_card_and_the_chart_only
     assert summary == 3.0, "the summary's gate time covers every delivered card, like its average"
     assert chart == 3.0, "the chart's gate time covers the plotted cards only, like its average"
     assert chart <= summary
+
+
+# SPEC 1327 #1334: round-interval linear y ticks, an explicit band polygon and an expanded summary.
+LINEAR_LADDER_HOURS = {5 / 60, 10 / 60, 0.25, 0.5, 1, 2, 3, 4, 6, 12, 24, 48, 72, 120, 168,
+                       240, 336, 720}
+
+
+def test_linear_ticks_fall_on_one_round_interval_with_four_to_six_ticks(lt):
+    chart = _chart(lt, [_closed(n, h) for n, h in enumerate([2, 4, 6, 8, 10], start=1)])
+
+    assert chart["axis"] == "linear"
+    tick_hours = [tick["hours"] for tick in chart["ticks"]]
+    assert 4 <= len(tick_hours) <= 6, f"a linear view serves 4 to 6 y ticks: {tick_hours}"
+    steps = {round(b - a, 9) for a, b in zip(tick_hours, tick_hours[1:], strict=False)}
+    assert len(steps) == 1, f"the y ticks do not fall on one interval: {tick_hours}"
+    step = steps.pop()
+    assert step in LINEAR_LADDER_HOURS, f"the interval {step}h is not a round duration"
+    assert tick_hours[0] == 0.0 and tick_hours[-1] >= 10.0, "the axis starts at zero and reaches the data"
+    assert [tick["text"] for tick in chart["ticks"]] == ["0m", "2h", "4h", "6h", "8h", "10h"]
+
+
+def test_the_cube_scale_keeps_its_own_tick_ladder(lt):
+    chart = _chart(lt, [_closed(1, 30 * 24), _closed(2, 5)])
+
+    assert chart["axis"] == "cube"
+    assert [tick["text"] for tick in chart["ticks"]] == ["1d", "7d", "30d", "60d"]
+
+
+def test_the_band_is_a_polygon_along_each_dots_rolling_high_and_low(lt):
+    chart = _chart(lt, [_closed(n, h) for n, h in enumerate([2, 4, 6, 8, 10], start=1)])
+
+    band, dots = chart["band"], chart["dots"]
+    assert [p["x"] for p in band["high"]] == [d["x"] for d in dots]
+    assert [p["y"] for p in band["high"]] == [d["rolling"]["y_high"] for d in dots]
+    assert [p["x"] for p in band["low"]] == [d["x"] for d in dots]
+    assert [p["y"] for p in band["low"]] == [d["rolling"]["y_low"] for d in dots]
+    assert band["polygon"] == band["high"] + list(reversed(band["low"])), \
+        "the polygon is the high edge then the low edge back again"
+
+
+def test_the_band_never_falls_below_zero_and_spans_only_the_observed_range(lt):
+    items = [_closed(n, h, days_ago=30 - n) for n, h in enumerate([1, 2, 3, 4, 5, 6, 100], start=1)]
+    chart = _chart(lt, items, timeframe=30)
+
+    band, dots = chart["band"], chart["dots"]
+    assert all(p["hours"] >= 0 for p in band["low"]), "a band edge falls below zero hours"
+    assert all(p["y"] >= 0 for p in band["low"] + band["high"]), "a band point falls under the plot floor"
+    assert band["low"][0]["x"] == dots[0]["x"] and band["low"][-1]["x"] == dots[-1]["x"]
+    assert 0 < band["low"][0]["x"] and band["low"][-1]["x"] < 1, \
+        "the band is bounded by the first and last observation, never by the empty window"
+
+
+def test_the_summary_carries_the_minimum_maximum_plotted_and_excluded_counts(lt):
+    items = [_closed(1, 2), _closed(2, 4), _closed(3, 6), _closed(4, 8), _closed(5, 10),
+             {**_closed(9, 3), "reason": "not_planned"}]
+
+    summary = _chart(lt, items)["summary"]
+
+    assert summary["minimum"]["hours"] == 2.0 and summary["minimum"]["text"] == "2h"
+    assert summary["minimum"]["label"] == "Minimum"
+    assert summary["maximum"]["hours"] == 10.0 and summary["maximum"]["text"] == "10h"
+    assert summary["plotted"] == 5 and summary["plotted_text"] == "5 issues plotted"
+    assert summary["excluded"] == 1, "the summary counts the cards the chart leaves out"
+
+
+def test_the_fit_range_gives_each_dot_a_second_x_from_the_same_payload(lt):
+    items = [_at(1, NOW - timedelta(hours=5)), _at(2, NOW - timedelta(hours=4)), _at(3, NOW - timedelta(hours=3))]
+    chart = _chart(lt, items, timeframe=30)
+
+    assert chart["fit"] is not None
+    assert all(0.0 <= dot["xf"] <= 1.0 for dot in chart["dots"])
+    assert [dot["xf"] for dot in chart["dots"]] != [dot["x"] for dot in chart["dots"]]
+    assert [p["x"] for p in chart["band"]["fit"]["high"]] == [dot["xf"] for dot in chart["dots"]]
+    assert len(chart["clusters"]) == 1, "the cards share one ring in the whole window"
+    assert len(chart["clusters_fit"]) == 3, "the fit view separates the dots it spreads, so it re-clusters them"
+
+
+def test_a_flat_view_serves_no_fit_range_and_no_fit_position(lt):
+    chart = _chart(lt, [_closed(1, 5, days_ago=1), _closed(2, 5, days_ago=10), _closed(3, 5, days_ago=20)],
+                   timeframe=30)
+
+    assert chart["fit"] is None
+    assert all("xf" not in dot for dot in chart["dots"])
+    assert "clusters_fit" not in chart and "fit" not in chart["band"]
+
+
+def test_the_range_carries_its_printed_text(lt):
+    result = _chart(lt, [_closed(1, 5, days_ago=1)], timeframe=30)
+    zoomed = _chart(lt, [_closed(1, 5, days_ago=20)], start=NOW - timedelta(days=3), end=NOW - timedelta(days=2))
+
+    assert result["range"]["text"] == "Oct 31 to Nov 30 UTC"
+    assert zoomed["range"]["text"] == "Nov 27 00:00 to Nov 28 00:00 UTC"
+
+
+# Re-anchored (#1334): the ladder's long-duration branches are asserted, not only its 2h step.
+def test_a_long_linear_view_reaches_its_ceiling_on_a_round_step(lt):
+    chart = _chart(lt, [_closed(1, 650)])
+
+    assert chart["axis"] == "linear"
+    tick_hours = [tick["hours"] for tick in chart["ticks"]]
+    assert 4 <= len(tick_hours) <= 6, f"a linear view serves 4 to 6 y ticks: {tick_hours}"
+    steps = {round(b - a, 9) for a, b in zip(tick_hours, tick_hours[1:], strict=False)}
+    assert steps == {168.0}, f"a 27-day view does not fall on the 7-day step: {tick_hours}"
+    assert tick_hours[-1] >= 650.0, "the last tick does not reach the data's ceiling"
+
+
+def test_the_range_text_names_both_years_when_the_view_crosses_one(lt):
+    chart = _chart(lt, [_closed(1, 5)], start=datetime(2026, 12, 30, tzinfo=UTC),
+                   end=datetime(2027, 1, 3, tzinfo=UTC))
+
+    assert chart["range"]["text"] == "Dec 30, 2026 to Jan 3, 2027 UTC"

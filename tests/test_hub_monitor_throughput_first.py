@@ -110,7 +110,8 @@ def test_the_monitor_carries_the_one_loop_switch_and_the_panel_keeps_the_log(hub
     monitor = _section(page, "inst")
     assert "id=iloop" in monitor, "the Monitor carries the loop slot"
     panel = _section(page, "lop")
-    assert "id=lopb" in panel and "id=histb" in panel, panel[:200]
+    assert "id=lopb" in panel, panel[:200]
+    assert "id=histb" not in panel and "id=list" not in panel, "the run history left the Loop panel (#1277)"
     assert "role=switch" not in panel, "the Loop panel carries no second switch"
 
 

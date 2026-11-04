@@ -2,16 +2,18 @@
 import importlib.util
 import json
 import os
-import re
-import shutil
-import subprocess
+import sys
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
+sys.path.insert(0, str(ROOT / "tests"))
+
+from test_hub_run_groups import _js, _run  # noqa: E402  the page's own drawList, run in node over the answer
 
 
 @pytest.fixture(scope="module")
@@ -88,11 +90,11 @@ def test_loop_caps_is_none_when_the_resolution_fails(hub):
 
 
 def test_the_header_prints_runs_then_agents_over_the_ceiling_and_names_what_waits(hub):
-    rows = [{"spend": 1.0, "agents": a} for a in (2, 3)]
+    rows = [{"state": "running", "live": True, "spend": 1.0, "agents": a} for a in (2, 3)]
     caps = {"runs": 10, "children": 20, "waiting": [{"ceiling": "caps.children", "holder": "run-x:route.router.4"}]}
     h = hub.group_header("running", rows, caps)
     assert h["text"] == "RUNS 2/10 · AGENTS 5/20 · waiting: run-x:route.router.4 (caps.children)"
-    assert _render_in_the_browser(hub, caps, rows)["text"] == h["text"]     # the page paints the same line
+    assert hub.run_groups(rows, caps)[0]["text"] == h["text"]              # the runs answer carries the same line
 
 
 def test_scan_counts_the_children_still_working(hub):
@@ -105,34 +107,49 @@ def test_scan_counts_the_children_still_working(hub):
     assert hub.scan(str(p))["agents"] == 2      # the two children with no outcome yet
 
 
-def test_the_page_binds_the_header_tooltip_to_the_group_spend():
+def test_the_runs_answer_binds_the_header_tooltip_to_the_group_spend(hub):
+    """Re-anchored (#1277): the caps no longer reach the page. The runs answer reads them and carries the tooltip."""
     src = HUB_PY.read_text()
-    assert "const CAPS=__CAPS__;" in src                                        # the caps reach the page
-    assert '.replace("__CAPS__", json.dumps(loop_caps()))' in src               # ... from the caps resolution
-    assert 'title="${esc(h.title)}">${h.text}' in src                           # spend in the tooltip, occupancy as the text
+    assert "const CAPS=" not in src and "__CAPS__" not in src                   # no caps are substituted into the page
+    assert "function groupHeader(" not in src                                   # the page holds no copy of the rule
+    rows = [{"state": "running", "live": True, "spend": s, "agents": 3} for s in (1.1, 2.2, 3.3)]
+    h = hub.run_groups(rows, {"runs": 10, "children": 20})[0]
+    assert h["text"] == "RUNS 3/10 · AGENTS 9/20"
+    assert h["title"] == "$6.60"                                                # spend in the tooltip, occupancy as the text
 
 
-def _render_in_the_browser(hub, caps, rows):
-    """The header the page really paints: the served function, run by node. node is already a hard dependency of this suite."""
-    assert shutil.which("node"), "node is not installed: the page's own groupHeader cannot be run"
-    page = hub.PAGE
-    js = "\n".join(re.search(rf"^{header}.*$", page, re.M).group(0) for header in (r"const usd=", r"function groupHeader\("))
-    script = f"const CAPS={json.dumps(caps)};\n{js}\nconsole.log(JSON.stringify(groupHeader('running',{json.dumps(rows)})))"
-    out = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=60)
-    assert out.returncode == 0, out.stderr
-    return json.loads(out.stdout)
+def test_the_page_paints_the_text_and_the_title_the_answer_carries(hub):
+    """The served page, run in node: it draws the header the hub built, never one of its own (#1277)."""
+    rows = [{"id": f"run-20261011-1010{n}0-abcd", "state": "running", "live": True, "rank": 0, "age": 10,
+             "spend": s, "agents": 3, "dur": 1, "port": 1234} for n, s in enumerate((1.1, 2.2, 3.3))]
+    groups = hub.run_groups(rows, {"runs": 10, "children": 20})
+    out = _run(_js(rows, "const a=boot();a.runs(R,G);a.draw();return {html:a.listHtml()};", groups))
+    assert '<span class=sr title="$6.60">RUNS 3/10 · AGENTS 9/20</span>' in out["html"]
 
 
-def test_the_page_renders_the_occupancy_header_with_the_graphs_caps(hub):
-    rows = [{"spend": s, "agents": 3} for s in (1.1, 2.2, 3.3)]
-    h = _render_in_the_browser(hub, {"runs": 10, "children": 20}, rows)
+def test_the_real_run_list_row_carries_the_fields_the_group_rule_reads(hub, tmp_path):
+    """The rows run_groups classifies are run_list's own: every one carries `state`, `live`, `rank` and `age` (#1277)."""
+    folder = tmp_path / "runs" / "run-real"
+    folder.mkdir(parents=True)
+    (folder / "record.jsonl").write_text(json.dumps({"ts": time.time() - 600, "event": "run_start", "pos": 1}) + "\n")
+    row, _ = hub.run_row(str(folder), "4321", [])
+    assert row["state"] in hub.LIVE_STATES and row["live"] is True and isinstance(row["age"], int)
+    groups = hub.run_groups([row], {"runs": 6, "children": 20})
+    assert [g["key"] for g in groups if not g["empty"]] == ["running"]   # a live row lands in WORKERS, never an age band
+    assert groups[0]["text"] == "RUNS 1/6 · AGENTS 0/20" and groups[0]["title"] == "$0.00"
+
+
+def test_the_runs_answer_carries_the_occupancy_header_with_the_graphs_caps(hub):
+    rows = [{"state": "completed", "live": False, "age": 600, "spend": 1.0, "agents": 0}]
+    rows += [{"state": "running", "live": True, "spend": s, "agents": 3} for s in (1.1, 2.2, 3.3)]
+    h = hub.run_groups(rows, {"runs": 10, "children": 20})[0]
     assert h["text"] == "RUNS 3/10 · AGENTS 9/20"
     assert h["title"] == "$6.60"
 
 
-def test_the_page_renders_plain_counts_when_the_graph_is_unreadable(hub):
-    rows = [{"spend": 1.0, "agents": 3}] * 3
-    h = _render_in_the_browser(hub, None, rows)   # json null: what loop_caps() returns for an unreadable graph
+def test_the_runs_answer_keeps_plain_counts_when_the_graph_is_unreadable(hub):
+    rows = [{"state": "running", "live": True, "spend": 1.0, "agents": 3}] * 3
+    h = hub.run_groups(rows, None)[0]   # json null: what loop_caps() returns for an unreadable graph
     assert h["text"] == "3 · 9"
     assert h["title"] == "$3.00"
 
@@ -164,9 +181,9 @@ def test_loop_caps_names_the_owner_defaults_per_run_ceilings(hub):
 
 
 def test_the_running_header_tooltip_labels_the_per_run_pair_beside_the_spend(hub):
-    rows = [{"spend": 1.0, "agents": 1}]
+    rows = [{"state": "running", "live": True, "spend": 1.0, "agents": 1}]
     caps = {"runs": 10, "children": 20, "per_run": {"label": "per run: max_parallel 2 · route: max_children 4, max_parallel 2"}}
     h = hub.group_header("running", rows, caps)
     assert h["text"] == "RUNS 1/10 · AGENTS 1/20"          # the machine-wide pair stays the text
     assert h["title"] == "$1.00 · per run: max_parallel 2 · route: max_children 4, max_parallel 2"
-    assert _render_in_the_browser(hub, caps, rows) == h     # the page paints the same line
+    assert hub.run_groups(rows, caps)[0] == {**h, "key": "running", "label": "WORKERS", "empty": False}   # the answer carries the same line

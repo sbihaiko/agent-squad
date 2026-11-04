@@ -84,3 +84,19 @@ def test_an_empty_pane_says_so_in_one_sentence(hub):
 def test_the_runs_tab_draws_nothing_while_another_tab_is_open(hub):
     html, = _draw(hub, [{"tab": "flow", "runs": [LIVE], "ended": [ENDED]}])
     assert html == ""
+
+
+def test_the_run_history_is_the_bottom_of_the_runs_pane(hub):
+    """#1277: the history left Settings > Loop and sits under Live and Ended today."""
+    pane = hub.PAGE[hub.PAGE.index("id=tab-runs"):hub.PAGE.index("</section>", hub.PAGE.index("id=tab-runs"))]
+    assert pane.index("id=main") < pane.index("id=list"), "the run history is not under Live and Ended today"
+
+
+def test_the_groups_come_from_the_answer_and_no_caps_are_substituted(hub):
+    """The hub builds each header and marks empty bands; the page's own rule and the served caps constant are gone (#1277)."""
+    src = hub.PAGE
+    assert 'fetch("/api/runs?groups=1")' in src, "the page does not ask for the answer that carries the groups"
+    assert "GROUPS=Array.isArray(d)?[]:d.groups||[]" in src, "the page does not take the groups the answer carries"
+    assert "GROUPS=d.runs||[]" not in src
+    assert "function groupHeader(" not in src, "the page builds a group header again"
+    assert "const CAPS=" not in src and "__CAPS__" not in src, "the caps are substituted into the page again"

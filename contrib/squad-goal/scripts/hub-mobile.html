@@ -1160,6 +1160,8 @@ function runRow(r, url) {
 }
 async function loadRuns() {
   try {
+    // The phone reads the bare runs array: the history groups are the desktop Runs tab's, and the array is the shape this
+    // route kept for every client (#1277).
     const [live, ended] = await Promise.all([call("/api/runs"), call("/api/ended")]);
     $("runs-live").replaceChildren(...live.filter(r => r.running).map(r => runRow(r, r.url || runURLs(r.id).page)));
     $("runs-ended").replaceChildren(...ended.map(r => runRow(r, "/ended/" + encodeURIComponent(r.id))));
