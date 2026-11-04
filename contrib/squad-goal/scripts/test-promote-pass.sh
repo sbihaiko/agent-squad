@@ -218,7 +218,7 @@ SG_PROMOTE_RESERVE_SECONDS=600 bash "$d/promote-pass.sh" > "$T/out5" 2>&1; rc=$?
 export CHECKS_DIR=$T
 # The shard names come from a workflow file; this fixture names four, so the shard cases keep proving the matrix the
 # repository's own ci.yml no longer carries while #1062 holds it withdrawn (a case below proves the withdrawn shape).
-printf 'jobs:\n  full-proof:\n    strategy:\n      matrix:\n        shard: [0, 1, 2, 3]\n' > "$T/ci-shards.yml"
+printf 'jobs:\n  ruff:\n    name: ruff\n  mypy:\n    name: mypy\n  fast-battery:\n    name: fast-battery\n  full-proof:\n    strategy:\n      matrix:\n        shard: [0, 1, 2, 3]\n' > "$T/ci-shards.yml"
 export SG_CI_WORKFLOW="$T/ci-shards.yml"
 cat > "$T/bin/ghread" <<'EOF'
 #!/bin/bash
@@ -229,8 +229,8 @@ esac
 EOF
 chmod +x "$T/bin/ghread"
 shards() {  # <sha> <state of shard 0> ... <state of shard 3>: a conclusion, "running" (unfinished) or "none" (missing)
-  # CHECK_CONCLUSION names the conclusion of the check job of the same commit (default success; none: the job is missing).
-  local s=$1 k=0 out="" c ck=${CHECK_CONCLUSION:-success}; shift
+  # CHECK_CONCLUSION names the conclusion of every fast-tier job of the same commit (default success; none: the jobs are missing).
+  local s=$1 k=0 out="" c j ck=${CHECK_CONCLUSION:-success}; shift
   for c in "$@"; do
     case "$c" in
       none) ;;
@@ -239,7 +239,9 @@ shards() {  # <sha> <state of shard 0> ... <state of shard 3>: a conclusion, "ru
     esac
     k=$((k + 1))
   done
-  [ "$ck" = none ] || out="{\"name\":\"check\",\"status\":\"completed\",\"conclusion\":\"$ck\"},$out"
+  if [ "$ck" != none ]; then
+    for j in ruff mypy fast-battery; do out="{\"name\":\"$j\",\"status\":\"completed\",\"conclusion\":\"$ck\"},$out"; done
+  fi
   echo "{\"check_runs\":[${out%,}]}" > "$T/checks-$s"
 }
 adv dev shards-green; tg=$(tip dev); rm -f "$T/suite-rc"; n=$(runs)
@@ -300,8 +302,18 @@ adv dev check-red; tc=$(tip dev); before=$(tip stg); n=$(runs)
 CHECK_CONCLUSION=failure shards "$tc" success success success success; SG_GHREAD="$T/bin/ghread" pass; rc=$?
 [ $rc != 0 ] && [ "$(tip stg)" = "$before" ] && [ "$(runs)" = "$n" ] && ok "a red check job holds the tip and runs no suite" \
   || ko "red check: rc $rc, stg $(tip stg), runs $(runs) was $n"
-/usr/bin/grep "promote-pass: $tc" "$SG_STATE/promote.log" | /usr/bin/grep -q "CI check is red" && ok "the refusal names the red check job" \
+/usr/bin/grep "promote-pass: $tc" "$SG_STATE/promote.log" | /usr/bin/grep -q "CI ruff is red" && ok "the refusal names the red check job" \
   || ko "red check line: $(/usr/bin/grep "$tc" "$SG_STATE/promote.log")"
+
+# #1322: one red fast-tier job holds the tip even when the other two are green, and the refusal names that job.
+adv dev mypy-red; tm=$(tip dev); before=$(tip stg); n=$(runs)
+shards "$tm" success success success success
+sed 's/"name":"mypy","status":"completed","conclusion":"success"/"name":"mypy","status":"completed","conclusion":"failure"/' "$T/checks-$tm" > "$T/checks-$tm.x" && mv "$T/checks-$tm.x" "$T/checks-$tm"
+SG_GHREAD="$T/bin/ghread" pass; rc=$?
+[ $rc != 0 ] && [ "$(tip stg)" = "$before" ] && [ "$(runs)" = "$n" ] && ok "a red mypy job holds the tip and runs no suite" \
+  || ko "red mypy: rc $rc, stg $(tip stg), runs $(runs) was $n"
+/usr/bin/grep "promote-pass: $tm" "$SG_STATE/promote.log" | /usr/bin/grep -q "CI mypy is red" && ok "the refusal names the red mypy job" \
+  || ko "red mypy line: $(/usr/bin/grep "$tm" "$SG_STATE/promote.log")"
 
 # A tip inside the quiet window opens the dev-to-stg pull request, so its four shards start before the proof reads them.
 adv dev shard-open; to=$(tip dev); n=$(runs); : > "$T/gh.log"

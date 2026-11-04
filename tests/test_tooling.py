@@ -1,6 +1,5 @@
 """Tooling guards. Guard for the mypy rule: `mypy squad` finds no error."""
 
-import json
 import os
 import re
 import subprocess
@@ -65,15 +64,25 @@ def test_the_wave_check_keeps_the_output_of_a_red_tip():
     assert "the check's own output is $clog" in txt, "the WAVE CHECK RED line does not name the log"
 
 
-def _ci_run_lines() -> list[str]:
+FAST_TIER_JOBS = ("ruff", "mypy", "fast-battery")
+
+
+def _ci_workflow() -> dict:
     import yaml
 
-    wf = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
-    return [step["run"] for job in wf["jobs"].values() for step in job["steps"] if "run" in step]
+    return yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
+
+
+def _job_python(job: dict) -> str:
+    return next(s["with"]["python-version"] for s in job["steps"] if s.get("uses", "").startswith("actions/setup-python"))
+
+
+def _ci_run_lines() -> list[str]:
+    return [step["run"] for job in _ci_workflow()["jobs"].values() for step in job["steps"] if "run" in step]
 
 
 def test_ci_workflow_runs_ruff_mypy_and_pytest_in_order():
-    """Guard for the CI rule: ci.yml runs ruff, then mypy, then pytest."""
+    """Guard for the CI rule: ci.yml runs ruff, then mypy, then pytest, in the fast tier's job order."""
     runs = _ci_run_lines()
     want = ["ruff check squad tests", "mypy squad", "python3 -m pytest"]
     idx = [next((i for i, r in enumerate(runs) if w in r), None) for w in want]
@@ -81,13 +90,39 @@ def test_ci_workflow_runs_ruff_mypy_and_pytest_in_order():
     assert idx == sorted(idx), "ci.yml must run ruff, mypy, pytest in that order"
 
 
-def test_ci_check_job_runs_mypy_squad_as_its_own_step():
-    """Guard for the mypy rule: the CI check job runs `mypy squad` as a step of its own, once for each supported
-    Python. The tree's own mypy call carries `heavy`, so the rule keeps this fast gate in the default run (ADR-0018)."""
-    runs = _ci_run_lines()
-    assert runs.count("mypy squad") == 2, (
-        f"the CI check job runs `mypy squad` as its own step, once per supported Python; found {runs}"
-    )
+def test_fast_tier_is_three_parallel_jobs_on_python_313_and_nothing_else():
+    """Guard for the fast tier (#1322): the dev-to-stg pull request starts exactly the ruff, mypy and fast-battery jobs.
+    Each runs on Python 3.13 alone, with no `needs:` between them, so the three run in parallel."""
+    wf = _ci_workflow()
+    assert tuple(wf["jobs"]) == FAST_TIER_JOBS, f"the fast tier is exactly {FAST_TIER_JOBS}; found {list(wf['jobs'])}"
+    for name, job in wf["jobs"].items():
+        assert "needs" not in job, f"{name} waits for another job, so the fast tier is not parallel"
+        assert "dev" in str(job.get("if", "")), f"{name} refuses a pull request from any branch but dev"
+        assert _job_python(job) == "3.13", f"{name} runs on Python 3.13 alone"
+    assert [s.get("run") for s in wf["jobs"]["ruff"]["steps"] if "run" in s] == ["ruff check squad tests"]
+    assert [s.get("run") for s in wf["jobs"]["fast-battery"]["steps"] if "run" in s] == [
+        'python3 -m pytest -n auto -m "not heavy"'
+    ]
+
+
+def test_claude_md_ci_rule_names_the_fast_tier_jobs_its_guard_and_no_other_job():
+    """Guard for the CI rule in CLAUDE.md (#1322): the rule names the fast tier, its guard, and exactly the jobs of
+    ci.yml. A job the rule names but the workflow lacks, or the reverse, fails here (ADR-0018)."""
+    claude = (ROOT / "CLAUDE.md").read_text()
+    rule = next(line for line in claude.splitlines() if line.startswith("- **CI runs"))
+    assert "fast tier" in rule and "tests/test_tooling.py" in rule, rule
+    named = tuple(re.findall(r"`([a-z-]+)` job", rule))
+    assert set(named) == set(_ci_workflow()["jobs"]) == set(FAST_TIER_JOBS), f"rule names {named}"
+    assert "full-proof" not in rule and "shard" not in rule, "the rule claims no job the workflow lacks"
+
+
+def test_ci_mypy_job_runs_mypy_squad_once_on_python_313():
+    """Guard for the mypy rule: the fast tier's mypy job runs `mypy squad` once, on Python 3.13. The tree's own mypy
+    call carries `heavy`, so the rule keeps this fast gate in the default run (ADR-0018)."""
+    wf = _ci_workflow()
+    runs = [s.get("run") for s in wf["jobs"]["mypy"]["steps"] if s.get("run") == "mypy squad"]
+    assert runs == ["mypy squad"], f"the mypy job runs `mypy squad` once; found {runs}"
+    assert _job_python(wf["jobs"]["mypy"]) == "3.13"
 
 
 def test_no_script_invokes_lsof_by_a_platform_specific_path():
@@ -122,7 +157,7 @@ def test_every_process_table_read_of_a_command_asks_for_the_full_one():
 def test_ci_workflow_triggers_one_job_that_covers_both_pythons_and_keeps_the_token_read_only():
     """Guard for the CI rule: the one pull request that carries dev to stg starts the run, and nothing else.
 
-    Python 3.11 and 3.13 run inside one job, with a read-only token. No branch push starts a run: a work branch is
+    The jobs run with a read-only token. No branch push starts a run: a work branch is
     proven by the local fast gate, and the landing by the promotion proof. A pull request to any other branch starts
     none, and neither does a pull request to stg from a branch other than dev.
     """
@@ -134,11 +169,9 @@ def test_ci_workflow_triggers_one_job_that_covers_both_pythons_and_keeps_the_tok
     assert set(on) == {"pull_request"}, f"only that pull request starts the run; found {sorted(on)}"
     assert "push" not in on and "pull_request_target" not in on, "a branch push starts no run"
     assert wf["permissions"] == {"contents": "read"}
-    job = next(iter(wf["jobs"].values()))
-    assert "dev" in str(job.get("if", "")), f"the job refuses a pull request from any branch but dev: {job.get('if')!r}"
-    assert job["timeout-minutes"] == 20, "the job keeps the twenty minutes it gives itself"
-    versions = [s["with"]["python-version"] for s in job["steps"] if s.get("uses", "").startswith("actions/setup-python")]
-    assert versions == ["3.11", "3.13"], f"one job runs both supported versions in order; found {versions}"
+    for job in wf["jobs"].values():
+        assert "dev" in str(job.get("if", "")), f"the job refuses a pull request from any branch but dev: {job.get('if')!r}"
+        assert job["timeout-minutes"] == 20, "each job keeps the twenty minutes it gives itself"
     uses = [s["uses"] for j in wf["jobs"].values() for s in j["steps"] if "uses" in s]
     assert uses and all("@v" in u and u.rsplit("@v", 1)[1].isdigit() for u in uses)
 
@@ -166,9 +199,9 @@ def test_one_commit_starts_the_check_job_and_a_landing_waits_in_no_queue():
 
     text = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
     wf = yaml.safe_load(text)
-    assert set(wf["jobs"]) == {"check"}, "one commit starts the check job and no other (#1062: the shards are withdrawn)"
-    job = wf["jobs"]["check"]
-    assert "matrix" not in (job.get("strategy") or {}), "a matrix splits the check job into jobs waiting for runners"
+    assert tuple(wf["jobs"]) == FAST_TIER_JOBS, "one commit starts the fast tier's jobs and no other (#1062, #1322)"
+    for job in wf["jobs"].values():
+        assert "matrix" not in (job.get("strategy") or {}), "a matrix splits a job into legs that wait for runners"
     con = wf["concurrency"]
     group = con["group"]
     assert "github.sha" in group, (
@@ -268,24 +301,19 @@ def test_the_deselection_adr_records_the_rule_and_is_indexed():
     assert "[0139](0139-a-test-without-its-fixture-repo-is-deselected.md)" in (ROOT / "docs" / "adr" / "README.md").read_text()
 
 
-def test_ci_e2e_step_names_no_mesenai_path_the_job_never_checks_out():
-    """Guard for ADR-0139: the e2e step keeps its place but sets no MESENAI_REPO path the job never checks out, and
-    the gate step keeps its own command."""
-    import yaml
-
-    wf = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
-    steps = [s for j in wf["jobs"].values() for s in j["steps"]]
-    e2e = [s for s in steps if "test_gui_test_e2e.py" in (s.get("run") or "")]
-    assert len(e2e) == 1, steps
-    assert "MESENAI_REPO" not in json.dumps(e2e[0]), e2e[0]
-    assert e2e[0].get("env", {}) == {}, e2e[0]
-    assert any("pytest -n auto" in r for r in _ci_run_lines()), "the gate step must keep its own command"
+def test_ci_fast_tier_names_no_gui_e2e_step_and_no_mesenai_path():
+    """Guard for ADR-0139 and #1322: the GUI e2e suite leaves the fast tier, so no CI step runs it or names a MESENAI_REPO
+    path the runner never checks out."""
+    text = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+    assert "test_gui_test_e2e.py" not in text, "the GUI e2e suite is outside the fast tier"
+    assert "MESENAI_REPO" not in text
 
 
-def test_ci_gate_steps_run_the_fast_battery_on_both_pythons():
-    """Guard for the suite rule: each gate step runs the fast battery, which leaves the `heavy` tests out."""
-    gates = [r for r in _ci_run_lines() if r.startswith("python3 -m pytest") and "test_gui_test_e2e.py" not in r]
-    assert gates == ['python3 -m pytest -n auto -m "not heavy"'] * 2, gates
+def test_ci_gate_steps_run_the_fast_battery_once_on_python_313():
+    """Guard for the suite rule: the fast-battery job runs the fast battery once, which leaves the `heavy` tests out."""
+    gates = [r for r in _ci_run_lines() if r.startswith("python3 -m pytest")]
+    assert gates == ['python3 -m pytest -n auto -m "not heavy"'], gates
+    assert _job_python(_ci_workflow()["jobs"]["fast-battery"]) == "3.13"
 
 
 # #793: a fixture that runs the real autobug.sh or autofrontier.sh pins its own disk floor. Without the pin the
