@@ -12,7 +12,7 @@ HUB_PY = SCRIPTS / "hub.py"
 PAGE = SCRIPTS / "hub-mobile.html"
 GESTURE_JS = SCRIPTS / "hub-mobile-gesture.js"
 BOARD_FILTER_JS = SCRIPTS / "board-filter.js"
-SCREEN_ROUTES = {"cost": "/api/stats"}   # #1028: the plans and the models left the More tab for Settings
+SCREEN_ROUTES = {"cost": "/api/stats", "lead": "/api/chart/lead"}   # #1028: the plans and the models left the More tab for Settings; the lead chart reads the desktop route (#1333)
 PERIODS = ["hour", "day", "month"]
 HUB_GET_ROUTES = {
     "/api/adapter-errors", "/api/board", "/api/chart/cfd", "/api/chart/lead", "/api/delivery", "/api/ended", "/api/issue", "/api/leadtime", "/api/limits", "/api/load", "/api/models",
