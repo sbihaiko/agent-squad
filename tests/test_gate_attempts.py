@@ -166,6 +166,58 @@ class TestProjection:
         assert ga.counts(journal) == {}
 
 
+class TestGating:
+    """The gating fact (#1257): a card reads Gating while a gate is live for its wave, or while the
+    wave's last attempt ended red or unproven with none since. The fact is read from the attempt
+    journal, so a hub restart re-reads the same answer."""
+
+    def test_a_live_gate_holds_the_card_in_gating(self, ga, journal):
+        assert ga.gating(journal, 1257, "abc", live=True) is True
+
+    def test_a_card_with_no_attempt_is_not_gating(self, ga, journal):
+        assert ga.gating(journal, 1257, "abc") is False
+
+    def test_the_last_attempt_red_or_unproven_holds_the_card_in_gating(self, ga, journal):
+        ga.record_attempt(journal, 1257, "abc", "fail", "a1", now=100)
+        assert ga.gating(journal, 1257, "abc") is True
+        ga.record_attempt(journal, 1257, "abc", "unproven", "a2", now=200)
+        assert ga.gating(journal, 1257, "abc") is True
+
+    def test_a_passed_last_attempt_leaves_gating(self, ga, journal):
+        ga.record_attempt(journal, 1257, "abc", "fail", "a1", now=100)
+        ga.record_attempt(journal, 1257, "abc", "pass", "a2", now=200)
+        assert ga.gating(journal, 1257, "abc") is False
+
+    def test_only_the_attempts_of_the_cards_wave_count(self, ga, journal):
+        """The wave is named by its tip: a red attempt at another tip -- a work-branch gate, a
+        different wave -- does not hold this wave's card in Gating."""
+        ga.record_attempt(journal, 1257, "abc", "fail", "a1", now=100)
+        assert ga.gating(journal, 1257, "def") is False
+
+    def test_a_reuse_marker_is_no_attempt_since_the_red(self, ga, journal):
+        ga.record_attempt(journal, 1257, "abc", "fail", "a1", now=100)
+        ga.record_reuse(journal, 1257, "abc", "m1", now=200)
+        assert ga.gating(journal, 1257, "abc") is True
+
+    def test_the_answer_survives_a_restart(self, ga, journal, tmp_path):
+        """The journal on disk is the only state: a fresh read under a new process answers the same
+        card the same column, so a hub restart changes nothing (#1257)."""
+        ga.record_attempt(journal, 1257, "abc", "unproven", "a1", now=100)
+        reloaded = _load("gate_attempts_reloaded", SCRIPTS / "gate_attempts.py")
+        assert reloaded.gating(journal, 1257, "abc") is True
+
+    def test_the_live_gate_marker_names_the_card_and_the_wave_tip(self, ga, tmp_path):
+        """gate.sh writes the attempt's start marker beside the state dir and drops it once the
+        attempt is journaled: while it stands, a gate is live for that card at that tip."""
+        marker = ga.start_marker(tmp_path, 1257, "abcdef1234567890")
+        assert marker.name == "gate-attempt-1257-abcdef123456.start"
+        assert ga.gate_live(tmp_path, 1257, "abcdef1234567890") is False
+        marker.write_text("gate-1-2-3")
+        assert ga.gate_live(tmp_path, 1257, "abcdef1234567890") is True
+        assert ga.gating(tmp_path / "hub-flow.x_y.jsonl", 1257, "abcdef1234567890") is False
+        assert ga.gating(tmp_path / "hub-flow.x_y.jsonl", 1257, "abcdef1234567890", live=ga.gate_live(tmp_path, 1257, "abcdef1234567890")) is True
+
+
 class TestCompaction:
     def test_the_flow_journal_rollup_keeps_attempt_records(self, ga, flow, journal):
         # Attempts older than the raw window survive a compaction pass, unlike samples and skips.

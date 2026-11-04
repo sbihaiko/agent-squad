@@ -94,6 +94,50 @@ def test_the_child_live_fact_marks_a_ticket_in_flight():
     assert facts.spec_facts(["Backlog", "Closed"]) == {"child_live": False}
 
 
+def test_a_live_or_held_gate_marks_gating_before_the_wave_test():
+    assert _column(gating=True) == "Gating"
+    produced = facts.issue_facts(entered=True, standing="ahead", approved=False, dev_running=False,
+                                 review_waits=False, gating=True)
+    assert produced["gating"] is True
+
+
+def test_the_gating_fact_defaults_to_false():
+    produced = facts.issue_facts(entered=True, standing="ahead", approved=False, dev_running=False, review_waits=False)
+
+    assert produced["gating"] is False
+
+
+def test_a_landed_wave_reads_closed_even_when_its_last_gate_is_held():
+    """Delivery outranks the proof (ADR-0164, ADR-0170): the terminal test stands before the gating
+    test, so a landed wave reads Closed whatever its last attempt said."""
+    assert _column(standing="behind", gating=True) == "Closed"
+    assert columns.column_for({"in_dev": True, "gating": True}) == ("Closed", None)
+
+
+def test_the_abandoned_test_stands_before_the_gating_test():
+    assert columns.column_for({"abandoned": True, "gating": True}) == ("Abandoned", None)
+
+
+def test_the_gating_fact_reads_the_attempt_journal(tmp_path):
+    """The fact the table reads is derived from the attempt journal (#1257), so the same journal
+    answers the same column after a restart."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("gate_attempts_under_test", SCRIPTS / "gate_attempts.py")
+    ga = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ga)
+    journal = tmp_path / "hub-flow.x_y.jsonl"
+    ga.record_attempt(journal, 1257, "abc", "fail", "a1", now=100)
+    held = ga.gating(journal, 1257, "abc")
+    derived = facts.issue_facts(entered=True, standing="ahead", approved=False, dev_running=False,
+                                review_waits=False, gating=held)
+    assert columns.column_for(derived)[0] == "Gating"
+
+
+def test_a_spec_whose_only_active_child_is_gating_reads_it_live():
+    assert facts.spec_facts(["Gating"]) == {"child_live": True}
+    assert columns.column_for(_spec("Gating"))[0] == "Todo"
+
+
 def test_the_page_counts_the_same_columns_in_flight_as_the_facts():
     """The lane counts a spec's in-flight children by a list copied from LIVE_WORK (board-lanes.js). A member in one list
     and not the other makes the page and the facts read the same card differently (#1254)."""
