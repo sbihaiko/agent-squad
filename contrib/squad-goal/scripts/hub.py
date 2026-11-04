@@ -4845,7 +4845,7 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #pj{font:inherit;font-weight:600;background:none;border:1px solid transparent;padding:2px 8px;min-height:36px}#pj:hover{border-color:var(--line)}
 .tabs{display:flex;gap:4px}.tabs button{white-space:nowrap}.tabs button.on{border-color:var(--acc);color:var(--acc)}
 .rkt{display:flex;gap:4px;border-bottom:1px solid var(--line);margin:0 0 12px}.rkt button{background:none;border:0;border-bottom:2px solid transparent;border-radius:0;padding:6px 10px;min-height:36px;color:var(--mute);font-weight:600}.rkt button.on{color:var(--fg);border-bottom-color:var(--acc)}.rkt button:hover{color:var(--fg)}
-#tab-flow:has(#flowov:not([hidden])) #main{display:none}#tab-flow #main{min-height:60vh}
+#tab-runs #main{min-height:60vh}
 #side .sp .sb{padding:0 10px 10px}#side .sp>summary::before{content:"\25B8";color:var(--mute);width:10px}#side .sp[open]>summary::before{content:"\25BE"}
 #side .sp>summary .sr{font-size:var(--fs-caption)}
 #lrun .r{border:1px solid var(--line);border-radius:var(--radius-lg);margin-bottom:8px;background:var(--card);min-width:0;overflow:hidden}#lrun .r>div{min-width:0;flex:1}#lrun .r .st,#lrun .r .m{white-space:normal;overflow-wrap:anywhere;max-width:none}#lrun .r:last-child
@@ -4927,7 +4927,7 @@ html.sbshut #sbtn svg{transform:scaleX(-1)}
 // A read already in flight is shared: the caller gets a clone of the same answer.
 (()=>{const f=window.fetch.bind(window),live=new Map();window.fetch=(u,o)=>{if(o&&o.method&&o.method!=="GET"||o&&o.signal)return f(u,o);
  const k=String(u);if(!live.has(k))live.set(k,f(u,o).finally(()=>live.delete(k)));return live.get(k).then(r=>r.clone())}})();</script>
-<header class=top><h1><button id=pj aria-haspopup=menu aria-expanded=false><span id=pjn></span> &#9662;</button></h1><div id=psw aria-label="Projects"></div><div class=tabs role=tablist><button data-t=board role=tab>Kanban</button><button data-t=flow role=tab>Throughput</button><button data-t=set role=tab>Settings</button></div><span class=spx></span>
+<header class=top><h1><button id=pj aria-haspopup=menu aria-expanded=false><span id=pjn></span> &#9662;</button></h1><div id=psw aria-label="Projects"></div><div class=tabs role=tablist><button data-t=board role=tab>Kanban</button><button data-t=runs role=tab>Runs</button><button data-t=flow role=tab>Flow</button><button data-t=set role=tab>Settings</button></div><span class=spx></span>
 <span class=pill id=bread></span></header>
 <script id=sideRule>function sideState(saved,wide){return saved==="shut"&&!!wide}function sideNext(saved,wide){return sideState(saved,wide)?"open":"shut"}</script>
 <div id=win>
@@ -4941,9 +4941,9 @@ html.sbshut #sbtn svg{transform:scaleX(-1)}
 <section id=tab-board class="pane on" aria-label=Board>
 <div id=board><div id=bhead><label>Swimlanes <select id=lmode title="swimlanes: one lane per spec (Spec), per wave (Wave), or no lanes, today's board (None)"><option value=spec>Spec</option><option value=wave>Wave</option><option value=none>None</option></select></label> <details id=fw class=fsel><summary>Waves: all</summary><div class=fpop id=fwl></div></details> <details id=fs class=fsel><summary>Specs: all</summary><div class=fpop id=fsl></div></details> <details id=fk class=fsel><summary>Kinds: all</summary><div class=fpop id=fkl></div></details> <button id=lcall title="collapse every swimlane">Collapse all</button> <button id=lexp title="expand every swimlane">Expand all</button> <label class=hck title="hide the swimlanes whose every ticket is closed"><input type=checkbox id=lhd> Hide done lanes</label> <span id=lhc></span><span id=sse class=m hidden></span><span id=bt class=m></span> <span id=hlrel class=hlrel hidden></span></div><div id=bcases></div><div id=bbody></div></div>
 </section>
+<section id=tab-runs class=pane aria-label=Runs><div id=main></div></section>
 <section id=tab-flow class=pane aria-label="Flow charts">
-<div class=rkt id=flowtabs><button id=bruns title="the live run dashboards">Runs</button><button id=bflow title="the development flow: the cards in each column over time, from the flow history (SPEC 111)">Cumulative Flow Diagram</button><button id=blead title="the lead time of the closed cards, opened to closed (SPEC 111)">Lead Time</button></div>
-<div id=main></div>
+<div class=rkt id=flowtabs><button id=bflow title="the development flow: the cards in each column over time, from the flow history (SPEC 111)">Cumulative Flow Diagram</button><button id=blead title="the lead time of the closed cards, opened to closed (SPEC 111)">Lead Time</button></div>
 <div id=flowchips></div>
 <div id=flowov hidden><div id=flowb></div></div>
 </section>
@@ -5098,11 +5098,11 @@ function drawList(){
   document.querySelectorAll(".r[data-id]").forEach(e=>e.onclick=()=>{const id=e.dataset.id;   // the childcc row carries the id of the run it holds, never its own (#598, #689)
     hl={run:id};paintHL();openRun(id)});   // a run opens in the side sheet (#984)
 }
-// The Runs chart tab lists the live runs and the runs ended today; a row opens the run sheet, never an embedded dashboard (#984).
-function drawMain(){if(typeof TAB==="string"&&TAB!=="flow")return;
-  const row=r=>`<div class=r data-rid="${esc(r.id)}" tabindex=0 role=button><span class="b ${esc(r.state)}">${esc(r.badge||r.state)}</span><b>${esc(name(r))}</b><span class=m>${usd(r.spend)} \u00b7 last write ${age(r.age)} ago</span></div>`;
+// The Runs tab lists the live runs and the runs ended today; a row opens the run sheet, never an embedded dashboard (#984).
+function drawMain(){if(TAB!=="runs")return;
+  const row=(r,verdict)=>`<div class=r data-rid="${esc(r.id)}" tabindex=0 role=button>${verdict?`<span class="b ${esc(r.state)}">${esc(r.badge||r.state)}</span>`:""}<b>${esc(name(r))}</b><span class=m>${usd(r.spend)} \u00b7 last write ${age(r.age)} ago</span></div>`;
   const live=runs.filter(r=>r.rank===0||r.running),ids=new Set(live.map(r=>r.id)),ended=ENDED.filter(r=>!ids.has(r.id));
-  $("#main").innerHTML=(live.length?"<h3>Live</h3>"+live.map(row).join(""):"")+(ended.length?"<h3>Ended today</h3>"+ended.map(row).join(""):"")||"<div class=m>no run is live and none ended today</div>"}
+  $("#main").innerHTML=(live.length?"<h3>Live</h3>"+live.map(r=>row(r,false)).join(""):"")+(ended.length?"<h3>Ended today</h3>"+ended.map(r=>row(r,true)).join(""):"")||"<div class=m>No run is live and none ended today.</div>"}
 function refresh(){plan();drawList();paintHL();drawMain();rkFollow()}
 function applyFilter(){runs=allRuns.filter(r=>r.kind!=="childcc")}   // the childcc pass is drawn in the WORKERS group, never a pane (#598)
 let known=null;   // run ids already seen: a run that appears running after the first poll is selected on its own (pinned, its group opened)
@@ -5782,18 +5782,17 @@ function paintHL(){
 }
 // highlight:end
 
-// The frame of the mock (#889): four tabs over one page. A tab only shows one pane; every pane keeps its own poll.
+// A tab only shows one pane; every pane keeps its own poll (#889).
 let TAB="board",lastRead=0,readStale=false;
-const TABS={board:"#tab-board",flow:"#tab-flow",set:"#tab-set"};
+const TABS={board:"#tab-board",runs:"#tab-runs",flow:"#tab-flow",set:"#tab-set"};
 function setTab(t,o){if(!TABS[t])t="board";TAB=t;ls.tab=t;save();
  for(const k in TABS)$(TABS[k]).classList.toggle("on",k===t);
  document.querySelectorAll(".tabs button").forEach(b=>b.classList.toggle("on",b.dataset.t===t));
  if(t==="set")setTheme(sTheme);   // entering the tab shows one theme, the last one picked (#913)
- if(t==="flow"){if(o&&o.runs)$("#flowov").hidden=true;else if(!o||!o.keep){if($("#flowov").hidden)flowOpen("cfd")}}
+ if(t==="flow"&&(!o||!o.keep)&&$("#flowov").hidden)flowOpen("cfd");
  drawMain()}
 document.querySelector(".tabs").addEventListener("click",e=>{const b=e.target.closest("button[data-t]");if(b)setTab(b.dataset.t)});
-$("#bruns").onclick=()=>{$("#flowov").hidden=true;flowTabs()};
-function flowTabs(){const h=$("#flowov").hidden,k=typeof FLOWK==="string"?FLOWK:"cfd";$("#bruns").classList.toggle("on",h);$("#bflow").classList.toggle("on",!h&&k==="cfd");$("#blead").classList.toggle("on",!h&&k==="lead");const c=h?"":flowFilterChip(bo.fw||[],bo.fs||[],bo.fk||[],!!FLOWFF[k]),x=$("#flowchips");if(x&&x.dataset.h!==c){x.dataset.h=c;x.innerHTML=c}}   // the one Board filter chip, drawn with the chart tabs for both charts (#1147)
+function flowTabs(){const h=$("#flowov").hidden,k=typeof FLOWK==="string"?FLOWK:"cfd";$("#bflow").classList.toggle("on",!h&&k==="cfd");$("#blead").classList.toggle("on",!h&&k==="lead");const c=h?"":flowFilterChip(bo.fw||[],bo.fs||[],bo.fk||[],!!FLOWFF[k]),x=$("#flowchips");if(x&&x.dataset.h!==c){x.dataset.h=c;x.innerHTML=c}}   // the one Board filter chip, drawn with the chart tabs for both charts (#1147)
 $("#main").addEventListener("click",e=>{const r=e.target.closest(".r[data-rid]");if(r)openRun(r.dataset.rid)});   // a run row on the Runs tab opens the sheet (#984)
 $("#main").addEventListener("keydown",e=>{const r=e.target.closest(".r[data-rid]");if(r&&(e.key==="Enter"||e.key===" ")){e.preventDefault();openRun(r.dataset.rid)}});
 new MutationObserver(flowTabs).observe($("#flowov"),{attributes:true});

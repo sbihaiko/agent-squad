@@ -293,9 +293,9 @@ def test_a_pin_from_before_the_sheet_is_neither_restored_nor_drawn(hub):
 
 
 def test_the_runs_tab_lists_runs_that_open_the_sheet(hub):
-    """The Runs chart tab stays (it is renamed elsewhere); it lists the runs as rows that open the sheet, never a frame."""
+    """The Runs tab lists the runs as rows that open the sheet, never a frame."""
     page = hub.PAGE
-    assert "id=bruns" in page and "<div id=main>" in page
+    assert 'data-t=runs role=tab>Runs' in page and "id=bruns" not in page and "<div id=main>" in page
     draw = page[page.index("function drawMain("):]
     draw = draw[:draw.index("\n}\n")]
     assert "data-rid=" in draw and "iframe" not in draw
