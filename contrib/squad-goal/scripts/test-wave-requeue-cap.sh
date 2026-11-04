@@ -8,7 +8,7 @@ d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok 
 exec 3>&2 2>>"$T.err"   # the suite's own stderr, read at the end: a "command not found" there is a fixture that lacks a file (#610)
 mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin"; cp "$d/wave.sh" "$d/issue_ledger.py" "$d/ghread.py" "$d/address.sh" "$d/ghcall.sh" "$d/base-battery.sh" "$d/basecheck.sh" "$T/s/"
 printf 'export SG_STATE=%s SG_REPO=x/y SG_OWNER=o SG_PROJECT=3 BOARD=%s/board.sh\n. %s/address.sh\n' "$T/st" "$T" "$T/s" > "$T/s/env.sh"
-printf '#!/bin/bash\necho "$*" >> "%s/board.log"\nif [ "${BOARD_REFUSE:-}" = 1 ]; then echo "board refused" >&2; exit 1; fi\n' "$T" > "$T/board.sh"; chmod +x "$T/board.sh"
+printf '#!/bin/bash\necho "$*" >> "%s/board.log"\necho "${SG_MOVE_REASON:-none} $*" >> "%s/board-reason.log"\nif [ "${BOARD_REFUSE:-}" = 1 ]; then echo "board refused" >&2; exit 1; fi\n' "$T" "$T" > "$T/board.sh"; chmod +x "$T/board.sh"
 # The stub gh logs every argv; issue 42 carries the owner freeze label (the issue read is one GraphQL query), every other read answers {}.
 printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/gh.log"\ncase "$*" in *"issue(number: 77)"*) printf "{\\"data\\":{\\"repository\\":{\\"i77\\":{\\"number\\":77,\\"state\\":\\"CLOSED\\",\\"labels\\":{\\"nodes\\":[]}}}}}";; *"issue(number: 78)"*) printf "not json";; *"issue(number: 42)"*) printf "{\\"data\\":{\\"repository\\":{\\"i42\\":{\\"number\\":42,\\"state\\":\\"OPEN\\",\\"labels\\":{\\"nodes\\":[{\\"name\\":\\"frozen:owner\\"}]}}}}}";; *) printf "{}";; esac\n' "$T" > "$T/bin/gh"; chmod +x "$T/bin/gh"
 # cnt <n> [loop]: the count of the issue's ledger (#673), read through its one module.
@@ -20,6 +20,8 @@ for i in 1 2; do
 done
 [ ! -e "$T/st/auto/disp-7" ] && [ "$(/usr/bin/grep -c 'o 3 Todo 7' "$T/board.log")" = 2 ] && [ "$(nsc)" = 0 ] \
   && ok "two requeues free the issue and put it back in Todo" || ko "below the cap: marker $(/bin/ls "$T/st/auto"), board '$(tr '\n' ' ' < "$T/board.log")', stops $(nsc)"
+# #1340: a requeue lands nothing, so its card leaves Code Complete as a no-landing move (board.py refuses any other automated backward move).
+[ "$(/usr/bin/grep -c '^no-landing o 3 Todo 7$' "$T/board-reason.log")" = 2 ] && ok "a requeue moves its card back to Todo as no-landing (#1340)" || ko "requeue move reason: '$(tr '\n' ' ' < "$T/board-reason.log")'"
 echo req > "$T/st/auto/disp-7"
 o=$(PATH="$T/bin:$PATH" bash "$T/s/wave.sh" requeue 7 "the review asked for changes: x")
 [ -e "$T/st/auto/disp-7" ] && ok "the third requeue keeps the dispatch marker" || ko "the third requeue freed the issue"
