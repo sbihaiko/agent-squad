@@ -132,11 +132,16 @@ case "$r" in *"WAVE-ERROR"*gates*) ok "C: the missing gates are said";; *) ko "C
 tip0=$($O rev-parse $W)                       # the tip before #11 entered
 child 11 g11; en 11 >/dev/null                # #11 adds g11 and enters
 child 12 g11 "$tip0"                          # #12 adds the same file from the older tip: the rebase conflicts
-printf 'run-1\n' > "$T/st/auto/disp-12"; before=$($O rev-parse $W); r=$(en 12)
+printf 'run-1\n' > "$T/st/auto/disp-12"; before=$($O rev-parse $W); mine=$($G -C "$T/c12" rev-parse HEAD); r=$(en 12)
 [ "$($O rev-parse $W)" = "$before" ] && [ "$(entered 12)" = no ] && ok "D: a child that conflicts with the wave tip never enters" || ko "D: #12 entered: '$r'"
-case "$r" in *"WAVE REQUEUE #12"*conflict*g11*) ok "D: the conflict is said, and names the file";; *) ko "D: no reason for the conflict: '$r'";; esac
+case "$r" in *"WAVE HOLD #12"*conflict*g11*) ok "D: the conflict is said, and names the file";; *) ko "D: no reason for the conflict: '$r'";; esac
+# A conflict keeps the child's own commits (#1344): pushed to fix/12-rebase-run-1, the child's HEAD never reset, one fix round
+# queued on that branch by a CHANGES verdict, and no requeue (no fresh build, the card stays Doing).
+[ "$($O rev-parse -q --verify refs/heads/fix/12-rebase-run-1)" = "$mine" ] && ok "D: the conflicted commits are kept on fix/12-rebase-run-1 on the remote" || ko "D: the commits are not kept on fix/12-rebase-run-1"
+[ "$($G -C "$T/c12" rev-parse HEAD)" = "$mine" ] && ok "D: the child's HEAD is not reset to the base" || ko "D: the child's HEAD was reset"
+head -1 "$T/st/review-fix_12-rebase-run-1.md" 2>/dev/null | /usr/bin/grep -q CHANGES && ok "D: a CHANGES verdict asks one rebase round on fix/12-rebase-run-1" || ko "D: no CHANGES verdict for fix/12-rebase-run-1"
 [ ! -e "$($G -C "$T/c12" rev-parse --git-path rebase-merge)" ] && ok "D: the failed rebase is aborted, so the worktree carries no half-rebase" || ko "D: the child is left mid-rebase"
-[ ! -e "$T/st/auto/disp-12" ] && /usr/bin/grep -qx 'o 3 Todo 12' "$T/board.log" && ok "D: a conflicting child is back in the queue" || ko "D: #12 was not requeued"
+[ -e "$T/st/auto/disp-12" ] && ! /usr/bin/grep -q 'Todo 12' "$T/board.log" && ok "D: a conflicting child is not requeued to Todo (no fresh build)" || ko "D: #12 was requeued"
 
 # P (#1348): a push that fails for a reason git does not name as a rejection holds the child: no requeue, no marker move, and
 # the hold names git's last stderr line. A push git rejects as non-fast-forward still refuses, with git's line in the reason.
