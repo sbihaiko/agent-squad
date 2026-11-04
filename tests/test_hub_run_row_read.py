@@ -68,6 +68,25 @@ def test_a_record_that_has_never_had_an_event_is_the_starting_row(hub, tmp_path)
     assert row["state"] == "starting" and row["spend"] == 0 and row["age"] == 0
 
 
+def test_the_last_node_the_record_names_is_the_run_stage(hub, tmp_path):
+    folder = tmp_path / "runs" / "run-stage"
+    write_record(folder, [
+        {"ts": NOW, "event": "run_start", "pos": 1},
+        {"ts": NOW + 1, "event": "call_start", "node": "spec", "pos": 2},
+        {"ts": NOW + 2, "event": "outcome", "node": "implement", "entry": 1, "spend": 0.1,
+         "model": "claude-sonnet-4-5", "tokens_in": 1, "tokens_out": 1, "pos": 3},
+    ])
+    row, _ = hub.run_row(str(folder), "", [])
+    assert row["stage"] == "implement", "the stage is the last node the record names, never an invented one"
+
+
+def test_a_record_that_names_no_node_has_no_stage(hub, tmp_path):
+    folder = tmp_path / "runs" / "run-nonode"
+    write_record(folder, [{"ts": NOW, "event": "run_start", "pos": 1}])
+    row, _ = hub.run_row(str(folder), "", [])
+    assert row["stage"] is None, "a run with no node omits the stage, so the row never invents one"
+
+
 def test_the_age_is_the_time_since_the_last_write_and_every_card_names_it(hub, tmp_path):
     folder = tmp_path / "runs" / "run-w"
     record = write_record(folder, run_events(NOW - 3600))
