@@ -350,15 +350,18 @@ async def run_call(source, deadline, make_request, *, chain, adapter, record, bu
 
 
 def ac_commands(out):
-    """The held-out commands an artifact lists, and whether the list is well formed. A command is a non-empty string. One level of
-    nesting (`[["cmd"]]`, a router's "one-item list" copied whole) is flattened. Any other entry (a mapping such as `{"cp": "..."}`) is
-    malformed: it would reach the shell as text and fail the final gate for a reason that is not the code."""
+    """The held-out commands an artifact lists, and whether the list is well formed. A command is a non-empty string, or a mapping
+    whose `command` value is one (`{"command": "...", "expected": "..."}`: `expected` is prose, not a command, and is ignored). One
+    level of nesting (`[["cmd"]]`, a router's "one-item list" copied whole) is flattened. Any other entry (a mapping such as
+    `{"cp": "..."}`) is malformed: it would reach the shell as text and fail the final gate for a reason that is not the code."""
     raw = out.get("ac_commands", []) if isinstance(out, dict) else []
     if not isinstance(raw, list):
         return [], False
     cmds, ok = [], True
     for c in raw:
         for x in (c if isinstance(c, list) else [c]):
+            if isinstance(x, dict):
+                x = x.get("command")
             if isinstance(x, str) and x.strip():
                 cmds.append(x)
             else:

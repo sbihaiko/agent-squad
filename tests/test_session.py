@@ -177,3 +177,19 @@ async def test_the_window_is_read_from_the_last_beat_not_the_call_start():
     """Beats every 0.03 s against a 0.1 s window: the call is never silent for the whole window, so it runs to its answer."""
     out, _, _, _ = await go(Beating(beats=10, gap=0.03, result=CallResult({}, 0.1)), deadline=5.0, no_progress=0.1)
     assert out.kind == "result"
+
+
+def test_an_ac_commands_entry_written_as_command_and_expected_is_the_command():    # #1346: a child wrote {command, expected} objects and the run failed
+    assert session.ac_commands({"ac_commands": [{"command": "true", "expected": "x"}]}) == (["true"], True)
+    assert session.ac_commands({"ac_commands": [[{"command": "true", "expected": "x"}]]}) == (["true"], True)
+
+
+def test_an_ac_commands_mapping_without_a_command_string_stays_malformed():    # #1346: only a non-empty `command` string counts
+    for bad in ({"cp": "x"}, {"command": ""}, {"command": "  "}, {"command": ["true"]}, {"expected": "x"}):
+        assert session.ac_commands({"ac_commands": [bad]}) == ([], False), bad
+
+
+def test_an_artifact_with_the_command_and_expected_form_does_not_fail_as_ac_commands_invalid():    # #1346
+    out = {"status": "pass", "ac_commands": [{"command": "true", "expected": "x"}]}
+    assert session.agent_outcome({}, type("R", (), {"output": out})(), None)[1] != ["ac_commands_invalid"]
+    assert session.agent_outcome({}, type("R", (), {"output": out})(), None)[0] == "pass"
