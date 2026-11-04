@@ -5,7 +5,10 @@
 . "$(dirname "$0")/env.sh"; P="$SG_STATE/watchd.pid"; L="$SG_STATE/watch.log"; me="$(cd "$(dirname "$0")" && pwd)/watchd.sh"
 # The slot is the one fact a supervisor holds (#932): watchd.pid is what a reader looks at, and watchd.lock/pid is what a
 # second `run` is refused by. alive() reads the slot, so a pid file a dying duplicate removed no longer reads as "not running".
-alive() { pid=$(cat "$SG_STATE/watchd.lock/pid" 2>/dev/null); [ -n "$pid" ] || { [ -s "$P" ] && pid=$(cat "$P"); }; [ -n "$pid" ] && /bin/ps -p "$pid" -ww -o command= 2>/dev/null | grep -qF "$me run"; }
+# A live supervisor is a `watchd.sh run` of any copy of the skill: the repository's scripts and the live ones are two paths
+# to one loop, and a proof that matched one absolute path read the other copy's holder as stale and ran a second loop (#1312).
+is_watchd() { /bin/ps -p "$1" -ww -o command= 2>/dev/null | grep -qE '(^|[ /])watchd\.sh run$'; }
+alive() { pid=$(cat "$SG_STATE/watchd.lock/pid" 2>/dev/null); [ -n "$pid" ] || { [ -s "$P" ] && pid=$(cat "$P"); }; [ -n "$pid" ] && is_watchd "$pid"; }
 # orphans: the lanes of this scripts dir that pid 1 holds, so their supervisor is gone, one "<pid> <lane>" a line (#959)
 orphans() { /bin/ps -axwwo pid=,ppid=,command= 2>/dev/null | awk -v a="$(dirname "$me")" '$2 == 1 { for (i = 3; i <= NF; i++) if ($i == a "/watch.sh" || $i == a "/fastloop.sh" || $i == a "/cqflush.sh") print $1, substr($i, length(a) + 2) }'; }
 # The drivers run the skill this script sits in: its PUBLISHED sha, else its git HEAD, goes to driver.sha, so live-guard.sh
@@ -74,17 +77,17 @@ case "${1:-status}" in
     # over instead of staying down. Only the holder writes watchd.pid, and only the holder removes the slot.
     if ! mkdir "$LK" 2>/dev/null; then
       h=$(cat "$LK/pid" 2>/dev/null)
-      if [ -n "$h" ] && /bin/ps -p "$h" -ww -o command= 2>/dev/null | grep -qF "$me run"; then
+      if [ -n "$h" ] && is_watchd "$h"; then
         printf 'WATCHD run %s refused: supervisor %s holds the loop\n' "$$" "$h" >> "$L"; exit 0
       fi
       rm -rf "$LK"; mkdir "$LK" 2>/dev/null || { printf 'WATCHD run %s refused: the slot was claimed again\n' "$$" >> "$L"; exit 0; }
     fi
     printf '%s\n' "$$" > "$LK/pid"; printf '%s\n' "$$" > "$P"
-    trap '[ -n "$child" ] && kill "$child" 2>/dev/null; rm -f "$P"; [ "$(cat "$LK/pid" 2>/dev/null)" = "$$" ] && rm -rf "$LK"; exit 0' TERM INT
+    trap '[ -n "$child" ] && kill "$child" 2>/dev/null; [ "$(cat "$P" 2>/dev/null)" = "$$" ] && rm -f "$P"; [ "$(cat "$LK/pid" 2>/dev/null)" = "$$" ] && rm -rf "$LK"; exit 0' TERM INT
     # The stop reaches every pass of both lanes, not the two lanes alone: a stop from inside the group signals this
     # supervisor only (#489), and a lane's foreground pass (childcc and its reviews) would run on and spend (#529). The
     # supervisor ignores the signal itself and sends it to its whole group.
-    fast=; cq=; trap 'trap "" TERM INT; kill -TERM -- "-$$" 2>/dev/null; rm -f "$P" "$SG_STATE/fastloop.pid"; [ "$(cat "$LK/pid" 2>/dev/null)" = "$$" ] && rm -rf "$LK"; exit 0' TERM INT
+    fast=; cq=; trap 'trap "" TERM INT; kill -TERM -- "-$$" 2>/dev/null; [ "$(cat "$P" 2>/dev/null)" = "$$" ] && rm -f "$P" "$SG_STATE/fastloop.pid"; [ "$(cat "$LK/pid" 2>/dev/null)" = "$$" ] && rm -rf "$LK"; exit 0' TERM INT
     reload=; trap 'reload=1' HUP
     while :; do
       # A reload lands here, once the cycle has ended: the fast and comment lanes end their current pass, SG_SQUAD is read
