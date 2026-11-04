@@ -99,10 +99,8 @@ def test_fast_tier_is_three_parallel_jobs_on_python_313_and_nothing_else():
         assert "needs" not in job, f"{name} waits for another job, so the fast tier is not parallel"
         assert "dev" in str(job.get("if", "")), f"{name} refuses a pull request from any branch but dev"
         assert _job_python(job) == "3.13", f"{name} runs on Python 3.13 alone"
-    assert [s.get("run") for s in wf["jobs"]["ruff"]["steps"] if "run" in s] == ["ruff check squad tests"]
-    assert [s.get("run") for s in wf["jobs"]["fast-battery"]["steps"] if "run" in s] == [
-        'python3 -m pytest -n auto -m "not heavy"'
-    ]
+    assert "ruff check squad tests" in [s.get("run") for s in wf["jobs"]["ruff"]["steps"]]
+    assert 'python3 -m pytest -n auto -m "not heavy"' in [s.get("run") for s in wf["jobs"]["fast-battery"]["steps"]]
 
 
 def test_claude_md_ci_rule_names_the_fast_tier_jobs_its_guard_and_no_other_job():
@@ -234,11 +232,12 @@ def test_the_shard_job_stays_withdrawn_until_its_heavy_tests_can_pass_on_a_runne
 
 
 def test_the_check_job_of_the_commit_is_part_of_the_ci_proof():
-    """Guard for ADR-0164 (#1051): the promotion reads the check job of the same commit as the four shards, so ruff and
-    mypy, which only the check job runs, are part of the full pass.
+    """Guard for ADR-0164 (#1051, #1322): the promotion reads the names of the fast tier's jobs from ci.yml, so ruff, mypy
+    and the fast battery are part of the full pass, and no job name is a literal in the script.
     """
     promote = (ROOT / "contrib" / "squad-goal" / "scripts" / "promote-pass.sh").read_text()
-    assert '"check"' in promote, "promote-pass.sh reads the check job before it writes the full pass"
+    assert "^    name: " in promote and "ci_file" in promote, "promote-pass.sh reads the job names from ci.yml before it writes the full pass"
+    assert '"check"' not in promote, "the check job is no longer a literal name in promote-pass.sh"
 
 
 E2E = ROOT / "tests" / "test_gui_test_e2e.py"

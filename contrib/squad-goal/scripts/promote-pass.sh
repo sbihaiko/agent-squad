@@ -92,7 +92,9 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
     [ "$st" = success ] || { echo "the commit status $ctx did not read back as success (${st:-missing})"; return 1; }
   }
   ci_verdict() {  # <tip>: pass, "fail <job>" for a red job, or pending
-    local cr n st c v=pass sh names=("check")
+    local cr n st c v=pass sh names=()
+    while IFS= read -r n; do [ -n "$n" ] && names+=("$n"); done < <(/usr/bin/grep -E '^    name: ' "$ci_file" 2>/dev/null | sed 's/^    name: //')
+    [ "${#names[@]}" -gt 0 ] || { echo pending; return; }   # a workflow that names no job proves nothing
     for sh in $shard_list; do names+=("full-proof shard $sh"); done   # none while the shard job is withdrawn (#1062)
     cr=$(gh_api "repos/$SG_REPO/commits/$1/check-runs?per_page=100&filter=latest") || { echo pending; return; }
     printf '%s' "$cr" | jq -e '.check_runs | type == "array"' >/dev/null 2>&1 || { echo pending; return; }
@@ -107,7 +109,7 @@ if [ "${1:-}" = --hold ]; then   # inside the proof's own lock: suite, full line
   case "$v" in
     pass)
       bash "$d/gate.sh" --status full pass "$tip"
-      why=$(full_status "$tip" "$([ -n "$shard_list" ] && echo "full suite, both modes, four CI shards and the check job" || echo "CI check job, both Pythons, the fast battery (#1062: the shards are withdrawn)")") || { mark "$tip" "not promoted: $why"; exit 1; }
+      why=$(full_status "$tip" "$([ -n "$shard_list" ] && echo "full suite, both modes, four CI shards and the fast tier" || echo "CI fast tier: ruff, mypy and the 3.13 fast battery (#1062: the shards are withdrawn)")") || { mark "$tip" "not promoted: $why"; exit 1; }
       o=$(SG_PROMOTE_PROOF=local bash "$d/promote-stg.sh" 2>&1); rc=$?
       [ $rc = 0 ] || { mark "$tip" "not promoted: $(printf '%s' "$o" | tail -1)"; exit 1; }
       mark "$tip" "promoted: the CI shards carried the full pass"; exit 0;;

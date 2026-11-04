@@ -287,7 +287,7 @@ shards "$tu" success success running timed_out; SG_PROMOTE_CI_WAIT=0 SG_GHREAD="
 
 # #1062: the shard job is withdrawn, so a workflow file that names no shard is the check job alone, and a green check
 # promotes the tip. The record says which proof carried it, so a reader never guesses.
-printf 'jobs:\n  check:\n    runs-on: ubuntu-latest\n' > "$T/ci-no-shards.yml"
+printf 'jobs:\n  ruff:\n    name: ruff\n  mypy:\n    name: mypy\n  fast-battery:\n    name: fast-battery\n' > "$T/ci-no-shards.yml"
 adv dev check-alone; ta=$(tip dev); n=$(runs)
 shards "$ta" none none none none; SG_CI_WORKFLOW="$T/ci-no-shards.yml" SG_GHREAD="$T/bin/ghread" pass; rc=$?
 [ $rc = 0 ] && [ "$(tip stg)" = "$ta" ] && ok "with no shard named, a green check job promotes the tip (#1062)" \
