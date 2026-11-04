@@ -2,6 +2,7 @@
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -103,10 +104,19 @@ def test_a_changed_cap_shows_after_one_answer(hub, monkeypatch):
 # --- the page's own code, run in node: the list and the three sections are read off the DOM ---
 
 
+def test_fn_finds_an_async_declaration_whatever_its_whitespace():
+    """The page harness extracts a whole declaration, never a span misaligned by the async modifier's spacing (#1277 debt)."""
+    src = "let a=1;\nasync\nfunction poll(){return 1}\nconst b=2;"
+    span = _fn(src, "poll")
+    assert re.match(r"async\s+function\s+poll\s*\(", span), "the extracted span drops or misplaces the async modifier"
+    assert span.endswith("}") and "return 1" in span
+
+
 def _fn(src, name):
-    i = src.index(f"function {name}(")
-    if src[max(0, i - 6) : i] == "async ":
-        i -= 6   # an async function's declaration starts six characters earlier
+    m = re.search(rf"(?:async\s+)?function\s+{re.escape(name)}\s*\(", src)   # the declaration is located as a whole, never by a fixed lookbehind that a different modifier spacing would misalign
+    if m is None:
+        raise AssertionError(f"function {name} is not declared")
+    i = m.start()
     j = src.index("{", i)
     depth = 0
     for k in range(j, len(src)):
