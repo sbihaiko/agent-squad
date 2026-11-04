@@ -800,7 +800,7 @@ cat > "$T/origin.git/hooks/pre-receive" <<H
 reject=
 while read -r old new ref; do [ "\$ref" = refs/heads/$W40 ] && [ -e "$T/hook40" ] && reject=1; done
 [ -n "\$reject" ] || exit 0
-rm -f "$T/hook40"; printf '%s\n' "$SIB" > "$T/origin.git/refs/heads/$W40"; exit 1
+rm -f "$T/hook40"; mkdir -p "$T/origin.git/refs/heads/wave"; printf '%s\n' "$SIB" > "$T/origin.git/refs/heads/$W40"; exit 1
 H
 chmod +x "$T/origin.git/hooks/pre-receive"
 child 400 g400 "origin/$W40"; REV_BASE=$W40 rev 400; : > "$T/hook40"; : > "$T/gl40"
@@ -818,7 +818,7 @@ cat > "$T/origin.git/hooks/pre-receive" <<H
 reject=
 while read -r old new ref; do [ "\$ref" = refs/heads/$W40 ] && [ -e "$T/hook40" ] && reject=1; done
 [ -n "\$reject" ] || exit 0
-rm -f "$T/hook40"; printf '%s\n' "$SIB" > "$T/origin.git/refs/heads/$W40"; exit 1
+rm -f "$T/hook40"; mkdir -p "$T/origin.git/refs/heads/wave"; printf '%s\n' "$SIB" > "$T/origin.git/refs/heads/$W40"; exit 1
 H
 : > "$T/hook40"; before=$SIB
 r=$(cd "$T/c401" && SG_WAVE_GATES="[ -e '$T/g401' ] && { echo red after the rebase; exit 1; }; touch '$T/g401'" bash "$T/s/wave.sh" enter run-40 401 2>&1); rc=$?
