@@ -3958,8 +3958,9 @@ def refresh_history():
 def drawn_column(i, moves, window):
     """The column the served board draws for one row, the freeze that column carries, and what the serve acts on:
     `read` (no entry names a column this board ships, or the read's column stands), `agree` (the read began after the
-    move and carries its column), `expired` (the window passed with no read agreeing) or `pending` (the move is drawn at
-    once and wears the mark). The board and the promote route ask this one function, so a card is promotable by the
+    move and carries its column), `expired` (the window passed with no read agreeing), `settled` (the writer proved the
+    move the hub sent: drawn at once with no mark, the entry kept as the column's guard, #1300) or `pending` (the move is
+    drawn at once and wears the mark). The board and the promote route ask this one function, so a card is promotable by the
     column both of them draw, never by two different columns (#829, ADR-0144)."""
     read_at = i.get("ot")   # the instant the read that observed this card began: the only stamp the overlay compares a move against
     closed = str(i["s"]).lower() == "closed"   # the row's own closedness: the freeze below is the card's, not the read's
@@ -3980,9 +3981,12 @@ def drawn_column(i, moves, window):
         return {"st": st, "fz": fz, "state": "expired", "recorded": recorded, "entry": entry}
     if read_carried(at, read_at) and not has_context(entry):
         return {"st": st, "fz": fz, "state": "read", "recorded": recorded, "entry": entry}   # a move with no dispatch context stands aside for a read that began after it
+    # The writer proved the move the hub sent (#1300): the column stands with no mark, and the entry stays as the column's
+    # guard against a lagging read until a read agrees or the window passes.
+    state = "settled" if proof_confirmed(i["i"], recorded, entry) else "pending"
     # Draw the move at once and keep the mark until a read that began after it agrees (#650). A move with a dispatch
     # context keeps the mark through a contradicting read too, for the whole window. A column that matches by coincidence is no proof.
-    return {"st": recorded, "fz": _columns_module.view_column(recorded, closed, i.get("l"), i.get("cr"))[1], "state": "pending",
+    return {"st": recorded, "fz": _columns_module.view_column(recorded, closed, i.get("l"), i.get("cr"))[1], "state": state,
             "recorded": recorded, "entry": entry}
 
 
@@ -4087,6 +4091,9 @@ def board(moves=None):
     if agreed or expired:
         _served_board["settling"] = True   # a build that settles entries is not kept: the next serve retries a drop that failed (#651, #973)
         dropped = drop_moves(agreed | set(expired))   # agreement settles an entry; the window settles one no read ever agreed with (#651)
+        if dropped:
+            with MOVE_LOCK:
+                for item in dropped: PROVED.pop(item, None)   # the entry is gone: its proof goes with it (#1300)
         for item, (n, recorded, read, context) in expired.items():
             if dropped and item in dropped: report_expired(n, item, recorded, read, window, context)   # only a drop that really happened is reported, so a retry never repeats a line
     return {"t": board_cache["t"], "err": board_cache["err"] or board_stale(), "parts": board_cache.get("parts", {}), "prs": lane, "groups": groups, "cases": cases, "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {}), "sum": dict(board_summary(drawn), none=nospec_count(board_cache["items"], moves, window))}   # the No spec lane's bar (owner)
@@ -4245,8 +4252,29 @@ def promote(issue):
 # which is the one thing a restart may lose: the board read draws the card where GitHub holds it.
 MOVE_FLIGHT = {}           # card number -> the column its write goes to, from the moment the route answers until the writer does
 MOVE_REFUSED = {}          # card number -> the reason the writer refused its last move
+PROVED = {}                # item id -> (column, instant) of the record entry the writer's proof confirmed (#1300): its mark is cleared
 MOVE_LOCK = threading.Lock()
 MOVE_THREADS = []          # the background writes this process started; wait_for_moves joins them
+def proof_confirmed(item_id, column, entry):
+    """Whether the writer proved the move this record entry holds for the item: the hub sent the write, the writer printed the
+    card as moved, and the board record holds that move at `column` and instant. A move the hub did not send (a loop move, or
+    a record a restart left) is never proved here, so its mark stays until a read agrees (#1300)."""
+    if not isinstance(entry, dict): return False
+    with MOVE_LOCK: return PROVED.get(str(item_id)) == (column, entry.get("at"))
+def confirmed_proofs(cards, moved):
+    """The record entries the writer's proof confirms, as {item id: (column, instant)}: one for each card the writer printed
+    as moved whose item id the board record holds at the column the move set. A card with no item id, or a record that names
+    no such move, confirms nothing, so its mark stays until a read agrees (#1300)."""
+    if not overlay_on(): return {}
+    moves = read_moves()
+    out = {}
+    for c in cards:
+        if c["n"] not in moved or not c.get("i"): continue
+        entry = moves.get(str(c["i"]))
+        if not isinstance(entry, dict) or not entry.get("at"): continue
+        column = _columns_module.SHIPPED_NAME.get(entry.get("column"), entry.get("column"))
+        if column == PROMOTE_TO: out[str(c["i"])] = (column, entry["at"])
+    return out
 def in_flight(n):
     """Whether a write for card `n` is sent and not yet answered: the owner's move is not offered again meanwhile (#1300)."""
     with MOVE_LOCK: return n in MOVE_FLIGHT
@@ -4270,7 +4298,7 @@ def start_write(cards, after=None):
 def _settle_write(cards, after):
     """The writer's answer for one card set, in the background. The flight ends whatever the answer, so a failure here can never
     leave a card drawn pending for good."""
-    moved, reason = [], "the writer did not answer"
+    moved, reason, confirmed = [], "the writer did not answer", {}
     try:
         proved, reason = send_cards(cards)
         moved = [c["n"] for c in cards if c["n"] in proved]
@@ -4280,11 +4308,13 @@ def _settle_write(cards, after):
                     if i.get("n") in moved: i["st"] = PROMOTE_TO   # the cache follows the proof, whichever list object the pass holds now
                 for c in cards:
                     if c["n"] in moved: c["st"] = PROMOTE_TO
+            confirmed = confirmed_proofs(cards, moved)   # the record the writer's proof confirms: its mark goes at this proof (#1300)
             save_board()
     except Exception as e:
         reason = str(e)[:200] or reason
     finally:
         with MOVE_LOCK:
+            PROVED.update(confirmed)   # set before the flight ends, so no card draws pending between the answer and the proof
             for c in cards:
                 MOVE_FLIGHT.pop(c["n"], None)
                 if c["n"] not in moved and reason: MOVE_REFUSED[c["n"]] = reason
@@ -5677,7 +5707,7 @@ const ageC=o=>{const h=(Date.now()-Date.parse(o))/3600000;return h>=24?"old":h>=
 setInterval(()=>document.querySelectorAll("#bbody .age").forEach(e=>{e.textContent=age(e.dataset.o);e.className="age "+ageC(e.dataset.o)}),30000);
 const gcls=c=>c.v==="?"?"unk":c.v==="debt"?"debt":c.v.startsWith("OK")?"ok":(c.v.startsWith("CHG")||c.v.startsWith("BLK"))?"bad":"";
 const gstrip=s=>{const age=Math.round(Date.now()/1000-s.at),old=age>s.max;return `<div class="gstrip${old?" old":""}" title="${esc(old?`these facts are ${age} s old: the strip greys out past 180 s, so nothing here is being claimed as fresh`:"R review · C CI · T threads · B base · H labels and holds")}">`+s.cells.map(c=>`<span class="gc ${gcls(c)}" title="${esc(c.tip||"")}">${c.k}<b>${esc(c.v)}</b></span>`).join("")+`</div>`};
-const cards=(g,it,shown)=>{const GHI='<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>';return shown.map(x=>{const pr=x.kind==="pr";return `<div class=it data-n="${x.n}" data-r="${esc(x.r||"__REPO__")}"${pr?" data-pr":""} data-col="${encodeURIComponent(g.name==null?"":String(g.name))}" data-pm="${x.pm&&!pr?1:""}" data-b="${encodeURIComponent(JSON.stringify(x.b||[]))}" data-bl="${encodeURIComponent(JSON.stringify(x.bl||[]))}" data-ho="${encodeURIComponent(x.ho==null?"":String(x.ho))}" data-hr="${encodeURIComponent(x.hr==null?"":String(x.hr))}" data-prf="${encodeURIComponent(JSON.stringify(x.prf||[]))}" style="--cc:${colOf(g.name,CN)};--lc:${specColor(SLOTS,cardSpec(x))}${tint(x)}"><a class="id ghl" target=_blank rel=noopener title="open ${pr?"pull request":"issue"} #${x.n} on GitHub" aria-label="open ${pr?"pull request":"issue"} #${x.n} on GitHub" href="https://github.com/${esc(x.r||"__REPO__")}/${pr?"pull":"issues"}/${x.n}">#${x.n} ${GHI}</a>${x.kind!=="pr"&&x.pa!=null&&!x.sp?`<span class=lchip data-k=spec title="spec #${x.pa}">${x.pa}</span>`:""}${waveChip(x)}${(x.l||[]).includes("loop-bug")?'<span class="bugc loop">loop-bug</span>':(x.l||[]).includes("bug")?'<span class="bugc">bug</span>':""}${x.rt?`<span class=rpo title="the repository this card belongs to: ${esc(x.r)}">${esc(x.rt)}</span>`:""}${x.pb?`<span class="pbg ${x.pb.replace(" ","-")}">${esc(x.pb)}</span>`:""}${x.rollup?`<span class="cir ${esc(x.rollup)}" title="CI states on the head${(x.ci||[]).length?": "+esc((x.ci||[]).join(", ")):""}">CI ${esc(x.rollup)}</span>`:""}${x.fz?`<span class=fz title="a freeze is a marker, never a move: the card keeps its column">${esc(x.fz)}</span>`:""}${x.pd?`<span class=pnd title="pending: the move to Todo is sent and the writer has not answered yet, or the board read has not carried a proved move">pending</span>`:""}${x.mr?`<div class=perr title="the writer refused this move">${esc(x.mr)}</div>`:""}${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(String(x.t).replace(/^\s*\[SPEC(?:\s*#?\d+)?\]\s*/i,""))}</span>${x.pm&&!pr?`<button class=pmp data-n="${x.n}" title="move this card to ${esc(x.pmt)}: the owner's go signal (ADR-0142)">→ ${esc(x.pmt)}</button>`:""}${x.sb?`<button class=spb data-n="${x.n}" title="plan this spec's batch: the hub names the count and the cards first, and nothing moves until you confirm">Start this spec</button>`:""}${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.ho?`<span class=hld title="${esc(x.ho)}">running</span>`:""}${(x.cl||[]).length?`<div class=clos title="the issues this pull request closes">closes ${x.cl.map(n=>`<a target=_blank rel=noopener href="https://github.com/${esc(x.r||"__REPO__")}/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${(x.o||x.sc||x.by)?`<div class=ft>${x.sc?`<span class=tsk title="sub-issues closed / total: ${esc(x.sc)}">${esc(x.sc)}</span>`:""}${x.o?`<span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span>`:""}${x.by?`<span class=au title="opened by ${esc(x.by)}">${esc(x.by)}</span>`:""}</div>`:""}</div>`}).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"")};
+const cards=(g,it,shown)=>{const GHI='<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>';return shown.map(x=>{const pr=x.kind==="pr";return `<div class=it data-n="${x.n}" data-r="${esc(x.r||"__REPO__")}"${pr?" data-pr":""} data-col="${encodeURIComponent(g.name==null?"":String(g.name))}" data-pm="${x.pm&&!pr?1:""}" data-b="${encodeURIComponent(JSON.stringify(x.b||[]))}" data-bl="${encodeURIComponent(JSON.stringify(x.bl||[]))}" data-ho="${encodeURIComponent(x.ho==null?"":String(x.ho))}" data-hr="${encodeURIComponent(x.hr==null?"":String(x.hr))}" data-prf="${encodeURIComponent(JSON.stringify(x.prf||[]))}" style="--cc:${colOf(g.name,CN)};--lc:${specColor(SLOTS,cardSpec(x))}${tint(x)}"><a class="id ghl" target=_blank rel=noopener title="open ${pr?"pull request":"issue"} #${x.n} on GitHub" aria-label="open ${pr?"pull request":"issue"} #${x.n} on GitHub" href="https://github.com/${esc(x.r||"__REPO__")}/${pr?"pull":"issues"}/${x.n}">#${x.n} ${GHI}</a>${x.kind!=="pr"&&x.pa!=null&&!x.sp?`<span class=lchip data-k=spec title="spec #${x.pa}">${x.pa}</span>`:""}${waveChip(x)}${(x.l||[]).includes("loop-bug")?'<span class="bugc loop">loop-bug</span>':(x.l||[]).includes("bug")?'<span class="bugc">bug</span>':""}${x.rt?`<span class=rpo title="the repository this card belongs to: ${esc(x.r)}">${esc(x.rt)}</span>`:""}${x.pb?`<span class="pbg ${x.pb.replace(" ","-")}">${esc(x.pb)}</span>`:""}${x.rollup?`<span class="cir ${esc(x.rollup)}" title="CI states on the head${(x.ci||[]).length?": "+esc((x.ci||[]).join(", ")):""}">CI ${esc(x.rollup)}</span>`:""}${x.fz?`<span class=fz title="a freeze is a marker, never a move: the card keeps its column">${esc(x.fz)}</span>`:""}${x.pd?`<span class=pnd title="pending: the move is not proved yet, because the writer has not answered, or no board read has carried a move the hub did not see proved">pending</span>`:""}${x.mr?`<div class=perr title="the writer refused this move">${esc(x.mr)}</div>`:""}${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(String(x.t).replace(/^\s*\[SPEC(?:\s*#?\d+)?\]\s*/i,""))}</span>${x.pm&&!pr?`<button class=pmp data-n="${x.n}" title="move this card to ${esc(x.pmt)}: the owner's go signal (ADR-0142)">→ ${esc(x.pmt)}</button>`:""}${x.sb?`<button class=spb data-n="${x.n}" title="plan this spec's batch: the hub names the count and the cards first, and nothing moves until you confirm">Start this spec</button>`:""}${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.ho?`<span class=hld title="${esc(x.ho)}">running</span>`:""}${(x.cl||[]).length?`<div class=clos title="the issues this pull request closes">closes ${x.cl.map(n=>`<a target=_blank rel=noopener href="https://github.com/${esc(x.r||"__REPO__")}/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${(x.o||x.sc||x.by)?`<div class=ft>${x.sc?`<span class=tsk title="sub-issues closed / total: ${esc(x.sc)}">${esc(x.sc)}</span>`:""}${x.o?`<span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span>`:""}${x.by?`<span class=au title="opened by ${esc(x.by)}">${esc(x.by)}</span>`:""}</div>`:""}</div>`}).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"")};
 // A visible column holding no cards is not drawn at all: the columns that do have cards take the width, and the
 // collapsed one is accounted for by a line at the foot of the hidden: strip. Which columns those are is derived on
 // every render -- from the filtered count, the user's hidden set and the set the line's eye added -- and never
