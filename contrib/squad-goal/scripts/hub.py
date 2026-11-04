@@ -5844,14 +5844,20 @@ function paintHL(){
 // A tab only shows one pane; every pane keeps its own poll (#889).
 let TAB="board",lastRead=0,readStale=false;
 const TABS={board:"#tab-board",runs:"#tab-runs",flow:"#tab-flow",set:"#tab-set"};
+const HASH={board:"#kanban",runs:"#runs",flow:"#flow",set:"#settings"},HASH_TAB={"#kanban":"board","#runs":"runs","#flow":"flow","#settings":"set","#set":"set"};   // #set is the Settings alias saved in old links (#1274)
+function tabFromLocation(){if(/issue=\d+/.test(location.hash))return "board";return HASH_TAB[location.hash]||null}   // a card link opens Kanban, where the card is (#1274)
+function tabNext(k,i,n){return k==="ArrowRight"?(i+1)%n:k==="ArrowLeft"?(i+n-1)%n:k==="Home"?0:k==="End"?n-1:-1}
 function setTab(t,o){if(!TABS[t])t="board";TAB=t;ls.tab=t;save();
  for(const k in TABS)$(TABS[k]).classList.toggle("on",k===t);
- document.querySelectorAll(".tabs button").forEach(b=>b.classList.toggle("on",b.dataset.t===t));
+ document.querySelectorAll(".tabs button").forEach(b=>{const on=b.dataset.t===t;b.classList.toggle("on",on);b.setAttribute("aria-selected",on);b.tabIndex=on?0:-1});
+ if(location.hash!==HASH[t]&&!/issue=\d+/.test(location.hash))history.replaceState(null,"",HASH[t]);   // the address bar names the pane shown; a card link keeps its form
  if(t==="set")setTheme(sTheme);   // entering the tab shows one theme, the last one picked (#913)
  if(t==="flow"&&(!o||!o.keep)&&$("#flowov").hidden)flowOpen(ls.flowk==="lead"?"lead":"cfd");
  drawMain()}
 function tabClick(e){const b=e.target.closest("button[data-t]");if(b)setTab(b.dataset.t)}   // one control names its tab by data-t; the bar and the live-runs card share the handler (#1276)
 document.querySelector(".tabs").addEventListener("click",tabClick);
+function tabKey(e){const bs=[...document.querySelectorAll(".tabs button[data-t]")],n=tabNext(e.key,bs.indexOf(e.target),bs.length);if(n<0)return;e.preventDefault();e.stopPropagation();setTab(bs[n].dataset.t);bs[n].focus()}
+document.querySelector(".tabs").addEventListener("keydown",tabKey);   // the bar is a tab list: focus and the shown pane move together (#1274)
 $("#lrun").addEventListener("click",tabClick);   // the live-runs card's control opens the Runs tab (#1276)
 $("#lrun").addEventListener("click",e=>{const r=e.target.closest(".r[data-id]");if(!r)return;const id=r.dataset.id;hl={run:id};paintHL();openRun(id)});   // a card row opens the run sheet, exactly as the list's row does (#1276)
 $("#lrun").addEventListener("keydown",e=>{const r=e.target.closest(".r[data-id]");if(r&&(e.key==="Enter"||e.key===" ")){e.preventDefault();const id=r.dataset.id;hl={run:id};paintHL();openRun(id)}});   // the card row answers the keyboard too (#1276)
@@ -5966,7 +5972,7 @@ setInterval(squadChartTick,5000);
 // Last ended: the runs that ended today, read from the hub (#889)
 async function endedPoll(){try{const rows=await (await fetch("/api/ended")).json();ENDED=rows;drawMain();rows.slice(0,5).map(r=>`<div class=r data-rid="${esc(r.id)}" tabindex=0 role=button><div><span class="b ${r.state}">${esc(r.badge||r.state)}</span> <b>${esc(name(r))}</b><div class=m>${usd(r.spend)} \u00b7 last write ${age(r.age)} ago</div></div></div>`).join("")||"<div class=m>no run ended today</div>"}catch(e){}}
 endedPoll();setInterval(endedPoll,30000);
-setTab(location.hash==="#set"?"set":TABS[ls.tab]?ls.tab:"board");   // the phone menu links here with #set (#913)
+setTab(tabFromLocation()||(TABS[ls.tab]?ls.tab:"board"));   // the phone menu links here with #set (#913); a hash picks its tab (#1274)
 // The open page follows the hub build that served it (#1114)
 const SERVED_BUILD=__BUILD__;let hubNote=null;
 function hubStale(msg){if(!msg){if(hubNote)hubNote.remove();hubNote=null;return}if(!hubNote){hubNote=document.createElement("div");hubNote.className="perr";document.body.append(hubNote)}hubNote.textContent=msg}
