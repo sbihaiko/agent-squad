@@ -5,10 +5,11 @@ the way the hub composes it: the chart screen fetches `/api/chart/lead`, the des
 one. On a phone the legend and the reference values sit under the plot with no right gutter, a tap pins one mark's
 tooltip, and zoom and reset are explicit buttons instead of a drag.
 
-Every fixture is the shape the hub serves, never a hand-made approximation of it. The pure drawing reads
-`board_leadtime.control_chart`'s own output; the page tests read the answer `/api/chart/lead` composes
-(`hub.flow_lead` over a seeded history store), so the payload carries `lead.start`, the control charts and the clusters
-the route hands the desktop page, and the zoom URL the screen builds is fed back to `hub.lead_zoom` unchanged.
+Every fixture is the shape the hub serves, never a hand-made approximation of it. The pin tests take a cluster from the
+answer `/api/chart/lead` composes (`hub.flow_lead` over a seeded history store), so `mltPin` reads the dot fields and the
+range objects the route actually hands the desktop page. The zoom test captures the URL the screen builds, passes it to
+`hub.lead_zoom`, and feeds the route's real answer back through the page, so the zoom-response coverage is the route's
+answer and not a stand-in. Only the drawing tests (marks, legend, the zoom arithmetic) use `control_chart` directly.
 """
 import importlib.util
 import json
@@ -170,29 +171,34 @@ def test_the_marks_and_the_legend_match_the_desktop_fill():
     assert LEADTIME.CLUSTER_RADIUS_PX == MANY["r"] and LEADTIME.DOT_RADIUS_PX == LONE["r"], (LONE["r"], MANY["r"])
 
 
-def test_a_cluster_serves_the_ranges_the_pin_reads(hub):  # noqa: F811
-    """The pin takes a cluster's lead and closed ranges from the payload (board_leadtime.py:250-257 serves them): both
-    shapes carry `{min, max, text}` and `{start, end, text}`, so no range is recomputed in the view (ADR-0137)."""
+def test_the_route_serves_each_cluster_range_the_pin_reads(hub):  # noqa: F811
+    """The pin takes a cluster's lead and closed ranges from the payload (board_leadtime.py:254-255 sets them): every
+    cluster of the route's own answer carries `{min, max, text}` and `{start, end, text}`, and its dots carry `n`,
+    `title`, `text` and a date string `closed`, so no range is recomputed in the view (ADR-0137)."""
     clusters = served_lead(hub)["lead"]["control"]["log"]["all"]["clusters"]
     lone = next(k for k in clusters if k["count"] == 1)
     many = next(k for k in clusters if k["count"] > 1)
     for k in (lone, many):
         assert {"min", "max", "text"} <= set(k["lead"]), k
         assert {"start", "end", "text"} <= set(k["closed"]), k
-        assert k["count"] == len(k["dots"]), k
+        assert k["count"] == len(k["dots"]) == len(k["cards"]), k
+        assert all({"n", "title", "closed", "text", "stack"} <= set(d) and isinstance(d["closed"], str) for d in k["dots"]), k
 
 
 @pytest.mark.skipif(NODE is None, reason="node is needed for the chart drawing")
-def test_a_tap_pins_a_lone_card_from_its_cluster_dot():
-    """A real cluster carries no `n`, `title`, `text` or string `closed` of its own: they live on its one dot."""
-    pinned = run_js(f"mltPin({json.dumps(LONE)})")
-    assert pinned == "#1 first card · lead 2h · closed 2026-10-01 · Todo 2h", pinned
+def test_a_tap_pins_a_lone_card_from_the_served_cluster(hub):  # noqa: F811
+    """A lone cluster carries no `n`, `title`, `text` or string `closed` of its own: they live on its one dot."""
+    lone = next(k for k in served_lead(hub)["lead"]["control"]["log"]["all"]["clusters"] if k["count"] == 1)
+    pinned = run_js(f"mltPin({json.dumps(lone)})")
+    assert pinned == "#1 card 1 · lead 2h · closed 2026-10-01 · Todo 2h", pinned
 
 
 @pytest.mark.skipif(NODE is None, reason="node is needed for the chart drawing")
-def test_a_tap_lists_every_card_in_a_cluster():
-    pinned = run_js(f"mltPin({json.dumps(MANY)})")
-    assert pinned == "2 issues: #2, #3 · lead 1h · closed Oct 2 · Doing 1h · Todo 1h", pinned
+def test_a_tap_lists_every_card_in_the_served_cluster(hub):  # noqa: F811
+    """A cluster lists its cards from the dots it serves and takes its ranges from its own `lead` and `closed`."""
+    many = next(k for k in served_lead(hub)["lead"]["control"]["log"]["all"]["clusters"] if k["count"] > 1)
+    pinned = run_js(f"mltPin({json.dumps(many)})")
+    assert pinned == "2 issues: #2, #3 · lead 1h · closed Oct 2 · Todo 1h · Todo 1h", pinned
 
 
 @pytest.mark.skipif(NODE is None, reason="node is needed for the chart drawing")
@@ -237,13 +243,14 @@ def test_zoom_and_reset_are_explicit_buttons():
 @pytest.mark.skipif(NODE is None, reason="node is needed for the chart drawing")
 def test_the_zoom_url_the_page_builds_is_the_route_it_reads(hub):  # noqa: F811
     """The screen names the span `/api/chart/lead` serves (`lead.start`) and doubles the payload's own range; the URL it
-    builds is the one `hub.lead_zoom` accepts, and the answer names the same measure over the same cards."""
+    builds is the one `hub.lead_zoom` accepts, and the route's real answer is what the page draws."""
     payload = served_lead(hub)
     lead = payload["lead"]
+    # Pass one: the screen builds its URL from the served view. The other path answers nothing here; this pass reads the
+    # request alone, so no synthetic chart ever stands in for the route's answer.
     out = move.run_page(hub.MOBILE_PAGE, f"const PAYLOAD = {json.dumps(payload)};" + """
       const sent = [];
-      call = (p, fresh) => { sent.push({ path: p, fresh: !!fresh });
-                             return Promise.resolve(p.startsWith("/api/chart/lead") ? PAYLOAD : PAYLOAD.lead.control.log.all); };
+      call = (p, fresh) => { sent.push({ path: p, fresh: !!fresh }); return Promise.resolve(p.startsWith("/api/chart/lead") ? PAYLOAD : {}); };
       moreScreen = "lead"; await loadMore();
       const el = document.querySelector('[data-screen="lead"]');
       el.listeners.click.forEach(fn => fn({ target: el.querySelector('#ltbars [data-ltf="all"]') }));
@@ -255,21 +262,42 @@ def test_the_zoom_url_the_page_builds_is_the_route_it_reads(hub):  # noqa: F811
     assert out["start"] == lead["start"] == hub.LEAD_START, "the span is the field the payload serves"
     url = out["sent"][1]["path"]
     assert out["sent"][1]["fresh"] is True, "a zoom reads the hub, never the cache"
-    query = urllib.parse.urlsplit(url).query
-    asked = urllib.parse.parse_qs(query)
+    asked = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
     rng = lead["control"]["log"]["all"]["range"]
-    start, end = datetime.fromisoformat(rng["start"]), datetime.fromisoformat(rng["end"])
-    half = (end - start) / 2
-    def moment(key):   # the page's Date#toISOString: UTC, milliseconds, Z
+
+    def ms(m):   # the page reads the payload's stamps through Date, whose resolution is the millisecond
+        return m.replace(microsecond=m.microsecond // 1000 * 1000)
+
+    start, end = ms(datetime.fromisoformat(rng["start"])), ms(datetime.fromisoformat(rng["end"]))
+
+    def moment(key):   # the page's Date#toISOString: UTC, milliseconds, Z, so 1ms is the page's own resolution
         return datetime.fromisoformat(asked[key][0].replace("Z", "+00:00"))
-    assert abs((moment("from") - (start - half)).total_seconds()) < 0.001, (asked, url)
-    assert abs((moment("to") - (end + half)).total_seconds()) < 0.001, (asked, url)
+
+    frm, to = moment("from"), moment("to")
+    assert abs(((to - frm) - 2 * (end - start)).total_seconds()) < 0.001, (asked, url)   # the window doubles
+    assert abs(((frm - start) + (to - end)).total_seconds()) < 0.001, (asked, url)   # around the same middle
     assert asked["scale"] == ["log"] and asked["a"] == [hub.LEAD_START], (asked, url)
-    served = hub.lead_zoom(query)   # the exact query the page sends, through the route's own gate
-    assert "error" not in served, served
-    assert served["measure"] == lead["measure"], (served["measure"], lead["measure"])
-    assert sum(k["count"] for k in served["clusters"]) == sum(k["count"] for k in lead["control"]["log"]["all"]["clusters"]), \
+    answer = hub.lead_zoom(urllib.parse.urlsplit(url).query)   # the exact query the page sends, through the route's gate
+    assert "error" not in answer, answer
+    assert answer["measure"] == lead["measure"], (answer["measure"], lead["measure"])
+    assert sum(k["count"] for k in answer["clusters"]) == sum(k["count"] for k in lead["control"]["log"]["all"]["clusters"]), \
         "the zoomed answer plots the cards the base payload plots"
+    assert datetime.fromisoformat(answer["range"]["start"]) == frm, (answer["range"], asked)
+    assert datetime.fromisoformat(answer["range"]["end"]) == to, (answer["range"], asked)
+    # Pass two: the page draws the route's own answer, not a stand-in of the test's own making.
+    drawn = move.run_page(hub.MOBILE_PAGE, f"const PAYLOAD = {json.dumps(payload)}; const ANSWER = {json.dumps(answer)};" + """
+      call = p => Promise.resolve(p.startsWith("/api/chart/lead") ? PAYLOAD : ANSWER);
+      moreScreen = "lead"; await loadMore();
+      const el = document.querySelector('[data-screen="lead"]');
+      el.listeners.click.forEach(fn => fn({ target: el.querySelector('#ltbars [data-ltf="all"]') }));
+      await leadZoom("out");
+      return { zc: MLT.zc, zr: MLT.zr, msg: el.querySelector(".msg").textContent };
+    """)
+    assert drawn["msg"] == "", drawn
+    assert drawn["zc"] is not None and drawn["zc"]["measure"] == answer["measure"], drawn["zc"]
+    assert drawn["zc"]["range"] == answer["range"], (drawn["zc"]["range"], answer["range"])
+    assert [d["n"] for d in drawn["zc"]["dots"]] == [d["n"] for d in answer["dots"]], drawn["zc"]
+    assert [k["count"] for k in drawn["zc"]["clusters"]] == [k["count"] for k in answer["clusters"]], drawn["zc"]
 
 
 @pytest.mark.skipif(NODE is None, reason="node is needed for the chart drawing")
@@ -286,29 +314,33 @@ def test_a_stale_answer_never_draws_over_a_newer_view(hub):  # noqa: F811
       const el = document.querySelector('[data-screen="lead"]');
       el.listeners.click.forEach(fn => fn({ target: el.querySelector('#ltbars [data-ltf="all"]') }));
       const click = sel => el.listeners.click.forEach(fn => fn({ target: el.querySelector(sel) }));
+      const draw0 = leadDraw; let draws = 0; leadDraw = (...a) => { draws++; return draw0(...a); };
       holding = true;
       const first = leadZoom("in"), second = leadZoom("out");
-      const seqs = MLT.seq;
+      const seqs = MLT.seq;   // one number per zoom action
       held[1]({ ...BASE, tag: "new" }); await second; await __tick(5);
       const drawn = MLT.zc && MLT.zc.tag;
       held[0]({ ...BASE, tag: "mid" }); await first; await __tick(5);
       const after = MLT.zc && MLT.zc.tag;   // the older answer never draws over the newer
       const pending = leadZoom("in");
       click('[data-ltzoom="reset"]');
-      const atReset = { zc: MLT.zc, zr: MLT.zr };
+      const atReset = { zc: MLT.zc, zr: MLT.zr }, seqAfter = MLT.seq, drawsAtReset = draws;
       held[2]({ ...BASE, tag: "stale" }); await pending; await __tick(5);
-      const afterReset = { zc: MLT.zc, zr: MLT.zr };   // an answer in flight at the reset never draws either
+      const afterReset = { zc: MLT.zc, zr: MLT.zr, draws };   // an answer in flight at the reset never draws either
       const pending2 = leadZoom("in");
       click('#ltbars [data-ltf="7"]');
       const tf = MLT.tf;
       held[3]({ ...BASE, tag: "old" }); await pending2; await __tick(5);
-      return { seqs, drawn, after, atReset, afterReset, tf, stale: MLT.zc, zc: !!MLT.zc };
+      return { seqs, seqAfter, drawsAtReset, drawn, after, atReset, afterReset, tf, stale: MLT.zc, zc: !!MLT.zc };
     """)
-    assert out["seqs"] >= 2, out
+    assert out["seqs"] == 3, out   # the served 'all' view, then the zoom in and the zoom out
     assert out["drawn"] == "new", out
     assert out["after"] == "new", "a stale zoom answer drew over the newer one"
+    assert out["seqAfter"] == out["seqs"] + 2, "the reset took no sequence number of its own"   # the zoom in flight, then the reset
     assert out["atReset"] == {"zc": None, "zr": None}, out
-    assert out["afterReset"] == {"zc": None, "zr": None}, "a zoom answer in flight at the reset drew over it"
+    assert out["afterReset"]["zc"] is None and out["afterReset"]["zr"] is None, \
+        "a zoom answer in flight at the reset drew over it"
+    assert out["afterReset"]["draws"] == out["drawsAtReset"], "the in-flight answer's resolution drew after the reset"
     assert out["tf"] == "7", out
     assert out["stale"] is None and out["zc"] is False, \
         "a timeframe switch did not outrank the zoom answer in flight: the stale chart drew"

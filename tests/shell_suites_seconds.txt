@@ -73,6 +73,7 @@ test-hub-killed.sh 0.06
 test-hub-lead-clusters.sh 0.09
 test-hub-loop-switch.sh 1.57
 test-hub-metrics.sh 1.52
+test-hub-mobile-lead.sh 0.18
 test-hub-mobile-loop.sh 0.09
 test-hub-mobile-move.sh 0.04
 test-hub-mobile-run.sh 0.05
