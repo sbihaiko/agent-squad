@@ -2,7 +2,7 @@
 # usage: health.sh   (also run by launchd every 2 min, outside watchd: nothing inside the loop can notice the loop itself dying)
 # One health pass -> $SG_STATE/health.json. Causes: watchd-down, fastloop-down, watch-stalled (cycle.log silent 6 min), never-started-runs,
 # orphan-markers (queued-/runof- whose run never recorded), loose-worktrees,
-# runs-board-drift (live runs that disagree with the cards sitting In Progress -- it NAMES both sides, not just the two counts).
+# runs-board-drift (live runs that disagree with the claimed cards -- In Progress or Doing, whichever the board carries -- it NAMES both sides, not just the two counts).
 # gh-cooldown and gh-miss-rate come from ghspend.py (ADR-0277, the spend is visible): an exhausted cooldown names when it expires and
 # which pass owns it, and a sustained snapshot miss rate is named from the call log; both also land in health.json as a short `brief`
 # the hub's footer shows. ghspend.py makes no request, so this pass spends nothing from the bucket it reports on.
@@ -102,13 +102,17 @@ for r in $(cat "$SG_STATE/active-runs.txt" 2>/dev/null); do f=$r; [ "${r#/}" = "
   # a card slot we cannot name yet, so it is counted as a slot and excuses one unmatched card below.
   [ -e "$f/request.txt" ] && [ $((now - $(mtime "$f/request.txt"))) -le 300 ] && nyoung=$((nyoung+1))
 done
-slots=$((nlive+nyoung)); nboard=-1; ip=""
+slots=$((nlive+nyoung)); nboard=-1; ip=""; cols=""
+# the names a claimed card wears, from the board vocabulary (#1342): the definition's name and the shipped one (Doing here)
+cl=$(python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); import board_columns; print(board_columns.claimed_names())' "$(dirname "$0")" 2>/dev/null); [ -n "$cl" ] || cl="In Progress|Doing"
 if [ -n "${SG_OWNER:-}" ] && [ -n "${SG_PROJECT:-}" ]; then
   # the state each card carries, asked of the seam (#236): one items read, the Status field id cached by the binding
   raw=$(python3 -I "$(dirname "$0")/issue_state.py" 2>/dev/null); brc=$?
   # an unreadable board is not a drift: leave the counts unknown (-1) and let the next readable pass decide
-  [ $brc = 0 ] && { nboard=$(printf '%s\n' "$raw" | awk -F'\t' '$2=="In Progress"' | wc -l | tr -d ' ')
-    ip="$(printf '%s\n' "$raw" | awk -F'\t' '$2=="In Progress"{printf " #%s",$1}')"; }
+  [ $brc = 0 ] && { nboard=$(printf '%s\n' "$raw" | awk -F'\t' -v set="$cl" 'BEGIN{n=split(set,a,"|"); for(i=1;i<=n;i++) w[a[i]]=1} ($2 in w)' | wc -l | tr -d ' ')
+    ip="$(printf '%s\n' "$raw" | awk -F'\t' -v set="$cl" 'BEGIN{n=split(set,a,"|"); for(i=1;i<=n;i++) w[a[i]]=1} ($2 in w){printf " #%s",$1}')"
+    cols="$(printf '%s\n' "$raw" | awk -F'\t' -v set="$cl" 'BEGIN{n=split(set,a,"|"); for(i=1;i<=n;i++) w[a[i]]=1} ($2 in w){print $2}' | sort -u | paste -sd/ -)"
+    [ -n "$cols" ] || cols="${cl%%|*}"; }   # the name the board carries; with no claimed card, the definition's name
 fi
 if [ "$nboard" -ge 0 ] 2>/dev/null; then
   cn=""; for c in $ip; do case " $li " in *" ${c#\#} "*) ;; *) cn="$cn $c";; esac; done      # cards with no live run
@@ -122,7 +126,7 @@ if [ "$nboard" -ge 0 ] 2>/dev/null; then
     sig="$slots $nboard"; prev=""; [ -e "$A/drift-prev" ] && prev=$(cat "$A/drift-prev" 2>/dev/null)
     # once the marker is set the drift keeps the cause, so a persisting drift whose counts move is not reported as cleared
     if [ "$sig" = "$prev" ] || [ -e "$A/health-runs-board-drift" ]; then
-      add runs-board-drift "$nlive live run(s), $nboard card(s) In Progress; cards with no live run:${cn:- -}; live runs with no In Progress card:${rn:- -}${cm:+; holding a dispatch marker with no live run (the janitor releases them):$cm}"; fi
+      add runs-board-drift "$nlive live run(s), $nboard card(s) $cols; cards with no live run:${cn:- -}; live runs with no $cols card:${rn:- -}${cm:+; holding a dispatch marker with no live run (the janitor releases them):$cm}"; fi
     [ -n "${HEALTH_DRY:-}" ] || printf '%s\n' "$sig" > "$A/drift-prev"
   else
     [ -n "${HEALTH_DRY:-}" ] || rm -f "$A/drift-prev"   # a drift that clears before the second pass leaves no stale count behind

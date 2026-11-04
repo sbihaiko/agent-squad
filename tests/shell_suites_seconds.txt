@@ -69,6 +69,7 @@ test-hub-ci.sh 0.08
 test-hub-demote.sh 0.07
 test-hub-ended.sh 0.20
 test-hub-killed.sh 0.06
+test-hub-lead-clusters.sh 0.09
 test-hub-loop-switch.sh 1.57
 test-hub-metrics.sh 1.52
 test-hub-mobile-loop.sh 0.09

@@ -118,7 +118,7 @@ def test_tasks_header_has_flow_and_lead_time_buttons_and_keeps_its_controls(hub)
     # Re-anchored to the owner-approved mock (#889): Flow and Lead time sit on the Flow charts tab, not in the board's toolbar.
     tabs = hub.PAGE[hub.PAGE.index("<div class=rkt id=flowtabs>"):hub.PAGE.index("<div id=flowchips>")]
     # Re-anchored by the owner (2026-11-02): the burn-down tab is gone, so the charts are the two the owner keeps; Runs is a top tab (#1272).
-    assert [re.sub(r"<[^>]*>", "", x) for x in re.findall(r"<button[^>]*>.*?</button>", tabs)] == ["Cumulative Flow Diagram", "Lead Time"]
+    assert [re.sub(r"<[^>]*>", "", x) for x in re.findall(r"<button[^>]*>.*?</button>", tabs)] == ["Cumulative Flow", "Lead Time"]
     assert "id=flowv" not in hub.PAGE, "the View selector is gone: a chart is a tab"
     assert 'flowOpen=async k=>{FLOWK=k;$("#flowov").hidden=false;flowTabs();' in hub.PAGE, "the lit tab follows the chart drawn"
     head = hub.PAGE[hub.PAGE.index("<div id=bhead>"):hub.PAGE.index("<div id=bcases>", hub.PAGE.index("<div id=bhead>"))]
@@ -126,6 +126,68 @@ def test_tasks_header_has_flow_and_lead_time_buttons_and_keeps_its_controls(hub)
     assert "id=bflow" not in head and "id=blead" not in head
     assert '<details id=fw' in head and '<details id=fs' in head, "the header lost the filter bar"
     assert 'id=bsp' not in head and 'id=bz' not in head and 'id=bx' not in head, "a removed control is still in the header"
+
+
+def _visit(hub, tmp_path, name, stored, steps):
+    """The page's tab and chart-pick code run under node over `stored` localStorage: each step is one JS call, then
+    the charts opened, the chart open now, and the stored text after the steps."""
+    page = hub.PAGE
+    pick = re.search(r"^const flowPick=[^\n]*", page, re.M)
+
+    def line(pattern):
+        m = re.search(pattern, page, re.M | re.S)
+        assert m, f"the page has no {pattern!r}"
+        return m.group(0)
+
+    drawing = "\n".join([
+        f"const localStorage={{hub:{json.dumps(stored)}}};",
+        'let TAB="board",pins=new Set(),q="",per=10,src="",FLOWK=null;',
+        'const sTheme=null,setTheme=()=>{},drawMain=()=>{},document={querySelectorAll:()=>[]};',
+        'const el={"#flowov":{hidden:true}};const $=s=>el[s]||(el[s]={classList:{toggle(){}}});',
+        'const ls=JSON.parse(localStorage.hub||"{}");const opened=[];',
+        'const flowOpen=k=>{FLOWK=k;$("#flowov").hidden=false;opened.push(k)};',
+        line(r"^const save=[^\n]*"), line(r"^const TABS=[^\n]*"), line(r"^function setTab\(.*?drawMain\(\)\}"),
+        pick.group(0) if pick else "",
+        *steps,
+        'console.log(JSON.stringify({opened,FLOWK,stored:localStorage.hub}));',
+    ])
+    path = tmp_path / name
+    path.write_text(drawing)
+    result = subprocess.run(["node", str(path)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_first_visit_to_flow_opens_cumulative_flow(hub, tmp_path):
+    out = _visit(hub, tmp_path, "flow-first-visit.js", "{}", ['setTab("flow")'])
+    assert out["opened"] == ["cfd"] and out["FLOWK"] == "cfd"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_flow_reopens_the_chart_last_picked_after_a_reload(hub, tmp_path):
+    picked = _visit(hub, tmp_path, "flow-pick-lead.js", "{}", ['flowPick("lead")'])
+    again = _visit(hub, tmp_path, "flow-reload.js", picked["stored"], ['setTab("flow")'])
+    assert again["opened"] == ["lead"] and again["FLOWK"] == "lead"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_entering_flow_twice_in_a_row_reopens_the_chart_picked_in_between(hub, tmp_path):
+    out = _visit(hub, tmp_path, "flow-reenter.js", "{}",
+                 ['setTab("flow")', 'flowPick("lead")', 'setTab("board")', 'setTab("flow")'])
+    assert out["opened"] == ["cfd", "lead"] and out["FLOWK"] == "lead"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_stored_pick_that_names_no_chart_opens_cumulative_flow(hub, tmp_path):
+    out = _visit(hub, tmp_path, "flow-unknown-pick.js", '{"flowk":"burn"}', ['setTab("flow")'])
+    assert out["opened"] == ["cfd"]
+
+
+def test_the_top_bar_gains_no_tab_when_a_chart_opens(hub):
+    top = hub.PAGE[hub.PAGE.index("<div class=tabs role=tablist>"):]
+    top = top[:top.index("</div>")]
+    assert re.findall(r"data-t=(\w+)", top) == ["board", "runs", "flow", "set"], "a chart is a tab of the top bar"
 
 
 def test_cfd_bands_follow_the_hub_order(hub, board):
@@ -446,7 +508,7 @@ def test_the_legend_carries_short_names_and_values_never_prose(hub):
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_the_legend_has_no_prose_sentences_and_reference_lines_carry_end_labels(hub, board, tmp_path):
     """#1304: the chart answers "how long do bugs take" without a prose legend; each reference line labels itself at its
-    end; the standard-deviation band hides by default; a cluster's count sits clear of its ring with a leader line."""
+    end; the standard-deviation band hides by default; a cluster is one dot, with no count text in the plot (#1331)."""
     _seed(hub, {n: _done(n, "2026-10-02T09:00:00Z") for n in range(1, 13)})
     chart = hub.flow_lead()["lead"]["control"]["jira"]["all"]
     out = _lt_chart(hub, tmp_path, "lt-readable.js", chart)
@@ -457,16 +519,9 @@ def test_the_legend_has_no_prose_sentences_and_reference_lines_carry_end_labels(
         assert re.search(rf'<text [^>]*text-anchor=end[^>]*>{label} [^<]+</text>', plot), \
             f"the {label} reference line carries no end label"
     assert "<polygon" not in plot, "the standard-deviation band draws by default"
+    assert not re.search(r"<text[^>]*>\s*\d+\s*</text>", plot), "the plot still draws a count"
     circle = re.search(r"<circle [^>]*>", plot).group(0)
-    count = re.search(r"<text ([^>]*)>12</text>", plot)
-    assert count, "the cluster ring draws no count"
-    assert float(_svg_attr(count.group(1), "y")) < float(_svg_attr(circle, "cy")) - float(_svg_attr(circle, "r")), \
-        "the count sits inside the ring instead of clear above it"
-    leader = next((ln for ln in re.findall(r"<line [^>]*>", plot)
-                   if _svg_attr(ln, "x1") == _svg_attr(circle, "cx") and
-                   float(_svg_attr(ln, "y1")) == pytest.approx(float(_svg_attr(circle, "cy"))
-                                                               - float(_svg_attr(circle, "r")))), None)
-    assert leader, "the count has no leader line back to its ring"
+    assert float(_svg_attr(circle, "r")) == chart["clusters"][0]["r"], "the dot does not take the payload's fixed radius"
 
 
 def _lt_chart(hub, tmp_path, name, chart, zr=None, coverage=None):
@@ -720,29 +775,64 @@ def test_each_mark_takes_its_own_role_and_the_legend_states_it(hub, board, tmp_p
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-def test_the_cluster_ring_holds_its_count_and_draws_it_clear_above_with_a_leader_line(hub, board, tmp_path):
-    """#1304: the count never hides inside an overlapping ring: it sits above the ring with a leader line."""
-    lt = _load("board_leadtime_ring", SCRIPTS / "board_leadtime.py")
-    _seed(hub, {n: _done(n, "2026-10-02T09:00:00Z") for n in range(1, 13)})
+def test_a_lone_card_draws_a_hollow_dot_and_a_cluster_draws_one_filled_dot(hub, board, tmp_path):
+    """#1331: a lone card is a hollow dot (ink ring, background fill); a cluster is one outlined filled dot of the one
+    fixed radius the payload serves; the plot draws no stacked bar and no count."""
+    lt = _load("board_leadtime_dots", SCRIPTS / "board_leadtime.py")
+    _seed(hub, {1: _done(1, "2026-10-02T09:00:00Z"), 2: _done(2, "2026-10-09T09:00:00Z"),
+                3: _done(3, "2026-10-09T09:00:00Z")})
     chart = hub.flow_lead()["lead"]["control"]["jira"]["all"]
-    assert len(chart["clusters"]) == 1 and len(chart["clusters"][0]["dots"]) == 12
-    out = _lt_chart(hub, tmp_path, "lt-ring.js", chart)
-    circle = re.search(r"<circle [^>]*>", out).group(0)
-    radius = float(_svg_attr(circle, "r"))
-    fs = float(re.search(r"--fs-body:(\d+)px", STYLESHEET.read_text()).group(1))
-    assert fs == lt.RING_TEXT_PX, "the ring geometry and the page body size have drifted apart"
-    box_w, box_h = len("12") * lt.AVG_GLYPH_EM * fs, lt.LINE_EM * fs
-    assert 2 * radius >= (box_w ** 2 + box_h ** 2) ** 0.5, "the ring does not hold the count's box"
-    count = re.search(r"<text ([^>]*)>12</text>", out)
-    assert count, "the cluster ring draws no count"
-    attrs = count.group(1)
-    assert "font-size" not in attrs, "the count sets a size of its own instead of inheriting the box"
-    top = float(_svg_attr(circle, "cy")) - radius
-    assert float(_svg_attr(attrs, "y")) < top, "the count does not sit clear above the ring"
-    leader = next((ln for ln in re.findall(r"<line [^>]*>", out)
-                   if _svg_attr(ln, "x1") == _svg_attr(circle, "cx") and float(_svg_attr(ln, "y1")) == pytest.approx(top)
-                   and _svg_attr(ln, "x2") == _svg_attr(circle, "cx")), None)
-    assert leader, "the count has no leader line back to its ring"
+    assert sorted(c["count"] for c in chart["clusters"]) == [1, 2]
+    out = _lt_chart(hub, tmp_path, "lt-dots.js", chart)
+    plot = re.search(r"<svg [^>]*data-lt[^>]*>(.*?)</svg>", out, re.S).group(1)
+    circles = re.findall(r"<circle [^>]*>", plot)
+    assert len(circles) == 2, "one mark per cluster, never one per card"
+    lone, cluster = sorted(circles, key=lambda tag: float(_svg_attr(tag, "r")))
+    assert float(_svg_attr(lone, "r")) == lt.DOT_RADIUS_PX
+    assert float(_svg_attr(cluster, "r")) == lt.CLUSTER_RADIUS_PX
+    assert _paint(lone, "fill") == "var(--chart-bg)", "a lone card draws no hollow dot"
+    assert _paint(cluster, "fill") == "var(--chart-ink)", "a cluster draws no filled dot"
+    assert _paint(cluster, "stroke") == "var(--chart-ink)", "a cluster's dot carries no outline"
+    assert "<rect" not in plot, "the plot still draws a stacked bar"
+    assert not re.search(r"<text[^>]*>\s*\d+\s*</text>", plot), "the plot still draws a count"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_dot_tooltip_names_the_mark_its_lead_its_dates_and_the_stage_strip(hub, board, tmp_path):
+    """#1331: the tooltip names the card or the cluster and shows the lead time, the closed dates and each dot's column
+    stack; the cluster carries its count, cards, date range and lead-time range in the payload."""
+    gated = [{"t": OPENED, "type": "added"}, {"t": OPENED, "type": "status", "status": "Todo"},
+             {"t": "2026-10-01T15:00:00Z", "type": "status", "status": "Gating"},
+             {"t": "2026-10-02T09:00:00Z", "type": "status", "status": "Closed"},
+             {"t": "2026-10-02T09:00:00Z", "type": "closed"}]
+    item = _card(1, st="Closed", s="CLOSED", c="2026-10-02T09:00:00Z")
+    _seed(hub, {1: (item, gated), 2: _done(2, "2026-10-02T09:00:00Z")})
+    chart = hub.flow_lead(ty=None)["lead"]["control"]["jira"]["all"]
+    cluster = chart["clusters"][0]
+    assert cluster["count"] == 2 and cluster["cards"] == [1, 2]
+    assert cluster["closed"]["text"] == "Oct 2"
+
+    out = _lt_chart(hub, tmp_path, "lt-tooltip.js", chart)
+    title = re.search(r"<circle[^>]*><title>([^<]*)</title>", out).group(1)
+    assert title.startswith("2 issues: #1, #2 · lead "), title
+    assert "closed Oct 2" in title
+    assert "Gating 18h" in title and "Todo 6h" in title, "the stage strip names each dot's column hours"
+
+
+def test_the_zoom_recomputes_the_clusters_from_the_same_rule(hub, board):
+    """#1331: a drag zoom re-requests the chart, and the clusters recompute from the caller's plot size and the one
+    screen-space rule; two closes the wide view merges split inside a zoom that spreads them."""
+    def same_day(n, opened, closed):
+        return (_card(n, st="Closed", s="CLOSED", c=closed, o=opened),
+                _life(opened, (closed, "Closed")))
+    _seed(hub, {1: same_day(1, "2026-10-02T08:00:00Z", "2026-10-02T09:00:00Z"),
+                2: same_day(2, "2026-10-02T20:00:00Z", "2026-10-02T21:00:00Z")})
+
+    wide = hub.lead_zoom("from=2026-09-01T00:00:00Z&to=2026-11-01T00:00:00Z")
+    assert [c["count"] for c in wide["clusters"]] == [2], "the wide view merges the two closes"
+    zoom = hub.lead_zoom("from=2026-10-02T00:00:00Z&to=2026-10-04T00:00:00Z")
+    assert sorted(c["count"] for c in zoom["clusters"]) == [1, 1], "the same rule at the zoom's scale splits them"
+    assert zoom["plot_frame"] == wide["plot_frame"] == {"width": 672, "height": 212}
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
@@ -1249,7 +1339,8 @@ def test_the_lead_chart_gives_a_gating_interval_its_own_band(hub, board):
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-def test_the_chart_draws_the_stack_and_gate_time_in_the_boards_palette_roles(hub, tmp_path):
+def test_the_stack_lives_in_the_dot_tooltip_and_gate_time_stays_a_text_metric(hub, tmp_path):
+    """Re-anchored (#1331): the plot draws no stacked bar; each dot's column stack is its tooltip's stage strip."""
     gated = [{"t": OPENED, "type": "added"}, {"t": OPENED, "type": "status", "status": "Todo"},
              {"t": "2026-10-01T15:00:00Z", "type": "status", "status": "Gating"},
              {"t": "2026-10-02T09:00:00Z", "type": "status", "status": "Closed"},
@@ -1272,14 +1363,10 @@ def test_the_chart_draws_the_stack_and_gate_time_in_the_boards_palette_roles(hub
     assert result.returncode == 0, result.stderr
     out = result.stdout
 
-    roles = json.loads(hub.BOARD_COLORS_JSON)
-    bands = re.findall(r"<rect [^>]*>.*?</rect>", out)
-    gating = next(band for band in bands if "Gating" in band)
-    todo = next(band for band in bands if "Todo" in band)
-    assert _paint(gating, "fill") == roles["Gating"], "the Gating band does not take the column's palette role"
-    assert _paint(todo, "fill") == roles["Todo"], "the Todo band does not take the column's palette role"
-    assert all(re.fullmatch(r"var\(--chart-[\w-]+\)", _paint(band, "fill") or "") for band in bands), \
-        "a band paints a colour outside the chart roles"
+    plot = re.search(r"<svg [^>]*data-lt[^>]*>(.*?)</svg>", out, re.S).group(1)
+    assert "<rect" not in plot, "the plot still draws a stacked bar"
+    title = re.search(r"<circle[^>]*><title>([^<]*)</title>", out).group(1)
+    assert "Gating 18h" in title and "Todo 6h" in title, "the stage strip does not name each column's hours"
     assert "Gate time" not in "".join(re.findall(r'<p class="flg ltlg">(.*?)</p>', out)), \
         "gate time is not a legend entry: zero has no counterpart on a log axis (#1304)"
     note = re.search(r'<p class="fnote ltkm">(.*?)</p>', out).group(1)

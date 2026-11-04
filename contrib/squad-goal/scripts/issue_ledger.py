@@ -377,7 +377,7 @@ def _conflict(rec, ev):   # -> (first|repeat|held|duplicate|floor, changed): a r
     if not run: raise ValueError("a conflict names its run")
     if run in floor_runs(rec): return "floor", False
     C = rec.get("conflict")
-    if C and C["sig"] == sig:   # the same base and the same paths: the same conflict, whichever run hit it
+    if C and C["sig"] == sig:   # the same paths (the wave keys sig on them, #1343): the same conflict, whichever run hit it
         if run in C["runs"]: return "duplicate", False
         C["runs"].append(run); C["count"] += 1
         return ("repeat" if C["count"] == 2 else "held"), True

@@ -88,6 +88,12 @@ DOING = "Doing"   # the column a claimed card wears: the lane bar counts it as t
 SPEC_LABEL = "spec"
 
 
+def claimed_names():
+    """The names a claimed card may wear, as one `|`-joined line: the definition's own name first, then the shipped name (#1342)."""
+    name = BY_FACT["claimed"]
+    return "|".join(dict.fromkeys((name, SHIPPED_NAME.get(name, name))))
+
+
 # A column whose GitHub colour another column already wears takes its own hex here: the hub draws one colour per column.
 COLUMN_HEX = {CODE_REVIEW: "var(--s5)"}
 

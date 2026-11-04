@@ -875,7 +875,10 @@ wave_conflict() {
   if [ -n "${dset// /}" ]; then list=$dset; for n2 in $refs; do case " $dset " in *" $n2 "*) ;; *) outs="${outs:+$outs }$n2";; esac; done
   else list=$refs; fi
   files=${6:-}; files=${files% }
-  sig="$($G -C "$S" rev-parse "origin/$base" 2>/dev/null) $files"
+  # The sig keys on the conflicting paths (#1343): the base sha moves with every landing, so a base in the key made every conflict a
+  # first. A conflict that names no path keeps the base sha, so an unnamed conflict never matches another one.
+  if [ -n "$files" ]; then sig=$(printf '%s\n' $files | sort -u | tr '\n' ' '); sig=${sig% }
+  else sig="base $($G -C "$S" rev-parse "origin/$base" 2>/dev/null)"; fi
   for n in $list; do
     wave_fact "$run" "$n" refused "the rebase on $base conflicts at $at"
     hit=$(ledger conflict "$n" "$run" "$sig" 2>&1) || { echo "WAVE-LEDGER #$n refused: $hit"; continue; }
@@ -896,6 +899,9 @@ wave_conflict() {
   done
   for n in $repeats; do
     file_conflict_bug "$n" "$run" "$w" "$at" "$files"
+    # The repeat stops the issue through the stop path (frozen:owner, ledger stop, one NOT-STARTABLE marker), so no dispatch pass
+    # picks it again while the loop rebuilds it (#1343). The count is the two conflicts on the same paths.
+    c=2; stop "$n" "the rebase on $base conflicts again at $at in ${files:-no path named by git}, the same paths as its last conflict: $w cannot land on the current base"
   done
   rm -f "$SG_STATE/auto/wave-$run" "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run"
   return 1

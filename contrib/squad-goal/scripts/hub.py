@@ -3755,6 +3755,16 @@ def _in_bar(row, fw, fs, fk=(), ty=None):
             and (ty is None or row["type"] == ty))
 
 
+def _lead_plot(query=None):
+    """The plot frame the lead chart clusters in: the page names its rendered plot size in pixels (`pw` x `ph`) on a
+    resize, and the default frame serves the first draw. Every view recomputes its clusters from this one size (#1331)."""
+    default = {"width": _leadtime.PLOT_WIDTH, "height": _leadtime.PLOT_HEIGHT}
+    if not query or "pw" not in query or "ph" not in query: return default
+    try: width, height = round(float(query["pw"][0])), round(float(query["ph"][0]))
+    except (ValueError, OverflowError): return default
+    return {"width": width, "height": height} if 100 <= width <= 4000 and 60 <= height <= 4000 else default
+
+
 def lead_zoom(query):
     """The control chart over a dragged range (`from` and `to`, ISO datetimes) or a timeframe preset (`tf`), `scale` jira
     or log (#900), measured from the start column `a` to the end column `b` (#905). No `a` is the card's opened instant;
@@ -3771,14 +3781,14 @@ def lead_zoom(query):
     if "from" not in q and "to" not in q and "tf" in q:
         days = dict(LEAD_TIMEFRAMES).get(q["tf"][0], 0)
         if days == 0: return {"error": "bad timeframe"}
-        return _leadtime.control_chart(rows, timeframe=days, log=log, now=now, measure=measure)
+        return _leadtime.control_chart(rows, timeframe=days, log=log, now=now, measure=measure, plot=_lead_plot(q))
     try:
         start, end = (dt.datetime.fromisoformat(q[k][0]) for k in ("from", "to"))
     except (KeyError, IndexError, ValueError):
         return {"error": "bad range: from and to are ISO datetimes"}
     start, end = (m if m.tzinfo else m.replace(tzinfo=dt.UTC) for m in (start, end))
     if end <= start: return {"error": "bad range: to is not after from"}
-    return _leadtime.control_chart(rows, log=log, now=now, start=start, end=end, measure=measure)
+    return _leadtime.control_chart(rows, log=log, now=now, start=start, end=end, measure=measure, plot=_lead_plot(q))
 
 
 CHARTS = {}   # each chart route's last answer, with the key of the inputs it read (#971)
@@ -3854,10 +3864,12 @@ def _lead_payload(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
     rows = [r for r in lead_rows(LEAD_START, None, now) if _in_bar(r, fw, fs, fk, ty)]
     measure = f"{LEAD_START} -> closed"
     lead = _leadtime.lead_time(rows, now=now, measure=measure)
-    control = {scale: {key: _leadtime.control_chart(rows, timeframe=days, log=scale == "log", now=now, measure=measure)
+    plot = _lead_plot()
+    control = {scale: {key: _leadtime.control_chart(rows, timeframe=days, log=scale == "log", now=now, measure=measure,
+                                                    plot=plot)
                        for key, days in LEAD_TIMEFRAMES} for scale in ("jira", "log")}   # the Jira-style control chart (#900)
     coverage = _coverage_payload(_hist.load_store(_hist.history_path(BOARD, REPO)))
-    return {"plot_frame": {"width": _leadtime.PLOT_WIDTH, "height": _leadtime.PLOT_HEIGHT},
+    return {"plot_frame": plot,
           "lead": {"measure": lead["measure"], "type": ty, "window": lead["window"], "start": LEAD_START,
                      "excluded": [{"reason": r, "count": c} for r, c in lead["excluded"].items()],
                      "excluded_cards": lead["excluded_cards"],
@@ -4704,6 +4716,7 @@ button.on{border-color:var(--acc);color:var(--acc)}
 #board{position:relative;width:auto}
 #bhead{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}#bhead>label{display:inline-flex;align-items:center;gap:8px}#bhead label.hck{border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px 0 10px;min-height:32px;background:var(--panel);cursor:pointer}#bhead label.hck input{margin:0;accent-color:var(--acc)}#bt:empty{display:none}
 #flowov{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-lg);display:flex;flex-direction:column}#flowov[hidden]{display:none}
+#flowtabs{display:inline-flex;border:1px solid var(--line-strong);border-radius:var(--radius-lg);overflow:hidden;margin:0 0 12px}#flowtabs button{border:0;border-radius:0;min-height:32px}#flowtabs button.on{background:var(--acc);color:var(--bg)}
 #flowchips{display:flex;gap:8px;align-items:center;margin-bottom:8px}#flowchips:empty{display:none}.fchip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line-strong);border-radius:var(--radius-lg);padding:0 8px;font-size:var(--fs-body);color:var(--ink-soft)}.fchip button{border:0;background:none;color:var(--acc);font:inherit;cursor:pointer;padding:0}
 #flowb{padding:10px;font-size:var(--fs-body)}#flowb svg{width:100%;height:auto;display:block;margin:6px 0;user-select:none;touch-action:pan-y}#flowb .fnote,#flowb .fhead{color:var(--mute);margin:4px 0}#flowb .fhead b{color:var(--fg,inherit)}#flowb .flstat{color:var(--mute);margin:6px 0 0}#flowb .ltgl{color:var(--mute);font-weight:600;margin-right:4px}
 #flowb .flg{margin-right:10px;white-space:nowrap}.ltlg{display:flex;flex-wrap:wrap;gap:4px 18px;white-space:normal}.ltlg span{display:inline-flex;align-items:baseline;gap:6px;white-space:nowrap}.ltlg b{font-weight:600}.ltlg em{font-style:normal;color:var(--mute)}.ltlg i{display:inline-block;width:18px;height:6px;border-radius:var(--radius-sm)}#flowb .flg i{display:inline-block;width:9px;height:9px;margin-right:4px;vertical-align:middle;border-radius:var(--radius-sm)}#flowb .ltmore>summary{cursor:pointer;color:var(--mute);margin:2px 0 6px}
@@ -4973,7 +4986,7 @@ html.sbshut #sbtn svg{transform:scaleX(-1)}
 </section>
 <section id=tab-runs class=pane aria-label=Runs><div id=main></div><div id=list></div></section>
 <section id=tab-flow class=pane aria-label="Flow charts">
-<div class=rkt id=flowtabs><button id=bflow title="the development flow: the cards in each column over time, from the flow history (SPEC 111)">Cumulative Flow Diagram</button><button id=blead title="the lead time of the closed cards, opened to closed (SPEC 111)">Lead Time</button></div>
+<div class=rkt id=flowtabs><button id=bflow title="the development flow: the cards in each column over time, from the flow history (SPEC 111)">Cumulative Flow</button><button id=blead title="the lead time of the closed cards, opened to closed (SPEC 111)">Lead Time</button></div>
 <div id=flowchips></div>
 <div id=flowov hidden><div id=flowb></div></div>
 </section>
@@ -5678,15 +5691,14 @@ const ltChart=(c,cov)=>{LT_FRAME=c.plot_frame;const n=c.dots.length,base=ltP+LT_
   const axes=`<line x1=${ltP} y1=${ltP-10} x2=${ltP} y2=${base} stroke=var(--chart-grid)></line><line x1=${ltP} y1=${base} x2=${ltP+LT_FRAME.width} y2=${base} stroke=var(--chart-grid)></line>`+
     `<text x=${ltP} y=${ltP+12} text-anchor=start fill=${ink}>elapsed time (${c.scale==="cube"?"cube root":c.scale})</text>`;   // the title sits inside the plot, at the left edge (#1141)
   const lines=ltLine(c.average,"var(--chart-series-8)","")+ltLine(c.median,"var(--chart-ok)","2 3")+ltLine(c.p85,"var(--chart-series-5)","5 3");
-  const bandCol=k=>COLORS[k]||"var(--chart-series-other)",stack=c.dots.map(d=>(d.stack||[]).map(b=>`<rect x=${ltX(d.x)-3} y=${ltY(b.y)} width=6 height=${ltY(b.y0)-ltY(b.y)} fill="${bandCol(b.column)}"><title>${esc(b.column)} ${esc(b.text)}</title></rect>`).join("")).join("");   // the hub places each band's two edges; the page draws them in the column's palette role (#1256)
-  const clus=fitMode&&c.clusters_fit?c.clusters_fit:c.clusters,dots=clus.map((k,i)=>{const m=k.dots.length,title=m>1?`${m} issues`:`#${k.dots[0].n} ${esc(k.dots[0].title)}`;   // the hub sizes the ring for its count, and serves the fit view's own rings (#1146, #1334)
-    const cx=ltX(k.x),cy=ltY(k.y);
-    return `<circle data-k=${i} cx=${cx} cy=${cy} r=${k.r} fill="${m>1?"var(--chart-bg)":"var(--chart-ink)"}" stroke="var(--chart-ink)" stroke-width=2${k.dots.some(d=>d.approx||d.unknown_first)?' stroke-dasharray="3 2"':""} style="cursor:pointer"><title>${esc(title)} · ${esc(k.dots[0].text)} · flowing ${esc(k.dots[0].flowing_text)} · held ${esc(k.dots[0].held_text)} · closed ${esc(k.dots[0].closed)}${k.dots.some(d=>d.approx)?" · start approximate":""}${k.dots.some(d=>d.unknown_first)?" · first interval unknown":""}</title></circle>`+(m>1?`<line x1=${cx} y1=${cy-k.r} x2=${cx} y2=${cy-k.r-5} stroke="var(--chart-ink)" stroke-width=1 pointer-events=none></line><text x=${cx} y=${cy-k.r-9} fill="var(--chart-ink)" text-anchor=middle pointer-events=none stroke="var(--chart-bg)" stroke-width=3 style="paint-order:stroke">${m}</text>`:"")}).join("");   // a count sits clear above its ring on a leader line, never hidden inside it (#1304)
+  const clus=fitMode&&c.clusters_fit?c.clusters_fit:c.clusters,dots=clus.map((k,i)=>{const m=k.count,shown=k.cards.slice(0,5).map(n=>"#"+n).join(", ")+(m>5?` +${m-5} more`:""),title=m>1?`${m} issues: ${shown}`:`#${k.dots[0].n} ${k.dots[0].title}`;   // a lone card is one hollow dot; a cluster is one outlined filled dot of the payload's one fixed radius (#1331)
+    const cx=ltX(k.x),cy=ltY(k.y),strip=k.dots.map(d=>d.stack.map(b=>`${b.column} ${b.text}`).join(", ")).join(" · ");   // the tooltip's stage strip: each dot's column stack, no stacked bar in the plot (#1331)
+    return `<circle data-k=${i} cx=${cx} cy=${cy} r=${k.r} fill="${m>1?"var(--chart-ink)":"var(--chart-bg)"}" stroke="var(--chart-ink)" stroke-width=2${k.dots.some(d=>d.approx||d.unknown_first)?' stroke-dasharray="3 2"':""} style="cursor:pointer"><title>${esc(title)} · lead ${esc(k.lead.text)} · closed ${esc(k.closed.text)}${strip?` · ${esc(strip)}`:""}${k.dots.some(d=>d.approx)?" · start approximate":""}${k.dots.some(d=>d.unknown_first)?" · first interval unknown":""}</title></circle>`}).join("");   // the tooltip names the card or the cluster, the lead time, the closed dates and the stage strip; the plot draws no count and no bar (#1331)
   const legend=`<p class="flg ltlg"><span><i style="background:var(--chart-bar)"></i>Rolling mean</span>${LT.band&&bp?`<span><i style="background:var(--chart-series-3);opacity:.28"></i>Standard deviation</span>`:""}</p>`+   // the series legend names only the marks the plot draws (#1304)
     `<p class="flg ltlg"><span><i style="background:var(--chart-series-8)"></i>${esc(c.average.label)} <b>${ltV(c.average)}</b></span><span><i style="background:var(--chart-ok)"></i>${esc(c.median.label)} <b>${ltV(c.median)}</b>${c.median.ci_text?` ${esc(c.median.ci_text)}`:""}</span><span><i style="background:var(--chart-series-5)"></i>${esc(c.p85.label)} <b>${ltV(c.p85)}</b></span></p>`+ltKM(c);   // one summary row carries each statistic beside its value; the one exclusion total sits in the header (#1248, #1250, #1334); every line also labels itself at its end (#1304)
   const pk=LT.pick!=null&&c.clusters[LT.pick]?c.clusters[LT.pick]:null;
   const rows=pk?`<table class=mtab><thead><tr><th>Issue</th><th>Title</th><th>Elapsed</th><th>Closed</th></tr></thead><tbody>${pk.dots.map(d=>`<tr data-o=${d.n} style="cursor:pointer"><td>#${d.n}</td><td>${esc(d.title)}</td><td>${esc(d.text)}</td><td>${esc(d.closed)}</td></tr>`).join("")}</tbody></table>`:"";   // the page's one table rule (#1146)
-  return ctl+legend+`<svg data-lt viewBox="0 0 ${LT_FRAME.width+2*ltP} ${LT_FRAME.height+2*ltP}">${axes}${ys}${xs}${band}${roll}${lines}${stack}${dots}</svg>`+rows;};
+  return ctl+legend+`<svg data-lt viewBox="0 0 ${LT_FRAME.width+2*ltP} ${LT_FRAME.height+2*ltP}">${axes}${ys}${xs}${band}${roll}${lines}${dots}</svg>`+rows;};
 const flowLead=l=>{const c=LT.zc||(l.control?l.control[LT.log?"log":"jira"][LT.tf]:null);
   const head=`<p class=fhead>${esc((LT_TYPES.find(([k])=>k===l.type)||[0,"all cards"])[1].toLowerCase())} · <b>${esc(c?c.measure:l.measure)}</b> · window ${l.window.size} ${esc(l.window.unit)}</p>`+
     (c&&c.summary?`<p class=fhead>min <b>${ltV(c.summary.minimum)}</b> · max <b>${ltV(c.summary.maximum)}</b> · ${esc(c.summary.plotted_text)} · ${ltExOf(c)}</p>`:"");   // the header is two rows: the view, then the summary it states (#1334)
@@ -5699,6 +5711,7 @@ const flowOpen=async k=>{FLOWK=k;$("#flowov").hidden=false;flowTabs();drawFlow()
 const ltQ=()=>`&scale=${LT.log?"log":"jira"}&a=${encodeURIComponent(LT.a)}&b=${encodeURIComponent(LT.b)}&${barQuery("lead")}`,ltOwn=()=>LT.a!==LT_START||LT.b!=="";   // a span other than the payload's, Todo to closed, is the hub's chart for it (#905, #1247); the bar's values filter it (#904)
 const ltZoom=async(f,t)=>{const tok=++LT.tok;try{const c=await (await fetch(`/api/leadtime?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}${ltQ()}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;LT.zr=[f,t];LT.pick=null;drawFlow()}catch(e){}};   // the hub recomputes the chart for the dragged range (#900)
 const ltGet=async()=>{const tok=++LT.tok;LT.zc=null;LT.pick=null;if(!ltOwn()){drawFlow();return}try{const c=await (await fetch(`/api/leadtime?tf=${LT.tf}${ltQ()}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;drawFlow()}catch(e){}};   // the timeframe's chart for the chosen span (#905)
+const ltResize=async()=>{const s=$("#flowb svg[data-lt]");if(!s)return;const r=s.getBoundingClientRect(),v=s.viewBox.baseVal,pw=LT_FRAME.width*r.width/v.width,ph=LT_FRAME.height*r.height/v.height,tok=++LT.tok;try{const c=await (await fetch(`/api/leadtime?${LT.zr?`from=${encodeURIComponent(LT.zr[0])}&to=${encodeURIComponent(LT.zr[1])}`:`tf=${LT.tf}`}${ltQ()}&pw=${pw}&ph=${ph}`)).json();if(tok!==LT.tok||c.error)return;LT.zc=c;drawFlow()}catch(e){}};   // a resize re-clusters the marks in the rendered plot size, by the hub's one rule (#1331)
 const ltPx=(e,s)=>{const r=s.getBoundingClientRect();return (e.clientX-r.left)/r.width*(LT_FRAME.width+2*ltP)};
 const ltClamp=x=>x<ltP?ltP:x>ltP+LT_FRAME.width?ltP+LT_FRAME.width:x,ltLo=(p,q)=>p<q?p:q,ltHi=(p,q)=>p<q?q:p;
 let LTD=null;   // the drag across a control chart's plot in progress (#900)
@@ -5719,7 +5732,8 @@ $("#flowb").onclick=e=>{if(LT.noclick){LT.noclick=false;return}
   if(e.target.id==="ltfit"){LT.win="fit";drawFlow();return}
   if(e.target.id==="ltfull"){LT.win="full";drawFlow();return}   // the range control redraws the held payload, never a second read (#1334)
   const k=e.target.closest("circle[data-k]");if(k){LT.pick=+k.dataset.k;drawFlow();return}const r=e.target.closest("tr[data-o]");if(r)showIssue(+r.dataset.o,"__REPO__")};
-$("#bflow").onclick=()=>flowOpen("cfd");$("#blead").onclick=()=>flowOpen("lead");$("#flowchips").onclick=e=>{if(e.target.id==="ffx")flowDetach()};addEventListener("resize",()=>{if(!$("#flowov").hidden)drawFlow()});
+const flowPick=k=>{ls.flowk=k;save();flowOpen(k)};
+$("#bflow").onclick=()=>flowPick("cfd");$("#blead").onclick=()=>flowPick("lead");$("#flowchips").onclick=e=>{if(e.target.id==="ffx")flowDetach()};addEventListener("resize",()=>{if(!$("#flowov").hidden){drawFlow();if(FLOWK==="lead")ltResize()}});
 function squadChart(k){if(FLOWK===k&&!$("#flowov").hidden)flowOpen(k)}   // a pushed version redraws only the chart it names
 function squadStreamLost(){$("#sse").hidden=false;$("#sse").textContent="live stream lost: retrying; the page keeps what it drew"}
 function squadStreamBack(){$("#sse").hidden=true;poll();pollBoard();if(FLOWK&&!$("#flowov").hidden)flowOpen(FLOWK)}   // one read each of the runs, the board and the open chart
@@ -5834,7 +5848,7 @@ function setTab(t,o){if(!TABS[t])t="board";TAB=t;ls.tab=t;save();
  for(const k in TABS)$(TABS[k]).classList.toggle("on",k===t);
  document.querySelectorAll(".tabs button").forEach(b=>b.classList.toggle("on",b.dataset.t===t));
  if(t==="set")setTheme(sTheme);   // entering the tab shows one theme, the last one picked (#913)
- if(t==="flow"&&(!o||!o.keep)&&$("#flowov").hidden)flowOpen("cfd");
+ if(t==="flow"&&(!o||!o.keep)&&$("#flowov").hidden)flowOpen(ls.flowk==="lead"?"lead":"cfd");
  drawMain()}
 function tabClick(e){const b=e.target.closest("button[data-t]");if(b)setTab(b.dataset.t)}   // one control names its tab by data-t; the bar and the live-runs card share the handler (#1276)
 document.querySelector(".tabs").addEventListener("click",tabClick);
@@ -5972,7 +5986,7 @@ HID_CHIP_TOKENS = (("abandoned", "err"), ("unscheduled", "warn"), ("issue_closed
 PAGE = PAGE.replace("/*HID_CHIP_RULES*/", "\n".join('.hidbar .chip[data-col="%s"] b{color:var(--%s)}' % (COLUMN[fact], token) for fact, token in HID_CHIP_TOKENS))
 PAGE = PAGE.replace("/*BOARD_COLORS*/", BOARD_COLORS_JSON).replace("/*BOARD_FLOW*/", BOARD_FLOW_JSON).replace("/*BOARD_NAMES*/", BOARD_NAMES_JSON).replace("/*BOARD_DOING*/", BOARD_DOING_JSON).replace("/*BOARD_REVIEW*/", BOARD_REVIEW_JSON).replace("/*HUB_REPO*/", json.dumps(REPO))
 PAGE = PAGE.replace("/*RUN_STATE_BASE_CSS*/", RUN_STATE_BASE_CSS).replace("/*RUN_STATE_CSS*/", "".join(run_state_css(r) for r in RUN_STATES))
-# The cluster count's baseline, from the one size the ring is measured against: the page and the hub read one constant (#1146).
+# The lead chart's clusters take their fixed radius from the payload; the page draws one dot per cluster and no count (#1331).
 PAGE = PAGE.replace("/*LT_START*/", LEAD_START)
 
 
