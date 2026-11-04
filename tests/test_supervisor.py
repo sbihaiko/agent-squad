@@ -434,7 +434,9 @@ def test_scrollback_is_dropped_when_the_session_ends(state):
     deadline = time.time() + 10
     while time.time() < deadline and '"event": "end"' not in (state / "sessions.jsonl").read_text():
         time.sleep(0.05)
-    assert sv.call(state, "read", session=session, offset=0)["data"] == ""
+    # The in-memory window is dropped at the end; a read then serves the redacted transcript and names the end (#1318).
+    out = sv.call(state, "read", session=session, offset=0)
+    assert out["ended"] is True and out["data"] == (state / "transcripts" / f"{session}.txt").read_text()[-4000:]
 
 
 def test_hub_module_holds_no_pty_or_fork_on_the_job_path():

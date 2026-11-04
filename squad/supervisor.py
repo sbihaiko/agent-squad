@@ -167,6 +167,8 @@ class Session:
         self.buf_lock = threading.Lock()
         self.write_lock = threading.Lock()
         self.closed = False
+        self.ended = False
+        self.returncode: int | None = None
         self.stop_requested = False
         self.pump = threading.Thread(target=self._pump, daemon=True)
 
@@ -200,6 +202,13 @@ class Session:
             raw = bytes(self.buf[start - self.base:])
             end = safe_cut(raw)
             return {"data": redact(raw[:end].decode("utf-8", "replace")), "offset": start + end, "gap": offset < self.base}
+
+
+def _tail(transcript: Path, limit: int = 4000) -> str:
+    try:
+        return transcript.read_text(encoding="utf-8", errors="replace")[-limit:]
+    except OSError:
+        return ""
 
 
 class Supervisor:
@@ -316,6 +325,8 @@ class Supervisor:
             _write_atomic(session.transcript, bytes(session.record))
             session.record.clear()
             session.buf.clear()
+            session.returncode = session.proc.returncode
+            session.ended = True
         reason = "stopped" if session.stop_requested else "exited"
         with self.lock:
             self._ledger({"event": "end", "session": session.sid, "reason": reason,
@@ -345,7 +356,15 @@ class Supervisor:
             self.attachments[key] = self.attachments.get(key, 0) + len(data)
 
     def read(self, sid: str, offset: int) -> dict:
-        return self._session(sid).read(offset)
+        """A live session's window, or, once it ended, the end itself: its return code and the transcript tail the caller
+        has not read yet, so a dead session never reads as a live, silent one (#1318)."""
+        session = self._session(sid)
+        with session.buf_lock:
+            if session.ended:
+                tail = "" if offset >= session.sent else _tail(session.transcript)
+                return {"data": tail, "offset": max(offset, session.sent), "gap": False, "ended": True,
+                        "returncode": session.returncode}
+        return {**session.read(offset), "ended": False}
 
     def detach(self, sid: str, caller: Caller) -> None:
         with self.lock:
