@@ -31,6 +31,7 @@ RAW_DAYS = 30
 DAY = 86400
 SHARED_NAME = "hub-flow.jsonl"   # the one history every repository on a board wrote before #894
 REBUCKET = "flow_rebucket"       # the line that records the one re-bucket of a history (#921)
+ATTEMPT_KEYS = frozenset({"gate_attempt", "gate_reuse"})   # #1255: journal facts, never samples or skips
 
 
 def history_path(board, repo):
@@ -249,10 +250,13 @@ def _read(path):
 
 
 def _rollup(lines, now):
-    """Past RAW_DAYS, the last sample and the last flow_skip of each UTC day stay; the other lines of that day go."""
+    """Past RAW_DAYS, the last sample and the last flow_skip of each UTC day stay; the other lines of that day go.
+    Gate attempt and gate reuse records (#1255) are facts, not samples: the old set filters on the record's
+    kind, and they never enter it -- whatever a future sample looks like, an attempt record always stays, so
+    the Gate Tries projection replays the whole attempt history however old it grows."""
     cutoff = now - RAW_DAYS * DAY
     old = [(i, (_is_sample(obj), _day(obj["t"]))) for i, (_, obj) in enumerate(lines)
-           if (_is_sample(obj) or _is_skip(obj)) and obj["t"] < cutoff]
+           if (_is_sample(obj) or _is_skip(obj)) and obj.get("k") not in ATTEMPT_KEYS and obj["t"] < cutoff]
     last_of_day = {key: i for i, key in old}
     drop = {i for i, key in old if last_of_day[key] != i}
     return [line for i, line in enumerate(lines) if i not in drop]

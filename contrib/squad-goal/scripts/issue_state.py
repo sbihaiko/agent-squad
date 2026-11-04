@@ -85,6 +85,9 @@ KINDS = ("bug", "task", "spec", "test case")
 # does not name them and board_define.py creates them from here (#487).
 HOLDER_FIELDS = ("Run", "Run started")
 
+# The number field the gate-attempt journal projects to (#1255, ADR-0170): one count per card.
+GATE_TRIES = "Gate Tries"
+
 WAVE = re.compile(r"^wave:\d+$")   # the ordering label, and the title of the milestone that carries a delivery
 
 
@@ -253,6 +256,23 @@ class State:
         """Clear the holder when the run ends, then read it back: a holder the next read still carries is
         `NotCarried`, never a clear. Returns None, the holder the issue then carries."""
         return self._write_holder(issue, None, None, None)
+
+    def set_gate_tries(self, issue, count):
+        """Raise the card's Gate Tries to `count`, then prove it by the read (ADR-0170). The field only rises:
+        a smaller `count` -- a rearm, or a journal shorter than the field -- is a floor and moves nothing
+        (ADR-0149). An unchanged value sends no write (ADR-0144). A crash between the journal and the field
+        replays to one count, because `count` is always the journal's own total. Returns the value the card carries."""
+        current = self.binding.gate_tries(issue)
+        want = max(int(count), current)
+        if want == current: return current
+        self.binding.write_gate_tries(issue, want)
+        def carried():
+            try: return self.binding.gate_tries(issue)
+            except (RuntimeError, ValueError): return None
+        if carried() == want: return want
+        if not self.binding.settle(lambda: want if carried() == want else None, self.binding.attempts):
+            raise NotCarried(issue, want, carried())
+        return want
 
     def kinds(self):
         """Every kind the carrier answers, in one read: {issue: kind}. An item with no kind is absent."""
@@ -464,6 +484,43 @@ class BoardBinding:
             return {x.get("name"): x.get("id") for x in fs if x.get("name") in HOLDER_FIELDS}
         return self._cached(f"rest-text-fields-{self.owner}-{self.project}.json", 86400, read_fields)
 
+    def number_field(self):
+        """The Gate Tries number field: `{"id"}`, the field's id, empty when the board carries none (#1255). Cached a day."""
+        def read_field():
+            fs = json.loads(self.api(f"{self.base}/fields?per_page=100"))
+            f = next((x for x in fs if isinstance(x, dict) and x.get("name") == GATE_TRIES), None) if isinstance(fs, list) else None
+            return {"id": f["id"] if f else ""}
+        return self._cached(f"rest-number-field-{self.owner}-{self.project}.json", 86400, read_field)
+
+    def gate_tries(self, issue):
+        """The value the card carries in Gate Tries, 0 when the card, the field or a value is absent. One items read."""
+        fid = self.number_field()["id"]
+        if not fid: return 0
+        out = self.api("--paginate", f"{self.base}/items?per_page=100&fields[]={fid}", "--jq",
+                       '.[]|select(.content.number==%d)|(((.fields[]?|select(.name==%s)|.value))//0)' % (int(issue), json.dumps(GATE_TRIES)))
+        for line in out.splitlines():
+            try: return max(0, int(float(line.strip())))
+            except ValueError: continue
+        return 0
+
+    def write_gate_tries(self, issue, count):
+        """One PATCH of the Gate Tries number. The read that proves it is the seam's (ADR-0144, ADR-0170)."""
+        iid = self.item_id(issue)
+        if not iid: raise RuntimeError(f"#{issue} not on the board")
+        fid = self.number_field()["id"]
+        if not fid:
+            (self.st / f"rest-number-field-{self.owner}-{self.project}.json").unlink(missing_ok=True)
+            fid = self.number_field()["id"]
+        if not fid: raise RuntimeError(f"no number field {GATE_TRIES!r}")
+        try:
+            self.api("-X", "PATCH", f"{self.base}/items/{iid}", "--input", "-",
+                     inp=json.dumps({"fields": [{"id": fid, "value": int(count)}]}))
+        except RuntimeError:
+            # A refused PATCH may name a stale id: a field renamed or recreated within the cache's day is
+            # dropped from the cache, so the next call re-reads it and never PATCHes the dead id again.
+            (self.st / f"rest-number-field-{self.owner}-{self.project}.json").unlink(missing_ok=True)
+            raise
+
     def items(self):
         """The issue -> item id map, REST only: the items route is a bare array with no total, so name the
         count read and its source, never a number not read (#96)."""
@@ -594,7 +651,7 @@ class BoardBinding:
         """The state one issue carries, "" when the carrier carries no card for it or no Status on it."""
         return self.read_all().get(str(issue), "")
 
-    def rows(self, jq, *, fields=True, kind=False, timeout=120):
+    def rows(self, jq, *, fields=True, kind=False, tries=False, timeout=120):
         """One paginated items read at the carrier, projected by the caller's jq program. The reach is the
         binding's, so a reader that needs more than the state (the pane, with its titles and labels) asks
         here and holds no call of its own. A read the carrier refuses raises, and the caller keeps its last rows."""
@@ -602,6 +659,9 @@ class BoardBinding:
         if fields and kind:   # the Kind field rides in the same read, so a pass that draws kinds adds no call (its field id is cached a day)
             try: fid += f"&fields[]={self.kind_field()['id']}" if self.kind_field()["id"] else ""
             except Exception: pass   # a carrier that cannot answer the field draws no kind: the rows are still read
+        if fields and tries:   # the Gate Tries number rides the same read (#1255): the card shows it, so no second read
+            try: fid += f"&fields[]={self.number_field()['id']}" if self.number_field()["id"] else ""
+            except Exception: pass
         return self.api("--paginate", f"{self.base}/items?per_page=100{fid}", "--jq", jq, timeout=timeout)
 
     def holders(self):

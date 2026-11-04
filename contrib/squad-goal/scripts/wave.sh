@@ -566,7 +566,8 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
     local of oc rs ran notran
     of=$(mktemp "${TMPDIR:-/tmp}/wave-outcome.XXXXXX" 2>/dev/null) || of=
     [ -z "$of" ] || : > "$of"
-    out=$(GATE_OUTCOME_READ_FILE="$of" SERIAL_TRY=1 SG_GATE_KIND=fast bash "$here/gate.sh" bash -c "$SG_WAVE_GATES" 2>&1); grc=$?
+    # SG_GATE_CARD names the card this gate answers for: its attempt is journaled and projected to Gate Tries (#1255).
+    out=$(GATE_OUTCOME_READ_FILE="$of" SERIAL_TRY=1 SG_GATE_KIND=fast SG_GATE_CARD="$iss" bash "$here/gate.sh" bash -c "$SG_WAVE_GATES" 2>&1); grc=$?
     oc= rs= ran= notran=
     [ -z "$of" ] || IFS=$'\t' read -r oc rs ran notran < "$of" 2>/dev/null
     [ -z "$of" ] || rm -f "$of"

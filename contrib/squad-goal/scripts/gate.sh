@@ -216,6 +216,18 @@ case "${1:-}" in
     GATE_OUTCOME_FILE=$(mktemp "${TMPDIR:-/tmp}/gate-outcome.XXXXXX" 2>/dev/null) || GATE_OUTCOME_FILE=
     GATE_BASE_FILE=$(mktemp "${TMPDIR:-/tmp}/gate-base.XXXXXX" 2>/dev/null) || GATE_BASE_FILE=
     start=$(date +%s)
+    # One attempt identity per logical gate invocation (#1255): the aid is a token written to a marker before the
+    # gate runs, and a replay for the same card and tip reads that marker instead of drawing a new token. Two runs
+    # in one second still differ, because each draws its own token; and a crash-restart answers as the same attempt
+    # whatever pid or clock it carries, because the token is the one the marker holds, never the replay's own.
+    gaid_marker=
+    if [ -n "${SG_GATE_CARD:-}" ] && [ -z "${SG_GATE_AID:-}" ]; then
+      sha0=$(git rev-parse HEAD 2>/dev/null)
+      gaid_marker="$st/gate-attempt-$SG_GATE_CARD-${sha0:0:12}.start"
+      if [ -r "$gaid_marker" ]; then SG_GATE_AID=$(cat "$gaid_marker" 2>/dev/null)
+      else SG_GATE_AID="gate-$start-$$-$RANDOM"; { mkdir -p "$st" 2>/dev/null && printf '%s\n' "$SG_GATE_AID" > "$gaid_marker"; } 2>/dev/null || :; fi
+      export SG_GATE_AID
+    fi
     bound=$(gate_bound); deadline=$(( start + bound ))
     export GATE_START_EPOCH=$start GATE_DEADLINE_EPOCH=$deadline GATE_BOUND_SECONDS=$bound
     export GATE_DELTA_RESERVE_SECONDS=$(gate_reserve)
@@ -233,6 +245,39 @@ case "${1:-}" in
           && mv -f "$outread.$$" "$outread" 2>/dev/null; }
         status "${SG_GATE_KIND:-gate}" "$FRES" "$sha" "$sel" "$scope"
         gate_history "${SG_GATE_KIND:-gate}" "$FRES" "$sha" "$start" "$sel" "$scope" "$FOC" "$FRS" "${FRAN:--}" "${FNOT:--}" "${SQUAD_GATE_WORKERS:-0}" "$FRED"
+        # The gate-attempt journal (#1255): one attempt record per verdict this invocation drew, for the card
+        # the gate names (SG_GATE_CARD) and the tip it ran at. A deadline stop reaches here too: its verdict is
+        # unproven, and an unproven attempt counts like any other. The record's identity is (card, tip, aid), and
+        # the aid is this invocation's start marker, so a crash between the append and the field write, then a
+        # replay under a new process, answers as the record itself and never appends twice. SG_GATE_AID names a
+        # chain of gates that is one attempt (a landing's retry chain): the first record answers for the chain.
+        gaok=1
+        if [ -n "${SG_GATE_CARD:-}" ]; then
+          gaj=${SG_GATE_JOURNAL:-}
+          if [ -z "$gaj" ] && [ -n "${SG_BOARD_CACHE:-}" ]; then
+            gaj=$(python3 "$here/gate_attempts.py" journal "$SG_BOARD_CACHE" "${SG_REPO:-$(repo_name)}" 2>/dev/null) || gaj=
+          fi
+          if [ -n "$gaj" ]; then
+            # A failed append is named on stderr, never swallowed: the gate's verdict stands, and the journal
+            # step is loud so a gate that journaled nothing is visible on the record it printed.
+            if ! garec=$(python3 "$here/gate_attempts.py" record "$gaj" "$SG_GATE_CARD" "$sha" "$FOC" "${SG_GATE_AID:-}" "$fin" 2>&1); then
+              echo "gate: WARNING: the attempt of card $SG_GATE_CARD at ${sha:0:9} was not journaled: $garec" >&2; gaok=
+            fi
+            # The journal is the source and the card's Gate Tries is its projection (#1255, ADR-0170): the count
+            # is replayed from the whole journal, so a crash between the append and the field write answers one
+            # count on the next projection. A projection that fails is named, never dropped silently.
+            if ! gat=$(python3 "$here/gate_attempts.py" count "$gaj" "$SG_GATE_CARD" 2>&1); then
+              echo "gate: WARNING: the Gate Tries count of card $SG_GATE_CARD did not replay: $gat" >&2; gaok=
+            elif [ -n "${SG_STATE:-}" ] && [ -n "${SG_OWNER:-}" ] && [ -n "${SG_PROJECT:-}" ]; then
+              if ! gaw=$(python3 "$here/board.py" --gate-tries "$SG_OWNER" "$SG_PROJECT" "$SG_GATE_CARD" "$gat" 2>&1); then
+                echo "gate: WARNING: the Gate Tries projection of card $SG_GATE_CARD failed: $gaw" >&2; gaok=
+              fi
+            fi
+          fi
+        fi
+        # The start marker holds the identity for a replay: it is dropped only once the append and its projection
+        # answered, so a crash before that lets the next gate of the same card and tip answer as the same attempt.
+        [ -z "$gaid_marker" ] || [ -z "$gaok" ] || rm -f "$gaid_marker" 2>/dev/null || :
         if [ "$FOC" = unproven ]; then
           base=$(cat "$GATE_BASE_FILE" 2>/dev/null); [ -n "$base" ] || base=${SG_BASE:-}
           obligation "$(repo_name)" "$sha" "$base" "${FNOT:--}" "$scope" "$fin"

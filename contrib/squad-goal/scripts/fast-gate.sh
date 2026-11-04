@@ -54,6 +54,15 @@ if [ -n "$memokey" ] && [ -r "$(memo_file "$memokey")" ]; then
     # The hit writes the pass line itself and no history line: a line with no selection and no run time would read as a whole
     # battery. The line names the current commit, not the tree object: the pass answers for the tip the gate stands on.
     SG_GATE_STATUS=self bash "$here/gate.sh" --status fast pass "$hsha"
+    # A memo reuse is no attempt (#1255): it is recorded as a reuse marker, and Gate Tries rises by none.
+    if [ -n "${SG_GATE_CARD:-}" ]; then
+      fgj=${SG_GATE_JOURNAL:-}
+      if [ -z "$fgj" ] && [ -n "${SG_BOARD_CACHE:-}" ] && [ -n "${SG_REPO:-}" ]; then
+        fgj=$(python3 "$here/gate_attempts.py" journal "$SG_BOARD_CACHE" "$SG_REPO" 2>/dev/null) || fgj=
+      fi
+      [ -z "$fgj" ] || python3 "$here/gate_attempts.py" reuse "$fgj" "$SG_GATE_CARD" "$hsha" \
+        "memo-${hsha:0:9}-$(printf '%s' "$memokey" | cksum | cut -d' ' -f1)" >/dev/null 2>&1 || :
+    fi
     echo "fast-gate: pass ${hsha:0:9} (log $ml) memo: the same tree, base and battery passed, so no battery ran"; exit 0
   fi
 fi
