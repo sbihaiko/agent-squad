@@ -293,7 +293,7 @@ else
   if [ "$lrc" -ne 0 ]; then echo "REVIEW $lbl: the label read of #$iss failed (exit $lrc); the ordinary review chain is used" >&2
   else chainname=$(lb_chain "$labels"); fi
 fi
-rrows=$(python3 "$(dirname "$0")/modelreg.py" chain "$chainname" --models "$cfg" --tsv); chain=$(awk -F'\t' '{print $2}' <<<"$rrows"); lane=""
+rrows=$(python3 "$(dirname "$0")/modelreg.py" chain "${chainname:-review}" --models "$cfg" --tsv); chain=$(awk -F'\t' '{print $2}' <<<"$rrows"); lane=""
 if [ "${SG_REVIEW_FASTLANE:-yes}" = yes ]; then
   files=$(filesof)
   if [ -n "$files" ] && ! printf '%s\n' "$files" | grep -vqE '^docs/|\.md$|Tests?/|(^|/)tests?/|(^|/)test_[^/]*$|_test\.[a-z]+$'; then
