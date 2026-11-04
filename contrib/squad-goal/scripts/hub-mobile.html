@@ -1168,14 +1168,26 @@ function runRow(r, url) {
   return b;
 }
 // The run history at the bottom of the tab (#1337), as the desktop tab draws it (#1277): the hub sends one entry per group,
-// its label, its header text and title, and marks a band that holds no run; each row carries its own group's key as `band`.
-// WORKERS always draws, an age band only while it holds a run, and the empty bands fold into one muted line. No groups — an
-// older hub's bare array — draws nothing, so the phone never shows a stale or invented group.
-function runHistory(groups) {
+// its label, its header text and title, and marks a band that holds no run; it also sends the muted line's own words, so the
+// page only lays them out. A row carries its group's key as `band` (#1337); a hub from #1277 sends the groups without that
+// field, so the page derives it with the same ladder the groups name. WORKERS always draws, an age band only while it holds a
+// run, and the empty bands fold into one muted line. No groups — an older hub's bare array — draws nothing.
+function runHistory(groups, mutedText) {
   const all = Array.isArray(groups) ? groups : [];
   const drawn = all.filter(g => g.key === "running" || !g.empty);
   const empty = all.filter(g => g.key !== "running" && g.empty);
-  return { drawn, muted: empty.length ? "no runs in " + empty.map(g => g.label).join(" · ") : "" };
+  // The hub owns the wording: only a hub that sends no `muted` gets the same words built from its own labels.
+  return { drawn, muted: mutedText || (empty.length ? "no runs in " + empty.map(g => g.label).join(" · ") : "") };
+}
+const LIVE_BANDS = ["running", "starting", "stalled"];
+function ageBand(age) {
+  const h = (age || 0) / 3600;
+  return h <= 1 ? "1h" : h <= 2 ? "2h" : h <= 4 ? "4h" : h <= 8 ? "8h" : h <= 24 ? "24h" : "d";
+}
+function rowBand(r) {
+  if (r.band) return r.band;
+  if (r.kind === "childcc" || (r.live !== false && LIVE_BANDS.includes(r.state))) return "running";
+  return ageBand(r.age);
 }
 function histRow(r) {
   // The childcc pass is a worker, not a run: its row is drawn, and it opens no dashboard of its own (#598).
@@ -1188,8 +1200,11 @@ function histRow(r) {
   d.append(name, meta);
   return d;
 }
-function drawHistory(rows, groups) {
-  const box = $("runs-history"), head = $("runs-history-h"), { drawn, muted } = runHistory(groups);
+function drawHistory(rows, groups, mutedText) {
+  const box = $("runs-history"), head = $("runs-history-h"), { drawn, muted } = runHistory(groups, mutedText);
+  const keys = new Set(drawn.map(g => g.key));
+  const first = (drawn.find(g => !g.empty) || drawn[0] || {}).key;   // a row no drawn header names joins the first filled band
+  const band = r => { const b = rowBand(r); return keys.has(b) ? b : first; };
   box.replaceChildren();
   for (const g of drawn) {
     const h = document.createElement("div"), text = document.createElement("span");
@@ -1197,7 +1212,7 @@ function drawHistory(rows, groups) {
     if (g.title) h.setAttribute("title", g.title);
     text.className = "sr"; text.textContent = g.text;
     h.append(text);
-    box.append(h, ...rows.filter(r => r.band === g.key).map(histRow));
+    box.append(h, ...rows.filter(r => band(r) === g.key).map(histRow));
   }
   if (muted) {
     const p = document.createElement("p");
@@ -1208,14 +1223,18 @@ function drawHistory(rows, groups) {
 }
 async function loadRuns() {
   try {
-    // The phone asks for the answer that carries the history groups, and reads either shape: a hub older than the page
-    // ignores the query and answers the bare array, so the runs still list and the history stays honestly empty (#1277).
-    const [d, ended] = await Promise.all([call("/api/runs?groups=1"), call("/api/ended")]);
-    const rows = Array.isArray(d) ? d : d.runs || [], groups = Array.isArray(d) ? [] : d.groups || [];
+    // The list first, on the bare route the page always read (#1337): a hub or an intermediary that rejects the groups query
+    // still shows the live and ended runs, as main did.
+    const [d, ended] = await Promise.all([call("/api/runs"), call("/api/ended")]);
+    const rows = Array.isArray(d) ? d : d.runs || [];
     $("runs-live").replaceChildren(...rows.filter(r => r.running).map(r => runRow(r, r.url || runURLs(r.id).page)));
     $("runs-ended").replaceChildren(...ended.map(r => runRow(r, "/ended/" + encodeURIComponent(r.id))));
-    drawHistory(rows, groups);
     $("runs-msg").textContent = "";
+    // Then the history's groups in their own read, so a rejected or failed query costs the history alone. A hub older than
+    // the page ignores the query and answers the bare array: the history stays honestly empty (#1277).
+    let a = Array.isArray(d) ? null : d;
+    if (!a) { try { const g = await call("/api/runs?groups=1"); a = Array.isArray(g) ? null : g; } catch (e) { a = null; } }
+    drawHistory(a && a.runs ? a.runs : rows, a ? a.groups || [] : [], a ? a.muted || "" : "");
   } catch (e) { $("runs-msg").textContent = e.message; }
 }
 // Pause and resume: the one write the run screen makes. It posts through the hub's forward route to the run's own control

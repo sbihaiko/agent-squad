@@ -108,35 +108,81 @@ DRIVER = """
            keys: ghs.map(e => e.dataset.g),
            span: ghs[0] ? ghs[0].querySelector(".sr").textContent : null,
            title: ghs[0] ? ghs[0].getAttribute("title") : null,
-           live: $("runs-live").textContent };
+           kids: [...h.children].map(e => ({ g: e.dataset.g || null, t: e.textContent })),
+           live: $("runs-live").textContent, msg: $("runs-msg").textContent };
 """
+
+
+def at(out, group):
+    """The index of the drawn header for `group`, so a test can place a row against it."""
+    return [i for i, k in enumerate(out["kids"]) if k["g"] == group][0]
+
+
+def under(out, group):
+    """The rows the drawn header for `group` carries, in order: every kid after it, up to the next header."""
+    kids = out["kids"][at(out, group) + 1:]
+    rows = []
+    for k in kids:
+        if k["g"]:
+            break
+        rows.append(k["t"])
+    return rows
 
 
 @pytest.mark.node_bound
 def test_the_phone_draws_the_workers_header_with_its_occupancy(hub):  # noqa: F811
     """The phone reads the answer's own group entries: the WORKERS label, the text the hub built and its spend tooltip."""
     rows = [dict(LIVE_ROW, band="running"), dict(HOUR_ROW, band="1h")]
-    answer = {"runs": rows, "groups": hub.run_groups([LIVE_ROW, HOUR_ROW], CAPS)}
+    groups = hub.run_groups([LIVE_ROW, HOUR_ROW], CAPS)
+    workers = next(g for g in groups if g["key"] == "running")
+    answer = {"runs": rows, "groups": groups, "muted": hub.run_muted(groups)}
     out = move.run_page(hub.MOBILE_PAGE, DRIVER,
                         routes={"/api/runs": [{"body": json.dumps(answer)}], "/api/ended": [{"body": "[]"}]})
     assert not out["hidden"] and not out["head"], "the run history is drawn at the bottom of the tab"
     assert out["keys"] == ["running", "1h"], "a filled band draws its header, in the answer's ladder order"
     assert "WORKERS" in out["text"]
-    assert out["span"] == "RUNS 1/6 · AGENTS 2/20", "the occupancy the hub built is not on the WORKERS header"
-    assert out["title"] == "$1.25", "the header carries the group's spend as its tooltip"
+    assert out["span"] == workers["text"], "the occupancy the hub built is not on the WORKERS header"
+    assert out["title"] == workers["title"], "the header carries the group's spend as its tooltip"
     assert "implement #7" in out["live"], "Live still lists the run it always did"
 
 
 @pytest.mark.node_bound
 def test_the_phone_folds_the_empty_age_bands_into_one_muted_line(hub):  # noqa: F811
-    """Six bands of 0 · $0.00 never push the rows down: the hub marks a band empty and the phone folds it (#1277)."""
+    """Six bands of 0 · $0.00 never push the rows down: the hub marks a band empty and sends the muted line (#1277)."""
     rows = [dict(TWO_HOUR_ROW, band="2h")]
-    answer = {"runs": rows, "groups": hub.run_groups([TWO_HOUR_ROW], CAPS)}
+    groups = hub.run_groups([TWO_HOUR_ROW], CAPS)
+    answer = {"runs": rows, "groups": groups, "muted": hub.run_muted(groups)}
     out = move.run_page(hub.MOBILE_PAGE, DRIVER,
                         routes={"/api/runs": [{"body": json.dumps(answer)}], "/api/ended": [{"body": "[]"}]})
     assert out["keys"] == ["running", "2h"], "an empty band draws no header"
     assert "0 · $0.00" not in out["text"], "an empty band still draws a zero row"
-    assert "no runs in ≤ 1 h · 2–4 h · 4–8 h · 8–24 h · 24 h+ (days)" in out["text"], "the empty bands are named once"
+    assert hub.run_muted(groups) in out["text"], "the empty bands are named once, in the words the hub sent"
+
+
+@pytest.mark.node_bound
+def test_a_hub_that_rejects_the_groups_query_still_lists_the_runs(hub):  # noqa: F811
+    """The list is the bare route's read, made first (#1337): a rejected `?groups=1` costs the history alone, never the runs."""
+    out = move.run_page(hub.MOBILE_PAGE, DRIVER,
+                        routes={"/api/runs": [{"body": json.dumps([LIVE_ROW])},
+                                              {"body": "bad request", "status": 400, "ct": "text/plain"}],
+                                "/api/ended": [{"body": "[]"}]})
+    assert "implement #7" in out["live"], "a hub that rejects the groups query still lists its runs, as main did"
+    assert out["hidden"] and out["head"], "the history is empty rather than a wrong group"
+    assert out["msg"] == "", "a rejected history read is not the runs list's error"
+
+
+@pytest.mark.node_bound
+def test_a_hub_that_sends_groups_without_the_row_band_still_places_every_row(hub):  # noqa: F811
+    """A #1277 hub sends the groups but no per-row `band`: the page derives it from the same ladder, so no row vanishes."""
+    rows = [LIVE_ROW, HOUR_ROW]
+    groups = hub.run_groups(rows, CAPS)
+    answer = {"runs": rows, "groups": groups}
+    out = move.run_page(hub.MOBILE_PAGE, DRIVER,
+                        routes={"/api/runs": [{"body": json.dumps([LIVE_ROW])}, {"body": json.dumps(answer)}],
+                                "/api/ended": [{"body": "[]"}]})
+    assert any("implement #7" in t for t in under(out, "running")), "a live row joins WORKERS"
+    assert any("fix #9" in t for t in under(out, "1h")), "an ended row joins its age band"
+    assert "no runs in" in out["text"], "a hub that sends no muted line still folds its empty bands"
 
 
 @pytest.mark.node_bound
