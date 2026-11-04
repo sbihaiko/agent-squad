@@ -146,6 +146,44 @@ def counts(path):
     return out
 
 
+def last_attempt(path, card, tip=None):
+    """The latest attempt of the card, None when the journal holds none. `tip` names the wave: only
+    attempts at that tip answer, so a red work-branch gate never holds another wave's card. The
+    latest is the greatest (t, ord): the clock the record carries, then the ordinal within the tip,
+    so an unproven attempt with a stopped clock still orders after the attempt before it."""
+    card = int(card)
+    held = [r for r in attempts(path) if r.get("n") == card and (tip is None or r.get("tip") == str(tip))]
+    if not held:
+        return None
+    return max(held, key=lambda r: (int(r.get("t") or 0), int(r.get("ord") or 0)))
+
+
+def start_marker(state_dir, card, tip):
+    """The path of the start marker gate.sh writes before a gate runs and drops once the attempt is
+    journaled: while it stands, a gate is live for the card at that tip (#1257). The name is the one
+    gate.sh builds, so the live read and the write never drift apart."""
+    return pathlib.Path(state_dir) / f"gate-attempt-{int(card)}-{str(tip)[:12]}.start"
+
+
+def gate_live(state_dir, card, tip):
+    """True when a gate runs for the card at that tip right now: the start marker stands."""
+    try:
+        return start_marker(state_dir, card, tip).exists()
+    except OSError:
+        return False
+
+
+def gating(path, card, tip, live=False):
+    """The gating fact one card's wave carries (#1257), read from the journal alone so a hub restart
+    answers the same. Two sources: a gate live for the wave right now, or the wave's last attempt
+    ended without a pass and no attempt was made since. A pass with none since is the way out; a
+    reuse marker is no attempt, so it never lifts the red."""
+    if live:
+        return True
+    last = last_attempt(path, card, tip)
+    return last is not None and last.get("v") != "pass"
+
+
 def main(argv):
     args = list(argv)
     cmd, args = args[0], args[1:]
