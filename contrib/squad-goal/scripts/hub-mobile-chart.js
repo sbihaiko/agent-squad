@@ -37,11 +37,11 @@ const mltChart = c => {
 };
 const mltStack = k => (k.dots || []).map(d => (d.stack || []).map(b => `${b.column} ${b.text}`).join(", ")).filter(Boolean).join(" · ");
 const mltPin = k => {
-  if (!k) return "";
-  const many = (k.count || 1) > 1;
-  const head = many ? `${k.count} issues: ${(k.cards || []).map(n => "#" + n).join(", ")}` : `#${k.n} ${k.title || ""}`.trim();
-  const lead = many ? (k.lead && k.lead.text) : k.text;   // a cluster carries a range; a lone card carries its own duration
-  const closed = many ? (k.closed && k.closed.text) : k.closed;
+  const dots = (k && k.dots) || [], m = dots.length;
+  if (!m) return "";   // every mark is a cluster of dots: its cards, its ranges and its stack live there
+  const head = m > 1 ? `${m} issues: ${dots.map(d => "#" + d.n).join(", ")}` : `#${dots[0].n} ${dots[0].title || ""}`.trim();
+  const lead = m > 1 ? (k.lead && k.lead.text) : dots[0].text;   // a cluster carries a range; a lone card its own duration
+  const closed = m > 1 ? (k.closed && k.closed.text) : dots[0].closed;
   return [head, lead ? "lead " + lead : "", closed ? "closed " + closed : "", mltStack(k)].filter(Boolean).join(" · ");
 };
 const mltZoom = (range, dir) => {

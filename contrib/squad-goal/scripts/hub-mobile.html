@@ -1162,7 +1162,7 @@ const MORE = {
 // The lead-time screen (#1333): the phone draws the payload /api/chart/lead serves, the desktop page's own route, and
 // computes none of its numbers (ADR-0137). The timeframe and the scale switch inside that one payload; zoom and reset
 // read the desktop's /api/leadtime through one explicit button each, never a drag. A tap pins one mark's tooltip.
-let MLT = { tf: "2", log: true, base: null, start: "", zc: null, zr: null };
+let MLT = { tf: "2", log: true, base: null, start: "", zc: null, zr: null, seq: 0 };   // `seq` numbers every view action: an answer numbered older than the last one never draws (#1333)
 const leadEl = () => document.querySelector('[data-screen="lead"]');
 const leadView = () => MLT.zc || (MLT.base ? MLT.base[MLT.log ? "log" : "jira"][MLT.tf] : null);
 function leadDraw() {
@@ -1179,22 +1179,23 @@ function leadPin(k) {
   el.querySelector("#ltpintext").textContent = k ? mltPin(k) : "";
 }
 async function leadZoom(dir) {
-  const el = leadEl(), msg = el.querySelector(".msg");
+  const el = leadEl(), msg = el.querySelector(".msg"), seq = ++MLT.seq;   // this action outranks every answer older than it
   if (dir === "reset") { MLT.zr = MLT.zc = null; leadPin(null); leadDraw(); msg.textContent = ""; return; }
   const c = leadView(), z = mltZoom(c && c.range, dir); if (!z) return;
   const q = "/api/leadtime?from=" + encodeURIComponent(z.from) + "&to=" + encodeURIComponent(z.to) +
-    "&scale=" + (MLT.log ? "log" : "jira") + "&a=" + encodeURIComponent(MLT.start || "");
+    "&scale=" + (MLT.log ? "log" : "jira") + "&a=" + encodeURIComponent(MLT.start || "");   // `a` is the span the payload serves (#1333)
   try {
     const d = await call(q, true);
+    if (seq !== MLT.seq) return;   // a later zoom, timeframe or scale holds the screen: a stale answer never draws (#1333)
     if (d.error) { msg.textContent = "The hub refused the zoom."; return; }
     MLT.zr = z; MLT.zc = d; leadPin(null); leadDraw(); msg.textContent = "";
-  } catch (e) { msg.textContent = e.message; }
+  } catch (e) { if (seq === MLT.seq) msg.textContent = e.message; }
 }
 leadEl().addEventListener("click", e => {
   const b = e.target ? e.target.closest("button") : null;
   if (!b) return;
-  if (b.dataset.ltf) { MLT.tf = b.dataset.ltf; MLT.zc = MLT.zr = null; leadPin(null); leadDraw(); }
-  else if (b.dataset.lscale) { MLT.log = b.dataset.lscale === "log"; MLT.zc = MLT.zr = null; leadPin(null); leadDraw(); }   // a zoom chart belongs to the scale it was read on
+  if (b.dataset.ltf) { ++MLT.seq; MLT.tf = b.dataset.ltf; MLT.zc = MLT.zr = null; leadPin(null); leadDraw(); }
+  else if (b.dataset.lscale) { ++MLT.seq; MLT.log = b.dataset.lscale === "log"; MLT.zc = MLT.zr = null; leadPin(null); leadDraw(); }   // a zoom chart belongs to the scale it was read on
   else if (b.dataset.ltzoom) leadZoom(b.dataset.ltzoom);
   else if (b.dataset.ltpin === "dismiss") leadPin(null);
 });
