@@ -5547,7 +5547,7 @@ function subRender(d){d=d||subData;if(!d||!$("#subs"))return;
   const cust=custom?`<span class=pr><span>amount</span><input data-plan=${k} data-f=amount type=number min=0 step=0.01 value="${pl.amount}" aria-label="${k} custom amount"> <input data-plan=${k} data-f=cur list=curs value="${esc(pl.currency)}" placeholder="BRL" aria-label="${k} currency" title="R$, U$, € or any 3-letter code"></span>`:"";
   const note=v.noRate?`<span class=warn>no exchange rate for ${esc(pl.currency)} right now</span>`:(pl&&pl.currency!=="USD"&&v.usd!=null?`<span class=dt>≈ <b>US$${v.usd}</b> / month · ${(+v.rate).toFixed(2)} ${esc(pl.currency)} per US$</span>`:"");
   const gauge=(d.gauges||[]).find(g=>g.key===k),bar=gauge?`<div class=isub>${subsGauges({subs:[gauge]})}</div>`:"";   // the sidebar usage card's own bar and text, from the same answer (#1281)
-  const win=pl&&pl.qwin||"",man=!pl||(v.quota&&v.quota.windows&&v.quota.windows.length)?""   // the hand-entered quota is a fallback: with no plan there is nothing to hold, and with a live CLI window the CLI value wins, so the row would edit a value the card never reads (#1281)
+  const win=pl&&pl.qwin||"",man=!pl?""   // the hand-entered quota follows the saved plan, never the live window: with a plan saved the owner can correct or clear the stored quota even when the CLI reports one (#1281)
    :`<div class=pr><span>quota used</span><input data-plan=${k} data-f=quota type=number min=0 max=100 step=1 value="${pl.quota??""}" placeholder="%" aria-label="${k} quota used" style="width:60px"><input data-plan=${k} data-f=qwin value="${esc(win)}" placeholder="window, e.g. weekly · all models" aria-label="${k} quota window"maxlength=40 style="flex:1;min-width:0"></div>`;
   return `<div class=sub><div class=hd><span class=nm>${esc(v.name)}</span>${ok?"":`<span class="sv none">choose a plan</span>`}</div><div class=pr>${sel}</div>${cust}${note}${bar}${man}</div>`}).join("")]);
  setBar()}   // a staged change arms the one Save at once, never on the next poll (#1281)
@@ -5565,6 +5565,7 @@ $("#subs").addEventListener("change",e=>{const k=e.target.dataset.plan;if(!k||!s
  else if(f==="plan"){v=pick===""?null:pick==="custom"?{plan:"custom",amount:0,currency:"USD"}:{plan:pick}}
  else{const a=row.querySelector("[data-f=amount]"),c=row.querySelector("[data-f=cur]");c.value=curOf(c.value);v={plan:"custom",amount:+a.value||0,currency:c.value}}
  subDraft[k]=v;subMsg="";subRender()});   // a change stages; the one Save asks for the diff and writes on confirm (#1281)
+// ---- subscriptions slice end: the helpers above are read by the Subscriptions theme (#1281); the stats poller follows
 async function pollStats(){try{pollSubs();
   const st=await (await fetch("/api/stats?period="+per+"&src="+src)).json();
   $("#per").innerHTML=["hour","day","month"].map(p=>`<button data-p=${p} class="${p===per?"on":""}">per ${p}</button>`).join("");
@@ -6231,13 +6232,12 @@ def plans_diff(old, new):
             for k in SUBS if old.get(k) != new.get(k)]
 def plans_set(new):
     """One subscription = a preset plan, or a custom monthly amount in any 3-letter currency; null clears it. Atomic write.
-    With `confirm` not true it answers the diff of every changed plan and writes nothing, which is what Save shows first.
-    This is the same wire contract as /api/limits and /api/slack (#1281): an absent or false `confirm` previews, and only
-    `confirm: true` writes, so no caller can write with a field edit alone. A non-boolean `confirm` is refused, never read
-    as a preview that looks like a save."""
+    A body with no `confirm` writes, as it did before #1281, so an existing caller (a script, curl) keeps its contract.
+    Save's preview is explicit: `confirm: false` answers the diff of every changed plan and writes nothing, which is what
+    the dialog shows first, and `confirm: true` writes. A non-boolean `confirm` is refused, never read as either."""
     if not isinstance(new, dict) or set(new) - set(SUBS) - {"confirm"}: return {"err": "unknown subscription"}
     if "confirm" in new and not isinstance(new["confirm"], bool): return {"err": "confirm: true or false"}
-    confirm = new.get("confirm") is True
+    confirm = new.get("confirm", True) is True
     d = plans_get(); out = dict(d)
     for k, v in new.items():
         if k == "confirm": continue

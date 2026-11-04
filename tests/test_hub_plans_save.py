@@ -102,20 +102,22 @@ def test_the_preview_names_a_changed_plan_and_never_raises_on_an_odd_row(hub):
     assert mod.sub_name("claude", None, None) == "Claude"
 
 
-def test_the_plans_route_previews_without_confirm_and_writes_only_on_true(hub):
-    """The /api/plans wire contract is /api/limits and /api/slack's (#1281): a body with no confirm, or confirm false,
-    answers the diff and writes nothing; only a boolean true writes. A string "true" is refused, never read as a save."""
+def test_the_plans_route_still_writes_without_confirm_and_previews_only_on_false(hub):
+    """The /api/plans wire contract keeps its write-on-POST (#1281 review): a body with no confirm writes, as it did
+    before this change, so an existing caller (a script, curl) never turns into a silent preview. Save's diff step is
+    explicit: `confirm: false` answers the diff and writes nothing, and only a boolean confirm is accepted, so the
+    string "true" or the number 1 is refused instead of read as either a save or a preview."""
     mod, plans = hub
     before = plans.read_text()
-    out = mod.plans_set({"claude": {"plan": "max20"}})
-    assert out["diff"] and "plans" not in out and plans.read_text() == before
     out = mod.plans_set({"claude": {"plan": "max20"}, "confirm": False})
     assert out["diff"] and "plans" not in out and plans.read_text() == before
     for bad in ("true", 1, "yes"):
         out = mod.plans_set({"claude": {"plan": "max20"}, "confirm": bad})
         assert out["err"] and plans.read_text() == before, (bad, out)
-    mod.plans_set({"claude": {"plan": "max20"}, "confirm": True})
-    assert json.loads(plans.read_text())["claude"]["plan"] == "max20"
+    mod.plans_set({"claude": {"plan": "max5"}})
+    assert json.loads(plans.read_text())["claude"]["plan"] == "max5", "a body with no confirm no longer writes"
+    out = mod.plans_set({"claude": {"plan": "max20"}, "confirm": True})
+    assert out["diff"] and json.loads(plans.read_text())["claude"]["plan"] == "max20"
 
 
 # ---------------------------------------------------------------- the page: stage, diff, confirm
@@ -224,9 +226,10 @@ def test_the_theme_names_the_plans_file_and_draws_each_quota_with_the_sidebar_ca
     assert got["chip"] == "all under limit", got["chip"]
 
 
-def test_the_hand_quota_row_shows_only_where_the_cli_reading_does_not(hub):
-    """The hand-entered quota is a fallback: a saved plan with no live CLI window keeps the row, and a plan the probe
-    already reports hides it, because the board draws the CLI value and would ignore an edit to the stored one."""
+def test_the_hand_quota_row_shows_whenever_a_plan_is_saved(hub):
+    """The hand-entered quota row follows the saved plan object, never the live CLI window (#1281 review): with a plan
+    saved the owner can correct or clear a stored quota even when the probe reports one, and a row with no plan keeps
+    no quota field."""
     mod = hub[0]
 
     def rendered(windowed):
@@ -236,8 +239,12 @@ def test_the_hand_quota_row_shows_only_where_the_cli_reading_does_not(hub):
                           'subDraft={claude:{plan:"max20",amount:200,currency:"USD"}};subRender();'
                           'console.log(JSON.stringify($("#subs").innerHTML));')
 
-    assert "data-f=quota" not in rendered(True), "a live CLI reading still offers a hand quota the card never reads"
+    assert "data-f=quota" in rendered(True), "a plan with a live CLI reading lost its hand quota row"
     assert "data-f=quota" in rendered(False), "a saved plan with no CLI reading lost its hand quota row"
+    alone = _node(mod, f"subData={json.dumps(_payload(77))};subS={{}};subSrv='{{}}';subDraft={{}};subRender();"
+                       'const h=$("#subs").innerHTML.split("<div class=sub>");'
+                       'console.log(JSON.stringify(h.find(x=>x.includes("Grok"))||""));')
+    assert "data-f=quota" not in alone, "a row with no plan still offers a hand quota field"
 
 
 def test_the_summary_reads_at_limit_all_under_limit_or_no_plan_chosen(hub):
@@ -250,10 +257,12 @@ def test_the_summary_reads_at_limit_all_under_limit_or_no_plan_chosen(hub):
 
 
 def test_the_page_holds_no_dead_write_in_the_subscriptions_panel(hub):
-    """Every element the panel writes must exist on the page, whatever its name: a dead write to a renamed id is
-    caught by the resolution check, not by a literal (#1281 review)."""
+    """Every element the panel writes must exist on the page, whatever its name, and the exact call site #1281 deleted
+    stays deleted (#1281 review): a re-add of the cash-element write fails on the literal even when its id exists."""
     page = hub[0].PAGE
     seg = page[page.index("const STH="):page.index("async function pollStats(")]
     targets = set(re.findall(r'\$\("#([A-Za-z0-9_]+)"\)', seg))
     ids = set(re.findall(r"id=([A-Za-z0-9_-]+)", page))
     assert targets <= ids, f"the panel writes elements it does not have: {sorted(targets - ids)}"
+    for dead in ("cashEl", '"#cash"'):
+        assert dead not in page, f"the dead write to the cash element is back: {dead}"

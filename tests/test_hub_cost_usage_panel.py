@@ -428,10 +428,14 @@ pollSubs().then(() => console.log("RESULT" + JSON.stringify(
 def _subs_slice():
     """The page slice holding pollSubs and every helper it reaches, plus the `esc` defined after it and the Now/Settings
     builders the panel draws through (#1278). The shell's own boot runs here, so `save` and the read-only flag are stubbed.
-    The quota rows come from the sidebar card's own `subsGauges` (#1281), so its helpers travel too. The slice is asserted
-    to carry each helper by name, so a refactor of the sidebar cannot leave it silently empty."""
+    The quota rows come from the sidebar card's own `subsGauges` (#1281), so its helpers travel too. The slice is bounded
+    by explicit markers and asserted to carry each helper by name inside them, so a refactor of the sidebar cannot widen
+    or truncate it silently (#1281 review)."""
+    END = "// ---- subscriptions slice end"
+    assert END in SRC, "the subscriptions slice lost its end marker"
     i = SRC.index("const usd=v=>")
-    j = SRC.index("async function pollStats(")
+    j = SRC.index(END)
+    assert i < j, "the subscriptions slice markers are out of order"
     body = SRC[i:j].replace("__CAPS__", "{}")
     for need in ("function subsGauges(", "const iq=", "fpct="):
         assert need in body, f"the subscriptions slice lost {need}"
